@@ -12,6 +12,18 @@ Pipeline::Pipeline(PipelineConfig config)
 
 Pipeline::~Pipeline() = default;
 
+void Pipeline::registerBackend(std::unique_ptr<Backend> backend) {
+    backends_.push_back(std::move(backend));
+}
+
+void Pipeline::registerPreprocessor(std::unique_ptr<Preprocessor> preproc) {
+    preprocs_.push_back(std::move(preproc));
+}
+
+void Pipeline::registerPostprocessor(std::unique_ptr<Postprocessor> postproc) {
+    postprocs_.push_back(std::move(postproc));
+}
+
 int Pipeline::run() {
     printf("[mj2x] Pipeline start (input=%s, output=%s)\n",
            config_.inputPath.c_str(), config_.outputPath.c_str());
@@ -22,6 +34,10 @@ int Pipeline::run() {
         printf("[mj2x] ERROR: load failed - %s\n", e.what());
         return 1;
     }
+
+    runPreprocessors();
+    compileMethods();
+    runPostprocessors();
 
     try {
         writeOutput();
@@ -37,6 +53,52 @@ int Pipeline::run() {
 void Pipeline::loadInput() {
     InputLoader loader;
     index_ = loader.load(config_.inputPath);
+}
+
+void Pipeline::runPreprocessors() {
+    for (auto& p : preprocs_)
+        p->process(*index_);
+}
+
+void Pipeline::compileMethods() {
+    if (backends_.empty())
+        return;
+
+    CodeConverter converter;
+
+    for (auto& [name, cls] : index_->getClasses()) {
+        if (cls.isLibrary) continue;
+
+        for (auto& method : cls.methods) {
+            if (!method.markedForCompile) continue;
+
+            printf("  Compiling %s.%s%s\n",
+                   name.c_str(),
+                   method.methodNode->name.c_str(),
+                   method.methodNode->desc.c_str());
+
+            auto blocks = converter.convert(*method.methodNode);
+
+            if (config_.dumpMIR) {
+                printf("--- MIR dump ---\n%s\n",
+                       CodeConverter::dumpMIR(blocks).c_str());
+            }
+
+            for (auto& backend : backends_) {
+                auto result = backend->compileMethod(name, method, blocks);
+                method.backendResult = result;
+                backend->injectIntoClass(cls, method, result);
+            }
+        }
+    }
+
+    for (auto& backend : backends_)
+        backend->finalize(*index_);
+}
+
+void Pipeline::runPostprocessors() {
+    for (auto& p : postprocs_)
+        p->process(*index_);
 }
 
 void Pipeline::writeOutput() {

@@ -6,6 +6,8 @@
 #include <vector>
 #include <unordered_map>
 
+#include "mj2x/backend/backend_result.hpp"
+
 namespace mj2x {
 
 struct MethodID {
@@ -28,10 +30,13 @@ struct FieldID {
     }
 };
 
+struct BackendResult;
+
 struct CompilerMethod {
     jbytecode::MethodNode* methodNode = nullptr;
     bool markedForCompile = false;
     bool compiled = false;
+    BackendResult backendResult;
 };
 
 struct CompilerField {
