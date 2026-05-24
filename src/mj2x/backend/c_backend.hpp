@@ -28,6 +28,8 @@ public:
 
     void finalize(const CompilerIndex& index) override;
 
+    void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
+
     // Access generated code for testing
     const std::string& generatedHeader() const { return headerCode_; }
     const std::string& generatedSource() const { return sourceCode_; }
@@ -36,6 +38,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 
+    std::string cOutputPath_;
     std::string headerCode_;
     std::string sourceCode_;
 };
