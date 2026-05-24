@@ -19,6 +19,14 @@
 - 支持所有 JVM 指令的 100% 语义兼容（特定边界行为有差异，同 masxinlingvonta）
 - JAR/ZIP 操作（由 morpher-nbase 的 jar 工具覆盖）
 
+### 1.3 MVP 已知语义不兼容
+
+| 场景 | 行为 | 风险 |
+|------|------|------|
+| `synchronized` 块内抛异常 | `MONITOREXIT` 被跳过 | **锁泄漏** — 不适用于生产 |
+| `ATHROW` 后继续执行 JNI | `(*env)->Throw` 不中断 C 控制流 | **UB / 崩溃** — 翻译为 `Throw + return` |
+| `INVOKEDYNAMIC` | 通过 Preprocessor 提取到合成方法 | 性能损失（多一次 JNI 回调用） |
+
 ### 1.3 参考项目
 
 - [masxinlingvonta](https://github.com/superblaubeere27/masxinlingvonta) — Java Bytecode → LLVM IR，单后端，全 JNI 策略
@@ -249,8 +257,9 @@ struct BackendResult {
 | 对象创建 | `(*env)->NewObject` |
 | 数组操作 | `(*env)->GetArrayLength`, `Get*ArrayElements`, `Set*ArrayRegion` |
 | 类型检查 | `(*env)->IsInstanceOf`, `(*env)->CheckCast` |
-| 异常 | `(*env)->ExceptionCheck`, `(*env)->Throw` |
-| 同步 | `(*env)->MonitorEnter` / `MonitorExit` |
+| 异常(Throw) | `(*env)->Throw(env, exc); return;` — JNI Throw 不中断 C 控制流，必须紧跟 return |
+| 异常(检查桩) | `if ((*env)->ExceptionCheck(env)) return;` — 每次 JNI 调用后可选插入 |
+| 同步 | `(*env)->MonitorEnter` / `MonitorExit` — 块内抛异常导致锁泄漏 |
 
 ### 5.2 代码结构
 

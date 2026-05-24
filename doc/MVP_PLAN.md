@@ -22,12 +22,20 @@
   - 端到端测试：编译一个简单 Java 方法，生成的 C 代码可被 MSVC 编译
   - CI 可构建
 
-### 1.2 排除 (MVP 后)
+### 1.2 包含但有限制
+
+| 指令 | MVP 策略 | 限制 |
+|------|---------|------|
+| `ATHROW` | `(*env)->Throw(env, exc); return;` | Throw 后不中断 C 控制流，手动 return；MVP 不生成 ExceptionCheck 桩 |
+| `MONITORENTER` / `MONITOREXIT` | 直译为 JNI `MonitorEnter` / `MonitorExit` | 块内抛异常 → 锁泄漏 |
+| `INVOKEDYNAMIC` | Preprocessor 提取到合成方法，替换为 `INVOKESTATIC` | 多一次 JNI 回调用开销 |
+| `synchronized` 方法 (`ACC_SYNCHRONIZED`) | **拒绝编译** | 需 JVM 级的 monitor 管理，C 不能模拟 |
+
+### 1.3 完全排除 (MVP 后)
 
 - JAR/ZIP 多文件输入输出
-- `INVOKEDYNAMIC` / lambda 处理
 - `MULTIANEWARRAY`
-- 异常处理 (try-catch)
+- 异常处理 try-catch 块翻译
 - JSR/RET 子程序
 - `DUP2_X1` / `DUP2_X2` (double/long 特殊栈操作)
 - 栈帧计算 (COMPUTE_FRAMES)
@@ -115,6 +123,8 @@
 | MIRBranch/MIRSwitch → C | `goto` / `if` / `switch` | 测试覆盖 |
 | MIRReturn → C | `return` 语句 | 测试覆盖 |
 | MIRNewObject → C | JNI `NewObject` 调用 | 测试覆盖 |
+| MIRMonitor → C | `(*env)->MonitorEnter(env, obj)` / `MonitorExit(env, obj)` | 块内抛异常锁泄漏 |
+| MIRThrow → C | `(*env)->Throw(env, exc); return;` | Throw 不中断 C 流，手动 return |
 | `CBackend::injectIntoClass` | 设置 ACC_NATIVE，清空指令 | 验证 class 修改 |
 | `CBackend::finalize` | 输出 `.c` 文件 | 文件生成 |
 
