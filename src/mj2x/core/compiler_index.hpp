@@ -1,0 +1,87 @@
+#pragma once
+
+#include <jbytecode/jbytecode.hpp>
+
+#include <string>
+#include <vector>
+#include <unordered_map>
+
+namespace mj2x {
+
+struct MethodID {
+    std::string owner;
+    std::string name;
+    std::string desc;
+
+    bool operator==(const MethodID& o) const {
+        return owner == o.owner && name == o.name && desc == o.desc;
+    }
+};
+
+struct FieldID {
+    std::string owner;
+    std::string name;
+    std::string desc;
+
+    bool operator==(const FieldID& o) const {
+        return owner == o.owner && name == o.name && desc == o.desc;
+    }
+};
+
+struct CompilerMethod {
+    jbytecode::MethodNode* methodNode = nullptr;
+    bool markedForCompile = false;
+    bool compiled = false;
+};
+
+struct CompilerField {
+    jbytecode::FieldNode* fieldNode = nullptr;
+};
+
+struct CompilerClass {
+    std::unique_ptr<jbytecode::ClassNode> classNode;
+    std::vector<CompilerMethod> methods;
+    std::vector<CompilerField> fields;
+    bool modified = false;
+    bool isLibrary = false;
+};
+
+} // namespace mj2x
+
+// -- hash specializations for MethodID / FieldID --
+namespace std {
+template<>
+struct hash<mj2x::MethodID> {
+    size_t operator()(const mj2x::MethodID& id) const {
+        return hash<string>()(id.owner) ^
+               (hash<string>()(id.name) << 1) ^
+               (hash<string>()(id.desc) << 2);
+    }
+};
+template<>
+struct hash<mj2x::FieldID> {
+    size_t operator()(const mj2x::FieldID& id) const {
+        return hash<string>()(id.owner) ^
+               (hash<string>()(id.name) << 1) ^
+               (hash<string>()(id.desc) << 2);
+    }
+};
+} // namespace std
+
+namespace mj2x {
+
+class CompilerIndex {
+public:
+    using ClassMap = std::unordered_map<std::string, CompilerClass>;
+
+    void addClass(const std::string& name, CompilerClass cls);
+    CompilerClass* getClass(const std::string& name);
+
+    ClassMap& getClasses() { return classes_; }
+    const ClassMap& getClasses() const { return classes_; }
+
+private:
+    ClassMap classes_;
+};
+
+} // namespace mj2x
