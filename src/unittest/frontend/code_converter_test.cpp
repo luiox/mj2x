@@ -4,9 +4,14 @@
 #include "mj2x/frontend/method_stack.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/frontend/opcode_utils.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 using namespace mj2x;
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 // ============================================================
 // TypeUtils tests

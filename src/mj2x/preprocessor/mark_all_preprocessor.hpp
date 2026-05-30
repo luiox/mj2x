@@ -12,8 +12,8 @@ public:
             for (auto& method : cls.methods) {
                 // Skip abstract and native methods
                 auto* mn = method.methodNode;
-                if (mn->access & (jbytecode::Opcodes::ACC_ABSTRACT |
-                                  jbytecode::Opcodes::ACC_NATIVE))
+                if (mn->access & (jbytecode::core::Opcodes::ACC_ABSTRACT |
+                                  jbytecode::core::Opcodes::ACC_NATIVE))
                     continue;
                 method.markedForCompile = true;
             }

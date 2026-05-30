@@ -4,10 +4,15 @@
 
 #include <cassert>
 #include <sstream>
+#include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 struct CodeConverter::Impl {
     std::unordered_map<int, std::unique_ptr<Block>> blocks;

@@ -2,10 +2,15 @@
 
 #include <cstdio>
 #include <fstream>
+#include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 struct OutputWriter::Impl {};
 

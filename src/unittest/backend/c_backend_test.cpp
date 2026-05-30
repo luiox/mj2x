@@ -2,9 +2,14 @@
 
 #include "mj2x/backend/c_backend.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 using namespace mj2x;
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 // Helper: create MethodNode with instructions
 static std::unique_ptr<MethodNode> makeMethod(

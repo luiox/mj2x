@@ -10,7 +10,7 @@ namespace mj2x {
 
 class MethodStack {
 public:
-    explicit MethodStack(jbytecode::MethodNode& mn);
+    explicit MethodStack(jbytecode::tree::MethodNode& mn);
 
     int maxStack() const { return maxStack_; }
     int maxLocals() const { return maxLocals_; }

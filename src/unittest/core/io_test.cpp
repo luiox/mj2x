@@ -4,9 +4,14 @@
 #include <fstream>
 
 #include "mj2x/mj2x.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 using namespace mj2x;
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 // Helper: create a minimal class in memory
 static std::unique_ptr<ClassNode> makeSimpleClass() {

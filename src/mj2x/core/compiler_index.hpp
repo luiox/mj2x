@@ -33,18 +33,18 @@ struct FieldID {
 struct BackendResult;
 
 struct CompilerMethod {
-    jbytecode::MethodNode* methodNode = nullptr;
+    jbytecode::tree::MethodNode* methodNode = nullptr;
     bool markedForCompile = false;
     bool compiled = false;
     BackendResult backendResult;
 };
 
 struct CompilerField {
-    jbytecode::FieldNode* fieldNode = nullptr;
+    jbytecode::tree::FieldNode* fieldNode = nullptr;
 };
 
 struct CompilerClass {
-    std::unique_ptr<jbytecode::ClassNode> classNode;
+    std::unique_ptr<jbytecode::tree::ClassNode> classNode;
     std::vector<CompilerMethod> methods;
     std::vector<CompilerField> fields;
     bool modified = false;

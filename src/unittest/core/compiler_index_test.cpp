@@ -6,10 +6,10 @@ using namespace mj2x;
 
 TEST(CompilerIndexTest, AddAndRetrieveClass) {
     CompilerIndex index;
-    auto cn = std::make_unique<jbytecode::ClassNode>();
+    auto cn = std::make_unique<jbytecode::tree::ClassNode>();
     cn->name = "Test";
-    cn->version = jbytecode::Opcodes::V1_8;
-    cn->access = jbytecode::Opcodes::ACC_PUBLIC;
+    cn->version = jbytecode::core::Opcodes::V1_8;
+    cn->access = jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->superName = "java/lang/Object";
 
     CompilerClass cls;
