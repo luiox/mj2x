@@ -4,7 +4,17 @@
 #include <fstream>
 #include <stdexcept>
 #include <vector>
+#include <string>
 #include "jbytecode/jbytecode.hpp"
+#include "libca/str/utf8_string.hpp"
+
+namespace {
+
+std::string toStr(ca::str::Utf8StringRef ref) {
+    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byteLength());
+}
+
+} // anonymous namespace
 
 namespace mj2x {
 
@@ -57,7 +67,7 @@ std::unique_ptr<CompilerIndex> InputLoader::load(const std::string& path) {
         cls.fields.push_back(std::move(cf));
     }
 
-    auto className = cls.classNode->name;
+    auto className = toStr(cls.classNode->name);
     auto numMethods = cls.classNode->methods.size();
     auto numFields = cls.classNode->fields.size();
 

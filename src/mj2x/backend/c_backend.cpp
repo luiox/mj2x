@@ -6,7 +6,21 @@
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <string>
 #include "jbytecode/jbytecode.hpp"
+#include "libca/str/utf8_string.hpp"
+
+namespace {
+
+std::string toStr(ca::str::Utf8StringRef ref) {
+    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byteLength());
+}
+
+ca::str::Utf8StringRef toRef(const std::string& s) {
+    return ca::str::Utf8StringRef(reinterpret_cast<const ca::u8*>(s.data()), s.size(), s.size());
+}
+
+} // anonymous namespace
 
 namespace mj2x {
 
@@ -227,17 +241,17 @@ BackendResult CBackend::compileMethod(
     impl_->currentClassName = className;
     auto& cls = impl_->currentClassName;
 
-    impl_->currentMethodName = mn->name;
-    impl_->currentMethodDesc = mn->desc;
+    impl_->currentMethodName = toStr(mn->name);
+    impl_->currentMethodDesc = toStr(mn->desc);
 
     std::ostringstream funcOut;
 
     // JNI function signature
     bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
     auto retType = jvmDescToPrimitive(
-        Type::getReturnType(mn->desc).getDescriptor());
+        toStr(Type::getReturnType(mn->desc).getDescriptor()));
 
-    auto funcName = mangleMethod(cls, mn->name, mn->desc);
+    auto funcName = mangleMethod(cls, toStr(mn->name), toStr(mn->desc));
     impl_->exportedFunctions.insert(funcName);
 
     funcOut << "JNIEXPORT " << primitiveToJNIType(retType) << " JNICALL\n";
@@ -604,7 +618,8 @@ void CBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringstream&
 }
 
 void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) {
-    auto retType = jvmDescToPrimitive(Type::getReturnType(node->desc).getDescriptor());
+    auto descRef = toRef(node->desc);
+    auto retType = jvmDescToPrimitive(toStr(Type::getReturnType(descRef).getDescriptor()));
     const char* suffix = primitiveToJNISuffix(retType);
 
     // Determine invocation kind
@@ -616,7 +631,7 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
     }
 
     // Count argument slots from desc
-    auto argTypes = Type::getArgumentTypes(node->desc);
+    auto argTypes = Type::getArgumentTypes(descRef);
     int argSlots = 0;
     for (auto& at : argTypes)
         argSlots += primitiveStackSize(jvmSortToPrimitive(at.getSort()));

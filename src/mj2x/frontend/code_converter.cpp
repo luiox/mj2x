@@ -4,7 +4,17 @@
 
 #include <cassert>
 #include <sstream>
+#include <string>
 #include "jbytecode/jbytecode.hpp"
+#include "libca/str/utf8_string.hpp"
+
+namespace {
+
+std::string toStr(ca::str::Utf8StringRef ref) {
+    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byteLength());
+}
+
+} // anonymous namespace
 
 namespace mj2x {
 
@@ -75,7 +85,7 @@ void CodeConverter::analyzeControlFlow(MethodNode& mn) {
         h.startLabel = tcb->start->bytecodeOffset;
         h.endLabel = tcb->end->bytecodeOffset;
         h.handlerLabel = tcb->handler->bytecodeOffset;
-        h.catchType = tcb->type;
+        h.catchType = toStr(tcb->type);
         impl_->handlers.push_back(h);
     }
 
@@ -197,25 +207,25 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         switch (ti->opcode) {
         case Opcodes::NEW: {
             auto node = std::make_unique<MIRNewObject>();
-            node->typeDesc = ti->desc;
+            node->typeDesc = toStr(ti->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::ANEWARRAY: {
             auto node = std::make_unique<MIRNewArray>();
-            node->typeDesc = ti->desc;
+            node->typeDesc = toStr(ti->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::CHECKCAST: {
             auto node = std::make_unique<MIRCheckCast>();
-            node->typeDesc = ti->desc;
+            node->typeDesc = toStr(ti->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::INSTANCEOF: {
             auto node = std::make_unique<MIRInstanceOf>();
-            node->typeDesc = ti->desc;
+            node->typeDesc = toStr(ti->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
@@ -230,25 +240,25 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         switch (fi->opcode) {
         case Opcodes::GETSTATIC: {
             auto node = std::make_unique<MIRStaticGet>();
-            node->owner = fi->owner; node->name = fi->name; node->desc = fi->desc;
+            node->owner = toStr(fi->owner); node->name = toStr(fi->name); node->desc = toStr(fi->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::PUTSTATIC: {
             auto node = std::make_unique<MIRStaticPut>();
-            node->owner = fi->owner; node->name = fi->name; node->desc = fi->desc;
+            node->owner = toStr(fi->owner); node->name = toStr(fi->name); node->desc = toStr(fi->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::GETFIELD: {
             auto node = std::make_unique<MIRFieldGet>();
-            node->owner = fi->owner; node->name = fi->name; node->desc = fi->desc;
+            node->owner = toStr(fi->owner); node->name = toStr(fi->name); node->desc = toStr(fi->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::PUTFIELD: {
             auto node = std::make_unique<MIRFieldPut>();
-            node->owner = fi->owner; node->name = fi->name; node->desc = fi->desc;
+            node->owner = toStr(fi->owner); node->name = toStr(fi->name); node->desc = toStr(fi->desc);
             cur->nodes.push_back(std::move(node));
             break;
         }
@@ -261,9 +271,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     case AbstractInsnNode::METHOD_INSN: {
         auto* mi = ca::core::cast<MethodInsnNode>(insn);
         auto node = std::make_unique<MIRInvoke>();
-        node->owner = mi->owner;
-        node->name = mi->name;
-        node->desc = mi->desc;
+        node->owner = toStr(mi->owner);
+        node->name = toStr(mi->name);
+        node->desc = toStr(mi->desc);
         node->isInterface = mi->isInterface;
         node->invokeOpcode = mi->opcode;
         cur->nodes.push_back(std::move(node));
