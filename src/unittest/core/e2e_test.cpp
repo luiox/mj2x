@@ -7,9 +7,14 @@
 #include "mj2x/mj2x.hpp"
 #include "mj2x/backend/c_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 using namespace mj2x;
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 // Helper: construct a class with one method and write to disk
 static std::string writeTestClass(const std::string& name, const std::string& suffix) {

@@ -4,9 +4,23 @@
 #include "mj2x/frontend/method_stack.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/frontend/opcode_utils.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 using namespace mj2x;
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
+
+namespace {
+
+ca::str::Utf8StringRef toRef(const char* s) {
+    auto len = std::strlen(s);
+    return ca::str::Utf8StringRef(reinterpret_cast<const ca::u8*>(s), len, len);
+}
+
+}
 
 // ============================================================
 // TypeUtils tests
@@ -79,8 +93,8 @@ TEST(OpcodeUtilsTest, BranchZeroOpcodeMapping) {
 // ============================================================
 
 TEST(MethodStackTest, StaticMethodParameterTypes) {
-    std::vector<std::string> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I", "", noExcepts);
+    std::vector<ca::str::Utf8StringRef> noExcepts;
+    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, toRef("add"), toRef("(II)I"), toRef(""), noExcepts);
     mn.maxStack = 2;
     mn.maxLocals = 2;
 
@@ -92,8 +106,8 @@ TEST(MethodStackTest, StaticMethodParameterTypes) {
 }
 
 TEST(MethodStackTest, InstanceMethodHasThis) {
-    std::vector<std::string> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC, "getValue", "()I", "", noExcepts);
+    std::vector<ca::str::Utf8StringRef> noExcepts;
+    MethodNode mn(Opcodes::ACC_PUBLIC, toRef("getValue"), toRef("()I"), toRef(""), noExcepts);
     mn.maxLocals = 1;
 
     MethodStack ms(mn);
@@ -101,7 +115,7 @@ TEST(MethodStackTest, InstanceMethodHasThis) {
 }
 
 TEST(MethodStackTest, LongAndDoubleTakeTwoSlots) {
-    std::vector<std::string> noExcepts;
+    std::vector<ca::str::Utf8StringRef> noExcepts;
     MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "test", "(JD)V", "", noExcepts);
     mn.maxLocals = 4;
 
@@ -119,7 +133,7 @@ static std::unique_ptr<MethodNode> makeMethod(
     int access, const std::string& name, const std::string& desc,
     std::initializer_list<AbstractInsnNode*> insns)
 {
-    std::vector<std::string> noExcepts;
+    std::vector<ca::str::Utf8StringRef> noExcepts;
     auto mn = std::make_unique<MethodNode>(access, name, desc, "", noExcepts);
     mn->maxStack = 10;
     mn->maxLocals = 10;

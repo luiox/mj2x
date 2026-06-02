@@ -19,15 +19,15 @@ public:
     CodeConverter();
     ~CodeConverter();
 
-    std::vector<Block*> convert(jbytecode::MethodNode& mn);
+    std::vector<Block*> convert(jbytecode::tree::MethodNode& mn);
 
     static std::string dumpMIR(const std::vector<Block*>& blocks);
 
 private:
-    void analyzeControlFlow(jbytecode::MethodNode& mn);
+    void analyzeControlFlow(jbytecode::tree::MethodNode& mn);
     void buildBlocks();
-    void translateInstructions(jbytecode::MethodNode& mn);
-    void processInsn(jbytecode::AbstractInsnNode* insn);
+    void translateInstructions(jbytecode::tree::MethodNode& mn);
+    void processInsn(jbytecode::tree::AbstractInsnNode* insn);
     Block* getOrCreateBlock(int labelId);
 
     struct Impl;

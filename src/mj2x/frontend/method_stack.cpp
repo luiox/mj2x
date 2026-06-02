@@ -1,9 +1,14 @@
 #include "method_stack.hpp"
 #include "type_utils.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 MethodStack::MethodStack(MethodNode& mn)
     : maxStack_(mn.maxStack), maxLocals_(mn.maxLocals)

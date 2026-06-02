@@ -1,18 +1,38 @@
 #include <gmock/gmock.h>
 
+#include <cstring>
+
 #include "mj2x/backend/c_backend.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 using namespace mj2x;
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
+
+namespace {
+
+ca::str::Utf8StringRef toRef(const std::string& s) {
+    return ca::str::Utf8StringRef(reinterpret_cast<const ca::u8*>(s.data()), s.size(), s.size());
+}
+
+ca::str::Utf8StringRef toRef(const char* s) {
+    auto len = std::strlen(s);
+    return ca::str::Utf8StringRef(reinterpret_cast<const ca::u8*>(s), len, len);
+}
+
+}
 
 // Helper: create MethodNode with instructions
 static std::unique_ptr<MethodNode> makeMethod(
     int access, const std::string& name, const std::string& desc,
     std::initializer_list<AbstractInsnNode*> insns)
 {
-    std::vector<std::string> noExcepts;
-    auto mn = std::make_unique<MethodNode>(access, name, desc, "", noExcepts);
+    std::vector<ca::str::Utf8StringRef> noExcepts;
+    auto mn = std::make_unique<MethodNode>(access, toRef(name), toRef(desc), toRef(""), noExcepts);
     mn->maxStack = 10;
     mn->maxLocals = 10;
     for (auto* insn : insns)
@@ -23,10 +43,10 @@ static std::unique_ptr<MethodNode> makeMethod(
 static CompilerClass makeCompilerClass(const std::string& name) {
     CompilerClass cls;
     auto cn = std::make_unique<ClassNode>();
-    cn->name = name;
+    cn->name = toRef(name);
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
-    cn->superName = "java/lang/Object";
+    cn->superName = toRef("java/lang/Object");
     cls.classNode = std::move(cn);
     return cls;
 }
@@ -77,7 +97,7 @@ TEST(CBackendTest, FieldAccess) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
                          "getX", "()I", {
         new VarInsnNode(Opcodes::ALOAD, 0),
-        new FieldInsnNode(Opcodes::GETFIELD, "Foo", "x", "I"),
+        new FieldInsnNode(Opcodes::GETFIELD, toRef("Foo"), toRef("x"), toRef("I")),
         new InsnNode(Opcodes::IRETURN),
     });
     CompilerMethod cm;
@@ -95,7 +115,7 @@ TEST(CBackendTest, InvokeMethod) {
     CBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "call", "()V", {
-        new MethodInsnNode(Opcodes::INVOKESTATIC, "Other", "run", "()V", false),
+        new MethodInsnNode(Opcodes::INVOKESTATIC, toRef("Other"), toRef("run"), toRef("()V"), false),
         new InsnNode(Opcodes::RETURN),
     });
     CompilerMethod cm;
@@ -161,10 +181,10 @@ TEST(CBackendTest, NewObject) {
     CBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "create", "()Ljava/lang/Object;", {
-        new TypeInsnNode(Opcodes::NEW, "java/lang/Object"),
+        new TypeInsnNode(Opcodes::NEW, toRef("java/lang/Object")),
         new InsnNode(Opcodes::DUP),
         new MethodInsnNode(Opcodes::INVOKESPECIAL,
-                          "java/lang/Object", "<init>", "()V", false),
+                          toRef("java/lang/Object"), toRef("<init>"), toRef("()V"), false),
         new InsnNode(Opcodes::ARETURN),
     });
     CompilerMethod cm;

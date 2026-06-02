@@ -3,6 +3,17 @@
 #include "mj2x/io/output_writer.hpp"
 
 #include <cstdio>
+#include <string>
+#include "jbytecode/jbytecode.hpp"
+#include "libca/str/utf8_string.hpp"
+
+namespace {
+
+std::string toStr(ca::str::Utf8StringRef ref) {
+    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byteLength());
+}
+
+} // anonymous namespace
 
 namespace mj2x {
 
@@ -72,10 +83,10 @@ void Pipeline::compileMethods() {
         for (auto& method : cls.methods) {
             if (!method.markedForCompile) continue;
 
+            auto mnName = toStr(method.methodNode->name);
+            auto mnDesc = toStr(method.methodNode->desc);
             printf("  Compiling %s.%s%s\n",
-                   name.c_str(),
-                   method.methodNode->name.c_str(),
-                   method.methodNode->desc.c_str());
+                   name.c_str(), mnName.c_str(), mnDesc.c_str());
 
             auto blocks = converter.convert(*method.methodNode);
 

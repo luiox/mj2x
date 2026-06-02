@@ -1,8 +1,13 @@
 #include "opcode_utils.hpp"
+#include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode;
+using namespace jbytecode::core;
+using namespace jbytecode::tree;
+using namespace jbytecode::analysis;
+using namespace jbytecode::commons;
+using namespace jbytecode::util;
 
 BinaryOp opcodeToBinaryOp(int opcode) {
     switch (opcode) {
