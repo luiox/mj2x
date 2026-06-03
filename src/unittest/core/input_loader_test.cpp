@@ -1,5 +1,6 @@
 #include <gmock/gmock.h>
 
+#include "test_helper.hpp"
 #include "mj2x/mj2x.hpp"
 #include "jbytecode/jbytecode.hpp"
 

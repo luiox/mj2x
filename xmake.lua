@@ -32,11 +32,11 @@ target("mj2x_unittest")
     set_kind("binary")
     set_group("mj2x/test")
 
-    add_deps("mj2x-core", "gmock")
+    add_deps("mj2x-core", "gmock", "test_helper")
     add_files("src/unittest/main.cpp")
     add_files("src/unittest/**/*_test.cpp")
     add_includedirs("src")
-    set_rundir("$(projectdir)")
+    set_rundir("$(projectdir)/test")
 
     if is_plat("windows") then
         add_cxflags("/utf-8", {tools = "cl"})

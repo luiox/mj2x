@@ -1,8 +1,8 @@
 #include <gmock/gmock.h>
 
-#include <cstdlib>
 #include <fstream>
 
+#include "test_helper.hpp"
 #include "mj2x/mj2x.hpp"
 #include "jbytecode/jbytecode.hpp"
 
@@ -39,8 +39,7 @@ static std::unique_ptr<ClassNode> makeSimpleClass() {
 
 // Helper: write class bytes to temp file
 static std::string writeTempClass(const std::string& suffix) {
-    auto tmpDir = std::getenv("TEMP");
-    auto path = std::string(tmpDir ? tmpDir : ".") + "/mj2x_" + suffix;
+    auto path = test::getTempOutPath("mj2x_" + suffix).string();
 
     auto cn = makeSimpleClass();
     ClassWriter cw(ClassWriter::COMPUTE_MAXS);
@@ -94,8 +93,7 @@ TEST(PipelineTest, BadInputPathReturnsError) {
 
 TEST(PipelineTest, FullPipelineRoundtrip) {
     auto inPath = writeTempClass("pipeline_in.class");
-    auto outPath = std::string(std::getenv("TEMP") ? std::getenv("TEMP") : ".") +
-                   "/mj2x_pipeline_out.class";
+    auto outPath = test::getTempOutPath("mj2x_pipeline_out.class").string();
 
     PipelineConfig cfg;
     cfg.inputPath = inPath;

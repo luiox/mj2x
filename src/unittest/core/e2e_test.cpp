@@ -1,9 +1,9 @@
 #include <gmock/gmock.h>
 
 #include <cstdio>
-#include <cstdlib>
 #include <fstream>
 
+#include "test_helper.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/backend/c_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
@@ -18,8 +18,7 @@ using namespace jbytecode::util;
 
 // Helper: construct a class with one method and write to disk
 static std::string writeTestClass(const std::string& name, const std::string& suffix) {
-    auto tmp = std::getenv("TEMP");
-    auto path = std::string(tmp ? tmp : ".") + "/mj2x_e2e_" + suffix;
+    auto path = test::getTempOutPath("mj2x_e2e_" + suffix).string();
 
     auto cn = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
@@ -50,10 +49,8 @@ static std::string writeTestClass(const std::string& name, const std::string& su
 
 TEST(E2ETest, PipelineWithCBackend) {
     auto inPath = writeTestClass("E2ETest", "in.class");
-    auto outPath = std::string(std::getenv("TEMP") ? std::getenv("TEMP") : ".")
-                   + "/mj2x_e2e_out.class";
-    auto cPath = std::string(std::getenv("TEMP") ? std::getenv("TEMP") : ".")
-                 + "/mj2x_e2e_out.c";
+    auto outPath = test::getTempOutPath("mj2x_e2e_out.class").string();
+    auto cPath = test::getTempOutPath("mj2x_e2e_out.c").string();
 
     PipelineConfig cfg;
     cfg.inputPath = inPath;
@@ -103,10 +100,9 @@ TEST(E2ETest, PipelineWithCBackend) {
 }
 
 TEST(E2ETest, VoidMethodWithCBackend) {
-    auto tmp = std::getenv("TEMP");
-    auto inPath = std::string(tmp ? tmp : ".") + "/mj2x_e2e_void_in.class";
-    auto outPath = std::string(tmp ? tmp : ".") + "/mj2x_e2e_void_out.class";
-    auto cPath = std::string(tmp ? tmp : ".") + "/mj2x_e2e_void_out.c";
+    auto inPath = test::getTempOutPath("mj2x_e2e_void_in.class").string();
+    auto outPath = test::getTempOutPath("mj2x_e2e_void_out.class").string();
+    auto cPath = test::getTempOutPath("mj2x_e2e_void_out.c").string();
 
     // Manual class construction
     auto cn = std::make_unique<ClassNode>();
