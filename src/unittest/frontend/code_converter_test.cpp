@@ -116,7 +116,7 @@ TEST(MethodStackTest, InstanceMethodHasThis) {
 
 TEST(MethodStackTest, LongAndDoubleTakeTwoSlots) {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "test", "(JD)V", "", noExcepts);
+    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, toRef("test"), toRef("(JD)V"), toRef(""), noExcepts);
     mn.maxLocals = 4;
 
     MethodStack ms(mn);
@@ -134,7 +134,7 @@ static std::unique_ptr<MethodNode> makeMethod(
     std::initializer_list<AbstractInsnNode*> insns)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    auto mn = std::make_unique<MethodNode>(access, name, desc, "", noExcepts);
+    auto mn = std::make_unique<MethodNode>(access, toRef(name.c_str()), toRef(desc.c_str()), toRef(""), noExcepts);
     mn->maxStack = 10;
     mn->maxLocals = 10;
     for (auto* insn : insns)
@@ -227,7 +227,7 @@ TEST(CodeConverterTest, FieldAccess) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
                          "getX", "()I", {
         new VarInsnNode(Opcodes::ALOAD, 0), // this
-        new FieldInsnNode(Opcodes::GETFIELD, "Foo", "x", "I"),
+        new FieldInsnNode(Opcodes::GETFIELD, toRef("Foo"), toRef("x"), toRef("I")),
         new InsnNode(Opcodes::IRETURN),
     });
 
@@ -251,7 +251,7 @@ TEST(CodeConverterTest, FieldAccess) {
 TEST(CodeConverterTest, MethodInvoke) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "call", "()V", {
-        new MethodInsnNode(Opcodes::INVOKESTATIC, "Other", "run", "()V", false),
+        new MethodInsnNode(Opcodes::INVOKESTATIC, toRef("Other"), toRef("run"), toRef("()V"), false),
         new InsnNode(Opcodes::RETURN),
     });
 
@@ -354,9 +354,9 @@ TEST(CodeConverterTest, ConstantInstructions) {
 TEST(CodeConverterTest, NewObjectAndInvokeSpecial) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "create", "()Ljava/lang/Object;", {
-        new TypeInsnNode(Opcodes::NEW, "java/lang/Object"),
+        new TypeInsnNode(Opcodes::NEW, toRef("java/lang/Object")),
         new InsnNode(Opcodes::DUP),
-        new MethodInsnNode(Opcodes::INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false),
+        new MethodInsnNode(Opcodes::INVOKESPECIAL, toRef("java/lang/Object"), toRef("<init>"), toRef("()V"), false),
         new InsnNode(Opcodes::ARETURN),
     });
 

@@ -2,6 +2,7 @@
 
 #include <fstream>
 
+#include "libca/str/utf8_string.hpp"
 #include "test_helper.hpp"
 #include "mj2x/mj2x.hpp"
 #include "jbytecode/jbytecode.hpp"
@@ -12,19 +13,20 @@ using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
+using namespace ca::str::literals;
 
 // Helper: create a minimal class in memory
 static std::unique_ptr<ClassNode> makeSimpleClass() {
     auto cn = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = "TestClass";
-    cn->superName = "java/lang/Object";
+    cn->name = "TestClass"_utf8_ref;
+    cn->superName = "java/lang/Object"_utf8_ref;
 
-    std::vector<std::string> noExceptions;
+    std::vector<ca::str::Utf8StringRef> noExceptions;
     auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
-        "", noExceptions);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add"_utf8_ref, "(II)I"_utf8_ref,
+        ""_utf8_ref, noExceptions);
     mn->maxStack = 2;
     mn->maxLocals = 2;
 
@@ -63,10 +65,10 @@ TEST(IOTest, ClassWriteReadRoundtrip) {
     ClassNode cn2;
     reader.accept(&cn2, 0);
 
-    EXPECT_EQ(cn2.name, "TestClass");
+    EXPECT_EQ(cn2.name, "TestClass"_utf8_ref);
     EXPECT_EQ(cn2.methods.size(), 1);
-    EXPECT_EQ(cn2.methods[0]->name, "add");
-    EXPECT_EQ(cn2.methods[0]->desc, "(II)I");
+    EXPECT_EQ(cn2.methods[0]->name, "add"_utf8_ref);
+    EXPECT_EQ(cn2.methods[0]->desc, "(II)I"_utf8_ref);
 }
 
 TEST(IOTest, InputLoaderRoundtrip) {

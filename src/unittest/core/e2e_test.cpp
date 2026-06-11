@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <fstream>
 
+#include "libca/str/utf8_string.hpp"
+#include "libca/str/utf8_string_arena.hpp"
 #include "test_helper.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/backend/c_backend.hpp"
@@ -15,20 +17,25 @@ using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
+using namespace ca::str::literals;
+using namespace ca::str;
 
 // Helper: construct a class with one method and write to disk
 static std::string writeTestClass(const std::string& name, const std::string& suffix) {
     auto path = test::getTempOutPath("mj2x_e2e_" + suffix).string();
 
     auto cn = std::make_unique<ClassNode>();
+    Utf8StringArena arena;
+    auto name_ref = arena.intern(name.c_str());
+
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = name;
-    cn->superName = "java/lang/Object";
+    cn->name = name_ref;
+    cn->superName = "java/lang/Object"_utf8_ref;
 
-    std::vector<std::string> noExcepts;
+    std::vector<Utf8StringRef> noExcepts;
     auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I", "", noExcepts);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add"_utf8_ref, "(II)I"_utf8_ref, ""_utf8_ref, noExcepts);
     mn->maxStack = 2;
     mn->maxLocals = 2;
     mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
@@ -108,12 +115,12 @@ TEST(E2ETest, VoidMethodWithCBackend) {
     auto cn = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = "VoidTest";
-    cn->superName = "java/lang/Object";
+    cn->name = "VoidTest"_utf8_ref;
+    cn->superName = "java/lang/Object"_utf8_ref;
 
-    std::vector<std::string> noExcepts;
+    std::vector<Utf8StringRef> noExcepts;
     auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "noop", "()V", "", noExcepts);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "noop"_utf8_ref, "()V"_utf8_ref, ""_utf8_ref, noExcepts);
     mn->maxStack = 1;
     mn->maxLocals = 0;
     mn->instructions.add(new InsnNode(Opcodes::RETURN));

@@ -291,7 +291,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         int opc = ji->opcode;
         int target = ji->label->bytecodeOffset;
 
-        if (opc == Opcodes::GOTO || opc == Opcodes::GOTO_W) {
+        if (opc == Opcodes::GOTO) {
             auto node = std::make_unique<MIRUncondBranch>();
             node->targetLabel = target;
             cur->nodes.push_back(std::move(node));
