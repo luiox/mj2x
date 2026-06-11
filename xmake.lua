@@ -43,3 +43,5 @@ target("mj2x_unittest")
         add_cxflags("/utf-8", {tools = "cl"})
         add_defines("_CRT_SECURE_NO_WARNINGS")
     end
+
+includes("runtime")
