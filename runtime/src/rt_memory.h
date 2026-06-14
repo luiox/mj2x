@@ -6,3 +6,4 @@
 #include "jni_wrapper.h"
 
 #endif // !RT_MEMORY_H_INCLUDE
+

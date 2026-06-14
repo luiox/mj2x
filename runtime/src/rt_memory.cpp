@@ -5,3 +5,4 @@ inline jlong rt_memory_read(jint size)
 {
 	return (jlong)malloc(size);
 }
+

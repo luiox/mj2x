@@ -13,20 +13,20 @@ using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
-using namespace ca::str::literals;
+using namespace ca::str;
 
 // Helper: create a minimal class in memory
 static std::unique_ptr<ClassNode> makeSimpleClass() {
     auto cn = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = "TestClass"_utf8_ref;
-    cn->superName = "java/lang/Object"_utf8_ref;
+    cn->name = ZUtf8StringRef::from_static("TestClass");
+    cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<ca::str::Utf8StringRef> noExceptions;
     auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add"_utf8_ref, "(II)I"_utf8_ref,
-        ""_utf8_ref, noExceptions);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ZUtf8StringRef::from_static("add"), ZUtf8StringRef::from_static("(II)I"),
+        ZUtf8StringRef::from_static(""), noExceptions);
     mn->maxStack = 2;
     mn->maxLocals = 2;
 
@@ -65,10 +65,10 @@ TEST(IOTest, ClassWriteReadRoundtrip) {
     ClassNode cn2;
     reader.accept(&cn2, 0);
 
-    EXPECT_EQ(cn2.name, "TestClass"_utf8_ref);
+    EXPECT_EQ(cn2.name, ZUtf8StringRef::from_static("TestClass"));
     EXPECT_EQ(cn2.methods.size(), 1);
-    EXPECT_EQ(cn2.methods[0]->name, "add"_utf8_ref);
-    EXPECT_EQ(cn2.methods[0]->desc, "(II)I"_utf8_ref);
+    EXPECT_EQ(cn2.methods[0]->name, ZUtf8StringRef::from_static("add"));
+    EXPECT_EQ(cn2.methods[0]->desc, ZUtf8StringRef::from_static("(II)I"));
 }
 
 TEST(IOTest, InputLoaderRoundtrip) {
@@ -111,3 +111,4 @@ TEST(PipelineTest, FullPipelineRoundtrip) {
     std::remove(inPath.c_str());
     std::remove(outPath.c_str());
 }
+

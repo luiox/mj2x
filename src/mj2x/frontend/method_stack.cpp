@@ -44,3 +44,4 @@ PrimitiveKind MethodStack::getLocalType(int index) const {
 }
 
 } // namespace mj2x
+

@@ -10,7 +10,7 @@
 namespace {
 
 std::string toStr(ca::str::Utf8StringRef ref) {
-    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byteLength());
+    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byte_length());
 }
 
 } // anonymous namespace
@@ -118,3 +118,4 @@ void Pipeline::writeOutput() {
 }
 
 } // namespace mj2x
+

@@ -29,3 +29,4 @@ TEST(CompilerIndexTest, GetNonExistentClassReturnsNull) {
     CompilerIndex index;
     EXPECT_EQ(index.getClass("NonExistent"), nullptr);
 }
+

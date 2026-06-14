@@ -48,3 +48,4 @@ void OutputWriter::write(const std::string& path, CompilerIndex& index) {
 }
 
 } // namespace mj2x
+

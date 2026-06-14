@@ -14,3 +14,4 @@ struct BackendResult {
 };
 
 } // namespace mj2x
+

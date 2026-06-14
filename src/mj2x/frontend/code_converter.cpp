@@ -11,7 +11,7 @@
 namespace {
 
 std::string toStr(ca::str::Utf8StringRef ref) {
-    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byteLength());
+    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byte_length());
 }
 
 } // anonymous namespace
@@ -56,19 +56,19 @@ void CodeConverter::analyzeControlFlow(MethodNode& mn) {
     for (auto* insn = mn.instructions.getFirst(); insn; insn = insn->nextInsn) {
         switch (insn->getType()) {
         case AbstractInsnNode::JUMP_INSN: {
-            auto* jump = ca::core::cast<JumpInsnNode>(insn);
+            auto* jump = typed::cast<JumpInsnNode>(insn);
             impl_->labelTargets.insert(jump->label->bytecodeOffset);
             break;
         }
         case AbstractInsnNode::TABLESWITCH_INSN: {
-            auto* ts = ca::core::cast<TableSwitchInsnNode>(insn);
+            auto* ts = typed::cast<TableSwitchInsnNode>(insn);
             impl_->labelTargets.insert(ts->dflt->bytecodeOffset);
             for (auto* l : ts->labels)
                 impl_->labelTargets.insert(l->bytecodeOffset);
             break;
         }
         case AbstractInsnNode::LOOKUPSWITCH_INSN: {
-            auto* ls = ca::core::cast<LookupSwitchInsnNode>(insn);
+            auto* ls = typed::cast<LookupSwitchInsnNode>(insn);
             impl_->labelTargets.insert(ls->dflt->bytecodeOffset);
             for (auto* l : ls->labels)
                 impl_->labelTargets.insert(l->bytecodeOffset);
@@ -108,7 +108,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
 
     switch (insn->getType()) {
     case AbstractInsnNode::LABEL: {
-        auto* lb = ca::core::cast<LabelNode>(insn);
+        auto* lb = typed::cast<LabelNode>(insn);
         int lid = lb->label->bytecodeOffset;
         auto it = impl_->blocks.find(lid);
         if (it != impl_->blocks.end())
@@ -175,7 +175,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::INT_INSN: {
-        auto* ii = ca::core::cast<IntInsnNode>(insn);
+        auto* ii = typed::cast<IntInsnNode>(insn);
         if (ii->opcode == Opcodes::BIPUSH || ii->opcode == Opcodes::SIPUSH) {
             cur->nodes.push_back(std::make_unique<MIRConstant>());
         } else if (ii->opcode == Opcodes::NEWARRAY) {
@@ -187,7 +187,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::VAR_INSN: {
-        auto* vi = ca::core::cast<VarInsnNode>(insn);
+        auto* vi = typed::cast<VarInsnNode>(insn);
         int opc = vi->opcode;
         if (opc >= Opcodes::ILOAD && opc <= Opcodes::ALOAD) {
             auto node = std::make_unique<MIRLocalLoad>();
@@ -203,7 +203,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::TYPE_INSN: {
-        auto* ti = ca::core::cast<TypeInsnNode>(insn);
+        auto* ti = typed::cast<TypeInsnNode>(insn);
         switch (ti->opcode) {
         case Opcodes::NEW: {
             auto node = std::make_unique<MIRNewObject>();
@@ -236,7 +236,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::FIELD_INSN: {
-        auto* fi = ca::core::cast<FieldInsnNode>(insn);
+        auto* fi = typed::cast<FieldInsnNode>(insn);
         switch (fi->opcode) {
         case Opcodes::GETSTATIC: {
             auto node = std::make_unique<MIRStaticGet>();
@@ -269,7 +269,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::METHOD_INSN: {
-        auto* mi = ca::core::cast<MethodInsnNode>(insn);
+        auto* mi = typed::cast<MethodInsnNode>(insn);
         auto node = std::make_unique<MIRInvoke>();
         node->owner = toStr(mi->owner);
         node->name = toStr(mi->name);
@@ -287,7 +287,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::JUMP_INSN: {
-        auto* ji = ca::core::cast<JumpInsnNode>(insn);
+        auto* ji = typed::cast<JumpInsnNode>(insn);
         int opc = ji->opcode;
         int target = ji->label->bytecodeOffset;
 
@@ -326,7 +326,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::IINC_INSN: {
-        auto* ii = ca::core::cast<IincInsnNode>(insn);
+        auto* ii = typed::cast<IincInsnNode>(insn);
         auto node = std::make_unique<MIRIinc>();
         node->varIndex = ii->var;
         node->increment = ii->incr;
@@ -335,7 +335,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::TABLESWITCH_INSN: {
-        auto* ts = ca::core::cast<TableSwitchInsnNode>(insn);
+        auto* ts = typed::cast<TableSwitchInsnNode>(insn);
         auto node = std::make_unique<MIRSwitch>();
         node->defaultLabel = ts->dflt->bytecodeOffset;
         int key = ts->min;
@@ -347,7 +347,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::LOOKUPSWITCH_INSN: {
-        auto* ls = ca::core::cast<LookupSwitchInsnNode>(insn);
+        auto* ls = typed::cast<LookupSwitchInsnNode>(insn);
         auto node = std::make_unique<MIRSwitch>();
         node->defaultLabel = ls->dflt->bytecodeOffset;
         for (size_t i = 0; i < ls->keys.size(); i++) {
@@ -383,7 +383,7 @@ void CodeConverter::translateInstructions(MethodNode& mn) {
     for (auto* insn = mn.instructions.getFirst(); insn; insn = insn->nextInsn) {
         // Check if this insn is a block start
         if (insn->getType() == AbstractInsnNode::LABEL) {
-            auto* lb = ca::core::cast<LabelNode>(insn);
+            auto* lb = typed::cast<LabelNode>(insn);
             int lid = lb->label->bytecodeOffset;
             auto it = impl_->blocks.find(lid);
             if (it != impl_->blocks.end())
@@ -496,3 +496,4 @@ std::string CodeConverter::dumpMIR(const std::vector<Block*>& blocks) {
 }
 
 } // namespace mj2x
+

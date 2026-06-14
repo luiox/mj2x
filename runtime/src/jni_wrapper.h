@@ -9,3 +9,4 @@
 #endif
 
 #endif // !JNI_WRAPPER_H_INCLUDE
+

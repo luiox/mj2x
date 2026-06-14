@@ -11,3 +11,4 @@ PrimitiveKind jvmDescToPrimitive(const std::string& desc);
 int primitiveStackSize(PrimitiveKind kind);
 
 } // namespace mj2x
+

@@ -83,3 +83,4 @@ CmpOp branchZeroOpcodeToCmpOp(int opcode) {
 }
 
 } // namespace mj2x
+

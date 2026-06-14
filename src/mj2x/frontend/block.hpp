@@ -28,3 +28,4 @@ struct Block {
 };
 
 } // namespace mj2x
+

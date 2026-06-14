@@ -233,3 +233,4 @@ TEST(CBackendTest, NameMangling) {
     EXPECT_FALSE(result.text.empty());
     EXPECT_NE(result.text.find("JNIEXPORT"), std::string::npos);
 }
+

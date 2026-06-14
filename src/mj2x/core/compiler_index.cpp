@@ -12,3 +12,4 @@ CompilerClass* CompilerIndex::getClass(const std::string& name) {
 }
 
 } // namespace mj2x
+

@@ -17,7 +17,6 @@ using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
-using namespace ca::str::literals;
 using namespace ca::str;
 
 // Helper: construct a class with one method and write to disk
@@ -31,11 +30,11 @@ static std::string writeTestClass(const std::string& name, const std::string& su
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
     cn->name = name_ref;
-    cn->superName = "java/lang/Object"_utf8_ref;
+    cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<Utf8StringRef> noExcepts;
     auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add"_utf8_ref, "(II)I"_utf8_ref, ""_utf8_ref, noExcepts);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ZUtf8StringRef::from_static("add"), ZUtf8StringRef::from_static("(II)I"), ZUtf8StringRef::from_static(""), noExcepts);
     mn->maxStack = 2;
     mn->maxLocals = 2;
     mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
@@ -115,12 +114,12 @@ TEST(E2ETest, VoidMethodWithCBackend) {
     auto cn = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = "VoidTest"_utf8_ref;
-    cn->superName = "java/lang/Object"_utf8_ref;
+    cn->name = ZUtf8StringRef::from_static("VoidTest");
+    cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<Utf8StringRef> noExcepts;
     auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "noop"_utf8_ref, "()V"_utf8_ref, ""_utf8_ref, noExcepts);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ZUtf8StringRef::from_static("noop"), ZUtf8StringRef::from_static("()V"), ZUtf8StringRef::from_static(""), noExcepts);
     mn->maxStack = 1;
     mn->maxLocals = 0;
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
@@ -162,3 +161,4 @@ TEST(E2ETest, VoidMethodWithCBackend) {
     std::remove(outPath.c_str());
     std::remove(cPath.c_str());
 }
+

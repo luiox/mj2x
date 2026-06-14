@@ -10,7 +10,7 @@ using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
-using namespace ca::str::literals;
+using namespace ca::str;
 
 TEST(InputLoaderTest, ReadRealClass) {
     auto* cls = std::getenv("TEMP");
@@ -24,5 +24,6 @@ TEST(InputLoaderTest, ReadRealClass) {
     auto* clazz = index->getClass("Test");
     ASSERT_NE(clazz, nullptr);
     EXPECT_GE(clazz->classNode->methods.size(), 1);
-    EXPECT_EQ(clazz->classNode->name, "Test"_utf8_ref);
+    EXPECT_EQ(clazz->classNode->name, ZUtf8StringRef::from_static("Test"));
 }
+

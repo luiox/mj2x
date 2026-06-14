@@ -425,3 +425,4 @@ TEST(CodeConverterTest, SwitchInstructions) {
     }
     EXPECT_TRUE(foundSwitch);
 }
+
