@@ -31,6 +31,7 @@ target("mj2x-cli")
 target("mj2x_unittest")
     set_kind("binary")
     set_group("mj2x/test")
+    set_default(false)
 
     add_deps("mj2x-core", "test_helper")
     add_packages("gtest")
