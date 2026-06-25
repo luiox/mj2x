@@ -10,18 +10,6 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 
-namespace {
-
-std::string toStr(ca::str::Utf8StringRef ref) {
-    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byte_length());
-}
-
-ca::str::Utf8StringRef toRef(const std::string& s) {
-    return ca::str::Utf8StringRef(reinterpret_cast<const ca::u8*>(s.data()), s.size(), s.size());
-}
-
-} // anonymous namespace
-
 namespace mj2x {
 
 using namespace jbytecode::core;
@@ -29,6 +17,11 @@ using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
+
+// label 标识：LabelNode* 转 int（与 code_converter 的 labelKey 一致；见 dev_plan R1a.3）。
+static int labelKey(jbytecode::core::Label* lbl) {
+    return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
+}
 
 // ============================================================
 // JNI name mangling (javah-style)
@@ -241,17 +234,17 @@ BackendResult CBackend::compileMethod(
     impl_->currentClassName = className;
     auto& cls = impl_->currentClassName;
 
-    impl_->currentMethodName = toStr(mn->name);
-    impl_->currentMethodDesc = toStr(mn->desc);
+    impl_->currentMethodName = mn->name.to_std_string();
+    impl_->currentMethodDesc = mn->desc.to_std_string();
 
     std::ostringstream funcOut;
 
     // JNI function signature
     bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
     auto retType = jvmDescToPrimitive(
-        toStr(Type::getReturnType(mn->desc).getDescriptor()));
+        Type::getReturnType(mn->desc).getDescriptor().to_std_string());
 
-    auto funcName = mangleMethod(cls, toStr(mn->name), toStr(mn->desc));
+    auto funcName = mangleMethod(cls, mn->name.to_std_string(), mn->desc.to_std_string());
     impl_->exportedFunctions.insert(funcName);
 
     funcOut << "JNIEXPORT " << primitiveToJNIType(retType) << " JNICALL\n";
@@ -355,7 +348,7 @@ void CBackend::finalize(const CompilerIndex& index) {
 void CBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out) {
     switch (node->kind) {
     case MIRKind::LABEL:
-        out << "label_" << static_cast<const MIRLabel*>(node)->id << ":\n";
+        out << "label_" << labelKey(static_cast<const MIRLabel*>(node)->labelNode) << ":\n";
         break;
     case MIRKind::CONSTANT:
         emitConstant(static_cast<const MIRConstant*>(node), out);
@@ -514,26 +507,26 @@ void CBackend::Impl::emitBranch(const MIRBranch* node, std::ostringstream& out) 
     const char* acc = stackAccessor(node->type);
     (void)acc;
     out << "    if (stack[sp - 1]" << acc << " " << cmpOpToC(node->op)
-        << " stack[sp]" << acc << ") goto label_" << node->targetLabel << ";\n";
+        << " stack[sp]" << acc << ") goto label_" << labelKey(node->targetLabel) << ";\n";
     out << "    sp -= 2;\n";
 }
 
 void CBackend::Impl::emitBranchZero(const MIRBranchZero* node, std::ostringstream& out) {
     out << "    if (stack[sp].i " << cmpOpToC(node->op)
-        << " 0) goto label_" << node->targetLabel << ";\n";
+        << " 0) goto label_" << labelKey(node->targetLabel) << ";\n";
     out << "    sp--;\n";
 }
 
 void CBackend::Impl::emitUncondBranch(const MIRUncondBranch* node, std::ostringstream& out) {
-    out << "    goto label_" << node->targetLabel << ";\n";
+    out << "    goto label_" << labelKey(node->targetLabel) << ";\n";
 }
 
 void CBackend::Impl::emitSwitch(const MIRSwitch* node, std::ostringstream& out) {
     out << "    switch (stack[sp--].i) {\n";
     for (auto& c : node->cases) {
-        out << "    case " << c.key << ": goto label_" << c.targetLabel << ";\n";
+        out << "    case " << c.key << ": goto label_" << labelKey(c.targetLabel) << ";\n";
     }
-    out << "    default: goto label_" << node->defaultLabel << ";\n";
+    out << "    default: goto label_" << labelKey(node->defaultLabel) << ";\n";
     out << "    }\n";
 }
 
@@ -618,8 +611,8 @@ void CBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringstream&
 }
 
 void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) {
-    auto descRef = toRef(node->desc);
-    auto retType = jvmDescToPrimitive(toStr(Type::getReturnType(descRef).getDescriptor()));
+    ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(node->desc.c_str());
+    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor().to_std_string());
     const char* suffix = primitiveToJNISuffix(retType);
 
     // Determine invocation kind

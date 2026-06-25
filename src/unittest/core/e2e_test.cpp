@@ -7,7 +7,7 @@
 #include "libca/str/utf8_string_arena.hpp"
 #include "test_helper.hpp"
 #include "mj2x/mj2x.hpp"
-#include "mj2x/backend/c_backend.hpp"
+#include "mj2x/backend/reference/c_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 
@@ -43,7 +43,7 @@ static std::string writeTestClass(const std::string& name, const std::string& su
     mn->instructions.add(new InsnNode(Opcodes::IRETURN));
     cn->methods.push_back(mn.release());
 
-    ClassWriter cw(ClassWriter::COMPUTE_MAXS);
+    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
     cn->accept(&cw);
     auto bytes = cw.toByteArray();
 
@@ -125,7 +125,8 @@ TEST(E2ETest, VoidMethodWithCBackend) {
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
     cn->methods.push_back(mn.release());
 
-    ClassWriter cw(ClassWriter::COMPUTE_MAXS);
+    Utf8StringArena arena;
+    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
     cn->accept(&cw);
     auto bytes = cw.toByteArray();
     {
