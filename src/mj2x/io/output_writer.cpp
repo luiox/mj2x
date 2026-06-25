@@ -29,7 +29,7 @@ void OutputWriter::write(const std::string& path, CompilerIndex& index) {
 
     // Phase 1: single-class output
     for (auto& [name, cls] : classes) {
-        ClassWriter writer(ClassWriter::COMPUTE_MAXS);
+        ClassWriter writer(index.arena(), ClassWriter::COMPUTE_MAXS);
         cls.classNode->accept(&writer);
         auto bytes = writer.toByteArray();
 

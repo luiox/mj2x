@@ -1,6 +1,7 @@
 #pragma once
 
 #include <jbytecode/jbytecode.hpp>
+#include <libca/str/utf8_string_arena.hpp>
 
 #include <string>
 #include <vector>
@@ -85,8 +86,14 @@ public:
     ClassMap& getClasses() { return classes_; }
     const ClassMap& getClasses() const { return classes_; }
 
+    // Utf8StringArena ownership: ClassReader/ClassWriter 需要 arena&，且 arena 必须比
+    // 它们活得更久。CompilerIndex 持有 arena，全编译期共享一个（ARCHITECTURE_REDESIGN §2.1）。
+    ca::str::Utf8StringArena& arena() { return arena_; }
+    const ca::str::Utf8StringArena& arena() const { return arena_; }
+
 private:
     ClassMap classes_;
+    ca::str::Utf8StringArena arena_;
 };
 
 } // namespace mj2x

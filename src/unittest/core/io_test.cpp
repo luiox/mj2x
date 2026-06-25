@@ -44,7 +44,8 @@ static std::string writeTempClass(const std::string& suffix) {
     auto path = test::getTempOutPath("mj2x_" + suffix).string();
 
     auto cn = makeSimpleClass();
-    ClassWriter cw(ClassWriter::COMPUTE_MAXS);
+    ca::str::Utf8StringArena arena;
+    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
     cn->accept(&cw);
     auto bytes = cw.toByteArray();
 
@@ -56,12 +57,13 @@ static std::string writeTempClass(const std::string& suffix) {
 
 TEST(IOTest, ClassWriteReadRoundtrip) {
     auto cn = makeSimpleClass();
-    ClassWriter cw(ClassWriter::COMPUTE_MAXS);
+    ca::str::Utf8StringArena arena;
+    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
     cn->accept(&cw);
     auto bytes = cw.toByteArray();
     ASSERT_GT(bytes.size(), 50);
 
-    ClassReader reader(bytes.data(), bytes.size());
+    ClassReader reader(arena, bytes.data(), bytes.size());
     ClassNode cn2;
     reader.accept(&cn2, 0);
 
