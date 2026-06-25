@@ -15,11 +15,6 @@ using namespace jbytecode::util;
 
 namespace {
 
-ca::str::Utf8StringRef toRef(const char* s) {
-    auto len = std::strlen(s);
-    return ca::str::Utf8StringRef(reinterpret_cast<const ca::u8*>(s), len, len);
-}
-
 }
 
 // ============================================================
@@ -94,7 +89,7 @@ TEST(OpcodeUtilsTest, BranchZeroOpcodeMapping) {
 
 TEST(MethodStackTest, StaticMethodParameterTypes) {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, toRef("add"), toRef("(II)I"), toRef(""), noExcepts);
+    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ca::str::Utf8StringRef::from_cstr("add"), ca::str::Utf8StringRef::from_cstr("(II)I"), ca::str::Utf8StringRef::from_cstr(""), noExcepts);
     mn.maxStack = 2;
     mn.maxLocals = 2;
 
@@ -107,7 +102,7 @@ TEST(MethodStackTest, StaticMethodParameterTypes) {
 
 TEST(MethodStackTest, InstanceMethodHasThis) {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC, toRef("getValue"), toRef("()I"), toRef(""), noExcepts);
+    MethodNode mn(Opcodes::ACC_PUBLIC, ca::str::Utf8StringRef::from_cstr("getValue"), ca::str::Utf8StringRef::from_cstr("()I"), ca::str::Utf8StringRef::from_cstr(""), noExcepts);
     mn.maxLocals = 1;
 
     MethodStack ms(mn);
@@ -116,7 +111,7 @@ TEST(MethodStackTest, InstanceMethodHasThis) {
 
 TEST(MethodStackTest, LongAndDoubleTakeTwoSlots) {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, toRef("test"), toRef("(JD)V"), toRef(""), noExcepts);
+    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ca::str::Utf8StringRef::from_cstr("test"), ca::str::Utf8StringRef::from_cstr("(JD)V"), ca::str::Utf8StringRef::from_cstr(""), noExcepts);
     mn.maxLocals = 4;
 
     MethodStack ms(mn);
@@ -134,7 +129,7 @@ static std::unique_ptr<MethodNode> makeMethod(
     std::initializer_list<AbstractInsnNode*> insns)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    auto mn = std::make_unique<MethodNode>(access, toRef(name.c_str()), toRef(desc.c_str()), toRef(""), noExcepts);
+    auto mn = std::make_unique<MethodNode>(access, ca::str::Utf8StringRef::from_cstr(name.c_str()), ca::str::Utf8StringRef::from_cstr(desc.c_str()), ca::str::Utf8StringRef::from_cstr(""), noExcepts);
     mn->maxStack = 10;
     mn->maxLocals = 10;
     for (auto* insn : insns)
@@ -227,7 +222,7 @@ TEST(CodeConverterTest, FieldAccess) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
                          "getX", "()I", {
         new VarInsnNode(Opcodes::ALOAD, 0), // this
-        new FieldInsnNode(Opcodes::GETFIELD, toRef("Foo"), toRef("x"), toRef("I")),
+        new FieldInsnNode(Opcodes::GETFIELD, ca::str::Utf8StringRef::from_cstr("Foo"), ca::str::Utf8StringRef::from_cstr("x"), ca::str::Utf8StringRef::from_cstr("I")),
         new InsnNode(Opcodes::IRETURN),
     });
 
@@ -251,7 +246,7 @@ TEST(CodeConverterTest, FieldAccess) {
 TEST(CodeConverterTest, MethodInvoke) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "call", "()V", {
-        new MethodInsnNode(Opcodes::INVOKESTATIC, toRef("Other"), toRef("run"), toRef("()V"), false),
+        new MethodInsnNode(Opcodes::INVOKESTATIC, ca::str::Utf8StringRef::from_cstr("Other"), ca::str::Utf8StringRef::from_cstr("run"), ca::str::Utf8StringRef::from_cstr("()V"), false),
         new InsnNode(Opcodes::RETURN),
     });
 
@@ -298,7 +293,8 @@ TEST(CodeConverterTest, UnconditionalBranch) {
     bool foundGoto = false;
     for (auto& n : entryBlock->nodes) {
         if (n->kind == MIRKind::UNCOND_BRANCH) {
-            EXPECT_EQ(static_cast<MIRUncondBranch*>(n.get())->targetLabel, 10);
+            // targetLabel 现在是 Label* 身份（不再用 bytecodeOffset，见 R1a.3）
+            EXPECT_EQ(static_cast<MIRUncondBranch*>(n.get())->targetLabel, label->label);
             foundGoto = true;
         }
     }
@@ -354,9 +350,9 @@ TEST(CodeConverterTest, ConstantInstructions) {
 TEST(CodeConverterTest, NewObjectAndInvokeSpecial) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "create", "()Ljava/lang/Object;", {
-        new TypeInsnNode(Opcodes::NEW, toRef("java/lang/Object")),
+        new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
         new InsnNode(Opcodes::DUP),
-        new MethodInsnNode(Opcodes::INVOKESPECIAL, toRef("java/lang/Object"), toRef("<init>"), toRef("()V"), false),
+        new MethodInsnNode(Opcodes::INVOKESPECIAL, ca::str::Utf8StringRef::from_cstr("java/lang/Object"), ca::str::Utf8StringRef::from_cstr("<init>"), ca::str::Utf8StringRef::from_cstr("()V"), false),
         new InsnNode(Opcodes::ARETURN),
     });
 
@@ -418,7 +414,8 @@ TEST(CodeConverterTest, SwitchInstructions) {
     for (auto& n : entryBlock->nodes) {
         if (n->kind == MIRKind::SWITCH) {
             auto* sw = static_cast<MIRSwitch*>(n.get());
-            EXPECT_EQ(sw->defaultLabel, 100);
+            // defaultLabel 现在是 Label* 身份（不再用 bytecodeOffset，见 R1a.3）
+            EXPECT_EQ(sw->defaultLabel, defaultLabel->label);
             ASSERT_EQ(sw->cases.size(), 1);
             foundSwitch = true;
         }
