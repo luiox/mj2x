@@ -433,9 +433,12 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
             case MIRKind::LABEL:
             case MIRKind::FRAME:
             case MIRKind::LINE:
-            case MIRKind::INVOKE_DYNAMIC:
-                // NOP/元数据：忽略。INVOKE_DYNAMIC 应由 R1b preprocessor 先展开，R1a 暂忽略。
+                // NOP/元数据：忽略。
                 break;
+            case MIRKind::INVOKE_DYNAMIC:
+                // R1b preprocessor 标记但未展开（R2/R5+ 完整展开）。fail-closed，不静默。
+                reason = "invokedynamic not yet expanded (R2/R5+); preprocessor flagged it";
+                return false;
             }
         }
 

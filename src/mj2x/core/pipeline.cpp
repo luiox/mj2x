@@ -7,14 +7,6 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 
-namespace {
-
-std::string toStr(ca::str::Utf8StringRef ref) {
-    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byte_length());
-}
-
-} // anonymous namespace
-
 namespace mj2x {
 
 Pipeline::Pipeline(PipelineConfig config)
@@ -83,8 +75,8 @@ void Pipeline::compileMethods() {
         for (auto& method : cls.methods) {
             if (!method.markedForCompile) continue;
 
-            auto mnName = toStr(method.methodNode->name);
-            auto mnDesc = toStr(method.methodNode->desc);
+            auto mnName = method.methodNode->name.to_std_string();
+            auto mnDesc = method.methodNode->desc.to_std_string();
             printf("  Compiling %s.%s%s\n",
                    name.c_str(), mnName.c_str(), mnDesc.c_str());
 

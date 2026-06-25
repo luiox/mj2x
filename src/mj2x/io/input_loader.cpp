@@ -8,14 +8,6 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 
-namespace {
-
-std::string toStr(ca::str::Utf8StringRef ref) {
-    return std::string(reinterpret_cast<const char*>(ref.data()), ref.byte_length());
-}
-
-} // anonymous namespace
-
 namespace mj2x {
 
 using namespace jbytecode::core;
@@ -46,11 +38,12 @@ static std::vector<ca::u8> readFileBytes(const std::string& path) {
 std::unique_ptr<CompilerIndex> InputLoader::load(const std::string& path) {
     auto bytes = readFileBytes(path);
 
-    ClassReader reader(bytes.data(), bytes.size());
+    auto index = std::make_unique<CompilerIndex>();
+
+    // ClassReader 需要 arena&，arena 归 CompilerIndex 持有，比 reader 活得久。
+    ClassReader reader(index->arena(), bytes.data(), bytes.size());
     auto classNode = std::make_unique<ClassNode>();
     reader.accept(classNode.get(), 0);
-
-    auto index = std::make_unique<CompilerIndex>();
 
     CompilerClass cls;
     cls.classNode = std::move(classNode);
@@ -67,7 +60,7 @@ std::unique_ptr<CompilerIndex> InputLoader::load(const std::string& path) {
         cls.fields.push_back(std::move(cf));
     }
 
-    auto className = toStr(cls.classNode->name);
+    auto className = cls.classNode->name.to_std_string();
     auto numMethods = cls.classNode->methods.size();
     auto numFields = cls.classNode->fields.size();
 

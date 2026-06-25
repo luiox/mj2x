@@ -1,6 +1,9 @@
 #include "mj2x/mj2x.hpp"
-#include "mj2x/backend/c_backend.hpp"
+#include "mj2x/backend/reference/c_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
+#include "mj2x/preprocessor/ldc_preprocessor.hpp"
+#include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
+#include "mj2x/preprocessor/multianewarray_preprocessor.hpp"
 
 #include <cstdio>
 #include <string>
@@ -54,6 +57,10 @@ int main(int argc, char** argv) {
 
     pipeline.registerPreprocessor(
         std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+    // R1b: 字节码改写预处理（顺序：Ldc → Indy → MultiNewArray → MarkAll）
+    pipeline.registerPreprocessor(std::make_unique<mj2x::LdcPreprocessor>());
+    pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
+    pipeline.registerPreprocessor(std::make_unique<mj2x::MultiANewArrayPreprocessor>());
 
     return pipeline.run();
 }

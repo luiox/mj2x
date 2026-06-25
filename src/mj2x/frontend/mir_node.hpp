@@ -85,8 +85,9 @@ struct MIRNop : MIRNode {
 };
 
 struct MIRLabel : MIRNode {
-    int id;
-    explicit MIRLabel(int id_) : MIRNode(MIRKind::LABEL), id(id_) {}
+    // label 标识用 Label*（读取期稳定）。bytecodeOffset 在树形重建后被重置为 -1，不可靠。
+    jbytecode::core::Label* labelNode = nullptr;
+    explicit MIRLabel(jbytecode::core::Label* ln) : MIRNode(MIRKind::LABEL), labelNode(ln) {}
 };
 
 struct MIRConstant : MIRNode {
@@ -138,27 +139,27 @@ struct MIRCast : MIRNode {
 struct MIRBranch : MIRNode {
     CmpOp op = CmpOp::EQ;
     PrimitiveKind type = PrimitiveKind::INT;
-    int targetLabel = 0;
+    jbytecode::core::Label* targetLabel = nullptr;
     MIRBranch() : MIRNode(MIRKind::BRANCH) {}
 };
 
 struct MIRBranchZero : MIRNode {
     CmpOp op = CmpOp::EQ;
-    int targetLabel = 0;
+    jbytecode::core::Label* targetLabel = nullptr;
     MIRBranchZero() : MIRNode(MIRKind::BRANCH_ZERO) {}
 };
 
 struct MIRUncondBranch : MIRNode {
-    int targetLabel = 0;
+    jbytecode::core::Label* targetLabel = nullptr;
     MIRUncondBranch() : MIRNode(MIRKind::UNCOND_BRANCH) {}
 };
 
 struct MIRSwitch : MIRNode {
     struct Case {
         int key;
-        int targetLabel;
+        jbytecode::core::Label* targetLabel;
     };
-    int defaultLabel = 0;
+    jbytecode::core::Label* defaultLabel = nullptr;
     std::vector<Case> cases;
     MIRSwitch() : MIRNode(MIRKind::SWITCH) {}
 };
@@ -222,6 +223,19 @@ struct MIRInvoke : MIRNode {
     bool isInterface = false;
     int invokeOpcode = 0; // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
     MIRInvoke() : MIRNode(MIRKind::INVOKE) {}
+};
+
+// invokedynamic：R1b preprocessor 标记但未展开（R2/R5+ 完整展开）。builder 遇到则 fail-closed。
+struct MIRInvokeDynamic : MIRNode {
+    std::string name, desc;
+    MIRInvokeDynamic() : MIRNode(MIRKind::INVOKE_DYNAMIC) {}
+};
+
+// multianewarray：R1b 不展开（R2+ 加 runtime helper）。builder 遇到 dims>1 fail-closed。
+struct MIRMultiNewArray : MIRNode {
+    std::string typeDesc;
+    int dims = 0;
+    MIRMultiNewArray() : MIRNode(MIRKind::MULTI_NEW_ARRAY) {}
 };
 
 struct MIRCheckCast : MIRNode {
