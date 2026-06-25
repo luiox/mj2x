@@ -1,10 +1,30 @@
 # mj2x — Native VM 路线设计与保护方案
 
-> 基于现有 CBackend（JNIC 翻译）的基础，向自定义 Native VM 执行路线演进。
-> 让 mj2x 不仅是"Java→C 翻译器"，更是"Java→VM 字节码→Native VM 解释器"的保护工具链。
+> ⚠️ **Repositioning Notice（2026-06-24 架构重构）**
 >
-> 参考：JavaShroud VBC4/NBVM 路线、masxinlingvonta LLVM IR 路线
-> 前置：现有 MIR + CBackend 体系（详见 ARCHITECTURE.md）
+> 本文档原定 VMC4 自研 VM 与 CBackend **并行为两条主路线**。经竞品分析
+> （`ref_samples/竞品分析报告.md`）与架构重构评审（`ARCHITECTURE_REDESIGN.md` ADR-3），
+> **VMC4 降级为 V2+ 可选增强支线**，主生成后端让位给**寄存器式 C/C++（RegC）**。
+>
+> 降级理由：
+> 1. **资源聚焦** —— mj2x 人手有限，自研 VM（resident opcode 自变异 + opcode alias +
+>    资源切片）是 ~7 周量级；寄存器 IR + RegC 在更低成本下命中大部分 c2j gap。
+> 2. **性能** —— RegC 生成普通 C/C++ 可被 MSVC 优化，远好于 VM 解释执行。
+> 3. **避免 LLVM 依赖** —— `DEPENDENCIES.md` 明确无 LLVM；RegC 不引入新依赖。
+>
+> **本文档的定位变更**：
+> - §1（为什么加 VM）与 §2（整体架构）已重写，反映 RegC 主线 + VMC4 可选支线。
+> - §3-§12（VMC4 字节码格式、VmBackend、Native Runtime、反调试、keygen、对照表等）
+>   **作为 VMC4 支线的设计参考保留**，设计内容本身有价值，只是不优先实现。
+> - VMC4 的实现排在 ROADMAP 的 R5+ 之后，视 RegC + RT 闭环后的实际抗分析需求启动。
+> - 本文与 `ARCHITECTURE_REDESIGN.md` 冲突时，以 redesign 文档为准。
+>
+> 原始定位（已作废，保留作历史）：
+> > 基于现有 CBackend（JNIC 翻译）的基础，向自定义 Native VM 执行路线演进。
+> > 让 mj2x 不仅是"Java→C 翻译器"，更是"Java→VM 字节码→Native VM 解释器"的保护工具链。
+> >
+> > 参考：JavaShroud VBC4/NBVM 路线、masxinlingvonta LLVM IR 路线
+> > 前置：现有 MIR + CBackend 体系（详见 ARCHITECTURE.md）
 
 ---
 
@@ -30,76 +50,110 @@
 | **运行期校验** | VM 执行前校验资源 HMAC + 入口 token + 状态绑定 | patch 或替换资源会被检测 |
 | **密钥分层** | Build-time 注入密钥，运行时派生执行上下文 | 公开源码不能直接变成通用解包器 |
 
-### 1.3 适用场景决策
+### 1.3 适用场景决策（重构后）
+
+VMC4 不再是"与 CBackend 互补的并行主线"，而是"RegC 之外的**可选深度保护支线**"：
 
 ```
-方法是否适合 VM 保护？
-├─ 纯计算 + 高频调用 → 不适合（性能损耗大），继续用 CBackend
-├─ 纯计算 + 低频调用 → 可考虑
-├─ 含敏感逻辑（license check / 算法核心 / 协议组装） → 强烈推荐
-├─ 含大量 JNI 互操作 → 需评估，VM 中 Call*Method 开销叠加
-└─ 含异常处理 / synchronized → CBackend 已有已知限制，VM 同样不完美
+方法保护路线选择（重构后）
+├─ 普通方法 → [L1-L5] RegC（寄存器式 C/C++）—— 主路线
+│   适用：绝大多数方法。性能好，已消除 cstack 锚点，命中 c2j Gap A/C/D。
+│
+└─ 极高价值方法（license check / 核心算法 / 协议组装）→ VMC4 虚拟化（可选支线）
+    适用：少数需要"resident opcode 自变异 + opcode alias + 资源切片"额外抗分析层的方法。
+    代价：解释执行性能损耗 10-50x；实现复杂度高（~7 周）。
+    时机：RegC + RT 闭环后，据 mjdbg 攻击反馈决定是否启动（ROADMAP R5+）。
 ```
 
-**判断原则**：VM 路线和 CBackend 是互补关系，不是替代关系。CBackend 处理"需要高性能的简单方法"，VM Backend 处理"高价值的关键方法"。
+**判断原则（重构后）**：RegC 是默认主线；VMC4 是 RegC 抗性不足时对少数高价值方法的加固。
+两者不再是"互补并行"，而是"主线 + 可选增强"。
+
+> 原始判断原则（已作废，保留作历史）：
+> > 方法是否适合 VM 保护？
+> > ├─ 纯计算 + 高频调用 → 不适合（性能损耗大），继续用 CBackend
+> > ├─ 纯计算 + 低频调用 → 可考虑
+> > ├─ 含敏感逻辑（license check / 算法核心 / 协议组装） → 强烈推荐
+> > ├─ 含大量 JNI 互操作 → 需评估，VM 中 Call*Method 开销叠加
+> > └─ 含异常处理 / synchronized → CBackend 已有已知限制，VM 同样不完美
+> >
+> > **判断原则**：VM 路线和 CBackend 是互补关系，不是替代关系。CBackend 处理"需要高性能的简单方法"，VM Backend 处理"高价值的关键方法"。
 
 ---
 
-## 2. 整体架构
+## 2. 整体架构（重构后：RegC 主线 + VMC4 可选支线）
 
 ```
-                     ┌───────────────────────────────┐
-                     │         Pipeline              │
-                     │    (已有，无需大改)             │
-                     │                               │
-  .class/.jar ──────▶│  InputLoader                  │
-                     │    │                          │
-                     │    ▼                          │
-                     │  CompilerIndex                │
-                     │    │                          │
-                     │    ▼                          │
-                     │  Preprocessors                │
-                     │    │       ┌─────────────────┐│
-                     │    ▼       │  New: VmConfig   ││
-                     │  CodeConverter → MIR          ││
-                     │    │       │  (复用现有 MIR)  ││
-                     │    ▼       └─────────────────┘│
-                     │  Backend (可插拔)              │
-                     │    │                          │
-                     │    ├── CBackend (已有)         │
-                     │    │     MIR → JNI C 代码      │
-                     │    │                          │
-                     │    └── VmBackend (新增 ★)      │
-                     │          MIR → VMC4 字节码     │
-                     │          + 资源封装 + 密钥注入  │
-                     │          + 生成 stub + loader   │
-                     │                               │
-                     │    ▼                          │
-                     │  Postprocessors               │
-                     │    │                          │
-                     │    ▼                          │
-                     │  OutputWriter                 │
-                     └───────┬───────────────────────┘
+                     ┌───────────────────────────────────────────────────┐
+                     │                   Pipeline                         │
+                     │                                                    │
+   .class/.jar ──────▶│  InputLoader (复用) → CompilerIndex (复用)         │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  Preprocessors                                     │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  [L1] CodeConverter → 栈式 MIR (复用)               │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  [L2] SSA 构造 (★新增)                             │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  [L3] 寄存器 IR (★新增)                            │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  [L4] IR 变换 pass (★新增: 常量折叠/DCE/MBA/CFF)    │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  Backend (可插拔, Preprocessor 按方法分发)          │
+                     │    │                                               │
+                     │    ├── [L5] RegC (★ 主路线)                         │
+                     │    │     寄存器 IR → 寄存器式 C/C++                  │
+                     │    │     (无 cstack, 无 jvalue 联合, 自定义符号 helper)│
+                     │    │                                               │
+                     │    └── VmBackend (★ 可选支线, V2+/R5+)              │
+                     │          寄存器 IR → VMC4 字节码                    │
+                     │          + 资源封装 + 密钥注入 + stub + loader       │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  Postprocessors                                    │
+                     │    │                                               │
+                     │    ▼                                               │
+                     │  OutputWriter (复用)                                │
+                     └───────┬───────────────────────────────────────────┘
                              │
               ┌──────────────┴──────────────┐
               │                             │
-        Hybrid JAR (.class        Native DLL (.dll/.so)
-         + VMC4 resources)        ├─ VM 解释器核心
-         + key material            ├─ JNI bridge stub
-             (build-time           ├─ 反调试/反 dump
-              生成的)              └─ 运行期防护模块
+        Hybrid JAR (.class          Native DLL (.dll/.so)
+         + VMC4 resources           ├─ [RT] 运行时（crypto/kernel/antidebug/
+         + key material               antijvmti/stringpool, ★ R3 重写）
+             (仅 VMC4 支线)          ├─ VM 解释器核心（仅 VMC4 支线）
+                                     └─ RegC 生成的 C/C++ 编译产物（主路线）
 ```
 
-### 2.1 新增模块概览
+> **与 v0.1 架构的差异**：v0.1 是 CBackend + VmBackend 并行（无 SSA/寄存器 IR 中间层）。
+> 重构后主路线是 L1→L2→L3→L4→RegC 五层；VMC4 接在 L4 之后作为可选支线（而非独立路径）。
+> 这意味着 VMC4 也享受寄存器化的成果（无 cstack 锚点），比 v0.1 设计更强。
 
-| 模块 | 位置 | 职责 |
-|------|------|------|
-| **VmBackend** | `src/mj2x/backend/vm/` | MIR → VMC4 字节码编码 + 资源封装 |
-| **VmConfig** | `src/mj2x/preprocessor/vm_config.hpp` | 标记哪些方法走 VM 路线 |
-| **runtime/vm/** | `runtime/src/vm/` | Native VM 解释器 C 源码 |
-| **runtime/kernel/** | `runtime/src/kernel/` | 微内核：密钥校验、HMAC、AES 解密 |
-| **runtime/antidebug/** | `runtime/src/antidebug/` | 反调试、反转储、完整性检查 |
-| **keygen/** | `runtime/keygen/` | 构建期密钥生成工具（xmake rule） |
+### 2.1 新增模块概览（重构后）
+
+| 模块 | 位置 | 职责 | 路线 |
+|------|------|------|------|
+| **SsaBuilder** | `src/mj2x/mir/ssa/` | [L2] 栈式 MIR → SSA（reaching-def + dominance + φ） | 主线 R1 |
+| **RegLowering** | `src/mj2x/mir/register_ir/` | [L3] SSA → 寄存器 IR（φ 消解 + 虚拟寄存器） | 主线 R1 |
+| **PassPipeline** | `src/mj2x/mir/passes/` | [L4] 常量折叠/DCE/MBA/CFF（schema + Kahn planner） | 主线 R4 |
+| **RegCBackend** | `src/mj2x/backend/regc/` | [L5] 寄存器 IR → 寄存器式 C/C++（主生成后端） | 主线 R2 |
+| **VmBackend** | `src/mj2x/backend/vm/` | 寄存器 IR → VMC4 字节码 + 资源封装 | 可选支线 R5+ |
+| **VmConfigPreprocessor** | `src/mj2x/preprocessor/vm_config.hpp` | 标记哪些方法走 VMC4 支线 | 可选支线 R5+ |
+| **runtime/crypto** | `runtime/src/crypto/` | SHA256/HMAC/AES（纯 C） | 主线 RT R3 |
+| **runtime/kernel** | `runtime/src/kernel/` | HKDF 派生 + HMAC 校验 + volatile wipe | 主线 RT R3 |
+| **runtime/antidebug** | `runtime/src/antidebug/` | PEB/ptrace/sysctl + 完整性校验 | 主线 RT R3 |
+| **runtime/antijvmti** | `runtime/src/antijvmti/` | env->functions 篡改检测 + agent 扫描 | 主线 RT R3 |
+| **runtime/vm** | `runtime/src/vm/` | VMC4 解释器（仅 VMC4 支线需要） | 可选支线 R5+ |
+| **keygen** | `runtime/keygen/` | 构建期密钥生成（xmake rule） | 可选支线 R5+ |
+
+> **与 v0.1 的差异**：v0.1 只列 VmBackend + runtime/vm + keygen（VM 专用）。
+> 重构后 crypto/kernel/antidebug/antijvmti 是**主线 RT**（RegC 也依赖它们做符号 helper、
+> 字符串池、反 JVMTI）；只有 runtime/vm + keygen 是 VMC4 支线专用。
 
 ---
 
@@ -509,6 +563,11 @@ output.jar/
 
 ## 7. MVP 范围（V0: VM Backend 原型）
 
+> ⚠️ **重构后注（2026-06-24）**：本节的"V0 ~7 周 MVP"是 VMC4 支线的实现计划，
+> **不再是 mj2x 的整体 MVP**。mj2x 整体 MVP 现在是 ROADMAP 的 R0-R2（架构设计 +
+> SSA/寄存器 IR + RegC）。VMC4 V0 排在 R5+ 之后启动。本节时间表保留作 VMC4 支线启动时的参考。
+
+
 ### 7.1 包含
 
 | 组成部分 | 范围 | 预计工作量 |
@@ -576,6 +635,10 @@ dev.5b (VM Backend MVP):
 ---
 
 ## 9. 长期演进路线
+
+> ⚠️ **重构后注（2026-06-24）**：下表的 V0-V4 是 **VMC4 支线**的演进，
+> 不再是 mj2x 整体路线。mj2x 整体路线见 `ROADMAP.md` 的 R0-R5。
+> VMC4 支线启动时机 = R5+（RegC + RT 闭环后，据 mjdbg 攻击反馈决定）。
 
 ```
 V0 (MVP):  功能验证

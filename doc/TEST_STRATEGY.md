@@ -1,83 +1,99 @@
 # mj2x — Test Strategy
 
----
-
-## 1. Test Levels
-
-### 1.1 Unit Tests (GoogleMock)
-
-覆盖所有核心组件，测试框架已就绪 (`mj2x_unittest`)。
-
-| 组件 | 测试内容 | 预估用例数 |
-|------|---------|-----------|
-| `CompilerIndex` | addClass / getClass / index method/field | ~10 |
-| `MIRNode` | 各子类构造/析构 | ~10 |
-| `Block` | 节点追加/清空/CFG 连接 | ~10 |
-| `CodeConverter` | 单条指令 → MIR (每个指令类型) | ~30 |
-| `CodeConverter` | 方法 → Block[] 分解 | ~15 |
-| `CodeConverter` | CFG 构建 (分支目标/异常处理) | ~10 |
-| `MethodStack` | 参数类型推导 / local type | ~10 |
-| `TypeUtils` | Sort → PrimitiveKind 映射 | ~10 |
-| `OpcodeUtils` | opcode → BinaryOp/UnaryOp 映射 | ~10 |
-| `Backend` (mock) | compile/inject/finalize 调用 | ~5 |
-| `CBackend` | 每个 MIRKind → C 代码片段 | ~30 |
-| `CBackend` | JNI 名称修饰 | ~10 |
-| `CBackend` | 完整方法 → C 函数字符串 | ~10 |
-| `InputLoader` | 读 class → CompilerIndex | ~5 |
-| `OutputWriter` | ClassNode → byte[] roundtrip | ~5 |
-| **总计** | | **~170** |
-
-### 1.2 Integration Tests
-
-测试组件间的交互。
-
-| 测试 | 范围 | 方法 |
-|------|------|------|
-| Pipeline 空跑 | pipeline → preproc → convert → backend → postproc → write | mock backend 验证调用链 |
-| CodeConverter → CBackend | MIR 完整翻译路径 | 真实 bytecode → C 代码 |
-| InputLoader → Pipeline → OutputWriter | 完整读-改-写轮转 | .class roundtrip |
-
-### 1.3 End-to-End Tests
-
-| 测试 | 环境要求 | 验收标准 |
-|------|---------|---------|
-| 简单计算 | JDK + MSVC | Java 方法 → C 函数 → cl 编译通过 |
-| 字段读写 | JDK + MSVC | 生成正确 JNI 调用 |
-| 方法调用 | JDK + MSVC | 生成正确 JNI 调用 |
-| 控制流 | JDK + MSVC | 分支/循环正确翻译 |
+> **v2（2026-06-24 架构重构后）**：测试分层对齐新的五层 IR（L1-L5）+ RT 运行时。
+> v1 的测试目标（≥80 单元，仅针对 CBackend）调整为按层分质量门。
+> 重构依据见 `ARCHITECTURE_REDESIGN.md`。
 
 ---
 
-## 2. Test Organization
+## 1. 测试分层（对齐 L1-L5 + RT）
+
+### 1.1 现有基线（CBackend MVP，50 测试，保留）
+
+CBackend MVP（`feat/mj2x/mvp-completion` 分支）的 50 测试是**重构期的 L1 + legacy 基线**，
+全部保留，不删：
+
+| 测试 | 层 | 用例 | 处置 |
+|------|----|------|------|
+| `core/compiler_index_test` | 基础设施 | 2 | 保留 |
+| `core/io_test`, `input_loader_test`, `jar_io_test` | 基础设施 | 8 | 保留 |
+| `core/e2e_test`（CBackend 版） | legacy CBackend | 3 | 随 CBackend 移 reference，标 legacy |
+| `frontend/code_converter_test` | **L1** 栈式 MIR | 13 | 保留（L1 基线） |
+| `backend/c_backend_test` | legacy CBackend | 11 | 随 CBackend 移 reference，改 `*_legacy_test` 或 `DISABLED_`，不删 |
+
+### 1.2 各层测试目标（R1-R4 落地时补）
+
+| 层 | 测试文件（计划） | 测试内容 | 落地波次 |
+|----|----------------|---------|---------|
+| **L1** 栈式 MIR | `frontend/code_converter_test`（已有）+ 补 INVOKEDYNAMIC/MULTIANEWARRAY 提取 | 字节码→MIR、CFG、L1 preprocessor | R1 补 |
+| **L2** SSA | `mir/ssa_test`（★新增） | reaching-def、dominance、φ 插入、重命名正确性 | R1 |
+| **L3** 寄存器 IR | `mir/register_ir_test`（★新增） | φ 消解、虚拟寄存器分配、**操作数无 stack slot**（硬断言） | R1 |
+| **L4** 变换 pass | `mir/passes/*_test`（★新增） | 每个 pass（常量折叠/DCE/MBA/CFF）的语义保持 + 变换生效 | R4 |
+| **L5** RegC | `backend/regc_test`（★新增） | RegIR→C 生成正确性、**生成 C 无 `cstack` 模式**（硬断言） | R2 |
+| **RT** 运行时 | `runtime/*_test`（★新增，C 单测） | crypto/kernel/antidebug 正确性；antijvmti 在 mock 篡改下 fail-closed | R3 |
+
+### 1.3 关键结构断言（防御有效性验证）
+
+这些断言直接对应 `ARCHITECTURE_REDESIGN.md §4` 防御矩阵，是"防御是否生效"的客观检查：
+
+| 断言 | 层 | 含义 | 对应 c2j 攻击 |
+|------|----|------|--------------|
+| RegIR 操作数无 stack slot | L3 | dump RegModule，grep 不到 stack/local index | cstack 正则失配 |
+| 生成 C 无 `cstack[` 子串 | L5 | 对 RegC 产物做字符串断言 | CSTACK_RE 失配 |
+| 生成 C 无 "Cannot invoke" 子串 | L5 | 对 RegC 产物做字符串断言 | throw_reason 兜底失配 |
+| 生成 C 无全局 `cclasses[`/`cmethods[` 数组 | L5 | 符号走 helper，非全局表 | TABLE_RE/cache_table 失配 |
+| antijvmti 在 mock 篡改 `env->functions` 时 fail-closed | RT | 单元测试注入假 vtable | c2j vtable 劫持反制 |
+
+### 1.4 集成 / E2E 测试
+
+| 测试 | 范围 | 方法 | 落地波次 |
+|------|------|------|---------|
+| Pipeline 空跑（mock backend） | pipeline → preproc → L1→L2→L3→L4 → backend → postproc → write | mock backend 验证调用链 | R1 |
+| MIR → SSA → RegIR → RegC | 完整 IR 翻译路径 | 真实 bytecode → RegC C 代码 | R2 |
+| InputLoader → Pipeline → OutputWriter | 完整读-改-写轮转 | .class/.jar roundtrip（已有） | 已有 |
+| Java → mj2x → .c → cl → 运行 | 端到端行为对比 | JDK + MSVC，结果与原 Java 一致 | R2 |
+| 受保护样本 + c2j agent | anti-JVMTI 有效性 | 注入 c2j agent，验证 fail-closed 或 trace 退化（**与 mjdbg 协作**） | R3 |
+
+---
+
+## 2. 测试组织
 
 ```
 src/unittest/
-├── main.cpp                                — gmock main
-├── core/
-│   ├── compiler_index_test.cpp             — CompilerIndex 测试
-│   └── pipeline_test.cpp                   — Pipeline 测试
+├── main.cpp                                — gmock main（test::setup("mj2x")）
+├── core/                                   — 基础设施测试（已有）
+│   ├── compiler_index_test.cpp
+│   ├── io_test.cpp
+│   ├── input_loader_test.cpp
+│   ├── jar_io_test.cpp
+│   └── e2e_test.cpp                        — legacy CBackend E2E（移 reference 时标 legacy）
 ├── frontend/
-│   ├── mir_node_test.cpp                   — MIR 节点测试
-│   ├── block_test.cpp                      — Block 测试
-│   ├── code_converter_test.cpp             — CodeConverter 测试
-│   ├── method_stack_test.cpp               — MethodStack 测试
-│   ├── type_utils_test.cpp                 — TypeUtils 测试
-│   └── opcode_utils_test.cpp               — OpcodeUtils 测试
+│   └── code_converter_test.cpp             — [L1] 栈式 MIR（已有，R1 补 indy/multianewarray）
+├── mir/                                    — ★ 新增（R1/R4）
+│   ├── ssa_test.cpp                        — [L2] SSA
+│   ├── register_ir_test.cpp                — [L3] 寄存器 IR
+│   └── passes/                             — [L4] 变换 pass
+│       ├── constfold_test.cpp
+│       ├── dce_test.cpp
+│       ├── mba_test.cpp
+│       └── cff_test.cpp
 └── backend/
-    ├── backend_test.cpp                    — Backend 接口 (mock)
-    └── c_backend_test.cpp                  — CBackend 测试
+    ├── regc_test.cpp                       — ★ [L5] RegC（R2）
+    └── reference/
+        └── c_backend_legacy_test.cpp       — legacy CBackend（从 c_backend_test.cpp 移入，标 legacy）
 ```
+
+runtime 测试（R3）单独组织在 `runtime/test/`（C 单测，不一定用 gmock）。
 
 ---
 
 ## 3. 测试数据
 
-### 3.1 内联字节码
+### 3.1 内联构造（首选）
 
-大多数测试应使用 **内联构造的 bytecode 数组**，避免依赖外部文件：
+大多数单元测试用**内联构造的 ClassNode/MethodNode**，避免依赖外部文件：
 
 ```cpp
-// 示例: 手动构造一个 ClassNode 用于测试
 auto cn = std::make_unique<ClassNode>();
 cn->version = V1_8;
 cn->access = ACC_PUBLIC;
@@ -88,41 +104,58 @@ auto mn = std::make_unique<MethodNode>();
 mn->access = ACC_PUBLIC | ACC_STATIC;
 mn->name = "add";
 mn->desc = "(II)I";
-mn->maxStack = 2;
-mn->maxLocals = 2;
 mn->instructions.add(new VarInsnNode(ILOAD, 0));
 mn->instructions.add(new VarInsnNode(ILOAD, 1));
 mn->instructions.add(new InsnNode(IADD));
 mn->instructions.add(new InsnNode(IRETURN));
 ```
 
+字符串/类型必须经共享 `testArena().intern()`（CBackend 测试曾因 bare `toRef` 指针与
+libjbytecode Type 全局状态交互导致 flaky，已修）。
+
 ### 3.2 真实 class 文件
 
-少数 E2E 测试使用 `test_resource/` 下的真实 `.class` 文件（与 libjbytecode 共用资源目录）。
+少数 E2E 测试用 `test_resource/` 下的真实 `.class`（与 libjbytecode 共用资源目录）。
+输出一律走 `test::getOutPath()` 等 test_helper API，**绝不写 `test_resource/`**。
+
+### 3.3 c2j 攻击验证样本（R3+）
+
+R3 起，受保护样本需在 c2j agent 下验证。样本与 expected trace surface 文档化，
+交 mjdbg 协作验证（见 ROADMAP §5 Shared Contracts）。
 
 ---
 
 ## 4. 测试运行
 
 ```bash
-# 运行全部测试
-xmake run mj2x_unittest
+# 配置（一次性）
+xmake f --with_mj2x=y --with_tests=y
+
+# 全部
+xmake build mj2x_unittest && xmake run mj2x_unittest
 
 # gmock 过滤
-xmake run mj2x_unittest --gtest_filter="CBackend*"
+xmake run mj2x_unittest --gtest_filter="RegC*"
+xmake run mj2x_unittest --gtest_filter="SsaTest.*"
 
-# 带输出
-xmake run mj2x_unittest --gtest_print_time=1
+# runtime 单测（R3 起）
+xmake build mj2x_runtime_test && xmake run mj2x_runtime_test
 ```
 
 ---
 
-## 5. 质量门槛
+## 5. 质量门槛（按层）
 
-| 指标 | MVP 门槛 | 生产门槛 |
-|------|---------|---------|
-| 单元测试数 | ≥ 80 | ≥ 150 |
-| 代码行覆盖率 | ≥ 60% | ≥ 80% |
-| E2E 测试 | ≥ 3 | ≥ 10 |
-| 编译警告 | 0 | 0 |
-| CI 构建 | 必过 | 必过 |
+| 层 | 单元测试门槛 | 结构断言门槛 | 落地波次 |
+|----|------------|------------|---------|
+| L1 栈式 MIR | ≥ 15（已有 13，R1 补） | — | 已有/R1 |
+| L2 SSA | ≥ 10 | φ 插入/dominance 正确 | R1 |
+| L3 寄存器 IR | ≥ 10 | **操作数无 stack slot（硬断言）** | R1 |
+| L4 变换 pass | 每 pass ≥ 5 | 语义保持 + 变换生效 | R4 |
+| L5 RegC | ≥ 15 | **生成 C 无 cstack/Cannot invoke/cclasses（硬断言）** | R2 |
+| RT 运行时 | 每 module ≥ 5 | antijvmti mock 篡改 fail-closed | R3 |
+| E2E | ≥ 3（R2）→ ≥ 6（R3 含 c2j agent） | 行为与原 Java 一致 | R2/R3 |
+
+全局：编译警告 0，CI 必过，RTTI 禁用（用 `typed::cast` 不用 `dynamic_cast`）。
+
+> 旧 v1 目标（≥80 单元 / ≥60% 覆盖，仅针对 CBackend）已被本按层目标取代。

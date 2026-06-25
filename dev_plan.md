@@ -1,7 +1,47 @@
 # mj2x — MVP 开发现状与接手指南
 
-> 最后更新: 2026-05-25
-> 分支: `feat/mj2x-mvp`（基于 `main`，已 rebase 到最新）
+> ## 当前阶段：架构重构期（2026-06-24 起）
+>
+> mj2x 已完成 **CBackend MVP**（feat/mj2x/mvp-completion 分支，50 测试）。
+> 经竞品分析（`ref_samples/竞品分析报告.md`），确认旧 CBackend 路线（`cstack[]`/sp JNI C
+> 直译）是 c2j-native-deobfuscator 的正中靶心，系统性可还原，继续修补意义不大。
+>
+> **mj2x 进入架构重构期**，新主路线：栈式 MIR → SSA → 寄存器 IR → 变换 → 寄存器式 C/C++（RegC）
+> + native 运行时。详见：
+>
+> - **`doc/ARCHITECTURE_REDESIGN.md`**（重构权威设计，最高优先级）
+> - **`doc/ROADMAP.md`**（R0-R5 波次，替换旧 B0-B3）
+> - **`doc/ARCHITECTURE.md`** v0.2
+>
+> 旧 CBackend 归档为 reference（ADR-1），不再演进；其 50 测试作 L1 + legacy 基线保留。
+> 本文档 §1-§9 是 **CBackend MVP 的历史记录**（保留作基线证明，不再作为下一步依据）。
+> 下一步开发优先级以 `ROADMAP.md` R1（L2 SSA + L3 寄存器 IR）为准。
+
+---
+
+> 最后更新: 2026-05-25（CBackend MVP 历史段）/ 2026-06-24（重构段）
+> 分支: CBackend MVP 在 `feat/mj2x/mvp-completion`；重构设计在 `spike/mj2x/arch-redesign`
+
+---
+
+## 0. 架构重构期工作（当前，2026-06-24 起）
+
+mj2x 当前不在做 CBackend 增量，而在执行架构重构。当前进度：
+
+| 波次 | 内容 | 状态 |
+|------|------|------|
+| **R0** | 架构重构设计落地（6 份文档） | ✅ 完成（本分支 `spike/mj2x/arch-redesign`） |
+| **R1** | L2 SSA + L3 寄存器 IR 骨架 | ⬜ 待开始 |
+| **R2** | L5 RegC 寄存器式 C 生成 + E2E | ⬜ 待开始 |
+| **R3** | RT 运行时最小可用 | ⬜ 待开始 |
+| **R4** | L4 变换 pass 系统 | ⬜ 待开始 |
+| **R5+** | mjdbg 闭环 + 可选 VMC4 | ⬜ 待开始 |
+
+权威定义见 `doc/ROADMAP.md`。下一步具体任务是 **R1**：
+`src/mj2x/mir/ssa/`（reaching-def + dominance + φ）+ `src/mj2x/mir/register_ir/`（φ 消解 + 虚拟寄存器），
+复用 libjbytecode analysis 的 Frame/SourceValue。
+
+> 以下 §1-§9 是 **CBackend MVP 的历史记录**，保留作基线，不再驱动下一步开发。
 
 ---
 
@@ -249,6 +289,11 @@ mj2x_unittest ──▶ mj2x-core + gmock
 ---
 
 ## 7. 下一步开发优先级
+
+> ⚠️ **本节为 CBackend MVP 时期的优先级，已被架构重构取代（2026-06-24）**。
+> 当前优先级见 `doc/ROADMAP.md` 的 R0-R5 与本文 §0。下列 P0-P2 已全部完成
+> （在 `feat/mj2x/mvp-completion` 分支：JAR I/O、JNI ID 缓存、MIRConstant 常量值、
+> C 编译 E2E 等），保留作历史。
 
 ### P0（必须先修）
 

@@ -1,8 +1,13 @@
 # mj2x — Architecture Design
 
 > Morpher Java Bytecode to X
-> 多后端 JVM 字节码 AOT 编译器 / C 翻译器
-> 设计版本: v0.1 (draft)
+> 多后端 JVM 字节码 → native 保护编译器
+> 设计版本: **v0.2** （2026-06-24 架构重构后）
+>
+> **重要**: v0.2 反映 `ARCHITECTURE_REDESIGN.md` 确立的五层 IR 分层。
+> v0.1 的"C 翻译器 / CBackend 主线"定位已作废，CBackend 归档为 reference。
+> 本文是摘要性文档；权威分层定义、保留/退役清单、防御矩阵见
+> `ARCHITECTURE_REDESIGN.md`。本文与该文档冲突时以 redesign 文档为准。
 
 ---
 
@@ -10,78 +15,108 @@
 
 ### 1.1 目标
 
-将 JVM 字节码（.class）翻译为目标高级语言/IR，面向代码混淆和硬化场景。通过可插拔后端架构支持多种输出，MVP 优先实现 **C 源码后端**。
+将 JVM 字节码（`.class` / `.jar`）经过多层中间表示变换，生成为抗逆向分析的 native 产物。
+mj2x 是 morpher 攻防闭环的**蓝队**：产出受保护样本供 mjdbg（红队）攻击，据反馈硬化。
+
+主路线（ADR-3，见 redesign 文档 §0）：
+
+```
+字节码 → [L1] 栈式 MIR → [L2] SSA → [L3] 寄存器 IR
+       → [L4] IR 变换 pass → [L5] 寄存器式 C/C++ 生成
+                                       │
+                                       ▼
+                            [RT] native 运行时（crypto / antidebug / antijvmti / stringpool）
+```
+
+设计目标不是"翻译器"，而是"系统性地移除 c2j-native-deobfuscator 依赖的两个锚点"
+（JNI vtable offset + jvalue 索引模式）。详见 redesign 文档 §1。
 
 ### 1.2 非目标
 
 - 通用 Java AOT 编译器（不处理 GC、多线程等完整运行时）
 - 字节码验证（由 libjbytecode analysis 层覆盖）
-- 支持所有 JVM 指令的 100% 语义兼容（特定边界行为有差异，同 masxinlingvonta）
-- JAR/ZIP 操作（由 morpher-nbase 的 jar 工具覆盖）
+- 100% JVM 指令语义兼容（特定边界行为有差异，同 masxinlingvonta）
+- LLVM 依赖（`DEPENDENCIES.md` 明确无 LLVM；SSA/寄存器分配自研）
 
-### 1.3 MVP 已知语义不兼容
+### 1.3 已知语义不兼容（fail-closed 边界，沿用 `AGENTS.md`）
 
-| 场景 | 行为 | 风险 |
-|------|------|------|
-| `synchronized` 块内抛异常 | `MONITOREXIT` 被跳过 | **锁泄漏** — 不适用于生产 |
-| `ATHROW` 后继续执行 JNI | `(*env)->Throw` 不中断 C 控制流 | **UB / 崩溃** — 翻译为 `Throw + return` |
-| `INVOKEDYNAMIC` | 通过 Preprocessor 提取到合成方法 | 性能损失（多一次 JNI 回调用） |
+| 场景 | 行为 | 处理时机 |
+|------|------|---------|
+| `synchronized` 块内抛异常 | `MONITOREXIT` 被跳过 → 锁泄漏 | R2 起用 C++ RAII guard 修复（构造 `MonitorEnter` / 析构 `MonitorExit`，栈展开保证释放，PR#305 review） |
+| `ATHROW` 后继续 JNI | `Throw` 不中断 C 控制流 | R2 起翻译为 `Throw + return` |
+| `ACC_SYNCHRONIZED` 方法 | C 不能模拟 JVM monitor | R1 起仍拒绝，fail-closed |
+| `INVOKEDYNAMIC` | preprocessor 提取到合成方法 | R1 补齐 L1 preprocessor |
 
-### 1.3 参考项目
+### 1.4 参考项目（仅设计借鉴，不依赖）
 
-- [masxinlingvonta](https://github.com/superblaubeere27/masxinlingvonta) — Java Bytecode → LLVM IR，单后端，全 JNI 策略
-- libjbytecode — OW2 ASM 的 C++ 移植，class 读写基础
+- **masxinlingvonta** — 栈 IR → LLVM alloca → mem2reg → SSA 路线；其"用 ASM SourceInterpreter 拿 reaching-def"思路被 L2 复用，但 SSA/寄存器分配自研而非外包 LLVM
+- **JavaShroud** — VBC4 虚拟机 + 运行时反调试 + 资源切片；其"减少 JNI 暴露面""运行时密钥绑定""pass 框架（schema + 拓扑排序 planner）"设计被 RT/L4 借鉴
+- **c2j-native-deobfuscator**（攻击方）— 其两锚点理论是 mj2x 防御设计的反向输入
 
 ---
 
 ## 2. Architecture
 
-### 2.1 Pipeline
+### 2.1 Pipeline（v0.2 五层）
 
 ```
-          ┌──────────────────────────────────────────┐
-          │               Pipeline                    │
-          │                                           │
-  .class ──▶  InputLoader                             │
-  / .jar  │       │                                   │
-          │       ▼                                   │
-          │  CompilerIndex                            │
-          │       │                                   │
-          │       ▼                                   │
-          │  Preprocessors (插拔式)                    │
-          │       │                                   │
-          │       ▼                                   │
-          │  Bytecode → MIR (CodeConverter)           │
-          │       │                                   │
-          │       ▼                                   │
-          │  Backend (插拔式)                          │
-          │       │  MIR → C code                     │
-          │       │  MIR → LLVM IR (future)           │
-          │       │                                   │
-          │       ▼                                   │
-          │  Postprocessors (插拔式)                   │
-          │       │                                   │
-          │       ▼                                   │
-          │  OutputWriter                             │
-          │                                           │
-          └─────────────────┬────────────────────────┘
+          ┌─────────────────────────────────────────────────────────┐
+          │                      Pipeline                            │
+          │                                                          │
+  .class ──▶  InputLoader (复用)                                     │
+  / .jar  │       │                                                  │
+          │       ▼                                                  │
+          │  CompilerIndex (复用, 含 Utf8StringArena)                 │
+          │       │                                                  │
+          │       ▼                                                  │
+          │  Preprocessors (插拔式)                                   │
+          │       │                                                  │
+          │       ▼                                                  │
+          │  [L1] CodeConverter → 栈式 MIR (复用)                     │
+          │       │                                                  │
+          │       ▼                                                  │
+          │  [L2] SSA 构造 (★新增)                                   │
+          │       │                                                  │
+          │       ▼                                                  │
+          │  [L3] 寄存器 IR (★新增)                                  │
+          │       │                                                  │
+          │       ▼                                                  │
+          │  [L4] IR 变换 pass (★新增: 常量折叠/DCE/MBA/CFF)          │
+          │       │                                                  │
+          │       ▼                                                  │
+          │  Backend (插拔式)                                         │
+          │       │  [L5] RegC → 寄存器式 C/C++ (★主路线)            │
+          │       │  CBackend → cstack C (归档 reference, 不默认注册)│
+          │       │                                                  │
+          │       ▼                                                  │
+          │  Postprocessors (插拔式)                                  │
+          │       │                                                  │
+          │       ▼                                                  │
+          │  OutputWriter (复用)                                      │
+          └─────────────────┬────────────────────────────────────────┘
                             │
               ┌─────────────┴─────────────┐
               │                           │
-        Hybrid JAR                  .c / .ll / .o
-        (native stubs)
+        Hybrid JAR                  .c / .cpp + native runtime
+        (native stubs               (crypto / antidebug / antijvmti /
+         + 资源)                     stringpool, ★ 重写)
 ```
+
+每层的职责、设计要点、为什么是这个顺序，见 `ARCHITECTURE_REDESIGN.md §3`。
 
 ### 2.2 阶段说明
 
 | 阶段 | 输入 | 输出 | 职责 |
 |------|------|------|------|
-| **Load** | .class / .jar | `CompilerIndex` | 解析字节码，建类/方法/字段索引 |
-| **Preprocess** | `CompilerIndex` | 修改后 `CompilerIndex` | 标记待编译方法、提取复杂指令、lambda 预编译 |
-| **Convert** | `MethodNode` | `Block[]` + `MIRNode[]` | 字节码 → 后端无关中间表示 |
-| **Backend** | `Block[]` | `BackendResult` | MIR → 目标代码（C/LLVM/...） |
-| **Postprocess** | `CompilerIndex` + 结果 | 修改后 `CompilerIndex` | 设 ACC_NATIVE、注入加载器 |
-| **Write** | `CompilerIndex` | JAR / .c / .dll | 序列化输出 |
+| **Load** | `.class` / `.jar` | `CompilerIndex` | 解析字节码，建类/方法/字段索引（复用，含 arena） |
+| **Preprocess** | `CompilerIndex` | 修改后 `CompilerIndex` | 标记待编译方法、提取复杂指令（INVOKEDYNAMIC/MULTIANEWARRAY） |
+| **L1 Convert** | `MethodNode` | `Block[]` + `MIRNode[]` | 字节码 → 后端无关栈式 IR（复用 frontend） |
+| **L2 SSA** | `Block[]` | SSA 形 `Block[]` | reaching-def + dominance + φ 插入 + 重命名（★新增） |
+| **L3 RegIR** | SSA `Block[]` | 寄存器 IR | φ 消解 + 虚拟寄存器分配（★新增） |
+| **L4 Pass** | 寄存器 IR | 变换后寄存器 IR | 常量折叠/DCE/MBA/CFF（★新增） |
+| **L5 Backend** | 寄存器 IR | `BackendResult` | RegIR → 寄存器式 C/C++（★主路线） |
+| **Postprocess** | `CompilerIndex` + 结果 | 修改后 `CompilerIndex` | 设 ACC_NATIVE、注入 loader |
+| **Write** | `CompilerIndex` | JAR / .c / .dll | 序列化输出（复用） |
 
 ### 2.3 核心数据流
 
@@ -89,391 +124,207 @@
 .class bytes
     │
     ▼
-libjbytecode::ClassReader
+libjbytecode::ClassReader → ClassNode (tree API)
     │
     ▼
-libjbytecode::ClassNode  (tree API)
+[L1] CodeConverter::convert(MethodNode)
+    │   ├── 遍历 InsnList + 分析控制流 + 构建基本块
+    │   └── 每条指令 → MIRNode (栈式, 操作数含 stackSlot/localIndex)
+    ▼
+vector<Block*>  (栈式 MIR)
     │
     ▼
-CodeConverter::convert(MethodNode)
-    │  ├── 遍历 InsnList
-    │  ├── 分析控制流 (label targets)
-    │  ├── 构建基本块
-    │  └── 每条指令 → MIRNode
+[L2] SsaBuilder::build(blocks)
+    │   ├── reaching-def (复用 libjbytecode SourceInterpreter 风格)
+    │   ├── dominance 计算
+    │   └── φ 插入 + 重命名
+    ▼
+SsaModule (SSA 形)
     │
     ▼
-vector<Block*>
-    │  └── Block::nodes: vector<unique_ptr<MIRNode>>
+[L3] RegLowering::lower(ssa)
+    │   ├── φ 消解
+    │   └── 线性扫描寄存器分配 → 虚拟寄存器 vN
+    ▼
+RegModule (寄存器 IR, 操作数 = (RegId, Type))
+    │   ★ 此处 cstack[N]/sp 锚点已消除
+    ▼
+[L4] PassPipeline::run(regModule)
+    │   └── 常量折叠 / DCE / MBA / CFF (seed 派生)
+    ▼
+变换后 RegModule
     │
     ▼
-Backend::compileMethod(method, blocks)
-    │  └── 遍历 blocks → 遍历 MIRNodes → 发射目标代码
-    │
+[L5] RegCBackend::compileMethod(...)
+    │   └── RegIR → 普通 C/C++ (局部变量 = reg, 无 jvalue 联合, 无 cstack 数组)
     ▼
-BackendResult  { .text = "C source code", .kind = C_SOURCE }
+BackendResult { .text = "C/C++ source", .kind = REGISTER_C_SOURCE }
 ```
 
 ---
 
 ## 3. Core Data Structures
 
-### 3.1 CompilerIndex
+> 公共 API 契约定义在 header 的 Doxygen 注释里，本节不重复字段表（遵循 `AGENTS.md`
+> "Do not write API tables in docs"）。这里只描述结构关系与设计约束。
 
-```
-CompilerIndex (全局索引)
-  ├── classes_:  map<string owner, CompilerClass>
-  ├── methodIndex_:  map<MethodID, CompilerMethod*>
-  └── fieldIndex_:  map<FieldID, CompilerField*>
+### 3.1 CompilerIndex（复用，v0.1 drift 修正）
 
-CompilerClass
-  ├── classNode: ClassNode*         (libjbytecode tree)
-  ├── methods: vector<CompilerMethod>
-  ├── fields:  vector<CompilerField>
-  ├── modified: bool
-  └── isLibrary: bool
+`CompilerIndex` 持有全局类/方法/字段索引与共享的 `Utf8StringArena`。
+**v0.1 文档曾描述 `methodIndex_` / `fieldIndex_` 成员 —— 实际不存在**（doc drift）。
+当前实现是 `classes_: map<string, CompilerClass>`，方法/字段通过所属类访问。
+R1 若需要快速方法/字段反查，届时再加索引成员。
 
-CompilerMethod
-  ├── methodNode: MethodNode*       (libjbytecode tree)
-  ├── markedForCompile: bool
-  ├── compiled: bool
-  └── backendResult: any
+`CompilerClass` 持有 `ClassNode*`、`methods`/`fields` vector、`modified`/`isLibrary` 标志。
+`CompilerMethod` 持有 `MethodNode*`、`markedForCompile`/`compiled`/`backendResult`。
+`MethodID` / `FieldID` 是 `{owner, name, desc}` 三元组，可哈希。
+`JarPassthroughEntry` 持有非 class zip 条目（name + data + compressionMethod），供 JAR 回写保真。
 
-CompilerField
-  └── fieldNode: FieldNode*
+### 3.2 [L1] MIR（复用 frontend，后端无关栈式 IR）
 
-MethodID = { owner, name, desc }    // 三元组，可哈希
-FieldID  = { owner, name, desc }
-```
+`MIRNode` 是所有节点基类（含 `MIRKind kind`）。`mir_node.hpp` 定义了覆盖 JVM 指令的节点族
+（常量/局部/栈操作/算术/转换/控制流/返回/对象/数组/字段/方法调用/类型/monitor/throw/frame）。
 
-### 3.2 MIR (Morpher Intermediate Representation)
+关键约束：
+- **只含数据，不含代码生成逻辑** —— 每个子类仅携带操作数
+- **后端按需遍历** —— L2/L3/L5 自行决定如何处理每种节点
+- 操作数仍含 stack slot / local index（这是 L1 栈式特征，L3 寄存器化后消除）
 
-MIR 是后端无关指令树，定义在 `mir_node.hpp`。核心设计原则：
+已知 L1 缺口（R1 补齐）：`INVOKE_DYNAMIC` / `MULTI_NEW_ARRAY` 当前翻译为 `MIRNop` 占位，
+对应 struct 未定义；R1 加 preprocessor 提取。
 
-- **只含数据，不含代码生成逻辑** — 每个 `MIRNode` 子类仅携带操作数
-- **后端按需遍历** — `Backend` 自行决定如何翻译每种节点
-- **覆盖全部 JVM 指令** — 通过组合方式表达
+### 3.3 Block（复用）
 
-```
-MIRNode  (所有节点基类，含 MIRKind kind)
-  │
-  ├── MIRLabel          — 基本块标签
-  ├── MIRConstant       — 常量推送 (int64/double/float/null)
-  ├── MIRLocalLoad      — load 局部变量 (varIndex, type)
-  ├── MIRLocalStore     — store 局部变量
-  ├── MIRStackOp        — dup/swap 等栈操作
-  ├── MIRBinaryOp       — 二元运算 (ADD/SUB/DIV...)
-  ├── MIRUnaryOp        — 一元运算 (NEG)
-  ├── MIRCast           — 类型转换
-  ├── MIRIinc           — iinc
-  ├── MIRBranch         — 条件跳转 (if_icmp* / if_acmp*)
-  ├── MIRBranchZero     — 零值跳转 (ifeq/ifnull/iflt...)
-  ├── MIRUncondBranch   — goto
-  ├── MIRSwitch         — tableswitch / lookupswitch
-  ├── MIRReturn         — void return
-  ├── MIRReturnValue    — 有返回值 return
-  ├── MIRNewObject      — new
-  ├── MIRNewArray       — newarray / anewarray
-  ├── MIRMultiNewArray  — multianewarray (preprocessor 提取)
-  ├── MIRArrayLength    — arraylength
-  ├── MIRArrayLoad      — *aload
-  ├── MIRArrayStore     — *astore
-  ├── MIRFieldGet       — getfield
-  ├── MIRFieldPut       — putfield
-  ├── MIRStaticGet      — getstatic
-  ├── MIRStaticPut      — putstatic
-  ├── MIRInvoke         — invokevirtual/special/static/interface
-  ├── MIRInvokeDynamic  — invokedynamic (preprocessor 提取)
-  ├── MIRCheckCast      — checkcast
-  ├── MIRInstanceOf     — instanceof
-  ├── MIRMonitor        — monitorenter/monitorexit
-  ├── MIRThrow          — athrow
-  └── MIRFrame          — stack map frame (元数据)
-```
+`Block` 持有 `id`、`nodes: vector<unique_ptr<MIRNode>>`、`successors`/`predecessors`、
+`exceptionHandler`。非 copyable（`unique_ptr` 成员）。`ExceptionHandler` 持有
+`startLabel`/`endLabel`/`handlerLabel`/`catchType`。
 
-### 3.3 Block (基本块)
+CFG 由 `CodeConverter::analyzeControlFlow` 从 jump/switch 指令的 label target 构建。
+L2 SSA 在此 CFG 上做 dominance。
 
-```
-Block
-  ├── id: int                — 对应 label bytecodeOffset
-  ├── nodes: vector<unique_ptr<MIRNode>>
-  ├── successors: vector<Block*>
-  ├── predecessors: vector<Block*>
-  └── exceptionHandler: ExceptionHandler*
+### 3.4 [L2] SSA / [L3] 寄存器 IR（★新增，R1 落地）
 
-ExceptionHandler
-  ├── startLabel, endLabel: int
-  ├── handlerLabel: int
-  └── catchType: string       // 空 = finally
-```
+节点结构、`RegId` 宽度、φ 表示、`Type` 枚举是否复用 `PrimitiveKind` 等**留给 R1 header 设计**，
+不在本文预先定义（见 redesign 文档 §8 待决问题）。设计约束：
+- SSA 形必须能在 L1 Block CFG 上构造，复用 libjbytecode analysis 的 reaching-def 信息
+- 寄存器 IR 操作数必须是 `(RegId, Type)`，不得保留 stack slot 下标 —— 这是打破 c2j 锚点 2 的硬约束
+
+### 3.5 [L4] Pass 框架（★新增，R4 落地）
+
+借鉴 JavaShroud：`ModuleDefinition`（schema: params/ordering/compatibility）+ Kahn 拓扑排序
+planner（确定性，稳定 tie-break）。schema 格式（TOML 还是 C++ 结构体）R4 决定。
 
 ---
 
 ## 4. Backend Interface
 
-```cpp
-class Backend {
-public:
-    virtual ~Backend() = default;
-    virtual std::string_view name() const = 0;
+`Backend` 抽象接口定义在 `backend.hpp`（`name()` / `compileMethod()` / `injectIntoClass()` /
+`finalize()`）。`BackendResult` 定义在 `backend_result.hpp`。
 
-    // 编译方法：MIR blocks → 后端产物
-    virtual BackendResult compileMethod(
-        CompilerMethod& method,
-        const std::vector<Block*>& blocks
-    ) = 0;
+`BackendResult::Kind` 当前为 `{ NONE, C_SOURCE, BINARY }`。**v0.1 文档曾列出 `LLVM_IR` —— 实际不存在**（doc drift）。
+R2 落地 RegC 时加 `REGISTER_C_SOURCE`。
 
-    // 将编译产物注入 ClassNode（如修改方法体为 native 存根）
-    virtual void injectIntoClass(
-        CompilerClass& clazz,
-        CompilerMethod& method,
-        const BackendResult& result
-    ) = 0;
+### 4.1 [L5] RegC Backend（★主路线，R2 落地）
 
-    // 最终化（多方法编译后回调，如输出完整 .c 文件）
-    virtual void finalize(const CompilerIndex& index) = 0;
-};
+从寄存器 IR 生成普通 C/C++：
+- 局部变量 = SSA 寄存器，**无 `union jvalue`，无 `cstack[]` 数组**
+- JNI 调用收敛：类/方法/字段解析走 runtime helper（非全局 `cclasses[]` 表）
+- **不发 "Cannot invoke X.Y(args)" throw-reason 字符串**（c2j `throw_reason.py` 的唯一兜底）
+- 纯计算（算术、比较）直接生成 C 表达式，不经 JNI（命中 c2j Gap A）
 
-struct BackendResult {
-    enum class Kind { NONE, C_SOURCE, LLVM_IR, BINARY };
-    Kind kind = Kind::NONE;
-    std::vector<u8> data;        // 二进制数据
-    std::string text;            // 文本输出 (C/LLVM IR)
-    std::vector<std::string> metadata;  // 辅助数据（符号名等）
-};
-```
+实现细节（节点结构、helper ABI）R2 定。
+
+### 4.2 CBackend（[ARCHIVED reference]）
+
+`c_backend.{hpp,cpp}` 是 v0.1 的唯一后端，用 `union jvalue stack[N]` + `int sp` 模拟操作数栈，
+每个字段/方法/对象操作都翻译为 JNI 调用。**它同时命中 c2j 的两个锚点，系统性可还原**
+（见 redesign 文档 §1.2），故 ADR-1 归档：
+
+- 移到 `backend/reference/`（目录落点 R1 定）
+- pipeline 默认不再注册
+- 保留作 mjdbg 易攻基线样本 + 回归对照
+- 其 11 个测试保留为 legacy，不删
+
+v0.1 的 §5（C Backend 详细设计）内容不再作为演进依据，仅作历史参考。
 
 ---
 
-## 5. C Backend 详细设计
-
-### 5.1 策略
-
-**全 JNI 互操作**，同 masxinlingvonta 的基本思路：
-
-| Java 操作 | C 实现 |
-|-----------|--------|
-| 字段读写 | `(*env)->Get*Field` / `Set*Field` |
-| 方法调用 | `(*env)->Call*Method` |
-| 对象创建 | `(*env)->NewObject` |
-| 数组操作 | `(*env)->GetArrayLength`, `Get*ArrayElements`, `Set*ArrayRegion` |
-| 类型检查 | `(*env)->IsInstanceOf`, `(*env)->CheckCast` |
-| 异常(Throw) | `(*env)->Throw(env, exc); return;` — JNI Throw 不中断 C 控制流，必须紧跟 return |
-| 异常(检查桩) | `if ((*env)->ExceptionCheck(env)) return;` — 每次 JNI 调用后可选插入 |
-| 同步 | `(*env)->MonitorEnter` / `MonitorExit` — 块内抛异常导致锁泄漏 |
-
-### 5.2 代码结构
-
-每个编译方法生成一个 C 函数：
-
-```c
-// JNI 导出函数
-JNIEXPORT <return_type> JNICALL
-Java_<mangled_owner>_<mangled_method>(JNIEnv* env, jclass clazz, ...args) {
-    // [可选] try-catch 框架
-    // 局部变量声明（模拟 JVM 栈和 locals）
-    union jvalue stack[<max_stack>];
-    union jvalue locals[<max_locals>];
-    
-    // 初始化参数到 locals
-    locals[0] = clazz;  // 或 this
-    
-    // 控制流：每个基本块用 label + goto
-    // 块内顺序翻译 MIR 节点
-    goto block_entry;
-    
-block_entry:
-    // ... 翻译后的 C 代码 ...
-    
-block_1:
-    // ... 翻译后的 C 代码 ...
-    goto block_2;
-    
-block_2:
-    // ... 翻译后的 C 代码 ...
-    
-    // JNI 局部引用释放
-    return result;
-}
-```
-
-### 5.3 虚拟栈实现
+## 5. Module Layout（v0.2）
 
 ```
-union jvalue {
-    jint z; jbyte b; jchar c; jshort s;
-    jint i; jlong j; jfloat f; jdouble d;
-    jobject l;
-};
-
-union jvalue stack[MAX_STACK];  // 栈数组
-int sp = -1;                     // 栈指针
-
-// 翻译示例:
-// IADD → stack[sp-1].i = stack[sp-1].i + stack[sp].i; sp--;
-// GETFIELD → stack[++sp].l = (*env)->GetObjectField(env, stack[sp-1].l, fieldID);
-```
-
-**关键设计决策**：简化策略 vs 高效策略
-
-| 策略 | 优点 | 缺点 |
-|------|------|------|
-| **stack 数组 + sp** | 实现简单，与 JVM 模型一致 | 每次访问都需类型 union 操作 |
-| **C 局部变量** | 性能好，编译器优化空间大 | 需要分析每个变量的生存期 |
-| **混合** | 常用值用局部变量，栈操作用数组 | 实现复杂，MVP 不应做 |
-
-→ **MVP 选 stack 数组 + sp**，后续可优化。
-
-### 5.4 控制流翻译
-
-| MIRKind | C 翻译 |
-|---------|--------|
-| `UNCOND_BRANCH` → target | `goto label_<target>;` |
-| `BRANCH` (eq/ne/lt/ge/gt/le) | `if (lhs op rhs) goto label_<target>;` |
-| `BRANCH_ZERO` | `if (val == 0 / != 0 / < 0 / ...) goto label_<target>;` |
-| `SWITCH` | `switch (key) { case v0: goto label_0; ... }` |
-| `RETURN` | `return;` |
-| `RETURN_VALUE` | `return stack[sp--].? ;` |
-
-### 5.5 JNI 名称修饰
-
-沿用 JDK `javah` 的 JNI 命名规范：
-
-```
-Java_<fully_qualified_class>_<methodName>__<signature_hash>
-```
-
-- 类名中 `.` → `_`
-- 包分隔符 `/` → `_`
-- 重载方法通过 `__` + 参数签名追加区分
-
-### 5.6 输出格式
-
-每个类输出一个 `.c` 文件，包含：
-
-```c
-#include <jni.h>
-
-// 辅助宏 (可选，减少样板代码)
-#define JNI_CALL_INT(env, obj, mid)  (*env)->CallIntMethod(env, obj, mid)
-// ...
-
-// 类初始化用的静态字段 ID / 方法 ID 缓存 (static variables)
-static jmethodID mid_Example_compute = NULL;
-static jfieldID fid_Example_value = NULL;
-
-JNIEXPORT void JNICALL Java_Example_initIds(JNIEnv* env, jclass clazz) {
-    // 缓存 MethodID / FieldID
-}
-
-// 每个编译方法一个函数
-JNIEXPORT jint JNICALL
-Java_com_example_Example_compute__III(JNIEnv* env, jobject this, jint a, jint b, jint c) {
-    // ...
-}
-```
-
----
-
-## 6. Module Layout
-
-```
-morpher-native/mj2x/
-├── xmake.lua                    — 构建入口
+mj2x/
+├── xmake.lua                         — 构建入口（mj2x-core / mj2x-cli / mj2x_unittest）
 ├── doc/
-│   ├── ARCHITECTURE.md          — 本文档
-│   ├── DEPENDENCIES.md          — 依赖分析
-│   ├── MVP_PLAN.md              — MVP 计划
-│   └── TEST_STRATEGY.md         — 测试策略
+│   ├── ARCHITECTURE_REDESIGN.md      — ★ 重构权威设计（v0.2 最高优先级）
+│   ├── ARCHITECTURE.md               — 本文档（v0.2 摘要）
+│   ├── NATIVE_VM_ROADMAP.md          — VMC4 设计（已降级为 V2+ 可选）
+│   ├── ROADMAP.md                    — R0-R5
+│   ├── MVP_PLAN.md                   — 冻结历史
+│   ├── DEPENDENCIES.md               — 依赖（无 LLVM）
+│   ├── TEST_STRATEGY.md              — 测试分层
+│   ├── handover_context.md           — 历史
+│   └── task_mvp_completion.md        — 历史
 ├── src/
-│   ├── mj2x/                    — 核心库
-│   │   ├── mj2x.hpp             — 聚合头文件
-│   │   ├── core/                — Pipeline 编排
-│   │   ├── frontend/            — MIR / CodeConverter / Block
-│   │   ├── backend/             — 后端接口
-│   │   │   ├── backend.hpp
-│   │   │   └── c_backend/       — C 源码后端
-│   │   ├── preprocessor/        — 预处理器
-│   │   ├── postprocessor/       — 后处理器
-│   │   └── io/                  — 输入输出
-│   ├── mj2x-cli/                — CLI 入口
-│   └── unittest/                — 单元测试
-│       ├── core/                — Pipeline 测试
-│       ├── frontend/            — MIR / Block / CodeConverter 测试
-│       └── backend/             — 后端测试
-└── dev_plan.md                  — 宏观开发计划
+│   ├── mj2x/
+│   │   ├── mj2x.hpp                  — 聚合头
+│   │   ├── core/                     — Pipeline + CompilerIndex（复用 + 扩展）
+│   │   ├── io/                       — InputLoader / OutputWriter（复用）
+│   │   ├── frontend/                 — [L1] 栈式 MIR（复用）
+│   │   ├── mir/                      — ★ [L2] ssa/ + [L3] register_ir/ + [L4] passes/（R1/R4 新增）
+│   │   ├── preprocessor/             — 复用 + INVOKEDYNAMIC 提取（R1 补）
+│   │   ├── postprocessor/            — 复用（注入 loader）
+│   │   └── backend/
+│   │       ├── backend.hpp           — 接口（复用）
+│   │       ├── backend_result.hpp    — 复用 + 扩展 Kind
+│   │       ├── regc/                 — ★ [L5] 寄存器式 C 生成（R2 主路线）
+│   │       └── reference/            — CBackend 归档（R1 移入）
+│   ├── mj2x-cli/                     — CLI 入口
+│   └── unittest/                     — 测试（分层见 TEST_STRATEGY）
+└── runtime/                          — ★ [RT] 重写（R3）
+    └── src/
+        ├── crypto/                   — SHA256/HMAC/AES（集成审计过的轻量库，PR#305 review；候选 tiny-AES-c / Mbed TLS / BearSSL 精简子集）
+        ├── kernel/                   — HKDF 派生 + HMAC 校验 + 平台 API 安全擦除（SecureZeroMemory / explicit_bzero / memset_s，PR#305 review）
+        ├── antidebug/                — Windows PEB
+        ├── antijvmti/                — env->functions 篡改检测 + 多维 agent 检测（启动期 argv 扫 + 动态 attach 模块扫 + JVMTI capability 查询，PR#305 review）
+        ├── stringpool/               — 运行时密钥解密字符串池
+        ├── rt_str_obf.{h,cpp}        — 复用（已有 XOR 实现）
+        ├── jni_wrapper.h             — 复用
+        └── platform.h                — 复用
 ```
+
+> `runtime/main.cpp`（Windows DLL 注入 demo）、`rt_insn`/`rt_memory`（空壳）R3 删除。
 
 ---
 
-## 7. Build Integration
+## 6. Build Integration
 
-```lua
--- morpher-native/mj2x/xmake.lua
-target("mj2x-core")
-    set_kind("static")
-    add_deps("libjbytecode", "libjstr")
-    add_files("src/mj2x/**.cpp")
-    add_headerfiles("src/mj2x/**.hpp")
-    add_includedirs("src", {public = true})
-    -- /utf-8 on MSVC
+构建配置见 `mj2x/xmake.lua` 与 `mj2x/runtime/xmake.lua`。R1-R4 落地新模块时按现有模式
+扩展 `add_files`。依赖约束：仍无 LLVM，无 OpenSSL；crypto 集成审计过的轻量库（PR#305 review，
+候选 tiny-AES-c / Mbed TLS / BearSSL 精简子集），R3 落地时在 `DEPENDENCIES.md` 锁定具体选型。
 
-target("mj2x-cli")
-    set_kind("binary")
-    add_deps("mj2x-core")
-    add_files("src/mj2x-cli/*.cpp")
-
-target("mj2x_unittest")
-    set_kind("binary")
-    add_deps("mj2x-core", "gmock")
-    add_files("src/unittest/**_test.cpp")
-    set_rundir("$(projectdir)")
-
--- morpher-native/xmake.lua 中添加
-includes("mj2x")
-```
-
-### 7.1 依赖图
+依赖图（v0.2，R3 后）：
 
 ```
 mj2x-cli ──▶ mj2x-core ──▶ libjbytecode ──▶ libca_core
                                       ├──▶ libtyped
                                       └──▶ libcrypto
                          ──▶ libjstr
-mj2x_unittest ──▶ mj2x-core + gmock
+                         ──▶ libjzip
+mj2x_unittest ──▶ mj2x-core + test_helper + gmock
+runtime(jni_lib) ──▶ JDK（仅 runtime 编译需要）
 ```
 
 ---
 
-## 8. JVM Interop 策略
+## 7. 与 v0.1 的差异摘要
 
-### 8.1 C 后端 — JNI
-
-所有 Java 互操作走 JNI C API：
-
-| JNI 调用 | 频率 | 优化方向 |
-|----------|------|---------|
-| `FindClass` | 类首次引用 | 缓存到 static 变量 |
-| `GetMethodID` / `GetFieldID` | 方法首次调用 | `JNI_OnLoad` 预缓存 |
-| `Call*Method` | 每次调用 | — |
-| `Get/Set*Field` | 每次访问 | — |
-| `NewObject` | 每次创建 | — |
-| `New*Array` | 每次创建 | — |
-
-### 8.2 未来优化方向
-
-- **Direct linking**: 对纯计算密集方法，通过 JNI `RegisterNatives` 直接注册函数指针
-- **JNI call caching**: 批量获取 MethodID/FieldID
-
----
-
-## 9. 与 masxinlingvonta 的关键差异
-
-| 方面 | masxinlingvonta | mj2x |
-|------|----------------|------|
-| 语言 | Java 11 | C++17 |
-| 字节码库 | OW2 ASM 9.1 | libjbytecode (C++, no RTTI) |
-| 后端 | 单后端 LLVM | 多后端可插拔 |
-| 中间表示 | 无 | MIR |
-| MVP 后端 | LLVM | C 源码 |
-| 测试 | 无 | GoogleMock |
-| 构建 | Maven | Xmake |
+| 维度 | v0.1 | v0.2 |
+|------|------|------|
+| 自我定位 | "C 翻译器" | "多后端 native 保护编译器，主路线寄存器式 C/C++" |
+| 主后端 | CBackend（cstack/sp JNI C） | RegC（寄存器式 C/C++） |
+| CBackend | 唯一后端 | 归档 reference，不默认注册 |
+| IR 层次 | 单层栈式 MIR | 五层：L1 栈式 → L2 SSA → L3 寄存器 → L4 pass → L5 生成 |
+| 运行时 | 几乎空（DLL demo + stub） | 重写：crypto/kernel/antidebug/antijvmti/stringpool |
+| VMC4 自研 VM | 与 CBackend 并行主线 | 降级为 V2+ 可选支线 |
+| 防御设计依据 | 无竞品分析 | 以 c2j 两锚点理论为反向输入（见 redesign §1） |
+| doc drift | `methodIndex_/fieldIndex_`、`LLVM_IR` 误述 | 已修正 |
