@@ -299,7 +299,7 @@ CHECK_CAST, INSTANCE_OF, MONITOR_ENTER, MONITOR_EXIT, THROW, FRAME`
 > `MIRInvokeDynamic`/`MIRMultiNewArray`/`MIRLine` 的 struct **实际未定义**，enum 值存在但
 > converter 落到 nop。这是 R1 要先补齐的 L1 缺口。
 
-### 5.3 fail-closed 边界（沿用 `AGENTS.md`）
+### 5.3 fail-closed 边界（沿用 `prompt/mj2x.md`）
 
 不支持的字节码场景必须 fail-closed 并给出明确原因，不得静默生成错误代码：
 
@@ -322,7 +322,7 @@ CHECK_CAST, INSTANCE_OF, MONITOR_ENTER, MONITOR_EXIT, THROW, FRAME`
 | **R4** | L4 变换 pass 系统 | 变换后 RegC 经 Ghidra 反编译，c2j 静态 lifter 产出退化 | `src/mj2x/mir/passes/`（schema + Kahn planner + 4 个 pass） |
 | **R5+** | mjdbg 闭环 + 可选 VMC4 | mjdbg 攻击报告显示恢复难度上升 | 受保护样本 + mjdbg 报告；VMC4 视情况启动 |
 
-每个 R 波次的"完成"以 mjdbg（红队）的攻击反馈为准，而非实现复杂度。这是 `AGENTS.md`
+每个 R 波次的"完成"以 mjdbg（红队）的攻击反馈为准，而非实现复杂度。这是 `prompt/mj2x.md`
 attack/defense loop 的硬性要求。
 
 ---

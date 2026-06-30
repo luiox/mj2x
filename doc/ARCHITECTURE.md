@@ -38,7 +38,7 @@ mj2x 是 morpher 攻防闭环的**蓝队**：产出受保护样本供 mjdbg（�
 - 100% JVM 指令语义兼容（特定边界行为有差异，同 masxinlingvonta）
 - LLVM 依赖（`DEPENDENCIES.md` 明确无 LLVM；SSA/寄存器分配自研）
 
-### 1.3 已知语义不兼容（fail-closed 边界，沿用 `AGENTS.md`）
+### 1.3 已知语义不兼容（fail-closed 边界，沿用 `prompt/mj2x.md`）
 
 | 场景 | 行为 | 处理时机 |
 |------|------|---------|
@@ -165,7 +165,7 @@ BackendResult { .text = "C/C++ source", .kind = REGISTER_C_SOURCE }
 
 ## 3. Core Data Structures
 
-> 公共 API 契约定义在 header 的 Doxygen 注释里，本节不重复字段表（遵循 `AGENTS.md`
+> 公共 API 契约定义在 header 的 Doxygen 注释里，本节不重复字段表（遵循 `prompt/mj2x.md`
 > "Do not write API tables in docs"）。这里只描述结构关系与设计约束。
 
 ### 3.1 CompilerIndex（复用，v0.1 drift 修正）

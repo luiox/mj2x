@@ -186,7 +186,7 @@ For native runtime changes (R3+), document:
 
 mj2x AI maintains:
 
-- `AGENTS.md`
+- `prompt/mj2x.md`
 - `doc/ROADMAP.md`（本文）
 - `doc/ARCHITECTURE_REDESIGN.md`（★ 重构期最高优先级）
 - `doc/ARCHITECTURE.md`
