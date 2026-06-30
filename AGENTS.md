@@ -74,8 +74,8 @@ masking, anti-debug, and keygen are later stages.
 
 Do not:
 
-- block on nbase unless the needed helper already exists and is stable
-- import nbase-wide pass abstractions just to compile a sample
+- block on mbase unless the needed helper already exists and is stable
+- import mbase-wide pass abstractions just to compile a sample
 - implement mjdbg tracing here
 - claim protection strength before mjdbg/analyzer has attacked the sample
 - hide unsupported bytecode cases; fail closed with a clear reason
