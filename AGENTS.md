@@ -49,7 +49,7 @@ Primary:
 Coordinate before changing:
 
 - `../mjdbg/` trace expectations or protected sample contracts
-- `../morpher-nbase/` when reusing JAR/resource/analysis helpers
+- `../mbase/` when reusing JAR/resource/analysis helpers
 - top-level build options
 
 ## Strategy

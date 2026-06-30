@@ -297,7 +297,7 @@ mj2x_unittest ──▶ mj2x-core + gmock
 
 ### P0（必须先修）
 
-- [ ] **JAR 输入输出支持**：当前 InputLoader 只读单 `.class`，OutputWriter 只写单 `.class`。需要基于 `libjzip` 或 `morpher-nbase` 的 jar 工具实现多文件 JAR 读写。
+- [ ] **JAR 输入输出支持**：当前 InputLoader 只读单 `.class`，OutputWriter 只写单 `.class`。需要基于 `libjzip` 或 `mbase` 的 jar 工具实现多文件 JAR 读写。
 - [ ] **修复 4 个混淆 class 加载失败**：确定 `readInt exceeds buffer` 的具体溢出位置并修复。
 
 ### P1（核心增强）
