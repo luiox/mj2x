@@ -16,6 +16,19 @@ attack/defense loop:
 - produce samples that mjdbg can trace and attack
 - harden based on mjdbg/analyzer findings
 
+### Non-mission
+
+- do not wait for mbase unless a stable helper already exists
+- do not implement mjdbg tracing
+- do not claim protection strength before red-team feedback
+
+### Immediate Focus
+
+- stabilize CBackend MVP
+- define MIR subset boundaries
+- build VMC4 V0 executable correctness path
+- produce first protected samples for mjdbg
+
 ## Read First
 
 Before editing:
