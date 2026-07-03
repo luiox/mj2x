@@ -1,6 +1,6 @@
 #include "ldc_preprocessor.hpp"
 
-#include <any>
+#include "libca/core/any.hpp"
 #include <vector>
 
 namespace mj2x {
@@ -16,14 +16,14 @@ ca::str::Utf8StringRef intern(ca::str::Utf8StringArena& arena, const char* s) {
 }
 
 // 判断 ldc cst 是否是 Handle。
-bool isHandleCst(const std::any& cst) {
-    return cst.type() == typeid(Handle);
+bool isHandleCst(const ca::core::Any& cst) {
+    return cst.as<Handle>() != nullptr;
 }
 
 // 判断 ldc cst 是否是 MethodType（Type，sort == METHOD）。
-bool isMethodTypeCst(const std::any& cst) {
-    if (cst.type() != typeid(Type)) return false;
-    return std::any_cast<Type>(cst).getSort() == Type::METHOD;
+bool isMethodTypeCst(const ca::core::Any& cst) {
+    auto* p = cst.as<Type>();
+    return p && p->getSort() == Type::METHOD;
 }
 
 // 给一个方法的指令列表，在 ldc 节点处插入展开序列，并移除原 ldc。
@@ -43,7 +43,7 @@ void expandLdcInMethod(ca::str::Utf8StringArena& arena, MethodNode* m) {
 
     for (auto* ldc : targets) {
         if (isHandleCst(ldc->cst)) {
-            Handle h = std::any_cast<Handle>(ldc->cst);
+            Handle h = ldc->cst.cast<Handle>();
             // 展开序列（插入到 ldc 之前，然后删 ldc）：
             //   INVOKESTATIC MethodHandles.lookup()           ; → Lookup
             //   LDC <owner class>                              ; → Class
@@ -154,7 +154,7 @@ void expandLdcInMethod(ca::str::Utf8StringArena& arena, MethodNode* m) {
             m->instructions.remove(ldc);
         } else if (isMethodTypeCst(ldc->cst)) {
             // ldc MethodType → fromMethodDescriptorString(desc, systemClassLoader)
-            Type t = std::any_cast<Type>(ldc->cst);
+            Type t = ldc->cst.cast<Type>();
             auto desc = t.getDescriptor();
             auto* ldcDesc = new LdcInsnNode(std::string(reinterpret_cast<const char*>(desc.data()), desc.byte_length()));
             auto* callSysCl = new MethodInsnNode(
