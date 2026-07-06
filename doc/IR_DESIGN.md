@@ -30,11 +30,13 @@ SSAFunction
 ├── parameters    : SSAParameter[]           // 方法形参，每个是入口可见的 SSA value
 ├── blocks        : SSABlock[]               // 所有基本块（含 entry）
 ├── entry         : SSABlock*                // 唯一入口块（合成，terminator=Jump→真入口）
-└── exceptionRegions : SSAExceptionRegion[]  // R1 先留空（无 try-catch 的方法才进 R1）
+└── exceptionRegions : SSAExceptionRegion[]  // L1 exception table lowered to SSA regions
 ```
 
-`SSAExceptionRegion { protectedBlocks:SSABlock[], handler:SSABlock*, caughtType:SSAType? }`
-—— R1 只处理无异常方法（fail-closed 拒绝带 try-catch 的），R2 起填充。
+`SSAExceptionRegion { protectedBlocks:SSABlock[], handler:SSABlock*, exceptionValue:SSABlockArg*, caughtType:string }`
+describes one exception-table entry.  The handler receives a synthetic REF block
+argument at slot `kSSAExceptionObjectSlot`; RegIR lowers that arg to the
+register that RegC assigns after a matching pending exception is cleared.
 
 ---
 

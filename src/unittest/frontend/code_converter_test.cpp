@@ -65,6 +65,15 @@ TEST(OpcodeUtilsTest, BinaryOpMapping) {
     EXPECT_EQ(opcodeToBinaryOp(Opcodes::IXOR), BinaryOp::XOR);
 }
 
+TEST(OpcodeUtilsTest, ResultTypeMapping) {
+    EXPECT_EQ(opcodeToResultType(Opcodes::IADD), PrimitiveKind::INT);
+    EXPECT_EQ(opcodeToResultType(Opcodes::LADD), PrimitiveKind::LONG);
+    EXPECT_EQ(opcodeToResultType(Opcodes::FREM), PrimitiveKind::FLOAT);
+    EXPECT_EQ(opcodeToResultType(Opcodes::DDIV), PrimitiveKind::DOUBLE);
+    EXPECT_EQ(opcodeToResultType(Opcodes::LSHL), PrimitiveKind::LONG);
+    EXPECT_EQ(opcodeToResultType(Opcodes::DNEG), PrimitiveKind::DOUBLE);
+}
+
 TEST(OpcodeUtilsTest, BranchOpcodeMapping) {
     EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPEQ), CmpOp::EQ);
     EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPNE), CmpOp::NE);
@@ -218,6 +227,102 @@ TEST(CodeConverterTest, BinaryOp) {
     EXPECT_TRUE(foundBinary);
 }
 
+TEST(CodeConverterTest, CastAndNumericCompare) {
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "casts", "(ID)I", {
+        new VarInsnNode(Opcodes::ILOAD, 0),
+        new InsnNode(Opcodes::I2L),
+        new VarInsnNode(Opcodes::DLOAD, 1),
+        new InsnNode(Opcodes::D2I),
+        new InsnNode(Opcodes::LCMP),
+        new InsnNode(Opcodes::IRETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto& nodes = blocks[0]->nodes;
+
+    bool foundI2L = false;
+    bool foundD2I = false;
+    bool foundD2L = false;
+    bool foundCmp = false;
+    for (auto& n : nodes) {
+        if (n->kind == MIRKind::CAST) {
+            auto* cast = static_cast<MIRCast*>(n.get());
+            if (cast->from == PrimitiveKind::INT && cast->to == PrimitiveKind::LONG)
+                foundI2L = true;
+            if (cast->from == PrimitiveKind::DOUBLE && cast->to == PrimitiveKind::INT)
+                foundD2I = true;
+            if (cast->from == PrimitiveKind::DOUBLE && cast->to == PrimitiveKind::LONG)
+                foundD2L = true;
+        } else if (n->kind == MIRKind::CMP) {
+            auto* cmp = static_cast<MIRCmp*>(n.get());
+            EXPECT_EQ(cmp->type, PrimitiveKind::LONG);
+            EXPECT_FALSE(cmp->nanGreater);
+            foundCmp = true;
+        }
+    }
+    EXPECT_TRUE(foundI2L);
+    EXPECT_TRUE(foundD2I);
+    EXPECT_FALSE(foundD2L);
+    EXPECT_TRUE(foundCmp);
+}
+
+TEST(CodeConverterTest, DoubleToLongCast) {
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "d2l", "(D)J", {
+        new VarInsnNode(Opcodes::DLOAD, 0),
+        new InsnNode(Opcodes::D2L),
+        new InsnNode(Opcodes::LRETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto& nodes = blocks[0]->nodes;
+
+    bool foundD2L = false;
+    for (auto& n : nodes) {
+        if (n->kind == MIRKind::CAST) {
+            auto* cast = static_cast<MIRCast*>(n.get());
+            if (cast->from == PrimitiveKind::DOUBLE && cast->to == PrimitiveKind::LONG)
+                foundD2L = true;
+        }
+    }
+    EXPECT_TRUE(foundD2L);
+}
+
+TEST(CodeConverterTest, FloatingCompareNaNDirection) {
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "cmp", "(FFDD)I", {
+        new VarInsnNode(Opcodes::FLOAD, 0),
+        new VarInsnNode(Opcodes::FLOAD, 1),
+        new InsnNode(Opcodes::FCMPG),
+        new VarInsnNode(Opcodes::DLOAD, 2),
+        new VarInsnNode(Opcodes::DLOAD, 4),
+        new InsnNode(Opcodes::DCMPL),
+        new InsnNode(Opcodes::IADD),
+        new InsnNode(Opcodes::IRETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto& nodes = blocks[0]->nodes;
+
+    bool foundFcmpg = false;
+    bool foundDcmpl = false;
+    for (auto& n : nodes) {
+        if (n->kind != MIRKind::CMP)
+            continue;
+        auto* cmp = static_cast<MIRCmp*>(n.get());
+        if (cmp->type == PrimitiveKind::FLOAT && cmp->nanGreater)
+            foundFcmpg = true;
+        if (cmp->type == PrimitiveKind::DOUBLE && !cmp->nanGreater)
+            foundDcmpl = true;
+    }
+    EXPECT_TRUE(foundFcmpg);
+    EXPECT_TRUE(foundDcmpl);
+}
+
 TEST(CodeConverterTest, FieldAccess) {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
                          "getX", "()I", {
@@ -266,6 +371,74 @@ TEST(CodeConverterTest, MethodInvoke) {
     EXPECT_TRUE(foundInvoke);
 }
 
+TEST(CodeConverterTest, StringLdcKeepsLiteralValue) {
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "literal", "()Ljava/lang/String;", {
+        new LdcInsnNode(std::string("hello \"jni\"")),
+        new InsnNode(Opcodes::ARETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto& nodes = blocks[0]->nodes;
+
+    bool foundString = false;
+    for (auto& n : nodes) {
+        if (n->kind == MIRKind::CONSTANT) {
+            auto* c = static_cast<MIRConstant*>(n.get());
+            if (c->type == PrimitiveKind::OBJECT && std::holds_alternative<std::string>(c->value)) {
+                EXPECT_EQ(std::get<std::string>(c->value), "hello \"jni\"");
+                foundString = true;
+            }
+        }
+    }
+    EXPECT_TRUE(foundString);
+}
+
+TEST(CodeConverterTest, ArrayInstructionsCarryComponentType) {
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "arrays", "()V", {
+        new InsnNode(Opcodes::ICONST_2),
+        new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_LONG),
+        new InsnNode(Opcodes::DUP),
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::LCONST_1),
+        new InsnNode(Opcodes::LASTORE),
+        new InsnNode(Opcodes::DUP),
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::LALOAD),
+        new InsnNode(Opcodes::POP2),
+        new InsnNode(Opcodes::POP),
+        new InsnNode(Opcodes::RETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto& nodes = blocks[0]->nodes;
+
+    bool foundNewLongArray = false;
+    bool foundLongStore = false;
+    bool foundLongLoad = false;
+    for (auto& n : nodes) {
+        if (n->kind == MIRKind::NEW_ARRAY) {
+            auto* a = static_cast<MIRNewArray*>(n.get());
+            if (a->componentType == PrimitiveKind::LONG)
+                foundNewLongArray = true;
+        } else if (n->kind == MIRKind::ARRAY_STORE) {
+            auto* s = static_cast<MIRArrayStore*>(n.get());
+            if (s->componentType == PrimitiveKind::LONG)
+                foundLongStore = true;
+        } else if (n->kind == MIRKind::ARRAY_LOAD) {
+            auto* l = static_cast<MIRArrayLoad*>(n.get());
+            if (l->componentType == PrimitiveKind::LONG)
+                foundLongLoad = true;
+        }
+    }
+    EXPECT_TRUE(foundNewLongArray);
+    EXPECT_TRUE(foundLongStore);
+    EXPECT_TRUE(foundLongLoad);
+}
+
 TEST(CodeConverterTest, UnconditionalBranch) {
     auto* label = new LabelNode();
     label->label->bytecodeOffset = 10;
@@ -299,6 +472,39 @@ TEST(CodeConverterTest, UnconditionalBranch) {
         }
     }
     EXPECT_TRUE(foundGoto);
+}
+
+TEST(CodeConverterTest, IfNullBranchZeroHasObjectType) {
+    auto* label = new LabelNode();
+    label->label->bytecodeOffset = 10;
+
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "isNull", "(Ljava/lang/Object;)I", {
+        new VarInsnNode(Opcodes::ALOAD, 0),
+        new JumpInsnNode(Opcodes::IFNULL, label->label),
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::IRETURN),
+        label,
+        new InsnNode(Opcodes::ICONST_1),
+        new InsnNode(Opcodes::IRETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+
+    bool foundObjectNullBranch = false;
+    for (auto* block : blocks) {
+        for (auto& n : block->nodes) {
+            if (n->kind == MIRKind::BRANCH_ZERO) {
+                auto* bz = static_cast<MIRBranchZero*>(n.get());
+                EXPECT_EQ(bz->op, CmpOp::EQ);
+                EXPECT_EQ(bz->type, PrimitiveKind::OBJECT);
+                EXPECT_EQ(bz->targetLabel, label->label);
+                foundObjectNullBranch = true;
+            }
+        }
+    }
+    EXPECT_TRUE(foundObjectNullBranch);
 }
 
 TEST(CodeConverterTest, DumpOutput) {
@@ -345,6 +551,48 @@ TEST(CodeConverterTest, ConstantInstructions) {
         if (n->kind == MIRKind::CONSTANT) constCount++;
     }
     EXPECT_EQ(constCount, 6);
+}
+
+TEST(CodeConverterTest, StackShapeInstructionsArePreserved) {
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "stackShape", "()V", {
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::POP),
+        new InsnNode(Opcodes::LCONST_0),
+        new InsnNode(Opcodes::POP2),
+        new InsnNode(Opcodes::ICONST_1),
+        new InsnNode(Opcodes::ICONST_2),
+        new InsnNode(Opcodes::ICONST_3),
+        new InsnNode(Opcodes::DUP2_X1),
+        new InsnNode(Opcodes::POP2),
+        new InsnNode(Opcodes::POP2),
+        new InsnNode(Opcodes::ICONST_1),
+        new InsnNode(Opcodes::ICONST_2),
+        new InsnNode(Opcodes::ICONST_3),
+        new InsnNode(Opcodes::ICONST_4),
+        new InsnNode(Opcodes::DUP2_X2),
+        new InsnNode(Opcodes::RETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto& nodes = blocks[0]->nodes;
+
+    bool foundPop = false;
+    bool foundPop2 = false;
+    bool foundDup2X1 = false;
+    bool foundDup2X2 = false;
+    for (auto& n : nodes) {
+        foundPop = foundPop || n->kind == MIRKind::STACK_POP;
+        foundPop2 = foundPop2 || n->kind == MIRKind::STACK_POP2;
+        foundDup2X1 = foundDup2X1 || n->kind == MIRKind::STACK_DUP2_X1;
+        foundDup2X2 = foundDup2X2 || n->kind == MIRKind::STACK_DUP2_X2;
+    }
+
+    EXPECT_TRUE(foundPop);
+    EXPECT_TRUE(foundPop2);
+    EXPECT_TRUE(foundDup2X1);
+    EXPECT_TRUE(foundDup2X2);
 }
 
 TEST(CodeConverterTest, NewObjectAndInvokeSpecial) {

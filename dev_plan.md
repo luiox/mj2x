@@ -1,10 +1,10 @@
 # mj2x — MVP 开发现状与接手指南
 
-> ## 当前阶段：架构重构期（2026-06-24 起）
+> ## 当前阶段：RegC/R3 闭环前加固期（2026-07-06 起）
 >
-> mj2x 已完成 **CBackend MVP**（feat/mj2x/mvp-completion 分支，50 测试）。
-> 经竞品分析（`ref_samples/竞品分析报告.md`），确认旧 CBackend 路线（`cstack[]`/sp JNI C
-> 直译）是 c2j-native-deobfuscator 的正中靶心，系统性可还原，继续修补意义不大。
+> mj2x 已完成 CBackend Wave 0-7、SSA/RegIR、RegC native backend、RegC helper
+> semantics、try/catch dispatch、integer traps、narrow primitive helpers, and
+> the first R3 runtime core.
 >
 > **mj2x 进入架构重构期**，新主路线：栈式 MIR → SSA → 寄存器 IR → 变换 → 寄存器式 C/C++（RegC）
 > + native 运行时。详见：
@@ -13,35 +13,46 @@
 > - **`doc/ROADMAP.md`**（R0-R5 波次，替换旧 B0-B3）
 > - **`doc/ARCHITECTURE.md`** v0.2
 >
-> 旧 CBackend 归档为 reference（ADR-1），不再演进；其 50 测试作 L1 + legacy 基线保留。
-> 本文档 §1-§9 是 **CBackend MVP 的历史记录**（保留作基线证明，不再作为下一步依据）。
-> 下一步开发优先级以 `ROADMAP.md` R1（L2 SSA + L3 寄存器 IR）为准。
-
----
-
-> 最后更新: 2026-05-25（CBackend MVP 历史段）/ 2026-06-24（重构段）
-> 分支: CBackend MVP 在 `feat/mj2x/mvp-completion`；重构设计在 `spike/mj2x/arch-redesign`
+> CBackend 作为广覆盖/兼容性后端保留；RegC 是保护导向后端，后续工作围绕
+> SSA readiness、R3 runtime ABI、mjdbg/c2j 反馈和 L4 transform passes 展开。
+> 本文 §1-§8 是 CBackend 的实现记录与已知限制，仍作为该后端的参考。
 
 ---
 
 ## 0. 架构重构期工作（当前，2026-06-24 起）
 
-mj2x 当前不在做 CBackend 增量，而在执行架构重构。当前进度：
+2026-07-06 更新：CBackend 已按 `doc/CBACKEND_REVIVAL_AND_WAVES.md` 完成 Wave 0-7
+复活与覆盖扩展；RegC/SSA/R3 已完成 MVP 闭环，下一步进入输入面加固、runtime ABI
+落地和 mjdbg 反馈闭环。
+当前进度：
 
 | 波次 | 内容 | 状态 |
 |------|------|------|
-| **R0** | 架构重构设计落地（6 份文档） | ✅ 完成（本分支 `spike/mj2x/arch-redesign`） |
-| **R1** | L2 SSA + L3 寄存器 IR 骨架 | ⬜ 待开始 |
-| **R2** | L5 RegC 寄存器式 C 生成 + E2E | ⬜ 待开始 |
-| **R3** | RT 运行时最小可用 | ⬜ 待开始 |
+| **R0** | 架构重构设计落地（6 份文档） | ✅ 完成 |
+| **R1** | L2 SSA + L3 寄存器 IR 骨架 | ✅ 完成 |
+| **R2** | L5 RegC 寄存器式 C 生成 + E2E | ✅ MVP 完成 |
+| **R3** | RT 运行时最小可用 | ✅ core 完成，待 RegC ABI/live 验证 |
 | **R4** | L4 变换 pass 系统 | ⬜ 待开始 |
-| **R5+** | mjdbg 闭环 + 可选 VMC4 | ⬜ 待开始 |
+| **R5+** | mjdbg 闭环 + 可选 VMC4 | ⬜ 待 RegC/R3 样本反馈 |
 
-权威定义见 `doc/ROADMAP.md`。下一步具体任务是 **R1**：
-`src/mj2x/mir/ssa/`（reaching-def + dominance + φ）+ `src/mj2x/mir/register_ir/`（φ 消解 + 虚拟寄存器），
-复用 libjbytecode analysis 的 Frame/SourceValue。
+权威定义见 `doc/ROADMAP.md`。当前下一步不是重做 R1/R2，而是按
+`doc/REGC_NEXT_STEPS.md` 做善后与加固：先修正文档/注释漂移，再补 SSA/RegC
+常见 javac 输入形状，然后把 inline RegC helper 逐步迁到 R3 runtime ABI。
 
-> 以下 §1-§9 是 **CBackend MVP 的历史记录**，保留作基线，不再驱动下一步开发。
+### 0.1 当前分支交付清单（feat/mj2x/regc-followup-foundation）
+
+本分支只做 RegC 后续基础包，不把 R3 runtime ABI 迁移和 R4 pass 系统混入同一个 PR。
+完成后再开 PR 到 `dev.3`。
+
+| 项目 | 状态 | 验收 |
+|------|------|------|
+| 文档善后：修正 R1/R2/R3 和 try/catch 过时状态 | ✅ 完成 | `REGC_NEXT_STEPS.md`、本文、相关设计文档同步 |
+| 公开注释补齐：RegCBackend/RegCEmitter 与 multianewarray 边界 | ✅ 完成 | Doxygen 注释与当前 helper-backed 实现一致 |
+| 后续计划：明确 Phase 1-4 顺序 | ✅ 完成 | `doc/REGC_FOLLOWUP_PLAN.md` |
+| javac 窄化转换：`i2b`/`i2s`/`i2c` | ✅ 完成 | SSA Java sample + RegC DLL E2E |
+| javac boolean ternary StackMap 形状 | ✅ 完成 | SSA Java sample + RegC DLL E2E |
+| null field/call/array protected handler 形状 | ✅ 完成 | SSA Java sample + RegC DLL E2E |
+| 最终验证与提交整理 | ✅ 完成 | 提交信息使用 `[mj2x] 中文描述`，PR 标题同规范 |
 
 ---
 
@@ -49,13 +60,13 @@ mj2x 当前不在做 CBackend 增量，而在执行架构重构。当前进度�
 
 mj2x (Morpher Java Bytecode to X) 是一个 JVM 字节码 AOT 编译器，将 `.class` 文件中的 Java 方法翻译为 C 源码（未来可扩展到 LLVM IR 等后端）。通过 JNI 实现 Java 运行时互操作。
 
-定位：代码混淆/硬化工具链的一部分，与 morpher-native 生态集成。
+定位：代码混淆/硬化工具链的一部分，与 morpher 生态集成。
 
 参考项目：[masxinlingvonta](https://github.com/superblaubeere27/masxinlingvonta)（Java→LLVM IR，单后端）
 
 ---
 
-## 2. MVP 完成状态
+## 2. CBackend MVP 实现状态
 
 ### 2.1 已实现 ✅
 
@@ -65,7 +76,7 @@ mj2x (Morpher Java Bytecode to X) 是一个 JVM 字节码 AOT 编译器，将 `.
 | CompilerIndex | 类/方法/字段索引 | `src/mj2x/core/compiler_index.{hpp,cpp}` |
 | InputLoader | 单 `.class` 文件读取（libjbytecode） | `src/mj2x/io/input_loader.{hpp,cpp}` |
 | OutputWriter | 写回修改后的 `.class` | `src/mj2x/io/output_writer.{hpp,cpp}` |
-| MIR | 34 种后端无关中间表示节点 | `src/mj2x/frontend/mir_node.hpp` |
+| MIR | 覆盖算术/控制流/调用/对象/数组/异常的后端无关 MIR 节点 | `src/mj2x/frontend/mir_node.hpp` |
 | Block | 基本块 + CFG + 异常处理器 | `src/mj2x/frontend/block.hpp` |
 | CodeConverter | 字节码 → MIR 转换 | `src/mj2x/frontend/code_converter.{hpp,cpp}` |
 | MethodStack | 参数/局部变量类型推导 | `src/mj2x/frontend/method_stack.{hpp,cpp}` |
@@ -78,298 +89,82 @@ mj2x (Morpher Java Bytecode to X) 是一个 JVM 字节码 AOT 编译器，将 `.
 | Postprocessor 接口 | 可插拔 | `src/mj2x/postprocessor/postprocessor.hpp` |
 | CLI | `mj2x-cli -i in.class -o out.class --emit-c out.c` | `src/mj2x-cli/main.cpp` |
 
-### 2.2 单元测试 ✅ 39 passing
+### 2.2 单元测试 ✅
 
-| 测试套件 | 用例数 | 覆盖 |
-|---------|--------|------|
-| CompilerIndexTest | 2 | 增删查 |
-| IOTest | 2 | ClassReader/Writer roundtrip |
-| InputLoaderTest | 1 | 真实 class 读入 |
-| PipelineTest | 2 | 非法路径 / roundtrip |
-| TypeUtilsTest | 3 | JVM 类型映射 |
-| OpcodeUtilsTest | 3 | opcode 到枚举映射 |
-| MethodStackTest | 3 | 参数类型推导 |
-| CodeConverterTest | 12 | 指令翻译 / CFG / dump |
-| CBackendTest | 9 | 各 MIR 节点 C 翻译 |
-| E2ETest | 2 | 完整 Pipeline + C 输出 |
+当前测试覆盖 CompilerIndex / IO / Pipeline / TypeUtils / OpcodeUtils / MethodStack / CodeConverter /
+CBackend 子串测试 / CBackend 真 E2E。CBackend 真 E2E 现有 25 个用例，覆盖 Wave 1-7 与综合样本。
 
-### 2.3 已知的限制
+### 2.3 已知的限制（CBackend）
 
-| 限制 | 说明 | Issue |
-|------|------|-------|
-| 只支持单 `.class` 输入 | 无 JAR 解析 | — |
-| `synchronized` 块抛异常 → 锁泄漏 | `MONITOREXIT` 跳过 | 文档标注 |
-| `ATHROW` 不中断 C 控制流 | 需手动 `return` | 文档标注 |
-| `ACC_SYNCHRONIZED` 方法拒绝 | C 不能模拟 JVM monitor | 文档标注 |
-| JNI ID 无缓存 | 每次调用都 GetMethodID | Phase 5 计划 |
-| 栈全用 union jvalue 数组 | 性能差，后续可优化 | Phase 5 计划 |
-| 不支持 `INVOKEDYNAMIC` | 需 preprocessor 提取 | Phase 5 计划 |
+| 限制 | 说明 |
+|------|------|
+| 只支持单 `.class` 输入 | 无 JAR 解析 |
+| JNI ID 无缓存 | 每次调用都 GetMethodID |
+| 栈全用 union jvalue 数组 | 性能差，后续可优化 |
+| `INVOKEDYNAMIC` fail-closed | 生成 `UnsupportedOperationException`，不直译 lambda/方法句柄 |
+| JSR/RET 不纳入 | 废弃字节码由 preprocessor/输入规范处理 |
+| int/long DIV/REM 除零未显式转异常 | C 层仍不是完整 JVM trap 模型 |
 
 ---
 
 ## 3. 构建与运行
 
-### 3.1 前置条件
-
-- Windows x64（其他平台未测试）
-- MSVC 2022（Visual Studio 2022）
-- xmake >= 2.9.3
-- JDK 17+（仅编译测试用）
-
-### 3.2 构建
-
 ```bash
-# 从 morpher 根目录运行
+# 构建
 xmake build mj2x-core          # 核心静态库
 xmake build mj2x-cli           # CLI 工具
 xmake build mj2x_unittest      # 单元测试
-```
 
-### 3.3 运行
-
-```bash
-# 处理单个 class 文件
+# 运行
 xmake run mj2x-cli -i input.class -o output.class --emit-c output.c
-
-# 带 MIR 调试输出
-xmake run mj2x-cli -i input.class -o output.class --emit-c output.c --dump-mir
-
-# 运行测试
+xmake run mj2x-cli -i input.class -o output.class --emit-c output.c --dump-mir  # MIR 调试
 xmake run mj2x_unittest
 xmake run mj2x_unittest --gtest_filter="CBackend*"  # 过滤
 ```
 
-### 3.4 测试真实混淆 class
-
+测试真实混淆 class：
 ```bash
-# 从 SnakeGame 样本提取 class
 jar xf ref_samples/SnakeGame-obf-grunt.jar b.class
-
-# 处理
 xmake run mj2x-cli -i b.class -o b_out.class --emit-c b_out.c
-
-# 验证输出
-cat b_out.c | head -30
 ```
 
 ---
 
-## 4. 架构速览
+## 4. CBackend 关键设计决策
 
-### 4.1 Pipeline 流程
+- **MIR 层**：后端无关中间表示，所有 34 种节点定义在 `mir_node.hpp`，`CodeConverter` 将字节码指令翻译为 MIR，`CBackend` 将 MIR 翻译为 C 代码。多后端分离的关键抽象。
+- **Stack + SP 模型**：C 中使用 `union jvalue stack[]` + `int sp` 模拟 JVM 操作数栈，实现简单但性能低于局部变量优化方案。
+- **全 JNI 互操作**：字段读写、方法调用、对象创建全部走 JNI C API（`(*env)->Call*Method` 等），不需要运行时环境。
+- **无 RTTI**：遵循 morpher 项目约定，使用 `typed::cast<T>`（声明在 `libtyped`）替代 `dynamic_cast`。
+- **所有 MIR 节点用 `unique_ptr` 管理**：存储在 `Block::nodes` 的 `vector` 中，`CodeConverter` 必须比 `Block*` 活得更久。
 
-```
-input.class
-    │
-    ▼
-[InputLoader]  →  libjbytecode::ClassReader → ClassNode
-    │
-    ▼
-[CompilerIndex]  →  classes / methods / fields 索引
-    │
-    ▼
-[Preprocessors]  →  标记待编译方法、提取复杂指令
-    │
-    ▼
-[CodeConverter]  →  遍历 InsnList → 分析 CFG → 构建 Block[] + MIRNode[]
-    │
-    ▼
-[Backend]        →  MIR → 目标代码（CBackend 生成 JNI C 函数）
-    │
-    ▼
-[Postprocessors] →  设 ACC_NATIVE、注入加载器
-    │
-    ▼
-[OutputWriter]   →  libjbytecode::ClassWriter → output.class + output.c
-```
-
-### 4.2 关键设计决策
-
-- **MIR 层**: 后端无关中间表示，所有 34 种节点定义在 `mir_node.hpp`，`CodeConverter` 将字节码指令翻译为 MIR，`CBackend` 将 MIR 翻译为 C 代码。多后端分离的关键抽象。
-- **Stack + SP 模型**: C 中使用 `union jvalue stack[]` + `int sp` 模拟 JVM 操作数栈，实现简单但性能低于局部变量优化方案。
-- **全 JNI 互操作**: 字段读写、方法调用、对象创建全部走 JNI C API（`(*env)->Call*Method` 等），不需要运行时环境。
-- **无 RTTI**: 遵循 morpher-native 项目约定，使用 `typed::cast<T>`（声明在 `libtyped`）替代 `dynamic_cast`。
-- **所有 MIR 节点用 `unique_ptr` 管理**: 存储在 `Block::nodes` 的 `vector` 中，`CodeConverter` 必须比 `Block*` 活得更久。
-
-### 4.3 文件树
-
-```
-src/mj2x/
-├── mj2x.hpp                        # 聚合头文件
-├── core/
-│   ├── pipeline.{hpp,cpp}          # Pipeline 编排
-│   └── compiler_index.{hpp,cpp}    # CompilerIndex
-├── frontend/
-│   ├── mir_node.hpp                # 34 种 MIR 节点定义
-│   ├── block.hpp                   # Block + ExceptionHandler
-│   ├── code_converter.{hpp,cpp}    # 字节码 → MIR 转换
-│   ├── method_stack.{hpp,cpp}      # 局部变量类型推导
-│   ├── type_utils.{hpp,cpp}        # JVM 类型工具
-│   └── opcode_utils.{hpp,cpp}      # Opcode 映射
-├── backend/
-│   ├── backend_result.hpp          # 后端结果结构体
-│   ├── backend.hpp                 # Backend 抽象接口
-│   └── c_backend.{hpp,cpp}         # C 源码后端
-├── preprocessor/
-│   ├── preprocessor.hpp            # Preprocessor 接口
-│   └── mark_all_preprocessor.hpp   # 全部标记预处理器
-├── postprocessor/
-│   └── postprocessor.hpp           # Postprocessor 接口
-├── io/
-│   ├── input_loader.{hpp,cpp}      # .class 文件读取
-│   └── output_writer.{hpp,cpp}     # .class 文件写入
-src/mj2x-cli/
-│   └── main.cpp                    # CLI 入口
-src/unittest/
-├── main.cpp                        # gmock main
-├── core/
-│   ├── compiler_index_test.cpp
-│   ├── io_test.cpp
-│   ├── e2e_test.cpp
-│   └── input_loader_test.cpp
-├── frontend/
-│   └── code_converter_test.cpp
-└── backend/
-    └── c_backend_test.cpp
-```
+文件树与依赖关系详见 `doc/ARCHITECTURE.md`。
 
 ---
 
-## 5. 依赖关系
+## 5. 已知问题
 
-```
-mj2x-cli ──▶ mj2x-core (static lib)
-                   │
-                   ├── libjbytecode (class 读写)
-                   │     ├── libca_core (基础类型 u8/i32)
-                   │     ├── libtyped (RTTI 替代)
-                   │     └── libcrypto (SHA-1)
-                   │
-                   └── libjstr (字符串工具)
-mj2x_unittest ──▶ mj2x-core + gmock
-```
+### 5.1 加载失败（4 个混淆 class）
 
-所有依赖均为 morpher-native 内部库，无新增第三方依赖。
+`ref_samples/SnakeGame-obf-grunt.jar` 中 4/14 的 class 加载时抛 `readInt exceeds buffer`（a/h/k/n.class）。调试方法：在 `libjbytecode` 的 `readInt` 函数中添加 `printf` 输出调用栈或文件名+行号，重新运行确定具体溢出位置。
 
----
+### 5.2 libjbytecode ClassReader 已知问题
 
-## 6. 已知问题与待修复
+- [#227](https://github.com/luiox/morpher/issues/227) ✅ 已修复 (PR #228)：thisClass/superClass 越界校验
+- [#229](https://github.com/luiox/morpher/issues/229) ✅ 已修复 (PR #230)：属性长度截断守卫
 
-### 6.1 加载失败（4 个混淆 class）
+### 5.3 CBackend 生成代码限制
 
-`ref_samples/SnakeGame-obf-grunt.jar` 中 4/14 的 class 加载时抛 `readInt exceeds buffer`：
+> **2026-07-05 更新**（Wave 0-7 复活）：整数/长整型/浮点、转换、控制流、调用、
+> 对象/字段、数组、`ATHROW`/try-catch/finally、monitor 块均已有真 E2E 覆盖。下表为**当前**
+> 剩余限制。
 
-| Class | 大小 | 错误位置 | 可能原因 |
-|-------|------|---------|---------|
-| a.class | 9800 | readInt at 9800 | 深层 attribute 解析溢出（PR #228/#230 未覆盖的更底层读越界） |
-| h.class | 4827 | readInt at 4824 | 同上 |
-| k.class | 1619 | readInt at 1616 | 同上 |
-| n.class | 56264 | readInt at 56264 | 同上 |
-
-**建议调试方法**：在 `libjbytecode` 的 `readInt` 函数中添加 `printf` 输出调用栈或文件名+行号，重新运行确定具体溢出位置。
-
-### 6.2 libjbytecode ClassReader 已知问题
-
-| Issue | 状态 | 说明 |
-|-------|------|------|
-| [#227](https://github.com/luiox/morpher/issues/227) | ✅ 已修复 (PR #228) | thisClass/superClass 越界校验 |
-| [#229](https://github.com/luiox/morpher/issues/229) | ✅ 已修复 (PR #230) | 属性长度截断守卫 |
-
-### 6.3 CBackend 生成代码限制
-
-| 问题 | 影响 | 优先级 |
-|------|------|--------|
-| JNI field/method ID 未缓存 | 每次访问都查 ID，性能差 | 中 |
-| `ATHROW` 后无 `ExceptionCheck` 桩 | MVP 文档接受此限制 | 低 |
-| `MONITORENTER/EXIT` 块内异常 → 锁泄漏 | MVP 文档接受此限制 | 低 |
-| JAR 输入/输出不支持 | 只能处理单 class 文件 | 高 |
-| 缺失 `ConstantInstruction` 适配器的 MIRConstant 节点 | LDC 指令未正确翻译常量值 | 低 |
-| 生成的 `stack` 类型声明 `union jvalue` 被传入函数形参时有潜在兼容问题 | MSVC 兼容 | 低 |
-
----
-
-## 7. 下一步开发优先级
-
-> ⚠️ **本节为 CBackend MVP 时期的优先级，已被架构重构取代（2026-06-24）**。
-> 当前优先级见 `doc/ROADMAP.md` 的 R0-R5 与本文 §0。下列 P0-P2 已全部完成
-> （在 `feat/mj2x/mvp-completion` 分支：JAR I/O、JNI ID 缓存、MIRConstant 常量值、
-> C 编译 E2E 等），保留作历史。
-
-### P0（必须先修）
-
-- [ ] **JAR 输入输出支持**：当前 InputLoader 只读单 `.class`，OutputWriter 只写单 `.class`。需要基于 `libjzip` 或 `mbase` 的 jar 工具实现多文件 JAR 读写。
-- [ ] **修复 4 个混淆 class 加载失败**：确定 `readInt exceeds buffer` 的具体溢出位置并修复。
-
-### P1（核心增强）
-
-- [ ] **JNI ID 缓存**：在生成的 C 代码中用静态变量缓存 `jmethodID` / `jfieldID`，在 `JNI_OnLoad` 或首次使用时初始化。
-- [ ] **INVOKEDYNAMIC 提取 Preprocessor**：参考 masxinlingvonta 的 `InstructionExtractor`，把 `invokedynamic` 指令提取到合成方法。
-- [ ] **`ConstantInstruction` 类型完善**：让 MIRConstant 正确区分 int/long/float/double/string 常量值。
-
-### P2（质量提升）
-
-- [ ] **C 编译验证 E2E 测试**：用 javac 编译一个测试 Java 类，mj2x 翻译成 C，再用 MSVC `cl /c` 验证生成的 C 可编译。
-- [ ] **行覆盖测试**：补充 Phase 1-4 未覆盖的组件测试（Block、MethodStack、Preprocessor 等），目标 ≥ 80 测试用例。
-- [ ] **README 文档**：构建说明、使用示例、架构概览。
-
----
-
-## 8. 如何调试
-
-### 8.1 MIR 调试
-
-```bash
-xmake run mj2x-cli -i input.class -o out.class --emit-c out.c --dump-mir
-```
-
-`--dump-mir` 打印每个方法翻译后的 MIR 基本块和指令序列。
-
-### 8.2 libjbytecode ClassReader 调试
-
-如果某个 class 文件加载失败，可以：
-
-```bash
-# 快速验证
-xmake run libjbytecode_unittest --gtest_filter="ClassReaderFix*"
-```
-
-要定位具体的 `readInt` 溢出位置，在 `class_reader.cpp` 的 `readInt` 函数中添加上下文信息：
-
-```cpp
-ca::i32 ClassReader::readInt(ca::i32 offset) const {
-    if (offset < 0 || offset + 4 > static_cast<ca::i32>(len)) {
-        printf("readInt at %d exceeds buffer (%d) | cpEnd=%d cpCount=%d\n",
-               offset, len, cpEnd, cpCount);
-        throw std::out_of_range(...);
-    }
-    ...
-}
-```
-
-### 8.3 测试单个组件
-
-```bash
-xmake run mj2x_unittest --gtest_filter="CBackendTest.AddMethod"
-xmake run mj2x_unittest --gtest_filter="CodeConverterTest.*"
-```
-
----
-
-## 9. 分支策略
-
-```
-main
-  └── feat/mj2x-mvp        ← 当前开发分支（已 rebase 到最新 main）
-  └── fix/libjbytecode-*    ← libjbytecode 修复分支（PR → main → rebase mvp）
-
-feat/mj2x-mvp 的 7 个 commit:
-  485c581f  feat(mj2x): Phase 4 - E2E integration
-  6f0c72d9  feat(mj2x): Phase 3 - C backend
-  a27eb360  feat(mj2x): Phase 2 - MIR + CodeConverter
-  42acc564  feat(mj2x): Phase 1 - project skeleton
-  511edbb7  docs(mj2x): address review - ATHROW/MONITOR semantics
-  b3d71ad0  docs(mj2x): architecture, deps, MVP plan, test strategy
-  5ee840d6  Merge PR #228 (ClassReader fix 1)
-```
-
-修复分支从 `main` 切出，PR 合并到 `main` 后，`feat/mj2x-mvp` rebase 到最新 `main` 以获取修复。
+| 问题 | 影响 | 优先级 | 处置波次 |
+|------|------|--------|---------|
+| JNI field/method ID 未缓存（每次现查 GetMethodID/GetFieldID） | 性能差 | 中 | 后续优化 |
+| JAR 输入/输出不支持 | 只能处理单 class 文件 | 高 | 后续独立波次 |
+| `<init>`/`<clinit>` 不被 MarkAll 标记（保留原字节码） | 构造器不走 native | 中 | Wave 4 完整支持时重评 |
+| int DIV/REM 除零：JVM 抛 ArithmeticException，C 是 UB | 极端输入行为差异 | 低 | 接受（Wave 1 限制） |
+| `INVOKEDYNAMIC` 仅 fail-closed | lambda/字符串拼接等 indy 形态不直译 | 中 | 后续 preprocessor/RegC |
+| LDC Class/MethodType/Handle 仍非完整对象语义 | 反射/方法句柄场景受限 | 中 | 后续 preprocessor |
+| 生成的 `stack` 类型声明 `union jvalue` 被传入函数形参时有潜在兼容问题 | MSVC 兼容 | 低 | — |

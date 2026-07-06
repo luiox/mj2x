@@ -1,10 +1,16 @@
 #include "ssa_builder.hpp"
+#include "mj2x/frontend/type_utils.hpp"
 
 #include <cassert>
+#include <algorithm>
+#include <variant>
 #include <unordered_map>
 #include <unordered_set>
+#include "libca/str/utf8_string.hpp"
 
 namespace mj2x {
+
+using namespace jbytecode::core;
 
 namespace {
 
@@ -40,6 +46,174 @@ SSAType mirKindToSSA(PrimitiveKind k) {
         case PrimitiveKind::OBJECT:  return SSAType::REF;
         default:                     return SSAType::UNKNOWN;
     }
+}
+
+SSAType jvmTypeToSSA(const Type& type) {
+    return mirKindToSSA(jvmSortToPrimitive(type.getSort()));
+}
+
+SSAType descToSSA(const std::string& desc) {
+    return mirKindToSSA(jvmDescToPrimitive(desc));
+}
+
+std::string primitiveArrayDesc(PrimitiveKind kind) {
+    switch (kind) {
+        case PrimitiveKind::BOOLEAN: return "[Z";
+        case PrimitiveKind::BYTE:    return "[B";
+        case PrimitiveKind::CHAR:    return "[C";
+        case PrimitiveKind::SHORT:   return "[S";
+        case PrimitiveKind::INT:     return "[I";
+        case PrimitiveKind::LONG:    return "[J";
+        case PrimitiveKind::FLOAT:   return "[F";
+        case PrimitiveKind::DOUBLE:  return "[D";
+        default:                     return "[Ljava/lang/Object;";
+    }
+}
+
+SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c) {
+    if (std::holds_alternative<int64_t>(c->value)) {
+        return fn.internInt(std::get<int64_t>(c->value), mirKindToSSA(c->type));
+    }
+    if (std::holds_alternative<double>(c->value)) {
+        auto type = c->type == PrimitiveKind::DOUBLE ? SSAType::F64 : SSAType::F32;
+        return fn.internFloat(std::get<double>(c->value), type);
+    }
+    if (std::holds_alternative<std::nullptr_t>(c->value)) {
+        return fn.internNull();
+    }
+    if (std::holds_alternative<std::string>(c->value)) {
+        return fn.newOpaque(SSAType::REF, "ldc_string");
+    }
+    return fn.newOpaque(mirKindToSSA(c->type), "ldc_unknown");
+}
+
+std::string arrayDescFor(const MIRNewArray* node) {
+    if (!node->typeDesc.empty()) {
+        if (node->typeDesc[0] == '[') return "[" + node->typeDesc;
+        return "[L" + node->typeDesc + ";";
+    }
+    return primitiveArrayDesc(node->componentType);
+}
+
+bool isStaticInvoke(int opcode) {
+    return opcode == Opcodes::INVOKESTATIC;
+}
+
+void markResolvingReadEffect(SSAInstruction* instr) {
+    instr->effect.mayThrow = true;
+    instr->effect.readsMemory = true;
+    instr->effect.resolvesExternal = true;
+}
+
+void markResolvingWriteEffect(SSAInstruction* instr) {
+    instr->effect.mayThrow = true;
+    instr->effect.writesMemory = true;
+    instr->effect.resolvesExternal = true;
+}
+
+void markRuntimeCheckEffect(SSAInstruction* instr) {
+    instr->effect.mayThrow = true;
+    instr->effect.resolvesExternal = true;
+}
+
+SSAType localDefType(const std::vector<Block*>& blocks, int blockLabel, int nodeIndex) {
+    for (auto* block : blocks) {
+        if (block->id != blockLabel) continue;
+        if (nodeIndex < 0 || nodeIndex >= static_cast<int>(block->nodes.size())) break;
+        const auto& node = block->nodes[static_cast<size_t>(nodeIndex)];
+        if (node->kind == MIRKind::LOCAL_STORE) {
+            return mirKindToSSA(static_cast<MIRLocalStore*>(node.get())->type);
+        }
+        if (node->kind == MIRKind::IINC) {
+            return SSAType::I32;
+        }
+        break;
+    }
+    return SSAType::UNKNOWN;
+}
+
+SSAType blockArgType(const std::vector<Block*>& blocks, const DefSet& defs) {
+    SSAType inferred = SSAType::UNKNOWN;
+    for (const auto& def : defs) {
+        SSAType next = localDefType(blocks, def.blockLabel, def.nodeIndex);
+        if (next == SSAType::UNKNOWN) continue;
+        if (inferred == SSAType::UNKNOWN) {
+            inferred = next;
+        } else if (inferred != next) {
+            return SSAType::UNKNOWN;
+        }
+    }
+    return inferred == SSAType::UNKNOWN ? SSAType::I32 : inferred;
+}
+
+bool isBlockMetadata(MIRKind kind) {
+    return kind == MIRKind::LABEL || kind == MIRKind::FRAME ||
+           kind == MIRKind::LINE || kind == MIRKind::NOP;
+}
+
+void appendFrameStackTypes(std::vector<SSAType>& out, const MIRFrame* frame) {
+    if (!frame) return;
+    out.reserve(frame->stackTypes.size());
+    for (PrimitiveKind kind : frame->stackTypes) {
+        out.push_back(mirKindToSSA(kind));
+    }
+}
+
+bool blockHasStackArgs(const SSABlock* block) {
+    if (!block) return false;
+    for (const auto& arg : block->args) {
+        if (isSSAStackValueSlot(arg.slot)) return true;
+    }
+    return false;
+}
+
+void ensureSuccessorStackArgs(SSABlock* target, const FrameState& fs, SSAFunction& fn) {
+    if (!target || fs.stack.empty() || blockHasStackArgs(target)) return;
+
+    // Some verifier-split fallthrough blocks, such as the ireturn after a
+    // throwing GETFIELD inside a try range, have no StackMapTable entry of
+    // their own.  The predecessor FrameState is still authoritative because
+    // the target is translated later in L1 order.
+    for (size_t i = 0; i < fs.stack.size(); ++i) {
+        SSAType type = fs.stack[i] ? fs.stack[i]->type : SSAType::UNKNOWN;
+        target->args.emplace_back(fn.ids.newValueId(), type, ssaStackValueSlot(static_cast<int>(i)));
+    }
+}
+
+std::vector<SSAType> stackArgTypes(const std::vector<Block*>& blocks, size_t blockIndex) {
+    std::vector<SSAType> result;
+    if (blockIndex >= blocks.size()) return result;
+    const Block* block = blocks[blockIndex];
+
+    for (const auto& node : block->nodes) {
+        if (node->kind == MIRKind::FRAME) {
+            appendFrameStackTypes(result, static_cast<const MIRFrame*>(node.get()));
+            return result;
+        }
+        if (!isBlockMetadata(node->kind)) break;
+    }
+
+    if (blockIndex == 0) return result;
+    const Block* previous = blocks[blockIndex - 1];
+    if (!previous) return result;
+    for (auto it = previous->nodes.rbegin(); it != previous->nodes.rend(); ++it) {
+        MIRKind kind = (*it)->kind;
+        if (kind == MIRKind::FRAME) {
+            appendFrameStackTypes(result, static_cast<const MIRFrame*>(it->get()));
+            return result;
+        }
+        if (kind == MIRKind::LABEL || kind == MIRKind::LINE || kind == MIRKind::NOP) continue;
+        break;
+    }
+    return result;
+}
+
+bool isCategory2(const SSAValue* value) {
+    return value && ssaStackSize(value->type) == 2;
+}
+
+bool isCategory1(const SSAValue* value) {
+    return value && ssaStackSize(value->type) == 1;
 }
 
 // 算术 op 类型推断（R1：整型统一 I32，长整型 I64，浮点 F32/F64）。
@@ -81,15 +255,23 @@ SSAComparePredicate mapComparePredicate(CmpOp op) {
     return SSAComparePredicate::Eq;  // 不可达
 }
 
-// 构造一条出边：跳到 target 块，并按 target.args 的 slot 从 FrameState.locals 取值传出。
+// 构造一条出边：跳到 target 块，并按 target.args 的 slot 从 FrameState.locals/stack 取值传出。
 // target=null 时返回空 successor（不可达/错误兜底）。
 SSASuccessor buildSuccessor(SSABlock* target, const FrameState& fs, SSAFunction& fn) {
     SSASuccessor s;
     s.block = target;
     if (!target) return s;
+    ensureSuccessorStackArgs(target, fs, fn);
     for (auto& arg : target->args) {
-        if (arg.slot < static_cast<int>(fs.locals.size()) && fs.locals[arg.slot]) {
+        if (arg.slot >= 0 && arg.slot < static_cast<int>(fs.locals.size()) && fs.locals[arg.slot]) {
             s.args.push_back(fs.locals[arg.slot]);
+        } else if (isSSAStackValueSlot(arg.slot)) {
+            int depth = ssaStackValueDepth(arg.slot);
+            if (depth >= 0 && depth < static_cast<int>(fs.stack.size()) && fs.stack[depth]) {
+                s.args.push_back(fs.stack[depth]);
+            } else {
+                s.args.push_back(fn.newOpaque(SSAType::UNKNOWN, "undef_stack_arg"));
+            }
         } else {
             s.args.push_back(fn.newOpaque(SSAType::UNKNOWN, "undef_succ_arg"));
         }
@@ -110,12 +292,62 @@ SSABlock* fallthroughBlock(const std::vector<Block*>& l1blocks,
     return nullptr;
 }
 
+// targetLabel is a Label*; CodeConverter stores label identity as the
+// pointer-derived key because libjbytecode resets bytecode offsets during tree
+// reconstruction.
+int mirLabelKey(jbytecode::core::Label* lbl) {
+    return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
+}
+
+bool blockContainsLabel(const Block* block, int labelId) {
+    if (!block) return false;
+    if (block->id == labelId) return true;
+    for (const auto& node : block->nodes) {
+        if (node->kind != MIRKind::LABEL) continue;
+        auto* label = static_cast<const MIRLabel*>(node.get());
+        if (mirLabelKey(label->labelNode) == labelId) return true;
+    }
+    return false;
+}
+
+bool blockInProtectedRange(const std::vector<Block*>& blocks,
+                           const ExceptionHandler& handler,
+                           const Block* needle) {
+    bool active = false;
+    for (auto* block : blocks) {
+        if (blockContainsLabel(block, handler.startLabel)) active = true;
+        if (blockContainsLabel(block, handler.endLabel)) active = false;
+        if (active && block == needle) return true;
+    }
+    return false;
+}
+
+bool isExceptionHandlerBlock(const std::vector<ExceptionHandler>& handlers, const Block* block) {
+    return std::any_of(handlers.begin(), handlers.end(), [&](const ExceptionHandler& handler) {
+        return blockContainsLabel(block, handler.handlerLabel);
+    });
+}
+
+Block* findBlockByLabel(const std::vector<Block*>& blocks, int labelId) {
+    for (auto* block : blocks) {
+        if (blockContainsLabel(block, labelId)) return block;
+    }
+    return nullptr;
+}
+
+SSABlockArg* findExceptionArg(SSABlock* block) {
+    if (!block) return nullptr;
+    for (auto& arg : block->args) {
+        if (arg.slot == kSSAExceptionObjectSlot) return &arg;
+    }
+    return nullptr;
+}
+
 } // namespace
 
-// ---- 收集块出口的目标 label（从末尾 terminator 推 CFG，L1 没填 successors） ----
-// targetLabel 是 Label*；用 labelKey（指针转 int）作块 id 对齐。
-static int mirLabelKey(jbytecode::core::Label* lbl) {
-    return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
+std::vector<ExceptionHandler> SSABuilder::exceptionTable(const std::vector<Block*>& blocks) const {
+    if (blocks.empty()) return {};
+    return blocks.front()->exceptionTable;
 }
 
 void SSABuilder::collectOutEdges(Block* b, std::vector<int>& targets) {
@@ -160,6 +392,7 @@ static bool blockEndsWithTerminator(Block* b) {
 std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector<Block*>& blocks) {
     // label -> 所有以它为目标 label 的源块（前驱）
     std::unordered_map<int, std::vector<int>> predsOf;
+    const auto handlers = exceptionTable(blocks);
     for (size_t i = 0; i < blocks.size(); ++i) {
         Block* b = blocks[i];
         std::vector<int> outs;
@@ -169,6 +402,13 @@ std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector
             outs.push_back(blocks[i + 1]->id);
         }
         for (int t : outs) predsOf[t].push_back(b->id);
+
+        for (const auto& handler : handlers) {
+            if (blockInProtectedRange(blocks, handler, b)) {
+                auto* handlerBlock = findBlockByLabel(blocks, handler.handlerLabel);
+                if (handlerBlock) predsOf[handlerBlock->id].push_back(b->id);
+            }
+        }
     }
 
     std::vector<ReachingDefBlock> view;
@@ -198,22 +438,61 @@ std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector
 void SSABuilder::buildBlocks(SSAFunction& fn,
                               const std::vector<Block*>& l1blocks,
                               const ReachingDefResult& rd) {
-    for (auto* lb : l1blocks) {
+    const auto handlers = exceptionTable(l1blocks);
+    for (size_t blockIndex = 0; blockIndex < l1blocks.size(); ++blockIndex) {
+        auto* lb = l1blocks[blockIndex];
         auto sb = std::make_unique<SSABlock>(fn.ids.newBlockId());
         sb->l1LabelId = lb->id;
 
         // args：所有 IN[B] 有 ≥1 def 的 local slot 都开 arg（R1 简化策略，见 SSA_ALGORITHM §3.4）。
-        // 类型 R1 保守用 I32（细化推 R2）。
         auto it = rd.in.find(lb->id);
         if (it != rd.in.end()) {
             for (const auto& [slot, defs] : it->second.bySlot) {
                 if (defs.empty()) continue;
-                // 每个有 def 的 slot 开一个 arg（≥2 源 = 真 phi；1 源 = 冗余但正确）
-                sb->args.emplace_back(fn.ids.newValueId(), SSAType::I32, slot);
+                // 每个有 def 的 slot 开一个 arg（≥2 源 = 真 phi；1 源 = 冗余但正确）。
+                // 类型从 reaching defs 回看具体 STORE/IINC，供 RegC 保留 long/double 槽语义。
+                sb->args.emplace_back(fn.ids.newValueId(), blockArgType(l1blocks, defs), slot);
             }
         }
 
+        const bool isHandler = isExceptionHandlerBlock(handlers, lb);
+        if (!isHandler) {
+            auto stackTypes = stackArgTypes(l1blocks, blockIndex);
+            for (size_t i = 0; i < stackTypes.size(); ++i) {
+                sb->args.emplace_back(
+                    fn.ids.newValueId(), stackTypes[i], ssaStackValueSlot(static_cast<int>(i)));
+            }
+        }
+
+        if (isHandler) {
+            sb->args.emplace_back(fn.ids.newValueId(), SSAType::REF, kSSAExceptionObjectSlot);
+        }
+
         fn.blocks.push_back(std::move(sb));
+    }
+
+    std::unordered_map<int, SSABlock*> ssaByLabel;
+    std::unordered_map<const Block*, SSABlock*> ssaByL1Block;
+    for (size_t i = 0; i < fn.blocks.size() && i < l1blocks.size(); ++i) {
+        ssaByLabel[fn.blocks[i]->l1LabelId] = fn.blocks[i].get();
+        ssaByL1Block[l1blocks[i]] = fn.blocks[i].get();
+    }
+    for (const auto& handler : handlers) {
+        SSAExceptionRegion region;
+        auto* handlerBlock = findBlockByLabel(l1blocks, handler.handlerLabel);
+        auto handlerIt = ssaByL1Block.find(handlerBlock);
+        region.handler = handlerIt != ssaByL1Block.end() ? handlerIt->second : nullptr;
+        region.exceptionValue = findExceptionArg(region.handler);
+        region.caughtType = handler.catchType;
+        for (auto* lb : l1blocks) {
+            if (blockInProtectedRange(l1blocks, handler, lb)) {
+                auto it = ssaByLabel.find(lb->id);
+                if (it != ssaByLabel.end()) region.protectedBlocks.push_back(it->second);
+            }
+        }
+        if (region.handler && region.exceptionValue && !region.protectedBlocks.empty()) {
+            fn.exceptionRegions.push_back(std::move(region));
+        }
     }
 }
 
@@ -221,7 +500,9 @@ void SSABuilder::buildBlocks(SSAFunction& fn,
 bool SSABuilder::translateBlocks(SSAFunction& fn,
                                  const std::vector<Block*>& l1blocks,
                                  const ReachingDefResult& rd,
+                                 int methodMaxLocals,
                                  std::string& reason) {
+    (void)rd;
     // l1Label -> SSABlock*
     std::unordered_map<int, SSABlock*> ssaByLabel;
     for (auto& sb : fn.blocks) ssaByLabel[sb->l1LabelId] = sb.get();
@@ -232,15 +513,29 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
 
     for (auto* lb : l1blocks) {
         SSABlock* sb = ssaByLabel.at(lb->id);
-        FrameState fs(fn.symbol.parameterTypes.size() > 0 ? static_cast<int>(fn.symbol.parameterTypes.size()) : 4);
-        // 扩展 locals 到方法 maxLocals（builder 调用方传 methodMaxLocals，但我们没存——用 fs 默认足够 R1）
+        FrameState fs(methodMaxLocals > 0 ? methodMaxLocals : 1);
         if (fs.locals.size() < 8) fs.locals.resize(8, nullptr);
 
-        // 块入口：把 args 绑到对应 slot
+        // Method parameters are available in every block unless a block arg
+        // shadows the same local slot.  This keeps loop conditions that read an
+        // unchanged parameter from turning into opaque undef_local values.
+        for (auto& p : fn.parameters) {
+            if (p->index < fs.locals.size())
+                fs.locals[p->index] = p.get();
+        }
+
+        // 块入口：把 args 绑到对应 slot；若参数 slot 被前驱写过，arg 覆盖原参数。
         for (auto& arg : sb->args) {
-            if (arg.slot < static_cast<int>(fs.locals.size())) {
+            if (arg.slot >= 0 && arg.slot < static_cast<int>(fs.locals.size())) {
                 fs.locals[arg.slot] = &arg;
+            } else if (isSSAStackValueSlot(arg.slot)) {
+                // StackMapTable 的 stack 数组是 bottom-to-top 顺序，FrameState 保持同序，
+                // 后续 pop() 仍能从 vector 尾部取得 JVM 栈顶。
+                fs.push(&arg);
             }
+        }
+        if (auto* exceptionArg = findExceptionArg(sb)) {
+            fs.push(exceptionArg);
         }
 
         // 翻译块内节点
@@ -248,19 +543,9 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
             switch (node->kind) {
             case MIRKind::CONSTANT: {
                 auto* c = static_cast<MIRConstant*>(node.get());
-                // 简单处理：int/long 用 IntLiteral，double/float 用 FloatLiteral，null 用 Null
-                if (c->type == PrimitiveKind::LONG) {
-                    int64_t v = std::get<int64_t>(c->value);
-                    fs.push(fn.internInt(v, SSAType::I64));
-                } else if (c->type == PrimitiveKind::FLOAT || c->type == PrimitiveKind::DOUBLE) {
-                    double v = std::get<double>(c->value);
-                    fs.push(fn.internFloat(v, c->type == PrimitiveKind::DOUBLE ? SSAType::F64 : SSAType::F32));
-                } else if (std::holds_alternative<std::nullptr_t>(c->value)) {
-                    fs.push(fn.internNull());
-                } else {
-                    int64_t v = std::get<int64_t>(c->value);
-                    fs.push(fn.internInt(v, mirKindToSSA(c->type)));
-                }
+                // LDC String/Class 等对象常量先落 opaque ref；这里保持 builder 不因 variant
+                // 类型扩展崩溃，具体对象构造留给后续 RegC/runtime lowering。
+                fs.push(constantValue(fn, c));
                 break;
             }
             case MIRKind::LOCAL_LOAD: {
@@ -309,6 +594,9 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
                 SSAType rt = binaryResultType(lhs->type, rhs->type);
                 instr->result = SSAInstructionResult(fn.ids.newValueId(), rt);
                 instr->hasResult = true;
+                if (instr->op == SSABinaryOp::Div || instr->op == SSABinaryOp::Rem) {
+                    instr->effect.mayThrow = true;
+                }
                 SSAValue* resultPtr = &instr->result;
                 sb->instructions.push_back(std::move(instr));
                 fs.push(resultPtr);
@@ -328,10 +616,57 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
                 fs.push(resultPtr);
                 break;
             }
+            case MIRKind::CAST: {
+                auto* cast = static_cast<MIRCast*>(node.get());
+                SSAValue* v = fs.pop();
+                if (!v) { reason = "stack underflow at CAST"; return false; }
+                auto instr = std::make_unique<SSAConvertInstruction>();
+                instr->convertKind = SSAConvertKind::Numeric;
+                instr->value = v;
+                instr->targetType = mirKindToSSA(cast->to);
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), instr->targetType);
+                instr->hasResult = true;
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::CMP: {
+                auto* cmp = static_cast<MIRCmp*>(node.get());
+                SSAValue* rhs = fs.pop();
+                SSAValue* lhs = fs.pop();
+                if (!lhs || !rhs) { reason = "stack underflow at CMP"; return false; }
+                auto instr = std::make_unique<SSAIntrinsicInstruction>();
+                instr->name = cmp->nanGreater ? "cmp.nan_greater" : "cmp.nan_less";
+                instr->args.push_back(lhs);
+                instr->args.push_back(rhs);
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::I32);
+                instr->hasResult = true;
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
             // 栈操作：只动 FrameState，不产 IR（消除 cstack 锚点的核心）
+            case MIRKind::STACK_POP: {
+                SSAValue* v = fs.pop();
+                if (!v) { reason = "underflow POP"; return false; }
+                break;
+            }
+            case MIRKind::STACK_POP2: {
+                SSAValue* v1 = fs.pop();
+                if (!v1) { reason = "underflow POP2"; return false; }
+                if (!isCategory2(v1)) {
+                    SSAValue* v2 = fs.pop();
+                    if (!v2) { reason = "underflow POP2 category-1 pair"; return false; }
+                    if (!isCategory1(v2)) { reason = "invalid POP2 category mix"; return false; }
+                }
+                break;
+            }
             case MIRKind::STACK_DUP: {
                 SSAValue* v = fs.pop();
                 if (!v) { reason = "underflow DUP"; return false; }
+                if (!isCategory1(v)) { reason = "DUP requires category-1 value"; return false; }
                 fs.push(v); fs.push(v);
                 break;
             }
@@ -339,6 +674,10 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
                 SSAValue* v1 = fs.pop();
                 SSAValue* v2 = fs.pop();
                 if (!v1 || !v2) { reason = "underflow SWAP"; return false; }
+                if (!isCategory1(v1) || !isCategory1(v2)) {
+                    reason = "SWAP requires two category-1 values";
+                    return false;
+                }
                 fs.push(v1); fs.push(v2);
                 break;
             }
@@ -346,14 +685,110 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
                 SSAValue* v1 = fs.pop();
                 SSAValue* v2 = fs.pop();
                 if (!v1 || !v2) { reason = "underflow DUP_X1"; return false; }
+                if (!isCategory1(v1) || !isCategory1(v2)) {
+                    reason = "DUP_X1 requires two category-1 values";
+                    return false;
+                }
                 fs.push(v1); fs.push(v2); fs.push(v1);
                 break;
             }
-            case MIRKind::STACK_DUP2:
             case MIRKind::STACK_DUP_X2: {
-                // R1 简化：DUP2/DUP_X2 涉及 category-2，先按 1-slot 近似（测试样本可避免）
-                reason = "DUP2/DUP_X2 category-2 handling pending (R2)";
-                return false;
+                SSAValue* v1 = fs.pop();
+                if (!v1) { reason = "underflow DUP_X2"; return false; }
+                if (!isCategory1(v1)) { reason = "DUP_X2 top must be category-1"; return false; }
+                SSAValue* v2 = fs.pop();
+                if (!v2) { reason = "underflow DUP_X2"; return false; }
+                if (isCategory2(v2)) {
+                    fs.push(v1); fs.push(v2); fs.push(v1);
+                } else if (isCategory1(v2)) {
+                    SSAValue* v3 = fs.pop();
+                    if (!v3) { reason = "underflow DUP_X2 category-1 form"; return false; }
+                    if (!isCategory1(v3)) { reason = "invalid DUP_X2 category mix"; return false; }
+                    fs.push(v1); fs.push(v3); fs.push(v2); fs.push(v1);
+                } else {
+                    reason = "invalid DUP_X2 value category";
+                    return false;
+                }
+                break;
+            }
+            case MIRKind::STACK_DUP2: {
+                SSAValue* v1 = fs.pop();
+                if (!v1) { reason = "underflow DUP2"; return false; }
+                if (isCategory2(v1)) {
+                    fs.push(v1); fs.push(v1);
+                } else if (isCategory1(v1)) {
+                    SSAValue* v2 = fs.pop();
+                    if (!v2) { reason = "underflow DUP2 category-1 pair"; return false; }
+                    if (!isCategory1(v2)) { reason = "invalid DUP2 category mix"; return false; }
+                    fs.push(v2); fs.push(v1); fs.push(v2); fs.push(v1);
+                } else {
+                    reason = "invalid DUP2 value category";
+                    return false;
+                }
+                break;
+            }
+            case MIRKind::STACK_DUP2_X1: {
+                SSAValue* v1 = fs.pop();
+                if (!v1) { reason = "underflow DUP2_X1"; return false; }
+                if (isCategory2(v1)) {
+                    SSAValue* v2 = fs.pop();
+                    if (!v2) { reason = "underflow DUP2_X1 category-2 form"; return false; }
+                    if (!isCategory1(v2)) { reason = "invalid DUP2_X1 category mix"; return false; }
+                    fs.push(v1); fs.push(v2); fs.push(v1);
+                } else if (isCategory1(v1)) {
+                    SSAValue* v2 = fs.pop();
+                    SSAValue* v3 = fs.pop();
+                    if (!v2 || !v3) { reason = "underflow DUP2_X1 category-1 form"; return false; }
+                    if (!isCategory1(v2) || !isCategory1(v3)) {
+                        reason = "DUP2_X1 category-1 form requires three category-1 values";
+                        return false;
+                    }
+                    fs.push(v2); fs.push(v1); fs.push(v3); fs.push(v2); fs.push(v1);
+                } else {
+                    reason = "invalid DUP2_X1 value category";
+                    return false;
+                }
+                break;
+            }
+            case MIRKind::STACK_DUP2_X2: {
+                SSAValue* v1 = fs.pop();
+                if (!v1) { reason = "underflow DUP2_X2"; return false; }
+                if (isCategory2(v1)) {
+                    SSAValue* v2 = fs.pop();
+                    if (!v2) { reason = "underflow DUP2_X2 category-2 top form"; return false; }
+                    if (isCategory2(v2)) {
+                        fs.push(v1); fs.push(v2); fs.push(v1);
+                    } else if (isCategory1(v2)) {
+                        SSAValue* v3 = fs.pop();
+                        if (!v3) { reason = "underflow DUP2_X2 mixed top form"; return false; }
+                        if (!isCategory1(v3)) { reason = "invalid DUP2_X2 category mix"; return false; }
+                        fs.push(v1); fs.push(v3); fs.push(v2); fs.push(v1);
+                    } else {
+                        reason = "invalid DUP2_X2 value category";
+                        return false;
+                    }
+                } else if (isCategory1(v1)) {
+                    SSAValue* v2 = fs.pop();
+                    if (!v2) { reason = "underflow DUP2_X2 category-1 top form"; return false; }
+                    if (!isCategory1(v2)) { reason = "invalid DUP2_X2 category-1 pair"; return false; }
+                    SSAValue* v3 = fs.pop();
+                    if (!v3) { reason = "underflow DUP2_X2 insertion form"; return false; }
+                    if (isCategory2(v3)) {
+                        fs.push(v2); fs.push(v1); fs.push(v3); fs.push(v2); fs.push(v1);
+                    } else if (isCategory1(v3)) {
+                        SSAValue* v4 = fs.pop();
+                        if (!v4) { reason = "underflow DUP2_X2 four-value form"; return false; }
+                        if (!isCategory1(v4)) { reason = "invalid DUP2_X2 four-value form"; return false; }
+                        fs.push(v2); fs.push(v1); fs.push(v4); fs.push(v3); fs.push(v2); fs.push(v1);
+                    } else {
+                        reason = "invalid DUP2_X2 insertion category";
+                        return false;
+                    }
+                } else {
+                    reason = "invalid DUP2_X2 value category";
+                    return false;
+                }
+                break;
             }
             case MIRKind::RETURN: {
                 sb->terminator = SSAReturnTerminator{nullptr};
@@ -361,6 +796,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
             }
             case MIRKind::RETURN_VALUE: {
                 SSAValue* v = fs.pop();
+                if (!v) { reason = "stack underflow at RETURN_VALUE"; return false; }
                 sb->terminator = SSAReturnTerminator{v};
                 break;
             }
@@ -376,10 +812,14 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
             case MIRKind::BRANCH_ZERO: {
                 auto* bz = static_cast<MIRBranchZero*>(node.get());
                 SSAValue* v = fs.pop();
+                if (!v) { reason = "stack underflow at BRANCH_ZERO"; return false; }
                 auto cmp = std::make_unique<SSACompareInstruction>();
                 cmp->predicate = mapComparePredicate(bz->op);
                 cmp->lhs = v;
-                cmp->rhs = fn.internInt(0, SSAType::I32);
+                SSAValue* zero = (bz->type == PrimitiveKind::OBJECT)
+                    ? static_cast<SSAValue*>(fn.internNull())
+                    : static_cast<SSAValue*>(fn.internInt(0, mirKindToSSA(bz->type)));
+                cmp->rhs = zero;
                 cmp->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::BOOL);
                 cmp->hasResult = true;
                 SSAValue* cond = &cmp->result;
@@ -396,6 +836,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
                 auto* br = static_cast<MIRBranch*>(node.get());
                 SSAValue* rhs = fs.pop();
                 SSAValue* lhs = fs.pop();
+                if (!lhs || !rhs) { reason = "stack underflow at BRANCH"; return false; }
                 auto cmp = std::make_unique<SSACompareInstruction>();
                 cmp->predicate = mapComparePredicate(br->op);
                 cmp->lhs = lhs; cmp->rhs = rhs;
@@ -411,23 +852,263 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
                 sb->terminator = std::move(bt);
                 break;
             }
+            case MIRKind::SWITCH: {
+                auto* sw = static_cast<MIRSwitch*>(node.get());
+                SSAValue* value = fs.pop();
+                if (!value) { reason = "stack underflow at SWITCH"; return false; }
+                SSASwitchTerminator st;
+                st.value = value;
+                for (const auto& c : sw->cases) {
+                    int key = mirLabelKey(c.targetLabel);
+                    SSASwitchCase sc;
+                    sc.key = c.key;
+                    sc.target = buildSuccessor(ssaByLabel.count(key) ? ssaByLabel.at(key) : nullptr, fs, fn);
+                    st.cases.push_back(std::move(sc));
+                }
+                int defaultKey = mirLabelKey(sw->defaultLabel);
+                st.defaultTarget = buildSuccessor(
+                    ssaByLabel.count(defaultKey) ? ssaByLabel.at(defaultKey) : nullptr, fs, fn);
+                sb->terminator = std::move(st);
+                break;
+            }
             case MIRKind::THROW: {
                 SSAValue* v = fs.pop();
+                if (!v) { reason = "stack underflow at THROW"; return false; }
                 sb->terminator = SSAThrowTerminator{v};
                 break;
             }
-            // R1 先 fail-closed 的复杂指令（R2 细化）
-            case MIRKind::INVOKE:
-            case MIRKind::FIELD_GET: case MIRKind::FIELD_PUT:
-            case MIRKind::STATIC_GET: case MIRKind::STATIC_PUT:
-            case MIRKind::NEW_OBJECT: case MIRKind::NEW_ARRAY: case MIRKind::MULTI_NEW_ARRAY:
-            case MIRKind::ARRAY_LOAD: case MIRKind::ARRAY_STORE: case MIRKind::ARRAY_LENGTH:
-            case MIRKind::CHECK_CAST: case MIRKind::INSTANCE_OF:
-            case MIRKind::MONITOR_ENTER: case MIRKind::MONITOR_EXIT:
-            case MIRKind::CAST:
-            case MIRKind::SWITCH: {
-                reason = std::string("R1a does not lower MIRKind=") + std::to_string(static_cast<int>(node->kind));
-                return false;
+            case MIRKind::FIELD_GET: {
+                auto* fg = static_cast<MIRFieldGet*>(node.get());
+                SSAValue* receiver = fs.pop();
+                if (!receiver) { reason = "stack underflow at FIELD_GET"; return false; }
+                auto instr = std::make_unique<SSALoadFieldInstruction>();
+                instr->field = SSAFieldRef{fg->owner, fg->name, fg->desc, false};
+                instr->receiver = receiver;
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), descToSSA(fg->desc));
+                instr->hasResult = true;
+                markResolvingReadEffect(instr.get());
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::FIELD_PUT: {
+                auto* fp = static_cast<MIRFieldPut*>(node.get());
+                SSAValue* value = fs.pop();
+                SSAValue* receiver = fs.pop();
+                if (!receiver || !value) { reason = "stack underflow at FIELD_PUT"; return false; }
+                auto instr = std::make_unique<SSAStoreFieldInstruction>();
+                instr->field = SSAFieldRef{fp->owner, fp->name, fp->desc, false};
+                instr->receiver = receiver;
+                instr->value = value;
+                markResolvingWriteEffect(instr.get());
+                sb->instructions.push_back(std::move(instr));
+                break;
+            }
+            case MIRKind::STATIC_GET: {
+                auto* sg = static_cast<MIRStaticGet*>(node.get());
+                auto instr = std::make_unique<SSALoadFieldInstruction>();
+                instr->field = SSAFieldRef{sg->owner, sg->name, sg->desc, true};
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), descToSSA(sg->desc));
+                instr->hasResult = true;
+                markResolvingReadEffect(instr.get());
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::STATIC_PUT: {
+                auto* sp = static_cast<MIRStaticPut*>(node.get());
+                SSAValue* value = fs.pop();
+                if (!value) { reason = "stack underflow at STATIC_PUT"; return false; }
+                auto instr = std::make_unique<SSAStoreFieldInstruction>();
+                instr->field = SSAFieldRef{sp->owner, sp->name, sp->desc, true};
+                instr->value = value;
+                markResolvingWriteEffect(instr.get());
+                sb->instructions.push_back(std::move(instr));
+                break;
+            }
+            case MIRKind::INVOKE: {
+                auto* inv = static_cast<MIRInvoke*>(node.get());
+                ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(inv->desc.c_str());
+                auto argTypes = Type::getArgumentTypes(descRef);
+                auto retType = jvmTypeToSSA(Type::getReturnType(descRef));
+
+                auto instr = std::make_unique<SSACallInstruction>();
+                instr->method = SSAMethodRef{inv->owner, inv->name, inv->desc, inv->invokeOpcode};
+                instr->args.resize(argTypes.size() + (isStaticInvoke(inv->invokeOpcode) ? 0 : 1), nullptr);
+
+                // JVM 调用参数以最后一个实参在栈顶；SSA call args 保持 receiver,arg0,arg1...
+                // 的源码顺序，便于 RegC 后续直接生成调用 ABI。
+                for (int i = static_cast<int>(argTypes.size()) - 1; i >= 0; --i) {
+                    SSAValue* arg = fs.pop();
+                    if (!arg) { reason = "stack underflow at INVOKE args"; return false; }
+                    instr->args[static_cast<size_t>(i + (isStaticInvoke(inv->invokeOpcode) ? 0 : 1))] = arg;
+                }
+                if (!isStaticInvoke(inv->invokeOpcode)) {
+                    SSAValue* receiver = fs.pop();
+                    if (!receiver) { reason = "stack underflow at INVOKE receiver"; return false; }
+                    instr->args[0] = receiver;
+                }
+
+                instr->effect = SSAEffect::externalCall();
+                instr->effect.resolvesExternal = true;
+                if (retType != SSAType::VOID) {
+                    instr->result = SSAInstructionResult(fn.ids.newValueId(), retType);
+                    instr->hasResult = true;
+                    SSAValue* resultPtr = &instr->result;
+                    sb->instructions.push_back(std::move(instr));
+                    fs.push(resultPtr);
+                } else {
+                    sb->instructions.push_back(std::move(instr));
+                }
+                break;
+            }
+            case MIRKind::NEW_OBJECT: {
+                auto* no = static_cast<MIRNewObject*>(node.get());
+                auto instr = std::make_unique<SSAAllocateInstruction>();
+                instr->allocationKind = SSAAllocationKind::Object;
+                instr->typeDesc = no->typeDesc;
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
+                instr->hasResult = true;
+                instr->effect = SSAEffect::externalCall();
+                instr->effect.resolvesExternal = true;
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::NEW_ARRAY: {
+                auto* na = static_cast<MIRNewArray*>(node.get());
+                SSAValue* count = fs.pop();
+                if (!count) { reason = "stack underflow at NEW_ARRAY"; return false; }
+                auto instr = std::make_unique<SSAAllocateInstruction>();
+                instr->allocationKind = SSAAllocationKind::Array;
+                instr->typeDesc = arrayDescFor(na);
+                instr->args.push_back(count);
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
+                instr->hasResult = true;
+                instr->effect = SSAEffect::externalCall();
+                instr->effect.resolvesExternal = true;
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::MULTI_NEW_ARRAY: {
+                auto* ma = static_cast<MIRMultiNewArray*>(node.get());
+                if (ma->dims <= 0) { reason = "invalid MULTI_NEW_ARRAY dims"; return false; }
+                auto instr = std::make_unique<SSAAllocateInstruction>();
+                instr->allocationKind = SSAAllocationKind::MultiArray;
+                instr->typeDesc = ma->typeDesc;
+                instr->args.resize(static_cast<size_t>(ma->dims), nullptr);
+                for (int i = ma->dims - 1; i >= 0; --i) {
+                    SSAValue* dim = fs.pop();
+                    if (!dim) { reason = "stack underflow at MULTI_NEW_ARRAY"; return false; }
+                    instr->args[static_cast<size_t>(i)] = dim;
+                }
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
+                instr->hasResult = true;
+                instr->effect = SSAEffect::externalCall();
+                instr->effect.resolvesExternal = true;
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::ARRAY_LENGTH: {
+                SSAValue* array = fs.pop();
+                if (!array) { reason = "stack underflow at ARRAY_LENGTH"; return false; }
+                auto instr = std::make_unique<SSAIntrinsicInstruction>();
+                instr->name = "array.length";
+                instr->args.push_back(array);
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::I32);
+                instr->hasResult = true;
+                instr->effect.mayThrow = true;
+                instr->effect.readsMemory = true;
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::ARRAY_LOAD: {
+                auto* al = static_cast<MIRArrayLoad*>(node.get());
+                SSAValue* index = fs.pop();
+                SSAValue* array = fs.pop();
+                if (!array || !index) { reason = "stack underflow at ARRAY_LOAD"; return false; }
+                auto instr = std::make_unique<SSAArrayLoadInstruction>();
+                instr->array = array;
+                instr->index = index;
+                instr->elementType = mirKindToSSA(al->componentType);
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), instr->elementType);
+                instr->hasResult = true;
+                instr->effect = SSAEffect::readMemory().withMayThrow();
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::ARRAY_STORE: {
+                auto* as = static_cast<MIRArrayStore*>(node.get());
+                SSAValue* value = fs.pop();
+                SSAValue* index = fs.pop();
+                SSAValue* array = fs.pop();
+                if (!array || !index || !value) { reason = "stack underflow at ARRAY_STORE"; return false; }
+                auto instr = std::make_unique<SSAArrayStoreInstruction>();
+                instr->array = array;
+                instr->index = index;
+                instr->value = value;
+                instr->elementType = mirKindToSSA(as->componentType);
+                instr->effect = SSAEffect::writeMemory().withMayThrow();
+                sb->instructions.push_back(std::move(instr));
+                break;
+            }
+            case MIRKind::CHECK_CAST: {
+                auto* cc = static_cast<MIRCheckCast*>(node.get());
+                SSAValue* value = fs.pop();
+                if (!value) { reason = "stack underflow at CHECK_CAST"; return false; }
+                auto instr = std::make_unique<SSAConvertInstruction>();
+                instr->convertKind = SSAConvertKind::ReferenceCast;
+                instr->value = value;
+                instr->targetType = SSAType::REF;
+                instr->referenceTypeDesc = cc->typeDesc;
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
+                instr->hasResult = true;
+                markRuntimeCheckEffect(instr.get());
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::INSTANCE_OF: {
+                auto* io = static_cast<MIRInstanceOf*>(node.get());
+                SSAValue* value = fs.pop();
+                if (!value) { reason = "stack underflow at INSTANCE_OF"; return false; }
+                auto instr = std::make_unique<SSAIntrinsicInstruction>();
+                instr->name = "instanceof:" + io->typeDesc;
+                instr->args.push_back(value);
+                instr->result = SSAInstructionResult(fn.ids.newValueId(), SSAType::I32);
+                instr->hasResult = true;
+                markRuntimeCheckEffect(instr.get());
+                SSAValue* resultPtr = &instr->result;
+                sb->instructions.push_back(std::move(instr));
+                fs.push(resultPtr);
+                break;
+            }
+            case MIRKind::MONITOR_ENTER:
+            case MIRKind::MONITOR_EXIT: {
+                auto* mon = static_cast<MIRMonitor*>(node.get());
+                SSAValue* value = fs.pop();
+                if (!value) { reason = "stack underflow at MONITOR"; return false; }
+                auto instr = std::make_unique<SSAIntrinsicInstruction>();
+                instr->name = mon->enter ? "monitor.enter" : "monitor.exit";
+                instr->args.push_back(value);
+                instr->effect = SSAEffect::barrier();
+                instr->effect.mayThrow = true;
+                instr->effect.readsExternalState = true;
+                instr->effect.writesExternalState = true;
+                sb->instructions.push_back(std::move(instr));
+                break;
             }
             case MIRKind::NOP:
             case MIRKind::LABEL:
@@ -469,7 +1150,11 @@ bool SSABuilder::translateBlocks(SSAFunction& fn,
                     break;
                 }
             }
-            if (!bound) jt.target.args.push_back(fn.newOpaque(SSAType::UNKNOWN, "entry_arg_unbound"));
+            if (!bound && isSSAStackValueSlot(arg.slot)) {
+                jt.target.args.push_back(fn.newOpaque(SSAType::UNKNOWN, "entry_stack_arg_unbound"));
+            } else if (!bound) {
+                jt.target.args.push_back(fn.newOpaque(SSAType::UNKNOWN, "entry_arg_unbound"));
+            }
         }
     }
     entryBlock->terminator = std::move(jt);
@@ -498,17 +1183,22 @@ std::unique_ptr<SSAFunction> SSABuilder::build(const std::vector<Block*>& blocks
     fn->symbol.name = methodName;
     fn->symbol.desc = methodDesc;
 
-    // 解析 desc 得参数/返回类型（R1 保守：全 I32，细化推 R2）
-    // R1 简化：参数个数从 desc 的 ( 数量粗推，类型用 I32 占位。
-    // （测试样本 Add(int,int) / LoopSum(int) 都是 int，足够。）
-    // TODO R2：正经解析 desc。
-    int argCount = 0;
-    for (char ch : methodDesc) if (ch == 'I') ++argCount;  // 极简：数 'I'
-    fn->symbol.returnType = SSAType::I32;  // 测试样本返回 int
-    for (int i = 0; i < argCount; ++i) {
-        fn->symbol.parameterTypes.push_back(SSAType::I32);
-        auto p = std::make_unique<SSAParameter>(fn->ids.newValueId(), SSAType::I32, static_cast<uint32_t>(i));
+    ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(methodDesc.c_str());
+    auto methodType = Type::getMethodType(descRef);
+    fn->symbol.returnType = jvmTypeToSSA(Type::getReturnType(descRef));
+
+    uint32_t localSlot = 0;
+    if (!isStatic) {
+        auto thisParam = std::make_unique<SSAParameter>(fn->ids.newValueId(), SSAType::REF, localSlot);
+        fn->parameters.push_back(std::move(thisParam));
+        localSlot += 1;
+    }
+    for (const auto& argType : methodType.getArgumentTypes()) {
+        SSAType paramType = jvmTypeToSSA(argType);
+        fn->symbol.parameterTypes.push_back(paramType);
+        auto p = std::make_unique<SSAParameter>(fn->ids.newValueId(), paramType, localSlot);
         fn->parameters.push_back(std::move(p));
+        localSlot += static_cast<uint32_t>(ssaStackSize(paramType));
     }
 
     // 阶段 A
@@ -519,7 +1209,7 @@ std::unique_ptr<SSAFunction> SSABuilder::build(const std::vector<Block*>& blocks
     buildBlocks(*fn, blocks, rd);
 
     // 阶段 C
-    if (!translateBlocks(*fn, blocks, rd, reason)) {
+    if (!translateBlocks(*fn, blocks, rd, methodMaxLocals, reason)) {
         return nullptr;
     }
 

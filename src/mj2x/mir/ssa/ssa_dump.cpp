@@ -70,6 +70,13 @@ void dumpSuccessor(std::ostringstream& os, const SSASuccessor& s, const char* pr
     os << "\n";
 }
 
+void dumpValueList(std::ostringstream& os, const std::vector<SSAValue*>& values) {
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i) os << ", ";
+        os << valueName(values[i]);
+    }
+}
+
 } // namespace
 
 std::string dumpSSA(const SSAFunction& fn) {
@@ -137,6 +144,70 @@ std::string dumpSSA(const SSAFunction& fn) {
                     os << "cmp " << valueName(c->lhs) << " " << opn << " " << valueName(c->rhs);
                     break;
                 }
+                case SSAInstructionKind::Convert: {
+                    auto* c = static_cast<SSAConvertInstruction*>(ins.get());
+                    os << "convert " << valueName(c->value) << " -> " << typeName(c->targetType);
+                    if (c->convertKind == SSAConvertKind::ReferenceCast && !c->referenceTypeDesc.empty()) {
+                        os << " checkcast " << c->referenceTypeDesc;
+                    }
+                    break;
+                }
+                case SSAInstructionKind::LoadField: {
+                    auto* lf = static_cast<SSALoadFieldInstruction*>(ins.get());
+                    os << (lf->field.isStatic ? "getstatic " : "getfield ")
+                       << lf->field.owner << "." << lf->field.name << ":" << lf->field.desc;
+                    if (!lf->field.isStatic) os << " from " << valueName(lf->receiver);
+                    break;
+                }
+                case SSAInstructionKind::StoreField: {
+                    auto* sf = static_cast<SSAStoreFieldInstruction*>(ins.get());
+                    os << (sf->field.isStatic ? "putstatic " : "putfield ")
+                       << sf->field.owner << "." << sf->field.name << ":" << sf->field.desc;
+                    if (!sf->field.isStatic) os << " on " << valueName(sf->receiver);
+                    os << " = " << valueName(sf->value);
+                    break;
+                }
+                case SSAInstructionKind::ArrayLoad: {
+                    auto* al = static_cast<SSAArrayLoadInstruction*>(ins.get());
+                    os << "array.load " << typeName(al->elementType)
+                       << " " << valueName(al->array) << "[" << valueName(al->index) << "]";
+                    break;
+                }
+                case SSAInstructionKind::ArrayStore: {
+                    auto* as = static_cast<SSAArrayStoreInstruction*>(ins.get());
+                    os << "array.store " << typeName(as->elementType)
+                       << " " << valueName(as->array) << "[" << valueName(as->index)
+                       << "] = " << valueName(as->value);
+                    break;
+                }
+                case SSAInstructionKind::Call: {
+                    auto* call = static_cast<SSACallInstruction*>(ins.get());
+                    os << "call " << call->method.owner << "." << call->method.name
+                       << call->method.desc << "(";
+                    dumpValueList(os, call->args);
+                    os << ")";
+                    break;
+                }
+                case SSAInstructionKind::Allocate: {
+                    auto* alloc = static_cast<SSAAllocateInstruction*>(ins.get());
+                    const char* kind = "object";
+                    if (alloc->allocationKind == SSAAllocationKind::Array) kind = "array";
+                    if (alloc->allocationKind == SSAAllocationKind::MultiArray) kind = "multiarray";
+                    os << "alloc " << kind << " " << alloc->typeDesc << "(";
+                    dumpValueList(os, alloc->args);
+                    os << ")";
+                    break;
+                }
+                case SSAInstructionKind::Intrinsic: {
+                    auto* in = static_cast<SSAIntrinsicInstruction*>(ins.get());
+                    os << "intrinsic " << in->name << "(";
+                    for (size_t i = 0; i < in->args.size(); ++i) {
+                        if (i) os << ", ";
+                        os << valueName(in->args[i]);
+                    }
+                    os << ")";
+                    break;
+                }
                 default:
                     os << "<instr kind=" << static_cast<int>(ins->kind) << ">";
                     break;
@@ -153,6 +224,14 @@ std::string dumpSSA(const SSAFunction& fn) {
                 os << "    br " << valueName(t.condition) << "\n";
                 dumpSuccessor(os, t.trueTarget, "  T:");
                 dumpSuccessor(os, t.falseTarget, "  F:");
+            } else if constexpr (std::is_same_v<T, SSASwitchTerminator>) {
+                os << "    switch " << valueName(t.value) << "\n";
+                for (const auto& c : t.cases) {
+                    std::ostringstream prefix;
+                    prefix << "  case " << c.key << ":";
+                    dumpSuccessor(os, c.target, prefix.str().c_str());
+                }
+                dumpSuccessor(os, t.defaultTarget, "  default:");
             } else if constexpr (std::is_same_v<T, SSAReturnTerminator>) {
                 os << "    ret " << (t.value ? valueName(t.value) : "") << "\n";
             } else if constexpr (std::is_same_v<T, SSAThrowTerminator>) {

@@ -282,17 +282,18 @@ mj2x/
 │   └── unittest/                     — 测试（分层见 TEST_STRATEGY）
 └── runtime/                          — ★ [RT] 重写（R3）
     └── src/
-        ├── crypto/                   — SHA256/HMAC/AES（集成审计过的轻量库，PR#305 review；候选 tiny-AES-c / Mbed TLS / BearSSL 精简子集）
-        ├── kernel/                   — HKDF 派生 + HMAC 校验 + 平台 API 安全擦除（SecureZeroMemory / explicit_bzero / memset_s，PR#305 review）
-        ├── antidebug/                — Windows PEB
-        ├── antijvmti/                — env->functions 篡改检测 + 多维 agent 检测（启动期 argv 扫 + 动态 attach 模块扫 + JVMTI capability 查询，PR#305 review）
-        ├── stringpool/               — 运行时密钥解密字符串池
-        ├── rt_str_obf.{h,cpp}        — 复用（已有 XOR 实现）
-        ├── jni_wrapper.h             — 复用
-        └── platform.h                — 复用
+        ├── crypto/                   — SHA-256 / HMAC-SHA256 / AES-128 / constant-time compare
+        ├── kernel/                   — HKDF-SHA256 + HMAC verify + volatile wipe
+        ├── antidebug/                — debugger signal probes
+        ├── antijvmti/                — JNI function-table tamper check + agent option scan
+        ├── stringpool/               — HKDF-derived string-pool decoder
+        ├── runtime_entry.cpp         — shared-library wrapper symbol
+        ├── rt_str_obf.{h,cpp}        — legacy XOR helper retained for compatibility
+        ├── jni_wrapper.h
+        └── platform.h
 ```
 
-> `runtime/main.cpp`（Windows DLL 注入 demo）、`rt_insn`/`rt_memory`（空壳）R3 删除。
+> `runtime/main.cpp`（Windows DLL 注入 demo）和 `rt_insn`/`rt_memory` 空壳已在 R3 runtime core 清理。
 
 ---
 

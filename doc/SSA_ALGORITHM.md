@@ -59,7 +59,7 @@ JVM 的值存在两类槽：
 - **local slot**：`iload/istore` 等操作的局部变量表下标（`MIRLocalLoad/Store::varIndex`）。
 - **stack slot**：操作数栈位置。**但 stack slot 在 SSA 构造里只存在于 builder 的 FrameState，不参与 reaching-def 数据流** —— 因为栈的生命期在一个块内线性，跨块时栈必须为空（JVM 规范：跳转目标处栈高度由 StackMapTable 固定，但同一逻辑栈位置在不同前驱可以是不同值）。
 
-**R1 简化**：reaching-def **只跟踪 local slot**。stack 的跨块合并问题转化为"块入口处的栈内容"（见 §3.4）。这覆盖了 `sumTo`/`gcd` 这类循环 phi 场景（phi 都在 local 上）。stack 跨块合并（如异常 handler 的单元素栈）R1 fail-closed 拒绝。
+**当前简化**：reaching-def **只跟踪 local slot**。stack 的跨块合并问题转化为"块入口处的栈内容"（见 §3.4）。这覆盖了 `sumTo`/`gcd` 这类循环 phi 场景（phi 都在 local 上）。异常 handler 的单元素栈是唯一特殊入口形状，由合成 exception block arg 表达，不进入通用 stack-slot 数据流。
 
 ### 3.2 数据流方程
 
@@ -137,7 +137,7 @@ FrameState {
 
 进入块 B 时，`FrameState` 初始化：
 - `locals[N]` = 块 B 的第 k 个 arg（若 N 是 B 的 arg slot）或上一块的出口值（reaching-def 给出，§3.4）。
-- `stack` = 块 B 入口需要的栈内容（R1：方法入口栈空；其它块入口栈 R1 要求空或 fail-closed）。
+- `stack` = 块 B 入口需要的栈内容。普通控制流块入口为空；异常 handler 块入口先压入合成 exception block arg，使首条 `ASTORE` 能按 JVM 规则消费异常对象。
 
 ### 5.2 逐 MIRNode 翻译规则
 
@@ -192,15 +192,21 @@ FrameState {
 
 ---
 
-## 6. 异常处理（R1 fail-closed）
+## 6. 异常处理
 
 带 try-catch 的方法，handler 块入口的栈含单个异常对象，且 protected 块到 handler 是异常边。这需要：
 - 异常边纳入 reaching-def 的 preds。
 - handler 入口栈 = 单元素（异常）。
 
-**R1 策略**：检测方法有 `tryCatchBlocks` 非空 → **fail-closed 拒绝**（不静默生成错误 SSA）。`SSAExceptionRegion` 留空结构，R2 起填充（对齐 Grunt `NativeJvmExceptionDispatchPlanner`）。
+当前实现把 `CodeConverter` 携带的 exception table 转成 `SSAExceptionRegion`：
 
-这把 R1 范围收紧到"无 try-catch 的方法"，与 dev_plan R1.4 风险表一致。
+1. try start/end/handler label 都成为 L1 block 边界。
+2. 每个 protected block 向 handler 加一条 reaching-def 异常前驱边。
+3. handler block 增加一个 `SSAType::REF` 的合成 block arg，slot 为 `kSSAExceptionObjectSlot`。
+4. 翻译 handler block 时，builder 先把该 arg 压入 FrameState.stack，再按普通 L1 节点翻译；Java 编译器常见的 handler 起始 `ASTORE` 因此会自然 pop 出异常对象。
+5. `SSAExceptionRegion` 记录 protected blocks、handler、exceptionValue 和 caughtType，后续 RegIR/RegC 用它生成 pending-exception dispatch。
+
+这仍不是完整 JVM verifier。通用跨块 operand-stack 合流依旧不建模；当前只显式支持 try/catch handler 的单异常对象入口。
 
 ---
 
@@ -234,7 +240,7 @@ FrameState {
 | 支配树 | 不需要 | 不需要 | LLVM 内部算 | 必须 |
 | libjbytecode analysis | **不依赖**（实测有 bug） | — | — | — |
 | φ 插入 | 不显式插 | 不显式插 | LLVM 算 | 显式插 |
-| 异常边 | R1 fail-closed | 支持（exceptionRegions） | 支持 | 视实现 |
+| 异常边 | 支持 handler exception arg + exceptionRegions | 支持（exceptionRegions） | 支持 | 视实现 |
 
 mj2x 与 Grunt 算法骨架相同（block-arg），差别只在数据流来源：Grunt 用 ASM Analyzer（Java 生态成熟），mj2x 因 libjbytecode Analyzer 有 bug 改用自写（基于已验证的 L1 CFG）。
 
@@ -244,8 +250,8 @@ mj2x 与 Grunt 算法骨架相同（block-arg），差别只在数据流来源�
 
 1. **block arg 策略**：所有 live local 都开 arg（不只 ≥2 源），arg 数偏多。L4 加 arg-elimination pass。
 2. **类型精确度**：R1 用保守类型，R2 lowering 前补精确推断。
-3. **异常处理**：fail-closed 拒绝，R2 支持。
-4. **stack 跨块合并**：R1 要求块入口栈空（fail-closed），R2 处理 handler 单元素栈。
+3. **异常处理**：已支持 try/catch handler 单异常对象入口；更复杂的 verifier 级异常/栈形状仍保守处理。
+4. **stack 跨块合并**：普通控制流仍要求块入口栈空；handler 单元素栈是显式特例。
 5. **INVOKEDYNAMIC/MULTIANEWARRAY**：R1a 不直接处理，R1b preprocessor 先展开（dev_plan R1b.4）。
 
 这些简化都不影响 R1 验收标准（无栈槽 + phi 正确）。

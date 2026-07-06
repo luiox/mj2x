@@ -1,5 +1,15 @@
-// mj2x SSA IR — 块内非控制转移指令（12 类）。
-// 详见 doc/IR_DESIGN.md §7。每条至多一个 result（void call/store 无 result）。
+/**
+ * @file ssa_instruction.hpp
+ * @brief Stackless SSA instruction families used inside SSABlock.
+ *
+ * @details
+ * Instructions model non-control-transfer work only; block exits live in
+ * `ssa_terminator.hpp`.  Every instruction carries a tag instead of relying on
+ * RTTI, and every result is represented as an SSAInstructionResult embedded in
+ * the instruction object.  Calls, stores, barriers, and void intrinsics have no
+ * result but still carry SSAEffect information so RegC and future passes can
+ * preserve ordering around memory, resolution, and throwing operations.
+ */
 #pragma once
 
 #include "ssa_effect.hpp"
@@ -13,7 +23,7 @@
 
 namespace mj2x {
 
-// ---- 指令类型 tag（RTTI 禁用，用 kind 标签替代 dynamic_cast） ----
+/// @brief Instruction tag used for no-RTTI dispatch.
 enum class SSAInstructionKind : uint8_t {
     Unary, Binary, Compare, Convert,
     LoadField, StoreField,
@@ -21,13 +31,27 @@ enum class SSAInstructionKind : uint8_t {
     Call, Allocate, Intrinsic, Barrier,
 };
 
-// ---- 算术/位运算 op ----
+/// @brief Unary arithmetic operations.
 enum class SSAUnaryOp : uint8_t { Neg, BitNot };
+
+/// @brief Binary arithmetic and bitwise operations.
 enum class SSABinaryOp : uint8_t { Add, Sub, Mul, Div, Rem, And, Or, Xor, Shl, Shr, UShr };
+
+/// @brief Integer/reference comparison predicates used by branch conditions.
 enum class SSAComparePredicate : uint8_t { Eq, Ne, Lt, Le, Gt, Ge };
+
+/// @brief Conversion family. Numeric changes primitive width; ReferenceCast keeps runtime type info.
 enum class SSAConvertKind : uint8_t { Numeric, ReferenceCast };
 
-// 抽象基类。每条指令 operands 在子类的构造里填。kind 标签用于无 RTTI 的类型判定。
+/**
+ * @brief Base class for all block-local SSA instructions.
+ *
+ * @details
+ * Operands are stored in concrete subclasses.  `result` is valid only when
+ * `hasResult` is true; otherwise its id remains empty.  The `effect` field is
+ * intentionally conservative for JVM operations that may resolve classes,
+ * touch heap memory, call out to JNI/runtime helpers, or throw.
+ */
 struct SSAInstruction {
     SSAInstructionKind kind;
     SSAInstructionResult result;   // result.id.value == 0 表示无 result（void call/store）
@@ -38,14 +62,14 @@ struct SSAInstruction {
     virtual ~SSAInstruction() = default;
 };
 
-// 单目算术（INEG / LNEG / FNEG ...）。
+/// @brief Unary arithmetic such as INEG/LNEG/FNEG/DNEG.
 struct SSAUnaryInstruction : SSAInstruction {
     SSAUnaryOp op;
     SSAValue* value = nullptr;
     SSAUnaryInstruction() : SSAInstruction(SSAInstructionKind::Unary), op(SSAUnaryOp::Neg) {}
 };
 
-// 双目算术（IADD / IMUL / ISHL / LAND ...）。LCMP 三元比较也走这个（R1）。
+/// @brief Binary arithmetic and bitwise operations such as IADD/LMUL/ISHL/LAND.
 struct SSABinaryInstruction : SSAInstruction {
     SSABinaryOp op;
     SSAValue* lhs = nullptr;
@@ -53,7 +77,7 @@ struct SSABinaryInstruction : SSAInstruction {
     SSABinaryInstruction() : SSAInstruction(SSAInstructionKind::Binary), op(SSABinaryOp::Add) {}
 };
 
-// 比较，产 bool。IF 指令的判定条件。
+/// @brief Compare two values and produce an SSA BOOL for branch terminators.
 struct SSACompareInstruction : SSAInstruction {
     SSAComparePredicate predicate;
     SSAValue* lhs = nullptr;
@@ -61,15 +85,23 @@ struct SSACompareInstruction : SSAInstruction {
     SSACompareInstruction() : SSAInstruction(SSAInstructionKind::Compare), predicate(SSAComparePredicate::Eq) {}
 };
 
-// 数值/引用转换（I2L / I2B / CHECKCAST）。
+/**
+ * @brief Numeric conversion or runtime reference cast.
+ *
+ * @details
+ * Numeric conversions lower JVM I2L/I2B/D2I-style opcodes.  ReferenceCast lowers
+ * CHECKCAST and keeps `referenceTypeDesc` so RegC can emit the required runtime
+ * class check instead of seeing only a generic REF result.
+ */
 struct SSAConvertInstruction : SSAInstruction {
     SSAConvertKind convertKind;
     SSAValue* value = nullptr;
     SSAType targetType = SSAType::UNKNOWN;
+    std::string referenceTypeDesc;  // ReferenceCast 目标类/数组描述符，Numeric 留空。
     SSAConvertInstruction() : SSAInstruction(SSAInstructionKind::Convert), convertKind(SSAConvertKind::Numeric) {}
 };
 
-// 字段引用描述（owner.name:desc）。
+/// @brief JVM field reference in owner/name/descriptor form.
 struct SSAFieldRef {
     std::string owner;
     std::string name;
@@ -77,14 +109,14 @@ struct SSAFieldRef {
     bool isStatic = false;
 };
 
-// 读字段。instance 字段带 receiver。
+/// @brief Read an instance or static field; instance reads carry a receiver value.
 struct SSALoadFieldInstruction : SSAInstruction {
     SSAFieldRef field;
     SSAValue* receiver = nullptr;   // null = static
     SSALoadFieldInstruction() : SSAInstruction(SSAInstructionKind::LoadField) {}
 };
 
-// 写字段。
+/// @brief Write an instance or static field; instance writes carry receiver and value.
 struct SSAStoreFieldInstruction : SSAInstruction {
     SSAFieldRef field;
     SSAValue* receiver = nullptr;
@@ -92,7 +124,7 @@ struct SSAStoreFieldInstruction : SSAInstruction {
     SSAStoreFieldInstruction() : SSAInstruction(SSAInstructionKind::StoreField) {}
 };
 
-// 数组读。
+/// @brief Read one array element with bounds/null checks represented by effect.
 struct SSAArrayLoadInstruction : SSAInstruction {
     SSAValue* array = nullptr;
     SSAValue* index = nullptr;
@@ -100,7 +132,7 @@ struct SSAArrayLoadInstruction : SSAInstruction {
     SSAArrayLoadInstruction() : SSAInstruction(SSAInstructionKind::ArrayLoad) {}
 };
 
-// 数组写。
+/// @brief Write one array element with bounds/null/store checks represented by effect.
 struct SSAArrayStoreInstruction : SSAInstruction {
     SSAValue* array = nullptr;
     SSAValue* index = nullptr;
@@ -109,7 +141,7 @@ struct SSAArrayStoreInstruction : SSAInstruction {
     SSAArrayStoreInstruction() : SSAInstruction(SSAInstructionKind::ArrayStore) {}
 };
 
-// 方法调用描述。
+/// @brief JVM method reference and original invoke opcode.
 struct SSAMethodRef {
     std::string owner;
     std::string name;
@@ -117,15 +149,32 @@ struct SSAMethodRef {
     int invokeOpcode = 0;   // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
 };
 
-// 方法调用。
+/**
+ * @brief JVM method invocation.
+ *
+ * @details
+ * `args` are stored in source order.  For instance calls, args[0] is the
+ * receiver followed by descriptor arguments; for static calls, args contains
+ * only descriptor arguments.  This order is deliberately independent of JVM
+ * stack pop order to make RegC call emission straightforward.
+ */
 struct SSACallInstruction : SSAInstruction {
     SSAMethodRef method;
     std::vector<SSAValue*> args;
     SSACallInstruction() : SSAInstruction(SSAInstructionKind::Call) {}
 };
 
-// 分配（NEW / NEWARRAY / ANEWARRAY / MULTIANEWARRAY）。
+/// @brief Allocation form lowered from NEW/NEWARRAY/ANEWARRAY/MULTIANEWARRAY.
 enum class SSAAllocationKind : uint8_t { Object, Array, MultiArray };
+
+/**
+ * @brief Object or array allocation.
+ *
+ * @details
+ * `typeDesc` is the internal class name for objects and a JVM array descriptor
+ * for arrays.  `args` holds array dimensions/counts in source order; object
+ * allocation has no args.
+ */
 struct SSAAllocateInstruction : SSAInstruction {
     SSAAllocationKind allocationKind = SSAAllocationKind::Object;
     std::string typeDesc;            // 类/数组描述符
@@ -133,14 +182,14 @@ struct SSAAllocateInstruction : SSAInstruction {
     SSAAllocateInstruction() : SSAInstruction(SSAInstructionKind::Allocate) {}
 };
 
-// intrinsic（ARRAYLENGTH / MONITORENTER / MONITOREXIT / INSTANCEOF）。
+/// @brief Named JVM intrinsic used when a compact operation is clearer than a new instruction family.
 struct SSAIntrinsicInstruction : SSAInstruction {
     std::string name;                // "array.length", "monitor.enter", ...
     std::vector<SSAValue*> args;
     SSAIntrinsicInstruction() : SSAInstruction(SSAInstructionKind::Intrinsic) {}
 };
 
-// 副作用栅栏（占位，防 DCE 误删）。
+/// @brief Explicit side-effect barrier placeholder for future passes.
 struct SSABarrierInstruction : SSAInstruction {
     std::string reason;
     SSABarrierInstruction() : SSAInstruction(SSAInstructionKind::Barrier) {}

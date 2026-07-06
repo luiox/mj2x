@@ -10,7 +10,15 @@
 
 namespace mj2x {
 
-// -- MIR kind enum --
+/**
+ * @brief L1 MIR node kind.
+ *
+ * @details
+ * L1 MIR keeps bytecode control flow and JVM operation families explicit while
+ * hiding tree-node details from backends.  Stack-shape operations are preserved
+ * as MIR nodes instead of being collapsed to NOP because the SSA builder needs
+ * to apply JVM category-1/category-2 rules when it erases the operand stack.
+ */
 enum class MIRKind : uint8_t {
     NOP,
     LABEL,
@@ -21,9 +29,14 @@ enum class MIRKind : uint8_t {
     STACK_DUP_X1,
     STACK_DUP_X2,
     STACK_DUP2,
+    STACK_DUP2_X1,
+    STACK_DUP2_X2,
     STACK_SWAP,
+    STACK_POP,
+    STACK_POP2,
     BINARY_OP,
     UNARY_OP,
+    CMP,
     CAST,
     IINC,
     BRANCH,
@@ -91,7 +104,7 @@ struct MIRLabel : MIRNode {
 };
 
 struct MIRConstant : MIRNode {
-    std::variant<int64_t, double, std::nullptr_t> value;
+    std::variant<int64_t, double, std::nullptr_t, std::string> value;
     PrimitiveKind type = PrimitiveKind::INT;
     MIRConstant() : MIRNode(MIRKind::CONSTANT) {}
 };
@@ -130,6 +143,12 @@ struct MIRUnaryOp : MIRNode {
     MIRUnaryOp() : MIRNode(MIRKind::UNARY_OP) {}
 };
 
+struct MIRCmp : MIRNode {
+    PrimitiveKind type = PrimitiveKind::LONG;
+    bool nanGreater = false;
+    MIRCmp() : MIRNode(MIRKind::CMP) {}
+};
+
 struct MIRCast : MIRNode {
     PrimitiveKind from = PrimitiveKind::INT;
     PrimitiveKind to = PrimitiveKind::INT;
@@ -145,6 +164,7 @@ struct MIRBranch : MIRNode {
 
 struct MIRBranchZero : MIRNode {
     CmpOp op = CmpOp::EQ;
+    PrimitiveKind type = PrimitiveKind::INT;
     jbytecode::core::Label* targetLabel = nullptr;
     MIRBranchZero() : MIRNode(MIRKind::BRANCH_ZERO) {}
 };
@@ -180,6 +200,7 @@ struct MIRNewObject : MIRNode {
 
 struct MIRNewArray : MIRNode {
     std::string typeDesc;
+    PrimitiveKind componentType = PrimitiveKind::OBJECT;
     int dims = 1;
     MIRNewArray() : MIRNode(MIRKind::NEW_ARRAY) {}
 };
@@ -231,7 +252,7 @@ struct MIRInvokeDynamic : MIRNode {
     MIRInvokeDynamic() : MIRNode(MIRKind::INVOKE_DYNAMIC) {}
 };
 
-// multianewarray：R1b 不展开（R2+ 加 runtime helper）。builder 遇到 dims>1 fail-closed。
+// multianewarray：保留描述符和维度数，SSA/RegC 通过 multi-array helper 执行。
 struct MIRMultiNewArray : MIRNode {
     std::string typeDesc;
     int dims = 0;
@@ -257,7 +278,22 @@ struct MIRThrow : MIRNode {
     MIRThrow() : MIRNode(MIRKind::THROW) {}
 };
 
+/**
+ * @brief StackMapTable frame metadata kept for SSA block-entry stack args.
+ *
+ * @details
+ * Most frame metadata remains verifier-only and is ignored by backends. The
+ * operand-stack part is different: javac can split bytecode so a join block
+ * starts with a value already on the JVM operand stack, for example ternary
+ * expressions compiled as two branches that each push a value before `ireturn`.
+ * SSA erases the construction-time stack, so CodeConverter preserves the
+ * frame's stack item types here and SSABuilder turns them into synthetic block
+ * arguments. Handler-entry exception objects are modeled separately from the
+ * exception table and do not rely on these stack items.
+ */
 struct MIRFrame : MIRNode {
+    int frameType = 0;
+    std::vector<PrimitiveKind> stackTypes;
     MIRFrame() : MIRNode(MIRKind::FRAME) {}
 };
 

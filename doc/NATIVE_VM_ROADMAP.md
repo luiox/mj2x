@@ -364,17 +364,15 @@ runtime/src/
 │   ├── sha256.c                 # SHA-256
 │   └── fnv1a.c                  # FNV-1a 哈希
 │
-├── obf/                         # 运行期字符串/常量反混淆（已有骨架）
-│   ├── rt_str_obf.h             # 已有，功能需补全
-│   └── rt_str_obf.cpp
+├── stringpool/                  # R3 已落地：HKDF-derived string-pool decoder
+│   ├── string_pool.hpp
+│   └── string_pool.cpp
 │
 ├── jni_wrapper.h                # 已有：JNI 类型包装
 ├── platform.h                   # 已有：平台检测宏
-├── rt_insn.h                    # 已有（仅 nop 宏，需扩展）
-├── rt_memory.h                  # 已有（空壳，需填充）
+├── runtime_entry.cpp            # R3 已落地：shared-library wrapper symbol
 │
-├── main.cpp                     # 已有（DLL 入口 + JNI_OnLoad）
-└── jni_bridge.c                 # ★ 新增：JNI RegisterNatives 注册
+└── jni_bridge.c                 # ★ 未来：JNI RegisterNatives 注册
 ```
 
 ### 5.2 VM 解释器核心循环

@@ -8,11 +8,16 @@
 // 样本：test_resource/ssa/ssa/SsaSamples.class（javac 编译）
 #include <gmock/gmock.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "test_helper.hpp"
 #include "jbytecode/jbytecode.hpp"
@@ -28,6 +33,8 @@ using namespace jbytecode::tree;
 using namespace ca::str;
 
 namespace {
+
+namespace fs = std::filesystem;
 
 std::string toStr(Utf8StringRef ref) {
     return std::string(reinterpret_cast<const char*>(ref.data()), ref.byte_length());
@@ -61,6 +68,160 @@ std::unique_ptr<SSAFunction> buildSSAFor(ClassNode* cn, MethodNode* m, std::stri
     bool isStatic = (m->access & Opcodes::ACC_STATIC) != 0;
     return builder.build(blocks, toStr(cn->name), toStr(m->name), toStr(m->desc),
                          isStatic, m->maxLocals, reason);
+}
+
+std::unique_ptr<MethodNode> makeMethod(
+    int access, const std::string& name, const std::string& desc,
+    std::initializer_list<AbstractInsnNode*> insns,
+    int maxStack,
+    int maxLocals)
+{
+    std::vector<ca::str::Utf8StringRef> noExcepts;
+    auto mn = std::make_unique<MethodNode>(
+        access,
+        ca::str::Utf8StringRef::from_cstr(name.c_str()),
+        ca::str::Utf8StringRef::from_cstr(desc.c_str()),
+        ca::str::Utf8StringRef::from_cstr(""),
+        noExcepts);
+    mn->maxStack = maxStack;
+    mn->maxLocals = maxLocals;
+    for (auto* insn : insns) mn->instructions.add(insn);
+    return mn;
+}
+
+std::unique_ptr<SSAFunction> buildInlineSSA(
+    const std::string& name,
+    const std::string& desc,
+    std::initializer_list<AbstractInsnNode*> insns,
+    int maxStack,
+    int maxLocals,
+    std::string& reason)
+{
+    ClassNode cn;
+    cn.name = ca::str::Utf8StringRef::from_cstr("InlineSsa");
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         name, desc, insns, maxStack, maxLocals);
+    return buildSSAFor(&cn, mn.get(), reason);
+}
+
+struct ExecResult {
+    int exitCode = -1;
+    std::string out;
+};
+
+std::string quotePath(const fs::path& path) {
+    return "\"" + path.string() + "\"";
+}
+
+bool fileExists(const fs::path& path) {
+    std::error_code ec;
+    return fs::exists(path, ec);
+}
+
+ExecResult runScript(const std::vector<std::string>& lines) {
+    ExecResult result;
+    fs::path tmpDir = test::getTempOutPath("mj2x_ssa_javac.keep").parent_path();
+    std::error_code ec;
+    fs::create_directories(tmpDir, ec);
+    fs::path script = tmpDir / ("mj2x_ssa_javac_" +
+        std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) +
+#ifdef _WIN32
+        ".bat");
+#else
+        ".sh");
+#endif
+
+    {
+        std::ofstream out(script);
+#ifdef _WIN32
+        out << "@echo off\n";
+        out << "chcp 65001 >nul 2>&1\n";
+#else
+        out << "#!/bin/sh\n";
+#endif
+        for (const auto& line : lines) out << line << "\n";
+#ifdef _WIN32
+        out << "exit /b %errorlevel%\n";
+#endif
+    }
+
+#ifdef _WIN32
+    std::string cmd = quotePath(script) + " 2>&1";
+#else
+    std::string cmd = "sh " + quotePath(script) + " 2>&1";
+#endif
+    FILE* pipe =
+#ifdef _WIN32
+        _popen(cmd.c_str(), "rb");
+#else
+        popen(cmd.c_str(), "r");
+#endif
+    if (!pipe) {
+        result.out = "failed to run script: " + script.string();
+        return result;
+    }
+    char buffer[4096];
+    while (size_t n = fread(buffer, 1, sizeof(buffer), pipe)) {
+        result.out.append(buffer, n);
+    }
+#ifdef _WIN32
+    result.exitCode = _pclose(pipe);
+#else
+    result.exitCode = pclose(pipe);
+#endif
+    fs::remove(script, ec);
+    return result;
+}
+
+fs::path findJavac() {
+    if (const char* home = std::getenv("JAVA_HOME"); home && *home) {
+        fs::path root(home);
+#ifdef _WIN32
+        fs::path javac = root / "bin" / "javac.exe";
+#else
+        fs::path javac = root / "bin" / "javac";
+#endif
+        if (fileExists(javac)) return javac;
+    }
+
+    fs::path fallback = "C:/Users/Canrad/.jdks/corretto-17.0.5";
+    fs::path fallbackJavac = fallback / "bin" / "javac.exe";
+    if (fileExists(fallbackJavac)) return fallbackJavac;
+
+    return {};
+}
+
+fs::path compileJavaSample(const fs::path& javac,
+                           const std::string& caseName,
+                           const std::string& sourceResource,
+                           const std::string& className) {
+    fs::path outDir = test::getOutPath("mj2x/ssa_cases/" + caseName + "/.keep").parent_path();
+    std::error_code ec;
+    fs::create_directories(outDir, ec);
+    fs::path sourcePath = test::getResourcePath(sourceResource);
+    auto result = runScript({
+        quotePath(javac) + " -g -d " + quotePath(outDir) + " " + quotePath(sourcePath),
+    });
+    EXPECT_EQ(result.exitCode, 0) << "javac failed:\n" << result.out;
+    return outDir / "ssa_cases" / (className + ".class");
+}
+
+std::unique_ptr<ClassNode> loadClassFile(Utf8StringArena& arena,
+                                         const fs::path& classFile,
+                                         std::vector<ca::u8>& bytesOut) {
+    std::ifstream in(classFile, std::ios::binary);
+    if (!in) return nullptr;
+    in.seekg(0, std::ios::end);
+    auto size = in.tellg();
+    if (size < 0) return nullptr;
+    bytesOut.resize(static_cast<size_t>(size));
+    in.seekg(0, std::ios::beg);
+    in.read(reinterpret_cast<char*>(bytesOut.data()), static_cast<std::streamsize>(bytesOut.size()));
+
+    auto cn = std::make_unique<ClassNode>();
+    ClassReader reader(arena, bytesOut.data(), static_cast<ca::i32>(bytesOut.size()));
+    reader.accept(cn.get(), 0);
+    return cn;
 }
 
 } // namespace
@@ -174,6 +335,603 @@ TEST(SSABuilderE2E, LoopCountHasPhiBlockArg) {
     if (::testing::Test::HasFailure()) {
         printf("=== loopCount dump ===\n%s\n", dump.c_str());
     }
+}
+
+TEST(SSABuilderE2E, ParsesWideMethodDescriptorAndBindsEntryParameters) {
+    std::string reason;
+    auto fn = buildInlineSSA("retDouble", "(JD)D", {
+        new VarInsnNode(Opcodes::DLOAD, 2),
+        new InsnNode(Opcodes::DRETURN),
+    }, 2, 4, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    ASSERT_EQ(fn->symbol.parameterTypes.size(), 2u);
+    EXPECT_EQ(fn->symbol.parameterTypes[0], SSAType::I64);
+    EXPECT_EQ(fn->symbol.parameterTypes[1], SSAType::F64);
+    EXPECT_EQ(fn->symbol.returnType, SSAType::F64);
+    ASSERT_EQ(fn->parameters.size(), 2u);
+    EXPECT_EQ(fn->parameters[0]->index, 0u);
+    EXPECT_EQ(fn->parameters[0]->type, SSAType::I64);
+    EXPECT_EQ(fn->parameters[1]->index, 2u);
+    EXPECT_EQ(fn->parameters[1]->type, SSAType::F64);
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("ret param2"), std::string::npos) << dump;
+    EXPECT_EQ(dump.find("<opaque:undef_local_2>"), std::string::npos) << dump;
+}
+
+TEST(SSABuilderE2E, LowersCastAndCompareForRegCInput) {
+    auto* elseLabel = new LabelNode();
+    std::string reason;
+    auto fn = buildInlineSSA("castCmp", "(D)I", {
+        new VarInsnNode(Opcodes::DLOAD, 0),
+        new InsnNode(Opcodes::D2I),
+        new InsnNode(Opcodes::ICONST_5),
+        new JumpInsnNode(Opcodes::IF_ICMPGE, elseLabel->label),
+        new InsnNode(Opcodes::ICONST_1),
+        new InsnNode(Opcodes::IRETURN),
+        elseLabel,
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::IRETURN),
+    }, 4, 2, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("convert param0 -> i32"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("cmp "), std::string::npos) << dump;
+    EXPECT_EQ(dump.find("cstack"), std::string::npos) << dump;
+    EXPECT_EQ(dump.find("sp"), std::string::npos) << dump;
+}
+
+TEST(SSABuilderE2E, LowersSwitchTerminatorForRegCInput) {
+    auto* case0 = new LabelNode();
+    auto* case1 = new LabelNode();
+    auto* defaultLabel = new LabelNode();
+
+    std::string reason;
+    auto fn = buildInlineSSA("pick", "(I)I", {
+        new VarInsnNode(Opcodes::ILOAD, 0),
+        new TableSwitchInsnNode(0, 1, defaultLabel->label, {case0->label, case1->label}),
+        case0,
+        new IntInsnNode(Opcodes::BIPUSH, 7),
+        new InsnNode(Opcodes::IRETURN),
+        case1,
+        new IntInsnNode(Opcodes::BIPUSH, 9),
+        new InsnNode(Opcodes::IRETURN),
+        defaultLabel,
+        new InsnNode(Opcodes::ICONST_M1),
+        new InsnNode(Opcodes::IRETURN),
+    }, 2, 1, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("switch param0"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("case 0"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("case 1"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("default"), std::string::npos) << dump;
+    EXPECT_EQ(dump.find("cstack"), std::string::npos) << dump;
+    EXPECT_EQ(dump.find("sp"), std::string::npos) << dump;
+}
+
+TEST(SSABuilderE2E, LowersStringLdcAsOpaqueReference) {
+    std::string reason;
+    auto fn = buildInlineSSA("literal", "()Ljava/lang/String;", {
+        new LdcInsnNode(std::string("hello")),
+        new InsnNode(Opcodes::ARETURN),
+    }, 1, 0, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("<opaque:ldc_string>"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("ret <opaque:ldc_string>"), std::string::npos) << dump;
+    EXPECT_EQ(dump.find("cstack"), std::string::npos) << dump;
+}
+
+TEST(SSABuilderE2E, LowersFieldsAndStaticFieldsForRegCInput) {
+    std::string reason;
+    auto fn = buildInlineSSA("fields", "(LFoo;)J", {
+        new VarInsnNode(Opcodes::ALOAD, 0),
+        new FieldInsnNode(Opcodes::GETFIELD,
+                          ca::str::Utf8StringRef::from_cstr("Foo"),
+                          ca::str::Utf8StringRef::from_cstr("x"),
+                          ca::str::Utf8StringRef::from_cstr("I")),
+        new FieldInsnNode(Opcodes::PUTSTATIC,
+                          ca::str::Utf8StringRef::from_cstr("Foo"),
+                          ca::str::Utf8StringRef::from_cstr("sink"),
+                          ca::str::Utf8StringRef::from_cstr("I")),
+        new FieldInsnNode(Opcodes::GETSTATIC,
+                          ca::str::Utf8StringRef::from_cstr("Foo"),
+                          ca::str::Utf8StringRef::from_cstr("wide"),
+                          ca::str::Utf8StringRef::from_cstr("J")),
+        new InsnNode(Opcodes::LRETURN),
+    }, 2, 1, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("getfield Foo.x:I from param0"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("putstatic Foo.sink:I"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("getstatic Foo.wide:J"), std::string::npos) << dump;
+    EXPECT_EQ(fn->symbol.returnType, SSAType::I64);
+}
+
+TEST(SSABuilderE2E, LowersInvokeObjectAllocationAndConstructorPattern) {
+    std::string reason;
+    auto fn = buildInlineSSA("create", "()Ljava/lang/Object;", {
+        new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
+        new InsnNode(Opcodes::DUP),
+        new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                           ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
+                           ca::str::Utf8StringRef::from_cstr("<init>"),
+                           ca::str::Utf8StringRef::from_cstr("()V"),
+                           false),
+        new InsnNode(Opcodes::ARETURN),
+    }, 2, 0, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("alloc object java/lang/Object()"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("call java/lang/Object.<init>()V("), std::string::npos) << dump;
+    EXPECT_NE(dump.find("ret v"), std::string::npos) << dump;
+}
+
+TEST(SSABuilderE2E, LowersStaticInvokeWithWideArguments) {
+    std::string reason;
+    auto fn = buildInlineSSA("callWide", "(ID)J", {
+        new VarInsnNode(Opcodes::ILOAD, 0),
+        new VarInsnNode(Opcodes::DLOAD, 1),
+        new MethodInsnNode(Opcodes::INVOKESTATIC,
+                           ca::str::Utf8StringRef::from_cstr("Other"),
+                           ca::str::Utf8StringRef::from_cstr("mix"),
+                           ca::str::Utf8StringRef::from_cstr("(ID)J"),
+                           false),
+        new InsnNode(Opcodes::LRETURN),
+    }, 4, 3, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("call Other.mix(ID)J(param0, param1)"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("ret v"), std::string::npos) << dump;
+    ASSERT_FALSE(fn->blocks.empty());
+}
+
+TEST(SSABuilderE2E, LowersArrayOperationsForRegCInput) {
+    std::string reason;
+    auto fn = buildInlineSSA("arrayOps", "()I", {
+        new InsnNode(Opcodes::ICONST_2),
+        new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_INT),
+        new InsnNode(Opcodes::DUP),
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::ICONST_5),
+        new InsnNode(Opcodes::IASTORE),
+        new InsnNode(Opcodes::DUP),
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::IALOAD),
+        new InsnNode(Opcodes::IRETURN),
+    }, 4, 0, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("alloc array [I(2)"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("array.store i32"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("array.load i32"), std::string::npos) << dump;
+}
+
+TEST(SSABuilderE2E, LowersMultiArrayAllocationForRegCInput) {
+    std::string reason;
+    auto fn = buildInlineSSA("multi", "()[[I", {
+        new InsnNode(Opcodes::ICONST_2),
+        new InsnNode(Opcodes::ICONST_3),
+        new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[I"), 2),
+        new InsnNode(Opcodes::ARETURN),
+    }, 3, 0, reason);
+    ASSERT_NE(fn, nullptr) << "build failed: " << reason;
+
+    std::string dump = dumpSSA(*fn);
+    EXPECT_NE(dump.find("alloc multiarray [[I(2, 3)"), std::string::npos) << dump;
+}
+
+TEST(SSABuilderE2E, LowersObjectArrayDescriptorForRegCInput) {
+    std::string reason;
+    auto objectArray = buildInlineSSA("strings", "()[Ljava/lang/String;", {
+        new InsnNode(Opcodes::ICONST_2),
+        new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::Utf8StringRef::from_cstr("java/lang/String")),
+        new InsnNode(Opcodes::ARETURN),
+    }, 2, 0, reason);
+    ASSERT_NE(objectArray, nullptr) << "build failed: " << reason;
+    EXPECT_NE(dumpSSA(*objectArray).find("alloc array [Ljava/lang/String;(2)"), std::string::npos);
+
+    reason.clear();
+    auto nestedArray = buildInlineSSA("intArrays", "()[[I", {
+        new InsnNode(Opcodes::ICONST_2),
+        new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::Utf8StringRef::from_cstr("[I")),
+        new InsnNode(Opcodes::ARETURN),
+    }, 2, 0, reason);
+    ASSERT_NE(nestedArray, nullptr) << "build failed: " << reason;
+    EXPECT_NE(dumpSSA(*nestedArray).find("alloc array [[I(2)"), std::string::npos);
+}
+
+TEST(SSABuilderE2E, HandlesPopAndWideDupStackShapes) {
+    std::string reason;
+    auto pops = buildInlineSSA("pops", "()I", {
+        new InsnNode(Opcodes::ICONST_1),
+        new InsnNode(Opcodes::POP),
+        new InsnNode(Opcodes::ICONST_2),
+        new InsnNode(Opcodes::ICONST_3),
+        new InsnNode(Opcodes::POP2),
+        new InsnNode(Opcodes::ICONST_5),
+        new InsnNode(Opcodes::IRETURN),
+    }, 3, 0, reason);
+    ASSERT_NE(pops, nullptr) << "build failed: " << reason;
+    EXPECT_NE(dumpSSA(*pops).find("ret 5"), std::string::npos);
+
+    reason.clear();
+    auto dup2Wide = buildInlineSSA("dup2Wide", "()J", {
+        new InsnNode(Opcodes::LCONST_1),
+        new InsnNode(Opcodes::DUP2),
+        new InsnNode(Opcodes::POP2),
+        new InsnNode(Opcodes::LRETURN),
+    }, 4, 0, reason);
+    ASSERT_NE(dup2Wide, nullptr) << "build failed: " << reason;
+    EXPECT_NE(dumpSSA(*dup2Wide).find("ret 1"), std::string::npos);
+}
+
+TEST(SSABuilderE2E, HandlesDupInsertionStackShapes) {
+    std::string reason;
+    auto dupX2 = buildInlineSSA("dupX2", "()I", {
+        new InsnNode(Opcodes::LCONST_0),
+        new InsnNode(Opcodes::ICONST_5),
+        new InsnNode(Opcodes::DUP_X2),
+        new InsnNode(Opcodes::IRETURN),
+    }, 4, 0, reason);
+    ASSERT_NE(dupX2, nullptr) << "build failed: " << reason;
+    EXPECT_NE(dumpSSA(*dupX2).find("ret 5"), std::string::npos);
+
+    reason.clear();
+    auto dup2X1 = buildInlineSSA("dup2X1", "()I", {
+        new InsnNode(Opcodes::ICONST_5),
+        new InsnNode(Opcodes::LCONST_1),
+        new InsnNode(Opcodes::DUP2_X1),
+        new InsnNode(Opcodes::POP2),
+        new InsnNode(Opcodes::IRETURN),
+    }, 5, 0, reason);
+    ASSERT_NE(dup2X1, nullptr) << "build failed: " << reason;
+    EXPECT_NE(dumpSSA(*dup2X1).find("ret 5"), std::string::npos);
+
+    reason.clear();
+    auto dup2X2 = buildInlineSSA("dup2X2", "()I", {
+        new InsnNode(Opcodes::ICONST_1),
+        new InsnNode(Opcodes::ICONST_2),
+        new InsnNode(Opcodes::ICONST_3),
+        new InsnNode(Opcodes::ICONST_4),
+        new InsnNode(Opcodes::DUP2_X2),
+        new InsnNode(Opcodes::IRETURN),
+    }, 6, 0, reason);
+    ASSERT_NE(dup2X2, nullptr) << "build failed: " << reason;
+    EXPECT_NE(dumpSSA(*dup2X2).find("ret 4"), std::string::npos);
+}
+
+TEST(SSABuilderE2E, LowersReferenceChecksAndMonitorIntrinsics) {
+    std::string reason;
+    auto checked = buildInlineSSA("checks", "(Ljava/lang/Object;)I", {
+        new VarInsnNode(Opcodes::ALOAD, 0),
+        new TypeInsnNode(Opcodes::CHECKCAST, ca::str::Utf8StringRef::from_cstr("java/lang/String")),
+        new TypeInsnNode(Opcodes::INSTANCEOF, ca::str::Utf8StringRef::from_cstr("java/lang/CharSequence")),
+        new InsnNode(Opcodes::IRETURN),
+    }, 1, 1, reason);
+    ASSERT_NE(checked, nullptr) << "build failed: " << reason;
+
+    std::string checkDump = dumpSSA(*checked);
+    EXPECT_NE(checkDump.find("checkcast java/lang/String"), std::string::npos) << checkDump;
+    EXPECT_NE(checkDump.find("intrinsic instanceof:java/lang/CharSequence"), std::string::npos) << checkDump;
+
+    reason.clear();
+    auto monitored = buildInlineSSA("monitor", "(Ljava/lang/Object;)V", {
+        new VarInsnNode(Opcodes::ALOAD, 0),
+        new InsnNode(Opcodes::MONITORENTER),
+        new VarInsnNode(Opcodes::ALOAD, 0),
+        new InsnNode(Opcodes::MONITOREXIT),
+        new InsnNode(Opcodes::RETURN),
+    }, 1, 1, reason);
+    ASSERT_NE(monitored, nullptr) << "build failed: " << reason;
+
+    std::string monitorDump = dumpSSA(*monitored);
+    EXPECT_NE(monitorDump.find("intrinsic monitor.enter(param0)"), std::string::npos) << monitorDump;
+    EXPECT_NE(monitorDump.find("intrinsic monitor.exit(param0)"), std::string::npos) << monitorDump;
+}
+
+TEST(SSABuilderJavaSamples, TinyArithmeticControlFlowFromJavaSource) {
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME to enable Java-source SSA samples";
+    }
+
+    fs::path classFile = compileJavaSample(
+        javac, "tiny_arithmetic", "ssa_cases/SsaTinyArithmetic.java", "SsaTinyArithmetic");
+    ASSERT_TRUE(fileExists(classFile)) << classFile;
+
+    Utf8StringArena arena;
+    std::vector<ca::u8> bytes;
+    auto cn = loadClassFile(arena, classFile, bytes);
+    ASSERT_NE(cn, nullptr);
+
+    std::string reason;
+    auto* addMul = findMethod(cn.get(), "addMul", "(II)I");
+    ASSERT_NE(addMul, nullptr);
+    auto addFn = buildSSAFor(cn.get(), addMul, reason);
+    ASSERT_NE(addFn, nullptr) << reason;
+    std::string addDump = dumpSSA(*addFn);
+    EXPECT_NE(addDump.find("+"), std::string::npos) << addDump;
+    EXPECT_NE(addDump.find("*"), std::string::npos) << addDump;
+    EXPECT_NE(addDump.find("&"), std::string::npos) << addDump;
+    EXPECT_EQ(addDump.find("cstack"), std::string::npos) << addDump;
+
+    reason.clear();
+    auto* wideMix = findMethod(cn.get(), "wideMix", "(JI)J");
+    ASSERT_NE(wideMix, nullptr);
+    auto wideFn = buildSSAFor(cn.get(), wideMix, reason);
+    ASSERT_NE(wideFn, nullptr) << reason;
+    std::string wideDump = dumpSSA(*wideFn);
+    EXPECT_NE(wideDump.find("<<"), std::string::npos) << wideDump;
+    EXPECT_EQ(wideFn->symbol.returnType, SSAType::I64);
+
+    reason.clear();
+    auto* castCompare = findMethod(cn.get(), "castCompare", "(D)I");
+    ASSERT_NE(castCompare, nullptr);
+    auto castFn = buildSSAFor(cn.get(), castCompare, reason);
+    ASSERT_NE(castFn, nullptr) << reason;
+    std::string castDump = dumpSSA(*castFn);
+    EXPECT_NE(castDump.find("convert param0 -> i32"), std::string::npos) << castDump;
+    EXPECT_NE(castDump.find("cmp "), std::string::npos) << castDump;
+
+    reason.clear();
+    auto* loopSum = findMethod(cn.get(), "loopSum", "(I)I");
+    ASSERT_NE(loopSum, nullptr);
+    auto loopFn = buildSSAFor(cn.get(), loopSum, reason);
+    ASSERT_NE(loopFn, nullptr) << reason;
+    bool foundLoopArgs = false;
+    for (const auto& block : loopFn->blocks) {
+        if (block->args.size() >= 2) foundLoopArgs = true;
+    }
+    EXPECT_TRUE(foundLoopArgs) << dumpSSA(*loopFn);
+
+    reason.clear();
+    auto* choose = findMethod(cn.get(), "choose", "(I)I");
+    ASSERT_NE(choose, nullptr);
+    auto switchFn = buildSSAFor(cn.get(), choose, reason);
+    ASSERT_NE(switchFn, nullptr) << reason;
+    std::string switchDump = dumpSSA(*switchFn);
+    EXPECT_NE(switchDump.find("switch"), std::string::npos) << switchDump;
+    EXPECT_NE(switchDump.find("default"), std::string::npos) << switchDump;
+}
+
+TEST(SSABuilderJavaSamples, ObjectsArraysAndReferenceOpsFromJavaSource) {
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME to enable Java-source SSA samples";
+    }
+
+    fs::path classFile = compileJavaSample(
+        javac, "object_array", "ssa_cases/SsaObjectArrayCases.java", "SsaObjectArrayCases");
+    ASSERT_TRUE(fileExists(classFile)) << classFile;
+
+    Utf8StringArena arena;
+    std::vector<ca::u8> bytes;
+    auto cn = loadClassFile(arena, classFile, bytes);
+    ASSERT_NE(cn, nullptr);
+
+    std::string reason;
+    auto* fieldAndCall = findMethod(cn.get(), "fieldAndCall", "(I)I");
+    ASSERT_NE(fieldAndCall, nullptr);
+    auto fieldFn = buildSSAFor(cn.get(), fieldAndCall, reason);
+    ASSERT_NE(fieldFn, nullptr) << reason;
+    std::string fieldDump = dumpSSA(*fieldFn);
+    EXPECT_NE(fieldDump.find("alloc object ssa_cases/SsaObjectArrayCases()"), std::string::npos) << fieldDump;
+    EXPECT_NE(fieldDump.find("call ssa_cases/SsaObjectArrayCases.<init>(I)V"), std::string::npos) << fieldDump;
+    EXPECT_NE(fieldDump.find("getfield ssa_cases/SsaObjectArrayCases.value:I"), std::string::npos) << fieldDump;
+    EXPECT_NE(fieldDump.find("putstatic ssa_cases/SsaObjectArrayCases.sink:I"), std::string::npos) << fieldDump;
+    EXPECT_NE(fieldDump.find("getstatic ssa_cases/SsaObjectArrayCases.sink:I"), std::string::npos) << fieldDump;
+    EXPECT_NE(fieldDump.find("call ssa_cases/SsaObjectArrayCases.helper(II)I"), std::string::npos) << fieldDump;
+    EXPECT_NE(fieldDump.find("call ssa_cases/SsaObjectArrayCases.bump(I)I"), std::string::npos) << fieldDump;
+
+    reason.clear();
+    auto* arrays = findMethod(cn.get(), "arrays", "(I)I");
+    ASSERT_NE(arrays, nullptr);
+    auto arrayFn = buildSSAFor(cn.get(), arrays, reason);
+    ASSERT_NE(arrayFn, nullptr) << reason;
+    std::string arrayDump = dumpSSA(*arrayFn);
+    EXPECT_NE(arrayDump.find("alloc array [I(3)"), std::string::npos) << arrayDump;
+    EXPECT_NE(arrayDump.find("array.store i32"), std::string::npos) << arrayDump;
+    EXPECT_NE(arrayDump.find("array.load i32"), std::string::npos) << arrayDump;
+    EXPECT_NE(arrayDump.find("intrinsic array.length"), std::string::npos) << arrayDump;
+
+    reason.clear();
+    auto* refOps = findMethod(cn.get(), "refOps", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    ASSERT_NE(refOps, nullptr);
+    auto refFn = buildSSAFor(cn.get(), refOps, reason);
+    ASSERT_NE(refFn, nullptr) << reason;
+    std::string refDump = dumpSSA(*refFn);
+    EXPECT_NE(refDump.find("intrinsic instanceof:java/lang/String"), std::string::npos) << refDump;
+    EXPECT_NE(refDump.find("checkcast java/lang/String"), std::string::npos) << refDump;
+
+    reason.clear();
+    auto* literal = findMethod(cn.get(), "literal", "()Ljava/lang/String;");
+    ASSERT_NE(literal, nullptr);
+    auto literalFn = buildSSAFor(cn.get(), literal, reason);
+    ASSERT_NE(literalFn, nullptr) << reason;
+    EXPECT_NE(dumpSSA(*literalFn).find("<opaque:ldc_string>"), std::string::npos);
+}
+
+TEST(SSABuilderJavaSamples, NarrowingConversionsFromJavaSource) {
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME to enable Java-source SSA samples";
+    }
+
+    fs::path classFile = compileJavaSample(
+        javac, "narrowing", "ssa_cases/SsaNarrowingCases.java", "SsaNarrowingCases");
+    ASSERT_TRUE(fileExists(classFile)) << classFile;
+
+    Utf8StringArena arena;
+    std::vector<ca::u8> bytes;
+    auto cn = loadClassFile(arena, classFile, bytes);
+    ASSERT_NE(cn, nullptr);
+
+    std::string reason;
+    auto* narrowMath = findMethod(cn.get(), "narrowMath", "(I)I");
+    ASSERT_NE(narrowMath, nullptr);
+    auto mathFn = buildSSAFor(cn.get(), narrowMath, reason);
+    ASSERT_NE(mathFn, nullptr) << reason;
+    std::string mathDump = dumpSSA(*mathFn);
+    EXPECT_NE(mathDump.find("convert"), std::string::npos) << mathDump;
+    EXPECT_NE(mathDump.find("-> i8"), std::string::npos) << mathDump;
+    EXPECT_NE(mathDump.find("-> i16"), std::string::npos) << mathDump;
+    EXPECT_NE(mathDump.find("-> char"), std::string::npos) << mathDump;
+
+    reason.clear();
+    auto* narrowFields = findMethod(cn.get(), "narrowFields", "(Lssa_cases/SsaNarrowingCases;I)I");
+    ASSERT_NE(narrowFields, nullptr);
+    auto fieldFn = buildSSAFor(cn.get(), narrowFields, reason);
+    ASSERT_NE(fieldFn, nullptr) << reason;
+    std::string fieldDump = dumpSSA(*fieldFn);
+    EXPECT_NE(fieldDump.find("putfield ssa_cases/SsaNarrowingCases.b:B"), std::string::npos)
+        << fieldDump;
+    EXPECT_NE(fieldDump.find("putfield ssa_cases/SsaNarrowingCases.s:S"), std::string::npos)
+        << fieldDump;
+    EXPECT_NE(fieldDump.find("putfield ssa_cases/SsaNarrowingCases.c:C"), std::string::npos)
+        << fieldDump;
+}
+
+TEST(SSABuilderJavaSamples, StackShapeBytecodeFromJavaSource) {
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME to enable Java-source SSA samples";
+    }
+
+    fs::path classFile = compileJavaSample(
+        javac, "stack_shape", "ssa_cases/SsaStackShapeCases.java", "SsaStackShapeCases");
+    ASSERT_TRUE(fileExists(classFile)) << classFile;
+
+    Utf8StringArena arena;
+    std::vector<ca::u8> bytes;
+    auto cn = loadClassFile(arena, classFile, bytes);
+    ASSERT_NE(cn, nullptr);
+
+    std::string reason;
+    auto* discardCategory1 = findMethod(cn.get(), "discardCategory1", "(I)I");
+    ASSERT_NE(discardCategory1, nullptr);
+    auto popFn = buildSSAFor(cn.get(), discardCategory1, reason);
+    ASSERT_NE(popFn, nullptr) << reason;
+    std::string popDump = dumpSSA(*popFn);
+    EXPECT_NE(popDump.find("call ssa_cases/SsaStackShapeCases.returnsObject(I)Ljava/lang/String;"),
+              std::string::npos) << popDump;
+    EXPECT_EQ(popDump.find("cstack"), std::string::npos) << popDump;
+
+    reason.clear();
+    auto* discardCategory2 = findMethod(cn.get(), "discardCategory2", "(I)I");
+    ASSERT_NE(discardCategory2, nullptr);
+    auto pop2Fn = buildSSAFor(cn.get(), discardCategory2, reason);
+    ASSERT_NE(pop2Fn, nullptr) << reason;
+    std::string pop2Dump = dumpSSA(*pop2Fn);
+    EXPECT_NE(pop2Dump.find("call ssa_cases/SsaStackShapeCases.returnsLong(J)J"),
+              std::string::npos) << pop2Dump;
+
+    reason.clear();
+    auto* constructObject = findMethod(cn.get(), "constructObject", "()Ljava/lang/Object;");
+    ASSERT_NE(constructObject, nullptr);
+    auto constructFn = buildSSAFor(cn.get(), constructObject, reason);
+    ASSERT_NE(constructFn, nullptr) << reason;
+    std::string constructDump = dumpSSA(*constructFn);
+    EXPECT_NE(constructDump.find("alloc object java/lang/Object()"), std::string::npos) << constructDump;
+    EXPECT_NE(constructDump.find("call java/lang/Object.<init>()V"), std::string::npos) << constructDump;
+}
+
+TEST(SSABuilderJavaSamples, StackJoinTernaryFromJavaSource) {
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME to enable Java-source SSA samples";
+    }
+
+    fs::path classFile = compileJavaSample(
+        javac, "stack_join", "ssa_cases/SsaStackJoinCases.java", "SsaStackJoinCases");
+    ASSERT_TRUE(fileExists(classFile)) << classFile;
+
+    Utf8StringArena arena;
+    std::vector<ca::u8> bytes;
+    auto cn = loadClassFile(arena, classFile, bytes);
+    ASSERT_NE(cn, nullptr);
+
+    std::string reason;
+    auto* booleanTernary = findMethod(cn.get(), "booleanTernary", "(Z)I");
+    ASSERT_NE(booleanTernary, nullptr);
+    auto boolFn = buildSSAFor(cn.get(), booleanTernary, reason);
+    ASSERT_NE(boolFn, nullptr) << reason;
+    std::string boolDump = dumpSSA(*boolFn);
+    EXPECT_NE(boolDump.find("@slot-1000"), std::string::npos) << boolDump;
+    EXPECT_EQ(boolDump.find("cstack"), std::string::npos) << boolDump;
+
+    reason.clear();
+    auto* intTernary = findMethod(cn.get(), "intTernary", "(I)I");
+    ASSERT_NE(intTernary, nullptr);
+    auto intFn = buildSSAFor(cn.get(), intTernary, reason);
+    ASSERT_NE(intFn, nullptr) << reason;
+    std::string intDump = dumpSSA(*intFn);
+    EXPECT_NE(intDump.find("@slot-1000"), std::string::npos) << intDump;
+    EXPECT_EQ(intDump.find("cstack"), std::string::npos) << intDump;
+
+    reason.clear();
+    auto* referenceTernary = findMethod(
+        cn.get(), "referenceTernary", "(ZLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    ASSERT_NE(referenceTernary, nullptr);
+    auto refFn = buildSSAFor(cn.get(), referenceTernary, reason);
+    ASSERT_NE(refFn, nullptr) << reason;
+    std::string refDump = dumpSSA(*refFn);
+    EXPECT_NE(refDump.find("@slot-1000"), std::string::npos) << refDump;
+    EXPECT_EQ(refDump.find("cstack"), std::string::npos) << refDump;
+}
+
+TEST(SSABuilderJavaSamples, NullTrapHandlersFromJavaSource) {
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME to enable Java-source SSA samples";
+    }
+
+    fs::path classFile = compileJavaSample(
+        javac, "null_trap", "ssa_cases/SsaNullTrapCases.java", "SsaNullTrapCases");
+    ASSERT_TRUE(fileExists(classFile)) << classFile;
+
+    Utf8StringArena arena;
+    std::vector<ca::u8> bytes;
+    auto cn = loadClassFile(arena, classFile, bytes);
+    ASSERT_NE(cn, nullptr);
+
+    std::string reason;
+    auto* catchNullField = findMethod(cn.get(), "catchNullField", "()I");
+    ASSERT_NE(catchNullField, nullptr);
+    auto fieldFn = buildSSAFor(cn.get(), catchNullField, reason);
+    ASSERT_NE(fieldFn, nullptr) << reason;
+    std::string fieldDump = dumpSSA(*fieldFn);
+    EXPECT_NE(fieldDump.find("getfield ssa_cases/SsaNullTrapCases.value:I"), std::string::npos)
+        << fieldDump;
+    EXPECT_NE(fieldDump.find("@slot-1"), std::string::npos) << fieldDump;
+
+    reason.clear();
+    auto* catchNullCall = findMethod(cn.get(), "catchNullCall", "()I");
+    ASSERT_NE(catchNullCall, nullptr);
+    auto callFn = buildSSAFor(cn.get(), catchNullCall, reason);
+    ASSERT_NE(callFn, nullptr) << reason;
+    std::string callDump = dumpSSA(*callFn);
+    EXPECT_NE(callDump.find("call ssa_cases/SsaNullTrapCases.id(I)I"), std::string::npos)
+        << callDump;
+    EXPECT_NE(callDump.find("@slot-1"), std::string::npos) << callDump;
+
+    reason.clear();
+    auto* catchNullArray = findMethod(cn.get(), "catchNullArray", "()I");
+    ASSERT_NE(catchNullArray, nullptr);
+    auto arrayFn = buildSSAFor(cn.get(), catchNullArray, reason);
+    ASSERT_NE(arrayFn, nullptr) << reason;
+    std::string arrayDump = dumpSSA(*arrayFn);
+    EXPECT_NE(arrayDump.find("array.load i32 null[0]"), std::string::npos) << arrayDump;
+    EXPECT_NE(arrayDump.find("@slot-1"), std::string::npos) << arrayDump;
 }
 
 // 临时 dump 查看（人工检查 loopSum 的 phi 形态）。跑一次后可 DISABLED。

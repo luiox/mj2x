@@ -2,6 +2,8 @@
 
 > Product-line roadmap for the mj2x blue-team AI.
 >
+> **v2.1（2026-07-05 C backend 复活）**：撤销 ADR-1，CBackend 作为"易实现、广覆盖"通用后端
+> 与 RegC 并行。复活决策与逐波覆盖路线见 `CBACKEND_REVIVAL_AND_WAVES.md`。
 > **v2（2026-06-24 架构重构后）**：B0-B3 波次被 R0-R5 替换。
 > 重构依据见 `ARCHITECTURE_REDESIGN.md`。v1 的 CBackend 主线已作废（归档 reference）。
 
@@ -61,11 +63,14 @@ Timing:
 - 排在 R5+ 之后，RegC + RT 闭环后据 mjdbg 攻击反馈决定是否启动
 - 设计见 `NATIVE_VM_ROADMAP.md`（已降级）
 
-### CBackend（归档 reference）
+### CBackend（复活通用后端，2026-07-05 起）
 
-- v0.1 唯一后端，已交付（feat/mj2x/mvp-completion 分支）
-- 同时命中 c2j 两锚点，作 mjdbg 易攻基线样本 + 回归对照保留
-- pipeline 默认不再注册，不再演进
+- **撤销 ADR-1**：从 `backend/reference/` 移回 `backend/`，pipeline 重新注册，逐波扩指令覆盖
+- 定位："易实现、广覆盖"通用后端，吃 L1 栈式 MIR，直接产 JNI C 源码
+- **不承担 c2j 对抗职责**：生成的代码可被 c2j 还原（接受）；对抗强度留给未来的 RegC
+- SSA 线（R1a/R1b 已合并）保留代码，但**不接入** C backend pipeline（C backend 直接吃 L1 MIR）
+- 逐波覆盖路线（Wave 0-7）见 `CBACKEND_REVIVAL_AND_WAVES.md`
+- 历史：v0.1 已交付 → ADR-1 归档 → 复活
 
 ---
 
@@ -118,7 +123,8 @@ Goal: 建立 native 运行时，打破 c2j 锚点 1（JNI hook）+ Gap B（运�
 - `runtime/antijvmti/`（`env->functions` 篡改检测 + RuntimeMXBean 扫 `-javaagent`）
 - `runtime/stringpool/`（运行时派生密钥解密的字符串池）
 - 与 RegC 集成：符号 helper、字符串池解密
-- 删除 `runtime/main.cpp`（DLL demo）、`rt_insn`/`rt_memory`（空壳）
+- 已删除 `runtime/main.cpp`（DLL demo）、`rt_insn`/`rt_memory`（空壳）；R3 core 改为
+  `mj2x-runtime-core` + `mj2x_runtime_test`
 
 Done when: 受保护样本在 c2j agent 下 fail-closed，或 trace 显著退化（与 mjdbg 协作验证）。
 
@@ -153,7 +159,7 @@ Done when: mjdbg 攻击报告显示恢复难度相对前一版样本上升。
 |---|---|---|
 | protected sample format | mjdbg | sample 必须文档化 expected trace surface |
 | trace expectations | mjdbg | 隐藏或随机化信号前先协调 |
-| libjbytecode usage | nbase | 直接用 OK；共享 wrapper 需协调 |
+| libjbytecode usage | mbase | 直接用 OK；共享 wrapper 需协调 |
 | runtime build options | build owner | 不静默加重默认依赖（仍无 LLVM） |
 | c2j 攻击靶单 | mjdbg | `ARCHITECTURE_REDESIGN.md §4` 防御矩阵每条需 mjdbg 验证 |
 

@@ -35,21 +35,26 @@
 
 MVP (C 后端) 不需要 LLVM 或其他第三方库。所有依赖均为 morpher-native 现有内部库。
 
-### 1.5 计划新增：R3 运行时密码学库（PR#305 review 采纳）
+### 1.5 R3 runtime crypto status
 
-架构重构后 R3 的 native 运行时需要 SHA256 / HMAC-SHA256 / AES-128。**不自研密码学**
-（PR#305 gemini-code-assist review：自研易引入缓存定时侧信道、padding oracle、实现缺陷），
-改为集成审计过的轻量库，仍保持无 OpenSSL / 无 LLVM 约束。
+R3 runtime core currently carries an in-repo minimal implementation under
+`mj2x/runtime/src/crypto/`: SHA-256, HMAC-SHA256, AES-128 block encryption,
+AES-128 CTR, and constant-time comparison.  This keeps the first RegC/runtime
+samples dependency-free and testable while the loader ABI is still moving.
 
-| 候选 | 形态 | 评估要点 |
+The implementation is covered by public SHA/HMAC/AES/HKDF known-answer vectors
+in `mj2x_runtime_test`.  It is not a claim of hardened side-channel resistance.
+Before mj2x claims production-grade cryptographic hardening, this module should
+be reviewed or replaced with a locked, audited lightweight library.
+
+| Replacement candidate | Shape | Evaluation point |
 |------|------|---------|
-| **tiny-AES-c** | 单文件 C (AES-128/192/256) | 最轻量；仅 AES，SHA/HMAC 需另配；常量时间查表需确认 |
-| **Mbed TLS 精简子集** | C 库，可裁剪 | 全套原语（AES/SHA/HMAC/HKDF）；审计充分；裁剪到最小需工程量 |
-| **BearSSL 精简子集** | C 库，常量时间实现 | 抗侧信道最强；仅 SHA/HMAC/AES；API 偏底层 |
+| **tiny-AES-c + local SHA/HMAC** | single-file C AES plus current SHA/HMAC | small; AES table timing still needs review |
+| **Mbed TLS subset** | trimmed C library | complete primitive set; more integration work |
+| **BearSSL subset** | constant-time-oriented C library | stronger side-channel posture; lower-level API |
 
-**决策时机**：R3 启动时在此表锁定具体选型 + commit/tag，并补到 `third_party/VERSIONS.lock.md`。
-候选评估标准：常量时间实现（抗 cache-timing）、代码体积、是否覆盖 HKDF、审计历史。
-在锁定前，本文档其它部分提到 crypto 的"纯 C 自实现"表述均已作废（见 `ARCHITECTURE_REDESIGN.md` §3 RT）。
+**Decision point**: before R3 is advertised as hardened rather than functional,
+lock a reviewed choice here and in `third_party/VERSIONS.lock.md`.
 
 ---
 

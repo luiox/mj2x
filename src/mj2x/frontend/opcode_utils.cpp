@@ -37,11 +37,25 @@ UnaryOp opcodeToUnaryOp(int opcode) {
 }
 
 PrimitiveKind opcodeToResultType(int opcode) {
-    if (opcode >= Opcodes::IADD && opcode <= Opcodes::IXOR) return PrimitiveKind::INT;
-    if (opcode >= Opcodes::LADD && opcode <= Opcodes::LXOR) return PrimitiveKind::LONG;
-    if (opcode >= Opcodes::FADD && opcode <= Opcodes::FNEG) return PrimitiveKind::FLOAT;
-    if (opcode >= Opcodes::DADD && opcode <= Opcodes::DNEG) return PrimitiveKind::DOUBLE;
     switch (opcode) {
+    case Opcodes::IADD: case Opcodes::ISUB: case Opcodes::IMUL:
+    case Opcodes::IDIV: case Opcodes::IREM:
+    case Opcodes::ISHL: case Opcodes::ISHR: case Opcodes::IUSHR:
+    case Opcodes::IAND: case Opcodes::IOR: case Opcodes::IXOR:
+    case Opcodes::INEG:
+        return PrimitiveKind::INT;
+    case Opcodes::LADD: case Opcodes::LSUB: case Opcodes::LMUL:
+    case Opcodes::LDIV: case Opcodes::LREM:
+    case Opcodes::LSHL: case Opcodes::LSHR: case Opcodes::LUSHR:
+    case Opcodes::LAND: case Opcodes::LOR: case Opcodes::LXOR:
+    case Opcodes::LNEG:
+        return PrimitiveKind::LONG;
+    case Opcodes::FADD: case Opcodes::FSUB: case Opcodes::FMUL:
+    case Opcodes::FDIV: case Opcodes::FREM: case Opcodes::FNEG:
+        return PrimitiveKind::FLOAT;
+    case Opcodes::DADD: case Opcodes::DSUB: case Opcodes::DMUL:
+    case Opcodes::DDIV: case Opcodes::DREM: case Opcodes::DNEG:
+        return PrimitiveKind::DOUBLE;
     case Opcodes::I2L: return PrimitiveKind::LONG;
     case Opcodes::I2F: return PrimitiveKind::FLOAT;
     case Opcodes::I2D: return PrimitiveKind::DOUBLE;

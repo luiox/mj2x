@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include "jbytecode/jbytecode.hpp"
+#include "libca/core/datatype.hpp"
 #include "libca/str/utf8_string.hpp"
 
 namespace mj2x {
@@ -21,6 +22,112 @@ using namespace jbytecode::util;
 // 故不能用 bytecodeOffset 作 label 标识；改用指针身份（见 dev_plan R1a.3）。
 static int labelKey(jbytecode::core::Label* lbl) {
     return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
+}
+
+static PrimitiveKind castSourceType(int opcode) {
+    switch (opcode) {
+    case Opcodes::I2L: case Opcodes::I2F: case Opcodes::I2D:
+    case Opcodes::I2B: case Opcodes::I2C: case Opcodes::I2S:
+        return PrimitiveKind::INT;
+    case Opcodes::L2I: case Opcodes::L2F: case Opcodes::L2D:
+        return PrimitiveKind::LONG;
+    case Opcodes::F2I: case Opcodes::F2L: case Opcodes::F2D:
+        return PrimitiveKind::FLOAT;
+    case Opcodes::D2I: case Opcodes::D2L: case Opcodes::D2F:
+        return PrimitiveKind::DOUBLE;
+    default:
+        return PrimitiveKind::INT;
+    }
+}
+
+static PrimitiveKind castTargetType(int opcode) {
+    switch (opcode) {
+    case Opcodes::I2L: return PrimitiveKind::LONG;
+    case Opcodes::I2F: return PrimitiveKind::FLOAT;
+    case Opcodes::I2D: return PrimitiveKind::DOUBLE;
+    case Opcodes::L2I: return PrimitiveKind::INT;
+    case Opcodes::L2F: return PrimitiveKind::FLOAT;
+    case Opcodes::L2D: return PrimitiveKind::DOUBLE;
+    case Opcodes::F2I: return PrimitiveKind::INT;
+    case Opcodes::F2L: return PrimitiveKind::LONG;
+    case Opcodes::F2D: return PrimitiveKind::DOUBLE;
+    case Opcodes::D2I: return PrimitiveKind::INT;
+    case Opcodes::D2L: return PrimitiveKind::LONG;
+    case Opcodes::D2F: return PrimitiveKind::FLOAT;
+    case Opcodes::I2B: return PrimitiveKind::BYTE;
+    case Opcodes::I2C: return PrimitiveKind::CHAR;
+    case Opcodes::I2S: return PrimitiveKind::SHORT;
+    default: return PrimitiveKind::INT;
+    }
+}
+
+static PrimitiveKind arrayComponentType(int opcode) {
+    switch (opcode) {
+    case Opcodes::IALOAD: case Opcodes::IASTORE: return PrimitiveKind::INT;
+    case Opcodes::LALOAD: case Opcodes::LASTORE: return PrimitiveKind::LONG;
+    case Opcodes::FALOAD: case Opcodes::FASTORE: return PrimitiveKind::FLOAT;
+    case Opcodes::DALOAD: case Opcodes::DASTORE: return PrimitiveKind::DOUBLE;
+    case Opcodes::AALOAD: case Opcodes::AASTORE: return PrimitiveKind::OBJECT;
+    case Opcodes::BALOAD: case Opcodes::BASTORE: return PrimitiveKind::BYTE;
+    case Opcodes::CALOAD: case Opcodes::CASTORE: return PrimitiveKind::CHAR;
+    case Opcodes::SALOAD: case Opcodes::SASTORE: return PrimitiveKind::SHORT;
+    default: return PrimitiveKind::INT;
+    }
+}
+
+static PrimitiveKind newArrayComponentType(int atype) {
+    switch (atype) {
+    case Opcodes::T_BOOLEAN: return PrimitiveKind::BOOLEAN;
+    case Opcodes::T_CHAR:    return PrimitiveKind::CHAR;
+    case Opcodes::T_FLOAT:   return PrimitiveKind::FLOAT;
+    case Opcodes::T_DOUBLE:  return PrimitiveKind::DOUBLE;
+    case Opcodes::T_BYTE:    return PrimitiveKind::BYTE;
+    case Opcodes::T_SHORT:   return PrimitiveKind::SHORT;
+    case Opcodes::T_INT:     return PrimitiveKind::INT;
+    case Opcodes::T_LONG:    return PrimitiveKind::LONG;
+    default:                 return PrimitiveKind::OBJECT;
+    }
+}
+
+static PrimitiveKind cmpOperandType(int opcode) {
+    switch (opcode) {
+    case Opcodes::LCMP:
+        return PrimitiveKind::LONG;
+    case Opcodes::FCMPL:
+    case Opcodes::FCMPG:
+        return PrimitiveKind::FLOAT;
+    case Opcodes::DCMPL:
+    case Opcodes::DCMPG:
+        return PrimitiveKind::DOUBLE;
+    default:
+        return PrimitiveKind::INT;
+    }
+}
+
+static PrimitiveKind frameValueType(const ca::core::Any& value) {
+    if (auto* tag = value.template as<int>()) {
+        switch (*tag) {
+        case Opcodes::INTEGER: return PrimitiveKind::INT;
+        case Opcodes::FLOAT: return PrimitiveKind::FLOAT;
+        case Opcodes::LONG: return PrimitiveKind::LONG;
+        case Opcodes::DOUBLE: return PrimitiveKind::DOUBLE;
+        case Opcodes::TOP:
+            return PrimitiveKind::VOID;
+        case Opcodes::ITEM_NULL:
+        case Opcodes::UNINITIALIZED_THIS:
+        default:
+            return PrimitiveKind::OBJECT;
+        }
+    }
+    // Object and uninitialized verification types are represented by class
+    // names or labels in libjbytecode's tree model; both enter SSA as refs.
+    return PrimitiveKind::OBJECT;
+}
+
+static bool frameHasEntryStack(int frameType) {
+    return frameType == Opcodes::F_NEW ||
+           frameType == Opcodes::F_FULL ||
+           frameType == Opcodes::F_SAME1;
 }
 
 struct CodeConverter::Impl {
@@ -88,6 +195,8 @@ void CodeConverter::analyzeControlFlow(MethodNode& mn) {
     }
 
     for (auto* tcb : mn.tryCatchBlocks) {
+        impl_->labelTargets.insert(labelKey(tcb->start));
+        impl_->labelTargets.insert(labelKey(tcb->end));
         impl_->labelTargets.insert(labelKey(tcb->handler));
         ExceptionHandler h;
         h.startLabel = labelKey(tcb->start);
@@ -117,6 +226,10 @@ void CodeConverter::analyzeControlFlow(MethodNode& mn) {
                 auto* lb = typed::cast<LabelNode>(insn);
                 if (impl_->labelTargets.count(labelKey(lb->label))) {
                     impl_->blockStartIndices.insert(idx);
+                    // The label itself starts the block; keep the following
+                    // executable instruction in the same block so handler
+                    // entry stack state is not split away from ASTORE.
+                    afterTerminator = false;
                 }
             }
             continue;
@@ -171,15 +284,44 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         if (opc == Opcodes::NOP) {
             cur->nodes.push_back(std::make_unique<MIRNop>());
         } else if (opc == Opcodes::ACONST_NULL) {
-            cur->nodes.push_back(std::make_unique<MIRConstant>());
-        } else if (opc >= Opcodes::ICONST_M1 && opc <= Opcodes::DCONST_1) {
-            cur->nodes.push_back(std::make_unique<MIRConstant>());
+            auto node = std::make_unique<MIRConstant>();
+            node->type = PrimitiveKind::OBJECT;
+            node->value = nullptr;
+            cur->nodes.push_back(std::move(node));
+        } else if (opc >= Opcodes::ICONST_M1 && opc <= Opcodes::ICONST_5) {
+            // ICONST_M1..ICONST_5：int 常量 -1..5
+            auto node = std::make_unique<MIRConstant>();
+            node->type = PrimitiveKind::INT;
+            node->value = static_cast<int64_t>(opc - Opcodes::ICONST_0);
+            cur->nodes.push_back(std::move(node));
+        } else if (opc == Opcodes::LCONST_0 || opc == Opcodes::LCONST_1) {
+            auto node = std::make_unique<MIRConstant>();
+            node->type = PrimitiveKind::LONG;
+            node->value = static_cast<int64_t>(opc - Opcodes::LCONST_0);
+            cur->nodes.push_back(std::move(node));
+        } else if (opc == Opcodes::FCONST_0 || opc == Opcodes::FCONST_1 ||
+                   opc == Opcodes::FCONST_2) {
+            auto node = std::make_unique<MIRConstant>();
+            node->type = PrimitiveKind::FLOAT;
+            node->value = static_cast<double>(opc - Opcodes::FCONST_0);
+            cur->nodes.push_back(std::move(node));
+        } else if (opc == Opcodes::DCONST_0 || opc == Opcodes::DCONST_1) {
+            auto node = std::make_unique<MIRConstant>();
+            node->type = PrimitiveKind::DOUBLE;
+            node->value = static_cast<double>(opc - Opcodes::DCONST_0);
+            cur->nodes.push_back(std::move(node));
         } else if (opc >= Opcodes::IALOAD && opc <= Opcodes::SALOAD) {
-            cur->nodes.push_back(std::make_unique<MIRArrayLoad>());
+            auto node = std::make_unique<MIRArrayLoad>();
+            node->componentType = arrayComponentType(opc);
+            cur->nodes.push_back(std::move(node));
         } else if (opc >= Opcodes::IASTORE && opc <= Opcodes::SASTORE) {
-            cur->nodes.push_back(std::make_unique<MIRArrayStore>());
-        } else if (opc == Opcodes::POP || opc == Opcodes::POP2) {
-            cur->nodes.push_back(std::make_unique<MIRNop>());
+            auto node = std::make_unique<MIRArrayStore>();
+            node->componentType = arrayComponentType(opc);
+            cur->nodes.push_back(std::move(node));
+        } else if (opc == Opcodes::POP) {
+            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_POP));
+        } else if (opc == Opcodes::POP2) {
+            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_POP2));
         } else if (opc == Opcodes::DUP) {
             cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP));
         } else if (opc == Opcodes::DUP_X1) {
@@ -188,6 +330,10 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP_X2));
         } else if (opc == Opcodes::DUP2) {
             cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP2));
+        } else if (opc == Opcodes::DUP2_X1) {
+            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP2_X1));
+        } else if (opc == Opcodes::DUP2_X2) {
+            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP2_X2));
         } else if (opc == Opcodes::SWAP) {
             cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_SWAP));
         } else if ((opc >= Opcodes::IADD && opc <= Opcodes::DREM) ||
@@ -197,16 +343,38 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->type = opcodeToResultType(opc);
             cur->nodes.push_back(std::move(node));
         } else if (opc >= Opcodes::INEG && opc <= Opcodes::DNEG) {
-            cur->nodes.push_back(std::make_unique<MIRUnaryOp>());
-        } else if ((opc >= Opcodes::I2L && opc <= Opcodes::D2I) ||
+            auto node = std::make_unique<MIRUnaryOp>();
+            node->op = opcodeToUnaryOp(opc);
+            node->type = opcodeToResultType(opc);
+            cur->nodes.push_back(std::move(node));
+        } else if ((opc >= Opcodes::I2L && opc <= Opcodes::D2F) ||
                    opc == Opcodes::I2B || opc == Opcodes::I2C || opc == Opcodes::I2S) {
-            cur->nodes.push_back(std::make_unique<MIRCast>());
+            auto node = std::make_unique<MIRCast>();
+            node->from = castSourceType(opc);
+            node->to = castTargetType(opc);
+            cur->nodes.push_back(std::move(node));
         } else if (opc == Opcodes::LCMP || opc == Opcodes::FCMPL ||
                    opc == Opcodes::FCMPG || opc == Opcodes::DCMPL ||
                    opc == Opcodes::DCMPG) {
-            cur->nodes.push_back(std::make_unique<MIRBinaryOp>());
+            auto node = std::make_unique<MIRCmp>();
+            node->type = cmpOperandType(opc);
+            node->nanGreater = (opc == Opcodes::FCMPG || opc == Opcodes::DCMPG);
+            cur->nodes.push_back(std::move(node));
         } else if (opc >= Opcodes::IRETURN && opc <= Opcodes::ARETURN) {
-            cur->nodes.push_back(std::make_unique<MIRReturnValue>());
+            auto node = std::make_unique<MIRReturnValue>();
+            // 按 *RETURN opcode 推导返回值类型（与方法描述符一致）。
+            auto retKind = [](int op) -> PrimitiveKind {
+                switch (op) {
+                case Opcodes::IRETURN:   return PrimitiveKind::INT;
+                case Opcodes::LRETURN:   return PrimitiveKind::LONG;
+                case Opcodes::FRETURN:   return PrimitiveKind::FLOAT;
+                case Opcodes::DRETURN:   return PrimitiveKind::DOUBLE;
+                case Opcodes::ARETURN:   return PrimitiveKind::OBJECT;
+                default:                 return PrimitiveKind::INT;
+                }
+            };
+            node->type = retKind(opc);
+            cur->nodes.push_back(std::move(node));
         } else if (opc == Opcodes::RETURN) {
             cur->nodes.push_back(std::make_unique<MIRReturn>());
         } else if (opc == Opcodes::ARRAYLENGTH) {
@@ -214,7 +382,8 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         } else if (opc == Opcodes::ATHROW) {
             cur->nodes.push_back(std::make_unique<MIRThrow>());
         } else if (opc == Opcodes::MONITORENTER) {
-            cur->nodes.push_back(std::make_unique<MIRMonitor>()); // enter=true default
+            auto node = std::make_unique<MIRMonitor>(); // enter=true default
+            cur->nodes.push_back(std::move(node));
         } else if (opc == Opcodes::MONITOREXIT) {
             auto node = std::make_unique<MIRMonitor>();
             node->enter = false;
@@ -226,10 +395,13 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     case AbstractInsnNode::INT_INSN: {
         auto* ii = typed::cast<IntInsnNode>(insn);
         if (ii->opcode == Opcodes::BIPUSH || ii->opcode == Opcodes::SIPUSH) {
-            cur->nodes.push_back(std::make_unique<MIRConstant>());
+            auto node = std::make_unique<MIRConstant>();
+            node->type = PrimitiveKind::INT;
+            node->value = static_cast<int64_t>(ii->operand);
+            cur->nodes.push_back(std::move(node));
         } else if (ii->opcode == Opcodes::NEWARRAY) {
             auto node = std::make_unique<MIRNewArray>();
-            (void)ii; // type info available via ii->operand
+            node->componentType = newArrayComponentType(ii->operand);
             cur->nodes.push_back(std::move(node));
         }
         break;
@@ -238,13 +410,27 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     case AbstractInsnNode::VAR_INSN: {
         auto* vi = typed::cast<VarInsnNode>(insn);
         int opc = vi->opcode;
+        // 局部变量类型直接由 opcode 推导（比 MethodStack 更精确：MethodStack 只跟踪参数 slot）。
+        // ILOAD/LLOAD/FLOAD/DLOAD/ALOAD 与对应 STORE 是连续 opcode（21..25 / 54..58）。
+        auto varKind = [](int op) -> PrimitiveKind {
+            switch (op) {
+            case Opcodes::ILOAD: case Opcodes::ISTORE: return PrimitiveKind::INT;
+            case Opcodes::LLOAD: case Opcodes::LSTORE: return PrimitiveKind::LONG;
+            case Opcodes::FLOAD: case Opcodes::FSTORE: return PrimitiveKind::FLOAT;
+            case Opcodes::DLOAD: case Opcodes::DSTORE: return PrimitiveKind::DOUBLE;
+            case Opcodes::ALOAD: case Opcodes::ASTORE: return PrimitiveKind::OBJECT;
+            default:                              return PrimitiveKind::INT;
+            }
+        };
         if (opc >= Opcodes::ILOAD && opc <= Opcodes::ALOAD) {
             auto node = std::make_unique<MIRLocalLoad>();
             node->varIndex = vi->var;
+            node->type = varKind(opc);
             cur->nodes.push_back(std::move(node));
         } else if (opc >= Opcodes::ISTORE && opc <= Opcodes::ASTORE) {
             auto node = std::make_unique<MIRLocalStore>();
             node->varIndex = vi->var;
+            node->type = varKind(opc);
             cur->nodes.push_back(std::move(node));
         }
         // RET handled in preprocessor
@@ -263,6 +449,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         case Opcodes::ANEWARRAY: {
             auto node = std::make_unique<MIRNewArray>();
             node->typeDesc = ti->desc.to_std_string();
+            node->componentType = PrimitiveKind::OBJECT;
             cur->nodes.push_back(std::move(node));
             break;
         }
@@ -365,6 +552,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
                    (opc >= Opcodes::IFEQ && opc <= Opcodes::IFLE)) {
             auto node = std::make_unique<MIRBranchZero>();
             node->op = branchZeroOpcodeToCmpOp(opc);
+            node->type = (opc == Opcodes::IFNULL || opc == Opcodes::IFNONNULL)
+                ? PrimitiveKind::OBJECT
+                : PrimitiveKind::INT;
             node->targetLabel = target;
             cur->nodes.push_back(std::move(node));
         } else {
@@ -375,7 +565,37 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::LDC_INSN: {
-        cur->nodes.push_back(std::make_unique<MIRConstant>());
+        // LDC 常量类型（来自 ClassReader::readConst）：
+        //   int → i32, float → float, long → i64, double → double,
+        //   String → Utf8StringRef, Class/MethodType → Type, MethodHandle → Handle。
+        // Wave 4：String LDC 保留字面量，由 CBackend 生成 NewStringUTF。
+        // Class/MethodType/Handle 仍暂落 null OBJECT，留给后续对象/方法句柄覆盖。
+        auto* ld = typed::cast<LdcInsnNode>(insn);
+        auto node = std::make_unique<MIRConstant>();
+        if (auto* p = ld->cst.template as<ca::i32>()) {
+            node->type = PrimitiveKind::INT;
+            node->value = static_cast<int64_t>(*p);
+        } else if (auto* p = ld->cst.template as<ca::i64>()) {
+            node->type = PrimitiveKind::LONG;
+            node->value = static_cast<int64_t>(*p);
+        } else if (auto* p = ld->cst.template as<float>()) {
+            node->type = PrimitiveKind::FLOAT;
+            node->value = static_cast<double>(*p);
+        } else if (auto* p = ld->cst.template as<double>()) {
+            node->type = PrimitiveKind::DOUBLE;
+            node->value = *p;
+        } else if (auto* p = ld->cst.template as<std::string>()) {
+            node->type = PrimitiveKind::OBJECT;
+            node->value = *p;
+        } else if (auto* p = ld->cst.template as<ca::str::Utf8StringRef>()) {
+            node->type = PrimitiveKind::OBJECT;
+            node->value = p->to_std_string();
+        } else {
+            // Class/MethodType/Handle：暂落 null 对象常量。
+            node->type = PrimitiveKind::OBJECT;
+            node->value = nullptr;
+        }
+        cur->nodes.push_back(std::move(node));
         break;
     }
 
@@ -412,7 +632,8 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::MULTIANEWARRAY_INSN: {
-        // R1b: 不展开（R2+ 加 runtime helper）。落 MIRMultiNewArray，builder 遇到 fail-closed。
+        // Keep the bytecode compact: downstream SSA/RegC lowers this to the
+        // multi-array runtime helper instead of expanding nested loops here.
         auto* ma = typed::cast<MultiANewArrayInsnNode>(insn);
         auto node = std::make_unique<MIRMultiNewArray>();
         node->typeDesc = ma->desc.to_std_string();
@@ -422,7 +643,20 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::FRAME: {
-        cur->nodes.push_back(std::make_unique<MIRFrame>());
+        auto* frame = typed::cast<FrameNode>(insn);
+        auto node = std::make_unique<MIRFrame>();
+        node->frameType = frame->frameType;
+        if (frameHasEntryStack(frame->frameType)) {
+            node->stackTypes.reserve(frame->stack.size());
+            for (const auto& value : frame->stack) {
+                PrimitiveKind kind = frameValueType(value);
+                if (kind != PrimitiveKind::VOID) {
+                    node->stackTypes.push_back(kind);
+                    if (frame->frameType == Opcodes::F_SAME1) break;
+                }
+            }
+        }
+        cur->nodes.push_back(std::move(node));
         break;
     }
 
@@ -474,6 +708,9 @@ std::vector<Block*> CodeConverter::convert(MethodNode& mn) {
     if (impl_->blockOrder.empty()) {
         getOrCreateBlock(0);
     }
+    if (!impl_->blockOrder.empty()) {
+        impl_->blockOrder.front()->exceptionTable = impl_->handlers;
+    }
     return impl_->blockOrder;
 }
 
@@ -491,9 +728,14 @@ static const char* mirKindName(MIRKind k) {
     case MIRKind::STACK_DUP_X1:  return "DUP_X1";
     case MIRKind::STACK_DUP_X2:  return "DUP_X2";
     case MIRKind::STACK_DUP2:    return "DUP2";
+    case MIRKind::STACK_DUP2_X1: return "DUP2_X1";
+    case MIRKind::STACK_DUP2_X2: return "DUP2_X2";
     case MIRKind::STACK_SWAP:    return "SWAP";
+    case MIRKind::STACK_POP:     return "POP";
+    case MIRKind::STACK_POP2:    return "POP2";
     case MIRKind::BINARY_OP:     return "BINARY";
     case MIRKind::UNARY_OP:      return "UNARY";
+    case MIRKind::CMP:           return "CMP";
     case MIRKind::CAST:          return "CAST";
     case MIRKind::BRANCH:        return "BRANCH";
     case MIRKind::BRANCH_ZERO:   return "BRANCH_ZERO";
@@ -521,6 +763,22 @@ static const char* mirKindName(MIRKind k) {
     }
 }
 
+static const char* primitiveKindName(PrimitiveKind kind) {
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN: return "boolean";
+    case PrimitiveKind::BYTE: return "byte";
+    case PrimitiveKind::CHAR: return "char";
+    case PrimitiveKind::SHORT: return "short";
+    case PrimitiveKind::INT: return "int";
+    case PrimitiveKind::LONG: return "long";
+    case PrimitiveKind::FLOAT: return "float";
+    case PrimitiveKind::DOUBLE: return "double";
+    case PrimitiveKind::VOID: return "void";
+    case PrimitiveKind::OBJECT: return "object";
+    }
+    return "?";
+}
+
 std::string CodeConverter::dumpMIR(const std::vector<Block*>& blocks) {
     std::ostringstream oss;
     for (auto* blk : blocks) {
@@ -540,6 +798,16 @@ std::string CodeConverter::dumpMIR(const std::vector<Block*>& blocks) {
             case MIRKind::IINC:
                 oss << " v" << static_cast<MIRIinc*>(n.get())->varIndex;
                 break;
+            case MIRKind::FRAME: {
+                auto* frame = static_cast<MIRFrame*>(n.get());
+                oss << " type=" << frame->frameType << " stack=[";
+                for (size_t i = 0; i < frame->stackTypes.size(); ++i) {
+                    if (i) oss << ",";
+                    oss << primitiveKindName(frame->stackTypes[i]);
+                }
+                oss << "]";
+                break;
+            }
             case MIRKind::BRANCH:
                 oss << " -> L" << labelKey(static_cast<MIRBranch*>(n.get())->targetLabel);
                 break;

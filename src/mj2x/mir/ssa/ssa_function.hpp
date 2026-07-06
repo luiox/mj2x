@@ -14,21 +14,34 @@
 
 namespace mj2x {
 
+/// @brief JVM method identity and signature carried by SSA and later RegC.
 struct SSAFunctionSymbol {
-    std::string owner;       // 内部类名
+    std::string owner;       ///< JVM internal owner name.
     std::string name;
     std::string desc;
     std::vector<SSAType> parameterTypes;
     SSAType returnType = SSAType::UNKNOWN;
 };
 
-// 异常保护区。R1 留空（带 try-catch 的方法 fail-closed）。R2 填充。
+/**
+ * @brief One SSA-level JVM exception-table region.
+ *
+ * @details
+ * `protectedBlocks` preserves the L1 block range covered by the original
+ * exception table entry.  `handler` is the block entered when RegC catches a
+ * matching pending exception.  `exceptionValue` is a synthetic REF block
+ * argument that represents the JVM handler-entry operand stack item; it uses
+ * `kSSAExceptionObjectSlot` rather than a real local slot.  `caughtType` is the
+ * JVM internal class name from the table, or empty for catch-all/finally.
+ */
 struct SSAExceptionRegion {
-    std::vector<SSABlock*> protectedBlocks;
-    SSABlock* handler = nullptr;
-    std::string caughtType;   // 空 = catch all / finally
+    std::vector<SSABlock*> protectedBlocks; ///< Blocks covered by this region.
+    SSABlock* handler = nullptr;            ///< Handler entry block.
+    SSABlockArg* exceptionValue = nullptr;  ///< Synthetic caught-exception arg.
+    std::string caughtType;                 ///< Empty means catch-all/finally.
 };
 
+/// @brief Full block-argument SSA function owned by one method conversion.
 struct SSAFunction {
     SSAFunctionSymbol symbol;
     std::vector<std::unique_ptr<SSAParameter>> parameters;   // owns

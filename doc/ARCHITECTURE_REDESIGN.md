@@ -19,7 +19,7 @@ c2j-native-deobfuscator 系统性还原的靶子。继续在这条路线上打�
 
 | # | 决策 | 选择 | 落地含义 |
 |---|------|------|---------|
-| ADR-1 | 现有 CBackend（MIR→`cstack[]`/sp JNI C）如何处理？ | **归档为 reference，不再演进** | `c_backend.{hpp,cpp}` 移到 `backend/reference/`，pipeline 默认不再注册；保留作 mjdbg 易攻基线样本 + 回归对照，测试保留 |
+| ADR-1 | 现有 CBackend（MIR→`cstack[]`/sp JNI C）如何处理？ | ~~归档为 reference，不再演进~~ **【已撤销，2026-07-05】** | 复活为"易实现、广覆盖"通用后端，`c_backend.{hpp,cpp}` 移回 `backend/`，pipeline 重新注册，逐波扩指令覆盖。**不承担 c2j 对抗职责**（对抗强度留给未来的 RegC）。撤销理由与边界见 `CBACKEND_REVIVAL_AND_WAVES.md §0`。下表"归档 reference"等历史表述保留作决策溯源，不再生效。 |
 | ADR-2 | 新 IR 第一块落地哪个？ | **先 SSA + 寄存器 IR**；runtime 第二块 | R1 = L2 SSA + L3 寄存器 IR 骨架；R3 才是 runtime |
 | ADR-3 | 生成后端主路线？ | **寄存器式 C/C++ 为主**（非自研 VM，非 LLVM） | 主生成后端是 RegC；VMC4 自研 VM 从主线降级为 V2+ 可选增强 |
 | ADR-4 | 本次产出形式？ | **先出完整重构设计文档 + ROADMAP 改写** | 本次 PR 全部是 `.md`；代码骨架是后续 PR |

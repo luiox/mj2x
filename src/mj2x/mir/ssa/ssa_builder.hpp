@@ -1,12 +1,25 @@
-// mj2x SSA builder — L1 Block[] → SSAFunction (block-argument SSA)。
-//
-// 算法见 doc/SSA_ALGORITHM.md。三阶段：
-//   A. 从 L1 Block[] 构造 ReachingDefBlock 视图 + 跑 reaching-def
-//   B. 搭块结构 + 入口 frame shape（决定 block args）
-//   C. 逐块翻译（FrameState 模拟栈，吸收 DUP/SWAP，不产栈 IR）
-//
-// 关键：栈操作（DUP/SWAP/...）只在 builder-local FrameState 里动，**不产任何 SSA 节点**。
-// 这是"消除 cstack 锚点"的机制。详见 IR_DESIGN.md §10、SSA_ALGORITHM.md §5.2。
+/**
+ * @file ssa_builder.hpp
+ * @brief L1 MIR blocks to block-argument SSA conversion.
+ *
+ * @details
+ * SSABuilder is the boundary where JVM stack bytecode becomes a value-oriented
+ * IR for RegC and later optimization passes.  The builder intentionally keeps
+ * operand-stack simulation private to construction time: stack shuffles such as
+ * POP, DUP, DUP2_X*, and SWAP update the temporary FrameState with JVM
+ * category-1/category-2 rules, while emitted SSA instructions only reference
+ * stable SSAValue objects.  This is the mechanism that removes the old CBackend
+ * cstack/sp anchor from downstream IR.
+ *
+ * The construction algorithm is documented in `mj2x/doc/SSA_ALGORITHM.md`.
+ * In short, it:
+ *   1. computes a reaching-def view over local slots,
+ *   2. creates SSABlock arguments for values that must cross block boundaries,
+ *   3. lowers each MIR node into stackless SSA instructions or terminators.
+ *
+ * Unsupported or semantically ambiguous bytecode is rejected with a reason
+ * string rather than approximated silently.
+ */
 #pragma once
 
 #include "mj2x/frontend/block.hpp"
@@ -18,13 +31,30 @@
 
 namespace mj2x {
 
+/**
+ * @brief Builds an SSAFunction from CodeConverter L1 blocks.
+ *
+ * @details
+ * The generated function uses block arguments instead of explicit phi nodes.
+ * Method parameters are bound by JVM local slot, so wide `long`/`double`
+ * parameters occupy the expected slot spacing even though each SSA value is a
+ * single object.  The builder owns no input blocks; all output state is owned by
+ * the returned SSAFunction.
+ */
 class SSABuilder {
 public:
-    // 从 L1 的 Block[] 构造一个方法的 SSAFunction。ownerName/desc 供 symbol。
-    // 返回 nullptr = fail-closed（带 try-catch / 不支持的指令），reason 填拒绝原因。
-    //
-    // blocks 由调用方（CodeConverter::convert）产出，builder 不持有它们的生命周期。
-    // methodMaxLocals 用于 FrameState 的 locals 数组大小。
+    /**
+     * @brief Convert one method's L1 blocks into SSA.
+     *
+     * @param blocks Blocks produced by CodeConverter; they must outlive this call.
+     * @param ownerName JVM internal class name that owns the method.
+     * @param methodName JVM method name.
+     * @param methodDesc JVM method descriptor.
+     * @param isStatic Whether the method has no implicit `this` parameter.
+     * @param methodMaxLocals Local slot count used to size the construction frame.
+     * @param reason Receives a human-readable fail-closed reason on failure.
+     * @return A fully-owned SSAFunction, or nullptr if the method is unsupported.
+     */
     std::unique_ptr<SSAFunction> build(const std::vector<Block*>& blocks,
                                        const std::string& ownerName,
                                        const std::string& methodName,
@@ -34,19 +64,25 @@ public:
                                        std::string& reason);
 
 private:
-    // 阶段 A：从 L1 blocks 构造 ReachingDefBlock 视图 + 跑 reaching-def。
+    /// @brief Method-level exception table carried by CodeConverter on the first block.
+    std::vector<ExceptionHandler> exceptionTable(const std::vector<Block*>& blocks) const;
+
+    /// @brief Stage A: build the reaching-def view consumed by computeReachingDef().
     std::vector<ReachingDefBlock> buildReachingDefView(const std::vector<Block*>& blocks);
+
+    /// @brief Collect explicit branch/switch targets from one L1 block.
     void collectOutEdges(Block* b, std::vector<int>& targets);
 
-    // 阶段 B：建 SSABlock[]，决定 args。
+    /// @brief Stage B: create SSABlocks and their block-argument local slots.
     void buildBlocks(SSAFunction& fn,
                      const std::vector<Block*>& l1blocks,
                      const ReachingDefResult& rd);
 
-    // 阶段 C：逐块翻译。
+    /// @brief Stage C: lower MIR nodes while simulating the JVM operand stack.
     bool translateBlocks(SSAFunction& fn,
                          const std::vector<Block*>& l1blocks,
                          const ReachingDefResult& rd,
+                         int methodMaxLocals,
                          std::string& reason);
 };
 

@@ -145,16 +145,15 @@ tryCatch(bootstrapStart..bootstrapEnd -> bsmeStart, Throwable)
 把 `multianewarray T d dims` 展开为嵌套分配（最外层 anewarray，内层循环 anewarray）。
 但**循环展开在字节码层很重**。R1b 采用更简单的等价：
 
-**方案 A（R1b 采用）**：保留 `multianewarray` 但在 L1 翻译时把它映射到一个合成 runtime
-helper（`MULTIANEWARRAY` MIR 节点 → L5 调 `env->NewObjectArray` 嵌套）。即 preprocessor
-**不改字节码**，而是给 `CodeConverter` 一个明确信号"这是多维，用 helper"。
+**方案 A（当前采用）**：保留 `multianewarray` 但在 L1 翻译时把它映射到
+`MIRMultiNewArray`，后续 SSA/RegIR/RegC 通过 `_mj2x_regc_alloc_multi_array`
+helper 执行。preprocessor **不改字节码**，只统计并提示该站点会走 helper 路径。
 
-> 实际上 multianewarray 在真实代码里极罕见（SnakeGame 没有），R1b 的最小实现是：
-> `CodeConverter` 遇到 `multianewarray` 时 fail-closed 报"multianewarray not supported, 
-> use helper in R2"，而不是落 `MIRNop` 静默错。preprocessor 暂留空（标记"已知"）。
+> 早期 R1b 最小实现只要求“不静默落 `MIRNop`”；当前 RegC 已有 multi-array
+> helper 和 E2E 覆盖，所以这里不再是 fail-closed 边界。
 
-**方案 B（R2+ 若需要）**：字节码层展开为 anewarray + 嵌套填充循环（参考 masxinlingvonta
-`InstructionExtractor`）。成本高，SnakeGame 用不到，不做。
+**方案 B（保留备选）**：字节码层展开为 anewarray + 嵌套填充循环（参考
+masxinlingvonta `InstructionExtractor`）。成本高，当前不需要。
 
 ---
 
@@ -164,8 +163,8 @@ helper（`MULTIANEWARRAY` MIR 节点 → L5 调 `env->NewObjectArray` 嵌套）�
    `CodeConverter` 不再遇到原始 ldc Handle/Type（被展开成方法调用序列）。
 2. `InvokeDynamicPreprocessor`：一个含 `invokedynamic` 的方法（如 lambda / String concat），
    preprocess 后 `CodeConverter` 不再遇到 invokedynamic（被展开成 bootstrap+invoke 链）。
-3. `MultiANewArrayPreprocessor`：multianewarray 在 L1 不再静默落 `MIRNop`，而是明确处理或
-   fail-closed。
+3. `MultiANewArrayPreprocessor`：multianewarray 在 L1 不再静默落 `MIRNop`，而是明确
+   进入 `MIRMultiNewArray` / RegC helper 路径。
 4. 现有 45/46 测试不回归。
 
 R1b 用 javac 编译的小样本验证（`test_resource/preproc/`）。
