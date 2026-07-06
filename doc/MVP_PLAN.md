@@ -1,5 +1,13 @@
 # mj2x — MVP Plan
 
+> **Historical document.** This file records the original single-class
+> CBackend MVP plan.  The current mj2x 0.1 internal MVP release scope is frozen
+> in `MVP_RELEASE_SCOPE.md`, with backend support matrices in
+> `C_BACKEND_README.md`, `REGC_BACKEND_README.md`, and
+> `MVP_BACKEND_VERIFICATION.md`.
+>
+> Do not use this file to decide current release scope.
+
 > MVP 目标：完整 Pipeline 跑通，能将一个简单 .class 方法翻译为可读 C 源码
 > 预计工期：4-6 周 (单人)
 

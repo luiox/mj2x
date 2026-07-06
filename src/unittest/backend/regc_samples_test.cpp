@@ -213,7 +213,8 @@ void writeTraceNote(const fs::path& outDir, const SampleSpec& sample) {
     out << "Expected mjdbg use:\n\n";
     out << "- Compare this RegC helper-style C with CBackend stack-style C.\n";
     out << "- Confirm virtual-register locals such as `r0` and labels such as `block_b0`.\n";
-    out << "- Confirm helper calls use `_mj2x_regc_*` instead of `stack[]` / `sp` patterns.\n";
+    out << "- Confirm helper calls use RegC/R3 symbols such as `mj2x_regc_div_i32`\n";
+    out << "  or transitional `_mj2x_regc_*` helpers instead of `stack[]` / `sp` patterns.\n";
     out << "- Use observations to guide RegC runtime/JNI tracing requirements.\n";
 }
 
@@ -316,6 +317,16 @@ TEST_F(RegCTraceSamples, GenerateMjdbgFixtures) {
                 {"catchOwn", "(I)I", "_mj2x_regc_exception_matches"},
                 {"missCatch", "()I", "_mj2x_regc_throw"},
                 {"catchCall", "()I", "_mj2x_regc_exception_clear"},
+            },
+        },
+        {
+            "RegCRuntimeSurfaceSample",
+            "protected_samples/regc/RegCRuntimeSurfaceSample.java",
+            "runtime-backed div/rem ABI calls, arithmetic trap routing, and register locals",
+            {
+                {"divOrCatch", "(II)I", "mj2x_regc_div_i32"},
+                {"remOrCatch", "(II)I", "mj2x_regc_rem_i32"},
+                {"longDiv", "(JJ)J", "mj2x_regc_div_i64"},
             },
         },
     };

@@ -15,9 +15,10 @@ calling the `regc_*` helper.  The generated helper body can then call functions
 such as `_mj2x_regc_alloc_array`, `_mj2x_regc_load_i32_array`, and
 `_mj2x_regc_instanceof` without receiving `JNIEnv*` as an explicit RegIR value.
 
-This is an MVP bridge, not the final hardened runtime ABI.  The current
-environment slot is deliberately simple so generated code can execute while the
-longer-term runtime context and helper symbol policy are designed.
+This is a transitional bridge.  Integer div/rem and barrier call sites now use
+the first R3 runtime ABI described in `REGC_R3_RUNTIME_ABI.md`; object, field,
+array, call, monitor, and exception-dispatch helpers remain generated inline
+until those larger surfaces have stable runtime contracts.
 
 ## Implemented Surface
 
@@ -31,7 +32,7 @@ The MVP helper layer implements:
 - instance/static field load/store; the generated call passes an explicit
   static/instance flag so a null instance receiver throws
   `NullPointerException` instead of being mistaken for a static access
-- `checkcast`, `instanceof`, monitor enter/exit, and barriers
+- `checkcast`, `instanceof`, and monitor enter/exit
 - static, virtual, special, and constructor calls through descriptor-driven
   `jvalue` argument packing
 - multi-dimensional arrays through recursive JNI allocation; dimensions supplied
@@ -43,10 +44,13 @@ The MVP helper layer implements:
 - try/catch dispatch through `_mj2x_regc_exception_check`,
   `_mj2x_regc_exception_occurred`, `_mj2x_regc_exception_clear`, and
   `_mj2x_regc_exception_matches`; generated C rethrows unmatched exceptions
-- Java integer division/remainder through `_mj2x_regc_div_i32`,
-  `_mj2x_regc_div_i64`, `_mj2x_regc_rem_i32`, and `_mj2x_regc_rem_i64`; these
-  helpers throw `ArithmeticException` for zero divisors and preserve
-  `MIN_VALUE / -1` and `MIN_VALUE % -1` JVM edge semantics
+- Java integer division/remainder through R3 ABI calls
+  `mj2x_regc_div_i32`, `mj2x_regc_div_i64`, `mj2x_regc_rem_i32`, and
+  `mj2x_regc_rem_i64`; these helpers throw `ArithmeticException` for zero
+  divisors through the generated adapter callback and preserve `MIN_VALUE / -1`
+  and `MIN_VALUE % -1` JVM edge semantics
+- runtime policy barriers through `mj2x_regc_barrier`, currently a no-op ABI
+  hook reserved for later anti-debug/anti-JVMTI/key-state checks
 
 ## Testing
 
@@ -65,8 +69,9 @@ one input and propagates `IllegalStateException` for another.
 `RegCBackendE2E.TryCatchDispatchRoundTrip` covers a local throw caught by a
 matching handler, an unmatched catch that rethrows, and a native callee throw
 caught by the caller's RegC dispatch.
-`RegCBackendE2E.IntegerDivisionTrapRoundTrip` covers i32/i64 division helpers,
-zero-divisor catching/propagation, and signed overflow edge cases.
+`RegCBackendE2E.IntegerDivisionTrapRoundTrip` covers i32/i64 runtime-backed
+division helpers, zero-divisor catching/propagation, and signed overflow edge
+cases.
 `RegCBackendE2E.NarrowPrimitiveRoundTrip` covers byte/short/char/boolean fields
 and byte/short/char array helpers through a real DLL round trip.  Boolean array
 load/store shares the JVM `baload`/`bastore` opcode shape with byte arrays, so

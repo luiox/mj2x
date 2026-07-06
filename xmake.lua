@@ -5,7 +5,7 @@ target("mj2x-core")
     set_kind("static")
     set_group("mj2x")
 
-    add_deps("libjbytecode", "libjstr")
+    add_deps("libjbytecode", "libjstr", "libjzip")
 
     add_files("src/mj2x/**.cpp")
     add_headerfiles("src/mj2x/**.hpp")

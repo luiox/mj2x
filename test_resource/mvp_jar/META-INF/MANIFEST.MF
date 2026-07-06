@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+Main-Class: mvpjar.MvpJarMain
+Created-By: mj2x MVP hardening fixture
+

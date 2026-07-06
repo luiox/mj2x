@@ -3,6 +3,9 @@
 > **v2（2026-06-24 架构重构后）**：测试分层对齐新的五层 IR（L1-L5）+ RT 运行时。
 > v1 的测试目标（≥80 单元，仅针对 CBackend）调整为按层分质量门。
 > 重构依据见 `ARCHITECTURE_REDESIGN.md`。
+>
+> **MVP freeze（2026-07-06）**：当前发版范围见 `MVP_RELEASE_SCOPE.md`。
+> 发版前只补冻结范围内的 JAR/CLI/unsupported 边界测试，不新增 R4/VMC4 等后续功能。
 
 ---
 
@@ -17,11 +20,12 @@
 | 测试 | 层 | 用例 | 处置 |
 |------|----|------|------|
 | `core/compiler_index_test` | 基础设施 | 2 | 保留 |
-| `core/io_test`, `input_loader_test`, `jar_io_test` | 基础设施 | 8 | 保留 |
+| `core/io_test`, `input_loader_test`, `jar_io_test` | 基础设施 | 11+ | 覆盖 class/JAR roundtrip、MVP fixture、signed/no-class fail-closed |
 | `core/e2e_test`（CBackend 版） | CBackend | 3 | 复活，去 legacy |
 | `frontend/code_converter_test` | **L1** 栈式 MIR | 18 | 保留（L1 基线）；Wave 6 补数组 component 元数据 |
 | `backend/c_backend_test` | CBackend | 19 | 复名 `c_backend_test.cpp`，子串匹配；Wave 6 补 array/checkcast emit |
 | **`backend/c_backend_e2e_test.cpp`** ★新增 | **CBackend 真 E2E** | 25 | Wave 1 起逐波补，见 §1.4 |
+| `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、CBackend/RegC JAR 输入/输出入口、负向参数、坏 JAR fail-closed |
 
 ### 1.2 各层测试目标（R1-R4 落地时补）
 
@@ -53,6 +57,7 @@
 | Pipeline 空跑（mock backend） | pipeline → preproc → L1→L2→L3→L4 → backend → postproc → write | mock backend 验证调用链 | R1 |
 | MIR → SSA → RegIR → RegC | 完整 IR 翻译路径 | 真实 bytecode → RegC C 代码 | R2 |
 | InputLoader → Pipeline → OutputWriter | 完整读-改-写轮转 | .class/.jar roundtrip（已有） | 已有 |
+| CLI JAR MVP | 命令行产品入口 | `in.jar -> out.jar + out.c`，验证资源保留和 class native injection | 已有 |
 | Java → mj2x → .c → cl → 运行 | 端到端行为对比 | JDK + MSVC，结果与原 Java 一致 | R2 |
 | 受保护样本 + c2j agent | anti-JVMTI 有效性 | 注入 c2j agent，验证 fail-closed 或 trace 退化（**与 mjdbg 协作**） | R3 |
 
@@ -181,20 +186,40 @@ R3 起，受保护样本需在 c2j agent 下验证。样本与 expected trace su
 设计说明见 `C_BACKEND_PROTECTED_SAMPLES.md`。这些样本用于 trace 捕获、分组和弱点评估，
 不代表保护强度结论。
 
-### 3.5 Register IR fixtures
+### 3.5 Backend README and MVP verification index
+
+后端支持矩阵和可发版验证入口集中在：
+
+- `C_BACKEND_README.md`：CBackend 支持特性、限制、CLI 用法、样本。
+- `REGC_BACKEND_README.md`：RegC 支持特性、限制、CLI 用法、样本。
+- `MVP_BACKEND_VERIFICATION.md`：每个 MVP 能力对应的单测、E2E 或 protected sample。
+
+### 3.5.1 JAR MVP fixtures and negative boundaries
+
+`mj2x/test_resource/mvp_jar/` 保存 JAR MVP 的稳定输入样本：manifest、两份 Java
+source 和非 class resource。`IOTest.JarMvpFixturePreservesManifestResourcesAndMultiReleaseClasses`
+在测试中构造真实 JAR，验证 root class entry 被解析、manifest/resource 被原样保留，
+`META-INF/versions/**.class` 作为资源 passthrough。
+
+JAR 输入边界采用 fail-closed 策略：signed-JAR metadata
+(`META-INF/*.SF`, `*.RSA`, `*.DSA`, `*.EC`)、空 JAR、无 root class JAR 不继续进入
+pipeline。对应测试为 `IOTest.JarInputLoaderRejectsSignedJarMetadata`、
+`IOTest.JarInputLoaderRejectsJarWithoutRootClasses` 和 `CliTest.BadJarInputsFailClosed`。
+
+### 3.6 Register IR fixtures
 
 `mir/register_ir_test.cpp` 覆盖 SSA → RegIR lowering：SSA block args 会被消解为
 successor edge copies，RegIR 操作数只能是虚拟寄存器或立即数，不能表达 JVM stack slot。
 设计说明见 `REGISTER_IR.md`。
 
-### 3.6 RegC MVP fixtures
+### 3.7 RegC MVP fixtures
 
 `backend/regc_test.cpp` 覆盖 RegIR → C helper emission：纯计算、分支、循环、
 switch、edge-copy 输出，以及字段、数组、调用、对象、reference check、monitor、
 try/catch exception dispatch、integer div/rem trap 的 `_mj2x_regc_*` helper 形态。测试会断言生成 C 不含 `cstack[`、`stack[`、
 `union jvalue`、`sp--` 等 stack-machine anchor。设计说明见 `REGC_MVP.md`。
 
-### 3.7 RegC trace samples
+### 3.8 RegC trace samples
 
 `backend/regc_samples_test.cpp` 从 `mj2x/test_resource/protected_samples/regc/`
 编译 Java 样本，并生成 RegC helper-style C 到
@@ -202,7 +227,7 @@ try/catch exception dispatch、integer div/rem trap 的 `_mj2x_regc_*` helper �
 stack-style C 与 RegC register/helper-style C 的 trace surface。设计说明见
 `REGC_TRACE_SAMPLES.md`。
 
-### 3.8 RegC native backend
+### 3.9 RegC native backend
 
 `backend/regc_backend_test.cpp` 覆盖 RegCBackend facade：L1 blocks 经
 SSA/RegIR/RegC 生成 helper，再由 JNI wrapper 暴露为 `Java_*` native symbol，并且
@@ -218,7 +243,7 @@ caller catch。`IntegerDivisionTrapRoundTrip` 覆盖 i32/i64 除零捕获/传播
 byte/short/char array helper 的 DLL round-trip。
 设计说明见 `REGC_NATIVE_BACKEND.md` 与 `REGC_RUNTIME_HELPERS.md`。
 
-### 3.9 R3 runtime core
+### 3.10 R3 runtime core
 
 `mj2x/runtime/src/{crypto,kernel,antidebug,antijvmti,stringpool}/` 提供 R3
 runtime foundation。`mj2x_runtime_test` 覆盖 SHA-256/HMAC 标准向量、

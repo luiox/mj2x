@@ -281,7 +281,8 @@ std::string binaryExpr(const RegInstruction& ins) {
         (ins.binaryOp == SSABinaryOp::Div || ins.binaryOp == SSABinaryOp::Rem)) {
         const char* op = ins.binaryOp == SSABinaryOp::Div ? "div" : "rem";
         const char* width = type == SSAType::I64 ? "i64" : "i32";
-        return "_mj2x_regc_" + std::string(op) + "_" + width + "(" + lhs + ", " + rhs + ")";
+        return "mj2x_regc_" + std::string(op) + "_" + width +
+               "(_mj2x_regc_current_context(), " + lhs + ", " + rhs + ")";
     }
     if (ins.binaryOp == SSABinaryOp::UShr) {
         return "(" + std::string(cType(type)) + ")((" + unsignedCType(type) + ")" +
@@ -301,6 +302,16 @@ std::string binaryExpr(const RegInstruction& ins) {
 
 void emitHelperPrelude(std::ostringstream& out) {
     out << "typedef void* mj2x_ref;\n";
+    out << "#ifndef MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
+    out << "#define MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
+    out << "typedef struct mj2x_regc_context mj2x_regc_context;\n";
+    out << "int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
+    out << "int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
+    out << "int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
+    out << "int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
+    out << "void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);\n";
+    out << "#endif\n";
+    out << "static mj2x_regc_context* _mj2x_regc_current_context(void);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_object(const char* type_desc);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_array(const char* type_desc, int32_t length);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_multi_array(const char* type_desc, int32_t dim_count, int32_t* dims);\n";
@@ -314,11 +325,6 @@ void emitHelperPrelude(std::ostringstream& out) {
     out << "static void _mj2x_regc_exception_clear(void);\n";
     out << "static int32_t _mj2x_regc_exception_matches(mj2x_ref value, const char* catch_type);\n";
     out << "static void _mj2x_regc_throw(mj2x_ref value);\n";
-    out << "static int32_t _mj2x_regc_div_i32(int32_t lhs, int32_t rhs);\n";
-    out << "static int64_t _mj2x_regc_div_i64(int64_t lhs, int64_t rhs);\n";
-    out << "static int32_t _mj2x_regc_rem_i32(int32_t lhs, int32_t rhs);\n";
-    out << "static int64_t _mj2x_regc_rem_i64(int64_t lhs, int64_t rhs);\n";
-    out << "static void _mj2x_regc_barrier(const char* reason);\n";
     out << "static bool _mj2x_regc_load_bool_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
     out << "static int8_t _mj2x_regc_load_i8_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
     out << "static uint16_t _mj2x_regc_load_char_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
@@ -547,7 +553,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
             reason = "unsupported RegC intrinsic: " + ins.intrinsicName;
             return false;
         case RegInstructionKind::Barrier:
-            out << "    _mj2x_regc_barrier(" << cStringLiteral(ins.barrierReason) << ");\n";
+            out << "    mj2x_regc_barrier(_mj2x_regc_current_context(), "
+                << cStringLiteral(ins.barrierReason) << ");\n";
             return true;
         default:
             break;

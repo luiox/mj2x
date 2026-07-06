@@ -432,8 +432,15 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->varIndex = vi->var;
             node->type = varKind(opc);
             cur->nodes.push_back(std::move(node));
+        } else if (opc == Opcodes::RET) {
+            // JSR/RET subroutines are outside the MVP bytecode surface.  Keep
+            // an explicit unsupported node so backends fail closed instead of
+            // silently dropping the instruction as metadata.
+            auto node = std::make_unique<MIRInvokeDynamic>();
+            node->name = "ret";
+            node->desc = "()V";
+            cur->nodes.push_back(std::move(node));
         }
-        // RET handled in preprocessor
         break;
     }
 
@@ -558,8 +565,12 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->targetLabel = target;
             cur->nodes.push_back(std::move(node));
         } else {
-            // JSR/JSR_W — preprocessor extracts
-            cur->nodes.push_back(std::make_unique<MIRNop>());
+            // JSR/JSR_W subroutines are unsupported for the MVP.  Route them
+            // through the same explicit fail-closed boundary as invokedynamic.
+            auto node = std::make_unique<MIRInvokeDynamic>();
+            node->name = "jsr";
+            node->desc = "()V";
+            cur->nodes.push_back(std::move(node));
         }
         break;
     }

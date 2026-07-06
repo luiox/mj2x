@@ -110,3 +110,31 @@ TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister) {
               std::string::npos) << result.text;
     expectNoStackAnchors(result.text);
 }
+
+TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative) {
+    auto method = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        "bad", "()I",
+        {
+            new InsnNode(Opcodes::IRETURN),
+        },
+        0, 0);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend backend;
+    CodeConverter converter;
+    auto blocks = converter.convert(*method);
+    auto result = backend.compileMethod("Bad", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
+    EXPECT_NE(result.text.find("RegC lowering failed"), std::string::npos) << result.text;
+
+    backend.injectIntoClass(cls, cls.methods[0], result);
+    EXPECT_FALSE(method->access & Opcodes::ACC_NATIVE);
+    EXPECT_GT(method->instructions.size(), 0);
+    EXPECT_FALSE(cls.modified);
+}

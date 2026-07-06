@@ -11,5 +11,9 @@ CompilerClass* CompilerIndex::getClass(const std::string& name) {
     return it != classes_.end() ? &it->second : nullptr;
 }
 
+void CompilerIndex::addJarEntry(JarEntryRecord entry) {
+    jarEntries_.push_back(std::move(entry));
+}
+
 } // namespace mj2x
 

@@ -474,6 +474,67 @@ TEST(CodeConverterTest, UnconditionalBranch) {
     EXPECT_TRUE(foundGoto);
 }
 
+TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes) {
+    auto* label = new LabelNode();
+    label->label->bytecodeOffset = 10;
+
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "legacySubroutine", "()V", {
+        new JumpInsnNode(Opcodes::JSR, label->label),
+        new InsnNode(Opcodes::RETURN),
+        label,
+        new VarInsnNode(Opcodes::RET, 0),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+
+    bool foundJsr = false;
+    bool foundRet = false;
+    for (auto* block : blocks) {
+        for (auto& n : block->nodes) {
+            if (n->kind != MIRKind::INVOKE_DYNAMIC) continue;
+            auto* unsupported = static_cast<MIRInvokeDynamic*>(n.get());
+            foundJsr = foundJsr || unsupported->name == "jsr";
+            foundRet = foundRet || unsupported->name == "ret";
+        }
+    }
+
+    EXPECT_TRUE(foundJsr);
+    EXPECT_TRUE(foundRet);
+}
+
+TEST(CodeConverterTest, InvokeDynamicBecomesUnsupportedBoundaryNode) {
+    auto bsm = Handle(Opcodes::H_INVOKESTATIC,
+                      ca::str::Utf8StringRef::from_cstr("java/lang/invoke/StringConcatFactory"),
+                      ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
+                      ca::str::Utf8StringRef::from_cstr("()V"),
+                      false);
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "concat", "()Ljava/lang/String;", {
+        new InvokeDynamicInsnNode(ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
+                                  ca::str::Utf8StringRef::from_cstr("()Ljava/lang/String;"),
+                                  bsm, {}),
+        new InsnNode(Opcodes::ARETURN),
+    });
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    ASSERT_GE(blocks.size(), 1u);
+
+    bool foundIndy = false;
+    for (auto* block : blocks) {
+        for (auto& n : block->nodes) {
+            if (n->kind != MIRKind::INVOKE_DYNAMIC) continue;
+            auto* unsupported = static_cast<MIRInvokeDynamic*>(n.get());
+            foundIndy = unsupported->name == "makeConcatWithConstants" &&
+                        unsupported->desc == "()Ljava/lang/String;";
+        }
+    }
+
+    EXPECT_TRUE(foundIndy);
+}
+
 TEST(CodeConverterTest, IfNullBranchZeroHasObjectType) {
     auto* label = new LabelNode();
     label->label->bytecodeOffset = 10;

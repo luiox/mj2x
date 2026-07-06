@@ -3,10 +3,9 @@
 ## Purpose
 
 RegC trace samples give mjdbg a register-style C surface to compare with the
-existing CBackend protected samples.  They are not final protected native
-artifacts yet because RegC does not have JNI glue or runtime helpers wired into
-the pipeline.  They are deterministic fixture bundles for understanding the
-shape RegC will expose.
+existing CBackend protected samples.  Current samples are generated through
+RegCBackend, include JNI wrapper output, and expose the register/helper/runtime
+shape that mjdbg should compare against CBackend's stack-style surface.
 
 ## Source Layout
 
@@ -23,6 +22,8 @@ The samples are split into two surfaces:
   reference checks through `_mj2x_regc_*` helper calls
 - `RegCExceptionSurfaceSample`: try/catch dispatch, handler exception
   registers, unmatched rethrow, and callee-throw/caller-catch paths
+- `RegCRuntimeSurfaceSample`: integer div/rem helpers that call the R3 runtime
+  ABI and route arithmetic traps through the generated adapter callback
 
 ## Generated Output
 
@@ -63,7 +64,8 @@ mjdbg should use these samples to compare:
 
 - CBackend: JNI native functions with explicit operand-stack storage
 - RegC: helper-style C using virtual registers, labels, edge copies, and
-  `_mj2x_regc_*` calls
+  transitional `_mj2x_regc_*` helpers plus R3 ABI calls such as
+  `mj2x_regc_div_i32`
 
 This comparison should guide what trace grouping and weakness reports need to
-look like once RegC gains JNI/native glue.
+look like as RegC moves more helper semantics behind the R3 runtime boundary.

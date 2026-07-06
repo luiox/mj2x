@@ -50,7 +50,7 @@ Validation:
 
 ## Phase 2: R3 Runtime ABI Integration
 
-Status: design-to-code after Phase 1.
+Status: in progress; the first div/rem/barrier ABI slice exists.
 
 Goals:
 
@@ -58,6 +58,7 @@ Goals:
 - define the runtime context passed from JNI wrappers to helper code
 - connect string-pool decode and anti-JVMTI/anti-debug probes to generated
   RegC samples without claiming protection strength before mjdbg feedback
+- migrate larger helper surfaces after the div/rem/barrier path proves stable
 
 Validation:
 

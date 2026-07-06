@@ -10,7 +10,7 @@
 #include <string>
 
 static void printUsage() {
-    printf("Usage: mj2x-cli -i <input.class> -o <output.class> [options]\n");
+    printf("Usage: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]\n");
     printf("Options:\n");
     printf("  --emit-c <file>            Output C source to file\n");
     printf("  --backend <cbackend|regc>  Select C emitter when --emit-c is used (default: cbackend)\n");

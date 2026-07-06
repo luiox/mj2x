@@ -438,7 +438,9 @@ TEST(RegCTest, EmitsIntegerDivRemHelpers) {
     }, 2, 3, reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
-    EXPECT_NE(result.source.find("_mj2x_regc_div_i32"), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("_mj2x_regc_rem_i32"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("mj2x_regc_div_i32(_mj2x_regc_current_context()"),
+              std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("mj2x_regc_rem_i32(_mj2x_regc_current_context()"),
+              std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }

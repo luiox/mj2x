@@ -199,6 +199,7 @@ mj2x AI maintains:
 - `dev_plan.md`
 - `doc/NATIVE_VM_ROADMAP.md`（已降级）
 - `doc/TEST_STRATEGY.md`
+- `doc/MVP_RELEASE_SCOPE.md`（当前 MVP 冻结范围）
 - `doc/MVP_PLAN.md`（冻结历史）
 
 Update root `doc/capability_map.md` only when mj2x creates a shared capability

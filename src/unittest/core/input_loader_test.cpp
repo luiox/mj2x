@@ -1,6 +1,6 @@
 #include <gmock/gmock.h>
 
-#include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <vector>
@@ -17,47 +17,39 @@ using namespace jbytecode::commons;
 using namespace jbytecode::util;
 using namespace ca::str;
 
-namespace {
+TEST(InputLoaderTest, ReadRealClass) {
+    auto path = test::getTempOutPath("mj2x_input_loader_real.class");
 
-std::string writeTestClass()
-{
-    ClassNode cn;
-    cn.version   = Opcodes::V1_8;
-    cn.access    = Opcodes::ACC_PUBLIC;
-    cn.name      = ZUtf8StringRef::from_static("Test");
-    cn.superName = ZUtf8StringRef::from_static("java/lang/Object");
+    Utf8StringArena arena;
+    auto cn = std::make_unique<ClassNode>();
+    cn->version = Opcodes::V1_8;
+    cn->access = Opcodes::ACC_PUBLIC;
+    cn->name = arena.intern("Test");
+    cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
-    std::vector<ca::str::Utf8StringRef> noExceptions;
-    auto mn = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                                           ZUtf8StringRef::from_static("value"),
-                                           ZUtf8StringRef::from_static("()I"),
-                                           ZUtf8StringRef::from_static(""),
-                                           noExceptions);
-    mn->maxStack  = 1;
-    mn->maxLocals = 0;
-    mn->instructions.add(new InsnNode(Opcodes::ICONST_1));
+    std::vector<Utf8StringRef> noExceptions;
+    auto mn = std::make_unique<MethodNode>(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        ZUtf8StringRef::from_static("id"),
+        ZUtf8StringRef::from_static("(I)I"),
+        ZUtf8StringRef::from_static(""),
+        noExceptions);
+    mn->maxStack = 1;
+    mn->maxLocals = 1;
+    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
     mn->instructions.add(new InsnNode(Opcodes::IRETURN));
-    cn.methods.push_back(mn.release());
+    cn->methods.push_back(mn.release());
 
-    ca::str::Utf8StringArena arena;
-    ClassWriter              writer(arena, ClassWriter::COMPUTE_MAXS);
-    cn.accept(&writer);
-    const auto bytes = writer.toByteArray();
-
-    const auto path = test::getTempOutPath("mj2x_input_loader_Test.class").string();
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    ClassWriter writer(arena, ClassWriter::COMPUTE_MAXS);
+    cn->accept(&writer);
+    auto bytes = writer.toByteArray();
+    std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
-    return path;
-}
-
-}   // namespace
-
-TEST(InputLoaderTest, ReadRealClass) {
-    const auto path = writeTestClass();
+    out.close();
 
     InputLoader loader;
-    auto index = loader.load(path);
+    auto index = loader.load(path.string());
     ASSERT_NE(index, nullptr);
 
     auto* clazz = index->getClass("Test");
@@ -65,6 +57,6 @@ TEST(InputLoaderTest, ReadRealClass) {
     EXPECT_GE(clazz->classNode->methods.size(), 1);
     EXPECT_EQ(clazz->classNode->name, ZUtf8StringRef::from_static("Test"));
 
-    std::remove(path.c_str());
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
 }
-

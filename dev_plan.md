@@ -39,10 +39,9 @@
 `doc/REGC_NEXT_STEPS.md` 做善后与加固：先修正文档/注释漂移，再补 SSA/RegC
 常见 javac 输入形状，然后把 inline RegC helper 逐步迁到 R3 runtime ABI。
 
-### 0.1 当前分支交付清单（feat/mj2x/regc-followup-foundation）
+### 0.1 已完成加固包（feat/mj2x/regc-followup-foundation）
 
-本分支只做 RegC 后续基础包，不把 R3 runtime ABI 迁移和 R4 pass 系统混入同一个 PR。
-完成后再开 PR 到 `dev.3`。
+该分支已通过 PR #396 合并到 `dev.3`，用于记录 RegC 输入面基础加固结果。
 
 | 项目 | 状态 | 验收 |
 |------|------|------|
@@ -53,6 +52,58 @@
 | javac boolean ternary StackMap 形状 | ✅ 完成 | SSA Java sample + RegC DLL E2E |
 | null field/call/array protected handler 形状 | ✅ 完成 | SSA Java sample + RegC DLL E2E |
 | 最终验证与提交整理 | ✅ 完成 | 提交信息使用 `[mj2x] 中文描述`，PR 标题同规范 |
+
+### 0.2 当前总线开发清单（feat/mj2x/regc-r3-runtime-abi）
+
+本轮以“阶段分支逐步开发，最终整理一个总 PR 到 `dev.3`”为交付方式。每个阶段完成后
+在本清单打勾；提交和 PR 标题使用 `[mj2x] 中文描述`，并遵循 `spec/git-workflow-convention.md`。
+
+| 阶段 | 状态 | 验收 |
+|------|------|------|
+| Phase A：R3 Runtime ABI 设计落地 | ✅ 完成 | `doc/REGC_R3_RUNTIME_ABI.md` + `runtime/src/regc/regc_runtime_abi.hpp` Doxygen 明确上下文/符号边界 |
+| Phase B：RegC 生成 runtime-backed helper 调用 | ✅ 完成 | div/rem/barrier 走 R3 ABI；生成 C 仍无 `cstack`/`sp` |
+| Phase C：RegC/R3 native E2E | ✅ 完成 | `RegCBackendE2E.IntegerDivisionTrapRoundTrip` 链接 runtime ABI，Java baseline 与 protected DLL 一致 |
+| Phase D：RegC/R3 protected samples | ✅ 完成 | `RegCRuntimeSurfaceSample` 产出 mjdbg 可消费样本，文档说明 register/runtime trace surface |
+| Phase E：invokedynamic 策略预案 | ✅ 完成 | `doc/REGC_INVOKEDYNAMIC_STRATEGY.md` 明确 fail-closed 边界和 string concat/lambda 展开路线 |
+| Phase F：最终验证与提交整理 | ✅ 完成 | `mj2x-core`/`mj2x-cli`/`mj2x_unittest` 构建与目标测试通过，提交历史中文规范 |
+
+### 0.3 MVP 发版收口清单（当前）
+
+本轮目标是把 mj2x 从“功能已能跑”收口到“内部 MVP 可发版”：必须有 backend 级 README
+说明支持矩阵，必须能说明每项能力对应哪些样本/测试验证，并补上急需的 JAR 级输入/输出。
+
+| 阶段 | 状态 | 验收 |
+|------|------|------|
+| Phase A：backend README 能力矩阵 | ✅ 完成 | `doc/C_BACKEND_README.md` / `doc/REGC_BACKEND_README.md` 写清支持特性、限制、CLI 用法、验证样本 |
+| Phase B：样本验证索引 | ✅ 完成 | `doc/MVP_BACKEND_VERIFICATION.md` 能从每项能力追到 E2E/单测/protected sample |
+| Phase C：JAR 输入/输出 MVP | ✅ 完成 | `mj2x-cli -i in.jar -o out.jar --emit-c out.c` 能处理 jar 内多 class 并保留非 class 资源 |
+| Phase D：JAR Pipeline/CLI 测试 | ✅ 完成 | 单测构造 jar，验证 class 修改、资源 passthrough、输出 jar 可重新读取 |
+| Phase E：最终验证与提交整理 | ✅ 完成 | `mj2x-core`/`mj2x-cli`/`mj2x_unittest` 构建与目标测试通过，中文规范提交 |
+
+### 0.4 MVP 功能冻结（当前）
+
+2026-07-06 冻结 mj2x 0.1 内部 MVP 范围，权威文档为 `doc/MVP_RELEASE_SCOPE.md`。
+后续到 MVP 发版前不再扩新后端能力，只允许在冻结范围内做可靠性加强、测试修复和文档清理。
+
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| 冻结输入/输出范围 | ✅ 完成 | `.class` / `.jar` 输入输出，CBackend / RegC CLI 入口 |
+| 冻结后端范围 | ✅ 完成 | CBackend 广覆盖正确性；RegC 保护导向 MVP；R3 runtime 仅冻结当前 div/rem/barrier ABI |
+| 冻结延期项 | ✅ 完成 | R4 pass、VMC4、signed JAR 重签、完整 invokedynamic、JNI ID cache 等均 MVP 后处理 |
+| 发版前补强范围 | ✅ 完成 | JAR fixture、签名 metadata 处理、CLI negative tests、unsupported fail-closed tests、旧文档清理 |
+
+### 0.5 MVP 冻结后加固清单（feat/mj2x/mvp-hardening-tests）
+
+本阶段只在 `doc/MVP_RELEASE_SCOPE.md` 冻结范围内做测试、修补和功能补全，不新增 R4/VMC4
+等后续能力。每个阶段完成后按中文规范提交，最终开 PR 到 `dev.3`。
+
+| 阶段 | 状态 | 验收 |
+|------|------|------|
+| Phase A：JAR fixture 加固 | ✅ 完成 | committed Java/资源样本覆盖 manifest、多 class、资源 passthrough、多 release class passthrough |
+| Phase B：signed JAR metadata 边界 | ✅ 完成 | `META-INF/*.SF`、`*.RSA`、`*.DSA`、`*.EC` 触发 fail-closed，并有 InputLoader/CLI 测试 |
+| Phase C：CLI negative tests | ✅ 完成 | 坏参数、未知 backend、缺 input、空 JAR、无 class JAR等路径有自动化覆盖 |
+| Phase D：unsupported fail-closed tests | ✅ 完成 | `invokedynamic` 既有覆盖；JSR/RET、RegC unsupported lowering 不静默生成错误 native |
+| Phase E：release gate 复跑 | ✅ 完成 | `mj2x-core`/`mj2x-cli`/`mj2x_unittest`/`mj2x_runtime_test` 构建与完整测试通过 |
 
 ---
 
@@ -74,8 +125,8 @@ mj2x (Morpher Java Bytecode to X) 是一个 JVM 字节码 AOT 编译器，将 `.
 |------|------|------|
 | Pipeline | Load → Preprocess → Convert(Core/MIR) → Backend(CBackend) → Postprocess → Write | `src/mj2x/core/pipeline.{hpp,cpp}` |
 | CompilerIndex | 类/方法/字段索引 | `src/mj2x/core/compiler_index.{hpp,cpp}` |
-| InputLoader | 单 `.class` 文件读取（libjbytecode） | `src/mj2x/io/input_loader.{hpp,cpp}` |
-| OutputWriter | 写回修改后的 `.class` | `src/mj2x/io/output_writer.{hpp,cpp}` |
+| InputLoader | `.class` / `.jar` 文件读取（libjbytecode + libjzip） | `src/mj2x/io/input_loader.{hpp,cpp}` |
+| OutputWriter | 写回修改后的 `.class` / `.jar` | `src/mj2x/io/output_writer.{hpp,cpp}` |
 | MIR | 覆盖算术/控制流/调用/对象/数组/异常的后端无关 MIR 节点 | `src/mj2x/frontend/mir_node.hpp` |
 | Block | 基本块 + CFG + 异常处理器 | `src/mj2x/frontend/block.hpp` |
 | CodeConverter | 字节码 → MIR 转换 | `src/mj2x/frontend/code_converter.{hpp,cpp}` |
@@ -98,7 +149,7 @@ CBackend 子串测试 / CBackend 真 E2E。CBackend 真 E2E 现有 25 个用例�
 
 | 限制 | 说明 |
 |------|------|
-| 只支持单 `.class` 输入 | 无 JAR 解析 |
+| JAR 输出仍是 MVP | 保留 entry 顺序和非 class 资源，输出 stored ZIP；签名 JAR 改写后不保证原签名有效 |
 | JNI ID 无缓存 | 每次调用都 GetMethodID |
 | 栈全用 union jvalue 数组 | 性能差，后续可优化 |
 | `INVOKEDYNAMIC` fail-closed | 生成 `UnsupportedOperationException`，不直译 lambda/方法句柄 |
@@ -117,6 +168,7 @@ xmake build mj2x_unittest      # 单元测试
 
 # 运行
 xmake run mj2x-cli -i input.class -o output.class --emit-c output.c
+xmake run mj2x-cli -i input.jar -o output.jar --emit-c output.c
 xmake run mj2x-cli -i input.class -o output.class --emit-c output.c --dump-mir  # MIR 调试
 xmake run mj2x_unittest
 xmake run mj2x_unittest --gtest_filter="CBackend*"  # 过滤
@@ -162,7 +214,7 @@ xmake run mj2x-cli -i b.class -o b_out.class --emit-c b_out.c
 | 问题 | 影响 | 优先级 | 处置波次 |
 |------|------|--------|---------|
 | JNI field/method ID 未缓存（每次现查 GetMethodID/GetFieldID） | 性能差 | 中 | 后续优化 |
-| JAR 输入/输出不支持 | 只能处理单 class 文件 | 高 | 后续独立波次 |
+| JAR 输出仍是 MVP | entry 顺序和资源保留，签名/重压缩/manifest 产品体验未完整化 | 高 | 当前 MVP 已接入，后续产品化 |
 | `<init>`/`<clinit>` 不被 MarkAll 标记（保留原字节码） | 构造器不走 native | 中 | Wave 4 完整支持时重评 |
 | int DIV/REM 除零：JVM 抛 ArithmeticException，C 是 UB | 极端输入行为差异 | 低 | 接受（Wave 1 限制） |
 | `INVOKEDYNAMIC` 仅 fail-closed | lambda/字符串拼接等 indy 形态不直译 | 中 | 后续 preprocessor/RegC |

@@ -162,6 +162,13 @@ std::string joinLines(const std::vector<std::string>& lines) {
     return out;
 }
 
+std::string readText(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream out;
+    out << in.rdbuf();
+    return out.str();
+}
+
 class RegCBackendE2E : public ::testing::Test {
 protected:
     static Toolchain tc_;
@@ -222,15 +229,33 @@ protected:
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
         ASSERT_EQ(pipeline.run(), 0);
         ASSERT_TRUE(fileExists(cFile));
+        std::string generatedC = readText(cFile);
+        EXPECT_EQ(generatedC.find("static int32_t _mj2x_regc_div_i32"), std::string::npos)
+            << generatedC;
+        EXPECT_EQ(generatedC.find("static void _mj2x_regc_barrier"), std::string::npos)
+            << generatedC;
 
         fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
         ASSERT_FALSE(ec) << ec.message();
 
         fs::path dll = dir / (className + ".dll");
+        fs::path objDir = dir / "obj";
+        fs::create_directories(objDir, ec);
+        ASSERT_FALSE(ec) << ec.message();
+        fs::path generatedObj = objDir / "generated.obj";
+        fs::path runtimeObj = objDir / "regc_runtime_abi.obj";
+        fs::path runtimeSrc = fs::current_path() / "mj2x" / "runtime" / "src";
+        fs::path runtimeAbi = runtimeSrc / "regc" / "regc_runtime_abi.cpp";
+        ASSERT_TRUE(fileExists(runtimeAbi)) << runtimeAbi;
         auto cl = runBat({
             "call " + q(tc_.vcvars64) + " >nul",
-            "cl /nologo /LD /O2 /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " +
-                q(cFile) + " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+            "cl /nologo /O2 /c /Fo" + q(generatedObj) + " " + q(cFile) +
+                " /I" + q(runtimeSrc) +
+                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+            "cl /nologo /O2 /c /Fo" + q(runtimeObj) + " " + q(runtimeAbi) +
+                " /I" + q(runtimeSrc) +
+                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+            "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj) + " " + q(runtimeObj),
         });
         ASSERT_EQ(cl.exitCode, 0) << cl.out;
         ASSERT_TRUE(fileExists(dll));

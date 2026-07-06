@@ -6,6 +6,7 @@ target("mj2x-runtime-core")
     add_files("src/kernel/*.cpp")
     add_files("src/antidebug/*.cpp")
     add_files("src/antijvmti/*.cpp")
+    add_files("src/regc/*.cpp")
     add_files("src/stringpool/*.cpp")
     add_includedirs("src", {public = true})
 

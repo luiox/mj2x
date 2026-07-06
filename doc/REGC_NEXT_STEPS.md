@@ -47,8 +47,9 @@ C.
   broad Java method coverage.  Known shapes include numeric narrowing
   (`i2b`/`i2s`/`i2c`) around stores, boolean ternary StackMap layouts, null
   field/call/array handlers, and non-expanded `invokedynamic`.
-- The emitted inline helper layer is still an execution bridge, not the final R3
-  hardened runtime ABI.
+- The emitted helper layer is now mixed: integer div/rem and barrier call sites
+  use the first R3 ABI slice, while object/field/array/call/exception helpers
+  remain inline execution bridges.
 - R4 transform passes (`src/mj2x/mir/passes/`) have not started yet.  Constant
   propagation, DCE, MBA, and control-flow flattening are still design-to-code
   work.
@@ -61,8 +62,8 @@ C.
    confused with retired Wave R1/R2 task packets.
 2. Harden SSA/RegC readiness against common javac bytecode shapes, starting
    with numeric narrowing and null-handler cases that currently fail closed.
-3. Move selected inline RegC helpers onto the R3 runtime ABI once the loader
-   boundary is stable.
+3. Continue moving selected inline RegC helpers onto the R3 runtime ABI after
+   the initial div/rem/barrier slice is validated.
 4. Hand new RegC/runtime samples to mjdbg for trace comparison against CBackend.
 5. Start the L4 pass framework after the RegC input surface is stable enough to
    avoid hardening a moving target.

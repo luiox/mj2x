@@ -1303,3 +1303,4 @@ void CBackend::Impl::emitThrow(const MIRThrow* node, std::ostringstream& out) {
 }
 
 } // namespace mj2x
+

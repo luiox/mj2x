@@ -60,7 +60,8 @@ Edge copies are emitted with temporary variables so cyclic phi transfers remain
 well-defined.
 
 The helper-backed surface keeps the same stackless C shape but emits calls to
-`_mj2x_regc_*` helpers for JVM operations:
+generated `_mj2x_regc_*` helpers or R3 `mj2x_regc_*` runtime ABI helpers for
+JVM operations:
 
 - field access
 - array access and allocation
@@ -69,13 +70,14 @@ The helper-backed surface keeps the same stackless C shape but emits calls to
 - monitor and reference-check intrinsics
 - throw terminators for uncaught exception propagation
 - try/catch exception-table dispatch
-- integer division/remainder traps through arithmetic helpers
+- integer division/remainder traps through runtime-backed arithmetic helpers
 - narrow primitive field/array access for boolean, byte, char, and short
 - barriers
 
-These helpers are not the final runtime ABI.  They are a structured placeholder
-so RegC can cover the instruction surface while the native/JNI runtime policy is
-designed separately and then moved behind an R3 runtime boundary.
+Most generated helpers are still a structured placeholder so RegC can cover the
+instruction surface while native/JNI runtime policy is moved behind the R3
+boundary in slices.  Integer div/rem and barrier call sites are the first
+runtime-backed slice.
 
 Try/catch support is modeled as method-level exception regions carried from L1
 through SSA and RegIR.  After a may-throw helper call or `ATHROW` in a protected
@@ -95,7 +97,7 @@ exception is rethrown and native control returns immediately.
   calls without reintroducing stack-machine anchors
 - throw terminators emit `_mj2x_regc_throw` followed by an immediate C return
 - try/catch methods emit `_mj2x_regc_exception_*` dispatch and handler jumps
-- integer div/rem emits `_mj2x_regc_div_*` / `_mj2x_regc_rem_*` helpers
+- integer div/rem emits `mj2x_regc_div_*` / `mj2x_regc_rem_*` runtime ABI calls
 - narrow primitive fields and arrays select descriptor/element-specific JNI
   helpers for boolean, byte, char, and short instead of reusing int helpers
 - generated source passes the no-stack-anchor gate

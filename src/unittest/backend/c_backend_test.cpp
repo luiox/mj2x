@@ -90,6 +90,33 @@ TEST(CBackendTest, AddMethod) {
     EXPECT_NE(result.text.find("+"), std::string::npos);
 }
 
+TEST(CBackendTest, InvokeDynamicEmitsUnsupportedException) {
+    auto bsm = Handle(Opcodes::H_INVOKESTATIC,
+                      testArena.intern("java/lang/invoke/StringConcatFactory"),
+                      testArena.intern("makeConcatWithConstants"),
+                      testArena.intern("()V"),
+                      false);
+    CBackend backend;
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "concat", "()Ljava/lang/String;", {
+        new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
+                                  testArena.intern("()Ljava/lang/String;"),
+                                  bsm, {}),
+        new InsnNode(Opcodes::ARETURN),
+    });
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto result = backend.compileMethod("Test", cm, blocks);
+
+    EXPECT_NE(result.text.find("UnsupportedOperationException"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("invokedynamic"), std::string::npos) << result.text;
+}
+
 TEST(CBackendTest, CastEmission) {
     CBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
@@ -448,3 +475,4 @@ TEST(CBackendTest, NameManglingObjectParameterDescriptor) {
 
     EXPECT_NE(result.text.find("Java_Test_isNull__Ljava_lang_Object_2"), std::string::npos);
 }
+

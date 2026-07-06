@@ -1,10 +1,17 @@
 #include <gmock/gmock.h>
 
 #include <fstream>
+#include <limits>
+#include <string>
+#include <utility>
 
+#include "jzip/zip_io.hpp"
+#include "zip/checksum.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "test_helper.hpp"
+#include "mj2x/backend/c_backend.hpp"
 #include "mj2x/mj2x.hpp"
+#include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 
 using namespace mj2x;
@@ -16,11 +23,11 @@ using namespace jbytecode::util;
 using namespace ca::str;
 
 // Helper: create a minimal class in memory
-static std::unique_ptr<ClassNode> makeSimpleClass() {
+static std::unique_ptr<ClassNode> makeSimpleClass(const char* className = "TestClass") {
     auto cn = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
     cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = ZUtf8StringRef::from_static("TestClass");
+    cn->name = Utf8StringRef::from_cstr(className);
     cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<ca::str::Utf8StringRef> noExceptions;
@@ -39,20 +46,95 @@ static std::unique_ptr<ClassNode> makeSimpleClass() {
     return cn;
 }
 
+static std::vector<ca::u8> classBytesFor(const char* className) {
+    auto cn = makeSimpleClass(className);
+    ca::str::Utf8StringArena arena;
+    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
+    cn->accept(&cw);
+    return cw.toByteArray();
+}
+
 // Helper: write class bytes to temp file
 static std::string writeTempClass(const std::string& suffix) {
     auto path = test::getTempOutPath("mj2x_" + suffix).string();
 
-    auto cn = makeSimpleClass();
-    ca::str::Utf8StringArena arena;
-    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
-    cn->accept(&cw);
-    auto bytes = cw.toByteArray();
+    auto bytes = classBytesFor("TestClass");
 
     std::ofstream ofs(path, std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
     return path;
+}
+
+static std::unique_ptr<jzip::LocalFileHeader> makeJarEntry(
+    const std::string& name,
+    const std::vector<ca::u8>& data) {
+    auto local = std::make_unique<jzip::LocalFileHeader>();
+    zip::Crc32 crc;
+    crc.update(data.data(), data.size());
+    local->setFileName(name);
+    local->setGeneralPurposeBitFlag(0x0800);
+    local->setCompressionMethod(0);
+    local->setCrc32(crc.value());
+    local->setCompressedSize(static_cast<ca::i64>(data.size()));
+    local->setUncompressedSize(static_cast<ca::i64>(data.size()));
+    local->setFileData(data);
+    local->setOffset(0);
+    return local;
+}
+
+struct TestJarEntry {
+    std::string name;
+    std::vector<ca::u8> data;
+};
+
+static std::string writeTempJarWithEntries(
+    const std::string& suffix,
+    const std::vector<TestJarEntry>& entries) {
+    auto path = test::getTempOutPath("mj2x_" + suffix).string();
+    jzip::ZipArchive archive;
+    for (const auto& entry : entries) {
+        archive.addPart(makeJarEntry(entry.name, entry.data));
+    }
+    auto jarBytes = jzip::ZipIO::writeDirect(archive);
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(jarBytes.data()),
+              static_cast<std::streamsize>(jarBytes.size()));
+    return path;
+}
+
+static std::string writeTempJar(const std::string& suffix) {
+    return writeTempJarWithEntries(suffix, {
+        {"pkg/A.class", classBytesFor("pkg/A")},
+        {"pkg/B.class", classBytesFor("pkg/B")},
+        {"assets/config.txt", std::vector<ca::u8>{'o', 'k'}},
+    });
+}
+
+static std::vector<ca::u8> resourceBytes(const std::string& resource) {
+    auto bytes = test::getResource(resource);
+    return std::vector<ca::u8>(bytes.begin(), bytes.end());
+}
+
+static std::vector<ca::u8> readJarEntry(const std::string& jarPath, const std::string& name) {
+    std::ifstream in(jarPath, std::ios::binary | std::ios::ate);
+    auto size = static_cast<size_t>(in.tellg());
+    std::vector<ca::u8> bytes(size);
+    in.seekg(0, std::ios::beg);
+    in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    auto archive = jzip::ZipIO::readJvm(jzip::MemorySegment(bytes));
+    const auto* local = archive.getLocalFileByName(name);
+    if (local == nullptr) return {};
+    return jzip::ZipIO::decompressLocalFile(*local);
+}
+
+static std::unique_ptr<ClassNode> readClassFromBytes(std::vector<ca::u8>& bytes,
+                                                     ca::str::Utf8StringArena& arena) {
+    EXPECT_LE(bytes.size(), static_cast<size_t>(std::numeric_limits<ca::i32>::max()));
+    auto cn = std::make_unique<ClassNode>();
+    ClassReader reader(arena, bytes.data(), static_cast<ca::i32>(bytes.size()));
+    reader.accept(cn.get(), 0);
+    return cn;
 }
 
 TEST(IOTest, ClassWriteReadRoundtrip) {
@@ -63,7 +145,8 @@ TEST(IOTest, ClassWriteReadRoundtrip) {
     auto bytes = cw.toByteArray();
     ASSERT_GT(bytes.size(), 50);
 
-    ClassReader reader(arena, bytes.data(), bytes.size());
+    ASSERT_LE(bytes.size(), static_cast<size_t>(std::numeric_limits<ca::i32>::max()));
+    ClassReader reader(arena, bytes.data(), static_cast<ca::i32>(bytes.size()));
     ClassNode cn2;
     reader.accept(&cn2, 0);
 
@@ -85,6 +168,90 @@ TEST(IOTest, InputLoaderRoundtrip) {
     EXPECT_EQ(cls->classNode->methods.size(), 1);
 
     std::remove(path.c_str());
+}
+
+TEST(IOTest, JarInputLoaderAndOutputWriterPreserveClassesAndResources) {
+    auto inPath = writeTempJar("loader_test.jar");
+    auto outPath = test::getTempOutPath("mj2x_loader_out.jar").string();
+
+    InputLoader loader;
+    auto index = loader.load(inPath);
+    ASSERT_NE(index, nullptr);
+    EXPECT_TRUE(index->isJarInput());
+    ASSERT_NE(index->getClass("pkg/A"), nullptr);
+    ASSERT_NE(index->getClass("pkg/B"), nullptr);
+    ASSERT_EQ(index->jarEntries().size(), 3u);
+
+    OutputWriter writer;
+    writer.write(outPath, *index);
+
+    auto resource = readJarEntry(outPath, "assets/config.txt");
+    EXPECT_EQ(resource, std::vector<ca::u8>({'o', 'k'}));
+
+    auto classBytes = readJarEntry(outPath, "pkg/A.class");
+    ca::str::Utf8StringArena arena;
+    auto cn = readClassFromBytes(classBytes, arena);
+    EXPECT_EQ(cn->name.to_std_string(), "pkg/A");
+
+    std::remove(inPath.c_str());
+    std::remove(outPath.c_str());
+}
+
+TEST(IOTest, JarMvpFixturePreservesManifestResourcesAndMultiReleaseClasses) {
+    auto manifest = resourceBytes("mvp_jar/META-INF/MANIFEST.MF");
+    auto config = resourceBytes("mvp_jar/assets/config.properties");
+    auto versionedClass = classBytesFor("mvpjar/MvpJarMain");
+    auto inPath = writeTempJarWithEntries("mvp_fixture.jar", {
+        {"META-INF/MANIFEST.MF", manifest},
+        {"mvpjar/MvpJarMain.class", classBytesFor("mvpjar/MvpJarMain")},
+        {"mvpjar/MvpJarHelper.class", classBytesFor("mvpjar/MvpJarHelper")},
+        {"assets/config.properties", config},
+        {"META-INF/versions/9/mvpjar/MvpJarMain.class", versionedClass},
+    });
+    auto outPath = test::getTempOutPath("mj2x_mvp_fixture_out.jar").string();
+
+    InputLoader loader;
+    auto index = loader.load(inPath);
+    ASSERT_NE(index, nullptr);
+    EXPECT_TRUE(index->isJarInput());
+    ASSERT_NE(index->getClass("mvpjar/MvpJarMain"), nullptr);
+    ASSERT_NE(index->getClass("mvpjar/MvpJarHelper"), nullptr);
+    ASSERT_EQ(index->jarEntries().size(), 5u);
+
+    OutputWriter writer;
+    writer.write(outPath, *index);
+
+    EXPECT_EQ(readJarEntry(outPath, "META-INF/MANIFEST.MF"), manifest);
+    EXPECT_EQ(readJarEntry(outPath, "assets/config.properties"), config);
+    EXPECT_EQ(readJarEntry(outPath, "META-INF/versions/9/mvpjar/MvpJarMain.class"),
+              versionedClass);
+
+    std::remove(inPath.c_str());
+    std::remove(outPath.c_str());
+}
+
+TEST(IOTest, JarInputLoaderRejectsSignedJarMetadata) {
+    auto inPath = writeTempJarWithEntries("signed_metadata.jar", {
+        {"pkg/A.class", classBytesFor("pkg/A")},
+        {"META-INF/MORPHER.SF", std::vector<ca::u8>{'s', 'i', 'g'}},
+    });
+
+    InputLoader loader;
+    EXPECT_THROW((void)loader.load(inPath), std::runtime_error);
+
+    std::remove(inPath.c_str());
+}
+
+TEST(IOTest, JarInputLoaderRejectsJarWithoutRootClasses) {
+    auto inPath = writeTempJarWithEntries("resource_only.jar", {
+        {"META-INF/MANIFEST.MF", resourceBytes("mvp_jar/META-INF/MANIFEST.MF")},
+        {"assets/config.properties", resourceBytes("mvp_jar/assets/config.properties")},
+    });
+
+    InputLoader loader;
+    EXPECT_THROW((void)loader.load(inPath), std::runtime_error);
+
+    std::remove(inPath.c_str());
 }
 
 TEST(PipelineTest, BadInputPathReturnsError) {
@@ -112,5 +279,37 @@ TEST(PipelineTest, FullPipelineRoundtrip) {
 
     std::remove(inPath.c_str());
     std::remove(outPath.c_str());
+}
+
+TEST(PipelineTest, JarPipelineMarksClassesNativeAndPreservesResources) {
+    auto inPath = writeTempJar("pipeline_in.jar");
+    auto outPath = test::getTempOutPath("mj2x_pipeline_out.jar").string();
+    auto cPath = test::getTempOutPath("mj2x_pipeline_out.c").string();
+
+    PipelineConfig cfg;
+    cfg.inputPath = inPath;
+    cfg.outputPath = outPath;
+    Pipeline pipeline(std::move(cfg));
+    auto backend = std::make_unique<CBackend>();
+    backend->setOutputPath(cPath);
+    pipeline.registerBackend(std::move(backend));
+    pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
+    EXPECT_EQ(pipeline.run(), 0);
+
+    auto resource = readJarEntry(outPath, "assets/config.txt");
+    EXPECT_EQ(resource, std::vector<ca::u8>({'o', 'k'}));
+
+    auto classBytes = readJarEntry(outPath, "pkg/A.class");
+    ca::str::Utf8StringArena arena;
+    auto cn = readClassFromBytes(classBytes, arena);
+    ASSERT_EQ(cn->methods.size(), 1u);
+    EXPECT_TRUE((cn->methods[0]->access & Opcodes::ACC_NATIVE) != 0);
+
+    std::ifstream cFile(cPath, std::ios::binary);
+    ASSERT_TRUE(cFile);
+
+    std::remove(inPath.c_str());
+    std::remove(outPath.c_str());
+    std::remove(cPath.c_str());
 }
 
