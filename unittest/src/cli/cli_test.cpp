@@ -1,5 +1,6 @@
 #include <gmock/gmock.h>
 
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +39,10 @@ std::string q(const fs::path& path) {
     }
 #endif
     return "\"" + s + "\"";
+}
+
+std::string quoteArg(const std::string& value) {
+    return "\"" + value + "\"";
 }
 
 ExecResult runScript(const std::vector<std::string>& lines) {
@@ -101,6 +106,83 @@ fs::path findCli() {
     return fileExists(path) ? path : fs::path{};
 }
 
+bool commandAvailable(const char* command) {
+#ifdef _WIN32
+    return std::system((std::string("where ") + command + " >nul 2>nul").c_str()) == 0;
+#else
+    return std::system((std::string("command -v ") + command + " >/dev/null 2>&1").c_str()) == 0;
+#endif
+}
+
+fs::path findJavac() {
+    std::vector<fs::path> roots;
+    if (const char* javaHome = std::getenv("JAVA_HOME")) {
+        if (javaHome[0] != '\0') roots.emplace_back(javaHome);
+    }
+#ifdef _WIN32
+    roots.emplace_back("D:/sdk/java/jdk17");
+#endif
+    for (const auto& root : roots) {
+#ifdef _WIN32
+        fs::path javac = root / "bin" / "javac.exe";
+#else
+        fs::path javac = root / "bin" / "javac";
+#endif
+        if (fileExists(javac)) return javac;
+    }
+    return {};
+}
+
+bool hasAutoNativeCompiler() {
+#ifdef _WIN32
+    return commandAvailable("cl");
+#elif defined(__APPLE__)
+    return commandAvailable("clang") || commandAvailable("gcc");
+#else
+    return commandAvailable("gcc") || commandAvailable("clang");
+#endif
+}
+
+fs::path nativeLibraryPathFor(const fs::path& outputPath) {
+#ifdef _WIN32
+    const char* ext = ".dll";
+#elif defined(__APPLE__)
+    const char* ext = ".dylib";
+#else
+    const char* ext = ".so";
+#endif
+    return outputPath.parent_path() / (outputPath.stem().string() + ext);
+}
+
+void addStaticIntMethod(
+    jbytecode::tree::ClassNode& cn,
+    const char* name,
+    int opcode,
+    bool nativeAnnotated) {
+    using namespace ca::str;
+    using namespace jbytecode::core;
+    using namespace jbytecode::tree;
+
+    std::vector<Utf8StringRef> noExceptions;
+    auto mn = std::make_unique<MethodNode>(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        ZUtf8StringRef::from_static(name),
+        ZUtf8StringRef::from_static("(II)I"),
+        ZUtf8StringRef::from_static(""),
+        noExceptions);
+    if (nativeAnnotated) {
+        mn->visibleAnnotations.push_back(
+            new AnnotationNode(ZUtf8StringRef::from_static("Lmj2x/Native;")));
+    }
+    mn->maxStack = 2;
+    mn->maxLocals = 2;
+    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
+    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 1));
+    mn->instructions.add(new InsnNode(opcode));
+    mn->instructions.add(new InsnNode(Opcodes::IRETURN));
+    cn.methods.push_back(mn.release());
+}
+
 std::vector<ca::u8> tinyClassBytes(const char* className) {
     using namespace ca::str;
     using namespace jbytecode::core;
@@ -133,6 +215,28 @@ std::vector<ca::u8> tinyClassBytes(const char* className) {
     return writer.toByteArray();
 }
 
+std::vector<ca::u8> selectableClassBytes(
+    const char* className,
+    bool annotateFirstMethod) {
+    using namespace ca::str;
+    using namespace jbytecode::core;
+    using namespace jbytecode::tree;
+
+    auto cn = std::make_unique<ClassNode>();
+    Utf8StringArena arena;
+    cn->version = Opcodes::V1_8;
+    cn->access = Opcodes::ACC_PUBLIC;
+    cn->name = arena.intern(className);
+    cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
+
+    addStaticIntMethod(*cn, "annotatedAdd", Opcodes::IADD, annotateFirstMethod);
+    addStaticIntMethod(*cn, "plainSub", Opcodes::ISUB, false);
+
+    ClassWriter writer(arena, ClassWriter::COMPUTE_MAXS);
+    cn->accept(&writer);
+    return writer.toByteArray();
+}
+
 fs::path writeTinyClass() {
     auto bytes = tinyClassBytes("CliRegCTest");
     fs::path path = test::getTempOutPath("mj2x_cli_regc_input.class");
@@ -140,6 +244,41 @@ fs::path writeTinyClass() {
     std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     return path;
+}
+
+fs::path writeSelectableClass(const char* className, const std::string& suffix, bool annotateFirstMethod) {
+    auto bytes = selectableClassBytes(className, annotateFirstMethod);
+    fs::path path = test::getTempOutPath(suffix);
+
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return path;
+}
+
+fs::path compileProvidedAnnotationSample(const fs::path& javac) {
+    fs::path dir = test::getTempOutPath("mj2x_cli_annotation_java.keep").parent_path() /
+        "mj2x_cli_annotation_java";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+
+    fs::path sampleSource = dir / "CliProvidedAnnotationSample.java";
+    {
+        std::ofstream out(sampleSource);
+        out << "public class CliProvidedAnnotationSample {\n";
+        out << "  @mj2x.Native\n";
+        out << "  public static int annotated(int a, int b) { return a + b; }\n";
+        out << "  public static int plain(int a, int b) { return a - b; }\n";
+        out << "}\n";
+    }
+
+    fs::path annotationSource = test::getTopProjectPath() /
+        "mj2x" / "mj2x-annotations" / "src" / "main" / "java" / "mj2x" / "Native.java";
+    auto result = runScript({
+        q(javac) + " -d " + q(dir) + " " + q(annotationSource) + " " + q(sampleSource),
+    });
+    EXPECT_EQ(result.exitCode, 0) << result.out;
+    return dir / "CliProvidedAnnotationSample.class";
 }
 
 std::unique_ptr<jzip::LocalFileHeader> makeJarEntry(
@@ -228,6 +367,26 @@ std::unique_ptr<jbytecode::tree::ClassNode> readClassFromBytes(
     return cn;
 }
 
+std::unique_ptr<jbytecode::tree::ClassNode> readClassFile(
+    const fs::path& path,
+    ca::str::Utf8StringArena& arena) {
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    EXPECT_TRUE(in);
+    auto size = static_cast<size_t>(in.tellg());
+    std::vector<ca::u8> bytes(size);
+    in.seekg(0, std::ios::beg);
+    in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return readClassFromBytes(bytes, arena);
+}
+
+jbytecode::tree::MethodNode* findMethod(jbytecode::tree::ClassNode& cn, const char* name) {
+    for (auto* method : cn.methods) {
+        if (method->name.to_std_string() == name)
+            return method;
+    }
+    return nullptr;
+}
+
 std::string readText(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
     std::ostringstream out;
@@ -236,6 +395,107 @@ std::string readText(const fs::path& path) {
 }
 
 }  // namespace
+
+TEST(CliTest, NativeAnnotationOnlyCompilesAnnotatedMethods) {
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inClass = writeSelectableClass(
+        "CliAnnotationSelect", "mj2x_cli_annotation_select_input.class", true);
+    fs::path outClass = test::getTempOutPath("mj2x_cli_annotation_select_output.class");
+    fs::path cFile = test::getTempOutPath("mj2x_cli_annotation_select_output.c");
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(cFile) + " --native-annotation " + quoteArg("Lmj2x/Native;"),
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+
+    ca::str::Utf8StringArena arena;
+    auto cn = readClassFile(outClass, arena);
+    auto* annotated = findMethod(*cn, "annotatedAdd");
+    auto* plain = findMethod(*cn, "plainSub");
+    ASSERT_NE(annotated, nullptr);
+    ASSERT_NE(plain, nullptr);
+    EXPECT_TRUE((annotated->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_EQ(annotated->instructions.size(), 0);
+    EXPECT_FALSE((plain->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_GT(plain->instructions.size(), 0);
+
+    std::string source = readText(cFile);
+    EXPECT_NE(source.find("Java_CliAnnotationSelect_annotatedAdd"), std::string::npos) << source;
+    EXPECT_EQ(source.find("Java_CliAnnotationSelect_plainSub"), std::string::npos) << source;
+}
+
+TEST(CliTest, NativeAnnotationWithNoMatchesMarksNoMethods) {
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inClass = writeSelectableClass(
+        "CliAnnotationNone", "mj2x_cli_annotation_none_input.class", false);
+    fs::path outClass = test::getTempOutPath("mj2x_cli_annotation_none_output.class");
+    fs::path cFile = test::getTempOutPath("mj2x_cli_annotation_none_output.c");
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(cFile) + " --native-annotation " + quoteArg("Lmj2x/Native;"),
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+
+    ca::str::Utf8StringArena arena;
+    auto cn = readClassFile(outClass, arena);
+    auto* first = findMethod(*cn, "annotatedAdd");
+    auto* second = findMethod(*cn, "plainSub");
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    EXPECT_FALSE((first->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_FALSE((second->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+
+    std::string source = readText(cFile);
+    EXPECT_EQ(source.find("Java_CliAnnotationNone_annotatedAdd"), std::string::npos) << source;
+    EXPECT_EQ(source.find("Java_CliAnnotationNone_plainSub"), std::string::npos) << source;
+}
+
+TEST(CliTest, ProvidedJavaAnnotationCanSelectMethods) {
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME";
+    }
+
+    fs::path inClass = compileProvidedAnnotationSample(javac);
+    ASSERT_TRUE(fileExists(inClass));
+    fs::path outClass = test::getTempOutPath("mj2x_cli_provided_annotation_output.class");
+    fs::path cFile = test::getTempOutPath("mj2x_cli_provided_annotation_output.c");
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(cFile) + " --native-annotation " + quoteArg("Lmj2x/Native;"),
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+
+    ca::str::Utf8StringArena arena;
+    auto cn = readClassFile(outClass, arena);
+    auto* annotated = findMethod(*cn, "annotated");
+    auto* plain = findMethod(*cn, "plain");
+    ASSERT_NE(annotated, nullptr);
+    ASSERT_NE(plain, nullptr);
+    EXPECT_TRUE((annotated->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_FALSE((plain->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+
+    std::string source = readText(cFile);
+    EXPECT_NE(source.find("Java_CliProvidedAnnotationSample_annotated"), std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("Java_CliProvidedAnnotationSample_plain"), std::string::npos)
+        << source;
+}
 
 TEST(CliTest, RegCBackendFlagEmitsRegCSource) {
     fs::path cli = findCli();
@@ -325,6 +585,64 @@ TEST(CliTest, RegCJarInputEmitsJarAndRegCSource) {
     EXPECT_EQ(source.find("union jvalue"), std::string::npos) << source;
 }
 
+TEST(CliTest, CompileFailsClearlyWhenJavaHomeMissing) {
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inClass = writeTinyClass();
+    fs::path outClass = test::getTempOutPath("mj2x_cli_compile_no_java_home_output.class");
+    fs::path cFile = test::getTempOutPath("mj2x_cli_compile_no_java_home_output.c");
+
+#ifdef _WIN32
+    std::string unsetJavaHome = "set JAVA_HOME=";
+#else
+    std::string unsetJavaHome = "unset JAVA_HOME";
+#endif
+
+    auto result = runScript({
+        unsetJavaHome,
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(cFile) + " --compile",
+    });
+    EXPECT_NE(result.exitCode, 0);
+    EXPECT_NE(result.out.find("JAVA_HOME is not set"), std::string::npos) << result.out;
+}
+
+TEST(CliTest, CompileEmitsNativeLibraryWhenToolchainIsAvailable) {
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+#ifdef _WIN32
+    if (commandAvailable("cl") &&
+        (std::getenv("INCLUDE") == nullptr || std::getenv("INCLUDE")[0] == '\0')) {
+        GTEST_SKIP() << "MSVC compiler is present, but the Developer Command Prompt environment is not configured";
+    }
+#endif
+    if (!hasAutoNativeCompiler()) {
+        GTEST_SKIP() << "no supported C compiler is available on PATH";
+    }
+
+    fs::path inClass = writeTinyClass();
+    fs::path outClass = test::getTempOutPath("mj2x_cli_compile_output.class");
+    fs::path cFile = test::getTempOutPath("mj2x_cli_compile_output.c");
+    fs::path nativeLibrary = nativeLibraryPathFor(outClass);
+    std::error_code ec;
+    fs::remove(nativeLibrary, ec);
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(cFile) + " --compile",
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+}
+
 TEST(CliTest, NegativeArgumentsFail) {
     fs::path cli = findCli();
     if (cli.empty()) {
@@ -352,6 +670,29 @@ TEST(CliTest, NegativeArgumentsFail) {
     EXPECT_NE(backendWithoutEmit.exitCode, 0);
     EXPECT_NE(backendWithoutEmit.out.find("--backend requires --emit-c"), std::string::npos)
         << backendWithoutEmit.out;
+
+    auto compileWithoutEmit = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --compile",
+    });
+    EXPECT_NE(compileWithoutEmit.exitCode, 0);
+    EXPECT_NE(compileWithoutEmit.out.find("--compile requires --emit-c"), std::string::npos)
+        << compileWithoutEmit.out;
+
+    auto badAnnotationDescriptor = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(cFile) + " --native-annotation " + quoteArg("mj2x.Native"),
+    });
+    EXPECT_NE(badAnnotationDescriptor.exitCode, 0);
+    EXPECT_NE(badAnnotationDescriptor.out.find("--native-annotation must be"), std::string::npos)
+        << badAnnotationDescriptor.out;
+
+    auto badCompiler = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(cFile) + " --compile --c-compiler nope",
+    });
+    EXPECT_NE(badCompiler.exitCode, 0);
+    EXPECT_NE(badCompiler.out.find("Unknown --c-compiler value"), std::string::npos)
+        << badCompiler.out;
 
     auto missingInput = runScript({
         q(cli) + " -i " + q(test::getTempOutPath("mj2x_cli_missing_input.class")) +
