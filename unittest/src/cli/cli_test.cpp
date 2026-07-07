@@ -99,11 +99,20 @@ ExecResult runScript(const std::vector<std::string>& lines) {
 
 fs::path findCli() {
 #ifdef _WIN32
-    fs::path path = test::getTopProjectPath() / "build" / "windows" / "x64" / "release" / "mj2x-cli.exe";
+    std::vector<fs::path> candidates = {
+        test::getTopProjectPath() / "build" / "windows" / "x64" / "debug" / "mj2x-cli.exe",
+        test::getTopProjectPath() / "build" / "windows" / "x64" / "release" / "mj2x-cli.exe",
+    };
 #else
-    fs::path path = test::getTopProjectPath() / "build" / "linux" / "x86_64" / "release" / "mj2x-cli";
+    std::vector<fs::path> candidates = {
+        test::getTopProjectPath() / "build" / "linux" / "x86_64" / "debug" / "mj2x-cli",
+        test::getTopProjectPath() / "build" / "linux" / "x86_64" / "release" / "mj2x-cli",
+    };
 #endif
-    return fileExists(path) ? path : fs::path{};
+    for (const auto& path : candidates) {
+        if (fileExists(path)) return path;
+    }
+    return {};
 }
 
 bool commandAvailable(const char* command) {
@@ -618,12 +627,6 @@ TEST(CliTest, CompileEmitsNativeLibraryWhenToolchainIsAvailable) {
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
     }
-#ifdef _WIN32
-    if (commandAvailable("cl") &&
-        (std::getenv("INCLUDE") == nullptr || std::getenv("INCLUDE")[0] == '\0')) {
-        GTEST_SKIP() << "MSVC compiler is present, but the Developer Command Prompt environment is not configured";
-    }
-#endif
     if (!hasAutoNativeCompiler()) {
         GTEST_SKIP() << "no supported C compiler is available on PATH";
     }

@@ -87,7 +87,7 @@
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c` 之后自动调用 C 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;`--c-compiler msvc|gcc|clang` 可覆盖自动检测。
-- 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;`JAVA_HOME` 缺失、JNI include 缺失、MSVC 环境未初始化或编译器退出失败时返回非零并打印明确错误。
+- 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
 
 ---
 

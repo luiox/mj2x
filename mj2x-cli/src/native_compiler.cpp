@@ -145,6 +145,39 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes) {
     return true;
 }
 
+std::filesystem::path vcvarsAllPathFromVCTools(const std::string& value) {
+    if (value.empty()) return {};
+    std::filesystem::path tools(value);
+    std::filesystem::path vcRoot = tools.parent_path().parent_path().parent_path();
+    std::filesystem::path vcvars = vcRoot / "Auxiliary" / "Build" / "vcvarsall.bat";
+    std::error_code ec;
+    return std::filesystem::exists(vcvars, ec) ? vcvars : std::filesystem::path{};
+}
+
+std::filesystem::path findVcvarsAll() {
+    if (auto fromEnv = vcvarsAllPathFromVCTools(envValue("VCToolsInstallDir")); !fromEnv.empty())
+        return fromEnv;
+
+    std::vector<std::filesystem::path> roots;
+    if (auto programFiles = envValue("ProgramFiles"); !programFiles.empty())
+        roots.emplace_back(programFiles);
+    if (auto programFilesX86 = envValue("ProgramFiles(x86)"); !programFilesX86.empty())
+        roots.emplace_back(programFilesX86);
+
+    const char* editions[] = {"Community", "Professional", "Enterprise", "BuildTools"};
+    for (const auto& root : roots) {
+        for (const char* edition : editions) {
+            std::filesystem::path vcvars =
+                root / "Microsoft Visual Studio" / "2022" / edition /
+                "VC" / "Auxiliary" / "Build" / "vcvarsall.bat";
+            std::error_code ec;
+            if (std::filesystem::exists(vcvars, ec))
+                return vcvars;
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 bool parseCompilerName(const std::string& name, CCompilerKind& compiler) {
@@ -189,20 +222,31 @@ int compileCSource(
     if (!jniIncludePaths(includes))
         return 1;
 
-    if (compiler == CCompilerKind::Msvc && envValue("INCLUDE").empty()) {
-        fprintf(stderr,
-                "[mj2x] ERROR: MSVC compiler was found, but the MSVC environment is not configured; run from a Developer Command Prompt or vcvars shell.\n");
-        return 1;
-    }
-
     std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::ostringstream command;
     if (compiler == CCompilerKind::Msvc) {
+        std::filesystem::path objectPath = libraryPath;
+        objectPath.replace_extension(".obj");
         command << "cl /nologo /LD";
         for (const auto& include : includes)
             command << " /I" << quotePath(include);
         command << " " << quotePath(cOutputPath)
+                << " /Fo:" << quotePath(objectPath)
                 << " /Fe:" << quotePath(libraryPath);
+        if (envValue("INCLUDE").empty()) {
+            auto vcvars = findVcvarsAll();
+            if (vcvars.empty()) {
+                fprintf(stderr,
+                        "[mj2x] ERROR: MSVC compiler was found, but the MSVC environment is not configured and vcvarsall.bat was not found.\n");
+                return 1;
+            }
+            std::ostringstream wrapped;
+            wrapped << "cmd /s /c \"" << quotePath(vcvars)
+                    << " x64 >nul && " << command.str() << "\"";
+            command.str("");
+            command.clear();
+            command << wrapped.str();
+        }
     } else {
 #ifdef __APPLE__
         const char* sharedFlag = "-dynamiclib";

@@ -28,4 +28,4 @@ xmake run mj2x_unittest --gtest_filter=CliTest.*
 xmake run mj2x_runtime_test
 ```
 
-`CliTest.*` 覆盖 CLI 注解筛选、`--compile` 错误提示和可用工具链 smoke；本机缺少 `JAVA_HOME` 或 MSVC Developer Command Prompt 环境时，native library 成功编译 smoke 会按环境跳过。
+`CliTest.*` 覆盖 CLI 注解筛选、`--compile` 错误提示和可用工具链 smoke；本机缺少 `JAVA_HOME` 或没有可用 C 编译器时，native library 成功编译 smoke 会按环境跳过。

@@ -142,7 +142,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile --c-com
 自动编译需要:
 
 - `JAVA_HOME` 指向 JDK,且包含 `include/jni.h`
-- Windows 使用 MSVC 时,在 Developer Command Prompt 或已运行 `vcvars` 的 shell 中执行
+- Windows 使用 MSVC 时,mj2x 会在环境未初始化时自动查找并调用 Visual Studio 2022 的 `vcvarsall.bat`;如果找不到,再从 Developer Command Prompt 或已运行 `vcvars` 的 shell 中执行
 
 ### 4.2 用 xmake(推荐,JAR / 复杂场景)
 
@@ -209,8 +209,8 @@ mj2x-cli -i b.class -o b_out.class --emit-c b_out.c
 **Q: `--compile` 报 `JAVA_HOME is not set`?**
 设置 `JAVA_HOME` 到 JDK 根目录,不是 JRE 目录。mj2x 会读取 `$JAVA_HOME/include` 和平台子目录(`win32` / `linux` / `darwin`)。
 
-**Q: Windows 上 `cl` 存在但 `--compile` 报 MSVC 环境未配置?**
-从 Visual Studio Developer Command Prompt 运行,或先执行对应的 `vcvars64.bat`。
+**Q: Windows 上 `cl` 存在但 `--compile` 报找不到 `vcvarsall.bat`?**
+mj2x 会优先使用当前 shell 的 MSVC 环境;如果 `INCLUDE` 尚未配置,会尝试在 Visual Studio 2022 的 Community / Professional / Enterprise / BuildTools 路径下查找 `VC/Auxiliary/Build/vcvarsall.bat`。若安装位置不在这些默认目录,从 Visual Studio Developer Command Prompt 运行,或先执行对应的 `vcvars64.bat`。
 
 **Q: JAR 改写后签名失效?**
 当前 MVP 不处理签名。`META-INF/*.SF` / `*.RSA` / `*.DSA` / `*.EC` 会触发 fail-closed。需要先去签名再处理。
