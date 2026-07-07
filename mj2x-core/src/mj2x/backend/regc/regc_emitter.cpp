@@ -1,6 +1,7 @@
 #include "regc_emitter.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/codegen/c_helpers.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -15,6 +16,10 @@ namespace mj2x {
 using namespace jbytecode::core;
 
 namespace {
+
+// cStringLiteral is shared with CBackend via codegen::cStringLiteral; alias it
+// here so the existing call sites stay one-line.
+using codegen::cStringLiteral;
 
 const char* cType(SSAType type) {
     switch (type) {
@@ -57,29 +62,6 @@ std::string sanitizeIdent(const std::string& text) {
         out.insert(out.begin(), '_');
     }
     return out;
-}
-
-std::string cStringLiteral(const std::string& text) {
-    std::ostringstream os;
-    os << '"';
-    for (unsigned char c : text) {
-        switch (c) {
-            case '\\': os << "\\\\"; break;
-            case '"': os << "\\\""; break;
-            case '\n': os << "\\n"; break;
-            case '\r': os << "\\r"; break;
-            case '\t': os << "\\t"; break;
-            default:
-                if (std::isprint(c)) {
-                    os << static_cast<char>(c);
-                } else {
-                    os << "\\" << static_cast<int>(c);
-                }
-                break;
-        }
-    }
-    os << '"';
-    return os.str();
 }
 
 std::string functionName(const SSAFunctionSymbol& symbol) {

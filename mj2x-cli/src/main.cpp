@@ -1,5 +1,5 @@
 #include "mj2x/mj2x.hpp"
-#include "mj2x/backend/c_backend.hpp"
+#include "mj2x/backend/cbackend/c_backend.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/ldc_preprocessor.hpp"

@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-#include "mj2x/backend/c_backend.hpp"
+#include "mj2x/backend/cbackend/c_backend.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string_arena.hpp"

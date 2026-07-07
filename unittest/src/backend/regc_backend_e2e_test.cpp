@@ -243,7 +243,7 @@ protected:
         fs::create_directories(objDir, ec);
         ASSERT_FALSE(ec) << ec.message();
         fs::path generatedObj = objDir / "generated.obj";
-        fs::path runtimeSrc = fs::current_path() / "mj2x" / "runtime" / "src";
+        fs::path runtimeSrc = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
 
         // Compile every runtime .cpp the generated TU may reference.  The regc
         // ABI helper is always needed (div/rem/barrier); the intrinsic modules

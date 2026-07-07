@@ -97,6 +97,30 @@
 
 ---
 
+## 5. 项目结构 + codegen 工具层
+
+**模块化目录**(对齐 `libs/libjbytecode/<module>/` 子库模式):
+
+```
+mj2x/
+├── mj2x-core/src/mj2x/      核心库(include 根 = src,内层 mj2x/ 保留 → 98 处 include 零改动)
+├── mj2x-cli/src/             CLI 入口
+├── mj2x-runtime/src/         native runtime(crypto/kernel/intrinsic/...)
+├── unittest/src/             单测
+```
+
+| 能力 | 状态 |
+|---|---|
+| codegen 工具层(`mj2x-core/src/mj2x/codegen/`) | ✅ CSourceStream(缩进管理)、IncludeSet(include 去重)、cStringLiteral/mangle 收口 |
+| CBackend 拆到 `backend/cbackend/` 文件夹 | ✅ c_backend + c_runtime_prelude 分离 |
+| 重复 helper 收口(cStringLiteral/mangle 跨 CBackend/RegC) | ✅ 单一来源在 codegen |
+
+**codegen 工具层设计**:替代裸 `std::ostringstream << "    ..."` 字符串拼接。`CSourceStream` 管缩进、`IncludeSet` 管 include 去重排序、`c_helpers.hpp` 是无状态 helper 的单一来源。两个 C 发射后端(CBackend/RegC)共用。后续 emitRuntimeHelpers/emitHelperPrelude 的大段字符串迁移到 CSourceStream 是渐进工作。
+
+---
+
+---
+
 ## 5. 生成 xmake 工程
 
 `--generate-project <dir>` 把转 C 结果连同 `xmake.lua` / `.gitignore` / 原 class / (RegC) runtime 源码打包成独立可编译工程。

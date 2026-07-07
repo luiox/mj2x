@@ -1,6 +1,6 @@
 target("mj2x-runtime-core")
     set_kind("static")
-    set_group("mj2x/runtime")
+    set_group("mj2x/mj2x-runtime")
 
     add_files("src/crypto/*.cpp")
     add_files("src/kernel/*.cpp")
@@ -21,7 +21,7 @@ target("mj2x-runtime-core")
 
 target("jni_lib")
     set_kind("shared")
-    set_group("mj2x/runtime")
+    set_group("mj2x/mj2x-runtime")
     set_default(false)
 
     add_deps("mj2x-runtime-core")
@@ -50,7 +50,7 @@ target("jni_lib")
 
 target("mj2x_runtime_test")
     set_kind("binary")
-    set_group("mj2x/runtime/test")
+    set_group("mj2x/mj2x-runtime/test")
     set_default(false)
 
     add_deps("mj2x-runtime-core")

@@ -1,48 +1,7 @@
 -- mj2x - Morpher Java Bytecode to X
--- Phase 1: 项目骨架
---
-target("mj2x-core")
-    set_kind("static")
-    set_group("mj2x")
-
-    add_deps("libjbytecode", "libjstr", "libjzip")
-
-    add_files("src/mj2x/**.cpp")
-    add_headerfiles("src/mj2x/**.hpp")
-    add_includedirs("src", {public = true})
-
-    if is_plat("windows") then
-        add_cxflags("/utf-8", {tools = "cl"})
-    end
-
-target("mj2x-cli")
-    set_kind("binary")
-    set_group("mj2x")
-
-    add_deps("mj2x-core")
-
-    add_files("src/mj2x-cli/*.cpp")
-    add_includedirs("src")
-
-    if is_plat("windows") then
-        add_cxflags("/utf-8", {tools = "cl"})
-    end
-
-target("mj2x_unittest")
-    set_kind("binary")
-    set_group("mj2x/test")
-    set_default(false)
-
-    add_deps("mj2x-core", "test_helper")
-    add_packages("gtest")
-    add_files("src/unittest/main.cpp")
-    add_files("src/unittest/**/*_test.cpp")
-    add_includedirs("src")
-    set_rundir("$(projectdir)")
-
-    if is_plat("windows") then
-        add_cxflags("/utf-8", {tools = "cl"})
-        add_defines("_CRT_SECURE_NO_WARNINGS")
-    end
-
-includes("runtime")
+-- 聚合入口：各子模块（core/cli/runtime/unittest）拆到独立目录，对齐
+-- libs/libjbytecode/<module>/ 的子库模式。每个子模块自带 xmake.lua。
+includes("mj2x-core")
+includes("mj2x-cli")
+includes("mj2x-runtime")
+includes("unittest")
