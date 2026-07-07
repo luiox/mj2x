@@ -5,19 +5,41 @@
 #include <cstdio>
 #include <sstream>
 #include <vector>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
 namespace mj2x::cli {
 namespace {
 
 std::string quotePath(const std::filesystem::path& path) {
     std::string value = path.string();
+#ifdef _WIN32
     std::string out = "\"";
-    for (char c : value) {
-        if (c == '"') out += "\\\"";
-        else out += c;
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        char c = value[i];
+        if (c == '"') {
+            out += "\\\"";
+        } else if (c == '\\' && i + 1 == value.size()) {
+            out += "\\\\";
+        } else {
+            out += c;
+        }
     }
     out += "\"";
     return out;
+#else
+    std::string out = "'";
+    for (char c : value) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += "'";
+    return out;
+#endif
 }
 
 int runQuiet(const std::string& command) {
@@ -57,14 +79,25 @@ const char* compilerExecutable(CCompilerKind compiler) {
     return "";
 }
 
+std::filesystem::path findVcvarsAll();
+
+bool canUseMsvc() {
+    return commandExists("cl") || !findVcvarsAll().empty();
+}
+
 bool detectCompiler(CCompilerKind requested, CCompilerKind& detected) {
     if (requested != CCompilerKind::Auto) {
         detected = requested;
+        if (requested == CCompilerKind::Msvc)
+            return canUseMsvc();
         return commandExists(compilerExecutable(detected));
     }
 
 #ifdef _WIN32
-    if (commandExists("cl")) {
+    bool hasCl = commandExists("cl");
+    bool hasConfiguredMsvc = hasCl && !envValue("INCLUDE").empty();
+    bool hasVcvarsMsvc = !hasConfiguredMsvc && !findVcvarsAll().empty();
+    if (hasConfiguredMsvc || hasVcvarsMsvc) {
         detected = CCompilerKind::Msvc;
         return true;
     }
@@ -74,6 +107,10 @@ bool detectCompiler(CCompilerKind requested, CCompilerKind& detected) {
     }
     if (commandExists("gcc")) {
         detected = CCompilerKind::Gcc;
+        return true;
+    }
+    if (hasCl) {
+        detected = CCompilerKind::Msvc;
         return true;
     }
 #elif defined(__APPLE__)
@@ -178,6 +215,20 @@ std::filesystem::path findVcvarsAll() {
     return {};
 }
 
+int systemExitCode(int rc) {
+#ifdef _WIN32
+    return rc;
+#else
+    if (rc == -1)
+        return rc;
+    if (WIFEXITED(rc))
+        return WEXITSTATUS(rc);
+    if (WIFSIGNALED(rc))
+        return 128 + WTERMSIG(rc);
+    return rc;
+#endif
+}
+
 } // namespace
 
 bool parseCompilerName(const std::string& name, CCompilerKind& compiler) {
@@ -231,8 +282,8 @@ int compileCSource(
         for (const auto& include : includes)
             command << " /I" << quotePath(include);
         command << " " << quotePath(cOutputPath)
-                << " /Fo:" << quotePath(objectPath)
-                << " /Fe:" << quotePath(libraryPath);
+                << " /Fo" << quotePath(objectPath)
+                << " /Fe" << quotePath(libraryPath);
         if (envValue("INCLUDE").empty()) {
             auto vcvars = findVcvarsAll();
             if (vcvars.empty()) {
@@ -264,7 +315,8 @@ int compileCSource(
     printf("[mj2x] Compiler command: %s\n", command.str().c_str());
     int rc = std::system(command.str().c_str());
     if (rc != 0) {
-        fprintf(stderr, "[mj2x] ERROR: C compiler failed with exit code %d.\n", rc);
+        fprintf(stderr, "[mj2x] ERROR: C compiler failed with exit code %d.\n",
+                systemExitCode(rc));
         return 1;
     }
     printf("[mj2x] Native library written: %s\n", libraryPath.string().c_str());
