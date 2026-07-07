@@ -16,13 +16,14 @@
 
 ## 模块组成
 
-- `src/mj2x-cli/` — 命令行入口
-- `src/mj2x/core/` — Pipeline / CompilerIndex
-- `src/mj2x/io/` — InputLoader / OutputWriter(`.class` / `.jar`)
-- `src/mj2x/frontend/` — MIR / Block / CodeConverter / MethodStack
-- `src/mj2x/backend/` — CBackend / RegCBackend
-- `src/mj2x/preprocessor/` — 可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll)
-- `runtime/` — RegC R3 runtime(crypto / kernel / stringpool / antidebug / antijvmti)
+- `mj2x-cli/` — 命令行入口、参数解析、native 编译器调用
+- `mj2x-core/src/mj2x/core/` — Pipeline / CompilerIndex
+- `mj2x-core/src/mj2x/io/` — InputLoader / OutputWriter(`.class` / `.jar`)
+- `mj2x-core/src/mj2x/frontend/` — MIR / Block / CodeConverter / MethodStack
+- `mj2x-core/src/mj2x/backend/` — CBackend / RegCBackend
+- `mj2x-core/src/mj2x/preprocessor/` — 可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll / NativeAnnotation)
+- `mj2x-annotations/` — 用户可引入的 `@mj2x.Native` 注解源码
+- `mj2x-runtime/` — RegC R3 runtime(crypto / kernel / stringpool / antidebug / antijvmti)
 
 ## 构建
 

@@ -15,6 +15,9 @@
 | `.jar` 输入 → 改写后 `.jar` + emitted C | ✅ | `mj2x_unittest` JAR pipeline 测试 |
 | JAR 输出保留 entry 顺序和非 class 资源 payload | ✅ | JAR fixture 测试 |
 | class entry 在 native method 注入后重新写回 | ✅ | JAR pipeline 测试 |
+| `--native-annotation Lpkg/Anno;` 只翻译带目标方法注解的方法 | ✅ | CLI 注解筛选测试 |
+| 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
+| `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
 
 ---
 
@@ -78,7 +81,13 @@
 
 **intrinsic 限制(初版)**:包装类对象 valueOf/intValue、Random nextInt 涉及对象逃逸表示,暂走 JNI(后续扩展)。
 
-**CLI**:`--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
+**CLI**:
+
+- `--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
+- `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
+- `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
+- `--compile` 在 `--emit-c` 之后自动调用 C 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;`--c-compiler msvc|gcc|clang` 可覆盖自动检测。
+- 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;`JAVA_HOME` 缺失、JNI include 缺失、MSVC 环境未初始化或编译器退出失败时返回非零并打印明确错误。
 
 ---
 

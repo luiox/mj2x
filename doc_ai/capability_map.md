@@ -12,6 +12,8 @@
 | 字节码转 native（RegC / CBackend） | `mj2x/` 各 backend | 栈式 MIR → SSA → 寄存器 IR → C/native |
 | VMC4 自研 VM | `mj2x/vm/`（可选支线，R5+） | opcode 自变异 + 资源切片 |
 | native 运行时 | `mj2x/runtime/` | crypto / antidebug / antijvmti / stringpool |
+| 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` | 注解筛选、C 编译器探测、JNI include 推导 |
+| 用户注解包 | `mj2x/mj2x-annotations/` | `@mj2x.Native` 方法标记源码 |
 | 受保护样本生成 | `mj2x/` 保护管线 | 供 mjdbg 攻击的受保护产物 |
 
 ## 对外依赖（共享能力走 mbase）

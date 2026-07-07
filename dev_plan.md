@@ -24,5 +24,8 @@
 ```bash
 xmake build mj2x-core mj2x-cli mj2x_unittest mj2x_runtime_test
 xmake run mj2x_unittest
+xmake run mj2x_unittest --gtest_filter=CliTest.*
 xmake run mj2x_runtime_test
 ```
+
+`CliTest.*` 覆盖 CLI 注解筛选、`--compile` 错误提示和可用工具链 smoke；本机缺少 `JAVA_HOME` 或 MSVC Developer Command Prompt 环境时，native library 成功编译 smoke 会按环境跳过。

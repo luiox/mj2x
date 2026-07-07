@@ -50,7 +50,44 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --backend regc
 
 后端对比见 [capabilities.md §2 / §3](../doc_ai/capabilities.md)。
 
-### 2.4 调试:查看中间表示
+### 2.4 只翻译带注解的方法
+
+默认情况下,mj2x 会翻译所有可支持的非抽象、非 native 方法。若只想让部分方法走 native,可使用项目提供的 `mj2x.Native` 注解:
+
+```java
+import mj2x.Native;
+
+public class Hello {
+    @Native
+    public static int protectedAdd(int a, int b) {
+        return a + b;
+    }
+
+    public static int plainSub(int a, int b) {
+        return a - b;
+    }
+}
+```
+
+先把注解源码放到 javac classpath:
+
+```bash
+javac -d build/mj2x-annotations mj2x/mj2x-annotations/src/main/java/mj2x/Native.java
+javac -cp build/mj2x-annotations Hello.java
+```
+
+再用注解 descriptor 选择方法:
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --native-annotation Lmj2x/Native;
+```
+
+- `@mj2x.Native` 的 descriptor 是 `Lmj2x/Native;`
+- 未加注解的方法保留原字节码
+- `<init>` / `<clinit>` 不会被翻译
+- `mj2x.Native` 使用 `RetentionPolicy.CLASS`,运行时不依赖该注解类出现在应用 classpath
+
+### 2.5 调试:查看中间表示
 
 ```bash
 mj2x-cli -i Hello.class -o /dev/null --dump-mir
@@ -66,6 +103,9 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `-o, --output <.class/.jar>` | 输出文件(方法被标记为 native) |
 | `--emit-c <file>` | 输出的 C 源码路径 |
 | `--backend <cbackend\|regc>` | 选择后端(默认 `cbackend`) |
+| `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
+| `--compile` | 在 `--emit-c` 后自动编译 native library |
+| `--c-compiler <msvc\|gcc\|clang>` | 覆盖自动探测到的 C 编译器 |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--help` | 打印帮助 |
 
@@ -73,20 +113,49 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 
 ---
 
-## 4. 编译生成的 C 为 DLL
+## 4. 编译生成的 C 为 DLL / SO
 
-### 4.1 用 xmake(推荐,JAR / 复杂场景)
+### 4.1 CLI 自动编译
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile
+```
+
+输出文件位于 `--output` 同目录:
+
+- Windows:`Hello_native.dll`
+- Linux:`Hello_native.so`
+- macOS:`Hello_native.dylib`
+
+默认编译器探测顺序:
+
+- Windows:MSVC `cl`,再尝试 `clang` / `gcc`
+- Linux:`gcc`,再尝试 `clang`
+- macOS:`clang`,再尝试 `gcc`
+
+可用 `--c-compiler` 覆盖:
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile --c-compiler clang
+```
+
+自动编译需要:
+
+- `JAVA_HOME` 指向 JDK,且包含 `include/jni.h`
+- Windows 使用 MSVC 时,在 Developer Command Prompt 或已运行 `vcvars` 的 shell 中执行
+
+### 4.2 用 xmake(推荐,JAR / 复杂场景)
 
 手动建工程或用生成器(实验性,见分支)。核心是:把生成的 `.c` 连同 JNI 头编译为 shared library。
 
-### 4.2 手动编译(Windows / cl)
+### 4.3 手动编译(Windows / cl)
 
 ```bash
 javac -h . Hello.java
 cl /LD /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" Hello.c /FeHello.dll
 ```
 
-### 4.3 手动编译(Linux / gcc)
+### 4.4 手动编译(Linux / gcc)
 
 ```bash
 javac -h . Hello.java
@@ -136,6 +205,12 @@ mj2x-cli -i b.class -o b_out.class --emit-c b_out.c
 
 **Q: 生成的 DLL 加载报 `UnsatisfiedLinkError`?**
 检查:JNI 头是否正确生成(`javac -h`)、DLL 是否在 `java.library.path`、方法签名是否匹配。
+
+**Q: `--compile` 报 `JAVA_HOME is not set`?**
+设置 `JAVA_HOME` 到 JDK 根目录,不是 JRE 目录。mj2x 会读取 `$JAVA_HOME/include` 和平台子目录(`win32` / `linux` / `darwin`)。
+
+**Q: Windows 上 `cl` 存在但 `--compile` 报 MSVC 环境未配置?**
+从 Visual Studio Developer Command Prompt 运行,或先执行对应的 `vcvars64.bat`。
 
 **Q: JAR 改写后签名失效?**
 当前 MVP 不处理签名。`META-INF/*.SF` / `*.RSA` / `*.DSA` / `*.EC` 会触发 fail-closed。需要先去签名再处理。
