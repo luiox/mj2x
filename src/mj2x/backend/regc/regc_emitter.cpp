@@ -137,6 +137,13 @@ std::string operandExpr(const RegOperand& operand) {
         case RegOperandKind::NullLiteral:
             return "NULL";
         case RegOperandKind::Opaque:
+            // A String LDC carries its UTF-8 content after "ldc_string:" so the
+            // String intrinsic path can materialize the jstring without going
+            // through JNI call dispatch.  Other opaques stay as annotated NULL.
+            if (operand.tag.rfind("ldc_string:", 0) == 0) {
+                return "_mj2x_intrinsic_string_literal(_mj2x_regc_current_context(), "
+                       + cStringLiteral(operand.tag.substr(std::string("ldc_string:").size())) + ")";
+            }
             return "NULL /* opaque:" + operand.tag + " */";
     }
     return "0";
@@ -364,7 +371,38 @@ void emitHelperPrelude(std::ostringstream& out) {
     out << "static float _mj2x_regc_call_f32(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
     out << "static double _mj2x_regc_call_f64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
     out << "static mj2x_ref _mj2x_regc_call_ref(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
-    out << "static void _mj2x_regc_call_void(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n\n";
+    out << "static void _mj2x_regc_call_void(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
+    // String LDC intrinsic: materializes a jstring from UTF-8 so String-typed
+    // intrinsics (parseInt/literal/toString) avoid JNI call dispatch.  The
+    // body is emitted by the JNI TU prelude where _mj2x_regc_env is in scope.
+    out << "static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* utf8);\n";
+    // String-typed JDK intrinsic whose body needs JNI (GetStringUTFChars) to
+    // reach the literal content.  Declared here and defined in the JNI TU.
+    out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n";
+    // Pure-computation Math intrinsics live in the runtime lib (no JNI); these
+    // declarations resolve at link time against mj2x-runtime-core the same way
+    // mj2x_regc_div_i32 does.
+    out << "int32_t mj2x_math_abs_i32(int32_t value);\n";
+    out << "int64_t mj2x_math_abs_i64(int64_t value);\n";
+    out << "float mj2x_math_abs_f32(float value);\n";
+    out << "double mj2x_math_abs_f64(double value);\n";
+    out << "int32_t mj2x_math_min_i32(int32_t lhs, int32_t rhs);\n";
+    out << "int32_t mj2x_math_max_i32(int32_t lhs, int32_t rhs);\n";
+    out << "int64_t mj2x_math_min_i64(int64_t lhs, int64_t rhs);\n";
+    out << "int64_t mj2x_math_max_i64(int64_t lhs, int64_t rhs);\n";
+    out << "float mj2x_math_min_f32(float lhs, float rhs);\n";
+    out << "float mj2x_math_max_f32(float lhs, float rhs);\n";
+    out << "double mj2x_math_min_f64(double lhs, double rhs);\n";
+    out << "double mj2x_math_max_f64(double lhs, double rhs);\n";
+    out << "double mj2x_math_sin(double value);\n";
+    out << "double mj2x_math_cos(double value);\n";
+    out << "double mj2x_math_tan(double value);\n";
+    out << "double mj2x_math_sqrt(double value);\n";
+    out << "double mj2x_math_pow(double base, double exponent);\n";
+    out << "double mj2x_math_floor(double value);\n";
+    out << "double mj2x_math_ceil(double value);\n";
+    out << "int64_t mj2x_math_round(double value);\n";
+    out << "double mj2x_math_random();\n\n";
 }
 
 std::string callArgs(const std::vector<RegOperand>& args) {
@@ -374,6 +412,96 @@ std::string callArgs(const std::vector<RegOperand>& args) {
         os << ", (" << cType(arg.type) << ")(" << operandExpr(arg) << ")";
     }
     return os.str();
+}
+
+// Emit a unary or binary runtime-math intrinsic call.  Returns true when the
+// signature matched and the call was written.  Kept narrow: only static
+// java.lang.Math methods whose args are pure primitives, so no receiver and no
+// JNI boundary is involved.
+bool tryEmitMathIntrinsic(std::ostringstream& out, const RegInstruction& ins) {
+    if (!isStaticCall(ins)) return false;
+    if (ins.method.owner != "java/lang/Math") return false;
+
+    // Each entry: descriptor suffix -> C runtime symbol.  The descriptor is
+    // matched against ins.method.desc so overload resolution (abs(I)I vs
+    // abs(D)D) picks the right width.
+    struct MathEntry {
+        const char* method;
+        const char* desc;
+        const char* runtimeSymbol;
+        bool unary;
+    };
+    static constexpr MathEntry entries[] = {
+        {"abs", "(I)I", "mj2x_math_abs_i32", true},
+        {"abs", "(J)J", "mj2x_math_abs_i64", true},
+        {"abs", "(F)F", "mj2x_math_abs_f32", true},
+        {"abs", "(D)D", "mj2x_math_abs_f64", true},
+        {"min", "(II)I", "mj2x_math_min_i32", false},
+        {"max", "(II)I", "mj2x_math_max_i32", false},
+        {"min", "(JJ)J", "mj2x_math_min_i64", false},
+        {"max", "(JJ)J", "mj2x_math_max_i64", false},
+        {"min", "(FF)F", "mj2x_math_min_f32", false},
+        {"max", "(FF)F", "mj2x_math_max_f32", false},
+        {"min", "(DD)D", "mj2x_math_min_f64", false},
+        {"max", "(DD)D", "mj2x_math_max_f64", false},
+        {"sin", "(D)D", "mj2x_math_sin", true},
+        {"cos", "(D)D", "mj2x_math_cos", true},
+        {"tan", "(D)D", "mj2x_math_tan", true},
+        {"sqrt", "(D)D", "mj2x_math_sqrt", true},
+        {"floor", "(D)D", "mj2x_math_floor", true},
+        {"ceil", "(D)D", "mj2x_math_ceil", true},
+        {"pow", "(DD)D", "mj2x_math_pow", false},
+        {"round", "(D)J", "mj2x_math_round", true},
+        {"random", "()D", "mj2x_math_random", true},
+    };
+
+    for (const auto& e : entries) {
+        if (ins.method.name != e.method || ins.method.desc != e.desc) continue;
+
+        const bool isRandom = ins.method.name == "random";
+        if (isRandom && !ins.args.empty()) return false;
+        if (!isRandom && ins.args.empty()) return false;
+
+        out << "    ";
+        if (ins.hasDest) out << regName(ins.dest.id) << " = ";
+        out << e.runtimeSymbol << "(";
+        if (isRandom) {
+            out << ")";
+        } else if (e.unary) {
+            out << operandExpr(ins.args[0]) << ")";
+        } else {
+            out << operandExpr(ins.args[0]) << ", " << operandExpr(ins.args[1]) << ")";
+        }
+        out << ";\n";
+        return true;
+    }
+    return false;
+}
+
+// Emit Integer.parseInt(String) as a native intrinsic instead of a JNI static
+// call.  The body reads the jstring UTF-8 bytes and parses them, so the parse
+// never dispatches through CallStaticIntMethod.  Returns true when matched.
+bool tryEmitStringParseIntrinsic(std::ostringstream& out, const RegInstruction& ins) {
+    if (!isStaticCall(ins)) return false;
+    if (ins.method.owner == "java/lang/Integer" &&
+        ins.method.name == "parseInt" &&
+        ins.method.desc == "(Ljava/lang/String;)I" &&
+        ins.args.size() == 1) {
+        out << "    ";
+        if (ins.hasDest) out << regName(ins.dest.id) << " = ";
+        out << "_mj2x_intrinsic_parse_int(_mj2x_regc_current_context(), "
+            << operandExpr(ins.args[0]) << ");\n";
+        return true;
+    }
+    return false;
+}
+
+// Dispatcher: returns true if a JDK method call was lowered to an intrinsic
+// (math or String), in which case the generic JNI call helper is skipped.
+bool tryEmitIntrinsicCall(std::ostringstream& out, const RegInstruction& ins) {
+    if (tryEmitMathIntrinsic(out, ins)) return true;
+    if (tryEmitStringParseIntrinsic(out, ins)) return true;
+    return false;
 }
 
 void emitEdgeCopies(std::ostringstream& out, const std::vector<RegCopy>& copies, int edgeIndex) {
@@ -493,6 +621,10 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
                 << ", " << operandExpr(ins.value) << ");\n";
             return true;
         case RegInstructionKind::Call:
+            // JDK intrinsic recognition: Math.* and Integer.parseInt are lowered
+            // to direct runtime calls so no JNI method dispatch is emitted.  If
+            // no intrinsic matches, fall through to the generic JNI call helper.
+            if (tryEmitIntrinsicCall(out, ins)) return true;
             if (ins.hasDest) {
                 out << "    " << regName(ins.dest.id) << " = _mj2x_regc_call_"
                     << helperSuffix(ins.dest.type) << "("

@@ -243,20 +243,41 @@ protected:
         fs::create_directories(objDir, ec);
         ASSERT_FALSE(ec) << ec.message();
         fs::path generatedObj = objDir / "generated.obj";
-        fs::path runtimeObj = objDir / "regc_runtime_abi.obj";
         fs::path runtimeSrc = fs::current_path() / "mj2x" / "runtime" / "src";
-        fs::path runtimeAbi = runtimeSrc / "regc" / "regc_runtime_abi.cpp";
-        ASSERT_TRUE(fileExists(runtimeAbi)) << runtimeAbi;
-        auto cl = runBat({
-            "call " + q(tc_.vcvars64) + " >nul",
+
+        // Compile every runtime .cpp the generated TU may reference.  The regc
+        // ABI helper is always needed (div/rem/barrier); the intrinsic modules
+        // back the mj2x_math_* / mj2x_intrinsic_* symbols the emitter lowers
+        // JDK calls to.  Compiling all of them keeps the harness ready for new
+        // intrinsic coverage without per-test obj wiring.
+        std::vector<std::string> compileLines;
+        compileLines.push_back("call " + q(tc_.vcvars64) + " >nul");
+        compileLines.push_back(
             "cl /nologo /O2 /c /Fo" + q(generatedObj) + " " + q(cFile) +
+            " /I" + q(runtimeSrc) +
+            " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+
+        std::vector<fs::path> runtimeObjs;
+        auto compileRuntime = [&](const std::string& relPath, const std::string& objName) {
+            fs::path src = runtimeSrc / relPath;
+            ASSERT_TRUE(fileExists(src)) << src;
+            fs::path obj = objDir / objName;
+            runtimeObjs.push_back(obj);
+            compileLines.push_back(
+                "cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) +
                 " /I" + q(runtimeSrc) +
-                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
-            "cl /nologo /O2 /c /Fo" + q(runtimeObj) + " " + q(runtimeAbi) +
-                " /I" + q(runtimeSrc) +
-                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
-            "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj) + " " + q(runtimeObj),
-        });
+                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+        };
+        compileRuntime("regc/regc_runtime_abi.cpp", "regc_runtime_abi.obj");
+        compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
+        compileRuntime("intrinsic/intrinsic_math.cpp", "intrinsic_math.obj");
+        compileRuntime("intrinsic/intrinsic_random.cpp", "intrinsic_random.obj");
+
+        std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
+        for (const auto& obj : runtimeObjs) linkLine += " " + q(obj);
+        compileLines.push_back(linkLine);
+
+        auto cl = runBat(compileLines);
         ASSERT_EQ(cl.exitCode, 0) << cl.out;
         ASSERT_TRUE(fileExists(dll));
 
@@ -589,4 +610,59 @@ TEST_F(RegCBackendE2E, IntegerDivisionTrapRoundTrip) {
             {"longDivOrCatch(12L, 3L)", "RegCIntegerTraps.longDivOrCatch(12L, 3L)"},
             {"longDivOrCatch(12L, 0L)", "RegCIntegerTraps.longDivOrCatch(12L, 0L)"},
         });
+}
+
+// JDK intrinsic E2E: Integer.parseInt + Math.* run entirely in native code.
+// The generated C must call mj2x_math_* / _mj2x_intrinsic_parse_int and must
+// not dispatch Math/parseInt through the JNI call helper.  Results match the
+// original Java baseline (parseInt "42" -> 42, Math.sin via the same IEEE 754
+// sin both sides use).
+TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
+    runCase(
+        "RegCIntrinsic",
+        "public class RegCIntrinsic {\n"
+        "  public static int parseInt42() { return Integer.parseInt(\"42\"); }\n"
+        "  public static int parseIntArg(String s) { return Integer.parseInt(s); }\n"
+        "  public static double sinDemo(double x) { return Math.sin(x); }\n"
+        "  public static double sqrtDemo(double x) { return Math.sqrt(x); }\n"
+        "  public static int mathChain(int a, int b) {\n"
+        "    return Math.max(a, b) + Math.abs(a - b);\n"
+        "  }\n"
+        "  public static long roundDemo(double x) { return Math.round(x); }\n"
+        "}\n",
+        {
+            {"parseInt42()", "RegCIntrinsic.parseInt42()"},
+            {"parseIntArg(\"-123\")", "RegCIntrinsic.parseIntArg(\"-123\")"},
+            {"sinDemo(1.0)", "RegCIntrinsic.sinDemo(1.0)"},
+            {"sqrtDemo(2.0)", "RegCIntrinsic.sqrtDemo(2.0)"},
+            {"mathChain(3, 9)", "RegCIntrinsic.mathChain(3, 9)"},
+            {"mathChain(-5, -2)", "RegCIntrinsic.mathChain(-5, -2)"},
+            {"roundDemo(2.6)", "RegCIntrinsic.roundDemo(2.6)"},
+            {"roundDemo(2.5)", "RegCIntrinsic.roundDemo(2.5)"},
+            {"roundDemo(-2.5)", "RegCIntrinsic.roundDemo(-2.5)"},
+        });
+
+    // After runCase succeeds, the generated C file is on disk.  Re-open it to
+    // assert the intrinsic path was taken (no JNI dispatch at the matched call
+    // sites).  This is the structural guarantee the task requires: only the
+    // boundary wrappers carry JNI, intrinsic call sites stay native.
+    fs::path dir = caseDir("RegCIntrinsic");
+    fs::path cFile = dir / "RegCIntrinsic.c";
+    ASSERT_TRUE(fileExists(cFile)) << cFile;
+    std::string generatedC = readText(cFile);
+    EXPECT_NE(generatedC.find("mj2x_math_sin("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_math_sqrt("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_math_max_i32("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_math_abs_i32("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_math_round("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_int("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_literal("), std::string::npos) << generatedC;
+    // The matched JDK call sites must not dispatch through the JNI call helper.
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_f64(\"java/lang/Math\""), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i64(\"java/lang/Math\""), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"parseInt\""),
+              std::string::npos)
+        << generatedC;
 }

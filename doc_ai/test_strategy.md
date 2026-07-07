@@ -245,13 +245,25 @@ byte/short/char array helper 的 DLL round-trip。
 
 ### 3.10 R3 runtime core
 
-`mj2x/runtime/src/{crypto,kernel,antidebug,antijvmti,stringpool}/` 提供 R3
+`mj2x/runtime/src/{crypto,kernel,antidebug,antijvmti,stringpool,intrinsic}/` 提供 R3
 runtime foundation。`mj2x_runtime_test` 覆盖 SHA-256/HMAC 标准向量、
 HKDF-SHA256 RFC 5869 向量、HMAC 校验、volatile wipe、JNI table tamper mock、
 agent 参数扫描、anti-debug signal 聚合和 string-pool 派生流解码。
 
+`intrinsic/` 子模块承载 JDK intrinsic 的 runtime 实现:`intrinsic_wrapper`
+(包装类 valueOf/xxxValue + Integer cache)、`intrinsic_math`(Math abs/min/max/
+sin/.../random,JLS NaN 语义)、`intrinsic_random`(Java 兼容 LCG,序列逐位对齐
+`new java.util.Random(42)`)。`mj2x_runtime_test` 对应三个 `Intrinsic*Test` 套件。
+
+`regc_intrinsic_test.cpp` 在 RegC 单测层断言 emitter 把 JDK 调用(Math/parseInt)
+识别为 intrinsic,生成 C 不含对应 `_mj2x_regc_call_*`;`RegCBackendE2E.
+IntrinsicMathAndParseIntRoundTrip` 在 JDK/MSVC 可用时真编译 DLL 并与 Java 基准
+逐项对比(parseInt "42" -> 42,sin/sqrt/round 浮点与语义对比),且断言生成 C 在
+Math/parseInt 调用点无 JNI 派发。
+
 设计说明见 `runtime_crypto.md`、`runtime_kernel.md`、
-`runtime_antijvmti.md`、`runtime_antidebug.md`、`runtime_stringpool.md`。
+`runtime_antijvmti.md`、`runtime_antidebug.md`、`runtime_stringpool.md`、
+`regc_intrinsic.md`。
 
 ---
 

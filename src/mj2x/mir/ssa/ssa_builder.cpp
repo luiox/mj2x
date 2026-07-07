@@ -82,7 +82,12 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c) {
         return fn.internNull();
     }
     if (std::holds_alternative<std::string>(c->value)) {
-        return fn.newOpaque(SSAType::REF, "ldc_string");
+        // Carrying the literal content through the opaque tag lets downstream
+        // String intrinsics (parseInt/literal/toString) recover it without a
+        // separate IR value kind.  The "ldc_string:" prefix marks this opaque
+        // as a String LDC; anything after it is the raw UTF-8 content.  Emitter
+        // and dump apply their own escaping when rendering.
+        return fn.newOpaque(SSAType::REF, "ldc_string:" + std::get<std::string>(c->value));
     }
     return fn.newOpaque(mirKindToSSA(c->type), "ldc_unknown");
 }

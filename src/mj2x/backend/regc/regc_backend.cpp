@@ -394,6 +394,51 @@ void emitRuntimeHelpers(std::ostringstream& out) {
     out << "static double _mj2x_regc_call_f64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return 0.0; return is_static ? (*_mj2x_regc_env)->CallStaticDoubleMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values) : (*_mj2x_regc_env)->CallDoubleMethodA(_mj2x_regc_env, receiver, m, values); }\n";
     out << "static mj2x_ref _mj2x_regc_call_ref(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return NULL; return is_static ? (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values) : (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethodA(_mj2x_regc_env, receiver, m, values); }\n";
     out << "static void _mj2x_regc_call_void(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return; if (is_static) (*_mj2x_regc_env)->CallStaticVoidMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values); else (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }\n\n";
+    // String LDC intrinsic helper.  This is the only JNI touchpoint of the
+    // String intrinsic path: a String literal becomes a jstring via
+    // NewStringUTF so it can flow into parseInt/toString without per-call JNI
+    // method dispatch.  context is accepted for ABI symmetry with future
+    // throwing String intrinsics.
+    out << "static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* utf8) {\n";
+    out << "    (void)context;\n";
+    out << "    if (utf8 == NULL) return NULL;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);\n";
+    out << "}\n\n";
+    // Integer.parseInt intrinsic.  Reads the jstring's modified-UTF-8 bytes,
+    // parses the leading integer, and throws NumberFormatException through the
+    // context callback when the input is not a parseable int.  This is the only
+    // JNI touchpoint of parseInt: the parse itself stays in native strtol, no
+    // CallStaticIntMethod dispatch is emitted for the parseInt call site.
+    out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr_ref) {\n";
+    out << "    if (jstr_ref == NULL) {\n";
+    out << "        if (context != NULL && context->throwException != NULL) {\n";
+    out << "            context->throwException(context->env, \"java/lang/NullPointerException\", \"parseInt\");\n";
+    out << "        }\n";
+    out << "        return 0;\n";
+    out << "    }\n";
+    out << "    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, NULL);\n";
+    out << "    if (utf == NULL) return 0;\n";
+    out << "    char* end = NULL;\n";
+    out << "    errno = 0;\n";
+    out << "    long parsed = strtol(utf, &end, 10);\n";
+    out << "    int failed = (end == utf) || (errno == ERANGE) ||\n";
+    // Use explicit casts: a bare 2147483648L literal is ill-typed on 32-bit
+    // long targets (MSVC), which would flip the range check on valid inputs.
+    out << "                 (parsed > (long)INT32_MAX) || (parsed < (long)INT32_MIN);\n";
+    // JDK Integer.parseInt rejects trailing non-digit characters too; mirror
+    // that by checking the whole string (skipping ASCII whitespace only at the
+    // leading edge, matching JDK which uses Character.isWhitespace via the
+    // leading-sign/no-trim Integer.parseInt(String) contract).
+    out << "    if (!failed) { while (*end != '\\0' && (*end == ' ' || *end == '\\t')) end++; failed = (*end != '\\0'); }\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);\n";
+    out << "    if (failed) {\n";
+    out << "        if (context != NULL && context->throwException != NULL) {\n";
+    out << "            context->throwException(context->env, \"java/lang/NumberFormatException\", \"For input string\");\n";
+    out << "        }\n";
+    out << "        return 0;\n";
+    out << "    }\n";
+    out << "    return (int32_t)parsed;\n";
+    out << "}\n\n";
 }
 
 } // namespace
@@ -482,7 +527,10 @@ void RegCBackend::finalize(const CompilerIndex& index) {
     full << "#include <stdint.h>\n";
     full << "#include <stddef.h>\n";
     full << "#include <stdarg.h>\n";
-    full << "#include <math.h>\n\n";
+    full << "#include <math.h>\n";
+    // strtol + errno are used by the Integer.parseInt intrinsic body below.
+    full << "#include <stdlib.h>\n";
+    full << "#include <errno.h>\n\n";
     emitRuntimeHelpers(full);
     full << impl_->source.str();
 

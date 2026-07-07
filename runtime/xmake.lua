@@ -8,6 +8,7 @@ target("mj2x-runtime-core")
     add_files("src/antijvmti/*.cpp")
     add_files("src/regc/*.cpp")
     add_files("src/stringpool/*.cpp")
+    add_files("src/intrinsic/*.cpp")
     add_includedirs("src", {public = true})
 
     if is_plat("windows") then

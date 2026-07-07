@@ -422,8 +422,11 @@ TEST(SSABuilderE2E, LowersStringLdcAsOpaqueReference) {
     ASSERT_NE(fn, nullptr) << "build failed: " << reason;
 
     std::string dump = dumpSSA(*fn);
-    EXPECT_NE(dump.find("<opaque:ldc_string>"), std::string::npos) << dump;
-    EXPECT_NE(dump.find("ret <opaque:ldc_string>"), std::string::npos) << dump;
+    // The String LDC opaque now carries the literal content after the
+    // "ldc_string:" prefix so String intrinsics (parseInt/literal/toString)
+    // can recover it.  The dump must still read as a stackless opaque form.
+    EXPECT_NE(dump.find("<opaque:ldc_string:hello>"), std::string::npos) << dump;
+    EXPECT_NE(dump.find("ret <opaque:ldc_string:hello>"), std::string::npos) << dump;
     EXPECT_EQ(dump.find("cstack"), std::string::npos) << dump;
 }
 
@@ -758,7 +761,9 @@ TEST(SSABuilderJavaSamples, ObjectsArraysAndReferenceOpsFromJavaSource) {
     ASSERT_NE(literal, nullptr);
     auto literalFn = buildSSAFor(cn.get(), literal, reason);
     ASSERT_NE(literalFn, nullptr) << reason;
-    EXPECT_NE(dumpSSA(*literalFn).find("<opaque:ldc_string>"), std::string::npos);
+    // The opaque tag now embeds the literal content ("ssa-case") so the String
+    // intrinsic path can recover it without re-parsing bytecode.
+    EXPECT_NE(dumpSSA(*literalFn).find("<opaque:ldc_string:ssa-case>"), std::string::npos);
 }
 
 TEST(SSABuilderJavaSamples, NarrowingConversionsFromJavaSource) {

@@ -68,6 +68,15 @@
 - try / catch
 - null trap
 - integer div / rem trap(走 R3 runtime ABI)
+- **JDK intrinsic(Math / parseInt)**:RegC 在 Call 分支识别 JDK 方法签名,不发 JNI,直接内联 runtime intrinsic
+
+**JDK intrinsic 覆盖(初版,无 JNI 派发)**:
+
+- `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
+- `java.lang.Integer.parseInt(String)`:native strtol 解析,NumberFormatException 经 context 回调路由
+- String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
+
+**intrinsic 限制(初版)**:包装类对象 valueOf/intValue、Random nextInt 涉及对象逃逸表示,暂走 JNI(后续扩展)。
 
 **CLI**:`--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
 
@@ -80,6 +89,11 @@
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
 | RegC / R3 ABI 冻结 | ✅ 当前冻结在 div / rem / barrier helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
+| **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
+| Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random) | ✅ runtime + emitter 识别 |
+| Integer.parseInt intrinsic | ✅ emitter 内联 JNI helper + E2E |
+| 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime(对象逃逸未接 emitter) |
+| Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime(逐位对齐 JDK,对象逃逸未接 emitter) |
 
 ---
 
