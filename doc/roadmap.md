@@ -44,6 +44,11 @@ mj2x 的核心能力是 Java 字节码 → native 编译管线。管线的进化
 mj2x 是 morpher attack/defense loop 的蓝队半环。其输出最终必须由 mjdbg 攻击。
 **一个波次只有当 mjdbg（红队）确认攻击变难时才算"完成"，而不是当实现看起来完整。**
 
+> **技术演进谱系**: 本文按 R 波次组织交付节奏（"做哪些"）；跨波次的技术能力代际演进
+> （直译栈字节码 → 符号缓存 → 基元/字符串 intrinsic → 容器映射 + Any → 调用语义 → invokedynamic →
+> JVMTI CallSite → 内存池）见 [`doc/translation_evolution.md`](translation_evolution.md)（"每类技术如何一代代演进"）。
+> 波次与代际互补，某代能力可择机插入最近的波次。
+
 ### 1.1 竞争定位
 
 | 维度 | jvmtp/jumanji144 | mj2x |
@@ -316,6 +321,7 @@ mj2x AI 维护：
 
 - `prompt/mj2x.md`
 - 本文 `doc/roadmap.md`
+- `doc/translation_evolution.md`（跨波次技术能力代际演进谱系）
 - `doc/architecture_redesign.md`（★ 重构期最高优先级）
 - `doc/architecture.md`
 - `dev_plan.md`
