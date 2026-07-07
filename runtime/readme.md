@@ -12,7 +12,7 @@ samples.
 - `src/antidebug/`: platform debugger signal collection.
 - `src/stringpool/`: HKDF-derived string-pool decode.
 
-Design notes live in `mj2x/doc/RUNTIME_*.md`.
+Design notes live in `mj2x/doc_ai/RUNTIME_*.md`.
 
 ## Build
 

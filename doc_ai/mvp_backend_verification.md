@@ -80,7 +80,7 @@ JAR MVP committed fixtures：
 - `mvp_jar/assets/config.properties`
 
 生成物不提交，统一写入 `test/mj2x/protected_samples/...`。这符合
-`spec/project-test-resource-spec.md`：`test_resource/` 存稳定输入，测试输出进入 `test/`。
+`doc_ai/project-test-resource-spec.md`：`test_resource/` 存稳定输入，测试输出进入 `test/`。
 
 ## MVP 剩余风险
 

@@ -85,4 +85,4 @@ workflow is:
 5. Record observations as weakness reports for mj2x hardening.
 
 When the fixture format or trace expectations change, update this document,
-`mj2x/doc/TEST_STRATEGY.md`, and the per-sample README in the same change.
+`mj2x/test_strategy.md`, and the per-sample README in the same change.
