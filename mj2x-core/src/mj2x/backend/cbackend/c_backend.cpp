@@ -1,6 +1,7 @@
 #include "c_backend.hpp"
 #include "mj2x/backend/cbackend/c_runtime_prelude.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
+#include "mj2x/codegen/c_source.hpp"
 #include "mj2x/codegen/include_set.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 
@@ -16,6 +17,7 @@
 #include <unordered_set>
 #include <vector>
 #include <string>
+#include <string_view>
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 
@@ -26,6 +28,7 @@ using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
+using codegen::CSourceStream;
 
 // label 标识：LabelNode* 转 int（与 code_converter 的 labelKey 一致；见 dev_plan R1a.3）。
 static int labelKey(jbytecode::core::Label* lbl) {
@@ -50,8 +53,46 @@ static std::string labelIdent(jbytecode::core::Label* lbl) {
 
 namespace {
 using codegen::cStringLiteral;
-using codegen::mangleMethod;
 }  // namespace
+
+static std::uint64_t fnv1a64(std::string_view value, std::uint64_t seed = 1469598103934665603ULL) {
+    std::uint64_t hash = seed;
+    for (unsigned char c : value) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static std::string hex64(std::uint64_t value) {
+    std::ostringstream os;
+    os << std::hex << std::setw(16) << std::setfill('0') << value;
+    return os.str();
+}
+
+static std::string nativeFunctionName(
+    const std::string& className,
+    const std::string& methodName,
+    const std::string& methodDesc)
+{
+    auto hash = fnv1a64(className);
+    hash = fnv1a64(methodName, hash);
+    hash = fnv1a64(methodDesc, hash);
+    return "__mj2x_c_" + hex64(hash);
+}
+
+static std::string registerFunctionName(const std::string& className) {
+    std::string ident = "_mj2x_register_";
+    for (unsigned char c : className) {
+        if (std::isalnum(c)) {
+            ident += static_cast<char>(c);
+        } else {
+            ident += "_";
+            ident += hex64(c).substr(14);
+        }
+    }
+    return ident;
+}
 
 // ============================================================
 // Type mapping helpers
@@ -241,6 +282,12 @@ struct CExceptionDispatchInfo {
     std::vector<int> handlerIndices;
 };
 
+struct CNativeRegistration {
+    std::string javaName;
+    std::string javaDesc;
+    std::string cFunctionName;
+};
+
 static std::string exceptionDispatchKey(const std::vector<int>& handlerIndices) {
     std::ostringstream key;
     bool first = true;
@@ -287,7 +334,9 @@ static void removeActiveHandler(std::vector<int>& activeHandlers, int handlerInd
 struct CBackend::Impl {
     std::ostringstream header;
     std::ostringstream source;
-    std::unordered_set<std::string> exportedFunctions;
+    std::unordered_set<std::string> nativeFunctions;
+    std::unordered_map<std::string, std::vector<CNativeRegistration>> registrationsByClass;
+    std::vector<std::string> registrationClassOrder;
 
     // Cache current method info for codegen
     std::string currentClassName;
@@ -334,6 +383,8 @@ struct CBackend::Impl {
     void emitArrayLength(const MIRArrayLength* node, std::ostringstream& out);
     void emitArrayLoad(const MIRArrayLoad* node, std::ostringstream& out);
     void emitArrayStore(const MIRArrayStore* node, std::ostringstream& out);
+    void emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostringstream& out);
+    void emitRegistrationCode(std::ostringstream& out) const;
 };
 
 CBackend::CBackend()
@@ -365,10 +416,23 @@ BackendResult CBackend::compileMethod(
     auto retType = jvmDescToPrimitive(
         Type::getReturnType(mn->desc).getDescriptor().to_std_string());
 
-    auto funcName = mangleMethod(cls, mn->name.to_std_string(), mn->desc.to_std_string());
-    impl_->exportedFunctions.insert(funcName);
+    std::string methodName = mn->name.to_std_string();
+    std::string methodDesc = mn->desc.to_std_string();
+    auto funcName = nativeFunctionName(cls, methodName, methodDesc);
+    if (!impl_->nativeFunctions.insert(funcName).second) {
+        int suffix = 1;
+        std::string candidate;
+        do {
+            candidate = funcName + "_" + std::to_string(suffix++);
+        } while (!impl_->nativeFunctions.insert(candidate).second);
+        funcName = std::move(candidate);
+    }
+    auto [regsIt, insertedClass] = impl_->registrationsByClass.emplace(cls, std::vector<CNativeRegistration>{});
+    if (insertedClass)
+        impl_->registrationClassOrder.push_back(cls);
+    regsIt->second.push_back({methodName, methodDesc, funcName});
 
-    funcOut << "JNIEXPORT " << primitiveToJNIType(retType) << " JNICALL\n";
+    funcOut << "static " << primitiveToJNIType(retType) << " JNICALL\n";
     funcOut << funcName << "(JNIEnv* env, "
             << (isStatic ? "jclass clazz" : "jobject this");
 
@@ -522,6 +586,7 @@ void CBackend::finalize(const CompilerIndex& index) {
     full << "\n";
     full << backend::cBackendRuntimePrelude();
     full << impl_->source.str();
+    impl_->emitRegistrationCode(full);
 
     headerCode_ = "/* Generated by mj2x CBackend */\n" + includes.render() + "\n";
     sourceCode_ = full.str();
@@ -537,6 +602,55 @@ void CBackend::finalize(const CompilerIndex& index) {
             printf("[CBackend] ERROR: cannot write %s\n", cOutputPath_.c_str());
         }
     }
+}
+
+void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
+    CSourceStream src;
+    src.emitLine("/* Native registration */");
+    for (const auto& className : registrationClassOrder) {
+        auto found = registrationsByClass.find(className);
+        if (found == registrationsByClass.end() || found->second.empty())
+            continue;
+
+        const auto registerName = registerFunctionName(className);
+        src.emitLine("static jint " + registerName + "(JNIEnv* env) {");
+        src.indent();
+        src.emitLine("jclass clazz = (*env)->FindClass(env, " + cStringLiteral(className) + ");");
+        src.emitLine("if (clazz == NULL) return JNI_ERR;");
+        src.emitLine("static JNINativeMethod methods[] = {");
+        src.indent();
+        for (const auto& reg : found->second) {
+            src.emitLine("{(char*)" + cStringLiteral(reg.javaName)
+                + ", (char*)" + cStringLiteral(reg.javaDesc)
+                + ", (void*)" + reg.cFunctionName + "},");
+        }
+        src.dedent();
+        src.emitLine("};");
+        src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, "
+            "sizeof(methods) / sizeof(methods[0])) != 0) return JNI_ERR;");
+        src.emitLine("return JNI_OK;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("");
+    }
+
+    src.emitLine("JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {");
+    src.indent();
+    src.emitLine("JNIEnv* env = NULL;");
+    src.emitLine("(void)reserved;");
+    src.emitLine("if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;");
+    for (const auto& className : registrationClassOrder) {
+        auto found = registrationsByClass.find(className);
+        if (found == registrationsByClass.end() || found->second.empty())
+            continue;
+        src.emitLine("if (" + registerFunctionName(className) + "(env) != JNI_OK) return JNI_ERR;");
+    }
+    src.emitLine("return JNI_VERSION_1_6;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("");
+
+    out << src.str();
 }
 
 // ============================================================
@@ -741,6 +855,16 @@ void CBackend::Impl::emitIinc(const MIRIinc* node, std::ostringstream& out) {
     out << "    locals[" << node->varIndex << "].i += " << node->increment << ";\n";
 }
 
+void CBackend::Impl::emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostringstream& out) {
+    out << "    if (stack[sp]" << rhsAccessor << " == 0) {\n";
+    out << "        (*env)->ThrowNew(env, (*env)->FindClass(env, \"java/lang/ArithmeticException\"), \"/ by zero\");\n";
+    if (!currentExceptionDispatchTarget.empty())
+        out << "        goto " << currentExceptionDispatchTarget << ";\n";
+    else
+        emitExceptionReturn(currentMethodDesc, out, 8);
+    out << "    }\n";
+}
+
 void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& out) {
     const char* acc = stackAccessor(node->type);
     const char* lhs = "stack[sp - 1]";
@@ -748,8 +872,8 @@ void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& o
 
     // JVM 整数算术是确定的有符号二补码环绕；C int 溢出是 UB。
     // 对 ADD/SUB/MUL/SHL/NEG/USHR 显式走无符号运算再转回，保证环绕语义。
-    // DIV/REM：JVM 与 C 对有符号除/模在大多数平台上行为一致（向零截断），
-    //   但 JVM 在除零时抛 ArithmeticException —— MVP 接受 C 行为（UB/崩溃），记为已知限制。
+    // DIV/REM：除零必须抛 ArithmeticException；MIN_VALUE / -1 和 % -1 也显式处理，
+    // 避免 C 有符号除法 UB。
     if (node->type == PrimitiveKind::INT) {
         switch (node->op) {
         case BinaryOp::ADD: case BinaryOp::SUB: case BinaryOp::MUL:
@@ -773,7 +897,27 @@ void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& o
                 << " >> (" << rhs << acc << " & 31));\n";
             out << "    sp--;\n";
             return;
-        default: break;  // DIV/REM/SHR/AND/OR/XOR：直接发，行为一致或 MVP 接受
+        case BinaryOp::DIV:
+            emitIntegerDivZeroTrap(acc, out);
+            out << "    if (" << lhs << acc << " == (jint)0x80000000u && "
+                << rhs << acc << " == -1) {\n";
+            out << "        " << lhs << acc << " = (jint)0x80000000u;\n";
+            out << "    } else {\n";
+            out << "        " << lhs << acc << " = " << lhs << acc << " / " << rhs << acc << ";\n";
+            out << "    }\n";
+            out << "    sp--;\n";
+            return;
+        case BinaryOp::REM:
+            emitIntegerDivZeroTrap(acc, out);
+            out << "    if (" << lhs << acc << " == (jint)0x80000000u && "
+                << rhs << acc << " == -1) {\n";
+            out << "        " << lhs << acc << " = 0;\n";
+            out << "    } else {\n";
+            out << "        " << lhs << acc << " = " << lhs << acc << " % " << rhs << acc << ";\n";
+            out << "    }\n";
+            out << "    sp--;\n";
+            return;
+        default: break;
         }
     }
     if (node->type == PrimitiveKind::LONG) {
@@ -799,6 +943,7 @@ void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& o
             out << "    sp--;\n";
             return;
         case BinaryOp::DIV:
+            emitIntegerDivZeroTrap(acc, out);
             out << "    if (" << lhs << acc << " == (jlong)0x8000000000000000ULL && "
                 << rhs << acc << " == -1) {\n";
             out << "        " << lhs << acc << " = (jlong)0x8000000000000000ULL;\n";
@@ -808,6 +953,7 @@ void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& o
             out << "    sp--;\n";
             return;
         case BinaryOp::REM:
+            emitIntegerDivZeroTrap(acc, out);
             out << "    if (" << lhs << acc << " == (jlong)0x8000000000000000ULL && "
                 << rhs << acc << " == -1) {\n";
             out << "        " << lhs << acc << " = 0;\n";

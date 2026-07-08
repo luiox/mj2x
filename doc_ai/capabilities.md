@@ -24,6 +24,8 @@
 ## 2. CBackend(广覆盖正确性后端)
 
 定位:正确性基线后端,覆盖广,输出仍是 stack-style(`union jvalue stack[]` + `sp`)。
+Native 绑定使用 `static` C 函数 + `JNI_OnLoad` / `RegisterNatives`,不为每个 Java 方法导出
+`Java_*` 符号。
 
 **已覆盖的 javac 输出形状**:
 
@@ -35,8 +37,9 @@
 - 方法调用:`invokevirtual` / `invokespecial` / `invokestatic` / `invokeinterface`
 - 数组:`newarray` / `anewarray` / `multianewarray` / `arraylength` / `*aload` / `*astore`
 - 异常:`athrow` / try-catch / finally / monitor (`monitorenter` / `monitorexit`)
+- int/long DIV/REM 除零:`ArithmeticException` trap,含 catch 分派与未捕获传播
 
-**验证**:25 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)。
+**验证**:26 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)。
 
 **已知限制**:
 
@@ -46,7 +49,6 @@
 | 栈全用 `union jvalue` 数组 | 性能低于寄存器方案,后续可优化 |
 | `INVOKEDYNAMIC` fail-closed | 生成 `UnsupportedOperationException`,不直译 lambda / 方法句柄 |
 | JSR / RET 不纳入 | 废弃字节码,由 preprocessor / 输入规范处理 |
-| int/long DIV/REM 除零 | C 层是 UB,非完整 JVM `ArithmeticException` trap 模型 |
 | `<init>` / `<clinit>` 不被 MarkAll 标记 | 构造器保留原字节码,不走 native |
 
 ---

@@ -25,6 +25,7 @@
 | 能力组 | 验证 |
 |--------|------|
 | i32/long/float/double/转换 | `CBackendE2E.IntAdd`、`IntMulSubNeg`、`IntIinc`、`IntBitwiseShift`、`LongArith`、`FloatDouble`、`Conversions` |
+| int/long div/rem trap | `CBackendE2E.IntegerDivisionTrap` |
 | 控制流 | `CBackendE2E.IntControlFlow`、`DenseSwitch`、`SparseSwitch`、`NestedLoopsAndContinue`、`ReferenceBranches` |
 | 调用与字符串 | `CBackendE2E.MethodCalls`、`RecursionCalls`、`StringLiterals`、`InterfaceCalls` |
 | 对象/字段/类型检查 | `CBackendE2E.ObjectFieldsAndTypeChecks` |

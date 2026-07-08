@@ -13,6 +13,9 @@ JNI C 源码，并把被保护的 Java 方法改写为 `native` 方法。它的�
 CBackend 不承担主要抗 c2j 责任。生成 C 中保留 JVM operand stack 形状，是为了广覆盖和
 可调试性；保护导向路线见 `regc_backend_readme.md`。
 
+Native 绑定使用 `static` C 函数加 `JNI_OnLoad` / `RegisterNatives`。生成 DLL/SO 不再为每个
+Java 方法导出 `Java_*` 符号；Java 方法名和描述符保留在注册表中供 JVM 绑定。
+
 ## CLI 用法
 
 ```powershell
@@ -36,6 +39,7 @@ passthrough，不参与 root class 解析或 native injection。
 | 能力 | 状态 | 验证入口 |
 |------|------|----------|
 | i32 算术、位运算、`iinc`、分支和循环 | 支持 | `CBackendE2E.IntAdd`、`IntMulSubNeg`、`IntIinc`、`IntBitwiseShift`、`IntControlFlow` |
+| int/long 除零 trap 与 `MIN_VALUE / -1` 边界 | 支持 | `CBackendE2E.IntegerDivisionTrap` |
 | long/float/double 与基础转换 | 支持 | `CBackendE2E.LongArith`、`FloatDouble`、`Conversions` |
 | `tableswitch` / `lookupswitch` | 支持 | `CBackendE2E.DenseSwitch`、`SparseSwitch` |
 | 引用分支、字符串常量、方法调用、递归、接口调用 | 支持 | `CBackendE2E.ReferenceBranches`、`StringLiterals`、`MethodCalls`、`RecursionCalls`、`InterfaceCalls` |
@@ -59,8 +63,6 @@ passthrough，不参与 root class 解析或 native injection。
   signed-JAR metadata 触发 fail-closed，签名剥离/重签策略留到产品化阶段。
 - 没有 root class entry 的 JAR 会 fail-closed；multi-release `META-INF/versions/**.class`
   作为资源 passthrough，不在 MVP 中重写。
-- CBackend 的整数除零 trap 不等同完整 JVM trap 模型；RegC/R3 已先覆盖 div/rem runtime-backed
-  trap 路径。
 
 ## 相关设计文档
 

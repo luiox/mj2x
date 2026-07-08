@@ -245,7 +245,7 @@ protected:
         // 用改写后的类替换原类（Driver 按 <className> 加载）。
         fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing);
 
-        // 5. cl 编译 .c → <className>.dll（导出 Java_<...> 符号）。
+        // 5. cl 编译 .c → <className>.dll（JNI_OnLoad 注册 native 方法）。
         fs::path dll = dir / (className + ".dll");
         {
             // 通过 vcvars64.bat 设置 cl 需要的 INCLUDE/LIB 环境。
@@ -454,6 +454,35 @@ TEST_F(CBackendE2E, LongArith) {
             {"ushr(-1L, 1)", "9223372036854775807"},
             {"div(-9223372036854775808L, -1L)", "-9223372036854775808"},
             {"rem(-9223372036854775808L, -1L)", "0"},
+        });
+}
+
+TEST_F(CBackendE2E, IntegerDivisionTrap) {
+    runCase("IntegerDivisionTrap",
+        "public class IntegerDivisionTrap {\n"
+        "  public static int idiv(int a, int b) { return a / b; }\n"
+        "  public static int irem(int a, int b) { return a % b; }\n"
+        "  public static long ldiv(long a, long b) { return a / b; }\n"
+        "  public static long lrem(long a, long b) { return a % b; }\n"
+        "  public static int catchIntDiv(int a, int b) {\n"
+        "    try { return a / b; } catch (ArithmeticException e) { return 77; }\n"
+        "  }\n"
+        "  public static int catchLongRem(long a, long b) {\n"
+        "    try { long v = a % b; return (int)v; } catch (ArithmeticException e) { return 88; }\n"
+        "  }\n"
+        "}\n",
+        {
+            {"idiv(10, 2)", "5"},
+            {"irem(10, 3)", "1"},
+            {"ldiv(81L, 9L)", "9"},
+            {"lrem(81L, 7L)", "4"},
+            {"idiv(-2147483648, -1)", "-2147483648"},
+            {"irem(-2147483648, -1)", "0"},
+            {"ldiv(-9223372036854775808L, -1L)", "-9223372036854775808"},
+            {"lrem(-9223372036854775808L, -1L)", "0"},
+            {"catchIntDiv(1, 0)", "77"},
+            {"catchLongRem(1L, 0L)", "88"},
+            {"idiv(1, 0)", "THROW:java.lang.ArithmeticException"},
         });
 }
 

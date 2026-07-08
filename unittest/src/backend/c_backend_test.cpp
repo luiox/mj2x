@@ -441,7 +441,7 @@ TEST(CBackendTest, IincInstruction) {
     EXPECT_NE(result.text.find("locals[0].i += 5"), std::string::npos);
 }
 
-TEST(CBackendTest, NameMangling) {
+TEST(CBackendTest, StaticNativeFunctionAndOnLoadRegistration) {
     CBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "add", "(II)I", {new InsnNode(Opcodes::IRETURN)});
@@ -455,10 +455,21 @@ TEST(CBackendTest, NameMangling) {
 
     EXPECT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
     EXPECT_FALSE(result.text.empty());
-    EXPECT_NE(result.text.find("JNIEXPORT"), std::string::npos);
+    EXPECT_NE(result.text.find("static jint JNICALL"), std::string::npos);
+    EXPECT_NE(result.text.find("__mj2x_c_"), std::string::npos);
+    EXPECT_EQ(result.text.find("JNIEXPORT"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("Java_com_example_Foo_add__II"), std::string::npos) << result.text;
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& source = backend.generatedSource();
+    EXPECT_NE(source.find("JNI_OnLoad"), std::string::npos) << source;
+    EXPECT_NE(source.find("RegisterNatives"), std::string::npos) << source;
+    EXPECT_NE(source.find("{(char*)\"add\", (char*)\"(II)I\""), std::string::npos) << source;
+    EXPECT_EQ(source.find("Java_com_example_Foo_add__II"), std::string::npos) << source;
 }
 
-TEST(CBackendTest, NameManglingObjectParameterDescriptor) {
+TEST(CBackendTest, RegisterNativesKeepsObjectParameterDescriptor) {
     CBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "isNull", "(Ljava/lang/Object;)I", {
@@ -471,8 +482,14 @@ TEST(CBackendTest, NameManglingObjectParameterDescriptor) {
 
     CodeConverter cc;
     auto blocks = cc.convert(*mn);
-    auto result = backend.compileMethod("Test", cm, blocks);
+    (void)backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("Java_Test_isNull__Ljava_lang_Object_2"), std::string::npos);
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& source = backend.generatedSource();
+    EXPECT_NE(source.find("{(char*)\"isNull\", (char*)\"(Ljava/lang/Object;)I\""),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("Java_Test_isNull__Ljava_lang_Object_2"), std::string::npos) << source;
 }
 

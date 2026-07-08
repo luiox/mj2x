@@ -61,7 +61,9 @@ mj2x/src/unittest/backend/c_backend_protected_samples_test.cpp
 
 It probes for a local JDK and built `mj2x-cli`, compiles each Java source with
 debug metadata, runs CBackend through `mj2x-cli`, and verifies that the emitted
-C source contains JNI exports for the protected package.
+C source exposes `JNI_OnLoad` and `RegisterNatives` bindings for the protected
+package. CBackend method bodies are emitted as `static __mj2x_c_*` functions,
+so mjdbg should not expect per-method `Java_*` exports.
 
 Run:
 
@@ -81,7 +83,7 @@ workflow is:
 1. Run the generator test on the mj2x side.
 2. Launch or attach to a JVM that loads the generated protected class.
 3. Capture Java method entry/exit around the public entry methods.
-4. Capture native/JNI activity inside the emitted CBackend implementation.
+4. Capture `JNI_OnLoad` / `RegisterNatives`, then native/JNI activity inside the emitted CBackend implementation.
 5. Record observations as weakness reports for mj2x hardening.
 
 When the fixture format or trace expectations change, update this document,

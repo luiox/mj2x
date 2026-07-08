@@ -84,9 +84,11 @@ TEST(E2ETest, PipelineWithCBackend) {
         ASSERT_TRUE(ifs);
         std::string content((std::istreambuf_iterator<char>(ifs)),
                             std::istreambuf_iterator<char>());
-        EXPECT_NE(content.find("JNIEXPORT"), std::string::npos);
+        EXPECT_NE(content.find("JNIEXPORT jint JNICALL JNI_OnLoad"), std::string::npos);
+        EXPECT_NE(content.find("RegisterNatives"), std::string::npos);
         EXPECT_NE(content.find("return stack[sp--].i"), std::string::npos);
-        EXPECT_NE(content.find("E2ETest_add"), std::string::npos);
+        EXPECT_NE(content.find("{(char*)\"add\", (char*)\"(II)I\""), std::string::npos);
+        EXPECT_EQ(content.find("Java_E2ETest_add__II"), std::string::npos);
         printf("=== Generated C ===\n%s\n", content.c_str());
     }
 

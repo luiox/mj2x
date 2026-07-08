@@ -24,7 +24,7 @@
 | `core/e2e_test`（CBackend 版） | CBackend | 3 | 复活，去 legacy |
 | `frontend/code_converter_test` | **L1** 栈式 MIR | 18 | 保留（L1 基线）；Wave 6 补数组 component 元数据 |
 | `backend/c_backend_test` | CBackend | 19 | 复名 `c_backend_test.cpp`，子串匹配；Wave 6 补 array/checkcast emit |
-| **`backend/c_backend_e2e_test.cpp`** ★新增 | **CBackend 真 E2E** | 25 | Wave 1 起逐波补，见 §1.4 |
+| **`backend/c_backend_e2e_test.cpp`** ★新增 | **CBackend 真 E2E** | 26 | Wave 1 起逐波补，见 §1.4 |
 | `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、CBackend/RegC JAR 输入/输出入口、负向参数、坏 JAR fail-closed |
 
 ### 1.2 各层测试目标（R1-R4 落地时补）
@@ -84,7 +84,8 @@
 **已覆盖**（Wave 1）：`IntAdd`（含 wrap）、`IntMulSubNeg`、`IntIinc`（含循环控制流）、
 `IntBitwiseShift`（含 USHR）、`IntControlFlow`（if/else 分支）。
 
-**已覆盖**（Wave 2）：`LongArith`（long wrap/shift/div-rem 边界）、`FloatDouble`
+**已覆盖**（Wave 2）：`LongArith`（long wrap/shift/div-rem 边界）、`IntegerDivisionTrap`
+（int/long 除零 `ArithmeticException`、catch 分派、`MIN_VALUE / -1` 边界）、`FloatDouble`
 （float/double 运算、remainder、NaN 比较）、`Conversions`（I/L/F/D 与 I2B/I2C/I2S 转换）。
 
 **已覆盖**（Wave 3）：`DenseSwitch`（TABLESWITCH/default）、`SparseSwitch`（LOOKUPSWITCH/default）、
