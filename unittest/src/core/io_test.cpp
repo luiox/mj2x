@@ -11,6 +11,7 @@
 #include "test_helper.hpp"
 #include "mj2x/backend/cbackend/c_backend.hpp"
 #include "mj2x/mj2x.hpp"
+#include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 
@@ -137,6 +138,14 @@ static std::unique_ptr<ClassNode> readClassFromBytes(std::vector<ca::u8>& bytes,
     return cn;
 }
 
+static MethodNode* findMethod(ClassNode& cn, const char* name) {
+    for (auto* method : cn.methods) {
+        if (method->name.to_std_string() == name)
+            return method;
+    }
+    return nullptr;
+}
+
 TEST(IOTest, ClassWriteReadRoundtrip) {
     auto cn = makeSimpleClass();
     ca::str::Utf8StringArena arena;
@@ -254,6 +263,22 @@ TEST(IOTest, JarInputLoaderRejectsJarWithoutRootClasses) {
     std::remove(inPath.c_str());
 }
 
+TEST(IOTest, NativeLoaderPostprocessorAddsLoaderClassResource) {
+    CompilerIndex index;
+    index.setJarInput(true);
+    NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll");
+    postprocessor.process(index);
+
+    ASSERT_EQ(index.jarEntries().size(), 1u);
+    EXPECT_EQ(index.jarEntries()[0].name, "mj2x/runtime/NativeLoader.class");
+    EXPECT_FALSE(index.jarEntries()[0].data.empty());
+
+    ca::str::Utf8StringArena arena;
+    auto loaderClass = readClassFromBytes(index.jarEntries()[0].data, arena);
+    EXPECT_EQ(loaderClass->name.to_std_string(), "mj2x/runtime/NativeLoader");
+    EXPECT_NE(findMethod(*loaderClass, "load"), nullptr);
+}
+
 TEST(PipelineTest, BadInputPathReturnsError) {
     PipelineConfig cfg;
     cfg.inputPath = "nonexistent.class";
@@ -302,8 +327,13 @@ TEST(PipelineTest, JarPipelineMarksClassesNativeAndPreservesResources) {
     auto classBytes = readJarEntry(outPath, "pkg/A.class");
     ca::str::Utf8StringArena arena;
     auto cn = readClassFromBytes(classBytes, arena);
-    ASSERT_EQ(cn->methods.size(), 1u);
-    EXPECT_TRUE((cn->methods[0]->access & Opcodes::ACC_NATIVE) != 0);
+    auto* add = findMethod(*cn, "add");
+    ASSERT_NE(add, nullptr);
+    EXPECT_TRUE((add->access & Opcodes::ACC_NATIVE) != 0);
+    auto* bridge = findMethod(*cn, "__mj2x_registerClass");
+    ASSERT_NE(bridge, nullptr);
+    EXPECT_TRUE((bridge->access & Opcodes::ACC_NATIVE) != 0);
+    EXPECT_NE(findMethod(*cn, "<clinit>"), nullptr);
 
     std::ifstream cFile(cPath, std::ios::binary);
     ASSERT_TRUE(cFile);

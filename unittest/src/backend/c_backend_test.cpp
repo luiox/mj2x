@@ -49,6 +49,20 @@ static CompilerClass makeCompilerClass(const std::string& name) {
     return cls;
 }
 
+static MethodNode* findClassMethod(
+    const CompilerClass& cls,
+    const std::string& name,
+    const std::string& desc)
+{
+    for (auto* method : cls.classNode->methods) {
+        if (method->name.to_std_string() == name &&
+            method->desc.to_std_string() == desc) {
+            return method;
+        }
+    }
+    return nullptr;
+}
+
 // IMPORTANT: CodeConverter MUST outlive the Block* pointers it returns.
 // Always declare CodeConverter and blocks in the same scope.
 
@@ -438,6 +452,139 @@ TEST(CBackendTest, InjectMakesMethodNative) {
     backend.injectIntoClass(cls, cm, result);
     EXPECT_TRUE(mn->access & Opcodes::ACC_NATIVE);
     EXPECT_EQ(mn->instructions.size(), 0);
+}
+
+TEST(CBackendTest, InjectAddsClinitRegistrationBridge) {
+    CBackend backend;
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "test", "()V", {new InsnNode(Opcodes::RETURN)});
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    auto cls = makeCompilerClass("com/example/Foo");
+    cls.classNode->methods.push_back(mn.get());
+    mn.release();
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*cm.methodNode);
+    auto result = backend.compileMethod("com/example/Foo", cm, blocks);
+    backend.injectIntoClass(cls, cm, result);
+
+    auto* bridge = findClassMethod(cls, "__mj2x_registerClass", "(I)V");
+    ASSERT_NE(bridge, nullptr);
+    EXPECT_NE(bridge->access & Opcodes::ACC_NATIVE, 0);
+    EXPECT_NE(bridge->access & Opcodes::ACC_SYNTHETIC, 0);
+
+    auto* clinit = findClassMethod(cls, "<clinit>", "()V");
+    ASSERT_NE(clinit, nullptr);
+    EXPECT_EQ(clinit->instructions.size(), 3);
+    auto* call = clinit->instructions.get(1);
+    ASSERT_EQ(call->getType(), AbstractInsnNode::METHOD_INSN);
+    auto* invoke = static_cast<MethodInsnNode*>(call);
+    EXPECT_EQ(invoke->opcode, Opcodes::INVOKESTATIC);
+    EXPECT_EQ(invoke->owner.to_std_string(), "com/example/Foo");
+    EXPECT_EQ(invoke->name.to_std_string(), "__mj2x_registerClass");
+    EXPECT_EQ(invoke->desc.to_std_string(), "(I)V");
+    EXPECT_EQ(clinit->instructions.get(2)->opcode, Opcodes::RETURN);
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& source = backend.generatedSource();
+    EXPECT_NE(source.find("JNIEXPORT void JNICALL Java_com_example_Foo__1_1mj2x_1registerClass__I"),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("bridge_method"), std::string::npos) << source;
+}
+
+TEST(CBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge) {
+    CBackend backend;
+    backend.setJarNativeLoaderResourcePath("META-INF/mj2x/native/app.dll", ".dll");
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "test", "()V", {new InsnNode(Opcodes::RETURN)});
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    auto cls = makeCompilerClass("com/example/Foo");
+    cls.classNode->methods.push_back(mn.get());
+    mn.release();
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*cm.methodNode);
+    auto result = backend.compileMethod("com/example/Foo", cm, blocks);
+    backend.injectIntoClass(cls, cm, result);
+
+    auto* clinit = findClassMethod(cls, "<clinit>", "()V");
+    ASSERT_NE(clinit, nullptr);
+    ASSERT_EQ(clinit->instructions.size(), 6);
+    auto* loaderCall = clinit->instructions.get(2);
+    ASSERT_EQ(loaderCall->getType(), AbstractInsnNode::METHOD_INSN);
+    auto* loaderInvoke = static_cast<MethodInsnNode*>(loaderCall);
+    EXPECT_EQ(loaderInvoke->owner.to_std_string(), "mj2x/runtime/NativeLoader");
+    EXPECT_EQ(loaderInvoke->name.to_std_string(), "load");
+    EXPECT_EQ(loaderInvoke->desc.to_std_string(), "(Ljava/lang/String;Ljava/lang/String;)V");
+
+    auto* bridgeCall = clinit->instructions.get(4);
+    ASSERT_EQ(bridgeCall->getType(), AbstractInsnNode::METHOD_INSN);
+    auto* bridgeInvoke = static_cast<MethodInsnNode*>(bridgeCall);
+    EXPECT_EQ(bridgeInvoke->name.to_std_string(), "__mj2x_registerClass");
+}
+
+TEST(CBackendTest, ExistingClinitBodyMovesToHiddenClassProxy) {
+    CBackend backend;
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "test", "()V", {new InsnNode(Opcodes::RETURN)});
+    auto clinit = makeMethod(Opcodes::ACC_STATIC,
+                             "<clinit>", "()V", {
+        new InsnNode(Opcodes::ICONST_1),
+        new FieldInsnNode(Opcodes::PUTSTATIC,
+                          testArena.intern("com/example/Foo"),
+                          testArena.intern("VALUE"),
+                          testArena.intern("I")),
+        new InsnNode(Opcodes::RETURN),
+    });
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    auto cls = makeCompilerClass("com/example/Foo");
+    cls.classNode->methods.push_back(mn.get());
+    cls.classNode->methods.push_back(clinit.get());
+    mn.release();
+    clinit.release();
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*cm.methodNode);
+    auto result = backend.compileMethod("com/example/Foo", cm, blocks);
+    backend.injectIntoClass(cls, cm, result);
+
+    auto* rewrittenClinit = findClassMethod(cls, "<clinit>", "()V");
+    ASSERT_NE(rewrittenClinit, nullptr);
+    ASSERT_EQ(rewrittenClinit->instructions.size(), 3);
+    auto* bridgeCall = rewrittenClinit->instructions.get(1);
+    ASSERT_EQ(bridgeCall->getType(), AbstractInsnNode::METHOD_INSN);
+    auto* bridgeInvoke = static_cast<MethodInsnNode*>(bridgeCall);
+    EXPECT_EQ(bridgeInvoke->owner.to_std_string(), "com/example/Foo");
+    EXPECT_EQ(bridgeInvoke->name.to_std_string(), "__mj2x_registerClass");
+    EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(I)V");
+    EXPECT_EQ(rewrittenClinit->instructions.get(2)->opcode, Opcodes::RETURN);
+
+    for (auto* method : cls.classNode->methods) {
+        EXPECT_EQ(method->name.to_std_string().find("__mj2x_hidden_clinit_"), std::string::npos)
+            << method->name.to_std_string();
+    }
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& source = backend.generatedSource();
+    EXPECT_NE(source.find("DefineClass(env, \"com/example/__mj2xHiddenClinit"), std::string::npos)
+        << source;
+    EXPECT_NE(source.find("{(char*)\"__mj2x_hiddenClinit\", (char*)\"(Ljava/lang/Class;)V\""),
+              std::string::npos) << source;
+    EXPECT_NE(source.find("_mj2x_hidden_clinit_wrapper_"), std::string::npos) << source;
+    EXPECT_EQ(source.find("{(char*)\"__mj2x_hidden_clinit_"), std::string::npos) << source;
+    EXPECT_NE(source.find("SetStaticIntField"), std::string::npos) << source;
 }
 
 TEST(CBackendTest, BranchAndComparison) {

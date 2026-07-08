@@ -29,6 +29,9 @@ public:
     void finalize(const CompilerIndex& index) override;
 
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
+    void setJarNativeLoaderResourcePath(
+        const std::string& resourcePath,
+        const std::string& tempSuffix);
 
     // Access generated code for testing
     const std::string& generatedHeader() const { return headerCode_; }

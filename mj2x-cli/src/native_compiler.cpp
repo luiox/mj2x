@@ -247,6 +247,10 @@ bool parseCompilerName(const std::string& name, CCompilerKind& compiler) {
     return false;
 }
 
+std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath) {
+    return nativeLibraryPath(outputPath);
+}
+
 int compileCSource(
     const std::string& cOutputPath,
     const std::string& outputPath,

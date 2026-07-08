@@ -21,9 +21,15 @@
   - [x] P3:JNI 局部引用追踪与批量释放,降低复杂方法 local-ref table 溢出风险。
   - [x] P4:method/field ID 懒缓存,降低重复 `GetMethodID`/`GetFieldID` 开销。
   - [x] P5:String pool,减少重复字符串字面量并收敛字符串常量表面。
-  - [ ] P1:`<clinit>` 分散注册入口,从集中 `JNI_OnLoad` 迁到 per-class 触发。
-  - [ ] P1:hidden `<clinit>` proxy / HiddenMethodsPool,把类初始化本体移出 Java 层。
-  - [ ] P7:JAR 内 native loader,减少用户手动 `System.loadLibrary` 配置。
+  - [x] P1:`<clinit>` 分散注册入口,业务 native 方法注册从集中 `JNI_OnLoad`
+    迁到 per-class `<clinit>` bridge 触发;bridge 自身使用标准 JNI 导出符号解决
+    `System.load`/类初始化顺序问题。
+  - [x] P1:HiddenMethodsPool / `DefineClass` hidden `<clinit>` proxy,把类初始化
+    本体移出 Java bytecode,并通过 C 侧 embedded class bytes + `DefineClass` +
+    hidden `RegisterNatives` 执行,原类不再保留同类 synthetic native proxy。
+  - [x] P7:JAR 内 native loader,`--compile` 的 CBackend JAR 输出会内嵌
+    `mj2x/runtime/NativeLoader.class` 和 native library resource,类初始化时自动
+    解包 `System.load`。
   - [x] P8:CMake / 独立工程构建输出,对齐 native-obfuscator 可移植构建体验。
   - [ ] P0:invokedynamic lowering 策略,支持 lambda/string concat/method handle 的可执行路径。
 - [ ] **R4:L4 变换 pass 系统**(MBA / DCE / CFF / opaque predicate)。前置:RegC/R3 live 验证。

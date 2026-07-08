@@ -126,6 +126,11 @@ public:
     void addJarEntry(JarEntryRecord entry);
 
     /**
+     * @brief Append or replace a generated JAR resource entry.
+     */
+    void upsertJarResource(const std::string& name, std::vector<ca::u8> data);
+
+    /**
      * @brief Ordered JAR entries used by `OutputWriter`.
      */
     std::vector<JarEntryRecord>& jarEntries() { return jarEntries_; }

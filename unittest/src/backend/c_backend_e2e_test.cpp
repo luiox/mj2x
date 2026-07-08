@@ -245,7 +245,7 @@ protected:
         // 用改写后的类替换原类（Driver 按 <className> 加载）。
         fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing);
 
-        // 5. cl 编译 .c → <className>.dll（JNI_OnLoad 注册 native 方法）。
+        // 5. cl 编译 .c → <className>.dll（<clinit> 桥触发 RegisterNatives）。
         fs::path dll = dir / (className + ".dll");
         {
             // 通过 vcvars64.bat 设置 cl 需要的 INCLUDE/LIB 环境。

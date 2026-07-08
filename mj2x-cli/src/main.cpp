@@ -6,12 +6,19 @@
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "mj2x/preprocessor/multianewarray_preprocessor.hpp"
 #include "mj2x/preprocessor/native_annotation_preprocessor.hpp"
+#include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "native_compiler.hpp"
+#include "jzip/memory_segment.hpp"
+#include "jzip/zip_io.hpp"
+#include "zip/checksum.hpp"
 
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <vector>
 
 static void printUsage() {
     printf("Usage: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]\n");
@@ -41,6 +48,76 @@ static bool parseBackendName(const std::string& name, CEmitterBackend& backend) 
         return true;
     }
     return false;
+}
+
+static bool hasExtension(std::string path, const std::string& ext) {
+    if (path.size() < ext.size()) return false;
+    auto suffix = path.substr(path.size() - ext.size());
+    for (char& ch : suffix)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return suffix == ext;
+}
+
+static std::vector<ca::u8> readFileBytes(const std::filesystem::path& path) {
+    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+    if (!ifs) return {};
+    auto size = ifs.tellg();
+    std::vector<ca::u8> bytes(static_cast<size_t>(size));
+    ifs.seekg(0, std::ios::beg);
+    ifs.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+    return bytes;
+}
+
+static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(
+    const std::string& name,
+    const std::vector<ca::u8>& data) {
+    auto local = std::make_unique<jzip::LocalFileHeader>();
+    zip::Crc32 crc;
+    crc.update(data.data(), data.size());
+    local->setFileName(name);
+    local->setGeneralPurposeBitFlag(0x0800);
+    local->setCompressionMethod(0);
+    local->setCrc32(crc.value());
+    local->setCompressedSize(static_cast<ca::i64>(data.size()));
+    local->setUncompressedSize(static_cast<ca::i64>(data.size()));
+    local->setFileData(data);
+    local->setOffset(0);
+    return local;
+}
+
+static int embedNativeLibraryInJar(
+    const std::string& jarPath,
+    const std::string& entryName,
+    const std::filesystem::path& nativeLibraryPath) {
+    auto jarBytes = readFileBytes(jarPath);
+    auto nativeBytes = readFileBytes(nativeLibraryPath);
+    if (jarBytes.empty() || nativeBytes.empty()) {
+        fprintf(stderr, "[mj2x] ERROR: cannot embed native library into output JAR.\n");
+        return 1;
+    }
+
+    auto original = jzip::ZipIO::readJvm(jzip::MemorySegment(jarBytes));
+    jzip::ZipArchive rewritten;
+    bool replaced = false;
+    for (const auto* local : original.getLocalFiles()) {
+        const auto& name = local->getFileName();
+        auto data = name == entryName ? nativeBytes : jzip::ZipIO::decompressLocalFile(*local);
+        if (name == entryName) replaced = true;
+        rewritten.addPart(makeStoredEntry(name, data));
+    }
+    if (!replaced)
+        rewritten.addPart(makeStoredEntry(entryName, nativeBytes));
+
+    auto outBytes = jzip::ZipIO::writeDirect(rewritten);
+    std::ofstream ofs(jarPath, std::ios::binary);
+    if (!ofs) {
+        fprintf(stderr, "[mj2x] ERROR: cannot rewrite output JAR: %s\n", jarPath.c_str());
+        return 1;
+    }
+    ofs.write(reinterpret_cast<const char*>(outBytes.data()),
+              static_cast<std::streamsize>(outBytes.size()));
+    printf("[mj2x] Embedded native library in JAR: %s\n", entryName.c_str());
+    return 0;
 }
 
 static bool isNativeAnnotationDescriptor(const std::string& descriptor) {
@@ -216,6 +293,18 @@ int main(int argc, char** argv) {
     config.outputPath = outputPath;
     config.dumpMIR = dumpMIR;
 
+    const bool jarNativeLoaderEnabled =
+        compileNative &&
+        cBackendKind == CEmitterBackend::CBackend &&
+        hasExtension(inputPath, ".jar") &&
+        hasExtension(outputPath, ".jar");
+    std::filesystem::path nativeLibraryPath =
+        mj2x::cli::nativeLibraryPathForOutput(outputPath);
+    const std::string nativeResourceEntry =
+        "META-INF/mj2x/native/" + nativeLibraryPath.filename().string();
+    const std::string nativeResourcePath = nativeResourceEntry;
+    const std::string nativeTempSuffix = nativeLibraryPath.extension().string();
+
     mj2x::Pipeline pipeline(std::move(config));
 
     if (!cOutputPath.empty()) {
@@ -226,6 +315,11 @@ int main(int argc, char** argv) {
         } else {
             auto cBackend = std::make_unique<mj2x::CBackend>();
             cBackend->setOutputPath(cOutputPath);
+            if (jarNativeLoaderEnabled) {
+                cBackend->setJarNativeLoaderResourcePath(
+                    nativeResourcePath,
+                    nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
+            }
             pipeline.registerBackend(std::move(cBackend));
         }
     }
@@ -242,6 +336,10 @@ int main(int argc, char** argv) {
         pipeline.registerPreprocessor(
             std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
+    if (jarNativeLoaderEnabled) {
+        pipeline.registerPostprocessor(
+            std::make_unique<mj2x::NativeLoaderPostprocessor>(nativeResourcePath));
+    }
 
     int rc = pipeline.run();
     if (rc != 0)
@@ -253,8 +351,13 @@ int main(int argc, char** argv) {
             return projectRc;
     }
 
-    if (compileNative)
-        return mj2x::cli::compileCSource(cOutputPath, outputPath, cCompilerKind);
+    if (compileNative) {
+        int compileRc = mj2x::cli::compileCSource(cOutputPath, outputPath, cCompilerKind);
+        if (compileRc != 0)
+            return compileRc;
+        if (jarNativeLoaderEnabled)
+            return embedNativeLibraryInJar(outputPath, nativeResourceEntry, nativeLibraryPath);
+    }
 
     return 0;
 }

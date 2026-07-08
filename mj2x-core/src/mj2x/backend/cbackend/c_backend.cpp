@@ -3,6 +3,7 @@
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/codegen/include_set.hpp"
+#include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 
 #include <cassert>
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -20,6 +22,7 @@
 #include <string_view>
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "libca/str/utf8_string_arena.hpp"
 
 namespace mj2x {
 
@@ -304,6 +307,33 @@ struct CNativeRegistration {
     std::string cFunctionName;
 };
 
+struct CHiddenClinitProxy {
+    std::string ownerClassName;
+    std::string hiddenClassName;
+    std::string hiddenMethodName;
+    std::string hiddenMethodDesc;
+    std::string compiledFunctionName;
+    std::string wrapperFunctionName;
+    std::string callFunctionName;
+    std::string classBytesName;
+    std::string classRefName;
+    std::string methodIdName;
+    std::string doneFlagName;
+    std::vector<uint8_t> classBytes;
+};
+
+static constexpr const char* kRegisterBridgeName = "__mj2x_registerClass";
+static constexpr const char* kRegisterBridgeDesc = "(I)V";
+static constexpr const char* kHiddenClinitMethodName = "__mj2x_hiddenClinit";
+static constexpr const char* kHiddenClinitMethodDesc = "(Ljava/lang/Class;)V";
+static constexpr const char* kNativeLoaderClassName = "mj2x/runtime/NativeLoader";
+static constexpr const char* kNativeLoaderLoadDesc = "(Ljava/lang/String;Ljava/lang/String;)V";
+
+static std::string hiddenClinitClassNameFor(const std::string& ownerClassName);
+static std::vector<uint8_t> makeHiddenClinitClassBytes(
+    const std::string& hiddenClassName,
+    const std::string& hiddenMethodName);
+
 static std::string exceptionDispatchKey(const std::vector<int>& handlerIndices) {
     std::ostringstream key;
     bool first = true;
@@ -353,8 +383,16 @@ struct CBackend::Impl {
     std::unordered_set<std::string> nativeFunctions;
     std::unordered_map<std::string, std::vector<CNativeRegistration>> registrationsByClass;
     std::vector<std::string> registrationClassOrder;
+    std::unordered_map<std::string, int> registrationClassIds;
+    std::unordered_set<std::string> injectedRegistrationBridgeClasses;
+    std::unordered_set<std::string> protectedClinitClasses;
+    std::unordered_map<std::string, CHiddenClinitProxy> hiddenClinitByClass;
+    std::vector<std::string> hiddenClinitClassOrder;
     std::unordered_map<std::string, size_t> stringPoolOffsets;
     std::vector<unsigned char> stringPoolBytes;
+    std::deque<std::string> stableUtf8Storage;
+    std::string jarNativeLoaderResourcePath;
+    std::string jarNativeLoaderTempSuffix;
 
     // Cache current method info for codegen
     std::string currentClassName;
@@ -405,6 +443,21 @@ struct CBackend::Impl {
     size_t stringPoolOffsetFor(const std::string& value);
     void emitStringPool(std::ostringstream& out) const;
     void emitRegistrationCode(std::ostringstream& out) const;
+    ca::str::Utf8StringRef stableUtf8(const std::string& value);
+    void ensureRegistrationBridge(CompilerClass& clazz);
+    void protectClassInitializer(CBackend& backend, CompilerClass& clazz);
+    void registerHiddenClinitProxy(
+        const std::string& className,
+        const std::string& hiddenMethodName,
+        const std::string& compiledFunctionName);
+    void removeRegistration(
+        const std::string& className,
+        const std::string& methodName,
+        const std::string& methodDesc);
+    jbytecode::tree::MethodNode* findMethod(
+        CompilerClass& clazz,
+        const char* name,
+        const char* desc = nullptr) const;
 };
 
 CBackend::CBackend()
@@ -412,6 +465,14 @@ CBackend::CBackend()
 {}
 
 CBackend::~CBackend() = default;
+
+void CBackend::setJarNativeLoaderResourcePath(
+    const std::string& resourcePath,
+    const std::string& tempSuffix)
+{
+    impl_->jarNativeLoaderResourcePath = resourcePath;
+    impl_->jarNativeLoaderTempSuffix = tempSuffix;
+}
 
 // ============================================================
 // Main compile method
@@ -448,8 +509,10 @@ BackendResult CBackend::compileMethod(
         funcName = std::move(candidate);
     }
     auto [regsIt, insertedClass] = impl_->registrationsByClass.emplace(cls, std::vector<CNativeRegistration>{});
-    if (insertedClass)
+    if (insertedClass) {
+        impl_->registrationClassIds.emplace(cls, static_cast<int>(impl_->registrationClassOrder.size()));
         impl_->registrationClassOrder.push_back(cls);
+    }
     regsIt->second.push_back({methodName, methodDesc, funcName});
 
     funcOut << "static " << primitiveToJNIType(retType) << " JNICALL\n";
@@ -594,12 +657,231 @@ void CBackend::injectIntoClass(
     CompilerMethod& method,
     const BackendResult& result)
 {
+    impl_->ensureRegistrationBridge(clazz);
+    impl_->protectClassInitializer(*this, clazz);
+
     // Mark method as native and clear bytecode
     auto* mn = method.methodNode;
     mn->access |= Opcodes::ACC_NATIVE;
     mn->instructions.clear();
     mn->maxStack = 0;
     mn->maxLocals = 0;
+    clazz.modified = true;
+}
+
+ca::str::Utf8StringRef CBackend::Impl::stableUtf8(const std::string& value) {
+    stableUtf8Storage.push_back(value);
+    return ca::str::Utf8StringRef::from_cstr(stableUtf8Storage.back().c_str());
+}
+
+jbytecode::tree::MethodNode* CBackend::Impl::findMethod(
+    CompilerClass& clazz,
+    const char* name,
+    const char* desc) const
+{
+    for (auto* method : clazz.classNode->methods) {
+        if (method->name.to_std_string() != name)
+            continue;
+        if (desc != nullptr && method->desc.to_std_string() != desc)
+            continue;
+        return method;
+    }
+    return nullptr;
+}
+
+void CBackend::Impl::removeRegistration(
+    const std::string& className,
+    const std::string& methodName,
+    const std::string& methodDesc)
+{
+    auto found = registrationsByClass.find(className);
+    if (found == registrationsByClass.end())
+        return;
+    auto& registrations = found->second;
+    for (auto it = registrations.begin(); it != registrations.end(); ++it) {
+        if (it->javaName == methodName && it->javaDesc == methodDesc) {
+            registrations.erase(it);
+            return;
+        }
+    }
+}
+
+void CBackend::Impl::registerHiddenClinitProxy(
+    const std::string& className,
+    const std::string& hiddenMethodName,
+    const std::string& compiledFunctionName)
+{
+    CHiddenClinitProxy proxy;
+    proxy.ownerClassName = className;
+    proxy.hiddenClassName = hiddenClinitClassNameFor(className);
+    proxy.hiddenMethodName = kHiddenClinitMethodName;
+    proxy.hiddenMethodDesc = kHiddenClinitMethodDesc;
+    proxy.compiledFunctionName = compiledFunctionName;
+
+    const auto suffix = hex64(fnv1a64(className));
+    proxy.wrapperFunctionName = "_mj2x_hidden_clinit_wrapper_" + suffix;
+    proxy.callFunctionName = "_mj2x_call_hidden_clinit_" + suffix;
+    proxy.classBytesName = "_mj2x_hidden_clinit_class_" + suffix;
+    proxy.classRefName = "_mj2x_hidden_clinit_class_ref_" + suffix;
+    proxy.methodIdName = "_mj2x_hidden_clinit_mid_" + suffix;
+    proxy.doneFlagName = "_mj2x_hidden_clinit_done_" + suffix;
+    proxy.classBytes = makeHiddenClinitClassBytes(proxy.hiddenClassName, proxy.hiddenMethodName);
+
+    if (hiddenClinitByClass.emplace(className, std::move(proxy)).second)
+        hiddenClinitClassOrder.push_back(className);
+    removeRegistration(className, hiddenMethodName, "()V");
+}
+
+void CBackend::Impl::ensureRegistrationBridge(CompilerClass& clazz) {
+    const auto className = clazz.classNode->name.to_std_string();
+    if (!injectedRegistrationBridgeClasses.insert(className).second)
+        return;
+    if (findMethod(clazz, kRegisterBridgeName, kRegisterBridgeDesc) != nullptr)
+        return;
+
+    std::vector<ca::str::Utf8StringRef> noExceptions;
+    auto* bridge = new MethodNode(
+        Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
+        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeName),
+        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeDesc),
+        ca::str::ZUtf8StringRef::from_static(""),
+        noExceptions);
+    bridge->maxStack = 0;
+    bridge->maxLocals = 0;
+    clazz.classNode->methods.push_back(bridge);
+    clazz.modified = true;
+}
+
+static void clearMethodDebugAndHandlers(MethodNode* method) {
+    for (auto* tc : method->tryCatchBlocks) delete tc;
+    method->tryCatchBlocks.clear();
+    for (auto* lv : method->localVariables) delete lv;
+    method->localVariables.clear();
+}
+
+static std::string hiddenClinitClassNameFor(const std::string& ownerClassName) {
+    const auto slash = ownerClassName.find_last_of('/');
+    const auto simpleName = "__mj2xHiddenClinit" + hex64(fnv1a64(ownerClassName));
+    if (slash == std::string::npos)
+        return simpleName;
+    return ownerClassName.substr(0, slash + 1) + simpleName;
+}
+
+static std::vector<uint8_t> makeHiddenClinitClassBytes(
+    const std::string& hiddenClassName,
+    const std::string& hiddenMethodName)
+{
+    ca::str::Utf8StringArena arena;
+    ClassNode cn;
+    cn.version = Opcodes::V1_8;
+    cn.access = Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
+    cn.name = arena.intern(hiddenClassName.c_str());
+    cn.superName = arena.intern("java/lang/Object");
+
+    std::vector<ca::str::Utf8StringRef> noExceptions;
+    auto* proxy = new MethodNode(
+        Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
+        arena.intern(hiddenMethodName.c_str()),
+        arena.intern(kHiddenClinitMethodDesc),
+        arena.intern(""),
+        noExceptions);
+    proxy->maxStack = 0;
+    proxy->maxLocals = 1;
+    cn.methods.push_back(proxy);
+
+    ClassWriter writer(arena, 0);
+    cn.accept(&writer);
+    return writer.toByteArray();
+}
+
+static void emitClassRegistrationCall(
+    MethodNode* clinit,
+    ca::str::Utf8StringRef className,
+    const std::string& nativeLoaderResourcePath,
+    const std::string& nativeLoaderTempSuffix,
+    int classId)
+{
+    (void)className;
+    if (!nativeLoaderResourcePath.empty()) {
+        clinit->instructions.add(new LdcInsnNode(nativeLoaderResourcePath));
+        clinit->instructions.add(new LdcInsnNode(nativeLoaderTempSuffix));
+        clinit->instructions.add(new MethodInsnNode(
+            Opcodes::INVOKESTATIC,
+            ca::str::ZUtf8StringRef::from_static(kNativeLoaderClassName),
+            ca::str::ZUtf8StringRef::from_static("load"),
+            ca::str::ZUtf8StringRef::from_static(kNativeLoaderLoadDesc),
+            false));
+    }
+    clinit->instructions.add(new LdcInsnNode(classId));
+    clinit->instructions.add(new MethodInsnNode(
+        Opcodes::INVOKESTATIC,
+        className,
+        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeName),
+        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeDesc),
+        false));
+}
+
+void CBackend::Impl::protectClassInitializer(CBackend& backend, CompilerClass& clazz) {
+    const auto className = clazz.classNode->name.to_std_string();
+    if (!protectedClinitClasses.insert(className).second)
+        return;
+
+    auto idIt = registrationClassIds.find(className);
+    if (idIt == registrationClassIds.end())
+        return;
+
+    auto* clinit = findMethod(clazz, "<clinit>", "()V");
+    std::string hiddenName;
+    std::string hiddenFunctionName;
+
+    if (clinit != nullptr && clinit->instructions.size() > 0) {
+        hiddenName = "__mj2x_hidden_clinit_" + hex64(fnv1a64(className));
+        auto originalName = clinit->name;
+        clinit->name = stableUtf8(hiddenName);
+
+        CompilerMethod hiddenMethod;
+        hiddenMethod.methodNode = clinit;
+        hiddenMethod.markedForCompile = true;
+        CodeConverter converter;
+        auto blocks = converter.convert(*clinit);
+        (void)backend.compileMethod(className, hiddenMethod, blocks);
+        auto regsIt = registrationsByClass.find(className);
+        if (regsIt != registrationsByClass.end()) {
+            for (auto it = regsIt->second.rbegin(); it != regsIt->second.rend(); ++it) {
+                if (it->javaName == hiddenName && it->javaDesc == "()V") {
+                    hiddenFunctionName = it->cFunctionName;
+                    break;
+                }
+            }
+        }
+        clinit->name = originalName;
+        if (!hiddenFunctionName.empty())
+            registerHiddenClinitProxy(className, hiddenName, hiddenFunctionName);
+    }
+
+    if (clinit == nullptr) {
+        std::vector<ca::str::Utf8StringRef> noExceptions;
+        clinit = new MethodNode(
+            Opcodes::ACC_STATIC,
+            ca::str::ZUtf8StringRef::from_static("<clinit>"),
+            ca::str::ZUtf8StringRef::from_static("()V"),
+            ca::str::ZUtf8StringRef::from_static(""),
+            noExceptions);
+        clazz.classNode->methods.push_back(clinit);
+    }
+
+    clinit->access &= ~Opcodes::ACC_NATIVE;
+    clinit->instructions.clear();
+    clearMethodDebugAndHandlers(clinit);
+    emitClassRegistrationCall(
+        clinit,
+        clazz.classNode->name,
+        jarNativeLoaderResourcePath,
+        jarNativeLoaderTempSuffix,
+        idIt->second);
+    clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+    clinit->maxStack = jarNativeLoaderResourcePath.empty() ? 1 : 2;
+    clinit->maxLocals = 0;
     clazz.modified = true;
 }
 
@@ -665,16 +947,98 @@ void CBackend::Impl::emitStringPool(std::ostringstream& out) const {
 void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
     CSourceStream src;
     src.emitLine("/* Native registration */");
+    for (const auto& className : hiddenClinitClassOrder) {
+        auto hiddenIt = hiddenClinitByClass.find(className);
+        if (hiddenIt == hiddenClinitByClass.end())
+            continue;
+        const auto& proxy = hiddenIt->second;
+
+        src.emitLine("static const unsigned char " + proxy.classBytesName + "[] = {");
+        src.indent();
+        std::string line;
+        for (size_t i = 0; i < proxy.classBytes.size(); ++i) {
+            if (line.empty()) {
+                line = std::to_string(static_cast<unsigned int>(proxy.classBytes[i]));
+            } else {
+                line += ", " + std::to_string(static_cast<unsigned int>(proxy.classBytes[i]));
+            }
+            if (line.size() > 96) {
+                src.emitLine(line + ",");
+                line.clear();
+            }
+        }
+        if (!line.empty())
+            src.emitLine(line);
+        src.dedent();
+        src.emitLine("};");
+        src.emitLine("static jclass " + proxy.classRefName + " = NULL;");
+        src.emitLine("static jmethodID " + proxy.methodIdName + " = NULL;");
+        src.emitLine("static jboolean " + proxy.doneFlagName + " = JNI_FALSE;");
+        src.emitLine("static void JNICALL " + proxy.wrapperFunctionName
+            + "(JNIEnv* env, jclass hidden_class, jclass owner_class) {");
+        src.indent();
+        src.emitLine("(void)hidden_class;");
+        src.emitLine(proxy.compiledFunctionName + "(env, owner_class);");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("static jint " + proxy.callFunctionName + "(JNIEnv* env, jclass owner_class) {");
+        src.indent();
+        src.emitLine("if (owner_class == NULL) return JNI_ERR;");
+        src.emitLine("if (" + proxy.doneFlagName + ") return JNI_OK;");
+        src.emitLine("if (" + proxy.classRefName + " == NULL) {");
+        src.indent();
+        src.emitLine("jclass class_class = (*env)->FindClass(env, \"java/lang/Class\");");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || class_class == NULL) return JNI_ERR;");
+        src.emitLine("jmethodID get_loader = (*env)->GetMethodID(env, class_class, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || get_loader == NULL) return JNI_ERR;");
+        src.emitLine("jobject loader = (*env)->CallObjectMethod(env, owner_class, get_loader);");
+        src.emitLine("if ((*env)->ExceptionCheck(env)) return JNI_ERR;");
+        src.emitLine("jclass hidden_class = (*env)->DefineClass(env, " + cStringLiteral(proxy.hiddenClassName)
+            + ", loader, (const jbyte*)" + proxy.classBytesName
+            + ", (jsize)sizeof(" + proxy.classBytesName + "));");
+        src.emitLine("if (loader != NULL) (*env)->DeleteLocalRef(env, loader);");
+        src.emitLine("(*env)->DeleteLocalRef(env, class_class);");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || hidden_class == NULL) return JNI_ERR;");
+        src.emitLine("static JNINativeMethod hidden_methods[] = {");
+        src.indent();
+        src.emitLine("{(char*)" + cStringLiteral(proxy.hiddenMethodName)
+            + ", (char*)" + cStringLiteral(proxy.hiddenMethodDesc)
+            + ", (void*)" + proxy.wrapperFunctionName + "},");
+        src.dedent();
+        src.emitLine("};");
+        src.emitLine("if ((*env)->RegisterNatives(env, hidden_class, hidden_methods, "
+            "sizeof(hidden_methods) / sizeof(hidden_methods[0])) != 0) return JNI_ERR;");
+        src.emitLine(proxy.methodIdName + " = (*env)->GetStaticMethodID(env, hidden_class, "
+            + cStringLiteral(proxy.hiddenMethodName) + ", " + cStringLiteral(proxy.hiddenMethodDesc) + ");");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || " + proxy.methodIdName + " == NULL) return JNI_ERR;");
+        src.emitLine(proxy.classRefName + " = (jclass)(*env)->NewGlobalRef(env, hidden_class);");
+        src.emitLine("(*env)->DeleteLocalRef(env, hidden_class);");
+        src.emitLine("if (" + proxy.classRefName + " == NULL) return JNI_ERR;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("(*env)->CallStaticVoidMethod(env, " + proxy.classRefName + ", "
+            + proxy.methodIdName + ", owner_class);");
+        src.emitLine("if ((*env)->ExceptionCheck(env)) return JNI_ERR;");
+        src.emitLine(proxy.doneFlagName + " = JNI_TRUE;");
+        src.emitLine("return JNI_OK;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("");
+    }
+
     for (const auto& className : registrationClassOrder) {
         auto found = registrationsByClass.find(className);
         if (found == registrationsByClass.end() || found->second.empty())
             continue;
 
         const auto registerName = registerFunctionName(className);
-        src.emitLine("static jint " + registerName + "(JNIEnv* env) {");
+        const auto registeredFlag = registerName + "_done";
+        const auto bridgeName = codegen::mangleMethod(className, kRegisterBridgeName, kRegisterBridgeDesc);
+        src.emitLine("static jboolean " + registeredFlag + " = JNI_FALSE;");
+        src.emitLine("static jint " + registerName + "(JNIEnv* env, jclass clazz) {");
         src.indent();
-        src.emitLine("jclass clazz = (*env)->FindClass(env, " + cStringLiteral(className) + ");");
         src.emitLine("if (clazz == NULL) return JNI_ERR;");
+        src.emitLine("if (" + registeredFlag + ") return JNI_OK;");
         src.emitLine("static JNINativeMethod methods[] = {");
         src.indent();
         for (const auto& reg : found->second) {
@@ -687,12 +1051,49 @@ void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
         src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, "
             "sizeof(methods) / sizeof(methods[0])) != 0) {");
         src.indent();
-        src.emitLine("(*env)->DeleteLocalRef(env, clazz);");
         src.emitLine("return JNI_ERR;");
         src.dedent();
         src.emitLine("}");
-        src.emitLine("(*env)->DeleteLocalRef(env, clazz);");
+        src.emitLine(registeredFlag + " = JNI_TRUE;");
         src.emitLine("return JNI_OK;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("");
+
+        auto idIt = registrationClassIds.find(className);
+        const int classId = idIt == registrationClassIds.end() ? -1 : idIt->second;
+        src.emitLine("JNIEXPORT void JNICALL " + bridgeName
+            + "(JNIEnv* env, jclass bridge_class, jint class_id) {");
+        src.indent();
+        src.emitLine("if (class_id != " + std::to_string(classId) + ") {");
+        src.indent();
+        src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+        src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id mismatch\");");
+        src.emitLine("return;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("if (" + registerName + "(env, bridge_class) != JNI_OK) {");
+        src.indent();
+        src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+        src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native registration failed\");");
+        src.emitLine("return;");
+        src.dedent();
+        src.emitLine("}");
+        auto hiddenIt = hiddenClinitByClass.find(className);
+        if (hiddenIt != hiddenClinitByClass.end()) {
+            const auto& proxy = hiddenIt->second;
+            src.emitLine("if (" + proxy.callFunctionName + "(env, bridge_class) != JNI_OK) {");
+            src.indent();
+            src.emitLine("if (!(*env)->ExceptionCheck(env)) {");
+            src.indent();
+            src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+            src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x hidden <clinit> failed\");");
+            src.dedent();
+            src.emitLine("}");
+            src.emitLine("return;");
+            src.dedent();
+            src.emitLine("}");
+        }
         src.dedent();
         src.emitLine("}");
         src.emitLine("");
@@ -703,12 +1104,6 @@ void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
     src.emitLine("JNIEnv* env = NULL;");
     src.emitLine("(void)reserved;");
     src.emitLine("if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;");
-    for (const auto& className : registrationClassOrder) {
-        auto found = registrationsByClass.find(className);
-        if (found == registrationsByClass.end() || found->second.empty())
-            continue;
-        src.emitLine("if (" + registerFunctionName(className) + "(env) != JNI_OK) return JNI_ERR;");
-    }
     src.emitLine("return JNI_VERSION_1_6;");
     src.dedent();
     src.emitLine("}");
