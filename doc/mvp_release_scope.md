@@ -24,6 +24,12 @@ documented automated tests and protected samples.
 - CLI supports both backend modes:
   - `--backend stackc`
   - `--backend regc`
+- CLI supports annotation-scoped method selection with
+  `--native-annotation <desc>`.
+- CLI can compile emitted C with `--compile` when a supported local native
+  toolchain and JDK headers are available.
+- CLI can generate a standalone CMake native project with
+  `--generate-cmake <dir>`.
 
 ### StackC
 
@@ -56,6 +62,8 @@ The MVP includes the current R3 runtime core and ABI foundation:
 
 - crypto/kernel/stringpool/antidebug/antijvmti unit-testable modules
 - RegC runtime ABI for div/rem trap helpers and barrier hook
+- initial intrinsic helpers for Math, Integer.parseInt, boxed primitive
+  value/unbox, and java.util.Random narrow non-escaping paths
 - runtime protected sample surface for mjdbg
 
 The MVP does not claim that anti-debug or anti-JVMTI behavior has already been
@@ -88,14 +96,16 @@ The following items are postponed until after the MVP release:
 - L4 transform pass system: MBA, DCE, control-flow flattening, opaque
   predicates, and pass schema/planner.
 - VMC4 native VM backend and VM runtime.
-- Product packaging that compiles emitted C into platform DLL/SO artifacts.
+- Product-grade native packaging beyond the local `--compile` helper and
+  generated CMake project.
 - Signed-JAR re-signing or signature-stripping policy.
 - RegC `invokedynamic`, lambda, method-handle, and string-concat lowering.
 - JNI ID cache optimization.
 - StackC JVM-accurate integer div/rem trap semantics.
 - Moving all RegC object/field/array/call helpers behind the R3 runtime ABI.
 - Claims that mjdbg/c2j recovery is harder before red-team feedback confirms it.
-- Annotation/config-driven fine-grained method selection as a product feature.
+- JSON/config-driven method selection beyond the descriptor-based
+  `--native-annotation` MVP path.
 
 ## Release Gates
 
@@ -108,6 +118,7 @@ xmake build mj2x_unittest
 xmake build mj2x_runtime_test
 xmake run mj2x_unittest
 xmake run mj2x_runtime_test
+tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 git diff --check HEAD
 ```
 
@@ -115,7 +126,7 @@ The PR must also link the backend support matrix and verification index:
 
 - `stackc_backend_readme.md`
 - `regc_backend_readme.md`
-- `mvp_backend_verification.md`
+- `../doc_ai/mvp_backend_verification.md`
 
 ## Current Residual Risks
 

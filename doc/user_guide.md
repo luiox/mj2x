@@ -8,7 +8,7 @@
 ## 1. 构建
 
 ```bash
-xmake f --with_mj2x=y
+xmake f --with_mj2x=y --with_tests=y
 xmake build mj2x-cli       # CLI 工具
 xmake build mj2x-core      # 核心静态库(被 CLI 依赖)
 xmake build mj2x_unittest  # 单元测试
@@ -19,9 +19,32 @@ xmake build mj2x_runtime_test  # R3 runtime 测试
 
 ---
 
-## 2. 基本用法
+## 2. 可复现验证
 
-### 2.1 单 class 输入
+发布前的 mj2x MVP 验证命令:
+
+```powershell
+xmake build -y mj2x-core
+xmake build -y mj2x-cli
+xmake build -y mj2x_unittest
+xmake build -y mj2x_runtime_test
+xmake run -y mj2x_unittest
+xmake run -y mj2x_runtime_test
+tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
+git diff --check HEAD
+```
+
+`product_sample_smoke.ps1` 会用 `mj2x/test_resource/mvp_jar/` 生成半真实 JAR,
+分别验证 StackC/RegC 的 class 与 jar 输入,并比较连续两次生成的 `.class` /
+`.jar` / `.c` SHA-256。生成物统一写到 `test/product_sample_hardening/mj2x/`。
+
+能力到测试的追溯表见 [mvp_backend_verification.md](../doc_ai/mvp_backend_verification.md)。
+
+---
+
+## 3. 基本用法
+
+### 3.1 单 class 输入
 
 ```bash
 mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c
@@ -30,7 +53,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c
 - `Hello_native.class`:原方法被标记为 `native`
 - `Hello.c`:生成的 C 源码
 
-### 2.2 JAR 输入
+### 3.2 JAR 输入
 
 ```bash
 mj2x-cli -i myapp.jar -o myapp_native.jar --emit-c myapp.c
@@ -38,7 +61,7 @@ mj2x-cli -i myapp.jar -o myapp_native.jar --emit-c myapp.c
 
 JAR 内多个 class 会被逐个处理,非 class 资源原样保留,entry 顺序保留。
 
-### 2.3 选择后端
+### 3.3 选择后端
 
 ```bash
 # StackC(默认,广覆盖正确性; cbackend 仍作为旧别名兼容)
@@ -50,7 +73,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --backend regc
 
 后端对比见 [capabilities.md §2 / §3](../doc_ai/capabilities.md)。
 
-### 2.4 只翻译带注解的方法
+### 3.4 只翻译带注解的方法
 
 默认情况下,mj2x 会翻译所有可支持的非抽象、非 native 方法。若只想让部分方法走 native,可使用项目提供的 `mj2x.Native` 注解:
 
@@ -87,7 +110,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --native-annotati
 - `<init>` / `<clinit>` 不会被翻译
 - `mj2x.Native` 使用 `RetentionPolicy.CLASS`,运行时不依赖该注解类出现在应用 classpath
 
-### 2.5 调试:查看中间表示
+### 3.5 调试:查看中间表示
 
 ```bash
 mj2x-cli -i Hello.class -o /dev/null --dump-mir
@@ -95,7 +118,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 
 ---
 
-## 3. 参数参考
+## 4. 参数参考
 
 | 参数 | 说明 |
 |---|---|
@@ -129,9 +152,9 @@ StackC/RegC 两次，并比较输出 class/jar 与 C 源的 SHA-256。
 
 ---
 
-## 4. 编译生成的 C 为 DLL / SO
+## 5. 编译生成的 C 为 DLL / SO
 
-### 4.1 CLI 自动编译
+### 5.1 CLI 自动编译
 
 ```bash
 mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile
@@ -160,18 +183,19 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile --c-com
 - `JAVA_HOME` 指向 JDK,且包含 `include/jni.h`
 - Windows 使用 MSVC 时,mj2x 会在环境未初始化时自动查找并调用 Visual Studio 2022 的 `vcvarsall.bat`;如果找不到,再从 Developer Command Prompt 或已运行 `vcvars` 的 shell 中执行
 
-### 4.2 用 xmake(推荐,JAR / 复杂场景)
+### 5.2 生成 CMake 工程
 
-手动建工程或用生成器(实验性,见分支)。核心是:把生成的 `.c` 连同 JNI 头编译为 shared library。
+`--generate-cmake <dir>` 会把生成的 `.c` 和最小 CMake 工程写到指定目录。
+核心是把生成的 `.c` 连同 JNI 头编译为 shared library。
 
-### 4.3 手动编译(Windows / cl)
+### 5.3 手动编译(Windows / cl)
 
 ```bash
 javac -h . Hello.java
 cl /LD /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" Hello.c /FeHello.dll
 ```
 
-### 4.4 手动编译(Linux / gcc)
+### 5.4 手动编译(Linux / gcc)
 
 ```bash
 javac -h . Hello.java
@@ -180,7 +204,7 @@ gcc -shared -fPIC -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" Hello.c -o
 
 ---
 
-## 5. 运行
+## 6. 运行
 
 ```bash
 # Windows
@@ -192,7 +216,7 @@ java -Djava.library.path=. Hello
 
 ---
 
-## 6. 后端选择指南
+## 7. 后端选择指南
 
 | 场景 | 推荐后端 |
 |---|---|
@@ -205,7 +229,7 @@ java -Djava.library.path=. Hello
 - StackC:`doc/stackc_backend_readme.md`
 - RegC:`doc/regc_backend_readme.md`
 
-### 6.1 RegC intrinsic 支持范围
+### 7.1 RegC intrinsic 支持范围
 
 RegC 会在生成 C 时识别部分 JDK 调用,把这些调用降到 native runtime symbol,
 避免在匹配调用点发 `_mj2x_regc_call_*` JNI 派发:
@@ -224,7 +248,7 @@ RegC 会在生成 C 时识别部分 JDK 调用,把这些调用降到 native runt
 
 ---
 
-## 7. 测试真实混淆 class
+## 8. 测试真实混淆 class
 
 ```bash
 jar xf ref_samples/SnakeGame-obf-grunt.jar b.class
@@ -235,7 +259,7 @@ mj2x-cli -i b.class -o b_out.class --emit-c b_out.c
 
 ---
 
-## 8. 常见问题
+## 9. 常见问题
 
 **Q: 生成的 DLL 加载报 `UnsatisfiedLinkError`?**
 检查:JNI 头是否正确生成(`javac -h`)、DLL 是否在 `java.library.path`、方法签名是否匹配。

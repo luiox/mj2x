@@ -166,14 +166,6 @@ mj2x/
 
 ---
 
-## 5. 生成 xmake 工程
-
-`--generate-project <dir>` 把转 C 结果连同 `xmake.lua` / `.gitignore` / 原 class / (RegC) runtime 源码打包成独立可编译工程。
-
-> 注:该功能当前在分支 `feat/mj2x/xmake-project-generator`,实现为 emit 后字符串改写,待 golden test 建立后重构到 codegen 层。详见分支提交说明。
-
----
-
 ## 6. 验证入口
 
 ```bash
@@ -183,6 +175,7 @@ xmake build mj2x_unittest
 xmake build mj2x_runtime_test
 xmake run mj2x_unittest
 xmake run mj2x_runtime_test
+tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 ```
 
 能力到测试的追溯见 `../doc_ai/mvp_backend_verification.md`。
