@@ -101,6 +101,15 @@ static std::string cacheIdentifier(const char* prefix, const std::string& key) {
     return std::string(prefix) + "_" + hex64(fnv1a64(key));
 }
 
+static bool isCategory2Kind(PrimitiveKind kind) {
+    return kind == PrimitiveKind::LONG || kind == PrimitiveKind::DOUBLE;
+}
+
+static bool stackOpTopIsCategory2(const MIRStackOp* op, size_t depth = 0) {
+    return op != nullptr && depth < op->stackBeforeTop.size() &&
+           isCategory2Kind(op->stackBeforeTop[depth]);
+}
+
 // ============================================================
 // Type mapping helpers
 // ============================================================
@@ -238,11 +247,52 @@ static const char* defaultReturnValue(PrimitiveKind k) {
     }
 }
 
+static int loadOpcodeForSort(int sort) {
+    switch (sort) {
+    case Type::LONG:   return Opcodes::LLOAD;
+    case Type::FLOAT:  return Opcodes::FLOAD;
+    case Type::DOUBLE: return Opcodes::DLOAD;
+    case Type::OBJECT:
+    case Type::ARRAY:  return Opcodes::ALOAD;
+    default:           return Opcodes::ILOAD;
+    }
+}
+
+static int returnOpcodeForKind(PrimitiveKind kind) {
+    switch (kind) {
+    case PrimitiveKind::VOID:   return Opcodes::RETURN;
+    case PrimitiveKind::LONG:   return Opcodes::LRETURN;
+    case PrimitiveKind::FLOAT:  return Opcodes::FRETURN;
+    case PrimitiveKind::DOUBLE: return Opcodes::DRETURN;
+    case PrimitiveKind::OBJECT: return Opcodes::ARETURN;
+    default:                    return Opcodes::IRETURN;
+    }
+}
+
 static PrimitiveKind methodReturnKind(const std::string& methodDesc) {
     return jvmDescToPrimitive(
         Type::getReturnType(ca::str::Utf8StringRef::from_cstr(methodDesc.c_str()))
             .getDescriptor()
             .to_std_string());
+}
+
+static std::string prependReceiverToMethodDesc(
+    const std::string& ownerClassName,
+    const std::string& methodDesc)
+{
+    const auto close = methodDesc.find(')');
+    if (methodDesc.empty() || methodDesc[0] != '(' || close == std::string::npos)
+        return methodDesc;
+    return "(L" + ownerClassName + ";" + methodDesc.substr(1);
+}
+
+static bool isInterfaceDefaultMethod(const CompilerClass& clazz, const MethodNode& method) {
+    if ((clazz.classNode->access & Opcodes::ACC_INTERFACE) == 0)
+        return false;
+    if ((method.access & (Opcodes::ACC_ABSTRACT | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE)) != 0)
+        return false;
+    const auto name = method.name.to_std_string();
+    return name != "<init>" && name != "<clinit>";
 }
 
 static std::string utf8RefToString(ca::str::Utf8StringRef value) {
@@ -393,8 +443,26 @@ struct CHiddenClinitProxy {
     std::vector<uint8_t> classBytes;
 };
 
-static constexpr const char* kRegisterBridgeName = "__mj2x_registerClass";
-static constexpr const char* kRegisterBridgeDesc = "(I)V";
+struct CHiddenInterfaceDefaultProxy {
+    std::string ownerClassName;
+    std::string javaName;
+    std::string javaDesc;
+    std::string hiddenClassName;
+    std::string hiddenMethodName;
+    std::string hiddenMethodDesc;
+    std::string compiledFunctionName;
+    std::string wrapperFunctionName;
+    std::string defineFunctionName;
+    std::string classBytesName;
+    std::string classRefName;
+    std::string doneFlagName;
+    std::vector<uint8_t> classBytes;
+};
+
+static constexpr const char* kRegisterBridgeClassName = "mj2x/cloader/Loader";
+static constexpr const char* kRegisterBridgeMethodName = "registerNativesForClass";
+static constexpr const char* kRegisterBridgeMethodDesc = "(ILjava/lang/String;)V";
+static constexpr const char* kRegisterBridgeCFunctionName = "_mj2x_register_for_class";
 static constexpr const char* kHiddenClinitMethodName = "__mj2x_hiddenClinit";
 static constexpr const char* kHiddenClinitMethodDesc = "(Ljava/lang/Class;)V";
 static constexpr const char* kNativeLoaderClassName = "mj2x/runtime/NativeLoader";
@@ -404,6 +472,11 @@ static std::string hiddenClinitClassNameFor(const std::string& ownerClassName);
 static std::vector<uint8_t> makeHiddenClinitClassBytes(
     const std::string& hiddenClassName,
     const std::string& hiddenMethodName);
+static std::vector<uint8_t> makeHiddenInterfaceDefaultClassBytes(
+    const std::string& hiddenClassName,
+    const std::string& hiddenMethodName,
+    const std::string& hiddenMethodDesc);
+static void clearMethodDebugAndHandlers(MethodNode* method);
 
 static std::string exceptionDispatchKey(const std::vector<int>& handlerIndices) {
     std::ostringstream key;
@@ -455,10 +528,11 @@ struct CBackend::Impl {
     std::unordered_map<std::string, std::vector<CNativeRegistration>> registrationsByClass;
     std::vector<std::string> registrationClassOrder;
     std::unordered_map<std::string, int> registrationClassIds;
-    std::unordered_set<std::string> injectedRegistrationBridgeClasses;
     std::unordered_set<std::string> protectedClinitClasses;
     std::unordered_map<std::string, CHiddenClinitProxy> hiddenClinitByClass;
     std::vector<std::string> hiddenClinitClassOrder;
+    std::unordered_map<std::string, std::vector<CHiddenInterfaceDefaultProxy>> interfaceDefaultProxiesByClass;
+    std::vector<std::string> interfaceDefaultProxyClassOrder;
     std::unordered_map<std::string, size_t> stringPoolOffsets;
     std::vector<unsigned char> stringPoolBytes;
     std::deque<std::string> stableUtf8Storage;
@@ -512,16 +586,46 @@ struct CBackend::Impl {
     void emitArrayLoad(const MIRArrayLoad* node, std::ostringstream& out);
     void emitArrayStore(const MIRArrayStore* node, std::ostringstream& out);
     void emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostringstream& out);
+    void emitNullPointerTrap(const std::string& refExpr, std::ostringstream& out);
+    void emitPendingExceptionCheck(std::ostringstream& out, int indent = 8);
+    void emitFieldIdCache(
+        const std::string& cacheName,
+        const std::string& localName,
+        const std::string& classExpr,
+        const std::string& name,
+        const std::string& desc,
+        bool isStatic,
+        std::ostringstream& out);
+    void emitMethodIdCache(
+        const std::string& cacheName,
+        const std::string& localName,
+        const std::string& classExpr,
+        const std::string& name,
+        const std::string& desc,
+        bool isStatic,
+        std::ostringstream& out);
     size_t stringPoolOffsetFor(const std::string& value);
     void emitStringPool(std::ostringstream& out) const;
     void emitRegistrationCode(std::ostringstream& out) const;
     ca::str::Utf8StringRef stableUtf8(const std::string& value);
-    void ensureRegistrationBridge(CompilerClass& clazz);
     void protectClassInitializer(CBackend& backend, CompilerClass& clazz);
     void registerHiddenClinitProxy(
         const std::string& className,
         const std::string& hiddenMethodName,
         const std::string& compiledFunctionName);
+    void registerInterfaceDefaultProxy(
+        CompilerClass& clazz,
+        MethodNode& method,
+        const std::string& compiledFunctionName);
+    void rewriteInterfaceDefaultMethodToProxy(
+        CompilerClass& clazz,
+        MethodNode& method,
+        const CHiddenInterfaceDefaultProxy& proxy);
+    std::string findCompiledFunctionName(
+        const std::string& className,
+        const std::string& methodName,
+        const std::string& methodDesc) const;
+    bool hasInterfaceDefaultProxies(const std::string& className) const;
     void removeRegistration(
         const std::string& className,
         const std::string& methodName,
@@ -729,11 +833,25 @@ void CBackend::injectIntoClass(
     CompilerMethod& method,
     const BackendResult& result)
 {
-    impl_->ensureRegistrationBridge(clazz);
+    (void)result;
     impl_->protectClassInitializer(*this, clazz);
 
-    // Mark method as native and clear bytecode
     auto* mn = method.methodNode;
+    if (isInterfaceDefaultMethod(clazz, *mn)) {
+        const auto className = clazz.classNode->name.to_std_string();
+        const auto functionName = impl_->findCompiledFunctionName(
+            className,
+            mn->name.to_std_string(),
+            mn->desc.to_std_string());
+        if (!functionName.empty()) {
+            impl_->registerInterfaceDefaultProxy(clazz, *mn, functionName);
+            const auto& proxies = impl_->interfaceDefaultProxiesByClass[className];
+            impl_->rewriteInterfaceDefaultMethodToProxy(clazz, *mn, proxies.back());
+        }
+        return;
+    }
+
+    // Mark method as native and clear bytecode
     mn->access |= Opcodes::ACC_NATIVE;
     mn->instructions.clear();
     mn->maxStack = 0;
@@ -804,23 +922,92 @@ void CBackend::Impl::registerHiddenClinitProxy(
     removeRegistration(className, hiddenMethodName, "()V");
 }
 
-void CBackend::Impl::ensureRegistrationBridge(CompilerClass& clazz) {
-    const auto className = clazz.classNode->name.to_std_string();
-    if (!injectedRegistrationBridgeClasses.insert(className).second)
-        return;
-    if (findMethod(clazz, kRegisterBridgeName, kRegisterBridgeDesc) != nullptr)
-        return;
+std::string CBackend::Impl::findCompiledFunctionName(
+    const std::string& className,
+    const std::string& methodName,
+    const std::string& methodDesc) const
+{
+    auto regsIt = registrationsByClass.find(className);
+    if (regsIt == registrationsByClass.end())
+        return {};
+    for (auto it = regsIt->second.rbegin(); it != regsIt->second.rend(); ++it) {
+        if (it->javaName == methodName && it->javaDesc == methodDesc)
+            return it->cFunctionName;
+    }
+    return {};
+}
 
-    std::vector<ca::str::Utf8StringRef> noExceptions;
-    auto* bridge = new MethodNode(
-        Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
-        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeName),
-        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeDesc),
-        ca::str::ZUtf8StringRef::from_static(""),
-        noExceptions);
-    bridge->maxStack = 0;
-    bridge->maxLocals = 0;
-    clazz.classNode->methods.push_back(bridge);
+bool CBackend::Impl::hasInterfaceDefaultProxies(const std::string& className) const {
+    auto found = interfaceDefaultProxiesByClass.find(className);
+    return found != interfaceDefaultProxiesByClass.end() && !found->second.empty();
+}
+
+void CBackend::Impl::registerInterfaceDefaultProxy(
+    CompilerClass& clazz,
+    MethodNode& method,
+    const std::string& compiledFunctionName)
+{
+    const auto className = clazz.classNode->name.to_std_string();
+    const auto methodName = method.name.to_std_string();
+    const auto methodDesc = method.desc.to_std_string();
+    const auto suffix = hex64(fnv1a64(className + "." + methodName + methodDesc));
+
+    CHiddenInterfaceDefaultProxy proxy;
+    proxy.ownerClassName = className;
+    proxy.javaName = methodName;
+    proxy.javaDesc = methodDesc;
+    proxy.hiddenClassName = hiddenClinitClassNameFor(className + "$default$" + suffix);
+    proxy.hiddenMethodName = "__mj2x_default_" + suffix;
+    proxy.hiddenMethodDesc = prependReceiverToMethodDesc(className, methodDesc);
+    proxy.compiledFunctionName = compiledFunctionName;
+    proxy.wrapperFunctionName = "_mj2x_interface_default_wrapper_" + suffix;
+    proxy.defineFunctionName = "_mj2x_define_interface_default_" + suffix;
+    proxy.classBytesName = "_mj2x_interface_default_class_" + suffix;
+    proxy.classRefName = "_mj2x_interface_default_class_ref_" + suffix;
+    proxy.doneFlagName = "_mj2x_interface_default_done_" + suffix;
+    proxy.classBytes = makeHiddenInterfaceDefaultClassBytes(
+        proxy.hiddenClassName,
+        proxy.hiddenMethodName,
+        proxy.hiddenMethodDesc);
+
+    auto [proxiesIt, inserted] = interfaceDefaultProxiesByClass.emplace(
+        className,
+        std::vector<CHiddenInterfaceDefaultProxy>{});
+    if (inserted)
+        interfaceDefaultProxyClassOrder.push_back(className);
+    proxiesIt->second.push_back(std::move(proxy));
+    removeRegistration(className, methodName, methodDesc);
+}
+
+void CBackend::Impl::rewriteInterfaceDefaultMethodToProxy(
+    CompilerClass& clazz,
+    MethodNode& method,
+    const CHiddenInterfaceDefaultProxy& proxy)
+{
+    method.access &= ~Opcodes::ACC_NATIVE;
+    method.instructions.clear();
+    clearMethodDebugAndHandlers(&method);
+
+    method.instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+    int slot = 1;
+    int maxStack = 1;
+    auto argTypes = Type::getArgumentTypes(method.desc);
+    for (const auto& argType : argTypes) {
+        method.instructions.add(new VarInsnNode(loadOpcodeForSort(argType.getSort()), slot));
+        auto pk = jvmSortToPrimitive(argType.getSort());
+        const int width = primitiveStackSize(pk);
+        slot += width;
+        maxStack += width;
+    }
+    method.instructions.add(new MethodInsnNode(
+        Opcodes::INVOKESTATIC,
+        stableUtf8(proxy.hiddenClassName),
+        stableUtf8(proxy.hiddenMethodName),
+        stableUtf8(proxy.hiddenMethodDesc),
+        false));
+    method.instructions.add(new InsnNode(returnOpcodeForKind(methodReturnKind(proxy.javaDesc))));
+    method.maxStack = maxStack;
+    method.maxLocals = slot;
     clazz.modified = true;
 }
 
@@ -866,6 +1053,34 @@ static std::vector<uint8_t> makeHiddenClinitClassBytes(
     return writer.toByteArray();
 }
 
+static std::vector<uint8_t> makeHiddenInterfaceDefaultClassBytes(
+    const std::string& hiddenClassName,
+    const std::string& hiddenMethodName,
+    const std::string& hiddenMethodDesc)
+{
+    ca::str::Utf8StringArena arena;
+    ClassNode cn;
+    cn.version = Opcodes::V1_8;
+    cn.access = Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
+    cn.name = arena.intern(hiddenClassName.c_str());
+    cn.superName = arena.intern("java/lang/Object");
+
+    std::vector<ca::str::Utf8StringRef> noExceptions;
+    auto* proxy = new MethodNode(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
+        arena.intern(hiddenMethodName.c_str()),
+        arena.intern(hiddenMethodDesc.c_str()),
+        arena.intern(""),
+        noExceptions);
+    proxy->maxStack = 0;
+    proxy->maxLocals = 0;
+    cn.methods.push_back(proxy);
+
+    ClassWriter writer(arena, 0);
+    cn.accept(&writer);
+    return writer.toByteArray();
+}
+
 static void emitClassRegistrationCall(
     MethodNode* clinit,
     ca::str::Utf8StringRef className,
@@ -873,7 +1088,6 @@ static void emitClassRegistrationCall(
     const std::string& nativeLoaderTempSuffix,
     int classId)
 {
-    (void)className;
     if (!nativeLoaderResourcePath.empty()) {
         clinit->instructions.add(new LdcInsnNode(nativeLoaderResourcePath));
         clinit->instructions.add(new LdcInsnNode(nativeLoaderTempSuffix));
@@ -885,11 +1099,12 @@ static void emitClassRegistrationCall(
             false));
     }
     clinit->instructions.add(new LdcInsnNode(classId));
+    clinit->instructions.add(new LdcInsnNode(className.to_std_string()));
     clinit->instructions.add(new MethodInsnNode(
         Opcodes::INVOKESTATIC,
-        className,
-        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeName),
-        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeDesc),
+        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeClassName),
+        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeMethodName),
+        ca::str::ZUtf8StringRef::from_static(kRegisterBridgeMethodDesc),
         false));
 }
 
@@ -952,7 +1167,7 @@ void CBackend::Impl::protectClassInitializer(CBackend& backend, CompilerClass& c
         jarNativeLoaderTempSuffix,
         idIt->second);
     clinit->instructions.add(new InsnNode(Opcodes::RETURN));
-    clinit->maxStack = jarNativeLoaderResourcePath.empty() ? 1 : 2;
+    clinit->maxStack = 2;
     clinit->maxLocals = 0;
     clazz.modified = true;
 }
@@ -1019,6 +1234,11 @@ void CBackend::Impl::emitStringPool(std::ostringstream& out) const {
 void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
     CSourceStream src;
     src.emitLine("/* Native registration */");
+    src.emitLine("typedef jint (*_mj2x_reg_method)(JNIEnv* env, jclass clazz);");
+    src.emitLine("static _mj2x_reg_method _mj2x_reg_methods["
+        + std::to_string(registrationClassOrder.empty() ? 1 : registrationClassOrder.size())
+        + "] = {0};");
+    src.emitLine("");
     for (const auto& className : hiddenClinitClassOrder) {
         auto hiddenIt = hiddenClinitByClass.find(className);
         if (hiddenIt == hiddenClinitByClass.end())
@@ -1043,7 +1263,7 @@ void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
             src.emitLine(line);
         src.dedent();
         src.emitLine("};");
-        src.emitLine("static jclass " + proxy.classRefName + " = NULL;");
+        src.emitLine("static jweak " + proxy.classRefName + " = NULL;");
         src.emitLine("static jmethodID " + proxy.methodIdName + " = NULL;");
         src.emitLine("static jboolean " + proxy.doneFlagName + " = JNI_FALSE;");
         src.emitLine("static void JNICALL " + proxy.wrapperFunctionName
@@ -1056,21 +1276,41 @@ void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
         src.emitLine("static jint " + proxy.callFunctionName + "(JNIEnv* env, jclass owner_class) {");
         src.indent();
         src.emitLine("if (owner_class == NULL) return JNI_ERR;");
-        src.emitLine("if (" + proxy.doneFlagName + ") return JNI_OK;");
-        src.emitLine("if (" + proxy.classRefName + " == NULL) {");
+        src.emitLine("if ((*env)->MonitorEnter(env, owner_class) != 0) return JNI_ERR;");
+        src.emitLine("jint result = JNI_OK;");
+        src.emitLine("jclass cached_class = NULL;");
+        src.emitLine("if (" + proxy.doneFlagName + ") {");
+        src.indent();
+        src.emitLine("goto " + proxy.callFunctionName + "_exit;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("if (" + proxy.classRefName + " != NULL) {");
+        src.indent();
+        src.emitLine("cached_class = (jclass)(*env)->NewLocalRef(env, " + proxy.classRefName + ");");
+        src.emitLine("if (cached_class == NULL) {");
+        src.indent();
+        src.emitLine("(*env)->DeleteWeakGlobalRef(env, " + proxy.classRefName + ");");
+        src.emitLine(proxy.classRefName + " = NULL;");
+        src.emitLine(proxy.methodIdName + " = NULL;");
+        src.dedent();
+        src.emitLine("}");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("if (cached_class == NULL) {");
         src.indent();
         src.emitLine("jclass class_class = (*env)->FindClass(env, \"java/lang/Class\");");
-        src.emitLine("if ((*env)->ExceptionCheck(env) || class_class == NULL) return JNI_ERR;");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || class_class == NULL) { result = JNI_ERR; goto " + proxy.callFunctionName + "_exit; }");
         src.emitLine("jmethodID get_loader = (*env)->GetMethodID(env, class_class, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");");
-        src.emitLine("if ((*env)->ExceptionCheck(env) || get_loader == NULL) return JNI_ERR;");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || get_loader == NULL) { result = JNI_ERR; goto " + proxy.callFunctionName + "_exit; }");
         src.emitLine("jobject loader = (*env)->CallObjectMethod(env, owner_class, get_loader);");
-        src.emitLine("if ((*env)->ExceptionCheck(env)) return JNI_ERR;");
+        src.emitLine("if ((*env)->ExceptionCheck(env)) { result = JNI_ERR; goto " + proxy.callFunctionName + "_exit; }");
         src.emitLine("jclass hidden_class = (*env)->DefineClass(env, " + cStringLiteral(proxy.hiddenClassName)
             + ", loader, (const jbyte*)" + proxy.classBytesName
             + ", (jsize)sizeof(" + proxy.classBytesName + "));");
         src.emitLine("if (loader != NULL) (*env)->DeleteLocalRef(env, loader);");
         src.emitLine("(*env)->DeleteLocalRef(env, class_class);");
-        src.emitLine("if ((*env)->ExceptionCheck(env) || hidden_class == NULL) return JNI_ERR;");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || hidden_class == NULL) { result = JNI_ERR; goto " + proxy.callFunctionName + "_exit; }");
+        src.emitLine("cached_class = hidden_class;");
         src.emitLine("static JNINativeMethod hidden_methods[] = {");
         src.indent();
         src.emitLine("{(char*)" + cStringLiteral(proxy.hiddenMethodName)
@@ -1079,103 +1319,274 @@ void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
         src.dedent();
         src.emitLine("};");
         src.emitLine("if ((*env)->RegisterNatives(env, hidden_class, hidden_methods, "
-            "sizeof(hidden_methods) / sizeof(hidden_methods[0])) != 0) return JNI_ERR;");
+            "sizeof(hidden_methods) / sizeof(hidden_methods[0])) != 0) { result = JNI_ERR; goto " + proxy.callFunctionName + "_exit; }");
         src.emitLine(proxy.methodIdName + " = (*env)->GetStaticMethodID(env, hidden_class, "
             + cStringLiteral(proxy.hiddenMethodName) + ", " + cStringLiteral(proxy.hiddenMethodDesc) + ");");
-        src.emitLine("if ((*env)->ExceptionCheck(env) || " + proxy.methodIdName + " == NULL) return JNI_ERR;");
-        src.emitLine(proxy.classRefName + " = (jclass)(*env)->NewGlobalRef(env, hidden_class);");
-        src.emitLine("(*env)->DeleteLocalRef(env, hidden_class);");
-        src.emitLine("if (" + proxy.classRefName + " == NULL) return JNI_ERR;");
+        src.emitLine("if ((*env)->ExceptionCheck(env) || " + proxy.methodIdName + " == NULL) { result = JNI_ERR; goto " + proxy.callFunctionName + "_exit; }");
+        src.emitLine(proxy.classRefName + " = (*env)->NewWeakGlobalRef(env, hidden_class);");
+        src.emitLine("if (" + proxy.classRefName + " == NULL) { result = JNI_ERR; goto " + proxy.callFunctionName + "_exit; }");
         src.dedent();
         src.emitLine("}");
-        src.emitLine("(*env)->CallStaticVoidMethod(env, " + proxy.classRefName + ", "
+        src.emitLine("(*env)->CallStaticVoidMethod(env, cached_class, "
             + proxy.methodIdName + ", owner_class);");
-        src.emitLine("if ((*env)->ExceptionCheck(env)) return JNI_ERR;");
-        src.emitLine(proxy.doneFlagName + " = JNI_TRUE;");
-        src.emitLine("return JNI_OK;");
+        src.emitLine("if ((*env)->ExceptionCheck(env)) result = JNI_ERR;");
+        src.emitLine("else " + proxy.doneFlagName + " = JNI_TRUE;");
+        src.emitLine(proxy.callFunctionName + "_exit:");
+        src.emitLine("if (cached_class != NULL) (*env)->DeleteLocalRef(env, cached_class);");
+        src.emitLine("if ((*env)->MonitorExit(env, owner_class) != 0 && result == JNI_OK) result = JNI_ERR;");
+        src.emitLine("return result;");
         src.dedent();
         src.emitLine("}");
         src.emitLine("");
+    }
+
+    for (const auto& className : interfaceDefaultProxyClassOrder) {
+        auto proxiesIt = interfaceDefaultProxiesByClass.find(className);
+        if (proxiesIt == interfaceDefaultProxiesByClass.end())
+            continue;
+        for (const auto& proxy : proxiesIt->second) {
+            src.emitLine("static const unsigned char " + proxy.classBytesName + "[] = {");
+            src.indent();
+            std::string line;
+            for (size_t i = 0; i < proxy.classBytes.size(); ++i) {
+                if (line.empty()) {
+                    line = std::to_string(static_cast<unsigned int>(proxy.classBytes[i]));
+                } else {
+                    line += ", " + std::to_string(static_cast<unsigned int>(proxy.classBytes[i]));
+                }
+                if (line.size() > 96) {
+                    src.emitLine(line + ",");
+                    line.clear();
+                }
+            }
+            if (!line.empty())
+                src.emitLine(line);
+            src.dedent();
+            src.emitLine("};");
+            src.emitLine("static jweak " + proxy.classRefName + " = NULL;");
+            src.emitLine("static jboolean " + proxy.doneFlagName + " = JNI_FALSE;");
+
+            const auto retType = methodReturnKind(proxy.javaDesc);
+            std::string signature = "static " + std::string(primitiveToJNIType(retType)) + " JNICALL "
+                + proxy.wrapperFunctionName
+                + "(JNIEnv* env, jclass hidden_class, jobject receiver";
+            auto argTypes = Type::getArgumentTypes(
+                ca::str::Utf8StringRef::from_cstr(proxy.javaDesc.c_str()));
+            int paramIdx = 0;
+            for (const auto& argType : argTypes) {
+                auto pk = jvmSortToPrimitive(argType.getSort());
+                signature += ", " + std::string(primitiveToJNIType(pk)) + " p"
+                    + std::to_string(paramIdx);
+                ++paramIdx;
+            }
+            signature += ") {";
+            src.emitLine(signature);
+            src.indent();
+            src.emitLine("(void)hidden_class;");
+            std::string call = proxy.compiledFunctionName + "(env, receiver";
+            for (int i = 0; i < paramIdx; ++i)
+                call += ", p" + std::to_string(i);
+            call += ")";
+            if (retType == PrimitiveKind::VOID) {
+                src.emitLine(call + ";");
+                src.emitLine("return;");
+            } else {
+                src.emitLine("return " + call + ";");
+            }
+            src.dedent();
+            src.emitLine("}");
+
+            src.emitLine("static jint " + proxy.defineFunctionName + "(JNIEnv* env, jclass owner_class) {");
+            src.indent();
+            src.emitLine("if (owner_class == NULL) return JNI_ERR;");
+            src.emitLine("if ((*env)->MonitorEnter(env, owner_class) != 0) return JNI_ERR;");
+            src.emitLine("jint result = JNI_OK;");
+            src.emitLine("jclass cached_class = NULL;");
+            src.emitLine("if (" + proxy.doneFlagName + ") goto " + proxy.defineFunctionName + "_exit;");
+            src.emitLine("if (" + proxy.classRefName + " != NULL) {");
+            src.indent();
+            src.emitLine("cached_class = (jclass)(*env)->NewLocalRef(env, " + proxy.classRefName + ");");
+            src.emitLine("if (cached_class == NULL) {");
+            src.indent();
+            src.emitLine("(*env)->DeleteWeakGlobalRef(env, " + proxy.classRefName + ");");
+            src.emitLine(proxy.classRefName + " = NULL;");
+            src.dedent();
+            src.emitLine("}");
+            src.dedent();
+            src.emitLine("}");
+            src.emitLine("if (cached_class == NULL) {");
+            src.indent();
+            src.emitLine("jclass class_class = (*env)->FindClass(env, \"java/lang/Class\");");
+            src.emitLine("if ((*env)->ExceptionCheck(env) || class_class == NULL) { result = JNI_ERR; goto " + proxy.defineFunctionName + "_exit; }");
+            src.emitLine("jmethodID get_loader = (*env)->GetMethodID(env, class_class, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");");
+            src.emitLine("if ((*env)->ExceptionCheck(env) || get_loader == NULL) { result = JNI_ERR; goto " + proxy.defineFunctionName + "_exit; }");
+            src.emitLine("jobject loader = (*env)->CallObjectMethod(env, owner_class, get_loader);");
+            src.emitLine("if ((*env)->ExceptionCheck(env)) { result = JNI_ERR; goto " + proxy.defineFunctionName + "_exit; }");
+            src.emitLine("jclass hidden_class = (*env)->DefineClass(env, " + cStringLiteral(proxy.hiddenClassName)
+                + ", loader, (const jbyte*)" + proxy.classBytesName
+                + ", (jsize)sizeof(" + proxy.classBytesName + "));");
+            src.emitLine("if (loader != NULL) (*env)->DeleteLocalRef(env, loader);");
+            src.emitLine("(*env)->DeleteLocalRef(env, class_class);");
+            src.emitLine("if ((*env)->ExceptionCheck(env) || hidden_class == NULL) { result = JNI_ERR; goto " + proxy.defineFunctionName + "_exit; }");
+            src.emitLine("cached_class = hidden_class;");
+            src.emitLine("static JNINativeMethod hidden_methods[] = {");
+            src.indent();
+            src.emitLine("{(char*)" + cStringLiteral(proxy.hiddenMethodName)
+                + ", (char*)" + cStringLiteral(proxy.hiddenMethodDesc)
+                + ", (void*)" + proxy.wrapperFunctionName + "},");
+            src.dedent();
+            src.emitLine("};");
+            src.emitLine("if ((*env)->RegisterNatives(env, hidden_class, hidden_methods, "
+                "sizeof(hidden_methods) / sizeof(hidden_methods[0])) != 0) { result = JNI_ERR; goto " + proxy.defineFunctionName + "_exit; }");
+            src.emitLine(proxy.classRefName + " = (*env)->NewWeakGlobalRef(env, hidden_class);");
+            src.emitLine("if (" + proxy.classRefName + " == NULL) { result = JNI_ERR; goto " + proxy.defineFunctionName + "_exit; }");
+            src.dedent();
+            src.emitLine("}");
+            src.emitLine(proxy.doneFlagName + " = JNI_TRUE;");
+            src.emitLine(proxy.defineFunctionName + "_exit:");
+            src.emitLine("if (cached_class != NULL) (*env)->DeleteLocalRef(env, cached_class);");
+            src.emitLine("if ((*env)->MonitorExit(env, owner_class) != 0 && result == JNI_OK) result = JNI_ERR;");
+            src.emitLine("return result;");
+            src.dedent();
+            src.emitLine("}");
+            src.emitLine("");
+        }
     }
 
     for (const auto& className : registrationClassOrder) {
         auto found = registrationsByClass.find(className);
-        if (found == registrationsByClass.end() || found->second.empty())
+        const bool hasRegularRegistrations = found != registrationsByClass.end() && !found->second.empty();
+        if (!hasRegularRegistrations && !hasInterfaceDefaultProxies(className))
             continue;
 
         const auto registerName = registerFunctionName(className);
         const auto registeredFlag = registerName + "_done";
-        const auto bridgeName = codegen::mangleMethod(className, kRegisterBridgeName, kRegisterBridgeDesc);
         src.emitLine("static jboolean " + registeredFlag + " = JNI_FALSE;");
         src.emitLine("static jint " + registerName + "(JNIEnv* env, jclass clazz) {");
         src.indent();
         src.emitLine("if (clazz == NULL) return JNI_ERR;");
-        src.emitLine("if (" + registeredFlag + ") return JNI_OK;");
-        src.emitLine("static JNINativeMethod methods[] = {");
-        src.indent();
-        for (const auto& reg : found->second) {
-            src.emitLine("{(char*)" + cStringLiteral(reg.javaName)
-                + ", (char*)" + cStringLiteral(reg.javaDesc)
-                + ", (void*)" + reg.cFunctionName + "},");
+        src.emitLine("if ((*env)->MonitorEnter(env, clazz) != 0) return JNI_ERR;");
+        src.emitLine("jint result = JNI_OK;");
+        src.emitLine("if (" + registeredFlag + ") goto " + registerName + "_exit;");
+        if (hasRegularRegistrations) {
+            src.emitLine("static JNINativeMethod methods[] = {");
+            src.indent();
+            for (const auto& reg : found->second) {
+                src.emitLine("{(char*)" + cStringLiteral(reg.javaName)
+                    + ", (char*)" + cStringLiteral(reg.javaDesc)
+                    + ", (void*)" + reg.cFunctionName + "},");
+            }
+            src.dedent();
+            src.emitLine("};");
+            src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, "
+                "sizeof(methods) / sizeof(methods[0])) != 0) {");
+            src.indent();
+            src.emitLine("result = JNI_ERR;");
+            src.emitLine("goto " + registerName + "_exit;");
+            src.dedent();
+            src.emitLine("}");
         }
-        src.dedent();
-        src.emitLine("};");
-        src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, "
-            "sizeof(methods) / sizeof(methods[0])) != 0) {");
-        src.indent();
-        src.emitLine("return JNI_ERR;");
-        src.dedent();
-        src.emitLine("}");
+        auto proxyClassIt = interfaceDefaultProxiesByClass.find(className);
+        if (proxyClassIt != interfaceDefaultProxiesByClass.end()) {
+            for (const auto& proxy : proxyClassIt->second) {
+                src.emitLine("if (" + proxy.defineFunctionName + "(env, clazz) != JNI_OK) {");
+                src.indent();
+                src.emitLine("result = JNI_ERR;");
+                src.emitLine("goto " + registerName + "_exit;");
+                src.dedent();
+                src.emitLine("}");
+            }
+        }
         src.emitLine(registeredFlag + " = JNI_TRUE;");
-        src.emitLine("return JNI_OK;");
-        src.dedent();
-        src.emitLine("}");
-        src.emitLine("");
-
-        auto idIt = registrationClassIds.find(className);
-        const int classId = idIt == registrationClassIds.end() ? -1 : idIt->second;
-        src.emitLine("JNIEXPORT void JNICALL " + bridgeName
-            + "(JNIEnv* env, jclass bridge_class, jint class_id) {");
-        src.indent();
-        src.emitLine("if (class_id != " + std::to_string(classId) + ") {");
-        src.indent();
-        src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-        src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id mismatch\");");
-        src.emitLine("return;");
-        src.dedent();
-        src.emitLine("}");
-        src.emitLine("if (" + registerName + "(env, bridge_class) != JNI_OK) {");
-        src.indent();
-        src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-        src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native registration failed\");");
-        src.emitLine("return;");
-        src.dedent();
-        src.emitLine("}");
         auto hiddenIt = hiddenClinitByClass.find(className);
         if (hiddenIt != hiddenClinitByClass.end()) {
             const auto& proxy = hiddenIt->second;
-            src.emitLine("if (" + proxy.callFunctionName + "(env, bridge_class) != JNI_OK) {");
+            src.emitLine("if (" + proxy.callFunctionName + "(env, clazz) != JNI_OK) {");
             src.indent();
-            src.emitLine("if (!(*env)->ExceptionCheck(env)) {");
-            src.indent();
-            src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-            src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x hidden <clinit> failed\");");
-            src.dedent();
-            src.emitLine("}");
-            src.emitLine("return;");
+            src.emitLine("result = JNI_ERR;");
+            src.emitLine("goto " + registerName + "_exit;");
             src.dedent();
             src.emitLine("}");
         }
+        src.emitLine(registerName + "_exit:");
+        src.emitLine("if ((*env)->MonitorExit(env, clazz) != 0 && result == JNI_OK) result = JNI_ERR;");
+        src.emitLine("return result;");
         src.dedent();
         src.emitLine("}");
         src.emitLine("");
     }
+
+    src.emitLine("static void JNICALL " + std::string(kRegisterBridgeCFunctionName)
+        + "(JNIEnv* env, jclass loader_class, jint class_id, jstring class_name) {");
+    src.indent();
+    src.emitLine("(void)loader_class;");
+    src.emitLine("if (class_id < 0 || class_id >= "
+        + std::to_string(registrationClassOrder.size())
+        + " || _mj2x_reg_methods[class_id] == NULL) {");
+    src.indent();
+    src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id mismatch\");");
+    src.emitLine("return;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("if (class_name == NULL) {");
+    src.indent();
+    src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class name is null\");");
+    src.emitLine("return;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("const char* class_name_chars = (*env)->GetStringUTFChars(env, class_name, NULL);");
+    src.emitLine("if (class_name_chars == NULL) return;");
+    src.emitLine("jclass clazz = (*env)->FindClass(env, class_name_chars);");
+    src.emitLine("(*env)->ReleaseStringUTFChars(env, class_name, class_name_chars);");
+    src.emitLine("if ((*env)->ExceptionCheck(env) || clazz == NULL) return;");
+    src.emitLine("if (_mj2x_reg_methods[class_id](env, clazz) != JNI_OK) {");
+    src.indent();
+    src.emitLine("if (!(*env)->ExceptionCheck(env)) {");
+    src.indent();
+    src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native registration failed\");");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("(*env)->DeleteLocalRef(env, clazz);");
+    src.emitLine("return;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("(*env)->DeleteLocalRef(env, clazz);");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("");
 
     src.emitLine("JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {");
     src.indent();
     src.emitLine("JNIEnv* env = NULL;");
     src.emitLine("(void)reserved;");
     src.emitLine("if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;");
+    for (const auto& className : registrationClassOrder) {
+        auto found = registrationsByClass.find(className);
+        const bool hasRegularRegistrations = found != registrationsByClass.end() && !found->second.empty();
+        if (!hasRegularRegistrations && !hasInterfaceDefaultProxies(className))
+            continue;
+        auto idIt = registrationClassIds.find(className);
+        if (idIt == registrationClassIds.end())
+            continue;
+        src.emitLine("_mj2x_reg_methods[" + std::to_string(idIt->second) + "] = "
+            + registerFunctionName(className) + ";");
+    }
+    src.emitLine("jclass loader_class = (*env)->FindClass(env, "
+        + cStringLiteral(kRegisterBridgeClassName) + ");");
+    src.emitLine("if ((*env)->ExceptionCheck(env) || loader_class == NULL) return JNI_ERR;");
+    src.emitLine("static JNINativeMethod loader_methods[] = {");
+    src.indent();
+    src.emitLine("{(char*)" + cStringLiteral(kRegisterBridgeMethodName)
+        + ", (char*)" + cStringLiteral(kRegisterBridgeMethodDesc)
+        + ", (void*)" + kRegisterBridgeCFunctionName + "},");
+    src.dedent();
+    src.emitLine("};");
+    src.emitLine("if ((*env)->RegisterNatives(env, loader_class, loader_methods, "
+        "sizeof(loader_methods) / sizeof(loader_methods[0])) != 0) return JNI_ERR;");
+    src.emitLine("(*env)->DeleteLocalRef(env, loader_class);");
     src.emitLine("return JNI_VERSION_1_6;");
     src.dedent();
     src.emitLine("}");
@@ -1206,18 +1617,26 @@ void CBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out) {
         emitIinc(static_cast<const MIRIinc*>(node), out);
         break;
     case MIRKind::STACK_DUP:
-    case MIRKind::STACK_DUP_X1:
         out << "    stack[sp + 1] = stack[sp]; sp++;\n";
+        break;
+    case MIRKind::STACK_DUP_X1:
+        out << "    {\n";
+        out << "        union jvalue v1 = stack[sp];\n";
+        out << "        union jvalue v2 = stack[sp - 1];\n";
+        out << "        stack[sp - 1] = v1;\n";
+        out << "        stack[sp] = v2;\n";
+        out << "        stack[sp + 1] = v1;\n";
+        out << "        sp++;\n";
+        out << "    }\n";
         break;
     case MIRKind::STACK_POP:
         out << "    sp--;\n";
         break;
-    case MIRKind::STACK_POP2:
-        // The legacy CBackend stack stores every JVM value in one jvalue cell,
-        // so it cannot distinguish POP2(long/double) from POP2(cat1,cat1)
-        // without the typed SSA frame.  Fail closed instead of guessing.
-        emitUnsupported("pop2 requires typed stack lowering", out);
+    case MIRKind::STACK_POP2: {
+        const auto* op = static_cast<const MIRStackOp*>(node);
+        out << "    sp -= " << (stackOpTopIsCategory2(op) ? 1 : 2) << ";\n";
         break;
+    }
     case MIRKind::STACK_SWAP: {
         out << "    {\n";
         out << "        union jvalue tmp = stack[sp];\n";
@@ -1226,21 +1645,122 @@ void CBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out) {
         out << "    }\n";
         break;
     }
-    case MIRKind::STACK_DUP2:
-        out << "    stack[sp + 1] = stack[sp - 1];\n";
-        out << "    stack[sp + 2] = stack[sp];\n";
-        out << "    sp += 2;\n";
+    case MIRKind::STACK_DUP2: {
+        const auto* op = static_cast<const MIRStackOp*>(node);
+        if (stackOpTopIsCategory2(op)) {
+            out << "    stack[sp + 1] = stack[sp]; sp++;\n";
+        } else {
+            out << "    stack[sp + 1] = stack[sp - 1];\n";
+            out << "    stack[sp + 2] = stack[sp];\n";
+            out << "    sp += 2;\n";
+        }
         break;
-    case MIRKind::STACK_DUP2_X1:
-    case MIRKind::STACK_DUP2_X2:
-        emitUnsupported("wide dup form requires typed stack lowering", out);
+    }
+    case MIRKind::STACK_DUP2_X1: {
+        const auto* op = static_cast<const MIRStackOp*>(node);
+        if (stackOpTopIsCategory2(op)) {
+            out << "    {\n";
+            out << "        union jvalue v1 = stack[sp];\n";
+            out << "        union jvalue v2 = stack[sp - 1];\n";
+            out << "        stack[sp - 1] = v1;\n";
+            out << "        stack[sp] = v2;\n";
+            out << "        stack[sp + 1] = v1;\n";
+            out << "        sp++;\n";
+            out << "    }\n";
+        } else {
+            out << "    {\n";
+            out << "        union jvalue v1 = stack[sp];\n";
+            out << "        union jvalue v2 = stack[sp - 1];\n";
+            out << "        union jvalue v3 = stack[sp - 2];\n";
+            out << "        stack[sp - 2] = v2;\n";
+            out << "        stack[sp - 1] = v1;\n";
+            out << "        stack[sp] = v3;\n";
+            out << "        stack[sp + 1] = v2;\n";
+            out << "        stack[sp + 2] = v1;\n";
+            out << "        sp += 2;\n";
+            out << "    }\n";
+        }
         break;
+    }
+    case MIRKind::STACK_DUP2_X2: {
+        const auto* op = static_cast<const MIRStackOp*>(node);
+        if (stackOpTopIsCategory2(op)) {
+            if (stackOpTopIsCategory2(op, 1)) {
+                out << "    {\n";
+                out << "        union jvalue v1 = stack[sp];\n";
+                out << "        union jvalue v2 = stack[sp - 1];\n";
+                out << "        stack[sp - 1] = v1;\n";
+                out << "        stack[sp] = v2;\n";
+                out << "        stack[sp + 1] = v1;\n";
+                out << "        sp++;\n";
+                out << "    }\n";
+            } else {
+                out << "    {\n";
+                out << "        union jvalue v1 = stack[sp];\n";
+                out << "        union jvalue v2 = stack[sp - 1];\n";
+                out << "        union jvalue v3 = stack[sp - 2];\n";
+                out << "        stack[sp - 2] = v1;\n";
+                out << "        stack[sp - 1] = v3;\n";
+                out << "        stack[sp] = v2;\n";
+                out << "        stack[sp + 1] = v1;\n";
+                out << "        sp++;\n";
+                out << "    }\n";
+            }
+        } else if (stackOpTopIsCategory2(op, 2)) {
+            out << "    {\n";
+            out << "        union jvalue v1 = stack[sp];\n";
+            out << "        union jvalue v2 = stack[sp - 1];\n";
+            out << "        union jvalue v3 = stack[sp - 2];\n";
+            out << "        stack[sp - 2] = v2;\n";
+            out << "        stack[sp - 1] = v1;\n";
+            out << "        stack[sp] = v3;\n";
+            out << "        stack[sp + 1] = v2;\n";
+            out << "        stack[sp + 2] = v1;\n";
+            out << "        sp += 2;\n";
+            out << "    }\n";
+        } else {
+            out << "    {\n";
+            out << "        union jvalue v1 = stack[sp];\n";
+            out << "        union jvalue v2 = stack[sp - 1];\n";
+            out << "        union jvalue v3 = stack[sp - 2];\n";
+            out << "        union jvalue v4 = stack[sp - 3];\n";
+            out << "        stack[sp - 3] = v2;\n";
+            out << "        stack[sp - 2] = v1;\n";
+            out << "        stack[sp - 1] = v4;\n";
+            out << "        stack[sp] = v3;\n";
+            out << "        stack[sp + 1] = v2;\n";
+            out << "        stack[sp + 2] = v1;\n";
+            out << "        sp += 2;\n";
+            out << "    }\n";
+        }
+        break;
+    }
     case MIRKind::STACK_DUP_X2:
-        out << "    stack[sp + 1] = stack[sp];\n";
-        out << "    stack[sp] = stack[sp - 1];\n";
-        out << "    stack[sp - 1] = stack[sp + 1];\n";
-        out << "    sp++;\n";
+    {
+        const auto* op = static_cast<const MIRStackOp*>(node);
+        if (stackOpTopIsCategory2(op, 1)) {
+            out << "    {\n";
+            out << "        union jvalue v1 = stack[sp];\n";
+            out << "        union jvalue v2 = stack[sp - 1];\n";
+            out << "        stack[sp - 1] = v1;\n";
+            out << "        stack[sp] = v2;\n";
+            out << "        stack[sp + 1] = v1;\n";
+            out << "        sp++;\n";
+            out << "    }\n";
+        } else {
+            out << "    {\n";
+            out << "        union jvalue v1 = stack[sp];\n";
+            out << "        union jvalue v2 = stack[sp - 1];\n";
+            out << "        union jvalue v3 = stack[sp - 2];\n";
+            out << "        stack[sp - 2] = v1;\n";
+            out << "        stack[sp - 1] = v3;\n";
+            out << "        stack[sp] = v2;\n";
+            out << "        stack[sp + 1] = v1;\n";
+            out << "        sp++;\n";
+            out << "    }\n";
+        }
         break;
+    }
     case MIRKind::BINARY_OP:
         emitBinaryOp(static_cast<const MIRBinaryOp*>(node), out);
         break;
@@ -1399,6 +1919,73 @@ void CBackend::Impl::emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostrin
     else
         emitExceptionReturn(currentMethodDesc, out, 8);
     out << "    }\n";
+}
+
+void CBackend::Impl::emitNullPointerTrap(const std::string& refExpr, std::ostringstream& out) {
+    out << "    if (" << refExpr << " == NULL) {\n";
+    out << "        jclass ex_class = (jclass)"
+        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/NullPointerException\")") << ";\n";
+    out << "        (*env)->ThrowNew(env, ex_class, \"null reference\");\n";
+    if (!currentExceptionDispatchTarget.empty())
+        out << "        goto " << currentExceptionDispatchTarget << ";\n";
+    else
+        emitExceptionReturn(currentMethodDesc, out, 8);
+    out << "    }\n";
+}
+
+void CBackend::Impl::emitPendingExceptionCheck(std::ostringstream& out, int indent) {
+    const auto pad = std::string(static_cast<size_t>(indent), ' ');
+    out << pad << "if ((*env)->ExceptionCheck(env)) {\n";
+    if (!currentExceptionDispatchTarget.empty()) {
+        out << pad << "    goto " << currentExceptionDispatchTarget << ";\n";
+    } else {
+        emitExceptionReturn(currentMethodDesc, out, indent + 4);
+    }
+    out << pad << "}\n";
+}
+
+void CBackend::Impl::emitFieldIdCache(
+    const std::string& cacheName,
+    const std::string& localName,
+    const std::string& classExpr,
+    const std::string& name,
+    const std::string& desc,
+    bool isStatic,
+    std::ostringstream& out)
+{
+    out << "        static jfieldID " << cacheName << " = NULL;\n";
+    out << "        jfieldID " << localName << " = NULL;\n";
+    out << "        if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {\n";
+    out << "            if (" << cacheName << " == NULL) " << cacheName
+        << " = (*env)->Get" << (isStatic ? "Static" : "")
+        << "FieldID(env, " << classExpr << ", \"" << name << "\", \"" << desc << "\");\n";
+    out << "            " << localName << " = " << cacheName << ";\n";
+    out << "            if ((*env)->MonitorExit(env, _mj2x_owner_class) != 0) "
+        << localName << " = NULL;\n";
+    out << "        }\n";
+    emitPendingExceptionCheck(out, 8);
+}
+
+void CBackend::Impl::emitMethodIdCache(
+    const std::string& cacheName,
+    const std::string& localName,
+    const std::string& classExpr,
+    const std::string& name,
+    const std::string& desc,
+    bool isStatic,
+    std::ostringstream& out)
+{
+    out << "        static jmethodID " << cacheName << " = NULL;\n";
+    out << "        jmethodID " << localName << " = NULL;\n";
+    out << "        if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {\n";
+    out << "            if (" << cacheName << " == NULL) " << cacheName
+        << " = (*env)->Get" << (isStatic ? "Static" : "")
+        << "MethodID(env, " << classExpr << ", \"" << name << "\", \"" << desc << "\");\n";
+    out << "            " << localName << " = " << cacheName << ";\n";
+    out << "            if ((*env)->MonitorExit(env, _mj2x_owner_class) != 0) "
+        << localName << " = NULL;\n";
+    out << "        }\n";
+    emitPendingExceptionCheck(out, 8);
 }
 
 void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& out) {
@@ -1676,10 +2263,12 @@ void CBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, std::ostrin
 
 void CBackend::Impl::emitArrayLength(const MIRArrayLength* node, std::ostringstream& out) {
     (void)node;
+    emitNullPointerTrap("stack[sp].l", out);
     out << "    stack[sp].i = (*env)->GetArrayLength(env, stack[sp].l);\n";
 }
 
 void CBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringstream& out) {
+    emitNullPointerTrap("stack[sp - 1].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    stack[sp - 1].l = " << trackLocalRefExpr(
             "(*env)->GetObjectArrayElement(env, (jobjectArray)stack[sp - 1].l, stack[sp].i)") << ";\n";
@@ -1717,6 +2306,7 @@ void CBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringstream&
 }
 
 void CBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostringstream& out) {
+    emitNullPointerTrap("stack[sp - 2].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    (*env)->SetObjectArrayElement(env, (jobjectArray)stack[sp - 2].l, "
             << "stack[sp - 1].i, stack[sp].l);\n";
@@ -1758,12 +2348,11 @@ void CBackend::Impl::emitFieldGet(const MIRFieldGet* node, std::ostringstream& o
     out << "    {\n";
     out << "        jclass lc = (jclass)"
         << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")") << ";\n";
-    out << "        static jfieldID " << fidCache << " = NULL;\n";
-    out << "        if (" << fidCache << " == NULL) " << fidCache
-        << " = (*env)->GetFieldID(env, lc, \"" << node->name << "\", \"" << node->desc << "\");\n";
+    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, false, out);
+    emitNullPointerTrap("stack[sp].l", out);
     out << "        stack[sp]" << acc << " = ("
         << (narrowOnOperandStack(pk) ? "jint" : primitiveToJNIType(pk))
-        << ")(*env)->Get" << suffix << "Field(env, stack[sp].l, " << fidCache << ");\n";
+        << ")(*env)->Get" << suffix << "Field(env, stack[sp].l, fid_local);\n";
     out << "    }\n";
 }
 
@@ -1775,11 +2364,10 @@ void CBackend::Impl::emitFieldPut(const MIRFieldPut* node, std::ostringstream& o
     out << "    {\n";
     out << "        jclass lc = (jclass)"
         << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")") << ";\n";
-    out << "        static jfieldID " << fidCache << " = NULL;\n";
-    out << "        if (" << fidCache << " == NULL) " << fidCache
-        << " = (*env)->GetFieldID(env, lc, \"" << node->name << "\", \"" << node->desc << "\");\n";
+    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, false, out);
+    emitNullPointerTrap("stack[sp - 1].l", out);
     out << "        (*env)->Set" << suffix
-        << "Field(env, stack[sp - 1].l, " << fidCache << ", ("
+        << "Field(env, stack[sp - 1].l, fid_local, ("
         << primitiveToJNIType(pk) << ")stack[sp]" << acc << ");\n";
     out << "    }\n";
     out << "    sp -= 2;\n";
@@ -1793,12 +2381,10 @@ void CBackend::Impl::emitStaticGet(const MIRStaticGet* node, std::ostringstream&
     out << "    {\n";
     out << "        jclass lc = (jclass)"
         << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")") << ";\n";
-    out << "        static jfieldID " << fidCache << " = NULL;\n";
-    out << "        if (" << fidCache << " == NULL) " << fidCache
-        << " = (*env)->GetStaticFieldID(env, lc, \"" << node->name << "\", \"" << node->desc << "\");\n";
+    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, true, out);
     out << "        stack[++sp]" << acc << " = ("
         << (narrowOnOperandStack(pk) ? "jint" : primitiveToJNIType(pk))
-        << ")(*env)->GetStatic" << suffix << "Field(env, lc, " << fidCache << ");\n";
+        << ")(*env)->GetStatic" << suffix << "Field(env, lc, fid_local);\n";
     out << "    }\n";
 }
 
@@ -1810,11 +2396,9 @@ void CBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringstream&
     out << "    {\n";
     out << "        jclass lc = (jclass)"
         << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")") << ";\n";
-    out << "        static jfieldID " << fidCache << " = NULL;\n";
-    out << "        if (" << fidCache << " == NULL) " << fidCache
-        << " = (*env)->GetStaticFieldID(env, lc, \"" << node->name << "\", \"" << node->desc << "\");\n";
+    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, true, out);
     out << "        (*env)->SetStatic" << suffix
-        << "Field(env, lc, " << fidCache << ", ("
+        << "Field(env, lc, fid_local, ("
         << primitiveToJNIType(pk) << ")stack[sp]" << acc << ");\n";
     out << "    }\n";
     out << "    sp--;\n";
@@ -1853,9 +2437,7 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
     if (isStatic) {
         out << "        jclass lc = (jclass)"
             << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")") << ";\n";
-        out << "        static jmethodID " << methodCache << " = NULL;\n";
-        out << "        if (" << methodCache << " == NULL) " << methodCache
-            << " = (*env)->GetStaticMethodID(env, lc, \"" << node->name << "\", \"" << node->desc << "\");\n";
+        emitMethodIdCache(methodCache, "mid_local", "lc", node->name, node->desc, true, out);
         out << "        ";
         if (retType != PrimitiveKind::VOID) {
             if (argCount == 0)
@@ -1863,13 +2445,12 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
             else
                 out << "stack[sp - " << resultIndex << "]" << stackAccessor(retType) << " = ";
         }
-        out << "(*env)->" << callPrefix << retSuffix << "Method(env, lc, " << methodCache;
+        out << "(*env)->" << callPrefix << retSuffix << "Method(env, lc, mid_local";
     } else {
         out << "        jclass lc = (jclass)"
             << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")") << ";\n";
-        out << "        static jmethodID " << methodCache << " = NULL;\n";
-        out << "        if (" << methodCache << " == NULL) " << methodCache
-            << " = (*env)->GetMethodID(env, lc, \"" << node->name << "\", \"" << node->desc << "\");\n";
+        emitMethodIdCache(methodCache, "mid_local", "lc", node->name, node->desc, false, out);
+        emitNullPointerTrap("stack[" + recvExpr + "].l", out);
         out << "        ";
         if (retType != PrimitiveKind::VOID)
             out << "stack[" << recvExpr << "]" << stackAccessor(retType) << " = ";
@@ -1877,7 +2458,7 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
             << recvExpr << "].l";
         // CallNonvirtual* 需要 (env, obj, jclass, methodID, ...)：在 obj 后插 jclass lc。
         if (isNonvirtual) out << ", lc";
-        out << ", " << methodCache;
+        out << ", mid_local";
     }
     // 参数列表：arg0 在 sp-argCount+1，依次往后；静态/实例共享同一参数区。
     for (int i = 0; i < argCount; ++i) {

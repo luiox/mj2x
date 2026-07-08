@@ -556,6 +556,8 @@ TEST(CliTest, JarInputEmitsJarAndCSource) {
 
     auto resource = readJarEntry(outJar, "assets/config.txt");
     EXPECT_EQ(resource, std::vector<ca::u8>({'o', 'k'}));
+    auto cloaderClass = readJarEntry(outJar, "mj2x/cloader/Loader.class");
+    EXPECT_FALSE(cloaderClass.empty());
 
     auto classBytes = readJarEntry(outJar, "demo/CliJarA.class");
     ca::str::Utf8StringArena arena;
@@ -564,8 +566,7 @@ TEST(CliTest, JarInputEmitsJarAndCSource) {
     ASSERT_NE(add, nullptr);
     EXPECT_TRUE((add->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
     auto* bridge = findMethod(*cn, "__mj2x_registerClass");
-    ASSERT_NE(bridge, nullptr);
-    EXPECT_TRUE((bridge->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_EQ(bridge, nullptr);
     EXPECT_NE(findMethod(*cn, "<clinit>"), nullptr);
 
     std::string source = readText(cFile);
@@ -721,6 +722,8 @@ TEST(CliTest, CompileJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable) {
 
     auto loaderClass = readJarEntry(outJar, "mj2x/runtime/NativeLoader.class");
     EXPECT_FALSE(loaderClass.empty()) << result.out;
+    auto cloaderClass = readJarEntry(outJar, "mj2x/cloader/Loader.class");
+    EXPECT_FALSE(cloaderClass.empty()) << result.out;
     auto nativeResource = readJarEntry(
         outJar,
         "META-INF/mj2x/native/" + nativeLibrary.filename().string());

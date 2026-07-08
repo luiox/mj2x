@@ -682,6 +682,63 @@ TEST_F(CBackendE2E, InterfaceCalls) {
         });
 }
 
+TEST_F(CBackendE2E, InterfaceDefaultMethodProxy) {
+    fs::path dir = caseDir("DefaultIface");
+    fs::create_directories(dir);
+
+    fs::path javaFile = dir / "DefaultIface.java";
+    {
+        std::ofstream f(javaFile);
+        f << "public interface DefaultIface {\n"
+          << "  default int inc(int x) { return x + 1; }\n"
+          << "}\n"
+          << "class DefaultIfaceImpl implements DefaultIface {}\n";
+    }
+    fs::path driverFile = dir / "Driver.java";
+    {
+        std::ofstream f(driverFile);
+        f << "public class Driver {\n"
+          << "  public static void main(String[] args) throws Exception {\n"
+          << "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+          << "    if (dll != null) System.load(dll);\n"
+          << "    DefaultIface op = new DefaultIfaceImpl();\n"
+          << "    System.out.println(\"inc=\" + op.inc(41));\n"
+          << "  }\n"
+          << "}\n";
+    }
+
+    auto javac = runBat({q(tc_.javac) + " -d " + q(dir) + " " + q(javaFile) + " " + q(driverFile)});
+    ASSERT_EQ(javac.exitCode, 0) << "javac 失败:\n" << javac.out;
+    auto baseline = runBat({q(tc_.java) + " -cp " + q(dir) + " Driver"});
+    ASSERT_EQ(baseline.exitCode, 0) << "基准 java 运行失败:\n" << baseline.out;
+    ASSERT_NE(baseline.out.find("inc=42"), std::string::npos) << baseline.out;
+
+    fs::path inClass = dir / "DefaultIface.class";
+    fs::path outClass = dir / "DefaultIface_protected.class";
+    fs::path cFile = dir / "DefaultIface.c";
+    auto mj2x = runBat({q(tc_.mj2xCli) + " -i " + q(inClass) + " -o " + q(outClass)
+                        + " --emit-c " + q(cFile)});
+    ASSERT_EQ(mj2x.exitCode, 0) << "mj2x-cli 失败:\n" << mj2x.out;
+    ASSERT_TRUE(fileExists(dir / "mj2x" / "cloader" / "Loader.class"));
+    fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing);
+
+    fs::path dll = dir / "DefaultIface.dll";
+    auto cl = runBat({
+        "call " + q(tc_.vcvars64) + " >nul",
+        "cl /nologo /LD /O2 /EHsc /Fe" + q(dll) + " /Fo" + q(dir / "_") + " "
+            + q(cFile) + " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+    });
+    ASSERT_EQ(cl.exitCode, 0) << "cl 编译失败:\n" << cl.out;
+    ASSERT_TRUE(fileExists(dll));
+
+    auto actual = runBat({
+        "set \"MORPHER_DLL=" + dll.string() + "\"",
+        q(tc_.java) + " -cp " + q(dir) + " Driver",
+    });
+    ASSERT_EQ(actual.exitCode, 0) << "protected java 运行失败:\n" << actual.out;
+    EXPECT_NE(actual.out.find("inc=42"), std::string::npos) << actual.out;
+}
+
 TEST_F(CBackendE2E, InvokeDynamicStringConcat) {
     runCase("InvokeDynamicStringConcat",
         "public class InvokeDynamicStringConcat {\n"
@@ -744,6 +801,28 @@ TEST_F(CBackendE2E, ObjectFieldsAndTypeChecks) {
             {"isString(new Object())", "0"},
             {"castLen(\"abcd\")", "4"},
             {"castNull()", "1"},
+        });
+}
+
+TEST_F(CBackendE2E, ExplicitNullPointerTraps) {
+    runCase("NullTraps",
+        "public class NullTraps {\n"
+        "  int value;\n"
+        "  int get() { return value; }\n"
+        "  public static int fieldGet() { try { NullTraps n = null; return n.value; } catch (NullPointerException e) { return 11; } }\n"
+        "  public static int fieldPut() { try { NullTraps n = null; n.value = 3; return 0; } catch (NullPointerException e) { return 12; } }\n"
+        "  public static int arrayLength() { try { int[] a = null; return a.length; } catch (NullPointerException e) { return 13; } }\n"
+        "  public static int arrayLoad() { try { int[] a = null; return a[0]; } catch (NullPointerException e) { return 14; } }\n"
+        "  public static int arrayStore() { try { int[] a = null; a[0] = 1; return 0; } catch (NullPointerException e) { return 15; } }\n"
+        "  public static int invoke() { try { NullTraps n = null; return n.get(); } catch (NullPointerException e) { return 16; } }\n"
+        "}\n",
+        {
+            {"fieldGet()", "11"},
+            {"fieldPut()", "12"},
+            {"arrayLength()", "13"},
+            {"arrayLoad()", "14"},
+            {"arrayStore()", "15"},
+            {"invoke()", "16"},
         });
 }
 

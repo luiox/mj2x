@@ -11,6 +11,7 @@
 #include "test_helper.hpp"
 #include "mj2x/backend/cbackend/c_backend.hpp"
 #include "mj2x/mj2x.hpp"
+#include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
@@ -279,6 +280,40 @@ TEST(IOTest, NativeLoaderPostprocessorAddsLoaderClassResource) {
     EXPECT_NE(findMethod(*loaderClass, "load"), nullptr);
 }
 
+TEST(IOTest, CLoaderPostprocessorAddsDispatchLoaderClassResource) {
+    CompilerIndex index;
+    index.setJarInput(true);
+    CLoaderPostprocessor postprocessor;
+
+    postprocessor.process(index);
+
+    ASSERT_EQ(index.jarEntries().size(), 1u);
+    EXPECT_EQ(index.jarEntries()[0].name, "mj2x/cloader/Loader.class");
+
+    ca::str::Utf8StringArena arena;
+    auto loaderClass = readClassFromBytes(index.jarEntries()[0].data, arena);
+    ASSERT_NE(loaderClass, nullptr);
+    EXPECT_EQ(loaderClass->name.to_std_string(), "mj2x/cloader/Loader");
+    auto* registerMethod = findMethod(*loaderClass, "registerNativesForClass");
+    ASSERT_NE(registerMethod, nullptr);
+    EXPECT_TRUE((registerMethod->access & Opcodes::ACC_NATIVE) != 0);
+}
+
+TEST(IOTest, CLoaderPostprocessorAddsSidecarClassForClassOutput) {
+    CompilerIndex index;
+    CLoaderPostprocessor postprocessor;
+
+    postprocessor.process(index);
+
+    auto* loaderClass = index.getClass("mj2x/cloader/Loader");
+    ASSERT_NE(loaderClass, nullptr);
+    ASSERT_NE(loaderClass->classNode, nullptr);
+    EXPECT_EQ(loaderClass->classNode->name.to_std_string(), "mj2x/cloader/Loader");
+    auto* registerMethod = findMethod(*loaderClass->classNode, "registerNativesForClass");
+    ASSERT_NE(registerMethod, nullptr);
+    EXPECT_TRUE((registerMethod->access & Opcodes::ACC_NATIVE) != 0);
+}
+
 TEST(PipelineTest, BadInputPathReturnsError) {
     PipelineConfig cfg;
     cfg.inputPath = "nonexistent.class";
@@ -319,10 +354,13 @@ TEST(PipelineTest, JarPipelineMarksClassesNativeAndPreservesResources) {
     backend->setOutputPath(cPath);
     pipeline.registerBackend(std::move(backend));
     pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
+    pipeline.registerPostprocessor(std::make_unique<CLoaderPostprocessor>());
     EXPECT_EQ(pipeline.run(), 0);
 
     auto resource = readJarEntry(outPath, "assets/config.txt");
     EXPECT_EQ(resource, std::vector<ca::u8>({'o', 'k'}));
+    auto loaderResource = readJarEntry(outPath, "mj2x/cloader/Loader.class");
+    EXPECT_FALSE(loaderResource.empty());
 
     auto classBytes = readJarEntry(outPath, "pkg/A.class");
     ca::str::Utf8StringArena arena;
@@ -331,8 +369,7 @@ TEST(PipelineTest, JarPipelineMarksClassesNativeAndPreservesResources) {
     ASSERT_NE(add, nullptr);
     EXPECT_TRUE((add->access & Opcodes::ACC_NATIVE) != 0);
     auto* bridge = findMethod(*cn, "__mj2x_registerClass");
-    ASSERT_NE(bridge, nullptr);
-    EXPECT_TRUE((bridge->access & Opcodes::ACC_NATIVE) != 0);
+    EXPECT_EQ(bridge, nullptr);
     EXPECT_NE(findMethod(*cn, "<clinit>"), nullptr);
 
     std::ifstream cFile(cPath, std::ios::binary);

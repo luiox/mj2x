@@ -144,7 +144,7 @@ void writeTraceNote(const fs::path& outDir, const SampleSpec& sample) {
     out << "Expected mjdbg use:\n\n";
     out << "- Load or attach to a JVM that runs the protected class.\n";
     out << "- Confirm the selected methods are native after CBackend processing.\n";
-    out << "- Observe the `<clinit>` registration bridge and `RegisterNatives`; the bridge may use a `Java_*__mj2x_registerClass` export, while protected method bodies remain `static __mj2x_c_*` functions rather than per-method `Java_*` exports.\n";
+    out << "- Observe the `<clinit>` call into `mj2x-cloader` and the native `RegisterNatives` dispatch table; protected method bodies remain `static __mj2x_c_*` functions rather than per-method or per-class `Java_*` exports.\n";
     out << "- Capture Java MethodEntry/MethodExit around the public entry methods.\n";
     out << "- Capture native/JNI activity inside the generated CBackend implementation.\n";
     out << "- Use observations to draft weakness reports for mj2x hardening.\n";
@@ -200,7 +200,9 @@ protected:
         std::string generatedC = readTextFile(cFile);
         EXPECT_NE(generatedC.find("JNIEXPORT jint JNICALL JNI_OnLoad"), std::string::npos);
         EXPECT_NE(generatedC.find("RegisterNatives"), std::string::npos) << generatedC;
-        EXPECT_NE(generatedC.find("_1_1mj2x_1registerClass__I"), std::string::npos)
+        EXPECT_NE(generatedC.find("registerNativesForClass"), std::string::npos)
+            << generatedC;
+        EXPECT_EQ(generatedC.find("_1_1mj2x_1registerClass__I"), std::string::npos)
             << generatedC;
         EXPECT_NE(generatedC.find("__mj2x_c_"), std::string::npos) << generatedC;
         EXPECT_EQ(generatedC.find(std::string("Java_protected_1samples_cbackend_") +

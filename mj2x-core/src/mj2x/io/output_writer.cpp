@@ -4,11 +4,14 @@
 #include "zip/checksum.hpp"
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 
 #include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
+
+namespace fs = std::filesystem;
 
 using namespace jbytecode::core;
 using namespace jbytecode::tree;
@@ -86,6 +89,62 @@ static void writeJar(const std::string& path, CompilerIndex& index) {
            path.c_str(), bytes.size(), classCount, resourceCount);
 }
 
+static bool isGeneratedRuntimeClass(const std::string& name) {
+    return name == "mj2x/cloader/Loader";
+}
+
+static fs::path sidecarClassPath(const fs::path& outputPath, const std::string& className) {
+    fs::path sidecar = outputPath.parent_path();
+    size_t start = 0;
+    while (start < className.size()) {
+        const auto slash = className.find('/', start);
+        if (slash == std::string::npos) {
+            sidecar /= className.substr(start) + ".class";
+            break;
+        }
+        sidecar /= className.substr(start, slash - start);
+        start = slash + 1;
+    }
+    return sidecar;
+}
+
+static void writeClassFile(const std::string& path, CompilerIndex& index) {
+    auto& classes = index.getClasses();
+    CompilerClass* primary = nullptr;
+    std::string primaryName;
+
+    for (auto& [name, cls] : classes) {
+        if (!isGeneratedRuntimeClass(name)) {
+            primary = &cls;
+            primaryName = name;
+            break;
+        }
+    }
+    if (primary == nullptr) {
+        auto it = classes.begin();
+        primary = &it->second;
+        primaryName = it->first;
+    }
+
+    auto bytes = writeClassBytes(index, *primary);
+    writeBytes(path, bytes);
+    printf("[OutputWriter] Written: %s (%zu bytes)\n", path.c_str(), bytes.size());
+
+    const fs::path outputPath(path);
+    for (auto& [name, cls] : classes) {
+        if (name == primaryName)
+            continue;
+
+        const auto sidecarPath = sidecarClassPath(outputPath, name);
+        std::error_code ec;
+        fs::create_directories(sidecarPath.parent_path(), ec);
+        auto sidecarBytes = writeClassBytes(index, cls);
+        writeBytes(sidecarPath.string(), sidecarBytes);
+        printf("[OutputWriter] Written sidecar: %s (%zu bytes)\n",
+               sidecarPath.string().c_str(), sidecarBytes.size());
+    }
+}
+
 void OutputWriter::write(const std::string& path, CompilerIndex& index) {
     auto& classes = index.getClasses();
     if (classes.empty()) {
@@ -98,13 +157,7 @@ void OutputWriter::write(const std::string& path, CompilerIndex& index) {
         return;
     }
 
-    for (auto& [name, cls] : classes) {
-        auto bytes = writeClassBytes(index, cls);
-        writeBytes(path, bytes);
-
-        printf("[OutputWriter] Written: %s (%zu bytes)\n",
-               path.c_str(), bytes.size());
-    }
+    writeClassFile(path, index);
 }
 
 } // namespace mj2x

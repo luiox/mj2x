@@ -648,17 +648,43 @@ TEST(CodeConverterTest, StackShapeInstructionsArePreserved) {
     bool foundPop2 = false;
     bool foundDup2X1 = false;
     bool foundDup2X2 = false;
+    bool pop2IsWide = false;
+    bool dup2X1HasPair = false;
+    bool dup2X2HasPair = false;
     for (auto& n : nodes) {
         foundPop = foundPop || n->kind == MIRKind::STACK_POP;
-        foundPop2 = foundPop2 || n->kind == MIRKind::STACK_POP2;
-        foundDup2X1 = foundDup2X1 || n->kind == MIRKind::STACK_DUP2_X1;
-        foundDup2X2 = foundDup2X2 || n->kind == MIRKind::STACK_DUP2_X2;
+        if (n->kind == MIRKind::STACK_POP2) {
+            foundPop2 = true;
+            auto* op = static_cast<MIRStackOp*>(n.get());
+            pop2IsWide = pop2IsWide ||
+                (!op->stackBeforeTop.empty() && op->stackBeforeTop[0] == PrimitiveKind::LONG);
+        }
+        if (n->kind == MIRKind::STACK_DUP2_X1) {
+            foundDup2X1 = true;
+            auto* op = static_cast<MIRStackOp*>(n.get());
+            dup2X1HasPair = op->stackBeforeTop.size() >= 3 &&
+                op->stackBeforeTop[0] == PrimitiveKind::INT &&
+                op->stackBeforeTop[1] == PrimitiveKind::INT &&
+                op->stackBeforeTop[2] == PrimitiveKind::INT;
+        }
+        if (n->kind == MIRKind::STACK_DUP2_X2) {
+            foundDup2X2 = true;
+            auto* op = static_cast<MIRStackOp*>(n.get());
+            dup2X2HasPair = op->stackBeforeTop.size() >= 4 &&
+                op->stackBeforeTop[0] == PrimitiveKind::INT &&
+                op->stackBeforeTop[1] == PrimitiveKind::INT &&
+                op->stackBeforeTop[2] == PrimitiveKind::INT &&
+                op->stackBeforeTop[3] == PrimitiveKind::INT;
+        }
     }
 
     EXPECT_TRUE(foundPop);
     EXPECT_TRUE(foundPop2);
     EXPECT_TRUE(foundDup2X1);
     EXPECT_TRUE(foundDup2X2);
+    EXPECT_TRUE(pop2IsWide);
+    EXPECT_TRUE(dup2X1HasPair);
+    EXPECT_TRUE(dup2X2HasPair);
 }
 
 TEST(CodeConverterTest, NewObjectAndInvokeSpecial) {

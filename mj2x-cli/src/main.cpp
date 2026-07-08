@@ -7,6 +7,7 @@
 #include "mj2x/preprocessor/multianewarray_preprocessor.hpp"
 #include "mj2x/preprocessor/native_annotation_preprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
+#include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "native_compiler.hpp"
 #include "jzip/memory_segment.hpp"
 #include "jzip/zip_io.hpp"
@@ -293,11 +294,11 @@ int main(int argc, char** argv) {
     config.outputPath = outputPath;
     config.dumpMIR = dumpMIR;
 
-    const bool jarNativeLoaderEnabled =
-        compileNative &&
+    const bool cBackendJarOutput =
         cBackendKind == CEmitterBackend::CBackend &&
         hasExtension(inputPath, ".jar") &&
         hasExtension(outputPath, ".jar");
+    const bool jarNativeLoaderEnabled = compileNative && cBackendJarOutput;
     std::filesystem::path nativeLibraryPath =
         mj2x::cli::nativeLibraryPathForOutput(outputPath);
     const std::string nativeResourceEntry =
@@ -335,6 +336,9 @@ int main(int argc, char** argv) {
     } else {
         pipeline.registerPreprocessor(
             std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+    }
+    if (!cOutputPath.empty() && cBackendKind == CEmitterBackend::CBackend) {
+        pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
     }
     if (jarNativeLoaderEnabled) {
         pipeline.registerPostprocessor(

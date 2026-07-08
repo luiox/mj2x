@@ -2,6 +2,7 @@
 #include "opcode_utils.hpp"
 #include "type_utils.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <sstream>
 #include <string>
@@ -130,12 +131,32 @@ static bool frameHasEntryStack(int frameType) {
            frameType == Opcodes::F_SAME1;
 }
 
+static bool isCategory2Kind(PrimitiveKind kind) {
+    return kind == PrimitiveKind::LONG || kind == PrimitiveKind::DOUBLE;
+}
+
+static PrimitiveKind methodReturnPrimitive(const std::string& desc) {
+    return jvmDescToPrimitive(Type::getReturnType(
+        ca::str::Utf8StringRef::from_cstr(desc.c_str())).getDescriptor().to_std_string());
+}
+
+static std::vector<PrimitiveKind> methodArgumentPrimitives(const std::string& desc) {
+    std::vector<PrimitiveKind> result;
+    auto args = Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(desc.c_str()));
+    result.reserve(args.size());
+    for (const auto& arg : args)
+        result.push_back(jvmSortToPrimitive(arg.getSort()));
+    return result;
+}
+
 struct CodeConverter::Impl {
     std::unordered_map<int, std::unique_ptr<Block>> blocks;
     std::vector<Block*> blockOrder;
     Block* currentBlock = nullptr;
     std::unordered_set<int> labelTargets;
     std::vector<ExceptionHandler> handlers;
+    std::vector<PrimitiveKind> operandStack;
+    std::unordered_map<int, PrimitiveKind> localTypes;
 
     // 块起始指令索引集合（index 在 instruction list 里的位置）。
     // 一个指令 index 是块起始，当且仅当：(a) 它是 LABEL 且其 label 是跳转目标/异常 handler；
@@ -143,6 +164,52 @@ struct CodeConverter::Impl {
     // 修复"不在终结指令后切 fallthrough 块"的缺陷（见 dev_plan R1a.2）。
     std::unordered_set<int> blockStartIndices;
     int nextSyntheticBlockId = -1000;   // fallthrough 块的合成 id 发放（负数，避开正数 label id）
+
+    void initMethodState(MethodNode& mn) {
+        operandStack.clear();
+        localTypes.clear();
+        int slot = 0;
+        if (!(mn.access & Opcodes::ACC_STATIC))
+            localTypes[slot++] = PrimitiveKind::OBJECT;
+        auto desc = Type::getMethodType(mn.desc);
+        for (const auto& argType : desc.getArgumentTypes()) {
+            auto kind = jvmSortToPrimitive(argType.getSort());
+            localTypes[slot] = kind;
+            slot += primitiveStackSize(kind);
+        }
+    }
+
+    void push(PrimitiveKind kind) {
+        if (kind != PrimitiveKind::VOID)
+            operandStack.push_back(kind);
+    }
+
+    PrimitiveKind pop() {
+        if (operandStack.empty())
+            return PrimitiveKind::INT;
+        auto kind = operandStack.back();
+        operandStack.pop_back();
+        return kind;
+    }
+
+    PrimitiveKind peek(size_t depth = 0) const {
+        if (depth >= operandStack.size())
+            return PrimitiveKind::INT;
+        return operandStack[operandStack.size() - 1 - depth];
+    }
+
+    std::vector<PrimitiveKind> topSnapshot(size_t limit) const {
+        std::vector<PrimitiveKind> result;
+        const size_t count = std::min(limit, operandStack.size());
+        result.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+            result.push_back(peek(i));
+        return result;
+    }
+
+    void resetStack(const std::vector<PrimitiveKind>& stackTypes) {
+        operandStack = stackTypes;
+    }
 };
 
 CodeConverter::CodeConverter()
@@ -267,6 +334,127 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     if (!cur) {
         cur = impl_->blockOrder.empty() ? getOrCreateBlock(0) : impl_->blockOrder[0];
     }
+    auto addStackOp = [&](MIRKind kind) {
+        auto node = std::make_unique<MIRStackOp>(kind);
+        node->stackBeforeTop = impl_->topSnapshot(4);
+        cur->nodes.push_back(std::move(node));
+
+        switch (kind) {
+        case MIRKind::STACK_POP:
+            impl_->pop();
+            break;
+        case MIRKind::STACK_POP2: {
+            auto v1 = impl_->pop();
+            if (!isCategory2Kind(v1))
+                impl_->pop();
+            break;
+        }
+        case MIRKind::STACK_DUP:
+            impl_->push(impl_->peek());
+            break;
+        case MIRKind::STACK_DUP_X1: {
+            auto v1 = impl_->pop();
+            auto v2 = impl_->pop();
+            impl_->push(v1);
+            impl_->push(v2);
+            impl_->push(v1);
+            break;
+        }
+        case MIRKind::STACK_DUP_X2: {
+            auto v1 = impl_->pop();
+            auto v2 = impl_->pop();
+            if (isCategory2Kind(v2)) {
+                impl_->push(v1);
+                impl_->push(v2);
+                impl_->push(v1);
+            } else {
+                auto v3 = impl_->pop();
+                impl_->push(v1);
+                impl_->push(v3);
+                impl_->push(v2);
+                impl_->push(v1);
+            }
+            break;
+        }
+        case MIRKind::STACK_DUP2: {
+            auto v1 = impl_->pop();
+            if (isCategory2Kind(v1)) {
+                impl_->push(v1);
+                impl_->push(v1);
+            } else {
+                auto v2 = impl_->pop();
+                impl_->push(v2);
+                impl_->push(v1);
+                impl_->push(v2);
+                impl_->push(v1);
+            }
+            break;
+        }
+        case MIRKind::STACK_DUP2_X1: {
+            auto v1 = impl_->pop();
+            if (isCategory2Kind(v1)) {
+                auto v2 = impl_->pop();
+                impl_->push(v1);
+                impl_->push(v2);
+                impl_->push(v1);
+            } else {
+                auto v2 = impl_->pop();
+                auto v3 = impl_->pop();
+                impl_->push(v2);
+                impl_->push(v1);
+                impl_->push(v3);
+                impl_->push(v2);
+                impl_->push(v1);
+            }
+            break;
+        }
+        case MIRKind::STACK_DUP2_X2: {
+            auto v1 = impl_->pop();
+            if (isCategory2Kind(v1)) {
+                auto v2 = impl_->pop();
+                if (isCategory2Kind(v2)) {
+                    impl_->push(v1);
+                    impl_->push(v2);
+                    impl_->push(v1);
+                } else {
+                    auto v3 = impl_->pop();
+                    impl_->push(v1);
+                    impl_->push(v3);
+                    impl_->push(v2);
+                    impl_->push(v1);
+                }
+            } else {
+                auto v2 = impl_->pop();
+                auto v3 = impl_->pop();
+                if (isCategory2Kind(v3)) {
+                    impl_->push(v2);
+                    impl_->push(v1);
+                    impl_->push(v3);
+                    impl_->push(v2);
+                    impl_->push(v1);
+                } else {
+                    auto v4 = impl_->pop();
+                    impl_->push(v2);
+                    impl_->push(v1);
+                    impl_->push(v4);
+                    impl_->push(v3);
+                    impl_->push(v2);
+                    impl_->push(v1);
+                }
+            }
+            break;
+        }
+        case MIRKind::STACK_SWAP: {
+            auto v1 = impl_->pop();
+            auto v2 = impl_->pop();
+            impl_->push(v1);
+            impl_->push(v2);
+            break;
+        }
+        default:
+            break;
+        }
+    };
 
     switch (insn->getType()) {
     case AbstractInsnNode::LABEL: {
@@ -287,61 +475,75 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             auto node = std::make_unique<MIRConstant>();
             node->type = PrimitiveKind::OBJECT;
             node->value = nullptr;
+            impl_->push(node->type);
             cur->nodes.push_back(std::move(node));
         } else if (opc >= Opcodes::ICONST_M1 && opc <= Opcodes::ICONST_5) {
             // ICONST_M1..ICONST_5：int 常量 -1..5
             auto node = std::make_unique<MIRConstant>();
             node->type = PrimitiveKind::INT;
             node->value = static_cast<int64_t>(opc - Opcodes::ICONST_0);
+            impl_->push(node->type);
             cur->nodes.push_back(std::move(node));
         } else if (opc == Opcodes::LCONST_0 || opc == Opcodes::LCONST_1) {
             auto node = std::make_unique<MIRConstant>();
             node->type = PrimitiveKind::LONG;
             node->value = static_cast<int64_t>(opc - Opcodes::LCONST_0);
+            impl_->push(node->type);
             cur->nodes.push_back(std::move(node));
         } else if (opc == Opcodes::FCONST_0 || opc == Opcodes::FCONST_1 ||
                    opc == Opcodes::FCONST_2) {
             auto node = std::make_unique<MIRConstant>();
             node->type = PrimitiveKind::FLOAT;
             node->value = static_cast<double>(opc - Opcodes::FCONST_0);
+            impl_->push(node->type);
             cur->nodes.push_back(std::move(node));
         } else if (opc == Opcodes::DCONST_0 || opc == Opcodes::DCONST_1) {
             auto node = std::make_unique<MIRConstant>();
             node->type = PrimitiveKind::DOUBLE;
             node->value = static_cast<double>(opc - Opcodes::DCONST_0);
+            impl_->push(node->type);
             cur->nodes.push_back(std::move(node));
         } else if (opc >= Opcodes::IALOAD && opc <= Opcodes::SALOAD) {
             auto node = std::make_unique<MIRArrayLoad>();
             node->componentType = arrayComponentType(opc);
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->pop();
+            impl_->push(arrayComponentType(opc));
         } else if (opc >= Opcodes::IASTORE && opc <= Opcodes::SASTORE) {
             auto node = std::make_unique<MIRArrayStore>();
             node->componentType = arrayComponentType(opc);
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->pop();
+            impl_->pop();
         } else if (opc == Opcodes::POP) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_POP));
+            addStackOp(MIRKind::STACK_POP);
         } else if (opc == Opcodes::POP2) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_POP2));
+            addStackOp(MIRKind::STACK_POP2);
         } else if (opc == Opcodes::DUP) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP));
+            addStackOp(MIRKind::STACK_DUP);
         } else if (opc == Opcodes::DUP_X1) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP_X1));
+            addStackOp(MIRKind::STACK_DUP_X1);
         } else if (opc == Opcodes::DUP_X2) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP_X2));
+            addStackOp(MIRKind::STACK_DUP_X2);
         } else if (opc == Opcodes::DUP2) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP2));
+            addStackOp(MIRKind::STACK_DUP2);
         } else if (opc == Opcodes::DUP2_X1) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP2_X1));
+            addStackOp(MIRKind::STACK_DUP2_X1);
         } else if (opc == Opcodes::DUP2_X2) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_DUP2_X2));
+            addStackOp(MIRKind::STACK_DUP2_X2);
         } else if (opc == Opcodes::SWAP) {
-            cur->nodes.push_back(std::make_unique<MIRStackOp>(MIRKind::STACK_SWAP));
+            addStackOp(MIRKind::STACK_SWAP);
         } else if ((opc >= Opcodes::IADD && opc <= Opcodes::DREM) ||
                    (opc >= Opcodes::ISHL && opc <= Opcodes::LXOR)) {
             auto node = std::make_unique<MIRBinaryOp>();
             node->op = opcodeToBinaryOp(opc);
             node->type = opcodeToResultType(opc);
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->pop();
+            impl_->push(opcodeToResultType(opc));
         } else if (opc >= Opcodes::INEG && opc <= Opcodes::DNEG) {
             auto node = std::make_unique<MIRUnaryOp>();
             node->op = opcodeToUnaryOp(opc);
@@ -352,7 +554,10 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             auto node = std::make_unique<MIRCast>();
             node->from = castSourceType(opc);
             node->to = castTargetType(opc);
+            PrimitiveKind targetType = node->to;
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->push(targetType);
         } else if (opc == Opcodes::LCMP || opc == Opcodes::FCMPL ||
                    opc == Opcodes::FCMPG || opc == Opcodes::DCMPL ||
                    opc == Opcodes::DCMPG) {
@@ -360,6 +565,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->type = cmpOperandType(opc);
             node->nanGreater = (opc == Opcodes::FCMPG || opc == Opcodes::DCMPG);
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->pop();
+            impl_->push(PrimitiveKind::INT);
         } else if (opc >= Opcodes::IRETURN && opc <= Opcodes::ARETURN) {
             auto node = std::make_unique<MIRReturnValue>();
             // 按 *RETURN opcode 推导返回值类型（与方法描述符一致）。
@@ -375,19 +583,25 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             };
             node->type = retKind(opc);
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
         } else if (opc == Opcodes::RETURN) {
             cur->nodes.push_back(std::make_unique<MIRReturn>());
         } else if (opc == Opcodes::ARRAYLENGTH) {
             cur->nodes.push_back(std::make_unique<MIRArrayLength>());
+            impl_->pop();
+            impl_->push(PrimitiveKind::INT);
         } else if (opc == Opcodes::ATHROW) {
             cur->nodes.push_back(std::make_unique<MIRThrow>());
+            impl_->pop();
         } else if (opc == Opcodes::MONITORENTER) {
             auto node = std::make_unique<MIRMonitor>(); // enter=true default
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
         } else if (opc == Opcodes::MONITOREXIT) {
             auto node = std::make_unique<MIRMonitor>();
             node->enter = false;
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
         }
         break;
     }
@@ -398,11 +612,14 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             auto node = std::make_unique<MIRConstant>();
             node->type = PrimitiveKind::INT;
             node->value = static_cast<int64_t>(ii->operand);
+            impl_->push(node->type);
             cur->nodes.push_back(std::move(node));
         } else if (ii->opcode == Opcodes::NEWARRAY) {
             auto node = std::make_unique<MIRNewArray>();
             node->componentType = newArrayComponentType(ii->operand);
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->push(PrimitiveKind::OBJECT);
         }
         break;
     }
@@ -427,11 +644,14 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->varIndex = vi->var;
             node->type = varKind(opc);
             cur->nodes.push_back(std::move(node));
+            impl_->push(varKind(opc));
         } else if (opc >= Opcodes::ISTORE && opc <= Opcodes::ASTORE) {
             auto node = std::make_unique<MIRLocalStore>();
             node->varIndex = vi->var;
             node->type = varKind(opc);
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->localTypes[vi->var] = varKind(opc);
         } else if (opc == Opcodes::RET) {
             // JSR/RET subroutines are outside the MVP bytecode surface.  Keep
             // an explicit unsupported node so backends fail closed instead of
@@ -451,6 +671,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             auto node = std::make_unique<MIRNewObject>();
             node->typeDesc = ti->desc.to_std_string();
             cur->nodes.push_back(std::move(node));
+            impl_->push(PrimitiveKind::OBJECT);
             break;
         }
         case Opcodes::ANEWARRAY: {
@@ -458,18 +679,24 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->typeDesc = ti->desc.to_std_string();
             node->componentType = PrimitiveKind::OBJECT;
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->push(PrimitiveKind::OBJECT);
             break;
         }
         case Opcodes::CHECKCAST: {
             auto node = std::make_unique<MIRCheckCast>();
             node->typeDesc = ti->desc.to_std_string();
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->push(PrimitiveKind::OBJECT);
             break;
         }
         case Opcodes::INSTANCEOF: {
             auto node = std::make_unique<MIRInstanceOf>();
             node->typeDesc = ti->desc.to_std_string();
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->push(PrimitiveKind::INT);
             break;
         }
         default:
@@ -484,24 +711,30 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         case Opcodes::GETSTATIC: {
             auto node = std::make_unique<MIRStaticGet>();
             node->owner = fi->owner.to_std_string(); node->name = fi->name.to_std_string(); node->desc = fi->desc.to_std_string();
+            impl_->push(jvmDescToPrimitive(node->desc));
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::PUTSTATIC: {
             auto node = std::make_unique<MIRStaticPut>();
             node->owner = fi->owner.to_std_string(); node->name = fi->name.to_std_string(); node->desc = fi->desc.to_std_string();
+            impl_->pop();
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::GETFIELD: {
             auto node = std::make_unique<MIRFieldGet>();
             node->owner = fi->owner.to_std_string(); node->name = fi->name.to_std_string(); node->desc = fi->desc.to_std_string();
+            impl_->pop();
+            impl_->push(jvmDescToPrimitive(node->desc));
             cur->nodes.push_back(std::move(node));
             break;
         }
         case Opcodes::PUTFIELD: {
             auto node = std::make_unique<MIRFieldPut>();
             node->owner = fi->owner.to_std_string(); node->name = fi->name.to_std_string(); node->desc = fi->desc.to_std_string();
+            impl_->pop();
+            impl_->pop();
             cur->nodes.push_back(std::move(node));
             break;
         }
@@ -519,6 +752,12 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         node->desc = mi->desc.to_std_string();
         node->isInterface = mi->isInterface;
         node->invokeOpcode = mi->opcode;
+        auto args = methodArgumentPrimitives(node->desc);
+        for (size_t i = 0; i < args.size(); ++i)
+            impl_->pop();
+        if (mi->opcode != Opcodes::INVOKESTATIC)
+            impl_->pop();
+        impl_->push(methodReturnPrimitive(node->desc));
         cur->nodes.push_back(std::move(node));
         break;
     }
@@ -530,6 +769,10 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         node->desc = id->desc.to_std_string();
         node->bsm = id->bsm;
         node->bsmArgs = id->bsmArgs;
+        auto args = methodArgumentPrimitives(node->desc);
+        for (size_t i = 0; i < args.size(); ++i)
+            impl_->pop();
+        impl_->push(methodReturnPrimitive(node->desc));
         cur->nodes.push_back(std::move(node));
         break;
     }
@@ -549,12 +792,16 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->type = PrimitiveKind::OBJECT;
             node->targetLabel = target;
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->pop();
         } else if (opc >= Opcodes::IF_ICMPEQ && opc <= Opcodes::IF_ICMPLE) {
             auto node = std::make_unique<MIRBranch>();
             node->op = branchOpcodeToCmpOp(opc);
             node->type = PrimitiveKind::INT;
             node->targetLabel = target;
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
+            impl_->pop();
         } else if (opc == Opcodes::IFNULL || opc == Opcodes::IFNONNULL ||
                    (opc >= Opcodes::IFEQ && opc <= Opcodes::IFLE)) {
             auto node = std::make_unique<MIRBranchZero>();
@@ -564,6 +811,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
                 : PrimitiveKind::INT;
             node->targetLabel = target;
             cur->nodes.push_back(std::move(node));
+            impl_->pop();
         } else {
             // JSR/JSR_W subroutines are unsupported for the MVP.  Route them
             // through the same explicit fail-closed boundary as invokedynamic.
@@ -606,6 +854,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->type = PrimitiveKind::OBJECT;
             node->value = nullptr;
         }
+        impl_->push(node->type);
         cur->nodes.push_back(std::move(node));
         break;
     }
@@ -628,6 +877,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->cases.push_back({key++, l});
         }
         cur->nodes.push_back(std::move(node));
+        impl_->pop();
         break;
     }
 
@@ -639,6 +889,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
             node->cases.push_back({ls->keys[i], ls->labels[i]});
         }
         cur->nodes.push_back(std::move(node));
+        impl_->pop();
         break;
     }
 
@@ -650,6 +901,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         node->typeDesc = ma->desc.to_std_string();
         node->dims = ma->dims;
         cur->nodes.push_back(std::move(node));
+        for (int i = 0; i < ma->dims; ++i)
+            impl_->pop();
+        impl_->push(PrimitiveKind::OBJECT);
         break;
     }
 
@@ -667,6 +921,8 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
                 }
             }
         }
+        if (frameHasEntryStack(frame->frameType))
+            impl_->resetStack(node->stackTypes);
         cur->nodes.push_back(std::move(node));
         break;
     }
@@ -712,6 +968,7 @@ void CodeConverter::translateInstructions(MethodNode& mn) {
 }
 
 std::vector<Block*> CodeConverter::convert(MethodNode& mn) {
+    impl_->initMethodState(mn);
     analyzeControlFlow(mn);
     buildBlocks();
     translateInstructions(mn);

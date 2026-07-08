@@ -13,6 +13,8 @@
 |---|---|---|
 | 单 `.class` 输入 → 改写后 `.class` + emitted C | ✅ | CBackend / RegC E2E |
 | `.jar` 输入 → 改写后 `.jar` + emitted C | ✅ | `mj2x_unittest` JAR pipeline 测试 |
+| CBackend 单 `.class` 输出附带 `mj2x-cloader` sidecar class | ✅ | CBackend E2E |
+| CBackend `.jar` 输出注入 `mj2x-cloader` dispatch loader class | ✅ | JAR pipeline / CLI 测试 |
 | JAR 输出保留 entry 顺序和非 class 资源 payload | ✅ | JAR fixture 测试 |
 | class entry 在 native method 注入后重新写回 | ✅ | JAR pipeline 测试 |
 | `--native-annotation Lpkg/Anno;` 只翻译带目标方法注解的方法 | ✅ | CLI 注解筛选测试 |
@@ -25,13 +27,16 @@
 ## 2. CBackend(广覆盖正确性后端)
 
 定位:正确性基线后端,覆盖广,输出仍是 stack-style(`union jvalue stack[]` + `sp`)。
-Native 绑定使用 `static` C 函数 + `JNI_OnLoad` / `RegisterNatives`,不为每个 Java 方法导出
-`Java_*` 符号。生成方法体内的业务类解析使用当前 owner class 的 `ClassLoader`，覆盖
+Native 绑定使用 `static` C 函数 + `JNI_OnLoad` 预注册 `mj2x-cloader`
+dispatch bridge + `RegisterNatives`,业务方法和注册桥均不产生 per-class `Java_*`
+导出符号。单 `.class` 输出在目标目录旁写出 `mj2x/cloader/Loader.class`,JAR 输出注入
+同名 loader class。生成方法体内的业务类解析使用当前 owner class 的 `ClassLoader`，覆盖
 自定义 class loader 下 `new` / `anewarray` / `multianewarray` / 静态成员 / type check
 等路径，bootstrap 异常类和注册入口仍使用 JVM `FindClass`。生成方法体跟踪临时 JNI
 local refs，并在正常返回或异常提前返回前批量释放；对象返回值作为 keep ref 保留。
-字段和方法 ID 在各生成调用点用 `static jfieldID` / `static jmethodID` 懒缓存。字符串
-LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offset。
+字段和方法 ID 在各生成调用点用 `static jfieldID` / `static jmethodID` 懒缓存,读写由
+owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局引用,调用前通过
+`NewLocalRef` 提升。字符串 LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offset。
 
 **已覆盖的 javac 输出形状**:
 
@@ -41,13 +46,21 @@ LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offse
 - 字段读写:`getfield` / `putfield` / `getstatic` / `putstatic`
 - 对象:`new` / `checkcast` / `instanceof`
 - 方法调用:`invokevirtual` / `invokespecial` / `invokestatic` / `invokeinterface`
+- interface default 方法:原 default 方法保留 Java stub,调用 `DefineClass` 注入的 hidden
+  proxy class;native 只注册 proxy 方法,不直接把 interface default 标成 `ACC_NATIVE`
 - 数组:`newarray` / `anewarray` / `multianewarray` / `arraylength` / `*aload` / `*astore`;
   `BALOAD`/`BASTORE` 对 `byte[]`/`boolean[]` 做运行时类型分流
+- 栈形状操作:`POP` / `POP2` / `DUP` / `DUP_X1` / `DUP_X2` / `DUP2` /
+  `DUP2_X1` / `DUP2_X2` / `SWAP`;CBackend 通过转换期类型快照区分 category-2
+  与 category-1 pair
 - 异常:`athrow` / try-catch / finally / monitor (`monitorenter` / `monitorexit`)
+- 显式 NPE trap:field / array / instance invoke 在 JNI 调用前主动抛
+  `NullPointerException`,并进入当前 catch 分派或按返回类型传播
 - int/long DIV/REM 除零:`ArithmeticException` trap,含 catch 分派与未捕获传播
 - owner ClassLoader-aware 类解析:应用类查找走 `_mj2x_find_class(env, _mj2x_owner_class, ...)`
 - JNI local-ref 追踪:临时 class/string/object/array refs 登记到方法级列表，返回前释放
-- JNI method/field ID 懒缓存:调用点首次解析，后续复用缓存 ID
+- JNI method/field ID 懒缓存:调用点首次解析,owner class monitor 保护缓存读写,后续复用缓存 ID
+- hidden proxy class cache:使用 WeakGlobalRef,不因 native cache 强持有阻止类卸载
 - String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring
 - CBackend `invokedynamic`:native 侧调用 bootstrap,经 `CallSite.getTarget()` +
   `MethodHandle.invokeWithArguments` 执行;已覆盖 javac string concat、方法引用和捕获 lambda
@@ -59,7 +72,6 @@ LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offse
 
 | 限制 | 说明 |
 |---|---|
-| method/field ID 懒缓存未加锁 | 多线程首次同时命中同一调用点时可能重复解析一次 |
 | 栈全用 `union jvalue` 数组 | 性能低于寄存器方案,后续可优化 |
 | RegC `INVOKEDYNAMIC` fail-closed | RegC/SSA 仍拒绝未展开 indy;CBackend 已有运行时 MethodHandle 桥 |
 | JSR / RET 不纳入 | 废弃字节码,由 preprocessor / 输入规范处理 |
