@@ -8,7 +8,7 @@ block arguments from the final control-flow graph.
 
 The main defensive property is structural: RegIR has no JVM operand-stack slot
 operand.  RegC emits C locals from virtual registers instead of reconstructing
-the old CBackend `stack[]` / `sp` pattern.
+the old StackC `stack[]` / `sp` pattern.
 
 ## Inputs and Outputs
 

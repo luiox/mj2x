@@ -1,5 +1,5 @@
-#include "c_backend.hpp"
-#include "mj2x/backend/cbackend/c_runtime_prelude.hpp"
+#include "stackc_backend.hpp"
+#include "mj2x/backend/stackc/stackc_runtime_prelude.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/codegen/include_set.hpp"
@@ -57,6 +57,14 @@ static std::string labelIdent(jbytecode::core::Label* lbl) {
 namespace {
 using codegen::cStringLiteral;
 }  // namespace
+
+static void emitCLine(std::ostringstream& out, int indentLevel, const std::string& line) {
+    CSourceStream src;
+    for (int i = 0; i < indentLevel; ++i)
+        src.indent();
+    src.emitLine(line);
+    out << src.str();
+}
 
 static std::uint64_t fnv1a64(std::string_view value, std::uint64_t seed = 1469598103934665603ULL) {
     std::uint64_t hash = seed;
@@ -521,7 +529,7 @@ static void removeActiveHandler(std::vector<int>& activeHandlers, int handlerInd
 // Impl
 // ============================================================
 
-struct CBackend::Impl {
+struct StackCBackend::Impl {
     std::ostringstream header;
     std::ostringstream source;
     std::unordered_set<std::string> nativeFunctions;
@@ -608,7 +616,7 @@ struct CBackend::Impl {
     void emitStringPool(std::ostringstream& out) const;
     void emitRegistrationCode(std::ostringstream& out) const;
     ca::str::Utf8StringRef stableUtf8(const std::string& value);
-    void protectClassInitializer(CBackend& backend, CompilerClass& clazz);
+    void protectClassInitializer(StackCBackend& backend, CompilerClass& clazz);
     void registerHiddenClinitProxy(
         const std::string& className,
         const std::string& hiddenMethodName,
@@ -636,13 +644,13 @@ struct CBackend::Impl {
         const char* desc = nullptr) const;
 };
 
-CBackend::CBackend()
+StackCBackend::StackCBackend()
     : impl_(std::make_unique<Impl>())
 {}
 
-CBackend::~CBackend() = default;
+StackCBackend::~StackCBackend() = default;
 
-void CBackend::setJarNativeLoaderResourcePath(
+void StackCBackend::setJarNativeLoaderResourcePath(
     const std::string& resourcePath,
     const std::string& tempSuffix)
 {
@@ -654,7 +662,7 @@ void CBackend::setJarNativeLoaderResourcePath(
 // Main compile method
 // ============================================================
 
-BackendResult CBackend::compileMethod(
+BackendResult StackCBackend::compileMethod(
     const std::string& className,
     CompilerMethod& method,
     const std::vector<Block*>& blocks)
@@ -828,7 +836,7 @@ BackendResult CBackend::compileMethod(
     return result;
 }
 
-void CBackend::injectIntoClass(
+void StackCBackend::injectIntoClass(
     CompilerClass& clazz,
     CompilerMethod& method,
     const BackendResult& result)
@@ -859,12 +867,12 @@ void CBackend::injectIntoClass(
     clazz.modified = true;
 }
 
-ca::str::Utf8StringRef CBackend::Impl::stableUtf8(const std::string& value) {
+ca::str::Utf8StringRef StackCBackend::Impl::stableUtf8(const std::string& value) {
     stableUtf8Storage.push_back(value);
     return ca::str::Utf8StringRef::from_cstr(stableUtf8Storage.back().c_str());
 }
 
-jbytecode::tree::MethodNode* CBackend::Impl::findMethod(
+jbytecode::tree::MethodNode* StackCBackend::Impl::findMethod(
     CompilerClass& clazz,
     const char* name,
     const char* desc) const
@@ -879,7 +887,7 @@ jbytecode::tree::MethodNode* CBackend::Impl::findMethod(
     return nullptr;
 }
 
-void CBackend::Impl::removeRegistration(
+void StackCBackend::Impl::removeRegistration(
     const std::string& className,
     const std::string& methodName,
     const std::string& methodDesc)
@@ -896,7 +904,7 @@ void CBackend::Impl::removeRegistration(
     }
 }
 
-void CBackend::Impl::registerHiddenClinitProxy(
+void StackCBackend::Impl::registerHiddenClinitProxy(
     const std::string& className,
     const std::string& hiddenMethodName,
     const std::string& compiledFunctionName)
@@ -922,7 +930,7 @@ void CBackend::Impl::registerHiddenClinitProxy(
     removeRegistration(className, hiddenMethodName, "()V");
 }
 
-std::string CBackend::Impl::findCompiledFunctionName(
+std::string StackCBackend::Impl::findCompiledFunctionName(
     const std::string& className,
     const std::string& methodName,
     const std::string& methodDesc) const
@@ -937,12 +945,12 @@ std::string CBackend::Impl::findCompiledFunctionName(
     return {};
 }
 
-bool CBackend::Impl::hasInterfaceDefaultProxies(const std::string& className) const {
+bool StackCBackend::Impl::hasInterfaceDefaultProxies(const std::string& className) const {
     auto found = interfaceDefaultProxiesByClass.find(className);
     return found != interfaceDefaultProxiesByClass.end() && !found->second.empty();
 }
 
-void CBackend::Impl::registerInterfaceDefaultProxy(
+void StackCBackend::Impl::registerInterfaceDefaultProxy(
     CompilerClass& clazz,
     MethodNode& method,
     const std::string& compiledFunctionName)
@@ -979,7 +987,7 @@ void CBackend::Impl::registerInterfaceDefaultProxy(
     removeRegistration(className, methodName, methodDesc);
 }
 
-void CBackend::Impl::rewriteInterfaceDefaultMethodToProxy(
+void StackCBackend::Impl::rewriteInterfaceDefaultMethodToProxy(
     CompilerClass& clazz,
     MethodNode& method,
     const CHiddenInterfaceDefaultProxy& proxy)
@@ -1108,7 +1116,7 @@ static void emitClassRegistrationCall(
         false));
 }
 
-void CBackend::Impl::protectClassInitializer(CBackend& backend, CompilerClass& clazz) {
+void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, CompilerClass& clazz) {
     const auto className = clazz.classNode->name.to_std_string();
     if (!protectedClinitClasses.insert(className).second)
         return;
@@ -1172,7 +1180,7 @@ void CBackend::Impl::protectClassInitializer(CBackend& backend, CompilerClass& c
     clazz.modified = true;
 }
 
-void CBackend::finalize(const CompilerIndex& index) {
+void StackCBackend::finalize(const CompilerIndex& index) {
     // Build final source: header + all compiled function code
     codegen::IncludeSet includes;
     includes.addSystem("jni.h");
@@ -1180,15 +1188,15 @@ void CBackend::finalize(const CompilerIndex& index) {
     includes.addSystem("math.h");     // NAN/INFINITY（浮点常量）
 
     std::ostringstream full;
-    full << "/* Generated by mj2x CBackend */\n";
+    full << "/* Generated by mj2x StackCBackend */\n";
     full << includes.render();
     full << "\n";
-    full << backend::cBackendRuntimePrelude();
+    full << backend::stackCRuntimePrelude();
     impl_->emitStringPool(full);
     full << impl_->source.str();
     impl_->emitRegistrationCode(full);
 
-    headerCode_ = "/* Generated by mj2x CBackend */\n" + includes.render() + "\n";
+    headerCode_ = "/* Generated by mj2x StackCBackend */\n" + includes.render() + "\n";
     sourceCode_ = full.str();
 
     // Write to file if output path is set
@@ -1196,15 +1204,15 @@ void CBackend::finalize(const CompilerIndex& index) {
         std::ofstream ofs(cOutputPath_, std::ios::binary);
         if (ofs) {
             ofs << sourceCode_;
-            printf("[CBackend] Written: %s (%zu bytes)\n",
+            printf("[StackCBackend] Written: %s (%zu bytes)\n",
                    cOutputPath_.c_str(), sourceCode_.size());
         } else {
-            printf("[CBackend] ERROR: cannot write %s\n", cOutputPath_.c_str());
+            printf("[StackCBackend] ERROR: cannot write %s\n", cOutputPath_.c_str());
         }
     }
 }
 
-size_t CBackend::Impl::stringPoolOffsetFor(const std::string& value) {
+size_t StackCBackend::Impl::stringPoolOffsetFor(const std::string& value) {
     auto found = stringPoolOffsets.find(value);
     if (found != stringPoolOffsets.end())
         return found->second;
@@ -1216,7 +1224,7 @@ size_t CBackend::Impl::stringPoolOffsetFor(const std::string& value) {
     return offset;
 }
 
-void CBackend::Impl::emitStringPool(std::ostringstream& out) const {
+void StackCBackend::Impl::emitStringPool(std::ostringstream& out) const {
     if (stringPoolBytes.empty())
         return;
 
@@ -1231,7 +1239,7 @@ void CBackend::Impl::emitStringPool(std::ostringstream& out) const {
     out << "\n};\n\n";
 }
 
-void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
+void StackCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
     CSourceStream src;
     src.emitLine("/* Native registration */");
     src.emitLine("typedef jint (*_mj2x_reg_method)(JNIEnv* env, jclass clazz);");
@@ -1599,7 +1607,7 @@ void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
 // MIR Node → C code
 // ============================================================
 
-void CBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out) {
     switch (node->kind) {
     case MIRKind::LABEL:
         out << labelIdent(static_cast<const MIRLabel*>(node)->labelNode) << ":\n";
@@ -1846,7 +1854,7 @@ void CBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out) {
     }
 }
 
-void CBackend::Impl::emitNodeWithExceptionDispatch(
+void StackCBackend::Impl::emitNodeWithExceptionDispatch(
     const MIRNode* node,
     std::ostringstream& out,
     const std::string& dispatchTarget) {
@@ -1858,7 +1866,7 @@ void CBackend::Impl::emitNodeWithExceptionDispatch(
     }
 }
 
-void CBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstream& out) {
     const char* acc = stackAccessor(node->type);
     if (std::holds_alternative<int64_t>(node->value)) {
         auto v = std::get<int64_t>(node->value);
@@ -1893,23 +1901,23 @@ void CBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstream& o
     }
 }
 
-void CBackend::Impl::emitLocalLoad(const MIRLocalLoad* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitLocalLoad(const MIRLocalLoad* node, std::ostringstream& out) {
     out << "    stack[++sp]" << stackAccessor(node->type)
         << " = locals[" << node->varIndex << "]"
         << stackAccessor(node->type) << ";\n";
 }
 
-void CBackend::Impl::emitLocalStore(const MIRLocalStore* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitLocalStore(const MIRLocalStore* node, std::ostringstream& out) {
     out << "    locals[" << node->varIndex << "]"
         << stackAccessor(node->type)
         << " = stack[sp--]" << stackAccessor(node->type) << ";\n";
 }
 
-void CBackend::Impl::emitIinc(const MIRIinc* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitIinc(const MIRIinc* node, std::ostringstream& out) {
     out << "    locals[" << node->varIndex << "].i += " << node->increment << ";\n";
 }
 
-void CBackend::Impl::emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostringstream& out) {
+void StackCBackend::Impl::emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostringstream& out) {
     out << "    if (stack[sp]" << rhsAccessor << " == 0) {\n";
     out << "        jclass ex_class = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/ArithmeticException\")") << ";\n";
@@ -1921,7 +1929,7 @@ void CBackend::Impl::emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostrin
     out << "    }\n";
 }
 
-void CBackend::Impl::emitNullPointerTrap(const std::string& refExpr, std::ostringstream& out) {
+void StackCBackend::Impl::emitNullPointerTrap(const std::string& refExpr, std::ostringstream& out) {
     out << "    if (" << refExpr << " == NULL) {\n";
     out << "        jclass ex_class = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/NullPointerException\")") << ";\n";
@@ -1933,7 +1941,7 @@ void CBackend::Impl::emitNullPointerTrap(const std::string& refExpr, std::ostrin
     out << "    }\n";
 }
 
-void CBackend::Impl::emitPendingExceptionCheck(std::ostringstream& out, int indent) {
+void StackCBackend::Impl::emitPendingExceptionCheck(std::ostringstream& out, int indent) {
     const auto pad = std::string(static_cast<size_t>(indent), ' ');
     out << pad << "if ((*env)->ExceptionCheck(env)) {\n";
     if (!currentExceptionDispatchTarget.empty()) {
@@ -1944,7 +1952,7 @@ void CBackend::Impl::emitPendingExceptionCheck(std::ostringstream& out, int inde
     out << pad << "}\n";
 }
 
-void CBackend::Impl::emitFieldIdCache(
+void StackCBackend::Impl::emitFieldIdCache(
     const std::string& cacheName,
     const std::string& localName,
     const std::string& classExpr,
@@ -1953,20 +1961,27 @@ void CBackend::Impl::emitFieldIdCache(
     bool isStatic,
     std::ostringstream& out)
 {
-    out << "        static jfieldID " << cacheName << " = NULL;\n";
-    out << "        jfieldID " << localName << " = NULL;\n";
-    out << "        if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {\n";
-    out << "            if (" << cacheName << " == NULL) " << cacheName
-        << " = (*env)->Get" << (isStatic ? "Static" : "")
-        << "FieldID(env, " << classExpr << ", \"" << name << "\", \"" << desc << "\");\n";
-    out << "            " << localName << " = " << cacheName << ";\n";
-    out << "            if ((*env)->MonitorExit(env, _mj2x_owner_class) != 0) "
-        << localName << " = NULL;\n";
-    out << "        }\n";
+    CSourceStream src;
+    src.indent();
+    src.indent();
+    const std::string staticPrefix = isStatic ? "Static" : "";
+    src.emitLine("static jfieldID " + cacheName + " = NULL;");
+    src.emitLine("jfieldID " + localName + " = NULL;");
+    src.emitLine("if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {");
+    src.indent();
+    src.emitLine("if (" + cacheName + " == NULL) " + cacheName
+        + " = (*env)->Get" + staticPrefix + "FieldID(env, " + classExpr + ", "
+        + cStringLiteral(name) + ", " + cStringLiteral(desc) + ");");
+    src.emitLine(localName + " = " + cacheName + ";");
+    src.emitLine("if ((*env)->MonitorExit(env, _mj2x_owner_class) != 0) "
+        + localName + " = NULL;");
+    src.dedent();
+    src.emitLine("}");
+    out << src.str();
     emitPendingExceptionCheck(out, 8);
 }
 
-void CBackend::Impl::emitMethodIdCache(
+void StackCBackend::Impl::emitMethodIdCache(
     const std::string& cacheName,
     const std::string& localName,
     const std::string& classExpr,
@@ -1975,20 +1990,27 @@ void CBackend::Impl::emitMethodIdCache(
     bool isStatic,
     std::ostringstream& out)
 {
-    out << "        static jmethodID " << cacheName << " = NULL;\n";
-    out << "        jmethodID " << localName << " = NULL;\n";
-    out << "        if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {\n";
-    out << "            if (" << cacheName << " == NULL) " << cacheName
-        << " = (*env)->Get" << (isStatic ? "Static" : "")
-        << "MethodID(env, " << classExpr << ", \"" << name << "\", \"" << desc << "\");\n";
-    out << "            " << localName << " = " << cacheName << ";\n";
-    out << "            if ((*env)->MonitorExit(env, _mj2x_owner_class) != 0) "
-        << localName << " = NULL;\n";
-    out << "        }\n";
+    CSourceStream src;
+    src.indent();
+    src.indent();
+    const std::string staticPrefix = isStatic ? "Static" : "";
+    src.emitLine("static jmethodID " + cacheName + " = NULL;");
+    src.emitLine("jmethodID " + localName + " = NULL;");
+    src.emitLine("if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {");
+    src.indent();
+    src.emitLine("if (" + cacheName + " == NULL) " + cacheName
+        + " = (*env)->Get" + staticPrefix + "MethodID(env, " + classExpr + ", "
+        + cStringLiteral(name) + ", " + cStringLiteral(desc) + ");");
+    src.emitLine(localName + " = " + cacheName + ";");
+    src.emitLine("if ((*env)->MonitorExit(env, _mj2x_owner_class) != 0) "
+        + localName + " = NULL;");
+    src.dedent();
+    src.emitLine("}");
+    out << src.str();
     emitPendingExceptionCheck(out, 8);
 }
 
-void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& out) {
     const char* acc = stackAccessor(node->type);
     const char* lhs = "stack[sp - 1]";
     const char* rhs = "stack[sp]";
@@ -2105,7 +2127,7 @@ void CBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstream& o
     out << "    sp--;\n";
 }
 
-void CBackend::Impl::emitCmp(const MIRCmp* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitCmp(const MIRCmp* node, std::ostringstream& out) {
     const char* acc = stackAccessor(node->type);
     const char* lhs = "stack[sp - 1]";
     const char* rhs = "stack[sp]";
@@ -2123,7 +2145,7 @@ void CBackend::Impl::emitCmp(const MIRCmp* node, std::ostringstream& out) {
     out << "    sp--;\n";
 }
 
-void CBackend::Impl::emitCast(const MIRCast* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitCast(const MIRCast* node, std::ostringstream& out) {
     const char* fromAcc = stackAccessor(node->from);
     const char* toAcc = castResultAccessor(node->to);
     if (node->from == PrimitiveKind::FLOAT || node->from == PrimitiveKind::DOUBLE) {
@@ -2160,7 +2182,7 @@ void CBackend::Impl::emitCast(const MIRCast* node, std::ostringstream& out) {
     }
 }
 
-void CBackend::Impl::emitUnaryOp(const MIRUnaryOp* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitUnaryOp(const MIRUnaryOp* node, std::ostringstream& out) {
     const char* acc = stackAccessor(node->type);
     const char* tgt = "stack[sp]";
     if (node->type == PrimitiveKind::INT) {
@@ -2173,7 +2195,7 @@ void CBackend::Impl::emitUnaryOp(const MIRUnaryOp* node, std::ostringstream& out
     }
 }
 
-void CBackend::Impl::emitBranch(const MIRBranch* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitBranch(const MIRBranch* node, std::ostringstream& out) {
     const char* acc = stackAccessor(node->type);
     out << "    {\n";
     out << "        int cond = (stack[sp - 1]" << acc << " " << cmpOpToC(node->op)
@@ -2183,7 +2205,7 @@ void CBackend::Impl::emitBranch(const MIRBranch* node, std::ostringstream& out) 
     out << "    }\n";
 }
 
-void CBackend::Impl::emitBranchZero(const MIRBranchZero* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitBranchZero(const MIRBranchZero* node, std::ostringstream& out) {
     const char* acc = stackAccessor(node->type);
     const char* zero = (node->type == PrimitiveKind::OBJECT) ? "NULL" : "0";
     out << "    {\n";
@@ -2194,11 +2216,11 @@ void CBackend::Impl::emitBranchZero(const MIRBranchZero* node, std::ostringstrea
     out << "    }\n";
 }
 
-void CBackend::Impl::emitUncondBranch(const MIRUncondBranch* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitUncondBranch(const MIRUncondBranch* node, std::ostringstream& out) {
     out << "    goto " << labelIdent(node->targetLabel) << ";\n";
 }
 
-void CBackend::Impl::emitSwitch(const MIRSwitch* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitSwitch(const MIRSwitch* node, std::ostringstream& out) {
     out << "    switch (stack[sp--].i) {\n";
     for (auto& c : node->cases) {
         out << "    case " << c.key << ": goto " << labelIdent(c.targetLabel) << ";\n";
@@ -2207,7 +2229,7 @@ void CBackend::Impl::emitSwitch(const MIRSwitch* node, std::ostringstream& out) 
     out << "    }\n";
 }
 
-void CBackend::Impl::emitReturnValue(const MIRReturnValue* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitReturnValue(const MIRReturnValue* node, std::ostringstream& out) {
     if (node->type == PrimitiveKind::OBJECT) {
         out << "    {\n";
         out << "    jobject _mj2x_ret = stack[sp--].l;\n";
@@ -2224,7 +2246,7 @@ void CBackend::Impl::emitReturnValue(const MIRReturnValue* node, std::ostringstr
     out << "    }\n";
 }
 
-void CBackend::Impl::emitNewObject(const MIRNewObject* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitNewObject(const MIRNewObject* node, std::ostringstream& out) {
     // NEW 只分配对象、压栈；构造由后续 INVOKESPECIAL <init>（走 emitInvoke 的
     // CallNonvirtualVoidMethod 路径）完成。用 AllocObject 解耦分配与初始化，
     // 避免 emitNewObject 推断构造器签名（MIRNewObject 不带 ctor desc）。
@@ -2235,7 +2257,7 @@ void CBackend::Impl::emitNewObject(const MIRNewObject* node, std::ostringstream&
     out << "    }\n";
 }
 
-void CBackend::Impl::emitNewArray(const MIRNewArray* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitNewArray(const MIRNewArray* node, std::ostringstream& out) {
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    stack[sp].l = (*env)->NewObjectArray(env, stack[sp].i, ";
         if (node->typeDesc.empty())
@@ -2250,7 +2272,7 @@ void CBackend::Impl::emitNewArray(const MIRNewArray* node, std::ostringstream& o
     }
 }
 
-void CBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, std::ostringstream& out) {
     out << "    {\n";
     out << "        jint dims[" << node->dims << "];\n";
     for (int i = node->dims - 1; i >= 0; --i) {
@@ -2261,13 +2283,13 @@ void CBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, std::ostrin
     out << "    }\n";
 }
 
-void CBackend::Impl::emitArrayLength(const MIRArrayLength* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitArrayLength(const MIRArrayLength* node, std::ostringstream& out) {
     (void)node;
     emitNullPointerTrap("stack[sp].l", out);
     out << "    stack[sp].i = (*env)->GetArrayLength(env, stack[sp].l);\n";
 }
 
-void CBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringstream& out) {
     emitNullPointerTrap("stack[sp - 1].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    stack[sp - 1].l = " << trackLocalRefExpr(
@@ -2305,7 +2327,7 @@ void CBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringstream&
     out << "    sp--;\n";
 }
 
-void CBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostringstream& out) {
     emitNullPointerTrap("stack[sp - 2].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    (*env)->SetObjectArrayElement(env, (jobjectArray)stack[sp - 2].l, "
@@ -2340,7 +2362,7 @@ void CBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostringstrea
     out << "    sp -= 3;\n";
 }
 
-void CBackend::Impl::emitFieldGet(const MIRFieldGet* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitFieldGet(const MIRFieldGet* node, std::ostringstream& out) {
     auto pk = jvmDescToPrimitive(node->desc);
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc = stackValueAccessor(pk);
@@ -2356,7 +2378,7 @@ void CBackend::Impl::emitFieldGet(const MIRFieldGet* node, std::ostringstream& o
     out << "    }\n";
 }
 
-void CBackend::Impl::emitFieldPut(const MIRFieldPut* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitFieldPut(const MIRFieldPut* node, std::ostringstream& out) {
     auto pk = jvmDescToPrimitive(node->desc);
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc = stackValueAccessor(pk);
@@ -2373,7 +2395,7 @@ void CBackend::Impl::emitFieldPut(const MIRFieldPut* node, std::ostringstream& o
     out << "    sp -= 2;\n";
 }
 
-void CBackend::Impl::emitStaticGet(const MIRStaticGet* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitStaticGet(const MIRStaticGet* node, std::ostringstream& out) {
     auto pk = jvmDescToPrimitive(node->desc);
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc = stackValueAccessor(pk);
@@ -2388,7 +2410,7 @@ void CBackend::Impl::emitStaticGet(const MIRStaticGet* node, std::ostringstream&
     out << "    }\n";
 }
 
-void CBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringstream& out) {
     auto pk = jvmDescToPrimitive(node->desc);
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc = stackValueAccessor(pk);
@@ -2404,7 +2426,7 @@ void CBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringstream&
     out << "    sp--;\n";
 }
 
-void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) {
     ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(node->desc.c_str());
     auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor().to_std_string());
 
@@ -2485,7 +2507,7 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
     }
 }
 
-void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostringstream& out) {
     ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(node->desc.c_str());
     auto argTypes = Type::getArgumentTypes(descRef);
     auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor().to_std_string());
@@ -2512,9 +2534,9 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
             out << "        jclass " << varName << "_wrapper = (jclass)"
                 << trackLocalRefExpr("(*env)->FindClass(env, \"" + std::string(boxedClassName(kind)) + "\")")
                 << ";\n";
-            out << "        jfieldID " << varName
-                << "_type_fid = (*env)->GetStaticFieldID(env, " << varName
-                << "_wrapper, \"TYPE\", \"Ljava/lang/Class;\");\n";
+            emitCLine(out, 2,
+                "jfieldID " + varName + "_type_fid = (*env)->GetStaticFieldID(env, " +
+                varName + "_wrapper, \"TYPE\", \"Ljava/lang/Class;\");");
             out << "        jclass " << varName << " = (jclass)"
                 << trackLocalRefExpr("(*env)->GetStaticObjectField(env, " + varName +
                                      "_wrapper, " + varName + "_type_fid)") << ";\n";
@@ -2527,18 +2549,18 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
         emitStringObject(varName + "_desc", methodDesc);
         out << "        jclass " << varName << "_class_cls = (jclass)"
             << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/Class\")") << ";\n";
-        out << "        jmethodID " << varName
-            << "_loader_mid = (*env)->GetMethodID(env, " << varName
-            << "_class_cls, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");\n";
+        emitCLine(out, 2,
+            "jmethodID " + varName + "_loader_mid = (*env)->GetMethodID(env, " +
+            varName + "_class_cls, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");");
         out << "        jobject " << varName << "_loader = "
             << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_owner_class, " + varName +
                                  "_loader_mid)") << ";\n";
         out << "        jclass " << varName << "_mt_cls = (jclass)"
             << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodType\")") << ";\n";
-        out << "        jmethodID " << varName
-            << "_from_desc_mid = (*env)->GetStaticMethodID(env, " << varName
-            << "_mt_cls, \"fromMethodDescriptorString\", "
-            << "\"(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;\");\n";
+        emitCLine(out, 2,
+            "jmethodID " + varName + "_from_desc_mid = (*env)->GetStaticMethodID(env, " +
+            varName + "_mt_cls, \"fromMethodDescriptorString\", "
+            "\"(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;\");");
         out << "        jobject " << varName << " = "
             << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, " + varName +
                                  "_mt_cls, " + varName + "_from_desc_mid, " +
@@ -2551,9 +2573,9 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
         out << "        jclass " << varName << "_box_cls = (jclass)"
             << trackLocalRefExpr("(*env)->FindClass(env, \"" + std::string(boxedClassName(kind)) + "\")")
             << ";\n";
-        out << "        jmethodID " << varName
-            << "_valueof_mid = (*env)->GetStaticMethodID(env, " << varName
-            << "_box_cls, \"valueOf\", \"" << boxedValueOfDesc(kind) << "\");\n";
+        emitCLine(out, 2,
+            "jmethodID " + varName + "_valueof_mid = (*env)->GetStaticMethodID(env, " +
+            varName + "_box_cls, \"valueOf\", " + cStringLiteral(boxedValueOfDesc(kind)) + ");");
         out << "        jobject " << varName << " = "
             << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, " + varName +
                                  "_box_cls, " + varName + "_valueof_mid, " + valueExpr + ")")
@@ -2647,9 +2669,10 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
             args += ", " + varName + "_name, " + varName + "_type";
             break;
         }
-        out << "            jmethodID " << varName
-            << "_find_mid = (*env)->GetMethodID(env, " << varName
-            << "_lookup_cls, \"" << findName << "\", \"" << findDesc << "\");\n";
+        emitCLine(out, 3,
+            "jmethodID " + varName + "_find_mid = (*env)->GetMethodID(env, " +
+            varName + "_lookup_cls, " + cStringLiteral(findName) + ", " +
+            cStringLiteral(findDesc) + ");");
         out << "            " << varName << " = "
             << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_lookup, " +
                                  varName + "_find_mid, " + args + ")") << ";\n";
@@ -2737,15 +2760,17 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
 
     out << "        jclass _mj2x_indy_mh_cls = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodHandles\")") << ";\n";
-    out << "        jmethodID _mj2x_indy_lookup_mid = (*env)->GetStaticMethodID(env, "
-        << "_mj2x_indy_mh_cls, \"lookup\", \"()Ljava/lang/invoke/MethodHandles$Lookup;\");\n";
+    emitCLine(out, 2,
+        "jmethodID _mj2x_indy_lookup_mid = (*env)->GetStaticMethodID(env, "
+        "_mj2x_indy_mh_cls, \"lookup\", \"()Ljava/lang/invoke/MethodHandles$Lookup;\");");
     out << "        jobject _mj2x_indy_base_lookup = "
         << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, _mj2x_indy_mh_cls, _mj2x_indy_lookup_mid)")
         << ";\n";
     out << "        jobject _mj2x_indy_lookup = _mj2x_indy_base_lookup;\n";
-    out << "        jmethodID _mj2x_indy_private_lookup_mid = (*env)->GetStaticMethodID(env, "
-        << "_mj2x_indy_mh_cls, \"privateLookupIn\", "
-        << "\"(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;\");\n";
+    emitCLine(out, 2,
+        "jmethodID _mj2x_indy_private_lookup_mid = (*env)->GetStaticMethodID(env, "
+        "_mj2x_indy_mh_cls, \"privateLookupIn\", "
+        "\"(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;\");");
     out << "        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);\n";
     out << "        if (_mj2x_indy_private_lookup_mid != NULL) {\n";
     out << "            jobject _mj2x_indy_private_lookup = "
@@ -2772,9 +2797,10 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
     out << "        jclass _mj2x_indy_bsm_cls = (jclass)"
         << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + bsmOwner + "\")")
         << ";\n";
-    out << "        jmethodID _mj2x_indy_bsm_mid = (*env)->GetStaticMethodID(env, "
-        << "_mj2x_indy_bsm_cls, " << cStringLiteral(bsmName) << ", " << cStringLiteral(bsmDesc)
-        << ");\n";
+    emitCLine(out, 2,
+        "jmethodID _mj2x_indy_bsm_mid = (*env)->GetStaticMethodID(env, "
+        "_mj2x_indy_bsm_cls, " + cStringLiteral(bsmName) + ", " +
+        cStringLiteral(bsmDesc) + ");");
 
     std::vector<std::string> bsmExprs;
     size_t bsmArgIndex = 0;
@@ -2834,8 +2860,9 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
 
     out << "        jclass _mj2x_indy_callsite_cls = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/CallSite\")") << ";\n";
-    out << "        jmethodID _mj2x_indy_get_target_mid = (*env)->GetMethodID(env, "
-        << "_mj2x_indy_callsite_cls, \"getTarget\", \"()Ljava/lang/invoke/MethodHandle;\");\n";
+    emitCLine(out, 2,
+        "jmethodID _mj2x_indy_get_target_mid = (*env)->GetMethodID(env, "
+        "_mj2x_indy_callsite_cls, \"getTarget\", \"()Ljava/lang/invoke/MethodHandle;\");");
     out << "        jobject _mj2x_indy_target = "
         << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_callsite, _mj2x_indy_get_target_mid)")
         << ";\n";
@@ -2843,9 +2870,10 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
 
     out << "        jclass _mj2x_indy_method_handle_cls = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodHandle\")") << ";\n";
-    out << "        jmethodID _mj2x_indy_invoke_mid = (*env)->GetMethodID(env, "
-        << "_mj2x_indy_method_handle_cls, \"invokeWithArguments\", "
-        << "\"([Ljava/lang/Object;)Ljava/lang/Object;\");\n";
+    emitCLine(out, 2,
+        "jmethodID _mj2x_indy_invoke_mid = (*env)->GetMethodID(env, "
+        "_mj2x_indy_method_handle_cls, \"invokeWithArguments\", "
+        "\"([Ljava/lang/Object;)Ljava/lang/Object;\");");
     out << "        jobject _mj2x_indy_result = "
         << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_target, "
                              "_mj2x_indy_invoke_mid, _mj2x_indy_args)") << ";\n";
@@ -2859,9 +2887,10 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
         out << "        jclass _mj2x_indy_ret_box_cls = (jclass)"
             << trackLocalRefExpr("(*env)->FindClass(env, \"" + std::string(boxedClassName(retType)) + "\")")
             << ";\n";
-        out << "        jmethodID _mj2x_indy_unbox_mid = (*env)->GetMethodID(env, "
-            << "_mj2x_indy_ret_box_cls, \"" << boxedUnboxMethod(retType) << "\", \""
-            << boxedUnboxDesc(retType) << "\");\n";
+        emitCLine(out, 2,
+            "jmethodID _mj2x_indy_unbox_mid = (*env)->GetMethodID(env, "
+            "_mj2x_indy_ret_box_cls, " + cStringLiteral(boxedUnboxMethod(retType)) +
+            ", " + cStringLiteral(boxedUnboxDesc(retType)) + ");");
         out << "        stack[++sp]" << stackValueAccessor(retType) << " = ("
             << (narrowOnOperandStack(retType) ? "jint" : primitiveToJNIType(retType))
             << ")(*env)->Call" << primitiveToJNISuffix(retType)
@@ -2870,7 +2899,7 @@ void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostrin
     out << "    }\n";
 }
 
-void CBackend::Impl::emitCheckCast(const MIRCheckCast* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitCheckCast(const MIRCheckCast* node, std::ostringstream& out) {
     out << "    if (stack[sp].l != NULL && !(*env)->IsInstanceOf(env, stack[sp].l, "
         << classExprForDescriptor(node->typeDesc) << ")) {\n";
     out << "        jclass ex_class = (jclass)"
@@ -2883,7 +2912,7 @@ void CBackend::Impl::emitCheckCast(const MIRCheckCast* node, std::ostringstream&
     out << "    }\n";
 }
 
-void CBackend::Impl::emitUnsupported(const char* what, std::ostringstream& out) {
+void StackCBackend::Impl::emitUnsupported(const char* what, std::ostringstream& out) {
     out << "    jclass ex_class = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/UnsupportedOperationException\")") << ";\n";
     out << "    (*env)->ThrowNew(env, ex_class, \"" << what << "\");\n";
@@ -2893,19 +2922,19 @@ void CBackend::Impl::emitUnsupported(const char* what, std::ostringstream& out) 
         emitExceptionReturn(currentMethodDesc, out, 4);
 }
 
-void CBackend::Impl::emitInstanceOf(const MIRInstanceOf* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitInstanceOf(const MIRInstanceOf* node, std::ostringstream& out) {
     out << "    stack[sp].i = (*env)->IsInstanceOf(env, stack[sp].l, "
         << classExprForDescriptor(node->typeDesc) << ");\n";
 }
 
-void CBackend::Impl::emitMonitor(const MIRMonitor* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitMonitor(const MIRMonitor* node, std::ostringstream& out) {
     if (node->enter)
         out << "    (*env)->MonitorEnter(env, stack[sp--].l);\n";
     else
         out << "    (*env)->MonitorExit(env, stack[sp--].l);\n";
 }
 
-void CBackend::Impl::emitThrow(const MIRThrow* node, std::ostringstream& out) {
+void StackCBackend::Impl::emitThrow(const MIRThrow* node, std::ostringstream& out) {
     (void)node;
     out << "    (*env)->Throw(env, stack[sp--].l);\n";
     if (!currentExceptionDispatchTarget.empty())

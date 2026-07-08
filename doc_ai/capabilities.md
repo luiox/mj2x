@@ -11,10 +11,10 @@
 
 | 能力 | 状态 | 验证 |
 |---|---|---|
-| 单 `.class` 输入 → 改写后 `.class` + emitted C | ✅ | CBackend / RegC E2E |
+| 单 `.class` 输入 → 改写后 `.class` + emitted C | ✅ | StackC / RegC E2E |
 | `.jar` 输入 → 改写后 `.jar` + emitted C | ✅ | `mj2x_unittest` JAR pipeline 测试 |
-| CBackend 单 `.class` 输出附带 `mj2x-cloader` sidecar class | ✅ | CBackend E2E |
-| CBackend `.jar` 输出注入 `mj2x-cloader` dispatch loader class | ✅ | JAR pipeline / CLI 测试 |
+| StackC 单 `.class` 输出附带 `mj2x-cloader` sidecar class | ✅ | StackCBackend E2E |
+| StackC `.jar` 输出注入 `mj2x-cloader` dispatch loader class | ✅ | JAR pipeline / CLI 测试 |
 | JAR 输出保留 entry 顺序和非 class 资源 payload | ✅ | JAR fixture 测试 |
 | class entry 在 native method 注入后重新写回 | ✅ | JAR pipeline 测试 |
 | `--native-annotation Lpkg/Anno;` 只翻译带目标方法注解的方法 | ✅ | CLI 注解筛选测试 |
@@ -24,7 +24,7 @@
 
 ---
 
-## 2. CBackend(广覆盖正确性后端)
+## 2. StackC(广覆盖正确性后端)
 
 定位:正确性基线后端,覆盖广,输出仍是 stack-style(`union jvalue stack[]` + `sp`)。
 Native 绑定使用 `static` C 函数 + `JNI_OnLoad` 预注册 `mj2x-cloader`
@@ -51,7 +51,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - 数组:`newarray` / `anewarray` / `multianewarray` / `arraylength` / `*aload` / `*astore`;
   `BALOAD`/`BASTORE` 对 `byte[]`/`boolean[]` 做运行时类型分流
 - 栈形状操作:`POP` / `POP2` / `DUP` / `DUP_X1` / `DUP_X2` / `DUP2` /
-  `DUP2_X1` / `DUP2_X2` / `SWAP`;CBackend 通过转换期类型快照区分 category-2
+  `DUP2_X1` / `DUP2_X2` / `SWAP`;StackC 通过转换期类型快照区分 category-2
   与 category-1 pair
 - 异常:`athrow` / try-catch / finally / monitor (`monitorenter` / `monitorexit`)
 - 显式 NPE trap:field / array / instance invoke 在 JNI 调用前主动抛
@@ -62,10 +62,10 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - JNI method/field ID 懒缓存:调用点首次解析,owner class monitor 保护缓存读写,后续复用缓存 ID
 - hidden proxy class cache:使用 WeakGlobalRef,不因 native cache 强持有阻止类卸载
 - String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring
-- CBackend `invokedynamic`:native 侧调用 bootstrap,经 `CallSite.getTarget()` +
+- StackC `invokedynamic`:native 侧调用 bootstrap,经 `CallSite.getTarget()` +
   `MethodHandle.invokeWithArguments` 执行;已覆盖 javac string concat、方法引用和捕获 lambda
 
-**验证**:28 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 CBackend
+**验证**:28 个 StackCBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 StackCBackend
 发射单测。
 
 **已知限制**:
@@ -73,7 +73,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | 限制 | 说明 |
 |---|---|
 | 栈全用 `union jvalue` 数组 | 性能低于寄存器方案,后续可优化 |
-| RegC `INVOKEDYNAMIC` fail-closed | RegC/SSA 仍拒绝未展开 indy;CBackend 已有运行时 MethodHandle 桥 |
+| RegC `INVOKEDYNAMIC` fail-closed | RegC/SSA 仍拒绝未展开 indy;StackC 已有运行时 MethodHandle 桥 |
 | JSR / RET 不纳入 | 废弃字节码,由 preprocessor / 输入规范处理 |
 | `<init>` / `<clinit>` 不被 MarkAll 标记 | 构造器保留原字节码,不走 native |
 
@@ -151,10 +151,10 @@ mj2x/
 | 能力 | 状态 |
 |---|---|
 | codegen 工具层(`mj2x-core/src/mj2x/codegen/`) | ✅ CSourceStream(缩进管理)、IncludeSet(include 去重)、cStringLiteral/mangle 收口 |
-| CBackend 拆到 `backend/cbackend/` 文件夹 | ✅ c_backend + c_runtime_prelude 分离 |
-| 重复 helper 收口(cStringLiteral/mangle 跨 CBackend/RegC) | ✅ 单一来源在 codegen |
+| StackC 拆到 `backend/stackc/` 文件夹 | ✅ stackc_backend + stackc_runtime_prelude 分离 |
+| 重复 helper 收口(cStringLiteral/mangle 跨 StackC/RegC) | ✅ 单一来源在 codegen |
 
-**codegen 工具层设计**:替代裸 `std::ostringstream << "    ..."` 字符串拼接。`CSourceStream` 管缩进、`IncludeSet` 管 include 去重排序、`c_helpers.hpp` 是无状态 helper 的单一来源。两个 C 发射后端(CBackend/RegC)共用。后续 emitRuntimeHelpers/emitHelperPrelude 的大段字符串迁移到 CSourceStream 是渐进工作。
+**codegen 工具层设计**:替代裸 `std::ostringstream << "    ..."` 字符串拼接。`CSourceStream` 管缩进、`IncludeSet` 管 include 去重排序、`c_helpers.hpp` 是无状态 helper 的单一来源。两个 C 发射后端(StackC/RegC)共用。`StackCBackend` 的 registration 与 method/field ID 懒缓存发射已迁到 `CSourceStream`;后续大段 runtime helper 字符串迁移是渐进工作。
 
 ---
 

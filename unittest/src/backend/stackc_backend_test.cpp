@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-#include "mj2x/backend/cbackend/c_backend.hpp"
+#include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string_arena.hpp"
@@ -66,8 +66,8 @@ static MethodNode* findClassMethod(
 // IMPORTANT: CodeConverter MUST outlive the Block* pointers it returns.
 // Always declare CodeConverter and blocks in the same scope.
 
-TEST(CBackendTest, SimpleReturn) {
-    CBackend backend;
+TEST(StackCBackendTest, SimpleReturn) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "empty", "()V", {new InsnNode(Opcodes::RETURN)});
     CompilerMethod cm;
@@ -82,8 +82,8 @@ TEST(CBackendTest, SimpleReturn) {
     EXPECT_NE(result.text.find("void"), std::string::npos);
 }
 
-TEST(CBackendTest, AddMethod) {
-    CBackend backend;
+TEST(StackCBackendTest, AddMethod) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "add", "(II)I", {
         new VarInsnNode(Opcodes::ILOAD, 0),
@@ -106,7 +106,7 @@ TEST(CBackendTest, AddMethod) {
     EXPECT_NE(result.text.find("+"), std::string::npos);
 }
 
-TEST(CBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
+TEST(StackCBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
     auto bsm = Handle(Opcodes::H_INVOKESTATIC,
                       testArena.intern("java/lang/invoke/StringConcatFactory"),
                       testArena.intern("makeConcatWithConstants"),
@@ -114,7 +114,7 @@ TEST(CBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
                                        "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
                                        "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
                       false);
-    CBackend backend;
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "concat", "(I)Ljava/lang/String;", {
         new VarInsnNode(Opcodes::ILOAD, 0),
@@ -139,8 +139,8 @@ TEST(CBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
     EXPECT_NE(result.text.find("java/lang/Integer"), std::string::npos) << result.text;
 }
 
-TEST(CBackendTest, CastEmission) {
-    CBackend backend;
+TEST(StackCBackendTest, CastEmission) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "d2i", "(D)I", {
         new VarInsnNode(Opcodes::DLOAD, 0),
@@ -159,8 +159,8 @@ TEST(CBackendTest, CastEmission) {
     EXPECT_NE(result.text.find("stack[sp].i = (jint)v"), std::string::npos);
 }
 
-TEST(CBackendTest, LongShiftAndCompareEmission) {
-    CBackend backend;
+TEST(StackCBackendTest, LongShiftAndCompareEmission) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "shiftCmp", "(JI)I", {
         new VarInsnNode(Opcodes::LLOAD, 0),
@@ -182,8 +182,8 @@ TEST(CBackendTest, LongShiftAndCompareEmission) {
     EXPECT_NE(result.text.find("stack[sp - 1].i = (stack[sp - 1].j > stack[sp].j)"), std::string::npos);
 }
 
-TEST(CBackendTest, FloatRemainderEmission) {
-    CBackend backend;
+TEST(StackCBackendTest, FloatRemainderEmission) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "rem", "(FF)F", {
         new VarInsnNode(Opcodes::FLOAD, 0),
@@ -202,8 +202,8 @@ TEST(CBackendTest, FloatRemainderEmission) {
     EXPECT_NE(result.text.find("fmodf("), std::string::npos);
 }
 
-TEST(CBackendTest, TypedWideStackOpsEmitConcreteShuffle) {
-    CBackend backend;
+TEST(StackCBackendTest, TypedWideStackOpsEmitConcreteShuffle) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "shape", "()I", {
         new InsnNode(Opcodes::LCONST_1),
@@ -236,8 +236,8 @@ TEST(CBackendTest, TypedWideStackOpsEmitConcreteShuffle) {
     EXPECT_NE(result.text.find("stack[sp - 3] = v2;"), std::string::npos);
 }
 
-TEST(CBackendTest, FieldAccess) {
-    CBackend backend;
+TEST(StackCBackendTest, FieldAccess) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
                          "getX", "()I", {
         new VarInsnNode(Opcodes::ALOAD, 0),
@@ -260,8 +260,8 @@ TEST(CBackendTest, FieldAccess) {
     EXPECT_NE(result.text.find("GetIntField(env, stack[sp].l, fid_local)"), std::string::npos);
 }
 
-TEST(CBackendTest, InvokeMethod) {
-    CBackend backend;
+TEST(StackCBackendTest, InvokeMethod) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "call", "()V", {
         new MethodInsnNode(Opcodes::INVOKESTATIC, ca::str::Utf8StringRef::from_cstr("Other"), ca::str::Utf8StringRef::from_cstr("run"), ca::str::Utf8StringRef::from_cstr("()V"), false),
@@ -283,8 +283,8 @@ TEST(CBackendTest, InvokeMethod) {
     EXPECT_NE(result.text.find("CallStaticVoidMethod(env, lc, mid_local)"), std::string::npos);
 }
 
-TEST(CBackendTest, StaticInvokeReturnUsesArgumentBaseSlot) {
-    CBackend backend;
+TEST(StackCBackendTest, StaticInvokeReturnUsesArgumentBaseSlot) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "call", "(II)I", {
         new VarInsnNode(Opcodes::ILOAD, 0),
@@ -304,8 +304,8 @@ TEST(CBackendTest, StaticInvokeReturnUsesArgumentBaseSlot) {
     EXPECT_NE(result.text.find("sp -= 1;"), std::string::npos);
 }
 
-TEST(CBackendTest, InvokeSpecialLooksUpDeclaringClass) {
-    CBackend backend;
+TEST(StackCBackendTest, InvokeSpecialLooksUpDeclaringClass) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "create", "()Ljava/lang/Object;", {
         new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
@@ -325,8 +325,8 @@ TEST(CBackendTest, InvokeSpecialLooksUpDeclaringClass) {
     EXPECT_NE(result.text.find("CallNonvirtualVoidMethod(env, stack[sp - 0].l, lc, mid"), std::string::npos);
 }
 
-TEST(CBackendTest, StringConstantEmission) {
-    CBackend backend;
+TEST(StackCBackendTest, StringConstantEmission) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "literal", "()Ljava/lang/String;", {
         new LdcInsnNode(std::string("hello \"jni\"\\path")),
@@ -356,8 +356,8 @@ TEST(CBackendTest, StringConstantEmission) {
     EXPECT_EQ(source.find("\"hello \\\"jni\\\"\\\\path\""), std::string::npos) << source;
 }
 
-TEST(CBackendTest, PrimitiveArrayEmission) {
-    CBackend backend;
+TEST(StackCBackendTest, PrimitiveArrayEmission) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "array", "()I", {
         new InsnNode(Opcodes::ICONST_2),
@@ -383,8 +383,8 @@ TEST(CBackendTest, PrimitiveArrayEmission) {
     EXPECT_NE(result.text.find("GetIntArrayRegion"), std::string::npos);
 }
 
-TEST(CBackendTest, ByteArrayOpsDisambiguateBooleanArrays) {
-    CBackend backend;
+TEST(StackCBackendTest, ByteArrayOpsDisambiguateBooleanArrays) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "array", "()I", {
         new InsnNode(Opcodes::ICONST_2),
@@ -413,8 +413,8 @@ TEST(CBackendTest, ByteArrayOpsDisambiguateBooleanArrays) {
     EXPECT_NE(result.text.find("SetByteArrayRegion"), std::string::npos);
 }
 
-TEST(CBackendTest, CheckCastEmission) {
-    CBackend backend;
+TEST(StackCBackendTest, CheckCastEmission) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "cast", "(Ljava/lang/Object;)Ljava/lang/String;", {
         new VarInsnNode(Opcodes::ALOAD, 0),
@@ -433,8 +433,8 @@ TEST(CBackendTest, CheckCastEmission) {
     EXPECT_NE(result.text.find("IsInstanceOf"), std::string::npos);
 }
 
-TEST(CBackendTest, ClassLookupsUseOwnerClassLoaderHelper) {
-    CBackend backend;
+TEST(StackCBackendTest, ClassLookupsUseOwnerClassLoaderHelper) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
                          "refs", "(Ljava/lang/Object;)I", {
         new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("pkg/Foo")),
@@ -480,8 +480,8 @@ TEST(CBackendTest, ClassLookupsUseOwnerClassLoaderHelper) {
     EXPECT_EQ(result.text.find("FindClass(env, \"pkg/Helper\")"), std::string::npos) << result.text;
 }
 
-TEST(CBackendTest, InjectMakesMethodNative) {
-    CBackend backend;
+TEST(StackCBackendTest, InjectMakesMethodNative) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "test", "()V", {new InsnNode(Opcodes::RETURN)});
     CompilerMethod cm;
@@ -500,8 +500,8 @@ TEST(CBackendTest, InjectMakesMethodNative) {
     EXPECT_EQ(mn->instructions.size(), 0);
 }
 
-TEST(CBackendTest, InjectAddsClinitCLoaderRegistrationCall) {
-    CBackend backend;
+TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "test", "()V", {new InsnNode(Opcodes::RETURN)});
     CompilerMethod cm;
@@ -545,8 +545,8 @@ TEST(CBackendTest, InjectAddsClinitCLoaderRegistrationCall) {
     EXPECT_EQ(source.find("bridge_method"), std::string::npos) << source;
 }
 
-TEST(CBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge) {
-    CBackend backend;
+TEST(StackCBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge) {
+    StackCBackend backend;
     backend.setJarNativeLoaderResourcePath("META-INF/mj2x/native/app.dll", ".dll");
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "test", "()V", {new InsnNode(Opcodes::RETURN)});
@@ -581,8 +581,8 @@ TEST(CBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge) {
     EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(ILjava/lang/String;)V");
 }
 
-TEST(CBackendTest, ExistingClinitBodyMovesToHiddenClassProxy) {
-    CBackend backend;
+TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "test", "()V", {new InsnNode(Opcodes::RETURN)});
     auto clinit = makeMethod(Opcodes::ACC_STATIC,
@@ -641,8 +641,8 @@ TEST(CBackendTest, ExistingClinitBodyMovesToHiddenClassProxy) {
     EXPECT_NE(source.find("SetStaticIntField"), std::string::npos) << source;
 }
 
-TEST(CBackendTest, InterfaceDefaultMethodUsesHiddenProxy) {
-    CBackend backend;
+TEST(StackCBackendTest, InterfaceDefaultMethodUsesHiddenProxy) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
                          "inc", "(I)I", {
         new VarInsnNode(Opcodes::ILOAD, 1),
@@ -695,8 +695,8 @@ TEST(CBackendTest, InterfaceDefaultMethodUsesHiddenProxy) {
     EXPECT_EQ(source.find("{(char*)\"inc\", (char*)\"(I)I\""), std::string::npos) << source;
 }
 
-TEST(CBackendTest, BranchAndComparison) {
-    CBackend backend;
+TEST(StackCBackendTest, BranchAndComparison) {
+    StackCBackend backend;
     auto* targetLabel = new LabelNode();
     targetLabel->label->bytecodeOffset = 10;
 
@@ -724,8 +724,8 @@ TEST(CBackendTest, BranchAndComparison) {
     EXPECT_NE(result.text.find("sp -= 2;\n        if (cond) goto"), std::string::npos);
 }
 
-TEST(CBackendTest, BranchZeroObjectUsesReferenceAccessor) {
-    CBackend backend;
+TEST(StackCBackendTest, BranchZeroObjectUsesReferenceAccessor) {
+    StackCBackend backend;
     auto* targetLabel = new LabelNode();
     targetLabel->label->bytecodeOffset = 10;
 
@@ -751,8 +751,8 @@ TEST(CBackendTest, BranchZeroObjectUsesReferenceAccessor) {
     EXPECT_NE(result.text.find("sp--;\n        if (cond) goto"), std::string::npos);
 }
 
-TEST(CBackendTest, NewObject) {
-    CBackend backend;
+TEST(StackCBackendTest, NewObject) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "create", "()Ljava/lang/Object;", {
         new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
@@ -772,8 +772,8 @@ TEST(CBackendTest, NewObject) {
     EXPECT_NE(result.text.find("AllocObject"), std::string::npos);
 }
 
-TEST(CBackendTest, IincInstruction) {
-    CBackend backend;
+TEST(StackCBackendTest, IincInstruction) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "inc", "(I)I", {
         new IincInsnNode(0, 5),
@@ -791,8 +791,8 @@ TEST(CBackendTest, IincInstruction) {
     EXPECT_NE(result.text.find("locals[0].i += 5"), std::string::npos);
 }
 
-TEST(CBackendTest, StaticNativeFunctionAndOnLoadRegistration) {
-    CBackend backend;
+TEST(StackCBackendTest, StaticNativeFunctionAndOnLoadRegistration) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "add", "(II)I", {new InsnNode(Opcodes::IRETURN)});
     CompilerMethod cm;
@@ -819,8 +819,8 @@ TEST(CBackendTest, StaticNativeFunctionAndOnLoadRegistration) {
     EXPECT_EQ(source.find("Java_com_example_Foo_add__II"), std::string::npos) << source;
 }
 
-TEST(CBackendTest, RegisterNativesKeepsObjectParameterDescriptor) {
-    CBackend backend;
+TEST(StackCBackendTest, RegisterNativesKeepsObjectParameterDescriptor) {
+    StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "isNull", "(Ljava/lang/Object;)I", {
         new InsnNode(Opcodes::ICONST_0),

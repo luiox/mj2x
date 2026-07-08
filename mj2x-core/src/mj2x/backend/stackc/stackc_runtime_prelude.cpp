@@ -1,10 +1,10 @@
-#include "mj2x/backend/cbackend/c_runtime_prelude.hpp"
+#include "mj2x/backend/stackc/stackc_runtime_prelude.hpp"
 
 #include <string>
 
 namespace mj2x::backend {
 
-std::string cBackendRuntimePrelude() {
+std::string stackCRuntimePrelude() {
     std::string s;
     s.reserve(4096);
 

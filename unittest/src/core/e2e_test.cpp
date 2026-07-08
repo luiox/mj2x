@@ -7,7 +7,7 @@
 #include "libca/str/utf8_string_arena.hpp"
 #include "test_helper.hpp"
 #include "mj2x/mj2x.hpp"
-#include "mj2x/backend/cbackend/c_backend.hpp"
+#include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
@@ -54,7 +54,7 @@ static std::string writeTestClass(const std::string& name, const std::string& su
     return path;
 }
 
-TEST(E2ETest, PipelineWithCBackend) {
+TEST(E2ETest, PipelineWithStackCBackend) {
     auto inPath = writeTestClass("E2ETest", "in.class");
     auto outPath = test::getTempOutPath("mj2x_e2e_out.class").string();
     auto cPath = test::getTempOutPath("mj2x_e2e_out.c").string();
@@ -64,9 +64,9 @@ TEST(E2ETest, PipelineWithCBackend) {
     cfg.outputPath = outPath;
 
     Pipeline pipeline(std::move(cfg));
-    auto cBackend = std::make_unique<CBackend>();
-    cBackend->setOutputPath(cPath);
-    pipeline.registerBackend(std::move(cBackend));
+    auto stackCBackend = std::make_unique<StackCBackend>();
+    stackCBackend->setOutputPath(cPath);
+    pipeline.registerBackend(std::move(stackCBackend));
     pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
 
     EXPECT_EQ(pipeline.run(), 0);
@@ -153,7 +153,7 @@ TEST(E2ETest, PipelineWithRegCBackend) {
     std::remove(cPath.c_str());
 }
 
-TEST(E2ETest, VoidMethodWithCBackend) {
+TEST(E2ETest, VoidMethodWithStackCBackend) {
     auto inPath = test::getTempOutPath("mj2x_e2e_void_in.class").string();
     auto outPath = test::getTempOutPath("mj2x_e2e_void_out.class").string();
     auto cPath = test::getTempOutPath("mj2x_e2e_void_out.c").string();
@@ -188,9 +188,9 @@ TEST(E2ETest, VoidMethodWithCBackend) {
     cfg.outputPath = outPath;
 
     Pipeline pipeline(std::move(cfg));
-    auto cBackend = std::make_unique<CBackend>();
-    cBackend->setOutputPath(cPath);
-    pipeline.registerBackend(std::move(cBackend));
+    auto stackCBackend = std::make_unique<StackCBackend>();
+    stackCBackend->setOutputPath(cPath);
+    pipeline.registerBackend(std::move(stackCBackend));
     pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
 
     EXPECT_EQ(pipeline.run(), 0);

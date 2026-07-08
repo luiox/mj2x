@@ -18,12 +18,12 @@ Current behavior:
 - `InvokeDynamicPreprocessor` detects indy instructions and logs them.
 - It does not rewrite bytecode yet.
 - SSA rejects non-expanded indy with `invokedynamic not yet expanded`.
-- CBackend has a separate runtime bridge that invokes the bootstrap method,
+- StackC has a separate runtime bridge that invokes the bootstrap method,
   reads `CallSite.getTarget()`, and executes `MethodHandle.invokeWithArguments`.
 - RegC should not mark a method native when indy lowering fails.
 
 This is the correct RegC boundary until expansion has deterministic tests.
-CBackend's runtime bridge is a correctness path, not a RegC no-stack lowering.
+StackC's runtime bridge is a correctness path, not a RegC no-stack lowering.
 
 ## Expansion Order
 

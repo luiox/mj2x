@@ -3,9 +3,9 @@
 ## Purpose
 
 RegC trace samples give mjdbg a register-style C surface to compare with the
-existing CBackend protected samples.  Current samples are generated through
+existing StackC protected samples.  Current samples are generated through
 RegCBackend, include JNI wrapper output, and expose the register/helper/runtime
-shape that mjdbg should compare against CBackend's stack-style surface.
+shape that mjdbg should compare against StackC's stack-style surface.
 
 ## Source Layout
 
@@ -62,7 +62,7 @@ exception-dispatch surface.
 
 mjdbg should use these samples to compare:
 
-- CBackend: JNI native functions with explicit operand-stack storage
+- StackC: JNI native functions with explicit operand-stack storage
 - RegC: helper-style C using virtual registers, labels, edge copies, and
   transitional `_mj2x_regc_*` helpers plus R3 ABI calls such as
   `mj2x_regc_div_i32`

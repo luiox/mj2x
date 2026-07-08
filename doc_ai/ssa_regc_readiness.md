@@ -11,7 +11,7 @@ RegC backend.  Its job is not to optimize aggressively yet; its job is to give
 RegC a stackless, value-oriented view of a method where JVM operand-stack motion
 has already disappeared.
 
-This matters because the old CBackend emitted code around a visible `stack[]`
+This matters because the old StackC emitted code around a visible `stack[]`
 and `sp`.  That shape is easy to recognize and hard to optimize.  SSA instead
 turns each meaningful JVM value into an SSAValue and keeps block transfer values
 explicit on edges.  RegC can then generate local temporaries from values rather

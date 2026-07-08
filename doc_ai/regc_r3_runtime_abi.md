@@ -56,7 +56,7 @@ calls such as `mj2x_regc_div_i32` and `mj2x_regc_barrier` from register-style
 RegC code.  This is not yet a protection-strength claim.  It is the first stable
 call boundary that lets mjdbg compare:
 
-- CBackend stack style: `stack[]`, `sp`, JNI calls in each generated function
+- StackC stack style: `stack[]`, `sp`, JNI calls in each generated function
 - RegC/R3 style: virtual registers, labels, and runtime ABI helper calls
 
 Future phases should add protected samples that pair the generated RegC C file,

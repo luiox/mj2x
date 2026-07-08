@@ -1,7 +1,7 @@
 # mj2x — Test Strategy
 
 > **v2（2026-06-24 架构重构后）**：测试分层对齐新的五层 IR（L1-L5）+ RT 运行时。
-> v1 的测试目标（≥80 单元，仅针对 CBackend）调整为按层分质量门。
+> v1 的测试目标（≥80 单元，仅针对 StackC）调整为按层分质量门。
 > 重构依据见 `architecture_redesign.md`。
 >
 > **MVP freeze（2026-07-06）**：当前发版范围见 `mvp_release_scope.md`。
@@ -11,21 +11,21 @@
 
 ## 1. 测试分层（对齐 L1-L5 + RT）
 
-### 1.1 现有基线（CBackend 复活后，子串匹配 + 真 E2E）
+### 1.1 现有基线（StackC 复活后，子串匹配 + 真 E2E）
 
-> **2026-07-05 更新**：ADR-1 撤销，CBackend 复活为通用后端。`backend/c_backend.{hpp,cpp}`
-> 已从 `reference/` 移回 `backend/`，`c_backend_legacy_test.cpp` 复名 `c_backend_test.cpp`。
+> **2026-07-05 更新**：ADR-1 撤销，StackC 复活为通用后端。`backend/stackc/stackc_backend.{hpp,cpp}`
+> 已从 `reference/` 移回 `backend/stackc/`。2026-07-08 起正式更名为 StackC。
 > 新增**真 E2E** 测试层（见 §1.4）。
 
 | 测试 | 层 | 用例 | 处置 |
 |------|----|------|------|
 | `core/compiler_index_test` | 基础设施 | 2 | 保留 |
 | `core/io_test`, `input_loader_test`, `jar_io_test` | 基础设施 | 11+ | 覆盖 class/JAR roundtrip、MVP fixture、signed/no-class fail-closed |
-| `core/e2e_test`（CBackend 版） | CBackend | 3 | 复活，去 legacy |
+| `core/e2e_test`（StackC 版） | StackC | 3 | 复活，去 legacy |
 | `frontend/code_converter_test` | **L1** 栈式 MIR | 18 | 保留（L1 基线）；Wave 6 补数组 component 元数据 |
-| `backend/c_backend_test` | CBackend | 19 | 复名 `c_backend_test.cpp`，子串匹配；Wave 6 补 array/checkcast emit |
-| **`backend/c_backend_e2e_test.cpp`** ★新增 | **CBackend 真 E2E** | 28 | Wave 1 起逐波补，见 §1.4 |
-| `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、CBackend/RegC JAR 输入/输出入口、CMake 工程输出、负向参数、坏 JAR fail-closed |
+| `backend/stackc_backend_test.cpp` | StackC | 19 | 子串匹配；Wave 6 补 array/checkcast emit |
+| **`backend/stackc_backend_e2e_test.cpp`** ★新增 | **StackC 真 E2E** | 28 | Wave 1 起逐波补，见 §1.4 |
+| `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、StackC/RegC JAR 输入/输出入口、CMake 工程输出、负向参数、坏 JAR fail-closed |
 
 ### 1.2 各层测试目标（R1-R4 落地时补）
 
@@ -61,9 +61,9 @@
 | Java → mj2x → .c → cl → 运行 | 端到端行为对比 | JDK + MSVC，结果与原 Java 一致 | R2 |
 | 受保护样本 + c2j agent | anti-JVMTI 有效性 | 注入 c2j agent，验证 fail-closed 或 trace 退化（**与 mjdbg 协作**） | R3 |
 
-### 1.4 CBackend 真 E2E harness（Wave 1 起）
+### 1.4 StackC 真 E2E harness（Wave 1 起）
 
-区别于子串匹配的 `c_backend_test.cpp`，`c_backend_e2e_test.cpp` 把生成的 C **真编译成 DLL、
+区别于子串匹配的 `stackc_backend_test.cpp`，`stackc_backend_e2e_test.cpp` 把生成的 C **真编译成 DLL、
 在 JVM 里调用、与原 Java 行为逐项对比**。这是 revival 文档定义的"端到端闭环"判据。
 
 **流程**（每个 case）：
@@ -93,19 +93,19 @@
 
 **已覆盖**（Wave 4）：`MethodCalls`（静态/实例/构造器/long+double 参数调用）、`RecursionCalls`
 （native 递归调用）、`StringLiterals`（String LDC/ARETURN/虚方法调用）、`InterfaceCalls`（INVOKEINTERFACE）。
-`InvokeDynamicStringConcat` 与 `InvokeDynamicLambda` 覆盖 CBackend native 侧
+`InvokeDynamicStringConcat` 与 `InvokeDynamicLambda` 覆盖 StackC native 侧
 bootstrap + `MethodHandle.invokeWithArguments` 路径，包括 javac string concat、方法引用和捕获 lambda。
 
 **已覆盖**（Wave 5/6）：`ObjectFields`（实例/静态字段、`instanceof`、`checkcast`）、
 `PrimitiveArrays`（基本类型数组、窄类型数组、boolean[]/byte[] 分流、arraylength）、`ObjectArrays`（String/Object 数组）、
-`MultiDimArrays`（int[][] 与 String[][][]）。CBackend 发射单测还断言 `new`、`anewarray`、
+`MultiDimArrays`（int[][] 与 String[][][]）。StackC 发射单测还断言 `new`、`anewarray`、
 静态调用、`instanceof` 等业务类路径走 owner ClassLoader-aware helper，而不是直接
 `FindClass`；同组单测断言 generated method 在返回前调用 local-ref 批量释放 helper。
 对象/数组/字符串/异常 E2E 用于确认该清理逻辑不会破坏对象返回值、catch 分派或异常传播。
 字段/方法调用单测断言 generated C 含调用点级 `static jfieldID` / `static jmethodID`
 懒缓存；方法调用、接口调用、对象字段 E2E 覆盖缓存后语义。
 `StringConstantEmission` 断言重复 LDC 字符串复用同一个 `_mj2x_string_pool` offset，
-`CBackendE2E.StringLiterals` 覆盖 pool 物化后的运行时行为。
+`StackCBackendE2E.StringLiterals` 覆盖 pool 物化后的运行时行为。
 `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` 覆盖 `--generate-cmake` 输出
 `native.c`、`CMakeLists.txt`、`.gitignore` 和 README。
 
@@ -114,7 +114,7 @@ bootstrap + `MethodHandle.invokeWithArguments` 路径，包括 javac string conc
 `ExceptionFromNativeCallAndMonitor`（callee native 抛出后 caller catch、同步块 monitor）、
 `IntegratedSample`（算术/控制流/调用/对象/字段/数组/String 的综合样本）。
 
-**运行**：`xmake build mj2x-cli && xmake build mj2x_unittest && xmake run mj2x_unittest -- --gtest_filter=CBackendE2E.*`
+**运行**：`xmake build mj2x-cli && xmake build mj2x_unittest && xmake run mj2x_unittest -- --gtest_filter=StackCBackendE2E.*`
 
 ---
 
@@ -128,7 +128,7 @@ src/unittest/
 │   ├── io_test.cpp
 │   ├── input_loader_test.cpp
 │   ├── jar_io_test.cpp
-│   └── e2e_test.cpp                        — legacy CBackend E2E（移 reference 时标 legacy）
+│   └── e2e_test.cpp                        — legacy StackC E2E（移 reference 时标 legacy）
 ├── frontend/
 │   └── code_converter_test.cpp             — [L1] 栈式 MIR（已有，R1 补 indy/multianewarray）
 ├── mir/                                    — ★ 新增（R1/R4）
@@ -142,7 +142,7 @@ src/unittest/
 └── backend/
     ├── regc_test.cpp                       — ★ [L5] RegC（R2）
     └── reference/
-        └── c_backend_legacy_test.cpp       — legacy CBackend（从 c_backend_test.cpp 移入，标 legacy）
+        └── stackc_backend_legacy_test.cpp  — legacy StackC（仅历史计划；当前未使用）
 ```
 
 runtime 测试（R3）单独组织在 `runtime/test/`，由 `mj2x_runtime_test`
@@ -174,7 +174,7 @@ mn->instructions.add(new InsnNode(IADD));
 mn->instructions.add(new InsnNode(IRETURN));
 ```
 
-字符串/类型必须经共享 `testArena().intern()`（CBackend 测试曾因 bare `toRef` 指针与
+字符串/类型必须经共享 `testArena().intern()`（StackC 测试曾因 bare `toRef` 指针与
 libjbytecode Type 全局状态交互导致 flaky，已修）。
 
 ### 3.2 真实 class 文件
@@ -187,22 +187,22 @@ libjbytecode Type 全局状态交互导致 flaky，已修）。
 R3 起，受保护样本需在 c2j agent 下验证。样本与 expected trace surface 文档化，
 交 mjdbg 协作验证（见 ROADMAP §5 Shared Contracts）。
 
-### 3.4 CBackend protected sample fixtures
+### 3.4 StackC protected sample fixtures
 
 `mj2x/test_resource/protected_samples/cbackend/` 保存面向 mjdbg 的 Java 源样本；
-`CBackendProtectedSamples.GenerateMjdbgFixtures` 在测试运行时编译这些源文件，并通过
+`StackCBackendProtectedSamples.GenerateMjdbgFixtures` 在测试运行时编译这些源文件，并通过
 `mj2x-cli --emit-c` 生成 protected `.class` 与 C/JNI 源码。生成物一律写入
 `test/mj2x/protected_samples/cbackend/<SampleName>/`，同时生成 `TRACE_SURFACE.md`
 说明 mjdbg 应观察的 Java/native/JNI trace 面。
 
-设计说明见 `c_backend_protected_samples.md`。这些样本用于 trace 捕获、分组和弱点评估，
+设计说明见 `stackc_backend_protected_samples.md`。这些样本用于 trace 捕获、分组和弱点评估，
 不代表保护强度结论。
 
 ### 3.5 Backend README and MVP verification index
 
 后端支持矩阵和可发版验证入口集中在：
 
-- `c_backend_readme.md`：CBackend 支持特性、限制、CLI 用法、样本。
+- `stackc_backend_readme.md`：StackC 支持特性、限制、CLI 用法、样本。
 - `regc_backend_readme.md`：RegC 支持特性、限制、CLI 用法、样本。
 - `mvp_backend_verification.md`：每个 MVP 能力对应的单测、E2E 或 protected sample。
 
@@ -235,7 +235,7 @@ try/catch exception dispatch、integer div/rem trap 的 `_mj2x_regc_*` helper �
 
 `backend/regc_samples_test.cpp` 从 `mj2x/test_resource/protected_samples/regc/`
 编译 Java 样本，并生成 RegC helper-style C 到
-`test/mj2x/protected_samples/regc/<SampleName>/`。这些样本用于 mjdbg 对比 CBackend
+`test/mj2x/protected_samples/regc/<SampleName>/`。这些样本用于 mjdbg 对比 StackC
 stack-style C 与 RegC register/helper-style C 的 trace surface。设计说明见
 `regc_trace_samples.md`。
 
@@ -312,4 +312,4 @@ xmake build mj2x_runtime_test && xmake run mj2x_runtime_test
 
 全局：编译警告 0，CI 必过，RTTI 禁用（用 `typed::cast` 不用 `dynamic_cast`）。
 
-> 旧 v1 目标（≥80 单元 / ≥60% 覆盖，仅针对 CBackend）已被本按层目标取代。
+> 旧 v1 目标（≥80 单元 / ≥60% 覆盖，仅针对 StackC）已被本按层目标取代。

@@ -4,7 +4,7 @@
 
 RegCBackend is the native facade for the stackless RegC line.  It connects the
 shared mj2x backend interface to the newer SSA -> RegIR -> RegC pipeline so
-RegC can start replacing the old operand-stack-shaped CBackend surface for
+RegC can start replacing the old operand-stack-shaped StackC surface for
 methods that fit the register path.
 
 ## Pipeline Position

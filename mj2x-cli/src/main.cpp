@@ -1,5 +1,5 @@
 #include "mj2x/mj2x.hpp"
-#include "mj2x/backend/cbackend/c_backend.hpp"
+#include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/ldc_preprocessor.hpp"
@@ -25,7 +25,7 @@ static void printUsage() {
     printf("Usage: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]\n");
     printf("Options:\n");
     printf("  --emit-c <file>            Output C source to file\n");
-    printf("  --backend <cbackend|regc>  Select C emitter when --emit-c is used (default: cbackend)\n");
+    printf("  --backend <stackc|regc>    Select C emitter when --emit-c is used (default: stackc; cbackend is a legacy alias)\n");
     printf("  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
     printf("  --compile                  Compile emitted C into a native library beside --output\n");
     printf("  --c-compiler <name>        Override C compiler detection (msvc, gcc, clang)\n");
@@ -35,13 +35,13 @@ static void printUsage() {
 }
 
 enum class CEmitterBackend {
-    CBackend,
+    StackC,
     RegC,
 };
 
 static bool parseBackendName(const std::string& name, CEmitterBackend& backend) {
-    if (name == "cbackend" || name == "c") {
-        backend = CEmitterBackend::CBackend;
+    if (name == "stackc" || name == "cbackend" || name == "c") {
+        backend = CEmitterBackend::StackC;
         return true;
     }
     if (name == "regc") {
@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
     std::string cOutputPath;
     std::string cmakeProjectDir;
     std::string nativeAnnotation;
-    CEmitterBackend cBackendKind = CEmitterBackend::CBackend;
+    CEmitterBackend cBackendKind = CEmitterBackend::StackC;
     mj2x::cli::CCompilerKind cCompilerKind = mj2x::cli::CCompilerKind::Auto;
     bool backendSelected = false;
     bool compileNative = false;
@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
         else if (arg == "--backend" && i + 1 < argc) {
             backendSelected = true;
             if (!parseBackendName(argv[++i], cBackendKind)) {
-                fprintf(stderr, "Unknown --backend value. Expected cbackend or regc.\n");
+                fprintf(stderr, "Unknown --backend value. Expected stackc or regc. Legacy alias cbackend is also accepted.\n");
                 printUsage();
                 return 1;
             }
@@ -294,11 +294,11 @@ int main(int argc, char** argv) {
     config.outputPath = outputPath;
     config.dumpMIR = dumpMIR;
 
-    const bool cBackendJarOutput =
-        cBackendKind == CEmitterBackend::CBackend &&
+    const bool stackCBackendJarOutput =
+        cBackendKind == CEmitterBackend::StackC &&
         hasExtension(inputPath, ".jar") &&
         hasExtension(outputPath, ".jar");
-    const bool jarNativeLoaderEnabled = compileNative && cBackendJarOutput;
+    const bool jarNativeLoaderEnabled = compileNative && stackCBackendJarOutput;
     std::filesystem::path nativeLibraryPath =
         mj2x::cli::nativeLibraryPathForOutput(outputPath);
     const std::string nativeResourceEntry =
@@ -314,14 +314,14 @@ int main(int argc, char** argv) {
             regcBackend->setOutputPath(cOutputPath);
             pipeline.registerBackend(std::move(regcBackend));
         } else {
-            auto cBackend = std::make_unique<mj2x::CBackend>();
-            cBackend->setOutputPath(cOutputPath);
+            auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
+            stackCBackend->setOutputPath(cOutputPath);
             if (jarNativeLoaderEnabled) {
-                cBackend->setJarNativeLoaderResourcePath(
+                stackCBackend->setJarNativeLoaderResourcePath(
                     nativeResourcePath,
                     nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
             }
-            pipeline.registerBackend(std::move(cBackend));
+            pipeline.registerBackend(std::move(stackCBackend));
         }
     }
 
@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
         pipeline.registerPreprocessor(
             std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
-    if (!cOutputPath.empty() && cBackendKind == CEmitterBackend::CBackend) {
+    if (!cOutputPath.empty() && cBackendKind == CEmitterBackend::StackC) {
         pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
     }
     if (jarNativeLoaderEnabled) {

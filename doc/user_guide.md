@@ -41,8 +41,8 @@ JAR 内多个 class 会被逐个处理,非 class 资源原样保留,entry 顺序
 ### 2.3 选择后端
 
 ```bash
-# CBackend(默认,广覆盖正确性)
-mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --backend cbackend
+# StackC(默认,广覆盖正确性; cbackend 仍作为旧别名兼容)
+mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --backend stackc
 
 # RegC(保护导向,无栈)
 mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --backend regc
@@ -102,7 +102,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `-i, --input <.class/.jar>` | 输入文件 |
 | `-o, --output <.class/.jar>` | 输出文件(方法被标记为 native) |
 | `--emit-c <file>` | 输出的 C 源码路径 |
-| `--backend <cbackend\|regc>` | 选择后端(默认 `cbackend`) |
+| `--backend <stackc\|regc>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名) |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c` 后自动编译 native library |
 | `--c-compiler <msvc\|gcc\|clang>` | 覆盖自动探测到的 C 编译器 |
@@ -187,12 +187,12 @@ java -Djava.library.path=. Hello
 
 | 场景 | 推荐后端 |
 |---|---|
-| 需要最大正确性覆盖、不关心抗分析 | CBackend |
+| 需要最大正确性覆盖、不关心抗分析 | StackC |
 | 保护导向,需要无栈输出抗 c2j | RegC |
 | 需要除零 trap 符合 JVM 语义 | RegC + R3 runtime |
 
 后端的详细支持矩阵和限制:
-- CBackend:`doc/c_backend_readme.md`
+- StackC:`doc/stackc_backend_readme.md`
 - RegC:`doc/regc_backend_readme.md`
 
 ---
@@ -222,8 +222,8 @@ mj2x 会优先使用当前 shell 的 MSVC 环境;如果 `INCLUDE` 尚未配置,�
 **Q: JAR 改写后签名失效?**
 当前 MVP 不处理签名。`META-INF/*.SF` / `*.RSA` / `*.DSA` / `*.EC` 会触发 fail-closed。需要先去签名再处理。
 
-**Q: CBackend 遇到 `invokedynamic` 怎么处理?**
-CBackend 会通过 runtime MethodHandle 桥执行 javac 生成的 string concat / lambda。RegC 仍会对未展开的 `invokedynamic` fail-closed。
+**Q: StackC 遇到 `invokedynamic` 怎么处理?**
+StackC 会通过 runtime MethodHandle 桥执行 javac 生成的 string concat / lambda。RegC 仍会对未展开的 `invokedynamic` fail-closed。
 
 **Q: RegC 输出里有 `cstack` / `sp`?**
 不应该有。如果有,是 bug —— RegC 的结构断言禁止 stack-machine anchor。

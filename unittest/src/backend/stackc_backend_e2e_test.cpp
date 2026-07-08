@@ -1,6 +1,6 @@
-// CBackend 真 E2E harness：Java 源 → javac → mj2x → .c → cl → java 调用对比。
+// StackCBackend 真 E2E harness：Java 源 → javac → mj2x → .c → cl → java 调用对比。
 //
-// 与 c_backend_test.cpp 的子串匹配不同，这里把生成的 C 真编译成 DLL、在 JVM 里调用，
+// 与 stackc_backend_test.cpp 的子串匹配不同，这里把生成的 C 真编译成 DLL、在 JVM 里调用，
 // 比对结果与原 Java 行为是否一致。这是 revival 文档定义的"端到端闭环"判据。
 //
 // 工具链探测放在 fixture SetUp：javac/java/cl/mj2x-cli 任一缺失即 GTEST_SKIP，
@@ -163,7 +163,7 @@ std::string q(const fs::path& p) {
 }
 
 // ---- E2E 框架 ----
-class CBackendE2E : public ::testing::Test {
+class StackCBackendE2E : public ::testing::Test {
 protected:
     static Toolchain tc_;
 
@@ -342,13 +342,13 @@ private:
     }
 };
 
-Toolchain CBackendE2E::tc_;
+Toolchain StackCBackendE2E::tc_;
 
 } // namespace
 
 // ===== Wave 1 E2E 用例：整数算术与局部变量 =====
 
-TEST_F(CBackendE2E, IntAdd) {
+TEST_F(StackCBackendE2E, IntAdd) {
     runCase("IntAdd",
         "public class IntAdd {\n"
         "  public static int add(int a, int b) { return a + b; }\n"
@@ -361,7 +361,7 @@ TEST_F(CBackendE2E, IntAdd) {
         });
 }
 
-TEST_F(CBackendE2E, IntMulSubNeg) {
+TEST_F(StackCBackendE2E, IntMulSubNeg) {
     runCase("IntArith",
         "public class IntArith {\n"
         "  public static int mul(int a, int b) { return a * b; }\n"
@@ -378,7 +378,7 @@ TEST_F(CBackendE2E, IntMulSubNeg) {
         });
 }
 
-TEST_F(CBackendE2E, IntIinc) {
+TEST_F(StackCBackendE2E, IntIinc) {
     // iinc + 局部变量自增
     runCase("IntIinc",
         "public class IntIinc {\n"
@@ -395,7 +395,7 @@ TEST_F(CBackendE2E, IntIinc) {
         });
 }
 
-TEST_F(CBackendE2E, IntBitwiseShift) {
+TEST_F(StackCBackendE2E, IntBitwiseShift) {
     runCase("IntBits",
         "public class IntBits {\n"
         "  public static int and(int a, int b) { return a & b; }\n"
@@ -415,7 +415,7 @@ TEST_F(CBackendE2E, IntBitwiseShift) {
         });
 }
 
-TEST_F(CBackendE2E, IntControlFlow) {
+TEST_F(StackCBackendE2E, IntControlFlow) {
     // if/else + 比较分支（提前验 Wave 3 的 if/goto 基础）
     runCase("IntCmp",
         "public class IntCmp {\n"
@@ -437,7 +437,7 @@ TEST_F(CBackendE2E, IntControlFlow) {
 
 // ===== Wave 2 E2E 用例：long/float/double 算术与类型转换 =====
 
-TEST_F(CBackendE2E, LongArith) {
+TEST_F(StackCBackendE2E, LongArith) {
     runCase("LongArith",
         "public class LongArith {\n"
         "  public static long add(long a, long b) { return a + b; }\n"
@@ -457,7 +457,7 @@ TEST_F(CBackendE2E, LongArith) {
         });
 }
 
-TEST_F(CBackendE2E, IntegerDivisionTrap) {
+TEST_F(StackCBackendE2E, IntegerDivisionTrap) {
     runCase("IntegerDivisionTrap",
         "public class IntegerDivisionTrap {\n"
         "  public static int idiv(int a, int b) { return a / b; }\n"
@@ -486,7 +486,7 @@ TEST_F(CBackendE2E, IntegerDivisionTrap) {
         });
 }
 
-TEST_F(CBackendE2E, FloatDouble) {
+TEST_F(StackCBackendE2E, FloatDouble) {
     runCase("FloatDouble",
         "public class FloatDouble {\n"
         "  public static float fadd(float a, float b) { return a + b; }\n"
@@ -507,7 +507,7 @@ TEST_F(CBackendE2E, FloatDouble) {
         });
 }
 
-TEST_F(CBackendE2E, Conversions) {
+TEST_F(StackCBackendE2E, Conversions) {
     runCase("Conversions",
         "public class Conversions {\n"
         "  public static long i2l(int a) { return (long)a; }\n"
@@ -533,7 +533,7 @@ TEST_F(CBackendE2E, Conversions) {
 
 // ===== Wave 3 E2E 用例：控制流完整性 =====
 
-TEST_F(CBackendE2E, DenseSwitch) {
+TEST_F(StackCBackendE2E, DenseSwitch) {
     runCase("DenseSwitch",
         "public class DenseSwitch {\n"
         "  public static int classify(int x) {\n"
@@ -554,7 +554,7 @@ TEST_F(CBackendE2E, DenseSwitch) {
         });
 }
 
-TEST_F(CBackendE2E, SparseSwitch) {
+TEST_F(StackCBackendE2E, SparseSwitch) {
     runCase("SparseSwitch",
         "public class SparseSwitch {\n"
         "  public static int pick(int x) {\n"
@@ -574,7 +574,7 @@ TEST_F(CBackendE2E, SparseSwitch) {
         });
 }
 
-TEST_F(CBackendE2E, NestedLoopsAndContinue) {
+TEST_F(StackCBackendE2E, NestedLoopsAndContinue) {
     runCase("NestedLoops",
         "public class NestedLoops {\n"
         "  public static int nested(int n) {\n"
@@ -603,7 +603,7 @@ TEST_F(CBackendE2E, NestedLoopsAndContinue) {
         });
 }
 
-TEST_F(CBackendE2E, ReferenceBranches) {
+TEST_F(StackCBackendE2E, ReferenceBranches) {
     runCase("ReferenceBranches",
         "public class ReferenceBranches {\n"
         "  public static int isNullConst() { Object o = null; return o == null ? 1 : 0; }\n"
@@ -621,7 +621,7 @@ TEST_F(CBackendE2E, ReferenceBranches) {
 
 // ===== Wave 4 E2E 用例：方法调用、构造、接口与 String LDC =====
 
-TEST_F(CBackendE2E, MethodCalls) {
+TEST_F(StackCBackendE2E, MethodCalls) {
     runCase("MethodCalls",
         "public class MethodCalls {\n"
         "  public MethodCalls() {}\n"
@@ -639,7 +639,7 @@ TEST_F(CBackendE2E, MethodCalls) {
         });
 }
 
-TEST_F(CBackendE2E, RecursionCalls) {
+TEST_F(StackCBackendE2E, RecursionCalls) {
     runCase("RecursionCalls",
         "public class RecursionCalls {\n"
         "  public static int fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }\n"
@@ -652,7 +652,7 @@ TEST_F(CBackendE2E, RecursionCalls) {
         });
 }
 
-TEST_F(CBackendE2E, StringLiterals) {
+TEST_F(StackCBackendE2E, StringLiterals) {
     runCase("StringLiterals",
         "public class StringLiterals {\n"
         "  public static String literal() { return \"hello jni\"; }\n"
@@ -666,7 +666,7 @@ TEST_F(CBackendE2E, StringLiterals) {
         });
 }
 
-TEST_F(CBackendE2E, InterfaceCalls) {
+TEST_F(StackCBackendE2E, InterfaceCalls) {
     runCase("InterfaceCalls",
         "public class InterfaceCalls {\n"
         "  public interface Op { int apply(int x); }\n"
@@ -682,7 +682,7 @@ TEST_F(CBackendE2E, InterfaceCalls) {
         });
 }
 
-TEST_F(CBackendE2E, InterfaceDefaultMethodProxy) {
+TEST_F(StackCBackendE2E, InterfaceDefaultMethodProxy) {
     fs::path dir = caseDir("DefaultIface");
     fs::create_directories(dir);
 
@@ -739,7 +739,7 @@ TEST_F(CBackendE2E, InterfaceDefaultMethodProxy) {
     EXPECT_NE(actual.out.find("inc=42"), std::string::npos) << actual.out;
 }
 
-TEST_F(CBackendE2E, InvokeDynamicStringConcat) {
+TEST_F(StackCBackendE2E, InvokeDynamicStringConcat) {
     runCase("InvokeDynamicStringConcat",
         "public class InvokeDynamicStringConcat {\n"
         "  public static String join(int a, long b, String s) {\n"
@@ -754,7 +754,7 @@ TEST_F(CBackendE2E, InvokeDynamicStringConcat) {
         });
 }
 
-TEST_F(CBackendE2E, InvokeDynamicLambda) {
+TEST_F(StackCBackendE2E, InvokeDynamicLambda) {
     runCase("InvokeDynamicLambda",
         "import java.util.function.IntUnaryOperator;\n"
         "public class InvokeDynamicLambda {\n"
@@ -775,9 +775,9 @@ TEST_F(CBackendE2E, InvokeDynamicLambda) {
         });
 }
 
-// ===== Final CBackend E2E 用例：对象/字段/数组 =====
+// ===== Final StackCBackend E2E 用例：对象/字段/数组 =====
 
-TEST_F(CBackendE2E, ObjectFieldsAndTypeChecks) {
+TEST_F(StackCBackendE2E, ObjectFieldsAndTypeChecks) {
     runCase("ObjectFields",
         "public class ObjectFields {\n"
         "  int value;\n"
@@ -804,7 +804,7 @@ TEST_F(CBackendE2E, ObjectFieldsAndTypeChecks) {
         });
 }
 
-TEST_F(CBackendE2E, ExplicitNullPointerTraps) {
+TEST_F(StackCBackendE2E, ExplicitNullPointerTraps) {
     runCase("NullTraps",
         "public class NullTraps {\n"
         "  int value;\n"
@@ -826,7 +826,7 @@ TEST_F(CBackendE2E, ExplicitNullPointerTraps) {
         });
 }
 
-TEST_F(CBackendE2E, PrimitiveArrays) {
+TEST_F(StackCBackendE2E, PrimitiveArrays) {
     runCase("PrimitiveArrays",
         "public class PrimitiveArrays {\n"
         "  public static int intSum(int n) {\n"
@@ -850,7 +850,7 @@ TEST_F(CBackendE2E, PrimitiveArrays) {
         });
 }
 
-TEST_F(CBackendE2E, ObjectArrays) {
+TEST_F(StackCBackendE2E, ObjectArrays) {
     runCase("ObjectArrays",
         "public class ObjectArrays {\n"
         "  public static int stringArray() {\n"
@@ -870,7 +870,7 @@ TEST_F(CBackendE2E, ObjectArrays) {
         });
 }
 
-TEST_F(CBackendE2E, MultiDimArrays) {
+TEST_F(StackCBackendE2E, MultiDimArrays) {
     runCase("MultiDimArrays",
         "public class MultiDimArrays {\n"
         "  public static int matrix() {\n"
@@ -890,7 +890,7 @@ TEST_F(CBackendE2E, MultiDimArrays) {
         });
 }
 
-TEST_F(CBackendE2E, ThrowPropagation) {
+TEST_F(StackCBackendE2E, ThrowPropagation) {
     runCase("ThrowPropagation",
         "public class ThrowPropagation {\n"
         "  public static int raise(int x) {\n"
@@ -904,7 +904,7 @@ TEST_F(CBackendE2E, ThrowPropagation) {
         });
 }
 
-TEST_F(CBackendE2E, TryCatchExceptions) {
+TEST_F(StackCBackendE2E, TryCatchExceptions) {
     runCase("TryCatchExceptions",
         "public class TryCatchExceptions {\n"
         "  public static int catchOwn(int x) {\n"
@@ -930,7 +930,7 @@ TEST_F(CBackendE2E, TryCatchExceptions) {
         });
 }
 
-TEST_F(CBackendE2E, MultiCatchAndFinally) {
+TEST_F(StackCBackendE2E, MultiCatchAndFinally) {
     runCase("MultiCatchAndFinally",
         "public class MultiCatchAndFinally {\n"
         "  public static int multi(int x) {\n"
@@ -966,7 +966,7 @@ TEST_F(CBackendE2E, MultiCatchAndFinally) {
         });
 }
 
-TEST_F(CBackendE2E, ExceptionFromNativeCallAndMonitor) {
+TEST_F(StackCBackendE2E, ExceptionFromNativeCallAndMonitor) {
     runCase("ExceptionFromNativeCallAndMonitor",
         "public class ExceptionFromNativeCallAndMonitor {\n"
         "  public static void fail() { throw new IllegalArgumentException(); }\n"
@@ -985,7 +985,7 @@ TEST_F(CBackendE2E, ExceptionFromNativeCallAndMonitor) {
         });
 }
 
-TEST_F(CBackendE2E, IntegratedSample) {
+TEST_F(StackCBackendE2E, IntegratedSample) {
     runCase("IntegratedSample",
         "public class IntegratedSample {\n"
         "  int seed;\n"

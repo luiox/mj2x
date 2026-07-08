@@ -9,7 +9,7 @@
 
 | 后端 | 定位 | 输出风格 |
 |---|---|---|
-| **CBackend** | 广覆盖正确性基线 | `union jvalue stack[]` + `sp` 操作(stack-style) |
+| **StackC** | 广覆盖正确性基线 | `union jvalue stack[]` + `sp` 操作(stack-style) |
 | **RegC** | 保护导向,抗 c2j 分析 | 虚拟寄存器 + block label,无栈锚点 |
 
 详细支持矩阵和限制见 [doc_ai/capabilities.md](doc_ai/capabilities.md)。
@@ -20,7 +20,7 @@
 - `mj2x-core/src/mj2x/core/` — Pipeline / CompilerIndex
 - `mj2x-core/src/mj2x/io/` — InputLoader / OutputWriter(`.class` / `.jar`)
 - `mj2x-core/src/mj2x/frontend/` — MIR / Block / CodeConverter / MethodStack
-- `mj2x-core/src/mj2x/backend/` — CBackend / RegCBackend
+- `mj2x-core/src/mj2x/backend/` — StackCBackend / RegCBackend
 - `mj2x-core/src/mj2x/preprocessor/` — 可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll / NativeAnnotation)
 - `mj2x-annotations/` — 用户可引入的 `@mj2x.Native` 注解源码
 - `mj2x-runtime/` — RegC R3 runtime(crypto / kernel / stringpool / antidebug / antijvmti)
@@ -40,5 +40,5 @@ xmake build mj2x-cli
 - **[doc_ai/capabilities.md](doc_ai/capabilities.md)** — 已实现功能清单 + MVP 边界
 - [doc/roadmap.md](doc/roadmap.md) — R0-R5 路线图
 - [doc/architecture_redesign.md](doc/architecture_redesign.md) — 架构权威设计
-- [doc/c_backend_readme.md](doc/c_backend_readme.md) / [doc/regc_backend_readme.md](doc/regc_backend_readme.md) — 各后端支持矩阵
+- [doc/stackc_backend_readme.md](doc/stackc_backend_readme.md) / [doc/regc_backend_readme.md](doc/regc_backend_readme.md) — 各后端支持矩阵
 - [doc/mvp_release_scope.md](doc/mvp_release_scope.md) — MVP 功能冻结范围

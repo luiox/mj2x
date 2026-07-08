@@ -15,26 +15,26 @@
 | signed JAR metadata fail-closed | 已覆盖 | `IOTest.JarInputLoaderRejectsSignedJarMetadata`、`CliTest.BadJarInputsFailClosed` |
 | 空 JAR / 无 root class JAR fail-closed | 已覆盖 | `IOTest.JarInputLoaderRejectsJarWithoutRootClasses`、`CliTest.BadJarInputsFailClosed` |
 | `.jar` pipeline native injection | 已覆盖 | `PipelineTest.JarPipelineMarksClassesNativeAndPreservesResources` |
-| CLI CBackend `in.jar -> out.jar + out.c` | 已覆盖 | `CliTest.JarInputEmitsJarAndCSource` |
+| CLI StackC `in.jar -> out.jar + out.c` | 已覆盖 | `CliTest.JarInputEmitsJarAndCSource` |
 | CLI RegC `in.jar -> out.jar + out.c` | 已覆盖 | `CliTest.RegCJarInputEmitsJarAndRegCSource` |
 | CLI RegC backend flag | 已覆盖 | `CliTest.RegCBackendFlagEmitsRegCSource` |
 | CLI 负向参数 | 已覆盖 | `CliTest.NegativeArgumentsFail` |
 
-## CBackend 验证索引
+## StackC 验证索引
 
 | 能力组 | 验证 |
 |--------|------|
-| i32/long/float/double/转换 | `CBackendE2E.IntAdd`、`IntMulSubNeg`、`IntIinc`、`IntBitwiseShift`、`LongArith`、`FloatDouble`、`Conversions` |
-| int/long div/rem trap | `CBackendE2E.IntegerDivisionTrap` |
-| 控制流 | `CBackendE2E.IntControlFlow`、`DenseSwitch`、`SparseSwitch`、`NestedLoopsAndContinue`、`ReferenceBranches` |
-| 调用与字符串 | `CBackendE2E.MethodCalls`、`RecursionCalls`、`StringLiterals`、`InterfaceCalls` |
-| CBackend invokedynamic | `CBackendTest.InvokeDynamicEmitsMethodHandleBridge`、`CBackendE2E.InvokeDynamicStringConcat`、`InvokeDynamicLambda` |
-| 对象/字段/类型检查 | `CBackendE2E.ObjectFieldsAndTypeChecks` |
-| 数组 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
-| 异常与 monitor | `CBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
-| 综合样本 | `CBackendE2E.IntegratedSample` |
-| 结构生成与 injection | `CBackendTest.*` |
-| mjdbg 样本 | `CBackendProtectedSamples.GenerateMjdbgFixtures`；Java sources 在 `test_resource/protected_samples/cbackend/` |
+| i32/long/float/double/转换 | `StackCBackendE2E.IntAdd`、`IntMulSubNeg`、`IntIinc`、`IntBitwiseShift`、`LongArith`、`FloatDouble`、`Conversions` |
+| int/long div/rem trap | `StackCBackendE2E.IntegerDivisionTrap` |
+| 控制流 | `StackCBackendE2E.IntControlFlow`、`DenseSwitch`、`SparseSwitch`、`NestedLoopsAndContinue`、`ReferenceBranches` |
+| 调用与字符串 | `StackCBackendE2E.MethodCalls`、`RecursionCalls`、`StringLiterals`、`InterfaceCalls` |
+| StackC invokedynamic | `StackCBackendTest.InvokeDynamicEmitsMethodHandleBridge`、`StackCBackendE2E.InvokeDynamicStringConcat`、`InvokeDynamicLambda` |
+| 对象/字段/类型检查 | `StackCBackendE2E.ObjectFieldsAndTypeChecks` |
+| 数组 | `StackCBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
+| 异常与 monitor | `StackCBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
+| 综合样本 | `StackCBackendE2E.IntegratedSample` |
+| 结构生成与 injection | `StackCBackendTest.*` |
+| mjdbg 样本 | `StackCBackendProtectedSamples.GenerateMjdbgFixtures`；Java sources 在 `test_resource/protected_samples/cbackend/` |
 
 ## RegC 验证索引
 
@@ -61,7 +61,7 @@
 
 ## 样本清单
 
-CBackend committed Java samples：
+StackC committed Java samples（legacy Java 文件名保留以维持 fixture 契约）：
 
 - `CBackendTinySample.java`
 - `CBackendObjectArraySample.java`
@@ -87,7 +87,7 @@ JAR MVP committed fixtures：
 ## MVP 剩余风险
 
 - signed JAR metadata 当前已 fail-closed；签名剥离/重签策略仍留到后续产品化阶段。
-- CBackend 是广覆盖正确性后端，不是防 c2j 主力。
+- StackC 是广覆盖正确性后端，不是防 c2j 主力。
 - RegC 的保护强度需要 mjdbg/c2j 反馈闭环确认；当前只能声明结构上已脱离 stack-style anchor。
 - JAR 级产品体验仍是 MVP writer，不做签名重建和压缩策略保真；核心读写、manifest/resource
   passthrough、multi-release passthrough 和负向边界已有自动化覆盖。

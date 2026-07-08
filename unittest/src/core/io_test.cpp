@@ -9,7 +9,7 @@
 #include "zip/checksum.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "test_helper.hpp"
-#include "mj2x/backend/cbackend/c_backend.hpp"
+#include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
@@ -350,7 +350,7 @@ TEST(PipelineTest, JarPipelineMarksClassesNativeAndPreservesResources) {
     cfg.inputPath = inPath;
     cfg.outputPath = outPath;
     Pipeline pipeline(std::move(cfg));
-    auto backend = std::make_unique<CBackend>();
+    auto backend = std::make_unique<StackCBackend>();
     backend->setOutputPath(cPath);
     pipeline.registerBackend(std::move(backend));
     pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());

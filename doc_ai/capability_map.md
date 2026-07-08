@@ -9,7 +9,7 @@
 
 | 能力域 | 权威来源 | 说明 |
 |---|---|---|
-| 字节码转 native（RegC / CBackend） | `mj2x/` 各 backend | 栈式 MIR → SSA → 寄存器 IR → C/native |
+| 字节码转 native（RegC / StackC） | `mj2x/` 各 backend | 栈式 MIR → SSA → 寄存器 IR → C/native |
 | VMC4 自研 VM | `mj2x/vm/`（可选支线，R5+） | opcode 自变异 + 资源切片 |
 | native 运行时 | `mj2x/runtime/` | crypto / antidebug / antijvmti / stringpool |
 | 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` | 注解筛选、C 编译器探测、JNI include 推导 |

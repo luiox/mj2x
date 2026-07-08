@@ -63,7 +63,7 @@ Gen 8-9 解决"深度优化与运行时可靠性"。每一代都以前一代为�
 - 每条 `getfield`/`invoke*`/`*aload` 都翻译成一次对应 JNI 调用
 - 每个 JNI 调用现场查找 class/method/field ID
 
-**现状**: ✅ 已落地（CBackend，25 个 E2E 覆盖）。定位是"广覆盖正确性基线"，**不承担对抗强度**
+**现状**: ✅ 已落地（StackC，25 个 E2E 覆盖）。定位是"广覆盖正确性基线"，**不承担对抗强度**
 （同时命中 c2j 的两个锚点：JNI vtable offset + jvalue 索引模式，系统性可还原 —— 这是 RegC 主路线要消除的）。
 
 **为什么是第一代**: 没有正确性基线，后续所有优化都无法验证是否保持语义。这是所有后端的"对照基准"。
@@ -79,7 +79,7 @@ Gen 8-9 解决"深度优化与运行时可靠性"。每一代都以前一代为�
 - 缓存生命周期绑定到 JNIenv 或类卸载事件
 - 静态字段/方法的 ID 可跨调用复用
 
-**现状**: ⚠️ 未落地。CBackend 当前每次 `GetMethodID`/`GetFieldID`（capabilities.md 已记录此限制）。
+**现状**: ⚠️ 未落地。StackC 当前每次 `GetMethodID`/`GetFieldID`（capabilities.md 已记录此限制）。
 RegC 的 `_mj2x_regc_*` helper 同样未缓存。
 
 **为什么在 Gen 1 之后**: 必须先有正确的直译路径，才能在不改语义的前提下把"查找"和"使用"分离、
@@ -225,7 +225,7 @@ Gen 9 再统一收口性能与生命周期。提前做内存池会因为对象�
 
 | 代际 | 对应 roadmap 波次 | 备注 |
 |---|---|---|
-| Gen 1 直译 | 已完成（v0.1 → 复活） | CBackend 基线 |
+| Gen 1 直译 | 已完成（v0.1 → 复活） | StackC 基线 |
 | Gen 2 缓存 | 未排期 | 待提上 |
 | Gen 3 基元 intrinsic | R2-R3（部分已交付） | Math/parseInt 已通，包装类待 Gen 5 |
 | Gen 4 字符串 intrinsic | R3（部分已交付） | LDC/parseInt 已通 |

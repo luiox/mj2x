@@ -1,4 +1,4 @@
-// CBackend protected sample generator for mjdbg development.
+// StackCBackend protected sample generator for mjdbg development.
 //
 // The committed Java sources live under test_resource/protected_samples/cbackend.
 // This test compiles them and runs mj2x-cli so mjdbg can consume deterministic
@@ -143,14 +143,14 @@ void writeTraceNote(const fs::path& outDir, const SampleSpec& sample) {
     out << "Focus: " << sample.traceFocus << "\n\n";
     out << "Expected mjdbg use:\n\n";
     out << "- Load or attach to a JVM that runs the protected class.\n";
-    out << "- Confirm the selected methods are native after CBackend processing.\n";
+    out << "- Confirm the selected methods are native after StackCBackend processing.\n";
     out << "- Observe the `<clinit>` call into `mj2x-cloader` and the native `RegisterNatives` dispatch table; protected method bodies remain `static __mj2x_c_*` functions rather than per-method or per-class `Java_*` exports.\n";
     out << "- Capture Java MethodEntry/MethodExit around the public entry methods.\n";
-    out << "- Capture native/JNI activity inside the generated CBackend implementation.\n";
+    out << "- Capture native/JNI activity inside the generated StackCBackend implementation.\n";
     out << "- Use observations to draft weakness reports for mj2x hardening.\n";
 }
 
-class CBackendProtectedSamples : public ::testing::Test {
+class StackCBackendProtectedSamples : public ::testing::Test {
 protected:
     static Toolchain tc_;
 
@@ -217,11 +217,11 @@ protected:
     }
 };
 
-Toolchain CBackendProtectedSamples::tc_;
+Toolchain StackCBackendProtectedSamples::tc_;
 
 } // namespace
 
-TEST_F(CBackendProtectedSamples, GenerateMjdbgFixtures) {
+TEST_F(StackCBackendProtectedSamples, GenerateMjdbgFixtures) {
     const std::vector<SampleSpec> samples = {
         {
             "CBackendTinySample",

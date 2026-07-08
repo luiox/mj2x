@@ -2,14 +2,14 @@
 
 > 2026-07-06 freeze decision: this document is the authority for the mj2x 0.1
 > internal MVP release scope.  It supersedes the historical `mvp_plan.md`,
-> which described the first single-class CBackend prototype.
+> which described the first single-class StackC prototype.
 
 ## Release Goal
 
 The MVP proves that mj2x has a usable native-protection pipeline, not that the
 protection is already hardened against mjdbg/c2j.  The release is acceptable
 when a developer can feed ordinary `.class` or `.jar` inputs through the CLI,
-choose CBackend or RegC, inspect the emitted C, and validate the result with the
+choose StackC or RegC, inspect the emitted C, and validate the result with the
 documented automated tests and protected samples.
 
 ## Frozen Functional Scope
@@ -22,19 +22,19 @@ documented automated tests and protected samples.
 - JAR class entries are rewritten from the mutable compiler index after native
   method injection.
 - CLI supports both backend modes:
-  - `--backend cbackend`
+  - `--backend stackc`
   - `--backend regc`
 
-### CBackend
+### StackC
 
-CBackend is frozen as the broad correctness backend:
+StackC is frozen as the broad correctness backend:
 
 - L1 stack-MIR to JNI C.
 - Arithmetic, conversions, control flow, switches, calls, objects, fields,
-  arrays, exceptions, and monitor paths already covered by CBackend E2E.
-- CBackend protected samples are part of the MVP handoff to mjdbg.
+  arrays, exceptions, and monitor paths already covered by StackC E2E.
+- StackC protected samples are part of the MVP handoff to mjdbg.
 
-CBackend is not the protection-strength claim for this MVP.  Its stack-shaped
+StackC is not the protection-strength claim for this MVP.  Its stack-shaped
 `union jvalue` / `sp` output remains an accepted limitation.
 
 ### RegC
@@ -74,7 +74,7 @@ inside the frozen scope without adding new backend features:
   backend selection, unreadable input, empty JAR, and no-class JAR.
 - Unsupported bytecode boundary tests: JSR/RET and unsupported RegC lowering
   must fail closed or leave the method unmodified rather than silently
-  generating wrong native code. CBackend `invokedynamic` now has a runtime
+  generating wrong native code. StackC `invokedynamic` now has a runtime
   MethodHandle bridge and is covered by E2E tests.
 - Multi-release JAR tests: `META-INF/versions/*.class` entries stay passthrough
   for the MVP and must be documented.
@@ -92,7 +92,7 @@ The following items are postponed until after the MVP release:
 - Signed-JAR re-signing or signature-stripping policy.
 - RegC `invokedynamic`, lambda, method-handle, and string-concat lowering.
 - JNI ID cache optimization.
-- CBackend JVM-accurate integer div/rem trap semantics.
+- StackC JVM-accurate integer div/rem trap semantics.
 - Moving all RegC object/field/array/call helpers behind the R3 runtime ABI.
 - Claims that mjdbg/c2j recovery is harder before red-team feedback confirms it.
 - Annotation/config-driven fine-grained method selection as a product feature.
@@ -113,7 +113,7 @@ git diff --check HEAD
 
 The PR must also link the backend support matrix and verification index:
 
-- `c_backend_readme.md`
+- `stackc_backend_readme.md`
 - `regc_backend_readme.md`
 - `mvp_backend_verification.md`
 
@@ -123,6 +123,6 @@ The PR must also link the backend support matrix and verification index:
   replacement, multi-release class passthrough, and signed metadata fail-closed,
   but no signature-stripping or re-signing policy.
 - RegC is a protection-oriented preview, not full bytecode coverage.
-- CBackend is broad and executable but intentionally stack-shaped.
+- StackC is broad and executable but intentionally stack-shaped.
 - Runtime anti-debug and anti-JVMTI modules have unit coverage but still need
   mjdbg/c2j live feedback before stronger claims.

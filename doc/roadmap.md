@@ -12,10 +12,10 @@
 > 上推进极快（1.2.2→1.3.0 两周 3 个 release），mj2x 选择差异化战略——用翻译管线 +
 > intrinsic + 整类下沉来拉开差距。
 >
-> **v2.1（2026-07-05 C backend 复活）**：撤销 ADR-1，CBackend 作为"易实现、广覆盖"通用后端
+> **v2.1（2026-07-05 StackC 复活）**：撤销 ADR-1，StackC 作为"易实现、广覆盖"通用后端
 > 与 RegC 并行。复活决策与逐波覆盖路线见 `cbackend_revival_and_waves.md`。
 > **v2（2026-06-24 架构重构后）**：B0-B3 波次被 R0-R5 替换。
-> 重构依据见 `architecture_redesign.md`。v1 的 CBackend 主线已作废（归档 reference）。
+> 重构依据见 `architecture_redesign.md`。v1 的 CBackend 主线曾作废（归档 reference），现已作为 StackC 复活。
 
 ---
 
@@ -69,7 +69,7 @@ mj2x 是 morpher attack/defense loop 的蓝队半环。其输出最终必须由 
 
 - c2j-native-deobfuscator 的攻击理论依赖两个锚点：JNI vtable offset + jvalue 索引模式
   （`cstack[N].i` / `cstrings[N]` / `cclasses[N]`）。
-- 旧 CBackend 同时命中两锚点 → 系统性可还原 → 继续修补意义不大（ADR-1 归档）。
+- 旧 CBackend（现 StackC）同时命中两锚点 → 系统性可还原 → 继续修补意义不大（ADR-1 归档）。
 - 新主路线：通过 L2 SSA + L3 寄存器化消除锚点 2，L5 RegC + RT 消除锚点 1。
 - VMC4 自研 VM 从主线降级为可选支线（ADR-3）。
 
@@ -103,12 +103,12 @@ mj2x 是 morpher attack/defense loop 的蓝队半环。其输出最终必须由 
 - 排在 R5+ 之后，RegC + RT 闭环后据 mjdbg 攻击反馈决定是否启动
 - 设计见 `native_vm_roadmap.md`（已降级）
 
-### CBackend（复活通用后端，2026-07-05 起）
+### StackC（复活通用后端，2026-07-05 起）
 
-- **撤销 ADR-1**：从 `backend/reference/` 移回 `backend/`，pipeline 重新注册，逐波扩指令覆盖
+- **撤销 ADR-1**：从 `backend/reference/` 复活并更名到 `backend/stackc/`，pipeline 重新注册，逐波扩指令覆盖
 - 定位："易实现、广覆盖"通用后端，吃 L1 栈式 MIR，直接产 JNI C 源码
 - **不承担 c2j 对抗职责**：生成的代码可被 c2j 还原（接受）；对抗强度留给未来的 RegC
-- SSA 线（R1a/R1b 已合并）保留代码，但**不接入** C backend pipeline（C backend 直接吃 L1 MIR）
+- SSA 线（R1a/R1b 已合并）保留代码，但**不接入** StackC pipeline（StackC 直接吃 L1 MIR）
 - 逐波覆盖路线（Wave 0-7）见 `cbackend_revival_and_waves.md`
 - 历史：v0.1 已交付 → ADR-1 归档 → 复活
 

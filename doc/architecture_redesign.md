@@ -12,19 +12,19 @@
 ## §0 决策记录 (ADR)
 
 本次重构基于一次竞品分析（见 `ref_samples/竞品分析报告.md`），核心结论是：
-现有 CBackend 走的"字节码 → `cstack[N]`/`sp` JNI C 直译"路线，正是攻击工具
+现有 CBackend（现 StackC）走的"字节码 → `cstack[N]`/`sp` JNI C 直译"路线，正是攻击工具
 c2j-native-deobfuscator 系统性还原的靶子。继续在这条路线上打补丁意义不大。
 
 四项关键决策（来自设计评审）：
 
 | # | 决策 | 选择 | 落地含义 |
 |---|------|------|---------|
-| ADR-1 | 现有 CBackend（MIR→`cstack[]`/sp JNI C）如何处理？ | ~~归档为 reference，不再演进~~ **【已撤销，2026-07-05】** | 复活为"易实现、广覆盖"通用后端，`c_backend.{hpp,cpp}` 移回 `backend/`，pipeline 重新注册，逐波扩指令覆盖。**不承担 c2j 对抗职责**（对抗强度留给未来的 RegC）。撤销理由与边界见 `cbackend_revival_and_waves.md §0`。下表"归档 reference"等历史表述保留作决策溯源，不再生效。 |
+| ADR-1 | 现有 CBackend（MIR→`cstack[]`/sp JNI C）如何处理？ | ~~归档为 reference，不再演进~~ **【已撤销，2026-07-05；2026-07-08 更名 StackC】** | 复活为"易实现、广覆盖"通用后端，现位于 `backend/stackc/stackc_backend.{hpp,cpp}`，pipeline 注册为 StackC，逐波扩指令覆盖。**不承担 c2j 对抗职责**（对抗强度留给 RegC）。撤销理由与边界见 `cbackend_revival_and_waves.md §0`。下表"归档 reference"等历史表述保留作决策溯源，不再生效。 |
 | ADR-2 | 新 IR 第一块落地哪个？ | **先 SSA + 寄存器 IR**；runtime 第二块 | R1 = L2 SSA + L3 寄存器 IR 骨架；R3 才是 runtime |
 | ADR-3 | 生成后端主路线？ | **寄存器式 C/C++ 为主**（非自研 VM，非 LLVM） | 主生成后端是 RegC；VMC4 自研 VM 从主线降级为 V2+ 可选增强 |
 | ADR-4 | 本次产出形式？ | **先出完整重构设计文档 + ROADMAP 改写** | 本次 PR 全部是 `.md`；代码骨架是后续 PR |
 
-**ADR-3 与 `native_vm_roadmap.md` 的冲突**：该文档原定 VMC4 自研 VM 与 CBackend 并行为
+**ADR-3 与 `native_vm_roadmap.md` 的冲突**：该文档原定 VMC4 自研 VM 与 CBackend（现 StackC）并行为
 两条主路线。本次决策把 VMC4 降为 V2+ 可选路径，主线让位给寄存器式 C/C++。理由：
 (a) 资源聚焦 —— mj2x 人手有限，自研 VM 解释器（含 resident opcode 自变异、opcode alias、
 资源切片）是 ~7 周量级，寄存器 IR + RegC 在更低成本下命中大部分 c2j gap；
@@ -48,16 +48,16 @@ c2j-native-deobfuscator 整套工具链的理论根基（其 `docs/static-revers
 只要被保护产物同时命中这两个锚点，c2j 的三条路径（动态 JVMTI hook、静态 Ghidra+tree-sitter
 模式匹配、Unicorn 模拟）就能完整还原字节码。
 
-### 1.2 现有 CBackend 同时命中两锚点
+### 1.2 现有 CBackend（现 StackC）同时命中两锚点
 
-- **锚点 1 命中**：CBackend 把每个字段读写、方法调用、对象创建都翻译为
+- **锚点 1 命中**：StackC 把每个字段读写、方法调用、对象创建都翻译为
   `(*env)->Call*Method` / `Get*Field` 等 JNI 调用，c2j 的 `jni_hook.cpp` 全量劫持
   ~80 个 vtable 槽即可恢复所有参数。
-- **锚点 2 命中**：CBackend 用 `union jvalue stack[N]` + `int sp` 模拟操作数栈，
+- **锚点 2 命中**：StackC 用 `union jvalue stack[N]` + `int sp` 模拟操作数栈，
   正则 `cstack(\d+)\.(\w)`（c2j `core.py:49`）精确匹配；类/方法/字段引用走静态数组表，
   命中 `cmethods[N]` / `cclasses[N]` 模式。
 
-结论：现有 CBackend 是 c2j 的**正中靶心**，系统性可还原。继续修补（INVOKEDYNAMIC、异常处理、
+结论：现有 StackC 是 c2j 的**正中靶心**，系统性可还原。继续修补（INVOKEDYNAMIC、异常处理、
 JNI 缓存）不改变命中锚点的事实，故"意义不大"。
 
 ### 1.3 唯一稳健的防御方向
@@ -93,7 +93,7 @@ mj2x 的新架构围绕"系统性地移除这两个锚点"设计。
 | `frontend/mir_node`, `block`, `code_converter` | **保留为 L1 栈式 IR** | 正是"接近 ASM 的栈式 IR"，后端无关，是新分层的基础 |
 | `frontend/type_utils`, `opcode_utils`, `method_stack` | **保留** | L1 IR 翻译辅助 |
 | `backend/backend.hpp`, `backend_result.hpp` | **保留 + 扩展** | 接口抽象 OK；`BackendResult::Kind` 加 `REGISTER_C_SOURCE` |
-| `backend/c_backend.{hpp,cpp}` | **已撤销：保留在 backend/**（2026-07-05） | ADR-1 撤销：复活为"易实现、广覆盖"通用后端，留在 `backend/`，pipeline 重新注册，逐波扩指令覆盖。不承担 c2j 对抗职责（对抗强度留给 RegC）。 |
+| `backend/stackc/stackc_backend.{hpp,cpp}` | **已撤销：复活并更名为 StackC**（2026-07-05 复活；2026-07-08 更名） | ADR-1 撤销：复活为"易实现、广覆盖"通用后端，pipeline 注册为 StackC，逐波扩指令覆盖。不承担 c2j 对抗职责（对抗强度留给 RegC）。 |
 | `preprocessor/mark_all_preprocessor` | **保留** | 标记逻辑复用 |
 | `postprocessor/`（空接口） | **保留** | 后续注入 loader/stub 用 |
 
@@ -114,7 +114,7 @@ mj2x 的新架构围绕"系统性地移除这两个锚点"设计。
 |------|------|
 | `frontend/code_converter_test.cpp`（13 例） | **保留**（L1 IR 基线） |
 | `core/*`（compiler_index / io / input_loader / jar_io / e2e） | **保留** |
-| `backend/c_backend_test.cpp`（11 例） | **保留但标记 legacy**：随 CBackend 移到 reference，改名为 `*_legacy_test.cpp` 或加 `DISABLED_` 前缀；不删，作回归对照 |
+| `backend/stackc_backend_test.cpp` | **保留**：作为 StackC 子串匹配回归测试；历史 legacy 归档计划已随 ADR-1 撤销。 |
 
 ### 2.4 文档
 
@@ -332,7 +332,7 @@ attack/defense loop 的硬性要求。
 | 文档 | 本次后的状态 | 关系说明 |
 |------|------------|---------|
 | **本文档（architecture_redesign.md）** | **权威** | 重构期最高优先级，覆盖冲突 |
-| `architecture.md` | v0.2，摘要性 | 引用本文档 §3 的分层；v0.1 的 CBackend 主线定位作废 |
+| `architecture.md` | v0.2，摘要性 | 引用本文档 §3 的分层；v0.1 的 CBackend 主线定位曾作废，现以 StackC 名义复活 |
 | `native_vm_roadmap.md` | 降级，加 Repositioning Notice | VMC4 从主线→V2+ 可选；设计内容保留 |
 | `roadmap.md` | 改写 | R0-R5 替换 B0-B3 |
 | `mvp_plan.md` | 冻结历史 | 旧 CBackend MVP 已交付，不再更新 |
@@ -352,6 +352,6 @@ attack/defense loop 的硬性要求。
 2. **SSA 实现细节**：是自写 dominance 还是直接用 libjbytecode `SourceInterpreter` 的 reaching-def 近似 SSA —— R1 spike 决定。
 3. **pass 框架的 schema 格式**：TOML 还是 C++ 结构体 —— R4 决定。
 4. **runtime 与 RegC 的符号 helper ABI**：是 C 函数符号还是 token 表 —— R3 与 L5 协同设计。
-5. ~~**`backend/reference/` 的目录落点**：是 `src/mj2x/backend/reference/` 还是单独 `legacy/` —— R1 代码移动时定。~~ **已撤销：ADR-1 已反转，CBackend 保留在 `backend/`，不设 reference 目录。**
+5. ~~**`backend/reference/` 的目录落点**：是 `src/mj2x/backend/reference/` 还是单独 `legacy/` —— R1 代码移动时定。~~ **已撤销：ADR-1 已反转，CBackend 复活并更名为 StackC，现位于 `backend/stackc/`，不设 reference 目录。**
 
 这些都是实现细节，不影响本次架构决策的正确性。

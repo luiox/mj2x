@@ -14,7 +14,7 @@ L1 `CodeConverter`（栈式 MIR 翻译）对几类 JVM 指令**无法直接翻�
 
 | 指令 | 为什么不能直译 | preprocessor 处理 |
 |------|---------------|-------------------|
-| `invokedynamic` | bootstrap 方法在运行时链接 call site，构建期无法静态决定目标；`MIRInvoke` 只能表达静态已知的 owner/name/desc | CBackend 保留 bootstrap 元数据并在 native 侧走 MethodHandle runtime bridge；RegC 仍等待字节码/IR 展开 |
+| `invokedynamic` | bootstrap 方法在运行时链接 call site，构建期无法静态决定目标；`MIRInvoke` 只能表达静态已知的 owner/name/desc | StackC 保留 bootstrap 元数据并在 native 侧走 MethodHandle runtime bridge；RegC 仍等待字节码/IR 展开 |
 | `multianewarray` | 一次分配 N 维数组，需要 N 个长度操作数；`MIRNewArray` 只支持 1 维 | 展开为嵌套 `anewarray`/`newarray`（每维一次） |
 | `ldc` Handle/Type | Handle/Type 不是普通常量，需要 `MethodHandles.Lookup` 反射构造；`MIRConstant` 只支持标量 | Handle → `Lookup.findVirtual/findStatic/...` 链；Type → `Class.forName`/`MethodType.fromMethodDescriptorString` |
 
@@ -92,7 +92,7 @@ R1b 不需要它们真的存在 —— 在 L5 生成阶段（R2）识别这些�
 
 ---
 
-## 4. InvokeDynamicPreprocessor / CBackend runtime bridge
+## 4. InvokeDynamicPreprocessor / StackC runtime bridge
 
 ### 4.1 处理对象
 
@@ -100,8 +100,8 @@ R1b 不需要它们真的存在 —— 在 L5 生成阶段（R2）识别这些�
 
 ### 4.2 STD_JAVA 路径（R1b 唯一实现）
 
-CBackend 当前不在 preprocessor 中改写字节码，而是在 `MIRInvokeDynamic` 中保留
-bootstrap handle 与 bsmArgs。CBackend 发射 C 时执行：
+StackC 当前不在 preprocessor 中改写字节码，而是在 `MIRInvokeDynamic` 中保留
+bootstrap handle 与 bsmArgs。StackC 发射 C 时执行：
 
 ```
 ; native 侧
@@ -115,7 +115,7 @@ unbox / jobject 返回
 ```
 
 这一路径已覆盖 javac `StringConcatFactory.makeConcatWithConstants`、
-`LambdaMetafactory.metafactory` 的方法引用和捕获 lambda。它是 CBackend 正确性路径，
+`LambdaMetafactory.metafactory` 的方法引用和捕获 lambda。它是 StackC 正确性路径，
 不是 RegC 的无栈 lowering。
 
 RegC 后续仍应参考 native-obfuscator `IndyPreprocessor` 的非 HOTSPOT 分支，在进入
@@ -180,8 +180,8 @@ masxinlingvonta `InstructionExtractor`）。成本高，当前不需要。
 
 1. `LdcPreprocessor`：一个含 `ldc MethodType`/`ldc MethodHandle` 的方法，preprocess 后
    `CodeConverter` 不再遇到原始 ldc Handle/Type（被展开成方法调用序列）。
-2. CBackend `invokedynamic`：一个含 `invokedynamic` 的方法（如 lambda / String concat），
-   `CodeConverter` 保留 bootstrap 元数据，CBackend 生成 MethodHandle runtime bridge。
+2. StackC `invokedynamic`：一个含 `invokedynamic` 的方法（如 lambda / String concat），
+   `CodeConverter` 保留 bootstrap 元数据，StackC 生成 MethodHandle runtime bridge。
 3. `MultiANewArrayPreprocessor`：multianewarray 在 L1 不再静默落 `MIRNop`，而是明确
    进入 `MIRMultiNewArray` / RegC helper 路径。
 4. 现有 45/46 测试不回归。

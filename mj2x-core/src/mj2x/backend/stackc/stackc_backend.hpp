@@ -7,10 +7,10 @@
 
 namespace mj2x {
 
-class CBackend : public Backend {
+class StackCBackend : public Backend {
 public:
-    CBackend();
-    ~CBackend() override;
+    StackCBackend();
+    ~StackCBackend() override;
 
     std::string_view name() const override { return "c_source"; }
 

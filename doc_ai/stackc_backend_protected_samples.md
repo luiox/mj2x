@@ -1,11 +1,11 @@
-# CBackend Protected Samples
+# StackC Protected Samples
 
-This note describes the CBackend sample fixtures that mjdbg can use for trace
+This note describes the StackCBackend sample fixtures that mjdbg can use for trace
 capture and red-team development.
 
 ## Purpose
 
-CBackend protected samples are small Java programs that exercise known native
+StackCBackend protected samples are small Java programs that exercise known native
 lowering surfaces. mj2x keeps the Java source files in `test_resource/` and
 generates protected `.class` files plus C/JNI sources under `test/` during a
 test run.
@@ -44,7 +44,7 @@ Each output directory contains:
 
 - copied Java source
 - original compiled class under its package path
-- CBackend-protected class
+- StackCBackend-protected class
 - emitted C/JNI source
 - `TRACE_SURFACE.md` describing what mjdbg should inspect
 
@@ -56,13 +56,13 @@ the reproducible way to refresh them.
 The test entry point is:
 
 ```text
-mj2x/src/unittest/backend/c_backend_protected_samples_test.cpp
+mj2x/src/unittest/backend/stackc_backend_protected_samples_test.cpp
 ```
 
 It probes for a local JDK and built `mj2x-cli`, compiles each Java source with
-debug metadata, runs CBackend through `mj2x-cli`, and verifies that the emitted
+debug metadata, runs StackCBackend through `mj2x-cli`, and verifies that the emitted
 C source exposes `JNI_OnLoad` and `RegisterNatives` bindings for the protected
-package. CBackend method bodies are emitted as `static __mj2x_c_*` functions,
+package. StackCBackend method bodies are emitted as `static __mj2x_c_*` functions,
 so mjdbg should not expect per-method `Java_*` exports.
 
 Run:
@@ -70,7 +70,7 @@ Run:
 ```powershell
 xmake build mj2x-cli
 xmake build mj2x_unittest
-xmake run mj2x_unittest -- --gtest_filter=CBackendProtectedSamples.GenerateMjdbgFixtures
+xmake run mj2x_unittest -- --gtest_filter=StackCBackendProtectedSamples.GenerateMjdbgFixtures
 ```
 
 If the toolchain is unavailable, the test skips instead of failing CI.
@@ -83,7 +83,7 @@ workflow is:
 1. Run the generator test on the mj2x side.
 2. Launch or attach to a JVM that loads the generated protected class.
 3. Capture Java method entry/exit around the public entry methods.
-4. Capture `JNI_OnLoad` / `RegisterNatives`, then native/JNI activity inside the emitted CBackend implementation.
+4. Capture `JNI_OnLoad` / `RegisterNatives`, then native/JNI activity inside the emitted StackCBackend implementation.
 5. Record observations as weakness reports for mj2x hardening.
 
 When the fixture format or trace expectations change, update this document,

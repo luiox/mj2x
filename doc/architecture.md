@@ -5,8 +5,8 @@
 > 设计版本: **v0.2** （2026-06-24 架构重构后）
 >
 > **重要**: v0.2 反映 `architecture_redesign.md` 确立的五层 IR 分层。
-> v0.1 的 CBackend 主线定位曾作废（ADR-1），已于 2026-07-05 复活为"易实现、广覆盖"
-> 通用后端，与 RegC 并行。对抗强度留给 RegC，CBackend 不承担 c2j 对抗职责。
+> v0.1 的 StackC 主线定位曾作废（ADR-1），已于 2026-07-05 复活为"易实现、广覆盖"
+> 通用后端，与 RegC 并行。对抗强度留给 RegC，StackC 不承担 c2j 对抗职责。
 > 本文是摘要性文档；权威分层定义、保留/退役清单、防御矩阵见
 > `architecture_redesign.md`。本文与该文档冲突时以 redesign 文档为准。
 
@@ -46,7 +46,7 @@ mj2x 是 morpher 攻防闭环的**蓝队**：产出受保护样本供 mjdbg（�
 | `synchronized` 块内抛异常 | `MONITOREXIT` 被跳过 → 锁泄漏 | R2 起用 C++ RAII guard 修复（构造 `MonitorEnter` / 析构 `MonitorExit`，栈展开保证释放，PR#305 review） |
 | `ATHROW` 后继续 JNI | `Throw` 不中断 C 控制流 | R2 起翻译为 `Throw + return` |
 | `ACC_SYNCHRONIZED` 方法 | C 不能模拟 JVM monitor | R1 起仍拒绝，fail-closed |
-| `INVOKEDYNAMIC` | CBackend 保留 bootstrap 元数据并生成 MethodHandle runtime bridge；RegC 后续展开 | CBackend 已覆盖 javac string concat/lambda |
+| `INVOKEDYNAMIC` | StackC 保留 bootstrap 元数据并生成 MethodHandle runtime bridge；RegC 后续展开 | StackC 已覆盖 javac string concat/lambda |
 
 ### 1.4 参考项目（仅设计借鉴，不依赖）
 
@@ -87,7 +87,7 @@ mj2x 是 morpher 攻防闭环的**蓝队**：产出受保护样本供 mjdbg（�
           │       ▼                                                  │
           │  Backend (插拔式)                                         │
           │       │  [L5] RegC → 寄存器式 C/C++ (★主路线)            │
-          │       │  CBackend → cstack C (归档 reference, 不默认注册)│
+          │       │  StackC → cstack C (广覆盖正确性后端)          │
           │       │                                                  │
           │       ▼                                                  │
           │  Postprocessors (插拔式)                                  │
@@ -235,13 +235,13 @@ R2 落地 RegC 时加 `REGISTER_C_SOURCE`。
 
 实现细节（节点结构、helper ABI）R2 定。
 
-### 4.2 CBackend（[ARCHIVED reference]）
+### 4.2 StackC（广覆盖正确性后端）
 
-`c_backend.{hpp,cpp}` 是 v0.1 的唯一后端，用 `union jvalue stack[N]` + `int sp` 模拟操作数栈，
+`backend/stackc/stackc_backend.{hpp,cpp}` 是广覆盖正确性后端，用 `union jvalue stack[N]` + `int sp` 模拟操作数栈，
 每个字段/方法/对象操作都翻译为 JNI 调用。**它同时命中 c2j 的两个锚点，系统性可还原**
 （见 redesign 文档 §1.2），原 ADR-1 归档决策已撤销（2026-07-05）：
 
-- ADR-1 已撤销：CBackend 复活，保留在 `backend/`，pipeline 重新注册，逐波扩指令覆盖
+- ADR-1 已撤销：StackC 复活，保留在 `backend/stackc/`，pipeline 重新注册，逐波扩指令覆盖
 - 定位："易实现、广覆盖"通用后端，不承担 c2j 对抗职责（对抗强度留给 RegC）
 - 其 11 个测试保留
 - 撤销理由与逐波路线见 `cbackend_revival_and_waves.md`
@@ -267,13 +267,13 @@ mj2x/
 │   │   ├── io/                       — InputLoader / OutputWriter（复用）
 │   │   ├── frontend/                 — [L1] 栈式 MIR（复用）
 │   │   ├── mir/                      — ★ [L2] ssa/ + [L3] register_ir/ + [L4] passes/（R1/R4 新增）
-│   │   ├── preprocessor/             — 诊断/改写入口；CBackend 保留 INVOKEDYNAMIC 元数据
+│   │   ├── preprocessor/             — 诊断/改写入口；StackC 保留 INVOKEDYNAMIC 元数据
 │   │   ├── postprocessor/            — 复用（注入 loader）
 │   │   └── backend/
 │   │       ├── backend.hpp           — 接口（复用）
 │   │       ├── backend_result.hpp    — 复用 + 扩展 Kind
-│   │       ├── regc/                 — ★ [L5] 寄存器式 C 生成（R2 主路线）
-│   │       └── reference/            — CBackend 归档（R1 移入）
+│   │       ├── stackc/               — StackC 广覆盖正确性后端
+│   │       └── regc/                 — ★ [L5] 寄存器式 C 生成（R2 主路线）
 │   ├── mj2x-cli/                     — CLI 入口
 │   └── unittest/                     — 测试（分层见 TEST_STRATEGY）
 └── runtime/                          — ★ [RT] 重写（R3）
@@ -318,10 +318,10 @@ runtime(jni_lib) ──▶ JDK（仅 runtime 编译需要）
 | 维度 | v0.1 | v0.2 |
 |------|------|------|
 | 自我定位 | "C 翻译器" | "多后端 native 保护编译器，主路线寄存器式 C/C++" |
-| 主后端 | CBackend（cstack/sp JNI C） | RegC（寄存器式 C/C++） |
-| CBackend | 唯一后端 | 归档 reference，不默认注册 |
+| 主后端 | StackC（cstack/sp JNI C） | RegC（寄存器式 C/C++） |
+| StackC | 唯一后端 | 广覆盖正确性后端，默认 `--emit-c` |
 | IR 层次 | 单层栈式 MIR | 五层：L1 栈式 → L2 SSA → L3 寄存器 → L4 pass → L5 生成 |
 | 运行时 | 几乎空（DLL demo + stub） | 重写：crypto/kernel/antidebug/antijvmti/stringpool |
-| VMC4 自研 VM | 与 CBackend 并行主线 | 降级为 V2+ 可选支线 |
+| VMC4 自研 VM | 与 StackC 并行主线 | 降级为 V2+ 可选支线 |
 | 防御设计依据 | 无竞品分析 | 以 c2j 两锚点理论为反向输入（见 redesign §1） |
 | doc drift | `methodIndex_/fieldIndex_`、`LLVM_IR` 误述 | 已修正 |
