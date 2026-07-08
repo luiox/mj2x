@@ -353,6 +353,8 @@ struct CBackend::Impl {
     std::unordered_set<std::string> nativeFunctions;
     std::unordered_map<std::string, std::vector<CNativeRegistration>> registrationsByClass;
     std::vector<std::string> registrationClassOrder;
+    std::unordered_map<std::string, size_t> stringPoolOffsets;
+    std::vector<unsigned char> stringPoolBytes;
 
     // Cache current method info for codegen
     std::string currentClassName;
@@ -400,6 +402,8 @@ struct CBackend::Impl {
     void emitArrayLoad(const MIRArrayLoad* node, std::ostringstream& out);
     void emitArrayStore(const MIRArrayStore* node, std::ostringstream& out);
     void emitIntegerDivZeroTrap(const char* rhsAccessor, std::ostringstream& out);
+    size_t stringPoolOffsetFor(const std::string& value);
+    void emitStringPool(std::ostringstream& out) const;
     void emitRegistrationCode(std::ostringstream& out) const;
 };
 
@@ -611,6 +615,7 @@ void CBackend::finalize(const CompilerIndex& index) {
     full << includes.render();
     full << "\n";
     full << backend::cBackendRuntimePrelude();
+    impl_->emitStringPool(full);
     full << impl_->source.str();
     impl_->emitRegistrationCode(full);
 
@@ -628,6 +633,33 @@ void CBackend::finalize(const CompilerIndex& index) {
             printf("[CBackend] ERROR: cannot write %s\n", cOutputPath_.c_str());
         }
     }
+}
+
+size_t CBackend::Impl::stringPoolOffsetFor(const std::string& value) {
+    auto found = stringPoolOffsets.find(value);
+    if (found != stringPoolOffsets.end())
+        return found->second;
+
+    const size_t offset = stringPoolBytes.size();
+    stringPoolOffsets.emplace(value, offset);
+    stringPoolBytes.insert(stringPoolBytes.end(), value.begin(), value.end());
+    stringPoolBytes.push_back(0);
+    return offset;
+}
+
+void CBackend::Impl::emitStringPool(std::ostringstream& out) const {
+    if (stringPoolBytes.empty())
+        return;
+
+    out << "static const unsigned char _mj2x_string_pool[] = {";
+    for (size_t i = 0; i < stringPoolBytes.size(); ++i) {
+        if (i % 16 == 0)
+            out << "\n    ";
+        out << static_cast<unsigned int>(stringPoolBytes[i]);
+        if (i + 1 < stringPoolBytes.size())
+            out << ", ";
+    }
+    out << "\n};\n\n";
 }
 
 void CBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
@@ -865,8 +897,10 @@ void CBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstream& o
             else                    out << "    stack[++sp]" << acc << " = " << std::setprecision(17) << d << ";\n";
         }
     } else if (std::holds_alternative<std::string>(node->value)) {
-        out << "    stack[++sp].l = " << trackLocalRefExpr("(*env)->NewStringUTF(env, " +
-            cStringLiteral(std::get<std::string>(node->value)) + ")") << ";\n";
+        const auto offset = stringPoolOffsetFor(std::get<std::string>(node->value));
+        out << "    stack[++sp].l = " << trackLocalRefExpr(
+            "(*env)->NewStringUTF(env, (const char*)(_mj2x_string_pool + " +
+            std::to_string(offset) + "))") << ";\n";
     } else {
         out << "    stack[++sp]" << acc << " = NULL;\n";
     }

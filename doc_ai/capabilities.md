@@ -29,7 +29,8 @@ Native 绑定使用 `static` C 函数 + `JNI_OnLoad` / `RegisterNatives`,不为�
 自定义 class loader 下 `new` / `anewarray` / `multianewarray` / 静态成员 / type check
 等路径，bootstrap 异常类和注册入口仍使用 JVM `FindClass`。生成方法体跟踪临时 JNI
 local refs，并在正常返回或异常提前返回前批量释放；对象返回值作为 keep ref 保留。
-字段和方法 ID 在各生成调用点用 `static jfieldID` / `static jmethodID` 懒缓存。
+字段和方法 ID 在各生成调用点用 `static jfieldID` / `static jmethodID` 懒缓存。字符串
+LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offset。
 
 **已覆盖的 javac 输出形状**:
 
@@ -46,6 +47,7 @@ local refs，并在正常返回或异常提前返回前批量释放；对象返�
 - owner ClassLoader-aware 类解析:应用类查找走 `_mj2x_find_class(env, _mj2x_owner_class, ...)`
 - JNI local-ref 追踪:临时 class/string/object/array refs 登记到方法级列表，返回前释放
 - JNI method/field ID 懒缓存:调用点首次解析，后续复用缓存 ID
+- String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring
 
 **验证**:26 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 CBackend
 发射单测。

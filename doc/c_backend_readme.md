@@ -19,6 +19,7 @@ Java 方法导出 `Java_*` 符号；Java 方法名和描述符保留在注册表
 直接 `FindClass` 找不到业务类。生成方法体会跟踪临时 JNI local refs，并在正常返回或
 异常提前返回前批量释放；对象返回值会保留下来作为返回引用。字段和方法 ID 在各生成
 调用点按需懒初始化到 `static jfieldID` / `static jmethodID`，避免每次执行都重新解析。
+字符串 LDC 常量会去重到 TU 级 `_mj2x_string_pool[]`，方法体只保留 pool offset。
 
 ## CLI 用法
 
@@ -46,7 +47,7 @@ passthrough，不参与 root class 解析或 native injection。
 | int/long 除零 trap 与 `MIN_VALUE / -1` 边界 | 支持 | `CBackendE2E.IntegerDivisionTrap` |
 | long/float/double 与基础转换 | 支持 | `CBackendE2E.LongArith`、`FloatDouble`、`Conversions` |
 | `tableswitch` / `lookupswitch` | 支持 | `CBackendE2E.DenseSwitch`、`SparseSwitch` |
-| 引用分支、字符串常量、方法调用、递归、接口调用 | 支持；静态/特殊/接口调用的 owner 解析使用当前 owner `ClassLoader` | `CBackendE2E.ReferenceBranches`、`StringLiterals`、`MethodCalls`、`RecursionCalls`、`InterfaceCalls` |
+| 引用分支、字符串常量、方法调用、递归、接口调用 | 支持；字符串常量走 TU 级 pool，静态/特殊/接口调用的 owner 解析使用当前 owner `ClassLoader` | `CBackendE2E.ReferenceBranches`、`StringLiterals`、`MethodCalls`、`RecursionCalls`、`InterfaceCalls` |
 | 对象、字段、`instanceof`、`checkcast` | 支持；业务类解析使用当前 owner `ClassLoader` | `CBackendE2E.ObjectFieldsAndTypeChecks` |
 | 基本类型数组、对象数组、多维数组 | 支持；对象/多维数组类解析使用当前 owner `ClassLoader`，`BALOAD`/`BASTORE` 对 byte[]/boolean[] 做运行时分流 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
 | `athrow`、try/catch、多 catch、finally、monitor | 支持 | `CBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
