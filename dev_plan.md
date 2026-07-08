@@ -24,7 +24,7 @@
   - [ ] P1:`<clinit>` 分散注册入口,从集中 `JNI_OnLoad` 迁到 per-class 触发。
   - [ ] P1:hidden `<clinit>` proxy / HiddenMethodsPool,把类初始化本体移出 Java 层。
   - [ ] P7:JAR 内 native loader,减少用户手动 `System.loadLibrary` 配置。
-  - [ ] P8:CMake / 独立工程构建输出,对齐 native-obfuscator 可移植构建体验。
+  - [x] P8:CMake / 独立工程构建输出,对齐 native-obfuscator 可移植构建体验。
   - [ ] P0:invokedynamic lowering 策略,支持 lambda/string concat/method handle 的可执行路径。
 - [ ] **R4:L4 变换 pass 系统**(MBA / DCE / CFF / opaque predicate)。前置:RegC/R3 live 验证。
 - [ ] **R5:mjdbg 闭环验证**。用 mjdbg / c2j 红队验证 RegC 保护强度,产出量化结论。前置:R3 RegC ABI live 验证 + mjdbg 样本反馈。

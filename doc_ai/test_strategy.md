@@ -25,7 +25,7 @@
 | `frontend/code_converter_test` | **L1** 栈式 MIR | 18 | 保留（L1 基线）；Wave 6 补数组 component 元数据 |
 | `backend/c_backend_test` | CBackend | 19 | 复名 `c_backend_test.cpp`，子串匹配；Wave 6 补 array/checkcast emit |
 | **`backend/c_backend_e2e_test.cpp`** ★新增 | **CBackend 真 E2E** | 26 | Wave 1 起逐波补，见 §1.4 |
-| `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、CBackend/RegC JAR 输入/输出入口、负向参数、坏 JAR fail-closed |
+| `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、CBackend/RegC JAR 输入/输出入口、CMake 工程输出、负向参数、坏 JAR fail-closed |
 
 ### 1.2 各层测试目标（R1-R4 落地时补）
 
@@ -104,6 +104,8 @@
 懒缓存；方法调用、接口调用、对象字段 E2E 覆盖缓存后语义。
 `StringConstantEmission` 断言重复 LDC 字符串复用同一个 `_mj2x_string_pool` offset，
 `CBackendE2E.StringLiterals` 覆盖 pool 物化后的运行时行为。
+`CliTest.GenerateCMakeProjectEmitsStandaloneFiles` 覆盖 `--generate-cmake` 输出
+`native.c`、`CMakeLists.txt`、`.gitignore` 和 README。
 
 **已覆盖**（Wave 7/收尾）：`ThrowPropagation`（`ATHROW` 向上传播）、
 `TryCatchExceptions`（try-catch 与未命中 catch 重新抛出）、`MultiCatchAndFinally`（多 catch 与 finally）、

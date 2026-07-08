@@ -106,10 +106,17 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c` 后自动编译 native library |
 | `--c-compiler <msvc\|gcc\|clang>` | 覆盖自动探测到的 C 编译器 |
+| `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 `--emit-c` 时源码写到 `<dir>/native.c` |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--help` | 打印帮助 |
 
-> `--generate-project <dir>`(生成独立 xmake 工程)当前在分支 `feat/mj2x/xmake-project-generator`,未合入 main。
+生成 CMake 工程示例:
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --generate-cmake native_project
+cmake -S native_project -B native_project/build
+cmake --build native_project/build --config Release
+```
 
 ---
 

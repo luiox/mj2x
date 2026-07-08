@@ -9,6 +9,8 @@
 #include "native_compiler.hpp"
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 static void printUsage() {
@@ -19,6 +21,7 @@ static void printUsage() {
     printf("  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
     printf("  --compile                  Compile emitted C into a native library beside --output\n");
     printf("  --c-compiler <name>        Override C compiler detection (msvc, gcc, clang)\n");
+    printf("  --generate-cmake <dir>     Generate a standalone CMake project for emitted C\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
     printf("  --help                     Print help\n");
 }
@@ -45,10 +48,83 @@ static bool isNativeAnnotationDescriptor(const std::string& descriptor) {
            descriptor.back() == ';' && descriptor.find('.') == std::string::npos;
 }
 
+static int generateCMakeProject(const std::string& projectDirValue, const std::string& cOutputPath) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path projectDir(projectDirValue);
+    fs::create_directories(projectDir, ec);
+    if (ec) {
+        fprintf(stderr, "[mj2x] ERROR: cannot create CMake project directory: %s\n",
+                projectDir.string().c_str());
+        return 1;
+    }
+
+    fs::path sourcePath(cOutputPath);
+    if (!fs::exists(sourcePath, ec)) {
+        fprintf(stderr, "[mj2x] ERROR: emitted C source does not exist: %s\n",
+                sourcePath.string().c_str());
+        return 1;
+    }
+
+    fs::path expectedSource = projectDir / "native.c";
+    if (fs::absolute(sourcePath, ec) != fs::absolute(expectedSource, ec)) {
+        fs::copy_file(sourcePath, expectedSource, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            fprintf(stderr, "[mj2x] ERROR: cannot copy emitted C into CMake project: %s\n",
+                    ec.message().c_str());
+            return 1;
+        }
+    }
+
+    {
+        std::ofstream out(projectDir / "CMakeLists.txt", std::ios::binary);
+        if (!out) {
+            fprintf(stderr, "[mj2x] ERROR: cannot write CMakeLists.txt\n");
+            return 1;
+        }
+        out << "cmake_minimum_required(VERSION 3.16)\n";
+        out << "project(mj2x_native C)\n\n";
+        out << "find_package(JNI REQUIRED)\n\n";
+        out << "add_library(mj2x_native SHARED native.c)\n";
+        out << "target_include_directories(mj2x_native PRIVATE ${JNI_INCLUDE_DIRS})\n";
+        out << "set_target_properties(mj2x_native PROPERTIES OUTPUT_NAME mj2x_native)\n";
+    }
+
+    {
+        std::ofstream out(projectDir / ".gitignore", std::ios::binary);
+        if (!out) {
+            fprintf(stderr, "[mj2x] ERROR: cannot write .gitignore\n");
+            return 1;
+        }
+        out << "build/\n";
+        out << "cmake-build-*/\n";
+        out << "*.obj\n*.o\n*.dll\n*.so\n*.dylib\n";
+    }
+
+    {
+        std::ofstream out(projectDir / "README.md", std::ios::binary);
+        if (!out) {
+            fprintf(stderr, "[mj2x] ERROR: cannot write README.md\n");
+            return 1;
+        }
+        out << "# mj2x native CMake project\n\n";
+        out << "Build:\n\n";
+        out << "```sh\n";
+        out << "cmake -S . -B build\n";
+        out << "cmake --build build --config Release\n";
+        out << "```\n\n";
+        out << "`JAVA_HOME` or CMake's JNI discovery must point at a JDK with JNI headers.\n";
+    }
+
+    printf("[mj2x] CMake project written: %s\n", projectDir.string().c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     std::string inputPath;
     std::string outputPath;
     std::string cOutputPath;
+    std::string cmakeProjectDir;
     std::string nativeAnnotation;
     CEmitterBackend cBackendKind = CEmitterBackend::CBackend;
     mj2x::cli::CCompilerKind cCompilerKind = mj2x::cli::CCompilerKind::Auto;
@@ -64,6 +140,7 @@ int main(int argc, char** argv) {
         else if (arg == "--emit-c" && i + 1 < argc) cOutputPath = argv[++i];
         else if (arg == "--native-annotation" && i + 1 < argc) nativeAnnotation = argv[++i];
         else if (arg == "--compile") compileNative = true;
+        else if (arg == "--generate-cmake" && i + 1 < argc) cmakeProjectDir = argv[++i];
         else if (arg == "--c-compiler" && i + 1 < argc) {
             compilerSelected = true;
             if (!mj2x::cli::parseCompilerName(argv[++i], cCompilerKind)) {
@@ -114,6 +191,20 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (!cmakeProjectDir.empty() && cOutputPath.empty()) {
+        cOutputPath = (std::filesystem::path(cmakeProjectDir) / "native.c").string();
+    }
+
+    if (!cmakeProjectDir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(cmakeProjectDir, ec);
+        if (ec) {
+            fprintf(stderr, "[mj2x] ERROR: cannot create CMake project directory: %s\n",
+                    cmakeProjectDir.c_str());
+            return 1;
+        }
+    }
+
     if (compilerSelected && !compileNative) {
         fprintf(stderr, "--c-compiler requires --compile.\n");
         printUsage();
@@ -155,6 +246,12 @@ int main(int argc, char** argv) {
     int rc = pipeline.run();
     if (rc != 0)
         return rc;
+
+    if (!cmakeProjectDir.empty()) {
+        int projectRc = generateCMakeProject(cmakeProjectDir, cOutputPath);
+        if (projectRc != 0)
+            return projectRc;
+    }
 
     if (compileNative)
         return mj2x::cli::compileCSource(cOutputPath, outputPath, cCompilerKind);

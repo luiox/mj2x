@@ -18,6 +18,7 @@
 | `--native-annotation Lpkg/Anno;` 只翻译带目标方法注解的方法 | ✅ | CLI 注解筛选测试 |
 | 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
 | `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
+| `--generate-cmake <dir>` 输出独立 CMake native 工程 | ✅ | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
 
 ---
 
@@ -101,6 +102,8 @@ LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offse
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c` 之后自动调用 C 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;`--c-compiler msvc|gcc|clang` 可覆盖自动检测。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
+- `--generate-cmake <dir>` 生成 `native.c`、`CMakeLists.txt`、`.gitignore` 和 `README.md`;
+  CMake 工程通过 `find_package(JNI REQUIRED)` 发现 JNI headers。
 
 ---
 

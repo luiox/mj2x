@@ -35,6 +35,15 @@ xmake run mj2x-cli -i input.jar -o output.jar --emit-c output.c
 xmake run mj2x-cli -i input.jar -o output.jar --emit-c output.c --backend cbackend
 ```
 
+也可以生成独立 CMake 工程，工程内包含 `native.c`、`CMakeLists.txt`、`.gitignore` 和
+构建说明：
+
+```powershell
+xmake run mj2x-cli -i input.class -o output.class --generate-cmake build/native_project
+cmake -S build/native_project -B build/native_project/build
+cmake --build build/native_project/build --config Release
+```
+
 JAR MVP 会读取每个可处理的 class entry，保留原 entry 顺序和非 class 资源，并在输出 JAR
 中替换被改写的 class bytes。`META-INF/versions/**.class` 在 MVP 中作为资源
 passthrough，不参与 root class 解析或 native injection。
@@ -56,6 +65,7 @@ passthrough，不参与 root class 解析或 native injection。
 | 综合样本 | 支持 | `CBackendE2E.IntegratedSample` |
 | `.class` 输入/输出 | 支持 | `IOTest.InputLoaderRoundtrip`、`PipelineTest.FullPipelineRoundtrip` |
 | `.jar` 输入/输出 | MVP 支持 | `IOTest.JarInputLoaderAndOutputWriterPreserveClassesAndResources`、`PipelineTest.JarPipelineMarksClassesNativeAndPreservesResources`、`CliTest.JarInputEmitsJarAndCSource` |
+| CMake 独立工程输出 | 支持 `--generate-cmake <dir>` | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
 | JAR manifest/resource/multi-release passthrough | MVP 支持 | `IOTest.JarMvpFixturePreservesManifestResourcesAndMultiReleaseClasses` |
 | signed/empty/no-class JAR 边界 | fail-closed | `IOTest.JarInputLoaderRejectsSignedJarMetadata`、`IOTest.JarInputLoaderRejectsJarWithoutRootClasses`、`CliTest.BadJarInputsFailClosed` |
 | mjdbg protected samples | 支持生成 | `CBackendProtectedSamples.GenerateMjdbgFixtures` |
