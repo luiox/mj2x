@@ -17,9 +17,10 @@ JNI 派发点是 c2j 的攻击锚点之一。intrinsic 把 JDK 常用方法从 J
 
 ```
 RegC emitter (src/mj2x/backend/regc/regc_emitter.cpp)
-  └─ Call 分支 → tryEmitIntrinsicCall(owner/name/desc)
+  └─ Call 分支 → RegCIntrinsicRegistry(owner/name/desc/opcode)
        ├─ Math.*      → mj2x_math_*      (runtime lib,纯计算)
-       └─ parseInt    → _mj2x_intrinsic_parse_int (emitter TU 内联,需 JNI 取 String)
+       ├─ parseInt    → _mj2x_intrinsic_parse_int (emitter TU 内联,需 JNI 取 String)
+       └─ Wrapper     → mj2x_* value struct shadow state(仅非逃逸 value/unbox)
   未命中 → _mj2x_regc_call_* (原 JNI 路径)
 
 runtime (mj2x/runtime/src/intrinsic/)
@@ -52,15 +53,33 @@ emitter TU (regc_backend.cpp::emitRuntimeHelpers)
 - `Integer.parseInt(Ljava/lang/String;)I` → `_mj2x_intrinsic_parse_int`
 - String LDC → `_mj2x_intrinsic_string_literal`(供 parseInt/未来 toString 消费)
 
+### Primitive wrappers(第一切片,非逃逸)
+- `Integer.valueOf(I)` + `Integer.intValue()` → `mj2x_int_value_of` / `mj2x_int_int_value`
+- `Long/Short/Byte/Float/Double/Boolean/Character.valueOf` + 对应 `xxxValue`
+  → `mj2x_*_value_of` / `mj2x_*_*_value`
+
+RegC emitter 为 `valueOf` 结果维护 shadow native state:
+
+```
+r1 = Integer.valueOf(x)  => mj2x_int native_r1 = mj2x_int_value_of(x); r1 = NULL;
+r2 = r1.intValue()       => r2 = mj2x_int_int_value(native_r1);
+```
+
+这个 shadow state 不是 jobject,因此第一切片只允许同一 RegC 函数内的
+`valueOf -> xxxValue` 窄链路。若 shadow object 被返回、传入未知 call、存字段、
+放数组、参与 monitor/checkcast/instanceof 或跨 CFG edge,当前策略是 fail-closed 并报告
+`native wrapper object escaped through ...`。后续若要支持逃逸,需要在 valueOf 决策前做
+use/escape 分析:可证明不逃逸才 native 化,否则从一开始 fallback 到 `_mj2x_regc_call_*`;
+若对象已被 native unbox/mutation 后才逃逸,则必须提供 jobject materialize/writeback 桥。
+
 ## 4. 未覆盖(后续扩展,见 dev_plan)
 
-下列 runtime 实现已交付但**未接 emitter**,因涉及对象逃逸表示:
+下列 runtime 实现已交付但**未完整接 emitter**,因涉及对象状态逃逸表示:
 
-- **包装类 valueOf/intValue**:runtime 用 `mj2x_int` 等 struct(按值),但 RegC 把对象
-  当 `mj2x_ref`(jobject)。valueOf 结果若逃逸回 JVM(作为 native 方法返回值),native
-  struct ≠ jobject,需边界转换。阻塞点:包装类对象逃逸分析。
 - **Random nextInt/nextLong/...**:runtime 用 `mj2x_random` struct,但 `new Random()`
   当前走 `NEW_OBJECT` + JNI `<init>`,不会变成 `mj2x_random`。阻塞点:Random 对象表示。
+- **完整包装类对象语义**:identity、equals/hashCode/toString、返回 jobject、字段/数组存取
+  仍未覆盖。阻塞点:escape-aware fallback 或 jobject materialize。
 
 `Integer.signum` 等未覆盖方法正常走 `_mj2x_regc_call_*`,不会误识别。
 
@@ -68,7 +87,8 @@ emitter TU (regc_backend.cpp::emitRuntimeHelpers)
 
 - **runtime 单测**:`mj2x_runtime_test` 的 `IntrinsicWrapperTest`/`IntrinsicMathTest`/
   `IntrinsicRandomTest`(22 用例,Random 逐位对齐 JDK)。
-- **emitter 单测**:`regc_intrinsic_test.cpp`(6 用例,断言 intrinsic 被识别 + 无 JNI 派发)。
+- **emitter 单测**:`regc_intrinsic_test.cpp`(Math/parseInt/wrapper value-unbox + 逃逸 reason,
+  断言 intrinsic 被识别 + 无 JNI 派发)。
 - **E2E**:`RegCBackendE2E.IntrinsicMathAndParseIntRoundTrip`(JDK/MSVC 可用时真编 DLL,
   Java 基准逐项对比 + 生成 C 无 JNI call 断言)。
 - **mjdbg 样本**:`test_resource/protected_samples/regc/RegCIntrinsicSurfaceSample.java`,

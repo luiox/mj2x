@@ -26,6 +26,23 @@ enum class RegCIntrinsicDecisionKind {
 enum class RegCIntrinsicEmitKind {
     RuntimeFunction,
     RegCLocalHelper,
+    WrapperValueOf,
+    WrapperUnbox,
+};
+
+/**
+ * @brief Native object state carried by wrapper-class intrinsics.
+ */
+enum class RegCIntrinsicNativeObjectKind {
+    None,
+    Int,
+    Long,
+    Short,
+    Byte,
+    Float,
+    Double,
+    Bool,
+    Char,
 };
 
 /**
@@ -40,6 +57,7 @@ enum class RegCIntrinsicEmitKind {
 struct RegCIntrinsicDecision {
     RegCIntrinsicDecisionKind kind = RegCIntrinsicDecisionKind::Fallback;
     RegCIntrinsicEmitKind emitKind = RegCIntrinsicEmitKind::RuntimeFunction;
+    RegCIntrinsicNativeObjectKind nativeObjectKind = RegCIntrinsicNativeObjectKind::None;
     std::string symbol;
     std::string reason;
     bool passContext = false;

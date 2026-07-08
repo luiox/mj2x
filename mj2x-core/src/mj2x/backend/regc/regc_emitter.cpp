@@ -241,6 +241,64 @@ bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs, 
     return true;
 }
 
+struct RegCNativeObjectState {
+    RegCIntrinsicNativeObjectKind kind = RegCIntrinsicNativeObjectKind::None;
+    std::string storageName;
+};
+
+struct RegCFunctionEmitState {
+    std::map<uint32_t, RegCNativeObjectState> nativeObjects;
+};
+
+const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind) {
+    switch (kind) {
+        case RegCIntrinsicNativeObjectKind::Int: return "mj2x_int";
+        case RegCIntrinsicNativeObjectKind::Long: return "mj2x_long";
+        case RegCIntrinsicNativeObjectKind::Short: return "mj2x_short";
+        case RegCIntrinsicNativeObjectKind::Byte: return "mj2x_byte";
+        case RegCIntrinsicNativeObjectKind::Float: return "mj2x_float";
+        case RegCIntrinsicNativeObjectKind::Double: return "mj2x_double";
+        case RegCIntrinsicNativeObjectKind::Bool: return "mj2x_bool";
+        case RegCIntrinsicNativeObjectKind::Char: return "mj2x_char";
+        default: return "mj2x_ref";
+    }
+}
+
+std::string nativeObjectStorageName(RegId id) {
+    return "native_r" + std::to_string(id.value);
+}
+
+const RegCNativeObjectState* nativeObjectFor(
+    const RegCFunctionEmitState& state,
+    const RegOperand& operand)
+{
+    if (operand.kind != RegOperandKind::Register) return nullptr;
+    auto it = state.nativeObjects.find(operand.reg.value);
+    if (it == state.nativeObjects.end()) return nullptr;
+    return &it->second;
+}
+
+bool rejectNativeObjectEscape(const RegCFunctionEmitState& state,
+                              const RegOperand& operand,
+                              const std::string& surface,
+                              std::string& reason)
+{
+    if (!nativeObjectFor(state, operand)) return true;
+    reason = "native wrapper object escaped through " + surface;
+    return false;
+}
+
+bool rejectNativeObjectEscapes(const RegCFunctionEmitState& state,
+                               const std::vector<RegOperand>& operands,
+                               const std::string& surface,
+                               std::string& reason)
+{
+    for (const auto& operand : operands) {
+        if (!rejectNativeObjectEscape(state, operand, surface, reason)) return false;
+    }
+    return true;
+}
+
 bool isSupportedInstruction(const RegInstruction& ins, std::string& reason) {
     switch (ins.kind) {
         case RegInstructionKind::Copy:
@@ -367,9 +425,46 @@ std::string callArgs(const std::vector<RegOperand>& args) {
     return os.str();
 }
 
-RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out, const RegInstruction& ins) {
+RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
+                                        const RegInstruction& ins,
+                                        RegCFunctionEmitState& state)
+{
     RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
     if (decision.kind != RegCIntrinsicDecisionKind::Emit) return decision;
+
+    if (decision.emitKind == RegCIntrinsicEmitKind::WrapperValueOf) {
+        if (!ins.hasDest) {
+            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "wrapper valueOf intrinsic missing destination";
+            return decision;
+        }
+        out << "    " << nativeObjectType(decision.nativeObjectKind) << " "
+            << nativeObjectStorageName(ins.dest.id) << " = " << decision.symbol << "(";
+        if (!ins.args.empty()) out << operandExpr(ins.args[0]);
+        out << ");\n";
+        out << "    " << regName(ins.dest.id) << " = NULL;\n";
+        state.nativeObjects[ins.dest.id.value] =
+            RegCNativeObjectState{decision.nativeObjectKind, nativeObjectStorageName(ins.dest.id)};
+        return decision;
+    }
+
+    if (decision.emitKind == RegCIntrinsicEmitKind::WrapperUnbox) {
+        if (ins.args.empty()) {
+            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "wrapper unbox intrinsic missing receiver";
+            return decision;
+        }
+        const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
+        if (!objectState || objectState->kind != decision.nativeObjectKind) {
+            decision.kind = RegCIntrinsicDecisionKind::Fallback;
+            decision.reason = "wrapper receiver is not native state";
+            return decision;
+        }
+        out << "    ";
+        if (ins.hasDest) out << regName(ins.dest.id) << " = ";
+        out << decision.symbol << "(" << objectState->storageName << ");\n";
+        return decision;
+    }
 
     out << "    ";
     if (ins.hasDest) out << regName(ins.dest.id) << " = ";
@@ -388,18 +483,24 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out, const RegInstru
     return decision;
 }
 
-void emitEdgeCopies(std::ostringstream& out, const std::vector<RegCopy>& copies, int edgeIndex) {
-    if (copies.empty()) return;
+bool emitEdgeCopies(std::ostringstream& out,
+                    const std::vector<RegCopy>& copies,
+                    int edgeIndex,
+                    const RegCFunctionEmitState& state,
+                    std::string& reason) {
+    if (copies.empty()) return true;
 
     // Edge copies are parallel phi transfers.  Stage sources in temporaries so
     // cycles such as r1<-r2 and r2<-r1 remain well-defined for later RegC work.
     for (size_t i = 0; i < copies.size(); ++i) {
+        if (!rejectNativeObjectEscape(state, copies[i].source, "CFG edge copy", reason)) return false;
         out << "    " << cType(copies[i].dest.type) << " edge_" << edgeIndex << "_" << i
             << " = (" << cType(copies[i].dest.type) << ")(" << operandExpr(copies[i].source) << ");\n";
     }
     for (size_t i = 0; i < copies.size(); ++i) {
         out << "    " << regName(copies[i].dest.id) << " = edge_" << edgeIndex << "_" << i << ";\n";
     }
+    return true;
 }
 
 bool protectsBlock(const RegExceptionRegion& region, const RegBlock* block) {
@@ -449,13 +550,26 @@ void emitExceptionDispatch(std::ostringstream& out,
     out << "    }\n";
 }
 
-bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::string& reason) {
+bool emitInstruction(std::ostringstream& out,
+                     const RegInstruction& ins,
+                     RegCFunctionEmitState& state,
+                     std::string& reason) {
     if (!isSupportedInstruction(ins, reason)) return false;
 
     switch (ins.kind) {
         case RegInstructionKind::Copy:
-            out << "    " << regName(ins.copy.dest.id) << " = ("
-                << cType(ins.copy.dest.type) << ")(" << operandExpr(ins.copy.source) << ");\n";
+            if (const auto* objectState = nativeObjectFor(state, ins.copy.source)) {
+                out << "    " << nativeObjectType(objectState->kind) << " "
+                    << nativeObjectStorageName(ins.copy.dest.id) << " = "
+                    << objectState->storageName << ";\n";
+                out << "    " << regName(ins.copy.dest.id) << " = NULL;\n";
+                state.nativeObjects[ins.copy.dest.id.value] =
+                    RegCNativeObjectState{objectState->kind, nativeObjectStorageName(ins.copy.dest.id)};
+            } else {
+                state.nativeObjects.erase(ins.copy.dest.id.value);
+                out << "    " << regName(ins.copy.dest.id) << " = ("
+                    << cType(ins.copy.dest.type) << ")(" << operandExpr(ins.copy.source) << ");\n";
+            }
             return true;
         case RegInstructionKind::Unary:
             out << "    " << regName(ins.dest.id) << " = (" << cType(ins.dest.type)
@@ -470,6 +584,7 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
                 << " " << operandExpr(ins.rhs) << ");\n";
             return true;
         case RegInstructionKind::Convert:
+            if (!rejectNativeObjectEscape(state, ins.value, "reference conversion", reason)) return false;
             if (ins.convertKind == SSAConvertKind::ReferenceCast) {
                 out << "    " << regName(ins.dest.id) << " = _mj2x_regc_checkcast("
                     << operandExpr(ins.value) << ", " << cStringLiteral(ins.referenceTypeDesc) << ");\n";
@@ -479,6 +594,7 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
             }
             return true;
         case RegInstructionKind::LoadField:
+            if (!rejectNativeObjectEscape(state, ins.receiver, "field load receiver", reason)) return false;
             out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
                 << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field("
                 << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver)) << ", "
@@ -487,6 +603,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
                 << cStringLiteral(ins.field.desc) << ");\n";
             return true;
         case RegInstructionKind::StoreField:
+            if (!rejectNativeObjectEscape(state, ins.receiver, "field store receiver", reason)) return false;
+            if (!rejectNativeObjectEscape(state, ins.value, "field store value", reason)) return false;
             out << "    _mj2x_regc_store_" << fieldHelperSuffix(ins.field.desc, ins.value.type) << "_field("
                 << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver)) << ", "
                 << cStringLiteral(ins.field.owner) << ", "
@@ -495,11 +613,14 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
                 << operandExpr(ins.value) << ");\n";
             return true;
         case RegInstructionKind::ArrayLoad:
+            if (!rejectNativeObjectEscape(state, ins.receiver, "array load receiver", reason)) return false;
             out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
                 << arrayHelperSuffix(ins.elementType) << "_array("
                 << operandExpr(ins.receiver) << ", " << operandExpr(ins.index) << ");\n";
             return true;
         case RegInstructionKind::ArrayStore:
+            if (!rejectNativeObjectEscape(state, ins.receiver, "array store receiver", reason)) return false;
+            if (!rejectNativeObjectEscape(state, ins.value, "array store value", reason)) return false;
             out << "    _mj2x_regc_store_" << arrayHelperSuffix(ins.elementType) << "_array("
                 << operandExpr(ins.receiver) << ", " << operandExpr(ins.index)
                 << ", " << operandExpr(ins.value) << ");\n";
@@ -508,12 +629,15 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
             // JDK intrinsic recognition goes through the registry so fallback
             // and unsupported reasons remain explicit as coverage grows.
             {
-                RegCIntrinsicDecision decision = emitIntrinsicCall(out, ins);
+                RegCIntrinsicDecision decision = emitIntrinsicCall(out, ins, state);
                 if (decision.kind == RegCIntrinsicDecisionKind::Emit) return true;
                 if (decision.kind == RegCIntrinsicDecisionKind::Unsupported) {
                     reason = decision.reason;
                     return false;
                 }
+            }
+            if (!rejectNativeObjectEscapes(state, ins.args, "generic call " + ins.method.owner + "." + ins.method.name, reason)) {
+                return false;
             }
             if (ins.hasDest) {
                 out << "    " << regName(ins.dest.id) << " = _mj2x_regc_call_"
@@ -552,22 +676,30 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins, std::st
             return true;
         case RegInstructionKind::Intrinsic:
             if (ins.intrinsicName == "array.length") {
+                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                              "array.length", reason)) return false;
                 out << "    " << regName(ins.dest.id) << " = _mj2x_regc_array_length("
                     << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
                 return true;
             }
             if (ins.intrinsicName.rfind("instanceof:", 0) == 0) {
+                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                              "instanceof", reason)) return false;
                 out << "    " << regName(ins.dest.id) << " = _mj2x_regc_instanceof("
                     << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ", "
                     << cStringLiteral(ins.intrinsicName.substr(11)) << ");\n";
                 return true;
             }
             if (ins.intrinsicName == "monitor.enter") {
+                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                              "monitor.enter", reason)) return false;
                 out << "    _mj2x_regc_monitor_enter("
                     << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
                 return true;
             }
             if (ins.intrinsicName == "monitor.exit") {
+                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                              "monitor.exit", reason)) return false;
                 out << "    _mj2x_regc_monitor_exit("
                     << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
                 return true;
@@ -590,6 +722,7 @@ bool emitTerminator(std::ostringstream& out,
                     const RegTerminator& terminator,
                     SSAType returnType,
                     const std::vector<const RegExceptionRegion*>& activeRegions,
+                    const RegCFunctionEmitState& state,
                     int& dispatchIndex,
                     std::string& reason) {
     int edgeIndex = 0;
@@ -597,41 +730,45 @@ bool emitTerminator(std::ostringstream& out,
         using T = std::decay_t<decltype(t)>;
         if constexpr (std::is_same_v<T, RegJumpTerminator>) {
             out << "    {\n";
-            emitEdgeCopies(out, t.target.copies, edgeIndex++);
+            if (!emitEdgeCopies(out, t.target.copies, edgeIndex++, state, reason)) return false;
             out << "    goto block_b" << t.target.block->id.value << ";\n";
             out << "    }\n";
             return true;
         } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+            if (!rejectNativeObjectEscape(state, t.condition, "branch condition", reason)) return false;
             out << "    if (" << operandExpr(t.condition) << ") {\n";
-            emitEdgeCopies(out, t.trueTarget.copies, edgeIndex++);
+            if (!emitEdgeCopies(out, t.trueTarget.copies, edgeIndex++, state, reason)) return false;
             out << "        goto block_b" << t.trueTarget.block->id.value << ";\n";
             out << "    } else {\n";
-            emitEdgeCopies(out, t.falseTarget.copies, edgeIndex++);
+            if (!emitEdgeCopies(out, t.falseTarget.copies, edgeIndex++, state, reason)) return false;
             out << "        goto block_b" << t.falseTarget.block->id.value << ";\n";
             out << "    }\n";
             return true;
         } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+            if (!rejectNativeObjectEscape(state, t.value, "switch value", reason)) return false;
             out << "    switch (" << operandExpr(t.value) << ") {\n";
             for (const auto& c : t.cases) {
                 out << "    case " << c.key << ": {\n";
-                emitEdgeCopies(out, c.target.copies, edgeIndex++);
+                if (!emitEdgeCopies(out, c.target.copies, edgeIndex++, state, reason)) return false;
                 out << "        goto block_b" << c.target.block->id.value << ";\n";
                 out << "    }\n";
             }
             out << "    default: {\n";
-            emitEdgeCopies(out, t.defaultTarget.copies, edgeIndex++);
+            if (!emitEdgeCopies(out, t.defaultTarget.copies, edgeIndex++, state, reason)) return false;
             out << "        goto block_b" << t.defaultTarget.block->id.value << ";\n";
             out << "    }\n";
             out << "    }\n";
             return true;
         } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
             if (t.hasValue) {
+                if (!rejectNativeObjectEscape(state, t.value, "method return", reason)) return false;
                 out << "    return " << operandExpr(t.value) << ";\n";
             } else {
                 out << "    return;\n";
             }
             return true;
         } else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
+            if (!rejectNativeObjectEscape(state, t.value, "throw", reason)) return false;
             out << "    _mj2x_regc_throw(" << operandExpr(t.value) << ");\n";
             emitExceptionDispatch(out, activeRegions, returnType, dispatchIndex);
             if (returnType == SSAType::VOID) out << "    return;\n";
@@ -700,18 +837,19 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
     if (!regs.empty()) out << "\n";
     out << "    goto block_b" << fn.entry->id.value << ";\n\n";
 
+    RegCFunctionEmitState emitState;
     int dispatchIndex = 0;
     for (const auto& block : fn.blocks) {
         auto activeRegions = activeExceptionRegions(fn, block.get());
         out << "block_b" << block->id.value << ":\n";
         for (const auto& ins : block->instructions) {
-            if (!emitInstruction(out, ins, result.reason)) return result;
+            if (!emitInstruction(out, ins, emitState, result.reason)) return result;
             if (ins.effect.mayThrow) {
                 emitExceptionDispatch(out, activeRegions, fn.symbol.returnType, dispatchIndex);
             }
         }
         if (!emitTerminator(out, block->terminator, fn.symbol.returnType,
-                            activeRegions, dispatchIndex, result.reason)) {
+                            activeRegions, emitState, dispatchIndex, result.reason)) {
             return result;
         }
         out << "\n";

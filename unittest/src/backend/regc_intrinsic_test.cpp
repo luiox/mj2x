@@ -148,6 +148,31 @@ TEST(RegCIntrinsicRegistryTest, MalformedIntrinsicArgumentCountIsUnsupported) {
               std::string::npos);
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesWrapperValueOfAndUnbox) {
+    auto valueOf = makeStaticCall("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", {
+        RegOperand::fromInt(7, SSAType::I32),
+    });
+    auto valueDecision = RegCIntrinsicRegistry::builtins().matchCall(valueOf);
+    EXPECT_EQ(valueDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(valueDecision.emitKind, RegCIntrinsicEmitKind::WrapperValueOf);
+    EXPECT_EQ(valueDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::Int);
+    EXPECT_EQ(valueDecision.symbol, "mj2x_int_value_of");
+
+    RegInstruction unbox;
+    unbox.kind = RegInstructionKind::Call;
+    unbox.method.owner = "java/lang/Integer";
+    unbox.method.name = "intValue";
+    unbox.method.desc = "()I";
+    unbox.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+    unbox.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
+
+    auto unboxDecision = RegCIntrinsicRegistry::builtins().matchCall(unbox);
+    EXPECT_EQ(unboxDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(unboxDecision.emitKind, RegCIntrinsicEmitKind::WrapperUnbox);
+    EXPECT_EQ(unboxDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::Int);
+    EXPECT_EQ(unboxDecision.symbol, "mj2x_int_int_value");
+}
+
 TEST(RegCIntrinsicTest, MathSinLoweredToRuntimeCallNotJni) {
     std::string reason;
     // static double sinCall() { return Math.sin(1.0); }
@@ -226,6 +251,41 @@ TEST(RegCIntrinsicTest, StringLdcFeedsParseIntWithLiteral) {
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\""), std::string::npos)
         << result.source;
+}
+
+TEST(RegCIntrinsicTest, IntegerValueOfIntValueLoweredToNativeWrapper) {
+    std::string reason;
+    // static int boxed(int x) { return Integer.valueOf(x).intValue(); }
+    auto result = emitRegC("boxed", "(I)I", {
+        new VarInsnNode(Opcodes::ILOAD, 0),
+        new MethodInsnNode(Opcodes::INVOKESTATIC, U("java/lang/Integer"), U("valueOf"),
+                           U("(I)Ljava/lang/Integer;"), false),
+        new MethodInsnNode(Opcodes::INVOKEVIRTUAL, U("java/lang/Integer"), U("intValue"),
+                           U("()I"), false),
+        new InsnNode(Opcodes::IRETURN),
+    }, 1, 1, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("mj2x_int native_r"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("mj2x_int_value_of("), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("mj2x_int_int_value("), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Integer\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\""), std::string::npos)
+        << result.source;
+}
+
+TEST(RegCIntrinsicTest, EscapingWrapperValueFailsClosedWithReason) {
+    std::string reason;
+    // static Object boxed(int x) { return Integer.valueOf(x); }
+    auto result = emitRegC("boxedObject", "(I)Ljava/lang/Object;", {
+        new VarInsnNode(Opcodes::ILOAD, 0),
+        new MethodInsnNode(Opcodes::INVOKESTATIC, U("java/lang/Integer"), U("valueOf"),
+                           U("(I)Ljava/lang/Integer;"), false),
+        new InsnNode(Opcodes::ARETURN),
+    }, 1, 1, reason);
+    ASSERT_FALSE(result.ok);
+    EXPECT_NE(result.reason.find("native wrapper object escaped through method return"),
+              std::string::npos) << result.reason;
 }
 
 TEST(RegCIntrinsicTest, NonIntrinsicCallStillUsesJniHelper) {
