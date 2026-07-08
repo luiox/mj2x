@@ -204,11 +204,15 @@ static const char* castResultAccessor(PrimitiveKind k) {
     }
 }
 
-static std::string classExprForDescriptor(const std::string& typeDesc) {
+static std::string classExprForDescriptor(
+    const std::string& typeDesc,
+    const std::string& ownerExpr = "_mj2x_owner_class")
+{
     if (typeDesc.size() >= 2 && typeDesc.front() == 'L' && typeDesc.back() == ';') {
-        return "(*env)->FindClass(env, \"" + typeDesc.substr(1, typeDesc.size() - 2) + "\")";
+        return "_mj2x_find_class(env, " + ownerExpr + ", \"" +
+               typeDesc.substr(1, typeDesc.size() - 2) + "\")";
     }
-    return "(*env)->FindClass(env, \"" + typeDesc + "\")";
+    return "_mj2x_find_class(env, " + ownerExpr + ", \"" + typeDesc + "\")";
 }
 
 static const char* defaultReturnValue(PrimitiveKind k) {
@@ -454,7 +458,12 @@ BackendResult CBackend::compileMethod(
     int maxLocalsVal = mn->maxLocals > 0 ? mn->maxLocals : 1;
     funcOut << "    union jvalue stack[" << (mn->maxStack > 0 ? mn->maxStack : 1) << "];\n";
     funcOut << "    union jvalue locals[" << maxLocalsVal << "];\n";
-    funcOut << "    int sp = -1;\n\n";
+    funcOut << "    int sp = -1;\n";
+    if (isStatic) {
+        funcOut << "    jclass _mj2x_owner_class = clazz;\n\n";
+    } else {
+        funcOut << "    jclass _mj2x_owner_class = (*env)->GetObjectClass(env, this);\n\n";
+    }
 
     // Param init
     slot = 0;
@@ -1092,9 +1101,8 @@ void CBackend::Impl::emitNewObject(const MIRNewObject* node, std::ostringstream&
     // NEW 只分配对象、压栈；构造由后续 INVOKESPECIAL <init>（走 emitInvoke 的
     // CallNonvirtualVoidMethod 路径）完成。用 AllocObject 解耦分配与初始化，
     // 避免 emitNewObject 推断构造器签名（MIRNewObject 不带 ctor desc）。
-    // 每次现查 jclass（MVP 不缓存）。
     out << "    {\n";
-    out << "        jclass lc = (*env)->FindClass(env, \"" << node->typeDesc << "\");\n";
+    out << "        jclass lc = _mj2x_find_class(env, _mj2x_owner_class, \"" << node->typeDesc << "\");\n";
     out << "        stack[++sp].l = (*env)->AllocObject(env, lc);\n";
     out << "    }\n";
 }
@@ -1103,7 +1111,7 @@ void CBackend::Impl::emitNewArray(const MIRNewArray* node, std::ostringstream& o
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    stack[sp].l = (*env)->NewObjectArray(env, stack[sp].i, ";
         if (node->typeDesc.empty())
-            out << "(*env)->FindClass(env, \"java/lang/Object\")";
+            out << "_mj2x_find_class(env, _mj2x_owner_class, \"java/lang/Object\")";
         else
             out << classExprForDescriptor(node->typeDesc);
         out << ", NULL);\n";
@@ -1119,7 +1127,7 @@ void CBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, std::ostrin
     for (int i = node->dims - 1; i >= 0; --i) {
         out << "        dims[" << i << "] = stack[sp--].i;\n";
     }
-    out << "        stack[++sp].l = _mj2x_new_multi_array(env, \""
+    out << "        stack[++sp].l = _mj2x_new_multi_array(env, _mj2x_owner_class, \""
         << node->typeDesc << "\", dims, " << node->dims << ");\n";
     out << "    }\n";
 }
@@ -1233,7 +1241,7 @@ void CBackend::Impl::emitStaticGet(const MIRStaticGet* node, std::ostringstream&
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc = stackValueAccessor(pk);
     out << "    {\n";
-    out << "        jclass lc = (*env)->FindClass(env, \"" << node->owner << "\");\n";
+    out << "        jclass lc = _mj2x_find_class(env, _mj2x_owner_class, \"" << node->owner << "\");\n";
     out << "        jfieldID fid = (*env)->GetStaticFieldID(env, lc, \""
         << node->name << "\", \"" << node->desc << "\");\n";
     out << "        stack[++sp]" << acc << " = ("
@@ -1247,7 +1255,7 @@ void CBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringstream&
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc = stackValueAccessor(pk);
     out << "    {\n";
-    out << "        jclass lc = (*env)->FindClass(env, \"" << node->owner << "\");\n";
+    out << "        jclass lc = _mj2x_find_class(env, _mj2x_owner_class, \"" << node->owner << "\");\n";
     out << "        jfieldID fid = (*env)->GetStaticFieldID(env, lc, \""
         << node->name << "\", \"" << node->desc << "\");\n";
     out << "        (*env)->SetStatic" << suffix
@@ -1285,7 +1293,7 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
     // 整段放 block 内：先查 jclass/jmethodID，再调用。返回值写入接收者槽（非 void）。
     out << "    {\n";
     if (isStatic) {
-        out << "        jclass lc = (*env)->FindClass(env, \"" << node->owner << "\");\n";
+        out << "        jclass lc = _mj2x_find_class(env, _mj2x_owner_class, \"" << node->owner << "\");\n";
         out << "        jmethodID mid = (*env)->GetStaticMethodID(env, lc, \""
             << node->name << "\", \"" << node->desc << "\");\n";
         out << "        ";
@@ -1298,7 +1306,7 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
         out << "(*env)->" << callPrefix << retSuffix << "Method(env, lc, mid";
     } else {
         if (isNonvirtual || node->isInterface || node->invokeOpcode == Opcodes::INVOKEINTERFACE) {
-            out << "        jclass lc = (*env)->FindClass(env, \"" << node->owner << "\");\n";
+            out << "        jclass lc = _mj2x_find_class(env, _mj2x_owner_class, \"" << node->owner << "\");\n";
         } else {
             out << "        jclass lc = (*env)->GetObjectClass(env, stack["
                 << recvExpr << "].l);\n";

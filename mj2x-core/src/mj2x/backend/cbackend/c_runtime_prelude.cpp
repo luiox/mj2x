@@ -5,27 +5,43 @@
 namespace mj2x::backend {
 
 std::string cBackendRuntimePrelude() {
-    // These two helpers are emitted verbatim into every CBackend TU.  They
-    // resolve a JVM class descriptor and recursively allocate a multi-dim
-    // array; both are `static` so they are local to the TU and stripped by the
-    // linker when unused.  The body matches the original inline emit so the
-    // generated source stays byte-compatible with prior CBackend output.
     std::string s;
-    s.reserve(1024);
+    s.reserve(4096);
 
-    s += "static jclass _mj2x_component_class(JNIEnv* env, const char* desc) {\n";
-    s += "    if (desc[0] == '[') return (*env)->FindClass(env, desc);\n";
+    s += "static jclass _mj2x_find_class(JNIEnv* env, jclass owner, const char* name) {\n";
+    s += "    if (name == NULL) return NULL;\n";
+    s += "    if (owner == NULL) return (*env)->FindClass(env, name);\n";
+    s += "    jclass class_class = (*env)->FindClass(env, \"java/lang/Class\");\n";
+    s += "    if ((*env)->ExceptionCheck(env)) return NULL;\n";
+    s += "    jmethodID get_loader = (*env)->GetMethodID(env, class_class, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");\n";
+    s += "    if ((*env)->ExceptionCheck(env)) return NULL;\n";
+    s += "    jobject loader = (*env)->CallObjectMethod(env, owner, get_loader);\n";
+    s += "    if ((*env)->ExceptionCheck(env)) return NULL;\n";
+    s += "    if (loader == NULL) return (*env)->FindClass(env, name);\n";
+    s += "    char binary_name[1024];\n";
+    s += "    int i = 0;\n";
+    s += "    while (name[i] != '\\0' && i < 1023) { binary_name[i] = (name[i] == '/') ? '.' : name[i]; i++; }\n";
+    s += "    binary_name[i] = '\\0';\n";
+    s += "    jstring class_name = (*env)->NewStringUTF(env, binary_name);\n";
+    s += "    if ((*env)->ExceptionCheck(env)) return NULL;\n";
+    s += "    jmethodID for_name = (*env)->GetStaticMethodID(env, class_class, \"forName\", \"(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;\");\n";
+    s += "    if ((*env)->ExceptionCheck(env)) return NULL;\n";
+    s += "    return (jclass)(*env)->CallStaticObjectMethod(env, class_class, for_name, class_name, JNI_FALSE, loader);\n";
+    s += "}\n\n";
+
+    s += "static jclass _mj2x_component_class(JNIEnv* env, jclass owner, const char* desc) {\n";
+    s += "    if (desc[0] == '[') return _mj2x_find_class(env, owner, desc);\n";
     s += "    if (desc[0] == 'L') {\n";
     s += "        char name[1024];\n";
     s += "        int i = 0;\n";
     s += "        while (desc[i + 1] != ';' && desc[i + 1] != '\\0' && i < 1023) { name[i] = desc[i + 1]; i++; }\n";
     s += "        name[i] = '\\0';\n";
-    s += "        return (*env)->FindClass(env, name);\n";
+    s += "        return _mj2x_find_class(env, owner, name);\n";
     s += "    }\n";
     s += "    return (*env)->FindClass(env, \"java/lang/Object\");\n";
     s += "}\n\n";
 
-    s += "static jobject _mj2x_new_multi_array(JNIEnv* env, const char* desc, jint* dims, int dimCount) {\n";
+    s += "static jobject _mj2x_new_multi_array(JNIEnv* env, jclass owner, const char* desc, jint* dims, int dimCount) {\n";
     s += "    jint len = dims[0];\n";
     s += "    const char* component = desc + 1;\n";
     s += "    if (dimCount == 1) {\n";
@@ -38,12 +54,12 @@ std::string cBackendRuntimePrelude() {
     s += "        case 'J': return (jobject)(*env)->NewLongArray(env, len);\n";
     s += "        case 'F': return (jobject)(*env)->NewFloatArray(env, len);\n";
     s += "        case 'D': return (jobject)(*env)->NewDoubleArray(env, len);\n";
-    s += "        default: return (jobject)(*env)->NewObjectArray(env, len, _mj2x_component_class(env, component), NULL);\n";
+    s += "        default: return (jobject)(*env)->NewObjectArray(env, len, _mj2x_component_class(env, owner, component), NULL);\n";
     s += "        }\n";
     s += "    }\n";
-    s += "    jobjectArray outer = (*env)->NewObjectArray(env, len, (*env)->FindClass(env, component), NULL);\n";
+    s += "    jobjectArray outer = (*env)->NewObjectArray(env, len, _mj2x_find_class(env, owner, component), NULL);\n";
     s += "    for (jint i = 0; i < len; ++i) {\n";
-    s += "        jobject child = _mj2x_new_multi_array(env, component, dims + 1, dimCount - 1);\n";
+    s += "        jobject child = _mj2x_new_multi_array(env, owner, component, dims + 1, dimCount - 1);\n";
     s += "        (*env)->SetObjectArrayElement(env, outer, i, child);\n";
     s += "    }\n";
     s += "    return (jobject)outer;\n";

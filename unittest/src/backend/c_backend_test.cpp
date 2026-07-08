@@ -255,7 +255,7 @@ TEST(CBackendTest, InvokeSpecialLooksUpDeclaringClass) {
     auto blocks = cc.convert(*mn);
     auto result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("jclass lc = (*env)->FindClass(env, \"java/lang/Object\")"), std::string::npos);
+    EXPECT_NE(result.text.find("jclass lc = _mj2x_find_class(env, _mj2x_owner_class, \"java/lang/Object\")"), std::string::npos);
     EXPECT_NE(result.text.find("CallNonvirtualVoidMethod(env, stack[sp - 0].l, lc, mid"), std::string::npos);
 }
 
@@ -353,6 +353,53 @@ TEST(CBackendTest, CheckCastEmission) {
 
     EXPECT_NE(result.text.find("ClassCastException"), std::string::npos);
     EXPECT_NE(result.text.find("IsInstanceOf"), std::string::npos);
+}
+
+TEST(CBackendTest, ClassLookupsUseOwnerClassLoaderHelper) {
+    CBackend backend;
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC,
+                         "refs", "(Ljava/lang/Object;)I", {
+        new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("pkg/Foo")),
+        new InsnNode(Opcodes::POP),
+        new InsnNode(Opcodes::ICONST_1),
+        new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::Utf8StringRef::from_cstr("pkg/Foo")),
+        new InsnNode(Opcodes::POP),
+        new InsnNode(Opcodes::ICONST_1),
+        new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::Utf8StringRef::from_cstr("[Lpkg/Foo;")),
+        new InsnNode(Opcodes::POP),
+        new VarInsnNode(Opcodes::ALOAD, 1),
+        new TypeInsnNode(Opcodes::INSTANCEOF, ca::str::Utf8StringRef::from_cstr("pkg/Foo")),
+        new InsnNode(Opcodes::POP),
+        new MethodInsnNode(Opcodes::INVOKESTATIC,
+                           ca::str::Utf8StringRef::from_cstr("pkg/Helper"),
+                           ca::str::Utf8StringRef::from_cstr("value"),
+                           ca::str::Utf8StringRef::from_cstr("()I"),
+                           false),
+        new InsnNode(Opcodes::IRETURN),
+    });
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto result = backend.compileMethod("pkg/Owner", cm, blocks);
+
+    EXPECT_NE(result.text.find("jclass _mj2x_owner_class = (*env)->GetObjectClass(env, this);"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("_mj2x_find_class(env, _mj2x_owner_class, \"pkg/Foo\")"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("_mj2x_find_class(env, _mj2x_owner_class, \"[Lpkg/Foo;\")"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("_mj2x_find_class(env, _mj2x_owner_class, \"pkg/Helper\")"),
+              std::string::npos)
+        << result.text;
+    EXPECT_EQ(result.text.find("FindClass(env, \"pkg/Foo\")"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("FindClass(env, \"[Lpkg/Foo;\")"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("FindClass(env, \"pkg/Helper\")"), std::string::npos) << result.text;
 }
 
 TEST(CBackendTest, InjectMakesMethodNative) {

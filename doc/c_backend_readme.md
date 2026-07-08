@@ -14,7 +14,9 @@ CBackend 不承担主要抗 c2j 责任。生成 C 中保留 JVM operand stack �
 可调试性；保护导向路线见 `regc_backend_readme.md`。
 
 Native 绑定使用 `static` C 函数加 `JNI_OnLoad` / `RegisterNatives`。生成 DLL/SO 不再为每个
-Java 方法导出 `Java_*` 符号；Java 方法名和描述符保留在注册表中供 JVM 绑定。
+Java 方法导出 `Java_*` 符号；Java 方法名和描述符保留在注册表中供 JVM 绑定。方法体内
+应用类解析会使用当前 owner class 的 `ClassLoader`，避免自定义 class loader 场景下
+直接 `FindClass` 找不到业务类。
 
 ## CLI 用法
 
@@ -42,9 +44,9 @@ passthrough，不参与 root class 解析或 native injection。
 | int/long 除零 trap 与 `MIN_VALUE / -1` 边界 | 支持 | `CBackendE2E.IntegerDivisionTrap` |
 | long/float/double 与基础转换 | 支持 | `CBackendE2E.LongArith`、`FloatDouble`、`Conversions` |
 | `tableswitch` / `lookupswitch` | 支持 | `CBackendE2E.DenseSwitch`、`SparseSwitch` |
-| 引用分支、字符串常量、方法调用、递归、接口调用 | 支持 | `CBackendE2E.ReferenceBranches`、`StringLiterals`、`MethodCalls`、`RecursionCalls`、`InterfaceCalls` |
-| 对象、字段、`instanceof`、`checkcast` | 支持 | `CBackendE2E.ObjectFieldsAndTypeChecks` |
-| 基本类型数组、对象数组、多维数组 | 支持；`BALOAD`/`BASTORE` 对 byte[]/boolean[] 做运行时分流 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
+| 引用分支、字符串常量、方法调用、递归、接口调用 | 支持；静态/特殊/接口调用的 owner 解析使用当前 owner `ClassLoader` | `CBackendE2E.ReferenceBranches`、`StringLiterals`、`MethodCalls`、`RecursionCalls`、`InterfaceCalls` |
+| 对象、字段、`instanceof`、`checkcast` | 支持；业务类解析使用当前 owner `ClassLoader` | `CBackendE2E.ObjectFieldsAndTypeChecks` |
+| 基本类型数组、对象数组、多维数组 | 支持；对象/多维数组类解析使用当前 owner `ClassLoader`，`BALOAD`/`BASTORE` 对 byte[]/boolean[] 做运行时分流 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
 | `athrow`、try/catch、多 catch、finally、monitor | 支持 | `CBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
 | 综合样本 | 支持 | `CBackendE2E.IntegratedSample` |
 | `.class` 输入/输出 | 支持 | `IOTest.InputLoaderRoundtrip`、`PipelineTest.FullPipelineRoundtrip` |
@@ -56,7 +58,7 @@ passthrough，不参与 root class 解析或 native injection。
 ## 已知限制
 
 - 生成 C 是 `union jvalue stack[]` / `sp` 风格，便于正确性覆盖，但容易被 c2j 类工具识别。
-- JNI class/method/field ID 目前按需查找，未做缓存优化。
+- JNI method/field ID 目前按需查找，未做缓存优化。
 - `<init>` / `<clinit>` 仍按 MarkAll 边界保守处理，不作为默认 native 化目标。
 - `invokedynamic` 采用 fail-closed 策略，不直译 lambda、string concat 或 method handle。
 - JAR 输出是 MVP：entry 顺序和非 class payload 保留，输出 entry 使用 stored ZIP 形态；

@@ -96,7 +96,9 @@
 
 **已覆盖**（Wave 5/6）：`ObjectFields`（实例/静态字段、`instanceof`、`checkcast`）、
 `PrimitiveArrays`（基本类型数组、窄类型数组、boolean[]/byte[] 分流、arraylength）、`ObjectArrays`（String/Object 数组）、
-`MultiDimArrays`（int[][] 与 String[][][]）。
+`MultiDimArrays`（int[][] 与 String[][][]）。CBackend 发射单测还断言 `new`、`anewarray`、
+静态调用、`instanceof` 等业务类路径走 owner ClassLoader-aware helper，而不是直接
+`FindClass`。
 
 **已覆盖**（Wave 7/收尾）：`ThrowPropagation`（`ATHROW` 向上传播）、
 `TryCatchExceptions`（try-catch 与未命中 catch 重新抛出）、`MultiCatchAndFinally`（多 catch 与 finally）、
