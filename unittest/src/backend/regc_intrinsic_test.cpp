@@ -15,6 +15,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
+#include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
@@ -94,7 +95,58 @@ ca::str::Utf8StringRef U(const char* s) {
     return ca::str::Utf8StringRef::from_cstr(s);
 }
 
+RegInstruction makeStaticCall(
+    const char* owner,
+    const char* name,
+    const char* desc,
+    std::initializer_list<RegOperand> args)
+{
+    RegInstruction ins;
+    ins.kind = RegInstructionKind::Call;
+    ins.method.owner = owner;
+    ins.method.name = name;
+    ins.method.desc = desc;
+    ins.method.invokeOpcode = Opcodes::INVOKESTATIC;
+    ins.args.assign(args.begin(), args.end());
+    return ins;
+}
+
 } // namespace
+
+TEST(RegCIntrinsicRegistryTest, MatchesMathIntrinsicThroughRegistry) {
+    auto ins = makeStaticCall("java/lang/Math", "sqrt", "(D)D", {
+        RegOperand::fromFloat(9.0, SSAType::F64),
+    });
+
+    auto decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+
+    EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(decision.emitKind, RegCIntrinsicEmitKind::RuntimeFunction);
+    EXPECT_EQ(decision.symbol, "mj2x_math_sqrt");
+    EXPECT_FALSE(decision.passContext);
+}
+
+TEST(RegCIntrinsicRegistryTest, UnsupportedOverloadFallsBackWithReason) {
+    auto ins = makeStaticCall("java/lang/Math", "sqrt", "(I)I", {
+        RegOperand::fromInt(9, SSAType::I32),
+    });
+
+    auto decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+
+    EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Fallback);
+    EXPECT_NE(decision.reason.find("unsupported intrinsic overload: java/lang/Math.sqrt(I)I"),
+              std::string::npos);
+}
+
+TEST(RegCIntrinsicRegistryTest, MalformedIntrinsicArgumentCountIsUnsupported) {
+    auto ins = makeStaticCall("java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", {});
+
+    auto decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+
+    EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Unsupported);
+    EXPECT_NE(decision.reason.find("malformed RegIR argument count for intrinsic"),
+              std::string::npos);
+}
 
 TEST(RegCIntrinsicTest, MathSinLoweredToRuntimeCallNotJni) {
     std::string reason;
