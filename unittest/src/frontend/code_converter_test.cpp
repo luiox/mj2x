@@ -504,17 +504,19 @@ TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes) {
     EXPECT_TRUE(foundRet);
 }
 
-TEST(CodeConverterTest, InvokeDynamicBecomesUnsupportedBoundaryNode) {
+TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata) {
     auto bsm = Handle(Opcodes::H_INVOKESTATIC,
                       ca::str::Utf8StringRef::from_cstr("java/lang/invoke/StringConcatFactory"),
                       ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
-                      ca::str::Utf8StringRef::from_cstr("()V"),
+                      ca::str::Utf8StringRef::from_cstr("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                                                        "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
+                                                        "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
                       false);
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "concat", "()Ljava/lang/String;", {
         new InvokeDynamicInsnNode(ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                                   ca::str::Utf8StringRef::from_cstr("()Ljava/lang/String;"),
-                                  bsm, {}),
+                                  bsm, {std::string("v=\x01")}),
         new InsnNode(Opcodes::ARETURN),
     });
 
@@ -528,7 +530,10 @@ TEST(CodeConverterTest, InvokeDynamicBecomesUnsupportedBoundaryNode) {
             if (n->kind != MIRKind::INVOKE_DYNAMIC) continue;
             auto* unsupported = static_cast<MIRInvokeDynamic*>(n.get());
             foundIndy = unsupported->name == "makeConcatWithConstants" &&
-                        unsupported->desc == "()Ljava/lang/String;";
+                        unsupported->desc == "()Ljava/lang/String;" &&
+                        unsupported->bsm.has_value() &&
+                        unsupported->bsm->getOwner().to_std_string() == "java/lang/invoke/StringConcatFactory" &&
+                        unsupported->bsmArgs.size() == 1;
         }
     }
 

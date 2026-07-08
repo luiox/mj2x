@@ -7,6 +7,7 @@
 #include <vector>
 #include <variant>
 #include <memory>
+#include <optional>
 
 namespace mj2x {
 
@@ -246,9 +247,10 @@ struct MIRInvoke : MIRNode {
     MIRInvoke() : MIRNode(MIRKind::INVOKE) {}
 };
 
-// invokedynamic：R1b preprocessor 标记但未展开（R2/R5+ 完整展开）。builder 遇到则 fail-closed。
 struct MIRInvokeDynamic : MIRNode {
     std::string name, desc;
+    std::optional<jbytecode::core::Handle> bsm;
+    std::vector<ca::core::Any> bsmArgs;
     MIRInvokeDynamic() : MIRNode(MIRKind::INVOKE_DYNAMIC) {}
 };
 

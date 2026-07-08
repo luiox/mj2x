@@ -106,18 +106,21 @@ TEST(CBackendTest, AddMethod) {
     EXPECT_NE(result.text.find("+"), std::string::npos);
 }
 
-TEST(CBackendTest, InvokeDynamicEmitsUnsupportedException) {
+TEST(CBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
     auto bsm = Handle(Opcodes::H_INVOKESTATIC,
                       testArena.intern("java/lang/invoke/StringConcatFactory"),
                       testArena.intern("makeConcatWithConstants"),
-                      testArena.intern("()V"),
+                      testArena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                                       "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
+                                       "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
                       false);
     CBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "concat", "()Ljava/lang/String;", {
+                         "concat", "(I)Ljava/lang/String;", {
+        new VarInsnNode(Opcodes::ILOAD, 0),
         new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
-                                  testArena.intern("()Ljava/lang/String;"),
-                                  bsm, {}),
+                                  testArena.intern("(I)Ljava/lang/String;"),
+                                  bsm, {std::string("v=\x01")}),
         new InsnNode(Opcodes::ARETURN),
     });
     CompilerMethod cm;
@@ -128,9 +131,12 @@ TEST(CBackendTest, InvokeDynamicEmitsUnsupportedException) {
     auto blocks = cc.convert(*mn);
     auto result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("UnsupportedOperationException"), std::string::npos)
+    EXPECT_EQ(result.text.find("UnsupportedOperationException"), std::string::npos)
         << result.text;
-    EXPECT_NE(result.text.find("invokedynamic"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("makeConcatWithConstants"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("getTarget"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("invokeWithArguments"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("java/lang/Integer"), std::string::npos) << result.text;
 }
 
 TEST(CBackendTest, CastEmission) {

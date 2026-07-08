@@ -150,7 +150,9 @@ RETURN 系列各类型、方法参数传递
 
 ## 4. 暂不在本路线的（明确边界）
 
-- ❌ **INVOKEDYNAMIC**：lambda/方法句柄不做直译；CBackend 生成 `UnsupportedOperationException` fail-closed，避免静默生成错误语义。
+- ✅ **INVOKEDYNAMIC(CBackend)**：CBackend 通过 native 侧 bootstrap +
+  `MethodHandle.invokeWithArguments` runtime bridge 覆盖 javac string concat、
+  方法引用和捕获 lambda；RegC 仍按独立策略 fail-closed。
 - ❌ **JSR/RET**：废弃 subroutine 指令不纳入本路线；若旧 class 仍含 JSR/RET，应由 preprocessor/输入规范处理。
 - ❌ **c2j 对抗**：C backend 不承担对抗职责，生成的代码可被 c2j 还原（接受）
 - ✅ **JAR 输入输出 MVP**：当前可处理 `.jar` 内多 class，并保留非 class 资源；签名、重压缩和

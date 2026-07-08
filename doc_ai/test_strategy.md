@@ -24,7 +24,7 @@
 | `core/e2e_test`（CBackend 版） | CBackend | 3 | 复活，去 legacy |
 | `frontend/code_converter_test` | **L1** 栈式 MIR | 18 | 保留（L1 基线）；Wave 6 补数组 component 元数据 |
 | `backend/c_backend_test` | CBackend | 19 | 复名 `c_backend_test.cpp`，子串匹配；Wave 6 补 array/checkcast emit |
-| **`backend/c_backend_e2e_test.cpp`** ★新增 | **CBackend 真 E2E** | 26 | Wave 1 起逐波补，见 §1.4 |
+| **`backend/c_backend_e2e_test.cpp`** ★新增 | **CBackend 真 E2E** | 28 | Wave 1 起逐波补，见 §1.4 |
 | `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、CBackend/RegC JAR 输入/输出入口、CMake 工程输出、负向参数、坏 JAR fail-closed |
 
 ### 1.2 各层测试目标（R1-R4 落地时补）
@@ -93,6 +93,8 @@
 
 **已覆盖**（Wave 4）：`MethodCalls`（静态/实例/构造器/long+double 参数调用）、`RecursionCalls`
 （native 递归调用）、`StringLiterals`（String LDC/ARETURN/虚方法调用）、`InterfaceCalls`（INVOKEINTERFACE）。
+`InvokeDynamicStringConcat` 与 `InvokeDynamicLambda` 覆盖 CBackend native 侧
+bootstrap + `MethodHandle.invokeWithArguments` 路径，包括 javac string concat、方法引用和捕获 lambda。
 
 **已覆盖**（Wave 5/6）：`ObjectFields`（实例/静态字段、`instanceof`、`checkcast`）、
 `PrimitiveArrays`（基本类型数组、窄类型数组、boolean[]/byte[] 分流、arraylength）、`ObjectArrays`（String/Object 数组）、

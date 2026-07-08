@@ -181,7 +181,9 @@ SSAEffect {
 **纯算术**（Unary/Binary 无 trap）= `Pure`；div/rem = `Pure.copy(mayThrow=true)`；
 数组访问 = `ReadMemory/WriteMemory.copy(mayThrow=true)`；call = `ExternalCall`。
 
-**INVOKE_DYNAMIC** 不在这 12 类里 —— 它由 L1 preprocessor 在翻译前展开为 MethodHandle 链（dev_plan R1b.4），翻译期不再有 invokedynamic。
+**INVOKE_DYNAMIC** 不在这 12 类里。CBackend 当前保留 `MIRInvokeDynamic`
+bootstrap 元数据并生成 native MethodHandle runtime bridge；RegC/SSA 仍要求
+后续在进入无栈 IR 前展开或 fail-closed。
 
 ---
 

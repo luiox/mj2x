@@ -20,6 +20,9 @@ Java 方法导出 `Java_*` 符号；Java 方法名和描述符保留在注册表
 异常提前返回前批量释放；对象返回值会保留下来作为返回引用。字段和方法 ID 在各生成
 调用点按需懒初始化到 `static jfieldID` / `static jmethodID`，避免每次执行都重新解析。
 字符串 LDC 常量会去重到 TU 级 `_mj2x_string_pool[]`，方法体只保留 pool offset。
+CBackend 对 `invokedynamic` 采用运行时桥:在 native 侧调用 bootstrap，取
+`CallSite.getTarget()` 后通过 `MethodHandle.invokeWithArguments` 执行，覆盖 javac
+生成的 string concat、方法引用和捕获 lambda。
 
 ## CLI 用法
 
@@ -57,6 +60,7 @@ passthrough，不参与 root class 解析或 native injection。
 | long/float/double 与基础转换 | 支持 | `CBackendE2E.LongArith`、`FloatDouble`、`Conversions` |
 | `tableswitch` / `lookupswitch` | 支持 | `CBackendE2E.DenseSwitch`、`SparseSwitch` |
 | 引用分支、字符串常量、方法调用、递归、接口调用 | 支持；字符串常量走 TU 级 pool，静态/特殊/接口调用的 owner 解析使用当前 owner `ClassLoader` | `CBackendE2E.ReferenceBranches`、`StringLiterals`、`MethodCalls`、`RecursionCalls`、`InterfaceCalls` |
+| `invokedynamic` string concat / lambda | 支持；native 侧 bootstrap + MethodHandle 桥执行 | `CBackendE2E.InvokeDynamicStringConcat`、`InvokeDynamicLambda` |
 | 对象、字段、`instanceof`、`checkcast` | 支持；业务类解析使用当前 owner `ClassLoader` | `CBackendE2E.ObjectFieldsAndTypeChecks` |
 | 基本类型数组、对象数组、多维数组 | 支持；对象/多维数组类解析使用当前 owner `ClassLoader`，`BALOAD`/`BASTORE` 对 byte[]/boolean[] 做运行时分流 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
 | `athrow`、try/catch、多 catch、finally、monitor | 支持 | `CBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
@@ -76,7 +80,8 @@ passthrough，不参与 root class 解析或 native injection。
 - JNI local refs 按方法级固定容量追踪并在返回前释放；极端长循环中持续创建新局部引用时，后续仍可补周期性清理。
 - JNI method/field ID 懒缓存未加锁；多线程首次同时命中同一调用点时可能重复解析一次，但最终缓存值等价。
 - `<init>` / `<clinit>` 仍按 MarkAll 边界保守处理，不作为默认 native 化目标。
-- `invokedynamic` 采用 fail-closed 策略，不直译 lambda、string concat 或 method handle。
+- `invokedynamic` 通过 MethodHandle runtime bridge 执行，正确性优先；不是隐藏 bootstrap
+  或 lambda 语义的保护型实现。RegC 对未展开 indy 仍 fail-closed。
 - JAR 输出是 MVP：entry 顺序和非 class payload 保留，输出 entry 使用 stored ZIP 形态；
   signed-JAR metadata 触发 fail-closed，签名剥离/重签策略留到产品化阶段。
 - 没有 root class entry 的 JAR 会 fail-closed；multi-release `META-INF/versions/**.class`

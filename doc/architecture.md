@@ -46,7 +46,7 @@ mj2x 是 morpher 攻防闭环的**蓝队**：产出受保护样本供 mjdbg（�
 | `synchronized` 块内抛异常 | `MONITOREXIT` 被跳过 → 锁泄漏 | R2 起用 C++ RAII guard 修复（构造 `MonitorEnter` / 析构 `MonitorExit`，栈展开保证释放，PR#305 review） |
 | `ATHROW` 后继续 JNI | `Throw` 不中断 C 控制流 | R2 起翻译为 `Throw + return` |
 | `ACC_SYNCHRONIZED` 方法 | C 不能模拟 JVM monitor | R1 起仍拒绝，fail-closed |
-| `INVOKEDYNAMIC` | preprocessor 提取到合成方法 | R1 补齐 L1 preprocessor |
+| `INVOKEDYNAMIC` | CBackend 保留 bootstrap 元数据并生成 MethodHandle runtime bridge；RegC 后续展开 | CBackend 已覆盖 javac string concat/lambda |
 
 ### 1.4 参考项目（仅设计借鉴，不依赖）
 
@@ -267,7 +267,7 @@ mj2x/
 │   │   ├── io/                       — InputLoader / OutputWriter（复用）
 │   │   ├── frontend/                 — [L1] 栈式 MIR（复用）
 │   │   ├── mir/                      — ★ [L2] ssa/ + [L3] register_ir/ + [L4] passes/（R1/R4 新增）
-│   │   ├── preprocessor/             — 复用 + INVOKEDYNAMIC 提取（R1 补）
+│   │   ├── preprocessor/             — 诊断/改写入口；CBackend 保留 INVOKEDYNAMIC 元数据
 │   │   ├── postprocessor/            — 复用（注入 loader）
 │   │   └── backend/
 │   │       ├── backend.hpp           — 接口（复用）

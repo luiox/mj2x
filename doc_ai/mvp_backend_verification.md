@@ -28,6 +28,7 @@
 | int/long div/rem trap | `CBackendE2E.IntegerDivisionTrap` |
 | 控制流 | `CBackendE2E.IntControlFlow`、`DenseSwitch`、`SparseSwitch`、`NestedLoopsAndContinue`、`ReferenceBranches` |
 | 调用与字符串 | `CBackendE2E.MethodCalls`、`RecursionCalls`、`StringLiterals`、`InterfaceCalls` |
+| CBackend invokedynamic | `CBackendTest.InvokeDynamicEmitsMethodHandleBridge`、`CBackendE2E.InvokeDynamicStringConcat`、`InvokeDynamicLambda` |
 | 对象/字段/类型检查 | `CBackendE2E.ObjectFieldsAndTypeChecks` |
 | 数组 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
 | 异常与 monitor | `CBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
@@ -54,7 +55,7 @@
 
 | 边界 | 策略 | 验证 |
 |------|------|------|
-| `invokedynamic` | 保持 fail-closed，不直译 lambda/string concat/method handle | `CodeConverterTest.InvokeDynamicBecomesUnsupportedBoundaryNode`、`CBackendTest.InvokeDynamicEmitsUnsupportedException` |
+| RegC `invokedynamic` | 保持 fail-closed，不进入 SSA/RegIR/RegC lowering | `RegCBackendTest.FailedLoweringDoesNotMarkMethodNative` |
 | JSR/RET | 转为显式 unsupported MIR 节点，让后端 fail closed | `CodeConverterTest.JsrAndRetBecomeUnsupportedBoundaryNodes` |
 | RegC lowering 失败 | 不标记 `native`，不清空原 bytecode | `RegCBackendTest.FailedLoweringDoesNotMarkMethodNative` |
 

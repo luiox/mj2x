@@ -72,9 +72,10 @@ inside the frozen scope without adding new backend features:
   `*.DSA`, and `*.EC` before producing misleading output.
 - CLI negative-path tests: bad args, unknown backend, missing input, unsupported
   backend selection, unreadable input, empty JAR, and no-class JAR.
-- Unsupported bytecode boundary tests: `invokedynamic`, JSR/RET, and unsupported
-  RegC lowering must fail closed or leave the method unmodified rather than
-  silently generating wrong native code.
+- Unsupported bytecode boundary tests: JSR/RET and unsupported RegC lowering
+  must fail closed or leave the method unmodified rather than silently
+  generating wrong native code. CBackend `invokedynamic` now has a runtime
+  MethodHandle bridge and is covered by E2E tests.
 - Multi-release JAR tests: `META-INF/versions/*.class` entries stay passthrough
   for the MVP and must be documented.
 - Documentation cleanup where old docs contradict this frozen scope.
@@ -89,7 +90,7 @@ The following items are postponed until after the MVP release:
 - VMC4 native VM backend and VM runtime.
 - Product packaging that compiles emitted C into platform DLL/SO artifacts.
 - Signed-JAR re-signing or signature-stripping policy.
-- Complete `invokedynamic`, lambda, method-handle, and string-concat lowering.
+- RegC `invokedynamic`, lambda, method-handle, and string-concat lowering.
 - JNI ID cache optimization.
 - CBackend JVM-accurate integer div/rem trap semantics.
 - Moving all RegC object/field/array/call helpers behind the R3 runtime ABI.

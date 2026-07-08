@@ -245,6 +245,77 @@ static PrimitiveKind methodReturnKind(const std::string& methodDesc) {
             .to_std_string());
 }
 
+static std::string utf8RefToString(ca::str::Utf8StringRef value) {
+    return value.to_std_string();
+}
+
+static std::string typeDescriptorString(const Type& type) {
+    return type.getDescriptor().to_std_string();
+}
+
+static std::string methodTypeDescriptorString(const Type& type) {
+    return type.getSort() == Type::METHOD
+        ? type.getDescriptor().to_std_string()
+        : type.toString();
+}
+
+static const char* boxedClassName(PrimitiveKind kind) {
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN: return "java/lang/Boolean";
+    case PrimitiveKind::BYTE:    return "java/lang/Byte";
+    case PrimitiveKind::CHAR:    return "java/lang/Character";
+    case PrimitiveKind::SHORT:   return "java/lang/Short";
+    case PrimitiveKind::INT:     return "java/lang/Integer";
+    case PrimitiveKind::LONG:    return "java/lang/Long";
+    case PrimitiveKind::FLOAT:   return "java/lang/Float";
+    case PrimitiveKind::DOUBLE:  return "java/lang/Double";
+    case PrimitiveKind::VOID:    return "java/lang/Void";
+    default:                     return "java/lang/Object";
+    }
+}
+
+static const char* boxedValueOfDesc(PrimitiveKind kind) {
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN: return "(Z)Ljava/lang/Boolean;";
+    case PrimitiveKind::BYTE:    return "(B)Ljava/lang/Byte;";
+    case PrimitiveKind::CHAR:    return "(C)Ljava/lang/Character;";
+    case PrimitiveKind::SHORT:   return "(S)Ljava/lang/Short;";
+    case PrimitiveKind::INT:     return "(I)Ljava/lang/Integer;";
+    case PrimitiveKind::LONG:    return "(J)Ljava/lang/Long;";
+    case PrimitiveKind::FLOAT:   return "(F)Ljava/lang/Float;";
+    case PrimitiveKind::DOUBLE:  return "(D)Ljava/lang/Double;";
+    default:                     return "(Ljava/lang/Object;)Ljava/lang/Object;";
+    }
+}
+
+static const char* boxedUnboxMethod(PrimitiveKind kind) {
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN: return "booleanValue";
+    case PrimitiveKind::BYTE:    return "byteValue";
+    case PrimitiveKind::CHAR:    return "charValue";
+    case PrimitiveKind::SHORT:   return "shortValue";
+    case PrimitiveKind::INT:     return "intValue";
+    case PrimitiveKind::LONG:    return "longValue";
+    case PrimitiveKind::FLOAT:   return "floatValue";
+    case PrimitiveKind::DOUBLE:  return "doubleValue";
+    default:                     return "";
+    }
+}
+
+static const char* boxedUnboxDesc(PrimitiveKind kind) {
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN: return "()Z";
+    case PrimitiveKind::BYTE:    return "()B";
+    case PrimitiveKind::CHAR:    return "()C";
+    case PrimitiveKind::SHORT:   return "()S";
+    case PrimitiveKind::INT:     return "()I";
+    case PrimitiveKind::LONG:    return "()J";
+    case PrimitiveKind::FLOAT:   return "()F";
+    case PrimitiveKind::DOUBLE:  return "()D";
+    default:                     return "()Ljava/lang/Object;";
+    }
+}
+
 static void emitExceptionReturn(const std::string& methodDesc, std::ostringstream& out, int indent = 8) {
     auto retType = methodReturnKind(methodDesc);
     out << std::string(static_cast<size_t>(indent), ' ');
@@ -431,6 +502,7 @@ struct CBackend::Impl {
     void emitStaticGet(const MIRStaticGet* node, std::ostringstream& out);
     void emitStaticPut(const MIRStaticPut* node, std::ostringstream& out);
     void emitInvoke(const MIRInvoke* node, std::ostringstream& out);
+    void emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostringstream& out);
     void emitUnsupported(const char* what, std::ostringstream& out);
     void emitCheckCast(const MIRCheckCast* node, std::ostringstream& out);
     void emitInstanceOf(const MIRInstanceOf* node, std::ostringstream& out);
@@ -1234,7 +1306,7 @@ void CBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out) {
         emitInvoke(static_cast<const MIRInvoke*>(node), out);
         break;
     case MIRKind::INVOKE_DYNAMIC:
-        emitUnsupported("invokedynamic", out);
+        emitInvokeDynamic(static_cast<const MIRInvokeDynamic*>(node), out);
         break;
     case MIRKind::CHECK_CAST:
         emitCheckCast(static_cast<const MIRCheckCast*>(node), out);
@@ -1830,6 +1902,391 @@ void CBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out) 
         if (popCount > 0)
             out << "    sp -= " << popCount << ";\n";
     }
+}
+
+void CBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostringstream& out) {
+    ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(node->desc.c_str());
+    auto argTypes = Type::getArgumentTypes(descRef);
+    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor().to_std_string());
+    const int argCount = static_cast<int>(argTypes.size());
+
+    auto emitExceptionCheck = [&]() {
+        out << "        if ((*env)->ExceptionCheck(env)) {\n";
+        if (!currentExceptionDispatchTarget.empty()) {
+            out << "            goto " << currentExceptionDispatchTarget << ";\n";
+        } else {
+            emitExceptionReturn(currentMethodDesc, out, 12);
+        }
+        out << "        }\n";
+    };
+
+    auto emitStringObject = [&](const std::string& varName, const std::string& value) {
+        out << "        jstring " << varName << " = (jstring)"
+            << trackLocalRefExpr("(*env)->NewStringUTF(env, " + cStringLiteral(value) + ")") << ";\n";
+    };
+
+    auto emitClassObjectForDescriptor = [&](const std::string& varName, const std::string& desc) {
+        const auto kind = jvmDescToPrimitive(desc);
+        if (kind != PrimitiveKind::OBJECT || desc == "V") {
+            out << "        jclass " << varName << "_wrapper = (jclass)"
+                << trackLocalRefExpr("(*env)->FindClass(env, \"" + std::string(boxedClassName(kind)) + "\")")
+                << ";\n";
+            out << "        jfieldID " << varName
+                << "_type_fid = (*env)->GetStaticFieldID(env, " << varName
+                << "_wrapper, \"TYPE\", \"Ljava/lang/Class;\");\n";
+            out << "        jclass " << varName << " = (jclass)"
+                << trackLocalRefExpr("(*env)->GetStaticObjectField(env, " + varName +
+                                     "_wrapper, " + varName + "_type_fid)") << ";\n";
+        } else {
+            out << "        jclass " << varName << " = " << classExprForDescriptor(desc) << ";\n";
+        }
+    };
+
+    auto emitMethodType = [&](const std::string& varName, const std::string& methodDesc) {
+        emitStringObject(varName + "_desc", methodDesc);
+        out << "        jclass " << varName << "_class_cls = (jclass)"
+            << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/Class\")") << ";\n";
+        out << "        jmethodID " << varName
+            << "_loader_mid = (*env)->GetMethodID(env, " << varName
+            << "_class_cls, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");\n";
+        out << "        jobject " << varName << "_loader = "
+            << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_owner_class, " + varName +
+                                 "_loader_mid)") << ";\n";
+        out << "        jclass " << varName << "_mt_cls = (jclass)"
+            << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodType\")") << ";\n";
+        out << "        jmethodID " << varName
+            << "_from_desc_mid = (*env)->GetStaticMethodID(env, " << varName
+            << "_mt_cls, \"fromMethodDescriptorString\", "
+            << "\"(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;\");\n";
+        out << "        jobject " << varName << " = "
+            << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, " + varName +
+                                 "_mt_cls, " + varName + "_from_desc_mid, " +
+                                 varName + "_desc, " + varName + "_loader)") << ";\n";
+    };
+
+    auto emitBoxPrimitiveExpr = [&](const std::string& varName,
+                                    PrimitiveKind kind,
+                                    const std::string& valueExpr) {
+        out << "        jclass " << varName << "_box_cls = (jclass)"
+            << trackLocalRefExpr("(*env)->FindClass(env, \"" + std::string(boxedClassName(kind)) + "\")")
+            << ";\n";
+        out << "        jmethodID " << varName
+            << "_valueof_mid = (*env)->GetStaticMethodID(env, " << varName
+            << "_box_cls, \"valueOf\", \"" << boxedValueOfDesc(kind) << "\");\n";
+        out << "        jobject " << varName << " = "
+            << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, " + varName +
+                                 "_box_cls, " + varName + "_valueof_mid, " + valueExpr + ")")
+            << ";\n";
+    };
+
+    auto emitBoxStackValue = [&](const std::string& varName,
+                                 PrimitiveKind kind,
+                                 const std::string& stackIndexExpr) {
+        if (kind == PrimitiveKind::OBJECT) {
+            out << "        jobject " << varName << " = stack[" << stackIndexExpr << "].l;\n";
+            return;
+        }
+        std::string valueExpr = "(" + std::string(primitiveToJNIType(kind)) + ")stack[" +
+            stackIndexExpr + "]" + stackValueAccessor(kind);
+        emitBoxPrimitiveExpr(varName, kind, valueExpr);
+    };
+
+    auto emitMethodHandle = [&](const std::string& varName, const Handle& handle) {
+        const int tag = handle.getTag();
+        const std::string owner = utf8RefToString(handle.getOwner());
+        const std::string name = utf8RefToString(handle.getName());
+        const std::string desc = utf8RefToString(handle.getDesc());
+        out << "        jobject " << varName << " = NULL;\n";
+        out << "        {\n";
+        out << "            jclass " << varName << "_lookup_cls = (jclass)"
+            << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodHandles$Lookup\")")
+            << ";\n";
+        out << "            jclass " << varName << "_owner_cls = (jclass)"
+            << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")
+            << ";\n";
+        if (tag == Opcodes::H_GETFIELD || tag == Opcodes::H_GETSTATIC ||
+            tag == Opcodes::H_PUTFIELD || tag == Opcodes::H_PUTSTATIC) {
+            emitStringObject(varName + "_name", name);
+            emitClassObjectForDescriptor(varName + "_field_type", desc);
+        } else {
+            if (tag != Opcodes::H_NEWINVOKESPECIAL) {
+                emitStringObject(varName + "_name", name);
+            }
+            emitMethodType(varName + "_type", desc);
+        }
+
+        const char* findName = "findVirtual";
+        const char* findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
+                               "Ljava/lang/invoke/MethodHandle;";
+        std::string args = varName + "_owner_cls";
+        switch (tag) {
+        case Opcodes::H_GETFIELD:
+            findName = "findGetter";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+                       "Ljava/lang/invoke/MethodHandle;";
+            args += ", " + varName + "_name, " + varName + "_field_type";
+            break;
+        case Opcodes::H_GETSTATIC:
+            findName = "findStaticGetter";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+                       "Ljava/lang/invoke/MethodHandle;";
+            args += ", " + varName + "_name, " + varName + "_field_type";
+            break;
+        case Opcodes::H_PUTFIELD:
+            findName = "findSetter";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+                       "Ljava/lang/invoke/MethodHandle;";
+            args += ", " + varName + "_name, " + varName + "_field_type";
+            break;
+        case Opcodes::H_PUTSTATIC:
+            findName = "findStaticSetter";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+                       "Ljava/lang/invoke/MethodHandle;";
+            args += ", " + varName + "_name, " + varName + "_field_type";
+            break;
+        case Opcodes::H_INVOKESTATIC:
+            findName = "findStatic";
+            args += ", " + varName + "_name, " + varName + "_type";
+            break;
+        case Opcodes::H_INVOKESPECIAL:
+            findName = "findSpecial";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)"
+                       "Ljava/lang/invoke/MethodHandle;";
+            args += ", " + varName + "_name, " + varName + "_type, _mj2x_owner_class";
+            break;
+        case Opcodes::H_NEWINVOKESPECIAL:
+            findName = "findConstructor";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
+                       "Ljava/lang/invoke/MethodHandle;";
+            args += ", " + varName + "_type";
+            break;
+        case Opcodes::H_INVOKEINTERFACE:
+        case Opcodes::H_INVOKEVIRTUAL:
+        default:
+            args += ", " + varName + "_name, " + varName + "_type";
+            break;
+        }
+        out << "            jmethodID " << varName
+            << "_find_mid = (*env)->GetMethodID(env, " << varName
+            << "_lookup_cls, \"" << findName << "\", \"" << findDesc << "\");\n";
+        out << "            " << varName << " = "
+            << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_lookup, " +
+                                 varName + "_find_mid, " + args + ")") << ";\n";
+        out << "        }\n";
+    };
+
+    auto emitAnyAsObject = [&](const std::string& varName, const ca::core::Any& value) {
+        if (auto* p = value.as<std::string>()) {
+            emitStringObject(varName, *p);
+        } else if (auto* p = value.as<ca::str::Utf8StringRef>()) {
+            emitStringObject(varName, p->to_std_string());
+        } else if (auto* p = value.as<Type>()) {
+            if (p->getSort() == Type::METHOD) {
+                emitMethodType(varName, methodTypeDescriptorString(*p));
+            } else {
+                emitClassObjectForDescriptor(varName, typeDescriptorString(*p));
+            }
+        } else if (auto* p = value.as<Handle>()) {
+            emitMethodHandle(varName, *p);
+        } else if (auto* p = value.as<ca::i32>()) {
+            emitBoxPrimitiveExpr(varName, PrimitiveKind::INT, "(jint)" + std::to_string(*p));
+        } else if (auto* p = value.as<ca::i64>()) {
+            emitBoxPrimitiveExpr(varName, PrimitiveKind::LONG, "(jlong)" + std::to_string(*p) + "LL");
+        } else if (auto* p = value.as<float>()) {
+            std::ostringstream valueText;
+            valueText << std::setprecision(9) << *p << "f";
+            emitBoxPrimitiveExpr(varName, PrimitiveKind::FLOAT, valueText.str());
+        } else if (auto* p = value.as<double>()) {
+            std::ostringstream valueText;
+            valueText << std::setprecision(17) << *p;
+            emitBoxPrimitiveExpr(varName, PrimitiveKind::DOUBLE, valueText.str());
+        } else {
+            out << "        jobject " << varName << " = NULL;\n";
+        }
+    };
+
+    auto emitAnyForFormal = [&](const std::string& varName,
+                                const Type& formal,
+                                const ca::core::Any& value) -> std::string {
+        const int sort = formal.getSort();
+        if (sort == Type::OBJECT || sort == Type::ARRAY) {
+            emitAnyAsObject(varName, value);
+            return varName;
+        }
+        auto primitive = jvmSortToPrimitive(sort);
+        if (auto* p = value.as<ca::i32>()) {
+            return "(jint)" + std::to_string(*p);
+        }
+        if (auto* p = value.as<ca::i64>()) {
+            return "(jlong)" + std::to_string(*p) + "LL";
+        }
+        if (auto* p = value.as<float>()) {
+            std::ostringstream valueText;
+            valueText << std::setprecision(9) << *p << "f";
+            return valueText.str();
+        }
+        if (auto* p = value.as<double>()) {
+            std::ostringstream valueText;
+            valueText << std::setprecision(17) << *p;
+            return valueText.str();
+        }
+        if (primitive == PrimitiveKind::BOOLEAN) return "JNI_FALSE";
+        return "0";
+    };
+
+    out << "    {\n";
+    out << "        jclass _mj2x_indy_object_cls = (jclass)"
+        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/Object\")") << ";\n";
+    out << "        jobjectArray _mj2x_indy_args = (jobjectArray)"
+        << trackLocalRefExpr("(*env)->NewObjectArray(env, " + std::to_string(argCount) +
+                             ", _mj2x_indy_object_cls, NULL)") << ";\n";
+    for (int i = 0; i < argCount; ++i) {
+        const auto kind = jvmSortToPrimitive(argTypes[static_cast<size_t>(i)].getSort());
+        const int distFromSp = argCount - 1 - i;
+        const std::string stackIndexExpr = distFromSp == 0
+            ? "sp"
+            : "sp - " + std::to_string(distFromSp);
+        emitBoxStackValue("_mj2x_indy_arg_" + std::to_string(i), kind, stackIndexExpr);
+        out << "        (*env)->SetObjectArrayElement(env, _mj2x_indy_args, " << i
+            << ", _mj2x_indy_arg_" << i << ");\n";
+    }
+    if (argCount > 0) {
+        out << "        sp -= " << argCount << ";\n";
+    }
+
+    out << "        jclass _mj2x_indy_mh_cls = (jclass)"
+        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodHandles\")") << ";\n";
+    out << "        jmethodID _mj2x_indy_lookup_mid = (*env)->GetStaticMethodID(env, "
+        << "_mj2x_indy_mh_cls, \"lookup\", \"()Ljava/lang/invoke/MethodHandles$Lookup;\");\n";
+    out << "        jobject _mj2x_indy_base_lookup = "
+        << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, _mj2x_indy_mh_cls, _mj2x_indy_lookup_mid)")
+        << ";\n";
+    out << "        jobject _mj2x_indy_lookup = _mj2x_indy_base_lookup;\n";
+    out << "        jmethodID _mj2x_indy_private_lookup_mid = (*env)->GetStaticMethodID(env, "
+        << "_mj2x_indy_mh_cls, \"privateLookupIn\", "
+        << "\"(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;\");\n";
+    out << "        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);\n";
+    out << "        if (_mj2x_indy_private_lookup_mid != NULL) {\n";
+    out << "            jobject _mj2x_indy_private_lookup = "
+        << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, _mj2x_indy_mh_cls, "
+                             "_mj2x_indy_private_lookup_mid, _mj2x_owner_class, "
+                             "_mj2x_indy_base_lookup)") << ";\n";
+    out << "            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);\n";
+    out << "            else _mj2x_indy_lookup = _mj2x_indy_private_lookup;\n";
+    out << "        }\n";
+
+    emitStringObject("_mj2x_indy_name", node->name);
+    emitMethodType("_mj2x_indy_type", node->desc);
+
+    if (!node->bsm.has_value()) {
+        emitUnsupported("invokedynamic without bootstrap metadata", out);
+        out << "    }\n";
+        return;
+    }
+    const auto& bsm = *node->bsm;
+    const std::string bsmOwner = utf8RefToString(bsm.getOwner());
+    const std::string bsmName = utf8RefToString(bsm.getName());
+    const std::string bsmDesc = utf8RefToString(bsm.getDesc());
+    auto bsmArgTypes = Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
+    out << "        jclass _mj2x_indy_bsm_cls = (jclass)"
+        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + bsmOwner + "\")")
+        << ";\n";
+    out << "        jmethodID _mj2x_indy_bsm_mid = (*env)->GetStaticMethodID(env, "
+        << "_mj2x_indy_bsm_cls, " << cStringLiteral(bsmName) << ", " << cStringLiteral(bsmDesc)
+        << ");\n";
+
+    std::vector<std::string> bsmExprs;
+    size_t bsmArgIndex = 0;
+    for (size_t i = 0; i < bsmArgTypes.size(); ++i) {
+        if (i == 0) {
+            bsmExprs.push_back("_mj2x_indy_lookup");
+            continue;
+        }
+        if (i == 1) {
+            bsmExprs.push_back("_mj2x_indy_name");
+            continue;
+        }
+        if (i == 2) {
+            bsmExprs.push_back("_mj2x_indy_type");
+            continue;
+        }
+        const auto& formal = bsmArgTypes[i];
+        const bool isTrailingObjectArray =
+            i + 1 == bsmArgTypes.size() &&
+            formal.getSort() == Type::ARRAY &&
+            typeDescriptorString(formal) == "[Ljava/lang/Object;";
+        if (isTrailingObjectArray) {
+            const size_t remaining = bsmArgIndex < node->bsmArgs.size()
+                ? node->bsmArgs.size() - bsmArgIndex
+                : 0;
+            out << "        jobjectArray _mj2x_indy_bsm_varargs = (jobjectArray)"
+                << trackLocalRefExpr("(*env)->NewObjectArray(env, " + std::to_string(remaining) +
+                                     ", _mj2x_indy_object_cls, NULL)") << ";\n";
+            for (size_t j = 0; j < remaining; ++j) {
+                const std::string argVar = "_mj2x_indy_bsm_vararg_" + std::to_string(j);
+                emitAnyAsObject(argVar, node->bsmArgs[bsmArgIndex + j]);
+                out << "        (*env)->SetObjectArrayElement(env, _mj2x_indy_bsm_varargs, "
+                    << j << ", " << argVar << ");\n";
+            }
+            bsmArgIndex = node->bsmArgs.size();
+            bsmExprs.push_back("_mj2x_indy_bsm_varargs");
+            continue;
+        }
+        if (bsmArgIndex >= node->bsmArgs.size()) {
+            bsmExprs.push_back("NULL");
+            continue;
+        }
+        const std::string argVar = "_mj2x_indy_bsm_arg_" + std::to_string(bsmArgIndex);
+        bsmExprs.push_back(emitAnyForFormal(argVar, formal, node->bsmArgs[bsmArgIndex]));
+        ++bsmArgIndex;
+    }
+
+    std::string bsmCall =
+        "(*env)->CallStaticObjectMethod(env, _mj2x_indy_bsm_cls, _mj2x_indy_bsm_mid";
+    for (const auto& expr : bsmExprs) {
+        bsmCall += ", ";
+        bsmCall += expr;
+    }
+    bsmCall += ")";
+    out << "        jobject _mj2x_indy_callsite = " << trackLocalRefExpr(bsmCall) << ";\n";
+    emitExceptionCheck();
+
+    out << "        jclass _mj2x_indy_callsite_cls = (jclass)"
+        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/CallSite\")") << ";\n";
+    out << "        jmethodID _mj2x_indy_get_target_mid = (*env)->GetMethodID(env, "
+        << "_mj2x_indy_callsite_cls, \"getTarget\", \"()Ljava/lang/invoke/MethodHandle;\");\n";
+    out << "        jobject _mj2x_indy_target = "
+        << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_callsite, _mj2x_indy_get_target_mid)")
+        << ";\n";
+    emitExceptionCheck();
+
+    out << "        jclass _mj2x_indy_method_handle_cls = (jclass)"
+        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodHandle\")") << ";\n";
+    out << "        jmethodID _mj2x_indy_invoke_mid = (*env)->GetMethodID(env, "
+        << "_mj2x_indy_method_handle_cls, \"invokeWithArguments\", "
+        << "\"([Ljava/lang/Object;)Ljava/lang/Object;\");\n";
+    out << "        jobject _mj2x_indy_result = "
+        << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_target, "
+                             "_mj2x_indy_invoke_mid, _mj2x_indy_args)") << ";\n";
+    emitExceptionCheck();
+
+    if (retType == PrimitiveKind::VOID) {
+        out << "        (void)_mj2x_indy_result;\n";
+    } else if (retType == PrimitiveKind::OBJECT) {
+        out << "        stack[++sp].l = _mj2x_indy_result;\n";
+    } else {
+        out << "        jclass _mj2x_indy_ret_box_cls = (jclass)"
+            << trackLocalRefExpr("(*env)->FindClass(env, \"" + std::string(boxedClassName(retType)) + "\")")
+            << ";\n";
+        out << "        jmethodID _mj2x_indy_unbox_mid = (*env)->GetMethodID(env, "
+            << "_mj2x_indy_ret_box_cls, \"" << boxedUnboxMethod(retType) << "\", \""
+            << boxedUnboxDesc(retType) << "\");\n";
+        out << "        stack[++sp]" << stackValueAccessor(retType) << " = ("
+            << (narrowOnOperandStack(retType) ? "jint" : primitiveToJNIType(retType))
+            << ")(*env)->Call" << primitiveToJNISuffix(retType)
+            << "Method(env, _mj2x_indy_result, _mj2x_indy_unbox_mid);\n";
+    }
+    out << "    }\n";
 }
 
 void CBackend::Impl::emitCheckCast(const MIRCheckCast* node, std::ostringstream& out) {

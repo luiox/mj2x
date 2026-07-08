@@ -682,6 +682,42 @@ TEST_F(CBackendE2E, InterfaceCalls) {
         });
 }
 
+TEST_F(CBackendE2E, InvokeDynamicStringConcat) {
+    runCase("InvokeDynamicStringConcat",
+        "public class InvokeDynamicStringConcat {\n"
+        "  public static String join(int a, long b, String s) {\n"
+        "    return \"a=\" + a + \",b=\" + b + \",s=\" + s;\n"
+        "  }\n"
+        "  public static String withNull(String s) { return \"n=\" + s; }\n"
+        "}\n",
+        {
+            {"join(7, 42L, \"ok\")", "a=7,b=42,s=ok"},
+            {"join(-1, 9223372036854775807L, \"x\")", "a=-1,b=9223372036854775807,s=x"},
+            {"withNull(null)", "n=null"},
+        });
+}
+
+TEST_F(CBackendE2E, InvokeDynamicLambda) {
+    runCase("InvokeDynamicLambda",
+        "import java.util.function.IntUnaryOperator;\n"
+        "public class InvokeDynamicLambda {\n"
+        "  private static int base(int x) { return x + 3; }\n"
+        "  public static int stateless(int x) {\n"
+        "    IntUnaryOperator op = InvokeDynamicLambda::base;\n"
+        "    return op.applyAsInt(x);\n"
+        "  }\n"
+        "  public static int capturing(int x) {\n"
+        "    int delta = 5;\n"
+        "    IntUnaryOperator op = v -> v + delta;\n"
+        "    return op.applyAsInt(x);\n"
+        "  }\n"
+        "}\n",
+        {
+            {"stateless(9)", "12"},
+            {"capturing(10)", "15"},
+        });
+}
+
 // ===== Final CBackend E2E 用例：对象/字段/数组 =====
 
 TEST_F(CBackendE2E, ObjectFieldsAndTypeChecks) {

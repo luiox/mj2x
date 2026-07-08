@@ -524,12 +524,12 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
     }
 
     case AbstractInsnNode::INVOKE_DYNAMIC_INSN: {
-        // R1b: preprocessor 标记但未展开（R2/R5+ 完整展开）。落 MIRInvokeDynamic，
-        // builder 遇到则 fail-closed（不静默 MIRNop）。
         auto* id = typed::cast<InvokeDynamicInsnNode>(insn);
         auto node = std::make_unique<MIRInvokeDynamic>();
         node->name = id->name.to_std_string();
         node->desc = id->desc.to_std_string();
+        node->bsm = id->bsm;
+        node->bsmArgs = id->bsmArgs;
         cur->nodes.push_back(std::move(node));
         break;
     }

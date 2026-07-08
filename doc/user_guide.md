@@ -222,8 +222,8 @@ mj2x 会优先使用当前 shell 的 MSVC 环境;如果 `INCLUDE` 尚未配置,�
 **Q: JAR 改写后签名失效?**
 当前 MVP 不处理签名。`META-INF/*.SF` / `*.RSA` / `*.DSA` / `*.EC` 会触发 fail-closed。需要先去签名再处理。
 
-**Q: 遇到 `invokedynamic` 报 `UnsupportedOperationException`?**
-这是预期行为(fail-closed)。lambda / 方法句柄 / string concat 的 lowering 在 MVP 范围外。
+**Q: CBackend 遇到 `invokedynamic` 怎么处理?**
+CBackend 会通过 runtime MethodHandle 桥执行 javac 生成的 string concat / lambda。RegC 仍会对未展开的 `invokedynamic` fail-closed。
 
 **Q: RegC 输出里有 `cstack` / `sp`?**
 不应该有。如果有,是 bug —— RegC 的结构断言禁止 stack-machine anchor。

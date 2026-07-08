@@ -49,8 +49,10 @@ LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offse
 - JNI local-ref 追踪:临时 class/string/object/array refs 登记到方法级列表，返回前释放
 - JNI method/field ID 懒缓存:调用点首次解析，后续复用缓存 ID
 - String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring
+- CBackend `invokedynamic`:native 侧调用 bootstrap,经 `CallSite.getTarget()` +
+  `MethodHandle.invokeWithArguments` 执行;已覆盖 javac string concat、方法引用和捕获 lambda
 
-**验证**:26 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 CBackend
+**验证**:28 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 CBackend
 发射单测。
 
 **已知限制**:
@@ -59,7 +61,7 @@ LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offse
 |---|---|
 | method/field ID 懒缓存未加锁 | 多线程首次同时命中同一调用点时可能重复解析一次 |
 | 栈全用 `union jvalue` 数组 | 性能低于寄存器方案,后续可优化 |
-| `INVOKEDYNAMIC` fail-closed | 生成 `UnsupportedOperationException`,不直译 lambda / 方法句柄 |
+| RegC `INVOKEDYNAMIC` fail-closed | RegC/SSA 仍拒绝未展开 indy;CBackend 已有运行时 MethodHandle 桥 |
 | JSR / RET 不纳入 | 废弃字节码,由 preprocessor / 输入规范处理 |
 | `<init>` / `<clinit>` 不被 MarkAll 标记 | 构造器保留原字节码,不走 native |
 
