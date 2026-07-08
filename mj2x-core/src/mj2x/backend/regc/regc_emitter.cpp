@@ -260,6 +260,7 @@ const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind) {
         case RegCIntrinsicNativeObjectKind::Double: return "mj2x_double";
         case RegCIntrinsicNativeObjectKind::Bool: return "mj2x_bool";
         case RegCIntrinsicNativeObjectKind::Char: return "mj2x_char";
+        case RegCIntrinsicNativeObjectKind::Random: return "mj2x_random";
         default: return "mj2x_ref";
     }
 }
@@ -284,7 +285,7 @@ bool rejectNativeObjectEscape(const RegCFunctionEmitState& state,
                               std::string& reason)
 {
     if (!nativeObjectFor(state, operand)) return true;
-    reason = "native wrapper object escaped through " + surface;
+    reason = "native object escaped through " + surface;
     return false;
 }
 
@@ -463,6 +464,45 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
         out << "    ";
         if (ins.hasDest) out << regName(ins.dest.id) << " = ";
         out << decision.symbol << "(" << objectState->storageName << ");\n";
+        return decision;
+    }
+
+    if (decision.emitKind == RegCIntrinsicEmitKind::RandomInit) {
+        if (ins.args.size() != 2) {
+            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "Random init intrinsic requires receiver and seed";
+            return decision;
+        }
+        const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
+        if (!objectState || objectState->kind != RegCIntrinsicNativeObjectKind::Random) {
+            decision.kind = RegCIntrinsicDecisionKind::Fallback;
+            decision.reason = "Random receiver is not native state";
+            return decision;
+        }
+        out << "    " << decision.symbol << "(&" << objectState->storageName
+            << ", " << operandExpr(ins.args[1]) << ");\n";
+        return decision;
+    }
+
+    if (decision.emitKind == RegCIntrinsicEmitKind::NativeObjectMethod) {
+        if (ins.args.empty()) {
+            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "native object method intrinsic missing receiver";
+            return decision;
+        }
+        const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
+        if (!objectState || objectState->kind != decision.nativeObjectKind) {
+            decision.kind = RegCIntrinsicDecisionKind::Fallback;
+            decision.reason = "receiver is not native object state";
+            return decision;
+        }
+        out << "    ";
+        if (ins.hasDest) out << regName(ins.dest.id) << " = ";
+        out << decision.symbol << "(&" << objectState->storageName;
+        for (size_t i = 1; i < ins.args.size(); ++i) {
+            out << ", " << operandExpr(ins.args[i]);
+        }
+        out << ");\n";
         return decision;
     }
 
@@ -658,8 +698,16 @@ bool emitInstruction(std::ostringstream& out,
             return true;
         case RegInstructionKind::Allocate:
             if (ins.allocationKind == SSAAllocationKind::Object) {
-                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_object("
-                    << cStringLiteral(ins.typeDesc) << ");\n";
+                if (ins.typeDesc == "java/util/Random") {
+                    out << "    mj2x_random " << nativeObjectStorageName(ins.dest.id) << " = {0};\n";
+                    out << "    " << regName(ins.dest.id) << " = NULL;\n";
+                    state.nativeObjects[ins.dest.id.value] =
+                        RegCNativeObjectState{RegCIntrinsicNativeObjectKind::Random,
+                                              nativeObjectStorageName(ins.dest.id)};
+                } else {
+                    out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_object("
+                        << cStringLiteral(ins.typeDesc) << ");\n";
+                }
             } else if (ins.allocationKind == SSAAllocationKind::Array) {
                 out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_array("
                     << cStringLiteral(ins.typeDesc) << ", " << operandExpr(ins.args.empty() ? RegOperand::fromInt(0, SSAType::I32) : ins.args[0]) << ");\n";

@@ -95,6 +95,20 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::WrapperValueOf, RegCIntrinsicNativeObjectKind::Char, false, 1, true},
     {"java/lang/Character", "charValue", "()C", "mj2x_char_char_value",
      RegCIntrinsicEmitKind::WrapperUnbox, RegCIntrinsicNativeObjectKind::Char, false, 1, false},
+    {"java/util/Random", "<init>", "(J)V", "mj2x_random_init",
+     RegCIntrinsicEmitKind::RandomInit, RegCIntrinsicNativeObjectKind::Random, false, 2, false},
+    {"java/util/Random", "nextInt", "()I", "mj2x_random_next_int",
+     RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
+    {"java/util/Random", "nextInt", "(I)I", "mj2x_random_next_int_bound",
+     RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 2, false},
+    {"java/util/Random", "nextLong", "()J", "mj2x_random_next_long",
+     RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
+    {"java/util/Random", "nextBoolean", "()Z", "mj2x_random_next_boolean",
+     RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
+    {"java/util/Random", "nextFloat", "()F", "mj2x_random_next_float",
+     RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
+    {"java/util/Random", "nextDouble", "()D", "mj2x_random_next_double",
+     RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
 };
 
 bool sameSignature(const RegCIntrinsicCall& call, const RegCIntrinsicEntry& entry) {
@@ -154,6 +168,8 @@ RegCIntrinsicDecision RegCIntrinsicRegistry::matchNormalizedCall(const RegCIntri
 }
 
 void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
+    out << "#ifndef MJ2X_REGC_INTRINSIC_ABI_DECLARED\n";
+    out << "#define MJ2X_REGC_INTRINSIC_ABI_DECLARED\n";
     out << "static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* utf8);\n";
     out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n";
     out << "typedef struct mj2x_int { int32_t value; } mj2x_int;\n";
@@ -164,6 +180,7 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "typedef struct mj2x_double { double value; } mj2x_double;\n";
     out << "typedef struct mj2x_bool { int8_t value; } mj2x_bool;\n";
     out << "typedef struct mj2x_char { uint16_t value; } mj2x_char;\n";
+    out << "typedef struct mj2x_random { uint64_t seed; } mj2x_random;\n";
     out << "mj2x_int mj2x_int_value_of(int32_t value);\n";
     out << "int32_t mj2x_int_int_value(mj2x_int box);\n";
     out << "mj2x_long mj2x_long_value_of(int64_t value);\n";
@@ -180,6 +197,13 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "int8_t mj2x_bool_bool_value(mj2x_bool box);\n";
     out << "mj2x_char mj2x_char_value_of(uint16_t value);\n";
     out << "uint16_t mj2x_char_char_value(mj2x_char box);\n";
+    out << "void mj2x_random_init(mj2x_random* state, int64_t seed);\n";
+    out << "int32_t mj2x_random_next_int(mj2x_random* state);\n";
+    out << "int32_t mj2x_random_next_int_bound(mj2x_random* state, int32_t bound);\n";
+    out << "int64_t mj2x_random_next_long(mj2x_random* state);\n";
+    out << "int8_t mj2x_random_next_boolean(mj2x_random* state);\n";
+    out << "float mj2x_random_next_float(mj2x_random* state);\n";
+    out << "double mj2x_random_next_double(mj2x_random* state);\n";
     out << "int32_t mj2x_math_abs_i32(int32_t value);\n";
     out << "int64_t mj2x_math_abs_i64(int64_t value);\n";
     out << "float mj2x_math_abs_f32(float value);\n";
@@ -200,7 +224,8 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "double mj2x_math_floor(double value);\n";
     out << "double mj2x_math_ceil(double value);\n";
     out << "int64_t mj2x_math_round(double value);\n";
-    out << "double mj2x_math_random();\n\n";
+    out << "double mj2x_math_random();\n";
+    out << "#endif\n\n";
 }
 
 } // namespace mj2x

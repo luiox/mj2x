@@ -614,9 +614,9 @@ TEST_F(RegCBackendE2E, IntegerDivisionTrapRoundTrip) {
 
 // JDK intrinsic E2E: Integer.parseInt + Math.* run entirely in native code.
 // The generated C must call mj2x_math_* / _mj2x_intrinsic_parse_int and must
-// not dispatch Math/parseInt through the JNI call helper.  Results match the
-// original Java baseline (parseInt "42" -> 42, Math.sin via the same IEEE 754
-// sin both sides use).
+// not dispatch Math/parseInt/wrapper/Random through the JNI call helper.
+// Results match the original Java baseline (parseInt "42" -> 42, Math.sin via
+// the same IEEE 754 sin both sides use, Random via the Java-compatible LCG).
 TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     runCase(
         "RegCIntrinsic",
@@ -629,6 +629,16 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "    return Math.max(a, b) + Math.abs(a - b);\n"
         "  }\n"
         "  public static long roundDemo(double x) { return Math.round(x); }\n"
+        "  public static int boxedInt(int x) { return Integer.valueOf(x).intValue(); }\n"
+        "  public static long boxedLong(long x) { return Long.valueOf(x).longValue(); }\n"
+        "  public static int randomNextInt(long seed) {\n"
+        "    java.util.Random r = new java.util.Random(seed);\n"
+        "    return r.nextInt();\n"
+        "  }\n"
+        "  public static int randomNextBound(long seed, int bound) {\n"
+        "    java.util.Random r = new java.util.Random(seed);\n"
+        "    return r.nextInt(bound);\n"
+        "  }\n"
         "}\n",
         {
             {"parseInt42()", "RegCIntrinsic.parseInt42()"},
@@ -640,6 +650,10 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"roundDemo(2.6)", "RegCIntrinsic.roundDemo(2.6)"},
             {"roundDemo(2.5)", "RegCIntrinsic.roundDemo(2.5)"},
             {"roundDemo(-2.5)", "RegCIntrinsic.roundDemo(-2.5)"},
+            {"boxedInt(-99)", "RegCIntrinsic.boxedInt(-99)"},
+            {"boxedLong(1234567890123L)", "RegCIntrinsic.boxedLong(1234567890123L)"},
+            {"randomNextInt(42L)", "RegCIntrinsic.randomNextInt(42L)"},
+            {"randomNextBound(42L, 37)", "RegCIntrinsic.randomNextBound(42L, 37)"},
         });
 
     // After runCase succeeds, the generated C file is on disk.  Re-open it to
@@ -657,6 +671,13 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("mj2x_math_round("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_int("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_literal("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_int_value_of("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_int_int_value("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_long_value_of("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_long_long_value("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_random_init(&native_r"), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_random_next_int(&native_r"), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_random_next_int_bound(&native_r"), std::string::npos) << generatedC;
     // The matched JDK call sites must not dispatch through the JNI call helper.
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_f64(\"java/lang/Math\""), std::string::npos)
         << generatedC;
@@ -664,5 +685,21 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"parseInt\""),
               std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Integer\", \"valueOf\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"intValue\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Long\", \"valueOf\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i64(\"java/lang/Long\", \"longValue\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_alloc_object(\"java/util/Random\""), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/util/Random\""), std::string::npos)
         << generatedC;
 }

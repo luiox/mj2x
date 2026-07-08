@@ -99,7 +99,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - try / catch
 - null trap
 - integer div / rem trap(走 R3 runtime ABI)
-- **JDK intrinsic(Math / parseInt / wrapper value-unbox)**:RegC 在 Call 分支识别 JDK 方法签名,不发 JNI,直接内联 runtime intrinsic
+- **JDK intrinsic(Math / parseInt / wrapper value-unbox / Random next*)**:RegC 在 Call 分支识别 JDK 方法签名,不发 JNI,直接内联 runtime intrinsic
 
 **JDK intrinsic 覆盖(初版,无 JNI 派发)**:
 
@@ -108,9 +108,11 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
 - 包装类非逃逸 value/unbox:`Integer/Long/Short/Byte/Float/Double/Boolean/Character.valueOf`
   后接对应 `xxxValue`,RegC 用 native shadow struct 承载,不发 JNI call
+- `java.util.Random` 非逃逸 new/init/next*:`mj2x_random` shadow state + runtime LCG,
+  nextInt/nextLong/nextBoolean/nextFloat/nextDouble 不发 JNI call
 
 **intrinsic 限制(初版)**:包装类 native shadow object 一旦返回、存字段/数组、传入未知 call
-或跨 CFG edge 会 fail-closed;Random nextInt 仍待对象状态接入。
+或跨 CFG edge 会 fail-closed;Random shadow state 同样只支持非逃逸路径。
 
 **CLI**:
 
@@ -135,7 +137,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random) | ✅ runtime + emitter 识别 |
 | Integer.parseInt intrinsic | ✅ emitter 内联 JNI helper + E2E |
 | 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime + RegC 非逃逸 value/unbox;逃逸 fail-closed |
-| Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime(逐位对齐 JDK,对象逃逸未接 emitter) |
+| Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
 
 ---
 

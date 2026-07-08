@@ -173,6 +173,35 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperValueOfAndUnbox) {
     EXPECT_EQ(unboxDecision.symbol, "mj2x_int_int_value");
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt) {
+    RegInstruction init;
+    init.kind = RegInstructionKind::Call;
+    init.method.owner = "java/util/Random";
+    init.method.name = "<init>";
+    init.method.desc = "(J)V";
+    init.method.invokeOpcode = Opcodes::INVOKESPECIAL;
+    init.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
+    init.args.push_back(RegOperand::fromInt(42, SSAType::I64));
+
+    auto initDecision = RegCIntrinsicRegistry::builtins().matchCall(init);
+    EXPECT_EQ(initDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(initDecision.emitKind, RegCIntrinsicEmitKind::RandomInit);
+    EXPECT_EQ(initDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::Random);
+
+    RegInstruction next;
+    next.kind = RegInstructionKind::Call;
+    next.method.owner = "java/util/Random";
+    next.method.name = "nextInt";
+    next.method.desc = "()I";
+    next.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+    next.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
+
+    auto nextDecision = RegCIntrinsicRegistry::builtins().matchCall(next);
+    EXPECT_EQ(nextDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(nextDecision.emitKind, RegCIntrinsicEmitKind::NativeObjectMethod);
+    EXPECT_EQ(nextDecision.symbol, "mj2x_random_next_int");
+}
+
 TEST(RegCIntrinsicTest, MathSinLoweredToRuntimeCallNotJni) {
     std::string reason;
     // static double sinCall() { return Math.sin(1.0); }
@@ -284,7 +313,47 @@ TEST(RegCIntrinsicTest, EscapingWrapperValueFailsClosedWithReason) {
         new InsnNode(Opcodes::ARETURN),
     }, 1, 1, reason);
     ASSERT_FALSE(result.ok);
-    EXPECT_NE(result.reason.find("native wrapper object escaped through method return"),
+    EXPECT_NE(result.reason.find("native object escaped through method return"),
+              std::string::npos) << result.reason;
+}
+
+TEST(RegCIntrinsicTest, RandomNewInitNextIntLoweredToNativeState) {
+    std::string reason;
+    // static int next(int seed) { return new Random((long)seed).nextInt(); }
+    auto result = emitRegC("next", "(I)I", {
+        new TypeInsnNode(Opcodes::NEW, U("java/util/Random")),
+        new InsnNode(Opcodes::DUP),
+        new VarInsnNode(Opcodes::ILOAD, 0),
+        new InsnNode(Opcodes::I2L),
+        new MethodInsnNode(Opcodes::INVOKESPECIAL, U("java/util/Random"), U("<init>"),
+                           U("(J)V"), false),
+        new MethodInsnNode(Opcodes::INVOKEVIRTUAL, U("java/util/Random"), U("nextInt"),
+                           U("()I"), false),
+        new InsnNode(Opcodes::IRETURN),
+    }, 4, 1, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("mj2x_random native_r"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("mj2x_random_init(&native_r"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("mj2x_random_next_int(&native_r"), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_alloc_object(\"java/util/Random\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/util/Random\""), std::string::npos)
+        << result.source;
+}
+
+TEST(RegCIntrinsicTest, EscapingRandomStateFailsClosedWithReason) {
+    std::string reason;
+    // static Object make(long seed) { return new Random(seed); }
+    auto result = emitRegC("makeRandom", "(J)Ljava/lang/Object;", {
+        new TypeInsnNode(Opcodes::NEW, U("java/util/Random")),
+        new InsnNode(Opcodes::DUP),
+        new VarInsnNode(Opcodes::LLOAD, 0),
+        new MethodInsnNode(Opcodes::INVOKESPECIAL, U("java/util/Random"), U("<init>"),
+                           U("(J)V"), false),
+        new InsnNode(Opcodes::ARETURN),
+    }, 4, 2, reason);
+    ASSERT_FALSE(result.ok);
+    EXPECT_NE(result.reason.find("native object escaped through method return"),
               std::string::npos) << result.reason;
 }
 

@@ -33,7 +33,17 @@ intrinsics.  For these call sites the generated C must NOT emit
 - `Integer.parseInt(String)` -> `_mj2x_intrinsic_parse_int` (the only JNI
   touchpoint of the parseInt path is `GetStringUTFChars` inside that helper)
 - String LDC -> `_mj2x_intrinsic_string_literal` (calls `NewStringUTF`)
+- Non-escaping primitive wrappers -> `mj2x_int_*` / `mj2x_long_*` shadow
+  structs.  These call sites should not emit `_mj2x_regc_call_ref` for
+  `valueOf` or `_mj2x_regc_call_i32/i64` for `xxxValue`.
+- Non-escaping `java.util.Random` -> `mj2x_random native_r*` plus
+  `mj2x_random_init` / `mj2x_random_next_*` calls.  These call sites should not
+  emit `_mj2x_regc_alloc_object("java/util/Random")` or
+  `_mj2x_regc_call_*("java/util/Random", ...)`.
 
 Trace surface contrast vs. CBackend stack style: intrinsic call sites keep the
-JVM boundary out of arithmetic and parsing entirely; only the entry JNI wrapper
-and the String intrinsic helper touch `JNIEnv`.
+JVM boundary out of arithmetic, parsing, wrapper unboxing, and Random stepping;
+only the entry JNI wrapper and the String intrinsic helper touch `JNIEnv`.
+Escaping wrapper/Random object cases are not fixtures yet: the current RegC
+slice fails closed with `native object escaped through ...` instead of silently
+materializing an imprecise jobject.

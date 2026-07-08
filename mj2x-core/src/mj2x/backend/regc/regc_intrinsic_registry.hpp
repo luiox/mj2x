@@ -28,6 +28,8 @@ enum class RegCIntrinsicEmitKind {
     RegCLocalHelper,
     WrapperValueOf,
     WrapperUnbox,
+    RandomInit,
+    NativeObjectMethod,
 };
 
 /**
@@ -43,6 +45,7 @@ enum class RegCIntrinsicNativeObjectKind {
     Double,
     Bool,
     Char,
+    Random,
 };
 
 /**

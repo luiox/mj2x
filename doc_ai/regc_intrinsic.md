@@ -20,7 +20,8 @@ RegC emitter (src/mj2x/backend/regc/regc_emitter.cpp)
   └─ Call 分支 → RegCIntrinsicRegistry(owner/name/desc/opcode)
        ├─ Math.*      → mj2x_math_*      (runtime lib,纯计算)
        ├─ parseInt    → _mj2x_intrinsic_parse_int (emitter TU 内联,需 JNI 取 String)
-       └─ Wrapper     → mj2x_* value struct shadow state(仅非逃逸 value/unbox)
+       ├─ Wrapper     → mj2x_* value struct shadow state(仅非逃逸 value/unbox)
+       └─ Random      → mj2x_random shadow state(仅非逃逸 new/init/next*)
   未命中 → _mj2x_regc_call_* (原 JNI 路径)
 
 runtime (mj2x/runtime/src/intrinsic/)
@@ -68,18 +69,31 @@ r2 = r1.intValue()       => r2 = mj2x_int_int_value(native_r1);
 这个 shadow state 不是 jobject,因此第一切片只允许同一 RegC 函数内的
 `valueOf -> xxxValue` 窄链路。若 shadow object 被返回、传入未知 call、存字段、
 放数组、参与 monitor/checkcast/instanceof 或跨 CFG edge,当前策略是 fail-closed 并报告
-`native wrapper object escaped through ...`。后续若要支持逃逸,需要在 valueOf 决策前做
+`native object escaped through ...`。后续若要支持逃逸,需要在 valueOf 决策前做
 use/escape 分析:可证明不逃逸才 native 化,否则从一开始 fallback 到 `_mj2x_regc_call_*`;
 若对象已被 native unbox/mutation 后才逃逸,则必须提供 jobject materialize/writeback 桥。
+
+### Random(第一切片,非逃逸)
+- `new java.util.Random` → `mj2x_random native_rN = {0}`
+- `Random.<init>(J)V` → `mj2x_random_init(&native_rN, seed)`
+- `nextInt()` / `nextInt(bound)` / `nextLong()` / `nextBoolean()` /
+  `nextFloat()` / `nextDouble()` → `mj2x_random_*(&native_rN, ...)`
+
+Random state 是 mutable shadow native object,不会创建 jobject,所以 protected 方法内部
+的 PRNG 序列可以完全不走 JNI。逃逸规则与 wrapper 相同:作为返回值、字段/数组存储、
+未知调用参数或 CFG edge copy 时 fail-closed。后续 fallback 方案应在 `new Random`
+时先做 use/escape 分析:若对象会逃逸,从分配开始就走 `_mj2x_regc_alloc_object` +
+`_mj2x_regc_call_void("<init>")`;若已执行 native `next*` 后再逃逸,需要 jobject
+materialize 并把 48-bit seed 写回 Java 对象,否则不能保持 Java 语义。
 
 ## 4. 未覆盖(后续扩展,见 dev_plan)
 
 下列 runtime 实现已交付但**未完整接 emitter**,因涉及对象状态逃逸表示:
 
-- **Random nextInt/nextLong/...**:runtime 用 `mj2x_random` struct,但 `new Random()`
-  当前走 `NEW_OBJECT` + JNI `<init>`,不会变成 `mj2x_random`。阻塞点:Random 对象表示。
 - **完整包装类对象语义**:identity、equals/hashCode/toString、返回 jobject、字段/数组存取
   仍未覆盖。阻塞点:escape-aware fallback 或 jobject materialize。
+- **完整 Random 对象语义**:构造后返回、字段/数组存取、传给未知 Java 方法、跨 CFG edge
+  仍未覆盖。阻塞点:escape-aware fallback 或 jobject materialize + seed writeback。
 
 `Integer.signum` 等未覆盖方法正常走 `_mj2x_regc_call_*`,不会误识别。
 

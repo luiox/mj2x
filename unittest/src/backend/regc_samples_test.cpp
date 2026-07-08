@@ -329,6 +329,17 @@ TEST_F(RegCTraceSamples, GenerateMjdbgFixtures) {
                 {"longDiv", "(JJ)J", "mj2x_regc_div_i64"},
             },
         },
+        {
+            "RegCIntrinsicSurfaceSample",
+            "protected_samples/regc/RegCIntrinsicSurfaceSample.java",
+            "Math/parseInt/wrapper/Random intrinsic calls without JNI dispatch at matched call sites",
+            {
+                {"parseIntLiteral", "()I", "_mj2x_intrinsic_parse_int"},
+                {"sinAndPow", "(D)D", "mj2x_math_pow"},
+                {"boxedInt", "(I)I", "mj2x_int_int_value"},
+                {"randomNextInt", "(J)I", "mj2x_random_next_int"},
+            },
+        },
     };
 
     for (const auto& sample : samples) {
