@@ -4,9 +4,10 @@
  *
  * @details
  * CBackend's generated translation unit needs small static JNI helpers
- * that are reused by every compiled method: an owner-loader-aware class
- * resolver (`_mj2x_find_class`), a class-descriptor resolver
- * (`_mj2x_component_class`), and a multi-array allocator
+ * that are reused by every compiled method: local-ref tracking helpers
+ * (`_mj2x_track_local_ref` / `_mj2x_clear_local_refs`), an
+ * owner-loader-aware class resolver (`_mj2x_find_class`), a class-descriptor
+ * resolver (`_mj2x_component_class`), and a multi-array allocator
  * (`_mj2x_new_multi_array`).  These used to be inlined as string literals
  * inside `CBackend::finalize`, which made that method long and the helpers
  * impossible to unit-test in isolation.  They now live here as a single

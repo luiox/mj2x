@@ -27,7 +27,8 @@
 Native 绑定使用 `static` C 函数 + `JNI_OnLoad` / `RegisterNatives`,不为每个 Java 方法导出
 `Java_*` 符号。生成方法体内的业务类解析使用当前 owner class 的 `ClassLoader`，覆盖
 自定义 class loader 下 `new` / `anewarray` / `multianewarray` / 静态成员 / type check
-等路径，bootstrap 异常类和注册入口仍使用 JVM `FindClass`。
+等路径，bootstrap 异常类和注册入口仍使用 JVM `FindClass`。生成方法体跟踪临时 JNI
+local refs，并在正常返回或异常提前返回前批量释放；对象返回值作为 keep ref 保留。
 
 **已覆盖的 javac 输出形状**:
 
@@ -42,6 +43,7 @@ Native 绑定使用 `static` C 函数 + `JNI_OnLoad` / `RegisterNatives`,不为�
 - 异常:`athrow` / try-catch / finally / monitor (`monitorenter` / `monitorexit`)
 - int/long DIV/REM 除零:`ArithmeticException` trap,含 catch 分派与未捕获传播
 - owner ClassLoader-aware 类解析:应用类查找走 `_mj2x_find_class(env, _mj2x_owner_class, ...)`
+- JNI local-ref 追踪:临时 class/string/object/array refs 登记到方法级列表，返回前释放
 
 **验证**:26 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 CBackend
 发射单测。

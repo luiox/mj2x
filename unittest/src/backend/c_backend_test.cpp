@@ -86,7 +86,9 @@ TEST(CBackendTest, AddMethod) {
     auto result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("jint"), std::string::npos);
-    EXPECT_NE(result.text.find("return stack[sp--].i"), std::string::npos);
+    EXPECT_NE(result.text.find("jint _mj2x_ret = stack[sp--].i"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);"),
+              std::string::npos);
     EXPECT_NE(result.text.find("+"), std::string::npos);
 }
 
@@ -255,7 +257,7 @@ TEST(CBackendTest, InvokeSpecialLooksUpDeclaringClass) {
     auto blocks = cc.convert(*mn);
     auto result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("jclass lc = _mj2x_find_class(env, _mj2x_owner_class, \"java/lang/Object\")"), std::string::npos);
+    EXPECT_NE(result.text.find("jclass lc = (jclass)_mj2x_track_local_ref(env, _mj2x_refs, &_mj2x_ref_count, _mj2x_find_class(env, _mj2x_owner_class, \"java/lang/Object\"))"), std::string::npos);
     EXPECT_NE(result.text.find("CallNonvirtualVoidMethod(env, stack[sp - 0].l, lc, mid"), std::string::npos);
 }
 
@@ -385,7 +387,7 @@ TEST(CBackendTest, ClassLookupsUseOwnerClassLoaderHelper) {
     auto blocks = cc.convert(*mn);
     auto result = backend.compileMethod("pkg/Owner", cm, blocks);
 
-    EXPECT_NE(result.text.find("jclass _mj2x_owner_class = (*env)->GetObjectClass(env, this);"),
+    EXPECT_NE(result.text.find("jclass _mj2x_owner_class = (jclass)_mj2x_track_local_ref(env, _mj2x_refs, &_mj2x_ref_count, (*env)->GetObjectClass(env, this));"),
               std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("_mj2x_find_class(env, _mj2x_owner_class, \"pkg/Foo\")"),
