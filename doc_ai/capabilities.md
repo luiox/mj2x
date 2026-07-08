@@ -81,6 +81,14 @@
 
 **intrinsic 限制(初版)**:包装类对象 valueOf/intValue、Random nextInt 涉及对象逃逸表示,暂走 JNI(后续扩展)。
 
+**JDK intrinsic 覆盖(初版,无 JNI 派发)**:
+
+- `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
+- `java.lang.Integer.parseInt(String)`:native strtol 解析,NumberFormatException 经 context 回调路由
+- String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
+
+**intrinsic 限制(初版)**:包装类对象 valueOf/intValue、Random nextInt 涉及对象逃逸表示,暂走 JNI(后续扩展)。
+
 **CLI**:
 
 - `--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。

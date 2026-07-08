@@ -99,97 +99,11 @@ ExecResult runScript(const std::vector<std::string>& lines) {
 
 fs::path findCli() {
 #ifdef _WIN32
-    std::vector<fs::path> candidates = {
-        test::getTopProjectPath() / "build" / "windows" / "x64" / "debug" / "mj2x-cli.exe",
-        test::getTopProjectPath() / "build" / "windows" / "x64" / "release" / "mj2x-cli.exe",
-    };
+    fs::path path = test::getTopProjectPath() / "build" / "windows" / "x64" / "release" / "mj2x-cli.exe";
 #else
-    std::vector<fs::path> candidates = {
-        test::getTopProjectPath() / "build" / "linux" / "x86_64" / "debug" / "mj2x-cli",
-        test::getTopProjectPath() / "build" / "linux" / "x86_64" / "release" / "mj2x-cli",
-    };
+    fs::path path = test::getTopProjectPath() / "build" / "linux" / "x86_64" / "release" / "mj2x-cli";
 #endif
-    for (const auto& path : candidates) {
-        if (fileExists(path)) return path;
-    }
-    return {};
-}
-
-bool commandAvailable(const char* command) {
-#ifdef _WIN32
-    return std::system((std::string("where ") + command + " >nul 2>nul").c_str()) == 0;
-#else
-    return std::system((std::string("command -v ") + command + " >/dev/null 2>&1").c_str()) == 0;
-#endif
-}
-
-fs::path findJavac() {
-    std::vector<fs::path> roots;
-    if (const char* javaHome = std::getenv("JAVA_HOME")) {
-        if (javaHome[0] != '\0') roots.emplace_back(javaHome);
-    }
-#ifdef _WIN32
-    roots.emplace_back("D:/sdk/java/jdk17");
-#endif
-    for (const auto& root : roots) {
-#ifdef _WIN32
-        fs::path javac = root / "bin" / "javac.exe";
-#else
-        fs::path javac = root / "bin" / "javac";
-#endif
-        if (fileExists(javac)) return javac;
-    }
-    return {};
-}
-
-bool hasAutoNativeCompiler() {
-#ifdef _WIN32
-    return commandAvailable("cl");
-#elif defined(__APPLE__)
-    return commandAvailable("clang") || commandAvailable("gcc");
-#else
-    return commandAvailable("gcc") || commandAvailable("clang");
-#endif
-}
-
-fs::path nativeLibraryPathFor(const fs::path& outputPath) {
-#ifdef _WIN32
-    const char* ext = ".dll";
-#elif defined(__APPLE__)
-    const char* ext = ".dylib";
-#else
-    const char* ext = ".so";
-#endif
-    return outputPath.parent_path() / (outputPath.stem().string() + ext);
-}
-
-void addStaticIntMethod(
-    jbytecode::tree::ClassNode& cn,
-    const char* name,
-    int opcode,
-    bool nativeAnnotated) {
-    using namespace ca::str;
-    using namespace jbytecode::core;
-    using namespace jbytecode::tree;
-
-    std::vector<Utf8StringRef> noExceptions;
-    auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-        ZUtf8StringRef::from_static(name),
-        ZUtf8StringRef::from_static("(II)I"),
-        ZUtf8StringRef::from_static(""),
-        noExceptions);
-    if (nativeAnnotated) {
-        mn->visibleAnnotations.push_back(
-            new AnnotationNode(ZUtf8StringRef::from_static("Lmj2x/Native;")));
-    }
-    mn->maxStack = 2;
-    mn->maxLocals = 2;
-    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
-    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 1));
-    mn->instructions.add(new InsnNode(opcode));
-    mn->instructions.add(new InsnNode(Opcodes::IRETURN));
-    cn.methods.push_back(mn.release());
+    return fileExists(path) ? path : fs::path{};
 }
 
 std::vector<ca::u8> tinyClassBytes(const char* className) {
