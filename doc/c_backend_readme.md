@@ -44,7 +44,7 @@ passthrough，不参与 root class 解析或 native injection。
 | `tableswitch` / `lookupswitch` | 支持 | `CBackendE2E.DenseSwitch`、`SparseSwitch` |
 | 引用分支、字符串常量、方法调用、递归、接口调用 | 支持 | `CBackendE2E.ReferenceBranches`、`StringLiterals`、`MethodCalls`、`RecursionCalls`、`InterfaceCalls` |
 | 对象、字段、`instanceof`、`checkcast` | 支持 | `CBackendE2E.ObjectFieldsAndTypeChecks` |
-| 基本类型数组、对象数组、多维数组 | 支持 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
+| 基本类型数组、对象数组、多维数组 | 支持；`BALOAD`/`BASTORE` 对 byte[]/boolean[] 做运行时分流 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
 | `athrow`、try/catch、多 catch、finally、monitor | 支持 | `CBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
 | 综合样本 | 支持 | `CBackendE2E.IntegratedSample` |
 | `.class` 输入/输出 | 支持 | `IOTest.InputLoaderRoundtrip`、`PipelineTest.FullPipelineRoundtrip` |

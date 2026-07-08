@@ -16,7 +16,7 @@
   `cbackend_vs_native_obfuscator_gap_report.md` 为任务源,按功能块拆分提交。
   - [x] P0/P2/P4(旧报告):导出符号消除、`JNI_OnLoad` + `RegisterNatives`、int/long
     div/rem `ArithmeticException` trap。提交:`2b2e84a2 [mj2x] align cbackend native registration`。
-  - [ ] P6:boolean[]/byte[] `BALOAD`/`BASTORE` 运行时歧义消除。
+  - [x] P6:boolean[]/byte[] `BALOAD`/`BASTORE` 运行时歧义消除。
   - [ ] P2:ClassLoader-aware 类解析,减少自定义 class loader 下 `FindClass` 失败。
   - [ ] P3:JNI 局部引用追踪与批量释放,降低复杂方法 local-ref table 溢出风险。
   - [ ] P4:method/field ID 懒缓存,降低重复 `GetMethodID`/`GetFieldID` 开销。

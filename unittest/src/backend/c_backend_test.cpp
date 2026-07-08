@@ -305,6 +305,36 @@ TEST(CBackendTest, PrimitiveArrayEmission) {
     EXPECT_NE(result.text.find("GetIntArrayRegion"), std::string::npos);
 }
 
+TEST(CBackendTest, ByteArrayOpsDisambiguateBooleanArrays) {
+    CBackend backend;
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "array", "()I", {
+        new InsnNode(Opcodes::ICONST_2),
+        new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_BYTE),
+        new InsnNode(Opcodes::DUP),
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::ICONST_5),
+        new InsnNode(Opcodes::BASTORE),
+        new InsnNode(Opcodes::ICONST_0),
+        new InsnNode(Opcodes::BALOAD),
+        new InsnNode(Opcodes::IRETURN),
+    });
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto result = backend.compileMethod("Test", cm, blocks);
+
+    EXPECT_NE(result.text.find("FindClass(env, \"[Z\")"), std::string::npos);
+    EXPECT_NE(result.text.find("IsInstanceOf(env, stack[sp - 1].l, boolean_array_class"), std::string::npos);
+    EXPECT_NE(result.text.find("GetBooleanArrayRegion"), std::string::npos);
+    EXPECT_NE(result.text.find("GetByteArrayRegion"), std::string::npos);
+    EXPECT_NE(result.text.find("SetBooleanArrayRegion"), std::string::npos);
+    EXPECT_NE(result.text.find("SetByteArrayRegion"), std::string::npos);
+}
+
 TEST(CBackendTest, CheckCastEmission) {
     CBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,

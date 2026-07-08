@@ -723,12 +723,15 @@ TEST_F(CBackendE2E, PrimitiveArrays) {
         "  public static long longMix() { long[] a = new long[3]; a[0] = 40L; a[1] = 2L; return a[0] + a[1] + a.length; }\n"
         "  public static double doubleMix() { double[] a = new double[2]; a[0] = 1.5d; a[1] = 2.25d; return a[0] + a[1]; }\n"
         "  public static int narrowMix() { byte[] b = new byte[2]; short[] s = new short[2]; char[] c = new char[1]; b[0] = (byte)130; s[1] = (short)40000; c[0] = (char)65535; return b[0] + s[1] + c[0]; }\n"
+        "  public static int booleanMix(boolean x) { boolean[] z = new boolean[3]; z[0] = x; z[1] = !x; z[2] = true; return (z[0] ? 1 : 0) + (z[1] ? 10 : 0) + (z[2] ? 100 : 0); }\n"
         "}\n",
         {
             {"intSum(5)", "35"},
             {"longMix()", "45"},
             {"doubleMix()", "3.75"},
             {"narrowMix()", "40063"},
+            {"booleanMix(true)", "101"},
+            {"booleanMix(false)", "110"},
         });
 }
 

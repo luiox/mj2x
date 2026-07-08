@@ -95,7 +95,7 @@
 （native 递归调用）、`StringLiterals`（String LDC/ARETURN/虚方法调用）、`InterfaceCalls`（INVOKEINTERFACE）。
 
 **已覆盖**（Wave 5/6）：`ObjectFields`（实例/静态字段、`instanceof`、`checkcast`）、
-`PrimitiveArrays`（基本类型数组、窄类型数组、arraylength）、`ObjectArrays`（String/Object 数组）、
+`PrimitiveArrays`（基本类型数组、窄类型数组、boolean[]/byte[] 分流、arraylength）、`ObjectArrays`（String/Object 数组）、
 `MultiDimArrays`（int[][] 与 String[][][]）。
 
 **已覆盖**（Wave 7/收尾）：`ThrowPropagation`（`ATHROW` 向上传播）、

@@ -1136,6 +1136,22 @@ void CBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringstream&
         out << "    sp--;\n";
         return;
     }
+    if (node->componentType == PrimitiveKind::BYTE) {
+        out << "    {\n";
+        out << "        jclass boolean_array_class = (*env)->FindClass(env, \"[Z\");\n";
+        out << "        if ((*env)->IsInstanceOf(env, stack[sp - 1].l, boolean_array_class)) {\n";
+        out << "            jboolean value;\n";
+        out << "            (*env)->GetBooleanArrayRegion(env, (jbooleanArray)stack[sp - 1].l, stack[sp].i, 1, &value);\n";
+        out << "            stack[sp - 1].i = (jint)value;\n";
+        out << "        } else {\n";
+        out << "            jbyte value;\n";
+        out << "            (*env)->GetByteArrayRegion(env, (jbyteArray)stack[sp - 1].l, stack[sp].i, 1, &value);\n";
+        out << "            stack[sp - 1].i = (jint)value;\n";
+        out << "        }\n";
+        out << "    }\n";
+        out << "    sp--;\n";
+        return;
+    }
     const char* suffix = primitiveToJNISuffix(node->componentType);
     const char* type = primitiveToJNIType(node->componentType);
     out << "    {\n";
@@ -1153,6 +1169,20 @@ void CBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostringstrea
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    (*env)->SetObjectArrayElement(env, (jobjectArray)stack[sp - 2].l, "
             << "stack[sp - 1].i, stack[sp].l);\n";
+        out << "    sp -= 3;\n";
+        return;
+    }
+    if (node->componentType == PrimitiveKind::BYTE) {
+        out << "    {\n";
+        out << "        jclass boolean_array_class = (*env)->FindClass(env, \"[Z\");\n";
+        out << "        if ((*env)->IsInstanceOf(env, stack[sp - 2].l, boolean_array_class)) {\n";
+        out << "            jboolean value = (jboolean)(stack[sp].i & 1);\n";
+        out << "            (*env)->SetBooleanArrayRegion(env, (jbooleanArray)stack[sp - 2].l, stack[sp - 1].i, 1, &value);\n";
+        out << "        } else {\n";
+        out << "            jbyte value = (jbyte)stack[sp].i;\n";
+        out << "            (*env)->SetByteArrayRegion(env, (jbyteArray)stack[sp - 2].l, stack[sp - 1].i, 1, &value);\n";
+        out << "        }\n";
+        out << "    }\n";
         out << "    sp -= 3;\n";
         return;
     }

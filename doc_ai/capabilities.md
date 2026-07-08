@@ -35,7 +35,8 @@ Native 绑定使用 `static` C 函数 + `JNI_OnLoad` / `RegisterNatives`,不为�
 - 字段读写:`getfield` / `putfield` / `getstatic` / `putstatic`
 - 对象:`new` / `checkcast` / `instanceof`
 - 方法调用:`invokevirtual` / `invokespecial` / `invokestatic` / `invokeinterface`
-- 数组:`newarray` / `anewarray` / `multianewarray` / `arraylength` / `*aload` / `*astore`
+- 数组:`newarray` / `anewarray` / `multianewarray` / `arraylength` / `*aload` / `*astore`;
+  `BALOAD`/`BASTORE` 对 `byte[]`/`boolean[]` 做运行时类型分流
 - 异常:`athrow` / try-catch / finally / monitor (`monitorenter` / `monitorexit`)
 - int/long DIV/REM 除零:`ArithmeticException` trap,含 catch 分派与未捕获传播
 
