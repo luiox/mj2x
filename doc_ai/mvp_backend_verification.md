@@ -46,6 +46,7 @@
 | 窄类型和多维数组 | `RegCTest.EmitsNarrowPrimitiveFieldAndArrayHelpers`、`EmitsMultiArrayHelperWithoutStackMachineAnchors` |
 | throw/try-catch | `RegCTest.EmitsThrowTerminatorWithImmediateReturn`、`EmitsTryCatchExceptionDispatch` |
 | R3 div/rem trap | `RegCTest.EmitsIntegerDivRemHelpers`、`RegCBackendE2E.IntegerDivisionTrapRoundTrip` |
+| JDK intrinsic(Math / parseInt / wrappers / Random) | `RegCIntrinsicRegistryTest.*`、`RegCIntrinsicTest.*`、`RegCBackendE2E.IntrinsicMathAndParseIntRoundTrip` |
 | JNI wrapper/injection | `RegCBackendTest.*` |
 | native DLL 行为对比 | `RegCBackendE2E.*` |
 | mjdbg 样本 | `RegCTraceSamples.GenerateMjdbgFixtures`；Java sources 在 `test_resource/protected_samples/regc/` |
@@ -73,6 +74,7 @@ RegC committed Java samples：
 - `RegCHelperSurfaceSample.java`
 - `RegCExceptionSurfaceSample.java`
 - `RegCRuntimeSurfaceSample.java`
+- `RegCIntrinsicSurfaceSample.java`
 
 JAR MVP committed fixtures：
 

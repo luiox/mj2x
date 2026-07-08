@@ -12,6 +12,7 @@
 | 字节码转 native（RegC / StackC） | `mj2x/` 各 backend | 栈式 MIR → SSA → 寄存器 IR → C/native |
 | VMC4 自研 VM | `mj2x/vm/`（可选支线，R5+） | opcode 自变异 + 资源切片 |
 | native 运行时 | `mj2x/runtime/` | crypto / antidebug / antijvmti / stringpool |
+| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` | Math / parseInt / 非逃逸包装类拆箱 / 非逃逸 Random next* |
 | 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` | 注解筛选、C 编译器探测、JNI include 推导 |
 | 用户注解包 | `mj2x/mj2x-annotations/` | `@mj2x.Native` 方法标记源码 |
 | 受保护样本生成 | `mj2x/` 保护管线 | 供 mjdbg 攻击的受保护产物 |
@@ -30,4 +31,5 @@
 - 架构：`mj2x/doc/architecture.md` / `mj2x/doc/architecture_redesign.md`
 - 路线图：`mj2x/doc/roadmap.md`
 - 测试策略：`mj2x/doc_ai/test_strategy.md`
+- 已实现能力：`mj2x/doc_ai/capabilities.md`
 - 开发计划：`mj2x/dev_plan.md`

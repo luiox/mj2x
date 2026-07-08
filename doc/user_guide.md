@@ -190,10 +190,28 @@ java -Djava.library.path=. Hello
 | 需要最大正确性覆盖、不关心抗分析 | StackC |
 | 保护导向,需要无栈输出抗 c2j | RegC |
 | 需要除零 trap 符合 JVM 语义 | RegC + R3 runtime |
+| 代码大量使用 `Math.*` / `Integer.parseInt` / 包装类拆箱 / `Random.next*` | RegC + R3 runtime intrinsic |
 
 后端的详细支持矩阵和限制:
 - StackC:`doc/stackc_backend_readme.md`
 - RegC:`doc/regc_backend_readme.md`
+
+### 6.1 RegC intrinsic 支持范围
+
+RegC 会在生成 C 时识别部分 JDK 调用,把这些调用降到 native runtime symbol,
+避免在匹配调用点发 `_mj2x_regc_call_*` JNI 派发:
+
+- `java.lang.Math`: `abs` / `min` / `max` / `sin` / `cos` / `tan` /
+  `sqrt` / `pow` / `floor` / `ceil` / `round` / `random`
+- `Integer.parseInt(String)`,包括字符串字面量参数
+- 非逃逸包装类窄链路: `Integer/Long/Short/Byte/Float/Double/Boolean/Character.valueOf`
+  后接对应 `xxxValue`
+- 非逃逸 `java.util.Random`: `new Random(seed)` 后接 `nextInt` /
+  `nextInt(bound)` / `nextLong` / `nextBoolean` / `nextFloat` / `nextDouble`
+
+这些 intrinsic 是保护导向的窄场景优化,不是完整 JDK 对象模型。包装类或
+`Random` 对象一旦作为返回值、字段/数组元素、未知 Java 调用参数或跨复杂 CFG
+边界逃逸,RegC 当前会 fail-closed,不会生成语义不可靠的 jobject。
 
 ---
 
