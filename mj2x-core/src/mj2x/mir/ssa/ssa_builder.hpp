@@ -8,7 +8,7 @@
  * operand-stack simulation private to construction time: stack shuffles such as
  * POP, DUP, DUP2_X*, and SWAP update the temporary FrameState with JVM
  * category-1/category-2 rules, while emitted SSA instructions only reference
- * stable SSAValue objects.  This is the mechanism that removes the old CBackend
+ * stable SSAValue objects.  This is the mechanism that removes the old StackC
  * cstack/sp anchor from downstream IR.
  *
  * The construction algorithm is documented in `mj2x/doc/SSA_ALGORITHM.md`.

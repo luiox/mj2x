@@ -1,12 +1,12 @@
-# CBackend Protected Samples for mjdbg
+# StackC Protected Samples for mjdbg
 
-These Java sources are stable mj2x input fixtures for generating CBackend
+These Java sources are stable mj2x input fixtures for generating StackC
 protected classes and C/JNI sources that mjdbg can attach to, trace, and analyze.
 
 Generated artifacts are not checked in.  The generator test writes them under:
 
 ```text
-test/mj2x/protected_samples/cbackend/<SampleName>/
+test/mj2x/protected_samples/stackc/<SampleName>/
 ```
 
 Run:
@@ -14,7 +14,7 @@ Run:
 ```powershell
 xmake build mj2x-cli
 xmake build mj2x_unittest
-xmake run mj2x_unittest -- --gtest_filter=CBackendProtectedSamples.GenerateMjdbgFixtures
+xmake run mj2x_unittest -- --gtest_filter=StackCBackendProtectedSamples.GenerateMjdbgFixtures
 ```
 
 The output directory contains the original class, protected class, generated C
@@ -22,7 +22,7 @@ file, copied Java source, and a per-sample trace note.
 
 ## Expected mjdbg Trace Surface
 
-`CBackendTinySample`
+`StackCTinySample`
 
 - Java static methods become native methods after mj2x processing.
 - mjdbg should still observe Java method entry/exit for the public static entry
@@ -31,7 +31,7 @@ file, copied Java source, and a per-sample trace note.
   generated C body rather than Java bytecode stepping through the original
   method body.
 
-`CBackendObjectArraySample`
+`StackCObjectArraySample`
 
 - Exercises object allocation, constructor calls, instance/static fields,
   primitive arrays, `instanceof`, `checkcast`, and String LDC.
@@ -39,7 +39,7 @@ file, copied Java source, and a per-sample trace note.
   allocation, field get/set, array region access, `IsInstanceOf`, and
   `NewStringUTF`.
 
-`CBackendExceptionMonitorSample`
+`StackCExceptionMonitorSample`
 
 - Exercises exception paths and monitor enter/exit.
 - mjdbg should expect native code to create/propagate Java exceptions and call

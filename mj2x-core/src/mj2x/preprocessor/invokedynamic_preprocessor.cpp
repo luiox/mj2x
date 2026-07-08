@@ -9,7 +9,7 @@ using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
 void InvokeDynamicPreprocessor::process(CompilerIndex& index) {
-    // CBackend 在 MIR 层保留 bootstrap 元数据，并在 native 侧走
+    // StackC 在 MIR 层保留 bootstrap 元数据，并在 native 侧走
     // CallSite.getTarget() + MethodHandle.invokeWithArguments。RegC/SSA 仍要求
     // indy 在进入无栈 IR 前被展开，因此这里不改写字节码，只做可见诊断。
     int totalIndy = 0;
@@ -25,7 +25,7 @@ void InvokeDynamicPreprocessor::process(CompilerIndex& index) {
     }
     if (totalIndy > 0) {
         printf("[InvokeDynamicPreproc] Detected %d invokedynamic site(s). "
-               "CBackend will lower them through a runtime MethodHandle bridge; "
+               "StackC will lower them through a runtime MethodHandle bridge; "
                "RegC/SSA still fail-closed until bytecode/IR expansion exists.\n",
                totalIndy);
     }

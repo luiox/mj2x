@@ -211,7 +211,7 @@ void writeTraceNote(const fs::path& outDir, const SampleSpec& sample) {
     out << "Generated from `mj2x/test_resource/" << sample.sourceResource << "`.\n\n";
     out << "Focus: " << sample.traceFocus << "\n\n";
     out << "Expected mjdbg use:\n\n";
-    out << "- Compare this RegC helper-style C with CBackend stack-style C.\n";
+    out << "- Compare this RegC helper-style C with StackC stack-style C.\n";
     out << "- Confirm virtual-register locals such as `r0` and labels such as `block_b0`.\n";
     out << "- Confirm helper calls use RegC/R3 symbols such as `mj2x_regc_div_i32`\n";
     out << "  or transitional `_mj2x_regc_*` helpers instead of `stack[]` / `sp` patterns.\n";

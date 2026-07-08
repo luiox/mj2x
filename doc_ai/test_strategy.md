@@ -189,10 +189,10 @@ R3 起，受保护样本需在 c2j agent 下验证。样本与 expected trace su
 
 ### 3.4 StackC protected sample fixtures
 
-`mj2x/test_resource/protected_samples/cbackend/` 保存面向 mjdbg 的 Java 源样本；
+`mj2x/test_resource/protected_samples/stackc/` 保存面向 mjdbg 的 Java 源样本；
 `StackCBackendProtectedSamples.GenerateMjdbgFixtures` 在测试运行时编译这些源文件，并通过
 `mj2x-cli --emit-c` 生成 protected `.class` 与 C/JNI 源码。生成物一律写入
-`test/mj2x/protected_samples/cbackend/<SampleName>/`，同时生成 `TRACE_SURFACE.md`
+`test/mj2x/protected_samples/stackc/<SampleName>/`，同时生成 `TRACE_SURFACE.md`
 说明 mjdbg 应观察的 Java/native/JNI trace 面。
 
 设计说明见 `stackc_backend_protected_samples.md`。这些样本用于 trace 捕获、分组和弱点评估，

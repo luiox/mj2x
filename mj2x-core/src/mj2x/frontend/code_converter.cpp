@@ -827,7 +827,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         // LDC 常量类型（来自 ClassReader::readConst）：
         //   int → i32, float → float, long → i64, double → double,
         //   String → Utf8StringRef, Class/MethodType → Type, MethodHandle → Handle。
-        // Wave 4：String LDC 保留字面量，由 CBackend 生成 NewStringUTF。
+        // Wave 4：String LDC 保留字面量，由 StackC 生成 NewStringUTF。
         // Class/MethodType/Handle 仍暂落 null OBJECT，留给后续对象/方法句柄覆盖。
         auto* ld = typed::cast<LdcInsnNode>(insn);
         auto node = std::make_unique<MIRConstant>();

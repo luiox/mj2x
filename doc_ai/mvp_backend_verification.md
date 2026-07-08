@@ -34,7 +34,7 @@
 | 异常与 monitor | `StackCBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
 | 综合样本 | `StackCBackendE2E.IntegratedSample` |
 | 结构生成与 injection | `StackCBackendTest.*` |
-| mjdbg 样本 | `StackCBackendProtectedSamples.GenerateMjdbgFixtures`；Java sources 在 `test_resource/protected_samples/cbackend/` |
+| mjdbg 样本 | `StackCBackendProtectedSamples.GenerateMjdbgFixtures`；Java sources 在 `test_resource/protected_samples/stackc/` |
 
 ## RegC 验证索引
 
@@ -61,11 +61,11 @@
 
 ## 样本清单
 
-StackC committed Java samples（legacy Java 文件名保留以维持 fixture 契约）：
+StackC committed Java samples：
 
-- `CBackendTinySample.java`
-- `CBackendObjectArraySample.java`
-- `CBackendExceptionMonitorSample.java`
+- `StackCTinySample.java`
+- `StackCObjectArraySample.java`
+- `StackCExceptionMonitorSample.java`
 
 RegC committed Java samples：
 

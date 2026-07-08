@@ -1,6 +1,6 @@
-# StackC（原 CBackend）复活与指令覆盖分波路线
+# StackC 复活与指令覆盖分波路线
 
-> 本文档定义 mj2x StackC（原 CBackend）的复活决策（撤销 ADR-1）和按字节码类别分波的指令覆盖路线。
+> 本文档定义 mj2x StackC 的复活决策（撤销 ADR-1）和按字节码类别分波的指令覆盖路线。
 > 每波是一个独立 PR，可单独验证（Java→mj2x→.c→cl→运行对比）。
 > 迁移/实现 checklist 见 `mbase/mbase/doc_ai/pass-migration-checklist.md`（pass 通用）；本文件专注 StackC 特有的分波顺序。
 
@@ -36,7 +36,7 @@
 
 | 后端 | 输入 IR | 输出 | 对抗强度 | 状态 |
 |---|---|---|---|---|
-| **StackC**（本路线，原 CBackend） | L1 栈式 MIR | JNI C 源码 | 低（c2j 可还原） | 复活，逐波扩散 |
+| **StackC** | L1 栈式 MIR | JNI C 源码 | 低（c2j 可还原） | 复活，逐波扩散 |
 | RegC（未来可选） | L3 RegIR | 寄存器式 C | 高（破 c2j 锚点） | 未启动，依赖 R1-L3 |
 
 `Backend` 接口（`backend/backend.hpp`）已支持多后端：`name()` 区分、`compileMethod` 统一入口。

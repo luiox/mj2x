@@ -1,7 +1,7 @@
 // RegC native E2E harness: Java source -> javac -> RegCBackend -> .c -> DLL
 // -> Java loads the DLL and calls the protected native methods.
 //
-// This is intentionally narrower than CBackendE2E.  It grows with the RegC
+// This is intentionally narrower than StackCBackendE2E.  It grows with the RegC
 // runtime-helper surface and avoids call-helper cases until that ABI is wired.
 
 #include <gmock/gmock.h>

@@ -17,7 +17,7 @@ using namespace jbytecode::core;
 
 namespace {
 
-// cStringLiteral is shared with CBackend via codegen::cStringLiteral; alias it
+// cStringLiteral is shared with StackC via codegen::cStringLiteral; alias it
 // here so the existing call sites stay one-line.
 using codegen::cStringLiteral;
 

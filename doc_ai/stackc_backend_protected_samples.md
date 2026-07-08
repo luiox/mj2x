@@ -24,7 +24,7 @@ strength claims.
 The authoritative sample sources live in:
 
 ```text
-mj2x/test_resource/protected_samples/cbackend/
+mj2x/test_resource/protected_samples/stackc/
 ```
 
 Each committed Java file should stay small enough for a debugger trace to be
@@ -37,7 +37,7 @@ integration program.
 The generator test writes artifacts to:
 
 ```text
-test/mj2x/protected_samples/cbackend/<SampleName>/
+test/mj2x/protected_samples/stackc/<SampleName>/
 ```
 
 Each output directory contains:

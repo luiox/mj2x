@@ -131,7 +131,7 @@ struct MIRIinc : MIRNode {
 struct MIRStackOp : MIRNode {
     using MIRNode::MIRNode;
     // Top-first operand stack type snapshot before this stack-shape opcode.
-    // CBackend uses it to distinguish category-2 values from category-1 pairs.
+    // StackC uses it to distinguish category-2 values from category-1 pairs.
     std::vector<PrimitiveKind> stackBeforeTop;
 };
 

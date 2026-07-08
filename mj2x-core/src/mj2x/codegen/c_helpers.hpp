@@ -3,7 +3,7 @@
  * @brief Stateless helpers shared by the C/C++ emitting backends.
  *
  * @details
- * CBackend and RegC each used to carry their own copy of the same string
+ * StackC and RegC each used to carry their own copy of the same string
  * helpers: C string escaping, JNI symbol mangling, type-display maps.  That
  * meant bug fixes had to land in two places and the two backends slowly
  * drifted.  This header is the single home for those stateless helpers so any
@@ -26,7 +26,7 @@ namespace mj2x::codegen {
 /// @details Escapes backslash, quote, newline, carriage return, tab; emits
 ///          non-printable bytes as 3-digit octal (C string-literal grammar
 ///          reads a backslash escape as octal, so the digits must already be
-///          octal, not decimal).  Matches the exact escaping CBackend has
+///          octal, not decimal).  Matches the exact escaping StackC has
 ///          always used; RegC now shares it.
 inline std::string cStringLiteral(const std::string& text) {
     std::ostringstream os;

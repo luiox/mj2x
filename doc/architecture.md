@@ -244,7 +244,7 @@ R2 落地 RegC 时加 `REGISTER_C_SOURCE`。
 - ADR-1 已撤销：StackC 复活，保留在 `backend/stackc/`，pipeline 重新注册，逐波扩指令覆盖
 - 定位："易实现、广覆盖"通用后端，不承担 c2j 对抗职责（对抗强度留给 RegC）
 - 其 11 个测试保留
-- 撤销理由与逐波路线见 `cbackend_revival_and_waves.md`
+- 撤销理由与逐波路线见 `stackc_revival_and_waves.md`
 
 ---
 

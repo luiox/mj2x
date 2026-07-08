@@ -1,16 +1,16 @@
-package protected_samples.cbackend;
+package protected_samples.stackc;
 
 /**
- * CBackend fixture covering object, field, array, and type-check JNI surfaces.
+ * StackC fixture covering object, field, array, and type-check JNI surfaces.
  *
  * <p>mjdbg can use this sample after the tiny fixture to validate trace
  * grouping across allocation, member access, primitive arrays, and String LDC.
  */
-public class CBackendObjectArraySample {
+public class StackCObjectArraySample {
     public int value;
     public static int sink;
 
-    public CBackendObjectArraySample(int value) {
+    public StackCObjectArraySample(int value) {
         this.value = value;
     }
 
@@ -20,7 +20,7 @@ public class CBackendObjectArraySample {
     }
 
     public static int objectFieldCall(int x) {
-        CBackendObjectArraySample box = new CBackendObjectArraySample(x);
+        StackCObjectArraySample box = new StackCObjectArraySample(x);
         sink = box.value;
         return box.bump(sink + 2);
     }
@@ -43,6 +43,6 @@ public class CBackendObjectArraySample {
     }
 
     public static String stringLiteral() {
-        return "mjdbg-cbackend";
+        return "mjdbg-stackc";
     }
 }

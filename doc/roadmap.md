@@ -13,7 +13,7 @@
 > intrinsic + 整类下沉来拉开差距。
 >
 > **v2.1（2026-07-05 StackC 复活）**：撤销 ADR-1，StackC 作为"易实现、广覆盖"通用后端
-> 与 RegC 并行。复活决策与逐波覆盖路线见 `cbackend_revival_and_waves.md`。
+> 与 RegC 并行。复活决策与逐波覆盖路线见 `stackc_revival_and_waves.md`。
 > **v2（2026-06-24 架构重构后）**：B0-B3 波次被 R0-R5 替换。
 > 重构依据见 `architecture_redesign.md`。v1 的 CBackend 主线曾作废（归档 reference），现已作为 StackC 复活。
 
@@ -109,7 +109,7 @@ mj2x 是 morpher attack/defense loop 的蓝队半环。其输出最终必须由 
 - 定位："易实现、广覆盖"通用后端，吃 L1 栈式 MIR，直接产 JNI C 源码
 - **不承担 c2j 对抗职责**：生成的代码可被 c2j 还原（接受）；对抗强度留给未来的 RegC
 - SSA 线（R1a/R1b 已合并）保留代码，但**不接入** StackC pipeline（StackC 直接吃 L1 MIR）
-- 逐波覆盖路线（Wave 0-7）见 `cbackend_revival_and_waves.md`
+- 逐波覆盖路线（Wave 0-7）见 `stackc_revival_and_waves.md`
 - 历史：v0.1 已交付 → ADR-1 归档 → 复活
 
 ---

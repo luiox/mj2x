@@ -1,12 +1,12 @@
-package protected_samples.cbackend;
+package protected_samples.stackc;
 
 /**
- * Tiny CBackend fixture for mjdbg smoke traces.
+ * Tiny StackC fixture for mjdbg smoke traces.
  *
  * <p>The methods intentionally stay small so a debugger can compare Java
  * entry/exit events with the generated native arithmetic and branch bodies.
  */
-public class CBackendTinySample {
+public class StackCTinySample {
     public static int arithmetic(int a, int b) {
         int mixed = (a + b) * 3;
         return mixed ^ (a << 1);
