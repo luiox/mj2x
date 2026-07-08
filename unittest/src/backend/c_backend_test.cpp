@@ -199,6 +199,8 @@ TEST(CBackendTest, FieldAccess) {
     auto result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("GetIntField"), std::string::npos);
+    EXPECT_NE(result.text.find("static jfieldID fid_"), std::string::npos);
+    EXPECT_NE(result.text.find("if (fid_"), std::string::npos);
 }
 
 TEST(CBackendTest, InvokeMethod) {
@@ -217,6 +219,8 @@ TEST(CBackendTest, InvokeMethod) {
     auto result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("CallStaticVoidMethod"), std::string::npos);
+    EXPECT_NE(result.text.find("static jmethodID smid_"), std::string::npos);
+    EXPECT_NE(result.text.find("GetStaticMethodID"), std::string::npos);
 }
 
 TEST(CBackendTest, StaticInvokeReturnUsesArgumentBaseSlot) {

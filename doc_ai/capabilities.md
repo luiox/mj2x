@@ -29,6 +29,7 @@ Native 绑定使用 `static` C 函数 + `JNI_OnLoad` / `RegisterNatives`,不为�
 自定义 class loader 下 `new` / `anewarray` / `multianewarray` / 静态成员 / type check
 等路径，bootstrap 异常类和注册入口仍使用 JVM `FindClass`。生成方法体跟踪临时 JNI
 local refs，并在正常返回或异常提前返回前批量释放；对象返回值作为 keep ref 保留。
+字段和方法 ID 在各生成调用点用 `static jfieldID` / `static jmethodID` 懒缓存。
 
 **已覆盖的 javac 输出形状**:
 
@@ -44,6 +45,7 @@ local refs，并在正常返回或异常提前返回前批量释放；对象返�
 - int/long DIV/REM 除零:`ArithmeticException` trap,含 catch 分派与未捕获传播
 - owner ClassLoader-aware 类解析:应用类查找走 `_mj2x_find_class(env, _mj2x_owner_class, ...)`
 - JNI local-ref 追踪:临时 class/string/object/array refs 登记到方法级列表，返回前释放
+- JNI method/field ID 懒缓存:调用点首次解析，后续复用缓存 ID
 
 **验证**:26 个 CBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 CBackend
 发射单测。
@@ -52,7 +54,7 @@ local refs，并在正常返回或异常提前返回前批量释放；对象返�
 
 | 限制 | 说明 |
 |---|---|
-| JNI field/method ID 未缓存 | 每次 `GetMethodID` / `GetFieldID`,性能差 |
+| method/field ID 懒缓存未加锁 | 多线程首次同时命中同一调用点时可能重复解析一次 |
 | 栈全用 `union jvalue` 数组 | 性能低于寄存器方案,后续可优化 |
 | `INVOKEDYNAMIC` fail-closed | 生成 `UnsupportedOperationException`,不直译 lambda / 方法句柄 |
 | JSR / RET 不纳入 | 废弃字节码,由 preprocessor / 输入规范处理 |

@@ -100,6 +100,8 @@
 静态调用、`instanceof` 等业务类路径走 owner ClassLoader-aware helper，而不是直接
 `FindClass`；同组单测断言 generated method 在返回前调用 local-ref 批量释放 helper。
 对象/数组/字符串/异常 E2E 用于确认该清理逻辑不会破坏对象返回值、catch 分派或异常传播。
+字段/方法调用单测断言 generated C 含调用点级 `static jfieldID` / `static jmethodID`
+懒缓存；方法调用、接口调用、对象字段 E2E 覆盖缓存后语义。
 
 **已覆盖**（Wave 7/收尾）：`ThrowPropagation`（`ATHROW` 向上传播）、
 `TryCatchExceptions`（try-catch 与未命中 catch 重新抛出）、`MultiCatchAndFinally`（多 catch 与 finally）、

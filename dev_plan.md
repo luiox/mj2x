@@ -19,7 +19,7 @@
   - [x] P6:boolean[]/byte[] `BALOAD`/`BASTORE` 运行时歧义消除。
   - [x] P2:ClassLoader-aware 类解析,减少自定义 class loader 下 `FindClass` 失败。
   - [x] P3:JNI 局部引用追踪与批量释放,降低复杂方法 local-ref table 溢出风险。
-  - [ ] P4:method/field ID 懒缓存,降低重复 `GetMethodID`/`GetFieldID` 开销。
+  - [x] P4:method/field ID 懒缓存,降低重复 `GetMethodID`/`GetFieldID` 开销。
   - [ ] P5:String pool,减少重复 `NewStringUTF` 并收敛字符串常量表面。
   - [ ] P1:`<clinit>` 分散注册入口,从集中 `JNI_OnLoad` 迁到 per-class 触发。
   - [ ] P1:hidden `<clinit>` proxy / HiddenMethodsPool,把类初始化本体移出 Java 层。

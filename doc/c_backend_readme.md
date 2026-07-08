@@ -17,7 +17,8 @@ Native 绑定使用 `static` C 函数加 `JNI_OnLoad` / `RegisterNatives`。生�
 Java 方法导出 `Java_*` 符号；Java 方法名和描述符保留在注册表中供 JVM 绑定。方法体内
 应用类解析会使用当前 owner class 的 `ClassLoader`，避免自定义 class loader 场景下
 直接 `FindClass` 找不到业务类。生成方法体会跟踪临时 JNI local refs，并在正常返回或
-异常提前返回前批量释放；对象返回值会保留下来作为返回引用。
+异常提前返回前批量释放；对象返回值会保留下来作为返回引用。字段和方法 ID 在各生成
+调用点按需懒初始化到 `static jfieldID` / `static jmethodID`，避免每次执行都重新解析。
 
 ## CLI 用法
 
@@ -50,6 +51,7 @@ passthrough，不参与 root class 解析或 native injection。
 | 基本类型数组、对象数组、多维数组 | 支持；对象/多维数组类解析使用当前 owner `ClassLoader`，`BALOAD`/`BASTORE` 对 byte[]/boolean[] 做运行时分流 | `CBackendE2E.PrimitiveArrays`、`ObjectArrays`、`MultiDimArrays` |
 | `athrow`、try/catch、多 catch、finally、monitor | 支持 | `CBackendE2E.ThrowPropagation`、`TryCatchExceptions`、`MultiCatchAndFinally`、`ExceptionFromNativeCallAndMonitor` |
 | JNI local refs | 支持方法级追踪与返回前批量释放 | `CBackendTest.*`、对象/数组/异常 CBackend E2E |
+| JNI method/field ID | 支持调用点级懒缓存 | `CBackendTest.FieldAccess`、`InvokeMethod`、方法/字段 CBackend E2E |
 | 综合样本 | 支持 | `CBackendE2E.IntegratedSample` |
 | `.class` 输入/输出 | 支持 | `IOTest.InputLoaderRoundtrip`、`PipelineTest.FullPipelineRoundtrip` |
 | `.jar` 输入/输出 | MVP 支持 | `IOTest.JarInputLoaderAndOutputWriterPreserveClassesAndResources`、`PipelineTest.JarPipelineMarksClassesNativeAndPreservesResources`、`CliTest.JarInputEmitsJarAndCSource` |
@@ -61,7 +63,7 @@ passthrough，不参与 root class 解析或 native injection。
 
 - 生成 C 是 `union jvalue stack[]` / `sp` 风格，便于正确性覆盖，但容易被 c2j 类工具识别。
 - JNI local refs 按方法级固定容量追踪并在返回前释放；极端长循环中持续创建新局部引用时，后续仍可补周期性清理。
-- JNI method/field ID 目前按需查找，未做缓存优化。
+- JNI method/field ID 懒缓存未加锁；多线程首次同时命中同一调用点时可能重复解析一次，但最终缓存值等价。
 - `<init>` / `<clinit>` 仍按 MarkAll 边界保守处理，不作为默认 native 化目标。
 - `invokedynamic` 采用 fail-closed 策略，不直译 lambda、string concat 或 method handle。
 - JAR 输出是 MVP：entry 顺序和非 class payload 保留，输出 entry 使用 stored ZIP 形态；
