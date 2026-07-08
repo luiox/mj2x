@@ -98,20 +98,8 @@ ExecResult runScript(const std::vector<std::string>& lines) {
 }
 
 fs::path findCli() {
-#ifdef _WIN32
-    std::vector<fs::path> candidates = {
-        test::getTopProjectPath() / "build" / "windows" / "x64" / "debug" / "mj2x-cli.exe",
-        test::getTopProjectPath() / "build" / "windows" / "x64" / "release" / "mj2x-cli.exe",
-    };
-#else
-    std::vector<fs::path> candidates = {
-        test::getTopProjectPath() / "build" / "linux" / "x86_64" / "debug" / "mj2x-cli",
-        test::getTopProjectPath() / "build" / "linux" / "x86_64" / "release" / "mj2x-cli",
-    };
-#endif
-    for (const auto& path : candidates) {
-        if (fileExists(path)) return path;
-    }
+    auto path = test::getBuildTargetPath("mj2x-cli");
+    if (fileExists(path)) return path;
     return {};
 }
 

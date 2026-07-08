@@ -138,7 +138,7 @@ Toolchain probeToolchain() {
         return tc;
     }
 
-    tc.mj2xCli = test::getTopProjectPath() / "build" / "windows" / "x64" / "release" / "mj2x-cli.exe";
+    tc.mj2xCli = test::getBuildTargetPath("mj2x-cli");
     if (!fileExists(tc.mj2xCli)) {
         tc.reason = "mj2x-cli.exe 未构建（请先 xmake build mj2x-cli）。期望路径: " + tc.mj2xCli.string();
         return tc;

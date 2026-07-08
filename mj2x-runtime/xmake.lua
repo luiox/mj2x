@@ -46,7 +46,7 @@ target("jni_lib")
         add_cxflags("/utf-8", {tools = "cl"})
     end
 
-    set_targetdir("bin")
+    morpher_set_artifact_dir("mj2x")
 
 target("mj2x_runtime_test")
     set_kind("binary")

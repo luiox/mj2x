@@ -121,12 +121,10 @@ Toolchain probeToolchain()
     }
 #ifdef _WIN32
     tc.javac = jdk / "bin" / "javac.exe";
-    tc.mj2xCli =
-        test::getTopProjectPath() / "build" / "windows" / "x64" / "release" / "mj2x-cli.exe";
 #else
-    tc.javac   = jdk / "bin" / "javac";
-    tc.mj2xCli = test::getTopProjectPath() / "build" / "linux" / "x86_64" / "release" / "mj2x-cli";
+    tc.javac = jdk / "bin" / "javac";
 #endif
+    tc.mj2xCli = test::getBuildTargetPath("mj2x-cli");
     if (!fileExists(tc.javac)) {
         tc.reason = "javac not found: " + tc.javac.string();
         return tc;

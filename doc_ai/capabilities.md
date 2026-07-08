@@ -186,3 +186,8 @@ xmake run mj2x_runtime_test
 ```
 
 能力到测试的追溯见 `../doc_ai/mvp_backend_verification.md`。
+
+## 7. Validation maturity
+
+- 首切片：`script/validate_release.ps1 -Layer mj2x -Mode release` 覆盖 build、unit、CLI smoke，并且 `mj2x_unittest` 只查找当前 build mode 的 `mj2x-cli`。
+- 尚未产品级：真实 protected sample corpus、跨 MSVC/GCC/Clang native compile gate、mjdbg observation report 仍需作为 release gate 固化。
