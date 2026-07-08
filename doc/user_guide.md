@@ -118,6 +118,15 @@ cmake -S native_project -B native_project/build
 cmake --build native_project/build --config Release
 ```
 
+产品级 smoke 会验证 StackC/RegC 对 class 和 jar 输入的重复生成稳定性：
+
+```powershell
+tools/product_sample_smoke.ps1 -Mode fast -SkipBuild
+```
+
+该 smoke 从 `mj2x/test_resource/mvp_jar/` 编译一个半真实 JAR，连续运行
+StackC/RegC 两次，并比较输出 class/jar 与 C 源的 SHA-256。
+
 ---
 
 ## 4. 编译生成的 C 为 DLL / SO

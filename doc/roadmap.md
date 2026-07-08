@@ -304,6 +304,7 @@ xmake build mj2x-core
 xmake build mj2x-cli
 xmake build mj2x_unittest
 xmake run mj2x_unittest
+tools/product_sample_smoke.ps1 -Mode fast -SkipBuild
 ```
 
 对于 native 运行时变更（R3+），记录：

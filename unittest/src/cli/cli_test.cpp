@@ -403,6 +403,16 @@ std::string readText(const fs::path& path) {
     return out.str();
 }
 
+std::vector<ca::u8> readFileBytes(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    EXPECT_TRUE(in);
+    auto size = static_cast<size_t>(in.tellg());
+    std::vector<ca::u8> bytes(size);
+    in.seekg(0, std::ios::beg);
+    in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return bytes;
+}
+
 }  // namespace
 
 TEST(CliTest, NativeAnnotationOnlyCompilesAnnotatedMethods) {
@@ -635,6 +645,81 @@ TEST(CliTest, RegCJarInputEmitsJarAndRegCSource) {
     EXPECT_NE(source.find("regc_demo_CliJarA_add__II_I"), std::string::npos) << source;
     EXPECT_EQ(source.find("stack["), std::string::npos) << source;
     EXPECT_EQ(source.find("union jvalue"), std::string::npos) << source;
+}
+
+TEST(CliTest, ClassInputRepeatableForStackCAndRegC) {
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    for (const char* backendName : {"stackc", "regc"}) {
+        fs::path inClass = writeTinyClass();
+        fs::path outClassA = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_a.class");
+        fs::path outClassB = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_b.class");
+        fs::path cFileA = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_a.c");
+        fs::path cFileB = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_b.c");
+
+        auto first = runScript({
+            q(cli) + " -i " + q(inClass) + " -o " + q(outClassA) + " --emit-c " +
+                q(cFileA) + " --backend " + backendName,
+        });
+        ASSERT_EQ(first.exitCode, 0) << first.out;
+        auto second = runScript({
+            q(cli) + " -i " + q(inClass) + " -o " + q(outClassB) + " --emit-c " +
+                q(cFileB) + " --backend " + backendName,
+        });
+        ASSERT_EQ(second.exitCode, 0) << second.out;
+
+        EXPECT_EQ(readFileBytes(outClassA), readFileBytes(outClassB));
+        EXPECT_EQ(readText(cFileA), readText(cFileB));
+    }
+}
+
+TEST(CliTest, JarInputRepeatableForStackCAndRegC) {
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    for (const char* backendName : {"stackc", "regc"}) {
+        fs::path inJar = writeTinyJar();
+        fs::path outJarA = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_a.jar");
+        fs::path outJarB = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_b.jar");
+        fs::path cFileA = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_a.c");
+        fs::path cFileB = test::getTempOutPath(
+            std::string("mj2x_cli_repeat_") + backendName + "_b.c");
+
+        auto first = runScript({
+            q(cli) + " -i " + q(inJar) + " -o " + q(outJarA) + " --emit-c " +
+                q(cFileA) + " --backend " + backendName,
+        });
+        ASSERT_EQ(first.exitCode, 0) << first.out;
+        auto second = runScript({
+            q(cli) + " -i " + q(inJar) + " -o " + q(outJarB) + " --emit-c " +
+                q(cFileB) + " --backend " + backendName,
+        });
+        ASSERT_EQ(second.exitCode, 0) << second.out;
+
+        EXPECT_EQ(readText(cFileA), readText(cFileB));
+        EXPECT_EQ(readJarEntry(outJarA, "demo/CliJarA.class"),
+                  readJarEntry(outJarB, "demo/CliJarA.class"));
+        EXPECT_EQ(readJarEntry(outJarA, "demo/CliJarB.class"),
+                  readJarEntry(outJarB, "demo/CliJarB.class"));
+        EXPECT_EQ(readJarEntry(outJarA, "assets/config.txt"),
+                  readJarEntry(outJarB, "assets/config.txt"));
+        if (std::string(backendName) == "stackc") {
+            EXPECT_EQ(readJarEntry(outJarA, "mj2x/cloader/Loader.class"),
+                      readJarEntry(outJarB, "mj2x/cloader/Loader.class"));
+        }
+    }
 }
 
 TEST(CliTest, GenerateCMakeProjectEmitsStandaloneFiles) {
