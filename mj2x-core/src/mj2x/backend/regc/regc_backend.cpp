@@ -987,18 +987,6 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, "
            "(jobject)value, to_string);\n";
     out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs) {\n";
-    out << "    return (lhs > rhs) - (lhs < rhs);\n";
-    out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs) {\n";
-    out << "    return (lhs > rhs) - (lhs < rhs);\n";
-    out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs) {\n";
-    out << "    return (int32_t)lhs - (int32_t)rhs;\n";
-    out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs) {\n";
-    out << "    return (int32_t)lhs - (int32_t)rhs;\n";
-    out << "}\n\n";
     out << "static int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs) {\n";
     out << "    if (lhs < rhs) return -1;\n";
     out << "    if (lhs > rhs) return 1;\n";
@@ -1022,12 +1010,6 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if ((rhs_bits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL) rhs_bits = 0x7ff8000000000000ULL;\n";
     out << "    if (lhs_bits == rhs_bits) return 0;\n";
     out << "    return ((int64_t)lhs_bits < (int64_t)rhs_bits) ? -1 : 1;\n";
-    out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs) {\n";
-    out << "    return ((lhs != 0) > (rhs != 0)) - ((lhs != 0) < (rhs != 0));\n";
-    out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs) {\n";
-    out << "    return (int32_t)lhs - (int32_t)rhs;\n";
     out << "}\n\n";
     out << "#ifndef MJ2X_REGC_STRING_BUILDER_DECLARED\n";
     out << "#define MJ2X_REGC_STRING_BUILDER_DECLARED\n";

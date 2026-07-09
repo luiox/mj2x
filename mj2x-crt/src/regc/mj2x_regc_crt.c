@@ -133,3 +133,27 @@ jfieldID mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache
     cache->field = field;
     return field;
 }
+
+int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs) {
+    return (lhs > rhs) - (lhs < rhs);
+}
+
+int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs) {
+    return (lhs > rhs) - (lhs < rhs);
+}
+
+int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs) {
+    return (int32_t)lhs - (int32_t)rhs;
+}
+
+int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs) {
+    return (int32_t)lhs - (int32_t)rhs;
+}
+
+int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs) {
+    return ((lhs != 0) > (rhs != 0)) - ((lhs != 0) < (rhs != 0));
+}
+
+int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs) {
+    return (int32_t)lhs - (int32_t)rhs;
+}

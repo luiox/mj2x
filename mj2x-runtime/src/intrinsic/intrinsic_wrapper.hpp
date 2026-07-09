@@ -145,4 +145,22 @@ mj2x_char mj2x_char_value_of(std::uint16_t value);
 /// @brief `Character.charValue()`.
 std::uint16_t mj2x_char_char_value(mj2x_char box);
 
+/// @brief `Integer.compare(int, int)`.
+std::int32_t _mj2x_intrinsic_int_compare(std::int32_t lhs, std::int32_t rhs);
+
+/// @brief `Long.compare(long, long)`.
+std::int32_t _mj2x_intrinsic_long_compare(std::int64_t lhs, std::int64_t rhs);
+
+/// @brief `Byte.compare(byte, byte)`.
+std::int32_t _mj2x_intrinsic_byte_compare(std::int8_t lhs, std::int8_t rhs);
+
+/// @brief `Short.compare(short, short)`.
+std::int32_t _mj2x_intrinsic_short_compare(std::int16_t lhs, std::int16_t rhs);
+
+/// @brief `Boolean.compare(boolean, boolean)`.
+std::int32_t _mj2x_intrinsic_bool_compare(std::int8_t lhs, std::int8_t rhs);
+
+/// @brief `Character.compare(char, char)`.
+std::int32_t _mj2x_intrinsic_char_compare(std::uint16_t lhs, std::uint16_t rhs);
+
 }  // extern "C"

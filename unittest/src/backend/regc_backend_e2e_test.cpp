@@ -824,6 +824,18 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_char_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_float_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_double_compare("), std::string::npos) << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_int_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_long_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_byte_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_short_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_bool_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_char_compare"), std::string::npos)
+        << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_literal("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_int_value_of("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_int_int_value("), std::string::npos) << generatedC;

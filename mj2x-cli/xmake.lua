@@ -16,6 +16,9 @@ rule("mj2x.embed-resource")
         local resource = fileconfig and fileconfig.resource
         local header = fileconfig and fileconfig.header
         assert(resource and header, "mj2x.embed-resource requires resource/header fileconfig")
+        if not path.is_absolute(resource) then
+            resource = path.join(os.scriptdir(), resource)
+        end
         local headerdir = path.join(target:autogendir(), "rules", "mj2x", "embed-resource")
         local headerfile = path.join(headerdir, header)
         bin2c_utils.generate_headerfile(target, batchcmds, resource, {
@@ -25,7 +28,7 @@ rule("mj2x.embed-resource")
             nozeroend = true,
         })
         batchcmds:add_depfiles(sourcefile, resource)
-        batchcmds:set_depmtime(os.mtime(headerfile))
+        batchcmds:set_depmtime(os.mtime(resource))
         batchcmds:set_depcache(target:dependfile(headerfile))
     end)
 

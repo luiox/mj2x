@@ -53,6 +53,13 @@ jclass mj2x_regc_cached_class(JNIEnv* env, mj2x_regc_class_cache* cache);
 jmethodID mj2x_regc_cached_static_method(JNIEnv* env, mj2x_regc_static_method_cache* cache);
 jfieldID mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache* cache);
 
+int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs);
+int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);
+int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs);
+int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs);
+int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs);
+int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs);
+
 #ifdef __cplusplus
 }
 #endif

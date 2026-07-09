@@ -109,4 +109,28 @@ std::uint16_t mj2x_char_char_value(mj2x_char box) {
     return box.value;
 }
 
+std::int32_t _mj2x_intrinsic_int_compare(std::int32_t lhs, std::int32_t rhs) {
+    return (lhs > rhs) - (lhs < rhs);
+}
+
+std::int32_t _mj2x_intrinsic_long_compare(std::int64_t lhs, std::int64_t rhs) {
+    return (lhs > rhs) - (lhs < rhs);
+}
+
+std::int32_t _mj2x_intrinsic_byte_compare(std::int8_t lhs, std::int8_t rhs) {
+    return static_cast<std::int32_t>(lhs) - static_cast<std::int32_t>(rhs);
+}
+
+std::int32_t _mj2x_intrinsic_short_compare(std::int16_t lhs, std::int16_t rhs) {
+    return static_cast<std::int32_t>(lhs) - static_cast<std::int32_t>(rhs);
+}
+
+std::int32_t _mj2x_intrinsic_bool_compare(std::int8_t lhs, std::int8_t rhs) {
+    return ((lhs != 0) > (rhs != 0)) - ((lhs != 0) < (rhs != 0));
+}
+
+std::int32_t _mj2x_intrinsic_char_compare(std::uint16_t lhs, std::uint16_t rhs) {
+    return static_cast<std::int32_t>(lhs) - static_cast<std::int32_t>(rhs);
+}
+
 }  // extern "C"
