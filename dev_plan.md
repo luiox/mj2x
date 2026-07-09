@@ -16,6 +16,7 @@
 - [ ] **R5:mjdbg 闭环验证**。用 mjdbg / c2j 红队验证 RegC 保护强度,产出量化结论。前置:R3 RegC ABI live 验证 + mjdbg 样本反馈。
 - [ ] **RegC/R3 live 验证(剩余)**:保持现有 intrinsic(Math/parseInt/包装类/Random)在统一 registry 内稳定;剩余工作优先是 escape-aware fallback、unsupported reason 和产品入口回归,不是新增 String/StringBuilder 覆盖。#439 Math/Random 已有 runtime/emitter/sample 验证,可按验证结果关闭;#438 只完成 wrapper value/unbox + `Integer.parseInt` 第一切片,`toString`/`compare`/`parseLong` 等完整包装类语义仍未交付,不能关闭。
 - [ ] **运行时反侦测体系(issue #411,剩余集成)**:mockable core 已覆盖四类威胁的第二切片——IDE/JDWP 参数、java agent 参数与模块名、JVMTI dump 模块名与 capability 快照、native debugger API 与软件断点字节扫描。剩余工作是接入真实运行时枚举/查询:进程模块枚举、JVMTI capability live query、PEB/NtQuery/硬件断点/代码段扫描、策略层 fail-closed 编排。
+- [ ] **String/StringBuilder intrinsic(issue #440)**:已完成设计和 runtime 最小 UTF-16 view 垫片(`length`/`charAt`/status)及 StringBuilder fail-closed 状态。剩余工作是 UTF-16 ownership、escape-aware fallback、jobject materialize、StringBuilder 可变状态和 emitter 接入;#440 不能关闭。
 - [ ] **xmake 项目生成器重构**(`feat/mj2x/xmake-project-generator` 分支):当前 emit 后字符串改写,迁到 codegen 阶段直出。前置:建立 golden test 固化当前输出。
 
 ## 下一步验证命令

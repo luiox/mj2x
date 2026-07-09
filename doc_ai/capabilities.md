@@ -139,6 +139,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | Integer.parseInt intrinsic | ✅ emitter 内联 JNI helper + E2E |
 | 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime + RegC 非逃逸 value/unbox;逃逸 fail-closed |
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
+| String intrinsic 最小 UTF-16 view 垫片(length/charAt/status) | ✅ runtime 单测;尚未接 RegC emitter |
 | antidebug 软件断点字节扫描 | ✅ mockable runtime 单测 |
 | antijvmti agent/JDWP 参数、模块名、dump capability 信号聚合 | ✅ mockable runtime 单测 |
 
