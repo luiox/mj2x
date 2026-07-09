@@ -1,5 +1,7 @@
 #include "native_project_generator.hpp"
 
+#include "embedded_resources.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -20,6 +22,13 @@ std::string readText(const fs::path& path)
     std::ostringstream out;
     out << in.rdbuf();
     return out.str();
+}
+
+std::string readEmbeddedText(const char* path)
+{
+    const auto* resource = findEmbeddedResource(path);
+    if (resource == nullptr) return {};
+    return std::string(reinterpret_cast<const char*>(resource->data), resource->size);
 }
 
 bool writeText(const fs::path& path, const std::string& text)
@@ -158,11 +167,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
                 config.generatedSourcePath.string().c_str());
         return 1;
     }
-    if (!isCrtRoot(config.crtRoot)) {
-        fprintf(stderr,
-                "[mj2x] ERROR: mj2x-crt root not found. Set MJ2X_CRT_DIR or run from repo root.\n");
-        return 1;
-    }
+    const bool useExternalCrt = isCrtRoot(config.crtRoot);
 
     const fs::path generatedDir = config.projectDir / "src" / "generated";
     const fs::path crtDest      = config.projectDir / "src" / "mj2x-crt";
@@ -185,10 +190,18 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         }
     }
 
-    if (!copyDirectory(config.crtRoot / "src", crtDest)) return 1;
+    if (useExternalCrt) {
+        if (!copyDirectory(config.crtRoot / "src", crtDest)) return 1;
+    }
+    else if (!writeEmbeddedCrtTree(config.projectDir)) {
+        fprintf(stderr, "[mj2x] ERROR: embedded mj2x-crt resources are unavailable.\n");
+        return 1;
+    }
 
-    auto xmakeTemplate  = readText(config.crtRoot / "templates" / "xmake.lua.in");
-    auto readmeTemplate = readText(config.crtRoot / "templates" / "README.md.in");
+    auto xmakeTemplate = useExternalCrt ? readText(config.crtRoot / "templates" / "xmake.lua.in")
+                                        : readEmbeddedText("templates/xmake.lua.in");
+    auto readmeTemplate = useExternalCrt ? readText(config.crtRoot / "templates" / "README.md.in")
+                                         : readEmbeddedText("templates/README.md.in");
     if (xmakeTemplate.empty() || readmeTemplate.empty()) {
         fprintf(stderr, "[mj2x] ERROR: mj2x-crt templates are missing.\n");
         return 1;

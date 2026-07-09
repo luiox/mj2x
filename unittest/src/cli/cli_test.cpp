@@ -864,6 +864,58 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
     EXPECT_NE(source.find("RegisterNatives"), std::string::npos) << source;
 }
 
+TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path        inClass = writeTinyClass();
+    fs::path        outDir =
+        test::getTempOutPath("mj2x_cli_xmake_embedded.keep").parent_path() /
+        "mj2x_cli_xmake_embedded";
+    fs::path projectDir = outDir / "project";
+    fs::path outClass   = outDir / "output.class";
+    std::error_code ec;
+    fs::remove_all(outDir, ec);
+    fs::create_directories(outDir, ec);
+    fs::path isolatedCli = outDir / cli.filename();
+    fs::copy_file(cli, isolatedCli, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+#ifdef _WIN32
+    std::string poisonCrt = "set MJ2X_CRT_DIR=" + (outDir / "missing-crt").string();
+    std::string cdOutDir  = "cd /d " + q(outDir);
+#else
+    std::string poisonCrt = "MJ2X_CRT_DIR=" + q(outDir / "missing-crt") + "; export MJ2X_CRT_DIR";
+    std::string cdOutDir  = "cd " + q(outDir);
+#endif
+
+    auto result = runScript({
+        poisonCrt,
+        cdOutDir,
+        q(isolatedCli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+            q(projectDir),
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(projectDir / "src" / "mj2x-crt" / "regc" / "mj2x_regc_crt.h"))
+        << result.out;
+    EXPECT_TRUE(fileExists(projectDir / "src" / "mj2x-crt" / "regc" / "mj2x_regc_crt.c"))
+        << result.out;
+    EXPECT_TRUE(fileExists(projectDir / "xmake.lua")) << result.out;
+
+    fs::path repoRoot = test::getTopProjectPath();
+    EXPECT_EQ(readText(projectDir / "src" / "mj2x-crt" / "regc" / "mj2x_regc_crt.h"),
+              readText(repoRoot / "mj2x" / "mj2x-crt" / "src" / "regc" / "mj2x_regc_crt.h"));
+    EXPECT_EQ(readText(projectDir / "src" / "mj2x-crt" / "regc" / "mj2x_regc_crt.c"),
+              readText(repoRoot / "mj2x" / "mj2x-crt" / "src" / "regc" / "mj2x_regc_crt.c"));
+
+    std::string xmake = readText(projectDir / "xmake.lua");
+    EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
+    EXPECT_EQ(xmake.find("@PROJECT_NAME@"), std::string::npos) << xmake;
+}
+
 TEST(CliTest, GenerateXmakeProjectForRegCJarInjectsNativeLoader)
 {
     fs::path cli = findCli();
