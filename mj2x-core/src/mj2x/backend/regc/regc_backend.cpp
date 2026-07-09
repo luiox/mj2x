@@ -322,7 +322,8 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
                         const std::string& classCastExceptionClassCacheName,
                         const std::string& outOfMemoryErrorClassCacheName,
                         const std::string& stringIndexOutOfBoundsClassCacheName,
-                        const std::string& unsupportedOperationExceptionClassCacheName)
+                        const std::string& unsupportedOperationExceptionClassCacheName,
+                        bool emitStringBuilderHelpers)
 {
     out << "typedef void* mj2x_ref;\n";
     out << "#ifndef MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
@@ -593,6 +594,39 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    for (int32_t i = 0; i < dims[0]; ++i) {\n";
     out << "        mj2x_ref child = _mj2x_regc_alloc_multi_array(type_desc + 1, dim_count - 1, "
            "dims + 1);\n";
+    out << "        if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return "
+           "(mj2x_ref)array;\n";
+    out << "        (*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, array, i, "
+           "(jobject)child);\n";
+    out << "        if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return "
+           "(mj2x_ref)array;\n";
+    out << "    }\n";
+    out << "    return (mj2x_ref)array;\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_regc_alloc_multi_array_cached(const char* type_desc, "
+           "int32_t dim_count, int32_t* dims, mj2x_regc_class_cache** component_caches) {\n";
+    out << "    if (type_desc == NULL || dims == NULL || dim_count <= 0 || type_desc[0] != '[') "
+           "{\n";
+    out << "        _mj2x_regc_throw_unsupported(\"RegC cached multi-array helper received a "
+           "malformed descriptor\");\n";
+    out << "        return NULL;\n";
+    out << "    }\n";
+    out << "    if (dim_count == 1) {\n";
+    out << "        if (type_desc[1] == 'L' || type_desc[1] == '[') {\n";
+    out << "            return _mj2x_regc_alloc_ref_array_cached(component_caches[0], dims[0]);\n";
+    out << "        }\n";
+    out << "        return _mj2x_regc_alloc_array(type_desc, dims[0]);\n";
+    out << "    }\n";
+    out << "    if (component_caches == NULL || component_caches[0] == NULL) return NULL;\n";
+    out << "    jclass component = _mj2x_regc_cached_class(component_caches[0]);\n";
+    out << "    if (component == NULL) return NULL;\n";
+    out << "    jobjectArray array = (*_mj2x_regc_env)->NewObjectArray(_mj2x_regc_env, dims[0], "
+           "component, NULL);\n";
+    out << "    if (array == NULL || (*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return "
+           "(mj2x_ref)array;\n";
+    out << "    for (int32_t i = 0; i < dims[0]; ++i) {\n";
+    out << "        mj2x_ref child = _mj2x_regc_alloc_multi_array_cached(type_desc + 1, "
+           "dim_count - 1, dims + 1, component_caches + 1);\n";
     out << "        if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return "
            "(mj2x_ref)array;\n";
     out << "        (*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, array, i, "
@@ -947,6 +981,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, "
            "(jobject)value, to_string);\n";
     out << "}\n\n";
+    if (emitStringBuilderHelpers) {
     out << "#ifndef MJ2X_REGC_STRING_BUILDER_DECLARED\n";
     out << "#define MJ2X_REGC_STRING_BUILDER_DECLARED\n";
     out << "typedef struct mj2x_string_builder { char data[1024]; int32_t length; int32_t overflow; "
@@ -1095,6 +1130,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, "
            "state->data);\n";
     out << "}\n\n";
+    }
     out << "static int32_t _mj2x_intrinsic_is_string(mj2x_ref value) {\n";
     out << "    if (value == NULL) return 0;\n";
     out << "    jclass cls = _mj2x_regc_cached_class(&" << stringClassCacheName << ");\n";
@@ -1451,6 +1487,10 @@ void RegCBackend::finalize(const CompilerIndex& index)
     const std::string unsupportedOperationExceptionClassCacheName =
         impl_->cachePool.classCache("java/lang/UnsupportedOperationException");
     const std::string cacheDeclarations = impl_->cachePool.renderDeclarations();
+    const std::string emittedSource = impl_->source.str();
+    const bool emitStringBuilderHelpers =
+        emittedSource.find("_mj2x_intrinsic_string_builder_") != std::string::npos ||
+        emittedSource.find("mj2x_string_builder ") != std::string::npos;
     emitRuntimeHelpers(full,
                        cacheDeclarations,
                        stringClassCacheName,
@@ -1461,9 +1501,10 @@ void RegCBackend::finalize(const CompilerIndex& index)
                        classCastExceptionClassCacheName,
                        outOfMemoryErrorClassCacheName,
                        stringIndexOutOfBoundsClassCacheName,
-                       unsupportedOperationExceptionClassCacheName);
+                       unsupportedOperationExceptionClassCacheName,
+                       emitStringBuilderHelpers);
     emitRegCHelperPrelude(full);
-    full << impl_->source.str();
+    full << emittedSource;
 
     sourceCode_ = full.str();
     if (!cOutputPath_.empty()) {

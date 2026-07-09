@@ -225,7 +225,23 @@ bool isReferenceArrayDesc(const std::string& desc)
 
 std::string arrayComponentDesc(const std::string& desc)
 {
-    return desc.size() > 1 ? desc.substr(1) : desc;
+    if (desc.size() <= 1) return desc;
+    std::string component = desc.substr(1);
+    if (component.size() >= 2 && component.front() == 'L' && component.back() == ';') {
+        return component.substr(1, component.size() - 2);
+    }
+    return component;
+}
+
+std::vector<std::string> multiArrayComponentDescs(const std::string& desc, size_t dimCount)
+{
+    std::vector<std::string> components;
+    std::string current = desc;
+    for (size_t i = 0; i < dimCount && isReferenceArrayDesc(current); ++i) {
+        components.push_back(arrayComponentDesc(current));
+        current = current.substr(1);
+    }
+    return components;
 }
 
 bool isStaticCall(const RegInstruction& ins)
@@ -1204,8 +1220,27 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
             for (size_t i = 0; i < ins.args.size(); ++i) {
                 out << "        dims[" << i << "] = " << operandExpr(ins.args[i]) << ";\n";
             }
-            out << "        " << regName(ins.dest.id) << " = _mj2x_regc_alloc_multi_array("
-                << cStringLiteral(ins.typeDesc) << ", " << ins.args.size() << ", dims);\n";
+            const std::vector<std::string> componentDescs =
+                state.cachePool != nullptr ? multiArrayComponentDescs(ins.typeDesc, ins.args.size())
+                                           : std::vector<std::string>{};
+            if (!componentDescs.empty()) {
+                out << "        mj2x_regc_class_cache* component_caches[" << componentDescs.size()
+                    << "] = {";
+                for (size_t i = 0; i < componentDescs.size(); ++i) {
+                    if (i != 0) out << ", ";
+                    const std::string cacheName = addClassCache(state, componentDescs[i]);
+                    out << "&" << cacheName;
+                }
+                out << "};\n";
+                out << "        " << regName(ins.dest.id)
+                    << " = _mj2x_regc_alloc_multi_array_cached("
+                    << cStringLiteral(ins.typeDesc) << ", " << ins.args.size()
+                    << ", dims, component_caches);\n";
+            }
+            else {
+                out << "        " << regName(ins.dest.id) << " = _mj2x_regc_alloc_multi_array("
+                    << cStringLiteral(ins.typeDesc) << ", " << ins.args.size() << ", dims);\n";
+            }
             out << "    }\n";
         }
         return true;

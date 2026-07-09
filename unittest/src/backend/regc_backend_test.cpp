@@ -133,6 +133,10 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
             new TypeInsnNode(Opcodes::ANEWARRAY,
                              ca::str::ZUtf8StringRef::from_static("Foo")),
             new InsnNode(Opcodes::POP),
+            new InsnNode(Opcodes::ICONST_1),
+            new InsnNode(Opcodes::ICONST_1),
+            new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"), 2),
+            new InsnNode(Opcodes::POP),
             new VarInsnNode(Opcodes::ALOAD, 0),
             new TypeInsnNode(Opcodes::CHECKCAST,
                              ca::str::ZUtf8StringRef::from_static("java/lang/CharSequence")),
@@ -172,6 +176,10 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
             new InsnNode(Opcodes::ICONST_1),
             new TypeInsnNode(Opcodes::ANEWARRAY,
                              ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(Opcodes::POP),
+            new InsnNode(Opcodes::ICONST_1),
+            new InsnNode(Opcodes::ICONST_1),
+            new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"), 2),
             new InsnNode(Opcodes::POP),
             new VarInsnNode(Opcodes::ALOAD, 0),
             new TypeInsnNode(Opcodes::CHECKCAST,
@@ -252,6 +260,8 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
         << source;
     EXPECT_EQ(countSubstring(source, "{\"java/lang/String\", NULL}"), 1u)
         << source;
+    EXPECT_EQ(countSubstring(source, "{\"[Ljava/lang/String;\", NULL}"), 1u)
+        << source;
     EXPECT_EQ(countSubstring(source, "{\"java/lang/NullPointerException\", NULL}"), 1u)
         << source;
     EXPECT_EQ(countSubstring(source, "{\"java/lang/ClassCastException\", NULL}"), 1u)
@@ -294,6 +304,12 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
               std::string::npos)
         << source;
     EXPECT_NE(source.find("_mj2x_regc_alloc_ref_array_cached(&_mj2x_regc_class_cache_tu_"),
+              std::string::npos)
+        << source;
+    EXPECT_NE(source.find("_mj2x_regc_alloc_multi_array_cached(\"[[Ljava/lang/String;\""),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("static void _mj2x_intrinsic_string_builder_init_empty(mj2x_string_builder* state) {"),
               std::string::npos)
         << source;
     expectNoStackAnchors(source);
