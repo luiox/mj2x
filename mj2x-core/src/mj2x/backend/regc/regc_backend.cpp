@@ -955,6 +955,18 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "static int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs) {\n";
     out << "    return (lhs > rhs) - (lhs < rhs);\n";
     out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs) {\n";
+    out << "    return (int32_t)lhs - (int32_t)rhs;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs) {\n";
+    out << "    return (int32_t)lhs - (int32_t)rhs;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs) {\n";
+    out << "    return ((lhs != 0) > (rhs != 0)) - ((lhs != 0) < (rhs != 0));\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs) {\n";
+    out << "    return (int32_t)lhs - (int32_t)rhs;\n";
+    out << "}\n\n";
     out << "#ifndef MJ2X_REGC_STRING_BUILDER_DECLARED\n";
     out << "#define MJ2X_REGC_STRING_BUILDER_DECLARED\n";
     out << "typedef struct mj2x_string_builder { char data[1024]; int32_t length; int32_t overflow; "

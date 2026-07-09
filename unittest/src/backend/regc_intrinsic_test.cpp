@@ -209,6 +209,45 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperToStringIntrinsics)
     EXPECT_EQ(doubleDecision.symbol, "_mj2x_intrinsic_double_to_string");
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesWrapperCompareIntrinsics)
+{
+    auto byteCompare = makeStaticCall("java/lang/Byte",
+                                      "compare",
+                                      "(BB)I",
+                                      {
+                                          RegOperand::fromInt(1, SSAType::I8),
+                                          RegOperand::fromInt(2, SSAType::I8),
+                                      });
+    auto byteDecision = RegCIntrinsicRegistry::builtins().matchCall(byteCompare);
+    EXPECT_EQ(byteDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(byteDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(byteDecision.symbol, "_mj2x_intrinsic_byte_compare");
+
+    auto boolCompare = makeStaticCall("java/lang/Boolean",
+                                      "compare",
+                                      "(ZZ)I",
+                                      {
+                                          RegOperand::fromInt(1, SSAType::BOOL),
+                                          RegOperand::fromInt(0, SSAType::BOOL),
+                                      });
+    auto boolDecision = RegCIntrinsicRegistry::builtins().matchCall(boolCompare);
+    EXPECT_EQ(boolDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(boolDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(boolDecision.symbol, "_mj2x_intrinsic_bool_compare");
+
+    auto charCompare = makeStaticCall("java/lang/Character",
+                                      "compare",
+                                      "(CC)I",
+                                      {
+                                          RegOperand::fromInt(1, SSAType::CHAR),
+                                          RegOperand::fromInt(2, SSAType::CHAR),
+                                      });
+    auto charDecision = RegCIntrinsicRegistry::builtins().matchCall(charCompare);
+    EXPECT_EQ(charDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(charDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(charDecision.symbol, "_mj2x_intrinsic_char_compare");
+}
+
 TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
 {
     RegInstruction init;
@@ -856,6 +895,69 @@ TEST(RegCIntrinsicTest, MoreWrapperToStringLoweredToIntrinsicsNotJni)
               std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Double\", \"toString\""),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
+{
+    std::string reason;
+    // static int compares(byte b, short s, boolean z, char c) {
+    //   return Byte.compare(b, (byte)7) + Short.compare(s, (short)3)
+    //       + Boolean.compare(z, false) + Character.compare(c, 'A');
+    // }
+    auto result = emitRegC(
+        "moreWrapperCompares",
+        "(BSZC)I",
+        {
+            new VarInsnNode(Opcodes::ILOAD, 0),
+            new IntInsnNode(Opcodes::BIPUSH, 7),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Byte"), U("compare"), U("(BB)I"), false),
+            new VarInsnNode(Opcodes::ILOAD, 1),
+            new InsnNode(Opcodes::ICONST_3),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Short"), U("compare"), U("(SS)I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ILOAD, 2),
+            new InsnNode(Opcodes::ICONST_0),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Boolean"), U("compare"), U("(ZZ)I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ILOAD, 3),
+            new IntInsnNode(Opcodes::BIPUSH, 65),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Character"),
+                               U("compare"),
+                               U("(CC)I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        3,
+        4,
+        reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_byte_compare("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_short_compare("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_bool_compare("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_char_compare("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Byte\", \"compare\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Short\", \"compare\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Boolean\", \"compare\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Character\", \"compare\""),
               std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);

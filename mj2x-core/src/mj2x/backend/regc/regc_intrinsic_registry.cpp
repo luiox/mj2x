@@ -83,16 +83,24 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Short", "toString", "(S)Ljava/lang/String;", "_mj2x_intrinsic_int_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Short", "compare", "(SS)I", "_mj2x_intrinsic_short_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Byte", "toString", "(B)Ljava/lang/String;", "_mj2x_intrinsic_int_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Byte", "compare", "(BB)I", "_mj2x_intrinsic_byte_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Float", "toString", "(F)Ljava/lang/String;", "_mj2x_intrinsic_float_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
     {"java/lang/Double", "toString", "(D)Ljava/lang/String;", "_mj2x_intrinsic_double_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
     {"java/lang/Boolean", "toString", "(Z)Ljava/lang/String;", "_mj2x_intrinsic_bool_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Boolean", "compare", "(ZZ)I", "_mj2x_intrinsic_bool_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Character", "toString", "(C)Ljava/lang/String;", "_mj2x_intrinsic_char_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Character", "compare", "(CC)I", "_mj2x_intrinsic_char_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/String", "valueOf", "(I)Ljava/lang/String;", "_mj2x_intrinsic_int_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
     {"java/lang/String", "valueOf", "(J)Ljava/lang/String;", "_mj2x_intrinsic_long_to_string",
@@ -288,6 +296,10 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "static mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, mj2x_ref value);\n";
     out << "static int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n";
     out << "static int32_t _mj2x_intrinsic_string_length(mj2x_ref value);\n";
     out << "static uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index);\n";

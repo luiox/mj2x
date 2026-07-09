@@ -635,6 +635,10 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static String doubleString(double x) { return Double.toString(x); }\n"
         "  public static int intCompare(int a, int b) { return Integer.compare(a, b); }\n"
         "  public static int longCompare(long a, long b) { return Long.compare(a, b); }\n"
+        "  public static int byteCompare(byte a, byte b) { return Byte.compare(a, b); }\n"
+        "  public static int shortCompare(short a, short b) { return Short.compare(a, b); }\n"
+        "  public static int boolCompare(boolean a, boolean b) { return Boolean.compare(a, b); }\n"
+        "  public static int charCompare(char a, char b) { return Character.compare(a, b); }\n"
         "  public static double sinDemo(double x) { return Math.sin(x); }\n"
         "  public static double sqrtDemo(double x) { return Math.sqrt(x); }\n"
         "  public static int mathChain(int a, int b) {\n"
@@ -705,6 +709,11 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"intCompare(9, 4)", "RegCIntrinsic.intCompare(9, 4)"},
             {"longCompare(9L, 9L)", "RegCIntrinsic.longCompare(9L, 9L)"},
             {"longCompare(-5L, 2L)", "RegCIntrinsic.longCompare(-5L, 2L)"},
+            {"byteCompare((byte)-3, (byte)4)", "RegCIntrinsic.byteCompare((byte)-3, (byte)4)"},
+            {"shortCompare((short)9, (short)-2)", "RegCIntrinsic.shortCompare((short)9, (short)-2)"},
+            {"boolCompare(true, false)", "RegCIntrinsic.boolCompare(true, false)"},
+            {"boolCompare(false, true)", "RegCIntrinsic.boolCompare(false, true)"},
+            {"charCompare('A', 'Z')", "RegCIntrinsic.charCompare('A', 'Z')"},
             {"sinDemo(1.0)", "RegCIntrinsic.sinDemo(1.0)"},
             {"sqrtDemo(2.0)", "RegCIntrinsic.sqrtDemo(2.0)"},
             {"mathChain(3, 9)", "RegCIntrinsic.mathChain(3, 9)"},
@@ -773,6 +782,10 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_object_to_string("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_int_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_long_compare("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_byte_compare("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_short_compare("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_bool_compare("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_char_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_literal("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_int_value_of("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_int_int_value("), std::string::npos) << generatedC;
@@ -852,6 +865,18 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
               std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Long\", \"compare\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Byte\", \"compare\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Short\", \"compare\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Boolean\", \"compare\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Character\", \"compare\""),
               std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/String\", \"valueOf\""),
