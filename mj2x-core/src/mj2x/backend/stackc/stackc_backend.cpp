@@ -66,6 +66,13 @@ enum class StackCSnippet {
     LocalStore,
     BinaryUnsignedWrap,
     ReturnVoid,
+    NullPointerTrap,
+    PendingExceptionCheck,
+    ArrayLength,
+    ObjectArrayLoad,
+    ObjectArrayStore,
+    PrimitiveArrayLoad,
+    PrimitiveArrayStore,
 };
 
 static const codegen::CodeSnippetSet<StackCSnippet>& stackCSnippets() {
@@ -80,6 +87,40 @@ static const codegen::CodeSnippetSet<StackCSnippet>& stackCSnippets() {
         {StackCSnippet::ReturnVoid,
          "    _mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);\n"
          "    return;\n"},
+        {StackCSnippet::NullPointerTrap,
+         "    if (${ref} == NULL) {\n"
+         "        jclass ex_class = (jclass)${ex_class};\n"
+         "        (*env)->ThrowNew(env, ex_class, \"null reference\");\n"
+         "${dispatch}"
+         "    }\n"},
+        {StackCSnippet::PendingExceptionCheck,
+         "${pad}if ((*env)->ExceptionCheck(env)) {\n"
+         "${dispatch}"
+         "${pad}}\n"},
+        {StackCSnippet::ArrayLength,
+         "    stack[sp].i = (*env)->GetArrayLength(env, stack[sp].l);\n"},
+        {StackCSnippet::ObjectArrayLoad,
+         "    stack[sp - 1].l = ${value};\n"
+         "    sp--;\n"},
+        {StackCSnippet::ObjectArrayStore,
+         "    (*env)->SetObjectArrayElement(env, (jobjectArray)stack[sp - 2].l, "
+         "stack[sp - 1].i, stack[sp].l);\n"
+         "    sp -= 3;\n"},
+        {StackCSnippet::PrimitiveArrayLoad,
+         "    {\n"
+         "        ${type} value;\n"
+         "        (*env)->Get${suffix}ArrayRegion(env, (${array_type})stack[sp - 1].l, "
+         "stack[sp].i, 1, &value);\n"
+         "        stack[sp - 1]${acc} = (${target_type})value;\n"
+         "    }\n"
+         "    sp--;\n"},
+        {StackCSnippet::PrimitiveArrayStore,
+         "    {\n"
+         "        ${type} value = (${type})stack[sp]${acc};\n"
+         "        (*env)->Set${suffix}ArrayRegion(env, (${array_type})stack[sp - 2].l, "
+         "stack[sp - 1].i, 1, &value);\n"
+         "    }\n"
+         "    sp -= 3;\n"},
     });
     return snippets;
 }
@@ -1983,26 +2024,30 @@ void StackCBackend::Impl::emitIntegerDivZeroTrap(const char* rhsAccessor, std::o
 }
 
 void StackCBackend::Impl::emitNullPointerTrap(const std::string& refExpr, std::ostringstream& out) {
-    out << "    if (" << refExpr << " == NULL) {\n";
-    out << "        jclass ex_class = (jclass)"
-        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/NullPointerException\")") << ";\n";
-    out << "        (*env)->ThrowNew(env, ex_class, \"null reference\");\n";
+    std::ostringstream dispatch;
     if (!currentExceptionDispatchTarget.empty())
-        out << "        goto " << currentExceptionDispatchTarget << ";\n";
+        dispatch << "        goto " << currentExceptionDispatchTarget << ";\n";
     else
-        emitExceptionReturn(currentMethodDesc, out, 8);
-    out << "    }\n";
+        emitExceptionReturn(currentMethodDesc, dispatch, 8);
+    out << renderStackCSnippet(
+        StackCSnippet::NullPointerTrap,
+        {{"ref", refExpr},
+         {"ex_class",
+          trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/NullPointerException\")")},
+         {"dispatch", dispatch.str()}});
 }
 
 void StackCBackend::Impl::emitPendingExceptionCheck(std::ostringstream& out, int indent) {
     const auto pad = std::string(static_cast<size_t>(indent), ' ');
-    out << pad << "if ((*env)->ExceptionCheck(env)) {\n";
+    std::ostringstream dispatch;
     if (!currentExceptionDispatchTarget.empty()) {
-        out << pad << "    goto " << currentExceptionDispatchTarget << ";\n";
+        dispatch << pad << "    goto " << currentExceptionDispatchTarget << ";\n";
     } else {
-        emitExceptionReturn(currentMethodDesc, out, indent + 4);
+        emitExceptionReturn(currentMethodDesc, dispatch, indent + 4);
     }
-    out << pad << "}\n";
+    out << renderStackCSnippet(
+        StackCSnippet::PendingExceptionCheck,
+        {{"pad", pad}, {"dispatch", dispatch.str()}});
 }
 
 void StackCBackend::Impl::emitFieldIdCache(
@@ -2383,15 +2428,18 @@ void StackCBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, std::o
 void StackCBackend::Impl::emitArrayLength(const MIRArrayLength* node, std::ostringstream& out) {
     (void)node;
     emitNullPointerTrap("stack[sp].l", out);
-    out << "    stack[sp].i = (*env)->GetArrayLength(env, stack[sp].l);\n";
+    out << renderStackCSnippet(StackCSnippet::ArrayLength, {});
 }
 
 void StackCBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringstream& out) {
     emitNullPointerTrap("stack[sp - 1].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
-        out << "    stack[sp - 1].l = " << trackLocalRefExpr(
-            "(*env)->GetObjectArrayElement(env, (jobjectArray)stack[sp - 1].l, stack[sp].i)") << ";\n";
-        out << "    sp--;\n";
+        out << renderStackCSnippet(
+            StackCSnippet::ObjectArrayLoad,
+            {{"value",
+              trackLocalRefExpr(
+                  "(*env)->GetObjectArrayElement(env, (jobjectArray)stack[sp - 1].l, "
+                  "stack[sp].i)")}});
         return;
     }
     if (node->componentType == PrimitiveKind::BYTE) {
@@ -2413,23 +2461,19 @@ void StackCBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, std::ostringst
     }
     const char* suffix = primitiveToJNISuffix(node->componentType);
     const char* type = primitiveToJNIType(node->componentType);
-    out << "    {\n";
-    out << "        " << type << " value;\n";
-    out << "        (*env)->Get" << suffix << "ArrayRegion(env, ("
-        << primitiveToJNIArrayType(node->componentType)
-        << ")stack[sp - 1].l, stack[sp].i, 1, &value);\n";
-    out << "        stack[sp - 1]" << stackValueAccessor(node->componentType)
-        << " = (" << (narrowOnOperandStack(node->componentType) ? "jint" : type) << ")value;\n";
-    out << "    }\n";
-    out << "    sp--;\n";
+    out << renderStackCSnippet(
+        StackCSnippet::PrimitiveArrayLoad,
+        {{"type", type},
+         {"suffix", suffix},
+         {"array_type", primitiveToJNIArrayType(node->componentType)},
+         {"acc", stackValueAccessor(node->componentType)},
+         {"target_type", narrowOnOperandStack(node->componentType) ? "jint" : type}});
 }
 
 void StackCBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostringstream& out) {
     emitNullPointerTrap("stack[sp - 2].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
-        out << "    (*env)->SetObjectArrayElement(env, (jobjectArray)stack[sp - 2].l, "
-            << "stack[sp - 1].i, stack[sp].l);\n";
-        out << "    sp -= 3;\n";
+        out << renderStackCSnippet(StackCSnippet::ObjectArrayStore, {});
         return;
     }
     if (node->componentType == PrimitiveKind::BYTE) {
@@ -2449,14 +2493,12 @@ void StackCBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostring
     }
     const char* suffix = primitiveToJNISuffix(node->componentType);
     const char* type = primitiveToJNIType(node->componentType);
-    out << "    {\n";
-    out << "        " << type << " value = (" << type << ")stack[sp]"
-        << stackValueAccessor(node->componentType) << ";\n";
-    out << "        (*env)->Set" << suffix << "ArrayRegion(env, ("
-        << primitiveToJNIArrayType(node->componentType)
-        << ")stack[sp - 2].l, stack[sp - 1].i, 1, &value);\n";
-    out << "    }\n";
-    out << "    sp -= 3;\n";
+    out << renderStackCSnippet(
+        StackCSnippet::PrimitiveArrayStore,
+        {{"type", type},
+         {"suffix", suffix},
+         {"array_type", primitiveToJNIArrayType(node->componentType)},
+         {"acc", stackValueAccessor(node->componentType)}});
 }
 
 void StackCBackend::Impl::emitFieldGet(const MIRFieldGet* node, std::ostringstream& out) {
