@@ -27,6 +27,7 @@ std::string stackCRuntimePrelude()
     src.emitLine("static void _mj2x_clear_local_refs(JNIEnv* env, jobject* refs, int* refCount, "
                  "jobject keep) {");
     src.indent();
+    src.emitLine("if ((*env)->ExceptionCheck(env)) { *refCount = 0; return; }");
     src.emitLine("for (int i = 0; i < *refCount; ++i) {");
     src.indent();
     src.emitLine("if (refs[i] != NULL && refs[i] != keep) (*env)->DeleteLocalRef(env, refs[i]);");
@@ -46,9 +47,11 @@ std::string stackCRuntimePrelude()
     src.emitLine("if ((*env)->ExceptionCheck(env)) return NULL;");
     src.emitLine("jmethodID get_loader = (*env)->GetMethodID(env, class_class, \"getClassLoader\", "
                  "\"()Ljava/lang/ClassLoader;\");");
-    src.emitLine("if ((*env)->ExceptionCheck(env)) return NULL;");
+    src.emitLine("if ((*env)->ExceptionCheck(env)) { (*env)->DeleteLocalRef(env, class_class); "
+                 "return NULL; }");
     src.emitLine("jobject loader = (*env)->CallObjectMethod(env, owner, get_loader);");
-    src.emitLine("if ((*env)->ExceptionCheck(env)) return NULL;");
+    src.emitLine("if ((*env)->ExceptionCheck(env)) { (*env)->DeleteLocalRef(env, class_class); "
+                 "return NULL; }");
     src.emitLine("if (loader == NULL) {");
     src.indent();
     src.emitLine("jclass result = (*env)->FindClass(env, name);");
@@ -62,12 +65,18 @@ std::string stackCRuntimePrelude()
                  "name[i]; i++; }");
     src.emitLine("binary_name[i] = '\\0';");
     src.emitLine("jstring class_name = (*env)->NewStringUTF(env, binary_name);");
-    src.emitLine("if ((*env)->ExceptionCheck(env)) return NULL;");
+    src.emitLine("if ((*env)->ExceptionCheck(env)) { (*env)->DeleteLocalRef(env, loader); "
+                 "(*env)->DeleteLocalRef(env, class_class); return NULL; }");
     src.emitLine("jmethodID for_name = (*env)->GetStaticMethodID(env, class_class, \"forName\", "
                  "\"(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;\");");
-    src.emitLine("if ((*env)->ExceptionCheck(env)) return NULL;");
+    src.emitLine("if ((*env)->ExceptionCheck(env)) { (*env)->DeleteLocalRef(env, class_name); "
+                 "(*env)->DeleteLocalRef(env, loader); (*env)->DeleteLocalRef(env, class_class); "
+                 "return NULL; }");
     src.emitLine("jclass result = (jclass)(*env)->CallStaticObjectMethod(env, class_class, "
                  "for_name, class_name, JNI_FALSE, loader);");
+    src.emitLine("if ((*env)->ExceptionCheck(env)) { (*env)->DeleteLocalRef(env, class_name); "
+                 "(*env)->DeleteLocalRef(env, loader); (*env)->DeleteLocalRef(env, class_class); "
+                 "return NULL; }");
     src.emitLine("(*env)->DeleteLocalRef(env, class_name);");
     src.emitLine("(*env)->DeleteLocalRef(env, loader);");
     src.emitLine("(*env)->DeleteLocalRef(env, class_class);");

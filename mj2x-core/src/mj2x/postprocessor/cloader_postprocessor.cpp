@@ -43,12 +43,31 @@ std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena
     auto* registerMethod = new MethodNode(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
         arena.intern("registerNativesForClass"),
-        arena.intern("(ILjava/lang/String;)V"),
+        arena.intern("(ILjava/lang/Class;)V"),
         arena.intern(""),
         noExceptions);
     registerMethod->maxStack = 0;
     registerMethod->maxLocals = 2;
     cn->methods.push_back(registerMethod);
+
+    auto* invokeOne = new MethodNode(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNTHETIC,
+        arena.intern("invokeMethodHandle1"),
+        arena.intern("(Ljava/lang/invoke/MethodHandle;Ljava/lang/Object;)Ljava/lang/Object;"),
+        arena.intern(""),
+        noExceptions);
+    invokeOne->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+    invokeOne->instructions.add(new VarInsnNode(Opcodes::ALOAD, 1));
+    invokeOne->instructions.add(new MethodInsnNode(
+        Opcodes::INVOKEVIRTUAL,
+        arena.intern("java/lang/invoke/MethodHandle"),
+        arena.intern("invoke"),
+        arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;"),
+        false));
+    invokeOne->instructions.add(new InsnNode(Opcodes::ARETURN));
+    invokeOne->maxStack = 2;
+    invokeOne->maxLocals = 2;
+    cn->methods.push_back(invokeOne);
 
     return cn;
 }

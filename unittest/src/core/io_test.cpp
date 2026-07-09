@@ -56,6 +56,45 @@ static std::vector<ca::u8> classBytesFor(const char* className) {
     return cw.toByteArray();
 }
 
+static std::vector<ca::u8> annotationInterfaceBytes() {
+    auto cn = std::make_unique<ClassNode>();
+    ca::str::Utf8StringArena arena;
+    cn->version = Opcodes::V1_8;
+    cn->access = Opcodes::ACC_PUBLIC | Opcodes::ACC_ABSTRACT |
+        Opcodes::ACC_INTERFACE | Opcodes::ACC_ANNOTATION;
+    cn->name = arena.intern("pkg/Anno");
+    cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
+    cn->interfaces.push_back(ZUtf8StringRef::from_static("java/lang/annotation/Annotation"));
+
+    auto* retention = cn->visitAnnotation(
+        ZUtf8StringRef::from_static("Ljava/lang/annotation/Retention;"), true);
+    retention->visitEnum(
+        ZUtf8StringRef::from_static("value"),
+        ZUtf8StringRef::from_static("Ljava/lang/annotation/RetentionPolicy;"),
+        ZUtf8StringRef::from_static("RUNTIME"));
+    retention->visitEnd();
+
+    std::vector<ca::str::Utf8StringRef> noExceptions;
+    auto addDefaultedMethod = [&](const char* name) {
+        auto mn = std::make_unique<MethodNode>(
+            Opcodes::ACC_PUBLIC | Opcodes::ACC_ABSTRACT,
+            ZUtf8StringRef::from_static(name),
+            ZUtf8StringRef::from_static("()Ljava/lang/String;"),
+            ZUtf8StringRef::from_static(""),
+            noExceptions);
+        auto* defaultValue = mn->visitAnnotationDefault();
+        defaultValue->visit(ca::str::Utf8StringRef(), ZUtf8StringRef::from_static("yes"));
+        defaultValue->visitEnd();
+        cn->methods.push_back(mn.release());
+    };
+    addDefaultedMethod("val");
+    addDefaultedMethod("val2");
+
+    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
+    cn->accept(&cw);
+    return cw.toByteArray();
+}
+
 // Helper: write class bytes to temp file
 static std::string writeTempClass(const std::string& suffix) {
     auto path = test::getTempOutPath("mj2x_" + suffix).string();
@@ -166,6 +205,37 @@ TEST(IOTest, ClassWriteReadRoundtrip) {
     EXPECT_EQ(cn2.methods[0]->desc, ZUtf8StringRef::from_static("(II)I"));
 }
 
+TEST(IOTest, AnnotationDefaultsAndElementNamesRoundtripThroughTree) {
+    ca::str::Utf8StringArena arena;
+    auto bytes = annotationInterfaceBytes();
+    auto first = readClassFromBytes(bytes, arena);
+
+    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
+    first->accept(&cw);
+    auto rewritten = cw.toByteArray();
+    auto second = readClassFromBytes(rewritten, arena);
+
+    ASSERT_EQ(second->visibleAnnotations.size(), 1u);
+    auto* retention = second->visibleAnnotations[0];
+    EXPECT_EQ(retention->desc.to_std_string(), "Ljava/lang/annotation/Retention;");
+    ASSERT_EQ(retention->elements.size(), 1u);
+    EXPECT_EQ(retention->elements[0].name.to_std_string(), "value");
+    EXPECT_EQ(retention->elements[0].tag, 'e');
+    EXPECT_EQ(retention->elements[0].sval.to_std_string(),
+              "Ljava/lang/annotation/RetentionPolicy; RUNTIME");
+
+    for (const char* methodName : {"val", "val2"}) {
+        auto* method = findMethod(*second, methodName);
+        ASSERT_NE(method, nullptr) << methodName;
+        ASSERT_NE(method->annotationDefault, nullptr) << methodName;
+        ASSERT_EQ(method->annotationDefault->elements.size(), 1u) << methodName;
+        const auto& value = method->annotationDefault->elements[0];
+        EXPECT_TRUE(value.name.is_empty()) << methodName;
+        EXPECT_EQ(value.tag, 's') << methodName;
+        EXPECT_EQ(value.sval.to_std_string(), "yes") << methodName;
+    }
+}
+
 TEST(IOTest, InputLoaderRoundtrip) {
     auto path = writeTempClass("loader_test.class");
 
@@ -199,6 +269,7 @@ TEST(IOTest, JarInputLoaderAndOutputWriterPreserveClassesAndResources) {
     EXPECT_EQ(resource, std::vector<ca::u8>({'o', 'k'}));
 
     auto classBytes = readJarEntry(outPath, "pkg/A.class");
+    EXPECT_EQ(classBytes, classBytesFor("pkg/A"));
     ca::str::Utf8StringArena arena;
     auto cn = readClassFromBytes(classBytes, arena);
     EXPECT_EQ(cn->name.to_std_string(), "pkg/A");

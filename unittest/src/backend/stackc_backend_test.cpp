@@ -126,7 +126,7 @@ TEST(StackCBackendTest, AddMethod) {
     EXPECT_NE(result.text.find("+"), std::string::npos);
 }
 
-TEST(StackCBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
+TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge) {
     auto bsm = Handle(Opcodes::H_INVOKESTATIC,
                       testArena.intern("java/lang/invoke/StringConcatFactory"),
                       testArena.intern("makeConcatWithConstants"),
@@ -151,12 +151,41 @@ TEST(StackCBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
     auto blocks = cc.convert(*mn);
     auto result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_EQ(result.text.find("UnsupportedOperationException"), std::string::npos)
+    EXPECT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
+    EXPECT_NE(result.text.find("java/lang/invoke/StringConcatFactory"), std::string::npos);
+    EXPECT_NE(result.text.find("invokeWithArguments"), std::string::npos);
+}
+
+TEST(StackCBackendTest, BooleanInvokeResultUsesFullStackSlot) {
+    StackCBackend backend;
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "eq",
+                         "(Ljava/lang/String;Ljava/lang/Object;)Z",
+                         {
+                             new VarInsnNode(Opcodes::ALOAD, 0),
+                             new VarInsnNode(Opcodes::ALOAD, 1),
+                             new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                testArena.intern("java/lang/String"),
+                                                testArena.intern("equals"),
+                                                testArena.intern("(Ljava/lang/Object;)Z"),
+                                                false),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto result = backend.compileMethod("Test", cm, blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
+    EXPECT_NE(result.text.find(".i = (*env)->CallBooleanMethod"), std::string::npos)
         << result.text;
-    EXPECT_NE(result.text.find("makeConcatWithConstants"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("getTarget"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("invokeWithArguments"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("java/lang/Integer"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find(".z = (*env)->CallBooleanMethod"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("if ((*env)->ExceptionCheck(env))"), std::string::npos)
+        << result.text;
 }
 
 TEST(StackCBackendTest, CastEmission) {
@@ -549,7 +578,7 @@ TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall) {
     EXPECT_EQ(invoke->opcode, Opcodes::INVOKESTATIC);
     EXPECT_EQ(invoke->owner.to_std_string(), "mj2x/cloader/Loader");
     EXPECT_EQ(invoke->name.to_std_string(), "registerNativesForClass");
-    EXPECT_EQ(invoke->desc.to_std_string(), "(ILjava/lang/String;)V");
+    EXPECT_EQ(invoke->desc.to_std_string(), "(ILjava/lang/Class;)V");
     EXPECT_EQ(clinit->instructions.get(3)->opcode, Opcodes::RETURN);
 
     CompilerIndex emptyIndex;
@@ -560,7 +589,7 @@ TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall) {
     EXPECT_NE(source.find("_mj2x_reg_methods[0] = _mj2x_register_com_2fexample_2fFoo"),
               std::string::npos) << source;
     EXPECT_NE(source.find("FindClass(env, \"mj2x/cloader/Loader\")"), std::string::npos) << source;
-    EXPECT_NE(source.find("{(char*)\"registerNativesForClass\", (char*)\"(ILjava/lang/String;)V\""),
+    EXPECT_NE(source.find("{(char*)\"registerNativesForClass\", (char*)\"(ILjava/lang/Class;)V\""),
               std::string::npos) << source;
     EXPECT_EQ(source.find("bridge_method"), std::string::npos) << source;
 }
@@ -598,7 +627,7 @@ TEST(StackCBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge) {
     auto* bridgeInvoke = static_cast<MethodInsnNode*>(bridgeCall);
     EXPECT_EQ(bridgeInvoke->owner.to_std_string(), "mj2x/cloader/Loader");
     EXPECT_EQ(bridgeInvoke->name.to_std_string(), "registerNativesForClass");
-    EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(ILjava/lang/String;)V");
+    EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(ILjava/lang/Class;)V");
 }
 
 TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy) {
@@ -637,7 +666,7 @@ TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy) {
     auto* bridgeInvoke = static_cast<MethodInsnNode*>(bridgeCall);
     EXPECT_EQ(bridgeInvoke->owner.to_std_string(), "mj2x/cloader/Loader");
     EXPECT_EQ(bridgeInvoke->name.to_std_string(), "registerNativesForClass");
-    EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(ILjava/lang/String;)V");
+    EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(ILjava/lang/Class;)V");
     EXPECT_EQ(rewrittenClinit->instructions.get(3)->opcode, Opcodes::RETURN);
 
     for (auto* method : cls.classNode->methods) {

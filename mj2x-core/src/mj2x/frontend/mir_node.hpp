@@ -105,7 +105,7 @@ struct MIRLabel : MIRNode {
 };
 
 struct MIRConstant : MIRNode {
-    std::variant<int64_t, double, std::nullptr_t, std::string> value;
+    std::variant<int64_t, double, std::nullptr_t, std::string, jbytecode::core::Type> value;
     PrimitiveKind type = PrimitiveKind::INT;
     MIRConstant() : MIRNode(MIRKind::CONSTANT) {}
 };

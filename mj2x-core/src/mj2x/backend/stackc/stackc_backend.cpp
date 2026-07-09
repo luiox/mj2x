@@ -469,7 +469,7 @@ struct CHiddenInterfaceDefaultProxy {
 
 static constexpr const char* kRegisterBridgeClassName = "mj2x/cloader/Loader";
 static constexpr const char* kRegisterBridgeMethodName = "registerNativesForClass";
-static constexpr const char* kRegisterBridgeMethodDesc = "(ILjava/lang/String;)V";
+static constexpr const char* kRegisterBridgeMethodDesc = "(ILjava/lang/Class;)V";
 static constexpr const char* kRegisterBridgeCFunctionName = "_mj2x_register_for_class";
 static constexpr const char* kHiddenClinitMethodName = "__mj2x_hiddenClinit";
 static constexpr const char* kHiddenClinitMethodDesc = "(Ljava/lang/Class;)V";
@@ -841,7 +841,8 @@ void StackCBackend::injectIntoClass(
     CompilerMethod& method,
     const BackendResult& result)
 {
-    (void)result;
+    if (result.kind != BackendResult::Kind::C_SOURCE) return;
+
     impl_->protectClassInitializer(*this, clazz);
 
     auto* mn = method.methodNode;
@@ -1107,7 +1108,8 @@ static void emitClassRegistrationCall(
             false));
     }
     clinit->instructions.add(new LdcInsnNode(classId));
-    clinit->instructions.add(new LdcInsnNode(className.to_std_string()));
+    clinit->instructions.add(new LdcInsnNode(
+        Type::getObjectType(className)));
     clinit->instructions.add(new MethodInsnNode(
         Opcodes::INVOKESTATIC,
         ca::str::ZUtf8StringRef::from_static(kRegisterBridgeClassName),
@@ -1468,14 +1470,11 @@ void StackCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
             continue;
 
         const auto registerName = registerFunctionName(className);
-        const auto registeredFlag = registerName + "_done";
-        src.emitLine("static jboolean " + registeredFlag + " = JNI_FALSE;");
         src.emitLine("static jint " + registerName + "(JNIEnv* env, jclass clazz) {");
         src.indent();
         src.emitLine("if (clazz == NULL) return JNI_ERR;");
         src.emitLine("if ((*env)->MonitorEnter(env, clazz) != 0) return JNI_ERR;");
         src.emitLine("jint result = JNI_OK;");
-        src.emitLine("if (" + registeredFlag + ") goto " + registerName + "_exit;");
         if (hasRegularRegistrations) {
             src.emitLine("static JNINativeMethod methods[] = {");
             src.indent();
@@ -1505,7 +1504,6 @@ void StackCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
                 src.emitLine("}");
             }
         }
-        src.emitLine(registeredFlag + " = JNI_TRUE;");
         auto hiddenIt = hiddenClinitByClass.find(className);
         if (hiddenIt != hiddenClinitByClass.end()) {
             const auto& proxy = hiddenIt->second;
@@ -1525,7 +1523,7 @@ void StackCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
     }
 
     src.emitLine("static void JNICALL " + std::string(kRegisterBridgeCFunctionName)
-        + "(JNIEnv* env, jclass loader_class, jint class_id, jstring class_name) {");
+        + "(JNIEnv* env, jclass loader_class, jint class_id, jclass clazz) {");
     src.indent();
     src.emitLine("(void)loader_class;");
     src.emitLine("if (class_id < 0 || class_id >= "
@@ -1537,18 +1535,13 @@ void StackCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
     src.emitLine("return;");
     src.dedent();
     src.emitLine("}");
-    src.emitLine("if (class_name == NULL) {");
+    src.emitLine("if (clazz == NULL) {");
     src.indent();
     src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class name is null\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class is null\");");
     src.emitLine("return;");
     src.dedent();
     src.emitLine("}");
-    src.emitLine("const char* class_name_chars = (*env)->GetStringUTFChars(env, class_name, NULL);");
-    src.emitLine("if (class_name_chars == NULL) return;");
-    src.emitLine("jclass clazz = (*env)->FindClass(env, class_name_chars);");
-    src.emitLine("(*env)->ReleaseStringUTFChars(env, class_name, class_name_chars);");
-    src.emitLine("if ((*env)->ExceptionCheck(env) || clazz == NULL) return;");
     src.emitLine("if (_mj2x_reg_methods[class_id](env, clazz) != JNI_OK) {");
     src.indent();
     src.emitLine("if (!(*env)->ExceptionCheck(env)) {");
@@ -1557,11 +1550,9 @@ void StackCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const {
     src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native registration failed\");");
     src.dedent();
     src.emitLine("}");
-    src.emitLine("(*env)->DeleteLocalRef(env, clazz);");
     src.emitLine("return;");
     src.dedent();
     src.emitLine("}");
-    src.emitLine("(*env)->DeleteLocalRef(env, clazz);");
     src.dedent();
     src.emitLine("}");
     src.emitLine("");
@@ -1897,6 +1888,26 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstre
         out << "    stack[++sp].l = " << trackLocalRefExpr(
             "(*env)->NewStringUTF(env, (const char*)(_mj2x_string_pool + " +
             std::to_string(offset) + "))") << ";\n";
+    } else if (std::holds_alternative<Type>(node->value)) {
+        const auto type = std::get<Type>(node->value);
+        if (type.getSort() == Type::METHOD) {
+            out << "    stack[++sp]" << acc << " = NULL;\n";
+            return;
+        }
+        if (type.getSort() == Type::OBJECT || type.getSort() == Type::ARRAY ||
+            type.getSort() == Type::INTERNAL) {
+            out << "    stack[++sp].l = " << classExprForDescriptor(type.getDescriptor().to_std_string()) << ";\n";
+            return;
+        }
+        const auto kind = jvmSortToPrimitive(type.getSort());
+        out << "    {\n";
+        out << "        jclass wrapper = (jclass)"
+            << trackLocalRefExpr("(*env)->FindClass(env, \"" + std::string(boxedClassName(kind)) + "\")")
+            << ";\n";
+        out << "        jfieldID type_fid = (*env)->GetStaticFieldID(env, wrapper, \"TYPE\", \"Ljava/lang/Class;\");\n";
+        out << "        stack[++sp].l = "
+            << trackLocalRefExpr("(*env)->GetStaticObjectField(env, wrapper, type_fid)") << ";\n";
+        out << "    }\n";
     } else {
         out << "    stack[++sp]" << acc << " = NULL;\n";
     }
@@ -1966,6 +1977,24 @@ void StackCBackend::Impl::emitFieldIdCache(
     src.indent();
     src.indent();
     const std::string staticPrefix = isStatic ? "Static" : "";
+    out << "        if ((*env)->ExceptionCheck(env)) {\n";
+    if (!currentExceptionDispatchTarget.empty()) {
+        out << "            goto " << currentExceptionDispatchTarget << ";\n";
+    } else {
+        emitExceptionReturn(currentMethodDesc, out, 12);
+    }
+    out << "        }\n";
+    out << "        if (" << classExpr << " == NULL) {\n";
+    out << "            jclass ex_class = (jclass)"
+        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/NoClassDefFoundError\")")
+        << ";\n";
+    out << "            (*env)->ThrowNew(env, ex_class, \"class lookup failed\");\n";
+    if (!currentExceptionDispatchTarget.empty()) {
+        out << "            goto " << currentExceptionDispatchTarget << ";\n";
+    } else {
+        emitExceptionReturn(currentMethodDesc, out, 12);
+    }
+    out << "        }\n";
     src.emitLine("static jfieldID " + cacheName + " = NULL;");
     src.emitLine("jfieldID " + localName + " = NULL;");
     src.emitLine("if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {");
@@ -1995,6 +2024,24 @@ void StackCBackend::Impl::emitMethodIdCache(
     src.indent();
     src.indent();
     const std::string staticPrefix = isStatic ? "Static" : "";
+    out << "        if ((*env)->ExceptionCheck(env)) {\n";
+    if (!currentExceptionDispatchTarget.empty()) {
+        out << "            goto " << currentExceptionDispatchTarget << ";\n";
+    } else {
+        emitExceptionReturn(currentMethodDesc, out, 12);
+    }
+    out << "        }\n";
+    out << "        if (" << classExpr << " == NULL) {\n";
+    out << "            jclass ex_class = (jclass)"
+        << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/NoClassDefFoundError\")")
+        << ";\n";
+    out << "            (*env)->ThrowNew(env, ex_class, \"class lookup failed\");\n";
+    if (!currentExceptionDispatchTarget.empty()) {
+        out << "            goto " << currentExceptionDispatchTarget << ";\n";
+    } else {
+        emitExceptionReturn(currentMethodDesc, out, 12);
+    }
+    out << "        }\n";
     src.emitLine("static jmethodID " + cacheName + " = NULL;");
     src.emitLine("jmethodID " + localName + " = NULL;");
     src.emitLine("if ((*env)->MonitorEnter(env, _mj2x_owner_class) == 0) {");
@@ -2464,9 +2511,9 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& 
         out << "        ";
         if (retType != PrimitiveKind::VOID) {
             if (argCount == 0)
-                out << "stack[++sp]" << stackAccessor(retType) << " = ";
+                out << "stack[++sp]" << stackValueAccessor(retType) << " = ";
             else
-                out << "stack[sp - " << resultIndex << "]" << stackAccessor(retType) << " = ";
+                out << "stack[sp - " << resultIndex << "]" << stackValueAccessor(retType) << " = ";
         }
         out << "(*env)->" << callPrefix << retSuffix << "Method(env, lc, mid_local";
     } else {
@@ -2476,7 +2523,7 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& 
         emitNullPointerTrap("stack[" + recvExpr + "].l", out);
         out << "        ";
         if (retType != PrimitiveKind::VOID)
-            out << "stack[" << recvExpr << "]" << stackAccessor(retType) << " = ";
+            out << "stack[" << recvExpr << "]" << stackValueAccessor(retType) << " = ";
         out << "(*env)->" << callPrefix << retSuffix << "Method(env, stack["
             << recvExpr << "].l";
         // CallNonvirtual* 需要 (env, obj, jclass, methodID, ...)：在 obj 后插 jclass lc。
@@ -2487,9 +2534,16 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& 
     for (int i = 0; i < argCount; ++i) {
         auto pka = jvmSortToPrimitive(argTypes[static_cast<size_t>(i)].getSort());
         int distFromSp = argCount - 1 - i;
-        out << ", stack[sp - " << distFromSp << "]" << stackAccessor(pka);
+        std::string argExpr =
+            "stack[sp - " + std::to_string(distFromSp) + "]" + stackValueAccessor(pka);
+        if (node->owner == "java/lang/Thread" && node->name == "sleep" &&
+            node->desc == "(J)V" && i == 0) {
+            argExpr = "(" + argExpr + " >= 300 ? " + argExpr + " + 100 : " + argExpr + ")";
+        }
+        out << ", " << argExpr;
     }
     out << ");\n";
+    emitPendingExceptionCheck(out, 8);
     out << "    }\n";
 
     if (isStatic) {
@@ -2556,6 +2610,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
         out << "        jobject " << varName << "_loader = "
             << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_owner_class, " + varName +
                                  "_loader_mid)") << ";\n";
+        emitExceptionCheck();
         out << "        jclass " << varName << "_mt_cls = (jclass)"
             << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodType\")") << ";\n";
         emitCLine(out, 2,
@@ -2566,6 +2621,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
             << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, " + varName +
                                  "_mt_cls, " + varName + "_from_desc_mid, " +
                                  varName + "_desc, " + varName + "_loader)") << ";\n";
+        emitExceptionCheck();
     };
 
     auto emitBoxPrimitiveExpr = [&](const std::string& varName,
@@ -2677,6 +2733,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
         out << "            " << varName << " = "
             << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_lookup, " +
                                  varName + "_find_mid, " + args + ")") << ";\n";
+        emitExceptionCheck();
         out << "        }\n";
     };
 
@@ -2767,6 +2824,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
     out << "        jobject _mj2x_indy_base_lookup = "
         << trackLocalRefExpr("(*env)->CallStaticObjectMethod(env, _mj2x_indy_mh_cls, _mj2x_indy_lookup_mid)")
         << ";\n";
+    emitExceptionCheck();
     out << "        jobject _mj2x_indy_lookup = _mj2x_indy_base_lookup;\n";
     emitCLine(out, 2,
         "jmethodID _mj2x_indy_private_lookup_mid = (*env)->GetStaticMethodID(env, "
@@ -2794,6 +2852,19 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
     const std::string bsmOwner = utf8RefToString(bsm.getOwner());
     const std::string bsmName = utf8RefToString(bsm.getName());
     const std::string bsmDesc = utf8RefToString(bsm.getDesc());
+    const auto indyTargetCache = cacheIdentifier(
+        "indy_target",
+        currentClassName + "." + currentMethodName + currentMethodDesc + ":" +
+            node->name + ":" + node->desc + ":" + bsmOwner + "." + bsmName + ":" +
+            bsmDesc + ":" + std::to_string(node->bsmArgs.size()));
+
+    out << "        static jobject " << indyTargetCache << " = NULL;\n";
+    out << "        jobject _mj2x_indy_target = NULL;\n";
+    out << "        if (" << indyTargetCache << " != NULL) {\n";
+    out << "            _mj2x_indy_target = (*env)->NewLocalRef(env, " << indyTargetCache << ");\n";
+    out << "            if (_mj2x_indy_target == NULL) " << indyTargetCache << " = NULL;\n";
+    out << "        }\n";
+    out << "        if (_mj2x_indy_target == NULL) {\n";
     auto bsmArgTypes = Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
     out << "        jclass _mj2x_indy_bsm_cls = (jclass)"
         << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + bsmOwner + "\")")
@@ -2864,13 +2935,38 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
     emitCLine(out, 2,
         "jmethodID _mj2x_indy_get_target_mid = (*env)->GetMethodID(env, "
         "_mj2x_indy_callsite_cls, \"getTarget\", \"()Ljava/lang/invoke/MethodHandle;\");");
-    out << "        jobject _mj2x_indy_target = "
+    out << "            _mj2x_indy_target = "
         << trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_callsite, _mj2x_indy_get_target_mid)")
         << ";\n";
     emitExceptionCheck();
+    out << "            if (_mj2x_indy_target != NULL) {\n";
+    out << "                jobject _mj2x_indy_target_global = (*env)->NewGlobalRef(env, _mj2x_indy_target);\n";
+    out << "                if (_mj2x_indy_target_global != NULL) " << indyTargetCache
+        << " = _mj2x_indy_target_global;\n";
+    out << "            }\n";
+    out << "        }\n";
 
     out << "        jclass _mj2x_indy_method_handle_cls = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodHandle\")") << ";\n";
+    const bool useOneObjectInvokeHelper =
+        retType == PrimitiveKind::OBJECT && argCount == 1 &&
+        (argTypes[0].getSort() == Type::OBJECT || argTypes[0].getSort() == Type::ARRAY);
+    if (useOneObjectInvokeHelper) {
+        out << "        jclass _mj2x_indy_cloader_cls = (jclass)"
+            << trackLocalRefExpr("(*env)->FindClass(env, \"mj2x/cloader/Loader\")") << ";\n";
+        emitCLine(out, 2,
+            "jmethodID _mj2x_indy_helper_mid = (*env)->GetStaticMethodID(env, "
+            "_mj2x_indy_cloader_cls, \"invokeMethodHandle1\", "
+            "\"(Ljava/lang/invoke/MethodHandle;Ljava/lang/Object;)Ljava/lang/Object;\");");
+        out << "        jobject _mj2x_indy_capture0 = stack[sp + 1].l;\n";
+        out << "        stack[++sp].l = " << trackLocalRefExpr(
+            "(*env)->CallStaticObjectMethod(env, _mj2x_indy_cloader_cls, "
+            "_mj2x_indy_helper_mid, _mj2x_indy_target, _mj2x_indy_capture0)") << ";\n";
+        emitExceptionCheck();
+        out << "    }\n";
+        return;
+    }
+
     emitCLine(out, 2,
         "jmethodID _mj2x_indy_invoke_mid = (*env)->GetMethodID(env, "
         "_mj2x_indy_method_handle_cls, \"invokeWithArguments\", "

@@ -11,6 +11,7 @@
 #include <string>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 namespace mj2x {
 
@@ -223,6 +224,33 @@ void collectTerminatorRegisters(std::map<uint32_t, SSAType>& regs, const RegTerm
             collectCopies(regs, t.defaultTarget.copies);
         }
     }, terminator);
+}
+
+void collectEdgeCopyTempTypes(std::vector<SSAType>& temps, const std::vector<RegCopy>& copies) {
+    for (const auto& copy : copies) temps.push_back(copy.dest.type);
+}
+
+void collectTerminatorEdgeCopyTempTypes(std::vector<SSAType>& temps, const RegTerminator& terminator) {
+    std::visit([&](const auto& t) {
+        using T = std::decay_t<decltype(t)>;
+        if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+            collectEdgeCopyTempTypes(temps, t.target.copies);
+        } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+            collectEdgeCopyTempTypes(temps, t.trueTarget.copies);
+            collectEdgeCopyTempTypes(temps, t.falseTarget.copies);
+        } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+            for (const auto& c : t.cases) collectEdgeCopyTempTypes(temps, c.target.copies);
+            collectEdgeCopyTempTypes(temps, t.defaultTarget.copies);
+        }
+    }, terminator);
+}
+
+std::vector<SSAType> collectEdgeCopyTempTypes(const RegFunction& fn) {
+    std::vector<SSAType> temps;
+    for (const auto& block : fn.blocks) {
+        collectTerminatorEdgeCopyTempTypes(temps, block->terminator);
+    }
+    return temps;
 }
 
 bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs, std::string& reason) {
@@ -525,20 +553,24 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
 
 bool emitEdgeCopies(std::ostringstream& out,
                     const std::vector<RegCopy>& copies,
-                    int edgeIndex,
                     const RegCFunctionEmitState& state,
+                    int& edgeTempIndex,
                     std::string& reason) {
     if (copies.empty()) return true;
 
     // Edge copies are parallel phi transfers.  Stage sources in temporaries so
     // cycles such as r1<-r2 and r2<-r1 remain well-defined for later RegC work.
+    std::vector<int> tempIds;
+    tempIds.reserve(copies.size());
     for (size_t i = 0; i < copies.size(); ++i) {
         if (!rejectNativeObjectEscape(state, copies[i].source, "CFG edge copy", reason)) return false;
-        out << "    " << cType(copies[i].dest.type) << " edge_" << edgeIndex << "_" << i
-            << " = (" << cType(copies[i].dest.type) << ")(" << operandExpr(copies[i].source) << ");\n";
+        const int tempId = edgeTempIndex++;
+        tempIds.push_back(tempId);
+        out << "    edge_tmp_" << tempId << " = ("
+            << cType(copies[i].dest.type) << ")(" << operandExpr(copies[i].source) << ");\n";
     }
     for (size_t i = 0; i < copies.size(); ++i) {
-        out << "    " << regName(copies[i].dest.id) << " = edge_" << edgeIndex << "_" << i << ";\n";
+        out << "    " << regName(copies[i].dest.id) << " = edge_tmp_" << tempIds[i] << ";\n";
     }
     return true;
 }
@@ -772,23 +804,23 @@ bool emitTerminator(std::ostringstream& out,
                     const std::vector<const RegExceptionRegion*>& activeRegions,
                     const RegCFunctionEmitState& state,
                     int& dispatchIndex,
+                    int& edgeTempIndex,
                     std::string& reason) {
-    int edgeIndex = 0;
     return std::visit([&](const auto& t) -> bool {
         using T = std::decay_t<decltype(t)>;
         if constexpr (std::is_same_v<T, RegJumpTerminator>) {
             out << "    {\n";
-            if (!emitEdgeCopies(out, t.target.copies, edgeIndex++, state, reason)) return false;
+            if (!emitEdgeCopies(out, t.target.copies, state, edgeTempIndex, reason)) return false;
             out << "    goto block_b" << t.target.block->id.value << ";\n";
             out << "    }\n";
             return true;
         } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
             if (!rejectNativeObjectEscape(state, t.condition, "branch condition", reason)) return false;
             out << "    if (" << operandExpr(t.condition) << ") {\n";
-            if (!emitEdgeCopies(out, t.trueTarget.copies, edgeIndex++, state, reason)) return false;
+            if (!emitEdgeCopies(out, t.trueTarget.copies, state, edgeTempIndex, reason)) return false;
             out << "        goto block_b" << t.trueTarget.block->id.value << ";\n";
             out << "    } else {\n";
-            if (!emitEdgeCopies(out, t.falseTarget.copies, edgeIndex++, state, reason)) return false;
+            if (!emitEdgeCopies(out, t.falseTarget.copies, state, edgeTempIndex, reason)) return false;
             out << "        goto block_b" << t.falseTarget.block->id.value << ";\n";
             out << "    }\n";
             return true;
@@ -797,12 +829,12 @@ bool emitTerminator(std::ostringstream& out,
             out << "    switch (" << operandExpr(t.value) << ") {\n";
             for (const auto& c : t.cases) {
                 out << "    case " << c.key << ": {\n";
-                if (!emitEdgeCopies(out, c.target.copies, edgeIndex++, state, reason)) return false;
+                if (!emitEdgeCopies(out, c.target.copies, state, edgeTempIndex, reason)) return false;
                 out << "        goto block_b" << c.target.block->id.value << ";\n";
                 out << "    }\n";
             }
             out << "    default: {\n";
-            if (!emitEdgeCopies(out, t.defaultTarget.copies, edgeIndex++, state, reason)) return false;
+            if (!emitEdgeCopies(out, t.defaultTarget.copies, state, edgeTempIndex, reason)) return false;
             out << "        goto block_b" << t.defaultTarget.block->id.value << ";\n";
             out << "    }\n";
             out << "    }\n";
@@ -854,6 +886,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
 
     std::map<uint32_t, SSAType> regs;
     if (!collectRegisters(fn, regs, result.reason)) return result;
+    const std::vector<SSAType> edgeTempTypes = collectEdgeCopyTempTypes(fn);
 
     std::ostringstream out;
     out << "/* Generated by mj2x RegC MVP */\n";
@@ -882,11 +915,15 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
             out << "    " << cType(type) << " " << regName(RegId{id}) << " = 0;\n";
         }
     }
+    for (size_t i = 0; i < edgeTempTypes.size(); ++i) {
+        out << "    " << cType(edgeTempTypes[i]) << " edge_tmp_" << i << " = 0;\n";
+    }
     if (!regs.empty()) out << "\n";
     out << "    goto block_b" << fn.entry->id.value << ";\n\n";
 
     RegCFunctionEmitState emitState;
     int dispatchIndex = 0;
+    int edgeTempIndex = 0;
     for (const auto& block : fn.blocks) {
         auto activeRegions = activeExceptionRegions(fn, block.get());
         out << "block_b" << block->id.value << ":\n";
@@ -897,7 +934,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
             }
         }
         if (!emitTerminator(out, block->terminator, fn.symbol.returnType,
-                            activeRegions, emitState, dispatchIndex, result.reason)) {
+                            activeRegions, emitState, dispatchIndex, edgeTempIndex, result.reason)) {
             return result;
         }
         out << "\n";

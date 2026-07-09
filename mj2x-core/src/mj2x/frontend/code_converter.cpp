@@ -828,7 +828,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         //   int → i32, float → float, long → i64, double → double,
         //   String → Utf8StringRef, Class/MethodType → Type, MethodHandle → Handle。
         // Wave 4：String LDC 保留字面量，由 StackC 生成 NewStringUTF。
-        // Class/MethodType/Handle 仍暂落 null OBJECT，留给后续对象/方法句柄覆盖。
+        // Class/MethodType 以 Type 传递；Handle 仍暂落 null OBJECT。
         auto* ld = typed::cast<LdcInsnNode>(insn);
         auto node = std::make_unique<MIRConstant>();
         if (auto* p = ld->cst.template as<ca::i32>()) {
@@ -849,8 +849,11 @@ void CodeConverter::processInsn(AbstractInsnNode* insn) {
         } else if (auto* p = ld->cst.template as<ca::str::Utf8StringRef>()) {
             node->type = PrimitiveKind::OBJECT;
             node->value = p->to_std_string();
+        } else if (auto* p = ld->cst.template as<Type>()) {
+            node->type = PrimitiveKind::OBJECT;
+            node->value = *p;
         } else {
-            // Class/MethodType/Handle：暂落 null 对象常量。
+            // Handle：暂落 null 对象常量。
             node->type = PrimitiveKind::OBJECT;
             node->value = nullptr;
         }
