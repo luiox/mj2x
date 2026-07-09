@@ -8,6 +8,12 @@ Generated artifacts are not checked in.  The generator test writes them under:
 test/mj2x/protected_samples/regc/<SampleName>/
 ```
 
+Each generated sample directory also includes `REGC_METRICS.md`, a structural
+benchmark note with generated C byte size, `_mj2x_regc_call_` symbol
+occurrences, and TU cache declaration counts.  This replaces the old dependency
+on an external `test/java_obfuscator_test/TEST.jar` for intrinsic/cache surface
+tracking.
+
 Run:
 
 ```powershell
@@ -47,3 +53,14 @@ only the entry JNI wrapper and the String intrinsic helper touch `JNIEnv`.
 Escaping wrapper/Random object cases are not fixtures yet: the current RegC
 slice fails closed with `native object escaped through ...` instead of silently
 materializing an imprecise jobject.
+
+## Benchmark fixture
+
+`RegCIntrinsicBenchmarkSample` is a small committed fixture for repeated
+intrinsic/cache measurements.  It intentionally stresses:
+
+- String read hot paths (`length`, `charAt`, `hashCode`, `isEmpty`,
+  `startsWith`, `endsWith`, `indexOf`, `contains`);
+- `StringBuilder.append(char[])` plus primitive append chaining;
+- wrapper parse/compare, including floating compare edge helpers;
+- multi-array allocation through cached child descriptors.

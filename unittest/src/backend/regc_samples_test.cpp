@@ -73,6 +73,16 @@ std::string readTextFile(const fs::path& path) {
     return out.str();
 }
 
+size_t countSubstring(const std::string& text, const std::string& needle) {
+    size_t count = 0;
+    size_t pos = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
+}
+
 size_t countJavaSources(const fs::path& dir) {
     size_t count = 0;
     for (const auto& entry : fs::directory_iterator(dir)) {
@@ -228,6 +238,27 @@ void writeTraceNote(const fs::path& outDir, const SampleSpec& sample) {
     out << "- Use observations to guide RegC runtime/JNI tracing requirements.\n";
 }
 
+void writeMetricsNote(const fs::path& outDir, const SampleSpec& sample, const std::string& source) {
+    std::ofstream out(outDir / "REGC_METRICS.md");
+    out << "# " << sample.className << " RegC Metrics\n\n";
+    out << "Generated from `mj2x/test_resource/" << sample.sourceResource << "`.\n\n";
+    out << "| Metric | Value |\n";
+    out << "|---|---:|\n";
+    out << "| generated C bytes | " << source.size() << " |\n";
+    out << "| `_mj2x_regc_call_` symbol occurrences | "
+        << countSubstring(source, "_mj2x_regc_call_") << " |\n";
+    out << "| TU class cache declarations | "
+        << countSubstring(source, "static mj2x_regc_class_cache ") << " |\n";
+    out << "| TU static method cache declarations | "
+        << countSubstring(source, "static mj2x_regc_static_method_cache ") << " |\n";
+    out << "| TU instance method cache declarations | "
+        << countSubstring(source, "static mj2x_regc_instance_method_cache ") << " |\n";
+    out << "| TU static field cache declarations | "
+        << countSubstring(source, "static mj2x_regc_static_field_cache ") << " |\n";
+    out << "| TU instance field cache declarations | "
+        << countSubstring(source, "static mj2x_regc_instance_field_cache ") << " |\n";
+}
+
 class RegCTraceSamples : public ::testing::Test {
 protected:
     static Toolchain tc_;
@@ -289,11 +320,18 @@ protected:
         }
 
         writeTraceNote(outDir, sample);
+        writeMetricsNote(outDir, sample, source);
         fs::path traceNote = outDir / "TRACE_SURFACE.md";
         ASSERT_TRUE(fileExists(traceNote));
         std::string traceSurface = readTextFile(traceNote);
         EXPECT_NE(traceSurface.find(sample.className), std::string::npos);
         EXPECT_NE(traceSurface.find(sample.traceFocus), std::string::npos);
+
+        fs::path metricsNote = outDir / "REGC_METRICS.md";
+        ASSERT_TRUE(fileExists(metricsNote));
+        std::string metrics = readTextFile(metricsNote);
+        EXPECT_NE(metrics.find("generated C bytes"), std::string::npos);
+        EXPECT_NE(metrics.find("TU class cache declarations"), std::string::npos);
     }
 };
 
@@ -352,6 +390,17 @@ TEST_F(RegCTraceSamples, GenerateMjdbgFixtures) {
                 {"sinAndPow", "(D)D", "mj2x_math_pow"},
                 {"boxedInt", "(I)I", "mj2x_int_int_value"},
                 {"randomNextInt", "(J)I", "mj2x_random_next_int"},
+            },
+        },
+        {
+            "RegCIntrinsicBenchmarkSample",
+            "protected_samples/regc/RegCIntrinsicBenchmarkSample.java",
+            "committed intrinsic/cache benchmark fixture with structural generated-C metrics",
+            {
+                {"stringReadHotPath", "(Ljava/lang/String;Ljava/lang/String;)I", "_mj2x_intrinsic_string_contains"},
+                {"builderChars", "([CI)Ljava/lang/String;", "_mj2x_intrinsic_string_builder_append_chars"},
+                {"parseAndCompare", "(Ljava/lang/String;Ljava/lang/String;)I", "_mj2x_intrinsic_float_compare"},
+                {"multiArray", "(II)Ljava/lang/Object;", "_mj2x_regc_alloc_multi_array_cached"},
             },
         },
     };
