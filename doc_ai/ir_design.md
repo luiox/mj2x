@@ -3,7 +3,7 @@
 > 状态：R1a 实现 note，权威随代码演进
 > 日期：2026-06-25
 > 关系：本文档定义 `src/mj2x/mir/ssa/` 的 IR 数据结构。
-> 上层依据：`architecture_redesign.md §3`（五层分层）、`dev_plan.md` R1 决策（R1-A/R1-B/R1-C）。
+> 上层依据：`../doc/architecture.md` 的 MIR / SSA / RegIR 分层。
 > 算法依据：`ssa_algorithm.md`（reaching-def + block-arg 构造流程）。
 >
 > 本文只讲"IR 长什么样"；"怎么从字节码构造出来"在 `ssa_algorithm.md`。

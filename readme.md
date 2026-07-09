@@ -38,7 +38,7 @@ xmake build mj2x-cli
 
 - **[doc/user_guide.md](doc/user_guide.md)** — 怎么用(命令、参数、示例、FAQ)
 - **[doc_ai/capabilities.md](doc_ai/capabilities.md)** — 已实现功能清单 + MVP 边界
-- [doc/roadmap.md](doc/roadmap.md) — R0-R5 路线图
-- [doc/architecture_redesign.md](doc/architecture_redesign.md) — 架构权威设计
+- [doc/roadmap.md](doc/roadmap.md) — 能力路线图和 v2.1 优先级
+- [doc/architecture.md](doc/architecture.md) — 当前架构概览
 - [doc/stackc_backend_readme.md](doc/stackc_backend_readme.md) / [doc/regc_backend_readme.md](doc/regc_backend_readme.md) — 各后端支持矩阵
 - [doc/mvp_release_scope.md](doc/mvp_release_scope.md) — MVP 功能冻结范围

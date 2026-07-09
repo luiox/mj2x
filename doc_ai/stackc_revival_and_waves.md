@@ -6,7 +6,7 @@
 
 ## 0. 决策记录：撤销 ADR-1
 
-**原 ADR-1**（`doc/architecture_redesign.md` §0）：旧 CBackend（cstack[]/sp JNI 直译）被 c2j
+**原 ADR-1**（历史记录见 `doc/_archive/architecture_redesign.md`）：旧 CBackend（cstack[]/sp JNI 直译）被 c2j
 系统性还原，归档到 `backend/reference/` 不再演进。
 
 **撤销理由**（2026-07-05，owner 决策）：
@@ -18,14 +18,14 @@
 **接受的代价**：
 - mj2x 暂不解决 c2j 锚点 1/2（JNI vtable hook + cstack 正则）。StackC 生成的代码
   仍可被 c2j 还原。这是"先做出来"的代价，后续由 RegC 后端（若做）解决。
-- `architecture_redesign.md` 的防御矩阵 / 锚点消除路径**对 StackC 不生效**，
+- RegC 的防御矩阵 / 锚点消除路径**对 StackC 不生效**，
   文档需明确"StackC 不承担对抗职责"。
 
 **落地动作**（第一个 PR，见 Wave 0）：
 - `backend/reference/c_backend.{hpp,cpp}` → `backend/stackc/stackc_backend.{hpp,cpp}`（移出 reference）
 - `unittest/backend/stackc_backend_legacy_test.cpp` → `stackc_backend_test.cpp`（去 legacy 标记）
 - pipeline 重新注册 StackC backend（若被反注册）
-- 修订 `architecture_redesign.md` ADR-1：状态改为"撤销"，说明 StackC 复活理由与边界
+- 在当前 roadmap/architecture 中说明 StackC 复活理由与边界
 - 修订 `doc/roadmap.md`：把 StackC 路线加回（作为独立于 RegC 的并行后端）
 
 **SSA/RegIR 线的状态**（暂不动，待后续决策）：

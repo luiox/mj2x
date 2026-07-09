@@ -162,11 +162,20 @@ mj2x/
 
 **codegen 工具层设计**:替代裸 `std::ostringstream << "    ..."` 字符串拼接。`CSourceStream` 管缩进、`IncludeSet` 管 include 去重排序、`c_helpers.hpp` 是无状态 helper 的单一来源。两个 C 发射后端(StackC/RegC)共用。`StackCBackend` 的 registration 与 method/field ID 懒缓存发射已迁到 `CSourceStream`;后续大段 runtime helper 字符串迁移是渐进工作。
 
----
+## 6. 能力索引
+
+| 能力域 | 当前权威来源 |
+|---|---|
+| 字节码转 native | `mj2x/mj2x-core/src/mj2x/backend/{stackc,regc}/` |
+| native 运行时 | `mj2x/mj2x-runtime/src/` |
+| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` |
+| 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` |
+| 用户注解包 | `mj2x/mj2x-annotations/` |
+| protected samples | `mj2x/test_resource/protected_samples/` |
 
 ---
 
-## 6. 验证入口
+## 7. 验证入口
 
 ```bash
 xmake build mj2x-core
@@ -180,7 +189,7 @@ tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 
 能力到测试的追溯见 `../doc_ai/mvp_backend_verification.md`。
 
-## 7. Validation maturity
+## 8. Validation maturity
 
 - 首切片：`script/validate_release.ps1 -Layer mj2x -Mode release` 覆盖 build、unit、CLI smoke，并且 `mj2x_unittest` 只查找当前 build mode 的 `mj2x-cli`。
 - 尚未产品级：真实 protected sample corpus、跨 MSVC/GCC/Clang native compile gate、mjdbg observation report 仍需作为 release gate 固化。

@@ -3,7 +3,7 @@
 > 状态：R1b 实现 note，权威随代码演进
 > 日期：2026-06-25
 > 关系：本文档定义 `src/mj2x/preprocessor/` 下的字节码改写预处理。
-> 上层依据：`architecture_redesign.md §5.2`（L1 占位/未完成项）。
+> 上层依据：`../doc/architecture.md` 的 pipeline / preprocessor 边界。
 
 ---
 

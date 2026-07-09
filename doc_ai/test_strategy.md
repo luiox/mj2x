@@ -2,7 +2,7 @@
 
 > **v2（2026-06-24 架构重构后）**：测试分层对齐新的五层 IR（L1-L5）+ RT 运行时。
 > v1 的测试目标（≥80 单元，仅针对 StackC）调整为按层分质量门。
-> 重构依据见 `architecture_redesign.md`。
+> 架构概览见 `../doc/architecture.md`。
 >
 > **MVP freeze（2026-07-06）**：当前发版范围见 `mvp_release_scope.md`。
 > 发版前只补冻结范围内的 JAR/CLI/unsupported 边界测试，不新增 R4/VMC4 等后续功能。
@@ -40,7 +40,7 @@
 
 ### 1.3 关键结构断言（防御有效性验证）
 
-这些断言直接对应 `architecture_redesign.md §4` 防御矩阵，是"防御是否生效"的客观检查：
+这些断言对应当前架构中 RegC 消除 stack-machine anchor 的目标，是"防御是否生效"的客观检查：
 
 | 断言 | 层 | 含义 | 对应 c2j 攻击 |
 |------|----|------|--------------|
