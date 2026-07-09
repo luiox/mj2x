@@ -121,3 +121,15 @@ jmethodID mj2x_regc_cached_static_method(JNIEnv* env, mj2x_regc_static_method_ca
     cache->method = method;
     return method;
 }
+
+jfieldID mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache* cache) {
+    if (env == NULL || cache == NULL) return NULL;
+    if (cache->field != NULL) return cache->field;
+
+    jclass owner = mj2x_regc_global_class(env, cache->owner, &cache->ownerClass);
+    if (owner == NULL) return NULL;
+    jfieldID field = (*env)->GetStaticFieldID(env, owner, cache->name, cache->desc);
+    if (field == NULL) return NULL;
+    cache->field = field;
+    return field;
+}

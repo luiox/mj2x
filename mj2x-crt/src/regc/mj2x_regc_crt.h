@@ -29,6 +29,14 @@ typedef struct mj2x_regc_static_method_cache {
     jmethodID method;
 } mj2x_regc_static_method_cache;
 
+typedef struct mj2x_regc_static_field_cache {
+    const char* owner;
+    const char* name;
+    const char* desc;
+    jclass ownerClass;
+    jfieldID field;
+} mj2x_regc_static_field_cache;
+
 void mj2x_regc_init_context(mj2x_regc_context* context,
                             void* env,
                             mj2x_regc_throw_callback throwException);
@@ -43,6 +51,7 @@ void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
 
 jclass mj2x_regc_cached_class(JNIEnv* env, mj2x_regc_class_cache* cache);
 jmethodID mj2x_regc_cached_static_method(JNIEnv* env, mj2x_regc_static_method_cache* cache);
+jfieldID mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache* cache);
 
 #ifdef __cplusplus
 }

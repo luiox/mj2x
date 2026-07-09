@@ -311,8 +311,11 @@ struct RegCFunctionEmitState
 {
     std::map<uint32_t, RegCNativeObjectState> nativeObjects;
     std::string                               functionName;
+    SSAFunctionSymbol                         symbol;
     std::vector<std::string>                  staticMethodCacheDeclarations;
+    std::vector<std::string>                  staticFieldCacheDeclarations;
     int                                       staticMethodCacheIndex = 0;
+    int                                       staticFieldCacheIndex  = 0;
 };
 
 const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind)
@@ -449,6 +452,17 @@ void emitHelperPrelude(std::ostream& out)
            "char* owner, const char* name, const char* desc);\n";
     out << "static mj2x_ref _mj2x_regc_load_ref_field(int32_t is_static, mj2x_ref receiver, const "
            "char* owner, const char* name, const char* desc);\n";
+    out << "static bool _mj2x_regc_load_cached_bool_field(mj2x_regc_static_field_cache* cache);\n";
+    out << "static int8_t _mj2x_regc_load_cached_i8_field(mj2x_regc_static_field_cache* cache);\n";
+    out << "static uint16_t _mj2x_regc_load_cached_char_field(mj2x_regc_static_field_cache* "
+           "cache);\n";
+    out << "static int16_t _mj2x_regc_load_cached_i16_field(mj2x_regc_static_field_cache* cache);\n";
+    out << "static int32_t _mj2x_regc_load_cached_i32_field(mj2x_regc_static_field_cache* cache);\n";
+    out << "static int64_t _mj2x_regc_load_cached_i64_field(mj2x_regc_static_field_cache* cache);\n";
+    out << "static float _mj2x_regc_load_cached_f32_field(mj2x_regc_static_field_cache* cache);\n";
+    out << "static double _mj2x_regc_load_cached_f64_field(mj2x_regc_static_field_cache* cache);\n";
+    out << "static mj2x_ref _mj2x_regc_load_cached_ref_field(mj2x_regc_static_field_cache* "
+           "cache);\n";
     out << "static void _mj2x_regc_store_bool_field(int32_t is_static, mj2x_ref receiver, const "
            "char* owner, const char* name, const char* desc, bool value);\n";
     out << "static void _mj2x_regc_store_i8_field(int32_t is_static, mj2x_ref receiver, const "
@@ -467,6 +481,24 @@ void emitHelperPrelude(std::ostream& out)
            "char* owner, const char* name, const char* desc, double value);\n";
     out << "static void _mj2x_regc_store_ref_field(int32_t is_static, mj2x_ref receiver, const "
            "char* owner, const char* name, const char* desc, mj2x_ref value);\n";
+    out << "static void _mj2x_regc_store_cached_bool_field(mj2x_regc_static_field_cache* cache, "
+           "bool value);\n";
+    out << "static void _mj2x_regc_store_cached_i8_field(mj2x_regc_static_field_cache* cache, "
+           "int8_t value);\n";
+    out << "static void _mj2x_regc_store_cached_char_field(mj2x_regc_static_field_cache* cache, "
+           "uint16_t value);\n";
+    out << "static void _mj2x_regc_store_cached_i16_field(mj2x_regc_static_field_cache* cache, "
+           "int16_t value);\n";
+    out << "static void _mj2x_regc_store_cached_i32_field(mj2x_regc_static_field_cache* cache, "
+           "int32_t value);\n";
+    out << "static void _mj2x_regc_store_cached_i64_field(mj2x_regc_static_field_cache* cache, "
+           "int64_t value);\n";
+    out << "static void _mj2x_regc_store_cached_f32_field(mj2x_regc_static_field_cache* cache, "
+           "float value);\n";
+    out << "static void _mj2x_regc_store_cached_f64_field(mj2x_regc_static_field_cache* cache, "
+           "double value);\n";
+    out << "static void _mj2x_regc_store_cached_ref_field(mj2x_regc_static_field_cache* cache, "
+           "mj2x_ref value);\n";
     out << "static int8_t _mj2x_regc_load_i8_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static int16_t _mj2x_regc_load_i16_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static uint16_t _mj2x_regc_load_char_array(mj2x_ref array_ref, int32_t index);\n";
@@ -528,6 +560,22 @@ std::string callArgs(const std::vector<RegOperand>& args)
     return os.str();
 }
 
+std::string directCallArgs(const std::vector<RegOperand>& args)
+{
+    std::ostringstream os;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i) os << ", ";
+        os << "(" << cType(args[i].type) << ")(" << operandExpr(args[i]) << ")";
+    }
+    return os.str();
+}
+
+bool isSelfStaticCall(const RegCFunctionEmitState& state, const RegInstruction& ins)
+{
+    return isStaticCall(ins) && state.symbol.owner == ins.method.owner &&
+           state.symbol.name == ins.method.name && state.symbol.desc == ins.method.desc;
+}
+
 std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
 {
     const std::string  cacheName = "_mj2x_regc_cache_" + state.functionName + "_" +
@@ -537,6 +585,18 @@ std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruct
          << cStringLiteral(ins.method.owner) << ", " << cStringLiteral(ins.method.name) << ", "
          << cStringLiteral(ins.method.desc) << ", NULL, NULL};\n";
     state.staticMethodCacheDeclarations.push_back(decl.str());
+    return cacheName;
+}
+
+std::string addStaticFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+{
+    const std::string  cacheName = "_mj2x_regc_field_cache_" + state.functionName + "_" +
+                                   std::to_string(state.staticFieldCacheIndex++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_static_field_cache " << cacheName << " = {"
+         << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name) << ", "
+         << cStringLiteral(ins.field.desc) << ", NULL, NULL};\n";
+    state.staticFieldCacheDeclarations.push_back(decl.str());
     return cacheName;
 }
 
@@ -758,20 +818,37 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
     case RegInstructionKind::LoadField:
         if (!rejectNativeObjectEscape(state, ins.receiver, "field load receiver", reason))
             return false;
-        out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
-            << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field("
-            << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver)) << ", "
-            << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name) << ", "
-            << cStringLiteral(ins.field.desc) << ");\n";
+        if (ins.field.isStatic) {
+            const std::string cacheName = addStaticFieldCache(state, ins);
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_cached_"
+                << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field(&" << cacheName
+                << ");\n";
+        }
+        else {
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
+                << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field(0, "
+                << operandExpr(ins.receiver) << ", " << cStringLiteral(ins.field.owner) << ", "
+                << cStringLiteral(ins.field.name) << ", " << cStringLiteral(ins.field.desc)
+                << ");\n";
+        }
         return true;
     case RegInstructionKind::StoreField:
         if (!rejectNativeObjectEscape(state, ins.receiver, "field store receiver", reason))
             return false;
         if (!rejectNativeObjectEscape(state, ins.value, "field store value", reason)) return false;
-        out << "    _mj2x_regc_store_" << fieldHelperSuffix(ins.field.desc, ins.value.type)
-            << "_field(" << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver))
-            << ", " << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name)
-            << ", " << cStringLiteral(ins.field.desc) << ", " << operandExpr(ins.value) << ");\n";
+        if (ins.field.isStatic) {
+            const std::string cacheName = addStaticFieldCache(state, ins);
+            out << "    _mj2x_regc_store_cached_"
+                << fieldHelperSuffix(ins.field.desc, ins.value.type) << "_field(&" << cacheName
+                << ", " << operandExpr(ins.value) << ");\n";
+        }
+        else {
+            out << "    _mj2x_regc_store_" << fieldHelperSuffix(ins.field.desc, ins.value.type)
+                << "_field(0, " << operandExpr(ins.receiver) << ", "
+                << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name)
+                << ", " << cStringLiteral(ins.field.desc) << ", " << operandExpr(ins.value)
+                << ");\n";
+        }
         return true;
     case RegInstructionKind::ArrayLoad:
         if (!rejectNativeObjectEscape(state, ins.receiver, "array load receiver", reason))
@@ -807,28 +884,44 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
             return false;
         }
         const bool        staticCall = isStaticCall(ins);
-        const std::string cacheName  = staticCall ? addStaticMethodCache(state, ins) : "";
+        const bool        selfCall   = isSelfStaticCall(state, ins);
+        const std::string cacheName =
+            (staticCall && !selfCall) ? addStaticMethodCache(state, ins) : "";
         if (ins.hasDest) {
-            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_call_";
-            if (staticCall) {
-                out << "cached_" << helperSuffix(ins.dest.type) << "(&" << cacheName << ", "
-                    << callArgs(ins.args) << ");\n";
+            out << "    " << regName(ins.dest.id) << " = ";
+            if (selfCall) {
+                out << state.functionName << "(" << directCallArgs(ins.args) << ");\n";
             }
             else {
-                out << helperSuffix(ins.dest.type) << "(" << cStringLiteral(ins.method.owner)
-                    << ", " << cStringLiteral(ins.method.name) << ", "
-                    << cStringLiteral(ins.method.desc) << ", 0, " << callArgs(ins.args) << ");\n";
+                out << "_mj2x_regc_call_";
+                if (staticCall) {
+                    out << "cached_" << helperSuffix(ins.dest.type) << "(&" << cacheName << ", "
+                        << callArgs(ins.args) << ");\n";
+                }
+                else {
+                    out << helperSuffix(ins.dest.type) << "(" << cStringLiteral(ins.method.owner)
+                        << ", " << cStringLiteral(ins.method.name) << ", "
+                        << cStringLiteral(ins.method.desc) << ", 0, " << callArgs(ins.args)
+                        << ");\n";
+                }
             }
         }
         else {
-            out << "    _mj2x_regc_call_";
-            if (staticCall) {
-                out << "cached_void(&" << cacheName << ", " << callArgs(ins.args) << ");\n";
+            out << "    ";
+            if (selfCall) {
+                out << state.functionName << "(" << directCallArgs(ins.args) << ");\n";
             }
             else {
-                out << "void(" << cStringLiteral(ins.method.owner) << ", "
-                    << cStringLiteral(ins.method.name) << ", " << cStringLiteral(ins.method.desc)
-                    << ", 0, " << callArgs(ins.args) << ");\n";
+                out << "_mj2x_regc_call_";
+                if (staticCall) {
+                    out << "cached_void(&" << cacheName << ", " << callArgs(ins.args) << ");\n";
+                }
+                else {
+                    out << "void(" << cStringLiteral(ins.method.owner) << ", "
+                        << cStringLiteral(ins.method.name) << ", "
+                        << cStringLiteral(ins.method.desc) << ", 0, " << callArgs(ins.args)
+                        << ");\n";
+                }
             }
         }
         return true;
@@ -1033,6 +1126,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
 
     RegCFunctionEmitState emitState;
     emitState.functionName           = result.functionName;
+    emitState.symbol                 = fn.symbol;
     int                dispatchIndex = 0;
     int                edgeTempIndex = 0;
     std::ostringstream body;
@@ -1063,7 +1157,12 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
     for (const auto& declaration : emitState.staticMethodCacheDeclarations) {
         out << declaration;
     }
-    if (!emitState.staticMethodCacheDeclarations.empty()) out << "\n";
+    for (const auto& declaration : emitState.staticFieldCacheDeclarations) {
+        out << declaration;
+    }
+    if (!emitState.staticMethodCacheDeclarations.empty() ||
+        !emitState.staticFieldCacheDeclarations.empty())
+        out << "\n";
 
     out << "static " << cType(fn.symbol.returnType) << " " << result.functionName << "(";
     for (size_t i = 0; i < fn.parameters.size(); ++i) {

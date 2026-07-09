@@ -272,7 +272,17 @@ TEST(RegCTest, EmitsObjectFieldAndCallHelpers)
               std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_load_i32_field"), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("_mj2x_regc_store_i32_field(1, NULL"), std::string::npos)
+    EXPECT_NE(result.source.find("mj2x_regc_static_field_cache"), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("{\"Foo\", \"sink\", \"I\", NULL, NULL}"), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_store_cached_i32_field(&_mj2x_regc_field_cache_"),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_load_cached_i32_field(&_mj2x_regc_field_cache_"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_store_i32_field(1, NULL"), std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
         << result.source;
@@ -283,6 +293,37 @@ TEST(RegCTest, EmitsObjectFieldAndCallHelpers)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"Foo\", \"mix\", \"(I)I\""),
               std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCTest, EmitsSelfStaticCallAsDirectCDispatch)
+{
+    std::string reason;
+    auto        result = emitRegC("self",
+                                  "(I)I",
+                                  {
+                                      new VarInsnNode(Opcodes::ILOAD, 0),
+                                      new InsnNode(Opcodes::ICONST_1),
+                                      new InsnNode(Opcodes::ISUB),
+                                      new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                         ca::str::Utf8StringRef::from_cstr(
+                                                             "InlineRegC"),
+                                                         ca::str::Utf8StringRef::from_cstr("self"),
+                                                         ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                         false),
+                                      new InsnNode(Opcodes::IRETURN),
+                                  },
+                                  2,
+                                  1,
+                                  reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_cached_i32"), std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
 }
