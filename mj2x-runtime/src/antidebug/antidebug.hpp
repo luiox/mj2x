@@ -10,12 +10,15 @@
  */
 #pragma once
 
+#include <cstddef>
+
 namespace mj2x::runtime::antidebug {
 
 /// @brief Collected debugger signal flags.
 struct DebugSignals {
     bool debuggerPresent = false;
     bool remoteDebuggerPresent = false;
+    bool softwareBreakpointPattern = false;
 };
 
 /**
@@ -25,6 +28,18 @@ struct DebugSignals {
  * unavailable.
  */
 DebugSignals collectDebugSignals();
+
+/**
+ * @brief 扫描内存片段中是否存在常见软件断点指令。
+ *
+ * @param data 起始地址;允许为空,为空时返回 false。
+ * @param size 可读字节数。
+ * @return 检测到 `INT3`(`0xCC`) 或 `INT 3`(`0xCD 0x03`) 时返回 true。
+ *
+ * @note 该函数只做纯字节匹配,用于 mockable 单测和未来代码段探测的底层积木;
+ *       不负责枚举模块或修改页保护。
+ */
+bool containsSoftwareBreakpoint(const void* data, std::size_t size);
 
 /// @brief Convenience predicate for any collected debugger signal.
 bool hasDebugSignal(const DebugSignals& signals);
