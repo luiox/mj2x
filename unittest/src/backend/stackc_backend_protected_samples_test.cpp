@@ -145,6 +145,17 @@ std::string readTextFile(const fs::path& path)
     return out.str();
 }
 
+size_t countJavaSources(const fs::path& dir)
+{
+    size_t count = 0;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".java") {
+            ++count;
+        }
+    }
+    return count;
+}
+
 void writeTraceNote(const fs::path& outDir, const SampleSpec& sample)
 {
     std::ofstream out(outDir / "TRACE_SURFACE.md");
@@ -228,7 +239,11 @@ protected:
             << generatedC;
 
         writeTraceNote(outDir, sample);
-        ASSERT_TRUE(fileExists(outDir / "TRACE_SURFACE.md"));
+        fs::path traceNote = outDir / "TRACE_SURFACE.md";
+        ASSERT_TRUE(fileExists(traceNote));
+        std::string traceSurface = readTextFile(traceNote);
+        EXPECT_NE(traceSurface.find(sample.className), std::string::npos);
+        EXPECT_NE(traceSurface.find(sample.traceFocus), std::string::npos);
     }
 };
 
@@ -255,6 +270,9 @@ TEST_F(StackCBackendProtectedSamples, GenerateMjdbgFixtures)
             "exception creation/catch paths and monitor enter/exit",
         },
     };
+
+    ASSERT_EQ(countJavaSources(test::getResourcePath("protected_samples/stackc")), samples.size())
+        << "Every committed StackC protected sample needs a SampleSpec and TRACE_SURFACE generator.";
 
     for (const auto& sample : samples) {
         generateSample(sample);
