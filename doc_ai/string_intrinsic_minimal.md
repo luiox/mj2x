@@ -33,9 +33,29 @@ RegC must only emit these runtime calls when all conditions are true:
 - unsupported operations fail closed with a clear reason instead of falling
   through to imprecise native behavior.
 
+Current RegC first-slice StringBuilder lowering is intentionally narrower than
+the full runtime ABI target.  It supports non-escaping `new`/`<init>` plus
+`append(String|Object|CharSequence|int|long|boolean|char|char[]|float|double)`
+and `toString()` with a fixed UTF-8-friendly buffer.  `append(char[])` reads
+JVM `char[]` elements as UTF-16 code units and preserves the JDK null NPE
+boundary, but it still materializes into the temporary first-slice buffer.
+
 Until escape-aware fallback exists, full `String.concat`, `substring`,
-`equals`, `indexOf`, `valueOf`, and all `StringBuilder` mutation chains remain
-future work.
+additional `String.valueOf` overloads, `StringBuilder` range overloads,
+capacity semantics, and escaping mutation chains remain future work.
+
+## libca/runtime Requests
+
+The next StringBuilder/UTF-16 upgrade should be backed by libca/runtime C++
+infrastructure rather than more generated-C helper bodies.  mj2x needs:
+
+- owning UTF-16 string and builder buffers with explicit capacity growth;
+- conversion helpers for JNI modified UTF-8, UTF-16 views, and Java `char[]`;
+- surrogate and non-ASCII behavior that matches JDK `String`/`StringBuilder`;
+- a C ABI wrapper that can materialize native builder state back to `jobject`;
+- escape-aware ownership hooks so RegC can fallback or materialize instead of
+  fail-closing when a shadow object crosses a native/JNI boundary;
+- a future synchronized wrapper point for `StringBuffer` semantics.
 
 ## Validation
 

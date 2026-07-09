@@ -115,7 +115,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - `java.lang.String`:equals/length/charAt/hashCode/isEmpty/startsWith(String)/endsWith(String)/indexOf(String)/contains(CharSequence)
   走 RegC local helper;返回值被丢弃的调用点也可安全发射 intrinsic call;`contains` 对 String rhs 走 native `indexOf`,非 String `CharSequence` 回退到缓存的 Java `String.contains` methodID
 - `java.lang.StringBuilder` 非逃逸第一片:`new`/`<init>()`/`<init>(String)` +
-  `append(String|Object|CharSequence|int|long|boolean|char|float|double)` + `toString`,RegC 用固定容量 native shadow buffer 承载,
+  `append(String|Object|CharSequence|int|long|boolean|char|char[]|float|double)` + `toString`,RegC 用固定容量 native shadow buffer 承载,
   其中 `append(float|double)` 复用缓存的 `String.valueOf(F/D)` 保持 JDK 浮点文本格式,
   匹配链式调用不发 `_mj2x_regc_call_*`;shadow state 逃逸仍 fail-closed
 - 包装类非逃逸 value/unbox:`Integer/Long/Short/Byte/Float/Double/Boolean/Character.valueOf`
@@ -151,7 +151,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime + RegC 非逃逸 value/unbox;逃逸 fail-closed |
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
 | String intrinsic 最小 UTF-16 view 垫片(length/charAt/status) + RegC String read hot paths | ✅ runtime 单测 + RegC emitter/结构测试 + native E2E |
-| StringBuilder 非逃逸 append/toString first slice | ✅ RegC emitter/结构测试 + native E2E;逃逸 fail-closed |
+| StringBuilder 非逃逸 append/toString first slice | ✅ RegC emitter/结构测试 + native E2E;覆盖 `append(char[])`;逃逸 fail-closed |
 | antidebug 软件断点字节扫描 | ✅ mockable runtime 单测 |
 | antijvmti agent/JDWP 参数、模块名、dump capability 信号聚合 | ✅ mockable runtime 单测 |
 
