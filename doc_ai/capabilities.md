@@ -191,5 +191,5 @@ tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 
 ## 8. Validation maturity
 
-- 首切片：`script/validate_release.ps1 -Layer mj2x -Mode release` 覆盖 build、unit、CLI smoke，并且 `mj2x_unittest` 只查找当前 build mode 的 `mj2x-cli`。
+- 首切片：`script/validate_release.ps1 -Layer mj2x -Mode release` 覆盖 build、unit、CLI smoke，并产出 `build/artifacts/windows/x64/<mode>/mj2x/mj2x-windows-x64-<mode>.zip` 与 `SHA256SUMS`。
 - 尚未产品级：真实 protected sample corpus、跨 MSVC/GCC/Clang native compile gate、mjdbg observation report 仍需作为 release gate 固化。
