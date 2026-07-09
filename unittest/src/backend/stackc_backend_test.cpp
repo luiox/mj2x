@@ -82,6 +82,26 @@ TEST(StackCBackendTest, SimpleReturn) {
     EXPECT_NE(result.text.find("void"), std::string::npos);
 }
 
+TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement) {
+    auto* tailLabel = new LabelNode();
+    tailLabel->label->bytecodeOffset = 1;
+    StackCBackend backend;
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "tailLabel", "()V", {
+        new InsnNode(Opcodes::RETURN),
+        tailLabel,
+    });
+    CompilerMethod cm;
+    cm.methodNode = mn.get();
+    cm.markedForCompile = true;
+
+    CodeConverter cc;
+    auto blocks = cc.convert(*mn);
+    auto result = backend.compileMethod("Test", cm, blocks);
+
+    EXPECT_NE(result.text.find(":\n    ;\n"), std::string::npos) << result.text;
+}
+
 TEST(StackCBackendTest, AddMethod) {
     StackCBackend backend;
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
