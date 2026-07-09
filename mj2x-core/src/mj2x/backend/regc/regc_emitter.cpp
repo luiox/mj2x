@@ -314,8 +314,13 @@ struct RegCFunctionEmitState
     SSAFunctionSymbol                         symbol;
     std::vector<std::string>                  staticMethodCacheDeclarations;
     std::vector<std::string>                  staticFieldCacheDeclarations;
+    std::vector<std::string>                  classCacheDeclarations;
+    std::map<std::string, std::string>        staticMethodCacheNames;
+    std::map<std::string, std::string>        staticFieldCacheNames;
+    std::map<std::string, std::string>        classCacheNames;
     int                                       staticMethodCacheIndex = 0;
     int                                       staticFieldCacheIndex  = 0;
+    int                                       classCacheIndex        = 0;
 };
 
 const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind)
@@ -426,7 +431,11 @@ void emitHelperPrelude(std::ostream& out)
            "int32_t* dims);\n";
     out << "static int32_t _mj2x_regc_array_length(mj2x_ref array_ref);\n";
     out << "static mj2x_ref _mj2x_regc_checkcast(mj2x_ref value, const char* type_desc);\n";
+    out << "static mj2x_ref _mj2x_regc_checkcast_cached(mj2x_ref value, "
+           "mj2x_regc_class_cache* cache);\n";
     out << "static int32_t _mj2x_regc_instanceof(mj2x_ref value, const char* type_desc);\n";
+    out << "static int32_t _mj2x_regc_instanceof_cached(mj2x_ref value, "
+           "mj2x_regc_class_cache* cache);\n";
     out << "static void _mj2x_regc_monitor_enter(mj2x_ref value);\n";
     out << "static void _mj2x_regc_monitor_exit(mj2x_ref value);\n";
     out << "static int32_t _mj2x_regc_exception_check(void);\n";
@@ -576,8 +585,17 @@ bool isSelfStaticCall(const RegCFunctionEmitState& state, const RegInstruction& 
            state.symbol.name == ins.method.name && state.symbol.desc == ins.method.desc;
 }
 
+std::string cacheKey(const std::string& first, const std::string& second, const std::string& third)
+{
+    return first + "\n" + second + "\n" + third;
+}
+
 std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
 {
+    const std::string key = cacheKey(ins.method.owner, ins.method.name, ins.method.desc);
+    auto              it  = state.staticMethodCacheNames.find(key);
+    if (it != state.staticMethodCacheNames.end()) return it->second;
+
     const std::string  cacheName = "_mj2x_regc_cache_" + state.functionName + "_" +
                                    std::to_string(state.staticMethodCacheIndex++);
     std::ostringstream decl;
@@ -585,11 +603,16 @@ std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruct
          << cStringLiteral(ins.method.owner) << ", " << cStringLiteral(ins.method.name) << ", "
          << cStringLiteral(ins.method.desc) << ", NULL, NULL};\n";
     state.staticMethodCacheDeclarations.push_back(decl.str());
+    state.staticMethodCacheNames.emplace(key, cacheName);
     return cacheName;
 }
 
 std::string addStaticFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins)
 {
+    const std::string key = cacheKey(ins.field.owner, ins.field.name, ins.field.desc);
+    auto              it  = state.staticFieldCacheNames.find(key);
+    if (it != state.staticFieldCacheNames.end()) return it->second;
+
     const std::string  cacheName = "_mj2x_regc_field_cache_" + state.functionName + "_" +
                                    std::to_string(state.staticFieldCacheIndex++);
     std::ostringstream decl;
@@ -597,6 +620,22 @@ std::string addStaticFieldCache(RegCFunctionEmitState& state, const RegInstructi
          << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name) << ", "
          << cStringLiteral(ins.field.desc) << ", NULL, NULL};\n";
     state.staticFieldCacheDeclarations.push_back(decl.str());
+    state.staticFieldCacheNames.emplace(key, cacheName);
+    return cacheName;
+}
+
+std::string addClassCache(RegCFunctionEmitState& state, const std::string& desc)
+{
+    auto it = state.classCacheNames.find(desc);
+    if (it != state.classCacheNames.end()) return it->second;
+
+    const std::string  cacheName = "_mj2x_regc_class_cache_" + state.functionName + "_" +
+                                   std::to_string(state.classCacheIndex++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_class_cache " << cacheName << " = {" << cStringLiteral(desc)
+         << ", NULL};\n";
+    state.classCacheDeclarations.push_back(decl.str());
+    state.classCacheNames.emplace(desc, cacheName);
     return cacheName;
 }
 
@@ -806,9 +845,9 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
         if (!rejectNativeObjectEscape(state, ins.value, "reference conversion", reason))
             return false;
         if (ins.convertKind == SSAConvertKind::ReferenceCast) {
-            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_checkcast("
-                << operandExpr(ins.value) << ", " << cStringLiteral(ins.referenceTypeDesc)
-                << ");\n";
+            const std::string cacheName = addClassCache(state, ins.referenceTypeDesc);
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_checkcast_cached("
+                << operandExpr(ins.value) << ", &" << cacheName << ");\n";
         }
         else {
             out << "    " << regName(ins.dest.id) << " = (" << cType(ins.targetType) << ")("
@@ -974,9 +1013,10 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                                           "instanceof",
                                           reason))
                 return false;
-            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_instanceof("
-                << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ", "
-                << cStringLiteral(ins.intrinsicName.substr(11)) << ");\n";
+            const std::string cacheName = addClassCache(state, ins.intrinsicName.substr(11));
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_instanceof_cached("
+                << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ", &" << cacheName
+                << ");\n";
             return true;
         }
         if (ins.intrinsicName == "monitor.enter") {
@@ -1160,8 +1200,11 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
     for (const auto& declaration : emitState.staticFieldCacheDeclarations) {
         out << declaration;
     }
+    for (const auto& declaration : emitState.classCacheDeclarations) {
+        out << declaration;
+    }
     if (!emitState.staticMethodCacheDeclarations.empty() ||
-        !emitState.staticFieldCacheDeclarations.empty())
+        !emitState.staticFieldCacheDeclarations.empty() || !emitState.classCacheDeclarations.empty())
         out << "\n";
 
     out << "static " << cType(fn.symbol.returnType) << " " << result.functionName << "(";

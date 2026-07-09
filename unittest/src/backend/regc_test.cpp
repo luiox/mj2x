@@ -74,6 +74,17 @@ void expectNoStackAnchors(const std::string& source)
     EXPECT_EQ(source.find("Cannot invoke"), std::string::npos) << source;
 }
 
+size_t countSubstring(const std::string& text, const std::string& needle)
+{
+    size_t count = 0;
+    size_t pos   = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+        count++;
+        pos += needle.size();
+    }
+    return count;
+}
+
 }   // namespace
 
 TEST(RegCTest, EmitsPureArithmeticWithoutStackMachineAnchors)
@@ -276,6 +287,8 @@ TEST(RegCTest, EmitsObjectFieldAndCallHelpers)
         << result.source;
     EXPECT_NE(result.source.find("{\"Foo\", \"sink\", \"I\", NULL, NULL}"), std::string::npos)
         << result.source;
+    EXPECT_EQ(countSubstring(result.source, "{\"Foo\", \"sink\", \"I\", NULL, NULL}"), 1u)
+        << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_store_cached_i32_field(&_mj2x_regc_field_cache_"),
               std::string::npos)
         << result.source;
@@ -292,6 +305,59 @@ TEST(RegCTest, EmitsObjectFieldAndCallHelpers)
               std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"Foo\", \"mix\", \"(I)I\""),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCTest, InternsRepeatedStaticMethodAndFieldCachesWithinFunction)
+{
+    std::string reason;
+    auto        result = emitRegC("cacheCse",
+                                  "()I",
+                                  {
+                                      new FieldInsnNode(Opcodes::GETSTATIC,
+                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                        ca::str::Utf8StringRef::from_cstr("sink"),
+                                                        ca::str::Utf8StringRef::from_cstr("I")),
+                                      new InsnNode(Opcodes::POP),
+                                      new InsnNode(Opcodes::ICONST_1),
+                                      new FieldInsnNode(Opcodes::PUTSTATIC,
+                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                        ca::str::Utf8StringRef::from_cstr("sink"),
+                                                        ca::str::Utf8StringRef::from_cstr("I")),
+                                      new FieldInsnNode(Opcodes::GETSTATIC,
+                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                        ca::str::Utf8StringRef::from_cstr("sink"),
+                                                        ca::str::Utf8StringRef::from_cstr("I")),
+                                      new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                         ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                         ca::str::Utf8StringRef::from_cstr("mix"),
+                                                         ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                         false),
+                                      new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                         ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                         ca::str::Utf8StringRef::from_cstr("mix"),
+                                                         ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                         false),
+                                      new InsnNode(Opcodes::IRETURN),
+                                  },
+                                  1,
+                                  0,
+                                  reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_EQ(countSubstring(result.source, "{\"Foo\", \"sink\", \"I\", NULL, NULL}"), 1u)
+        << result.source;
+    EXPECT_EQ(countSubstring(result.source, "{\"Foo\", \"mix\", \"(I)I\", NULL, NULL}"), 1u)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_load_cached_i32_field(&_mj2x_regc_field_cache_"),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_store_cached_i32_field(&_mj2x_regc_field_cache_"),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_call_cached_i32(&_mj2x_regc_cache_"),
               std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
@@ -440,10 +506,42 @@ TEST(RegCTest, EmitsReferenceCheckAndMonitorHelpers)
                  reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
-    EXPECT_NE(result.source.find("_mj2x_regc_checkcast"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_checkcast_cached"), std::string::npos)
+        << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_monitor_enter"), std::string::npos) << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_monitor_exit"), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("_mj2x_regc_instanceof"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_instanceof_cached"), std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCTest, InternsRepeatedClassCachesWithinFunction)
+{
+    std::string reason;
+    auto        result =
+        emitRegC("classCacheCse",
+                 "(Ljava/lang/Object;)I",
+                 {
+                     new VarInsnNode(Opcodes::ALOAD, 0),
+                     new TypeInsnNode(Opcodes::CHECKCAST,
+                                      ca::str::Utf8StringRef::from_cstr("java/lang/String")),
+                     new InsnNode(Opcodes::POP),
+                     new VarInsnNode(Opcodes::ALOAD, 0),
+                     new TypeInsnNode(Opcodes::INSTANCEOF,
+                                      ca::str::Utf8StringRef::from_cstr("java/lang/String")),
+                     new InsnNode(Opcodes::IRETURN),
+                 },
+                 1,
+                 1,
+                 reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_EQ(countSubstring(result.source, "{\"java/lang/String\", NULL}"), 1u)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_checkcast_cached"), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_instanceof_cached"), std::string::npos)
+        << result.source;
     expectNoStackAnchors(result.source);
 }
 

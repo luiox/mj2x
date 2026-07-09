@@ -519,9 +519,30 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, type_desc);\n";
     out << "    return NULL;\n";
     out << "}\n\n";
+    out << "static mj2x_ref _mj2x_regc_checkcast_cached(mj2x_ref value, "
+           "mj2x_regc_class_cache* cache) {\n";
+    out << "    if (value == NULL) return NULL;\n";
+    out << "    jclass cls = _mj2x_regc_cached_class(cache);\n";
+    out << "    if (cls == NULL) return NULL;\n";
+    out << "    if ((*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls)) return "
+           "value;\n";
+    out << "    jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
+           "\"java/lang/ClassCastException\");\n";
+    out << "    if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, cache != NULL ? "
+           "cache->desc : \"checkcast\");\n";
+    out << "    return NULL;\n";
+    out << "}\n\n";
     out << "static int32_t _mj2x_regc_instanceof(mj2x_ref value, const char* type_desc) {\n";
     out << "    if (value == NULL) return 0;\n";
     out << "    jclass cls = _mj2x_regc_find_class(type_desc);\n";
+    out << "    if (cls == NULL) return 0;\n";
+    out << "    return (*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls) ? 1 : "
+           "0;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_regc_instanceof_cached(mj2x_ref value, "
+           "mj2x_regc_class_cache* cache) {\n";
+    out << "    if (value == NULL) return 0;\n";
+    out << "    jclass cls = _mj2x_regc_cached_class(cache);\n";
     out << "    if (cls == NULL) return 0;\n";
     out << "    return (*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls) ? 1 : "
            "0;\n";
