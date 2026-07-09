@@ -1,0 +1,31 @@
+set_project("@PROJECT_NAME@")
+set_version("0.1.0")
+set_languages("c99", "cxx17")
+add_rules("mode.debug", "mode.release")
+
+target("mj2x_native")
+    set_kind("shared")
+    add_files("src/generated/native.c")
+    add_files("src/mj2x-crt/regc/*.c")
+    add_includedirs("src/mj2x-crt")
+
+    local jdk_path = os.getenv("JAVA_HOME")
+    if jdk_path then
+        add_includedirs(jdk_path .. "/include")
+        if is_plat("windows") then
+            add_includedirs(jdk_path .. "/include/win32")
+            add_linkdirs(jdk_path .. "/lib")
+        elseif is_plat("linux") then
+            add_includedirs(jdk_path .. "/include/linux")
+            add_linkdirs(jdk_path .. "/lib/server")
+        elseif is_plat("macosx") then
+            add_includedirs(jdk_path .. "/include/darwin")
+        end
+    else
+        print("warning: JAVA_HOME is not set; JNI headers are required to build mj2x_native")
+    end
+
+    if is_plat("windows") then
+        add_cflags("/TC", {tools = "cl"})
+        add_cflags("/utf-8", {tools = "cl"})
+    end
