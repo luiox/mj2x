@@ -912,46 +912,6 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    }\n";
     out << "    return (int64_t)value;\n";
     out << "}\n\n";
-    out << "static mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, "
-           "int32_t value) {\n";
-    out << "    (void)context;\n";
-    out << "    char buffer[16];\n";
-    out << "    snprintf(buffer, sizeof(buffer), \"%d\", value);\n";
-    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, buffer);\n";
-    out << "}\n\n";
-    out << "static mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, "
-           "int64_t value) {\n";
-    out << "    (void)context;\n";
-    out << "    char buffer[32];\n";
-    out << "    snprintf(buffer, sizeof(buffer), \"%lld\", (long long)value);\n";
-    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, buffer);\n";
-    out << "}\n\n";
-    out << "static mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, "
-           "int8_t value) {\n";
-    out << "    (void)context;\n";
-    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, "
-           "value ? \"true\" : \"false\");\n";
-    out << "}\n\n";
-    out << "static mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, "
-           "uint16_t value) {\n";
-    out << "    (void)context;\n";
-    out << "    char buffer[4];\n";
-    out << "    int32_t length = 0;\n";
-    out << "    if (value == 0) { buffer[0] = (char)0xC0; buffer[1] = (char)0x80; length = 2; }\n";
-    out << "    else if (value <= 0x7F) { buffer[0] = (char)value; length = 1; }\n";
-    out << "    else if (value <= 0x7FF) {\n";
-    out << "        buffer[0] = (char)(0xC0 | (value >> 6));\n";
-    out << "        buffer[1] = (char)(0x80 | (value & 0x3F));\n";
-    out << "        length = 2;\n";
-    out << "    } else {\n";
-    out << "        buffer[0] = (char)(0xE0 | (value >> 12));\n";
-    out << "        buffer[1] = (char)(0x80 | ((value >> 6) & 0x3F));\n";
-    out << "        buffer[2] = (char)(0x80 | (value & 0x3F));\n";
-    out << "        length = 3;\n";
-    out << "    }\n";
-    out << "    buffer[length] = '\\0';\n";
-    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, buffer);\n";
-    out << "}\n\n";
     out << "static mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* context, "
            "float value) {\n";
     out << "    (void)context;\n";
@@ -986,30 +946,6 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (to_string == NULL) return NULL;\n";
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, "
            "(jobject)value, to_string);\n";
-    out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs) {\n";
-    out << "    if (lhs < rhs) return -1;\n";
-    out << "    if (lhs > rhs) return 1;\n";
-    out << "    uint32_t lhs_bits;\n";
-    out << "    uint32_t rhs_bits;\n";
-    out << "    memcpy(&lhs_bits, &lhs, sizeof(lhs_bits));\n";
-    out << "    memcpy(&rhs_bits, &rhs, sizeof(rhs_bits));\n";
-    out << "    if ((lhs_bits & 0x7fffffffU) > 0x7f800000U) lhs_bits = 0x7fc00000U;\n";
-    out << "    if ((rhs_bits & 0x7fffffffU) > 0x7f800000U) rhs_bits = 0x7fc00000U;\n";
-    out << "    if (lhs_bits == rhs_bits) return 0;\n";
-    out << "    return ((int32_t)lhs_bits < (int32_t)rhs_bits) ? -1 : 1;\n";
-    out << "}\n\n";
-    out << "static int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs) {\n";
-    out << "    if (lhs < rhs) return -1;\n";
-    out << "    if (lhs > rhs) return 1;\n";
-    out << "    uint64_t lhs_bits;\n";
-    out << "    uint64_t rhs_bits;\n";
-    out << "    memcpy(&lhs_bits, &lhs, sizeof(lhs_bits));\n";
-    out << "    memcpy(&rhs_bits, &rhs, sizeof(rhs_bits));\n";
-    out << "    if ((lhs_bits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL) lhs_bits = 0x7ff8000000000000ULL;\n";
-    out << "    if ((rhs_bits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL) rhs_bits = 0x7ff8000000000000ULL;\n";
-    out << "    if (lhs_bits == rhs_bits) return 0;\n";
-    out << "    return ((int64_t)lhs_bits < (int64_t)rhs_bits) ? -1 : 1;\n";
     out << "}\n\n";
     out << "#ifndef MJ2X_REGC_STRING_BUILDER_DECLARED\n";
     out << "#define MJ2X_REGC_STRING_BUILDER_DECLARED\n";

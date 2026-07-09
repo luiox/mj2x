@@ -261,18 +261,23 @@ protected:
             " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
 
         std::vector<fs::path> runtimeObjs;
-        auto compileRuntime = [&](const std::string& relPath, const std::string& objName) {
+        auto compileRuntime = [&](const std::string& relPath,
+                                  const std::string& objName,
+                                  const std::string& extraFlags = "") {
             fs::path src = runtimeSrc / relPath;
             ASSERT_TRUE(fileExists(src)) << src;
             fs::path obj = objDir / objName;
             runtimeObjs.push_back(obj);
             compileLines.push_back(
                 "cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) +
+                (extraFlags.empty() ? "" : " " + extraFlags) +
                 " /I" + q(runtimeSrc) +
                 " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
         };
         compileRuntime("regc/regc_runtime_abi.cpp", "regc_runtime_abi.obj");
-        compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
+        compileRuntime("intrinsic/intrinsic_wrapper.cpp",
+                       "intrinsic_wrapper.obj",
+                       "/DMJ2X_RUNTIME_WITH_JNI");
         compileRuntime("intrinsic/intrinsic_math.cpp", "intrinsic_math.obj");
         compileRuntime("intrinsic/intrinsic_random.cpp", "intrinsic_random.obj");
 
@@ -835,6 +840,18 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_bool_compare"), std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_char_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_float_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_double_compare"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static mj2x_ref _mj2x_intrinsic_int_to_string"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static mj2x_ref _mj2x_intrinsic_long_to_string"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static mj2x_ref _mj2x_intrinsic_bool_to_string"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("static mj2x_ref _mj2x_intrinsic_char_to_string"), std::string::npos)
         << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_literal("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_int_value_of("), std::string::npos) << generatedC;

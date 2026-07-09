@@ -1080,6 +1080,12 @@ TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
     EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_char_compare"),
               std::string::npos)
         << result.source;
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_float_compare"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_double_compare"),
+              std::string::npos)
+        << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Byte\", \"compare\""),
               std::string::npos)
         << result.source;
@@ -1182,6 +1188,18 @@ TEST(RegCIntrinsicTest, StringValueOfLoweredToIntrinsicsNotJni)
     EXPECT_NE(result.source.find("_mj2x_intrinsic_double_to_string("), std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_object_to_string("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("static mj2x_ref _mj2x_intrinsic_int_to_string"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("static mj2x_ref _mj2x_intrinsic_long_to_string"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("static mj2x_ref _mj2x_intrinsic_bool_to_string"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("static mj2x_ref _mj2x_intrinsic_char_to_string"),
+              std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/String\", \"valueOf\""),
               std::string::npos)

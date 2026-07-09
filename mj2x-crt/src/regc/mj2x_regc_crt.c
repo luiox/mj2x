@@ -1,6 +1,7 @@
 #include "regc/mj2x_regc_crt.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <string.h>
 
 static const char* kArithmeticException = "java/lang/ArithmeticException";
@@ -150,10 +151,93 @@ int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs) {
     return (int32_t)lhs - (int32_t)rhs;
 }
 
+int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs) {
+    if (lhs < rhs) return -1;
+    if (lhs > rhs) return 1;
+    uint32_t lhs_bits;
+    uint32_t rhs_bits;
+    memcpy(&lhs_bits, &lhs, sizeof(lhs_bits));
+    memcpy(&rhs_bits, &rhs, sizeof(rhs_bits));
+    if ((lhs_bits & 0x7fffffffU) > 0x7f800000U) lhs_bits = 0x7fc00000U;
+    if ((rhs_bits & 0x7fffffffU) > 0x7f800000U) rhs_bits = 0x7fc00000U;
+    if (lhs_bits == rhs_bits) return 0;
+    return ((int32_t)lhs_bits < (int32_t)rhs_bits) ? -1 : 1;
+}
+
+int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs) {
+    if (lhs < rhs) return -1;
+    if (lhs > rhs) return 1;
+    uint64_t lhs_bits;
+    uint64_t rhs_bits;
+    memcpy(&lhs_bits, &lhs, sizeof(lhs_bits));
+    memcpy(&rhs_bits, &rhs, sizeof(rhs_bits));
+    if ((lhs_bits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL) {
+        lhs_bits = 0x7ff8000000000000ULL;
+    }
+    if ((rhs_bits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL) {
+        rhs_bits = 0x7ff8000000000000ULL;
+    }
+    if (lhs_bits == rhs_bits) return 0;
+    return ((int64_t)lhs_bits < (int64_t)rhs_bits) ? -1 : 1;
+}
+
 int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs) {
     return ((lhs != 0) > (rhs != 0)) - ((lhs != 0) < (rhs != 0));
 }
 
 int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs) {
     return (int32_t)lhs - (int32_t)rhs;
+}
+
+static JNIEnv* mj2x_regc_context_env(mj2x_regc_context* context) {
+    if (context == NULL) return NULL;
+    return (JNIEnv*)context->env;
+}
+
+mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, int32_t value) {
+    JNIEnv* env = mj2x_regc_context_env(context);
+    if (env == NULL) return NULL;
+    char buffer[16];
+    snprintf(buffer, sizeof(buffer), "%d", value);
+    return (mj2x_ref)(*env)->NewStringUTF(env, buffer);
+}
+
+mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, int64_t value) {
+    JNIEnv* env = mj2x_regc_context_env(context);
+    if (env == NULL) return NULL;
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    return (mj2x_ref)(*env)->NewStringUTF(env, buffer);
+}
+
+mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value) {
+    JNIEnv* env = mj2x_regc_context_env(context);
+    if (env == NULL) return NULL;
+    return (mj2x_ref)(*env)->NewStringUTF(env, value ? "true" : "false");
+}
+
+mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t value) {
+    JNIEnv* env = mj2x_regc_context_env(context);
+    if (env == NULL) return NULL;
+    char buffer[4];
+    int32_t length = 0;
+    if (value == 0) {
+        buffer[0] = (char)0xC0;
+        buffer[1] = (char)0x80;
+        length = 2;
+    } else if (value <= 0x7F) {
+        buffer[0] = (char)value;
+        length = 1;
+    } else if (value <= 0x7FF) {
+        buffer[0] = (char)(0xC0 | (value >> 6));
+        buffer[1] = (char)(0x80 | (value & 0x3F));
+        length = 2;
+    } else {
+        buffer[0] = (char)(0xE0 | (value >> 12));
+        buffer[1] = (char)(0x80 | ((value >> 6) & 0x3F));
+        buffer[2] = (char)(0x80 | (value & 0x3F));
+        length = 3;
+    }
+    buffer[length] = '\0';
+    return (mj2x_ref)(*env)->NewStringUTF(env, buffer);
 }

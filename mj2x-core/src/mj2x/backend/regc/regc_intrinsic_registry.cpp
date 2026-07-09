@@ -299,10 +299,10 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "static int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref jstr, int32_t radix);\n";
     out << "static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref jstr);\n";
     out << "static int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref jstr, int32_t radix);\n";
-    out << "static mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, int32_t value);\n";
-    out << "static mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, int64_t value);\n";
-    out << "static mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value);\n";
-    out << "static mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t value);\n";
+    out << "mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, int32_t value);\n";
+    out << "mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, int64_t value);\n";
+    out << "mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value);\n";
+    out << "mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t value);\n";
     out << "static mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* context, float value);\n";
     out << "static mj2x_ref _mj2x_intrinsic_double_to_string(mj2x_regc_context* context, double value);\n";
     out << "static mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, mj2x_ref value);\n";
@@ -310,8 +310,8 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);\n";
     out << "int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs);\n";
     out << "int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs);\n";
-    out << "static int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs);\n";
-    out << "static int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs);\n";
+    out << "int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs);\n";
+    out << "int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs);\n";
     out << "int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs);\n";
     out << "int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n";

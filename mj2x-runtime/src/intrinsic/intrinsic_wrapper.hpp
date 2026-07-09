@@ -157,6 +157,12 @@ std::int32_t _mj2x_intrinsic_byte_compare(std::int8_t lhs, std::int8_t rhs);
 /// @brief `Short.compare(short, short)`.
 std::int32_t _mj2x_intrinsic_short_compare(std::int16_t lhs, std::int16_t rhs);
 
+/// @brief `Float.compare(float, float)`.
+std::int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs);
+
+/// @brief `Double.compare(double, double)`.
+std::int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs);
+
 /// @brief `Boolean.compare(boolean, boolean)`.
 std::int32_t _mj2x_intrinsic_bool_compare(std::int8_t lhs, std::int8_t rhs);
 

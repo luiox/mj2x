@@ -57,8 +57,15 @@ int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs);
 int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);
 int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs);
 int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs);
+int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs);
+int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs);
 int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs);
 int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs);
+
+mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, int32_t value);
+mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, int64_t value);
+mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value);
+mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t value);
 
 #ifdef __cplusplus
 }

@@ -84,6 +84,18 @@ TEST(IntrinsicWrapperTest, PrimitiveCompareMatchesJdkWrapperRules) {
     EXPECT_EQ(_mj2x_intrinsic_short_compare(static_cast<std::int16_t>(300),
                                             static_cast<std::int16_t>(-20)),
               320);
+    EXPECT_EQ(_mj2x_intrinsic_float_compare(-0.0f, 0.0f), -1);
+    EXPECT_EQ(_mj2x_intrinsic_float_compare(0.0f, -0.0f), 1);
+    EXPECT_EQ(_mj2x_intrinsic_float_compare(std::numeric_limits<float>::quiet_NaN(), 1.0f), 1);
+    EXPECT_EQ(_mj2x_intrinsic_float_compare(std::numeric_limits<float>::quiet_NaN(),
+                                            std::numeric_limits<float>::quiet_NaN()),
+              0);
+    EXPECT_EQ(_mj2x_intrinsic_double_compare(-0.0, 0.0), -1);
+    EXPECT_EQ(_mj2x_intrinsic_double_compare(0.0, -0.0), 1);
+    EXPECT_EQ(_mj2x_intrinsic_double_compare(std::numeric_limits<double>::quiet_NaN(), 1.0), 1);
+    EXPECT_EQ(_mj2x_intrinsic_double_compare(std::numeric_limits<double>::quiet_NaN(),
+                                             std::numeric_limits<double>::quiet_NaN()),
+              0);
     EXPECT_EQ(_mj2x_intrinsic_bool_compare(0, 1), -1);
     EXPECT_EQ(_mj2x_intrinsic_bool_compare(42, 1), 0);
     EXPECT_EQ(_mj2x_intrinsic_char_compare(static_cast<std::uint16_t>('B'),

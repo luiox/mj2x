@@ -1,6 +1,13 @@
 #include "intrinsic/intrinsic_wrapper.hpp"
+#include "regc/regc_runtime_abi.hpp"
 
 #include <cstddef>
+#include <cstdio>
+#include <cstring>
+
+#ifdef MJ2X_RUNTIME_WITH_JNI
+#include <jni.h>
+#endif
 
 namespace {
 
@@ -125,12 +132,114 @@ std::int32_t _mj2x_intrinsic_short_compare(std::int16_t lhs, std::int16_t rhs) {
     return static_cast<std::int32_t>(lhs) - static_cast<std::int32_t>(rhs);
 }
 
+std::int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs) {
+    if (lhs < rhs) return -1;
+    if (lhs > rhs) return 1;
+    std::uint32_t lhsBits;
+    std::uint32_t rhsBits;
+    std::memcpy(&lhsBits, &lhs, sizeof(lhsBits));
+    std::memcpy(&rhsBits, &rhs, sizeof(rhsBits));
+    if ((lhsBits & 0x7fffffffU) > 0x7f800000U) lhsBits = 0x7fc00000U;
+    if ((rhsBits & 0x7fffffffU) > 0x7f800000U) rhsBits = 0x7fc00000U;
+    if (lhsBits == rhsBits) return 0;
+    return static_cast<std::int32_t>(lhsBits) < static_cast<std::int32_t>(rhsBits) ? -1 : 1;
+}
+
+std::int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs) {
+    if (lhs < rhs) return -1;
+    if (lhs > rhs) return 1;
+    std::uint64_t lhsBits;
+    std::uint64_t rhsBits;
+    std::memcpy(&lhsBits, &lhs, sizeof(lhsBits));
+    std::memcpy(&rhsBits, &rhs, sizeof(rhsBits));
+    if ((lhsBits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL) {
+        lhsBits = 0x7ff8000000000000ULL;
+    }
+    if ((rhsBits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL) {
+        rhsBits = 0x7ff8000000000000ULL;
+    }
+    if (lhsBits == rhsBits) return 0;
+    return static_cast<std::int64_t>(lhsBits) < static_cast<std::int64_t>(rhsBits) ? -1 : 1;
+}
+
 std::int32_t _mj2x_intrinsic_bool_compare(std::int8_t lhs, std::int8_t rhs) {
     return ((lhs != 0) > (rhs != 0)) - ((lhs != 0) < (rhs != 0));
 }
 
 std::int32_t _mj2x_intrinsic_char_compare(std::uint16_t lhs, std::uint16_t rhs) {
     return static_cast<std::int32_t>(lhs) - static_cast<std::int32_t>(rhs);
+}
+
+void* _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, std::int32_t value) {
+#ifdef MJ2X_RUNTIME_WITH_JNI
+    auto* env = context == nullptr ? nullptr : static_cast<JNIEnv*>(context->env);
+    if (env == nullptr) return nullptr;
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "%d", value);
+    return env->NewStringUTF(buffer);
+#else
+    (void)context;
+    (void)value;
+    return nullptr;
+#endif
+}
+
+void* _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, std::int64_t value) {
+#ifdef MJ2X_RUNTIME_WITH_JNI
+    auto* env = context == nullptr ? nullptr : static_cast<JNIEnv*>(context->env);
+    if (env == nullptr) return nullptr;
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%lld", static_cast<long long>(value));
+    return env->NewStringUTF(buffer);
+#else
+    (void)context;
+    (void)value;
+    return nullptr;
+#endif
+}
+
+void* _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, std::int8_t value) {
+#ifdef MJ2X_RUNTIME_WITH_JNI
+    auto* env = context == nullptr ? nullptr : static_cast<JNIEnv*>(context->env);
+    if (env == nullptr) return nullptr;
+    return env->NewStringUTF(value ? "true" : "false");
+#else
+    (void)context;
+    (void)value;
+    return nullptr;
+#endif
+}
+
+void* _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, std::uint16_t value) {
+#ifdef MJ2X_RUNTIME_WITH_JNI
+    auto* env = context == nullptr ? nullptr : static_cast<JNIEnv*>(context->env);
+    if (env == nullptr) return nullptr;
+    char buffer[4];
+    std::int32_t length = 0;
+    if (value == 0) {
+        buffer[0] = static_cast<char>(0xC0);
+        buffer[1] = static_cast<char>(0x80);
+        length = 2;
+    } else if (value <= 0x7F) {
+        buffer[0] = static_cast<char>(value);
+        length = 1;
+    } else if (value <= 0x7FF) {
+        buffer[0] = static_cast<char>(0xC0 | (value >> 6));
+        buffer[1] = static_cast<char>(0x80 | (value & 0x3F));
+        length = 2;
+    } else {
+        buffer[0] = static_cast<char>(0xE0 | (value >> 12));
+        buffer[1] = static_cast<char>(0x80 | ((value >> 6) & 0x3F));
+        buffer[2] = static_cast<char>(0x80 | (value & 0x3F));
+        length = 3;
+    }
+    buffer[length] = '\0';
+    return env->NewStringUTF(buffer);
+#else
+    (void)context;
+    (void)value;
+    return nullptr;
+#endif
 }
 
 }  // extern "C"
