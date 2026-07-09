@@ -1,6 +1,8 @@
 param(
     [int]$Runs = 5,
-    [string]$InputJar = "test/java_obfuscator_test/TEST.jar",
+    [string]$InputJar = "",
+    [string]$FixtureSourceDir = "mj2x/test_resource/benchmark/java_obfuscator_style/src",
+    [string]$MainClass = "pack.Main",
     [string]$WorkDir = "test/java_obfuscator_test/benchmark-current"
 )
 
@@ -32,6 +34,49 @@ function Run-ProcessChecked([string]$FilePath, [string[]]$Arguments, [string]$Wo
         throw "$FilePath exited with $exitCode. See $LogPath"
     }
     return $text
+}
+
+function Ensure-JdkTools() {
+    if ([string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
+        throw "JAVA_HOME is not set"
+    }
+    $jdkBin = Join-Path $env:JAVA_HOME "bin"
+    if (Test-Path $jdkBin) {
+        $paths = $env:PATH -split [System.IO.Path]::PathSeparator
+        if ($paths -notcontains $jdkBin) {
+            $env:PATH = $jdkBin + [System.IO.Path]::PathSeparator + $env:PATH
+        }
+    }
+    foreach ($tool in @("java", "javac", "jar")) {
+        if (!(Get-Command $tool -ErrorAction SilentlyContinue)) {
+            throw "$tool was not found. Ensure JAVA_HOME points at a JDK and JAVA_HOME/bin is on PATH."
+        }
+    }
+}
+
+function Build-FixtureJar([string]$SourceDir, [string]$JarPath, [string]$ClassName, [string]$BuildDir) {
+    if (!(Test-Path $SourceDir)) {
+        throw "Fixture source dir not found: $SourceDir"
+    }
+
+    $classesDir = Join-Path $BuildDir "classes"
+    New-Item -ItemType Directory -Force -Path $classesDir | Out-Null
+
+    $sourceList = Join-Path $BuildDir "sources.txt"
+    $sources = Get-ChildItem -LiteralPath $SourceDir -Recurse -File -Filter "*.java" |
+        Sort-Object FullName |
+        ForEach-Object { $_.FullName }
+    if ($sources.Count -eq 0) {
+        throw "No Java sources found under $SourceDir"
+    }
+    Set-Content -Path $sourceList -Value $sources -Encoding UTF8
+
+    Run-ProcessChecked "javac" @("-encoding", "UTF-8", "-d", $classesDir, "@$sourceList") `
+        $BuildDir (Join-Path $BuildDir "javac.log") | Out-Null
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $JarPath) | Out-Null
+    Run-ProcessChecked "jar" @("--create", "--file", $JarPath, "--main-class", $ClassName, "-C", $classesDir, ".") `
+        $BuildDir (Join-Path $BuildDir "jar-create.log") | Out-Null
 }
 
 function Measure-JarRun([string]$JarPath, [string]$Case, [int]$Run, [string]$RunDir) {
@@ -105,8 +150,14 @@ function Embed-NativeLibrary([string]$JarPath, [string]$NativeLibrary, [string]$
 }
 
 $repo = Get-Location
-$inputJarPath = Resolve-RepoPath $InputJar
+$fixtureSourcePath = Resolve-RepoPath $FixtureSourceDir
 $workDirPath = Resolve-RepoPath $WorkDir
+$fixtureBuildDir = Join-Path $workDirPath "fixture-build"
+$inputJarPath = if ([string]::IsNullOrWhiteSpace($InputJar)) {
+    Join-Path $fixtureBuildDir "TEST.jar"
+} else {
+    Resolve-RepoPath $InputJar
+}
 $baselineDir = Join-Path $workDirPath "baseline"
 $regcDir = Join-Path $workDirPath "regc-full-xmake"
 $projectDir = Join-Path $regcDir "native_project"
@@ -114,15 +165,17 @@ $outJar = Join-Path $regcDir "TEST-regc-full-xmake.jar"
 $csvPath = Join-Path $workDirPath "perf-results.csv"
 $summaryPath = Join-Path $workDirPath "summary.txt"
 
-if (!(Test-Path $inputJarPath)) {
+Remove-Item -Recurse -Force $workDirPath -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $baselineDir, $regcDir, $fixtureBuildDir | Out-Null
+
+Ensure-JdkTools
+
+if ([string]::IsNullOrWhiteSpace($InputJar)) {
+    Build-FixtureJar $fixtureSourcePath $inputJarPath $MainClass $fixtureBuildDir
+}
+elseif (!(Test-Path $inputJarPath)) {
     throw "Input jar not found: $inputJarPath"
 }
-if ([string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
-    throw "JAVA_HOME is not set"
-}
-
-Remove-Item -Recurse -Force $workDirPath -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $baselineDir, $regcDir | Out-Null
 
 Run-ProcessChecked "xmake" @("build", "-P", $repo.Path, "mj2x-cli") $repo.Path (Join-Path $workDirPath "build-mj2x-cli.log") | Out-Null
 $cli = Find-Cli
@@ -160,10 +213,16 @@ $baselineAvg = ($rows | Where-Object { $_.Case -eq "baseline" -and $_.CalcMs -ne
 $regcAvg = ($rows | Where-Object { $_.Case -eq "regc-full-xmake" -and $_.CalcMs -ne "" } |
     Measure-Object -Property CalcMs -Average).Average
 $ratio = if ($baselineAvg -and $regcAvg) { $regcAvg / $baselineAvg } else { 0 }
+$javaVersion = ((Run-ProcessChecked "java" @("-version") $repo.Path (Join-Path $workDirPath "java-version.log")) -split "`r?`n")[0]
+$gitCommit = (Run-ProcessChecked "git" @("rev-parse", "--short", "HEAD") $repo.Path (Join-Path $workDirPath "git-rev.log")).Trim()
 
 $summary = @(
     "input=$inputJarPath",
+    "fixture_source=$fixtureSourcePath",
+    "main_class=$MainClass",
     "runs=$Runs",
+    "git_commit=$gitCommit",
+    "java_version=$javaVersion",
     "generate_ms=$([int64]$generateSw.ElapsedMilliseconds)",
     "native_build_ms=$([int64]$buildSw.ElapsedMilliseconds)",
     "baseline_calc_avg_ms=$([math]::Round($baselineAvg, 2))",
