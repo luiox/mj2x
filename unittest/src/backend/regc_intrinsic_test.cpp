@@ -388,6 +388,13 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
     EXPECT_EQ(appendCharDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendCharDecision.symbol, "_mj2x_intrinsic_string_builder_append_char");
 
+    append.method.desc = "([C)Ljava/lang/StringBuilder;";
+    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
+    auto appendCharsDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
+    EXPECT_EQ(appendCharsDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(appendCharsDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
+    EXPECT_EQ(appendCharsDecision.symbol, "_mj2x_intrinsic_string_builder_append_chars");
+
     append.method.desc = "(F)Ljava/lang/StringBuilder;";
     append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F32});
     auto appendFloatDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
@@ -1319,12 +1326,12 @@ TEST(RegCIntrinsicTest, EscapingRandomStateFailsClosedWithReason)
 TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
 {
     std::string reason;
-    // static String build(String s, int x, Object o, CharSequence cs, float f, double d) {
-    //   return new StringBuilder().append(s).append(x).append(7L).append(true).append('!').append(f).append(d).append(o).append(cs).toString();
+    // static String build(String s, int x, Object o, CharSequence cs, float f, double d, char[] chars) {
+    //   return new StringBuilder().append(s).append(x).append(7L).append(true).append('!').append(chars).append(f).append(d).append(o).append(cs).toString();
     // }
     auto result = emitRegC(
         "buildString",
-        "(Ljava/lang/String;ILjava/lang/Object;Ljava/lang/CharSequence;FD)Ljava/lang/String;",
+        "(Ljava/lang/String;ILjava/lang/Object;Ljava/lang/CharSequence;FD[C)Ljava/lang/String;",
         {
             new TypeInsnNode(Opcodes::NEW, U("java/lang/StringBuilder")),
             new InsnNode(Opcodes::DUP),
@@ -1360,6 +1367,12 @@ TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
                                U("append"),
                                U("(C)Ljava/lang/StringBuilder;"),
                                false),
+            new VarInsnNode(Opcodes::ALOAD, 7),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/StringBuilder"),
+                               U("append"),
+                               U("([C)Ljava/lang/StringBuilder;"),
+                               false),
             new VarInsnNode(Opcodes::FLOAD, 4),
             new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
                                U("java/lang/StringBuilder"),
@@ -1392,7 +1405,7 @@ TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
             new InsnNode(Opcodes::ARETURN),
         },
         6,
-        7,
+        8,
         reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
@@ -1414,6 +1427,9 @@ TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
               std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_builder_append_char(&native_r"),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_builder_append_chars(&native_r"),
               std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_builder_append_float(&native_r"),

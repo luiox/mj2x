@@ -710,6 +710,9 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static String stringBuilderCharSequence(CharSequence value) {\n"
         "    return new StringBuilder().append(value).toString();\n"
         "  }\n"
+        "  public static String stringBuilderChars(char[] value) {\n"
+        "    return new StringBuilder().append(value).toString();\n"
+        "  }\n"
         "  public static String stringBuilderFloat(float value) {\n"
         "    return new StringBuilder().append(value).toString();\n"
         "  }\n"
@@ -789,6 +792,7 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"stringBuilderObject(null)", "RegCIntrinsic.stringBuilderObject(null)"},
             {"stringBuilderCharSequence(new StringBuilder(\"seq\"))", "RegCIntrinsic.stringBuilderCharSequence(new StringBuilder(\"seq\"))"},
             {"stringBuilderCharSequence(null)", "RegCIntrinsic.stringBuilderCharSequence(null)"},
+            {"stringBuilderChars(new char[]{'A','\\u4e2d','!'})", "RegCIntrinsic.stringBuilderChars(new char[]{'A','\\u4e2d','!'})"},
             {"stringBuilderFloat(1.25f)", "RegCIntrinsic.stringBuilderFloat(1.25f)"},
             {"stringBuilderFloat(-0.0f)", "RegCIntrinsic.stringBuilderFloat(-0.0f)"},
             {"stringBuilderDouble(1.25d)", "RegCIntrinsic.stringBuilderDouble(1.25d)"},
@@ -877,6 +881,8 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_builder_append_bool("), std::string::npos)
         << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_builder_append_char("), std::string::npos)
+        << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_builder_append_chars("), std::string::npos)
         << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_builder_append_float("), std::string::npos)
         << generatedC;

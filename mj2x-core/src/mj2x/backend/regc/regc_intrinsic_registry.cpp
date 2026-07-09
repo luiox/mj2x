@@ -200,6 +200,10 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      "_mj2x_intrinsic_string_builder_append_char",
      RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
      false, 2, false},
+    {"java/lang/StringBuilder", "append", "([C)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_chars",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
     {"java/lang/StringBuilder", "append", "(F)Ljava/lang/StringBuilder;",
      "_mj2x_intrinsic_string_builder_append_float",
      RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
@@ -367,6 +371,7 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "static void _mj2x_intrinsic_string_builder_append_long(mj2x_string_builder* state, int64_t value);\n";
     out << "static void _mj2x_intrinsic_string_builder_append_bool(mj2x_string_builder* state, bool value);\n";
     out << "static void _mj2x_intrinsic_string_builder_append_char(mj2x_string_builder* state, uint16_t value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_chars(mj2x_string_builder* state, mj2x_ref value);\n";
     out << "static void _mj2x_intrinsic_string_builder_append_float(mj2x_string_builder* state, float value);\n";
     out << "static void _mj2x_intrinsic_string_builder_append_double(mj2x_string_builder* state, double value);\n";
     out << "static mj2x_ref _mj2x_intrinsic_string_builder_to_string(mj2x_string_builder* state);\n";

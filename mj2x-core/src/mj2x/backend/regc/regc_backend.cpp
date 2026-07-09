@@ -1084,6 +1084,25 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    }\n";
     out << "    _mj2x_intrinsic_string_builder_append_raw(state, buffer, length);\n";
     out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_chars(mj2x_string_builder* state, "
+           "mj2x_ref value) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"StringBuilder.append(char[])\"); "
+           "return; }\n";
+    out << "    jsize length = (*_mj2x_regc_env)->GetArrayLength(_mj2x_regc_env, "
+           "(jarray)value);\n";
+    out << "    jchar chunk[128];\n";
+    out << "    for (jsize offset = 0; offset < length; offset += (jsize)128) {\n";
+    out << "        jsize count = length - offset;\n";
+    out << "        if (count > (jsize)128) count = (jsize)128;\n";
+    out << "        (*_mj2x_regc_env)->GetCharArrayRegion(_mj2x_regc_env, (jcharArray)value, "
+           "offset, count, chunk);\n";
+    out << "        if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return;\n";
+    out << "        for (jsize i = 0; i < count; ++i) {\n";
+    out << "            _mj2x_intrinsic_string_builder_append_char(state, (uint16_t)chunk[i]);\n";
+    out << "            if (state == NULL || state->overflow) return;\n";
+    out << "        }\n";
+    out << "    }\n";
+    out << "}\n\n";
     out << "static void _mj2x_intrinsic_string_builder_append_float(mj2x_string_builder* state, "
            "float value) {\n";
     out << "    jmethodID value_of = _mj2x_regc_cached_static_method(&"
