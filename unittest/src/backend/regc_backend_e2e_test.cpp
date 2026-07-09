@@ -627,6 +627,12 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static long parseLongArg(String s) { return Long.parseLong(s); }\n"
         "  public static String intString(int x) { return Integer.toString(x); }\n"
         "  public static String longString(long x) { return Long.toString(x); }\n"
+        "  public static String byteString(byte x) { return Byte.toString(x); }\n"
+        "  public static String shortString(short x) { return Short.toString(x); }\n"
+        "  public static String boolString(boolean x) { return Boolean.toString(x); }\n"
+        "  public static String charString(char x) { return Character.toString(x); }\n"
+        "  public static String floatString(float x) { return Float.toString(x); }\n"
+        "  public static String doubleString(double x) { return Double.toString(x); }\n"
         "  public static int intCompare(int a, int b) { return Integer.compare(a, b); }\n"
         "  public static int longCompare(long a, long b) { return Long.compare(a, b); }\n"
         "  public static double sinDemo(double x) { return Math.sin(x); }\n"
@@ -686,6 +692,15 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"parseLongArg(\"-1234567890123\")", "RegCIntrinsic.parseLongArg(\"-1234567890123\")"},
             {"intString(-42)", "RegCIntrinsic.intString(-42)"},
             {"longString(1234567890123L)", "RegCIntrinsic.longString(1234567890123L)"},
+            {"byteString((byte)-7)", "RegCIntrinsic.byteString((byte)-7)"},
+            {"shortString((short)1234)", "RegCIntrinsic.shortString((short)1234)"},
+            {"boolString(true)", "RegCIntrinsic.boolString(true)"},
+            {"boolString(false)", "RegCIntrinsic.boolString(false)"},
+            {"charString('Z')", "RegCIntrinsic.charString('Z')"},
+            {"floatString(1.25f)", "RegCIntrinsic.floatString(1.25f)"},
+            {"floatString(-0.0f)", "RegCIntrinsic.floatString(-0.0f)"},
+            {"doubleString(1.25d)", "RegCIntrinsic.doubleString(1.25d)"},
+            {"doubleString(Double.NaN)", "RegCIntrinsic.doubleString(Double.NaN)"},
             {"intCompare(3, 7)", "RegCIntrinsic.intCompare(3, 7)"},
             {"intCompare(9, 4)", "RegCIntrinsic.intCompare(9, 4)"},
             {"longCompare(9L, 9L)", "RegCIntrinsic.longCompare(9L, 9L)"},
@@ -813,6 +828,24 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
               std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Long\", \"toString\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Byte\", \"toString\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Short\", \"toString\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Boolean\", \"toString\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Character\", \"toString\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Float\", \"toString\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/Double\", \"toString\""),
               std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"compare\""),

@@ -173,6 +173,42 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperValueOfAndUnbox)
     EXPECT_EQ(unboxDecision.symbol, "mj2x_int_int_value");
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesWrapperToStringIntrinsics)
+{
+    auto byteToString = makeStaticCall("java/lang/Byte",
+                                       "toString",
+                                       "(B)Ljava/lang/String;",
+                                       {
+                                           RegOperand::fromInt(7, SSAType::I32),
+                                       });
+    auto byteDecision = RegCIntrinsicRegistry::builtins().matchCall(byteToString);
+    EXPECT_EQ(byteDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(byteDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(byteDecision.symbol, "_mj2x_intrinsic_int_to_string");
+
+    auto boolToString = makeStaticCall("java/lang/Boolean",
+                                       "toString",
+                                       "(Z)Ljava/lang/String;",
+                                       {
+                                           RegOperand::fromInt(1, SSAType::BOOL),
+                                       });
+    auto boolDecision = RegCIntrinsicRegistry::builtins().matchCall(boolToString);
+    EXPECT_EQ(boolDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(boolDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(boolDecision.symbol, "_mj2x_intrinsic_bool_to_string");
+
+    auto doubleToString = makeStaticCall("java/lang/Double",
+                                         "toString",
+                                         "(D)Ljava/lang/String;",
+                                         {
+                                             RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}),
+                                         });
+    auto doubleDecision = RegCIntrinsicRegistry::builtins().matchCall(doubleToString);
+    EXPECT_EQ(doubleDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(doubleDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(doubleDecision.symbol, "_mj2x_intrinsic_double_to_string");
+}
+
 TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
 {
     RegInstruction init;
@@ -728,6 +764,98 @@ TEST(RegCIntrinsicTest, WrapperParseCompareToStringLoweredToIntrinsicsNotJni)
               std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Long\", \"compare\""),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCIntrinsicTest, MoreWrapperToStringLoweredToIntrinsicsNotJni)
+{
+    std::string reason;
+    // static int wrappers(byte b, short s, boolean z, char c, float f, double d) {
+    //   Byte.toString(b); Short.toString(s); Boolean.toString(z); Character.toString(c);
+    //   Float.toString(f); Double.toString(d); return 0;
+    // }
+    auto result = emitRegC(
+        "moreWrapperStrings",
+        "(BSZCFD)I",
+        {
+            new VarInsnNode(Opcodes::ILOAD, 0),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Byte"),
+                               U("toString"),
+                               U("(B)Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::POP),
+            new VarInsnNode(Opcodes::ILOAD, 1),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Short"),
+                               U("toString"),
+                               U("(S)Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::POP),
+            new VarInsnNode(Opcodes::ILOAD, 2),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Boolean"),
+                               U("toString"),
+                               U("(Z)Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::POP),
+            new VarInsnNode(Opcodes::ILOAD, 3),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Character"),
+                               U("toString"),
+                               U("(C)Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::POP),
+            new VarInsnNode(Opcodes::FLOAD, 4),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Float"),
+                               U("toString"),
+                               U("(F)Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::POP),
+            new VarInsnNode(Opcodes::DLOAD, 5),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Double"),
+                               U("toString"),
+                               U("(D)Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::POP),
+            new InsnNode(Opcodes::ICONST_0),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        2,
+        7,
+        reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_int_to_string("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_bool_to_string("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_char_to_string("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_float_to_string("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_double_to_string("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Byte\", \"toString\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Short\", \"toString\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Boolean\", \"toString\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Character\", \"toString\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Float\", \"toString\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Double\", \"toString\""),
               std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
