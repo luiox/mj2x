@@ -38,6 +38,7 @@ file, copied Java source, and a per-sample trace note.
 - mjdbg should expect JNI calls such as class/method/field lookup, object/array
   allocation, field get/set, array region access, `IsInstanceOf`, and
   `NewStringUTF`.
+- Source-side gate note: `StackCObjectArraySample/TRACE_SURFACE.md`.
 
 `StackCExceptionMonitorSample`
 

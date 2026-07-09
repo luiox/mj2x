@@ -170,6 +170,7 @@ void writeTraceNote(const fs::path& outDir, const SampleSpec& sample)
            "than per-method or per-class `Java_*` exports.\n";
     out << "- Capture Java MethodEntry/MethodExit around the public entry methods.\n";
     out << "- Capture native/JNI activity inside the generated StackCBackend implementation.\n";
+    out << "- Expect JNI lookup, invoke, field, array, and string surfaces when the sample uses them.\n";
     out << "- Use observations to draft weakness reports for mj2x hardening.\n";
 }
 
