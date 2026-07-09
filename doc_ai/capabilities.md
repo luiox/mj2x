@@ -107,8 +107,8 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 **JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
 
 - `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
-- `java.lang.Integer.parseInt(String)`:native strtol 解析,NumberFormatException 经 context 回调路由
-- `java.lang.Long.parseLong(String)`:native strtoll 解析,NumberFormatException 经 context 回调路由
+- `java.lang.Integer.parseInt(String[,radix])`:native digit parser 解析,NumberFormatException 经 context 回调路由
+- `java.lang.Long.parseLong(String[,radix])`:native digit parser 解析,NumberFormatException 经 context 回调路由
 - `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Boolean/Character.compare`:RegC local helper 生成字符串或比较结果;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式
 - `java.lang.String.valueOf(int|long|boolean|char|float|double|Object)`:RegC local helper 覆盖常见值转字符串;`float|double` 和 `Object` 通过缓存的 JDK methodID 保持浮点格式和虚分派语义
 - String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
@@ -147,7 +147,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
 | Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random) | ✅ runtime + emitter 识别 |
-| Integer.parseInt / Long.parseLong / wrapper toString / wrapper compare intrinsic | ✅ emitter 内联 RegC local helper + E2E |
+| Integer.parseInt / Long.parseLong radix overloads / wrapper toString / wrapper compare intrinsic | ✅ emitter 内联 RegC local helper + E2E |
 | 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime + RegC 非逃逸 value/unbox;逃逸 fail-closed |
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
 | String intrinsic 最小 UTF-16 view 垫片(length/charAt/status) + RegC String read hot paths | ✅ runtime 单测 + RegC emitter/结构测试 + native E2E |

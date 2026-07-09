@@ -144,6 +144,35 @@ TEST(RegCIntrinsicRegistryTest, MalformedIntrinsicArgumentCountIsUnsupported)
               std::string::npos);
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesParseRadixIntrinsics)
+{
+    auto parseInt = makeStaticCall("java/lang/Integer",
+                                   "parseInt",
+                                   "(Ljava/lang/String;I)I",
+                                   {
+                                       RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+                                       RegOperand::fromInt(16, SSAType::I32),
+                                   });
+    auto intDecision = RegCIntrinsicRegistry::builtins().matchCall(parseInt);
+    EXPECT_EQ(intDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(intDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(intDecision.symbol, "_mj2x_intrinsic_parse_int_radix");
+    EXPECT_TRUE(intDecision.passContext);
+
+    auto parseLong = makeStaticCall("java/lang/Long",
+                                    "parseLong",
+                                    "(Ljava/lang/String;I)J",
+                                    {
+                                        RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+                                        RegOperand::fromInt(36, SSAType::I32),
+                                    });
+    auto longDecision = RegCIntrinsicRegistry::builtins().matchCall(parseLong);
+    EXPECT_EQ(longDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(longDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(longDecision.symbol, "_mj2x_intrinsic_parse_long_radix");
+    EXPECT_TRUE(longDecision.passContext);
+}
+
 TEST(RegCIntrinsicRegistryTest, MatchesWrapperValueOfAndUnbox)
 {
     auto valueOf       = makeStaticCall("java/lang/Integer",
@@ -524,6 +553,52 @@ TEST(RegCIntrinsicTest, IntegerParseIntLoweredToIntrinsicNotJni)
     EXPECT_NE(result.source.find("_mj2x_intrinsic_parse_int("), std::string::npos) << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\""), std::string::npos)
         << result.source;
+}
+
+TEST(RegCIntrinsicTest, ParseRadixLoweredToIntrinsicNotJni)
+{
+    std::string reason;
+    // static long parseRadix(String i, String l) {
+    //   return Integer.parseInt(i, 16) + Long.parseLong(l, 36);
+    // }
+    auto result = emitRegC(
+        "parseRadix",
+        "(Ljava/lang/String;Ljava/lang/String;)J",
+        {
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new IntInsnNode(Opcodes::BIPUSH, 16),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Integer"),
+                               U("parseInt"),
+                               U("(Ljava/lang/String;I)I"),
+                               false),
+            new InsnNode(Opcodes::I2L),
+            new VarInsnNode(Opcodes::ALOAD, 1),
+            new IntInsnNode(Opcodes::BIPUSH, 36),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Long"),
+                               U("parseLong"),
+                               U("(Ljava/lang/String;I)J"),
+                               false),
+            new InsnNode(Opcodes::LADD),
+            new InsnNode(Opcodes::LRETURN),
+        },
+        3,
+        2,
+        reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_parse_int_radix("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_parse_long_radix("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"parseInt\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i64(\"java/lang/Long\", \"parseLong\""),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
 }
 
 TEST(RegCIntrinsicTest, StringMethodsLoweredToIntrinsicsNotJni)

@@ -63,6 +63,9 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::RuntimeFunction, RegCIntrinsicNativeObjectKind::None, false, 0, true},
     {"java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", "_mj2x_intrinsic_parse_int",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Integer", "parseInt", "(Ljava/lang/String;I)I",
+     "_mj2x_intrinsic_parse_int_radix",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 2, true},
     {"java/lang/Integer", "toString", "(I)Ljava/lang/String;", "_mj2x_intrinsic_int_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
     {"java/lang/Integer", "compare", "(II)I", "_mj2x_intrinsic_int_compare",
@@ -77,6 +80,9 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::WrapperUnbox, RegCIntrinsicNativeObjectKind::Long, false, 1, false},
     {"java/lang/Long", "parseLong", "(Ljava/lang/String;)J", "_mj2x_intrinsic_parse_long",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Long", "parseLong", "(Ljava/lang/String;I)J",
+     "_mj2x_intrinsic_parse_long_radix",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 2, true},
     {"java/lang/Long", "toString", "(J)Ljava/lang/String;", "_mj2x_intrinsic_long_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
     {"java/lang/Long", "compare", "(JJ)I", "_mj2x_intrinsic_long_compare",
@@ -286,7 +292,9 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "#define MJ2X_REGC_INTRINSIC_ABI_DECLARED\n";
     out << "static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* utf8);\n";
     out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n";
+    out << "static int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref jstr, int32_t radix);\n";
     out << "static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref jstr);\n";
+    out << "static int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref jstr, int32_t radix);\n";
     out << "static mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, int32_t value);\n";
     out << "static mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, int64_t value);\n";
     out << "static mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value);\n";

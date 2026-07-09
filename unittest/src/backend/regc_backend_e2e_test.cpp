@@ -624,7 +624,9 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "public class RegCIntrinsic {\n"
         "  public static int parseInt42() { return Integer.parseInt(\"42\"); }\n"
         "  public static int parseIntArg(String s) { return Integer.parseInt(s); }\n"
+        "  public static int parseIntRadix(String s, int radix) { return Integer.parseInt(s, radix); }\n"
         "  public static long parseLongArg(String s) { return Long.parseLong(s); }\n"
+        "  public static long parseLongRadix(String s, int radix) { return Long.parseLong(s, radix); }\n"
         "  public static String intString(int x) { return Integer.toString(x); }\n"
         "  public static String longString(long x) { return Long.toString(x); }\n"
         "  public static String byteString(byte x) { return Byte.toString(x); }\n"
@@ -693,7 +695,11 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         {
             {"parseInt42()", "RegCIntrinsic.parseInt42()"},
             {"parseIntArg(\"-123\")", "RegCIntrinsic.parseIntArg(\"-123\")"},
+            {"parseIntRadix(\"7fffffff\", 16)", "RegCIntrinsic.parseIntRadix(\"7fffffff\", 16)"},
+            {"parseIntRadix(\"-80000000\", 16)", "RegCIntrinsic.parseIntRadix(\"-80000000\", 16)"},
             {"parseLongArg(\"-1234567890123\")", "RegCIntrinsic.parseLongArg(\"-1234567890123\")"},
+            {"parseLongRadix(\"zzzzzz\", 36)", "RegCIntrinsic.parseLongRadix(\"zzzzzz\", 36)"},
+            {"parseLongRadix(\"-8000000000000000\", 16)", "RegCIntrinsic.parseLongRadix(\"-8000000000000000\", 16)"},
             {"intString(-42)", "RegCIntrinsic.intString(-42)"},
             {"longString(1234567890123L)", "RegCIntrinsic.longString(1234567890123L)"},
             {"byteString((byte)-7)", "RegCIntrinsic.byteString((byte)-7)"},
@@ -772,7 +778,11 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("mj2x_math_abs_i32("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_math_round("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_int("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_int_radix("), std::string::npos)
+        << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_long("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_long_radix("), std::string::npos)
+        << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_int_to_string("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_long_to_string("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_bool_to_string("), std::string::npos) << generatedC;

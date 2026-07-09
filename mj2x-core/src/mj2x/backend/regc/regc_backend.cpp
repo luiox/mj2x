@@ -803,13 +803,33 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (utf8 == NULL) return NULL;\n";
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);\n";
     out << "}\n\n";
-    // Integer.parseInt intrinsic.  Reads the jstring's modified-UTF-8 bytes,
-    // parses the leading integer, and throws NumberFormatException through the
-    // context callback when the input is not a parseable int.  This is the only
-    // JNI touchpoint of parseInt: the parse itself stays in native strtol, no
-    // CallStaticIntMethod dispatch is emitted for the parseInt call site.
+    // Integer.parseInt / Long.parseLong intrinsic helpers.  Reads the jstring's
+    // modified-UTF-8 bytes and parses digits locally so radix overloads do not
+    // dispatch through CallStatic*Method.
+    out << "static int32_t _mj2x_intrinsic_digit_value(unsigned char ch) {\n";
+    out << "    if (ch >= '0' && ch <= '9') return (int32_t)(ch - '0');\n";
+    out << "    if (ch >= 'a' && ch <= 'z') return (int32_t)(ch - 'a') + 10;\n";
+    out << "    if (ch >= 'A' && ch <= 'Z') return (int32_t)(ch - 'A') + 10;\n";
+    out << "    return -1;\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_throw_number_format(mj2x_regc_context* context) {\n";
+    out << "    if (context != NULL && context->throwException != NULL) {\n";
+    out << "        context->throwException(context->env, \"java/lang/NumberFormatException\", "
+           "\"For input string\");\n";
+    out << "    }\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, "
+           "mj2x_ref jstr_ref, int32_t radix);\n";
+    out << "static int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, "
+           "mj2x_ref jstr_ref, int32_t radix);\n\n";
     out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref "
            "jstr_ref) {\n";
+    out << "    return _mj2x_intrinsic_parse_int_radix(context, jstr_ref, 10);\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, "
+           "mj2x_ref jstr_ref, int32_t radix) {\n";
+    out << "    if (radix < 2 || radix > 36) { _mj2x_intrinsic_throw_number_format(context); "
+           "return 0; }\n";
     out << "    if (jstr_ref == NULL) {\n";
     out << "        if (context != NULL && context->throwException != NULL) {\n";
     out << "            context->throwException(context->env, \"java/lang/NullPointerException\", "
@@ -820,32 +840,41 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, "
            "(jstring)jstr_ref, NULL);\n";
     out << "    if (utf == NULL) return 0;\n";
-    out << "    char* end = NULL;\n";
-    out << "    errno = 0;\n";
-    out << "    long parsed = strtol(utf, &end, 10);\n";
-    out << "    int failed = (end == utf) || (errno == ERANGE) ||\n";
-    // Use explicit casts: a bare 2147483648L literal is ill-typed on 32-bit
-    // long targets (MSVC), which would flip the range check on valid inputs.
-    out << "                 (parsed > (long)INT32_MAX) || (parsed < (long)INT32_MIN);\n";
-    // JDK Integer.parseInt rejects trailing non-digit characters too; mirror
-    // that by checking the whole string (skipping ASCII whitespace only at the
-    // leading edge, matching JDK which uses Character.isWhitespace via the
-    // leading-sign/no-trim Integer.parseInt(String) contract).
-    out << "    if (!failed) { while (*end != '\\0' && (*end == ' ' || *end == '\\t')) end++; "
-           "failed = (*end != '\\0'); }\n";
+    out << "    const unsigned char* p = (const unsigned char*)utf;\n";
+    out << "    int negative = 0;\n";
+    out << "    if (*p == '-' || *p == '+') { negative = (*p == '-'); p++; }\n";
+    out << "    uint64_t limit = negative ? 2147483648ULL : 2147483647ULL;\n";
+    out << "    uint64_t value = 0;\n";
+    out << "    int digit_count = 0;\n";
+    out << "    int failed = 0;\n";
+    out << "    while (*p != '\\0') {\n";
+    out << "        int32_t digit = _mj2x_intrinsic_digit_value(*p++);\n";
+    out << "        if (digit < 0 || digit >= radix || value > (limit - (uint64_t)digit) / "
+           "(uint64_t)radix) { failed = 1; break; }\n";
+    out << "        value = value * (uint64_t)radix + (uint64_t)digit;\n";
+    out << "        digit_count++;\n";
+    out << "    }\n";
+    out << "    if (digit_count == 0) failed = 1;\n";
     out << "    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, "
            "utf);\n";
     out << "    if (failed) {\n";
-    out << "        if (context != NULL && context->throwException != NULL) {\n";
-    out << "            context->throwException(context->env, \"java/lang/NumberFormatException\", "
-           "\"For input string\");\n";
-    out << "        }\n";
+    out << "        _mj2x_intrinsic_throw_number_format(context);\n";
     out << "        return 0;\n";
     out << "    }\n";
-    out << "    return (int32_t)parsed;\n";
+    out << "    if (negative) {\n";
+    out << "        if (value == 2147483648ULL) return (int32_t)INT32_MIN;\n";
+    out << "        return -(int32_t)value;\n";
+    out << "    }\n";
+    out << "    return (int32_t)value;\n";
     out << "}\n\n";
     out << "static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref "
            "jstr_ref) {\n";
+    out << "    return _mj2x_intrinsic_parse_long_radix(context, jstr_ref, 10);\n";
+    out << "}\n\n";
+    out << "static int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, "
+           "mj2x_ref jstr_ref, int32_t radix) {\n";
+    out << "    if (radix < 2 || radix > 36) { _mj2x_intrinsic_throw_number_format(context); "
+           "return 0; }\n";
     out << "    if (jstr_ref == NULL) {\n";
     out << "        if (context != NULL && context->throwException != NULL) {\n";
     out << "            context->throwException(context->env, \"java/lang/NullPointerException\", "
@@ -856,23 +885,32 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, "
            "(jstring)jstr_ref, NULL);\n";
     out << "    if (utf == NULL) return 0;\n";
-    out << "    char* end = NULL;\n";
-    out << "    errno = 0;\n";
-    out << "    long long parsed = strtoll(utf, &end, 10);\n";
-    out << "    int failed = (end == utf) || (errno == ERANGE) ||\n";
-    out << "                 (parsed > (long long)INT64_MAX) || (parsed < (long long)INT64_MIN);\n";
-    out << "    if (!failed) { while (*end != '\\0' && (*end == ' ' || *end == '\\t')) end++; "
-           "failed = (*end != '\\0'); }\n";
+    out << "    const unsigned char* p = (const unsigned char*)utf;\n";
+    out << "    int negative = 0;\n";
+    out << "    if (*p == '-' || *p == '+') { negative = (*p == '-'); p++; }\n";
+    out << "    uint64_t limit = negative ? 9223372036854775808ULL : 9223372036854775807ULL;\n";
+    out << "    uint64_t value = 0;\n";
+    out << "    int digit_count = 0;\n";
+    out << "    int failed = 0;\n";
+    out << "    while (*p != '\\0') {\n";
+    out << "        int32_t digit = _mj2x_intrinsic_digit_value(*p++);\n";
+    out << "        if (digit < 0 || digit >= radix || value > (limit - (uint64_t)digit) / "
+           "(uint64_t)radix) { failed = 1; break; }\n";
+    out << "        value = value * (uint64_t)radix + (uint64_t)digit;\n";
+    out << "        digit_count++;\n";
+    out << "    }\n";
+    out << "    if (digit_count == 0) failed = 1;\n";
     out << "    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, "
            "utf);\n";
     out << "    if (failed) {\n";
-    out << "        if (context != NULL && context->throwException != NULL) {\n";
-    out << "            context->throwException(context->env, \"java/lang/NumberFormatException\", "
-           "\"For input string\");\n";
-    out << "        }\n";
+    out << "        _mj2x_intrinsic_throw_number_format(context);\n";
     out << "        return 0;\n";
     out << "    }\n";
-    out << "    return (int64_t)parsed;\n";
+    out << "    if (negative) {\n";
+    out << "        if (value == 9223372036854775808ULL) return (int64_t)INT64_MIN;\n";
+    out << "        return -(int64_t)value;\n";
+    out << "    }\n";
+    out << "    return (int64_t)value;\n";
     out << "}\n\n";
     out << "static mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, "
            "int32_t value) {\n";
