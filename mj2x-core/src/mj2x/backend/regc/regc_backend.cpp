@@ -96,6 +96,7 @@ bool isCompatibilityRiskCall(const std::string& owner, const std::string& name) 
            owner == "java/lang/Thread" ||
            owner == "java/io/InputStream" ||
            owner == "java/io/ByteArrayInputStream" ||
+           (owner == "java/lang/Object" && name == "getClass") ||
            owner.rfind("java/lang/reflect/", 0) == 0 ||
            owner.rfind("java/util/concurrent/", 0) == 0 ||
            (owner == "java/lang/System" &&
@@ -105,6 +106,10 @@ bool isCompatibilityRiskCall(const std::string& owner, const std::string& name) 
 bool shouldKeepBytecodeForCompatibility(const MethodNode& method,
                                         const std::vector<Block*>& blocks,
                                         std::string& reason) {
+    if (method.name.to_std_string().rfind("lambda$", 0) == 0) {
+        reason = "lambda body remains on bytecode path for invokedynamic compatibility";
+        return true;
+    }
     if (method.tryCatchBlocks.size() > 4) {
         reason = "large exception-table method remains on bytecode path";
         return true;
@@ -589,6 +594,12 @@ BackendResult RegCBackend::compileMethod(
     const bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
 
     std::string reason;
+    if (className.find('$') != std::string::npos) {
+        reason = "inner class method remains on bytecode path for compatibility";
+        printf("[RegCBackend] Skipping %s.%s%s: %s\n",
+               className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
+        return backendResult;
+    }
     if (shouldKeepBytecodeForCompatibility(*mn, blocks, reason)) {
         printf("[RegCBackend] Skipping %s.%s%s: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
