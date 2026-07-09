@@ -43,6 +43,16 @@ void expectNoStackAnchors(const std::string& source) {
     EXPECT_EQ(source.find(" sp "), std::string::npos) << source;
 }
 
+size_t countSubstring(const std::string& text, const std::string& needle) {
+    size_t count = 0;
+    size_t pos   = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+        count++;
+        pos += needle.size();
+    }
+    return count;
+}
+
 } // namespace
 
 TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative) {
@@ -109,6 +119,184 @@ TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister) {
     EXPECT_NE(result.text.find("regc_pkg_Box_bump__I_I((mj2x_ref)(thisObject), (int32_t)(p0));"),
               std::string::npos) << result.text;
     expectNoStackAnchors(result.text);
+}
+
+TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
+    auto first = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        "first", "(Ljava/lang/Object;)I",
+        {
+            new TypeInsnNode(Opcodes::NEW,
+                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(Opcodes::POP),
+            new InsnNode(Opcodes::ICONST_1),
+            new TypeInsnNode(Opcodes::ANEWARRAY,
+                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(Opcodes::POP),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new TypeInsnNode(Opcodes::CHECKCAST,
+                             ca::str::ZUtf8StringRef::from_static("java/lang/CharSequence")),
+            new InsnNode(Opcodes::POP),
+            new FieldInsnNode(Opcodes::GETSTATIC,
+                              ca::str::ZUtf8StringRef::from_static("Foo"),
+                              ca::str::ZUtf8StringRef::from_static("sink"),
+                              ca::str::ZUtf8StringRef::from_static("I")),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               ca::str::ZUtf8StringRef::from_static("Foo"),
+                               ca::str::ZUtf8StringRef::from_static("mix"),
+                               ca::str::ZUtf8StringRef::from_static("(I)I"),
+                               false),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new FieldInsnNode(Opcodes::GETFIELD,
+                              ca::str::ZUtf8StringRef::from_static("Foo"),
+                              ca::str::ZUtf8StringRef::from_static("value"),
+                              ca::str::ZUtf8StringRef::from_static("I")),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               ca::str::ZUtf8StringRef::from_static("Foo"),
+                               ca::str::ZUtf8StringRef::from_static("bump"),
+                               ca::str::ZUtf8StringRef::from_static("()I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        2, 1);
+    auto second = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        "second", "(Ljava/lang/Object;)I",
+        {
+            new TypeInsnNode(Opcodes::NEW,
+                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(Opcodes::POP),
+            new InsnNode(Opcodes::ICONST_1),
+            new TypeInsnNode(Opcodes::ANEWARRAY,
+                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(Opcodes::POP),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new TypeInsnNode(Opcodes::CHECKCAST,
+                             ca::str::ZUtf8StringRef::from_static("java/lang/CharSequence")),
+            new InsnNode(Opcodes::POP),
+            new FieldInsnNode(Opcodes::GETSTATIC,
+                              ca::str::ZUtf8StringRef::from_static("Foo"),
+                              ca::str::ZUtf8StringRef::from_static("sink"),
+                              ca::str::ZUtf8StringRef::from_static("I")),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               ca::str::ZUtf8StringRef::from_static("Foo"),
+                               ca::str::ZUtf8StringRef::from_static("mix"),
+                               ca::str::ZUtf8StringRef::from_static("(I)I"),
+                               false),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new FieldInsnNode(Opcodes::GETFIELD,
+                              ca::str::ZUtf8StringRef::from_static("Foo"),
+                              ca::str::ZUtf8StringRef::from_static("value"),
+                              ca::str::ZUtf8StringRef::from_static("I")),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               ca::str::ZUtf8StringRef::from_static("Foo"),
+                               ca::str::ZUtf8StringRef::from_static("bump"),
+                               ca::str::ZUtf8StringRef::from_static("()I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        2, 1);
+
+    CompilerMethod firstMethod;
+    firstMethod.methodNode = first.get();
+    CompilerMethod secondMethod;
+    secondMethod.methodNode = second.get();
+    CompilerClass cls;
+    cls.methods.push_back(firstMethod);
+    cls.methods.push_back(secondMethod);
+
+    RegCBackend   backend;
+    CodeConverter firstConverter;
+    CodeConverter secondConverter;
+    auto          firstBlocks  = firstConverter.convert(*first);
+    auto          secondBlocks = secondConverter.convert(*second);
+    auto          firstResult  = backend.compileMethod("CacheOwner", cls.methods[0], firstBlocks);
+    auto          secondResult = backend.compileMethod("CacheOwner", cls.methods[1], secondBlocks);
+
+    ASSERT_EQ(firstResult.kind, BackendResult::Kind::C_SOURCE) << firstResult.text;
+    ASSERT_EQ(secondResult.kind, BackendResult::Kind::C_SOURCE) << secondResult.text;
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& source = backend.generatedSource();
+
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"sink\", \"I\", NULL, NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"value\", \"I\", NULL, NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"mix\", \"(I)I\", NULL, NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"bump\", \"()I\", NULL, NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source,
+                             "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL}"),
+              1u)
+        << source;
+    EXPECT_EQ(countSubstring(source,
+                             "{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
+              1u)
+        << source;
+    EXPECT_EQ(countSubstring(source,
+                             "{\"java/lang/String\", \"valueOf\", \"(D)Ljava/lang/String;\", NULL, NULL}"),
+              1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/CharSequence\", NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/String\", NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/NullPointerException\", NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/ClassCastException\", NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/OutOfMemoryError\", NULL}"), 1u)
+        << source;
+    EXPECT_EQ(countSubstring(source,
+                             "{\"java/lang/StringIndexOutOfBoundsException\", NULL}"),
+              1u)
+        << source;
+    EXPECT_EQ(countSubstring(source,
+                             "{\"java/lang/UnsupportedOperationException\", NULL}"),
+              1u)
+        << source;
+    EXPECT_EQ(source.find("FindClass(_mj2x_regc_env, \"java/lang/NullPointerException\")"),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("FindClass(_mj2x_regc_env, \"java/lang/ClassCastException\")"),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("FindClass(_mj2x_regc_env, \"java/lang/OutOfMemoryError\")"),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find(
+                  "FindClass(_mj2x_regc_env, \"java/lang/StringIndexOutOfBoundsException\")"),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find(
+                  "FindClass(_mj2x_regc_env, \"java/lang/UnsupportedOperationException\")"),
+              std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("_mj2x_intrinsic_string_class_cache"), std::string::npos)
+        << source;
+    EXPECT_NE(source.find("_mj2x_regc_field_cache_tu_"), std::string::npos) << source;
+    EXPECT_NE(source.find("_mj2x_regc_instance_field_cache_tu_"), std::string::npos) << source;
+    EXPECT_NE(source.find("_mj2x_regc_cache_tu_"), std::string::npos) << source;
+    EXPECT_NE(source.find("_mj2x_regc_instance_cache_tu_"), std::string::npos) << source;
+    EXPECT_NE(source.find("_mj2x_regc_class_cache_tu_"), std::string::npos) << source;
+    EXPECT_NE(source.find("_mj2x_regc_alloc_object_cached(&_mj2x_regc_class_cache_tu_"),
+              std::string::npos)
+        << source;
+    EXPECT_NE(source.find("_mj2x_regc_alloc_ref_array_cached(&_mj2x_regc_class_cache_tu_"),
+              std::string::npos)
+        << source;
+    expectNoStackAnchors(source);
 }
 
 TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative) {

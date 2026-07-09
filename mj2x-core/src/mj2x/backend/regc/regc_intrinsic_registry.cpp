@@ -63,6 +63,10 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::RuntimeFunction, RegCIntrinsicNativeObjectKind::None, false, 0, true},
     {"java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", "_mj2x_intrinsic_parse_int",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Integer", "toString", "(I)Ljava/lang/String;", "_mj2x_intrinsic_int_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Integer", "compare", "(II)I", "_mj2x_intrinsic_int_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", "mj2x_int_value_of",
      RegCIntrinsicEmitKind::WrapperValueOf, RegCIntrinsicNativeObjectKind::Int, false, 1, true},
     {"java/lang/Integer", "intValue", "()I", "mj2x_int_int_value",
@@ -71,6 +75,27 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::WrapperValueOf, RegCIntrinsicNativeObjectKind::Long, false, 1, true},
     {"java/lang/Long", "longValue", "()J", "mj2x_long_long_value",
      RegCIntrinsicEmitKind::WrapperUnbox, RegCIntrinsicNativeObjectKind::Long, false, 1, false},
+    {"java/lang/Long", "parseLong", "(Ljava/lang/String;)J", "_mj2x_intrinsic_parse_long",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Long", "toString", "(J)Ljava/lang/String;", "_mj2x_intrinsic_long_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Long", "compare", "(JJ)I", "_mj2x_intrinsic_long_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
+    {"java/lang/String", "valueOf", "(I)Ljava/lang/String;", "_mj2x_intrinsic_int_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/String", "valueOf", "(J)Ljava/lang/String;", "_mj2x_intrinsic_long_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/String", "valueOf", "(Z)Ljava/lang/String;", "_mj2x_intrinsic_bool_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/String", "valueOf", "(C)Ljava/lang/String;", "_mj2x_intrinsic_char_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/String", "valueOf", "(F)Ljava/lang/String;", "_mj2x_intrinsic_float_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/String", "valueOf", "(D)Ljava/lang/String;", "_mj2x_intrinsic_double_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;",
+     "_mj2x_intrinsic_object_to_string",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
     {"java/lang/Short", "valueOf", "(S)Ljava/lang/Short;", "mj2x_short_value_of",
      RegCIntrinsicEmitKind::WrapperValueOf, RegCIntrinsicNativeObjectKind::Short, false, 1, true},
     {"java/lang/Short", "shortValue", "()S", "mj2x_short_short_value",
@@ -109,6 +134,54 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
     {"java/util/Random", "nextDouble", "()D", "mj2x_random_next_double",
      RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
+    {"java/lang/StringBuilder", "<init>", "()V", "_mj2x_intrinsic_string_builder_init_empty",
+     RegCIntrinsicEmitKind::StringBuilderInit, RegCIntrinsicNativeObjectKind::StringBuilder, false,
+     1, false},
+    {"java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V",
+     "_mj2x_intrinsic_string_builder_init_string",
+     RegCIntrinsicEmitKind::StringBuilderInit, RegCIntrinsicNativeObjectKind::StringBuilder, false,
+     2, false},
+    {"java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_string",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_object",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append",
+     "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_object",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append", "(I)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_int",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append", "(J)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_long",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append", "(Z)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_bool",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append", "(C)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_char",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append", "(F)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_float",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "append", "(D)Ljava/lang/StringBuilder;",
+     "_mj2x_intrinsic_string_builder_append_double",
+     RegCIntrinsicEmitKind::StringBuilderAppend, RegCIntrinsicNativeObjectKind::StringBuilder,
+     false, 2, false},
+    {"java/lang/StringBuilder", "toString", "()Ljava/lang/String;",
+     "_mj2x_intrinsic_string_builder_to_string",
+     RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::StringBuilder, false,
+     1, false},
     {"java/lang/String", "equals", "(Ljava/lang/Object;)Z", "_mj2x_intrinsic_string_equals",
      RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
     {"java/lang/String", "length", "()I", "_mj2x_intrinsic_string_length",
@@ -117,6 +190,19 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
     {"java/lang/String", "hashCode", "()I", "_mj2x_intrinsic_string_hash_code",
      RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 1, false},
+    {"java/lang/String", "isEmpty", "()Z", "_mj2x_intrinsic_string_is_empty",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 1, false},
+    {"java/lang/String", "startsWith", "(Ljava/lang/String;)Z",
+     "_mj2x_intrinsic_string_starts_with",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
+    {"java/lang/String", "endsWith", "(Ljava/lang/String;)Z",
+     "_mj2x_intrinsic_string_ends_with",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
+    {"java/lang/String", "indexOf", "(Ljava/lang/String;)I", "_mj2x_intrinsic_string_index_of",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
+    {"java/lang/String", "contains", "(Ljava/lang/CharSequence;)Z",
+     "_mj2x_intrinsic_string_contains",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
 };
 
 bool sameSignature(const RegCIntrinsicCall& call, const RegCIntrinsicEntry& entry) {
@@ -180,10 +266,25 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "#define MJ2X_REGC_INTRINSIC_ABI_DECLARED\n";
     out << "static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* utf8);\n";
     out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n";
+    out << "static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref jstr);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, int32_t value);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, int64_t value);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t value);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* context, float value);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_double_to_string(mj2x_regc_context* context, double value);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, mj2x_ref value);\n";
+    out << "static int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n";
     out << "static int32_t _mj2x_intrinsic_string_length(mj2x_ref value);\n";
     out << "static uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index);\n";
     out << "static int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value);\n";
+    out << "static int32_t _mj2x_intrinsic_string_is_empty(mj2x_ref value);\n";
+    out << "static int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix);\n";
+    out << "static int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix);\n";
+    out << "static int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle);\n";
+    out << "static int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq);\n";
     out << "typedef struct mj2x_int { int32_t value; } mj2x_int;\n";
     out << "typedef struct mj2x_long { int64_t value; } mj2x_long;\n";
     out << "typedef struct mj2x_short { int16_t value; } mj2x_short;\n";
@@ -193,6 +294,10 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "typedef struct mj2x_bool { int8_t value; } mj2x_bool;\n";
     out << "typedef struct mj2x_char { uint16_t value; } mj2x_char;\n";
     out << "typedef struct mj2x_random { uint64_t seed; } mj2x_random;\n";
+    out << "#ifndef MJ2X_REGC_STRING_BUILDER_DECLARED\n";
+    out << "#define MJ2X_REGC_STRING_BUILDER_DECLARED\n";
+    out << "typedef struct mj2x_string_builder { char data[1024]; int32_t length; int32_t overflow; } mj2x_string_builder;\n";
+    out << "#endif\n";
     out << "mj2x_int mj2x_int_value_of(int32_t value);\n";
     out << "int32_t mj2x_int_int_value(mj2x_int box);\n";
     out << "mj2x_long mj2x_long_value_of(int64_t value);\n";
@@ -216,6 +321,17 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "int8_t mj2x_random_next_boolean(mj2x_random* state);\n";
     out << "float mj2x_random_next_float(mj2x_random* state);\n";
     out << "double mj2x_random_next_double(mj2x_random* state);\n";
+    out << "static void _mj2x_intrinsic_string_builder_init_empty(mj2x_string_builder* state);\n";
+    out << "static void _mj2x_intrinsic_string_builder_init_string(mj2x_string_builder* state, mj2x_ref value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_string(mj2x_string_builder* state, mj2x_ref value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_object(mj2x_string_builder* state, mj2x_ref value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_int(mj2x_string_builder* state, int32_t value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_long(mj2x_string_builder* state, int64_t value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_bool(mj2x_string_builder* state, bool value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_char(mj2x_string_builder* state, uint16_t value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_float(mj2x_string_builder* state, float value);\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_double(mj2x_string_builder* state, double value);\n";
+    out << "static mj2x_ref _mj2x_intrinsic_string_builder_to_string(mj2x_string_builder* state);\n";
     out << "int32_t mj2x_math_abs_i32(int32_t value);\n";
     out << "int64_t mj2x_math_abs_i64(int64_t value);\n";
     out << "float mj2x_math_abs_f32(float value);\n";

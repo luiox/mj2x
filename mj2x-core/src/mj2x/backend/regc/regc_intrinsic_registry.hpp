@@ -31,6 +31,8 @@ enum class RegCIntrinsicEmitKind {
     RandomInit,
     NativeObjectMethod,
     StringMethod,
+    StringBuilderInit,
+    StringBuilderAppend,
 };
 
 /**
@@ -47,6 +49,7 @@ enum class RegCIntrinsicNativeObjectKind {
     Bool,
     Char,
     Random,
+    StringBuilder,
 };
 
 /**

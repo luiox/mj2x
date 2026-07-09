@@ -218,6 +218,16 @@ const char* arrayHelperSuffix(SSAType type)
     }
 }
 
+bool isReferenceArrayDesc(const std::string& desc)
+{
+    return desc.size() > 1 && desc[0] == '[' && (desc[1] == 'L' || desc[1] == '[');
+}
+
+std::string arrayComponentDesc(const std::string& desc)
+{
+    return desc.size() > 1 ? desc.substr(1) : desc;
+}
+
 bool isStaticCall(const RegInstruction& ins)
 {
     return ins.method.invokeOpcode == Opcodes::INVOKESTATIC;
@@ -312,6 +322,7 @@ struct RegCFunctionEmitState
     std::map<uint32_t, RegCNativeObjectState> nativeObjects;
     std::string                               functionName;
     SSAFunctionSymbol                         symbol;
+    RegCCachePool*                            cachePool = nullptr;
     std::vector<std::string>                  staticMethodCacheDeclarations;
     std::vector<std::string>                  staticFieldCacheDeclarations;
     std::vector<std::string>                  classCacheDeclarations;
@@ -335,6 +346,7 @@ const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind)
     case RegCIntrinsicNativeObjectKind::Bool: return "mj2x_bool";
     case RegCIntrinsicNativeObjectKind::Char: return "mj2x_char";
     case RegCIntrinsicNativeObjectKind::Random: return "mj2x_random";
+    case RegCIntrinsicNativeObjectKind::StringBuilder: return "mj2x_string_builder";
     default: return "mj2x_ref";
     }
 }
@@ -426,7 +438,10 @@ void emitHelperPrelude(std::ostream& out)
 {
     out << "static mj2x_regc_context* _mj2x_regc_current_context(void);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_object(const char* type_desc);\n";
+    out << "static mj2x_ref _mj2x_regc_alloc_object_cached(mj2x_regc_class_cache* cache);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_array(const char* type_desc, int32_t length);\n";
+    out << "static mj2x_ref _mj2x_regc_alloc_ref_array_cached(mj2x_regc_class_cache* "
+           "component_cache, int32_t length);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_multi_array(const char* type_desc, int32_t dim_count, "
            "int32_t* dims);\n";
     out << "static int32_t _mj2x_regc_array_length(mj2x_ref array_ref);\n";
@@ -472,6 +487,24 @@ void emitHelperPrelude(std::ostream& out)
     out << "static double _mj2x_regc_load_cached_f64_field(mj2x_regc_static_field_cache* cache);\n";
     out << "static mj2x_ref _mj2x_regc_load_cached_ref_field(mj2x_regc_static_field_cache* "
            "cache);\n";
+    out << "static bool _mj2x_regc_load_cached_instance_bool_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static int8_t _mj2x_regc_load_cached_instance_i8_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static uint16_t _mj2x_regc_load_cached_instance_char_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static int16_t _mj2x_regc_load_cached_instance_i16_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static int32_t _mj2x_regc_load_cached_instance_i32_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static int64_t _mj2x_regc_load_cached_instance_i64_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static float _mj2x_regc_load_cached_instance_f32_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static double _mj2x_regc_load_cached_instance_f64_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
+    out << "static mj2x_ref _mj2x_regc_load_cached_instance_ref_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver);\n";
     out << "static void _mj2x_regc_store_bool_field(int32_t is_static, mj2x_ref receiver, const "
            "char* owner, const char* name, const char* desc, bool value);\n";
     out << "static void _mj2x_regc_store_i8_field(int32_t is_static, mj2x_ref receiver, const "
@@ -508,6 +541,24 @@ void emitHelperPrelude(std::ostream& out)
            "double value);\n";
     out << "static void _mj2x_regc_store_cached_ref_field(mj2x_regc_static_field_cache* cache, "
            "mj2x_ref value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_bool_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, bool value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_i8_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int8_t value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_char_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, uint16_t value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_i16_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int16_t value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_i32_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int32_t value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_i64_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int64_t value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_f32_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, float value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_f64_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, double value);\n";
+    out << "static void _mj2x_regc_store_cached_instance_ref_field("
+           "mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, mj2x_ref value);\n";
     out << "static int8_t _mj2x_regc_load_i8_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static int16_t _mj2x_regc_load_i16_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static uint16_t _mj2x_regc_load_char_array(mj2x_ref array_ref, int32_t index);\n";
@@ -556,6 +607,18 @@ void emitHelperPrelude(std::ostream& out)
            "int32_t arg_count, ...);\n";
     out << "static void _mj2x_regc_call_cached_void(mj2x_regc_static_method_cache* cache, int32_t "
            "arg_count, ...);\n";
+    out << "static int32_t _mj2x_regc_call_cached_instance_i32("
+           "mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...);\n";
+    out << "static int64_t _mj2x_regc_call_cached_instance_i64("
+           "mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...);\n";
+    out << "static float _mj2x_regc_call_cached_instance_f32("
+           "mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...);\n";
+    out << "static double _mj2x_regc_call_cached_instance_f64("
+           "mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...);\n";
+    out << "static mj2x_ref _mj2x_regc_call_cached_instance_ref("
+           "mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...);\n";
+    out << "static void _mj2x_regc_call_cached_instance_void("
+           "mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...);\n";
     RegCIntrinsicRegistry::builtins().emitDeclarations(out);
 }
 
@@ -592,6 +655,11 @@ std::string cacheKey(const std::string& first, const std::string& second, const 
 
 std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
 {
+    if (state.cachePool != nullptr) {
+        return state.cachePool->staticMethodCache(
+            ins.method.owner, ins.method.name, ins.method.desc);
+    }
+
     const std::string key = cacheKey(ins.method.owner, ins.method.name, ins.method.desc);
     auto              it  = state.staticMethodCacheNames.find(key);
     if (it != state.staticMethodCacheNames.end()) return it->second;
@@ -607,8 +675,18 @@ std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruct
     return cacheName;
 }
 
+std::string addInstanceMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+{
+    if (state.cachePool == nullptr) return "";
+    return state.cachePool->instanceMethodCache(ins.method.owner, ins.method.name, ins.method.desc);
+}
+
 std::string addStaticFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins)
 {
+    if (state.cachePool != nullptr) {
+        return state.cachePool->staticFieldCache(ins.field.owner, ins.field.name, ins.field.desc);
+    }
+
     const std::string key = cacheKey(ins.field.owner, ins.field.name, ins.field.desc);
     auto              it  = state.staticFieldCacheNames.find(key);
     if (it != state.staticFieldCacheNames.end()) return it->second;
@@ -624,8 +702,18 @@ std::string addStaticFieldCache(RegCFunctionEmitState& state, const RegInstructi
     return cacheName;
 }
 
+std::string addInstanceFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+{
+    if (state.cachePool == nullptr) return "";
+    return state.cachePool->instanceFieldCache(ins.field.owner, ins.field.name, ins.field.desc);
+}
+
 std::string addClassCache(RegCFunctionEmitState& state, const std::string& desc)
 {
+    if (state.cachePool != nullptr) {
+        return state.cachePool->classCache(desc);
+    }
+
     auto it = state.classCacheNames.find(desc);
     if (it != state.classCacheNames.end()) return it->second;
 
@@ -718,12 +806,66 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out, const RegInstru
         return decision;
     }
 
-    if (decision.emitKind == RegCIntrinsicEmitKind::StringMethod) {
-        if (!ins.hasDest) {
+    if (decision.emitKind == RegCIntrinsicEmitKind::StringBuilderInit) {
+        if (ins.args.empty()) {
             decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
-            decision.reason = "String intrinsic missing destination";
+            decision.reason = "StringBuilder init intrinsic missing receiver";
             return decision;
         }
+        const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
+        if (!objectState || objectState->kind != RegCIntrinsicNativeObjectKind::StringBuilder) {
+            decision.kind   = RegCIntrinsicDecisionKind::Fallback;
+            decision.reason = "StringBuilder receiver is not native state";
+            return decision;
+        }
+        for (size_t i = 1; i < ins.args.size(); ++i) {
+            if (nativeObjectFor(state, ins.args[i])) {
+                decision.kind   = RegCIntrinsicDecisionKind::Fallback;
+                decision.reason = "StringBuilder init argument is native state";
+                return decision;
+            }
+        }
+        out << "    " << decision.symbol << "(&" << objectState->storageName;
+        for (size_t i = 1; i < ins.args.size(); ++i) {
+            out << ", " << operandExpr(ins.args[i]);
+        }
+        out << ");\n";
+        return decision;
+    }
+
+    if (decision.emitKind == RegCIntrinsicEmitKind::StringBuilderAppend) {
+        if (ins.args.empty()) {
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "StringBuilder append intrinsic missing receiver";
+            return decision;
+        }
+        const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
+        if (!objectState || objectState->kind != RegCIntrinsicNativeObjectKind::StringBuilder) {
+            decision.kind   = RegCIntrinsicDecisionKind::Fallback;
+            decision.reason = "StringBuilder append receiver is not native state";
+            return decision;
+        }
+        for (size_t i = 1; i < ins.args.size(); ++i) {
+            if (nativeObjectFor(state, ins.args[i])) {
+                decision.kind   = RegCIntrinsicDecisionKind::Fallback;
+                decision.reason = "StringBuilder append argument is native state";
+                return decision;
+            }
+        }
+        out << "    " << decision.symbol << "(&" << objectState->storageName;
+        for (size_t i = 1; i < ins.args.size(); ++i) {
+            out << ", " << operandExpr(ins.args[i]);
+        }
+        out << ");\n";
+        if (ins.hasDest) {
+            out << "    " << regName(ins.dest.id) << " = NULL;\n";
+            state.nativeObjects[ins.dest.id.value] =
+                RegCNativeObjectState{objectState->kind, objectState->storageName};
+        }
+        return decision;
+    }
+
+    if (decision.emitKind == RegCIntrinsicEmitKind::StringMethod) {
         for (const auto& arg : ins.args) {
             if (nativeObjectFor(state, arg)) {
                 decision.kind   = RegCIntrinsicDecisionKind::Fallback;
@@ -731,7 +873,9 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out, const RegInstru
                 return decision;
             }
         }
-        out << "    " << regName(ins.dest.id) << " = " << decision.symbol << "(";
+        out << "    ";
+        if (ins.hasDest) out << regName(ins.dest.id) << " = ";
+        out << decision.symbol << "(";
         for (size_t i = 0; i < ins.args.size(); ++i) {
             if (i) out << ", ";
             out << operandExpr(ins.args[i]);
@@ -886,11 +1030,18 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                 << ");\n";
         }
         else {
-            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
-                << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field(0, "
-                << operandExpr(ins.receiver) << ", " << cStringLiteral(ins.field.owner) << ", "
-                << cStringLiteral(ins.field.name) << ", " << cStringLiteral(ins.field.desc)
-                << ");\n";
+            const std::string cacheName = addInstanceFieldCache(state, ins);
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_";
+            if (!cacheName.empty()) {
+                out << "cached_instance_" << fieldHelperSuffix(ins.field.desc, ins.dest.type)
+                    << "_field(&" << cacheName << ", " << operandExpr(ins.receiver) << ");\n";
+            }
+            else {
+                out << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field(0, "
+                    << operandExpr(ins.receiver) << ", " << cStringLiteral(ins.field.owner)
+                    << ", " << cStringLiteral(ins.field.name) << ", "
+                    << cStringLiteral(ins.field.desc) << ");\n";
+            }
         }
         return true;
     case RegInstructionKind::StoreField:
@@ -904,11 +1055,20 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                 << ", " << operandExpr(ins.value) << ");\n";
         }
         else {
-            out << "    _mj2x_regc_store_" << fieldHelperSuffix(ins.field.desc, ins.value.type)
-                << "_field(0, " << operandExpr(ins.receiver) << ", "
-                << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name)
-                << ", " << cStringLiteral(ins.field.desc) << ", " << operandExpr(ins.value)
-                << ");\n";
+            const std::string cacheName = addInstanceFieldCache(state, ins);
+            out << "    _mj2x_regc_store_";
+            if (!cacheName.empty()) {
+                out << "cached_instance_" << fieldHelperSuffix(ins.field.desc, ins.value.type)
+                    << "_field(&" << cacheName << ", " << operandExpr(ins.receiver) << ", "
+                    << operandExpr(ins.value) << ");\n";
+            }
+            else {
+                out << fieldHelperSuffix(ins.field.desc, ins.value.type) << "_field(0, "
+                    << operandExpr(ins.receiver) << ", " << cStringLiteral(ins.field.owner)
+                    << ", " << cStringLiteral(ins.field.name) << ", "
+                    << cStringLiteral(ins.field.desc) << ", " << operandExpr(ins.value)
+                    << ");\n";
+            }
         }
         return true;
     case RegInstructionKind::ArrayLoad:
@@ -948,6 +1108,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
         const bool        selfCall   = isSelfStaticCall(state, ins);
         const std::string cacheName =
             (staticCall && !selfCall) ? addStaticMethodCache(state, ins) : "";
+        const std::string instanceCacheName =
+            (!staticCall && !selfCall) ? addInstanceMethodCache(state, ins) : "";
         if (ins.hasDest) {
             out << "    " << regName(ins.dest.id) << " = ";
             if (selfCall) {
@@ -958,6 +1120,10 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                 if (staticCall) {
                     out << "cached_" << helperSuffix(ins.dest.type) << "(&" << cacheName << ", "
                         << callArgs(ins.args) << ");\n";
+                }
+                else if (!instanceCacheName.empty()) {
+                    out << "cached_instance_" << helperSuffix(ins.dest.type) << "(&"
+                        << instanceCacheName << ", " << callArgs(ins.args) << ");\n";
                 }
                 else {
                     out << helperSuffix(ins.dest.type) << "(" << cStringLiteral(ins.method.owner)
@@ -977,6 +1143,10 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                 if (staticCall) {
                     out << "cached_void(&" << cacheName << ", " << callArgs(ins.args) << ");\n";
                 }
+                else if (!instanceCacheName.empty()) {
+                    out << "cached_instance_void(&" << instanceCacheName << ", "
+                        << callArgs(ins.args) << ");\n";
+                }
                 else {
                     out << "void(" << cStringLiteral(ins.method.owner) << ", "
                         << cStringLiteral(ins.method.name) << ", "
@@ -995,17 +1165,38 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                 state.nativeObjects[ins.dest.id.value] = RegCNativeObjectState{
                     RegCIntrinsicNativeObjectKind::Random, nativeObjectStorageName(ins.dest.id)};
             }
+            else if (ins.typeDesc == "java/lang/StringBuilder") {
+                out << "    mj2x_string_builder " << nativeObjectStorageName(ins.dest.id)
+                    << " = {{0}, 0, 0};\n";
+                out << "    " << regName(ins.dest.id) << " = NULL;\n";
+                state.nativeObjects[ins.dest.id.value] = RegCNativeObjectState{
+                    RegCIntrinsicNativeObjectKind::StringBuilder,
+                    nativeObjectStorageName(ins.dest.id)};
+            }
             else {
-                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_object("
-                    << cStringLiteral(ins.typeDesc) << ");\n";
+                out << "    " << regName(ins.dest.id) << " = ";
+                if (state.cachePool != nullptr) {
+                    const std::string cacheName = addClassCache(state, ins.typeDesc);
+                    out << "_mj2x_regc_alloc_object_cached(&" << cacheName << ");\n";
+                }
+                else {
+                    out << "_mj2x_regc_alloc_object(" << cStringLiteral(ins.typeDesc) << ");\n";
+                }
             }
         }
         else if (ins.allocationKind == SSAAllocationKind::Array) {
-            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_array("
-                << cStringLiteral(ins.typeDesc) << ", "
-                << operandExpr(ins.args.empty() ? RegOperand::fromInt(0, SSAType::I32)
-                                                : ins.args[0])
-                << ");\n";
+            const RegOperand length =
+                ins.args.empty() ? RegOperand::fromInt(0, SSAType::I32) : ins.args[0];
+            if (state.cachePool != nullptr && isReferenceArrayDesc(ins.typeDesc)) {
+                const std::string cacheName = addClassCache(state, arrayComponentDesc(ins.typeDesc));
+                out << "    " << regName(ins.dest.id)
+                    << " = _mj2x_regc_alloc_ref_array_cached(&" << cacheName << ", "
+                    << operandExpr(length) << ");\n";
+            }
+            else {
+                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_array("
+                    << cStringLiteral(ins.typeDesc) << ", " << operandExpr(length) << ");\n";
+            }
         }
         else {
             out << "    {\n";
@@ -1162,10 +1353,126 @@ bool emitTerminator(std::ostringstream& out, const RegTerminator& terminator, SS
 
 }   // namespace
 
+namespace {
+
+std::string poolCacheKey(const std::string& first, const std::string& second,
+                         const std::string& third)
+{
+    return first + "\n" + second + "\n" + third;
+}
+
+}   // namespace
+
+std::string RegCCachePool::staticMethodCache(const std::string& owner, const std::string& name,
+                                             const std::string& desc)
+{
+    const std::string key = poolCacheKey(owner, name, desc);
+    auto              it  = staticMethodCacheNames_.find(key);
+    if (it != staticMethodCacheNames_.end()) return it->second;
+
+    const std::string  cacheName = "_mj2x_regc_cache_tu_" +
+                                  std::to_string(staticMethodCacheIndex_++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_static_method_cache " << cacheName << " = {"
+         << codegen::cStringLiteral(owner) << ", " << codegen::cStringLiteral(name) << ", "
+         << codegen::cStringLiteral(desc) << ", NULL, NULL};\n";
+    declarations_.push_back(decl.str());
+    staticMethodCacheNames_.emplace(key, cacheName);
+    return cacheName;
+}
+
+std::string RegCCachePool::instanceMethodCache(const std::string& owner, const std::string& name,
+                                               const std::string& desc)
+{
+    const std::string key = poolCacheKey(owner, name, desc);
+    auto              it  = instanceMethodCacheNames_.find(key);
+    if (it != instanceMethodCacheNames_.end()) return it->second;
+
+    const std::string cacheName = "_mj2x_regc_instance_cache_tu_" +
+                                  std::to_string(instanceMethodCacheIndex_++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_instance_method_cache " << cacheName << " = {"
+         << codegen::cStringLiteral(owner) << ", " << codegen::cStringLiteral(name) << ", "
+         << codegen::cStringLiteral(desc) << ", NULL, NULL};\n";
+    declarations_.push_back(decl.str());
+    instanceMethodCacheNames_.emplace(key, cacheName);
+    return cacheName;
+}
+
+std::string RegCCachePool::staticFieldCache(const std::string& owner, const std::string& name,
+                                            const std::string& desc)
+{
+    const std::string key = poolCacheKey(owner, name, desc);
+    auto              it  = staticFieldCacheNames_.find(key);
+    if (it != staticFieldCacheNames_.end()) return it->second;
+
+    const std::string  cacheName = "_mj2x_regc_field_cache_tu_" +
+                                  std::to_string(staticFieldCacheIndex_++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_static_field_cache " << cacheName << " = {"
+         << codegen::cStringLiteral(owner) << ", " << codegen::cStringLiteral(name) << ", "
+         << codegen::cStringLiteral(desc) << ", NULL, NULL};\n";
+    declarations_.push_back(decl.str());
+    staticFieldCacheNames_.emplace(key, cacheName);
+    return cacheName;
+}
+
+std::string RegCCachePool::instanceFieldCache(const std::string& owner, const std::string& name,
+                                              const std::string& desc)
+{
+    const std::string key = poolCacheKey(owner, name, desc);
+    auto              it  = instanceFieldCacheNames_.find(key);
+    if (it != instanceFieldCacheNames_.end()) return it->second;
+
+    const std::string cacheName = "_mj2x_regc_instance_field_cache_tu_" +
+                                  std::to_string(instanceFieldCacheIndex_++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_instance_field_cache " << cacheName << " = {"
+         << codegen::cStringLiteral(owner) << ", " << codegen::cStringLiteral(name) << ", "
+         << codegen::cStringLiteral(desc) << ", NULL, NULL};\n";
+    declarations_.push_back(decl.str());
+    instanceFieldCacheNames_.emplace(key, cacheName);
+    return cacheName;
+}
+
+std::string RegCCachePool::classCache(const std::string& desc)
+{
+    auto it = classCacheNames_.find(desc);
+    if (it != classCacheNames_.end()) return it->second;
+
+    const std::string  cacheName = "_mj2x_regc_class_cache_tu_" +
+                                  std::to_string(classCacheIndex_++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_class_cache " << cacheName << " = {"
+         << codegen::cStringLiteral(desc) << ", NULL};\n";
+    declarations_.push_back(decl.str());
+    classCacheNames_.emplace(desc, cacheName);
+    return cacheName;
+}
+
+std::string RegCCachePool::renderDeclarations() const
+{
+    std::ostringstream out;
+    for (const auto& declaration : declarations_) {
+        out << declaration;
+    }
+    if (!declarations_.empty()) out << "\n";
+    return out.str();
+}
+
+bool RegCCachePool::empty() const
+{
+    return declarations_.empty();
+}
+
 void emitRegCHelperPrelude(std::ostream& out)
 {
     emitHelperPrelude(out);
 }
+
+RegCEmitter::RegCEmitter(RegCCachePool* cachePool)
+    : cachePool_(cachePool)
+{}
 
 RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
 {
@@ -1189,6 +1496,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
     RegCFunctionEmitState emitState;
     emitState.functionName           = result.functionName;
     emitState.symbol                 = fn.symbol;
+    emitState.cachePool              = cachePool_;
     int                dispatchIndex = 0;
     int                edgeTempIndex = 0;
     std::ostringstream body;

@@ -15,7 +15,9 @@
 #include "mj2x/mir/register_ir/reg_function.hpp"
 
 #include <iosfwd>
+#include <map>
 #include <string>
+#include <vector>
 
 namespace mj2x {
 
@@ -37,6 +39,45 @@ struct RegCEmitResult
 };
 
 /**
+ * @brief Shared generated-C translation-unit cache declaration pool.
+ *
+ * @details
+ * RegCEmitter can still emit function-local cache declarations for standalone
+ * tests.  RegCBackend supplies one pool for the whole generated C file so equal
+ * owner/name/desc or class descriptors across methods share a single static
+ * cache object.
+ */
+class RegCCachePool
+{
+public:
+    std::string staticMethodCache(const std::string& owner, const std::string& name,
+                                  const std::string& desc);
+    std::string instanceMethodCache(const std::string& owner, const std::string& name,
+                                    const std::string& desc);
+    std::string staticFieldCache(const std::string& owner, const std::string& name,
+                                 const std::string& desc);
+    std::string instanceFieldCache(const std::string& owner, const std::string& name,
+                                   const std::string& desc);
+    std::string classCache(const std::string& desc);
+
+    std::string renderDeclarations() const;
+    bool        empty() const;
+
+private:
+    std::vector<std::string>           declarations_;
+    std::map<std::string, std::string> staticMethodCacheNames_;
+    std::map<std::string, std::string> instanceMethodCacheNames_;
+    std::map<std::string, std::string> staticFieldCacheNames_;
+    std::map<std::string, std::string> instanceFieldCacheNames_;
+    std::map<std::string, std::string> classCacheNames_;
+    int                                staticMethodCacheIndex_ = 0;
+    int                                instanceMethodCacheIndex_ = 0;
+    int                                staticFieldCacheIndex_  = 0;
+    int                                instanceFieldCacheIndex_ = 0;
+    int                                classCacheIndex_        = 0;
+};
+
+/**
  * @brief Emits stackless helper C from Register IR.
  *
  * @details
@@ -49,6 +90,8 @@ struct RegCEmitResult
 class RegCEmitter
 {
 public:
+    explicit RegCEmitter(RegCCachePool* cachePool = nullptr);
+
     /**
      * @brief Emit a C helper function for one RegFunction.
      *
@@ -59,6 +102,9 @@ public:
      * pass `validateRegCNoStackAnchors` before `ok` is set.
      */
     RegCEmitResult emitFunction(const RegFunction& fn) const;
+
+private:
+    RegCCachePool* cachePool_;
 };
 
 /**

@@ -21,6 +21,7 @@
 | 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
 | `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
 | `--generate-cmake <dir>` 输出独立 CMake native 工程 | ✅ | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
+| `--generate-xmake <dir>` 输出独立 xmake native 工程,`mj2x-cli` 通过 xmake `bin2c` 构建期内嵌 `mj2x-crt`/模板资源,可支持单 exe 使用 | ✅ | `CliTest.GenerateXmakeProject*` |
 | StackC/RegC class 和 jar 重复生成稳定性 | ✅ | `CliTest.ClassInputRepeatableForStackCAndRegC`、`CliTest.JarInputRepeatableForStackCAndRegC`、`tools/product_sample_smoke.ps1 -Mode fast` |
 
 ---
@@ -100,20 +101,30 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - try / catch
 - null trap
 - integer div / rem trap(走 R3 runtime ABI)
-- **JDK intrinsic(Math / parseInt / wrapper value-unbox / Random next*)**:RegC 在 Call 分支识别 JDK 方法签名,不发 JNI,直接内联 runtime intrinsic
+- generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池
+- **JDK intrinsic(Math / parseInt/parseLong / wrapper toString/compare/value-unbox / Random next* / String read hot paths / StringBuilder 非逃逸链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接内联 runtime/local intrinsic
 
-**JDK intrinsic 覆盖(初版,无 JNI 派发)**:
+**JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
 
 - `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
 - `java.lang.Integer.parseInt(String)`:native strtol 解析,NumberFormatException 经 context 回调路由
+- `java.lang.Long.parseLong(String)`:native strtoll 解析,NumberFormatException 经 context 回调路由
+- `java.lang.Integer/Long.toString`、`java.lang.Integer/Long.compare`:RegC local helper 生成字符串或比较结果
+- `java.lang.String.valueOf(int|long|boolean|char|float|double|Object)`:RegC local helper 覆盖常见值转字符串;`float|double` 和 `Object` 通过缓存的 JDK methodID 保持浮点格式和虚分派语义
 - String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
+- `java.lang.String`:equals/length/charAt/hashCode/isEmpty/startsWith(String)/endsWith(String)/indexOf(String)/contains(CharSequence)
+  走 RegC local helper;返回值被丢弃的调用点也可安全发射 intrinsic call;`contains` 对 String rhs 走 native `indexOf`,非 String `CharSequence` 回退到缓存的 Java `String.contains` methodID
+- `java.lang.StringBuilder` 非逃逸第一片:`new`/`<init>()`/`<init>(String)` +
+  `append(String|Object|CharSequence|int|long|boolean|char|float|double)` + `toString`,RegC 用固定容量 native shadow buffer 承载,
+  其中 `append(float|double)` 复用缓存的 `String.valueOf(F/D)` 保持 JDK 浮点文本格式,
+  匹配链式调用不发 `_mj2x_regc_call_*`;shadow state 逃逸仍 fail-closed
 - 包装类非逃逸 value/unbox:`Integer/Long/Short/Byte/Float/Double/Boolean/Character.valueOf`
   后接对应 `xxxValue`,RegC 用 native shadow struct 承载,不发 JNI call
 - `java.util.Random` 非逃逸 new/init/next*:`mj2x_random` shadow state + runtime LCG,
   nextInt/nextLong/nextBoolean/nextFloat/nextDouble 不发 JNI call
 
-**intrinsic 限制(初版)**:包装类 native shadow object 一旦返回、存字段/数组、传入未知 call
-或跨 CFG edge 会 fail-closed;Random shadow state 同样只支持非逃逸路径。
+**intrinsic 限制(初版)**:包装类/StringBuilder native shadow object 一旦返回、存字段/数组、传入未知 call
+或跨 CFG edge 会 fail-closed;Random shadow state 同样只支持非逃逸路径。StringBuilder first slice 还不是完整 Java 语义:内部固定 1024 字节 UTF-8 friendly buffer,后续需补 UTF-16 ownership、扩容、更多 append 重载和逃逸 materialize。
 
 **CLI**:
 
@@ -136,10 +147,11 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
 | Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random) | ✅ runtime + emitter 识别 |
-| Integer.parseInt intrinsic | ✅ emitter 内联 JNI helper + E2E |
+| Integer.parseInt / Long.parseLong / Integer/Long.toString / Integer/Long.compare intrinsic | ✅ emitter 内联 RegC local helper + E2E |
 | 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime + RegC 非逃逸 value/unbox;逃逸 fail-closed |
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
-| String intrinsic 最小 UTF-16 view 垫片(length/charAt/status) | ✅ runtime 单测;尚未接 RegC emitter |
+| String intrinsic 最小 UTF-16 view 垫片(length/charAt/status) + RegC String read hot paths | ✅ runtime 单测 + RegC emitter/结构测试 + native E2E |
+| StringBuilder 非逃逸 append/toString first slice | ✅ RegC emitter/结构测试 + native E2E;逃逸 fail-closed |
 | antidebug 软件断点字节扫描 | ✅ mockable runtime 单测 |
 | antijvmti agent/JDWP 参数、模块名、dump capability 信号聚合 | ✅ mockable runtime 单测 |
 

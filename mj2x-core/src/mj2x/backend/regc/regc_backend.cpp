@@ -226,6 +226,23 @@ static int64_t _mj2x_regc_load_cached_i64_field(mj2x_regc_static_field_cache* ca
 static float _mj2x_regc_load_cached_f32_field(mj2x_regc_static_field_cache* cache) { jfieldID f = _mj2x_regc_cached_static_field(cache); if (f == NULL || cache->ownerClass == NULL) return 0.0f; return (*_mj2x_regc_env)->GetStaticFloatField(_mj2x_regc_env, cache->ownerClass, f); }
 static double _mj2x_regc_load_cached_f64_field(mj2x_regc_static_field_cache* cache) { jfieldID f = _mj2x_regc_cached_static_field(cache); if (f == NULL || cache->ownerClass == NULL) return 0.0; return (*_mj2x_regc_env)->GetStaticDoubleField(_mj2x_regc_env, cache->ownerClass, f); }
 static mj2x_ref _mj2x_regc_load_cached_ref_field(mj2x_regc_static_field_cache* cache) { jfieldID f = _mj2x_regc_cached_static_field(cache); if (f == NULL || cache->ownerClass == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->GetStaticObjectField(_mj2x_regc_env, cache->ownerClass, f); }
+
+)mj2x");
+    src.emitRaw(R"mj2x(
+
+static bool _mj2x_regc_load_cached_instance_bool_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return false; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return false; return (*_mj2x_regc_env)->GetBooleanField(_mj2x_regc_env, (jobject)receiver, f) == JNI_TRUE; }
+static int8_t _mj2x_regc_load_cached_instance_i8_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return 0; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return 0; return (int8_t)(*_mj2x_regc_env)->GetByteField(_mj2x_regc_env, (jobject)receiver, f); }
+static uint16_t _mj2x_regc_load_cached_instance_char_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return 0; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return 0; return (uint16_t)(*_mj2x_regc_env)->GetCharField(_mj2x_regc_env, (jobject)receiver, f); }
+static int16_t _mj2x_regc_load_cached_instance_i16_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return 0; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return 0; return (int16_t)(*_mj2x_regc_env)->GetShortField(_mj2x_regc_env, (jobject)receiver, f); }
+static int32_t _mj2x_regc_load_cached_instance_i32_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return 0; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return 0; return (*_mj2x_regc_env)->GetIntField(_mj2x_regc_env, (jobject)receiver, f); }
+static int64_t _mj2x_regc_load_cached_instance_i64_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return 0; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return 0; return (*_mj2x_regc_env)->GetLongField(_mj2x_regc_env, (jobject)receiver, f); }
+static float _mj2x_regc_load_cached_instance_f32_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return 0.0f; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return 0.0f; return (*_mj2x_regc_env)->GetFloatField(_mj2x_regc_env, (jobject)receiver, f); }
+static double _mj2x_regc_load_cached_instance_f64_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return 0.0; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return 0.0; return (*_mj2x_regc_env)->GetDoubleField(_mj2x_regc_env, (jobject)receiver, f); }
+static mj2x_ref _mj2x_regc_load_cached_instance_ref_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return NULL; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->GetObjectField(_mj2x_regc_env, (jobject)receiver, f); }
+
+)mj2x");
+    src.emitRaw(R"mj2x(
+
 static void _mj2x_regc_store_bool_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, bool value) { jclass c = _mj2x_regc_field_class(is_static, receiver, owner); jfieldID f = _mj2x_regc_field_id(is_static, c, name, desc); if (f == NULL) return; if (is_static) (*_mj2x_regc_env)->SetStaticBooleanField(_mj2x_regc_env, c, f, value ? JNI_TRUE : JNI_FALSE); else (*_mj2x_regc_env)->SetBooleanField(_mj2x_regc_env, (jobject)receiver, f, value ? JNI_TRUE : JNI_FALSE); }
 static void _mj2x_regc_store_i8_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, int8_t value) { jclass c = _mj2x_regc_field_class(is_static, receiver, owner); jfieldID f = _mj2x_regc_field_id(is_static, c, name, desc); if (f == NULL) return; if (is_static) (*_mj2x_regc_env)->SetStaticByteField(_mj2x_regc_env, c, f, (jbyte)value); else (*_mj2x_regc_env)->SetByteField(_mj2x_regc_env, (jobject)receiver, f, (jbyte)value); }
 static void _mj2x_regc_store_char_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, uint16_t value) { jclass c = _mj2x_regc_field_class(is_static, receiver, owner); jfieldID f = _mj2x_regc_field_id(is_static, c, name, desc); if (f == NULL) return; if (is_static) (*_mj2x_regc_env)->SetStaticCharField(_mj2x_regc_env, c, f, (jchar)value); else (*_mj2x_regc_env)->SetCharField(_mj2x_regc_env, (jobject)receiver, f, (jchar)value); }
@@ -244,6 +261,19 @@ static void _mj2x_regc_store_cached_i64_field(mj2x_regc_static_field_cache* cach
 static void _mj2x_regc_store_cached_f32_field(mj2x_regc_static_field_cache* cache, float value) { jfieldID f = _mj2x_regc_cached_static_field(cache); if (f == NULL || cache->ownerClass == NULL) return; (*_mj2x_regc_env)->SetStaticFloatField(_mj2x_regc_env, cache->ownerClass, f, value); }
 static void _mj2x_regc_store_cached_f64_field(mj2x_regc_static_field_cache* cache, double value) { jfieldID f = _mj2x_regc_cached_static_field(cache); if (f == NULL || cache->ownerClass == NULL) return; (*_mj2x_regc_env)->SetStaticDoubleField(_mj2x_regc_env, cache->ownerClass, f, value); }
 static void _mj2x_regc_store_cached_ref_field(mj2x_regc_static_field_cache* cache, mj2x_ref value) { jfieldID f = _mj2x_regc_cached_static_field(cache); if (f == NULL || cache->ownerClass == NULL) return; (*_mj2x_regc_env)->SetStaticObjectField(_mj2x_regc_env, cache->ownerClass, f, (jobject)value); }
+
+)mj2x");
+    src.emitRaw(R"mj2x(
+
+static void _mj2x_regc_store_cached_instance_bool_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, bool value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetBooleanField(_mj2x_regc_env, (jobject)receiver, f, value ? JNI_TRUE : JNI_FALSE); }
+static void _mj2x_regc_store_cached_instance_i8_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int8_t value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetByteField(_mj2x_regc_env, (jobject)receiver, f, (jbyte)value); }
+static void _mj2x_regc_store_cached_instance_char_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, uint16_t value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetCharField(_mj2x_regc_env, (jobject)receiver, f, (jchar)value); }
+static void _mj2x_regc_store_cached_instance_i16_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int16_t value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetShortField(_mj2x_regc_env, (jobject)receiver, f, (jshort)value); }
+static void _mj2x_regc_store_cached_instance_i32_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int32_t value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetIntField(_mj2x_regc_env, (jobject)receiver, f, value); }
+static void _mj2x_regc_store_cached_instance_i64_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, int64_t value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetLongField(_mj2x_regc_env, (jobject)receiver, f, value); }
+static void _mj2x_regc_store_cached_instance_f32_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, float value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetFloatField(_mj2x_regc_env, (jobject)receiver, f, value); }
+static void _mj2x_regc_store_cached_instance_f64_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, double value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetDoubleField(_mj2x_regc_env, (jobject)receiver, f, value); }
+static void _mj2x_regc_store_cached_instance_ref_field(mj2x_regc_instance_field_cache* cache, mj2x_ref receiver, mj2x_ref value) { if (receiver == NULL) { _mj2x_regc_throw_null("instance field access"); return; } jfieldID f = _mj2x_regc_cached_instance_field(cache); if (f == NULL) return; (*_mj2x_regc_env)->SetObjectField(_mj2x_regc_env, (jobject)receiver, f, (jobject)value); }
 
 )mj2x");
     out << src.str();
@@ -272,12 +302,27 @@ static float _mj2x_regc_call_cached_f32(mj2x_regc_static_method_cache* cache, in
 static double _mj2x_regc_call_cached_f64(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return 0.0; return (*_mj2x_regc_env)->CallStaticDoubleMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
 static mj2x_ref _mj2x_regc_call_cached_ref(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
 static void _mj2x_regc_call_cached_void(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return; (*_mj2x_regc_env)->CallStaticVoidMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
+static int32_t _mj2x_regc_call_cached_instance_i32(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0; return (*_mj2x_regc_env)->CallIntMethodA(_mj2x_regc_env, receiver, m, values); }
+static int64_t _mj2x_regc_call_cached_instance_i64(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0; return (*_mj2x_regc_env)->CallLongMethodA(_mj2x_regc_env, receiver, m, values); }
+static float _mj2x_regc_call_cached_instance_f32(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0f; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0.0f; return (*_mj2x_regc_env)->CallFloatMethodA(_mj2x_regc_env, receiver, m, values); }
+static double _mj2x_regc_call_cached_instance_f64(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0.0; return (*_mj2x_regc_env)->CallDoubleMethodA(_mj2x_regc_env, receiver, m, values); }
+static mj2x_ref _mj2x_regc_call_cached_instance_ref(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return NULL; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethodA(_mj2x_regc_env, receiver, m, values); }
+static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return; (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }
 
 )mj2x");
     out << src.str();
 }
 
-void emitRuntimeHelpers(std::ostringstream& out)
+void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclarations,
+                        const std::string& stringClassCacheName,
+                        const std::string& objectToStringMethodCacheName,
+                        const std::string& stringValueOfFloatMethodCacheName,
+                        const std::string& stringValueOfDoubleMethodCacheName,
+                        const std::string& nullPointerExceptionClassCacheName,
+                        const std::string& classCastExceptionClassCacheName,
+                        const std::string& outOfMemoryErrorClassCacheName,
+                        const std::string& stringIndexOutOfBoundsClassCacheName,
+                        const std::string& unsupportedOperationExceptionClassCacheName)
 {
     out << "typedef void* mj2x_ref;\n";
     out << "#ifndef MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
@@ -299,6 +344,13 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    jclass ownerClass;\n";
     out << "    jmethodID method;\n";
     out << "} mj2x_regc_static_method_cache;\n";
+    out << "typedef struct mj2x_regc_instance_method_cache {\n";
+    out << "    const char* owner;\n";
+    out << "    const char* name;\n";
+    out << "    const char* desc;\n";
+    out << "    jclass ownerClass;\n";
+    out << "    jmethodID method;\n";
+    out << "} mj2x_regc_instance_method_cache;\n";
     out << "typedef struct mj2x_regc_static_field_cache {\n";
     out << "    const char* owner;\n";
     out << "    const char* name;\n";
@@ -306,6 +358,17 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    jclass ownerClass;\n";
     out << "    jfieldID field;\n";
     out << "} mj2x_regc_static_field_cache;\n";
+    out << "typedef struct mj2x_regc_instance_field_cache {\n";
+    out << "    const char* owner;\n";
+    out << "    const char* name;\n";
+    out << "    const char* desc;\n";
+    out << "    jclass ownerClass;\n";
+    out << "    jfieldID field;\n";
+    out << "} mj2x_regc_instance_field_cache;\n";
+    if (!cacheDeclarations.empty()) {
+        out << cacheDeclarations;
+    }
+    out << "static jclass _mj2x_regc_cached_class(mj2x_regc_class_cache* cache);\n";
     out << "static void mj2x_regc_init_context(mj2x_regc_context* context, void* env, "
            "mj2x_regc_throw_callback throwException);\n";
     out << "static void mj2x_regc_set_env(mj2x_regc_context* context, void* env);\n";
@@ -385,13 +448,13 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    if (ex != NULL) (*jni)->ThrowNew(jni, ex, message != NULL ? message : \"\");\n";
     out << "}\n\n";
     out << "static void _mj2x_regc_throw_unsupported(const char* feature) {\n";
-    out << "    jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
-           "\"java/lang/UnsupportedOperationException\");\n";
+    out << "    jclass ex = _mj2x_regc_cached_class(&"
+        << unsupportedOperationExceptionClassCacheName << ");\n";
     out << "    if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, feature);\n";
     out << "}\n\n";
     out << "static void _mj2x_regc_throw_null(const char* message) {\n";
-    out << "    jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
-           "\"java/lang/NullPointerException\");\n";
+    out << "    jclass ex = _mj2x_regc_cached_class(&" << nullPointerExceptionClassCacheName
+        << ");\n";
     out << "    if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, message);\n";
     out << "}\n\n";
     out << "static jclass _mj2x_regc_find_class(const char* desc) {\n";
@@ -433,6 +496,18 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    cache->method = method;\n";
     out << "    return method;\n";
     out << "}\n\n";
+    out << "static jmethodID _mj2x_regc_cached_instance_method("
+           "mj2x_regc_instance_method_cache* cache) {\n";
+    out << "    if (cache == NULL) return NULL;\n";
+    out << "    if (cache->method != NULL) return cache->method;\n";
+    out << "    jclass owner = _mj2x_regc_global_class(cache->owner, &cache->ownerClass);\n";
+    out << "    if (owner == NULL) return NULL;\n";
+    out << "    jmethodID method = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, owner, "
+           "cache->name, cache->desc);\n";
+    out << "    if (method == NULL) return NULL;\n";
+    out << "    cache->method = method;\n";
+    out << "    return method;\n";
+    out << "}\n\n";
     out << "static jfieldID _mj2x_regc_cached_static_field(mj2x_regc_static_field_cache* cache) "
            "{\n";
     out << "    if (cache == NULL) return NULL;\n";
@@ -445,8 +520,25 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    cache->field = field;\n";
     out << "    return field;\n";
     out << "}\n\n";
+    out << "static jfieldID _mj2x_regc_cached_instance_field("
+           "mj2x_regc_instance_field_cache* cache) {\n";
+    out << "    if (cache == NULL) return NULL;\n";
+    out << "    if (cache->field != NULL) return cache->field;\n";
+    out << "    jclass owner = _mj2x_regc_global_class(cache->owner, &cache->ownerClass);\n";
+    out << "    if (owner == NULL) return NULL;\n";
+    out << "    jfieldID field = (*_mj2x_regc_env)->GetFieldID(_mj2x_regc_env, owner, "
+           "cache->name, cache->desc);\n";
+    out << "    if (field == NULL) return NULL;\n";
+    out << "    cache->field = field;\n";
+    out << "    return field;\n";
+    out << "}\n\n";
     out << "static mj2x_ref _mj2x_regc_alloc_object(const char* type_desc) {\n";
     out << "    jclass cls = _mj2x_regc_find_class(type_desc);\n";
+    out << "    if (cls == NULL) return NULL;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->AllocObject(_mj2x_regc_env, cls);\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_regc_alloc_object_cached(mj2x_regc_class_cache* cache) {\n";
+    out << "    jclass cls = _mj2x_regc_cached_class(cache);\n";
     out << "    if (cls == NULL) return NULL;\n";
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->AllocObject(_mj2x_regc_env, cls);\n";
     out << "}\n\n";
@@ -472,6 +564,13 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    default: return (mj2x_ref)(*_mj2x_regc_env)->NewObjectArray(_mj2x_regc_env, "
            "length, _mj2x_regc_find_class(type_desc + 1), NULL);\n";
     out << "    }\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_regc_alloc_ref_array_cached("
+           "mj2x_regc_class_cache* component_cache, int32_t length) {\n";
+    out << "    jclass component = _mj2x_regc_cached_class(component_cache);\n";
+    out << "    if (component == NULL) return NULL;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewObjectArray(_mj2x_regc_env, length, "
+           "component, NULL);\n";
     out << "}\n\n";
     out << "static mj2x_ref _mj2x_regc_alloc_multi_array(const char* type_desc, int32_t dim_count, "
            "int32_t* dims) {\n";
@@ -514,8 +613,8 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    if (cls == NULL) return NULL;\n";
     out << "    if ((*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls)) return "
            "value;\n";
-    out << "    jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
-           "\"java/lang/ClassCastException\");\n";
+    out << "    jclass ex = _mj2x_regc_cached_class(&" << classCastExceptionClassCacheName
+        << ");\n";
     out << "    if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, type_desc);\n";
     out << "    return NULL;\n";
     out << "}\n\n";
@@ -526,8 +625,8 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    if (cls == NULL) return NULL;\n";
     out << "    if ((*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls)) return "
            "value;\n";
-    out << "    jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
-           "\"java/lang/ClassCastException\");\n";
+    out << "    jclass ex = _mj2x_regc_cached_class(&" << classCastExceptionClassCacheName
+        << ");\n";
     out << "    if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, cache != NULL ? "
            "cache->desc : \"checkcast\");\n";
     out << "    return NULL;\n";
@@ -569,8 +668,8 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "}\n";
     out << "static void _mj2x_regc_throw(mj2x_ref value) {\n";
     out << "    if (value == NULL) {\n";
-    out << "        jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
-           "\"java/lang/NullPointerException\");\n";
+    out << "        jclass ex = _mj2x_regc_cached_class(&" << nullPointerExceptionClassCacheName
+        << ");\n";
     out << "        if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, \"athrow "
            "null\");\n";
     out << "        return;\n";
@@ -745,11 +844,268 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    }\n";
     out << "    return (int32_t)parsed;\n";
     out << "}\n\n";
-    out << "static mj2x_regc_class_cache _mj2x_intrinsic_string_class_cache = "
-           "{\"java/lang/String\", NULL};\n";
+    out << "static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref "
+           "jstr_ref) {\n";
+    out << "    if (jstr_ref == NULL) {\n";
+    out << "        if (context != NULL && context->throwException != NULL) {\n";
+    out << "            context->throwException(context->env, \"java/lang/NullPointerException\", "
+           "\"parseLong\");\n";
+    out << "        }\n";
+    out << "        return 0;\n";
+    out << "    }\n";
+    out << "    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, "
+           "(jstring)jstr_ref, NULL);\n";
+    out << "    if (utf == NULL) return 0;\n";
+    out << "    char* end = NULL;\n";
+    out << "    errno = 0;\n";
+    out << "    long long parsed = strtoll(utf, &end, 10);\n";
+    out << "    int failed = (end == utf) || (errno == ERANGE) ||\n";
+    out << "                 (parsed > (long long)INT64_MAX) || (parsed < (long long)INT64_MIN);\n";
+    out << "    if (!failed) { while (*end != '\\0' && (*end == ' ' || *end == '\\t')) end++; "
+           "failed = (*end != '\\0'); }\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, "
+           "utf);\n";
+    out << "    if (failed) {\n";
+    out << "        if (context != NULL && context->throwException != NULL) {\n";
+    out << "            context->throwException(context->env, \"java/lang/NumberFormatException\", "
+           "\"For input string\");\n";
+    out << "        }\n";
+    out << "        return 0;\n";
+    out << "    }\n";
+    out << "    return (int64_t)parsed;\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_int_to_string(mj2x_regc_context* context, "
+           "int32_t value) {\n";
+    out << "    (void)context;\n";
+    out << "    char buffer[16];\n";
+    out << "    snprintf(buffer, sizeof(buffer), \"%d\", value);\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, buffer);\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, "
+           "int64_t value) {\n";
+    out << "    (void)context;\n";
+    out << "    char buffer[32];\n";
+    out << "    snprintf(buffer, sizeof(buffer), \"%lld\", (long long)value);\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, buffer);\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, "
+           "int8_t value) {\n";
+    out << "    (void)context;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, "
+           "value ? \"true\" : \"false\");\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, "
+           "uint16_t value) {\n";
+    out << "    (void)context;\n";
+    out << "    char buffer[4];\n";
+    out << "    int32_t length = 0;\n";
+    out << "    if (value == 0) { buffer[0] = (char)0xC0; buffer[1] = (char)0x80; length = 2; }\n";
+    out << "    else if (value <= 0x7F) { buffer[0] = (char)value; length = 1; }\n";
+    out << "    else if (value <= 0x7FF) {\n";
+    out << "        buffer[0] = (char)(0xC0 | (value >> 6));\n";
+    out << "        buffer[1] = (char)(0x80 | (value & 0x3F));\n";
+    out << "        length = 2;\n";
+    out << "    } else {\n";
+    out << "        buffer[0] = (char)(0xE0 | (value >> 12));\n";
+    out << "        buffer[1] = (char)(0x80 | ((value >> 6) & 0x3F));\n";
+    out << "        buffer[2] = (char)(0x80 | (value & 0x3F));\n";
+    out << "        length = 3;\n";
+    out << "    }\n";
+    out << "    buffer[length] = '\\0';\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, buffer);\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* context, "
+           "float value) {\n";
+    out << "    (void)context;\n";
+    out << "    jmethodID value_of = _mj2x_regc_cached_static_method(&"
+        << stringValueOfFloatMethodCacheName << ");\n";
+    out << "    if (value_of == NULL || " << stringValueOfFloatMethodCacheName
+        << ".ownerClass == NULL) return NULL;\n";
+    out << "    jvalue args[1];\n";
+    out << "    args[0].f = (jfloat)value;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA(_mj2x_regc_env, "
+        << stringValueOfFloatMethodCacheName << ".ownerClass, value_of, args);\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_double_to_string(mj2x_regc_context* context, "
+           "double value) {\n";
+    out << "    (void)context;\n";
+    out << "    jmethodID value_of = _mj2x_regc_cached_static_method(&"
+        << stringValueOfDoubleMethodCacheName << ");\n";
+    out << "    if (value_of == NULL || " << stringValueOfDoubleMethodCacheName
+        << ".ownerClass == NULL) return NULL;\n";
+    out << "    jvalue args[1];\n";
+    out << "    args[0].d = (jdouble)value;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA(_mj2x_regc_env, "
+        << stringValueOfDoubleMethodCacheName << ".ownerClass, value_of, args);\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, "
+           "mj2x_ref value) {\n";
+    out << "    (void)context;\n";
+    out << "    if (value == NULL) return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF("
+           "_mj2x_regc_env, \"null\");\n";
+    out << "    jmethodID to_string = _mj2x_regc_cached_instance_method(&"
+        << objectToStringMethodCacheName << ");\n";
+    out << "    if (to_string == NULL) return NULL;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, "
+           "(jobject)value, to_string);\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs) {\n";
+    out << "    return (lhs > rhs) - (lhs < rhs);\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs) {\n";
+    out << "    return (lhs > rhs) - (lhs < rhs);\n";
+    out << "}\n\n";
+    out << "#ifndef MJ2X_REGC_STRING_BUILDER_DECLARED\n";
+    out << "#define MJ2X_REGC_STRING_BUILDER_DECLARED\n";
+    out << "typedef struct mj2x_string_builder { char data[1024]; int32_t length; int32_t overflow; "
+           "} mj2x_string_builder;\n";
+    out << "#endif\n";
+    out << "static void _mj2x_intrinsic_string_builder_init_empty(mj2x_string_builder* state) "
+           "{\n";
+    out << "    if (state == NULL) return;\n";
+    out << "    state->length = 0;\n";
+    out << "    state->overflow = 0;\n";
+    out << "    state->data[0] = '\\0';\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_raw(mj2x_string_builder* state, "
+           "const char* data, int32_t length) {\n";
+    out << "    if (state == NULL || data == NULL || length <= 0 || state->overflow) return;\n";
+    out << "    int32_t cap = (int32_t)sizeof(state->data) - 1;\n";
+    out << "    if (state->length > cap || length > cap - state->length) {\n";
+    out << "        state->overflow = 1;\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    memcpy(state->data + state->length, data, (size_t)length);\n";
+    out << "    state->length += length;\n";
+    out << "    state->data[state->length] = '\\0';\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_string(mj2x_string_builder* state, "
+           "mj2x_ref value) {\n";
+    out << "    if (value == NULL) {\n";
+    out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"null\", 4);\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, "
+           "(jstring)value, NULL);\n";
+    out << "    if (utf == NULL) return;\n";
+    out << "    _mj2x_intrinsic_string_builder_append_raw(state, utf, (int32_t)strlen(utf));\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)value, "
+           "utf);\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_object(mj2x_string_builder* state, "
+           "mj2x_ref value) {\n";
+    out << "    if (value == NULL) {\n";
+    out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"null\", 4);\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    jmethodID to_string = _mj2x_regc_cached_instance_method(&"
+        << objectToStringMethodCacheName << ");\n";
+    out << "    if (to_string == NULL) return;\n";
+    out << "    mj2x_ref text = (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, "
+           "(jobject)value, to_string);\n";
+    out << "    if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return;\n";
+    out << "    _mj2x_intrinsic_string_builder_append_string(state, text);\n";
+    out << "    if (text != NULL) (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
+           "(jobject)text);\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_init_string(mj2x_string_builder* state, "
+           "mj2x_ref value) {\n";
+    out << "    _mj2x_intrinsic_string_builder_init_empty(state);\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"StringBuilder.<init>\"); return; }\n";
+    out << "    _mj2x_intrinsic_string_builder_append_string(state, value);\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_int(mj2x_string_builder* state, "
+           "int32_t value) {\n";
+    out << "    char buffer[16];\n";
+    out << "    snprintf(buffer, sizeof(buffer), \"%d\", value);\n";
+    out << "    _mj2x_intrinsic_string_builder_append_raw(state, buffer, (int32_t)strlen(buffer));\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_long(mj2x_string_builder* state, "
+           "int64_t value) {\n";
+    out << "    char buffer[32];\n";
+    out << "    snprintf(buffer, sizeof(buffer), \"%lld\", (long long)value);\n";
+    out << "    _mj2x_intrinsic_string_builder_append_raw(state, buffer, (int32_t)strlen(buffer));\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_bool(mj2x_string_builder* state, "
+           "bool value) {\n";
+    out << "    if (value) {\n";
+    out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"true\", 4);\n";
+    out << "    } else {\n";
+    out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"false\", 5);\n";
+    out << "    }\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_char(mj2x_string_builder* state, "
+           "uint16_t value) {\n";
+    out << "    char buffer[3];\n";
+    out << "    int32_t length = 0;\n";
+    out << "    if (value == 0) {\n";
+    out << "        buffer[0] = (char)0xC0;\n";
+    out << "        buffer[1] = (char)0x80;\n";
+    out << "        length = 2;\n";
+    out << "    } else if (value <= 0x7F) {\n";
+    out << "        buffer[0] = (char)value;\n";
+    out << "        length = 1;\n";
+    out << "    } else if (value <= 0x7FF) {\n";
+    out << "        buffer[0] = (char)(0xC0 | (value >> 6));\n";
+    out << "        buffer[1] = (char)(0x80 | (value & 0x3F));\n";
+    out << "        length = 2;\n";
+    out << "    } else {\n";
+    out << "        buffer[0] = (char)(0xE0 | (value >> 12));\n";
+    out << "        buffer[1] = (char)(0x80 | ((value >> 6) & 0x3F));\n";
+    out << "        buffer[2] = (char)(0x80 | (value & 0x3F));\n";
+    out << "        length = 3;\n";
+    out << "    }\n";
+    out << "    _mj2x_intrinsic_string_builder_append_raw(state, buffer, length);\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_float(mj2x_string_builder* state, "
+           "float value) {\n";
+    out << "    jmethodID value_of = _mj2x_regc_cached_static_method(&"
+        << stringValueOfFloatMethodCacheName << ");\n";
+    out << "    if (value_of == NULL || " << stringValueOfFloatMethodCacheName
+        << ".ownerClass == NULL) return;\n";
+    out << "    jvalue args[1];\n";
+    out << "    args[0].f = (jfloat)value;\n";
+    out << "    mj2x_ref text = (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA("
+           "_mj2x_regc_env, "
+        << stringValueOfFloatMethodCacheName << ".ownerClass, value_of, args);\n";
+    out << "    if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return;\n";
+    out << "    _mj2x_intrinsic_string_builder_append_string(state, text);\n";
+    out << "    if (text != NULL) (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
+           "(jobject)text);\n";
+    out << "}\n\n";
+    out << "static void _mj2x_intrinsic_string_builder_append_double(mj2x_string_builder* state, "
+           "double value) {\n";
+    out << "    jmethodID value_of = _mj2x_regc_cached_static_method(&"
+        << stringValueOfDoubleMethodCacheName << ");\n";
+    out << "    if (value_of == NULL || " << stringValueOfDoubleMethodCacheName
+        << ".ownerClass == NULL) return;\n";
+    out << "    jvalue args[1];\n";
+    out << "    args[0].d = (jdouble)value;\n";
+    out << "    mj2x_ref text = (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA("
+           "_mj2x_regc_env, "
+        << stringValueOfDoubleMethodCacheName << ".ownerClass, value_of, args);\n";
+    out << "    if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) return;\n";
+    out << "    _mj2x_intrinsic_string_builder_append_string(state, text);\n";
+    out << "    if (text != NULL) (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
+           "(jobject)text);\n";
+    out << "}\n\n";
+    out << "static mj2x_ref _mj2x_intrinsic_string_builder_to_string(mj2x_string_builder* "
+           "state) {\n";
+    out << "    if (state == NULL) { _mj2x_regc_throw_null(\"StringBuilder.toString\"); return "
+           "NULL; }\n";
+    out << "    if (state->overflow) {\n";
+    out << "        jclass ex = _mj2x_regc_cached_class(&" << outOfMemoryErrorClassCacheName
+        << ");\n";
+    out << "        if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, "
+           "\"StringBuilder intrinsic buffer overflow\");\n";
+    out << "        return NULL;\n";
+    out << "    }\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, "
+           "state->data);\n";
+    out << "}\n\n";
     out << "static int32_t _mj2x_intrinsic_is_string(mj2x_ref value) {\n";
     out << "    if (value == NULL) return 0;\n";
-    out << "    jclass cls = _mj2x_regc_cached_class(&_mj2x_intrinsic_string_class_cache);\n";
+    out << "    jclass cls = _mj2x_regc_cached_class(&" << stringClassCacheName << ");\n";
     out << "    if (cls == NULL) return 0;\n";
     out << "    return (*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls) ? 1 : "
            "0;\n";
@@ -763,6 +1119,7 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    jsize rhs_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
            "(jstring)rhs);\n";
     out << "    if (lhs_len != rhs_len) return 0;\n";
+    out << "    if (lhs_len == 0) return 1;\n";
     out << "    const jchar* lhs_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
            "(jstring)lhs, NULL);\n";
     out << "    if (lhs_chars == NULL) return 0;\n";
@@ -786,8 +1143,8 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.charAt\"); return 0; }\n";
     out << "    jsize len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
     out << "    if (index < 0 || index >= len) {\n";
-    out << "        jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
-           "\"java/lang/StringIndexOutOfBoundsException\");\n";
+    out << "        jclass ex = _mj2x_regc_cached_class(&"
+        << stringIndexOutOfBoundsClassCacheName << ");\n";
     out << "        if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, "
            "\"String.charAt\");\n";
     out << "        return 0;\n";
@@ -802,6 +1159,7 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "static int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value) {\n";
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.hashCode\"); return 0; }\n";
     out << "    jsize len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    if (len == 0) return 0;\n";
     out << "    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
            "(jstring)value, NULL);\n";
     out << "    if (chars == NULL) return 0;\n";
@@ -809,6 +1167,104 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    for (jsize i = 0; i < len; ++i) hash = hash * 31u + (uint32_t)chars[i];\n";
     out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);\n";
     out << "    return (int32_t)hash;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_string_is_empty(mj2x_ref value) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.isEmpty\"); return 0; }\n";
+    out << "    return (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value) == 0;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.startsWith\"); return 0; }\n";
+    out << "    if (prefix == NULL) { _mj2x_regc_throw_null(\"String.startsWith prefix\"); return 0; }\n";
+    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    jsize prefix_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)prefix);\n";
+    out << "    if (prefix_len > value_len) return 0;\n";
+    out << "    if (prefix_len == 0) return 1;\n";
+    out << "    const jchar* value_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)value, NULL);\n";
+    out << "    if (value_chars == NULL) return 0;\n";
+    out << "    const jchar* prefix_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)prefix, NULL);\n";
+    out << "    if (prefix_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, "
+           "(jstring)value, value_chars); return 0; }\n";
+    out << "    int32_t same = 1;\n";
+    out << "    for (jsize i = 0; i < prefix_len; ++i) { if (value_chars[i] != prefix_chars[i]) { "
+           "same = 0; break; } }\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, "
+           "value_chars);\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)prefix, "
+           "prefix_chars);\n";
+    out << "    return same;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.endsWith\"); return 0; }\n";
+    out << "    if (suffix == NULL) { _mj2x_regc_throw_null(\"String.endsWith suffix\"); return 0; }\n";
+    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    jsize suffix_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)suffix);\n";
+    out << "    if (suffix_len > value_len) return 0;\n";
+    out << "    if (suffix_len == 0) return 1;\n";
+    out << "    const jchar* value_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)value, NULL);\n";
+    out << "    if (value_chars == NULL) return 0;\n";
+    out << "    const jchar* suffix_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)suffix, NULL);\n";
+    out << "    if (suffix_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, "
+           "(jstring)value, value_chars); return 0; }\n";
+    out << "    int32_t same = 1;\n";
+    out << "    jsize start = value_len - suffix_len;\n";
+    out << "    for (jsize i = 0; i < suffix_len; ++i) { if (value_chars[start + i] != "
+           "suffix_chars[i]) { same = 0; break; } }\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, "
+           "value_chars);\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)suffix, "
+           "suffix_chars);\n";
+    out << "    return same;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.indexOf\"); return -1; }\n";
+    out << "    if (needle == NULL) { _mj2x_regc_throw_null(\"String.indexOf needle\"); return -1; }\n";
+    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    jsize needle_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)needle);\n";
+    out << "    if (needle_len == 0) return 0;\n";
+    out << "    if (needle_len > value_len) return -1;\n";
+    out << "    const jchar* value_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)value, NULL);\n";
+    out << "    if (value_chars == NULL) return -1;\n";
+    out << "    const jchar* needle_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)needle, NULL);\n";
+    out << "    if (needle_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, "
+           "(jstring)value, value_chars); return -1; }\n";
+    out << "    int32_t found = -1;\n";
+    out << "    for (jsize i = 0; i <= value_len - needle_len; ++i) {\n";
+    out << "        jsize j = 0;\n";
+    out << "        while (j < needle_len && value_chars[i + j] == needle_chars[j]) j++;\n";
+    out << "        if (j == needle_len) { found = (int32_t)i; break; }\n";
+    out << "    }\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, "
+           "value_chars);\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)needle, "
+           "needle_chars);\n";
+    out << "    return found;\n";
+    out << "}\n\n";
+    out << "static jmethodID _mj2x_intrinsic_string_contains_method = NULL;\n";
+    out << "static int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.contains\"); return 0; }\n";
+    out << "    if (seq == NULL) { _mj2x_regc_throw_null(\"String.contains sequence\"); return 0; }\n";
+    out << "    if (_mj2x_intrinsic_is_string(seq)) {\n";
+    out << "        return _mj2x_intrinsic_string_index_of(value, seq) >= 0;\n";
+    out << "    }\n";
+    out << "    jclass cls = _mj2x_regc_cached_class(&" << stringClassCacheName << ");\n";
+    out << "    if (cls == NULL) return 0;\n";
+    out << "    if (_mj2x_intrinsic_string_contains_method == NULL) {\n";
+    out << "        _mj2x_intrinsic_string_contains_method = "
+           "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, cls, \"contains\", "
+           "\"(Ljava/lang/CharSequence;)Z\");\n";
+    out << "        if (_mj2x_intrinsic_string_contains_method == NULL) return 0;\n";
+    out << "    }\n";
+    out << "    return (*_mj2x_regc_env)->CallBooleanMethod(_mj2x_regc_env, (jobject)value, "
+           "_mj2x_intrinsic_string_contains_method, (jobject)seq) == JNI_TRUE;\n";
     out << "}\n\n";
 }
 
@@ -856,6 +1312,7 @@ void prependNativeLoaderCall(CompilerClass& clazz, const std::string& resourcePa
 struct RegCBackend::Impl
 {
     std::ostringstream              source;
+    RegCCachePool                   cachePool;
     std::string                     jarNativeLoaderResourcePath;
     std::string                     jarNativeLoaderTempSuffix;
     std::unordered_set<std::string> loaderInjectedClasses;
@@ -919,7 +1376,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
 
-    RegCEmitter emitter;
+    RegCEmitter emitter(&impl_->cachePool);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         backendResult.text = emitJniWrapper(className, *mn, emitted);
@@ -975,14 +1432,44 @@ void RegCBackend::finalize(const CompilerIndex& index)
     includes.addSystem("stddef.h");
     includes.addSystem("stdarg.h");
     includes.addSystem("math.h");
+    includes.addSystem("stdio.h");
     includes.addSystem("stdlib.h");
+    includes.addSystem("string.h");
     includes.addSystem("errno.h");
 
     std::ostringstream full;
     full << "/* Generated by mj2x RegCBackend */\n";
     full << includes.render();
     full << "\n";
-    emitRuntimeHelpers(full);
+    const std::string stringClassCacheName = impl_->cachePool.classCache("java/lang/String");
+    const std::string objectToStringMethodCacheName =
+        impl_->cachePool.instanceMethodCache("java/lang/Object", "toString", "()Ljava/lang/String;");
+    const std::string stringValueOfFloatMethodCacheName =
+        impl_->cachePool.staticMethodCache("java/lang/String", "valueOf", "(F)Ljava/lang/String;");
+    const std::string stringValueOfDoubleMethodCacheName =
+        impl_->cachePool.staticMethodCache("java/lang/String", "valueOf", "(D)Ljava/lang/String;");
+    const std::string nullPointerExceptionClassCacheName =
+        impl_->cachePool.classCache("java/lang/NullPointerException");
+    const std::string classCastExceptionClassCacheName =
+        impl_->cachePool.classCache("java/lang/ClassCastException");
+    const std::string outOfMemoryErrorClassCacheName =
+        impl_->cachePool.classCache("java/lang/OutOfMemoryError");
+    const std::string stringIndexOutOfBoundsClassCacheName =
+        impl_->cachePool.classCache("java/lang/StringIndexOutOfBoundsException");
+    const std::string unsupportedOperationExceptionClassCacheName =
+        impl_->cachePool.classCache("java/lang/UnsupportedOperationException");
+    const std::string cacheDeclarations = impl_->cachePool.renderDeclarations();
+    emitRuntimeHelpers(full,
+                       cacheDeclarations,
+                       stringClassCacheName,
+                       objectToStringMethodCacheName,
+                       stringValueOfFloatMethodCacheName,
+                       stringValueOfDoubleMethodCacheName,
+                       nullPointerExceptionClassCacheName,
+                       classCastExceptionClassCacheName,
+                       outOfMemoryErrorClassCacheName,
+                       stringIndexOutOfBoundsClassCacheName,
+                       unsupportedOperationExceptionClassCacheName);
     emitRegCHelperPrelude(full);
     full << impl_->source.str();
 
