@@ -14,6 +14,7 @@
 
 #include "mj2x/mir/register_ir/reg_function.hpp"
 
+#include <iosfwd>
 #include <string>
 
 namespace mj2x {
@@ -27,8 +28,9 @@ namespace mj2x {
  * still report deterministic diagnostics, while `source` is valid only when
  * `ok` is true.
  */
-struct RegCEmitResult {
-    bool ok = false;
+struct RegCEmitResult
+{
+    bool        ok = false;
     std::string functionName;
     std::string source;
     std::string reason;
@@ -44,7 +46,8 @@ struct RegCEmitResult {
  * reason string if an unsupported intrinsic or invalid RegIR invariant reaches
  * this layer.
  */
-class RegCEmitter {
+class RegCEmitter
+{
 public:
     /**
      * @brief Emit a C helper function for one RegFunction.
@@ -59,6 +62,11 @@ public:
 };
 
 /**
+ * @brief Emit declarations shared by all RegC function bodies in one C file.
+ */
+void emitRegCHelperPrelude(std::ostream& out);
+
+/**
  * @brief Validate that generated RegC text does not expose stack-machine anchors.
  *
  * @details
@@ -68,4 +76,4 @@ public:
  */
 bool validateRegCNoStackAnchors(const std::string& source, std::string& reason);
 
-} // namespace mj2x
+}   // namespace mj2x

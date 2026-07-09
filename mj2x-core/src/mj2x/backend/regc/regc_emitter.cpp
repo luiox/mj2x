@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -23,40 +24,45 @@ namespace {
 // here so the existing call sites stay one-line.
 using codegen::cStringLiteral;
 
-const char* cType(SSAType type) {
+const char* cType(SSAType type)
+{
     switch (type) {
-        case SSAType::VOID: return "void";
-        case SSAType::BOOL: return "bool";
-        case SSAType::I8: return "int8_t";
-        case SSAType::I16: return "int16_t";
-        case SSAType::CHAR: return "uint16_t";
-        case SSAType::I32: return "int32_t";
-        case SSAType::I64: return "int64_t";
-        case SSAType::F32: return "float";
-        case SSAType::F64: return "double";
-        case SSAType::REF: return "void*";
-        default: return "int32_t";
+    case SSAType::VOID: return "void";
+    case SSAType::BOOL: return "bool";
+    case SSAType::I8: return "int8_t";
+    case SSAType::I16: return "int16_t";
+    case SSAType::CHAR: return "uint16_t";
+    case SSAType::I32: return "int32_t";
+    case SSAType::I64: return "int64_t";
+    case SSAType::F32: return "float";
+    case SSAType::F64: return "double";
+    case SSAType::REF: return "void*";
+    default: return "int32_t";
     }
 }
 
-const char* unsignedCType(SSAType type) {
+const char* unsignedCType(SSAType type)
+{
     switch (type) {
-        case SSAType::I64: return "uint64_t";
-        default: return "uint32_t";
+    case SSAType::I64: return "uint64_t";
+    default: return "uint32_t";
     }
 }
 
-bool isIntegerLike(SSAType type) {
+bool isIntegerLike(SSAType type)
+{
     return ssaIsIntLike(type) || type == SSAType::I64;
 }
 
-std::string sanitizeIdent(const std::string& text) {
+std::string sanitizeIdent(const std::string& text)
+{
     std::string out;
     out.reserve(text.size());
     for (unsigned char c : text) {
         if (std::isalnum(c)) {
             out.push_back(static_cast<char>(c));
-        } else {
+        }
+        else {
             out.push_back('_');
         }
     }
@@ -66,186 +72,211 @@ std::string sanitizeIdent(const std::string& text) {
     return out;
 }
 
-std::string functionName(const SSAFunctionSymbol& symbol) {
-    return "regc_" + sanitizeIdent(symbol.owner) + "_" +
-           sanitizeIdent(symbol.name) + "_" + sanitizeIdent(symbol.desc);
+std::string functionName(const SSAFunctionSymbol& symbol)
+{
+    return "regc_" + sanitizeIdent(symbol.owner) + "_" + sanitizeIdent(symbol.name) + "_" +
+           sanitizeIdent(symbol.desc);
 }
 
-std::string regName(RegId id) {
+std::string regName(RegId id)
+{
     return "r" + std::to_string(id.value);
 }
 
-const char* defaultValue(SSAType type) {
+const char* defaultValue(SSAType type)
+{
     switch (type) {
-        case SSAType::VOID: return "";
-        case SSAType::F32: return "0.0f";
-        case SSAType::F64: return "0.0";
-        case SSAType::REF: return "NULL";
-        case SSAType::BOOL: return "false";
-        default: return "0";
+    case SSAType::VOID: return "";
+    case SSAType::F32: return "0.0f";
+    case SSAType::F64: return "0.0";
+    case SSAType::REF: return "NULL";
+    case SSAType::BOOL: return "false";
+    default: return "0";
     }
 }
 
-const char* helperSuffix(SSAType type) {
+const char* helperSuffix(SSAType type)
+{
     switch (type) {
-        case SSAType::VOID: return "void";
-        case SSAType::BOOL:
-        case SSAType::I8:
-        case SSAType::I16:
-        case SSAType::CHAR:
-        case SSAType::I32: return "i32";
-        case SSAType::I64: return "i64";
-        case SSAType::F32: return "f32";
-        case SSAType::F64: return "f64";
-        case SSAType::REF: return "ref";
-        default: return "i32";
+    case SSAType::VOID: return "void";
+    case SSAType::BOOL:
+    case SSAType::I8:
+    case SSAType::I16:
+    case SSAType::CHAR:
+    case SSAType::I32: return "i32";
+    case SSAType::I64: return "i64";
+    case SSAType::F32: return "f32";
+    case SSAType::F64: return "f64";
+    case SSAType::REF: return "ref";
+    default: return "i32";
     }
 }
 
-std::string operandExpr(const RegOperand& operand) {
+std::string operandExpr(const RegOperand& operand)
+{
     std::ostringstream os;
     switch (operand.kind) {
-        case RegOperandKind::Register:
-            return regName(operand.reg);
-        case RegOperandKind::IntLiteral:
-            if (operand.type == SSAType::I64) {
-                os << "(int64_t)" << operand.intValue << "LL";
-            } else {
-                os << operand.intValue;
-            }
-            return os.str();
-        case RegOperandKind::FloatLiteral:
-            os << operand.floatValue;
-            if (operand.type == SSAType::F32) os << "f";
-            return os.str();
-        case RegOperandKind::NullLiteral:
-            return "NULL";
-        case RegOperandKind::Opaque:
-            // A String LDC carries its UTF-8 content after "ldc_string:" so the
-            // String intrinsic path can materialize the jstring without going
-            // through JNI call dispatch.  Other opaques stay as annotated NULL.
-            if (operand.tag.rfind("ldc_string:", 0) == 0) {
-                return "_mj2x_intrinsic_string_literal(_mj2x_regc_current_context(), "
-                       + cStringLiteral(operand.tag.substr(std::string("ldc_string:").size())) + ")";
-            }
-            return "NULL /* opaque:" + operand.tag + " */";
+    case RegOperandKind::Register: return regName(operand.reg);
+    case RegOperandKind::IntLiteral:
+        if (operand.type == SSAType::I64) {
+            os << "(int64_t)" << operand.intValue << "LL";
+        }
+        else {
+            os << operand.intValue;
+        }
+        return os.str();
+    case RegOperandKind::FloatLiteral:
+        os << operand.floatValue;
+        if (operand.type == SSAType::F32) os << "f";
+        return os.str();
+    case RegOperandKind::NullLiteral: return "NULL";
+    case RegOperandKind::Opaque:
+        // A String LDC carries its UTF-8 content after "ldc_string:" so the
+        // String intrinsic path can materialize the jstring without going
+        // through JNI call dispatch.  Other opaques stay as annotated NULL.
+        if (operand.tag.rfind("ldc_string:", 0) == 0) {
+            return "_mj2x_intrinsic_string_literal(_mj2x_regc_current_context(), " +
+                   cStringLiteral(operand.tag.substr(std::string("ldc_string:").size())) + ")";
+        }
+        return "NULL /* opaque:" + operand.tag + " */";
     }
     return "0";
 }
 
-const char* binaryOp(SSABinaryOp op) {
+const char* binaryOp(SSABinaryOp op)
+{
     switch (op) {
-        case SSABinaryOp::Add: return "+";
-        case SSABinaryOp::Sub: return "-";
-        case SSABinaryOp::Mul: return "*";
-        case SSABinaryOp::Div: return "/";
-        case SSABinaryOp::Rem: return "%";
-        case SSABinaryOp::And: return "&";
-        case SSABinaryOp::Or: return "|";
-        case SSABinaryOp::Xor: return "^";
-        case SSABinaryOp::Shl: return "<<";
-        case SSABinaryOp::Shr: return ">>";
-        case SSABinaryOp::UShr: return ">>";
+    case SSABinaryOp::Add: return "+";
+    case SSABinaryOp::Sub: return "-";
+    case SSABinaryOp::Mul: return "*";
+    case SSABinaryOp::Div: return "/";
+    case SSABinaryOp::Rem: return "%";
+    case SSABinaryOp::And: return "&";
+    case SSABinaryOp::Or: return "|";
+    case SSABinaryOp::Xor: return "^";
+    case SSABinaryOp::Shl: return "<<";
+    case SSABinaryOp::Shr: return ">>";
+    case SSABinaryOp::UShr: return ">>";
     }
     return "+";
 }
 
-const char* compareOp(SSAComparePredicate predicate) {
+const char* compareOp(SSAComparePredicate predicate)
+{
     switch (predicate) {
-        case SSAComparePredicate::Eq: return "==";
-        case SSAComparePredicate::Ne: return "!=";
-        case SSAComparePredicate::Lt: return "<";
-        case SSAComparePredicate::Le: return "<=";
-        case SSAComparePredicate::Gt: return ">";
-        case SSAComparePredicate::Ge: return ">=";
+    case SSAComparePredicate::Eq: return "==";
+    case SSAComparePredicate::Ne: return "!=";
+    case SSAComparePredicate::Lt: return "<";
+    case SSAComparePredicate::Le: return "<=";
+    case SSAComparePredicate::Gt: return ">";
+    case SSAComparePredicate::Ge: return ">=";
     }
     return "==";
 }
 
-bool collectRegister(std::map<uint32_t, SSAType>& regs, RegValue value) {
+bool collectRegister(std::map<uint32_t, SSAType>& regs, RegValue value)
+{
     auto [it, inserted] = regs.emplace(value.id.value, value.type);
     return inserted || it->second == value.type;
 }
 
-void collectCopies(std::map<uint32_t, SSAType>& regs, const std::vector<RegCopy>& copies) {
+void collectCopies(std::map<uint32_t, SSAType>& regs, const std::vector<RegCopy>& copies)
+{
     for (const auto& copy : copies) collectRegister(regs, copy.dest);
 }
 
-const char* fieldHelperSuffix(const std::string& desc, SSAType fallback) {
+const char* fieldHelperSuffix(const std::string& desc, SSAType fallback)
+{
     // JVM narrow fields are int-like on the operand stack but require their
     // descriptor-specific JNI accessors at the native boundary.
     if (!desc.empty()) {
         switch (desc[0]) {
-            case 'Z': return "bool";
-            case 'B': return "i8";
-            case 'C': return "char";
-            case 'S': return "i16";
-            case 'I': return "i32";
-            case 'J': return "i64";
-            case 'F': return "f32";
-            case 'D': return "f64";
-            default: return "ref";
+        case 'Z': return "bool";
+        case 'B': return "i8";
+        case 'C': return "char";
+        case 'S': return "i16";
+        case 'I': return "i32";
+        case 'J': return "i64";
+        case 'F': return "f32";
+        case 'D': return "f64";
+        default: return "ref";
         }
     }
     return helperSuffix(fallback);
 }
 
-const char* arrayHelperSuffix(SSAType type) {
+const char* arrayHelperSuffix(SSAType type)
+{
     // BALOAD/BASTORE cover both byte[] and boolean[]; the i8 runtime helper
     // performs the final array-class check when it sees the actual reference.
     switch (type) {
-        case SSAType::BOOL:
-        case SSAType::I8: return "i8";
-        case SSAType::I16: return "i16";
-        case SSAType::CHAR: return "char";
-        default: return helperSuffix(type);
+    case SSAType::BOOL:
+    case SSAType::I8: return "i8";
+    case SSAType::I16: return "i16";
+    case SSAType::CHAR: return "char";
+    default: return helperSuffix(type);
     }
 }
 
-bool isStaticCall(const RegInstruction& ins) {
+bool isStaticCall(const RegInstruction& ins)
+{
     return ins.method.invokeOpcode == Opcodes::INVOKESTATIC;
 }
 
-void collectExceptionRegisters(std::map<uint32_t, SSAType>& regs,
-                               const std::vector<RegExceptionRegion>& regions) {
+void collectExceptionRegisters(std::map<uint32_t, SSAType>&           regs,
+                               const std::vector<RegExceptionRegion>& regions)
+{
     for (const auto& region : regions) collectRegister(regs, region.exceptionValue);
 }
 
-void collectTerminatorRegisters(std::map<uint32_t, SSAType>& regs, const RegTerminator& terminator) {
-    std::visit([&](const auto& t) {
-        using T = std::decay_t<decltype(t)>;
-        if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-            collectCopies(regs, t.target.copies);
-        } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
-            collectCopies(regs, t.trueTarget.copies);
-            collectCopies(regs, t.falseTarget.copies);
-        } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
-            for (const auto& c : t.cases) collectCopies(regs, c.target.copies);
-            collectCopies(regs, t.defaultTarget.copies);
-        }
-    }, terminator);
+void collectTerminatorRegisters(std::map<uint32_t, SSAType>& regs, const RegTerminator& terminator)
+{
+    std::visit(
+        [&](const auto& t) {
+            using T = std::decay_t<decltype(t)>;
+            if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                collectCopies(regs, t.target.copies);
+            }
+            else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                collectCopies(regs, t.trueTarget.copies);
+                collectCopies(regs, t.falseTarget.copies);
+            }
+            else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                for (const auto& c : t.cases) collectCopies(regs, c.target.copies);
+                collectCopies(regs, t.defaultTarget.copies);
+            }
+        },
+        terminator);
 }
 
-void collectEdgeCopyTempTypes(std::vector<SSAType>& temps, const std::vector<RegCopy>& copies) {
+void collectEdgeCopyTempTypes(std::vector<SSAType>& temps, const std::vector<RegCopy>& copies)
+{
     for (const auto& copy : copies) temps.push_back(copy.dest.type);
 }
 
-void collectTerminatorEdgeCopyTempTypes(std::vector<SSAType>& temps, const RegTerminator& terminator) {
-    std::visit([&](const auto& t) {
-        using T = std::decay_t<decltype(t)>;
-        if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-            collectEdgeCopyTempTypes(temps, t.target.copies);
-        } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
-            collectEdgeCopyTempTypes(temps, t.trueTarget.copies);
-            collectEdgeCopyTempTypes(temps, t.falseTarget.copies);
-        } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
-            for (const auto& c : t.cases) collectEdgeCopyTempTypes(temps, c.target.copies);
-            collectEdgeCopyTempTypes(temps, t.defaultTarget.copies);
-        }
-    }, terminator);
+void collectTerminatorEdgeCopyTempTypes(std::vector<SSAType>& temps,
+                                        const RegTerminator&  terminator)
+{
+    std::visit(
+        [&](const auto& t) {
+            using T = std::decay_t<decltype(t)>;
+            if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                collectEdgeCopyTempTypes(temps, t.target.copies);
+            }
+            else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                collectEdgeCopyTempTypes(temps, t.trueTarget.copies);
+                collectEdgeCopyTempTypes(temps, t.falseTarget.copies);
+            }
+            else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                for (const auto& c : t.cases) collectEdgeCopyTempTypes(temps, c.target.copies);
+                collectEdgeCopyTempTypes(temps, t.defaultTarget.copies);
+            }
+        },
+        terminator);
 }
 
-std::vector<SSAType> collectEdgeCopyTempTypes(const RegFunction& fn) {
+std::vector<SSAType> collectEdgeCopyTempTypes(const RegFunction& fn)
+{
     std::vector<SSAType> temps;
     for (const auto& block : fn.blocks) {
         collectTerminatorEdgeCopyTempTypes(temps, block->terminator);
@@ -253,7 +284,8 @@ std::vector<SSAType> collectEdgeCopyTempTypes(const RegFunction& fn) {
     return temps;
 }
 
-bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs, std::string& reason) {
+bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs, std::string& reason)
+{
     for (const auto& parameter : fn.parameters) collectRegister(regs, parameter);
     for (const auto& block : fn.blocks) {
         for (const auto& ins : block->instructions) {
@@ -269,37 +301,43 @@ bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs, 
     return true;
 }
 
-struct RegCNativeObjectState {
+struct RegCNativeObjectState
+{
     RegCIntrinsicNativeObjectKind kind = RegCIntrinsicNativeObjectKind::None;
-    std::string storageName;
+    std::string                   storageName;
 };
 
-struct RegCFunctionEmitState {
+struct RegCFunctionEmitState
+{
     std::map<uint32_t, RegCNativeObjectState> nativeObjects;
+    std::string                               functionName;
+    std::vector<std::string>                  staticMethodCacheDeclarations;
+    int                                       staticMethodCacheIndex = 0;
 };
 
-const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind) {
+const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind)
+{
     switch (kind) {
-        case RegCIntrinsicNativeObjectKind::Int: return "mj2x_int";
-        case RegCIntrinsicNativeObjectKind::Long: return "mj2x_long";
-        case RegCIntrinsicNativeObjectKind::Short: return "mj2x_short";
-        case RegCIntrinsicNativeObjectKind::Byte: return "mj2x_byte";
-        case RegCIntrinsicNativeObjectKind::Float: return "mj2x_float";
-        case RegCIntrinsicNativeObjectKind::Double: return "mj2x_double";
-        case RegCIntrinsicNativeObjectKind::Bool: return "mj2x_bool";
-        case RegCIntrinsicNativeObjectKind::Char: return "mj2x_char";
-        case RegCIntrinsicNativeObjectKind::Random: return "mj2x_random";
-        default: return "mj2x_ref";
+    case RegCIntrinsicNativeObjectKind::Int: return "mj2x_int";
+    case RegCIntrinsicNativeObjectKind::Long: return "mj2x_long";
+    case RegCIntrinsicNativeObjectKind::Short: return "mj2x_short";
+    case RegCIntrinsicNativeObjectKind::Byte: return "mj2x_byte";
+    case RegCIntrinsicNativeObjectKind::Float: return "mj2x_float";
+    case RegCIntrinsicNativeObjectKind::Double: return "mj2x_double";
+    case RegCIntrinsicNativeObjectKind::Bool: return "mj2x_bool";
+    case RegCIntrinsicNativeObjectKind::Char: return "mj2x_char";
+    case RegCIntrinsicNativeObjectKind::Random: return "mj2x_random";
+    default: return "mj2x_ref";
     }
 }
 
-std::string nativeObjectStorageName(RegId id) {
+std::string nativeObjectStorageName(RegId id)
+{
     return "native_r" + std::to_string(id.value);
 }
 
-const RegCNativeObjectState* nativeObjectFor(
-    const RegCFunctionEmitState& state,
-    const RegOperand& operand)
+const RegCNativeObjectState* nativeObjectFor(const RegCFunctionEmitState& state,
+                                             const RegOperand&            operand)
 {
     if (operand.kind != RegOperandKind::Register) return nullptr;
     auto it = state.nativeObjects.find(operand.reg.value);
@@ -307,19 +345,16 @@ const RegCNativeObjectState* nativeObjectFor(
     return &it->second;
 }
 
-bool rejectNativeObjectEscape(const RegCFunctionEmitState& state,
-                              const RegOperand& operand,
-                              const std::string& surface,
-                              std::string& reason)
+bool rejectNativeObjectEscape(const RegCFunctionEmitState& state, const RegOperand& operand,
+                              const std::string& surface, std::string& reason)
 {
     if (!nativeObjectFor(state, operand)) return true;
     reason = "native object escaped through " + surface;
     return false;
 }
 
-bool rejectNativeObjectEscapes(const RegCFunctionEmitState& state,
-                               const std::vector<RegOperand>& operands,
-                               const std::string& surface,
+bool rejectNativeObjectEscapes(const RegCFunctionEmitState&   state,
+                               const std::vector<RegOperand>& operands, const std::string& surface,
                                std::string& reason)
 {
     for (const auto& operand : operands) {
@@ -328,70 +363,64 @@ bool rejectNativeObjectEscapes(const RegCFunctionEmitState& state,
     return true;
 }
 
-bool isSupportedInstruction(const RegInstruction& ins, std::string& reason) {
+bool isSupportedInstruction(const RegInstruction& ins, std::string& reason)
+{
     switch (ins.kind) {
-        case RegInstructionKind::Copy:
-        case RegInstructionKind::Unary:
-        case RegInstructionKind::Binary:
-        case RegInstructionKind::Compare:
-        case RegInstructionKind::Convert:
-        case RegInstructionKind::LoadField:
-        case RegInstructionKind::StoreField:
-        case RegInstructionKind::ArrayLoad:
-        case RegInstructionKind::ArrayStore:
-        case RegInstructionKind::Call:
-        case RegInstructionKind::Allocate:
-        case RegInstructionKind::Intrinsic:
-        case RegInstructionKind::Barrier:
-            return true;
+    case RegInstructionKind::Copy:
+    case RegInstructionKind::Unary:
+    case RegInstructionKind::Binary:
+    case RegInstructionKind::Compare:
+    case RegInstructionKind::Convert:
+    case RegInstructionKind::LoadField:
+    case RegInstructionKind::StoreField:
+    case RegInstructionKind::ArrayLoad:
+    case RegInstructionKind::ArrayStore:
+    case RegInstructionKind::Call:
+    case RegInstructionKind::Allocate:
+    case RegInstructionKind::Intrinsic:
+    case RegInstructionKind::Barrier: return true;
     }
     reason = "unknown RegIR instruction kind";
     return false;
 }
 
-std::string binaryExpr(const RegInstruction& ins) {
-    const std::string lhs = operandExpr(ins.lhs);
-    const std::string rhs = operandExpr(ins.rhs);
-    const SSAType type = ins.dest.type;
+std::string binaryExpr(const RegInstruction& ins)
+{
+    const std::string lhs  = operandExpr(ins.lhs);
+    const std::string rhs  = operandExpr(ins.rhs);
+    const SSAType     type = ins.dest.type;
 
     if (isIntegerLike(type) &&
         (ins.binaryOp == SSABinaryOp::Div || ins.binaryOp == SSABinaryOp::Rem)) {
-        const char* op = ins.binaryOp == SSABinaryOp::Div ? "div" : "rem";
+        const char* op    = ins.binaryOp == SSABinaryOp::Div ? "div" : "rem";
         const char* width = type == SSAType::I64 ? "i64" : "i32";
-        return "mj2x_regc_" + std::string(op) + "_" + width +
-               "(_mj2x_regc_current_context(), " + lhs + ", " + rhs + ")";
+        return "mj2x_regc_" + std::string(op) + "_" + width + "(_mj2x_regc_current_context(), " +
+               lhs + ", " + rhs + ")";
     }
     if (ins.binaryOp == SSABinaryOp::UShr) {
-        return "(" + std::string(cType(type)) + ")((" + unsignedCType(type) + ")" +
-               lhs + " >> " + rhs + ")";
+        return "(" + std::string(cType(type)) + ")((" + unsignedCType(type) + ")" + lhs + " >> " +
+               rhs + ")";
     }
     if (isIntegerLike(type) &&
         (ins.binaryOp == SSABinaryOp::Add || ins.binaryOp == SSABinaryOp::Sub ||
          ins.binaryOp == SSABinaryOp::Mul)) {
-        return "(" + std::string(cType(type)) + ")((" + unsignedCType(type) + ")" +
-               lhs + " " + binaryOp(ins.binaryOp) + " (" + unsignedCType(type) + ")" + rhs + ")";
+        return "(" + std::string(cType(type)) + ")((" + unsignedCType(type) + ")" + lhs + " " +
+               binaryOp(ins.binaryOp) + " (" + unsignedCType(type) + ")" + rhs + ")";
     }
     if ((type == SSAType::F32 || type == SSAType::F64) && ins.binaryOp == SSABinaryOp::Rem) {
         return std::string(type == SSAType::F32 ? "fmodf" : "fmod") + "(" + lhs + ", " + rhs + ")";
     }
-    return "(" + std::string(cType(type)) + ")(" + lhs + " " + binaryOp(ins.binaryOp) + " " + rhs + ")";
+    return "(" + std::string(cType(type)) + ")(" + lhs + " " + binaryOp(ins.binaryOp) + " " + rhs +
+           ")";
 }
 
-void emitHelperPrelude(std::ostringstream& out) {
-    out << "typedef void* mj2x_ref;\n";
-    out << "#ifndef MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
-    out << "#define MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
-    out << "typedef struct mj2x_regc_context mj2x_regc_context;\n";
-    out << "int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
-    out << "int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
-    out << "int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
-    out << "int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
-    out << "void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);\n";
-    out << "#endif\n";
+void emitHelperPrelude(std::ostream& out)
+{
     out << "static mj2x_regc_context* _mj2x_regc_current_context(void);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_object(const char* type_desc);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_array(const char* type_desc, int32_t length);\n";
-    out << "static mj2x_ref _mj2x_regc_alloc_multi_array(const char* type_desc, int32_t dim_count, int32_t* dims);\n";
+    out << "static mj2x_ref _mj2x_regc_alloc_multi_array(const char* type_desc, int32_t dim_count, "
+           "int32_t* dims);\n";
     out << "static int32_t _mj2x_regc_array_length(mj2x_ref array_ref);\n";
     out << "static mj2x_ref _mj2x_regc_checkcast(mj2x_ref value, const char* type_desc);\n";
     out << "static int32_t _mj2x_regc_instanceof(mj2x_ref value, const char* type_desc);\n";
@@ -402,24 +431,42 @@ void emitHelperPrelude(std::ostringstream& out) {
     out << "static void _mj2x_regc_exception_clear(void);\n";
     out << "static int32_t _mj2x_regc_exception_matches(mj2x_ref value, const char* catch_type);\n";
     out << "static void _mj2x_regc_throw(mj2x_ref value);\n";
-    out << "static bool _mj2x_regc_load_bool_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static int8_t _mj2x_regc_load_i8_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static uint16_t _mj2x_regc_load_char_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static int16_t _mj2x_regc_load_i16_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static int32_t _mj2x_regc_load_i32_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static int64_t _mj2x_regc_load_i64_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static float _mj2x_regc_load_f32_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static double _mj2x_regc_load_f64_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static mj2x_ref _mj2x_regc_load_ref_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc);\n";
-    out << "static void _mj2x_regc_store_bool_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, bool value);\n";
-    out << "static void _mj2x_regc_store_i8_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, int8_t value);\n";
-    out << "static void _mj2x_regc_store_char_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, uint16_t value);\n";
-    out << "static void _mj2x_regc_store_i16_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, int16_t value);\n";
-    out << "static void _mj2x_regc_store_i32_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, int32_t value);\n";
-    out << "static void _mj2x_regc_store_i64_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, int64_t value);\n";
-    out << "static void _mj2x_regc_store_f32_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, float value);\n";
-    out << "static void _mj2x_regc_store_f64_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, double value);\n";
-    out << "static void _mj2x_regc_store_ref_field(int32_t is_static, mj2x_ref receiver, const char* owner, const char* name, const char* desc, mj2x_ref value);\n";
+    out << "static bool _mj2x_regc_load_bool_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static int8_t _mj2x_regc_load_i8_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static uint16_t _mj2x_regc_load_char_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static int16_t _mj2x_regc_load_i16_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static int32_t _mj2x_regc_load_i32_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static int64_t _mj2x_regc_load_i64_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static float _mj2x_regc_load_f32_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static double _mj2x_regc_load_f64_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static mj2x_ref _mj2x_regc_load_ref_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc);\n";
+    out << "static void _mj2x_regc_store_bool_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, bool value);\n";
+    out << "static void _mj2x_regc_store_i8_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, int8_t value);\n";
+    out << "static void _mj2x_regc_store_char_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, uint16_t value);\n";
+    out << "static void _mj2x_regc_store_i16_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, int16_t value);\n";
+    out << "static void _mj2x_regc_store_i32_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, int32_t value);\n";
+    out << "static void _mj2x_regc_store_i64_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, int64_t value);\n";
+    out << "static void _mj2x_regc_store_f32_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, float value);\n";
+    out << "static void _mj2x_regc_store_f64_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, double value);\n";
+    out << "static void _mj2x_regc_store_ref_field(int32_t is_static, mj2x_ref receiver, const "
+           "char* owner, const char* name, const char* desc, mj2x_ref value);\n";
     out << "static int8_t _mj2x_regc_load_i8_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static int16_t _mj2x_regc_load_i16_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static uint16_t _mj2x_regc_load_char_array(mj2x_ref array_ref, int32_t index);\n";
@@ -428,24 +475,51 @@ void emitHelperPrelude(std::ostringstream& out) {
     out << "static float _mj2x_regc_load_f32_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static double _mj2x_regc_load_f64_array(mj2x_ref array_ref, int32_t index);\n";
     out << "static mj2x_ref _mj2x_regc_load_ref_array(mj2x_ref array_ref, int32_t index);\n";
-    out << "static void _mj2x_regc_store_i8_array(mj2x_ref array_ref, int32_t index, int8_t value);\n";
-    out << "static void _mj2x_regc_store_i16_array(mj2x_ref array_ref, int32_t index, int16_t value);\n";
-    out << "static void _mj2x_regc_store_char_array(mj2x_ref array_ref, int32_t index, uint16_t value);\n";
-    out << "static void _mj2x_regc_store_i32_array(mj2x_ref array_ref, int32_t index, int32_t value);\n";
-    out << "static void _mj2x_regc_store_i64_array(mj2x_ref array_ref, int32_t index, int64_t value);\n";
-    out << "static void _mj2x_regc_store_f32_array(mj2x_ref array_ref, int32_t index, float value);\n";
-    out << "static void _mj2x_regc_store_f64_array(mj2x_ref array_ref, int32_t index, double value);\n";
-    out << "static void _mj2x_regc_store_ref_array(mj2x_ref array_ref, int32_t index, mj2x_ref value);\n";
-    out << "static int32_t _mj2x_regc_call_i32(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
-    out << "static int64_t _mj2x_regc_call_i64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
-    out << "static float _mj2x_regc_call_f32(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
-    out << "static double _mj2x_regc_call_f64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
-    out << "static mj2x_ref _mj2x_regc_call_ref(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
-    out << "static void _mj2x_regc_call_void(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...);\n";
+    out << "static void _mj2x_regc_store_i8_array(mj2x_ref array_ref, int32_t index, int8_t "
+           "value);\n";
+    out << "static void _mj2x_regc_store_i16_array(mj2x_ref array_ref, int32_t index, int16_t "
+           "value);\n";
+    out << "static void _mj2x_regc_store_char_array(mj2x_ref array_ref, int32_t index, uint16_t "
+           "value);\n";
+    out << "static void _mj2x_regc_store_i32_array(mj2x_ref array_ref, int32_t index, int32_t "
+           "value);\n";
+    out << "static void _mj2x_regc_store_i64_array(mj2x_ref array_ref, int32_t index, int64_t "
+           "value);\n";
+    out << "static void _mj2x_regc_store_f32_array(mj2x_ref array_ref, int32_t index, float "
+           "value);\n";
+    out << "static void _mj2x_regc_store_f64_array(mj2x_ref array_ref, int32_t index, double "
+           "value);\n";
+    out << "static void _mj2x_regc_store_ref_array(mj2x_ref array_ref, int32_t index, mj2x_ref "
+           "value);\n";
+    out << "static int32_t _mj2x_regc_call_i32(const char* owner, const char* name, const char* "
+           "desc, int32_t is_static, int32_t arg_count, ...);\n";
+    out << "static int64_t _mj2x_regc_call_i64(const char* owner, const char* name, const char* "
+           "desc, int32_t is_static, int32_t arg_count, ...);\n";
+    out << "static float _mj2x_regc_call_f32(const char* owner, const char* name, const char* "
+           "desc, int32_t is_static, int32_t arg_count, ...);\n";
+    out << "static double _mj2x_regc_call_f64(const char* owner, const char* name, const char* "
+           "desc, int32_t is_static, int32_t arg_count, ...);\n";
+    out << "static mj2x_ref _mj2x_regc_call_ref(const char* owner, const char* name, const char* "
+           "desc, int32_t is_static, int32_t arg_count, ...);\n";
+    out << "static void _mj2x_regc_call_void(const char* owner, const char* name, const char* "
+           "desc, int32_t is_static, int32_t arg_count, ...);\n";
+    out << "static int32_t _mj2x_regc_call_cached_i32(mj2x_regc_static_method_cache* cache, "
+           "int32_t arg_count, ...);\n";
+    out << "static int64_t _mj2x_regc_call_cached_i64(mj2x_regc_static_method_cache* cache, "
+           "int32_t arg_count, ...);\n";
+    out << "static float _mj2x_regc_call_cached_f32(mj2x_regc_static_method_cache* cache, int32_t "
+           "arg_count, ...);\n";
+    out << "static double _mj2x_regc_call_cached_f64(mj2x_regc_static_method_cache* cache, int32_t "
+           "arg_count, ...);\n";
+    out << "static mj2x_ref _mj2x_regc_call_cached_ref(mj2x_regc_static_method_cache* cache, "
+           "int32_t arg_count, ...);\n";
+    out << "static void _mj2x_regc_call_cached_void(mj2x_regc_static_method_cache* cache, int32_t "
+           "arg_count, ...);\n";
     RegCIntrinsicRegistry::builtins().emitDeclarations(out);
 }
 
-std::string callArgs(const std::vector<RegOperand>& args) {
+std::string callArgs(const std::vector<RegOperand>& args)
+{
     std::ostringstream os;
     os << static_cast<int32_t>(args.size());
     for (const auto& arg : args) {
@@ -454,8 +528,19 @@ std::string callArgs(const std::vector<RegOperand>& args) {
     return os.str();
 }
 
-RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
-                                        const RegInstruction& ins,
+std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+{
+    const std::string  cacheName = "_mj2x_regc_cache_" + state.functionName + "_" +
+                                   std::to_string(state.staticMethodCacheIndex++);
+    std::ostringstream decl;
+    decl << "static mj2x_regc_static_method_cache " << cacheName << " = {"
+         << cStringLiteral(ins.method.owner) << ", " << cStringLiteral(ins.method.name) << ", "
+         << cStringLiteral(ins.method.desc) << ", NULL, NULL};\n";
+    state.staticMethodCacheDeclarations.push_back(decl.str());
+    return cacheName;
+}
+
+RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out, const RegInstruction& ins,
                                         RegCFunctionEmitState& state)
 {
     RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
@@ -463,7 +548,7 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
 
     if (decision.emitKind == RegCIntrinsicEmitKind::WrapperValueOf) {
         if (!ins.hasDest) {
-            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
             decision.reason = "wrapper valueOf intrinsic missing destination";
             return decision;
         }
@@ -479,13 +564,13 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
 
     if (decision.emitKind == RegCIntrinsicEmitKind::WrapperUnbox) {
         if (ins.args.empty()) {
-            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
             decision.reason = "wrapper unbox intrinsic missing receiver";
             return decision;
         }
         const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
         if (!objectState || objectState->kind != decision.nativeObjectKind) {
-            decision.kind = RegCIntrinsicDecisionKind::Fallback;
+            decision.kind   = RegCIntrinsicDecisionKind::Fallback;
             decision.reason = "wrapper receiver is not native state";
             return decision;
         }
@@ -497,30 +582,30 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
 
     if (decision.emitKind == RegCIntrinsicEmitKind::RandomInit) {
         if (ins.args.size() != 2) {
-            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
             decision.reason = "Random init intrinsic requires receiver and seed";
             return decision;
         }
         const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
         if (!objectState || objectState->kind != RegCIntrinsicNativeObjectKind::Random) {
-            decision.kind = RegCIntrinsicDecisionKind::Fallback;
+            decision.kind   = RegCIntrinsicDecisionKind::Fallback;
             decision.reason = "Random receiver is not native state";
             return decision;
         }
-        out << "    " << decision.symbol << "(&" << objectState->storageName
-            << ", " << operandExpr(ins.args[1]) << ");\n";
+        out << "    " << decision.symbol << "(&" << objectState->storageName << ", "
+            << operandExpr(ins.args[1]) << ");\n";
         return decision;
     }
 
     if (decision.emitKind == RegCIntrinsicEmitKind::NativeObjectMethod) {
         if (ins.args.empty()) {
-            decision.kind = RegCIntrinsicDecisionKind::Unsupported;
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
             decision.reason = "native object method intrinsic missing receiver";
             return decision;
         }
         const RegCNativeObjectState* objectState = nativeObjectFor(state, ins.args[0]);
         if (!objectState || objectState->kind != decision.nativeObjectKind) {
-            decision.kind = RegCIntrinsicDecisionKind::Fallback;
+            decision.kind   = RegCIntrinsicDecisionKind::Fallback;
             decision.reason = "receiver is not native object state";
             return decision;
         }
@@ -551,11 +636,9 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out,
     return decision;
 }
 
-bool emitEdgeCopies(std::ostringstream& out,
-                    const std::vector<RegCopy>& copies,
-                    const RegCFunctionEmitState& state,
-                    int& edgeTempIndex,
-                    std::string& reason) {
+bool emitEdgeCopies(std::ostringstream& out, const std::vector<RegCopy>& copies,
+                    const RegCFunctionEmitState& state, int& edgeTempIndex, std::string& reason)
+{
     if (copies.empty()) return true;
 
     // Edge copies are parallel phi transfers.  Stage sources in temporaries so
@@ -563,11 +646,12 @@ bool emitEdgeCopies(std::ostringstream& out,
     std::vector<int> tempIds;
     tempIds.reserve(copies.size());
     for (size_t i = 0; i < copies.size(); ++i) {
-        if (!rejectNativeObjectEscape(state, copies[i].source, "CFG edge copy", reason)) return false;
+        if (!rejectNativeObjectEscape(state, copies[i].source, "CFG edge copy", reason))
+            return false;
         const int tempId = edgeTempIndex++;
         tempIds.push_back(tempId);
-        out << "    edge_tmp_" << tempId << " = ("
-            << cType(copies[i].dest.type) << ")(" << operandExpr(copies[i].source) << ");\n";
+        out << "    edge_tmp_" << tempId << " = (" << cType(copies[i].dest.type) << ")("
+            << operandExpr(copies[i].source) << ");\n";
     }
     for (size_t i = 0; i < copies.size(); ++i) {
         out << "    " << regName(copies[i].dest.id) << " = edge_tmp_" << tempIds[i] << ";\n";
@@ -575,13 +659,15 @@ bool emitEdgeCopies(std::ostringstream& out,
     return true;
 }
 
-bool protectsBlock(const RegExceptionRegion& region, const RegBlock* block) {
+bool protectsBlock(const RegExceptionRegion& region, const RegBlock* block)
+{
     return std::find(region.protectedBlocks.begin(), region.protectedBlocks.end(), block) !=
            region.protectedBlocks.end();
 }
 
 std::vector<const RegExceptionRegion*> activeExceptionRegions(const RegFunction& fn,
-                                                              const RegBlock* block) {
+                                                              const RegBlock*    block)
+{
     std::vector<const RegExceptionRegion*> active;
     for (const auto& region : fn.exceptionRegions) {
         if (protectsBlock(region, block)) active.push_back(&region);
@@ -589,18 +675,20 @@ std::vector<const RegExceptionRegion*> activeExceptionRegions(const RegFunction&
     return active;
 }
 
-void emitDefaultReturnAfterException(std::ostringstream& out, SSAType returnType) {
+void emitDefaultReturnAfterException(std::ostringstream& out, SSAType returnType)
+{
     if (returnType == SSAType::VOID) {
         out << "        return;\n";
-    } else {
+    }
+    else {
         out << "        return " << defaultValue(returnType) << ";\n";
     }
 }
 
-void emitExceptionDispatch(std::ostringstream& out,
+void emitExceptionDispatch(std::ostringstream&                           out,
                            const std::vector<const RegExceptionRegion*>& regions,
-                           SSAType returnType,
-                           int& dispatchIndex) {
+                           SSAType returnType, int& dispatchIndex)
+{
     if (regions.empty()) return;
 
     const int index = dispatchIndex++;
@@ -622,255 +710,310 @@ void emitExceptionDispatch(std::ostringstream& out,
     out << "    }\n";
 }
 
-bool emitInstruction(std::ostringstream& out,
-                     const RegInstruction& ins,
-                     RegCFunctionEmitState& state,
-                     std::string& reason) {
+bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
+                     RegCFunctionEmitState& state, std::string& reason)
+{
     if (!isSupportedInstruction(ins, reason)) return false;
 
     switch (ins.kind) {
-        case RegInstructionKind::Copy:
-            if (const auto* objectState = nativeObjectFor(state, ins.copy.source)) {
-                out << "    " << nativeObjectType(objectState->kind) << " "
-                    << nativeObjectStorageName(ins.copy.dest.id) << " = "
-                    << objectState->storageName << ";\n";
-                out << "    " << regName(ins.copy.dest.id) << " = NULL;\n";
-                state.nativeObjects[ins.copy.dest.id.value] =
-                    RegCNativeObjectState{objectState->kind, nativeObjectStorageName(ins.copy.dest.id)};
-            } else {
-                state.nativeObjects.erase(ins.copy.dest.id.value);
-                out << "    " << regName(ins.copy.dest.id) << " = ("
-                    << cType(ins.copy.dest.type) << ")(" << operandExpr(ins.copy.source) << ");\n";
-            }
-            return true;
-        case RegInstructionKind::Unary:
-            out << "    " << regName(ins.dest.id) << " = (" << cType(ins.dest.type)
-                << ")(-" << operandExpr(ins.value) << ");\n";
-            return true;
-        case RegInstructionKind::Binary:
-            out << "    " << regName(ins.dest.id) << " = " << binaryExpr(ins) << ";\n";
-            return true;
-        case RegInstructionKind::Compare:
-            out << "    " << regName(ins.dest.id) << " = ("
-                << operandExpr(ins.lhs) << " " << compareOp(ins.comparePredicate)
-                << " " << operandExpr(ins.rhs) << ");\n";
-            return true;
-        case RegInstructionKind::Convert:
-            if (!rejectNativeObjectEscape(state, ins.value, "reference conversion", reason)) return false;
-            if (ins.convertKind == SSAConvertKind::ReferenceCast) {
-                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_checkcast("
-                    << operandExpr(ins.value) << ", " << cStringLiteral(ins.referenceTypeDesc) << ");\n";
-            } else {
-                out << "    " << regName(ins.dest.id) << " = (" << cType(ins.targetType)
-                    << ")(" << operandExpr(ins.value) << ");\n";
-            }
-            return true;
-        case RegInstructionKind::LoadField:
-            if (!rejectNativeObjectEscape(state, ins.receiver, "field load receiver", reason)) return false;
-            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
-                << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field("
-                << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver)) << ", "
-                << cStringLiteral(ins.field.owner) << ", "
-                << cStringLiteral(ins.field.name) << ", "
-                << cStringLiteral(ins.field.desc) << ");\n";
-            return true;
-        case RegInstructionKind::StoreField:
-            if (!rejectNativeObjectEscape(state, ins.receiver, "field store receiver", reason)) return false;
-            if (!rejectNativeObjectEscape(state, ins.value, "field store value", reason)) return false;
-            out << "    _mj2x_regc_store_" << fieldHelperSuffix(ins.field.desc, ins.value.type) << "_field("
-                << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver)) << ", "
-                << cStringLiteral(ins.field.owner) << ", "
-                << cStringLiteral(ins.field.name) << ", "
-                << cStringLiteral(ins.field.desc) << ", "
+    case RegInstructionKind::Copy:
+        if (const auto* objectState = nativeObjectFor(state, ins.copy.source)) {
+            out << "    " << nativeObjectType(objectState->kind) << " "
+                << nativeObjectStorageName(ins.copy.dest.id) << " = " << objectState->storageName
+                << ";\n";
+            out << "    " << regName(ins.copy.dest.id) << " = NULL;\n";
+            state.nativeObjects[ins.copy.dest.id.value] =
+                RegCNativeObjectState{objectState->kind, nativeObjectStorageName(ins.copy.dest.id)};
+        }
+        else {
+            state.nativeObjects.erase(ins.copy.dest.id.value);
+            out << "    " << regName(ins.copy.dest.id) << " = (" << cType(ins.copy.dest.type)
+                << ")(" << operandExpr(ins.copy.source) << ");\n";
+        }
+        return true;
+    case RegInstructionKind::Unary:
+        out << "    " << regName(ins.dest.id) << " = (" << cType(ins.dest.type) << ")(-"
+            << operandExpr(ins.value) << ");\n";
+        return true;
+    case RegInstructionKind::Binary:
+        out << "    " << regName(ins.dest.id) << " = " << binaryExpr(ins) << ";\n";
+        return true;
+    case RegInstructionKind::Compare:
+        out << "    " << regName(ins.dest.id) << " = (" << operandExpr(ins.lhs) << " "
+            << compareOp(ins.comparePredicate) << " " << operandExpr(ins.rhs) << ");\n";
+        return true;
+    case RegInstructionKind::Convert:
+        if (!rejectNativeObjectEscape(state, ins.value, "reference conversion", reason))
+            return false;
+        if (ins.convertKind == SSAConvertKind::ReferenceCast) {
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_checkcast("
+                << operandExpr(ins.value) << ", " << cStringLiteral(ins.referenceTypeDesc)
+                << ");\n";
+        }
+        else {
+            out << "    " << regName(ins.dest.id) << " = (" << cType(ins.targetType) << ")("
                 << operandExpr(ins.value) << ");\n";
-            return true;
-        case RegInstructionKind::ArrayLoad:
-            if (!rejectNativeObjectEscape(state, ins.receiver, "array load receiver", reason)) return false;
-            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
-                << arrayHelperSuffix(ins.elementType) << "_array("
-                << operandExpr(ins.receiver) << ", " << operandExpr(ins.index) << ");\n";
-            return true;
-        case RegInstructionKind::ArrayStore:
-            if (!rejectNativeObjectEscape(state, ins.receiver, "array store receiver", reason)) return false;
-            if (!rejectNativeObjectEscape(state, ins.value, "array store value", reason)) return false;
-            out << "    _mj2x_regc_store_" << arrayHelperSuffix(ins.elementType) << "_array("
-                << operandExpr(ins.receiver) << ", " << operandExpr(ins.index)
-                << ", " << operandExpr(ins.value) << ");\n";
-            return true;
-        case RegInstructionKind::Call:
-            // JDK intrinsic recognition goes through the registry so fallback
-            // and unsupported reasons remain explicit as coverage grows.
-            {
-                RegCIntrinsicDecision decision = emitIntrinsicCall(out, ins, state);
-                if (decision.kind == RegCIntrinsicDecisionKind::Emit) return true;
-                if (decision.kind == RegCIntrinsicDecisionKind::Unsupported) {
-                    reason = decision.reason;
-                    return false;
-                }
-            }
-            if (!rejectNativeObjectEscapes(state, ins.args, "generic call " + ins.method.owner + "." + ins.method.name, reason)) {
+        }
+        return true;
+    case RegInstructionKind::LoadField:
+        if (!rejectNativeObjectEscape(state, ins.receiver, "field load receiver", reason))
+            return false;
+        out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
+            << fieldHelperSuffix(ins.field.desc, ins.dest.type) << "_field("
+            << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver)) << ", "
+            << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name) << ", "
+            << cStringLiteral(ins.field.desc) << ");\n";
+        return true;
+    case RegInstructionKind::StoreField:
+        if (!rejectNativeObjectEscape(state, ins.receiver, "field store receiver", reason))
+            return false;
+        if (!rejectNativeObjectEscape(state, ins.value, "field store value", reason)) return false;
+        out << "    _mj2x_regc_store_" << fieldHelperSuffix(ins.field.desc, ins.value.type)
+            << "_field(" << (ins.field.isStatic ? "1, NULL" : "0, " + operandExpr(ins.receiver))
+            << ", " << cStringLiteral(ins.field.owner) << ", " << cStringLiteral(ins.field.name)
+            << ", " << cStringLiteral(ins.field.desc) << ", " << operandExpr(ins.value) << ");\n";
+        return true;
+    case RegInstructionKind::ArrayLoad:
+        if (!rejectNativeObjectEscape(state, ins.receiver, "array load receiver", reason))
+            return false;
+        out << "    " << regName(ins.dest.id) << " = _mj2x_regc_load_"
+            << arrayHelperSuffix(ins.elementType) << "_array(" << operandExpr(ins.receiver) << ", "
+            << operandExpr(ins.index) << ");\n";
+        return true;
+    case RegInstructionKind::ArrayStore:
+        if (!rejectNativeObjectEscape(state, ins.receiver, "array store receiver", reason))
+            return false;
+        if (!rejectNativeObjectEscape(state, ins.value, "array store value", reason)) return false;
+        out << "    _mj2x_regc_store_" << arrayHelperSuffix(ins.elementType) << "_array("
+            << operandExpr(ins.receiver) << ", " << operandExpr(ins.index) << ", "
+            << operandExpr(ins.value) << ");\n";
+        return true;
+    case RegInstructionKind::Call:
+    {
+        // JDK intrinsic recognition goes through the registry so fallback
+        // and unsupported reasons remain explicit as coverage grows.
+        {
+            RegCIntrinsicDecision decision = emitIntrinsicCall(out, ins, state);
+            if (decision.kind == RegCIntrinsicDecisionKind::Emit) return true;
+            if (decision.kind == RegCIntrinsicDecisionKind::Unsupported) {
+                reason = decision.reason;
                 return false;
             }
-            if (ins.hasDest) {
-                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_call_"
-                    << helperSuffix(ins.dest.type) << "("
-                    << cStringLiteral(ins.method.owner) << ", "
-                    << cStringLiteral(ins.method.name) << ", "
-                    << cStringLiteral(ins.method.desc) << ", "
-                    << (isStaticCall(ins) ? "1" : "0") << ", "
-                    << callArgs(ins.args) << ");\n";
-            } else {
-                out << "    _mj2x_regc_call_void("
-                    << cStringLiteral(ins.method.owner) << ", "
-                    << cStringLiteral(ins.method.name) << ", "
-                    << cStringLiteral(ins.method.desc) << ", "
-                    << (isStaticCall(ins) ? "1" : "0") << ", "
-                    << callArgs(ins.args) << ");\n";
-            }
-            return true;
-        case RegInstructionKind::Allocate:
-            if (ins.allocationKind == SSAAllocationKind::Object) {
-                if (ins.typeDesc == "java/util/Random") {
-                    out << "    mj2x_random " << nativeObjectStorageName(ins.dest.id) << " = {0};\n";
-                    out << "    " << regName(ins.dest.id) << " = NULL;\n";
-                    state.nativeObjects[ins.dest.id.value] =
-                        RegCNativeObjectState{RegCIntrinsicNativeObjectKind::Random,
-                                              nativeObjectStorageName(ins.dest.id)};
-                } else {
-                    out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_object("
-                        << cStringLiteral(ins.typeDesc) << ");\n";
-                }
-            } else if (ins.allocationKind == SSAAllocationKind::Array) {
-                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_array("
-                    << cStringLiteral(ins.typeDesc) << ", " << operandExpr(ins.args.empty() ? RegOperand::fromInt(0, SSAType::I32) : ins.args[0]) << ");\n";
-            } else {
-                out << "    {\n";
-                out << "        int32_t dims[" << ins.args.size() << "];\n";
-                for (size_t i = 0; i < ins.args.size(); ++i) {
-                    out << "        dims[" << i << "] = " << operandExpr(ins.args[i]) << ";\n";
-                }
-                out << "        " << regName(ins.dest.id) << " = _mj2x_regc_alloc_multi_array("
-                    << cStringLiteral(ins.typeDesc) << ", " << ins.args.size() << ", dims);\n";
-                out << "    }\n";
-            }
-            return true;
-        case RegInstructionKind::Intrinsic:
-            if (ins.intrinsicName == "array.length") {
-                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
-                                              "array.length", reason)) return false;
-                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_array_length("
-                    << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
-                return true;
-            }
-            if (ins.intrinsicName.rfind("instanceof:", 0) == 0) {
-                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
-                                              "instanceof", reason)) return false;
-                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_instanceof("
-                    << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ", "
-                    << cStringLiteral(ins.intrinsicName.substr(11)) << ");\n";
-                return true;
-            }
-            if (ins.intrinsicName == "monitor.enter") {
-                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
-                                              "monitor.enter", reason)) return false;
-                out << "    _mj2x_regc_monitor_enter("
-                    << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
-                return true;
-            }
-            if (ins.intrinsicName == "monitor.exit") {
-                if (!rejectNativeObjectEscape(state, ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
-                                              "monitor.exit", reason)) return false;
-                out << "    _mj2x_regc_monitor_exit("
-                    << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
-                return true;
-            }
-            reason = "unsupported RegC intrinsic: " + ins.intrinsicName;
+        }
+        if (!rejectNativeObjectEscapes(state,
+                                       ins.args,
+                                       "generic call " + ins.method.owner + "." + ins.method.name,
+                                       reason)) {
             return false;
-        case RegInstructionKind::Barrier:
-            out << "    mj2x_regc_barrier(_mj2x_regc_current_context(), "
-                << cStringLiteral(ins.barrierReason) << ");\n";
+        }
+        const bool        staticCall = isStaticCall(ins);
+        const std::string cacheName  = staticCall ? addStaticMethodCache(state, ins) : "";
+        if (ins.hasDest) {
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_call_";
+            if (staticCall) {
+                out << "cached_" << helperSuffix(ins.dest.type) << "(&" << cacheName << ", "
+                    << callArgs(ins.args) << ");\n";
+            }
+            else {
+                out << helperSuffix(ins.dest.type) << "(" << cStringLiteral(ins.method.owner)
+                    << ", " << cStringLiteral(ins.method.name) << ", "
+                    << cStringLiteral(ins.method.desc) << ", 0, " << callArgs(ins.args) << ");\n";
+            }
+        }
+        else {
+            out << "    _mj2x_regc_call_";
+            if (staticCall) {
+                out << "cached_void(&" << cacheName << ", " << callArgs(ins.args) << ");\n";
+            }
+            else {
+                out << "void(" << cStringLiteral(ins.method.owner) << ", "
+                    << cStringLiteral(ins.method.name) << ", " << cStringLiteral(ins.method.desc)
+                    << ", 0, " << callArgs(ins.args) << ");\n";
+            }
+        }
+        return true;
+    }
+    case RegInstructionKind::Allocate:
+        if (ins.allocationKind == SSAAllocationKind::Object) {
+            if (ins.typeDesc == "java/util/Random") {
+                out << "    mj2x_random " << nativeObjectStorageName(ins.dest.id) << " = {0};\n";
+                out << "    " << regName(ins.dest.id) << " = NULL;\n";
+                state.nativeObjects[ins.dest.id.value] = RegCNativeObjectState{
+                    RegCIntrinsicNativeObjectKind::Random, nativeObjectStorageName(ins.dest.id)};
+            }
+            else {
+                out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_object("
+                    << cStringLiteral(ins.typeDesc) << ");\n";
+            }
+        }
+        else if (ins.allocationKind == SSAAllocationKind::Array) {
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_array("
+                << cStringLiteral(ins.typeDesc) << ", "
+                << operandExpr(ins.args.empty() ? RegOperand::fromInt(0, SSAType::I32)
+                                                : ins.args[0])
+                << ");\n";
+        }
+        else {
+            out << "    {\n";
+            out << "        int32_t dims[" << ins.args.size() << "];\n";
+            for (size_t i = 0; i < ins.args.size(); ++i) {
+                out << "        dims[" << i << "] = " << operandExpr(ins.args[i]) << ";\n";
+            }
+            out << "        " << regName(ins.dest.id) << " = _mj2x_regc_alloc_multi_array("
+                << cStringLiteral(ins.typeDesc) << ", " << ins.args.size() << ", dims);\n";
+            out << "    }\n";
+        }
+        return true;
+    case RegInstructionKind::Intrinsic:
+        if (ins.intrinsicName == "array.length") {
+            if (!rejectNativeObjectEscape(state,
+                                          ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                          "array.length",
+                                          reason))
+                return false;
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_array_length("
+                << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
             return true;
-        default:
-            break;
+        }
+        if (ins.intrinsicName.rfind("instanceof:", 0) == 0) {
+            if (!rejectNativeObjectEscape(state,
+                                          ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                          "instanceof",
+                                          reason))
+                return false;
+            out << "    " << regName(ins.dest.id) << " = _mj2x_regc_instanceof("
+                << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ", "
+                << cStringLiteral(ins.intrinsicName.substr(11)) << ");\n";
+            return true;
+        }
+        if (ins.intrinsicName == "monitor.enter") {
+            if (!rejectNativeObjectEscape(state,
+                                          ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                          "monitor.enter",
+                                          reason))
+                return false;
+            out << "    _mj2x_regc_monitor_enter("
+                << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
+            return true;
+        }
+        if (ins.intrinsicName == "monitor.exit") {
+            if (!rejectNativeObjectEscape(state,
+                                          ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
+                                          "monitor.exit",
+                                          reason))
+                return false;
+            out << "    _mj2x_regc_monitor_exit("
+                << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
+            return true;
+        }
+        reason = "unsupported RegC intrinsic: " + ins.intrinsicName;
+        return false;
+    case RegInstructionKind::Barrier:
+        out << "    mj2x_regc_barrier(_mj2x_regc_current_context(), "
+            << cStringLiteral(ins.barrierReason) << ");\n";
+        return true;
+    default: break;
     }
 
     reason = "unreachable RegC instruction path";
     return false;
 }
 
-bool emitTerminator(std::ostringstream& out,
-                    const RegTerminator& terminator,
-                    SSAType returnType,
+bool emitTerminator(std::ostringstream& out, const RegTerminator& terminator, SSAType returnType,
                     const std::vector<const RegExceptionRegion*>& activeRegions,
-                    const RegCFunctionEmitState& state,
-                    int& dispatchIndex,
-                    int& edgeTempIndex,
-                    std::string& reason) {
-    return std::visit([&](const auto& t) -> bool {
-        using T = std::decay_t<decltype(t)>;
-        if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-            out << "    {\n";
-            if (!emitEdgeCopies(out, t.target.copies, state, edgeTempIndex, reason)) return false;
-            out << "    goto block_b" << t.target.block->id.value << ";\n";
-            out << "    }\n";
-            return true;
-        } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
-            if (!rejectNativeObjectEscape(state, t.condition, "branch condition", reason)) return false;
-            out << "    if (" << operandExpr(t.condition) << ") {\n";
-            if (!emitEdgeCopies(out, t.trueTarget.copies, state, edgeTempIndex, reason)) return false;
-            out << "        goto block_b" << t.trueTarget.block->id.value << ";\n";
-            out << "    } else {\n";
-            if (!emitEdgeCopies(out, t.falseTarget.copies, state, edgeTempIndex, reason)) return false;
-            out << "        goto block_b" << t.falseTarget.block->id.value << ";\n";
-            out << "    }\n";
-            return true;
-        } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
-            if (!rejectNativeObjectEscape(state, t.value, "switch value", reason)) return false;
-            out << "    switch (" << operandExpr(t.value) << ") {\n";
-            for (const auto& c : t.cases) {
-                out << "    case " << c.key << ": {\n";
-                if (!emitEdgeCopies(out, c.target.copies, state, edgeTempIndex, reason)) return false;
-                out << "        goto block_b" << c.target.block->id.value << ";\n";
+                    const RegCFunctionEmitState& state, int& dispatchIndex, int& edgeTempIndex,
+                    std::string& reason)
+{
+    return std::visit(
+        [&](const auto& t) -> bool {
+            using T = std::decay_t<decltype(t)>;
+            if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                out << "    {\n";
+                if (!emitEdgeCopies(out, t.target.copies, state, edgeTempIndex, reason))
+                    return false;
+                out << "    goto block_b" << t.target.block->id.value << ";\n";
                 out << "    }\n";
+                return true;
             }
-            out << "    default: {\n";
-            if (!emitEdgeCopies(out, t.defaultTarget.copies, state, edgeTempIndex, reason)) return false;
-            out << "        goto block_b" << t.defaultTarget.block->id.value << ";\n";
-            out << "    }\n";
-            out << "    }\n";
-            return true;
-        } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
-            if (t.hasValue) {
-                if (!rejectNativeObjectEscape(state, t.value, "method return", reason)) return false;
-                out << "    return " << operandExpr(t.value) << ";\n";
-            } else {
-                out << "    return;\n";
+            else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                if (!rejectNativeObjectEscape(state, t.condition, "branch condition", reason))
+                    return false;
+                out << "    if (" << operandExpr(t.condition) << ") {\n";
+                if (!emitEdgeCopies(out, t.trueTarget.copies, state, edgeTempIndex, reason))
+                    return false;
+                out << "        goto block_b" << t.trueTarget.block->id.value << ";\n";
+                out << "    } else {\n";
+                if (!emitEdgeCopies(out, t.falseTarget.copies, state, edgeTempIndex, reason))
+                    return false;
+                out << "        goto block_b" << t.falseTarget.block->id.value << ";\n";
+                out << "    }\n";
+                return true;
             }
-            return true;
-        } else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
-            if (!rejectNativeObjectEscape(state, t.value, "throw", reason)) return false;
-            out << "    _mj2x_regc_throw(" << operandExpr(t.value) << ");\n";
-            emitExceptionDispatch(out, activeRegions, returnType, dispatchIndex);
-            if (returnType == SSAType::VOID) out << "    return;\n";
-            else out << "    return " << defaultValue(returnType) << ";\n";
-            return true;
-        } else if constexpr (std::is_same_v<T, RegUnreachableTerminator>) {
-            if (returnType == SSAType::VOID) {
-                out << "    return;\n";
-            } else {
-                out << "    return " << defaultValue(returnType) << ";\n";
+            else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                if (!rejectNativeObjectEscape(state, t.value, "switch value", reason)) return false;
+                out << "    switch (" << operandExpr(t.value) << ") {\n";
+                for (const auto& c : t.cases) {
+                    out << "    case " << c.key << ": {\n";
+                    if (!emitEdgeCopies(out, c.target.copies, state, edgeTempIndex, reason))
+                        return false;
+                    out << "        goto block_b" << c.target.block->id.value << ";\n";
+                    out << "    }\n";
+                }
+                out << "    default: {\n";
+                if (!emitEdgeCopies(out, t.defaultTarget.copies, state, edgeTempIndex, reason))
+                    return false;
+                out << "        goto block_b" << t.defaultTarget.block->id.value << ";\n";
+                out << "    }\n";
+                out << "    }\n";
+                return true;
             }
-            return true;
-        } else {
-            reason = "unknown RegIR terminator";
-            return false;
-        }
-    }, terminator);
+            else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
+                if (t.hasValue) {
+                    if (!rejectNativeObjectEscape(state, t.value, "method return", reason))
+                        return false;
+                    out << "    return " << operandExpr(t.value) << ";\n";
+                }
+                else {
+                    out << "    return;\n";
+                }
+                return true;
+            }
+            else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
+                if (!rejectNativeObjectEscape(state, t.value, "throw", reason)) return false;
+                out << "    _mj2x_regc_throw(" << operandExpr(t.value) << ");\n";
+                emitExceptionDispatch(out, activeRegions, returnType, dispatchIndex);
+                if (returnType == SSAType::VOID)
+                    out << "    return;\n";
+                else
+                    out << "    return " << defaultValue(returnType) << ";\n";
+                return true;
+            }
+            else if constexpr (std::is_same_v<T, RegUnreachableTerminator>) {
+                if (returnType == SSAType::VOID) {
+                    out << "    return;\n";
+                }
+                else {
+                    out << "    return " << defaultValue(returnType) << ";\n";
+                }
+                return true;
+            }
+            else {
+                reason = "unknown RegIR terminator";
+                return false;
+            }
+        },
+        terminator);
 }
 
-} // namespace
+}   // namespace
 
-RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
+void emitRegCHelperPrelude(std::ostream& out)
+{
+    emitHelperPrelude(out);
+}
+
+RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
+{
     RegCEmitResult result;
     result.functionName = functionName(fn.symbol);
     if (!fn.entry) {
@@ -888,13 +1031,39 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
     if (!collectRegisters(fn, regs, result.reason)) return result;
     const std::vector<SSAType> edgeTempTypes = collectEdgeCopyTempTypes(fn);
 
+    RegCFunctionEmitState emitState;
+    emitState.functionName           = result.functionName;
+    int                dispatchIndex = 0;
+    int                edgeTempIndex = 0;
+    std::ostringstream body;
+    for (const auto& block : fn.blocks) {
+        auto activeRegions = activeExceptionRegions(fn, block.get());
+        body << "block_b" << block->id.value << ":\n";
+        for (const auto& ins : block->instructions) {
+            if (!emitInstruction(body, ins, emitState, result.reason)) return result;
+            if (ins.effect.mayThrow) {
+                emitExceptionDispatch(body, activeRegions, fn.symbol.returnType, dispatchIndex);
+            }
+        }
+        if (!emitTerminator(body,
+                            block->terminator,
+                            fn.symbol.returnType,
+                            activeRegions,
+                            emitState,
+                            dispatchIndex,
+                            edgeTempIndex,
+                            result.reason)) {
+            return result;
+        }
+        body << "\n";
+    }
+
     std::ostringstream out;
     out << "/* Generated by mj2x RegC MVP */\n";
-    out << "#include <stdbool.h>\n";
-    out << "#include <stdint.h>\n";
-    out << "#include <stddef.h>\n";
-    out << "#include <math.h>\n\n";
-    emitHelperPrelude(out);
+    for (const auto& declaration : emitState.staticMethodCacheDeclarations) {
+        out << declaration;
+    }
+    if (!emitState.staticMethodCacheDeclarations.empty()) out << "\n";
 
     out << "static " << cType(fn.symbol.returnType) << " " << result.functionName << "(";
     for (size_t i = 0; i < fn.parameters.size(); ++i) {
@@ -920,25 +1089,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
     }
     if (!regs.empty()) out << "\n";
     out << "    goto block_b" << fn.entry->id.value << ";\n\n";
-
-    RegCFunctionEmitState emitState;
-    int dispatchIndex = 0;
-    int edgeTempIndex = 0;
-    for (const auto& block : fn.blocks) {
-        auto activeRegions = activeExceptionRegions(fn, block.get());
-        out << "block_b" << block->id.value << ":\n";
-        for (const auto& ins : block->instructions) {
-            if (!emitInstruction(out, ins, emitState, result.reason)) return result;
-            if (ins.effect.mayThrow) {
-                emitExceptionDispatch(out, activeRegions, fn.symbol.returnType, dispatchIndex);
-            }
-        }
-        if (!emitTerminator(out, block->terminator, fn.symbol.returnType,
-                            activeRegions, emitState, dispatchIndex, edgeTempIndex, result.reason)) {
-            return result;
-        }
-        out << "\n";
-    }
+    out << body.str();
 
     out << "}\n";
 
@@ -952,7 +1103,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const {
     return result;
 }
 
-bool validateRegCNoStackAnchors(const std::string& source, std::string& reason) {
+bool validateRegCNoStackAnchors(const std::string& source, std::string& reason)
+{
     const char* anchors[] = {
         "cstack[",
         "cstack",
@@ -975,4 +1127,4 @@ bool validateRegCNoStackAnchors(const std::string& source, std::string& reason) 
     return true;
 }
 
-} // namespace mj2x
+}   // namespace mj2x
