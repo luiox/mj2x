@@ -109,6 +109,14 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
     {"java/util/Random", "nextDouble", "()D", "mj2x_random_next_double",
      RegCIntrinsicEmitKind::NativeObjectMethod, RegCIntrinsicNativeObjectKind::Random, false, 1, false},
+    {"java/lang/String", "equals", "(Ljava/lang/Object;)Z", "_mj2x_intrinsic_string_equals",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
+    {"java/lang/String", "length", "()I", "_mj2x_intrinsic_string_length",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 1, false},
+    {"java/lang/String", "charAt", "(I)C", "_mj2x_intrinsic_string_char_at",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 2, false},
+    {"java/lang/String", "hashCode", "()I", "_mj2x_intrinsic_string_hash_code",
+     RegCIntrinsicEmitKind::StringMethod, RegCIntrinsicNativeObjectKind::None, false, 1, false},
 };
 
 bool sameSignature(const RegCIntrinsicCall& call, const RegCIntrinsicEntry& entry) {
@@ -172,6 +180,10 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "#define MJ2X_REGC_INTRINSIC_ABI_DECLARED\n";
     out << "static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* utf8);\n";
     out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n";
+    out << "static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_string_length(mj2x_ref value);\n";
+    out << "static uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index);\n";
+    out << "static int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value);\n";
     out << "typedef struct mj2x_int { int32_t value; } mj2x_int;\n";
     out << "typedef struct mj2x_long { int64_t value; } mj2x_long;\n";
     out << "typedef struct mj2x_short { int16_t value; } mj2x_short;\n";

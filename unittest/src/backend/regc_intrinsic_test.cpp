@@ -203,6 +203,36 @@ TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
     EXPECT_EQ(nextDecision.symbol, "mj2x_random_next_int");
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
+{
+    RegInstruction length;
+    length.kind                = RegInstructionKind::Call;
+    length.method.owner        = "java/lang/String";
+    length.method.name         = "length";
+    length.method.desc         = "()I";
+    length.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+    length.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
+
+    auto lengthDecision = RegCIntrinsicRegistry::builtins().matchCall(length);
+    EXPECT_EQ(lengthDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(lengthDecision.emitKind, RegCIntrinsicEmitKind::StringMethod);
+    EXPECT_EQ(lengthDecision.symbol, "_mj2x_intrinsic_string_length");
+
+    RegInstruction charAt;
+    charAt.kind                = RegInstructionKind::Call;
+    charAt.method.owner        = "java/lang/String";
+    charAt.method.name         = "charAt";
+    charAt.method.desc         = "(I)C";
+    charAt.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+    charAt.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
+    charAt.args.push_back(RegOperand::fromInt(1, SSAType::I32));
+
+    auto charAtDecision = RegCIntrinsicRegistry::builtins().matchCall(charAt);
+    EXPECT_EQ(charAtDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(charAtDecision.emitKind, RegCIntrinsicEmitKind::StringMethod);
+    EXPECT_EQ(charAtDecision.symbol, "_mj2x_intrinsic_string_char_at");
+}
+
 TEST(RegCIntrinsicTest, MathSinLoweredToRuntimeCallNotJni)
 {
     std::string reason;
@@ -294,6 +324,70 @@ TEST(RegCIntrinsicTest, IntegerParseIntLoweredToIntrinsicNotJni)
     EXPECT_NE(result.source.find("_mj2x_intrinsic_parse_int("), std::string::npos) << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\""), std::string::npos)
         << result.source;
+}
+
+TEST(RegCIntrinsicTest, StringMethodsLoweredToIntrinsicsNotJni)
+{
+    std::string reason;
+    // static int strings(String s, Object o) {
+    //   return s.length() + s.charAt(1) + s.hashCode() + (s.equals(o) ? 1 : 0);
+    // }
+    auto result = emitRegC("strings",
+                           "(Ljava/lang/String;Ljava/lang/Object;)I",
+                           {
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                  U("java/lang/String"),
+                                                  U("length"),
+                                                  U("()I"),
+                                                  false),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new InsnNode(Opcodes::ICONST_1),
+                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                  U("java/lang/String"),
+                                                  U("charAt"),
+                                                  U("(I)C"),
+                                                  false),
+                               new InsnNode(Opcodes::IADD),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                  U("java/lang/String"),
+                                                  U("hashCode"),
+                                                  U("()I"),
+                                                  false),
+                               new InsnNode(Opcodes::IADD),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new VarInsnNode(Opcodes::ALOAD, 1),
+                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                  U("java/lang/String"),
+                                                  U("equals"),
+                                                  U("(Ljava/lang/Object;)Z"),
+                                                  false),
+                               new InsnNode(Opcodes::IADD),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           3,
+                           2,
+                           reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_length("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_equals("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"length\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"equals\""), std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
 }
 
 TEST(RegCIntrinsicTest, StringLdcFeedsParseIntWithLiteral)

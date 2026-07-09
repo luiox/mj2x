@@ -745,6 +745,71 @@ void emitRuntimeHelpers(std::ostringstream& out)
     out << "    }\n";
     out << "    return (int32_t)parsed;\n";
     out << "}\n\n";
+    out << "static mj2x_regc_class_cache _mj2x_intrinsic_string_class_cache = "
+           "{\"java/lang/String\", NULL};\n";
+    out << "static int32_t _mj2x_intrinsic_is_string(mj2x_ref value) {\n";
+    out << "    if (value == NULL) return 0;\n";
+    out << "    jclass cls = _mj2x_regc_cached_class(&_mj2x_intrinsic_string_class_cache);\n";
+    out << "    if (cls == NULL) return 0;\n";
+    out << "    return (*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls) ? 1 : "
+           "0;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs) {\n";
+    out << "    if (lhs == NULL) { _mj2x_regc_throw_null(\"String.equals\"); return 0; }\n";
+    out << "    if (lhs == rhs) return 1;\n";
+    out << "    if (rhs == NULL || !_mj2x_intrinsic_is_string(rhs)) return 0;\n";
+    out << "    jsize lhs_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)lhs);\n";
+    out << "    jsize rhs_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)rhs);\n";
+    out << "    if (lhs_len != rhs_len) return 0;\n";
+    out << "    const jchar* lhs_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)lhs, NULL);\n";
+    out << "    if (lhs_chars == NULL) return 0;\n";
+    out << "    const jchar* rhs_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)rhs, NULL);\n";
+    out << "    if (rhs_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, "
+           "(jstring)lhs, lhs_chars); return 0; }\n";
+    out << "    int32_t same = 1;\n";
+    out << "    for (jsize i = 0; i < lhs_len; ++i) { if (lhs_chars[i] != rhs_chars[i]) { same = "
+           "0; break; } }\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)lhs, lhs_chars);\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)rhs, rhs_chars);\n";
+    out << "    return same;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_string_length(mj2x_ref value) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.length\"); return 0; }\n";
+    out << "    return (int32_t)(*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)value);\n";
+    out << "}\n\n";
+    out << "static uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.charAt\"); return 0; }\n";
+    out << "    jsize len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    if (index < 0 || index >= len) {\n";
+    out << "        jclass ex = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
+           "\"java/lang/StringIndexOutOfBoundsException\");\n";
+    out << "        if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, "
+           "\"String.charAt\");\n";
+    out << "        return 0;\n";
+    out << "    }\n";
+    out << "    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)value, NULL);\n";
+    out << "    if (chars == NULL) return 0;\n";
+    out << "    uint16_t ch = (uint16_t)chars[index];\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);\n";
+    out << "    return ch;\n";
+    out << "}\n\n";
+    out << "static int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value) {\n";
+    out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.hashCode\"); return 0; }\n";
+    out << "    jsize len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, "
+           "(jstring)value, NULL);\n";
+    out << "    if (chars == NULL) return 0;\n";
+    out << "    uint32_t hash = 0;\n";
+    out << "    for (jsize i = 0; i < len; ++i) hash = hash * 31u + (uint32_t)chars[i];\n";
+    out << "    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);\n";
+    out << "    return (int32_t)hash;\n";
+    out << "}\n\n";
 }
 
 MethodNode* findMethod(CompilerClass& clazz, const char* name, const char* desc)

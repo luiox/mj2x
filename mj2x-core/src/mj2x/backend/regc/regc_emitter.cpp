@@ -718,6 +718,28 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out, const RegInstru
         return decision;
     }
 
+    if (decision.emitKind == RegCIntrinsicEmitKind::StringMethod) {
+        if (!ins.hasDest) {
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "String intrinsic missing destination";
+            return decision;
+        }
+        for (const auto& arg : ins.args) {
+            if (nativeObjectFor(state, arg)) {
+                decision.kind   = RegCIntrinsicDecisionKind::Fallback;
+                decision.reason = "String intrinsic argument is native state";
+                return decision;
+            }
+        }
+        out << "    " << regName(ins.dest.id) << " = " << decision.symbol << "(";
+        for (size_t i = 0; i < ins.args.size(); ++i) {
+            if (i) out << ", ";
+            out << operandExpr(ins.args[i]);
+        }
+        out << ");\n";
+        return decision;
+    }
+
     out << "    ";
     if (ins.hasDest) out << regName(ins.dest.id) << " = ";
     out << decision.symbol << "(";

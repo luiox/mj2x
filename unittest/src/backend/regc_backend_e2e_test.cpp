@@ -612,9 +612,10 @@ TEST_F(RegCBackendE2E, IntegerDivisionTrapRoundTrip) {
         });
 }
 
-// JDK intrinsic E2E: Integer.parseInt + Math.* run entirely in native code.
-// The generated C must call mj2x_math_* / _mj2x_intrinsic_parse_int and must
-// not dispatch Math/parseInt/wrapper/Random through the JNI call helper.
+// JDK intrinsic E2E: Integer.parseInt + Math.* + String hot paths run entirely
+// in native code. The generated C must call mj2x_math_* /
+// _mj2x_intrinsic_parse_int / _mj2x_intrinsic_string_* and must not dispatch
+// Math/parseInt/wrapper/Random/String through the JNI call helper.
 // Results match the original Java baseline (parseInt "42" -> 42, Math.sin via
 // the same IEEE 754 sin both sides use, Random via the Java-compatible LCG).
 TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
@@ -639,6 +640,10 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "    java.util.Random r = new java.util.Random(seed);\n"
         "    return r.nextInt(bound);\n"
         "  }\n"
+        "  public static int stringLength(String s) { return s.length(); }\n"
+        "  public static int stringCharAt(String s, int index) { return s.charAt(index); }\n"
+        "  public static int stringHash(String s) { return s.hashCode(); }\n"
+        "  public static int stringEquals(String lhs, Object rhs) { return lhs.equals(rhs) ? 1 : 0; }\n"
         "}\n",
         {
             {"parseInt42()", "RegCIntrinsic.parseInt42()"},
@@ -654,6 +659,13 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"boxedLong(1234567890123L)", "RegCIntrinsic.boxedLong(1234567890123L)"},
             {"randomNextInt(42L)", "RegCIntrinsic.randomNextInt(42L)"},
             {"randomNextBound(42L, 37)", "RegCIntrinsic.randomNextBound(42L, 37)"},
+            {"stringLength(\"abcdef\")", "RegCIntrinsic.stringLength(\"abcdef\")"},
+            {"stringCharAt(\"abcdef\", 2)", "RegCIntrinsic.stringCharAt(\"abcdef\", 2)"},
+            {"stringHash(\"abcdef\")", "RegCIntrinsic.stringHash(\"abcdef\")"},
+            {"stringEquals(\"same\", \"same\")", "RegCIntrinsic.stringEquals(\"same\", \"same\")"},
+            {"stringEquals(\"same\", \"other\")", "RegCIntrinsic.stringEquals(\"same\", \"other\")"},
+            {"stringEquals(\"same\", null)", "RegCIntrinsic.stringEquals(\"same\", null)"},
+            {"stringEquals(\"same\", new Object())", "RegCIntrinsic.stringEquals(\"same\", new Object())"},
         });
 
     // After runCase succeeds, the generated C file is on disk.  Re-open it to
@@ -678,6 +690,10 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("mj2x_random_init(&native_r"), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_random_next_int(&native_r"), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_random_next_int_bound(&native_r"), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_length("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_char_at("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_hash_code("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_equals("), std::string::npos) << generatedC;
     // The matched JDK call sites must not dispatch through the JNI call helper.
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_f64(\"java/lang/Math\""), std::string::npos)
         << generatedC;
@@ -701,5 +717,17 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_EQ(generatedC.find("_mj2x_regc_alloc_object(\"java/util/Random\""), std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/util/Random\""), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/String\", \"length\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/String\", \"charAt\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/String\", \"hashCode\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/String\", \"equals\""),
+              std::string::npos)
         << generatedC;
 }

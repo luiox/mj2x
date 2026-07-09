@@ -30,6 +30,7 @@ enum class RegCIntrinsicEmitKind {
     WrapperUnbox,
     RandomInit,
     NativeObjectMethod,
+    StringMethod,
 };
 
 /**
