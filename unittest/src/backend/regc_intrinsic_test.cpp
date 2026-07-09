@@ -35,10 +35,11 @@ std::unique_ptr<MethodNode> makeMethod(
     int maxLocals)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
+    auto& arena = Type::staticArena();
     auto mn = std::make_unique<MethodNode>(
         access,
-        ca::str::Utf8StringRef::from_cstr(name.c_str()),
-        ca::str::Utf8StringRef::from_cstr(desc.c_str()),
+        arena.intern(name.c_str()),
+        arena.intern(desc.c_str()),
         ca::str::Utf8StringRef::from_cstr(""),
         noExcepts);
     mn->maxStack = maxStack;
