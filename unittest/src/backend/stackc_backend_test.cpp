@@ -126,7 +126,7 @@ TEST(StackCBackendTest, AddMethod) {
     EXPECT_NE(result.text.find("+"), std::string::npos);
 }
 
-TEST(StackCBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
+TEST(StackCBackendTest, InvokeDynamicRemainsOnBytecodePathForCompatibility) {
     auto bsm = Handle(Opcodes::H_INVOKESTATIC,
                       testArena.intern("java/lang/invoke/StringConcatFactory"),
                       testArena.intern("makeConcatWithConstants"),
@@ -151,12 +151,15 @@ TEST(StackCBackendTest, InvokeDynamicEmitsMethodHandleBridge) {
     auto blocks = cc.convert(*mn);
     auto result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_EQ(result.text.find("UnsupportedOperationException"), std::string::npos)
-        << result.text;
-    EXPECT_NE(result.text.find("makeConcatWithConstants"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("getTarget"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("invokeWithArguments"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("java/lang/Integer"), std::string::npos) << result.text;
+    EXPECT_EQ(result.kind, BackendResult::Kind::NONE);
+    EXPECT_TRUE(result.text.empty());
+
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+    backend.injectIntoClass(cls, cls.methods[0], result);
+    EXPECT_FALSE(mn->access & Opcodes::ACC_NATIVE);
+    EXPECT_GT(mn->instructions.size(), 0);
+    EXPECT_FALSE(cls.modified);
 }
 
 TEST(StackCBackendTest, CastEmission) {

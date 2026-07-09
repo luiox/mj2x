@@ -255,6 +255,38 @@ static const char* defaultReturnValue(PrimitiveKind k) {
     }
 }
 
+static bool isCompatibilityRiskCall(const std::string& owner, const std::string& name) {
+    return owner == "java/lang/Class" ||
+           owner == "java/lang/ClassLoader" ||
+           owner == "java/lang/Thread" ||
+           owner == "java/io/InputStream" ||
+           owner == "java/io/ByteArrayInputStream" ||
+           owner.rfind("java/lang/reflect/", 0) == 0 ||
+           owner.rfind("java/util/concurrent/", 0) == 0 ||
+           (owner == "java/lang/System" &&
+            (name == "setSecurityManager" || name == "getSecurityManager" || name == "exit"));
+}
+
+static bool shouldKeepBytecodeForCompatibility(const std::vector<Block*>& blocks, std::string& reason) {
+    for (auto* block : blocks) {
+        for (const auto& node : block->nodes) {
+            if (node->kind == MIRKind::INVOKE_DYNAMIC) {
+                reason = "invokedynamic remains on bytecode path for compatibility";
+                return true;
+            }
+            if (node->kind == MIRKind::INVOKE) {
+                const auto* invoke = static_cast<const MIRInvoke*>(node.get());
+                if (isCompatibilityRiskCall(invoke->owner, invoke->name)) {
+                    reason = "high-risk runtime call remains on bytecode path: " +
+                             invoke->owner + "." + invoke->name;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 static int loadOpcodeForSort(int sort) {
     switch (sort) {
     case Type::LONG:   return Opcodes::LLOAD;
@@ -674,6 +706,16 @@ BackendResult StackCBackend::compileMethod(
     impl_->currentMethodName = mn->name.to_std_string();
     impl_->currentMethodDesc = mn->desc.to_std_string();
 
+    std::string compatibilityReason;
+    if (shouldKeepBytecodeForCompatibility(blocks, compatibilityReason)) {
+        printf("[StackCBackend] Skipping %s.%s%s: %s\n",
+               className.c_str(),
+               impl_->currentMethodName.c_str(),
+               impl_->currentMethodDesc.c_str(),
+               compatibilityReason.c_str());
+        return {};
+    }
+
     std::ostringstream funcOut;
 
     // JNI function signature
@@ -841,7 +883,8 @@ void StackCBackend::injectIntoClass(
     CompilerMethod& method,
     const BackendResult& result)
 {
-    (void)result;
+    if (result.kind != BackendResult::Kind::C_SOURCE) return;
+
     impl_->protectClassInitializer(*this, clazz);
 
     auto* mn = method.methodNode;

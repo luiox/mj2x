@@ -15,6 +15,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace mj2x {
@@ -29,6 +30,9 @@ namespace {
 using codegen::CSourceStream;
 using codegen::mangleMethod;
 using codegen::mangleName;
+
+static constexpr const char* kNativeLoaderClassName = "mj2x/runtime/NativeLoader";
+static constexpr const char* kNativeLoaderLoadDesc = "(Ljava/lang/String;Ljava/lang/String;)V";
 
 const char* jniType(PrimitiveKind kind) {
     switch (kind) {
@@ -84,6 +88,44 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc) {
         kinds.push_back(jvmSortToPrimitive(argType.getSort()));
     }
     return kinds;
+}
+
+bool isCompatibilityRiskCall(const std::string& owner, const std::string& name) {
+    return owner == "java/lang/Class" ||
+           owner == "java/lang/ClassLoader" ||
+           owner == "java/lang/Thread" ||
+           owner == "java/io/InputStream" ||
+           owner == "java/io/ByteArrayInputStream" ||
+           owner.rfind("java/lang/reflect/", 0) == 0 ||
+           owner.rfind("java/util/concurrent/", 0) == 0 ||
+           (owner == "java/lang/System" &&
+            (name == "setSecurityManager" || name == "getSecurityManager" || name == "exit"));
+}
+
+bool shouldKeepBytecodeForCompatibility(const MethodNode& method,
+                                        const std::vector<Block*>& blocks,
+                                        std::string& reason) {
+    if (method.tryCatchBlocks.size() > 4) {
+        reason = "large exception-table method remains on bytecode path";
+        return true;
+    }
+    for (auto* block : blocks) {
+        for (const auto& node : block->nodes) {
+            if (node->kind == MIRKind::INVOKE_DYNAMIC) {
+                reason = "invokedynamic remains on bytecode path for compatibility";
+                return true;
+            }
+            if (node->kind == MIRKind::INVOKE) {
+                const auto* invoke = static_cast<const MIRInvoke*>(node.get());
+                if (isCompatibilityRiskCall(invoke->owner, invoke->name)) {
+                    reason = "high-risk runtime call remains on bytecode path: " +
+                             invoke->owner + "." + invoke->name;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 std::string emitFailureBody(const std::string& reason, PrimitiveKind retKind) {
@@ -207,15 +249,58 @@ void emitRuntimeHelpers(std::ostringstream& out) {
     out << "    void* env;\n";
     out << "    mj2x_regc_throw_callback throwException;\n";
     out << "} mj2x_regc_context;\n";
-    out << "void mj2x_regc_init_context(mj2x_regc_context* context, void* env, mj2x_regc_throw_callback throwException);\n";
-    out << "void mj2x_regc_set_env(mj2x_regc_context* context, void* env);\n";
-    out << "void* mj2x_regc_env(const mj2x_regc_context* context);\n";
-    out << "void mj2x_regc_throw_arithmetic(mj2x_regc_context* context, const char* message);\n";
-    out << "int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
-    out << "int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
-    out << "int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
-    out << "int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
-    out << "void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);\n\n";
+    out << "static void mj2x_regc_init_context(mj2x_regc_context* context, void* env, mj2x_regc_throw_callback throwException);\n";
+    out << "static void mj2x_regc_set_env(mj2x_regc_context* context, void* env);\n";
+    out << "static void* mj2x_regc_env(const mj2x_regc_context* context);\n";
+    out << "static void mj2x_regc_throw_arithmetic(mj2x_regc_context* context, const char* message);\n";
+    out << "static int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
+    out << "static int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
+    out << "static int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);\n";
+    out << "static int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);\n";
+    out << "static void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);\n\n";
+    out << "static void _mj2x_regc_throw_exception(mj2x_regc_context* context, const char* class_name, const char* message) {\n";
+    out << "    if (context == NULL || context->throwException == NULL) return;\n";
+    out << "    context->throwException(context->env, class_name, message);\n";
+    out << "}\n";
+    out << "static void mj2x_regc_init_context(mj2x_regc_context* context, void* env, mj2x_regc_throw_callback throwException) {\n";
+    out << "    if (context == NULL) return;\n";
+    out << "    context->env = env;\n";
+    out << "    context->throwException = throwException;\n";
+    out << "}\n";
+    out << "static void mj2x_regc_set_env(mj2x_regc_context* context, void* env) {\n";
+    out << "    if (context == NULL) return;\n";
+    out << "    context->env = env;\n";
+    out << "}\n";
+    out << "static void* mj2x_regc_env(const mj2x_regc_context* context) {\n";
+    out << "    return context == NULL ? NULL : context->env;\n";
+    out << "}\n";
+    out << "static void mj2x_regc_throw_arithmetic(mj2x_regc_context* context, const char* message) {\n";
+    out << "    _mj2x_regc_throw_exception(context, \"java/lang/ArithmeticException\", message == NULL ? \"/ by zero\" : message);\n";
+    out << "}\n";
+    out << "static int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs) {\n";
+    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
+    out << "    if (lhs == INT32_MIN && rhs == -1) return INT32_MIN;\n";
+    out << "    return lhs / rhs;\n";
+    out << "}\n";
+    out << "static int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs) {\n";
+    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
+    out << "    if (lhs == INT64_MIN && rhs == -1) return INT64_MIN;\n";
+    out << "    return lhs / rhs;\n";
+    out << "}\n";
+    out << "static int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs) {\n";
+    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
+    out << "    if (lhs == INT32_MIN && rhs == -1) return 0;\n";
+    out << "    return lhs % rhs;\n";
+    out << "}\n";
+    out << "static int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs) {\n";
+    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
+    out << "    if (lhs == INT64_MIN && rhs == -1) return 0;\n";
+    out << "    return lhs % rhs;\n";
+    out << "}\n";
+    out << "static void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason) {\n";
+    out << "    (void)context;\n";
+    out << "    (void)reason;\n";
+    out << "}\n\n";
     out << "#endif\n\n";
     out << "static JNIEnv* _mj2x_regc_env = NULL;\n\n";
     out << "static mj2x_regc_context _mj2x_regc_ctx;\n";
@@ -427,10 +512,56 @@ void emitRuntimeHelpers(std::ostringstream& out) {
     out << "}\n\n";
 }
 
+MethodNode* findMethod(CompilerClass& clazz, const char* name, const char* desc) {
+    for (auto* method : clazz.classNode->methods) {
+        if (method->name.to_std_string() == name &&
+            method->desc.to_std_string() == desc) {
+            return method;
+        }
+    }
+    return nullptr;
+}
+
+void prependNativeLoaderCall(
+    CompilerClass& clazz,
+    const std::string& resourcePath,
+    const std::string& tempSuffix)
+{
+    if (resourcePath.empty()) return;
+
+    auto* clinit = findMethod(clazz, "<clinit>", "()V");
+    if (clinit == nullptr) {
+        std::vector<ca::str::Utf8StringRef> noExceptions;
+        clinit = new MethodNode(
+            Opcodes::ACC_STATIC,
+            ca::str::ZUtf8StringRef::from_static("<clinit>"),
+            ca::str::ZUtf8StringRef::from_static("()V"),
+            ca::str::ZUtf8StringRef::from_static(""),
+            noExceptions);
+        clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+        clazz.classNode->methods.push_back(clinit);
+    }
+
+    InsnList prefix;
+    prefix.add(new LdcInsnNode(resourcePath));
+    prefix.add(new LdcInsnNode(tempSuffix));
+    prefix.add(new MethodInsnNode(
+        Opcodes::INVOKESTATIC,
+        ca::str::ZUtf8StringRef::from_static(kNativeLoaderClassName),
+        ca::str::ZUtf8StringRef::from_static("load"),
+        ca::str::ZUtf8StringRef::from_static(kNativeLoaderLoadDesc),
+        false));
+    clinit->instructions.insert(clinit->instructions.getFirst(), prefix);
+    clinit->maxStack = std::max(clinit->maxStack, 2);
+}
+
 } // namespace
 
 struct RegCBackend::Impl {
     std::ostringstream source;
+    std::string jarNativeLoaderResourcePath;
+    std::string jarNativeLoaderTempSuffix;
+    std::unordered_set<std::string> loaderInjectedClasses;
 };
 
 RegCBackend::RegCBackend()
@@ -438,6 +569,14 @@ RegCBackend::RegCBackend()
 {}
 
 RegCBackend::~RegCBackend() = default;
+
+void RegCBackend::setJarNativeLoaderResourcePath(
+    const std::string& resourcePath,
+    const std::string& tempSuffix)
+{
+    impl_->jarNativeLoaderResourcePath = resourcePath;
+    impl_->jarNativeLoaderTempSuffix = tempSuffix;
+}
 
 BackendResult RegCBackend::compileMethod(
     const std::string& className,
@@ -450,6 +589,12 @@ BackendResult RegCBackend::compileMethod(
     const bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
 
     std::string reason;
+    if (shouldKeepBytecodeForCompatibility(*mn, blocks, reason)) {
+        printf("[RegCBackend] Skipping %s.%s%s: %s\n",
+               className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
+        return backendResult;
+    }
+
     SSABuilder ssaBuilder;
     // RegCBackend is a facade over the existing IR pipeline: L1 blocks are
     // supplied by Pipeline, then this backend owns the SSA and RegIR handoff.
@@ -501,6 +646,17 @@ void RegCBackend::injectIntoClass(
     mn->maxStack = 0;
     mn->maxLocals = 0;
     clazz.modified = true;
+
+    if (impl_->jarNativeLoaderResourcePath.empty() || clazz.classNode == nullptr)
+        return;
+
+    const auto className = clazz.classNode->name.to_std_string();
+    if (impl_->loaderInjectedClasses.insert(className).second) {
+        prependNativeLoaderCall(
+            clazz,
+            impl_->jarNativeLoaderResourcePath,
+            impl_->jarNativeLoaderTempSuffix);
+    }
 }
 
 void RegCBackend::finalize(const CompilerIndex& index) {
@@ -510,6 +666,7 @@ void RegCBackend::finalize(const CompilerIndex& index) {
     codegen::IncludeSet includes;
     includes.addSystem("jni.h");
     includes.addSystem("stdbool.h");
+    includes.addSystem("limits.h");
     includes.addSystem("stdint.h");
     includes.addSystem("stddef.h");
     includes.addSystem("stdarg.h");

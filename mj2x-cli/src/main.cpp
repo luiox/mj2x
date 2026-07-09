@@ -6,6 +6,7 @@
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "mj2x/preprocessor/multianewarray_preprocessor.hpp"
 #include "mj2x/preprocessor/native_annotation_preprocessor.hpp"
+#include "mj2x/preprocessor/native_method_prefix_preprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "native_compiler.hpp"
@@ -27,6 +28,7 @@ static void printUsage() {
     printf("  --emit-c <file>            Output C source to file\n");
     printf("  --backend <stackc|regc>    Select C emitter when --emit-c is used (default: stackc; cbackend is a legacy alias)\n");
     printf("  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
+    printf("  --native-method-prefix <p> Only compile methods whose owner.name starts with p; repeatable\n");
     printf("  --compile                  Compile emitted C into a native library beside --output\n");
     printf("  --c-compiler <name>        Override C compiler detection (msvc, gcc, clang)\n");
     printf("  --generate-cmake <dir>     Generate a standalone CMake project for emitted C\n");
@@ -204,6 +206,7 @@ int main(int argc, char** argv) {
     std::string cOutputPath;
     std::string cmakeProjectDir;
     std::string nativeAnnotation;
+    std::vector<std::string> nativeMethodPrefixes;
     CEmitterBackend cBackendKind = CEmitterBackend::StackC;
     mj2x::cli::CCompilerKind cCompilerKind = mj2x::cli::CCompilerKind::Auto;
     bool backendSelected = false;
@@ -217,6 +220,7 @@ int main(int argc, char** argv) {
         else if (arg == "-o" && i + 1 < argc) outputPath = argv[++i];
         else if (arg == "--emit-c" && i + 1 < argc) cOutputPath = argv[++i];
         else if (arg == "--native-annotation" && i + 1 < argc) nativeAnnotation = argv[++i];
+        else if (arg == "--native-method-prefix" && i + 1 < argc) nativeMethodPrefixes.push_back(argv[++i]);
         else if (arg == "--compile") compileNative = true;
         else if (arg == "--generate-cmake" && i + 1 < argc) cmakeProjectDir = argv[++i];
         else if (arg == "--c-compiler" && i + 1 < argc) {
@@ -253,6 +257,12 @@ int main(int argc, char** argv) {
     if (!nativeAnnotation.empty() && !isNativeAnnotationDescriptor(nativeAnnotation)) {
         fprintf(stderr,
                 "--native-annotation must be a JVM annotation descriptor like Lcom/example/Native;.\n");
+        printUsage();
+        return 1;
+    }
+
+    if (!nativeAnnotation.empty() && !nativeMethodPrefixes.empty()) {
+        fprintf(stderr, "--native-annotation and --native-method-prefix are mutually exclusive.\n");
         printUsage();
         return 1;
     }
@@ -294,11 +304,8 @@ int main(int argc, char** argv) {
     config.outputPath = outputPath;
     config.dumpMIR = dumpMIR;
 
-    const bool stackCBackendJarOutput =
-        cBackendKind == CEmitterBackend::StackC &&
-        hasExtension(inputPath, ".jar") &&
-        hasExtension(outputPath, ".jar");
-    const bool jarNativeLoaderEnabled = compileNative && stackCBackendJarOutput;
+    const bool jarOutput = hasExtension(inputPath, ".jar") && hasExtension(outputPath, ".jar");
+    const bool jarNativeLoaderEnabled = compileNative && jarOutput;
     std::filesystem::path nativeLibraryPath =
         mj2x::cli::nativeLibraryPathForOutput(outputPath);
     const std::string nativeResourceEntry =
@@ -312,6 +319,11 @@ int main(int argc, char** argv) {
         if (cBackendKind == CEmitterBackend::RegC) {
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             regcBackend->setOutputPath(cOutputPath);
+            if (jarNativeLoaderEnabled) {
+                regcBackend->setJarNativeLoaderResourcePath(
+                    nativeResourcePath,
+                    nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
+            }
             pipeline.registerBackend(std::move(regcBackend));
         } else {
             auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
@@ -333,6 +345,9 @@ int main(int argc, char** argv) {
     if (!nativeAnnotation.empty()) {
         pipeline.registerPreprocessor(
             std::make_unique<mj2x::NativeAnnotationPreprocessor>(nativeAnnotation));
+    } else if (!nativeMethodPrefixes.empty()) {
+        pipeline.registerPreprocessor(
+            std::make_unique<mj2x::NativeMethodPrefixPreprocessor>(nativeMethodPrefixes));
     } else {
         pipeline.registerPreprocessor(
             std::make_unique<mj2x::MarkAllMethodsPreprocessor>());

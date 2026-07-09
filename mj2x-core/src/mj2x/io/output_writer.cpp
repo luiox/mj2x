@@ -28,7 +28,8 @@ OutputWriter::OutputWriter()
 OutputWriter::~OutputWriter() = default;
 
 static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& cls) {
-    ClassWriter writer(index.arena(), ClassWriter::COMPUTE_MAXS);
+    const ca::i32 flags = cls.modified ? ClassWriter::COMPUTE_FRAMES : ClassWriter::COMPUTE_MAXS;
+    ClassWriter writer(index.arena(), flags);
     cls.classNode->accept(&writer);
     return writer.toByteArray();
 }
@@ -69,10 +70,13 @@ static void writeJar(const std::string& path, CompilerIndex& index) {
     for (const auto& entry : index.jarEntries()) {
         std::vector<ca::u8> data = entry.data;
         if (entry.isClass) {
-            // Class entries are regenerated from the mutable CompilerClass so
-            // native-method injection and backend metadata make it into the JAR.
+            // Preserve untouched class bytes. Some real-world classes carry
+            // verifier-sensitive StackMapTable/debug metadata that the tree
+            // writer cannot yet reproduce byte-for-byte.
             if (auto* cls = index.getClass(entry.className)) {
-                data = writeClassBytes(index, *cls);
+                if (cls->modified) {
+                    data = writeClassBytes(index, *cls);
+                }
                 ++classCount;
             }
         } else {
