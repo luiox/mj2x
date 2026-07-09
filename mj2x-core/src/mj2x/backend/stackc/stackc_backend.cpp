@@ -1611,6 +1611,7 @@ void StackCBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out)
     switch (node->kind) {
     case MIRKind::LABEL:
         out << labelIdent(static_cast<const MIRLabel*>(node)->labelNode) << ":\n";
+        out << "    ;\n";
         break;
     case MIRKind::CONSTANT:
         emitConstant(static_cast<const MIRConstant*>(node), out);
