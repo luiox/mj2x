@@ -125,6 +125,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `-i, --input <.class/.jar>` | 输入文件 |
 | `-o, --output <.class/.jar>` | 输出文件(方法被标记为 native) |
 | `--emit-c <file>` | 输出的 C 源码路径 |
+| `--config <file>` | 从 JSON 配置读取默认参数,命令行显式参数覆盖配置 |
 | `--backend <stackc\|regc>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名) |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c` 后自动编译 native library |

@@ -9,6 +9,7 @@
 #include "mj2x/preprocessor/native_method_prefix_preprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
+#include "config_file.hpp"
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
 #include "jzip/memory_segment.hpp"
@@ -27,6 +28,7 @@ static void printUsage()
 {
     printf("Usage: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]\n");
     printf("Options:\n");
+    printf("  --config <file>           Load JSON options; command line values override it\n");
     printf("  --emit-c <file>            Output C source to file\n");
     printf("  --backend <stackc|regc>    Select C emitter when --emit-c is used (default: stackc; "
            "cbackend is a legacy alias)\n");
@@ -49,6 +51,23 @@ enum class CEmitterBackend
     RegC,
 };
 
+struct CliOptions
+{
+    std::string              inputPath;
+    std::string              outputPath;
+    std::string              cOutputPath;
+    std::string              cmakeProjectDir;
+    std::string              xmakeProjectDir;
+    std::string              nativeAnnotation;
+    std::vector<std::string> nativeMethodPrefixes;
+    CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
+    mj2x::cli::CCompilerKind cCompilerKind    = mj2x::cli::CCompilerKind::Auto;
+    bool                     backendSelected  = false;
+    bool                     compileNative    = false;
+    bool                     compilerSelected = false;
+    bool                     dumpMIR          = false;
+};
+
 static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
 {
     if (name == "stackc" || name == "cbackend" || name == "c") {
@@ -60,6 +79,35 @@ static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
         return true;
     }
     return false;
+}
+
+static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOptions& options,
+                               std::string& error)
+{
+    if (config.input) options.inputPath = *config.input;
+    if (config.output) options.outputPath = *config.output;
+    if (config.emitC) options.cOutputPath = *config.emitC;
+    if (config.nativeAnnotation) options.nativeAnnotation = *config.nativeAnnotation;
+    if (config.hasNativeMethodPrefixes) options.nativeMethodPrefixes = config.nativeMethodPrefixes;
+    if (config.compile) options.compileNative = *config.compile;
+    if (config.generateXmake) options.xmakeProjectDir = *config.generateXmake;
+    if (config.generateCmake) options.cmakeProjectDir = *config.generateCmake;
+    if (config.dumpMir) options.dumpMIR = *config.dumpMir;
+    if (config.backend) {
+        options.backendSelected = true;
+        if (!parseBackendName(*config.backend, options.cBackendKind)) {
+            error = "Unknown config backend value. Expected stackc or regc.";
+            return false;
+        }
+    }
+    if (config.cCompiler) {
+        options.compilerSelected = true;
+        if (!mj2x::cli::parseCompilerName(*config.cCompiler, options.cCompilerKind)) {
+            error = "Unknown config c_compiler value. Expected msvc, gcc, or clang.";
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool hasExtension(std::string path, const std::string& ext)
@@ -215,49 +263,75 @@ static int generateCMakeProject(const std::string& projectDirValue, const std::s
 
 int main(int argc, char** argv)
 {
-    std::string              inputPath;
-    std::string              outputPath;
-    std::string              cOutputPath;
-    std::string              cmakeProjectDir;
-    std::string              xmakeProjectDir;
-    std::string              nativeAnnotation;
-    std::vector<std::string> nativeMethodPrefixes;
-    CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
-    mj2x::cli::CCompilerKind cCompilerKind    = mj2x::cli::CCompilerKind::Auto;
-    bool                     backendSelected  = false;
-    bool                     compileNative    = false;
-    bool                     compilerSelected = false;
-    bool                     dumpMIR          = false;
+    CliOptions options;
+    std::string configPath;
+
+    bool commandLineNativePrefixesSeen = false;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--config") {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--config requires a JSON file path.\n");
+                printUsage();
+                return 1;
+            }
+            if (!configPath.empty()) {
+                fprintf(stderr, "--config may only be specified once.\n");
+                printUsage();
+                return 1;
+            }
+            configPath = argv[++i];
+        }
+    }
+
+    if (!configPath.empty()) {
+        mj2x::cli::ConfigFileOptions configOptions;
+        std::string                  error;
+        if (!mj2x::cli::loadConfigFile(configPath, configOptions, error) ||
+            !applyConfigOptions(configOptions, options, error)) {
+            fprintf(stderr, "[mj2x] ERROR: %s\n", error.c_str());
+            return 1;
+        }
+    }
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
+        if (arg == "--config" && i + 1 < argc) {
+            ++i;
+            continue;
+        }
         if (arg == "-i" && i + 1 < argc)
-            inputPath = argv[++i];
+            options.inputPath = argv[++i];
         else if (arg == "-o" && i + 1 < argc)
-            outputPath = argv[++i];
+            options.outputPath = argv[++i];
         else if (arg == "--emit-c" && i + 1 < argc)
-            cOutputPath = argv[++i];
+            options.cOutputPath = argv[++i];
         else if (arg == "--native-annotation" && i + 1 < argc)
-            nativeAnnotation = argv[++i];
-        else if (arg == "--native-method-prefix" && i + 1 < argc)
-            nativeMethodPrefixes.push_back(argv[++i]);
+            options.nativeAnnotation = argv[++i];
+        else if (arg == "--native-method-prefix" && i + 1 < argc) {
+            if (!commandLineNativePrefixesSeen) {
+                options.nativeMethodPrefixes.clear();
+                commandLineNativePrefixesSeen = true;
+            }
+            options.nativeMethodPrefixes.push_back(argv[++i]);
+        }
         else if (arg == "--compile")
-            compileNative = true;
+            options.compileNative = true;
         else if (arg == "--generate-cmake" && i + 1 < argc)
-            cmakeProjectDir = argv[++i];
+            options.cmakeProjectDir = argv[++i];
         else if (arg == "--generate-xmake" && i + 1 < argc)
-            xmakeProjectDir = argv[++i];
+            options.xmakeProjectDir = argv[++i];
         else if (arg == "--c-compiler" && i + 1 < argc) {
-            compilerSelected = true;
-            if (!mj2x::cli::parseCompilerName(argv[++i], cCompilerKind)) {
+            options.compilerSelected = true;
+            if (!mj2x::cli::parseCompilerName(argv[++i], options.cCompilerKind)) {
                 fprintf(stderr, "Unknown --c-compiler value. Expected msvc, gcc, or clang.\n");
                 printUsage();
                 return 1;
             }
         }
         else if (arg == "--backend" && i + 1 < argc) {
-            backendSelected = true;
-            if (!parseBackendName(argv[++i], cBackendKind)) {
+            options.backendSelected = true;
+            if (!parseBackendName(argv[++i], options.cBackendKind)) {
                 fprintf(stderr,
                         "Unknown --backend value. Expected stackc or regc. Legacy alias cbackend "
                         "is also accepted.\n");
@@ -266,7 +340,7 @@ int main(int argc, char** argv)
             }
         }
         else if (arg == "--dump-mir")
-            dumpMIR = true;
+            options.dumpMIR = true;
         else if (arg == "-h" || arg == "--help") {
             printUsage();
             return 0;
@@ -277,12 +351,13 @@ int main(int argc, char** argv)
         }
     }
 
-    if (inputPath.empty() || outputPath.empty()) {
+    if (options.inputPath.empty() || options.outputPath.empty()) {
         printUsage();
         return 1;
     }
 
-    if (!nativeAnnotation.empty() && !isNativeAnnotationDescriptor(nativeAnnotation)) {
+    if (!options.nativeAnnotation.empty() &&
+        !isNativeAnnotationDescriptor(options.nativeAnnotation)) {
         fprintf(
             stderr,
             "--native-annotation must be a JVM annotation descriptor like Lcom/example/Native;.\n");
@@ -290,76 +365,81 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!nativeAnnotation.empty() && !nativeMethodPrefixes.empty()) {
+    if (!options.nativeAnnotation.empty() && !options.nativeMethodPrefixes.empty()) {
         fprintf(stderr, "--native-annotation and --native-method-prefix are mutually exclusive.\n");
         printUsage();
         return 1;
     }
 
-    if (!cmakeProjectDir.empty() && !xmakeProjectDir.empty()) {
+    if (!options.cmakeProjectDir.empty() && !options.xmakeProjectDir.empty()) {
         fprintf(stderr, "--generate-cmake and --generate-xmake are mutually exclusive.\n");
         printUsage();
         return 1;
     }
 
-    if (!cmakeProjectDir.empty() && cOutputPath.empty()) {
-        cOutputPath = (std::filesystem::path(cmakeProjectDir) / "native.c").string();
+    if (!options.cmakeProjectDir.empty() && options.cOutputPath.empty()) {
+        options.cOutputPath =
+            (std::filesystem::path(options.cmakeProjectDir) / "native.c").string();
     }
 
-    if (!xmakeProjectDir.empty() && cOutputPath.empty()) {
-        cOutputPath =
-            (std::filesystem::path(xmakeProjectDir) / "src" / "generated" / "native.c").string();
+    if (!options.xmakeProjectDir.empty() && options.cOutputPath.empty()) {
+        options.cOutputPath = (std::filesystem::path(options.xmakeProjectDir) / "src" /
+                               "generated" / "native.c")
+                                  .string();
     }
 
-    if (backendSelected && cOutputPath.empty()) {
+    if (options.backendSelected && options.cOutputPath.empty()) {
         fprintf(stderr, "--backend requires --emit-c or a generated native project.\n");
         printUsage();
         return 1;
     }
 
-    if (compileNative && cOutputPath.empty()) {
+    if (options.compileNative && options.cOutputPath.empty()) {
         fprintf(stderr, "--compile requires --emit-c or a generated native project.\n");
         printUsage();
         return 1;
     }
 
-    if (!cmakeProjectDir.empty()) {
+    if (!options.cmakeProjectDir.empty()) {
         std::error_code ec;
-        std::filesystem::create_directories(cmakeProjectDir, ec);
+        std::filesystem::create_directories(options.cmakeProjectDir, ec);
         if (ec) {
             fprintf(stderr,
                     "[mj2x] ERROR: cannot create CMake project directory: %s\n",
-                    cmakeProjectDir.c_str());
+                    options.cmakeProjectDir.c_str());
             return 1;
         }
     }
 
-    if (!xmakeProjectDir.empty()) {
+    if (!options.xmakeProjectDir.empty()) {
         std::error_code ec;
         std::filesystem::create_directories(
-            std::filesystem::path(xmakeProjectDir) / "src" / "generated", ec);
+            std::filesystem::path(options.xmakeProjectDir) / "src" / "generated", ec);
         if (ec) {
             fprintf(stderr,
                     "[mj2x] ERROR: cannot create xmake project directory: %s\n",
-                    xmakeProjectDir.c_str());
+                    options.xmakeProjectDir.c_str());
             return 1;
         }
     }
 
-    if (compilerSelected && !compileNative) {
+    if (options.compilerSelected && !options.compileNative) {
         fprintf(stderr, "--c-compiler requires --compile.\n");
         printUsage();
         return 1;
     }
 
     mj2x::PipelineConfig config;
-    config.inputPath  = inputPath;
-    config.outputPath = outputPath;
-    config.dumpMIR    = dumpMIR;
+    config.inputPath  = options.inputPath;
+    config.outputPath = options.outputPath;
+    config.dumpMIR    = options.dumpMIR;
 
-    const bool jarOutput = hasExtension(inputPath, ".jar") && hasExtension(outputPath, ".jar");
-    const bool jarNativeLoaderEnabled       = (compileNative || !xmakeProjectDir.empty()) && jarOutput;
-    std::filesystem::path nativeLibraryPath = mj2x::cli::nativeLibraryPathForOutput(outputPath);
+    const bool jarOutput =
+        hasExtension(options.inputPath, ".jar") && hasExtension(options.outputPath, ".jar");
+    const bool jarNativeLoaderEnabled =
+        (options.compileNative || !options.xmakeProjectDir.empty()) && jarOutput;
+    std::filesystem::path nativeLibraryPath =
+        mj2x::cli::nativeLibraryPathForOutput(options.outputPath);
     const std::string     nativeResourceEntry =
         "META-INF/mj2x/native/" + nativeLibraryPath.filename().string();
     const std::string nativeResourcePath = nativeResourceEntry;
@@ -367,10 +447,10 @@ int main(int argc, char** argv)
 
     mj2x::Pipeline pipeline(std::move(config));
 
-    if (!cOutputPath.empty()) {
-        if (cBackendKind == CEmitterBackend::RegC) {
+    if (!options.cOutputPath.empty()) {
+        if (options.cBackendKind == CEmitterBackend::RegC) {
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
-            regcBackend->setOutputPath(cOutputPath);
+            regcBackend->setOutputPath(options.cOutputPath);
             if (jarNativeLoaderEnabled) {
                 regcBackend->setJarNativeLoaderResourcePath(
                     nativeResourcePath, nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
@@ -379,7 +459,7 @@ int main(int argc, char** argv)
         }
         else {
             auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
-            stackCBackend->setOutputPath(cOutputPath);
+            stackCBackend->setOutputPath(options.cOutputPath);
             if (jarNativeLoaderEnabled) {
                 stackCBackend->setJarNativeLoaderResourcePath(
                     nativeResourcePath, nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
@@ -393,18 +473,19 @@ int main(int argc, char** argv)
     pipeline.registerPreprocessor(std::make_unique<mj2x::LdcPreprocessor>());
     pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
     pipeline.registerPreprocessor(std::make_unique<mj2x::MultiANewArrayPreprocessor>());
-    if (!nativeAnnotation.empty()) {
+    if (!options.nativeAnnotation.empty()) {
         pipeline.registerPreprocessor(
-            std::make_unique<mj2x::NativeAnnotationPreprocessor>(nativeAnnotation));
+            std::make_unique<mj2x::NativeAnnotationPreprocessor>(options.nativeAnnotation));
     }
-    else if (!nativeMethodPrefixes.empty()) {
+    else if (!options.nativeMethodPrefixes.empty()) {
         pipeline.registerPreprocessor(
-            std::make_unique<mj2x::NativeMethodPrefixPreprocessor>(nativeMethodPrefixes));
+            std::make_unique<mj2x::NativeMethodPrefixPreprocessor>(
+                options.nativeMethodPrefixes));
     }
     else {
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
-    if (!cOutputPath.empty() && cBackendKind == CEmitterBackend::StackC) {
+    if (!options.cOutputPath.empty() && options.cBackendKind == CEmitterBackend::StackC) {
         pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
     }
     if (jarNativeLoaderEnabled) {
@@ -415,26 +496,28 @@ int main(int argc, char** argv)
     int rc = pipeline.run();
     if (rc != 0) return rc;
 
-    if (!cmakeProjectDir.empty()) {
-        int projectRc = generateCMakeProject(cmakeProjectDir, cOutputPath);
+    if (!options.cmakeProjectDir.empty()) {
+        int projectRc = generateCMakeProject(options.cmakeProjectDir, options.cOutputPath);
         if (projectRc != 0) return projectRc;
     }
 
-    if (!xmakeProjectDir.empty()) {
+    if (!options.xmakeProjectDir.empty()) {
         mj2x::cli::XmakeProjectConfig projectConfig;
-        projectConfig.projectDir          = xmakeProjectDir;
-        projectConfig.generatedSourcePath = cOutputPath;
+        projectConfig.projectDir          = options.xmakeProjectDir;
+        projectConfig.generatedSourcePath = options.cOutputPath;
         projectConfig.crtRoot             = mj2x::cli::findCrtRoot(argv[0]);
         projectConfig.projectName         = "mj2x_native_project";
         int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
         if (projectRc != 0) return projectRc;
     }
 
-    if (compileNative) {
-        int compileRc = mj2x::cli::compileCSource(cOutputPath, outputPath, cCompilerKind);
+    if (options.compileNative) {
+        int compileRc =
+            mj2x::cli::compileCSource(options.cOutputPath, options.outputPath, options.cCompilerKind);
         if (compileRc != 0) return compileRc;
         if (jarNativeLoaderEnabled)
-            return embedNativeLibraryInJar(outputPath, nativeResourceEntry, nativeLibraryPath);
+            return embedNativeLibraryInJar(
+                options.outputPath, nativeResourceEntry, nativeLibraryPath);
     }
 
     return 0;

@@ -37,6 +37,7 @@ target("mj2x-cli")
     set_group("mj2x")
 
     add_deps("mj2x-core")
+    add_packages("nlohmann_json")
 
     add_files("src/*.cpp")
     add_files("resources/mj2x_regc_crt_h.mj2xres", {
