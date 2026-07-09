@@ -2,6 +2,7 @@
 #include "mj2x/backend/stackc/stackc_runtime_prelude.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
+#include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/codegen/include_set.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
@@ -56,7 +57,36 @@ static std::string labelIdent(jbytecode::core::Label* lbl) {
 
 namespace {
 using codegen::cStringLiteral;
+using codegen::SnippetVars;
 }  // namespace
+
+enum class StackCSnippet {
+    PushStackValue,
+    LocalLoad,
+    LocalStore,
+    BinaryUnsignedWrap,
+    ReturnVoid,
+};
+
+static const codegen::CodeSnippetSet<StackCSnippet>& stackCSnippets() {
+    static const codegen::CodeSnippetSet<StackCSnippet> snippets({
+        {StackCSnippet::PushStackValue, "    stack[++sp]${acc} = ${value};\n"},
+        {StackCSnippet::LocalLoad, "    stack[++sp]${acc} = locals[${slot}]${acc};\n"},
+        {StackCSnippet::LocalStore, "    locals[${slot}]${acc} = stack[sp--]${acc};\n"},
+        {StackCSnippet::BinaryUnsignedWrap,
+         "    ${lhs}${acc} = (${signed_type})((${unsigned_type})${lhs}${acc} ${op} "
+         "(${unsigned_type})${rhs}${acc});\n"
+         "    sp--;\n"},
+        {StackCSnippet::ReturnVoid,
+         "    _mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);\n"
+         "    return;\n"},
+    });
+    return snippets;
+}
+
+static std::string renderStackCSnippet(StackCSnippet key, const SnippetVars& vars) {
+    return stackCSnippets().render(key, vars);
+}
 
 static void emitCLine(std::ostringstream& out, int indentLevel, const std::string& line) {
     CSourceStream src;
@@ -1786,8 +1816,7 @@ void StackCBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out)
         emitSwitch(static_cast<const MIRSwitch*>(node), out);
         break;
     case MIRKind::RETURN:
-        out << "    _mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);\n";
-        out << "    return;\n";
+        out << renderStackCSnippet(StackCSnippet::ReturnVoid, {});
         break;
     case MIRKind::RETURN_VALUE:
         emitReturnValue(static_cast<const MIRReturnValue*>(node), out);
@@ -1865,23 +1894,33 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstre
         if (node->type == PrimitiveKind::LONG) {
             // 用 unsigned 64-bit 字面量再转 jlong，避免 INT64_MIN 被解析成越界有符号字面量。
             auto u = static_cast<uint64_t>(v);
-            out << "    stack[++sp]" << acc << " = (jlong)" << u << "ULL;\n";
+            out << renderStackCSnippet(StackCSnippet::PushStackValue,
+                                       {{"acc", acc},
+                                        {"value", "(jlong)" + std::to_string(u) + "ULL"}});
         } else {
             // int：先转 uint32 再转 jint，保证 INT_MIN 等值无符号环绕语义、字面量不越界。
             auto u = static_cast<uint32_t>(static_cast<int32_t>(v));
-            out << "    stack[++sp]" << acc << " = (jint)" << u << "u;\n";
+            out << renderStackCSnippet(StackCSnippet::PushStackValue,
+                                       {{"acc", acc},
+                                        {"value", "(jint)" + std::to_string(u) + "u"}});
         }
     } else if (std::holds_alternative<double>(node->value)) {
         auto d = std::get<double>(node->value);
         if (node->type == PrimitiveKind::FLOAT) {
             // float 字面量加 f 后缀；NaN/Inf 走宏保证可移植（MSVC/gcc 均支持）。
-            if (std::isnan(d))      out << "    stack[++sp]" << acc << " = NAN;\n";
-            else if (std::isinf(d)) out << "    stack[++sp]" << acc << " = (" << (d < 0 ? "-" : "") << "INFINITY);\n";
-            else                    out << "    stack[++sp]" << acc << " = " << std::setprecision(9) << d << "f;\n";
+            std::ostringstream value;
+            if (std::isnan(d))      value << "NAN";
+            else if (std::isinf(d)) value << "(" << (d < 0 ? "-" : "") << "INFINITY)";
+            else                    value << std::setprecision(9) << d << "f";
+            out << renderStackCSnippet(StackCSnippet::PushStackValue,
+                                       {{"acc", acc}, {"value", value.str()}});
         } else {
-            if (std::isnan(d))      out << "    stack[++sp]" << acc << " = (double)NAN;\n";
-            else if (std::isinf(d)) out << "    stack[++sp]" << acc << " = (" << (d < 0 ? "-" : "") << "(double)INFINITY);\n";
-            else                    out << "    stack[++sp]" << acc << " = " << std::setprecision(17) << d << ";\n";
+            std::ostringstream value;
+            if (std::isnan(d))      value << "(double)NAN";
+            else if (std::isinf(d)) value << "(" << (d < 0 ? "-" : "") << "(double)INFINITY)";
+            else                    value << std::setprecision(17) << d;
+            out << renderStackCSnippet(StackCSnippet::PushStackValue,
+                                       {{"acc", acc}, {"value", value.str()}});
         }
     } else if (std::holds_alternative<std::string>(node->value)) {
         const auto offset = stringPoolOffsetFor(std::get<std::string>(node->value));
@@ -1891,7 +1930,8 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstre
     } else if (std::holds_alternative<Type>(node->value)) {
         const auto type = std::get<Type>(node->value);
         if (type.getSort() == Type::METHOD) {
-            out << "    stack[++sp]" << acc << " = NULL;\n";
+            out << renderStackCSnippet(StackCSnippet::PushStackValue,
+                                       {{"acc", acc}, {"value", "NULL"}});
             return;
         }
         if (type.getSort() == Type::OBJECT || type.getSort() == Type::ARRAY ||
@@ -1909,20 +1949,21 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstre
             << trackLocalRefExpr("(*env)->GetStaticObjectField(env, wrapper, type_fid)") << ";\n";
         out << "    }\n";
     } else {
-        out << "    stack[++sp]" << acc << " = NULL;\n";
+        out << renderStackCSnippet(StackCSnippet::PushStackValue,
+                                   {{"acc", acc}, {"value", "NULL"}});
     }
 }
 
 void StackCBackend::Impl::emitLocalLoad(const MIRLocalLoad* node, std::ostringstream& out) {
-    out << "    stack[++sp]" << stackAccessor(node->type)
-        << " = locals[" << node->varIndex << "]"
-        << stackAccessor(node->type) << ";\n";
+    out << renderStackCSnippet(StackCSnippet::LocalLoad,
+                               {{"acc", stackAccessor(node->type)},
+                                {"slot", std::to_string(node->varIndex)}});
 }
 
 void StackCBackend::Impl::emitLocalStore(const MIRLocalStore* node, std::ostringstream& out) {
-    out << "    locals[" << node->varIndex << "]"
-        << stackAccessor(node->type)
-        << " = stack[sp--]" << stackAccessor(node->type) << ";\n";
+    out << renderStackCSnippet(StackCSnippet::LocalStore,
+                               {{"acc", stackAccessor(node->type)},
+                                {"slot", std::to_string(node->varIndex)}});
 }
 
 void StackCBackend::Impl::emitIinc(const MIRIinc* node, std::ostringstream& out) {
@@ -2070,9 +2111,13 @@ void StackCBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstre
     if (node->type == PrimitiveKind::INT) {
         switch (node->op) {
         case BinaryOp::ADD: case BinaryOp::SUB: case BinaryOp::MUL:
-            out << "    " << lhs << acc << " = (jint)((uint32_t)" << lhs << acc
-                << " " << binaryOpToC(node->op) << " (uint32_t)" << rhs << acc << ");\n";
-            out << "    sp--;\n";
+            out << renderStackCSnippet(StackCSnippet::BinaryUnsignedWrap,
+                                       {{"lhs", lhs},
+                                        {"rhs", rhs},
+                                        {"acc", acc},
+                                        {"signed_type", "jint"},
+                                        {"unsigned_type", "uint32_t"},
+                                        {"op", binaryOpToC(node->op)}});
             return;
         case BinaryOp::SHL:
             out << "    " << lhs << acc << " = (jint)((uint32_t)" << lhs << acc
@@ -2116,9 +2161,13 @@ void StackCBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, std::ostringstre
     if (node->type == PrimitiveKind::LONG) {
         switch (node->op) {
         case BinaryOp::ADD: case BinaryOp::SUB: case BinaryOp::MUL:
-            out << "    " << lhs << acc << " = (jlong)((uint64_t)" << lhs << acc
-                << " " << binaryOpToC(node->op) << " (uint64_t)" << rhs << acc << ");\n";
-            out << "    sp--;\n";
+            out << renderStackCSnippet(StackCSnippet::BinaryUnsignedWrap,
+                                       {{"lhs", lhs},
+                                        {"rhs", rhs},
+                                        {"acc", acc},
+                                        {"signed_type", "jlong"},
+                                        {"unsigned_type", "uint64_t"},
+                                        {"op", binaryOpToC(node->op)}});
             return;
         case BinaryOp::SHL:
             out << "    " << lhs << acc << " = (jlong)((uint64_t)" << lhs << acc
@@ -3041,4 +3090,3 @@ void StackCBackend::Impl::emitThrow(const MIRThrow* node, std::ostringstream& ou
 }
 
 } // namespace mj2x
-

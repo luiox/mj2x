@@ -6,6 +6,7 @@
 
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
+#include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/codegen/include_set.hpp"
 
 using namespace mj2x::codegen;
@@ -98,6 +99,27 @@ TEST(CHelpersTest, MangleMethodBuildsJavaPrefixSymbol) {
     EXPECT_EQ(mangleMethod("Foo", "bar", "()V"), "Java_Foo_bar");
     // <init> maps to init_ (legal C identifier).
     EXPECT_EQ(mangleMethod("Foo", "<init>", "()V"), "Java_Foo_init_");
+}
+
+enum class TestSnippet {
+    Assign,
+};
+
+TEST(CodeSnippetTest, RendersTypedSnippetVariables) {
+    CodeSnippetSet<TestSnippet> snippets({
+        {TestSnippet::Assign, "${lhs} = (${type})${rhs};"},
+    });
+    EXPECT_EQ(snippets.render(TestSnippet::Assign,
+                              {
+                                  {"lhs", "stack[++sp].i"},
+                                  {"type", "jint"},
+                                  {"rhs", "7"},
+                              }),
+              "stack[++sp].i = (jint)7;");
+}
+
+TEST(CodeSnippetTest, LeavesUnknownVariablesVisible) {
+    EXPECT_EQ(renderSnippet("${known} ${missing}", {{"known", "ok"}}), "ok ${missing}");
 }
 
 }  // namespace
