@@ -659,6 +659,8 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static int shortCompare(short a, short b) { return Short.compare(a, b); }\n"
         "  public static int boolCompare(boolean a, boolean b) { return Boolean.compare(a, b); }\n"
         "  public static int charCompare(char a, char b) { return Character.compare(a, b); }\n"
+        "  public static int floatCompare(float a, float b) { return Float.compare(a, b); }\n"
+        "  public static int doubleCompare(double a, double b) { return Double.compare(a, b); }\n"
         "  public static double sinDemo(double x) { return Math.sin(x); }\n"
         "  public static double sqrtDemo(double x) { return Math.sqrt(x); }\n"
         "  public static int mathChain(int a, int b) {\n"
@@ -738,6 +740,12 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"boolCompare(true, false)", "RegCIntrinsic.boolCompare(true, false)"},
             {"boolCompare(false, true)", "RegCIntrinsic.boolCompare(false, true)"},
             {"charCompare('A', 'Z')", "RegCIntrinsic.charCompare('A', 'Z')"},
+            {"floatCompare(1.0f, 2.0f)", "RegCIntrinsic.floatCompare(1.0f, 2.0f)"},
+            {"floatCompare(-0.0f, 0.0f)", "RegCIntrinsic.floatCompare(-0.0f, 0.0f)"},
+            {"floatCompare(Float.NaN, 1.0f)", "RegCIntrinsic.floatCompare(Float.NaN, 1.0f)"},
+            {"doubleCompare(2.0d, 1.0d)", "RegCIntrinsic.doubleCompare(2.0d, 1.0d)"},
+            {"doubleCompare(-0.0d, 0.0d)", "RegCIntrinsic.doubleCompare(-0.0d, 0.0d)"},
+            {"doubleCompare(Double.NaN, 1.0d)", "RegCIntrinsic.doubleCompare(Double.NaN, 1.0d)"},
             {"sinDemo(1.0)", "RegCIntrinsic.sinDemo(1.0)"},
             {"sqrtDemo(2.0)", "RegCIntrinsic.sqrtDemo(2.0)"},
             {"mathChain(3, 9)", "RegCIntrinsic.mathChain(3, 9)"},
@@ -814,6 +822,8 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_short_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_bool_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_char_compare("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_float_compare("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_double_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_literal("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_int_value_of("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_int_int_value("), std::string::npos) << generatedC;
@@ -905,6 +915,12 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
               std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Character\", \"compare\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Float\", \"compare\""),
+              std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/Double\", \"compare\""),
               std::string::npos)
         << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/String\", \"valueOf\""),

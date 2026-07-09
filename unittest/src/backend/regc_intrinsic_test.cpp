@@ -275,6 +275,30 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperCompareIntrinsics)
     EXPECT_EQ(charDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(charDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(charDecision.symbol, "_mj2x_intrinsic_char_compare");
+
+    auto floatCompare = makeStaticCall("java/lang/Float",
+                                       "compare",
+                                       "(FF)I",
+                                       {
+                                           RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F32}),
+                                           RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F32}),
+                                       });
+    auto floatDecision = RegCIntrinsicRegistry::builtins().matchCall(floatCompare);
+    EXPECT_EQ(floatDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(floatDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(floatDecision.symbol, "_mj2x_intrinsic_float_compare");
+
+    auto doubleCompare = makeStaticCall("java/lang/Double",
+                                        "compare",
+                                        "(DD)I",
+                                        {
+                                            RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}),
+                                            RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F64}),
+                                        });
+    auto doubleDecision = RegCIntrinsicRegistry::builtins().matchCall(doubleCompare);
+    EXPECT_EQ(doubleDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(doubleDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(doubleDecision.symbol, "_mj2x_intrinsic_double_compare");
 }
 
 TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
@@ -978,13 +1002,14 @@ TEST(RegCIntrinsicTest, MoreWrapperToStringLoweredToIntrinsicsNotJni)
 TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
 {
     std::string reason;
-    // static int compares(byte b, short s, boolean z, char c) {
+    // static int compares(byte b, short s, boolean z, char c, float f, double d) {
     //   return Byte.compare(b, (byte)7) + Short.compare(s, (short)3)
-    //       + Boolean.compare(z, false) + Character.compare(c, 'A');
+    //       + Boolean.compare(z, false) + Character.compare(c, 'A')
+    //       + Float.compare(f, 0.0f) + Double.compare(d, 0.0d);
     // }
     auto result = emitRegC(
         "moreWrapperCompares",
-        "(BSZC)I",
+        "(BSZCFD)I",
         {
             new VarInsnNode(Opcodes::ILOAD, 0),
             new IntInsnNode(Opcodes::BIPUSH, 7),
@@ -1008,10 +1033,20 @@ TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
                                U("(CC)I"),
                                false),
             new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::FLOAD, 4),
+            new InsnNode(Opcodes::FCONST_0),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Float"), U("compare"), U("(FF)I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::DLOAD, 5),
+            new InsnNode(Opcodes::DCONST_0),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Double"), U("compare"), U("(DD)I"), false),
+            new InsnNode(Opcodes::IADD),
             new InsnNode(Opcodes::IRETURN),
         },
-        3,
         4,
+        7,
         reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
@@ -1023,6 +1058,10 @@ TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_char_compare("), std::string::npos)
         << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_float_compare("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_double_compare("), std::string::npos)
+        << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Byte\", \"compare\""),
               std::string::npos)
         << result.source;
@@ -1033,6 +1072,12 @@ TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
               std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Character\", \"compare\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Float\", \"compare\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Double\", \"compare\""),
               std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);

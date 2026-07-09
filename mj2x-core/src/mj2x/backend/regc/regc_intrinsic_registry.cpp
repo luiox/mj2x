@@ -97,8 +97,12 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Float", "toString", "(F)Ljava/lang/String;", "_mj2x_intrinsic_float_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Float", "compare", "(FF)I", "_mj2x_intrinsic_float_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Double", "toString", "(D)Ljava/lang/String;", "_mj2x_intrinsic_double_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
+    {"java/lang/Double", "compare", "(DD)I", "_mj2x_intrinsic_double_compare",
+     RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, false, 2, true},
     {"java/lang/Boolean", "toString", "(Z)Ljava/lang/String;", "_mj2x_intrinsic_bool_to_string",
      RegCIntrinsicEmitKind::RegCLocalHelper, RegCIntrinsicNativeObjectKind::None, true, 1, true},
     {"java/lang/Boolean", "compare", "(ZZ)I", "_mj2x_intrinsic_bool_compare",
@@ -306,6 +310,8 @@ void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const {
     out << "static int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_byte_compare(int8_t lhs, int8_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_short_compare(int16_t lhs, int16_t rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_float_compare(float lhs, float rhs);\n";
+    out << "static int32_t _mj2x_intrinsic_double_compare(double lhs, double rhs);\n";
     out << "static int32_t _mj2x_intrinsic_bool_compare(int8_t lhs, int8_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_char_compare(uint16_t lhs, uint16_t rhs);\n";
     out << "static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n";
