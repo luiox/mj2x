@@ -66,7 +66,10 @@ ExecResult runBat(const std::vector<std::string>& lines) {
         std::ofstream out(script);
         out << "@echo off\n";
         out << "chcp 65001 >nul 2>&1\n";
-        for (const auto& line : lines) out << line << "\n";
+        for (const auto& line : lines) {
+            out << line << "\n";
+            out << "if errorlevel 1 exit /b %errorlevel%\n";
+        }
         out << "exit /b %errorlevel%\n";
     }
 
@@ -338,6 +341,21 @@ private:
 Toolchain RegCBackendE2E::tc_;
 
 } // namespace
+
+TEST(RegCBackendE2EHarnessTest, RunBatStopsAfterFirstFailingCommand)
+{
+    fs::path marker = test::getTempOutPath("mj2x_regc_e2e_fail_fast_marker.txt");
+    std::error_code ec;
+    fs::remove(marker, ec);
+
+    auto result = runBat({
+        "cmd /c exit /b 7",
+        "echo stale-object-risk > " + q(marker),
+    });
+
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_FALSE(fileExists(marker)) << marker;
+}
 
 TEST_F(RegCBackendE2E, PureArithmeticLoopAndArrayRoundTrip) {
     runCase(
