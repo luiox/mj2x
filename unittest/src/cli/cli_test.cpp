@@ -864,6 +864,48 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
     EXPECT_NE(source.find("RegisterNatives"), std::string::npos) << source;
 }
 
+TEST(CliTest, GenerateXmakeProjectForRegCJarInjectsNativeLoader)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path        inJar      = writeTinyJar();
+    fs::path        outJar     = test::getTempOutPath("mj2x_cli_xmake_regc_output.jar");
+    fs::path        projectDir = test::getTempOutPath("mj2x_cli_xmake_regc_project.keep")
+                              .parent_path() /
+                          "mj2x_cli_xmake_regc_project";
+    std::error_code ec;
+    fs::remove_all(projectDir, ec);
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) + " --backend regc --generate-xmake " +
+            q(projectDir),
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    ASSERT_TRUE(fileExists(outJar));
+    EXPECT_TRUE(fileExists(projectDir / "xmake.lua")) << result.out;
+    EXPECT_TRUE(fileExists(projectDir / "src" / "generated" / "native.c")) << result.out;
+
+    auto loaderClass = readJarEntry(outJar, "mj2x/runtime/NativeLoader.class");
+    EXPECT_FALSE(loaderClass.empty()) << result.out;
+
+    auto                     classBytes = readJarEntry(outJar, "demo/CliJarA.class");
+    ca::str::Utf8StringArena arena;
+    auto                     cn = readClassFromBytes(classBytes, arena);
+    auto*                    clinit = findMethod(*cn, "<clinit>");
+    ASSERT_NE(clinit, nullptr);
+    bool callsLoader = false;
+    for (auto* insn : clinit->instructions) {
+        auto* call = typed::dyn_cast<jbytecode::tree::MethodInsnNode>(insn);
+        if (call == nullptr) continue;
+        callsLoader = callsLoader || (call->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
+                                      call->name.to_std_string() == "load");
+    }
+    EXPECT_TRUE(callsLoader);
+}
+
 TEST(CliTest, CompileFailsClearlyWhenJavaHomeMissing)
 {
     fs::path cli = findCli();

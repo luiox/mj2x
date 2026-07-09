@@ -358,7 +358,7 @@ int main(int argc, char** argv)
     config.dumpMIR    = dumpMIR;
 
     const bool jarOutput = hasExtension(inputPath, ".jar") && hasExtension(outputPath, ".jar");
-    const bool jarNativeLoaderEnabled       = compileNative && jarOutput;
+    const bool jarNativeLoaderEnabled       = (compileNative || !xmakeProjectDir.empty()) && jarOutput;
     std::filesystem::path nativeLibraryPath = mj2x::cli::nativeLibraryPathForOutput(outputPath);
     const std::string     nativeResourceEntry =
         "META-INF/mj2x/native/" + nativeLibraryPath.filename().string();

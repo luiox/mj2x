@@ -5,6 +5,7 @@ add_rules("mode.debug", "mode.release")
 
 target("mj2x_native")
     set_kind("shared")
+    set_targetdir("$(projectdir)/build/$(plat)/$(arch)/$(mode)")
     add_files("src/generated/native.c")
     add_files("src/mj2x-crt/regc/*.c")
     add_includedirs("src/mj2x-crt")
