@@ -15,10 +15,16 @@ calling the `regc_*` helper.  The generated helper body can then call functions
 such as `_mj2x_regc_alloc_array`, `_mj2x_regc_load_i32_array`, and
 `_mj2x_regc_instanceof` without receiving `JNIEnv*` as an explicit RegIR value.
 
-This is a transitional bridge.  Integer div/rem and barrier call sites now use
-the first R3 runtime ABI described in `regc_r3_runtime_abi.md`; object, field,
-array, call, monitor, and exception-dispatch helpers remain generated inline
-until those larger surfaces have stable runtime contracts.
+This is a transitional bridge. Integer div/rem, barrier, primitive compare, and
+basic primitive-to-`String` call sites now use the C99/JNI ABI in
+`mj2x-crt/src/regc/mj2x_regc_crt.h`; generated C includes that header instead
+of defining those helpers per translation unit. Object, field, array, call,
+monitor, and exception-dispatch helpers remain generated inline until those
+larger surfaces have stable runtime contracts.
+
+`mj2x-crt/resources.manifest` is the distributable source-pack authority. It
+lets CLI-generated projects compile the same C (and later C++) sources without
+depending on the in-tree `mj2x-runtime` or `libca` layout.
 
 ## Implemented Surface
 
@@ -44,13 +50,15 @@ The MVP helper layer implements:
 - try/catch dispatch through `_mj2x_regc_exception_check`,
   `_mj2x_regc_exception_occurred`, `_mj2x_regc_exception_clear`, and
   `_mj2x_regc_exception_matches`; generated C rethrows unmatched exceptions
-- Java integer division/remainder through R3 ABI calls
+- Java integer division/remainder through CRT ABI calls
   `mj2x_regc_div_i32`, `mj2x_regc_div_i64`, `mj2x_regc_rem_i32`, and
   `mj2x_regc_rem_i64`; these helpers throw `ArithmeticException` for zero
   divisors through the generated adapter callback and preserve `MIN_VALUE / -1`
   and `MIN_VALUE % -1` JVM edge semantics
 - runtime policy barriers through `mj2x_regc_barrier`, currently a no-op ABI
   hook reserved for later anti-debug/anti-JVMTI/key-state checks
+- primitive compare and `Integer`/`Long`/`Boolean`/`Character` `toString`
+  helpers owned by CRT rather than re-emitted into every generated C file
 
 ## Testing
 
@@ -76,3 +84,5 @@ cases.
 and byte/short/char array helpers through a real DLL round trip.  Boolean array
 load/store shares the JVM `baload`/`bastore` opcode shape with byte arrays, so
 the runtime helper detects boolean arrays before falling back to byte regions.
+`mj2x_crt_test` independently covers the portable CRT div/rem/barrier,
+comparison, StringBuilder status bridge, and UTF-16 builder surface.

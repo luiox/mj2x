@@ -512,8 +512,17 @@ int main(int argc, char** argv)
     }
 
     if (options.compileNative) {
-        int compileRc =
-            mj2x::cli::compileCSource(options.cOutputPath, options.outputPath, options.cCompilerKind);
+        std::filesystem::path crtRoot;
+        if (options.cBackendKind == CEmitterBackend::RegC) {
+            crtRoot = mj2x::cli::findCrtRoot(argv[0]);
+            if (crtRoot.empty()) {
+                fprintf(stderr,
+                        "[mj2x] ERROR: RegC --compile requires an mj2x-crt source pack; set MJ2X_CRT_DIR or use --generate-xmake.\n");
+                return 1;
+            }
+        }
+        int compileRc = mj2x::cli::compileCSource(
+            options.cOutputPath, options.outputPath, options.cCompilerKind, crtRoot);
         if (compileRc != 0) return compileRc;
         if (jarNativeLoaderEnabled)
             return embedNativeLibraryInJar(

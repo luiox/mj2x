@@ -21,7 +21,7 @@
 | 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
 | `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
 | `--generate-cmake <dir>` 输出独立 CMake native 工程 | ✅ | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
-| `--generate-xmake <dir>` 输出独立 xmake native 工程,`mj2x-cli` 通过 xmake `bin2c` 构建期内嵌 `mj2x-crt`/模板资源,可支持单 exe 使用 | ✅ | `CliTest.GenerateXmakeProject*` |
+| `--generate-xmake <dir>` 输出独立 xmake native 工程,`mj2x-cli` 按 `mj2x-crt/resources.manifest` 构建期内嵌并释放 CRT 源文件/模板资源,可支持单 exe 使用 | ✅ | `CliTest.GenerateXmakeProject*` |
 | StackC/RegC class 和 jar 重复生成稳定性 | ✅ | `CliTest.ClassInputRepeatableForStackCAndRegC`、`CliTest.JarInputRepeatableForStackCAndRegC`、`tools/product_sample_smoke.ps1 -Mode fast` |
 
 ---
@@ -109,7 +109,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
 - `java.lang.Integer.parseInt(String[,radix])`:native digit parser 解析,NumberFormatException 经 context 回调路由
 - `java.lang.Long.parseLong(String[,radix])`:native digit parser 解析,NumberFormatException 经 context 回调路由
-- `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.compare`:RegC local helper 生成字符串或比较结果;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式,`Float/Double.compare` 显式处理 NaN 与 signed zero 语义
+- `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.compare`:无状态 compare 与基础整型/布尔/字符 `toString` 走 `mj2x-crt` C ABI;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式,`Float/Double.compare` 显式处理 NaN 与 signed zero 语义
 - `java.lang.String.valueOf(int|long|boolean|char|float|double|Object)`:RegC local helper 覆盖常见值转字符串;`float|double` 和 `Object` 通过缓存的 JDK methodID 保持浮点格式和虚分派语义
 - String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
 - `java.lang.String`:equals/length/charAt/hashCode/isEmpty/startsWith(String)/endsWith(String)/indexOf(String)/contains(CharSequence)
@@ -143,15 +143,16 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | 模块 | 状态 |
 |---|---|
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
-| RegC / R3 ABI 冻结 | ✅ 当前冻结在 div / rem / barrier helper |
+| `mj2x-crt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;无 `libca` 分发依赖 |
+| RegC / R3 ABI 冻结 | ✅ 当前冻结在 div / rem / barrier、compare、基础 `toString` helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
 | Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random) | ✅ runtime + emitter 识别 |
-| Integer.parseInt / Long.parseLong radix overloads / wrapper toString / wrapper compare intrinsic | ✅ emitter 内联 RegC local helper + E2E |
+| Integer.parseInt / Long.parseLong radix overloads / wrapper toString / wrapper compare intrinsic | ✅ parseInt 与复杂格式仍为 emitter/runtime 路径;无状态 compare/基础 `toString` 由 CRT 提供 + E2E |
 | 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime + RegC 非逃逸 value/unbox;逃逸 fail-closed |
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
 | String intrinsic 最小 UTF-16 view 垫片(length/charAt/status) + RegC String read hot paths | ✅ runtime 单测 + RegC emitter/结构测试 + native E2E |
-| StringBuilder 非逃逸 append/toString first slice | ✅ RegC emitter/结构测试 + native E2E;覆盖 `append(char[])`;逃逸 fail-closed |
+| StringBuilder 非逃逸 append/toString first slice | ✅ RegC emitter/结构测试 + native E2E;当前为本地固定 buffer,CRT 已定义 opaque UTF-16 C ABI 供后续替换;覆盖 `append(char[])`;逃逸 fail-closed |
 | antidebug 软件断点字节扫描 | ✅ mockable runtime 单测 |
 | antijvmti agent/JDWP 参数、模块名、dump capability 信号聚合 | ✅ mockable runtime 单测 |
 
@@ -165,7 +166,8 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 mj2x/
 ├── mj2x-core/src/mj2x/      核心库(include 根 = src,内层 mj2x/ 保留 → 98 处 include 零改动)
 ├── mj2x-cli/src/             CLI 入口
-├── mj2x-runtime/src/         native runtime(crypto/kernel/intrinsic/...)
+├── mj2x-crt/src/             可分发 C99/JNI RegC ABI source pack
+├── mj2x-runtime/src/         in-tree native runtime(crypto/kernel/intrinsic/...)
 ├── unittest/src/             单测
 ```
 
@@ -182,8 +184,9 @@ mj2x/
 | 能力域 | 当前权威来源 |
 |---|---|
 | 字节码转 native | `mj2x/mj2x-core/src/mj2x/backend/{stackc,regc}/` |
+| 可分发 RegC 运行时 ABI | `mj2x/mj2x-crt/src/regc/` + `mj2x/mj2x-crt/resources.manifest` |
 | native 运行时 | `mj2x/mj2x-runtime/src/` |
-| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` |
+| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` + `mj2x/mj2x-crt/src/regc/` |
 | 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` |
 | 用户注解包 | `mj2x/mj2x-annotations/` |
 | protected samples | `mj2x/test_resource/protected_samples/` |
@@ -195,8 +198,10 @@ mj2x/
 ```bash
 xmake build mj2x-core
 xmake build mj2x-cli
+xmake build mj2x-crt
 xmake build mj2x_unittest
 xmake build mj2x_runtime_test
+xmake run mj2x_crt_test
 xmake run mj2x_unittest
 xmake run mj2x_runtime_test
 tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples

@@ -7,11 +7,39 @@
 static const char* kArithmeticException = "java/lang/ArithmeticException";
 static const char* kDivideByZero = "/ by zero";
 
-static void mj2x_regc_throw_exception(mj2x_regc_context* context,
-                                      const char* class_name,
-                                      const char* message) {
+void mj2x_regc_throw_exception(mj2x_regc_context* context,
+                               const char* class_name,
+                               const char* message) {
     if (context == NULL || context->throwException == NULL) return;
     context->throwException(context->env, class_name, message);
+}
+
+void mj2x_regc_report_status(mj2x_regc_context* context,
+                             mj2x_regc_status status,
+                             const char* operation) {
+    const char* class_name = NULL;
+    if (status == MJ2X_REGC_STATUS_OK || status == MJ2X_REGC_STATUS_PENDING_EXCEPTION) return;
+
+    switch (status) {
+    case MJ2X_REGC_STATUS_INVALID_ARGUMENT:
+        class_name = "java/lang/IllegalArgumentException";
+        break;
+    case MJ2X_REGC_STATUS_OUT_OF_MEMORY:
+        class_name = "java/lang/OutOfMemoryError";
+        break;
+    case MJ2X_REGC_STATUS_INVALID_STATE:
+        class_name = "java/lang/IllegalStateException";
+        break;
+    case MJ2X_REGC_STATUS_UNSUPPORTED:
+        class_name = "java/lang/UnsupportedOperationException";
+        break;
+    default:
+        class_name = "java/lang/RuntimeException";
+        break;
+    }
+    mj2x_regc_throw_exception(context,
+                              class_name,
+                              operation == NULL ? "mj2x runtime operation" : operation);
 }
 
 void mj2x_regc_init_context(mj2x_regc_context* context,

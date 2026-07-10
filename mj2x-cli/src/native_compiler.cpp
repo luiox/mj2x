@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <cstdio>
+#include <fstream>
 #include <sstream>
 #include <vector>
 #ifndef _WIN32
@@ -80,6 +81,83 @@ const char* compilerExecutable(CCompilerKind compiler) {
 }
 
 std::filesystem::path findVcvarsAll();
+
+std::string trim(std::string value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+bool addCrtSources(const std::filesystem::path& crtRoot,
+                   std::vector<std::filesystem::path>& includes,
+                   std::vector<std::filesystem::path>& sources) {
+    const auto sourceRoot = crtRoot / "src";
+    const auto manifest = crtRoot / "resources.manifest";
+    std::error_code ec;
+    if (!std::filesystem::exists(sourceRoot / "regc" / "mj2x_regc_crt.h", ec) ||
+        !std::filesystem::exists(manifest, ec)) {
+        fprintf(stderr,
+                "[mj2x] ERROR: invalid mj2x-crt source pack: %s\n",
+                crtRoot.string().c_str());
+        return false;
+    }
+
+    std::ifstream in(manifest);
+    if (!in) {
+        fprintf(stderr,
+                "[mj2x] ERROR: cannot read mj2x-crt manifest: %s\n",
+                manifest.string().c_str());
+        return false;
+    }
+
+    includes.push_back(sourceRoot);
+    bool        foundSource = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        if (line.rfind("src/", 0) != 0) continue;
+
+        const std::filesystem::path relative(line);
+        bool                        escapesRoot = relative.is_absolute();
+        for (const auto& component : relative) {
+            if (component == "..") {
+                escapesRoot = true;
+                break;
+            }
+        }
+        if (escapesRoot) {
+            fprintf(stderr,
+                    "[mj2x] ERROR: invalid mj2x-crt manifest source path: %s\n",
+                    line.c_str());
+            return false;
+        }
+
+        const auto source = crtRoot / relative;
+        const auto extension = source.extension().string();
+        if (extension == ".cpp") {
+            fprintf(stderr,
+                    "[mj2x] ERROR: --compile does not yet support C++ mj2x-crt sources; use --generate-xmake.\n");
+            return false;
+        }
+        if (extension != ".c") continue;
+        if (!std::filesystem::exists(source, ec)) {
+            fprintf(stderr,
+                    "[mj2x] ERROR: mj2x-crt manifest source is missing: %s\n",
+                    source.string().c_str());
+            return false;
+        }
+        sources.push_back(source);
+        foundSource = true;
+    }
+
+    if (!foundSource) {
+        fprintf(stderr, "[mj2x] ERROR: mj2x-crt manifest has no C sources.\n");
+        return false;
+    }
+    return true;
+}
 
 bool canUseMsvc() {
     return commandExists("cl") || !findVcvarsAll().empty();
@@ -254,7 +332,8 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath) 
 int compileCSource(
     const std::string& cOutputPath,
     const std::string& outputPath,
-    CCompilerKind requestedCompiler) {
+    CCompilerKind requestedCompiler,
+    const std::filesystem::path& crtRoot) {
     std::error_code ec;
     if (!std::filesystem::exists(cOutputPath, ec)) {
         fprintf(stderr, "[mj2x] ERROR: emitted C source does not exist: %s\n",
@@ -277,17 +356,23 @@ int compileCSource(
     if (!jniIncludePaths(includes))
         return 1;
 
+    std::vector<std::filesystem::path> sources{std::filesystem::path(cOutputPath)};
+    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources))
+        return 1;
+
     std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::ostringstream command;
     if (compiler == CCompilerKind::Msvc) {
-        std::filesystem::path objectPath = libraryPath;
-        objectPath.replace_extension(".obj");
         command << "cl /nologo /LD";
         for (const auto& include : includes)
             command << " /I" << quotePath(include);
-        command << " " << quotePath(cOutputPath)
-                << " /Fo" << quotePath(objectPath)
-                << " /Fe" << quotePath(libraryPath);
+        std::filesystem::path objectDir = libraryPath.parent_path();
+        if (objectDir.empty()) objectDir = ".";
+        objectDir /= "";
+        command << " /Fo" << quotePath(objectDir);
+        for (const auto& source : sources)
+            command << " " << quotePath(source);
+        command << " /Fe" << quotePath(libraryPath);
         if (envValue("INCLUDE").empty()) {
             auto vcvars = findVcvarsAll();
             if (vcvars.empty()) {
@@ -311,8 +396,9 @@ int compileCSource(
         command << compilerExecutable(compiler) << " " << sharedFlag << " -fPIC";
         for (const auto& include : includes)
             command << " -I" << quotePath(include);
-        command << " -o " << quotePath(libraryPath)
-                << " " << quotePath(cOutputPath);
+        command << " -o " << quotePath(libraryPath);
+        for (const auto& source : sources)
+            command << " " << quotePath(source);
     }
 
     printf("[mj2x] Compiling native library: %s\n", libraryPath.string().c_str());

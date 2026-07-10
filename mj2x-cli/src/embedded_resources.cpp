@@ -10,28 +10,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr unsigned char kCrtHeader[] = {
-#include "mj2x_regc_crt.h.h"
-};
-
-constexpr unsigned char kCrtSource[] = {
-#include "mj2x_regc_crt.c.h"
-};
-
-constexpr unsigned char kXmakeTemplate[] = {
-#include "xmake.lua.in.h"
-};
-
-constexpr unsigned char kReadmeTemplate[] = {
-#include "README.md.in.h"
-};
-
-constexpr EmbeddedResource kResources[] = {
-    {"src/regc/mj2x_regc_crt.h", kCrtHeader, sizeof(kCrtHeader)},
-    {"src/regc/mj2x_regc_crt.c", kCrtSource, sizeof(kCrtSource)},
-    {"templates/xmake.lua.in", kXmakeTemplate, sizeof(kXmakeTemplate)},
-    {"templates/README.md.in", kReadmeTemplate, sizeof(kReadmeTemplate)},
-};
+#include "mj2x_crt_resources.generated.hpp"
 
 bool writeResource(const fs::path& base, const EmbeddedResource& resource)
 {
@@ -61,10 +40,17 @@ bool writeResource(const fs::path& base, const EmbeddedResource& resource)
 const EmbeddedResource* findEmbeddedResource(const char* path)
 {
     if (path == nullptr) return nullptr;
-    for (const auto& resource : kResources) {
+    for (std::size_t index = 0; index < kResourceCount; ++index) {
+        const auto& resource = kResources[index];
         if (std::string_view(resource.path) == path) return &resource;
     }
     return nullptr;
+}
+
+const EmbeddedResource* embeddedResources(std::size_t* outCount)
+{
+    if (outCount != nullptr) *outCount = kResourceCount;
+    return kResources;
 }
 
 bool writeEmbeddedCrtTree(const std::filesystem::path& projectDir)

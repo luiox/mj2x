@@ -13,6 +13,7 @@ struct EmbeddedResource
 };
 
 const EmbeddedResource* findEmbeddedResource(const char* path);
+const EmbeddedResource* embeddedResources(std::size_t* outCount);
 bool writeEmbeddedCrtTree(const std::filesystem::path& projectDir);
 
 }   // namespace mj2x::cli

@@ -66,7 +66,8 @@ whole-class sinking. StackC does not depend on SSA.
 | `mj2x-core/src/mj2x/backend/regc/` | RegC backend and intrinsic matcher/registry |
 | `mj2x-core/src/mj2x/codegen/` | C source helpers shared by emitters |
 | `mj2x-core/src/mj2x/preprocessor/` | method marking and bytecode shape preprocessing |
-| `mj2x-runtime/src/` | runtime ABI, crypto, antidebug, antijvmti, intrinsic helpers |
+| `mj2x-crt/src/` | distributable C99/JNI RegC ABI and source pack for generated projects |
+| `mj2x-runtime/src/` | in-tree higher-level runtime: crypto, antidebug, antijvmti, intrinsic helpers |
 | `mj2x-annotations/` | user-facing `@mj2x.Native` annotation |
 | `test_resource/protected_samples/` | samples for mjdbg attack/observation |
 
@@ -105,11 +106,16 @@ Use RegC for:
 
 ## 5. Runtime
 
-The runtime is a native support library for RegC and protected samples.
+The runtime is split by distribution boundary. `mj2x-crt` is the sole
+distributable C99/JNI source pack for generated RegC projects; it owns the
+public helper ABI and must not depend on `libca`. `mj2x-runtime` remains the
+in-tree higher-level native support library for RegC development and protected
+samples.
 
 Current/runtime domains:
 
-- ABI helpers: div/rem/barrier and exception/error routing.
+- CRT ABI helpers: div/rem/barrier, primitive compare/basic formatting, and
+  exception/error routing.
 - Crypto/kernel/stringpool.
 - Antidebug and antijvmti checks.
 - JDK intrinsic helpers: wrappers, Math, Random, parseInt.
@@ -151,8 +157,10 @@ Core validation:
 ```powershell
 xmake build mj2x-core
 xmake build mj2x-cli
+xmake build mj2x-crt
 xmake build mj2x_unittest
 xmake build mj2x_runtime_test
+xmake run mj2x_crt_test
 xmake run mj2x_unittest
 xmake run mj2x_runtime_test
 ```

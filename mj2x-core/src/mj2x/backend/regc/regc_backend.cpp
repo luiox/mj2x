@@ -325,118 +325,11 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
                         const std::string& unsupportedOperationExceptionClassCacheName,
                         bool emitStringBuilderHelpers)
 {
-    out << "typedef void* mj2x_ref;\n";
-    out << "#ifndef MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
-    out << "#define MJ2X_REGC_RUNTIME_ABI_DECLARED\n";
-    out << "typedef void (*mj2x_regc_throw_callback)(void* env, const char* class_name, const "
-           "char* message);\n";
-    out << "typedef struct mj2x_regc_context {\n";
-    out << "    void* env;\n";
-    out << "    mj2x_regc_throw_callback throwException;\n";
-    out << "} mj2x_regc_context;\n";
-    out << "typedef struct mj2x_regc_class_cache {\n";
-    out << "    const char* desc;\n";
-    out << "    jclass value;\n";
-    out << "} mj2x_regc_class_cache;\n";
-    out << "typedef struct mj2x_regc_static_method_cache {\n";
-    out << "    const char* owner;\n";
-    out << "    const char* name;\n";
-    out << "    const char* desc;\n";
-    out << "    jclass ownerClass;\n";
-    out << "    jmethodID method;\n";
-    out << "} mj2x_regc_static_method_cache;\n";
-    out << "typedef struct mj2x_regc_instance_method_cache {\n";
-    out << "    const char* owner;\n";
-    out << "    const char* name;\n";
-    out << "    const char* desc;\n";
-    out << "    jclass ownerClass;\n";
-    out << "    jmethodID method;\n";
-    out << "} mj2x_regc_instance_method_cache;\n";
-    out << "typedef struct mj2x_regc_static_field_cache {\n";
-    out << "    const char* owner;\n";
-    out << "    const char* name;\n";
-    out << "    const char* desc;\n";
-    out << "    jclass ownerClass;\n";
-    out << "    jfieldID field;\n";
-    out << "} mj2x_regc_static_field_cache;\n";
-    out << "typedef struct mj2x_regc_instance_field_cache {\n";
-    out << "    const char* owner;\n";
-    out << "    const char* name;\n";
-    out << "    const char* desc;\n";
-    out << "    jclass ownerClass;\n";
-    out << "    jfieldID field;\n";
-    out << "} mj2x_regc_instance_field_cache;\n";
     if (!cacheDeclarations.empty()) {
         out << cacheDeclarations;
     }
     out << "static jclass _mj2x_regc_cached_class(mj2x_regc_class_cache* cache);\n";
-    out << "static void mj2x_regc_init_context(mj2x_regc_context* context, void* env, "
-           "mj2x_regc_throw_callback throwException);\n";
-    out << "static void mj2x_regc_set_env(mj2x_regc_context* context, void* env);\n";
-    out << "static void* mj2x_regc_env(const mj2x_regc_context* context);\n";
-    out << "static void mj2x_regc_throw_arithmetic(mj2x_regc_context* context, const char* "
-           "message);\n";
-    out << "static int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t "
-           "rhs);\n";
-    out << "static int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t "
-           "rhs);\n";
-    out << "static int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t "
-           "rhs);\n";
-    out << "static int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t "
-           "rhs);\n";
-    out << "static void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);\n\n";
-    out << "static void _mj2x_regc_throw_exception(mj2x_regc_context* context, const char* "
-           "class_name, const char* message) {\n";
-    out << "    if (context == NULL || context->throwException == NULL) return;\n";
-    out << "    context->throwException(context->env, class_name, message);\n";
-    out << "}\n";
-    out << "static void mj2x_regc_init_context(mj2x_regc_context* context, void* env, "
-           "mj2x_regc_throw_callback throwException) {\n";
-    out << "    if (context == NULL) return;\n";
-    out << "    context->env = env;\n";
-    out << "    context->throwException = throwException;\n";
-    out << "}\n";
-    out << "static void mj2x_regc_set_env(mj2x_regc_context* context, void* env) {\n";
-    out << "    if (context == NULL) return;\n";
-    out << "    context->env = env;\n";
-    out << "}\n";
-    out << "static void* mj2x_regc_env(const mj2x_regc_context* context) {\n";
-    out << "    return context == NULL ? NULL : context->env;\n";
-    out << "}\n";
-    out << "static void mj2x_regc_throw_arithmetic(mj2x_regc_context* context, const char* "
-           "message) {\n";
-    out << "    _mj2x_regc_throw_exception(context, \"java/lang/ArithmeticException\", message == "
-           "NULL ? \"/ by zero\" : message);\n";
-    out << "}\n";
-    out << "static int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs) "
-           "{\n";
-    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
-    out << "    if (lhs == INT32_MIN && rhs == -1) return INT32_MIN;\n";
-    out << "    return lhs / rhs;\n";
-    out << "}\n";
-    out << "static int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs) "
-           "{\n";
-    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
-    out << "    if (lhs == INT64_MIN && rhs == -1) return INT64_MIN;\n";
-    out << "    return lhs / rhs;\n";
-    out << "}\n";
-    out << "static int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs) "
-           "{\n";
-    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
-    out << "    if (lhs == INT32_MIN && rhs == -1) return 0;\n";
-    out << "    return lhs % rhs;\n";
-    out << "}\n";
-    out << "static int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs) "
-           "{\n";
-    out << "    if (rhs == 0) { mj2x_regc_throw_arithmetic(context, \"/ by zero\"); return 0; }\n";
-    out << "    if (lhs == INT64_MIN && rhs == -1) return 0;\n";
-    out << "    return lhs % rhs;\n";
-    out << "}\n";
-    out << "static void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason) {\n";
-    out << "    (void)context;\n";
-    out << "    (void)reason;\n";
-    out << "}\n\n";
-    out << "#endif\n\n";
+    out << "\n";
     out << "static JNIEnv* _mj2x_regc_env = NULL;\n\n";
     out << "static mj2x_regc_context _mj2x_regc_ctx;\n";
     out << "static mj2x_regc_context* _mj2x_regc_current_context(void) { return &_mj2x_regc_ctx; "
@@ -982,19 +875,19 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
            "(jobject)value, to_string);\n";
     out << "}\n\n";
     if (emitStringBuilderHelpers) {
-    out << "#ifndef MJ2X_REGC_STRING_BUILDER_DECLARED\n";
-    out << "#define MJ2X_REGC_STRING_BUILDER_DECLARED\n";
-    out << "typedef struct mj2x_string_builder { char data[1024]; int32_t length; int32_t overflow; "
-           "} mj2x_string_builder;\n";
+    out << "#ifndef MJ2X_REGC_LOCAL_STRING_BUILDER_DECLARED\n";
+    out << "#define MJ2X_REGC_LOCAL_STRING_BUILDER_DECLARED\n";
+    out << "typedef struct mj2x_regc_local_string_builder { char data[1024]; int32_t length; "
+           "int32_t overflow; } mj2x_regc_local_string_builder;\n";
     out << "#endif\n";
-    out << "static void _mj2x_intrinsic_string_builder_init_empty(mj2x_string_builder* state) "
+    out << "static void _mj2x_intrinsic_string_builder_init_empty(mj2x_regc_local_string_builder* state) "
            "{\n";
     out << "    if (state == NULL) return;\n";
     out << "    state->length = 0;\n";
     out << "    state->overflow = 0;\n";
     out << "    state->data[0] = '\\0';\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_raw(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_raw(mj2x_regc_local_string_builder* state, "
            "const char* data, int32_t length) {\n";
     out << "    if (state == NULL || data == NULL || length <= 0 || state->overflow) return;\n";
     out << "    int32_t cap = (int32_t)sizeof(state->data) - 1;\n";
@@ -1006,7 +899,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    state->length += length;\n";
     out << "    state->data[state->length] = '\\0';\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_string(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_string(mj2x_regc_local_string_builder* state, "
            "mj2x_ref value) {\n";
     out << "    if (value == NULL) {\n";
     out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"null\", 4);\n";
@@ -1019,7 +912,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)value, "
            "utf);\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_object(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_object(mj2x_regc_local_string_builder* state, "
            "mj2x_ref value) {\n";
     out << "    if (value == NULL) {\n";
     out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"null\", 4);\n";
@@ -1035,25 +928,25 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (text != NULL) (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
            "(jobject)text);\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_init_string(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_init_string(mj2x_regc_local_string_builder* state, "
            "mj2x_ref value) {\n";
     out << "    _mj2x_intrinsic_string_builder_init_empty(state);\n";
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"StringBuilder.<init>\"); return; }\n";
     out << "    _mj2x_intrinsic_string_builder_append_string(state, value);\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_int(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_int(mj2x_regc_local_string_builder* state, "
            "int32_t value) {\n";
     out << "    char buffer[16];\n";
     out << "    snprintf(buffer, sizeof(buffer), \"%d\", value);\n";
     out << "    _mj2x_intrinsic_string_builder_append_raw(state, buffer, (int32_t)strlen(buffer));\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_long(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_long(mj2x_regc_local_string_builder* state, "
            "int64_t value) {\n";
     out << "    char buffer[32];\n";
     out << "    snprintf(buffer, sizeof(buffer), \"%lld\", (long long)value);\n";
     out << "    _mj2x_intrinsic_string_builder_append_raw(state, buffer, (int32_t)strlen(buffer));\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_bool(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_bool(mj2x_regc_local_string_builder* state, "
            "bool value) {\n";
     out << "    if (value) {\n";
     out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"true\", 4);\n";
@@ -1061,7 +954,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "        _mj2x_intrinsic_string_builder_append_raw(state, \"false\", 5);\n";
     out << "    }\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_char(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_char(mj2x_regc_local_string_builder* state, "
            "uint16_t value) {\n";
     out << "    char buffer[3];\n";
     out << "    int32_t length = 0;\n";
@@ -1084,7 +977,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    }\n";
     out << "    _mj2x_intrinsic_string_builder_append_raw(state, buffer, length);\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_chars(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_chars(mj2x_regc_local_string_builder* state, "
            "mj2x_ref value) {\n";
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"StringBuilder.append(char[])\"); "
            "return; }\n";
@@ -1103,7 +996,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "        }\n";
     out << "    }\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_float(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_float(mj2x_regc_local_string_builder* state, "
            "float value) {\n";
     out << "    jmethodID value_of = _mj2x_regc_cached_static_method(&"
         << stringValueOfFloatMethodCacheName << ");\n";
@@ -1119,7 +1012,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (text != NULL) (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
            "(jobject)text);\n";
     out << "}\n\n";
-    out << "static void _mj2x_intrinsic_string_builder_append_double(mj2x_string_builder* state, "
+    out << "static void _mj2x_intrinsic_string_builder_append_double(mj2x_regc_local_string_builder* state, "
            "double value) {\n";
     out << "    jmethodID value_of = _mj2x_regc_cached_static_method(&"
         << stringValueOfDoubleMethodCacheName << ");\n";
@@ -1135,7 +1028,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (text != NULL) (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
            "(jobject)text);\n";
     out << "}\n\n";
-    out << "static mj2x_ref _mj2x_intrinsic_string_builder_to_string(mj2x_string_builder* "
+    out << "static mj2x_ref _mj2x_intrinsic_string_builder_to_string(mj2x_regc_local_string_builder* "
            "state) {\n";
     out << "    if (state == NULL) { _mj2x_regc_throw_null(\"StringBuilder.toString\"); return "
            "NULL; }\n";
@@ -1483,6 +1376,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
     includes.addSystem("stdlib.h");
     includes.addSystem("string.h");
     includes.addSystem("errno.h");
+    includes.addProject("regc/mj2x_regc_crt.h");
 
     std::ostringstream full;
     full << "/* Generated by mj2x RegCBackend */\n";
@@ -1509,7 +1403,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
     const std::string emittedSource = impl_->source.str();
     const bool emitStringBuilderHelpers =
         emittedSource.find("_mj2x_intrinsic_string_builder_") != std::string::npos ||
-        emittedSource.find("mj2x_string_builder ") != std::string::npos;
+        emittedSource.find("mj2x_regc_local_string_builder ") != std::string::npos;
     emitRuntimeHelpers(full,
                        cacheDeclarations,
                        stringClassCacheName,

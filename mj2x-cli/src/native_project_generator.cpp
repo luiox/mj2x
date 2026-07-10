@@ -52,12 +52,21 @@ void replaceAll(std::string& text, const std::string& from, const std::string& t
     }
 }
 
-bool copyDirectory(const fs::path& from, const fs::path& to)
+std::string trim(std::string value)
+{
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+bool copyManifestSources(const fs::path& root, const fs::path& to)
 {
     std::error_code ec;
-    if (!fs::exists(from, ec) || !fs::is_directory(from, ec)) {
+    const auto manifest = root / "resources.manifest";
+    if (!fs::exists(manifest, ec)) {
         fprintf(
-            stderr, "[mj2x] ERROR: CRT source directory not found: %s\n", from.string().c_str());
+            stderr, "[mj2x] ERROR: CRT resource manifest not found: %s\n", manifest.string().c_str());
         return false;
     }
 
@@ -67,22 +76,27 @@ bool copyDirectory(const fs::path& from, const fs::path& to)
         return false;
     }
 
-    for (const auto& entry : fs::recursive_directory_iterator(from, ec)) {
-        if (ec) {
-            fprintf(
-                stderr, "[mj2x] ERROR: cannot enumerate CRT directory: %s\n", ec.message().c_str());
+    std::ifstream in(manifest);
+    std::string   line;
+    while (std::getline(in, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        if (line.rfind("src/", 0) != 0) continue;
+        if (line.find("../") != std::string::npos) {
+            fprintf(stderr, "[mj2x] ERROR: invalid CRT manifest path: %s\n", line.c_str());
             return false;
         }
-        const auto rel = fs::relative(entry.path(), from, ec);
-        if (ec) return false;
-        const auto dest = to / rel;
-        if (entry.is_directory()) {
-            fs::create_directories(dest, ec);
+
+        const fs::path source = root / line;
+        const fs::path dest = to / fs::path(line).lexically_relative("src");
+        if (!fs::exists(source, ec) || !fs::is_regular_file(source, ec)) {
+            fprintf(stderr,
+                    "[mj2x] ERROR: CRT manifest source not found: %s\n",
+                    source.string().c_str());
+            return false;
         }
-        else if (entry.is_regular_file()) {
-            fs::create_directories(dest.parent_path(), ec);
-            fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing, ec);
-        }
+        fs::create_directories(dest.parent_path(), ec);
+        if (!ec) fs::copy_file(source, dest, fs::copy_options::overwrite_existing, ec);
         if (ec) {
             fprintf(stderr, "[mj2x] ERROR: cannot copy CRT file: %s\n", ec.message().c_str());
             return false;
@@ -110,6 +124,7 @@ bool isCrtRoot(const fs::path& root)
 {
     std::error_code ec;
     return fs::exists(root / "src" / "regc" / "mj2x_regc_crt.h", ec) &&
+           fs::exists(root / "resources.manifest", ec) &&
            fs::exists(root / "templates" / "xmake.lua.in", ec);
 }
 
@@ -191,7 +206,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     }
 
     if (useExternalCrt) {
-        if (!copyDirectory(config.crtRoot / "src", crtDest)) return 1;
+        if (!copyManifestSources(config.crtRoot, crtDest)) return 1;
     }
     else if (!writeEmbeddedCrtTree(config.projectDir)) {
         fprintf(stderr, "[mj2x] ERROR: embedded mj2x-crt resources are unavailable.\n");

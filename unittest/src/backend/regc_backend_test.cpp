@@ -309,7 +309,7 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
     EXPECT_NE(source.find("_mj2x_regc_alloc_multi_array_cached(\"[[Ljava/lang/String;\""),
               std::string::npos)
         << source;
-    EXPECT_EQ(source.find("static void _mj2x_intrinsic_string_builder_init_empty(mj2x_string_builder* state) {"),
+    EXPECT_EQ(source.find("static void _mj2x_intrinsic_string_builder_init_empty(mj2x_regc_local_string_builder* state) {"),
               std::string::npos)
         << source;
     expectNoStackAnchors(source);

@@ -362,7 +362,7 @@ const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind)
     case RegCIntrinsicNativeObjectKind::Bool: return "mj2x_bool";
     case RegCIntrinsicNativeObjectKind::Char: return "mj2x_char";
     case RegCIntrinsicNativeObjectKind::Random: return "mj2x_random";
-    case RegCIntrinsicNativeObjectKind::StringBuilder: return "mj2x_string_builder";
+    case RegCIntrinsicNativeObjectKind::StringBuilder: return "mj2x_regc_local_string_builder";
     default: return "mj2x_ref";
     }
 }
@@ -1182,7 +1182,7 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                     RegCIntrinsicNativeObjectKind::Random, nativeObjectStorageName(ins.dest.id)};
             }
             else if (ins.typeDesc == "java/lang/StringBuilder") {
-                out << "    mj2x_string_builder " << nativeObjectStorageName(ins.dest.id)
+                out << "    mj2x_regc_local_string_builder " << nativeObjectStorageName(ins.dest.id)
                     << " = {{0}, 0, 0};\n";
                 out << "    " << regName(ins.dest.id) << " = NULL;\n";
                 state.nativeObjects[ins.dest.id.value] = RegCNativeObjectState{

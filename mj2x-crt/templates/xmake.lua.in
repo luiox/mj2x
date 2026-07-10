@@ -7,7 +7,10 @@ target("mj2x_native")
     set_kind("shared")
     set_targetdir("$(projectdir)/build/$(plat)/$(arch)/$(mode)")
     add_files("src/generated/native.c")
-    add_files("src/mj2x-crt/regc/*.c")
+    add_files("src/mj2x-crt/**.c")
+    if #os.files("src/mj2x-crt/**.cpp") > 0 then
+        add_files("src/mj2x-crt/**.cpp")
+    end
     add_includedirs("src/mj2x-crt")
 
     local jdk_path = os.getenv("JAVA_HOME")

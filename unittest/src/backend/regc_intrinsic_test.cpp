@@ -905,6 +905,9 @@ TEST(RegCIntrinsicTest, WrapperParseCompareToStringLoweredToIntrinsicsNotJni)
     EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_long_compare"),
               std::string::npos)
         << result.source;
+    EXPECT_EQ(result.source.find("static mj2x_ref _mj2x_intrinsic_int_to_string"),
+              std::string::npos)
+        << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/Integer\", \"toString\""),
               std::string::npos)
         << result.source;
@@ -1409,7 +1412,7 @@ TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
         reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
-    EXPECT_NE(result.source.find("mj2x_string_builder native_r"), std::string::npos)
+    EXPECT_NE(result.source.find("mj2x_regc_local_string_builder native_r"), std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_builder_init_empty(&native_r"),
               std::string::npos)

@@ -233,9 +233,13 @@ protected:
         ASSERT_EQ(pipeline.run(), 0);
         ASSERT_TRUE(fileExists(cFile));
         std::string generatedC = readText(cFile);
-        EXPECT_EQ(generatedC.find("static int32_t _mj2x_regc_div_i32"), std::string::npos)
+        EXPECT_NE(generatedC.find("#include \"regc/mj2x_regc_crt.h\""), std::string::npos)
+            << generatedC;
+        EXPECT_EQ(generatedC.find("static int32_t mj2x_regc_div_i32"), std::string::npos)
             << generatedC;
         EXPECT_EQ(generatedC.find("static void _mj2x_regc_barrier"), std::string::npos)
+            << generatedC;
+        EXPECT_EQ(generatedC.find("static int32_t _mj2x_intrinsic_int_compare"), std::string::npos)
             << generatedC;
 
         fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
@@ -247,17 +251,16 @@ protected:
         ASSERT_FALSE(ec) << ec.message();
         fs::path generatedObj = objDir / "generated.obj";
         fs::path runtimeSrc = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
+        fs::path crtSrc     = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
 
-        // Compile every runtime .cpp the generated TU may reference.  The regc
-        // ABI helper is always needed (div/rem/barrier); the intrinsic modules
-        // back the mj2x_math_* / mj2x_intrinsic_* symbols the emitter lowers
-        // JDK calls to.  Compiling all of them keeps the harness ready for new
-        // intrinsic coverage without per-test obj wiring.
+        // Generated RegC includes the distributable CRT ABI directly. The
+        // remaining runtime sources only back non-CRT Math/Random/shadow
+        // intrinsic surfaces.
         std::vector<std::string> compileLines;
         compileLines.push_back("call " + q(tc_.vcvars64) + " >nul");
         compileLines.push_back(
             "cl /nologo /O2 /c /Fo" + q(generatedObj) + " " + q(cFile) +
-            " /I" + q(runtimeSrc) +
+            " /I" + q(crtSrc) +
             " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
 
         std::vector<fs::path> runtimeObjs;
@@ -271,13 +274,22 @@ protected:
             compileLines.push_back(
                 "cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) +
                 (extraFlags.empty() ? "" : " " + extraFlags) +
-                " /I" + q(runtimeSrc) +
+                 " /I" + q(runtimeSrc) +
+                 " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+        };
+        auto compileCrt = [&](const std::string& relPath, const std::string& objName) {
+            fs::path src = crtSrc / relPath;
+            ASSERT_TRUE(fileExists(src)) << src;
+            fs::path obj = objDir / objName;
+            runtimeObjs.push_back(obj);
+            compileLines.push_back(
+                "cl /nologo /O2 /TC /c /Fo" + q(obj) + " " + q(src) +
+                " /I" + q(crtSrc) +
                 " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
         };
-        compileRuntime("regc/regc_runtime_abi.cpp", "regc_runtime_abi.obj");
-        compileRuntime("intrinsic/intrinsic_wrapper.cpp",
-                       "intrinsic_wrapper.obj",
-                       "/DMJ2X_RUNTIME_WITH_JNI");
+        compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+        compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+        compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
         compileRuntime("intrinsic/intrinsic_math.cpp", "intrinsic_math.obj");
         compileRuntime("intrinsic/intrinsic_random.cpp", "intrinsic_random.obj");
 
