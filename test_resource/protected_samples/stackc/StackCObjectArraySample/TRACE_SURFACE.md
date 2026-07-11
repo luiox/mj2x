@@ -4,6 +4,8 @@ Sample: `protected_samples.stackc.StackCObjectArraySample`
 
 Backend: `stackc`
 
+Target issue: https://github.com/luiox/morpher/issues/438
+
 Purpose: first real mj2x protected sample for mjdbg observation reports.
 
 Expected surfaces:

@@ -4,6 +4,8 @@ Sample: `protected_samples.regc.RegCIntrinsicSurfaceSample`
 
 Backend: `regc`
 
+Target issue: https://github.com/luiox/morpher/issues/438
+
 Purpose: first RegC protected sample for mjdbg observation reports. It contrasts
 StackC's JNI-heavy helper surface with RegC intrinsic/runtime calls.
 
