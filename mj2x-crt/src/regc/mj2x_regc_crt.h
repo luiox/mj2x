@@ -115,6 +115,56 @@ mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value
 mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t value);
 
 /**
+ * @brief UTF-16 `java.lang.String` operations used by RegC intrinsics.
+ *
+ * These functions preserve Java UTF-16 code-unit behavior. Returned references
+ * are JNI local references owned by the current native invocation.
+ */
+mj2x_regc_status mj2x_string_concat(mj2x_regc_context* context,
+                                     mj2x_ref value,
+                                     mj2x_ref suffix,
+                                     mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_substring_from(mj2x_regc_context* context,
+                                             mj2x_ref value,
+                                             int32_t begin_index,
+                                             mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_substring_range(mj2x_regc_context* context,
+                                              mj2x_ref value,
+                                              int32_t begin_index,
+                                              int32_t end_index,
+                                              mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_compare_to(mj2x_regc_context* context,
+                                         mj2x_ref value,
+                                         mj2x_ref other,
+                                         int32_t* out_result);
+mj2x_regc_status mj2x_string_index_of_char(mj2x_regc_context* context,
+                                            mj2x_ref value,
+                                            int32_t code_point,
+                                            int32_t* out_index);
+mj2x_regc_status mj2x_string_index_of_char_from(mj2x_regc_context* context,
+                                                 mj2x_ref value,
+                                                 int32_t code_point,
+                                                 int32_t from_index,
+                                                 int32_t* out_index);
+mj2x_regc_status mj2x_string_index_of_string(mj2x_regc_context* context,
+                                              mj2x_ref value,
+                                              mj2x_ref needle,
+                                              int32_t* out_index);
+mj2x_regc_status mj2x_string_index_of_string_from(mj2x_regc_context* context,
+                                                   mj2x_ref value,
+                                                   mj2x_ref needle,
+                                                   int32_t from_index,
+                                                   int32_t* out_index);
+mj2x_regc_status mj2x_string_replace_char(mj2x_regc_context* context,
+                                           mj2x_ref value,
+                                           uint16_t old_char,
+                                           uint16_t new_char,
+                                           mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_trim(mj2x_regc_context* context,
+                                   mj2x_ref value,
+                                   mj2x_ref* out_string);
+
+/**
  * @brief Allocate or destroy an opaque StringBuilder state.
  *
  * `init_jstring` follows `StringBuilder(String)` and therefore reports a

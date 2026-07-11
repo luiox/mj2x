@@ -69,6 +69,11 @@ static void test_string_builder_utf16_and_errors(void) {
     assert(thrown.count == 1);
     assert(strcmp(thrown.class_name, "java/lang/IllegalStateException") == 0);
 
+    assert(mj2x_string_builder_append_utf16(&context, builder, prefix, SIZE_MAX) ==
+           MJ2X_REGC_STATUS_OUT_OF_MEMORY);
+    assert(thrown.count == 2);
+    assert(strcmp(thrown.class_name, "java/lang/OutOfMemoryError") == 0);
+
     mj2x_string_builder_destroy(builder);
 }
 

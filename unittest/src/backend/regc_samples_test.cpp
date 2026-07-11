@@ -398,7 +398,7 @@ TEST_F(RegCTraceSamples, GenerateMjdbgFixtures) {
             "committed intrinsic/cache benchmark fixture with structural generated-C metrics",
             {
                 {"stringReadHotPath", "(Ljava/lang/String;Ljava/lang/String;)I", "_mj2x_intrinsic_string_contains"},
-                {"builderChars", "([CI)Ljava/lang/String;", "_mj2x_intrinsic_string_builder_append_chars"},
+                {"builderChars", "([CI)Ljava/lang/String;", "mj2x_string_builder_append_char_array"},
                 {"parseAndCompare", "(Ljava/lang/String;Ljava/lang/String;)I", "_mj2x_intrinsic_float_compare"},
                 {"multiArray", "(II)Ljava/lang/Object;", "_mj2x_regc_alloc_multi_array_cached"},
             },

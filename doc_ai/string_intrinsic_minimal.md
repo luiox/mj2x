@@ -45,28 +45,31 @@ replace it without changing generated C or the source-pack manifest contract.
 
 ## Emitter Policy
 
-RegC must only emit these runtime calls when all conditions are true:
+RegC emits these runtime calls under the following ownership rules:
 
 - the UTF-16 storage is owned by generated/runtime code and outlives the call;
-- the value does not escape as `jobject`, field, array element, monitor target,
-  unknown call argument, or cross-CFG mutable state;
+- an escaping value is materialized before use as a `jobject`, field, array
+  element, or unknown-call argument; cross-CFG aliases retain the opaque handle;
+- a chain that mutates after materialization falls back to Java from its
+  allocation point;
 - unsupported operations fail closed with a clear reason instead of falling
   through to imprecise native behavior.
 
-Current RegC first-slice StringBuilder lowering is intentionally narrower than
-the full runtime ABI target.  It supports non-escaping `new`/`<init>` plus
+Current RegC StringBuilder lowering uses the opaque CRT state directly. It
+supports `new`/`<init>` plus
 `append(String|Object|CharSequence|int|long|boolean|char|char[]|float|double)`
-and `toString()` with a fixed UTF-8-friendly buffer.  `append(char[])` reads
-JVM `char[]` elements as UTF-16 code units and preserves the JDK null NPE
-boundary, but it still materializes into the temporary first-slice buffer.
+and `toString()` with dynamically growing UTF-16 storage. Every generated
+function owns a cleanup path that destroys its native builders on normal return,
+throw, unreachable, and uncaught-exception exits.
 
-The emitter currently retains its fixed-buffer
-`mj2x_regc_local_string_builder` lowering. Moving it to opaque CRT state needs
-cleanup on every return and exception path, so the new ABI is defined and tested
-before generated code begins to allocate it. Until that lifecycle work and
-escape-aware fallback exist, full `String.concat`, `substring`,
-additional `String.valueOf` overloads, `StringBuilder` range overloads,
-capacity semantics, and escaping mutation chains remain future work.
+Return, unknown-call, field, array, and CFG escape points lazily materialize a
+real Java `StringBuilder`. Repeated escapes reuse the same materialized object.
+If a chain mutates after escape, analysis falls back from its allocation point
+to Java operations so native and Java state cannot diverge. The CRT also owns
+`String.concat`, `substring`, `compareTo`, `indexOf` overloads,
+`replace(char,char)`, and `trim`. Remaining scope is StringBuilder range and
+capacity APIs, additional overloads, synchronized StringBuffer, and
+`String.split`.
 
 ## Implementation Boundary
 

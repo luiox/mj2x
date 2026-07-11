@@ -102,29 +102,26 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - null trap
 - integer div / rem trap(走 R3 runtime ABI)
 - generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池
-- **JDK intrinsic(Math / parseInt/parseLong / wrapper toString/compare/value-unbox / Random next* / String read hot paths / StringBuilder 非逃逸链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接内联 runtime/local intrinsic
+- **JDK intrinsic(Math / wrapper parse/toString/compare/value-unbox / Random next* / String UTF-16 hot paths / StringBuilder opaque CRT 链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接调用 CRT ABI 或 TU-local cache helper
 
 **JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
 
 - `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
-- `java.lang.Integer.parseInt(String[,radix])`:native digit parser 解析,NumberFormatException 经 context 回调路由
-- `java.lang.Long.parseLong(String[,radix])`:native digit parser 解析,NumberFormatException 经 context 回调路由
+- `java.lang.Integer.parseInt(String[,radix])`、`Long.parseLong(String[,radix])`、`Short.parseShort(String[,radix])`、`Byte.parseByte(String[,radix])`:native digit parser 解析并检查目标类型范围,NumberFormatException 经 context 回调路由
+- `java.lang.Boolean.parseBoolean(String)`:按 UTF-16 ASCII 大小写不敏感匹配 `true`;`Float.parseFloat(String)` / `Double.parseDouble(String)` 通过专用 TU 级缓存调用 JDK parser,保留 NaN、Infinity、hex float 与异常语义
 - `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.compare`:无状态 compare 与基础整型/布尔/字符 `toString` 走 `mj2x-crt` C ABI;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式,`Float/Double.compare` 显式处理 NaN 与 signed zero 语义
 - `java.lang.String.valueOf(int|long|boolean|char|float|double|Object)`:RegC local helper 覆盖常见值转字符串;`float|double` 和 `Object` 通过缓存的 JDK methodID 保持浮点格式和虚分派语义
 - String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
-- `java.lang.String`:equals/length/charAt/hashCode/isEmpty/startsWith(String)/endsWith(String)/indexOf(String)/contains(CharSequence)
-  走 RegC local helper;返回值被丢弃的调用点也可安全发射 intrinsic call;`contains` 对 String rhs 走 native `indexOf`,非 String `CharSequence` 回退到缓存的 Java `String.contains` methodID
-- `java.lang.StringBuilder` 非逃逸第一片:`new`/`<init>()`/`<init>(String)` +
-  `append(String|Object|CharSequence|int|long|boolean|char|char[]|float|double)` + `toString`,RegC 用固定容量 native shadow buffer 承载,
-  其中 `append(float|double)` 复用缓存的 `String.valueOf(F/D)` 保持 JDK 浮点文本格式,
-  匹配链式调用不发 `_mj2x_regc_call_*`;shadow state 逃逸仍 fail-closed
-- 包装类非逃逸 value/unbox:`Integer/Long/Short/Byte/Float/Double/Boolean/Character.valueOf`
-  后接对应 `xxxValue`,RegC 用 native shadow struct 承载,不发 JNI call
+- `java.lang.String`:equals/length/charAt/hashCode/isEmpty/startsWith(String)/endsWith(String)/contains(CharSequence),以及 `concat`、`substring`、`compareTo`、`indexOf(int|String[,fromIndex])`、`replace(char,char)`、`trim`。新增操作走 `mj2x-crt` UTF-16 C ABI;`contains` 对非 String `CharSequence` 回退到缓存的 Java methodID
+- `java.lang.StringBuilder`:`new`/`<init>()`/`<init>(String)` +
+  `append(String|Object|CharSequence|int|long|boolean|char|char[]|float|double)` + `toString`,由 CRT opaque UTF-16 state 承载并在统一 cleanup 销毁。
+  返回、未知调用、字段/数组存储和 CFG alias 会按需 materialize 为真实 Java 对象;逃逸后仍继续修改的链从创建点整体回退 Java,避免 native/Java 状态分叉
+- 包装类 value/unbox:`Integer/Long/Short/Byte/Float/Double/Boolean/Character.valueOf`
+  后接可证明安全的对应 `xxxValue` 时使用 native shadow;返回、字段/数组存储或未知调用等逃逸链从 `valueOf` 起回退真实 Java wrapper
 - `java.util.Random` 非逃逸 new/init/next*:`mj2x_random` shadow state + runtime LCG,
   nextInt/nextLong/nextBoolean/nextFloat/nextDouble 不发 JNI call
 
-**intrinsic 限制(初版)**:包装类/StringBuilder native shadow object 一旦返回、存字段/数组、传入未知 call
-或跨 CFG edge 会 fail-closed;Random shadow state 同样只支持非逃逸路径。StringBuilder first slice 还不是完整 Java 语义:内部固定 1024 字节 UTF-8 friendly buffer,后续需补 UTF-16 ownership、扩容、更多 append 重载和逃逸 materialize。
+**intrinsic 限制(当前)**:Random shadow state 仍只支持非逃逸路径。StringBuilder 已有动态 UTF-16 storage 和 escape-aware materialize/fallback,但尚未覆盖 StringBuffer、range append、capacity API 与所有 JDK 重载;`String.split` 也不在当前切片。
 
 **CLI**:
 
@@ -144,15 +141,15 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 |---|---|
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
 | `mj2x-crt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;无 `libca` 分发依赖 |
-| RegC / R3 ABI 冻结 | ✅ 当前冻结在 div / rem / barrier、compare、基础 `toString` helper |
+| RegC / R3 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String 与 opaque StringBuilder helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
 | Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random) | ✅ runtime + emitter 识别 |
-| Integer.parseInt / Long.parseLong radix overloads / wrapper toString / wrapper compare intrinsic | ✅ parseInt 与复杂格式仍为 emitter/runtime 路径;无状态 compare/基础 `toString` 由 CRT 提供 + E2E |
-| 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ runtime + RegC 非逃逸 value/unbox;逃逸 fail-closed |
+| wrapper parse / toString / compare intrinsic | ✅ Integer/Long/Short/Byte radix parser、Boolean parser、Float/Double JDK parser cache + E2E;无状态 compare/基础 `toString` 由 CRT 提供 |
+| 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ 可证明安全的 value/unbox 使用 native shadow;逃逸链回退真实 Java wrapper |
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
-| String intrinsic 最小 UTF-16 view 垫片(length/charAt/status) + RegC String read hot paths | ✅ runtime 单测 + RegC emitter/结构测试 + native E2E |
-| StringBuilder 非逃逸 append/toString first slice | ✅ RegC emitter/结构测试 + native E2E;当前为本地固定 buffer,CRT 已定义 opaque UTF-16 C ABI 供后续替换;覆盖 `append(char[])`;逃逸 fail-closed |
+| String UTF-16 intrinsic | ✅ read hot paths + concat/substring/compareTo/indexOf overloads/replace/trim;CRT、结构测试与 native E2E 覆盖中文和 surrogate |
+| StringBuilder opaque CRT append/toString + materialize | ✅ 动态 UTF-16 state、统一 cleanup、返回/调用/字段/数组/CFG 逃逸 materialize 或 Java fallback + native E2E |
 | antidebug 软件断点字节扫描 | ✅ mockable runtime 单测 |
 | antijvmti agent/JDWP 参数、模块名、dump capability 信号聚合 | ✅ mockable runtime 单测 |
 

@@ -2,6 +2,7 @@
 # Paths are relative to this directory. Add future C or C++ runtime sources here.
 src/regc/mj2x_regc_crt.h
 src/regc/mj2x_regc_crt.c
+src/regc/mj2x_regc_string.c
 src/regc/mj2x_regc_string_builder.c
 templates/xmake.lua.in
 templates/README.md.in

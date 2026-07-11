@@ -109,7 +109,11 @@ TEST(RegCTest, EmitsPureArithmeticWithoutStackMachineAnchors)
         << result.source;
     EXPECT_NE(result.source.find("int32_t r0"), std::string::npos) << result.source;
     EXPECT_NE(result.source.find("uint32_t"), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("return r"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_result = r"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("return _mj2x_regc_result;"), std::string::npos)
+        << result.source;
     expectNoStackAnchors(result.source);
 }
 
@@ -568,7 +572,9 @@ TEST(RegCTest, EmitsThrowTerminatorWithImmediateReturn)
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_regc_throw("), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("return 0;"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_result = 0;"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos)
+        << result.source;
     expectNoStackAnchors(result.source);
 }
 
