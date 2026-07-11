@@ -1,8 +1,8 @@
 #include "native_compiler.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -59,8 +59,7 @@ std::string envValue(const char* name) {
 #ifdef _WIN32
     char* value = nullptr;
     size_t size = 0;
-    if (_dupenv_s(&value, &size, name) != 0 || value == nullptr)
-        return {};
+    if (_dupenv_s(&value, &size, name) != 0 || value == nullptr) return {};
     std::string result(value);
     std::free(value);
     return result;
@@ -97,22 +96,20 @@ bool addCrtSources(const std::filesystem::path& crtRoot,
     std::error_code ec;
     if (!std::filesystem::exists(sourceRoot / "regc" / "mj2x_regc_crt.h", ec) ||
         !std::filesystem::exists(manifest, ec)) {
-        fprintf(stderr,
-                "[mj2x] ERROR: invalid mj2x-crt source pack: %s\n",
+        fprintf(stderr, "[mj2x] ERROR: invalid mj2x-crt source pack: %s\n",
                 crtRoot.string().c_str());
         return false;
     }
 
     std::ifstream in(manifest);
     if (!in) {
-        fprintf(stderr,
-                "[mj2x] ERROR: cannot read mj2x-crt manifest: %s\n",
+        fprintf(stderr, "[mj2x] ERROR: cannot read mj2x-crt manifest: %s\n",
                 manifest.string().c_str());
         return false;
     }
 
     includes.push_back(sourceRoot);
-    bool        foundSource = false;
+    bool foundSource = false;
     std::string line;
     while (std::getline(in, line)) {
         line = trim(line);
@@ -120,7 +117,7 @@ bool addCrtSources(const std::filesystem::path& crtRoot,
         if (line.rfind("src/", 0) != 0) continue;
 
         const std::filesystem::path relative(line);
-        bool                        escapesRoot = relative.is_absolute();
+        bool escapesRoot = relative.is_absolute();
         for (const auto& component : relative) {
             if (component == "..") {
                 escapesRoot = true;
@@ -128,8 +125,7 @@ bool addCrtSources(const std::filesystem::path& crtRoot,
             }
         }
         if (escapesRoot) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: invalid mj2x-crt manifest source path: %s\n",
+            fprintf(stderr, "[mj2x] ERROR: invalid mj2x-crt manifest source path: %s\n",
                     line.c_str());
             return false;
         }
@@ -137,14 +133,14 @@ bool addCrtSources(const std::filesystem::path& crtRoot,
         const auto source = crtRoot / relative;
         const auto extension = source.extension().string();
         if (extension == ".cpp") {
-            fprintf(stderr,
-                    "[mj2x] ERROR: --compile does not yet support C++ mj2x-crt sources; use --generate-xmake.\n");
+            fprintf(stderr, "[mj2x] ERROR: --compile does not yet support C++ "
+                            "mj2x-crt sources; use "
+                            "--generate-xmake.\n");
             return false;
         }
         if (extension != ".c") continue;
         if (!std::filesystem::exists(source, ec)) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: mj2x-crt manifest source is missing: %s\n",
+            fprintf(stderr, "[mj2x] ERROR: mj2x-crt manifest source is missing: %s\n",
                     source.string().c_str());
             return false;
         }
@@ -166,8 +162,7 @@ bool canUseMsvc() {
 bool detectCompiler(CCompilerKind requested, CCompilerKind& detected) {
     if (requested != CCompilerKind::Auto) {
         detected = requested;
-        if (requested == CCompilerKind::Msvc)
-            return canUseMsvc();
+        if (requested == CCompilerKind::Msvc) return canUseMsvc();
         return commandExists(compilerExecutable(detected));
     }
 
@@ -233,7 +228,8 @@ std::filesystem::path nativeLibraryPath(const std::string& outputPath) {
 bool jniIncludePaths(std::vector<std::filesystem::path>& includes) {
     std::string javaHomeValue = envValue("JAVA_HOME");
     if (javaHomeValue.empty()) {
-        fprintf(stderr, "[mj2x] ERROR: JAVA_HOME is not set; required to locate JNI headers.\n");
+        fprintf(stderr, "[mj2x] ERROR: JAVA_HOME is not set; required to locate "
+                        "JNI headers.\n");
         return false;
     }
 
@@ -250,7 +246,8 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes) {
     std::error_code ec;
     if (!std::filesystem::exists(include, ec) || !std::filesystem::exists(platformInclude, ec)) {
         fprintf(stderr,
-                "[mj2x] ERROR: JNI include paths not found under JAVA_HOME: %s and %s\n",
+                "[mj2x] ERROR: JNI include paths not found under JAVA_HOME: %s and "
+                "%s\n",
                 include.string().c_str(), platformInclude.string().c_str());
         return false;
     }
@@ -282,12 +279,10 @@ std::filesystem::path findVcvarsAll() {
     const char* editions[] = {"Community", "Professional", "Enterprise", "BuildTools"};
     for (const auto& root : roots) {
         for (const char* edition : editions) {
-            std::filesystem::path vcvars =
-                root / "Microsoft Visual Studio" / "2022" / edition /
-                "VC" / "Auxiliary" / "Build" / "vcvarsall.bat";
+            std::filesystem::path vcvars = root / "Microsoft Visual Studio" / "2022" / edition /
+                                           "VC" / "Auxiliary" / "Build" / "vcvarsall.bat";
             std::error_code ec;
-            if (std::filesystem::exists(vcvars, ec))
-                return vcvars;
+            if (std::filesystem::exists(vcvars, ec)) return vcvars;
         }
     }
     return {};
@@ -297,12 +292,9 @@ int systemExitCode(int rc) {
 #ifdef _WIN32
     return rc;
 #else
-    if (rc == -1)
-        return rc;
-    if (WIFEXITED(rc))
-        return WEXITSTATUS(rc);
-    if (WIFSIGNALED(rc))
-        return 128 + WTERMSIG(rc);
+    if (rc == -1) return rc;
+    if (WIFEXITED(rc)) return WEXITSTATUS(rc);
+    if (WIFSIGNALED(rc)) return 128 + WTERMSIG(rc);
     return rc;
 #endif
 }
@@ -329,15 +321,11 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath) 
     return nativeLibraryPath(outputPath);
 }
 
-int compileCSource(
-    const std::string& cOutputPath,
-    const std::string& outputPath,
-    CCompilerKind requestedCompiler,
-    const std::filesystem::path& crtRoot) {
+int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
+                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot) {
     std::error_code ec;
     if (!std::filesystem::exists(cOutputPath, ec)) {
-        fprintf(stderr, "[mj2x] ERROR: emitted C source does not exist: %s\n",
-                cOutputPath.c_str());
+        fprintf(stderr, "[mj2x] ERROR: emitted C source does not exist: %s\n", cOutputPath.c_str());
         return 1;
     }
 
@@ -353,36 +341,33 @@ int compileCSource(
     }
 
     std::vector<std::filesystem::path> includes;
-    if (!jniIncludePaths(includes))
-        return 1;
+    if (!jniIncludePaths(includes)) return 1;
 
     std::vector<std::filesystem::path> sources{std::filesystem::path(cOutputPath)};
-    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources))
-        return 1;
+    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources)) return 1;
 
     std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::ostringstream command;
     if (compiler == CCompilerKind::Msvc) {
         command << "cl /nologo /LD";
-        for (const auto& include : includes)
-            command << " /I" << quotePath(include);
+        for (const auto& include : includes) command << " /I" << quotePath(include);
         std::filesystem::path objectDir = libraryPath.parent_path();
         if (objectDir.empty()) objectDir = ".";
         objectDir /= "";
         command << " /Fo" << quotePath(objectDir);
-        for (const auto& source : sources)
-            command << " " << quotePath(source);
+        for (const auto& source : sources) command << " " << quotePath(source);
         command << " /Fe" << quotePath(libraryPath);
         if (envValue("INCLUDE").empty()) {
             auto vcvars = findVcvarsAll();
             if (vcvars.empty()) {
-                fprintf(stderr,
-                        "[mj2x] ERROR: MSVC compiler was found, but the MSVC environment is not configured and vcvarsall.bat was not found.\n");
+                fprintf(stderr, "[mj2x] ERROR: MSVC compiler was found, but the MSVC "
+                                "environment is not "
+                                "configured and vcvarsall.bat was not found.\n");
                 return 1;
             }
             std::ostringstream wrapped;
-            wrapped << "cmd /s /c \"" << quotePath(vcvars)
-                    << " x64 >nul && " << command.str() << "\"";
+            wrapped << "cmd /s /c \"" << quotePath(vcvars) << " x64 >nul && " << command.str()
+                    << "\"";
             command.str("");
             command.clear();
             command << wrapped.str();
@@ -394,19 +379,17 @@ int compileCSource(
         const char* sharedFlag = "-shared";
 #endif
         command << compilerExecutable(compiler) << " " << sharedFlag << " -fPIC";
-        for (const auto& include : includes)
-            command << " -I" << quotePath(include);
+        command << " -pthread";
+        for (const auto& include : includes) command << " -I" << quotePath(include);
         command << " -o " << quotePath(libraryPath);
-        for (const auto& source : sources)
-            command << " " << quotePath(source);
+        for (const auto& source : sources) command << " " << quotePath(source);
     }
 
     printf("[mj2x] Compiling native library: %s\n", libraryPath.string().c_str());
     printf("[mj2x] Compiler command: %s\n", command.str().c_str());
     int rc = std::system(command.str().c_str());
     if (rc != 0) {
-        fprintf(stderr, "[mj2x] ERROR: C compiler failed with exit code %d.\n",
-                systemExitCode(rc));
+        fprintf(stderr, "[mj2x] ERROR: C compiler failed with exit code %d.\n", systemExitCode(rc));
         return 1;
     }
     printf("[mj2x] Native library written: %s\n", libraryPath.string().c_str());

@@ -26,20 +26,27 @@ target("mj2x-crt")
     if is_plat("windows") then
         add_cflags("/TC", {tools = "cl"})
         add_cflags("/utf-8", {tools = "cl"})
+        add_cxxflags("/utf-8", {tools = "cl"})
+    else
+        add_syslinks("pthread")
     end
 
 target("mj2x_crt_test")
     set_kind("binary")
     set_group("mj2x/mj2x-crt/test")
     set_default(false)
-    set_languages("c99")
+    set_languages("c99", "cxx17")
 
     add_deps("mj2x-crt")
     add_files("test/*.c")
+    add_files("test/*.cpp")
     add_includedirs("src")
     set_rundir("$(projectdir)")
 
     if is_plat("windows") then
         add_cflags("/TC", {tools = "cl"})
         add_cflags("/utf-8", {tools = "cl"})
+        add_cxxflags("/utf-8", {tools = "cl"})
+    else
+        add_syslinks("pthread")
     end

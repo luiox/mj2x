@@ -19,55 +19,62 @@ typedef void (*mj2x_regc_throw_callback)(void* env, const char* class_name, cons
  * callers must preserve it instead of throwing a second exception.  Other
  * non-zero statuses can be bridged through `mj2x_regc_report_status`.
  */
-typedef enum mj2x_regc_status {
-    MJ2X_REGC_STATUS_OK = 0,
-    MJ2X_REGC_STATUS_INVALID_ARGUMENT = 1,
-    MJ2X_REGC_STATUS_OUT_OF_MEMORY = 2,
+typedef enum mj2x_regc_status
+{
+    MJ2X_REGC_STATUS_OK                = 0,
+    MJ2X_REGC_STATUS_INVALID_ARGUMENT  = 1,
+    MJ2X_REGC_STATUS_OUT_OF_MEMORY     = 2,
     MJ2X_REGC_STATUS_PENDING_EXCEPTION = 3,
-    MJ2X_REGC_STATUS_INVALID_STATE = 4,
-    MJ2X_REGC_STATUS_UNSUPPORTED = 5,
+    MJ2X_REGC_STATUS_INVALID_STATE     = 4,
+    MJ2X_REGC_STATUS_UNSUPPORTED       = 5,
 } mj2x_regc_status;
 
-typedef struct mj2x_regc_context {
-    void* env;
+typedef struct mj2x_regc_context
+{
+    void*                    env;
     mj2x_regc_throw_callback throwException;
 } mj2x_regc_context;
 
-typedef struct mj2x_regc_class_cache {
+typedef struct mj2x_regc_class_cache
+{
     const char* desc;
-    jclass value;
+    jclass      value;
 } mj2x_regc_class_cache;
 
-typedef struct mj2x_regc_static_method_cache {
+typedef struct mj2x_regc_static_method_cache
+{
     const char* owner;
     const char* name;
     const char* desc;
-    jclass ownerClass;
-    jmethodID method;
+    jclass      ownerClass;
+    jmethodID   method;
 } mj2x_regc_static_method_cache;
 
-typedef struct mj2x_regc_instance_method_cache {
+typedef struct mj2x_regc_instance_method_cache
+{
     const char* owner;
     const char* name;
     const char* desc;
-    jclass ownerClass;
-    jmethodID method;
+    jclass      ownerClass;
+    jmethodID   method;
 } mj2x_regc_instance_method_cache;
 
-typedef struct mj2x_regc_static_field_cache {
+typedef struct mj2x_regc_static_field_cache
+{
     const char* owner;
     const char* name;
     const char* desc;
-    jclass ownerClass;
-    jfieldID field;
+    jclass      ownerClass;
+    jfieldID    field;
 } mj2x_regc_static_field_cache;
 
-typedef struct mj2x_regc_instance_field_cache {
+typedef struct mj2x_regc_instance_field_cache
+{
     const char* owner;
     const char* name;
     const char* desc;
-    jclass ownerClass;
-    jfieldID field;
+    jclass      ownerClass;
+    jfieldID    field;
 } mj2x_regc_instance_field_cache;
 
 /**
@@ -78,27 +85,32 @@ typedef struct mj2x_regc_instance_field_cache {
  */
 typedef struct mj2x_string_builder mj2x_string_builder;
 
-void mj2x_regc_init_context(mj2x_regc_context* context,
-                            void* env,
-                            mj2x_regc_throw_callback throwException);
-void mj2x_regc_set_env(mj2x_regc_context* context, void* env);
-void* mj2x_regc_env(const mj2x_regc_context* context);
-void mj2x_regc_throw_exception(mj2x_regc_context* context,
-                               const char* class_name,
-                               const char* message);
-void mj2x_regc_report_status(mj2x_regc_context* context,
-                             mj2x_regc_status status,
-                             const char* operation);
-void mj2x_regc_throw_arithmetic(mj2x_regc_context* context, const char* message);
+/**
+ * @brief 与 StringBuilder 共用 UTF-16 存储、但操作经过同步锁的 StringBuffer 状态。
+ *
+ * 该类型保持 opaque；调用方只能通过 `mj2x_string_buffer_*` ABI 访问。状态逃逸到
+ * Java 时会物化为真实 `java.lang.StringBuffer`，调用方仍负责销毁 native 状态。
+ */
+typedef struct mj2x_string_builder mj2x_string_buffer;
+
+void    mj2x_regc_init_context(mj2x_regc_context* context, void* env,
+                               mj2x_regc_throw_callback throwException);
+void    mj2x_regc_set_env(mj2x_regc_context* context, void* env);
+void*   mj2x_regc_env(const mj2x_regc_context* context);
+void    mj2x_regc_throw_exception(mj2x_regc_context* context, const char* class_name,
+                                  const char* message);
+void    mj2x_regc_report_status(mj2x_regc_context* context, mj2x_regc_status status,
+                                const char* operation);
+void    mj2x_regc_throw_arithmetic(mj2x_regc_context* context, const char* message);
 int32_t mj2x_regc_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
 int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
 int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
-void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
+void    mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
 
-jclass mj2x_regc_cached_class(JNIEnv* env, mj2x_regc_class_cache* cache);
+jclass    mj2x_regc_cached_class(JNIEnv* env, mj2x_regc_class_cache* cache);
 jmethodID mj2x_regc_cached_static_method(JNIEnv* env, mj2x_regc_static_method_cache* cache);
-jfieldID mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache* cache);
+jfieldID  mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache* cache);
 
 int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs);
 int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);
@@ -120,49 +132,33 @@ mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t val
  * These functions preserve Java UTF-16 code-unit behavior. Returned references
  * are JNI local references owned by the current native invocation.
  */
-mj2x_regc_status mj2x_string_concat(mj2x_regc_context* context,
-                                     mj2x_ref value,
-                                     mj2x_ref suffix,
-                                     mj2x_ref* out_string);
-mj2x_regc_status mj2x_string_substring_from(mj2x_regc_context* context,
-                                             mj2x_ref value,
-                                             int32_t begin_index,
+mj2x_regc_status mj2x_string_concat(mj2x_regc_context* context, mj2x_ref value, mj2x_ref suffix,
+                                    mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_substring_from(mj2x_regc_context* context, mj2x_ref value,
+                                            int32_t begin_index, mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_substring_range(mj2x_regc_context* context, mj2x_ref value,
+                                             int32_t begin_index, int32_t end_index,
                                              mj2x_ref* out_string);
-mj2x_regc_status mj2x_string_substring_range(mj2x_regc_context* context,
-                                              mj2x_ref value,
-                                              int32_t begin_index,
-                                              int32_t end_index,
-                                              mj2x_ref* out_string);
-mj2x_regc_status mj2x_string_compare_to(mj2x_regc_context* context,
-                                         mj2x_ref value,
-                                         mj2x_ref other,
-                                         int32_t* out_result);
-mj2x_regc_status mj2x_string_index_of_char(mj2x_regc_context* context,
-                                            mj2x_ref value,
-                                            int32_t code_point,
-                                            int32_t* out_index);
-mj2x_regc_status mj2x_string_index_of_char_from(mj2x_regc_context* context,
-                                                 mj2x_ref value,
-                                                 int32_t code_point,
-                                                 int32_t from_index,
-                                                 int32_t* out_index);
-mj2x_regc_status mj2x_string_index_of_string(mj2x_regc_context* context,
-                                              mj2x_ref value,
-                                              mj2x_ref needle,
-                                              int32_t* out_index);
-mj2x_regc_status mj2x_string_index_of_string_from(mj2x_regc_context* context,
-                                                   mj2x_ref value,
-                                                   mj2x_ref needle,
-                                                   int32_t from_index,
-                                                   int32_t* out_index);
-mj2x_regc_status mj2x_string_replace_char(mj2x_regc_context* context,
-                                           mj2x_ref value,
-                                           uint16_t old_char,
-                                           uint16_t new_char,
-                                           mj2x_ref* out_string);
-mj2x_regc_status mj2x_string_trim(mj2x_regc_context* context,
-                                   mj2x_ref value,
-                                   mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_compare_to(mj2x_regc_context* context, mj2x_ref value, mj2x_ref other,
+                                        int32_t* out_result);
+mj2x_regc_status mj2x_string_index_of_char(mj2x_regc_context* context, mj2x_ref value,
+                                           int32_t code_point, int32_t* out_index);
+mj2x_regc_status mj2x_string_index_of_char_from(mj2x_regc_context* context, mj2x_ref value,
+                                                int32_t code_point, int32_t from_index,
+                                                int32_t* out_index);
+mj2x_regc_status mj2x_string_index_of_string(mj2x_regc_context* context, mj2x_ref value,
+                                             mj2x_ref needle, int32_t* out_index);
+mj2x_regc_status mj2x_string_index_of_string_from(mj2x_regc_context* context, mj2x_ref value,
+                                                  mj2x_ref needle, int32_t from_index,
+                                                  int32_t* out_index);
+mj2x_regc_status mj2x_string_replace_char(mj2x_regc_context* context, mj2x_ref value,
+                                          uint16_t old_char, uint16_t new_char,
+                                          mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_trim(mj2x_regc_context* context, mj2x_ref value, mj2x_ref* out_string);
+mj2x_regc_status mj2x_string_split(mj2x_regc_context* context, mj2x_ref value, mj2x_ref regex,
+                                   mj2x_ref* out_array);
+mj2x_regc_status mj2x_string_split_limit(mj2x_regc_context* context, mj2x_ref value, mj2x_ref regex,
+                                         int32_t limit, mj2x_ref* out_array);
 
 /**
  * @brief Allocate or destroy an opaque StringBuilder state.
@@ -171,54 +167,63 @@ mj2x_regc_status mj2x_string_trim(mj2x_regc_context* context,
  * `NullPointerException` for a null initial value.  `append_jstring`, like
  * Java `append(String)`, appends the literal `"null"` for a null value.
  */
-mj2x_regc_status mj2x_string_builder_init(mj2x_regc_context* context,
+mj2x_regc_status mj2x_string_builder_init(mj2x_regc_context*    context,
                                           mj2x_string_builder** out_state);
-mj2x_regc_status mj2x_string_builder_init_jstring(mj2x_regc_context* context,
-                                                   mj2x_ref initial_value,
+mj2x_regc_status mj2x_string_builder_init_jstring(mj2x_regc_context*    context,
+                                                  mj2x_ref              initial_value,
+                                                  mj2x_string_builder** out_state);
+mj2x_regc_status mj2x_string_builder_init_capacity(mj2x_regc_context* context, int32_t capacity,
                                                    mj2x_string_builder** out_state);
-void mj2x_string_builder_destroy(mj2x_string_builder* state);
+mj2x_regc_status mj2x_string_builder_init_char_sequence(mj2x_regc_context*    context,
+                                                        mj2x_ref              initial_value,
+                                                        mj2x_string_builder** out_state);
+void             mj2x_string_builder_destroy(mj2x_string_builder* state);
 
 /**
  * @brief Append Java UTF-16 code units without converting through UTF-8.
  */
-mj2x_regc_status mj2x_string_builder_append_utf16(mj2x_regc_context* context,
-                                                   mj2x_string_builder* state,
-                                                   const uint16_t* units,
-                                                   size_t length);
-mj2x_regc_status mj2x_string_builder_append_jstring(mj2x_regc_context* context,
-                                                     mj2x_string_builder* state,
-                                                     mj2x_ref value);
-mj2x_regc_status mj2x_string_builder_append_object(mj2x_regc_context* context,
-                                                    mj2x_string_builder* state,
-                                                    mj2x_ref value);
-mj2x_regc_status mj2x_string_builder_append_i32(mj2x_regc_context* context,
-                                                 mj2x_string_builder* state,
-                                                 int32_t value);
-mj2x_regc_status mj2x_string_builder_append_i64(mj2x_regc_context* context,
-                                                 mj2x_string_builder* state,
-                                                 int64_t value);
-mj2x_regc_status mj2x_string_builder_append_bool(mj2x_regc_context* context,
-                                                  mj2x_string_builder* state,
-                                                  int8_t value);
-mj2x_regc_status mj2x_string_builder_append_char(mj2x_regc_context* context,
-                                                  mj2x_string_builder* state,
-                                                  uint16_t value);
-mj2x_regc_status mj2x_string_builder_append_char_array(mj2x_regc_context* context,
-                                                        mj2x_string_builder* state,
-                                                        mj2x_ref value);
-mj2x_regc_status mj2x_string_builder_append_f32(mj2x_regc_context* context,
-                                                 mj2x_string_builder* state,
-                                                 float value);
-mj2x_regc_status mj2x_string_builder_append_f64(mj2x_regc_context* context,
-                                                 mj2x_string_builder* state,
-                                                 double value);
+mj2x_regc_status mj2x_string_builder_append_utf16(mj2x_regc_context*   context,
+                                                  mj2x_string_builder* state, const uint16_t* units,
+                                                  size_t length);
+mj2x_regc_status mj2x_string_builder_append_jstring(mj2x_regc_context*   context,
+                                                    mj2x_string_builder* state, mj2x_ref value);
+mj2x_regc_status mj2x_string_builder_append_object(mj2x_regc_context*   context,
+                                                   mj2x_string_builder* state, mj2x_ref value);
+mj2x_regc_status mj2x_string_builder_append_char_sequence(mj2x_regc_context*   context,
+                                                          mj2x_string_builder* state,
+                                                          mj2x_ref             value);
+mj2x_regc_status mj2x_string_builder_append_char_sequence_range(mj2x_regc_context*   context,
+                                                                mj2x_string_builder* state,
+                                                                mj2x_ref value, int32_t start,
+                                                                int32_t end);
+mj2x_regc_status mj2x_string_builder_append_i32(mj2x_regc_context*   context,
+                                                mj2x_string_builder* state, int32_t value);
+mj2x_regc_status mj2x_string_builder_append_i64(mj2x_regc_context*   context,
+                                                mj2x_string_builder* state, int64_t value);
+mj2x_regc_status mj2x_string_builder_append_bool(mj2x_regc_context*   context,
+                                                 mj2x_string_builder* state, int8_t value);
+mj2x_regc_status mj2x_string_builder_append_char(mj2x_regc_context*   context,
+                                                 mj2x_string_builder* state, uint16_t value);
+mj2x_regc_status mj2x_string_builder_append_char_array(mj2x_regc_context*   context,
+                                                       mj2x_string_builder* state, mj2x_ref value);
+mj2x_regc_status mj2x_string_builder_append_char_array_range(mj2x_regc_context*   context,
+                                                             mj2x_string_builder* state,
+                                                             mj2x_ref value, int32_t offset,
+                                                             int32_t length);
+mj2x_regc_status mj2x_string_builder_append_code_point(mj2x_regc_context*   context,
+                                                       mj2x_string_builder* state,
+                                                       int32_t              code_point);
+mj2x_regc_status mj2x_string_builder_append_f32(mj2x_regc_context*   context,
+                                                mj2x_string_builder* state, float value);
+mj2x_regc_status mj2x_string_builder_append_f64(mj2x_regc_context*   context,
+                                                mj2x_string_builder* state, double value);
 
 /**
  * @brief Materialize a UTF-16 snapshot as a local `java.lang.String` reference.
  */
-mj2x_regc_status mj2x_string_builder_to_jstring(mj2x_regc_context* context,
-                                                 const mj2x_string_builder* state,
-                                                 mj2x_ref* out_jstring);
+mj2x_regc_status mj2x_string_builder_to_jstring(mj2x_regc_context*         context,
+                                                const mj2x_string_builder* state,
+                                                mj2x_ref*                  out_jstring);
 
 /**
  * @brief Materialize a UTF-16 snapshot as a local `java.lang.StringBuilder`.
@@ -226,14 +231,112 @@ mj2x_regc_status mj2x_string_builder_to_jstring(mj2x_regc_context* context,
  * This is the escape bridge for later lowering: it returns a real Java object
  * while preserving the opaque native state for the caller to destroy.
  */
-mj2x_regc_status mj2x_string_builder_materialize(mj2x_regc_context* context,
-                                                  const mj2x_string_builder* state,
-                                                  mj2x_ref* out_builder);
+mj2x_regc_status mj2x_string_builder_materialize(mj2x_regc_context*         context,
+                                                 const mj2x_string_builder* state,
+                                                 mj2x_ref*                  out_builder);
+
+/**
+ * @brief 查询或修改 Java 可观察的 StringBuilder 长度、容量与 UTF-16 单元。
+ *
+ * 所有索引按 UTF-16 code unit 计算；越界和负长度通过 Java 异常桥接返回
+ * `MJ2X_REGC_STATUS_PENDING_EXCEPTION`。
+ */
+mj2x_regc_status mj2x_string_builder_length(mj2x_regc_context*         context,
+                                            const mj2x_string_builder* state, int32_t* out_length);
+mj2x_regc_status mj2x_string_builder_capacity(mj2x_regc_context*         context,
+                                              const mj2x_string_builder* state,
+                                              int32_t*                   out_capacity);
+mj2x_regc_status mj2x_string_builder_ensure_capacity(mj2x_regc_context*   context,
+                                                     mj2x_string_builder* state,
+                                                     int32_t              minimum_capacity);
+mj2x_regc_status mj2x_string_builder_trim_to_size(mj2x_regc_context*   context,
+                                                  mj2x_string_builder* state);
+mj2x_regc_status mj2x_string_builder_set_length(mj2x_regc_context*   context,
+                                                mj2x_string_builder* state, int32_t new_length);
+mj2x_regc_status mj2x_string_builder_char_at(mj2x_regc_context*         context,
+                                             const mj2x_string_builder* state, int32_t index,
+                                             uint16_t* out_char);
+mj2x_regc_status mj2x_string_builder_set_char_at(mj2x_regc_context*   context,
+                                                 mj2x_string_builder* state, int32_t index,
+                                                 uint16_t value);
 
 /**
  * @brief Return the number of retained UTF-16 code units, or zero for null.
  */
 size_t mj2x_string_builder_utf16_length(const mj2x_string_builder* state);
+
+/**
+ * @brief 创建、操作和销毁带同步语义的 opaque StringBuffer 状态。
+ *
+ * 每个公开操作都持有状态内部锁；不同状态之间互不阻塞。销毁前调用方必须确保没有
+ * 仍在执行的并发操作。
+ */
+mj2x_regc_status mj2x_string_buffer_init(mj2x_regc_context*   context,
+                                         mj2x_string_buffer** out_state);
+mj2x_regc_status mj2x_string_buffer_init_jstring(mj2x_regc_context* context, mj2x_ref initial_value,
+                                                 mj2x_string_buffer** out_state);
+mj2x_regc_status mj2x_string_buffer_init_capacity(mj2x_regc_context* context, int32_t capacity,
+                                                  mj2x_string_buffer** out_state);
+mj2x_regc_status mj2x_string_buffer_init_char_sequence(mj2x_regc_context*   context,
+                                                       mj2x_ref             initial_value,
+                                                       mj2x_string_buffer** out_state);
+void             mj2x_string_buffer_destroy(mj2x_string_buffer* state);
+mj2x_regc_status mj2x_string_buffer_append_jstring(mj2x_regc_context*  context,
+                                                   mj2x_string_buffer* state, mj2x_ref value);
+mj2x_regc_status mj2x_string_buffer_append_object(mj2x_regc_context*  context,
+                                                  mj2x_string_buffer* state, mj2x_ref value);
+mj2x_regc_status mj2x_string_buffer_append_char_sequence(mj2x_regc_context*  context,
+                                                         mj2x_string_buffer* state, mj2x_ref value);
+mj2x_regc_status mj2x_string_buffer_append_char_sequence_range(mj2x_regc_context*  context,
+                                                               mj2x_string_buffer* state,
+                                                               mj2x_ref value, int32_t start,
+                                                               int32_t end);
+mj2x_regc_status mj2x_string_buffer_append_i32(mj2x_regc_context*  context,
+                                               mj2x_string_buffer* state, int32_t value);
+mj2x_regc_status mj2x_string_buffer_append_i64(mj2x_regc_context*  context,
+                                               mj2x_string_buffer* state, int64_t value);
+mj2x_regc_status mj2x_string_buffer_append_bool(mj2x_regc_context*  context,
+                                                mj2x_string_buffer* state, int8_t value);
+mj2x_regc_status mj2x_string_buffer_append_char(mj2x_regc_context*  context,
+                                                mj2x_string_buffer* state, uint16_t value);
+mj2x_regc_status mj2x_string_buffer_append_char_array(mj2x_regc_context*  context,
+                                                      mj2x_string_buffer* state, mj2x_ref value);
+mj2x_regc_status mj2x_string_buffer_append_char_array_range(mj2x_regc_context*  context,
+                                                            mj2x_string_buffer* state,
+                                                            mj2x_ref value, int32_t offset,
+                                                            int32_t length);
+mj2x_regc_status mj2x_string_buffer_append_code_point(mj2x_regc_context*  context,
+                                                      mj2x_string_buffer* state,
+                                                      int32_t             code_point);
+mj2x_regc_status mj2x_string_buffer_append_f32(mj2x_regc_context*  context,
+                                               mj2x_string_buffer* state, float value);
+mj2x_regc_status mj2x_string_buffer_append_f64(mj2x_regc_context*  context,
+                                               mj2x_string_buffer* state, double value);
+mj2x_regc_status mj2x_string_buffer_to_jstring(mj2x_regc_context*        context,
+                                               const mj2x_string_buffer* state,
+                                               mj2x_ref*                 out_jstring);
+mj2x_regc_status mj2x_string_buffer_materialize(mj2x_regc_context*        context,
+                                                const mj2x_string_buffer* state,
+                                                mj2x_ref*                 out_buffer);
+mj2x_regc_status mj2x_string_buffer_length(mj2x_regc_context*        context,
+                                           const mj2x_string_buffer* state, int32_t* out_length);
+mj2x_regc_status mj2x_string_buffer_capacity(mj2x_regc_context*        context,
+                                             const mj2x_string_buffer* state,
+                                             int32_t*                  out_capacity);
+mj2x_regc_status mj2x_string_buffer_ensure_capacity(mj2x_regc_context*  context,
+                                                    mj2x_string_buffer* state,
+                                                    int32_t             minimum_capacity);
+mj2x_regc_status mj2x_string_buffer_trim_to_size(mj2x_regc_context*  context,
+                                                 mj2x_string_buffer* state);
+mj2x_regc_status mj2x_string_buffer_set_length(mj2x_regc_context*  context,
+                                               mj2x_string_buffer* state, int32_t new_length);
+mj2x_regc_status mj2x_string_buffer_char_at(mj2x_regc_context*        context,
+                                            const mj2x_string_buffer* state, int32_t index,
+                                            uint16_t* out_char);
+mj2x_regc_status mj2x_string_buffer_set_char_at(mj2x_regc_context*  context,
+                                                mj2x_string_buffer* state, int32_t index,
+                                                uint16_t value);
+size_t           mj2x_string_buffer_utf16_length(const mj2x_string_buffer* state);
 
 #ifdef __cplusplus
 }

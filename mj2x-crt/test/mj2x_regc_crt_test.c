@@ -4,22 +4,27 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef struct thrown_exception {
-    int count;
+typedef struct thrown_exception
+{
+    int         count;
     const char* class_name;
     const char* message;
 } thrown_exception;
 
-static void record_throw(void* env, const char* class_name, const char* message) {
+void test_string_buffer_concurrency(void);
+
+static void record_throw(void* env, const char* class_name, const char* message)
+{
     thrown_exception* thrown = (thrown_exception*)env;
     if (thrown == NULL) return;
     thrown->count += 1;
     thrown->class_name = class_name;
-    thrown->message = message;
+    thrown->message    = message;
 }
 
-static void test_div_rem_and_status_bridge(void) {
-    thrown_exception thrown = {0};
+static void test_div_rem_and_status_bridge(void)
+{
+    thrown_exception  thrown = {0};
     mj2x_regc_context context;
     mj2x_regc_init_context(&context, &thrown, record_throw);
 
@@ -38,7 +43,8 @@ static void test_div_rem_and_status_bridge(void) {
     assert(strcmp(thrown.message, "test operation") == 0);
 }
 
-static void test_compare_intrinsics(void) {
+static void test_compare_intrinsics(void)
+{
     assert(_mj2x_intrinsic_int_compare(1, 2) == -1);
     assert(_mj2x_intrinsic_long_compare(INT64_MAX, INT64_MIN) == 1);
     assert(_mj2x_intrinsic_byte_compare(INT8_MIN, INT8_MAX) == -255);
@@ -49,20 +55,41 @@ static void test_compare_intrinsics(void) {
     assert(_mj2x_intrinsic_char_compare((uint16_t)'B', (uint16_t)'A') == 1);
 }
 
-static void test_string_builder_utf16_and_errors(void) {
-    const uint16_t prefix[] = {(uint16_t)'A', 0x4E2D, 0xD83D, 0xDE00};
-    thrown_exception thrown = {0};
-    mj2x_regc_context context;
+static void test_string_builder_utf16_and_errors(void)
+{
+    const uint16_t       prefix[] = {(uint16_t)'A', 0x4E2D, 0xD83D, 0xDE00};
+    thrown_exception     thrown   = {0};
+    mj2x_regc_context    context;
     mj2x_string_builder* builder = NULL;
 
     mj2x_regc_init_context(&context, &thrown, record_throw);
     assert(mj2x_string_builder_init(&context, &builder) == MJ2X_REGC_STATUS_OK);
     assert(builder != NULL);
-    assert(mj2x_string_builder_append_utf16(&context, builder, prefix, 4) ==
-           MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_append_utf16(&context, builder, prefix, 4) == MJ2X_REGC_STATUS_OK);
     assert(mj2x_string_builder_append_i32(&context, builder, -42) == MJ2X_REGC_STATUS_OK);
     assert(mj2x_string_builder_append_bool(&context, builder, 1) == MJ2X_REGC_STATUS_OK);
     assert(mj2x_string_builder_utf16_length(builder) == 11);
+    int32_t  capacity = 0;
+    int32_t  length   = 0;
+    uint16_t value    = 0;
+    assert(mj2x_string_builder_capacity(&context, builder, &capacity) == MJ2X_REGC_STATUS_OK);
+    assert(capacity == 16);
+    assert(mj2x_string_builder_ensure_capacity(&context, builder, 17) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_capacity(&context, builder, &capacity) == MJ2X_REGC_STATUS_OK);
+    assert(capacity == 34);
+    assert(mj2x_string_builder_set_length(&context, builder, 20) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_length(&context, builder, &length) == MJ2X_REGC_STATUS_OK);
+    assert(length == 20);
+    assert(mj2x_string_builder_char_at(&context, builder, 11, &value) == MJ2X_REGC_STATUS_OK);
+    assert(value == 0);
+    assert(mj2x_string_builder_set_char_at(&context, builder, 11, (uint16_t)'X') ==
+           MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_trim_to_size(&context, builder) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_capacity(&context, builder, &capacity) == MJ2X_REGC_STATUS_OK);
+    assert(capacity == 20);
+    assert(mj2x_string_builder_append_code_point(&context, builder, 0x1F600) ==
+           MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_utf16_length(builder) == 22);
 
     assert(mj2x_string_builder_append_utf16(&context, NULL, prefix, 1) ==
            MJ2X_REGC_STATUS_INVALID_STATE);
@@ -77,9 +104,11 @@ static void test_string_builder_utf16_and_errors(void) {
     mj2x_string_builder_destroy(builder);
 }
 
-int main(void) {
+int main(void)
+{
     test_div_rem_and_status_bridge();
     test_compare_intrinsics();
     test_string_builder_utf16_and_errors();
+    test_string_buffer_concurrency();
     return 0;
 }

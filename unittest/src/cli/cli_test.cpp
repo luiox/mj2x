@@ -206,10 +206,10 @@ std::vector<ca::u8> tinyClassBytes(const char* className)
 
     std::vector<Utf8StringRef> noExceptions;
     auto mn       = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                                                 ZUtf8StringRef::from_static("add"),
-                                                 ZUtf8StringRef::from_static("(II)I"),
-                                                 ZUtf8StringRef::from_static(""),
-                                                 noExceptions);
+                                           ZUtf8StringRef::from_static("add"),
+                                           ZUtf8StringRef::from_static("(II)I"),
+                                           ZUtf8StringRef::from_static(""),
+                                           noExceptions);
     mn->maxStack  = 2;
     mn->maxLocals = 2;
     mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
@@ -269,8 +269,8 @@ fs::path writeSelectableClass(const char* className, const std::string& suffix,
 
 fs::path compileProvidedAnnotationSample(const fs::path& javac)
 {
-    fs::path        dir = test::getTempOutPath("mj2x_cli_annotation_java.keep").parent_path() /
-                          "mj2x_cli_annotation_java";
+    fs::path dir = test::getTempOutPath("mj2x_cli_annotation_java.keep").parent_path() /
+                   "mj2x_cli_annotation_java";
     std::error_code ec;
     fs::remove_all(dir, ec);
     fs::create_directories(dir, ec);
@@ -287,7 +287,7 @@ fs::path compileProvidedAnnotationSample(const fs::path& javac)
 
     fs::path annotationSource = test::getTopProjectPath() / "mj2x" / "mj2x-annotations" / "src" /
                                 "main" / "java" / "mj2x" / "Native.java";
-    auto     result           = runScript({
+    auto result = runScript({
         q(javac) + " -d " + q(dir) + " " + q(annotationSource) + " " + q(sampleSource),
     });
     EXPECT_EQ(result.exitCode, 0) << result.out;
@@ -422,9 +422,9 @@ std::string readText(const fs::path& path)
 
 std::vector<std::string> readCrtManifest(const fs::path& manifest)
 {
-    std::ifstream             in(manifest);
+    std::ifstream            in(manifest);
     std::vector<std::string> paths;
-    std::string               line;
+    std::string              line;
     while (std::getline(in, line)) {
         const auto first = line.find_first_not_of(" \t\r");
         if (first == std::string::npos || line[first] == '#') continue;
@@ -755,14 +755,14 @@ TEST(CliTest, JsonConfigProvidesDefaultsAndCommandLineOverrides)
         GTEST_SKIP() << "mj2x-cli is not built";
     }
 
-    fs::path inClass         = writeTinyClass();
-    fs::path configOutClass  = test::getTempOutPath("mj2x_cli_config_default_output.class");
-    fs::path configCFile     = test::getTempOutPath("mj2x_cli_config_default_output.c");
-    fs::path overrideOut     = test::getTempOutPath("mj2x_cli_config_override_output.class");
-    fs::path overrideCFile   = test::getTempOutPath("mj2x_cli_config_override_output.c");
-    fs::path configPath      = test::getTempOutPath("mj2x_cli_config.json");
-    std::string configSource = "{\n"
-                               "  \"input\": \"" +
+    fs::path    inClass        = writeTinyClass();
+    fs::path    configOutClass = test::getTempOutPath("mj2x_cli_config_default_output.class");
+    fs::path    configCFile    = test::getTempOutPath("mj2x_cli_config_default_output.c");
+    fs::path    overrideOut    = test::getTempOutPath("mj2x_cli_config_override_output.class");
+    fs::path    overrideCFile  = test::getTempOutPath("mj2x_cli_config_override_output.c");
+    fs::path    configPath     = test::getTempOutPath("mj2x_cli_config.json");
+    std::string configSource   = "{\n"
+                                 "  \"input\": \"" +
                                inClass.generic_string() +
                                "\",\n"
                                "  \"output\": \"" +
@@ -874,10 +874,10 @@ TEST(CliTest, GenerateCMakeProjectEmitsStandaloneFiles)
         GTEST_SKIP() << "mj2x-cli is not built";
     }
 
-    fs::path        inClass    = writeTinyClass();
-    fs::path        outClass   = test::getTempOutPath("mj2x_cli_cmake_project_output.class");
-    fs::path        projectDir = test::getTempOutPath("mj2x_cli_cmake_project.keep").parent_path() /
-                                 "mj2x_cli_cmake_project";
+    fs::path inClass    = writeTinyClass();
+    fs::path outClass   = test::getTempOutPath("mj2x_cli_cmake_project_output.class");
+    fs::path projectDir = test::getTempOutPath("mj2x_cli_cmake_project.keep").parent_path() /
+                          "mj2x_cli_cmake_project";
     std::error_code ec;
     fs::remove_all(projectDir, ec);
 
@@ -907,10 +907,10 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
         GTEST_SKIP() << "mj2x-cli is not built";
     }
 
-    fs::path        inClass    = writeTinyClass();
-    fs::path        outClass   = test::getTempOutPath("mj2x_cli_xmake_project_output.class");
-    fs::path        projectDir = test::getTempOutPath("mj2x_cli_xmake_project.keep").parent_path() /
-                                 "mj2x_cli_xmake_project";
+    fs::path inClass    = writeTinyClass();
+    fs::path outClass   = test::getTempOutPath("mj2x_cli_xmake_project_output.class");
+    fs::path projectDir = test::getTempOutPath("mj2x_cli_xmake_project.keep").parent_path() /
+                          "mj2x_cli_xmake_project";
     std::error_code ec;
     fs::remove_all(projectDir, ec);
 
@@ -923,8 +923,7 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
     EXPECT_TRUE(fileExists(projectDir / ".gitignore")) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "README.md")) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "src" / "generated" / "native.c")) << result.out;
-    EXPECT_TRUE(
-        fileExists(projectDir / "src" / "mj2x-crt" / "regc" / "mj2x_regc_string_builder.c"))
+    EXPECT_TRUE(fileExists(projectDir / "src" / "mj2x-crt" / "regc" / "mj2x_regc_string_builder.c"))
         << result.out;
 
     std::string xmake = readText(projectDir / "xmake.lua");
@@ -945,12 +944,11 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
         GTEST_SKIP() << "mj2x-cli is not built";
     }
 
-    fs::path        inClass = writeTinyClass();
-    fs::path        outDir =
-        test::getTempOutPath("mj2x_cli_xmake_embedded.keep").parent_path() /
-        "mj2x_cli_xmake_embedded";
-    fs::path projectDir = outDir / "project";
-    fs::path outClass   = outDir / "output.class";
+    fs::path inClass = writeTinyClass();
+    fs::path outDir  = test::getTempOutPath("mj2x_cli_xmake_embedded.keep").parent_path() /
+                      "mj2x_cli_xmake_embedded";
+    fs::path        projectDir = outDir / "project";
+    fs::path        outClass   = outDir / "output.class";
     std::error_code ec;
     fs::remove_all(outDir, ec);
     fs::create_directories(outDir, ec);
@@ -975,15 +973,15 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "xmake.lua")) << result.out;
 
-    fs::path repoRoot = test::getTopProjectPath();
-    fs::path crtRoot  = repoRoot / "mj2x" / "mj2x-crt";
+    fs::path   repoRoot = test::getTopProjectPath();
+    fs::path   crtRoot  = repoRoot / "mj2x" / "mj2x-crt";
     const auto manifest = readCrtManifest(crtRoot / "resources.manifest");
     ASSERT_FALSE(manifest.empty());
     for (const auto& resource : manifest) {
         if (resource.rfind("src/", 0) != 0) continue;
         const fs::path sourcePath(resource);
-        const fs::path copiedPath = projectDir / "src" / "mj2x-crt" /
-                                    sourcePath.lexically_relative("src");
+        const fs::path copiedPath =
+            projectDir / "src" / "mj2x-crt" / sourcePath.lexically_relative("src");
         ASSERT_TRUE(fileExists(copiedPath)) << resource;
         EXPECT_EQ(readText(copiedPath), readText(crtRoot / sourcePath)) << resource;
     }
@@ -991,16 +989,19 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
     std::string xmake = readText(projectDir / "xmake.lua");
     EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
     EXPECT_EQ(xmake.find("@PROJECT_NAME@"), std::string::npos) << xmake;
+#ifndef _WIN32
+    EXPECT_NE(xmake.find("add_syslinks(\"pthread\")"), std::string::npos) << xmake;
+#endif
 
     constexpr std::string_view projectPrefix = "set_project(\"";
-    const auto projectStart = xmake.find(projectPrefix);
+    const auto                 projectStart  = xmake.find(projectPrefix);
     ASSERT_NE(projectStart, std::string::npos) << xmake;
     const auto nameStart = projectStart + projectPrefix.size();
-    const auto nameEnd = xmake.find("\")", nameStart);
+    const auto nameEnd   = xmake.find("\")", nameStart);
     ASSERT_NE(nameEnd, std::string::npos) << xmake;
     const std::string projectName = xmake.substr(nameStart, nameEnd - nameStart);
 
-    std::string expectedXmake = readText(crtRoot / "templates" / "xmake.lua.in");
+    std::string expectedXmake  = readText(crtRoot / "templates" / "xmake.lua.in");
     std::string expectedReadme = readText(crtRoot / "templates" / "README.md.in");
     replaceAll(expectedXmake, "@PROJECT_NAME@", projectName);
     replaceAll(expectedReadme, "@PROJECT_NAME@", projectName);
@@ -1023,10 +1024,9 @@ TEST(CliTest, GenerateXmakeProjectForRegCJarInjectsNativeLoader)
         GTEST_SKIP() << "mj2x-cli is not built";
     }
 
-    fs::path        inJar      = writeTinyJar();
-    fs::path        outJar     = test::getTempOutPath("mj2x_cli_xmake_regc_output.jar");
-    fs::path        projectDir = test::getTempOutPath("mj2x_cli_xmake_regc_project.keep")
-                              .parent_path() /
+    fs::path inJar      = writeTinyJar();
+    fs::path outJar     = test::getTempOutPath("mj2x_cli_xmake_regc_output.jar");
+    fs::path projectDir = test::getTempOutPath("mj2x_cli_xmake_regc_project.keep").parent_path() /
                           "mj2x_cli_xmake_regc_project";
     std::error_code ec;
     fs::remove_all(projectDir, ec);
@@ -1045,7 +1045,7 @@ TEST(CliTest, GenerateXmakeProjectForRegCJarInjectsNativeLoader)
 
     auto                     classBytes = readJarEntry(outJar, "demo/CliJarA.class");
     ca::str::Utf8StringArena arena;
-    auto                     cn = readClassFromBytes(classBytes, arena);
+    auto                     cn     = readClassFromBytes(classBytes, arena);
     auto*                    clinit = findMethod(*cn, "<clinit>");
     ASSERT_NE(clinit, nullptr);
     bool callsLoader = false;

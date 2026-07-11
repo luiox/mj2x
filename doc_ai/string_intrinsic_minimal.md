@@ -1,12 +1,11 @@
-# String/StringBuilder Intrinsic Minimal Slice
+# String and Mutable String Intrinsic Contract
 
 ## Purpose
 
-Issue #440 is larger than the current RegC/R3 live-validation window because
-full Java `String` and `StringBuilder` support needs UTF-16 ownership, object
-materialization, escape analysis, and GC/writeback rules.  The v2.1 first step
-therefore fixes the runtime boundary rather than pretending the full intrinsic
-set is ready.
+Issue #440 establishes the RegC runtime boundary for the implemented `String`,
+`StringBuilder`, and `StringBuffer` intrinsic set. The implementation owns
+UTF-16 state in `mj2x-crt`, materializes real Java objects at escape points, and
+falls back to Java when a mutable chain cannot remain native without diverging.
 
 ## Existing Runtime Slice
 
@@ -23,19 +22,27 @@ This in-tree runtime slice deliberately does not accept `jstring` or return `job
 materialization remains in emitter-local helpers such as
 `_mj2x_intrinsic_string_literal` and `_mj2x_intrinsic_parse_int`.
 
-## Distributable StringBuilder C ABI
+## Distributable Mutable String C ABI
 
 `mj2x-crt/src/regc/mj2x_regc_crt.h` is the public ABI for the next
-StringBuilder lowering phase. It keeps `mj2x_string_builder` opaque and exposes
-only C99/JNI operations:
+mutable String lowering. It keeps `mj2x_string_builder` and the compatible
+`mj2x_string_buffer` storage opaque and exposes only C99/JNI operations:
 
-- explicit `init`, `init_jstring`, and `destroy` lifecycle;
-- UTF-16 code-unit append plus `jstring`, object, primitive, and `char[]`
-  append operations;
+- explicit default, String, CharSequence, and capacity initialization plus
+  `destroy` lifecycle;
+- UTF-16 code-unit append plus `jstring`, object, primitive, `char[]`, range,
+  and code-point append operations;
+- observable length/capacity, ensure/trim, setLength, charAt, and setCharAt;
 - `to_jstring` for a local `String` snapshot and `materialize` for a local
-  `StringBuilder` escape bridge;
+  `StringBuilder` or `StringBuffer` escape bridge while preserving capacity;
 - explicit `mj2x_regc_status` results and `mj2x_regc_report_status` for the
   Java exception bridge.
+
+`mj2x_string_buffer_*` is a separate synchronized ABI over the shared opaque
+UTF-16 representation. Every public operation holds the state lock. Windows
+uses recursive `CRITICAL_SECTION`; POSIX uses a recursive pthread mutex so JNI
+callbacks can re-enter the same state like Java synchronized methods. Callers
+must ensure no operation is active before destroy.
 
 `PENDING_EXCEPTION` means JNI has already established the Java exception and
 must not be replaced. Other failed statuses map to a stable Java exception
@@ -55,26 +62,29 @@ RegC emits these runtime calls under the following ownership rules:
 - unsupported operations fail closed with a clear reason instead of falling
   through to imprecise native behavior.
 
-Current RegC StringBuilder lowering uses the opaque CRT state directly. It
-supports `new`/`<init>` plus
-`append(String|Object|CharSequence|int|long|boolean|char|char[]|float|double)`
-and `toString()` with dynamically growing UTF-16 storage. Every generated
-function owns a cleanup path that destroys its native builders on normal return,
-throw, unreachable, and uncaught-exception exits.
+Current RegC StringBuilder and StringBuffer lowering uses the opaque CRT state
+directly. It supports the constructors, append overloads, and range/capacity
+operations listed above. Every generated function owns a cleanup path that
+destroys native mutable String state on normal return, throw, unreachable, and
+uncaught-exception exits.
 
 Return, unknown-call, field, array, and CFG escape points lazily materialize a
-real Java `StringBuilder`. Repeated escapes reuse the same materialized object.
-If a chain mutates after escape, analysis falls back from its allocation point
-to Java operations so native and Java state cannot diverge. The CRT also owns
-`String.concat`, `substring`, `compareTo`, `indexOf` overloads,
-`replace(char,char)`, and `trim`. Remaining scope is StringBuilder range and
-capacity APIs, additional overloads, synchronized StringBuffer, and
-`String.split`.
+real Java `StringBuilder` or `StringBuffer`. Repeated escapes reuse the same
+materialized object. If a chain mutates after escape, analysis falls back from
+its allocation point to Java operations so native and Java state cannot
+diverge. The CRT also owns `String.concat`, `substring`, `compareTo`, `indexOf`
+overloads, `replace(char,char)`, `trim`, and `split`.
+
+`String.split` only uses the native UTF-16 fast path for a non-empty delimiter
+with no regex metacharacters. Empty, escaped, or regex patterns call the JDK
+implementation, preserving PatternSyntaxException and complete regex behavior.
+The native path implements Java `limit` and trailing-empty semantics but does
+not contain a regex engine.
 
 ## Implementation Boundary
 
-The next StringBuilder/UTF-16 upgrade belongs in `mj2x-crt`, behind its C ABI,
-rather than more generated-C helper bodies. The CRT has no direct or transitive
+Future String/UTF-16 upgrades belong in `mj2x-crt`, behind its C ABI, rather
+than more generated-C helper bodies. The CRT has no direct or transitive
 `libca` dependency: a generated native project must remain a self-contained
 source pack. `libca` may supply semantic references, conformance test vectors,
 or independently ported algorithms, but CRT must own its allocators and
@@ -86,7 +96,8 @@ implementation dependencies. mj2x needs:
 - a C ABI wrapper that can materialize native builder state back to `jobject`;
 - escape-aware ownership hooks so RegC can fallback or materialize instead of
   fail-closing when a shadow object crosses a native/JNI boundary;
-- a future synchronized wrapper point for `StringBuffer` semantics.
+- platform synchronization dependencies must remain represented by the
+  standalone xmake template and direct compiler entry.
 
 ## Validation
 
@@ -98,5 +109,9 @@ implementation dependencies. mj2x needs:
 - out-of-bounds fail-closed.
 - explicit StringBuilder unsupported status.
 
-`mj2x_crt_test` covers the CRT StringBuilder ABI directly, including UTF-16
-append/length, allocation failure reporting, and the status-to-exception bridge.
+`mj2x_crt_test` covers the CRT mutable String ABI directly, including UTF-16
+append/length/capacity, allocation failure reporting, the status-to-exception
+bridge, and concurrent StringBuffer append. RegC structure tests cover registry,
+cleanup, materialize/fallback, and UTF-16 result types. Native E2E compares
+range/capacity, escape-aware materialization, literal/regex split, and invalid
+regex behavior against JDK 17.

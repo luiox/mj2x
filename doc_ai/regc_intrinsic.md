@@ -1,6 +1,6 @@
 # RegC JDK Intrinsic
 
-> 设计文档:RegC 在码生成阶段把 JDK 常用方法调用识别为 intrinsic,直接内联 runtime 实现而非走 JNI 派发。权威 ABI 在 `runtime/src/intrinsic/*.hpp` 头文件 Doxygen。
+> 设计文档:RegC 在码生成阶段把 JDK 常用方法调用识别为 intrinsic,直接调用 runtime ABI 或 TU-local helper 而非走通用 JNI 派发。可分发 C ABI 权威头为 `mj2x-crt/src/regc/mj2x_regc_crt.h`;in-tree intrinsic ABI 在 `mj2x-runtime/src/intrinsic/*.hpp`。
 
 ## 1. 目标
 
@@ -21,7 +21,8 @@ RegC emitter (src/mj2x/backend/regc/regc_emitter.cpp)
        ├─ Math.*      → mj2x_math_*      (runtime lib,纯计算)
        ├─ parseInt    → _mj2x_intrinsic_parse_int (emitter TU 内联,需 JNI 取 String)
        ├─ Wrapper     → mj2x_* value struct shadow state(仅非逃逸 value/unbox)
-       └─ Random      → mj2x_random shadow state(仅非逃逸 new/init/next*)
+       ├─ Random      → mj2x_random shadow state(仅非逃逸 new/init/next*)
+       └─ String      → mj2x-crt UTF-16 ABI / mutable opaque state
   未命中 → _mj2x_regc_call_* (原 JNI 路径)
 
 runtime (mj2x/runtime/src/intrinsic/)
@@ -29,6 +30,10 @@ runtime (mj2x/runtime/src/intrinsic/)
   ├─ intrinsic_math.{hpp,cpp}     Math 纯计算,转发 C math.h
   ├─ intrinsic_random.{hpp,cpp}   Java 兼容 LCG
   └─ intrinsic_string.{hpp,cpp}   最小 UTF-16 view + fail-closed status
+
+distributable CRT (mj2x/mj2x-crt/src/regc/)
+  ├─ mj2x_regc_string.c           String UTF-16 operations + split fast path
+  └─ mj2x_regc_string_builder.c   StringBuilder/StringBuffer opaque state
 
 emitter TU (regc_backend.cpp::emitRuntimeHelpers)
   ├─ _mj2x_intrinsic_string_literal  NewStringUTF 物化 String LDC
@@ -53,10 +58,13 @@ emitter TU (regc_backend.cpp::emitRuntimeHelpers)
 
 ### String / Integer
 - `Integer.parseInt(Ljava/lang/String;)I` → `_mj2x_intrinsic_parse_int`
-- String LDC → `_mj2x_intrinsic_string_literal`(供 parseInt/未来 toString 消费)
-- runtime 已提供 `mj2x_utf16_view`、`mj2x_string_length`、`mj2x_string_char_at`
-  和 `mj2x_string_status` 最小垫片,但 emitter 尚未把 Java `String.length/charAt`
-  降到该 ABI;接入前必须证明 UTF-16 storage runtime-owned 且不逃逸。
+- String LDC → `_mj2x_intrinsic_string_literal`
+- String read hot paths、concat/substring/compareTo/indexOf/replace/trim 通过
+  TU-local helper 或 `mj2x-crt` UTF-16 ABI 实现。
+- `String.split(String[,limit])` 对简单字面量走 CRT fast path;空模式、转义和完整
+  正则回退 JDK `String.split`,不在 CRT 自造正则引擎。
+- StringBuilder/StringBuffer 使用 escape-aware opaque UTF-16 state;range/capacity 常用
+  API 直接调用 CRT,逃逸时 materialize,逃逸后继续修改则从创建点回退 Java。
 
 ### Primitive wrappers(第一切片,非逃逸)
 - `Integer.valueOf(I)` + `Integer.intValue()` → `mj2x_int_value_of` / `mj2x_int_int_value`
@@ -98,22 +106,19 @@ materialize 并把 48-bit seed 写回 Java 对象,否则不能保持 Java 语义
   仍未覆盖。阻塞点:escape-aware fallback 或 jobject materialize。
 - **完整 Random 对象语义**:构造后返回、字段/数组存取、传给未知 Java 方法、跨 CFG edge
   仍未覆盖。阻塞点:escape-aware fallback 或 jobject materialize + seed writeback。
-- **完整 String/StringBuilder 语义**:`String.concat/subString/equals/indexOf/valueOf`
-  和 `StringBuilder.append/toString` 尚未接 emitter。当前只有 runtime UTF-16 view 垫片
-  与 StringBuilder unsupported status;阻塞点是 UTF-16 ownership、对象逃逸、
-  StringBuilder 可变状态和 jobject materialize。
+- **未登记的 String/mutable String 方法**:正常走 Java fallback。当前 registry 是常用
+  签名集合,不是对 JDK 全量 API 的替代;正则 split 始终由 JDK 保持语义。
 
 `Integer.signum` 等未覆盖方法正常走 `_mj2x_regc_call_*`,不会误识别。
 
 ## 5. 验证
 
-- **runtime 单测**:`mj2x_runtime_test` 的 `IntrinsicWrapperTest`/`IntrinsicMathTest`/
-  `IntrinsicRandomTest`/`IntrinsicStringTest`(String 当前只测最小 UTF-16 view 垫片,
-  Random 逐位对齐 JDK)。
-- **emitter 单测**:`regc_intrinsic_test.cpp`(Math/parseInt/wrapper value-unbox + 逃逸 reason,
-  断言 intrinsic 被识别 + 无 JNI 派发)。
-- **E2E**:`RegCBackendE2E.IntrinsicMathAndParseIntRoundTrip`(JDK/MSVC 可用时真编 DLL,
-  Java 基准逐项对比 + 生成 C 无 JNI call 断言)。
+- **runtime 单测**:`mj2x_runtime_test` 覆盖 in-tree intrinsic;`mj2x_crt_test` 覆盖
+  可分发 C ABI、StringBuilder capacity/range 基础语义和 StringBuffer 并发 append。
+- **emitter 单测**:`regc_intrinsic_test.cpp` 覆盖 registry、opaque state、cleanup、
+  materialize/fallback 和无通用 JNI 派发断言。
+- **E2E**:`RegCBackendE2E.IntrinsicMathAndParseIntRoundTrip` 在 JDK/MSVC 可用时真编 DLL,
+  对比 StringBuilder/StringBuffer range/capacity、逃逸和 split literal/regex/异常语义。
 - **mjdbg 样本**:`test_resource/protected_samples/regc/RegCIntrinsicSurfaceSample.java`,
   trace surface 见同目录 README。
 

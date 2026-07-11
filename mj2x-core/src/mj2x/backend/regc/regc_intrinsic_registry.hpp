@@ -14,7 +14,8 @@ namespace mj2x {
 /**
  * @brief Intrinsic lowering decision for one RegC call site.
  */
-enum class RegCIntrinsicDecisionKind {
+enum class RegCIntrinsicDecisionKind
+{
     Emit,
     Fallback,
     Unsupported,
@@ -23,7 +24,8 @@ enum class RegCIntrinsicDecisionKind {
 /**
  * @brief How the emitter should form the matched intrinsic call expression.
  */
-enum class RegCIntrinsicEmitKind {
+enum class RegCIntrinsicEmitKind
+{
     RuntimeFunction,
     RegCLocalHelper,
     WrapperValueOf,
@@ -34,12 +36,14 @@ enum class RegCIntrinsicEmitKind {
     StringRuntimeMethod,
     StringBuilderInit,
     StringBuilderAppend,
+    StringBuilderMethod,
 };
 
 /**
  * @brief Native object state carried by wrapper-class intrinsics.
  */
-enum class RegCIntrinsicNativeObjectKind {
+enum class RegCIntrinsicNativeObjectKind
+{
     None,
     Int,
     Long,
@@ -51,6 +55,7 @@ enum class RegCIntrinsicNativeObjectKind {
     Char,
     Random,
     StringBuilder,
+    StringBuffer,
 };
 
 /**
@@ -62,13 +67,14 @@ enum class RegCIntrinsicNativeObjectKind {
  * its RegIR shape is malformed, so emitting generic code would hide a compiler
  * bug.  `reason` is populated for both cases when useful.
  */
-struct RegCIntrinsicDecision {
-    RegCIntrinsicDecisionKind kind = RegCIntrinsicDecisionKind::Fallback;
-    RegCIntrinsicEmitKind emitKind = RegCIntrinsicEmitKind::RuntimeFunction;
+struct RegCIntrinsicDecision
+{
+    RegCIntrinsicDecisionKind     kind             = RegCIntrinsicDecisionKind::Fallback;
+    RegCIntrinsicEmitKind         emitKind         = RegCIntrinsicEmitKind::RuntimeFunction;
     RegCIntrinsicNativeObjectKind nativeObjectKind = RegCIntrinsicNativeObjectKind::None;
-    std::string symbol;
-    std::string reason;
-    bool passContext = false;
+    std::string                   symbol;
+    std::string                   reason;
+    bool                          passContext = false;
 };
 
 /**
@@ -79,7 +85,8 @@ struct RegCIntrinsicDecision {
  * `Integer.parseInt(String)` paths.  Later wrapper and Random support should
  * register here instead of adding one-off emitter branches.
  */
-class RegCIntrinsicRegistry {
+class RegCIntrinsicRegistry
+{
 public:
     /**
      * @brief Shared process-wide registry for the built-in JDK intrinsic set.
@@ -100,4 +107,4 @@ private:
     RegCIntrinsicDecision matchNormalizedCall(const RegCIntrinsicCall& call) const;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

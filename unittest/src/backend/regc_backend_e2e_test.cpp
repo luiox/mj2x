@@ -24,32 +24,37 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct ExecResult {
-    int exitCode = -1;
+struct ExecResult
+{
+    int         exitCode = -1;
     std::string out;
 };
 
-struct Toolchain {
-    bool available = false;
+struct Toolchain
+{
+    bool        available = false;
     std::string reason;
-    fs::path javac;
-    fs::path java;
-    fs::path jdkInclude;
-    fs::path jdkIncludeWin;
-    fs::path vcvars64;
+    fs::path    javac;
+    fs::path    java;
+    fs::path    jdkInclude;
+    fs::path    jdkIncludeWin;
+    fs::path    vcvars64;
 };
 
-struct JavaCheck {
+struct JavaCheck
+{
     std::string label;
     std::string expression;
 };
 
-bool fileExists(const fs::path& path) {
+bool fileExists(const fs::path& path)
+{
     std::error_code ec;
     return fs::exists(path, ec);
 }
 
-std::string q(const fs::path& path) {
+std::string q(const fs::path& path)
+{
     std::string s = path.string();
     for (auto& c : s) {
         if (c == '/') c = '\\';
@@ -57,11 +62,14 @@ std::string q(const fs::path& path) {
     return "\"" + s + "\"";
 }
 
-ExecResult runBat(const std::vector<std::string>& lines) {
+ExecResult runBat(const std::vector<std::string>& lines)
+{
     ExecResult result;
-    fs::path tmpDir = test::getTempOutPath("mj2x_regc_e2e_run.keep").parent_path();
-    fs::path script = tmpDir / ("mj2x_regc_e2e_" +
-        std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + ".bat");
+    fs::path   tmpDir = test::getTempOutPath("mj2x_regc_e2e_run.keep").parent_path();
+    fs::path   script =
+        tmpDir /
+        ("mj2x_regc_e2e_" +
+         std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + ".bat");
     {
         std::ofstream out(script);
         out << "@echo off\n";
@@ -73,8 +81,8 @@ ExecResult runBat(const std::vector<std::string>& lines) {
         out << "exit /b %errorlevel%\n";
     }
 
-    std::string cmd = q(script) + " 2>&1";
-    FILE* pipe = _popen(cmd.c_str(), "rb");
+    std::string cmd  = q(script) + " 2>&1";
+    FILE*       pipe = _popen(cmd.c_str(), "rb");
     if (!pipe) {
         result.out = "failed to run " + script.string();
         return result;
@@ -90,7 +98,8 @@ ExecResult runBat(const std::vector<std::string>& lines) {
     return result;
 }
 
-fs::path findJdk() {
+fs::path findJdk()
+{
     if (const char* home = std::getenv("JAVA_HOME"); home && *home) {
         fs::path root(home);
         if (fileExists(root / "bin" / "javac.exe")) return root;
@@ -100,7 +109,8 @@ fs::path findJdk() {
     return {};
 }
 
-fs::path findVcvars() {
+fs::path findVcvars()
+{
     fs::path vswhere = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe";
     if (!fileExists(vswhere)) return {};
 
@@ -116,16 +126,17 @@ fs::path findVcvars() {
     return fileExists(vcvars) ? vcvars : fs::path{};
 }
 
-Toolchain probeToolchain() {
+Toolchain probeToolchain()
+{
     Toolchain tc;
-    fs::path jdk = findJdk();
+    fs::path  jdk = findJdk();
     if (jdk.empty()) {
         tc.reason = "javac not found; set JAVA_HOME";
         return tc;
     }
-    tc.javac = jdk / "bin" / "javac.exe";
-    tc.java = jdk / "bin" / "java.exe";
-    tc.jdkInclude = jdk / "include";
+    tc.javac         = jdk / "bin" / "javac.exe";
+    tc.java          = jdk / "bin" / "java.exe";
+    tc.jdkInclude    = jdk / "include";
     tc.jdkIncludeWin = tc.jdkInclude / "win32";
     if (!fileExists(tc.jdkInclude / "jni.h")) {
         tc.reason = "jni.h not found under " + tc.jdkInclude.string();
@@ -140,14 +151,16 @@ Toolchain probeToolchain() {
     return tc;
 }
 
-std::vector<std::string> splitLines(const std::string& text) {
+std::vector<std::string> splitLines(const std::string& text)
+{
     std::vector<std::string> lines;
-    std::string current;
+    std::string              current;
     for (char c : text) {
         if (c == '\n') {
             lines.push_back(current);
             current.clear();
-        } else if (c != '\r') {
+        }
+        else if (c != '\r') {
             current.push_back(c);
         }
     }
@@ -155,7 +168,8 @@ std::vector<std::string> splitLines(const std::string& text) {
     return lines;
 }
 
-std::string joinLines(const std::vector<std::string>& lines) {
+std::string joinLines(const std::vector<std::string>& lines)
+{
     std::string out;
     for (const auto& line : lines) {
         out += "  ";
@@ -165,35 +179,37 @@ std::string joinLines(const std::vector<std::string>& lines) {
     return out;
 }
 
-std::string readText(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
+std::string readText(const fs::path& path)
+{
+    std::ifstream      in(path, std::ios::binary);
     std::ostringstream out;
     out << in.rdbuf();
     return out.str();
 }
 
-class RegCBackendE2E : public ::testing::Test {
+class RegCBackendE2E : public ::testing::Test
+{
 protected:
     static Toolchain tc_;
 
-    static void SetUpTestSuite() {
-        tc_ = probeToolchain();
-    }
+    static void SetUpTestSuite() { tc_ = probeToolchain(); }
 
-    void SetUp() override {
+    void SetUp() override
+    {
         if (!tc_.available) {
             GTEST_SKIP() << "RegC native E2E toolchain unavailable: " << tc_.reason;
         }
     }
 
-    fs::path caseDir(const std::string& name) const {
+    fs::path caseDir(const std::string& name) const
+    {
         return test::getOutPath("mj2x/regc_e2e/" + name + "/.keep").parent_path();
     }
 
-    void runCase(const std::string& className,
-                 const std::string& javaSource,
-                 const std::vector<JavaCheck>& checks) {
-        fs::path dir = caseDir(className);
+    void runCase(const std::string& className, const std::string& javaSource,
+                 const std::vector<JavaCheck>& checks)
+    {
+        fs::path        dir = caseDir(className);
         std::error_code ec;
         fs::create_directories(dir, ec);
 
@@ -211,22 +227,23 @@ protected:
             std::ofstream out(driverFile);
             out << buildDriver(checks);
         }
-        auto driverCompile = runBat({q(tc_.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(driverFile)});
+        auto driverCompile =
+            runBat({q(tc_.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(driverFile)});
         ASSERT_EQ(driverCompile.exitCode, 0) << driverCompile.out;
 
         auto baselineRun = runBat({q(tc_.java) + " -cp " + q(dir) + " Driver"});
         ASSERT_EQ(baselineRun.exitCode, 0) << baselineRun.out;
         auto baseline = splitLines(baselineRun.out);
 
-        fs::path inClass = dir / (className + ".class");
+        fs::path inClass  = dir / (className + ".class");
         fs::path outClass = dir / (className + "_protected.class");
-        fs::path cFile = dir / (className + ".c");
+        fs::path cFile    = dir / (className + ".c");
 
         mj2x::PipelineConfig config;
-        config.inputPath = inClass.string();
+        config.inputPath  = inClass.string();
         config.outputPath = outClass.string();
         mj2x::Pipeline pipeline(std::move(config));
-        auto backend = std::make_unique<mj2x::RegCBackend>();
+        auto           backend = std::make_unique<mj2x::RegCBackend>();
         backend->setOutputPath(cFile.string());
         pipeline.registerBackend(std::move(backend));
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
@@ -245,47 +262,44 @@ protected:
         fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
         ASSERT_FALSE(ec) << ec.message();
 
-        fs::path dll = dir / (className + ".dll");
+        fs::path dll    = dir / (className + ".dll");
         fs::path objDir = dir / "obj";
         fs::create_directories(objDir, ec);
         ASSERT_FALSE(ec) << ec.message();
         fs::path generatedObj = objDir / "generated.obj";
-        fs::path runtimeSrc = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
-        fs::path crtSrc     = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
+        fs::path runtimeSrc   = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
+        fs::path crtSrc       = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
 
         // Generated RegC includes the distributable CRT ABI directly. The
         // remaining runtime sources only back non-CRT Math/Random/shadow
         // intrinsic surfaces.
         std::vector<std::string> compileLines;
         compileLines.push_back("call " + q(tc_.vcvars64) + " >nul");
-        compileLines.push_back(
-            "cl /nologo /O2 /c /Fo" + q(generatedObj) + " " + q(cFile) +
-            " /I" + q(crtSrc) +
-            " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+        compileLines.push_back("cl /nologo /O2 /c /Fo" + q(generatedObj) + " " + q(cFile) + " /I" +
+                               q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                               q(tc_.jdkIncludeWin));
 
         std::vector<fs::path> runtimeObjs;
-        auto compileRuntime = [&](const std::string& relPath,
+        auto                  compileRuntime = [&](const std::string& relPath,
                                   const std::string& objName,
                                   const std::string& extraFlags = "") {
             fs::path src = runtimeSrc / relPath;
             ASSERT_TRUE(fileExists(src)) << src;
             fs::path obj = objDir / objName;
             runtimeObjs.push_back(obj);
-            compileLines.push_back(
-                "cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) +
-                (extraFlags.empty() ? "" : " " + extraFlags) +
-                 " /I" + q(runtimeSrc) +
-                 " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+            compileLines.push_back("cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) +
+                                   (extraFlags.empty() ? "" : " " + extraFlags) + " /I" +
+                                   q(runtimeSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                                   q(tc_.jdkIncludeWin));
         };
         auto compileCrt = [&](const std::string& relPath, const std::string& objName) {
             fs::path src = crtSrc / relPath;
             ASSERT_TRUE(fileExists(src)) << src;
             fs::path obj = objDir / objName;
             runtimeObjs.push_back(obj);
-            compileLines.push_back(
-                "cl /nologo /O2 /TC /c /Fo" + q(obj) + " " + q(src) +
-                " /I" + q(crtSrc) +
-                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+            compileLines.push_back("cl /nologo /O2 /TC /c /Fo" + q(obj) + " " + q(src) + " /I" +
+                                   q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                                   q(tc_.jdkIncludeWin));
         };
         compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
         compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
@@ -309,33 +323,35 @@ protected:
         ASSERT_EQ(protectedRun.exitCode, 0) << protectedRun.out;
         auto actual = splitLines(protectedRun.out);
 
-        ASSERT_EQ(baseline.size(), actual.size())
-            << "baseline:\n" << joinLines(baseline)
-            << "protected:\n" << joinLines(actual);
+        ASSERT_EQ(baseline.size(), actual.size()) << "baseline:\n"
+                                                  << joinLines(baseline) << "protected:\n"
+                                                  << joinLines(actual);
         for (size_t i = 0; i < baseline.size(); ++i) {
             EXPECT_EQ(baseline[i], actual[i]);
         }
     }
 
 private:
-    static std::string javaString(const std::string& text) {
+    static std::string javaString(const std::string& text)
+    {
         std::ostringstream out;
         out << "\"";
         for (char c : text) {
             switch (c) {
             case '\\': out << "\\\\"; break;
-            case '"':  out << "\\\""; break;
+            case '"': out << "\\\""; break;
             case '\n': out << "\\n"; break;
             case '\r': out << "\\r"; break;
             case '\t': out << "\\t"; break;
-            default:   out << c; break;
+            default: out << c; break;
             }
         }
         out << "\"";
         return out.str();
     }
 
-    static std::string buildDriver(const std::vector<JavaCheck>& checks) {
+    static std::string buildDriver(const std::vector<JavaCheck>& checks)
+    {
         std::ostringstream out;
         out << "public class Driver {\n";
         out << "  public static void main(String[] args) throws Exception {\n";
@@ -358,11 +374,11 @@ private:
 
 Toolchain RegCBackendE2E::tc_;
 
-} // namespace
+}   // namespace
 
 TEST(RegCBackendE2EHarnessTest, RunBatStopsAfterFirstFailingCommand)
 {
-    fs::path marker = test::getTempOutPath("mj2x_regc_e2e_fail_fast_marker.txt");
+    fs::path        marker = test::getTempOutPath("mj2x_regc_e2e_fail_fast_marker.txt");
     std::error_code ec;
     fs::remove(marker, ec);
 
@@ -375,95 +391,97 @@ TEST(RegCBackendE2EHarnessTest, RunBatStopsAfterFirstFailingCommand)
     EXPECT_FALSE(fileExists(marker)) << marker;
 }
 
-TEST_F(RegCBackendE2E, PureArithmeticLoopAndArrayRoundTrip) {
-    runCase(
-        "RegCNativePure",
-        "public class RegCNativePure {\n"
-        "  public static int addMul(int a, int b) { return (a + b) * 3; }\n"
-        "  public static int loopSum(int n) {\n"
-        "    int acc = 0;\n"
-        "    for (int i = 0; i < n; i++) acc += i;\n"
-        "    return acc;\n"
-        "  }\n"
-        "  public static int intArray(int n) {\n"
-        "    int[] values = new int[3];\n"
-        "    values[0] = n;\n"
-        "    values[1] = n + 1;\n"
-        "    values[2] = values[0] + values[1];\n"
-        "    return values.length + values[2];\n"
-        "  }\n"
-        "}\n",
-        {
-            {"addMul(3, 4)", "RegCNativePure.addMul(3, 4)"},
-            {"addMul(2147483647, 1)", "RegCNativePure.addMul(2147483647, 1)"},
-            {"loopSum(0)", "RegCNativePure.loopSum(0)"},
-            {"loopSum(7)", "RegCNativePure.loopSum(7)"},
-            {"intArray(5)", "RegCNativePure.intArray(5)"},
-        });
+TEST_F(RegCBackendE2E, PureArithmeticLoopAndArrayRoundTrip)
+{
+    runCase("RegCNativePure",
+            "public class RegCNativePure {\n"
+            "  public static int addMul(int a, int b) { return (a + b) * 3; }\n"
+            "  public static int loopSum(int n) {\n"
+            "    int acc = 0;\n"
+            "    for (int i = 0; i < n; i++) acc += i;\n"
+            "    return acc;\n"
+            "  }\n"
+            "  public static int intArray(int n) {\n"
+            "    int[] values = new int[3];\n"
+            "    values[0] = n;\n"
+            "    values[1] = n + 1;\n"
+            "    values[2] = values[0] + values[1];\n"
+            "    return values.length + values[2];\n"
+            "  }\n"
+            "}\n",
+            {
+                {"addMul(3, 4)", "RegCNativePure.addMul(3, 4)"},
+                {"addMul(2147483647, 1)", "RegCNativePure.addMul(2147483647, 1)"},
+                {"loopSum(0)", "RegCNativePure.loopSum(0)"},
+                {"loopSum(7)", "RegCNativePure.loopSum(7)"},
+                {"intArray(5)", "RegCNativePure.intArray(5)"},
+            });
 }
 
-TEST_F(RegCBackendE2E, FieldAndReferenceHelpersRoundTrip) {
-    runCase(
-        "RegCNativeHelpers",
-        "public class RegCNativeHelpers {\n"
-        "  public int value;\n"
-        "  public static int sink;\n"
-        "  public int instanceField(int x) {\n"
-        "    value = x;\n"
-        "    return value + 1;\n"
-        "  }\n"
-        "  public static int staticField(int x) {\n"
-        "    sink = x * 2;\n"
-        "    return sink + 3;\n"
-        "  }\n"
-        "  public static int isString(Object value) {\n"
-        "    return value instanceof String ? 1 : 0;\n"
-        "  }\n"
-        "}\n",
-        {
-            {"instanceField(5)", "new RegCNativeHelpers().instanceField(5)"},
-            {"staticField(7)", "RegCNativeHelpers.staticField(7)"},
-            {"isString(\"x\")", "RegCNativeHelpers.isString(\"x\")"},
-            {"isString(new Object())", "RegCNativeHelpers.isString(new Object())"},
-        });
+TEST_F(RegCBackendE2E, FieldAndReferenceHelpersRoundTrip)
+{
+    runCase("RegCNativeHelpers",
+            "public class RegCNativeHelpers {\n"
+            "  public int value;\n"
+            "  public static int sink;\n"
+            "  public int instanceField(int x) {\n"
+            "    value = x;\n"
+            "    return value + 1;\n"
+            "  }\n"
+            "  public static int staticField(int x) {\n"
+            "    sink = x * 2;\n"
+            "    return sink + 3;\n"
+            "  }\n"
+            "  public static int isString(Object value) {\n"
+            "    return value instanceof String ? 1 : 0;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"instanceField(5)", "new RegCNativeHelpers().instanceField(5)"},
+                {"staticField(7)", "RegCNativeHelpers.staticField(7)"},
+                {"isString(\"x\")", "RegCNativeHelpers.isString(\"x\")"},
+                {"isString(new Object())", "RegCNativeHelpers.isString(new Object())"},
+            });
 }
 
-TEST_F(RegCBackendE2E, MultiArrayHelpersRoundTrip) {
-    runCase(
-        "RegCMultiArrayHelpers",
-        "public class RegCMultiArrayHelpers {\n"
-        "  public static int cube(int a, int b, int c) {\n"
-        "    int[][][] values = new int[a][b][c];\n"
-        "    values[a - 1][b - 1][c - 1] = a + b + c;\n"
-        "    return values.length + values[0].length + values[0][0].length + values[a - 1][b - 1][c - 1];\n"
-        "  }\n"
-        "}\n",
-        {
-            {"cube(2, 3, 4)", "RegCMultiArrayHelpers.cube(2, 3, 4)"},
-        });
+TEST_F(RegCBackendE2E, MultiArrayHelpersRoundTrip)
+{
+    runCase("RegCMultiArrayHelpers",
+            "public class RegCMultiArrayHelpers {\n"
+            "  public static int cube(int a, int b, int c) {\n"
+            "    int[][][] values = new int[a][b][c];\n"
+            "    values[a - 1][b - 1][c - 1] = a + b + c;\n"
+            "    return values.length + values[0].length + values[0][0].length + values[a - 1][b - "
+            "1][c - 1];\n"
+            "  }\n"
+            "}\n",
+            {
+                {"cube(2, 3, 4)", "RegCMultiArrayHelpers.cube(2, 3, 4)"},
+            });
 }
 
-TEST_F(RegCBackendE2E, CallHelpersRoundTrip) {
-    runCase(
-        "RegCCallHelpers",
-        "public class RegCCallHelpers {\n"
-        "  public int value;\n"
-        "  public int addValue(int x) { return value + x; }\n"
-        "  public static int twice(int x) { return x * 2; }\n"
-        "  public static int staticCaller(int x) { return twice(x) + 1; }\n"
-        "  public static int instanceCaller(int x) {\n"
-        "    RegCCallHelpers box = new RegCCallHelpers();\n"
-        "    box.value = 4;\n"
-        "    return box.addValue(x);\n"
-        "  }\n"
-        "}\n",
-        {
-            {"staticCaller(9)", "RegCCallHelpers.staticCaller(9)"},
-            {"instanceCaller(5)", "RegCCallHelpers.instanceCaller(5)"},
-        });
+TEST_F(RegCBackendE2E, CallHelpersRoundTrip)
+{
+    runCase("RegCCallHelpers",
+            "public class RegCCallHelpers {\n"
+            "  public int value;\n"
+            "  public int addValue(int x) { return value + x; }\n"
+            "  public static int twice(int x) { return x * 2; }\n"
+            "  public static int staticCaller(int x) { return twice(x) + 1; }\n"
+            "  public static int instanceCaller(int x) {\n"
+            "    RegCCallHelpers box = new RegCCallHelpers();\n"
+            "    box.value = 4;\n"
+            "    return box.addValue(x);\n"
+            "  }\n"
+            "}\n",
+            {
+                {"staticCaller(9)", "RegCCallHelpers.staticCaller(9)"},
+                {"instanceCaller(5)", "RegCCallHelpers.instanceCaller(5)"},
+            });
 }
 
-TEST_F(RegCBackendE2E, NarrowPrimitiveRoundTrip) {
+TEST_F(RegCBackendE2E, NarrowPrimitiveRoundTrip)
+{
     runCase(
         "RegCNarrowHelpers",
         "public class RegCNarrowHelpers {\n"
@@ -509,19 +527,23 @@ TEST_F(RegCBackendE2E, NarrowPrimitiveRoundTrip) {
         "  }\n"
         "}\n",
         {
-            {"narrowFields", "new RegCNarrowHelpers().narrowFields((byte)-12, (short)18, (char)70, true)"},
-            {"staticNarrowFields", "RegCNarrowHelpers.staticNarrowFields((byte)-10, (short)20, (char)71, false)"},
+            {"narrowFields",
+             "new RegCNarrowHelpers().narrowFields((byte)-12, (short)18, (char)70, true)"},
+            {"staticNarrowFields",
+             "RegCNarrowHelpers.staticNarrowFields((byte)-10, (short)20, (char)71, false)"},
             {"narrowArrays", "RegCNarrowHelpers.narrowArrays((byte)-8, (short)22, (char)72, true)"},
             {"castNarrow", "RegCNarrowHelpers.castNarrow(7)"},
         });
 }
 
-TEST_F(RegCBackendE2E, StackJoinTernaryRoundTrip) {
+TEST_F(RegCBackendE2E, StackJoinTernaryRoundTrip)
+{
     runCase(
         "RegCStackJoinTernary",
         "public class RegCStackJoinTernary {\n"
         "  public static int booleanTernary(boolean flag) { return flag ? 11 : 3; }\n"
-        "  public static int intTernary(int value) { return (value & 1) != 0 ? value + 7 : value - 5; }\n"
+        "  public static int intTernary(int value) { return (value & 1) != 0 ? value + 7 : value - "
+        "5; }\n"
         "  public static Object referenceTernary(boolean flag, Object left, Object right) {\n"
         "    return flag ? left : right;\n"
         "  }\n"
@@ -532,120 +554,121 @@ TEST_F(RegCBackendE2E, StackJoinTernaryRoundTrip) {
             {"intTernary(6)", "RegCStackJoinTernary.intTernary(6)"},
             {"intTernary(7)", "RegCStackJoinTernary.intTernary(7)"},
             {"referenceTernary(true)", "RegCStackJoinTernary.referenceTernary(true, \"L\", \"R\")"},
-            {"referenceTernary(false)", "RegCStackJoinTernary.referenceTernary(false, \"L\", \"R\")"},
+            {"referenceTernary(false)",
+             "RegCStackJoinTernary.referenceTernary(false, \"L\", \"R\")"},
         });
 }
 
-TEST_F(RegCBackendE2E, NullTrapHandlerRoundTrip) {
-    runCase(
-        "RegCNullTrapHandlers",
-        "public class RegCNullTrapHandlers {\n"
-        "  public int value;\n"
-        "  public int id(int input) { return input + 1; }\n"
-        "  public static int catchNullField() {\n"
-        "    try { RegCNullTrapHandlers box = null; return box.value; }\n"
-        "    catch (NullPointerException ex) { return 55; }\n"
-        "  }\n"
-        "  public static int catchNullCall() {\n"
-        "    try { RegCNullTrapHandlers box = null; return box.id(1); }\n"
-        "    catch (NullPointerException ex) { return 66; }\n"
-        "  }\n"
-        "  public static int catchNullArray() {\n"
-        "    try { int[] values = null; return values[0]; }\n"
-        "    catch (NullPointerException ex) { return 77; }\n"
-        "  }\n"
-        "}\n",
-        {
-            {"catchNullField()", "RegCNullTrapHandlers.catchNullField()"},
-            {"catchNullCall()", "RegCNullTrapHandlers.catchNullCall()"},
-            {"catchNullArray()", "RegCNullTrapHandlers.catchNullArray()"},
-        });
+TEST_F(RegCBackendE2E, NullTrapHandlerRoundTrip)
+{
+    runCase("RegCNullTrapHandlers",
+            "public class RegCNullTrapHandlers {\n"
+            "  public int value;\n"
+            "  public int id(int input) { return input + 1; }\n"
+            "  public static int catchNullField() {\n"
+            "    try { RegCNullTrapHandlers box = null; return box.value; }\n"
+            "    catch (NullPointerException ex) { return 55; }\n"
+            "  }\n"
+            "  public static int catchNullCall() {\n"
+            "    try { RegCNullTrapHandlers box = null; return box.id(1); }\n"
+            "    catch (NullPointerException ex) { return 66; }\n"
+            "  }\n"
+            "  public static int catchNullArray() {\n"
+            "    try { int[] values = null; return values[0]; }\n"
+            "    catch (NullPointerException ex) { return 77; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"catchNullField()", "RegCNullTrapHandlers.catchNullField()"},
+                {"catchNullCall()", "RegCNullTrapHandlers.catchNullCall()"},
+                {"catchNullArray()", "RegCNullTrapHandlers.catchNullArray()"},
+            });
 }
 
-TEST_F(RegCBackendE2E, ThrowHelperRoundTrip) {
-    runCase(
-        "RegCThrowHelpers",
-        "public class RegCThrowHelpers {\n"
-        "  public static int raise(int x) {\n"
-        "    if (x == 0) return 7;\n"
-        "    throw new IllegalStateException();\n"
-        "  }\n"
-        "}\n",
-        {
-            {"raise(0)", "RegCThrowHelpers.raise(0)"},
-            {"raise(1)", "RegCThrowHelpers.raise(1)"},
-        });
+TEST_F(RegCBackendE2E, ThrowHelperRoundTrip)
+{
+    runCase("RegCThrowHelpers",
+            "public class RegCThrowHelpers {\n"
+            "  public static int raise(int x) {\n"
+            "    if (x == 0) return 7;\n"
+            "    throw new IllegalStateException();\n"
+            "  }\n"
+            "}\n",
+            {
+                {"raise(0)", "RegCThrowHelpers.raise(0)"},
+                {"raise(1)", "RegCThrowHelpers.raise(1)"},
+            });
 }
 
-TEST_F(RegCBackendE2E, TryCatchDispatchRoundTrip) {
-    runCase(
-        "RegCExceptionDispatch",
-        "public class RegCExceptionDispatch {\n"
-        "  public static int catchOwn(int x) {\n"
-        "    try {\n"
-        "      if (x > 0) throw new IllegalArgumentException();\n"
-        "      return 1;\n"
-        "    } catch (IllegalArgumentException e) {\n"
-        "      return 2;\n"
-        "    }\n"
-        "  }\n"
-        "  public static int missCatch() {\n"
-        "    try {\n"
-        "      throw new IllegalStateException();\n"
-        "    } catch (IllegalArgumentException e) {\n"
-        "      return 3;\n"
-        "    }\n"
-        "  }\n"
-        "  public static void fail() { throw new IllegalArgumentException(); }\n"
-        "  public static int catchCall() {\n"
-        "    try {\n"
-        "      fail();\n"
-        "      return 1;\n"
-        "    } catch (IllegalArgumentException e) {\n"
-        "      return 9;\n"
-        "    }\n"
-        "  }\n"
-        "}\n",
-        {
-            {"catchOwn(0)", "RegCExceptionDispatch.catchOwn(0)"},
-            {"catchOwn(1)", "RegCExceptionDispatch.catchOwn(1)"},
-            {"missCatch()", "RegCExceptionDispatch.missCatch()"},
-            {"catchCall()", "RegCExceptionDispatch.catchCall()"},
-        });
+TEST_F(RegCBackendE2E, TryCatchDispatchRoundTrip)
+{
+    runCase("RegCExceptionDispatch",
+            "public class RegCExceptionDispatch {\n"
+            "  public static int catchOwn(int x) {\n"
+            "    try {\n"
+            "      if (x > 0) throw new IllegalArgumentException();\n"
+            "      return 1;\n"
+            "    } catch (IllegalArgumentException e) {\n"
+            "      return 2;\n"
+            "    }\n"
+            "  }\n"
+            "  public static int missCatch() {\n"
+            "    try {\n"
+            "      throw new IllegalStateException();\n"
+            "    } catch (IllegalArgumentException e) {\n"
+            "      return 3;\n"
+            "    }\n"
+            "  }\n"
+            "  public static void fail() { throw new IllegalArgumentException(); }\n"
+            "  public static int catchCall() {\n"
+            "    try {\n"
+            "      fail();\n"
+            "      return 1;\n"
+            "    } catch (IllegalArgumentException e) {\n"
+            "      return 9;\n"
+            "    }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"catchOwn(0)", "RegCExceptionDispatch.catchOwn(0)"},
+                {"catchOwn(1)", "RegCExceptionDispatch.catchOwn(1)"},
+                {"missCatch()", "RegCExceptionDispatch.missCatch()"},
+                {"catchCall()", "RegCExceptionDispatch.catchCall()"},
+            });
 }
 
-TEST_F(RegCBackendE2E, IntegerDivisionTrapRoundTrip) {
-    runCase(
-        "RegCIntegerTraps",
-        "public class RegCIntegerTraps {\n"
-        "  public static int divOrCatch(int a, int b) {\n"
-        "    try { return a / b; }\n"
-        "    catch (ArithmeticException e) { return 77; }\n"
-        "  }\n"
-        "  public static int remOrCatch(int a, int b) {\n"
-        "    try { return a % b; }\n"
-        "    catch (ArithmeticException e) { return 88; }\n"
-        "  }\n"
-        "  public static int divPropagate(int a) { return 10 / a; }\n"
-        "  public static int minDiv() { return Integer.MIN_VALUE / -1; }\n"
-        "  public static int minRem() { return Integer.MIN_VALUE % -1; }\n"
-        "  public static long longDivOrCatch(long a, long b) {\n"
-        "    try { return a / b; }\n"
-        "    catch (ArithmeticException e) { return 99L; }\n"
-        "  }\n"
-        "}\n",
-        {
-            {"divOrCatch(9, 3)", "RegCIntegerTraps.divOrCatch(9, 3)"},
-            {"divOrCatch(9, 0)", "RegCIntegerTraps.divOrCatch(9, 0)"},
-            {"remOrCatch(10, 4)", "RegCIntegerTraps.remOrCatch(10, 4)"},
-            {"remOrCatch(10, 0)", "RegCIntegerTraps.remOrCatch(10, 0)"},
-            {"divPropagate(2)", "RegCIntegerTraps.divPropagate(2)"},
-            {"divPropagate(0)", "RegCIntegerTraps.divPropagate(0)"},
-            {"minDiv()", "RegCIntegerTraps.minDiv()"},
-            {"minRem()", "RegCIntegerTraps.minRem()"},
-            {"longDivOrCatch(12L, 3L)", "RegCIntegerTraps.longDivOrCatch(12L, 3L)"},
-            {"longDivOrCatch(12L, 0L)", "RegCIntegerTraps.longDivOrCatch(12L, 0L)"},
-        });
+TEST_F(RegCBackendE2E, IntegerDivisionTrapRoundTrip)
+{
+    runCase("RegCIntegerTraps",
+            "public class RegCIntegerTraps {\n"
+            "  public static int divOrCatch(int a, int b) {\n"
+            "    try { return a / b; }\n"
+            "    catch (ArithmeticException e) { return 77; }\n"
+            "  }\n"
+            "  public static int remOrCatch(int a, int b) {\n"
+            "    try { return a % b; }\n"
+            "    catch (ArithmeticException e) { return 88; }\n"
+            "  }\n"
+            "  public static int divPropagate(int a) { return 10 / a; }\n"
+            "  public static int minDiv() { return Integer.MIN_VALUE / -1; }\n"
+            "  public static int minRem() { return Integer.MIN_VALUE % -1; }\n"
+            "  public static long longDivOrCatch(long a, long b) {\n"
+            "    try { return a / b; }\n"
+            "    catch (ArithmeticException e) { return 99L; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"divOrCatch(9, 3)", "RegCIntegerTraps.divOrCatch(9, 3)"},
+                {"divOrCatch(9, 0)", "RegCIntegerTraps.divOrCatch(9, 0)"},
+                {"remOrCatch(10, 4)", "RegCIntegerTraps.remOrCatch(10, 4)"},
+                {"remOrCatch(10, 0)", "RegCIntegerTraps.remOrCatch(10, 0)"},
+                {"divPropagate(2)", "RegCIntegerTraps.divPropagate(2)"},
+                {"divPropagate(0)", "RegCIntegerTraps.divPropagate(0)"},
+                {"minDiv()", "RegCIntegerTraps.minDiv()"},
+                {"minRem()", "RegCIntegerTraps.minRem()"},
+                {"longDivOrCatch(12L, 3L)", "RegCIntegerTraps.longDivOrCatch(12L, 3L)"},
+                {"longDivOrCatch(12L, 0L)", "RegCIntegerTraps.longDivOrCatch(12L, 0L)"},
+            });
 }
 
 // JDK intrinsic E2E: Integer.parseInt + Math.* + String hot paths run entirely
@@ -654,27 +677,34 @@ TEST_F(RegCBackendE2E, IntegerDivisionTrapRoundTrip) {
 // Math/parseInt/wrapper/Random/String through the JNI call helper.
 // Results match the original Java baseline (parseInt "42" -> 42, Math.sin via
 // the same IEEE 754 sin both sides use, Random via the Java-compatible LCG).
-TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
+TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
+{
     runCase(
         "RegCIntrinsic",
         "public class RegCIntrinsic {\n"
         "  public static int parseInt42() { return Integer.parseInt(\"42\"); }\n"
         "  public static int parseIntArg(String s) { return Integer.parseInt(s); }\n"
-        "  public static int parseIntRadix(String s, int radix) { return Integer.parseInt(s, radix); }\n"
+        "  public static int parseIntRadix(String s, int radix) { return Integer.parseInt(s, "
+        "radix); }\n"
         "  public static long parseLongArg(String s) { return Long.parseLong(s); }\n"
-        "  public static long parseLongRadix(String s, int radix) { return Long.parseLong(s, radix); }\n"
+        "  public static long parseLongRadix(String s, int radix) { return Long.parseLong(s, "
+        "radix); }\n"
         "  public static short parseShortArg(String s) { return Short.parseShort(s); }\n"
-        "  public static short parseShortRadix(String s, int radix) { return Short.parseShort(s, radix); }\n"
+        "  public static short parseShortRadix(String s, int radix) { return Short.parseShort(s, "
+        "radix); }\n"
         "  public static byte parseByteArg(String s) { return Byte.parseByte(s); }\n"
-        "  public static byte parseByteRadix(String s, int radix) { return Byte.parseByte(s, radix); }\n"
+        "  public static byte parseByteRadix(String s, int radix) { return Byte.parseByte(s, "
+        "radix); }\n"
         "  public static boolean parseBooleanArg(String s) { return Boolean.parseBoolean(s); }\n"
         "  public static float parseFloatArg(String s) { return Float.parseFloat(s); }\n"
         "  public static double parseDoubleArg(String s) { return Double.parseDouble(s); }\n"
         "  public static int parseShortOverflow(String s) {\n"
-        "    try { Short.parseShort(s); return 0; } catch (NumberFormatException expected) { return 1; }\n"
+        "    try { Short.parseShort(s); return 0; } catch (NumberFormatException expected) { "
+        "return 1; }\n"
         "  }\n"
         "  public static int parseByteOverflow(String s) {\n"
-        "    try { Byte.parseByte(s); return 0; } catch (NumberFormatException expected) { return 1; }\n"
+        "    try { Byte.parseByte(s); return 0; } catch (NumberFormatException expected) { return "
+        "1; }\n"
         "  }\n"
         "  public static String intString(int x) { return Integer.toString(x); }\n"
         "  public static String longString(long x) { return Long.toString(x); }\n"
@@ -702,10 +732,13 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static long boxedLong(long x) { return Long.valueOf(x).longValue(); }\n"
         "  public static Object boxedIntObject(int x) { return Integer.valueOf(x); }\n"
         "  private static Object wrapperSink;\n"
-        "  public static String boxedIntField(int x) { wrapperSink = Integer.valueOf(x); return wrapperSink.toString(); }\n"
-        "  public static String boxedIntArray(int x) { Object[] values = new Object[1]; values[0] = Integer.valueOf(x); return values[0].toString(); }\n"
+        "  public static String boxedIntField(int x) { wrapperSink = Integer.valueOf(x); return "
+        "wrapperSink.toString(); }\n"
+        "  public static String boxedIntArray(int x) { Object[] values = new Object[1]; values[0] "
+        "= Integer.valueOf(x); return values[0].toString(); }\n"
         "  public static String consumeBox(Object value) { return value.toString(); }\n"
-        "  public static String boxedIntUnknownCall(int x) { return consumeBox(Integer.valueOf(x)); }\n"
+        "  public static String boxedIntUnknownCall(int x) { return "
+        "consumeBox(Integer.valueOf(x)); }\n"
         "  public static int randomNextInt(long seed) {\n"
         "    java.util.Random r = new java.util.Random(seed);\n"
         "    return r.nextInt();\n"
@@ -717,21 +750,43 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static int stringLength(String s) { return s.length(); }\n"
         "  public static int stringCharAt(String s, int index) { return s.charAt(index); }\n"
         "  public static int stringHash(String s) { return s.hashCode(); }\n"
-        "  public static int stringEquals(String lhs, Object rhs) { return lhs.equals(rhs) ? 1 : 0; }\n"
-        "  public static int stringContains(String s, String needle) { return s.contains(needle) ? 1 : 0; }\n"
-        "  public static int stringContainsSeq(String s, CharSequence needle) { return s.contains(needle) ? 1 : 0; }\n"
-        "  public static String stringConcat(String s, String suffix) { return s.concat(suffix); }\n"
-        "  public static String stringSubstringFrom(String s, int begin) { return s.substring(begin); }\n"
-        "  public static String stringSubstringRange(String s, int begin, int end) { return s.substring(begin, end); }\n"
-        "  public static int stringCompareTo(String s, String other) { return s.compareTo(other); }\n"
+        "  public static int stringEquals(String lhs, Object rhs) { return lhs.equals(rhs) ? 1 : "
+        "0; }\n"
+        "  public static int stringContains(String s, String needle) { return s.contains(needle) ? "
+        "1 : 0; }\n"
+        "  public static int stringContainsSeq(String s, CharSequence needle) { return "
+        "s.contains(needle) ? 1 : 0; }\n"
+        "  public static String stringConcat(String s, String suffix) { return s.concat(suffix); "
+        "}\n"
+        "  public static String stringSubstringFrom(String s, int begin) { return "
+        "s.substring(begin); }\n"
+        "  public static String stringSubstringRange(String s, int begin, int end) { return "
+        "s.substring(begin, end); }\n"
+        "  public static int stringCompareTo(String s, String other) { return s.compareTo(other); "
+        "}\n"
         "  public static int stringIndexOfChar(String s, int ch) { return s.indexOf(ch); }\n"
-        "  public static int stringIndexOfCharFrom(String s, int ch, int from) { return s.indexOf(ch, from); }\n"
-        "  public static int stringIndexOfString(String s, String needle) { return s.indexOf(needle); }\n"
-        "  public static int stringIndexOfStringFrom(String s, String needle, int from) { return s.indexOf(needle, from); }\n"
-        "  public static String stringReplace(String s, char oldChar, char newChar) { return s.replace(oldChar, newChar); }\n"
+        "  public static int stringIndexOfCharFrom(String s, int ch, int from) { return "
+        "s.indexOf(ch, from); }\n"
+        "  public static int stringIndexOfString(String s, String needle) { return "
+        "s.indexOf(needle); }\n"
+        "  public static int stringIndexOfStringFrom(String s, String needle, int from) { return "
+        "s.indexOf(needle, from); }\n"
+        "  public static String stringReplace(String s, char oldChar, char newChar) { return "
+        "s.replace(oldChar, newChar); }\n"
         "  public static String stringTrim(String s) { return s.trim(); }\n"
+        "  public static String stringSplitLiteral(String s, String delimiter) {\n"
+        "    return java.util.Arrays.toString(s.split(delimiter));\n"
+        "  }\n"
+        "  public static String stringSplitLimit(String s, String delimiter, int limit) {\n"
+        "    return java.util.Arrays.toString(s.split(delimiter, limit));\n"
+        "  }\n"
+        "  public static int stringSplitInvalidRegex(String s) {\n"
+        "    try { s.split(\"[\"); return 0; }\n"
+        "    catch (java.util.regex.PatternSyntaxException expected) { return 1; }\n"
+        "  }\n"
         "  public static int stringSubstringBounds(String s) {\n"
-        "    try { s.substring(-1); return 0; } catch (StringIndexOutOfBoundsException expected) { return 1; }\n"
+        "    try { s.substring(-1); return 0; } catch (StringIndexOutOfBoundsException expected) { "
+        "return 1; }\n"
         "  }\n"
         "  public static final class Named {\n"
         "    public String toString() { return \"named\"; }\n"
@@ -739,15 +794,26 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static final class ThrowingName {\n"
         "    public String toString() { throw new IllegalStateException(\"boom\"); }\n"
         "  }\n"
+        "  public static final class OddSequence implements CharSequence {\n"
+        "    public int length() { return 4; }\n"
+        "    public char charAt(int index) { return \"A\\u4e2dBC\".charAt(index); }\n"
+        "    public CharSequence subSequence(int start, int end) { return "
+        "\"A\\u4e2dBC\".substring(start, end); }\n"
+        "    public String toString() { return \"WRONG\"; }\n"
+        "  }\n"
         "  public static String stringValueOfInt(int value) { return String.valueOf(value); }\n"
         "  public static String stringValueOfLong(long value) { return String.valueOf(value); }\n"
-        "  public static String stringValueOfBoolean(boolean value) { return String.valueOf(value); }\n"
+        "  public static String stringValueOfBoolean(boolean value) { return "
+        "String.valueOf(value); }\n"
         "  public static String stringValueOfChar(char value) { return String.valueOf(value); }\n"
         "  public static String stringValueOfFloat(float value) { return String.valueOf(value); }\n"
-        "  public static String stringValueOfDouble(double value) { return String.valueOf(value); }\n"
-        "  public static String stringValueOfObject(Object value) { return String.valueOf(value); }\n"
+        "  public static String stringValueOfDouble(double value) { return String.valueOf(value); "
+        "}\n"
+        "  public static String stringValueOfObject(Object value) { return String.valueOf(value); "
+        "}\n"
         "  public static String stringBuilderChain(String s, int x) {\n"
-        "    return new StringBuilder().append(s).append(x).append(7L).append(true).append('!').toString();\n"
+        "    return new "
+        "StringBuilder().append(s).append(x).append(7L).append(true).append('!').toString();\n"
         "  }\n"
         "  public static String stringBuilderFromString(String s) {\n"
         "    return new StringBuilder(s).append(\"!\").toString();\n"
@@ -767,12 +833,30 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "  public static String stringBuilderDouble(double value) {\n"
         "    return new StringBuilder().append(value).toString();\n"
         "  }\n"
+        "  public static String stringBuilderRange(char[] chars) {\n"
+        "    return new StringBuilder(2).append(new OddSequence()).append(new OddSequence(), 1, "
+        "3)\n"
+        "      .append(chars, 1, 2).appendCodePoint(0x1f600).toString();\n"
+        "  }\n"
+        "  public static int stringBuilderCapacity() {\n"
+        "    StringBuilder value = new StringBuilder(2); value.append(\"abc\");\n"
+        "    int grown = value.capacity(); value.ensureCapacity(20); int ensured = "
+        "value.capacity();\n"
+        "    value.setLength(5); value.setCharAt(3, 'X'); value.trimToSize();\n"
+        "    return grown * 10000 + ensured * 100 + value.capacity() * 10 + value.charAt(3);\n"
+        "  }\n"
+        "  public static String stringBuilderFromSequence() {\n"
+        "    return new StringBuilder(new OddSequence()).toString();\n"
+        "  }\n"
         "  public static String stringBuilderExceptionCleanup() {\n"
         "    try { return new StringBuilder().append(new ThrowingName()).toString(); }\n"
         "    catch (IllegalStateException expected) { return \"caught\"; }\n"
         "  }\n"
         "  public static StringBuilder stringBuilderReturn(String value) {\n"
         "    return new StringBuilder().append(value);\n"
+        "  }\n"
+        "  public static StringBuilder stringBuilderCapacityReturn() {\n"
+        "    StringBuilder value = new StringBuilder(3); value.ensureCapacity(40); return value;\n"
         "  }\n"
         "  public static String consumeBuilder(Object value) { return value.toString(); }\n"
         "  public static String stringBuilderUnknownCall(String value) {\n"
@@ -786,6 +870,29 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         "    Object[] values = new Object[1]; values[0] = new StringBuilder().append(value);\n"
         "    return values[0].toString();\n"
         "  }\n"
+        "  public static String stringBufferChain(String value, char[] chars) {\n"
+        "    return new StringBuffer(1).append(value).append(new OddSequence(), 1, 3)\n"
+        "      .append(chars, 0, 2).appendCodePoint(0x1f600).toString();\n"
+        "  }\n"
+        "  public static int stringBufferCapacity() {\n"
+        "    StringBuffer value = new StringBuffer(1); value.append(\"ab\"); "
+        "value.ensureCapacity(12);\n"
+        "    value.setLength(4); value.setCharAt(2, 'Z'); value.trimToSize();\n"
+        "    return value.capacity() * 100 + value.length() * 10 + value.charAt(2);\n"
+        "  }\n"
+        "  public static StringBuffer stringBufferReturn(String value) {\n"
+        "    return new StringBuffer().append(value);\n"
+        "  }\n"
+        "  public static StringBuffer stringBufferCapacityReturn() {\n"
+        "    StringBuffer value = new StringBuffer(3); value.ensureCapacity(40); return value;\n"
+        "  }\n"
+        "  public static String stringBufferUnknownCall(String value) {\n"
+        "    return consumeBuilder(new StringBuffer().append(value));\n"
+        "  }\n"
+        "  public static String stringBufferUseAfterEscape(String value) {\n"
+        "    StringBuffer buffer = new StringBuffer().append(value); consumeBuilder(buffer);\n"
+        "    return buffer.append('!').toString();\n"
+        "  }\n"
         "}\n",
         {
             {"parseInt42()", "RegCIntrinsic.parseInt42()"},
@@ -794,7 +901,8 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"parseIntRadix(\"-80000000\", 16)", "RegCIntrinsic.parseIntRadix(\"-80000000\", 16)"},
             {"parseLongArg(\"-1234567890123\")", "RegCIntrinsic.parseLongArg(\"-1234567890123\")"},
             {"parseLongRadix(\"zzzzzz\", 36)", "RegCIntrinsic.parseLongRadix(\"zzzzzz\", 36)"},
-            {"parseLongRadix(\"-8000000000000000\", 16)", "RegCIntrinsic.parseLongRadix(\"-8000000000000000\", 16)"},
+            {"parseLongRadix(\"-8000000000000000\", 16)",
+             "RegCIntrinsic.parseLongRadix(\"-8000000000000000\", 16)"},
             {"parseShortArg(\"-32768\")", "RegCIntrinsic.parseShortArg(\"-32768\")"},
             {"parseShortRadix(\"7fff\", 16)", "RegCIntrinsic.parseShortRadix(\"7fff\", 16)"},
             {"parseByteArg(\"-128\")", "RegCIntrinsic.parseByteArg(\"-128\")"},
@@ -823,7 +931,8 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"longCompare(9L, 9L)", "RegCIntrinsic.longCompare(9L, 9L)"},
             {"longCompare(-5L, 2L)", "RegCIntrinsic.longCompare(-5L, 2L)"},
             {"byteCompare((byte)-3, (byte)4)", "RegCIntrinsic.byteCompare((byte)-3, (byte)4)"},
-            {"shortCompare((short)9, (short)-2)", "RegCIntrinsic.shortCompare((short)9, (short)-2)"},
+            {"shortCompare((short)9, (short)-2)",
+             "RegCIntrinsic.shortCompare((short)9, (short)-2)"},
             {"boolCompare(true, false)", "RegCIntrinsic.boolCompare(true, false)"},
             {"boolCompare(false, true)", "RegCIntrinsic.boolCompare(false, true)"},
             {"charCompare('A', 'Z')", "RegCIntrinsic.charCompare('A', 'Z')"},
@@ -852,29 +961,54 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"stringCharAt(\"abcdef\", 2)", "RegCIntrinsic.stringCharAt(\"abcdef\", 2)"},
             {"stringHash(\"abcdef\")", "RegCIntrinsic.stringHash(\"abcdef\")"},
             {"stringEquals(\"same\", \"same\")", "RegCIntrinsic.stringEquals(\"same\", \"same\")"},
-            {"stringEquals(\"same\", \"other\")", "RegCIntrinsic.stringEquals(\"same\", \"other\")"},
+            {"stringEquals(\"same\", \"other\")",
+             "RegCIntrinsic.stringEquals(\"same\", \"other\")"},
             {"stringEquals(\"same\", null)", "RegCIntrinsic.stringEquals(\"same\", null)"},
-            {"stringEquals(\"same\", new Object())", "RegCIntrinsic.stringEquals(\"same\", new Object())"},
-            {"stringContains(\"abcdef\", \"cd\")", "RegCIntrinsic.stringContains(\"abcdef\", \"cd\")"},
-            {"stringContains(\"abcdef\", \"xy\")", "RegCIntrinsic.stringContains(\"abcdef\", \"xy\")"},
-            {"stringContainsSeq(\"abcdef\", new StringBuilder(\"cd\"))", "RegCIntrinsic.stringContainsSeq(\"abcdef\", new StringBuilder(\"cd\"))"},
-            {"stringConcat(\"A\\u4e2d\", \"\\ud83d\\ude00\")", "RegCIntrinsic.stringConcat(\"A\\u4e2d\", \"\\ud83d\\ude00\")"},
+            {"stringEquals(\"same\", new Object())",
+             "RegCIntrinsic.stringEquals(\"same\", new Object())"},
+            {"stringContains(\"abcdef\", \"cd\")",
+             "RegCIntrinsic.stringContains(\"abcdef\", \"cd\")"},
+            {"stringContains(\"abcdef\", \"xy\")",
+             "RegCIntrinsic.stringContains(\"abcdef\", \"xy\")"},
+            {"stringContainsSeq(\"abcdef\", new StringBuilder(\"cd\"))",
+             "RegCIntrinsic.stringContainsSeq(\"abcdef\", new StringBuilder(\"cd\"))"},
+            {"stringConcat(\"A\\u4e2d\", \"\\ud83d\\ude00\")",
+             "RegCIntrinsic.stringConcat(\"A\\u4e2d\", \"\\ud83d\\ude00\")"},
             {"stringConcat(\"same\", \"\")", "RegCIntrinsic.stringConcat(\"same\", \"\")"},
-            {"stringSubstringFrom(\"A\\u4e2d\\ud83d\\ude00Z\", 2)", "RegCIntrinsic.stringSubstringFrom(\"A\\u4e2d\\ud83d\\ude00Z\", 2)"},
-            {"stringSubstringRange(\"A\\u4e2d\\ud83d\\ude00Z\", 1, 4)", "RegCIntrinsic.stringSubstringRange(\"A\\u4e2d\\ud83d\\ude00Z\", 1, 4)"},
-            {"stringCompareTo(\"abc\", \"abd\")", "RegCIntrinsic.stringCompareTo(\"abc\", \"abd\")"},
-            {"stringCompareTo(\"\\ud83d\\ude00\", \"\\ud83d\\ude01\")", "RegCIntrinsic.stringCompareTo(\"\\ud83d\\ude00\", \"\\ud83d\\ude01\")"},
-            {"stringIndexOfChar(\"x\\ud83d\\ude00y\", 0x1F600)", "RegCIntrinsic.stringIndexOfChar(\"x\\ud83d\\ude00y\", 0x1F600)"},
-            {"stringIndexOfCharFrom(\"ababa\", 'a', 2)", "RegCIntrinsic.stringIndexOfCharFrom(\"ababa\", 'a', 2)"},
-            {"stringIndexOfCharFrom(\"ababa\", 'a', -10)", "RegCIntrinsic.stringIndexOfCharFrom(\"ababa\", 'a', -10)"},
-            {"stringIndexOfString(\"A\\u4e2dB\\u4e2d\", \"\\u4e2d\")", "RegCIntrinsic.stringIndexOfString(\"A\\u4e2dB\\u4e2d\", \"\\u4e2d\")"},
-            {"stringIndexOfStringFrom(\"ababa\", \"ba\", 2)", "RegCIntrinsic.stringIndexOfStringFrom(\"ababa\", \"ba\", 2)"},
-            {"stringIndexOfStringFrom(\"abc\", \"\", 99)", "RegCIntrinsic.stringIndexOfStringFrom(\"abc\", \"\", 99)"},
-            {"stringReplace(\"a\\u4e2da\", 'a', 'b')", "RegCIntrinsic.stringReplace(\"a\\u4e2da\", 'a', 'b')"},
+            {"stringSubstringFrom(\"A\\u4e2d\\ud83d\\ude00Z\", 2)",
+             "RegCIntrinsic.stringSubstringFrom(\"A\\u4e2d\\ud83d\\ude00Z\", 2)"},
+            {"stringSubstringRange(\"A\\u4e2d\\ud83d\\ude00Z\", 1, 4)",
+             "RegCIntrinsic.stringSubstringRange(\"A\\u4e2d\\ud83d\\ude00Z\", 1, 4)"},
+            {"stringCompareTo(\"abc\", \"abd\")",
+             "RegCIntrinsic.stringCompareTo(\"abc\", \"abd\")"},
+            {"stringCompareTo(\"\\ud83d\\ude00\", \"\\ud83d\\ude01\")",
+             "RegCIntrinsic.stringCompareTo(\"\\ud83d\\ude00\", \"\\ud83d\\ude01\")"},
+            {"stringIndexOfChar(\"x\\ud83d\\ude00y\", 0x1F600)",
+             "RegCIntrinsic.stringIndexOfChar(\"x\\ud83d\\ude00y\", 0x1F600)"},
+            {"stringIndexOfCharFrom(\"ababa\", 'a', 2)",
+             "RegCIntrinsic.stringIndexOfCharFrom(\"ababa\", 'a', 2)"},
+            {"stringIndexOfCharFrom(\"ababa\", 'a', -10)",
+             "RegCIntrinsic.stringIndexOfCharFrom(\"ababa\", 'a', -10)"},
+            {"stringIndexOfString(\"A\\u4e2dB\\u4e2d\", \"\\u4e2d\")",
+             "RegCIntrinsic.stringIndexOfString(\"A\\u4e2dB\\u4e2d\", \"\\u4e2d\")"},
+            {"stringIndexOfStringFrom(\"ababa\", \"ba\", 2)",
+             "RegCIntrinsic.stringIndexOfStringFrom(\"ababa\", \"ba\", 2)"},
+            {"stringIndexOfStringFrom(\"abc\", \"\", 99)",
+             "RegCIntrinsic.stringIndexOfStringFrom(\"abc\", \"\", 99)"},
+            {"stringReplace(\"a\\u4e2da\", 'a', 'b')",
+             "RegCIntrinsic.stringReplace(\"a\\u4e2da\", 'a', 'b')"},
             {"stringTrim(\" \\t\\u4e2d \\n\")", "RegCIntrinsic.stringTrim(\" \\t\\u4e2d \\n\")"},
+            {"stringSplitLiteral(\"a--b--\", \"--\")",
+             "RegCIntrinsic.stringSplitLiteral(\"a--b--\", \"--\")"},
+            {"stringSplitLimit(\"a--b--\", \"--\", -1)",
+             "RegCIntrinsic.stringSplitLimit(\"a--b--\", \"--\", -1)"},
+            {"stringSplitLiteral(\"a,,b:::c\", \"[,:]+\")",
+             "RegCIntrinsic.stringSplitLiteral(\"a,,b:::c\", \"[,:]+\")"},
+            {"stringSplitInvalidRegex(\"abc\")", "RegCIntrinsic.stringSplitInvalidRegex(\"abc\")"},
             {"stringSubstringBounds(\"abc\")", "RegCIntrinsic.stringSubstringBounds(\"abc\")"},
             {"stringValueOfInt(-42)", "RegCIntrinsic.stringValueOfInt(-42)"},
-            {"stringValueOfLong(1234567890123L)", "RegCIntrinsic.stringValueOfLong(1234567890123L)"},
+            {"stringValueOfLong(1234567890123L)",
+             "RegCIntrinsic.stringValueOfLong(1234567890123L)"},
             {"stringValueOfBoolean(true)", "RegCIntrinsic.stringValueOfBoolean(true)"},
             {"stringValueOfBoolean(false)", "RegCIntrinsic.stringValueOfBoolean(false)"},
             {"stringValueOfChar('A')", "RegCIntrinsic.stringValueOfChar('A')"},
@@ -882,32 +1016,59 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
             {"stringValueOfFloat(-0.0f)", "RegCIntrinsic.stringValueOfFloat(-0.0f)"},
             {"stringValueOfDouble(1.25d)", "RegCIntrinsic.stringValueOfDouble(1.25d)"},
             {"stringValueOfDouble(Double.NaN)", "RegCIntrinsic.stringValueOfDouble(Double.NaN)"},
-            {"stringValueOfObject(new RegCIntrinsic.Named())", "RegCIntrinsic.stringValueOfObject(new RegCIntrinsic.Named())"},
+            {"stringValueOfObject(new RegCIntrinsic.Named())",
+             "RegCIntrinsic.stringValueOfObject(new RegCIntrinsic.Named())"},
             {"stringValueOfObject(null)", "RegCIntrinsic.stringValueOfObject(null)"},
             {"stringBuilderChain(\"v\", 42)", "RegCIntrinsic.stringBuilderChain(\"v\", 42)"},
-            {"stringBuilderFromString(\"seed\")", "RegCIntrinsic.stringBuilderFromString(\"seed\")"},
-            {"stringBuilderObject(new RegCIntrinsic.Named())", "RegCIntrinsic.stringBuilderObject(new RegCIntrinsic.Named())"},
+            {"stringBuilderFromString(\"seed\")",
+             "RegCIntrinsic.stringBuilderFromString(\"seed\")"},
+            {"stringBuilderObject(new RegCIntrinsic.Named())",
+             "RegCIntrinsic.stringBuilderObject(new RegCIntrinsic.Named())"},
             {"stringBuilderObject(null)", "RegCIntrinsic.stringBuilderObject(null)"},
-            {"stringBuilderCharSequence(new StringBuilder(\"seq\"))", "RegCIntrinsic.stringBuilderCharSequence(new StringBuilder(\"seq\"))"},
+            {"stringBuilderCharSequence(new StringBuilder(\"seq\"))",
+             "RegCIntrinsic.stringBuilderCharSequence(new StringBuilder(\"seq\"))"},
             {"stringBuilderCharSequence(null)", "RegCIntrinsic.stringBuilderCharSequence(null)"},
-            {"stringBuilderChars(new char[]{'A','\\u4e2d','!'})", "RegCIntrinsic.stringBuilderChars(new char[]{'A','\\u4e2d','!'})"},
-            {"stringBuilderChars(new char[]{'\\ud83d','\\ude00'})", "RegCIntrinsic.stringBuilderChars(new char[]{'\\ud83d','\\ude00'})"},
+            {"stringBuilderChars(new char[]{'A','\\u4e2d','!'})",
+             "RegCIntrinsic.stringBuilderChars(new char[]{'A','\\u4e2d','!'})"},
+            {"stringBuilderChars(new char[]{'\\ud83d','\\ude00'})",
+             "RegCIntrinsic.stringBuilderChars(new char[]{'\\ud83d','\\ude00'})"},
             {"stringBuilderFloat(1.25f)", "RegCIntrinsic.stringBuilderFloat(1.25f)"},
             {"stringBuilderFloat(-0.0f)", "RegCIntrinsic.stringBuilderFloat(-0.0f)"},
             {"stringBuilderDouble(1.25d)", "RegCIntrinsic.stringBuilderDouble(1.25d)"},
             {"stringBuilderDouble(Double.NaN)", "RegCIntrinsic.stringBuilderDouble(Double.NaN)"},
+            {"stringBuilderRange(new char[]{'x','Y','\\u4e2d','z'})",
+             "RegCIntrinsic.stringBuilderRange(new char[]{'x','Y','\\u4e2d','z'})"},
+            {"stringBuilderCapacity()", "RegCIntrinsic.stringBuilderCapacity()"},
+            {"stringBuilderFromSequence()", "RegCIntrinsic.stringBuilderFromSequence()"},
             {"stringBuilderExceptionCleanup()", "RegCIntrinsic.stringBuilderExceptionCleanup()"},
-            {"stringBuilderReturn(\"escaped\").toString()", "RegCIntrinsic.stringBuilderReturn(\"escaped\").toString()"},
-            {"stringBuilderUnknownCall(\"unknown\")", "RegCIntrinsic.stringBuilderUnknownCall(\"unknown\")"},
-            {"stringBuilderFieldEscape(\"field\")", "RegCIntrinsic.stringBuilderFieldEscape(\"field\")"},
-            {"stringBuilderArrayEscape(\"array\")", "RegCIntrinsic.stringBuilderArrayEscape(\"array\")"},
+            {"stringBuilderReturn(\"escaped\").toString()",
+             "RegCIntrinsic.stringBuilderReturn(\"escaped\").toString()"},
+            {"stringBuilderCapacityReturn().capacity()",
+             "RegCIntrinsic.stringBuilderCapacityReturn().capacity()"},
+            {"stringBuilderUnknownCall(\"unknown\")",
+             "RegCIntrinsic.stringBuilderUnknownCall(\"unknown\")"},
+            {"stringBuilderFieldEscape(\"field\")",
+             "RegCIntrinsic.stringBuilderFieldEscape(\"field\")"},
+            {"stringBuilderArrayEscape(\"array\")",
+             "RegCIntrinsic.stringBuilderArrayEscape(\"array\")"},
+            {"stringBufferChain(\"buf\", new char[]{'X','\\u4e2d','!'})",
+             "RegCIntrinsic.stringBufferChain(\"buf\", new char[]{'X','\\u4e2d','!'})"},
+            {"stringBufferCapacity()", "RegCIntrinsic.stringBufferCapacity()"},
+            {"stringBufferReturn(\"escaped-buffer\").toString()",
+             "RegCIntrinsic.stringBufferReturn(\"escaped-buffer\").toString()"},
+            {"stringBufferCapacityReturn().capacity()",
+             "RegCIntrinsic.stringBufferCapacityReturn().capacity()"},
+            {"stringBufferUnknownCall(\"unknown-buffer\")",
+             "RegCIntrinsic.stringBufferUnknownCall(\"unknown-buffer\")"},
+            {"stringBufferUseAfterEscape(\"fallback-buffer\")",
+             "RegCIntrinsic.stringBufferUseAfterEscape(\"fallback-buffer\")"},
         });
 
     // After runCase succeeds, the generated C file is on disk.  Re-open it to
     // assert the intrinsic path was taken (no JNI dispatch at the matched call
     // sites).  This is the structural guarantee the task requires: only the
     // boundary wrappers carry JNI, intrinsic call sites stay native.
-    fs::path dir = caseDir("RegCIntrinsic");
+    fs::path dir   = caseDir("RegCIntrinsic");
     fs::path cFile = dir / "RegCIntrinsic.c";
     ASSERT_TRUE(fileExists(cFile)) << cFile;
     std::string generatedC = readText(cFile);
@@ -917,32 +1078,28 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("mj2x_math_abs_i32("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_math_round("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_int("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_int_radix("), std::string::npos)
-        << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_int_radix("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_long("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_long_radix("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_short("), std::string::npos)
-        << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_short("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_short_radix("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_byte("), std::string::npos)
-        << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_byte("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_byte_radix("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_boolean("), std::string::npos)
-        << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_float("), std::string::npos)
-        << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_double("), std::string::npos)
-        << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_boolean("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_float("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_parse_double("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_int_to_string("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_long_to_string("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_bool_to_string("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_char_to_string("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_float_to_string("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_double_to_string("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_object_to_string("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_double_to_string("), std::string::npos)
+        << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_object_to_string("), std::string::npos)
+        << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_int_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_long_compare("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_byte_compare("), std::string::npos) << generatedC;
@@ -982,10 +1139,12 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_NE(generatedC.find("mj2x_long_long_value("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_random_init(&native_r"), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_random_next_int(&native_r"), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_random_next_int_bound(&native_r"), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_random_next_int_bound(&native_r"), std::string::npos)
+        << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_length("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_char_at("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_hash_code("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
+        << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_equals("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_contains("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_concat("), std::string::npos) << generatedC;
@@ -997,39 +1156,51 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
         << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_replace_char("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_trim("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_split("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_split_limit("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_builder_append_jstring("), std::string::npos)
         << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_builder_append_object("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_append_i32("), std::string::npos)
-        << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_append_i64("), std::string::npos)
-        << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_append_bool("), std::string::npos)
-        << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_append_char("), std::string::npos)
-        << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_i32("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_i64("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_bool("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_char("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_builder_append_char_array("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_append_f32("), std::string::npos)
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_char_sequence_range("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_append_f64("), std::string::npos)
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_char_array_range("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_to_jstring("), std::string::npos)
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_code_point("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_destroy("), std::string::npos)
+    EXPECT_NE(generatedC.find("mj2x_string_builder_capacity("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_ensure_capacity("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_builder_materialize("), std::string::npos)
+    EXPECT_NE(generatedC.find("mj2x_string_builder_set_length("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_f32("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_append_f64("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_to_jstring("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_destroy("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_builder_materialize("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_buffer_append_char_sequence_range("), std::string::npos)
         << generatedC;
-    EXPECT_EQ(generatedC.find("mj2x_regc_local_string_builder"), std::string::npos)
+    EXPECT_NE(generatedC.find("mj2x_string_buffer_append_char_array_range("), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL}"),
+    EXPECT_NE(generatedC.find("mj2x_string_buffer_to_jstring("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_buffer_materialize("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("mj2x_string_buffer_destroy("), std::string::npos) << generatedC;
+    EXPECT_EQ(generatedC.find("mj2x_regc_local_string_builder"), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find(
+                  "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL}"),
               std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
+    EXPECT_NE(generatedC.find(
+                  "{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
               std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("{\"java/lang/String\", \"valueOf\", \"(D)Ljava/lang/String;\", NULL, NULL}"),
+    EXPECT_NE(generatedC.find(
+                  "{\"java/lang/String\", \"valueOf\", \"(D)Ljava/lang/String;\", NULL, NULL}"),
               std::string::npos)
         << generatedC;
     // The matched JDK call sites must not dispatch through the JNI call helper.
@@ -1140,12 +1311,15 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip) {
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_i32(\"java/lang/String\", \"contains\""),
               std::string::npos)
         << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/String\", \"split\""),
+              std::string::npos)
+        << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_alloc_object(\"java/lang/StringBuilder\""),
               std::string::npos)
         << generatedC;
-    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/StringBuilder\""),
-              std::string::npos)
+    EXPECT_EQ(generatedC.find("_mj2x_regc_call_ref(\"java/lang/StringBuilder\""), std::string::npos)
         << generatedC;
+    EXPECT_NE(generatedC.find("uint16_t mutable_string_value_"), std::string::npos) << generatedC;
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_void(\"java/lang/StringBuilder\""),
               std::string::npos)
         << generatedC;

@@ -32,4 +32,7 @@ target("mj2x_native")
     if is_plat("windows") then
         add_cflags("/TC", {tools = "cl"})
         add_cflags("/utf-8", {tools = "cl"})
+        add_cxxflags("/utf-8", {tools = "cl"})
+    else
+        add_syslinks("pthread")
     end

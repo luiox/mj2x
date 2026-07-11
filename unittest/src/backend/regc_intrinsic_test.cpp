@@ -32,13 +32,13 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
     auto&                               arena = Type::staticArena();
-    auto mn       = std::make_unique<MethodNode>(access,
-                                                 arena.intern(name.c_str()),
-                                                 arena.intern(desc.c_str()),
-                                                 ca::str::Utf8StringRef::from_cstr(""),
-                                                 noExcepts);
-    mn->maxStack  = maxStack;
-    mn->maxLocals = maxLocals;
+    auto                                mn    = std::make_unique<MethodNode>(access,
+                                           arena.intern(name.c_str()),
+                                           arena.intern(desc.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(""),
+                                           noExcepts);
+    mn->maxStack                              = maxStack;
+    mn->maxLocals                             = maxLocals;
     for (auto* insn : insns) mn->instructions.add(insn);
     return mn;
 }
@@ -146,10 +146,10 @@ TEST(RegCIntrinsicRegistryTest, MalformedIntrinsicArgumentCountIsUnsupported)
 
 TEST(RegCIntrinsicRegistryTest, MatchesParseRadixIntrinsics)
 {
-    auto parseInt = makeStaticCall("java/lang/Integer",
+    auto parseInt    = makeStaticCall("java/lang/Integer",
                                    "parseInt",
                                    "(Ljava/lang/String;I)I",
-                                   {
+                                      {
                                        RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
                                        RegOperand::fromInt(16, SSAType::I32),
                                    });
@@ -159,10 +159,10 @@ TEST(RegCIntrinsicRegistryTest, MatchesParseRadixIntrinsics)
     EXPECT_EQ(intDecision.symbol, "_mj2x_intrinsic_parse_int_radix");
     EXPECT_TRUE(intDecision.passContext);
 
-    auto parseLong = makeStaticCall("java/lang/Long",
+    auto parseLong    = makeStaticCall("java/lang/Long",
                                     "parseLong",
                                     "(Ljava/lang/String;I)J",
-                                    {
+                                       {
                                         RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
                                         RegOperand::fromInt(36, SSAType::I32),
                                     });
@@ -176,11 +176,11 @@ TEST(RegCIntrinsicRegistryTest, MatchesParseRadixIntrinsics)
 TEST(RegCIntrinsicRegistryTest, MatchesWrapperValueOfAndUnbox)
 {
     auto valueOf       = makeStaticCall("java/lang/Integer",
-                                        "valueOf",
-                                        "(I)Ljava/lang/Integer;",
+                                  "valueOf",
+                                  "(I)Ljava/lang/Integer;",
                                         {
-                                            RegOperand::fromInt(7, SSAType::I32),
-                                        });
+                                      RegOperand::fromInt(7, SSAType::I32),
+                                  });
     auto valueDecision = RegCIntrinsicRegistry::builtins().matchCall(valueOf);
     EXPECT_EQ(valueDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(valueDecision.emitKind, RegCIntrinsicEmitKind::WrapperValueOf);
@@ -226,12 +226,13 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperToStringIntrinsics)
     EXPECT_EQ(boolDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(boolDecision.symbol, "_mj2x_intrinsic_bool_to_string");
 
-    auto doubleToString = makeStaticCall("java/lang/Double",
-                                         "toString",
-                                         "(D)Ljava/lang/String;",
-                                         {
-                                             RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}),
-                                         });
+    auto doubleToString =
+        makeStaticCall("java/lang/Double",
+                       "toString",
+                       "(D)Ljava/lang/String;",
+                       {
+                           RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}),
+                       });
     auto doubleDecision = RegCIntrinsicRegistry::builtins().matchCall(doubleToString);
     EXPECT_EQ(doubleDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(doubleDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
@@ -240,10 +241,10 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperToStringIntrinsics)
 
 TEST(RegCIntrinsicRegistryTest, MatchesWrapperCompareIntrinsics)
 {
-    auto byteCompare = makeStaticCall("java/lang/Byte",
+    auto byteCompare  = makeStaticCall("java/lang/Byte",
                                       "compare",
                                       "(BB)I",
-                                      {
+                                       {
                                           RegOperand::fromInt(1, SSAType::I8),
                                           RegOperand::fromInt(2, SSAType::I8),
                                       });
@@ -252,10 +253,10 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperCompareIntrinsics)
     EXPECT_EQ(byteDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(byteDecision.symbol, "_mj2x_intrinsic_byte_compare");
 
-    auto boolCompare = makeStaticCall("java/lang/Boolean",
+    auto boolCompare  = makeStaticCall("java/lang/Boolean",
                                       "compare",
                                       "(ZZ)I",
-                                      {
+                                       {
                                           RegOperand::fromInt(1, SSAType::BOOL),
                                           RegOperand::fromInt(0, SSAType::BOOL),
                                       });
@@ -264,10 +265,10 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperCompareIntrinsics)
     EXPECT_EQ(boolDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(boolDecision.symbol, "_mj2x_intrinsic_bool_compare");
 
-    auto charCompare = makeStaticCall("java/lang/Character",
+    auto charCompare  = makeStaticCall("java/lang/Character",
                                       "compare",
                                       "(CC)I",
-                                      {
+                                       {
                                           RegOperand::fromInt(1, SSAType::CHAR),
                                           RegOperand::fromInt(2, SSAType::CHAR),
                                       });
@@ -276,25 +277,27 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperCompareIntrinsics)
     EXPECT_EQ(charDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(charDecision.symbol, "_mj2x_intrinsic_char_compare");
 
-    auto floatCompare = makeStaticCall("java/lang/Float",
-                                       "compare",
-                                       "(FF)I",
-                                       {
-                                           RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F32}),
-                                           RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F32}),
-                                       });
+    auto floatCompare =
+        makeStaticCall("java/lang/Float",
+                       "compare",
+                       "(FF)I",
+                       {
+                           RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F32}),
+                           RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F32}),
+                       });
     auto floatDecision = RegCIntrinsicRegistry::builtins().matchCall(floatCompare);
     EXPECT_EQ(floatDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(floatDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(floatDecision.symbol, "_mj2x_intrinsic_float_compare");
 
-    auto doubleCompare = makeStaticCall("java/lang/Double",
-                                        "compare",
-                                        "(DD)I",
-                                        {
-                                            RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}),
-                                            RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F64}),
-                                        });
+    auto doubleCompare =
+        makeStaticCall("java/lang/Double",
+                       "compare",
+                       "(DD)I",
+                       {
+                           RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}),
+                           RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F64}),
+                       });
     auto doubleDecision = RegCIntrinsicRegistry::builtins().matchCall(doubleCompare);
     EXPECT_EQ(doubleDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(doubleDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
@@ -360,50 +363,50 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
     EXPECT_EQ(appendDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuilder);
 
-    append.method.desc = "(Ljava/lang/Object;)Ljava/lang/StringBuilder;";
-    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
+    append.method.desc        = "(Ljava/lang/Object;)Ljava/lang/StringBuilder;";
+    append.args[1]            = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
     auto appendObjectDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendObjectDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendObjectDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendObjectDecision.symbol, "mj2x_string_builder_append_object");
 
-    append.method.desc = "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;";
-    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
+    append.method.desc              = "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;";
+    append.args[1]                  = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
     auto appendCharSequenceDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendCharSequenceDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendCharSequenceDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
-    EXPECT_EQ(appendCharSequenceDecision.symbol, "mj2x_string_builder_append_object");
+    EXPECT_EQ(appendCharSequenceDecision.symbol, "mj2x_string_builder_append_char_sequence");
 
-    append.method.desc = "(Z)Ljava/lang/StringBuilder;";
-    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::BOOL});
+    append.method.desc      = "(Z)Ljava/lang/StringBuilder;";
+    append.args[1]          = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::BOOL});
     auto appendBoolDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendBoolDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendBoolDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendBoolDecision.symbol, "mj2x_string_builder_append_bool");
 
-    append.method.desc = "(C)Ljava/lang/StringBuilder;";
-    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::CHAR});
+    append.method.desc      = "(C)Ljava/lang/StringBuilder;";
+    append.args[1]          = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::CHAR});
     auto appendCharDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendCharDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendCharDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendCharDecision.symbol, "mj2x_string_builder_append_char");
 
-    append.method.desc = "([C)Ljava/lang/StringBuilder;";
-    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
+    append.method.desc       = "([C)Ljava/lang/StringBuilder;";
+    append.args[1]           = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
     auto appendCharsDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendCharsDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendCharsDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendCharsDecision.symbol, "mj2x_string_builder_append_char_array");
 
-    append.method.desc = "(F)Ljava/lang/StringBuilder;";
-    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F32});
+    append.method.desc       = "(F)Ljava/lang/StringBuilder;";
+    append.args[1]           = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F32});
     auto appendFloatDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendFloatDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendFloatDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendFloatDecision.symbol, "mj2x_string_builder_append_f32");
 
-    append.method.desc = "(D)Ljava/lang/StringBuilder;";
-    append.args[1] = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F64});
+    append.method.desc        = "(D)Ljava/lang/StringBuilder;";
+    append.args[1]            = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F64});
     auto appendDoubleDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendDoubleDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendDoubleDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
@@ -419,8 +422,59 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
 
     auto toStringDecision = RegCIntrinsicRegistry::builtins().matchCall(toString);
     EXPECT_EQ(toStringDecision.kind, RegCIntrinsicDecisionKind::Emit);
-    EXPECT_EQ(toStringDecision.emitKind, RegCIntrinsicEmitKind::NativeObjectMethod);
+    EXPECT_EQ(toStringDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
     EXPECT_EQ(toStringDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuilder);
+}
+
+TEST(RegCIntrinsicRegistryTest, MatchesMutableStringRangeCapacityAndBufferIntrinsics)
+{
+    RegInstruction call;
+    call.kind                = RegInstructionKind::Call;
+    call.method.owner        = "java/lang/StringBuilder";
+    call.method.name         = "append";
+    call.method.desc         = "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;";
+    call.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+    call.args                = {
+        RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+        RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF}),
+        RegOperand::fromInt(1, SSAType::I32),
+        RegOperand::fromInt(3, SSAType::I32),
+    };
+    auto rangeDecision = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(rangeDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(rangeDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
+    EXPECT_EQ(rangeDecision.symbol, "mj2x_string_builder_append_char_sequence_range");
+
+    call.method.name = "capacity";
+    call.method.desc = "()I";
+    call.args.resize(1);
+    auto capacityDecision = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(capacityDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(capacityDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
+    EXPECT_EQ(capacityDecision.symbol, "mj2x_string_builder_capacity");
+
+    call.method.owner = "java/lang/StringBuffer";
+    call.method.name  = "append";
+    call.method.desc  = "([CII)Ljava/lang/StringBuffer;";
+    call.args         = {
+        RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+        RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF}),
+        RegOperand::fromInt(0, SSAType::I32),
+        RegOperand::fromInt(2, SSAType::I32),
+    };
+    auto bufferDecision = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(bufferDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(bufferDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuffer);
+    EXPECT_EQ(bufferDecision.symbol, "mj2x_string_buffer_append_char_array_range");
+
+    call.method.owner = "java/lang/String";
+    call.method.name  = "split";
+    call.method.desc  = "(Ljava/lang/String;I)[Ljava/lang/String;";
+    call.args.resize(3);
+    auto splitDecision = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(splitDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(splitDecision.emitKind, RegCIntrinsicEmitKind::StringRuntimeMethod);
+    EXPECT_EQ(splitDecision.symbol, "mj2x_string_split_limit");
 }
 
 TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
@@ -505,18 +559,18 @@ TEST(RegCIntrinsicRegistryTest, MatchesUtf16StringRuntimeIntrinsics)
         call.args                = std::move(args);
         return call;
     };
-    const RegOperand receiver =
-        RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF});
-    const RegOperand stringArg =
-        RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
+    const RegOperand receiver  = RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF});
+    const RegOperand stringArg = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
 
     const std::vector<std::pair<RegInstruction, std::string>> cases = {
         {makeCall("concat", "(Ljava/lang/String;)Ljava/lang/String;", {receiver, stringArg}),
          "mj2x_string_concat"},
-        {makeCall("substring", "(I)Ljava/lang/String;",
+        {makeCall("substring",
+                  "(I)Ljava/lang/String;",
                   {receiver, RegOperand::fromInt(1, SSAType::I32)}),
          "mj2x_string_substring_from"},
-        {makeCall("substring", "(II)Ljava/lang/String;",
+        {makeCall("substring",
+                  "(II)Ljava/lang/String;",
                   {receiver,
                    RegOperand::fromInt(1, SSAType::I32),
                    RegOperand::fromInt(2, SSAType::I32)}),
@@ -525,17 +579,20 @@ TEST(RegCIntrinsicRegistryTest, MatchesUtf16StringRuntimeIntrinsics)
          "mj2x_string_compare_to"},
         {makeCall("indexOf", "(I)I", {receiver, RegOperand::fromInt(65, SSAType::I32)}),
          "mj2x_string_index_of_char"},
-        {makeCall("indexOf", "(II)I",
+        {makeCall("indexOf",
+                  "(II)I",
                   {receiver,
                    RegOperand::fromInt(65, SSAType::I32),
                    RegOperand::fromInt(1, SSAType::I32)}),
          "mj2x_string_index_of_char_from"},
         {makeCall("indexOf", "(Ljava/lang/String;)I", {receiver, stringArg}),
          "mj2x_string_index_of_string"},
-        {makeCall("indexOf", "(Ljava/lang/String;I)I",
+        {makeCall("indexOf",
+                  "(Ljava/lang/String;I)I",
                   {receiver, stringArg, RegOperand::fromInt(1, SSAType::I32)}),
          "mj2x_string_index_of_string_from"},
-        {makeCall("replace", "(CC)Ljava/lang/String;",
+        {makeCall("replace",
+                  "(CC)Ljava/lang/String;",
                   {receiver,
                    RegOperand::fromInt('a', SSAType::CHAR),
                    RegOperand::fromInt('b', SSAType::CHAR)}),
@@ -650,31 +707,30 @@ TEST(RegCIntrinsicTest, ParseRadixLoweredToIntrinsicNotJni)
     // static long parseRadix(String i, String l) {
     //   return Integer.parseInt(i, 16) + Long.parseLong(l, 36);
     // }
-    auto result = emitRegC(
-        "parseRadix",
-        "(Ljava/lang/String;Ljava/lang/String;)J",
-        {
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new IntInsnNode(Opcodes::BIPUSH, 16),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Integer"),
-                               U("parseInt"),
-                               U("(Ljava/lang/String;I)I"),
-                               false),
-            new InsnNode(Opcodes::I2L),
-            new VarInsnNode(Opcodes::ALOAD, 1),
-            new IntInsnNode(Opcodes::BIPUSH, 36),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Long"),
-                               U("parseLong"),
-                               U("(Ljava/lang/String;I)J"),
-                               false),
-            new InsnNode(Opcodes::LADD),
-            new InsnNode(Opcodes::LRETURN),
-        },
-        3,
-        2,
-        reason);
+    auto result = emitRegC("parseRadix",
+                           "(Ljava/lang/String;Ljava/lang/String;)J",
+                           {
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new IntInsnNode(Opcodes::BIPUSH, 16),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Integer"),
+                                                  U("parseInt"),
+                                                  U("(Ljava/lang/String;I)I"),
+                                                  false),
+                               new InsnNode(Opcodes::I2L),
+                               new VarInsnNode(Opcodes::ALOAD, 1),
+                               new IntInsnNode(Opcodes::BIPUSH, 36),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Long"),
+                                                  U("parseLong"),
+                                                  U("(Ljava/lang/String;I)J"),
+                                                  false),
+                               new InsnNode(Opcodes::LADD),
+                               new InsnNode(Opcodes::LRETURN),
+                           },
+                           3,
+                           2,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_parse_int_radix("), std::string::npos)
@@ -696,43 +752,35 @@ TEST(RegCIntrinsicTest, StringMethodsLoweredToIntrinsicsNotJni)
     // static int strings(String s, Object o) {
     //   return s.length() + s.charAt(1) + s.hashCode() + (s.equals(o) ? 1 : 0);
     // }
-    auto result = emitRegC("strings",
-                           "(Ljava/lang/String;Ljava/lang/Object;)I",
-                           {
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("length"),
-                                                  U("()I"),
-                                                  false),
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new InsnNode(Opcodes::ICONST_1),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("charAt"),
-                                                  U("(I)C"),
-                                                  false),
-                               new InsnNode(Opcodes::IADD),
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("hashCode"),
-                                                  U("()I"),
-                                                  false),
-                               new InsnNode(Opcodes::IADD),
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new VarInsnNode(Opcodes::ALOAD, 1),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("equals"),
-                                                  U("(Ljava/lang/Object;)Z"),
-                                                  false),
-                               new InsnNode(Opcodes::IADD),
-                               new InsnNode(Opcodes::IRETURN),
-                           },
-                           3,
-                           2,
-                           reason);
+    auto result = emitRegC(
+        "strings",
+        "(Ljava/lang/String;Ljava/lang/Object;)I",
+        {
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new InsnNode(Opcodes::ICONST_1),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("charAt"), U("(I)C"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("hashCode"), U("()I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new VarInsnNode(Opcodes::ALOAD, 1),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("equals"),
+                               U("(Ljava/lang/Object;)Z"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        3,
+        2,
+        reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_length("), std::string::npos)
@@ -758,22 +806,20 @@ TEST(RegCIntrinsicTest, DiscardedStringIntrinsicReturnStillLowers)
 {
     std::string reason;
     // static int discard(String s) { s.length(); return 7; }
-    auto result = emitRegC("discardStringLength",
-                           "(Ljava/lang/String;)I",
-                           {
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("length"),
-                                                  U("()I"),
-                                                  false),
-                               new InsnNode(Opcodes::POP),
-                               new IntInsnNode(Opcodes::BIPUSH, 7),
-                               new InsnNode(Opcodes::IRETURN),
-                           },
-                           1,
-                           1,
-                           reason);
+    auto result = emitRegC(
+        "discardStringLength",
+        "(Ljava/lang/String;)I",
+        {
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
+            new InsnNode(Opcodes::POP),
+            new IntInsnNode(Opcodes::BIPUSH, 7),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        1,
+        1,
+        reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_length("), std::string::npos)
@@ -792,52 +838,50 @@ TEST(RegCIntrinsicTest, MoreStringMethodsLoweredToIntrinsicsNotJni)
     //       + (s.endsWith("fix") ? 1 : 0) + (s.contains("needle") ? 1 : 0)
     //       + s.indexOf("needle");
     // }
-    auto result = emitRegC("moreStrings",
-                           "(Ljava/lang/String;)I",
-                           {
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("isEmpty"),
-                                                  U("()Z"),
-                                                  false),
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new LdcInsnNode(std::string("pre")),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("startsWith"),
-                                                  U("(Ljava/lang/String;)Z"),
-                                                  false),
-                               new InsnNode(Opcodes::IADD),
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new LdcInsnNode(std::string("fix")),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("endsWith"),
-                                                  U("(Ljava/lang/String;)Z"),
-                                                  false),
-                               new InsnNode(Opcodes::IADD),
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new LdcInsnNode(std::string("needle")),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("contains"),
-                                                  U("(Ljava/lang/CharSequence;)Z"),
-                                                  false),
-                               new InsnNode(Opcodes::IADD),
-                               new VarInsnNode(Opcodes::ALOAD, 0),
-                               new LdcInsnNode(std::string("needle")),
-                               new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                                  U("java/lang/String"),
-                                                  U("indexOf"),
-                                                  U("(Ljava/lang/String;)I"),
-                                                  false),
-                               new InsnNode(Opcodes::IADD),
-                               new InsnNode(Opcodes::IRETURN),
-                           },
-                           3,
-                           1,
-                           reason);
+    auto result = emitRegC(
+        "moreStrings",
+        "(Ljava/lang/String;)I",
+        {
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("isEmpty"), U("()Z"), false),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new LdcInsnNode(std::string("pre")),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("startsWith"),
+                               U("(Ljava/lang/String;)Z"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new LdcInsnNode(std::string("fix")),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("endsWith"),
+                               U("(Ljava/lang/String;)Z"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new LdcInsnNode(std::string("needle")),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("contains"),
+                               U("(Ljava/lang/CharSequence;)Z"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new LdcInsnNode(std::string("needle")),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("indexOf"),
+                               U("(Ljava/lang/String;)I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        3,
+        1,
+        reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_is_empty("), std::string::npos)
@@ -867,7 +911,7 @@ TEST(RegCIntrinsicTest, MoreStringMethodsLoweredToIntrinsicsNotJni)
 TEST(RegCIntrinsicTest, Utf16StringOperationsLowerToCrtAbi)
 {
     std::string reason;
-    auto result = emitRegC(
+    auto        result = emitRegC(
         "utf16Strings",
         "(Ljava/lang/String;Ljava/lang/String;)I",
         {
@@ -899,20 +943,14 @@ TEST(RegCIntrinsicTest, Utf16StringOperationsLowerToCrtAbi)
                                false),
             new VarInsnNode(Opcodes::ALOAD, 0),
             new LdcInsnNode(static_cast<int32_t>(0x1F600)),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("indexOf"),
-                               U("(I)I"),
-                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("indexOf"), U("(I)I"), false),
             new InsnNode(Opcodes::IADD),
             new VarInsnNode(Opcodes::ALOAD, 0),
             new IntInsnNode(Opcodes::BIPUSH, 'x'),
             new InsnNode(Opcodes::ICONST_1),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("indexOf"),
-                               U("(II)I"),
-                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("indexOf"), U("(II)I"), false),
             new InsnNode(Opcodes::IADD),
             new VarInsnNode(Opcodes::ALOAD, 0),
             new VarInsnNode(Opcodes::ALOAD, 1),
@@ -944,11 +982,8 @@ TEST(RegCIntrinsicTest, Utf16StringOperationsLowerToCrtAbi)
                                U("trim"),
                                U("()Ljava/lang/String;"),
                                false),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("length"),
-                               U("()I"),
-                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
             new InsnNode(Opcodes::IADD),
             new InsnNode(Opcodes::IRETURN),
         },
@@ -1069,11 +1104,9 @@ TEST(RegCIntrinsicTest, WrapperParseCompareToStringLoweredToIntrinsicsNotJni)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_long_compare("), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_int_compare"),
-              std::string::npos)
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_int_compare"), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_long_compare"),
-              std::string::npos)
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_long_compare"), std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("static mj2x_ref _mj2x_intrinsic_int_to_string"),
               std::string::npos)
@@ -1096,71 +1129,71 @@ TEST(RegCIntrinsicTest, WrapperParseCompareToStringLoweredToIntrinsicsNotJni)
 TEST(RegCIntrinsicTest, RemainingWrapperParsersUseDedicatedIntrinsics)
 {
     std::string reason;
-    auto result = emitRegC(
-        "parseWrappers",
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)D",
-        {
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Short"),
-                               U("parseShort"),
-                               U("(Ljava/lang/String;)S"),
-                               false),
-            new InsnNode(Opcodes::I2D),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new IntInsnNode(Opcodes::BIPUSH, 16),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Short"),
-                               U("parseShort"),
-                               U("(Ljava/lang/String;I)S"),
-                               false),
-            new InsnNode(Opcodes::I2D),
-            new InsnNode(Opcodes::DADD),
-            new VarInsnNode(Opcodes::ALOAD, 1),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Byte"),
-                               U("parseByte"),
-                               U("(Ljava/lang/String;)B"),
-                               false),
-            new InsnNode(Opcodes::I2D),
-            new InsnNode(Opcodes::DADD),
-            new VarInsnNode(Opcodes::ALOAD, 1),
-            new IntInsnNode(Opcodes::BIPUSH, 16),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Byte"),
-                               U("parseByte"),
-                               U("(Ljava/lang/String;I)B"),
-                               false),
-            new InsnNode(Opcodes::I2D),
-            new InsnNode(Opcodes::DADD),
-            new VarInsnNode(Opcodes::ALOAD, 2),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Boolean"),
-                               U("parseBoolean"),
-                               U("(Ljava/lang/String;)Z"),
-                               false),
-            new InsnNode(Opcodes::I2D),
-            new InsnNode(Opcodes::DADD),
-            new VarInsnNode(Opcodes::ALOAD, 3),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Float"),
-                               U("parseFloat"),
-                               U("(Ljava/lang/String;)F"),
-                               false),
-            new InsnNode(Opcodes::F2D),
-            new InsnNode(Opcodes::DADD),
-            new VarInsnNode(Opcodes::ALOAD, 4),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Double"),
-                               U("parseDouble"),
-                               U("(Ljava/lang/String;)D"),
-                               false),
-            new InsnNode(Opcodes::DADD),
-            new InsnNode(Opcodes::DRETURN),
-        },
-        6,
-        5,
-        reason);
+    auto        result = emitRegC("parseWrappers",
+                           "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/"
+                                  "String;Ljava/lang/String;)D",
+                                  {
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Short"),
+                                                  U("parseShort"),
+                                                  U("(Ljava/lang/String;)S"),
+                                                  false),
+                               new InsnNode(Opcodes::I2D),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new IntInsnNode(Opcodes::BIPUSH, 16),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Short"),
+                                                  U("parseShort"),
+                                                  U("(Ljava/lang/String;I)S"),
+                                                  false),
+                               new InsnNode(Opcodes::I2D),
+                               new InsnNode(Opcodes::DADD),
+                               new VarInsnNode(Opcodes::ALOAD, 1),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Byte"),
+                                                  U("parseByte"),
+                                                  U("(Ljava/lang/String;)B"),
+                                                  false),
+                               new InsnNode(Opcodes::I2D),
+                               new InsnNode(Opcodes::DADD),
+                               new VarInsnNode(Opcodes::ALOAD, 1),
+                               new IntInsnNode(Opcodes::BIPUSH, 16),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Byte"),
+                                                  U("parseByte"),
+                                                  U("(Ljava/lang/String;I)B"),
+                                                  false),
+                               new InsnNode(Opcodes::I2D),
+                               new InsnNode(Opcodes::DADD),
+                               new VarInsnNode(Opcodes::ALOAD, 2),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Boolean"),
+                                                  U("parseBoolean"),
+                                                  U("(Ljava/lang/String;)Z"),
+                                                  false),
+                               new InsnNode(Opcodes::I2D),
+                               new InsnNode(Opcodes::DADD),
+                               new VarInsnNode(Opcodes::ALOAD, 3),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Float"),
+                                                  U("parseFloat"),
+                                                  U("(Ljava/lang/String;)F"),
+                                                  false),
+                               new InsnNode(Opcodes::F2D),
+                               new InsnNode(Opcodes::DADD),
+                               new VarInsnNode(Opcodes::ALOAD, 4),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Double"),
+                                                  U("parseDouble"),
+                                                  U("(Ljava/lang/String;)D"),
+                                                  false),
+                               new InsnNode(Opcodes::DADD),
+                               new InsnNode(Opcodes::DRETURN),
+                           },
+                           6,
+                           5,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     const char* symbols[] = {
@@ -1186,58 +1219,57 @@ TEST(RegCIntrinsicTest, MoreWrapperToStringLoweredToIntrinsicsNotJni)
     //   Byte.toString(b); Short.toString(s); Boolean.toString(z); Character.toString(c);
     //   Float.toString(f); Double.toString(d); return 0;
     // }
-    auto result = emitRegC(
-        "moreWrapperStrings",
-        "(BSZCFD)I",
-        {
-            new VarInsnNode(Opcodes::ILOAD, 0),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Byte"),
-                               U("toString"),
-                               U("(B)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ILOAD, 1),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Short"),
-                               U("toString"),
-                               U("(S)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ILOAD, 2),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Boolean"),
-                               U("toString"),
-                               U("(Z)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ILOAD, 3),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Character"),
-                               U("toString"),
-                               U("(C)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::FLOAD, 4),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Float"),
-                               U("toString"),
-                               U("(F)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::DLOAD, 5),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Double"),
-                               U("toString"),
-                               U("(D)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new InsnNode(Opcodes::ICONST_0),
-            new InsnNode(Opcodes::IRETURN),
-        },
-        2,
-        7,
-        reason);
+    auto result = emitRegC("moreWrapperStrings",
+                           "(BSZCFD)I",
+                           {
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Byte"),
+                                                  U("toString"),
+                                                  U("(B)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Short"),
+                                                  U("toString"),
+                                                  U("(S)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::ILOAD, 2),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Boolean"),
+                                                  U("toString"),
+                                                  U("(Z)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::ILOAD, 3),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Character"),
+                                                  U("toString"),
+                                                  U("(C)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::FLOAD, 4),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Float"),
+                                                  U("toString"),
+                                                  U("(F)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::DLOAD, 5),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Double"),
+                                                  U("toString"),
+                                                  U("(D)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           2,
+                           7,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_int_to_string("), std::string::npos)
@@ -1299,11 +1331,8 @@ TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
             new InsnNode(Opcodes::IADD),
             new VarInsnNode(Opcodes::ILOAD, 3),
             new IntInsnNode(Opcodes::BIPUSH, 65),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/Character"),
-                               U("compare"),
-                               U("(CC)I"),
-                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Character"), U("compare"), U("(CC)I"), false),
             new InsnNode(Opcodes::IADD),
             new VarInsnNode(Opcodes::FLOAD, 4),
             new InsnNode(Opcodes::FCONST_0),
@@ -1334,20 +1363,15 @@ TEST(RegCIntrinsicTest, MoreWrapperCompareLoweredToIntrinsicsNotJni)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_double_compare("), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_byte_compare"),
-              std::string::npos)
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_byte_compare"), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_short_compare"),
-              std::string::npos)
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_short_compare"), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_bool_compare"),
-              std::string::npos)
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_bool_compare"), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_char_compare"),
-              std::string::npos)
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_char_compare"), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_float_compare"),
-              std::string::npos)
+    EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_float_compare"), std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("static int32_t _mj2x_intrinsic_double_compare"),
               std::string::npos)
@@ -1380,65 +1404,64 @@ TEST(RegCIntrinsicTest, StringValueOfLoweredToIntrinsicsNotJni)
     //   String.valueOf(i); String.valueOf(l); String.valueOf(b); String.valueOf(c);
     //   String.valueOf(f); String.valueOf(d); String.valueOf(o); return 0;
     // }
-    auto result = emitRegC(
-        "stringValues",
-        "(IJZCFDLjava/lang/Object;)I",
-        {
-            new VarInsnNode(Opcodes::ILOAD, 0),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/String"),
-                               U("valueOf"),
-                               U("(I)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::LLOAD, 1),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/String"),
-                               U("valueOf"),
-                               U("(J)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ILOAD, 3),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/String"),
-                               U("valueOf"),
-                               U("(Z)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ILOAD, 4),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/String"),
-                               U("valueOf"),
-                               U("(C)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::FLOAD, 5),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/String"),
-                               U("valueOf"),
-                               U("(F)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::DLOAD, 6),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/String"),
-                               U("valueOf"),
-                               U("(D)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ALOAD, 8),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("java/lang/String"),
-                               U("valueOf"),
-                               U("(Ljava/lang/Object;)Ljava/lang/String;"),
-                               false),
-            new InsnNode(Opcodes::POP),
-            new InsnNode(Opcodes::ICONST_0),
-            new InsnNode(Opcodes::IRETURN),
-        },
-        3,
-        9,
-        reason);
+    auto result = emitRegC("stringValues",
+                           "(IJZCFDLjava/lang/Object;)I",
+                           {
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/String"),
+                                                  U("valueOf"),
+                                                  U("(I)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::LLOAD, 1),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/String"),
+                                                  U("valueOf"),
+                                                  U("(J)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::ILOAD, 3),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/String"),
+                                                  U("valueOf"),
+                                                  U("(Z)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::ILOAD, 4),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/String"),
+                                                  U("valueOf"),
+                                                  U("(C)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::FLOAD, 5),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/String"),
+                                                  U("valueOf"),
+                                                  U("(F)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::DLOAD, 6),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/String"),
+                                                  U("valueOf"),
+                                                  U("(D)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::ALOAD, 8),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/String"),
+                                                  U("valueOf"),
+                                                  U("(Ljava/lang/Object;)Ljava/lang/String;"),
+                                                  false),
+                               new InsnNode(Opcodes::POP),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           3,
+                           9,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_int_to_string("), std::string::npos)
@@ -1531,7 +1554,7 @@ TEST(RegCIntrinsicTest, EscapingWrapperValueFallsBackToJavaObject)
 TEST(RegCIntrinsicTest, WrapperFieldAndUnknownCallEscapesFallBack)
 {
     std::string reason;
-    auto fieldResult = emitRegC(
+    auto        fieldResult = emitRegC(
         "storeBox",
         "(I)V",
         {
@@ -1541,8 +1564,7 @@ TEST(RegCIntrinsicTest, WrapperFieldAndUnknownCallEscapesFallBack)
                                U("valueOf"),
                                U("(I)Ljava/lang/Integer;"),
                                false),
-            new FieldInsnNode(
-                Opcodes::PUTSTATIC, U("Foo"), U("sink"), U("Ljava/lang/Object;")),
+            new FieldInsnNode(Opcodes::PUTSTATIC, U("Foo"), U("sink"), U("Ljava/lang/Object;")),
             new InsnNode(Opcodes::RETURN),
         },
         1,
@@ -1564,19 +1586,15 @@ TEST(RegCIntrinsicTest, WrapperFieldAndUnknownCallEscapesFallBack)
                                U("valueOf"),
                                U("(I)Ljava/lang/Integer;"),
                                false),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("Foo"),
-                               U("consume"),
-                               U("(Ljava/lang/Object;)V"),
-                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("Foo"), U("consume"), U("(Ljava/lang/Object;)V"), false),
             new InsnNode(Opcodes::RETURN),
         },
         1,
         1,
         reason);
     ASSERT_TRUE(callResult.ok) << callResult.reason;
-    EXPECT_EQ(callResult.source.find("mj2x_int native_r"), std::string::npos)
-        << callResult.source;
+    EXPECT_EQ(callResult.source.find("mj2x_int native_r"), std::string::npos) << callResult.source;
     EXPECT_NE(callResult.source.find("{\"Foo\", \"consume\", \"(Ljava/lang/Object;)V\""),
               std::string::npos)
         << callResult.source;
@@ -1640,8 +1658,10 @@ TEST(RegCIntrinsicTest, EscapingRandomStateFailsClosedWithReason)
 TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
 {
     std::string reason;
-    // static String build(String s, int x, Object o, CharSequence cs, float f, double d, char[] chars) {
-    //   return new StringBuilder().append(s).append(x).append(7L).append(true).append('!').append(chars).append(f).append(d).append(o).append(cs).toString();
+    // static String build(String s, int x, Object o, CharSequence cs, float f, double d, char[]
+    // chars) {
+    //   return new
+    //   StringBuilder().append(s).append(x).append(7L).append(true).append('!').append(chars).append(f).append(d).append(o).append(cs).toString();
     // }
     auto result = emitRegC(
         "buildString",
@@ -1743,8 +1763,9 @@ TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
     EXPECT_NE(result.source.find("mj2x_string_builder_append_char(_mj2x_regc_current_context()"),
               std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("mj2x_string_builder_append_char_array(_mj2x_regc_current_context()"),
-              std::string::npos)
+    EXPECT_NE(
+        result.source.find("mj2x_string_builder_append_char_array(_mj2x_regc_current_context()"),
+        std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("mj2x_string_builder_append_f32(_mj2x_regc_current_context()"),
               std::string::npos)
@@ -1755,15 +1776,13 @@ TEST(RegCIntrinsicTest, StringBuilderChainLoweredToNativeState)
     EXPECT_NE(result.source.find("mj2x_string_builder_append_object(_mj2x_regc_current_context()"),
               std::string::npos)
         << result.source;
-    EXPECT_EQ(
-        result.source.find("_mj2x_regc_call_ref(\"java/lang/StringBuilder\", \"append\""),
-        std::string::npos)
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_ref(\"java/lang/StringBuilder\", \"append\""),
+              std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("mj2x_string_builder_to_jstring(_mj2x_regc_current_context()"),
               std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("mj2x_string_builder_destroy(native_owner_r"),
-              std::string::npos)
+    EXPECT_NE(result.source.find("mj2x_string_builder_destroy(native_owner_r"), std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("mj2x_regc_local_string_builder"), std::string::npos)
         << result.source;
@@ -1800,17 +1819,15 @@ TEST(RegCIntrinsicTest, ReturningStringBuilderMaterializesAndCleansUpNativeState
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("mj2x_string_builder_materialize("), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("mj2x_string_builder_destroy(native_owner_r"),
-              std::string::npos)
+    EXPECT_NE(result.source.find("mj2x_string_builder_destroy(native_owner_r"), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos)
-        << result.source;
+    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos) << result.source;
 }
 
 TEST(RegCIntrinsicTest, StringBuilderUnknownCallArgumentMaterializesLazily)
 {
     std::string reason;
-    auto result = emitRegC(
+    auto        result = emitRegC(
         "consumeBuilder",
         "()V",
         {
@@ -1824,11 +1841,8 @@ TEST(RegCIntrinsicTest, StringBuilderUnknownCallArgumentMaterializesLazily)
                                U("append"),
                                U("(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
                                false),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("Foo"),
-                               U("consume"),
-                               U("(Ljava/lang/Object;)V"),
-                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("Foo"), U("consume"), U("(Ljava/lang/Object;)V"), false),
             new InsnNode(Opcodes::RETURN),
         },
         3,
@@ -1850,7 +1864,7 @@ TEST(RegCIntrinsicTest, StringBuilderUnknownCallArgumentMaterializesLazily)
 TEST(RegCIntrinsicTest, StringBuilderFieldAndArrayStoresMaterialize)
 {
     std::string reason;
-    auto fieldResult = emitRegC(
+    auto        fieldResult = emitRegC(
         "storeBuilderField",
         "()V",
         {
@@ -1858,10 +1872,7 @@ TEST(RegCIntrinsicTest, StringBuilderFieldAndArrayStoresMaterialize)
             new InsnNode(Opcodes::DUP),
             new MethodInsnNode(
                 Opcodes::INVOKESPECIAL, U("java/lang/StringBuilder"), U("<init>"), U("()V"), false),
-            new FieldInsnNode(Opcodes::PUTSTATIC,
-                              U("Foo"),
-                              U("sink"),
-                              U("Ljava/lang/Object;")),
+            new FieldInsnNode(Opcodes::PUTSTATIC, U("Foo"), U("sink"), U("Ljava/lang/Object;")),
             new InsnNode(Opcodes::RETURN),
         },
         2,
@@ -1899,9 +1910,9 @@ TEST(RegCIntrinsicTest, StringBuilderFieldAndArrayStoresMaterialize)
 
 TEST(RegCIntrinsicTest, StringBuilderCfgAliasKeepsOpaqueHandle)
 {
-    auto* skipAppend = new LabelNode();
+    auto*       skipAppend = new LabelNode();
     std::string reason;
-    auto result = emitRegC(
+    auto        result = emitRegC(
         "cfgBuilder",
         "(Z)Ljava/lang/String;",
         {
@@ -1945,7 +1956,7 @@ TEST(RegCIntrinsicTest, StringBuilderCfgAliasKeepsOpaqueHandle)
 TEST(RegCIntrinsicTest, StringBuilderUseAfterEscapeFallsBackToJavaObject)
 {
     std::string reason;
-    auto result = emitRegC(
+    auto        result = emitRegC(
         "mutateAfterEscape",
         "()Ljava/lang/String;",
         {
@@ -1954,11 +1965,8 @@ TEST(RegCIntrinsicTest, StringBuilderUseAfterEscapeFallsBackToJavaObject)
             new MethodInsnNode(
                 Opcodes::INVOKESPECIAL, U("java/lang/StringBuilder"), U("<init>"), U("()V"), false),
             new InsnNode(Opcodes::DUP),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               U("Foo"),
-                               U("consume"),
-                               U("(Ljava/lang/Object;)V"),
-                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("Foo"), U("consume"), U("(Ljava/lang/Object;)V"), false),
             new LdcInsnNode(U("x")),
             new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
                                U("java/lang/StringBuilder"),
@@ -1981,6 +1989,86 @@ TEST(RegCIntrinsicTest, StringBuilderUseAfterEscapeFallsBackToJavaObject)
               std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("mj2x_string_builder_materialize("), std::string::npos)
+        << result.source;
+}
+
+TEST(RegCIntrinsicTest, StringBufferChainUsesSynchronizedOpaqueState)
+{
+    std::string reason;
+    auto        result = emitRegC(
+        "bufferChain",
+        "()Ljava/lang/String;",
+        {
+            new TypeInsnNode(Opcodes::NEW, U("java/lang/StringBuffer")),
+            new InsnNode(Opcodes::DUP),
+            new MethodInsnNode(
+                Opcodes::INVOKESPECIAL, U("java/lang/StringBuffer"), U("<init>"), U("()V"), false),
+            new LdcInsnNode(U("x")),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/StringBuffer"),
+                               U("append"),
+                               U("(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
+                               false),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/StringBuffer"),
+                               U("toString"),
+                               U("()Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::ARETURN),
+        },
+        3,
+        0,
+        reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("mj2x_string_buffer_init("), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("mj2x_string_buffer_append_jstring("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("mj2x_string_buffer_to_jstring("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("mj2x_string_buffer_destroy("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_alloc_object(\"java/lang/StringBuffer\")"),
+              std::string::npos)
+        << result.source;
+}
+
+TEST(RegCIntrinsicTest, StringBufferUseAfterEscapeFallsBackToJavaObject)
+{
+    std::string reason;
+    auto        result = emitRegC(
+        "bufferMutateAfterEscape",
+        "()Ljava/lang/String;",
+        {
+            new TypeInsnNode(Opcodes::NEW, U("java/lang/StringBuffer")),
+            new InsnNode(Opcodes::DUP),
+            new MethodInsnNode(
+                Opcodes::INVOKESPECIAL, U("java/lang/StringBuffer"), U("<init>"), U("()V"), false),
+            new InsnNode(Opcodes::DUP),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("Foo"), U("consume"), U("(Ljava/lang/Object;)V"), false),
+            new LdcInsnNode(U("x")),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/StringBuffer"),
+                               U("append"),
+                               U("(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
+                               false),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/StringBuffer"),
+                               U("toString"),
+                               U("()Ljava/lang/String;"),
+                               false),
+            new InsnNode(Opcodes::ARETURN),
+        },
+        3,
+        0,
+        reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_regc_alloc_object(\"java/lang/StringBuffer\")"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("mj2x_string_buffer_materialize("), std::string::npos)
         << result.source;
 }
 
