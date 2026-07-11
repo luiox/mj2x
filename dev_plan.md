@@ -22,8 +22,6 @@
 - [ ] **R5:mjdbg 闭环验证**。用 mjdbg / c2j 红队验证 RegC 保护强度,产出量化结论。前置:R3 RegC ABI live 验证 + mjdbg 样本反馈。
 - [ ] **RegC/R3 live 验证(剩余)**:保持现有 intrinsic(Math/wrapper parse/toString/compare/value-unbox/String.valueOf/Random/String UTF-16 hot paths)在统一 registry 内稳定;剩余工作优先是 Random escape 边界、unsupported reason、benchmark 和产品入口回归。#439 Math/Random 已有 runtime/emitter/sample 验证,可按验证结果关闭。
 - [ ] **RegC JNI cache CSE(后续)**:已完成 generated C TU 级 static/instance method、static/instance field、class cache interning,且 String intrinsic 的 `java/lang/String` class cache、固定异常类(`NullPointerException`/`ClassCastException`/`OutOfMemoryError`/`StringIndexOutOfBoundsException`/`UnsupportedOperationException`)、编译期 descriptor 的 `new`/reference-array allocation 和 multi-array 子 descriptor 已纳入统一 class cache pool;剩余评估动态 `_mj2x_regc_find_class`/runtime `class_name` 回调是否继续优化,并补 benchmark 对比。
-- [ ] **运行时反侦测体系(issue #411,剩余集成)**:mockable core 已覆盖四类威胁的第二切片——IDE/JDWP 参数、java agent 参数与模块名、JVMTI dump 模块名与 capability 快照、native debugger API 与软件断点字节扫描。剩余工作是接入真实运行时枚举/查询:进程模块枚举、JVMTI capability live query、PEB/NtQuery/硬件断点/代码段扫描、策略层 fail-closed 编排。
-- [ ] **xmake 项目生成器重构**(`feat/mj2x/xmake-project-generator` 分支):当前 emit 后字符串改写,迁到 codegen 阶段直出。前置:建立 golden test 固化当前输出。
 
 ## 下一步验证命令
 

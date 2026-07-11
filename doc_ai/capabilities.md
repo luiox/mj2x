@@ -21,7 +21,7 @@
 | 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
 | `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
 | `--generate-cmake <dir>` 输出独立 CMake native 工程 | ✅ | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
-| `--generate-xmake <dir>` 输出独立 xmake native 工程,`mj2x-cli` 按 `mj2x-crt/resources.manifest` 构建期内嵌并释放 CRT 源文件/模板资源,可支持单 exe 使用 | ✅ | `CliTest.GenerateXmakeProject*` |
+| `--generate-xmake <dir>` 输出独立 xmake native 工程,`mj2x-cli` 按 `mj2x-crt/resources.manifest` 构建期内嵌并释放 CRT 源文件/模板资源;模板变量在 project codegen 写出阶段单遍展开,不再对完整输出做 `replaceAll` 后处理 | ✅ | `CliTest.GenerateXmakeProject*` + `test_resource/native_project/*.golden` |
 | StackC/RegC class 和 jar 重复生成稳定性 | ✅ | `CliTest.ClassInputRepeatableForStackCAndRegC`、`CliTest.JarInputRepeatableForStackCAndRegC`、`tools/product_sample_smoke.ps1 -Mode fast` |
 
 ---
@@ -151,8 +151,9 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
 | String UTF-16 intrinsic | ✅ read hot paths + concat/substring/compareTo/indexOf overloads/replace/trim/split;split 字面量 fast path 与 JDK regex fallback 均有 native E2E |
 | StringBuilder/StringBuffer opaque CRT state + materialize | ✅ range/capacity 常用 API、escape-aware materialize/fallback、StringBuffer 可重入平台锁与并发 CRT 测试 + native E2E |
-| antidebug 软件断点字节扫描 | ✅ mockable runtime 单测 |
-| antijvmti agent/JDWP 参数、模块名、dump capability 信号聚合 | ✅ mockable runtime 单测 |
+| antidebug live probe | ✅ Windows IsDebuggerPresent/PEB/NtGlobalFlag/NtQuery debug port/object/flags/硬件断点 + mockable 软件断点扫描 |
+| antijvmti live probe | ✅ Windows Toolhelp/Linux proc maps 模块枚举 + JavaVM/JVMTI capability query + agent/JDWP/dump 信号聚合 |
+| runtime detection policy | ✅ 聚合 debug/agent/probe-failure 报告并显式返回 fail-closed 判定,不在探针内主动退出 |
 
 ---
 

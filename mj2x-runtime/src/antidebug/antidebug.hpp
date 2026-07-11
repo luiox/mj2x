@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace mj2x::runtime::antidebug {
 
@@ -18,7 +19,18 @@ namespace mj2x::runtime::antidebug {
 struct DebugSignals {
     bool debuggerPresent = false;
     bool remoteDebuggerPresent = false;
+    bool pebBeingDebugged = false;
+    bool pebDebugHeapFlags = false;
+    bool processDebugPort = false;
+    bool processDebugObject = false;
+    bool processDebugFlags = false;
+    bool hardwareBreakpoint = false;
     bool softwareBreakpointPattern = false;
+    bool platformProbeAvailable = false;
+    bool pebProbeAvailable = false;
+    bool ntQueryProbeAvailable = false;
+    bool hardwareBreakpointProbeAvailable = false;
+    bool nativeProbeFailed = false;
 };
 
 /**
@@ -28,6 +40,23 @@ struct DebugSignals {
  * unavailable.
  */
 DebugSignals collectDebugSignals();
+
+/**
+ * @brief Check the Windows PEB NtGlobalFlag debugger-related heap bits.
+ *
+ * @details This helper is platform-neutral so snapshot mapping remains directly
+ * testable without attaching a debugger.
+ */
+bool hasSuspiciousNtGlobalFlag(std::uint32_t ntGlobalFlag);
+
+/**
+ * @brief Check whether x86/x64 debug registers describe an enabled breakpoint.
+ */
+bool hasEnabledHardwareBreakpoint(std::uintptr_t dr0,
+                                  std::uintptr_t dr1,
+                                  std::uintptr_t dr2,
+                                  std::uintptr_t dr3,
+                                  std::uintptr_t dr7);
 
 /**
  * @brief 扫描内存片段中是否存在常见软件断点指令。

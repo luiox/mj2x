@@ -15,6 +15,13 @@
 
 namespace mj2x::runtime::antijvmti {
 
+/// @brief Availability of a platform or JVM live probe.
+enum class LiveProbeStatus {
+    Unavailable,
+    Success,
+    Failed,
+};
+
 /// @brief Snapshot of an expected JNI function table address.
 struct JniTableSnapshot {
     const void* functions = nullptr;
@@ -52,9 +59,27 @@ struct AgentSignals {
 struct JvmtiCapabilitySnapshot {
     bool canTagObjects = false;
     bool canGenerateAllClassHookEvents = false;
-    bool canGenerateClassFileLoadHookEvents = false;
     bool canGetBytecodes = false;
     bool canRetransformClasses = false;
+};
+
+/// @brief Result of enumerating native modules in the current process.
+struct LoadedModuleSnapshot {
+    LiveProbeStatus status = LiveProbeStatus::Unavailable;
+    std::vector<std::string> moduleNames;
+};
+
+/// @brief Result of querying capabilities from a live JVMTI environment.
+struct JvmtiCapabilityQuery {
+    LiveProbeStatus status = LiveProbeStatus::Unavailable;
+    JvmtiCapabilitySnapshot capabilities;
+};
+
+/// @brief Inputs and aggregated signals captured by the live agent probe.
+struct LiveAgentProbe {
+    LoadedModuleSnapshot modules;
+    JvmtiCapabilityQuery jvmti;
+    AgentSignals signals;
 };
 
 /**
@@ -90,11 +115,35 @@ bool containsSuspiciousJvmtiDumpModule(const std::vector<std::string>& moduleNam
 bool hasDumpRelevantJvmtiCapabilities(const JvmtiCapabilitySnapshot& capabilities);
 
 /**
+ * @brief Enumerate loaded native modules in the current process.
+ *
+ * @details Windows uses Toolhelp module snapshots. Linux parses
+ * `/proc/self/maps`. Other platforms return `Unavailable`.
+ */
+LoadedModuleSnapshot enumerateLoadedModules();
+
+/**
+ * @brief Query capabilities from a live JVMTI environment obtained from JavaVM.
+ *
+ * @param javaVm Opaque `JavaVM*`. Null returns `Unavailable`.
+ * @details `GetCapabilities` is scoped to the returned JVMTI environment; it
+ * cannot enumerate capabilities owned by unrelated agents. Module enumeration
+ * remains the complementary cross-agent signal.
+ */
+JvmtiCapabilityQuery queryLiveJvmtiCapabilities(void* javaVm);
+
+/**
  * @brief 聚合参数、模块和 capability 信号。
  */
 AgentSignals collectAgentSignals(const std::vector<std::string>& arguments,
                                  const std::vector<std::string>& moduleNames,
                                  const JvmtiCapabilitySnapshot& capabilities);
+
+/**
+ * @brief Collect module and JVMTI live facts and aggregate agent signals.
+ */
+LiveAgentProbe collectLiveAgentSignals(const std::vector<std::string>& arguments,
+                                       void* javaVm);
 
 /// @brief 任一 Java/JVMTI agent 信号命中时返回 true。
 bool hasAgentSignal(const AgentSignals& signals);

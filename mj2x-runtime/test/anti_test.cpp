@@ -2,6 +2,7 @@
 
 #include "antidebug/antidebug.hpp"
 #include "antijvmti/antijvmti.hpp"
+#include "detection/runtime_detection.hpp"
 
 TEST(RuntimeAntiJvmtiTest, DetectsJniTableReplacement) {
     int originalTable = 1;
@@ -57,11 +58,17 @@ TEST(RuntimeAntiJvmtiTest, DetectsDumpRelevantCapabilities) {
     retransformTag.canTagObjects = true;
     retransformTag.canRetransformClasses = true;
     EXPECT_TRUE(mj2x::runtime::antijvmti::hasDumpRelevantJvmtiCapabilities(retransformTag));
+
+    mj2x::runtime::antijvmti::JvmtiCapabilitySnapshot classHooks;
+    classHooks.canGenerateAllClassHookEvents = true;
+    classHooks.canRetransformClasses = true;
+    EXPECT_TRUE(mj2x::runtime::antijvmti::hasDumpRelevantJvmtiCapabilities(classHooks));
 }
 
 TEST(RuntimeAntiJvmtiTest, AggregatesAgentSignals) {
     mj2x::runtime::antijvmti::JvmtiCapabilitySnapshot capabilities;
-    capabilities.canGenerateClassFileLoadHookEvents = true;
+    capabilities.canGenerateAllClassHookEvents = true;
+    capabilities.canRetransformClasses = true;
 
     auto signals = mj2x::runtime::antijvmti::collectAgentSignals(
         {"-Xmx256m"},
@@ -73,6 +80,27 @@ TEST(RuntimeAntiJvmtiTest, AggregatesAgentSignals) {
 
     mj2x::runtime::antijvmti::AgentSignals none;
     EXPECT_FALSE(mj2x::runtime::antijvmti::hasAgentSignal(none));
+}
+
+TEST(RuntimeAntiJvmtiTest, EnumeratesLiveModulesWithoutAssumingAgentNames) {
+    const auto modules = mj2x::runtime::antijvmti::enumerateLoadedModules();
+    if (modules.status == mj2x::runtime::antijvmti::LiveProbeStatus::Success) {
+        EXPECT_FALSE(modules.moduleNames.empty());
+    } else {
+        EXPECT_TRUE(modules.status == mj2x::runtime::antijvmti::LiveProbeStatus::Unavailable ||
+                    modules.status == mj2x::runtime::antijvmti::LiveProbeStatus::Failed);
+    }
+}
+
+TEST(RuntimeAntiJvmtiTest, LiveJvmtiQueryRequiresAnExplicitJavaVm) {
+    const auto query = mj2x::runtime::antijvmti::queryLiveJvmtiCapabilities(nullptr);
+    EXPECT_EQ(query.status, mj2x::runtime::antijvmti::LiveProbeStatus::Unavailable);
+}
+
+TEST(RuntimeAntiJvmtiTest, CollectsLiveAgentProbeWithModuleFacts) {
+    const auto probe = mj2x::runtime::antijvmti::collectLiveAgentSignals({}, nullptr);
+    EXPECT_EQ(probe.jvmti.status, mj2x::runtime::antijvmti::LiveProbeStatus::Unavailable);
+    EXPECT_FALSE(mj2x::runtime::antijvmti::hasAgentSignal(probe.signals));
 }
 
 TEST(RuntimeAntiDebugTest, AggregatesDebugSignals) {
@@ -101,4 +129,26 @@ TEST(RuntimeAntiDebugTest, DetectsSoftwareBreakpointPatterns) {
     mj2x::runtime::antidebug::DebugSignals signals;
     signals.softwareBreakpointPattern = true;
     EXPECT_TRUE(mj2x::runtime::antidebug::hasDebugSignal(signals));
+}
+
+TEST(RuntimeAntiDebugTest, DetectsWindowsSnapshotPrimitives) {
+    EXPECT_TRUE(mj2x::runtime::antidebug::hasSuspiciousNtGlobalFlag(0x70));
+    EXPECT_FALSE(mj2x::runtime::antidebug::hasSuspiciousNtGlobalFlag(0));
+    EXPECT_FALSE(mj2x::runtime::antidebug::hasEnabledHardwareBreakpoint(0, 0, 0, 0, 0));
+    EXPECT_TRUE(mj2x::runtime::antidebug::hasEnabledHardwareBreakpoint(
+        0x1234, 0, 0, 0, 0x1));
+}
+
+TEST(RuntimeDetectionTest, AppliesFailClosedPolicyWithoutTerminating) {
+    mj2x::runtime::detection::RuntimeDetectionReport clean;
+    EXPECT_FALSE(mj2x::runtime::detection::shouldFailClosed(clean));
+
+    clean.suspicious = true;
+    EXPECT_TRUE(mj2x::runtime::detection::shouldFailClosed(clean));
+
+    clean.suspicious = false;
+    clean.probeFailed = true;
+    EXPECT_TRUE(mj2x::runtime::detection::shouldFailClosed(clean));
+    EXPECT_FALSE(mj2x::runtime::detection::shouldFailClosed(
+        clean, mj2x::runtime::detection::DetectionPolicy{true, false}));
 }

@@ -6,10 +6,24 @@ target("mj2x-runtime-core")
     add_files("src/kernel/*.cpp")
     add_files("src/antidebug/*.cpp")
     add_files("src/antijvmti/*.cpp")
+    add_files("src/detection/*.cpp")
     add_files("src/stringpool/*.cpp")
     add_files("src/intrinsic/*.cpp")
     add_includedirs("src", {public = true})
     add_deps("mj2x-crt", {public = true})
+
+    local jdk_path = os.getenv("JAVA_HOME")
+    if jdk_path then
+        add_defines("MJ2X_RUNTIME_HAS_JVMTI=1")
+        add_includedirs(jdk_path .. "/include")
+        if is_plat("windows") then
+            add_includedirs(jdk_path .. "/include/win32")
+        elseif is_plat("linux") then
+            add_includedirs(jdk_path .. "/include/linux")
+        elseif is_plat("macosx") then
+            add_includedirs(jdk_path .. "/include/darwin")
+        end
+    end
 
     if is_plat("windows") then
         add_defines("WIN32", "_WIN32", "WINDOWS", "MORPHER_RT_PLANTFORM_WINDOWS")

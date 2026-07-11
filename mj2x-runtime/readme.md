@@ -7,9 +7,12 @@ samples.
 
 - `src/crypto/`: SHA-256, HMAC-SHA256, constant-time comparison.
 - `src/kernel/`: HKDF-SHA256, HMAC verification, volatile wipe.
-- `src/antijvmti/`: mockable JNI function-table tamper checks and agent option
-  scanning.
-- `src/antidebug/`: platform debugger signal collection.
+- `src/antijvmti/`: JNI table checks, live module enumeration, agent/JDWP
+  scanning, and JVMTI capability query.
+- `src/antidebug/`: platform debugger, PEB/NtQuery, hardware/software breakpoint
+  signal collection.
+- `src/detection/`: policy-neutral live report aggregation and fail-closed
+  decision.
 - `src/stringpool/`: HKDF-derived string-pool decode.
 
 Design notes live in `mj2x/doc_ai/RUNTIME_*.md`.

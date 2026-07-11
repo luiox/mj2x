@@ -1,0 +1,7 @@
+build/
+.xmake/
+*.obj
+*.o
+*.dll
+*.so
+*.dylib

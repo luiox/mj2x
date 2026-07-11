@@ -13,25 +13,27 @@ and later compares the current address with that snapshot.  Argument scanners
 recognize common agent launch options (`-javaagent`, `-agentpath`,
 `-agentlib`) and JDWP/IDE debugging options separately.
 
-The second slice adds deterministic inputs for signals that cannot be covered
-by argument scanning alone:
+The live slice adds signals that cannot be covered by argument scanning alone:
 
-- loaded module names matching known attach/agent/dump families such as
+- current-process module enumeration matching known attach/agent/dump families such as
   Arthas, ByteBuddy, JDWP, JVMTI dump agents, and mjt-dump style tools;
-- a small JVMTI capability snapshot that flags bytecode/class-load-hook and
-  retransform/tag combinations relevant to class dumping.
+- `JavaVM::GetEnv(JVMTI_VERSION_1_2)` plus `GetCapabilities` for bytecode,
+  class-hook, retransform, and tag combinations relevant to class dumping.
 
-Runtime core does not enumerate modules or query a live JVM yet.  Platform/JVM
-integration should collect those raw facts and pass them into this module.
+Windows module collection uses Toolhelp snapshots; Linux parses
+`/proc/self/maps`. Both probes report `Unavailable`, `Success`, or `Failed`
+instead of treating missing facts as clean.
 
 ## Boundaries
 
-This module does not yet enumerate loaded modules or query JVMTI capabilities by
-itself.  Those probes require platform/JVM integration and should remain layered
-above the mockable core so tests can inject deterministic tampering cases.
+JVMTI capabilities belong to a specific `jvmtiEnv`. Standard JVMTI cannot
+enumerate environments owned by unrelated agents, so capability query is not
+claimed as cross-agent proof. Module enumeration and JNI-table stability remain
+independent complementary signals. The module reports facts only; the detection
+policy decides whether a signal or probe failure denies execution.
 
 ## Validation
 
 `mj2x_runtime_test` verifies stable and replaced JNI table pointers, agent/JDWP
-option detection, suspicious module-name matching, JVMTI capability aggregation,
-and full agent-signal aggregation without requiring a live JVM.
+option detection, suspicious module-name matching, module enumeration,
+capability aggregation, null-VM availability semantics, and fail-closed policy.

@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mj2x::cli {
@@ -42,14 +43,39 @@ bool writeText(const fs::path& path, const std::string& text)
     return true;
 }
 
-void replaceAll(std::string& text, const std::string& from, const std::string& to)
+bool writeProjectTemplate(const fs::path& path,
+                          std::string_view source,
+                          std::string_view projectName)
 {
-    if (from.empty()) return;
-    std::size_t pos = 0;
-    while ((pos = text.find(from, pos)) != std::string::npos) {
-        text.replace(pos, from.size(), to);
-        pos += to.size();
+    constexpr std::string_view projectNameToken = "@PROJECT_NAME@";
+    if (source.find(projectNameToken) == std::string_view::npos) {
+        fprintf(stderr,
+                "[mj2x] ERROR: project template is missing %.*s: %s\n",
+                static_cast<int>(projectNameToken.size()),
+                projectNameToken.data(),
+                path.string().c_str());
+        return false;
     }
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        fprintf(stderr, "[mj2x] ERROR: cannot write %s\n", path.string().c_str());
+        return false;
+    }
+
+    std::size_t cursor = 0;
+    while (cursor < source.size()) {
+        const std::size_t token = source.find(projectNameToken, cursor);
+        if (token == std::string_view::npos) {
+            out.write(source.data() + cursor,
+                      static_cast<std::streamsize>(source.size() - cursor));
+            break;
+        }
+        out.write(source.data() + cursor, static_cast<std::streamsize>(token - cursor));
+        out.write(projectName.data(), static_cast<std::streamsize>(projectName.size()));
+        cursor = token + projectNameToken.size();
+    }
+    return static_cast<bool>(out);
 }
 
 std::string trim(std::string value)
@@ -221,11 +247,12 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         fprintf(stderr, "[mj2x] ERROR: mj2x-crt templates are missing.\n");
         return 1;
     }
-    replaceAll(xmakeTemplate, "@PROJECT_NAME@", config.projectName);
-    replaceAll(readmeTemplate, "@PROJECT_NAME@", config.projectName);
-
-    if (!writeText(config.projectDir / "xmake.lua", xmakeTemplate)) return 1;
-    if (!writeText(config.projectDir / "README.md", readmeTemplate)) return 1;
+    if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate, config.projectName)) {
+        return 1;
+    }
+    if (!writeProjectTemplate(config.projectDir / "README.md", readmeTemplate, config.projectName)) {
+        return 1;
+    }
     if (!writeText(config.projectDir / ".gitignore",
                    "build/\n.xmake/\n*.obj\n*.o\n*.dll\n*.so\n*.dylib\n")) {
         return 1;
