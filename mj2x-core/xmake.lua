@@ -4,6 +4,7 @@
 target("mj2x-core")
     set_kind("static")
     set_group("mj2x")
+    set_policy("build.merge_archive", true)
 
     add_deps("libjbytecode", "libjstr", "libjzip")
 
