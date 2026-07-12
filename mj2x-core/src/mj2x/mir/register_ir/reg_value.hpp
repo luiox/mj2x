@@ -19,20 +19,23 @@
 namespace mj2x {
 
 /// @brief Virtual register identifier inside one RegFunction.
-struct RegId {
+struct RegId
+{
     uint32_t value = 0;
-    bool operator==(const RegId& other) const { return value == other.value; }
-    bool operator!=(const RegId& other) const { return value != other.value; }
+    bool     operator==(const RegId& other) const { return value == other.value; }
+    bool     operator!=(const RegId& other) const { return value != other.value; }
 };
 
 /// @brief A typed virtual register definition.
-struct RegValue {
-    RegId id;
+struct RegValue
+{
+    RegId   id;
     SSAType type = SSAType::UNKNOWN;
 };
 
 /// @brief Operand tag used for no-RTTI RegIR dispatch.
-enum class RegOperandKind : uint8_t {
+enum class RegOperandKind : uint8_t
+{
     Register,
     IntLiteral,
     FloatLiteral,
@@ -48,13 +51,14 @@ enum class RegOperandKind : uint8_t {
  * undefined defensive fallbacks.  They are still stackless: consumers must not
  * interpret their tag as a JVM local or stack position.
  */
-struct RegOperand {
+struct RegOperand
+{
     RegOperandKind kind = RegOperandKind::Opaque;
-    SSAType type = SSAType::UNKNOWN;
-    RegId reg{};
-    int64_t intValue = 0;
-    double floatValue = 0.0;
-    std::string tag;
+    SSAType        type = SSAType::UNKNOWN;
+    RegId          reg{};
+    int64_t        intValue   = 0;
+    double         floatValue = 0.0;
+    std::string    tag;
 
     static RegOperand fromRegister(RegValue value);
     static RegOperand fromInt(int64_t value, SSAType type);
@@ -63,4 +67,4 @@ struct RegOperand {
     static RegOperand opaque(SSAType type, std::string tag);
 };
 
-} // namespace mj2x
+}   // namespace mj2x

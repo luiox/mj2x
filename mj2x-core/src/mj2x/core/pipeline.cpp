@@ -15,25 +15,31 @@ Pipeline::Pipeline(PipelineConfig config)
 
 Pipeline::~Pipeline() = default;
 
-void Pipeline::registerBackend(std::unique_ptr<Backend> backend) {
+void Pipeline::registerBackend(std::unique_ptr<Backend> backend)
+{
     backends_.push_back(std::move(backend));
 }
 
-void Pipeline::registerPreprocessor(std::unique_ptr<Preprocessor> preproc) {
+void Pipeline::registerPreprocessor(std::unique_ptr<Preprocessor> preproc)
+{
     preprocs_.push_back(std::move(preproc));
 }
 
-void Pipeline::registerPostprocessor(std::unique_ptr<Postprocessor> postproc) {
+void Pipeline::registerPostprocessor(std::unique_ptr<Postprocessor> postproc)
+{
     postprocs_.push_back(std::move(postproc));
 }
 
-int Pipeline::run() {
+int Pipeline::run()
+{
     printf("[mj2x] Pipeline start (input=%s, output=%s)\n",
-           config_.inputPath.c_str(), config_.outputPath.c_str());
+           config_.inputPath.c_str(),
+           config_.outputPath.c_str());
 
     try {
         loadInput();
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e) {
         printf("[mj2x] ERROR: load failed - %s\n", e.what());
         return 1;
     }
@@ -44,7 +50,8 @@ int Pipeline::run() {
 
     try {
         writeOutput();
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e) {
         printf("[mj2x] ERROR: write failed - %s\n", e.what());
         return 1;
     }
@@ -53,19 +60,20 @@ int Pipeline::run() {
     return 0;
 }
 
-void Pipeline::loadInput() {
+void Pipeline::loadInput()
+{
     InputLoader loader;
     index_ = loader.load(config_.inputPath);
 }
 
-void Pipeline::runPreprocessors() {
-    for (auto& p : preprocs_)
-        p->process(*index_);
+void Pipeline::runPreprocessors()
+{
+    for (auto& p : preprocs_) p->process(*index_);
 }
 
-void Pipeline::compileMethods() {
-    if (backends_.empty())
-        return;
+void Pipeline::compileMethods()
+{
+    if (backends_.empty()) return;
 
     CodeConverter converter;
 
@@ -77,37 +85,34 @@ void Pipeline::compileMethods() {
 
             auto mnName = method.methodNode->name.to_std_string();
             auto mnDesc = method.methodNode->desc.to_std_string();
-            printf("  Compiling %s.%s%s\n",
-                   name.c_str(), mnName.c_str(), mnDesc.c_str());
+            printf("  Compiling %s.%s%s\n", name.c_str(), mnName.c_str(), mnDesc.c_str());
 
             auto blocks = converter.convert(*method.methodNode);
 
             if (config_.dumpMIR) {
-                printf("--- MIR dump ---\n%s\n",
-                       CodeConverter::dumpMIR(blocks).c_str());
+                printf("--- MIR dump ---\n%s\n", CodeConverter::dumpMIR(blocks).c_str());
             }
 
             for (auto& backend : backends_) {
-                auto result = backend->compileMethod(name, method, blocks);
+                auto result          = backend->compileMethod(name, method, blocks);
                 method.backendResult = result;
                 backend->injectIntoClass(cls, method, result);
             }
         }
     }
 
-    for (auto& backend : backends_)
-        backend->finalize(*index_);
+    for (auto& backend : backends_) backend->finalize(*index_);
 }
 
-void Pipeline::runPostprocessors() {
-    for (auto& p : postprocs_)
-        p->process(*index_);
+void Pipeline::runPostprocessors()
+{
+    for (auto& p : postprocs_) p->process(*index_);
 }
 
-void Pipeline::writeOutput() {
+void Pipeline::writeOutput()
+{
     OutputWriter writer;
     writer.write(config_.outputPath, *index_);
 }
 
-} // namespace mj2x
-
+}   // namespace mj2x

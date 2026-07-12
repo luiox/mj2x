@@ -8,11 +8,12 @@
 
 namespace {
 
-constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+constexpr double kNan  = std::numeric_limits<double>::quiet_NaN();
 constexpr double kPInf = std::numeric_limits<double>::infinity();
 constexpr double kNInf = -std::numeric_limits<double>::infinity();
 
-TEST(IntrinsicMathTest, AbsHandlesNegativesAndExtremes) {
+TEST(IntrinsicMathTest, AbsHandlesNegativesAndExtremes)
+{
     EXPECT_EQ(mj2x_math_abs_i32(-5), 5);
     EXPECT_EQ(mj2x_math_abs_i32(5), 5);
     EXPECT_EQ(mj2x_math_abs_i32(0), 0);
@@ -27,14 +28,16 @@ TEST(IntrinsicMathTest, AbsHandlesNegativesAndExtremes) {
     EXPECT_TRUE(std::isnan(mj2x_math_abs_f64(kNan)));
 }
 
-TEST(IntrinsicMathTest, IntegerMinMaxPickExtremes) {
+TEST(IntrinsicMathTest, IntegerMinMaxPickExtremes)
+{
     EXPECT_EQ(mj2x_math_min_i32(-3, 7), -3);
     EXPECT_EQ(mj2x_math_max_i32(-3, 7), 7);
     EXPECT_EQ(mj2x_math_min_i64(INT64_MIN, 1), INT64_MIN);
     EXPECT_EQ(mj2x_math_max_i64(INT64_MAX, 1), INT64_MAX);
 }
 
-TEST(IntrinsicMathTest, FloatingMinMaxPropagateNanJlsStyle) {
+TEST(IntrinsicMathTest, FloatingMinMaxPropagateNanJlsStyle)
+{
     // JLS: either operand NaN -> NaN.  This is the deliberate divergence from
     // ISO C fmin/fmax which would return the non-NaN argument.
     EXPECT_TRUE(std::isnan(mj2x_math_min_f64(kNan, 5.0)));
@@ -46,7 +49,8 @@ TEST(IntrinsicMathTest, FloatingMinMaxPropagateNanJlsStyle) {
     EXPECT_DOUBLE_EQ(mj2x_math_max_f64(2.5, 3.5), 3.5);
 }
 
-TEST(IntrinsicMathTest, TranscendentalsAndPowMatchCLibrary) {
+TEST(IntrinsicMathTest, TranscendentalsAndPowMatchCLibrary)
+{
     EXPECT_NEAR(mj2x_math_sin(1.0), std::sin(1.0), 1e-15);
     EXPECT_NEAR(mj2x_math_cos(1.0), std::cos(1.0), 1e-15);
     EXPECT_NEAR(mj2x_math_tan(0.5), std::tan(0.5), 1e-15);
@@ -54,7 +58,8 @@ TEST(IntrinsicMathTest, TranscendentalsAndPowMatchCLibrary) {
     EXPECT_NEAR(mj2x_math_pow(2.0, 10.0), std::pow(2.0, 10.0), 1e-12);
 }
 
-TEST(IntrinsicMathTest, FloorCeilRoundHalfTowardPositiveInfinity) {
+TEST(IntrinsicMathTest, FloorCeilRoundHalfTowardPositiveInfinity)
+{
     EXPECT_DOUBLE_EQ(mj2x_math_floor(2.7), 2.0);
     EXPECT_DOUBLE_EQ(mj2x_math_floor(-2.7), -3.0);
     EXPECT_DOUBLE_EQ(mj2x_math_ceil(2.2), 3.0);
@@ -72,7 +77,8 @@ TEST(IntrinsicMathTest, FloorCeilRoundHalfTowardPositiveInfinity) {
     EXPECT_EQ(mj2x_math_round(kNInf), INT64_MIN);
 }
 
-TEST(IntrinsicMathTest, RandomStaysInUnitHalfOpenInterval) {
+TEST(IntrinsicMathTest, RandomStaysInUnitHalfOpenInterval)
+{
     for (int i = 0; i < 64; ++i) {
         double value = mj2x_math_random();
         EXPECT_GE(value, 0.0);
@@ -85,4 +91,4 @@ TEST(IntrinsicMathTest, RandomStaysInUnitHalfOpenInterval) {
     EXPECT_NE(a, b);
 }
 
-}  // namespace
+}   // namespace

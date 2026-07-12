@@ -13,7 +13,8 @@ using namespace mj2x::codegen;
 
 namespace {
 
-TEST(CSourceStreamTest, EmitLineAppliesCurrentIndent) {
+TEST(CSourceStreamTest, EmitLineAppliesCurrentIndent)
+{
     CSourceStream s;
     s.emitLine("a");
     s.indent();
@@ -29,15 +30,17 @@ TEST(CSourceStreamTest, EmitLineAppliesCurrentIndent) {
               "    d\n");
 }
 
-TEST(CSourceStreamTest, DedentClampsAtZero) {
+TEST(CSourceStreamTest, DedentClampsAtZero)
+{
     CSourceStream s;
-    s.dedent();  // no-op, never negative
+    s.dedent();   // no-op, never negative
     s.dedent();
     s.emitLine("x");
     EXPECT_EQ(s.str(), "x\n");
 }
 
-TEST(CSourceStreamTest, EmitRawPreservesContentVerbatim) {
+TEST(CSourceStreamTest, EmitRawPreservesContentVerbatim)
+{
     CSourceStream s;
     s.emitRaw("extern \"C\" {\n");
     s.indent();
@@ -50,13 +53,14 @@ TEST(CSourceStreamTest, EmitRawPreservesContentVerbatim) {
               "}\n");
 }
 
-TEST(IncludeSetTest, DeduplicatesAndGroupsSystemBeforeProject) {
+TEST(IncludeSetTest, DeduplicatesAndGroupsSystemBeforeProject)
+{
     IncludeSet set;
     set.addSystem("jni.h");
     set.addProject("regc/abi.hpp");
     set.addSystem("stdint.h");
-    set.addSystem("jni.h");  // duplicate
-    set.addProject("regc/abi.hpp");  // duplicate
+    set.addSystem("jni.h");           // duplicate
+    set.addProject("regc/abi.hpp");   // duplicate
     EXPECT_FALSE(set.empty());
     EXPECT_EQ(set.render(),
               "#include <jni.h>\n"
@@ -64,13 +68,15 @@ TEST(IncludeSetTest, DeduplicatesAndGroupsSystemBeforeProject) {
               "#include \"regc/abi.hpp\"\n");
 }
 
-TEST(IncludeSetTest, EmptySetRendersNothing) {
+TEST(IncludeSetTest, EmptySetRendersNothing)
+{
     IncludeSet set;
     EXPECT_TRUE(set.empty());
     EXPECT_EQ(set.render(), "");
 }
 
-TEST(CHelpersTest, CStringLiteralEscapesSpecialBytes) {
+TEST(CHelpersTest, CStringLiteralEscapesSpecialBytes)
+{
     EXPECT_EQ(cStringLiteral("plain"), "\"plain\"");
     EXPECT_EQ(cStringLiteral("a\"b\\c"), "\"a\\\"b\\\\c\"");
     EXPECT_EQ(cStringLiteral("line1\nline2"), "\"line1\\nline2\"");
@@ -82,7 +88,8 @@ TEST(CHelpersTest, CStringLiteralEscapesSpecialBytes) {
     EXPECT_EQ(cStringLiteral(withCtrl), "\"x\\001\\237y\"");
 }
 
-TEST(CHelpersTest, MangleNameEscapesUnderscoreAndSlashes) {
+TEST(CHelpersTest, MangleNameEscapesUnderscoreAndSlashes)
+{
     EXPECT_EQ(mangleName("java/lang/String", false), "java_lang_String");
     EXPECT_EQ(mangleName("a_b", false), "a_1b");
     EXPECT_EQ(mangleName("com.example.Pkg", false), "com_example_Pkg");
@@ -91,21 +98,23 @@ TEST(CHelpersTest, MangleNameEscapesUnderscoreAndSlashes) {
     EXPECT_EQ(mangleName("[I", true), "_3I");
 }
 
-TEST(CHelpersTest, MangleMethodBuildsJavaPrefixSymbol) {
+TEST(CHelpersTest, MangleMethodBuildsJavaPrefixSymbol)
+{
     // Static add(II)I on com/example/Foo -> Java_com_example_Foo_add__II
-    EXPECT_EQ(mangleMethod("com/example/Foo", "add", "(II)I"),
-              "Java_com_example_Foo_add__II");
+    EXPECT_EQ(mangleMethod("com/example/Foo", "add", "(II)I"), "Java_com_example_Foo_add__II");
     // No-arg method has no __ suffix.
     EXPECT_EQ(mangleMethod("Foo", "bar", "()V"), "Java_Foo_bar");
     // <init> maps to init_ (legal C identifier).
     EXPECT_EQ(mangleMethod("Foo", "<init>", "()V"), "Java_Foo_init_");
 }
 
-enum class TestSnippet {
+enum class TestSnippet
+{
     Assign,
 };
 
-TEST(CodeSnippetTest, RendersTypedSnippetVariables) {
+TEST(CodeSnippetTest, RendersTypedSnippetVariables)
+{
     CodeSnippetSet<TestSnippet> snippets({
         {TestSnippet::Assign, "${lhs} = (${type})${rhs};"},
     });
@@ -118,8 +127,9 @@ TEST(CodeSnippetTest, RendersTypedSnippetVariables) {
               "stack[++sp].i = (jint)7;");
 }
 
-TEST(CodeSnippetTest, LeavesUnknownVariablesVisible) {
+TEST(CodeSnippetTest, LeavesUnknownVariablesVisible)
+{
     EXPECT_EQ(renderSnippet("${known} ${missing}", {{"known", "ok"}}), "ok ${missing}");
 }
 
-}  // namespace
+}   // namespace

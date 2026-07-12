@@ -21,22 +21,26 @@ using namespace jbytecode::util;
 using namespace ca::str;
 
 // Helper: construct a class with one method and write to disk
-static std::string writeTestClass(const std::string& name, const std::string& suffix) {
+static std::string writeTestClass(const std::string& name, const std::string& suffix)
+{
     auto path = test::getTempOutPath("mj2x_e2e_" + suffix).string();
 
-    auto cn = std::make_unique<ClassNode>();
+    auto            cn = std::make_unique<ClassNode>();
     Utf8StringArena arena;
-    auto name_ref = arena.intern(name.c_str());
+    auto            name_ref = arena.intern(name.c_str());
 
-    cn->version = Opcodes::V1_8;
-    cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = name_ref;
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->name      = name_ref;
     cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<Utf8StringRef> noExcepts;
-    auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ZUtf8StringRef::from_static("add"), ZUtf8StringRef::from_static("(II)I"), ZUtf8StringRef::from_static(""), noExcepts);
-    mn->maxStack = 2;
+    auto mn       = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                           ZUtf8StringRef::from_static("add"),
+                                           ZUtf8StringRef::from_static("(II)I"),
+                                           ZUtf8StringRef::from_static(""),
+                                           noExcepts);
+    mn->maxStack  = 2;
     mn->maxLocals = 2;
     mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
     mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 1));
@@ -54,17 +58,18 @@ static std::string writeTestClass(const std::string& name, const std::string& su
     return path;
 }
 
-TEST(E2ETest, PipelineWithStackCBackend) {
-    auto inPath = writeTestClass("E2ETest", "in.class");
+TEST(E2ETest, PipelineWithStackCBackend)
+{
+    auto inPath  = writeTestClass("E2ETest", "in.class");
     auto outPath = test::getTempOutPath("mj2x_e2e_out.class").string();
-    auto cPath = test::getTempOutPath("mj2x_e2e_out.c").string();
+    auto cPath   = test::getTempOutPath("mj2x_e2e_out.c").string();
 
     PipelineConfig cfg;
-    cfg.inputPath = inPath;
+    cfg.inputPath  = inPath;
     cfg.outputPath = outPath;
 
     Pipeline pipeline(std::move(cfg));
-    auto stackCBackend = std::make_unique<StackCBackend>();
+    auto     stackCBackend = std::make_unique<StackCBackend>();
     stackCBackend->setOutputPath(cPath);
     pipeline.registerBackend(std::move(stackCBackend));
     pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
@@ -95,8 +100,8 @@ TEST(E2ETest, PipelineWithStackCBackend) {
     // Verify the .class has ACC_NATIVE on the compiled method
     {
         InputLoader loader;
-        auto index = loader.load(outPath);
-        auto* cls = index->getClass("E2ETest");
+        auto        index = loader.load(outPath);
+        auto*       cls   = index->getClass("E2ETest");
         ASSERT_NE(cls, nullptr);
         ASSERT_GE(cls->methods.size(), 1);
         EXPECT_TRUE(cls->methods[0].methodNode->access & Opcodes::ACC_NATIVE);
@@ -108,17 +113,18 @@ TEST(E2ETest, PipelineWithStackCBackend) {
     std::remove(cPath.c_str());
 }
 
-TEST(E2ETest, PipelineWithRegCBackend) {
-    auto inPath = writeTestClass("RegCE2ETest", "regc_in.class");
+TEST(E2ETest, PipelineWithRegCBackend)
+{
+    auto inPath  = writeTestClass("RegCE2ETest", "regc_in.class");
     auto outPath = test::getTempOutPath("mj2x_regc_e2e_out.class").string();
-    auto cPath = test::getTempOutPath("mj2x_regc_e2e_out.c").string();
+    auto cPath   = test::getTempOutPath("mj2x_regc_e2e_out.c").string();
 
     PipelineConfig cfg;
-    cfg.inputPath = inPath;
+    cfg.inputPath  = inPath;
     cfg.outputPath = outPath;
 
     Pipeline pipeline(std::move(cfg));
-    auto regcBackend = std::make_unique<RegCBackend>();
+    auto     regcBackend = std::make_unique<RegCBackend>();
     regcBackend->setOutputPath(cPath);
     pipeline.registerBackend(std::move(regcBackend));
     pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
@@ -140,8 +146,8 @@ TEST(E2ETest, PipelineWithRegCBackend) {
 
     {
         InputLoader loader;
-        auto index = loader.load(outPath);
-        auto* cls = index->getClass("RegCE2ETest");
+        auto        index = loader.load(outPath);
+        auto*       cls   = index->getClass("RegCE2ETest");
         ASSERT_NE(cls, nullptr);
         ASSERT_GE(cls->methods.size(), 1);
         EXPECT_TRUE(cls->methods[0].methodNode->access & Opcodes::ACC_NATIVE);
@@ -153,28 +159,32 @@ TEST(E2ETest, PipelineWithRegCBackend) {
     std::remove(cPath.c_str());
 }
 
-TEST(E2ETest, VoidMethodWithStackCBackend) {
-    auto inPath = test::getTempOutPath("mj2x_e2e_void_in.class").string();
+TEST(E2ETest, VoidMethodWithStackCBackend)
+{
+    auto inPath  = test::getTempOutPath("mj2x_e2e_void_in.class").string();
     auto outPath = test::getTempOutPath("mj2x_e2e_void_out.class").string();
-    auto cPath = test::getTempOutPath("mj2x_e2e_void_out.c").string();
+    auto cPath   = test::getTempOutPath("mj2x_e2e_void_out.c").string();
 
     // Manual class construction
-    auto cn = std::make_unique<ClassNode>();
-    cn->version = Opcodes::V1_8;
-    cn->access = Opcodes::ACC_PUBLIC;
-    cn->name = ZUtf8StringRef::from_static("VoidTest");
+    auto cn       = std::make_unique<ClassNode>();
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->name      = ZUtf8StringRef::from_static("VoidTest");
     cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<Utf8StringRef> noExcepts;
-    auto mn = std::make_unique<MethodNode>(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ZUtf8StringRef::from_static("noop"), ZUtf8StringRef::from_static("()V"), ZUtf8StringRef::from_static(""), noExcepts);
-    mn->maxStack = 1;
+    auto mn       = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                           ZUtf8StringRef::from_static("noop"),
+                                           ZUtf8StringRef::from_static("()V"),
+                                           ZUtf8StringRef::from_static(""),
+                                           noExcepts);
+    mn->maxStack  = 1;
     mn->maxLocals = 0;
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
     cn->methods.push_back(mn.release());
 
     Utf8StringArena arena;
-    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
+    ClassWriter     cw(arena, ClassWriter::COMPUTE_MAXS);
     cn->accept(&cw);
     auto bytes = cw.toByteArray();
     {
@@ -184,11 +194,11 @@ TEST(E2ETest, VoidMethodWithStackCBackend) {
     }
 
     PipelineConfig cfg;
-    cfg.inputPath = inPath;
+    cfg.inputPath  = inPath;
     cfg.outputPath = outPath;
 
     Pipeline pipeline(std::move(cfg));
-    auto stackCBackend = std::make_unique<StackCBackend>();
+    auto     stackCBackend = std::make_unique<StackCBackend>();
     stackCBackend->setOutputPath(cPath);
     pipeline.registerBackend(std::move(stackCBackend));
     pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
@@ -210,4 +220,3 @@ TEST(E2ETest, VoidMethodWithStackCBackend) {
     std::remove(outPath.c_str());
     std::remove(cPath.c_str());
 }
-

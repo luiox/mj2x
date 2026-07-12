@@ -18,53 +18,40 @@ using namespace jbytecode::tree;
 
 namespace {
 
-std::unique_ptr<MethodNode> makeMethod(
-    int access,
-    const std::string& name,
-    const std::string& desc,
-    std::initializer_list<AbstractInsnNode*> insns,
-    int maxStack,
-    int maxLocals)
+std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, const std::string& desc,
+                                       std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                                       int maxLocals)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    auto mn = std::make_unique<MethodNode>(
-        access,
-        ca::str::Utf8StringRef::from_cstr(name.c_str()),
-        ca::str::Utf8StringRef::from_cstr(desc.c_str()),
-        ca::str::Utf8StringRef::from_cstr(""),
-        noExcepts);
-    mn->maxStack = maxStack;
-    mn->maxLocals = maxLocals;
+    auto                                mn = std::make_unique<MethodNode>(access,
+                                           ca::str::Utf8StringRef::from_cstr(name.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(desc.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(""),
+                                           noExcepts);
+    mn->maxStack                           = maxStack;
+    mn->maxLocals                          = maxLocals;
     for (auto* insn : insns) mn->instructions.add(insn);
     return mn;
 }
 
-std::unique_ptr<SSAFunction> buildInlineSSA(
-    const std::string& name,
-    const std::string& desc,
-    std::initializer_list<AbstractInsnNode*> insns,
-    int maxStack,
-    int maxLocals,
-    std::string& reason)
+std::unique_ptr<SSAFunction> buildInlineSSA(const std::string& name, const std::string& desc,
+                                            std::initializer_list<AbstractInsnNode*> insns,
+                                            int maxStack, int maxLocals, std::string& reason)
 {
     ClassNode cn;
     cn.name = ca::str::Utf8StringRef::from_cstr("InlineRegIR");
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         name, desc, insns, maxStack, maxLocals);
+    auto mn = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
 
     CodeConverter converter;
-    auto blocks = converter.convert(*mn);
-    SSABuilder builder;
+    auto          blocks = converter.convert(*mn);
+    SSABuilder    builder;
     return builder.build(blocks, "InlineRegIR", name, desc, true, maxLocals, reason);
 }
 
-std::unique_ptr<RegFunction> lowerInlineRegIR(
-    const std::string& name,
-    const std::string& desc,
-    std::initializer_list<AbstractInsnNode*> insns,
-    int maxStack,
-    int maxLocals,
-    std::string& reason)
+std::unique_ptr<RegFunction> lowerInlineRegIR(const std::string& name, const std::string& desc,
+                                              std::initializer_list<AbstractInsnNode*> insns,
+                                              int maxStack, int maxLocals, std::string& reason)
 {
     auto ssa = buildInlineSSA(name, desc, insns, maxStack, maxLocals, reason);
     if (!ssa) return nullptr;
@@ -73,48 +60,61 @@ std::unique_ptr<RegFunction> lowerInlineRegIR(
     return lowering.lower(*ssa, reason);
 }
 
-bool hasAnyEdgeCopy(const RegFunction& fn) {
+bool hasAnyEdgeCopy(const RegFunction& fn)
+{
     for (const auto& block : fn.blocks) {
-        bool found = std::visit([](const auto& t) -> bool {
-            using T = std::decay_t<decltype(t)>;
-            if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-                return !t.target.copies.empty();
-            } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
-                return !t.trueTarget.copies.empty() || !t.falseTarget.copies.empty();
-            } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
-                if (!t.defaultTarget.copies.empty()) return true;
-                for (const auto& c : t.cases) {
-                    if (!c.target.copies.empty()) return true;
+        bool found = std::visit(
+            [](const auto& t) -> bool {
+                using T = std::decay_t<decltype(t)>;
+                if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                    return !t.target.copies.empty();
                 }
-                return false;
-            } else {
-                return false;
-            }
-        }, block->terminator);
+                else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                    return !t.trueTarget.copies.empty() || !t.falseTarget.copies.empty();
+                }
+                else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                    if (!t.defaultTarget.copies.empty()) return true;
+                    for (const auto& c : t.cases) {
+                        if (!c.target.copies.empty()) return true;
+                    }
+                    return false;
+                }
+                else {
+                    return false;
+                }
+            },
+            block->terminator);
         if (found) return true;
     }
     return false;
 }
 
-bool hasBlockWithArgs(const SSAFunction& fn) {
+bool hasBlockWithArgs(const SSAFunction& fn)
+{
     for (const auto& block : fn.blocks) {
         if (!block->args.empty()) return true;
     }
     return false;
 }
 
-} // namespace
+}   // namespace
 
-TEST(RegLoweringTest, LowersArithmeticToVirtualRegisters) {
+TEST(RegLoweringTest, LowersArithmeticToVirtualRegisters)
+{
     std::string reason;
-    auto reg = lowerInlineRegIR("addMul", "(II)I", {
-        new VarInsnNode(Opcodes::ILOAD, 0),
-        new VarInsnNode(Opcodes::ILOAD, 1),
-        new InsnNode(Opcodes::IADD),
-        new InsnNode(Opcodes::ICONST_3),
-        new InsnNode(Opcodes::IMUL),
-        new InsnNode(Opcodes::IRETURN),
-    }, 3, 2, reason);
+    auto        reg = lowerInlineRegIR("addMul",
+                                "(II)I",
+                                       {
+                                    new VarInsnNode(Opcodes::ILOAD, 0),
+                                    new VarInsnNode(Opcodes::ILOAD, 1),
+                                    new InsnNode(Opcodes::IADD),
+                                    new InsnNode(Opcodes::ICONST_3),
+                                    new InsnNode(Opcodes::IMUL),
+                                    new InsnNode(Opcodes::IRETURN),
+                                },
+                                3,
+                                2,
+                                reason);
     ASSERT_NE(reg, nullptr) << reason;
 
     ASSERT_GE(reg->parameters.size(), 2u);
@@ -135,35 +135,41 @@ TEST(RegLoweringTest, LowersArithmeticToVirtualRegisters) {
     EXPECT_TRUE(validateRegIRNoStackSlots(*reg, validationReason)) << validationReason;
 }
 
-TEST(RegLoweringTest, EliminatesLoopBlockArgsIntoEdgeCopies) {
+TEST(RegLoweringTest, EliminatesLoopBlockArgsIntoEdgeCopies)
+{
     auto* loop = new LabelNode();
     auto* done = new LabelNode();
 
     std::string reason;
-    auto ssa = buildInlineSSA("sum", "(I)I", {
-        new InsnNode(Opcodes::ICONST_0),
-        new VarInsnNode(Opcodes::ISTORE, 1),
-        new InsnNode(Opcodes::ICONST_0),
-        new VarInsnNode(Opcodes::ISTORE, 2),
-        loop,
-        new VarInsnNode(Opcodes::ILOAD, 2),
-        new VarInsnNode(Opcodes::ILOAD, 0),
-        new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
-        new VarInsnNode(Opcodes::ILOAD, 1),
-        new VarInsnNode(Opcodes::ILOAD, 2),
-        new InsnNode(Opcodes::IADD),
-        new VarInsnNode(Opcodes::ISTORE, 1),
-        new IincInsnNode(2, 1),
-        new JumpInsnNode(Opcodes::GOTO, loop->label),
-        done,
-        new VarInsnNode(Opcodes::ILOAD, 1),
-        new InsnNode(Opcodes::IRETURN),
-    }, 3, 3, reason);
+    auto        ssa = buildInlineSSA("sum",
+                              "(I)I",
+                                     {
+                                  new InsnNode(Opcodes::ICONST_0),
+                                  new VarInsnNode(Opcodes::ISTORE, 1),
+                                  new InsnNode(Opcodes::ICONST_0),
+                                  new VarInsnNode(Opcodes::ISTORE, 2),
+                                  loop,
+                                  new VarInsnNode(Opcodes::ILOAD, 2),
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new VarInsnNode(Opcodes::ILOAD, 2),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ISTORE, 1),
+                                  new IincInsnNode(2, 1),
+                                  new JumpInsnNode(Opcodes::GOTO, loop->label),
+                                  done,
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              3,
+                              3,
+                              reason);
     ASSERT_NE(ssa, nullptr) << reason;
     ASSERT_TRUE(hasBlockWithArgs(*ssa));
 
     RegLowering lowering;
-    auto reg = lowering.lower(*ssa, reason);
+    auto        reg = lowering.lower(*ssa, reason);
     ASSERT_NE(reg, nullptr) << reason;
     EXPECT_TRUE(hasAnyEdgeCopy(*reg));
 
@@ -174,25 +180,32 @@ TEST(RegLoweringTest, EliminatesLoopBlockArgsIntoEdgeCopies) {
     EXPECT_EQ(dump.find("sp"), std::string::npos) << dump;
 }
 
-TEST(RegLoweringTest, PreservesBranchAndSwitchEdgeSpecificCopies) {
+TEST(RegLoweringTest, PreservesBranchAndSwitchEdgeSpecificCopies)
+{
     auto* case0 = new LabelNode();
     auto* case1 = new LabelNode();
-    auto* def = new LabelNode();
+    auto* def   = new LabelNode();
 
     std::string reason;
-    auto reg = lowerInlineRegIR("pick", "(I)I", {
-        new VarInsnNode(Opcodes::ILOAD, 0),
-        new TableSwitchInsnNode(0, 1, def->label, {case0->label, case1->label}),
-        case0,
-        new IntInsnNode(Opcodes::BIPUSH, 7),
-        new InsnNode(Opcodes::IRETURN),
-        case1,
-        new IntInsnNode(Opcodes::BIPUSH, 9),
-        new InsnNode(Opcodes::IRETURN),
-        def,
-        new InsnNode(Opcodes::ICONST_M1),
-        new InsnNode(Opcodes::IRETURN),
-    }, 2, 1, reason);
+    auto        reg = lowerInlineRegIR(
+        "pick",
+        "(I)I",
+        {
+            new VarInsnNode(Opcodes::ILOAD, 0),
+            new TableSwitchInsnNode(0, 1, def->label, {case0->label, case1->label}),
+            case0,
+            new IntInsnNode(Opcodes::BIPUSH, 7),
+            new InsnNode(Opcodes::IRETURN),
+            case1,
+            new IntInsnNode(Opcodes::BIPUSH, 9),
+            new InsnNode(Opcodes::IRETURN),
+            def,
+            new InsnNode(Opcodes::ICONST_M1),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        2,
+        1,
+        reason);
     ASSERT_NE(reg, nullptr) << reason;
 
     std::string dump = dumpRegIR(*reg);
@@ -202,19 +215,25 @@ TEST(RegLoweringTest, PreservesBranchAndSwitchEdgeSpecificCopies) {
     EXPECT_EQ(dump.find("cstack"), std::string::npos) << dump;
 }
 
-TEST(RegLoweringTest, LowersObjectsArraysAndIntrinsicsWithoutStackSlots) {
+TEST(RegLoweringTest, LowersObjectsArraysAndIntrinsicsWithoutStackSlots)
+{
     std::string reason;
-    auto reg = lowerInlineRegIR("arrayOps", "()I", {
-        new InsnNode(Opcodes::ICONST_2),
-        new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_INT),
-        new InsnNode(Opcodes::DUP),
-        new InsnNode(Opcodes::ICONST_0),
-        new InsnNode(Opcodes::ICONST_5),
-        new InsnNode(Opcodes::IASTORE),
-        new InsnNode(Opcodes::DUP),
-        new InsnNode(Opcodes::ARRAYLENGTH),
-        new InsnNode(Opcodes::IRETURN),
-    }, 4, 0, reason);
+    auto        reg = lowerInlineRegIR("arrayOps",
+                                "()I",
+                                       {
+                                    new InsnNode(Opcodes::ICONST_2),
+                                    new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_INT),
+                                    new InsnNode(Opcodes::DUP),
+                                    new InsnNode(Opcodes::ICONST_0),
+                                    new InsnNode(Opcodes::ICONST_5),
+                                    new InsnNode(Opcodes::IASTORE),
+                                    new InsnNode(Opcodes::DUP),
+                                    new InsnNode(Opcodes::ARRAYLENGTH),
+                                    new InsnNode(Opcodes::IRETURN),
+                                },
+                                4,
+                                0,
+                                reason);
     ASSERT_NE(reg, nullptr) << reason;
 
     std::string dump = dumpRegIR(*reg);

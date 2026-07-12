@@ -57,9 +57,7 @@ Sha256Digest sha256(const std::uint8_t* data, std::size_t size);
  * @param dataSize Number of message bytes.
  * @return The 32-byte HMAC-SHA256 tag.
  */
-Sha256Digest hmacSha256(const std::uint8_t* key,
-                        std::size_t keySize,
-                        const std::uint8_t* data,
+Sha256Digest hmacSha256(const std::uint8_t* key, std::size_t keySize, const std::uint8_t* data,
                         std::size_t dataSize);
 
 /**
@@ -67,9 +65,7 @@ Sha256Digest hmacSha256(const std::uint8_t* key,
  *
  * @return true when both buffers contain identical bytes.
  */
-bool constantTimeEqual(const std::uint8_t* lhs,
-                       const std::uint8_t* rhs,
-                       std::size_t size);
+bool constantTimeEqual(const std::uint8_t* lhs, const std::uint8_t* rhs, std::size_t size);
 
 /// @brief Convenience overload for vector-backed data.
 Sha256Digest sha256(const std::vector<std::uint8_t>& data);
@@ -90,10 +86,7 @@ AesBlock aes128EncryptBlock(const Aes128Key& key, const AesBlock& block);
  * The counter block is incremented as a big-endian 128-bit integer after each
  * block.  Input and output may point to the same buffer.
  */
-void aes128CtrXor(const Aes128Key& key,
-                  AesBlock counter,
-                  const std::uint8_t* input,
-                  std::uint8_t* output,
-                  std::size_t size);
+void aes128CtrXor(const Aes128Key& key, AesBlock counter, const std::uint8_t* input,
+                  std::uint8_t* output, std::size_t size);
 
-}  // namespace mj2x::runtime::crypto
+}   // namespace mj2x::runtime::crypto

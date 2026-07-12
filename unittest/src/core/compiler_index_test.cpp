@@ -5,14 +5,15 @@
 
 using namespace mj2x;
 
-TEST(CompilerIndexTest, AddAndRetrieveClass) {
-    CompilerIndex index;
-    auto cn = std::make_unique<jbytecode::tree::ClassNode>();
+TEST(CompilerIndexTest, AddAndRetrieveClass)
+{
+    CompilerIndex       index;
+    auto                cn = std::make_unique<jbytecode::tree::ClassNode>();
     ca::str::Utf8String name("Test");
     ca::str::Utf8String superName("java/lang/Object");
-    cn->name = name.ref();
-    cn->version = jbytecode::core::Opcodes::V1_8;
-    cn->access = jbytecode::core::Opcodes::ACC_PUBLIC;
+    cn->name      = name.ref();
+    cn->version   = jbytecode::core::Opcodes::V1_8;
+    cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->superName = superName.ref();
 
     CompilerClass cls;
@@ -25,8 +26,8 @@ TEST(CompilerIndexTest, AddAndRetrieveClass) {
     EXPECT_FALSE(retrieved->modified);
 }
 
-TEST(CompilerIndexTest, GetNonExistentClassReturnsNull) {
+TEST(CompilerIndexTest, GetNonExistentClassReturnsNull)
+{
     CompilerIndex index;
     EXPECT_EQ(index.getClass("NonExistent"), nullptr);
 }
-

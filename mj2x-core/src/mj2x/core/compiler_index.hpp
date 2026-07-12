@@ -11,36 +11,42 @@
 
 namespace mj2x {
 
-struct MethodID {
+struct MethodID
+{
     std::string owner;
     std::string name;
     std::string desc;
 
-    bool operator==(const MethodID& o) const {
+    bool operator==(const MethodID& o) const
+    {
         return owner == o.owner && name == o.name && desc == o.desc;
     }
 };
 
-struct FieldID {
+struct FieldID
+{
     std::string owner;
     std::string name;
     std::string desc;
 
-    bool operator==(const FieldID& o) const {
+    bool operator==(const FieldID& o) const
+    {
         return owner == o.owner && name == o.name && desc == o.desc;
     }
 };
 
 struct BackendResult;
 
-struct CompilerMethod {
-    jbytecode::tree::MethodNode* methodNode = nullptr;
-    bool markedForCompile = false;
-    bool compiled = false;
-    BackendResult backendResult;
+struct CompilerMethod
+{
+    jbytecode::tree::MethodNode* methodNode       = nullptr;
+    bool                         markedForCompile = false;
+    bool                         compiled         = false;
+    BackendResult                backendResult;
 };
 
-struct CompilerField {
+struct CompilerField
+{
     jbytecode::tree::FieldNode* fieldNode = nullptr;
 };
 
@@ -54,46 +60,51 @@ struct CompilerField {
  * JVM class name so `OutputWriter` can replace their bytes after backend
  * injection while keeping non-class resources unchanged.
  */
-struct JarEntryRecord {
-    std::string name;
+struct JarEntryRecord
+{
+    std::string         name;
     std::vector<ca::u8> data;
-    bool isClass = false;
-    std::string className;
+    bool                isClass = false;
+    std::string         className;
 };
 
-struct CompilerClass {
+struct CompilerClass
+{
     std::unique_ptr<jbytecode::tree::ClassNode> classNode;
-    std::vector<CompilerMethod> methods;
-    std::vector<CompilerField> fields;
-    bool modified = false;
-    bool isLibrary = false;
+    std::vector<CompilerMethod>                 methods;
+    std::vector<CompilerField>                  fields;
+    bool                                        modified  = false;
+    bool                                        isLibrary = false;
 };
 
-} // namespace mj2x
+}   // namespace mj2x
 
 // -- hash specializations for MethodID / FieldID --
 namespace std {
 template<>
-struct hash<mj2x::MethodID> {
-    size_t operator()(const mj2x::MethodID& id) const {
-        return hash<string>()(id.owner) ^
-               (hash<string>()(id.name) << 1) ^
+struct hash<mj2x::MethodID>
+{
+    size_t operator()(const mj2x::MethodID& id) const
+    {
+        return hash<string>()(id.owner) ^ (hash<string>()(id.name) << 1) ^
                (hash<string>()(id.desc) << 2);
     }
 };
 template<>
-struct hash<mj2x::FieldID> {
-    size_t operator()(const mj2x::FieldID& id) const {
-        return hash<string>()(id.owner) ^
-               (hash<string>()(id.name) << 1) ^
+struct hash<mj2x::FieldID>
+{
+    size_t operator()(const mj2x::FieldID& id) const
+    {
+        return hash<string>()(id.owner) ^ (hash<string>()(id.name) << 1) ^
                (hash<string>()(id.desc) << 2);
     }
 };
-} // namespace std
+}   // namespace std
 
 namespace mj2x {
 
-class CompilerIndex {
+class CompilerIndex
+{
 public:
     using ClassMap = std::unordered_map<std::string, CompilerClass>;
 
@@ -107,7 +118,7 @@ public:
      */
     CompilerClass* getClass(const std::string& name);
 
-    ClassMap& getClasses() { return classes_; }
+    ClassMap&       getClasses() { return classes_; }
     const ClassMap& getClasses() const { return classes_; }
 
     /**
@@ -133,20 +144,19 @@ public:
     /**
      * @brief Ordered JAR entries used by `OutputWriter`.
      */
-    std::vector<JarEntryRecord>& jarEntries() { return jarEntries_; }
+    std::vector<JarEntryRecord>&       jarEntries() { return jarEntries_; }
     const std::vector<JarEntryRecord>& jarEntries() const { return jarEntries_; }
 
     // Utf8StringArena ownership: ClassReader/ClassWriter 需要 arena&，且 arena 必须比
     // 它们活得更久。CompilerIndex 持有 arena，全编译期共享一个（ARCHITECTURE_REDESIGN §2.1）。
-    ca::str::Utf8StringArena& arena() { return arena_; }
+    ca::str::Utf8StringArena&       arena() { return arena_; }
     const ca::str::Utf8StringArena& arena() const { return arena_; }
 
 private:
-    ClassMap classes_;
+    ClassMap                    classes_;
     std::vector<JarEntryRecord> jarEntries_;
-    bool jarInput_ = false;
-    ca::str::Utf8StringArena arena_;
+    bool                        jarInput_ = false;
+    ca::str::Utf8StringArena    arena_;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

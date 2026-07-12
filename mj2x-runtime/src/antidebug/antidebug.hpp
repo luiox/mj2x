@@ -16,21 +16,22 @@
 namespace mj2x::runtime::antidebug {
 
 /// @brief Collected debugger signal flags.
-struct DebugSignals {
-    bool debuggerPresent = false;
-    bool remoteDebuggerPresent = false;
-    bool pebBeingDebugged = false;
-    bool pebDebugHeapFlags = false;
-    bool processDebugPort = false;
-    bool processDebugObject = false;
-    bool processDebugFlags = false;
-    bool hardwareBreakpoint = false;
-    bool softwareBreakpointPattern = false;
-    bool platformProbeAvailable = false;
-    bool pebProbeAvailable = false;
-    bool ntQueryProbeAvailable = false;
+struct DebugSignals
+{
+    bool debuggerPresent                  = false;
+    bool remoteDebuggerPresent            = false;
+    bool pebBeingDebugged                 = false;
+    bool pebDebugHeapFlags                = false;
+    bool processDebugPort                 = false;
+    bool processDebugObject               = false;
+    bool processDebugFlags                = false;
+    bool hardwareBreakpoint               = false;
+    bool softwareBreakpointPattern        = false;
+    bool platformProbeAvailable           = false;
+    bool pebProbeAvailable                = false;
+    bool ntQueryProbeAvailable            = false;
     bool hardwareBreakpointProbeAvailable = false;
-    bool nativeProbeFailed = false;
+    bool nativeProbeFailed                = false;
 };
 
 /**
@@ -52,11 +53,8 @@ bool hasSuspiciousNtGlobalFlag(std::uint32_t ntGlobalFlag);
 /**
  * @brief Check whether x86/x64 debug registers describe an enabled breakpoint.
  */
-bool hasEnabledHardwareBreakpoint(std::uintptr_t dr0,
-                                  std::uintptr_t dr1,
-                                  std::uintptr_t dr2,
-                                  std::uintptr_t dr3,
-                                  std::uintptr_t dr7);
+bool hasEnabledHardwareBreakpoint(std::uintptr_t dr0, std::uintptr_t dr1, std::uintptr_t dr2,
+                                  std::uintptr_t dr3, std::uintptr_t dr7);
 
 /**
  * @brief 扫描内存片段中是否存在常见软件断点指令。
@@ -73,4 +71,4 @@ bool containsSoftwareBreakpoint(const void* data, std::size_t size);
 /// @brief Convenience predicate for any collected debugger signal.
 bool hasDebugSignal(const DebugSignals& signals);
 
-}  // namespace mj2x::runtime::antidebug
+}   // namespace mj2x::runtime::antidebug

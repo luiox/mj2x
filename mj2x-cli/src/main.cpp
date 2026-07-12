@@ -263,7 +263,7 @@ static int generateCMakeProject(const std::string& projectDirValue, const std::s
 
 int main(int argc, char** argv)
 {
-    CliOptions options;
+    CliOptions  options;
     std::string configPath;
 
     bool commandLineNativePrefixesSeen = false;
@@ -383,9 +383,9 @@ int main(int argc, char** argv)
     }
 
     if (!options.xmakeProjectDir.empty() && options.cOutputPath.empty()) {
-        options.cOutputPath = (std::filesystem::path(options.xmakeProjectDir) / "src" /
-                               "generated" / "native.c")
-                                  .string();
+        options.cOutputPath =
+            (std::filesystem::path(options.xmakeProjectDir) / "src" / "generated" / "native.c")
+                .string();
     }
 
     if (options.backendSelected && options.cOutputPath.empty()) {
@@ -440,7 +440,7 @@ int main(int argc, char** argv)
         (options.compileNative || !options.xmakeProjectDir.empty()) && jarOutput;
     std::filesystem::path nativeLibraryPath =
         mj2x::cli::nativeLibraryPathForOutput(options.outputPath);
-    const std::string     nativeResourceEntry =
+    const std::string nativeResourceEntry =
         "META-INF/mj2x/native/" + nativeLibraryPath.filename().string();
     const std::string nativeResourcePath = nativeResourceEntry;
     const std::string nativeTempSuffix   = nativeLibraryPath.extension().string();
@@ -479,8 +479,7 @@ int main(int argc, char** argv)
     }
     else if (!options.nativeMethodPrefixes.empty()) {
         pipeline.registerPreprocessor(
-            std::make_unique<mj2x::NativeMethodPrefixPreprocessor>(
-                options.nativeMethodPrefixes));
+            std::make_unique<mj2x::NativeMethodPrefixPreprocessor>(options.nativeMethodPrefixes));
     }
     else {
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
@@ -517,7 +516,8 @@ int main(int argc, char** argv)
             crtRoot = mj2x::cli::findCrtRoot(argv[0]);
             if (crtRoot.empty()) {
                 fprintf(stderr,
-                        "[mj2x] ERROR: RegC --compile requires an mj2x-crt source pack; set MJ2X_CRT_DIR or use --generate-xmake.\n");
+                        "[mj2x] ERROR: RegC --compile requires an mj2x-crt source pack; set "
+                        "MJ2X_CRT_DIR or use --generate-xmake.\n");
                 return 1;
             }
         }

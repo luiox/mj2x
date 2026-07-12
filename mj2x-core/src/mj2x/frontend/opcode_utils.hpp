@@ -6,11 +6,10 @@
 
 namespace mj2x {
 
-BinaryOp opcodeToBinaryOp(int opcode);
-UnaryOp opcodeToUnaryOp(int opcode);
+BinaryOp      opcodeToBinaryOp(int opcode);
+UnaryOp       opcodeToUnaryOp(int opcode);
 PrimitiveKind opcodeToResultType(int opcode);
-CmpOp branchOpcodeToCmpOp(int opcode);
-CmpOp branchZeroOpcodeToCmpOp(int opcode);
+CmpOp         branchOpcodeToCmpOp(int opcode);
+CmpOp         branchZeroOpcodeToCmpOp(int opcode);
 
-} // namespace mj2x
-
+}   // namespace mj2x

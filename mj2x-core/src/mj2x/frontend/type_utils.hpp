@@ -8,7 +8,6 @@ namespace mj2x {
 
 PrimitiveKind jvmSortToPrimitive(int sort);
 PrimitiveKind jvmDescToPrimitive(const std::string& desc);
-int primitiveStackSize(PrimitiveKind kind);
+int           primitiveStackSize(PrimitiveKind kind);
 
-} // namespace mj2x
-
+}   // namespace mj2x

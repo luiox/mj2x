@@ -17,8 +17,9 @@ using SnippetVars = std::unordered_map<std::string, std::string>;
 
 std::string renderSnippet(std::string_view text, const SnippetVars& vars);
 
-template <typename Key>
-class CodeSnippetSet {
+template<typename Key>
+class CodeSnippetSet
+{
 public:
     CodeSnippetSet(std::initializer_list<std::pair<const Key, std::string_view>> items)
     {
@@ -36,4 +37,4 @@ private:
     std::unordered_map<Key, std::string> snippets_;
 };
 
-}  // namespace mj2x::codegen
+}   // namespace mj2x::codegen

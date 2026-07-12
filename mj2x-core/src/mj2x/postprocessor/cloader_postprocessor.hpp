@@ -4,9 +4,10 @@
 
 namespace mj2x {
 
-class CLoaderPostprocessor : public Postprocessor {
+class CLoaderPostprocessor : public Postprocessor
+{
 public:
     void process(CompilerIndex& index) override;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

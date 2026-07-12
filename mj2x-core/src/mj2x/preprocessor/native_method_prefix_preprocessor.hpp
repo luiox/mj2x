@@ -8,25 +8,26 @@
 
 namespace mj2x {
 
-class NativeMethodPrefixPreprocessor : public Preprocessor {
+class NativeMethodPrefixPreprocessor : public Preprocessor
+{
 public:
     explicit NativeMethodPrefixPreprocessor(std::vector<std::string> prefixes)
         : prefixes_(std::move(prefixes))
     {}
 
-    void process(CompilerIndex& index) override {
+    void process(CompilerIndex& index) override
+    {
         int marked = 0;
         for (auto& [className, cls] : index.getClasses()) {
             if (cls.isLibrary) continue;
             for (auto& method : cls.methods) {
                 auto* mn = method.methodNode;
-                if (mn->access & (jbytecode::core::Opcodes::ACC_ABSTRACT |
-                                  jbytecode::core::Opcodes::ACC_NATIVE))
+                if (mn->access &
+                    (jbytecode::core::Opcodes::ACC_ABSTRACT | jbytecode::core::Opcodes::ACC_NATIVE))
                     continue;
 
                 const auto methodName = mn->name.to_std_string();
-                if (methodName == "<init>" || methodName == "<clinit>")
-                    continue;
+                if (methodName == "<init>" || methodName == "<clinit>") continue;
 
                 const std::string key = className + "." + methodName;
                 if (!matches(key)) continue;
@@ -39,7 +40,8 @@ public:
     }
 
 private:
-    bool matches(const std::string& key) const {
+    bool matches(const std::string& key) const
+    {
         for (const auto& prefix : prefixes_) {
             if (key.rfind(prefix, 0) == 0) return true;
         }
@@ -49,4 +51,4 @@ private:
     std::vector<std::string> prefixes_;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

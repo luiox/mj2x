@@ -6,7 +6,8 @@
 
 namespace mj2x {
 
-class NativeLoaderPostprocessor : public Postprocessor {
+class NativeLoaderPostprocessor : public Postprocessor
+{
 public:
     explicit NativeLoaderPostprocessor(std::string resourcePath);
 
@@ -16,4 +17,4 @@ private:
     std::string resourcePath_;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

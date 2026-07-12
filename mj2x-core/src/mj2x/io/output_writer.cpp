@@ -19,7 +19,8 @@ using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
 
-struct OutputWriter::Impl {};
+struct OutputWriter::Impl
+{};
 
 OutputWriter::OutputWriter()
     : impl_(std::make_unique<Impl>())
@@ -27,17 +28,18 @@ OutputWriter::OutputWriter()
 
 OutputWriter::~OutputWriter() = default;
 
-static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& cls) {
+static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& cls)
+{
     const ca::i32 flags = cls.modified ? ClassWriter::COMPUTE_FRAMES : ClassWriter::COMPUTE_MAXS;
-    ClassWriter writer(index.arena(), flags);
+    ClassWriter   writer(index.arena(), flags);
     cls.classNode->accept(&writer);
     return writer.toByteArray();
 }
 
-static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(
-    const std::string& name,
-    const std::vector<ca::u8>& data) {
-    auto local = std::make_unique<jzip::LocalFileHeader>();
+static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&         name,
+                                                              const std::vector<ca::u8>& data)
+{
+    auto       local = std::make_unique<jzip::LocalFileHeader>();
     zip::Crc32 crc;
     crc.update(data.data(), data.size());
 
@@ -52,7 +54,8 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(
     return local;
 }
 
-static void writeBytes(const std::string& path, const std::vector<ca::u8>& bytes) {
+static void writeBytes(const std::string& path, const std::vector<ca::u8>& bytes)
+{
     std::ofstream ofs(path, std::ios::binary);
     if (!ofs) {
         printf("[OutputWriter] ERROR: cannot write %s\n", path.c_str());
@@ -62,10 +65,11 @@ static void writeBytes(const std::string& path, const std::vector<ca::u8>& bytes
               static_cast<std::streamsize>(bytes.size()));
 }
 
-static void writeJar(const std::string& path, CompilerIndex& index) {
+static void writeJar(const std::string& path, CompilerIndex& index)
+{
     jzip::ZipArchive archive;
-    size_t classCount = 0;
-    size_t resourceCount = 0;
+    size_t           classCount    = 0;
+    size_t           resourceCount = 0;
 
     for (const auto& entry : index.jarEntries()) {
         std::vector<ca::u8> data = entry.data;
@@ -79,7 +83,8 @@ static void writeJar(const std::string& path, CompilerIndex& index) {
                 }
                 ++classCount;
             }
-        } else {
+        }
+        else {
             ++resourceCount;
         }
         archive.addPart(makeStoredEntry(entry.name, data));
@@ -90,16 +95,21 @@ static void writeJar(const std::string& path, CompilerIndex& index) {
     auto bytes = jzip::ZipIO::writeDirect(archive);
     writeBytes(path, bytes);
     printf("[OutputWriter] Written JAR: %s (%zu bytes, %zu classes, %zu resources)\n",
-           path.c_str(), bytes.size(), classCount, resourceCount);
+           path.c_str(),
+           bytes.size(),
+           classCount,
+           resourceCount);
 }
 
-static bool isGeneratedRuntimeClass(const std::string& name) {
+static bool isGeneratedRuntimeClass(const std::string& name)
+{
     return name == "mj2x/cloader/Loader";
 }
 
-static fs::path sidecarClassPath(const fs::path& outputPath, const std::string& className) {
+static fs::path sidecarClassPath(const fs::path& outputPath, const std::string& className)
+{
     fs::path sidecar = outputPath.parent_path();
-    size_t start = 0;
+    size_t   start   = 0;
     while (start < className.size()) {
         const auto slash = className.find('/', start);
         if (slash == std::string::npos) {
@@ -112,21 +122,22 @@ static fs::path sidecarClassPath(const fs::path& outputPath, const std::string& 
     return sidecar;
 }
 
-static void writeClassFile(const std::string& path, CompilerIndex& index) {
-    auto& classes = index.getClasses();
+static void writeClassFile(const std::string& path, CompilerIndex& index)
+{
+    auto&          classes = index.getClasses();
     CompilerClass* primary = nullptr;
-    std::string primaryName;
+    std::string    primaryName;
 
     for (auto& [name, cls] : classes) {
         if (!isGeneratedRuntimeClass(name)) {
-            primary = &cls;
+            primary     = &cls;
             primaryName = name;
             break;
         }
     }
     if (primary == nullptr) {
-        auto it = classes.begin();
-        primary = &it->second;
+        auto it     = classes.begin();
+        primary     = &it->second;
         primaryName = it->first;
     }
 
@@ -136,20 +147,21 @@ static void writeClassFile(const std::string& path, CompilerIndex& index) {
 
     const fs::path outputPath(path);
     for (auto& [name, cls] : classes) {
-        if (name == primaryName)
-            continue;
+        if (name == primaryName) continue;
 
-        const auto sidecarPath = sidecarClassPath(outputPath, name);
+        const auto      sidecarPath = sidecarClassPath(outputPath, name);
         std::error_code ec;
         fs::create_directories(sidecarPath.parent_path(), ec);
         auto sidecarBytes = writeClassBytes(index, cls);
         writeBytes(sidecarPath.string(), sidecarBytes);
         printf("[OutputWriter] Written sidecar: %s (%zu bytes)\n",
-               sidecarPath.string().c_str(), sidecarBytes.size());
+               sidecarPath.string().c_str(),
+               sidecarBytes.size());
     }
 }
 
-void OutputWriter::write(const std::string& path, CompilerIndex& index) {
+void OutputWriter::write(const std::string& path, CompilerIndex& index)
+{
     auto& classes = index.getClasses();
     if (classes.empty()) {
         printf("[OutputWriter] No classes to write\n");
@@ -164,5 +176,4 @@ void OutputWriter::write(const std::string& path, CompilerIndex& index) {
     writeClassFile(path, index);
 }
 
-} // namespace mj2x
-
+}   // namespace mj2x

@@ -25,4 +25,4 @@ namespace mj2x::backend {
 ///          `#include` block and before the per-method bodies.
 std::string stackCRuntimePrelude();
 
-}  // namespace mj2x::backend
+}   // namespace mj2x::backend

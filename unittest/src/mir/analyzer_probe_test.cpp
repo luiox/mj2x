@@ -31,13 +31,15 @@ using namespace ca::str;
 
 namespace {
 
-std::string toStr(Utf8StringRef ref) {
+std::string toStr(Utf8StringRef ref)
+{
     return std::string(reinterpret_cast<const char*>(ref.data()), ref.byte_length());
 }
 
 // 在 test_resource/analyzer/analyzer/AnalyzerProbe.class 里找名为 name+desc 的方法。
 // 返回 nullptr 表示没找到（测试会 FAIL，便于发现资源缺失）。
-MethodNode* findMethod(ClassNode& cn, const std::string& name, const std::string& desc) {
+MethodNode* findMethod(ClassNode& cn, const std::string& name, const std::string& desc)
+{
     for (auto* m : cn.methods) {
         if (toStr(m->name) == name && toStr(m->desc) == desc) return m;
     }
@@ -45,35 +47,36 @@ MethodNode* findMethod(ClassNode& cn, const std::string& name, const std::string
 }
 
 // 用 libjbytecode 读 AnalyzerProbe.class（走 CompilerIndex 同款 arena 路径）。
-std::unique_ptr<ClassNode> loadProbeClass() {
-    auto bytes = test::getResource("analyzer/analyzer/AnalyzerProbe.class");
-    auto cn = std::make_unique<ClassNode>();
+std::unique_ptr<ClassNode> loadProbeClass()
+{
+    auto            bytes = test::getResource("analyzer/analyzer/AnalyzerProbe.class");
+    auto            cn    = std::make_unique<ClassNode>();
     Utf8StringArena arena;
-    ClassReader reader(arena, bytes.data(), static_cast<ca::i32>(bytes.size()));
+    ClassReader     reader(arena, bytes.data(), static_cast<ca::i32>(bytes.size()));
     reader.accept(cn.get(), 0);
     return cn;
 }
 
-} // namespace
+}   // namespace
 
 // ============================================================================
 // Part 1: BasicInterpreter — 循环头/合并点的 frame shape 必须正确
 // ============================================================================
 
-TEST(AnalyzerProbe, DISABLED_BasicInterpreterSumToLoopHeaderMerges) {
+TEST(AnalyzerProbe, DISABLED_BasicInterpreterSumToLoopHeaderMerges)
+{
     auto cn = loadProbeClass();
     ASSERT_NE(cn, nullptr);
     auto* m = findMethod(*cn, "sumTo", "(I)I");
     ASSERT_NE(m, nullptr) << "sumTo(I)I not found in AnalyzerProbe";
 
-    BasicInterpreter interp;
+    BasicInterpreter     interp;
     Analyzer<BasicValue> analyzer(&interp);
-    auto frames = analyzer.analyze(cn->name, m);
-    auto insns = m->instructions.toArray();
+    auto                 frames = analyzer.analyze(cn->name, m);
+    auto                 insns  = m->instructions.toArray();
 
     ASSERT_FALSE(frames.empty()) << "analyzer returned no frames";
-    ASSERT_EQ(frames.size(), insns.size())
-        << "frame count must match instruction count";
+    ASSERT_EQ(frames.size(), insns.size()) << "frame count must match instruction count";
 
     // pc 4 (iload_2) 是循环头：前驱 = 顺序进入(pc3 istore_2 之后) + 回边(pc16 goto)。
     // 断言：该处 frame 存在（可达且已 merge 成功），locals 数 == 3 (n,s,i)，stack 空。
@@ -92,17 +95,18 @@ TEST(AnalyzerProbe, DISABLED_BasicInterpreterSumToLoopHeaderMerges) {
         << "local2 (i) must merge to INT at loop header";
 }
 
-TEST(AnalyzerProbe, DISABLED_BasicInterpreterGcdWhileLoopMerge) {
+TEST(AnalyzerProbe, DISABLED_BasicInterpreterGcdWhileLoopMerge)
+{
     auto cn = loadProbeClass();
     ASSERT_NE(cn, nullptr);
-    auto* m = findMethod(*cn, "sumTo", "(I)I"); // 先确认 class 加载正常
+    auto* m = findMethod(*cn, "sumTo", "(I)I");   // 先确认 class 加载正常
     (void)m;
     auto* g = findMethod(*cn, "gcd", "(II)I");
     ASSERT_NE(g, nullptr) << "gcd(II)I not found";
 
-    BasicInterpreter interp;
+    BasicInterpreter     interp;
     Analyzer<BasicValue> analyzer(&interp);
-    auto frames = analyzer.analyze(cn->name, g);
+    auto                 frames = analyzer.analyze(cn->name, g);
 
     // gcd 的回边目标是 pc0（方法入口本身，goto 0）。入口 frame 本身就是 merge 结果。
     ASSERT_FALSE(frames.empty());
@@ -123,16 +127,17 @@ TEST(AnalyzerProbe, DISABLED_BasicInterpreterGcdWhileLoopMerge) {
 // 这是 R1a block-argument SSA 的根基：phi 正是"该 value 的 SourceValue.insns_
 // 含 ≥2 条指令"。如果 SourceInterpreter 在循环回边上算不出多源集合，整个路线就站不住。
 
-TEST(AnalyzerProbe, DISABLED_SourceInterpreterSumToInductionVarHasPhi) {
+TEST(AnalyzerProbe, DISABLED_SourceInterpreterSumToInductionVarHasPhi)
+{
     auto cn = loadProbeClass();
     ASSERT_NE(cn, nullptr);
     auto* m = findMethod(*cn, "sumTo", "(I)I");
     ASSERT_NE(m, nullptr);
 
-    SourceInterpreter interp;
+    SourceInterpreter     interp;
     Analyzer<SourceValue> analyzer(&interp);
-    auto frames = analyzer.analyze(cn->name, m);
-    auto insns = m->instructions.toArray();
+    auto                  frames = analyzer.analyze(cn->name, m);
+    auto                  insns  = m->instructions.toArray();
     ASSERT_EQ(frames.size(), insns.size());
 
     // pc4 (iload_2) 处 local1 (s) 的 SourceValue.insns_ 必须含 ≥2 条指令：
@@ -143,25 +148,24 @@ TEST(AnalyzerProbe, DISABLED_SourceInterpreterSumToInductionVarHasPhi) {
     ASSERT_NE(fh, nullptr);
     const auto& sSources = fh->getLocal(1).insns_;
     EXPECT_GE(sSources.size(), 2u)
-        << "local1 (s) must have >=2 reaching defs at loop header (= phi); got "
-        << sSources.size();
+        << "local1 (s) must have >=2 reaching defs at loop header (= phi); got " << sSources.size();
 
     // 同理 local2 (i)：ICONST_0 at pc2 + IINC at pc13。
     const auto& iSources = fh->getLocal(2).insns_;
     EXPECT_GE(iSources.size(), 2u)
-        << "local2 (i) must have >=2 reaching defs at loop header (= phi); got "
-        << iSources.size();
+        << "local2 (i) must have >=2 reaching defs at loop header (= phi); got " << iSources.size();
 }
 
-TEST(AnalyzerProbe, DISABLED_SourceInterpreterGcdBackEdgePhi) {
+TEST(AnalyzerProbe, DISABLED_SourceInterpreterGcdBackEdgePhi)
+{
     auto cn = loadProbeClass();
     ASSERT_NE(cn, nullptr);
     auto* g = findMethod(*cn, "gcd", "(II)I");
     ASSERT_NE(g, nullptr);
 
-    SourceInterpreter interp;
+    SourceInterpreter     interp;
     Analyzer<SourceValue> analyzer(&interp);
-    auto frames = analyzer.analyze(cn->name, g);
+    auto                  frames = analyzer.analyze(cn->name, g);
     ASSERT_FALSE(frames.empty());
 
     // pc0 处 local0 (a) 的 def 源：方法参数（newParameterValue）+ pc11 istore_0。
@@ -182,15 +186,16 @@ TEST(AnalyzerProbe, DISABLED_SourceInterpreterGcdBackEdgePhi) {
 // "全联通"），Part2 也会通过但语义错误。这一节反向校验：没有控制流汇合的地方，
 // insns_ 必须只有 1 个源。
 
-TEST(AnalyzerProbe, DISABLED_SourceInterpreterSingleDefWhereNoMerge) {
+TEST(AnalyzerProbe, DISABLED_SourceInterpreterSingleDefWhereNoMerge)
+{
     auto cn = loadProbeClass();
     ASSERT_NE(cn, nullptr);
     auto* a = findMethod(*cn, "abs", "(I)I");
     ASSERT_NE(a, nullptr);
 
-    SourceInterpreter interp;
+    SourceInterpreter     interp;
     Analyzer<SourceValue> analyzer(&interp);
-    auto frames = analyzer.analyze(cn->name, a);
+    auto                  frames = analyzer.analyze(cn->name, a);
 
     // abs 的 pc0 (iload_0) 处，local0 只有方法参数一个 def 源（还没进入任何 merge）。
     auto* f0 = frames[0];
@@ -202,7 +207,8 @@ TEST(AnalyzerProbe, DISABLED_SourceInterpreterSingleDefWhereNoMerge) {
 // ============================================================================
 // DIAGNOSTIC dump（调试用，非判定性）—— 观察分析器实际产出的 frame 内容
 // ============================================================================
-TEST(AnalyzerProbe, DISABLED_DiagnosticDumpSumTo) {
+TEST(AnalyzerProbe, DISABLED_DiagnosticDumpSumTo)
+{
     auto cn = loadProbeClass();
     ASSERT_NE(cn, nullptr);
     auto* m = findMethod(*cn, "sumTo", "(I)I");
@@ -211,21 +217,26 @@ TEST(AnalyzerProbe, DISABLED_DiagnosticDumpSumTo) {
 
     printf("\n=== sumTo BasicInterpreter ===\n");
     {
-        BasicInterpreter interp;
+        BasicInterpreter     interp;
         Analyzer<BasicValue> analyzer(&interp);
-        auto frames = analyzer.analyze(cn->name, m);
+        auto                 frames = analyzer.analyze(cn->name, m);
         printf("  frames.size()=%zu insns.size()=%zu maxLocals=%d\n",
-               frames.size(), insns.size(), m->maxLocals);
+               frames.size(),
+               insns.size(),
+               m->maxLocals);
         for (size_t i = 0; i < frames.size() && i < insns.size(); i++) {
             auto* fr = frames[i];
             printf("  [%zu] locals=%d", i, fr ? fr->getLocals() : -1);
             if (fr) {
                 printf(" [");
-                for (int j = 0; j < fr->getLocals(); j++) printf("%s", fr->getLocal(j).toString().c_str());
+                for (int j = 0; j < fr->getLocals(); j++)
+                    printf("%s", fr->getLocal(j).toString().c_str());
                 printf("] stack=%d[", fr->getStackSize());
-                for (int j = 0; j < fr->getStackSize(); j++) printf("%s", fr->getStack(j).toString().c_str());
+                for (int j = 0; j < fr->getStackSize(); j++)
+                    printf("%s", fr->getStack(j).toString().c_str());
                 printf("]");
-            } else {
+            }
+            else {
                 printf(" (null)");
             }
             printf("\n");
@@ -234,9 +245,9 @@ TEST(AnalyzerProbe, DISABLED_DiagnosticDumpSumTo) {
 
     printf("\n=== sumTo SourceInterpreter ===\n");
     {
-        SourceInterpreter interp;
+        SourceInterpreter     interp;
         Analyzer<SourceValue> analyzer(&interp);
-        auto frames = analyzer.analyze(cn->name, m);
+        auto                  frames = analyzer.analyze(cn->name, m);
         for (size_t i = 0; i < frames.size() && i < insns.size(); i++) {
             auto* fr = frames[i];
             printf("  [%zu] locals=%d", i, fr ? fr->getLocals() : -1);
@@ -248,7 +259,8 @@ TEST(AnalyzerProbe, DISABLED_DiagnosticDumpSumTo) {
                 for (int j = 0; j < fr->getStackSize(); j++)
                     printf("S%d:%zu ", j, fr->getStack(j).insns_.size());
                 printf("]");
-            } else {
+            }
+            else {
                 printf(" (null)");
             }
             printf("\n");

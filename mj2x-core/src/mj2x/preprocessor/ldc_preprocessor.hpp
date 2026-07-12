@@ -15,9 +15,10 @@
 
 namespace mj2x {
 
-class LdcPreprocessor : public Preprocessor {
+class LdcPreprocessor : public Preprocessor
+{
 public:
     void process(CompilerIndex& index) override;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

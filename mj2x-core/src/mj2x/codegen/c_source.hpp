@@ -22,10 +22,12 @@
 namespace mj2x::codegen {
 
 /// @brief Indent-aware sink for generated C/C++ source text.
-class CSourceStream {
+class CSourceStream
+{
 public:
     /// @brief Append one logical line at the current indent, terminated by `\n`.
-    void emitLine(std::string_view line) {
+    void emitLine(std::string_view line)
+    {
         writeIndent();
         out_ << line << '\n';
     }
@@ -39,7 +41,8 @@ public:
     void indent() { ++indentLevel_; }
 
     /// @brief Decrease the indent level, clamped at zero.
-    void dedent() {
+    void dedent()
+    {
         if (indentLevel_ > 0) --indentLevel_;
     }
 
@@ -50,12 +53,13 @@ public:
     int indentLevel() const { return indentLevel_; }
 
 private:
-    void writeIndent() {
+    void writeIndent()
+    {
         for (int i = 0; i < indentLevel_; ++i) out_ << "    ";
     }
 
     std::ostringstream out_;
-    int indentLevel_ = 0;
+    int                indentLevel_ = 0;
 };
 
-}  // namespace mj2x::codegen
+}   // namespace mj2x::codegen

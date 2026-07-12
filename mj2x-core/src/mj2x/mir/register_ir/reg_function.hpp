@@ -18,11 +18,12 @@
 namespace mj2x {
 
 /// @brief L3 register-form function produced from one SSAFunction.
-struct RegFunction {
-    SSAFunctionSymbol symbol;
-    std::vector<RegValue> parameters;
+struct RegFunction
+{
+    SSAFunctionSymbol                      symbol;
+    std::vector<RegValue>                  parameters;
     std::vector<std::unique_ptr<RegBlock>> blocks;
-    RegBlock* entry = nullptr;
+    RegBlock*                              entry = nullptr;
     /**
      * @brief Exception regions lowered from SSA.
      *
@@ -44,4 +45,4 @@ struct RegFunction {
  */
 bool validateRegIRNoStackSlots(const RegFunction& fn, std::string& reason);
 
-} // namespace mj2x
+}   // namespace mj2x

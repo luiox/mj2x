@@ -46,26 +46,23 @@ crypto::Sha256Digest hkdfExtract(const std::vector<std::uint8_t>& salt,
  * @param outputSize Number of output bytes required.
  * @return Derived key stream of exactly `outputSize` bytes.
  */
-std::vector<std::uint8_t> hkdfExpand(const crypto::Sha256Digest& prk,
-                                     const std::vector<std::uint8_t>& info,
-                                     std::size_t outputSize);
+std::vector<std::uint8_t> hkdfExpand(const crypto::Sha256Digest&      prk,
+                                     const std::vector<std::uint8_t>& info, std::size_t outputSize);
 
 /**
  * @brief Convenience HKDF-SHA256 extract+expand.
  */
 std::vector<std::uint8_t> hkdfSha256(const std::vector<std::uint8_t>& salt,
                                      const std::vector<std::uint8_t>& inputKeyMaterial,
-                                     const std::vector<std::uint8_t>& info,
-                                     std::size_t outputSize);
+                                     const std::vector<std::uint8_t>& info, std::size_t outputSize);
 
 /**
  * @brief Verify an HMAC-SHA256 tag in constant time.
  */
-bool verifyHmacSha256(const std::vector<std::uint8_t>& key,
-                      const std::vector<std::uint8_t>& data,
+bool verifyHmacSha256(const std::vector<std::uint8_t>& key, const std::vector<std::uint8_t>& data,
                       const crypto::Sha256Digest& expected);
 
 /// @brief Convert a narrow ASCII label to bytes for HKDF/HMAC domain separation.
 std::vector<std::uint8_t> labelBytes(const std::string& label);
 
-}  // namespace mj2x::runtime::kernel
+}   // namespace mj2x::runtime::kernel

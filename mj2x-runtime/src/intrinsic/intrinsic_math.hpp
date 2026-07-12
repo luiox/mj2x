@@ -108,4 +108,4 @@ std::int64_t mj2x_math_round(double value);
  */
 double mj2x_math_random();
 
-}  // extern "C"
+}   // extern "C"

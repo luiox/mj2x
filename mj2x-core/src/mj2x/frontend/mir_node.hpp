@@ -20,7 +20,8 @@ namespace mj2x {
  * as MIR nodes instead of being collapsed to NOP because the SSA builder needs
  * to apply JVM category-1/category-2 rules when it erases the operand stack.
  */
-enum class MIRKind : uint8_t {
+enum class MIRKind : uint8_t
+{
     NOP,
     LABEL,
     CONSTANT,
@@ -67,220 +68,348 @@ enum class MIRKind : uint8_t {
     LINE,
 };
 
-enum class BinaryOp : uint8_t {
-    ADD, SUB, MUL, DIV, REM,
-    SHL, SHR, USHR,
-    AND, OR, XOR,
+enum class BinaryOp : uint8_t
+{
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    REM,
+    SHL,
+    SHR,
+    USHR,
+    AND,
+    OR,
+    XOR,
 };
 
-enum class UnaryOp : uint8_t {
+enum class UnaryOp : uint8_t
+{
     NEG,
 };
 
-enum class CmpOp : uint8_t {
-    EQ, NE, LT, GE, GT, LE,
+enum class CmpOp : uint8_t
+{
+    EQ,
+    NE,
+    LT,
+    GE,
+    GT,
+    LE,
 };
 
-enum class PrimitiveKind : uint8_t {
-    BOOLEAN, BYTE, CHAR, SHORT, INT, LONG, FLOAT, DOUBLE, VOID, OBJECT,
+enum class PrimitiveKind : uint8_t
+{
+    BOOLEAN,
+    BYTE,
+    CHAR,
+    SHORT,
+    INT,
+    LONG,
+    FLOAT,
+    DOUBLE,
+    VOID,
+    OBJECT,
 };
 
 // -- MIRNode base --
-struct MIRNode {
+struct MIRNode
+{
     MIRKind kind;
-    explicit MIRNode(MIRKind k) : kind(k) {}
+    explicit MIRNode(MIRKind k)
+        : kind(k)
+    {}
     virtual ~MIRNode() = default;
 };
 
 // -- Concrete node types --
 
-struct MIRNop : MIRNode {
-    MIRNop() : MIRNode(MIRKind::NOP) {}
+struct MIRNop : MIRNode
+{
+    MIRNop()
+        : MIRNode(MIRKind::NOP)
+    {}
 };
 
-struct MIRLabel : MIRNode {
+struct MIRLabel : MIRNode
+{
     // label 标识用 Label*（读取期稳定）。bytecodeOffset 在树形重建后被重置为 -1，不可靠。
     jbytecode::core::Label* labelNode = nullptr;
-    explicit MIRLabel(jbytecode::core::Label* ln) : MIRNode(MIRKind::LABEL), labelNode(ln) {}
+    explicit MIRLabel(jbytecode::core::Label* ln)
+        : MIRNode(MIRKind::LABEL)
+        , labelNode(ln)
+    {}
 };
 
-struct MIRConstant : MIRNode {
+struct MIRConstant : MIRNode
+{
     std::variant<int64_t, double, std::nullptr_t, std::string, jbytecode::core::Type> value;
     PrimitiveKind type = PrimitiveKind::INT;
-    MIRConstant() : MIRNode(MIRKind::CONSTANT) {}
+    MIRConstant()
+        : MIRNode(MIRKind::CONSTANT)
+    {}
 };
 
-struct MIRLocalLoad : MIRNode {
-    int varIndex = 0;
-    PrimitiveKind type = PrimitiveKind::INT;
-    MIRLocalLoad() : MIRNode(MIRKind::LOCAL_LOAD) {}
+struct MIRLocalLoad : MIRNode
+{
+    int           varIndex = 0;
+    PrimitiveKind type     = PrimitiveKind::INT;
+    MIRLocalLoad()
+        : MIRNode(MIRKind::LOCAL_LOAD)
+    {}
 };
 
-struct MIRLocalStore : MIRNode {
-    int varIndex = 0;
-    PrimitiveKind type = PrimitiveKind::INT;
-    MIRLocalStore() : MIRNode(MIRKind::LOCAL_STORE) {}
+struct MIRLocalStore : MIRNode
+{
+    int           varIndex = 0;
+    PrimitiveKind type     = PrimitiveKind::INT;
+    MIRLocalStore()
+        : MIRNode(MIRKind::LOCAL_STORE)
+    {}
 };
 
-struct MIRIinc : MIRNode {
-    int varIndex = 0;
+struct MIRIinc : MIRNode
+{
+    int varIndex  = 0;
     int increment = 0;
-    MIRIinc() : MIRNode(MIRKind::IINC) {}
+    MIRIinc()
+        : MIRNode(MIRKind::IINC)
+    {}
 };
 
-struct MIRStackOp : MIRNode {
+struct MIRStackOp : MIRNode
+{
     using MIRNode::MIRNode;
     // Top-first operand stack type snapshot before this stack-shape opcode.
     // StackC uses it to distinguish category-2 values from category-1 pairs.
     std::vector<PrimitiveKind> stackBeforeTop;
 };
 
-struct MIRBinaryOp : MIRNode {
-    BinaryOp op = BinaryOp::ADD;
+struct MIRBinaryOp : MIRNode
+{
+    BinaryOp      op   = BinaryOp::ADD;
     PrimitiveKind type = PrimitiveKind::INT;
-    MIRBinaryOp() : MIRNode(MIRKind::BINARY_OP) {}
+    MIRBinaryOp()
+        : MIRNode(MIRKind::BINARY_OP)
+    {}
 };
 
-struct MIRUnaryOp : MIRNode {
-    UnaryOp op = UnaryOp::NEG;
+struct MIRUnaryOp : MIRNode
+{
+    UnaryOp       op   = UnaryOp::NEG;
     PrimitiveKind type = PrimitiveKind::INT;
-    MIRUnaryOp() : MIRNode(MIRKind::UNARY_OP) {}
+    MIRUnaryOp()
+        : MIRNode(MIRKind::UNARY_OP)
+    {}
 };
 
-struct MIRCmp : MIRNode {
-    PrimitiveKind type = PrimitiveKind::LONG;
-    bool nanGreater = false;
-    MIRCmp() : MIRNode(MIRKind::CMP) {}
+struct MIRCmp : MIRNode
+{
+    PrimitiveKind type       = PrimitiveKind::LONG;
+    bool          nanGreater = false;
+    MIRCmp()
+        : MIRNode(MIRKind::CMP)
+    {}
 };
 
-struct MIRCast : MIRNode {
+struct MIRCast : MIRNode
+{
     PrimitiveKind from = PrimitiveKind::INT;
-    PrimitiveKind to = PrimitiveKind::INT;
-    MIRCast() : MIRNode(MIRKind::CAST) {}
+    PrimitiveKind to   = PrimitiveKind::INT;
+    MIRCast()
+        : MIRNode(MIRKind::CAST)
+    {}
 };
 
-struct MIRBranch : MIRNode {
-    CmpOp op = CmpOp::EQ;
-    PrimitiveKind type = PrimitiveKind::INT;
+struct MIRBranch : MIRNode
+{
+    CmpOp                   op          = CmpOp::EQ;
+    PrimitiveKind           type        = PrimitiveKind::INT;
     jbytecode::core::Label* targetLabel = nullptr;
-    MIRBranch() : MIRNode(MIRKind::BRANCH) {}
+    MIRBranch()
+        : MIRNode(MIRKind::BRANCH)
+    {}
 };
 
-struct MIRBranchZero : MIRNode {
-    CmpOp op = CmpOp::EQ;
-    PrimitiveKind type = PrimitiveKind::INT;
+struct MIRBranchZero : MIRNode
+{
+    CmpOp                   op          = CmpOp::EQ;
+    PrimitiveKind           type        = PrimitiveKind::INT;
     jbytecode::core::Label* targetLabel = nullptr;
-    MIRBranchZero() : MIRNode(MIRKind::BRANCH_ZERO) {}
+    MIRBranchZero()
+        : MIRNode(MIRKind::BRANCH_ZERO)
+    {}
 };
 
-struct MIRUncondBranch : MIRNode {
+struct MIRUncondBranch : MIRNode
+{
     jbytecode::core::Label* targetLabel = nullptr;
-    MIRUncondBranch() : MIRNode(MIRKind::UNCOND_BRANCH) {}
+    MIRUncondBranch()
+        : MIRNode(MIRKind::UNCOND_BRANCH)
+    {}
 };
 
-struct MIRSwitch : MIRNode {
-    struct Case {
-        int key;
+struct MIRSwitch : MIRNode
+{
+    struct Case
+    {
+        int                     key;
         jbytecode::core::Label* targetLabel;
     };
     jbytecode::core::Label* defaultLabel = nullptr;
-    std::vector<Case> cases;
-    MIRSwitch() : MIRNode(MIRKind::SWITCH) {}
+    std::vector<Case>       cases;
+    MIRSwitch()
+        : MIRNode(MIRKind::SWITCH)
+    {}
 };
 
-struct MIRReturn : MIRNode {
-    MIRReturn() : MIRNode(MIRKind::RETURN) {}
+struct MIRReturn : MIRNode
+{
+    MIRReturn()
+        : MIRNode(MIRKind::RETURN)
+    {}
 };
 
-struct MIRReturnValue : MIRNode {
+struct MIRReturnValue : MIRNode
+{
     PrimitiveKind type = PrimitiveKind::INT;
-    MIRReturnValue() : MIRNode(MIRKind::RETURN_VALUE) {}
+    MIRReturnValue()
+        : MIRNode(MIRKind::RETURN_VALUE)
+    {}
 };
 
-struct MIRNewObject : MIRNode {
+struct MIRNewObject : MIRNode
+{
     std::string typeDesc;
-    MIRNewObject() : MIRNode(MIRKind::NEW_OBJECT) {}
+    MIRNewObject()
+        : MIRNode(MIRKind::NEW_OBJECT)
+    {}
 };
 
-struct MIRNewArray : MIRNode {
-    std::string typeDesc;
+struct MIRNewArray : MIRNode
+{
+    std::string   typeDesc;
     PrimitiveKind componentType = PrimitiveKind::OBJECT;
-    int dims = 1;
-    MIRNewArray() : MIRNode(MIRKind::NEW_ARRAY) {}
+    int           dims          = 1;
+    MIRNewArray()
+        : MIRNode(MIRKind::NEW_ARRAY)
+    {}
 };
 
-struct MIRArrayLength : MIRNode {
-    MIRArrayLength() : MIRNode(MIRKind::ARRAY_LENGTH) {}
+struct MIRArrayLength : MIRNode
+{
+    MIRArrayLength()
+        : MIRNode(MIRKind::ARRAY_LENGTH)
+    {}
 };
 
-struct MIRArrayLoad : MIRNode {
+struct MIRArrayLoad : MIRNode
+{
     PrimitiveKind componentType = PrimitiveKind::INT;
-    MIRArrayLoad() : MIRNode(MIRKind::ARRAY_LOAD) {}
+    MIRArrayLoad()
+        : MIRNode(MIRKind::ARRAY_LOAD)
+    {}
 };
 
-struct MIRArrayStore : MIRNode {
+struct MIRArrayStore : MIRNode
+{
     PrimitiveKind componentType = PrimitiveKind::INT;
-    MIRArrayStore() : MIRNode(MIRKind::ARRAY_STORE) {}
+    MIRArrayStore()
+        : MIRNode(MIRKind::ARRAY_STORE)
+    {}
 };
 
-struct MIRFieldGet : MIRNode {
+struct MIRFieldGet : MIRNode
+{
     std::string owner, name, desc;
-    MIRFieldGet() : MIRNode(MIRKind::FIELD_GET) {}
+    MIRFieldGet()
+        : MIRNode(MIRKind::FIELD_GET)
+    {}
 };
 
-struct MIRFieldPut : MIRNode {
+struct MIRFieldPut : MIRNode
+{
     std::string owner, name, desc;
-    MIRFieldPut() : MIRNode(MIRKind::FIELD_PUT) {}
+    MIRFieldPut()
+        : MIRNode(MIRKind::FIELD_PUT)
+    {}
 };
 
-struct MIRStaticGet : MIRNode {
+struct MIRStaticGet : MIRNode
+{
     std::string owner, name, desc;
-    MIRStaticGet() : MIRNode(MIRKind::STATIC_GET) {}
+    MIRStaticGet()
+        : MIRNode(MIRKind::STATIC_GET)
+    {}
 };
 
-struct MIRStaticPut : MIRNode {
+struct MIRStaticPut : MIRNode
+{
     std::string owner, name, desc;
-    MIRStaticPut() : MIRNode(MIRKind::STATIC_PUT) {}
+    MIRStaticPut()
+        : MIRNode(MIRKind::STATIC_PUT)
+    {}
 };
 
-struct MIRInvoke : MIRNode {
+struct MIRInvoke : MIRNode
+{
     std::string owner, name, desc;
-    bool isInterface = false;
-    int invokeOpcode = 0; // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
-    MIRInvoke() : MIRNode(MIRKind::INVOKE) {}
+    bool        isInterface  = false;
+    int         invokeOpcode = 0;   // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
+    MIRInvoke()
+        : MIRNode(MIRKind::INVOKE)
+    {}
 };
 
-struct MIRInvokeDynamic : MIRNode {
-    std::string name, desc;
+struct MIRInvokeDynamic : MIRNode
+{
+    std::string                            name, desc;
     std::optional<jbytecode::core::Handle> bsm;
-    std::vector<ca::core::Any> bsmArgs;
-    MIRInvokeDynamic() : MIRNode(MIRKind::INVOKE_DYNAMIC) {}
+    std::vector<ca::core::Any>             bsmArgs;
+    MIRInvokeDynamic()
+        : MIRNode(MIRKind::INVOKE_DYNAMIC)
+    {}
 };
 
 // multianewarray：保留描述符和维度数，SSA/RegC 通过 multi-array helper 执行。
-struct MIRMultiNewArray : MIRNode {
+struct MIRMultiNewArray : MIRNode
+{
     std::string typeDesc;
-    int dims = 0;
-    MIRMultiNewArray() : MIRNode(MIRKind::MULTI_NEW_ARRAY) {}
+    int         dims = 0;
+    MIRMultiNewArray()
+        : MIRNode(MIRKind::MULTI_NEW_ARRAY)
+    {}
 };
 
-struct MIRCheckCast : MIRNode {
+struct MIRCheckCast : MIRNode
+{
     std::string typeDesc;
-    MIRCheckCast() : MIRNode(MIRKind::CHECK_CAST) {}
+    MIRCheckCast()
+        : MIRNode(MIRKind::CHECK_CAST)
+    {}
 };
 
-struct MIRInstanceOf : MIRNode {
+struct MIRInstanceOf : MIRNode
+{
     std::string typeDesc;
-    MIRInstanceOf() : MIRNode(MIRKind::INSTANCE_OF) {}
+    MIRInstanceOf()
+        : MIRNode(MIRKind::INSTANCE_OF)
+    {}
 };
 
-struct MIRMonitor : MIRNode {
+struct MIRMonitor : MIRNode
+{
     bool enter = true;
-    MIRMonitor() : MIRNode(MIRKind::MONITOR_ENTER) {}
+    MIRMonitor()
+        : MIRNode(MIRKind::MONITOR_ENTER)
+    {}
 };
 
-struct MIRThrow : MIRNode {
-    MIRThrow() : MIRNode(MIRKind::THROW) {}
+struct MIRThrow : MIRNode
+{
+    MIRThrow()
+        : MIRNode(MIRKind::THROW)
+    {}
 };
 
 /**
@@ -296,11 +425,13 @@ struct MIRThrow : MIRNode {
  * arguments. Handler-entry exception objects are modeled separately from the
  * exception table and do not rely on these stack items.
  */
-struct MIRFrame : MIRNode {
-    int frameType = 0;
+struct MIRFrame : MIRNode
+{
+    int                        frameType = 0;
     std::vector<PrimitiveKind> stackTypes;
-    MIRFrame() : MIRNode(MIRKind::FRAME) {}
+    MIRFrame()
+        : MIRNode(MIRKind::FRAME)
+    {}
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

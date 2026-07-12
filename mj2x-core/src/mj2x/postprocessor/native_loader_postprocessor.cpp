@@ -14,9 +14,10 @@ namespace {
 static constexpr const char* kLoaderClass = "mj2x/runtime/NativeLoader";
 static constexpr const char* kLoaderEntry = "mj2x/runtime/NativeLoader.class";
 
-std::vector<ca::u8> buildNativeLoaderClass() {
+std::vector<ca::u8> buildNativeLoaderClass()
+{
     Utf8StringArena arena;
-    ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
+    ClassWriter     cw(arena, ClassWriter::COMPUTE_MAXS);
     cw.visit(49,
              Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SYNTHETIC,
              Utf8StringRef::from_cstr(kLoaderClass),
@@ -46,15 +47,16 @@ std::vector<ca::u8> buildNativeLoaderClass() {
     init->visitMaxs(1, 1);
     init->visitEnd();
 
-    auto* load = cw.visitMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNCHRONIZED,
-                                Utf8StringRef::from_cstr("load"),
-                                Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)V"),
-                                Utf8StringRef(),
-                                {});
+    auto* load =
+        cw.visitMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNCHRONIZED,
+                       Utf8StringRef::from_cstr("load"),
+                       Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)V"),
+                       Utf8StringRef(),
+                       {});
     auto* continueLabel = new Label();
-    auto* streamOk = new Label();
-    auto* loop = new Label();
-    auto* done = new Label();
+    auto* streamOk      = new Label();
+    auto* loop          = new Label();
+    auto* done          = new Label();
 
     load->visitCode();
     load->visitFieldInsn(Opcodes::GETSTATIC,
@@ -87,11 +89,12 @@ std::vector<ca::u8> buildNativeLoaderClass() {
     load->visitLabel(streamOk);
     load->visitLdcInsn(ca::core::Any(std::string("mj2x-")));
     load->visitVarInsn(Opcodes::ALOAD, 1);
-    load->visitMethodInsn(Opcodes::INVOKESTATIC,
-                          Utf8StringRef::from_cstr("java/io/File"),
-                          Utf8StringRef::from_cstr("createTempFile"),
-                          Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)Ljava/io/File;"),
-                          false);
+    load->visitMethodInsn(
+        Opcodes::INVOKESTATIC,
+        Utf8StringRef::from_cstr("java/io/File"),
+        Utf8StringRef::from_cstr("createTempFile"),
+        Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)Ljava/io/File;"),
+        false);
     load->visitVarInsn(Opcodes::ASTORE, 3);
     load->visitVarInsn(Opcodes::ALOAD, 3);
     load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
@@ -173,16 +176,16 @@ std::vector<ca::u8> buildNativeLoaderClass() {
     return cw.toByteArray();
 }
 
-} // namespace
+}   // namespace
 
 NativeLoaderPostprocessor::NativeLoaderPostprocessor(std::string resourcePath)
     : resourcePath_(std::move(resourcePath))
 {}
 
-void NativeLoaderPostprocessor::process(CompilerIndex& index) {
-    if (!index.isJarInput() || resourcePath_.empty())
-        return;
+void NativeLoaderPostprocessor::process(CompilerIndex& index)
+{
+    if (!index.isJarInput() || resourcePath_.empty()) return;
     index.upsertJarResource(kLoaderEntry, buildNativeLoaderClass());
 }
 
-} // namespace mj2x
+}   // namespace mj2x

@@ -6,7 +6,8 @@
 
 namespace mj2x::cli {
 
-struct ConfigFileOptions {
+struct ConfigFileOptions
+{
     std::optional<std::string> input;
     std::optional<std::string> output;
     std::optional<std::string> emitC;
@@ -23,4 +24,4 @@ struct ConfigFileOptions {
 
 bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::string& error);
 
-}  // namespace mj2x::cli
+}   // namespace mj2x::cli

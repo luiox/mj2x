@@ -24,7 +24,8 @@
 extern "C" {
 
 /// @brief Native mirror of `java.util.Random` carrying the 48-bit LCG state.
-struct mj2x_random {
+struct mj2x_random
+{
     /// @brief Internal scrambled seed; only the low 48 bits are live.
     std::uint64_t seed;
 };
@@ -72,4 +73,4 @@ float mj2x_random_next_float(mj2x_random* state);
 /// @brief `nextDouble()` in [0.0, 1.0).
 double mj2x_random_next_double(mj2x_random* state);
 
-}  // extern "C"
+}   // extern "C"

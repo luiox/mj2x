@@ -22,23 +22,21 @@
 namespace mj2x::codegen {
 
 /// @brief Deduplicating, ordered include directive manager.
-class IncludeSet {
+class IncludeSet
+{
 public:
     /// @brief Add an angle-bracket system header such as `jni.h` (no brackets).
-    void addSystem(std::string_view header) {
-        systemHeaders_.insert(std::string(header));
-    }
+    void addSystem(std::string_view header) { systemHeaders_.insert(std::string(header)); }
 
     /// @brief Add a quote project header such as `regc/abi.hpp` (no quotes).
-    void addProject(std::string_view header) {
-        projectHeaders_.insert(std::string(header));
-    }
+    void addProject(std::string_view header) { projectHeaders_.insert(std::string(header)); }
 
     /// @brief Render the `#include` block: system headers first, then project.
     /// @details Each header appears once.  A trailing newline separates the
     ///          block from the following source.  Returns an empty string when
     ///          no headers were registered.
-    std::string render() const {
+    std::string render() const
+    {
         std::string out;
         for (const auto& h : systemHeaders_) {
             out += "#include <";
@@ -61,4 +59,4 @@ private:
     std::set<std::string> projectHeaders_;
 };
 
-}  // namespace mj2x::codegen
+}   // namespace mj2x::codegen

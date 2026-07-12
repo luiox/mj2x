@@ -15,27 +15,24 @@ using namespace jbytecode::tree;
 
 namespace {
 
-std::unique_ptr<MethodNode> makeMethod(
-    int access,
-    const char* name,
-    const char* desc,
-    std::initializer_list<AbstractInsnNode*> insns,
-    int maxStack,
-    int maxLocals) {
+std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char* desc,
+                                       std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                                       int maxLocals)
+{
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    auto mn = std::make_unique<MethodNode>(
-        access,
-        ca::str::ZUtf8StringRef::from_static(name),
-        ca::str::ZUtf8StringRef::from_static(desc),
-        ca::str::ZUtf8StringRef::from_static(""),
-        noExcepts);
-    mn->maxStack = maxStack;
-    mn->maxLocals = maxLocals;
+    auto                                mn = std::make_unique<MethodNode>(access,
+                                           ca::str::ZUtf8StringRef::from_static(name),
+                                           ca::str::ZUtf8StringRef::from_static(desc),
+                                           ca::str::ZUtf8StringRef::from_static(""),
+                                           noExcepts);
+    mn->maxStack                           = maxStack;
+    mn->maxLocals                          = maxLocals;
     for (auto* insn : insns) mn->instructions.add(insn);
     return mn;
 }
 
-void expectNoStackAnchors(const std::string& source) {
+void expectNoStackAnchors(const std::string& source)
+{
     std::string reason;
     EXPECT_TRUE(validateRegCNoStackAnchors(source, reason)) << reason << "\n" << source;
     EXPECT_EQ(source.find("stack["), std::string::npos) << source;
@@ -43,7 +40,8 @@ void expectNoStackAnchors(const std::string& source) {
     EXPECT_EQ(source.find(" sp "), std::string::npos) << source;
 }
 
-size_t countSubstring(const std::string& text, const std::string& needle) {
+size_t countSubstring(const std::string& text, const std::string& needle)
+{
     size_t count = 0;
     size_t pos   = 0;
     while ((pos = text.find(needle, pos)) != std::string::npos) {
@@ -53,36 +51,39 @@ size_t countSubstring(const std::string& text, const std::string& needle) {
     return count;
 }
 
-} // namespace
+}   // namespace
 
-TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative) {
-    auto method = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-        "add", "(II)I",
-        {
-            new VarInsnNode(Opcodes::ILOAD, 0),
-            new VarInsnNode(Opcodes::ILOAD, 1),
-            new InsnNode(Opcodes::IADD),
-            new InsnNode(Opcodes::IRETURN),
-        },
-        2, 2);
+TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "add",
+                             "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2,
+                             2);
 
     CompilerMethod cm;
     cm.methodNode = method.get();
     CompilerClass cls;
     cls.methods.push_back(cm);
 
-    RegCBackend backend;
+    RegCBackend   backend;
     CodeConverter converter;
-    auto blocks = converter.convert(*method);
-    auto result = backend.compileMethod("Test", cls.methods[0], blocks);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
     EXPECT_NE(result.text.find("JNIEXPORT jint JNICALL"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("Java_Test_add__II(JNIEnv* env, jclass clazz"), std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("regc_Test_add__II_I((int32_t)(p0), (int32_t)(p1));"),
-              std::string::npos) << result.text;
+              std::string::npos)
+        << result.text;
     expectNoStackAnchors(result.text);
 
     backend.injectIntoClass(cls, cls.methods[0], result);
@@ -91,51 +92,56 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative) {
     EXPECT_TRUE(cls.modified);
 }
 
-TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister) {
-    auto method = makeMethod(
-        Opcodes::ACC_PUBLIC,
-        "bump", "(I)I",
-        {
-            new VarInsnNode(Opcodes::ILOAD, 1),
-            new InsnNode(Opcodes::ICONST_1),
-            new InsnNode(Opcodes::IADD),
-            new InsnNode(Opcodes::IRETURN),
-        },
-        2, 2);
+TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC,
+                             "bump",
+                             "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2,
+                             2);
 
     CompilerMethod cm;
     cm.methodNode = method.get();
     CompilerClass cls;
     cls.methods.push_back(cm);
 
-    RegCBackend backend;
+    RegCBackend   backend;
     CodeConverter converter;
-    auto blocks = converter.convert(*method);
-    auto result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
     EXPECT_NE(result.text.find("Java_pkg_Box_bump__I(JNIEnv* env, jobject thisObject"),
-              std::string::npos) << result.text;
+              std::string::npos)
+        << result.text;
     EXPECT_NE(result.text.find("regc_pkg_Box_bump__I_I((mj2x_ref)(thisObject), (int32_t)(p0));"),
-              std::string::npos) << result.text;
+              std::string::npos)
+        << result.text;
     expectNoStackAnchors(result.text);
 }
 
-TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
+TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
+{
     auto first = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-        "first", "(Ljava/lang/Object;)I",
+        "first",
+        "(Ljava/lang/Object;)I",
         {
-            new TypeInsnNode(Opcodes::NEW,
-                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new TypeInsnNode(Opcodes::NEW, ca::str::ZUtf8StringRef::from_static("Foo")),
             new InsnNode(Opcodes::POP),
             new InsnNode(Opcodes::ICONST_1),
-            new TypeInsnNode(Opcodes::ANEWARRAY,
-                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::ZUtf8StringRef::from_static("Foo")),
             new InsnNode(Opcodes::POP),
             new InsnNode(Opcodes::ICONST_1),
             new InsnNode(Opcodes::ICONST_1),
-            new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"), 2),
+            new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"),
+                                       2),
             new InsnNode(Opcodes::POP),
             new VarInsnNode(Opcodes::ALOAD, 0),
             new TypeInsnNode(Opcodes::CHECKCAST,
@@ -165,21 +171,22 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
             new InsnNode(Opcodes::IADD),
             new InsnNode(Opcodes::IRETURN),
         },
-        2, 1);
+        2,
+        1);
     auto second = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-        "second", "(Ljava/lang/Object;)I",
+        "second",
+        "(Ljava/lang/Object;)I",
         {
-            new TypeInsnNode(Opcodes::NEW,
-                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new TypeInsnNode(Opcodes::NEW, ca::str::ZUtf8StringRef::from_static("Foo")),
             new InsnNode(Opcodes::POP),
             new InsnNode(Opcodes::ICONST_1),
-            new TypeInsnNode(Opcodes::ANEWARRAY,
-                             ca::str::ZUtf8StringRef::from_static("Foo")),
+            new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::ZUtf8StringRef::from_static("Foo")),
             new InsnNode(Opcodes::POP),
             new InsnNode(Opcodes::ICONST_1),
             new InsnNode(Opcodes::ICONST_1),
-            new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"), 2),
+            new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"),
+                                       2),
             new InsnNode(Opcodes::POP),
             new VarInsnNode(Opcodes::ALOAD, 0),
             new TypeInsnNode(Opcodes::CHECKCAST,
@@ -209,7 +216,8 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
             new InsnNode(Opcodes::IADD),
             new InsnNode(Opcodes::IRETURN),
         },
-        2, 1);
+        2,
+        1);
 
     CompilerMethod firstMethod;
     firstMethod.methodNode = first.get();
@@ -234,47 +242,35 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
     backend.finalize(emptyIndex);
     const auto& source = backend.generatedSource();
 
-    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"sink\", \"I\", NULL, NULL}"), 1u)
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"sink\", \"I\", NULL, NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"value\", \"I\", NULL, NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"mix\", \"(I)I\", NULL, NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"bump\", \"()I\", NULL, NULL}"), 1u) << source;
+    EXPECT_EQ(
+        countSubstring(
+            source, "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL}"),
+        1u)
         << source;
-    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"value\", \"I\", NULL, NULL}"), 1u)
+    EXPECT_EQ(
+        countSubstring(
+            source, "{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
+        1u)
         << source;
-    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"mix\", \"(I)I\", NULL, NULL}"), 1u)
+    EXPECT_EQ(
+        countSubstring(
+            source, "{\"java/lang/String\", \"valueOf\", \"(D)Ljava/lang/String;\", NULL, NULL}"),
+        1u)
         << source;
-    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"bump\", \"()I\", NULL, NULL}"), 1u)
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/CharSequence\", NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/String\", NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"[Ljava/lang/String;\", NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/NullPointerException\", NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/ClassCastException\", NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/OutOfMemoryError\", NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/StringIndexOutOfBoundsException\", NULL}"), 1u)
         << source;
-    EXPECT_EQ(countSubstring(source,
-                             "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL}"),
-              1u)
-        << source;
-    EXPECT_EQ(countSubstring(source,
-                             "{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
-              1u)
-        << source;
-    EXPECT_EQ(countSubstring(source,
-                             "{\"java/lang/String\", \"valueOf\", \"(D)Ljava/lang/String;\", NULL, NULL}"),
-              1u)
-        << source;
-    EXPECT_EQ(countSubstring(source, "{\"Foo\", NULL}"), 1u)
-        << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/CharSequence\", NULL}"), 1u)
-        << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/String\", NULL}"), 1u)
-        << source;
-    EXPECT_EQ(countSubstring(source, "{\"[Ljava/lang/String;\", NULL}"), 1u)
-        << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/NullPointerException\", NULL}"), 1u)
-        << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/ClassCastException\", NULL}"), 1u)
-        << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/OutOfMemoryError\", NULL}"), 1u)
-        << source;
-    EXPECT_EQ(countSubstring(source,
-                             "{\"java/lang/StringIndexOutOfBoundsException\", NULL}"),
-              1u)
-        << source;
-    EXPECT_EQ(countSubstring(source,
-                             "{\"java/lang/UnsupportedOperationException\", NULL}"),
-              1u)
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/UnsupportedOperationException\", NULL}"), 1u)
         << source;
     EXPECT_EQ(source.find("FindClass(_mj2x_regc_env, \"java/lang/NullPointerException\")"),
               std::string::npos)
@@ -285,16 +281,14 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
     EXPECT_EQ(source.find("FindClass(_mj2x_regc_env, \"java/lang/OutOfMemoryError\")"),
               std::string::npos)
         << source;
-    EXPECT_EQ(source.find(
-                  "FindClass(_mj2x_regc_env, \"java/lang/StringIndexOutOfBoundsException\")"),
+    EXPECT_EQ(
+        source.find("FindClass(_mj2x_regc_env, \"java/lang/StringIndexOutOfBoundsException\")"),
+        std::string::npos)
+        << source;
+    EXPECT_EQ(source.find("FindClass(_mj2x_regc_env, \"java/lang/UnsupportedOperationException\")"),
               std::string::npos)
         << source;
-    EXPECT_EQ(source.find(
-                  "FindClass(_mj2x_regc_env, \"java/lang/UnsupportedOperationException\")"),
-              std::string::npos)
-        << source;
-    EXPECT_EQ(source.find("_mj2x_intrinsic_string_class_cache"), std::string::npos)
-        << source;
+    EXPECT_EQ(source.find("_mj2x_intrinsic_string_class_cache"), std::string::npos) << source;
     EXPECT_NE(source.find("_mj2x_regc_field_cache_tu_"), std::string::npos) << source;
     EXPECT_NE(source.find("_mj2x_regc_instance_field_cache_tu_"), std::string::npos) << source;
     EXPECT_NE(source.find("_mj2x_regc_cache_tu_"), std::string::npos) << source;
@@ -309,30 +303,35 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit) {
     EXPECT_NE(source.find("_mj2x_regc_alloc_multi_array_cached(\"[[Ljava/lang/String;\""),
               std::string::npos)
         << source;
-    EXPECT_EQ(source.find("static void _mj2x_intrinsic_string_builder_init_empty(mj2x_regc_local_string_builder* state) {"),
-              std::string::npos)
+    EXPECT_EQ(
+        source.find(
+            "static void _mj2x_intrinsic_string_builder_init_empty(mj2x_regc_local_string_builder* "
+            "state) {"),
+        std::string::npos)
         << source;
     expectNoStackAnchors(source);
 }
 
-TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative) {
-    auto method = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-        "bad", "()I",
-        {
-            new InsnNode(Opcodes::IRETURN),
-        },
-        0, 0);
+TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "bad",
+                             "()I",
+                             {
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             0,
+                             0);
 
     CompilerMethod cm;
     cm.methodNode = method.get();
     CompilerClass cls;
     cls.methods.push_back(cm);
 
-    RegCBackend backend;
+    RegCBackend   backend;
     CodeConverter converter;
-    auto blocks = converter.convert(*method);
-    auto result = backend.compileMethod("Bad", cls.methods[0], blocks);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Bad", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
     EXPECT_NE(result.text.find("RegC lowering failed"), std::string::npos) << result.text;

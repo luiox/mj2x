@@ -18,9 +18,8 @@ bool writeResource(const fs::path& base, const EmbeddedResource& resource)
     const auto      dest = base / resource.path;
     fs::create_directories(dest.parent_path(), ec);
     if (ec) {
-        fprintf(stderr,
-                "[mj2x] ERROR: cannot create resource directory: %s\n",
-                ec.message().c_str());
+        fprintf(
+            stderr, "[mj2x] ERROR: cannot create resource directory: %s\n", ec.message().c_str());
         return false;
     }
 

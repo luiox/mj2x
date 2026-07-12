@@ -20,59 +20,66 @@ namespace mj2x {
 struct RegBlock;
 
 /// @brief A control-flow edge plus the copies that materialize eliminated block args.
-struct RegSuccessor {
-    RegBlock* block = nullptr;
+struct RegSuccessor
+{
+    RegBlock*            block = nullptr;
     std::vector<RegCopy> copies;
 };
 
-struct RegJumpTerminator {
+struct RegJumpTerminator
+{
     RegSuccessor target;
 };
 
-struct RegBranchTerminator {
-    RegOperand condition;
+struct RegBranchTerminator
+{
+    RegOperand   condition;
     RegSuccessor trueTarget;
     RegSuccessor falseTarget;
 };
 
-struct RegSwitchCase {
-    int64_t key = 0;
+struct RegSwitchCase
+{
+    int64_t      key = 0;
     RegSuccessor target;
 };
 
-struct RegSwitchTerminator {
-    RegOperand value;
+struct RegSwitchTerminator
+{
+    RegOperand                 value;
     std::vector<RegSwitchCase> cases;
-    RegSuccessor defaultTarget;
+    RegSuccessor               defaultTarget;
 };
 
-struct RegReturnTerminator {
-    bool hasValue = false;
+struct RegReturnTerminator
+{
+    bool       hasValue = false;
     RegOperand value;
 };
 
-struct RegThrowTerminator {
+struct RegThrowTerminator
+{
     RegOperand value;
 };
 
-struct RegUnreachableTerminator {};
+struct RegUnreachableTerminator
+{};
 
-using RegTerminator = std::variant<
-    RegJumpTerminator,
-    RegBranchTerminator,
-    RegSwitchTerminator,
-    RegReturnTerminator,
-    RegThrowTerminator,
-    RegUnreachableTerminator>;
+using RegTerminator =
+    std::variant<RegJumpTerminator, RegBranchTerminator, RegSwitchTerminator, RegReturnTerminator,
+                 RegThrowTerminator, RegUnreachableTerminator>;
 
 /// @brief A basic block with flat register instructions and a single terminator.
-struct RegBlock {
-    SSABlockId id;
-    int l1LabelId = -1;
+struct RegBlock
+{
+    SSABlockId                  id;
+    int                         l1LabelId = -1;
     std::vector<RegInstruction> instructions;
-    RegTerminator terminator = RegUnreachableTerminator{};
+    RegTerminator               terminator = RegUnreachableTerminator{};
 
-    explicit RegBlock(SSABlockId id_) : id(id_) {}
+    explicit RegBlock(SSABlockId id_)
+        : id(id_)
+    {}
 };
 
 /**
@@ -84,11 +91,12 @@ struct RegBlock {
  * register immediately before jumping to `handler` after a successful
  * `_mj2x_regc_exception_matches` check.
  */
-struct RegExceptionRegion {
-    std::vector<RegBlock*> protectedBlocks; ///< Blocks covered by the handler.
-    RegBlock* handler = nullptr;            ///< Handler entry block.
-    RegValue exceptionValue{};              ///< Register holding caught object.
-    std::string caughtType;                 ///< Empty means catch-all/finally.
+struct RegExceptionRegion
+{
+    std::vector<RegBlock*> protectedBlocks;     ///< Blocks covered by the handler.
+    RegBlock*              handler = nullptr;   ///< Handler entry block.
+    RegValue               exceptionValue{};    ///< Register holding caught object.
+    std::string            caughtType;          ///< Empty means catch-all/finally.
 };
 
-} // namespace mj2x
+}   // namespace mj2x

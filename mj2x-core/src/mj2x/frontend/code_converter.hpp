@@ -14,7 +14,8 @@
 
 namespace mj2x {
 
-class CodeConverter {
+class CodeConverter
+{
 public:
     CodeConverter();
     ~CodeConverter();
@@ -24,15 +25,14 @@ public:
     static std::string dumpMIR(const std::vector<Block*>& blocks);
 
 private:
-    void analyzeControlFlow(jbytecode::tree::MethodNode& mn);
-    void buildBlocks();
-    void translateInstructions(jbytecode::tree::MethodNode& mn);
-    void processInsn(jbytecode::tree::AbstractInsnNode* insn);
+    void   analyzeControlFlow(jbytecode::tree::MethodNode& mn);
+    void   buildBlocks();
+    void   translateInstructions(jbytecode::tree::MethodNode& mn);
+    void   processInsn(jbytecode::tree::AbstractInsnNode* insn);
     Block* getOrCreateBlock(int labelId);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

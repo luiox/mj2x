@@ -4,11 +4,11 @@
 
 namespace mj2x {
 
-class Preprocessor {
+class Preprocessor
+{
 public:
-    virtual ~Preprocessor() = default;
+    virtual ~Preprocessor()                    = default;
     virtual void process(CompilerIndex& index) = 0;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

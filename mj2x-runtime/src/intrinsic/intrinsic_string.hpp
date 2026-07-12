@@ -16,18 +16,20 @@
 extern "C" {
 
 /// @brief String intrinsic 的返回状态。
-enum mj2x_string_status : std::int32_t {
-    MJ2X_STRING_OK = 0,
-    MJ2X_STRING_UNSUPPORTED_NULL = -1,
-    MJ2X_STRING_UNSUPPORTED_BOUNDS = -2,
-    MJ2X_STRING_UNSUPPORTED_ESCAPE = -3,
+enum mj2x_string_status : std::int32_t
+{
+    MJ2X_STRING_OK                          = 0,
+    MJ2X_STRING_UNSUPPORTED_NULL            = -1,
+    MJ2X_STRING_UNSUPPORTED_BOUNDS          = -2,
+    MJ2X_STRING_UNSUPPORTED_ESCAPE          = -3,
     MJ2X_STRING_UNSUPPORTED_MUTABLE_BUILDER = -4,
 };
 
 /// @brief runtime-owned UTF-16 字符串视图;调用方负责保证底层内存存活。
-struct mj2x_utf16_view {
+struct mj2x_utf16_view
+{
     const std::uint16_t* units;
-    std::size_t length;
+    std::size_t          length;
 };
 
 /**
@@ -56,8 +58,7 @@ std::int32_t mj2x_string_length(mj2x_utf16_view view, mj2x_string_status* status
  * @param status 可为空;非空时写入状态。
  * @return 成功时返回 UTF-16 code unit;失败时返回 0。
  */
-std::uint16_t mj2x_string_char_at(mj2x_utf16_view view,
-                                  std::size_t index,
+std::uint16_t mj2x_string_char_at(mj2x_utf16_view view, std::size_t index,
                                   mj2x_string_status* status);
 
 /**
@@ -67,4 +68,4 @@ std::uint16_t mj2x_string_char_at(mj2x_utf16_view view,
  */
 mj2x_string_status mj2x_stringbuilder_unsupported_status();
 
-}  // extern "C"
+}   // extern "C"

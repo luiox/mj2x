@@ -8,7 +8,8 @@ namespace mj2x {
 using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
-void InvokeDynamicPreprocessor::process(CompilerIndex& index) {
+void InvokeDynamicPreprocessor::process(CompilerIndex& index)
+{
     // StackC 在 MIR 层保留 bootstrap 元数据，并在 native 侧走
     // CallSite.getTarget() + MethodHandle.invokeWithArguments。RegC/SSA 仍要求
     // indy 在进入无栈 IR 前被展开，因此这里不改写字节码，只做可见诊断。
@@ -31,4 +32,4 @@ void InvokeDynamicPreprocessor::process(CompilerIndex& index) {
     }
 }
 
-} // namespace mj2x
+}   // namespace mj2x

@@ -20,12 +20,13 @@ namespace mj2x {
  * "known intrinsic shape but malformed RegIR arguments" and report a useful
  * unsupported reason.
  */
-struct RegCIntrinsicCall {
+struct RegCIntrinsicCall
+{
     std::string owner;
     std::string name;
     std::string desc;
-    int invokeOpcode = 0;
-    std::size_t argCount = 0;
+    int         invokeOpcode = 0;
+    std::size_t argCount     = 0;
 
     /**
      * @brief Return true when the bytecode call is INVOKESTATIC.
@@ -41,7 +42,8 @@ struct RegCIntrinsicCall {
 /**
  * @brief Extracts intrinsic lookup keys from RegIR call instructions.
  */
-class RegCIntrinsicCallMatcher {
+class RegCIntrinsicCallMatcher
+{
 public:
     /**
      * @brief Build a normalized call-site view from one RegIR call.
@@ -49,4 +51,4 @@ public:
     static RegCIntrinsicCall fromInstruction(const RegInstruction& ins);
 };
 
-} // namespace mj2x
+}   // namespace mj2x

@@ -10,4 +10,4 @@ namespace mj2x {
 // dump 整个 SSAFunction。用于人工检查 + R1 验收（grep cstack 应零匹配）。
 std::string dumpSSA(const SSAFunction& fn);
 
-} // namespace mj2x
+}   // namespace mj2x

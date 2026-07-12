@@ -5,7 +5,8 @@
 
 namespace mj2x::cli {
 
-enum class CCompilerKind {
+enum class CCompilerKind
+{
     Auto,
     Msvc,
     Gcc,
@@ -24,14 +25,14 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath);
 /**
  * @brief 把已生成的 C 源码编译为与输出 class/JAR 同目录的 native library。
  *
- * 编译器可由 @p requestedCompiler 指定,也可自动探测。JNI include 路径从
- * `JAVA_HOME` 推导。RegC 调用方传入 @p crtRoot 后,编译器按其 manifest
- * 加入 CRT C 源码与 public include 根。失败时向 stderr 打印明确错误并返回非 0。
+ * 编译器可由 @p
+ * requestedCompiler 指定,也可自动探测。JNI include 路径从
+ * `JAVA_HOME` 推导。RegC 调用方传入 @p
+ * crtRoot 后,编译器按其 manifest
+ * 加入 CRT C 源码与 public include 根。失败时向 stderr
+ * 打印明确错误并返回非 0。
  */
-int compileCSource(
-    const std::string& cOutputPath,
-    const std::string& outputPath,
-    CCompilerKind requestedCompiler,
-    const std::filesystem::path& crtRoot = {});
+int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
+                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot = {});
 
-} // namespace mj2x::cli
+}   // namespace mj2x::cli

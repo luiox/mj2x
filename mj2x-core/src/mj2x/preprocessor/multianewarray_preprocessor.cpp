@@ -7,7 +7,8 @@ namespace mj2x {
 using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
-void MultiANewArrayPreprocessor::process(CompilerIndex& index) {
+void MultiANewArrayPreprocessor::process(CompilerIndex& index)
+{
     // Keep this preprocessor observational.  CodeConverter and RegC already
     // preserve MULTIANEWARRAY as a helper-backed operation, so bytecode-level
     // loop expansion would only make the input harder to reason about.
@@ -23,10 +24,11 @@ void MultiANewArrayPreprocessor::process(CompilerIndex& index) {
         }
     }
     if (total > 0) {
-        printf("[MultiANewArrayPreproc] Detected %d multianewarray site(s). "
-               "Keeping bytecode shape; RegC lowers supported sites through its multi-array helper.\n",
-               total);
+        printf(
+            "[MultiANewArrayPreproc] Detected %d multianewarray site(s). "
+            "Keeping bytecode shape; RegC lowers supported sites through its multi-array helper.\n",
+            total);
     }
 }
 
-} // namespace mj2x
+}   // namespace mj2x

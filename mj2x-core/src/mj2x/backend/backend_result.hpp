@@ -6,12 +6,17 @@
 
 namespace mj2x {
 
-struct BackendResult {
-    enum class Kind { NONE, C_SOURCE, BINARY };
-    Kind kind = Kind::NONE;
+struct BackendResult
+{
+    enum class Kind
+    {
+        NONE,
+        C_SOURCE,
+        BINARY
+    };
+    Kind                 kind = Kind::NONE;
     std::vector<uint8_t> data;
-    std::string text;
+    std::string          text;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

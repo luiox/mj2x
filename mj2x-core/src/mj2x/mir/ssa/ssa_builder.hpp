@@ -41,7 +41,8 @@ namespace mj2x {
  * single object.  The builder owns no input blocks; all output state is owned by
  * the returned SSAFunction.
  */
-class SSABuilder {
+class SSABuilder
+{
 public:
     /**
      * @brief Convert one method's L1 blocks into SSA.
@@ -56,12 +57,9 @@ public:
      * @return A fully-owned SSAFunction, or nullptr if the method is unsupported.
      */
     std::unique_ptr<SSAFunction> build(const std::vector<Block*>& blocks,
-                                       const std::string& ownerName,
-                                       const std::string& methodName,
-                                       const std::string& methodDesc,
-                                       bool isStatic,
-                                       int methodMaxLocals,
-                                       std::string& reason);
+                                       const std::string& ownerName, const std::string& methodName,
+                                       const std::string& methodDesc, bool isStatic,
+                                       int methodMaxLocals, std::string& reason);
 
 private:
     /// @brief Method-level exception table carried by CodeConverter on the first block.
@@ -74,16 +72,12 @@ private:
     void collectOutEdges(Block* b, std::vector<int>& targets);
 
     /// @brief Stage B: create SSABlocks and their block-argument local slots.
-    void buildBlocks(SSAFunction& fn,
-                     const std::vector<Block*>& l1blocks,
+    void buildBlocks(SSAFunction& fn, const std::vector<Block*>& l1blocks,
                      const ReachingDefResult& rd);
 
     /// @brief Stage C: lower MIR nodes while simulating the JVM operand stack.
-    bool translateBlocks(SSAFunction& fn,
-                         const std::vector<Block*>& l1blocks,
-                         const ReachingDefResult& rd,
-                         int methodMaxLocals,
-                         std::string& reason);
+    bool translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1blocks,
+                         const ReachingDefResult& rd, int methodMaxLocals, std::string& reason);
 };
 
-} // namespace mj2x
+}   // namespace mj2x

@@ -70,11 +70,11 @@ private:
     std::map<std::string, std::string> staticFieldCacheNames_;
     std::map<std::string, std::string> instanceFieldCacheNames_;
     std::map<std::string, std::string> classCacheNames_;
-    int                                staticMethodCacheIndex_ = 0;
+    int                                staticMethodCacheIndex_   = 0;
     int                                instanceMethodCacheIndex_ = 0;
-    int                                staticFieldCacheIndex_  = 0;
-    int                                instanceFieldCacheIndex_ = 0;
-    int                                classCacheIndex_        = 0;
+    int                                staticFieldCacheIndex_    = 0;
+    int                                instanceFieldCacheIndex_  = 0;
+    int                                classCacheIndex_          = 0;
 };
 
 /**

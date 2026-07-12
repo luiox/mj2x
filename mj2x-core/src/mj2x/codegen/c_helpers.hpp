@@ -28,26 +28,26 @@ namespace mj2x::codegen {
 ///          reads a backslash escape as octal, so the digits must already be
 ///          octal, not decimal).  Matches the exact escaping StackC has
 ///          always used; RegC now shares it.
-inline std::string cStringLiteral(const std::string& text) {
+inline std::string cStringLiteral(const std::string& text)
+{
     std::ostringstream os;
     os << '"';
     for (unsigned char c : text) {
         switch (c) {
-            case '\\': os << "\\\\"; break;
-            case '"':  os << "\\\""; break;
-            case '\n': os << "\\n"; break;
-            case '\r': os << "\\r"; break;
-            case '\t': os << "\\t"; break;
-            default:
-                if (std::isprint(c)) {
-                    os << static_cast<char>(c);
-                } else {
-                    os << '\\'
-                       << static_cast<char>('0' + ((c >> 6) & 7))
-                       << static_cast<char>('0' + ((c >> 3) & 7))
-                       << static_cast<char>('0' + (c & 7));
-                }
-                break;
+        case '\\': os << "\\\\"; break;
+        case '"': os << "\\\""; break;
+        case '\n': os << "\\n"; break;
+        case '\r': os << "\\r"; break;
+        case '\t': os << "\\t"; break;
+        default:
+            if (std::isprint(c)) {
+                os << static_cast<char>(c);
+            }
+            else {
+                os << '\\' << static_cast<char>('0' + ((c >> 6) & 7))
+                   << static_cast<char>('0' + ((c >> 3) & 7)) << static_cast<char>('0' + (c & 7));
+            }
+            break;
         }
     }
     os << '"';
@@ -58,20 +58,25 @@ inline std::string cStringLiteral(const std::string& text) {
 /// @param name The class or method name component.
 /// @param descriptorMode When true, also escape `;` and `[` (used for the
 ///                       overloaded-argument suffix appended to method symbols).
-inline std::string mangleName(std::string_view name, bool descriptorMode) {
+inline std::string mangleName(std::string_view name, bool descriptorMode)
+{
     std::string result;
     result.reserve(name.size());
     for (unsigned char uc : name) {
         char c = static_cast<char>(uc);
         if (c == '/' || c == '.') {
             result += '_';
-        } else if (c == '_') {
+        }
+        else if (c == '_') {
             result += "_1";
-        } else if (descriptorMode && c == ';') {
+        }
+        else if (descriptorMode && c == ';') {
             result += "_2";
-        } else if (descriptorMode && c == '[') {
+        }
+        else if (descriptorMode && c == '[') {
             result += "_3";
-        } else {
+        }
+        else {
             result += c;
         }
     }
@@ -82,17 +87,19 @@ inline std::string mangleName(std::string_view name, bool descriptorMode) {
 /// @details `<init>` / `<clinit>` are mapped to `init_` / `clinit_` so the
 ///          exported name stays a legal C identifier even though the JVM will
 ///          not auto-bind constructors through it.
-inline std::string mangleMethod(std::string_view className,
-                                std::string_view methodName,
-                                std::string_view methodDesc) {
+inline std::string mangleMethod(std::string_view className, std::string_view methodName,
+                                std::string_view methodDesc)
+{
     std::string result = "Java_";
     result += mangleName(className, false);
     result += "_";
     if (methodName == "<init>") {
         result += "init_";
-    } else if (methodName == "<clinit>") {
+    }
+    else if (methodName == "<clinit>") {
         result += "clinit_";
-    } else {
+    }
+    else {
         result += mangleName(methodName, false);
     }
 
@@ -104,4 +111,4 @@ inline std::string mangleMethod(std::string_view className,
     return result;
 }
 
-}  // namespace mj2x::codegen
+}   // namespace mj2x::codegen

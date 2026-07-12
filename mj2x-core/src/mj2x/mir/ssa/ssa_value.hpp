@@ -25,24 +25,33 @@ inline constexpr int kSSAExceptionObjectSlot = -1;
 inline constexpr int kSSAStackValueSlotBase = -1000;
 
 /// @brief Return the synthetic slot for an operand-stack entry at bottom-to-top index `depth`.
-constexpr int ssaStackValueSlot(int depth) {
+constexpr int ssaStackValueSlot(int depth)
+{
     return kSSAStackValueSlotBase - depth;
 }
 
 /// @brief True when `slot` identifies an operand-stack join value instead of a JVM local.
-constexpr bool isSSAStackValueSlot(int slot) {
+constexpr bool isSSAStackValueSlot(int slot)
+{
     return slot <= kSSAStackValueSlotBase;
 }
 
 /// @brief Convert a synthetic operand-stack slot back to its bottom-to-top index.
-constexpr int ssaStackValueDepth(int slot) {
+constexpr int ssaStackValueDepth(int slot)
+{
     return kSSAStackValueSlotBase - slot;
 }
 
 /// @brief Value tag used for no-RTTI dispatch.
-enum class SSAValueKind : uint8_t {
-    Parameter, BlockArg, InstructionResult,
-    IntLiteral, FloatLiteral, NullLiteral, Opaque,
+enum class SSAValueKind : uint8_t
+{
+    Parameter,
+    BlockArg,
+    InstructionResult,
+    IntLiteral,
+    FloatLiteral,
+    NullLiteral,
+    Opaque,
 };
 
 /**
@@ -53,13 +62,20 @@ enum class SSAValueKind : uint8_t {
  * ids.  Literals are still SSAValue operands but may leave `id` empty because
  * they are printed and consumed by immediate value.
  */
-struct SSAValue {
+struct SSAValue
+{
     SSAValueKind valueKind;
-    SSAValueId id;
-    SSAType type = SSAType::UNKNOWN;
+    SSAValueId   id;
+    SSAType      type = SSAType::UNKNOWN;
 
-    SSAValue() : valueKind(SSAValueKind::Opaque) {}
-    SSAValue(SSAValueKind vk, SSAValueId id_, SSAType t) : valueKind(vk), id(id_), type(t) {}
+    SSAValue()
+        : valueKind(SSAValueKind::Opaque)
+    {}
+    SSAValue(SSAValueKind vk, SSAValueId id_, SSAType t)
+        : valueKind(vk)
+        , id(id_)
+        , type(t)
+    {}
     virtual ~SSAValue() = default;
 };
 
@@ -71,11 +87,16 @@ struct SSAValue {
  * methods therefore bind `this` at slot 0, and category-2 `long`/`double`
  * parameters leave the expected one-slot gap before the next parameter.
  */
-struct SSAParameter : SSAValue {
+struct SSAParameter : SSAValue
+{
     uint32_t index = 0;   ///< JVM local slot index.
-    SSAParameter() : SSAValue(SSAValueKind::Parameter, SSAValueId{}, SSAType::UNKNOWN) {}
+    SSAParameter()
+        : SSAValue(SSAValueKind::Parameter, SSAValueId{}, SSAType::UNKNOWN)
+    {}
     SSAParameter(SSAValueId id_, SSAType t, uint32_t idx)
-        : SSAValue(SSAValueKind::Parameter, id_, t), index(idx) {}
+        : SSAValue(SSAValueKind::Parameter, id_, t)
+        , index(idx)
+    {}
 };
 
 /**
@@ -89,40 +110,62 @@ struct SSAParameter : SSAValue {
  * a StackMapTable operand-stack value at block entry, used by javac shapes such
  * as ternary joins where branches push a value and the join block consumes it.
  */
-struct SSABlockArg : SSAValue {
-    int slot = 0;          ///< Local slot, exception slot, or synthetic stack-map slot.
-    SSABlockArg() : SSAValue(SSAValueKind::BlockArg, SSAValueId{}, SSAType::UNKNOWN) {}
+struct SSABlockArg : SSAValue
+{
+    int slot = 0;   ///< Local slot, exception slot, or synthetic stack-map slot.
+    SSABlockArg()
+        : SSAValue(SSAValueKind::BlockArg, SSAValueId{}, SSAType::UNKNOWN)
+    {}
     SSABlockArg(SSAValueId id_, SSAType t, int s)
-        : SSAValue(SSAValueKind::BlockArg, id_, t), slot(s) {}
+        : SSAValue(SSAValueKind::BlockArg, id_, t)
+        , slot(s)
+    {}
 };
 
 /// @brief Result value uniquely defined by one SSAInstruction.
-struct SSAInstructionResult : SSAValue {
-    SSAInstructionResult() : SSAValue(SSAValueKind::InstructionResult, SSAValueId{}, SSAType::UNKNOWN) {}
+struct SSAInstructionResult : SSAValue
+{
+    SSAInstructionResult()
+        : SSAValue(SSAValueKind::InstructionResult, SSAValueId{}, SSAType::UNKNOWN)
+    {}
     SSAInstructionResult(SSAValueId id_, SSAType t)
-        : SSAValue(SSAValueKind::InstructionResult, id_, t) {}
+        : SSAValue(SSAValueKind::InstructionResult, id_, t)
+    {}
 };
 
 /// @brief Integer literal from ICONST/BIPUSH/SIPUSH/LDC int/long.
-struct SSAIntLiteral : SSAValue {
+struct SSAIntLiteral : SSAValue
+{
     int64_t value = 0;
-    SSAIntLiteral() : SSAValue(SSAValueKind::IntLiteral, SSAValueId{}, SSAType::UNKNOWN) {}
+    SSAIntLiteral()
+        : SSAValue(SSAValueKind::IntLiteral, SSAValueId{}, SSAType::UNKNOWN)
+    {}
     SSAIntLiteral(int64_t v, SSAType t)
-        : SSAValue(SSAValueKind::IntLiteral, SSAValueId{}, t), value(v) {}
+        : SSAValue(SSAValueKind::IntLiteral, SSAValueId{}, t)
+        , value(v)
+    {}
     // literal 不占正式 value id 槽位（去重/内联），id 留空；dump 时按 value 印。
 };
 
 /// @brief Floating literal from FCONST/DCONST/LDC float/double.
-struct SSAFloatLiteral : SSAValue {
+struct SSAFloatLiteral : SSAValue
+{
     double value = 0.0;
-    SSAFloatLiteral() : SSAValue(SSAValueKind::FloatLiteral, SSAValueId{}, SSAType::UNKNOWN) {}
+    SSAFloatLiteral()
+        : SSAValue(SSAValueKind::FloatLiteral, SSAValueId{}, SSAType::UNKNOWN)
+    {}
     SSAFloatLiteral(double v, SSAType t)
-        : SSAValue(SSAValueKind::FloatLiteral, SSAValueId{}, t), value(v) {}
+        : SSAValue(SSAValueKind::FloatLiteral, SSAValueId{}, t)
+        , value(v)
+    {}
 };
 
 /// @brief The singleton null reference literal.
-struct SSANullLiteral : SSAValue {
-    SSANullLiteral() : SSAValue(SSAValueKind::NullLiteral, SSAValueId{}, SSAType::REF) {}
+struct SSANullLiteral : SSAValue
+{
+    SSANullLiteral()
+        : SSAValue(SSAValueKind::NullLiteral, SSAValueId{}, SSAType::REF)
+    {}
 };
 
 /**
@@ -133,11 +176,16 @@ struct SSANullLiteral : SSAValue {
  * defensive undefined-local fallbacks while still making the dump visibly
  * different from a real computed value.
  */
-struct SSAOpaqueValue : SSAValue {
-    std::string tag;       // 调试用（如 "ldc_string", "undef_local_3"）
-    SSAOpaqueValue() : SSAValue(SSAValueKind::Opaque, SSAValueId{}, SSAType::UNKNOWN) {}
+struct SSAOpaqueValue : SSAValue
+{
+    std::string tag;   // 调试用（如 "ldc_string", "undef_local_3"）
+    SSAOpaqueValue()
+        : SSAValue(SSAValueKind::Opaque, SSAValueId{}, SSAType::UNKNOWN)
+    {}
     SSAOpaqueValue(SSAValueId id_, SSAType t, std::string tag_)
-        : SSAValue(SSAValueKind::Opaque, id_, t), tag(std::move(tag_)) {}
+        : SSAValue(SSAValueKind::Opaque, id_, t)
+        , tag(std::move(tag_))
+    {}
 };
 
-} // namespace mj2x
+}   // namespace mj2x

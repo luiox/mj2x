@@ -8,25 +8,28 @@
 
 namespace {
 
-struct ThrownException {
-    int count = 0;
+struct ThrownException
+{
+    int         count = 0;
     std::string className;
     std::string message;
 };
 
-void recordThrow(void* env, const char* className, const char* message) {
+void recordThrow(void* env, const char* className, const char* message)
+{
     auto* thrown = static_cast<ThrownException*>(env);
     if (thrown == nullptr) return;
     thrown->count++;
     thrown->className = className == nullptr ? "" : className;
-    thrown->message = message == nullptr ? "" : message;
+    thrown->message   = message == nullptr ? "" : message;
 }
 
-}  // namespace
+}   // namespace
 
-TEST(RegCRuntimeAbiTest, InitializesAndUpdatesOpaqueEnvironment) {
-    ThrownException left;
-    ThrownException right;
+TEST(RegCRuntimeAbiTest, InitializesAndUpdatesOpaqueEnvironment)
+{
+    ThrownException   left;
+    ThrownException   right;
     mj2x_regc_context context{};
 
     mj2x_regc_init_context(&context, &left, recordThrow);
@@ -36,7 +39,8 @@ TEST(RegCRuntimeAbiTest, InitializesAndUpdatesOpaqueEnvironment) {
     EXPECT_EQ(mj2x_regc_env(&context), &right);
 }
 
-TEST(RegCRuntimeAbiTest, DivRemFollowJvmOverflowRules) {
+TEST(RegCRuntimeAbiTest, DivRemFollowJvmOverflowRules)
+{
     mj2x_regc_context context{};
     mj2x_regc_init_context(&context, nullptr, recordThrow);
 
@@ -49,8 +53,9 @@ TEST(RegCRuntimeAbiTest, DivRemFollowJvmOverflowRules) {
     EXPECT_EQ(mj2x_regc_rem_i64(&context, std::numeric_limits<std::int64_t>::min(), -1), 0);
 }
 
-TEST(RegCRuntimeAbiTest, DivideByZeroReportsArithmeticException) {
-    ThrownException thrown;
+TEST(RegCRuntimeAbiTest, DivideByZeroReportsArithmeticException)
+{
+    ThrownException   thrown;
     mj2x_regc_context context{};
     mj2x_regc_init_context(&context, &thrown, recordThrow);
 

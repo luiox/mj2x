@@ -19,7 +19,8 @@
 namespace mj2x {
 
 /// @brief SSA to RegIR lowering entry point.
-class RegLowering {
+class RegLowering
+{
 public:
     /**
      * @brief Convert a stackless SSAFunction into RegIR.
@@ -31,4 +32,4 @@ public:
     std::unique_ptr<RegFunction> lower(const SSAFunction& fn, std::string& reason);
 };
 
-} // namespace mj2x
+}   // namespace mj2x

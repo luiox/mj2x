@@ -8,7 +8,8 @@
 
 namespace {
 
-std::string hex(const std::vector<std::uint8_t>& data) {
+std::string hex(const std::vector<std::uint8_t>& data)
+{
     std::ostringstream out;
     out << std::hex << std::setfill('0');
     for (auto byte : data) {
@@ -17,7 +18,8 @@ std::string hex(const std::vector<std::uint8_t>& data) {
     return out.str();
 }
 
-std::vector<std::uint8_t> seq(std::uint8_t first, std::uint8_t lastInclusive) {
+std::vector<std::uint8_t> seq(std::uint8_t first, std::uint8_t lastInclusive)
+{
     std::vector<std::uint8_t> out;
     for (std::uint8_t value = first;; ++value) {
         out.push_back(value);
@@ -26,12 +28,13 @@ std::vector<std::uint8_t> seq(std::uint8_t first, std::uint8_t lastInclusive) {
     return out;
 }
 
-}  // namespace
+}   // namespace
 
-TEST(RuntimeKernelTest, HkdfSha256MatchesRfc5869Vector) {
+TEST(RuntimeKernelTest, HkdfSha256MatchesRfc5869Vector)
+{
     std::vector<std::uint8_t> ikm(22, 0x0b);
-    auto salt = seq(0x00, 0x0c);
-    auto info = seq(0xf0, 0xf9);
+    auto                      salt = seq(0x00, 0x0c);
+    auto                      info = seq(0xf0, 0xf9);
 
     auto okm = mj2x::runtime::kernel::hkdfSha256(salt, ikm, info, 42);
     EXPECT_EQ(hex(okm),
@@ -40,8 +43,9 @@ TEST(RuntimeKernelTest, HkdfSha256MatchesRfc5869Vector) {
               "34007208d5b887185865");
 }
 
-TEST(RuntimeKernelTest, VerifyHmacRejectsChangedData) {
-    std::vector<std::uint8_t> key = {1, 2, 3, 4};
+TEST(RuntimeKernelTest, VerifyHmacRejectsChangedData)
+{
+    std::vector<std::uint8_t> key  = {1, 2, 3, 4};
     std::vector<std::uint8_t> data = {5, 6, 7};
     auto tag = mj2x::runtime::crypto::hmacSha256(key.data(), key.size(), data.data(), data.size());
     EXPECT_TRUE(mj2x::runtime::kernel::verifyHmacSha256(key, data, tag));
@@ -49,7 +53,8 @@ TEST(RuntimeKernelTest, VerifyHmacRejectsChangedData) {
     EXPECT_FALSE(mj2x::runtime::kernel::verifyHmacSha256(key, data, tag));
 }
 
-TEST(RuntimeKernelTest, SecureWipeClearsBuffer) {
+TEST(RuntimeKernelTest, SecureWipeClearsBuffer)
+{
     std::vector<std::uint8_t> secret = {9, 8, 7, 6};
     mj2x::runtime::kernel::secureWipe(secret.data(), secret.size());
     EXPECT_THAT(secret, ::testing::ElementsAre(0, 0, 0, 0));

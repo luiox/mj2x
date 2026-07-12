@@ -7,7 +7,8 @@
 
 namespace mj2x {
 
-class OutputWriter {
+class OutputWriter
+{
 public:
     OutputWriter();
     ~OutputWriter();
@@ -28,5 +29,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

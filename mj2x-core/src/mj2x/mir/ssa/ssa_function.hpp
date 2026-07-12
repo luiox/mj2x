@@ -15,12 +15,13 @@
 namespace mj2x {
 
 /// @brief JVM method identity and signature carried by SSA and later RegC.
-struct SSAFunctionSymbol {
-    std::string owner;       ///< JVM internal owner name.
-    std::string name;
-    std::string desc;
+struct SSAFunctionSymbol
+{
+    std::string          owner;   ///< JVM internal owner name.
+    std::string          name;
+    std::string          desc;
     std::vector<SSAType> parameterTypes;
-    SSAType returnType = SSAType::UNKNOWN;
+    SSAType              returnType = SSAType::UNKNOWN;
 };
 
 /**
@@ -34,36 +35,39 @@ struct SSAFunctionSymbol {
  * `kSSAExceptionObjectSlot` rather than a real local slot.  `caughtType` is the
  * JVM internal class name from the table, or empty for catch-all/finally.
  */
-struct SSAExceptionRegion {
-    std::vector<SSABlock*> protectedBlocks; ///< Blocks covered by this region.
-    SSABlock* handler = nullptr;            ///< Handler entry block.
-    SSABlockArg* exceptionValue = nullptr;  ///< Synthetic caught-exception arg.
-    std::string caughtType;                 ///< Empty means catch-all/finally.
+struct SSAExceptionRegion
+{
+    std::vector<SSABlock*> protectedBlocks;            ///< Blocks covered by this region.
+    SSABlock*              handler        = nullptr;   ///< Handler entry block.
+    SSABlockArg*           exceptionValue = nullptr;   ///< Synthetic caught-exception arg.
+    std::string            caughtType;                 ///< Empty means catch-all/finally.
 };
 
 /// @brief Full block-argument SSA function owned by one method conversion.
-struct SSAFunction {
-    SSAFunctionSymbol symbol;
-    std::vector<std::unique_ptr<SSAParameter>> parameters;   // owns
-    std::vector<std::unique_ptr<SSABlock>> blocks;           // owns blocks
-    SSABlock* entry = nullptr;                               // 合成入口块
-    std::vector<SSAExceptionRegion> exceptionRegions;
+struct SSAFunction
+{
+    SSAFunctionSymbol                          symbol;
+    std::vector<std::unique_ptr<SSAParameter>> parameters;        // owns
+    std::vector<std::unique_ptr<SSABlock>>     blocks;            // owns blocks
+    SSABlock*                                  entry = nullptr;   // 合成入口块
+    std::vector<SSAExceptionRegion>            exceptionRegions;
 
     SSAIds ids;   // id 发放器（function 内全局）
 
-    // owns 额外的 value（literal/opaque）。指令 result 由指令自己 owns（通过 unique_ptr<SSAInstruction>），
-    // 但 result 作为 SSAValue 被引用时，其地址稳定（指令存在 blocks[*].instructions 里，不移动）。
-    // literal 不占正式 id（去重/内联），用裸指针持有，function 析构时释放。
-    std::vector<std::unique_ptr<SSAIntLiteral>> intLiterals;
+    // owns 额外的 value（literal/opaque）。指令 result 由指令自己 owns（通过
+    // unique_ptr<SSAInstruction>）， 但 result 作为 SSAValue 被引用时，其地址稳定（指令存在
+    // blocks[*].instructions 里，不移动）。 literal 不占正式
+    // id（去重/内联），用裸指针持有，function 析构时释放。
+    std::vector<std::unique_ptr<SSAIntLiteral>>   intLiterals;
     std::vector<std::unique_ptr<SSAFloatLiteral>> floatLiterals;
-    std::unique_ptr<SSANullLiteral> nullLiteral;
-    std::vector<std::unique_ptr<SSAOpaqueValue>> opaqueValues;
+    std::unique_ptr<SSANullLiteral>               nullLiteral;
+    std::vector<std::unique_ptr<SSAOpaqueValue>>  opaqueValues;
 
     // literal 工厂（简单去重：相同 value+type 复用）。
-    SSAIntLiteral* internInt(int64_t v, SSAType t);
+    SSAIntLiteral*   internInt(int64_t v, SSAType t);
     SSAFloatLiteral* internFloat(double v, SSAType t);
-    SSANullLiteral* internNull();
-    SSAOpaqueValue* newOpaque(SSAType t, std::string tag);
+    SSANullLiteral*  internNull();
+    SSAOpaqueValue*  newOpaque(SSAType t, std::string tag);
 };
 
-} // namespace mj2x
+}   // namespace mj2x

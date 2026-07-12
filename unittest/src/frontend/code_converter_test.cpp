@@ -13,25 +13,25 @@ using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
 
-namespace {
-
-}
+namespace {}
 
 // ============================================================
 // TypeUtils tests
 // ============================================================
 
-TEST(TypeUtilsTest, JvmSortToPrimitive) {
+TEST(TypeUtilsTest, JvmSortToPrimitive)
+{
     EXPECT_EQ(jvmSortToPrimitive(Type::INT), PrimitiveKind::INT);
     EXPECT_EQ(jvmSortToPrimitive(Type::LONG), PrimitiveKind::LONG);
     EXPECT_EQ(jvmSortToPrimitive(Type::FLOAT), PrimitiveKind::FLOAT);
     EXPECT_EQ(jvmSortToPrimitive(Type::DOUBLE), PrimitiveKind::DOUBLE);
     EXPECT_EQ(jvmSortToPrimitive(Type::BOOLEAN), PrimitiveKind::BOOLEAN);
     EXPECT_EQ(jvmSortToPrimitive(Type::VOID), PrimitiveKind::VOID);
-    EXPECT_EQ(jvmSortToPrimitive(99), PrimitiveKind::OBJECT); // unknown → OBJECT
+    EXPECT_EQ(jvmSortToPrimitive(99), PrimitiveKind::OBJECT);   // unknown → OBJECT
 }
 
-TEST(TypeUtilsTest, JvmDescToPrimitive) {
+TEST(TypeUtilsTest, JvmDescToPrimitive)
+{
     EXPECT_EQ(jvmDescToPrimitive("I"), PrimitiveKind::INT);
     EXPECT_EQ(jvmDescToPrimitive("J"), PrimitiveKind::LONG);
     EXPECT_EQ(jvmDescToPrimitive("V"), PrimitiveKind::VOID);
@@ -39,7 +39,8 @@ TEST(TypeUtilsTest, JvmDescToPrimitive) {
     EXPECT_EQ(jvmDescToPrimitive("[I"), PrimitiveKind::OBJECT);
 }
 
-TEST(TypeUtilsTest, PrimitiveStackSize) {
+TEST(TypeUtilsTest, PrimitiveStackSize)
+{
     EXPECT_EQ(primitiveStackSize(PrimitiveKind::INT), 1);
     EXPECT_EQ(primitiveStackSize(PrimitiveKind::LONG), 2);
     EXPECT_EQ(primitiveStackSize(PrimitiveKind::DOUBLE), 2);
@@ -50,7 +51,8 @@ TEST(TypeUtilsTest, PrimitiveStackSize) {
 // OpcodeUtils tests
 // ============================================================
 
-TEST(OpcodeUtilsTest, BinaryOpMapping) {
+TEST(OpcodeUtilsTest, BinaryOpMapping)
+{
     EXPECT_EQ(opcodeToBinaryOp(Opcodes::IADD), BinaryOp::ADD);
     EXPECT_EQ(opcodeToBinaryOp(Opcodes::LADD), BinaryOp::ADD);
     EXPECT_EQ(opcodeToBinaryOp(Opcodes::ISUB), BinaryOp::SUB);
@@ -65,7 +67,8 @@ TEST(OpcodeUtilsTest, BinaryOpMapping) {
     EXPECT_EQ(opcodeToBinaryOp(Opcodes::IXOR), BinaryOp::XOR);
 }
 
-TEST(OpcodeUtilsTest, ResultTypeMapping) {
+TEST(OpcodeUtilsTest, ResultTypeMapping)
+{
     EXPECT_EQ(opcodeToResultType(Opcodes::IADD), PrimitiveKind::INT);
     EXPECT_EQ(opcodeToResultType(Opcodes::LADD), PrimitiveKind::LONG);
     EXPECT_EQ(opcodeToResultType(Opcodes::FREM), PrimitiveKind::FLOAT);
@@ -74,7 +77,8 @@ TEST(OpcodeUtilsTest, ResultTypeMapping) {
     EXPECT_EQ(opcodeToResultType(Opcodes::DNEG), PrimitiveKind::DOUBLE);
 }
 
-TEST(OpcodeUtilsTest, BranchOpcodeMapping) {
+TEST(OpcodeUtilsTest, BranchOpcodeMapping)
+{
     EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPEQ), CmpOp::EQ);
     EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPNE), CmpOp::NE);
     EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPLT), CmpOp::LT);
@@ -83,7 +87,8 @@ TEST(OpcodeUtilsTest, BranchOpcodeMapping) {
     EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPLE), CmpOp::LE);
 }
 
-TEST(OpcodeUtilsTest, BranchZeroOpcodeMapping) {
+TEST(OpcodeUtilsTest, BranchZeroOpcodeMapping)
+{
     EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFEQ), CmpOp::EQ);
     EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFNE), CmpOp::NE);
     EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFLT), CmpOp::LT);
@@ -96,10 +101,15 @@ TEST(OpcodeUtilsTest, BranchZeroOpcodeMapping) {
 // MethodStack tests
 // ============================================================
 
-TEST(MethodStackTest, StaticMethodParameterTypes) {
+TEST(MethodStackTest, StaticMethodParameterTypes)
+{
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ca::str::Utf8StringRef::from_cstr("add"), ca::str::Utf8StringRef::from_cstr("(II)I"), ca::str::Utf8StringRef::from_cstr(""), noExcepts);
-    mn.maxStack = 2;
+    MethodNode                          mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                  ca::str::Utf8StringRef::from_cstr("add"),
+                  ca::str::Utf8StringRef::from_cstr("(II)I"),
+                  ca::str::Utf8StringRef::from_cstr(""),
+                  noExcepts);
+    mn.maxStack  = 2;
     mn.maxLocals = 2;
 
     MethodStack ms(mn);
@@ -109,23 +119,33 @@ TEST(MethodStackTest, StaticMethodParameterTypes) {
     EXPECT_EQ(ms.getLocalType(1), PrimitiveKind::INT);
 }
 
-TEST(MethodStackTest, InstanceMethodHasThis) {
+TEST(MethodStackTest, InstanceMethodHasThis)
+{
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC, ca::str::Utf8StringRef::from_cstr("getValue"), ca::str::Utf8StringRef::from_cstr("()I"), ca::str::Utf8StringRef::from_cstr(""), noExcepts);
+    MethodNode                          mn(Opcodes::ACC_PUBLIC,
+                  ca::str::Utf8StringRef::from_cstr("getValue"),
+                  ca::str::Utf8StringRef::from_cstr("()I"),
+                  ca::str::Utf8StringRef::from_cstr(""),
+                  noExcepts);
     mn.maxLocals = 1;
 
     MethodStack ms(mn);
-    EXPECT_EQ(ms.getLocalType(0), PrimitiveKind::OBJECT); // this
+    EXPECT_EQ(ms.getLocalType(0), PrimitiveKind::OBJECT);   // this
 }
 
-TEST(MethodStackTest, LongAndDoubleTakeTwoSlots) {
+TEST(MethodStackTest, LongAndDoubleTakeTwoSlots)
+{
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ca::str::Utf8StringRef::from_cstr("test"), ca::str::Utf8StringRef::from_cstr("(JD)V"), ca::str::Utf8StringRef::from_cstr(""), noExcepts);
+    MethodNode                          mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                  ca::str::Utf8StringRef::from_cstr("test"),
+                  ca::str::Utf8StringRef::from_cstr("(JD)V"),
+                  ca::str::Utf8StringRef::from_cstr(""),
+                  noExcepts);
     mn.maxLocals = 4;
 
     MethodStack ms(mn);
-    EXPECT_EQ(ms.getLocalType(0), PrimitiveKind::LONG);   // slot 0-1
-    EXPECT_EQ(ms.getLocalType(2), PrimitiveKind::DOUBLE); // slot 2-3
+    EXPECT_EQ(ms.getLocalType(0), PrimitiveKind::LONG);     // slot 0-1
+    EXPECT_EQ(ms.getLocalType(2), PrimitiveKind::DOUBLE);   // slot 2-3
 }
 
 // ============================================================
@@ -133,43 +153,42 @@ TEST(MethodStackTest, LongAndDoubleTakeTwoSlots) {
 // ============================================================
 
 // Helper: create a MethodNode with given body instructions
-static std::unique_ptr<MethodNode> makeMethod(
-    int access, const std::string& name, const std::string& desc,
-    std::initializer_list<AbstractInsnNode*> insns)
+static std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name,
+                                              const std::string&                       desc,
+                                              std::initializer_list<AbstractInsnNode*> insns)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    auto& arena = Type::staticArena();
-    auto mn = std::make_unique<MethodNode>(
-        access,
-        arena.intern(name.c_str()),
-        arena.intern(desc.c_str()),
-        ca::str::Utf8StringRef::from_cstr(""),
-        noExcepts);
-    mn->maxStack = 10;
-    mn->maxLocals = 10;
-    for (auto* insn : insns)
-        mn->instructions.add(insn);
+    auto&                               arena = Type::staticArena();
+    auto                                mn    = std::make_unique<MethodNode>(access,
+                                           arena.intern(name.c_str()),
+                                           arena.intern(desc.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(""),
+                                           noExcepts);
+    mn->maxStack                              = 10;
+    mn->maxLocals                             = 10;
+    for (auto* insn : insns) mn->instructions.add(insn);
     return mn;
 }
 
-TEST(CodeConverterTest, EmptyReturnsEntryBlock) {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "empty", "()V", {});
+TEST(CodeConverterTest, EmptyReturnsEntryBlock)
+{
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "empty", "()V", {});
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 1);
-    EXPECT_EQ(blocks[0]->id, 0); // entry block
+    EXPECT_EQ(blocks[0]->id, 0);   // entry block
     EXPECT_EQ(blocks[0]->nodes.size(), 0);
 }
 
-TEST(CodeConverterTest, SimpleReturn) {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "ret", "()V", {new InsnNode(Opcodes::RETURN)});
+TEST(CodeConverterTest, SimpleReturn)
+{
+    auto mn = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "ret", "()V", {new InsnNode(Opcodes::RETURN)});
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 1);
     auto& nodes = blocks[0]->nodes;
@@ -177,27 +196,33 @@ TEST(CodeConverterTest, SimpleReturn) {
     EXPECT_EQ(nodes.back()->kind, MIRKind::RETURN);
 }
 
-TEST(CodeConverterTest, ReturnValue) {
+TEST(CodeConverterTest, ReturnValue)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "retVal", "()I", {new InsnNode(Opcodes::IRETURN)});
+                         "retVal",
+                         "()I",
+                         {new InsnNode(Opcodes::IRETURN)});
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
 
     auto& nodes = blocks[0]->nodes;
     EXPECT_EQ(nodes.back()->kind, MIRKind::RETURN_VALUE);
 }
 
-TEST(CodeConverterTest, LocalLoadStore) {
+TEST(CodeConverterTest, LocalLoadStore)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "ldst", "(I)I", {
-        new VarInsnNode(Opcodes::ILOAD, 0),
-        new InsnNode(Opcodes::IRETURN),
-    });
+                         "ldst",
+                         "(I)I",
+                         {
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     // Find LOAD node
     bool foundLoad = false;
@@ -210,18 +235,21 @@ TEST(CodeConverterTest, LocalLoadStore) {
     EXPECT_TRUE(foundLoad);
 }
 
-TEST(CodeConverterTest, BinaryOp) {
+TEST(CodeConverterTest, BinaryOp)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "add", "(II)I", {
-        new VarInsnNode(Opcodes::ILOAD, 0),
-        new VarInsnNode(Opcodes::ILOAD, 1),
-        new InsnNode(Opcodes::IADD),
-        new InsnNode(Opcodes::IRETURN),
-    });
+                         "add",
+                         "(II)I",
+                         {
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new VarInsnNode(Opcodes::ILOAD, 1),
+                             new InsnNode(Opcodes::IADD),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundBinary = false;
     for (auto& n : nodes) {
@@ -233,20 +261,23 @@ TEST(CodeConverterTest, BinaryOp) {
     EXPECT_TRUE(foundBinary);
 }
 
-TEST(CodeConverterTest, CastAndNumericCompare) {
+TEST(CodeConverterTest, CastAndNumericCompare)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "casts", "(ID)I", {
-        new VarInsnNode(Opcodes::ILOAD, 0),
-        new InsnNode(Opcodes::I2L),
-        new VarInsnNode(Opcodes::DLOAD, 1),
-        new InsnNode(Opcodes::D2I),
-        new InsnNode(Opcodes::LCMP),
-        new InsnNode(Opcodes::IRETURN),
-    });
+                         "casts",
+                         "(ID)I",
+                         {
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new InsnNode(Opcodes::I2L),
+                             new VarInsnNode(Opcodes::DLOAD, 1),
+                             new InsnNode(Opcodes::D2I),
+                             new InsnNode(Opcodes::LCMP),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundI2L = false;
     bool foundD2I = false;
@@ -261,7 +292,8 @@ TEST(CodeConverterTest, CastAndNumericCompare) {
                 foundD2I = true;
             if (cast->from == PrimitiveKind::DOUBLE && cast->to == PrimitiveKind::LONG)
                 foundD2L = true;
-        } else if (n->kind == MIRKind::CMP) {
+        }
+        else if (n->kind == MIRKind::CMP) {
             auto* cmp = static_cast<MIRCmp*>(n.get());
             EXPECT_EQ(cmp->type, PrimitiveKind::LONG);
             EXPECT_FALSE(cmp->nanGreater);
@@ -274,17 +306,20 @@ TEST(CodeConverterTest, CastAndNumericCompare) {
     EXPECT_TRUE(foundCmp);
 }
 
-TEST(CodeConverterTest, DoubleToLongCast) {
+TEST(CodeConverterTest, DoubleToLongCast)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "d2l", "(D)J", {
-        new VarInsnNode(Opcodes::DLOAD, 0),
-        new InsnNode(Opcodes::D2L),
-        new InsnNode(Opcodes::LRETURN),
-    });
+                         "d2l",
+                         "(D)J",
+                         {
+                             new VarInsnNode(Opcodes::DLOAD, 0),
+                             new InsnNode(Opcodes::D2L),
+                             new InsnNode(Opcodes::LRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundD2L = false;
     for (auto& n : nodes) {
@@ -297,49 +332,55 @@ TEST(CodeConverterTest, DoubleToLongCast) {
     EXPECT_TRUE(foundD2L);
 }
 
-TEST(CodeConverterTest, FloatingCompareNaNDirection) {
+TEST(CodeConverterTest, FloatingCompareNaNDirection)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "cmp", "(FFDD)I", {
-        new VarInsnNode(Opcodes::FLOAD, 0),
-        new VarInsnNode(Opcodes::FLOAD, 1),
-        new InsnNode(Opcodes::FCMPG),
-        new VarInsnNode(Opcodes::DLOAD, 2),
-        new VarInsnNode(Opcodes::DLOAD, 4),
-        new InsnNode(Opcodes::DCMPL),
-        new InsnNode(Opcodes::IADD),
-        new InsnNode(Opcodes::IRETURN),
-    });
+                         "cmp",
+                         "(FFDD)I",
+                         {
+                             new VarInsnNode(Opcodes::FLOAD, 0),
+                             new VarInsnNode(Opcodes::FLOAD, 1),
+                             new InsnNode(Opcodes::FCMPG),
+                             new VarInsnNode(Opcodes::DLOAD, 2),
+                             new VarInsnNode(Opcodes::DLOAD, 4),
+                             new InsnNode(Opcodes::DCMPL),
+                             new InsnNode(Opcodes::IADD),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundFcmpg = false;
     bool foundDcmpl = false;
     for (auto& n : nodes) {
-        if (n->kind != MIRKind::CMP)
-            continue;
+        if (n->kind != MIRKind::CMP) continue;
         auto* cmp = static_cast<MIRCmp*>(n.get());
-        if (cmp->type == PrimitiveKind::FLOAT && cmp->nanGreater)
-            foundFcmpg = true;
-        if (cmp->type == PrimitiveKind::DOUBLE && !cmp->nanGreater)
-            foundDcmpl = true;
+        if (cmp->type == PrimitiveKind::FLOAT && cmp->nanGreater) foundFcmpg = true;
+        if (cmp->type == PrimitiveKind::DOUBLE && !cmp->nanGreater) foundDcmpl = true;
     }
     EXPECT_TRUE(foundFcmpg);
     EXPECT_TRUE(foundDcmpl);
 }
 
-TEST(CodeConverterTest, FieldAccess) {
+TEST(CodeConverterTest, FieldAccess)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC,
-                         "getX", "()I", {
-        new VarInsnNode(Opcodes::ALOAD, 0), // this
-        new FieldInsnNode(Opcodes::GETFIELD, ca::str::Utf8StringRef::from_cstr("Foo"), ca::str::Utf8StringRef::from_cstr("x"), ca::str::Utf8StringRef::from_cstr("I")),
-        new InsnNode(Opcodes::IRETURN),
-    });
+                         "getX",
+                         "()I",
+                         {
+                             new VarInsnNode(Opcodes::ALOAD, 0),   // this
+                             new FieldInsnNode(Opcodes::GETFIELD,
+                                               ca::str::Utf8StringRef::from_cstr("Foo"),
+                                               ca::str::Utf8StringRef::from_cstr("x"),
+                                               ca::str::Utf8StringRef::from_cstr("I")),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundGet = false;
     for (auto& n : nodes) {
@@ -354,16 +395,23 @@ TEST(CodeConverterTest, FieldAccess) {
     EXPECT_TRUE(foundGet);
 }
 
-TEST(CodeConverterTest, MethodInvoke) {
+TEST(CodeConverterTest, MethodInvoke)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "call", "()V", {
-        new MethodInsnNode(Opcodes::INVOKESTATIC, ca::str::Utf8StringRef::from_cstr("Other"), ca::str::Utf8StringRef::from_cstr("run"), ca::str::Utf8StringRef::from_cstr("()V"), false),
-        new InsnNode(Opcodes::RETURN),
-    });
+                         "call",
+                         "()V",
+                         {
+                             new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                ca::str::Utf8StringRef::from_cstr("Other"),
+                                                ca::str::Utf8StringRef::from_cstr("run"),
+                                                ca::str::Utf8StringRef::from_cstr("()V"),
+                                                false),
+                             new InsnNode(Opcodes::RETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundInvoke = false;
     for (auto& n : nodes) {
@@ -377,16 +425,19 @@ TEST(CodeConverterTest, MethodInvoke) {
     EXPECT_TRUE(foundInvoke);
 }
 
-TEST(CodeConverterTest, StringLdcKeepsLiteralValue) {
+TEST(CodeConverterTest, StringLdcKeepsLiteralValue)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "literal", "()Ljava/lang/String;", {
-        new LdcInsnNode(std::string("hello \"jni\"")),
-        new InsnNode(Opcodes::ARETURN),
-    });
+                         "literal",
+                         "()Ljava/lang/String;",
+                         {
+                             new LdcInsnNode(std::string("hello \"jni\"")),
+                             new InsnNode(Opcodes::ARETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundString = false;
     for (auto& n : nodes) {
@@ -401,43 +452,45 @@ TEST(CodeConverterTest, StringLdcKeepsLiteralValue) {
     EXPECT_TRUE(foundString);
 }
 
-TEST(CodeConverterTest, ArrayInstructionsCarryComponentType) {
+TEST(CodeConverterTest, ArrayInstructionsCarryComponentType)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "arrays", "()V", {
-        new InsnNode(Opcodes::ICONST_2),
-        new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_LONG),
-        new InsnNode(Opcodes::DUP),
-        new InsnNode(Opcodes::ICONST_0),
-        new InsnNode(Opcodes::LCONST_1),
-        new InsnNode(Opcodes::LASTORE),
-        new InsnNode(Opcodes::DUP),
-        new InsnNode(Opcodes::ICONST_0),
-        new InsnNode(Opcodes::LALOAD),
-        new InsnNode(Opcodes::POP2),
-        new InsnNode(Opcodes::POP),
-        new InsnNode(Opcodes::RETURN),
-    });
+                         "arrays",
+                         "()V",
+                         {
+                             new InsnNode(Opcodes::ICONST_2),
+                             new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_LONG),
+                             new InsnNode(Opcodes::DUP),
+                             new InsnNode(Opcodes::ICONST_0),
+                             new InsnNode(Opcodes::LCONST_1),
+                             new InsnNode(Opcodes::LASTORE),
+                             new InsnNode(Opcodes::DUP),
+                             new InsnNode(Opcodes::ICONST_0),
+                             new InsnNode(Opcodes::LALOAD),
+                             new InsnNode(Opcodes::POP2),
+                             new InsnNode(Opcodes::POP),
+                             new InsnNode(Opcodes::RETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundNewLongArray = false;
-    bool foundLongStore = false;
-    bool foundLongLoad = false;
+    bool foundLongStore    = false;
+    bool foundLongLoad     = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::NEW_ARRAY) {
             auto* a = static_cast<MIRNewArray*>(n.get());
-            if (a->componentType == PrimitiveKind::LONG)
-                foundNewLongArray = true;
-        } else if (n->kind == MIRKind::ARRAY_STORE) {
+            if (a->componentType == PrimitiveKind::LONG) foundNewLongArray = true;
+        }
+        else if (n->kind == MIRKind::ARRAY_STORE) {
             auto* s = static_cast<MIRArrayStore*>(n.get());
-            if (s->componentType == PrimitiveKind::LONG)
-                foundLongStore = true;
-        } else if (n->kind == MIRKind::ARRAY_LOAD) {
+            if (s->componentType == PrimitiveKind::LONG) foundLongStore = true;
+        }
+        else if (n->kind == MIRKind::ARRAY_LOAD) {
             auto* l = static_cast<MIRArrayLoad*>(n.get());
-            if (l->componentType == PrimitiveKind::LONG)
-                foundLongLoad = true;
+            if (l->componentType == PrimitiveKind::LONG) foundLongLoad = true;
         }
     }
     EXPECT_TRUE(foundNewLongArray);
@@ -445,27 +498,33 @@ TEST(CodeConverterTest, ArrayInstructionsCarryComponentType) {
     EXPECT_TRUE(foundLongLoad);
 }
 
-TEST(CodeConverterTest, UnconditionalBranch) {
-    auto* label = new LabelNode();
+TEST(CodeConverterTest, UnconditionalBranch)
+{
+    auto* label                  = new LabelNode();
     label->label->bytecodeOffset = 10;
 
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "br", "()V", {
-        new JumpInsnNode(Opcodes::GOTO, label->label),
-        new InsnNode(Opcodes::RETURN),
-        label,
-        new InsnNode(Opcodes::RETURN),
-    });
+                         "br",
+                         "()V",
+                         {
+                             new JumpInsnNode(Opcodes::GOTO, label->label),
+                             new InsnNode(Opcodes::RETURN),
+                             label,
+                             new InsnNode(Opcodes::RETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 2);
 
     // Find entry block (id=0) and check it has GOTO
     Block* entryBlock = nullptr;
     for (auto* b : blocks) {
-        if (b->id == 0) { entryBlock = b; break; }
+        if (b->id == 0) {
+            entryBlock = b;
+            break;
+        }
     }
     ASSERT_NE(entryBlock, nullptr);
 
@@ -480,20 +539,23 @@ TEST(CodeConverterTest, UnconditionalBranch) {
     EXPECT_TRUE(foundGoto);
 }
 
-TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes) {
-    auto* label = new LabelNode();
+TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes)
+{
+    auto* label                  = new LabelNode();
     label->label->bytecodeOffset = 10;
 
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "legacySubroutine", "()V", {
-        new JumpInsnNode(Opcodes::JSR, label->label),
-        new InsnNode(Opcodes::RETURN),
-        label,
-        new VarInsnNode(Opcodes::RET, 0),
-    });
+                         "legacySubroutine",
+                         "()V",
+                         {
+                             new JumpInsnNode(Opcodes::JSR, label->label),
+                             new InsnNode(Opcodes::RETURN),
+                             label,
+                             new VarInsnNode(Opcodes::RET, 0),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
 
     bool foundJsr = false;
     bool foundRet = false;
@@ -501,8 +563,8 @@ TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes) {
         for (auto& n : block->nodes) {
             if (n->kind != MIRKind::INVOKE_DYNAMIC) continue;
             auto* unsupported = static_cast<MIRInvokeDynamic*>(n.get());
-            foundJsr = foundJsr || unsupported->name == "jsr";
-            foundRet = foundRet || unsupported->name == "ret";
+            foundJsr          = foundJsr || unsupported->name == "jsr";
+            foundRet          = foundRet || unsupported->name == "ret";
         }
     }
 
@@ -510,24 +572,30 @@ TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes) {
     EXPECT_TRUE(foundRet);
 }
 
-TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata) {
+TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
+{
     auto bsm = Handle(Opcodes::H_INVOKESTATIC,
                       ca::str::Utf8StringRef::from_cstr("java/lang/invoke/StringConcatFactory"),
                       ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
-                      ca::str::Utf8StringRef::from_cstr("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
-                                                        "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
-                                                        "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
+                      ca::str::Utf8StringRef::from_cstr(
+                          "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                          "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
+                          "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
                       false);
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "concat", "()Ljava/lang/String;", {
-        new InvokeDynamicInsnNode(ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
-                                  ca::str::Utf8StringRef::from_cstr("()Ljava/lang/String;"),
-                                  bsm, {std::string("v=\x01")}),
-        new InsnNode(Opcodes::ARETURN),
-    });
+    auto mn  = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        "concat",
+        "()Ljava/lang/String;",
+        {
+            new InvokeDynamicInsnNode(ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
+                                      ca::str::Utf8StringRef::from_cstr("()Ljava/lang/String;"),
+                                      bsm,
+                                       {std::string("v=\x01")}),
+            new InsnNode(Opcodes::ARETURN),
+        });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
     ASSERT_GE(blocks.size(), 1u);
 
     bool foundIndy = false;
@@ -535,10 +603,11 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata) {
         for (auto& n : block->nodes) {
             if (n->kind != MIRKind::INVOKE_DYNAMIC) continue;
             auto* unsupported = static_cast<MIRInvokeDynamic*>(n.get());
-            foundIndy = unsupported->name == "makeConcatWithConstants" &&
+            foundIndy         = unsupported->name == "makeConcatWithConstants" &&
                         unsupported->desc == "()Ljava/lang/String;" &&
                         unsupported->bsm.has_value() &&
-                        unsupported->bsm->getOwner().to_std_string() == "java/lang/invoke/StringConcatFactory" &&
+                        unsupported->bsm->getOwner().to_std_string() ==
+                            "java/lang/invoke/StringConcatFactory" &&
                         unsupported->bsmArgs.size() == 1;
         }
     }
@@ -546,23 +615,26 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata) {
     EXPECT_TRUE(foundIndy);
 }
 
-TEST(CodeConverterTest, IfNullBranchZeroHasObjectType) {
-    auto* label = new LabelNode();
+TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
+{
+    auto* label                  = new LabelNode();
     label->label->bytecodeOffset = 10;
 
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "isNull", "(Ljava/lang/Object;)I", {
-        new VarInsnNode(Opcodes::ALOAD, 0),
-        new JumpInsnNode(Opcodes::IFNULL, label->label),
-        new InsnNode(Opcodes::ICONST_0),
-        new InsnNode(Opcodes::IRETURN),
-        label,
-        new InsnNode(Opcodes::ICONST_1),
-        new InsnNode(Opcodes::IRETURN),
-    });
+                         "isNull",
+                         "(Ljava/lang/Object;)I",
+                         {
+                             new VarInsnNode(Opcodes::ALOAD, 0),
+                             new JumpInsnNode(Opcodes::IFNULL, label->label),
+                             new InsnNode(Opcodes::ICONST_0),
+                             new InsnNode(Opcodes::IRETURN),
+                             label,
+                             new InsnNode(Opcodes::ICONST_1),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
 
     bool foundObjectNullBranch = false;
     for (auto* block : blocks) {
@@ -579,18 +651,21 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType) {
     EXPECT_TRUE(foundObjectNullBranch);
 }
 
-TEST(CodeConverterTest, DumpOutput) {
+TEST(CodeConverterTest, DumpOutput)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "add", "(II)I", {
-        new VarInsnNode(Opcodes::ILOAD, 0),
-        new VarInsnNode(Opcodes::ILOAD, 1),
-        new InsnNode(Opcodes::IADD),
-        new InsnNode(Opcodes::IRETURN),
-    });
+                         "add",
+                         "(II)I",
+                         {
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new VarInsnNode(Opcodes::ILOAD, 1),
+                             new InsnNode(Opcodes::IADD),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto dump = CodeConverter::dumpMIR(blocks);
+    auto          blocks = cc.convert(*mn);
+    auto          dump   = CodeConverter::dumpMIR(blocks);
 
     EXPECT_FALSE(dump.empty());
     EXPECT_NE(dump.find("B0:"), std::string::npos);
@@ -598,25 +673,28 @@ TEST(CodeConverterTest, DumpOutput) {
     EXPECT_NE(dump.find("RETURN_VALUE"), std::string::npos);
 }
 
-TEST(CodeConverterTest, ConstantInstructions) {
+TEST(CodeConverterTest, ConstantInstructions)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "consts", "()V", {
-        new InsnNode(Opcodes::ICONST_0),
-        new InsnNode(Opcodes::ICONST_1),
-        new InsnNode(Opcodes::LCONST_0),
-        new InsnNode(Opcodes::FCONST_0),
-        new InsnNode(Opcodes::DCONST_0),
-        new InsnNode(Opcodes::ACONST_NULL),
-        new InsnNode(Opcodes::POP2), // clean up long
-        new InsnNode(Opcodes::POP2), // clean up double
-        new InsnNode(Opcodes::POP),  // clean up float
-        new InsnNode(Opcodes::POP2), // clean up null + iconst_0
-        new InsnNode(Opcodes::RETURN),
-    });
+                         "consts",
+                         "()V",
+                         {
+                             new InsnNode(Opcodes::ICONST_0),
+                             new InsnNode(Opcodes::ICONST_1),
+                             new InsnNode(Opcodes::LCONST_0),
+                             new InsnNode(Opcodes::FCONST_0),
+                             new InsnNode(Opcodes::DCONST_0),
+                             new InsnNode(Opcodes::ACONST_NULL),
+                             new InsnNode(Opcodes::POP2),   // clean up long
+                             new InsnNode(Opcodes::POP2),   // clean up double
+                             new InsnNode(Opcodes::POP),    // clean up float
+                             new InsnNode(Opcodes::POP2),   // clean up null + iconst_0
+                             new InsnNode(Opcodes::RETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     int constCount = 0;
     for (auto& n : nodes) {
@@ -625,62 +703,65 @@ TEST(CodeConverterTest, ConstantInstructions) {
     EXPECT_EQ(constCount, 6);
 }
 
-TEST(CodeConverterTest, StackShapeInstructionsArePreserved) {
+TEST(CodeConverterTest, StackShapeInstructionsArePreserved)
+{
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "stackShape", "()V", {
-        new InsnNode(Opcodes::ICONST_0),
-        new InsnNode(Opcodes::POP),
-        new InsnNode(Opcodes::LCONST_0),
-        new InsnNode(Opcodes::POP2),
-        new InsnNode(Opcodes::ICONST_1),
-        new InsnNode(Opcodes::ICONST_2),
-        new InsnNode(Opcodes::ICONST_3),
-        new InsnNode(Opcodes::DUP2_X1),
-        new InsnNode(Opcodes::POP2),
-        new InsnNode(Opcodes::POP2),
-        new InsnNode(Opcodes::ICONST_1),
-        new InsnNode(Opcodes::ICONST_2),
-        new InsnNode(Opcodes::ICONST_3),
-        new InsnNode(Opcodes::ICONST_4),
-        new InsnNode(Opcodes::DUP2_X2),
-        new InsnNode(Opcodes::RETURN),
-    });
+                         "stackShape",
+                         "()V",
+                         {
+                             new InsnNode(Opcodes::ICONST_0),
+                             new InsnNode(Opcodes::POP),
+                             new InsnNode(Opcodes::LCONST_0),
+                             new InsnNode(Opcodes::POP2),
+                             new InsnNode(Opcodes::ICONST_1),
+                             new InsnNode(Opcodes::ICONST_2),
+                             new InsnNode(Opcodes::ICONST_3),
+                             new InsnNode(Opcodes::DUP2_X1),
+                             new InsnNode(Opcodes::POP2),
+                             new InsnNode(Opcodes::POP2),
+                             new InsnNode(Opcodes::ICONST_1),
+                             new InsnNode(Opcodes::ICONST_2),
+                             new InsnNode(Opcodes::ICONST_3),
+                             new InsnNode(Opcodes::ICONST_4),
+                             new InsnNode(Opcodes::DUP2_X2),
+                             new InsnNode(Opcodes::RETURN),
+                         });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
-    bool foundPop = false;
-    bool foundPop2 = false;
-    bool foundDup2X1 = false;
-    bool foundDup2X2 = false;
-    bool pop2IsWide = false;
+    bool foundPop      = false;
+    bool foundPop2     = false;
+    bool foundDup2X1   = false;
+    bool foundDup2X2   = false;
+    bool pop2IsWide    = false;
     bool dup2X1HasPair = false;
     bool dup2X2HasPair = false;
     for (auto& n : nodes) {
         foundPop = foundPop || n->kind == MIRKind::STACK_POP;
         if (n->kind == MIRKind::STACK_POP2) {
-            foundPop2 = true;
-            auto* op = static_cast<MIRStackOp*>(n.get());
-            pop2IsWide = pop2IsWide ||
-                (!op->stackBeforeTop.empty() && op->stackBeforeTop[0] == PrimitiveKind::LONG);
+            foundPop2  = true;
+            auto* op   = static_cast<MIRStackOp*>(n.get());
+            pop2IsWide = pop2IsWide || (!op->stackBeforeTop.empty() &&
+                                        op->stackBeforeTop[0] == PrimitiveKind::LONG);
         }
         if (n->kind == MIRKind::STACK_DUP2_X1) {
-            foundDup2X1 = true;
-            auto* op = static_cast<MIRStackOp*>(n.get());
+            foundDup2X1   = true;
+            auto* op      = static_cast<MIRStackOp*>(n.get());
             dup2X1HasPair = op->stackBeforeTop.size() >= 3 &&
-                op->stackBeforeTop[0] == PrimitiveKind::INT &&
-                op->stackBeforeTop[1] == PrimitiveKind::INT &&
-                op->stackBeforeTop[2] == PrimitiveKind::INT;
+                            op->stackBeforeTop[0] == PrimitiveKind::INT &&
+                            op->stackBeforeTop[1] == PrimitiveKind::INT &&
+                            op->stackBeforeTop[2] == PrimitiveKind::INT;
         }
         if (n->kind == MIRKind::STACK_DUP2_X2) {
-            foundDup2X2 = true;
-            auto* op = static_cast<MIRStackOp*>(n.get());
+            foundDup2X2   = true;
+            auto* op      = static_cast<MIRStackOp*>(n.get());
             dup2X2HasPair = op->stackBeforeTop.size() >= 4 &&
-                op->stackBeforeTop[0] == PrimitiveKind::INT &&
-                op->stackBeforeTop[1] == PrimitiveKind::INT &&
-                op->stackBeforeTop[2] == PrimitiveKind::INT &&
-                op->stackBeforeTop[3] == PrimitiveKind::INT;
+                            op->stackBeforeTop[0] == PrimitiveKind::INT &&
+                            op->stackBeforeTop[1] == PrimitiveKind::INT &&
+                            op->stackBeforeTop[2] == PrimitiveKind::INT &&
+                            op->stackBeforeTop[3] == PrimitiveKind::INT;
         }
     }
 
@@ -693,18 +774,26 @@ TEST(CodeConverterTest, StackShapeInstructionsArePreserved) {
     EXPECT_TRUE(dup2X2HasPair);
 }
 
-TEST(CodeConverterTest, NewObjectAndInvokeSpecial) {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "create", "()Ljava/lang/Object;", {
-        new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
-        new InsnNode(Opcodes::DUP),
-        new MethodInsnNode(Opcodes::INVOKESPECIAL, ca::str::Utf8StringRef::from_cstr("java/lang/Object"), ca::str::Utf8StringRef::from_cstr("<init>"), ca::str::Utf8StringRef::from_cstr("()V"), false),
-        new InsnNode(Opcodes::ARETURN),
-    });
+TEST(CodeConverterTest, NewObjectAndInvokeSpecial)
+{
+    auto mn = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        "create",
+        "()Ljava/lang/Object;",
+        {
+            new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
+            new InsnNode(Opcodes::DUP),
+            new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                               ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
+                               ca::str::Utf8StringRef::from_cstr("<init>"),
+                               ca::str::Utf8StringRef::from_cstr("()V"),
+                               false),
+            new InsnNode(Opcodes::ARETURN),
+        });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
-    auto& nodes = blocks[0]->nodes;
+    auto          blocks = cc.convert(*mn);
+    auto&         nodes  = blocks[0]->nodes;
 
     bool foundNew = false, foundDup = false, foundInvoke = false;
     for (auto& n : nodes) {
@@ -713,15 +802,12 @@ TEST(CodeConverterTest, NewObjectAndInvokeSpecial) {
             EXPECT_EQ(static_cast<MIRNewObject*>(n.get())->typeDesc, "java/lang/Object");
             foundNew = true;
             break;
-        case MIRKind::STACK_DUP:
-            foundDup = true;
-            break;
+        case MIRKind::STACK_DUP: foundDup = true; break;
         case MIRKind::INVOKE:
             EXPECT_EQ(static_cast<MIRInvoke*>(n.get())->name, "<init>");
             foundInvoke = true;
             break;
-        default:
-            break;
+        default: break;
         }
     }
     EXPECT_TRUE(foundNew);
@@ -729,30 +815,37 @@ TEST(CodeConverterTest, NewObjectAndInvokeSpecial) {
     EXPECT_TRUE(foundInvoke);
 }
 
-TEST(CodeConverterTest, SwitchInstructions) {
-    auto* defaultLabel = new LabelNode();
+TEST(CodeConverterTest, SwitchInstructions)
+{
+    auto* defaultLabel                  = new LabelNode();
     defaultLabel->label->bytecodeOffset = 100;
-    auto* caseLabel = new LabelNode();
-    caseLabel->label->bytecodeOffset = 50;
+    auto* caseLabel                     = new LabelNode();
+    caseLabel->label->bytecodeOffset    = 50;
 
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                         "sw", "()V", {
-        new TableSwitchInsnNode(0, 10, defaultLabel->label, {caseLabel->label}),
-        defaultLabel,
-        new InsnNode(Opcodes::RETURN),
-        caseLabel,
-        new InsnNode(Opcodes::RETURN),
-    });
+    auto mn =
+        makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                   "sw",
+                   "()V",
+                   {
+                       new TableSwitchInsnNode(0, 10, defaultLabel->label, {caseLabel->label}),
+                       defaultLabel,
+                       new InsnNode(Opcodes::RETURN),
+                       caseLabel,
+                       new InsnNode(Opcodes::RETURN),
+                   });
 
     CodeConverter cc;
-    auto blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 1);
 
     // Find entry block
     Block* entryBlock = nullptr;
     for (auto* b : blocks) {
-        if (b->id == 0) { entryBlock = b; break; }
+        if (b->id == 0) {
+            entryBlock = b;
+            break;
+        }
     }
     ASSERT_NE(entryBlock, nullptr);
 
@@ -768,4 +861,3 @@ TEST(CodeConverterTest, SwitchInstructions) {
     }
     EXPECT_TRUE(foundSwitch);
 }
-

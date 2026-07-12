@@ -8,19 +8,19 @@
 
 namespace mj2x {
 
-class MethodStack {
+class MethodStack
+{
 public:
     explicit MethodStack(jbytecode::tree::MethodNode& mn);
 
-    int maxStack() const { return maxStack_; }
-    int maxLocals() const { return maxLocals_; }
+    int           maxStack() const { return maxStack_; }
+    int           maxLocals() const { return maxLocals_; }
     PrimitiveKind getLocalType(int index) const;
 
 private:
-    int maxStack_ = 0;
-    int maxLocals_ = 0;
+    int                                    maxStack_  = 0;
+    int                                    maxLocals_ = 0;
     std::unordered_map<int, PrimitiveKind> localTypes_;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

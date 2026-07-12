@@ -43,8 +43,7 @@ bool writeText(const fs::path& path, const std::string& text)
     return true;
 }
 
-bool writeProjectTemplate(const fs::path& path,
-                          std::string_view source,
+bool writeProjectTemplate(const fs::path& path, std::string_view source,
                           std::string_view projectName)
 {
     constexpr std::string_view projectNameToken = "@PROJECT_NAME@";
@@ -67,8 +66,7 @@ bool writeProjectTemplate(const fs::path& path,
     while (cursor < source.size()) {
         const std::size_t token = source.find(projectNameToken, cursor);
         if (token == std::string_view::npos) {
-            out.write(source.data() + cursor,
-                      static_cast<std::streamsize>(source.size() - cursor));
+            out.write(source.data() + cursor, static_cast<std::streamsize>(source.size() - cursor));
             break;
         }
         out.write(source.data() + cursor, static_cast<std::streamsize>(token - cursor));
@@ -89,10 +87,11 @@ std::string trim(std::string value)
 bool copyManifestSources(const fs::path& root, const fs::path& to)
 {
     std::error_code ec;
-    const auto manifest = root / "resources.manifest";
+    const auto      manifest = root / "resources.manifest";
     if (!fs::exists(manifest, ec)) {
-        fprintf(
-            stderr, "[mj2x] ERROR: CRT resource manifest not found: %s\n", manifest.string().c_str());
+        fprintf(stderr,
+                "[mj2x] ERROR: CRT resource manifest not found: %s\n",
+                manifest.string().c_str());
         return false;
     }
 
@@ -114,7 +113,7 @@ bool copyManifestSources(const fs::path& root, const fs::path& to)
         }
 
         const fs::path source = root / line;
-        const fs::path dest = to / fs::path(line).lexically_relative("src");
+        const fs::path dest   = to / fs::path(line).lexically_relative("src");
         if (!fs::exists(source, ec) || !fs::is_regular_file(source, ec)) {
             fprintf(stderr,
                     "[mj2x] ERROR: CRT manifest source not found: %s\n",
@@ -239,8 +238,8 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         return 1;
     }
 
-    auto xmakeTemplate = useExternalCrt ? readText(config.crtRoot / "templates" / "xmake.lua.in")
-                                        : readEmbeddedText("templates/xmake.lua.in");
+    auto xmakeTemplate  = useExternalCrt ? readText(config.crtRoot / "templates" / "xmake.lua.in")
+                                         : readEmbeddedText("templates/xmake.lua.in");
     auto readmeTemplate = useExternalCrt ? readText(config.crtRoot / "templates" / "README.md.in")
                                          : readEmbeddedText("templates/README.md.in");
     if (xmakeTemplate.empty() || readmeTemplate.empty()) {
@@ -250,7 +249,8 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate, config.projectName)) {
         return 1;
     }
-    if (!writeProjectTemplate(config.projectDir / "README.md", readmeTemplate, config.projectName)) {
+    if (!writeProjectTemplate(
+            config.projectDir / "README.md", readmeTemplate, config.projectName)) {
         return 1;
     }
     if (!writeText(config.projectDir / ".gitignore",

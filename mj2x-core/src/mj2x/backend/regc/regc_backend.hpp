@@ -31,24 +31,19 @@ namespace mj2x {
  * fail closed and are not injected as native methods; this prevents partially
  * translated bytecode from being replaced by a broken native stub.
  */
-class RegCBackend : public Backend {
+class RegCBackend : public Backend
+{
 public:
     RegCBackend();
     ~RegCBackend() override;
 
     std::string_view name() const override { return "regc_native"; }
 
-    BackendResult compileMethod(
-        const std::string& className,
-        CompilerMethod& method,
-        const std::vector<Block*>& blocks
-    ) override;
+    BackendResult compileMethod(const std::string& className, CompilerMethod& method,
+                                const std::vector<Block*>& blocks) override;
 
-    void injectIntoClass(
-        CompilerClass& clazz,
-        CompilerMethod& method,
-        const BackendResult& result
-    ) override;
+    void injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
+                         const BackendResult& result) override;
 
     void finalize(const CompilerIndex& index) override;
 
@@ -61,9 +56,8 @@ public:
      * `generatedSource()` but does not write a file.
      */
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
-    void setJarNativeLoaderResourcePath(
-        const std::string& resourcePath,
-        const std::string& tempSuffix);
+    void setJarNativeLoaderResourcePath(const std::string& resourcePath,
+                                        const std::string& tempSuffix);
 
     /**
      * @brief Full generated C translation unit after finalize.
@@ -83,4 +77,4 @@ private:
     std::string sourceCode_;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

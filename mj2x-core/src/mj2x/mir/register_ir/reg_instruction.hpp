@@ -20,7 +20,8 @@
 namespace mj2x {
 
 /// @brief Instruction tag used for no-RTTI dispatch.
-enum class RegInstructionKind : uint8_t {
+enum class RegInstructionKind : uint8_t
+{
     Copy,
     Unary,
     Binary,
@@ -43,8 +44,9 @@ enum class RegInstructionKind : uint8_t {
  * Copies can appear as normal instructions for local rewrites or on successor
  * edges for branch-sensitive block argument transfers.
  */
-struct RegCopy {
-    RegValue dest;
+struct RegCopy
+{
+    RegValue   dest;
     RegOperand source;
 };
 
@@ -56,19 +58,20 @@ struct RegCopy {
  * model simple and avoids RTTI.  `hasDest` is false for stores, void calls,
  * barriers, monitor intrinsics, and other side-effect-only instructions.
  */
-struct RegInstruction {
-    RegInstructionKind kind = RegInstructionKind::Copy;
-    bool hasDest = false;
-    RegValue dest{};
-    SSAEffect effect;
+struct RegInstruction
+{
+    RegInstructionKind kind    = RegInstructionKind::Copy;
+    bool               hasDest = false;
+    RegValue           dest{};
+    SSAEffect          effect;
 
-    RegCopy copy{};
-    SSAUnaryOp unaryOp = SSAUnaryOp::Neg;
-    SSABinaryOp binaryOp = SSABinaryOp::Add;
+    RegCopy             copy{};
+    SSAUnaryOp          unaryOp          = SSAUnaryOp::Neg;
+    SSABinaryOp         binaryOp         = SSABinaryOp::Add;
     SSAComparePredicate comparePredicate = SSAComparePredicate::Eq;
-    SSAConvertKind convertKind = SSAConvertKind::Numeric;
-    SSAType targetType = SSAType::UNKNOWN;
-    std::string referenceTypeDesc;
+    SSAConvertKind      convertKind      = SSAConvertKind::Numeric;
+    SSAType             targetType       = SSAType::UNKNOWN;
+    std::string         referenceTypeDesc;
 
     RegOperand value;
     RegOperand lhs;
@@ -76,14 +79,14 @@ struct RegInstruction {
     RegOperand receiver;
     RegOperand index;
 
-    SSAFieldRef field;
-    SSAMethodRef method;
-    SSAAllocationKind allocationKind = SSAAllocationKind::Object;
-    std::string typeDesc;
-    std::string intrinsicName;
-    std::string barrierReason;
-    SSAType elementType = SSAType::UNKNOWN;
+    SSAFieldRef             field;
+    SSAMethodRef            method;
+    SSAAllocationKind       allocationKind = SSAAllocationKind::Object;
+    std::string             typeDesc;
+    std::string             intrinsicName;
+    std::string             barrierReason;
+    SSAType                 elementType = SSAType::UNKNOWN;
     std::vector<RegOperand> args;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

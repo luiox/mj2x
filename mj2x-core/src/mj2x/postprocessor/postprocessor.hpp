@@ -4,11 +4,11 @@
 
 namespace mj2x {
 
-class Postprocessor {
+class Postprocessor
+{
 public:
-    virtual ~Postprocessor() = default;
+    virtual ~Postprocessor()                   = default;
     virtual void process(CompilerIndex& index) = 0;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

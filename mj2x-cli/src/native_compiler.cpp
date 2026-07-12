@@ -7,13 +7,14 @@
 #include <sstream>
 #include <vector>
 #ifndef _WIN32
-#include <sys/wait.h>
+#    include <sys/wait.h>
 #endif
 
 namespace mj2x::cli {
 namespace {
 
-std::string quotePath(const std::filesystem::path& path) {
+std::string quotePath(const std::filesystem::path& path)
+{
     std::string value = path.string();
 #ifdef _WIN32
     std::string out = "\"";
@@ -21,9 +22,11 @@ std::string quotePath(const std::filesystem::path& path) {
         char c = value[i];
         if (c == '"') {
             out += "\\\"";
-        } else if (c == '\\' && i + 1 == value.size()) {
+        }
+        else if (c == '\\' && i + 1 == value.size()) {
             out += "\\\\";
-        } else {
+        }
+        else {
             out += c;
         }
     }
@@ -34,7 +37,8 @@ std::string quotePath(const std::filesystem::path& path) {
     for (char c : value) {
         if (c == '\'') {
             out += "'\\''";
-        } else {
+        }
+        else {
             out += c;
         }
     }
@@ -43,11 +47,13 @@ std::string quotePath(const std::filesystem::path& path) {
 #endif
 }
 
-int runQuiet(const std::string& command) {
+int runQuiet(const std::string& command)
+{
     return std::system(command.c_str());
 }
 
-bool commandExists(const std::string& command) {
+bool commandExists(const std::string& command)
+{
 #ifdef _WIN32
     return runQuiet("where " + command + " >nul 2>nul") == 0;
 #else
@@ -55,10 +61,11 @@ bool commandExists(const std::string& command) {
 #endif
 }
 
-std::string envValue(const char* name) {
+std::string envValue(const char* name)
+{
 #ifdef _WIN32
-    char* value = nullptr;
-    size_t size = 0;
+    char*  value = nullptr;
+    size_t size  = 0;
     if (_dupenv_s(&value, &size, name) != 0 || value == nullptr) return {};
     std::string result(value);
     std::free(value);
@@ -69,7 +76,8 @@ std::string envValue(const char* name) {
 #endif
 }
 
-const char* compilerExecutable(CCompilerKind compiler) {
+const char* compilerExecutable(CCompilerKind compiler)
+{
     switch (compiler) {
     case CCompilerKind::Msvc: return "cl";
     case CCompilerKind::Gcc: return "gcc";
@@ -81,35 +89,37 @@ const char* compilerExecutable(CCompilerKind compiler) {
 
 std::filesystem::path findVcvarsAll();
 
-std::string trim(std::string value) {
+std::string trim(std::string value)
+{
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
     const auto last = value.find_last_not_of(" \t\r\n");
     return value.substr(first, last - first + 1);
 }
 
-bool addCrtSources(const std::filesystem::path& crtRoot,
+bool addCrtSources(const std::filesystem::path&        crtRoot,
                    std::vector<std::filesystem::path>& includes,
-                   std::vector<std::filesystem::path>& sources) {
-    const auto sourceRoot = crtRoot / "src";
-    const auto manifest = crtRoot / "resources.manifest";
+                   std::vector<std::filesystem::path>& sources)
+{
+    const auto      sourceRoot = crtRoot / "src";
+    const auto      manifest   = crtRoot / "resources.manifest";
     std::error_code ec;
     if (!std::filesystem::exists(sourceRoot / "regc" / "mj2x_regc_crt.h", ec) ||
         !std::filesystem::exists(manifest, ec)) {
-        fprintf(stderr, "[mj2x] ERROR: invalid mj2x-crt source pack: %s\n",
-                crtRoot.string().c_str());
+        fprintf(
+            stderr, "[mj2x] ERROR: invalid mj2x-crt source pack: %s\n", crtRoot.string().c_str());
         return false;
     }
 
     std::ifstream in(manifest);
     if (!in) {
-        fprintf(stderr, "[mj2x] ERROR: cannot read mj2x-crt manifest: %s\n",
-                manifest.string().c_str());
+        fprintf(
+            stderr, "[mj2x] ERROR: cannot read mj2x-crt manifest: %s\n", manifest.string().c_str());
         return false;
     }
 
     includes.push_back(sourceRoot);
-    bool foundSource = false;
+    bool        foundSource = false;
     std::string line;
     while (std::getline(in, line)) {
         line = trim(line);
@@ -117,7 +127,7 @@ bool addCrtSources(const std::filesystem::path& crtRoot,
         if (line.rfind("src/", 0) != 0) continue;
 
         const std::filesystem::path relative(line);
-        bool escapesRoot = relative.is_absolute();
+        bool                        escapesRoot = relative.is_absolute();
         for (const auto& component : relative) {
             if (component == "..") {
                 escapesRoot = true;
@@ -125,22 +135,24 @@ bool addCrtSources(const std::filesystem::path& crtRoot,
             }
         }
         if (escapesRoot) {
-            fprintf(stderr, "[mj2x] ERROR: invalid mj2x-crt manifest source path: %s\n",
-                    line.c_str());
+            fprintf(
+                stderr, "[mj2x] ERROR: invalid mj2x-crt manifest source path: %s\n", line.c_str());
             return false;
         }
 
-        const auto source = crtRoot / relative;
+        const auto source    = crtRoot / relative;
         const auto extension = source.extension().string();
         if (extension == ".cpp") {
-            fprintf(stderr, "[mj2x] ERROR: --compile does not yet support C++ "
-                            "mj2x-crt sources; use "
-                            "--generate-xmake.\n");
+            fprintf(stderr,
+                    "[mj2x] ERROR: --compile does not yet support C++ "
+                    "mj2x-crt sources; use "
+                    "--generate-xmake.\n");
             return false;
         }
         if (extension != ".c") continue;
         if (!std::filesystem::exists(source, ec)) {
-            fprintf(stderr, "[mj2x] ERROR: mj2x-crt manifest source is missing: %s\n",
+            fprintf(stderr,
+                    "[mj2x] ERROR: mj2x-crt manifest source is missing: %s\n",
                     source.string().c_str());
             return false;
         }
@@ -155,11 +167,13 @@ bool addCrtSources(const std::filesystem::path& crtRoot,
     return true;
 }
 
-bool canUseMsvc() {
+bool canUseMsvc()
+{
     return commandExists("cl") || !findVcvarsAll().empty();
 }
 
-bool detectCompiler(CCompilerKind requested, CCompilerKind& detected) {
+bool detectCompiler(CCompilerKind requested, CCompilerKind& detected)
+{
     if (requested != CCompilerKind::Auto) {
         detected = requested;
         if (requested == CCompilerKind::Msvc) return canUseMsvc();
@@ -167,9 +181,9 @@ bool detectCompiler(CCompilerKind requested, CCompilerKind& detected) {
     }
 
 #ifdef _WIN32
-    bool hasCl = commandExists("cl");
+    bool hasCl             = commandExists("cl");
     bool hasConfiguredMsvc = hasCl && !envValue("INCLUDE").empty();
-    bool hasVcvarsMsvc = !hasConfiguredMsvc && !findVcvarsAll().empty();
+    bool hasVcvarsMsvc     = !hasConfiguredMsvc && !findVcvarsAll().empty();
     if (hasConfiguredMsvc || hasVcvarsMsvc) {
         detected = CCompilerKind::Msvc;
         return true;
@@ -209,7 +223,8 @@ bool detectCompiler(CCompilerKind requested, CCompilerKind& detected) {
     return false;
 }
 
-std::filesystem::path nativeLibraryPath(const std::string& outputPath) {
+std::filesystem::path nativeLibraryPath(const std::string& outputPath)
+{
     std::filesystem::path output(outputPath);
     std::filesystem::path dir = output.parent_path();
     if (dir.empty()) dir = ".";
@@ -225,11 +240,13 @@ std::filesystem::path nativeLibraryPath(const std::string& outputPath) {
     return dir / (output.stem().string() + ext);
 }
 
-bool jniIncludePaths(std::vector<std::filesystem::path>& includes) {
+bool jniIncludePaths(std::vector<std::filesystem::path>& includes)
+{
     std::string javaHomeValue = envValue("JAVA_HOME");
     if (javaHomeValue.empty()) {
-        fprintf(stderr, "[mj2x] ERROR: JAVA_HOME is not set; required to locate "
-                        "JNI headers.\n");
+        fprintf(stderr,
+                "[mj2x] ERROR: JAVA_HOME is not set; required to locate "
+                "JNI headers.\n");
         return false;
     }
 
@@ -248,7 +265,8 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes) {
         fprintf(stderr,
                 "[mj2x] ERROR: JNI include paths not found under JAVA_HOME: %s and "
                 "%s\n",
-                include.string().c_str(), platformInclude.string().c_str());
+                include.string().c_str(),
+                platformInclude.string().c_str());
         return false;
     }
 
@@ -257,16 +275,18 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes) {
     return true;
 }
 
-std::filesystem::path vcvarsAllPathFromVCTools(const std::string& value) {
+std::filesystem::path vcvarsAllPathFromVCTools(const std::string& value)
+{
     if (value.empty()) return {};
     std::filesystem::path tools(value);
     std::filesystem::path vcRoot = tools.parent_path().parent_path().parent_path();
     std::filesystem::path vcvars = vcRoot / "Auxiliary" / "Build" / "vcvarsall.bat";
-    std::error_code ec;
+    std::error_code       ec;
     return std::filesystem::exists(vcvars, ec) ? vcvars : std::filesystem::path{};
 }
 
-std::filesystem::path findVcvarsAll() {
+std::filesystem::path findVcvarsAll()
+{
     if (auto fromEnv = vcvarsAllPathFromVCTools(envValue("VCToolsInstallDir")); !fromEnv.empty())
         return fromEnv;
 
@@ -288,7 +308,8 @@ std::filesystem::path findVcvarsAll() {
     return {};
 }
 
-int systemExitCode(int rc) {
+int systemExitCode(int rc)
+{
 #ifdef _WIN32
     return rc;
 #else
@@ -299,9 +320,10 @@ int systemExitCode(int rc) {
 #endif
 }
 
-} // namespace
+}   // namespace
 
-bool parseCompilerName(const std::string& name, CCompilerKind& compiler) {
+bool parseCompilerName(const std::string& name, CCompilerKind& compiler)
+{
     if (name == "msvc") {
         compiler = CCompilerKind::Msvc;
         return true;
@@ -317,12 +339,14 @@ bool parseCompilerName(const std::string& name, CCompilerKind& compiler) {
     return false;
 }
 
-std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath) {
+std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath)
+{
     return nativeLibraryPath(outputPath);
 }
 
 int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
-                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot) {
+                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+{
     std::error_code ec;
     if (!std::filesystem::exists(cOutputPath, ec)) {
         fprintf(stderr, "[mj2x] ERROR: emitted C source does not exist: %s\n", cOutputPath.c_str());
@@ -333,8 +357,10 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
     if (!detectCompiler(requestedCompiler, compiler)) {
         if (requestedCompiler == CCompilerKind::Auto) {
             fprintf(stderr, "[mj2x] ERROR: no supported C compiler found on PATH.\n");
-        } else {
-            fprintf(stderr, "[mj2x] ERROR: C compiler '%s' not found on PATH.\n",
+        }
+        else {
+            fprintf(stderr,
+                    "[mj2x] ERROR: C compiler '%s' not found on PATH.\n",
                     compilerExecutable(requestedCompiler));
         }
         return 1;
@@ -347,7 +373,7 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
     if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources)) return 1;
 
     std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
-    std::ostringstream command;
+    std::ostringstream    command;
     if (compiler == CCompilerKind::Msvc) {
         command << "cl /nologo /LD";
         for (const auto& include : includes) command << " /I" << quotePath(include);
@@ -360,9 +386,10 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
         if (envValue("INCLUDE").empty()) {
             auto vcvars = findVcvarsAll();
             if (vcvars.empty()) {
-                fprintf(stderr, "[mj2x] ERROR: MSVC compiler was found, but the MSVC "
-                                "environment is not "
-                                "configured and vcvarsall.bat was not found.\n");
+                fprintf(stderr,
+                        "[mj2x] ERROR: MSVC compiler was found, but the MSVC "
+                        "environment is not "
+                        "configured and vcvarsall.bat was not found.\n");
                 return 1;
             }
             std::ostringstream wrapped;
@@ -372,7 +399,8 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
             command.clear();
             command << wrapped.str();
         }
-    } else {
+    }
+    else {
 #ifdef __APPLE__
         const char* sharedFlag = "-dynamiclib";
 #else
@@ -396,4 +424,4 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
     return 0;
 }
 
-} // namespace mj2x::cli
+}   // namespace mj2x::cli

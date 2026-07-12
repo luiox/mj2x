@@ -28,4 +28,4 @@ std::string renderSnippet(std::string_view text, const SnippetVars& vars)
     return out;
 }
 
-}  // namespace mj2x::codegen
+}   // namespace mj2x::codegen

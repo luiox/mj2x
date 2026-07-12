@@ -11,9 +11,10 @@
 
 namespace mj2x {
 
-class MultiANewArrayPreprocessor : public Preprocessor {
+class MultiANewArrayPreprocessor : public Preprocessor
+{
 public:
     void process(CompilerIndex& index) override;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

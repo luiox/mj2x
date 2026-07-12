@@ -15,44 +15,48 @@ namespace mj2x {
 struct SSABlock;
 
 // 一条出边：跳到 block，并给后继块的 args 传值（phi 语义，详见 IR_DESIGN §6）。
-struct SSASuccessor {
-    SSABlock* block = nullptr;
+struct SSASuccessor
+{
+    SSABlock*              block = nullptr;
     std::vector<SSAValue*> args;   // 个数必须等于后继 block->args.size()
 };
 
 // ---- Terminator 变体 ----
-struct SSAJumpTerminator {
+struct SSAJumpTerminator
+{
     SSASuccessor target;
 };
-struct SSABranchTerminator {
-    SSAValue* condition = nullptr;   // SSACompareInstruction 的 bool result
+struct SSABranchTerminator
+{
+    SSAValue*    condition = nullptr;   // SSACompareInstruction 的 bool result
     SSASuccessor trueTarget;
     SSASuccessor falseTarget;
 };
-struct SSASwitchCase {
-    int64_t key = 0;
+struct SSASwitchCase
+{
+    int64_t      key = 0;
     SSASuccessor target;
 };
-struct SSASwitchTerminator {
-    SSAValue* value = nullptr;
+struct SSASwitchTerminator
+{
+    SSAValue*                  value = nullptr;
     std::vector<SSASwitchCase> cases;
-    SSASuccessor defaultTarget;
+    SSASuccessor               defaultTarget;
 };
-struct SSAReturnTerminator {
+struct SSAReturnTerminator
+{
     SSAValue* value = nullptr;   // null = void return
 };
-struct SSAThrowTerminator {
+struct SSAThrowTerminator
+{
     SSAValue* value = nullptr;
 };
-struct SSAUnreachableTerminator {};
+struct SSAUnreachableTerminator
+{};
 
 // tagged union 终结符。RTTI 禁用，故用 variant 而非虚函数。
-using SSATerminator = std::variant<
-    SSAJumpTerminator,
-    SSABranchTerminator,
-    SSASwitchTerminator,
-    SSAReturnTerminator,
-    SSAThrowTerminator,
-    SSAUnreachableTerminator>;
+using SSATerminator =
+    std::variant<SSAJumpTerminator, SSABranchTerminator, SSASwitchTerminator, SSAReturnTerminator,
+                 SSAThrowTerminator, SSAUnreachableTerminator>;
 
-} // namespace mj2x
+}   // namespace mj2x

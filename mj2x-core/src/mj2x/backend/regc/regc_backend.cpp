@@ -980,8 +980,8 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.charAt\"); return 0; }\n";
     out << "    jsize len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
     out << "    if (index < 0 || index >= len) {\n";
-    out << "        jclass ex = _mj2x_regc_cached_class(&"
-        << stringIndexOutOfBoundsClassCacheName << ");\n";
+    out << "        jclass ex = _mj2x_regc_cached_class(&" << stringIndexOutOfBoundsClassCacheName
+        << ");\n";
     out << "        if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, "
            "\"String.charAt\");\n";
     out << "        return 0;\n";
@@ -1011,8 +1011,10 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "}\n\n";
     out << "static int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix) {\n";
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.startsWith\"); return 0; }\n";
-    out << "    if (prefix == NULL) { _mj2x_regc_throw_null(\"String.startsWith prefix\"); return 0; }\n";
-    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    if (prefix == NULL) { _mj2x_regc_throw_null(\"String.startsWith prefix\"); return "
+           "0; }\n";
+    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)value);\n";
     out << "    jsize prefix_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
            "(jstring)prefix);\n";
     out << "    if (prefix_len > value_len) return 0;\n";
@@ -1035,8 +1037,10 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "}\n\n";
     out << "static int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix) {\n";
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.endsWith\"); return 0; }\n";
-    out << "    if (suffix == NULL) { _mj2x_regc_throw_null(\"String.endsWith suffix\"); return 0; }\n";
-    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    if (suffix == NULL) { _mj2x_regc_throw_null(\"String.endsWith suffix\"); return 0; "
+           "}\n";
+    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)value);\n";
     out << "    jsize suffix_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
            "(jstring)suffix);\n";
     out << "    if (suffix_len > value_len) return 0;\n";
@@ -1060,8 +1064,10 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "}\n\n";
     out << "static int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle) {\n";
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.indexOf\"); return -1; }\n";
-    out << "    if (needle == NULL) { _mj2x_regc_throw_null(\"String.indexOf needle\"); return -1; }\n";
-    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);\n";
+    out << "    if (needle == NULL) { _mj2x_regc_throw_null(\"String.indexOf needle\"); return -1; "
+           "}\n";
+    out << "    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
+           "(jstring)value);\n";
     out << "    jsize needle_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, "
            "(jstring)needle);\n";
     out << "    if (needle_len == 0) return 0;\n";
@@ -1088,7 +1094,8 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "static jmethodID _mj2x_intrinsic_string_contains_method = NULL;\n";
     out << "static int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq) {\n";
     out << "    if (value == NULL) { _mj2x_regc_throw_null(\"String.contains\"); return 0; }\n";
-    out << "    if (seq == NULL) { _mj2x_regc_throw_null(\"String.contains sequence\"); return 0; }\n";
+    out << "    if (seq == NULL) { _mj2x_regc_throw_null(\"String.contains sequence\"); return 0; "
+           "}\n";
     out << "    if (_mj2x_intrinsic_is_string(seq)) {\n";
     out << "        return _mj2x_intrinsic_string_index_of(value, seq) >= 0;\n";
     out << "    }\n";
@@ -1280,14 +1287,14 @@ void RegCBackend::finalize(const CompilerIndex& index)
     full << includes.render();
     full << "\n";
     const std::string stringClassCacheName = impl_->cachePool.classCache("java/lang/String");
-    const std::string objectToStringMethodCacheName =
-        impl_->cachePool.instanceMethodCache("java/lang/Object", "toString", "()Ljava/lang/String;");
+    const std::string objectToStringMethodCacheName = impl_->cachePool.instanceMethodCache(
+        "java/lang/Object", "toString", "()Ljava/lang/String;");
     const std::string stringValueOfFloatMethodCacheName =
         impl_->cachePool.staticMethodCache("java/lang/String", "valueOf", "(F)Ljava/lang/String;");
     const std::string stringValueOfDoubleMethodCacheName =
         impl_->cachePool.staticMethodCache("java/lang/String", "valueOf", "(D)Ljava/lang/String;");
-    const std::string floatParseFloatMethodCacheName =
-        impl_->cachePool.staticMethodCache("java/lang/Float", "parseFloat", "(Ljava/lang/String;)F");
+    const std::string floatParseFloatMethodCacheName = impl_->cachePool.staticMethodCache(
+        "java/lang/Float", "parseFloat", "(Ljava/lang/String;)F");
     const std::string doubleParseDoubleMethodCacheName = impl_->cachePool.staticMethodCache(
         "java/lang/Double", "parseDouble", "(Ljava/lang/String;)D");
     const std::string nullPointerExceptionClassCacheName =
@@ -1301,7 +1308,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
     const std::string unsupportedOperationExceptionClassCacheName =
         impl_->cachePool.classCache("java/lang/UnsupportedOperationException");
     const std::string cacheDeclarations = impl_->cachePool.renderDeclarations();
-    const std::string emittedSource = impl_->source.str();
+    const std::string emittedSource     = impl_->source.str();
     emitRuntimeHelpers(full,
                        cacheDeclarations,
                        stringClassCacheName,

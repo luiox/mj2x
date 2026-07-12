@@ -14,29 +14,29 @@ namespace {
 static constexpr const char* kCLoaderClass = "mj2x/cloader/Loader";
 static constexpr const char* kCLoaderEntry = "mj2x/cloader/Loader.class";
 
-std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena) {
-    auto cn = std::make_unique<ClassNode>();
+std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena)
+{
+    auto cn     = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
-    cn->access = Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
-    cn->name = arena.intern(kCLoaderClass);
+    cn->access =
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
+    cn->name      = arena.intern(kCLoaderClass);
     cn->superName = arena.intern("java/lang/Object");
 
     std::vector<ca::str::Utf8StringRef> noExceptions;
-    auto* init = new MethodNode(
-        Opcodes::ACC_PRIVATE,
-        arena.intern("<init>"),
-        arena.intern("()V"),
-        arena.intern(""),
-        noExceptions);
+    auto*                               init = new MethodNode(Opcodes::ACC_PRIVATE,
+                                arena.intern("<init>"),
+                                arena.intern("()V"),
+                                arena.intern(""),
+                                noExceptions);
     init->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
-    init->instructions.add(new MethodInsnNode(
-        Opcodes::INVOKESPECIAL,
-        arena.intern("java/lang/Object"),
-        arena.intern("<init>"),
-        arena.intern("()V"),
-        false));
+    init->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                              arena.intern("java/lang/Object"),
+                                              arena.intern("<init>"),
+                                              arena.intern("()V"),
+                                              false));
     init->instructions.add(new InsnNode(Opcodes::RETURN));
-    init->maxStack = 1;
+    init->maxStack  = 1;
     init->maxLocals = 1;
     cn->methods.push_back(init);
 
@@ -46,7 +46,7 @@ std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena
         arena.intern("(ILjava/lang/Class;)V"),
         arena.intern(""),
         noExceptions);
-    registerMethod->maxStack = 0;
+    registerMethod->maxStack  = 0;
     registerMethod->maxLocals = 2;
     cn->methods.push_back(registerMethod);
 
@@ -58,40 +58,42 @@ std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena
         noExceptions);
     invokeOne->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
     invokeOne->instructions.add(new VarInsnNode(Opcodes::ALOAD, 1));
-    invokeOne->instructions.add(new MethodInsnNode(
-        Opcodes::INVOKEVIRTUAL,
-        arena.intern("java/lang/invoke/MethodHandle"),
-        arena.intern("invoke"),
-        arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;"),
-        false));
+    invokeOne->instructions.add(
+        new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                           arena.intern("java/lang/invoke/MethodHandle"),
+                           arena.intern("invoke"),
+                           arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;"),
+                           false));
     invokeOne->instructions.add(new InsnNode(Opcodes::ARETURN));
-    invokeOne->maxStack = 2;
+    invokeOne->maxStack  = 2;
     invokeOne->maxLocals = 2;
     cn->methods.push_back(invokeOne);
 
     return cn;
 }
 
-std::vector<ca::u8> buildCLoaderClass() {
+std::vector<ca::u8> buildCLoaderClass()
+{
     Utf8StringArena arena;
-    auto cn = buildCLoaderClassNode(arena);
-    ClassWriter cw(arena, 0);
+    auto            cn = buildCLoaderClassNode(arena);
+    ClassWriter     cw(arena, 0);
     cn->accept(&cw);
     return cw.toByteArray();
 }
 
-} // namespace
+}   // namespace
 
-void CLoaderPostprocessor::process(CompilerIndex& index) {
+void CLoaderPostprocessor::process(CompilerIndex& index)
+{
     if (!index.isJarInput()) {
         CompilerClass cls;
         cls.classNode = buildCLoaderClassNode(index.arena());
         cls.isLibrary = true;
-        cls.modified = true;
+        cls.modified  = true;
         index.addClass(kCLoaderClass, std::move(cls));
         return;
     }
     index.upsertJarResource(kCLoaderEntry, buildCLoaderClass());
 }
 
-} // namespace mj2x
+}   // namespace mj2x

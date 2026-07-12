@@ -29,42 +29,50 @@ extern "C" {
 // --- Native struct mirrors of java.lang wrapper instances -------------------
 
 /// @brief Native mirror of `java.lang.Integer`.
-struct mj2x_int {
+struct mj2x_int
+{
     std::int32_t value;
 };
 
 /// @brief Native mirror of `java.lang.Long`.
-struct mj2x_long {
+struct mj2x_long
+{
     std::int64_t value;
 };
 
 /// @brief Native mirror of `java.lang.Short`.
-struct mj2x_short {
+struct mj2x_short
+{
     std::int16_t value;
 };
 
 /// @brief Native mirror of `java.lang.Byte`.
-struct mj2x_byte {
+struct mj2x_byte
+{
     std::int8_t value;
 };
 
 /// @brief Native mirror of `java.lang.Float`.
-struct mj2x_float {
+struct mj2x_float
+{
     float value;
 };
 
 /// @brief Native mirror of `java.lang.Double`.
-struct mj2x_double {
+struct mj2x_double
+{
     double value;
 };
 
 /// @brief Native mirror of `java.lang.Boolean` (stores 0/1).
-struct mj2x_bool {
+struct mj2x_bool
+{
     std::int8_t value;
 };
 
 /// @brief Native mirror of `java.lang.Character`.
-struct mj2x_char {
+struct mj2x_char
+{
     std::uint16_t value;
 };
 
@@ -145,4 +153,4 @@ mj2x_char mj2x_char_value_of(std::uint16_t value);
 /// @brief `Character.charValue()`.
 std::uint16_t mj2x_char_char_value(mj2x_char box);
 
-}  // extern "C"
+}   // extern "C"

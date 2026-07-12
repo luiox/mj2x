@@ -11,9 +11,10 @@
 
 namespace mj2x {
 
-class InvokeDynamicPreprocessor : public Preprocessor {
+class InvokeDynamicPreprocessor : public Preprocessor
+{
 public:
     void process(CompilerIndex& index) override;
 };
 
-} // namespace mj2x
+}   // namespace mj2x

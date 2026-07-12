@@ -80,8 +80,8 @@ bool getBool(const json& root, const char* key, std::optional<bool>& out, std::s
     return true;
 }
 
-bool getStringArray(const json& root, const char* key, std::vector<std::string>& out,
-                    bool& present, std::string& error)
+bool getStringArray(const json& root, const char* key, std::vector<std::string>& out, bool& present,
+                    std::string& error)
 {
     auto it = root.find(key);
     if (it == root.end()) return true;
@@ -101,7 +101,7 @@ bool getStringArray(const json& root, const char* key, std::vector<std::string>&
     return true;
 }
 
-}  // namespace
+}   // namespace
 
 bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::string& error)
 {
@@ -131,4 +131,4 @@ bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::st
     return true;
 }
 
-}  // namespace mj2x::cli
+}   // namespace mj2x::cli

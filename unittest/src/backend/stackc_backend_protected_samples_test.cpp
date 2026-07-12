@@ -170,7 +170,8 @@ void writeTraceNote(const fs::path& outDir, const SampleSpec& sample)
            "than per-method or per-class `Java_*` exports.\n";
     out << "- Capture Java MethodEntry/MethodExit around the public entry methods.\n";
     out << "- Capture native/JNI activity inside the generated StackCBackend implementation.\n";
-    out << "- Expect JNI lookup, invoke, field, array, and string surfaces when the sample uses them.\n";
+    out << "- Expect JNI lookup, invoke, field, array, and string surfaces when the sample uses "
+           "them.\n";
     out << "- Use observations to draft weakness reports for mj2x hardening.\n";
 }
 
@@ -273,7 +274,8 @@ TEST_F(StackCBackendProtectedSamples, GenerateMjdbgFixtures)
     };
 
     ASSERT_EQ(countJavaSources(test::getResourcePath("protected_samples/stackc")), samples.size())
-        << "Every committed StackC protected sample needs a SampleSpec and TRACE_SURFACE generator.";
+        << "Every committed StackC protected sample needs a SampleSpec and TRACE_SURFACE "
+           "generator.";
 
     for (const auto& sample : samples) {
         generateSample(sample);

@@ -12,15 +12,17 @@
 
 namespace mj2x::runtime::detection {
 
-struct RuntimeDetectionReport {
-    antidebug::DebugSignals debug;
+struct RuntimeDetectionReport
+{
+    antidebug::DebugSignals   debug;
     antijvmti::LiveAgentProbe agent;
-    bool suspicious = false;
-    bool probeFailed = false;
+    bool                      suspicious  = false;
+    bool                      probeFailed = false;
 };
 
-struct DetectionPolicy {
-    bool denyOnSignal = true;
+struct DetectionPolicy
+{
+    bool denyOnSignal       = true;
     bool denyOnProbeFailure = true;
 };
 
@@ -28,12 +30,11 @@ struct DetectionPolicy {
  * @brief Collect current-process debugger, module, and JVMTI facts.
  */
 RuntimeDetectionReport collectRuntimeDetection(const std::vector<std::string>& arguments,
-                                               void* javaVm);
+                                               void*                           javaVm);
 
 /**
  * @brief Apply fail-closed policy without terminating or throwing.
  */
-bool shouldFailClosed(const RuntimeDetectionReport& report,
-                      const DetectionPolicy& policy = {});
+bool shouldFailClosed(const RuntimeDetectionReport& report, const DetectionPolicy& policy = {});
 
-}  // namespace mj2x::runtime::detection
+}   // namespace mj2x::runtime::detection

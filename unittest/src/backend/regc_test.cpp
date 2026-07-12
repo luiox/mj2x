@@ -21,13 +21,13 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
                                        int maxLocals)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    auto mn       = std::make_unique<MethodNode>(access,
-                                                 ca::str::Utf8StringRef::from_cstr(name.c_str()),
-                                                 ca::str::Utf8StringRef::from_cstr(desc.c_str()),
-                                                 ca::str::Utf8StringRef::from_cstr(""),
-                                                 noExcepts);
-    mn->maxStack  = maxStack;
-    mn->maxLocals = maxLocals;
+    auto                                mn = std::make_unique<MethodNode>(access,
+                                           ca::str::Utf8StringRef::from_cstr(name.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(desc.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(""),
+                                           noExcepts);
+    mn->maxStack                           = maxStack;
+    mn->maxLocals                          = maxLocals;
     for (auto* insn : insns) mn->instructions.add(insn);
     return mn;
 }
@@ -91,18 +91,18 @@ TEST(RegCTest, EmitsPureArithmeticWithoutStackMachineAnchors)
 {
     std::string reason;
     auto        result = emitRegC("addMul",
-                                  "(II)I",
+                           "(II)I",
                                   {
-                                      new VarInsnNode(Opcodes::ILOAD, 0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new InsnNode(Opcodes::IADD),
-                                      new InsnNode(Opcodes::ICONST_3),
-                                      new InsnNode(Opcodes::IMUL),
-                                      new InsnNode(Opcodes::IRETURN),
-                                  },
-                                  3,
-                                  2,
-                                  reason);
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::IADD),
+                               new InsnNode(Opcodes::ICONST_3),
+                               new InsnNode(Opcodes::IMUL),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           3,
+                           2,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("static int32_t regc_InlineRegC_addMul__II_I"), std::string::npos)
@@ -110,10 +110,8 @@ TEST(RegCTest, EmitsPureArithmeticWithoutStackMachineAnchors)
     EXPECT_NE(result.source.find("int32_t r0"), std::string::npos) << result.source;
     EXPECT_NE(result.source.find("uint32_t"), std::string::npos) << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_result = r"), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("return _mj2x_regc_result;"), std::string::npos)
-        << result.source;
+    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("return _mj2x_regc_result;"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }
 
@@ -124,29 +122,29 @@ TEST(RegCTest, EmitsLoopControlFlowWithEdgeCopies)
 
     std::string reason;
     auto        result = emitRegC("sum",
-                                  "(I)I",
+                           "(I)I",
                                   {
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new VarInsnNode(Opcodes::ISTORE, 1),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new VarInsnNode(Opcodes::ISTORE, 2),
-                                      loop,
-                                      new VarInsnNode(Opcodes::ILOAD, 2),
-                                      new VarInsnNode(Opcodes::ILOAD, 0),
-                                      new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new VarInsnNode(Opcodes::ILOAD, 2),
-                                      new InsnNode(Opcodes::IADD),
-                                      new VarInsnNode(Opcodes::ISTORE, 1),
-                                      new IincInsnNode(2, 1),
-                                      new JumpInsnNode(Opcodes::GOTO, loop->label),
-                                      done,
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new InsnNode(Opcodes::IRETURN),
-                                  },
-                                  3,
-                                  3,
-                                  reason);
+                               new InsnNode(Opcodes::ICONST_0),
+                               new VarInsnNode(Opcodes::ISTORE, 1),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new VarInsnNode(Opcodes::ISTORE, 2),
+                               loop,
+                               new VarInsnNode(Opcodes::ILOAD, 2),
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new VarInsnNode(Opcodes::ILOAD, 2),
+                               new InsnNode(Opcodes::IADD),
+                               new VarInsnNode(Opcodes::ISTORE, 1),
+                               new IincInsnNode(2, 1),
+                               new JumpInsnNode(Opcodes::GOTO, loop->label),
+                               done,
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           3,
+                           3,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("goto block_b"), std::string::npos) << result.source;
@@ -193,21 +191,21 @@ TEST(RegCTest, EmitsArrayHelpersWithoutStackMachineAnchors)
 {
     std::string reason;
     auto        result = emitRegC("arrayOps",
-                                  "()I",
+                           "()I",
                                   {
-                                      new InsnNode(Opcodes::ICONST_2),
-                                      new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_INT),
-                                      new InsnNode(Opcodes::DUP),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new InsnNode(Opcodes::ICONST_5),
-                                      new InsnNode(Opcodes::IASTORE),
-                                      new InsnNode(Opcodes::DUP),
-                                      new InsnNode(Opcodes::ARRAYLENGTH),
-                                      new InsnNode(Opcodes::IRETURN),
-                                  },
-                                  4,
-                                  0,
-                                  reason);
+                               new InsnNode(Opcodes::ICONST_2),
+                               new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_INT),
+                               new InsnNode(Opcodes::DUP),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new InsnNode(Opcodes::ICONST_5),
+                               new InsnNode(Opcodes::IASTORE),
+                               new InsnNode(Opcodes::DUP),
+                               new InsnNode(Opcodes::ARRAYLENGTH),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           4,
+                           0,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_regc_alloc_array(\"[I\""), std::string::npos)
@@ -318,37 +316,37 @@ TEST(RegCTest, InternsRepeatedStaticMethodAndFieldCachesWithinFunction)
 {
     std::string reason;
     auto        result = emitRegC("cacheCse",
-                                  "()I",
+                           "()I",
                                   {
-                                      new FieldInsnNode(Opcodes::GETSTATIC,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("sink"),
-                                                        ca::str::Utf8StringRef::from_cstr("I")),
-                                      new InsnNode(Opcodes::POP),
-                                      new InsnNode(Opcodes::ICONST_1),
-                                      new FieldInsnNode(Opcodes::PUTSTATIC,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("sink"),
-                                                        ca::str::Utf8StringRef::from_cstr("I")),
-                                      new FieldInsnNode(Opcodes::GETSTATIC,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("sink"),
-                                                        ca::str::Utf8StringRef::from_cstr("I")),
-                                      new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                                         ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                         ca::str::Utf8StringRef::from_cstr("mix"),
-                                                         ca::str::Utf8StringRef::from_cstr("(I)I"),
-                                                         false),
-                                      new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                                         ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                         ca::str::Utf8StringRef::from_cstr("mix"),
-                                                         ca::str::Utf8StringRef::from_cstr("(I)I"),
-                                                         false),
-                                      new InsnNode(Opcodes::IRETURN),
-                                  },
-                                  1,
-                                  0,
-                                  reason);
+                               new FieldInsnNode(Opcodes::GETSTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("sink"),
+                                                 ca::str::Utf8StringRef::from_cstr("I")),
+                               new InsnNode(Opcodes::POP),
+                               new InsnNode(Opcodes::ICONST_1),
+                               new FieldInsnNode(Opcodes::PUTSTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("sink"),
+                                                 ca::str::Utf8StringRef::from_cstr("I")),
+                               new FieldInsnNode(Opcodes::GETSTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("sink"),
+                                                 ca::str::Utf8StringRef::from_cstr("I")),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                  ca::str::Utf8StringRef::from_cstr("mix"),
+                                                  ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                  false),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                  ca::str::Utf8StringRef::from_cstr("mix"),
+                                                  ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                  false),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           1,
+                           0,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_EQ(countSubstring(result.source, "{\"Foo\", \"sink\", \"I\", NULL, NULL}"), 1u)
@@ -371,30 +369,28 @@ TEST(RegCTest, EmitsSelfStaticCallAsDirectCDispatch)
 {
     std::string reason;
     auto        result = emitRegC("self",
-                                  "(I)I",
+                           "(I)I",
                                   {
-                                      new VarInsnNode(Opcodes::ILOAD, 0),
-                                      new InsnNode(Opcodes::ICONST_1),
-                                      new InsnNode(Opcodes::ISUB),
-                                      new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                                         ca::str::Utf8StringRef::from_cstr(
-                                                             "InlineRegC"),
-                                                         ca::str::Utf8StringRef::from_cstr("self"),
-                                                         ca::str::Utf8StringRef::from_cstr("(I)I"),
-                                                         false),
-                                      new InsnNode(Opcodes::IRETURN),
-                                  },
-                                  2,
-                                  1,
-                                  reason);
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new InsnNode(Opcodes::ICONST_1),
+                               new InsnNode(Opcodes::ISUB),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  ca::str::Utf8StringRef::from_cstr("InlineRegC"),
+                                                  ca::str::Utf8StringRef::from_cstr("self"),
+                                                  ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                  false),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           2,
+                           1,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("_mj2x_regc_call_cached_i32"), std::string::npos)
-        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_cached_i32"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }
 
@@ -402,69 +398,69 @@ TEST(RegCTest, EmitsNarrowPrimitiveFieldAndArrayHelpers)
 {
     std::string reason;
     auto        result = emitRegC("narrow",
-                                  "(LFoo;I)I",
+                           "(LFoo;I)I",
                                   {
-                                      new VarInsnNode(Opcodes::ALOAD, 0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new FieldInsnNode(Opcodes::PUTFIELD,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("b"),
-                                                        ca::str::Utf8StringRef::from_cstr("B")),
-                                      new VarInsnNode(Opcodes::ALOAD, 0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new FieldInsnNode(Opcodes::PUTFIELD,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("s"),
-                                                        ca::str::Utf8StringRef::from_cstr("S")),
-                                      new VarInsnNode(Opcodes::ALOAD, 0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new FieldInsnNode(Opcodes::PUTFIELD,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("c"),
-                                                        ca::str::Utf8StringRef::from_cstr("C")),
-                                      new VarInsnNode(Opcodes::ALOAD, 0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new FieldInsnNode(Opcodes::PUTFIELD,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("z"),
-                                                        ca::str::Utf8StringRef::from_cstr("Z")),
-                                      new InsnNode(Opcodes::ICONST_1),
-                                      new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_BYTE),
-                                      new InsnNode(Opcodes::DUP),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new InsnNode(Opcodes::BASTORE),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new InsnNode(Opcodes::BALOAD),
-                                      new InsnNode(Opcodes::POP),
-                                      new InsnNode(Opcodes::ICONST_1),
-                                      new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_CHAR),
-                                      new InsnNode(Opcodes::DUP),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new InsnNode(Opcodes::CASTORE),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new InsnNode(Opcodes::CALOAD),
-                                      new InsnNode(Opcodes::POP),
-                                      new InsnNode(Opcodes::ICONST_1),
-                                      new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_SHORT),
-                                      new InsnNode(Opcodes::DUP),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new InsnNode(Opcodes::SASTORE),
-                                      new InsnNode(Opcodes::ICONST_0),
-                                      new InsnNode(Opcodes::SALOAD),
-                                      new InsnNode(Opcodes::POP),
-                                      new VarInsnNode(Opcodes::ALOAD, 0),
-                                      new FieldInsnNode(Opcodes::GETFIELD,
-                                                        ca::str::Utf8StringRef::from_cstr("Foo"),
-                                                        ca::str::Utf8StringRef::from_cstr("b"),
-                                                        ca::str::Utf8StringRef::from_cstr("B")),
-                                      new InsnNode(Opcodes::IRETURN),
-                                  },
-                                  4,
-                                  2,
-                                  reason);
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new FieldInsnNode(Opcodes::PUTFIELD,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("b"),
+                                                 ca::str::Utf8StringRef::from_cstr("B")),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new FieldInsnNode(Opcodes::PUTFIELD,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("s"),
+                                                 ca::str::Utf8StringRef::from_cstr("S")),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new FieldInsnNode(Opcodes::PUTFIELD,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("c"),
+                                                 ca::str::Utf8StringRef::from_cstr("C")),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new FieldInsnNode(Opcodes::PUTFIELD,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("z"),
+                                                 ca::str::Utf8StringRef::from_cstr("Z")),
+                               new InsnNode(Opcodes::ICONST_1),
+                               new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_BYTE),
+                               new InsnNode(Opcodes::DUP),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::BASTORE),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new InsnNode(Opcodes::BALOAD),
+                               new InsnNode(Opcodes::POP),
+                               new InsnNode(Opcodes::ICONST_1),
+                               new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_CHAR),
+                               new InsnNode(Opcodes::DUP),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::CASTORE),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new InsnNode(Opcodes::CALOAD),
+                               new InsnNode(Opcodes::POP),
+                               new InsnNode(Opcodes::ICONST_1),
+                               new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_SHORT),
+                               new InsnNode(Opcodes::DUP),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::SASTORE),
+                               new InsnNode(Opcodes::ICONST_0),
+                               new InsnNode(Opcodes::SALOAD),
+                               new InsnNode(Opcodes::POP),
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new FieldInsnNode(Opcodes::GETFIELD,
+                                                 ca::str::Utf8StringRef::from_cstr("Foo"),
+                                                 ca::str::Utf8StringRef::from_cstr("b"),
+                                                 ca::str::Utf8StringRef::from_cstr("B")),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           4,
+                           2,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_regc_store_i8_field(0,"), std::string::npos)
@@ -540,8 +536,7 @@ TEST(RegCTest, InternsRepeatedClassCachesWithinFunction)
                  reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
-    EXPECT_EQ(countSubstring(result.source, "{\"java/lang/String\", NULL}"), 1u)
-        << result.source;
+    EXPECT_EQ(countSubstring(result.source, "{\"java/lang/String\", NULL}"), 1u) << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_checkcast_cached"), std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_instanceof_cached"), std::string::npos)
@@ -573,8 +568,7 @@ TEST(RegCTest, EmitsThrowTerminatorWithImmediateReturn)
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_regc_throw("), std::string::npos) << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_result = 0;"), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos)
-        << result.source;
+    EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }
 
@@ -627,18 +621,18 @@ TEST(RegCTest, EmitsIntegerDivRemHelpers)
 {
     std::string reason;
     auto        result = emitRegC("divRem",
-                                  "(III)I",
+                           "(III)I",
                                   {
-                                      new VarInsnNode(Opcodes::ILOAD, 0),
-                                      new VarInsnNode(Opcodes::ILOAD, 1),
-                                      new InsnNode(Opcodes::IDIV),
-                                      new VarInsnNode(Opcodes::ILOAD, 2),
-                                      new InsnNode(Opcodes::IREM),
-                                      new InsnNode(Opcodes::IRETURN),
-                                  },
-                                  2,
-                                  3,
-                                  reason);
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::IDIV),
+                               new VarInsnNode(Opcodes::ILOAD, 2),
+                               new InsnNode(Opcodes::IREM),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           2,
+                           3,
+                           reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("mj2x_regc_div_i32(_mj2x_regc_current_context()"),

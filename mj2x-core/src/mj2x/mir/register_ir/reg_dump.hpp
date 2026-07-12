@@ -13,4 +13,4 @@ namespace mj2x {
 /// @brief Dump a RegFunction without JVM stack-machine anchor names.
 std::string dumpRegIR(const RegFunction& fn);
 
-} // namespace mj2x
+}   // namespace mj2x

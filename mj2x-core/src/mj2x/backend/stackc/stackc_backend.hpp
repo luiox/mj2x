@@ -7,31 +7,25 @@
 
 namespace mj2x {
 
-class StackCBackend : public Backend {
+class StackCBackend : public Backend
+{
 public:
     StackCBackend();
     ~StackCBackend() override;
 
     std::string_view name() const override { return "c_source"; }
 
-    BackendResult compileMethod(
-        const std::string& className,
-        CompilerMethod& method,
-        const std::vector<Block*>& blocks
-    ) override;
+    BackendResult compileMethod(const std::string& className, CompilerMethod& method,
+                                const std::vector<Block*>& blocks) override;
 
-    void injectIntoClass(
-        CompilerClass& clazz,
-        CompilerMethod& method,
-        const BackendResult& result
-    ) override;
+    void injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
+                         const BackendResult& result) override;
 
     void finalize(const CompilerIndex& index) override;
 
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
-    void setJarNativeLoaderResourcePath(
-        const std::string& resourcePath,
-        const std::string& tempSuffix);
+    void setJarNativeLoaderResourcePath(const std::string& resourcePath,
+                                        const std::string& tempSuffix);
 
     // Access generated code for testing
     const std::string& generatedHeader() const { return headerCode_; }
@@ -46,5 +40,4 @@ private:
     std::string sourceCode_;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

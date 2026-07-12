@@ -6,9 +6,10 @@
 
 namespace {
 
-TEST(IntrinsicStringTest, Utf16ViewLengthAndCharAt) {
+TEST(IntrinsicStringTest, Utf16ViewLengthAndCharAt)
+{
     const std::uint16_t text[] = {'h', 'i', 0x4E2D};
-    auto view = mj2x_utf16_view_of(text, 3);
+    auto                view   = mj2x_utf16_view_of(text, 3);
 
     mj2x_string_status status = MJ2X_STRING_UNSUPPORTED_ESCAPE;
     EXPECT_EQ(mj2x_string_length(view, &status), 3);
@@ -20,7 +21,8 @@ TEST(IntrinsicStringTest, Utf16ViewLengthAndCharAt) {
     EXPECT_EQ(status, MJ2X_STRING_OK);
 }
 
-TEST(IntrinsicStringTest, EmptyViewMayUseNullData) {
+TEST(IntrinsicStringTest, EmptyViewMayUseNullData)
+{
     auto view = mj2x_utf16_view_of(nullptr, 0);
 
     mj2x_string_status status = MJ2X_STRING_UNSUPPORTED_ESCAPE;
@@ -28,7 +30,8 @@ TEST(IntrinsicStringTest, EmptyViewMayUseNullData) {
     EXPECT_EQ(status, MJ2X_STRING_OK);
 }
 
-TEST(IntrinsicStringTest, InvalidAndOutOfBoundsFailClosed) {
+TEST(IntrinsicStringTest, InvalidAndOutOfBoundsFailClosed)
+{
     auto invalid = mj2x_utf16_view_of(nullptr, 2);
 
     mj2x_string_status status = MJ2X_STRING_OK;
@@ -36,14 +39,14 @@ TEST(IntrinsicStringTest, InvalidAndOutOfBoundsFailClosed) {
     EXPECT_EQ(status, MJ2X_STRING_UNSUPPORTED_NULL);
 
     const std::uint16_t text[] = {'x'};
-    auto view = mj2x_utf16_view_of(text, 1);
+    auto                view   = mj2x_utf16_view_of(text, 1);
     EXPECT_EQ(mj2x_string_char_at(view, 1, &status), 0);
     EXPECT_EQ(status, MJ2X_STRING_UNSUPPORTED_BOUNDS);
 }
 
-TEST(IntrinsicStringTest, StringBuilderIsExplicitlyUnsupported) {
-    EXPECT_EQ(mj2x_stringbuilder_unsupported_status(),
-              MJ2X_STRING_UNSUPPORTED_MUTABLE_BUILDER);
+TEST(IntrinsicStringTest, StringBuilderIsExplicitlyUnsupported)
+{
+    EXPECT_EQ(mj2x_stringbuilder_unsupported_status(), MJ2X_STRING_UNSUPPORTED_MUTABLE_BUILDER);
 }
 
-}  // namespace
+}   // namespace

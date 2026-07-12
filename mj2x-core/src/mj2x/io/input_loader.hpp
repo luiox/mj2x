@@ -7,7 +7,8 @@
 
 namespace mj2x {
 
-class InputLoader {
+class InputLoader
+{
 public:
     InputLoader();
     ~InputLoader();
@@ -30,5 +31,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x

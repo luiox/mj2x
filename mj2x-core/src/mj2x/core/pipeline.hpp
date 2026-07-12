@@ -12,14 +12,16 @@
 
 namespace mj2x {
 
-struct PipelineConfig {
+struct PipelineConfig
+{
     std::string inputPath;
     std::string outputPath;
-    bool dumpIR = false;
-    bool dumpMIR = false;
+    bool        dumpIR  = false;
+    bool        dumpMIR = false;
 };
 
-class Pipeline {
+class Pipeline
+{
 public:
     explicit Pipeline(PipelineConfig config);
     ~Pipeline();
@@ -37,12 +39,11 @@ private:
     void runPostprocessors();
     void writeOutput();
 
-    PipelineConfig config_;
-    std::unique_ptr<CompilerIndex> index_;
-    std::vector<std::unique_ptr<Backend>> backends_;
-    std::vector<std::unique_ptr<Preprocessor>> preprocs_;
+    PipelineConfig                              config_;
+    std::unique_ptr<CompilerIndex>              index_;
+    std::vector<std::unique_ptr<Backend>>       backends_;
+    std::vector<std::unique_ptr<Preprocessor>>  preprocs_;
     std::vector<std::unique_ptr<Postprocessor>> postprocs_;
 };
 
-} // namespace mj2x
-
+}   // namespace mj2x
