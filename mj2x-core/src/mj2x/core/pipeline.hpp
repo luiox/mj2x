@@ -1,3 +1,18 @@
+/**
+ * @file pipeline.hpp
+ * @brief 编译流水线：InputLoader -> Preprocessor -> CodeConverter -> Backend -> Postprocessor -> OutputWriter。
+ *
+ * @details
+ * Pipeline 是 mj2x 的编排核心，固定 6 阶段顺序：
+ *  1. loadInput：读 .class/.jar 到 CompilerIndex；
+ *  2. runPreprocessors：bytecode shaping（LDC/invokedynamic/multianewarray/标记选择）；
+ *  3. compileMethods：每个 markedForCompile 方法经 CodeConverter 转 L1 MIR，交各 Backend；
+ *  4. (Backend.injectIntoClass 紧跟每个 compileMethod)；
+ *  5. runPostprocessors：clinit 注入、loader 资源、cloader 等（在所有编译后）；
+ *  6. writeOutput：写 .class/.jar。
+ *
+ * registerBackend/Preprocessor/Postprocessor 在 run() 前注册，顺序即执行顺序。
+ */
 #pragma once
 
 #include "compiler_index.hpp"
@@ -12,6 +27,7 @@
 
 namespace mj2x {
 
+/// Pipeline 运行配置：输入/输出路径与可选 IR/MIR dump。
 struct PipelineConfig
 {
     std::string inputPath;
@@ -20,6 +36,7 @@ struct PipelineConfig
     bool        dumpMIR = false;
 };
 
+/// 编排 6 阶段流水线的驱动器。注册顺序 = 执行顺序。
 class Pipeline
 {
 public:
@@ -30,6 +47,7 @@ public:
     void registerPreprocessor(std::unique_ptr<Preprocessor> preproc);
     void registerPostprocessor(std::unique_ptr<Postprocessor> postproc);
 
+    /// 运行完整流水线，返回 0 表示成功。
     int run();
 
 private:
