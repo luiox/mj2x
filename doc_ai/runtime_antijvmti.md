@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`runtime/src/antijvmti/` targets the JNI vtable hook anchor used by c2j-style
+`mj2x-runtime/src/antijvmti/` targets the JNI vtable hook anchor used by c2j-style
 agents.  R3 needs a runtime place where generated native code can detect that
 the active JNI function table is no longer the one it captured.
 

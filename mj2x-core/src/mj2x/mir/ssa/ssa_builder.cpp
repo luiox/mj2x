@@ -1366,7 +1366,7 @@ void SSABuilder::buildBlocks(SSAFunction& fn, const std::vector<Block*>& l1block
         auto  sb      = std::make_unique<SSABlock>(fn.ids.newBlockId());
         sb->l1LabelId = lb->id;
 
-        // args：所有 IN[B] 有 ≥1 def 的 local slot 都开 arg（R1 简化策略，见 SSA_ALGORITHM §3.4）。
+        // args：所有 IN[B] 有 ≥1 def 的 local slot 都开 arg（R1 简化策略，见 ssa_algorithm.md §3.4）。
         auto it = rd.in.find(lb->id);
         if (it != rd.in.end()) {
             for (const auto& [slot, defs] : it->second.bySlot) {

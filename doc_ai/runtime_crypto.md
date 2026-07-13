@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`runtime/src/crypto/` provides the portable cryptographic floor for R3.  It is
+`mj2x-runtime/src/crypto/` provides the portable cryptographic floor for R3.  It is
 kept inside mj2x so protected samples do not inherit OpenSSL, Windows CNG, or
 JDK provider dependencies.
 

@@ -5,7 +5,7 @@
 // L1 CodeConverter 的 CFG（frontend/block.hpp，已 12 测试验证）上跑经典 reaching-def，
 // 完全自有代码、零外部依赖风险。
 //
-// 算法详见 doc/SSA_ALGORITHM.md §3。
+// 算法详见 doc_ai/ssa_algorithm.md §3。
 //
 // 简化：R1 只跟踪 local slot（跨块 phi 都在 local 上；stack 跨块合并 R1 fail-closed）。
 // 这覆盖 sumTo/gcd 这类循环 phi 场景（= R1 验收样本）。

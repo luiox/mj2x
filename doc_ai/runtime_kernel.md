@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`runtime/src/kernel/` is the small shared runtime layer for key derivation,
+`mj2x-runtime/src/kernel/` is the small shared runtime layer for key derivation,
 resource integrity, and secret memory hygiene.  Other runtime modules should use
 it instead of each inventing local key schedules.
 

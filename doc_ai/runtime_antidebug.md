@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`runtime/src/antidebug/` collects platform debugger signals for R3 fail-closed
+`mj2x-runtime/src/antidebug/` collects platform debugger signals for R3 fail-closed
 policy decisions.  It complements anti-JVMTI checks; neither signal family is
 strong enough alone.
 

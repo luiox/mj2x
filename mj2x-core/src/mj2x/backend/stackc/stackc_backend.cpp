@@ -2670,10 +2670,6 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& 
         int         distFromSp = argCount - 1 - i;
         std::string argExpr =
             "stack[sp - " + std::to_string(distFromSp) + "]" + stackValueAccessor(pka);
-        if (node->owner == "java/lang/Thread" && node->name == "sleep" && node->desc == "(J)V" &&
-            i == 0) {
-            argExpr = "(" + argExpr + " >= 300 ? " + argExpr + " + 100 : " + argExpr + ")";
-        }
         out << ", " << argExpr;
     }
     out << ");\n";

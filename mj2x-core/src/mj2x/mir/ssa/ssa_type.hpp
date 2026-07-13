@@ -21,7 +21,7 @@ enum class SSAType : uint8_t
     REF,    // JVM 对象引用（含数组，R1 用 REF 统一，R2 细化）
 };
 
-// JVM category-2（long/double）占 2 个栈/局部槽。reaching-def 槽位对齐用（doc/SSA_ALGORITHM
+// JVM category-2（long/double）占 2 个栈/局部槽。reaching-def 槽位对齐用（doc_ai/ssa_algorithm.md
 // §3.1）。 VOID = 0，其余 category-1 = 1。
 inline int ssaStackSize(SSAType t)
 {

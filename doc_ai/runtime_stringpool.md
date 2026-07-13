@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`runtime/src/stringpool/` provides the first R3 string-pool decoder for RegC and
+`mj2x-runtime/src/stringpool/` provides the first R3 string-pool decoder for RegC and
 protected samples.  Its job is to remove clear text and static XOR keys from
 generated native code.
 
