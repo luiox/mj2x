@@ -228,7 +228,7 @@ TEST(CodeConverterTest, LocalLoadStore)
     bool foundLoad = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::LOCAL_LOAD) {
-            EXPECT_EQ(static_cast<MIRLocalLoad*>(n.get())->varIndex, 0);
+            EXPECT_EQ(typed::cast<MIRLocalLoad>(n.get())->varIndex, 0);
             foundLoad = true;
         }
     }
@@ -254,7 +254,7 @@ TEST(CodeConverterTest, BinaryOp)
     bool foundBinary = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::BINARY_OP) {
-            EXPECT_EQ(static_cast<MIRBinaryOp*>(n.get())->op, BinaryOp::ADD);
+            EXPECT_EQ(typed::cast<MIRBinaryOp>(n.get())->op, BinaryOp::ADD);
             foundBinary = true;
         }
     }
@@ -285,7 +285,7 @@ TEST(CodeConverterTest, CastAndNumericCompare)
     bool foundCmp = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::CAST) {
-            auto* cast = static_cast<MIRCast*>(n.get());
+            auto* cast = typed::cast<MIRCast>(n.get());
             if (cast->from == PrimitiveKind::INT && cast->to == PrimitiveKind::LONG)
                 foundI2L = true;
             if (cast->from == PrimitiveKind::DOUBLE && cast->to == PrimitiveKind::INT)
@@ -294,7 +294,7 @@ TEST(CodeConverterTest, CastAndNumericCompare)
                 foundD2L = true;
         }
         else if (n->kind == MIRKind::CMP) {
-            auto* cmp = static_cast<MIRCmp*>(n.get());
+            auto* cmp = typed::cast<MIRCmp>(n.get());
             EXPECT_EQ(cmp->type, PrimitiveKind::LONG);
             EXPECT_FALSE(cmp->nanGreater);
             foundCmp = true;
@@ -324,7 +324,7 @@ TEST(CodeConverterTest, DoubleToLongCast)
     bool foundD2L = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::CAST) {
-            auto* cast = static_cast<MIRCast*>(n.get());
+            auto* cast = typed::cast<MIRCast>(n.get());
             if (cast->from == PrimitiveKind::DOUBLE && cast->to == PrimitiveKind::LONG)
                 foundD2L = true;
         }
@@ -356,7 +356,7 @@ TEST(CodeConverterTest, FloatingCompareNaNDirection)
     bool foundDcmpl = false;
     for (auto& n : nodes) {
         if (n->kind != MIRKind::CMP) continue;
-        auto* cmp = static_cast<MIRCmp*>(n.get());
+        auto* cmp = typed::cast<MIRCmp>(n.get());
         if (cmp->type == PrimitiveKind::FLOAT && cmp->nanGreater) foundFcmpg = true;
         if (cmp->type == PrimitiveKind::DOUBLE && !cmp->nanGreater) foundDcmpl = true;
     }
@@ -385,7 +385,7 @@ TEST(CodeConverterTest, FieldAccess)
     bool foundGet = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::FIELD_GET) {
-            auto* fg = static_cast<MIRFieldGet*>(n.get());
+            auto* fg = typed::cast<MIRFieldGet>(n.get());
             EXPECT_EQ(fg->name, "x");
             EXPECT_EQ(fg->owner, "Foo");
             EXPECT_EQ(fg->desc, "I");
@@ -416,7 +416,7 @@ TEST(CodeConverterTest, MethodInvoke)
     bool foundInvoke = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::INVOKE) {
-            auto* inv = static_cast<MIRInvoke*>(n.get());
+            auto* inv = typed::cast<MIRInvoke>(n.get());
             EXPECT_EQ(inv->name, "run");
             EXPECT_EQ(inv->owner, "Other");
             foundInvoke = true;
@@ -442,7 +442,7 @@ TEST(CodeConverterTest, StringLdcKeepsLiteralValue)
     bool foundString = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::CONSTANT) {
-            auto* c = static_cast<MIRConstant*>(n.get());
+            auto* c = typed::cast<MIRConstant>(n.get());
             if (c->type == PrimitiveKind::OBJECT && std::holds_alternative<std::string>(c->value)) {
                 EXPECT_EQ(std::get<std::string>(c->value), "hello \"jni\"");
                 foundString = true;
@@ -481,15 +481,15 @@ TEST(CodeConverterTest, ArrayInstructionsCarryComponentType)
     bool foundLongLoad     = false;
     for (auto& n : nodes) {
         if (n->kind == MIRKind::NEW_ARRAY) {
-            auto* a = static_cast<MIRNewArray*>(n.get());
+            auto* a = typed::cast<MIRNewArray>(n.get());
             if (a->componentType == PrimitiveKind::LONG) foundNewLongArray = true;
         }
         else if (n->kind == MIRKind::ARRAY_STORE) {
-            auto* s = static_cast<MIRArrayStore*>(n.get());
+            auto* s = typed::cast<MIRArrayStore>(n.get());
             if (s->componentType == PrimitiveKind::LONG) foundLongStore = true;
         }
         else if (n->kind == MIRKind::ARRAY_LOAD) {
-            auto* l = static_cast<MIRArrayLoad*>(n.get());
+            auto* l = typed::cast<MIRArrayLoad>(n.get());
             if (l->componentType == PrimitiveKind::LONG) foundLongLoad = true;
         }
     }
@@ -532,7 +532,7 @@ TEST(CodeConverterTest, UnconditionalBranch)
     for (auto& n : entryBlock->nodes) {
         if (n->kind == MIRKind::UNCOND_BRANCH) {
             // targetLabel 现在是 Label* 身份（不再用 bytecodeOffset，见 R1a.3）
-            EXPECT_EQ(static_cast<MIRUncondBranch*>(n.get())->targetLabel, label->label);
+            EXPECT_EQ(typed::cast<MIRUncondBranch>(n.get())->targetLabel, label->label);
             foundGoto = true;
         }
     }
@@ -562,7 +562,7 @@ TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes)
     for (auto* block : blocks) {
         for (auto& n : block->nodes) {
             if (n->kind != MIRKind::INVOKE_DYNAMIC) continue;
-            auto* unsupported = static_cast<MIRInvokeDynamic*>(n.get());
+            auto* unsupported = typed::cast<MIRInvokeDynamic>(n.get());
             foundJsr          = foundJsr || unsupported->name == "jsr";
             foundRet          = foundRet || unsupported->name == "ret";
         }
@@ -602,7 +602,7 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
     for (auto* block : blocks) {
         for (auto& n : block->nodes) {
             if (n->kind != MIRKind::INVOKE_DYNAMIC) continue;
-            auto* unsupported = static_cast<MIRInvokeDynamic*>(n.get());
+            auto* unsupported = typed::cast<MIRInvokeDynamic>(n.get());
             foundIndy         = unsupported->name == "makeConcatWithConstants" &&
                         unsupported->desc == "()Ljava/lang/String;" &&
                         unsupported->bsm.has_value() &&
@@ -640,7 +640,7 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
     for (auto* block : blocks) {
         for (auto& n : block->nodes) {
             if (n->kind == MIRKind::BRANCH_ZERO) {
-                auto* bz = static_cast<MIRBranchZero*>(n.get());
+                auto* bz = typed::cast<MIRBranchZero>(n.get());
                 EXPECT_EQ(bz->op, CmpOp::EQ);
                 EXPECT_EQ(bz->type, PrimitiveKind::OBJECT);
                 EXPECT_EQ(bz->targetLabel, label->label);
@@ -742,13 +742,13 @@ TEST(CodeConverterTest, StackShapeInstructionsArePreserved)
         foundPop = foundPop || n->kind == MIRKind::STACK_POP;
         if (n->kind == MIRKind::STACK_POP2) {
             foundPop2  = true;
-            auto* op   = static_cast<MIRStackOp*>(n.get());
+            auto* op   = typed::cast<MIRStackOp>(n.get());
             pop2IsWide = pop2IsWide || (!op->stackBeforeTop.empty() &&
                                         op->stackBeforeTop[0] == PrimitiveKind::LONG);
         }
         if (n->kind == MIRKind::STACK_DUP2_X1) {
             foundDup2X1   = true;
-            auto* op      = static_cast<MIRStackOp*>(n.get());
+            auto* op      = typed::cast<MIRStackOp>(n.get());
             dup2X1HasPair = op->stackBeforeTop.size() >= 3 &&
                             op->stackBeforeTop[0] == PrimitiveKind::INT &&
                             op->stackBeforeTop[1] == PrimitiveKind::INT &&
@@ -756,7 +756,7 @@ TEST(CodeConverterTest, StackShapeInstructionsArePreserved)
         }
         if (n->kind == MIRKind::STACK_DUP2_X2) {
             foundDup2X2   = true;
-            auto* op      = static_cast<MIRStackOp*>(n.get());
+            auto* op      = typed::cast<MIRStackOp>(n.get());
             dup2X2HasPair = op->stackBeforeTop.size() >= 4 &&
                             op->stackBeforeTop[0] == PrimitiveKind::INT &&
                             op->stackBeforeTop[1] == PrimitiveKind::INT &&
@@ -799,12 +799,12 @@ TEST(CodeConverterTest, NewObjectAndInvokeSpecial)
     for (auto& n : nodes) {
         switch (n->kind) {
         case MIRKind::NEW_OBJECT:
-            EXPECT_EQ(static_cast<MIRNewObject*>(n.get())->typeDesc, "java/lang/Object");
+            EXPECT_EQ(typed::cast<MIRNewObject>(n.get())->typeDesc, "java/lang/Object");
             foundNew = true;
             break;
         case MIRKind::STACK_DUP: foundDup = true; break;
         case MIRKind::INVOKE:
-            EXPECT_EQ(static_cast<MIRInvoke*>(n.get())->name, "<init>");
+            EXPECT_EQ(typed::cast<MIRInvoke>(n.get())->name, "<init>");
             foundInvoke = true;
             break;
         default: break;
@@ -852,7 +852,7 @@ TEST(CodeConverterTest, SwitchInstructions)
     bool foundSwitch = false;
     for (auto& n : entryBlock->nodes) {
         if (n->kind == MIRKind::SWITCH) {
-            auto* sw = static_cast<MIRSwitch*>(n.get());
+            auto* sw = typed::cast<MIRSwitch>(n.get());
             // defaultLabel 现在是 Label* 身份（不再用 bytecodeOffset，见 R1a.3）
             EXPECT_EQ(sw->defaultLabel, defaultLabel->label);
             ASSERT_EQ(sw->cases.size(), 1);

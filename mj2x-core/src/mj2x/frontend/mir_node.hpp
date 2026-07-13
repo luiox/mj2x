@@ -1,6 +1,7 @@
 #pragma once
 
 #include <jbytecode/jbytecode.hpp>
+#include <typed/cast.hpp>
 
 #include <cstdint>
 #include <string>
@@ -113,6 +114,10 @@ enum class PrimitiveKind : uint8_t
 };
 
 // -- MIRNode base --
+// 接入 typed::cast/isa/dyn_cast 体系：每个子类构造时绑定固定 MIRKind，
+// getType() 暴露该 tag 供 typed::isa 做运行期校验。downcast 应优先用
+// typed::cast<T>（switch case 内、kind 已确定）或 typed::dyn_cast<T>
+// （运行期类型不确定时），避免裸 static_cast 越过类型契约。
 struct MIRNode
 {
     MIRKind kind;
@@ -120,6 +125,9 @@ struct MIRNode
         : kind(k)
     {}
     virtual ~MIRNode() = default;
+
+    /// typed::isa/dyn_cast 读取的 type tag。
+    MIRKind getType() const { return kind; }
 };
 
 // -- Concrete node types --
@@ -435,3 +443,49 @@ struct MIRFrame : MIRNode
 };
 
 }   // namespace mj2x
+
+// typed::TypeOf 特化：把每个 MIR 子类映射到它构造时绑定的 MIRKind tag。
+// 这样 typed::isa<MIRFoo>(node) / typed::dyn_cast<MIRFoo>(node) 可在运行期
+// 校验 node->getType() 是否匹配，typed::cast<MIRFoo> 才能在已确定上下文安全使用。
+namespace typed {
+#define MJ2X_MIR_TYPEOF(MIR_TYPE, KIND)                          \
+    template<>                                                    \
+    struct TypeOf<::mj2x::MIR_TYPE>                               \
+    {                                                             \
+        static constexpr ::mj2x::MIRKind value = ::mj2x::MIRKind::KIND; \
+    }
+MJ2X_MIR_TYPEOF(MIRNop, NOP);
+MJ2X_MIR_TYPEOF(MIRLabel, LABEL);
+MJ2X_MIR_TYPEOF(MIRConstant, CONSTANT);
+MJ2X_MIR_TYPEOF(MIRLocalLoad, LOCAL_LOAD);
+MJ2X_MIR_TYPEOF(MIRLocalStore, LOCAL_STORE);
+MJ2X_MIR_TYPEOF(MIRBinaryOp, BINARY_OP);
+MJ2X_MIR_TYPEOF(MIRUnaryOp, UNARY_OP);
+MJ2X_MIR_TYPEOF(MIRCmp, CMP);
+MJ2X_MIR_TYPEOF(MIRCast, CAST);
+MJ2X_MIR_TYPEOF(MIRIinc, IINC);
+MJ2X_MIR_TYPEOF(MIRBranch, BRANCH);
+MJ2X_MIR_TYPEOF(MIRBranchZero, BRANCH_ZERO);
+MJ2X_MIR_TYPEOF(MIRUncondBranch, UNCOND_BRANCH);
+MJ2X_MIR_TYPEOF(MIRSwitch, SWITCH);
+MJ2X_MIR_TYPEOF(MIRReturn, RETURN);
+MJ2X_MIR_TYPEOF(MIRReturnValue, RETURN_VALUE);
+MJ2X_MIR_TYPEOF(MIRNewObject, NEW_OBJECT);
+MJ2X_MIR_TYPEOF(MIRNewArray, NEW_ARRAY);
+MJ2X_MIR_TYPEOF(MIRMultiNewArray, MULTI_NEW_ARRAY);
+MJ2X_MIR_TYPEOF(MIRArrayLength, ARRAY_LENGTH);
+MJ2X_MIR_TYPEOF(MIRArrayLoad, ARRAY_LOAD);
+MJ2X_MIR_TYPEOF(MIRArrayStore, ARRAY_STORE);
+MJ2X_MIR_TYPEOF(MIRFieldGet, FIELD_GET);
+MJ2X_MIR_TYPEOF(MIRFieldPut, FIELD_PUT);
+MJ2X_MIR_TYPEOF(MIRStaticGet, STATIC_GET);
+MJ2X_MIR_TYPEOF(MIRStaticPut, STATIC_PUT);
+MJ2X_MIR_TYPEOF(MIRInvoke, INVOKE);
+MJ2X_MIR_TYPEOF(MIRInvokeDynamic, INVOKE_DYNAMIC);
+MJ2X_MIR_TYPEOF(MIRCheckCast, CHECK_CAST);
+MJ2X_MIR_TYPEOF(MIRInstanceOf, INSTANCE_OF);
+MJ2X_MIR_TYPEOF(MIRMonitor, MONITOR_ENTER);
+MJ2X_MIR_TYPEOF(MIRThrow, THROW);
+MJ2X_MIR_TYPEOF(MIRFrame, FRAME);
+#undef MJ2X_MIR_TYPEOF
+}   // namespace typed
