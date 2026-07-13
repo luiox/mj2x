@@ -385,6 +385,880 @@ SSABlockArg* findExceptionArg(SSABlock* block)
     return nullptr;
 }
 
+// ============================================================
+// per-MIRKind lowering helpers
+// ------------------------------------------------------------
+// translateBlocks 的内层 switch 拆成按 JVM 语义族分组的 lower 函数。
+// 每个 lower 函数返回 bool：false = fail-closed（reason 已填），true = 成功。
+// 所有函数共享匿名 namespace 的 free helper（constantValue / mapBinaryOp /
+// buildSuccessor / mirLabelKey 等），状态通过 LowerCtx 显式传递。
+// ============================================================
+
+// lowering 阶段的可变上下文：translateBlocks 主循环为每个块构造一次。
+struct LowerCtx
+{
+    SSAFunction&                              fn;
+    SSABlock*&                                sb;          // 当前块的指令累积目标
+    FrameState&                               fs;          // 构造期栈模拟
+    const std::unordered_map<int, SSABlock*>& ssaByLabel;  // l1Label -> SSABlock*
+    const std::vector<Block*>&                l1blocks;    // fallthrough 查询用
+    Block*                                    lb;          // 当前 L1 块
+};
+
+// ---- 分区 1：常量与局部（CONSTANT / LOCAL_LOAD / LOCAL_STORE / IINC） ----
+
+bool lowerConstant(const MIRConstant* c, LowerCtx& d, std::string& /*reason*/)
+{
+    // LDC String/Class 等对象常量先落 opaque ref；具体对象构造留给 RegC/runtime lowering。
+    d.fs.push(constantValue(d.fn, c));
+    return true;
+}
+
+bool lowerLocalLoad(const MIRLocalLoad* ll, LowerCtx& d, std::string& /*reason*/)
+{
+    if (ll->varIndex < static_cast<int>(d.fs.locals.size()) && d.fs.locals[ll->varIndex]) {
+        d.fs.push(d.fs.locals[ll->varIndex]);
+    }
+    else {
+        // 未定义到达 = opaque 兜底
+        d.fs.push(d.fn.newOpaque(mirKindToSSA(ll->type),
+                                  "undef_local_" + std::to_string(ll->varIndex)));
+    }
+    return true;
+}
+
+bool lowerLocalStore(const MIRLocalStore* ls, LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "stack underflow at LOCAL_STORE";
+        return false;
+    }
+    if (ls->varIndex < static_cast<int>(d.fs.locals.size())) {
+        d.fs.locals[ls->varIndex] = v;
+    }
+    return true;
+}
+
+bool lowerIinc(const MIRIinc* ii, LowerCtx& d, std::string& reason)
+{
+    SSAValue* lhs = (ii->varIndex < static_cast<int>(d.fs.locals.size()))
+                        ? d.fs.locals[ii->varIndex]
+                        : nullptr;
+    if (!lhs) {
+        reason = "iinc on undef local";
+        return false;
+    }
+    auto instr          = std::make_unique<SSABinaryInstruction>();
+    instr->op           = SSABinaryOp::Add;
+    instr->lhs          = lhs;
+    instr->rhs          = d.fn.internInt(ii->increment, SSAType::I32);
+    instr->result       = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::I32);
+    instr->hasResult    = true;
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    if (ii->varIndex < static_cast<int>(d.fs.locals.size()))
+        d.fs.locals[ii->varIndex] = resultPtr;
+    return true;
+}
+
+// ---- 分区 3：算术与比较（BINARY_OP / UNARY_OP / CMP / CAST） ----
+
+bool lowerBinaryOp(const MIRBinaryOp* bo, LowerCtx& d, std::string& reason)
+{
+    SSAValue* rhs = d.fs.pop();
+    SSAValue* lhs = d.fs.pop();
+    if (!lhs || !rhs) {
+        reason = "stack underflow at BINARY_OP";
+        return false;
+    }
+    auto instr       = std::make_unique<SSABinaryInstruction>();
+    instr->op        = mapBinaryOp(bo->op);
+    instr->lhs       = lhs;
+    instr->rhs       = rhs;
+    SSAType rt       = binaryResultType(lhs->type, rhs->type);
+    instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), rt);
+    instr->hasResult = true;
+    if (instr->op == SSABinaryOp::Div || instr->op == SSABinaryOp::Rem) {
+        instr->effect.mayThrow = true;
+    }
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerUnaryOp(const MIRUnaryOp* uo, LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "stack underflow at UNARY_OP";
+        return false;
+    }
+    auto instr          = std::make_unique<SSAUnaryInstruction>();
+    instr->op           = SSAUnaryOp::Neg;
+    instr->value        = v;
+    instr->result       = SSAInstructionResult(d.fn.ids.newValueId(), v->type);
+    instr->hasResult    = true;
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+// ---- 分区 2：栈操作（只动 FrameState，不产 IR；消除 cstack 锚点的核心） ----
+
+bool lowerStackPop(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "underflow POP";
+        return false;
+    }
+    return true;
+}
+
+bool lowerStackPop2(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v1 = d.fs.pop();
+    if (!v1) {
+        reason = "underflow POP2";
+        return false;
+    }
+    if (!isCategory2(v1)) {
+        SSAValue* v2 = d.fs.pop();
+        if (!v2) {
+            reason = "underflow POP2 category-1 pair";
+            return false;
+        }
+        if (!isCategory1(v2)) {
+            reason = "invalid POP2 category mix";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool lowerStackDup(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "underflow DUP";
+        return false;
+    }
+    if (!isCategory1(v)) {
+        reason = "DUP requires category-1 value";
+        return false;
+    }
+    d.fs.push(v);
+    d.fs.push(v);
+    return true;
+}
+
+bool lowerStackSwap(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v1 = d.fs.pop();
+    SSAValue* v2 = d.fs.pop();
+    if (!v1 || !v2) {
+        reason = "underflow SWAP";
+        return false;
+    }
+    if (!isCategory1(v1) || !isCategory1(v2)) {
+        reason = "SWAP requires two category-1 values";
+        return false;
+    }
+    d.fs.push(v1);
+    d.fs.push(v2);
+    return true;
+}
+
+bool lowerStackDupX1(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v1 = d.fs.pop();
+    SSAValue* v2 = d.fs.pop();
+    if (!v1 || !v2) {
+        reason = "underflow DUP_X1";
+        return false;
+    }
+    if (!isCategory1(v1) || !isCategory1(v2)) {
+        reason = "DUP_X1 requires two category-1 values";
+        return false;
+    }
+    d.fs.push(v1);
+    d.fs.push(v2);
+    d.fs.push(v1);
+    return true;
+}
+
+bool lowerStackDupX2(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v1 = d.fs.pop();
+    if (!v1) {
+        reason = "underflow DUP_X2";
+        return false;
+    }
+    if (!isCategory1(v1)) {
+        reason = "DUP_X2 top must be category-1";
+        return false;
+    }
+    SSAValue* v2 = d.fs.pop();
+    if (!v2) {
+        reason = "underflow DUP_X2";
+        return false;
+    }
+    if (isCategory2(v2)) {
+        d.fs.push(v1);
+        d.fs.push(v2);
+        d.fs.push(v1);
+    }
+    else if (isCategory1(v2)) {
+        SSAValue* v3 = d.fs.pop();
+        if (!v3) {
+            reason = "underflow DUP_X2 category-1 form";
+            return false;
+        }
+        if (!isCategory1(v3)) {
+            reason = "invalid DUP_X2 category mix";
+            return false;
+        }
+        d.fs.push(v1);
+        d.fs.push(v3);
+        d.fs.push(v2);
+        d.fs.push(v1);
+    }
+    else {
+        reason = "invalid DUP_X2 value category";
+        return false;
+    }
+    return true;
+}
+
+bool lowerStackDup2(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v1 = d.fs.pop();
+    if (!v1) {
+        reason = "underflow DUP2";
+        return false;
+    }
+    if (isCategory2(v1)) {
+        d.fs.push(v1);
+        d.fs.push(v1);
+    }
+    else if (isCategory1(v1)) {
+        SSAValue* v2 = d.fs.pop();
+        if (!v2) {
+            reason = "underflow DUP2 category-1 pair";
+            return false;
+        }
+        if (!isCategory1(v2)) {
+            reason = "invalid DUP2 category mix";
+            return false;
+        }
+        d.fs.push(v2);
+        d.fs.push(v1);
+        d.fs.push(v2);
+        d.fs.push(v1);
+    }
+    else {
+        reason = "invalid DUP2 value category";
+        return false;
+    }
+    return true;
+}
+
+bool lowerStackDup2X1(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v1 = d.fs.pop();
+    if (!v1) {
+        reason = "underflow DUP2_X1";
+        return false;
+    }
+    if (isCategory2(v1)) {
+        SSAValue* v2 = d.fs.pop();
+        if (!v2) {
+            reason = "underflow DUP2_X1 category-2 form";
+            return false;
+        }
+        if (!isCategory1(v2)) {
+            reason = "invalid DUP2_X1 category mix";
+            return false;
+        }
+        d.fs.push(v1);
+        d.fs.push(v2);
+        d.fs.push(v1);
+    }
+    else if (isCategory1(v1)) {
+        SSAValue* v2 = d.fs.pop();
+        SSAValue* v3 = d.fs.pop();
+        if (!v2 || !v3) {
+            reason = "underflow DUP2_X1 category-1 form";
+            return false;
+        }
+        if (!isCategory1(v2) || !isCategory1(v3)) {
+            reason = "DUP2_X1 category-1 form requires three category-1 values";
+            return false;
+        }
+        d.fs.push(v2);
+        d.fs.push(v1);
+        d.fs.push(v3);
+        d.fs.push(v2);
+        d.fs.push(v1);
+    }
+    else {
+        reason = "invalid DUP2_X1 value category";
+        return false;
+    }
+    return true;
+}
+
+bool lowerStackDup2X2(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v1 = d.fs.pop();
+    if (!v1) {
+        reason = "underflow DUP2_X2";
+        return false;
+    }
+    if (isCategory2(v1)) {
+        SSAValue* v2 = d.fs.pop();
+        if (!v2) {
+            reason = "underflow DUP2_X2 category-2 top form";
+            return false;
+        }
+        if (isCategory2(v2)) {
+            d.fs.push(v1);
+            d.fs.push(v2);
+            d.fs.push(v1);
+        }
+        else if (isCategory1(v2)) {
+            SSAValue* v3 = d.fs.pop();
+            if (!v3) {
+                reason = "underflow DUP2_X2 mixed top form";
+                return false;
+            }
+            if (!isCategory1(v3)) {
+                reason = "invalid DUP2_X2 category mix";
+                return false;
+            }
+            d.fs.push(v1);
+            d.fs.push(v3);
+            d.fs.push(v2);
+            d.fs.push(v1);
+        }
+        else {
+            reason = "invalid DUP2_X2 value category";
+            return false;
+        }
+    }
+    else if (isCategory1(v1)) {
+        SSAValue* v2 = d.fs.pop();
+        if (!v2) {
+            reason = "underflow DUP2_X2 category-1 top form";
+            return false;
+        }
+        if (!isCategory1(v2)) {
+            reason = "invalid DUP2_X2 category-1 pair";
+            return false;
+        }
+        SSAValue* v3 = d.fs.pop();
+        if (!v3) {
+            reason = "underflow DUP2_X2 insertion form";
+            return false;
+        }
+        if (isCategory2(v3)) {
+            d.fs.push(v2);
+            d.fs.push(v1);
+            d.fs.push(v3);
+            d.fs.push(v2);
+            d.fs.push(v1);
+        }
+        else if (isCategory1(v3)) {
+            SSAValue* v4 = d.fs.pop();
+            if (!v4) {
+                reason = "underflow DUP2_X2 four-value form";
+                return false;
+            }
+            if (!isCategory1(v4)) {
+                reason = "invalid DUP2_X2 four-value form";
+                return false;
+            }
+            d.fs.push(v2);
+            d.fs.push(v1);
+            d.fs.push(v4);
+            d.fs.push(v3);
+            d.fs.push(v2);
+            d.fs.push(v1);
+        }
+        else {
+            reason = "invalid DUP2_X2 insertion category";
+            return false;
+        }
+    }
+    else {
+        reason = "invalid DUP2_X2 value category";
+        return false;
+    }
+    return true;
+}
+
+// ---- 分区 3 续：算术与比较 ----
+
+bool lowerCast(const MIRCast* cast, LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "stack underflow at CAST";
+        return false;
+    }
+    auto instr          = std::make_unique<SSAConvertInstruction>();
+    instr->convertKind  = SSAConvertKind::Numeric;
+    instr->value        = v;
+    instr->targetType   = mirKindToSSA(cast->to);
+    instr->result       = SSAInstructionResult(d.fn.ids.newValueId(), instr->targetType);
+    instr->hasResult    = true;
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerCmp(const MIRCmp* cmp, LowerCtx& d, std::string& reason)
+{
+    SSAValue* rhs = d.fs.pop();
+    SSAValue* lhs = d.fs.pop();
+    if (!lhs || !rhs) {
+        reason = "stack underflow at CMP";
+        return false;
+    }
+    auto instr  = std::make_unique<SSAIntrinsicInstruction>();
+    instr->name = cmp->nanGreater ? "cmp.nan_greater" : "cmp.nan_less";
+    instr->args.push_back(lhs);
+    instr->args.push_back(rhs);
+    instr->result       = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::I32);
+    instr->hasResult    = true;
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+// ---- 分区 4：控制转移（RETURN / RETURN_VALUE / UNCOND_BRANCH / BRANCH / BRANCH_ZERO / SWITCH / THROW） ----
+
+bool lowerReturn(LowerCtx& d, std::string& /*reason*/)
+{
+    d.sb->terminator = SSAReturnTerminator{nullptr};
+    return true;
+}
+
+bool lowerReturnValue(const MIRReturnValue* /*rv*/, LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "stack underflow at RETURN_VALUE";
+        return false;
+    }
+    d.sb->terminator = SSAReturnTerminator{v};
+    return true;
+}
+
+bool lowerUncondBranch(const MIRUncondBranch* ub, LowerCtx& d, std::string& /*reason*/)
+{
+    int               tkey   = mirLabelKey(ub->targetLabel);
+    SSABlock*         target = d.ssaByLabel.count(tkey) ? d.ssaByLabel.at(tkey) : nullptr;
+    SSAJumpTerminator jt;
+    jt.target      = buildSuccessor(target, d.fs, d.fn);
+    d.sb->terminator = std::move(jt);
+    return true;
+}
+
+bool lowerBranchZero(const MIRBranchZero* bz, LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "stack underflow at BRANCH_ZERO";
+        return false;
+    }
+    auto cmp       = std::make_unique<SSACompareInstruction>();
+    cmp->predicate = mapComparePredicate(bz->op);
+    cmp->lhs       = v;
+    SSAValue* zero =
+        (bz->type == PrimitiveKind::OBJECT)
+            ? static_cast<SSAValue*>(d.fn.internNull())
+            : static_cast<SSAValue*>(d.fn.internInt(0, mirKindToSSA(bz->type)));
+    cmp->rhs       = zero;
+    cmp->result    = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::BOOL);
+    cmp->hasResult = true;
+    SSAValue* cond = &cmp->result;
+    d.sb->instructions.push_back(std::move(cmp));
+    SSABranchTerminator bt;
+    bt.condition  = cond;
+    int bzKey     = mirLabelKey(bz->targetLabel);
+    bt.trueTarget = buildSuccessor(
+        d.ssaByLabel.count(bzKey) ? d.ssaByLabel.at(bzKey) : nullptr, d.fs, d.fn);
+    bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
+    d.sb->terminator = std::move(bt);
+    return true;
+}
+
+bool lowerBranch(const MIRBranch* br, LowerCtx& d, std::string& reason)
+{
+    SSAValue* rhs = d.fs.pop();
+    SSAValue* lhs = d.fs.pop();
+    if (!lhs || !rhs) {
+        reason = "stack underflow at BRANCH";
+        return false;
+    }
+    auto cmp       = std::make_unique<SSACompareInstruction>();
+    cmp->predicate = mapComparePredicate(br->op);
+    cmp->lhs       = lhs;
+    cmp->rhs       = rhs;
+    cmp->result    = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::BOOL);
+    cmp->hasResult = true;
+    SSAValue* cond = &cmp->result;
+    d.sb->instructions.push_back(std::move(cmp));
+    SSABranchTerminator bt;
+    bt.condition  = cond;
+    int brKey     = mirLabelKey(br->targetLabel);
+    bt.trueTarget = buildSuccessor(
+        d.ssaByLabel.count(brKey) ? d.ssaByLabel.at(brKey) : nullptr, d.fs, d.fn);
+    bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
+    d.sb->terminator = std::move(bt);
+    return true;
+}
+
+bool lowerSwitch(const MIRSwitch* sw, LowerCtx& d, std::string& reason)
+{
+    SSAValue* value = d.fs.pop();
+    if (!value) {
+        reason = "stack underflow at SWITCH";
+        return false;
+    }
+    SSASwitchTerminator st;
+    st.value = value;
+    for (const auto& c : sw->cases) {
+        int           key = mirLabelKey(c.targetLabel);
+        SSASwitchCase sc;
+        sc.key    = c.key;
+        sc.target = buildSuccessor(
+            d.ssaByLabel.count(key) ? d.ssaByLabel.at(key) : nullptr, d.fs, d.fn);
+        st.cases.push_back(std::move(sc));
+    }
+    int defaultKey   = mirLabelKey(sw->defaultLabel);
+    st.defaultTarget = buildSuccessor(
+        d.ssaByLabel.count(defaultKey) ? d.ssaByLabel.at(defaultKey) : nullptr, d.fs, d.fn);
+    d.sb->terminator = std::move(st);
+    return true;
+}
+
+bool lowerThrow(LowerCtx& d, std::string& reason)
+{
+    SSAValue* v = d.fs.pop();
+    if (!v) {
+        reason = "stack underflow at THROW";
+        return false;
+    }
+    d.sb->terminator = SSAThrowTerminator{v};
+    return true;
+}
+
+// ---- 分区 5：字段与静态（FIELD_GET / FIELD_PUT / STATIC_GET / STATIC_PUT） ----
+
+bool lowerFieldGet(const MIRFieldGet* fg, LowerCtx& d, std::string& reason)
+{
+    SSAValue* receiver = d.fs.pop();
+    if (!receiver) {
+        reason = "stack underflow at FIELD_GET";
+        return false;
+    }
+    auto instr       = std::make_unique<SSALoadFieldInstruction>();
+    instr->field     = SSAFieldRef{fg->owner, fg->name, fg->desc, false};
+    instr->receiver  = receiver;
+    instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), descToSSA(fg->desc));
+    instr->hasResult = true;
+    markResolvingReadEffect(instr.get());
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerFieldPut(const MIRFieldPut* fp, LowerCtx& d, std::string& reason)
+{
+    SSAValue* value    = d.fs.pop();
+    SSAValue* receiver = d.fs.pop();
+    if (!receiver || !value) {
+        reason = "stack underflow at FIELD_PUT";
+        return false;
+    }
+    auto instr      = std::make_unique<SSAStoreFieldInstruction>();
+    instr->field    = SSAFieldRef{fp->owner, fp->name, fp->desc, false};
+    instr->receiver = receiver;
+    instr->value    = value;
+    markResolvingWriteEffect(instr.get());
+    d.sb->instructions.push_back(std::move(instr));
+    return true;
+}
+
+bool lowerStaticGet(const MIRStaticGet* sg, LowerCtx& d, std::string& /*reason*/)
+{
+    auto instr      = std::make_unique<SSALoadFieldInstruction>();
+    instr->field     = SSAFieldRef{sg->owner, sg->name, sg->desc, true};
+    instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), descToSSA(sg->desc));
+    instr->hasResult = true;
+    markResolvingReadEffect(instr.get());
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerStaticPut(const MIRStaticPut* sp, LowerCtx& d, std::string& reason)
+{
+    SSAValue* value = d.fs.pop();
+    if (!value) {
+        reason = "stack underflow at STATIC_PUT";
+        return false;
+    }
+    auto instr   = std::make_unique<SSAStoreFieldInstruction>();
+    instr->field = SSAFieldRef{sp->owner, sp->name, sp->desc, true};
+    instr->value = value;
+    markResolvingWriteEffect(instr.get());
+    d.sb->instructions.push_back(std::move(instr));
+    return true;
+}
+
+// ---- 分区 6：调用与分配（INVOKE / NEW_OBJECT / NEW_ARRAY / MULTI_NEW_ARRAY） ----
+
+bool lowerInvoke(const MIRInvoke* inv, LowerCtx& d, std::string& reason)
+{
+    ca::str::Utf8StringRef descRef =
+        ca::str::Utf8StringRef::from_cstr(inv->desc.c_str());
+    auto argTypes = Type::getArgumentTypes(descRef);
+    auto retType  = jvmTypeToSSA(Type::getReturnType(descRef));
+
+    auto instr    = std::make_unique<SSACallInstruction>();
+    instr->method = SSAMethodRef{inv->owner, inv->name, inv->desc, inv->invokeOpcode};
+    instr->args.resize(argTypes.size() + (isStaticInvoke(inv->invokeOpcode) ? 0 : 1),
+                       nullptr);
+
+    // JVM 调用参数以最后一个实参在栈顶；SSA call args 保持 receiver,arg0,arg1...
+    // 的源码顺序，便于 RegC 后续直接生成调用 ABI。
+    for (int i = static_cast<int>(argTypes.size()) - 1; i >= 0; --i) {
+        SSAValue* arg = d.fs.pop();
+        if (!arg) {
+            reason = "stack underflow at INVOKE args";
+            return false;
+        }
+        instr->args[static_cast<size_t>(
+            i + (isStaticInvoke(inv->invokeOpcode) ? 0 : 1))] = arg;
+    }
+    if (!isStaticInvoke(inv->invokeOpcode)) {
+        SSAValue* receiver = d.fs.pop();
+        if (!receiver) {
+            reason = "stack underflow at INVOKE receiver";
+            return false;
+        }
+        instr->args[0] = receiver;
+    }
+
+    instr->effect                  = SSAEffect::externalCall();
+    instr->effect.resolvesExternal = true;
+    if (retType != SSAType::VOID) {
+        instr->result       = SSAInstructionResult(d.fn.ids.newValueId(), retType);
+        instr->hasResult    = true;
+        SSAValue* resultPtr = &instr->result;
+        d.sb->instructions.push_back(std::move(instr));
+        d.fs.push(resultPtr);
+    }
+    else {
+        d.sb->instructions.push_back(std::move(instr));
+    }
+    return true;
+}
+
+bool lowerNewObject(const MIRNewObject* no, LowerCtx& d, std::string& /*reason*/)
+{
+    auto instr                    = std::make_unique<SSAAllocateInstruction>();
+    instr->allocationKind         = SSAAllocationKind::Object;
+    instr->typeDesc               = no->typeDesc;
+    instr->result                 = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::REF);
+    instr->hasResult              = true;
+    instr->effect                 = SSAEffect::externalCall();
+    instr->effect.resolvesExternal = true;
+    SSAValue* resultPtr            = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerNewArray(const MIRNewArray* na, LowerCtx& d, std::string& reason)
+{
+    SSAValue* count = d.fs.pop();
+    if (!count) {
+        reason = "stack underflow at NEW_ARRAY";
+        return false;
+    }
+    auto instr            = std::make_unique<SSAAllocateInstruction>();
+    instr->allocationKind = SSAAllocationKind::Array;
+    instr->typeDesc       = arrayDescFor(na);
+    instr->args.push_back(count);
+    instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::REF);
+    instr->hasResult = true;
+    instr->effect    = SSAEffect::externalCall();
+    instr->effect.resolvesExternal = true;
+    SSAValue* resultPtr            = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerMultiNewArray(const MIRMultiNewArray* ma, LowerCtx& d, std::string& reason)
+{
+    if (ma->dims <= 0) {
+        reason = "invalid MULTI_NEW_ARRAY dims";
+        return false;
+    }
+    auto instr            = std::make_unique<SSAAllocateInstruction>();
+    instr->allocationKind = SSAAllocationKind::MultiArray;
+    instr->typeDesc       = ma->typeDesc;
+    instr->args.resize(static_cast<size_t>(ma->dims), nullptr);
+    for (int i = ma->dims - 1; i >= 0; --i) {
+        SSAValue* dim = d.fs.pop();
+        if (!dim) {
+            reason = "stack underflow at MULTI_NEW_ARRAY";
+            return false;
+        }
+        instr->args[static_cast<size_t>(i)] = dim;
+    }
+    instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::REF);
+    instr->hasResult = true;
+    instr->effect    = SSAEffect::externalCall();
+    instr->effect.resolvesExternal = true;
+    SSAValue* resultPtr            = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+// ---- 分区 7：数组与类型检查（ARRAY_LENGTH / ARRAY_LOAD / ARRAY_STORE / CHECK_CAST / INSTANCE_OF / MONITOR_*） ----
+
+bool lowerArrayLength(LowerCtx& d, std::string& reason)
+{
+    SSAValue* array = d.fs.pop();
+    if (!array) {
+        reason = "stack underflow at ARRAY_LENGTH";
+        return false;
+    }
+    auto instr  = std::make_unique<SSAIntrinsicInstruction>();
+    instr->name = "array.length";
+    instr->args.push_back(array);
+    instr->result             = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::I32);
+    instr->hasResult          = true;
+    instr->effect.mayThrow    = true;
+    instr->effect.readsMemory = true;
+    SSAValue* resultPtr       = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerArrayLoad(const MIRArrayLoad* al, LowerCtx& d, std::string& reason)
+{
+    SSAValue* index = d.fs.pop();
+    SSAValue* array = d.fs.pop();
+    if (!array || !index) {
+        reason = "stack underflow at ARRAY_LOAD";
+        return false;
+    }
+    auto instr          = std::make_unique<SSAArrayLoadInstruction>();
+    instr->array        = array;
+    instr->index        = index;
+    instr->elementType  = mirKindToSSA(al->componentType);
+    instr->result       = SSAInstructionResult(d.fn.ids.newValueId(), instr->elementType);
+    instr->hasResult    = true;
+    instr->effect       = SSAEffect::readMemory().withMayThrow();
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerArrayStore(const MIRArrayStore* as, LowerCtx& d, std::string& reason)
+{
+    SSAValue* value = d.fs.pop();
+    SSAValue* index = d.fs.pop();
+    SSAValue* array = d.fs.pop();
+    if (!array || !index || !value) {
+        reason = "stack underflow at ARRAY_STORE";
+        return false;
+    }
+    auto instr         = std::make_unique<SSAArrayStoreInstruction>();
+    instr->array       = array;
+    instr->index       = index;
+    instr->value       = value;
+    instr->elementType = mirKindToSSA(as->componentType);
+    instr->effect      = SSAEffect::writeMemory().withMayThrow();
+    d.sb->instructions.push_back(std::move(instr));
+    return true;
+}
+
+bool lowerCheckCast(const MIRCheckCast* cc, LowerCtx& d, std::string& reason)
+{
+    SSAValue* value = d.fs.pop();
+    if (!value) {
+        reason = "stack underflow at CHECK_CAST";
+        return false;
+    }
+    auto instr               = std::make_unique<SSAConvertInstruction>();
+    instr->convertKind       = SSAConvertKind::ReferenceCast;
+    instr->value             = value;
+    instr->targetType        = SSAType::REF;
+    instr->referenceTypeDesc = cc->typeDesc;
+    instr->result            = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::REF);
+    instr->hasResult         = true;
+    markRuntimeCheckEffect(instr.get());
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerInstanceOf(const MIRInstanceOf* io, LowerCtx& d, std::string& reason)
+{
+    SSAValue* value = d.fs.pop();
+    if (!value) {
+        reason = "stack underflow at INSTANCE_OF";
+        return false;
+    }
+    auto instr  = std::make_unique<SSAIntrinsicInstruction>();
+    instr->name = "instanceof:" + io->typeDesc;
+    instr->args.push_back(value);
+    instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::I32);
+    instr->hasResult = true;
+    markRuntimeCheckEffect(instr.get());
+    SSAValue* resultPtr = &instr->result;
+    d.sb->instructions.push_back(std::move(instr));
+    d.fs.push(resultPtr);
+    return true;
+}
+
+bool lowerMonitor(const MIRMonitor* mon, LowerCtx& d, std::string& reason)
+{
+    SSAValue* value = d.fs.pop();
+    if (!value) {
+        reason = "stack underflow at MONITOR";
+        return false;
+    }
+    auto instr  = std::make_unique<SSAIntrinsicInstruction>();
+    instr->name = mon->enter ? "monitor.enter" : "monitor.exit";
+    instr->args.push_back(value);
+    instr->effect                     = SSAEffect::barrier();
+    instr->effect.mayThrow            = true;
+    instr->effect.readsExternalState  = true;
+    instr->effect.writesExternalState = true;
+    d.sb->instructions.push_back(std::move(instr));
+    return true;
+}
+
 }   // namespace
 
 std::vector<ExceptionHandler> SSABuilder::exceptionTable(const std::vector<Block*>& blocks) const
@@ -587,835 +1461,125 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
 
         // 翻译块内节点
         for (auto& node : lb->nodes) {
+            // lowering 上下文：所有 per-kind lower 函数通过它读写 SSA 输出与栈模拟。
+            LowerCtx d{fn, sb, fs, ssaByLabel, l1blocks, lb};
             switch (node->kind) {
             case MIRKind::CONSTANT:
-            {
-                auto* c = static_cast<MIRConstant*>(node.get());
-                // LDC String/Class 等对象常量先落 opaque ref；这里保持 builder 不因 variant
-                // 类型扩展崩溃，具体对象构造留给后续 RegC/runtime lowering。
-                fs.push(constantValue(fn, c));
+                if (!lowerConstant(static_cast<MIRConstant*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::LOCAL_LOAD:
-            {
-                auto* ll = static_cast<MIRLocalLoad*>(node.get());
-                if (ll->varIndex < static_cast<int>(fs.locals.size()) && fs.locals[ll->varIndex]) {
-                    fs.push(fs.locals[ll->varIndex]);
-                }
-                else {
-                    // 未定义到达 = opaque 兜底
-                    fs.push(fn.newOpaque(mirKindToSSA(ll->type),
-                                         "undef_local_" + std::to_string(ll->varIndex)));
-                }
+                if (!lowerLocalLoad(static_cast<MIRLocalLoad*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::LOCAL_STORE:
-            {
-                auto*     ls = static_cast<MIRLocalStore*>(node.get());
-                SSAValue* v  = fs.pop();
-                if (!v) {
-                    reason = "stack underflow at LOCAL_STORE";
-                    return false;
-                }
-                if (ls->varIndex < static_cast<int>(fs.locals.size())) {
-                    fs.locals[ls->varIndex] = v;
-                }
+                if (!lowerLocalStore(static_cast<MIRLocalStore*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::IINC:
-            {
-                auto*     ii  = static_cast<MIRIinc*>(node.get());
-                SSAValue* lhs = (ii->varIndex < static_cast<int>(fs.locals.size()))
-                                    ? fs.locals[ii->varIndex]
-                                    : nullptr;
-                if (!lhs) {
-                    reason = "iinc on undef local";
-                    return false;
-                }
-                auto instr          = std::make_unique<SSABinaryInstruction>();
-                instr->op           = SSABinaryOp::Add;
-                instr->lhs          = lhs;
-                instr->rhs          = fn.internInt(ii->increment, SSAType::I32);
-                instr->result       = SSAInstructionResult(fn.ids.newValueId(), SSAType::I32);
-                instr->hasResult    = true;
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                if (ii->varIndex < static_cast<int>(fs.locals.size()))
-                    fs.locals[ii->varIndex] = resultPtr;
+                if (!lowerIinc(static_cast<MIRIinc*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::BINARY_OP:
-            {
-                auto*     bo  = static_cast<MIRBinaryOp*>(node.get());
-                SSAValue* rhs = fs.pop();
-                SSAValue* lhs = fs.pop();
-                if (!lhs || !rhs) {
-                    reason = "stack underflow at BINARY_OP";
-                    return false;
-                }
-                auto instr       = std::make_unique<SSABinaryInstruction>();
-                instr->op        = mapBinaryOp(bo->op);
-                instr->lhs       = lhs;
-                instr->rhs       = rhs;
-                SSAType rt       = binaryResultType(lhs->type, rhs->type);
-                instr->result    = SSAInstructionResult(fn.ids.newValueId(), rt);
-                instr->hasResult = true;
-                if (instr->op == SSABinaryOp::Div || instr->op == SSABinaryOp::Rem) {
-                    instr->effect.mayThrow = true;
-                }
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerBinaryOp(static_cast<MIRBinaryOp*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::UNARY_OP:
-            {
-                auto*     uo = static_cast<MIRUnaryOp*>(node.get());
-                SSAValue* v  = fs.pop();
-                if (!v) {
-                    reason = "stack underflow at UNARY_OP";
-                    return false;
-                }
-                auto instr          = std::make_unique<SSAUnaryInstruction>();
-                instr->op           = SSAUnaryOp::Neg;
-                instr->value        = v;
-                instr->result       = SSAInstructionResult(fn.ids.newValueId(), v->type);
-                instr->hasResult    = true;
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerUnaryOp(static_cast<MIRUnaryOp*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::CAST:
-            {
-                auto*     cast = static_cast<MIRCast*>(node.get());
-                SSAValue* v    = fs.pop();
-                if (!v) {
-                    reason = "stack underflow at CAST";
-                    return false;
-                }
-                auto instr          = std::make_unique<SSAConvertInstruction>();
-                instr->convertKind  = SSAConvertKind::Numeric;
-                instr->value        = v;
-                instr->targetType   = mirKindToSSA(cast->to);
-                instr->result       = SSAInstructionResult(fn.ids.newValueId(), instr->targetType);
-                instr->hasResult    = true;
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerCast(static_cast<MIRCast*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::CMP:
-            {
-                auto*     cmp = static_cast<MIRCmp*>(node.get());
-                SSAValue* rhs = fs.pop();
-                SSAValue* lhs = fs.pop();
-                if (!lhs || !rhs) {
-                    reason = "stack underflow at CMP";
-                    return false;
-                }
-                auto instr  = std::make_unique<SSAIntrinsicInstruction>();
-                instr->name = cmp->nanGreater ? "cmp.nan_greater" : "cmp.nan_less";
-                instr->args.push_back(lhs);
-                instr->args.push_back(rhs);
-                instr->result       = SSAInstructionResult(fn.ids.newValueId(), SSAType::I32);
-                instr->hasResult    = true;
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerCmp(static_cast<MIRCmp*>(node.get()), d, reason)) return false;
                 break;
-            }
             // 栈操作：只动 FrameState，不产 IR（消除 cstack 锚点的核心）
             case MIRKind::STACK_POP:
-            {
-                SSAValue* v = fs.pop();
-                if (!v) {
-                    reason = "underflow POP";
-                    return false;
-                }
+                if (!lowerStackPop(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_POP2:
-            {
-                SSAValue* v1 = fs.pop();
-                if (!v1) {
-                    reason = "underflow POP2";
-                    return false;
-                }
-                if (!isCategory2(v1)) {
-                    SSAValue* v2 = fs.pop();
-                    if (!v2) {
-                        reason = "underflow POP2 category-1 pair";
-                        return false;
-                    }
-                    if (!isCategory1(v2)) {
-                        reason = "invalid POP2 category mix";
-                        return false;
-                    }
-                }
+                if (!lowerStackPop2(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_DUP:
-            {
-                SSAValue* v = fs.pop();
-                if (!v) {
-                    reason = "underflow DUP";
-                    return false;
-                }
-                if (!isCategory1(v)) {
-                    reason = "DUP requires category-1 value";
-                    return false;
-                }
-                fs.push(v);
-                fs.push(v);
+                if (!lowerStackDup(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_SWAP:
-            {
-                SSAValue* v1 = fs.pop();
-                SSAValue* v2 = fs.pop();
-                if (!v1 || !v2) {
-                    reason = "underflow SWAP";
-                    return false;
-                }
-                if (!isCategory1(v1) || !isCategory1(v2)) {
-                    reason = "SWAP requires two category-1 values";
-                    return false;
-                }
-                fs.push(v1);
-                fs.push(v2);
+                if (!lowerStackSwap(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_DUP_X1:
-            {
-                SSAValue* v1 = fs.pop();
-                SSAValue* v2 = fs.pop();
-                if (!v1 || !v2) {
-                    reason = "underflow DUP_X1";
-                    return false;
-                }
-                if (!isCategory1(v1) || !isCategory1(v2)) {
-                    reason = "DUP_X1 requires two category-1 values";
-                    return false;
-                }
-                fs.push(v1);
-                fs.push(v2);
-                fs.push(v1);
+                if (!lowerStackDupX1(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_DUP_X2:
-            {
-                SSAValue* v1 = fs.pop();
-                if (!v1) {
-                    reason = "underflow DUP_X2";
-                    return false;
-                }
-                if (!isCategory1(v1)) {
-                    reason = "DUP_X2 top must be category-1";
-                    return false;
-                }
-                SSAValue* v2 = fs.pop();
-                if (!v2) {
-                    reason = "underflow DUP_X2";
-                    return false;
-                }
-                if (isCategory2(v2)) {
-                    fs.push(v1);
-                    fs.push(v2);
-                    fs.push(v1);
-                }
-                else if (isCategory1(v2)) {
-                    SSAValue* v3 = fs.pop();
-                    if (!v3) {
-                        reason = "underflow DUP_X2 category-1 form";
-                        return false;
-                    }
-                    if (!isCategory1(v3)) {
-                        reason = "invalid DUP_X2 category mix";
-                        return false;
-                    }
-                    fs.push(v1);
-                    fs.push(v3);
-                    fs.push(v2);
-                    fs.push(v1);
-                }
-                else {
-                    reason = "invalid DUP_X2 value category";
-                    return false;
-                }
+                if (!lowerStackDupX2(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_DUP2:
-            {
-                SSAValue* v1 = fs.pop();
-                if (!v1) {
-                    reason = "underflow DUP2";
-                    return false;
-                }
-                if (isCategory2(v1)) {
-                    fs.push(v1);
-                    fs.push(v1);
-                }
-                else if (isCategory1(v1)) {
-                    SSAValue* v2 = fs.pop();
-                    if (!v2) {
-                        reason = "underflow DUP2 category-1 pair";
-                        return false;
-                    }
-                    if (!isCategory1(v2)) {
-                        reason = "invalid DUP2 category mix";
-                        return false;
-                    }
-                    fs.push(v2);
-                    fs.push(v1);
-                    fs.push(v2);
-                    fs.push(v1);
-                }
-                else {
-                    reason = "invalid DUP2 value category";
-                    return false;
-                }
+                if (!lowerStackDup2(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_DUP2_X1:
-            {
-                SSAValue* v1 = fs.pop();
-                if (!v1) {
-                    reason = "underflow DUP2_X1";
-                    return false;
-                }
-                if (isCategory2(v1)) {
-                    SSAValue* v2 = fs.pop();
-                    if (!v2) {
-                        reason = "underflow DUP2_X1 category-2 form";
-                        return false;
-                    }
-                    if (!isCategory1(v2)) {
-                        reason = "invalid DUP2_X1 category mix";
-                        return false;
-                    }
-                    fs.push(v1);
-                    fs.push(v2);
-                    fs.push(v1);
-                }
-                else if (isCategory1(v1)) {
-                    SSAValue* v2 = fs.pop();
-                    SSAValue* v3 = fs.pop();
-                    if (!v2 || !v3) {
-                        reason = "underflow DUP2_X1 category-1 form";
-                        return false;
-                    }
-                    if (!isCategory1(v2) || !isCategory1(v3)) {
-                        reason = "DUP2_X1 category-1 form requires three category-1 values";
-                        return false;
-                    }
-                    fs.push(v2);
-                    fs.push(v1);
-                    fs.push(v3);
-                    fs.push(v2);
-                    fs.push(v1);
-                }
-                else {
-                    reason = "invalid DUP2_X1 value category";
-                    return false;
-                }
+                if (!lowerStackDup2X1(d, reason)) return false;
                 break;
-            }
             case MIRKind::STACK_DUP2_X2:
-            {
-                SSAValue* v1 = fs.pop();
-                if (!v1) {
-                    reason = "underflow DUP2_X2";
-                    return false;
-                }
-                if (isCategory2(v1)) {
-                    SSAValue* v2 = fs.pop();
-                    if (!v2) {
-                        reason = "underflow DUP2_X2 category-2 top form";
-                        return false;
-                    }
-                    if (isCategory2(v2)) {
-                        fs.push(v1);
-                        fs.push(v2);
-                        fs.push(v1);
-                    }
-                    else if (isCategory1(v2)) {
-                        SSAValue* v3 = fs.pop();
-                        if (!v3) {
-                            reason = "underflow DUP2_X2 mixed top form";
-                            return false;
-                        }
-                        if (!isCategory1(v3)) {
-                            reason = "invalid DUP2_X2 category mix";
-                            return false;
-                        }
-                        fs.push(v1);
-                        fs.push(v3);
-                        fs.push(v2);
-                        fs.push(v1);
-                    }
-                    else {
-                        reason = "invalid DUP2_X2 value category";
-                        return false;
-                    }
-                }
-                else if (isCategory1(v1)) {
-                    SSAValue* v2 = fs.pop();
-                    if (!v2) {
-                        reason = "underflow DUP2_X2 category-1 top form";
-                        return false;
-                    }
-                    if (!isCategory1(v2)) {
-                        reason = "invalid DUP2_X2 category-1 pair";
-                        return false;
-                    }
-                    SSAValue* v3 = fs.pop();
-                    if (!v3) {
-                        reason = "underflow DUP2_X2 insertion form";
-                        return false;
-                    }
-                    if (isCategory2(v3)) {
-                        fs.push(v2);
-                        fs.push(v1);
-                        fs.push(v3);
-                        fs.push(v2);
-                        fs.push(v1);
-                    }
-                    else if (isCategory1(v3)) {
-                        SSAValue* v4 = fs.pop();
-                        if (!v4) {
-                            reason = "underflow DUP2_X2 four-value form";
-                            return false;
-                        }
-                        if (!isCategory1(v4)) {
-                            reason = "invalid DUP2_X2 four-value form";
-                            return false;
-                        }
-                        fs.push(v2);
-                        fs.push(v1);
-                        fs.push(v4);
-                        fs.push(v3);
-                        fs.push(v2);
-                        fs.push(v1);
-                    }
-                    else {
-                        reason = "invalid DUP2_X2 insertion category";
-                        return false;
-                    }
-                }
-                else {
-                    reason = "invalid DUP2_X2 value category";
-                    return false;
-                }
+                if (!lowerStackDup2X2(d, reason)) return false;
                 break;
-            }
             case MIRKind::RETURN:
-            {
-                sb->terminator = SSAReturnTerminator{nullptr};
+                if (!lowerReturn(d, reason)) return false;
                 break;
-            }
             case MIRKind::RETURN_VALUE:
-            {
-                SSAValue* v = fs.pop();
-                if (!v) {
-                    reason = "stack underflow at RETURN_VALUE";
-                    return false;
-                }
-                sb->terminator = SSAReturnTerminator{v};
+                if (!lowerReturnValue(static_cast<MIRReturnValue*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::UNCOND_BRANCH:
-            {
-                auto*             ub     = static_cast<MIRUncondBranch*>(node.get());
-                int               tkey   = mirLabelKey(ub->targetLabel);
-                SSABlock*         target = ssaByLabel.count(tkey) ? ssaByLabel.at(tkey) : nullptr;
-                SSAJumpTerminator jt;
-                jt.target      = buildSuccessor(target, fs, fn);
-                sb->terminator = std::move(jt);
+                if (!lowerUncondBranch(static_cast<MIRUncondBranch*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::BRANCH_ZERO:
-            {
-                auto*     bz = static_cast<MIRBranchZero*>(node.get());
-                SSAValue* v  = fs.pop();
-                if (!v) {
-                    reason = "stack underflow at BRANCH_ZERO";
-                    return false;
-                }
-                auto cmp       = std::make_unique<SSACompareInstruction>();
-                cmp->predicate = mapComparePredicate(bz->op);
-                cmp->lhs       = v;
-                SSAValue* zero =
-                    (bz->type == PrimitiveKind::OBJECT)
-                        ? static_cast<SSAValue*>(fn.internNull())
-                        : static_cast<SSAValue*>(fn.internInt(0, mirKindToSSA(bz->type)));
-                cmp->rhs       = zero;
-                cmp->result    = SSAInstructionResult(fn.ids.newValueId(), SSAType::BOOL);
-                cmp->hasResult = true;
-                SSAValue* cond = &cmp->result;
-                sb->instructions.push_back(std::move(cmp));
-                SSABranchTerminator bt;
-                bt.condition  = cond;
-                int bzKey     = mirLabelKey(bz->targetLabel);
-                bt.trueTarget = buildSuccessor(
-                    ssaByLabel.count(bzKey) ? ssaByLabel.at(bzKey) : nullptr, fs, fn);
-                bt.falseTarget = buildSuccessor(fallthroughBlock(l1blocks, ssaByLabel, lb), fs, fn);
-                sb->terminator = std::move(bt);
+                if (!lowerBranchZero(static_cast<MIRBranchZero*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::BRANCH:
-            {
-                auto*     br  = static_cast<MIRBranch*>(node.get());
-                SSAValue* rhs = fs.pop();
-                SSAValue* lhs = fs.pop();
-                if (!lhs || !rhs) {
-                    reason = "stack underflow at BRANCH";
-                    return false;
-                }
-                auto cmp       = std::make_unique<SSACompareInstruction>();
-                cmp->predicate = mapComparePredicate(br->op);
-                cmp->lhs       = lhs;
-                cmp->rhs       = rhs;
-                cmp->result    = SSAInstructionResult(fn.ids.newValueId(), SSAType::BOOL);
-                cmp->hasResult = true;
-                SSAValue* cond = &cmp->result;
-                sb->instructions.push_back(std::move(cmp));
-                SSABranchTerminator bt;
-                bt.condition  = cond;
-                int brKey     = mirLabelKey(br->targetLabel);
-                bt.trueTarget = buildSuccessor(
-                    ssaByLabel.count(brKey) ? ssaByLabel.at(brKey) : nullptr, fs, fn);
-                bt.falseTarget = buildSuccessor(fallthroughBlock(l1blocks, ssaByLabel, lb), fs, fn);
-                sb->terminator = std::move(bt);
+                if (!lowerBranch(static_cast<MIRBranch*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::SWITCH:
-            {
-                auto*     sw    = static_cast<MIRSwitch*>(node.get());
-                SSAValue* value = fs.pop();
-                if (!value) {
-                    reason = "stack underflow at SWITCH";
-                    return false;
-                }
-                SSASwitchTerminator st;
-                st.value = value;
-                for (const auto& c : sw->cases) {
-                    int           key = mirLabelKey(c.targetLabel);
-                    SSASwitchCase sc;
-                    sc.key    = c.key;
-                    sc.target = buildSuccessor(
-                        ssaByLabel.count(key) ? ssaByLabel.at(key) : nullptr, fs, fn);
-                    st.cases.push_back(std::move(sc));
-                }
-                int defaultKey   = mirLabelKey(sw->defaultLabel);
-                st.defaultTarget = buildSuccessor(
-                    ssaByLabel.count(defaultKey) ? ssaByLabel.at(defaultKey) : nullptr, fs, fn);
-                sb->terminator = std::move(st);
+                if (!lowerSwitch(static_cast<MIRSwitch*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::THROW:
-            {
-                SSAValue* v = fs.pop();
-                if (!v) {
-                    reason = "stack underflow at THROW";
-                    return false;
-                }
-                sb->terminator = SSAThrowTerminator{v};
+                if (!lowerThrow(d, reason)) return false;
                 break;
-            }
             case MIRKind::FIELD_GET:
-            {
-                auto*     fg       = static_cast<MIRFieldGet*>(node.get());
-                SSAValue* receiver = fs.pop();
-                if (!receiver) {
-                    reason = "stack underflow at FIELD_GET";
-                    return false;
-                }
-                auto instr       = std::make_unique<SSALoadFieldInstruction>();
-                instr->field     = SSAFieldRef{fg->owner, fg->name, fg->desc, false};
-                instr->receiver  = receiver;
-                instr->result    = SSAInstructionResult(fn.ids.newValueId(), descToSSA(fg->desc));
-                instr->hasResult = true;
-                markResolvingReadEffect(instr.get());
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerFieldGet(static_cast<MIRFieldGet*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::FIELD_PUT:
-            {
-                auto*     fp       = static_cast<MIRFieldPut*>(node.get());
-                SSAValue* value    = fs.pop();
-                SSAValue* receiver = fs.pop();
-                if (!receiver || !value) {
-                    reason = "stack underflow at FIELD_PUT";
-                    return false;
-                }
-                auto instr      = std::make_unique<SSAStoreFieldInstruction>();
-                instr->field    = SSAFieldRef{fp->owner, fp->name, fp->desc, false};
-                instr->receiver = receiver;
-                instr->value    = value;
-                markResolvingWriteEffect(instr.get());
-                sb->instructions.push_back(std::move(instr));
+                if (!lowerFieldPut(static_cast<MIRFieldPut*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::STATIC_GET:
-            {
-                auto* sg         = static_cast<MIRStaticGet*>(node.get());
-                auto  instr      = std::make_unique<SSALoadFieldInstruction>();
-                instr->field     = SSAFieldRef{sg->owner, sg->name, sg->desc, true};
-                instr->result    = SSAInstructionResult(fn.ids.newValueId(), descToSSA(sg->desc));
-                instr->hasResult = true;
-                markResolvingReadEffect(instr.get());
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerStaticGet(static_cast<MIRStaticGet*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::STATIC_PUT:
-            {
-                auto*     sp    = static_cast<MIRStaticPut*>(node.get());
-                SSAValue* value = fs.pop();
-                if (!value) {
-                    reason = "stack underflow at STATIC_PUT";
-                    return false;
-                }
-                auto instr   = std::make_unique<SSAStoreFieldInstruction>();
-                instr->field = SSAFieldRef{sp->owner, sp->name, sp->desc, true};
-                instr->value = value;
-                markResolvingWriteEffect(instr.get());
-                sb->instructions.push_back(std::move(instr));
+                if (!lowerStaticPut(static_cast<MIRStaticPut*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::INVOKE:
-            {
-                auto*                  inv = static_cast<MIRInvoke*>(node.get());
-                ca::str::Utf8StringRef descRef =
-                    ca::str::Utf8StringRef::from_cstr(inv->desc.c_str());
-                auto argTypes = Type::getArgumentTypes(descRef);
-                auto retType  = jvmTypeToSSA(Type::getReturnType(descRef));
-
-                auto instr    = std::make_unique<SSACallInstruction>();
-                instr->method = SSAMethodRef{inv->owner, inv->name, inv->desc, inv->invokeOpcode};
-                instr->args.resize(argTypes.size() + (isStaticInvoke(inv->invokeOpcode) ? 0 : 1),
-                                   nullptr);
-
-                // JVM 调用参数以最后一个实参在栈顶；SSA call args 保持 receiver,arg0,arg1...
-                // 的源码顺序，便于 RegC 后续直接生成调用 ABI。
-                for (int i = static_cast<int>(argTypes.size()) - 1; i >= 0; --i) {
-                    SSAValue* arg = fs.pop();
-                    if (!arg) {
-                        reason = "stack underflow at INVOKE args";
-                        return false;
-                    }
-                    instr->args[static_cast<size_t>(
-                        i + (isStaticInvoke(inv->invokeOpcode) ? 0 : 1))] = arg;
-                }
-                if (!isStaticInvoke(inv->invokeOpcode)) {
-                    SSAValue* receiver = fs.pop();
-                    if (!receiver) {
-                        reason = "stack underflow at INVOKE receiver";
-                        return false;
-                    }
-                    instr->args[0] = receiver;
-                }
-
-                instr->effect                  = SSAEffect::externalCall();
-                instr->effect.resolvesExternal = true;
-                if (retType != SSAType::VOID) {
-                    instr->result       = SSAInstructionResult(fn.ids.newValueId(), retType);
-                    instr->hasResult    = true;
-                    SSAValue* resultPtr = &instr->result;
-                    sb->instructions.push_back(std::move(instr));
-                    fs.push(resultPtr);
-                }
-                else {
-                    sb->instructions.push_back(std::move(instr));
-                }
+                if (!lowerInvoke(static_cast<MIRInvoke*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::NEW_OBJECT:
-            {
-                auto* no              = static_cast<MIRNewObject*>(node.get());
-                auto  instr           = std::make_unique<SSAAllocateInstruction>();
-                instr->allocationKind = SSAAllocationKind::Object;
-                instr->typeDesc       = no->typeDesc;
-                instr->result         = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
-                instr->hasResult      = true;
-                instr->effect         = SSAEffect::externalCall();
-                instr->effect.resolvesExternal = true;
-                SSAValue* resultPtr            = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerNewObject(static_cast<MIRNewObject*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::NEW_ARRAY:
-            {
-                auto*     na    = static_cast<MIRNewArray*>(node.get());
-                SSAValue* count = fs.pop();
-                if (!count) {
-                    reason = "stack underflow at NEW_ARRAY";
-                    return false;
-                }
-                auto instr            = std::make_unique<SSAAllocateInstruction>();
-                instr->allocationKind = SSAAllocationKind::Array;
-                instr->typeDesc       = arrayDescFor(na);
-                instr->args.push_back(count);
-                instr->result    = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
-                instr->hasResult = true;
-                instr->effect    = SSAEffect::externalCall();
-                instr->effect.resolvesExternal = true;
-                SSAValue* resultPtr            = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerNewArray(static_cast<MIRNewArray*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::MULTI_NEW_ARRAY:
-            {
-                auto* ma = static_cast<MIRMultiNewArray*>(node.get());
-                if (ma->dims <= 0) {
-                    reason = "invalid MULTI_NEW_ARRAY dims";
-                    return false;
-                }
-                auto instr            = std::make_unique<SSAAllocateInstruction>();
-                instr->allocationKind = SSAAllocationKind::MultiArray;
-                instr->typeDesc       = ma->typeDesc;
-                instr->args.resize(static_cast<size_t>(ma->dims), nullptr);
-                for (int i = ma->dims - 1; i >= 0; --i) {
-                    SSAValue* dim = fs.pop();
-                    if (!dim) {
-                        reason = "stack underflow at MULTI_NEW_ARRAY";
-                        return false;
-                    }
-                    instr->args[static_cast<size_t>(i)] = dim;
-                }
-                instr->result    = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
-                instr->hasResult = true;
-                instr->effect    = SSAEffect::externalCall();
-                instr->effect.resolvesExternal = true;
-                SSAValue* resultPtr            = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerMultiNewArray(static_cast<MIRMultiNewArray*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::ARRAY_LENGTH:
-            {
-                SSAValue* array = fs.pop();
-                if (!array) {
-                    reason = "stack underflow at ARRAY_LENGTH";
-                    return false;
-                }
-                auto instr  = std::make_unique<SSAIntrinsicInstruction>();
-                instr->name = "array.length";
-                instr->args.push_back(array);
-                instr->result             = SSAInstructionResult(fn.ids.newValueId(), SSAType::I32);
-                instr->hasResult          = true;
-                instr->effect.mayThrow    = true;
-                instr->effect.readsMemory = true;
-                SSAValue* resultPtr       = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerArrayLength(d, reason)) return false;
                 break;
-            }
             case MIRKind::ARRAY_LOAD:
-            {
-                auto*     al    = static_cast<MIRArrayLoad*>(node.get());
-                SSAValue* index = fs.pop();
-                SSAValue* array = fs.pop();
-                if (!array || !index) {
-                    reason = "stack underflow at ARRAY_LOAD";
-                    return false;
-                }
-                auto instr          = std::make_unique<SSAArrayLoadInstruction>();
-                instr->array        = array;
-                instr->index        = index;
-                instr->elementType  = mirKindToSSA(al->componentType);
-                instr->result       = SSAInstructionResult(fn.ids.newValueId(), instr->elementType);
-                instr->hasResult    = true;
-                instr->effect       = SSAEffect::readMemory().withMayThrow();
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerArrayLoad(static_cast<MIRArrayLoad*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::ARRAY_STORE:
-            {
-                auto*     as    = static_cast<MIRArrayStore*>(node.get());
-                SSAValue* value = fs.pop();
-                SSAValue* index = fs.pop();
-                SSAValue* array = fs.pop();
-                if (!array || !index || !value) {
-                    reason = "stack underflow at ARRAY_STORE";
-                    return false;
-                }
-                auto instr         = std::make_unique<SSAArrayStoreInstruction>();
-                instr->array       = array;
-                instr->index       = index;
-                instr->value       = value;
-                instr->elementType = mirKindToSSA(as->componentType);
-                instr->effect      = SSAEffect::writeMemory().withMayThrow();
-                sb->instructions.push_back(std::move(instr));
+                if (!lowerArrayStore(static_cast<MIRArrayStore*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::CHECK_CAST:
-            {
-                auto*     cc    = static_cast<MIRCheckCast*>(node.get());
-                SSAValue* value = fs.pop();
-                if (!value) {
-                    reason = "stack underflow at CHECK_CAST";
-                    return false;
-                }
-                auto instr               = std::make_unique<SSAConvertInstruction>();
-                instr->convertKind       = SSAConvertKind::ReferenceCast;
-                instr->value             = value;
-                instr->targetType        = SSAType::REF;
-                instr->referenceTypeDesc = cc->typeDesc;
-                instr->result            = SSAInstructionResult(fn.ids.newValueId(), SSAType::REF);
-                instr->hasResult         = true;
-                markRuntimeCheckEffect(instr.get());
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerCheckCast(static_cast<MIRCheckCast*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::INSTANCE_OF:
-            {
-                auto*     io    = static_cast<MIRInstanceOf*>(node.get());
-                SSAValue* value = fs.pop();
-                if (!value) {
-                    reason = "stack underflow at INSTANCE_OF";
-                    return false;
-                }
-                auto instr  = std::make_unique<SSAIntrinsicInstruction>();
-                instr->name = "instanceof:" + io->typeDesc;
-                instr->args.push_back(value);
-                instr->result    = SSAInstructionResult(fn.ids.newValueId(), SSAType::I32);
-                instr->hasResult = true;
-                markRuntimeCheckEffect(instr.get());
-                SSAValue* resultPtr = &instr->result;
-                sb->instructions.push_back(std::move(instr));
-                fs.push(resultPtr);
+                if (!lowerInstanceOf(static_cast<MIRInstanceOf*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::MONITOR_ENTER:
             case MIRKind::MONITOR_EXIT:
-            {
-                auto*     mon   = static_cast<MIRMonitor*>(node.get());
-                SSAValue* value = fs.pop();
-                if (!value) {
-                    reason = "stack underflow at MONITOR";
-                    return false;
-                }
-                auto instr  = std::make_unique<SSAIntrinsicInstruction>();
-                instr->name = mon->enter ? "monitor.enter" : "monitor.exit";
-                instr->args.push_back(value);
-                instr->effect                     = SSAEffect::barrier();
-                instr->effect.mayThrow            = true;
-                instr->effect.readsExternalState  = true;
-                instr->effect.writesExternalState = true;
-                sb->instructions.push_back(std::move(instr));
+                if (!lowerMonitor(static_cast<MIRMonitor*>(node.get()), d, reason)) return false;
                 break;
-            }
             case MIRKind::NOP:
             case MIRKind::LABEL:
             case MIRKind::FRAME:
