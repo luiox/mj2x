@@ -31,9 +31,6 @@ using codegen::CSourceStream;
 using codegen::mangleMethod;
 using codegen::mangleName;
 
-static constexpr const char* kNativeLoaderClassName = "mj2x/runtime/NativeLoader";
-static constexpr const char* kNativeLoaderLoadDesc  = "(Ljava/lang/String;Ljava/lang/String;)V";
-
 const char* jniType(PrimitiveKind kind)
 {
     switch (kind) {
@@ -1122,44 +1119,12 @@ MethodNode* findMethod(CompilerClass& clazz, const char* name, const char* desc)
     return nullptr;
 }
 
-void prependNativeLoaderCall(CompilerClass& clazz, const std::string& resourcePath,
-                             const std::string& tempSuffix)
-{
-    if (resourcePath.empty()) return;
-
-    auto* clinit = findMethod(clazz, "<clinit>", "()V");
-    if (clinit == nullptr) {
-        std::vector<ca::str::Utf8StringRef> noExceptions;
-        clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                ca::str::ZUtf8StringRef::from_static("<clinit>"),
-                                ca::str::ZUtf8StringRef::from_static("()V"),
-                                ca::str::ZUtf8StringRef::from_static(""),
-                                noExceptions);
-        clinit->instructions.add(new InsnNode(Opcodes::RETURN));
-        clazz.classNode->methods.push_back(clinit);
-    }
-
-    InsnList prefix;
-    prefix.add(new LdcInsnNode(resourcePath));
-    prefix.add(new LdcInsnNode(tempSuffix));
-    prefix.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                  ca::str::ZUtf8StringRef::from_static(kNativeLoaderClassName),
-                                  ca::str::ZUtf8StringRef::from_static("load"),
-                                  ca::str::ZUtf8StringRef::from_static(kNativeLoaderLoadDesc),
-                                  false));
-    clinit->instructions.insert(clinit->instructions.getFirst(), prefix);
-    clinit->maxStack = std::max(clinit->maxStack, 2);
-}
-
 }   // namespace
 
 struct RegCBackend::Impl
 {
-    std::ostringstream              source;
-    RegCCachePool                   cachePool;
-    std::string                     jarNativeLoaderResourcePath;
-    std::string                     jarNativeLoaderTempSuffix;
-    std::unordered_set<std::string> loaderInjectedClasses;
+    std::ostringstream source;
+    RegCCachePool      cachePool;
 };
 
 RegCBackend::RegCBackend()
@@ -1167,13 +1132,6 @@ RegCBackend::RegCBackend()
 {}
 
 RegCBackend::~RegCBackend() = default;
-
-void RegCBackend::setJarNativeLoaderResourcePath(const std::string& resourcePath,
-                                                 const std::string& tempSuffix)
-{
-    impl_->jarNativeLoaderResourcePath = resourcePath;
-    impl_->jarNativeLoaderTempSuffix   = tempSuffix;
-}
 
 BackendResult RegCBackend::compileMethod(const std::string& className, CompilerMethod& method,
                                          const std::vector<Block*>& blocks)
@@ -1253,14 +1211,8 @@ void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
     mn->maxStack   = 0;
     mn->maxLocals  = 0;
     clazz.modified = true;
-
-    if (impl_->jarNativeLoaderResourcePath.empty() || clazz.classNode == nullptr) return;
-
-    const auto className = clazz.classNode->name.to_std_string();
-    if (impl_->loaderInjectedClasses.insert(className).second) {
-        prependNativeLoaderCall(
-            clazz, impl_->jarNativeLoaderResourcePath, impl_->jarNativeLoaderTempSuffix);
-    }
+    // Native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责（见
+    // postprocessor/native_loader_call.hpp），不再在 backend 内重复。
 }
 
 void RegCBackend::finalize(const CompilerIndex& index)

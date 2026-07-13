@@ -56,8 +56,6 @@ public:
      * `generatedSource()` but does not write a file.
      */
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
-    void setJarNativeLoaderResourcePath(const std::string& resourcePath,
-                                        const std::string& tempSuffix);
 
     /**
      * @brief Full generated C translation unit after finalize.

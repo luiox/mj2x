@@ -1,17 +1,18 @@
 #include "native_loader_postprocessor.hpp"
+#include "mj2x/postprocessor/native_loader_call.hpp"
 
 #include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
 
 using namespace jbytecode::core;
+using namespace jbytecode::tree;
 using ca::str::Utf8StringArena;
 using ca::str::Utf8StringRef;
 using ca::str::ZUtf8StringRef;
 
 namespace {
 
-static constexpr const char* kLoaderClass = "mj2x/runtime/NativeLoader";
 static constexpr const char* kLoaderEntry = "mj2x/runtime/NativeLoader.class";
 
 std::vector<ca::u8> buildNativeLoaderClass()
@@ -20,7 +21,7 @@ std::vector<ca::u8> buildNativeLoaderClass()
     ClassWriter     cw(arena, ClassWriter::COMPUTE_MAXS);
     cw.visit(49,
              Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SYNTHETIC,
-             Utf8StringRef::from_cstr(kLoaderClass),
+             Utf8StringRef::from_cstr(native_loader::kClassName),
              Utf8StringRef(),
              Utf8StringRef::from_cstr("java/lang/Object"),
              {});
@@ -60,7 +61,7 @@ std::vector<ca::u8> buildNativeLoaderClass()
 
     load->visitCode();
     load->visitFieldInsn(Opcodes::GETSTATIC,
-                         Utf8StringRef::from_cstr(kLoaderClass),
+                         Utf8StringRef::from_cstr(native_loader::kClassName),
                          Utf8StringRef::from_cstr("loaded"),
                          Utf8StringRef::from_cstr("Z"));
     load->visitJumpInsn(Opcodes::IFEQ, continueLabel);
@@ -165,7 +166,7 @@ std::vector<ca::u8> buildNativeLoaderClass()
                           false);
     load->visitInsn(Opcodes::ICONST_1);
     load->visitFieldInsn(Opcodes::PUTSTATIC,
-                         Utf8StringRef::from_cstr(kLoaderClass),
+                         Utf8StringRef::from_cstr(native_loader::kClassName),
                          Utf8StringRef::from_cstr("loaded"),
                          Utf8StringRef::from_cstr("Z"));
     load->visitInsn(Opcodes::RETURN);
@@ -178,14 +179,55 @@ std::vector<ca::u8> buildNativeLoaderClass()
 
 }   // namespace
 
-NativeLoaderPostprocessor::NativeLoaderPostprocessor(std::string resourcePath)
+NativeLoaderPostprocessor::NativeLoaderPostprocessor(std::string resourcePath,
+                                                     std::string tempSuffix,
+                                                     bool        injectClinitCalls)
     : resourcePath_(std::move(resourcePath))
+    , tempSuffix_(std::move(tempSuffix))
+    , injectClinitCalls_(injectClinitCalls)
 {}
+
+// 找到或创建类的 <clinit>，确保存在一个可前插 load 调用的静态初始化方法。
+// 与原 RegCBackend::prependNativeLoaderCall 行为一致：缺失时新建带 RETURN 的 clinit。
+MethodNode* ensureClinit(CompilerClass& clazz)
+{
+    for (auto* method : clazz.classNode->methods) {
+        if (method->name.to_std_string() == "<clinit>" && method->desc.to_std_string() == "()V") {
+            return method;
+        }
+    }
+    std::vector<Utf8StringRef> noExceptions;
+    auto* clinit = new MethodNode(Opcodes::ACC_STATIC,
+                                  ZUtf8StringRef::from_static("<clinit>"),
+                                  ZUtf8StringRef::from_static("()V"),
+                                  ZUtf8StringRef::from_static(""),
+                                  noExceptions);
+    clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+    clazz.classNode->methods.push_back(clinit);
+    return clinit;
+}
 
 void NativeLoaderPostprocessor::process(CompilerIndex& index)
 {
-    if (!index.isJarInput() || resourcePath_.empty()) return;
-    index.upsertJarResource(kLoaderEntry, buildNativeLoaderClass());
+    // 资源注入对 class 和 JAR 输出都需要；clinit 调用注入只在 JAR 场景有意义。
+    const bool needResource = !resourcePath_.empty();
+    const bool needClinit   = injectClinitCalls_ && index.isJarInput() && !resourcePath_.empty();
+    if (!needResource && !needClinit) return;
+
+    if (needResource) {
+        index.upsertJarResource(kLoaderEntry, buildNativeLoaderClass());
+    }
+
+    if (!needClinit) return;
+
+    // 对每个被后端改写过的非库类前插 NativeLoader.load 调用。
+    // 对齐原 RegC 行为：只有 clazz.modified 的类（至少一个方法成功编译成 native）
+    // 才需要运行时加载 native 库。
+    for (auto& [name, cls] : index.getClasses()) {
+        if (!cls.modified || cls.isLibrary || !cls.classNode) continue;
+        MethodNode* clinit = ensureClinit(cls);
+        native_loader::emitLoadCall(clinit, resourcePath_, tempSuffix_);
+    }
 }
 
 }   // namespace mj2x

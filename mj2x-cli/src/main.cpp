@@ -451,10 +451,7 @@ int main(int argc, char** argv)
         if (options.cBackendKind == CEmitterBackend::RegC) {
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             regcBackend->setOutputPath(options.cOutputPath);
-            if (jarNativeLoaderEnabled) {
-                regcBackend->setJarNativeLoaderResourcePath(
-                    nativeResourcePath, nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
-            }
+            // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
             pipeline.registerBackend(std::move(regcBackend));
         }
         else {
@@ -488,8 +485,14 @@ int main(int argc, char** argv)
         pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
     }
     if (jarNativeLoaderEnabled) {
-        pipeline.registerPostprocessor(
-            std::make_unique<mj2x::NativeLoaderPostprocessor>(nativeResourcePath));
+        // RegC 由 postprocessor 注入 clinit load 调用；StackC 因 RegisterNatives
+        // 绑定需自己重写 clinit，此处只注入资源（injectClinitCalls=false）。
+        const bool regcInjectsClinit = !options.cOutputPath.empty() &&
+                                       options.cBackendKind == CEmitterBackend::RegC;
+        pipeline.registerPostprocessor(std::make_unique<mj2x::NativeLoaderPostprocessor>(
+            nativeResourcePath,
+            nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix,
+            regcInjectsClinit));
     }
 
     int rc = pipeline.run();

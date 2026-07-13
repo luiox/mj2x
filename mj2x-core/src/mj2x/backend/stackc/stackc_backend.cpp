@@ -6,6 +6,7 @@
 #include "mj2x/codegen/include_set.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
+#include "mj2x/postprocessor/native_loader_call.hpp"
 
 #include <cassert>
 #include <cctype>
@@ -576,8 +577,6 @@ static constexpr const char* kRegisterBridgeMethodDesc    = "(ILjava/lang/Class;
 static constexpr const char* kRegisterBridgeCFunctionName = "_mj2x_register_for_class";
 static constexpr const char* kHiddenClinitMethodName      = "__mj2x_hiddenClinit";
 static constexpr const char* kHiddenClinitMethodDesc      = "(Ljava/lang/Class;)V";
-static constexpr const char* kNativeLoaderClassName       = "mj2x/runtime/NativeLoader";
-static constexpr const char* kNativeLoaderLoadDesc = "(Ljava/lang/String;Ljava/lang/String;)V";
 
 static std::string          hiddenClinitClassNameFor(const std::string& ownerClassName);
 static std::vector<uint8_t> makeHiddenClinitClassBytes(const std::string& hiddenClassName,
@@ -1151,14 +1150,17 @@ static void emitClassRegistrationCall(MethodNode* clinit, ca::str::Utf8StringRef
                                       const std::string& nativeLoaderResourcePath,
                                       const std::string& nativeLoaderTempSuffix, int classId)
 {
+    // NativeLoader.load 必须在 registerNativesForClass 之前执行（先加载 native 库
+    // 才能绑定 native 方法）。clinit 此时已被 protectClassInitializer 清空，故用
+    // add 顺序累积：load 指令在前，registerNatives 在后。
     if (!nativeLoaderResourcePath.empty()) {
         clinit->instructions.add(new LdcInsnNode(nativeLoaderResourcePath));
         clinit->instructions.add(new LdcInsnNode(nativeLoaderTempSuffix));
         clinit->instructions.add(
             new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               ca::str::ZUtf8StringRef::from_static(kNativeLoaderClassName),
+                               ca::str::ZUtf8StringRef::from_static(native_loader::kClassName),
                                ca::str::ZUtf8StringRef::from_static("load"),
-                               ca::str::ZUtf8StringRef::from_static(kNativeLoaderLoadDesc),
+                               ca::str::ZUtf8StringRef::from_static(native_loader::kLoadDesc),
                                false));
     }
     clinit->instructions.add(new LdcInsnNode(classId));

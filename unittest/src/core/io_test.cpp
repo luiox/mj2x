@@ -361,7 +361,8 @@ TEST(IOTest, NativeLoaderPostprocessorAddsLoaderClassResource)
 {
     CompilerIndex index;
     index.setJarInput(true);
-    NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll");
+    // 仅注入资源，不开 clinit 注入（对齐 StackC 场景）。
+    NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll", ".dll", false);
     postprocessor.process(index);
 
     ASSERT_EQ(index.jarEntries().size(), 1u);
@@ -372,6 +373,43 @@ TEST(IOTest, NativeLoaderPostprocessorAddsLoaderClassResource)
     auto                     loaderClass = readClassFromBytes(index.jarEntries()[0].data, arena);
     EXPECT_EQ(loaderClass->name.to_std_string(), "mj2x/runtime/NativeLoader");
     EXPECT_NE(findMethod(*loaderClass, "load"), nullptr);
+}
+
+TEST(IOTest, NativeLoaderPostprocessorInjectsClinitLoadCallForModifiedClasses)
+{
+    // 验证 RegC 路径的 clinit 注入：modified 且非 library 的类应在 <clinit>
+    // 头部前插 NativeLoader.load(resourcePath, tempSuffix) 调用。
+    CompilerIndex index;
+    index.setJarInput(true);
+
+    // 构造一个 modified 类（模拟 RegC injectIntoClass 后的状态）。
+    CompilerClass cls;
+    cls.classNode  = std::make_unique<ClassNode>();
+    cls.modified   = true;
+    cls.isLibrary  = false;
+    cls.classNode->name = index.arena().intern("test/Sample");
+    index.addClass("test/Sample", std::move(cls));
+
+    NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll", ".dll", true);
+    postprocessor.process(index);
+
+    CompilerClass* out = index.getClass("test/Sample");
+    ASSERT_NE(out, nullptr);
+    MethodNode* clinit = findMethod(*out->classNode, "<clinit>");
+    ASSERT_NE(clinit, nullptr);
+    // clinit 应含 NativeLoader.load 调用（INVOKESTATIC mj2x/runtime/NativeLoader.load）。
+    bool foundLoadCall = false;
+    for (auto* insn : clinit->instructions) {
+        if (insn->getOpcode() == Opcodes::INVOKESTATIC) {
+            auto* mi = static_cast<MethodInsnNode*>(insn);
+            if (mi->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
+                mi->name.to_std_string() == "load") {
+                foundLoadCall = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(foundLoadCall) << "modified class clinit missing NativeLoader.load call";
 }
 
 TEST(IOTest, CLoaderPostprocessorAddsDispatchLoaderClassResource)
