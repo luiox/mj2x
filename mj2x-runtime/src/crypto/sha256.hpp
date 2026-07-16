@@ -1,3 +1,16 @@
+/// @defgroup runtime_crypto 运行时加密原语
+///
+/// 为 R3 提供可移植加密底层。保持在 mj2x 内部，使保护样本不继承
+/// OpenSSL/Windows CNG/JDK provider 依赖。
+///
+/// ## 设计
+///
+/// 首个切片实现 SHA-256、HMAC-SHA256、AES-128 block 加密、AES-128 CTR XOR
+/// 和常量时间比较。SHA/HMAC 供给运行时内核的 HKDF 和资源验证。
+/// AES-CTR 为未来资源和字符串池格式提供无依赖的流原语。
+/// 模块是值导向的：调用者传入字节缓冲区并接收固定大小输出。
+/// 秘密材料的所有权和擦除保持在外部内核模块中。
+
 /**
  * @file sha256.hpp
  * @brief Small SHA-256 and HMAC-SHA256 primitives for the mj2x R3 runtime.

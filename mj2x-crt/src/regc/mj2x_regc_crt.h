@@ -1,3 +1,53 @@
+/// @defgroup regc_r3_abi RegC R3 运行时 ABI 与 Helper
+///
+/// RegC 是无栈后端（register-style），其生成的 C 不应在每处翻译单元中保持大型
+/// inline helper body。R3 运行时 ABI 是将选定 helper 语义移入可分发 `mj2x-crt`
+/// 源码包的边界。
+///
+/// ## R3 ABI 切片
+///
+/// 当前 ABI 切片保持小型：
+/// - 每条目 `mj2x_regc_context`
+/// - JVM 兼容整数除/余 helper
+/// - Java `ArithmeticException` 路由（通过生成的 adapter callback）
+/// - 运行时 barrier hook（预留给 anti-debug/anti-JVMTI/key 检查）
+/// - 基本类型 compare 和基本类型到 `String` 的 helper
+///
+/// 字段、数组、对象分配、方法调用和异常表分派仍使用现有生成的 helper 层，
+/// 将在后期移至运行时 ABI 后。
+///
+/// ## Context 所有权
+///
+/// 生成的 JNI wrapper 在调用无栈 RegC 函数体前初始化一个 `mj2x_regc_context`。
+/// context 存储 JVM 环境为不透明指针加上抛出 Java 异常的 callback。
+/// 运行时拥有 helper 语义，而非本地 JNI adapter 机制。
+///
+/// ## 可分发 ABI 边界
+///
+/// 公共权威是 `mj2x-crt/src/regc/mj2x_regc_crt.h`。公共契约属于该 header 的
+/// Doxygen 注释。生成的 RegC C 包含 `regc/mj2x_regc_crt.h` 并调用其 C99/JNI ABI。
+/// CLI 将 `mj2x-crt/resources.manifest` 中的每个条目复制到生成的 native 项目中，
+/// 其构建模板编译 CRT 源码。这是唯一支持的可分发运行时入口。
+///
+/// ## RegC Helper 层
+///
+/// Helper 调用是无栈 generated C 和 JVM 之间的第一个运行时 ABI。
+/// 当前 `RegCBackend` 将 helper 定义发射到生成的 C 翻译单元中。
+///
+/// MVP helper 层实现：
+/// - 对象分配（`AllocObject`）
+/// - 基本类型和对象数组分配/加载/存储
+/// - 数组长度
+/// - 实例/静态字段加载/存储（带 null 检查）
+/// - `checkcast`、`instanceof`、monitor enter/exit
+/// - 静态/虚/特殊/构造函数调用（通过 descriptor 驱动 `jvalue` 参数打包）
+/// - 多维数组分配（递归 JNI allocation）
+/// - 未捕获 `ATHROW` 传播
+/// - try/catch 分派（`_mj2x_regc_exception_check` 等 4 个 helper）
+/// - Java 整数除/余（CRT ABI 调用，带 `ArithmeticException`）
+/// - 运行时策略 barrier（`mj2x_regc_barrier`，当前 no-op）
+/// - 基本类型 compare 和 `Integer`/`Long`/`Boolean`/`Character` `toString`
+
 #pragma once
 
 #include <jni.h>

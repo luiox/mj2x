@@ -1,3 +1,19 @@
+/// @defgroup runtime_stringpool 运行时字符串池
+///
+/// 为 RegC 和保护样本提供第一个 R3 string-pool 解码器。
+/// 从生成的 native 代码中移除明文和静态 XOR 密钥。
+///
+/// ## 设计
+///
+/// 每个字符串条目有加密字节和标签。运行时使用 HKDF-SHA256 从运行时根密钥和条目
+/// 标签推导出每条目密钥流，然后与载荷 XOR。相同变换是对称的，因此测试和 fixture
+/// 生成可创建确定性的加密条目。
+///
+/// ## 边界
+///
+/// 当前格式有意保持小型：无压缩、无记录表 ABI、无认证元数据。
+/// 未来格式可在保持相同标签基密钥分离的同时添加这些特性。
+
 /**
  * @file string_pool.hpp
  * @brief Key-derived string-pool decoder for protected RegC/runtime samples.

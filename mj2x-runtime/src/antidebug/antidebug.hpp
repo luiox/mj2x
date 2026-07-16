@@ -1,3 +1,20 @@
+/// @defgroup runtime_antidebug 运行时 Anti-Debug
+///
+/// 为 R3 fail-closed 策略决策收集平台调试器信号。
+/// 补充 anti-JVMTI 检查；两个信号家族单独都不够强。
+///
+/// ## 设计
+///
+/// 模块返回简单信号结构而非抛出或退出。
+/// Windows 组合文档化调试器探测（`IsDebuggerPresent`、`CheckRemoteDebuggerPresent`）
+/// 与三个独立 native 表面：
+/// - PEB `BeingDebugged` 和 `NtGlobalFlag` heap 位
+/// - 动态解析的 `NtQueryInformationProcess` 查询
+/// - x86/x64 调试寄存器检查硬件断点
+///
+/// mockable 核心还暴露字节模式扫描（`0xCC`、`0xCD 0x03`）
+/// 和纯 NtGlobalFlag/调试寄存器谓词。
+
 /**
  * @file antidebug.hpp
  * @brief Platform anti-debug probes for the mj2x R3 runtime.

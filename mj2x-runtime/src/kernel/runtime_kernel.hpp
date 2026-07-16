@@ -1,3 +1,15 @@
+/// @defgroup runtime_kernel 运行时内核
+///
+/// 密钥派生、资源完整性和秘密内存卫生的小型共享运行时层。
+/// 其他运行时模块应使用它而不是各自发明本地密钥调度。
+///
+/// ## 设计
+///
+/// 使用 HKDF-SHA256 加显式 salt/input key material/info 字节。
+/// 使 RegC、string pool 和未来受保护资源拥有公共域分离模式，
+/// 同时保持测试确定性。HMAC 验证使用 crypto 模块的常量时间比较。
+/// 临时秘密缓冲区通过 volatile 字节存储清除。
+
 /**
  * @file runtime_kernel.hpp
  * @brief R3 runtime key-derivation and memory hygiene helpers.

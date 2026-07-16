@@ -1,3 +1,20 @@
+/// @defgroup runtime_antijvmti 运行时 Anti-JVMTI
+///
+/// 针对 c2j 风格 agent 使用的 JNI vtable hook 锚点。
+/// R3 需要一个运行时位置，generated native 代码可在此检测活跃 JNI 函数表
+/// 是否与捕获时不同。
+///
+/// ## 设计
+///
+/// 探测核心保持可 mock：快照不透明 `env->functions` 地址，后续比较当前地址。
+/// 参数扫描器识别常见 agent 启动选项和 JDWP/IDE 调试选项。
+///
+/// 存活切片添加参数扫描无法覆盖的信号：
+/// - 当前进程模块枚举匹配已知 attach/agent/dump 工具家族
+/// - `JavaVM::GetEnv(JVMTI_VERSION_1_2)` + `GetCapabilities`
+///
+/// Windows 模块收集使用 Toolhelp snapshot；Linux 解析 `/proc/self/maps`。
+
 /**
  * @file antijvmti.hpp
  * @brief Mockable anti-JVMTI probes for the R3 runtime.

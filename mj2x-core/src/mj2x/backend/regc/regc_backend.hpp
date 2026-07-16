@@ -1,3 +1,35 @@
+/// @defgroup regc_native_backend RegC Native Backend
+///
+/// 无栈 RegC 行的 native facade。连接共享 mj2x backend 接口到较新的
+/// SSA → RegIR → RegC 管线，使 RegC 可以开始替换旧的 operand-stack 形状
+/// StackC 表面。
+///
+/// ## 管线位置
+///
+/// ```text
+/// MethodNode → CodeConverter L1 → SSA → RegIR → RegC helper → JNI wrapper
+/// ```
+///
+/// RegCBackend 不直接翻译字节码。它从共享 Pipeline 接收 L1 block，
+/// 构建 SSA 和 RegIR，委托 RegCEmitter 生成无栈 helper 函数，
+/// 并附加 JNI 导出 wrapper。
+///
+/// ## 输出形状
+///
+/// 每个成功的方法生成两层：
+/// - 静态 `regc_*` helper（使用虚拟寄存器 local，如 `r0`）
+/// - `JNIEXPORT Java_*` wrapper（将 JNI 参数转为 helper 参数）
+///
+/// ## 失败策略
+///
+/// Lowering 和 emission 是 fail-closed。如果 SSA、RegIR 或 RegC 无法处理方法，
+/// 返回 `BackendResult::Kind::NONE` 且不标记 Java 方法为 native。
+///
+/// ## 运行时边界
+///
+/// 纯计算和控制流可通过生成的 JNI wrapper 执行；
+/// 对象/字段/数组/monitor/类型检查操作降低为 `_mj2x_regc_*` helper 调用。
+
 /**
  * @file regc_backend.hpp
  * @brief Native backend facade for the Register-C pipeline.
