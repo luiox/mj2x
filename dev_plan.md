@@ -12,6 +12,11 @@
 
 ## 待办
 
+- [ ] **Native 后端与产物扩展**:在 --emit-cpp reserved CLI 入口之后,按小切片扩展 C++17 和可选 LLVM IR 输出,不改变 StackC/RegC 的既有承诺。
+  - 产物契约:把 BackendResult::C_SOURCE、--emit-c、.c 路径和 compileCSource 中的语言假设抽成显式 artifact/source-language contract,保留现有 C99 默认行为和 fail-closed 诊断。
+  - C++17 输出:复用 L1 MIR -> SSA -> RegIR 和 RegC lowering,只新增 C++ emitter/dialect、.cpp 工程模板以及 MSVC/clang++/g++ 编译路径;继续通过 mj2x-crt C ABI 交互,不复制一套 JNI 语义。
+  - LLVM IR 实验后端:从 RegIR 发射 textual .ll,通过显式 opt-in 的外部 clang/llc 工具链编译,不把 LLVM 作为默认构建依赖;第一批只覆盖纯计算和控制流,对象/JNI/异常/monitor 在有设计和 E2E 前保持 fail closed。
+  - 验收:每种产物必须有 CLI 负路径、结构断言、native E2E、Java baseline 对照和跨工具链记录;保护收益由 mjdbg weakness report 验证,不能仅凭输出语言宣称增强。
 - [ ] **mj2x 持续优化专项(大计划)**:围绕 #467/#468/#471 继续按“小批次、可结构断言、可 native E2E、可 benchmark”的节奏推进,避免一次性扩大语义面。
   - 阶段 A:基线收口。以 #472 合入后的 String intrinsic 为起点,保持 discarded-return、空串 fast path、String read hot path、embedded xmake CRT 资源和现有 RegC cache pool 回归稳定;每轮都跑 `mj2x_unittest`/`mj2x_runtime_test`/CLI 生成器 smoke。
   - 阶段 B:JNI cache CSE 深化(#467)。已完成 TU 级 method/field/class/static/instance cache 与固定异常类、String intrinsic class、编译期 allocation descriptor cache、multi-array 子 descriptor cache,并删除 emitter 内嵌 StringBuilder helper;下一步只评估受限动态 descriptor cache,并用 cache symbol 数、生成 C 体积、C 编译耗时记录收益。

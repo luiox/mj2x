@@ -30,6 +30,7 @@ static void printUsage()
     printf("Options:\n");
     printf("  --config <file>           Load JSON options; command line values override it\n");
     printf("  --emit-c <file>            Output C source to file\n");
+    printf("  --emit-cpp <file>          Reserved C++17 source output (planned)\n");
     printf("  --backend <stackc|regc>    Select C emitter when --emit-c is used (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf(
@@ -56,6 +57,7 @@ struct CliOptions
     std::string              inputPath;
     std::string              outputPath;
     std::string              cOutputPath;
+    std::string              cppOutputPath;
     std::string              cmakeProjectDir;
     std::string              xmakeProjectDir;
     std::string              nativeAnnotation;
@@ -306,6 +308,8 @@ int main(int argc, char** argv)
             options.outputPath = argv[++i];
         else if (arg == "--emit-c" && i + 1 < argc)
             options.cOutputPath = argv[++i];
+        else if (arg == "--emit-cpp" && i + 1 < argc)
+            options.cppOutputPath = argv[++i];
         else if (arg == "--native-annotation" && i + 1 < argc)
             options.nativeAnnotation = argv[++i];
         else if (arg == "--native-method-prefix" && i + 1 < argc) {
@@ -353,6 +357,16 @@ int main(int argc, char** argv)
 
     if (options.inputPath.empty() || options.outputPath.empty()) {
         printUsage();
+        return 1;
+    }
+
+    if (!options.cOutputPath.empty() && !options.cppOutputPath.empty()) {
+        fprintf(stderr, "--emit-c and --emit-cpp are mutually exclusive.\n");
+        return 1;
+    }
+    if (!options.cppOutputPath.empty()) {
+        fprintf(stderr,
+                "--emit-cpp is reserved for the planned C++17 backend and is not implemented yet.\n");
         return 1;
     }
 
