@@ -1,4 +1,4 @@
-// mj2x SSA IR — function 容器。
+﻿// mj2x SSA IR — function 容器。
 // 详见 doc/IR_DESIGN.md §2。owns 所有块、参数、value（块内指令 owns 其 result 的生命周期，
 // 但 Parameter/BlockArg/Literal 由 function 持有）。
 #pragma once
@@ -24,17 +24,15 @@ struct SSAFunctionSymbol
     SSAType              returnType = SSAType::UNKNOWN;
 };
 
-/**
- * @brief One SSA-level JVM exception-table region.
- *
- * @details
- * `protectedBlocks` preserves the L1 block range covered by the original
- * exception table entry.  `handler` is the block entered when RegC catches a
- * matching pending exception.  `exceptionValue` is a synthetic REF block
- * argument that represents the JVM handler-entry operand stack item; it uses
- * `kSSAExceptionObjectSlot` rather than a real local slot.  `caughtType` is the
- * JVM internal class name from the table, or empty for catch-all/finally.
- */
+/// @brief One SSA-level JVM exception-table region.
+///
+/// @details
+/// `protectedBlocks` preserves the L1 block range covered by the original
+/// exception table entry.  `handler` is the block entered when RegC catches a
+/// matching pending exception.  `exceptionValue` is a synthetic REF block
+/// argument that represents the JVM handler-entry operand stack item; it uses
+/// `kSSAExceptionObjectSlot` rather than a real local slot.  `caughtType` is the
+/// JVM internal class name from the table, or empty for catch-all/finally.
 struct SSAExceptionRegion
 {
     std::vector<SSABlock*> protectedBlocks;            ///< Blocks covered by this region.

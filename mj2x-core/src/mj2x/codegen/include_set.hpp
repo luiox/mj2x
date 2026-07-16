@@ -1,18 +1,16 @@
-/**
- * @file include_set.hpp
- * @brief Deduplicating include directive manager for generated C TUs.
- *
- * @details
- * Each generated translation unit previously hard-coded its `#include` block
- * as inline string literals scattered across `finalize` / `emitHelperPrelude`.
- * Adding a header meant remembering every emit site, and duplicate or
- * mis-ordered includes were easy to introduce.
- *
- * `IncludeSet` records system (`<jni.h>`) and project (`"regc/abi.hpp"`)
- * headers separately, deduplicates them, and renders a stable block with
- * system headers first.  Backends build the set during emission and render it
- * once when assembling the final source.
- */
+﻿/// @file include_set.hpp
+/// @brief Deduplicating include directive manager for generated C TUs.
+///
+/// @details
+/// Each generated translation unit previously hard-coded its `#include` block
+/// as inline string literals scattered across `finalize` / `emitHelperPrelude`.
+/// Adding a header meant remembering every emit site, and duplicate or
+/// mis-ordered includes were easy to introduce.
+///
+/// `IncludeSet` records system (`<jni.h>`) and project (`"regc/abi.hpp"`)
+/// headers separately, deduplicates them, and renders a stable block with
+/// system headers first.  Backends build the set during emission and render it
+/// once when assembling the final source.
 #pragma once
 
 #include <set>

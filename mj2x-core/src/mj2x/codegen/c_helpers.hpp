@@ -1,18 +1,16 @@
-/**
- * @file c_helpers.hpp
- * @brief Stateless helpers shared by the C/C++ emitting backends.
- *
- * @details
- * StackC and RegC each used to carry their own copy of the same string
- * helpers: C string escaping, JNI symbol mangling, type-display maps.  That
- * meant bug fixes had to land in two places and the two backends slowly
- * drifted.  This header is the single home for those stateless helpers so any
- * new C-emitting backend can reuse them.
- *
- * Everything here is header-only `inline` because the helpers are tiny and
- * stateless; pulling them into a .cpp would only add a build unit for no
- * isolation benefit.
- */
+﻿/// @file c_helpers.hpp
+/// @brief Stateless helpers shared by the C/C++ emitting backends.
+///
+/// @details
+/// StackC and RegC each used to carry their own copy of the same string
+/// helpers: C string escaping, JNI symbol mangling, type-display maps.  That
+/// meant bug fixes had to land in two places and the two backends slowly
+/// drifted.  This header is the single home for those stateless helpers so any
+/// new C-emitting backend can reuse them.
+///
+/// Everything here is header-only `inline` because the helpers are tiny and
+/// stateless; pulling them into a .cpp would only add a build unit for no
+/// isolation benefit.
 #pragma once
 
 #include <cctype>

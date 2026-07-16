@@ -1,10 +1,8 @@
-/**
- * @file regc_runtime_template.cpp
- * @brief RegC 运行时 C-source 定义发射（从 regc_backend.cpp 抽出，字节不变）。
- *
- * @details 见 regc_runtime_template.hpp。三个函数原先在 regc_backend.cpp 匿名
- * namespace，现搬到此处命名空间 mj2x 下，供 RegCBackend::finalize 调用。
- */
+﻿/// @file regc_runtime_template.cpp
+/// @brief RegC 运行时 C-source 定义发射（从 regc_backend.cpp 抽出，字节不变）。
+///
+/// @details 见 regc_runtime_template.hpp。三个函数原先在 regc_backend.cpp 匿名
+/// namespace，现搬到此处命名空间 mj2x 下，供 RegCBackend::finalize 调用。
 #include "mj2x/backend/regc/regc_runtime_template.hpp"
 #include "mj2x/codegen/c_source.hpp"
 

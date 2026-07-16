@@ -1,13 +1,11 @@
-/**
- * @file reg_instruction.hpp
- * @brief Register IR instruction families.
- *
- * @details
- * RegIR instructions mirror the stackless SSA operation families but replace
- * SSAValue pointers with RegOperand/RegValue records.  Block arguments are not
- * represented here; they are eliminated into RegCopy records attached to CFG
- * successor edges.
- */
+﻿/// @file reg_instruction.hpp
+/// @brief Register IR instruction families.
+///
+/// @details
+/// RegIR instructions mirror the stackless SSA operation families but replace
+/// SSAValue pointers with RegOperand/RegValue records.  Block arguments are not
+/// represented here; they are eliminated into RegCopy records attached to CFG
+/// successor edges.
 #pragma once
 
 #include "mj2x/mir/register_ir/reg_value.hpp"
@@ -37,27 +35,23 @@ enum class RegInstructionKind : uint8_t
     Barrier,
 };
 
-/**
- * @brief Explicit register copy used by phi/block-argument elimination.
- *
- * @details
- * Copies can appear as normal instructions for local rewrites or on successor
- * edges for branch-sensitive block argument transfers.
- */
+/// @brief Explicit register copy used by phi/block-argument elimination.
+///
+/// @details
+/// Copies can appear as normal instructions for local rewrites or on successor
+/// edges for branch-sensitive block argument transfers.
 struct RegCopy
 {
     RegValue   dest;
     RegOperand source;
 };
 
-/**
- * @brief One block-local RegIR instruction.
- *
- * @details
- * The active fields are selected by `kind`.  A compact tagged struct keeps the
- * model simple and avoids RTTI.  `hasDest` is false for stores, void calls,
- * barriers, monitor intrinsics, and other side-effect-only instructions.
- */
+/// @brief One block-local RegIR instruction.
+///
+/// @details
+/// The active fields are selected by `kind`.  A compact tagged struct keeps the
+/// model simple and avoids RTTI.  `hasDest` is false for stores, void calls,
+/// barriers, monitor intrinsics, and other side-effect-only instructions.
 struct RegInstruction
 {
     RegInstructionKind kind    = RegInstructionKind::Copy;

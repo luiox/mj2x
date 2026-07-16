@@ -1,7 +1,5 @@
-/**
- * @file code_snippet.hpp
- * @brief Typed source snippet rendering for C/C++ emitting backends.
- */
+﻿/// @file code_snippet.hpp
+/// @brief Typed source snippet rendering for C/C++ emitting backends.
 #pragma once
 
 #include <cstddef>

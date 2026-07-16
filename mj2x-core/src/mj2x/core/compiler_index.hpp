@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <jbytecode/jbytecode.hpp>
 #include <libca/str/utf8_string_arena.hpp>
@@ -50,16 +50,14 @@ struct CompilerField
     jbytecode::tree::FieldNode* fieldNode = nullptr;
 };
 
-/**
- * @brief Original JAR entry tracked for whole-archive input/output.
- *
- * @details
- * mj2x compiles class entries through `CompilerClass` but must preserve the
- * rest of the archive for MVP JAR round trips.  Each entry records its original
- * path and raw, decompressed payload.  Class entries also remember the internal
- * JVM class name so `OutputWriter` can replace their bytes after backend
- * injection while keeping non-class resources unchanged.
- */
+/// @brief Original JAR entry tracked for whole-archive input/output.
+///
+/// @details
+/// mj2x compiles class entries through `CompilerClass` but must preserve the
+/// rest of the archive for MVP JAR round trips.  Each entry records its original
+/// path and raw, decompressed payload.  Class entries also remember the internal
+/// JVM class name so `OutputWriter` can replace their bytes after backend
+/// injection while keeping non-class resources unchanged.
 struct JarEntryRecord
 {
     std::string         name;
@@ -108,42 +106,28 @@ class CompilerIndex
 public:
     using ClassMap = std::unordered_map<std::string, CompilerClass>;
 
-    /**
-     * @brief Add or replace a parsed class by internal JVM name.
-     */
+    /// @brief Add or replace a parsed class by internal JVM name.
     void addClass(const std::string& name, CompilerClass cls);
 
-    /**
-     * @brief Return a mutable class record, or null when absent.
-     */
+    /// @brief Return a mutable class record, or null when absent.
     CompilerClass* getClass(const std::string& name);
 
     ClassMap&       getClasses() { return classes_; }
     const ClassMap& getClasses() const { return classes_; }
 
-    /**
-     * @brief Mark this compilation as originating from a JAR archive.
-     */
+    /// @brief Mark this compilation as originating from a JAR archive.
     void setJarInput(bool value) { jarInput_ = value; }
 
-    /**
-     * @brief Whether output should preserve whole-archive JAR entry shape.
-     */
+    /// @brief Whether output should preserve whole-archive JAR entry shape.
     bool isJarInput() const { return jarInput_; }
 
-    /**
-     * @brief Append an original JAR entry to the output-preservation list.
-     */
+    /// @brief Append an original JAR entry to the output-preservation list.
     void addJarEntry(JarEntryRecord entry);
 
-    /**
-     * @brief Append or replace a generated JAR resource entry.
-     */
+    /// @brief Append or replace a generated JAR resource entry.
     void upsertJarResource(const std::string& name, std::vector<ca::u8> data);
 
-    /**
-     * @brief Ordered JAR entries used by `OutputWriter`.
-     */
+    /// @brief Ordered JAR entries used by `OutputWriter`.
     std::vector<JarEntryRecord>&       jarEntries() { return jarEntries_; }
     const std::vector<JarEntryRecord>& jarEntries() const { return jarEntries_; }
 

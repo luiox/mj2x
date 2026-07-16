@@ -1,4 +1,4 @@
-/// @defgroup regc_r3_abi RegC R3 运行时 ABI 与 Helper
+﻿/// @defgroup regc_r3_abi RegC R3 运行时 ABI 与 Helper
 ///
 /// RegC 是无栈后端（register-style），其生成的 C 不应在每处翻译单元中保持大型
 /// inline helper body。R3 运行时 ABI 是将选定 helper 语义移入可分发 `mj2x-crt`
@@ -62,13 +62,11 @@ typedef void* mj2x_ref;
 
 typedef void (*mj2x_regc_throw_callback)(void* env, const char* class_name, const char* message);
 
-/**
- * @brief Result code shared by the distributable RegC runtime ABI.
- *
- * `PENDING_EXCEPTION` means a JNI call has already raised a Java exception;
- * callers must preserve it instead of throwing a second exception.  Other
- * non-zero statuses can be bridged through `mj2x_regc_report_status`.
- */
+/// @brief Result code shared by the distributable RegC runtime ABI.
+///
+/// `PENDING_EXCEPTION` means a JNI call has already raised a Java exception;
+/// callers must preserve it instead of throwing a second exception.  Other
+/// non-zero statuses can be bridged through `mj2x_regc_report_status`.
 typedef enum mj2x_regc_status
 {
     MJ2X_REGC_STATUS_OK                = 0,
@@ -127,20 +125,16 @@ typedef struct mj2x_regc_instance_field_cache
     jfieldID    field;
 } mj2x_regc_instance_field_cache;
 
-/**
- * @brief Opaque UTF-16 StringBuilder state owned by mj2x-crt.
- *
- * The allocation and representation stay private so a later C++ source pack
- * can replace the implementation without changing generated-C call sites.
- */
+/// @brief Opaque UTF-16 StringBuilder state owned by mj2x-crt.
+///
+/// The allocation and representation stay private so a later C++ source pack
+/// can replace the implementation without changing generated-C call sites.
 typedef struct mj2x_string_builder mj2x_string_builder;
 
-/**
- * @brief 与 StringBuilder 共用 UTF-16 存储、但操作经过同步锁的 StringBuffer 状态。
- *
- * 该类型保持 opaque；调用方只能通过 `mj2x_string_buffer_*` ABI 访问。状态逃逸到
- * Java 时会物化为真实 `java.lang.StringBuffer`，调用方仍负责销毁 native 状态。
- */
+/// @brief 与 StringBuilder 共用 UTF-16 存储、但操作经过同步锁的 StringBuffer 状态。
+///
+/// 该类型保持 opaque；调用方只能通过 `mj2x_string_buffer_*` ABI 访问。状态逃逸到
+/// Java 时会物化为真实 `java.lang.StringBuffer`，调用方仍负责销毁 native 状态。
 typedef struct mj2x_string_builder mj2x_string_buffer;
 
 void    mj2x_regc_init_context(mj2x_regc_context* context, void* env,
@@ -176,12 +170,10 @@ mj2x_ref _mj2x_intrinsic_long_to_string(mj2x_regc_context* context, int64_t valu
 mj2x_ref _mj2x_intrinsic_bool_to_string(mj2x_regc_context* context, int8_t value);
 mj2x_ref _mj2x_intrinsic_char_to_string(mj2x_regc_context* context, uint16_t value);
 
-/**
- * @brief UTF-16 `java.lang.String` operations used by RegC intrinsics.
- *
- * These functions preserve Java UTF-16 code-unit behavior. Returned references
- * are JNI local references owned by the current native invocation.
- */
+/// @brief UTF-16 `java.lang.String` operations used by RegC intrinsics.
+///
+/// These functions preserve Java UTF-16 code-unit behavior. Returned references
+/// are JNI local references owned by the current native invocation.
 mj2x_regc_status mj2x_string_concat(mj2x_regc_context* context, mj2x_ref value, mj2x_ref suffix,
                                     mj2x_ref* out_string);
 mj2x_regc_status mj2x_string_substring_from(mj2x_regc_context* context, mj2x_ref value,
@@ -210,13 +202,11 @@ mj2x_regc_status mj2x_string_split(mj2x_regc_context* context, mj2x_ref value, m
 mj2x_regc_status mj2x_string_split_limit(mj2x_regc_context* context, mj2x_ref value, mj2x_ref regex,
                                          int32_t limit, mj2x_ref* out_array);
 
-/**
- * @brief Allocate or destroy an opaque StringBuilder state.
- *
- * `init_jstring` follows `StringBuilder(String)` and therefore reports a
- * `NullPointerException` for a null initial value.  `append_jstring`, like
- * Java `append(String)`, appends the literal `"null"` for a null value.
- */
+/// @brief Allocate or destroy an opaque StringBuilder state.
+///
+/// `init_jstring` follows `StringBuilder(String)` and therefore reports a
+/// `NullPointerException` for a null initial value.  `append_jstring`, like
+/// Java `append(String)`, appends the literal `"null"` for a null value.
 mj2x_regc_status mj2x_string_builder_init(mj2x_regc_context*    context,
                                           mj2x_string_builder** out_state);
 mj2x_regc_status mj2x_string_builder_init_jstring(mj2x_regc_context*    context,
@@ -229,9 +219,7 @@ mj2x_regc_status mj2x_string_builder_init_char_sequence(mj2x_regc_context*    co
                                                         mj2x_string_builder** out_state);
 void             mj2x_string_builder_destroy(mj2x_string_builder* state);
 
-/**
- * @brief Append Java UTF-16 code units without converting through UTF-8.
- */
+/// @brief Append Java UTF-16 code units without converting through UTF-8.
 mj2x_regc_status mj2x_string_builder_append_utf16(mj2x_regc_context*   context,
                                                   mj2x_string_builder* state, const uint16_t* units,
                                                   size_t length);
@@ -268,29 +256,23 @@ mj2x_regc_status mj2x_string_builder_append_f32(mj2x_regc_context*   context,
 mj2x_regc_status mj2x_string_builder_append_f64(mj2x_regc_context*   context,
                                                 mj2x_string_builder* state, double value);
 
-/**
- * @brief Materialize a UTF-16 snapshot as a local `java.lang.String` reference.
- */
+/// @brief Materialize a UTF-16 snapshot as a local `java.lang.String` reference.
 mj2x_regc_status mj2x_string_builder_to_jstring(mj2x_regc_context*         context,
                                                 const mj2x_string_builder* state,
                                                 mj2x_ref*                  out_jstring);
 
-/**
- * @brief Materialize a UTF-16 snapshot as a local `java.lang.StringBuilder`.
- *
- * This is the escape bridge for later lowering: it returns a real Java object
- * while preserving the opaque native state for the caller to destroy.
- */
+/// @brief Materialize a UTF-16 snapshot as a local `java.lang.StringBuilder`.
+///
+/// This is the escape bridge for later lowering: it returns a real Java object
+/// while preserving the opaque native state for the caller to destroy.
 mj2x_regc_status mj2x_string_builder_materialize(mj2x_regc_context*         context,
                                                  const mj2x_string_builder* state,
                                                  mj2x_ref*                  out_builder);
 
-/**
- * @brief 查询或修改 Java 可观察的 StringBuilder 长度、容量与 UTF-16 单元。
- *
- * 所有索引按 UTF-16 code unit 计算；越界和负长度通过 Java 异常桥接返回
- * `MJ2X_REGC_STATUS_PENDING_EXCEPTION`。
- */
+/// @brief 查询或修改 Java 可观察的 StringBuilder 长度、容量与 UTF-16 单元。
+///
+/// 所有索引按 UTF-16 code unit 计算；越界和负长度通过 Java 异常桥接返回
+/// `MJ2X_REGC_STATUS_PENDING_EXCEPTION`。
 mj2x_regc_status mj2x_string_builder_length(mj2x_regc_context*         context,
                                             const mj2x_string_builder* state, int32_t* out_length);
 mj2x_regc_status mj2x_string_builder_capacity(mj2x_regc_context*         context,
@@ -310,17 +292,13 @@ mj2x_regc_status mj2x_string_builder_set_char_at(mj2x_regc_context*   context,
                                                  mj2x_string_builder* state, int32_t index,
                                                  uint16_t value);
 
-/**
- * @brief Return the number of retained UTF-16 code units, or zero for null.
- */
+/// @brief Return the number of retained UTF-16 code units, or zero for null.
 size_t mj2x_string_builder_utf16_length(const mj2x_string_builder* state);
 
-/**
- * @brief 创建、操作和销毁带同步语义的 opaque StringBuffer 状态。
- *
- * 每个公开操作都持有状态内部锁；不同状态之间互不阻塞。销毁前调用方必须确保没有
- * 仍在执行的并发操作。
- */
+/// @brief 创建、操作和销毁带同步语义的 opaque StringBuffer 状态。
+///
+/// 每个公开操作都持有状态内部锁；不同状态之间互不阻塞。销毁前调用方必须确保没有
+/// 仍在执行的并发操作。
 mj2x_regc_status mj2x_string_buffer_init(mj2x_regc_context*   context,
                                          mj2x_string_buffer** out_state);
 mj2x_regc_status mj2x_string_buffer_init_jstring(mj2x_regc_context* context, mj2x_ref initial_value,

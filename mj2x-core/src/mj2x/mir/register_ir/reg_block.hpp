@@ -1,11 +1,9 @@
-/**
- * @file reg_block.hpp
- * @brief Register IR basic blocks and terminators.
- *
- * @details
- * RegBlock has no block-argument list.  SSA block arguments are lowered into
- * RegCopy transfers stored on the predecessor edge that supplies the value.
- */
+﻿/// @file reg_block.hpp
+/// @brief Register IR basic blocks and terminators.
+///
+/// @details
+/// RegBlock has no block-argument list.  SSA block arguments are lowered into
+/// RegCopy transfers stored on the predecessor edge that supplies the value.
 #pragma once
 
 #include "mj2x/mir/register_ir/reg_instruction.hpp"
@@ -82,15 +80,13 @@ struct RegBlock
     {}
 };
 
-/**
- * @brief One lowered JVM exception-table entry.
- *
- * @details
- * RegIR has no block arguments, so `exceptionValue` is the virtual register
- * corresponding to SSA's synthetic handler exception arg.  RegC assigns that
- * register immediately before jumping to `handler` after a successful
- * `_mj2x_regc_exception_matches` check.
- */
+/// @brief One lowered JVM exception-table entry.
+///
+/// @details
+/// RegIR has no block arguments, so `exceptionValue` is the virtual register
+/// corresponding to SSA's synthetic handler exception arg.  RegC assigns that
+/// register immediately before jumping to `handler` after a successful
+/// `_mj2x_regc_exception_matches` check.
 struct RegExceptionRegion
 {
     std::vector<RegBlock*> protectedBlocks;     ///< Blocks covered by the handler.

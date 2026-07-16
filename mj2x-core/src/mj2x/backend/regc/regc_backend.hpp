@@ -1,4 +1,4 @@
-/// @defgroup regc_native_backend RegC Native Backend
+﻿/// @defgroup regc_native_backend RegC Native Backend
 ///
 /// 无栈 RegC 行的 native facade。连接共享 mj2x backend 接口到较新的
 /// SSA → RegIR → RegC 管线，使 RegC 可以开始替换旧的 operand-stack 形状
@@ -30,19 +30,17 @@
 /// 纯计算和控制流可通过生成的 JNI wrapper 执行；
 /// 对象/字段/数组/monitor/类型检查操作降低为 `_mj2x_regc_*` helper 调用。
 
-/**
- * @file regc_backend.hpp
- * @brief Native backend facade for the Register-C pipeline.
- *
- * @details
- * RegCBackend adapts the stackless RegC emitter to the shared mj2x Backend
- * interface.  It lowers one method through SSA and RegIR, emits the register
- * helper function, then wraps that helper in a JNI-exported native method and
- * marks the original Java method as native.  The current helper ABI is emitted
- * inline into the generated translation unit so RegC samples are executable
- * while the longer-term R3 runtime symbol/context boundary is still being
- * hardened.
- */
+/// @file regc_backend.hpp
+/// @brief Native backend facade for the Register-C pipeline.
+///
+/// @details
+/// RegCBackend adapts the stackless RegC emitter to the shared mj2x Backend
+/// interface.  It lowers one method through SSA and RegIR, emits the register
+/// helper function, then wraps that helper in a JNI-exported native method and
+/// marks the original Java method as native.  The current helper ABI is emitted
+/// inline into the generated translation unit so RegC samples are executable
+/// while the longer-term R3 runtime symbol/context boundary is still being
+/// hardened.
 #pragma once
 
 #include "mj2x/backend/backend.hpp"
@@ -52,17 +50,15 @@
 
 namespace mj2x {
 
-/**
- * @brief Backend that emits JNI-native C using the SSA -> RegIR -> RegC path.
- *
- * @details
- * The backend owns no bytecode conversion logic itself.  The shared Pipeline
- * still supplies L1 MIR blocks; RegCBackend builds SSA and RegIR from those
- * blocks, delegates stackless C generation to RegCEmitter, and appends a JNI
- * wrapper with javah-compatible symbol naming.  Methods that cannot be lowered
- * fail closed and are not injected as native methods; this prevents partially
- * translated bytecode from being replaced by a broken native stub.
- */
+/// @brief Backend that emits JNI-native C using the SSA -> RegIR -> RegC path.
+///
+/// @details
+/// The backend owns no bytecode conversion logic itself.  The shared Pipeline
+/// still supplies L1 MIR blocks; RegCBackend builds SSA and RegIR from those
+/// blocks, delegates stackless C generation to RegCEmitter, and appends a JNI
+/// wrapper with javah-compatible symbol naming.  Methods that cannot be lowered
+/// fail closed and are not injected as native methods; this prevents partially
+/// translated bytecode from being replaced by a broken native stub.
 class RegCBackend : public Backend
 {
 public:
@@ -79,24 +75,20 @@ public:
 
     void finalize(const CompilerIndex& index) override;
 
-    /**
-     * @brief Set a `.c` output path written during finalize.
-     *
-     * @details
-     * Pipeline and E2E tests use this to compile the generated translation unit
-     * into a native library.  When empty, finalize still records
-     * `generatedSource()` but does not write a file.
-     */
+    /// @brief Set a `.c` output path written during finalize.
+    ///
+    /// @details
+    /// Pipeline and E2E tests use this to compile the generated translation unit
+    /// into a native library.  When empty, finalize still records
+    /// `generatedSource()` but does not write a file.
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
 
-    /**
-     * @brief Full generated C translation unit after finalize.
-     *
-     * @details
-     * The source includes helper declarations/definitions, one RegC helper per
-     * successfully lowered method, and the JNI wrappers used to bind those
-     * helpers back to the protected Java class.
-     */
+    /// @brief Full generated C translation unit after finalize.
+    ///
+    /// @details
+    /// The source includes helper declarations/definitions, one RegC helper per
+    /// successfully lowered method, and the JNI wrappers used to bind those
+    /// helpers back to the protected Java class.
     const std::string& generatedSource() const { return sourceCode_; }
 
 private:

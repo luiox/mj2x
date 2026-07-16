@@ -1,18 +1,16 @@
-/**
- * @file c_source.hpp
- * @brief Indent-aware C source stream for backends that emit C/C++.
- *
- * @details
- * Generated C translation units used to be assembled by writing into a raw
- * `std::ostringstream` with hand-counted leading spaces (`out << "    ..."`).
- * That made indentation easy to drift, blocks hard to follow, and diffs noisy.
- *
- * `CSourceStream` owns the current indent level so emitters write logical
- * content (`emitLine`) instead of literal whitespace.  Raw fragments that must
- * not be re-indented (e.g. an externally formatted block) still have an escape
- * hatch via `emitRaw`.  The stream is a drop-in sink: callers flush it to a
- * string when the translation unit is complete.
- */
+﻿/// @file c_source.hpp
+/// @brief Indent-aware C source stream for backends that emit C/C++.
+///
+/// @details
+/// Generated C translation units used to be assembled by writing into a raw
+/// `std::ostringstream` with hand-counted leading spaces (`out << "    ..."`).
+/// That made indentation easy to drift, blocks hard to follow, and diffs noisy.
+///
+/// `CSourceStream` owns the current indent level so emitters write logical
+/// content (`emitLine`) instead of literal whitespace.  Raw fragments that must
+/// not be re-indented (e.g. an externally formatted block) still have an escape
+/// hatch via `emitRaw`.  The stream is a drop-in sink: callers flush it to a
+/// string when the translation unit is complete.
 #pragma once
 
 #include <sstream>

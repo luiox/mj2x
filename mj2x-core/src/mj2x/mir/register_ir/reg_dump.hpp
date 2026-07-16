@@ -1,7 +1,5 @@
-/**
- * @file reg_dump.hpp
- * @brief Text dump for Register IR tests and review.
- */
+﻿/// @file reg_dump.hpp
+/// @brief Text dump for Register IR tests and review.
 #pragma once
 
 #include "mj2x/mir/register_ir/reg_function.hpp"

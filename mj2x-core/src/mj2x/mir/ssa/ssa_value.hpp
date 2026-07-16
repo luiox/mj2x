@@ -1,13 +1,11 @@
-/**
- * @file ssa_value.hpp
- * @brief SSA value hierarchy shared by parameters, block args, literals, and instruction results.
- *
- * @details
- * SSAValue is the operand currency of mj2x's stackless IR.  A non-literal value
- * has a stable id inside its SSAFunction and can be referenced many times after
- * a single definition.  Literal values are owned by SSAFunction as interned
- * constants and intentionally do not consume normal value ids.
- */
+﻿/// @file ssa_value.hpp
+/// @brief SSA value hierarchy shared by parameters, block args, literals, and instruction results.
+///
+/// @details
+/// SSAValue is the operand currency of mj2x's stackless IR.  A non-literal value
+/// has a stable id inside its SSAFunction and can be referenced many times after
+/// a single definition.  Literal values are owned by SSAFunction as interned
+/// constants and intentionally do not consume normal value ids.
 #pragma once
 
 #include "ssa_ids.hpp"
@@ -54,14 +52,12 @@ enum class SSAValueKind : uint8_t
     Opaque,
 };
 
-/**
- * @brief Base class for every SSA operand.
- *
- * @details
- * Parameters, block args, instruction results, and opaque values receive stable
- * ids.  Literals are still SSAValue operands but may leave `id` empty because
- * they are printed and consumed by immediate value.
- */
+/// @brief Base class for every SSA operand.
+///
+/// @details
+/// Parameters, block args, instruction results, and opaque values receive stable
+/// ids.  Literals are still SSAValue operands but may leave `id` empty because
+/// they are printed and consumed by immediate value.
 struct SSAValue
 {
     SSAValueKind valueKind;
@@ -79,14 +75,12 @@ struct SSAValue
     virtual ~SSAValue() = default;
 };
 
-/**
- * @brief Method entry parameter.
- *
- * @details
- * `index` is the JVM local slot, not the ordinal parameter number.  Instance
- * methods therefore bind `this` at slot 0, and category-2 `long`/`double`
- * parameters leave the expected one-slot gap before the next parameter.
- */
+/// @brief Method entry parameter.
+///
+/// @details
+/// `index` is the JVM local slot, not the ordinal parameter number.  Instance
+/// methods therefore bind `this` at slot 0, and category-2 `long`/`double`
+/// parameters leave the expected one-slot gap before the next parameter.
 struct SSAParameter : SSAValue
 {
     uint32_t index = 0;   ///< JVM local slot index.
@@ -99,17 +93,15 @@ struct SSAParameter : SSAValue
     {}
 };
 
-/**
- * @brief Block entry parameter representing an implicit phi.
- *
- * @details
- * Every predecessor passes one value for each block arg through its successor
- * edge. Non-negative `slot` values record the JVM local slot whose reaching
- * definitions forced the argument to exist. `kSSAExceptionObjectSlot` is the
- * synthetic handler-entry exception object. `ssaStackValueSlot(depth)` records
- * a StackMapTable operand-stack value at block entry, used by javac shapes such
- * as ternary joins where branches push a value and the join block consumes it.
- */
+/// @brief Block entry parameter representing an implicit phi.
+///
+/// @details
+/// Every predecessor passes one value for each block arg through its successor
+/// edge. Non-negative `slot` values record the JVM local slot whose reaching
+/// definitions forced the argument to exist. `kSSAExceptionObjectSlot` is the
+/// synthetic handler-entry exception object. `ssaStackValueSlot(depth)` records
+/// a StackMapTable operand-stack value at block entry, used by javac shapes such
+/// as ternary joins where branches push a value and the join block consumes it.
 struct SSABlockArg : SSAValue
 {
     int slot = 0;   ///< Local slot, exception slot, or synthetic stack-map slot.
@@ -168,14 +160,12 @@ struct SSANullLiteral : SSAValue
     {}
 };
 
-/**
- * @brief Conservative value for modeled-later JVM objects or undefined inputs.
- *
- * @details
- * Opaque values keep SSA construction total for inputs such as LDC String or
- * defensive undefined-local fallbacks while still making the dump visibly
- * different from a real computed value.
- */
+/// @brief Conservative value for modeled-later JVM objects or undefined inputs.
+///
+/// @details
+/// Opaque values keep SSA construction total for inputs such as LDC String or
+/// defensive undefined-local fallbacks while still making the dump visibly
+/// different from a real computed value.
 struct SSAOpaqueValue : SSAValue
 {
     std::string tag;   // 调试用（如 "ldc_string", "undef_local_3"）

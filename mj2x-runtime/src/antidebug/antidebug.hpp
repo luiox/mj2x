@@ -1,4 +1,4 @@
-/// @defgroup runtime_antidebug 运行时 Anti-Debug
+﻿/// @defgroup runtime_antidebug 运行时 Anti-Debug
 ///
 /// 为 R3 fail-closed 策略决策收集平台调试器信号。
 /// 补充 anti-JVMTI 检查；两个信号家族单独都不够强。
@@ -15,16 +15,14 @@
 /// mockable 核心还暴露字节模式扫描（`0xCC`、`0xCD 0x03`）
 /// 和纯 NtGlobalFlag/调试寄存器谓词。
 
-/**
- * @file antidebug.hpp
- * @brief Platform anti-debug probes for the mj2x R3 runtime.
- *
- * @details
- * The module reports observable debugger signals without deciding policy.
- * Callers can combine the returned flags with anti-JVMTI and resource HMAC
- * checks to fail closed.  Windows uses documented debugger probes in this first
- * slice; unsupported platforms return a clean "not detected" result.
- */
+/// @file antidebug.hpp
+/// @brief Platform anti-debug probes for the mj2x R3 runtime.
+///
+/// @details
+/// The module reports observable debugger signals without deciding policy.
+/// Callers can combine the returned flags with anti-JVMTI and resource HMAC
+/// checks to fail closed.  Windows uses documented debugger probes in this first
+/// slice; unsupported platforms return a clean "not detected" result.
 #pragma once
 
 #include <cstddef>
@@ -51,38 +49,30 @@ struct DebugSignals
     bool nativeProbeFailed                = false;
 };
 
-/**
- * @brief Collect platform debugger signals.
- *
- * @return Debug signal flags.  All fields are false when the platform probe is
- * unavailable.
- */
+/// @brief Collect platform debugger signals.
+///
+/// @return Debug signal flags.  All fields are false when the platform probe is
+/// unavailable.
 DebugSignals collectDebugSignals();
 
-/**
- * @brief Check the Windows PEB NtGlobalFlag debugger-related heap bits.
- *
- * @details This helper is platform-neutral so snapshot mapping remains directly
- * testable without attaching a debugger.
- */
+/// @brief Check the Windows PEB NtGlobalFlag debugger-related heap bits.
+///
+/// @details This helper is platform-neutral so snapshot mapping remains directly
+/// testable without attaching a debugger.
 bool hasSuspiciousNtGlobalFlag(std::uint32_t ntGlobalFlag);
 
-/**
- * @brief Check whether x86/x64 debug registers describe an enabled breakpoint.
- */
+/// @brief Check whether x86/x64 debug registers describe an enabled breakpoint.
 bool hasEnabledHardwareBreakpoint(std::uintptr_t dr0, std::uintptr_t dr1, std::uintptr_t dr2,
                                   std::uintptr_t dr3, std::uintptr_t dr7);
 
-/**
- * @brief 扫描内存片段中是否存在常见软件断点指令。
- *
- * @param data 起始地址;允许为空,为空时返回 false。
- * @param size 可读字节数。
- * @return 检测到 `INT3`(`0xCC`) 或 `INT 3`(`0xCD 0x03`) 时返回 true。
- *
- * @note 该函数只做纯字节匹配,用于 mockable 单测和未来代码段探测的底层积木;
- *       不负责枚举模块或修改页保护。
- */
+/// @brief 扫描内存片段中是否存在常见软件断点指令。
+///
+/// @param data 起始地址;允许为空,为空时返回 false。
+/// @param size 可读字节数。
+/// @return 检测到 `INT3`(`0xCC`) 或 `INT 3`(`0xCD 0x03`) 时返回 true。
+///
+/// @note 该函数只做纯字节匹配,用于 mockable 单测和未来代码段探测的底层积木;
+///       不负责枚举模块或修改页保护。
 bool containsSoftwareBreakpoint(const void* data, std::size_t size);
 
 /// @brief Convenience predicate for any collected debugger signal.

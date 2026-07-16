@@ -1,25 +1,23 @@
-/**
- * @file intrinsic_wrapper.hpp
- * @brief JDK primitive wrapper-class intrinsic structs and accessors.
- *
- * @details
- * R3 runtime counterpart of the RegC JDK-intrinsic surface.  RegC-emitted code
- * recognizes calls such as `Integer.valueOf(I)` or `box.intValue()` and lowers
- * them to direct calls into this module instead of JNI method dispatch, so the
- * generated translation unit keeps the JVM boundary out of arithmetic on boxed
- * primitives.
- *
- * Each JDK wrapper class maps to a small plain-data struct that carries the
- * unboxed scalar.  This first slice models value semantics only: identity,
- * `equals`, `hashCode`, `toString`, and `parseInt` live in the String intrinsic
- * module because they need the JNI string boundary.  The Integer cache follows
- * the JDK [-128, 127] window through a pre-populated static array.
- *
- * All entry points are `extern "C"` with the `mj2x_intrinsic_` prefix so the
- * RegC emitter can name them from generated C without a C++ mangling
- * dependency.  Types use fixed-width `<cstdint>` aliases to match the existing
- * regc runtime ABI.
- */
+﻿/// @file intrinsic_wrapper.hpp
+/// @brief JDK primitive wrapper-class intrinsic structs and accessors.
+///
+/// @details
+/// R3 runtime counterpart of the RegC JDK-intrinsic surface.  RegC-emitted code
+/// recognizes calls such as `Integer.valueOf(I)` or `box.intValue()` and lowers
+/// them to direct calls into this module instead of JNI method dispatch, so the
+/// generated translation unit keeps the JVM boundary out of arithmetic on boxed
+/// primitives.
+///
+/// Each JDK wrapper class maps to a small plain-data struct that carries the
+/// unboxed scalar.  This first slice models value semantics only: identity,
+/// `equals`, `hashCode`, `toString`, and `parseInt` live in the String intrinsic
+/// module because they need the JNI string boundary.  The Integer cache follows
+/// the JDK [-128, 127] window through a pre-populated static array.
+///
+/// All entry points are `extern "C"` with the `mj2x_intrinsic_` prefix so the
+/// RegC emitter can name them from generated C without a C++ mangling
+/// dependency.  Types use fixed-width `<cstdint>` aliases to match the existing
+/// regc runtime ABI.
 #pragma once
 
 #include <cstdint>
@@ -78,14 +76,12 @@ struct mj2x_char
 
 // --- Integer ----------------------------------------------------------------
 
-/**
- * @brief `Integer.valueOf(int)`: returns the cached instance for [-128, 127].
- *
- * @details
- * The cache is a process-wide static table that mirrors the JDK lazily-built
- * `Integer.IntegerCache`.  Out-of-window values are returned as fresh value
- * structs; later GC work will attach heap ownership to those instances.
- */
+/// @brief `Integer.valueOf(int)`: returns the cached instance for [-128, 127].
+///
+/// @details
+/// The cache is a process-wide static table that mirrors the JDK lazily-built
+/// `Integer.IntegerCache`.  Out-of-window values are returned as fresh value
+/// structs; later GC work will attach heap ownership to those instances.
 mj2x_int mj2x_int_value_of(std::int32_t value);
 
 /// @brief `Integer.intValue()`.
@@ -133,13 +129,11 @@ double mj2x_double_double_value(mj2x_double box);
 
 // --- Boolean ----------------------------------------------------------------
 
-/**
- * @brief `Boolean.valueOf(boolean)`.
- *
- * @details
- * Mirrors the JDK preallocated TRUE/FALSE instances through two static slots so
- * callers that compare by value stay consistent regardless of the boxing site.
- */
+/// @brief `Boolean.valueOf(boolean)`.
+///
+/// @details
+/// Mirrors the JDK preallocated TRUE/FALSE instances through two static slots so
+/// callers that compare by value stay consistent regardless of the boxing site.
 mj2x_bool mj2x_bool_value_of(std::int8_t value);
 
 /// @brief `Boolean.booleanValue()`.

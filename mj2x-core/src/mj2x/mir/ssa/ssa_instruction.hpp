@@ -1,15 +1,13 @@
-/**
- * @file ssa_instruction.hpp
- * @brief Stackless SSA instruction families used inside SSABlock.
- *
- * @details
- * Instructions model non-control-transfer work only; block exits live in
- * `ssa_terminator.hpp`.  Every instruction carries a tag instead of relying on
- * RTTI, and every result is represented as an SSAInstructionResult embedded in
- * the instruction object.  Calls, stores, barriers, and void intrinsics have no
- * result but still carry SSAEffect information so RegC and future passes can
- * preserve ordering around memory, resolution, and throwing operations.
- */
+﻿/// @file ssa_instruction.hpp
+/// @brief Stackless SSA instruction families used inside SSABlock.
+///
+/// @details
+/// Instructions model non-control-transfer work only; block exits live in
+/// `ssa_terminator.hpp`.  Every instruction carries a tag instead of relying on
+/// RTTI, and every result is represented as an SSAInstructionResult embedded in
+/// the instruction object.  Calls, stores, barriers, and void intrinsics have no
+/// result but still carry SSAEffect information so RegC and future passes can
+/// preserve ordering around memory, resolution, and throwing operations.
 #pragma once
 
 #include "ssa_effect.hpp"
@@ -82,15 +80,13 @@ enum class SSAConvertKind : uint8_t
     ReferenceCast
 };
 
-/**
- * @brief Base class for all block-local SSA instructions.
- *
- * @details
- * Operands are stored in concrete subclasses.  `result` is valid only when
- * `hasResult` is true; otherwise its id remains empty.  The `effect` field is
- * intentionally conservative for JVM operations that may resolve classes,
- * touch heap memory, call out to JNI/runtime helpers, or throw.
- */
+/// @brief Base class for all block-local SSA instructions.
+///
+/// @details
+/// Operands are stored in concrete subclasses.  `result` is valid only when
+/// `hasResult` is true; otherwise its id remains empty.  The `effect` field is
+/// intentionally conservative for JVM operations that may resolve classes,
+/// touch heap memory, call out to JNI/runtime helpers, or throw.
 struct SSAInstruction
 {
     SSAInstructionKind   kind;
@@ -139,14 +135,12 @@ struct SSACompareInstruction : SSAInstruction
     {}
 };
 
-/**
- * @brief Numeric conversion or runtime reference cast.
- *
- * @details
- * Numeric conversions lower JVM I2L/I2B/D2I-style opcodes.  ReferenceCast lowers
- * CHECKCAST and keeps `referenceTypeDesc` so RegC can emit the required runtime
- * class check instead of seeing only a generic REF result.
- */
+/// @brief Numeric conversion or runtime reference cast.
+///
+/// @details
+/// Numeric conversions lower JVM I2L/I2B/D2I-style opcodes.  ReferenceCast lowers
+/// CHECKCAST and keeps `referenceTypeDesc` so RegC can emit the required runtime
+/// class check instead of seeing only a generic REF result.
 struct SSAConvertInstruction : SSAInstruction
 {
     SSAConvertKind convertKind;
@@ -221,15 +215,13 @@ struct SSAMethodRef
     int         invokeOpcode = 0;   // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
 };
 
-/**
- * @brief JVM method invocation.
- *
- * @details
- * `args` are stored in source order.  For instance calls, args[0] is the
- * receiver followed by descriptor arguments; for static calls, args contains
- * only descriptor arguments.  This order is deliberately independent of JVM
- * stack pop order to make RegC call emission straightforward.
- */
+/// @brief JVM method invocation.
+///
+/// @details
+/// `args` are stored in source order.  For instance calls, args[0] is the
+/// receiver followed by descriptor arguments; for static calls, args contains
+/// only descriptor arguments.  This order is deliberately independent of JVM
+/// stack pop order to make RegC call emission straightforward.
 struct SSACallInstruction : SSAInstruction
 {
     SSAMethodRef           method;
@@ -247,14 +239,12 @@ enum class SSAAllocationKind : uint8_t
     MultiArray
 };
 
-/**
- * @brief Object or array allocation.
- *
- * @details
- * `typeDesc` is the internal class name for objects and a JVM array descriptor
- * for arrays.  `args` holds array dimensions/counts in source order; object
- * allocation has no args.
- */
+/// @brief Object or array allocation.
+///
+/// @details
+/// `typeDesc` is the internal class name for objects and a JVM array descriptor
+/// for arrays.  `args` holds array dimensions/counts in source order; object
+/// allocation has no args.
 struct SSAAllocateInstruction : SSAInstruction
 {
     SSAAllocationKind      allocationKind = SSAAllocationKind::Object;

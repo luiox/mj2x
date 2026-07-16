@@ -1,14 +1,12 @@
-/**
- * @file reg_value.hpp
- * @brief Register IR value and operand model.
- *
- * @details
- * RegIR is the L3 handoff between block-argument SSA and the future RegC
- * backend.  It deliberately has no JVM stack-slot operand kind: every computed
- * value is addressed by a virtual register, while literals remain immediates.
- * This keeps the structural "no cstack/sp anchor" property enforceable by the
- * type model instead of by post-hoc string filtering.
- */
+﻿/// @file reg_value.hpp
+/// @brief Register IR value and operand model.
+///
+/// @details
+/// RegIR is the L3 handoff between block-argument SSA and the future RegC
+/// backend.  It deliberately has no JVM stack-slot operand kind: every computed
+/// value is addressed by a virtual register, while literals remain immediates.
+/// This keeps the structural "no cstack/sp anchor" property enforceable by the
+/// type model instead of by post-hoc string filtering.
 #pragma once
 
 #include "mj2x/mir/ssa/ssa_type.hpp"
@@ -43,14 +41,12 @@ enum class RegOperandKind : uint8_t
     Opaque,
 };
 
-/**
- * @brief A source operand for RegIR instructions and edge transfers.
- *
- * @details
- * Opaque operands represent modeled-later JVM values such as String LDCs or
- * undefined defensive fallbacks.  They are still stackless: consumers must not
- * interpret their tag as a JVM local or stack position.
- */
+/// @brief A source operand for RegIR instructions and edge transfers.
+///
+/// @details
+/// Opaque operands represent modeled-later JVM values such as String LDCs or
+/// undefined defensive fallbacks.  They are still stackless: consumers must not
+/// interpret their tag as a JVM local or stack position.
 struct RegOperand
 {
     RegOperandKind kind = RegOperandKind::Opaque;

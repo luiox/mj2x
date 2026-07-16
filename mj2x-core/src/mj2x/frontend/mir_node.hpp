@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <jbytecode/jbytecode.hpp>
 #include <typed/cast.hpp>
@@ -12,15 +12,13 @@
 
 namespace mj2x {
 
-/**
- * @brief L1 MIR node kind.
- *
- * @details
- * L1 MIR keeps bytecode control flow and JVM operation families explicit while
- * hiding tree-node details from backends.  Stack-shape operations are preserved
- * as MIR nodes instead of being collapsed to NOP because the SSA builder needs
- * to apply JVM category-1/category-2 rules when it erases the operand stack.
- */
+/// @brief L1 MIR node kind.
+///
+/// @details
+/// L1 MIR keeps bytecode control flow and JVM operation families explicit while
+/// hiding tree-node details from backends.  Stack-shape operations are preserved
+/// as MIR nodes instead of being collapsed to NOP because the SSA builder needs
+/// to apply JVM category-1/category-2 rules when it erases the operand stack.
 enum class MIRKind : uint8_t
 {
     NOP,
@@ -420,19 +418,17 @@ struct MIRThrow : MIRNode
     {}
 };
 
-/**
- * @brief StackMapTable frame metadata kept for SSA block-entry stack args.
- *
- * @details
- * Most frame metadata remains verifier-only and is ignored by backends. The
- * operand-stack part is different: javac can split bytecode so a join block
- * starts with a value already on the JVM operand stack, for example ternary
- * expressions compiled as two branches that each push a value before `ireturn`.
- * SSA erases the construction-time stack, so CodeConverter preserves the
- * frame's stack item types here and SSABuilder turns them into synthetic block
- * arguments. Handler-entry exception objects are modeled separately from the
- * exception table and do not rely on these stack items.
- */
+/// @brief StackMapTable frame metadata kept for SSA block-entry stack args.
+///
+/// @details
+/// Most frame metadata remains verifier-only and is ignored by backends. The
+/// operand-stack part is different: javac can split bytecode so a join block
+/// starts with a value already on the JVM operand stack, for example ternary
+/// expressions compiled as two branches that each push a value before `ireturn`.
+/// SSA erases the construction-time stack, so CodeConverter preserves the
+/// frame's stack item types here and SSABuilder turns them into synthetic block
+/// arguments. Handler-entry exception objects are modeled separately from the
+/// exception table and do not rely on these stack items.
 struct MIRFrame : MIRNode
 {
     int                        frameType = 0;

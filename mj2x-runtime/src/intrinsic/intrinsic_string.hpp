@@ -1,4 +1,4 @@
-/// @defgroup string_intrinsic String/MutableString intrinsic 契约
+﻿/// @defgroup string_intrinsic String/MutableString intrinsic 契约
 ///
 /// 建立 RegC 运行时边界的 String/StringBuilder/StringBuffer intrinsic 集。
 /// 实现在 `mj2x-crt` 中拥有 UTF-16 状态，在逃逸点物化为真实 Java 对象，
@@ -43,16 +43,14 @@
 /// Native E2E 比较 range/capacity、escape-aware materialization、文字/regex split
 /// 和非法 regex 行为与 JDK 17 的一致性。
 
-/**
- * @file intrinsic_string.hpp
- * @brief String/StringBuilder intrinsic 的最小 UTF-16 垫片。
- *
- * @details
- * 这个头只定义 RegC 未来 String intrinsic 可以消费的 runtime-owned UTF-16
- * view 和 fail-closed 状态。它不表示 Java `jstring`,不做 GC,也不尝试实现
- * `StringBuilder` 的可变对象语义。emitter 只有在能证明字符串数据不逃逸且由
- * runtime 拥有时才允许调用这些函数。
- */
+/// @file intrinsic_string.hpp
+/// @brief String/StringBuilder intrinsic 的最小 UTF-16 垫片。
+///
+/// @details
+/// 这个头只定义 RegC 未来 String intrinsic 可以消费的 runtime-owned UTF-16
+/// view 和 fail-closed 状态。它不表示 Java `jstring`,不做 GC,也不尝试实现
+/// `StringBuilder` 的可变对象语义。emitter 只有在能证明字符串数据不逃逸且由
+/// runtime 拥有时才允许调用这些函数。
 #pragma once
 
 #include <cstddef>
@@ -77,40 +75,32 @@ struct mj2x_utf16_view
     std::size_t          length;
 };
 
-/**
- * @brief 创建 UTF-16 view。
- *
- * @param units UTF-16 code unit 起始地址;长度为 0 时允许为空。
- * @param length code unit 数量。
- * @return 可传给后续 String intrinsic 的 view。
- */
+/// @brief 创建 UTF-16 view。
+///
+/// @param units UTF-16 code unit 起始地址;长度为 0 时允许为空。
+/// @param length code unit 数量。
+/// @return 可传给后续 String intrinsic 的 view。
 mj2x_utf16_view mj2x_utf16_view_of(const std::uint16_t* units, std::size_t length);
 
-/**
- * @brief `String.length()` 的最小 native 语义。
- *
- * @param view runtime-owned UTF-16 view。
- * @param status 可为空;非空时写入状态。
- * @return 成功时返回 code unit 长度;失败时返回 0。
- */
+/// @brief `String.length()` 的最小 native 语义。
+///
+/// @param view runtime-owned UTF-16 view。
+/// @param status 可为空;非空时写入状态。
+/// @return 成功时返回 code unit 长度;失败时返回 0。
 std::int32_t mj2x_string_length(mj2x_utf16_view view, mj2x_string_status* status);
 
-/**
- * @brief `String.charAt(int)` 的最小 native 语义。
- *
- * @param view runtime-owned UTF-16 view。
- * @param index code unit 下标。
- * @param status 可为空;非空时写入状态。
- * @return 成功时返回 UTF-16 code unit;失败时返回 0。
- */
+/// @brief `String.charAt(int)` 的最小 native 语义。
+///
+/// @param view runtime-owned UTF-16 view。
+/// @param index code unit 下标。
+/// @param status 可为空;非空时写入状态。
+/// @return 成功时返回 UTF-16 code unit;失败时返回 0。
 std::uint16_t mj2x_string_char_at(mj2x_utf16_view view, std::size_t index,
                                   mj2x_string_status* status);
 
-/**
- * @brief StringBuilder/StringBuffer 当前统一 fail-closed 的状态码。
- *
- * @details 可变字符串涉及容量增长、逃逸、同步和对象物化,当前 R3 切片不实现。
- */
+/// @brief StringBuilder/StringBuffer 当前统一 fail-closed 的状态码。
+///
+/// @details 可变字符串涉及容量增长、逃逸、同步和对象物化,当前 R3 切片不实现。
 mj2x_string_status mj2x_stringbuilder_unsupported_status();
 
 }   // extern "C"
