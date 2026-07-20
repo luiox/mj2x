@@ -1601,6 +1601,29 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
             jt.target      = buildSuccessor(nextSb, fs, fn);
             sb->terminator = std::move(jt);
         }
+
+        // Exception-table entries are implicit CFG edges. Preserve the
+        // handler's local arguments using the frame that is live at this
+        // protected block; the synthetic exception stack argument is assigned
+        // by RegC from the pending JNI exception and is therefore omitted.
+        for (auto& region : fn.exceptionRegions) {
+            if (std::find(region.protectedBlocks.begin(), region.protectedBlocks.end(), sb) ==
+                region.protectedBlocks.end())
+                continue;
+
+            SSAExceptionEdge edge;
+            edge.protectedBlock = sb;
+            for (auto& arg : region.handler->args) {
+                if (&arg == region.exceptionValue) continue;
+                SSAValue* value = nullptr;
+                if (arg.slot >= 0 && arg.slot < static_cast<int>(fs.locals.size())) {
+                    value = fs.locals[arg.slot];
+                }
+                if (!value) value = fn.newOpaque(arg.type, "undef_exception_local");
+                edge.handlerArgs.push_back(value);
+            }
+            region.edges.push_back(std::move(edge));
+        }
     }
 
     // 建 entry 合成块：Jump 到真入口（L1 第一个块）。

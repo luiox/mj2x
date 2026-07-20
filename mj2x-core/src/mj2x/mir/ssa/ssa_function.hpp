@@ -24,6 +24,18 @@ struct SSAFunctionSymbol
     SSAType              returnType = SSAType::UNKNOWN;
 };
 
+/// @brief One exceptional CFG edge carrying handler local values.
+///
+/// @details
+/// The JVM exception table enters a handler without an ordinary terminator
+/// edge. The handler still needs the local-slot values that were live at the
+/// protected block, so the transfer is represented explicitly for lowering.
+struct SSAExceptionEdge
+{
+    SSABlock*             protectedBlock = nullptr;
+    std::vector<SSAValue*> handlerArgs;
+};
+
 /// @brief One SSA-level JVM exception-table region.
 ///
 /// @details
@@ -36,6 +48,7 @@ struct SSAFunctionSymbol
 struct SSAExceptionRegion
 {
     std::vector<SSABlock*> protectedBlocks;            ///< Blocks covered by this region.
+    std::vector<SSAExceptionEdge> edges;               ///< Local-value transfers per block.
     SSABlock*              handler        = nullptr;   ///< Handler entry block.
     SSABlockArg*           exceptionValue = nullptr;   ///< Synthetic caught-exception arg.
     std::string            caughtType;                 ///< Empty means catch-all/finally.

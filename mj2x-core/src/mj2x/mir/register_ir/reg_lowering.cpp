@@ -379,6 +379,33 @@ std::unique_ptr<RegFunction> RegLowering::lower(const SSAFunction& fn, std::stri
             }
             loweredRegion.protectedBlocks.push_back(blockIt->second);
         }
+        for (const auto& sourceEdge : sourceRegion.edges) {
+            auto protectedIt = blocks.find(sourceEdge.protectedBlock);
+            if (protectedIt == blocks.end()) {
+                reason = "SSA exception edge references unknown protected block";
+                return nullptr;
+            }
+            if (sourceEdge.handlerArgs.size() + 1 != sourceRegion.handler->args.size()) {
+                reason = "SSA exception edge handler argument count mismatch";
+                return nullptr;
+            }
+
+            RegExceptionRegion::Edge edge;
+            edge.protectedBlock = protectedIt->second;
+            size_t sourceIndex = 0;
+            for (const auto& handlerArg : sourceRegion.handler->args) {
+                if (&handlerArg == sourceRegion.exceptionValue) continue;
+                RegOperand source;
+                if (!mapValue(sourceEdge.handlerArgs[sourceIndex++], values, reason, source)) {
+                    return nullptr;
+                }
+                RegValue dest = regValueFor(handlerArg);
+                if (!sameRegister(source, dest)) {
+                    edge.copies.push_back(RegCopy{dest, source});
+                }
+            }
+            loweredRegion.edges.push_back(std::move(edge));
+        }
         reg->exceptionRegions.push_back(std::move(loweredRegion));
     }
 

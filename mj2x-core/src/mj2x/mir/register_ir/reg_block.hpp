@@ -89,7 +89,15 @@ struct RegBlock
 /// `_mj2x_regc_exception_matches` check.
 struct RegExceptionRegion
 {
+    /// @brief One exceptional edge's handler-local register transfers.
+    struct Edge
+    {
+        RegBlock*           protectedBlock = nullptr;
+        std::vector<RegCopy> copies;
+    };
+
     std::vector<RegBlock*> protectedBlocks;     ///< Blocks covered by the handler.
+    std::vector<Edge>       edges;              ///< Local-value transfers per block.
     RegBlock*              handler = nullptr;   ///< Handler entry block.
     RegValue               exceptionValue{};    ///< Register holding caught object.
     std::string            caughtType;          ///< Empty means catch-all/finally.

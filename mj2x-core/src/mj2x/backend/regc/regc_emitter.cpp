@@ -253,7 +253,10 @@ bool isStaticCall(const RegInstruction& ins)
 void collectExceptionRegisters(std::map<uint32_t, SSAType>&           regs,
                                const std::vector<RegExceptionRegion>& regions)
 {
-    for (const auto& region : regions) collectRegister(regs, region.exceptionValue);
+    for (const auto& region : regions) {
+        collectRegister(regs, region.exceptionValue);
+        for (const auto& edge : region.edges) collectCopies(regs, edge.copies);
+    }
 }
 
 void collectTerminatorRegisters(std::map<uint32_t, SSAType>& regs, const RegTerminator& terminator)
@@ -307,6 +310,9 @@ std::vector<SSAType> collectEdgeCopyTempTypes(const RegFunction& fn)
     std::vector<SSAType> temps;
     for (const auto& block : fn.blocks) {
         collectTerminatorEdgeCopyTempTypes(temps, block->terminator);
+    }
+    for (const auto& region : fn.exceptionRegions) {
+        for (const auto& edge : region.edges) collectEdgeCopyTempTypes(temps, edge.copies);
     }
     return temps;
 }
@@ -1627,16 +1633,18 @@ void emitDefaultReturnAfterException(std::ostringstream& out, SSAType returnType
     }
 }
 
-void emitExceptionDispatch(std::ostringstream&                           out,
+bool emitExceptionDispatch(std::ostringstream&                           out,
                            const std::vector<const RegExceptionRegion*>& regions,
-                           SSAType returnType, int& dispatchIndex)
+                           const RegBlock* block, SSAType returnType,
+                           RegCFunctionEmitState& state, int& dispatchIndex,
+                           int& edgeTempIndex, std::string& reason)
 {
     const int index = dispatchIndex++;
     out << "    if (_mj2x_regc_exception_check()) {\n";
     if (regions.empty()) {
         emitDefaultReturnAfterException(out, returnType);
         out << "    }\n";
-        return;
+        return true;
     }
     out << "        mj2x_ref ex_" << index << " = _mj2x_regc_exception_occurred();\n";
     out << "        _mj2x_regc_exception_clear();\n";
@@ -1645,6 +1653,11 @@ void emitExceptionDispatch(std::ostringstream&                           out,
     for (const auto* region : regions) {
         out << "        if (_mj2x_regc_exception_matches(ex_" << index << ", "
             << cStringLiteral(region->caughtType) << ")) {\n";
+        for (const auto& edge : region->edges) {
+            if (edge.protectedBlock != block) continue;
+            if (!emitEdgeCopies(out, edge.copies, state, edgeTempIndex, reason)) return false;
+            break;
+        }
         out << "            " << regName(region->exceptionValue.id) << " = ex_" << index << ";\n";
         out << "            goto block_b" << region->handler->id.value << ";\n";
         out << "        }\n";
@@ -1653,6 +1666,7 @@ void emitExceptionDispatch(std::ostringstream&                           out,
     out << "        _mj2x_regc_throw(ex_" << index << ");\n";
     emitDefaultReturnAfterException(out, returnType);
     out << "    }\n";
+    return true;
 }
 
 bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
@@ -2009,7 +2023,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
     return false;
 }
 
-bool emitTerminator(std::ostringstream& out, const RegTerminator& terminator, SSAType returnType,
+bool emitTerminator(std::ostringstream& out, const RegTerminator& terminator,
+                    const RegBlock* block, SSAType returnType,
                     const std::vector<const RegExceptionRegion*>& activeRegions,
                     RegCFunctionEmitState& state, int& dispatchIndex, int& edgeTempIndex,
                     std::string& reason)
@@ -2063,7 +2078,9 @@ bool emitTerminator(std::ostringstream& out, const RegTerminator& terminator, SS
                     if (objectState != nullptr && isMutableStringKind(objectState->kind)) {
                         std::string materializedExpression;
                         emitMaterializedStringBuilder(out, state, t.value, materializedExpression);
-                        emitExceptionDispatch(out, activeRegions, returnType, dispatchIndex);
+                        if (!emitExceptionDispatch(out, activeRegions, block, returnType, state,
+                                                   dispatchIndex, edgeTempIndex, reason))
+                            return false;
                         out << "    _mj2x_regc_result = " << materializedExpression << ";\n";
                     }
                     else {
@@ -2080,7 +2097,9 @@ bool emitTerminator(std::ostringstream& out, const RegTerminator& terminator, SS
             else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
                 if (!rejectNativeObjectEscape(state, t.value, "throw", reason)) return false;
                 out << "    _mj2x_regc_throw(" << operandExpr(t.value) << ");\n";
-                emitExceptionDispatch(out, activeRegions, returnType, dispatchIndex);
+                if (!emitExceptionDispatch(out, activeRegions, block, returnType, state,
+                                           dispatchIndex, edgeTempIndex, reason))
+                    return false;
                 if (returnType != SSAType::VOID)
                     out << "    _mj2x_regc_result = " << defaultValue(returnType) << ";\n";
                 out << "    goto _mj2x_regc_cleanup;\n";
@@ -2269,11 +2288,20 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
         for (const auto& ins : block->instructions) {
             if (!emitInstruction(body, ins, emitState, result.reason)) return result;
             if (ins.effect.mayThrow) {
-                emitExceptionDispatch(body, activeRegions, fn.symbol.returnType, dispatchIndex);
+                if (!emitExceptionDispatch(body,
+                                           activeRegions,
+                                           block.get(),
+                                           fn.symbol.returnType,
+                                           emitState,
+                                           dispatchIndex,
+                                           edgeTempIndex,
+                                           result.reason))
+                    return result;
             }
         }
         if (!emitTerminator(body,
                             block->terminator,
+                            block.get(),
                             fn.symbol.returnType,
                             activeRegions,
                             emitState,

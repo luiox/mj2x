@@ -617,6 +617,74 @@ TEST(RegCTest, EmitsTryCatchExceptionDispatch)
     expectNoStackAnchors(result.source);
 }
 
+TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
+{
+    auto start   = new LabelNode();
+    auto end     = new LabelNode();
+    auto handler = new LabelNode();
+    auto mn      = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        "monitorCatch",
+        "(Ljava/lang/Object;)I",
+        {
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new InsnNode(Opcodes::DUP),
+            new VarInsnNode(Opcodes::ASTORE, 1),
+            start,
+            new InsnNode(Opcodes::MONITORENTER),
+            new VarInsnNode(Opcodes::ALOAD, 1),
+            new InsnNode(Opcodes::MONITOREXIT),
+            end,
+            new InsnNode(Opcodes::ICONST_1),
+            new InsnNode(Opcodes::IRETURN),
+            handler,
+            new VarInsnNode(Opcodes::ASTORE, 2),
+            new VarInsnNode(Opcodes::ALOAD, 1),
+            new InsnNode(Opcodes::MONITOREXIT),
+            new VarInsnNode(Opcodes::ALOAD, 2),
+            new InsnNode(Opcodes::ATHROW),
+        },
+        2,
+        3);
+    mn->tryCatchBlocks.push_back(new TryCatchBlockNode(
+        start->label, end->label, handler->label, ca::str::Utf8StringRef::from_cstr("")));
+
+    CodeConverter converter;
+    auto          blocks = converter.convert(*mn);
+    SSABuilder    builder;
+    std::string   reason;
+    auto          ssa = builder.build(blocks,
+                             "InlineRegC",
+                             "monitorCatch",
+                             "(Ljava/lang/Object;)I",
+                             true,
+                             3,
+                             reason);
+    ASSERT_NE(ssa, nullptr) << reason;
+
+    RegLowering lowering;
+    auto        reg = lowering.lower(*ssa, reason);
+    ASSERT_NE(reg, nullptr) << reason;
+    ASSERT_FALSE(reg->exceptionRegions.empty());
+    ASSERT_FALSE(reg->exceptionRegions.front().edges.empty());
+    ASSERT_FALSE(reg->exceptionRegions.front().edges.front().copies.empty());
+
+    const RegId handlerLocal = reg->exceptionRegions.front().edges.front().copies.front().dest.id;
+    RegCEmitter emitter;
+    auto        result = emitter.emitFunction(*reg);
+    ASSERT_TRUE(result.ok) << result.reason;
+
+    const std::string handlerName = "r" + std::to_string(handlerLocal.value);
+    EXPECT_NE(result.source.find("void* " + handlerName + " = 0;"), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find(handlerName + " = edge_tmp_"), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_monitor_exit(" + handlerName + ")"),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
 TEST(RegCTest, EmitsIntegerDivRemHelpers)
 {
     std::string reason;
