@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "jdk_fixture.hpp"
 #include "test_helper.hpp"
 
 namespace fs = std::filesystem;
@@ -100,15 +101,8 @@ ExecResult runBat(const std::vector<std::string>& lines)
 
 fs::path findJdk()
 {
-    if (const char* home = std::getenv("JAVA_HOME"); home && *home) {
-        fs::path root(home);
-        if (fileExists(root / "bin" / "javac.exe") || fileExists(root / "bin" / "javac")) {
-            return root;
-        }
-    }
-    fs::path fallback = "C:/Users/Canrad/.jdks/corretto-17.0.5";
-    if (fileExists(fallback / "bin" / "javac.exe")) return fallback;
-    return {};
+    // 复用共享 JDK 探测（底层 libjdk_finder），替代硬编码作者机器路径的回落。
+    return test::jdk::probeJdk().javaHome;
 }
 
 Toolchain probeToolchain()

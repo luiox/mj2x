@@ -17,71 +17,21 @@
 #include <random>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
+#include "jdk_fixture.hpp"
+#include "jdk_finder/jdk_finder.hpp"
 #include "test_helper.hpp"
 
 namespace fs = std::filesystem;
 
+using namespace test::jdk;   // runBat / q / fileExists / ExecResult / JdkToolchain / probeJdk
+
 namespace {
 
-// ---- 工具：执行子进程，捕获 stdout+stderr 合并 ----
-struct ExecResult
-{
-    int         exitCode = -1;
-    std::string out;   // 合并的 stdout+stderr
-};
-
-// 通过临时 .bat 文件执行命令（绕开 cmd /C 引号解析的坑——含空格的绝对路径
-// 在 cmd /C "..." 下解析规则特殊，极易出错；写 bat 文件则按字面执行）。
-// bat 内容 = lines；返回合并输出。
-ExecResult runBat(const std::vector<std::string>& lines)
-{
-    ExecResult r;
-    // 临时 bat 放到 test/tmp，避免 cwd 影响。
-    fs::path tmpDir = test::getTempOutPath("mj2x_e2e_runbat.keep").parent_path();
-    fs::path bat =
-        tmpDir /
-        ("mj2x_e2e_" + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) +
-         "_" + std::to_string(std::rand()) + ".bat");
-    {
-        std::ofstream f(bat);
-        f << "@echo off\n";
-        f << "chcp 65001 >nul 2>&1\n";   // UTF-8 输出，避免中文系统 GBK 乱码
-        for (auto& l : lines) f << l << "\n";
-        f << "exit /b %errorlevel%\n";
-    }
-    std::string full = "\"" + bat.string() + "\" 2>&1";
-    FILE*       pipe =
-#ifdef _WIN32
-        _popen(full.c_str(), "rb");
-#else
-        popen(full.c_str(), "r");
-#endif
-    if (!pipe) {
-        r.out = "[runBat] _popen failed for: " + full;
-        return r;
-    }
-    char buf[4096];
-    while (size_t n = fread(buf, 1, sizeof(buf), pipe)) r.out.append(buf, n);
-#ifdef _WIN32
-    r.exitCode = _pclose(pipe);
-#else
-    r.exitCode = pclose(pipe);
-#endif
-    std::error_code ec;
-    fs::remove(bat, ec);
-    return r;
-}
-
-// 兼容旧调用：单行命令直接跑（少用，路径含空格时不可靠）。
-ExecResult runProc(const std::string& cmd)
-{
-    return runBat({cmd});
-}
-
 // ---- 工具链探测 ----
+// runBat / q / fileExists / ExecResult / probeJdk 复用 test::jdk（见上方 using namespace）。
+// 这里只保留 mj2x 特有的 Toolchain（在 JdkToolchain 之上加 mj2x-cli 和 vcvars64）。
 struct Toolchain
 {
     bool        available = false;
@@ -94,56 +44,22 @@ struct Toolchain
     fs::path    vcvars64;        // VS vcvars64.bat（设置 cl 的 INCLUDE/LIB 环境）
 };
 
-bool fileExists(const fs::path& p)
-{
-    std::error_code ec;
-    return fs::exists(p, ec);
-}
-
-fs::path findJdk()
-{
-    // 优先 JAVA_HOME；其次回落到 owner 提供的路径。
-    if (const char* home = std::getenv("JAVA_HOME"); home && *home) {
-        fs::path p = fs::path(home);
-        if (fileExists(p / "bin" / "javac.exe") || fileExists(p / "bin" / "javac")) return p;
-    }
-    fs::path fallback = "C:/Users/Canrad/.jdks/corretto-17.0.5";
-    if (fileExists(fallback / "bin" / "javac.exe")) return fallback;
-    return {};
-}
-
-fs::path findVcvars()
-{
-    // vswhere 定位 VS 安装根，再拼 vcvars64.bat。
-    fs::path vswhere = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe";
-    if (!fileExists(vswhere)) return {};
-    auto r = runBat({"\"" + vswhere.string() + "\" -latest -property installationPath"});
-    if (r.exitCode != 0) return {};
-    // 去尾部换行/空白
-    std::string path = r.out;
-    while (!path.empty() && (path.back() == '\r' || path.back() == '\n' || path.back() == ' '))
-        path.pop_back();
-    if (path.empty()) return {};
-    fs::path vcvars = fs::path(path) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat";
-    return fileExists(vcvars) ? vcvars : fs::path{};
-}
-
 Toolchain probeToolchain()
 {
     Toolchain tc;
-    tc.javac = findJdk();
-    if (tc.javac.empty()) {
-        tc.reason = "JAVA_HOME 未设置或 javac 不存在（探测 corretto-17.0.5 也失败）";
+    // JDK：test::jdk::probeJdk 底层走 libjdk_finder（JAVA_HOME→MORPHER_JDK_HOME→fallback），
+    // 并校验 jni.h（native 编译需要）。
+    ProbeOptions opts;
+    opts.requireJniHeader = true;
+    auto jdk = probeJdk(opts);
+    if (!jdk.available) {
+        tc.reason = jdk.reason;
         return tc;
     }
-    tc.java          = tc.javac / "bin" / "java.exe";
-    tc.javac         = tc.javac / "bin" / "javac.exe";
-    tc.jdkInclude    = tc.javac.parent_path().parent_path() / "include";
-    tc.jdkIncludeWin = tc.jdkInclude / "win32";
-    if (!fileExists(tc.jdkInclude / "jni.h")) {
-        tc.reason = "jni.h 不在 JDK include 下: " + tc.jdkInclude.string();
-        return tc;
-    }
+    tc.javac         = jdk.javac;
+    tc.java          = jdk.java;
+    tc.jdkInclude    = jdk.jdkInclude;
+    tc.jdkIncludeWin = jdk.jdkIncludeWin;
 
     tc.mj2xCli = test::getBuildTargetPath("mj2x-cli");
     if (!fileExists(tc.mj2xCli)) {
@@ -152,7 +68,8 @@ Toolchain probeToolchain()
         return tc;
     }
 
-    tc.vcvars64 = findVcvars();
+    // vcvars64：复用 libjdk_finder 的探测（VCToolsInstallDir→ProgramFiles 扫描）。
+    tc.vcvars64 = jdk_finder::findVcvarsAll();
     if (tc.vcvars64.empty()) {
         tc.reason = "未找到 VS vcvars64.bat（需要 MSVC 编译生成的 .c）";
         return tc;
@@ -160,16 +77,6 @@ Toolchain probeToolchain()
 
     tc.available = true;
     return tc;
-}
-
-// 把路径转成 cmd 友好的带引号字符串（Windows 路径含空格常见）。
-// 用反斜杠（cmd 原生分隔符），避免 cmd 把 "C:/..." 的 / 当开关解析报"卷标语法不正确"。
-std::string q(const fs::path& p)
-{
-    std::string s = p.string();
-    for (auto& c : s)
-        if (c == '/') c = '\\';
-    return "\"" + s + "\"";
 }
 
 // ---- E2E 框架 ----
@@ -262,11 +169,12 @@ protected:
         // 5. cl 编译 .c → <className>.dll（<clinit> 桥触发 RegisterNatives）。
         fs::path dll = dir / (className + ".dll");
         {
-            // 通过 vcvars64.bat 设置 cl 需要的 INCLUDE/LIB 环境。
+            // 通过 vcvarsall.bat 设置 cl 需要的 INCLUDE/LIB 环境（libjdk_finder 返回
+            // vcvarsall.bat，需带 x64 参数；产品侧 native_compiler.cpp 同样如此）。
             // cl /LD 生成 DLL；/Fe 指定输出名；/Fo 指定 .obj 输出目录（避免污染 cwd）；
             // /I 加 jni.h 头路径。
             auto r = runBat({
-                "call " + q(tc_.vcvars64) + " >nul",
+                "call " + q(tc_.vcvars64) + " x64 >nul",
                 "cl /nologo /LD /O2 /EHsc /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " + q(cFile) +
                     " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
             });

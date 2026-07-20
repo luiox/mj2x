@@ -76,7 +76,7 @@ target("mj2x-cli")
     set_kind("binary")
     set_group("mj2x")
 
-    add_deps("mj2x-core")
+    add_deps("mj2x-core", "libjdk_finder")
     add_packages("nlohmann_json")
 
     add_files("src/*.cpp")

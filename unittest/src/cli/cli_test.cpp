@@ -1,4 +1,4 @@
-﻿﻿#include <gmock/gmock.h>
+#include <gmock/gmock.h>
 
 #include <cstdlib>
 #include <cstdio>
@@ -1066,7 +1066,7 @@ TEST(CliTest, CompileFailsClearlyWhenJavaHomeMissing)
             " --compile",
     });
     EXPECT_NE(result.exitCode, 0);
-    EXPECT_NE(result.out.find("JAVA_HOME is not set"), std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("required to locate JNI headers"), std::string::npos) << result.out;
 }
 
 TEST(CliTest, CompileEmitsNativeLibraryWhenToolchainIsAvailable)

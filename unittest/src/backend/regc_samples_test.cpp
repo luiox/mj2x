@@ -18,6 +18,7 @@
 #include "mj2x/mj2x.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
+#include "jdk_fixture.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "test_helper.hpp"
 
@@ -162,21 +163,8 @@ ExecResult runScript(const std::vector<std::string>& lines)
 
 fs::path findJavac()
 {
-    if (const char* home = std::getenv("JAVA_HOME"); home && *home) {
-        fs::path root(home);
-#ifdef _WIN32
-        fs::path javac = root / "bin" / "javac.exe";
-#else
-        fs::path javac = root / "bin" / "javac";
-#endif
-        if (fileExists(javac)) return javac;
-    }
-
-    fs::path fallback      = "C:/Users/Canrad/.jdks/corretto-17.0.5";
-    fs::path fallbackJavac = fallback / "bin" / "javac.exe";
-    if (fileExists(fallbackJavac)) return fallbackJavac;
-
-    return {};
+    // 复用共享 JDK 探测（底层 libjdk_finder），替代硬编码作者机器路径的回落。
+    return test::jdk::probeJdk().javac;
 }
 
 Toolchain probeToolchain()

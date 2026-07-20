@@ -12,9 +12,10 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
+#include "jdk_fixture.hpp"
+#include "jdk_finder/jdk_finder.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
@@ -22,14 +23,12 @@
 
 namespace fs = std::filesystem;
 
+using namespace test::jdk;   // runBat / q / fileExists / ExecResult / JdkToolchain / probeJdk
+
 namespace {
 
-struct ExecResult
-{
-    int         exitCode = -1;
-    std::string out;
-};
-
+// mj2x RegC E2E 工具链：在 test::jdk::JdkToolchain 之上加 vcvars64（RegC 直接调库，
+// 不需要 mj2x-cli）。runBat / q / fileExists / ExecResult / probeJdk 复用 test::jdk。
 struct Toolchain
 {
     bool        available = false;
@@ -47,102 +46,24 @@ struct JavaCheck
     std::string expression;
 };
 
-bool fileExists(const fs::path& path)
-{
-    std::error_code ec;
-    return fs::exists(path, ec);
-}
-
-std::string q(const fs::path& path)
-{
-    std::string s = path.string();
-    for (auto& c : s) {
-        if (c == '/') c = '\\';
-    }
-    return "\"" + s + "\"";
-}
-
-ExecResult runBat(const std::vector<std::string>& lines)
-{
-    ExecResult result;
-    fs::path   tmpDir = test::getTempOutPath("mj2x_regc_e2e_run.keep").parent_path();
-    fs::path   script =
-        tmpDir /
-        ("mj2x_regc_e2e_" +
-         std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + ".bat");
-    {
-        std::ofstream out(script);
-        out << "@echo off\n";
-        out << "chcp 65001 >nul 2>&1\n";
-        for (const auto& line : lines) {
-            out << line << "\n";
-            out << "if errorlevel 1 exit /b %errorlevel%\n";
-        }
-        out << "exit /b %errorlevel%\n";
-    }
-
-    std::string cmd  = q(script) + " 2>&1";
-    FILE*       pipe = _popen(cmd.c_str(), "rb");
-    if (!pipe) {
-        result.out = "failed to run " + script.string();
-        return result;
-    }
-    char buffer[4096];
-    while (size_t n = fread(buffer, 1, sizeof(buffer), pipe)) {
-        result.out.append(buffer, n);
-    }
-    result.exitCode = _pclose(pipe);
-
-    std::error_code ec;
-    fs::remove(script, ec);
-    return result;
-}
-
-fs::path findJdk()
-{
-    if (const char* home = std::getenv("JAVA_HOME"); home && *home) {
-        fs::path root(home);
-        if (fileExists(root / "bin" / "javac.exe")) return root;
-    }
-    fs::path fallback = "C:/Users/Canrad/.jdks/corretto-17.0.5";
-    if (fileExists(fallback / "bin" / "javac.exe")) return fallback;
-    return {};
-}
-
-fs::path findVcvars()
-{
-    fs::path vswhere = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe";
-    if (!fileExists(vswhere)) return {};
-
-    auto probe = runBat({q(vswhere) + " -latest -property installationPath"});
-    if (probe.exitCode != 0) return {};
-    std::string path = probe.out;
-    while (!path.empty() && (path.back() == '\r' || path.back() == '\n' || path.back() == ' ')) {
-        path.pop_back();
-    }
-    if (path.empty()) return {};
-
-    fs::path vcvars = fs::path(path) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat";
-    return fileExists(vcvars) ? vcvars : fs::path{};
-}
-
 Toolchain probeToolchain()
 {
     Toolchain tc;
-    fs::path  jdk = findJdk();
-    if (jdk.empty()) {
-        tc.reason = "javac not found; set JAVA_HOME";
+    // JDK：test::jdk::probeJdk 底层走 libjdk_finder，并校验 jni.h。
+    ProbeOptions opts;
+    opts.requireJniHeader = true;
+    auto jdk = probeJdk(opts);
+    if (!jdk.available) {
+        tc.reason = jdk.reason;
         return tc;
     }
-    tc.javac         = jdk / "bin" / "javac.exe";
-    tc.java          = jdk / "bin" / "java.exe";
-    tc.jdkInclude    = jdk / "include";
-    tc.jdkIncludeWin = tc.jdkInclude / "win32";
-    if (!fileExists(tc.jdkInclude / "jni.h")) {
-        tc.reason = "jni.h not found under " + tc.jdkInclude.string();
-        return tc;
-    }
-    tc.vcvars64 = findVcvars();
+    tc.javac         = jdk.javac;
+    tc.java          = jdk.java;
+    tc.jdkInclude    = jdk.jdkInclude;
+    tc.jdkIncludeWin = jdk.jdkIncludeWin;
+
+    // vcvars64：复用 libjdk_finder 的探测。
+    tc.vcvars64 = jdk_finder::findVcvarsAll();
     if (tc.vcvars64.empty()) {
         tc.reason = "vcvars64.bat not found; MSVC is required";
         return tc;
@@ -274,7 +195,8 @@ protected:
         // remaining runtime sources only back non-CRT Math/Random/shadow
         // intrinsic surfaces.
         std::vector<std::string> compileLines;
-        compileLines.push_back("call " + q(tc_.vcvars64) + " >nul");
+        // vcvarsall.bat 需带 x64 参数（libjdk_finder 返回 vcvarsall.bat）。
+        compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
         compileLines.push_back("cl /nologo /O2 /c /Fo" + q(generatedObj) + " " + q(cFile) + " /I" +
                                q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
                                q(tc_.jdkIncludeWin));

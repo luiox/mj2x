@@ -27,6 +27,8 @@
 - [ ] **R5:mjdbg 闭环验证**。用 mjdbg / c2j 红队验证 RegC 保护强度,产出量化结论。前置:R3 RegC ABI live 验证 + mjdbg 样本反馈。
 - [ ] **RegC/R3 live 验证(剩余)**:保持现有 intrinsic(Math/wrapper parse/toString/compare/value-unbox/String.valueOf/Random/String UTF-16 hot paths)在统一 registry 内稳定;剩余工作优先是 Random escape 边界、unsupported reason、benchmark 和产品入口回归。#439 Math/Random 已有 runtime/emitter/sample 验证,可按验证结果关闭。
 - [ ] **RegC JNI cache CSE(后续)**:已完成 generated C TU 级 static/instance method、static/instance field、class cache interning,且 String intrinsic 的 `java/lang/String` class cache、固定异常类(`NullPointerException`/`ClassCastException`/`OutOfMemoryError`/`StringIndexOutOfBoundsException`/`UnsupportedOperationException`)、编译期 descriptor 的 `new`/reference-array allocation 和 multi-array 子 descriptor 已纳入统一 class cache pool;剩余评估动态 `_mj2x_regc_find_class`/runtime `class_name` 回调是否继续优化,并补 benchmark 对比。
+- [ ] **mtest_set RegC E2E 接入**:当前 `mtest_set/src/manifest/native_fixture_manifest.hpp` 的 16 条 case 仅含 StackC 后端。RegC 已声明支持纯计算/分支/switch/数组,需逐条实测后把 `NativeBackend::RegC` 追加到 backends,并新增 `regc_mtest_set_test.cpp` 消费。前置:确认 RegC 对 G1/G2/G5(非 NullCheck)/G8 的实际支持度。
+- [ ] **CI 接入 mtest_set + mj2x**:`.github/workflows/ci.yml` 当前未启用 `--with_mtest_set=y`,mj2x 因重依赖也不在 CI。需评估 Linux CI 上 JDK/MSVC 可用性后,把 mtest_set_unittest 与 mj2x_unittest 纳入 CI 矩阵,JDK/MSVC 缺失时走 GTEST_SKIP。
 
 ## 下一步验证命令
 

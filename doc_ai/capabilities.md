@@ -190,9 +190,23 @@ mj2x/
 | 用户注解包 | `mj2x/mj2x-annotations/` |
 | protected samples | `mj2x/test_resource/protected_samples/` |
 
+## 7. mtest_set 集成（跨产品共享样本）
+
+mj2x 消费 `mtest_set`（全仓库中性 Java 样本库）的 G1/G2/G5/G8 生成样本做 native 转换 E2E，
+建立与 mbase 等产品线的 opcode 覆盖对齐。
+
+- 桥梁：`mtest_set/src/manifest/native_fixture_manifest.hpp`（16 条 case，复用 mtest_set 生成器）
+- 消费：`mj2x/unittest/src/backend/stackc_mtest_set_test.cpp`（参数化 TEST_P，遍历 manifest）
+- 跨项目样本访问：`test_helper` 的 `getMtestSetPath` / `getMtestSetSample` 系列
+- JDK/MSVC 探测：统一走 `libs/libjdk_finder`（与 `mj2x-cli --compile` 共用，不再各自硬编码路径）
+- 覆盖映射：`doc_ai/jbc_sample_coverage.md`
+
+与 `stackc_backend_e2e_test.cpp`（28 个手写 inline Java case）互补：后者覆盖更广（含
+monitor/exception/invokedynamic 等），仍是主力；mtest_set 测试提供跨产品对齐的共享样本源。
+
 ---
 
-## 7. 验证入口
+## 8. 验证入口
 
 ```bash
 xmake build mj2x-core
@@ -208,7 +222,7 @@ tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 
 能力到测试的追溯见 `../doc_ai/mvp_backend_verification.md`。
 
-## 8. Validation maturity
+## 9. Validation maturity
 
 - 首切片：`script/validate_release.ps1 -Layer mj2x -Mode release` 覆盖 build、unit、CLI smoke，并产出 `build/artifacts/windows/x64/<mode>/mj2x/mj2x-windows-x64-<mode>.zip` 与 `SHA256SUMS`。
 - 尚未产品级：真实 protected sample corpus、跨 MSVC/GCC/Clang native compile gate、mjdbg observation report 仍需作为 release gate 固化。

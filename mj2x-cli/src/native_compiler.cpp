@@ -10,6 +10,8 @@
 #    include <sys/wait.h>
 #endif
 
+#include "jdk_finder/jdk_finder.hpp"
+
 namespace mj2x::cli {
 namespace {
 
@@ -47,20 +49,8 @@ std::string quotePath(const std::filesystem::path& path)
 #endif
 }
 
-int runQuiet(const std::string& command)
-{
-    return std::system(command.c_str());
-}
-
-bool commandExists(const std::string& command)
-{
-#ifdef _WIN32
-    return runQuiet("where " + command + " >nul 2>nul") == 0;
-#else
-    return runQuiet("command -v " + command + " >/dev/null 2>&1") == 0;
-#endif
-}
-
+/// 跨平台读环境变量（编译流程用：判断 INCLUDE 是否配置等）。JDK/工具链探测
+/// 已统一到 libjdk_finder，这里只保留编译命令构造需要的少量 env 读取。
 std::string envValue(const char* name)
 {
 #ifdef _WIN32
@@ -76,18 +66,40 @@ std::string envValue(const char* name)
 #endif
 }
 
+/// CCompilerKind → 可执行文件名（cl/gcc/clang），用于构造编译命令。
 const char* compilerExecutable(CCompilerKind compiler)
 {
     switch (compiler) {
-    case CCompilerKind::Msvc: return "cl";
-    case CCompilerKind::Gcc: return "gcc";
+    case CCompilerKind::Msvc:  return "cl";
+    case CCompilerKind::Gcc:   return "gcc";
     case CCompilerKind::Clang: return "clang";
-    case CCompilerKind::Auto: break;
+    case CCompilerKind::Auto:  break;
     }
     return "";
 }
 
-std::filesystem::path findVcvarsAll();
+/// mj2x::cli::CCompilerKind 与 jdk_finder::CCompilerKind 值一一对应，做透传映射。
+jdk_finder::CCompilerKind toFinderKind(CCompilerKind kind)
+{
+    switch (kind) {
+    case CCompilerKind::Msvc:  return jdk_finder::CCompilerKind::Msvc;
+    case CCompilerKind::Gcc:   return jdk_finder::CCompilerKind::Gcc;
+    case CCompilerKind::Clang: return jdk_finder::CCompilerKind::Clang;
+    case CCompilerKind::Auto:  break;
+    }
+    return jdk_finder::CCompilerKind::Auto;
+}
+
+CCompilerKind fromFinderKind(jdk_finder::CCompilerKind kind)
+{
+    switch (kind) {
+    case jdk_finder::CCompilerKind::Msvc:  return CCompilerKind::Msvc;
+    case jdk_finder::CCompilerKind::Gcc:   return CCompilerKind::Gcc;
+    case jdk_finder::CCompilerKind::Clang: return CCompilerKind::Clang;
+    case jdk_finder::CCompilerKind::Auto:  break;
+    }
+    return CCompilerKind::Auto;
+}
 
 std::string trim(std::string value)
 {
@@ -169,58 +181,16 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
 
 bool canUseMsvc()
 {
-    return commandExists("cl") || !findVcvarsAll().empty();
+    auto tc = jdk_finder::findNativeCompiler(jdk_finder::CCompilerKind::Msvc);
+    return tc.available;
 }
 
 bool detectCompiler(CCompilerKind requested, CCompilerKind& detected)
 {
-    if (requested != CCompilerKind::Auto) {
-        detected = requested;
-        if (requested == CCompilerKind::Msvc) return canUseMsvc();
-        return commandExists(compilerExecutable(detected));
-    }
-
-#ifdef _WIN32
-    bool hasCl             = commandExists("cl");
-    bool hasConfiguredMsvc = hasCl && !envValue("INCLUDE").empty();
-    bool hasVcvarsMsvc     = !hasConfiguredMsvc && !findVcvarsAll().empty();
-    if (hasConfiguredMsvc || hasVcvarsMsvc) {
-        detected = CCompilerKind::Msvc;
-        return true;
-    }
-    if (commandExists("clang")) {
-        detected = CCompilerKind::Clang;
-        return true;
-    }
-    if (commandExists("gcc")) {
-        detected = CCompilerKind::Gcc;
-        return true;
-    }
-    if (hasCl) {
-        detected = CCompilerKind::Msvc;
-        return true;
-    }
-#elif defined(__APPLE__)
-    if (commandExists("clang")) {
-        detected = CCompilerKind::Clang;
-        return true;
-    }
-    if (commandExists("gcc")) {
-        detected = CCompilerKind::Gcc;
-        return true;
-    }
-#else
-    if (commandExists("gcc")) {
-        detected = CCompilerKind::Gcc;
-        return true;
-    }
-    if (commandExists("clang")) {
-        detected = CCompilerKind::Clang;
-        return true;
-    }
-#endif
-
-    return false;
+    auto tc = jdk_finder::findNativeCompiler(toFinderKind(requested));
+    if (!tc.available) return false;
+    detected = fromFinderKind(tc.compiler);
+    return true;
 }
 
 std::filesystem::path nativeLibraryPath(const std::string& outputPath)
@@ -242,70 +212,23 @@ std::filesystem::path nativeLibraryPath(const std::string& outputPath)
 
 bool jniIncludePaths(std::vector<std::filesystem::path>& includes)
 {
-    std::string javaHomeValue = envValue("JAVA_HOME");
-    if (javaHomeValue.empty()) {
+    jdk_finder::FindOptions opts;
+    opts.requireJniHeader = true;
+    auto jdk = jdk_finder::findJdk(opts);
+    if (!jdk.available) {
         fprintf(stderr,
-                "[mj2x] ERROR: JAVA_HOME is not set; required to locate "
-                "JNI headers.\n");
+                "[mj2x] ERROR: %s; required to locate JNI headers.\n",
+                jdk.reason.c_str());
         return false;
     }
-
-    std::filesystem::path javaHome(javaHomeValue);
-    std::filesystem::path include = javaHome / "include";
-#ifdef _WIN32
-    std::filesystem::path platformInclude = include / "win32";
-#elif defined(__APPLE__)
-    std::filesystem::path platformInclude = include / "darwin";
-#else
-    std::filesystem::path platformInclude = include / "linux";
-#endif
-
-    std::error_code ec;
-    if (!std::filesystem::exists(include, ec) || !std::filesystem::exists(platformInclude, ec)) {
-        fprintf(stderr,
-                "[mj2x] ERROR: JNI include paths not found under JAVA_HOME: %s and "
-                "%s\n",
-                include.string().c_str(),
-                platformInclude.string().c_str());
-        return false;
-    }
-
-    includes.push_back(include);
-    includes.push_back(platformInclude);
+    includes.push_back(jdk.jdkInclude);
+    includes.push_back(jdk.jdkIncludePlat);
     return true;
-}
-
-std::filesystem::path vcvarsAllPathFromVCTools(const std::string& value)
-{
-    if (value.empty()) return {};
-    std::filesystem::path tools(value);
-    std::filesystem::path vcRoot = tools.parent_path().parent_path().parent_path();
-    std::filesystem::path vcvars = vcRoot / "Auxiliary" / "Build" / "vcvarsall.bat";
-    std::error_code       ec;
-    return std::filesystem::exists(vcvars, ec) ? vcvars : std::filesystem::path{};
 }
 
 std::filesystem::path findVcvarsAll()
 {
-    if (auto fromEnv = vcvarsAllPathFromVCTools(envValue("VCToolsInstallDir")); !fromEnv.empty())
-        return fromEnv;
-
-    std::vector<std::filesystem::path> roots;
-    if (auto programFiles = envValue("ProgramFiles"); !programFiles.empty())
-        roots.emplace_back(programFiles);
-    if (auto programFilesX86 = envValue("ProgramFiles(x86)"); !programFilesX86.empty())
-        roots.emplace_back(programFilesX86);
-
-    const char* editions[] = {"Community", "Professional", "Enterprise", "BuildTools"};
-    for (const auto& root : roots) {
-        for (const char* edition : editions) {
-            std::filesystem::path vcvars = root / "Microsoft Visual Studio" / "2022" / edition /
-                                           "VC" / "Auxiliary" / "Build" / "vcvarsall.bat";
-            std::error_code ec;
-            if (std::filesystem::exists(vcvars, ec)) return vcvars;
-        }
-    }
-    return {};
+    return jdk_finder::findVcvarsAll();
 }
 
 int systemExitCode(int rc)
