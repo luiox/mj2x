@@ -192,14 +192,14 @@ mj2x/
 
 ## 7. mtest_set 集成（跨产品共享样本）
 
-mj2x 消费 `mtest_set`（全仓库中性 Java 样本库）的 baseline 与 Wave 1
-（G3 类型转换/G6 方法调用/G7 字段）生成样本做 native 转换 E2E，建立双后端的
-opcode/语义覆盖对齐。
+mj2x 消费 `mtest_set`（全仓库中性 Java 样本库）的 baseline、Wave 1
+（G3 类型转换/G6 方法调用/G7 字段）和 Wave 2（G9 对象与类型/G10 异常与 monitor/
+G11 反射）生成样本做 native 转换 E2E，建立双后端的 opcode/语义覆盖对齐。
 
 - 中性事实源：`mtest_set/src/manifest/semantic_fixture_manifest.hpp`
 - 消费：`mj2x/unittest/src/integration/mtest_set_native_matrix_test.cpp`
 - 独立目标：`mj2x_integration_test`，不与 emitter/IR unit 混跑
-- 当前矩阵：13 条 fixture x StackC/RegC = 26 条真实 E2E；每条均走
+- 当前矩阵：18 条 fixture x StackC/RegC = 36 条真实 E2E；每条均走
   `mj2x-cli --compile`、native library、`java -Xverify:all` 和 stdout 精确比较
 - 跨项目样本访问：`test_helper` 的 `getMtestSetPath` / `getMtestSetSample` 系列
 - JDK/MSVC 探测：统一走 `libs/libjdk_finder`（与 `mj2x-cli --compile` 共用，不再各自硬编码路径）
@@ -208,7 +208,9 @@ opcode/语义覆盖对齐。
 与 `stackc_backend_e2e_test.cpp`（当前源码实际 30 个手写 inline Java case）互补：后者覆盖
 monitor/exception/invokedynamic 等更广形状；共享矩阵逐步接管可双后端比较的 case。
 Wave 1 首次运行发现并修复包内单 class 的 StackC cloader sidecar 错写到 package 子目录，
-现在统一输出到 classpath 根 `mj2x/cloader/Loader.class`。
+现在统一输出到 classpath 根 `mj2x/cloader/Loader.class`。Wave 2 首次运行发现并修复
+RegC exception handler local 未通过异常边传递的问题，`g10.monitor` 的异常释放路径现已
+完成 native/JVM 行为验证。
 
 ---
 

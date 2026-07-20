@@ -25,7 +25,7 @@
 | `frontend/code_converter_test` | **L1** 栈式 MIR | 18 | 保留（L1 基线）；Wave 6 补数组 component 元数据 |
 | `backend/stackc_backend_test.cpp` | StackC | 19 | 子串匹配；Wave 6 补 array/checkcast emit |
 | **`backend/stackc_backend_e2e_test.cpp`** ★新增 | **StackC 真 E2E** | 30 | 历史 inline case，见 §1.4 |
-| **`integration/mtest_set_native_matrix_test.cpp`** | **双后端真 E2E** | 26 | 13 个中性 fixture x StackC/RegC |
+| **`integration/mtest_set_native_matrix_test.cpp`** | **双后端真 E2E** | 36 | 18 个中性 fixture x StackC/RegC |
 | `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、StackC/RegC JAR 输入/输出入口、CMake 工程输出、负向参数、坏 JAR fail-closed |
 
 ### 1.2 各层测试目标（R1-R4 落地时补）
@@ -125,8 +125,10 @@ bootstrap + `MethodHandle.invokeWithArguments` 路径，包括 javac string conc
 加载 native library 并执行 `java -Xverify:all`。最终要求 manifest expected stdout、baseline、
 StackC、RegC 四者一致。
 
-首批覆盖 5 个 baseline fixture 和 Wave 1 的 G3/G6/G7 共 13 个 fixture，即 26 个后端 case。
-多 class `g6.virtual_interface` 同时验证 package、interface dispatch 和 sidecar classpath 位置。
+当前覆盖 5 个 baseline fixture、Wave 1 的 G3/G6/G7 和 Wave 2 的 G9/G10/G11，
+共 18 个 fixture，即 36 个后端 case。多 class `g6.virtual_interface` 同时验证 package、
+interface dispatch 和 sidecar classpath 位置；`g10.monitor` 覆盖异常 handler 的 local
+传递与 monitor 释放。
 生成物位于 `test/mj2x/integration/<backend>/<case>/`。
 
 **运行**：`xmake build mj2x_integration_test && xmake run mj2x_integration_test`

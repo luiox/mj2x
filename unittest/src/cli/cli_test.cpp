@@ -919,8 +919,8 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
     std::string xmake = readText(projectDir / "xmake.lua");
     EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
     EXPECT_NE(xmake.find("src/generated/native.c"), std::string::npos) << xmake;
-    EXPECT_NE(xmake.find("src/mj2x-crt/// .c"), std::string::npos) << xmake;
-    EXPECT_NE(xmake.find("src/mj2x-crt/// .cpp"), std::string::npos) << xmake;
+    EXPECT_NE(xmake.find("src/mj2x-crt/**.c"), std::string::npos) << xmake;
+    EXPECT_NE(xmake.find("src/mj2x-crt/**.cpp"), std::string::npos) << xmake;
     EXPECT_EQ(xmake, readText(test::getResourcePath("native_project/xmake.lua.golden")));
     EXPECT_EQ(readText(projectDir / "README.md"),
               readText(test::getResourcePath("native_project/README.md.golden")));
