@@ -106,9 +106,17 @@ static bool isGeneratedRuntimeClass(const std::string& name)
     return name == "mj2x/cloader/Loader";
 }
 
-static fs::path sidecarClassPath(const fs::path& outputPath, const std::string& className)
+static fs::path sidecarClassPath(const fs::path& outputPath,
+                                 const std::string& className,
+                                 const std::string& primaryName)
 {
     fs::path sidecar = outputPath.parent_path();
+    // A single-class output may be written under the primary class package
+    // (for example `pkg/A_protected.class`).  Generated runtime classes must
+    // remain relative to the classpath root, not relative to `pkg/`.
+    for (std::size_t i = 0; i < primaryName.size(); ++i) {
+        if (primaryName[i] == '/') sidecar = sidecar.parent_path();
+    }
     size_t   start   = 0;
     while (start < className.size()) {
         const auto slash = className.find('/', start);
@@ -149,7 +157,7 @@ static void writeClassFile(const std::string& path, CompilerIndex& index)
     for (auto& [name, cls] : classes) {
         if (name == primaryName) continue;
 
-        const auto      sidecarPath = sidecarClassPath(outputPath, name);
+        const auto      sidecarPath = sidecarClassPath(outputPath, name, primaryName);
         std::error_code ec;
         fs::create_directories(sidecarPath.parent_path(), ec);
         auto sidecarBytes = writeClassBytes(index, cls);

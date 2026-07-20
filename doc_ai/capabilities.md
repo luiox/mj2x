@@ -192,17 +192,23 @@ mj2x/
 
 ## 7. mtest_set 集成（跨产品共享样本）
 
-mj2x 消费 `mtest_set`（全仓库中性 Java 样本库）的 G1/G2/G5/G8 生成样本做 native 转换 E2E，
-建立与 mbase 等产品线的 opcode 覆盖对齐。
+mj2x 消费 `mtest_set`（全仓库中性 Java 样本库）的 baseline 与 Wave 1
+（G3 类型转换/G6 方法调用/G7 字段）生成样本做 native 转换 E2E，建立双后端的
+opcode/语义覆盖对齐。
 
-- 桥梁：`mtest_set/src/manifest/native_fixture_manifest.hpp`（16 条 case，复用 mtest_set 生成器）
-- 消费：`mj2x/unittest/src/backend/stackc_mtest_set_test.cpp`（参数化 TEST_P，遍历 manifest）
+- 中性事实源：`mtest_set/src/manifest/semantic_fixture_manifest.hpp`
+- 消费：`mj2x/unittest/src/integration/mtest_set_native_matrix_test.cpp`
+- 独立目标：`mj2x_integration_test`，不与 emitter/IR unit 混跑
+- 当前矩阵：13 条 fixture x StackC/RegC = 26 条真实 E2E；每条均走
+  `mj2x-cli --compile`、native library、`java -Xverify:all` 和 stdout 精确比较
 - 跨项目样本访问：`test_helper` 的 `getMtestSetPath` / `getMtestSetSample` 系列
 - JDK/MSVC 探测：统一走 `libs/libjdk_finder`（与 `mj2x-cli --compile` 共用，不再各自硬编码路径）
 - 覆盖映射：`doc_ai/jbc_sample_coverage.md`
 
-与 `stackc_backend_e2e_test.cpp`（28 个手写 inline Java case）互补：后者覆盖更广（含
-monitor/exception/invokedynamic 等），仍是主力；mtest_set 测试提供跨产品对齐的共享样本源。
+与 `stackc_backend_e2e_test.cpp`（当前源码实际 30 个手写 inline Java case）互补：后者覆盖
+monitor/exception/invokedynamic 等更广形状；共享矩阵逐步接管可双后端比较的 case。
+Wave 1 首次运行发现并修复包内单 class 的 StackC cloader sidecar 错写到 package 子目录，
+现在统一输出到 classpath 根 `mj2x/cloader/Loader.class`。
 
 ---
 
@@ -213,9 +219,11 @@ xmake build mj2x-core
 xmake build mj2x-cli
 xmake build mj2x-crt
 xmake build mj2x_unittest
+xmake build mj2x_integration_test
 xmake build mj2x_runtime_test
 xmake run mj2x_crt_test
 xmake run mj2x_unittest
+xmake run mj2x_integration_test
 xmake run mj2x_runtime_test
 tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 ```

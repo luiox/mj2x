@@ -9,8 +9,27 @@ target("mj2x_unittest")
     add_packages("gtest")
     add_files("src/main.cpp")
     add_files("src/**/*_test.cpp")
+    remove_files("src/integration/**.cpp")
     add_includedirs("src")
     -- mtest_set 的 manifest（header-only）供 native 转换 E2E 消费样本，与 mbase 同模式。
+    add_includedirs("$(projectdir)/mtest_set/src")
+    set_rundir("$(projectdir)")
+
+    if is_plat("windows") then
+        add_cxflags("/utf-8", {tools = "cl"})
+        add_defines("_CRT_SECURE_NO_WARNINGS")
+    end
+
+target("mj2x_integration_test")
+    set_kind("binary")
+    set_group("mj2x/test")
+    set_default(false)
+
+    add_deps("mj2x-cli", "test_helper", "libjbytecode")
+    add_packages("gtest")
+    add_files("src/integration/main.cpp")
+    add_files("src/integration/*_test.cpp")
+    add_includedirs("src")
     add_includedirs("$(projectdir)/mtest_set/src")
     set_rundir("$(projectdir)")
 

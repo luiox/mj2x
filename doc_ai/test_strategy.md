@@ -24,7 +24,8 @@
 | `core/e2e_test`（StackC 版） | StackC | 3 | 复活，去 legacy |
 | `frontend/code_converter_test` | **L1** 栈式 MIR | 18 | 保留（L1 基线）；Wave 6 补数组 component 元数据 |
 | `backend/stackc_backend_test.cpp` | StackC | 19 | 子串匹配；Wave 6 补 array/checkcast emit |
-| **`backend/stackc_backend_e2e_test.cpp`** ★新增 | **StackC 真 E2E** | 28 | Wave 1 起逐波补，见 §1.4 |
+| **`backend/stackc_backend_e2e_test.cpp`** ★新增 | **StackC 真 E2E** | 30 | 历史 inline case，见 §1.4 |
+| **`integration/mtest_set_native_matrix_test.cpp`** | **双后端真 E2E** | 26 | 13 个中性 fixture x StackC/RegC |
 | `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、StackC/RegC JAR 输入/输出入口、CMake 工程输出、负向参数、坏 JAR fail-closed |
 
 ### 1.2 各层测试目标（R1-R4 落地时补）
@@ -61,7 +62,7 @@
 | Java → mj2x → .c → cl → 运行 | 端到端行为对比 | JDK + MSVC，结果与原 Java 一致 | R2 |
 | 受保护样本 + c2j agent | anti-JVMTI 有效性 | 注入 c2j agent，验证 fail-closed 或 trace 退化（**与 mjdbg 协作**） | R3 |
 
-### 1.4 StackC 真 E2E harness（Wave 1 起）
+### 1.4 StackC 真 E2E harness（历史 inline case）
 
 区别于子串匹配的 `stackc_backend_test.cpp`，`stackc_backend_e2e_test.cpp` 把生成的 C **真编译成 DLL、
 在 JVM 里调用、与原 Java 行为逐项对比**。这是 revival 文档定义的"端到端闭环"判据。
@@ -115,6 +116,20 @@ bootstrap + `MethodHandle.invokeWithArguments` 路径，包括 javac string conc
 `IntegratedSample`（算术/控制流/调用/对象/字段/数组/String 的综合样本）。
 
 **运行**：`xmake build mj2x-cli && xmake build mj2x_unittest && xmake run mj2x_unittest -- --gtest_filter=StackCBackendE2E.*`
+
+### 1.5 mtest_set 双后端功能集成矩阵
+
+`mj2x_integration_test` 与 unit target 分离，消费
+`mtest_set/src/manifest/semantic_fixture_manifest.hpp`。每个 fixture 依次生成 class bundle、
+编译 Driver、运行 JVM baseline，然后分别调用真实 `mj2x-cli --backend stackc|regc --compile`，
+加载 native library 并执行 `java -Xverify:all`。最终要求 manifest expected stdout、baseline、
+StackC、RegC 四者一致。
+
+首批覆盖 5 个 baseline fixture 和 Wave 1 的 G3/G6/G7 共 13 个 fixture，即 26 个后端 case。
+多 class `g6.virtual_interface` 同时验证 package、interface dispatch 和 sidecar classpath 位置。
+生成物位于 `test/mj2x/integration/<backend>/<case>/`。
+
+**运行**：`xmake build mj2x_integration_test && xmake run mj2x_integration_test`
 
 ---
 

@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 
 #include <fstream>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <utility>
@@ -446,6 +447,43 @@ TEST(IOTest, CLoaderPostprocessorAddsSidecarClassForClassOutput)
     auto* registerMethod = findMethod(*loaderClass->classNode, "registerNativesForClass");
     ASSERT_NE(registerMethod, nullptr);
     EXPECT_TRUE((registerMethod->access & Opcodes::ACC_NATIVE) != 0);
+}
+
+TEST(PipelineTest, PackagedClassSidecarUsesClasspathRoot)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = test::getOutPath("mj2x/packaged_sidecar/.keep").parent_path();
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::create_directories(root / "pkg", ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    const fs::path input  = root / "pkg" / "TestClass.class";
+    const fs::path output = root / "pkg" / "TestClass_protected.class";
+    const fs::path cFile  = root / "native.c";
+    const auto     bytes  = classBytesFor("pkg/TestClass");
+    {
+        std::ofstream out(input, std::ios::binary);
+        ASSERT_TRUE(out);
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+    }
+
+    PipelineConfig cfg;
+    cfg.inputPath  = input.string();
+    cfg.outputPath = output.string();
+    Pipeline pipeline(std::move(cfg));
+    auto     backend = std::make_unique<StackCBackend>();
+    backend->setOutputPath(cFile.string());
+    pipeline.registerBackend(std::move(backend));
+    pipeline.registerPreprocessor(std::make_unique<MarkAllMethodsPreprocessor>());
+    pipeline.registerPostprocessor(std::make_unique<CLoaderPostprocessor>());
+    ASSERT_EQ(pipeline.run(), 0);
+
+    EXPECT_TRUE(fs::exists(root / "mj2x" / "cloader" / "Loader.class"));
+    EXPECT_FALSE(fs::exists(root / "pkg" / "mj2x" / "cloader" / "Loader.class"));
+    fs::remove_all(root, ec);
 }
 
 TEST(PipelineTest, BadInputPathReturnsError)
