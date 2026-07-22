@@ -1,11 +1,29 @@
 -- mj2x unittest 子模块
 -- include 根 = src；mj2x/ 头通过 add_deps("mj2x-core") 透传的 public includedir 解析
+target("mj2x_fake_zig")
+    set_kind("binary")
+    set_group("mj2x/test")
+    set_default(false)
+    add_files("src/cli/fake_zig.cpp")
+    if is_plat("windows") then
+        add_defines("_CRT_SECURE_NO_WARNINGS")
+    end
+
+target("mj2x_fake_xmake")
+    set_kind("binary")
+    set_group("mj2x/test")
+    set_default(false)
+    add_files("src/cli/fake_xmake.cpp")
+    if is_plat("windows") then
+        add_defines("_CRT_SECURE_NO_WARNINGS")
+    end
+
 target("mj2x_unittest")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
 
-    add_deps("mj2x-core", "test_helper")
+    add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake")
     add_packages("gtest")
     add_files("src/main.cpp")
     add_files("src/**/*_test.cpp")

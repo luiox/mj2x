@@ -11,12 +11,22 @@ enum class CCompilerKind
     Msvc,
     Gcc,
     Clang,
+    Zig,
+};
+
+enum class CompileMode
+{
+    File,
+    Pipe,
 };
 
 /// @brief 解析 CLI 传入的 C 编译器名称。
 ///
-/// 支持 `msvc`、`gcc`、`clang`。解析失败时返回 false,由 CLI 层打印参数错误。
+/// 支持 `msvc`、`gcc`、`clang`、`zig`。解析失败时返回 false,由 CLI 层打印参数错误。
 bool parseCompilerName(const std::string& name, CCompilerKind& compiler);
+
+/// @brief 解析 CLI 传入的 native 编译输入模式。
+bool parseCompileModeName(const std::string& name, CompileMode& mode);
 
 std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath);
 
@@ -30,5 +40,10 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath);
 /// 打印明确错误并返回非 0。
 int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
                    CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot = {});
+
+/// @brief 编译内存中的 C 源码；GCC/Clang/Zig 使用 stdin，MSVC 使用并清理临时源文件。
+int compileCSourceFromPipe(const std::string& cSource, const std::string& outputPath,
+                           CCompilerKind requestedCompiler,
+                           const std::filesystem::path& crtRoot = {});
 
 }   // namespace mj2x::cli

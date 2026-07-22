@@ -145,11 +145,12 @@ fs::path findJavac()
 bool hasAutoNativeCompiler()
 {
 #ifdef _WIN32
-    return commandAvailable("cl");
+    return commandAvailable("cl") || commandAvailable("clang") || commandAvailable("gcc") ||
+           commandAvailable("zig");
 #elif defined(__APPLE__)
-    return commandAvailable("clang") || commandAvailable("gcc");
+    return commandAvailable("clang") || commandAvailable("gcc") || commandAvailable("zig");
 #else
-    return commandAvailable("gcc") || commandAvailable("clang");
+    return commandAvailable("gcc") || commandAvailable("clang") || commandAvailable("zig");
 #endif
 }
 
@@ -1043,6 +1044,148 @@ TEST(CliTest, GenerateXmakeProjectForRegCJarInjectsNativeLoader)
     EXPECT_TRUE(callsLoader);
 }
 
+TEST(CliTest, GenerateXmakeAndCompileBuildsNativeLibrary)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!commandAvailable("xmake")) GTEST_SKIP() << "xmake is not available on PATH";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_xmake_compile.keep").parent_path() /
+        "mj2x_cli_xmake_compile";
+    const fs::path projectDir    = workDir / "project";
+    const fs::path outClass      = workDir / "output.class";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outClass);
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+            q(projectDir) + " --compile",
+    });
+
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(projectDir / "xmake.lua")) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    EXPECT_GT(fs::file_size(nativeLibrary), 0U);
+}
+
+TEST(CliTest, XmakeCompilerBuildsRegCJarAndCleansTemporaryProject)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!commandAvailable("xmake")) GTEST_SKIP() << "xmake is not available on PATH";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inJar = writeTinyJar();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_xmake_regc.keep").parent_path() /
+        "mj2x_cli_xmake_regc";
+    const fs::path outJar        = workDir / "output.jar";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outJar);
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) +
+            " --backend regc --compile --c-compiler xmake",
+    });
+
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    EXPECT_FALSE(readJarEntry(outJar, "mj2x/runtime/NativeLoader.class").empty()) << result.out;
+    EXPECT_FALSE(readJarEntry(
+                     outJar,
+                     "META-INF/mj2x/native/" + nativeLibrary.filename().string())
+                     .empty())
+        << result.out;
+    for (const auto& entry : fs::directory_iterator(workDir))
+        EXPECT_NE(entry.path().filename().string().rfind(".mj2x-xmake-", 0), 0U)
+            << entry.path().string();
+}
+
+TEST(CliTest, XmakeCompilerReportsConfigureAndMissingArtifactFailures)
+{
+    const fs::path cli       = findCli();
+    const fs::path fakeXmake = test::getBuildTargetPath("mj2x_fake_xmake");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeXmake)) GTEST_SKIP() << "mj2x_fake_xmake is not built";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_fake_xmake.keep").parent_path() /
+        "mj2x_cli_fake_xmake";
+    const fs::path toolDir    = workDir / "tool";
+    const fs::path projectDir = workDir / "project";
+    const fs::path outClass   = workDir / "output.class";
+#ifdef _WIN32
+    const fs::path xmakeExecutable = toolDir / "xmake.exe";
+#else
+    const fs::path xmakeExecutable = toolDir / "xmake";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::copy_file(fakeXmake, xmakeExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+#ifndef _WIN32
+    fs::permissions(xmakeExecutable,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add,
+                    ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+
+    std::vector<std::string> configureFailureLines;
+#ifdef _WIN32
+    configureFailureLines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    configureFailureLines.push_back("set \"MJ2X_FAKE_XMAKE_FAIL=configure\"");
+#else
+    configureFailureLines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    configureFailureLines.push_back("export MJ2X_FAKE_XMAKE_FAIL=configure");
+#endif
+    configureFailureLines.push_back(
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+        q(projectDir) + " --compile");
+    auto configureFailure = runScript(configureFailureLines);
+    EXPECT_NE(configureFailure.exitCode, 0);
+    EXPECT_NE(configureFailure.out.find("xmake configure failed with exit code 21"),
+              std::string::npos)
+        << configureFailure.out;
+
+    fs::remove_all(projectDir, ec);
+    std::vector<std::string> missingArtifactLines;
+#ifdef _WIN32
+    missingArtifactLines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    missingArtifactLines.push_back("set \"MJ2X_FAKE_XMAKE_FAIL=\"");
+    missingArtifactLines.push_back("set \"MJ2X_FAKE_XMAKE_ARTIFACT=none\"");
+#else
+    missingArtifactLines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    missingArtifactLines.push_back("unset MJ2X_FAKE_XMAKE_FAIL");
+    missingArtifactLines.push_back("export MJ2X_FAKE_XMAKE_ARTIFACT=none");
+#endif
+    missingArtifactLines.push_back(
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+        q(projectDir) + " --compile");
+    auto missingArtifact = runScript(missingArtifactLines);
+    EXPECT_NE(missingArtifact.exitCode, 0);
+    EXPECT_NE(missingArtifact.out.find("produced 0 matching native libraries"),
+              std::string::npos)
+        << missingArtifact.out;
+}
+
 TEST(CliTest, CompileFailsClearlyWhenJavaHomeMissing)
 {
     fs::path cli = findCli();
@@ -1095,6 +1238,197 @@ TEST(CliTest, CompileEmitsNativeLibraryWhenToolchainIsAvailable)
     });
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+}
+
+TEST(CliTest, PipeCompileWithClangDoesNotWriteCSource)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+    if (!commandAvailable("clang")) {
+        GTEST_SKIP() << "clang is not available on PATH";
+    }
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_pipe_compile.keep").parent_path() /
+        "mj2x_cli_pipe_compile";
+    const fs::path outClass      = workDir / "output.class";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outClass);
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+            " --compile --compile-mode pipe --c-compiler clang",
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(outClass)) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    for (const auto& entry : fs::recursive_directory_iterator(workDir)) {
+        EXPECT_NE(entry.path().extension(), ".c") << entry.path().string();
+    }
+}
+
+TEST(CliTest, FakeZigUsesCcForFileAndPipeModes)
+{
+    const fs::path cli     = findCli();
+    const fs::path fakeZig = test::getBuildTargetPath("mj2x_fake_zig");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeZig)) GTEST_SKIP() << "mj2x_fake_zig is not built";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_pipe_fake_zig.keep").parent_path() /
+        "mj2x_cli_pipe_fake_zig";
+    const fs::path toolDir       = workDir / "tool";
+    const fs::path outClass      = workDir / "output.class";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outClass);
+    const fs::path logFile       = workDir / "zig-args.txt";
+    const fs::path sourceFile    = workDir / "zig-stdin.txt";
+#ifdef _WIN32
+    const fs::path zigExecutable = toolDir / "zig.exe";
+#else
+    const fs::path zigExecutable = toolDir / "zig";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::copy_file(fakeZig, zigExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+#ifndef _WIN32
+    fs::permissions(zigExecutable,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add,
+                    ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+
+    std::vector<std::string> lines;
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_LOG=" + logFile.string() + "\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_SOURCE=" + sourceFile.string() + "\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_ZIG_LOG=" + q(logFile));
+    lines.push_back("export MJ2X_FAKE_ZIG_SOURCE=" + q(sourceFile));
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+                    " --compile --compile-mode pipe --c-compiler zig");
+    auto result = runScript(lines);
+
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    const std::string log = readText(logFile);
+    EXPECT_EQ(log.rfind("cc\n", 0), 0U) << log;
+    EXPECT_NE(log.find("-x\nc\n-\n"), std::string::npos) << log;
+    EXPECT_NE(readText(sourceFile).find("JNIEXPORT"), std::string::npos);
+    for (const auto& entry : fs::recursive_directory_iterator(workDir))
+        EXPECT_NE(entry.path().extension(), ".c") << entry.path().string();
+
+    std::ofstream staleLibrary(nativeLibrary, std::ios::binary | std::ios::trunc);
+    staleLibrary << "stale native library";
+    staleLibrary.close();
+    lines.clear();
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_SKIP_OUTPUT=1\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_ZIG_SKIP_OUTPUT=1");
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+                    " --compile --compile-mode pipe --c-compiler zig");
+    result = runScript(lines);
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_FALSE(fileExists(nativeLibrary)) << result.out;
+
+    const fs::path fileDir           = workDir / "file-mode";
+    const fs::path fileOutClass      = fileDir / "output.class";
+    const fs::path fileNativeLibrary = nativeLibraryPathFor(fileOutClass);
+    const fs::path generatedSource   = fileDir / "generated.c";
+    const fs::path fileLog           = fileDir / "zig-args.txt";
+    const fs::path fileStdin         = fileDir / "zig-stdin.txt";
+    fs::create_directories(fileDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    lines.clear();
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_LOG=" + fileLog.string() + "\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_SOURCE=" + fileStdin.string() + "\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_ZIG_LOG=" + q(fileLog));
+    lines.push_back("export MJ2X_FAKE_ZIG_SOURCE=" + q(fileStdin));
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(fileOutClass) +
+                    " --emit-c " + q(generatedSource) +
+                    " --compile --compile-mode file --c-compiler zig");
+    result = runScript(lines);
+
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(fileNativeLibrary)) << result.out;
+    EXPECT_TRUE(fileExists(generatedSource)) << result.out;
+    const std::string fileArguments = readText(fileLog);
+    EXPECT_EQ(fileArguments.rfind("cc\n", 0), 0U) << fileArguments;
+    EXPECT_NE(fileArguments.find(generatedSource.string()), std::string::npos) << fileArguments;
+    EXPECT_TRUE(readText(fileStdin).empty());
+}
+
+TEST(CliTest, PipeCompileWithMsvcRemovesTemporaryCSource)
+{
+#ifndef _WIN32
+    GTEST_SKIP() << "MSVC is only available on Windows";
+#else
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_pipe_msvc.keep").parent_path() /
+        "mj2x_cli_pipe_msvc";
+    const fs::path outClass      = workDir / "output.class";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outClass);
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+            " --compile --compile-mode pipe --c-compiler msvc",
+    });
+    if (result.exitCode != 0 &&
+        (result.out.find("C compiler 'cl' not found") != std::string::npos ||
+         result.out.find("vcvarsall.bat was not found") != std::string::npos)) {
+        GTEST_SKIP() << "MSVC toolchain is not available";
+    }
+
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(outClass)) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    for (const auto& entry : fs::recursive_directory_iterator(workDir)) {
+        EXPECT_NE(entry.path().extension(), ".c") << entry.path().string();
+    }
+#endif
 }
 
 TEST(CliTest, CompileJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable)
@@ -1196,6 +1530,55 @@ TEST(CliTest, CompileRegCJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable
                                       call->name.to_std_string() == "load");
     }
     EXPECT_TRUE(callsLoader);
+}
+
+TEST(CliTest, PipeCompileRegCJarEmbedsNativeLoaderAndLibraryWithClang)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+    if (!commandAvailable("clang")) {
+        GTEST_SKIP() << "clang is not available on PATH";
+    }
+
+    const fs::path inJar = writeTinyJar();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_pipe_regc.keep").parent_path() /
+        "mj2x_cli_pipe_regc";
+    const fs::path outJar        = workDir / "output.jar";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outJar);
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) +
+            " --backend regc --compile --compile-mode pipe --c-compiler clang",
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    for (const auto& entry : fs::recursive_directory_iterator(workDir)) {
+        EXPECT_NE(entry.path().extension(), ".c") << entry.path().string();
+    }
+
+    auto loaderClass = readJarEntry(outJar, "mj2x/runtime/NativeLoader.class");
+    EXPECT_FALSE(loaderClass.empty()) << result.out;
+    auto nativeResource =
+        readJarEntry(outJar, "META-INF/mj2x/native/" + nativeLibrary.filename().string());
+    EXPECT_FALSE(nativeResource.empty()) << result.out;
+
+    auto                     classBytes = readJarEntry(outJar, "demo/CliJarA.class");
+    ca::str::Utf8StringArena arena;
+    auto                     cn  = readClassFromBytes(classBytes, arena);
+    auto*                    add = findMethod(*cn, "add");
+    ASSERT_NE(add, nullptr);
+    EXPECT_TRUE((add->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
 }
 
 TEST(CliTest, CompileRegCWithMsvcSupportsOutputDirectoryContainingSpaces)
@@ -1350,6 +1733,49 @@ TEST(CliTest, NegativeArgumentsFail)
     EXPECT_NE(badCompiler.exitCode, 0);
     EXPECT_NE(badCompiler.out.find("Unknown --c-compiler value"), std::string::npos)
         << badCompiler.out;
+
+    auto badCompileMode = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+            " --compile --compile-mode nope",
+    });
+    EXPECT_NE(badCompileMode.exitCode, 0);
+    EXPECT_NE(badCompileMode.out.find("Unknown --compile-mode value"), std::string::npos)
+        << badCompileMode.out;
+
+    auto compileModeWithoutCompile = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --compile-mode pipe",
+    });
+    EXPECT_NE(compileModeWithoutCompile.exitCode, 0);
+    EXPECT_NE(compileModeWithoutCompile.out.find("--compile-mode requires --compile"),
+              std::string::npos)
+        << compileModeWithoutCompile.out;
+
+    auto pipeWithEmit = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
+            " --compile --compile-mode pipe",
+    });
+    EXPECT_NE(pipeWithEmit.exitCode, 0);
+    EXPECT_NE(pipeWithEmit.out.find("cannot be combined with --emit-c"), std::string::npos)
+        << pipeWithEmit.out;
+
+    auto xmakeWithPipe = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+            " --compile --compile-mode pipe --c-compiler xmake",
+    });
+    EXPECT_NE(xmakeWithPipe.exitCode, 0);
+    EXPECT_NE(xmakeWithPipe.out.find("does not support --compile-mode pipe"),
+              std::string::npos)
+        << xmakeWithPipe.out;
+
+    const fs::path conflictingXmakeProject =
+        test::getTempOutPath("mj2x_cli_conflicting_xmake_project");
+    auto directCompilerWithXmake = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+            q(conflictingXmakeProject) + " --compile --c-compiler clang",
+    });
+    EXPECT_NE(directCompilerWithXmake.exitCode, 0);
+    EXPECT_NE(directCompilerWithXmake.out.find("direct --c-compiler"), std::string::npos)
+        << directCompilerWithXmake.out;
 
     auto missingInput = runScript({
         q(cli) + " -i " + q(test::getTempOutPath("mj2x_cli_missing_input.class")) + " -o " +

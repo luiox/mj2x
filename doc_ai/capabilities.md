@@ -20,8 +20,9 @@
 | `--native-annotation Lpkg/Anno;` 只翻译带目标方法注解的方法 | ✅ | CLI 注解筛选测试 |
 | 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
 | `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
+| `--compile-mode pipe` 直接编译 backend 内存源码；GCC/Clang/Zig 走 stdin，MSVC 使用自动清理的 temporary-file fallback | ✅ | `CliTest.PipeCompile*`、`CliTest.FakeZigUsesCcForFileAndPipeModes` |
 | `--generate-cmake <dir>` 输出独立 CMake native 工程 | ✅ | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
-| `--generate-xmake <dir>` 输出独立 xmake native 工程,`mj2x-cli` 按 `mj2x-crt/resources.manifest` 构建期内嵌并释放 CRT 源文件/模板资源;模板变量在 project codegen 写出阶段单遍展开,不再对完整输出做 `replaceAll` 后处理 | ✅ | `CliTest.GenerateXmakeProject*` + `test_resource/native_project/*.golden` |
+| `--generate-xmake <dir>` 输出独立 xmake native 工程；与 `--compile` 同用时直接 configure/build 并复制产物；`--c-compiler xmake` 使用自动清理的临时工程 | ✅ | `CliTest.GenerateXmake*`、`CliTest.XmakeCompiler*` + golden |
 | StackC/RegC class 和 jar 重复生成稳定性 | ✅ | `CliTest.ClassInputRepeatableForStackCAndRegC`、`CliTest.JarInputRepeatableForStackCAndRegC`、`tools/product_sample_smoke.ps1 -Mode fast` |
 
 ---
@@ -129,7 +130,8 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - `--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
-- `--compile` 在 `--emit-c` 之后自动调用 C 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;`--c-compiler msvc|gcc|clang` 可覆盖自动检测。
+- `--compile` 在 `--emit-c` 之后自动调用 C 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;`--c-compiler msvc|gcc|clang|zig` 可覆盖自动检测，Zig 通过 `zig cc` 执行并作为自动探测末位 fallback。
+- `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
 - `--generate-cmake <dir>` 生成 `native.c`、`CMakeLists.txt`、`.gitignore` 和 `README.md`;
   CMake 工程通过 `find_package(JNI REQUIRED)` 发现 JNI headers。

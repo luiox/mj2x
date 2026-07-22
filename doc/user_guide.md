@@ -129,7 +129,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--backend <stackc\|regc>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名) |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c` 后自动编译 native library |
-| `--c-compiler <msvc\|gcc\|clang>` | 覆盖自动探测到的 C 编译器 |
+| `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 C 编译器 |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 `--emit-c` 时源码写到 `<dir>/native.c` |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--help` | 打印帮助 |
@@ -161,6 +161,17 @@ StackC/RegC 两次，并比较输出 class/jar 与 C 源的 SHA-256。
 mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile
 ```
 
+不需要保留生成的 C 源码时可使用 `pipe` 模式：
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --compile --compile-mode pipe --c-compiler clang
+```
+
+`pipe` 模式不能与 `--emit-c`、`--generate-cmake` 或 `--generate-xmake` 同用。GCC、
+Clang 和 Zig (`zig cc`) 直接从 stdin 读取源码，不产生 `.c` 文件。MSVC 的 `cl`/`c1` 不支持 stdin，并会拒绝
+Windows 命名管道路径，因此 Windows/MSVC 使用受控临时 `.c` fallback；CLI 在编译成功和失败
+返回前都会清理该文件，但这不是严格的 no-write 模式。需要严格不落盘时显式选择 Clang。
+
 输出文件位于 `--output` 同目录:
 
 - Windows:`Hello_native.dll`
@@ -169,9 +180,9 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile
 
 默认编译器探测顺序:
 
-- Windows:MSVC `cl`,再尝试 `clang` / `gcc`
-- Linux:`gcc`,再尝试 `clang`
-- macOS:`clang`,再尝试 `gcc`
+- Windows:MSVC `cl`,再尝试 `clang` / `gcc` / `zig`
+- Linux:`gcc`,再尝试 `clang` / `zig`
+- macOS:`clang`,再尝试 `gcc` / `zig`
 
 可用 `--c-compiler` 覆盖:
 
@@ -179,24 +190,49 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile
 mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile --c-compiler clang
 ```
 
+Zig 使用其 C frontend，不要求单独安装系统 GCC/Clang：
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --compile --compile-mode pipe --c-compiler zig
+```
+
 自动编译需要:
 
 - `JAVA_HOME` 指向 JDK,且包含 `include/jni.h`
 - Windows 使用 MSVC 时,mj2x 会在环境未初始化时自动查找并调用 Visual Studio 2022 的 `vcvarsall.bat`;如果找不到,再从 Developer Command Prompt 或已运行 `vcvars` 的 shell 中执行
 
-### 5.2 生成 CMake 工程
+### 5.2 xmake 一键构建
+
+生成并保留独立工程，同时立即构建：
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --generate-xmake native_project --compile
+```
+
+不需要保留工程时可将 xmake 作为构建驱动：
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --compile --c-compiler xmake
+```
+
+第二种形式在输出目录创建唯一临时工程，构建完成或失败后都会清理。两种形式都顺序执行
+xmake configure/build，验证唯一 release 共享库后原子复制到 `--output` 同目录；JAR 输出随后嵌入
+该库。xmake 是落地工程模式，不能与 `--compile-mode pipe` 同用。显式 direct 编译器（如
+`--c-compiler clang`）也不能和 `--generate-xmake ... --compile` 同时指定。
+
+### 5.3 生成 CMake 工程
 
 `--generate-cmake <dir>` 会把生成的 `.c` 和最小 CMake 工程写到指定目录。
 核心是把生成的 `.c` 连同 JNI 头编译为 shared library。
 
-### 5.3 手动编译(Windows / cl)
+### 5.4 手动编译(Windows / cl)
 
 ```bash
 javac -h . Hello.java
 cl /LD /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" Hello.c /FeHello.dll
 ```
 
-### 5.4 手动编译(Linux / gcc)
+### 5.5 手动编译(Linux / gcc)
 
 ```bash
 javac -h . Hello.java

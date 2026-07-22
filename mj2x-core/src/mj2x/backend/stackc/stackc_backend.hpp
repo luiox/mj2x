@@ -50,7 +50,7 @@ public:
     /// 生成代码访问器（测试用）。
     const std::string& generatedHeader() const { return headerCode_; }
     /// 生成代码访问器（测试用）。
-    const std::string& generatedSource() const { return sourceCode_; }
+    const std::string& generatedSource() const override { return sourceCode_; }
 
 private:
     struct Impl;

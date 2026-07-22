@@ -17,6 +17,7 @@
 #include "zip/checksum.hpp"
 
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -39,7 +40,8 @@ static void printUsage()
            "repeatable\n");
     printf(
         "  --compile                  Compile emitted C into a native library beside --output\n");
-    printf("  --c-compiler <name>        Override C compiler detection (msvc, gcc, clang)\n");
+    printf("  --compile-mode <mode>      Select native compile input mode (file, pipe)\n");
+    printf("  --c-compiler <name>        C compiler or build driver (msvc, gcc, clang, zig, xmake)\n");
     printf("  --generate-cmake <dir>     Generate a standalone CMake project for emitted C\n");
     printf("  --generate-xmake <dir>     Generate a standalone xmake project with mj2x-crt\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
@@ -50,6 +52,28 @@ enum class CEmitterBackend
 {
     StackC,
     RegC,
+};
+
+enum class NativeBuildDriver
+{
+    Direct,
+    Xmake,
+};
+
+class TemporaryProjectCleanup
+{
+public:
+    ~TemporaryProjectCleanup()
+    {
+        if (path_.empty()) return;
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    void set(std::filesystem::path path) { path_ = std::move(path); }
+
+private:
+    std::filesystem::path path_;
 };
 
 struct CliOptions
@@ -64,8 +88,11 @@ struct CliOptions
     std::vector<std::string> nativeMethodPrefixes;
     CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
     mj2x::cli::CCompilerKind cCompilerKind    = mj2x::cli::CCompilerKind::Auto;
+    mj2x::cli::CompileMode   compileMode      = mj2x::cli::CompileMode::File;
+    NativeBuildDriver        buildDriver      = NativeBuildDriver::Direct;
     bool                     backendSelected  = false;
     bool                     compileNative    = false;
+    bool                     compileModeSelected = false;
     bool                     compilerSelected = false;
     bool                     dumpMIR          = false;
 };
@@ -92,6 +119,13 @@ static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOp
     if (config.nativeAnnotation) options.nativeAnnotation = *config.nativeAnnotation;
     if (config.hasNativeMethodPrefixes) options.nativeMethodPrefixes = config.nativeMethodPrefixes;
     if (config.compile) options.compileNative = *config.compile;
+    if (config.compileMode) {
+        options.compileModeSelected = true;
+        if (!mj2x::cli::parseCompileModeName(*config.compileMode, options.compileMode)) {
+            error = "Unknown config compile_mode value. Expected file or pipe.";
+            return false;
+        }
+    }
     if (config.generateXmake) options.xmakeProjectDir = *config.generateXmake;
     if (config.generateCmake) options.cmakeProjectDir = *config.generateCmake;
     if (config.dumpMir) options.dumpMIR = *config.dumpMir;
@@ -104,8 +138,11 @@ static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOp
     }
     if (config.cCompiler) {
         options.compilerSelected = true;
-        if (!mj2x::cli::parseCompilerName(*config.cCompiler, options.cCompilerKind)) {
-            error = "Unknown config c_compiler value. Expected msvc, gcc, or clang.";
+        if (*config.cCompiler == "xmake") {
+            options.buildDriver = NativeBuildDriver::Xmake;
+        }
+        else if (!mj2x::cli::parseCompilerName(*config.cCompiler, options.cCompilerKind)) {
+            error = "Unknown config c_compiler value. Expected msvc, gcc, clang, zig, or xmake.";
             return false;
         }
     }
@@ -263,10 +300,34 @@ static int generateCMakeProject(const std::string& projectDirValue, const std::s
     return 0;
 }
 
+static bool createTemporaryXmakeProject(const std::string& outputPath,
+                                        std::filesystem::path& projectDir)
+{
+    namespace fs = std::filesystem;
+    fs::path base = fs::path(outputPath).parent_path();
+    if (base.empty()) base = ".";
+    std::error_code ec;
+    fs::create_directories(base, ec);
+    if (ec) return false;
+    const auto token = std::chrono::steady_clock::now().time_since_epoch().count();
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        fs::path candidate =
+            base / (".mj2x-xmake-" + std::to_string(token) + "-" + std::to_string(attempt));
+        if (fs::create_directory(candidate, ec)) {
+            projectDir = std::move(candidate);
+            return true;
+        }
+        if (ec && ec != std::errc::file_exists) return false;
+        ec.clear();
+    }
+    return false;
+}
+
 int main(int argc, char** argv)
 {
-    CliOptions  options;
-    std::string configPath;
+    CliOptions               options;
+    std::string              configPath;
+    TemporaryProjectCleanup temporaryProjectCleanup;
 
     bool commandLineNativePrefixesSeen = false;
     for (int i = 1; i < argc; i++) {
@@ -321,14 +382,27 @@ int main(int argc, char** argv)
         }
         else if (arg == "--compile")
             options.compileNative = true;
+        else if (arg == "--compile-mode" && i + 1 < argc) {
+            options.compileModeSelected = true;
+            if (!mj2x::cli::parseCompileModeName(argv[++i], options.compileMode)) {
+                fprintf(stderr, "Unknown --compile-mode value. Expected file or pipe.\n");
+                printUsage();
+                return 1;
+            }
+        }
         else if (arg == "--generate-cmake" && i + 1 < argc)
             options.cmakeProjectDir = argv[++i];
         else if (arg == "--generate-xmake" && i + 1 < argc)
             options.xmakeProjectDir = argv[++i];
         else if (arg == "--c-compiler" && i + 1 < argc) {
             options.compilerSelected = true;
-            if (!mj2x::cli::parseCompilerName(argv[++i], options.cCompilerKind)) {
-                fprintf(stderr, "Unknown --c-compiler value. Expected msvc, gcc, or clang.\n");
+            const std::string compilerName = argv[++i];
+            if (compilerName == "xmake") {
+                options.buildDriver = NativeBuildDriver::Xmake;
+            }
+            else if (!mj2x::cli::parseCompilerName(compilerName, options.cCompilerKind)) {
+                fprintf(stderr,
+                        "Unknown --c-compiler value. Expected msvc, gcc, clang, zig, or xmake.\n");
                 printUsage();
                 return 1;
             }
@@ -391,6 +465,45 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (options.compileNative && !options.xmakeProjectDir.empty()) {
+        if (options.compilerSelected && options.buildDriver == NativeBuildDriver::Direct) {
+            fprintf(stderr,
+                    "A direct --c-compiler cannot be combined with --generate-xmake and "
+                    "--compile.\n");
+            return 1;
+        }
+        options.buildDriver = NativeBuildDriver::Xmake;
+    }
+    if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
+        !options.cmakeProjectDir.empty()) {
+        fprintf(stderr, "--c-compiler xmake cannot be combined with --generate-cmake.\n");
+        return 1;
+    }
+    if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
+        options.compileMode == mj2x::cli::CompileMode::Pipe) {
+        fprintf(stderr, "xmake compilation does not support --compile-mode pipe.\n");
+        return 1;
+    }
+    if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
+        options.xmakeProjectDir.empty()) {
+        std::filesystem::path temporaryProject;
+        if (!createTemporaryXmakeProject(options.outputPath, temporaryProject)) {
+            fprintf(stderr, "[mj2x] ERROR: cannot create temporary xmake project.\n");
+            return 1;
+        }
+        temporaryProjectCleanup.set(temporaryProject);
+        options.xmakeProjectDir = temporaryProject.string();
+    }
+
+    if (options.compileMode == mj2x::cli::CompileMode::Pipe &&
+        (!options.cOutputPath.empty() || !options.cmakeProjectDir.empty() ||
+         !options.xmakeProjectDir.empty())) {
+        fprintf(stderr,
+                "--compile-mode pipe cannot be combined with --emit-c or generated native "
+                "projects.\n");
+        return 1;
+    }
+
     if (!options.cmakeProjectDir.empty() && options.cOutputPath.empty()) {
         options.cOutputPath =
             (std::filesystem::path(options.cmakeProjectDir) / "native.c").string();
@@ -402,14 +515,23 @@ int main(int argc, char** argv)
                 .string();
     }
 
-    if (options.backendSelected && options.cOutputPath.empty()) {
+    const bool pipeCompile =
+        options.compileNative && options.compileMode == mj2x::cli::CompileMode::Pipe;
+
+    if (options.backendSelected && options.cOutputPath.empty() && !pipeCompile) {
         fprintf(stderr, "--backend requires --emit-c or a generated native project.\n");
         printUsage();
         return 1;
     }
 
-    if (options.compileNative && options.cOutputPath.empty()) {
+    if (options.compileNative && options.cOutputPath.empty() && !pipeCompile) {
         fprintf(stderr, "--compile requires --emit-c or a generated native project.\n");
+        printUsage();
+        return 1;
+    }
+
+    if (options.compileModeSelected && !options.compileNative) {
+        fprintf(stderr, "--compile-mode requires --compile.\n");
         printUsage();
         return 1;
     }
@@ -461,16 +583,21 @@ int main(int argc, char** argv)
 
     mj2x::Pipeline pipeline(std::move(config));
 
-    if (!options.cOutputPath.empty()) {
+    const bool needsNativeSource = !options.cOutputPath.empty() || pipeCompile;
+    mj2x::Backend* nativeSourceBackend = nullptr;
+
+    if (needsNativeSource) {
         if (options.cBackendKind == CEmitterBackend::RegC) {
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
-            regcBackend->setOutputPath(options.cOutputPath);
+            if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
+            nativeSourceBackend = regcBackend.get();
             // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
             pipeline.registerBackend(std::move(regcBackend));
         }
         else {
             auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
-            stackCBackend->setOutputPath(options.cOutputPath);
+            if (!options.cOutputPath.empty()) stackCBackend->setOutputPath(options.cOutputPath);
+            nativeSourceBackend = stackCBackend.get();
             if (jarNativeLoaderEnabled) {
                 stackCBackend->setJarNativeLoaderResourcePath(
                     nativeResourcePath, nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
@@ -495,14 +622,14 @@ int main(int argc, char** argv)
     else {
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
-    if (!options.cOutputPath.empty() && options.cBackendKind == CEmitterBackend::StackC) {
+    if (needsNativeSource && options.cBackendKind == CEmitterBackend::StackC) {
         pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
     }
     if (jarNativeLoaderEnabled) {
         // RegC 由 postprocessor 注入 clinit load 调用；StackC 因 RegisterNatives
         // 绑定需自己重写 clinit，此处只注入资源（injectClinitCalls=false）。
-        const bool regcInjectsClinit = !options.cOutputPath.empty() &&
-                                       options.cBackendKind == CEmitterBackend::RegC;
+        const bool regcInjectsClinit = needsNativeSource &&
+                                        options.cBackendKind == CEmitterBackend::RegC;
         pipeline.registerPostprocessor(std::make_unique<mj2x::NativeLoaderPostprocessor>(
             nativeResourcePath,
             nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix,
@@ -528,18 +655,40 @@ int main(int argc, char** argv)
     }
 
     if (options.compileNative) {
-        std::filesystem::path crtRoot;
-        if (options.cBackendKind == CEmitterBackend::RegC) {
-            crtRoot = mj2x::cli::findCrtRoot(argv[0]);
-            if (crtRoot.empty()) {
-                fprintf(stderr,
-                        "[mj2x] ERROR: RegC --compile requires an mj2x-crt source pack; set "
-                        "MJ2X_CRT_DIR or use --generate-xmake.\n");
-                return 1;
+        int compileRc = 1;
+        if (options.buildDriver == NativeBuildDriver::Xmake) {
+            mj2x::cli::XmakeBuildConfig buildConfig;
+            buildConfig.projectDir        = options.xmakeProjectDir;
+            buildConfig.outputLibraryPath = nativeLibraryPath;
+            compileRc                     = mj2x::cli::buildXmakeProject(buildConfig);
+        }
+        else {
+            std::filesystem::path crtRoot;
+            if (options.cBackendKind == CEmitterBackend::RegC) {
+                crtRoot = mj2x::cli::findCrtRoot(argv[0]);
+                if (crtRoot.empty()) {
+                    fprintf(stderr,
+                            "[mj2x] ERROR: RegC --compile requires an mj2x-crt source pack; set "
+                            "MJ2X_CRT_DIR or use --generate-xmake.\n");
+                    return 1;
+                }
+            }
+            if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
+                if (nativeSourceBackend == nullptr) {
+                    fprintf(stderr, "[mj2x] ERROR: native source backend is unavailable.\n");
+                    return 1;
+                }
+                compileRc =
+                    mj2x::cli::compileCSourceFromPipe(nativeSourceBackend->generatedSource(),
+                                                      options.outputPath,
+                                                      options.cCompilerKind,
+                                                      crtRoot);
+            }
+            else {
+                compileRc = mj2x::cli::compileCSource(
+                    options.cOutputPath, options.outputPath, options.cCompilerKind, crtRoot);
             }
         }
-        int compileRc = mj2x::cli::compileCSource(
-            options.cOutputPath, options.outputPath, options.cCompilerKind, crtRoot);
         if (compileRc != 0) return compileRc;
         if (jarNativeLoaderEnabled)
             return embedNativeLibraryInJar(

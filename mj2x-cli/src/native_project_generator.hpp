@@ -13,8 +13,17 @@ struct XmakeProjectConfig
     std::string           projectName = "mj2x_native_project";
 };
 
+struct XmakeBuildConfig
+{
+    std::filesystem::path projectDir;
+    std::filesystem::path outputLibraryPath;
+    std::string           mode = "release";
+};
+
 std::filesystem::path findCrtRoot(const char* argv0);
 
 int generateXmakeProject(const XmakeProjectConfig& config);
+/// @brief 配置并构建已生成的 xmake 工程，将唯一 release 共享库原子复制到目标路径。
+int buildXmakeProject(const XmakeBuildConfig& config);
 
 }   // namespace mj2x::cli

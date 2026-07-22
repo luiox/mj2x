@@ -1,53 +1,25 @@
 #include "native_compiler.hpp"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <vector>
-#ifndef _WIN32
-#    include <sys/wait.h>
-#endif
+
+namespace {
+std::FILE* const kStdoutStream = stdout;
+std::FILE* const kStderrStream = stderr;
+}
 
 #include "jdk_finder/jdk_finder.hpp"
+#include "libca/process/subprocess.hpp"
 
 namespace mj2x::cli {
 namespace {
-
-std::string quotePath(const std::filesystem::path& path)
-{
-    std::string value = path.string();
-#ifdef _WIN32
-    std::string out = "\"";
-    for (std::size_t i = 0; i < value.size(); ++i) {
-        char c = value[i];
-        if (c == '"') {
-            out += "\\\"";
-        }
-        else if (c == '\\' && i + 1 == value.size()) {
-            out += "\\\\";
-        }
-        else {
-            out += c;
-        }
-    }
-    out += "\"";
-    return out;
-#else
-    std::string out = "'";
-    for (char c : value) {
-        if (c == '\'') {
-            out += "'\\''";
-        }
-        else {
-            out += c;
-        }
-    }
-    out += "'";
-    return out;
-#endif
-}
 
 /// 跨平台读环境变量（编译流程用：判断 INCLUDE 是否配置等）。JDK/工具链探测
 /// 已统一到 libjdk_finder，这里只保留编译命令构造需要的少量 env 读取。
@@ -66,13 +38,14 @@ std::string envValue(const char* name)
 #endif
 }
 
-/// CCompilerKind → 可执行文件名（cl/gcc/clang），用于构造编译命令。
+/// CCompilerKind → 可执行文件名（cl/gcc/clang/zig），用于构造编译命令。
 const char* compilerExecutable(CCompilerKind compiler)
 {
     switch (compiler) {
     case CCompilerKind::Msvc:  return "cl";
     case CCompilerKind::Gcc:   return "gcc";
     case CCompilerKind::Clang: return "clang";
+    case CCompilerKind::Zig:   return "zig";
     case CCompilerKind::Auto:  break;
     }
     return "";
@@ -85,6 +58,7 @@ jdk_finder::CCompilerKind toFinderKind(CCompilerKind kind)
     case CCompilerKind::Msvc:  return jdk_finder::CCompilerKind::Msvc;
     case CCompilerKind::Gcc:   return jdk_finder::CCompilerKind::Gcc;
     case CCompilerKind::Clang: return jdk_finder::CCompilerKind::Clang;
+    case CCompilerKind::Zig:   return jdk_finder::CCompilerKind::Zig;
     case CCompilerKind::Auto:  break;
     }
     return jdk_finder::CCompilerKind::Auto;
@@ -96,6 +70,7 @@ CCompilerKind fromFinderKind(jdk_finder::CCompilerKind kind)
     case jdk_finder::CCompilerKind::Msvc:  return CCompilerKind::Msvc;
     case jdk_finder::CCompilerKind::Gcc:   return CCompilerKind::Gcc;
     case jdk_finder::CCompilerKind::Clang: return CCompilerKind::Clang;
+    case jdk_finder::CCompilerKind::Zig:   return CCompilerKind::Zig;
     case jdk_finder::CCompilerKind::Auto:  break;
     }
     return CCompilerKind::Auto;
@@ -119,14 +94,18 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
     if (!std::filesystem::exists(sourceRoot / "regc" / "mj2x_regc_crt.h", ec) ||
         !std::filesystem::exists(manifest, ec)) {
         fprintf(
-            stderr, "[mj2x] ERROR: invalid mj2x-crt source pack: %s\n", crtRoot.string().c_str());
+            kStderrStream,
+            "[mj2x] ERROR: invalid mj2x-crt source pack: %s\n",
+            crtRoot.string().c_str());
         return false;
     }
 
     std::ifstream in(manifest);
     if (!in) {
         fprintf(
-            stderr, "[mj2x] ERROR: cannot read mj2x-crt manifest: %s\n", manifest.string().c_str());
+            kStderrStream,
+            "[mj2x] ERROR: cannot read mj2x-crt manifest: %s\n",
+            manifest.string().c_str());
         return false;
     }
 
@@ -148,14 +127,16 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
         }
         if (escapesRoot) {
             fprintf(
-                stderr, "[mj2x] ERROR: invalid mj2x-crt manifest source path: %s\n", line.c_str());
+                kStderrStream,
+                "[mj2x] ERROR: invalid mj2x-crt manifest source path: %s\n",
+                line.c_str());
             return false;
         }
 
         const auto source    = crtRoot / relative;
         const auto extension = source.extension().string();
         if (extension == ".cpp") {
-            fprintf(stderr,
+            fprintf(kStderrStream,
                     "[mj2x] ERROR: --compile does not yet support C++ "
                     "mj2x-crt sources; use "
                     "--generate-xmake.\n");
@@ -163,7 +144,7 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
         }
         if (extension != ".c") continue;
         if (!std::filesystem::exists(source, ec)) {
-            fprintf(stderr,
+            fprintf(kStderrStream,
                     "[mj2x] ERROR: mj2x-crt manifest source is missing: %s\n",
                     source.string().c_str());
             return false;
@@ -173,7 +154,7 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
     }
 
     if (!foundSource) {
-        fprintf(stderr, "[mj2x] ERROR: mj2x-crt manifest has no C sources.\n");
+        fprintf(kStderrStream, "[mj2x] ERROR: mj2x-crt manifest has no C sources.\n");
         return false;
     }
     return true;
@@ -216,7 +197,7 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes)
     opts.requireJniHeader = true;
     auto jdk = jdk_finder::findJdk(opts);
     if (!jdk.available) {
-        fprintf(stderr,
+        fprintf(kStderrStream,
                 "[mj2x] ERROR: %s; required to locate JNI headers.\n",
                 jdk.reason.c_str());
         return false;
@@ -231,17 +212,213 @@ std::filesystem::path findVcvarsAll()
     return jdk_finder::findVcvarsAll();
 }
 
-int systemExitCode(int rc)
+void writeProcessOutput(const ca::process::Output& output)
 {
-#ifdef _WIN32
-    return rc;
-#else
-    if (rc == -1) return rc;
-    if (WIFEXITED(rc)) return WEXITSTATUS(rc);
-    if (WIFSIGNALED(rc)) return 128 + WTERMSIG(rc);
-    return rc;
-#endif
+    if (!output.stdout_data.empty())
+        fwrite(output.stdout_data.data(), 1, output.stdout_data.size(), kStdoutStream);
+    if (!output.stderr_data.empty())
+        fwrite(output.stderr_data.data(), 1, output.stderr_data.size(), kStderrStream);
 }
+
+int runCompilerCommand(ca::process::Command& command, const char* compilerName)
+{
+    auto completed = command.output();
+    if (completed.is_err()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot start %s compiler: %s\n",
+                compilerName,
+                completed.unwrap_err().to_string().c_str());
+        return 1;
+    }
+    auto output = std::move(completed).unwrap();
+    writeProcessOutput(output);
+    if (!output.status.success()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: %s compiler failed with exit code %d.\n",
+                compilerName,
+                output.status.code);
+        return 1;
+    }
+    return 0;
+}
+
+#ifdef _WIN32
+std::string uniqueCompilerSourceToken()
+{
+    static std::atomic<unsigned long long> sequence{0};
+    const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+    return "mj2x_compile_" + std::to_string(ticks) + "_" +
+           std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+}
+
+using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
+
+bool environmentKeyEquals(const std::string& left, const char* right)
+{
+    return _stricmp(left.c_str(), right) == 0;
+}
+
+std::string environmentValue(const ProcessEnvironment& environment, const char* key)
+{
+    const auto found = std::find_if(environment.begin(), environment.end(), [&](const auto& entry) {
+        return environmentKeyEquals(entry.first, key);
+    });
+    return found == environment.end() ? std::string{} : found->second;
+}
+
+std::filesystem::path findExecutableOnPath(const std::string& pathValue,
+                                           const char*        executable)
+{
+    std::istringstream paths(pathValue);
+    std::string        entry;
+    std::error_code    ec;
+    while (std::getline(paths, entry, ';')) {
+        entry = trim(entry);
+        if (entry.size() >= 2 && entry.front() == '"' && entry.back() == '"')
+            entry = entry.substr(1, entry.size() - 2);
+        if (entry.empty()) continue;
+        const auto candidate = std::filesystem::path(entry) / executable;
+        if (std::filesystem::is_regular_file(candidate, ec)) return candidate;
+        ec.clear();
+    }
+    return {};
+}
+
+bool loadMsvcEnvironment(ProcessEnvironment& environment,
+                         std::filesystem::path& compilerPath)
+{
+    if (!envValue("INCLUDE").empty()) {
+        compilerPath = "cl";
+        return true;
+    }
+
+    const auto vcvars = findVcvarsAll();
+    if (vcvars.empty()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: MSVC environment is not configured and vcvarsall.bat was not "
+                "found.\n");
+        return false;
+    }
+    std::string shellPath = envValue("ComSpec");
+    if (shellPath.empty()) shellPath = "cmd.exe";
+    ca::process::Command shell(shellPath);
+    shell.current_dir(vcvars.parent_path().string());
+    shell.env("MJ2X_VCVARS_COMMAND",
+              "chcp 65001 >nul && call vcvarsall.bat x64 >nul && set");
+    shell.arg("/d").arg("/c").arg("%MJ2X_VCVARS_COMMAND%");
+    auto captured = shell.output();
+    if (captured.is_err()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot configure MSVC environment: %s\n",
+                captured.unwrap_err().to_string().c_str());
+        return false;
+    }
+    auto output = std::move(captured).unwrap();
+    if (!output.status.success()) {
+        writeProcessOutput(output);
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: vcvarsall.bat failed with exit code %d.\n",
+                output.status.code);
+        return false;
+    }
+
+    std::istringstream lines(output.stdout_data);
+    std::string        line;
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto separator = line.find('=');
+        if (separator == std::string::npos || separator == 0) continue;
+        environment.emplace_back(line.substr(0, separator), line.substr(separator + 1));
+    }
+    compilerPath = findExecutableOnPath(environmentValue(environment, "PATH"), "cl.exe");
+    if (compilerPath.empty()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: vcvarsall.bat completed without making cl.exe available.\n");
+        return false;
+    }
+    return true;
+}
+
+class ScopedTemporarySource
+{
+public:
+    explicit ScopedTemporarySource(std::filesystem::path path)
+        : path_(std::move(path))
+    {}
+    ~ScopedTemporarySource()
+    {
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+int compileMsvcSourceFromTemporaryFile(
+    const std::string&                         cSource,
+    const std::filesystem::path&               libraryPath,
+    const std::vector<std::filesystem::path>& includes,
+    const std::vector<std::filesystem::path>& sources)
+{
+    ProcessEnvironment    environment;
+    std::filesystem::path compilerPath;
+    if (!loadMsvcEnvironment(environment, compilerPath)) return 1;
+
+    std::filesystem::path sourceDir = libraryPath.parent_path();
+    if (sourceDir.empty()) sourceDir = ".";
+    ScopedTemporarySource sourceFile(
+        sourceDir /
+        ("." + libraryPath.stem().string() + ".mj2x." + uniqueCompilerSourceToken() + ".c"));
+    std::ofstream source(sourceFile.path(), std::ios::binary | std::ios::trunc);
+    if (!source) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot create temporary MSVC source: %s\n",
+                sourceFile.path().string().c_str());
+        return 1;
+    }
+    source.write(cSource.data(), static_cast<std::streamsize>(cSource.size()));
+    source.close();
+    if (!source) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot write temporary MSVC source: %s\n",
+                sourceFile.path().string().c_str());
+        return 1;
+    }
+
+    ca::process::Command command(compilerPath.string());
+    command.arg("/nologo").arg("/LD").arg("/TC");
+    for (const auto& include : includes) command.arg("/I" + include.string());
+    std::filesystem::path objectDir = libraryPath.parent_path();
+    if (objectDir.empty()) objectDir = ".";
+    objectDir /= "";
+    command.arg("/Fo" + objectDir.string());
+    command.arg(sourceFile.path().string());
+    for (const auto& source : sources) command.arg(source.string());
+    command.arg("/Fe" + libraryPath.string());
+    for (const auto& [key, value] : environment) command.env(key, value);
+    command.stdout(ca::process::Stdio::piped()).stderr(ca::process::Stdio::piped());
+
+    auto completed = command.output();
+    if (completed.is_err()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot start MSVC compiler: %s\n",
+                completed.unwrap_err().to_string().c_str());
+        return 1;
+    }
+    auto output = std::move(completed).unwrap();
+    writeProcessOutput(output);
+    if (!output.status.success()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: MSVC compiler failed with exit code %d.\n",
+                output.status.code);
+        return 1;
+    }
+    return 0;
+}
+#endif
 
 }   // namespace
 
@@ -259,6 +436,23 @@ bool parseCompilerName(const std::string& name, CCompilerKind& compiler)
         compiler = CCompilerKind::Clang;
         return true;
     }
+    if (name == "zig") {
+        compiler = CCompilerKind::Zig;
+        return true;
+    }
+    return false;
+}
+
+bool parseCompileModeName(const std::string& name, CompileMode& mode)
+{
+    if (name == "file") {
+        mode = CompileMode::File;
+        return true;
+    }
+    if (name == "pipe") {
+        mode = CompileMode::Pipe;
+        return true;
+    }
     return false;
 }
 
@@ -272,17 +466,19 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
 {
     std::error_code ec;
     if (!std::filesystem::exists(cOutputPath, ec)) {
-        fprintf(stderr, "[mj2x] ERROR: emitted C source does not exist: %s\n", cOutputPath.c_str());
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: emitted C source does not exist: %s\n",
+                cOutputPath.c_str());
         return 1;
     }
 
     CCompilerKind compiler = CCompilerKind::Auto;
     if (!detectCompiler(requestedCompiler, compiler)) {
         if (requestedCompiler == CCompilerKind::Auto) {
-            fprintf(stderr, "[mj2x] ERROR: no supported C compiler found on PATH.\n");
+            fprintf(kStderrStream, "[mj2x] ERROR: no supported C compiler found on PATH.\n");
         }
         else {
-            fprintf(stderr,
+            fprintf(kStderrStream,
                     "[mj2x] ERROR: C compiler '%s' not found on PATH.\n",
                     compilerExecutable(requestedCompiler));
         }
@@ -296,32 +492,29 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
     if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources)) return 1;
 
     std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
-    std::ostringstream    command;
+    std::filesystem::remove(libraryPath, ec);
+    ec.clear();
+    printf("[mj2x] Compiling native library: %s\n", libraryPath.string().c_str());
+    int result = 1;
     if (compiler == CCompilerKind::Msvc) {
-        command << "cl /nologo /LD";
-        for (const auto& include : includes) command << " /I" << quotePath(include);
+#ifdef _WIN32
+        ProcessEnvironment    environment;
+        std::filesystem::path compilerPath;
+        if (!loadMsvcEnvironment(environment, compilerPath)) return 1;
+        ca::process::Command command(compilerPath.string());
+        command.arg("/nologo").arg("/LD");
+        for (const auto& include : includes) command.arg("/I" + include.string());
         std::filesystem::path objectDir = libraryPath.parent_path();
         if (objectDir.empty()) objectDir = ".";
         objectDir /= "";
-        command << " /Fo" << quotePath(objectDir);
-        for (const auto& source : sources) command << " " << quotePath(source);
-        command << " /Fe" << quotePath(libraryPath);
-        if (envValue("INCLUDE").empty()) {
-            auto vcvars = findVcvarsAll();
-            if (vcvars.empty()) {
-                fprintf(stderr,
-                        "[mj2x] ERROR: MSVC compiler was found, but the MSVC "
-                        "environment is not "
-                        "configured and vcvarsall.bat was not found.\n");
-                return 1;
-            }
-            std::ostringstream wrapped;
-            wrapped << "cmd /s /c \"" << quotePath(vcvars) << " x64 >nul && " << command.str()
-                    << "\"";
-            command.str("");
-            command.clear();
-            command << wrapped.str();
-        }
+        command.arg("/Fo" + objectDir.string());
+        for (const auto& source : sources) command.arg(source.string());
+        command.arg("/Fe" + libraryPath.string());
+        for (const auto& [key, value] : environment) command.env(key, value);
+        result = runCompilerCommand(command, "MSVC");
+#else
+        fprintf(kStderrStream, "[mj2x] ERROR: MSVC is only supported on Windows.\n");
+#endif
     }
     else {
 #ifdef __APPLE__
@@ -329,18 +522,155 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
 #else
         const char* sharedFlag = "-shared";
 #endif
-        command << compilerExecutable(compiler) << " " << sharedFlag << " -fPIC";
-        command << " -pthread";
-        for (const auto& include : includes) command << " -I" << quotePath(include);
-        command << " -o " << quotePath(libraryPath);
-        for (const auto& source : sources) command << " " << quotePath(source);
+        ca::process::Command command(compilerExecutable(compiler));
+        if (compiler == CCompilerKind::Zig) command.arg("cc");
+        command.arg(sharedFlag);
+#ifndef _WIN32
+        command.arg("-fPIC").arg("-pthread");
+#endif
+        for (const auto& include : includes) command.arg("-I" + include.string());
+        command.arg("-o").arg(libraryPath.string());
+        for (const auto& source : sources) command.arg(source.string());
+        result = runCompilerCommand(command, compilerExecutable(compiler));
     }
 
-    printf("[mj2x] Compiling native library: %s\n", libraryPath.string().c_str());
-    printf("[mj2x] Compiler command: %s\n", command.str().c_str());
-    int rc = std::system(command.str().c_str());
-    if (rc != 0) {
-        fprintf(stderr, "[mj2x] ERROR: C compiler failed with exit code %d.\n", systemExitCode(rc));
+    if (result != 0) {
+        std::filesystem::remove(libraryPath, ec);
+        return 1;
+    }
+    if (!std::filesystem::is_regular_file(libraryPath, ec) ||
+        std::filesystem::file_size(libraryPath, ec) == 0) {
+        std::filesystem::remove(libraryPath, ec);
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: compiler succeeded without a native library: %s\n",
+                libraryPath.string().c_str());
+        return 1;
+    }
+    printf("[mj2x] Native library written: %s\n", libraryPath.string().c_str());
+    return 0;
+}
+
+int compileCSourceFromPipe(const std::string& cSource, const std::string& outputPath,
+                           CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+{
+    if (cSource.empty()) {
+        fprintf(kStderrStream, "[mj2x] ERROR: generated C source is empty.\n");
+        return 1;
+    }
+
+    CCompilerKind compiler = CCompilerKind::Auto;
+    if (!detectCompiler(requestedCompiler, compiler)) {
+        if (requestedCompiler == CCompilerKind::Auto) {
+            fprintf(kStderrStream, "[mj2x] ERROR: no supported C compiler found on PATH.\n");
+        }
+        else {
+            fprintf(kStderrStream,
+                    "[mj2x] ERROR: C compiler '%s' not found on PATH.\n",
+                    compilerExecutable(requestedCompiler));
+        }
+        return 1;
+    }
+    std::vector<std::filesystem::path> includes;
+    if (!jniIncludePaths(includes)) return 1;
+
+    std::vector<std::filesystem::path> sources;
+    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources)) return 1;
+
+    const std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
+    std::error_code             ec;
+    std::filesystem::remove(libraryPath, ec);
+    ec.clear();
+#ifdef _WIN32
+    if (compiler == CCompilerKind::Msvc) {
+        printf("[mj2x] Compiling native library with MSVC temporary source fallback: %s\n",
+               libraryPath.string().c_str());
+        const int rc =
+            compileMsvcSourceFromTemporaryFile(cSource, libraryPath, includes, sources);
+        if (rc != 0) return rc;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(libraryPath, ec) ||
+            std::filesystem::file_size(libraryPath, ec) == 0) {
+            fprintf(kStderrStream,
+                    "[mj2x] ERROR: MSVC succeeded without a native library: %s\n",
+                    libraryPath.string().c_str());
+            return 1;
+        }
+        printf("[mj2x] Native library written: %s\n", libraryPath.string().c_str());
+        return 0;
+    }
+#endif
+#ifdef __APPLE__
+    const char* sharedFlag = "-dynamiclib";
+#else
+    const char* sharedFlag = "-shared";
+#endif
+
+    ca::process::Command command(compilerExecutable(compiler));
+    if (compiler == CCompilerKind::Zig) command.arg("cc");
+    command.arg(sharedFlag);
+#ifndef _WIN32
+    command.arg("-fPIC").arg("-pthread");
+#endif
+    for (const auto& include : includes) command.arg("-I" + include.string());
+    command.arg("-o").arg(libraryPath.string());
+    for (const auto& source : sources) command.arg(source.string());
+    command.arg("-x").arg("c").arg("-");
+    command.stdin(ca::process::Stdio::piped())
+        .stdout(ca::process::Stdio::piped())
+        .stderr(ca::process::Stdio::piped());
+
+    printf("[mj2x] Compiling native library from stdin: %s\n", libraryPath.string().c_str());
+    auto spawned = command.spawn();
+    if (spawned.is_err()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot start C compiler: %s\n",
+                spawned.unwrap_err().to_string().c_str());
+        return 1;
+    }
+
+    auto child = std::move(spawned).unwrap();
+    auto input = child.take_stdin();
+    if (!input.has_value()) {
+        child.kill();
+        child.wait();
+        fprintf(kStderrStream, "[mj2x] ERROR: C compiler stdin pipe is unavailable.\n");
+        return 1;
+    }
+    auto written = input->write_all(cSource);
+    input->close();
+    if (written.is_err()) {
+        auto completed = child.wait_with_output();
+        if (completed.is_ok()) {
+            auto output = std::move(completed).unwrap();
+            writeProcessOutput(output);
+        }
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot write generated C source to compiler stdin: %s\n",
+                written.to_string().c_str());
+        return 1;
+    }
+
+    auto completed = child.wait_with_output();
+    if (completed.is_err()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot wait for C compiler: %s\n",
+                completed.unwrap_err().to_string().c_str());
+        return 1;
+    }
+    auto output = std::move(completed).unwrap();
+    writeProcessOutput(output);
+    if (!output.status.success()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: C compiler failed with exit code %d.\n",
+                output.status.code);
+        return 1;
+    }
+
+    if (!std::filesystem::is_regular_file(libraryPath, ec) ||
+        std::filesystem::file_size(libraryPath, ec) == 0) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: C compiler succeeded without a native library: %s\n",
+                libraryPath.string().c_str());
         return 1;
     }
     printf("[mj2x] Native library written: %s\n", libraryPath.string().c_str());

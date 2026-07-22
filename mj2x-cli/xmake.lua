@@ -30,7 +30,7 @@ rule("mj2x.embed-crt-resources")
             "",
         }
         for index, resource in ipairs(resources) do
-            local data = assert(io.readfile(path.join(crtroot, resource)),
+            local data = assert(io.readfile(path.join(crtroot, resource), {encoding = "binary"}),
                                 "cannot read mj2x-crt resource: " .. resource)
             table.insert(generated, "constexpr unsigned char kCrtResource" .. index .. "[] = {")
             local values = {}
@@ -76,7 +76,7 @@ target("mj2x-cli")
     set_kind("binary")
     set_group("mj2x")
 
-    add_deps("mj2x-core", "libjdk_finder")
+    add_deps("mj2x-core", "libjdk_finder", "libca_process")
     add_packages("nlohmann_json")
 
     add_files("src/*.cpp")

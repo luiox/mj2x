@@ -16,6 +16,7 @@ struct ConfigFileOptions
     std::vector<std::string>   nativeMethodPrefixes;
     bool                       hasNativeMethodPrefixes = false;
     std::optional<bool>        compile;
+    std::optional<std::string> compileMode;
     std::optional<std::string> cCompiler;
     std::optional<std::string> generateXmake;
     std::optional<std::string> generateCmake;

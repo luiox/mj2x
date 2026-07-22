@@ -14,7 +14,8 @@ Supported keys:
 | `native_annotation` | string | `--native-annotation` |
 | `native_method_prefixes` | string array | repeated `--native-method-prefix` |
 | `compile` | boolean | `--compile` |
-| `c_compiler` | string: `msvc`, `gcc`, or `clang` | `--c-compiler` |
+| `compile_mode` | string: `file` or `pipe` | `--compile-mode` |
+| `c_compiler` | string: `msvc`, `gcc`, `clang`, `zig`, or `xmake` | `--c-compiler` |
 | `generate_xmake` | string | `--generate-xmake` |
 | `generate_cmake` | string | `--generate-cmake` |
 | `dump_mir` | boolean | `--dump-mir` |
@@ -34,4 +35,5 @@ Example:
 Unknown keys and type mismatches are rejected. Normal CLI validation still
 applies after config loading, including mutually exclusive options such as
 `native_annotation` versus `native_method_prefixes`, and `generate_cmake`
-versus `generate_xmake`.
+versus `generate_xmake`. `c_compiler: "xmake"` selects the xmake build driver rather than a C
+compiler and creates a cleaned temporary project unless `generate_xmake` supplies a durable path.

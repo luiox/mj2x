@@ -41,6 +41,7 @@ bool rejectUnknownKeys(const json& root, std::string& error)
         "native_annotation",
         "native_method_prefixes",
         "compile",
+        "compile_mode",
         "c_compiler",
         "generate_xmake",
         "generate_cmake",
@@ -122,6 +123,7 @@ bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::st
                         error))
         return false;
     if (!getBool(root, "compile", parsed.compile, error)) return false;
+    if (!getString(root, "compile_mode", parsed.compileMode, error)) return false;
     if (!getString(root, "c_compiler", parsed.cCompiler, error)) return false;
     if (!getString(root, "generate_xmake", parsed.generateXmake, error)) return false;
     if (!getString(root, "generate_cmake", parsed.generateCmake, error)) return false;

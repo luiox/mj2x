@@ -89,7 +89,7 @@ public:
     /// The source includes helper declarations/definitions, one RegC helper per
     /// successfully lowered method, and the JNI wrappers used to bind those
     /// helpers back to the protected Java class.
-    const std::string& generatedSource() const { return sourceCode_; }
+    const std::string& generatedSource() const override { return sourceCode_; }
 
 private:
     struct Impl;

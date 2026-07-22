@@ -44,6 +44,10 @@ public:
 
     /// 所有方法编译完后调用，输出累积的 native 源到文件或 generatedSource()。
     virtual void finalize(const CompilerIndex& index) = 0;
+
+    /// @brief 返回 finalize 后生成的完整 native 源码。
+    /// @details 返回的引用由 backend 持有，在 backend 生命周期内有效。
+    virtual const std::string& generatedSource() const = 0;
 };
 
 }   // namespace mj2x
