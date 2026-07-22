@@ -7,6 +7,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "mj2x/mir/passes/reg_transform_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_dump.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
@@ -96,6 +97,46 @@ bool hasBlockWithArgs(const SSAFunction& fn)
         if (!block->args.empty()) return true;
     }
     return false;
+}
+
+RegFunction makePureBranchFunction()
+{
+    RegFunction function;
+    auto        entry      = std::make_unique<RegBlock>(SSABlockId{0});
+    auto        trueBlock  = std::make_unique<RegBlock>(SSABlockId{1});
+    auto        falseBlock = std::make_unique<RegBlock>(SSABlockId{2});
+
+    const RegValue input{RegId{0}, SSAType::I32};
+    const RegValue result{RegId{1}, SSAType::I32};
+    const RegValue edgeValue{RegId{2}, SSAType::I32};
+    function.parameters.push_back(input);
+
+    RegInstruction add;
+    add.kind     = RegInstructionKind::Binary;
+    add.hasDest  = true;
+    add.dest     = result;
+    add.lhs      = RegOperand::fromRegister(input);
+    add.rhs      = RegOperand::fromInt(1, SSAType::I32);
+    add.binaryOp = SSABinaryOp::Add;
+    add.effect   = SSAEffect::pure();
+    entry->instructions.push_back(add);
+
+    RegSuccessor trueTarget;
+    trueTarget.block = trueBlock.get();
+    trueTarget.copies.push_back(RegCopy{edgeValue, RegOperand::fromRegister(result)});
+    RegSuccessor falseTarget;
+    falseTarget.block = falseBlock.get();
+    falseTarget.copies.push_back(RegCopy{edgeValue, RegOperand::fromRegister(input)});
+    entry->terminator = RegBranchTerminator{
+        RegOperand::fromInt(1, SSAType::BOOL), std::move(trueTarget), std::move(falseTarget)};
+    trueBlock->terminator  = RegReturnTerminator{true, RegOperand::fromRegister(edgeValue)};
+    falseBlock->terminator = RegReturnTerminator{true, RegOperand::fromRegister(edgeValue)};
+
+    function.entry = entry.get();
+    function.blocks.push_back(std::move(entry));
+    function.blocks.push_back(std::move(trueBlock));
+    function.blocks.push_back(std::move(falseBlock));
+    return function;
 }
 
 }   // namespace
@@ -306,4 +347,113 @@ TEST(RegDceTest, PreservesValueConsumedBySuccessorCopy)
     EXPECT_EQ(eliminateDeadRegInstructions(function), 0U);
     ASSERT_EQ(function.blocks.front()->instructions.size(), 1U);
     EXPECT_EQ(function.blocks.front()->instructions.front().dest.id.value, 1U);
+}
+
+TEST(RegTransformPassTest, RewritesI32AdditionWithMbaIdentity)
+{
+    RegFunction    function;
+    auto           block = std::make_unique<RegBlock>(SSABlockId{0});
+    const RegValue result{RegId{0}, SSAType::I32};
+
+    RegInstruction add;
+    add.kind     = RegInstructionKind::Binary;
+    add.hasDest  = true;
+    add.dest     = result;
+    add.lhs      = RegOperand::fromInt(9, SSAType::I32);
+    add.rhs      = RegOperand::fromInt(4, SSAType::I32);
+    add.binaryOp = SSABinaryOp::Add;
+    add.effect   = SSAEffect::pure();
+    block->instructions.push_back(add);
+    block->terminator = RegReturnTerminator{true, RegOperand::fromRegister(result)};
+    function.entry    = block.get();
+    function.blocks.push_back(std::move(block));
+
+    RegTransformOptions options;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = false;
+    const auto stats                    = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.mbaRewrites, 1U);
+    ASSERT_EQ(function.blocks.front()->instructions.size(), 3U);
+    EXPECT_EQ(function.blocks.front()->instructions[0].binaryOp, SSABinaryOp::Or);
+    EXPECT_EQ(function.blocks.front()->instructions[1].binaryOp, SSABinaryOp::And);
+    EXPECT_EQ(function.blocks.front()->instructions[2].binaryOp, SSABinaryOp::Add);
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+TEST(RegTransformPassTest, MergesOpaquePredicateIntoBranchCondition)
+{
+    RegFunction function = makePureBranchFunction();
+
+    RegTransformOptions options;
+    options.enableMba                   = false;
+    options.enableControlFlowFlattening = false;
+    const auto stats                    = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.opaquePredicates, 1U);
+    const auto* branch = std::get_if<RegBranchTerminator>(&function.blocks.front()->terminator);
+    ASSERT_NE(branch, nullptr);
+    EXPECT_EQ(branch->condition.kind, RegOperandKind::Register);
+    ASSERT_EQ(function.blocks.front()->instructions.size(), 5U);
+    EXPECT_EQ(function.blocks.front()->instructions[1].binaryOp, SSABinaryOp::Or);
+    EXPECT_EQ(function.blocks.front()->instructions[2].binaryOp, SSABinaryOp::And);
+    EXPECT_EQ(function.blocks.front()->instructions[4].binaryOp, SSABinaryOp::And);
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+TEST(RegTransformPassTest, FlattensPureControlFlowAndRetainsEdgeCopies)
+{
+    RegFunction function      = makePureBranchFunction();
+    RegBlock*   originalEntry = function.entry;
+
+    RegTransformOptions options;
+    options.enableMba              = false;
+    options.enableOpaquePredicates = false;
+    const auto stats               = applyRegTransformPasses(function, options);
+
+    EXPECT_TRUE(stats.controlFlowFlattened);
+    EXPECT_EQ(stats.cffEdgeSetters, 2U);
+    EXPECT_NE(function.entry, originalEntry);
+    EXPECT_EQ(function.blocks.size(), 7U);
+    EXPECT_TRUE(hasAnyEdgeCopy(function));
+
+    const RegSwitchTerminator* dispatcher = nullptr;
+    for (const auto& block : function.blocks) {
+        const auto* candidate = std::get_if<RegSwitchTerminator>(&block->terminator);
+        if (candidate != nullptr && candidate->cases.size() == 3U) {
+            dispatcher = candidate;
+            break;
+        }
+    }
+    ASSERT_NE(dispatcher, nullptr);
+    EXPECT_EQ(dispatcher->value.kind, RegOperandKind::Register);
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+TEST(RegTransformPassTest, SkipsEffectfulAndExceptionalFunctions)
+{
+    RegTransformOptions options;
+    options.enableMba              = false;
+    options.enableOpaquePredicates = false;
+
+    RegFunction    effectful = makePureBranchFunction();
+    RegInstruction call;
+    call.kind   = RegInstructionKind::Call;
+    call.effect = SSAEffect::pure();
+    effectful.blocks.front()->instructions.push_back(call);
+    const auto effectfulStats = applyRegTransformPasses(effectful, options);
+    EXPECT_FALSE(effectfulStats.controlFlowFlattened);
+    EXPECT_EQ(effectful.blocks.size(), 3U);
+
+    RegFunction exceptional = makePureBranchFunction();
+    exceptional.exceptionRegions.push_back(RegExceptionRegion{});
+    const auto exceptionalStats = applyRegTransformPasses(exceptional, options);
+    EXPECT_FALSE(exceptionalStats.controlFlowFlattened);
+    EXPECT_EQ(exceptional.blocks.size(), 3U);
 }

@@ -8,6 +8,7 @@
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/codegen/include_set.hpp"
 #include "mj2x/frontend/type_utils.hpp"
+#include "mj2x/mir/passes/reg_transform_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
@@ -264,6 +265,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
+    applyRegTransformPasses(*reg);
 
     RegCEmitter emitter(&impl_->cachePool);
     auto        emitted = emitter.emitFunction(*reg);

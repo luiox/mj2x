@@ -94,6 +94,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 **结构断言(输出保证)**:RegC 输出不出现 `cstack` / `stack[]` / `union jvalue` / `sp--` 这类 stack-machine anchor。
 
 - **RegIR dead-code elimination**:在 RegIR→RegC 之间迭代删除未被终结器、CFG edge copy 或异常边消费的纯计算链；可能抛异常、内存访问、调用与 barrier 一律保留。`RegDceTest.*` 覆盖死链删除和 edge copy 活跃值保留，RegC native E2E 覆盖 JVM 语义。
+- **RegIR protection transforms**:RegC 在 DCE 后应用 i32/i64 加法 MBA 恒等式、分支 opaque predicate 与纯控制流 CFF。CFF 通过状态寄存器与 dispatcher switch 路由边，同时保留 edge copy；包含异常区域、内存访问、调用、barrier、throw 或 div/rem 的函数保持原 CFG。`RegTransformPassTest.*` 覆盖变换结构与保守跳过，`RegCBackendE2E.PureArithmeticLoopAndArrayRoundTrip` 覆盖 JVM 循环/数组语义。
 
 **已覆盖的 E2E 形状**:
 
