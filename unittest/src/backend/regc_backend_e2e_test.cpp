@@ -644,6 +644,8 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
         "  public static int charCompare(char a, char b) { return Character.compare(a, b); }\n"
         "  public static int floatCompare(float a, float b) { return Float.compare(a, b); }\n"
         "  public static int doubleCompare(double a, double b) { return Double.compare(a, b); }\n"
+        "  public static int literalCompare() { return Float.compare(-0.0f, 0.0f) + "
+        "Double.compare(Double.NaN, 1.0d); }\n"
         "  public static double sinDemo(double x) { return Math.sin(x); }\n"
         "  public static double sqrtDemo(double x) { return Math.sqrt(x); }\n"
         "  public static int mathChain(int a, int b) {\n"
@@ -864,6 +866,7 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
             {"doubleCompare(2.0d, 1.0d)", "RegCIntrinsic.doubleCompare(2.0d, 1.0d)"},
             {"doubleCompare(-0.0d, 0.0d)", "RegCIntrinsic.doubleCompare(-0.0d, 0.0d)"},
             {"doubleCompare(Double.NaN, 1.0d)", "RegCIntrinsic.doubleCompare(Double.NaN, 1.0d)"},
+            {"literalCompare()", "RegCIntrinsic.literalCompare()"},
             {"sinDemo(1.0)", "RegCIntrinsic.sinDemo(1.0)"},
             {"sqrtDemo(2.0)", "RegCIntrinsic.sqrtDemo(2.0)"},
             {"mathChain(3, 9)", "RegCIntrinsic.mathChain(3, 9)"},

@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 
 #include <memory>
+#include <limits>
 #include <string>
 
 #include "jbytecode/jbytecode.hpp"
@@ -112,6 +113,49 @@ TEST(RegCTest, EmitsPureArithmeticWithoutStackMachineAnchors)
     EXPECT_NE(result.source.find("_mj2x_regc_result = r"), std::string::npos) << result.source;
     EXPECT_NE(result.source.find("goto _mj2x_regc_cleanup;"), std::string::npos) << result.source;
     EXPECT_NE(result.source.find("return _mj2x_regc_result;"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCTest, EmitsBitExactFloatingLiterals)
+{
+    std::string reason;
+    auto        result = emitRegC("floatingLiterals",
+                           "()D",
+                           {
+                               new LdcInsnNode(-0.0f),
+                               new InsnNode(Opcodes::F2D),
+                               new InsnNode(Opcodes::DRETURN),
+                           },
+                           1,
+                           0,
+                           reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_regc_f32_from_bits((uint32_t)0x80000000u)"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("-0f"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCTest, EmitsBitExactNanLiteral)
+{
+    std::string reason;
+    auto        result = emitRegC("nanLiteral",
+                           "()D",
+                           {
+                               new LdcInsnNode(std::numeric_limits<double>::quiet_NaN()),
+                               new InsnNode(Opcodes::DRETURN),
+                           },
+                           2,
+                           0,
+                           reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_regc_f64_from_bits((uint64_t)0x7ff8000000000000ULL)"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find(" nan"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }
 

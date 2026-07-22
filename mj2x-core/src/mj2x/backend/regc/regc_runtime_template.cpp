@@ -152,6 +152,16 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "static mj2x_regc_context _mj2x_regc_ctx;\n";
     out << "static mj2x_regc_context* _mj2x_regc_current_context(void) { return &_mj2x_regc_ctx; "
            "}\n\n";
+    out << "static float _mj2x_regc_f32_from_bits(uint32_t bits) {\n";
+    out << "    float value;\n";
+    out << "    memcpy(&value, &bits, sizeof(value));\n";
+    out << "    return value;\n";
+    out << "}\n\n";
+    out << "static double _mj2x_regc_f64_from_bits(uint64_t bits) {\n";
+    out << "    double value;\n";
+    out << "    memcpy(&value, &bits, sizeof(value));\n";
+    out << "    return value;\n";
+    out << "}\n\n";
     out << "static void _mj2x_regc_throw_runtime(void* env, const char* class_name, const char* "
            "message) {\n";
     out << "    JNIEnv* jni = (JNIEnv*)env;\n";

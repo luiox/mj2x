@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <regex>
 #include <sstream>
@@ -89,6 +90,20 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
     mn->maxLocals                          = maxLocals;
     for (auto* insn : insns) mn->instructions.add(insn);
     return mn;
+}
+
+TEST(SSAFunctionTest, InternFloatPreservesIeee754Identity)
+{
+    SSAFunction function;
+
+    auto* negativeZero = function.internFloat(-0.0, SSAType::F64);
+    auto* positiveZero = function.internFloat(0.0, SSAType::F64);
+    auto* firstNan = function.internFloat(std::numeric_limits<double>::quiet_NaN(), SSAType::F64);
+    auto* secondNan = function.internFloat(std::numeric_limits<double>::quiet_NaN(), SSAType::F64);
+
+    EXPECT_NE(negativeZero, positiveZero);
+    EXPECT_EQ(firstNan, secondNan);
+    EXPECT_EQ(function.floatLiterals.size(), 3u);
 }
 
 std::unique_ptr<SSAFunction> buildInlineSSA(const std::string& name, const std::string& desc,

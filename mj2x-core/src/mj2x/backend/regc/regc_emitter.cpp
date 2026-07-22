@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
+#include <iomanip>
 #include <map>
 #include <ostream>
 #include <set>
@@ -113,6 +116,24 @@ const char* helperSuffix(SSAType type)
     }
 }
 
+std::string floatingOperandExpr(double value, SSAType type)
+{
+    std::ostringstream os;
+    os << std::hex << std::nouppercase << std::setfill('0');
+    if (type == SSAType::F32) {
+        const float floatValue = static_cast<float>(value);
+        uint32_t    bits       = 0;
+        std::memcpy(&bits, &floatValue, sizeof(bits));
+        os << "_mj2x_regc_f32_from_bits((uint32_t)0x" << std::setw(8) << bits << "u)";
+        return os.str();
+    }
+
+    uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    os << "_mj2x_regc_f64_from_bits((uint64_t)0x" << std::setw(16) << bits << "ULL)";
+    return os.str();
+}
+
 std::string operandExpr(const RegOperand& operand)
 {
     std::ostringstream os;
@@ -126,10 +147,7 @@ std::string operandExpr(const RegOperand& operand)
             os << operand.intValue;
         }
         return os.str();
-    case RegOperandKind::FloatLiteral:
-        os << operand.floatValue;
-        if (operand.type == SSAType::F32) os << "f";
-        return os.str();
+    case RegOperandKind::FloatLiteral: return floatingOperandExpr(operand.floatValue, operand.type);
     case RegOperandKind::NullLiteral: return "NULL";
     case RegOperandKind::Opaque:
         // A String LDC carries its UTF-8 content after "ldc_string:" so the
@@ -997,6 +1015,8 @@ std::string binaryExpr(const RegInstruction& ins)
 void emitHelperPrelude(std::ostream& out)
 {
     out << "static mj2x_regc_context* _mj2x_regc_current_context(void);\n";
+    out << "static float _mj2x_regc_f32_from_bits(uint32_t bits);\n";
+    out << "static double _mj2x_regc_f64_from_bits(uint64_t bits);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_object(const char* type_desc);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_object_cached(mj2x_regc_class_cache* cache);\n";
     out << "static mj2x_ref _mj2x_regc_alloc_array(const char* type_desc, int32_t length);\n";
