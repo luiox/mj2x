@@ -90,6 +90,10 @@ public:
     /// successfully lowered method, and the JNI wrappers used to bind those
     /// helpers back to the protected Java class.
     const std::string& generatedSource() const override { return sourceCode_; }
+    NativeSourceArtifact generatedSourceArtifact() const override
+    {
+        return {NativeSourceLanguage::C99, sourceCode_, "native.c"};
+    }
 
 private:
     struct Impl;

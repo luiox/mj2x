@@ -1123,7 +1123,7 @@ TEST(CliTest, XmakeCompilerBuildsRegCJarAndCleansTemporaryProject)
             << entry.path().string();
 }
 
-TEST(CliTest, XmakeCompilerRejectsFailedOrAmbiguousBuildsAndCleansTemporaryProject)
+TEST(CliTest, XmakeCompilerRejectsFailedOrAmbiguousBuildsAndCleansReadonlyTemporaryProject)
 {
     const fs::path cli       = findCli();
     const fs::path fakeXmake = test::getBuildTargetPath("mj2x_fake_xmake");
@@ -1207,10 +1207,12 @@ TEST(CliTest, XmakeCompilerRejectsFailedOrAmbiguousBuildsAndCleansTemporaryProje
     buildFailureLines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
     buildFailureLines.push_back("set \"MJ2X_FAKE_XMAKE_FAIL=build\"");
     buildFailureLines.push_back("set \"MJ2X_FAKE_XMAKE_ARTIFACT=\"");
+    buildFailureLines.push_back("set \"MJ2X_FAKE_XMAKE_READONLY_SOURCE=1\"");
 #else
     buildFailureLines.push_back("export PATH=" + q(toolDir) + ":$PATH");
     buildFailureLines.push_back("export MJ2X_FAKE_XMAKE_FAIL=build");
     buildFailureLines.push_back("unset MJ2X_FAKE_XMAKE_ARTIFACT");
+    buildFailureLines.push_back("export MJ2X_FAKE_XMAKE_READONLY_SOURCE=1");
 #endif
     buildFailureLines.push_back(q(cli) + " -i " + q(failureInputJar) + " -o " + q(failedJar) +
                                " --backend regc --compile --c-compiler xmake");

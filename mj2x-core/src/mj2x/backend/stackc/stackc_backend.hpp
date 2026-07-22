@@ -51,6 +51,10 @@ public:
     const std::string& generatedHeader() const { return headerCode_; }
     /// 生成代码访问器（测试用）。
     const std::string& generatedSource() const override { return sourceCode_; }
+    NativeSourceArtifact generatedSourceArtifact() const override
+    {
+        return {NativeSourceLanguage::C99, sourceCode_, "native.c"};
+    }
 
 private:
     struct Impl;

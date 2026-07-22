@@ -7,12 +7,9 @@
 ## 当前优先
 
 - [ ] **Native 编译管道跨平台验收**：在 Windows、Linux、macOS 分别记录 MSVC/GCC/Clang/Zig/xmake 的 file/pipe 结果。真实 Zig E2E 必须覆盖 class、JAR 和 JVM 加载；工具链缺失时明确记录 skipped/unverified，不把 fake-tool 验证替代为平台证据。
-- [ ] **Native 编译失败路径加固**：补充临时目录清理失败的自动化验证；任何失败不得留下部分 native library 或源码残留。
-
 ## 后续待办
 
 - [ ] **Native 后端与产物扩展**：在 `--emit-cpp` reserved CLI 入口之后，按小切片扩展 C++17 和可选 LLVM IR 输出，不改变 StackC/RegC 的既有承诺。
-  - 定义显式 artifact/source-language contract，保留 C99 默认行为和 fail-closed 诊断。
   - 复用 RegC lowering 增加 C++ emitter/dialect、`.cpp` 工程模板及 MSVC/clang++/g++ 编译路径，通过 mj2x-crt C ABI 交互。
   - 以显式 opt-in 接入 textual `.ll` 与外部 clang/llc；第一批仅支持纯计算和控制流，对象/JNI/异常/monitor 保持 fail closed。
   - 每种产物必须有 CLI 负路径、结构断言、native E2E、Java baseline 对照和跨工具链记录。

@@ -312,6 +312,18 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
     expectNoStackAnchors(source);
 }
 
+TEST(RegCBackendTest, ReportsC99SourceArtifact)
+{
+    RegCBackend backend;
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+
+    const auto artifact = backend.generatedSourceArtifact();
+    EXPECT_EQ(artifact.language, NativeSourceLanguage::C99);
+    EXPECT_EQ(artifact.suggestedFileName, "native.c");
+    EXPECT_EQ(artifact.content, backend.generatedSource());
+}
+
 TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
 {
     auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,

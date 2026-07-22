@@ -3,6 +3,10 @@
 #include <fstream>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -22,17 +26,43 @@ fs::path projectPath(int argc, char** argv)
     return fs::current_path(ec);
 }
 
+bool markGeneratedSourceReadOnly(const fs::path& project)
+{
+    const fs::path source = project / "src" / "generated" / "native.c";
+    std::error_code ec;
+    if (!fs::is_regular_file(source, ec)) return false;
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(source.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) return false;
+    return SetFileAttributesW(source.c_str(), attributes | FILE_ATTRIBUTE_READONLY) != 0;
+#else
+    fs::permissions(source,
+                    fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write,
+                    fs::perm_options::remove,
+                    ec);
+    return !ec;
+#endif
+}
+
 }
 
 int main(int argc, char** argv)
 {
     if (argc < 2) return 64;
     const std::string phase = std::string(argv[1]) == "f" ? "configure" : "build";
-    if (envValue("MJ2X_FAKE_XMAKE_FAIL") == phase) return phase == "configure" ? 21 : 22;
+    const std::string failure = envValue("MJ2X_FAKE_XMAKE_FAIL");
+    if (failure == "configure" && phase == "configure") return 21;
     if (phase == "configure") return 0;
 
     const fs::path project = projectPath(argc, argv);
     if (project.empty()) return 65;
+    if (failure == "build") {
+        if (envValue("MJ2X_FAKE_XMAKE_READONLY_SOURCE") == "1" &&
+            !markGeneratedSourceReadOnly(project)) {
+            return 70;
+        }
+        return 22;
+    }
     if (envValue("MJ2X_FAKE_XMAKE_ARTIFACT") == "none") return 0;
 #if defined(_WIN32)
     const fs::path library = project / "build" / "windows" / "x64" / "release" /

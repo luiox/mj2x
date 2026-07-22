@@ -25,6 +25,10 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 static void printUsage()
 {
     printf("Usage: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]\n");
@@ -66,13 +70,50 @@ public:
     ~TemporaryProjectCleanup()
     {
         if (path_.empty()) return;
-        std::error_code ec;
-        std::filesystem::remove_all(path_, ec);
+        if (removeAll(path_)) return;
+        fprintf(stderr,
+                "[mj2x] WARNING: cannot clean temporary xmake project: %s\n",
+                path_.string().c_str());
     }
 
     void set(std::filesystem::path path) { path_ = std::move(path); }
 
 private:
+    static void makeWritable(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        std::filesystem::permissions(
+            path, std::filesystem::perms::owner_all, std::filesystem::perm_options::add, ec);
+#ifdef _WIN32
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_READONLY) != 0) {
+            SetFileAttributesW(path.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
+        }
+#endif
+    }
+
+    static bool removeAll(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(path, ec);
+        if (!ec) return true;
+
+        makeWritable(path);
+        ec.clear();
+        std::filesystem::recursive_directory_iterator iterator(
+            path, std::filesystem::directory_options::skip_permission_denied, ec);
+        const std::filesystem::recursive_directory_iterator end;
+        while (!ec && iterator != end) {
+            makeWritable(iterator->path());
+            iterator.increment(ec);
+        }
+
+        ec.clear();
+        std::filesystem::remove_all(path, ec);
+        return !ec;
+    }
+
     std::filesystem::path path_;
 };
 
@@ -678,11 +719,15 @@ int main(int argc, char** argv)
                     fprintf(stderr, "[mj2x] ERROR: native source backend is unavailable.\n");
                     return 1;
                 }
-                compileRc =
-                    mj2x::cli::compileCSourceFromPipe(nativeSourceBackend->generatedSource(),
-                                                      options.outputPath,
-                                                      options.cCompilerKind,
-                                                      crtRoot);
+                const auto artifact = nativeSourceBackend->generatedSourceArtifact();
+                if (artifact.language != mj2x::NativeSourceLanguage::C99) {
+                    fprintf(stderr,
+                            "[mj2x] ERROR: --compile-mode pipe only supports C99 native "
+                            "source artifacts.\n");
+                    return 1;
+                }
+                compileRc = mj2x::cli::compileCSourceFromPipe(
+                    artifact.content, options.outputPath, options.cCompilerKind, crtRoot);
             }
             else {
                 compileRc = mj2x::cli::compileCSource(

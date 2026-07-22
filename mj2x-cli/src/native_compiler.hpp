@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace mj2x::cli {
 
@@ -42,7 +43,7 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
                    CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot = {});
 
 /// @brief 编译内存中的 C 源码；GCC/Clang/Zig 使用 stdin，MSVC 使用并清理临时源文件。
-int compileCSourceFromPipe(const std::string& cSource, const std::string& outputPath,
+int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
                            CCompilerKind requestedCompiler,
                            const std::filesystem::path& crtRoot = {});
 

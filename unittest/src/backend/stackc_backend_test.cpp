@@ -459,6 +459,18 @@ TEST(StackCBackendTest, StringConstantEmission)
     EXPECT_EQ(source.find("\"hello \\\"jni\\\"\\\\path\""), std::string::npos) << source;
 }
 
+TEST(StackCBackendTest, ReportsC99SourceArtifact)
+{
+    StackCBackend backend;
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+
+    const auto artifact = backend.generatedSourceArtifact();
+    EXPECT_EQ(artifact.language, NativeSourceLanguage::C99);
+    EXPECT_EQ(artifact.suggestedFileName, "native.c");
+    EXPECT_EQ(artifact.content, backend.generatedSource());
+}
+
 TEST(StackCBackendTest, PrimitiveArrayEmission)
 {
     StackCBackend  backend;

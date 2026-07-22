@@ -550,7 +550,7 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
     return 0;
 }
 
-int compileCSourceFromPipe(const std::string& cSource, const std::string& outputPath,
+int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
                            CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
 {
     if (cSource.empty()) {
@@ -636,7 +636,7 @@ int compileCSourceFromPipe(const std::string& cSource, const std::string& output
         fprintf(kStderrStream, "[mj2x] ERROR: C compiler stdin pipe is unavailable.\n");
         return 1;
     }
-    auto written = input->write_all(cSource);
+    auto written = input->write_all(cSource.data(), cSource.size());
     input->close();
     if (written.is_err()) {
         auto completed = child.wait_with_output();

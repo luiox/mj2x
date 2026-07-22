@@ -12,9 +12,30 @@
 #include "mj2x/core/compiler_index.hpp"
 #include "mj2x/frontend/block.hpp"
 
+#include <string>
 #include <string_view>
 
 namespace mj2x {
+
+/// @brief Native 源文件的语言方言。
+///
+/// 当前两个后端都只生成 C99；C++17 和 LLVM IR 由后续 emitter 通过同一契约接入。
+enum class NativeSourceLanguage
+{
+    C99,
+    Cpp17,
+    LlvmIr,
+};
+
+/// @brief finalize 后由 native backend 公开的源产物。
+///
+/// @details content 的所有权仍属于 backend，调用方不得在 backend 析构后保留该视图。
+struct NativeSourceArtifact
+{
+    NativeSourceLanguage language;
+    std::string_view     content;
+    std::string_view     suggestedFileName;
+};
 
 /// @brief 抽象后端：把选定方法的 L1 MIR 翻译成 native 源。
 ///
@@ -48,6 +69,9 @@ public:
     /// @brief 返回 finalize 后生成的完整 native 源码。
     /// @details 返回的引用由 backend 持有，在 backend 生命周期内有效。
     virtual const std::string& generatedSource() const = 0;
+
+    /// @brief 返回 finalize 后生成的 native 源产物元数据与内容。
+    virtual NativeSourceArtifact generatedSourceArtifact() const = 0;
 };
 
 }   // namespace mj2x
