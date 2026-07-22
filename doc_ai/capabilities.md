@@ -109,7 +109,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - try / catch
 - null trap
 - integer div / rem trap(走 R3 runtime ABI)
-- generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池
+- generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池。动态 descriptor 与 runtime `class_name` 不进入全局 cache，避免破坏 class-loader identity 和类卸载语义；量化依据见 [regc_cache_cse_evaluation.md](regc_cache_cse_evaluation.md)
 - **JDK intrinsic(Math / wrapper parse/toString/compare/value-unbox / Random next* / String UTF-16 hot paths / mutable String CRT 链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接调用 CRT ABI 或 TU-local cache helper
 
 **JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
