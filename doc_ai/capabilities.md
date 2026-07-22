@@ -151,7 +151,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | 模块 | 状态 |
 |---|---|
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
-| `mj2x-crt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;无 `libca` 分发依赖 |
+| `mj2x-crt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;包含 Math、Random 和非逃逸 primitive wrapper intrinsic；无 `libca` 分发依赖 |
 | RegC / R3 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String/split 与 opaque StringBuilder/StringBuffer helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
@@ -239,6 +239,9 @@ xmake run mj2x_integration_test
 xmake run mj2x_runtime_test
 tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 ```
+
+Linux CI 安装 OpenJDK 17，并构建、执行 `mtest_set_unittest`、`mj2x_unittest`
+和 `mj2x_integration_test`；`mj2x-cli` 作为同一构建批次的依赖目标。
 
 能力到测试的追溯见 `../doc_ai/mvp_backend_verification.md`。
 

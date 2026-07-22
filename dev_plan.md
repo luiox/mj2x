@@ -6,8 +6,7 @@
 
 ## 后续待办
 
-- [ ] **R5：mjdbg 闭环验证**：使用 mjdbg/c2j 验证 RegC 保护强度并产出量化结论。前置：R3 RegC ABI live 验证与样本反馈。
-- [ ] **CI 接入 mtest_set 与 mj2x**：评估 Linux CI 的 JDK/MSVC 可用性，将 `mtest_set_unittest` 与 `mj2x_unittest` 纳入 CI 矩阵；工具链缺失时使用 GTEST_SKIP。
+- [ ] **R5：mjdbg 闭环验证**：使用 mjdbg/c2j 验证 RegC 保护强度并产出量化结论。当前阻塞：仓库未提供 c2j CLI；本机 mjdbg protected-sample 与 native trace smoke 均在 adopt 后的 `trace start` CLI 请求超时。待 trace CLI 恢复并提供 c2j agent 后复验。
 
 ## 下一步验证命令
 
