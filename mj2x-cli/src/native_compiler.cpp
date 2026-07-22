@@ -714,6 +714,9 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         for (const auto& include : includes) command.arg("-I" + include.string());
         command.arg("-o").arg(libraryPath.string());
         for (const auto& source : sources) command.arg(source.string());
+#ifndef _WIN32
+        command.arg("-lm");
+#endif
         for (const auto& object : cppCrtObjects) command.arg(object.string());
         result = runCompilerCommand(command, executable);
     }
@@ -810,6 +813,9 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
     for (const auto& include : includes) command.arg("-I" + include.string());
     command.arg("-o").arg(libraryPath.string());
     for (const auto& source : sources) command.arg(source.string());
+#ifndef _WIN32
+    command.arg("-lm");
+#endif
     command.arg("-x").arg("c").arg("-");
     command.stdin(ca::process::Stdio::piped())
         .stdout(ca::process::Stdio::piped())

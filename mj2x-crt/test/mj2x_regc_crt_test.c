@@ -12,6 +12,7 @@ typedef struct thrown_exception
 } thrown_exception;
 
 void test_string_buffer_concurrency(void);
+void test_regc_intrinsic_c99_abi(void);
 
 static void record_throw(void* env, const char* class_name, const char* message)
 {
@@ -108,6 +109,7 @@ int main(void)
 {
     test_div_rem_and_status_bridge();
     test_compare_intrinsics();
+    test_regc_intrinsic_c99_abi();
     test_string_builder_utf16_and_errors();
     test_string_buffer_concurrency();
     return 0;

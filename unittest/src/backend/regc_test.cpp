@@ -666,10 +666,12 @@ TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
     auto start   = new LabelNode();
     auto end     = new LabelNode();
     auto handler = new LabelNode();
+    const std::string methodName = "monitorCatch";
+    const std::string methodDesc = "(Ljava/lang/Object;)I";
     auto mn      = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-        "monitorCatch",
-        "(Ljava/lang/Object;)I",
+        methodName,
+        methodDesc,
         {
             new VarInsnNode(Opcodes::ALOAD, 0),
             new InsnNode(Opcodes::DUP),

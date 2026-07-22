@@ -46,5 +46,5 @@ target("mj2x_native")
         add_cflags("/utf-8", {tools = "cl"})
         add_cxxflags("/utf-8", {tools = "cl"})
     else
-        add_syslinks("pthread")
+        add_syslinks("pthread", "m")
     end

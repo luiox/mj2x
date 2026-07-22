@@ -28,7 +28,7 @@ target("mj2x-crt")
         add_cflags("/utf-8", {tools = "cl"})
         add_cxxflags("/utf-8", {tools = "cl"})
     else
-        add_syslinks("pthread")
+        add_syslinks("pthread", "m")
     end
 
 target("mj2x_crt_test")
@@ -48,5 +48,5 @@ target("mj2x_crt_test")
         add_cflags("/utf-8", {tools = "cl"})
         add_cxxflags("/utf-8", {tools = "cl"})
     else
-        add_syslinks("pthread")
+        add_syslinks("pthread", "m")
     end

@@ -1128,7 +1128,7 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
     EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
     EXPECT_EQ(xmake.find("@PROJECT_NAME@"), std::string::npos) << xmake;
 #ifndef _WIN32
-    EXPECT_NE(xmake.find("add_syslinks(\"pthread\")"), std::string::npos) << xmake;
+    EXPECT_NE(xmake.find("add_syslinks(\"pthread\", \"m\")"), std::string::npos) << xmake;
 #endif
     EXPECT_EQ(xmake, readText(test::getResourcePath("native_project/xmake.lua.golden")));
     EXPECT_EQ(readText(projectDir / "README.md"),
