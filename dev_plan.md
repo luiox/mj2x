@@ -4,13 +4,9 @@
 >
 > 治理规则(`../doc_ai/documentation_governance.md` §7)：任务完成后从本文件删除，并更新 CAPABILITIES。
 
-## 当前优先
-
-- [ ] **Native 编译管道跨平台验收**：在 Windows、Linux、macOS 分别记录 MSVC/GCC/Clang/Zig/xmake 的 file/pipe 结果。真实 Zig E2E 必须覆盖 class、JAR 和 JVM 加载；工具链缺失时明确记录 skipped/unverified，不把 fake-tool 验证替代为平台证据。
 ## 后续待办
 
 - [ ] **Native 后端与产物扩展**：在 `--emit-cpp` reserved CLI 入口之后，按小切片扩展 C++17 和可选 LLVM IR 输出，不改变 StackC/RegC 的既有承诺。
-  - 复用 RegC lowering 增加 C++ emitter/dialect、`.cpp` 工程模板及 MSVC/clang++/g++ 编译路径，通过 mj2x-crt C ABI 交互。
   - 以显式 opt-in 接入 textual `.ll` 与外部 clang/llc；第一批仅支持纯计算和控制流，对象/JNI/异常/monitor 保持 fail closed。
   - 每种产物必须有 CLI 负路径、结构断言、native E2E、Java baseline 对照和跨工具链记录。
 - [ ] **mj2x 持续优化专项**：围绕 #467/#468/#471 按可结构断言、可 native E2E、可 benchmark 的小批次推进。

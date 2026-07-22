@@ -6,8 +6,21 @@ add_rules("mode.debug", "mode.release")
 target("mj2x_native")
     set_kind("shared")
     set_targetdir("$(projectdir)/build/$(plat)/$(arch)/$(mode)")
-    add_files("src/generated/native.c")
-    add_files("src/mj2x-crt/**.c")
+    if os.isfile("src/generated/native.c") then
+        if is_plat("windows") then
+            add_files("src/generated/native.c", {cxflags = "/TC"})
+        else
+            add_files("src/generated/native.c")
+        end
+    end
+    if os.isfile("src/generated/native.cpp") then
+        add_files("src/generated/native.cpp")
+    end
+    if is_plat("windows") then
+        add_files("src/mj2x-crt/**.c", {cxflags = "/TC"})
+    else
+        add_files("src/mj2x-crt/**.c")
+    end
     if #os.files("src/mj2x-crt/**.cpp") > 0 then
         add_files("src/mj2x-crt/**.cpp")
     end
@@ -30,7 +43,6 @@ target("mj2x_native")
     end
 
     if is_plat("windows") then
-        add_cflags("/TC", {tools = "cl"})
         add_cflags("/utf-8", {tools = "cl"})
         add_cxxflags("/utf-8", {tools = "cl"})
     else

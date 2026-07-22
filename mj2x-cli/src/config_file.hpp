@@ -11,6 +11,7 @@ struct ConfigFileOptions
     std::optional<std::string> input;
     std::optional<std::string> output;
     std::optional<std::string> emitC;
+    std::optional<std::string> emitCpp;
     std::optional<std::string> backend;
     std::optional<std::string> nativeAnnotation;
     std::vector<std::string>   nativeMethodPrefixes;

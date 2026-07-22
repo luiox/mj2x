@@ -125,12 +125,13 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `-i, --input <.class/.jar>` | 输入文件 |
 | `-o, --output <.class/.jar>` | 输出文件(方法被标记为 native) |
 | `--emit-c <file>` | 输出的 C 源码路径 |
+| `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
 | `--config <file>` | 从 JSON 配置读取默认参数,命令行显式参数覆盖配置 |
 | `--backend <stackc\|regc>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名) |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
-| `--compile` | 在 `--emit-c` 后自动编译 native library |
-| `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 C 编译器 |
-| `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 `--emit-c` 时源码写到 `<dir>/native.c` |
+| `--compile` | 在 `--emit-c` 或 `--emit-cpp` 后自动编译 native library |
+| `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++` |
+| `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--help` | 打印帮助 |
 
@@ -167,7 +168,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile
 mj2x-cli -i Hello.class -o Hello_native.class --compile --compile-mode pipe --c-compiler clang
 ```
 
-`pipe` 模式不能与 `--emit-c`、`--generate-cmake` 或 `--generate-xmake` 同用。GCC、
+`pipe` 模式不能与 `--emit-c`、`--emit-cpp`、`--generate-cmake` 或 `--generate-xmake` 同用。GCC、
 Clang 和 Zig (`zig cc`) 直接从 stdin 读取源码，不产生 `.c` 文件。MSVC 的 `cl`/`c1` 不支持 stdin，并会拒绝
 Windows 命名管道路径，因此 Windows/MSVC 使用受控临时 `.c` fallback；CLI 在编译成功和失败
 返回前都会清理该文件，但这不是严格的 no-write 模式。需要严格不落盘时显式选择 Clang。
@@ -220,19 +221,32 @@ xmake configure/build，验证唯一 release 共享库后原子复制到 `--outp
 该库。xmake 是落地工程模式，不能与 `--compile-mode pipe` 同用。显式 direct 编译器（如
 `--c-compiler clang`）也不能和 `--generate-xmake ... --compile` 同时指定。
 
-### 5.3 生成 CMake 工程
+### 5.3 RegC C++17
+
+`--emit-cpp` 将 RegC C99 JNI 函数表调用转换为 C++ JNI 成员调用，并为 JNI export 保持
+C linkage。RegC CRT 源码始终以 C 编译，通过稳定的 C ABI 链接：
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
+  --emit-cpp Hello.cpp --compile --c-compiler zig
+```
+
+`--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并随 RegC 工程复制
+`mj2x-crt` source pack。
+
+### 5.4 生成 CMake 工程
 
 `--generate-cmake <dir>` 会把生成的 `.c` 和最小 CMake 工程写到指定目录。
 核心是把生成的 `.c` 连同 JNI 头编译为 shared library。
 
-### 5.4 手动编译(Windows / cl)
+### 5.5 手动编译(Windows / cl)
 
 ```bash
 javac -h . Hello.java
 cl /LD /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" Hello.c /FeHello.dll
 ```
 
-### 5.5 手动编译(Linux / gcc)
+### 5.6 手动编译(Linux / gcc)
 
 ```bash
 javac -h . Hello.java

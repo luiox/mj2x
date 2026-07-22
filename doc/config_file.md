@@ -10,6 +10,7 @@ Supported keys:
 | `input` | string | `-i` |
 | `output` | string | `-o` |
 | `emit_c` | string | `--emit-c` |
+| `emit_cpp` | string | `--emit-cpp` |
 | `backend` | string: `stackc`, `regc`, `cbackend`, or `c` | `--backend` |
 | `native_annotation` | string | `--native-annotation` |
 | `native_method_prefixes` | string array | repeated `--native-method-prefix` |
@@ -26,7 +27,7 @@ Example:
 {
   "input": "Hello.class",
   "output": "Hello_native.class",
-  "emit_c": "Hello.c",
+  "emit_cpp": "Hello.cpp",
   "backend": "regc",
   "dump_mir": true
 }

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -45,6 +46,19 @@ const char* compilerExecutable(CCompilerKind compiler)
     case CCompilerKind::Msvc:  return "cl";
     case CCompilerKind::Gcc:   return "gcc";
     case CCompilerKind::Clang: return "clang";
+    case CCompilerKind::Zig:   return "zig";
+    case CCompilerKind::Auto:  break;
+    }
+    return "";
+}
+
+/// CCompilerKind → C++ 可执行文件名。MSVC 通过源文件扩展名自动选择 C++ 前端。
+const char* cppCompilerExecutable(CCompilerKind compiler)
+{
+    switch (compiler) {
+    case CCompilerKind::Msvc:  return "cl";
+    case CCompilerKind::Gcc:   return "g++";
+    case CCompilerKind::Clang: return "clang++";
     case CCompilerKind::Zig:   return "zig";
     case CCompilerKind::Auto:  break;
     }
@@ -242,6 +256,55 @@ int runCompilerCommand(ca::process::Command& command, const char* compilerName)
     return 0;
 }
 
+class ScopedTemporaryDirectory
+{
+public:
+    ~ScopedTemporaryDirectory()
+    {
+        if (path_.empty()) return;
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    bool create(const std::filesystem::path& parent, const char* prefix)
+    {
+        static std::atomic<unsigned long long> sequence{0};
+        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto token = std::string(prefix) + std::to_string(ticks) + "_" +
+                           std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+        std::error_code ec;
+        path_ = parent / token;
+        return std::filesystem::create_directory(path_, ec);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+bool compileCrtSourcesToObjects(const std::vector<std::filesystem::path>& sources,
+                                const std::vector<std::filesystem::path>& includes,
+                                CCompilerKind compiler,
+                                const std::filesystem::path& objectDirectory,
+                                std::vector<std::filesystem::path>& objects)
+{
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        const auto object = objectDirectory / ("crt_" + std::to_string(index) + ".o");
+        ca::process::Command command(compilerExecutable(compiler));
+        if (compiler == CCompilerKind::Zig) command.arg("cc");
+        command.arg("-c");
+#ifndef _WIN32
+        command.arg("-fPIC");
+#endif
+        for (const auto& include : includes) command.arg("-I" + include.string());
+        command.arg(sources[index].string()).arg("-o").arg(object.string());
+        if (runCompilerCommand(command, compilerExecutable(compiler)) != 0) return false;
+        objects.push_back(object);
+    }
+    return true;
+}
+
 #ifdef _WIN32
 std::string uniqueCompilerSourceToken()
 {
@@ -358,7 +421,7 @@ private:
 };
 
 int compileMsvcSourceFromTemporaryFile(
-    const std::string&                         cSource,
+    std::string_view                           cSource,
     const std::filesystem::path&               libraryPath,
     const std::vector<std::filesystem::path>& includes,
     const std::vector<std::filesystem::path>& sources)
@@ -461,14 +524,15 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath)
     return nativeLibraryPath(outputPath);
 }
 
-int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
-                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+int compileNativeSource(const std::string& sourcePath, const std::string& outputPath,
+                        CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                        bool useCpp17)
 {
     std::error_code ec;
-    if (!std::filesystem::exists(cOutputPath, ec)) {
+    if (!std::filesystem::exists(sourcePath, ec)) {
         fprintf(kStderrStream,
-                "[mj2x] ERROR: emitted C source does not exist: %s\n",
-                cOutputPath.c_str());
+                "[mj2x] ERROR: emitted native source does not exist: %s\n",
+                sourcePath.c_str());
         return 1;
     }
 
@@ -488,14 +552,32 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
     std::vector<std::filesystem::path> includes;
     if (!jniIncludePaths(includes)) return 1;
 
-    std::vector<std::filesystem::path> sources{std::filesystem::path(cOutputPath)};
-    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources)) return 1;
+    std::vector<std::filesystem::path> sources{std::filesystem::path(sourcePath)};
+    std::vector<std::filesystem::path> crtSources;
+    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, crtSources)) return 1;
 
     std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::filesystem::remove(libraryPath, ec);
     ec.clear();
     printf("[mj2x] Compiling native library: %s\n", libraryPath.string().c_str());
     int result = 1;
+    std::vector<std::filesystem::path> cppCrtObjects;
+    ScopedTemporaryDirectory             cppObjectDirectory;
+    if (useCpp17 && compiler != CCompilerKind::Msvc && !crtSources.empty()) {
+        std::filesystem::path parent = libraryPath.parent_path();
+        if (parent.empty()) parent = ".";
+        if (!cppObjectDirectory.create(parent, ".mj2x-cpp-")) {
+            fprintf(kStderrStream, "[mj2x] ERROR: cannot create temporary C++ object directory.\n");
+            return 1;
+        }
+        if (!compileCrtSourcesToObjects(
+                crtSources, includes, compiler, cppObjectDirectory.path(), cppCrtObjects)) {
+            return 1;
+        }
+    }
+    else {
+        sources.insert(sources.end(), crtSources.begin(), crtSources.end());
+    }
     if (compiler == CCompilerKind::Msvc) {
 #ifdef _WIN32
         ProcessEnvironment    environment;
@@ -503,6 +585,7 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
         if (!loadMsvcEnvironment(environment, compilerPath)) return 1;
         ca::process::Command command(compilerPath.string());
         command.arg("/nologo").arg("/LD");
+        if (useCpp17) command.arg("/std:c++17");
         for (const auto& include : includes) command.arg("/I" + include.string());
         std::filesystem::path objectDir = libraryPath.parent_path();
         if (objectDir.empty()) objectDir = ".";
@@ -522,16 +605,20 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
 #else
         const char* sharedFlag = "-shared";
 #endif
-        ca::process::Command command(compilerExecutable(compiler));
-        if (compiler == CCompilerKind::Zig) command.arg("cc");
+        const char* executable = useCpp17 ? cppCompilerExecutable(compiler)
+                                           : compilerExecutable(compiler);
+        ca::process::Command command(executable);
+        if (compiler == CCompilerKind::Zig) command.arg(useCpp17 ? "c++" : "cc");
         command.arg(sharedFlag);
+        if (useCpp17) command.arg("-std=c++17");
 #ifndef _WIN32
         command.arg("-fPIC").arg("-pthread");
 #endif
         for (const auto& include : includes) command.arg("-I" + include.string());
         command.arg("-o").arg(libraryPath.string());
         for (const auto& source : sources) command.arg(source.string());
-        result = runCompilerCommand(command, compilerExecutable(compiler));
+        for (const auto& object : cppCrtObjects) command.arg(object.string());
+        result = runCompilerCommand(command, executable);
     }
 
     if (result != 0) {
@@ -548,6 +635,18 @@ int compileCSource(const std::string& cOutputPath, const std::string& outputPath
     }
     printf("[mj2x] Native library written: %s\n", libraryPath.string().c_str());
     return 0;
+}
+
+int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
+                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+{
+    return compileNativeSource(cOutputPath, outputPath, requestedCompiler, crtRoot, false);
+}
+
+int compileCppSource(const std::string& cppOutputPath, const std::string& outputPath,
+                     CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+{
+    return compileNativeSource(cppOutputPath, outputPath, requestedCompiler, crtRoot, true);
 }
 
 int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,

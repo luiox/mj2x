@@ -10,6 +10,7 @@
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "config_file.hpp"
+#include "cpp_source_dialect.hpp"
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
 #include "jzip/memory_segment.hpp"
@@ -35,8 +36,8 @@ static void printUsage()
     printf("Options:\n");
     printf("  --config <file>           Load JSON options; command line values override it\n");
     printf("  --emit-c <file>            Output C source to file\n");
-    printf("  --emit-cpp <file>          Reserved C++17 source output (planned)\n");
-    printf("  --backend <stackc|regc>    Select C emitter when --emit-c is used (default: stackc; "
+    printf("  --emit-cpp <file>          Output RegC C++17 source to file\n");
+    printf("  --backend <stackc|regc>    Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf(
         "  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
@@ -157,6 +158,7 @@ static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOp
     if (config.input) options.inputPath = *config.input;
     if (config.output) options.outputPath = *config.output;
     if (config.emitC) options.cOutputPath = *config.emitC;
+    if (config.emitCpp) options.cppOutputPath = *config.emitCpp;
     if (config.nativeAnnotation) options.nativeAnnotation = *config.nativeAnnotation;
     if (config.hasNativeMethodPrefixes) options.nativeMethodPrefixes = config.nativeMethodPrefixes;
     if (config.compile) options.compileNative = *config.compile;
@@ -265,7 +267,32 @@ static bool isNativeAnnotationDescriptor(const std::string& descriptor)
            descriptor.find('.') == std::string::npos;
 }
 
-static int generateCMakeProject(const std::string& projectDirValue, const std::string& cOutputPath)
+static bool copyCrtForCMakeProject(const std::filesystem::path& projectDir,
+                                   const std::filesystem::path& crtRoot)
+{
+    namespace fs = std::filesystem;
+    const fs::path sourceRoot = crtRoot / "src";
+    const fs::path destinationRoot = projectDir / "mj2x-crt";
+    std::error_code ec;
+    if (!fs::is_regular_file(sourceRoot / "regc" / "mj2x_regc_crt.h", ec)) return false;
+    for (const auto& entry : fs::recursive_directory_iterator(sourceRoot, ec)) {
+        if (ec) return false;
+        const fs::path destination = destinationRoot / entry.path().lexically_relative(sourceRoot);
+        if (entry.is_directory()) {
+            fs::create_directories(destination, ec);
+        }
+        else if (entry.is_regular_file()) {
+            fs::create_directories(destination.parent_path(), ec);
+            if (!ec) fs::copy_file(entry.path(), destination, fs::copy_options::overwrite_existing, ec);
+        }
+        if (ec) return false;
+    }
+    return true;
+}
+
+static int generateCMakeProject(const std::string& projectDirValue,
+                                const std::string& nativeOutputPath,
+                                const std::filesystem::path& crtRoot)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -278,15 +305,16 @@ static int generateCMakeProject(const std::string& projectDirValue, const std::s
         return 1;
     }
 
-    fs::path sourcePath(cOutputPath);
+    fs::path sourcePath(nativeOutputPath);
     if (!fs::exists(sourcePath, ec)) {
         fprintf(stderr,
-                "[mj2x] ERROR: emitted C source does not exist: %s\n",
+                "[mj2x] ERROR: emitted native source does not exist: %s\n",
                 sourcePath.string().c_str());
         return 1;
     }
 
-    fs::path expectedSource = projectDir / "native.c";
+    const bool isCppSource = hasExtension(sourcePath.string(), ".cpp");
+    fs::path    expectedSource = projectDir / sourcePath.filename();
     if (fs::absolute(sourcePath, ec) != fs::absolute(expectedSource, ec)) {
         fs::copy_file(sourcePath, expectedSource, fs::copy_options::overwrite_existing, ec);
         if (ec) {
@@ -297,6 +325,12 @@ static int generateCMakeProject(const std::string& projectDirValue, const std::s
         }
     }
 
+    const bool needsCrt = !crtRoot.empty();
+    if (needsCrt && !copyCrtForCMakeProject(projectDir, crtRoot)) {
+        fprintf(stderr, "[mj2x] ERROR: cannot copy mj2x-crt into CMake project.\n");
+        return 1;
+    }
+
     {
         std::ofstream out(projectDir / "CMakeLists.txt", std::ios::binary);
         if (!out) {
@@ -304,10 +338,27 @@ static int generateCMakeProject(const std::string& projectDirValue, const std::s
             return 1;
         }
         out << "cmake_minimum_required(VERSION 3.16)\n";
-        out << "project(mj2x_native C)\n\n";
+        out << "project(mj2x_native C" << (isCppSource ? " CXX" : "") << ")\n\n";
+        if (isCppSource) {
+            out << "set(CMAKE_CXX_STANDARD 17)\n";
+            out << "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
+        }
         out << "find_package(JNI REQUIRED)\n\n";
-        out << "add_library(mj2x_native SHARED native.c)\n";
+        if (needsCrt) {
+            out << "file(GLOB_RECURSE MJ2X_CRT_SOURCES CONFIGURE_DEPENDS "
+                   "\"${CMAKE_CURRENT_SOURCE_DIR}/mj2x-crt/*.c\")\n";
+        }
+        out << "add_library(mj2x_native SHARED " << sourcePath.filename().string();
+        if (needsCrt) out << " ${MJ2X_CRT_SOURCES}";
+        out << ")\n";
         out << "target_include_directories(mj2x_native PRIVATE ${JNI_INCLUDE_DIRS})\n";
+        if (needsCrt) {
+            out << "target_include_directories(mj2x_native PRIVATE "
+                   "${CMAKE_CURRENT_SOURCE_DIR}/mj2x-crt)\n";
+        }
+        out << "if(UNIX AND NOT APPLE)\n";
+        out << "  target_link_libraries(mj2x_native PRIVATE pthread)\n";
+        out << "endif()\n";
         out << "set_target_properties(mj2x_native PROPERTIES OUTPUT_NAME mj2x_native)\n";
     }
 
@@ -371,6 +422,7 @@ int main(int argc, char** argv)
     TemporaryProjectCleanup temporaryProjectCleanup;
 
     bool commandLineNativePrefixesSeen = false;
+    bool commandLineNativeOutputSeen   = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--config") {
@@ -408,10 +460,22 @@ int main(int argc, char** argv)
             options.inputPath = argv[++i];
         else if (arg == "-o" && i + 1 < argc)
             options.outputPath = argv[++i];
-        else if (arg == "--emit-c" && i + 1 < argc)
+        else if (arg == "--emit-c" && i + 1 < argc) {
+            if (!commandLineNativeOutputSeen) {
+                options.cOutputPath.clear();
+                options.cppOutputPath.clear();
+                commandLineNativeOutputSeen = true;
+            }
             options.cOutputPath = argv[++i];
-        else if (arg == "--emit-cpp" && i + 1 < argc)
+        }
+        else if (arg == "--emit-cpp" && i + 1 < argc) {
+            if (!commandLineNativeOutputSeen) {
+                options.cOutputPath.clear();
+                options.cppOutputPath.clear();
+                commandLineNativeOutputSeen = true;
+            }
             options.cppOutputPath = argv[++i];
+        }
         else if (arg == "--native-annotation" && i + 1 < argc)
             options.nativeAnnotation = argv[++i];
         else if (arg == "--native-method-prefix" && i + 1 < argc) {
@@ -479,9 +543,13 @@ int main(int argc, char** argv)
         fprintf(stderr, "--emit-c and --emit-cpp are mutually exclusive.\n");
         return 1;
     }
-    if (!options.cppOutputPath.empty()) {
+    if (!options.cppOutputPath.empty() && !hasExtension(options.cppOutputPath, ".cpp")) {
         fprintf(stderr,
-                "--emit-cpp is reserved for the planned C++17 backend and is not implemented yet.\n");
+                "--emit-cpp requires a .cpp output path.\n");
+        return 1;
+    }
+    if (!options.cppOutputPath.empty() && options.cBackendKind != CEmitterBackend::RegC) {
+        fprintf(stderr, "--emit-cpp currently requires --backend regc.\n");
         return 1;
     }
 
@@ -537,7 +605,8 @@ int main(int argc, char** argv)
     }
 
     if (options.compileMode == mj2x::cli::CompileMode::Pipe &&
-        (!options.cOutputPath.empty() || !options.cmakeProjectDir.empty() ||
+        (!options.cOutputPath.empty() || !options.cppOutputPath.empty() ||
+         !options.cmakeProjectDir.empty() ||
          !options.xmakeProjectDir.empty())) {
         fprintf(stderr,
                 "--compile-mode pipe cannot be combined with --emit-c or generated native "
@@ -545,12 +614,14 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!options.cmakeProjectDir.empty() && options.cOutputPath.empty()) {
+    if (!options.cmakeProjectDir.empty() && options.cOutputPath.empty() &&
+        options.cppOutputPath.empty()) {
         options.cOutputPath =
             (std::filesystem::path(options.cmakeProjectDir) / "native.c").string();
     }
 
-    if (!options.xmakeProjectDir.empty() && options.cOutputPath.empty()) {
+    if (!options.xmakeProjectDir.empty() && options.cOutputPath.empty() &&
+        options.cppOutputPath.empty()) {
         options.cOutputPath =
             (std::filesystem::path(options.xmakeProjectDir) / "src" / "generated" / "native.c")
                 .string();
@@ -558,15 +629,18 @@ int main(int argc, char** argv)
 
     const bool pipeCompile =
         options.compileNative && options.compileMode == mj2x::cli::CompileMode::Pipe;
+    const std::string& nativeOutputPath = options.cppOutputPath.empty()
+                                              ? options.cOutputPath
+                                              : options.cppOutputPath;
 
-    if (options.backendSelected && options.cOutputPath.empty() && !pipeCompile) {
-        fprintf(stderr, "--backend requires --emit-c or a generated native project.\n");
+    if (options.backendSelected && nativeOutputPath.empty() && !pipeCompile) {
+        fprintf(stderr, "--backend requires --emit-c, --emit-cpp, or a generated native project.\n");
         printUsage();
         return 1;
     }
 
-    if (options.compileNative && options.cOutputPath.empty() && !pipeCompile) {
-        fprintf(stderr, "--compile requires --emit-c or a generated native project.\n");
+    if (options.compileNative && nativeOutputPath.empty() && !pipeCompile) {
+        fprintf(stderr, "--compile requires --emit-c, --emit-cpp, or a generated native project.\n");
         printUsage();
         return 1;
     }
@@ -624,7 +698,7 @@ int main(int argc, char** argv)
 
     mj2x::Pipeline pipeline(std::move(config));
 
-    const bool needsNativeSource = !options.cOutputPath.empty() || pipeCompile;
+    const bool needsNativeSource = !nativeOutputPath.empty() || pipeCompile;
     mj2x::Backend* nativeSourceBackend = nullptr;
 
     if (needsNativeSource) {
@@ -680,15 +754,59 @@ int main(int argc, char** argv)
     int rc = pipeline.run();
     if (rc != 0) return rc;
 
+    std::string                  cppSource;
+    mj2x::NativeSourceArtifact nativeArtifact{mj2x::NativeSourceLanguage::C99, {}, {}};
+    if (needsNativeSource) {
+        if (nativeSourceBackend == nullptr) {
+            fprintf(stderr, "[mj2x] ERROR: native source backend is unavailable.\n");
+            return 1;
+        }
+        nativeArtifact = nativeSourceBackend->generatedSourceArtifact();
+    }
+    if (!options.cppOutputPath.empty()) {
+        if (nativeArtifact.language != mj2x::NativeSourceLanguage::C99) {
+            fprintf(stderr,
+                    "[mj2x] ERROR: --emit-cpp requires a C99 backend source artifact.\n");
+            return 1;
+        }
+        cppSource = mj2x::cli::emitCpp17Dialect(nativeArtifact.content);
+        std::ofstream output(options.cppOutputPath, std::ios::binary | std::ios::trunc);
+        if (!output) {
+            fprintf(stderr,
+                    "[mj2x] ERROR: cannot write emitted C++ source: %s\n",
+                    options.cppOutputPath.c_str());
+            return 1;
+        }
+        output.write(cppSource.data(), static_cast<std::streamsize>(cppSource.size()));
+        if (!output) {
+            fprintf(stderr,
+                    "[mj2x] ERROR: cannot write emitted C++ source: %s\n",
+                    options.cppOutputPath.c_str());
+            return 1;
+        }
+        nativeArtifact = {mj2x::NativeSourceLanguage::Cpp17, cppSource, "native.cpp"};
+    }
+
     if (!options.cmakeProjectDir.empty()) {
-        int projectRc = generateCMakeProject(options.cmakeProjectDir, options.cOutputPath);
+        std::filesystem::path cmakeCrtRoot;
+        if (options.cBackendKind == CEmitterBackend::RegC) {
+            cmakeCrtRoot = mj2x::cli::findCrtRoot(argv[0]);
+            if (cmakeCrtRoot.empty()) {
+                fprintf(stderr,
+                        "[mj2x] ERROR: RegC CMake project requires an mj2x-crt source pack; "
+                        "set MJ2X_CRT_DIR.\n");
+                return 1;
+            }
+        }
+        int projectRc =
+            generateCMakeProject(options.cmakeProjectDir, nativeOutputPath, cmakeCrtRoot);
         if (projectRc != 0) return projectRc;
     }
 
     if (!options.xmakeProjectDir.empty()) {
         mj2x::cli::XmakeProjectConfig projectConfig;
         projectConfig.projectDir          = options.xmakeProjectDir;
-        projectConfig.generatedSourcePath = options.cOutputPath;
+        projectConfig.generatedSourcePath = nativeOutputPath;
         projectConfig.crtRoot             = mj2x::cli::findCrtRoot(argv[0]);
         projectConfig.projectName         = "mj2x_native_project";
         int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
@@ -719,19 +837,27 @@ int main(int argc, char** argv)
                     fprintf(stderr, "[mj2x] ERROR: native source backend is unavailable.\n");
                     return 1;
                 }
-                const auto artifact = nativeSourceBackend->generatedSourceArtifact();
-                if (artifact.language != mj2x::NativeSourceLanguage::C99) {
+                if (nativeArtifact.language != mj2x::NativeSourceLanguage::C99) {
                     fprintf(stderr,
                             "[mj2x] ERROR: --compile-mode pipe only supports C99 native "
                             "source artifacts.\n");
                     return 1;
                 }
                 compileRc = mj2x::cli::compileCSourceFromPipe(
-                    artifact.content, options.outputPath, options.cCompilerKind, crtRoot);
+                    nativeArtifact.content, options.outputPath, options.cCompilerKind, crtRoot);
             }
             else {
-                compileRc = mj2x::cli::compileCSource(
-                    options.cOutputPath, options.outputPath, options.cCompilerKind, crtRoot);
+                compileRc = nativeArtifact.language == mj2x::NativeSourceLanguage::Cpp17
+                                ? mj2x::cli::compileCppSource(
+                                      nativeOutputPath,
+                                      options.outputPath,
+                                      options.cCompilerKind,
+                                      crtRoot)
+                                : mj2x::cli::compileCSource(
+                                      nativeOutputPath,
+                                      options.outputPath,
+                                      options.cCompilerKind,
+                                      crtRoot);
             }
         }
         if (compileRc != 0) return compileRc;

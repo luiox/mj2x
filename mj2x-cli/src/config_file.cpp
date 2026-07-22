@@ -37,6 +37,7 @@ bool rejectUnknownKeys(const json& root, std::string& error)
         "input",
         "output",
         "emit_c",
+        "emit_cpp",
         "backend",
         "native_annotation",
         "native_method_prefixes",
@@ -114,6 +115,7 @@ bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::st
     if (!getString(root, "input", parsed.input, error)) return false;
     if (!getString(root, "output", parsed.output, error)) return false;
     if (!getString(root, "emit_c", parsed.emitC, error)) return false;
+    if (!getString(root, "emit_cpp", parsed.emitCpp, error)) return false;
     if (!getString(root, "backend", parsed.backend, error)) return false;
     if (!getString(root, "native_annotation", parsed.nativeAnnotation, error)) return false;
     if (!getStringArray(root,

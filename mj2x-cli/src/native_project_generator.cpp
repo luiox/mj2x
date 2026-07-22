@@ -217,7 +217,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         return 1;
     }
 
-    const fs::path nativeDest = generatedDir / "native.c";
+    const fs::path nativeDest = generatedDir / config.generatedSourcePath.filename();
     auto           sourceAbs  = fs::absolute(config.generatedSourcePath, ec);
     auto           nativeAbs  = fs::absolute(nativeDest, ec);
     if (sourceAbs != nativeAbs) {
