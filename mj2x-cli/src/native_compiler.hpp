@@ -21,6 +21,13 @@ enum class CompileMode
     Pipe,
 };
 
+/// @brief LLVM textual IR 的外部编译路径。
+enum class LlvmTool
+{
+    Clang,
+    Llc,
+};
+
 /// @brief 解析 CLI 传入的 C 编译器名称。
 ///
 /// 支持 `msvc`、`gcc`、`clang`、`zig`。解析失败时返回 false,由 CLI 层打印参数错误。
@@ -28,6 +35,11 @@ bool parseCompilerName(const std::string& name, CCompilerKind& compiler);
 
 /// @brief 解析 CLI 传入的 native 编译输入模式。
 bool parseCompileModeName(const std::string& name, CompileMode& mode);
+
+/// @brief 解析 LLVM IR 编译工具名称。
+///
+/// 支持 `clang`（直接由 LLVM IR 链接动态库）和 `llc`（先生成 object，再由 clang 链接）。
+bool parseLlvmToolName(const std::string& name, LlvmTool& tool);
 
 std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath);
 
@@ -51,5 +63,12 @@ int compileCppSource(const std::string& cppOutputPath, const std::string& output
 int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
                            CCompilerKind requestedCompiler,
                            const std::filesystem::path& crtRoot = {});
+
+/// @brief 把 textual LLVM IR 编译为与输出 class/JAR 同目录的 native library。
+///
+/// LLVM IR 由后端直接产生 JNI ABI wrapper，不需要 C/JNI include 或 mj2x-crt source pack。
+/// `clang` 直接读取 `.ll`；`llc` 先生成临时 object，再由 clang 链接。失败时返回非 0。
+int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
+                        LlvmTool tool);
 
 }   // namespace mj2x::cli

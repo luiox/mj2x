@@ -126,11 +126,13 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `-o, --output <.class/.jar>` | 输出文件(方法被标记为 native) |
 | `--emit-c <file>` | 输出的 C 源码路径 |
 | `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
+| `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm` |
 | `--config <file>` | 从 JSON 配置读取默认参数,命令行显式参数覆盖配置 |
-| `--backend <stackc\|regc>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名) |
+| `--backend <stackc\|regc\|llvm>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码 |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
-| `--compile` | 在 `--emit-c` 或 `--emit-cpp` 后自动编译 native library |
+| `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
 | `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++` |
+| `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用 |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--help` | 打印帮助 |
@@ -168,7 +170,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --compile
 mj2x-cli -i Hello.class -o Hello_native.class --compile --compile-mode pipe --c-compiler clang
 ```
 
-`pipe` 模式不能与 `--emit-c`、`--emit-cpp`、`--generate-cmake` 或 `--generate-xmake` 同用。GCC、
+`pipe` 模式不能与 `--emit-c`、`--emit-cpp`、`--emit-llvm`、`--generate-cmake` 或 `--generate-xmake` 同用。GCC、
 Clang 和 Zig (`zig cc`) 直接从 stdin 读取源码，不产生 `.c` 文件。MSVC 的 `cl`/`c1` 不支持 stdin，并会拒绝
 Windows 命名管道路径，因此 Windows/MSVC 使用受控临时 `.c` fallback；CLI 在编译成功和失败
 返回前都会清理该文件，但这不是严格的 no-write 模式。需要严格不落盘时显式选择 Clang。
@@ -234,19 +236,35 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
 `--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并随 RegC 工程复制
 `mj2x-crt` source pack。
 
-### 5.4 生成 CMake 工程
+### 5.4 LLVM IR（opt-in）
+
+`--backend llvm --emit-llvm` 直接输出 textual LLVM IR，不链接 LLVM SDK。当前只接受静态
+`int` / `long` / `float` / `double` / `void` 方法中的纯数值计算、比较、分支、循环和 switch；
+对象、JNI 调用、字段/数组访问、异常、monitor、整数除法/取余和引用类型会 fail closed，保留原
+Java 字节码。
+
+```bash
+mj2x-cli -i Hello.class -o Hello_native.class --backend llvm \
+  --emit-llvm Hello.ll --compile --llvm-tool clang
+```
+
+`--llvm-tool llc` 先调用 `llc -filetype=obj`，再由 clang 链接。两种路径都要求相应工具在
+`PATH` 中。LLVM IR 当前不支持 `--compile-mode pipe`、`--generate-cmake` 或
+`--generate-xmake`。
+
+### 5.5 生成 CMake 工程
 
 `--generate-cmake <dir>` 会把生成的 `.c` 和最小 CMake 工程写到指定目录。
 核心是把生成的 `.c` 连同 JNI 头编译为 shared library。
 
-### 5.5 手动编译(Windows / cl)
+### 5.6 手动编译(Windows / cl)
 
 ```bash
 javac -h . Hello.java
 cl /LD /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" Hello.c /FeHello.dll
 ```
 
-### 5.6 手动编译(Linux / gcc)
+### 5.7 手动编译(Linux / gcc)
 
 ```bash
 javac -h . Hello.java

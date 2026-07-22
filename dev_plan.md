@@ -6,10 +6,7 @@
 
 ## 后续待办
 
-- [ ] **Native 后端与产物扩展**：在 `--emit-cpp` reserved CLI 入口之后，按小切片扩展 C++17 和可选 LLVM IR 输出，不改变 StackC/RegC 的既有承诺。
-  - 以显式 opt-in 接入 textual `.ll` 与外部 clang/llc；第一批仅支持纯计算和控制流，对象/JNI/异常/monitor 保持 fail closed。
-  - 每种产物必须有 CLI 负路径、结构断言、native E2E、Java baseline 对照和跨工具链记录。
-- [ ] **mj2x 持续优化专项**：围绕 #467/#468/#471 按可结构断言、可 native E2E、可 benchmark 的小批次推进。
+- [ ] **RegC 后续优化与回归修复**：围绕新发现的性能或正确性数据，按可结构断言、可 native E2E、可 benchmark 的小批次推进。
   - 维持 String intrinsic、discarded-return、空串 fast path、String read hot path、embedded xmake CRT 资源和 RegC cache pool 的回归稳定。
   - 评估受限动态 descriptor cache，记录 cache symbol 数、生成 C 体积与 C 编译耗时。
   - 按 benchmark 命中率扩展低风险 Java intrinsic；新增 shadow object 必须定义 materialize 或可证明正确的 Java fallback。

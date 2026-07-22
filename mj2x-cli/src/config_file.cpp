@@ -38,12 +38,14 @@ bool rejectUnknownKeys(const json& root, std::string& error)
         "output",
         "emit_c",
         "emit_cpp",
+        "emit_llvm",
         "backend",
         "native_annotation",
         "native_method_prefixes",
         "compile",
         "compile_mode",
         "c_compiler",
+        "llvm_tool",
         "generate_xmake",
         "generate_cmake",
         "dump_mir",
@@ -116,6 +118,7 @@ bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::st
     if (!getString(root, "output", parsed.output, error)) return false;
     if (!getString(root, "emit_c", parsed.emitC, error)) return false;
     if (!getString(root, "emit_cpp", parsed.emitCpp, error)) return false;
+    if (!getString(root, "emit_llvm", parsed.emitLlvm, error)) return false;
     if (!getString(root, "backend", parsed.backend, error)) return false;
     if (!getString(root, "native_annotation", parsed.nativeAnnotation, error)) return false;
     if (!getStringArray(root,
@@ -127,6 +130,7 @@ bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::st
     if (!getBool(root, "compile", parsed.compile, error)) return false;
     if (!getString(root, "compile_mode", parsed.compileMode, error)) return false;
     if (!getString(root, "c_compiler", parsed.cCompiler, error)) return false;
+    if (!getString(root, "llvm_tool", parsed.llvmTool, error)) return false;
     if (!getString(root, "generate_xmake", parsed.generateXmake, error)) return false;
     if (!getString(root, "generate_cmake", parsed.generateCmake, error)) return false;
     if (!getBool(root, "dump_mir", parsed.dumpMir, error)) return false;

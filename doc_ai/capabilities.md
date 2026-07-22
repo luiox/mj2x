@@ -14,6 +14,7 @@
 | 单 `.class` 输入 → 改写后 `.class` + emitted C | ✅ | StackC / RegC E2E |
 | `.jar` 输入 → 改写后 `.jar` + emitted C | ✅ | `mj2x_unittest` JAR pipeline 测试 |
 | RegC `.class` / `.jar` 输入 → emitted C++17 | ✅ | `CliTest.RealZigCompilesRegcCppClassAndRunsJvm` + CLI negative tests |
+| LLVM IR opt-in：静态标量纯计算 / 控制流 → textual `.ll` + native library | ✅ | `CliTest.LlvmClangAndLlcCompileLoopSwitchAndRunJvm` + `LlvmIrBackendTest.*` |
 | StackC 单 `.class` 输出附带 `mj2x-cloader` sidecar class | ✅ | StackCBackend E2E |
 | StackC `.jar` 输出注入 `mj2x-cloader` dispatch loader class | ✅ | JAR pipeline / CLI 测试 |
 | JAR 输出保留 entry 顺序和非 class 资源 payload | ✅ | JAR fixture 测试 |
@@ -22,7 +23,7 @@
 | 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
 | `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
 | `--emit-cpp <file>` 输出 RegC C++17 JNI dialect，并通过 C ABI 链接 `mj2x-crt` | ✅ | Zig JVM E2E、MSVC direct compile、xmake/CMake project compile |
-| Native source artifact contract（C99 language、content、建议文件名） | ✅ | StackC/RegC artifact metadata 单测 + Zig pipe E2E |
+| Native source artifact contract（C99 / C++17 / LLVM IR language、content、建议文件名） | ✅ | StackC/RegC/LLVM artifact metadata 单测 + native E2E |
 | `--compile-mode pipe` 直接编译 backend 内存源码；GCC/Clang/Zig 走 stdin，MSVC 使用自动清理的 temporary-file fallback | ✅ | `CliTest.PipeCompile*`、`CliTest.FakeZigUsesCcForFileAndPipeModes`、Windows `CliTest.RealZigCompilesClassAndJarAndRunsJvm` |
 | `--generate-cmake <dir>` 输出独立 CMake native 工程 | ✅ | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
 | `--generate-xmake <dir>` 输出独立 xmake native 工程；与 `--compile` 同用时直接 configure/build 并复制产物；`--c-compiler xmake` 使用自动清理的临时工程 | ✅ | `CliTest.GenerateXmake*`、`CliTest.XmakeCompiler*` + golden |
@@ -134,12 +135,13 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 **CLI**:
 
 - `--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
+- `--backend llvm --emit-llvm <file.ll>` 输出 textual LLVM IR；仅转换静态 `int` / `long` / `float` / `double` / `void` 的纯计算、比较和控制流，所有对象/JNI/异常/monitor/内存操作与整数 div/rem 均 fail closed。`--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；暂不支持 pipe、CMake 或 xmake 工程路径。
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
-- `--compile` 在 `--emit-c` 或 `--emit-cpp` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。`--c-compiler msvc|gcc|clang|zig` 可覆盖自动检测。
+- `--compile` 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。LLVM IR 由 clang 或 `llc -> clang` 编译，不使用 `--c-compiler`。
 - `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
-- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-crt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。
+- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-crt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 当前明确拒绝这两条工程生成路径。
 
 ---
 

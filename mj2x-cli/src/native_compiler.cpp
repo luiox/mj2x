@@ -519,9 +519,106 @@ bool parseCompileModeName(const std::string& name, CompileMode& mode)
     return false;
 }
 
+bool parseLlvmToolName(const std::string& name, LlvmTool& tool)
+{
+    if (name == "clang") {
+        tool = LlvmTool::Clang;
+        return true;
+    }
+    if (name == "llc") {
+        tool = LlvmTool::Llc;
+        return true;
+    }
+    return false;
+}
+
 std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath)
 {
     return nativeLibraryPath(outputPath);
+}
+
+int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
+                        LlvmTool tool)
+{
+    std::error_code ec;
+    const std::filesystem::path sourcePath(llvmOutputPath);
+    if (!std::filesystem::is_regular_file(sourcePath, ec)) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: emitted LLVM IR source does not exist: %s\n",
+                llvmOutputPath.c_str());
+        return 1;
+    }
+    if (!jdk_finder::commandExists("clang")) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: LLVM IR compilation requires clang on PATH.\n");
+        return 1;
+    }
+    if (tool == LlvmTool::Llc && !jdk_finder::commandExists("llc")) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: --llvm-tool llc requires llc on PATH.\n");
+        return 1;
+    }
+
+    const std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
+    std::filesystem::remove(libraryPath, ec);
+    ec.clear();
+
+#ifdef __APPLE__
+    const char* sharedFlag = "-dynamiclib";
+#else
+    const char* sharedFlag = "-shared";
+#endif
+
+    int result = 1;
+    if (tool == LlvmTool::Clang) {
+        printf("[mj2x] Compiling LLVM IR native library with clang: %s\n",
+               libraryPath.string().c_str());
+        ca::process::Command command("clang");
+        command.arg(sharedFlag).arg(sourcePath.string()).arg("-o").arg(libraryPath.string());
+        result = runCompilerCommand(command, "clang");
+    }
+    else {
+        std::filesystem::path parent = libraryPath.parent_path();
+        if (parent.empty()) parent = ".";
+        ScopedTemporaryDirectory objectDirectory;
+        if (!objectDirectory.create(parent, ".mj2x-llvm-")) {
+            fprintf(kStderrStream,
+                    "[mj2x] ERROR: cannot create temporary LLVM object directory.\n");
+            return 1;
+        }
+#ifdef _WIN32
+        const std::filesystem::path objectPath = objectDirectory.path() / "native.obj";
+#else
+        const std::filesystem::path objectPath = objectDirectory.path() / "native.o";
+#endif
+        printf("[mj2x] Compiling LLVM IR object with llc: %s\n", objectPath.string().c_str());
+        ca::process::Command llcCommand("llc");
+        llcCommand.arg("-filetype=obj").arg(sourcePath.string()).arg("-o").arg(
+            objectPath.string());
+        if (runCompilerCommand(llcCommand, "llc") != 0) return 1;
+
+        printf("[mj2x] Linking LLVM IR native library with clang: %s\n",
+               libraryPath.string().c_str());
+        ca::process::Command clangCommand("clang");
+        clangCommand.arg(sharedFlag).arg(objectPath.string()).arg("-o").arg(
+            libraryPath.string());
+        result = runCompilerCommand(clangCommand, "clang");
+    }
+
+    if (result != 0) {
+        std::filesystem::remove(libraryPath, ec);
+        return 1;
+    }
+    if (!std::filesystem::is_regular_file(libraryPath, ec) ||
+        std::filesystem::file_size(libraryPath, ec) == 0) {
+        std::filesystem::remove(libraryPath, ec);
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: LLVM compiler succeeded without a native library: %s\n",
+                libraryPath.string().c_str());
+        return 1;
+    }
+    printf("[mj2x] Native library written: %s\n", libraryPath.string().c_str());
+    return 0;
 }
 
 int compileNativeSource(const std::string& sourcePath, const std::string& outputPath,

@@ -1,4 +1,5 @@
 #include "mj2x/mj2x.hpp"
+#include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
 #include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
@@ -37,7 +38,8 @@ static void printUsage()
     printf("  --config <file>           Load JSON options; command line values override it\n");
     printf("  --emit-c <file>            Output C source to file\n");
     printf("  --emit-cpp <file>          Output RegC C++17 source to file\n");
-    printf("  --backend <stackc|regc>    Select native emitter (default: stackc; "
+    printf("  --emit-llvm <file>         Output LLVM IR source to file\n");
+    printf("  --backend <stackc|regc|llvm> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf(
         "  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
@@ -47,6 +49,7 @@ static void printUsage()
         "  --compile                  Compile emitted C into a native library beside --output\n");
     printf("  --compile-mode <mode>      Select native compile input mode (file, pipe)\n");
     printf("  --c-compiler <name>        C compiler or build driver (msvc, gcc, clang, zig, xmake)\n");
+    printf("  --llvm-tool <clang|llc>    LLVM IR compiler path (default: clang)\n");
     printf("  --generate-cmake <dir>     Generate a standalone CMake project for emitted C\n");
     printf("  --generate-xmake <dir>     Generate a standalone xmake project with mj2x-crt\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
@@ -57,6 +60,7 @@ enum class CEmitterBackend
 {
     StackC,
     RegC,
+    LlvmIr,
 };
 
 enum class NativeBuildDriver
@@ -124,6 +128,7 @@ struct CliOptions
     std::string              outputPath;
     std::string              cOutputPath;
     std::string              cppOutputPath;
+    std::string              llvmOutputPath;
     std::string              cmakeProjectDir;
     std::string              xmakeProjectDir;
     std::string              nativeAnnotation;
@@ -131,11 +136,13 @@ struct CliOptions
     CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
     mj2x::cli::CCompilerKind cCompilerKind    = mj2x::cli::CCompilerKind::Auto;
     mj2x::cli::CompileMode   compileMode      = mj2x::cli::CompileMode::File;
+    mj2x::cli::LlvmTool      llvmTool         = mj2x::cli::LlvmTool::Clang;
     NativeBuildDriver        buildDriver      = NativeBuildDriver::Direct;
     bool                     backendSelected  = false;
     bool                     compileNative    = false;
     bool                     compileModeSelected = false;
     bool                     compilerSelected = false;
+    bool                     llvmToolSelected = false;
     bool                     dumpMIR          = false;
 };
 
@@ -149,6 +156,10 @@ static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
         backend = CEmitterBackend::RegC;
         return true;
     }
+    if (name == "llvm") {
+        backend = CEmitterBackend::LlvmIr;
+        return true;
+    }
     return false;
 }
 
@@ -159,6 +170,7 @@ static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOp
     if (config.output) options.outputPath = *config.output;
     if (config.emitC) options.cOutputPath = *config.emitC;
     if (config.emitCpp) options.cppOutputPath = *config.emitCpp;
+    if (config.emitLlvm) options.llvmOutputPath = *config.emitLlvm;
     if (config.nativeAnnotation) options.nativeAnnotation = *config.nativeAnnotation;
     if (config.hasNativeMethodPrefixes) options.nativeMethodPrefixes = config.nativeMethodPrefixes;
     if (config.compile) options.compileNative = *config.compile;
@@ -169,13 +181,20 @@ static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOp
             return false;
         }
     }
+    if (config.llvmTool) {
+        options.llvmToolSelected = true;
+        if (!mj2x::cli::parseLlvmToolName(*config.llvmTool, options.llvmTool)) {
+            error = "Unknown config llvm_tool value. Expected clang or llc.";
+            return false;
+        }
+    }
     if (config.generateXmake) options.xmakeProjectDir = *config.generateXmake;
     if (config.generateCmake) options.cmakeProjectDir = *config.generateCmake;
     if (config.dumpMir) options.dumpMIR = *config.dumpMir;
     if (config.backend) {
         options.backendSelected = true;
         if (!parseBackendName(*config.backend, options.cBackendKind)) {
-            error = "Unknown config backend value. Expected stackc or regc.";
+            error = "Unknown config backend value. Expected stackc, regc, or llvm.";
             return false;
         }
     }
@@ -464,6 +483,7 @@ int main(int argc, char** argv)
             if (!commandLineNativeOutputSeen) {
                 options.cOutputPath.clear();
                 options.cppOutputPath.clear();
+                options.llvmOutputPath.clear();
                 commandLineNativeOutputSeen = true;
             }
             options.cOutputPath = argv[++i];
@@ -472,9 +492,19 @@ int main(int argc, char** argv)
             if (!commandLineNativeOutputSeen) {
                 options.cOutputPath.clear();
                 options.cppOutputPath.clear();
+                options.llvmOutputPath.clear();
                 commandLineNativeOutputSeen = true;
             }
             options.cppOutputPath = argv[++i];
+        }
+        else if (arg == "--emit-llvm" && i + 1 < argc) {
+            if (!commandLineNativeOutputSeen) {
+                options.cOutputPath.clear();
+                options.cppOutputPath.clear();
+                options.llvmOutputPath.clear();
+                commandLineNativeOutputSeen = true;
+            }
+            options.llvmOutputPath = argv[++i];
         }
         else if (arg == "--native-annotation" && i + 1 < argc)
             options.nativeAnnotation = argv[++i];
@@ -512,11 +542,19 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
+        else if (arg == "--llvm-tool" && i + 1 < argc) {
+            options.llvmToolSelected = true;
+            if (!mj2x::cli::parseLlvmToolName(argv[++i], options.llvmTool)) {
+                fprintf(stderr, "Unknown --llvm-tool value. Expected clang or llc.\n");
+                printUsage();
+                return 1;
+            }
+        }
         else if (arg == "--backend" && i + 1 < argc) {
             options.backendSelected = true;
             if (!parseBackendName(argv[++i], options.cBackendKind)) {
                 fprintf(stderr,
-                        "Unknown --backend value. Expected stackc or regc. Legacy alias cbackend "
+                        "Unknown --backend value. Expected stackc, regc, or llvm. Legacy alias cbackend "
                         "is also accepted.\n");
                 printUsage();
                 return 1;
@@ -539,8 +577,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!options.cOutputPath.empty() && !options.cppOutputPath.empty()) {
-        fprintf(stderr, "--emit-c and --emit-cpp are mutually exclusive.\n");
+    const int nativeOutputCount = static_cast<int>(!options.cOutputPath.empty()) +
+                                  static_cast<int>(!options.cppOutputPath.empty()) +
+                                  static_cast<int>(!options.llvmOutputPath.empty());
+    if (nativeOutputCount > 1) {
+        fprintf(stderr, "--emit-c, --emit-cpp, and --emit-llvm are mutually exclusive.\n");
         return 1;
     }
     if (!options.cppOutputPath.empty() && !hasExtension(options.cppOutputPath, ".cpp")) {
@@ -550,6 +591,42 @@ int main(int argc, char** argv)
     }
     if (!options.cppOutputPath.empty() && options.cBackendKind != CEmitterBackend::RegC) {
         fprintf(stderr, "--emit-cpp currently requires --backend regc.\n");
+        return 1;
+    }
+    if (!options.llvmOutputPath.empty() && !hasExtension(options.llvmOutputPath, ".ll")) {
+        fprintf(stderr, "--emit-llvm requires a .ll output path.\n");
+        return 1;
+    }
+    if (!options.llvmOutputPath.empty() && options.cBackendKind != CEmitterBackend::LlvmIr) {
+        fprintf(stderr, "--emit-llvm requires --backend llvm.\n");
+        return 1;
+    }
+    if (options.cBackendKind == CEmitterBackend::LlvmIr && options.llvmOutputPath.empty() &&
+        options.compileMode != mj2x::cli::CompileMode::Pipe) {
+        fprintf(stderr, "--backend llvm requires --emit-llvm.\n");
+        return 1;
+    }
+    if (options.cBackendKind == CEmitterBackend::LlvmIr &&
+        options.compileMode == mj2x::cli::CompileMode::Pipe) {
+        fprintf(stderr, "--backend llvm does not support --compile-mode pipe.\n");
+        return 1;
+    }
+    if (options.llvmToolSelected && options.cBackendKind != CEmitterBackend::LlvmIr) {
+        fprintf(stderr, "--llvm-tool requires --backend llvm.\n");
+        return 1;
+    }
+    if (options.llvmToolSelected && !options.compileNative) {
+        fprintf(stderr, "--llvm-tool requires --compile.\n");
+        return 1;
+    }
+    if (options.cBackendKind == CEmitterBackend::LlvmIr && options.compilerSelected) {
+        fprintf(stderr, "--backend llvm cannot be combined with --c-compiler.\n");
+        return 1;
+    }
+    if (options.cBackendKind == CEmitterBackend::LlvmIr &&
+        (!options.cmakeProjectDir.empty() || !options.xmakeProjectDir.empty())) {
+        fprintf(stderr,
+                "--backend llvm does not support --generate-cmake or --generate-xmake.\n");
         return 1;
     }
 
@@ -606,6 +683,7 @@ int main(int argc, char** argv)
 
     if (options.compileMode == mj2x::cli::CompileMode::Pipe &&
         (!options.cOutputPath.empty() || !options.cppOutputPath.empty() ||
+         !options.llvmOutputPath.empty() ||
          !options.cmakeProjectDir.empty() ||
          !options.xmakeProjectDir.empty())) {
         fprintf(stderr,
@@ -615,13 +693,13 @@ int main(int argc, char** argv)
     }
 
     if (!options.cmakeProjectDir.empty() && options.cOutputPath.empty() &&
-        options.cppOutputPath.empty()) {
+        options.cppOutputPath.empty() && options.llvmOutputPath.empty()) {
         options.cOutputPath =
             (std::filesystem::path(options.cmakeProjectDir) / "native.c").string();
     }
 
     if (!options.xmakeProjectDir.empty() && options.cOutputPath.empty() &&
-        options.cppOutputPath.empty()) {
+        options.cppOutputPath.empty() && options.llvmOutputPath.empty()) {
         options.cOutputPath =
             (std::filesystem::path(options.xmakeProjectDir) / "src" / "generated" / "native.c")
                 .string();
@@ -629,18 +707,24 @@ int main(int argc, char** argv)
 
     const bool pipeCompile =
         options.compileNative && options.compileMode == mj2x::cli::CompileMode::Pipe;
-    const std::string& nativeOutputPath = options.cppOutputPath.empty()
-                                              ? options.cOutputPath
-                                              : options.cppOutputPath;
+    const std::string nativeOutputPath = !options.llvmOutputPath.empty()
+                                             ? options.llvmOutputPath
+                                             : (options.cppOutputPath.empty()
+                                                    ? options.cOutputPath
+                                                    : options.cppOutputPath);
 
     if (options.backendSelected && nativeOutputPath.empty() && !pipeCompile) {
-        fprintf(stderr, "--backend requires --emit-c, --emit-cpp, or a generated native project.\n");
+        fprintf(stderr,
+                "--backend requires --emit-c, --emit-cpp, --emit-llvm, or a generated native "
+                "project.\n");
         printUsage();
         return 1;
     }
 
     if (options.compileNative && nativeOutputPath.empty() && !pipeCompile) {
-        fprintf(stderr, "--compile requires --emit-c, --emit-cpp, or a generated native project.\n");
+        fprintf(stderr,
+                "--compile requires --emit-c, --emit-cpp, --emit-llvm, or a generated native "
+                "project.\n");
         printUsage();
         return 1;
     }
@@ -702,7 +786,13 @@ int main(int argc, char** argv)
     mj2x::Backend* nativeSourceBackend = nullptr;
 
     if (needsNativeSource) {
-        if (options.cBackendKind == CEmitterBackend::RegC) {
+        if (options.cBackendKind == CEmitterBackend::LlvmIr) {
+            auto llvmBackend = std::make_unique<mj2x::LlvmIrBackend>();
+            if (!options.llvmOutputPath.empty()) llvmBackend->setOutputPath(options.llvmOutputPath);
+            nativeSourceBackend = llvmBackend.get();
+            pipeline.registerBackend(std::move(llvmBackend));
+        }
+        else if (options.cBackendKind == CEmitterBackend::RegC) {
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
             nativeSourceBackend = regcBackend.get();
@@ -741,14 +831,15 @@ int main(int argc, char** argv)
         pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
     }
     if (jarNativeLoaderEnabled) {
-        // RegC 由 postprocessor 注入 clinit load 调用；StackC 因 RegisterNatives
-        // 绑定需自己重写 clinit，此处只注入资源（injectClinitCalls=false）。
-        const bool regcInjectsClinit = needsNativeSource &&
-                                        options.cBackendKind == CEmitterBackend::RegC;
+        /// RegC 和 LLVM IR 均通过 JNI export 绑定；StackC 因 RegisterNatives 绑定需自己
+        /// 重写 clinit，此处只注入资源（injectClinitCalls=false）。
+        const bool directJniBackend = needsNativeSource &&
+                                      (options.cBackendKind == CEmitterBackend::RegC ||
+                                       options.cBackendKind == CEmitterBackend::LlvmIr);
         pipeline.registerPostprocessor(std::make_unique<mj2x::NativeLoaderPostprocessor>(
             nativeResourcePath,
             nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix,
-            regcInjectsClinit));
+            directJniBackend));
     }
 
     int rc = pipeline.run();
@@ -785,6 +876,11 @@ int main(int argc, char** argv)
             return 1;
         }
         nativeArtifact = {mj2x::NativeSourceLanguage::Cpp17, cppSource, "native.cpp"};
+    }
+    if (!options.llvmOutputPath.empty() &&
+        nativeArtifact.language != mj2x::NativeSourceLanguage::LlvmIr) {
+        fprintf(stderr, "[mj2x] ERROR: --emit-llvm requires an LLVM IR backend source artifact.\n");
+        return 1;
     }
 
     if (!options.cmakeProjectDir.empty()) {
@@ -832,7 +928,11 @@ int main(int argc, char** argv)
                     return 1;
                 }
             }
-            if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
+            if (options.cBackendKind == CEmitterBackend::LlvmIr) {
+                compileRc = mj2x::cli::compileLlvmIrSource(
+                    nativeOutputPath, options.outputPath, options.llvmTool);
+            }
+            else if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
                 if (nativeSourceBackend == nullptr) {
                     fprintf(stderr, "[mj2x] ERROR: native source backend is unavailable.\n");
                     return 1;

@@ -12,6 +12,7 @@ struct ConfigFileOptions
     std::optional<std::string> output;
     std::optional<std::string> emitC;
     std::optional<std::string> emitCpp;
+    std::optional<std::string> emitLlvm;
     std::optional<std::string> backend;
     std::optional<std::string> nativeAnnotation;
     std::vector<std::string>   nativeMethodPrefixes;
@@ -19,6 +20,7 @@ struct ConfigFileOptions
     std::optional<bool>        compile;
     std::optional<std::string> compileMode;
     std::optional<std::string> cCompiler;
+    std::optional<std::string> llvmTool;
     std::optional<std::string> generateXmake;
     std::optional<std::string> generateCmake;
     std::optional<bool>        dumpMir;

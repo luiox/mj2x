@@ -19,6 +19,8 @@
 | Clang | C pipe, class | `CliTest.PipeCompileWithClangDoesNotWriteCSource` | pass |
 | Clang | C pipe, RegC JAR + embedded library | `CliTest.PipeCompileRegCJarEmbedsNativeLoaderAndLibraryWithClang` | pass |
 | Clang++ | RegC C++17 file, CRT C ABI | `CliTest.ClangCompilesRegcCppSource` | pass |
+| Clang | LLVM IR direct `.ll` link, loop/switch class + JVM baseline | `CliTest.LlvmClangAndLlcCompileLoopSwitchAndRunJvm` (`--llvm-tool clang`) | pass |
+| llc + Clang | LLVM IR `.ll` → object → DLL, loop/switch class + JVM baseline | `CliTest.LlvmClangAndLlcCompileLoopSwitchAndRunJvm` (`--llvm-tool llc`) | pass |
 | Zig | C file class + C pipe RegC JAR + JVM baseline | `CliTest.RealZigCompilesClassAndJarAndRunsJvm` | pass |
 | Zig | RegC C++17 file class/JAR + JVM baseline | `CliTest.RealZigCompilesRegcCppClassAndRunsJvm` | pass |
 | xmake | StackC project and RegC JAR temporary project | `CliTest.GenerateXmakeAndCompileBuildsNativeLibrary`, `CliTest.XmakeCompilerBuildsRegCJarAndCleansTemporaryProject` | pass |
@@ -28,6 +30,11 @@
 The Windows run executed the nine-toolchain matrix with real toolchains. The complete filtered
 test command passed 9/9. The separate C++ project regression suite passed 9/9, including CMake,
 xmake, MSVC, Zig class/JAR JVM execution, configuration, and negative cases.
+
+LLVM IR extension validation additionally passed 7/7 in one filtered local run: core scalar and
+fail-closed tests, CLI `.ll` / JSON / negative-path tests, and the real clang plus `llc -> clang`
+JVM loop/switch baseline test. LLVM IR does not currently claim CMake/xmake, pipe, GCC, Zig, Linux,
+or macOS validation.
 
 ## Unverified Platforms And Tools
 
