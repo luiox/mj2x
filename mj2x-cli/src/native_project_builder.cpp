@@ -123,6 +123,13 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         fprintf(kStderrStream, "[mj2x] ERROR: xmake output library path is empty.\n");
         return 1;
     }
+    fs::remove(config.outputLibraryPath, ec);
+    if (ec) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot remove previous native library: %s\n",
+                config.outputLibraryPath.string().c_str());
+        return 1;
+    }
 
     ca::process::Command configure("xmake");
     configure.current_dir(config.projectDir.string())

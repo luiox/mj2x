@@ -49,5 +49,13 @@ int main(int argc, char** argv)
     if (ec) return 66;
     std::ofstream output(library, std::ios::binary | std::ios::trunc);
     output << "fake-xmake-native";
-    return output.good() ? 0 : 67;
+    if (!output.good()) return 67;
+    if (envValue("MJ2X_FAKE_XMAKE_ARTIFACT") != "multiple") return 0;
+
+    const fs::path duplicate = library.parent_path() / "duplicate" / library.filename();
+    fs::create_directories(duplicate.parent_path(), ec);
+    if (ec) return 68;
+    std::ofstream second(duplicate, std::ios::binary | std::ios::trunc);
+    second << "fake-xmake-native-duplicate";
+    return second.good() ? 0 : 69;
 }

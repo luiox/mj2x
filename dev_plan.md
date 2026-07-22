@@ -7,7 +7,7 @@
 ## 当前优先
 
 - [ ] **Native 编译管道跨平台验收**：在 Windows、Linux、macOS 分别记录 MSVC/GCC/Clang/Zig/xmake 的 file/pipe 结果。真实 Zig E2E 必须覆盖 class、JAR 和 JVM 加载；工具链缺失时明确记录 skipped/unverified，不把 fake-tool 验证替代为平台证据。
-- [ ] **Native 编译失败路径加固**：补充 xmake build 失败、多产物、路径含空格、临时目录清理失败和 JAR embedding 前库缺失的自动化验证；任何失败不得留下部分 native library 或源码残留。
+- [ ] **Native 编译失败路径加固**：补充临时目录清理失败的自动化验证；任何失败不得留下部分 native library 或源码残留。
 
 ## 后续待办
 
@@ -22,11 +22,9 @@
   - 按 benchmark 命中率扩展低风险 Java intrinsic；新增 shadow object 必须定义 materialize 或可证明正确的 Java fallback。
   - 将 unsupported reason、异常路由、local-ref 生命周期、descriptor/class lookup 语义和 native 编译错误提示纳入固定修复池。
   - 建立 baseline vs RegC、JNI helper 调用面、cache declaration 数和生成/编译耗时的可提交 benchmark，并用 mjdbg/c2j weakness report 驱动下一批工作。
-- [ ] **R4：L4 变换 pass 系统**：实现 MBA、DCE、CFF、opaque predicate。前置：RegC/R3 live 验证。
+- [ ] **R4：L4 变换 pass 系统**：实现 MBA、CFF、opaque predicate。前置：RegC/R3 live 验证。
 - [ ] **R5：mjdbg 闭环验证**：使用 mjdbg/c2j 验证 RegC 保护强度并产出量化结论。前置：R3 RegC ABI live 验证与样本反馈。
-- [ ] **RegC/R3 live 验证**：覆盖 Random escape 边界、unsupported reason、benchmark 和产品入口回归；依据验证结果收敛 #439 Math/Random 的验收范围。
 - [ ] **RegC JNI cache CSE 后续**：评估动态 `_mj2x_regc_find_class` 和 runtime `class_name` 回调是否值得继续优化，并补 benchmark 对比。
-- [ ] **mtest_set RegC E2E 接入**：逐条验证 G1/G2/G5（非 NullCheck）/G8 支持度后，为 manifest 中的代表性 case 加入 `NativeBackend::RegC`，并新增 `regc_mtest_set_test.cpp`。
 - [ ] **CI 接入 mtest_set 与 mj2x**：评估 Linux CI 的 JDK/MSVC 可用性，将 `mtest_set_unittest` 与 `mj2x_unittest` 纳入 CI 矩阵；工具链缺失时使用 GTEST_SKIP。
 
 ## 下一步验证命令

@@ -7,6 +7,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_dump.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
@@ -243,4 +244,66 @@ TEST(RegLoweringTest, LowersObjectsArraysAndIntrinsicsWithoutStackSlots)
 
     std::string validationReason;
     EXPECT_TRUE(validateRegIRNoStackSlots(*reg, validationReason)) << validationReason;
+}
+
+TEST(RegDceTest, RemovesUnusedPureInstructionChain)
+{
+    RegFunction function;
+    auto        block = std::make_unique<RegBlock>(SSABlockId{0});
+
+    RegInstruction add;
+    add.kind    = RegInstructionKind::Binary;
+    add.hasDest = true;
+    add.dest    = RegValue{RegId{1}, SSAType::I32};
+    add.lhs     = RegOperand::fromInt(3, SSAType::I32);
+    add.rhs     = RegOperand::fromInt(4, SSAType::I32);
+    add.binaryOp = SSABinaryOp::Add;
+    block->instructions.push_back(add);
+
+    RegInstruction multiply;
+    multiply.kind    = RegInstructionKind::Binary;
+    multiply.hasDest = true;
+    multiply.dest    = RegValue{RegId{2}, SSAType::I32};
+    multiply.lhs     = RegOperand::fromRegister(add.dest);
+    multiply.rhs     = RegOperand::fromInt(2, SSAType::I32);
+    multiply.binaryOp = SSABinaryOp::Mul;
+    block->instructions.push_back(multiply);
+    block->terminator = RegReturnTerminator{};
+    function.entry    = block.get();
+    function.blocks.push_back(std::move(block));
+
+    EXPECT_EQ(eliminateDeadRegInstructions(function), 2U);
+    EXPECT_TRUE(function.blocks.front()->instructions.empty());
+}
+
+TEST(RegDceTest, PreservesValueConsumedBySuccessorCopy)
+{
+    RegFunction function;
+    auto        entry = std::make_unique<RegBlock>(SSABlockId{0});
+    auto        exit  = std::make_unique<RegBlock>(SSABlockId{1});
+
+    RegInstruction add;
+    add.kind    = RegInstructionKind::Binary;
+    add.hasDest = true;
+    add.dest    = RegValue{RegId{1}, SSAType::I32};
+    add.lhs     = RegOperand::fromInt(3, SSAType::I32);
+    add.rhs     = RegOperand::fromInt(4, SSAType::I32);
+    add.binaryOp = SSABinaryOp::Add;
+    entry->instructions.push_back(add);
+
+    RegSuccessor successor;
+    successor.block = exit.get();
+    successor.copies.push_back(RegCopy{RegValue{RegId{2}, SSAType::I32},
+                                       RegOperand::fromRegister(add.dest)});
+    entry->terminator = RegJumpTerminator{std::move(successor)};
+    exit->terminator =
+        RegReturnTerminator{true, RegOperand::fromRegister(RegValue{RegId{2}, SSAType::I32})};
+
+    function.entry = entry.get();
+    function.blocks.push_back(std::move(entry));
+    function.blocks.push_back(std::move(exit));
+
+    EXPECT_EQ(eliminateDeadRegInstructions(function), 0U);
+    ASSERT_EQ(function.blocks.front()->instructions.size(), 1U);
+    EXPECT_EQ(function.blocks.front()->instructions.front().dest.id.value, 1U);
 }

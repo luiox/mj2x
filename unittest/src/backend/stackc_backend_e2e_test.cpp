@@ -679,7 +679,7 @@ TEST_F(StackCBackendE2E, InterfaceDefaultMethodProxy)
 
     fs::path dll = dir / "DefaultIface.dll";
     auto     cl  = runBat({
-        "call " + q(tc_.vcvars64) + " >nul",
+        "call " + q(tc_.vcvars64) + " x64 >nul",
         "cl /nologo /LD /O2 /EHsc /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " + q(cFile) + " /I" +
             q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
     });

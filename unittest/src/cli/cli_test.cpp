@@ -142,6 +142,15 @@ fs::path findJavac()
     return {};
 }
 
+std::string classPath(const fs::path& first, const fs::path& second)
+{
+#ifdef _WIN32
+    return first.string() + ";" + second.string();
+#else
+    return first.string() + ":" + second.string();
+#endif
+}
+
 bool hasAutoNativeCompiler()
 {
 #ifdef _WIN32
@@ -1114,7 +1123,7 @@ TEST(CliTest, XmakeCompilerBuildsRegCJarAndCleansTemporaryProject)
             << entry.path().string();
 }
 
-TEST(CliTest, XmakeCompilerReportsConfigureAndMissingArtifactFailures)
+TEST(CliTest, XmakeCompilerRejectsFailedOrAmbiguousBuildsAndCleansTemporaryProject)
 {
     const fs::path cli       = findCli();
     const fs::path fakeXmake = test::getBuildTargetPath("mj2x_fake_xmake");
@@ -1124,7 +1133,7 @@ TEST(CliTest, XmakeCompilerReportsConfigureAndMissingArtifactFailures)
     const fs::path inClass = writeTinyClass();
     const fs::path workDir =
         test::getTempOutPath("mj2x_cli_fake_xmake.keep").parent_path() /
-        "mj2x_cli_fake_xmake";
+        "mj2x cli fake xmake";
     const fs::path toolDir    = workDir / "tool";
     const fs::path projectDir = workDir / "project";
     const fs::path outClass   = workDir / "output.class";
@@ -1184,6 +1193,70 @@ TEST(CliTest, XmakeCompilerReportsConfigureAndMissingArtifactFailures)
     EXPECT_NE(missingArtifact.out.find("produced 0 matching native libraries"),
               std::string::npos)
         << missingArtifact.out;
+
+    const fs::path failedJar       = workDir / "failed-output.jar";
+    const fs::path failedLibrary   = nativeLibraryPathFor(failedJar);
+    const fs::path failureInputJar = writeTinyJar();
+    {
+        std::ofstream stale(failedLibrary, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(stale) << failedLibrary.string();
+        stale << "stale native library";
+    }
+    std::vector<std::string> buildFailureLines;
+#ifdef _WIN32
+    buildFailureLines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    buildFailureLines.push_back("set \"MJ2X_FAKE_XMAKE_FAIL=build\"");
+    buildFailureLines.push_back("set \"MJ2X_FAKE_XMAKE_ARTIFACT=\"");
+#else
+    buildFailureLines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    buildFailureLines.push_back("export MJ2X_FAKE_XMAKE_FAIL=build");
+    buildFailureLines.push_back("unset MJ2X_FAKE_XMAKE_ARTIFACT");
+#endif
+    buildFailureLines.push_back(q(cli) + " -i " + q(failureInputJar) + " -o " + q(failedJar) +
+                               " --backend regc --compile --c-compiler xmake");
+    auto buildFailure = runScript(buildFailureLines);
+    EXPECT_NE(buildFailure.exitCode, 0);
+    EXPECT_NE(buildFailure.out.find("xmake build failed with exit code 22"), std::string::npos)
+        << buildFailure.out;
+    EXPECT_FALSE(fileExists(failedLibrary)) << buildFailure.out;
+    if (fileExists(failedJar)) {
+        EXPECT_TRUE(readJarEntry(
+                        failedJar,
+                        "META-INF/mj2x/native/" + failedLibrary.filename().string())
+                        .empty())
+            << buildFailure.out;
+    }
+    for (const auto& entry : fs::directory_iterator(workDir))
+        EXPECT_NE(entry.path().filename().string().rfind(".mj2x-xmake-", 0), 0U)
+            << entry.path().string();
+
+    fs::remove_all(projectDir, ec);
+    const fs::path ambiguousOut     = workDir / "ambiguous-output.class";
+    const fs::path ambiguousLibrary = nativeLibraryPathFor(ambiguousOut);
+    {
+        std::ofstream stale(ambiguousLibrary, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(stale) << ambiguousLibrary.string();
+        stale << "stale native library";
+    }
+    std::vector<std::string> ambiguousArtifactLines;
+#ifdef _WIN32
+    ambiguousArtifactLines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    ambiguousArtifactLines.push_back("set \"MJ2X_FAKE_XMAKE_FAIL=\"");
+    ambiguousArtifactLines.push_back("set \"MJ2X_FAKE_XMAKE_ARTIFACT=multiple\"");
+#else
+    ambiguousArtifactLines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    ambiguousArtifactLines.push_back("unset MJ2X_FAKE_XMAKE_FAIL");
+    ambiguousArtifactLines.push_back("export MJ2X_FAKE_XMAKE_ARTIFACT=multiple");
+#endif
+    ambiguousArtifactLines.push_back(
+        q(cli) + " -i " + q(inClass) + " -o " + q(ambiguousOut) + " --generate-xmake " +
+        q(projectDir) + " --compile");
+    auto ambiguousArtifact = runScript(ambiguousArtifactLines);
+    EXPECT_NE(ambiguousArtifact.exitCode, 0);
+    EXPECT_NE(ambiguousArtifact.out.find("produced 2 matching native libraries"),
+              std::string::npos)
+        << ambiguousArtifact.out;
+    EXPECT_FALSE(fileExists(ambiguousLibrary)) << ambiguousArtifact.out;
 }
 
 TEST(CliTest, CompileFailsClearlyWhenJavaHomeMissing)
@@ -1385,6 +1458,123 @@ TEST(CliTest, FakeZigUsesCcForFileAndPipeModes)
     EXPECT_EQ(fileArguments.rfind("cc\n", 0), 0U) << fileArguments;
     EXPECT_NE(fileArguments.find(generatedSource.string()), std::string::npos) << fileArguments;
     EXPECT_TRUE(readText(fileStdin).empty());
+}
+
+TEST(CliTest, RealZigCompilesClassAndJarAndRunsJvm)
+{
+    const fs::path cli   = findCli();
+    const fs::path javac = findJavac();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
+    if (!commandAvailable("zig")) GTEST_SKIP() << "zig is not available on PATH";
+
+#ifdef _WIN32
+    const fs::path java = javac.parent_path() / "java.exe";
+#else
+    const fs::path java = javac.parent_path() / "java";
+#endif
+    if (!fileExists(java)) GTEST_SKIP() << "java executable is unavailable beside javac";
+
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_real_zig.keep").parent_path() / "mj2x_cli_real_zig";
+    const fs::path classDir = workDir / "class-input";
+    const fs::path classOut = workDir / "class-output";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(classDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::create_directories(classOut, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    const fs::path classSource  = classDir / "CliZigClass.java";
+    const fs::path driverSource = classDir / "Driver.java";
+    {
+        std::ofstream out(classSource);
+        ASSERT_TRUE(out) << classSource.string();
+        out << "public class CliZigClass {\n"
+               "  public static int add(int a, int b) { return a + b; }\n"
+               "}\n";
+    }
+    {
+        std::ofstream out(driverSource);
+        ASSERT_TRUE(out) << driverSource.string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+               "    if (dll != null) System.load(dll);\n"
+               "    System.out.print(CliZigClass.add(20, 22));\n"
+               "  }\n"
+               "}\n";
+    }
+    auto result = runScript({q(javac) + " -d " + q(classDir) + " " + q(classSource) + " " +
+                             q(driverSource)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    result = runScript({q(java) + " -Xverify:all -cp " + q(classDir) + " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    const fs::path inputClass    = classDir / "CliZigClass.class";
+    const fs::path outputClass   = classOut / "CliZigClass.class";
+    const fs::path generatedC    = classOut / "native.c";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outputClass);
+    result = runScript({q(cli) + " -i " + q(inputClass) + " -o " + q(outputClass) + " --emit-c " +
+                        q(generatedC) + " --compile --compile-mode file --c-compiler zig"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(generatedC)) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    fs::copy_file(classDir / "Driver.class", classOut / "Driver.class",
+                  fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    std::vector<std::string> nativeClassRun;
+#ifdef _WIN32
+    nativeClassRun.push_back("set \"MORPHER_DLL=" + nativeLibrary.string() + "\"");
+#else
+    nativeClassRun.push_back("export MORPHER_DLL=" + q(nativeLibrary));
+#endif
+    nativeClassRun.push_back(q(java) + " -Xverify:all -cp " + q(classOut) + " Driver");
+    result = runScript(nativeClassRun);
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    const fs::path jarDir = workDir / "jar";
+    fs::create_directories(jarDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    const fs::path inputJar  = writeTinyJar();
+    const fs::path outputJar = jarDir / "output.jar";
+    const fs::path jarDriver = jarDir / "Driver.java";
+    {
+        std::ofstream out(jarDriver);
+        ASSERT_TRUE(out) << jarDriver.string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    System.out.print(demo.CliJarA.add(20, 22));\n"
+               "  }\n"
+               "}\n";
+    }
+    result = runScript({q(javac) + " -cp " + q(inputJar) + " -d " + q(jarDir) + " " +
+                        q(jarDriver)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(inputJar, jarDir)) +
+                        " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    const fs::path jarNativeLibrary = nativeLibraryPathFor(outputJar);
+    result = runScript({q(cli) + " -i " + q(inputJar) + " -o " + q(outputJar) +
+                        " --backend regc --compile --compile-mode pipe --c-compiler zig"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(jarNativeLibrary)) << result.out;
+    EXPECT_FALSE(readJarEntry(outputJar,
+                              "META-INF/mj2x/native/" + jarNativeLibrary.filename().string())
+                     .empty())
+        << result.out;
+
+    result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(outputJar, jarDir)) +
+                        " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
 }
 
 TEST(CliTest, PipeCompileWithMsvcRemovesTemporaryCSource)

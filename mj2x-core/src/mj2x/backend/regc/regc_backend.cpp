@@ -8,6 +8,7 @@
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/codegen/include_set.hpp"
 #include "mj2x/frontend/type_utils.hpp"
+#include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 
@@ -262,6 +263,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         backendResult.text = emitJniWrapper(className, *mn, RegCEmitResult{false, {}, {}, reason});
         return backendResult;
     }
+    eliminateDeadRegInstructions(*reg);
 
     RegCEmitter emitter(&impl_->cachePool);
     auto        emitted = emitter.emitFunction(*reg);
