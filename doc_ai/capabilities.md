@@ -93,6 +93,8 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 
 **结构断言(输出保证)**:RegC 输出不出现 `cstack` / `stack[]` / `union jvalue` / `sp--` 这类 stack-machine anchor。
 
+**覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 静默 fail-closed),实测复杂 jar 约 50% 业务方法真正转 native。未转原因含:invokedynamic/lambda、high-risk runtime call(反射/安全/IO/Thread API)、内部类、大异常表、浮点比较(dcmpg/dcmpl 的 `cmp.nan_*` intrinsic 未实现,属 bug)。**性能评估必须先做覆盖率审计**,详见 [regc_native_coverage_analysis.md](regc_native_coverage_analysis.md) 与 [performance_evaluation_spec.md](performance_evaluation_spec.md)。
+
 - **RegIR dead-code elimination**:在 RegIR→RegC 之间迭代删除未被终结器、CFG edge copy 或异常边消费的纯计算链；可能抛异常、内存访问、调用与 barrier 一律保留。`RegDceTest.*` 覆盖死链删除和 edge copy 活跃值保留，RegC native E2E 覆盖 JVM 语义。
 - **RegIR protection transforms**:RegC 在 DCE 后应用 i32/i64 加法 MBA 恒等式、分支 opaque predicate 与纯控制流 CFF。CFF 通过状态寄存器与 dispatcher switch 路由边，同时保留 edge copy；包含异常区域、内存访问、调用、barrier、throw 或 div/rem 的函数保持原 CFG。`RegTransformPassTest.*` 覆盖变换结构与保守跳过，`RegCBackendE2E.PureArithmeticLoopAndArrayRoundTrip` 覆盖 JVM 循环/数组语义。
 
