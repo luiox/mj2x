@@ -297,44 +297,6 @@ void collectTerminatorRegisters(std::map<uint32_t, SSAType>& regs, const RegTerm
         terminator);
 }
 
-void collectEdgeCopyTempTypes(std::vector<SSAType>& temps, const std::vector<RegCopy>& copies)
-{
-    for (const auto& copy : copies) temps.push_back(copy.dest.type);
-}
-
-void collectTerminatorEdgeCopyTempTypes(std::vector<SSAType>& temps,
-                                        const RegTerminator&  terminator)
-{
-    std::visit(
-        [&](const auto& t) {
-            using T = std::decay_t<decltype(t)>;
-            if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-                collectEdgeCopyTempTypes(temps, t.target.copies);
-            }
-            else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
-                collectEdgeCopyTempTypes(temps, t.trueTarget.copies);
-                collectEdgeCopyTempTypes(temps, t.falseTarget.copies);
-            }
-            else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
-                for (const auto& c : t.cases) collectEdgeCopyTempTypes(temps, c.target.copies);
-                collectEdgeCopyTempTypes(temps, t.defaultTarget.copies);
-            }
-        },
-        terminator);
-}
-
-std::vector<SSAType> collectEdgeCopyTempTypes(const RegFunction& fn)
-{
-    std::vector<SSAType> temps;
-    for (const auto& block : fn.blocks) {
-        collectTerminatorEdgeCopyTempTypes(temps, block->terminator);
-    }
-    for (const auto& region : fn.exceptionRegions) {
-        for (const auto& edge : region.edges) collectEdgeCopyTempTypes(temps, edge.copies);
-    }
-    return temps;
-}
-
 bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs, std::string& reason)
 {
     for (const auto& parameter : fn.parameters) collectRegister(regs, parameter);
@@ -378,6 +340,12 @@ struct RegCFunctionEmitState
     std::vector<uint32_t>                     nativeStringBuilderOwners;
     std::map<uint32_t, uint32_t>              nativeStringBuilderOwnerByRegister;
     std::set<uint32_t>                        nativeWrapperRegisters;
+    /// Edge-copy temporary types actually emitted, indexed by edgeTempIndex.
+    /// Captured during emit so the declaration block declares exactly the temporaries
+    /// that are used (a block with multiple mayThrow instructions re-emits its
+    /// exception edge copies once per throw site, so the count can exceed the static
+    /// CFG edge count).
+    std::vector<SSAType>                      edgeTempTypes;
 };
 
 const char* nativeObjectType(RegCIntrinsicNativeObjectKind kind)
@@ -1601,7 +1569,7 @@ RegCIntrinsicDecision emitIntrinsicCall(std::ostringstream& out, const RegInstru
 }
 
 bool emitEdgeCopies(std::ostringstream& out, const std::vector<RegCopy>& copies,
-                    const RegCFunctionEmitState& state, int& edgeTempIndex, std::string& reason)
+                    RegCFunctionEmitState& state, int& edgeTempIndex, std::string& reason)
 {
     if (copies.empty()) return true;
 
@@ -1617,6 +1585,13 @@ bool emitEdgeCopies(std::ostringstream& out, const std::vector<RegCopy>& copies,
         }
         const int tempId = edgeTempIndex++;
         tempIds.push_back(tempId);
+        // Record the actual type per emitted temporary so the declaration block
+        // declares exactly the temporaries that are used. A block with N mayThrow
+        // instructions re-emits its exception edge copies N times, so the emit count
+        // can exceed the static CFG edge count that collectEdgeCopyTempTypes sees.
+        if (static_cast<int>(state.edgeTempTypes.size()) <= tempId) {
+            state.edgeTempTypes.resize(static_cast<size_t>(tempId) + 1, copies[i].dest.type);
+        }
         out << "    edge_tmp_" << tempId << " = (" << cType(copies[i].dest.type) << ")("
             << operandExpr(copies[i].source) << ");\n";
     }
@@ -2278,7 +2253,6 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
 
     std::map<uint32_t, SSAType> regs;
     if (!collectRegisters(fn, regs, result.reason)) return result;
-    const std::vector<SSAType>  edgeTempTypes          = collectEdgeCopyTempTypes(fn);
     const RegCStringBuilderPlan stringBuilderPlan      = analyzeStringBuilders(fn);
     const std::set<uint32_t>    nativeWrapperRegisters = analyzeNativeWrappers(fn);
 
@@ -2373,8 +2347,12 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
             out << "    " << cType(type) << " " << regName(RegId{id}) << " = 0;\n";
         }
     }
-    for (size_t i = 0; i < edgeTempTypes.size(); ++i) {
-        out << "    " << cType(edgeTempTypes[i]) << " edge_tmp_" << i << " = 0;\n";
+    // Declare edge-copy temporaries based on the types actually captured during emit
+    // (emitState.edgeTempTypes). This mirrors the emit path exactly, including the
+    // exception-dispatch re-emission that a static CFG walk (collectEdgeCopyTempTypes)
+    // would undercount when a protected block has multiple mayThrow instructions.
+    for (size_t i = 0; i < emitState.edgeTempTypes.size(); ++i) {
+        out << "    " << cType(emitState.edgeTempTypes[i]) << " edge_tmp_" << i << " = 0;\n";
     }
     for (uint32_t owner : emitState.nativeStringBuilderOwners) {
         const auto objectIt = emitState.nativeObjects.find(owner);
