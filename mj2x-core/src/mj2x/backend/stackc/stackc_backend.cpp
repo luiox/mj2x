@@ -35,19 +35,11 @@ using namespace jbytecode::commons;
 using namespace jbytecode::util;
 using codegen::CSourceStream;
 
-// label 标识：LabelNode* 转 int（与 code_converter 的 labelKey 一致；见 dev_plan R1a.3）。
-static int labelKey(jbytecode::core::Label* lbl)
+/// label 的 C 标识符：用方法内顺序索引生成（见 Impl::labelIndex），保证跨进程确定性。
+/// 指针地址绝不进入输出——仅作为 labelIndex 的 key 用于进程内身份匹配。
+static std::string labelIdent(unsigned index)
 {
-    return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
-}
-
-// label 的 C 标识符：用 uintptr_t 的十六进制，保证永远是合法 C 标识符（0-9a-f），
-// 不会出现负号（int 强转可能为负，label_-12345 不是合法 C 标识符）。
-static std::string labelIdent(jbytecode::core::Label* lbl)
-{
-    std::ostringstream os;
-    os << "L" << std::hex << reinterpret_cast<uintptr_t>(lbl);
-    return os.str();
+    return "L" + std::to_string(index);
 }
 
 // ============================================================
@@ -655,6 +647,10 @@ struct StackCBackend::Impl
     std::string currentMethodDesc;
     std::string currentExceptionDispatchTarget;
 
+    /// 当前方法的 label 顺序索引：以 Label* 为 key（进程内身份匹配），值为方法内首次出现顺序。
+    /// 每个 compileMethod 开始时重建，用于生成确定性 C label（见 labelIdent）。
+    std::unordered_map<jbytecode::core::Label*, unsigned> labelIndex;
+
     void emitStackInit(int maxStack);
     void emitLocalsInit(const std::string& desc, int access);
 
@@ -851,9 +847,47 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
         return label;
     };
 
-    // Emit blocks
+    // Build deterministic per-method label index. Walk blocks in order; assign a
+    // sequential index to every label the first time it is referenced, whether as a
+    // LABEL definition or as a jump/switch target. The Label* is used only as a map
+    // key for identity within this process — it never reaches the output, so two
+    // independent CLI processes produce identical C labels (L0, L1, ...).
+    impl_->labelIndex.clear();
+    auto assignLabelIndex = [&](jbytecode::core::Label* lbl) {
+        if (lbl == nullptr) return;
+        impl_->labelIndex.emplace(lbl, static_cast<unsigned>(impl_->labelIndex.size()));
+    };
     for (auto* block : blocks) {
-        funcOut << "    /* B" << block->id << " */\n";
+        for (auto& node : block->nodes) {
+            switch (node->kind) {
+            case MIRKind::LABEL:
+                assignLabelIndex(static_cast<const MIRLabel*>(node.get())->labelNode);
+                break;
+            case MIRKind::BRANCH: assignLabelIndex(static_cast<const MIRBranch*>(node.get())->targetLabel); break;
+            case MIRKind::BRANCH_ZERO:
+                assignLabelIndex(static_cast<const MIRBranchZero*>(node.get())->targetLabel);
+                break;
+            case MIRKind::UNCOND_BRANCH:
+                assignLabelIndex(static_cast<const MIRUncondBranch*>(node.get())->targetLabel);
+                break;
+            case MIRKind::SWITCH: {
+                const auto* sw = static_cast<const MIRSwitch*>(node.get());
+                for (const auto& c : sw->cases) assignLabelIndex(c.targetLabel);
+                assignLabelIndex(sw->defaultLabel);
+                break;
+            }
+            default: break;
+            }
+        }
+    }
+    for (const auto& h : exceptionHandlers) {
+        assignLabelIndex(h.handler);
+    }
+
+    // Emit blocks
+    for (size_t bi = 0; bi < blocks.size(); ++bi) {
+        auto* block = blocks[bi];
+        funcOut << "    /* B" << bi << " */\n";
 
         for (auto& node : block->nodes) {
             if (node->kind == MIRKind::LABEL) {
@@ -889,14 +923,15 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
             if (handler.catchType.empty()) {
                 funcOut << "        sp = -1;\n";
                 funcOut << "        stack[++sp].l = _mj2x_ex;\n";
-                funcOut << "        goto " << labelIdent(handler.handler) << ";\n";
+                funcOut << "        goto " << labelIdent(impl_->labelIndex.at(handler.handler)) << ";\n";
             }
             else {
                 funcOut << "        if ((*env)->IsInstanceOf(env, _mj2x_ex, "
                         << classExprForDescriptor(handler.catchType) << ")) {\n";
                 funcOut << "            sp = -1;\n";
                 funcOut << "            stack[++sp].l = _mj2x_ex;\n";
-                funcOut << "            goto " << labelIdent(handler.handler) << ";\n";
+                funcOut << "            goto " << labelIdent(impl_->labelIndex.at(handler.handler))
+                        << ";\n";
                 funcOut << "        }\n";
             }
         }
@@ -1689,7 +1724,7 @@ void StackCBackend::Impl::emitNode(const MIRNode* node, std::ostringstream& out)
 {
     switch (node->kind) {
     case MIRKind::LABEL:
-        out << labelIdent(static_cast<const MIRLabel*>(node)->labelNode) << ":\n";
+        out << labelIdent(labelIndex.at(static_cast<const MIRLabel*>(node)->labelNode)) << ":\n";
         out << "    ;\n";
         break;
     case MIRKind::CONSTANT: emitConstant(static_cast<const MIRConstant*>(node), out); break;
@@ -2350,7 +2385,7 @@ void StackCBackend::Impl::emitBranch(const MIRBranch* node, std::ostringstream& 
     out << "        int cond = (stack[sp - 1]" << acc << " " << cmpOpToC(node->op) << " stack[sp]"
         << acc << ");\n";
     out << "        sp -= 2;\n";
-    out << "        if (cond) goto " << labelIdent(node->targetLabel) << ";\n";
+    out << "        if (cond) goto " << labelIdent(labelIndex.at(node->targetLabel)) << ";\n";
     out << "    }\n";
 }
 
@@ -2362,22 +2397,22 @@ void StackCBackend::Impl::emitBranchZero(const MIRBranchZero* node, std::ostring
     out << "        int cond = (stack[sp]" << acc << " " << cmpOpToC(node->op) << " " << zero
         << ");\n";
     out << "        sp--;\n";
-    out << "        if (cond) goto " << labelIdent(node->targetLabel) << ";\n";
+    out << "        if (cond) goto " << labelIdent(labelIndex.at(node->targetLabel)) << ";\n";
     out << "    }\n";
 }
 
 void StackCBackend::Impl::emitUncondBranch(const MIRUncondBranch* node, std::ostringstream& out)
 {
-    out << "    goto " << labelIdent(node->targetLabel) << ";\n";
+    out << "    goto " << labelIdent(labelIndex.at(node->targetLabel)) << ";\n";
 }
 
 void StackCBackend::Impl::emitSwitch(const MIRSwitch* node, std::ostringstream& out)
 {
     out << "    switch (stack[sp--].i) {\n";
     for (auto& c : node->cases) {
-        out << "    case " << c.key << ": goto " << labelIdent(c.targetLabel) << ";\n";
+        out << "    case " << c.key << ": goto " << labelIdent(labelIndex.at(c.targetLabel)) << ";\n";
     }
-    out << "    default: goto " << labelIdent(node->defaultLabel) << ";\n";
+    out << "    default: goto " << labelIdent(labelIndex.at(node->defaultLabel)) << ";\n";
     out << "    }\n";
 }
 

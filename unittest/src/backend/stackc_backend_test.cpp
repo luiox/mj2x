@@ -875,6 +875,51 @@ TEST(StackCBackendTest, BranchAndComparison)
     EXPECT_NE(result.text.find("sp -= 2;\n        if (cond) goto"), std::string::npos);
 }
 
+TEST(StackCBackendTest, CrossInstanceBranchOutputIsDeterministic)
+{
+    // Regression: labelIdent / block comments previously used Label* / Block::id (both
+    // pointer-derived), so two independent CLI processes emitted different C labels.
+    // This builds the same branchy method twice with freshly allocated LabelNodes
+    // (different heap addresses, mimicking two processes) and demands byte-identical C.
+    auto buildAndCompile = [](std::string* outText) {
+        // Fresh label objects each call -> different addresses, like two CLI processes.
+        auto* targetLabel = new LabelNode();
+        auto  mn          = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                       "cmp",
+                                       "(II)I",
+                                       {
+                                           new VarInsnNode(Opcodes::ILOAD, 0),
+                                           new VarInsnNode(Opcodes::ILOAD, 1),
+                                           new JumpInsnNode(Opcodes::IF_ICMPEQ, targetLabel->label),
+                                           new InsnNode(Opcodes::ICONST_0),
+                                           new InsnNode(Opcodes::IRETURN),
+                                           targetLabel,
+                                           new InsnNode(Opcodes::ICONST_1),
+                                           new InsnNode(Opcodes::IRETURN),
+                                       });
+        CompilerMethod cm;
+        cm.methodNode       = mn.get();
+        cm.markedForCompile = true;
+
+        CodeConverter  cc;
+        StackCBackend  backend;
+        auto           blocks = cc.convert(*mn);
+        auto           result = backend.compileMethod("Test", cm, blocks);
+        *outText              = std::move(result.text);
+    };
+
+    std::string textA;
+    std::string textB;
+    buildAndCompile(&textA);
+    buildAndCompile(&textB);
+
+    // Sanity: the generated code actually contains labels and gotos.
+    ASSERT_NE(textA.find("goto"), std::string::npos) << textA;
+    ASSERT_NE(textA.find("L0"), std::string::npos) << textA;
+    // The two independently compiled outputs must be byte-identical.
+    EXPECT_EQ(textA, textB);
+}
+
 TEST(StackCBackendTest, BranchZeroObjectUsesReferenceAccessor)
 {
     StackCBackend backend;
