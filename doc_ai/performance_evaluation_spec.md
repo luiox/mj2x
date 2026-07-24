@@ -12,7 +12,7 @@
 
 ## 2. 强制前置:覆盖率审计(每份性能报告必做)
 
-**转换后、跑基准前**,必须执行覆盖率审计。不可依赖 mj2x 的转换日志(显式 skip 有日志,静默 fail-closed **无任何日志**)。
+**转换后、跑基准前**,必须执行覆盖率审计。不可仅依赖 mj2x 的转换日志:显式 skip 与 fail-closed(SSA/lowering/emit 失败)均会输出 `[RegCBackend] Skipping <method>: <reason>` 日志,但 fail-closed 仍保留字节码,需结合 javap 确认。
 
 ### 2.1 审计方法
 
@@ -56,10 +56,11 @@ javap -p -c -cp <native.jar> <Class> | grep -B1 "    Code:"
 对比 StackC vs RegC 时,**确保被测方法在两个后端都是真 native**。否则对比无效。
 
 已知会破坏公平性的情况:
-- 被测方法含浮点比较(dcmpg/dcmpl/fcmpg/fcmpl)→ RegC 静默 fail-closed(`cmp.nan_*` 未实现),StackC 全转
 - 被测方法含 invokedynamic/lambda → RegC fail-closed
 - 被测方法命中 high-risk 黑名单(反射/安全/IO/Thread API)→ RegC 显式 skip
 - 被测方法是内部类或大异常表(tryCatchBlocks>4)→ RegC 显式 skip
+
+> 注:浮点比较(dcmpg/dcmpl/fcmpg/fcmpl/lcmp)已实现,不再是 fail-closed;含浮点比较的方法两后端均可转 native。
 
 **规避方法**:优先选择两后端都能转的纯计算方法(整数运算、循环、整数比较、数组、对象字段)。见第 4 节的标准基准套件。
 
@@ -92,8 +93,7 @@ javap -p -c -cp <native.jar> <Class> | grep -B1 "    Code:"
 | `arraySum(100K)` | 整数数组求和 | ✅ 均转 | 测数组访问(绝对值小,慎用) |
 
 **已知不适合直接用于性能对比的样本**:
-- `JavaObfuscatorTest/test.jar` 的 Calc 基准:热点 runAdd 在 RegC 是 fail-closed 的 Java,数据失真
-- 任何含浮点比较的方法:RegC 未转,对比不公平
+- `JavaObfuscatorTest/test.jar` 的 Calc 基准(历史):曾因 runAdd 的 `cmp.nan_*` 未实现而 RegC fail-closed,数据失真。**该 bug 已修复**,runAdd 现转 native;但其它方法(反射/lambda/内部类)仍 fail-closed/skip,使用前仍须做覆盖率审计。
 
 ## 5. 实测数据示例(参考基准)
 

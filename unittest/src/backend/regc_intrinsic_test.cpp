@@ -2105,3 +2105,161 @@ TEST(RegCIntrinsicTest, NonIntrinsicCallStillUsesJniHelper)
     EXPECT_EQ(result.source.find("= _mj2x_intrinsic_parse_int"), std::string::npos)
         << result.source;
 }
+
+// ---- cmp.nan_* intrinsic（LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较）----
+//
+// ssa_builder 把这 5 个比较 opcode 统一翻译为 cmp.nan_greater（FCMPG/DCMPG）或
+// cmp.nan_less（LCMP/FCMPL/DCMPL）intrinsic。emitter 按 args[0].type 分派：浮点
+// (F32/F64) 走 NaN-aware 三值，整型 (I64/LCMP) 走无 NaN 三值。这里既验证全链路
+// (策略 A，opcode → SSA → RegIR → emitter)，也验证 emitter 直接发射 (策略 B)。
+
+/// 直接构造一个仅含单条 cmp.nan_* Intrinsic 指令的 RegFunction，用于精确检查发射的 C 表达式。
+RegCEmitResult emitCmpNanIntrinsic(const char* intrinsicName, SSAType operandType,
+                                   std::string& reason)
+{
+    auto block  = std::make_unique<RegBlock>(SSABlockId{0});
+    RegBlock* b = block.get();
+
+    RegInstruction ins;
+    ins.kind          = RegInstructionKind::Intrinsic;
+    ins.hasDest       = true;
+    ins.dest          = RegValue{RegId{3}, SSAType::I32};
+    ins.intrinsicName = intrinsicName;
+    ins.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, operandType}));
+    ins.args.push_back(RegOperand::fromRegister(RegValue{RegId{2}, operandType}));
+    b->instructions.push_back(std::move(ins));
+
+    RegReturnTerminator ret;
+    ret.hasValue = true;
+    ret.value    = RegOperand::fromRegister(RegValue{RegId{3}, SSAType::I32});
+    b->terminator = std::move(ret);
+
+    RegFunction fn;
+    fn.symbol.owner      = "CmpNanRegC";
+    fn.symbol.name       = "cmp";
+    fn.symbol.desc       = "()I";
+    fn.symbol.returnType = SSAType::I32;
+    fn.entry             = b;
+    fn.blocks.push_back(std::move(block));
+
+    RegCEmitter emitter;
+    auto        result = emitter.emitFunction(fn);
+    reason             = result.reason;
+    return result;
+}
+
+TEST(RegCCompareIntrinsicTest, EmitF64NanGreaterProducesNanAwareThreeWay)
+{
+    std::string reason;
+    auto        result = emitCmpNanIntrinsic("cmp.nan_greater", SSAType::F64, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    // dcmpg 语义：任一 NaN → 1，否则 (l>r)-(l<r)。
+    EXPECT_NE(result.source.find("isnan"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("? 1 :"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("(r1 > r2) - (r1 < r2)"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCCompareIntrinsicTest, EmitF32NanLessProducesNegativeNanFallback)
+{
+    std::string reason;
+    auto        result = emitCmpNanIntrinsic("cmp.nan_less", SSAType::F32, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    // fcmpl 语义：任一 NaN → -1。
+    EXPECT_NE(result.source.find("isnan"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("? -1 :"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCCompareIntrinsicTest, EmitI64LongCompareHasNoNanCheck)
+{
+    std::string reason;
+    // LCMP 恒为 nan_less（nanGreater=false），long 无 NaN 概念，不应出现 isnan。
+    auto result = emitCmpNanIntrinsic("cmp.nan_less", SSAType::I64, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_EQ(result.source.find("isnan"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("(r1 > r2) - (r1 < r2)"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCCompareIntrinsicTest, RejectsCmpNanWithTooFewOperands)
+{
+    auto block  = std::make_unique<RegBlock>(SSABlockId{0});
+    RegBlock* b = block.get();
+    RegInstruction ins;
+    ins.kind          = RegInstructionKind::Intrinsic;
+    ins.hasDest       = true;
+    ins.dest          = RegValue{RegId{3}, SSAType::I32};
+    ins.intrinsicName = "cmp.nan_greater";
+    ins.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}));
+    // 故意只给一个操作数。
+    b->instructions.push_back(std::move(ins));
+    RegReturnTerminator ret;
+    ret.hasValue = true;
+    ret.value    = RegOperand::fromRegister(RegValue{RegId{3}, SSAType::I32});
+    b->terminator = std::move(ret);
+
+    RegFunction fn;
+    fn.symbol.owner      = "CmpNanRegC";
+    fn.symbol.name       = "cmp";
+    fn.symbol.desc       = "()I";
+    fn.symbol.returnType = SSAType::I32;
+    fn.entry             = b;
+    fn.blocks.push_back(std::move(block));
+
+    RegCEmitter emitter;
+    auto        result = emitter.emitFunction(fn);
+    ASSERT_FALSE(result.ok);
+    EXPECT_NE(result.reason.find("cmp.nan_*"), std::string::npos) << result.reason;
+}
+
+// 端到端：用真实 opcode 走 CodeConverter → SSABuilder → RegLowering → RegCEmitter，
+// 验证 5 个比较 opcode 都不再 fail-closed（P0 修复前 dcmpg/dcmpl/fcmpg/fcmpl/lcmp 全部静默失败）。
+TEST(RegCCompareIntrinsicTest, EndToEndAllCompareOpcodesCompile)
+{
+    struct Case
+    {
+        int         opcode;
+        const char* label;
+    };
+    const Case cases[] = {
+        {Opcodes::DCMPG, "dcmpg"},
+        {Opcodes::DCMPL, "dcmpl"},
+        {Opcodes::FCMPG, "fcmpg"},
+        {Opcodes::FCMPL, "fcmpl"},
+        {Opcodes::LCMP, "lcmp"},
+    };
+    for (const auto& c : cases) {
+        std::string reason;
+        // (DD)I：dload 0/2 → dcmpg/dcmpl → ireturn。long 用 (JJ)I 的 lload。
+        const bool isLong = c.opcode == Opcodes::LCMP;
+        const char* desc  = isLong ? "(JJ)I" : "(DD)I";
+        const int   load0 = isLong ? Opcodes::LLOAD : Opcodes::DLOAD;
+        const int   load2 = isLong ? Opcodes::LLOAD : Opcodes::DLOAD;
+        auto result = emitRegC(
+            "cmp",
+            desc,
+            {
+                new VarInsnNode(load0, 0),
+                new VarInsnNode(load2, isLong ? 2 : 2),
+                new InsnNode(c.opcode),
+                new InsnNode(Opcodes::IRETURN),
+            },
+            4,
+            isLong ? 4 : 4,
+            reason);
+        ASSERT_TRUE(result.ok) << c.label << ": " << result.reason;
+        // 整型 LCMP 不应出现 isnan；浮点应出现 isnan。
+        if (isLong) {
+            EXPECT_EQ(result.source.find("isnan"), std::string::npos)
+                << c.label << " should have no NaN check:\n"
+                << result.source;
+        }
+        else {
+            EXPECT_NE(result.source.find("isnan"), std::string::npos)
+                << c.label << " should have NaN check:\n"
+                << result.source;
+        }
+        expectNoStackAnchors(result.source);
+    }
+}

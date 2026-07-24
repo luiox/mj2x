@@ -2005,6 +2005,33 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                 << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ");\n";
             return true;
         }
+        // JVM 的 LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较（-1/0/1），由 ssa_builder 的
+        // lowerCmp 翻译为 cmp.nan_greater（FCMPG/DCMPG）或 cmp.nan_less（LCMP/FCMPL/DCMPL）。
+        // 操作数类型来自 args[0]：浮点（F32/F64）需 NaN-aware 语义，整型（I64，LCMP）无 NaN。
+        if (ins.intrinsicName == "cmp.nan_greater" || ins.intrinsicName == "cmp.nan_less") {
+            if (ins.args.size() < 2) {
+                reason = "cmp.nan_* intrinsic requires two operands";
+                return false;
+            }
+            const std::string lhs = operandExpr(ins.args[0]);
+            const std::string rhs = operandExpr(ins.args[1]);
+            const SSAType     type = ins.args[0].type;
+            const bool nanGreater = ins.intrinsicName == "cmp.nan_greater";
+            // (lhs > rhs) - (lhs < rhs) 产出三值 -1/0/1，两种类型通用。
+            const std::string threeWay =
+                "((" + lhs + " > " + rhs + ") - (" + lhs + " < " + rhs + "))";
+            if (ssaIsFloat(type)) {
+                // 浮点：任一为 NaN 时按 nanGreater 取 1（dcmpg/fcmpg）或 -1（dcmpl/fcmpl）。
+                const char* nanValue = nanGreater ? "1" : "-1";
+                out << "    " << regName(ins.dest.id) << " = (isnan(" << lhs
+                    << ") || isnan(" << rhs << ")) ? " << nanValue << " : " << threeWay << ";\n";
+            }
+            else {
+                // 整型（LCMP）：long 不可能为 NaN，直接三值比较。
+                out << "    " << regName(ins.dest.id) << " = " << threeWay << ";\n";
+            }
+            return true;
+        }
         reason = "unsupported RegC intrinsic: " + ins.intrinsicName;
         return false;
     case RegInstructionKind::Barrier:

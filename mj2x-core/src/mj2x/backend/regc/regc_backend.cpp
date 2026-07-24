@@ -254,6 +254,10 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     auto ssa = ssaBuilder.build(
         blocks, className, methodName, methodDesc, isStatic, mn->maxLocals, reason);
     if (!ssa) {
+        // F1: 静默 fail-closed 补可观测日志，消除 SSA 构建阶段的诊断盲区。
+        printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
+               className.c_str(), methodName.c_str(), methodDesc.c_str(),
+               "SSA build failed", reason.c_str());
         backendResult.text = emitJniWrapper(className, *mn, RegCEmitResult{false, {}, {}, reason});
         return backendResult;
     }
@@ -261,6 +265,10 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     RegLowering lowering;
     auto        reg = lowering.lower(*ssa, reason);
     if (!reg) {
+        // F2: 静默 fail-closed 补可观测日志，消除 RegIR lowering 阶段的诊断盲区。
+        printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
+               className.c_str(), methodName.c_str(), methodDesc.c_str(),
+               "lowering failed", reason.c_str());
         backendResult.text = emitJniWrapper(className, *mn, RegCEmitResult{false, {}, {}, reason});
         return backendResult;
     }
@@ -270,6 +278,10 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     RegCEmitter emitter(&impl_->cachePool);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
+        // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。
+        printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
+               className.c_str(), methodName.c_str(), methodDesc.c_str(),
+               "emit failed", emitted.reason.c_str());
         backendResult.text = emitJniWrapper(className, *mn, emitted);
         return backendResult;
     }

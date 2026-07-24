@@ -14,9 +14,9 @@
 xmake build mj2x-core
 xmake build mj2x-cli
 xmake build mj2x_unittest
-xmake build mj2x_runtime_test
 xmake run mj2x_unittest
 xmake run mj2x_unittest --gtest_filter=CliTest.*
-xmake run mj2x_runtime_test
+xmake run mj2x_unittest --gtest_filter=RegCCompareIntrinsicTest.*
+xmake run mj2x_integration_test
 tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 ```
