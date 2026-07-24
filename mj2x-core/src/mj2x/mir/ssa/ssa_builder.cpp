@@ -98,6 +98,12 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c)
         // and dump apply their own escaping when rendering.
         return fn.newOpaque(SSAType::REF, "ldc_string:" + std::get<std::string>(c->value));
     }
+    if (std::holds_alternative<jbytecode::core::Type>(c->value)) {
+        // LDC Class 常量（Foo.class）：Type 的 internal name 即 JNI FindClass 需要的路径
+        // （如 "java/lang/String"）。用 "ldc_class:" 前缀透传给 emitter 发射 FindClass。
+        const auto& t = std::get<jbytecode::core::Type>(c->value);
+        return fn.newOpaque(SSAType::REF, "ldc_class:" + t.getInternalName().to_std_string());
+    }
     return fn.newOpaque(mirKindToSSA(c->type), "ldc_unknown");
 }
 

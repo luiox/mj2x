@@ -18,7 +18,14 @@
 ///
 /// 每个成功的方法生成两层：
 /// - 静态 `regc_*` helper（使用虚拟寄存器 local，如 `r0`）
-/// - `JNIEXPORT Java_*` wrapper（将 JNI 参数转为 helper 参数）
+/// - 静态 `__mj2x_c_<hash>` JNI 形状 wrapper（将 JNI 参数转为 helper 参数）
+///
+/// RegC 用 **RegisterNatives 动态绑定**（不再是 `Java_<mangled>` 符号导出）：
+/// 每个方法编译成 TU 内部的 `static` C 函数（不透明名 `__mj2x_c_<fnv1a64>`），
+/// 通过 finalize 阶段发射的 RegisterNatives 表显式绑定到 Java 类。每个受保护类的
+/// `<clinit>` 调 `mj2x/cloader/Loader.registerNativesForClass(classId, thisClass)`
+/// 触发该类惰性注册（classloader 安全）。这彻底消除了符号名/导出的脆弱性，
+/// 尤其是内部类名里的 `$` 不再需要 JNI 转义即可正确绑定。
 ///
 /// ## 失败策略
 ///
@@ -36,8 +43,9 @@
 /// @details
 /// RegCBackend adapts the stackless RegC emitter to the shared mj2x Backend
 /// interface.  It lowers one method through SSA and RegIR, emits the register
-/// helper function, then wraps that helper in a JNI-exported native method and
-/// marks the original Java method as native.  The current helper ABI is emitted
+/// helper function, then wraps that helper in a RegisterNatives-bound native
+/// function (opaque `static ... JNICALL __mj2x_c_<hash>`) and marks the
+/// original Java method as native.  The current helper ABI is emitted
 /// inline into the generated translation unit so RegC samples are executable
 /// while the longer-term R3 runtime symbol/context boundary is still being
 /// hardened.

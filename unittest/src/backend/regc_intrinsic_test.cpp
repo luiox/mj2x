@@ -2263,3 +2263,32 @@ TEST(RegCCompareIntrinsicTest, EndToEndAllCompareOpcodesCompile)
         expectNoStackAnchors(result.source);
     }
 }
+
+// ---- LDC Class 常量（Foo.class）----
+//
+// 修复前：ssa_builder.constantValue 不识别 Type，LDC Class 落到 opaque:ldc_unknown，
+// emitter 渲染成 NULL，导致反射调用（SomeClass.class.getXxx()）在 NULL receiver 上执行。
+// 修复后：Type 经 "ldc_class:" 前缀透传，emitter 发射 _mj2x_regc_class_literal（FindClass）。
+TEST(RegCLdcClassTest, LdcClassConstantEmitsFindClass)
+{
+    std::string reason;
+    // ()Ljava/lang/Class;：仅一条 ldc 类常量 + areturn。
+    auto& arena = Type::staticArena();
+    auto result = emitRegC(
+        "classLiteral",
+        "()Ljava/lang/Class;",
+        {
+            new LdcInsnNode(Type::getObjectType(arena.intern("java/lang/String"))),
+            new InsnNode(Opcodes::ARETURN),
+        },
+        1,
+        0,
+        reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    // 不应是 NULL（ldc_unknown）；应发射 FindClass helper。
+    EXPECT_EQ(result.source.find("ldc_unknown"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_class_literal("), std::string::npos) << result.source;
+    // internal name 正确透传。
+    EXPECT_NE(result.source.find("\"java/lang/String\""), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}

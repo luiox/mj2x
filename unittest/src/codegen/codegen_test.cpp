@@ -96,6 +96,8 @@ TEST(CHelpersTest, MangleNameEscapesUnderscoreAndSlashes)
     // descriptor mode additionally escapes ; and [
     EXPECT_EQ(mangleName("Lpkg/Cls;", true), "Lpkg_Cls_2");
     EXPECT_EQ(mangleName("[I", true), "_3I");
+    // '$'(内部类名 Outer$Inner) 按 JNI 规范转义为 _24（两种模式都生效）
+    EXPECT_EQ(mangleName("com/example/Outer$Inner", false), "com_example_Outer_24Inner");
 }
 
 TEST(CHelpersTest, MangleMethodBuildsJavaPrefixSymbol)

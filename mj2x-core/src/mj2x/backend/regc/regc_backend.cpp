@@ -12,12 +12,16 @@
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
+#include "mj2x/postprocessor/cloader_call.hpp"
 
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -28,11 +32,7 @@ using namespace jbytecode::tree;
 
 namespace {
 
-// JNI mangling is shared with StackC via codegen::; alias the symbols so
-// existing call sites in this file stay one-line.
 using codegen::CSourceStream;
-using codegen::mangleMethod;
-using codegen::mangleName;
 
 const char* jniType(PrimitiveKind kind)
 {
@@ -75,6 +75,59 @@ const char* defaultReturnValue(PrimitiveKind kind)
     case PrimitiveKind::OBJECT: return "NULL";
     default: return "0";
     }
+}
+
+// ---------------------------------------------------------------------------
+// RegisterNatives naming helpers.
+//
+// RegC 不再使用 Java_<mangled> 符号绑定（符号导出/JVM 符号解析链路脆弱，
+// 尤其是内部类名里的 '$' 即便按规范转义也难可靠工作）。改为照搬 StackC 的
+// 不透明函数名 + RegisterNatives 动态绑定：每个 native 方法编译成一个
+// TU 内部的 `static` C 函数，名字是 `__mj2x_c_<fnv1a64>`，通过每类的
+// RegisterNatives 表显式绑定。函数名/可见性完全与 JNI 符号查找脱钩。
+// ---------------------------------------------------------------------------
+
+std::uint64_t fnv1a64(std::string_view value, std::uint64_t seed = 1469598103934665603ULL)
+{
+    std::uint64_t hash = seed;
+    for (unsigned char c : value) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+std::string hex64(std::uint64_t value)
+{
+    std::ostringstream os;
+    os << std::hex << std::setw(16) << std::setfill('0') << value;
+    return os.str();
+}
+
+/// 每个 native 方法的 C 函数名：不透明 fnv1a64 哈希，与 JNI 符号查找无关。
+std::string nativeFunctionName(const std::string& className, const std::string& methodName,
+                               const std::string& methodDesc)
+{
+    auto hash = fnv1a64(className);
+    hash      = fnv1a64(methodName, hash);
+    hash      = fnv1a64(methodDesc, hash);
+    return "__mj2x_c_" + hex64(hash);
+}
+
+/// 每类的 register 函数名：把类名里的非字母数字转义为 _XX 十六进制，保证合法 C 标识符。
+std::string registerFunctionName(const std::string& className)
+{
+    std::string ident = "_mj2x_register_";
+    for (unsigned char c : className) {
+        if (std::isalnum(c)) {
+            ident += static_cast<char>(c);
+        }
+        else {
+            ident += "_";
+            ident += hex64(c).substr(14);   // 末 2 位十六进制
+        }
+    }
+    return ident;
 }
 
 PrimitiveKind returnKind(const std::string& desc)
@@ -147,8 +200,19 @@ std::string emitFailureBody(const std::string& reason, PrimitiveKind retKind)
     return out.str();
 }
 
-std::string emitJniWrapper(const std::string& className, const MethodNode& method,
-                           const RegCEmitResult& emitted)
+/// 发射单个 native 方法的 C 函数（不透明 `static ... JNICALL __mj2x_c_<hash>`）。
+///
+/// 这是受 RegisterNatives 绑定的函数：签名必须匹配 Java 描述符的 JNI 调用约定
+/// （JNIEnv* + jclass/jobject + 按 jvmSort 映射的 jxxx 参数），返回值也按 jniType
+/// 映射。但函数本身不导出（无 JNIEXPORT），名字是不透明哈希，JVM 不会按符号查找它——
+/// 绑定完全靠 finalize 阶段发射的 RegisterNatives 表。
+///
+/// body 与旧 emitJniWrapper 完全一致：设置全局 _mj2x_regc_env、init context、
+/// 转调 RegCEmitter 生成的 regc_* helper。
+///
+/// @param[out] cFuncName 生成的 C 函数名（供 compileMethod 登记到 RegisterNatives 表）。
+std::string emitNativeMethod(const std::string& className, const MethodNode& method,
+                             const RegCEmitResult& emitted, std::string& cFuncName)
 {
     const std::string methodName = method.name.to_std_string();
     const std::string methodDesc = method.desc.to_std_string();
@@ -156,10 +220,11 @@ std::string emitJniWrapper(const std::string& className, const MethodNode& metho
     const auto        retKind    = returnKind(methodDesc);
     const auto        args       = argumentKinds(methodDesc);
 
+    cFuncName = nativeFunctionName(className, methodName, methodDesc);
+
     std::ostringstream out;
-    out << "JNIEXPORT " << jniType(retKind) << " JNICALL\n";
-    out << mangleMethod(className, methodName, methodDesc) << "(JNIEnv* env, "
-        << (isStatic ? "jclass clazz" : "jobject thisObject");
+    out << "static " << jniType(retKind) << " JNICALL\n";
+    out << cFuncName << "(JNIEnv* env, " << (isStatic ? "jclass clazz" : "jobject thisObject");
     for (size_t i = 0; i < args.size(); ++i) {
         out << ", " << jniType(args[i]) << " p" << i;
     }
@@ -210,6 +275,37 @@ struct RegCBackend::Impl
 {
     std::ostringstream source;
     RegCCachePool      cachePool;
+
+    /// RegisterNatives 注册簿记：每个受保护类 -> 它的 native 方法列表。
+    /// finalize 阶段据此发射每类的 register 函数 + _mj2x_reg_methods[] 表 + JNI_OnLoad。
+    struct NativeMethodReg
+    {
+        std::string javaName;    ///< Java 方法名（原样，如 doAdd / <init> 不会出现在这，clinit/init 不转）
+        std::string javaDesc;    ///< Java 描述符（如 (I)V）
+        std::string cFunctionName;   ///< 绑定的 C 函数名（__mj2x_c_<hash>）
+    };
+    std::unordered_map<std::string, std::vector<NativeMethodReg>> regsByClass;
+    std::vector<std::string>                                       classOrder;   /// 稳定遍历序
+    std::unordered_map<std::string, int>                           classIds;     /// 类名 -> classId
+    std::unordered_set<std::string> clinitInjected;   /// 已注入 registerNativesForClass 的类（去重）
+
+    /// 记录一条 native 方法注册，并为首次出现的类分配 classId。
+    /// compileMethod 成功路径调用。返回该类的 classId（供 injectIntoClass 注入 clinit）。
+    int registerNativeMethod(const std::string& className, const std::string& javaName,
+                             const std::string& javaDesc, const std::string& cFunctionName)
+    {
+        auto [regsIt, insertedClass] = regsByClass.emplace(className, std::vector<NativeMethodReg>{});
+        if (insertedClass) {
+            classIds.emplace(className, static_cast<int>(classOrder.size()));
+            classOrder.push_back(className);
+        }
+        regsIt->second.push_back({javaName, javaDesc, cFunctionName});
+        return classIds[className];
+    }
+
+    /// 在 finalize 阶段发射 RegisterNatives 基础设施：
+    /// 每类 register 函数、_mj2x_reg_methods[] 表、桥接 _mj2x_register_for_class、JNI_OnLoad。
+    void emitRegistrationCode(std::ostringstream& out) const;
 };
 
 RegCBackend::RegCBackend()
@@ -228,18 +324,8 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     const bool        isStatic   = (mn->access & Opcodes::ACC_STATIC) != 0;
 
     std::string reason;
-    // 内部类（含 $）整体 skip：实测 Exec$Inner.doAdd 转 native 后语义出错（this$0 合成字段
-    // 访问 / 外部类方法调用路径在当前 RegC 下不完善，导致 InnerClass 测试失败）。
-    // 待 RegC 字段/call 路径的引用管理完善后再放开。参考 native-obfuscator 全转内部类。
-    if (className.find('$') != std::string::npos) {
-        reason = "inner class method remains on bytecode path for compatibility";
-        printf("[RegCBackend] Skipping %s.%s%s: %s\n",
-               className.c_str(),
-               methodName.c_str(),
-               methodDesc.c_str(),
-               reason.c_str());
-        return backendResult;
-    }
+    // 内部类（含 $）整体 skip 已撤销：RegC 现用 RegisterNatives 动态绑定，
+    // 函数名/符号导出与 JNI 查找完全脱钩，内部类的 native 方法可以像普通类一样注册。
     if (shouldKeepBytecodeForCompatibility(*mn, blocks, reason)) {
         printf("[RegCBackend] Skipping %s.%s%s: %s\n",
                className.c_str(),
@@ -259,7 +345,6 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "SSA build failed", reason.c_str());
-        backendResult.text = emitJniWrapper(className, *mn, RegCEmitResult{false, {}, {}, reason});
         return backendResult;
     }
 
@@ -270,7 +355,6 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "lowering failed", reason.c_str());
-        backendResult.text = emitJniWrapper(className, *mn, RegCEmitResult{false, {}, {}, reason});
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
@@ -283,21 +367,66 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "emit failed", emitted.reason.c_str());
-        backendResult.text = emitJniWrapper(className, *mn, emitted);
         return backendResult;
     }
 
     // Keep the stackless helper as the trace surface and add a thin JNI entry
-    // point only for JVM native binding.  The wrapper must not reintroduce a
-    // StackC-style operand stack.
+    // point only for RegisterNatives binding.  The wrapper must not reintroduce
+    // a StackC-style operand stack.
+    std::string cFuncName;
     std::ostringstream methodSource;
     methodSource << emitted.source << "\n";
-    methodSource << emitJniWrapper(className, *mn, emitted);
+    methodSource << emitNativeMethod(className, *mn, emitted, cFuncName);
+
+    // 登记 RegisterNatives：本方法绑定到 cFuncName，并为该类分配 classId。
+    impl_->registerNativeMethod(className, methodName, methodDesc, cFuncName);
 
     backendResult.kind = BackendResult::Kind::C_SOURCE;
     backendResult.text = methodSource.str();
     impl_->source << methodSource.str();
     return backendResult;
+}
+
+/// 往 clinit 头部前插 registerNativesForClass(classId, thisClass) 调用。
+/// 无 clinit 则新建一个仅含该调用 + RETURN 的 clinit。每类只注入一次（由调用方去重）。
+///
+/// 顺序保证：插入在最前。NativeLoaderPostprocessor 在 backend 之后跑，它的
+/// emitLoadCall 也在 clinit 最前 insert，会把 NativeLoader.load 插到本调用之前，
+/// 最终 clinit 顺序为 [load, registerNativesForClass, ...原有/用户 clinit...]。
+/// 这保证先加载 native 库再绑定 native 方法，且绑定发生在用户静态初始化之前
+/// （用户 clinit 可能调用 native 方法，必须先完成绑定）。
+///
+/// className 取自 clazz.classNode->name（Utf8StringRef，arena 持有），避免临时
+/// std::string 生命周期的悬垂引用。
+void prependRegisterNativesCall(CompilerClass& clazz, int classId)
+{
+    constexpr int kClinitMaxStack = 2;   // ldc int + ldc class 各占 1 slot
+
+    MethodNode* clinit = findMethod(clazz, "<clinit>", "()V");
+    if (clinit == nullptr) {
+        std::vector<ca::str::Utf8StringRef> noExceptions;
+        clinit = new MethodNode(Opcodes::ACC_STATIC,
+                                ca::str::ZUtf8StringRef::from_static("<clinit>"),
+                                ca::str::ZUtf8StringRef::from_static("()V"),
+                                ca::str::ZUtf8StringRef::from_static(""),
+                                noExceptions);
+        clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+        clinit->maxStack  = 0;
+        clinit->maxLocals = 0;
+        clazz.classNode->methods.push_back(clinit);
+    }
+
+    using namespace jbytecode::tree;
+    InsnList prefix;
+    prefix.add(new LdcInsnNode(classId));
+    prefix.add(new LdcInsnNode(Type::getObjectType(clazz.classNode->name)));
+    prefix.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                  ca::str::ZUtf8StringRef::from_static(cloader::kClassName),
+                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterName),
+                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterDesc),
+                                  false));
+    clinit->instructions.insert(clinit->instructions.getFirst(), prefix);
+    if (clinit->maxStack < kClinitMaxStack) clinit->maxStack = kClinitMaxStack;
 }
 
 void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
@@ -313,6 +442,19 @@ void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
     mn->maxStack   = 0;
     mn->maxLocals  = 0;
     clazz.modified = true;
+
+    // RegisterNatives：在该类首次被注入 native 方法时，往 clinit 前插
+    // registerNativesForClass(classId, thisClass)。每类只注入一次。
+    // classNode 为空（单元测试直调 injectIntoClass）时跳过 clinit 注入——
+    // 这种场景没有类文件可改，注册基础设施仍由 finalize 正常发射。
+    if (clazz.classNode == nullptr) return;
+    const std::string className = clazz.classNode->name.to_std_string();
+    if (className.empty()) return;
+    if (impl_->classIds.find(className) != impl_->classIds.end() &&
+        impl_->clinitInjected.find(className) == impl_->clinitInjected.end()) {
+        prependRegisterNativesCall(clazz, impl_->classIds[className]);
+        impl_->clinitInjected.insert(className);
+    }
     // Native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责（见
     // postprocessor/native_loader_call.hpp），不再在 backend 内重复。
 }
@@ -379,6 +521,11 @@ void RegCBackend::finalize(const CompilerIndex& index)
     emitRegCHelperPrelude(full);
     full << emittedSource;
 
+    // RegisterNatives 基础设施（每类 register fn、_mj2x_reg_methods[] 表、桥接、JNI_OnLoad）。
+    // 无任何注册方法时（classOrder 为空）也发射一个不绑任何类的空壳 JNI_OnLoad，
+    // 保持"RegC 输出总有 JNI_OnLoad"的契约，便于测试与运行时一致性。
+    impl_->emitRegistrationCode(full);
+
     sourceCode_ = full.str();
     if (!cOutputPath_.empty()) {
         std::ofstream out(cOutputPath_, std::ios::binary);
@@ -392,6 +539,130 @@ void RegCBackend::finalize(const CompilerIndex& index)
             printf("[RegCBackend] ERROR: cannot write %s\n", cOutputPath_.c_str());
         }
     }
+}
+
+void RegCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const
+{
+    // 照搬 StackC 的惰性逐类 RegisterNatives 发射（stackc_backend.cpp:1332-1716）：
+    //   - 每类一个 static jint _mj2x_register_<class>(JNIEnv*, jclass)：建 JNINativeMethod[]
+    //     并 RegisterNatives。
+    //   - static _mj2x_reg_method _mj2x_reg_methods[N] 表（按 classId 索引）。
+    //   - 桥接 _mj2x_register_for_class：按 class_id 分派到对应 register fn。
+    //   - JNI_OnLoad：填表 + FindClass("mj2x/cloader/Loader") + RegisterNatives 绑桥接。
+    CSourceStream src;
+    src.emitLine("/* Native registration (RegisterNatives, lazy per-class) */");
+    src.emitLine("typedef jint (*_mj2x_reg_method)(JNIEnv* env, jclass clazz);");
+    src.emitLine(
+        "static _mj2x_reg_method _mj2x_reg_methods[" +
+        std::to_string(classOrder.empty() ? 1 : classOrder.size()) + "] = {0};");
+    src.emitLine("");
+
+    // 每类 register 函数。
+    for (const auto& className : classOrder) {
+        auto found = regsByClass.find(className);
+        if (found == regsByClass.end() || found->second.empty()) continue;
+
+        const auto registerName = registerFunctionName(className);
+        src.emitLine("static jint " + registerName + "(JNIEnv* env, jclass clazz) {");
+        src.indent();
+        src.emitLine("if (clazz == NULL) return JNI_ERR;");
+        src.emitLine("if ((*env)->MonitorEnter(env, clazz) != 0) return JNI_ERR;");
+        src.emitLine("jint result = JNI_OK;");
+        src.emitLine("static JNINativeMethod methods[] = {");
+        src.indent();
+        for (const auto& reg : found->second) {
+            src.emitLine("{(char*)" + codegen::cStringLiteral(reg.javaName) + ", (char*)" +
+                         codegen::cStringLiteral(reg.javaDesc) + ", (void*)" + reg.cFunctionName +
+                         "},");
+        }
+        src.dedent();
+        src.emitLine("};");
+        src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, "
+                     "sizeof(methods) / sizeof(methods[0])) != 0) {");
+        src.indent();
+        src.emitLine("result = JNI_ERR;");
+        src.emitLine("goto " + registerName + "_exit;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine(registerName + "_exit:");
+        src.emitLine(
+            "if ((*env)->MonitorExit(env, clazz) != 0 && result == JNI_OK) result = JNI_ERR;");
+        src.emitLine("return result;");
+        src.dedent();
+        src.emitLine("}");
+        src.emitLine("");
+    }
+
+    // 桥接：按 class_id 分派到对应 register fn。
+    src.emitLine(std::string("static void JNICALL ") + cloader::kBridgeCFunc +
+                 "(JNIEnv* env, jclass loader_class, jint class_id, jclass clazz) {");
+    src.indent();
+    src.emitLine("(void)loader_class;");
+    src.emitLine("if (class_id < 0 || class_id >= " + std::to_string(classOrder.size()) +
+                 " || _mj2x_reg_methods[class_id] == NULL) {");
+    src.indent();
+    src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id "
+                 "mismatch\");");
+    src.emitLine("return;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("if (clazz == NULL) {");
+    src.indent();
+    src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class is "
+                 "null\");");
+    src.emitLine("return;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("if (_mj2x_reg_methods[class_id](env, clazz) != JNI_OK) {");
+    src.indent();
+    src.emitLine("if (!(*env)->ExceptionCheck(env)) {");
+    src.indent();
+    src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
+    src.emitLine(
+        "if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native registration failed\");");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("return;");
+    src.dedent();
+    src.emitLine("}");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("");
+
+    // JNI_OnLoad：填表 + 绑桥接到 mj2x/cloader/Loader。
+    src.emitLine("JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {");
+    src.indent();
+    src.emitLine("JNIEnv* env = NULL;");
+    src.emitLine("(void)reserved;");
+    src.emitLine("if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;");
+    for (const auto& className : classOrder) {
+        auto found = regsByClass.find(className);
+        if (found == regsByClass.end() || found->second.empty()) continue;
+        auto idIt = classIds.find(className);
+        if (idIt == classIds.end()) continue;
+        src.emitLine("_mj2x_reg_methods[" + std::to_string(idIt->second) +
+                     "] = " + registerFunctionName(className) + ";");
+    }
+    src.emitLine("jclass loader_class = (*env)->FindClass(env, " +
+                 codegen::cStringLiteral(cloader::kClassName) + ");");
+    src.emitLine("if ((*env)->ExceptionCheck(env) || loader_class == NULL) return JNI_ERR;");
+    src.emitLine("static JNINativeMethod loader_methods[] = {");
+    src.indent();
+    src.emitLine("{(char*)" + codegen::cStringLiteral(cloader::kRegisterName) + ", (char*)" +
+                 codegen::cStringLiteral(cloader::kRegisterDesc) + ", (void*)" +
+                 cloader::kBridgeCFunc + "},");
+    src.dedent();
+    src.emitLine("};");
+    src.emitLine("if ((*env)->RegisterNatives(env, loader_class, loader_methods, "
+                 "sizeof(loader_methods) / sizeof(loader_methods[0])) != 0) return JNI_ERR;");
+    src.emitLine("(*env)->DeleteLocalRef(env, loader_class);");
+    src.emitLine("return JNI_VERSION_1_6;");
+    src.dedent();
+    src.emitLine("}");
+
+    out << src.str();
 }
 
 }   // namespace mj2x

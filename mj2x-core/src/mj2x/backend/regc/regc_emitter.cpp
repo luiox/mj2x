@@ -157,6 +157,12 @@ std::string operandExpr(const RegOperand& operand)
             return "_mj2x_intrinsic_string_literal(_mj2x_regc_current_context(), " +
                    cStringLiteral(operand.tag.substr(std::string("ldc_string:").size())) + ")";
         }
+        // LDC Class 常量（Foo.class）携带 internal name 在 "ldc_class:" 之后，
+        // 发射 FindClass 物质化为 jclass。
+        if (operand.tag.rfind("ldc_class:", 0) == 0) {
+            return "_mj2x_regc_class_literal(_mj2x_regc_current_context(), " +
+                   cStringLiteral(operand.tag.substr(std::string("ldc_class:").size())) + ")";
+        }
         return "NULL /* opaque:" + operand.tag + " */";
     }
     return "0";

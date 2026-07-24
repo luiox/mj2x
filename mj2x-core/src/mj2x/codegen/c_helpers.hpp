@@ -74,6 +74,11 @@ inline std::string mangleName(std::string_view name, bool descriptorMode)
         else if (descriptorMode && c == '[') {
             result += "_3";
         }
+        else if (c == '$') {
+            // JNI 规范：'$'(U+0024) 转义为 "_24"。内部类名（Outer$Inner）必须转义，
+            // 否则按 Java_* 符号查找时会失败。此转义对基于符号绑定的消费者是规范正确修复。
+            result += "_24";
+        }
         else {
             result += c;
         }

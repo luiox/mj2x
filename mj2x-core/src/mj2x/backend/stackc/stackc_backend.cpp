@@ -6,6 +6,7 @@
 #include "mj2x/codegen/include_set.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
+#include "mj2x/postprocessor/cloader_call.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
 #include <cassert>
@@ -563,10 +564,12 @@ struct CHiddenInterfaceDefaultProxy
     std::vector<uint8_t> classBytes;
 };
 
-static constexpr const char* kRegisterBridgeClassName     = "mj2x/cloader/Loader";
-static constexpr const char* kRegisterBridgeMethodName    = "registerNativesForClass";
-static constexpr const char* kRegisterBridgeMethodDesc    = "(ILjava/lang/Class;)V";
-static constexpr const char* kRegisterBridgeCFunctionName = "_mj2x_register_for_class";
+/// RegisterNatives 桥接常量从共享头 mj2x/postprocessor/cloader_call.hpp 取用。
+/// 这里保留旧别名以最小化本文件内既有引用的改动。
+static constexpr const char* kRegisterBridgeClassName     = cloader::kClassName;
+static constexpr const char* kRegisterBridgeMethodName    = cloader::kRegisterName;
+static constexpr const char* kRegisterBridgeMethodDesc    = cloader::kRegisterDesc;
+static constexpr const char* kRegisterBridgeCFunctionName = cloader::kBridgeCFunc;
 static constexpr const char* kHiddenClinitMethodName      = "__mj2x_hiddenClinit";
 static constexpr const char* kHiddenClinitMethodDesc      = "(Ljava/lang/Class;)V";
 

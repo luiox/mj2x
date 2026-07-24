@@ -558,6 +558,15 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (utf8 == NULL) return NULL;\n";
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);\n";
     out << "}\n\n";
+    // LDC Class 常量（Foo.class）的物质化：FindClass 返回 jclass。Class 对象在 JVM 内是
+    // 单例，FindClass 每次返回同一 Class 的 local ref；local ref 生命周期由 R6-D 引用管理
+    // 统一处理。context 用于 ABI 对称（与 string_literal 一致）。
+    out << "static mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* "
+           "internal_name) {\n";
+    out << "    (void)context;\n";
+    out << "    if (internal_name == NULL) return NULL;\n";
+    out << "    return (mj2x_ref)(*_mj2x_regc_env)->FindClass(_mj2x_regc_env, internal_name);\n";
+    out << "}\n\n";
     // Integer.parseInt / Long.parseLong intrinsic helpers.  Reads the jstring's
     // modified-UTF-8 bytes and parses digits locally so radix overloads do not
     // dispatch through CallStatic*Method.

@@ -78,9 +78,10 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
-    EXPECT_NE(result.text.find("JNIEXPORT jint JNICALL"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("Java_Test_add__II(JNIEnv* env, jclass clazz"), std::string::npos)
-        << result.text;
+    // RegC 用 RegisterNatives 动态绑定：native 方法是不透明 `static ... JNICALL __mj2x_c_<hash>`
+    // （无 JNIEXPORT、无 Java_<mangled> 符号）。签名仍匹配 JNI 调用约定。
+    EXPECT_NE(result.text.find("static jint JNICALL\n__mj2x_c_"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("(JNIEnv* env, jclass clazz"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("regc_Test_add__II_I((int32_t)(p0), (int32_t)(p1));"),
               std::string::npos)
         << result.text;
@@ -117,8 +118,9 @@ TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister)
     auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
-    EXPECT_NE(result.text.find("Java_pkg_Box_bump__I(JNIEnv* env, jobject thisObject"),
-              std::string::npos)
+    // 实例方法：不透明 static 函数，receiver 作为第一个参数（jobject thisObject）。
+    EXPECT_NE(result.text.find("static jint JNICALL\n__mj2x_c_"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("(JNIEnv* env, jobject thisObject"), std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("regc_pkg_Box_bump__I_I((mj2x_ref)(thisObject), (int32_t)(p0));"),
               std::string::npos)
@@ -346,7 +348,8 @@ TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
     auto          result = backend.compileMethod("Bad", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(result.text.find("RegC lowering failed"), std::string::npos) << result.text;
+    // fail-closed：lowering 失败时不生成 native 绑定（kind=NONE，result.text 空），
+    // 字节码保留由 injectIntoClass 负责。失败原因已通过 printf 诊断日志输出。
 
     backend.injectIntoClass(cls, cls.methods[0], result);
     EXPECT_FALSE(method->access & Opcodes::ACC_NATIVE);

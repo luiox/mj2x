@@ -18,6 +18,7 @@
 #include "jdk_finder/jdk_finder.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/mj2x.hpp"
+#include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "test_helper.hpp"
 
@@ -168,6 +169,9 @@ protected:
         backend->setOutputPath(cFile.string());
         pipeline.registerBackend(std::move(backend));
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+        // RegC 用 RegisterNatives 动态绑定，需要 mj2x/cloader/Loader 桥接类
+        // （JNI_OnLoad 绑其 registerNativesForClass 到 _mj2x_register_for_class）。
+        pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
         ASSERT_EQ(pipeline.run(), 0);
         ASSERT_TRUE(fileExists(cFile));
         std::string generatedC = readText(cFile);

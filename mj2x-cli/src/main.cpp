@@ -827,19 +827,24 @@ int main(int argc, char** argv)
     else {
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
-    if (needsNativeSource && options.cBackendKind == CEmitterBackend::StackC) {
+    if (needsNativeSource &&
+        (options.cBackendKind == CEmitterBackend::StackC ||
+         options.cBackendKind == CEmitterBackend::RegC)) {
+        // StackC 和 RegC 均使用 RegisterNatives 动态绑定，需要 mj2x/cloader/Loader
+        // 桥接类（其 native 方法 registerNativesForClass 由本侧 _mj2x_register_for_class 实现）。
         pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
     }
     if (jarNativeLoaderEnabled) {
-        /// RegC 和 LLVM IR 均通过 JNI export 绑定；StackC 因 RegisterNatives 绑定需自己
-        /// 重写 clinit，此处只注入资源（injectClinitCalls=false）。
-        const bool directJniBackend = needsNativeSource &&
-                                      (options.cBackendKind == CEmitterBackend::RegC ||
-                                       options.cBackendKind == CEmitterBackend::LlvmIr);
+        // injectClinitCalls 决定是否往每个 modified 类的 <clinit> 前插 NativeLoader.load：
+        //  - RegC / LLVM IR：需要 load（库通过 System.load 加载，再触发 JNI_OnLoad）。
+        //  - StackC：自己重写整个 clinit（含 load），故此处只注入资源（injectClinitCalls=false）。
+        const bool injectLoadIntoClinit = needsNativeSource &&
+                                          (options.cBackendKind == CEmitterBackend::RegC ||
+                                           options.cBackendKind == CEmitterBackend::LlvmIr);
         pipeline.registerPostprocessor(std::make_unique<mj2x::NativeLoaderPostprocessor>(
             nativeResourcePath,
             nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix,
-            directJniBackend));
+            injectLoadIntoClinit));
     }
 
     int rc = pipeline.run();
