@@ -113,10 +113,8 @@ bool shouldKeepBytecodeForCompatibility(const MethodNode& method, const std::vec
         reason = "lambda body remains on bytecode path for invokedynamic compatibility";
         return true;
     }
-    if (method.tryCatchBlocks.size() > 4) {
-        reason = "large exception-table method remains on bytecode path";
-        return true;
-    }
+    // 异常表阈值放宽：lowering 三层对 catch 数量无上限（实测 pack.Main 14 个 catch 正常）。
+    // 原 >4 阈值过保守，会把 main 等含多 try-catch 的方法误伤。此处不再按异常表数量 skip。
     for (auto* block : blocks) {
         for (const auto& node : block->nodes) {
             if (node->kind == MIRKind::INVOKE_DYNAMIC) {
@@ -230,6 +228,9 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     const bool        isStatic   = (mn->access & Opcodes::ACC_STATIC) != 0;
 
     std::string reason;
+    // 内部类（含 $）整体 skip：实测 Exec$Inner.doAdd 转 native 后语义出错（this$0 合成字段
+    // 访问 / 外部类方法调用路径在当前 RegC 下不完善，导致 InnerClass 测试失败）。
+    // 待 RegC 字段/call 路径的引用管理完善后再放开。参考 native-obfuscator 全转内部类。
     if (className.find('$') != std::string::npos) {
         reason = "inner class method remains on bytecode path for compatibility";
         printf("[RegCBackend] Skipping %s.%s%s: %s\n",

@@ -154,7 +154,7 @@ F1 子原因:`ssa_builder.cpp` 的栈下溢、DUP/SWAP category 校验、invoked
 | 内部类 `$` 硬跳 | 可讨论放宽 | 中 |
 | ~~静默 fail-closed 可观测性~~ | ~~加 printf 即可~~ | ~~中~~ **已修复** |
 | invokedynamic/lambda | 工作量大,设计如此 | 低(需 SSA 层展开 bootstrap) |
-| high-risk call 黑名单 | 设计如此(可讨论放宽) | 低(保守策略) |
+| high-risk call 黑名单 | **不可直接删**（见 §11，需先完善 call 引用管理） | 中（前置：call 路径引用管理） |
 | init/clinit | JVM 限制,设计如此 | 不修 |
 
 ## 10. 关联
@@ -163,3 +163,19 @@ F1 子原因:`ssa_builder.cpp` 的栈下溢、DUP/SWAP category 校验、invoked
 - invokedynamic 策略:`regc_invokedynamic_strategy.md`
 - intrinsic 体系:`regc_intrinsic.md`(本文档的 `cmp.nan_*` 是该体系的遗漏项)
 - RegC 能力声明:`capabilities.md`
+
+## 11. 覆盖率提升实验记录（2026-07-24，对标 JNIC/native-obfuscator 全转策略）
+
+**目标**:把 RegC 业务方法覆盖率从 75% 提升到接近 100%,对齐 JNIC（实测 pack.* 100% 转 native）。
+
+**安全放开的（已合入）**:
+- 异常表阈值 `tryCatchBlocks > 4`（`regc_backend.cpp` `shouldKeepBytecodeForCompatibility`）:lowering 三层（SSA `ssa_builder.cpp:1402`、RegIR `reg_lowering.cpp:360`、emitter `regc_emitter.cpp:1631`）对 catch 数量/类型/嵌套无上限。实测 `pack.Main`（14 个 catch(Throwable)）转 native 后全测试通过。
+
+**实测发现不可直接放开的（已回退,需前置工作）**:
+- **high-risk 黑名单**（`isCompatibilityRiskCall`）:取消后反射测试（Test #2 Counter/Resource/Field/Loader/ReTrace/Annotation）全失败。根因:RegC `_mj2x_regc_call_ref`（`regc_runtime_template.cpp:113`）返回的 JNI local ref 不做 `NewLocalRef`/`DeleteLocalRef` 管理,反射返回的 Class/Method/Field 对象生命周期与 Java 不一致。`Object.getClass`（javac 空检查惯用法）、`Class.*`、`reflect.*` 全受影响。
+- **Thread.sleep**:在 native 帧（线程池工作线程）调用会破坏 JDK 并发库（`ThreadPoolExecutor`/`LinkedBlockingQueue` 的 `ReentrantLock`）monitor 状态,抛 `IllegalMonitorStateException`。
+- **内部类 `$` skip**:取消后 `Exec$Inner.doAdd` 转 native 语义出错（InnerClass 测试失败）,`this$0` 合成字段访问/外部类方法调用路径不完善。
+
+**前置条件（R6）**:先完善 RegC call 路径的引用管理（local ref 追踪/释放,参考 StackC `trackLocalRef` `stackc_backend.cpp:2749`）+ 字段访问路径,再分项放开黑名单与内部类 skip。invokedynamic 是独立大工程（R6.1,搬 StackC 477 行实现）。native 库打包/加密技术整理成 wiki（R6.2）。
+
+**参考实现**:JNIC（AOT 真机器码,`JNICLoader` 解密流,dump 工具 `JNIC-Virtualization`）、native-obfuscator（`LoaderUnpack`,无 high-risk 黑名单全转,indy 走字节码预处理不编译 native）、morpher-legacy `CompressDataTool`（带去重排序压缩）。
