@@ -19,6 +19,7 @@
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
+#include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "test_helper.hpp"
 
@@ -168,6 +169,9 @@ protected:
         auto           backend = std::make_unique<mj2x::RegCBackend>();
         backend->setOutputPath(cFile.string());
         pipeline.registerBackend(std::move(backend));
+        // R6.1：先展开 StringConcatFactory invokedynamic → StringBuilder 字节码，
+        // 再 mark-all，使 concat 方法能进入 RegC native 流程。
+        pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
         // RegC 用 RegisterNatives 动态绑定，需要 mj2x/cloader/Loader 桥接类
         // （JNI_OnLoad 绑其 registerNativesForClass 到 _mj2x_register_for_class）。
@@ -447,6 +451,34 @@ TEST_F(RegCBackendE2E, ReflectionRoundTrip)
                 {"sameClass(\"a\", new Object())",
                  "RegCReflection.sameClass(\"a\", new Object())"},
                 {"loopNames(64)", "RegCReflection.loopNames(64)"},
+            });
+}
+
+// R6.1 阶段1：StringConcatFactory invokedynamic 展开验证。javac 把 "a"+x+"b"+... 编译成
+// invokedynamic makeConcatWithConstants —— InvokeDynamicPreprocessor 把它改写成
+// new StringBuilder + append 链 + toString 字节码，RegC 已有 StringBuilder intrinsic
+// 支持故能转 native（不走 StackC 的 runtime bridge，绕开 RegC 缺 owner-class 障碍）。
+// 覆盖多类型参数（int/long/String/null）、纯字面量、连续动态参数。
+TEST_F(RegCBackendE2E, InvokeDynamicStringConcatRoundTrip)
+{
+    runCase("RegCConcat",
+            "public class RegCConcat {\n"
+            "  public static String join(int a, long b, String s) {\n"
+            "    return \"a=\" + a + \",b=\" + b + \",s=\" + s;\n"
+            "  }\n"
+            "  public static String withNull(String s) { return \"n=\" + s; }\n"
+            "  public static String adjacent(String x, String y) { return x + y; }\n"
+            "  public static String types(boolean f, char c, double d) {\n"
+            "    return \"f=\" + f + \",c=\" + c + \",d=\" + d;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"join(7, 42L, \"ok\")", "RegCConcat.join(7, 42L, \"ok\")"},
+                {"join(-1, 9223372036854775807L, \"x\")",
+                 "RegCConcat.join(-1, 9223372036854775807L, \"x\")"},
+                {"withNull(null)", "RegCConcat.withNull(null)"},
+                {"adjacent(\"foo\", \"bar\")", "RegCConcat.adjacent(\"foo\", \"bar\")"},
+                {"types(true, 'z', 3.5)", "RegCConcat.types(true, 'z', 3.5)"},
             });
 }
 

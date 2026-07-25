@@ -251,4 +251,40 @@ R6-D e2e 用例（`nativeSleep` 比对耗时）因 sleep 耗时非确定性被�
 - **并发**（保留）：`java/lang/Thread`、`java/util/concurrent/*`。
 - **System**（保留）：`System.exit`/`setSecurityManager`/`getSecurityManager`。
 
-其余（反射 / IO / 类加载）均已放开。 invokedynamic 仍走显式 skip（R6.1 独立工程）。
+其余（反射 / IO / 类加载）均已放开。invokedynamic 走分阶段展开（见 §14）。
+
+## 14. R6.1 阶段1：StringConcatFactory invokedynamic 展开（2026-07-25，已完成）
+
+**背景与路线选择**：dev_plan 原方案是照搬 StackC 的 477 行 native runtime bridge
+（`stackc_backend.cpp:2732`，运行时真调用 bootstrap → CallSite → invokeWithArguments）。
+调研发现 RegC 后端**没有 `_mj2x_owner_class` 概念**（native wrapper 有 `clazz`/`thisObject`
+但未传入内层 helper），而 StackC bridge 的 privateLookupIn/findSpecial/classloader 可见性
+强依赖它——照搬需先给 RegC 引入 owner-class 机制，成本高。改采策略文档
+（[regc_invokedynamic_strategy.md](regc_invokedynamic_strategy.md)）的 **pre-SSA expansion**
+路线，分阶段展开，阶段1 先做占 javac 生成 indy 绝大多数的 string concat。
+
+**机制**：`InvokeDynamicPreprocessor`（`preprocessor/invokedynamic_preprocessor.cpp`）从纯诊断
+改为改写字节码。命中 `java/lang/invoke/StringConcatFactory` 的 `makeConcatWithConstants`
+（有 recipe 常量）/ `makeConcat`（无 recipe，全动态参数顺序拼接）时：
+1. indy 执行前 N 个动态实参已在操作数栈（栈底=第1参）。逆序 `xSTORE` 到从 `maxLocals` 起
+   新分配的局部槽（long/double 占 2 槽），清空栈上参数。
+2. `new StringBuilder` / `dup` / `<init>()V`。
+3. 按 recipe 从左到右：字面量文本→`append(String)`；`` 动态占位→`xLOAD` 对应槽 +
+   `append(<按参数类型选重载>)`（boolean/char 专用重载，byte/short/int→`append(I)`，
+   long/float/double 各有重载，String→`append(String)`，其余对象→`append(Object)`）；
+   `` 常量占位→`LDC` bsmArg 常量 + `append(String)`。
+4. `toString()`，栈顶恢复为单个 String（与 indy 返回一致）。
+
+**关键正确性点**：展开是**单块直线代码**，不引入分支/label，故 StackMapTable 帧
+（只在块边界）不受影响，仅 `maxLocals` 增大。RegC 已有完整 StringBuilder intrinsic
+（`regc_emitter.cpp:344+`），展开后的字节码直接转 native，**无需任何 native 新代码，
+也完全绕开 owner-class 障碍**。
+
+**测试**：
+- e2e `RegCBackendE2E.InvokeDynamicStringConcatRoundTrip`：`"a="+int+",b="+long+",s="+String`、
+  null 拼接、相邻动态参数、boolean/char/double 混合，protected native 与 Java baseline 逐行一致。
+- 单元 `InvokeDynamicPreprocessorTest.*`：makeConcatWithConstants / makeConcat 展开断言
+  （indy marker 消失、StringBuilder 构造/append/toString 计数、maxLocals 增大）+ **负例**
+  `LeavesLambdaIndyUnexpanded`（LambdaMetafactory 站点保持原样，交 SSA fail-closed）。
+
+**剩余**：阶段2（无状态 lambda）、阶段3（自定义 bootstrap / 评估 runtime bridge），见 dev_plan R6.1。

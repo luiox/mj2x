@@ -15,25 +15,35 @@ and obfuscator-specific bootstrap methods.
 
 Current behavior:
 
-- `InvokeDynamicPreprocessor` detects indy instructions and logs them.
-- It does not rewrite bytecode yet.
-- SSA rejects non-expanded indy with `invokedynamic not yet expanded`.
+- `InvokeDynamicPreprocessor` **expands** StringConcatFactory sites into
+  StringBuilder bytecode (阶段1，见 Expansion Order §1)；其余 indy 仅诊断、不改写。
+- SSA rejects still-unexpanded indy (lambda / custom bootstrap) with
+  `invokedynamic not yet expanded`.
 - StackC has a separate runtime bridge that invokes the bootstrap method,
   reads `CallSite.getTarget()`, and executes `MethodHandle.invokeWithArguments`.
 - RegC should not mark a method native when indy lowering fails.
 
-This is the correct RegC boundary until expansion has deterministic tests.
-StackC's runtime bridge is a correctness path, not a RegC no-stack lowering.
+This is the correct RegC boundary until each shape has deterministic tests.
+StackC's runtime bridge is a correctness path, not a RegC no-stack lowering —
+RegC prefers pre-SSA expansion (阶段1 string concat 已落地此路线).
 
 ## Expansion Order
 
-1. String concat first.
+1. String concat first. **[DONE — R6.1 阶段1，2026-07-25]**
 
-   Support `java/lang/invoke/StringConcatFactory.makeConcatWithConstants` for
-   javac-generated concatenation.  Expand it before SSA into ordinary
-   `StringBuilder`-style bytecode or a small synthetic static method.  This is
-   the lowest-risk useful shape because the recipe and constants are visible at
-   compile time.
+   Support `java/lang/invoke/StringConcatFactory.makeConcatWithConstants` (and
+   `makeConcat`) for javac-generated concatenation.  Expand it before SSA into
+   ordinary `StringBuilder`-style bytecode.  This is the lowest-risk useful shape
+   because the recipe and constants are visible at compile time.
+
+   **落地**：`InvokeDynamicPreprocessor`（`preprocessor/invokedynamic_preprocessor.cpp`）
+   不再只诊断，而是把 concat 站点改写成 `new StringBuilder / append 链 / toString`
+   字节码。栈上已求值的 N 个动态实参先 `xSTORE` 到新分配的局部槽（bump `maxLocals`），
+   再按 recipe（``=动态参数、``=常量、其余=字面量）从左到右 `append`。
+   单块直线代码、不引入分支/label，StackMapTable 帧不受影响。RegC 已有 StringBuilder
+   intrinsic，故转 native 无需任何 native 新代码，**完全绕开 RegC 缺 owner-class 的障碍**
+   （不走 StackC 的 runtime bridge）。测试：e2e `RegCBackendE2E.InvokeDynamicStringConcatRoundTrip`
+   + 单元 `InvokeDynamicPreprocessorTest.*`（展开断言 + lambda 负例仍 fail-closed）。
 
 2. Stateless lambda factories second.
 

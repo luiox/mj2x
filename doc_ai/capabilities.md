@@ -81,7 +81,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | 限制 | 说明 |
 |---|---|
 | 栈全用 `union jvalue` 数组 | 性能低于寄存器方案,后续可优化 |
-| RegC `INVOKEDYNAMIC` fail-closed | RegC/SSA 仍拒绝未展开 indy;StackC 已有运行时 MethodHandle 桥 |
+| RegC `INVOKEDYNAMIC` 分阶段 | string concat 站点已 pre-SSA 展开为 StringBuilder 字节码转 native（R6.1 阶段1）;lambda/自定义 bootstrap 仍 fail-closed,StackC 有运行时 MethodHandle 桥 |
 | JSR / RET 不纳入 | 废弃字节码,由 preprocessor / 输入规范处理 |
 | `<init>` / `<clinit>` 不被 MarkAll 标记 | 构造器保留原字节码,不走 native |
 
@@ -95,7 +95,9 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 
 **JNI local ref 引用管理**:每个 native 方法用 JNI `PushLocalFrame`(入口) / `PopLocalFrame`(单出口 `_mj2x_regc_cleanup`，REF 返回值 promote 到父帧、非 REF 传 NULL)批量释放方法内产生的 local ref，避免反射等密集调用撑爆 JNI 16 槽 local ref 表。零 C 数组、不引入 stack anchor；纯标量方法不发射帧。缓存 class/method/field 走 `NewGlobalRef` 不受帧影响。REF 相等比较(`if_acmpeq/ne`、与 null 比较)使用 `IsSameObject` 而非裸 `void*` 指针比较。
 
-**覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 可观测 fail-closed),实测复杂 jar(JavaObfuscatorTest `TEST.jar`)约 90% 业务方法真正转 native(~50/56,含入口 main、反射方法、大异常表方法)。未转原因均为**有意保留的分组黑名单**:invokedynamic/lambda、并发(`Thread`/`java.util.concurrent`——线程池/锁 monitor 在 native 帧不可靠,独立根因)、System(`exit`/`SecurityManager`)。**反射组**(`java/lang/Class`/`java/lang/reflect/*`/`Object.getClass`)、**IO 组**(`java/io/InputStream`/`ByteArrayInputStream`)、**类加载组**(`java/lang/ClassLoader` 的 `loadClass`/`getResourceAsStream`/`defineClass`)均已放开(引用管理前置完成)。**内部类 `$`** 注册已随 RegisterNatives 撤销,`this$0` 合成字段访问与外部类方法调用路径端到端通过。浮点/long 三值比较(`cmp.nan_*` intrinsic)已实现。大异常表(多 catch)已支持(lowering 三层无上限)。fail-closed 点通过 `[RegCBackend] Skipping <method>: <stage> failed: <reason>` 日志暴露,不再静默。**性能评估必须先做覆盖率审计**,详见 [regc_native_coverage_analysis.md](regc_native_coverage_analysis.md) §12/§13 与 [performance_evaluation_spec.md](performance_evaluation_spec.md)。
+**invokedynamic string concat 展开(R6.1 阶段1)**:`InvokeDynamicPreprocessor` 在 SSA 前把 `StringConcatFactory.makeConcat[WithConstants]` 站点改写成 `new StringBuilder`/`append` 链/`toString` 字节码(栈参数先 xSTORE 到新局部槽，按 recipe 展开)，RegC 已有 StringBuilder intrinsic 故直接转 native，无需 native 新代码、绕开 RegC 缺 owner-class 障碍。lambda/自定义 bootstrap 仍 fail-closed。详见 §14。
+
+**覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 可观测 fail-closed),实测复杂 jar(JavaObfuscatorTest `TEST.jar`)约 90% 业务方法真正转 native(~50/56,含入口 main、反射方法、大异常表方法)。未转原因均为**有意保留的分组黑名单**:invokedynamic 的 lambda/自定义 bootstrap（string concat 站点已展开为 StringBuilder 转 native,见 §14）、并发(`Thread`/`java.util.concurrent`——线程池/锁 monitor 在 native 帧不可靠,独立根因)、System(`exit`/`SecurityManager`)。**反射组**(`java/lang/Class`/`java/lang/reflect/*`/`Object.getClass`)、**IO 组**(`java/io/InputStream`/`ByteArrayInputStream`)、**类加载组**(`java/lang/ClassLoader` 的 `loadClass`/`getResourceAsStream`/`defineClass`)均已放开(引用管理前置完成)。**内部类 `$`** 注册已随 RegisterNatives 撤销,`this$0` 合成字段访问与外部类方法调用路径端到端通过。浮点/long 三值比较(`cmp.nan_*` intrinsic)已实现。大异常表(多 catch)已支持(lowering 三层无上限)。fail-closed 点通过 `[RegCBackend] Skipping <method>: <stage> failed: <reason>` 日志暴露,不再静默。**性能评估必须先做覆盖率审计**,详见 [regc_native_coverage_analysis.md](regc_native_coverage_analysis.md) §12/§13/§14 与 [performance_evaluation_spec.md](performance_evaluation_spec.md)。
 
 - **RegIR dead-code elimination**:在 RegIR→RegC 之间迭代删除未被终结器、CFG edge copy 或异常边消费的纯计算链；可能抛异常、内存访问、调用与 barrier 一律保留。`RegDceTest.*` 覆盖死链删除和 edge copy 活跃值保留，RegC native E2E 覆盖 JVM 语义。
 - **RegIR protection transforms**:RegC 在 DCE 后应用 i32/i64 加法 MBA 恒等式、分支 opaque predicate 与纯控制流 CFF。CFF 通过状态寄存器与 dispatcher switch 路由边，同时保留 edge copy；包含异常区域、内存访问、调用、barrier、throw 或 div/rem 的函数保持原 CFG。`RegTransformPassTest.*` 覆盖变换结构与保守跳过，`RegCBackendE2E.PureArithmeticLoopAndArrayRoundTrip` 覆盖 JVM 循环/数组语义。

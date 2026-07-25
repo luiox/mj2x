@@ -12,7 +12,10 @@
   - [x] **R6-B：类加载组放开**（2026-07-25）：移除 `java/lang/ClassLoader` 黑名单。`loadClass(String)`/`getResourceAsStream(String)`/`getSystemClassLoader()` 在 native 帧端到端通过，引用管理吸收 Class/InputStream ref 返回。e2e `ClassLoaderGroupRoundTrip` 通过。
   - [x] **R6-C：内部类访问路径验证**（2026-07-25）：内部类 `$` skip 已随 RegisterNatives（PR #661）撤销，本批补端到端验证——非静态内部类 `this$0` 合成字段访问 + 调用外部类实例方法（`Outer.this.method()`）在 native 帧走通。e2e `InnerClassFieldAccessRoundTrip` 通过。附带修复实例方法分派的抽象 owner bug（见 §13）。
   - [x] **R6-D：并发组根因调研 → 决策保留**（2026-07-25）：实测 `Thread.sleep(long)` 在主线程 native 帧调用**不**抛 `IllegalMonitorStateException`（与 dev_plan 旧描述不符），仅是调用结果与 baseline 存在调度抖动差异。原描述的 IMSE 只在线程池工作线程场景成立（`ReentrantLock` monitor 与 native 帧交互）。**决策**：保留并发组黑名单（`Thread`/`java.util.concurrent`）——线程池/锁语义在 native 帧不可靠，放开风险高且收益低（并发 API 本就稀疏）。详情见 §13。
-  - [ ] **R6.1：invokedynamic 搬迁**（独立大工程）：StackC 有完整 477 行 native 实现（`stackc_backend.cpp:2729`），RegC 三层全无。方案：RegIR 保留单条 InvokeDynamic 指令（不在 SSA 层展开），emitter 层照搬 StackC，机械替换 `stack[]`→寄存器表达式。
+  - **R6.1：invokedynamic 支持**（分阶段，优先 pre-SSA expansion 而非照搬 StackC runtime bridge——RegC 缺 owner-class 使 bridge 成本高，详见 [regc_invokedynamic_strategy.md](doc_ai/regc_invokedynamic_strategy.md)）：
+    - [x] **阶段1：string concat 展开**（2026-07-25）：`InvokeDynamicPreprocessor` 把 `StringConcatFactory.makeConcat[WithConstants]` 改写成 `new StringBuilder`/`append` 链/`toString` 字节码（栈参数先 xSTORE 到新局部槽，按 recipe 展开），RegC 已有 StringBuilder intrinsic 故转 native 无需 native 新代码、绕开 owner-class 障碍。e2e `InvokeDynamicStringConcatRoundTrip` + 单元 `InvokeDynamicPreprocessorTest.*` 通过。详见覆盖率文档 §14。
+    - [ ] **阶段2：无状态 lambda 展开**：`LambdaMetafactory.metafactory` 在目标 method handle + functional interface 可本地解析时展开；捕获 lambda 需显式 captured-arg 存储，后置。
+    - [ ] **阶段3：自定义 bootstrap**：混淆器 bootstrap 不在编译期执行任意代码，走 fail-closed 诊断或后续受保护运行时 call-site helper（需 mjdbg 反馈）。备选：若需全形态覆盖，评估照搬 StackC runtime bridge（`stackc_backend.cpp:2732-3208`，477 行），但须先给 RegC native 路径引入 owner-class 获取机制。
   - [x] **R6.2：native 库打包/加密技术 wiki**（草稿，知识储备）：已整理 [native_library_packaging.md](doc_ai/native_library_packaging.md)。具体解密算法待实现时逆向补充。
 
 ## 下一步验证命令
