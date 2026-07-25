@@ -119,12 +119,12 @@ static float _mj2x_regc_call_cached_f32(mj2x_regc_static_method_cache* cache, in
 static double _mj2x_regc_call_cached_f64(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return 0.0; return (*_mj2x_regc_env)->CallStaticDoubleMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
 static mj2x_ref _mj2x_regc_call_cached_ref(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
 static void _mj2x_regc_call_cached_void(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return; (*_mj2x_regc_env)->CallStaticVoidMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
-static int32_t _mj2x_regc_call_cached_instance_i32(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0; return (*_mj2x_regc_env)->CallIntMethodA(_mj2x_regc_env, receiver, m, values); }
-static int64_t _mj2x_regc_call_cached_instance_i64(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0; return (*_mj2x_regc_env)->CallLongMethodA(_mj2x_regc_env, receiver, m, values); }
-static float _mj2x_regc_call_cached_instance_f32(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0f; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0.0f; return (*_mj2x_regc_env)->CallFloatMethodA(_mj2x_regc_env, receiver, m, values); }
-static double _mj2x_regc_call_cached_instance_f64(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return 0.0; return (*_mj2x_regc_env)->CallDoubleMethodA(_mj2x_regc_env, receiver, m, values); }
-static mj2x_ref _mj2x_regc_call_cached_instance_ref(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return NULL; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethodA(_mj2x_regc_env, receiver, m, values); }
-static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache); if (m == NULL) return; (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }
+static int32_t _mj2x_regc_call_cached_instance_i32(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return 0; return (*_mj2x_regc_env)->CallIntMethodA(_mj2x_regc_env, receiver, m, values); }
+static int64_t _mj2x_regc_call_cached_instance_i64(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return 0; return (*_mj2x_regc_env)->CallLongMethodA(_mj2x_regc_env, receiver, m, values); }
+static float _mj2x_regc_call_cached_instance_f32(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0f; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return 0.0f; return (*_mj2x_regc_env)->CallFloatMethodA(_mj2x_regc_env, receiver, m, values); }
+static double _mj2x_regc_call_cached_instance_f64(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return 0.0; return (*_mj2x_regc_env)->CallDoubleMethodA(_mj2x_regc_env, receiver, m, values); }
+static mj2x_ref _mj2x_regc_call_cached_instance_ref(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return NULL; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethodA(_mj2x_regc_env, receiver, m, values); }
+static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return; (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }
 
 )mj2x");
     out << src.str();
@@ -218,16 +218,38 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    cache->method = method;\n";
     out << "    return method;\n";
     out << "}\n\n";
+    out << "// Resolve the jmethodID for an instance method. Correctness: the id MUST be\n";
+    out << "// resolved against the receiver's actual class, not the declared owner. When the\n";
+    out << "// owner is abstract/interface (e.g. java/io/InputStream.read), GetMethodID on the\n";
+    out << "// owner yields the abstract entry and CallXMethod triggers AbstractMethodError or\n";
+    out << "// crashes on the JIT inlined path (observed ACCESS_VIOLATION on HotSpot 17).\n";
+    out << "// Caching: reuse the cached id only when the receiver's runtime class equals the\n";
+    out << "// declared owner (covers the common same-type repeated calls); write back only in\n";
+    out << "// that case. Subclass receivers re-resolve every call (negligible vs the JNI call)\n";
+    out << "// to avoid caching one subclass's id and misleading a later different subclass.\n";
     out << "static jmethodID _mj2x_regc_cached_instance_method("
-           "mj2x_regc_instance_method_cache* cache) {\n";
-    out << "    if (cache == NULL) return NULL;\n";
-    out << "    if (cache->method != NULL) return cache->method;\n";
+           "mj2x_regc_instance_method_cache* cache, jobject receiver) {\n";
+    out << "    if (cache == NULL || receiver == NULL) return NULL;\n";
+    out << "    jclass receiver_class = (*_mj2x_regc_env)->GetObjectClass(_mj2x_regc_env, "
+           "receiver);\n";
+    out << "    if (receiver_class == NULL) return NULL;\n";
     out << "    jclass owner = _mj2x_regc_global_class(cache->owner, &cache->ownerClass);\n";
-    out << "    if (owner == NULL) return NULL;\n";
-    out << "    jmethodID method = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, owner, "
+    out << "    /* Fast path: receiver class == declared owner, reuse cached id. */\n";
+    out << "    if (owner != NULL && (*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, owner, "
+           "receiver_class) && cache->method != NULL) {\n";
+    out << "        (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, receiver_class);\n";
+    out << "        return cache->method;\n";
+    out << "    }\n";
+    out << "    jmethodID method = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, receiver_class, "
            "cache->name, cache->desc);\n";
-    out << "    if (method == NULL) return NULL;\n";
-    out << "    cache->method = method;\n";
+    out << "    if (method == NULL) { (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
+           "receiver_class); return NULL; }\n";
+    out << "    /* Write back only when receiver class == declared owner; never for subclasses. */\n";
+    out << "    if (owner != NULL && (*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, owner, "
+           "receiver_class)) {\n";
+    out << "        cache->method = method;\n";
+    out << "    }\n";
+    out << "    (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, receiver_class);\n";
     out << "    return method;\n";
     out << "}\n\n";
     out << "static jfieldID _mj2x_regc_cached_static_field(mj2x_regc_static_field_cache* cache) "
@@ -529,8 +551,17 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    int32_t i = 0;\n";
     out << "    while (*p != ')' && *p != '\\0' && i < 32) {\n";
     out << "        char tag = *p;\n";
-    out << "        while (tag == '[') tag = *++p;\n";
-    out << "        switch (tag) {\n";
+    out << "        /* Array params ([X) are references (jobject), NOT the element primitive.\n";
+    out << "           Previously the '[' was consumed and tag became the element type, so a\n";
+    out << "           byte[] arg was read as a jbyte via va_arg(ap,int) -- truncating the\n";
+    out << "           pointer and corrupting the constructor call (e.g. ByteArrayInputStream.<init>).\n";
+    out << "           Track array-ness and route to the .l slot. */\n";
+    out << "        int32_t is_array = 0;\n";
+    out << "        while (tag == '[') { is_array = 1; tag = *++p; }\n";
+    out << "        if (is_array || tag == 'L') {\n";
+    out << "            values[i].l = (jobject)va_arg(ap, mj2x_ref);\n";
+    out << "        } else {\n";
+    out << "            switch (tag) {\n";
     out << "        case 'Z': values[i].z = (jboolean)va_arg(ap, int); break;\n";
     out << "        case 'B': values[i].b = (jbyte)va_arg(ap, int); break;\n";
     out << "        case 'C': values[i].c = (jchar)va_arg(ap, int); break;\n";
@@ -540,6 +571,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "        case 'F': values[i].f = (jfloat)va_arg(ap, double); break;\n";
     out << "        case 'D': values[i].d = (jdouble)va_arg(ap, double); break;\n";
     out << "        default: values[i].l = (jobject)va_arg(ap, mj2x_ref); break;\n";
+    out << "        }\n";
     out << "        }\n";
     out << "        p = _mj2x_regc_skip_type(p);\n";
     out << "        i++;\n";
@@ -771,7 +803,7 @@ void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclara
     out << "    if (value == NULL) return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF("
            "_mj2x_regc_env, \"null\");\n";
     out << "    jmethodID to_string = _mj2x_regc_cached_instance_method(&"
-        << objectToStringMethodCacheName << ");\n";
+        << objectToStringMethodCacheName << ", (jobject)value);\n";
     out << "    if (to_string == NULL) return NULL;\n";
     out << "    return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, "
            "(jobject)value, to_string);\n";

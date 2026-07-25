@@ -406,6 +406,163 @@ TEST_F(RegCBackendE2E, CallHelpersRoundTrip)
             });
 }
 
+// R6 反射子集放开 + JNI local ref 引用管理验证。这些方法调用 Object.getClass /
+// java/lang/Class.* —— 放开黑名单前它们保留字节码路径不转 native；放开后转 native，
+// 每次调用产生 Class/String 临时 local ref。loopNames 在循环内反复制造临时 ref，
+// 验证 PushLocalFrame/PopLocalFrame 帧管理不撑爆 JNI 默认保证的 16 槽 local ref 表，
+// 且 name()/simpleName() 的 ref 返回值经 PopLocalFrame promote 后仍有效。
+TEST_F(RegCBackendE2E, ReflectionRoundTrip)
+{
+    runCase("RegCReflection",
+            "public class RegCReflection {\n"
+            "  public static String name(Object o) {\n"
+            "    return o.getClass().getName();\n"
+            "  }\n"
+            "  public static String simpleName(Object o) {\n"
+            "    return o.getClass().getSimpleName();\n"
+            "  }\n"
+            "  public static int nameLength(Object o) {\n"
+            "    return o.getClass().getName().length();\n"
+            "  }\n"
+            "  public static int sameClass(Object a, Object b) {\n"
+            "    return a.getClass() == b.getClass() ? 1 : 0;\n"
+            "  }\n"
+            "  // Loop repeatedly creates transient Class/String local refs to\n"
+            "  // stress the JNI local ref table capacity.\n"
+            "  public static int loopNames(int n) {\n"
+            "    int total = 0;\n"
+            "    for (int i = 0; i < n; i++) {\n"
+            "      total += new RegCReflection().getClass().getName().length();\n"
+            "    }\n"
+            "    return total;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"name(\"x\")", "RegCReflection.name(\"x\")"},
+                {"name(new Object())", "RegCReflection.name(new Object())"},
+                {"simpleName(new RegCReflection())",
+                 "RegCReflection.simpleName(new RegCReflection())"},
+                {"nameLength(\"x\")", "RegCReflection.nameLength(\"x\")"},
+                {"sameClass(\"a\", \"b\")", "RegCReflection.sameClass(\"a\", \"b\")"},
+                {"sameClass(\"a\", new Object())",
+                 "RegCReflection.sameClass(\"a\", new Object())"},
+                {"loopNames(64)", "RegCReflection.loopNames(64)"},
+            });
+}
+
+// R6-A IO 组放开验证。这些方法在 native 帧内调用 InputStream/ByteArrayInputStream 的
+// read()/available()/read(byte[]) —— 放开黑名单前保留字节码；放开后转 native。
+// read() 返回 int 单字节，read(byte[]) 返回读入数并经 ref-array 写入 byte[]，
+// available() 返回 int。readAll() 反复构造 ByteArrayInputStream 制造临时 ref，验证
+// 引用管理在 IO 路径同样不撑爆 local ref 表。
+TEST_F(RegCBackendE2E, IOGroupRoundTrip)
+{
+    runCase("RegCIO",
+            "import java.io.ByteArrayInputStream;\n"
+            "import java.io.InputStream;\n"
+            "public class RegCIO {\n"
+            "  public static int readFirst(byte[] data) throws Exception {\n"
+            "    InputStream in = new ByteArrayInputStream(data);\n"
+            "    return in.read();\n"
+            "  }\n"
+            "  public static int availableAfterOpen(byte[] data) throws Exception {\n"
+            "    InputStream in = new ByteArrayInputStream(data);\n"
+            "    return in.available();\n"
+            "  }\n"
+            "  public static int readIntoBuffer(byte[] data) throws Exception {\n"
+            "    InputStream in = new ByteArrayInputStream(data);\n"
+            "    byte[] buf = new byte[data.length];\n"
+            "    int n = in.read(buf);\n"
+            // 折叠所有字节，使 read(byte[]) 的写入对结果可见。
+            "    int sum = 0;\n"
+            "    for (int i = 0; i < n; i++) sum += buf[i];\n"
+            "    return sum;\n"
+            "  }\n"
+            "  public static int readAll(byte[] data, int rounds) throws Exception {\n"
+            "    int total = 0;\n"
+            "    for (int i = 0; i < rounds; i++) {\n"
+            "      InputStream in = new ByteArrayInputStream(data);\n"
+            "      total += in.read();\n"
+            "    }\n"
+            "    return total;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"readFirst({65,66,67})", "RegCIO.readFirst(new byte[]{65,66,67})"},
+                {"availableAfterOpen({1,2,3,4})",
+                 "RegCIO.availableAfterOpen(new byte[]{1,2,3,4})"},
+                {"readIntoBuffer({10,20,30})",
+                 "RegCIO.readIntoBuffer(new byte[]{10,20,30})"},
+                {"readAll({97}, 64)", "RegCIO.readAll(new byte[]{97}, 64)"},
+            });
+}
+
+// R6-B 类加载组放开验证。这些方法在 native 帧内调用 ClassLoader.loadClass(String)、
+// getResourceAsStream(String) —— 放开黑名单前保留字节码；放开后转 native。
+// loadClass 返回 Class（ref），getResourceAsStream 返回 InputStream（ref），参数 String 也是
+// ref，验证引用管理在类加载路径同样不撑爆 local ref 表，且 ref 返回值经 PopLocalFrame
+// promote 后仍可用。loadAndCheckName 链式 getName() 验证抽象/具体类实例方法分派。
+TEST_F(RegCBackendE2E, ClassLoaderGroupRoundTrip)
+{
+    runCase("RegCLoader",
+            "public class RegCLoader {\n"
+            "  public static String loadClassName(String name) throws Exception {\n"
+            "    ClassLoader cl = ClassLoader.getSystemClassLoader();\n"
+            "    return cl.loadClass(name).getName();\n"
+            "  }\n"
+            "  public static int resourceAvailable(String name) throws Exception {\n"
+            "    ClassLoader cl = ClassLoader.getSystemClassLoader();\n"
+            "    java.io.InputStream in = cl.getResourceAsStream(name);\n"
+            // Driver 运行在 -cp dir，资源不存在时返回 null，available() 不可调；
+            // 用 (in != null) ? 1 : 0 表达「资源是否存在」这一可观测的 int 结果。
+            "    return in != null ? 1 : 0;\n"
+            "  }\n"
+            "  public static String systemLoaderName() throws Exception {\n"
+            "    return ClassLoader.getSystemClassLoader().getClass().getName();\n"
+            "  }\n"
+            "}\n",
+            {
+                {"loadClassName(\"java.lang.String\")",
+                 "RegCLoader.loadClassName(\"java.lang.String\")"},
+                {"resourceAvailable(\"RegCLoader.class\")",
+                 "RegCLoader.resourceAvailable(\"RegCLoader.class\")"},
+                {"systemLoaderName()", "RegCLoader.systemLoaderName()"},
+            });
+}
+
+// R6-C 内部类访问路径验证。RegisterNatives 动态绑定（PR #661）已让内部类的 native 方法
+// 像普通类一样注册，函数名/符号导出与 JNI 查找脱钩。本用例验证内部类更深的语义路径：
+//   - 非静态内部类持有 this$0 合成字段（指向外部类实例），其上的字段访问在 native 帧内
+//     经 _mj2x_regc_load_*_field 走通。
+//   - 内部类方法调用外部类的实例方法（Outer.outerMethod()），跨类实例调用经 cached
+//     instance method 分派（含抽象 owner 修正后的 receiver-class 解析）。
+//   - 内部类自身的实例方法（innerAdd）注册并经 RegisterNatives 绑定。
+// Outer/Inner 两个类都进同一 .c，Driver 只调 Outer 的静态/实例入口。
+TEST_F(RegCBackendE2E, InnerClassFieldAccessRoundTrip)
+{
+    runCase("RegCInnerOuter",
+            "public class RegCInnerOuter {\n"
+            "  public int base;\n"
+            "  public RegCInnerOuter(int b) { base = b; }\n"
+            "  public int outerMethod(int x) { return base + x; }\n"
+            "  public static int viaInner(int b, int x) {\n"
+            "    RegCInnerOuter outer = new RegCInnerOuter(b);\n"
+            "    Inner inner = outer.new Inner();\n"
+            "    return inner.innerAdd(x);\n"
+            "  }\n"
+            // 非静态内部类：访问外部类 base 字段 + 调用外部类 outerMethod。
+            "  class Inner {\n"
+            "    public int innerAdd(int x) {\n"
+            "      return outerMethod(x) + RegCInnerOuter.this.base;\n"
+            "    }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"viaInner(10, 5)", "RegCInnerOuter.viaInner(10, 5)"},
+                {"viaInner(100, 1)", "RegCInnerOuter.viaInner(100, 1)"},
+            });
+}
+
 TEST_F(RegCBackendE2E, NarrowPrimitiveRoundTrip)
 {
     runCase(

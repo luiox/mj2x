@@ -42,11 +42,11 @@ SSA builder / RegLowering / Emitter 任一返回失败,`compileMethod` 仍会产
 
 | # | skip 原因(日志文案) | 触发条件 | 代码位置 | 性质 |
 |---|---|---|---|---|
-| S1 | `inner class method remains on bytecode path for compatibility` | 类名含 `$` | `regc_backend.cpp:233-241` | 设计如此 |
-| S2 | `lambda body remains on bytecode path for invokedynamic compatibility` | 方法名以 `lambda$` 开头 | `:112-115` | 设计如此 |
-| S3 | `large exception-table method remains on bytecode path` | `tryCatchBlocks.size() > 4`(**阈值 4**) | `:116-119` | 设计如此(阈值可调) |
-| S4 | `invokedynamic remains on bytecode path for compatibility` | 块内有 `MIRKind::INVOKE_DYNAMIC` | `:120-125` | 设计如此(待展开) |
-| S5 | `high-risk runtime call remains on bytecode path: <owner>.<name>` | INVOKE 命中黑名单 | `:126-133` | 设计如此 |
+| ~~S1~~ | ~~`inner class method remains on bytecode path for compatibility`~~ | ~~类名含 `$`~~ | ~~`regc_backend.cpp`~~ | **已撤销**（R6-B RegisterNatives 绑定，PR #661） |
+| S2 | `lambda body remains on bytecode path for invokedynamic compatibility` | 方法名以 `lambda$` 开头 | `shouldKeepBytecodeForCompatibility` | 设计如此 |
+| ~~S3~~ | ~~`large exception-table method remains on bytecode path`~~ | ~~`tryCatchBlocks.size() > 4`~~ | — | **已撤销**（异常表阈值放宽，PR #657） |
+| S4 | `invokedynamic remains on bytecode path for compatibility` | 块内有 `MIRKind::INVOKE_DYNAMIC` | `shouldKeepBytecodeForCompatibility` | 设计如此(待展开) |
+| S5 | `high-risk runtime call remains on bytecode path: <owner>.<name>` | INVOKE 命中黑名单 | `shouldKeepBytecodeForCompatibility` | 设计如此 |
 
 ### 3.1 high-risk API 黑名单(完整列表)
 
@@ -154,7 +154,8 @@ F1 子原因:`ssa_builder.cpp` 的栈下溢、DUP/SWAP category 校验、invoked
 | 内部类 `$` 硬跳 | 可讨论放宽 | 中 |
 | ~~静默 fail-closed 可观测性~~ | ~~加 printf 即可~~ | ~~中~~ **已修复** |
 | invokedynamic/lambda | 工作量大,设计如此 | 低(需 SSA 层展开 bootstrap) |
-| high-risk call 黑名单 | **不可直接删**（见 §11，需先完善 call 引用管理） | 中（前置：call 路径引用管理） |
+| high-risk 黑名单·反射组 | ~~不可直接删~~ **已放开**（引用管理前置完成） | ~~中~~ **已完成** |
+| high-risk 黑名单·类加载/IO/并发 | 分项放开（各有独立前置） | 中/低（见 §12） |
 | init/clinit | JVM 限制,设计如此 | 不修 |
 
 ## 10. 关联
@@ -179,3 +180,75 @@ F1 子原因:`ssa_builder.cpp` 的栈下溢、DUP/SWAP category 校验、invoked
 **前置条件（R6）**:先完善 RegC call 路径的引用管理（local ref 追踪/释放,参考 StackC `trackLocalRef` `stackc_backend.cpp:2749`）+ 字段访问路径,再分项放开黑名单与内部类 skip。invokedynamic 是独立大工程（R6.1,搬 StackC 477 行实现）。native 库打包/加密技术整理成 wiki（R6.2）。
 
 **参考实现**:JNIC（AOT 真机器码,`JNICLoader` 解密流,dump 工具 `JNIC-Virtualization`）、native-obfuscator（`LoaderUnpack`,无 high-risk 黑名单全转,indy 走字节码预处理不编译 native）、morpher-legacy `CompressDataTool`（带去重排序压缩）。
+
+## 12. R6 引用管理落地 + 反射组放开（2026-07-24，已完成）
+
+**引用管理机制（JNI PushLocalFrame/PopLocalFrame）**:
+RegC 每个 native 方法在单一 JNI 帧内运行，产 object 的 helper（`_mj2x_regc_call_ref` / `class_literal` / 非缓存 `find_class` / ref-field/array load）返回的 local ref 全程累积不释放，反射密集方法撑爆 JNI 默认保证的 16 槽 local ref 表。落地方案（`regc_emitter.cpp` `emitFunction`）：入口 `PushLocalFrame(env,16)`（JVM 按需扩容），单出口 `_mj2x_regc_cleanup:` 处 `PopLocalFrame`——REF 返回值经 promote 到父帧，非 REF/VOID 传 NULL。语义等价 StackC 的 `trackLocalRef`+`clear`，但零 C 数组、无 c2j stack anchor（不触发 `validateRegCNoStackAnchors`），更契合 RegC 保护目标。纯标量方法（`bodyProducesLocalRefs` 判空）不发射帧，保留「零 JNI」形态。缓存 class/method/field 走 `NewGlobalRef`，不受帧影响。
+
+**附带修复的 REF 比较 bug**:
+`if_acmpeq/ne` 及与 null 比较原来发射裸 `void* == void*`。JNI local ref 是句柄，同一对象的两个不同 ref 句柄指针不相等，导致 `a.getClass() == b.getClass()` 误判。改为 `IsSameObject`（对 NULL 也正确）。这是引用管理暴露出的独立正确性 bug。
+
+**反射组黑名单放开**（`isCompatibilityRiskCall` 重构为分组）:
+移除 `java/lang/Class`、`java/lang/reflect/*`、`Object.getClass`；保留类加载（`ClassLoader`）、并发（`Thread`/`java.util.concurrent`）、IO（`InputStream`/`ByteArrayInputStream`）、System（`exit`/`SecurityManager`）。
+
+**实测验证（JavaObfuscatorTest `TEST.jar`）**:
+- 覆盖率 46/56 方法转 native（82%）；剩余 10 个 skip 全部是有意保留黑名单（IO×4 / ClassLoader×1 / Thread×1 / System×2 / indy×2），无任何反射方法被 skip。
+- javap 确认反射类方法转 native：`Countee.{mpuli,mprot,mpackp,mpriv}`、`FTest.run`、`Tracer.run`、`annoe.{dox,dov}` 均为 `native`；`Loader.findClass`（ClassLoader）正确保留字节码。
+- 生成 C++ 编译为 202KB DLL（cl /O2），全 jar 运行反射测试 2.1 Counter / 2.3 Resource / 2.4 Field / 2.5 Loader / 2.6 ReTrace / 2.7 Annotation **全部 PASS**，与 baseline 逐行一致（1.6 Pool 反而 FAIL→PASS，2.8 Sec ERROR 与 baseline 相同——`setSecurityManager` 保留字节码）。
+- E2E 回归：`RegCBackendE2E.ReflectionRoundTrip` 新增通过，mj2x_unittest 全量 216 passed。
+
+**剩余待办（各有独立前置，不属纯引用管理）**:
+- ~~**类加载**（`ClassLoader`）~~:~~验证自定义 loader 下 `defineClass`/`loadClass`/`getResourceAsStream` 路径。~~ **已放开（R6-B，见 §13）**。
+- ~~**IO**（`InputStream.read` 等）~~:~~引用管理稳定后放开。~~ **已放开（R6-A，见 §13）**。
+- **并发**（`Thread.sleep`）:**独立根因**——native 帧调用破坏线程池 `ReentrantLock` monitor 状态抛 `IllegalMonitorStateException`，非引用管理可解，需单独设计。**调研结论（R6-D，见 §13）：保留**。
+- ~~**内部类 `$`**~~:~~`this$0` 合成字段访问/外部类方法路径。~~ **已验证（R6-C，见 §13）**。
+
+## 13. R6-A/B/C/D 黑名单分项放开 + 并发组调研（2026-07-25，已完成）
+
+本批逐项放开 IO/类加载黑名单、验证内部类访问路径、调研并发组根因并决策保留。覆盖率从 §12 的 46/56（82%）提升到约 50/56（~90%，IO×4 + ClassLoader×1 转为 native；剩 Thread×1 / System×2 / indy×2 共 5 个有意 skip，加 init/clinit JVM 限制）。
+
+### 13.1 R6-A IO 组放开 + collect_args 数组参数 bug 修复（关键）
+
+放开 `java/io/InputStream`/`java/io/ByteArrayInputStream` 黑名单。新增 e2e `IOGroupRoundTrip`：`read()`/`available()`/`read(byte[])` 在 native 帧调用，覆盖单字节 int 返回、byte[] 读写。
+
+**踩出的关键 bug**：放开后 `ByteArrayInputStream(byte[])` 构造直接 crash JVM（HotSpot 17 `EXCEPTION_ACCESS_VIOLATION`，pc=jvm.dll+0xbfb0，reading 0x88）。根因在 `_mj2x_regc_collect_args`（`regc_runtime_template.cpp`）：参数描述符 `[B` 的 `[` 被 `while (tag == '[') tag = *++p;` 消耗后 `tag` 变成元素类型 `B`，落入 `case 'B': values[i].b = (jbyte)va_arg(ap, int);`——**把数组指针当 jbyte 读**（截断 64 位指针低 8 位），构造器收到垃圾 buf 指针。
+
+修复：跟踪 array-ness，数组参数（任意 `[X`）与 `L` 类型一样走 `values[i].l = va_arg(ap, mj2x_ref)`：
+```c
+int32_t is_array = 0;
+while (tag == '[') { is_array = 1; tag = *++p; }
+if (is_array || tag == 'L') {
+    values[i].l = (jobject)va_arg(ap, mj2x_ref);
+} else { switch (tag) { /* 原生类型 cases */ } }
+```
+**影响面**：所有带数组参数的 JNI 方法调用此前都被破坏（只是 RegC e2e 此前没有数组参数用例命中），非 IO 特有。
+
+### 13.2 R6-B 类加载组放开
+
+放开 `java/lang/ClassLoader` 黑名单。新增 e2e `ClassLoaderGroupRoundTrip`：`ClassLoader.getSystemClassLoader()`（static）/`loadClass(String)`（ref 参数 + Class ref 返回）/`getResourceAsStream(String)`（InputStream ref 返回）。引用管理吸收 Class/InputStream ref 返回值；`loadClass` 触发的递归类初始化与 RegisterNatives 惰性绑定无冲突。实测 `loadClassName("java.lang.String")`、`resourceAvailable("RegCLoader.class")=1`、`systemLoaderName()` 全部 baseline 一致通过。
+
+### 13.3 R6-C 内部类访问路径验证 + 实例方法抽象 owner bug 修复
+
+内部类 `$` 整体 skip 已随 RegisterNatives（PR #661）撤销。本批补端到端验证：新增 e2e `InnerClassFieldAccessRoundTrip`——非静态内部类 `Inner` 访问外部类 `this$0.base` 合成字段 + 调用 `Outer.this.outerMethod()`。实测 `viaInner(10,5)`、`viaInner(100,1)` baseline 一致通过。
+
+**踩出的关键 bug**：调试期间发现实例方法分派对**抽象声明 owner** 不安全。`_mj2x_regc_cached_instance_method` 原按声明 owner（`cache->owner`）`GetMethodID`——当 owner 是抽象类/接口（如 `java/io/InputStream.read`）时，得到的是抽象方法条目，`CallIntMethodA` 在 JIT 内联路径直接 crash。修复：方法 ID 改为按 `GetObjectClass(receiver)` 实际类解析，仅当 receiver 运行时类 == 声明 owner 时复用/写回缓存（覆盖最常见的同类型多次调用）；子类 receiver 每次重解析（开销可忽略），避免缓存某子类 ID 误导另一子类。
+
+### 13.4 R6-D 并发组根因调研 → 决策保留
+
+**实测纠正 dev_plan 旧描述**：`Thread.sleep(long)` 在**主线程** native 帧调用**不**抛 `IllegalMonitorStateException**——去掉 Thread 黑名单后 native `Thread.sleep(1)` 正常返回，仅结果存在调度抖动（baseline 2.0ms vs protected 2.5ms，因 JNI 调用开销 + 调度器差异）。旧描述的 IMSE 只在**线程池工作线程**场景成立（`ThreadPoolExecutor`/`LinkedBlockingQueue` 的 `ReentrantLock` monitor 与 native 帧交互）。
+
+**决策**：保留并发组黑名单（`java/lang/Thread` + `java/util/concurrent/*`）。理由：
+1. 线程池/锁语义在 native 帧不可靠（IMSE 风险），且难在编译期静态判定调用点是否在线程池工作线程上下文。
+2. 并发 API 在受保护业务方法中本就稀疏，放开覆盖率收益低。
+3. 即便主线程 sleep 能跑通，结果受调度抖动影响，对 round-trip 测试不友好。
+
+R6-D e2e 用例（`nativeSleep` 比对耗时）因 sleep 耗时非确定性被废弃——并发组的放/留不靠 e2e 判定，靠上述根因分析。
+
+### 13.5 黑名单现状（R6 后）
+
+`isCompatibilityRiskCall` 现仅保留两组：
+- **并发**（保留）：`java/lang/Thread`、`java/util/concurrent/*`。
+- **System**（保留）：`System.exit`/`setSecurityManager`/`getSecurityManager`。
+
+其余（反射 / IO / 类加载）均已放开。 invokedynamic 仍走显式 skip（R6.1 独立工程）。

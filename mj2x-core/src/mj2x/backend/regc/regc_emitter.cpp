@@ -1634,6 +1634,28 @@ void emitDefaultReturnAfterException(std::ostringstream& out, SSAType returnType
     }
 }
 
+/// 判断已发射的方法体是否含产生 JNI local ref 的操作，用于 gate PushLocalFrame/
+/// PopLocalFrame 帧管理。命中任一产 ref helper 即需要帧；纯标量/纯字段算术方法
+/// 不含这些标记，保留「零 JNI 帧开销」形态。marker 覆盖：方法调用（call_*，含
+/// cached / instance / ref / void——void 调用也可能内部 FindClass 泄漏 class ref）、
+/// 对象/数组分配、class/string 字面量、ref 字段与 ref 数组读取。
+bool bodyProducesLocalRefs(const std::string& body)
+{
+    static const char* kMarkers[] = {
+        "_mj2x_regc_call_",          // 所有方法调用（含 static FindClass 路径）
+        "_mj2x_regc_alloc_",         // alloc_object / alloc_array / alloc_multi_array
+        "_mj2x_regc_class_literal",  // Foo.class -> FindClass
+        "_mj2x_intrinsic_string_literal",
+        "_mj2x_regc_load_ref_field",
+        "_mj2x_regc_load_cached_ref_field",
+        "_mj2x_regc_load_ref_array",
+    };
+    for (const char* marker : kMarkers) {
+        if (body.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
+
 bool emitExceptionDispatch(std::ostringstream&                           out,
                            const std::vector<const RegExceptionRegion*>& regions,
                            const RegBlock* block, SSAType returnType,
@@ -1707,6 +1729,17 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
         out << "    " << regName(ins.dest.id) << " = " << binaryExpr(ins) << ";\n";
         return true;
     case RegInstructionKind::Compare:
+        // REF 比较（acmp / 与 null 比较）：JNI local ref 是句柄，同一对象的两个不同
+        // local ref 句柄指针不相等，裸 void* 比较会误判。必须用 IsSameObject 判定对象
+        // 同一性（对 NULL 也正确：IsSameObject(x, NULL) 当且仅当 x 为 null 时为真）。
+        // acmp 在字节码只有 eq/ne 两种谓词。
+        if (ins.lhs.type == SSAType::REF || ins.rhs.type == SSAType::REF) {
+            const char* eq = "(*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, (jobject)";
+            out << "    " << regName(ins.dest.id) << " = ("
+                << (ins.comparePredicate == SSAComparePredicate::Ne ? "!" : "") << eq
+                << operandExpr(ins.lhs) << ", (jobject)" << operandExpr(ins.rhs) << "));\n";
+            return true;
+        }
         out << "    " << regName(ins.dest.id) << " = (" << operandExpr(ins.lhs) << " "
             << compareOp(ins.comparePredicate) << " " << operandExpr(ins.rhs) << ");\n";
         return true;
@@ -2398,6 +2431,22 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
         out << "    mj2x_ref " << stringBuilderMaterializedName(RegId{owner}) << " = NULL;\n";
     }
     if (!regs.empty()) out << "\n";
+
+    // R6 前置：JNI local ref 引用管理。RegC 每个 native 方法在单一 JNI 帧内运行，
+    // 产 object 的 helper（call_ref / class_literal / alloc / ref-field load 等）返回的
+    // local ref 全程累积不释放，反射密集方法会撑爆 JNI 默认保证的 16 槽 local ref 表。
+    // 用 PushLocalFrame(入口) / PopLocalFrame(单出口，promote 返回值) 批量释放，语义等价
+    // StackC 的 trackLocalRef/clear，但零 C 数组、无 c2j stack anchor。缓存 class/method
+    // 走 NewGlobalRef，不受帧影响。纯标量方法（无产 ref 操作）不发射，保留「零 JNI」形态。
+    const bool needsLocalFrame = bodyProducesLocalRefs(body.str());
+    if (needsLocalFrame) {
+        out << "    if ((*_mj2x_regc_env)->PushLocalFrame(_mj2x_regc_env, 16) != 0) {\n";
+        if (fn.symbol.returnType == SSAType::VOID)
+            out << "        return;\n";
+        else
+            out << "        return _mj2x_regc_result;\n";
+        out << "    }\n";
+    }
     out << "    goto block_b" << fn.entry->id.value << ";\n\n";
     out << body.str();
 
@@ -2410,6 +2459,17 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
                 ? "mj2x_string_buffer_destroy"
                 : "mj2x_string_builder_destroy";
         out << "    " << destroySymbol << "(" << stringBuilderOwnerName(RegId{owner}) << ");\n";
+    }
+    // PopLocalFrame 释放本帧全部 local ref；REF 返回值通过 result 参数 promote 到父帧，
+    // 非 REF/VOID 传 NULL。PopLocalFrame 对 pending exception 安全（返回值可能为 NULL）。
+    if (needsLocalFrame) {
+        if (fn.symbol.returnType == SSAType::REF) {
+            out << "    _mj2x_regc_result = (mj2x_ref)(*_mj2x_regc_env)->PopLocalFrame("
+                   "_mj2x_regc_env, (jobject)_mj2x_regc_result);\n";
+        }
+        else {
+            out << "    (*_mj2x_regc_env)->PopLocalFrame(_mj2x_regc_env, NULL);\n";
+        }
     }
     if (fn.symbol.returnType == SSAType::VOID)
         out << "    return;\n";

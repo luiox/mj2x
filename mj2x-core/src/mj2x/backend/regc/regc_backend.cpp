@@ -147,16 +147,37 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
     return kinds;
 }
 
+// high-risk 运行时调用黑名单：命中则该方法保留字节码路径、不转 native（fail-closed）。
+// 分组便于逐项放开——每组放开的前置条件不同：
+//
+//   [反射组] 已放开（R6 引用管理前置完成后）。根因是 call_ref 返回的 Class/Method/Field
+//            local ref 生命周期不受管理，现由 emitFunction 的 PushLocalFrame/PopLocalFrame
+//            统一批量释放，反射临时 ref 不再撑爆 JNI 16 槽 local ref 表。
+//   [类加载]  已放开（R6-B）：ClassLoader 的 loadClass(String)/getResourceAsStream(String)
+//            经 ref 参数与 Class/InputStream ref 返回值，引用管理已吸收。defineClass(byte[])
+//            的 byte[] 参数经 collect_args array 修正（R6-A）正确传递。
+//   [并发]    Thread / java.util.concurrent：Thread.sleep 等在 native 帧调用会破坏线程池
+//            monitor（ReentrantLock）状态抛 IllegalMonitorStateException，是独立根因，不属
+//            引用管理范畴，暂保留。
+//   [IO]      已放开（R6-A）：InputStream/ByteArrayInputStream 的 read/available 等返回 int，
+//            byte[] 读写经 ref-array helper，引用管理已吸收 native 帧内产生的 ref。
+//   [System]  exit / SecurityManager：语义敏感，暂不转 native。
 bool isCompatibilityRiskCall(const std::string& owner, const std::string& name)
 {
-    return owner == "java/lang/Class" || owner == "java/lang/ClassLoader" ||
-           owner == "java/lang/Thread" || owner == "java/io/InputStream" ||
-           owner == "java/io/ByteArrayInputStream" ||
-           (owner == "java/lang/Object" && name == "getClass") ||
-           owner.rfind("java/lang/reflect/", 0) == 0 ||
-           owner.rfind("java/util/concurrent/", 0) == 0 ||
-           (owner == "java/lang/System" &&
-            (name == "setSecurityManager" || name == "getSecurityManager" || name == "exit"));
+    // [并发] 保留：Thread.sleep 破坏线程池 monitor
+    const bool concurrency =
+        owner == "java/lang/Thread" || owner.rfind("java/util/concurrent/", 0) == 0;
+    // [System] 保留：语义敏感
+    const bool systemSensitive =
+        owner == "java/lang/System" &&
+        (name == "setSecurityManager" || name == "getSecurityManager" || name == "exit");
+
+    // [反射组] 已放开：java/lang/Class、java/lang/reflect/*、Object.getClass。
+    // [IO 组]   已放开（R6-A）：InputStream / ByteArrayInputStream。
+    // [类加载]  已放开（R6-B）：ClassLoader.loadClass/getResourceAsStream/defineClass。
+    // 引用管理（PushLocalFrame/PopLocalFrame）已吸收反射/IO/类加载临时 ref 泄漏，故不再 skip。
+
+    return concurrency || systemSensitive;
 }
 
 bool shouldKeepBytecodeForCompatibility(const MethodNode& method, const std::vector<Block*>& blocks,
