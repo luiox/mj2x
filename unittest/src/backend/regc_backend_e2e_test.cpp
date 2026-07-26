@@ -482,6 +482,33 @@ TEST_F(RegCBackendE2E, InvokeDynamicStringConcatRoundTrip)
             });
 }
 
+// R6.1 阶段2：无状态 lambda（方法引用）展开验证。javac 把 `IntUnaryOperator op = X::base`
+// 编译成 invokedynamic LambdaMetafactory.metafactory —— InvokeDynamicPreprocessor 合成一个
+// 实现 IntUnaryOperator 的类（SAM 方法 invokestatic 转调 base），把 indy 改写成
+// new 合成类/dup/<init>，并把私有 base 提权。RegC 转 native 时走通用 new/invoke 路径
+// （不走 StackC runtime bridge，绕开 owner-class 障碍）。stateless 使用方法引用（无捕获）。
+TEST_F(RegCBackendE2E, InvokeDynamicStatelessLambdaRoundTrip)
+{
+    runCase("RegCLambda",
+            "import java.util.function.IntUnaryOperator;\n"
+            "public class RegCLambda {\n"
+            "  private static int base(int x) { return x + 3; }\n"
+            "  public static int useRef(int x) {\n"
+            "    IntUnaryOperator op = RegCLambda::base;\n"
+            "    return op.applyAsInt(x);\n"
+            "  }\n"
+            "  public static int twice(int x) {\n"
+            "    IntUnaryOperator op = RegCLambda::base;\n"
+            "    return op.applyAsInt(op.applyAsInt(x));\n"
+            "  }\n"
+            "}\n",
+            {
+                {"useRef(9)", "RegCLambda.useRef(9)"},
+                {"useRef(-3)", "RegCLambda.useRef(-3)"},
+                {"twice(10)", "RegCLambda.twice(10)"},
+            });
+}
+
 // R6-A IO 组放开验证。这些方法在 native 帧内调用 InputStream/ByteArrayInputStream 的
 // read()/available()/read(byte[]) —— 放开黑名单前保留字节码；放开后转 native。
 // read() 返回 int 单字节，read(byte[]) 返回读入数并经 ref-array 写入 byte[]，

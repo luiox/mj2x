@@ -138,28 +138,83 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsMakeConcatWithoutConstants)
     EXPECT_EQ(countMethodCall(m, "java/lang/StringBuilder", "append"), 2);
 }
 
-// negative：非 StringConcatFactory 的 indy（如 LambdaMetafactory）保持原样 fail-closed。
-TEST(InvokeDynamicPreprocessorTest, LeavesLambdaIndyUnexpanded)
+Handle lambdaMetafactoryBsm(CompilerIndex& index)
+{
+    auto& arena = index.arena();
+    return Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
+                  arena.intern("metafactory"),
+                  arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                               "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;"
+                               "Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)"
+                               "Ljava/lang/invoke/CallSite;"));
+}
+
+// 无状态 lambda（方法引用）展开：indy 消失、换成 new 合成类，合成类进 index，私有目标提权。
+TEST(InvokeDynamicPreprocessorTest, ExpandsStatelessLambda)
 {
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    Handle lambdaBsm(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
-                     arena.intern("metafactory"),
-                     arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
-                                  "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;"
-                                  "Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)"
-                                  "Ljava/lang/invoke/CallSite;"));
+    // bsmArgs: [0]=samMethodType (I)I, [1]=implHandle Lam.base(I)I static, [2]=instantiated (I)I。
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
+                                arena.intern("(I)I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+
     auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
                                            arena.intern("()Ljava/util/function/IntUnaryOperator;"),
-                                           lambdaBsm, std::vector<ca::core::Any>{});
+                                           lambdaMetafactoryBsm(index), bsmArgs);
     MethodNode* m = addMethodToIndex(index, "Lam", "make",
                                      "()Ljava/util/function/IntUnaryOperator;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
+    // 私有目标方法 base，展开后应被提权。
+    std::vector<ca::str::Utf8StringRef> noExc;
+    auto* base = new MethodNode(Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC, arena.intern("base"),
+                                arena.intern("(I)I"), arena.intern(""), noExc);
+    base->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
+    base->instructions.add(new InsnNode(Opcodes::IRETURN));
+    base->maxStack  = 1;
+    base->maxLocals = 1;
+    index.getClass("Lam")->classNode->methods.push_back(base);
 
     InvokeDynamicPreprocessor().process(index);
 
-    // indy 仍在（未被展开），交由 SSA fail-closed。
+    // indy 消失，换成 NEW + INVOKESPECIAL <init>。
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::TYPE_INSN), 1);   // NEW
+    // 合成类入 index。
+    EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+    // 私有目标方法已提权（去 private、置 public）。
+    EXPECT_FALSE(base->access & Opcodes::ACC_PRIVATE);
+    EXPECT_TRUE(base->access & Opcodes::ACC_PUBLIC);
+}
+
+// negative：捕获 lambda（indy desc 有参 = 捕获变量）暂不支持，保持 fail-closed。
+TEST(InvokeDynamicPreprocessorTest, LeavesCapturingLambdaUnexpanded)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Cap"),
+                                arena.intern("lambda$make$0"), arena.intern("(II)I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+
+    // 捕获 lambda：indy desc 带一个捕获参数 (I)。
+    auto* indy =
+        new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
+                                  arena.intern("(I)Ljava/util/function/IntUnaryOperator;"),
+                                  lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "Cap", "make",
+                                     "(I)Ljava/util/function/IntUnaryOperator;",
+                                     {new VarInsnNode(Opcodes::ILOAD, 0), indy,
+                                      new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    // indy 仍在（捕获形态未支持），交由 SSA fail-closed；无合成类。
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
-    EXPECT_EQ(countMethodCall(m, "java/lang/StringBuilder", "<init>"), 0);
+    EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
 }
