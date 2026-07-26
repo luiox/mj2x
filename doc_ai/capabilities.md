@@ -217,7 +217,7 @@ G11 反射）生成样本做 native 转换 E2E，建立双后端的 opcode/语�
 - 独立目标：`mj2x_integration_test`，不与 emitter/IR unit 混跑
 - 当前矩阵：18 条 fixture x StackC/RegC = 36 条真实 E2E；每条均走
   `mj2x-cli --compile`、native library、`java -Xverify:all` 和 stdout 精确比较
-- 跨项目样本访问：`test_helper` 的 `getMtestSetPath` / `getMtestSetSample` 系列
+- 跨项目样本访问：`test_helper` 的 `getProjectResource` / `getProjectResourcePath` 系列（按项目名定位）
 - JDK/MSVC 探测：统一走 `libs/libjdk_finder`（与 `mj2x-cli --compile` 共用，不再各自硬编码路径）
 - 覆盖映射：`doc_ai/jbc_sample_coverage.md`
 
