@@ -545,6 +545,50 @@ TEST_F(RegCBackendE2E, InvokeDynamicCapturingLambdaRoundTrip)
             });
 }
 
+// R6.1 阶段2c：实例 / 构造器方法引用展开验证。javac 为不同 method-handle 形态生成 indy：
+//   String::length → H_INVOKEVIRTUAL（unbound 实例引用，receiver = SAM 首参）
+//   String::charAt → H_INVOKEVIRTUAL（unbound + 方法参数）
+//   base::concat   → H_INVOKEVIRTUAL（bound 实例引用，receiver 捕获入字段）
+//   String::new    → H_NEWINVOKESPECIAL（构造器引用，NEW/DUP/args/INVOKESPECIAL <init>）
+// InvokeDynamicPreprocessor 按 tag 合成对应 SAM 体，RegC 走通用 new/invokeinterface 路径
+// 构造合成对象并派发（与阶段2/2b 相同机制）。用非泛型自定义 functional interface
+// （erased==instantiated）规避装箱/checkcast 缺口，impl 目标均为 JDK 方法（合成 SAM 以纯
+// 字节码转调 JDK，故不要求 impl 目标本身可 native 化）。
+TEST_F(RegCBackendE2E, InvokeDynamicMethodRefRoundTrip)
+{
+    runCase("RegCMethodRef",
+            "public class RegCMethodRef {\n"
+            // functional interface 必须 public：合成类位于 mj2x.lambda 包，跨包实现
+            // 包私有接口会在运行期抛 IllegalAccessError（JVM 仅放行 public 跨包访问）。
+            "  public interface StrLen { int len(String s); }\n"
+            "  public interface CharPick { char pick(String s, int i); }\n"
+            "  public interface StrFromChars { String make(char[] c); }\n"
+            "  public interface Prefixer { String apply(String s); }\n"
+            "  public static int lenOf(String s) {\n"
+            "    StrLen f = String::length;\n"
+            "    return f.len(s);\n"
+            "  }\n"
+            "  public static char charOf(String s, int i) {\n"
+            "    CharPick f = String::charAt;\n"
+            "    return f.pick(s, i);\n"
+            "  }\n"
+            "  public static String ctorFromChars(char a, char b, char c) {\n"
+            "    StrFromChars f = String::new;\n"
+            "    return f.make(new char[]{a, b, c});\n"
+            "  }\n"
+            "  public static String boundConcat(String base, String suffix) {\n"
+            "    Prefixer p = base::concat;\n"
+            "    return p.apply(suffix);\n"
+            "  }\n"
+            "}\n",
+            {
+                {"lenOf(\"hello\")", "RegCMethodRef.lenOf(\"hello\")"},
+                {"charOf(\"world\",1)", "RegCMethodRef.charOf(\"world\", 1)"},
+                {"ctorFromChars(abc)", "RegCMethodRef.ctorFromChars('a', 'b', 'c')"},
+                {"boundConcat(foo-,bar)", "RegCMethodRef.boundConcat(\"foo-\", \"bar\")"},
+            });
+}
+
 // R6-A IO 组放开验证。这些方法在 native 帧内调用 InputStream/ByteArrayInputStream 的
 // read()/available()/read(byte[]) —— 放开黑名单前保留字节码；放开后转 native。
 // read() 返回 int 单字节，read(byte[]) 返回读入数并经 ref-array 写入 byte[]，

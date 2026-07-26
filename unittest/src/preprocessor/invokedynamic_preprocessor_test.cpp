@@ -42,6 +42,29 @@ int countMethodCall(MethodNode* m, const std::string& owner, const std::string& 
     return n;
 }
 
+// 返回方法里对 owner.name 的首个 MethodInsnNode 的 opcode（找不到返回 -1）。
+int firstCallOpcode(MethodNode* m, const std::string& owner, const std::string& name)
+{
+    for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
+        if (insn->getType() != AbstractInsnNode::METHOD_INSN) continue;
+        auto* mi = static_cast<MethodInsnNode*>(insn);
+        if (mi->owner.to_std_string() == owner && mi->name.to_std_string() == name)
+            return mi->getOpcode();
+    }
+    return -1;
+}
+
+// 返回合成类里第一个非 <init> 方法（即 SAM 转调方法）。
+MethodNode* synthSamMethod(CompilerIndex& index, const std::string& synthName)
+{
+    auto* cls = index.getClass(synthName);
+    if (!cls || !cls->classNode) return nullptr;
+    for (auto* m : cls->classNode->methods) {
+        if (m->name.to_std_string() != "<init>") return m;
+    }
+    return nullptr;
+}
+
 // 在 index 里造一个类，含一个方法，方法体是给定指令。返回方法指针（归 index 所有）。
 MethodNode* addMethodToIndex(CompilerIndex& index, const std::string& className,
                              const std::string& methodName, const std::string& methodDesc,
@@ -239,28 +262,160 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsCapturingLambda)
     EXPECT_TRUE(impl->access & Opcodes::ACC_PUBLIC);
 }
 
-// negative：impl 非 INVOKESTATIC（如 H_INVOKEVIRTUAL 实例方法引用）暂不支持，保持 fail-closed。
-TEST(InvokeDynamicPreprocessorTest, LeavesNonStaticImplUnexpanded)
+// 无捕获实例方法引用（unbound，如 Rec::val）：receiver = SAM 首参。展开后合成类 SAM
+// 体应含 INVOKEVIRTUAL Rec.val，站点换成 new 合成类。
+TEST(InvokeDynamicPreprocessorTest, ExpandsUnboundInstanceRef)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    // samMethodType (Lp/Rec;)I：receiver 就是唯一 SAM 参数；impl 虚调用 Rec.val()I。
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Rec"),
+                                arena.intern("val"), arena.intern("()I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"),
+                                           arena.intern("()Lp/Fn;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "UB", "make", "()Lp/Fn;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::TYPE_INSN), 1);   // NEW 合成类
+    auto* synth = index.getClass("mj2x/lambda/Lambda$0");
+    ASSERT_NE(synth, nullptr);
+    EXPECT_EQ(synth->classNode->fields.size(), 0u);   // unbound：无捕获字段
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    EXPECT_EQ(firstCallOpcode(sam, "p/Rec", "val"), Opcodes::INVOKEVIRTUAL);
+}
+
+// 捕获实例方法引用（bound，如 rec::val）：receiver 被捕获。合成类含 1 个 cap0 字段，
+// SAM 体先 GETFIELD cap0 再 INVOKEVIRTUAL Rec.val。
+TEST(InvokeDynamicPreprocessorTest, ExpandsBoundInstanceRef)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    // samMethodType ()I：无 SAM 参数；receiver 来自 indy 捕获参数 (Lp/Rec;)。
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("()I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Rec"),
+                                arena.intern("val"), arena.intern("()I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("()I")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("get"),
+                                           arena.intern("(Lp/Rec;)Lp/Sup;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "BD", "make", "(Lp/Rec;)Lp/Sup;",
+                                     {new VarInsnNode(Opcodes::ALOAD, 0), indy,
+                                      new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    auto* synth = index.getClass("mj2x/lambda/Lambda$0");
+    ASSERT_NE(synth, nullptr);
+    ASSERT_EQ(synth->classNode->fields.size(), 1u);
+    EXPECT_EQ(synth->classNode->fields[0]->name.to_std_string(), "cap0");
+    EXPECT_EQ(synth->classNode->fields[0]->desc.to_std_string(), "Lp/Rec;");
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    EXPECT_EQ(countInsnType(sam, AbstractInsnNode::FIELD_INSN), 1);   // GETFIELD cap0
+    EXPECT_EQ(firstCallOpcode(sam, "p/Rec", "val"), Opcodes::INVOKEVIRTUAL);
+}
+
+// 接口方法引用（H_INVOKEINTERFACE，如 List::size）：SAM 体应发射 INVOKEINTERFACE。
+TEST(InvokeDynamicPreprocessorTest, ExpandsInterfaceMethodRef)
 {
     CompilerIndex index;
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
-    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("java/lang/Integer"),
-                                arena.intern("intValue"), arena.intern("()I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/util/List;)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEINTERFACE, arena.intern("java/util/List"),
+                                arena.intern("size"), arena.intern("()I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/util/List;)I")));
 
-    auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
-                                           arena.intern("()Ljava/util/function/IntUnaryOperator;"),
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"), arena.intern("()Lp/Fn;"),
                                            lambdaMetafactoryBsm(index), bsmArgs);
-    MethodNode* m = addMethodToIndex(index, "NS", "make",
-                                     "()Ljava/util/function/IntUnaryOperator;",
+    MethodNode* m = addMethodToIndex(index, "IF", "make", "()Lp/Fn;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
     InvokeDynamicPreprocessor().process(index);
 
-    // impl 非 INVOKESTATIC → 未支持，indy 保留、交 SSA fail-closed；无合成类。
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    EXPECT_EQ(firstCallOpcode(sam, "java/util/List", "size"), Opcodes::INVOKEINTERFACE);
+}
+
+// 构造器引用（H_NEWINVOKESPECIAL，如 Rec::new）：SAM 体应为 NEW/DUP/args/INVOKESPECIAL
+// <init>/ARETURN；包私有构造器展开后提权为 public。
+TEST(InvokeDynamicPreprocessorTest, ExpandsConstructorRef)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    // samMethodType (I)Lp/Rec;：一个 int 参 → 造出 Rec；impl = Rec.<init>(I)V。
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)Lp/Rec;")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_NEWINVOKESPECIAL, arena.intern("p/Rec"),
+                                arena.intern("<init>"), arena.intern("(I)V")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)Lp/Rec;")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("make"), arena.intern("()Lp/Factory;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "p/Rec", "factory", "()Lp/Factory;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+    // 包私有构造器 Rec.<init>(I)V：展开后应被提权。
+    std::vector<ca::str::Utf8StringRef> noExc;
+    auto* ctor = new MethodNode(0 /* package-private */, arena.intern("<init>"),
+                                arena.intern("(I)V"), arena.intern(""), noExc);
+    ctor->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+    ctor->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                              arena.intern("java/lang/Object"),
+                                              arena.intern("<init>"), arena.intern("()V"), false));
+    ctor->instructions.add(new InsnNode(Opcodes::RETURN));
+    ctor->maxStack  = 1;
+    ctor->maxLocals = 2;
+    index.getClass("p/Rec")->classNode->methods.push_back(ctor);
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    EXPECT_EQ(countInsnType(sam, AbstractInsnNode::TYPE_INSN), 1);          // NEW p/Rec
+    EXPECT_EQ(firstCallOpcode(sam, "p/Rec", "<init>"), Opcodes::INVOKESPECIAL);
+    EXPECT_EQ(countInsnType(sam, AbstractInsnNode::INSN), 2);               // DUP + ARETURN
+    // 包私有构造器提权为 public。
+    EXPECT_TRUE(ctor->access & Opcodes::ACC_PUBLIC);
+}
+
+// negative：不支持的 handle 形态（H_GETFIELD 字段句柄）保持 fail-closed，indy 保留、无合成类。
+TEST(InvokeDynamicPreprocessorTest, LeavesUnsupportedHandleUnexpanded)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_GETFIELD, arena.intern("p/Rec"),
+                                arena.intern("field"), arena.intern("I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"), arena.intern("()Lp/Fn;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "GF", "make", "()Lp/Fn;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
     EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
 }

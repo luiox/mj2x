@@ -16,11 +16,14 @@ and obfuscator-specific bootstrap methods.
 Current behavior:
 
 - `InvokeDynamicPreprocessor` **expands** StringConcatFactory sites into
-  StringBuilder bytecode (阶段1) and LambdaMetafactory sites (stateless +
-  capturing) into a synthesized functional-interface class (阶段2/2b)；其余 indy
-  仅诊断、不改写。
-- SSA rejects still-unexpanded indy (non-INVOKESTATIC-impl lambda / custom
-  bootstrap) with `invokedynamic not yet expanded`.
+  StringBuilder bytecode (阶段1) and LambdaMetafactory sites into a synthesized
+  functional-interface class — stateless + capturing lambdas via `H_INVOKESTATIC`
+  impl (阶段2/2b), plus instance (`H_INVOKEVIRTUAL`/`H_INVOKEINTERFACE`/
+  `H_INVOKESPECIAL`) and constructor (`H_NEWINVOKESPECIAL`) method references
+  (阶段2c)；其余 indy 仅诊断、不改写。
+- SSA rejects still-unexpanded indy (boxing/bridge lambda whose samMethodType≠
+  implDesc, altMetafactory, or custom bootstrap) with `invokedynamic not yet
+  expanded`.
 - StackC has a separate runtime bridge that invokes the bootstrap method,
   reads `CallSite.getTarget()`, and executes `MethodHandle.invokeWithArguments`.
 - RegC should not mark a method native when indy lowering fails.
@@ -68,11 +71,35 @@ RegC prefers pre-SSA expansion (阶段1 string concat 已落地此路线).
    `invokestatic` 抛 `IllegalAccessError`；(2) `OutputWriter::isGeneratedRuntimeClass` 须认
    `mj2x/lambda/*` 前缀，否则合成类会被误当 primary（且 sidecar 路径须相对 classpath 根）。
    展开后走 RegC 通用 new/invoke 路径转 native，**绕开 owner-class 障碍**（不走 StackC bridge）。
-   MVP 约束：`metafactory`（非 altMetafactory）+ impl tag==`H_INVOKESTATIC` +
+   阶段2/2b MVP 约束：`metafactory`（非 altMetafactory）+ impl tag==`H_INVOKESTATIC` +
    impl 形参==capturedTypes++samArgs（无装箱/桥接）。测试：e2e
    `InvokeDynamicStatelessLambdaRoundTrip` / `InvokeDynamicCapturingLambdaRoundTrip`（单/多/
-   混合类型捕获）+ 单元 `ExpandsStatelessLambda` / `ExpandsCapturingLambda`（含提权、捕获字段
-   断言）/ `LeavesNonStaticImplUnexpanded`（非 INVOKESTATIC impl 仍 fail-closed）。
+   混合类型捕获）+ 单元 `ExpandsStatelessLambda` / `ExpandsCapturingLambda`（含提权、捕获字段断言）。
+
+2c. Instance + constructor method references. **[DONE — R6.1 阶段2c，2026-07-26]**
+
+   把阶段2 的 `H_INVOKESTATIC` 限制推广到全部方法引用形态。关键洞察：**站点改写与 impl tag
+   无关**（捕获的是 indy 描述符参数，与调用形态正交），只有合成类 SAM 体的发射指令和校验分支
+   随 tag 变化。`buildLambdaClassNode` 按 `impl.getTag()` 发射：
+   - `H_INVOKEVIRTUAL` / `H_INVOKEINTERFACE`（实例引用）：receiver = fullArgs（=capturedTypes
+     ++ samArgs）首元——**bound** 时来自捕获字段（GETFIELD cap0）、**unbound** 时来自 SAM 首参
+     （xLOAD 1）。因 receiver 天然是首个压栈项，压栈序与静态调用完全一致，只是把 `INVOKESTATIC`
+     换成 `INVOKEVIRTUAL`/`INVOKEINTERFACE`。
+   - `H_INVOKESPECIAL`（私有实例方法引用）：目标提权 public 后按 `INVOKEVIRTUAL` 发射（跨类
+     `INVOKESPECIAL` 非 `<init>`/super 非法）。super 方法引用（库超类目标、无法提权）仍 fail-closed。
+   - `H_NEWINVOKESPECIAL`（构造器引用）：`NEW owner` / `DUP` / fullArgs / `INVOKESPECIAL owner.<init>` /
+     `ARETURN`（返回新建对象）。
+   校验（`expandLambdaSite`）改为 tag 感知：静态/构造器要求 fullArgs 逐一匹配 implArgs；实例要求
+   fullArgs[0] 为对象/数组 receiver、其余匹配 implArgs；静态/实例额外加**返回类别一致性守卫**
+   （`returnOpcode(samRet)!=returnOpcode(implRet)` 即拒，挡住装箱/加宽的桥接形态）。de-privatize
+   推广为「用户类非 public 目标一律提权 public」（合成类在 `mj2x/lambda/` 包，跨包访问 private/
+   protected/包私有目标——含私有实例方法、包私有构造器——都会 `IllegalAccessError`）。测试：e2e
+   `InvokeDynamicMethodRefRoundTrip`（`String::length`/`String::charAt` unbound、`base::concat`
+   bound、`String::new` 构造器；functional interface 须 public 否则合成类跨包实现抛
+   `IllegalAccessError`）+ 单元 `ExpandsUnboundInstanceRef`/`ExpandsBoundInstanceRef`/
+   `ExpandsInterfaceMethodRef`/`ExpandsConstructorRef`/`LeavesUnsupportedHandleUnexpanded`
+   （`H_GETFIELD` 字段句柄仍 fail-closed）。未覆盖：装箱/桥接（samMethodType≠implDesc）、
+   altMetafactory（serializable/marker interface）。
 
 3. Obfuscator bootstrap methods last.
 

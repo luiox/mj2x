@@ -267,17 +267,21 @@ MethodNode* findMethodInIndex(CompilerIndex& index, const std::string& owner,
     return nullptr;
 }
 
-// 合成一个实现 functional interface 的类：
+// 合成一个实现 functional interface 的类，SAM 方法转调 impl：
 //   public final class <synthName> implements <ifaceInternal> {
-//     <synthName>() { super(); }
-//     public <samName><samDesc> { return <impl>(args...); }   // impl 走 INVOKESTATIC
+//     <synthName>(capturedDescs) { super(); this.capI = capI; }
+//     public <samName><samDesc> { return <impl>(fullArgs...); }
 //   }
-// 仅覆盖无状态（无捕获字段）+ impl tag==H_INVOKESTATIC + samDesc 与 impl desc 一致。
-// 合成一个实现 functional interface 的类，转调 impl（INVOKESTATIC）。
-//   capturedTypes 空 = 无状态 lambda：空 <init>，SAM 直接透传参数。
+//   capturedTypes 空 = 无捕获 lambda：空 <init>，SAM 只用 SAM 参数。
 //   capturedTypes 非空 = 捕获 lambda：N 个 private final 字段 capI + 参数化
 //     <init>(capturedDescs)V（super + 逐个 PUTFIELD），SAM 先 GETFIELD 取回捕获值再接
-//     SAM 参数，一起传给 impl。impl 形参 = capturedTypes ++ samArgs（javac 布局）。
+//     SAM 参数。
+// SAM 体按 impl 的 method-handle tag 发射（fullArgs = capturedTypes ++ samArgs，javac 布局）：
+//   H_INVOKESTATIC            → INVOKESTATIC impl(fullArgs)            ; xRETURN
+//   H_INVOKEVIRTUAL/SPECIAL   → INVOKEVIRTUAL impl（fullArgs[0]=receiver）; xRETURN
+//   H_INVOKEINTERFACE         → INVOKEINTERFACE，同上
+//   H_NEWINVOKESPECIAL        → NEW owner / DUP / fullArgs / INVOKESPECIAL <init> ; ARETURN
+// （H_INVOKESPECIAL 私有实例方法引用已在 expandLambdaSite 提权，故按 INVOKEVIRTUAL 发射。）
 std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
                                                 const std::string& synthName,
                                                 const std::string& ifaceInternal,
@@ -336,11 +340,28 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
     init->maxLocals = ctorSlot;
     cn->methods.push_back(init);
 
-    // SAM 方法：先 GETFIELD 取回各捕获字段，再加载 SAM 参数（实例方法，slot 0 = this，
-    // 参数从 slot 1 起），一起 invokestatic impl → xreturn。
+    // SAM 方法体：把 fullArgs = 捕获字段（GETFIELD）+ SAM 参数（xLOAD）按序压栈，再按
+    // impl 的 handle tag 发射调用。实例方法引用的 receiver 天然是 fullArgs 的首元（bound
+    // 时来自捕获字段、unbound 时来自 SAM 首参），故压栈顺序与静态调用完全一致，只有调用
+    // 指令不同。构造器引用需先 NEW/DUP 目标类型再压 fullArgs。
+    const int         tag       = impl.getTag();
+    const bool        isCtorRef = (tag == Opcodes::H_NEWINVOKESPECIAL);
+    const std::string implOwner = toStd(impl.getOwner());
+    const std::string implName  = toStd(impl.getName());
+    const std::string implDesc  = toStd(impl.getDesc());
+
     auto* sam = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern(samName.c_str()),
                                arena.intern(samDesc.c_str()), arena.intern(""), noExc);
     int samStack = 0;
+
+    // 构造器引用：先 NEW/DUP 目标类型（占 2 个栈位，位于 fullArgs 之下）。
+    if (isCtorRef) {
+        sam->instructions.add(new TypeInsnNode(Opcodes::NEW, intern(arena, implOwner.c_str())));
+        sam->instructions.add(new InsnNode(Opcodes::DUP));
+        samStack += 2;
+    }
+
+    // fullArgs 第一段：捕获字段 cap0..capN-1（GETFIELD）。
     for (size_t i = 0; i < capturedTypes.size(); ++i) {
         sam->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
         sam->instructions.add(new FieldInsnNode(Opcodes::GETFIELD, arena.intern(synthName.c_str()),
@@ -348,6 +369,7 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
                                                 arena.intern(capDesc[i].c_str())));
         samStack += slotSize(capturedTypes[i].getSort());
     }
+    // fullArgs 第二段：SAM 参数（实例方法 slot 0 = this，参数从 slot 1 起）。
     std::vector<Type> samArgs = Type::getArgumentTypes(arena.intern(samDesc.c_str()));
     int               slot    = 1;
     for (const auto& t : samArgs) {
@@ -355,12 +377,33 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         slot += slotSize(t.getSort());
         samStack += slotSize(t.getSort());
     }
-    sam->instructions.add(new MethodInsnNode(
-        Opcodes::INVOKESTATIC, intern(arena, toStd(impl.getOwner()).c_str()),
-        intern(arena, toStd(impl.getName()).c_str()), intern(arena, toStd(impl.getDesc()).c_str()),
-        false));
-    const Type samRet = Type::getReturnType(arena.intern(samDesc.c_str()));
-    sam->instructions.add(new InsnNode(returnOpcode(samRet.getSort())));
+
+    if (isCtorRef) {
+        // NEW/DUP/fullArgs/INVOKESPECIAL <init> → 栈顶留下新建对象，ARETURN。
+        sam->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                                 intern(arena, implOwner.c_str()),
+                                                 intern(arena, "<init>"),
+                                                 intern(arena, implDesc.c_str()), false));
+        sam->instructions.add(new InsnNode(Opcodes::ARETURN));
+    }
+    else {
+        int  invokeOpcode = Opcodes::INVOKESTATIC;
+        bool invokeIface  = false;
+        switch (tag) {
+        case Opcodes::H_INVOKESTATIC: invokeOpcode = Opcodes::INVOKESTATIC; break;
+        case Opcodes::H_INVOKEINTERFACE:
+            invokeOpcode = Opcodes::INVOKEINTERFACE;
+            invokeIface  = true;
+            break;
+        // H_INVOKEVIRTUAL 与已提权的 H_INVOKESPECIAL 均按虚调用发射。
+        default: invokeOpcode = Opcodes::INVOKEVIRTUAL; break;
+        }
+        sam->instructions.add(new MethodInsnNode(invokeOpcode, intern(arena, implOwner.c_str()),
+                                                 intern(arena, implName.c_str()),
+                                                 intern(arena, implDesc.c_str()), invokeIface));
+        const Type samRet = Type::getReturnType(arena.intern(samDesc.c_str()));
+        sam->instructions.add(new InsnNode(returnOpcode(samRet.getSort())));
+    }
     sam->maxStack  = samStack > 0 ? samStack : 1;
     sam->maxLocals = slot;
     cn->methods.push_back(sam);
@@ -402,29 +445,62 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     if (!samTypePtr || !implPtr) return false;
     if (samTypePtr->getSort() != Type::METHOD) return false;
 
-    // MVP：impl 必须是 INVOKESTATIC。
-    if (implPtr->getTag() != Opcodes::H_INVOKESTATIC) return false;
+    // 支持的 impl handle 形态：静态 / 实例（虚·接口·已提权私有）/ 构造器。
+    const int  tag        = implPtr->getTag();
+    const bool isStatic   = (tag == Opcodes::H_INVOKESTATIC);
+    const bool isCtor     = (tag == Opcodes::H_NEWINVOKESPECIAL);
+    const bool isInstance = (tag == Opcodes::H_INVOKEVIRTUAL ||
+                             tag == Opcodes::H_INVOKEINTERFACE ||
+                             tag == Opcodes::H_INVOKESPECIAL);
+    if (!isStatic && !isCtor && !isInstance) return false;   // H_GETFIELD/H_PUTFIELD 等暂不支持
+
     const std::string samDesc  = toStd(samTypePtr->getDescriptor());
     const std::string implDesc = toStd(implPtr->getDesc());
 
-    // 校验 impl 形参 == capturedTypes ++ samArgs（无装箱/桥接的直通形态）。
+    // fullArgs = capturedTypes ++ samArgs（javac 布局：捕获在前，SAM 参数在后）。
     std::vector<Type> samArgs  = Type::getArgumentTypes(arena.intern(samDesc.c_str()));
     std::vector<Type> implArgs = Type::getArgumentTypes(arena.intern(implDesc.c_str()));
-    if (implArgs.size() != capturedTypes.size() + samArgs.size()) return false;
-    for (size_t i = 0; i < capturedTypes.size(); ++i) {
-        if (implArgs[i].getDescriptor() != capturedTypes[i].getDescriptor()) return false;
-    }
-    for (size_t i = 0; i < samArgs.size(); ++i) {
-        if (implArgs[capturedTypes.size() + i].getDescriptor() != samArgs[i].getDescriptor())
+    std::vector<Type> fullArgs = capturedTypes;
+    fullArgs.insert(fullArgs.end(), samArgs.begin(), samArgs.end());
+
+    const Type samRet  = Type::getReturnType(arena.intern(samDesc.c_str()));
+    const Type implRet = Type::getReturnType(arena.intern(implDesc.c_str()));
+
+    if (isStatic || isCtor) {
+        // 全部 fullArgs 直通给 impl（静态=方法形参，构造器=<init> 形参）。
+        if (fullArgs.size() != implArgs.size()) return false;
+        for (size_t i = 0; i < fullArgs.size(); ++i) {
+            if (fullArgs[i].getDescriptor() != implArgs[i].getDescriptor()) return false;
+        }
+        if (isCtor) {
+            // 构造器引用：impl 必为 <init>，SAM 返回新建对象（对象类型）。
+            if (toStd(implPtr->getName()) != "<init>") return false;
+            if (samRet.getSort() != Type::OBJECT) return false;
+        }
+        // 返回类别须一致（拒绝装箱/加宽的桥接形态，交 SSA fail-closed）。
+        else if (returnOpcode(samRet.getSort()) != returnOpcode(implRet.getSort())) {
             return false;
+        }
+    }
+    else {
+        // 实例方法引用：fullArgs[0] = receiver（对象/数组），其余直通给 impl。
+        if (fullArgs.empty()) return false;
+        const int recvSort = fullArgs[0].getSort();
+        if (recvSort != Type::OBJECT && recvSort != Type::ARRAY) return false;
+        if (fullArgs.size() != implArgs.size() + 1) return false;
+        for (size_t i = 0; i < implArgs.size(); ++i) {
+            if (fullArgs[i + 1].getDescriptor() != implArgs[i].getDescriptor()) return false;
+        }
+        if (returnOpcode(samRet.getSort()) != returnOpcode(implRet.getSort())) return false;
     }
 
-    // 若 impl 目标在本 index 的非 library 类且为 private，提权（去 ACC_PRIVATE + 置 public），
-    // 否则合成类跨类 INVOKESTATIC 触发 IllegalAccessError。库方法（已 public）无需处理。
+    // impl 目标若在本 index 的用户类且非 public，提权为 public：合成类位于 mj2x/lambda/
+    // 包，跨类/跨包访问 private/protected/包私有目标（含私有实例方法、包私有构造器）都会
+    // 触发 IllegalAccessError。库方法（通常已 public）与 JDK 类（找不到）无需处理。
     if (auto* target = findMethodInIndex(index, toStd(implPtr->getOwner()),
                                          toStd(implPtr->getName()), implDesc)) {
-        if (target->access & Opcodes::ACC_PRIVATE) {
-            target->access &= ~Opcodes::ACC_PRIVATE;
+        if (!(target->access & Opcodes::ACC_PUBLIC)) {
+            target->access &= ~(Opcodes::ACC_PRIVATE | Opcodes::ACC_PROTECTED);
             target->access |= Opcodes::ACC_PUBLIC;
         }
     }

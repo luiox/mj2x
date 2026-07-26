@@ -336,9 +336,47 @@ map，多个合成类时随机把某个 Lambda$N 当 primary 写成 `_protected.
   `v->(int)(scale*v)+bias`（long+int 混合类型捕获）、`(u,v)->u+v+c`（双 SAM 参数+捕获），
   protected native 与 Java baseline 逐行一致。
 - 单元 `ExpandsStatelessLambda` / `ExpandsCapturingLambda`（indy 消失、NEW 出现、合成类入
-  index、捕获字段 cap0 断言、私有目标提权断言）+ **负例** `LeavesNonStaticImplUnexpanded`
-  （impl 非 INVOKESTATIC → 仍 fail-closed、无合成类）。
+  index、捕获字段 cap0 断言、私有目标提权断言）。
 
-**剩余待办**：`H_INVOKEVIRTUAL/H_INVOKESPECIAL/H_INVOKEINTERFACE/H_NEWINVOKESPECIAL` 形态
-（实例方法引用 `this::m` / 构造器引用 `X::new`）、samMethodType≠implDesc 时的 bridge/装箱、
-altMetafactory（serializable/marker interface）。见 dev_plan R6.1。
+**剩余待办**：samMethodType≠implDesc 时的 bridge/装箱、altMetafactory（serializable/marker
+interface）。实例/构造器方法引用已在 §16（阶段2c）落地。见 dev_plan R6.1。
+
+## 16. R6.1 阶段2c：实例 + 构造器方法引用展开（2026-07-26，已完成）
+
+把 §15 的 `H_INVOKESTATIC` 限制推广到全部方法引用 handle 形态。**关键洞察**：站点改写（把
+indy 栈上捕获值搬进合成类构造器）**与 impl tag 无关**——捕获的是 indy 描述符参数，与 impl 的
+调用形态正交。只有两处随 tag 变化：合成类 SAM 体的发射指令、`expandLambdaSite` 的校验分支。
+
+**`buildLambdaClassNode` 按 `impl.getTag()` 发射 SAM**（fullArgs = capturedTypes ++ samArgs）：
+- `H_INVOKEVIRTUAL` / `H_INVOKEINTERFACE`（实例引用）：receiver = fullArgs 首元。**bound**
+  （`expr::m`）时 receiver 来自捕获字段（`GETFIELD cap0`）、**unbound**（`Type::m`）时来自 SAM
+  首参（`xLOAD 1`）。receiver 天然首个压栈，故压栈序与静态调用一致，仅把 `INVOKESTATIC` 换成
+  `INVOKEVIRTUAL`/`INVOKEINTERFACE`。
+- `H_INVOKESPECIAL`（私有实例方法引用）：目标提权 public 后按 `INVOKEVIRTUAL` 发射（跨类
+  `INVOKESPECIAL` 仅限 `<init>`/super，对无关类的普通方法非法）。super 方法引用（库超类目标、
+  无法提权）仍 fail-closed。
+- `H_NEWINVOKESPECIAL`（构造器引用 `Type::new`）：`NEW owner` / `DUP` / fullArgs /
+  `INVOKESPECIAL owner.<init>` / `ARETURN`（返回新建对象；SAM 返回类型 = 该对象）。
+
+**`expandLambdaSite` 校验改 tag 感知**：
+- 静态 / 构造器：fullArgs 与 implArgs 逐一匹配（构造器额外要求 impl 名为 `<init>`、SAM 返回对象）。
+- 实例：fullArgs[0] 须对象/数组 receiver，其余匹配 implArgs。
+- 静态 / 实例额外加**返回类别一致性守卫**：`returnOpcode(samRet) != returnOpcode(implRet)` 即拒，
+  挡住 samMethodType≠implDesc 的装箱/加宽桥接形态（避免发射会验证失败的字节码）。
+- de-privatize 推广为「用户类**非 public** 目标（private/protected/包私有——含私有实例方法、包私有
+  构造器）一律提权 public」。合成类在 `mj2x/lambda/` 包，跨包访问非 public 目标会 `IllegalAccessError`。
+
+**关键正确性**：e2e 中 functional interface 必须 `public`——合成类在 `mj2x.lambda` 包，跨包实现
+包私有接口运行期抛 `IllegalAccessError`（JVM 仅放行 public 跨包访问；这与 §15 私有 impl 提权同源）。
+
+**测试**：
+- e2e `InvokeDynamicMethodRefRoundTrip`：`String::length`/`String::charAt`（unbound 实例引用）、
+  `base::concat`（bound 实例引用，receiver 捕获入字段）、`String::new`（构造器引用，`new char[]`
+  参数）——impl 目标均为 JDK 方法（合成 SAM 纯字节码转调 JDK，不要求 impl 本身可 native 化），
+  protected native 与 Java baseline 逐行一致。
+- 单元 `ExpandsUnboundInstanceRef`（SAM 体 `INVOKEVIRTUAL`、无捕获字段）/ `ExpandsBoundInstanceRef`
+  （cap0 字段 + `GETFIELD` + `INVOKEVIRTUAL`）/ `ExpandsInterfaceMethodRef`（SAM 体 `INVOKEINTERFACE`）/
+  `ExpandsConstructorRef`（`NEW`/`INVOKESPECIAL <init>`、包私有构造器提权断言）+ **负例**
+  `LeavesUnsupportedHandleUnexpanded`（`H_GETFIELD` 字段句柄仍 fail-closed、无合成类）。
+
+**剩余待办**：samMethodType≠implDesc 的 bridge/装箱、altMetafactory、自定义 bootstrap（阶段3）。
