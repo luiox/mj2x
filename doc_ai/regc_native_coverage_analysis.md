@@ -415,3 +415,53 @@ LambdaMetafactory 在运行期做的这类适配是 **javac 产出 lambda 的多
   `(J)V` impl 保持 fail-closed、无合成类）。
 
 **剩余待办**：altMetafactory（serializable/marker interface）、自定义 bootstrap（阶段3）。
+
+## 18. R6.1 阶段2e：altMetafactory serializable/marker/bridge（2026-07-26，已完成）
+
+`javac` 在 lambda 需要 `Serializable`、额外 marker 接口（交集类型 `(Runnable & Serializable)`）
+或桥接方法（泛型特化）时，改发 `LambdaMetafactory.altMetafactory`（而非 `metafactory`）。§15–§17
+只认 `metafactory`，这些站点整类残留 → SSA fail-closed。本阶段补齐 alt 形态。
+
+**bsmArgs 布局**：前 3 项与 metafactory 同（`[0]samMethodType [1]implHandle [2]instantiatedMethodType`），
+随后 `[3]flags:int`，按 flag 位跟 `markerCount:int + Class markers…`、`bridgeCount:int + MethodType bridges…`。
+`FLAG_SERIALIZABLE=1` 不带额外参。所有附加参经 `class_reader` 以 typed `Any` 呈现（int / Type(OBJECT
+=CONSTANT_Class) / Type(METHOD=CONSTANT_MethodType)），无需改 libjbytecode。
+
+**落地**：
+- `isLambdaMetafactorySite` 认 `altMetafactory`；`parseAltMetafactoryTail` 解析尾部为
+  `AltLambdaInfo{markerIfaces, bridgeDescs}`。出现未知 flag 位、缺计数、类型不符一律 false → fail-closed。
+- `buildLambdaClassNode` 追加 marker 接口（含 `java/io/Serializable`）到 `cn->interfaces`——marker 无方法，
+  SAM 体不变，只满足 `instanceof`/序列化标记语义。SAM 体发射抽成 `buildSam(name,desc,extraAccess)`，
+  主 SAM 外为每个 bridge 描述符发一个 `ACC_BRIDGE|ACC_SYNTHETIC` 同名方法（复用同一 impl 适配路径，
+  去重且跳过与主 SAM 重复的签名）。
+- 校验抽成 `canEmitSam`（主 SAM 与各 bridge 逐个校验，任一不可适配整站点 fail-closed）。
+- **序列化**：合成类实现 `Serializable` 后靠**默认序列化**其 `capN` 字段即可同进程 round-trip，
+  不复刻 JVM 原生 `SerializedLambda` 格式（对混淆输出无意义，且跨 JVM 不可依赖）。
+
+**测试**：
+- e2e `InvokeDynamicSerializableLambdaRoundTrip`：`IntOp extends Serializable`，无状态方法引用
+  `RegCSerLambda::base` + 捕获 lambda `v -> v + k`，各在同进程内 `writeObject`→`readObject`→invoke，
+  protected 合成类与 JVM 原生 lambda 逐行一致。javac 实测发 4 站点（2 创建 + 2 在 `$deserializeLambda$`），
+  全部展开。
+- 单元 `ExpandsAltMetafactorySerializable`（追加 `java/io/Serializable`）/`ExpandsAltMetafactoryMarkerInterface`
+  （追加 `java/lang/Cloneable`）/`ExpandsAltMetafactoryWithBridge`（主 SAM + 1 个 `ACC_BRIDGE` 同名方法）/
+  **负例** `LeavesUnknownAltFlagsUnexpanded`（未知 flag 位 8 → fail-closed、无合成类）。
+
+## 19. R6.1 阶段2f：基本类型加宽桥接（2026-07-26，已完成）
+
+method reference 的实参/返回基本类型与 SAM 相差一个 JLS §5.1.2 加宽（`int→long/float/double`、
+`long→float/double`、`float→double`）时，LambdaMetafactory 运行期插入 `i2l`/`i2f`/`i2d`/`l2f`/`l2d`/`f2d`。
+§17 的负例 `LeavesPrimitiveWideningUnexpanded` 即此形态整类 fail-closed。本阶段静态展开。
+
+**落地**：新增 `wideningOpcode(from,to)`（受支持加宽返回对应转换 opcode，收窄/boolean/同型返回 -1）。
+`canAdaptValue` 对基本类型互转仅放行加宽（`wideningOpcode!=-1`）；`emitAdaptValue` 在 primitive→primitive
+分支发对应转换指令。实参段（samArg→implArg）与返回段（implRet→samRet）复用同一适配，栈峰值按两侧较大槽宽
+累计（`int→long` 1→2 已被 §17 的 `std::max(slotSize…)` 覆盖）。**装箱+加宽复合适配**（擦除引用先拆到
+instantiated 包装类再加宽到 impl 基本类型，需读 `instantiatedMethodType`）与**收窄**仍 fail-closed。
+
+**测试**：
+- e2e `InvokeDynamicPrimitiveWideningRoundTrip`：`retI2L`/`retI2D`/`retL2D`/`retF2D`（返回加宽）+
+  `argI2L`（首参加宽），自定义非泛型 functional interface 规避与 §17 装箱路径叠加，5 站点全部展开、
+  protected 与 baseline 逐行一致。
+- 单元 `ExpandsPrimitiveWidening`（SAM 体含 `I2L` + `INVOKESTATIC`）/**负例**
+  `LeavesPrimitiveNarrowingUnexpanded`（`(J)V` SAM 对 `(I)V` impl 收窄 → fail-closed、无合成类）。

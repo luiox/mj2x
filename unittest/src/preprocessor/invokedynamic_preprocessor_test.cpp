@@ -518,8 +518,17 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsErasedInstanceRefReceiverCast)
     EXPECT_EQ(firstCallOpcode(sam, "java/lang/String", "length"), Opcodes::INVOKEVIRTUAL);
 }
 
-// negative：基本类型互转（int 参 → long impl，需 i2l 加宽）不在适配子集内，保持 fail-closed。
-TEST(InvokeDynamicPreprocessorTest, LeavesPrimitiveWideningUnexpanded)
+// 是否存在指定 opcode 的指令。
+bool hasOpcode(MethodNode* m, int opcode)
+{
+    for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
+        if (insn->getOpcode() == opcode) return true;
+    }
+    return false;
+}
+
+// 阶段2f：基本类型加宽（int 参 → long impl，i2l）。合成 SAM 体在 xLOAD 后发 I2L 再转调 impl。
+TEST(InvokeDynamicPreprocessorTest, ExpandsPrimitiveWidening)
 {
     CompilerIndex index;
     auto&         arena = index.arena();
@@ -533,6 +542,180 @@ TEST(InvokeDynamicPreprocessorTest, LeavesPrimitiveWideningUnexpanded)
     auto* indy = new InvokeDynamicInsnNode(arena.intern("accept"), arena.intern("()Lp/IntSink;"),
                                            lambdaMetafactoryBsm(index), bsmArgs);
     MethodNode* m = addMethodToIndex(index, "Wide", "make", "()Lp/IntSink;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    EXPECT_TRUE(hasOpcode(sam, Opcodes::I2L));   // int 参加宽到 long
+    EXPECT_EQ(firstCallOpcode(sam, "W", "useLong"), Opcodes::INVOKESTATIC);
+}
+
+// negative：基本类型收窄（long 参 → int impl）不合法、不在适配子集内，保持 fail-closed。
+TEST(InvokeDynamicPreprocessorTest, LeavesPrimitiveNarrowingUnexpanded)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(J)V")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("N"), arena.intern("useInt"),
+                                arena.intern("(I)V")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(J)V")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("accept"), arena.intern("()Lp/LongSink;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "Narrow", "make", "()Lp/LongSink;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
+    EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+}
+
+// ---- 阶段2e：altMetafactory（serializable / marker interface / bridge）----
+
+// altMetafactory bsm：desc 尾部是 [Object 变长（flags/markers/bridges）。
+Handle lambdaAltMetafactoryBsm(CompilerIndex& index)
+{
+    auto& arena = index.arena();
+    return Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
+                  arena.intern("altMetafactory"),
+                  arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                               "Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)"
+                               "Ljava/lang/invoke/CallSite;"));
+}
+
+// 合成类是否 implements 指定接口内部名。
+bool synthImplements(CompilerIndex& index, const std::string& synthName, const std::string& iface)
+{
+    auto* cls = index.getClass(synthName);
+    if (!cls || !cls->classNode) return false;
+    for (auto& itf : cls->classNode->interfaces) {
+        if (itf.to_std_string() == iface) return true;
+    }
+    return false;
+}
+
+// FLAG_SERIALIZABLE：合成类追加实现 java/io/Serializable（marker，SAM 体不变）。
+TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactorySerializable)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
+                                arena.intern("(I)I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(1);   // FLAG_SERIALIZABLE
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
+                                           arena.intern("()Ljava/util/function/IntUnaryOperator;"),
+                                           lambdaAltMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "Lam", "make",
+                                     "()Ljava/util/function/IntUnaryOperator;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    ASSERT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+    EXPECT_TRUE(synthImplements(index, "mj2x/lambda/Lambda$0", "java/io/Serializable"));
+    EXPECT_TRUE(
+        synthImplements(index, "mj2x/lambda/Lambda$0", "java/util/function/IntUnaryOperator"));
+}
+
+// FLAG_MARKERS：合成类追加实现 bsmArgs 里列出的每个 Class marker 接口。
+TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactoryMarkerInterface)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
+                                arena.intern("(I)I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(2);   // FLAG_MARKERS
+    bsmArgs.emplace_back(1);   // markerCount
+    bsmArgs.emplace_back(Type::getObjectType(arena.intern("java/lang/Cloneable")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
+                                           arena.intern("()Ljava/util/function/IntUnaryOperator;"),
+                                           lambdaAltMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "Mk", "make",
+                                     "()Ljava/util/function/IntUnaryOperator;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    ASSERT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+    EXPECT_TRUE(synthImplements(index, "mj2x/lambda/Lambda$0", "java/lang/Cloneable"));
+}
+
+// FLAG_BRIDGES：合成类为每个 bridge 描述符额外发射一个 ACC_BRIDGE|ACC_SYNTHETIC 同名方法。
+TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactoryWithBridge)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    // 主 SAM 擦除为 (Object)Object，bridge 是具体 (String)String；impl 静态 id(String)String。
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(
+        Type::getMethodType(arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Id"), arena.intern("id"),
+                                arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
+    bsmArgs.emplace_back(
+        Type::getMethodType(arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
+    bsmArgs.emplace_back(4);   // FLAG_BRIDGES
+    bsmArgs.emplace_back(1);   // bridgeCount
+    bsmArgs.emplace_back(
+        Type::getMethodType(arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"), arena.intern("()Lp/Fn;"),
+                                           lambdaAltMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "Br", "make", "()Lp/Fn;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    auto* synth = index.getClass("mj2x/lambda/Lambda$0");
+    ASSERT_NE(synth, nullptr);
+    // 主 SAM + bridge = 2 个 apply，其一带 ACC_BRIDGE。
+    int applyCount = 0, bridgeCount = 0;
+    for (auto* mm : synth->classNode->methods) {
+        if (mm->name.to_std_string() != "apply") continue;
+        ++applyCount;
+        if (mm->access & Opcodes::ACC_BRIDGE) ++bridgeCount;
+    }
+    EXPECT_EQ(applyCount, 2);
+    EXPECT_EQ(bridgeCount, 1);
+}
+
+// negative：altMetafactory 出现未知 flag 位（如 8）→ 保守 fail-closed，indy 保留、无合成类。
+TEST(InvokeDynamicPreprocessorTest, LeavesUnknownAltFlagsUnexpanded)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
+                                arena.intern("(I)I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(8);   // 未知 flag 位
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
+                                           arena.intern("()Ljava/util/function/IntUnaryOperator;"),
+                                           lambdaAltMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "Unk", "make",
+                                     "()Ljava/util/function/IntUnaryOperator;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
     InvokeDynamicPreprocessor().process(index);

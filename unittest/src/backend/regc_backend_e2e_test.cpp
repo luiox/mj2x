@@ -641,6 +641,79 @@ TEST_F(RegCBackendE2E, InvokeDynamicErasedGenericRoundTrip)
             });
 }
 
+// R6.1 阶段2e：altMetafactory（serializable lambda）展开验证。序列化 lambda（functional
+// interface 继承 Serializable）由 javac 编成 invokedynamic altMetafactory + FLAG_SERIALIZABLE。
+// InvokeDynamicPreprocessor 合成的类追加 implements java/io/Serializable（marker，SAM 体不变），
+// 靠默认序列化 round-trip 其 capN 字段（不复刻 JVM 原生 SerializedLambda 格式）。测试在同一
+// 进程内 writeObject → readObject → invoke，验证 native 合成类与 JVM 原生 lambda 行为一致。
+// 覆盖无状态方法引用与捕获 lambda 两种形态。
+TEST_F(RegCBackendE2E, InvokeDynamicSerializableLambdaRoundTrip)
+{
+    runCase("RegCSerLambda",
+            "import java.io.*;\n"
+            "public class RegCSerLambda {\n"
+            // functional interface 须 public（合成类跨包实现）且继承 Serializable。
+            "  public interface IntOp extends Serializable { int apply(int x); }\n"
+            "  private static int base(int x) { return x * 7 + 1; }\n"
+            "  private static int reserialize(IntOp op, int x) throws Exception {\n"
+            "    ByteArrayOutputStream bos = new ByteArrayOutputStream();\n"
+            "    ObjectOutputStream oos = new ObjectOutputStream(bos);\n"
+            "    oos.writeObject(op);\n"
+            "    oos.close();\n"
+            "    ObjectInputStream ois =\n"
+            "        new ObjectInputStream(new ByteArrayInputStream(bos.toByteArray()));\n"
+            "    IntOp back = (IntOp) ois.readObject();\n"
+            "    return back.apply(x);\n"
+            "  }\n"
+            "  public static int roundTripRef(int x) throws Exception {\n"
+            "    IntOp op = RegCSerLambda::base;\n"
+            "    return reserialize(op, x);\n"
+            "  }\n"
+            "  public static int roundTripCapture(int x, int k) throws Exception {\n"
+            "    IntOp op = v -> v + k;\n"
+            "    return reserialize(op, x);\n"
+            "  }\n"
+            "}\n",
+            {
+                {"roundTripRef(6)", "RegCSerLambda.roundTripRef(6)"},
+                {"roundTripCapture(10,5)", "RegCSerLambda.roundTripCapture(10, 5)"},
+            });
+}
+
+// R6.1 阶段2f：基本类型加宽桥接展开验证。method reference 的实参/返回基本类型与 SAM 相差
+// 一个 JLS 加宽（int→long/double、long→double、float→double）时，LambdaMetafactory 运行期
+// 插入 i2l/i2d/l2d/f2d；InvokeDynamicPreprocessor 在合成 SAM 体静态发射这些转换字节码。
+// 覆盖返回加宽（IntToLong/IntToDouble/LongToDouble/FloatToDouble）与实参加宽（I2L 首参）。
+// 用非泛型自定义 functional interface（避免与阶段2d 装箱路径叠加），impl 均为私有静态（展开
+// 后提权）。
+TEST_F(RegCBackendE2E, InvokeDynamicPrimitiveWideningRoundTrip)
+{
+    runCase("RegCWiden",
+            "public class RegCWiden {\n"
+            "  public interface IntToLong    { long   apply(int x); }\n"
+            "  public interface IntToDouble  { double apply(int x); }\n"
+            "  public interface LongToDouble { double apply(long x); }\n"
+            "  public interface FloatToDouble{ double apply(float x); }\n"
+            "  public interface ArgWiden     { long   apply(int x); }\n"
+            "  private static int   idI(int x)   { return x; }\n"
+            "  private static long  idL(long x)  { return x; }\n"
+            "  private static float idF(float x) { return x; }\n"
+            "  private static long  echoLong(long v) { return v * 3; }\n"
+            "  public static long   retI2L(int x)   { IntToLong f = RegCWiden::idI; return f.apply(x); }\n"
+            "  public static double retI2D(int x)   { IntToDouble f = RegCWiden::idI; return f.apply(x); }\n"
+            "  public static double retL2D(long x)  { LongToDouble f = RegCWiden::idL; return f.apply(x); }\n"
+            "  public static double retF2D(float x) { FloatToDouble f = RegCWiden::idF; return f.apply(x); }\n"
+            "  public static long   argI2L(int x)   { ArgWiden f = RegCWiden::echoLong; return f.apply(x); }\n"
+            "}\n",
+            {
+                {"retI2L(7)", "RegCWiden.retI2L(7)"},
+                {"retI2D(9)", "RegCWiden.retI2D(9)"},
+                {"retL2D(1234567890123)", "RegCWiden.retL2D(1234567890123L)"},
+                {"retF2D(2.5f)", "RegCWiden.retF2D(2.5f)"},
+                {"argI2L(11)", "RegCWiden.argI2L(11)"},
+            });
+}
+
 // R6-A IO 组放开验证。这些方法在 native 帧内调用 InputStream/ByteArrayInputStream 的
 // read()/available()/read(byte[]) —— 放开黑名单前保留字节码；放开后转 native。
 // read() 返回 int 单字节，read(byte[]) 返回读入数并经 ref-array 写入 byte[]，

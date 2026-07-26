@@ -20,11 +20,12 @@ Current behavior:
   functional-interface class — stateless + capturing lambdas via `H_INVOKESTATIC`
   impl (阶段2/2b), instance (`H_INVOKEVIRTUAL`/`H_INVOKEINTERFACE`/
   `H_INVOKESPECIAL`) and constructor (`H_NEWINVOKESPECIAL`) method references
-  (阶段2c), and erased-generic boxing/bridge shapes where samMethodType≠implDesc
-  (阶段2d：CHECKCAST / box / unbox / drop-return adaptation)；其余 indy 仅诊断、
-  不改写。
-- SSA rejects still-unexpanded indy (primitive-widening bridge, altMetafactory,
-  or custom bootstrap) with `invokedynamic not yet expanded`.
+  (阶段2c), erased-generic boxing/bridge shapes where samMethodType≠implDesc
+  (阶段2d：CHECKCAST / box / unbox / drop-return adaptation), `altMetafactory`
+  serializable / marker-interface / bridge shapes (阶段2e), and primitive-widening
+  bridges (阶段2f：i2l/i2d/l2d/f2d)；其余 indy 仅诊断、不改写。
+- SSA rejects still-unexpanded indy (primitive narrowing, box+widen composite
+  adaptation, or custom bootstrap) with `invokedynamic not yet expanded`.
 - StackC has a separate runtime bridge that invokes the bootstrap method,
   reads `CallSite.getTarget()`, and executes `MethodHandle.invokeWithArguments`.
 - RegC should not mark a method native when indy lowering fails.
@@ -125,7 +126,38 @@ RegC prefers pre-SSA expansion (阶段1 string concat 已落地此路线).
    receiver cast、`String::valueOf(long)` 拆箱、`String::new` Supplier、捕获+擦除 lambda，
    protected native 与 Java baseline 逐行一致）+ 单元 `ExpandsErasedStaticRefWithBoxing`/
    `ExpandsErasedConsumerDroppingReturn`/`ExpandsErasedInstanceRefReceiverCast`/**负例**
-   `LeavesPrimitiveWideningUnexpanded`。未覆盖：altMetafactory（serializable/marker interface）。
+   `LeavesPrimitiveWideningUnexpanded`（阶段2f 后改为 `LeavesPrimitiveNarrowingUnexpanded`）。
+
+2e. altMetafactory：serializable / marker interface / bridge. **[DONE — R6.1 阶段2e，2026-07-26]**
+
+   `javac` 在 lambda 需要 `Serializable`、额外 marker 接口（交集类型 `(Runnable & Serializable)`）
+   或桥接方法（泛型特化）时发 `LambdaMetafactory.altMetafactory`（非 `metafactory`）。其 `bsmArgs`
+   前 3 项与 metafactory 同（sam/impl/instantiated），随后 `[3]=flags:int`，按位跟
+   `markerCount + Class markers`、`bridgeCount + MethodType bridges`。
+
+   **落地**：`isLambdaMetafactorySite` 认 altMetafactory；`parseAltMetafactoryTail` 解析 flags
+   （`FLAG_SERIALIZABLE=1`/`FLAG_MARKERS=2`/`FLAG_BRIDGES=4`，出现未知位保守 fail-closed）为
+   `AltLambdaInfo{markerIfaces, bridgeDescs}`。`buildLambdaClassNode` 把 marker（含
+   `java/io/Serializable`）追加到 `cn->interfaces`（无方法 marker，SAM 体不变），并把 SAM 体发射
+   抽成 `buildSam(name,desc,extraAccess)` lambda，主 SAM 之外为每个 bridge 描述符发一个
+   `ACC_BRIDGE|ACC_SYNTHETIC` 同名方法（复用同一 impl 适配路径，去重且跳过与主 SAM 重复的签名）。
+   校验抽成 `canEmitSam`，主 SAM 与各 bridge 逐个校验，任一不可适配整站点 fail-closed。
+   **序列化**：合成类默认序列化其 `capN` 字段即可同进程 round-trip，不复刻 JVM 原生
+   `SerializedLambda` 格式（对混淆输出无意义）。测试：e2e `InvokeDynamicSerializableLambdaRoundTrip`
+   （无状态方法引用 + 捕获 lambda，真实 `writeObject`→`readObject`→invoke 与 baseline 逐行一致）+
+   单元 `ExpandsAltMetafactorySerializable`/`ExpandsAltMetafactoryMarkerInterface`/
+   `ExpandsAltMetafactoryWithBridge`/**负例** `LeavesUnknownAltFlagsUnexpanded`。
+
+2f. Primitive-widening bridge. **[DONE — R6.1 阶段2f，2026-07-26]**
+
+   method reference 的实参/返回基本类型与 SAM 相差一个 JLS §5.1.2 加宽（`int→long/float/double`、
+   `long→float/double`、`float→double`）时，LambdaMetafactory 运行期插入 `i2l`/`i2d`/`l2d`/`f2d` 等；
+   阶段2f 把它们静态发射进合成 SAM 体。`canAdaptValue` 对基本类型互转仅放行加宽
+   （`wideningOpcode(from,to)!=-1`），`emitAdaptValue` 在 primitive→primitive 分支发对应转换 opcode；
+   实参段（samArg→implArg）与返回段（implRet→samRet）复用同一适配。收窄、装箱+加宽复合适配仍
+   fail-closed。测试：e2e `InvokeDynamicPrimitiveWideningRoundTrip`（i2l/i2d/l2d/f2d 返回加宽 +
+   i2l 实参加宽，自定义非泛型 functional interface 规避与阶段2d 装箱叠加）+ 单元
+   `ExpandsPrimitiveWidening`/**负例** `LeavesPrimitiveNarrowingUnexpanded`。
 
 3. Obfuscator bootstrap methods last.
 
