@@ -103,7 +103,10 @@ static void writeJar(const std::string& path, CompilerIndex& index)
 
 static bool isGeneratedRuntimeClass(const std::string& name)
 {
-    return name == "mj2x/cloader/Loader";
+    // mj2x/cloader/Loader：RegisterNatives 桥接类。
+    // mj2x/lambda/*：invokedynamic lambda 展开合成的 functional interface 实现类（R6.1 阶段2）。
+    // 这些都不是 primary 输入类，且须相对 classpath 根写出（不跟 primary 包名走）。
+    return name == "mj2x/cloader/Loader" || name.rfind("mj2x/lambda/", 0) == 0;
 }
 
 static fs::path sidecarClassPath(const fs::path& outputPath,

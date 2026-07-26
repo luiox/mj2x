@@ -190,19 +190,22 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsStatelessLambda)
     EXPECT_TRUE(base->access & Opcodes::ACC_PUBLIC);
 }
 
-// negative：捕获 lambda（indy desc 有参 = 捕获变量）暂不支持，保持 fail-closed。
-TEST(InvokeDynamicPreprocessorTest, LeavesCapturingLambdaUnexpanded)
+// 捕获 lambda 展开：indy desc 带捕获参数 (I)，impl 布局 = captured ++ sam = (I I)I。
+// indy 消失、换成 xSTORE 暂存 + new + xLOAD + invokespecial <init>(I)V；合成类带捕获字段。
+TEST(InvokeDynamicPreprocessorTest, ExpandsCapturingLambda)
 {
     CompilerIndex index;
     auto&         arena = index.arena();
 
+    // bsmArgs: [0]=samMethodType (I)I, [1]=impl Cap.lambda$make$0(I I)I static（捕获在前）,
+    //          [2]=instantiated (I)I。
     std::vector<ca::core::Any> bsmArgs;
     bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Cap"),
                                 arena.intern("lambda$make$0"), arena.intern("(II)I")));
     bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
 
-    // 捕获 lambda：indy desc 带一个捕获参数 (I)。
+    // 捕获 lambda：indy desc 带一个捕获参数 (I)，返回 functional interface。
     auto* indy =
         new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
                                   arena.intern("(I)Ljava/util/function/IntUnaryOperator;"),
@@ -211,10 +214,53 @@ TEST(InvokeDynamicPreprocessorTest, LeavesCapturingLambdaUnexpanded)
                                      "(I)Ljava/util/function/IntUnaryOperator;",
                                      {new VarInsnNode(Opcodes::ILOAD, 0), indy,
                                       new InsnNode(Opcodes::ARETURN)});
+    // lambda$make$0 是 private static（javac 合成），展开后应被提权。
+    std::vector<ca::str::Utf8StringRef> noExc;
+    auto* impl = new MethodNode(Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_SYNTHETIC,
+                                arena.intern("lambda$make$0"), arena.intern("(II)I"),
+                                arena.intern(""), noExc);
+    impl->instructions.add(new InsnNode(Opcodes::ICONST_0));
+    impl->instructions.add(new InsnNode(Opcodes::IRETURN));
+    impl->maxStack  = 1;
+    impl->maxLocals = 2;
+    index.getClass("Cap")->classNode->methods.push_back(impl);
 
     InvokeDynamicPreprocessor().process(index);
 
-    // indy 仍在（捕获形态未支持），交由 SSA fail-closed；无合成类。
+    // indy 消失、换成 new。合成类入 index，含 1 个捕获字段 cap0。
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::TYPE_INSN), 1);   // NEW
+    auto* synth = index.getClass("mj2x/lambda/Lambda$0");
+    ASSERT_NE(synth, nullptr);
+    EXPECT_EQ(synth->classNode->fields.size(), 1u);
+    EXPECT_EQ(synth->classNode->fields[0]->name.to_std_string(), "cap0");
+    // 私有目标提权。
+    EXPECT_FALSE(impl->access & Opcodes::ACC_PRIVATE);
+    EXPECT_TRUE(impl->access & Opcodes::ACC_PUBLIC);
+}
+
+// negative：impl 非 INVOKESTATIC（如 H_INVOKEVIRTUAL 实例方法引用）暂不支持，保持 fail-closed。
+TEST(InvokeDynamicPreprocessorTest, LeavesNonStaticImplUnexpanded)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("java/lang/Integer"),
+                                arena.intern("intValue"), arena.intern("()I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
+                                           arena.intern("()Ljava/util/function/IntUnaryOperator;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "NS", "make",
+                                     "()Ljava/util/function/IntUnaryOperator;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    // impl 非 INVOKESTATIC → 未支持，indy 保留、交 SSA fail-closed；无合成类。
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
     EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
 }

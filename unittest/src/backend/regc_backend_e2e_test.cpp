@@ -509,6 +509,42 @@ TEST_F(RegCBackendE2E, InvokeDynamicStatelessLambdaRoundTrip)
             });
 }
 
+// R6.1 阶段2b：捕获 lambda 展开验证。`v -> v + delta` 捕获局部变量 delta —— javac 生成
+// invokedynamic desc `(I)L...`（捕获值作 indy 参数）+ 合成方法 lambda$..(I I)I（捕获值在前）。
+// InvokeDynamicPreprocessor 合成带 private final 字段的类，构造器接收捕获值存字段，SAM
+// 方法 GETFIELD 取回后接 SAM 参数一起转调 impl。站点栈上捕获值先 xSTORE 到临时槽、再
+// new/dup/顺序 xLOAD/invokespecial <init>(捕获描述符)。覆盖单捕获、多捕获、混合类型捕获。
+TEST_F(RegCBackendE2E, InvokeDynamicCapturingLambdaRoundTrip)
+{
+    runCase("RegCCapture",
+            "import java.util.function.IntUnaryOperator;\n"
+            "import java.util.function.IntBinaryOperator;\n"
+            "public class RegCCapture {\n"
+            "  public static int addDelta(int x, int delta) {\n"
+            "    IntUnaryOperator op = v -> v + delta;\n"
+            "    return op.applyAsInt(x);\n"
+            "  }\n"
+            "  public static int affine(int x, int a, int b) {\n"
+            "    IntUnaryOperator op = v -> a * v + b;\n"
+            "    return op.applyAsInt(x);\n"
+            "  }\n"
+            "  public static int mixed(int x, long scale, int bias) {\n"
+            "    IntUnaryOperator op = v -> (int)(scale * v) + bias;\n"
+            "    return op.applyAsInt(x);\n"
+            "  }\n"
+            "  public static int combine(int a, int b, int c) {\n"
+            "    IntBinaryOperator op = (u, v) -> u + v + c;\n"
+            "    return op.applyAsInt(a, b);\n"
+            "  }\n"
+            "}\n",
+            {
+                {"addDelta(10, 5)", "RegCCapture.addDelta(10, 5)"},
+                {"affine(4, 3, 7)", "RegCCapture.affine(4, 3, 7)"},
+                {"mixed(6, 2L, 1)", "RegCCapture.mixed(6, 2L, 1)"},
+                {"combine(2, 3, 100)", "RegCCapture.combine(2, 3, 100)"},
+            });
+}
+
 // R6-A IO 组放开验证。这些方法在 native 帧内调用 InputStream/ByteArrayInputStream 的
 // read()/available()/read(byte[]) —— 放开黑名单前保留字节码；放开后转 native。
 // read() 返回 int 单字节，read(byte[]) 返回读入数并经 ref-array 写入 byte[]，

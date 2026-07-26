@@ -284,12 +284,12 @@ R6-D e2e 用例（`nativeSleep` 比对耗时）因 sleep 耗时非确定性被�
 - e2e `RegCBackendE2E.InvokeDynamicStringConcatRoundTrip`：`"a="+int+",b="+long+",s="+String`、
   null 拼接、相邻动态参数、boolean/char/double 混合，protected native 与 Java baseline 逐行一致。
 - 单元 `InvokeDynamicPreprocessorTest.*`：makeConcatWithConstants / makeConcat 展开断言
-  （indy marker 消失、StringBuilder 构造/append/toString 计数、maxLocals 增大）+ **负例**
-  `LeavesLambdaIndyUnexpanded`（LambdaMetafactory 站点保持原样，交 SSA fail-closed）。
+  （indy marker 消失、StringBuilder 构造/append/toString 计数、maxLocals 增大）+ lambda 相关
+  见 §15。
 
 **剩余**：阶段2 已完成（见 §15）、阶段3（自定义 bootstrap / 评估 runtime bridge），见 dev_plan R6.1。
 
-## 15. R6.1 阶段2：无状态 lambda 展开（2026-07-25，已完成）
+## 15. R6.1 阶段2：无状态 + 捕获 lambda 展开（2026-07-25，已完成）
 
 **路线选择**：调研确认 lambda 的 StackC runtime bridge 同样强依赖 `_mj2x_owner_class`
 （lambda$/目标方法多为 private，metafactory 生成的实现类需 caller 的 `privateLookupIn`
@@ -302,13 +302,19 @@ instantiatedMethodType(Type)。**indy desc 的参数个数 = 捕获变量个数*
 返回类型 = 目标 functional interface。无状态方法引用（`X::base`）的 impl 直接指向用户
 方法，javac 不生成 lambda$ 合成方法。
 
-**机制**（`InvokeDynamicPreprocessor::expandStatelessLambdaSite`）：
-1. 校验无状态形态：indy desc 无参、返回对象类型、`bsmArgs[1]` 是 tag==`H_INVOKESTATIC`
-   的 Handle、samDesc==implDesc（无装箱/桥接）。
+**机制**（`InvokeDynamicPreprocessor::expandLambdaSite`，无状态+捕获统一）：
+1. 校验：`bsmArgs[1]` 是 tag==`H_INVOKESTATIC` 的 Handle；impl 形参 == capturedTypes ++
+   samArgs（capturedTypes = indy desc 参数；无装箱/桥接的直通形态）。
 2. 合成类 `mj2x/lambda/Lambda$<N>`（`buildLambdaClassNode`，照 `cloader_postprocessor.cpp`
-   套路）：`implements` 目标接口，空 `<init>`，一个 public SAM 方法（名=indy.name、
-   desc=samDesc）——加载全部参数后 `invokestatic` 转调 impl，按返回类型 `xRETURN`。
-3. 站点改写：`insert(new / dup / invokespecial 合成类.<init>()V)` + `remove(indy)`。
+   套路）：`implements` 目标接口。
+   - 无状态（0 捕获）：空 `<init>()V`，SAM 直接加载参数 `invokestatic` 转调 impl。
+   - 捕获（N 捕获）：N 个 `private final` 字段 capI + 参数化 `<init>(capturedDescs)V`
+     （super 后逐个 `aload_0 / xload / putfield`）；SAM 先 `aload_0 / getfield` 取回各捕获
+     字段、再接 SAM 参数一起 `invokestatic`，按返回类型 `xRETURN`。
+3. 站点改写：
+   - 无状态：`new / dup / invokespecial <init>()V`。
+   - 捕获：栈上 N 个捕获值先逆序 `xSTORE` 到新局部槽（bump `maxLocals`），再
+     `new / dup / 顺序 xLOAD / invokespecial <init>(capturedDescs)V`。
 4. **提权**：impl 目标若在本 index 非 library 类且 private，去 `ACC_PRIVATE` 置 public
    （否则合成类跨类 `invokestatic` 抛 `IllegalAccessError`）。
 5. 合成类登记：遍历 `getClasses()` 结束后统一 `addClass`（单类 sidecar）/`upsertJarResource`
@@ -317,13 +323,22 @@ instantiatedMethodType(Type)。**indy desc 的参数个数 = 捕获变量个数*
 **正确性要点**：改写后原方法不再含 INVOKE_DYNAMIC，自动脱离 `shouldKeepBytecodeForCompatibility`
 的 fail-closed；合成类经 `FindClass`（同 classpath sidecar / jar entry）正常加载，不需
 owner-class。展开后的 `new/dup/invokespecial` + 调用点 `invokeinterface applyAsInt` 走
-RegC 已验证的通用 lowering。
+RegC 已验证的通用 lowering。**踩出的 OutputWriter bug**：`isGeneratedRuntimeClass` 原只认
+`mj2x/cloader/Loader`，合成的 `mj2x/lambda/*` 会被误当 primary 输入类（getClasses 是无序
+map，多个合成类时随机把某个 Lambda$N 当 primary 写成 `_protected.class`，真类与 Loader 变
+错位 sidecar → `NoClassDefFoundError: mj2x/cloader/Loader`）。修复：`isGeneratedRuntimeClass`
+增认 `mj2x/lambda/` 前缀（sidecar 路径亦须相对 classpath 根，与 Loader 一致）。此 bug 对
+无状态也潜在，只是之前 map 顺序碰巧没触发。
 
 **测试**：
-- e2e `RegCBackendE2E.InvokeDynamicStatelessLambdaRoundTrip`：`X::base` 方法引用单次/
-  嵌套调用（`op.applyAsInt(op.applyAsInt(x))`），protected native 与 Java baseline 逐行一致。
-- 单元 `ExpandsStatelessLambda`（indy 消失、NEW 出现、合成类入 index、私有目标提权断言）
-  + **负例** `LeavesCapturingLambdaUnexpanded`（捕获 lambda 的 indy desc 有参 → 仍 fail-closed、无合成类）。
+- e2e `InvokeDynamicStatelessLambdaRoundTrip`：`X::base` 方法引用单次/嵌套调用。
+- e2e `InvokeDynamicCapturingLambdaRoundTrip`：`v->v+delta`（单捕获）、`v->a*v+b`（多捕获）、
+  `v->(int)(scale*v)+bias`（long+int 混合类型捕获）、`(u,v)->u+v+c`（双 SAM 参数+捕获），
+  protected native 与 Java baseline 逐行一致。
+- 单元 `ExpandsStatelessLambda` / `ExpandsCapturingLambda`（indy 消失、NEW 出现、合成类入
+  index、捕获字段 cap0 断言、私有目标提权断言）+ **负例** `LeavesNonStaticImplUnexpanded`
+  （impl 非 INVOKESTATIC → 仍 fail-closed、无合成类）。
 
-**剩余待办**：捕获 lambda（把栈上捕获值存入合成类字段、构造器接收）、`H_INVOKEVIRTUAL/
-H_INVOKESPECIAL/H_NEWINVOKESPECIAL` 形态、samMethodType≠implDesc 时的 bridge/装箱。见 dev_plan R6.1。
+**剩余待办**：`H_INVOKEVIRTUAL/H_INVOKESPECIAL/H_INVOKEINTERFACE/H_NEWINVOKESPECIAL` 形态
+（实例方法引用 `this::m` / 构造器引用 `X::new`）、samMethodType≠implDesc 时的 bridge/装箱、
+altMetafactory（serializable/marker interface）。见 dev_plan R6.1。

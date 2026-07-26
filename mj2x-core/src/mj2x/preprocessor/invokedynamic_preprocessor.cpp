@@ -273,11 +273,18 @@ MethodNode* findMethodInIndex(CompilerIndex& index, const std::string& owner,
 //     public <samName><samDesc> { return <impl>(args...); }   // impl 走 INVOKESTATIC
 //   }
 // 仅覆盖无状态（无捕获字段）+ impl tag==H_INVOKESTATIC + samDesc 与 impl desc 一致。
+// 合成一个实现 functional interface 的类，转调 impl（INVOKESTATIC）。
+//   capturedTypes 空 = 无状态 lambda：空 <init>，SAM 直接透传参数。
+//   capturedTypes 非空 = 捕获 lambda：N 个 private final 字段 capI + 参数化
+//     <init>(capturedDescs)V（super + 逐个 PUTFIELD），SAM 先 GETFIELD 取回捕获值再接
+//     SAM 参数，一起传给 impl。impl 形参 = capturedTypes ++ samArgs（javac 布局）。
 std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
                                                 const std::string& synthName,
                                                 const std::string& ifaceInternal,
                                                 const std::string& samName,
-                                                const std::string& samDesc, const Handle& impl)
+                                                const std::string&       samDesc,
+                                                const std::vector<Type>& capturedTypes,
+                                                const Handle&            impl)
 {
     auto cn     = std::make_unique<ClassNode>();
     cn->version = Opcodes::V1_8;
@@ -289,36 +296,72 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
 
     std::vector<ca::str::Utf8StringRef> noExc;
 
-    // <init>()V : aload_0 / invokespecial Object.<init> / return
-    auto* init = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern("<init>"), arena.intern("()V"),
-                                arena.intern(""), noExc);
+    // 捕获字段 cap0..capN-1（private final）+ 构造器描述符 (capturedDescs)V。
+    std::vector<std::string> capName(capturedTypes.size());
+    std::vector<std::string> capDesc(capturedTypes.size());
+    std::string              ctorDesc = "(";
+    for (size_t i = 0; i < capturedTypes.size(); ++i) {
+        capName[i] = "cap" + std::to_string(i);
+        capDesc[i] = toStd(capturedTypes[i].getDescriptor());
+        ctorDesc += capDesc[i];
+        cn->fields.push_back(new FieldNode(Opcodes::ACC_PRIVATE | Opcodes::ACC_FINAL,
+                                           arena.intern(capName[i].c_str()),
+                                           arena.intern(capDesc[i].c_str()), arena.intern(""),
+                                           ca::core::Any{}));
+    }
+    ctorDesc += ")V";
+
+    // <init>(capturedDescs)V : super.<init>() 后逐个 aload_0 / xload param / putfield capI。
+    auto* init = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern("<init>"),
+                                arena.intern(ctorDesc.c_str()), arena.intern(""), noExc);
     init->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
     init->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
                                               arena.intern("java/lang/Object"),
                                               arena.intern("<init>"), arena.intern("()V"), false));
+    int ctorSlot     = 1;   // slot 0 = this
+    int ctorMaxStack = 1;
+    for (size_t i = 0; i < capturedTypes.size(); ++i) {
+        const int sort = capturedTypes[i].getSort();
+        init->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+        init->instructions.add(new VarInsnNode(loadOpcode(sort), ctorSlot));
+        init->instructions.add(new FieldInsnNode(Opcodes::PUTFIELD, arena.intern(synthName.c_str()),
+                                                 arena.intern(capName[i].c_str()),
+                                                 arena.intern(capDesc[i].c_str())));
+        ctorSlot += slotSize(sort);
+        // putfield 峰值：this(1) + value(1或2)。
+        ctorMaxStack = std::max(ctorMaxStack, 1 + slotSize(sort));
+    }
     init->instructions.add(new InsnNode(Opcodes::RETURN));
-    init->maxStack  = 1;
-    init->maxLocals = 1;
+    init->maxStack  = ctorMaxStack;
+    init->maxLocals = ctorSlot;
     cn->methods.push_back(init);
 
-    // SAM 方法：加载全部参数（实例方法，slot 0 = this，参数从 slot 1 起）→ invokestatic impl
-    // → xreturn。samDesc 与 impl desc 一致（MVP 约束），参数直接透传。
+    // SAM 方法：先 GETFIELD 取回各捕获字段，再加载 SAM 参数（实例方法，slot 0 = this，
+    // 参数从 slot 1 起），一起 invokestatic impl → xreturn。
     auto* sam = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern(samName.c_str()),
                                arena.intern(samDesc.c_str()), arena.intern(""), noExc);
+    int samStack = 0;
+    for (size_t i = 0; i < capturedTypes.size(); ++i) {
+        sam->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+        sam->instructions.add(new FieldInsnNode(Opcodes::GETFIELD, arena.intern(synthName.c_str()),
+                                                arena.intern(capName[i].c_str()),
+                                                arena.intern(capDesc[i].c_str())));
+        samStack += slotSize(capturedTypes[i].getSort());
+    }
     std::vector<Type> samArgs = Type::getArgumentTypes(arena.intern(samDesc.c_str()));
     int               slot    = 1;
-    int               maxStack = 0;
     for (const auto& t : samArgs) {
         sam->instructions.add(new VarInsnNode(loadOpcode(t.getSort()), slot));
         slot += slotSize(t.getSort());
-        maxStack += slotSize(t.getSort());
+        samStack += slotSize(t.getSort());
     }
-    sam->instructions.add(new MethodInsnNode(Opcodes::INVOKESTATIC, intern(arena, toStd(impl.getOwner()).c_str()),
-                                             intern(arena, toStd(impl.getName()).c_str()),
-                                             intern(arena, toStd(impl.getDesc()).c_str()), false));
+    sam->instructions.add(new MethodInsnNode(
+        Opcodes::INVOKESTATIC, intern(arena, toStd(impl.getOwner()).c_str()),
+        intern(arena, toStd(impl.getName()).c_str()), intern(arena, toStd(impl.getDesc()).c_str()),
+        false));
     const Type samRet = Type::getReturnType(arena.intern(samDesc.c_str()));
     sam->instructions.add(new InsnNode(returnOpcode(samRet.getSort())));
-    sam->maxStack  = maxStack > 0 ? maxStack : 1;
+    sam->maxStack  = samStack > 0 ? samStack : 1;
     sam->maxLocals = slot;
     cn->methods.push_back(sam);
 
@@ -333,34 +376,48 @@ struct PendingLambdaClass
     std::unique_ptr<ClassNode> node;
 };
 
-// 展开单个无状态 lambda indy 站点。返回是否改写成功。
-// 失败（捕获 lambda / 非 INVOKESTATIC impl / desc 不匹配）保持 indy 原样、交 SSA fail-closed。
-bool expandStatelessLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode* indy,
-                               int synthCounter, std::vector<PendingLambdaClass>& pending)
+// 展开单个 lambda indy 站点（无状态 + 捕获统一处理）。返回是否改写成功。
+// 失败（非 INVOKESTATIC impl / desc 不符合 captured++sam 布局）保持 indy 原样、交 SSA fail-closed。
+//
+// indy desc 参数 = 捕获变量（无状态则为空），已在 indy 前压栈；返回类型 = functional interface。
+// bsmArgs[0]=samMethodType, [1]=implHandle, [2]=instantiatedMethodType。impl 形参布局
+// （javac）= capturedTypes ++ samArgs。
+bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode* indy,
+                      int synthCounter, std::vector<PendingLambdaClass>& pending)
 {
     auto& arena = index.arena();
 
-    // 无捕获：indy desc 必须无参（捕获值会作为 indy 参数压栈）。
-    const std::string indyDesc = toStd(indy->desc);
-    if (!Type::getArgumentTypes(arena.intern(indyDesc.c_str())).empty()) return false;
+    const std::string indyDesc      = toStd(indy->desc);
+    std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
 
     // functional interface = indy 返回类型（须是对象类型）。
     const Type ifaceType = Type::getReturnType(arena.intern(indyDesc.c_str()));
     if (ifaceType.getSort() != Type::OBJECT) return false;
     const std::string ifaceInternal = toStd(ifaceType.getInternalName());
 
-    // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle), [2]=instantiatedMethodType。
+    // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle)。
     if (indy->bsmArgs.size() < 2) return false;
     auto* samTypePtr = indy->bsmArgs[0].as<Type>();
     auto* implPtr    = indy->bsmArgs[1].as<Handle>();
     if (!samTypePtr || !implPtr) return false;
     if (samTypePtr->getSort() != Type::METHOD) return false;
 
-    // MVP：impl 必须是 INVOKESTATIC，且 desc 与 SAM desc 一致（无装箱/桥接）。
+    // MVP：impl 必须是 INVOKESTATIC。
     if (implPtr->getTag() != Opcodes::H_INVOKESTATIC) return false;
     const std::string samDesc  = toStd(samTypePtr->getDescriptor());
     const std::string implDesc = toStd(implPtr->getDesc());
-    if (samDesc != implDesc) return false;
+
+    // 校验 impl 形参 == capturedTypes ++ samArgs（无装箱/桥接的直通形态）。
+    std::vector<Type> samArgs  = Type::getArgumentTypes(arena.intern(samDesc.c_str()));
+    std::vector<Type> implArgs = Type::getArgumentTypes(arena.intern(implDesc.c_str()));
+    if (implArgs.size() != capturedTypes.size() + samArgs.size()) return false;
+    for (size_t i = 0; i < capturedTypes.size(); ++i) {
+        if (implArgs[i].getDescriptor() != capturedTypes[i].getDescriptor()) return false;
+    }
+    for (size_t i = 0; i < samArgs.size(); ++i) {
+        if (implArgs[capturedTypes.size() + i].getDescriptor() != samArgs[i].getDescriptor())
+            return false;
+    }
 
     // 若 impl 目标在本 index 的非 library 类且为 private，提权（去 ACC_PRIVATE + 置 public），
     // 否则合成类跨类 INVOKESTATIC 触发 IllegalAccessError。库方法（已 public）无需处理。
@@ -374,20 +431,59 @@ bool expandStatelessLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynami
 
     const std::string synthName = "mj2x/lambda/Lambda$" + std::to_string(synthCounter);
 
-    // 站点改写：new synth / dup / invokespecial synth.<init>()V（无捕获 → 空构造）。
+    // 构造器描述符 (capturedDescs)V。
+    std::string ctorDesc = "(";
+    for (const auto& t : capturedTypes) ctorDesc += toStd(t.getDescriptor());
+    ctorDesc += ")V";
+
+    // 站点改写。
+    //   无捕获：new synth / dup / invokespecial synth.<init>()V。
+    //   有捕获：捕获值已在栈上（栈底=cap0，栈顶=capN-1）。先逆序 xSTORE 到新局部槽腾空栈，
+    //     再 new / dup / 逆序? —— 需按构造器形参顺序（cap0..capN-1）重新 xLOAD，
+    //     故先全部存槽，再 new/dup，再顺序 load。
     InsnList seq;
-    seq.add(new TypeInsnNode(Opcodes::NEW, intern(arena, synthName.c_str())));
-    seq.add(new InsnNode(Opcodes::DUP));
-    seq.add(new MethodInsnNode(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
-                               intern(arena, "<init>"), intern(arena, "()V"), false));
+    if (capturedTypes.empty()) {
+        seq.add(new TypeInsnNode(Opcodes::NEW, intern(arena, synthName.c_str())));
+        seq.add(new InsnNode(Opcodes::DUP));
+        seq.add(new MethodInsnNode(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
+                                   intern(arena, "<init>"), intern(arena, "()V"), false));
+        m->maxStack += 2;
+    }
+    else {
+        // 为捕获值分配局部槽（从 m->maxLocals 起）。
+        std::vector<int> capSlot(capturedTypes.size());
+        int              slot = m->maxLocals;
+        for (size_t i = 0; i < capturedTypes.size(); ++i) {
+            capSlot[i] = slot;
+            slot += slotSize(capturedTypes[i].getSort());
+        }
+        // 逆序 xSTORE（栈顶 capN-1 先存）。
+        for (size_t r = capturedTypes.size(); r > 0; --r) {
+            const size_t i = r - 1;
+            seq.add(new VarInsnNode(storeOpcode(capturedTypes[i].getSort()), capSlot[i]));
+        }
+        // new / dup / 顺序 xLOAD cap0..capN-1 / invokespecial <init>(capturedDescs)V。
+        seq.add(new TypeInsnNode(Opcodes::NEW, intern(arena, synthName.c_str())));
+        seq.add(new InsnNode(Opcodes::DUP));
+        int loadStack = 0;
+        for (size_t i = 0; i < capturedTypes.size(); ++i) {
+            seq.add(new VarInsnNode(loadOpcode(capturedTypes[i].getSort()), capSlot[i]));
+            loadStack += slotSize(capturedTypes[i].getSort());
+        }
+        seq.add(new MethodInsnNode(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
+                                   intern(arena, "<init>"), intern(arena, ctorDesc.c_str()),
+                                   false));
+        if (slot > m->maxLocals) m->maxLocals = slot;
+        // 栈峰值：new+dup(2) + 全部捕获实参。
+        m->maxStack += 2 + loadStack;
+    }
     m->instructions.insert(indy, seq);
     m->instructions.remove(indy);
-    m->maxStack += 2;
 
     PendingLambdaClass pc;
     pc.internalName = synthName;
     pc.node = buildLambdaClassNode(arena, synthName, ifaceInternal, toStd(indy->name), samDesc,
-                                   *implPtr);
+                                   capturedTypes, *implPtr);
     pending.push_back(std::move(pc));
     return true;
 }
@@ -421,8 +517,7 @@ void processImpl(CompilerIndex& index)
                 if (expandConcatSite(arena, m, indy, wc)) ++expanded;
             }
             for (auto* indy : lambdaSites) {
-                if (expandStatelessLambdaSite(index, m, indy, synthCounter,
-                                              pendingLambdaClasses)) {
+                if (expandLambdaSite(index, m, indy, synthCounter, pendingLambdaClasses)) {
                     ++lambdaExpanded;
                     ++synthCounter;
                 }
@@ -458,7 +553,7 @@ void processImpl(CompilerIndex& index)
                expanded);
     }
     if (lambdaExpanded > 0) {
-        printf("[InvokeDynamicPreproc] Expanded %d stateless lambda site(s) into synthesized "
+        printf("[InvokeDynamicPreproc] Expanded %d lambda site(s) into synthesized "
                "functional-interface class(es) (RegC-native).\n",
                lambdaExpanded);
     }
