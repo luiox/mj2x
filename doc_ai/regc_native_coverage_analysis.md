@@ -380,3 +380,38 @@ indy 栈上捕获值搬进合成类构造器）**与 impl tag 无关**——捕�
   `LeavesUnsupportedHandleUnexpanded`（`H_GETFIELD` 字段句柄仍 fail-closed、无合成类）。
 
 **剩余待办**：samMethodType≠implDesc 的 bridge/装箱、altMetafactory、自定义 bootstrap（阶段3）。
+
+## 17. R6.1 阶段2d：擦除泛型装箱/桥接适配（2026-07-26，已完成）
+
+泛型 functional interface（`Function`/`Supplier`/`Consumer`/`Predicate`/`ToIntFunction`…）
+经类型擦除后 samMethodType 形参/返回是 `Object`，与 impl 的具体引用/基本类型不同——
+LambdaMetafactory 在运行期做的这类适配是 **javac 产出 lambda 的多数形态**，§15/§16 的
+逐位描述符相等校验把它们整类 fail-closed。本阶段把适配静态展开进合成 SAM 体。
+
+**适配子集**（`canAdaptValue`/`emitAdaptValue`，参数与返回统一走它）：
+- 引用收窄：`CHECKCAST`（目标 `Object` 免 cast）。覆盖 unbound receiver（`Object→String`）、
+  擦除参数、擦除返回（返回向发 `CHECKCAST samRet` 保证验证器通过）。
+- 引用→基本类型：`CHECKCAST 包装类`（源已是包装类免）+ `xxxValue()` 拆箱。
+- 基本类型→引用：`包装类.valueOf` 装箱；目标限 `Object`/对应包装类（javac 擦除只产出
+  这两种），其余 fail-closed。
+- SAM 返回 void：`POP`/`POP2` 丢弃 impl 返回值（`canAdaptReturn`/`emitReturnAdapt`）。
+- **不支持**（仍 fail-closed）：基本类型互转（`i2l` 加宽等，须读 instantiatedMethodType
+  定语义，MVP 不做）、impl 返回 void 而 SAM 要值。
+
+**校验与栈账**：`expandLambdaSite` 逐位校验从描述符相等改为 `canAdaptValue`（同型是快速
+路径，行为与 §16 完全一致）；捕获段与 SAM 参数段统一适配（捕获引用加宽 `String→Object`
+顺带覆盖）。SAM 栈峰值按适配两侧较大槽宽累计（`Object→long` 拆箱把 1 槽变 2 槽），并修复
+零参 SAM 调 `()J` impl 时 maxStack 被低估为 1 的既有边界（返回槽宽单独计入下界）。
+
+**测试**：
+- e2e `InvokeDynamicErasedGenericRoundTrip`：`Math::abs`（Function<Integer,Integer>，
+  CHECKCAST+intValue 拆箱、valueOf 装箱返回）、`String::length`/`String::isEmpty`
+  （ToIntFunction/Predicate，receiver cast）、`String::valueOf(long)`（Long 拆箱）、
+  `String::new`（Supplier 构造器引用+擦除返回）、`x -> x + base`（捕获+擦除参数），
+  6 站点全部展开（Lambda$0..$5），protected native 与 Java baseline 逐行一致。
+- 单元 `ExpandsErasedStaticRefWithBoxing`（CHECKCAST/intValue/valueOf 断言）/
+  `ExpandsErasedConsumerDroppingReturn`（POP+RETURN）/`ExpandsErasedInstanceRefReceiverCast`
+  （receiver CHECKCAST）+ **负例** `LeavesPrimitiveWideningUnexpanded`（`(I)V` SAM 对
+  `(J)V` impl 保持 fail-closed、无合成类）。
+
+**剩余待办**：altMetafactory（serializable/marker interface）、自定义 bootstrap（阶段3）。

@@ -589,6 +589,58 @@ TEST_F(RegCBackendE2E, InvokeDynamicMethodRefRoundTrip)
             });
 }
 
+// R6.1 阶段2d：装箱/桥接适配验证。泛型 functional interface（Function/Supplier/Predicate/
+// ToIntFunction）经类型擦除后 samMethodType 形参/返回是 Object，与 impl 的具体/基本类型不同，
+// javac 为此生成的 indy 此前 fail-closed。展开时在合成 SAM 体静态发射适配字节码：
+//   Math::abs → CHECKCAST Integer + intValue 拆箱、返回 Integer.valueOf 装箱
+//   String::length / String::isEmpty → receiver 从 Object CHECKCAST 到 String
+//   String::valueOf(long) → CHECKCAST Long + longValue 拆箱
+//   String::new (Supplier) → 构造器引用 + 擦除返回
+//   x -> x + base → 捕获 + 擦除参数 CHECKCAST（impl 为 javac 合成 lambda$ 方法）
+TEST_F(RegCBackendE2E, InvokeDynamicErasedGenericRoundTrip)
+{
+    runCase("RegCIndyBoxing",
+            "import java.util.function.Function;\n"
+            "import java.util.function.Predicate;\n"
+            "import java.util.function.Supplier;\n"
+            "import java.util.function.ToIntFunction;\n"
+            "public class RegCIndyBoxing {\n"
+            "  public static int mapAbs(int x) {\n"
+            "    Function<Integer, Integer> f = Math::abs;\n"
+            "    return f.apply(x);\n"
+            "  }\n"
+            "  public static int strLen(String s) {\n"
+            "    ToIntFunction<String> f = String::length;\n"
+            "    return f.applyAsInt(s);\n"
+            "  }\n"
+            "  public static String longText(long v) {\n"
+            "    Function<Long, String> f = String::valueOf;\n"
+            "    return f.apply(v);\n"
+            "  }\n"
+            "  public static boolean blank(String s) {\n"
+            "    Predicate<String> p = String::isEmpty;\n"
+            "    return p.test(s);\n"
+            "  }\n"
+            "  public static int emptyLen() {\n"
+            "    Supplier<String> s = String::new;\n"
+            "    return s.get().length();\n"
+            "  }\n"
+            "  public static int addCaptured(int base) {\n"
+            "    Function<Integer, Integer> f = x -> x + base;\n"
+            "    return f.apply(7);\n"
+            "  }\n"
+            "}\n",
+            {
+                {"mapAbs(-5)", "RegCIndyBoxing.mapAbs(-5)"},
+                {"strLen(\"hello\")", "RegCIndyBoxing.strLen(\"hello\")"},
+                {"longText(1234567890123)", "RegCIndyBoxing.longText(1234567890123L)"},
+                {"blank(\"\")", "RegCIndyBoxing.blank(\"\")"},
+                {"blank(\"x\")", "RegCIndyBoxing.blank(\"x\")"},
+                {"emptyLen()", "RegCIndyBoxing.emptyLen()"},
+                {"addCaptured(35)", "RegCIndyBoxing.addCaptured(35)"},
+            });
+}
+
 // R6-A IO 组放开验证。这些方法在 native 帧内调用 InputStream/ByteArrayInputStream 的
 // read()/available()/read(byte[]) —— 放开黑名单前保留字节码；放开后转 native。
 // read() 返回 int 单字节，read(byte[]) 返回读入数并经 ref-array 写入 byte[]，

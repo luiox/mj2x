@@ -18,12 +18,13 @@ Current behavior:
 - `InvokeDynamicPreprocessor` **expands** StringConcatFactory sites into
   StringBuilder bytecode (阶段1) and LambdaMetafactory sites into a synthesized
   functional-interface class — stateless + capturing lambdas via `H_INVOKESTATIC`
-  impl (阶段2/2b), plus instance (`H_INVOKEVIRTUAL`/`H_INVOKEINTERFACE`/
+  impl (阶段2/2b), instance (`H_INVOKEVIRTUAL`/`H_INVOKEINTERFACE`/
   `H_INVOKESPECIAL`) and constructor (`H_NEWINVOKESPECIAL`) method references
-  (阶段2c)；其余 indy 仅诊断、不改写。
-- SSA rejects still-unexpanded indy (boxing/bridge lambda whose samMethodType≠
-  implDesc, altMetafactory, or custom bootstrap) with `invokedynamic not yet
-  expanded`.
+  (阶段2c), and erased-generic boxing/bridge shapes where samMethodType≠implDesc
+  (阶段2d：CHECKCAST / box / unbox / drop-return adaptation)；其余 indy 仅诊断、
+  不改写。
+- SSA rejects still-unexpanded indy (primitive-widening bridge, altMetafactory,
+  or custom bootstrap) with `invokedynamic not yet expanded`.
 - StackC has a separate runtime bridge that invokes the bootstrap method,
   reads `CallSite.getTarget()`, and executes `MethodHandle.invokeWithArguments`.
 - RegC should not mark a method native when indy lowering fails.
@@ -98,8 +99,33 @@ RegC prefers pre-SSA expansion (阶段1 string concat 已落地此路线).
    bound、`String::new` 构造器；functional interface 须 public 否则合成类跨包实现抛
    `IllegalAccessError`）+ 单元 `ExpandsUnboundInstanceRef`/`ExpandsBoundInstanceRef`/
    `ExpandsInterfaceMethodRef`/`ExpandsConstructorRef`/`LeavesUnsupportedHandleUnexpanded`
-   （`H_GETFIELD` 字段句柄仍 fail-closed）。未覆盖：装箱/桥接（samMethodType≠implDesc）、
-   altMetafactory（serializable/marker interface）。
+   （`H_GETFIELD` 字段句柄仍 fail-closed）。未覆盖：altMetafactory（serializable/marker
+   interface）；装箱/桥接见阶段2d。
+
+2d. Erased-generic boxing/bridge adaptation. **[DONE — R6.1 阶段2d，2026-07-26]**
+
+   泛型 functional interface（`Function`/`Supplier`/`Consumer`/`Predicate`/`ToIntFunction`…）
+   类型擦除后 samMethodType 形参/返回是 `Object`，与 impl 的具体引用/基本类型不同；
+   LambdaMetafactory 在运行期做的适配是 javac 产出 lambda 的**多数形态**，此前整类 fail-closed。
+
+   **落地**：合成 SAM 体在每个值压栈后静态发射适配字节码（`canAdaptValue`/`emitAdaptValue`），
+   返回经 `canAdaptReturn`/`emitReturnAdapt`：
+   - 引用收窄：`CHECKCAST`（目标 Object 免 cast）——覆盖 unbound receiver（`Object→String`）、
+     擦除参数、擦除返回。
+   - 引用→基本类型：`CHECKCAST 包装类`（已是包装类免）+ `xxxValue()` 拆箱。
+   - 基本类型→引用：`包装类.valueOf` 装箱；目标限 `Object`/对应包装类（javac 擦除只产出
+     这两种），其余 fail-closed。
+   - SAM 返回 void：`POP`/`POP2` 丢弃 impl 返回值（Consumer 引用有返回值方法的形态）。
+   - **不支持**：基本类型互转（`i2l` 加宽等，需读 instantiatedMethodType 才能定语义）、
+     impl 返回 void 而 SAM 要值——均保持 fail-closed。
+   校验从逐位描述符相等改为逐位 `canAdaptValue`（同型仍是快速路径），捕获段与 SAM 参数段
+   统一走适配。栈峰值按适配两侧较大槽宽累计（`Object→long` 会把 1 槽变 2 槽），并修复
+   零参 SAM 调 `()J` impl 时 maxStack 低估为 1 的边界。测试：e2e
+   `InvokeDynamicErasedGenericRoundTrip`（`Math::abs` 拆装箱、`String::length`/`String::isEmpty`
+   receiver cast、`String::valueOf(long)` 拆箱、`String::new` Supplier、捕获+擦除 lambda，
+   protected native 与 Java baseline 逐行一致）+ 单元 `ExpandsErasedStaticRefWithBoxing`/
+   `ExpandsErasedConsumerDroppingReturn`/`ExpandsErasedInstanceRefReceiverCast`/**负例**
+   `LeavesPrimitiveWideningUnexpanded`。未覆盖：altMetafactory（serializable/marker interface）。
 
 3. Obfuscator bootstrap methods last.
 

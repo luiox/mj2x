@@ -247,6 +247,162 @@ int returnOpcode(int sort)
     }
 }
 
+// ---- 阶段2d：装箱/桥接适配（samMethodType 擦除形态 ↔ implDesc 具体形态）----
+// 泛型 functional interface（Function/Supplier/Consumer/Predicate…）经类型擦除后 SAM 形参/
+// 返回都是 Object，而 impl 是具体引用或基本类型。LambdaMetafactory 在运行期做的适配这里
+// 静态展开进合成 SAM 体：
+//   引用收窄        → CHECKCAST
+//   引用→基本类型   → CHECKCAST 包装类 + xxxValue() 拆箱
+//   基本类型→引用   → 包装类.valueOf 装箱（目标限 Object / 对应包装类）
+//   SAM 返回 void   → POP/POP2 丢弃 impl 返回值
+// 基本类型互转（i2l 加宽等，需看 instantiatedMethodType）不支持，保持 fail-closed。
+
+bool isPrimitiveSort(int sort)
+{
+    return sort >= Type::BOOLEAN && sort <= Type::DOUBLE;
+}
+
+bool isReferenceSort(int sort)
+{
+    return sort == Type::OBJECT || sort == Type::ARRAY;
+}
+
+const char* wrapperInternal(int sort)
+{
+    switch (sort) {
+    case Type::BOOLEAN: return "java/lang/Boolean";
+    case Type::CHAR: return "java/lang/Character";
+    case Type::BYTE: return "java/lang/Byte";
+    case Type::SHORT: return "java/lang/Short";
+    case Type::INT: return "java/lang/Integer";
+    case Type::FLOAT: return "java/lang/Float";
+    case Type::LONG: return "java/lang/Long";
+    case Type::DOUBLE: return "java/lang/Double";
+    default: return nullptr;
+    }
+}
+
+const char* unboxMethodName(int sort)
+{
+    switch (sort) {
+    case Type::BOOLEAN: return "booleanValue";
+    case Type::CHAR: return "charValue";
+    case Type::BYTE: return "byteValue";
+    case Type::SHORT: return "shortValue";
+    case Type::INT: return "intValue";
+    case Type::FLOAT: return "floatValue";
+    case Type::LONG: return "longValue";
+    case Type::DOUBLE: return "doubleValue";
+    default: return nullptr;
+    }
+}
+
+const char* unboxMethodDesc(int sort)
+{
+    switch (sort) {
+    case Type::BOOLEAN: return "()Z";
+    case Type::CHAR: return "()C";
+    case Type::BYTE: return "()B";
+    case Type::SHORT: return "()S";
+    case Type::INT: return "()I";
+    case Type::FLOAT: return "()F";
+    case Type::LONG: return "()J";
+    case Type::DOUBLE: return "()D";
+    default: return nullptr;
+    }
+}
+
+const char* boxValueOfDesc(int sort)
+{
+    switch (sort) {
+    case Type::BOOLEAN: return "(Z)Ljava/lang/Boolean;";
+    case Type::CHAR: return "(C)Ljava/lang/Character;";
+    case Type::BYTE: return "(B)Ljava/lang/Byte;";
+    case Type::SHORT: return "(S)Ljava/lang/Short;";
+    case Type::INT: return "(I)Ljava/lang/Integer;";
+    case Type::FLOAT: return "(F)Ljava/lang/Float;";
+    case Type::LONG: return "(J)Ljava/lang/Long;";
+    case Type::DOUBLE: return "(D)Ljava/lang/Double;";
+    default: return nullptr;
+    }
+}
+
+// CHECKCAST 的类型串：对象用内部名，数组用描述符（JVMS 规定数组 CHECKCAST 写描述符）。
+std::string checkcastName(const Type& t)
+{
+    return t.getSort() == Type::ARRAY ? toStd(t.getDescriptor()) : toStd(t.getInternalName());
+}
+
+// 栈顶值能否从 from 适配到 to（对应 LambdaMetafactory 运行期适配的静态可展开子集）。
+bool canAdaptValue(const Type& from, const Type& to)
+{
+    if (toStd(from.getDescriptor()) == toStd(to.getDescriptor())) return true;
+    const bool fromRef = isReferenceSort(from.getSort());
+    const bool toRef   = isReferenceSort(to.getSort());
+    if (fromRef && toRef) return true;                              // CHECKCAST
+    if (fromRef && isPrimitiveSort(to.getSort())) return true;      // CHECKCAST 包装类 + 拆箱
+    if (isPrimitiveSort(from.getSort()) && toRef) {
+        // 装箱目标限 Object / 对应包装类（javac 擦除只产出这两种；其余形态 fail-closed）。
+        const std::string toDesc = toStd(to.getDescriptor());
+        return toDesc == "Ljava/lang/Object;" ||
+               toDesc == std::string("L") + wrapperInternal(from.getSort()) + ";";
+    }
+    return false;   // 基本类型互转（加宽/收窄）不支持
+}
+
+// 在 seq 尾部发射「栈顶值 from → to」的适配字节码。调用前须先 canAdaptValue 校验。
+void emitAdaptValue(ca::str::Utf8StringArena& arena, InsnList& seq, const Type& from,
+                    const Type& to)
+{
+    const std::string fromDesc = toStd(from.getDescriptor());
+    const std::string toDesc   = toStd(to.getDescriptor());
+    if (fromDesc == toDesc) return;
+    const bool fromRef = isReferenceSort(from.getSort());
+    if (fromRef && isReferenceSort(to.getSort())) {
+        // 收窄到 Object 无需 cast（一切引用 <: Object）；其余发 CHECKCAST 保证验证器通过。
+        if (toDesc != "Ljava/lang/Object;")
+            seq.add(new TypeInsnNode(Opcodes::CHECKCAST, intern(arena, checkcastName(to).c_str())));
+        return;
+    }
+    if (fromRef) {
+        // 引用 → 基本类型：CHECKCAST 包装类（已是包装类则免）+ xxxValue() 拆箱。
+        const char*       w     = wrapperInternal(to.getSort());
+        const std::string wDesc = std::string("L") + w + ";";
+        if (fromDesc != wDesc)
+            seq.add(new TypeInsnNode(Opcodes::CHECKCAST, intern(arena, w)));
+        seq.add(new MethodInsnNode(Opcodes::INVOKEVIRTUAL, intern(arena, w),
+                                   intern(arena, unboxMethodName(to.getSort())),
+                                   intern(arena, unboxMethodDesc(to.getSort())), false));
+        return;
+    }
+    // 基本类型 → 引用：包装类.valueOf 装箱（canAdaptValue 已限定目标为 Object/包装类）。
+    const char* w = wrapperInternal(from.getSort());
+    seq.add(new MethodInsnNode(Opcodes::INVOKESTATIC, intern(arena, w), intern(arena, "valueOf"),
+                               intern(arena, boxValueOfDesc(from.getSort())), false));
+}
+
+// impl 返回值能否适配为 SAM 返回值。
+bool canAdaptReturn(const Type& implRet, const Type& samRet)
+{
+    if (samRet.getSort() == Type::VOID) return true;    // 丢弃返回值（POP/POP2）
+    if (implRet.getSort() == Type::VOID) return false;  // SAM 要值而 impl 无值
+    return canAdaptValue(implRet, samRet);
+}
+
+// 发射 SAM 返回序列：适配栈顶 impl 返回值（或丢弃）后按 samRet 发 xRETURN。
+void emitReturnAdapt(ca::str::Utf8StringArena& arena, InsnList& seq, const Type& implRet,
+                     const Type& samRet)
+{
+    if (samRet.getSort() == Type::VOID) {
+        if (implRet.getSort() != Type::VOID)
+            seq.add(new InsnNode(slotSize(implRet.getSort()) == 2 ? Opcodes::POP2 : Opcodes::POP));
+        seq.add(new InsnNode(Opcodes::RETURN));
+        return;
+    }
+    emitAdaptValue(arena, seq, implRet, samRet);
+    seq.add(new InsnNode(returnOpcode(samRet.getSort())));
+}
+
 // 判断 indy 是否为 LambdaMetafactory.metafactory 站点（阶段2 只认最简 metafactory，
 // 不认 altMetafactory——后者带 serializable/marker interface 等额外标志）。
 bool isLambdaMetafactorySite(const InvokeDynamicInsnNode* indy)
@@ -340,19 +496,29 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
     init->maxLocals = ctorSlot;
     cn->methods.push_back(init);
 
-    // SAM 方法体：把 fullArgs = 捕获字段（GETFIELD）+ SAM 参数（xLOAD）按序压栈，再按
-    // impl 的 handle tag 发射调用。实例方法引用的 receiver 天然是 fullArgs 的首元（bound
+    // SAM 方法体：把 fullArgs = 捕获字段（GETFIELD）+ SAM 参数（xLOAD）按序压栈，每个值
+    // 压栈后立即按 impl 期望类型适配（阶段2d：CHECKCAST / 拆箱 / 装箱，见 emitAdaptValue），
+    // 再按 impl 的 handle tag 发射调用。实例方法引用的 receiver 天然是 fullArgs 的首元（bound
     // 时来自捕获字段、unbound 时来自 SAM 首参），故压栈顺序与静态调用完全一致，只有调用
     // 指令不同。构造器引用需先 NEW/DUP 目标类型再压 fullArgs。
     const int         tag       = impl.getTag();
     const bool        isCtorRef = (tag == Opcodes::H_NEWINVOKESPECIAL);
+    const bool        isInstRef = (tag == Opcodes::H_INVOKEVIRTUAL ||
+                            tag == Opcodes::H_INVOKEINTERFACE || tag == Opcodes::H_INVOKESPECIAL);
     const std::string implOwner = toStd(impl.getOwner());
     const std::string implName  = toStd(impl.getName());
     const std::string implDesc  = toStd(impl.getDesc());
 
+    // fullArgs 各位置的目标类型：实例引用首元是 receiver（owner 对象类型），其余对应 implArgs。
+    std::vector<Type> implArgs = Type::getArgumentTypes(arena.intern(implDesc.c_str()));
+    std::vector<Type> toTypes;
+    if (isInstRef) toTypes.push_back(Type::getObjectType(arena.intern(implOwner.c_str())));
+    toTypes.insert(toTypes.end(), implArgs.begin(), implArgs.end());
+
     auto* sam = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern(samName.c_str()),
                                arena.intern(samDesc.c_str()), arena.intern(""), noExc);
-    int samStack = 0;
+    int    samStack = 0;
+    size_t argPos   = 0;   // fullArgs 位置游标（捕获段 + SAM 参数段共用）
 
     // 构造器引用：先 NEW/DUP 目标类型（占 2 个栈位，位于 fullArgs 之下）。
     if (isCtorRef) {
@@ -361,30 +527,37 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         samStack += 2;
     }
 
-    // fullArgs 第一段：捕获字段 cap0..capN-1（GETFIELD）。
-    for (size_t i = 0; i < capturedTypes.size(); ++i) {
+    // fullArgs 第一段：捕获字段 cap0..capN-1（GETFIELD + 适配）。
+    for (size_t i = 0; i < capturedTypes.size(); ++i, ++argPos) {
         sam->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
         sam->instructions.add(new FieldInsnNode(Opcodes::GETFIELD, arena.intern(synthName.c_str()),
                                                 arena.intern(capName[i].c_str()),
                                                 arena.intern(capDesc[i].c_str())));
-        samStack += slotSize(capturedTypes[i].getSort());
+        emitAdaptValue(arena, sam->instructions, capturedTypes[i], toTypes[argPos]);
+        // 适配可能改变栈宽（如 Object→long 1→2），按两侧较大者计。
+        samStack += std::max(slotSize(capturedTypes[i].getSort()),
+                             slotSize(toTypes[argPos].getSort()));
     }
-    // fullArgs 第二段：SAM 参数（实例方法 slot 0 = this，参数从 slot 1 起）。
+    // fullArgs 第二段：SAM 参数（实例方法 slot 0 = this，参数从 slot 1 起；xLOAD + 适配）。
     std::vector<Type> samArgs = Type::getArgumentTypes(arena.intern(samDesc.c_str()));
     int               slot    = 1;
     for (const auto& t : samArgs) {
         sam->instructions.add(new VarInsnNode(loadOpcode(t.getSort()), slot));
+        emitAdaptValue(arena, sam->instructions, t, toTypes[argPos]);
         slot += slotSize(t.getSort());
-        samStack += slotSize(t.getSort());
+        samStack += std::max(slotSize(t.getSort()), slotSize(toTypes[argPos].getSort()));
+        ++argPos;
     }
 
+    const Type samRet = Type::getReturnType(arena.intern(samDesc.c_str()));
     if (isCtorRef) {
-        // NEW/DUP/fullArgs/INVOKESPECIAL <init> → 栈顶留下新建对象，ARETURN。
+        // NEW/DUP/fullArgs/INVOKESPECIAL <init> → 栈顶留下新建对象，适配（一般免 cast）后 ARETURN。
         sam->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
                                                  intern(arena, implOwner.c_str()),
                                                  intern(arena, "<init>"),
                                                  intern(arena, implDesc.c_str()), false));
-        sam->instructions.add(new InsnNode(Opcodes::ARETURN));
+        emitReturnAdapt(arena, sam->instructions,
+                        Type::getObjectType(arena.intern(implOwner.c_str())), samRet);
     }
     else {
         int  invokeOpcode = Opcodes::INVOKESTATIC;
@@ -401,10 +574,17 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         sam->instructions.add(new MethodInsnNode(invokeOpcode, intern(arena, implOwner.c_str()),
                                                  intern(arena, implName.c_str()),
                                                  intern(arena, implDesc.c_str()), invokeIface));
-        const Type samRet = Type::getReturnType(arena.intern(samDesc.c_str()));
-        sam->instructions.add(new InsnNode(returnOpcode(samRet.getSort())));
+        emitReturnAdapt(arena, sam->instructions,
+                        Type::getReturnType(arena.intern(implDesc.c_str())), samRet);
     }
-    sam->maxStack  = samStack > 0 ? samStack : 1;
+    // 栈峰值另须容纳返回值（如零参 SAM 调 ()J impl：参数段 0 栈位、返回 2 栈位）。
+    const Type implRetT =
+        isCtorRef ? Type::getObjectType(arena.intern(implOwner.c_str()))
+                  : Type::getReturnType(arena.intern(implDesc.c_str()));
+    const int retSlots =
+        std::max(implRetT.getSort() == Type::VOID ? 0 : slotSize(implRetT.getSort()),
+                 samRet.getSort() == Type::VOID ? 0 : slotSize(samRet.getSort()));
+    sam->maxStack  = std::max({samStack, retSlots, 1});
     sam->maxLocals = slot;
     cn->methods.push_back(sam);
 
@@ -467,31 +647,33 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     const Type implRet = Type::getReturnType(arena.intern(implDesc.c_str()));
 
     if (isStatic || isCtor) {
-        // 全部 fullArgs 直通给 impl（静态=方法形参，构造器=<init> 形参）。
+        // fullArgs 逐位可适配到 impl 形参（阶段2d：擦除引用 CHECKCAST / 拆装箱，见 canAdaptValue；
+        // 完全同型仍是快速路径）。
         if (fullArgs.size() != implArgs.size()) return false;
         for (size_t i = 0; i < fullArgs.size(); ++i) {
-            if (fullArgs[i].getDescriptor() != implArgs[i].getDescriptor()) return false;
+            if (!canAdaptValue(fullArgs[i], implArgs[i])) return false;
         }
         if (isCtor) {
             // 构造器引用：impl 必为 <init>，SAM 返回新建对象（对象类型）。
             if (toStd(implPtr->getName()) != "<init>") return false;
             if (samRet.getSort() != Type::OBJECT) return false;
         }
-        // 返回类别须一致（拒绝装箱/加宽的桥接形态，交 SSA fail-closed）。
-        else if (returnOpcode(samRet.getSort()) != returnOpcode(implRet.getSort())) {
+        // 返回值可适配（含装箱/拆箱/丢弃）；不可适配交 SSA fail-closed。
+        else if (!canAdaptReturn(implRet, samRet)) {
             return false;
         }
     }
     else {
-        // 实例方法引用：fullArgs[0] = receiver（对象/数组），其余直通给 impl。
+        // 实例方法引用：fullArgs[0] = receiver（对象/数组，可 CHECKCAST 到 owner），
+        // 其余逐位可适配到 impl 形参。
         if (fullArgs.empty()) return false;
         const int recvSort = fullArgs[0].getSort();
         if (recvSort != Type::OBJECT && recvSort != Type::ARRAY) return false;
         if (fullArgs.size() != implArgs.size() + 1) return false;
         for (size_t i = 0; i < implArgs.size(); ++i) {
-            if (fullArgs[i + 1].getDescriptor() != implArgs[i].getDescriptor()) return false;
+            if (!canAdaptValue(fullArgs[i + 1], implArgs[i])) return false;
         }
-        if (returnOpcode(samRet.getSort()) != returnOpcode(implRet.getSort())) return false;
+        if (!canAdaptReturn(implRet, samRet)) return false;
     }
 
     // impl 目标若在本 index 的用户类且非 public，提权为 public：合成类位于 mj2x/lambda/

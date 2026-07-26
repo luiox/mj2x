@@ -419,3 +419,124 @@ TEST(InvokeDynamicPreprocessorTest, LeavesUnsupportedHandleUnexpanded)
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
     EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
 }
+
+// ---- 阶段2d：装箱/桥接适配 ----
+
+// 擦除泛型 + 基本类型 impl（Function<Integer,Integer> f = M::abs 形态）：
+// sam (Object)Object、impl 静态 (I)I。SAM 体应为 CHECKCAST Integer / intValue 拆箱 /
+// INVOKESTATIC impl / Integer.valueOf 装箱 / ARETURN。
+TEST(InvokeDynamicPreprocessorTest, ExpandsErasedStaticRefWithBoxing)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(
+        Type::getMethodType(arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("M"), arena.intern("abs"),
+                                arena.intern("(I)I")));
+    bsmArgs.emplace_back(
+        Type::getMethodType(arena.intern("(Ljava/lang/Integer;)Ljava/lang/Integer;")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"),
+                                           arena.intern("()Ljava/util/function/Function;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "FnBox", "make", "()Ljava/util/function/Function;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    // 参数：CHECKCAST Integer + intValue()I 拆箱；返回：Integer.valueOf 装箱。
+    EXPECT_EQ(countInsnType(sam, AbstractInsnNode::TYPE_INSN), 1);   // CHECKCAST Integer
+    EXPECT_EQ(countMethodCall(sam, "java/lang/Integer", "intValue"), 1);
+    EXPECT_EQ(firstCallOpcode(sam, "M", "abs"), Opcodes::INVOKESTATIC);
+    EXPECT_EQ(countMethodCall(sam, "java/lang/Integer", "valueOf"), 1);
+}
+
+// 擦除 Consumer 形态（sam (Object)V、impl 返回 int）：SAM 体应 CHECKCAST String 收窄参数、
+// POP 丢弃 impl 返回值后 RETURN。
+TEST(InvokeDynamicPreprocessorTest, ExpandsErasedConsumerDroppingReturn)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/Object;)V")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("C"), arena.intern("use"),
+                                arena.intern("(Ljava/lang/String;)I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/String;)V")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("accept"),
+                                           arena.intern("()Ljava/util/function/Consumer;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "CnDrop", "make", "()Ljava/util/function/Consumer;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    EXPECT_EQ(countInsnType(sam, AbstractInsnNode::TYPE_INSN), 1);   // CHECKCAST String
+    // POP + RETURN（丢弃 int 返回值）。
+    bool sawPop = false;
+    for (auto* insn = sam->instructions.getFirst(); insn; insn = insn->nextInsn) {
+        if (insn->getOpcode() == Opcodes::POP) sawPop = true;
+    }
+    EXPECT_TRUE(sawPop);
+}
+
+// 擦除 unbound 实例引用（ToIntFunction<String> f = String::length 形态）：receiver 从
+// SAM 首参（Object）CHECKCAST 到 owner 后 INVOKEVIRTUAL。
+TEST(InvokeDynamicPreprocessorTest, ExpandsErasedInstanceRefReceiverCast)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/Object;)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("java/lang/String"),
+                                arena.intern("length"), arena.intern("()I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/String;)I")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
+                                           arena.intern("()Ljava/util/function/ToIntFunction;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "RecvCast", "make",
+                                     "()Ljava/util/function/ToIntFunction;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
+    ASSERT_NE(sam, nullptr);
+    EXPECT_EQ(countInsnType(sam, AbstractInsnNode::TYPE_INSN), 1);   // CHECKCAST String
+    EXPECT_EQ(firstCallOpcode(sam, "java/lang/String", "length"), Opcodes::INVOKEVIRTUAL);
+}
+
+// negative：基本类型互转（int 参 → long impl，需 i2l 加宽）不在适配子集内，保持 fail-closed。
+TEST(InvokeDynamicPreprocessorTest, LeavesPrimitiveWideningUnexpanded)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)V")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("W"), arena.intern("useLong"),
+                                arena.intern("(J)V")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)V")));
+
+    auto* indy = new InvokeDynamicInsnNode(arena.intern("accept"), arena.intern("()Lp/IntSink;"),
+                                           lambdaMetafactoryBsm(index), bsmArgs);
+    MethodNode* m = addMethodToIndex(index, "Wide", "make", "()Lp/IntSink;",
+                                     {indy, new InsnNode(Opcodes::ARETURN)});
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
+    EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+}
