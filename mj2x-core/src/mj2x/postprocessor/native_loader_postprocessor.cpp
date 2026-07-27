@@ -79,7 +79,7 @@ std::vector<ca::u8> buildNativeLoaderClass()
     load->visitJumpInsn(Opcodes::IFNONNULL, streamOk);
     load->visitTypeInsn(Opcodes::NEW, Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"));
     load->visitInsn(Opcodes::DUP);
-    load->visitLdcInsn(ca::core::Any(std::string("mj2x native resource not found")));
+    load->visitLdcInsn(ca::core::Any(arena.intern("mj2x native resource not found")));
     load->visitMethodInsn(Opcodes::INVOKESPECIAL,
                           Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"),
                           Utf8StringRef::from_cstr("<init>"),
@@ -88,7 +88,7 @@ std::vector<ca::u8> buildNativeLoaderClass()
     load->visitInsn(Opcodes::ATHROW);
 
     load->visitLabel(streamOk);
-    load->visitLdcInsn(ca::core::Any(std::string("mj2x-")));
+    load->visitLdcInsn(ca::core::Any(arena.intern("mj2x-")));
     load->visitVarInsn(Opcodes::ALOAD, 1);
     load->visitMethodInsn(
         Opcodes::INVOKESTATIC,
