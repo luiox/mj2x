@@ -75,7 +75,7 @@ void Pipeline::compileMethods()
 {
     if (backends_.empty()) return;
 
-    CodeConverter converter;
+    CodeConverter converter(index_->arena());
 
     for (auto& [name, cls] : index_->getClasses()) {
         if (cls.isLibrary) continue;

@@ -58,7 +58,7 @@ SSAType jvmTypeToSSA(const Type& type)
     return mirKindToSSA(jvmSortToPrimitive(type.getSort()));
 }
 
-SSAType descToSSA(const std::string& desc)
+SSAType descToSSA(const ca::str::Utf8StringRef& desc)
 {
     return mirKindToSSA(jvmDescToPrimitive(desc));
 }
@@ -90,13 +90,13 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c)
     if (std::holds_alternative<std::nullptr_t>(c->value)) {
         return fn.internNull();
     }
-    if (std::holds_alternative<std::string>(c->value)) {
+    if (std::holds_alternative<ca::str::Utf8StringRef>(c->value)) {
         // Carrying the literal content through the opaque tag lets downstream
         // String intrinsics (parseInt/literal/toString) recover it without a
         // separate IR value kind.  The "ldc_string:" prefix marks this opaque
         // as a String LDC; anything after it is the raw UTF-8 content.  Emitter
         // and dump apply their own escaping when rendering.
-        return fn.newOpaque(SSAType::REF, "ldc_string:" + std::get<std::string>(c->value));
+        return fn.newOpaque(SSAType::REF, "ldc_string:" + std::get<ca::str::Utf8StringRef>(c->value).to_std_string());
     }
     if (std::holds_alternative<jbytecode::core::Type>(c->value)) {
         // LDC Class 常量（Foo.class）：Type 的 internal name 即 JNI FindClass 需要的路径
@@ -109,9 +109,10 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c)
 
 std::string arrayDescFor(const MIRNewArray* node)
 {
-    if (!node->typeDesc.empty()) {
-        if (node->typeDesc[0] == '[') return "[" + node->typeDesc;
-        return "[L" + node->typeDesc + ";";
+    if (!node->typeDesc.is_empty()) {
+        const auto desc = node->typeDesc.to_std_string();
+        if (desc[0] == '[') return "[" + desc;
+        return "[L" + desc + ";";
     }
     return primitiveArrayDesc(node->componentType);
 }
@@ -409,6 +410,7 @@ struct LowerCtx
     const std::unordered_map<int, SSABlock*>& ssaByLabel;  // l1Label -> SSABlock*
     const std::vector<Block*>&                l1blocks;    // fallthrough 查询用
     Block*                                    lb;          // 当前 L1 块
+    ca::str::Utf8StringArena&                 arena;       ///< 派生串（如数组 desc）入池用
 };
 
 // ---- 分区 1：常量与局部（CONSTANT / LOCAL_LOAD / LOCAL_STORE / IINC） ----
@@ -1036,10 +1038,8 @@ bool lowerStaticPut(const MIRStaticPut* sp, LowerCtx& d, std::string& reason)
 
 bool lowerInvoke(const MIRInvoke* inv, LowerCtx& d, std::string& reason)
 {
-    ca::str::Utf8StringRef descRef =
-        ca::str::Utf8StringRef::from_cstr(inv->desc.c_str());
-    auto argTypes = Type::getArgumentTypes(descRef);
-    auto retType  = jvmTypeToSSA(Type::getReturnType(descRef));
+    auto argTypes = Type::getArgumentTypes(inv->desc);
+    auto retType  = jvmTypeToSSA(Type::getReturnType(inv->desc));
 
     auto instr    = std::make_unique<SSACallInstruction>();
     instr->method = SSAMethodRef{inv->owner, inv->name, inv->desc, inv->invokeOpcode};
@@ -1105,7 +1105,7 @@ bool lowerNewArray(const MIRNewArray* na, LowerCtx& d, std::string& reason)
     }
     auto instr            = std::make_unique<SSAAllocateInstruction>();
     instr->allocationKind = SSAAllocationKind::Array;
-    instr->typeDesc       = arrayDescFor(na);
+    instr->typeDesc       = d.arena.intern(ca::str::Utf8StringRef::from_string_view(arrayDescFor(na)));
     instr->args.push_back(count);
     instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::REF);
     instr->hasResult = true;
@@ -1236,7 +1236,7 @@ bool lowerInstanceOf(const MIRInstanceOf* io, LowerCtx& d, std::string& reason)
         return false;
     }
     auto instr  = std::make_unique<SSAIntrinsicInstruction>();
-    instr->name = "instanceof:" + io->typeDesc;
+    instr->name = "instanceof:" + io->typeDesc.to_std_string();
     instr->args.push_back(value);
     instr->result    = SSAInstructionResult(d.fn.ids.newValueId(), SSAType::I32);
     instr->hasResult = true;
@@ -1468,7 +1468,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
         // 翻译块内节点
         for (auto& node : lb->nodes) {
             // lowering 上下文：所有 per-kind lower 函数通过它读写 SSA 输出与栈模拟。
-            LowerCtx d{fn, sb, fs, ssaByLabel, l1blocks, lb};
+            LowerCtx d{fn, sb, fs, ssaByLabel, l1blocks, lb, *arena_};
             switch (node->kind) {
             case MIRKind::CONSTANT:
                 if (!lowerConstant(typed::cast<MIRConstant>(node.get()), d, reason)) return false;
@@ -1668,10 +1668,13 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
 std::unique_ptr<SSAFunction> SSABuilder::build(const std::vector<Block*>& blocks,
                                                const std::string&         ownerName,
                                                const std::string&         methodName,
-                                               const std::string& methodDesc, bool isStatic,
-                                               int methodMaxLocals, std::string& reason)
+                                               const std::string&         methodDesc, bool isStatic,
+                                               int                       methodMaxLocals,
+                                               ca::str::Utf8StringArena& arena,
+                                               std::string&              reason)
 {
     (void)methodMaxLocals;
+    arena_ = &arena;
     if (blocks.empty()) {
         reason = "no blocks";
         return nullptr;

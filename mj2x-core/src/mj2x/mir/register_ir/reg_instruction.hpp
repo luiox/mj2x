@@ -65,7 +65,7 @@ struct RegInstruction
     SSAComparePredicate comparePredicate = SSAComparePredicate::Eq;
     SSAConvertKind      convertKind      = SSAConvertKind::Numeric;
     SSAType             targetType       = SSAType::UNKNOWN;
-    std::string         referenceTypeDesc;
+    ca::str::Utf8StringRef referenceTypeDesc;
 
     RegOperand value;
     RegOperand lhs;
@@ -76,7 +76,7 @@ struct RegInstruction
     SSAFieldRef             field;
     SSAMethodRef            method;
     SSAAllocationKind       allocationKind = SSAAllocationKind::Object;
-    std::string             typeDesc;
+    ca::str::Utf8StringRef  typeDesc;
     std::string             intrinsicName;
     std::string             barrierReason;
     SSAType                 elementType = SSAType::UNKNOWN;

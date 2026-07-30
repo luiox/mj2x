@@ -73,7 +73,8 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
-    CodeConverter converter;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
     auto          blocks = converter.convert(*method);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
@@ -113,7 +114,8 @@ TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister)
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
-    CodeConverter converter;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
     auto          blocks = converter.convert(*method);
     auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
 
@@ -230,8 +232,9 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
     cls.methods.push_back(secondMethod);
 
     RegCBackend   backend;
-    CodeConverter firstConverter;
-    CodeConverter secondConverter;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            firstConverter(arena);
+    CodeConverter            secondConverter(arena);
     auto          firstBlocks  = firstConverter.convert(*first);
     auto          secondBlocks = secondConverter.convert(*second);
     auto          firstResult  = backend.compileMethod("CacheOwner", cls.methods[0], firstBlocks);
@@ -343,7 +346,8 @@ TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
-    CodeConverter converter;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
     auto          blocks = converter.convert(*method);
     auto          result = backend.compileMethod("Bad", cls.methods[0], blocks);
 

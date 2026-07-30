@@ -24,6 +24,8 @@
 #include "mj2x/mir/reaching_def.hpp"
 #include "mj2x/mir/ssa/ssa_function.hpp"
 
+#include <libca/str/utf8_string_arena.hpp>
+
 #include <memory>
 #include <string>
 
@@ -48,16 +50,22 @@ public:
     /// @param methodDesc JVM method descriptor.
     /// @param isStatic Whether the method has no implicit `this` parameter.
     /// @param methodMaxLocals Local slot count used to size the construction frame.
+    /// @param arena SSA 节点派生字符串（如数组描述符）入池用，调用方注入寿命
+    ///              （str-ownership-spec §6.3），必须存活到返回的 SSAFunction 消费完毕。
     /// @param reason Receives a human-readable fail-closed reason on failure.
     /// @return A fully-owned SSAFunction, or nullptr if the method is unsupported.
     std::unique_ptr<SSAFunction> build(const std::vector<Block*>& blocks,
                                        const std::string& ownerName, const std::string& methodName,
                                        const std::string& methodDesc, bool isStatic,
-                                       int methodMaxLocals, std::string& reason);
+                                       int methodMaxLocals, ca::str::Utf8StringArena& arena,
+                                       std::string& reason);
 
 private:
     /// @brief Method-level exception table carried by CodeConverter on the first block.
     std::vector<ExceptionHandler> exceptionTable(const std::vector<Block*>& blocks) const;
+
+    /// SSA 节点派生串（如数组描述符）入池用，由 build() 注入，活到返回的 SSAFunction 消费完。
+    ca::str::Utf8StringArena* arena_ = nullptr;
 
     /// @brief Stage A: build the reaching-def view consumed by computeReachingDef().
     std::vector<ReachingDefBlock> buildReachingDefView(const std::vector<Block*>& blocks);

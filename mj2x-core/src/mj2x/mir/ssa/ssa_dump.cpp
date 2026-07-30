@@ -173,7 +173,7 @@ std::string dumpSSA(const SSAFunction& fn)
                 auto* c = static_cast<SSAConvertInstruction*>(ins.get());
                 os << "convert " << valueName(c->value) << " -> " << typeName(c->targetType);
                 if (c->convertKind == SSAConvertKind::ReferenceCast &&
-                    !c->referenceTypeDesc.empty()) {
+                    !c->referenceTypeDesc.is_empty()) {
                     os << " checkcast " << c->referenceTypeDesc;
                 }
                 break;

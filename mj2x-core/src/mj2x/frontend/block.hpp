@@ -3,7 +3,6 @@
 #include "mir_node.hpp"
 
 #include <memory>
-#include <string>
 #include <vector>
 
 namespace mj2x {
@@ -17,10 +16,10 @@ namespace mj2x {
 /// An empty `catchType` represents a catch-all/finally handler.
 struct ExceptionHandler
 {
-    int         startLabel   = 0;   ///< Inclusive protected-range start label key.
-    int         endLabel     = 0;   ///< Exclusive protected-range end label key.
-    int         handlerLabel = 0;   ///< Handler entry label key.
-    std::string catchType;          ///< JVM internal class name; empty means catch-all.
+    int                    startLabel   = 0;   ///< Inclusive protected-range start label key.
+    int                    endLabel     = 0;   ///< Exclusive protected-range end label key.
+    int                    handlerLabel = 0;   ///< Handler entry label key.
+    ca::str::Utf8StringRef catchType;          ///< JVM internal class name; empty means catch-all.
 };
 
 /// @brief L1 basic block produced by CodeConverter.

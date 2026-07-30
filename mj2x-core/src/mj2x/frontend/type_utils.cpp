@@ -25,8 +25,9 @@ PrimitiveKind jvmSortToPrimitive(int sort)
     }
 }
 
-PrimitiveKind jvmDescToPrimitive(const std::string& desc)
+PrimitiveKind jvmDescToPrimitive(std::string_view desc)
 {
+    // JVM descriptor 首字节是 ASCII 类型字符，按字节读安全且 O(1)。
     if (desc.empty()) return PrimitiveKind::VOID;
     switch (desc[0]) {
     case 'Z': return PrimitiveKind::BOOLEAN;

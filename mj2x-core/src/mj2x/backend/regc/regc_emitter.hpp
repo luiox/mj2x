@@ -15,6 +15,7 @@
 #include <iosfwd>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mj2x {
@@ -44,15 +45,15 @@ struct RegCEmitResult
 class RegCCachePool
 {
 public:
-    std::string staticMethodCache(const std::string& owner, const std::string& name,
-                                  const std::string& desc);
-    std::string instanceMethodCache(const std::string& owner, const std::string& name,
-                                    const std::string& desc);
-    std::string staticFieldCache(const std::string& owner, const std::string& name,
-                                 const std::string& desc);
-    std::string instanceFieldCache(const std::string& owner, const std::string& name,
-                                   const std::string& desc);
-    std::string classCache(const std::string& desc);
+    std::string staticMethodCache(const ca::str::Utf8StringRef& owner,
+                                  const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
+    std::string instanceMethodCache(const ca::str::Utf8StringRef& owner,
+                                    const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
+    std::string staticFieldCache(const ca::str::Utf8StringRef& owner,
+                                 const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
+    std::string instanceFieldCache(const ca::str::Utf8StringRef& owner,
+                                   const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
+    std::string classCache(const ca::str::Utf8StringRef& desc);
 
     std::string renderDeclarations() const;
     bool        empty() const;

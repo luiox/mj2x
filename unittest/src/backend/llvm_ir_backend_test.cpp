@@ -52,7 +52,8 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
     compilerClass.methods.push_back(compilerMethod);
 
     LlvmIrBackend backend;
-    CodeConverter converter;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
     auto blocks = converter.convert(*method);
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
@@ -96,7 +97,8 @@ TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
     compilerClass.methods.push_back(compilerMethod);
 
     LlvmIrBackend backend;
-    CodeConverter converter;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
     auto blocks = converter.convert(*method);
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
@@ -152,8 +154,9 @@ TEST(LlvmIrBackendTest, KeepsEffectfulAndThrowingMethodsBytecode)
     compilerClass.methods.push_back(divideCompilerMethod);
 
     LlvmIrBackend backend;
-    CodeConverter objectConverter;
-    CodeConverter divideConverter;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            objectConverter(arena);
+    CodeConverter            divideConverter(arena);
     auto objectResult = backend.compileMethod(
         "Test", compilerClass.methods[0], objectConverter.convert(*objectMethod));
     auto divideResult = backend.compileMethod(

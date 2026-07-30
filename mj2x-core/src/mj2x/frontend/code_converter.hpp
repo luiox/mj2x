@@ -27,7 +27,10 @@ namespace mj2x {
 class CodeConverter
 {
 public:
-    CodeConverter();
+    /// @param arena  MIR 节点字符串字段（owner/name/desc/typeDesc 等）入池用，
+    /// 调用方注入寿命（str-ownership-spec §6.3）。必须存活到 convert() 产出的
+    /// Block 消费完毕（CompilerIndex 的 job 级 arena 满足此要求）。
+    explicit CodeConverter(ca::str::Utf8StringArena& arena);
     ~CodeConverter();
 
     /// @brief 转换一个方法的字节码为 L1 MIR blocks。

@@ -132,7 +132,7 @@ void dumpInstruction(std::ostringstream& os, const RegInstruction& ins)
         break;
     case RegInstructionKind::Convert:
         os << "convert " << operandName(ins.value) << " -> " << typeName(ins.targetType);
-        if (ins.convertKind == SSAConvertKind::ReferenceCast && !ins.referenceTypeDesc.empty()) {
+        if (ins.convertKind == SSAConvertKind::ReferenceCast && !ins.referenceTypeDesc.is_empty()) {
             os << " checkcast " << ins.referenceTypeDesc;
         }
         break;

@@ -208,8 +208,9 @@ MethodNode* findMethod(ClassNode* cn, const MethodSpec& method)
 
 std::string emitRegCForMethod(ClassNode* cn, MethodNode* method, std::string& reason)
 {
-    CodeConverter converter;
-    auto          blocks = converter.convert(*method);
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*method);
 
     SSABuilder builder;
     bool       isStatic = (method->access & Opcodes::ACC_STATIC) != 0;
@@ -219,6 +220,7 @@ std::string emitRegCForMethod(ClassNode* cn, MethodNode* method, std::string& re
                              toStr(method->desc),
                              isStatic,
                              method->maxLocals,
+                             arena,
                              reason);
     if (!ssa) return {};
 

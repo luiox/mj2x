@@ -55,9 +55,8 @@ bool hasObservableEffect(const SSAEffect& effect)
 
 PrimitiveKind returnKind(const std::string& desc)
 {
-    return jvmDescToPrimitive(Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str()))
-                                  .getDescriptor()
-                                  .to_std_string());
+    return jvmDescToPrimitive(
+        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str())).getDescriptor());
 }
 
 std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
@@ -708,13 +707,15 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
         return result;
     }
 
-    SSABuilder builder;
+    SSABuilder             builder;
+    ca::str::Utf8StringArena ssaArena;   // SSA 派生串入池，活到 ssa 消费完（本函数内同步）
     auto ssa = builder.build(blocks,
                              className,
                              method.methodNode->name.to_std_string(),
                              method.methodNode->desc.to_std_string(),
                              true,
                              method.methodNode->maxLocals,
+                             ssaArena,
                              reason);
     if (!ssa) {
         result.text = "LLVM IR lowering failed: " + reason;

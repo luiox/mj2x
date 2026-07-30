@@ -11,6 +11,8 @@
 #include "ssa_ids.hpp"
 #include "ssa_type.hpp"
 
+#include <libca/str/utf8_string.hpp>
+
 #include <cstdint>
 #include <string>
 
@@ -168,6 +170,8 @@ struct SSANullLiteral : SSAValue
 /// different from a real computed value.
 struct SSAOpaqueValue : SSAValue
 {
+    // tag 是 SSA 把 LDC 字面量/未定义局部「夹带」通过 opaque value 的派生标记
+    // （如 "ldc_string:<literal>"），非 JVM 符号节点字段，保留 std::string。
     std::string tag;   // 调试用（如 "ldc_string", "undef_local_3"）
     SSAOpaqueValue()
         : SSAValue(SSAValueKind::Opaque, SSAValueId{}, SSAType::UNKNOWN)

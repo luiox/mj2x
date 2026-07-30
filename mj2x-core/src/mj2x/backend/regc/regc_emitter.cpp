@@ -210,12 +210,12 @@ void collectCopies(std::map<uint32_t, SSAType>& regs, const std::vector<RegCopy>
     for (const auto& copy : copies) collectRegister(regs, copy.dest);
 }
 
-const char* fieldHelperSuffix(const std::string& desc, SSAType fallback)
+const char* fieldHelperSuffix(const ca::str::Utf8StringRef& desc, SSAType fallback)
 {
     // JVM narrow fields are int-like on the operand stack but require their
     // descriptor-specific JNI accessors at the native boundary.
-    if (!desc.empty()) {
-        switch (desc[0]) {
+    if (!desc.is_empty()) {
+        switch (desc.data()[0]) {
         case 'Z': return "bool";
         case 'B': return "i8";
         case 'C': return "char";
@@ -243,27 +243,31 @@ const char* arrayHelperSuffix(SSAType type)
     }
 }
 
-bool isReferenceArrayDesc(const std::string& desc)
+bool isReferenceArrayDesc(const ca::str::Utf8StringRef& desc)
 {
-    return desc.size() > 1 && desc[0] == '[' && (desc[1] == 'L' || desc[1] == '[');
+    std::string_view sv = desc;
+    return sv.size() > 1 && sv[0] == '[' && (sv[1] == 'L' || sv[1] == '[');
 }
 
-std::string arrayComponentDesc(const std::string& desc)
+std::string arrayComponentDesc(const ca::str::Utf8StringRef& desc)
 {
-    if (desc.size() <= 1) return desc;
-    std::string component = desc.substr(1);
+    std::string_view sv = desc;
+    if (sv.size() <= 1) return std::string{sv};
+    std::string component{sv.substr(1)};
     if (component.size() >= 2 && component.front() == 'L' && component.back() == ';') {
         return component.substr(1, component.size() - 2);
     }
     return component;
 }
 
-std::vector<std::string> multiArrayComponentDescs(const std::string& desc, size_t dimCount)
+std::vector<std::string> multiArrayComponentDescs(const ca::str::Utf8StringRef& desc, size_t dimCount)
 {
     std::vector<std::string> components;
-    std::string              current = desc;
-    for (size_t i = 0; i < dimCount && isReferenceArrayDesc(current); ++i) {
-        components.push_back(arrayComponentDesc(current));
+    std::string              current = desc.to_std_string();
+    for (size_t i = 0; i < dimCount && isReferenceArrayDesc(
+               ca::str::Utf8StringRef::from_string_view(current));
+         ++i) {
+        components.push_back(arrayComponentDesc(ca::str::Utf8StringRef::from_string_view(current)));
         current = current.substr(1);
     }
     return components;
@@ -1223,13 +1227,16 @@ std::string directCallArgs(const std::vector<RegOperand>&  args,
 
 bool isSelfStaticCall(const RegCFunctionEmitState& state, const RegInstruction& ins)
 {
-    return isStaticCall(ins) && state.symbol.owner == ins.method.owner &&
-           state.symbol.name == ins.method.name && state.symbol.desc == ins.method.desc;
+    return isStaticCall(ins) &&
+           ca::str::Utf8StringRef::from_string_view(state.symbol.owner) == ins.method.owner &&
+           ca::str::Utf8StringRef::from_string_view(state.symbol.name) == ins.method.name &&
+           ca::str::Utf8StringRef::from_string_view(state.symbol.desc) == ins.method.desc;
 }
 
-std::string cacheKey(const std::string& first, const std::string& second, const std::string& third)
+std::string cacheKey(const ca::str::Utf8StringRef& first, const ca::str::Utf8StringRef& second,
+                     const ca::str::Utf8StringRef& third)
 {
-    return first + "\n" + second + "\n" + third;
+    return first.to_std_string() + "\n" + second.to_std_string() + "\n" + third.to_std_string();
 }
 
 std::string addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
@@ -1287,13 +1294,14 @@ std::string addInstanceFieldCache(RegCFunctionEmitState& state, const RegInstruc
     return state.cachePool->instanceFieldCache(ins.field.owner, ins.field.name, ins.field.desc);
 }
 
-std::string addClassCache(RegCFunctionEmitState& state, const std::string& desc)
+std::string addClassCache(RegCFunctionEmitState& state, const ca::str::Utf8StringRef& desc)
 {
     if (state.cachePool != nullptr) {
         return state.cachePool->classCache(desc);
     }
 
-    auto it = state.classCacheNames.find(desc);
+    const std::string descKey = desc.to_std_string();
+    auto              it      = state.classCacheNames.find(descKey);
     if (it != state.classCacheNames.end()) return it->second;
 
     const std::string cacheName = "_mj2x_regc_class_cache_" + state.functionName + "_" +
@@ -1302,7 +1310,7 @@ std::string addClassCache(RegCFunctionEmitState& state, const std::string& desc)
     decl << "static mj2x_regc_class_cache " << cacheName << " = {" << cStringLiteral(desc)
          << ", NULL};\n";
     state.classCacheDeclarations.push_back(decl.str());
-    state.classCacheNames.emplace(desc, cacheName);
+    state.classCacheNames.emplace(descKey, cacheName);
     return cacheName;
 }
 
@@ -1860,8 +1868,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
             std::string expression;
             const bool  materialized = emitMaterializedStringBuilder(out, state, arg, expression);
             if (!materialized && nativeObjectFor(state, arg) != nullptr) {
-                reason = "native object escaped through generic call " + ins.method.owner + "." +
-                         ins.method.name;
+                reason = "native object escaped through generic call " +
+                         ins.method.owner.to_std_string() + "." + ins.method.name.to_std_string();
                 return false;
             }
             hasMaterializedArgument = hasMaterializedArgument || materialized;
@@ -1962,8 +1970,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
             const RegOperand length =
                 ins.args.empty() ? RegOperand::fromInt(0, SSAType::I32) : ins.args[0];
             if (state.cachePool != nullptr && isReferenceArrayDesc(ins.typeDesc)) {
-                const std::string cacheName =
-                    addClassCache(state, arrayComponentDesc(ins.typeDesc));
+                const std::string cacheName = addClassCache(
+                    state, ca::str::Utf8StringRef::from_string_view(arrayComponentDesc(ins.typeDesc)));
                 out << "    " << regName(ins.dest.id) << " = _mj2x_regc_alloc_ref_array_cached(&"
                     << cacheName << ", " << operandExpr(length) << ");\n";
             }
@@ -1986,7 +1994,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                     << "] = {";
                 for (size_t i = 0; i < componentDescs.size(); ++i) {
                     if (i != 0) out << ", ";
-                    const std::string cacheName = addClassCache(state, componentDescs[i]);
+                    const std::string cacheName =
+                        addClassCache(state, ca::str::Utf8StringRef::from_string_view(componentDescs[i]));
                     out << "&" << cacheName;
                 }
                 out << "};\n";
@@ -2018,7 +2027,8 @@ bool emitInstruction(std::ostringstream& out, const RegInstruction& ins,
                                           "instanceof",
                                           reason))
                 return false;
-            const std::string cacheName = addClassCache(state, ins.intrinsicName.substr(11));
+            const std::string cacheName =
+                addClassCache(state, ca::str::Utf8StringRef::from_string_view(ins.intrinsicName.substr(11)));
             out << "    " << regName(ins.dest.id) << " = _mj2x_regc_instanceof_cached("
                 << (ins.args.empty() ? "NULL" : operandExpr(ins.args[0])) << ", &" << cacheName
                 << ");\n";
@@ -2184,16 +2194,17 @@ bool emitTerminator(std::ostringstream& out, const RegTerminator& terminator,
 
 namespace {
 
-std::string poolCacheKey(const std::string& first, const std::string& second,
-                         const std::string& third)
+std::string poolCacheKey(const ca::str::Utf8StringRef& first, const ca::str::Utf8StringRef& second,
+                         const ca::str::Utf8StringRef& third)
 {
-    return first + "\n" + second + "\n" + third;
+    return first.to_std_string() + "\n" + second.to_std_string() + "\n" + third.to_std_string();
 }
 
 }   // namespace
 
-std::string RegCCachePool::staticMethodCache(const std::string& owner, const std::string& name,
-                                             const std::string& desc)
+std::string RegCCachePool::staticMethodCache(const ca::str::Utf8StringRef& owner,
+                                             const ca::str::Utf8StringRef& name,
+                                             const ca::str::Utf8StringRef& desc)
 {
     const std::string key = poolCacheKey(owner, name, desc);
     auto              it  = staticMethodCacheNames_.find(key);
@@ -2210,8 +2221,9 @@ std::string RegCCachePool::staticMethodCache(const std::string& owner, const std
     return cacheName;
 }
 
-std::string RegCCachePool::instanceMethodCache(const std::string& owner, const std::string& name,
-                                               const std::string& desc)
+std::string RegCCachePool::instanceMethodCache(const ca::str::Utf8StringRef& owner,
+                                               const ca::str::Utf8StringRef& name,
+                                               const ca::str::Utf8StringRef& desc)
 {
     const std::string key = poolCacheKey(owner, name, desc);
     auto              it  = instanceMethodCacheNames_.find(key);
@@ -2228,8 +2240,9 @@ std::string RegCCachePool::instanceMethodCache(const std::string& owner, const s
     return cacheName;
 }
 
-std::string RegCCachePool::staticFieldCache(const std::string& owner, const std::string& name,
-                                            const std::string& desc)
+std::string RegCCachePool::staticFieldCache(const ca::str::Utf8StringRef& owner,
+                                            const ca::str::Utf8StringRef& name,
+                                            const ca::str::Utf8StringRef& desc)
 {
     const std::string key = poolCacheKey(owner, name, desc);
     auto              it  = staticFieldCacheNames_.find(key);
@@ -2246,8 +2259,9 @@ std::string RegCCachePool::staticFieldCache(const std::string& owner, const std:
     return cacheName;
 }
 
-std::string RegCCachePool::instanceFieldCache(const std::string& owner, const std::string& name,
-                                              const std::string& desc)
+std::string RegCCachePool::instanceFieldCache(const ca::str::Utf8StringRef& owner,
+                                              const ca::str::Utf8StringRef& name,
+                                              const ca::str::Utf8StringRef& desc)
 {
     const std::string key = poolCacheKey(owner, name, desc);
     auto              it  = instanceFieldCacheNames_.find(key);
@@ -2264,9 +2278,9 @@ std::string RegCCachePool::instanceFieldCache(const std::string& owner, const st
     return cacheName;
 }
 
-std::string RegCCachePool::classCache(const std::string& desc)
+std::string RegCCachePool::classCache(const ca::str::Utf8StringRef& desc)
 {
-    auto it = classCacheNames_.find(desc);
+    auto       it  = classCacheNames_.find(desc.to_std_string());
     if (it != classCacheNames_.end()) return it->second;
 
     const std::string cacheName = "_mj2x_regc_class_cache_tu_" + std::to_string(classCacheIndex_++);
@@ -2274,7 +2288,7 @@ std::string RegCCachePool::classCache(const std::string& desc)
     decl << "static mj2x_regc_class_cache " << cacheName << " = {" << codegen::cStringLiteral(desc)
          << ", NULL};\n";
     declarations_.push_back(decl.str());
-    classCacheNames_.emplace(desc, cacheName);
+    classCacheNames_.emplace(desc.to_std_string(), cacheName);
     return cacheName;
 }
 

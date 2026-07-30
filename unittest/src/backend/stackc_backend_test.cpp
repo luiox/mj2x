@@ -72,7 +72,8 @@ TEST(StackCBackendTest, SimpleReturn)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -96,7 +97,8 @@ TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -119,7 +121,8 @@ TEST(StackCBackendTest, AddMethod)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -155,7 +158,8 @@ TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -184,7 +188,8 @@ TEST(StackCBackendTest, BooleanInvokeResultUsesFullStackSlot)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -210,7 +215,8 @@ TEST(StackCBackendTest, CastEmission)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -236,7 +242,8 @@ TEST(StackCBackendTest, LongShiftAndCompareEmission)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -261,7 +268,8 @@ TEST(StackCBackendTest, FloatRemainderEmission)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -294,7 +302,8 @@ TEST(StackCBackendTest, TypedWideStackOpsEmitConcreteShuffle)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -323,7 +332,8 @@ TEST(StackCBackendTest, FieldAccess)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -353,7 +363,8 @@ TEST(StackCBackendTest, InvokeMethod)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -385,7 +396,8 @@ TEST(StackCBackendTest, StaticInvokeReturnUsesArgumentBaseSlot)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -414,7 +426,8 @@ TEST(StackCBackendTest, InvokeSpecialLooksUpDeclaringClass)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -442,7 +455,8 @@ TEST(StackCBackendTest, StringConstantEmission)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -492,7 +506,8 @@ TEST(StackCBackendTest, PrimitiveArrayEmission)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -522,7 +537,8 @@ TEST(StackCBackendTest, ByteArrayOpsDisambiguateBooleanArrays)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -552,7 +568,8 @@ TEST(StackCBackendTest, CheckCastEmission)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -590,7 +607,8 @@ TEST(StackCBackendTest, ClassLookupsUseOwnerClassLoaderHelper)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("pkg/Owner", cm, blocks);
 
@@ -623,7 +641,8 @@ TEST(StackCBackendTest, InjectMakesMethodNative)
 
     auto cls = makeCompilerClass("Test");
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -646,7 +665,8 @@ TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall)
     cls.classNode->methods.push_back(mn.get());
     mn.release();
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
@@ -695,7 +715,8 @@ TEST(StackCBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge)
     cls.classNode->methods.push_back(mn.get());
     mn.release();
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
@@ -744,7 +765,8 @@ TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy)
     mn.release();
     clinit.release();
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
@@ -807,7 +829,8 @@ TEST(StackCBackendTest, InterfaceDefaultMethodUsesHiddenProxy)
     cls.classNode->methods.push_back(mn.get());
     mn.release();
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Op", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
@@ -866,7 +889,8 @@ TEST(StackCBackendTest, BranchAndComparison)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -901,8 +925,9 @@ TEST(StackCBackendTest, CrossInstanceBranchOutputIsDeterministic)
         cm.methodNode       = mn.get();
         cm.markedForCompile = true;
 
-        CodeConverter  cc;
-        StackCBackend  backend;
+        ca::str::Utf8StringArena arena;
+        CodeConverter            cc(arena);
+        StackCBackend            backend;
         auto           blocks = cc.convert(*mn);
         auto           result = backend.compileMethod("Test", cm, blocks);
         *outText              = std::move(result.text);
@@ -942,7 +967,8 @@ TEST(StackCBackendTest, BranchZeroObjectUsesReferenceAccessor)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -971,7 +997,8 @@ TEST(StackCBackendTest, NewObject)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -993,7 +1020,8 @@ TEST(StackCBackendTest, IincInstruction)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
@@ -1011,7 +1039,8 @@ TEST(StackCBackendTest, StaticNativeFunctionAndOnLoadRegistration)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
 
@@ -1045,7 +1074,8 @@ TEST(StackCBackendTest, RegisterNativesKeepsObjectParameterDescriptor)
     cm.methodNode       = mn.get();
     cm.markedForCompile = true;
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     (void)backend.compileMethod("Test", cm, blocks);
 

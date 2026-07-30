@@ -150,17 +150,15 @@ static bool isCategory2Kind(PrimitiveKind kind)
     return kind == PrimitiveKind::LONG || kind == PrimitiveKind::DOUBLE;
 }
 
-static PrimitiveKind methodReturnPrimitive(const std::string& desc)
+static PrimitiveKind methodReturnPrimitive(const ca::str::Utf8StringRef& desc)
 {
-    return jvmDescToPrimitive(Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str()))
-                                  .getDescriptor()
-                                  .to_std_string());
+    return jvmDescToPrimitive(Type::getReturnType(desc).getDescriptor());
 }
 
-static std::vector<PrimitiveKind> methodArgumentPrimitives(const std::string& desc)
+static std::vector<PrimitiveKind> methodArgumentPrimitives(const ca::str::Utf8StringRef& desc)
 {
     std::vector<PrimitiveKind> result;
-    auto args = Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(desc.c_str()));
+    auto                       args = Type::getArgumentTypes(desc);
     result.reserve(args.size());
     for (const auto& arg : args) result.push_back(jvmSortToPrimitive(arg.getSort()));
     return result;
@@ -168,6 +166,7 @@ static std::vector<PrimitiveKind> methodArgumentPrimitives(const std::string& de
 
 struct CodeConverter::Impl
 {
+    ca::str::Utf8StringArena*                        arena = nullptr;   ///< MIR 字符串字段入池用，借用
     std::unordered_map<int, std::unique_ptr<Block>> blocks;
     std::vector<Block*>                             blockOrder;
     Block*                                          currentBlock = nullptr;
@@ -228,9 +227,11 @@ struct CodeConverter::Impl
     void resetStack(const std::vector<PrimitiveKind>& stackTypes) { operandStack = stackTypes; }
 };
 
-CodeConverter::CodeConverter()
+CodeConverter::CodeConverter(ca::str::Utf8StringArena& arena)
     : impl_(std::make_unique<Impl>())
-{}
+{
+    impl_->arena = &arena;
+}
 
 CodeConverter::~CodeConverter() = default;
 
@@ -286,7 +287,7 @@ void CodeConverter::analyzeControlFlow(MethodNode& mn)
         h.startLabel   = labelKey(tcb->start);
         h.endLabel     = labelKey(tcb->end);
         h.handlerLabel = labelKey(tcb->handler);
-        h.catchType    = tcb->type.to_std_string();
+        h.catchType    = impl_->arena->intern(tcb->type);
         impl_->handlers.push_back(h);
     }
 
@@ -717,8 +718,8 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
             // an explicit unsupported node so backends fail closed instead of
             // silently dropping the instruction as metadata.
             auto node  = std::make_unique<MIRInvokeDynamic>();
-            node->name = "ret";
-            node->desc = "()V";
+            node->name = impl_->arena->intern("ret");
+            node->desc = impl_->arena->intern("()V");
             cur->nodes.push_back(std::move(node));
         }
         break;
@@ -731,7 +732,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::NEW:
         {
             auto node      = std::make_unique<MIRNewObject>();
-            node->typeDesc = ti->desc.to_std_string();
+            node->typeDesc = impl_->arena->intern(ti->desc);
             cur->nodes.push_back(std::move(node));
             impl_->push(PrimitiveKind::OBJECT);
             break;
@@ -739,7 +740,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::ANEWARRAY:
         {
             auto node           = std::make_unique<MIRNewArray>();
-            node->typeDesc      = ti->desc.to_std_string();
+            node->typeDesc      = impl_->arena->intern(ti->desc);
             node->componentType = PrimitiveKind::OBJECT;
             cur->nodes.push_back(std::move(node));
             impl_->pop();
@@ -749,7 +750,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::CHECKCAST:
         {
             auto node      = std::make_unique<MIRCheckCast>();
-            node->typeDesc = ti->desc.to_std_string();
+            node->typeDesc = impl_->arena->intern(ti->desc);
             cur->nodes.push_back(std::move(node));
             impl_->pop();
             impl_->push(PrimitiveKind::OBJECT);
@@ -758,7 +759,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::INSTANCEOF:
         {
             auto node      = std::make_unique<MIRInstanceOf>();
-            node->typeDesc = ti->desc.to_std_string();
+            node->typeDesc = impl_->arena->intern(ti->desc);
             cur->nodes.push_back(std::move(node));
             impl_->pop();
             impl_->push(PrimitiveKind::INT);
@@ -776,9 +777,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::GETSTATIC:
         {
             auto node   = std::make_unique<MIRStaticGet>();
-            node->owner = fi->owner.to_std_string();
-            node->name  = fi->name.to_std_string();
-            node->desc  = fi->desc.to_std_string();
+            node->owner = impl_->arena->intern(fi->owner);
+            node->name  = impl_->arena->intern(fi->name);
+            node->desc  = impl_->arena->intern(fi->desc);
             impl_->push(jvmDescToPrimitive(node->desc));
             cur->nodes.push_back(std::move(node));
             break;
@@ -786,9 +787,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::PUTSTATIC:
         {
             auto node   = std::make_unique<MIRStaticPut>();
-            node->owner = fi->owner.to_std_string();
-            node->name  = fi->name.to_std_string();
-            node->desc  = fi->desc.to_std_string();
+            node->owner = impl_->arena->intern(fi->owner);
+            node->name  = impl_->arena->intern(fi->name);
+            node->desc  = impl_->arena->intern(fi->desc);
             impl_->pop();
             cur->nodes.push_back(std::move(node));
             break;
@@ -796,9 +797,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::GETFIELD:
         {
             auto node   = std::make_unique<MIRFieldGet>();
-            node->owner = fi->owner.to_std_string();
-            node->name  = fi->name.to_std_string();
-            node->desc  = fi->desc.to_std_string();
+            node->owner = impl_->arena->intern(fi->owner);
+            node->name  = impl_->arena->intern(fi->name);
+            node->desc  = impl_->arena->intern(fi->desc);
             impl_->pop();
             impl_->push(jvmDescToPrimitive(node->desc));
             cur->nodes.push_back(std::move(node));
@@ -807,9 +808,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         case Opcodes::PUTFIELD:
         {
             auto node   = std::make_unique<MIRFieldPut>();
-            node->owner = fi->owner.to_std_string();
-            node->name  = fi->name.to_std_string();
-            node->desc  = fi->desc.to_std_string();
+            node->owner = impl_->arena->intern(fi->owner);
+            node->name  = impl_->arena->intern(fi->name);
+            node->desc  = impl_->arena->intern(fi->desc);
             impl_->pop();
             impl_->pop();
             cur->nodes.push_back(std::move(node));
@@ -824,9 +825,9 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
     {
         auto* mi           = typed::cast<MethodInsnNode>(insn);
         auto  node         = std::make_unique<MIRInvoke>();
-        node->owner        = mi->owner.to_std_string();
-        node->name         = mi->name.to_std_string();
-        node->desc         = mi->desc.to_std_string();
+        node->owner        = impl_->arena->intern(mi->owner);
+        node->name         = impl_->arena->intern(mi->name);
+        node->desc         = impl_->arena->intern(mi->desc);
         node->isInterface  = mi->isInterface;
         node->invokeOpcode = mi->opcode;
         auto args          = methodArgumentPrimitives(node->desc);
@@ -841,8 +842,8 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
     {
         auto* id      = typed::cast<InvokeDynamicInsnNode>(insn);
         auto  node    = std::make_unique<MIRInvokeDynamic>();
-        node->name    = id->name.to_std_string();
-        node->desc    = id->desc.to_std_string();
+        node->name    = impl_->arena->intern(id->name);
+        node->desc    = impl_->arena->intern(id->desc);
         node->bsm     = id->bsm;
         node->bsmArgs = id->bsmArgs;
         auto args     = methodArgumentPrimitives(node->desc);
@@ -896,8 +897,8 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
             // JSR/JSR_W subroutines are unsupported for the MVP.  Route them
             // through the same explicit fail-closed boundary as invokedynamic.
             auto node  = std::make_unique<MIRInvokeDynamic>();
-            node->name = "jsr";
-            node->desc = "()V";
+            node->name = impl_->arena->intern("jsr");
+            node->desc = impl_->arena->intern("()V");
             cur->nodes.push_back(std::move(node));
         }
         break;
@@ -930,11 +931,11 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         }
         else if (auto* p = ld->cst.template as<std::string>()) {
             node->type  = PrimitiveKind::OBJECT;
-            node->value = *p;
+            node->value = impl_->arena->intern(ca::str::Utf8StringRef::from_string_view(*p));
         }
         else if (auto* p = ld->cst.template as<ca::str::Utf8StringRef>()) {
             node->type  = PrimitiveKind::OBJECT;
-            node->value = p->to_std_string();
+            node->value = impl_->arena->intern(*p);
         }
         else if (auto* p = ld->cst.template as<Type>()) {
             node->type  = PrimitiveKind::OBJECT;
@@ -993,7 +994,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         // multi-array runtime helper instead of expanding nested loops here.
         auto* ma       = typed::cast<MultiANewArrayInsnNode>(insn);
         auto  node     = std::make_unique<MIRMultiNewArray>();
-        node->typeDesc = ma->desc.to_std_string();
+        node->typeDesc = impl_->arena->intern(ma->desc);
         node->dims     = ma->dims;
         cur->nodes.push_back(std::move(node));
         for (int i = 0; i < ma->dims; ++i) impl_->pop();

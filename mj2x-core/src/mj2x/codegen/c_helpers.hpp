@@ -26,7 +26,7 @@ namespace mj2x::codegen {
 ///          reads a backslash escape as octal, so the digits must already be
 ///          octal, not decimal).  Matches the exact escaping StackC has
 ///          always used; RegC now shares it.
-inline std::string cStringLiteral(const std::string& text)
+inline std::string cStringLiteral(std::string_view text)
 {
     std::ostringstream os;
     os << '"';

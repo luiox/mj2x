@@ -364,9 +364,7 @@ static int returnOpcodeForKind(PrimitiveKind kind)
 static PrimitiveKind methodReturnKind(const std::string& methodDesc)
 {
     return jvmDescToPrimitive(
-        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(methodDesc.c_str()))
-            .getDescriptor()
-            .to_std_string());
+        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(methodDesc.c_str())).getDescriptor());
 }
 
 static std::string prependReceiverToMethodDesc(const std::string& ownerClassName,
@@ -755,7 +753,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     // JNI function signature
     bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
     auto retType =
-        jvmDescToPrimitive(Type::getReturnType(mn->desc).getDescriptor().to_std_string());
+        jvmDescToPrimitive(Type::getReturnType(mn->desc).getDescriptor());
 
     std::string methodName = mn->name.to_std_string();
     std::string methodDesc = mn->desc.to_std_string();
@@ -1231,8 +1229,10 @@ void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, Compil
         CompilerMethod hiddenMethod;
         hiddenMethod.methodNode       = clinit;
         hiddenMethod.markedForCompile = true;
-        CodeConverter converter;
-        auto          blocks = converter.convert(*clinit);
+        // blocks 在下方 compileMethod 同步消费完即弃，局部 arena 活过消费期即可（spec §6.4）。
+        ca::str::Utf8StringArena converterArena;
+        CodeConverter            converter(converterArena);
+        auto                     blocks = converter.convert(*clinit);
         (void)backend.compileMethod(className, hiddenMethod, blocks);
         auto regsIt = registrationsByClass.find(className);
         if (regsIt != registrationsByClass.end()) {
@@ -1985,8 +1985,8 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, std::ostringstre
                                        {{"acc", acc}, {"value", value.str()}});
         }
     }
-    else if (std::holds_alternative<std::string>(node->value)) {
-        const auto offset = stringPoolOffsetFor(std::get<std::string>(node->value));
+    else if (std::holds_alternative<ca::str::Utf8StringRef>(node->value)) {
+        const auto offset = stringPoolOffsetFor(std::get<ca::str::Utf8StringRef>(node->value).to_std_string());
         out << "    stack[++sp].l = "
             << trackLocalRefExpr("(*env)->NewStringUTF(env, (const char*)(_mj2x_string_pool + " +
                                  std::to_string(offset) + "))")
@@ -2444,7 +2444,7 @@ void StackCBackend::Impl::emitNewObject(const MIRNewObject* node, std::ostringst
     // 避免 emitNewObject 推断构造器签名（MIRNewObject 不带 ctor desc）。
     out << "    {\n";
     out << "        jclass lc = (jclass)"
-        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->typeDesc + "\")")
+        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->typeDesc.to_std_string() + "\")")
         << ";\n";
     out << "        stack[++sp].l = " << trackLocalRefExpr("(*env)->AllocObject(env, lc)") << ";\n";
     out << "    }\n";
@@ -2454,12 +2454,12 @@ void StackCBackend::Impl::emitNewArray(const MIRNewArray* node, std::ostringstre
 {
     if (node->componentType == PrimitiveKind::OBJECT) {
         out << "    stack[sp].l = (*env)->NewObjectArray(env, stack[sp].i, ";
-        if (node->typeDesc.empty())
+        if (node->typeDesc.is_empty())
             out << "(jclass)"
                 << trackLocalRefExpr(
                        "_mj2x_find_class(env, _mj2x_owner_class, \"java/lang/Object\")");
         else
-            out << classExprForDescriptor(node->typeDesc);
+            out << classExprForDescriptor(node->typeDesc.to_std_string());
         out << ", NULL);\n";
         out << "    _mj2x_track_local_ref(env, _mj2x_refs, &_mj2x_ref_count, stack[sp].l);\n";
     }
@@ -2480,7 +2480,7 @@ void StackCBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, std::o
         out << "        dims[" << i << "] = stack[sp--].i;\n";
     }
     out << "        stack[++sp].l = "
-        << trackLocalRefExpr("_mj2x_new_multi_array(env, _mj2x_owner_class, \"" + node->typeDesc +
+        << trackLocalRefExpr("_mj2x_new_multi_array(env, _mj2x_owner_class, \"" + node->typeDesc.to_std_string() +
                              "\", dims, " + std::to_string(node->dims) + ")")
         << ";\n";
     out << "    }\n";
@@ -2570,14 +2570,17 @@ void StackCBackend::Impl::emitArrayStore(const MIRArrayStore* node, std::ostring
 void StackCBackend::Impl::emitFieldGet(const MIRFieldGet* node, std::ostringstream& out)
 {
     auto        pk      = jvmDescToPrimitive(node->desc);
-    const char* suffix  = primitiveToJNISuffix(pk);
-    const char* acc     = stackValueAccessor(pk);
-    const auto fidCache = cacheIdentifier("fid", node->owner + "." + node->name + ":" + node->desc);
+    const char*    suffix = primitiveToJNISuffix(pk);
+    const char*    acc    = stackValueAccessor(pk);
+    const std::string owner = node->owner.to_std_string();
+    const std::string name  = node->name.to_std_string();
+    const std::string desc  = node->desc.to_std_string();
+    const auto fidCache = cacheIdentifier("fid", owner + "." + name + ":" + desc);
     out << "    {\n";
     out << "        jclass lc = (jclass)"
-        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")")
+        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")
         << ";\n";
-    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, false, out);
+    emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, false, out);
     emitNullPointerTrap("stack[sp].l", out);
     out << "        stack[sp]" << acc << " = ("
         << (narrowOnOperandStack(pk) ? "jint" : primitiveToJNIType(pk)) << ")(*env)->Get" << suffix
@@ -2590,12 +2593,15 @@ void StackCBackend::Impl::emitFieldPut(const MIRFieldPut* node, std::ostringstre
     auto        pk      = jvmDescToPrimitive(node->desc);
     const char* suffix  = primitiveToJNISuffix(pk);
     const char* acc     = stackValueAccessor(pk);
-    const auto fidCache = cacheIdentifier("fid", node->owner + "." + node->name + ":" + node->desc);
+    const std::string owner = node->owner.to_std_string();
+    const std::string name  = node->name.to_std_string();
+    const std::string desc  = node->desc.to_std_string();
+    const auto fidCache = cacheIdentifier("fid", owner + "." + name + ":" + desc);
     out << "    {\n";
     out << "        jclass lc = (jclass)"
-        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")")
+        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")
         << ";\n";
-    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, false, out);
+    emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, false, out);
     emitNullPointerTrap("stack[sp - 1].l", out);
     out << "        (*env)->Set" << suffix << "Field(env, stack[sp - 1].l, fid_local, ("
         << primitiveToJNIType(pk) << ")stack[sp]" << acc << ");\n";
@@ -2608,13 +2614,16 @@ void StackCBackend::Impl::emitStaticGet(const MIRStaticGet* node, std::ostringst
     auto        pk     = jvmDescToPrimitive(node->desc);
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc    = stackValueAccessor(pk);
+    const std::string owner = node->owner.to_std_string();
+    const std::string name  = node->name.to_std_string();
+    const std::string desc  = node->desc.to_std_string();
     const auto  fidCache =
-        cacheIdentifier("sfid", node->owner + "." + node->name + ":" + node->desc);
+        cacheIdentifier("sfid", owner + "." + name + ":" + desc);
     out << "    {\n";
     out << "        jclass lc = (jclass)"
-        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")")
+        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")
         << ";\n";
-    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, true, out);
+    emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, true, out);
     out << "        stack[++sp]" << acc << " = ("
         << (narrowOnOperandStack(pk) ? "jint" : primitiveToJNIType(pk)) << ")(*env)->GetStatic"
         << suffix << "Field(env, lc, fid_local);\n";
@@ -2626,13 +2635,16 @@ void StackCBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringst
     auto        pk     = jvmDescToPrimitive(node->desc);
     const char* suffix = primitiveToJNISuffix(pk);
     const char* acc    = stackValueAccessor(pk);
+    const std::string owner = node->owner.to_std_string();
+    const std::string name  = node->name.to_std_string();
+    const std::string desc  = node->desc.to_std_string();
     const auto  fidCache =
-        cacheIdentifier("sfid", node->owner + "." + node->name + ":" + node->desc);
+        cacheIdentifier("sfid", owner + "." + name + ":" + desc);
     out << "    {\n";
     out << "        jclass lc = (jclass)"
-        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner + "\")")
+        << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")
         << ";\n";
-    emitFieldIdCache(fidCache, "fid_local", "lc", node->name, node->desc, true, out);
+    emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, true, out);
     out << "        (*env)->SetStatic" << suffix << "Field(env, lc, fid_local, ("
         << primitiveToJNIType(pk) << ")stack[sp]" << acc << ");\n";
     out << "    }\n";
@@ -2641,8 +2653,11 @@ void StackCBackend::Impl::emitStaticPut(const MIRStaticPut* node, std::ostringst
 
 void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& out)
 {
-    ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(node->desc.c_str());
-    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor().to_std_string());
+    const ca::str::Utf8StringRef descRef = node->desc;
+    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor());
+    const std::string owner = node->owner.to_std_string();
+    const std::string name  = node->name.to_std_string();
+    const std::string desc  = node->desc.to_std_string();
 
     // 调用类别：INVOKESTATIC → CallStatic*；INVOKESPECIAL → CallNonvirtual*
     //   （含构造器 <init>：CallNonvirtualVoidMethod 作用于 AllocObject 出的对象）；
@@ -2667,17 +2682,17 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& 
     std::string recvExpr    = "sp - " + std::to_string(argCount);
     int         resultIndex = isStatic ? (argCount == 0 ? -1 : argCount - 1) : argCount;
     const auto  methodCache = cacheIdentifier(isStatic ? "smid" : "mid",
-                                             node->owner + "." + node->name + ":" + node->desc +
+                                             owner + "." + name + ":" + desc +
                                                  ":" + std::to_string(node->invokeOpcode));
 
     // 整段放 block 内：先查 jclass/jmethodID，再调用。返回值写入接收者槽（非 void）。
     out << "    {\n";
     if (isStatic) {
         out << "        jclass lc = (jclass)"
-            << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner +
+            << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner +
                                  "\")")
             << ";\n";
-        emitMethodIdCache(methodCache, "mid_local", "lc", node->name, node->desc, true, out);
+        emitMethodIdCache(methodCache, "mid_local", "lc", name, desc, true, out);
         out << "        ";
         if (retType != PrimitiveKind::VOID) {
             if (argCount == 0)
@@ -2689,10 +2704,10 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& 
     }
     else {
         out << "        jclass lc = (jclass)"
-            << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + node->owner +
+            << trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner +
                                  "\")")
             << ";\n";
-        emitMethodIdCache(methodCache, "mid_local", "lc", node->name, node->desc, false, out);
+        emitMethodIdCache(methodCache, "mid_local", "lc", name, desc, false, out);
         emitNullPointerTrap("stack[" + recvExpr + "].l", out);
         out << "        ";
         if (retType != PrimitiveKind::VOID)
@@ -2731,9 +2746,9 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, std::ostringstream& 
 
 void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::ostringstream& out)
 {
-    ca::str::Utf8StringRef descRef  = ca::str::Utf8StringRef::from_cstr(node->desc.c_str());
-    auto                   argTypes = Type::getArgumentTypes(descRef);
-    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor().to_std_string());
+    const ca::str::Utf8StringRef descRef  = node->desc;
+    auto                         argTypes = Type::getArgumentTypes(descRef);
+    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor());
     const int argCount = static_cast<int>(argTypes.size());
 
     auto emitExceptionCheck = [&]() {
@@ -3039,8 +3054,8 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
     out << "            else _mj2x_indy_lookup = _mj2x_indy_private_lookup;\n";
     out << "        }\n";
 
-    emitStringObject("_mj2x_indy_name", node->name);
-    emitMethodType("_mj2x_indy_type", node->desc);
+    emitStringObject("_mj2x_indy_name", node->name.to_std_string());
+    emitMethodType("_mj2x_indy_type", node->desc.to_std_string());
 
     if (!node->bsm.has_value()) {
         emitUnsupported("invokedynamic without bootstrap metadata", out);
@@ -3054,7 +3069,8 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
     const auto        indyTargetCache =
         cacheIdentifier("indy_target",
                         currentClassName + "." + currentMethodName + currentMethodDesc + ":" +
-                            node->name + ":" + node->desc + ":" + bsmOwner + "." + bsmName + ":" +
+                            node->name.to_std_string() + ":" + node->desc.to_std_string() + ":" +
+                            bsmOwner + "." + bsmName + ":" +
                             bsmDesc + ":" + std::to_string(node->bsmArgs.size()));
 
     out << "        static jobject " << indyTargetCache << " = NULL;\n";
@@ -3210,7 +3226,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, std::o
 void StackCBackend::Impl::emitCheckCast(const MIRCheckCast* node, std::ostringstream& out)
 {
     out << "    if (stack[sp].l != NULL && !(*env)->IsInstanceOf(env, stack[sp].l, "
-        << classExprForDescriptor(node->typeDesc) << ")) {\n";
+        << classExprForDescriptor(node->typeDesc.to_std_string()) << ")) {\n";
     out << "        jclass ex_class = (jclass)"
         << trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/ClassCastException\")") << ";\n";
     out << "        (*env)->ThrowNew(env, ex_class, \"" << node->typeDesc << "\");\n";
@@ -3236,7 +3252,7 @@ void StackCBackend::Impl::emitUnsupported(const char* what, std::ostringstream& 
 void StackCBackend::Impl::emitInstanceOf(const MIRInstanceOf* node, std::ostringstream& out)
 {
     out << "    stack[sp].i = (*env)->IsInstanceOf(env, stack[sp].l, "
-        << classExprForDescriptor(node->typeDesc) << ");\n";
+        << classExprForDescriptor(node->typeDesc.to_std_string()) << ");\n";
 }
 
 void StackCBackend::Impl::emitMonitor(const MIRMonitor* node, std::ostringstream& out)

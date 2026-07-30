@@ -15,6 +15,8 @@
 #include "ssa_type.hpp"
 #include "ssa_value.hpp"
 
+#include <libca/str/utf8_string.hpp>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -143,10 +145,10 @@ struct SSACompareInstruction : SSAInstruction
 /// class check instead of seeing only a generic REF result.
 struct SSAConvertInstruction : SSAInstruction
 {
-    SSAConvertKind convertKind;
-    SSAValue*      value      = nullptr;
-    SSAType        targetType = SSAType::UNKNOWN;
-    std::string referenceTypeDesc;   // ReferenceCast 目标类/数组描述符，Numeric 留空。
+    SSAConvertKind         convertKind;
+    SSAValue*              value      = nullptr;
+    SSAType                targetType = SSAType::UNKNOWN;
+    ca::str::Utf8StringRef referenceTypeDesc;   // ReferenceCast 目标类/数组描述符，Numeric 留空。
     SSAConvertInstruction()
         : SSAInstruction(SSAInstructionKind::Convert)
         , convertKind(SSAConvertKind::Numeric)
@@ -156,10 +158,10 @@ struct SSAConvertInstruction : SSAInstruction
 /// @brief JVM field reference in owner/name/descriptor form.
 struct SSAFieldRef
 {
-    std::string owner;
-    std::string name;
-    std::string desc;
-    bool        isStatic = false;
+    ca::str::Utf8StringRef owner;
+    ca::str::Utf8StringRef name;
+    ca::str::Utf8StringRef desc;
+    bool                   isStatic = false;
 };
 
 /// @brief Read an instance or static field; instance reads carry a receiver value.
@@ -209,10 +211,10 @@ struct SSAArrayStoreInstruction : SSAInstruction
 /// @brief JVM method reference and original invoke opcode.
 struct SSAMethodRef
 {
-    std::string owner;
-    std::string name;
-    std::string desc;
-    int         invokeOpcode = 0;   // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
+    ca::str::Utf8StringRef owner;
+    ca::str::Utf8StringRef name;
+    ca::str::Utf8StringRef desc;
+    int                    invokeOpcode = 0;   // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
 };
 
 /// @brief JVM method invocation.
@@ -248,7 +250,7 @@ enum class SSAAllocationKind : uint8_t
 struct SSAAllocateInstruction : SSAInstruction
 {
     SSAAllocationKind      allocationKind = SSAAllocationKind::Object;
-    std::string            typeDesc;   // 类/数组描述符
+    ca::str::Utf8StringRef typeDesc;   // 类/数组描述符
     std::vector<SSAValue*> args;       // 维度/计数
     SSAAllocateInstruction()
         : SSAInstruction(SSAInstructionKind::Allocate)
@@ -259,6 +261,8 @@ struct SSAAllocateInstruction : SSAInstruction
 /// family.
 struct SSAIntrinsicInstruction : SSAInstruction
 {
+    // name 是 intrinsic 派生标记（"array.length"/"monitor.enter"/"instanceof:<desc>"），
+    // 非 JVM 符号节点字段，保留 std::string。
     std::string            name;   // "array.length", "monitor.enter", ...
     std::vector<SSAValue*> args;
     SSAIntrinsicInstruction()

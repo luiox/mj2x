@@ -66,14 +66,17 @@ MethodNode* findMethod(ClassNode* cn, const std::string& name, const std::string
 }
 
 // 跑 CodeConverter + SSABuilder，返回 SSAFunction（或 nullptr + reason）。
-std::unique_ptr<SSAFunction> buildSSAFor(ClassNode* cn, MethodNode* m, std::string& reason)
+// arena 由调用方持有——SSAFunction 节点字段是 arena-backed Utf8StringRef（spec §6.1），
+// arena 必须活到调用方消费完 SSA（dump/lower/emit）为止（参见 #698）。
+std::unique_ptr<SSAFunction> buildSSAFor(ClassNode* cn, MethodNode* m,
+                                         ca::str::Utf8StringArena& arena, std::string& reason)
 {
-    CodeConverter converter;
+    CodeConverter converter(arena);
     auto          blocks = converter.convert(*m);
     SSABuilder    builder;
     bool          isStatic = (m->access & Opcodes::ACC_STATIC) != 0;
-    return builder.build(
-        blocks, toStr(cn->name), toStr(m->name), toStr(m->desc), isStatic, m->maxLocals, reason);
+    return builder.build(blocks, toStr(cn->name), toStr(m->name), toStr(m->desc), isStatic,
+                         m->maxLocals, arena, reason);
 }
 
 std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, const std::string& desc,
@@ -106,15 +109,32 @@ TEST(SSAFunctionTest, InternFloatPreservesIeee754Identity)
     EXPECT_EQ(function.floatLiterals.size(), 3u);
 }
 
-std::unique_ptr<SSAFunction> buildInlineSSA(const std::string& name, const std::string& desc,
-                                            std::initializer_list<AbstractInsnNode*> insns,
-                                            int maxStack, int maxLocals, std::string& reason)
+// buildInlineSSA 的返回包：把 arena 与 fn 绑在一起，保证 arena 与 SSAFunction 同生共死。
+// SSAFunction 节点字段是 arena-backed Utf8StringRef（spec §6.1），arena 析构会让 fn 内的
+// ref 全部悬垂——故不能用局部 arena + 返回 fn 的旧写法（参见 #698）。
+struct InlineSsaBundle
 {
-    ClassNode cn;
+    std::unique_ptr<SSAFunction>      fn;
+    std::unique_ptr<Utf8StringArena>  arena;   // 先声明 fn 后声明 arena：fn 先析构，再释放 arena
+    operator bool() const { return fn != nullptr; }
+    bool          operator==(std::nullptr_t) const { return fn == nullptr; }
+    bool          operator!=(std::nullptr_t) const { return fn != nullptr; }
+    SSAFunction&  operator*() const { return *fn; }
+    SSAFunction*  operator->() const { return fn.get(); }
+};
+
+InlineSsaBundle buildInlineSSA(const std::string& name, const std::string& desc,
+                               std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                               int maxLocals, std::string& reason)
+{
+    InlineSsaBundle bundle;
+    bundle.arena = std::make_unique<Utf8StringArena>();
+    ClassNode     cn;
     cn.name = ca::str::Utf8StringRef::from_cstr("InlineSsa");
-    auto mn = makeMethod(
+    auto         mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
-    return buildSSAFor(&cn, mn.get(), reason);
+    bundle.fn = buildSSAFor(&cn, mn.get(), *bundle.arena, reason);
+    return bundle;
 }
 
 struct ExecResult
@@ -246,7 +266,7 @@ TEST(SSABuilderE2E, AddProducesStacklessSSA)
     ASSERT_NE(m, nullptr);
 
     std::string reason;
-    auto        fn = buildSSAFor(cn, m, reason);
+    auto        fn = buildSSAFor(cn, m, arena, reason);
     ASSERT_NE(fn, nullptr) << "build failed: " << reason;
 
     std::string dump = dumpSSA(*fn);
@@ -283,7 +303,7 @@ TEST(SSABuilderE2E, LoopSumHasPhiBlockArg)
     ASSERT_NE(m, nullptr);
 
     std::string reason;
-    auto        fn = buildSSAFor(cn, m, reason);
+    auto        fn = buildSSAFor(cn, m, arena, reason);
     ASSERT_NE(fn, nullptr) << "build failed: " << reason;
 
     std::string dump = dumpSSA(*fn);
@@ -324,7 +344,7 @@ TEST(SSABuilderE2E, LoopCountHasPhiBlockArg)
     ASSERT_NE(m, nullptr);
 
     std::string reason;
-    auto        fn = buildSSAFor(cn, m, reason);
+    auto        fn = buildSSAFor(cn, m, arena, reason);
     ASSERT_NE(fn, nullptr) << "build failed: " << reason;
 
     std::string dump = dumpSSA(*fn);
@@ -786,7 +806,7 @@ TEST(SSABuilderJavaSamples, TinyArithmeticControlFlowFromJavaSource)
     std::string reason;
     auto*       addMul = findMethod(cn.get(), "addMul", "(II)I");
     ASSERT_NE(addMul, nullptr);
-    auto addFn = buildSSAFor(cn.get(), addMul, reason);
+    auto addFn = buildSSAFor(cn.get(), addMul, arena, reason);
     ASSERT_NE(addFn, nullptr) << reason;
     std::string addDump = dumpSSA(*addFn);
     EXPECT_NE(addDump.find("+"), std::string::npos) << addDump;
@@ -797,7 +817,7 @@ TEST(SSABuilderJavaSamples, TinyArithmeticControlFlowFromJavaSource)
     reason.clear();
     auto* wideMix = findMethod(cn.get(), "wideMix", "(JI)J");
     ASSERT_NE(wideMix, nullptr);
-    auto wideFn = buildSSAFor(cn.get(), wideMix, reason);
+    auto wideFn = buildSSAFor(cn.get(), wideMix, arena, reason);
     ASSERT_NE(wideFn, nullptr) << reason;
     std::string wideDump = dumpSSA(*wideFn);
     EXPECT_NE(wideDump.find("<<"), std::string::npos) << wideDump;
@@ -806,7 +826,7 @@ TEST(SSABuilderJavaSamples, TinyArithmeticControlFlowFromJavaSource)
     reason.clear();
     auto* castCompare = findMethod(cn.get(), "castCompare", "(D)I");
     ASSERT_NE(castCompare, nullptr);
-    auto castFn = buildSSAFor(cn.get(), castCompare, reason);
+    auto castFn = buildSSAFor(cn.get(), castCompare, arena, reason);
     ASSERT_NE(castFn, nullptr) << reason;
     std::string castDump = dumpSSA(*castFn);
     EXPECT_NE(castDump.find("convert param0 -> i32"), std::string::npos) << castDump;
@@ -815,7 +835,7 @@ TEST(SSABuilderJavaSamples, TinyArithmeticControlFlowFromJavaSource)
     reason.clear();
     auto* loopSum = findMethod(cn.get(), "loopSum", "(I)I");
     ASSERT_NE(loopSum, nullptr);
-    auto loopFn = buildSSAFor(cn.get(), loopSum, reason);
+    auto loopFn = buildSSAFor(cn.get(), loopSum, arena, reason);
     ASSERT_NE(loopFn, nullptr) << reason;
     bool foundLoopArgs = false;
     for (const auto& block : loopFn->blocks) {
@@ -826,7 +846,7 @@ TEST(SSABuilderJavaSamples, TinyArithmeticControlFlowFromJavaSource)
     reason.clear();
     auto* choose = findMethod(cn.get(), "choose", "(I)I");
     ASSERT_NE(choose, nullptr);
-    auto switchFn = buildSSAFor(cn.get(), choose, reason);
+    auto switchFn = buildSSAFor(cn.get(), choose, arena, reason);
     ASSERT_NE(switchFn, nullptr) << reason;
     std::string switchDump = dumpSSA(*switchFn);
     EXPECT_NE(switchDump.find("switch"), std::string::npos) << switchDump;
@@ -852,7 +872,7 @@ TEST(SSABuilderJavaSamples, ObjectsArraysAndReferenceOpsFromJavaSource)
     std::string reason;
     auto*       fieldAndCall = findMethod(cn.get(), "fieldAndCall", "(I)I");
     ASSERT_NE(fieldAndCall, nullptr);
-    auto fieldFn = buildSSAFor(cn.get(), fieldAndCall, reason);
+    auto fieldFn = buildSSAFor(cn.get(), fieldAndCall, arena, reason);
     ASSERT_NE(fieldFn, nullptr) << reason;
     std::string fieldDump = dumpSSA(*fieldFn);
     EXPECT_NE(fieldDump.find("alloc object ssa_cases/SsaObjectArrayCases()"), std::string::npos)
@@ -873,7 +893,7 @@ TEST(SSABuilderJavaSamples, ObjectsArraysAndReferenceOpsFromJavaSource)
     reason.clear();
     auto* arrays = findMethod(cn.get(), "arrays", "(I)I");
     ASSERT_NE(arrays, nullptr);
-    auto arrayFn = buildSSAFor(cn.get(), arrays, reason);
+    auto arrayFn = buildSSAFor(cn.get(), arrays, arena, reason);
     ASSERT_NE(arrayFn, nullptr) << reason;
     std::string arrayDump = dumpSSA(*arrayFn);
     EXPECT_NE(arrayDump.find("alloc array [I(3)"), std::string::npos) << arrayDump;
@@ -884,7 +904,7 @@ TEST(SSABuilderJavaSamples, ObjectsArraysAndReferenceOpsFromJavaSource)
     reason.clear();
     auto* refOps = findMethod(cn.get(), "refOps", "(Ljava/lang/Object;)Ljava/lang/Object;");
     ASSERT_NE(refOps, nullptr);
-    auto refFn = buildSSAFor(cn.get(), refOps, reason);
+    auto refFn = buildSSAFor(cn.get(), refOps, arena, reason);
     ASSERT_NE(refFn, nullptr) << reason;
     std::string refDump = dumpSSA(*refFn);
     EXPECT_NE(refDump.find("intrinsic instanceof:java/lang/String"), std::string::npos) << refDump;
@@ -893,7 +913,7 @@ TEST(SSABuilderJavaSamples, ObjectsArraysAndReferenceOpsFromJavaSource)
     reason.clear();
     auto* literal = findMethod(cn.get(), "literal", "()Ljava/lang/String;");
     ASSERT_NE(literal, nullptr);
-    auto literalFn = buildSSAFor(cn.get(), literal, reason);
+    auto literalFn = buildSSAFor(cn.get(), literal, arena, reason);
     ASSERT_NE(literalFn, nullptr) << reason;
     // The opaque tag now embeds the literal content ("ssa-case") so the String
     // intrinsic path can recover it without re-parsing bytecode.
@@ -919,7 +939,7 @@ TEST(SSABuilderJavaSamples, NarrowingConversionsFromJavaSource)
     std::string reason;
     auto*       narrowMath = findMethod(cn.get(), "narrowMath", "(I)I");
     ASSERT_NE(narrowMath, nullptr);
-    auto mathFn = buildSSAFor(cn.get(), narrowMath, reason);
+    auto mathFn = buildSSAFor(cn.get(), narrowMath, arena, reason);
     ASSERT_NE(mathFn, nullptr) << reason;
     std::string mathDump = dumpSSA(*mathFn);
     EXPECT_NE(mathDump.find("convert"), std::string::npos) << mathDump;
@@ -930,7 +950,7 @@ TEST(SSABuilderJavaSamples, NarrowingConversionsFromJavaSource)
     reason.clear();
     auto* narrowFields = findMethod(cn.get(), "narrowFields", "(Lssa_cases/SsaNarrowingCases;I)I");
     ASSERT_NE(narrowFields, nullptr);
-    auto fieldFn = buildSSAFor(cn.get(), narrowFields, reason);
+    auto fieldFn = buildSSAFor(cn.get(), narrowFields, arena, reason);
     ASSERT_NE(fieldFn, nullptr) << reason;
     std::string fieldDump = dumpSSA(*fieldFn);
     EXPECT_NE(fieldDump.find("putfield ssa_cases/SsaNarrowingCases.b:B"), std::string::npos)
@@ -960,7 +980,7 @@ TEST(SSABuilderJavaSamples, StackShapeBytecodeFromJavaSource)
     std::string reason;
     auto*       discardCategory1 = findMethod(cn.get(), "discardCategory1", "(I)I");
     ASSERT_NE(discardCategory1, nullptr);
-    auto popFn = buildSSAFor(cn.get(), discardCategory1, reason);
+    auto popFn = buildSSAFor(cn.get(), discardCategory1, arena, reason);
     ASSERT_NE(popFn, nullptr) << reason;
     std::string popDump = dumpSSA(*popFn);
     EXPECT_NE(popDump.find("call ssa_cases/SsaStackShapeCases.returnsObject(I)Ljava/lang/String;"),
@@ -971,7 +991,7 @@ TEST(SSABuilderJavaSamples, StackShapeBytecodeFromJavaSource)
     reason.clear();
     auto* discardCategory2 = findMethod(cn.get(), "discardCategory2", "(I)I");
     ASSERT_NE(discardCategory2, nullptr);
-    auto pop2Fn = buildSSAFor(cn.get(), discardCategory2, reason);
+    auto pop2Fn = buildSSAFor(cn.get(), discardCategory2, arena, reason);
     ASSERT_NE(pop2Fn, nullptr) << reason;
     std::string pop2Dump = dumpSSA(*pop2Fn);
     EXPECT_NE(pop2Dump.find("call ssa_cases/SsaStackShapeCases.returnsLong(J)J"), std::string::npos)
@@ -980,7 +1000,7 @@ TEST(SSABuilderJavaSamples, StackShapeBytecodeFromJavaSource)
     reason.clear();
     auto* constructObject = findMethod(cn.get(), "constructObject", "()Ljava/lang/Object;");
     ASSERT_NE(constructObject, nullptr);
-    auto constructFn = buildSSAFor(cn.get(), constructObject, reason);
+    auto constructFn = buildSSAFor(cn.get(), constructObject, arena, reason);
     ASSERT_NE(constructFn, nullptr) << reason;
     std::string constructDump = dumpSSA(*constructFn);
     EXPECT_NE(constructDump.find("alloc object java/lang/Object()"), std::string::npos)
@@ -1008,7 +1028,7 @@ TEST(SSABuilderJavaSamples, StackJoinTernaryFromJavaSource)
     std::string reason;
     auto*       booleanTernary = findMethod(cn.get(), "booleanTernary", "(Z)I");
     ASSERT_NE(booleanTernary, nullptr);
-    auto boolFn = buildSSAFor(cn.get(), booleanTernary, reason);
+    auto boolFn = buildSSAFor(cn.get(), booleanTernary, arena, reason);
     ASSERT_NE(boolFn, nullptr) << reason;
     std::string boolDump = dumpSSA(*boolFn);
     EXPECT_NE(boolDump.find("@slot-1000"), std::string::npos) << boolDump;
@@ -1017,7 +1037,7 @@ TEST(SSABuilderJavaSamples, StackJoinTernaryFromJavaSource)
     reason.clear();
     auto* intTernary = findMethod(cn.get(), "intTernary", "(I)I");
     ASSERT_NE(intTernary, nullptr);
-    auto intFn = buildSSAFor(cn.get(), intTernary, reason);
+    auto intFn = buildSSAFor(cn.get(), intTernary, arena, reason);
     ASSERT_NE(intFn, nullptr) << reason;
     std::string intDump = dumpSSA(*intFn);
     EXPECT_NE(intDump.find("@slot-1000"), std::string::npos) << intDump;
@@ -1027,7 +1047,7 @@ TEST(SSABuilderJavaSamples, StackJoinTernaryFromJavaSource)
     auto* referenceTernary = findMethod(
         cn.get(), "referenceTernary", "(ZLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
     ASSERT_NE(referenceTernary, nullptr);
-    auto refFn = buildSSAFor(cn.get(), referenceTernary, reason);
+    auto refFn = buildSSAFor(cn.get(), referenceTernary, arena, reason);
     ASSERT_NE(refFn, nullptr) << reason;
     std::string refDump = dumpSSA(*refFn);
     EXPECT_NE(refDump.find("@slot-1000"), std::string::npos) << refDump;
@@ -1053,7 +1073,7 @@ TEST(SSABuilderJavaSamples, NullTrapHandlersFromJavaSource)
     std::string reason;
     auto*       catchNullField = findMethod(cn.get(), "catchNullField", "()I");
     ASSERT_NE(catchNullField, nullptr);
-    auto fieldFn = buildSSAFor(cn.get(), catchNullField, reason);
+    auto fieldFn = buildSSAFor(cn.get(), catchNullField, arena, reason);
     ASSERT_NE(fieldFn, nullptr) << reason;
     std::string fieldDump = dumpSSA(*fieldFn);
     EXPECT_NE(fieldDump.find("getfield ssa_cases/SsaNullTrapCases.value:I"), std::string::npos)
@@ -1063,7 +1083,7 @@ TEST(SSABuilderJavaSamples, NullTrapHandlersFromJavaSource)
     reason.clear();
     auto* catchNullCall = findMethod(cn.get(), "catchNullCall", "()I");
     ASSERT_NE(catchNullCall, nullptr);
-    auto callFn = buildSSAFor(cn.get(), catchNullCall, reason);
+    auto callFn = buildSSAFor(cn.get(), catchNullCall, arena, reason);
     ASSERT_NE(callFn, nullptr) << reason;
     std::string callDump = dumpSSA(*callFn);
     EXPECT_NE(callDump.find("call ssa_cases/SsaNullTrapCases.id(I)I"), std::string::npos)
@@ -1073,7 +1093,7 @@ TEST(SSABuilderJavaSamples, NullTrapHandlersFromJavaSource)
     reason.clear();
     auto* catchNullArray = findMethod(cn.get(), "catchNullArray", "()I");
     ASSERT_NE(catchNullArray, nullptr);
-    auto arrayFn = buildSSAFor(cn.get(), catchNullArray, reason);
+    auto arrayFn = buildSSAFor(cn.get(), catchNullArray, arena, reason);
     ASSERT_NE(arrayFn, nullptr) << reason;
     std::string arrayDump = dumpSSA(*arrayFn);
     EXPECT_NE(arrayDump.find("array.load i32 null[0]"), std::string::npos) << arrayDump;
@@ -1089,7 +1109,7 @@ TEST(SSABuilderE2E, DISABLED_DumpLoopSumSsa)
     auto*               m  = findMethod(cn, "loopSum", "(I)I");
     ASSERT_NE(m, nullptr);
     std::string reason;
-    auto        fn = buildSSAFor(cn, m, reason);
+    auto        fn = buildSSAFor(cn, m, arena, reason);
     ASSERT_NE(fn, nullptr);
     printf("\n=== loopSum SSA dump ===\n%s\n", dumpSSA(*fn).c_str());
 }
@@ -1101,7 +1121,7 @@ TEST(SSABuilderE2E, DISABLED_DumpLoopSumBlocks)
     ClassNode*          cn = loadSamples(arena, bytes);
     auto*               m  = findMethod(cn, "loopSum", "(I)I");
     ASSERT_NE(m, nullptr);
-    CodeConverter converter;
+    CodeConverter converter(arena);
     auto          blocks = converter.convert(*m);
     printf("\n=== loopSum L1 blocks (%zu) ===\n", blocks.size());
     printf("%s\n", CodeConverter::dumpMIR(blocks).c_str());

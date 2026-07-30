@@ -1,5 +1,7 @@
 #include <gmock/gmock.h>
 
+#include <type_traits>
+
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/method_stack.hpp"
 #include "mj2x/frontend/type_utils.hpp"
@@ -174,7 +176,8 @@ TEST(CodeConverterTest, EmptyReturnsEntryBlock)
 {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "empty", "()V", {});
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 1);
@@ -187,7 +190,8 @@ TEST(CodeConverterTest, SimpleReturn)
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "ret", "()V", {new InsnNode(Opcodes::RETURN)});
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 1);
@@ -203,7 +207,8 @@ TEST(CodeConverterTest, ReturnValue)
                          "()I",
                          {new InsnNode(Opcodes::IRETURN)});
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
 
     auto& nodes = blocks[0]->nodes;
@@ -220,7 +225,8 @@ TEST(CodeConverterTest, LocalLoadStore)
                              new InsnNode(Opcodes::IRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -247,7 +253,8 @@ TEST(CodeConverterTest, BinaryOp)
                              new InsnNode(Opcodes::IRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -275,7 +282,8 @@ TEST(CodeConverterTest, CastAndNumericCompare)
                              new InsnNode(Opcodes::IRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -317,7 +325,8 @@ TEST(CodeConverterTest, DoubleToLongCast)
                              new InsnNode(Opcodes::LRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -348,7 +357,8 @@ TEST(CodeConverterTest, FloatingCompareNaNDirection)
                              new InsnNode(Opcodes::IRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -378,7 +388,8 @@ TEST(CodeConverterTest, FieldAccess)
                              new InsnNode(Opcodes::IRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -409,7 +420,8 @@ TEST(CodeConverterTest, MethodInvoke)
                              new InsnNode(Opcodes::RETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -435,7 +447,8 @@ TEST(CodeConverterTest, StringLdcKeepsLiteralValue)
                              new InsnNode(Opcodes::ARETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -443,8 +456,9 @@ TEST(CodeConverterTest, StringLdcKeepsLiteralValue)
     for (auto& n : nodes) {
         if (n->kind == MIRKind::CONSTANT) {
             auto* c = typed::cast<MIRConstant>(n.get());
-            if (c->type == PrimitiveKind::OBJECT && std::holds_alternative<std::string>(c->value)) {
-                EXPECT_EQ(std::get<std::string>(c->value), "hello \"jni\"");
+            if (c->type == PrimitiveKind::OBJECT &&
+                std::holds_alternative<ca::str::Utf8StringRef>(c->value)) {
+                EXPECT_EQ(std::get<ca::str::Utf8StringRef>(c->value).to_std_string(), "hello \"jni\"");
                 foundString = true;
             }
         }
@@ -472,7 +486,8 @@ TEST(CodeConverterTest, ArrayInstructionsCarryComponentType)
                              new InsnNode(Opcodes::RETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -513,7 +528,8 @@ TEST(CodeConverterTest, UnconditionalBranch)
                              new InsnNode(Opcodes::RETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 2);
@@ -554,7 +570,8 @@ TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes)
                              new VarInsnNode(Opcodes::RET, 0),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
 
     bool foundJsr = false;
@@ -594,7 +611,8 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
             new InsnNode(Opcodes::ARETURN),
         });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     ASSERT_GE(blocks.size(), 1u);
 
@@ -633,7 +651,8 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
                              new InsnNode(Opcodes::IRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
 
     bool foundObjectNullBranch = false;
@@ -663,7 +682,8 @@ TEST(CodeConverterTest, DumpOutput)
                              new InsnNode(Opcodes::IRETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto          dump   = CodeConverter::dumpMIR(blocks);
 
@@ -692,7 +712,8 @@ TEST(CodeConverterTest, ConstantInstructions)
                              new InsnNode(Opcodes::RETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -727,7 +748,8 @@ TEST(CodeConverterTest, StackShapeInstructionsArePreserved)
                              new InsnNode(Opcodes::RETURN),
                          });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -791,7 +813,8 @@ TEST(CodeConverterTest, NewObjectAndInvokeSpecial)
             new InsnNode(Opcodes::ARETURN),
         });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
     auto&         nodes  = blocks[0]->nodes;
 
@@ -834,7 +857,8 @@ TEST(CodeConverterTest, SwitchInstructions)
                        new InsnNode(Opcodes::RETURN),
                    });
 
-    CodeConverter cc;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
     auto          blocks = cc.convert(*mn);
 
     ASSERT_GE(blocks.size(), 1);
@@ -860,4 +884,82 @@ TEST(CodeConverterTest, SwitchInstructions)
         }
     }
     EXPECT_TRUE(foundSwitch);
+}
+
+// #698：MIR/SSA/RegIR 持久节点字段（JVM 符号 owner/name/desc/typeDesc + MIRConstant LDC
+// String 槽）从自持 std::string 迁移到 arena-backed Utf8StringRef（spec §6.1）。
+// 本测试做两层守卫：
+//   1) 编译期类型断言——防止有人把字段类型悄悄改回 std::string；
+//   2) 运行期内容 + lifetime 断言——确认 intern 后 ref 指向 arena 内副本、内容正确，
+//      且 arena 析构前 ref 稳定（这是 #698 调试期发现的测试 harness lifetime 陷阱的回归门）。
+TEST(CodeConverterTest, NodeFieldsHoldArenaBackedUtf8StringRef)
+{
+    // ---- 1) 编译期：节点字段类型必须是 Utf8StringRef（不是 std::string）----
+    static_assert(std::is_same_v<decltype(MIRFieldGet::owner), ca::str::Utf8StringRef>,
+                  "MIRFieldGet::owner must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRFieldGet::name), ca::str::Utf8StringRef>,
+                  "MIRFieldGet::name must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRFieldGet::desc), ca::str::Utf8StringRef>,
+                  "MIRFieldGet::desc must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRInvoke::owner), ca::str::Utf8StringRef>,
+                  "MIRInvoke::owner must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRNewObject::typeDesc), ca::str::Utf8StringRef>,
+                  "MIRNewObject::typeDesc must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRNewArray::typeDesc), ca::str::Utf8StringRef>,
+                  "MIRNewArray::typeDesc must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRCheckCast::typeDesc), ca::str::Utf8StringRef>,
+                  "MIRCheckCast::typeDesc must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRInstanceOf::typeDesc), ca::str::Utf8StringRef>,
+                  "MIRInstanceOf::typeDesc must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRInvokeDynamic::name), ca::str::Utf8StringRef>,
+                  "MIRInvokeDynamic::name must be Utf8StringRef (#698)");
+    static_assert(std::is_same_v<decltype(MIRInvokeDynamic::desc), ca::str::Utf8StringRef>,
+                  "MIRInvokeDynamic::desc must be Utf8StringRef (#698)");
+    // MIRConstant 的 variant string 槽
+    using ConstVariant = decltype(MIRConstant::value);
+    static_assert(std::is_same_v<ConstVariant,
+                                 std::variant<int64_t, double, std::nullptr_t,
+                                              ca::str::Utf8StringRef, jbytecode::core::Type>>,
+                  "MIRConstant::value string slot must hold Utf8StringRef (#698)");
+
+    // ---- 2) 运行期：intern 后内容正确、且 ref 指向 arena 内副本（data() 不指向源 cstr）----
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC,
+                         "getX",
+                         "()I",
+                         {
+                             new VarInsnNode(Opcodes::ALOAD, 0),
+                             new FieldInsnNode(Opcodes::GETFIELD,
+                                               ca::str::Utf8StringRef::from_cstr("Foo"),
+                                               ca::str::Utf8StringRef::from_cstr("x"),
+                                               ca::str::Utf8StringRef::from_cstr("I")),
+                             new InsnNode(Opcodes::IRETURN),
+                         });
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
+    auto                     blocks = cc.convert(*mn);
+
+    MIRFieldGet* fg = nullptr;
+    for (auto& n : blocks[0]->nodes) {
+        if (n->kind == MIRKind::FIELD_GET) {
+            fg = typed::cast<MIRFieldGet>(n.get());
+            break;
+        }
+    }
+    ASSERT_NE(fg, nullptr);
+
+    // 内容正确（Utf8StringRef operator== 接受 const char*）。
+    EXPECT_EQ(fg->owner, "Foo");
+    EXPECT_EQ(fg->name, "x");
+    EXPECT_EQ(fg->desc, "I");
+
+    // ref 指向 arena 内副本，不是源 cstr 字面量地址——这是 intern 去重生效的证据。
+    // arena.intern 把内容拷进 arena chunk，源 cstr（栈上 from_cstr）与 arena 副本地址不同。
+    const auto* srcOwnerCstr = "Foo";
+    EXPECT_NE(static_cast<const void*>(fg->owner.data()),
+              static_cast<const void*>(srcOwnerCstr));
+
+    // 同一符号二次 intern 返回同一副本（去重），data() 指针相等。
+    auto ownerAgain = arena.intern(ca::str::Utf8StringRef::from_cstr("Foo"));
+    EXPECT_EQ(ownerAgain.data(), fg->owner.data());
 }

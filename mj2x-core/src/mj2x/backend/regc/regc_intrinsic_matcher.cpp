@@ -19,9 +19,9 @@ std::string RegCIntrinsicCall::displayName() const
 RegCIntrinsicCall RegCIntrinsicCallMatcher::fromInstruction(const RegInstruction& ins)
 {
     RegCIntrinsicCall call;
-    call.owner        = ins.method.owner;
-    call.name         = ins.method.name;
-    call.desc         = ins.method.desc;
+    call.owner        = ins.method.owner.to_std_string();
+    call.name         = ins.method.name.to_std_string();
+    call.desc         = ins.method.desc.to_std_string();
     call.invokeOpcode = ins.method.invokeOpcode;
     call.argCount     = ins.args.size();
     return call;

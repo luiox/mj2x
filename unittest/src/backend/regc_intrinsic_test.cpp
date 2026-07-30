@@ -43,26 +43,28 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
     return mn;
 }
 
-std::unique_ptr<RegFunction> buildRegIR(const std::string& name, const std::string& desc,
-                                        std::initializer_list<AbstractInsnNode*> insns,
-                                        int maxStack, int maxLocals, std::string& reason)
-{
-    auto mn = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
-    CodeConverter converter;
-    auto          blocks = converter.convert(*mn);
-    SSABuilder    builder;
-    auto          ssa = builder.build(blocks, "IntrinsicRegC", name, desc, true, maxLocals, reason);
-    if (!ssa) return nullptr;
-    RegLowering lowering;
-    return lowering.lower(*ssa, reason);
-}
-
+// 注意：arena 必须活到 emitFunction 返回——MIR/SSA/RegIR 节点字段是 arena-backed
+// Utf8StringRef（spec §6.1），arena 提前析构会让 emit 读到悬垂指针（参见 #698）。
+// 生产侧 pipeline 把 arena 放在 CompilerIndex（job 级寿命）；测试侧把 arena 与 emit
+// 放同一作用域，对齐该寿命约定。
 RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
                         std::initializer_list<AbstractInsnNode*> insns, int maxStack, int maxLocals,
                         std::string& reason)
 {
-    auto reg = buildRegIR(name, desc, insns, maxStack, maxLocals, reason);
+    auto mn = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*mn);
+    SSABuilder               builder;
+    auto                     ssa = builder.build(blocks, "IntrinsicRegC", name, desc, true, maxLocals, arena, reason);
+    if (!ssa) {
+        RegCEmitResult result;
+        result.reason = reason;
+        return result;
+    }
+    RegLowering lowering;
+    auto        reg = lowering.lower(*ssa, reason);
     if (!reg) {
         RegCEmitResult result;
         result.reason = reason;
@@ -90,9 +92,9 @@ RegInstruction makeStaticCall(const char* owner, const char* name, const char* d
 {
     RegInstruction ins;
     ins.kind                = RegInstructionKind::Call;
-    ins.method.owner        = owner;
-    ins.method.name         = name;
-    ins.method.desc         = desc;
+    ins.method.owner        = U(owner);
+    ins.method.name         = U(name);
+    ins.method.desc         = U(desc);
     ins.method.invokeOpcode = Opcodes::INVOKESTATIC;
     ins.args.assign(args.begin(), args.end());
     return ins;
@@ -189,9 +191,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesWrapperValueOfAndUnbox)
 
     RegInstruction unbox;
     unbox.kind                = RegInstructionKind::Call;
-    unbox.method.owner        = "java/lang/Integer";
-    unbox.method.name         = "intValue";
-    unbox.method.desc         = "()I";
+    unbox.method.owner        = U("java/lang/Integer");
+    unbox.method.name         = U("intValue");
+    unbox.method.desc         = U("()I");
     unbox.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     unbox.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
 
@@ -308,9 +310,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
 {
     RegInstruction init;
     init.kind                = RegInstructionKind::Call;
-    init.method.owner        = "java/util/Random";
-    init.method.name         = "<init>";
-    init.method.desc         = "(J)V";
+    init.method.owner        = U("java/util/Random");
+    init.method.name         = U("<init>");
+    init.method.desc         = U("(J)V");
     init.method.invokeOpcode = Opcodes::INVOKESPECIAL;
     init.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
     init.args.push_back(RegOperand::fromInt(42, SSAType::I64));
@@ -322,9 +324,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
 
     RegInstruction next;
     next.kind                = RegInstructionKind::Call;
-    next.method.owner        = "java/util/Random";
-    next.method.name         = "nextInt";
-    next.method.desc         = "()I";
+    next.method.owner        = U("java/util/Random");
+    next.method.name         = U("nextInt");
+    next.method.desc         = U("()I");
     next.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     next.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
 
@@ -338,9 +340,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
 {
     RegInstruction init;
     init.kind                = RegInstructionKind::Call;
-    init.method.owner        = "java/lang/StringBuilder";
-    init.method.name         = "<init>";
-    init.method.desc         = "()V";
+    init.method.owner        = U("java/lang/StringBuilder");
+    init.method.name         = U("<init>");
+    init.method.desc         = U("()V");
     init.method.invokeOpcode = Opcodes::INVOKESPECIAL;
     init.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
 
@@ -351,9 +353,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
 
     RegInstruction append;
     append.kind                = RegInstructionKind::Call;
-    append.method.owner        = "java/lang/StringBuilder";
-    append.method.name         = "append";
-    append.method.desc         = "(Ljava/lang/String;)Ljava/lang/StringBuilder;";
+    append.method.owner        = U("java/lang/StringBuilder");
+    append.method.name         = U("append");
+    append.method.desc         = U("(Ljava/lang/String;)Ljava/lang/StringBuilder;");
     append.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     append.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
     append.args.push_back(RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF}));
@@ -363,49 +365,49 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
     EXPECT_EQ(appendDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuilder);
 
-    append.method.desc        = "(Ljava/lang/Object;)Ljava/lang/StringBuilder;";
+    append.method.desc        = U("(Ljava/lang/Object;)Ljava/lang/StringBuilder;");
     append.args[1]            = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
     auto appendObjectDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendObjectDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendObjectDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendObjectDecision.symbol, "mj2x_string_builder_append_object");
 
-    append.method.desc              = "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;";
+    append.method.desc              = U("(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;");
     append.args[1]                  = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
     auto appendCharSequenceDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendCharSequenceDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendCharSequenceDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendCharSequenceDecision.symbol, "mj2x_string_builder_append_char_sequence");
 
-    append.method.desc      = "(Z)Ljava/lang/StringBuilder;";
+    append.method.desc      = U("(Z)Ljava/lang/StringBuilder;");
     append.args[1]          = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::BOOL});
     auto appendBoolDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendBoolDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendBoolDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendBoolDecision.symbol, "mj2x_string_builder_append_bool");
 
-    append.method.desc      = "(C)Ljava/lang/StringBuilder;";
+    append.method.desc      = U("(C)Ljava/lang/StringBuilder;");
     append.args[1]          = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::CHAR});
     auto appendCharDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendCharDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendCharDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendCharDecision.symbol, "mj2x_string_builder_append_char");
 
-    append.method.desc       = "([C)Ljava/lang/StringBuilder;";
+    append.method.desc       = U("([C)Ljava/lang/StringBuilder;");
     append.args[1]           = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
     auto appendCharsDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendCharsDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendCharsDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendCharsDecision.symbol, "mj2x_string_builder_append_char_array");
 
-    append.method.desc       = "(F)Ljava/lang/StringBuilder;";
+    append.method.desc       = U("(F)Ljava/lang/StringBuilder;");
     append.args[1]           = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F32});
     auto appendFloatDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendFloatDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(appendFloatDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(appendFloatDecision.symbol, "mj2x_string_builder_append_f32");
 
-    append.method.desc        = "(D)Ljava/lang/StringBuilder;";
+    append.method.desc        = U("(D)Ljava/lang/StringBuilder;");
     append.args[1]            = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::F64});
     auto appendDoubleDecision = RegCIntrinsicRegistry::builtins().matchCall(append);
     EXPECT_EQ(appendDoubleDecision.kind, RegCIntrinsicDecisionKind::Emit);
@@ -414,9 +416,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
 
     RegInstruction toString;
     toString.kind                = RegInstructionKind::Call;
-    toString.method.owner        = "java/lang/StringBuilder";
-    toString.method.name         = "toString";
-    toString.method.desc         = "()Ljava/lang/String;";
+    toString.method.owner        = U("java/lang/StringBuilder");
+    toString.method.name         = U("toString");
+    toString.method.desc         = U("()Ljava/lang/String;");
     toString.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     toString.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
 
@@ -430,9 +432,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesMutableStringRangeCapacityAndBufferIntrin
 {
     RegInstruction call;
     call.kind                = RegInstructionKind::Call;
-    call.method.owner        = "java/lang/StringBuilder";
-    call.method.name         = "append";
-    call.method.desc         = "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;";
+    call.method.owner        = U("java/lang/StringBuilder");
+    call.method.name         = U("append");
+    call.method.desc         = U("(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;");
     call.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     call.args                = {
         RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
@@ -445,17 +447,17 @@ TEST(RegCIntrinsicRegistryTest, MatchesMutableStringRangeCapacityAndBufferIntrin
     EXPECT_EQ(rangeDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
     EXPECT_EQ(rangeDecision.symbol, "mj2x_string_builder_append_char_sequence_range");
 
-    call.method.name = "capacity";
-    call.method.desc = "()I";
+    call.method.name = U("capacity");
+    call.method.desc = U("()I");
     call.args.resize(1);
     auto capacityDecision = RegCIntrinsicRegistry::builtins().matchCall(call);
     EXPECT_EQ(capacityDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(capacityDecision.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
     EXPECT_EQ(capacityDecision.symbol, "mj2x_string_builder_capacity");
 
-    call.method.owner = "java/lang/StringBuffer";
-    call.method.name  = "append";
-    call.method.desc  = "([CII)Ljava/lang/StringBuffer;";
+    call.method.owner = U("java/lang/StringBuffer");
+    call.method.name  = U("append");
+    call.method.desc  = U("([CII)Ljava/lang/StringBuffer;");
     call.args         = {
         RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
         RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF}),
@@ -467,9 +469,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesMutableStringRangeCapacityAndBufferIntrin
     EXPECT_EQ(bufferDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuffer);
     EXPECT_EQ(bufferDecision.symbol, "mj2x_string_buffer_append_char_array_range");
 
-    call.method.owner = "java/lang/String";
-    call.method.name  = "split";
-    call.method.desc  = "(Ljava/lang/String;I)[Ljava/lang/String;";
+    call.method.owner = U("java/lang/String");
+    call.method.name  = U("split");
+    call.method.desc  = U("(Ljava/lang/String;I)[Ljava/lang/String;");
     call.args.resize(3);
     auto splitDecision = RegCIntrinsicRegistry::builtins().matchCall(call);
     EXPECT_EQ(splitDecision.kind, RegCIntrinsicDecisionKind::Emit);
@@ -481,9 +483,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
 {
     RegInstruction length;
     length.kind                = RegInstructionKind::Call;
-    length.method.owner        = "java/lang/String";
-    length.method.name         = "length";
-    length.method.desc         = "()I";
+    length.method.owner        = U("java/lang/String");
+    length.method.name         = U("length");
+    length.method.desc         = U("()I");
     length.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     length.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
 
@@ -494,9 +496,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
 
     RegInstruction charAt;
     charAt.kind                = RegInstructionKind::Call;
-    charAt.method.owner        = "java/lang/String";
-    charAt.method.name         = "charAt";
-    charAt.method.desc         = "(I)C";
+    charAt.method.owner        = U("java/lang/String");
+    charAt.method.name         = U("charAt");
+    charAt.method.desc         = U("(I)C");
     charAt.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     charAt.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
     charAt.args.push_back(RegOperand::fromInt(1, SSAType::I32));
@@ -508,9 +510,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
 
     RegInstruction isEmpty;
     isEmpty.kind                = RegInstructionKind::Call;
-    isEmpty.method.owner        = "java/lang/String";
-    isEmpty.method.name         = "isEmpty";
-    isEmpty.method.desc         = "()Z";
+    isEmpty.method.owner        = U("java/lang/String");
+    isEmpty.method.name         = U("isEmpty");
+    isEmpty.method.desc         = U("()Z");
     isEmpty.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     isEmpty.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
 
@@ -521,9 +523,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
 
     RegInstruction contains;
     contains.kind                = RegInstructionKind::Call;
-    contains.method.owner        = "java/lang/String";
-    contains.method.name         = "contains";
-    contains.method.desc         = "(Ljava/lang/CharSequence;)Z";
+    contains.method.owner        = U("java/lang/String");
+    contains.method.name         = U("contains");
+    contains.method.desc         = U("(Ljava/lang/CharSequence;)Z");
     contains.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
     contains.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
     contains.args.push_back(RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF}));
@@ -535,9 +537,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
 
     RegInstruction valueOf;
     valueOf.kind                = RegInstructionKind::Call;
-    valueOf.method.owner        = "java/lang/String";
-    valueOf.method.name         = "valueOf";
-    valueOf.method.desc         = "(D)Ljava/lang/String;";
+    valueOf.method.owner        = U("java/lang/String");
+    valueOf.method.name         = U("valueOf");
+    valueOf.method.desc         = U("(D)Ljava/lang/String;");
     valueOf.method.invokeOpcode = Opcodes::INVOKESTATIC;
     valueOf.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::F64}));
 
@@ -552,9 +554,9 @@ TEST(RegCIntrinsicRegistryTest, MatchesUtf16StringRuntimeIntrinsics)
     auto makeCall = [](const char* name, const char* desc, std::vector<RegOperand> args) {
         RegInstruction call;
         call.kind                = RegInstructionKind::Call;
-        call.method.owner        = "java/lang/String";
-        call.method.name         = name;
-        call.method.desc         = desc;
+        call.method.owner        = U("java/lang/String");
+        call.method.name         = U(name);
+        call.method.desc         = U(desc);
         call.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
         call.args                = std::move(args);
         return call;

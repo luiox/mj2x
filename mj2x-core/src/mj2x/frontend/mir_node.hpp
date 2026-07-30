@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <jbytecode/jbytecode.hpp>
+#include <libca/str/utf8_string.hpp>
 #include <typed/cast.hpp>
 
 #include <cstdint>
@@ -149,7 +150,9 @@ struct MIRLabel : MIRNode
 
 struct MIRConstant : MIRNode
 {
-    std::variant<int64_t, double, std::nullptr_t, std::string, jbytecode::core::Type> value;
+    // string 槽持 arena-backed Utf8StringRef（LDC String 常量），由 CodeConverter 经
+    // index.arena().intern(...) 入池（str-ownership-spec §6.1）。
+    std::variant<int64_t, double, std::nullptr_t, ca::str::Utf8StringRef, jbytecode::core::Type> value;
     PrimitiveKind type = PrimitiveKind::INT;
     MIRConstant()
         : MIRNode(MIRKind::CONSTANT)
@@ -286,7 +289,7 @@ struct MIRReturnValue : MIRNode
 
 struct MIRNewObject : MIRNode
 {
-    std::string typeDesc;
+    ca::str::Utf8StringRef typeDesc;
     MIRNewObject()
         : MIRNode(MIRKind::NEW_OBJECT)
     {}
@@ -294,9 +297,9 @@ struct MIRNewObject : MIRNode
 
 struct MIRNewArray : MIRNode
 {
-    std::string   typeDesc;
-    PrimitiveKind componentType = PrimitiveKind::OBJECT;
-    int           dims          = 1;
+    ca::str::Utf8StringRef typeDesc;
+    PrimitiveKind          componentType = PrimitiveKind::OBJECT;
+    int                    dims          = 1;
     MIRNewArray()
         : MIRNode(MIRKind::NEW_ARRAY)
     {}
@@ -327,7 +330,7 @@ struct MIRArrayStore : MIRNode
 
 struct MIRFieldGet : MIRNode
 {
-    std::string owner, name, desc;
+    ca::str::Utf8StringRef owner, name, desc;
     MIRFieldGet()
         : MIRNode(MIRKind::FIELD_GET)
     {}
@@ -335,7 +338,7 @@ struct MIRFieldGet : MIRNode
 
 struct MIRFieldPut : MIRNode
 {
-    std::string owner, name, desc;
+    ca::str::Utf8StringRef owner, name, desc;
     MIRFieldPut()
         : MIRNode(MIRKind::FIELD_PUT)
     {}
@@ -343,7 +346,7 @@ struct MIRFieldPut : MIRNode
 
 struct MIRStaticGet : MIRNode
 {
-    std::string owner, name, desc;
+    ca::str::Utf8StringRef owner, name, desc;
     MIRStaticGet()
         : MIRNode(MIRKind::STATIC_GET)
     {}
@@ -351,7 +354,7 @@ struct MIRStaticGet : MIRNode
 
 struct MIRStaticPut : MIRNode
 {
-    std::string owner, name, desc;
+    ca::str::Utf8StringRef owner, name, desc;
     MIRStaticPut()
         : MIRNode(MIRKind::STATIC_PUT)
     {}
@@ -359,9 +362,9 @@ struct MIRStaticPut : MIRNode
 
 struct MIRInvoke : MIRNode
 {
-    std::string owner, name, desc;
-    bool        isInterface  = false;
-    int         invokeOpcode = 0;   // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
+    ca::str::Utf8StringRef owner, name, desc;
+    bool                   isInterface  = false;
+    int                    invokeOpcode = 0;   // INVOKEVIRTUAL/SPECIAL/STATIC/INTERFACE
     MIRInvoke()
         : MIRNode(MIRKind::INVOKE)
     {}
@@ -369,7 +372,7 @@ struct MIRInvoke : MIRNode
 
 struct MIRInvokeDynamic : MIRNode
 {
-    std::string                            name, desc;
+    ca::str::Utf8StringRef                 name, desc;
     std::optional<jbytecode::core::Handle> bsm;
     std::vector<ca::core::Any>             bsmArgs;
     MIRInvokeDynamic()
@@ -380,8 +383,8 @@ struct MIRInvokeDynamic : MIRNode
 // multianewarray：保留描述符和维度数，SSA/RegC 通过 multi-array helper 执行。
 struct MIRMultiNewArray : MIRNode
 {
-    std::string typeDesc;
-    int         dims = 0;
+    ca::str::Utf8StringRef typeDesc;
+    int                    dims = 0;
     MIRMultiNewArray()
         : MIRNode(MIRKind::MULTI_NEW_ARRAY)
     {}
@@ -389,7 +392,7 @@ struct MIRMultiNewArray : MIRNode
 
 struct MIRCheckCast : MIRNode
 {
-    std::string typeDesc;
+    ca::str::Utf8StringRef typeDesc;
     MIRCheckCast()
         : MIRNode(MIRKind::CHECK_CAST)
     {}
@@ -397,7 +400,7 @@ struct MIRCheckCast : MIRNode
 
 struct MIRInstanceOf : MIRNode
 {
-    std::string typeDesc;
+    ca::str::Utf8StringRef typeDesc;
     MIRInstanceOf()
         : MIRNode(MIRKind::INSTANCE_OF)
     {}

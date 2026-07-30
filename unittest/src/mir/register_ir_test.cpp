@@ -6,6 +6,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "libca/str/utf8_string_arena.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
@@ -17,6 +18,8 @@
 using namespace mj2x;
 using namespace jbytecode::core;
 using namespace jbytecode::tree;
+using ca::str::Utf8StringArena;
+using ca::str::Utf8StringRef;
 
 namespace {
 
@@ -36,30 +39,63 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
     return mn;
 }
 
-std::unique_ptr<SSAFunction> buildInlineSSA(const std::string& name, const std::string& desc,
-                                            std::initializer_list<AbstractInsnNode*> insns,
-                                            int maxStack, int maxLocals, std::string& reason)
+// buildInlineSSA / lowerInlineRegIR 的返回包：把 arena 与 IR 绑在一起。
+// SSA/RegIR 节点字段是 arena-backed Utf8StringRef（spec §6.1），arena 析构会让 IR 内的
+// ref 全部悬垂——故不能用局部 arena + 返回 IR 的旧写法（参见 #698）。
+// 成员声明顺序：先 ir 后 arena，保证 ir 先析构、arena 后释放。
+struct InlineSsaBundle
 {
-    ClassNode cn;
+    std::unique_ptr<SSAFunction>      fn;
+    std::unique_ptr<Utf8StringArena>  arena;
+    operator bool() const { return fn != nullptr; }
+    bool          operator==(std::nullptr_t) const { return fn == nullptr; }
+    bool          operator!=(std::nullptr_t) const { return fn != nullptr; }
+    SSAFunction&  operator*() const { return *fn; }
+    SSAFunction*  operator->() const { return fn.get(); }
+};
+
+struct InlineRegBundle
+{
+    std::unique_ptr<RegFunction>      reg;
+    std::unique_ptr<Utf8StringArena>  arena;
+    operator bool() const { return reg != nullptr; }
+    bool          operator==(std::nullptr_t) const { return reg == nullptr; }
+    bool          operator!=(std::nullptr_t) const { return reg != nullptr; }
+    RegFunction&  operator*() const { return *reg; }
+    RegFunction*  operator->() const { return reg.get(); }
+};
+
+InlineSsaBundle buildInlineSSA(const std::string& name, const std::string& desc,
+                               std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                               int maxLocals, std::string& reason)
+{
+    InlineSsaBundle bundle;
+    bundle.arena = std::make_unique<Utf8StringArena>();
+    ClassNode     cn;
     cn.name = ca::str::Utf8StringRef::from_cstr("InlineRegIR");
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
 
-    CodeConverter converter;
+    CodeConverter converter(*bundle.arena);
     auto          blocks = converter.convert(*mn);
     SSABuilder    builder;
-    return builder.build(blocks, "InlineRegIR", name, desc, true, maxLocals, reason);
+    bundle.fn =
+        builder.build(blocks, "InlineRegIR", name, desc, true, maxLocals, *bundle.arena, reason);
+    return bundle;
 }
 
-std::unique_ptr<RegFunction> lowerInlineRegIR(const std::string& name, const std::string& desc,
-                                              std::initializer_list<AbstractInsnNode*> insns,
-                                              int maxStack, int maxLocals, std::string& reason)
+InlineRegBundle lowerInlineRegIR(const std::string& name, const std::string& desc,
+                                 std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                                 int maxLocals, std::string& reason)
 {
-    auto ssa = buildInlineSSA(name, desc, insns, maxStack, maxLocals, reason);
-    if (!ssa) return nullptr;
+    InlineRegBundle bundle;
+    auto            ssa = buildInlineSSA(name, desc, insns, maxStack, maxLocals, reason);
+    if (!ssa) return bundle;   // arena 与 fn 都已随 ssa 析构，bundle 保持空
 
-    RegLowering lowering;
-    return lowering.lower(*ssa, reason);
+    bundle.arena = std::move(ssa.arena);   // 把 arena 接管过来，陪 reg 走完 dump
+    RegLowering   lowering;
+    bundle.reg = lowering.lower(*ssa, reason);
+    return bundle;
 }
 
 bool hasAnyEdgeCopy(const RegFunction& fn)

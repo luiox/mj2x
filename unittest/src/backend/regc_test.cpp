@@ -33,28 +33,30 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
     return mn;
 }
 
-std::unique_ptr<RegFunction> buildRegIR(const std::string& name, const std::string& desc,
-                                        std::initializer_list<AbstractInsnNode*> insns,
-                                        int maxStack, int maxLocals, std::string& reason)
-{
-    auto mn = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
-
-    CodeConverter converter;
-    auto          blocks = converter.convert(*mn);
-    SSABuilder    builder;
-    auto          ssa = builder.build(blocks, "InlineRegC", name, desc, true, maxLocals, reason);
-    if (!ssa) return nullptr;
-
-    RegLowering lowering;
-    return lowering.lower(*ssa, reason);
-}
-
+// 注意：arena 必须活到 emitFunction 返回——MIR/SSA/RegIR 节点字段是 arena-backed
+// Utf8StringRef（spec §6.1），arena 提前析构会让 emit 读到悬垂指针（参见 #698）。
+// 生产侧 pipeline 把 arena 放在 CompilerIndex（job 级寿命）；测试侧把 arena 与 emit
+// 放同一作用域，对齐该寿命约定。
 RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
                         std::initializer_list<AbstractInsnNode*> insns, int maxStack, int maxLocals,
                         std::string& reason)
 {
-    auto reg = buildRegIR(name, desc, insns, maxStack, maxLocals, reason);
+    auto mn = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*mn);
+    SSABuilder               builder;
+    auto ssa = builder.build(blocks, "InlineRegC", name, desc, true, maxLocals, arena, reason);
+    if (!ssa) {
+        RegCEmitResult result;
+        result.reason = reason;
+        return result;
+    }
+
+    RegLowering   lowering;
+    auto          reg = lowering.lower(*ssa, reason);
     if (!reg) {
         RegCEmitResult result;
         result.reason = reason;
@@ -695,16 +697,18 @@ TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
     mn->tryCatchBlocks.push_back(new TryCatchBlockNode(
         start->label, end->label, handler->label, ca::str::Utf8StringRef::from_cstr("")));
 
-    CodeConverter converter;
-    auto          blocks = converter.convert(*mn);
-    SSABuilder    builder;
-    std::string   reason;
-    auto          ssa = builder.build(blocks,
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*mn);
+    SSABuilder               builder;
+    std::string              reason;
+    auto                     ssa = builder.build(blocks,
                              "InlineRegC",
                              "monitorCatch",
                              "(Ljava/lang/Object;)I",
                              true,
                              3,
+                             arena,
                              reason);
     ASSERT_NE(ssa, nullptr) << reason;
 
