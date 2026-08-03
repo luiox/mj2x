@@ -15,6 +15,12 @@ intrinsic layer and out of the JVM boundary.
 
 Expected surfaces:
 
+Entry methods (consumed by the protected-sample driver via `--entry-method`):
+
+- `divOrCatch=(II)I`
+- `remOrCatch=(II)I`
+- `longDiv=(JJ)J`
+
 - Java method trace for `divOrCatch`, `remOrCatch` and `longDiv`.
 - Native/JNI entry wrapper trace for the generated RegC native methods.
 - R3 runtime ABI div/rem surface: `mj2x_regc_div_i32`, `mj2x_regc_rem_i32`

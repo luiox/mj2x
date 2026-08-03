@@ -16,6 +16,12 @@ materialization rather than control and locking edges.
 
 Expected surfaces:
 
+Entry methods (consumed by the protected-sample driver via `--entry-method`):
+
+- `throwCatch=(I)I`
+- `synchronizedAdd=(I)I`
+- `throwThroughNative=(I)I`
+
 - Java method trace for `throwCatch`, `synchronizedAdd`, and
   `throwThroughNative`.
 - Native/JNI entry wrapper trace for the generated StackC native methods.

@@ -16,6 +16,12 @@ arithmetic path covered by `RegCRuntimeSurfaceSample`.
 
 Expected surfaces:
 
+Entry methods (consumed by the protected-sample driver via `--entry-method`):
+
+- `catchOwn=(I)I`
+- `missCatch=()I`
+- `catchCall=()I`
+
 - Java method trace for `catchOwn`, `missCatch`, `fail`, and `catchCall`.
 - Native/JNI entry wrapper trace for the generated RegC native methods.
 - ATHROW propagation surface through `_mj2x_regc_throw` (including the unmatched
