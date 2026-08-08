@@ -1,7 +1,5 @@
 #include "regc_intrinsic_registry.hpp"
 
-#include <ostream>
-
 namespace mj2x {
 
 namespace {
@@ -1415,101 +1413,101 @@ RegCIntrinsicDecision RegCIntrinsicRegistry::matchNormalizedCall(
     return RegCIntrinsicDecision{};
 }
 
-void RegCIntrinsicRegistry::emitDeclarations(std::ostream& out) const
+void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) const
 {
-    out << "#ifndef MJ2X_REGC_INTRINSIC_ABI_DECLARED\n";
-    out << "#define MJ2X_REGC_INTRINSIC_ABI_DECLARED\n";
-    out << "static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* "
-           "utf8);\n";
-    out << "static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n";
-    out << "static int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref "
-           "jstr, int32_t radix);\n";
-    out << "static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref "
-           "jstr);\n";
-    out << "static int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref "
-           "jstr, int32_t radix);\n";
-    out << "static int32_t _mj2x_intrinsic_parse_short(mj2x_regc_context* context, mj2x_ref "
-           "jstr);\n";
-    out << "static int32_t _mj2x_intrinsic_parse_short_radix(mj2x_regc_context* context, mj2x_ref "
-           "jstr, int32_t radix);\n";
-    out << "static int32_t _mj2x_intrinsic_parse_byte(mj2x_regc_context* context, mj2x_ref "
-           "jstr);\n";
-    out << "static int32_t _mj2x_intrinsic_parse_byte_radix(mj2x_regc_context* context, mj2x_ref "
-           "jstr, int32_t radix);\n";
-    out << "static int32_t _mj2x_intrinsic_parse_boolean(mj2x_regc_context* context, mj2x_ref "
-           "jstr);\n";
-    out << "static float _mj2x_intrinsic_parse_float(mj2x_regc_context* context, mj2x_ref jstr);\n";
-    out << "static double _mj2x_intrinsic_parse_double(mj2x_regc_context* context, mj2x_ref "
-           "jstr);\n";
-    out << "static mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* context, float "
-           "value);\n";
-    out << "static mj2x_ref _mj2x_intrinsic_double_to_string(mj2x_regc_context* context, double "
-           "value);\n";
-    out << "static mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, mj2x_ref "
-           "value);\n";
-    out << "static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n";
-    out << "static int32_t _mj2x_intrinsic_string_length(mj2x_ref value);\n";
-    out << "static uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index);\n";
-    out << "static int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value);\n";
-    out << "static int32_t _mj2x_intrinsic_string_is_empty(mj2x_ref value);\n";
-    out << "static int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix);\n";
-    out << "static int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix);\n";
-    out << "static int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle);\n";
-    out << "static int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq);\n";
-    out << "typedef struct mj2x_int { int32_t value; } mj2x_int;\n";
-    out << "typedef struct mj2x_long { int64_t value; } mj2x_long;\n";
-    out << "typedef struct mj2x_short { int16_t value; } mj2x_short;\n";
-    out << "typedef struct mj2x_byte { int8_t value; } mj2x_byte;\n";
-    out << "typedef struct mj2x_float { float value; } mj2x_float;\n";
-    out << "typedef struct mj2x_double { double value; } mj2x_double;\n";
-    out << "typedef struct mj2x_bool { int8_t value; } mj2x_bool;\n";
-    out << "typedef struct mj2x_char { uint16_t value; } mj2x_char;\n";
-    out << "typedef struct mj2x_random { uint64_t seed; } mj2x_random;\n";
-    out << "mj2x_int mj2x_int_value_of(int32_t value);\n";
-    out << "int32_t mj2x_int_int_value(mj2x_int box);\n";
-    out << "mj2x_long mj2x_long_value_of(int64_t value);\n";
-    out << "int64_t mj2x_long_long_value(mj2x_long box);\n";
-    out << "mj2x_short mj2x_short_value_of(int16_t value);\n";
-    out << "int16_t mj2x_short_short_value(mj2x_short box);\n";
-    out << "mj2x_byte mj2x_byte_value_of(int8_t value);\n";
-    out << "int8_t mj2x_byte_byte_value(mj2x_byte box);\n";
-    out << "mj2x_float mj2x_float_value_of(float value);\n";
-    out << "float mj2x_float_float_value(mj2x_float box);\n";
-    out << "mj2x_double mj2x_double_value_of(double value);\n";
-    out << "double mj2x_double_double_value(mj2x_double box);\n";
-    out << "mj2x_bool mj2x_bool_value_of(int8_t value);\n";
-    out << "int8_t mj2x_bool_bool_value(mj2x_bool box);\n";
-    out << "mj2x_char mj2x_char_value_of(uint16_t value);\n";
-    out << "uint16_t mj2x_char_char_value(mj2x_char box);\n";
-    out << "void mj2x_random_init(mj2x_random* state, int64_t seed);\n";
-    out << "int32_t mj2x_random_next_int(mj2x_random* state);\n";
-    out << "int32_t mj2x_random_next_int_bound(mj2x_random* state, int32_t bound);\n";
-    out << "int64_t mj2x_random_next_long(mj2x_random* state);\n";
-    out << "int8_t mj2x_random_next_boolean(mj2x_random* state);\n";
-    out << "float mj2x_random_next_float(mj2x_random* state);\n";
-    out << "double mj2x_random_next_double(mj2x_random* state);\n";
-    out << "int32_t mj2x_math_abs_i32(int32_t value);\n";
-    out << "int64_t mj2x_math_abs_i64(int64_t value);\n";
-    out << "float mj2x_math_abs_f32(float value);\n";
-    out << "double mj2x_math_abs_f64(double value);\n";
-    out << "int32_t mj2x_math_min_i32(int32_t lhs, int32_t rhs);\n";
-    out << "int32_t mj2x_math_max_i32(int32_t lhs, int32_t rhs);\n";
-    out << "int64_t mj2x_math_min_i64(int64_t lhs, int64_t rhs);\n";
-    out << "int64_t mj2x_math_max_i64(int64_t lhs, int64_t rhs);\n";
-    out << "float mj2x_math_min_f32(float lhs, float rhs);\n";
-    out << "float mj2x_math_max_f32(float lhs, float rhs);\n";
-    out << "double mj2x_math_min_f64(double lhs, double rhs);\n";
-    out << "double mj2x_math_max_f64(double lhs, double rhs);\n";
-    out << "double mj2x_math_sin(double value);\n";
-    out << "double mj2x_math_cos(double value);\n";
-    out << "double mj2x_math_tan(double value);\n";
-    out << "double mj2x_math_sqrt(double value);\n";
-    out << "double mj2x_math_pow(double base, double exponent);\n";
-    out << "double mj2x_math_floor(double value);\n";
-    out << "double mj2x_math_ceil(double value);\n";
-    out << "int64_t mj2x_math_round(double value);\n";
-    out << "double mj2x_math_random();\n";
-    out << "#endif\n\n";
+    out.append("#ifndef MJ2X_REGC_INTRINSIC_ABI_DECLARED\n");
+    out.append("#define MJ2X_REGC_INTRINSIC_ABI_DECLARED\n");
+    out.append("static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* "
+               "utf8);\n");
+    out.append("static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n");
+    out.append("static int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref "
+               "jstr, int32_t radix);\n");
+    out.append("static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref "
+               "jstr);\n");
+    out.append("static int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref "
+               "jstr, int32_t radix);\n");
+    out.append("static int32_t _mj2x_intrinsic_parse_short(mj2x_regc_context* context, mj2x_ref "
+               "jstr);\n");
+    out.append("static int32_t _mj2x_intrinsic_parse_short_radix(mj2x_regc_context* context, mj2x_ref "
+               "jstr, int32_t radix);\n");
+    out.append("static int32_t _mj2x_intrinsic_parse_byte(mj2x_regc_context* context, mj2x_ref "
+               "jstr);\n");
+    out.append("static int32_t _mj2x_intrinsic_parse_byte_radix(mj2x_regc_context* context, mj2x_ref "
+               "jstr, int32_t radix);\n");
+    out.append("static int32_t _mj2x_intrinsic_parse_boolean(mj2x_regc_context* context, mj2x_ref "
+               "jstr);\n");
+    out.append("static float _mj2x_intrinsic_parse_float(mj2x_regc_context* context, mj2x_ref jstr);\n");
+    out.append("static double _mj2x_intrinsic_parse_double(mj2x_regc_context* context, mj2x_ref "
+               "jstr);\n");
+    out.append("static mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* context, float "
+               "value);\n");
+    out.append("static mj2x_ref _mj2x_intrinsic_double_to_string(mj2x_regc_context* context, double "
+               "value);\n");
+    out.append("static mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, mj2x_ref "
+               "value);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_length(mj2x_ref value);\n");
+    out.append("static uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_is_empty(mj2x_ref value);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle);\n");
+    out.append("static int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq);\n");
+    out.append("typedef struct mj2x_int { int32_t value; } mj2x_int;\n");
+    out.append("typedef struct mj2x_long { int64_t value; } mj2x_long;\n");
+    out.append("typedef struct mj2x_short { int16_t value; } mj2x_short;\n");
+    out.append("typedef struct mj2x_byte { int8_t value; } mj2x_byte;\n");
+    out.append("typedef struct mj2x_float { float value; } mj2x_float;\n");
+    out.append("typedef struct mj2x_double { double value; } mj2x_double;\n");
+    out.append("typedef struct mj2x_bool { int8_t value; } mj2x_bool;\n");
+    out.append("typedef struct mj2x_char { uint16_t value; } mj2x_char;\n");
+    out.append("typedef struct mj2x_random { uint64_t seed; } mj2x_random;\n");
+    out.append("mj2x_int mj2x_int_value_of(int32_t value);\n");
+    out.append("int32_t mj2x_int_int_value(mj2x_int box);\n");
+    out.append("mj2x_long mj2x_long_value_of(int64_t value);\n");
+    out.append("int64_t mj2x_long_long_value(mj2x_long box);\n");
+    out.append("mj2x_short mj2x_short_value_of(int16_t value);\n");
+    out.append("int16_t mj2x_short_short_value(mj2x_short box);\n");
+    out.append("mj2x_byte mj2x_byte_value_of(int8_t value);\n");
+    out.append("int8_t mj2x_byte_byte_value(mj2x_byte box);\n");
+    out.append("mj2x_float mj2x_float_value_of(float value);\n");
+    out.append("float mj2x_float_float_value(mj2x_float box);\n");
+    out.append("mj2x_double mj2x_double_value_of(double value);\n");
+    out.append("double mj2x_double_double_value(mj2x_double box);\n");
+    out.append("mj2x_bool mj2x_bool_value_of(int8_t value);\n");
+    out.append("int8_t mj2x_bool_bool_value(mj2x_bool box);\n");
+    out.append("mj2x_char mj2x_char_value_of(uint16_t value);\n");
+    out.append("uint16_t mj2x_char_char_value(mj2x_char box);\n");
+    out.append("void mj2x_random_init(mj2x_random* state, int64_t seed);\n");
+    out.append("int32_t mj2x_random_next_int(mj2x_random* state);\n");
+    out.append("int32_t mj2x_random_next_int_bound(mj2x_random* state, int32_t bound);\n");
+    out.append("int64_t mj2x_random_next_long(mj2x_random* state);\n");
+    out.append("int8_t mj2x_random_next_boolean(mj2x_random* state);\n");
+    out.append("float mj2x_random_next_float(mj2x_random* state);\n");
+    out.append("double mj2x_random_next_double(mj2x_random* state);\n");
+    out.append("int32_t mj2x_math_abs_i32(int32_t value);\n");
+    out.append("int64_t mj2x_math_abs_i64(int64_t value);\n");
+    out.append("float mj2x_math_abs_f32(float value);\n");
+    out.append("double mj2x_math_abs_f64(double value);\n");
+    out.append("int32_t mj2x_math_min_i32(int32_t lhs, int32_t rhs);\n");
+    out.append("int32_t mj2x_math_max_i32(int32_t lhs, int32_t rhs);\n");
+    out.append("int64_t mj2x_math_min_i64(int64_t lhs, int64_t rhs);\n");
+    out.append("int64_t mj2x_math_max_i64(int64_t lhs, int64_t rhs);\n");
+    out.append("float mj2x_math_min_f32(float lhs, float rhs);\n");
+    out.append("float mj2x_math_max_f32(float lhs, float rhs);\n");
+    out.append("double mj2x_math_min_f64(double lhs, double rhs);\n");
+    out.append("double mj2x_math_max_f64(double lhs, double rhs);\n");
+    out.append("double mj2x_math_sin(double value);\n");
+    out.append("double mj2x_math_cos(double value);\n");
+    out.append("double mj2x_math_tan(double value);\n");
+    out.append("double mj2x_math_sqrt(double value);\n");
+    out.append("double mj2x_math_pow(double base, double exponent);\n");
+    out.append("double mj2x_math_floor(double value);\n");
+    out.append("double mj2x_math_ceil(double value);\n");
+    out.append("int64_t mj2x_math_round(double value);\n");
+    out.append("double mj2x_math_random();\n");
+    out.append("#endif\n\n");
 }
 
 }   // namespace mj2x

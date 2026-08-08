@@ -52,6 +52,7 @@
 #pragma once
 
 #include "mj2x/backend/backend.hpp"
+#include "mj2x/backend/regc/regc_emitter.hpp"
 
 #include <memory>
 #include <string>
@@ -90,6 +91,14 @@ public:
     /// into a native library.  When empty, finalize still records
     /// `generatedSource()` but does not write a file.
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
+
+    /// @brief 设置生成注释的详细级别（见 reg_codegen_syntax.md §4.2）。
+    ///
+    /// @details
+    /// 必须在 compileMethod 之前调用：级别透传给 RegCCachePool 与 RegCEmitter，
+    /// 影响函数头/块/cache 溯源注释（Summary）与逐指令 IR 注释（Detailed）。
+    /// 默认 Summary。
+    void setCommentLevel(RegCCommentLevel level);
 
     /// @brief Full generated C translation unit after finalize.
     ///

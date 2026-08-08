@@ -13,12 +13,85 @@
 /// isolation benefit.
 #pragma once
 
+#include "libca/str/utf8_string.hpp"
+
 #include <cctype>
+#include <cstdio>
 #include <sstream>
 #include <string>
 #include <string_view>
 
 namespace mj2x::codegen {
+
+using ca::u32;
+using ca::u8;
+using ca::usize;
+
+/// @brief Escape arbitrary JVM symbol bytes into ASCII-safe text for comments/dumps.
+/// @details Obfuscated or re-native samples can carry any byte in class/method/field
+///          names and descriptors.  Generated comments must stay textually intact, so
+///          printable ASCII passes through, everything else is UTF-8-decoded and
+///          emitted as `\uXXXX` (BMP) / `\UXXXXXXXX` (supplementary); malformed bytes
+///          degrade to a single-byte `\uXX`.  Output is always valid ASCII UTF-8.
+inline ca::str::Utf8String escapeCommentIdent(const ca::str::Utf8StringRef& raw)
+{
+    ca::str::Utf8StringBuilder b;
+    const u8*                  data = raw.data();
+    const usize                end  = raw.byte_length();
+    usize                      i    = 0;
+    while (i < end) {
+        const u8 lead = data[i];
+        if (lead < 0x80) {
+            if (lead >= 0x20 && lead != 0x7F) {
+                b.append(reinterpret_cast<const char*>(&lead), 1);
+            }
+            else {
+                char esc[8];
+                snprintf(esc, sizeof(esc), "\\u%04X", static_cast<unsigned>(lead));
+                b.append(esc);
+            }
+            ++i;
+            continue;
+        }
+        u32   cp  = 0;
+        usize len = 0;
+        if ((lead & 0xE0) == 0xC0 && i + 1 < end && (data[i + 1] & 0xC0) == 0x80) {
+            cp  = static_cast<u32>(lead & 0x1F) << 6 | (data[i + 1] & 0x3F);
+            len = 2;
+        }
+        else if ((lead & 0xF0) == 0xE0 && i + 2 < end && (data[i + 1] & 0xC0) == 0x80 &&
+                 (data[i + 2] & 0xC0) == 0x80) {
+            cp  = static_cast<u32>(lead & 0x0F) << 12 |
+                  static_cast<u32>(data[i + 1] & 0x3F) << 6 | (data[i + 2] & 0x3F);
+            len = 3;
+        }
+        else if ((lead & 0xF8) == 0xF0 && i + 3 < end && (data[i + 1] & 0xC0) == 0x80 &&
+                 (data[i + 2] & 0xC0) == 0x80 && (data[i + 3] & 0xC0) == 0x80) {
+            cp  = static_cast<u32>(lead & 0x07) << 18 |
+                  static_cast<u32>(data[i + 1] & 0x3F) << 12 |
+                  static_cast<u32>(data[i + 2] & 0x3F) << 6 | (data[i + 3] & 0x3F);
+            len = 4;
+        }
+        else {
+            // Malformed byte: escape the raw byte itself.
+            char esc[8];
+            snprintf(esc, sizeof(esc), "\\u%04X", static_cast<unsigned>(lead));
+            b.append(esc);
+            ++i;
+            continue;
+        }
+        char esc[16];
+        if (cp <= 0xFFFF) {
+            snprintf(esc, sizeof(esc), "\\u%04X", static_cast<unsigned>(cp));
+        }
+        else {
+            snprintf(esc, sizeof(esc), "\\U%08X", static_cast<unsigned>(cp));
+        }
+        b.append(esc);
+        i += len;
+    }
+    return b.build();
+}
 
 /// @brief Render a byte string as a quoted C string literal.
 /// @details Escapes backslash, quote, newline, carriage return, tab; emits

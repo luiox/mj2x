@@ -4,7 +4,8 @@
 
 #include "regc_intrinsic_matcher.hpp"
 
-#include <iosfwd>
+#include "libca/str/utf8_string.hpp"
+
 #include <string>
 
 namespace mj2x {
@@ -83,7 +84,7 @@ public:
     RegCIntrinsicDecision matchCall(const RegInstruction& ins) const;
 
     /// @brief Emit C declarations required by the registered intrinsic surface.
-    void emitDeclarations(std::ostream& out) const;
+    void emitDeclarations(ca::str::Utf8StringBuilder& out) const;
 
 private:
     RegCIntrinsicDecision matchNormalizedCall(const RegCIntrinsicCall& call) const;

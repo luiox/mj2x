@@ -12,13 +12,28 @@
 
 #include "mj2x/mir/register_ir/reg_function.hpp"
 
-#include <iosfwd>
+#include "libca/str/utf8_string.hpp"
+#include "mj2x/codegen/c_source.hpp"
+
 #include <map>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace mj2x {
+
+/// @brief 生成注释的分级（与日志分级一致：默认 Summary，最详细级逐指令出注释）。
+///
+/// @details
+/// 见 doc_ai/reg_codegen_syntax.md §4.2。Summary 是默认产出（函数头/块/缓存槽溯源）；
+/// Detailed 在 Summary 基础上对每条 RegIR 指令与终结器输出一行典型指令文本（复用
+/// reg_dump 的行渲染），供逐字节排查生成代码与 IR 的一致性。None 用于最小输出基线。
+enum class RegCCommentLevel : uint8_t
+{
+    None = 0,     ///< 不生成任何注释。
+    Summary = 1,  ///< 函数头 + 基本块 + 缓存槽溯源注释（默认）。
+    Detailed = 2, ///< Summary + 每条指令/终结器的溯源注释。
+};
 
 /// @brief Result of one RegC emission attempt.
 ///
@@ -45,31 +60,43 @@ struct RegCEmitResult
 class RegCCachePool
 {
 public:
-    std::string staticMethodCache(const ca::str::Utf8StringRef& owner,
-                                  const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
-    std::string instanceMethodCache(const ca::str::Utf8StringRef& owner,
-                                    const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
-    std::string staticFieldCache(const ca::str::Utf8StringRef& owner,
-                                 const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
-    std::string instanceFieldCache(const ca::str::Utf8StringRef& owner,
-                                   const ca::str::Utf8StringRef& name, const ca::str::Utf8StringRef& desc);
-    std::string classCache(const ca::str::Utf8StringRef& desc);
+    explicit RegCCachePool(RegCCommentLevel commentLevel = RegCCommentLevel::Summary);
+
+    ca::str::Utf8String staticMethodCache(const ca::str::Utf8StringRef& owner,
+                                          const ca::str::Utf8StringRef& name,
+                                          const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8String instanceMethodCache(const ca::str::Utf8StringRef& owner,
+                                            const ca::str::Utf8StringRef& name,
+                                            const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8String staticFieldCache(const ca::str::Utf8StringRef& owner,
+                                         const ca::str::Utf8StringRef& name,
+                                         const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8String instanceFieldCache(const ca::str::Utf8StringRef& owner,
+                                           const ca::str::Utf8StringRef& name,
+                                           const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8String classCache(const ca::str::Utf8StringRef& desc);
 
     std::string renderDeclarations() const;
     bool        empty() const;
 
+    /// @brief 在首次 add 前覆盖注释级别（影响后续声明的 cache 溯源注释）。
+    /// @details RegCBackend 透传统一级别时调用；与 RegCEmitter 的级别保持一致，
+    ///          保证翻译单元内 cache 声明注释与函数体注释同档。
+    void setCommentLevel(RegCCommentLevel level) { commentLevel_ = level; }
+
 private:
-    std::vector<std::string>           declarations_;
-    std::map<std::string, std::string> staticMethodCacheNames_;
-    std::map<std::string, std::string> instanceMethodCacheNames_;
-    std::map<std::string, std::string> staticFieldCacheNames_;
-    std::map<std::string, std::string> instanceFieldCacheNames_;
-    std::map<std::string, std::string> classCacheNames_;
+    std::vector<ca::str::Utf8String>     declarations_;
+    std::map<std::string, ca::str::Utf8String> staticMethodCacheNames_;
+    std::map<std::string, ca::str::Utf8String> instanceMethodCacheNames_;
+    std::map<std::string, ca::str::Utf8String> staticFieldCacheNames_;
+    std::map<std::string, ca::str::Utf8String> instanceFieldCacheNames_;
+    std::map<std::string, ca::str::Utf8String> classCacheNames_;
     int                                staticMethodCacheIndex_   = 0;
     int                                instanceMethodCacheIndex_ = 0;
     int                                staticFieldCacheIndex_    = 0;
     int                                instanceFieldCacheIndex_  = 0;
     int                                classCacheIndex_          = 0;
+    RegCCommentLevel                   commentLevel_              = RegCCommentLevel::Summary;
 };
 
 /// @brief Emits stackless helper C from Register IR.
@@ -83,7 +110,8 @@ private:
 class RegCEmitter
 {
 public:
-    explicit RegCEmitter(RegCCachePool* cachePool = nullptr);
+    explicit RegCEmitter(RegCCachePool* cachePool = nullptr,
+                         RegCCommentLevel commentLevel = RegCCommentLevel::Summary);
 
     /// @brief Emit a C helper function for one RegFunction.
     ///
@@ -95,11 +123,12 @@ public:
     RegCEmitResult emitFunction(const RegFunction& fn) const;
 
 private:
-    RegCCachePool* cachePool_;
+    RegCCachePool*   cachePool_;
+    RegCCommentLevel commentLevel_ = RegCCommentLevel::Summary;
 };
 
 /// @brief Emit declarations shared by all RegC function bodies in one C file.
-void emitRegCHelperPrelude(std::ostream& out);
+void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out);
 
 /// @brief Validate that generated RegC text does not expose stack-machine anchors.
 ///

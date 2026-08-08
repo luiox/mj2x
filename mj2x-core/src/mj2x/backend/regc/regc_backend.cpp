@@ -18,8 +18,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <iomanip>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -99,9 +97,10 @@ std::uint64_t fnv1a64(std::string_view value, std::uint64_t seed = 1469598103934
 
 std::string hex64(std::uint64_t value)
 {
-    std::ostringstream os;
-    os << std::hex << std::setw(16) << std::setfill('0') << value;
-    return os.str();
+    char buffer[17];
+    snprintf(buffer, sizeof(buffer), "%016llx",
+             static_cast<unsigned long long>(value));
+    return std::string(buffer);
 }
 
 /// 每个 native 方法的 C 函数名：不透明 fnv1a64 哈希，与 JNI 符号查找无关。
@@ -209,13 +208,24 @@ bool shouldKeepBytecodeForCompatibility(const std::vector<Block*>& blocks, std::
 
 std::string emitFailureBody(const std::string& reason, PrimitiveKind retKind)
 {
-    std::ostringstream out;
-    out << "    /* RegC lowering failed: " << reason << " */\n";
+    CSourceStream out;
+    out.indent();
+    {
+        CSourceStream line;
+        line.append("/* RegC lowering failed: ");
+        line.append(reason);
+        line.append(" */");
+        out.emitLine(line.build());
+    }
     if (retKind == PrimitiveKind::VOID) {
-        out << "    return;\n";
+        out.emitLine("return;");
     }
     else {
-        out << "    return " << defaultReturnValue(retKind) << ";\n";
+        CSourceStream line;
+        line.append("return ");
+        line.append(defaultReturnValue(retKind));
+        line.append(";");
+        out.emitLine(line.build());
     }
     return out.str();
 }
@@ -242,39 +252,79 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
 
     cFuncName = nativeFunctionName(className, methodName, methodDesc);
 
-    std::ostringstream out;
-    out << "static " << jniType(retKind) << " JNICALL\n";
-    out << cFuncName << "(JNIEnv* env, " << (isStatic ? "jclass clazz" : "jobject thisObject");
-    for (size_t i = 0; i < args.size(); ++i) {
-        out << ", " << jniType(args[i]) << " p" << i;
+    CSourceStream out;
+    // 函数签名行（顶层，无缩进）：多片段拼一条再 emitLine。
+    {
+        CSourceStream sig;
+        sig.append("static ");
+        sig.append(jniType(retKind));
+        sig.append(" JNICALL");
+        out.emitLine(sig.build());
     }
-    out << ") {\n";
-    out << "    (void)" << (isStatic ? "clazz" : "thisObject") << ";\n";
-    out << "    _mj2x_regc_env = env;\n";
-    out << "    mj2x_regc_init_context(&_mj2x_regc_ctx, env, _mj2x_regc_throw_runtime);\n";
+    {
+        CSourceStream sig;
+        sig.append(cFuncName);
+        sig.append("(JNIEnv* env, ");
+        sig.append(isStatic ? "jclass clazz" : "jobject thisObject");
+        for (size_t i = 0; i < args.size(); ++i) {
+            sig.append(", ");
+            sig.append(jniType(args[i]));
+            sig.append(" p");
+            sig.appendInt(static_cast<ca::i64>(i));
+        }
+        sig.append(") {");
+        out.emitLine(sig.build());
+    }
+    {
+        CSourceStream::IndentGuard g(out);
+        {
+            CSourceStream line;
+            line.append("(void)");
+            line.append(isStatic ? "clazz" : "thisObject");
+            line.append(";");
+            out.emitLine(line.build());
+        }
+        out.emitLine("_mj2x_regc_env = env;");
+        out.emitLine("mj2x_regc_init_context(&_mj2x_regc_ctx, env, _mj2x_regc_throw_runtime);");
 
-    if (!emitted.ok) {
-        out << emitFailureBody(emitted.reason, retKind);
-        out << "}\n\n";
-        return out.str();
-    }
+        if (!emitted.ok) {
+            const std::string failure = emitFailureBody(emitted.reason, retKind);
+            out.emitRaw(failure);
+            out.emitLine("}");
+            out.emitBlankLine();
+            return out.str();
+        }
 
-    out << "    ";
-    if (retKind != PrimitiveKind::VOID) out << "return (" << jniType(retKind) << ")";
-    out << emitted.functionName << "(";
-    bool first     = true;
-    auto appendArg = [&](const std::string& expr, const char* type) {
-        if (!first) out << ", ";
-        first = false;
-        out << "(" << type << ")(" << expr << ")";
-    };
-    if (!isStatic) appendArg("thisObject", "mj2x_ref");
-    for (size_t i = 0; i < args.size(); ++i) {
-        appendArg("p" + std::to_string(i), regcType(args[i]));
+        {
+            CSourceStream line;
+            if (retKind != PrimitiveKind::VOID) {
+                line.append("return (");
+                line.append(jniType(retKind));
+                line.append(")");
+            }
+            line.append(emitted.functionName);
+            line.append("(");
+            bool first = true;
+            auto appendArg = [&](std::string_view expr, const char* type) {
+                if (!first) line.append(", ");
+                first = false;
+                line.append("(");
+                line.append(type);
+                line.append(")(");
+                line.append(expr);
+                line.append(")");
+            };
+            if (!isStatic) appendArg("thisObject", "mj2x_ref");
+            for (size_t i = 0; i < args.size(); ++i) {
+                appendArg("p" + std::to_string(i), regcType(args[i]));
+            }
+            line.append(");");
+            out.emitLine(line.build());
+        }
+        if (retKind == PrimitiveKind::VOID) out.emitLine("return;");
     }
-    out << ");\n";
-    if (retKind == PrimitiveKind::VOID) out << "    return;\n";
-    out << "}\n\n";
+    out.emitLine("}");
+    out.emitBlankLine();
     return out.str();
 }
 
@@ -293,8 +343,9 @@ MethodNode* findMethod(CompilerClass& clazz, const char* name, const char* desc)
 
 struct RegCBackend::Impl
 {
-    std::ostringstream source;
-    RegCCachePool      cachePool;
+    ca::str::Utf8StringBuilder source;
+    RegCCachePool             cachePool;
+    RegCCommentLevel          commentLevel = RegCCommentLevel::Summary;
 
     /// RegisterNatives 注册簿记：每个受保护类 -> 它的 native 方法列表。
     /// finalize 阶段据此发射每类的 register 函数 + _mj2x_reg_methods[] 表 + JNI_OnLoad。
@@ -325,7 +376,7 @@ struct RegCBackend::Impl
 
     /// 在 finalize 阶段发射 RegisterNatives 基础设施：
     /// 每类 register 函数、_mj2x_reg_methods[] 表、桥接 _mj2x_register_for_class、JNI_OnLoad。
-    void emitRegistrationCode(std::ostringstream& out) const;
+    void emitRegistrationCode(ca::str::Utf8StringBuilder& out) const;
 };
 
 RegCBackend::RegCBackend()
@@ -333,6 +384,12 @@ RegCBackend::RegCBackend()
 {}
 
 RegCBackend::~RegCBackend() = default;
+
+void RegCBackend::setCommentLevel(RegCCommentLevel level)
+{
+    impl_->commentLevel = level;
+    impl_->cachePool.setCommentLevel(level);
+}
 
 BackendResult RegCBackend::compileMethod(const std::string& className, CompilerMethod& method,
                                          const std::vector<Block*>& blocks)
@@ -384,7 +441,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     eliminateDeadRegInstructions(*reg);
     applyRegTransformPasses(*reg);
 
-    RegCEmitter emitter(&impl_->cachePool);
+    RegCEmitter emitter(&impl_->cachePool, impl_->commentLevel);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。
@@ -398,16 +455,20 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     // point only for RegisterNatives binding.  The wrapper must not reintroduce
     // a StackC-style operand stack.
     std::string cFuncName;
-    std::ostringstream methodSource;
-    methodSource << emitted.source << "\n";
-    methodSource << emitNativeMethod(className, *mn, emitted, cFuncName);
+ca::str::Utf8StringBuilder methodSource;
+    methodSource.append(emitted.source.data(), emitted.source.size());
+    methodSource.append("\n");
+    {
+        const std::string wrapper = emitNativeMethod(className, *mn, emitted, cFuncName);
+        methodSource.append(wrapper.data(), wrapper.size());
+    }
 
     // 登记 RegisterNatives：本方法绑定到 cFuncName，并为该类分配 classId。
     impl_->registerNativeMethod(className, methodName, methodDesc, cFuncName);
 
     backendResult.kind = BackendResult::Kind::C_SOURCE;
-    backendResult.text = methodSource.str();
-    impl_->source << methodSource.str();
+    backendResult.text = methodSource.build().to_std_string();
+    impl_->source.append(backendResult.text.data(), backendResult.text.size());
     return backendResult;
 }
 
@@ -502,40 +563,43 @@ void RegCBackend::finalize(const CompilerIndex& index)
     includes.addSystem("errno.h");
     includes.addProject("regc/mj2x_regc_crt.h");
 
-    std::ostringstream full;
-    full << "/* Generated by mj2x RegCBackend */\n";
-    full << includes.render();
-    full << "\n";
+    ca::str::Utf8StringBuilder full;
+    full.append("/* Generated by mj2x RegCBackend */\n");
+    {
+        const std::string renderedIncludes = includes.render();
+        full.append(renderedIncludes.data(), renderedIncludes.size());
+    }
+    full.append("\n");
     using ca::str::ZUtf8StringRef;
     const std::string stringClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/String"));
+        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/String")).to_std_string();
     const std::string objectToStringMethodCacheName = impl_->cachePool.instanceMethodCache(
         ZUtf8StringRef::from_static("java/lang/Object"), ZUtf8StringRef::from_static("toString"),
-        ZUtf8StringRef::from_static("()Ljava/lang/String;"));
+        ZUtf8StringRef::from_static("()Ljava/lang/String;")).to_std_string();
     const std::string stringValueOfFloatMethodCacheName = impl_->cachePool.staticMethodCache(
         ZUtf8StringRef::from_static("java/lang/String"), ZUtf8StringRef::from_static("valueOf"),
-        ZUtf8StringRef::from_static("(F)Ljava/lang/String;"));
+        ZUtf8StringRef::from_static("(F)Ljava/lang/String;")).to_std_string();
     const std::string stringValueOfDoubleMethodCacheName = impl_->cachePool.staticMethodCache(
         ZUtf8StringRef::from_static("java/lang/String"), ZUtf8StringRef::from_static("valueOf"),
-        ZUtf8StringRef::from_static("(D)Ljava/lang/String;"));
+        ZUtf8StringRef::from_static("(D)Ljava/lang/String;")).to_std_string();
     const std::string floatParseFloatMethodCacheName = impl_->cachePool.staticMethodCache(
         ZUtf8StringRef::from_static("java/lang/Float"), ZUtf8StringRef::from_static("parseFloat"),
-        ZUtf8StringRef::from_static("(Ljava/lang/String;)F"));
+        ZUtf8StringRef::from_static("(Ljava/lang/String;)F")).to_std_string();
     const std::string doubleParseDoubleMethodCacheName = impl_->cachePool.staticMethodCache(
         ZUtf8StringRef::from_static("java/lang/Double"), ZUtf8StringRef::from_static("parseDouble"),
-        ZUtf8StringRef::from_static("(Ljava/lang/String;)D"));
+        ZUtf8StringRef::from_static("(Ljava/lang/String;)D")).to_std_string();
     const std::string nullPointerExceptionClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/NullPointerException"));
+        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/NullPointerException")).to_std_string();
     const std::string classCastExceptionClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/ClassCastException"));
+        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/ClassCastException")).to_std_string();
     const std::string outOfMemoryErrorClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/OutOfMemoryError"));
+        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/OutOfMemoryError")).to_std_string();
     const std::string stringIndexOutOfBoundsClassCacheName = impl_->cachePool.classCache(
-        ZUtf8StringRef::from_static("java/lang/StringIndexOutOfBoundsException"));
+        ZUtf8StringRef::from_static("java/lang/StringIndexOutOfBoundsException")).to_std_string();
     const std::string unsupportedOperationExceptionClassCacheName = impl_->cachePool.classCache(
-        ZUtf8StringRef::from_static("java/lang/UnsupportedOperationException"));
+        ZUtf8StringRef::from_static("java/lang/UnsupportedOperationException")).to_std_string();
     const std::string cacheDeclarations = impl_->cachePool.renderDeclarations();
-    const std::string emittedSource     = impl_->source.str();
+    const std::string emittedSource     = impl_->source.build().to_std_string();
     emitRuntimeHelpers(full,
                        cacheDeclarations,
                        stringClassCacheName,
@@ -550,14 +614,14 @@ void RegCBackend::finalize(const CompilerIndex& index)
                        stringIndexOutOfBoundsClassCacheName,
                        unsupportedOperationExceptionClassCacheName);
     emitRegCHelperPrelude(full);
-    full << emittedSource;
+    full.append(emittedSource.data(), emittedSource.size());
 
     // RegisterNatives 基础设施（每类 register fn、_mj2x_reg_methods[] 表、桥接、JNI_OnLoad）。
     // 无任何注册方法时（classOrder 为空）也发射一个不绑任何类的空壳 JNI_OnLoad，
     // 保持"RegC 输出总有 JNI_OnLoad"的契约，便于测试与运行时一致性。
     impl_->emitRegistrationCode(full);
 
-    sourceCode_ = full.str();
+    sourceCode_ = full.build().to_std_string();
     if (!cOutputPath_.empty()) {
         std::ofstream out(cOutputPath_, std::ios::binary);
         if (out) {
@@ -572,7 +636,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
     }
 }
 
-void RegCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const
+void RegCBackend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) const
 {
     // 照搬 StackC 的惰性逐类 RegisterNatives 发射（stackc_backend.cpp:1332-1716）：
     //   - 每类一个 static jint _mj2x_register_<class>(JNIEnv*, jclass)：建 JNINativeMethod[]
@@ -693,7 +757,10 @@ void RegCBackend::Impl::emitRegistrationCode(std::ostringstream& out) const
     src.dedent();
     src.emitLine("}");
 
-    out << src.str();
+    {
+        const std::string rendered = src.str();
+        out.append(rendered.data(), rendered.size());
+    }
 }
 
 }   // namespace mj2x

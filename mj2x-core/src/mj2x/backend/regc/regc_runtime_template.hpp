@@ -13,23 +13,24 @@
 /// cacheDeclarations 的 guard 都保持原样。
 #pragma once
 
-#include <sstream>
+#include "libca/str/utf8_string.hpp"
+
 #include <string>
 
 namespace mj2x {
 
 /// 发射 _mj2x_regc_*_field（static/instance × load/store 四象限）helper 定义。
-void emitRegCFieldAccessHelpers(std::ostringstream& out);
+void emitRegCFieldAccessHelpers(ca::str::Utf8StringBuilder& out);
 
 /// 发射 _mj2x_regc_call_* / _mj2x_regc_method_id helper 定义。
-void emitRegCMethodCallHelpers(std::ostringstream& out);
+void emitRegCMethodCallHelpers(ca::str::Utf8StringBuilder& out);
 
 /// @brief 发射 RegC 运行时主体（除上面两组 helper 外的全部 ABI 定义）。
 ///
 /// @details 12 个 cacheName 参数是 finalize() 从 RegCCachePool 预解析出的符号名，
 /// 作为子串内插到 `_mj2x_regc_cached_class(&<name>)` 调用里。cacheDeclarations
 /// 非空时作为缓存变量声明块原样前插。内部依次调用上面两个函数。
-void emitRuntimeHelpers(std::ostringstream& out, const std::string& cacheDeclarations,
+void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cacheDeclarations,
                         const std::string& stringClassCacheName,
                         const std::string& objectToStringMethodCacheName,
                         const std::string& stringValueOfFloatMethodCacheName,
