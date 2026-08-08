@@ -543,6 +543,24 @@ TEST_F(RegCBackendE2E, InvokeDynamicCapturingLambdaRoundTrip)
                 {"mixed(6, 2L, 1)", "RegCCapture.mixed(6, 2L, 1)"},
                 {"combine(2, 3, 100)", "RegCCapture.combine(2, 3, 100)"},
             });
+
+    // 回归断言：javac 为捕获 lambda 生成的合成方法 lambda$xxx 必须被 RegC 编译为
+    // native（InvokeDynamicPreprocessor 已把 indy 站点改写为合成类，lambda$ 体不再
+    // 按方法名前缀 skip）。这里检查生成 C 里出现每个 lambda$ 方法的 regc_ helper 定义——
+    // 一个被转 native 的方法会发射 `static ... regc_<Class>_lambda_<n>__<desc>` helper，
+    // 被 skip 的方法则不会出现在 C 源里。方法名中 `$` 在 C 标识符里映射为 `_`。
+    fs::path capDir  = caseDir("RegCCapture");
+    fs::path capC    = capDir / "RegCCapture.c";
+    ASSERT_TRUE(fileExists(capC)) << capC;
+    std::string captureC = readText(capC);
+    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_addDelta_0__II_I"), std::string::npos)
+        << captureC;
+    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_affine_1__III_I"), std::string::npos)
+        << captureC;
+    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_mixed_2__JII_I"), std::string::npos)
+        << captureC;
+    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_combine_3__III_I"), std::string::npos)
+        << captureC;
 }
 
 // R6.1 阶段2c：实例 / 构造器方法引用展开验证。javac 为不同 method-handle 形态生成 indy：

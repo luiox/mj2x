@@ -43,7 +43,7 @@ SSA builder / RegLowering / Emitter 任一返回失败,`compileMethod` 仍会产
 | # | skip 原因(日志文案) | 触发条件 | 代码位置 | 性质 |
 |---|---|---|---|---|
 | ~~S1~~ | ~~`inner class method remains on bytecode path for compatibility`~~ | ~~类名含 `$`~~ | ~~`regc_backend.cpp`~~ | **已撤销**（R6-B RegisterNatives 绑定，PR #661） |
-| S2 | `lambda body remains on bytecode path for invokedynamic compatibility` | 方法名以 `lambda$` 开头 | `shouldKeepBytecodeForCompatibility` | 设计如此 |
+| ~~S2~~ | ~~`lambda body remains on bytecode path for invokedynamic compatibility`~~ | ~~方法名以 `lambda$` 开头~~ | ~~`shouldKeepBytecodeForCompatibility`~~ | **已撤销**（R6.1 阶段2-2f lambda 预处理器展开，见 §15-§19） |
 | ~~S3~~ | ~~`large exception-table method remains on bytecode path`~~ | ~~`tryCatchBlocks.size() > 4`~~ | — | **已撤销**（异常表阈值放宽，PR #657） |
 | S4 | `invokedynamic remains on bytecode path for compatibility` | 块内有 `MIRKind::INVOKE_DYNAMIC` | `shouldKeepBytecodeForCompatibility` | 设计如此(待展开) |
 | S5 | `high-risk runtime call remains on bytecode path: <owner>.<name>` | INVOKE 命中黑名单 | `shouldKeepBytecodeForCompatibility` | 设计如此 |
@@ -120,13 +120,13 @@ F1 子原因:`ssa_builder.cpp` 的栈下溢、DUP/SWAP category 校验、invoked
 
 | 维度 | StackC | RegC |
 |---|---|---|
-| invokedynamic/lambda | 完整支持(MethodHandle 桥,`stackc_backend.cpp:2729`) | fail-closed |
+| invokedynamic/lambda | 完整支持(MethodHandle 桥,`stackc_backend.cpp:2729`) | pre-SSA 展开（string concat + lambda 阶段2-2f 已落地，自定义 bootstrap 仍 fail-closed；见 `regc_invokedynamic_strategy.md`） |
 | high-risk call | **无黑名单**,全走 JNI | 显式 skip |
 | 内部类/大异常表 | 无限制 | 显式 skip |
 | dcmpg/dcmpl/fcmpg/fcmpl/lcmp 比较 | 支持(原生 C 比较) | 支持(emitter intrinsic NaN-aware 三值) |
 | IR 模型 | MIR→C,忠实栈机翻译(`jvalue stack[]`) | MIR→SSA→RegIR→C,要求无栈语义 |
 
-**本质差异**:StackC 把 JVM 操作数栈原样搬到 C 的 `jvalue stack[]`,所以 invokedynamic(用 MethodHandle)、浮点比较(用原生 C)、反射调用(用 JNI)都能直接表达。RegC 追求"无栈纯寄存器代码",必须消除所有栈语义。浮点/long 三值比较已通过 `cmp.nan_*` intrinsic 实现(见 §5);invokedynamic 展开未做完,用 fail-closed 兜底(且有可观测日志,见 §6)。
+**本质差异**:StackC 把 JVM 操作数栈原样搬到 C 的 `jvalue stack[]`,所以 invokedynamic(用 MethodHandle)、浮点比较(用原生 C)、反射调用(用 JNI)都能直接表达。RegC 追求"无栈纯寄存器代码",必须消除所有栈语义。浮点/long 三值比较已通过 `cmp.nan_*` intrinsic 实现(见 §5);javac 生成的 string concat / lambda / 方法引用 invokedynamic 经 `InvokeDynamicPreprocessor` pre-SSA 展开（阶段1-2f，见 §14-§19），自定义 bootstrap 仍 fail-closed 兜底（且有可观测日志，见 §6）。
 
 ## 8. `test.jar` 实测覆盖统计
 
@@ -138,7 +138,7 @@ F1 子原因:`ssa_builder.cpp` 的栈下溢、DUP/SWAP category 校验、invoked
 |---|---|---|
 | 成功 native | 25 | 生成 `Java_*` JNI export |
 | 显式 skip(high-risk call) | 13 | 反射/安全/IO/Thread API |
-| 显式 skip(invokedynamic) | 1 | Task.lambda$run$0 |
+| ~~显式 skip(invokedynamic)~~ | ~~1~~ | ~~Task.lambda$run$0~~ **lambda$ skip 已撤销（R6.1 阶段2-2f 预处理器展开，现转 native）** |
 | 显式 skip(large exception-table) | 1 | Main.main(tryCatchBlocks>4) |
 | 显式 skip(inner class) | 1 | Exec$Inner.doAdd |
 | ~~静默 fail-closed~~ | ~~1~~ | ~~Calc.runAdd(cmp.nan_greater 未实现,bug)~~ **已修复,现转 native** |
@@ -150,10 +150,10 @@ F1 子原因:`ssa_builder.cpp` 的栈下溢、DUP/SWAP category 校验、invoked
 | 类别 | 可修复性 | 优先级 |
 |---|---|---|
 | ~~`cmp.nan_*` intrinsic(浮点/long 比较)~~ | ~~可修复,bug~~ | ~~高~~ **已修复** |
-| 大异常表阈值 > 4 | 阈值可调/可移除 | 中(异常表 lowering 已实现,阈值偏保守) |
-| 内部类 `$` 硬跳 | 可讨论放宽 | 中 |
+| ~~大异常表阈值 > 4~~ | ~~阈值可调/可移除~~ | ~~中~~ **已撤销**（§11，异常表 lowering 三层无上限） |
+| ~~内部类 `$` 硬跳~~ | ~~可讨论放宽~~ | ~~中~~ **已撤销**（R6-C，RegisterNatives 绑定） |
 | ~~静默 fail-closed 可观测性~~ | ~~加 printf 即可~~ | ~~中~~ **已修复** |
-| invokedynamic/lambda | 工作量大,设计如此 | 低(需 SSA 层展开 bootstrap) |
+| ~~invokedynamic/lambda~~ | ~~工作量大,设计如此~~ | ~~低~~ **已落地**（R6.1 阶段1-2f pre-SSA 展开，§14-§19；自定义 bootstrap 仍 fail-closed） |
 | high-risk 黑名单·反射组 | ~~不可直接删~~ **已放开**（引用管理前置完成） | ~~中~~ **已完成** |
 | high-risk 黑名单·类加载/IO/并发 | 分项放开（各有独立前置） | 中/低（见 §12） |
 | init/clinit | JVM 限制,设计如此 | 不修 |

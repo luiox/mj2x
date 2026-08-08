@@ -180,13 +180,12 @@ bool isCompatibilityRiskCall(const ca::str::Utf8StringRef& owner, const ca::str:
     return concurrency || systemSensitive;
 }
 
-bool shouldKeepBytecodeForCompatibility(const MethodNode& method, const std::vector<Block*>& blocks,
-                                        std::string& reason)
+bool shouldKeepBytecodeForCompatibility(const std::vector<Block*>& blocks, std::string& reason)
 {
-    if (method.name.to_std_string().rfind("lambda$", 0) == 0) {
-        reason = "lambda body remains on bytecode path for invokedynamic compatibility";
-        return true;
-    }
+    // 注意：原 lambda$ 整体 skip 已撤销。javac 合成的 lambda$ 方法现在由
+    // InvokeDynamicPreprocessor（regc_invokedynamic_strategy.md 阶段2-2f）把每个
+    // LambdaMetafactory 站点重写为合成实现类，invokedynamic 标记与 lambda$ 体在进入
+    // RegC 前已被消除，故无需再按方法名前缀 skip。覆盖见 e2e InvokeDynamic*LambdaRoundTrip。
     // 异常表阈值放宽：lowering 三层对 catch 数量无上限（实测 pack.Main 14 个 catch 正常）。
     // 原 >4 阈值过保守，会把 main 等含多 try-catch 的方法误伤。此处不再按异常表数量 skip。
     for (auto* block : blocks) {
@@ -347,7 +346,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     std::string reason;
     // 内部类（含 $）整体 skip 已撤销：RegC 现用 RegisterNatives 动态绑定，
     // 函数名/符号导出与 JNI 查找完全脱钩，内部类的 native 方法可以像普通类一样注册。
-    if (shouldKeepBytecodeForCompatibility(*mn, blocks, reason)) {
+    if (shouldKeepBytecodeForCompatibility(blocks, reason)) {
         printf("[RegCBackend] Skipping %s.%s%s: %s\n",
                className.c_str(),
                methodName.c_str(),
