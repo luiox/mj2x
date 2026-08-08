@@ -21,6 +21,7 @@
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
+#include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "test_helper.hpp"
 
 namespace fs = std::filesystem;
@@ -172,6 +173,9 @@ protected:
         // R6.1：先展开 StringConcatFactory invokedynamic → StringBuilder 字节码，
         // 再 mark-all，使 concat 方法能进入 RegC native 流程。
         pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
+        // 搬运法（regc_conversion_decisions.md §7.1）：<init>/<clinit> 体先进
+        // __regc_* 静态方法（MarkAll 标记后编译成 native），骨架保留字节码。
+        pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
         // RegC 用 RegisterNatives 动态绑定，需要 mj2x/cloader/Loader 桥接类
         // （JNI_OnLoad 绑其 registerNativesForClass 到 _mj2x_register_for_class）。
@@ -407,6 +411,38 @@ TEST_F(RegCBackendE2E, CallHelpersRoundTrip)
             {
                 {"staticCaller(9)", "RegCCallHelpers.staticCaller(9)"},
                 {"instanceCaller(5)", "RegCCallHelpers.instanceCaller(5)"},
+            });
+}
+
+// R6.1 构造器/静态块搬运验证（regc_conversion_decisions.md §7.1 搬运法）：
+// <init>/<clinit> 方法体被搬进 __regc_init_*/__regc_clinit_* 静态方法后经
+// MarkAll 编成 native；原方法保留字节码骨架（super 调用链 / registerNatives 注入点）。
+// javac 默认( -g:lines,source)在 <init> 头部生成 LineNumberTable 锚点 label，
+// 正好覆盖 v1「允许切点前 LABEL/LINE、拒绝跨切点引用」的放宽边界。
+TEST_F(RegCBackendE2E, InitAndClinitMoveRoundTrip)
+{
+    runCase("RegCNativeInit",
+            "public class RegCNativeInit {\n"
+            "  public int value;\n"
+            "  public static int counter;\n"
+            "  static {\n"
+            "    counter = 100;\n"
+            "  }\n"
+            "  public RegCNativeInit(int x) {\n"
+            "    value = x * 3;\n"
+            "  }\n"
+            "  public RegCNativeInit(int x, long y) {\n"
+            "    value = x + (int) y;\n"
+            "  }\n"
+            "  public int getValue() { return value; }\n"
+            "  public static int getCounter() { return counter; }\n"
+            "  public static int readStatic() { return counter + new RegCNativeInit(5).value; }\n"
+            "}\n",
+            {
+                {"staticBlock", "RegCNativeInit.getCounter()"},
+                {"init1", "new RegCNativeInit(7).getValue()"},
+                {"initLong", "new RegCNativeInit(2, 40L).getValue()"},
+                {"readStatic", "RegCNativeInit.readStatic()"},
             });
 }
 

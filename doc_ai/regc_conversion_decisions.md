@@ -106,10 +106,17 @@
 
 ## 7. 5 个"可转被卡住"点（2026-08-08 决策）
 
-### 7.1 `<init>`/`<clinit>`：搬运法 ✅ 决策
-- 生成同签名静态方法 `__regc_clinit_<hash>`（构造器同理），把原方法体指令搬进，原 `<init>`/`<clinit>` 骨架只保留"super 调用 + 对生成方法的调用"。
+### 7.1 `<init>`/`<clinit>`：搬运法 ✅ 决策（2026-08-08 已实现）
+- 生成同签名静态方法（`__regc_init_<hash>` / `__regc_clinit_<hash>`），把原方法体指令搬进，原 `<init>`/`<clinit>` 骨架只保留"super 调用 + 对生成方法的调用"。
 - `<clinit>` 骨架必须保留"注册时机"在调用生成方法之前（本次 `registerNativesForClass` 头部注册语义不破）。
 - 前提：JVM 对原生 `<init>` 标 ACC_NATIVE 部分实现拒收——我们不标生成方法，只标生成方法 native，无冲突。
+- 实现：`init_clinit_mover_preprocessor.hpp/.cpp`，注册于 MarkAll 之前；`__regc_*` 生成方法由 MarkAll 标记进 native 编译。生成方法 `ACC_STATIC | ACC_PRIVATE`，desc 为 `(L<owner>;<原参数>)V`（this 显式参数化，body 指令槽位零改动）。
+- v1 保守边界（不搬，保留字节码）：
+  - 有 tryCatchBlocks / localVariables / 局部变量注解；
+  - `<init>` 骨架段（切点 `INVOKESPECIAL <init>` 之前）含 FRAME 或跳转/switch 指令；
+  - 骨架段引用克隆体段 label（除行号锚点外）；克隆体跳转/switch 引用骨架段 label。
+  - javac 常态放行：骨架段 LABEL/LINE（行号锚点）；克隆体尾部 LineNumberNode 引用骨架段 label 时，克隆前映射到生成方法占位 label。
+- 验证：单测 `init_clinit_mover_test.cpp` 9 项；E2E `RegCBackendE2E.InitAndClinitMoveRoundTrip`（javac 默认 debug 信息下构造器×2 + 静态块 native 往返）。
 - 优先：中（类初始化是较稀少的执行；构造器是高频热路径）。
 
 ### 7.2 lambda$ 删 skip ✅ 决策

@@ -3,6 +3,7 @@
 #include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
+#include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "mj2x/preprocessor/ldc_preprocessor.hpp"
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "mj2x/preprocessor/multianewarray_preprocessor.hpp"
@@ -825,6 +826,10 @@ int main(int argc, char** argv)
             std::make_unique<mj2x::NativeMethodPrefixPreprocessor>(options.nativeMethodPrefixes));
     }
     else {
+        // 搬运法（regc_conversion_decisions.md §7.1）：MarkAll 之前先把 <init>/<clinit>
+        // 的体搬进 __regc_* 静态方法，让构造逻辑能进入 native 编译流程（<init>/<clinit>
+        // 本身保留字节码骨架，不标 ACC_NATIVE）。
+        pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
     if (needsNativeSource &&
