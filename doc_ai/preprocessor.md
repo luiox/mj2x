@@ -14,7 +14,7 @@ L1 `CodeConverter`（栈式 MIR 翻译）对几类 JVM 指令**无法直接翻�
 
 | 指令 | 为什么不能直译 | preprocessor 处理 |
 |------|---------------|-------------------|
-| `invokedynamic` | bootstrap 方法在运行时链接 call site，构建期无法静态决定目标；`MIRInvoke` 只能表达静态已知的 owner/name/desc | StackC 保留 bootstrap 元数据并在 native 侧走 MethodHandle runtime bridge；RegC 仍等待字节码/IR 展开 |
+| `invokedynamic` | bootstrap 方法在运行时链接 call site，构建期无法静态决定目标；`MIRInvoke` 只能表达静态已知的 owner/name/desc | StackC 保留 bootstrap 元数据并在 native 侧走 MethodHandle runtime bridge；RegC 在 SSA 前分阶段展开可静态解析的站点（见 `regc_codegen.md` §转换边界） |
 | `multianewarray` | 一次分配 N 维数组，需要 N 个长度操作数；`MIRNewArray` 只支持 1 维 | 展开为嵌套 `anewarray`/`newarray`（每维一次） |
 | `ldc` Handle/Type | Handle/Type 不是普通常量，需要 `MethodHandles.Lookup` 反射构造；`MIRConstant` 只支持标量 | Handle → `Lookup.findVirtual/findStatic/...` 链；Type → `Class.forName`/`MethodType.fromMethodDescriptorString` |
 
@@ -118,28 +118,8 @@ unbox / jobject 返回
 `LambdaMetafactory.metafactory` 的方法引用和捕获 lambda。它是 StackC 正确性路径，
 不是 RegC 的无栈 lowering。
 
-RegC 后续仍应参考 native-obfuscator `IndyPreprocessor` 的非 HOTSPOT 分支，在进入
-SSA/RegIR 前展开。目标伪字节码为：
-
-```
-bootstrapStart:
-   ; 装箱所有 dynamic-call 参数为 Object[]（category-2 手动 box）
-   ; 加载 LOOKUP_LOCAL、invocation name (String)、MethodType（LdcPreprocessor 的展开）、
-   ;   每个 BSM 参数（box int/long/...，递归处理 Object[]）
-   ; INVOKESTATIC bsm(owner, name, type, ...bsmArgs)   ; 直接调 bootstrap 方法
-   ; 结果 checkcast CallSite → getTarget() → MethodHandle
-   goto invokeStart
-bootstrapEnd:
-bsmeStart:                       ; catch Throwable
-   dup; instanceof BootstrapMethodError; ifne throwLabel;
-   new BootstrapMethodError; dup; dup2_x1; pop2;
-   invokespecial BootstrapMethodError.<init>(Throwable)
-   throwLabel: athrow
-invokeStart:
-   ; 把 receiver + 已装箱 args 作为 Object[] 传给 MethodHandle.invokeWithArguments
-   ; CHECKCAST / unbox 返回类型
-tryCatch(bootstrapStart..bootstrapEnd -> bsmeStart, Throwable)
-```
+> RegC 的 invokedynamic 展开已在 `InvokeDynamicPreprocessor` 落地（在 SSA 前把可静态
+> 解析的站点改写为普通字节码）。展开形态与边界见 `regc_codegen.md` §转换边界。
 
 ### 4.3 varargs BSM 归一
 

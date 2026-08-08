@@ -63,15 +63,15 @@ native。JAR 输入仍沿用 mj2x pipeline 的整包读写能力；signed-JAR me
 - RegC 是保护路线 MVP，不是完整 javac/bytecode 全覆盖后端；遇到 unsupported shape 必须 fail closed。
 - 对象、字段、数组、调用等多数 Java 语义仍通过生成 C 内的 helper 层承载；R3 runtime ABI 目前先接入
   div/rem/barrier 等核心 helper。
-- `invokedynamic` 暂不直译，策略见 `regc_invokedynamic_strategy.md`。
+- `invokedynamic` 暂不直译，展开策略见 `../doc_ai/regc_codegen.md` §转换边界。
 - JAR 输出沿用 pipeline MVP 限制：资源保留、class 替换、stored ZIP 输出；
   signed-JAR metadata fail-closed，multi-release class 作为资源 passthrough。
 - 保护强度不能由实现自证，需要 mjdbg/c2j trace 反馈闭环后再升级结论。
 
 ## 相关设计文档
 
-- `ssa_algorithm.md`、`register_ir.md`：SSA 和 RegIR 设计。
+- `ir_design.md`、`ssa_algorithm.md`：L2 SSA IR 结构与构造算法（ir_design §13 含 L3 RegIR lowering）。
 - `regc_mvp.md`、`regc_native_backend.md`：RegC lowering 和 backend facade。
-- `regc_runtime_helpers.md`、`regc_r3_runtime_abi.md`：helper/runtime ABI。
-- `regc_trace_samples.md`：mjdbg RegC 样本。
-- `mvp_backend_verification.md`：MVP 能力到测试/样本的验证索引。
+- `regc_codegen.md`：代码生成规则、转换边界与翻译决策。
+- `doc_ai/samples/regc_trace_samples.md`：mjdbg RegC 样本。
+- `capabilities.md`：能力到测试/样本的验证索引。

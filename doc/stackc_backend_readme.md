@@ -90,5 +90,5 @@ passthrough，不参与 root class 解析或 native injection。
 ## 相关设计文档
 
 - `stackc_revival_and_waves.md`：Wave 0-7 覆盖推进记录。
-- `stackc_backend_protected_samples.md`：mjdbg StackCBackend 样本契约。
-- `mvp_backend_verification.md`：MVP 能力到测试/样本的验证索引。
+- `doc_ai/samples/stackc_protected_samples.md`：mjdbg StackCBackend 样本契约。
+- `capabilities.md`：能力到测试/样本的验证索引。

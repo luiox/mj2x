@@ -126,7 +126,7 @@ The PR must also link the backend support matrix and verification index:
 
 - `stackc_backend_readme.md`
 - `regc_backend_readme.md`
-- `../doc_ai/mvp_backend_verification.md`
+- `../doc_ai/capabilities.md`
 
 ## Current Residual Risks
 

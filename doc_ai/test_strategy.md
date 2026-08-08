@@ -212,7 +212,7 @@ R3 起，受保护样本需在 c2j agent 下验证。样本与 expected trace su
 `test/mj2x/protected_samples/stackc/<SampleName>/`，同时生成 `TRACE_SURFACE.md`
 说明 mjdbg 应观察的 Java/native/JNI trace 面。
 
-设计说明见 `stackc_backend_protected_samples.md`。这些样本用于 trace 捕获、分组和弱点评估，
+设计说明见 `samples/stackc_protected_samples.md`。这些样本用于 trace 捕获、分组和弱点评估，
 不代表保护强度结论。
 
 ### 3.5 Backend README and MVP verification index
@@ -221,7 +221,7 @@ R3 起，受保护样本需在 c2j agent 下验证。样本与 expected trace su
 
 - `stackc_backend_readme.md`：StackC 支持特性、限制、CLI 用法、样本。
 - `regc_backend_readme.md`：RegC 支持特性、限制、CLI 用法、样本。
-- `mvp_backend_verification.md`：每个 MVP 能力对应的单测、E2E 或 protected sample。
+- `capabilities.md`：每个能力对应的单测、E2E 或 protected sample（能力→验证映射）。
 
 ### 3.5.1 JAR MVP fixtures and negative boundaries
 
@@ -239,14 +239,14 @@ pipeline。对应测试为 `IOTest.JarInputLoaderRejectsSignedJarMetadata`、
 
 `mir/register_ir_test.cpp` 覆盖 SSA → RegIR lowering：SSA block args 会被消解为
 successor edge copies，RegIR 操作数只能是虚拟寄存器或立即数，不能表达 JVM stack slot。
-设计说明见 `register_ir.md`。
+设计说明见 `ir_design.md` §13。
 
 ### 3.7 RegC MVP fixtures
 
 `backend/regc_test.cpp` 覆盖 RegIR → C helper emission：纯计算、分支、循环、
 switch、edge-copy 输出，以及字段、数组、调用、对象、reference check、monitor、
 try/catch exception dispatch、integer div/rem trap 的 `_mj2x_regc_*` helper 形态。测试会断言生成 C 不含 `cstack[`、`stack[`、
-`union jvalue`、`sp--` 等 stack-machine anchor。设计说明见 `regc_mvp.md`。
+`union jvalue`、`sp--` 等 stack-machine anchor。设计说明见 `regc_codegen.md`。
 
 ### 3.8 RegC trace samples
 
@@ -254,7 +254,7 @@ try/catch exception dispatch、integer div/rem trap 的 `_mj2x_regc_*` helper �
 编译 Java 样本，并生成 RegC helper-style C 到
 `test/mj2x/protected_samples/regc/<SampleName>/`。这些样本用于 mjdbg 对比 StackC
 stack-style C 与 RegC register/helper-style C 的 trace surface。设计说明见
-`regc_trace_samples.md`。
+`samples/regc_trace_samples.md`。
 
 ### 3.9 RegC native backend
 
@@ -270,7 +270,7 @@ caller catch。`IntegerDivisionTrapRoundTrip` 覆盖 i32/i64 除零捕获/传播
 `MIN_VALUE / -1`、`MIN_VALUE % -1` 边界。
 `NarrowPrimitiveRoundTrip` 覆盖 byte/short/char/boolean field helper 与
 byte/short/char array helper 的 DLL round-trip。
-设计说明见 `regc_native_backend.md` 与 `regc_runtime_helpers.md`。
+设计说明见 `regc_codegen.md`（RegIR→C 生成规则、转换边界与运行时 ABI 总览，代码生成审查入口）与 `codegen_style.md`（命名/注释规范）。
 
 ### 3.10 R3 runtime core
 

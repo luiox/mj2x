@@ -38,7 +38,7 @@ git diff --check HEAD
 分别验证 StackC/RegC 的 class 与 jar 输入,并比较连续两次生成的 `.class` /
 `.jar` / `.c` SHA-256。生成物统一写到 `test/product_sample_hardening/mj2x/`。
 
-能力到测试的追溯表见 [mvp_backend_verification.md](../doc_ai/mvp_backend_verification.md)。
+能力到测试的追溯表见 [capabilities.md](../doc_ai/capabilities.md) 与 [test_strategy.md](../doc_ai/test_strategy.md)。
 
 ---
 

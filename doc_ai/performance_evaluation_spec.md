@@ -1,6 +1,6 @@
 # mj2x 性能评估规范
 
-> 规范文档:规定 mj2x native 转换后的性能评估方法学,避免"假全量 native"导致的数据失真。本文档来源于一次实际教训——曾因未验证覆盖率,得出"RegC 比 StackC 快 39 倍"的错误结论,实际是 RegC 把热点方法 fail-closed 给 JVM 跑了。见 `regc_native_coverage_analysis.md` 的根因分析。
+> 规范文档:规定 mj2x native 转换后的性能评估方法学,避免"假全量 native"导致的数据失真。本文档来源于一次实际教训——曾因未验证覆盖率,得出"RegC 比 StackC 快 39 倍"的错误结论,实际是 RegC 把热点方法 fail-closed 给 JVM 跑了。
 
 ## 1. 核心原则
 
@@ -36,7 +36,7 @@ javap -p -c -cp <native.jar> <fully.qualified.Class>
 javap -p -c -cp <native.jar> <Class> | grep -B1 "    Code:"
 ```
 
-凡是"有字节码、不是构造器/clinit"的方法,都是未转 native(fail-closed 或显式 skip)。见 `regc_native_coverage_analysis.md` 的第 6 节。
+凡是"有字节码、不是构造器/clinit"的方法,都是未转 native(fail-closed 或显式 skip)。哪些不转、为什么,见 `regc_codegen.md` §转换边界。
 
 ### 2.3 报告必须包含覆盖率表
 
@@ -141,6 +141,6 @@ javap -p -c -cp <native.jar> <Class> | grep -B1 "    Code:"
 
 ## 8. 关联
 
-- RegC 覆盖率根因:`regc_native_coverage_analysis.md`
+- RegC 转换边界（哪些不转 native、为什么）:`regc_codegen.md` §转换边界
 - 能力声明:`capabilities.md`
 - 测试策略:`test_strategy.md`

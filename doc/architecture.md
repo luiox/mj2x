@@ -1,7 +1,6 @@
 # mj2x Architecture
 
-> Current architecture overview for mj2x. Historical redesign notes are archived
-> under `doc/_archive/`.
+> Current architecture overview for mj2x.
 
 ---
 

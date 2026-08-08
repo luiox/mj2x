@@ -95,9 +95,9 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 
 **JNI local ref 引用管理**:每个 native 方法用 JNI `PushLocalFrame`(入口) / `PopLocalFrame`(单出口 `_mj2x_regc_cleanup`，REF 返回值 promote 到父帧、非 REF 传 NULL)批量释放方法内产生的 local ref，避免反射等密集调用撑爆 JNI 16 槽 local ref 表。零 C 数组、不引入 stack anchor；纯标量方法不发射帧。缓存 class/method/field 走 `NewGlobalRef` 不受帧影响。REF 相等比较(`if_acmpeq/ne`、与 null 比较)使用 `IsSameObject` 而非裸 `void*` 指针比较。
 
-**invokedynamic 分阶段展开(R6.1)**:`InvokeDynamicPreprocessor` 在 SSA 前把可静态解析的 indy 改写成 RegC 已能 lower 的普通字节码，绕开 RegC 缺 owner-class 障碍(不走 StackC runtime bridge)。**阶段1 string concat(§14)**:`StringConcatFactory.makeConcat[WithConstants]` → `new StringBuilder`/`append` 链/`toString`(栈参数先 xSTORE 到新局部槽，按 recipe 展开)。**阶段2 无状态/捕获 lambda(§15)**:`LambdaMetafactory.metafactory` → 为站点合成实现 functional interface 的类(SAM 方法 `invokestatic` 转调 impl，impl 形参=captured++sam)。无状态=空 `<init>`;捕获=N 个 private final 字段+参数化 `<init>`(站点栈上捕获值先 xSTORE 暂存、再 new/dup/xLOAD/invokespecial)，SAM 先 getfield 取回捕获值。私有目标方法提权避免 `IllegalAccessError`;`OutputWriter::isGeneratedRuntimeClass` 认 `mj2x/lambda/*` 前缀。**阶段2c 实例/构造器方法引用**:`buildLambdaClassNode` 按 `impl.getTag()` 发射 SAM——`H_INVOKEVIRTUAL`/`H_INVOKEINTERFACE`(实例引用,receiver=fullArgs 首元:bound 取捕获字段/unbound 取 SAM 首参)、`H_INVOKESPECIAL`(私有实例引用,提权后按 INVOKEVIRTUAL)、`H_NEWINVOKESPECIAL`(构造器引用,NEW/DUP/args/INVOKESPECIAL `<init>`/ARETURN)。校验改 tag 感知(实例 receiver-first + 返回类别一致性守卫),de-privatize 推广为「用户类非 public 目标一律提权 public」。**阶段2d 擦除泛型装箱/桥接(§17)**:泛型 functional interface(Function/Supplier/Predicate/ToIntFunction…)擦除后 samMethodType 形参/返回为 Object,合成 SAM 体静态发射 LMF 运行期适配的可展开子集——引用收窄 CHECKCAST、引用→基本类型 CHECKCAST 包装类+xxxValue 拆箱、基本类型→Object/包装类 valueOf 装箱、SAM void 返回 POP/POP2 丢弃。**阶段2e altMetafactory(§18)**:`javac` 为 serializable lambda、交集类型 marker 接口或泛型桥接发 `altMetafactory`,`parseAltMetafactoryTail` 解析 flags/markers/bridges,合成类追加 marker 接口(含 `java/io/Serializable`,靠默认序列化 round-trip capN 字段)、为每个 bridge 描述符发 `ACC_BRIDGE` 同名方法(复用 impl 适配);未知 flag 位保守 fail-closed。**阶段2f 基本类型加宽桥接(§19)**:method reference 实参/返回基本类型与 SAM 相差一个 JLS 加宽时静态发 `i2l`/`i2d`/`l2d`/`f2d`。基本类型收窄/装箱+加宽复合适配/自定义 bootstrap 仍 fail-closed。
+**invokedynamic 分阶段展开(R6.1)**:`InvokeDynamicPreprocessor` 在 SSA 前把可静态解析的 indy 改写成 RegC 已能 lower 的普通字节码，绕开 RegC 缺 owner-class 障碍(不走 StackC runtime bridge)。已展开：string concat（StringBuilder 链）、无状态/捕获 lambda、实例/构造器/接口方法引用、擦除泛型装箱/桥接、altMetafactory（serializable/marker/bridge）、基本类型加宽。仍 fail-closed：基本类型收窄、装箱+加宽复合、自定义 bootstrap。展开形态与边界见 `regc_codegen.md` §转换边界。
 
-**覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 可观测 fail-closed),实测复杂 jar(JavaObfuscatorTest `TEST.jar`)约 90% 业务方法真正转 native(~50/56,含入口 main、反射方法、大异常表方法)。未转原因均为**有意保留的分组黑名单**:invokedynamic 的基本类型收窄/装箱+加宽复合适配/自定义 bootstrap（string concat + 无状态/捕获 lambda + 实例/构造器方法引用 + 擦除泛型装箱/桥接 + altMetafactory serializable/marker/bridge + 基本类型加宽已展开转 native,见 §14–§19）、并发(`Thread`/`java.util.concurrent`——线程池/锁 monitor 在 native 帧不可靠,独立根因)、System(`exit`/`SecurityManager`)。**反射组**(`java/lang/Class`/`java/lang/reflect/*`/`Object.getClass`)、**IO 组**(`java/io/InputStream`/`ByteArrayInputStream`)、**类加载组**(`java/lang/ClassLoader` 的 `loadClass`/`getResourceAsStream`/`defineClass`)均已放开(引用管理前置完成)。**内部类 `$`** 注册已随 RegisterNatives 撤销,`this$0` 合成字段访问与外部类方法调用路径端到端通过。浮点/long 三值比较(`cmp.nan_*` intrinsic)已实现。大异常表(多 catch)已支持(lowering 三层无上限)。fail-closed 点通过 `[RegCBackend] Skipping <method>: <stage> failed: <reason>` 日志暴露,不再静默。**性能评估必须先做覆盖率审计**,详见 [regc_native_coverage_analysis.md](regc_native_coverage_analysis.md) §12/§13/§14/§15 与 [performance_evaluation_spec.md](performance_evaluation_spec.md)。
+**覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 可观测 fail-closed),实测复杂 jar(JavaObfuscatorTest `TEST.jar`)约 90% 业务方法真正转 native(~50/56,含入口 main、反射方法、大异常表方法)。未转原因均为**有意保留的分组黑名单**:invokedynamic 的基本类型收窄/装箱+加宽复合适配/自定义 bootstrap（其余 indy 形态已展开转 native，见 `regc_codegen.md` §转换边界）、并发(`Thread`/`java.util.concurrent`——线程池/锁 monitor 在 native 帧不可靠,独立根因)、System(`exit`/`SecurityManager`)。**反射组**(`java/lang/Class`/`java/lang/reflect/*`/`Object.getClass`)、**IO 组**(`java/io/InputStream`/`ByteArrayInputStream`)、**类加载组**(`java/lang/ClassLoader` 的 `loadClass`/`getResourceAsStream`/`defineClass`)均已放开(引用管理前置完成)。**内部类 `$`** 注册已随 RegisterNatives 撤销,`this$0` 合成字段访问与外部类方法调用路径端到端通过。浮点/long 三值比较(`cmp.nan_*` intrinsic)已实现。大异常表(多 catch)已支持(lowering 三层无上限)。fail-closed 点通过 `[RegCBackend] Skipping <method>: <stage> failed: <reason>` 日志暴露,不再静默。**性能评估必须先做覆盖率审计**,见 [performance_evaluation_spec.md](performance_evaluation_spec.md)。
 
 - **RegIR dead-code elimination**:在 RegIR→RegC 之间迭代删除未被终结器、CFG edge copy 或异常边消费的纯计算链；可能抛异常、内存访问、调用与 barrier 一律保留。`RegDceTest.*` 覆盖死链删除和 edge copy 活跃值保留，RegC native E2E 覆盖 JVM 语义。
 - **RegIR protection transforms**:RegC 在 DCE 后应用 i32/i64 加法 MBA 恒等式、分支 opaque predicate 与纯控制流 CFF。CFF 通过状态寄存器与 dispatcher switch 路由边，同时保留 edge copy；包含异常区域、内存访问、调用、barrier、throw 或 div/rem 的函数保持原 CFG。`RegTransformPassTest.*` 覆盖变换结构与保守跳过，`RegCBackendE2E.PureArithmeticLoopAndArrayRoundTrip` 覆盖 JVM 循环/数组语义。
@@ -116,7 +116,7 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 - try / catch
 - null trap
 - integer div / rem trap(走 R3 runtime ABI)
-- generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池。动态 descriptor 与 runtime `class_name` 不进入全局 cache，避免破坏 class-loader identity 和类卸载语义；量化依据见 [regc_cache_cse_evaluation.md](regc_cache_cse_evaluation.md)
+- generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池。动态 descriptor 与 runtime `class_name` 不进入全局 cache，避免破坏 class-loader identity 和类卸载语义；决策理由见 `regc_codegen.md` §6
 - **JDK intrinsic(Math / wrapper parse/toString/compare/value-unbox / Random next* / String UTF-16 hot paths / mutable String CRT 链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接调用 CRT ABI 或 TU-local cache helper
 
 **JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
@@ -219,7 +219,7 @@ G11 反射）生成样本做 native 转换 E2E，建立双后端的 opcode/语�
   `mj2x-cli --compile`、native library、`java -Xverify:all` 和 stdout 精确比较
 - 跨项目样本访问：`test_helper` 的 `getProjectResource` / `getProjectResourcePath` 系列（按项目名定位）
 - JDK/MSVC 探测：统一走 `libs/libjdk_finder`（与 `mj2x-cli --compile` 共用，不再各自硬编码路径）
-- 覆盖映射：`doc_ai/jbc_sample_coverage.md`
+- 覆盖映射：`../../doc_ai/jbc_sample_coverage.md`（global 文档）
 
 与 `stackc_backend_e2e_test.cpp`（当前源码实际 30 个手写 inline Java case）互补：后者覆盖
 monitor/exception/invokedynamic 等更广形状；共享矩阵逐步接管可双后端比较的 case。
@@ -249,10 +249,10 @@ tools/product_sample_smoke.ps1 -Mode fast -SkipBuild -AllowMissingSamples
 Linux CI 安装 OpenJDK 17，并构建、执行 `mtest_set_unittest`、`mj2x_unittest`
 和 `mj2x_integration_test`；`mj2x-cli` 作为同一构建批次的依赖目标。
 
-能力到测试的追溯见 `../doc_ai/mvp_backend_verification.md`。
+能力到测试的追溯见本文档各能力表的"验证"列与 `test_strategy.md`。
 
 ## 9. Validation maturity
 
 - 首切片：`script/validate_release.ps1 -Layer mj2x -Mode release` 覆盖 build、unit、CLI smoke，并产出 `build/artifacts/windows/x64/<mode>/mj2x/mj2x-windows-x64-<mode>.zip` 与 `SHA256SUMS`。
-- Windows 原生工具链实测：MSVC、Clang/Clang++、Zig、xmake 和 CMake 的 class/JAR、file/pipe 与 C++17 结果见 [native_compile_validation.md](native_compile_validation.md)；Linux/macOS 与缺失的 GCC 仍显式标为 unverified。
+- Windows 原生工具链实测：MSVC、Clang/Clang++、Zig、xmake 和 CMake 的 class/JAR、file/pipe 与 C++17 编译由 `CliTest.*` 覆盖（见 test_strategy §1.1）；Linux/macOS/GCC 的覆盖由对应平台 CI 提供。
 - 尚未产品级：真实 protected sample corpus、跨 MSVC/GCC/Clang native compile gate、mjdbg observation report 仍需作为 release gate 固化。

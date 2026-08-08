@@ -1,10 +1,10 @@
-# mj2x IR 设计（L2 SSA / L3 寄存器 IR）
+# mj2x L2 SSA IR 设计
 
 > 状态：R1a 实现 note，权威随代码演进
-> 日期：2026-06-25
-> 关系：本文档定义 `src/mj2x/mir/ssa/` 的 IR 数据结构。
+> 关系：本文档定义 `src/mj2x/mir/ssa/` 的 L2 SSA IR 数据结构。
 > 上层依据：`../doc/architecture.md` 的 MIR / SSA / RegIR 分层。
 > 算法依据：`ssa_algorithm.md`（reaching-def + block-arg 构造流程）。
+> 下游：L3 Register IR（lowering）见本文 §13。
 >
 > 本文只讲"IR 长什么样"；"怎么从字节码构造出来"在 `ssa_algorithm.md`。
 
@@ -181,9 +181,10 @@ SSAEffect {
 **纯算术**（Unary/Binary 无 trap）= `Pure`；div/rem = `Pure.copy(mayThrow=true)`；
 数组访问 = `ReadMemory/WriteMemory.copy(mayThrow=true)`；call = `ExternalCall`。
 
-**INVOKE_DYNAMIC** 不在这 12 类里。StackC 当前保留 `MIRInvokeDynamic`
-bootstrap 元数据并生成 native MethodHandle runtime bridge；RegC/SSA 仍要求
-后续在进入无栈 IR 前展开或 fail-closed。
+**INVOKE_DYNAMIC** 不在这 12 类里。StackC 保留 `MIRInvokeDynamic` bootstrap 元数据并在
+native 侧走 MethodHandle runtime bridge；RegC 在进入 SSA 前由 `InvokeDynamicPreprocessor`
+把可静态解析的站点改写为普通字节码（展开形态见 `regc_codegen.md` §转换边界），
+未展开的（自定义 bootstrap 等）在 SSA fail-closed。
 
 ---
 
@@ -258,3 +259,21 @@ src/mj2x/mir/
 ```
 
 `reaching_def` 放 `mir/` 而非 `mir/ssa/`，因为它服务于 builder，但本身是独立数据流 pass，未来 L4 也会用。
+
+---
+
+## 13. L3 Register IR（SSA → RegIR lowering）
+
+L2 SSA 是 block-argument 形式（φ 隐式编码在块入口参数 + 前驱传值，见 §6）。L3 Register IR（`RegFunction`，`mir/register_ir/`）把它拍平成**虚拟寄存器 + 边拷贝**形式，供 RegC 直接生成 C 局部变量。
+
+lowering 做两件事：
+
+1. **block-argument 消解为边拷贝**。SSA 的"后继块声明 `args[]`，前驱在 `SSASuccessor.args[]` 传值"被改造成"后继块无参数，每条前驱→后继的边携带一组 `RegCopy`"。phi 语义不变，只是表示从"块入口参数"挪到"边的拷贝序列"。这对 branch/switch 很重要：每条出边可以传不同的值。
+
+2. **值拍平为虚拟寄存器**。每个非字面量 SSA value 就是一个虚拟寄存器（沿用 SSA value id 作寄存器号，见 §9）。RegIR 不做物理寄存器分配——C 局部变量数量无上限，无意义。指令族沿用 SSA（unary/binary/compare/convert/field/array/call/allocate/intrinsic/barrier），用 `RegInstructionKind` 标签选活动字段，无 RTTI。
+
+**不变量**：RegIR 操作数只能是虚拟寄存器或立即数，**没有 JVM 栈槽/local slot/`sp`/`cstack` 操作数**。`validateRegIRNoStackSlots` 遍历全部指令、终结器、边拷贝强制此不变量——这是 RegC 消除 c2j 栈锚点的结构保证。
+
+异常表原样下传：`SSAExceptionRegion` → `RegExceptionRegion`（protected blocks + handler + 合成异常寄存器 + caughtType），RegC 据此生成 pending-exception dispatch（见 `regc_codegen.md` §4）。
+
+> L3 仍是虚拟寄存器 IR，不分配物理寄存器、不发射 C——那是 RegC 的事。
