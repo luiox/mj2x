@@ -27,11 +27,15 @@ RegC 的目标是把 Java 方法体翻译成**寄存器式 C**，同时消除 c2
 
 | 情况 | 原因 |
 |---|---|
-| 调用 `java/lang/Thread.*` 或 `java/util/concurrent/*` | native 帧内调用破坏线程池 monitor（ReentrantLock），实测抛 IllegalMonitorStateException，是独立根因 |
-| 调用 `System.exit` / `setSecurityManager` / `getSecurityManager` | 安全/退出语义敏感 |
-| 含仍未展开的 invokedynamic 节点 | 见下表 |
+| 有逻辑构造器（局部变量表非空） | 搬运注入的 `__regc_init_*` 会被 `Class.getDeclaredMethods()` 反射计数（synthetic 亦可见），破坏精确方法数断言（如 JavaObfuscatorTest Test 2.1 Counter）；业界（JNIC/j2cc/native-obfuscator）均不转构造器逻辑。空构造器仍骨架化 |
+| 构造器含 try-catch / 局部变量注解 / 骨架段含 FRAME/跳转 / 跨段 label 引用 | 搬运法保守边界（§9） |
+| `abstract` / 已有 `native`（无字节码） | JVM 限制，不进入后端 |
 
-**JVM 限制**（不进入后端）：`abstract`/已有 `native`（无字节码）、JSR/RET（javac 17 不产生）。
+> 历史 fail-closed 分组（`Thread`/`java.util.concurrent/*`、`System.exit`/
+> `setSecurityManager`、反射组、IO 组、类加载组、自定义 bootstrap invokedynamic）
+> 已全部放开：并发根因是旧全局 JNIEnv 在多线程 native 并发下互相覆盖，thread-local
+> env/ctx 修复（2026-08-09）后消除；invokedynamic 自定义 bootstrap 由阶段3
+> 运行时 call-site helper 支持（`regc_invokedynamic_strategy.md`）。
 
 **`<init>`/`<clinit>` 不直接标 ACC_NATIVE**（JVM 部分实现拒收 native 构造器），但用搬运法把方法体搬进生成的静态方法、原骨架保留 super 调用，构造器/类初始化逻辑仍转 native（见 §9）。
 
@@ -47,9 +51,9 @@ RegC 的目标是把 Java 方法体翻译成**寄存器式 C**，同时消除 c2
 | 基本类型加宽桥接（i2l 等） | ✅ |
 | 装箱+加宽复合 | ✖ fail-closed |
 | 基本类型收窄 | ✖ fail-closed |
-| 自定义 bootstrap | ✖ fail-closed |
+| 自定义 bootstrap | ✅ 阶段3 运行时 call-site helper（2026-08-09，见 `regc_invokedynamic_strategy.md`） |
 
-展开策略：选择在 SSA 前（而非像 StackC 那样在 native 侧保留 MethodHandle runtime bridge）把站点改写成普通字节码，因为 RegC 没有 owner-class 运行时桥，改写后走已有的 new/invoke/StringBuilder-intrinsic 路径即可，无需 native 新代码。剩余的自定义 bootstrap 不在编译期执行任意 bootstrap 代码，保持 fail-closed。
+展开策略：可静态解析的站点（LMF/concat）在 SSA 前由 `InvokeDynamicPreprocessor` 改写为普通字节码，改写后走已有的 new/invoke/StringBuilder-intrinsic 路径。自定义 bootstrap（阶段3）无法静态展开，由 SSA 登记站点元数据 + finalize 生成文件级 bootstrap 函数（MethodHandles.lookup/privateLookupIn、MethodType、bsmArgs 重建、CallSite.getTarget 全局缓存），方法体经 invokeWithArguments 调用。
 
 **已放开的边界**（曾经保留、现已转 native，仅留痕迹）：反射组（Class/reflect\*/getClass）、IO 组（InputStream/ByteArrayInputStream）、类加载（ClassLoader.loadClass 等）——引用管理（PushLocalFrame/PopLocalFrame）已吸收这些路径产生的 local ref。内部类 `$` 随 RegisterNatives 撤销 skip。大异常表（多 catch）lowering 三层无上限。
 
@@ -162,7 +166,7 @@ RegC **放弃 `Java_<mangled>` 符号导出**。原因：JNI 符号查找链路�
 
 所以构造器/类初始化的逻辑**确实转 native 了**，只是通过搬运而非直接标记。
 
-**保守边界**（命中则不搬，保留字节码）：方法体含 try-catch / 局部变量注解；`<init>` 骨架段（切点 `INVOKESPECIAL <init>` 之前）含 FRAME 或跳转/switch；骨架段引用了克隆体段的 label（行号锚点除外）；或克隆体的跳转/switch 引用了骨架段 label。javac 常态（骨架段只有 LABEL/LINE 行号锚点）放行。
+**保守边界**（命中则不搬，保留字节码）：方法体含 try-catch / 局部变量表 / 局部变量注解；`<init>` 骨架段（切点 `INVOKESPECIAL <init>` 之前）含 FRAME 或跳转/switch；骨架段引用了克隆体段的 label（行号锚点除外）；或克隆体的跳转/switch 引用了骨架段 label。javac 常态（骨架段只有 LABEL/LINE 行号锚点）放行。局部变量表本身只是调试信息，但搬运会注入新方法导致反射方法数变化，故有逻辑构造器（LVT 非空）一律保留字节码——这是与反射计数兼容的取舍，见 `regc_native_coverage_analysis.md`。生成方法标记 `ACC_SYNTHETIC`（反射仍可见，语义正确标记）。
 
 ## 10. 相关文档
 

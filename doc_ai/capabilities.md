@@ -81,9 +81,9 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 | 限制 | 说明 |
 |---|---|
 | 栈全用 `union jvalue` 数组 | 性能低于寄存器方案,后续可优化 |
-| RegC `INVOKEDYNAMIC` 分阶段 | string concat（阶段1，StringBuilder 字节码）+ 无状态/捕获 lambda（阶段2）+ 实例/构造器方法引用（阶段2c）+ 擦除泛型装箱/桥接（阶段2d，CHECKCAST/拆装箱/POP 适配）+ altMetafactory serializable/marker/bridge（阶段2e）+ 基本类型加宽桥接（阶段2f，i2l/i2d/l2d/f2d）已 pre-SSA 展开转 native;基本类型收窄/装箱+加宽复合/自定义 bootstrap 仍 fail-closed,StackC 有运行时 MethodHandle 桥 |
+| RegC `INVOKEDYNAMIC` 分阶段 | string concat（阶段1，StringBuilder 字节码）+ 无状态/捕获 lambda（阶段2）+ 实例/构造器方法引用（阶段2c）+ 擦除泛型装箱/桥接（阶段2d，CHECKCAST/拆装箱/POP 适配）+ altMetafactory serializable/marker/bridge（阶段2e）+ 基本类型加宽桥接（阶段2f，i2l/i2d/l2d/f2d）已 pre-SSA 展开转 native;自定义 bootstrap（阶段3，任意 bootstrap 方法）由 SSA 登记站点 + finalize 生成运行时 call-site helper（MethodHandles.lookup/privateLookupIn + MethodType + bsmArgs 重建 + CallSite.getTarget 全局缓存 + invokeWithArguments），2026-08-09 已实现;基本类型收窄/装箱+加宽复合仍 fail-closed |
 | JSR / RET 不纳入 | 废弃字节码,由 preprocessor / 输入规范处理 |
-| `<init>` / `<clinit>` 不被 MarkAll 标记 | 构造器保留原字节码,不走 native |
+| `<init>` / `<clinit>` 搬运法 | 空构造器骨架化（super + 调 `__regc_init_<hash>`），有逻辑构造器保留原字节码（注入方法会被反射方法数断言计数，业界同此策略），`<clinit>` 搬运到 `__regc_clinit_<hash>`；详见 `regc_codegen.md` §9 |
 
 ---
 
@@ -95,9 +95,9 @@ owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局�
 
 **JNI local ref 引用管理**:每个 native 方法用 JNI `PushLocalFrame`(入口) / `PopLocalFrame`(单出口 `_mj2x_regc_cleanup`，REF 返回值 promote 到父帧、非 REF 传 NULL)批量释放方法内产生的 local ref，避免反射等密集调用撑爆 JNI 16 槽 local ref 表。零 C 数组、不引入 stack anchor；纯标量方法不发射帧。缓存 class/method/field 走 `NewGlobalRef` 不受帧影响。REF 相等比较(`if_acmpeq/ne`、与 null 比较)使用 `IsSameObject` 而非裸 `void*` 指针比较。
 
-**invokedynamic 分阶段展开(R6.1)**:`InvokeDynamicPreprocessor` 在 SSA 前把可静态解析的 indy 改写成 RegC 已能 lower 的普通字节码，绕开 RegC 缺 owner-class 障碍(不走 StackC runtime bridge)。已展开：string concat（StringBuilder 链）、无状态/捕获 lambda、实例/构造器/接口方法引用、擦除泛型装箱/桥接、altMetafactory（serializable/marker/bridge）、基本类型加宽。仍 fail-closed：基本类型收窄、装箱+加宽复合、自定义 bootstrap。展开形态与边界见 `regc_codegen.md` §转换边界。
+**invokedynamic 分阶段展开(R6.1)**:`InvokeDynamicPreprocessor` 在 SSA 前把可静态解析的 indy 改写成 RegC 已能 lower 的普通字节码；阶段3（2026-08-09）起自定义 bootstrap 不再整方法保留字节码，由 SSA 登记站点 + finalize 生成运行时 call-site helper（见 `regc_invokedynamic_strategy.md`）。已展开：string concat（StringBuilder 链）、无状态/捕获 lambda、实例/构造器/接口方法引用、擦除泛型装箱/桥接、altMetafactory（serializable/marker/bridge）、基本类型加宽；自定义 bootstrap 运行时解析已实现。仍 fail-closed：基本类型收窄、装箱+加宽复合。展开形态与边界见 `regc_codegen.md` §转换边界。
 
-**覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 可观测 fail-closed),实测复杂 jar(JavaObfuscatorTest `TEST.jar`)约 90% 业务方法真正转 native(~50/56,含入口 main、反射方法、大异常表方法)。未转原因均为**有意保留的分组黑名单**:invokedynamic 的基本类型收窄/装箱+加宽复合适配/自定义 bootstrap（其余 indy 形态已展开转 native，见 `regc_codegen.md` §转换边界）、并发(`Thread`/`java.util.concurrent`——线程池/锁 monitor 在 native 帧不可靠,独立根因)、System(`exit`/`SecurityManager`)。**反射组**(`java/lang/Class`/`java/lang/reflect/*`/`Object.getClass`)、**IO 组**(`java/io/InputStream`/`ByteArrayInputStream`)、**类加载组**(`java/lang/ClassLoader` 的 `loadClass`/`getResourceAsStream`/`defineClass`)均已放开(引用管理前置完成)。**内部类 `$`** 注册已随 RegisterNatives 撤销,`this$0` 合成字段访问与外部类方法调用路径端到端通过。浮点/long 三值比较(`cmp.nan_*` intrinsic)已实现。大异常表(多 catch)已支持(lowering 三层无上限)。fail-closed 点通过 `[RegCBackend] Skipping <method>: <stage> failed: <reason>` 日志暴露,不再静默。**性能评估必须先做覆盖率审计**,见 [performance_evaluation_spec.md](performance_evaluation_spec.md)。
+**覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 可观测 fail-closed),实测复杂 jar(JavaObfuscatorTest `TEST.jar`)业务方法（非构造器）已 **100% 转 native（零 skip）**。未转的合法情形：有逻辑构造器（局部变量表非空——注入方法会被反射方法数断言计数，业界同此策略）、含 try-catch/局部变量注解/跨段 label 引用的构造器、抽象方法、mj2x runtime 类自身。历史 fail-closed 分组（反射组、IO 组、类加载组、并发组 `Thread`/`java.util.concurrent/*`、System 组 `exit`/`SecurityManager`、invokedynamic 自定义 bootstrap）均已放开（引用管理 + thread-local env/ctx + 阶段3 实现）。**内部类 `$`** 注册已随 RegisterNatives 撤销,`this$0` 合成字段访问与外部类方法调用路径端到端通过。浮点/long 三值比较(`cmp.nan_*` intrinsic)已实现。大异常表(多 catch)已支持(lowering 三层无上限)。fail-closed 点通过 `[RegCBackend] Skipping <method>: <stage> failed: <reason>` 日志暴露,不再静默。**性能评估必须先做覆盖率审计**,见 [performance_evaluation_spec.md](performance_evaluation_spec.md) 与 [regc_native_coverage_analysis.md](regc_native_coverage_analysis.md)。
 
 - **RegIR dead-code elimination**:在 RegIR→RegC 之间迭代删除未被终结器、CFG edge copy 或异常边消费的纯计算链；可能抛异常、内存访问、调用与 barrier 一律保留。`RegDceTest.*` 覆盖死链删除和 edge copy 活跃值保留，RegC native E2E 覆盖 JVM 语义。
 - **RegIR protection transforms**:RegC 在 DCE 后应用 i32/i64 加法 MBA 恒等式、分支 opaque predicate 与纯控制流 CFF。CFF 通过状态寄存器与 dispatcher switch 路由边，同时保留 edge copy；包含异常区域、内存访问、调用、barrier、throw 或 div/rem 的函数保持原 CFG。`RegTransformPassTest.*` 覆盖变换结构与保守跳过，`RegCBackendE2E.PureArithmeticLoopAndArrayRoundTrip` 覆盖 JVM 循环/数组语义。
