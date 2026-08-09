@@ -17,6 +17,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -247,6 +248,16 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
     cFuncName = nativeFunctionName(className, methodName, methodDesc);
 
     CSourceStream out;
+    // JNI trampoline 注释：绑定 RegisterNatives 的 JNI 入口，转发给无栈 helper。
+    {
+        CSourceStream note;
+        note.append("// JNI trampoline: ");
+        note.append(className);
+        note.append(".");
+        note.append(methodName);
+        note.append(methodDesc);
+        out.emitLine(note.build());
+    }
     // 函数签名行（顶层，无缩进）：多片段拼一条再 emitLine。
     {
         CSourceStream sig;
@@ -351,6 +362,8 @@ struct RegCBackend::Impl
     /// 文件级 invokedynamic 站点表（自定义 bootstrap，阶段3）：所有方法的站点在此
     /// 汇总，finalize 按全局索引生成 _mj2x_regc_indy_bsm_<i> bootstrap 函数。
     std::vector<RegFunction::InvokeDynamicSite> indySites;
+    /// 按类收集的方法体文本（含 JNI wrapper），多文件模式按类分发。
+    std::map<std::string, ca::str::Utf8StringBuilder> methodsByClass;
 
     /// RegisterNatives 注册簿记：每个受保护类 -> 它的 native 方法列表。
     /// finalize 阶段据此发射每类的 register 函数 + _mj2x_reg_methods[] 表 + JNI_OnLoad。
@@ -482,6 +495,9 @@ ca::str::Utf8StringBuilder methodSource;
     backendResult.kind = BackendResult::Kind::C_SOURCE;
     backendResult.text = methodSource.build().to_std_string();
     impl_->source.append(backendResult.text.data(), backendResult.text.size());
+    // 按类收集方法文本：多文件模式（--emit-native-dir）按类拆出 m_<Class>.c。
+    impl_->methodsByClass[className].append(backendResult.text.data(),
+                                            backendResult.text.size());
     return backendResult;
 }
 
@@ -941,6 +957,158 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
 
 }   // namespace
 
+/// @brief 生成代码后处理器：拆分多文件模式（--emit-native-dir）用的文本改写。
+///
+/// @details
+/// 单文件模式（--emit-cpp）保持全 static 自包含；多文件模式需要跨 TU 符号，
+/// 故对文件级 `static` 做两类改写：
+///   - 函数/变量定义：去掉 `static`（外部链接，声明进 api.h）；
+///   - 前置声明：`static X f(...);` -> `X f(...);`（隐式 extern）。
+/// 函数体内部的 static 局部变量（如 indy target 缓存）必须保留，因此扫描时
+/// 追踪大括号深度并跳过字符串字面量。返回值是改写字（声明已收集到 decls）。
+namespace {
+
+/// 文件级 static 符号改写（多文件模式）：函数/变量定义去 `static`（外部链接，
+/// 声明收集进 decls）；前置声明 `static X f(...);` 去 static（隐式 extern）。
+/// 函数体内的 static 局部变量保留（追踪大括号深度，跳过字符串/字符字面量与注释）。
+std::string splitRewriteStatic(std::string_view text, std::vector<std::string>& decls)
+{
+    std::string out;
+    out.reserve(text.size());
+    size_t i = 0;
+    int    braceDepth = 0;
+    while (i < text.size()) {
+        const char c = text[i];
+        if (c == '"' || c == '\'') {
+            const char quote = c;
+            size_t     start = i;
+            ++i;
+            while (i < text.size()) {
+                if (text[i] == '\\') { i += 2; continue; }
+                if (text[i] == quote) { ++i; break; }
+                ++i;
+            }
+            out.append(text.substr(start, i - start));
+            continue;
+        }
+        if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+            size_t start = i;
+            while (i < text.size() && text[i] != '\n') ++i;
+            out.append(text.substr(start, i - start));
+            continue;
+        }
+        if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+            size_t start = i;
+            i += 2;
+            while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/')) ++i;
+            i = i + 2 < text.size() ? i + 2 : text.size();
+            out.append(text.substr(start, i - start));
+            continue;
+        }
+        if (c == '{') ++braceDepth;
+        else if (c == '}') { if (braceDepth > 0) --braceDepth; }
+        if (braceDepth == 0 && text.compare(i, 7, "static ") == 0) {
+            size_t j = i + 7;
+            // thread_local 族：static thread_local / static __declspec(thread) /
+            // static _Thread_local。
+            static const std::pair<std::string_view, size_t> kThreadKws[] = {
+                {"thread_local ", 13}, {"__declspec(thread) ", 19}, {"_Thread_local ", 14}};
+            bool threadLocal = false;
+            for (const auto& [kw, len] : kThreadKws) {
+                if (text.compare(j, len, kw) == 0) {
+                    threadLocal = true;
+                    // 声明（进 api.h）：thread_local 是 C++ 关键字，三种形态必须条件化。
+                    size_t k = j + len;
+                    while (k < text.size() && text[k] != ';' && text[k] != '=' && text[k] != '\n')
+                        ++k;
+                    std::string typeName = std::string(text.substr(j + len, k - (j + len)));
+                    while (!typeName.empty() && (typeName.back() == ' ' || typeName.back() == '\t'))
+                        typeName.pop_back();
+                    decls.push_back(
+                        "#if defined(__cplusplus)\nextern thread_local " + typeName +
+                        ";\n#elif defined(_MSC_VER)\nextern __declspec(thread) " + typeName +
+                        ";\n#else\nextern _Thread_local " + typeName + ";\n#endif");
+                    // 定义（去 static，不带 extern——extern 声明不能带初始化值）：
+                    // <kw> <type> <name> [= ...;]
+                    out.append(kw);
+                    out.append(text.substr(j + len, k - (j + len)));
+                    i = k;
+                    continue;
+                }
+            }
+            if (threadLocal) continue;
+            // 函数定义 / 前置声明：`static <ret> <name>(...)[; | {`。
+            size_t parenPos = text.find('(', j);
+            if (parenPos != std::string_view::npos) {
+                bool dotOrEq = false;
+                for (size_t k = j; k < parenPos; ++k) {
+                    if (text[k] == ';' || text[k] == '=') { dotOrEq = true; break; }
+                }
+                if (!dotOrEq) {
+                    // 签名到匹配 ')'。
+                    size_t sigEnd = parenPos + 1;
+                    int    depth  = 1;
+                    while (sigEnd < text.size() && depth > 0) {
+                        if (text[sigEnd] == '(') ++depth;
+                        else if (text[sigEnd] == ')') --depth;
+                        ++sigEnd;
+                    }
+                    const std::string sig = std::string(text.substr(j, sigEnd - j));
+                    decls.push_back(sig + ";");
+                    out.append(sig);
+                    i = sigEnd;
+                    // 后随 ';' 是前置声明，声明本身保留分号。
+                    if (i < text.size() && text[i] == ';') {
+                        out.append(";");
+                        ++i;
+                    }
+                    continue;
+                }
+            }
+            // 变量定义：`static <type> <name>[ = ...; ]`。
+            size_t declEnd = j;
+            while (declEnd < text.size() && text[declEnd] != ';' && text[declEnd] != '\n' &&
+                   text[declEnd] != '=') { ++declEnd; }
+            const std::string varDecl = std::string(text.substr(j, declEnd - j));
+            decls.push_back(varDecl + ";");
+            out.append(varDecl);
+            if (declEnd < text.size() && text[declEnd] == ';') {
+                out.append(";");
+                i = declEnd + 1;
+            }
+            else if (declEnd < text.size() && text[declEnd] == '=') {
+                size_t lineEnd = declEnd;
+                while (lineEnd < text.size() && text[lineEnd] != '\n') ++lineEnd;
+                out.append(text.substr(declEnd, lineEnd - declEnd));
+                out.append("\n");
+                i = lineEnd;
+            }
+            else {
+                i = declEnd;
+            }
+            continue;
+        }
+        out.append(1, c);
+        ++i;
+    }
+    return out;
+}
+
+void writeFileIfNeeded(const std::filesystem::path& path, const std::string& content,
+                       const std::string& label)
+{
+    std::ofstream out(path, std::ios::binary);
+    if (out) {
+        out << content;
+        printf("[RegCBackend] Written: %s (%zu bytes)\n", label.c_str(), content.size());
+    }
+    else {
+        printf("[RegCBackend] ERROR: cannot write %s\n", label.c_str());
+    }
+}
+
+}   // namespace
+
 void RegCBackend::finalize(const CompilerIndex& index)
 {
     (void)index;
@@ -1020,21 +1188,110 @@ void RegCBackend::finalize(const CompilerIndex& index)
     // RegisterNatives 基础设施（每类 register fn、_mj2x_reg_methods[] 表、桥接、JNI_OnLoad）。
     // 无任何注册方法时（classOrder 为空）也发射一个不绑任何类的空壳 JNI_OnLoad，
     // 保持"RegC 输出总有 JNI_OnLoad"的契约，便于测试与运行时一致性。
-    impl_->emitRegistrationCode(full);
+    ca::str::Utf8StringBuilder entryBuilder;
+    impl_->emitRegistrationCode(entryBuilder);
+    const std::string entryText = entryBuilder.build().to_std_string();
 
-    sourceCode_ = full.build().to_std_string();
-    if (!cOutputPath_.empty()) {
-        std::ofstream out(cOutputPath_, std::ios::binary);
-        if (out) {
-            out << sourceCode_;
-            printf("[RegCBackend] Written: %s (%zu bytes)\n",
-                   cOutputPath_.c_str(),
-                   sourceCode_.size());
+    if (splitOutputDir_.empty()) {
+        full.append(entryText.data(), entryText.size());
+        sourceCode_ = full.build().to_std_string();
+        if (!cOutputPath_.empty()) {
+            writeFileIfNeeded(std::filesystem::path(cOutputPath_), sourceCode_, cOutputPath_);
         }
-        else {
-            printf("[RegCBackend] ERROR: cannot write %s\n", cOutputPath_.c_str());
-        }
+        return;
     }
+
+    // ---- 多文件模式（--emit-native-dir）：头/源分类，库代码与用户代码分离 ----
+    //   mj2x_regc_api.h     全部 extern 声明（cache/helpers/方法/indy/trampoline/thread_local）
+    //   mj2x_regc_runtime.c 库代码：cache 变量 + runtime helpers + indy bootstrap
+    //   m_<Class>.c         用户代码：每类一个文件（方法体 + JNI wrapper）
+    //   mj2x_regc_entry.c   注册表 + JNI_OnLoad
+    const std::filesystem::path dir(splitOutputDir_);
+    std::error_code              ec;
+    std::filesystem::create_directories(dir, ec);
+
+    const std::string runtimeFull = full.build().to_std_string();
+    // runtime 段 = includes..indy bootstrap（emittedSource 之前的部分）。
+    const size_t runtimeEnd = runtimeFull.rfind("/* Generated by mj2x RegCBackend */",
+                                                runtimeFull.size() - emittedSource.size());
+    const size_t methodsStart = runtimeFull.size() - emittedSource.size();
+    const std::string runtimeText = runtimeFull.substr(0, methodsStart);
+    (void)runtimeEnd;
+
+    std::vector<std::string> runtimeDecls;
+    std::string              runtimeRewritten = splitRewriteStatic(runtimeText, runtimeDecls);
+
+    // api.h 头（includes 与实现共享）。
+    ca::str::Utf8StringBuilder api;
+    api.append("/* Generated by mj2x RegCBackend - shared declarations */\n");
+    api.append("#pragma once\n");
+    {
+        codegen::IncludeSet apiIncludes;
+        apiIncludes.addSystem("jni.h");
+        apiIncludes.addSystem("stdbool.h");
+        apiIncludes.addSystem("limits.h");
+        apiIncludes.addSystem("stdint.h");
+        apiIncludes.addSystem("stddef.h");
+        apiIncludes.addSystem("stdarg.h");
+        apiIncludes.addSystem("math.h");
+        apiIncludes.addSystem("stdio.h");
+        apiIncludes.addSystem("stdlib.h");
+        apiIncludes.addSystem("string.h");
+        apiIncludes.addSystem("errno.h");
+        apiIncludes.addProject("regc/mj2x_regc_crt.h");
+        const std::string rendered = apiIncludes.render();
+        api.append(rendered.data(), rendered.size());
+    }
+    api.append("\n");
+    auto appendApiDecls = [&](const std::vector<std::string>& decls) {
+        for (const auto& decl : decls) {
+            if (decl.rfind("#if", 0) == 0) {
+                api.append(decl.data(), decl.size());
+            }
+            else {
+                api.append("extern ");
+                api.append(decl.data(), decl.size());
+            }
+            api.append("\n");
+        }
+    };
+    appendApiDecls(runtimeDecls);
+    api.append("\n");
+
+    // 用户方法按类拆文件；每类文件的 static 改写 + 声明并入 api.h。
+    std::map<std::string, std::string> methodFiles;
+    std::vector<std::string>           methodDecls;
+    for (auto& [className, builder] : impl_->methodsByClass) {
+        const std::string methodText = builder.build().to_std_string();
+        methodFiles[className] = splitRewriteStatic(methodText, methodDecls);
+    }
+    appendApiDecls(methodDecls);
+    const std::string apiText = api.build().to_std_string();
+    writeFileIfNeeded(dir / "mj2x_regc_api.h", apiText, (dir / "mj2x_regc_api.h").string());
+
+    writeFileIfNeeded(dir / "mj2x_regc_runtime.c", runtimeRewritten,
+                      (dir / "mj2x_regc_runtime.c").string());
+
+    for (auto& [className, text] : methodFiles) {
+        std::string safeName = className;
+        for (auto& ch : safeName) {
+            if (!std::isalnum(static_cast<unsigned char>(ch))) ch = '_';
+        }
+        std::string fileBody = "/* Generated by mj2x RegCBackend - methods of " + className + " */\n";
+        fileBody += "#include \"mj2x_regc_api.h\"\n\n";
+        fileBody += text;
+        writeFileIfNeeded(dir / ("m_" + safeName + ".c"), fileBody,
+                          (dir / ("m_" + safeName + ".c")).string());
+    }
+
+    std::string entryBody = "/* Generated by mj2x RegCBackend - native registration */\n";
+    entryBody += "#include \"mj2x_regc_api.h\"\n\n";
+    entryBody += entryText;
+    writeFileIfNeeded(dir / "mj2x_regc_entry.c", entryBody,
+                      (dir / "mj2x_regc_entry.c").string());
+
+    sourceCode_ = runtimeFull;
+    sourceCode_ += entryText;
 }
 
 void RegCBackend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) const

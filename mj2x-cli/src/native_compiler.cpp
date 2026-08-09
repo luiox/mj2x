@@ -649,7 +649,24 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
     std::vector<std::filesystem::path> includes;
     if (!jniIncludePaths(includes)) return 1;
 
-    std::vector<std::filesystem::path> sources{std::filesystem::path(sourcePath)};
+    // 多文件模式（--emit-native-dir）：sourcePath 是目录——编译目录内全部 .c
+    // （mj2x_regc_runtime.c / m_*.c / mj2x_regc_entry.c，api.h 由它们 include；
+    // crt include 路径由 addCrtSources 统一提供）。
+    std::vector<std::filesystem::path> sources;
+    if (std::filesystem::is_directory(sourcePath, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(sourcePath, ec)) {
+            if (entry.path().extension() == ".c") sources.push_back(entry.path());
+        }
+        if (sources.empty()) {
+            fprintf(kStderrStream,
+                    "[mj2x] ERROR: no .c sources in native directory: %s\n",
+                    sourcePath.c_str());
+            return 1;
+        }
+    }
+    else {
+        sources.push_back(std::filesystem::path(sourcePath));
+    }
     std::vector<std::filesystem::path> crtSources;
     if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, crtSources)) return 1;
 

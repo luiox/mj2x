@@ -43,6 +43,8 @@ static void printUsage()
     printf("  --backend <stackc|regc|llvm> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
+    printf("  --emit-native-dir <dir>     RegC: 多文件输出（mj2x_regc_api.h + runtime.c + 每类 "
+           "m_<Class>.c + entry.c，库代码与用户代码分离）\n");
     printf(
         "  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
     printf("  --native-method-prefix <p> Only compile methods whose owner.name starts with p; "
@@ -131,6 +133,7 @@ struct CliOptions
     std::string              cOutputPath;
     std::string              cppOutputPath;
     std::string              llvmOutputPath;
+    std::string              nativeDirOutput;
     std::string              cmakeProjectDir;
     std::string              xmakeProjectDir;
     std::string              nativeAnnotation;
@@ -500,9 +503,20 @@ int main(int argc, char** argv)
                 options.cOutputPath.clear();
                 options.cppOutputPath.clear();
                 options.llvmOutputPath.clear();
+                options.nativeDirOutput.clear();
                 commandLineNativeOutputSeen = true;
             }
             options.cppOutputPath = argv[++i];
+        }
+        else if (arg == "--emit-native-dir" && i + 1 < argc) {
+            if (!commandLineNativeOutputSeen) {
+                options.cOutputPath.clear();
+                options.cppOutputPath.clear();
+                options.llvmOutputPath.clear();
+                options.nativeDirOutput.clear();
+                commandLineNativeOutputSeen = true;
+            }
+            options.nativeDirOutput = argv[++i];
         }
         else if (arg == "--emit-llvm" && i + 1 < argc) {
             if (!commandLineNativeOutputSeen) {
@@ -628,6 +642,10 @@ int main(int argc, char** argv)
         fprintf(stderr, "--regc-trace-calls requires --backend regc.\n");
         return 1;
     }
+    if (!options.nativeDirOutput.empty() && options.cBackendKind != CEmitterBackend::RegC) {
+        fprintf(stderr, "--emit-native-dir requires --backend regc.\n");
+        return 1;
+    }
     if (options.llvmToolSelected && !options.compileNative) {
         fprintf(stderr, "--llvm-tool requires --compile.\n");
         return 1;
@@ -720,24 +738,25 @@ int main(int argc, char** argv)
 
     const bool pipeCompile =
         options.compileNative && options.compileMode == mj2x::cli::CompileMode::Pipe;
+    const bool nativeDirMode = !options.nativeDirOutput.empty();
     const std::string nativeOutputPath = !options.llvmOutputPath.empty()
                                              ? options.llvmOutputPath
                                              : (options.cppOutputPath.empty()
                                                     ? options.cOutputPath
                                                     : options.cppOutputPath);
 
-    if (options.backendSelected && nativeOutputPath.empty() && !pipeCompile) {
+    if (options.backendSelected && nativeOutputPath.empty() && !nativeDirMode && !pipeCompile) {
         fprintf(stderr,
-                "--backend requires --emit-c, --emit-cpp, --emit-llvm, or a generated native "
-                "project.\n");
+                "--backend requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, or a "
+                "generated native project.\n");
         printUsage();
         return 1;
     }
 
-    if (options.compileNative && nativeOutputPath.empty() && !pipeCompile) {
+    if (options.compileNative && nativeOutputPath.empty() && !nativeDirMode && !pipeCompile) {
         fprintf(stderr,
-                "--compile requires --emit-c, --emit-cpp, --emit-llvm, or a generated native "
-                "project.\n");
+                "--compile requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, or a "
+                "generated native project.\n");
         printUsage();
         return 1;
     }
@@ -795,7 +814,7 @@ int main(int argc, char** argv)
 
     mj2x::Pipeline pipeline(std::move(config));
 
-    const bool needsNativeSource = !nativeOutputPath.empty() || pipeCompile;
+    const bool needsNativeSource = !nativeOutputPath.empty() || pipeCompile || nativeDirMode;
     mj2x::Backend* nativeSourceBackend = nullptr;
 
     if (needsNativeSource) {
@@ -809,6 +828,8 @@ int main(int argc, char** argv)
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
             if (options.regcTraceCalls) regcBackend->setTraceCallLog(true);
+            if (!options.nativeDirOutput.empty())
+                regcBackend->setSplitOutputDir(options.nativeDirOutput);
             nativeSourceBackend = regcBackend.get();
             // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
             pipeline.registerBackend(std::move(regcBackend));
@@ -970,14 +991,17 @@ int main(int argc, char** argv)
                     nativeArtifact.content, options.outputPath, options.cCompilerKind, crtRoot);
             }
             else {
+                // 多文件模式（--emit-native-dir）：编译目录内全部 .c。
+                const std::string compileSource =
+                    nativeDirMode ? options.nativeDirOutput : nativeOutputPath;
                 compileRc = nativeArtifact.language == mj2x::NativeSourceLanguage::Cpp17
                                 ? mj2x::cli::compileCppSource(
-                                      nativeOutputPath,
+                                      compileSource,
                                       options.outputPath,
                                       options.cCompilerKind,
                                       crtRoot)
                                 : mj2x::cli::compileCSource(
-                                      nativeOutputPath,
+                                      compileSource,
                                       options.outputPath,
                                       options.cCompilerKind,
                                       crtRoot);

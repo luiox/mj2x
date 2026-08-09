@@ -108,6 +108,15 @@ public:
     /// 用于排查方法调用链/多线程 env 竞态问题；默认关闭，不产生任何输出。
     void setTraceCallLog(bool enabled);
 
+    /// @brief 设置多文件输出目录（--emit-native-dir）。
+    ///
+    /// @details
+    /// 非空时 finalize 改为输出目录树：mj2x_regc_api.h（全部 extern 声明）+
+    /// mj2x_regc_runtime.c（库代码：cache/helpers/indy bootstrap）+ 每类一个
+    /// m_<Class>.c（用户方法体）+ mj2x_regc_entry.c（注册表/JNI_OnLoad）。
+    /// 为空时保持单文件（--emit-cpp，全 static 自包含）。
+    void setSplitOutputDir(const std::string& dir) { splitOutputDir_ = dir; }
+
     /// @brief Full generated C translation unit after finalize.
     ///
     /// @details
@@ -125,6 +134,7 @@ private:
     std::unique_ptr<Impl> impl_;
 
     std::string cOutputPath_;
+    std::string splitOutputDir_;
     std::string sourceCode_;
 };
 
