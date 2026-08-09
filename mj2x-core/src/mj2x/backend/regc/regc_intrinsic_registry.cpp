@@ -1463,6 +1463,9 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("typedef struct mj2x_bool { int8_t value; } mj2x_bool;\n");
     out.append("typedef struct mj2x_char { uint16_t value; } mj2x_char;\n");
     out.append("typedef struct mj2x_random { uint64_t seed; } mj2x_random;\n");
+    out.append("#ifdef __cplusplus\n");
+    out.append("extern \"C\" {\n");
+    out.append("#endif\n");
     out.append("mj2x_int mj2x_int_value_of(int32_t value);\n");
     out.append("int32_t mj2x_int_int_value(mj2x_int box);\n");
     out.append("mj2x_long mj2x_long_value_of(int64_t value);\n");
@@ -1507,6 +1510,9 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("double mj2x_math_ceil(double value);\n");
     out.append("int64_t mj2x_math_round(double value);\n");
     out.append("double mj2x_math_random();\n");
+    out.append("#ifdef __cplusplus\n");
+    out.append("}\n");
+    out.append("#endif\n");
     out.append("#endif\n\n");
 }
 

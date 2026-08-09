@@ -127,7 +127,6 @@ static int64_t _mj2x_regc_call_cached_instance_i64(mj2x_regc_instance_method_cac
 static float _mj2x_regc_call_cached_instance_f32(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0f; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return 0.0f; return (*_mj2x_regc_env)->CallFloatMethodA(_mj2x_regc_env, receiver, m, values); }
 static double _mj2x_regc_call_cached_instance_f64(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return 0.0; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return 0.0; return (*_mj2x_regc_env)->CallDoubleMethodA(_mj2x_regc_env, receiver, m, values); }
 static mj2x_ref _mj2x_regc_call_cached_instance_ref(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return NULL; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return NULL; return (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethodA(_mj2x_regc_env, receiver, m, values); }
-static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return; (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }
 
 )mj2x");
     {
@@ -147,15 +146,26 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
                         const std::string& classCastExceptionClassCacheName,
                         const std::string& outOfMemoryErrorClassCacheName,
                         const std::string& stringIndexOutOfBoundsClassCacheName,
-                        const std::string& unsupportedOperationExceptionClassCacheName)
+                        const std::string& unsupportedOperationExceptionClassCacheName,
+                        bool traceCallLog)
 {
     if (!cacheDeclarations.empty()) {
         out.append(cacheDeclarations.data(), cacheDeclarations.size());
     }
     out.append("static jclass _mj2x_regc_cached_class(mj2x_regc_class_cache* cache);\n");
     out.append("\n");
-    out.append("static JNIEnv* _mj2x_regc_env = NULL;\n\n");
-    out.append("static mj2x_regc_context _mj2x_regc_ctx;\n");
+    out.append("// 多线程并发调用 native 时各线程持有独立 env/ctx，避免互相覆盖。\n");
+    out.append("// C++ 用 thread_local；MSVC C 用 __declspec(thread)；其余 C11 用 _Thread_local。\n");
+    out.append("#if defined(__cplusplus)\n");
+    out.append("static thread_local JNIEnv* _mj2x_regc_env = NULL;\n");
+    out.append("static thread_local mj2x_regc_context _mj2x_regc_ctx;\n");
+    out.append("#elif defined(_MSC_VER)\n");
+    out.append("static __declspec(thread) JNIEnv* _mj2x_regc_env = NULL;\n");
+    out.append("static __declspec(thread) mj2x_regc_context _mj2x_regc_ctx;\n");
+    out.append("#else\n");
+    out.append("static _Thread_local JNIEnv* _mj2x_regc_env = NULL;\n");
+    out.append("static _Thread_local mj2x_regc_context _mj2x_regc_ctx;\n");
+    out.append("#endif\n");
     out.append("static mj2x_regc_context* _mj2x_regc_current_context(void) { return &_mj2x_regc_ctx; "
            "}\n\n");
     out.append("static float _mj2x_regc_f32_from_bits(uint32_t bits) {\n");
@@ -590,6 +600,37 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("    return receiver;\n");
     out.append("}\n\n");
     emitRegCMethodCallHelpers(out);
+    if (traceCallLog) {
+        out.append("static int _mj2x_regc_dbg_depth = 0;\n");
+        out.append("static void _mj2x_regc_dbg_enter(const char* owner, const char* name, const char* "
+                   "desc) {\n");
+        out.append("    _mj2x_regc_dbg_depth++;\n");
+        out.append("    if (_mj2x_regc_dbg_depth > 64) {\n");
+        out.append("        fprintf(stderr, \"DEEP[%d] %s.%s%s\\n\", _mj2x_regc_dbg_depth, owner, name, "
+                   "desc);\n");
+        out.append("    }\n");
+        out.append("}\n");
+        out.append("static void _mj2x_regc_dbg_leave() { _mj2x_regc_dbg_depth--; }\n");
+        out.append("static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* "
+                   "cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, "
+                   "arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, "
+                   "values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null(\"instance "
+                   "method call\"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache, "
+                   "receiver); if (m == NULL) return; fprintf(stderr, \"[CALL:%p] %s.%s%s\\n\", "
+                   "(void*)_mj2x_regc_env, cache->owner, cache->name, cache->desc); "
+                   "_mj2x_regc_dbg_enter(cache->owner, cache->name, cache->desc); "
+                   "(*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); "
+                   "_mj2x_regc_dbg_leave(); }\n");
+    }
+    else {
+        out.append("static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* "
+                   "cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, "
+                   "arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, "
+                   "values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null(\"instance "
+                   "method call\"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache, "
+                   "receiver); if (m == NULL) return; (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, "
+                   "receiver, m, values); }\n");
+    }
     // String LDC intrinsic helper.  This is the only JNI touchpoint of the
     // String intrinsic path: a String literal becomes a jstring via
     // NewStringUTF so it can flow into parseInt/toString without per-call JNI

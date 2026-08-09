@@ -42,6 +42,7 @@ static void printUsage()
     printf("  --emit-llvm <file>         Output LLVM IR source to file\n");
     printf("  --backend <stackc|regc|llvm> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
+    printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
     printf(
         "  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
     printf("  --native-method-prefix <p> Only compile methods whose owner.name starts with p; "
@@ -145,6 +146,7 @@ struct CliOptions
     bool                     compilerSelected = false;
     bool                     llvmToolSelected = false;
     bool                     dumpMIR          = false;
+    bool                     regcTraceCalls   = false;
 };
 
 static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
@@ -437,6 +439,10 @@ static bool createTemporaryXmakeProject(const std::string& outputPath,
 
 int main(int argc, char** argv)
 {
+    // 无缓冲 stdout/stderr：崩溃/异常退出时日志不丢（定位 pipeline 崩溃点）。
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
     CliOptions               options;
     std::string              configPath;
     TemporaryProjectCleanup temporaryProjectCleanup;
@@ -563,6 +569,8 @@ int main(int argc, char** argv)
         }
         else if (arg == "--dump-mir")
             options.dumpMIR = true;
+        else if (arg == "--regc-trace-calls")
+            options.regcTraceCalls = true;
         else if (arg == "-h" || arg == "--help") {
             printUsage();
             return 0;
@@ -614,6 +622,10 @@ int main(int argc, char** argv)
     }
     if (options.llvmToolSelected && options.cBackendKind != CEmitterBackend::LlvmIr) {
         fprintf(stderr, "--llvm-tool requires --backend llvm.\n");
+        return 1;
+    }
+    if (options.regcTraceCalls && options.cBackendKind != CEmitterBackend::RegC) {
+        fprintf(stderr, "--regc-trace-calls requires --backend regc.\n");
         return 1;
     }
     if (options.llvmToolSelected && !options.compileNative) {
@@ -796,6 +808,7 @@ int main(int argc, char** argv)
         else if (options.cBackendKind == CEmitterBackend::RegC) {
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
+            if (options.regcTraceCalls) regcBackend->setTraceCallLog(true);
             nativeSourceBackend = regcBackend.get();
             // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
             pipeline.registerBackend(std::move(regcBackend));

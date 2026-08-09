@@ -336,6 +336,17 @@ SSABlock* fallthroughBlock(const std::vector<Block*>&                l1blocks,
     return nullptr;
 }
 
+// 按 Label* 解析跳转目标。javac 对"回边到方法首条指令"（如 while(true) 循环
+// 的 goto 0）只合成 Label 对象、不发 LABEL 指令，CodeConverter 不会为该方法
+// 入口块建立该 label 映射，ssaByLabel 查不到。此时目标语义 = 方法真入口块
+// （fn.blocks[0]，合成 entry 之前的第一个 L1 块），回退到它并保持 args 绑定。
+SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel, int labelKey,
+                            SSABlock* realEntry)
+{
+    auto it = ssaByLabel.find(labelKey);
+    return it != ssaByLabel.end() ? it->second : realEntry;
+}
+
 // targetLabel is a Label*; CodeConverter stores label identity as the
 // pointer-derived key because libjbytecode resets bytecode offsets during tree
 // reconstruction.
@@ -871,13 +882,12 @@ bool lowerReturnValue(const MIRReturnValue* /*rv*/, LowerCtx& d, std::string& re
 bool lowerUncondBranch(const MIRUncondBranch* ub, LowerCtx& d, std::string& /*reason*/)
 {
     int               tkey   = mirLabelKey(ub->targetLabel);
-    SSABlock*         target = d.ssaByLabel.count(tkey) ? d.ssaByLabel.at(tkey) : nullptr;
+    SSABlock*         target = resolveJumpTarget(d.ssaByLabel, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
     SSAJumpTerminator jt;
     jt.target      = buildSuccessor(target, d.fs, d.fn);
     d.sb->terminator = std::move(jt);
     return true;
 }
-
 bool lowerBranchZero(const MIRBranchZero* bz, LowerCtx& d, std::string& reason)
 {
     SSAValue* v = d.fs.pop();
@@ -901,7 +911,7 @@ bool lowerBranchZero(const MIRBranchZero* bz, LowerCtx& d, std::string& reason)
     bt.condition  = cond;
     int bzKey     = mirLabelKey(bz->targetLabel);
     bt.trueTarget = buildSuccessor(
-        d.ssaByLabel.count(bzKey) ? d.ssaByLabel.at(bzKey) : nullptr, d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
@@ -927,7 +937,7 @@ bool lowerBranch(const MIRBranch* br, LowerCtx& d, std::string& reason)
     bt.condition  = cond;
     int brKey     = mirLabelKey(br->targetLabel);
     bt.trueTarget = buildSuccessor(
-        d.ssaByLabel.count(brKey) ? d.ssaByLabel.at(brKey) : nullptr, d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
@@ -947,12 +957,12 @@ bool lowerSwitch(const MIRSwitch* sw, LowerCtx& d, std::string& reason)
         SSASwitchCase sc;
         sc.key    = c.key;
         sc.target = buildSuccessor(
-            d.ssaByLabel.count(key) ? d.ssaByLabel.at(key) : nullptr, d.fs, d.fn);
+            resolveJumpTarget(d.ssaByLabel, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
         st.cases.push_back(std::move(sc));
     }
     int defaultKey   = mirLabelKey(sw->defaultLabel);
     st.defaultTarget = buildSuccessor(
-        d.ssaByLabel.count(defaultKey) ? d.ssaByLabel.at(defaultKey) : nullptr, d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     d.sb->terminator = std::move(st);
     return true;
 }

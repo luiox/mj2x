@@ -41,6 +41,7 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
                         const std::string& classCastExceptionClassCacheName,
                         const std::string& outOfMemoryErrorClassCacheName,
                         const std::string& stringIndexOutOfBoundsClassCacheName,
-                        const std::string& unsupportedOperationExceptionClassCacheName);
+                        const std::string& unsupportedOperationExceptionClassCacheName,
+                        bool traceCallLog);
 
 }   // namespace mj2x

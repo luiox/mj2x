@@ -100,6 +100,14 @@ public:
     /// 默认 Summary。
     void setCommentLevel(RegCCommentLevel level);
 
+    /// @brief 开启运行时调用日志（[CALL]/[DEEP]）生成。
+    ///
+    /// @details
+    /// 开启后生成的 native 库在每次实例方法缓存调用时向 stderr 输出
+    /// `[CALL] owner.name desc`，并带递归深度检测（>64 层打印 [DEEP]），
+    /// 用于排查方法调用链/多线程 env 竞态问题；默认关闭，不产生任何输出。
+    void setTraceCallLog(bool enabled);
+
     /// @brief Full generated C translation unit after finalize.
     ///
     /// @details

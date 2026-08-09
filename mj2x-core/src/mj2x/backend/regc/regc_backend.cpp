@@ -154,29 +154,20 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
 //   [类加载]  已放开（R6-B）：ClassLoader 的 loadClass(String)/getResourceAsStream(String)
 //            经 ref 参数与 Class/InputStream ref 返回值，引用管理已吸收。defineClass(byte[])
 //            的 byte[] 参数经 collect_args array 修正（R6-A）正确传递。
-//   [并发]    Thread / java.util.concurrent：Thread.sleep 等在 native 帧调用会破坏线程池
-//            monitor（ReentrantLock）状态抛 IllegalMonitorStateException，是独立根因，不属
-//            引用管理范畴，暂保留。
+//   [并发]    已放开（thread-local env/ctx 修复后）：历史根因是全局 JNIEnv 在多线程 native
+//            并发（主线程 + 线程池线程）下互相覆盖，导致 Thread.sleep 等在 native 帧调用时
+//            破坏线程池 monitor 状态抛 IllegalMonitorStateException。thread_local 修复后每个
+//            线程持有独立 env/ctx，该根因消除；java/lang/Thread 与 java/util/concurrent/* 的
+//            普通方法调用均为常规 JNI 调用，恢复转 native。
 //   [IO]      已放开（R6-A）：InputStream/ByteArrayInputStream 的 read/available 等返回 int，
 //            byte[] 读写经 ref-array helper，引用管理已吸收 native 帧内产生的 ref。
-//   [System]  exit / SecurityManager：语义敏感，暂不转 native。
+//   [System]  已放开：setSecurityManager/getSecurityManager 在 JDK17 直接抛
+//            UnsupportedOperationException，native 路径调用行为一致；exit 为常规静态调用。
 bool isCompatibilityRiskCall(const ca::str::Utf8StringRef& owner, const ca::str::Utf8StringRef& name)
 {
-    // [并发] 保留：Thread.sleep 破坏线程池 monitor
-    const bool concurrency =
-        owner == "java/lang/Thread" ||
-        owner.starts_with(ca::str::Utf8StringRef::from_cstr("java/util/concurrent/"));
-    // [System] 保留：语义敏感
-    const bool systemSensitive =
-        owner == "java/lang/System" &&
-        (name == "setSecurityManager" || name == "getSecurityManager" || name == "exit");
-
-    // [反射组] 已放开：java/lang/Class、java/lang/reflect/*、Object.getClass。
-    // [IO 组]   已放开（R6-A）：InputStream / ByteArrayInputStream。
-    // [类加载]  已放开（R6-B）：ClassLoader.loadClass/getResourceAsStream/defineClass。
-    // 引用管理（PushLocalFrame/PopLocalFrame）已吸收反射/IO/类加载临时 ref 泄漏，故不再 skip。
-
-    return concurrency || systemSensitive;
+    (void)owner;
+    (void)name;
+    return false;
 }
 
 bool shouldKeepBytecodeForCompatibility(const std::vector<Block*>& blocks, std::string& reason)
@@ -346,6 +337,7 @@ struct RegCBackend::Impl
     ca::str::Utf8StringBuilder source;
     RegCCachePool             cachePool;
     RegCCommentLevel          commentLevel = RegCCommentLevel::Summary;
+    bool                      traceCallLog = false;
 
     /// RegisterNatives 注册簿记：每个受保护类 -> 它的 native 方法列表。
     /// finalize 阶段据此发射每类的 register 函数 + _mj2x_reg_methods[] 表 + JNI_OnLoad。
@@ -389,6 +381,11 @@ void RegCBackend::setCommentLevel(RegCCommentLevel level)
 {
     impl_->commentLevel = level;
     impl_->cachePool.setCommentLevel(level);
+}
+
+void RegCBackend::setTraceCallLog(bool enabled)
+{
+    impl_->traceCallLog = enabled;
 }
 
 BackendResult RegCBackend::compileMethod(const std::string& className, CompilerMethod& method,
@@ -612,7 +609,8 @@ void RegCBackend::finalize(const CompilerIndex& index)
                        classCastExceptionClassCacheName,
                        outOfMemoryErrorClassCacheName,
                        stringIndexOutOfBoundsClassCacheName,
-                       unsupportedOperationExceptionClassCacheName);
+                       unsupportedOperationExceptionClassCacheName,
+                       impl_->traceCallLog);
     emitRegCHelperPrelude(full);
     full.append(emittedSource.data(), emittedSource.size());
 
