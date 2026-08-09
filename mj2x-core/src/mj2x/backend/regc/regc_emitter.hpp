@@ -1,4 +1,4 @@
-﻿/// @file regc_emitter.hpp
+/// @file regc_emitter.hpp
 /// @brief Stackless C emitter for Register IR.
 ///
 /// @details
@@ -110,8 +110,13 @@ private:
 class RegCEmitter
 {
 public:
+    /// @param fileIndySites 可选：非空时 emitFunction 把本方法的 invokedynamic 站点
+    ///                      追加进文件级表（finalize 据此生成 bootstrap 函数）。
+    /// @param indySiteBase  文件级表的全局站点偏移（本方法首个站点的全局索引）。
     explicit RegCEmitter(RegCCachePool* cachePool = nullptr,
-                         RegCCommentLevel commentLevel = RegCCommentLevel::Summary);
+                         RegCCommentLevel commentLevel = RegCCommentLevel::Summary,
+                         std::vector<RegFunction::InvokeDynamicSite>* fileIndySites = nullptr,
+                         size_t indySiteBase = 0);
 
     /// @brief Emit a C helper function for one RegFunction.
     ///
@@ -120,11 +125,13 @@ public:
     /// RegIR parameters as C parameters and calls `_mj2x_regc_*` helpers for JVM
     /// operations that require runtime or JNI state.  The returned source must
     /// pass `validateRegCNoStackAnchors` before `ok` is set.
-    RegCEmitResult emitFunction(const RegFunction& fn) const;
+    RegCEmitResult emitFunction(const RegFunction& fn);
 
 private:
     RegCCachePool*   cachePool_;
     RegCCommentLevel commentLevel_ = RegCCommentLevel::Summary;
+    std::vector<RegFunction::InvokeDynamicSite>* fileIndySites_ = nullptr;
+    size_t indySiteBase_ = 0;
 };
 
 /// @brief Emit declarations shared by all RegC function bodies in one C file.

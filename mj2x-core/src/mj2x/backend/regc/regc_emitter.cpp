@@ -22,6 +22,11 @@ namespace mj2x {
 
 using namespace jbytecode::core;
 
+/// Emit one invokedynamic site call.  Defined after emitFunction in this file.
+bool emitInvokeDynamic(codegen::CSourceStream& out, const RegInstruction& ins,
+                       const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                       std::string& reason);
+
 namespace {
 
 // cStringLiteral is shared with StackC via codegen::cStringLiteral; alias it
@@ -1982,7 +1987,8 @@ bool emitExceptionDispatch(CSourceStream&                        out,
 }
 
 bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
-                     RegCFunctionEmitState& state, std::string& reason)
+                     RegCFunctionEmitState& state, const RegFunction& fn, size_t indySiteBase,
+                     std::string& reason)
 {
     if (!isSupportedInstruction(ins, reason)) return false;
 
@@ -2489,6 +2495,26 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
         return true;
     case RegInstructionKind::Intrinsic:
+        if (ins.intrinsicName.rfind("indy:", 0) == 0) {
+            // 自定义 bootstrap invokedynamic（阶段3）：站点元数据在 RegFunction::indySites，
+            // 方法内的局部索引在文件级表中偏移 indySiteBase_。方法体只负责收集参数并调用
+            // 文件级 bootstrap helper（finalize 生成），返回目标 MethodHandle 后
+            // invokeWithArguments 完成实际调用。
+            size_t localIdx = 0;
+            try {
+                localIdx = static_cast<size_t>(std::stoull(ins.intrinsicName.substr(5)));
+            }
+            catch (const std::exception&) {
+                reason = "invalid indy site index in intrinsic name";
+                return false;
+            }
+            if (localIdx >= fn.indySites.size()) {
+                reason = "indy site index out of range";
+                return false;
+            }
+            return emitInvokeDynamic(
+                out, ins, fn.indySites[localIdx], indySiteBase + localIdx, reason);
+        }
         if (ins.intrinsicName == "array.length") {
             if (!rejectNativeObjectEscape(state,
                                           ins.args.empty() ? RegOperand::nullRef() : ins.args[0],
@@ -2939,17 +2965,25 @@ void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out)
     emitHelperPrelude(out);
 }
 
-RegCEmitter::RegCEmitter(RegCCachePool* cachePool, RegCCommentLevel commentLevel)
-    : cachePool_(cachePool), commentLevel_(commentLevel)
+RegCEmitter::RegCEmitter(RegCCachePool* cachePool, RegCCommentLevel commentLevel,
+                         std::vector<RegFunction::InvokeDynamicSite>* fileIndySites,
+                         size_t indySiteBase)
+    : cachePool_(cachePool)
+    , commentLevel_(commentLevel)
+    , fileIndySites_(fileIndySites)
+    , indySiteBase_(indySiteBase)
 {}
 
-RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
+RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
 {
     RegCEmitResult result;
     result.functionName = functionName(fn.symbol);
     if (!fn.entry) {
         result.reason = "RegC requires an entry block";
         return result;
+    }
+    if (fileIndySites_ != nullptr && !fn.indySites.empty()) {
+        fileIndySites_->insert(fileIndySites_->end(), fn.indySites.begin(), fn.indySites.end());
     }
 
     std::string validationReason;
@@ -3021,7 +3055,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
                 body.append(regInstructionLine(ins));
                 body.append("\n");
             }
-            if (!emitInstruction(body, ins, emitState, result.reason)) return result;
+            if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason)) return result;
             if (ins.effect.mayThrow) {
                 if (!emitExceptionDispatch(body,
                                            activeRegions,
@@ -3224,6 +3258,120 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn) const
     result.ok = true;
     result.reason.clear();
     return result;
+}
+
+bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
+                       const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                       std::string& reason)
+{
+    const ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(site.desc.c_str());
+    auto                         argTypes = Type::getArgumentTypes(descRef);
+    const int                    argCount = static_cast<int>(argTypes.size());
+    if (argCount != static_cast<int>(ins.args.size())) {
+        reason = "indy arg count mismatch";
+        return false;
+    }
+    const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+
+    out.append("    {\n");
+    out.append("        jclass _mj2x_indy_obj_cls = (jclass)_mj2x_regc_class_literal("
+               "_mj2x_regc_current_context(), \"java/lang/Object\");\n");
+    out.append("        jobjectArray _mj2x_indy_args = (jobjectArray)(*_mj2x_regc_env)"
+               "->NewObjectArray(_mj2x_regc_env, ");
+    out.append(std::to_string(argCount));
+    out.append(", _mj2x_indy_obj_cls, NULL);\n");
+    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
+    for (int i = 0; i < argCount; ++i) {
+        const ca::str::Utf8String expr = operandExpr(ins.args[i]);
+        out.append("        (*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, "
+                   "_mj2x_indy_args, ");
+        out.append(std::to_string(i));
+        out.append(", ");
+        switch (ins.args[i].type) {
+        case SSAType::REF:
+            out.append("(jobject)(");
+            out.append(expr);
+            out.append(")");
+            break;
+        case SSAType::BOOL:
+        case SSAType::I8:
+        case SSAType::I16:
+        case SSAType::CHAR:
+        case SSAType::I32:
+            out.append("_mj2x_regc_box_i32((int32_t)(");
+            out.append(expr);
+            out.append("))");
+            break;
+        case SSAType::I64:
+            out.append("_mj2x_regc_box_i64((int64_t)(");
+            out.append(expr);
+            out.append("))");
+            break;
+        case SSAType::F32:
+            out.append("_mj2x_regc_box_f32((float)(");
+            out.append(expr);
+            out.append("))");
+            break;
+        case SSAType::F64:
+            out.append("_mj2x_regc_box_f64((double)(");
+            out.append(expr);
+            out.append("))");
+            break;
+        default:
+            reason = "unsupported indy argument type";
+            return false;
+        }
+        out.append(");\n");
+    }
+    out.append("        jobject _mj2x_indy_target = _mj2x_regc_indy_bsm_");
+    out.append(std::to_string(globalSiteIndex));
+    out.append("(_mj2x_regc_owner_class);\n");
+    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
+    out.append("        if (_mj2x_indy_target == NULL) { goto _mj2x_regc_cleanup; }\n");
+    out.append("        jclass _mj2x_indy_mh_cls = (jclass)_mj2x_regc_class_literal("
+               "_mj2x_regc_current_context(), \"java/lang/invoke/MethodHandle\");\n");
+    out.append("        jmethodID _mj2x_indy_invoke_mid = (*_mj2x_regc_env)->GetMethodID("
+               "_mj2x_regc_env, _mj2x_indy_mh_cls, \"invokeWithArguments\", "
+               "\"([Ljava/lang/Object;)Ljava/lang/Object;\");\n");
+    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
+    out.append("        jobject _mj2x_indy_result = (jobject)(*_mj2x_regc_env)->CallObjectMethod("
+               "_mj2x_regc_env, _mj2x_indy_target, _mj2x_indy_invoke_mid, _mj2x_indy_args);\n");
+    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
+    if (ins.hasDest) {
+        out.append("        ");
+        out.append(destName.data(), destName.size());
+        out.append(" = ");
+        switch (ins.dest.type) {
+        case SSAType::REF:
+            out.append("(mj2x_ref)_mj2x_indy_result");
+            break;
+        case SSAType::BOOL:
+        case SSAType::I8:
+        case SSAType::I16:
+        case SSAType::CHAR:
+        case SSAType::I32:
+            out.append("_mj2x_regc_unbox_i32(_mj2x_indy_result)");
+            break;
+        case SSAType::I64:
+            out.append("_mj2x_regc_unbox_i64(_mj2x_indy_result)");
+            break;
+        case SSAType::F32:
+            out.append("_mj2x_regc_unbox_f32(_mj2x_indy_result)");
+            break;
+        case SSAType::F64:
+            out.append("_mj2x_regc_unbox_f64(_mj2x_indy_result)");
+            break;
+        default:
+            reason = "unsupported indy result type";
+            return false;
+        }
+        out.append(";\n");
+    }
+    else {
+        out.append("        (void)_mj2x_indy_result;\n");
+    }
+    out.append("    }\n");
+    return true;
 }
 
 bool validateRegCNoStackAnchors(const std::string& source, std::string& reason)

@@ -1091,6 +1091,47 @@ bool lowerInvoke(const MIRInvoke* inv, LowerCtx& d, std::string& reason)
     return true;
 }
 
+/// invokedynamic（自定义 bootstrap，阶段3）：无法在编译期静态展开，登记站点元数据
+/// 并降级为 Intrinsic("indy:<index>")，由 RegC emit 生成运行时 bootstrap 调用。
+bool lowerInvokeDynamic(const MIRInvokeDynamic* indy, LowerCtx& d, std::string& reason)
+{
+    auto argTypes = Type::getArgumentTypes(indy->desc);
+    auto retType  = jvmTypeToSSA(Type::getReturnType(indy->desc));
+
+    SSAFunction::InvokeDynamicSite site;
+    site.name    = indy->name.to_std_string();
+    site.desc    = indy->desc.to_std_string();
+    site.bsm     = indy->bsm;
+    site.bsmArgs = indy->bsmArgs;
+    const size_t siteIndex = d.fn.indySites.size();
+    d.fn.indySites.push_back(std::move(site));
+
+    auto instr  = std::make_unique<SSAIntrinsicInstruction>();
+    instr->name = "indy:" + std::to_string(siteIndex);
+    instr->args.resize(argTypes.size(), nullptr);
+    for (int i = static_cast<int>(argTypes.size()) - 1; i >= 0; --i) {
+        SSAValue* arg = d.fs.pop();
+        if (!arg) {
+            reason = "stack underflow at INVOKE_DYNAMIC args";
+            return false;
+        }
+        instr->args[static_cast<size_t>(i)] = arg;
+    }
+    instr->effect                  = SSAEffect::externalCall();
+    instr->effect.resolvesExternal = true;
+    if (retType != SSAType::VOID) {
+        instr->result       = SSAInstructionResult(d.fn.ids.newValueId(), retType);
+        instr->hasResult    = true;
+        SSAValue* resultPtr = &instr->result;
+        d.sb->instructions.push_back(std::move(instr));
+        d.fs.push(resultPtr);
+    }
+    else {
+        d.sb->instructions.push_back(std::move(instr));
+    }
+    return true;
+}
+
 bool lowerNewObject(const MIRNewObject* no, LowerCtx& d, std::string& /*reason*/)
 {
     auto instr                    = std::make_unique<SSAAllocateInstruction>();
@@ -1603,9 +1644,9 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
                 // NOP/元数据：忽略。
                 break;
             case MIRKind::INVOKE_DYNAMIC:
-                // R1b preprocessor 标记但未展开（R2/R5+ 完整展开）。fail-closed，不静默。
-                reason = "invokedynamic not yet expanded (R2/R5+); preprocessor flagged it";
-                return false;
+                if (!lowerInvokeDynamic(typed::cast<MIRInvokeDynamic>(node.get()), d, reason))
+                    return false;
+                break;
             }
         }
 

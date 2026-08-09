@@ -7,7 +7,10 @@
 #include "ssa_ids.hpp"
 #include "ssa_value.hpp"
 
+#include "jbytecode/core/primitives.hpp"
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -62,6 +65,21 @@ struct SSAFunction
     std::vector<std::unique_ptr<SSABlock>>     blocks;            // owns blocks
     SSABlock*                                  entry = nullptr;   // 合成入口块
     std::vector<SSAExceptionRegion>            exceptionRegions;
+
+    /// @brief invokedynamic 站点元数据（自定义 bootstrap，阶段3）。
+    ///
+    /// @details
+    /// SSA builder 对无法静态展开的 invokedynamic（非 LambdaMetafactory /
+    /// StringConcatFactory，见 InvokeDynamicPreprocessor）生成
+    /// Intrinsic("indy:<index>") 指令并把本站点压入此表；index 为表内下标。
+    /// 值类型拷贝（std::string / Any 值语义），不依赖 SSA arena 生命周期。
+    struct InvokeDynamicSite
+    {
+        std::string                          name, desc;
+        std::optional<jbytecode::core::Handle> bsm;
+        std::vector<ca::core::Any>           bsmArgs;
+    };
+    std::vector<InvokeDynamicSite> indySites;
 
     SSAIds ids;   // id 发放器（function 内全局）
 

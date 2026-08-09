@@ -154,17 +154,21 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     }
     out.append("static jclass _mj2x_regc_cached_class(mj2x_regc_class_cache* cache);\n");
     out.append("\n");
-    out.append("// 多线程并发调用 native 时各线程持有独立 env/ctx，避免互相覆盖。\n");
-    out.append("// C++ 用 thread_local；MSVC C 用 __declspec(thread)；其余 C11 用 _Thread_local。\n");
+    out.append("// Per-thread env/ctx: concurrent native calls from multiple threads must not\n");
+    out.append("// share JNIEnv state. C++ uses thread_local; MSVC C uses __declspec(thread);\n");
+    out.append("// other C11 uses _Thread_local. Keep comments ASCII for MSVC codepage safety.\n");
     out.append("#if defined(__cplusplus)\n");
     out.append("static thread_local JNIEnv* _mj2x_regc_env = NULL;\n");
     out.append("static thread_local mj2x_regc_context _mj2x_regc_ctx;\n");
+    out.append("static thread_local jclass _mj2x_regc_owner_class = NULL;\n");
     out.append("#elif defined(_MSC_VER)\n");
     out.append("static __declspec(thread) JNIEnv* _mj2x_regc_env = NULL;\n");
     out.append("static __declspec(thread) mj2x_regc_context _mj2x_regc_ctx;\n");
+    out.append("static __declspec(thread) jclass _mj2x_regc_owner_class = NULL;\n");
     out.append("#else\n");
     out.append("static _Thread_local JNIEnv* _mj2x_regc_env = NULL;\n");
     out.append("static _Thread_local mj2x_regc_context _mj2x_regc_ctx;\n");
+    out.append("static _Thread_local jclass _mj2x_regc_owner_class = NULL;\n");
     out.append("#endif\n");
     out.append("static mj2x_regc_context* _mj2x_regc_current_context(void) { return &_mj2x_regc_ctx; "
            "}\n\n");
@@ -642,9 +646,9 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("    if (utf8 == NULL) return NULL;\n");
     out.append("    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);\n");
     out.append("}\n\n");
-    // LDC Class 常量（Foo.class）的物质化：FindClass 返回 jclass。Class 对象在 JVM 内是
-    // 单例，FindClass 每次返回同一 Class 的 local ref；local ref 生命周期由 R6-D 引用管理
-    // 统一处理。context 用于 ABI 对称（与 string_literal 一致）。
+    // LDC Class constant (Foo.class) materialization: FindClass returns a jclass.
+    // Class objects are JVM singletons; local-ref lifetime is covered by the
+    // R6-D reference management frame. context is for ABI symmetry.
     out.append("static mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* "
            "internal_name) {\n");
     out.append("    (void)context;\n");
@@ -1048,5 +1052,63 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("    return (*_mj2x_regc_env)->CallBooleanMethod(_mj2x_regc_env, (jobject)value, "
            "_mj2x_intrinsic_string_contains_method, (jobject)seq) == JNI_TRUE;\n");
     out.append("}\n\n");
+    out.append("// invokedynamic (stage 3) box/unbox helpers: primitive arguments are boxed\n");
+    out.append("// into Object[]; invokeWithArguments results are unboxed back into scalar\n");
+    out.append("// registers. class/methodID are cached globally to avoid repeated lookups.\n");
+    const char* boxDefs[] = {
+        "static jobject _mj2x_regc_box_i32(int32_t value) { static jclass c = NULL; static "
+        "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
+        "\"java/lang/Integer\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
+        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, c, \"valueOf\", \"(I)Ljava/lang/Integer;\"); if (c == NULL || m == NULL) "
+        "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
+        "static jobject _mj2x_regc_box_i64(int64_t value) { static jclass c = NULL; static "
+        "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
+        "\"java/lang/Long\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
+        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, c, \"valueOf\", \"(J)Ljava/lang/Long;\"); if (c == NULL || m == NULL) "
+        "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
+        "static jobject _mj2x_regc_box_f32(float value) { static jclass c = NULL; static "
+        "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
+        "\"java/lang/Float\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
+        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, c, \"valueOf\", \"(F)Ljava/lang/Float;\"); if (c == NULL || m == NULL) "
+        "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
+        "static jobject _mj2x_regc_box_f64(double value) { static jclass c = NULL; static "
+        "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
+        "\"java/lang/Double\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
+        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, c, \"valueOf\", \"(D)Ljava/lang/Double;\"); if (c == NULL || m == NULL) "
+        "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
+        "static int32_t _mj2x_regc_unbox_i32(jobject value) { if (value == NULL) return 0; static "
+        "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
+        "->FindClass(_mj2x_regc_env, \"java/lang/Integer\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->GetMethodID(_mj2x_regc_env, c, \"intValue\", \"()I\"); if (c == NULL || m == NULL) return 0; "
+        "return (*_mj2x_regc_env)->CallIntMethod(_mj2x_regc_env, value, m); }",
+        "static int64_t _mj2x_regc_unbox_i64(jobject value) { if (value == NULL) return 0; static "
+        "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
+        "->FindClass(_mj2x_regc_env, \"java/lang/Long\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->GetMethodID(_mj2x_regc_env, c, \"longValue\", \"()J\"); if (c == NULL || m == NULL) return 0; "
+        "return (*_mj2x_regc_env)->CallLongMethod(_mj2x_regc_env, value, m); }",
+        "static float _mj2x_regc_unbox_f32(jobject value) { if (value == NULL) return 0.0f; static "
+        "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
+        "->FindClass(_mj2x_regc_env, \"java/lang/Float\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->GetMethodID(_mj2x_regc_env, c, \"floatValue\", \"()F\"); if (c == NULL || m == NULL) "
+        "return 0.0f; return (*_mj2x_regc_env)->CallFloatMethod(_mj2x_regc_env, value, m); }",
+        "static double _mj2x_regc_unbox_f64(jobject value) { if (value == NULL) return 0.0; static "
+        "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
+        "->FindClass(_mj2x_regc_env, \"java/lang/Double\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->GetMethodID(_mj2x_regc_env, c, \"doubleValue\", \"()D\"); if (c == NULL || m == NULL) "
+        "return 0.0; return (*_mj2x_regc_env)->CallDoubleMethod(_mj2x_regc_env, value, m); }",
+    };
+    for (const char* def : boxDefs) {
+        out.append(def);
+        out.append("\n");
+    }
+    out.append("\n");
 }
 }   // namespace mj2x
