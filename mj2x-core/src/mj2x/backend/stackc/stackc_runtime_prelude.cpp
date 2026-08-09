@@ -12,6 +12,30 @@ std::string stackCRuntimePrelude()
 
     src.emitLine("#define _MJ2X_LOCAL_REF_LIMIT 512");
     src.emitLine("");
+    src.emitLine("#if defined(_MSC_VER)");
+    src.emitLine("#include <intrin.h>");
+    src.emitLine("#define _MJ2X_LIKELY(x)   (x)");
+    src.emitLine("#define _MJ2X_UNLIKELY(x) (x)");
+    src.emitLine("static __inline void* _mj2x_cache_load(void* volatile* slot) { return *slot; }");
+    src.emitLine("static __inline void* _mj2x_cache_cas(void* volatile* slot, void* expected, "
+                 "void* desired) {");
+    src.emitLine("    return _InterlockedCompareExchangePointer(slot, desired, expected);");
+    src.emitLine("}");
+    src.emitLine("#else");
+    src.emitLine("#define _MJ2X_LIKELY(x)   __builtin_expect((x), 1)");
+    src.emitLine("#define _MJ2X_UNLIKELY(x) __builtin_expect((x), 0)");
+    src.emitLine("static __inline void* _mj2x_cache_load(void* volatile* slot) {");
+    src.emitLine("    return __atomic_load_n(slot, __ATOMIC_RELAXED);");
+    src.emitLine("}");
+    src.emitLine("static __inline void* _mj2x_cache_cas(void* volatile* slot, void* expected, "
+                 "void* desired) {");
+    src.emitLine("    void* previous = expected;");
+    src.emitLine("    __atomic_compare_exchange_n(slot, &previous, desired, 0, __ATOMIC_RELAXED, "
+                 "__ATOMIC_RELAXED);");
+    src.emitLine("    return previous;");
+    src.emitLine("}");
+    src.emitLine("#endif");
+    src.emitLine("");
 
     src.emitLine("static jobject _mj2x_track_local_ref(JNIEnv* env, jobject* refs, int* refCount, "
                  "jobject ref) {");

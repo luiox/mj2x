@@ -16,6 +16,7 @@
 #include "libca/str/utf8_string.hpp"
 
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <sstream>
 #include <string>
@@ -185,6 +186,64 @@ inline std::string mangleMethod(std::string_view className, std::string_view met
         result += mangleName(methodDesc.substr(1, paren - 1), true);
     }
     return result;
+}
+
+/// @brief FNV-1a 64-bit hash（StackC/RegC 共用的不透明函数名/缓存标识符基础）。
+inline std::uint64_t fnv1a64(std::string_view value, std::uint64_t seed = 1469598103934665603ULL)
+{
+    std::uint64_t hash = seed;
+    for (unsigned char c : value) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+/// @brief 64-bit 值 → 定宽 16 位十六进制文本。
+inline std::string hex64(std::uint64_t value)
+{
+    char buffer[17];
+    snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(value));
+    return std::string(buffer);
+}
+
+/// @brief Native 方法的不透明 C 函数名：`__mj2x_c_<fnv1a64>`。
+/// @details 与 JNI `Java_*` 符号查找脱钩，靠 RegisterNatives 表动态绑定；
+///          StackC 与 RegC 共用同一命名，避免两类生成库交叉引用时命名分裂。
+inline std::string nativeFunctionName(std::string_view className, std::string_view methodName,
+                                      std::string_view methodDesc)
+{
+    auto hash = fnv1a64(className);
+    hash      = fnv1a64(methodName, hash);
+    hash      = fnv1a64(methodDesc, hash);
+    return "__mj2x_c_" + hex64(hash);
+}
+
+/// @brief 每类的 register 函数名：类名非字母数字转义为 `_XX`（末两位 hex）。
+inline std::string registerFunctionName(std::string_view className)
+{
+    std::string ident = "_mj2x_register_";
+    for (unsigned char c : className) {
+        if (std::isalnum(c)) {
+            ident += static_cast<char>(c);
+        }
+        else {
+            ident += "_";
+            ident += hex64(c).substr(14);
+        }
+    }
+    return ident;
+}
+
+/// @brief 浮点字面量文本（`%.*g`，与 `std::setprecision(P) << double` 的默认
+///        格式规则一致：P-1 位有效数字，指数落在 [-4, P) 内用定点否则科学计数）。
+/// @details 发射器统一用它，不依赖 ostringstream/iomanip。NaN/Inf 由调用方
+///          走宏分支（NAN/INFINITY），这里不处理。
+inline std::string formatFloatLiteral(double value, int precision)
+{
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+    return std::string(buffer);
 }
 
 }   // namespace mj2x::codegen

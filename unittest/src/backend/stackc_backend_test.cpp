@@ -339,7 +339,8 @@ TEST(StackCBackendTest, FieldAccess)
 
     EXPECT_NE(result.text.find("GetIntField"), std::string::npos);
     EXPECT_NE(result.text.find("static jfieldID fid_"), std::string::npos);
-    EXPECT_NE(result.text.find("MonitorEnter(env, _mj2x_owner_class)"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_cache_load((void* volatile*)&fid_"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_cache_cas((void* volatile*)&fid_"), std::string::npos);
     EXPECT_NE(result.text.find("jfieldID fid_local = NULL"), std::string::npos);
     EXPECT_NE(result.text.find("GetFieldID(env, lc, \"x\", \"I\")"), std::string::npos);
     EXPECT_NE(result.text.find("GetIntField(env, stack[sp].l, fid_local)"), std::string::npos);
@@ -370,7 +371,8 @@ TEST(StackCBackendTest, InvokeMethod)
 
     EXPECT_NE(result.text.find("CallStaticVoidMethod"), std::string::npos);
     EXPECT_NE(result.text.find("static jmethodID smid_"), std::string::npos);
-    EXPECT_NE(result.text.find("MonitorEnter(env, _mj2x_owner_class)"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_cache_load((void* volatile*)&smid_"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_cache_cas((void* volatile*)&smid_"), std::string::npos);
     EXPECT_NE(result.text.find("jmethodID mid_local = NULL"), std::string::npos);
     EXPECT_NE(result.text.find("GetStaticMethodID"), std::string::npos);
     EXPECT_NE(result.text.find("CallStaticVoidMethod(env, lc, mid_local)"), std::string::npos);
@@ -460,8 +462,10 @@ TEST(StackCBackendTest, StringConstantEmission)
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("NewStringUTF"), std::string::npos);
-    EXPECT_NE(result.text.find("_mj2x_string_pool + 0"), std::string::npos);
+    // 字符串常量走 UTF-16 code units 池（防 strings 扫描，jnic370 形态）：
+    // NewString(env, (const jchar*)(pool + offset), len)，不再出现明文 UTF-8 NewStringUTF。
+    EXPECT_NE(result.text.find("NewString(env, (const jchar*)(_mj2x_string_pool + 0)"), std::string::npos);
+    EXPECT_EQ(result.text.find("NewStringUTF"), std::string::npos);
     EXPECT_EQ(result.text.find("\"hello \\\"jni\\\"\\\\path\""), std::string::npos);
     EXPECT_NE(result.text.find("_mj2x_string_pool + 0"), result.text.rfind("_mj2x_string_pool + 0"))
         << result.text;
@@ -469,7 +473,9 @@ TEST(StackCBackendTest, StringConstantEmission)
     CompilerIndex emptyIndex;
     backend.finalize(emptyIndex);
     const auto& source = backend.generatedSource();
-    EXPECT_NE(source.find("static const unsigned char _mj2x_string_pool[]"), std::string::npos);
+    EXPECT_NE(source.find("static const uint16_t _mj2x_string_pool[]"), std::string::npos);
+    EXPECT_EQ(source.find("static const unsigned char _mj2x_string_pool[]"), std::string::npos);
+    EXPECT_EQ(source.find("static const unsigned short _mj2x_string_pool[]"), std::string::npos);
     EXPECT_EQ(source.find("\"hello \\\"jni\\\"\\\\path\""), std::string::npos) << source;
 }
 

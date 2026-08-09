@@ -34,6 +34,10 @@ using namespace jbytecode::tree;
 namespace {
 
 using codegen::CSourceStream;
+using codegen::fnv1a64;
+using codegen::hex64;
+using codegen::nativeFunctionName;
+using codegen::registerFunctionName;
 
 const char* jniType(PrimitiveKind kind)
 {
@@ -86,51 +90,9 @@ const char* defaultReturnValue(PrimitiveKind kind)
 // 不透明函数名 + RegisterNatives 动态绑定：每个 native 方法编译成一个
 // TU 内部的 `static` C 函数，名字是 `__mj2x_c_<fnv1a64>`，通过每类的
 // RegisterNatives 表显式绑定。函数名/可见性完全与 JNI 符号查找脱钩。
+// fnv1a64 / hex64 / nativeFunctionName / registerFunctionName 已收口到
+// codegen::c_helpers.hpp，StackC 与 RegC 共用同一命名（见该头文件）。
 // ---------------------------------------------------------------------------
-
-std::uint64_t fnv1a64(std::string_view value, std::uint64_t seed = 1469598103934665603ULL)
-{
-    std::uint64_t hash = seed;
-    for (unsigned char c : value) {
-        hash ^= c;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
-std::string hex64(std::uint64_t value)
-{
-    char buffer[17];
-    snprintf(buffer, sizeof(buffer), "%016llx",
-             static_cast<unsigned long long>(value));
-    return std::string(buffer);
-}
-
-/// 每个 native 方法的 C 函数名：不透明 fnv1a64 哈希，与 JNI 符号查找无关。
-std::string nativeFunctionName(const std::string& className, const std::string& methodName,
-                               const std::string& methodDesc)
-{
-    auto hash = fnv1a64(className);
-    hash      = fnv1a64(methodName, hash);
-    hash      = fnv1a64(methodDesc, hash);
-    return "__mj2x_c_" + hex64(hash);
-}
-
-/// 每类的 register 函数名：把类名里的非字母数字转义为 _XX 十六进制，保证合法 C 标识符。
-std::string registerFunctionName(const std::string& className)
-{
-    std::string ident = "_mj2x_register_";
-    for (unsigned char c : className) {
-        if (std::isalnum(c)) {
-            ident += static_cast<char>(c);
-        }
-        else {
-            ident += "_";
-            ident += hex64(c).substr(14);   // 末 2 位十六进制
-        }
-    }
-    return ident;
-}
 
 PrimitiveKind returnKind(const std::string& desc)
 {

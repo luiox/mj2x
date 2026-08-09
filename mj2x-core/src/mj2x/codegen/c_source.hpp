@@ -53,10 +53,12 @@ public:
     /// @details 写入当前缩进后返回，调用方继续用 `append` 拼该行剩余片段，
     ///          最后用 `newLine()` 收尾。与 Utf8StringBuilder 多片段拼接模式对接：
     ///          `src.appendLineStart("    ").append(...)` 的迁移目标。
-    void appendLineStart(std::string_view first = {})
+    ///          返回 `*this` 以支持链式拼接（`appendLineStart(...).append(...)`）。
+    CSourceStream& appendLineStart(std::string_view first = {})
     {
         writeIndent();
         if (!first.empty()) appendStr(first);
+        return *this;
     }
 
     /// @brief 写入一个换行，结束当前逻辑行。

@@ -42,9 +42,16 @@ dispatch bridge + `RegisterNatives`,业务方法和注册桥均不产生 per-cla
 自定义 class loader 下 `new` / `anewarray` / `multianewarray` / 静态成员 / type check
 等路径，bootstrap 异常类和注册入口仍使用 JVM `FindClass`。生成方法体跟踪临时 JNI
 local refs，并在正常返回或异常提前返回前批量释放；对象返回值作为 keep ref 保留。
-字段和方法 ID 在各生成调用点用 `static jfieldID` / `static jmethodID` 懒缓存,读写由
-owner class monitor 保护。hidden proxy class cache 使用 `jweak` 弱全局引用,调用前通过
-`NewLocalRef` 提升。字符串 LDC 常量去重到 TU 级 `_mj2x_string_pool[]`，方法体只引用 pool offset。
+字段和方法 ID 在各生成调用点用 `static jfieldID` / `static jmethodID` 懒缓存，读写用
+**无锁 CAS + 快路径**（`_mj2x_cache_load` 无锁读 + `_mj2x_cache_cas` 发布，CAS 输家复用
+赢家结果；MSVC 走 `InterlockedCompareExchangePointer`，GCC/Clang/Zig 走 `__atomic`，
+平台宏定义在 runtime prelude），不再持有 owner class monitor（等价 JNIC 3.7.0 的无锁
+缓存结构）。异常检查 / NPE trap / 慢路径全部带 `_MJ2X_UNLIKELY` 分支预测提示
+（MSVC 下退化为普通 if，GCC/Clang/Zig 下为 `__builtin_expect`）。hidden proxy class
+cache 使用 `jweak` 弱全局引用,调用前通过 `NewLocalRef` 提升。字符串 LDC 常量去重到
+TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方法体按
+`NewString(env, (const jchar*)(pool + offset), len)` 物化，防 strings 扫描明文命中；
+等价 JNIC 3.5.1/3.7.0 stringObf=false 形态），方法体只引用 pool offset。
 
 **已覆盖的 javac 输出形状**:
 
@@ -188,11 +195,20 @@ mj2x/
 
 | 能力 | 状态 |
 |---|---|
-| codegen 工具层(`mj2x-core/src/mj2x/codegen/`) | ✅ CSourceStream(缩进管理)、IncludeSet(include 去重)、cStringLiteral/mangle 收口 |
+| codegen 工具层(`mj2x-core/src/mj2x/codegen/`) | ✅ CSourceStream(缩进管理 + `appendLineStart` 链式)、IncludeSet(include 去重)、cStringLiteral/mangle 收口 |
 | StackC 拆到 `backend/stackc/` 文件夹 | ✅ stackc_backend + stackc_runtime_prelude 分离 |
 | 重复 helper 收口(cStringLiteral/mangle 跨 StackC/RegC) | ✅ 单一来源在 codegen |
 
-**codegen 工具层设计**:替代裸 `std::ostringstream << "    ..."` 字符串拼接。`CSourceStream` 管缩进、`IncludeSet` 管 include 去重排序、`c_helpers.hpp` 是无状态 helper 的单一来源。两个 C 发射后端(StackC/RegC)共用。`StackCBackend` 的 registration 与 method/field ID 懒缓存发射已迁到 `CSourceStream`;后续大段 runtime helper 字符串迁移是渐进工作。
+**codegen 工具层设计**:替代裸 `std::ostringstream << "    ..."` 字符串拼接。`CSourceStream`
+管缩进、`IncludeSet` 管 include 去重排序、`c_helpers.hpp` 是无状态 helper 的单一来源。
+两个 C 发射后端(StackC/RegC)共用。**StackC 发射器已全量迁移到 CSourceStream**：
+`stackc_backend.cpp` 单体(3300+ 行)按领域拆分为 `stackc_mir_arith.cpp` / `stackc_mir_objects.cpp`
+/ `stackc_mir_invoke.cpp` / `stackc_exception.cpp` / `stackc_registration.cpp` /
+`stackc_snippets.cpp` + 内部共享头 `stackc_backend_internal.hpp`（辅助结构 + inline helper
++ `Impl` 完整定义），行级文本一律走 `emitLine`/`appendLineStart`，不出现手写空格拼接。
+`fnv1a64` / `hex64` / `nativeFunctionName` / `registerFunctionName` 收口到
+`c_helpers.hpp`（RegC 同源共用），浮点字面量走 `formatFloatLiteral`（`%.*g`，与
+`setprecision` 默认格式同规则，不依赖 ostringstream/iomanip）。
 
 ## 6. 能力索引
 
