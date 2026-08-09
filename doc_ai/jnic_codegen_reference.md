@@ -6,6 +6,8 @@
 >
 > 素材：`jnic.c` 已归档于
 > `C:\Users\Canrad\AppData\Local\Temp\opencode\jnic_capture\jnic13438505281557630243_20260809_101838_542\jnic13438505281557630243\jnic.c`
+>
+> JNIC 3.7.0 的 DLL 逆向对比见 `jnic370_reverse_notes.md`（性能更新点汇总）。
 
 ## 1. 文件总览
 
