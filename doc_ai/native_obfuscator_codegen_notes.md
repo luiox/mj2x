@@ -1,276 +1,203 @@
-# native-obfuscator 代码生成深度分析（re146 / radioegor146 原版）
+# native-obfuscator 生成产物行为特征（逆向参考）
 
-> 本文档对开源 native-obfuscator（github.com/radioegor146/native-obfuscator）的
-> **生成器源码**做逐模块分析，还原 Java 字节码 → C++ 的完整翻译机制。
-> 所有结论来自源码（obfuscator/src/main/）与生成模板（resources/sources/），
-> 非猜测。商业变体"幻影盾"的生成产物分析见 `phantom_shield_codegen_notes.md`。
->
-> 源码位置：GitHub `radioegor146/native-obfuscator`（master @ e481761，tag 至 3.5.4r），
-> 生成器源码 `obfuscator/src/main/` + 模板 `obfuscator/src/main/resources/sources/`
+> 本文档基于**真实生成产物**描述 native-obfuscator（radioegor146 原版）输出代码的
+> 行为特征——产物形态、类改写、运行时加载/注册/缓存行为、可识别指纹。
+> 样本：原版生成器（3.5.4r，平台 hotspot）对 snake.jar（7 类）的完整输出。
+> 商业变体"幻影盾"的授权验证情报见 `phantom_shield_codegen_notes.md`。
 
-## 1. 架构总览
+## 1. 产物形态
 
 ```
-src/main/java/by/radioegor146/
-├── NativeObfuscator.java            主流程（jar 逐类处理、类改写、产物组装）
-├── MethodProcessor.java             方法翻译主循环（opcode→snippet、栈指针）
-├── MethodContext.java               翻译上下文（输出缓冲/缓存/标签池）
-├── Snippets.java                    模板渲染（cppsnippets.properties）
-├── NodeCache.java                   类/方法/字段/字符串缓存表（全局编号）
-├── CachedMethodInfo/CachedFieldInfo 方法/字段缓存键
-├── CatchesBlock.java                异常捕获块集合（去重/链式）
-├── LabelPool.java                   Label → "L%d" 编号
-├── HiddenMethodsPool.java           隐藏方法池（mhinvoke 等）
-├── HiddenCppMethod.java             隐藏方法 ↔ C 函数绑定
-├── Platform.java                    STD_JAVA / HOTSPOT / ANDROID
-├── bytecode/                        预处理（翻译前改写字节码）
-│   ├── PreprocessorRunner.java
-│   ├── PreprocessorUtils.java       magic 方法占位符
-│   ├── IndyPreprocessor.java        invokedynamic 展开
-│   ├── LdcPreprocessor.java
-│   ├── MethodHandleUtils.java
-├── instructions/                    15 类指令 handler（见 §4）
-├── source/                          产物组装
-│   ├── ClassSourceBuilder.java      每类 .cpp/.hpp（缓存数组+注册函数）
-│   ├── MainSourceBuilder.java       native_jvm_output.cpp（reg_methods）
-│   ├── StringPool.java              字符串池构建
-│   └── CMakeFilesBuilder.java
-├── special/                         <clinit>/普通方法/接口方法处理
-└── compiletime/                     Loader 类（Java 侧加载器模板）
-src/main/resources/sources/
-├── cppsnippets.properties           ★ 574 行指令→C++ 模板表
-├── native_jvm.cpp/hpp               运行时框架（utils）
-├── native_jvm_output.cpp/hpp        JNI_OnLoad 模板
-├── string_pool.cpp/hpp              字符串池模板
-└── CMakeLists.txt
+输出目录/
+├── cpp/                                  # C++ 工程
+│   ├── native_jvm.cpp/hpp                运行时框架（utils）
+│   ├── native_jvm_output.cpp/hpp         JNI_OnLoad + 注册表
+│   ├── string_pool.cpp/hpp               字符串池
+│   ├── CMakeLists.txt                    C++17，MSVC/GNU/Clang
+│   └── output/                           每类一个独立文件 + 隐藏类数据
+│       ├── Main_2.cpp/hpp                <类名>_<序号>（类索引序号）
+│       ├── ThreadsController_4.cpp       （214 KB，游戏主循环）
+│       └── data_native0_hidden_Hidden0.cpp/hpp   隐藏类字节码
+└── snake.jar                             输出 jar（改写类 + Loader）
 ```
 
-**核心设计**：翻译 = **模板 + 替换**。每个 JVM 指令对应 `cppsnippets.properties`
-中一段 C++ 模板（key = ASM Opcodes 常量名），handler 填充占位符（栈槽号/标签/
-字符串池偏移/缓存数组下标）后拼进方法体。
+- **每类一个独立 .cpp/.hpp**（`.cpp` 含全部翻译方法 + 注册函数；`.hpp` 只声明
+  `__ngen_register_methods`）。
+- 隐藏类（special_clinit/mhinvoke 等）不生成 .class 进 jar（非 Android），而是
+  `class_data[jbyte数组]` 字节码 + 运行期 `DefineClass` 注入。
+- 输出 jar 只含：改写类 + `<nativeN>/Loader.class` + 原资源（**DLL 是外部编译后
+  手动放入 jar**）。
 
-## 2. 指令翻译机制（MethodProcessor + Snippets）
-
-### 2.1 opcode → 模板名
-
-```java
-// MethodProcessor 静态块：反射枚举 ASM Opcodes 全部常量
-for (Field f : Opcodes.class.getFields())
-    INSTRUCTIONS.put((int) f.get(null), f.getName());   // 例如 182 → "INVOKEVIRTUAL"
-```
-模板 key 与 JVM 指令名一一对应；特殊指令由 handler 动态拼接后缀
-（如 `INVOKEVIRTUAL_<返回值sort>`、`GETSTATIC_<字段sort>`、`NEWARRAY_<atype>`）。
-
-### 2.2 类型系统映射
-
-```java
-CPP_TYPES = {void, jboolean, jchar, jbyte, jshort, jint, jfloat, jlong, jdouble, jarray, jobject, jobject}
-            // sort 0..11（ASM Type）
-TYPE_TO_STACK = {1,1,1,1,1,1,1,2,2,0,0,0}   // 类型 → 栈槽数（long/double 占 2）
-```
-
-### 2.3 栈指针（stackPointer）维护
-
-每个 handler 实现 `getNewStackPointer(node, sp)`：按指令语义增减栈深
-（ILOAD +1、LSTORE -2、INVOKEVIRTUAL = -1 - 参数槽和 + 返回槽…）。翻译时每行
-注释输出当前栈深，模板用 `$stackindexN`（sp-5..sp+5）定位操作数。
-
-### 2.4 handler 管线（GenericInstructionHandler.accept）
-
-```
-1. 收集该指令位置上"活跃"的 try/catch 块（按 tryCatch 类型去重）
-   ——LabelHandler 在进入 try start 时加入 tryCatches、到 end 时移除，
-   指令的 trycatchhandler 即"当前捕获集合"的 C++ 片段：
-     · 无捕获：   if (env->ExceptionCheck()) { return (rettype)0; }
-     · 有捕获：   if (env->ExceptionCheck()) { jthrowable exception = ...; cstack0.l = exception;
-                  goto L_CATCH_N; }
-2. 生成属性：line / rettype / stackindex±5 / trycatchhandler
-3. process(context, node)（handler 专属：填充 operand/缓存/参数等 props）
-4. 渲染：context.output.append(snippets.getSnippet(instructionName, props))
-```
-
-## 3. 指令模板要点（cppsnippets.properties 摘录）
-
-| 类 | 模板模式 |
-|---|---|
-| 常量 | `ICONST_1 → cstack$stackindex0.i = 1;`；`LDC_STRING → cstack0.l = $cst_ptr;`（字符串池指针） |
-| 加载/存储 | `ILOAD → cstack0.i = clocal$var.i;`；`ASTORE → clocal$var.l = cstackm1.l; refs.insert(...)` |
-| 数组 | `*ALOAD → if (ref==nullptr) throw_re(NPE,"IALOAD npe",line); else GetIntArrayRegion(arr, idx, 1, &cstackm2.i);`（**Region 单元素批量接口**）；boolean/byte 二义统一走 `utils::baload/bastore` |
-| 算术 | `IADD → cstackm2.i = cstackm2.i + cstackm1.i;`；`IDIV →` 特判 `-1 && INT_MIN` 与除零 throw_re；`IREM` 除零检查；`FREM → std::fmod` |
-| 移位 | `ISHL → << (0x1f & n)`；`IUSHR → (jint)(((uint32_t)x) >> (((uint32_t)n) & 0x1f))` |
-| 比较 | `LCMP → (a==b)?0:(a>b?1:-1)`；`FCMPL/FCMPG → value1>value2?1:(==?0:(<?-1:±1))`（NaN 语义） |
-| 栈操作 | `DUP → cstack0 = cstackm1;`（整槽拷贝）；`DUP_X1/DUP_X2/DUP2_X1/DUP2_X2` 旋转；`SWAP → std::swap`；`POP/POP2 → ;`（空操作，靠指针覆盖） |
-| 分支 | `IF_ICMPxx → if (cstackm2.i cmp cstackm1.i) goto $label;`；`IF_ACMPEQ → env->IsSameObject(...)` |
-| switch | `TABLESWITCH_START/PART/DEFAULT/END → switch (cstackm1.i) { case $index: goto $label; ... }` |
-| new | `NEW → if (jobject obj = env->AllocObject($desc_ptr)) { cstack0.l = obj; refs.insert(obj); }` |
-| 字段 | `GETSTATIC_<sort>`/`GETFIELD_<sort>`/`PUT*`：按 sort 选 Get/Set 方法；**GETFIELD/PUTFIELD 前空指针检查** |
-| 方法调用 | `INVOKEVIRTUAL_<sort>`/`INVOKEINTERFACE_<sort>`/`INVOKESPECIAL_<sort>`/`INVOKESTATIC_<sort>`：按返回值 sort 选 Call*Method；invokespecial 用 `CallNonvirtual*Method`；**object 返回 refs.insert** |
-| checkcast | `if (ref != nullptr && !IsInstanceOf(ref, $desc_ptr)) throw_re(CCE, "cannot cast to "+desc, line)` |
-| athrow | `if (ref==nullptr) throw_re(NPE) else { env->Throw(ref); }` |
-| monitor | `MonitorEnter/MonitorExit`（null 检查） |
-| multianewarray | `utils::create_multidim_array(env, classloader, count, required_count, desc, line, dims)` |
-
-## 4. 缓存机制（NodeCache + 生成代码）
-
-每类一个 namespace，四个扁平缓存数组（按全局 ID 编号，`NodeCache.getId` 惰性分配）：
+## 2. 每个翻译类的 C 代码行为
 
 ```cpp
-jstring  cstrings[N];                    // 类名（点分）jstring，intern+NewGlobalRef
-std::mutex cclasses_mtx[N];  jclass cclasses[N];
-jmethodID cmethods[N];  jfieldID cfields[N];
+// Main                                              ← 类名注释
+namespace native_jvm::classes::__ngen_Main_2 {       ← 命名空间 = 类名_序号
+
+    char *string_pool;                               // 全局池指针
+    jstring cstrings[2];                             // 类名（点分）jstring 缓存
+    std::mutex cclasses_mtx[1];  jclass cclasses[1]; // 类缓存（弱引用）
+    jmethodID cmethods[5];                           // 方法 ID 缓存
+
+    // main([Ljava/lang/String;)V                    ← 方法注释
+    void JNICALL __ngen_native_main1(JNIEnv *env, jclass clazz, jarray arg0) {
+        jobject classloader = utils::get_classloader_from_class(env, clazz);
+        ...
+        jvalue cstack0..2 = {};  jvalue clocal0..1 = {};   // 槽数与 maxStack/maxLocals 对应
+        std::unordered_set<jobject> refs;                  // 引用跟踪
+
+        // LABEL L1; Stack: 0                         ← 每行注释：标签/指令/栈深
+        L1: if (env->ExceptionCheck()) { return; }
+        // NEW Window; Stack: 0
+        if (!cclasses[0] || IsSameObject(cclasses[0], NULL)) {  // 类缓存：双检锁
+            cclasses_mtx[0].lock(); ... FindClass via classloader ... NewWeakGlobalRef
+            ... }
+        if (jobject obj = env->AllocObject((cclasses[0]))) { cstack0.l = obj; refs.insert(obj); }
+        // INVOKESPECIAL Window.<init>()V; Stack: 2
+        if (!cmethods[0]) { cmethods[0] = env->GetMethodID((cclasses[0]), <池偏移>, <池偏移>); }
+        if (cstack1.l == nullptr) throw_re(NPE, "<池偏移>", 8);
+        else env->CallNonvirtualVoidMethod(...);
+        ...
+        // ALOAD 1; Stack: 0
+        cstack0.l = clocal1.l; refs.insert(cstack0.l);
+    }
+    void __ngen_register_methods(JNIEnv *env, jclass clazz) {
+        string_pool = string_pool::get_pool();
+        // cstrings 初始化：NewStringUTF → intern → NewGlobalRef
+        JNINativeMethod __ngen_methods[] = {
+            { <池偏移>, <池偏移>, (void *)&__ngen_native_main1 }, ... };
+        env->RegisterNatives(clazz, __ngen_methods, N);
+        // （如有）隐藏方法注册：FindClass + __ngen_hidden_methods
+    }
+}
 ```
 
-- **类缓存**（方法调用点内联生成，非独立函数）：
-  ```cpp
-  if (!cclasses[7] || env->IsSameObject(cclasses[7], NULL)) {
-      cclasses_mtx[7].lock();
-      if (!cclasses[7] || ...) { if (jclass clazz = <类获取>) cclasses[7] = (jclass) env->NewWeakGlobalRef(clazz); }
-      cclasses_mtx[7].unlock(); <异常检查>
-  }
-  ```
-  双检锁 + **NewWeakGlobalRef（弱引用）**。类获取分两种：
-  `getClassGetter`：数组类 `env->FindClass(desc)`；普通类
-  `utils::find_class_wo_static(env, classloader, <cstrings 点分名>)`（classloader.loadClass，
-  异常转 NoClassDefFoundError）。
-- **方法/字段 ID**（调用点内联）：
-  ```cpp
-  if (!cmethods[9]) { cmethods[9] = env->GetStaticMethodID(<类>, <名>, <描述符>); }
-  ```
-  名称/描述符来自字符串池偏移。
-- **cstrings**：在 `__ngen_register_methods` 里统一初始化（NewStringUTF → intern →
-  NewGlobalRef），用于 classloader 加载路径的类名。
+行为要点：
+- **缓存全部内联在调用点**（每处方法调用都带一段双检锁类缓存 + ID 缓存代码）——
+  产物膨胀但无需缓存函数表（幻影盾将这段封装成 `_CacheClass0` 等函数，见变体文档）。
+- **类缓存用弱引用**（NewWeakGlobalRef），允许类卸载。
+- **类解析走 classloader**：`utils::find_class_wo_static(env, classloader, cstrings[点分名])`
+  （loadClass 语义，异常转 NoClassDefFoundError）；数组类走 FindClass。
+- **引用管理**：每个 jobject 结果都 `refs.insert(...)`，方法出口统一清理；
+  局部引用不依赖 JVM 引用表自然回收。
+- **异常检查逐点**：每个 JNI 调用后 `if (env->ExceptionCheck()) return;`
+  （TRY 块内则是进捕获块：`goto L_CATCH_N`）。
+- **空指针前置**：方法调用/字段访问前 `if (ref == nullptr) throw_re(NPE, "<操作名> npe", <行号>)`。
+- **源行号残留**：`// Line 8; Stack: 0` 注释保留字节码行号。
 
-## 5. 方法翻译全流程（MethodProcessor.processMethod）
+## 3. 方法翻译行为（指令 → C）
 
-```
-1. 特殊处理器分发：<init> 跳过；<clinit> → ClInit；其他 → Default
-2. 方法名：__ngen_ + (native_<名><idx> | special_clinit_<class>_<idx> | interfacestatic_...)
-3. 签名：<ret> JNICALL 名(JNIEnv*, [jobject ignored_hidden,] jclass|jobject obj, <args>)
-   · 非 static 开头注入：
-       clazz = get_class_from_object(obj) → classloader = get_classloader_from_class(clazz)
-       → (classloader==nullptr → FatalError("classloader == null"))
-       → clazz = find_class_wo_static(classloader, <本类点分名>)   // 重新解析本类
-4. try/catch 涉及的异常类预缓存（WeakGlobalRef）
-5. 声明 cstack0..maxStack-1、clocal0..maxLocals-1（用 ASM maxStack/maxLocals）
-   + std::unordered_set<jobject> refs
-6. 参数 → clocal（LOCAL_LOAD_ARG_<sort> 模板，refs 跟踪引用）
-7. 逐指令循环：// <insn>; Stack: N 注释 → accept() 输出模板代码 → 更新栈指针
-8. 尾部 return (rettype)0
-9. catch 块展开：L_CATCH_N: → TRYCATCH_CHECK_STACK（IsInstanceOf 匹配→goto handler）
-   → 不匹配链到下一个 L_CATCH 或 TRYCATCH_END_STACK（重抛）
-10. 清理 ASM 元数据（localVariables/tryCatchBlocks），postProcess 改写 Java 方法
-```
-
-## 6. try/catch 展开（顺序模拟）
-
-- LabelHandler 维护"活跃 try 集合"：label 为某 try 块 start 时加入 `tryCatches`，
-  为 end 时移除；每条指令据此生成 trycatchhandler 前缀（进捕获块或仅异常检查）。
-- 捕获块以 `CatchesBlock`（异常类型序列）为键去重，链式生成：
-  `L_CATCH_0: if (IsInstanceOf(cstack0.l, <类>)) goto <handler>; goto L_CATCH_1;` 最后
-  `L_CATCH_N: env->Throw(cstack0.l); return (rettype)0;`（不匹配重抛）。
-
-## 7. invokedynamic 全链路（IndyPreprocessor 字节码层展开）
-
-invokedynamic **不直接翻译**——翻译前在字节码层面展开为普通指令序列：
-
-```
-[参数装箱入 Object[]]
-→ push lookup（预处理替换的 LOOKUP_LOCAL magic 方法）
-→ push name / MethodType（MethodHandleUtils 生成 ldc）
-→ push bsmArgs（String/Type/Integer/Long/Float/Double/Handle/Object[] 递归展开，装箱）
-→ INVOKESTATIC <bsm 所在类>.<bsm 名>（运行时调 bootstrap！）
-→ CHECKCAST CallSite → INVOKEINTERFACE CallSite.getTarget
-→ [调用目标 MethodHandle]
-分支：STD_JAVA/ANDROID → MethodHandle.invokeWithArguments(Object[])
-      HOTSPOT → 替换为魔法方法 native/magic/1/invoke/... （→ MethodHandler 换隐藏方法 mhinvoke）
-整个 bootstrap 段包 try/catch → BootstrapMethodError（bsme 块）
-```
-
-- **魔法方法占位**（PreprocessorUtils）：`MethodHandles.lookup()` /
-  `getClassLoader()` / `getClass()` 调用在预处理中替换为 magic owner
-  （`native/magic/1/lookup/obfuscator<随机>.a`）→ MethodHandler 识别后直接输出
-  `cstackN.l = lookup/classloader/clazz;`（方法体局部缓存变量）。
-- **HOTSPOT 专用**：`link_call_site` 走 `utils::link_call_site(...)`（native 侧用
-  JVM 内部 API linkCallSite），返回 MemberName 数组；invoke 走隐藏方法。
-
-## 8. 隐藏方法池（HiddenMethodsPool）
-
-运行时需要的 JVM 内部调用被包装成**隐藏类**（`LambdaForm$Hidden` +
-`jdk/internal/vm/annotation/Hidden` 注解的 native 方法）：
-- `mhinvoke`：包装 `MethodHandle.invoke`（invokeExact/invoke 翻译目标）
-- `invokereverse`：invoke 逆序参数包装
-- `special_clinit_*`：<clinit> 原逻辑代理
-- `interfacestatic_*`：接口方法代理
-
-非 Android 平台：隐藏类字节码 → `native_jvm::data::__ngen_<类>::class_data[]`
-（jbyte 数值数组）+ `DefineClass` 注入；Android：直接写 .class 进 jar。
-
-## 9. 类改写（postProcess）
-
-| 场景 | 改写 |
+| 指令 | 生成行为 |
 |---|---|
-| 普通方法 | `access |= ACC_NATIVE`，注册名 `__ngen_native_<名><idx>` |
-| `<clinit>` | 清空指令 → `Loader.registerNativesForClass(classIndex, 类.class)` + `special_clinit_N_M(类)`（隐藏类 native 调用）；原逻辑翻译成隐藏类 native 方法 |
-| 接口方法 | 原方法改为转发（调隐藏类 native `interfacestatic_N_M`），隐藏类内翻译 |
-| 类版本 | `classNode.version = 52`（强制 Java 8） |
+| 常量 | `cstackN.i = 5;`（数字明文）；字符串 → `cstrings[N]` 或池偏移（见 §6） |
+| 栈操作 | `DUP → cstackN = cstackM;`（整槽拷贝）；`POP → ;`（靠栈指针覆盖） |
+| 算术 | 直接运算；`IDIV/IREM` 带 `-1 && INT_MIN` 特判与除零 throw_re；`FREM → std::fmod` |
+| 移位 | `<< (0x1f & n)`；无符号右移 `(jint)(((uint32_t)x) >> (((uint32_t)n) & 0x1f))` |
+| 比较 | 三目；FCMPL/G NaN 语义 `value1>value2?1:(==?0:(<?-1:±1))` |
+| 分支 | `if (cond) goto L_N;`；`goto → goto L_N;` |
+| switch | `switch (cstackN.i) { case k: goto L; default: goto L; }` |
+| 数组 | `Get*ArrayRegion(arr, idx, 1, &槽)`（Region 单元素）；boolean/byte 走 `utils::baload/bastore`；负尺寸 throw_re(NASE) |
+| 字段 | `Get*/Set*Field(..., <cmethods/cfields 缓存>)`；实例访问前 null 检查 |
+| 方法调用 | `Call*Method`；`INVOKESPECIAL → CallNonvirtual*Method`（带 `$class_ptr`）；对象返回 `refs.insert` |
+| invokedynamic | 运行时自行调 bootstrap（见 §5） |
+| multianewarray | `utils::create_multidim_array(env, classloader, ...)` |
+| monitor | `env->MonitorEnter/Exit`（null 检查） |
 
-## 10. 注册与装载
+## 4. 类改写行为（javap 实证）
+
+翻译类改写后：
+
+```java
+public class Main {
+  public static native void main(String[]);      // 原方法 → native（保留签名/访问标志）
+  static {};                                     // clinit 重写为 3 条：
+      ldc  2                                     //   类索引
+      ldc  class Main
+      invokestatic native0/Loader.registerNativesForClass:(ILjava/lang/Class;)V
+      ldc  class Main
+      invokestatic native0/hidden/Hidden0.special_clinit_2_20:(Ljava/lang/Class;)V
+      return
+}
+```
+
+- 原方法 `access |= ACC_NATIVE`；`<init>` **不翻译**（保留 Java）。
+- **clinit 原逻辑整体移入隐藏类 native 方法**（`special_clinit_<类>_<方法>`），
+  Java clinit 只剩"注册 + 调用隐藏代理"两件事。
+- 接口默认方法 → 转发到隐藏类 `interfacestatic_*`。
+- 类文件版本强制 52（Java 8）。
+- 隐藏类（`native<N>/hidden/HiddenN`）带 `LambdaForm$Hidden` +
+  `jdk/internal/vm/annotation/Hidden` 注解（class_data 常量池可见）。
+
+## 5. invokedynamic / MethodHandle 行为
+
+- invokedynamic 在字节码层面展开（翻译前）：**运行时自己调 bootstrap**
+  （参数查表/装箱 → INVOKESTATIC bsm → getTarget），随后
+  - hotspot 平台：走 `utils::link_call_site`（JVM 内部 linkCallSite）+ 隐藏方法
+    `mhinvoke`/`invokereverse`（包装 MethodHandle.invoke）；
+  - std_java/android：`MethodHandle.invokeWithArguments(Object[])`。
+- 翻译代码中 `MethodHandles.lookup()`/`getClassLoader()`/`getClass()` 被替换为
+  方法体局部变量（`jobject lookup = nullptr;` 惰性初始化）。
+- **识别特征**：产物中出现 `java/lang/invoke/CallSite`、`getTarget`、
+  `LambdaMetafactory`、`utils::link_call_site` 的字符串/调用。
+
+## 6. 字符串池行为
+
+```cpp
+namespace native_jvm::string_pool {
+    static char pool[N] = { 109, 97, 105, 110, 0, 40, 91, 76, ... };  // "main\0([Ljava/lang/String;)V\0..."
+    char *get_pool() { return pool; }
+}
+```
+
+- **单一连续 ASCII 池**：所有字符串（方法名/描述符/类名/字面量/错误消息）按序拼接，
+  NUL 分隔，访问 `((char *)(string_pool + <offset>LL))`。
+- 池内可读到全部方法名、描述符、异常消息、字符串字面量——**逆向时直接转储即可
+  还原符号表**（数值数组 → ASCII）。
+- 无加密（仅防 strings 扫描）。
+
+## 7. 注册与加载行为链
 
 ```
-每类 .cpp：
-  void __ngen_register_methods(JNIEnv*, jclass) {
-      string_pool = string_pool::get_pool();
-      [cstrings 初始化（intern + global）]
-      JNINativeMethod __ngen_methods[] = { {池偏移名, 池偏移描述符, &__ngen_native_*} };
-      env->RegisterNatives(clazz, __ngen_methods, N);
-      [hidden 类方法注册：FindClass + __ngen_hidden_methods]
-  }
-native_jvm_output.cpp（模板 + MainSourceBuilder 填充）：
-  reg_method reg_methods[N];                       // 类注册函数表
-  void register_for_class(JNIEnv*, jclass, jint id, jclass clazz) { reg_methods[id](env, clazz); }
-  void prepare_lib(JNIEnv*) {
-      utils::init_utils(env);
-      [reg_methods 赋值 + DefineClass 隐藏类]
-      RegisterNatives(<nativeDir>/Loader, {"registerNativesForClass", "(ILjava/lang/Class;)V", &register_for_class}, 1);
-  }
-  JNI_OnLoad → prepare_lib → JNI_VERSION_1_8
-Java 侧 Loader（LoaderUnpack 模板，改包名 native<N>/Loader）：
-  static { os/arch 判断 → 读 /native<N>/<平台>-<扩展> → temp 解压 → System.load }
-  native void registerNativesForClass(int, Class)
+类 <clinit> → Loader.registerNativesForClass(类索引, 类)
+            → native register_for_class → reg_methods[类索引](env, clazz)
+            → 该类的 __ngen_register_methods → RegisterNatives
+
+JNI_OnLoad → prepare_lib → utils::init_utils
+            → [reg_methods 填表 + DefineClass 注入隐藏类]
+            → RegisterNatives(Loader, {registerNativesForClass, ...})
+
+Loader.<clinit>（Java）→ os.name/os.arch 判定 → 读 /native<N>/<平台>-<扩展>
+            → 临时文件 → System.load
 ```
 
-调用链：类 `<clinit>` → `Loader.registerNativesForClass` → `register_for_class` →
-`reg_methods[id]`（对应类的 `__ngen_register_methods`）→ RegisterNatives。
+- **注册延迟到类加载时**（clinit 触发），不是 JNI_OnLoad 一次性注册。
+- 平台资源命名：`x64-windows.dll` / `x64-linux.so` / `x64-macos.dylib` / arm 变体。
+- Loader 类名 `native<N>/Loader`（N 自动避让已有目录）；`registerNativesForClass`
+  是唯一 native 注册入口。
 
-## 11. 字符串池（StringPool）
+## 8. 逆向识别指纹（拿到未知产物如何认）
 
-- 全部字符串（方法名/描述符/类名/字面量/错误消息）惰性入池：offset 递增
-  （Modified-UTF-8 字节数 + 1 个 NUL），引用 `((char *)(string_pool + <offset>LL))`。
-- 池实现：`static char pool[N] = { 109, 97, 105, 110, 0, ... }`（明文数值数组，
-  NUL 分隔），`get_pool()` 返回指针。
-- 仅防 strings 扫描，无加密（对比 JNIC 3.7.0 stringObf=true 的 chacha20）。
+| 特征 | 说明 |
+|---|---|
+| 符号/命名 | `native_jvm::classes::__ngen_<类>_<N>` 命名空间、`__ngen_native_<名><N>` 方法、`__ngen_register_methods` |
+| 每行注释 | `// LABEL L1; Stack: N`、`// Line N; Stack: N`（**生成器不清理注释**） |
+| 缓存模式 | 调用点内联双检锁 + `NewWeakGlobalRef` + `cmethods[i]` 惰性 GetMethodID |
+| 字符串池 | `string_pool + <N>LL` 形态（唯一无 `((char *)` 转换则少见） |
+| 隐藏类 | `native<N>/hidden/Hidden0` + DefineClass 注入 + `special_clinit_*`/`interfacestatic_*` 方法名 |
+| 引用管理 | `std::unordered_set<jobject> refs` + `utils::clear_refs` |
+| 异常消息 | `"<操作> npe"`（如 `IALOAD npe`）、`"cannot cast to "`、`classloader == null` |
+| Loader | `registerNativesForClass` native + os/arch 分发的资源加载 |
+| 框架 | `utils::init_utils`、`find_class_wo_static`、`throw_re(env, cls, msg, line)` |
 
-## 12. 生成产物结构（与原版输出对比）
+## 9. 行为差异：原版 vs 幻影盾变体（简表）
 
-原生版输出目录：`cpp/`（native_jvm.* 框架模板 + string_pool.cpp +
-native_jvm_output.cpp + CMakeLists.txt）+ `cpp/output/`（**每类独立
-`<类名>_<idx>.cpp/.hpp`** + 隐藏类 data_*.cpp/.hpp）+ 输出 jar（改写类 + native<N>/
-资源 + Loader）。
-
-注意：商业变体"幻影盾"将**每类独立文件合并为单个 output.cpp** 并追加授权层
-（Ed25519 验签/云验证），见 `phantom_shield_codegen_notes.md`。
-
-## 13. 关键设计小结
-
-1. **模板驱动**：指令语义全部集中在一张 properties 表，handler 只做参数定位，
-   扩展新指令只需加模板。
-2. **栈机直译**：cstack/clocal 固定槽 + 编译期栈指针，无真栈、无寄存器分配。
-3. **引用管理**：所有 jobject 进 `refs` 集合，方法出口统一 DeleteLocalRef
-   （JNIC 无此机制，靠 JVM 局部引用表自然回收）。
-4. **弱引用类缓存**：NewWeakGlobalRef（类可被卸载）；JNIC 用强引用 NewGlobalRef。
-5. **字节码层预处理优先**：invokedynamic/lookup 等复杂构造在翻译前改写为普通指令，
-   翻译器保持简单。
-6. **隐藏类承载 JVM 内部语义**：mhinvoke/link_call_site/special_clinit 均通过
-   带 Hidden 注解的隐藏类 native 方法实现。
-7. **clinit 作为注册钩子**：每个翻译类的 <clinit> 都变成
-   `Loader.registerNativesForClass(id, clazz)` + 原逻辑的隐藏代理调用。
+| 行为 | 原版 | 幻影盾（snake 样本） |
+|---|---|---|
+| 文件组织 | 每类独立 .cpp/.hpp | **合并为单文件**（output.cpp 1.66MB + inline.cpp） |
+| 类名 | 保留原类名 | **重命名** `skidonion/nrgui/<单字母>` |
+| 方法名 | `__ngen_native_<原方法名><N>` | `__ngen_native_<字母><N>`（混淆） |
+| 缓存代码 | 调用点内联展开 | 封装为 `_CacheClass0/1`、`_CacheMethod` 等函数 |
+| 字符串池 | 明文 ASCII | 同（明文） |
+| Loader 名 | `native<N>/Loader` + `registerNativesForClass` | `skidonion/nrgui/___` + `___` |
+| 授权 | 无 | 授权方法提取到 inline 层 + Ed25519 验签 + 云心跳（见变体文档） |
+| 隐藏类 | `native<N>/hidden/Hidden0` | 同机制（`__ngen_data_` + DefineClass） |

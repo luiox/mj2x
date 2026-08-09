@@ -114,10 +114,24 @@ if (ed25519_verify(...) != 0) → 失败路径
    （需先抓包还原协议；心跳响应决定是否持续授权）。
 5. **伪造 token 不可行**：Ed25519 验签需要私钥，只能 patch 运行时。
 
-## 7. 变体魔改点清单（vs 原版，简列）
+## 7. 生成侧行为差异（vs 原版真实产物）
 
-- 每类独立 .cpp 合并为单个 output.cpp；类名重命名 `skidonion/nrgui/<单字母>`。
-- 方法命名 `__ngen_native_<字母><序号>`；Loader 类/方法更名（`skidonion/nrgui/___` /
-  `___`）。
-- 新增 inline 层：`native_jvm::inlines` + `__phantom_shield_x_N`（授权静态方法提取）。
-- 内嵌 Ed25519 全套 + ThemidaSDK（编译期 VM 化可选）。
+| 行为 | 原版（snake 7 类产物） | 幻影盾（snake 38 类产物） |
+|---|---|---|
+| 文件组织 | 每类独立 `output/<类>_<N>.cpp/.hpp` | **合并**：单文件 `native_jvm_output.cpp`（1.66MB）+ `native_jvm_inline.cpp`（768KB，新增） |
+| 类命名 | 保留原类名（`Main`、`Window`…） | **类名重命名** `skidonion/nrgui/<单字母>`（37 类），注册/缓存数组下标按类索引 |
+| 方法命名 | `__ngen_native_<原方法名><N>`（可读） | `__ngen_native_<字母><N>`（`a1,b2,c3…` 按类序分配）+ `__ngen_native_main1`/`aaaaa2`（入口）；**源方法名只在字符串池残留** |
+| 缓存代码 | 调用点内联双检锁展开（每处方法调用一段） | 封装为 `_CacheClass0`（classloader 加载，参数 class_name_index 查 cstrings）/ `_CacheClass1`（FindClass + 池偏移）/ `_CacheMethod/_CacheStaticMethod/_CacheField/_CacheStaticField`（参数传池偏移）——**缓存逻辑函数化**，产物更小 |
+| 方法体结构 | 无 static 类缓存字段 | 增加 `static jobject classloader`（方法级 static 缓存 classloader）、`jobject lookup` 同原版 |
+| 隐藏类 | `native<N>/hidden/Hidden0`（仅 clinit 代理等） | 同机制（`skidonion/nrgui/___` + `__ngen_data_` DefineClass），且授权方法被提取为 **inline 层函数** `__phantom_shield_x_N`（39 个，带 jclass 参数 = static 方法）+ 授权全局状态（`licenced`/`VERIFY_TOKEN22`/`__buffer` 等 extern） |
+| 授权注入 | 无 | 方法体内穿插授权调用：`VERIFY_TOKEN22` 比对（null 跳转）、`PT_LOCAL_TOKEN14` 赋值、`std::chrono` 时间戳、Ed25519 验签内联段（§2）、云端 API 调用（§4） |
+| 注册入口 | `native<N>/Loader` + `registerNativesForClass` | `skidonion/nrgui/___` + `___`（类名/方法名双混淆） |
+| 字符串池 | 明文 ASCII，可还原全部符号 | 同格式，但**方法名已混淆**（`a,b,c…`），描述符/异常消息/URL 保留可读（`api/v2/verify/login`、`https://skidonion.tech/` 直接可见） |
+| 额外 SDK | 无 | 内嵌 **Ed25519 全套**（fe/ge/sc/sha512/precomp_data）+ **ThemidaSDK.h**（编译期 VM 化可选） |
+| 类改写 | 方法 ACC_NATIVE + clinit 钩子 | 同，另把授权相关静态字段（`KEY23`/`NONCE20`/`EXPIRED_DATE19`…）在验证方法内 NewGlobalRef 缓存为全局 |
+
+**逆向启示**：
+1. 幻影盾的字符串池仍是明文池——**转储后描述符+异常消息可还原 90% 调用语义**；
+2. inline 层是授权逻辑集中地（`__phantom_shield_x_*`）——patch 点优先扫 inline.cpp 符号；
+3. 缓存函数 `_CacheClass*` 是幻影盾的**结构指纹**（原版无此封装）；
+4. 授权验证方法 = `ed25519_verify` 调用点所在函数（唯一裁决，见 §2.3）。
