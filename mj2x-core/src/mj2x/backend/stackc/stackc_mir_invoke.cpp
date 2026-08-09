@@ -53,9 +53,7 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, codegen::CSourceStre
     // 整段放 block 内：先查 jclass/jmethodID，再调用。返回值写入接收者槽（非 void）。
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jclass lc = (jclass)").append(trackLocalRefExpr(
-        "_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")).append(";");
-    out.newLine();
+    emitClassRefCache(owner, out);
     emitMethodIdCache(methodCache, "mid_local", "lc", name, desc, isStatic, out);
     if (!isStatic) {
         emitNullPointerTrap("stack[" + recvExpr + "].l", out);

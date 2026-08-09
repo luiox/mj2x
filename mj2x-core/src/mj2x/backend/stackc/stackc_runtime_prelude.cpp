@@ -10,8 +10,6 @@ std::string stackCRuntimePrelude()
 {
     codegen::CSourceStream src;
 
-    src.emitLine("#define _MJ2X_LOCAL_REF_LIMIT 512");
-    src.emitLine("");
     src.emitLine("#if defined(_MSC_VER)");
     src.emitLine("#include <intrin.h>");
     src.emitLine("#define _MJ2X_LIKELY(x)   (x)");
@@ -35,32 +33,6 @@ std::string stackCRuntimePrelude()
     src.emitLine("    return previous;");
     src.emitLine("}");
     src.emitLine("#endif");
-    src.emitLine("");
-
-    src.emitLine("static jobject _mj2x_track_local_ref(JNIEnv* env, jobject* refs, int* refCount, "
-                 "jobject ref) {");
-    src.indent();
-    src.emitLine("(void)env;");
-    src.emitLine(
-        "if (ref != NULL && *refCount < _MJ2X_LOCAL_REF_LIMIT) refs[(*refCount)++] = ref;");
-    src.emitLine("return ref;");
-    src.dedent();
-    src.emitLine("}");
-    src.emitLine("");
-
-    src.emitLine("static void _mj2x_clear_local_refs(JNIEnv* env, jobject* refs, int* refCount, "
-                 "jobject keep) {");
-    src.indent();
-    src.emitLine("if ((*env)->ExceptionCheck(env)) { *refCount = 0; return; }");
-    src.emitLine("for (int i = 0; i < *refCount; ++i) {");
-    src.indent();
-    src.emitLine("if (refs[i] != NULL && refs[i] != keep) (*env)->DeleteLocalRef(env, refs[i]);");
-    src.emitLine("refs[i] = NULL;");
-    src.dedent();
-    src.emitLine("}");
-    src.emitLine("*refCount = 0;");
-    src.dedent();
-    src.emitLine("}");
     src.emitLine("");
 
     src.emitLine("static jclass _mj2x_find_class(JNIEnv* env, jclass owner, const char* name) {");

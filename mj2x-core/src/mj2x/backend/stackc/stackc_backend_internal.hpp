@@ -258,9 +258,11 @@ inline const char* castResultAccessor(PrimitiveKind k)
     }
 }
 
+/// @brief 表达式透传（local-ref 跟踪已移除：对齐 JNIC 裸 JNI 模型，方法返回时
+///        JVM 自动释放 local refs，HotSpot 引用表自动扩容）。
 inline std::string trackLocalRefExpr(const std::string& expr)
 {
-    return "_mj2x_track_local_ref(env, _mj2x_refs, &_mj2x_ref_count, " + expr + ")";
+    return expr;
 }
 
 inline std::string classExprForDescriptor(const std::string& typeDesc,
@@ -408,10 +410,10 @@ inline const char* boxedUnboxDesc(PrimitiveKind kind)
     }
 }
 
-/// @brief 异常路径的清理+返回发射（缩进由调用方控制，emitLine 跟随当前层）。
+/// @brief 异常路径的返回发射（缩进由调用方控制，emitLine 跟随当前层）。
+///        异常检查逐点 `return` 对齐 JNIC 直译模型；local-ref 由 JVM 自动回收。
 inline void emitExceptionReturn(const std::string& methodDesc, codegen::CSourceStream& out)
 {
-    out.emitLine("_mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);");
     if (methodReturnKind(methodDesc) == PrimitiveKind::VOID) {
         out.emitLine("return;");
     }
@@ -526,6 +528,9 @@ struct StackCBackend::Impl
     std::string currentMethodName;
     std::string currentMethodDesc;
     std::string currentExceptionDispatchTarget;
+    /// 当前发射点的编译期栈深度（块入口来自数据流，块内逐节点累积净效应）。
+    /// emitNodeWithExceptionDispatch 静态化栈访问后更新。
+    int currentStackDepth = 0;
 
     /// 当前方法的 label 顺序索引：以 Label* 为 key（进程内身份匹配），值为方法内首次出现顺序。
     /// 每个 compileMethod 开始时重建，用于生成确定性 C label（见 labelIdent）。
@@ -538,8 +543,7 @@ struct StackCBackend::Impl
     void   emitNode(const MIRNode* node, codegen::CSourceStream& out);
     void   emitNodeWithExceptionDispatch(const MIRNode* node, codegen::CSourceStream& out,
                                          const std::string& dispatchTarget);
-    void   emitConstant(const MIRConstant* node, codegen::CSourceStream& out);
-    void   emitLocalLoad(const MIRLocalLoad* node, codegen::CSourceStream& out);
+    void   emitConstant(const MIRConstant* node, codegen::CSourceStream& out);    void   emitLocalLoad(const MIRLocalLoad* node, codegen::CSourceStream& out);
     void   emitLocalStore(const MIRLocalStore* node, codegen::CSourceStream& out);
     void   emitIinc(const MIRIinc* node, codegen::CSourceStream& out);
     void   emitBinaryOp(const MIRBinaryOp* node, codegen::CSourceStream& out);
@@ -578,6 +582,7 @@ struct StackCBackend::Impl
     void   emitMethodIdCache(const std::string& cacheName, const std::string& localName,
                              const std::string& classExpr, const std::string& name,
                              const std::string& desc, bool isStatic, codegen::CSourceStream& out);
+    void   emitClassRefCache(const std::string& className, codegen::CSourceStream& out);
     size_t stringPoolOffsetFor(const std::string& value);
     size_t stringPoolLengthFor(const std::string& value);
     void   emitStringPool(codegen::CSourceStream& out) const;
@@ -599,6 +604,12 @@ struct StackCBackend::Impl
                                    const std::string& methodDesc);
     jbytecode::tree::MethodNode* findMethod(CompilerClass& clazz, const char* name,
                                             const char* desc = nullptr) const;
+    /// 每块入口栈深度数据流：自建控制流边（converter 不填 successors），
+    /// handler 入口深度=1，块内净效应按节点发射文本统计。
+    /// 返回 false 表示深度无法收敛（非法字节码，调用方 fail-closed 跳过）。
+    bool computeBlockDepths(const std::vector<Block*>& blocks,
+                            const std::vector<jbytecode::core::Label*>& handlerLabels,
+                            std::vector<int>& entryDepths);
 };
 
 // ============================================================

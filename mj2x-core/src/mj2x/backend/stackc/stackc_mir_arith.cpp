@@ -83,9 +83,16 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
         }
         if (type.getSort() == Type::OBJECT || type.getSort() == Type::ARRAY ||
             type.getSort() == Type::INTERNAL) {
-            out.appendLineStart("stack[++sp].l = ")
-                .append(classExprForDescriptor(type.getDescriptor().to_std_string()));
+            // class literal：走类引用缓存（JNIC cached_c_N 形态），避免循环内重复
+            // find_class 反射链；self 类直接取 _mj2x_owner_class。块包裹保证
+            // 多个 class literal 相邻时局部变量/static 缓存名不冲突。
+            out.emitLine("{");
+            out.indent();
+            emitClassRefCache(type.getDescriptor().to_std_string(), out);
+            out.appendLineStart("stack[++sp].l = lc;");
             out.newLine();
+            out.dedent();
+            out.emitLine("}");
             return;
         }
         const auto kind = jvmSortToPrimitive(type.getSort());
@@ -475,7 +482,6 @@ void StackCBackend::Impl::emitReturnValue(const MIRReturnValue* node, codegen::C
         out.emitLine("{");
         out.indent();
         out.emitLine("jobject _mj2x_ret = stack[sp--].l;");
-        out.emitLine("_mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, _mj2x_ret);");
         out.emitLine("return _mj2x_ret;");
         out.dedent();
         out.emitLine("}");
@@ -486,7 +492,6 @@ void StackCBackend::Impl::emitReturnValue(const MIRReturnValue* node, codegen::C
     out.appendLineStart(primitiveToJNIType(node->type)).append(" _mj2x_ret = stack[sp--]")
         .append(stackAccessor(node->type)).append(";");
     out.newLine();
-    out.emitLine("_mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);");
     out.emitLine("return _mj2x_ret;");
     out.dedent();
     out.emitLine("}");

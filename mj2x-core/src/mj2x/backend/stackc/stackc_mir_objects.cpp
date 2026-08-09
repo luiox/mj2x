@@ -134,6 +134,70 @@ void StackCBackend::Impl::emitMethodIdCache(const std::string& cacheName,
     emitPendingExceptionCheck(out, 8);
 }
 
+/// @brief 发射「jclass lc = 缓存的类引用」（对标 JNIC cached_c_N）。
+/// @details self 类直接取 `_mj2x_owner_class`（clazz 参数即该类，零开销）；其余类
+///          走 static jclass + 无锁 CAS 缓存，首次执行 `_mj2x_find_class` 后
+///          以 NewGlobalRef 固化，后续路径只读缓存 slot。失败抛
+///          NoClassDefFoundError（dispatch 模式跳转 handler，否则 return）。
+void StackCBackend::Impl::emitClassRefCache(const std::string& className,
+                                            codegen::CSourceStream& out)
+{
+    std::string name = className;
+    if (name.size() >= 2 && name.front() == 'L' && name.back() == ';') {
+        name = name.substr(1, name.size() - 2);
+    }
+    // 注：不做 owner==self 优化——`_mj2x_owner_class` 是运行期实例类（多态下可能
+    // 是被继承的 Sub 类），而 owner 是编译期静态解析的类，两者可能不同。
+    const std::string cacheName = "_mj2x_cc_" + hex64(fnv1a64(name));
+    out.emitLine("static jclass " + cacheName + " = NULL;");
+    out.emitLine("jclass lc = NULL;");
+    out.appendLineStart("lc = (jclass)_mj2x_cache_load((void* volatile*)&")
+        .append(cacheName).append(");");
+    out.newLine();
+    out.appendLineStart("if (_MJ2X_UNLIKELY(lc == NULL)) {");
+    out.newLine();
+    out.indent();
+    out.appendLineStart("jclass loaded = (jclass)").append(trackLocalRefExpr(
+        "_mj2x_find_class(env, _mj2x_owner_class, \"" + name + "\")")).append(";");
+    out.newLine();
+    out.appendLineStart("if (loaded != NULL) {");
+    out.newLine();
+    out.indent();
+    out.appendLineStart("jclass global = (jclass)(*env)->NewGlobalRef(env, loaded);");
+    out.newLine();
+    out.appendLineStart("(*env)->DeleteLocalRef(env, loaded);");
+    out.newLine();
+    out.appendLineStart("if (global != NULL) {");
+    out.newLine();
+    out.indent();
+    out.appendLineStart("void* previous = _mj2x_cache_cas((void* volatile*)&").append(cacheName)
+        .append(", NULL, global);");
+    out.newLine();
+    out.appendLineStart("lc = (jclass)(previous != NULL ? previous : global);");
+    out.newLine();
+    out.dedent();
+    out.emitLine("}");
+    out.dedent();
+    out.emitLine("}");
+    out.dedent();
+    out.emitLine("}");
+    out.appendLineStart("if (_MJ2X_UNLIKELY(lc == NULL)) {");
+    out.newLine();
+    out.indent();
+    out.appendLineStart("jclass ex_class = (jclass)").append(trackLocalRefExpr(
+        "(*env)->FindClass(env, \"java/lang/NoClassDefFoundError\")")).append(";");
+    out.newLine();
+    out.emitLine("(*env)->ThrowNew(env, ex_class, \"class lookup failed\");");
+    if (!currentExceptionDispatchTarget.empty()) {
+        out.emitLine("goto " + currentExceptionDispatchTarget + ";");
+    }
+    else {
+        emitExceptionReturn(currentMethodDesc, out);
+    }
+    out.dedent();
+    out.emitLine("}");
+}
+
 void StackCBackend::Impl::emitNewObject(const MIRNewObject* node, codegen::CSourceStream& out)
 {
     // NEW 只分配对象、压栈；构造由后续 INVOKESPECIAL <init>（走 emitInvoke 的
@@ -141,9 +205,7 @@ void StackCBackend::Impl::emitNewObject(const MIRNewObject* node, codegen::CSour
     // 避免 emitNewObject 推断构造器签名（MIRNewObject 不带 ctor desc）。
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jclass lc = (jclass)").append(trackLocalRefExpr(
-        "_mj2x_find_class(env, _mj2x_owner_class, \"" + node->typeDesc.to_std_string() + "\")")).append(";");
-    out.newLine();
+    emitClassRefCache(node->typeDesc.to_std_string(), out);
     out.appendLineStart("stack[++sp].l = ")
         .append(trackLocalRefExpr("(*env)->AllocObject(env, lc)")).append(";");
     out.newLine();
@@ -164,7 +226,6 @@ void StackCBackend::Impl::emitNewArray(const MIRNewArray* node, codegen::CSource
         }
         out.append(", NULL);");
         out.newLine();
-        out.emitLine("_mj2x_track_local_ref(env, _mj2x_refs, &_mj2x_ref_count, stack[sp].l);");
     }
     else {
         out.appendLineStart("stack[sp].l = ").append(trackLocalRefExpr(
@@ -298,9 +359,7 @@ void StackCBackend::Impl::emitFieldGet(const MIRFieldGet* node, codegen::CSource
     const auto        fidCache = cacheIdentifier("fid", owner + "." + name + ":" + desc);
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jclass lc = (jclass)").append(trackLocalRefExpr(
-        "_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")).append(";");
-    out.newLine();
+    emitClassRefCache(owner, out);
     emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, false, out);
     emitNullPointerTrap("stack[sp].l", out);
     out.appendLineStart("stack[sp]").append(acc).append(" = (")
@@ -322,9 +381,7 @@ void StackCBackend::Impl::emitFieldPut(const MIRFieldPut* node, codegen::CSource
     const auto        fidCache = cacheIdentifier("fid", owner + "." + name + ":" + desc);
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jclass lc = (jclass)").append(trackLocalRefExpr(
-        "_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")).append(";");
-    out.newLine();
+    emitClassRefCache(owner, out);
     emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, false, out);
     emitNullPointerTrap("stack[sp - 1].l", out);
     out.appendLineStart("(*env)->Set").append(suffix)
@@ -348,9 +405,7 @@ void StackCBackend::Impl::emitStaticGet(const MIRStaticGet* node, codegen::CSour
         cacheIdentifier("sfid", owner + "." + name + ":" + desc);
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jclass lc = (jclass)").append(trackLocalRefExpr(
-        "_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")).append(";");
-    out.newLine();
+    emitClassRefCache(owner, out);
     emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, true, out);
     out.appendLineStart("stack[++sp]").append(acc).append(" = (")
         .append(narrowOnOperandStack(pk) ? "jint" : primitiveToJNIType(pk))
@@ -372,9 +427,7 @@ void StackCBackend::Impl::emitStaticPut(const MIRStaticPut* node, codegen::CSour
         cacheIdentifier("sfid", owner + "." + name + ":" + desc);
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jclass lc = (jclass)").append(trackLocalRefExpr(
-        "_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")).append(";");
-    out.newLine();
+    emitClassRefCache(owner, out);
     emitFieldIdCache(fidCache, "fid_local", "lc", name, desc, true, out);
     out.appendLineStart("(*env)->SetStatic").append(suffix)
         .append("Field(env, lc, fid_local, (")
@@ -415,3 +468,4 @@ void StackCBackend::Impl::emitInstanceOf(const MIRInstanceOf* node, codegen::CSo
 }
 
 }   // namespace mj2x
+

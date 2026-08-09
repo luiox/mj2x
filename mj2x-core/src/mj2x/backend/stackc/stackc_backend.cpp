@@ -86,7 +86,235 @@ std::vector<ca::u16> utf8ToUtf16Units(const std::string& value)
     return units;
 }
 
+/// @brief 把节点发射文本中的 `stack[sp ± k]` 动态索引静态化为 `s[<常量>]`，
+///        并把 `sp` 维护语句删除（对齐 JNIC 命名槽模型，-O2 下编译器可寄存器化）。
+/// @param baseDepth 节点执行前的编译期栈深度（块入口深度数据流 + 已发射节点净效应）。
+/// @return 该节点的栈净效应（push/pop 差值），调用方累加到当前深度。
+/// @details 逐行处理：`sp -= N`/`sp--` 等只改偏移不产出行；`stack[++sp]` 写
+///          `s[baseDepth+off]`，`stack[sp--]` 读 `s[baseDepth-1+off]`，其余
+///          `stack[sp ± K]` 读 `s[baseDepth±K+off]`。off 为节点内已发生的
+///          深度偏移（覆盖 DUP 系列与 invokedynamic 的 `sp -= argCount` 段）。
+int staticizeStackText(std::string& text, int baseDepth)
+{
+    std::string result;
+    int         off = 0;
+    size_t      pos = 0;
+    while (pos < text.size()) {
+        const size_t nl = text.find('\n', pos);
+        std::string  line = text.substr(pos, nl == std::string::npos ? std::string::npos
+                                                                     : nl - pos);
+        pos = (nl == std::string::npos) ? text.size() : nl + 1;
+
+        std::string out;
+        if (line.find("sp = -1;") != std::string::npos) {
+            continue;   // 异常 dispatch 的重置由 compileMethod 直接生成 s[0]，不会出现在节点文本
+        }
+        size_t       cursor = 0;
+        std::string  replaced;
+        // 行内顺序扫描替换（无「最早匹配」竞争）：栈访问模式与 sp 维护语句
+        // 都按行内模式处理（sp 语句只更新偏移不产出行，避免行级 continue 吞掉
+        // 同行含 stack[..] 的 DUP 类行）。顺序：
+        //   1) `stack[++sp]` / `stack[sp--]` / `stack[sp ± N]`（N 可为 0，指栈顶）/
+        //      `stack[sp]`
+        //   2) `sp -= N` / `sp += N` / `sp--` / `sp++`（只改偏移）
+        while (cursor < line.size()) {
+            if (line.compare(cursor, 11, "stack[++sp]") == 0) {
+                // push 写：sp 原顶下标 = baseDepth-1，新元素下标 = baseDepth。
+                replaced += "s[";
+                replaced += std::to_string(baseDepth + off);
+                replaced += "]";
+                off += 1;
+                cursor += 11;
+            }
+            else if (line.compare(cursor, 11, "stack[sp--]") == 0) {
+                replaced += "s[";
+                replaced += std::to_string(baseDepth - 1 + off);
+                replaced += "]";
+                off -= 1;
+                cursor += 11;
+            }
+            else if (line.compare(cursor, 9, "stack[sp ") == 0 && cursor + 9 < line.size() &&
+                     (line[cursor + 9] == '-' || line[cursor + 9] == '+')) {
+                const bool neg = line[cursor + 9] == '-';
+                size_t     j   = cursor + 10;
+                // `stack[sp + 1]` 形态：符号后可带空格。
+                while (j < line.size() && line[j] == ' ') ++j;
+                if (j < line.size() && std::isdigit(static_cast<unsigned char>(line[j]))) {
+                    int n = 0;
+                    while (j < line.size() && std::isdigit(static_cast<unsigned char>(line[j]))) {
+                        n = n * 10 + (line[j] - '0');
+                        ++j;
+                    }
+                    if (j < line.size() && line[j] == ']') {
+                        // sp 顶下标 = baseDepth-1，故 stack[sp-N] → 下标 baseDepth-1-N，
+                        // stack[sp+N] → 下标 baseDepth-1+N；N=0 视为栈顶。
+                        const int k = (n == 0) ? -1 : (neg ? -(n + 1) : (n - 1));
+                        replaced += "s[";
+                        replaced += std::to_string(baseDepth + k + off);
+                        replaced += "]";
+                        cursor = j + 1;
+                    }
+                    else {
+                        replaced += line[cursor];
+                        ++cursor;
+                    }
+                }
+                else {
+                    replaced += line[cursor];
+                    ++cursor;
+                }
+            }
+            else if (line.compare(cursor, 9, "stack[sp]") == 0) {
+                replaced += "s[";
+                replaced += std::to_string(baseDepth - 1 + off);
+                replaced += "]";
+                cursor += 9;
+            }
+            else if (line.compare(cursor, 6, "sp -= ") == 0) {
+                size_t j = cursor + 6;
+                int    n = 0;
+                while (j < line.size() && std::isdigit(static_cast<unsigned char>(line[j]))) {
+                    n = n * 10 + (line[j] - '0');
+                    ++j;
+                }
+                off -= n;
+                cursor = j;
+            }
+            else if (line.compare(cursor, 6, "sp += ") == 0) {
+                size_t j = cursor + 6;
+                int    n = 0;
+                while (j < line.size() && std::isdigit(static_cast<unsigned char>(line[j]))) {
+                    n = n * 10 + (line[j] - '0');
+                    ++j;
+                }
+                off += n;
+                cursor = j;
+            }
+            else if (line.compare(cursor, 4, "sp--") == 0) {
+                off -= 1;
+                cursor += 4;
+            }
+            else if (line.compare(cursor, 4, "sp++") == 0) {
+                off += 1;
+                cursor += 4;
+            }
+            else {
+                replaced += line[cursor];
+                ++cursor;
+            }
+        }
+        result += replaced;
+        result += '\n';
+    }
+    text = result;
+    return off;
+}
+
 }   // namespace
+
+/// @brief 每块入口栈深度的数据流迭代（定义在匿名命名空间外：Impl 静态成员）。
+///        语义见 internal.hpp 声明。
+bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
+                                             const std::vector<jbytecode::core::Label*>& handlerLabels,
+                                             std::vector<int>& entryDepths)
+{
+    const size_t n = blocks.size();
+    entryDepths.assign(n, -1);
+    if (n == 0) return true;
+
+    std::unordered_map<jbytecode::core::Label*, size_t> labelToIndex;
+    for (size_t bi = 0; bi < n; ++bi) {
+        for (auto& node : blocks[bi]->nodes) {
+            if (node->kind == MIRKind::LABEL) {
+                labelToIndex[static_cast<const MIRLabel*>(node.get())->labelNode] = bi;
+            }
+        }
+    }
+    // handler 入口深度恒为 1（异常对象在 s[0]）。
+    std::unordered_set<size_t> handlerBlocks;
+    for (auto* lbl : handlerLabels) {
+        auto found = labelToIndex.find(lbl);
+        if (found != labelToIndex.end()) handlerBlocks.insert(found->second);
+    }
+    for (size_t hi : handlerBlocks) entryDepths[hi] = 1;
+
+    entryDepths[0] = 0;
+    const int maxRounds = static_cast<int>(n) * 8 + 64;
+    int       rounds    = 0;
+    bool      changed   = true;
+    while (changed) {
+        if (++rounds > maxRounds) {
+            printf("[StackCBackend] depth analysis did not converge after %d rounds\n",
+                   maxRounds);
+            return false;
+        }
+        changed = false;
+        for (size_t bi = 0; bi < n; ++bi) {
+            if (entryDepths[bi] < 0) continue;
+            auto* b = blocks[bi];
+            int   depth = entryDepths[bi];
+            for (auto& node : b->nodes) {
+                CSourceStream tmp;
+                emitNode(node.get(), tmp);
+                std::string text = tmp.str();
+                depth += staticizeStackText(text, depth);
+            }
+            // 出边：终结器目标 + fallthrough（物理下一块）。
+            std::vector<size_t> succs;
+            Block*              fallthrough = (bi + 1 < n) ? blocks[bi + 1] : nullptr;
+            const MIRKind      lastKind = b->nodes.empty() ? MIRKind::NOP
+                                                           : b->nodes.back()->kind;
+            auto pushLabel = [&](jbytecode::core::Label* lbl) {
+                auto found = labelToIndex.find(lbl);
+                if (found != labelToIndex.end()) succs.push_back(found->second);
+            };
+            switch (lastKind) {
+            case MIRKind::BRANCH:
+                pushLabel(static_cast<const MIRBranch*>(b->nodes.back().get())->targetLabel);
+                if (fallthrough != nullptr) succs.push_back(bi + 1);
+                break;
+            case MIRKind::BRANCH_ZERO:
+                pushLabel(static_cast<const MIRBranchZero*>(b->nodes.back().get())->targetLabel);
+                if (fallthrough != nullptr) succs.push_back(bi + 1);
+                break;
+            case MIRKind::UNCOND_BRANCH:
+                pushLabel(static_cast<const MIRUncondBranch*>(b->nodes.back().get())->targetLabel);
+                break;
+            case MIRKind::SWITCH: {
+                const auto* sw = static_cast<const MIRSwitch*>(b->nodes.back().get());
+                for (const auto& c : sw->cases) pushLabel(c.targetLabel);
+                pushLabel(sw->defaultLabel);
+                break;
+            }
+            case MIRKind::RETURN:
+            case MIRKind::RETURN_VALUE:
+            case MIRKind::THROW: break;
+            default:
+                if (fallthrough != nullptr) succs.push_back(bi + 1);
+                break;
+            }
+            for (size_t si : succs) {
+                if (handlerBlocks.count(si) != 0) continue;   // handler 深度固定 1
+                if (entryDepths[si] < 0) {
+                    entryDepths[si] = depth;
+                    changed = true;
+                }
+                else if (entryDepths[si] != depth) {
+                    printf("[StackCBackend] depth conflict: block %d entry=%d pred=%d out=%d\n",
+                           blocks[si]->id, entryDepths[si], b->id, depth);
+                    return false;
+                }
+            }
+        }
+    }
+    for (size_t bi = 0; bi < n; ++bi) {
+        if (entryDepths[bi] < 0) {
+            printf("[StackCBackend] depth unresolved: block %d (idx %zu)\n", blocks[bi]->id, bi);
+            return false;
+        }
+    }
+    return true;
+}
 
 StackCBackend::StackCBackend()
     : impl_(std::make_unique<Impl>())
@@ -163,15 +391,14 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     funcOut.indent();
 
     // Stack and locals declaration
+    // 操作数栈用「静态槽」s[N]（对齐 JNIC 命名槽模型）：发射时按编译期栈深度
+    // 把 stack[sp±k] 静态化为 s[<常量>]，-O2 下编译器可寄存器化；无运行期 sp。
     int maxLocalsVal = mn->maxLocals > 0 ? mn->maxLocals : 1;
-    funcOut.appendLineStart("union jvalue stack[")
+    funcOut.appendLineStart("union jvalue s[")
         .appendInt(mn->maxStack > 0 ? mn->maxStack : 1).append("];");
     funcOut.newLine();
     funcOut.appendLineStart("union jvalue locals[").appendInt(maxLocalsVal).append("];");
     funcOut.newLine();
-    funcOut.emitLine("int sp = -1;");
-    funcOut.emitLine("jobject _mj2x_refs[_MJ2X_LOCAL_REF_LIMIT];");
-    funcOut.emitLine("int _mj2x_ref_count = 0;");
     if (isStatic) {
         funcOut.emitLine("jclass _mj2x_owner_class = clazz;");
     }
@@ -262,12 +489,30 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
         assignLabelIndex(h.handler);
     }
 
+    // 每块入口栈深度（数据流）；无法收敛（非法字节码）则 fail-closed 保留整方法。
+    std::vector<int> blockEntryDepths;
+    std::vector<jbytecode::core::Label*> handlerLabels;
+    for (const auto& h : exceptionHandlers) handlerLabels.push_back(h.handler);
+    if (!impl_->computeBlockDepths(blocks, handlerLabels, blockEntryDepths)) {
+        printf("[StackCBackend] Skipping %s.%s%s: stack depth analysis failed\n",
+               className.c_str(), methodName.c_str(), methodDesc.c_str());
+        impl_->removeRegistration(cls, methodName, methodDesc);
+        BackendResult failed;
+        failed.kind = BackendResult::Kind::NONE;
+        return failed;
+    }
+    std::unordered_map<int, int> blockIndexById;
+    for (size_t bi = 0; bi < blocks.size(); ++bi) {
+        blockIndexById[blocks[bi]->id] = static_cast<int>(bi);
+    }
+
     // Emit blocks
     for (size_t bi = 0; bi < blocks.size(); ++bi) {
         auto* block = blocks[bi];
         funcOut.appendLineStart("/* B").appendInt(static_cast<int64_t>(bi)).append(" */");
         funcOut.newLine();
 
+        impl_->currentStackDepth = blockEntryDepths[bi];
         for (auto& node : block->nodes) {
             if (node->kind == MIRKind::LABEL) {
                 auto* label = static_cast<const MIRLabel*>(node.get())->labelNode;
@@ -305,8 +550,8 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
         for (int handlerIndex : dispatch.handlerIndices) {
             const auto& handler = exceptionHandlers[static_cast<size_t>(handlerIndex)];
             if (handler.catchType.empty()) {
-                funcOut.emitLine("sp = -1;");
-                funcOut.emitLine("stack[++sp].l = _mj2x_ex;");
+                // handler 入口深度恒为 1（异常对象），写静态槽 s[0]。
+                funcOut.emitLine("s[0].l = _mj2x_ex;");
                 funcOut.appendLineStart("goto ")
                     .append(labelIdent(impl_->labelIndex.at(handler.handler))).append(";");
                 funcOut.newLine();
@@ -316,8 +561,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
                     .append(classExprForDescriptor(handler.catchType)).append(")) {");
                 funcOut.newLine();
                 funcOut.indent();
-                funcOut.emitLine("sp = -1;");
-                funcOut.emitLine("stack[++sp].l = _mj2x_ex;");
+                funcOut.emitLine("s[0].l = _mj2x_ex;");
                 funcOut.appendLineStart("goto ")
                     .append(labelIdent(impl_->labelIndex.at(handler.handler))).append(";");
                 funcOut.newLine();
@@ -700,13 +944,19 @@ void StackCBackend::Impl::emitNodeWithExceptionDispatch(const MIRNode*      node
                                                         const std::string&  dispatchTarget)
 {
     currentExceptionDispatchTarget = dispatchTarget;
-    emitNode(node, out);
+    CSourceStream tmp;
+    emitNode(node, tmp);
     currentExceptionDispatchTarget.clear();
     if (!dispatchTarget.empty() && isProtectedByExceptionHandler(node)) {
-        out.appendLineStart("if ((*env)->ExceptionCheck(env)) goto ")
+        tmp.appendLineStart("if ((*env)->ExceptionCheck(env)) goto ")
             .append(dispatchTarget).append(";");
-        out.newLine();
+        tmp.newLine();
     }
+    // 栈访问静态化：stack[sp±k] → s[<编译期深度>]，并统计净效应推进深度。
+    std::string text = tmp.str();
+    const int   effect = staticizeStackText(text, currentStackDepth);
+    currentStackDepth += effect;
+    out.append(text);
 }
 
 }   // namespace mj2x

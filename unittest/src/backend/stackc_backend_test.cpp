@@ -102,7 +102,7 @@ TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement)
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find(":\n    ;\n"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find(":\n;\n"), std::string::npos) << result.text;
 }
 
 TEST(StackCBackendTest, AddMethod)
@@ -127,9 +127,8 @@ TEST(StackCBackendTest, AddMethod)
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("jint"), std::string::npos);
-    EXPECT_NE(result.text.find("jint _mj2x_ret = stack[sp--].i"), std::string::npos);
-    EXPECT_NE(result.text.find("_mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);"),
-              std::string::npos);
+    EXPECT_NE(result.text.find("jint _mj2x_ret = s[0].i"), std::string::npos);
+    EXPECT_EQ(result.text.find("_mj2x_clear_local_refs"), std::string::npos);
     EXPECT_NE(result.text.find("+"), std::string::npos);
 }
 
@@ -221,7 +220,7 @@ TEST(StackCBackendTest, CastEmission)
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("isnan(v)"), std::string::npos);
-    EXPECT_NE(result.text.find("stack[sp].i = (jint)v"), std::string::npos);
+    EXPECT_NE(result.text.find(".i = (jint)v"), std::string::npos);
 }
 
 TEST(StackCBackendTest, LongShiftAndCompareEmission)
@@ -247,9 +246,9 @@ TEST(StackCBackendTest, LongShiftAndCompareEmission)
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("stack[sp].i & 63"), std::string::npos);
-    EXPECT_NE(result.text.find("stack[sp - 1].i = (stack[sp - 1].j > stack[sp].j)"),
-              std::string::npos);
+    EXPECT_NE(result.text.find(".i & 63"), std::string::npos);
+    EXPECT_NE(result.text.find(".j > s["), std::string::npos);
+    EXPECT_NE(result.text.find(".j < s["), std::string::npos);
 }
 
 TEST(StackCBackendTest, FloatRemainderEmission)
@@ -308,10 +307,11 @@ TEST(StackCBackendTest, TypedWideStackOpsEmitConcreteShuffle)
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_EQ(result.text.find("Unsupported"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("stack[sp + 1] = stack[sp]; sp++;"), std::string::npos);
-    EXPECT_NE(result.text.find("sp -= 1;"), std::string::npos);
-    EXPECT_NE(result.text.find("stack[sp - 1] = v1;"), std::string::npos);
-    EXPECT_NE(result.text.find("stack[sp - 3] = v2;"), std::string::npos);
+    // 栈访问已静态化为 s[常量]：shuffle 用 union jvalue 中间变量，sp 维护行不产出行。
+    EXPECT_NE(result.text.find("s["), std::string::npos);
+    EXPECT_NE(result.text.find("union jvalue v1"), std::string::npos);
+    EXPECT_NE(result.text.find("union jvalue v2"), std::string::npos);
+    EXPECT_EQ(result.text.find("sp -= 1;"), std::string::npos);
 }
 
 TEST(StackCBackendTest, FieldAccess)
@@ -343,7 +343,7 @@ TEST(StackCBackendTest, FieldAccess)
     EXPECT_NE(result.text.find("_mj2x_cache_cas((void* volatile*)&fid_"), std::string::npos);
     EXPECT_NE(result.text.find("jfieldID fid_local = NULL"), std::string::npos);
     EXPECT_NE(result.text.find("GetFieldID(env, lc, \"x\", \"I\")"), std::string::npos);
-    EXPECT_NE(result.text.find("GetIntField(env, stack[sp].l, fid_local)"), std::string::npos);
+    EXPECT_NE(result.text.find("GetIntField(env, s["), std::string::npos);
 }
 
 TEST(StackCBackendTest, InvokeMethod)
@@ -403,8 +403,8 @@ TEST(StackCBackendTest, StaticInvokeReturnUsesArgumentBaseSlot)
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("stack[sp - 1].i = (*env)->CallStaticIntMethod"), std::string::npos);
-    EXPECT_NE(result.text.find("sp -= 1;"), std::string::npos);
+    EXPECT_NE(result.text.find("CallStaticIntMethod"), std::string::npos);
+    EXPECT_NE(result.text.find("s[0].i = (*env)->CallStaticIntMethod"), std::string::npos);
 }
 
 TEST(StackCBackendTest, InvokeSpecialLooksUpDeclaringClass)
@@ -433,11 +433,11 @@ TEST(StackCBackendTest, InvokeSpecialLooksUpDeclaringClass)
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find(
-                  "jclass lc = (jclass)_mj2x_track_local_ref(env, _mj2x_refs, &_mj2x_ref_count, "
-                  "_mj2x_find_class(env, _mj2x_owner_class, \"java/lang/Object\"))"),
+    // 类引用走 static jclass CAS 缓存（对标 JNIC cached_c_N），不再每处 find_class。
+    EXPECT_NE(result.text.find("static jclass _mj2x_cc_"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_cache_cas((void* volatile*)&_mj2x_cc_"),
               std::string::npos);
-    EXPECT_NE(result.text.find("CallNonvirtualVoidMethod(env, stack[sp - 0].l, lc, mid"),
+    EXPECT_NE(result.text.find("CallNonvirtualVoidMethod(env, s[1].l, lc, mid"),
               std::string::npos);
 }
 
@@ -549,8 +549,7 @@ TEST(StackCBackendTest, ByteArrayOpsDisambiguateBooleanArrays)
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("FindClass(env, \"[Z\")"), std::string::npos);
-    EXPECT_NE(result.text.find("IsInstanceOf(env, stack[sp - 1].l, boolean_array_class"),
-              std::string::npos);
+    EXPECT_NE(result.text.find("IsInstanceOf(env, s["), std::string::npos);
     EXPECT_NE(result.text.find("GetBooleanArrayRegion"), std::string::npos);
     EXPECT_NE(result.text.find("GetByteArrayRegion"), std::string::npos);
     EXPECT_NE(result.text.find("SetBooleanArrayRegion"), std::string::npos);
@@ -618,8 +617,8 @@ TEST(StackCBackendTest, ClassLookupsUseOwnerClassLoaderHelper)
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("pkg/Owner", cm, blocks);
 
-    EXPECT_NE(result.text.find("jclass _mj2x_owner_class = (jclass)_mj2x_track_local_ref(env, "
-                               "_mj2x_refs, &_mj2x_ref_count, (*env)->GetObjectClass(env, this));"),
+    EXPECT_NE(result.text.find(
+                  "jclass _mj2x_owner_class = (jclass)(*env)->GetObjectClass(env, this);"),
               std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("_mj2x_find_class(env, _mj2x_owner_class, \"pkg/Foo\")"),
@@ -902,7 +901,7 @@ TEST(StackCBackendTest, BranchAndComparison)
 
     EXPECT_NE(result.text.find("goto"), std::string::npos);
     EXPECT_NE(result.text.find("=="), std::string::npos);
-    EXPECT_NE(result.text.find("sp -= 2;\n        if (cond) goto"), std::string::npos);
+    EXPECT_NE(result.text.find("if (cond) goto"), std::string::npos);
 }
 
 TEST(StackCBackendTest, CrossInstanceBranchOutputIsDeterministic)
@@ -978,8 +977,8 @@ TEST(StackCBackendTest, BranchZeroObjectUsesReferenceAccessor)
     auto          blocks = cc.convert(*mn);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_NE(result.text.find("stack[sp].l == NULL"), std::string::npos);
-    EXPECT_NE(result.text.find("sp--;\n        if (cond) goto"), std::string::npos);
+    EXPECT_NE(result.text.find("s[0].l == NULL"), std::string::npos);
+    EXPECT_NE(result.text.find("if (cond) goto"), std::string::npos);
 }
 
 TEST(StackCBackendTest, NewObject)

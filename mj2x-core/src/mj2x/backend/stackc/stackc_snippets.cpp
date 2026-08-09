@@ -24,7 +24,6 @@ static const codegen::CodeSnippetSet<StackCSnippet>& stackCSnippets()
          "(${unsigned_type})${rhs}${acc});\n"
          "    sp--;\n"},
         {StackCSnippet::ReturnVoid,
-         "    _mj2x_clear_local_refs(env, _mj2x_refs, &_mj2x_ref_count, NULL);\n"
          "    return;\n"},
         {StackCSnippet::NullPointerTrap,
          "    if (_MJ2X_UNLIKELY(${ref} == NULL)) {\n"
