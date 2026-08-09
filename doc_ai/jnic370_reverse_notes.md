@@ -7,12 +7,10 @@
 > TEST.jar / 自研 jar 实际生成，**抓取生成中间产物 `jnic.c`（C 源码）与编译产物**，
 > 直接读源码确证生成机制。
 >
-> 素材位置：
-> - 引擎 DLL：`C:\Users\Canrad\AppData\Local\Temp\opencode\jnic37_native.dll` + `.i64`（IDA 9.0）
-> - 破解包：`E:\canrad\reverse\jvm\native_obf\jnic3.7.0\jnic370.zip`（jnic370.jar + patcher/autopatch.py + patch-cagent.dll）
-> - 3.7.0 生成源码（stringObf=true，HelloWorld 3 方法）：`C:\Users\Canrad\AppData\Local\Temp\opencode\jnic_test\caught\jnic7155671103524183033.c`（29.7 KB）
-> - 3.7.0 生成源码（stringObf=false，TEST.jar 31 类 50 方法）：`...\caught\jnic10602900925539798838.c`（268 KB）
-> - 3.5.1 生成源码（同输入同配置）：`...\gen_c\jnic.c`（224 KB，已归档 jnic_capture/）
+> 素材：引擎 DLL `jnic37_native.dll`（7558656 B，PE64）+ IDA 9.0 数据库（.i64）；
+> 破解包 `jnic370.zip`（jnic370.jar + patcher/autopatch.py + patch-cagent.dll）；
+> 3.7.0 生成源码两版（stringObf=true HelloWorld 29.7 KB；stringObf=false TEST.jar
+> 31 类 50 方法 268 KB）；3.5.1 生成源码（同输入同配置 224 KB）。
 
 ## 1. 引擎 DLL 结构总览（静态线）
 
@@ -295,14 +293,14 @@ licence 验证全在引擎 native（工厂 `sub_1804818D8` 为验证出口），
 
 ```powershell
 # 跑破解版（frida spawn，JNIC_JAVA 覆盖 JDK 路径；RUN_ARGS 传编译参数）
-$env:JNIC_JAVA = "C:\Users\Canrad\.jdks\corretto-17.0.5\bin\java.exe"
-$env:JNIC_JAR = "...\jnic370_crack\jnic370.jar"
-$env:PYTHONPATH = "...\patcher\pydeps64"
+$env:JNIC_JAVA = "<jdk>\bin\java.exe"
+$env:JNIC_JAR = "<破解包>\jnic370.jar"
+$env:PYTHONPATH = "<破解包>\patcher\pydeps64"
 $env:RUN_ARGS = "<in.jar> <out.jar> <config.xml>"
-& python "...\patcher\autopatch.py"
+& python "<破解包>\patcher\autopatch.py"
 
-# 抢抓 jnic.c（编译窗口 <1s）：catch_c.ps1 轮询 Temp/jnic*/**/jnic.c 复制走
-# 或直接重跑后从 Temp/jnic*/WINDOWS_X86_64/ 找回（部分运行会保留）
+# 抢抓 jnic.c（编译窗口 <1s）：轮询 %TEMP%\jnic*\**\jnic.c 复制走
+# 或直接重跑后从 %TEMP%\jnic*\WINDOWS_X86_64\ 找回（部分运行会保留）
 ```
 
-分析脚本（静态线）位于 `C:\Users\Canrad\AppData\Local\Temp\opencode\ida_out\`。
+分析脚本（静态线，IDAPython）随会话临时目录保留。

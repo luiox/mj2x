@@ -5,8 +5,8 @@
 > 所有结论来自源码（obfuscator/src/main/）与生成模板（resources/sources/），
 > 非猜测。商业变体"幻影盾"的生成产物分析见 `phantom_shield_codegen_notes.md`。
 >
-> 源码位置：`E:\canrad\reverse\jvm\native_obf\native-obfuscator`（master @ e481761，
-> tag 至 3.5.4r）
+> 源码位置：GitHub `radioegor146/native-obfuscator`（master @ e481761，tag 至 3.5.4r），
+> 生成器源码 `obfuscator/src/main/` + 模板 `obfuscator/src/main/resources/sources/`
 
 ## 1. 架构总览
 

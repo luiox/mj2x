@@ -4,8 +4,8 @@
 > 生成细节参考**。所有结论均来自对真实产物 `jnic.c`（224KB / 5950 行，输入 TEST.jar 37 类）
 > 的逐行取证，不是猜测。
 >
-> 素材：`jnic.c` 已归档于
-> `C:\Users\Canrad\AppData\Local\Temp\opencode\jnic_capture\jnic13438505281557630243_20260809_101838_542\jnic13438505281557630243\jnic.c`
+> 素材：3.5.1 生成器对 TEST.jar（37 类）输出的 `jnic.c`（224KB / 5950 行），
+> 会话期间抓取并归档。
 >
 > JNIC 3.7.0 的 DLL 逆向对比见 `jnic370_reverse_notes.md`（性能更新点汇总）。
 >
