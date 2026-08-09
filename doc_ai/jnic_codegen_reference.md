@@ -8,6 +8,14 @@
 > `C:\Users\Canrad\AppData\Local\Temp\opencode\jnic_capture\jnic13438505281557630243_20260809_101838_542\jnic13438505281557630243\jnic.c`
 >
 > JNIC 3.7.0 的 DLL 逆向对比见 `jnic370_reverse_notes.md`（性能更新点汇总）。
+>
+> **版本标注（重要）**：本文档素材为 **3.5.1 生成器产物**（特征：`cached_c_N` 合并结构 +
+> `atomic_flag` 自旋锁 + 字符串 UTF-16 code units 数组，无 `__builtin_expect`/chacha20）。
+> 3.7.0 同输入同配置（TEST.jar, stringObf=false）生成结果与 3.5.1 **方法体/控制流/注册
+> 逐项一致**（50 方法 31 类、553 处 ExceptionCheck、31 处 RegisterNatives、3 处 indy），
+> 仅缓存形态改为无锁 CAS（`c_N`+`c_Nid_M` 独立函数）+ `__builtin_expect` 分支提示；
+> 3.7.0 stringObf=true 另将字符串升级为 chacha20 密钥流加密（详见 jnic370_reverse_notes.md
+> 第 3-4 节）。
 
 ## 1. 文件总览
 
