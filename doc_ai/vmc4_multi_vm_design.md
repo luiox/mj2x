@@ -359,6 +359,24 @@ VMC4 进入主线的前置条件：RegC/runtime 闭环已稳定 + mjdbg 提供 c
 | 后端 facade | `vmc4_backend.hpp/.cpp` | compileMethod/finalize/injectIntoClass，镜像 RegCBackend 结构，复用前端链路与 RegisterNatives 绑定 |
 | CLI 接线 | `mj2x-cli/src/main.cpp` | `--backend vmc4` + `--vmc4-dispatcher <kind>` + `--vmc4-seed <hex>` |
 | 单元测试 | `unittest/src/backend/vmc4_backend_test.cpp` | 编码成功/fail-closed/解释器源码结构/5 种 dispatcher 特征 |
+| E2E 测试 | `unittest/src/backend/vmc4_backend_e2e_test.cpp` | 3 用例 × 4 MSVC 可编译 dispatcher = 12 个 e2e：Java→javac→VMC4→.c→DLL→JNI 调用，基线/保护双跑对比（ComputedGoto 需 GCC，排除） |
+
+### E2E 驱动的正确性修复（2026-08-10，e2e 首次真编译暴露）
+
+Phase 0+1 的单测只验证"编码成功 + 文本结构"，从未把生成的 C 编译执行过。首个 e2e 测试立即暴露一批真实缺陷，已修复：
+
+| 缺陷 | 表现 | 修复 |
+|---|---|---|
+| `encodeCopy` 读错成员 | 含常量/分支的方法全部 fail-closed（`ins.value` 对 Copy 是默认 Opaque，源操作数在 `ins.copy.source`） | 改为读 `ins.copy.source`；`scanComputeRegisters` 同步修正 |
+| 边拷贝（块参数）被丢弃 | 循环/汇合块读未初始化寄存器，产出垃圾值但编码"成功" | 编码器为每条带拷贝的边生成合成块（[Copy...]+Jump），branch 的 T/F 边分别解析（`planSyntheticEdges`/`resolveEdgeTarget`） |
+| FuncPtrTable 是嵌套函数 | MSVC 编译失败（C 不允许函数内定义函数） | ctx struct/typedef/dispatch body 移到文件级（exec 函数前发射），exec 内只留表+循环 |
+| FuncPtrTable 循环退出判断读 operand 字节 | RETURN 后 `code[ctx->pc-1]` 是 operand 末字节非 0x22，永续循环/越界 | 调用 handler 前记录 opcode 位置，`code[op_pos]==0x22` 判断 |
+| StateDispatcher 残留 `code[pc-1]==0x22` 检查 | operand 末字节恰为 0x22 时提前退出 | 删除（RETURN 已直接 goto 退出，该检查是死代码） |
+| `applyRegTransformPasses` 不该跑 | CFF 给每个方法注入 switch dispatcher + state copy，VMC4 无法编码 | VMC4 路径移除（MBA/CFF/opaque-predicates 是 RegC 发射期混淆，非共享前端） |
+| 空常量池发射 `= {}` | MSVC C 模式不支持空初始化列表 | 空池发射 `{0}` |
+| 异常区域无编码 | 含 try/catch 的方法 edge copies 被静默丢弃 | encode 入口对 `exceptionRegions` 非空整体 fail-closed |
+
+修复后所有 e2e 通过：纯计算+控制流（含循环/三元/嵌套 if/移位/除法环绕）、浮点+转换（含 f2i/f2l 饱和、NaN→0）、fail-closed 混合共存（同类的 native 方法与保留字节码方法）。
 
 ### MVP 支持范围
 
@@ -383,7 +401,68 @@ VMC4 进入主线的前置条件：RegC/runtime 闭环已稳定 + mjdbg 提供 c
 
 ### 后续 Phase（未实现，记此跟进）
 
-- **Phase 2**：opcode 映射随机化 + per-instance seed 驱动 + per-class 粒度（VmInstance.opcodeTable/handlerOrder 真正生效）
 - **Phase 3**：ALT 别名、super-operator 折叠、bogus handler、handler 形态等价变形、per-method 独立解释器源码
 - **Phase 4**：mjdbg 红队闭环 + 跨实例分析复用性测试 + 强度量化
-- **e2e 测试**：`unittest/src/backend/vmc4_backend_e2e_test.cpp`（需 JDK + MSVC 工具链，镜像 `regc_backend_e2e_test.cpp` 的 fixture），验证 Java→VM→native→Java 端到端 round-trip
+- **e2e 扩展**：ComputedGoto dispatcher 的 e2e（需 GCC/clang 工具链，MSVC 无法编译 `goto *`）；div-by-zero 语义（当前 MVP wrapper 忽略 status 返回垃圾值，后续 Phase 需 ThrowNew）
+
+---
+
+## 12. Phase 2 已落地（2026-08-10）：opcode 映射随机化 + per-class/per-method 粒度
+
+设计文档 §9 Phase 2 的全部目标已实现并验证：
+
+| 维度 | 实现 | 验证 |
+|---|---|---|
+| opcode 编号随机化 | `VmInstance::opcodeTable`：受支持 opcode（Halt+8 计算/控制流）经 splitmix64 Fisher-Yates 洗牌，双射映射到 `[0, 9)` | P2-1/2/3 单测：同 seed 同映射、异 seed 异映射、双射性；P2-4：解释器 case 常量用实例字节 |
+| handler 顺序随机化 | `VmInstance::handlerOrder`：8 个 opcode 独立种子段洗牌，决定 switch case / 函数指针表项 / if 链的排列 | P2-2：排列是支持集的置换 |
+| per-class 粒度 | backend 按 className 缓存 VmInstance，同类方法共享实例 | P2-6：同主 seed 下不同类实例映射互异 |
+| per-method 粒度 | `--vmc4-granularity method`（className.method+desc 为实例键，每方法独立实例） | 单测 P2-5：身份哈希派生互异 |
+| 可复现构建 | 实例 seed = `vmc4DeriveInstanceSeed(mainSeed, fnv1a64(identity))`，确定性 splitmix64 派生，无未播种随机源 | P2-1/P2-5：同 seed 同身份 → 同产物 |
+| CLI | `--vmc4-granularity <class|method>`；`--vmc4-seed` 起真正驱动映射（此前仅记录） | CliTest 106/106 无回归 |
+
+**关键验证**：12 个 e2e 用例现在运行在随机化映射 + 洗牌 handler 顺序下全部通过（4 种 MSVC 可编译 dispatcher × 3 用例）——证明随机化后编码器/发射器两侧字节一致、运行时语义不变。这是「多 VM 实例」核心价值的首次端到端证明。
+
+设计变化记录：
+- Halt 哨兵也参与映射（`instance.haltByte()`），解释器的 Halt case 常量与编码器发射字节一致。
+- FuncPtrTable 的 RETURN 退出判断改用实例映射的 Return 字节（`code[op_pos] == <Return 字节>`）。
+- `VmInstance` 构造改为 `(options, instanceSeed)`；`isOpcodeSupported` 静态函数移除（支持集收敛为 `vm_opcode.hpp` 枚举 + `buildOpcodeTable`/`buildHandlerOrder`）。
+
+---
+
+## 13. Phase 3 已落地（2026-08-10）：ALT 别名 + super-operator + bogus handler + handler 形态
+
+设计文档 §4.5 可变性维度矩阵的剩余主项全部实现：
+
+| 维度 | 实现 | 验证 |
+|---|---|---|
+| ALT 别名 | 每语义 = canonical + aliasCount 个别名字节（0..3 可配），全局双射、不同语义集合互不相交；编码器按指令 nonce（`pickOpcodeByte`）确定性选字节，解释器为同一语义全部字节发射共享 handler | P3-1/2/3/4/5：集合互斥/aliasCount=0 回退/确定性+集合内/字节流用别名/解释器全字节 case |
+| super-operator | 编码器把 `Binary(x, 1, Add/Sub)` 折叠为 SuperInc/SuperDec（无 rhs operand，指令更短）；新增 2 个 opcode 参与映射/别名/handlerOrder | P3-7：折叠后无普通 Binary，常量 1 不 intern |
+| bogus handler | 每方法注入 0..4 个文件级 `mj2x_vm_bogus_<tag>_<i>` 假 handler（seed 确定性假体），任何 dispatch 结构不引用 | P3-6：存在但出现次数不超定义 |
+| handler 形态 | Unary 位取反（`~x` vs `x ^ 全1`）与 Compare Eq/Ne（`a==b` vs `!(a!=b)`）双形态，实例 seed 确定性选择（`usesAltHandlerForm`） | P3-8：确定性 + 解释器发射选中形态 |
+| per-method 独立实例 | Phase 2 已实现 `--vmc4-granularity method` | — |
+| CLI | `--vmc4-alias <0..3>`、`--vmc4-bogus <0..4>` | CliTest 无回归 |
+
+**关键验证**：12 个 e2e 用例在别名（默认 1）+ bogus（默认 1）+ super-op（恒开）+ handler 形态（seed 驱动）全开下全部通过——所有可变维度叠加时语义不变，这是"可变性不破坏语义保真"的端到端证明。
+
+设计说明：
+- FuncPtrTable 的 RETURN 退出判断升级为「op_pos 处字节 ∈ Return 字节全集」逐字节匹配。
+- Halt 别名在字节流不出现（固定 canonical），仅作为防御性停机面的扩展 case。
+- handler 形态只做位运算/相等比较这类可精确等价的变换，不做浮点/溢出敏感变换。
+
+---
+
+## 14. Phase 4 已落地（2026-08-10）：mjdbg 红队闭环的样本侧契约
+
+mjdbg 侧的自动还原工具与 weakness report 属 mjdbg 产品线，不在 mj2x 实现；mj2x 侧
+闭环前置已交付：
+
+- **expected trace surface 生成**：`VmInstance::describe()` 确定性文本（dispatcher、
+  instanceSeed、aliasCount/bogusHandlers、每语义字节集合、handlerOrder、alt-form 标记），
+  CLI `--vmc4-trace-surface <file>` 写成交付样本随附文件。单测 P4-1 锁定内容与可复现性。
+- **红队契约文档**：`doc_ai/vmc4_red_team_contract.md` 定义观测面表（§2）、强度归零
+  基准（§3，ISA 全恢复/跨实例可复用/无 seed 敏感性）、跨实例分析复用性测试方法（§4.1）、
+  opcode 编码熵（§4.2）、trace-surface 一致性核对（§4.3）。
+- **强度归零循环**：归零 → mj2x 调参（dispatcher/alias/granularity/seed）重产 → 复测。
+
+前置条件（设计 §8）中「RegC/runtime 闭环已稳定 + mjdbg 提供 c2j/VM 分析 agent」——
+RegC 闭环早已稳定；VM 分析 agent 待 mjdbg 按本文契约落地。

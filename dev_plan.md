@@ -28,7 +28,40 @@
   - **MVP 支持范围**：Copy/Unary/Binary/Compare/Convert + Jump/Branch/Return；I32/I64/F32/F64；JVM 整数环绕/除零/INT_MIN/-1/UShr 语义精确复刻。LoadField/Call/Allocate/Intrinsic 等对象/数组/调用 family 整体 fail-closed。
   - **接入**：CLI `--backend vmc4` + `--vmc4-dispatcher <kind>` + `--vmc4-seed <hex>`；新建 `mj2x-core/src/mj2x/backend/vmc4/`（6 文件），`xmake.lua` glob 自动纳入无需改构建脚本。
   - **验证**：`vmc4_backend_test.cpp` 10/10 通过（编码成功/fail-closed/解释器源码结构/5 种 dispatcher 特征）；RegC/StackC 单测无回归。
-  - **后续待办**：Phase 2（opcode 映射随机化 + seed 驱动 + per-class 粒度）、Phase 3（ALT 别名/super-op/bogus handler/per-method 独立源码）、e2e 测试（`vmc4_backend_e2e_test.cpp`，需 JDK+MSVC 工具链）、Phase 4（mjdbg 红队闭环）。
+
+- [x] **VMC4 E2E 闭环 + 正确性修复**（2026-08-10）：首个 e2e 测试（`vmc4_backend_e2e_test.cpp`，3 用例 × 4 MSVC 可编译 dispatcher = 12 项，ComputedGoto 需 GCC 排除）把生成的 C **真编译成 DLL 并 JNI 调用**，基线/保护双跑对比。立即暴露并修复一批 Phase 0+1 单测从未验证的真实缺陷：
+  - `encodeCopy` 读 `ins.value` 而非 `ins.copy.source`（Copy 指令源丢失 → 含常量/分支的方法全 fail-closed）
+  - 边拷贝（SSA 块参数 RegCopy）被编码器静默丢弃 → 循环/汇合块读未初始化寄存器；新增合成块机制（每条带拷贝的边生成 [Copy...]+Jump 块，branch T/F 边分别解析）
+  - FuncPtrTable 的 dispatch body 是函数内嵌函数（C 语法非法，MSVC 编译失败）→ ctx struct/typedef/body 移到文件级
+  - FuncPtrTable 循环退出判断读 operand 末字节（RETURN 后永不退出/越界）→ 记录 opcode 位置判断
+  - StateDispatcher 残留 `code[pc-1]==0x22` 死代码（operand 恰为 0x22 时提前退出）→ 删除
+  - VMC4 路径误跑 `applyRegTransformPasses`（RegC 发射期 MBA/CFF 混淆；CFF 注入 switch dispatcher VMC4 无法编码）→ 移除，仅保留共享前端的 DCE
+  - 空常量池 `= {}` MSVC 不可编译 → `{0}`；异常区域无编码 → encode 入口 fail-closed
+  - 验证：`xmake run mj2x_unittest --gtest_filter="Vmc4*"` 26/26 通过（含 12 项 e2e：纯计算+控制流/浮点+饱和转换/fail-closed 混合共存），RegC/StackC 无回归。
+  - **后续待办**：Phase 2（opcode 映射随机化 + seed 驱动 + per-class 粒度）、Phase 3（ALT 别名/super-op/bogus handler/per-method 独立源码）、Phase 4（mjdbg 红队闭环）、e2e 扩展（ComputedGoto 需 GCC 工具链；除零语义后续 Phase 补 ThrowNew）。
+
+- [x] **VMC4 Phase 2：opcode 映射随机化 + 实例粒度**（2026-08-10）：「多 VM 实例」核心价值首次落地。
+  - `VmInstance` 支持集（Halt+8 计算/控制流 opcode）经 splitmix64 Fisher-Yates 洗牌做双射映射（`opcodeTable`）；8 个 handler 独立洗牌（`handlerOrder`），决定 switch case / 函数指针表项 / if 链排列。
+  - 实例 seed = `vmc4DeriveInstanceSeed(mainSeed, fnv1a64(identity))`：per-class 按 className、per-method 按 className.method+desc 缓存/派生，确定性可复现（同 seed+同输入 → 同产物）。
+  - 编码器/发射器两侧消费同一映射：编码写实例字节，解释器 case 常量/Halt 哨兵/FuncPtrTable 的 RETURN 退出判断用实例字节。
+  - CLI：`--vmc4-granularity <class|method>`；`--vmc4-seed` 起真正驱动映射。
+  - 验证：`Vmc4*` 32/32 通过（新增 P2-1..6：可复现性/双射/编码字节/解释器 case/seed 派生/跨类实例独立）；12 项 e2e 在随机化映射下全部通过；RegC/StackC/Cli 106/106 无回归。
+  - **后续待办**：Phase 3（ALT 别名/super-op/bogus handler/handler 形态变形/per-method 独立解释器源码）、Phase 4（mjdbg 红队闭环）、e2e 扩展（ComputedGoto、除零 ThrowNew）。
+
+- [x] **VMC4 Phase 3：完整可变性维度**（2026-08-10）：设计 §4.5 可变性矩阵剩余主项全部落地。
+  - **ALT 别名**：每语义 canonical + aliasCount（0..3）个别名字节，全局双射、集合互斥；编码器按指令 nonce 确定性选字节（`pickOpcodeByte`），解释器为同语义全部字节发射共享 handler（switch case / 函数指针表项 / goto 表槽 / if 链 OR 条件）。
+  - **super-operator**：`Binary(x,1,Add/Sub)` 折叠为 SuperInc/SuperDec（无 rhs operand）；新增 opcode 参与映射/别名/handlerOrder。
+  - **bogus handler**：每方法注入 0..4 个文件级假 handler（seed 确定性假体），dispatch 结构不引用——只污染静态分析、运行时永不命中。
+  - **handler 形态**：Unary 位取反与 Compare Eq/Ne 双形态（`~x` vs `x^全1`、`a==b` vs `!(a!=b)`），`usesAltHandlerForm` 按 seed 确定性选择。
+  - CLI：`--vmc4-alias <0..3>`、`--vmc4-bogus <0..4>`。
+  - 验证：`Vmc4*` 50/50 通过（新增 P3-1..8）；12 项 e2e 在别名+bogus+super-op+morphing 全开下全部通过（可变性叠加不破坏语义）；RegC/StackC/Cli 124/124 无回归。
+  - **后续待办**：Phase 4（mjdbg 红队闭环 + expected trace surface + 强度量化）、e2e 扩展（ComputedGoto 需 GCC 工具链；除零 ThrowNew）。
+
+- [x] **VMC4 Phase 4：红队闭环样本侧契约**（2026-08-10）：mjdbg 自动还原工具属 mjdbg 产品线，mj2x 侧闭环前置全部交付。
+  - `VmInstance::describe()` 确定性生成 expected trace surface（dispatcher/instanceSeed/aliasCount/bogusHandlers/每语义字节集合/handlerOrder/alt-form 标记）；CLI `--vmc4-trace-surface <file>` 写交付样本随附文件。
+  - 契约文档 `doc_ai/vmc4_red_team_contract.md`：观测面表、强度归零基准（ISA 全恢复/跨实例可复用/无 seed 敏感性）、跨实例分析复用性测试方法、opcode 编码熵、trace-surface 一致性核对。
+  - 验证：`Vmc4*` 51/51（新增 P4-1 trace surface 确定性/内容/跨实例差异）；RegC/StackC/Cli 无回归。
+  - **后续待办**：mjdbg VM 分析 agent（按契约落地）、e2e 扩展（ComputedGoto 需 GCC 工具链；除零 ThrowNew）、对象 family 支持（新阶段，需 VM 对象模型/引用管理/异常语义）。
 
 ## 下一步验证命令
 

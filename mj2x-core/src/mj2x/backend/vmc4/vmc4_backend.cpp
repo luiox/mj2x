@@ -10,7 +10,6 @@
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/codegen/include_set.hpp"
 #include "mj2x/frontend/type_utils.hpp"
-#include "mj2x/mir/passes/reg_transform_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
@@ -25,6 +24,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <algorithm>
 
 namespace mj2x {
 
@@ -179,6 +180,10 @@ struct Vmc4Backend::Impl
     std::unordered_map<std::string, int>                         classIds;
     std::unordered_set<std::string>                              clinitInjected;
 
+    /// VmInstance 缓存：per-class 粒度按 className 键（同类方法共享实例），
+    /// per-method 粒度按 className.method+desc 键。构造确定性（同 seed 同产物）。
+    std::unordered_map<std::string, std::unique_ptr<VmInstance>> instances;
+
     int registerNativeMethod(const std::string& className, const std::string& javaName,
                              const std::string& javaDesc, const std::string& cFunctionName)
     {
@@ -199,6 +204,21 @@ Vmc4Backend::Vmc4Backend()
 {}
 
 Vmc4Backend::~Vmc4Backend() = default;
+
+std::string Vmc4Backend::traceSurface() const
+{
+    std::string out;
+    out += "/* VMC4 expected trace surface (mjdbg red-team contract) */\n";
+    // 按实例键排序保证确定性输出（per-class 时键即 className）。
+    std::vector<std::string> keys;
+    for (const auto& kv : impl_->instances) keys.push_back(kv.first);
+    std::sort(keys.begin(), keys.end());
+    for (const auto& key : keys) {
+        out += "\n===== instance \"" + key + "\" =====\n";
+        out += impl_->instances.at(key)->describe();
+    }
+    return out;
+}
 
 // ===========================================================================
 // compileMethod：镜像 RegCBackend 的阶段 0-8，阶段 5 换成 VmEncoder + 解释器发射。
@@ -266,11 +286,28 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
-    applyRegTransformPasses(*reg);
+    // 注意：不调用 applyRegTransformPasses（MBA/CFF/opaque-predicates 是 RegC 的
+    // 发射期混淆）。CFF 会注入 switch dispatcher + state copy，VMC4 的 opcode 编码器
+    // 不支持 switch terminator；且 VMC4 的混淆本体就是它自己的 opcode 编码与解释器
+    // 形态（vmc4_multi_vm_design.md §4），不需要在 VM 内部再套 RegC 变换。
 
     // --- 阶段 5：VMC4 分叉点 —— RegIR → opcode 流 ---
-    VmInstance instance(options_);
-    auto       program = VmEncoder::encode(*reg, instance, reason);
+    // 实例按粒度派生：per-class 同类方法共享同一 VmInstance（缓存），
+    // per-method 每方法独立实例。instanceSeed = mix(主 seed, 身份哈希)，
+    // 保证可复现（同 seed+同输入 → 同产物）且跨类/方法实例互不相同。
+    const bool      perMethod   = options_.granularity == Vmc4Options::Granularity::PerMethod;
+    const std::string instanceKey =
+        perMethod ? (className + "." + methodName + methodDesc) : className;
+    auto it = impl_->instances.find(instanceKey);
+    if (it == impl_->instances.end()) {
+        const uint64_t identityHash = fnv1a64(instanceKey);
+        const uint64_t instanceSeed = vmc4DeriveInstanceSeed(options_.seed, identityHash);
+        auto inserted = impl_->instances.emplace(
+            instanceKey, std::make_unique<VmInstance>(options_, instanceSeed));
+        it = inserted.first;
+    }
+    VmInstance& instance = *it->second;
+    auto        program  = VmEncoder::encode(*reg, instance, reason);
     if (!program) {
         printf("[Vmc4Backend] Skipping %s.%s%s: VM encode failed: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());

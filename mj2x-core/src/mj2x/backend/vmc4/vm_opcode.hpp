@@ -73,6 +73,10 @@ enum class VmOpcode : uint8_t
     Branch     = 0x21,   ///< if regs[cond] pc = true else false   [cond:u16][true:u16][false:u16]
     Return     = 0x22,   ///< return regs[src] / void              [has_value:u8][src:u16]
 
+    // --- super-operator（Phase 3：指令折叠，由编码器从 Binary 模式匹配产生）---
+    SuperInc   = 0x23,   ///< regs[dest] = regs[src] + 1           [type:u8][dest:u16][src:u16]
+    SuperDec   = 0x24,   ///< regs[dest] = regs[src] - 1           [type:u8][dest:u16][src:u16]
+
     // --- 以下 family 预留，MVP fail-closed ---
     LoadField  = 0x30,
     StoreField = 0x31,

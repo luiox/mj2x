@@ -72,6 +72,13 @@ public:
     /// @brief Set a `.c` output path written during finalize.
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
 
+    /// @brief 全部实例的 expected trace surface 描述（Phase 4 红队契约）。
+    ///
+    /// @details
+    /// 汇总 compileMethod 期间缓存的所有 VmInstance 的 describe() 文本，供 CLI
+    /// 写成交付样本旁的 trace-surface 文件。同 seed + 同输入 → 同内容。
+    std::string traceSurface() const;
+
     /// @brief 发射单个方法的 JNI wrapper（成员函数，compileMethod 调用）。
     static std::string emitNativeWrapper(const std::string& className,
                                          const std::string& methodName,

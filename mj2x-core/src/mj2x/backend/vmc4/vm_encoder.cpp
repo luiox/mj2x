@@ -98,6 +98,7 @@ bool toVmComparePred(SSAComparePredicate p, VmComparePred& out)
 struct EncoderState
 {
     const RegFunction& fn;
+    const VmInstance&  instance;
 
     /// block 指针 → 在 fn.blocks 里的索引（也用作 blockTargets/Jump/Branch 的目标索引）。
     std::unordered_map<const RegBlock*, uint16_t> blockIndex;
@@ -113,8 +114,32 @@ struct EncoderState
     /// 已分配的最大寄存器索引 + 1（含参数、常量槽、计算寄存器）。
     uint16_t maxReg = 0;
 
-    explicit EncoderState(const RegFunction& f)
+    /// 指令发射计数器：pickOpcodeByte 的 nonce（每条指令递增，确定性选别名）。
+    uint64_t instructionNonce = 0;
+
+    /// 带边拷贝（块参数 RegCopy）的边 → 合成块。合成块内容 = [Copy...] + Jump 真实目标，
+    /// 索引排在所有真实块之后（blockTargets 后半段）。每条带拷贝的边一个合成块，
+    /// 按 (src 块, dst 块, slot) 区分（slot：Jump=0，Branch true=0/false=1）。
+    struct SyntheticEdge
+    {
+        const RegBlock*           realTarget;
+        std::vector<RegCopy>      copies;   ///< 边拷贝快照（值语义，安全持有）
+        uint16_t                  index = 0;
+    };
+    std::vector<SyntheticEdge> syntheticEdges;
+
+    /// (src 块, dst 块, slot) → 合成块索引，供 encodeJump/encodeBranch 解析目标。
+    struct EdgeKey
+    {
+        const RegBlock* src = nullptr;
+        const RegBlock* dst = nullptr;
+        uint16_t        slot = 0;
+    };
+    std::vector<std::pair<EdgeKey, uint16_t>> edgeToSynthetic;
+
+    explicit EncoderState(const RegFunction& f, const VmInstance& inst)
         : fn(f)
+        , instance(inst)
     {
         numInputs = static_cast<uint16_t>(f.parameters.size());
         // 预扫描全部计算寄存器（指令 dest + Register 操作数），把常量槽隔离到
@@ -124,11 +149,60 @@ struct EncoderState
         scanComputeRegisters();
     }
 
+    /// @brief 为带边拷贝的后继创建合成块并分配索引（在 indexBlocks 之后调用）。
+    ///
+    /// @details
+    /// SSA 块参数经 RegIR 消除后变成后继边上的 RegCopy（reg_lowering.cpp lowerSuccessor）。
+    /// 这些拷贝必须在该边被取用时执行——MVP 的解释器只有 Copy/Jump/Branch 原语，
+    /// 因此把每条带拷贝的边重写为「合成块：Copy... + Jump 真实目标」，跳转/分支
+    /// 的目标指向合成块。无拷贝的边仍直接指向真实块。
+    void planSyntheticEdges()
+    {
+        const uint16_t base = static_cast<uint16_t>(fn.blocks.size());
+        auto plan = [&](const RegBlock* src, const RegSuccessor& succ, uint16_t slot) {
+            if (succ.block == nullptr || succ.copies.empty()) return;
+            SyntheticEdge edge;
+            edge.realTarget = succ.block;
+            edge.copies     = succ.copies;
+            edge.index      = static_cast<uint16_t>(base + syntheticEdges.size());
+            syntheticEdges.push_back(std::move(edge));
+            edgeToSynthetic.push_back({{src, succ.block, slot}, syntheticEdges.back().index});
+        };
+        for (const auto& block : fn.blocks) {
+            std::visit(
+                [&](const auto& term) {
+                    using T = std::decay_t<decltype(term)>;
+                    if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                        plan(block.get(), term.target, 0);
+                    } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                        plan(block.get(), term.trueTarget, 0);
+                        plan(block.get(), term.falseTarget, 1);
+                    }
+                    // Switch/Throw/Return/Unreachable：MVP 分别 fail-closed/无后继，
+                    // 无需合成块。
+                },
+                block->terminator);
+        }
+    }
+
+    /// @brief 解析边目标：该边有合成块则用合成块索引，否则用真实块索引。
+    uint16_t resolveEdgeTarget(const RegBlock* src, const RegBlock* dst, uint16_t slot,
+                               uint16_t realIndex)
+    {
+        for (const auto& kv : edgeToSynthetic) {
+            if (kv.first.src == src && kv.first.dst == dst && kv.first.slot == slot)
+                return kv.second;
+        }
+        return realIndex;
+    }
+
     /// @brief 第一遍：扫描所有指令的 dest 与 Register 操作数，抬高 maxReg。
     ///
     /// @details
     /// 只观察 Register 操作数，字面量由 internConstant 在编码期分配槽位；
     /// 由于 maxReg 已含全部计算寄存器，常量槽必然落在计算寄存器之后，互不重叠。
+    /// 边拷贝（后继块的块参数 RegCopy）也会占寄存器，必须一并扫描，否则常量槽
+    /// 可能落在边拷贝 dest 寄存器之上被覆盖。
     void scanComputeRegisters()
     {
         for (const auto& block : fn.blocks) {
@@ -136,6 +210,8 @@ struct EncoderState
                 observeReg(static_cast<uint16_t>(ins.dest.id.value));
                 switch (ins.kind) {
                 case RegInstructionKind::Copy:
+                    observeReg(static_cast<uint16_t>(ins.copy.source.reg.value));
+                    break;
                 case RegInstructionKind::Unary:
                     observeReg(static_cast<uint16_t>(ins.value.reg.value));
                     break;
@@ -153,10 +229,21 @@ struct EncoderState
             const auto& term = block->terminator;
             std::visit([&](const auto& t) {
                 using T = std::decay_t<decltype(t)>;
-                if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                    for (const auto& copy : t.target.copies) {
+                        observeReg(static_cast<uint16_t>(copy.dest.id.value));
+                        observeReg(static_cast<uint16_t>(copy.source.reg.value));
+                    }
+                } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
                     observeReg(static_cast<uint16_t>(t.condition.reg.value));
-                } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
-                    if (t.hasValue) observeReg(static_cast<uint16_t>(t.value.reg.value));
+                    for (const auto& copy : t.trueTarget.copies) {
+                        observeReg(static_cast<uint16_t>(copy.dest.id.value));
+                        observeReg(static_cast<uint16_t>(copy.source.reg.value));
+                    }
+                    for (const auto& copy : t.falseTarget.copies) {
+                        observeReg(static_cast<uint16_t>(copy.dest.id.value));
+                        observeReg(static_cast<uint16_t>(copy.source.reg.value));
+                    }
                 }
             },
                        term);
@@ -233,12 +320,27 @@ struct EncoderState
             return false;
         case RegOperandKind::Opaque:
             reason = "Opaque operand not supported in MVP";
+            if (!op.tag.empty()) reason += " (tag: " + op.tag + ")";
             return false;
         }
         reason = "unknown RegOperandKind";
         return false;
     }
 };
+
+/// 发射 VmOpcode 的实例字节（Phase 2 canonical 映射；Phase 3 按 nonce 在
+/// canonical+ALT 别名集合内确定性选取）。
+void emitOpcode(EncoderState& ctx, VmOpcode op, std::vector<uint8_t>& out)
+{
+    emitU8(out, ctx.instance.pickOpcodeByte(op, ctx.instructionNonce++));
+}
+
+/// 发射 Halt 哨兵：固定用 canonical 字节（发射器的 Halt case 覆盖全部别名，
+/// 别名槽在字节流里不会出现，仅作为防御性停机面）。
+void emitHaltOpcode(EncoderState& ctx, std::vector<uint8_t>& out)
+{
+    emitU8(out, ctx.instance.opcodeFor(VmOpcode::Halt));
+}
 
 // ---------------------------------------------------------------------------
 // 前向声明：layoutBlocks → encodeBlock → encodeInstruction/encodeTerminator →
@@ -283,17 +385,42 @@ bool indexBlocks(EncoderState& ctx, std::string& reason)
 ///
 /// @details
 /// 一遍完成：按 block 顺序边编码边记录起始 offset（block 的偏移只取决于前面
-/// block 的字节数，故一遍即够）。末尾追加 Halt 作为停机哨兵。
+/// block 的字节数，故一遍即够）。真实块之后布局合成块（边拷贝块，见
+/// EncoderState::planSyntheticEdges），末尾追加 Halt 作为停机哨兵。
 bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
 {
-    prog.blockTargets.assign(ctx.fn.blocks.size(), 0);
+    prog.blockTargets.assign(ctx.fn.blocks.size() + ctx.syntheticEdges.size(), 0);
     for (size_t bi = 0; bi < ctx.fn.blocks.size(); ++bi) {
         prog.blockTargets[bi] = static_cast<uint32_t>(prog.bytecodes.size());
         // 编码本 block 到 prog.bytecodes（offset 已记录，后续编码直接追加）。
         if (!encodeBlock(ctx, *ctx.fn.blocks[bi], prog, reason)) return false;
     }
+    // 合成块：边拷贝 + Jump 到真实目标。
+    for (const auto& edge : ctx.syntheticEdges) {
+        prog.blockTargets[edge.index] = static_cast<uint32_t>(prog.bytecodes.size());
+        for (const auto& copy : edge.copies) {
+            VmType type;
+            if (!toVmType(copy.dest.type, type)) {
+                reason = "edge copy dest type not supported in MVP";
+                return false;
+            }
+            uint16_t src;
+            if (!ctx.resolveOperand(copy.source, src, reason)) return false;
+            emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
+            emitU8(prog.bytecodes, static_cast<uint8_t>(type));
+            emitU16(prog.bytecodes, static_cast<uint16_t>(copy.dest.id.value));
+            emitU16(prog.bytecodes, src);
+        }
+        const auto realIt = ctx.blockIndex.find(edge.realTarget);
+        if (realIt == ctx.blockIndex.end()) {
+            reason = "edge copy target block not indexed";
+            return false;
+        }
+        emitOpcode(ctx, VmOpcode::Jump, prog.bytecodes);
+        emitU16(prog.bytecodes, realIt->second);
+    }
     // 末尾 Halt 作为停机哨兵（解释器主循环遇到 Halt 退出）。
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Halt));
+    emitHaltOpcode(ctx, prog.bytecodes);
     return true;
 }
 
@@ -341,12 +468,14 @@ bool encodeCopy(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
         reason = "Copy dest type not supported in MVP";
         return false;
     }
+    // Copy 指令的源操作数存在 ins.copy.source（不是 ins.value——那是 Unary/Convert
+    // 用的字段，对 Copy 是默认构造的 Opaque）。
     uint16_t src;
-    if (!ctx.resolveOperand(ins.value, src, reason)) return false;
+    if (!ctx.resolveOperand(ins.copy.source, src, reason)) return false;
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Copy));
+    emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(type));
     emitU16(prog.bytecodes, dest);
     emitU16(prog.bytecodes, src);
@@ -370,7 +499,7 @@ bool encodeUnary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, 
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Unary));
+    emitOpcode(ctx, VmOpcode::Unary, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(op));
     emitU8(prog.bytecodes, static_cast<uint8_t>(type));
     emitU16(prog.bytecodes, dest);
@@ -390,13 +519,32 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
         reason = "Binary op not supported";
         return false;
     }
+
+    // super-operator 折叠（Phase 3）：Binary(x, 1, Add/Sub) → SuperInc/SuperDec。
+    // 语义等价（整数环绕/浮点 ±1 一致），但指令格式更短（无 rhs operand），
+    // 且引入独立 opcode 增加指令集膨胀。rhs 必须是 IntLiteral(1) 字面量。
+    if (ins.rhs.kind == RegOperandKind::IntLiteral && ins.rhs.intValue == 1 &&
+        (ins.binaryOp == SSABinaryOp::Add || ins.binaryOp == SSABinaryOp::Sub)) {
+        const VmOpcode superOp = ins.binaryOp == SSABinaryOp::Add ? VmOpcode::SuperInc
+                                                                  : VmOpcode::SuperDec;
+        uint16_t src;
+        if (!ctx.resolveOperand(ins.lhs, src, reason)) return false;
+        const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+        ctx.observeReg(dest);
+        emitOpcode(ctx, superOp, prog.bytecodes);
+        emitU8(prog.bytecodes, static_cast<uint8_t>(type));
+        emitU16(prog.bytecodes, dest);
+        emitU16(prog.bytecodes, src);
+        return true;
+    }
+
     uint16_t lhs, rhs;
     if (!ctx.resolveOperand(ins.lhs, lhs, reason)) return false;
     if (!ctx.resolveOperand(ins.rhs, rhs, reason)) return false;
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Binary));
+    emitOpcode(ctx, VmOpcode::Binary, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(op));
     emitU8(prog.bytecodes, static_cast<uint8_t>(type));
     emitU16(prog.bytecodes, dest);
@@ -424,7 +572,7 @@ bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Compare));
+    emitOpcode(ctx, VmOpcode::Compare, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(pred));
     emitU8(prog.bytecodes, static_cast<uint8_t>(operandType));
     emitU16(prog.bytecodes, dest);
@@ -454,7 +602,7 @@ bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Convert));
+    emitOpcode(ctx, VmOpcode::Convert, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(from));
     emitU8(prog.bytecodes, static_cast<uint8_t>(to));
     emitU16(prog.bytecodes, dest);
@@ -469,9 +617,9 @@ bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog,
         [&](const auto& term) -> bool {
             using T = std::decay_t<decltype(term)>;
             if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-                return encodeJump(ctx, term, prog, reason);
+                return encodeJump(ctx, &block, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
-                return encodeBranch(ctx, term, prog, reason);
+                return encodeBranch(ctx, &block, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
                 return encodeReturn(ctx, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
@@ -484,7 +632,7 @@ bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog,
                 return false;
             } else if constexpr (std::is_same_v<T, RegUnreachableTerminator>) {
                 // Unreachable：发射 Halt 作为防御性停机（不应被执行到）。
-                emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Halt));
+                emitHaltOpcode(ctx, prog.bytecodes);
                 (void)term;
                 return true;
             }
@@ -494,21 +642,24 @@ bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog,
         block.terminator);
 }
 
-bool encodeJump(EncoderState& ctx, const RegJumpTerminator& term, VmProgram& prog,
-                std::string& reason)
+bool encodeJump(EncoderState& ctx, const RegBlock* srcBlock, const RegJumpTerminator& term,
+                VmProgram& prog, std::string& reason)
 {
     const auto it = ctx.blockIndex.find(term.target.block);
     if (it == ctx.blockIndex.end()) {
         reason = "Jump target block not indexed";
         return false;
     }
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Jump));
-    emitU16(prog.bytecodes, it->second);
+    // 边拷贝（块参数）走合成块：resolveEdgeTarget 优先返回合成块索引。
+    const uint16_t target =
+        ctx.resolveEdgeTarget(srcBlock, term.target.block, 0, it->second);
+    emitOpcode(ctx, VmOpcode::Jump, prog.bytecodes);
+    emitU16(prog.bytecodes, target);
     return true;
 }
 
-bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram& prog,
-                  std::string& reason)
+bool encodeBranch(EncoderState& ctx, const RegBlock* srcBlock, const RegBranchTerminator& term,
+                  VmProgram& prog, std::string& reason)
 {
     uint16_t cond;
     if (!ctx.resolveOperand(term.condition, cond, reason)) return false;
@@ -518,10 +669,12 @@ bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram&
         reason = "Branch target block not indexed";
         return false;
     }
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Branch));
+    const uint16_t trueIdx  = ctx.resolveEdgeTarget(srcBlock, term.trueTarget.block, 0, trueIt->second);
+    const uint16_t falseIdx = ctx.resolveEdgeTarget(srcBlock, term.falseTarget.block, 1, falseIt->second);
+    emitOpcode(ctx, VmOpcode::Branch, prog.bytecodes);
     emitU16(prog.bytecodes, cond);
-    emitU16(prog.bytecodes, trueIt->second);
-    emitU16(prog.bytecodes, falseIt->second);
+    emitU16(prog.bytecodes, trueIdx);
+    emitU16(prog.bytecodes, falseIdx);
     return true;
 }
 
@@ -529,14 +682,14 @@ bool encodeReturn(EncoderState& ctx, const RegReturnTerminator& term, VmProgram&
                   std::string& reason)
 {
     if (!term.hasValue) {
-        emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Return));
+        emitOpcode(ctx, VmOpcode::Return, prog.bytecodes);
         emitU8(prog.bytecodes, 0);   // has_value = 0
         emitU16(prog.bytecodes, 0);  // src unused
         return true;
     }
     uint16_t src;
     if (!ctx.resolveOperand(term.value, src, reason)) return false;
-    emitU8(prog.bytecodes, static_cast<uint8_t>(VmOpcode::Return));
+    emitOpcode(ctx, VmOpcode::Return, prog.bytecodes);
     emitU8(prog.bytecodes, 1);   // has_value = 1
     emitU16(prog.bytecodes, src);
     return true;
@@ -550,12 +703,18 @@ bool encodeReturn(EncoderState& ctx, const RegReturnTerminator& term, VmProgram&
 std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInstance& instance,
                                              std::string& reason)
 {
-    (void)instance;   // MVP：instance 只影响命名，不影响编码（Phase 2 起影响寄存器映射）
-
     auto prog = std::make_unique<VmProgram>();
-    EncoderState ctx(fn);
+    EncoderState ctx(fn, instance);
+
+    // 异常区域的隐式边（handler 参数）MVP 不支持：编码器既不编码 exception edges
+    // 也不抛 Java 异常，含 try/catch 的方法整体 fail-closed。
+    if (!fn.exceptionRegions.empty()) {
+        reason = "exception regions not supported in MVP";
+        return nullptr;
+    }
 
     if (!indexBlocks(ctx, reason)) return nullptr;
+    ctx.planSyntheticEdges();
     if (!layoutBlocks(ctx, *prog, reason)) return nullptr;
 
     // 填充常量池：constSlotBySignature 存 (签名 → 槽索引)，签名含 type+intBits+floatValue。

@@ -9,7 +9,10 @@
 
 #include <gmock/gmock.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <memory>
+#include <set>
 #include <string>
 
 #include "jbytecode/jbytecode.hpp"
@@ -31,15 +34,18 @@ using namespace jbytecode::tree;
 
 namespace {
 
-std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name,
-                                       const std::string& desc,
+/// @brief 构造 MethodNode。
+///
+/// @note name/desc 必须是静态存储期的 C 字符串（字面量）：MethodNode 只持有
+/// Utf8StringRef 视图不拷贝，临时 std::string 会在调用点析构导致悬垂视图。
+std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char* desc,
                                        std::initializer_list<AbstractInsnNode*> insns,
                                        int maxStack, int maxLocals)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
     auto mn = std::make_unique<MethodNode>(access,
-                                           ca::str::Utf8StringRef::from_cstr(name.c_str()),
-                                           ca::str::Utf8StringRef::from_cstr(desc.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(name),
+                                           ca::str::Utf8StringRef::from_cstr(desc),
                                            ca::str::Utf8StringRef::from_cstr(""),
                                            noExcepts);
     mn->maxStack  = maxStack;
@@ -49,18 +55,16 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name,
 }
 
 /// 完整编码管线：MethodNode -> VmProgram（复用 regc_test 的 emitRegC 结构，末段换 VmEncoder）。
-std::unique_ptr<VmProgram> encodeMethod(const std::string& name, const std::string& desc,
-                                        std::initializer_list<AbstractInsnNode*> insns,
-                                        int maxStack, int maxLocals, const VmInstance& instance,
-                                        std::string& reason, const RegFunction** outReg = nullptr)
+std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
+                                            const VmInstance& instance, std::string& reason,
+                                            const RegFunction** outReg = nullptr)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack,
-                         maxLocals);
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
     auto                     blocks = converter.convert(*mn);
     SSABuilder               builder;
-    auto ssa = builder.build(blocks, "InlineVmc4", name, desc, true, maxLocals, arena, reason);
+    auto ssa = builder.build(blocks, "InlineVmc4", mn->name.to_std_string(),
+                             mn->desc.to_std_string(), true, mn->maxLocals, arena, reason);
     if (!ssa) return nullptr;
     RegLowering lowering;
     auto        reg = lowering.lower(*ssa, reason);
@@ -68,6 +72,44 @@ std::unique_ptr<VmProgram> encodeMethod(const std::string& name, const std::stri
     eliminateDeadRegInstructions(*reg);
     if (outReg) *outReg = reg.get();
     return VmEncoder::encode(*reg, instance, reason);
+}
+
+/// 便捷重载：从指令列表构造 MethodNode 再编码。
+std::unique_ptr<VmProgram> encodeMethod(const std::string& name, const std::string& desc,
+                                        std::initializer_list<AbstractInsnNode*> insns,
+                                        int maxStack, int maxLocals, const VmInstance& instance,
+                                        std::string& reason, const RegFunction** outReg = nullptr)
+{
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name.c_str(), desc.c_str(),
+                         insns, maxStack, maxLocals);
+    return encodeMethodNode(std::move(mn), instance, reason, outReg);
+}
+
+/// 与发射器 emitOpcodeByteOrChain 同构：`opcode == b1 || opcode == b2 ...`。
+std::string emitOpcodeByteOrChainForTest(const VmInstance& instance, VmOpcode op)
+{
+    std::string out;
+    bool        first = true;
+    for (uint8_t b : instance.opcodeBytesFor(op)) {
+        if (!first) out += " || ";
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "opcode == 0x%02x", static_cast<unsigned>(b));
+        out += buf;
+        first = false;
+    }
+    return out;
+}
+
+/// 统计子串出现次数。
+size_t countOccurrencesForTest(const std::string& haystack, const std::string& needle)
+{
+    size_t count = 0;
+    size_t pos   = 0;
+    while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+        count++;
+        pos += needle.size();
+    }
+    return count;
 }
 
 /// @brief 计算 RegIR 中使用的最大寄存器索引（与 EncoderState::scanComputeRegisters
@@ -384,6 +426,29 @@ TEST(Vmc4BackendTest, FuncPtrDispatcherEmitsDoneLabel)
     EXPECT_NE(src.find("ctx->pc = pc; ctx->status = status;"), std::string::npos)
         << "pc/status write-back missing in FuncPtrTable dispatch body\n"
         << src;
+    // P0-4 回归：RETURN 后循环退出判断必须基于 opcode 位置而非 operand 末字节。
+    // 旧实现用 code[ctx->pc-1]==0x22 判断，RETURN 指令的 operand 末字节（src 低字节）
+    // 不等于 0x22 时永不退出，读到字节流末尾之外造成越界。现在在调用 handler 前
+    // 记录 opcode 位置 op_pos，并按实例映射的 Return 字节全集判断（Phase 3 起
+    // Return 可有 ALT 别名，用 _op 逐字节匹配）。
+    EXPECT_NE(src.find("unsigned int op_pos = ctx->pc;"), std::string::npos)
+        << "opcode position capture missing in FuncPtrTable dispatch loop\n"
+        << src;
+    EXPECT_NE(src.find("int _is_ret = 0;"), std::string::npos)
+        << "RETURN detection must use a per-op byte membership flag\n"
+        << src;
+    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Return)) {
+        char retCheck[48];
+        std::snprintf(retCheck, sizeof(retCheck), "_op == 0x%02x",
+                      static_cast<unsigned>(b));
+        EXPECT_NE(src.find(retCheck), std::string::npos)
+            << "RETURN detection must cover Return byte 0x" << std::hex
+            << static_cast<unsigned>(b) << std::dec << "\n"
+            << src;
+    }
+    EXPECT_EQ(src.find("ctx->code[ctx->pc-1] == 0x22"), std::string::npos)
+        << "legacy operand-byte RETURN detection must not survive\n"
+        << src;
 }
 
 // ===========================================================================
@@ -450,4 +515,719 @@ TEST(Vmc4BackendTest, PreludeHasSaturatingFloatConversionsAndNoStatusMagic)
     EXPECT_EQ(src.find("?status:3u"), std::string::npos)
         << "no magic '3u' status fallback may survive\n"
         << src;
+}
+
+// ===========================================================================
+// Phase 2：opcode 映射随机化 + handler 顺序 + 实例 seed 派生。
+// ===========================================================================
+
+/// 取一个实例的完整 opcode 映射（支持集 → 实例 canonical 字节），按枚举值排序。
+std::vector<uint8_t> mappingOf(const VmInstance& instance)
+{
+    std::vector<uint8_t> bytes;
+    for (const auto op : {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
+                          VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
+                          VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
+                          VmOpcode::SuperInc, VmOpcode::SuperDec}) {
+        bytes.push_back(instance.opcodeFor(op));
+    }
+    return bytes;
+}
+
+// P2-1：可复现构建 —— 相同 seed 相同映射与 handler 顺序；不同 seed 不同。
+TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
+{
+    Vmc4Options optsA;
+    optsA.seed = 0x1234;
+    Vmc4Options optsB = optsA;
+    optsB.seed       = 0x1235;
+    Vmc4Options optsC = optsA;   // 与 A 同 seed
+
+    VmInstance a(optsA);
+    VmInstance b(optsB);
+    VmInstance c(optsC);
+
+    EXPECT_EQ(mappingOf(a), mappingOf(c)) << "same seed must produce identical mapping";
+    EXPECT_NE(mappingOf(a), mappingOf(b)) << "different seeds must produce different mappings";
+    EXPECT_EQ(a.handlerOrder(), c.handlerOrder());
+    EXPECT_NE(a.handlerOrder(), b.handlerOrder()) << "handler order must vary with seed";
+    EXPECT_EQ(a.instanceTag(), c.instanceTag());
+    EXPECT_NE(a.instanceTag(), b.instanceTag());
+}
+
+// P2-2：映射是支持集上的双射（互不相同）+ handler 顺序是排列。
+// Phase 3 起支持集 = 11 语义（9 基础 + SuperInc/SuperDec），canonical 占 [0, 11)。
+TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
+{
+    Vmc4Options opts;
+    opts.seed        = 0xDEADBEEF;
+    opts.aliasCount  = 0;   // 关闭别名，只测 canonical 双射
+    VmInstance instance(opts);
+
+    const auto bytes = mappingOf(instance);
+    std::vector<uint8_t> sorted = bytes;
+    std::sort(sorted.begin(), sorted.end());
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        EXPECT_EQ(sorted[i], static_cast<uint8_t>(i))
+            << "mapped bytes must be a bijection over [0, kSupportedCount)";
+    }
+    EXPECT_EQ(bytes[0], instance.haltByte());
+
+    const auto& order = instance.handlerOrder();
+    EXPECT_EQ(order.size(), 10u) << "handler order covers the 10 compute/control opcodes";
+    std::vector<VmOpcode> sortedOrder = order;
+    std::sort(sortedOrder.begin(), sortedOrder.end(),
+              [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
+    std::vector<VmOpcode> expected = {VmOpcode::Copy,   VmOpcode::Unary,  VmOpcode::Binary,
+                                      VmOpcode::Compare, VmOpcode::Convert, VmOpcode::Jump,
+                                      VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
+                                      VmOpcode::SuperDec};
+    EXPECT_EQ(sortedOrder, expected) << "handler order must be a permutation of the supported set";
+}
+
+// P2-3：编码器发射实例映射字节（bytecodes 里的 opcode 不是固定 0x10/0x20 等）。
+TEST(Vmc4BackendTest, EncoderEmitsInstanceMappedOpcodeBytes)
+{
+    Vmc4Options opts;
+    opts.seed = 0x777;
+    VmInstance instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("map", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::ICONST_3),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             3, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    const auto& code = prog->bytecodes;
+    // 第一字节是 entry 块的 Jump opcode（实例映射字节）。
+    ASSERT_FALSE(code.empty());
+    EXPECT_EQ(code[0], instance.opcodeFor(VmOpcode::Jump));
+    // bytecodes 里至少出现一次 Return 的实例字节（RETURN 指令）。
+    EXPECT_NE(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::Return)),
+              code.end());
+    // 固定值必须不再出现（映射已随机化，0x10/0x20 等几乎必然不是映射值；
+    // 这里只断言 Jump 的固定值 0x20 不等于实例映射值，防止回归到固定编码）。
+    EXPECT_NE(static_cast<uint8_t>(instance.opcodeFor(VmOpcode::Jump)),
+              static_cast<uint8_t>(0x20))
+        << "Jump must not retain its fixed MVP byte";
+}
+
+// P2-4：解释器发射的 case 常量使用实例映射字节。
+TEST(Vmc4BackendTest, InterpreterUsesInstanceMappedCaseLabels)
+{
+    Vmc4Options opts;
+    opts.seed = 0xABC;
+    VmInstance instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("cas", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "case1");
+
+    // Copy 的每个实例字节（canonical + 别名）都必须有 case。
+    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Copy)) {
+        char copyCase[64];
+        std::snprintf(copyCase, sizeof(copyCase), "case 0x%02x /*COPY*/",
+                      static_cast<unsigned>(b));
+        EXPECT_NE(src.find(copyCase), std::string::npos)
+            << "switch case must use the instance-mapped Copy byte 0x" << std::hex
+            << static_cast<unsigned>(b) << std::dec << "\n"
+            << src;
+    }
+    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
+        char haltCase[64];
+        std::snprintf(haltCase, sizeof(haltCase), "case 0x%02x /*HALT*/",
+                      static_cast<unsigned>(b));
+        EXPECT_NE(src.find(haltCase), std::string::npos)
+            << "HALT case must use the instance-mapped halt byte 0x" << std::hex
+            << static_cast<unsigned>(b) << std::dec << "\n"
+            << src;
+    }
+    // 支持集外不发射 case（防御：任意未映射字节走 default）。
+    EXPECT_EQ(src.find("case 0xff"), std::string::npos)
+        << "no unmapped byte may have a dedicated case\n"
+        << src;
+}
+
+// P2-5：实例 seed 派生 —— 同主 seed + 同身份 → 同实例 seed；不同身份 → 不同。
+TEST(Vmc4BackendTest, InstanceSeedDerivationMixesIdentity)
+{
+    EXPECT_EQ(vmc4DeriveInstanceSeed(0x11, 0xAA), vmc4DeriveInstanceSeed(0x11, 0xAA));
+    EXPECT_NE(vmc4DeriveInstanceSeed(0x11, 0xAA), vmc4DeriveInstanceSeed(0x11, 0xBB));
+    EXPECT_NE(vmc4DeriveInstanceSeed(0x11, 0xAA), vmc4DeriveInstanceSeed(0x22, 0xAA));
+    EXPECT_NE(vmc4DeriveInstanceSeed(0x11, 0xAA), vmc4DeriveInstanceSeed(0x22, 0xBB));
+}
+
+// P2-6：per-class 语义 —— 同主 seed 下两个类实例的映射不同（跨实例 ISA 独立）。
+TEST(Vmc4BackendTest, PerClassInstancesDivergeAcrossClasses)
+{
+    Vmc4Options opts;
+    opts.seed = 42;
+    VmInstance classA(opts, vmc4DeriveInstanceSeed(opts.seed, 0xAAA00001));
+    VmInstance classB(opts, vmc4DeriveInstanceSeed(opts.seed, 0xBBB00002));
+
+    EXPECT_NE(mappingOf(classA), mappingOf(classB))
+        << "per-class instances must have independent opcode mappings";
+    EXPECT_NE(classA.handlerOrder(), classB.handlerOrder());
+}
+
+// ===========================================================================
+// fail-closed 边界全集：每个 MVP 未支持的 RegIR family 必须编码失败并给原因。
+// （对象 family 在 VM 无 JVM 对象模型/引用管理/异常语义，强行支持会破坏
+// 语义保真，按 fail-closed 哲学保留字节码。）
+// ===========================================================================
+
+// P2-7：StoreField（PUTFIELD）。
+TEST(Vmc4BackendTest, FailClosedOnStoreField)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("store", "(Ltest/Box;II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new FieldInsnNode(Opcodes::PUTFIELD,
+                                                   ca::str::Utf8StringRef::from_cstr("test/Box"),
+                                                   ca::str::Utf8StringRef::from_cstr("x"),
+                                                   ca::str::Utf8StringRef::from_cstr("I")),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 3, instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_FALSE(reason.empty());
+}
+
+// P2-8：ArrayLoad / ArrayStore。
+TEST(Vmc4BackendTest, FailClosedOnArrayAccess)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto load = encodeMethod("at", "([II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IALOAD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    EXPECT_EQ(load, nullptr);
+    EXPECT_FALSE(reason.empty());
+
+    std::string reason2;
+    auto store = encodeMethod("st", "([III)I",
+                              {
+                                  new VarInsnNode(Opcodes::ALOAD, 0),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new VarInsnNode(Opcodes::ILOAD, 2),
+                                  new InsnNode(Opcodes::IASTORE),
+                                  new InsnNode(Opcodes::ICONST_0),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              3, 3, instance, reason2);
+    EXPECT_EQ(store, nullptr);
+    EXPECT_FALSE(reason2.empty());
+}
+
+// P2-9：Call（INVOKESTATIC）。
+TEST(Vmc4BackendTest, FailClosedOnCall)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("call", "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                   ca::str::Utf8StringRef::from_cstr("test/Helper"),
+                                                   ca::str::Utf8StringRef::from_cstr("twice"),
+                                                   ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                   false),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1, 1, instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_FALSE(reason.empty());
+}
+
+// P2-10：Allocate（NEW）。
+TEST(Vmc4BackendTest, FailClosedOnAllocate)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("make", "()Ljava/lang/Object;",
+                             {
+                                 new TypeInsnNode(Opcodes::NEW,
+                                                  ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
+                                 new InsnNode(Opcodes::DUP),
+                                 new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                                   ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
+                                                   ca::str::Utf8StringRef::from_cstr("<init>"),
+                                                   ca::str::Utf8StringRef::from_cstr("()V"),
+                                                   false),
+                                 new InsnNode(Opcodes::ARETURN),
+                             },
+                             2, 1, instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_FALSE(reason.empty());
+}
+
+// P2-11：Intrinsic（ARRAYLENGTH → Intrinsic("array.length")）。
+TEST(Vmc4BackendTest, FailClosedOnIntrinsic)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("len", "([I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new InsnNode(Opcodes::ARRAYLENGTH),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1, 1, instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_FALSE(reason.empty());
+}
+
+// P2-12：Barrier（MONITORENTER）。
+TEST(Vmc4BackendTest, FailClosedOnBarrier)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("sync", "(Ljava/lang/Object;)I",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new InsnNode(Opcodes::MONITORENTER),
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new InsnNode(Opcodes::MONITOREXIT),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1, 1, instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_FALSE(reason.empty());
+}
+
+// P2-13：Throw（ATHROW）。
+TEST(Vmc4BackendTest, FailClosedOnThrow)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("raise", "(Ljava/lang/Throwable;)V",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new InsnNode(Opcodes::ATHROW),
+                             },
+                             1, 1, instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_FALSE(reason.empty());
+}
+
+// P2-14：Switch（TABLESWITCH）。
+TEST(Vmc4BackendTest, FailClosedOnSwitchTerminator)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto* l1 = new LabelNode();
+    auto* l2 = new LabelNode();
+    auto* l3 = new LabelNode();
+    auto prog = encodeMethod("sw", "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new TableSwitchInsnNode(0, 1, l3->label,
+                                                         {l1->label, l2->label}),
+                                 l1,
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IRETURN),
+                                 l2,
+                                 new InsnNode(Opcodes::ICONST_2),
+                                 new InsnNode(Opcodes::IRETURN),
+                                 l3,
+                                 new InsnNode(Opcodes::ICONST_3),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1, 1, instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_FALSE(reason.empty());
+}
+
+// P2-15：异常区域（try/catch 表）整体 fail-closed。
+TEST(Vmc4BackendTest, FailClosedOnExceptionRegion)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+
+    auto* start = new LabelNode();
+    auto* end   = new LabelNode();
+    auto* handler = new LabelNode();
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "divCatch", "(II)I",
+                         {
+                             start,
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new VarInsnNode(Opcodes::ILOAD, 1),
+                             new InsnNode(Opcodes::IDIV),
+                             new InsnNode(Opcodes::IRETURN),
+                             end,
+                             new JumpInsnNode(Opcodes::GOTO, handler->label),
+                             handler,
+                             new InsnNode(Opcodes::POP),
+                             new InsnNode(Opcodes::ICONST_1),
+                             new InsnNode(Opcodes::IRETURN),
+                         },
+                         2, 2);
+    mn->tryCatchBlocks.push_back(
+        new TryCatchBlockNode(start->label, end->label, handler->label,
+                              ca::str::Utf8StringRef::from_cstr("java/lang/ArithmeticException")));
+
+    auto prog = encodeMethodNode(std::move(mn), instance, reason);
+    EXPECT_EQ(prog, nullptr);
+    EXPECT_NE(reason.find("exception"), std::string::npos)
+        << "reason should mention exception regions\n"
+        << reason;
+}
+
+// P2-16：构造器/类初始化器在 backend 层整体跳过（不产 C_SOURCE、不标 native）。
+TEST(Vmc4BackendTest, SkipsConstructorAndClinit)
+{
+    for (const auto& ctorName : {"<init>", "<clinit>"}) {
+        auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, ctorName, "()V",
+                                 {
+                                     new InsnNode(Opcodes::RETURN),
+                                 },
+                                 0, 0);
+        CompilerMethod cm;
+        cm.methodNode = method.get();
+        CompilerClass cls;
+        cls.methods.push_back(cm);
+
+        Vmc4Backend   backend;
+        ca::str::Utf8StringArena arena;
+        CodeConverter            converter(arena);
+        auto          blocks = converter.convert(*method);
+        auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
+
+        EXPECT_EQ(result.kind, BackendResult::Kind::NONE) << ctorName;
+        EXPECT_FALSE(method->access & Opcodes::ACC_NATIVE) << ctorName;
+    }
+}
+
+// ===========================================================================
+// Phase 3：ALT 别名 + super-operator + bogus handler。
+// ===========================================================================
+
+// P3-1：每个语义的字节集合 = 1 + aliasCount，不同语义集合互不相交（全局双射）。
+TEST(Vmc4BackendTest, AliasBytesAreDisjointPerSemantics)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x1234;
+    opts.aliasCount = 2;
+    VmInstance instance(opts);
+
+    const auto ops = {VmOpcode::Halt, VmOpcode::Copy, VmOpcode::Binary, VmOpcode::Jump,
+                      VmOpcode::Return, VmOpcode::SuperInc};
+    std::set<uint8_t> seen;
+    for (const auto op : ops) {
+        const auto& bytes = instance.opcodeBytesFor(op);
+        EXPECT_EQ(bytes.size(), 3u) << "1 canonical + 2 aliases";
+        for (uint8_t b : bytes) {
+            EXPECT_TRUE(seen.insert(b).second)
+                << "byte 0x" << std::hex << static_cast<unsigned>(b)
+                << std::dec << " appears in more than one semantics";
+        }
+    }
+}
+
+// P3-2：aliasCount=0 时每语义单字节，映射回到 Phase 2 形态。
+TEST(Vmc4BackendTest, AliasCountZeroYieldsSingleBytes)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x99;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    for (const auto op : {VmOpcode::Copy, VmOpcode::Return, VmOpcode::Binary}) {
+        EXPECT_EQ(instance.opcodeBytesFor(op).size(), 1u);
+        EXPECT_EQ(instance.pickOpcodeByte(op, 12345), instance.opcodeFor(op));
+    }
+}
+
+// P3-3：pickOpcodeByte 确定性 + 只在集合内选字节。
+TEST(Vmc4BackendTest, PickOpcodeByteIsDeterministicAndInSet)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x777;
+    opts.aliasCount = 2;
+    VmInstance instance(opts);
+
+    const auto& bytes = instance.opcodeBytesFor(VmOpcode::Copy);
+    std::set<uint8_t> hit;
+    for (uint64_t nonce = 0; nonce < 64; ++nonce) {
+        const uint8_t b = instance.pickOpcodeByte(VmOpcode::Copy, nonce);
+        EXPECT_NE(std::find(bytes.begin(), bytes.end(), b), bytes.end())
+            << "picked byte must be within the semantics' byte set";
+        hit.insert(b);
+        // 同 nonce 同结果（可复现）。
+        EXPECT_EQ(instance.pickOpcodeByte(VmOpcode::Copy, nonce), b);
+    }
+    EXPECT_GT(hit.size(), 1u) << "with 3 bytes, 64 nonces must hit multiple aliases";
+}
+
+// P3-4：编码器在字节流里使用别名（同一语义出现多个不同字节）。
+TEST(Vmc4BackendTest, EncoderUsesAliasBytesInStream)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x555;
+    opts.aliasCount = 1;
+    VmInstance instance(opts);
+    std::string reason;
+    // loopSum 有多条边拷贝（Copy 指令），nonce 不同 → 大概率覆盖 canonical+别名。
+    auto* loop = new LabelNode();
+    auto* done = new LabelNode();
+    auto prog = encodeMethod("sumAlias", "(I)I",
+                             {
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 2),
+                                 loop,
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new IincInsnNode(2, 1),
+                                 new JumpInsnNode(Opcodes::GOTO, loop->label),
+                                 done,
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 3, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    const auto& copyBytes = instance.opcodeBytesFor(VmOpcode::Copy);
+    std::set<uint8_t> hit;
+    for (uint8_t b : prog->bytecodes) {
+        if (std::find(copyBytes.begin(), copyBytes.end(), b) != copyBytes.end()) hit.insert(b);
+    }
+    EXPECT_GT(hit.size(), 1u)
+        << "bytecode stream must use both canonical and alias Copy bytes (deterministic seed)";
+}
+
+// P3-5：解释器为同一语义发射全部字节的 case（canonical + 别名共享 body）。
+TEST(Vmc4BackendTest, InterpreterEmitsAliasCases)
+{
+    Vmc4Options opts;
+    opts.seed       = 0xABC;
+    opts.aliasCount = 2;
+    VmInstance instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("alias", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "alias1");
+
+    // COPY 的 3 个字节各有一个 case 标签。
+    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Copy)) {
+        char label[64];
+        std::snprintf(label, sizeof(label), "case 0x%02x /*COPY*/",
+                      static_cast<unsigned>(b));
+        EXPECT_NE(src.find(label), std::string::npos)
+            << "alias case missing for Copy byte 0x" << std::hex
+            << static_cast<unsigned>(b) << std::dec << "\n"
+            << src;
+    }
+    // IfNest 形态的 OR 链覆盖全部字节。
+    Vmc4Options ifOpts;
+    ifOpts.dispatcherKind = VmDispatcherKind::IfNest;
+    ifOpts.seed           = 0xABC;
+    ifOpts.aliasCount     = 2;
+    VmInstance ifInstance(ifOpts);
+    std::string reason2;
+    auto ifProg = encodeMethod("aliasIf", "(II)I",
+                               {
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new InsnNode(Opcodes::IADD),
+                                   new InsnNode(Opcodes::IRETURN),
+                               },
+                               2, 2, ifInstance, reason2);
+    ASSERT_NE(ifProg, nullptr) << reason2;
+    const std::string ifSrc = VmInterpreterEmitter::emit(*ifProg, ifInstance, "aliasIf");
+    const std::string chain = emitOpcodeByteOrChainForTest(ifInstance, VmOpcode::Copy);
+    EXPECT_NE(ifSrc.find(chain), std::string::npos)
+        << "IfNest must match Copy via OR chain over all alias bytes\n"
+        << ifSrc;
+}
+
+// P3-6：bogus handler 注入——函数存在但 dispatch 结构不引用。
+TEST(Vmc4BackendTest, BogusHandlersEmittedButNotReferenced)
+{
+    Vmc4Options opts;
+    opts.seed          = 0xDEAD;
+    opts.bogusHandlers = 2;
+    VmInstance instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("bog", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "bog1");
+
+    EXPECT_NE(src.find("mj2x_vm_bogus_bog1_0"), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_bogus_bog1_1"), std::string::npos) << src;
+    // dispatch 结构（switch case / 函数指针表 / goto 表）不得引用 bogus 函数名。
+    // 简化断言：bogus 名字只出现在自身定义处（2 处：定义行 + 注释/调用各算），
+    // 这里断言出现的次数不超过定义次数。
+    const size_t count = countOccurrencesForTest(src, "mj2x_vm_bogus_bog1_0");
+    EXPECT_LE(count, 2u) << "bogus handler must not be referenced by dispatch structures\n"
+                         << src;
+}
+
+// P3-7：super-operator 折叠——Binary(x,1,Add/Sub) → SuperInc/SuperDec。
+TEST(Vmc4BackendTest, SuperOpFoldsIncDec)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    // int inc(int x) { return x + 1; }  int dec(int x) { return x - 1; }
+    auto prog = encodeMethod("incDec", "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::ISUB),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    const auto& code = prog->bytecodes;
+    EXPECT_NE(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::SuperInc)), code.end())
+        << "x+1 must fold to SuperInc";
+    EXPECT_NE(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::SuperDec)), code.end())
+        << "x-1 must fold to SuperDec";
+    // 折叠后普通 Binary 不再出现在该实例的编码中（该实例内 Binary 字节不应出现
+    // ——注意：别的方法可能用 Binary，这里 aliasCount=0 且本方法只有 +1/-1）。
+    EXPECT_EQ(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::Binary)), code.end())
+        << "folded Inc/Dec must not emit plain Binary";
+}
+
+// P3-8：handler 形态等价变形——确定性选择 + 解释器按实例发射 alt body。
+TEST(Vmc4BackendTest, HandlerFormMorphingIsDeterministicAndEmitted)
+{
+    // 两个不同 seed 的实例对 Unary/Compare 的形态选择应确定性且可能不同。
+    Vmc4Options optsA;
+    optsA.seed = 0x111;
+    Vmc4Options optsB;
+    optsB.seed = 0x222;
+    VmInstance a(optsA);
+    VmInstance b(optsB);
+    EXPECT_EQ(a.usesAltHandlerForm(VmOpcode::Unary), a.usesAltHandlerForm(VmOpcode::Unary));
+    EXPECT_EQ(a.usesAltHandlerForm(VmOpcode::Compare), a.usesAltHandlerForm(VmOpcode::Compare));
+
+    // 找一个使用 alt 形态的实例，验证解释器发射的是 alt body。
+    VmInstance* altInst = nullptr;
+    for (auto* cand : {&a, &b}) {
+        if (cand->usesAltHandlerForm(VmOpcode::Unary) ||
+            cand->usesAltHandlerForm(VmOpcode::Compare)) {
+            altInst = cand;
+            break;
+        }
+    }
+    ASSERT_NE(altInst, nullptr) << "at least one instance should use an alt form";
+    std::string reason;
+    auto prog = encodeMethod("morph", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, *altInst, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, *altInst, "morph1");
+    if (altInst->usesAltHandlerForm(VmOpcode::Compare)) {
+        EXPECT_NE(src.find("result=!(a!=b);"), std::string::npos)
+            << "alt Compare form must be emitted when selected\n"
+            << src;
+        EXPECT_EQ(src.find("case 0: result=(a==b);"), std::string::npos)
+            << "default Compare form must not appear when alt is selected\n"
+            << src;
+    } else {
+        EXPECT_NE(src.find("case 0: result=(a==b);"), std::string::npos)
+            << "default Compare form must be emitted when alt is not selected\n"
+            << src;
+    }
+}
+
+// P4-1：expected trace surface 描述——确定性 + 覆盖红队契约字段。
+TEST(Vmc4BackendTest, TraceSurfaceDescribesInstanceDeterministically)
+{
+    Vmc4Options opts;
+    opts.seed           = 0xC0FFEE;
+    opts.dispatcherKind = VmDispatcherKind::IfNest;
+    opts.aliasCount     = 2;
+    opts.bogusHandlers  = 1;
+    VmInstance a(opts);
+    VmInstance b(opts);
+
+    const std::string descA = a.describe();
+    const std::string descB = b.describe();
+    EXPECT_EQ(descA, descB) << "same instance must produce identical trace surface";
+
+    EXPECT_NE(descA.find("dispatcher: if_nest"), std::string::npos) << descA;
+    EXPECT_NE(descA.find("instanceSeed:"), std::string::npos) << descA;
+    EXPECT_NE(descA.find("aliasCount: 2"), std::string::npos) << descA;
+    EXPECT_NE(descA.find("bogusHandlers: 1"), std::string::npos) << descA;
+    EXPECT_NE(descA.find("handlerOrder:"), std::string::npos) << descA;
+    EXPECT_NE(descA.find("opcodeTable:"), std::string::npos) << descA;
+    // 每个支持的语义都有条目。
+    for (const auto op : {VmOpcode::Copy, VmOpcode::Binary, VmOpcode::Return,
+                          VmOpcode::SuperInc, VmOpcode::Halt}) {
+        EXPECT_NE(descA.find(vmOpcodeName(op)), std::string::npos)
+            << "trace surface must list every supported semantics\n"
+            << descA;
+    }
+
+    // 不同 seed 实例的描述不同（红队可据此断言跨实例差异）。
+    Vmc4Options other = opts;
+    other.seed        = 0xBEEF;
+    VmInstance c(other);
+    EXPECT_NE(descA, c.describe());
 }

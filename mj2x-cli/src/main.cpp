@@ -18,6 +18,7 @@
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
 #include "jzip/memory_segment.hpp"
+#include "typed/cast.hpp"
 #include "jzip/zip_io.hpp"
 #include "zip/checksum.hpp"
 
@@ -64,6 +65,18 @@ static void printUsage()
     printf("  --llvm-tool <clang|llc>    LLVM IR compiler path (default: clang)\n");
     printf("  --generate-cmake <dir>     Generate a standalone CMake project for emitted C\n");
     printf("  --generate-xmake <dir>     Generate a standalone xmake project with mj2x-crt\n");
+    printf("  --vmc4-dispatcher <kind>   VMC4: dispatcher 形态 switch_table|funcptr_table|"
+           "computed_goto|if_nest|state_dispatcher（默认 switch_table；computed_goto 需 "
+           "GCC/clang 编译）\n");
+    printf("  --vmc4-seed <hex>          VMC4: 主 seed，驱动每实例 opcode 映射/handler 顺序"
+           "（同 seed 同输入 → 同产物，可复现构建）\n");
+    printf("  --vmc4-granularity <g>     VMC4: 实例粒度 class|method（默认 class；method 每方法"
+           "独立 VM 实例，最强可变性、体积膨胀最大）\n");
+    printf("  --vmc4-alias <n>           VMC4: 每语义 ALT 别名字节数 0..3（默认 1；0 关闭别名）\n");
+    printf("  --vmc4-bogus <n>           VMC4: 注入的不可达假 handler 数 0..4（默认 1；"
+           "0 关闭，只污染静态分析不参与执行）\n");
+    printf("  --vmc4-trace-surface <f>   VMC4: 写 expected trace surface 文件（mjdbg 红队契约，"
+           "同 seed+同输入 → 同内容）\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
     printf("  --help                     Print help\n");
 }
@@ -165,6 +178,10 @@ struct CliOptions
     std::string              vmc4Dispatcher      = "switch_table";
     uint64_t                 vmc4Seed            = 0;
     bool                     vmc4SeedSelected    = false;
+    std::string              vmc4Granularity     = "class";
+    int                      vmc4Alias           = 1;
+    int                      vmc4Bogus           = 1;
+    std::string              vmc4TraceSurface;   ///< 非空时写 expected trace surface 文件
 };
 
 static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
@@ -621,6 +638,18 @@ int main(int argc, char** argv)
             options.vmc4Seed = std::strtoull(argv[++i], nullptr, 0);
             options.vmc4SeedSelected = true;
         }
+        else if (arg == "--vmc4-granularity" && i + 1 < argc) {
+            options.vmc4Granularity = argv[++i];
+        }
+        else if (arg == "--vmc4-alias" && i + 1 < argc) {
+            options.vmc4Alias = std::atoi(argv[++i]);
+        }
+        else if (arg == "--vmc4-bogus" && i + 1 < argc) {
+            options.vmc4Bogus = std::atoi(argv[++i]);
+        }
+        else if (arg == "--vmc4-trace-surface" && i + 1 < argc) {
+            options.vmc4TraceSurface = argv[++i];
+        }
         else if (arg == "--stackc-exception-check" && i + 1 < argc)
             options.stackcExceptionCheck = argv[++i];
         else if (arg == "-h" || arg == "--help") {
@@ -900,6 +929,13 @@ int main(int argc, char** argv)
                 vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::StateDispatcher;
             else
                 vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::SwitchTable;
+            // 实例粒度：per-class（默认，同类方法共享 VM 实例）/ per-method。
+            if (options.vmc4Granularity == "method" || options.vmc4Granularity == "per-method")
+                vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerMethod;
+            else
+                vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerClass;
+            vmc4Opts.aliasCount = options.vmc4Alias;
+            vmc4Opts.bogusHandlers = options.vmc4Bogus;
             vmc4Backend->setOptions(vmc4Opts);
             // VMC4 复用同样的 native-loader clinit 注入（NativeLoaderPostprocessor）。
             nativeSourceBackend = vmc4Backend.get();
@@ -962,6 +998,14 @@ int main(int argc, char** argv)
 
     int rc = pipeline.run();
     if (rc != 0) return rc;
+
+    // VMC4：写 expected trace surface 文件（mjdbg 红队契约，同 seed+同输入 → 同内容）。
+    if (!options.vmc4TraceSurface.empty() &&
+        options.cBackendKind == CEmitterBackend::Vmc4 && nativeSourceBackend != nullptr) {
+        auto* vmc4 = typed::cast<mj2x::Vmc4Backend>(nativeSourceBackend);
+        std::ofstream ts(options.vmc4TraceSurface, std::ios::binary | std::ios::trunc);
+        if (ts) ts << vmc4->traceSurface();
+    }
 
     std::string                  cppSource;
     mj2x::NativeSourceArtifact nativeArtifact{mj2x::NativeSourceLanguage::C99, {}, {}};

@@ -3,88 +3,167 @@
 ///
 /// @details
 /// VmInstance 是 VMC4 的中心抽象——它描述一个 VM 实例的全部可变维度：
-///   - opcode 编号映射表（RegInstructionKind/VmOpcode → 实例 opcode 字节）
-///   - handler 顺序（dispatch 表/handler 函数的排列）
+///   - opcode 编号映射表（VmOpcode → 实例 opcode 字节集合，含 ALT 别名）
+///   - handler 顺序（dispatch 表/handler 的排列）
 ///   - dispatcher 算法（5 种之一）
-///   - operand 编码细节（MVP 固定变长）
 ///   - 驱动上述维度的 seed
 ///
-/// MVP（Phase 0+1）的可变性维度：
-///   - dispatcherKind：5 种 dispatcher 真实落地（Phase 1）
-///   - opcodeTable / handlerOrder：**固定恒等映射**（Phase 2 引入随机化）
-///   - seed：记录但不驱动随机化（Phase 2 起驱动）
-///
-/// Phase 2/3 会扩展：opcodeTable 随机化、ALT 别名、super-operator、bogus handler、
-/// per-method/per-class 粒度。这些已记入 doc_ai/vmc4_multi_vm_design.md §4.5/§9。
+/// 已落地的可变性维度：
+///   - opcodeTable：每个语义 → 互不相交的实例字节集合（Phase 2 canonical +
+///     Phase 3 ALT 别名），编码器按指令 nonce 确定性选字节
+///   - handlerOrder：支持集 opcode 的洗牌排列（决定 dispatch 结构出现顺序）
+///   - dispatcherKind：5 种 dispatcher 真实落地
+///   - 粒度：per-class / per-method（backend 按身份哈希派生）
+///   - super-operator：编码器把 Binary(x,+1)/(x,-1) 折叠为 SuperInc/SuperDec
+///   - bogus handler：解释器源码注入不可达假 handler（只污染静态分析）
 ///
 /// ### 可复现构建不变量
 ///
-/// 相同 seed → 相同 VmInstance。所有随机维度必须从 seed 确定性派生，禁止引入
-/// 未播种的随机源（如系统 rand()）。MVP 阶段随机化未启用，但 seed 字段已保留，
-/// 保证 Phase 2 启用时接口不变。
+/// 相同 instanceSeed → 相同 VmInstance（字节集合/handler 顺序/别名全同）。
+/// 所有随机维度都从 instanceSeed 确定性派生，禁止未播种的随机源。
+/// backend 从 CLI 主 seed 派生 instanceSeed = mix(mainSeed, 类/方法身份哈希)。
 #pragma once
 
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
 
+#include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace mj2x {
 
 /// @brief VMC4 配置选项（由 CLI/注解传入 Vmc4Backend，再传给 VmInstance 构造）。
-///
-/// @details
-/// MVP 只暴露 dispatcher 选择。Phase 2 会加 seed 控制和粒度（per-method/per-class）。
 struct Vmc4Options
 {
     /// dispatcher 形态。默认 SwitchTable（最广平台兼容）。
     VmDispatcherKind dispatcherKind = VmDispatcherKind::SwitchTable;
 
-    /// seed（MVP 记录但不驱动随机化；Phase 2 起驱动 opcode 映射/handler 顺序）。
-    /// 默认 0 = 固定实例。非 0 时仍保证可复现（相同 seed 相同实例）。
+    /// 主 seed。backend 用它与类/方法身份哈希派生每个实例的 instanceSeed。
+    /// 默认 0 也是合法 seed（仍是确定性随机化的固定实例）。
     uint64_t seed = 0;
+
+    /// 实例粒度：per-class 同类方法共享一个 VmInstance（推荐默认，体积可控）；
+    /// per-method 每方法独立实例（最强可变性，代码膨胀最大）。
+    enum class Granularity
+    {
+        PerClass = 0,
+        PerMethod = 1,
+    };
+    Granularity granularity = Granularity::PerClass;
+
+    /// ALT 别名数：每个语义除 canonical 外再分配的额外 opcode 字节数（0..3）。
+    /// 别名扩大 opcode 空间并让同一语义在字节流里多次出现不同字节；
+    /// 解释器为同一语义的全部字节发射共享 handler。默认 1（体积/可变性平衡）。
+    int aliasCount = 1;
+
+    /// 注入的 bogus handler 数：解释器源码中出现但 dispatch 表不引用的
+    /// 假 handler（只污染静态分析，运行时永不命中）。
+    int bogusHandlers = 1;
 };
 
 /// @brief 一个 VM 实例的描述对象。
 ///
 /// @details
-/// 由 Vmc4Options 构造。解释器发射器（VmInterpreterEmitter）和编码器（VmEncoder）
-/// 都消费 VmInstance 来决定生成形态。MVP 的 VmInstance 只在 dispatcherKind 上有差异，
-/// 但抽象结构已为 Phase 2 的随机化维度预留字段。
+/// 由 Vmc4Options + instanceSeed 构造（instanceSeed 由 backend 从主 seed 与
+/// 类/方法身份哈希派生）。解释器发射器（VmInterpreterEmitter）和编码器（VmEncoder）
+/// 都消费 VmInstance 来决定生成形态：opcode 字节、handler 排列、dispatcher 结构。
 class VmInstance
 {
 public:
-    /// @brief 从配置构造 VM 实例。
+    /// @brief 从配置 + 实例 seed 构造 VM 实例。
     ///
     /// @details
-    /// 确定性：相同 options 产生相同实例。MVP 阶段只是把 dispatcherKind/seed 存下来，
-    /// Phase 2 会在此处用 seed 派生 opcodeTable/handlerOrder。
-    explicit VmInstance(const Vmc4Options& options);
+    /// 确定性：相同 options + instanceSeed 产生相同实例。instanceSeed == 0 时
+    /// 回落用 options.seed（便于直接构造）；backend 总是显式传入混合后的 seed。
+    VmInstance(const Vmc4Options& options, uint64_t instanceSeed = 0);
 
     /// dispatcher 形态（解释器发射据此选择生成路径）。
     VmDispatcherKind dispatcherKind() const { return dispatcherKind_; }
 
-    /// 驱动实例的 seed（可复现构建与日志）。
+    /// 主配置 seed（日志用）。
     uint64_t seed() const { return seed_; }
 
-    /// @brief 实例的简短标识（用于生成的函数名后缀，避免多实例命名冲突）。
+    /// 实际驱动本实例的 seed（配置 seed 与身份哈希混合后）。
+    uint64_t instanceSeed() const { return instanceSeed_; }
+
+    /// ALT 别名数。
+    int aliasCount() const { return aliasCount_; }
+
+    /// 注入的 bogus handler 数。
+    int bogusHandlers() const { return bogusHandlers_; }
+
+    /// @brief VmOpcode → 实例 canonical 字节。
     ///
     /// @details
-    /// MVP 固定为 dispatcher 名 + seed hex，如 "switch_table_0000000000000000"。
-    /// Phase 2 起 per-method 实例会附加方法哈希。
+    /// canonical 是该语义字节集合的第一个字节。编码器通常用 pickOpcodeByte
+    /// 按指令 nonce 在集合内选择；发射器的 Halt 哨兵等固定点用 canonical。
+    uint8_t opcodeFor(VmOpcode op) const
+    {
+        return opcodeBytes_[static_cast<uint8_t>(op)].front();
+    }
+
+    /// @brief VmOpcode → 全部实例字节（canonical 在前，后跟 ALT 别名）。
+    ///
+    /// @details
+    /// 不同语义的字节集合互不相交；同集合内字节数 = 1 + aliasCount。
+    const std::vector<uint8_t>& opcodeBytesFor(VmOpcode op) const
+    {
+        return opcodeBytes_[static_cast<uint8_t>(op)];
+    }
+
+    /// @brief 按指令 nonce 确定性选取该语义的一个实例字节。
+    ///
+    /// @details
+    /// 编码器每条指令递增 nonce；同一 nonce + 同一实例 → 同一字节（可复现）。
+    /// 字节在 canonical+别名集合内均匀伪随机选取。
+    uint8_t pickOpcodeByte(VmOpcode op, uint64_t nonce) const;
+
+    /// @brief 该语义的 handler 是否使用等价变形形态（Phase 3 handler 形态维度）。
+    ///
+    /// @details
+    /// 由实例 seed 确定性决定（与 opcode 映射独立），仅对提供 bodyAlt 的语义
+    /// 有意义；语义不变（e2e 验证）。
+    bool usesAltHandlerForm(VmOpcode op) const;
+
+    /// @brief 支持 opcode 的洗牌排列（handler 在 dispatch 结构里的出现顺序）。
+    ///
+    /// @details
+    /// 计算/控制流 opcode（不含 Halt）。发射器按此顺序生成 case/表项/if 链。
+    const std::vector<VmOpcode>& handlerOrder() const { return handlerOrder_; }
+
+    /// 实例的 Halt canonical 字节（停机哨兵，随映射随机化）。
+    uint8_t haltByte() const { return opcodeFor(VmOpcode::Halt); }
+
+    /// @brief 实例的简短标识（用于生成的函数名后缀，避免多实例命名冲突）。
     std::string instanceTag() const;
 
-    /// @brief MVP 是否支持该 opcode（handler 已实现）。
+    /// @brief 实例的确定性文本描述（mjdbg 红队 expected trace surface 契约）。
     ///
     /// @details
-    /// Phase 0 支持 Copy/Unary/Binary/Compare/Convert + Jump/Branch/Return。
-    /// 其余 opcode 的 handler 留待 Phase 2+。VmEncoder 在遇到不支持的 family 时
-    /// 应先 fail-closed，但此函数供解释器发射器决定生成哪些 handler。
-    static bool isOpcodeSupported(VmOpcode op);
+    /// 覆盖：dispatcher 形态、instanceSeed、aliasCount/bogusHandlers、每语义的
+    /// 实例字节集合、handler 顺序、alt-form 选择。同实例 → 同描述（可复现），
+    /// 供样本随附 trace surface 文件与红队观测比对。
+    std::string describe() const;
 
 private:
+    void buildOpcodeBytes();
+    void buildHandlerOrder();
+
     VmDispatcherKind dispatcherKind_;
     uint64_t         seed_;
+    uint64_t         instanceSeed_;
+    int              aliasCount_;
+    int              bogusHandlers_;
+    /// VmOpcode 值 → 该语义的实例字节集合（canonical 在前）。
+    std::array<std::vector<uint8_t>, 256> opcodeBytes_;
+    std::vector<VmOpcode> handlerOrder_;
 };
+
+/// @brief 主 seed 与身份哈希混合派生实例 seed（确定性）。
+///
+/// @details
+/// 同主 seed + 同身份 → 同实例 seed；不同身份（类/方法）→ 不同实例 seed。
+uint64_t vmc4DeriveInstanceSeed(uint64_t mainSeed, uint64_t identityHash);
 
 }   // namespace mj2x
