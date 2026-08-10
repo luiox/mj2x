@@ -89,22 +89,12 @@ std::vector<uint8_t> makeHiddenInterfaceDefaultClassBytes(const std::string& hid
 }
 
 static void emitClassRegistrationCall(MethodNode* clinit, ca::str::Utf8StringRef className,
-                                      const std::string& nativeLoaderResourcePath,
-                                      const std::string& nativeLoaderTempSuffix, int classId)
+                                      int classId)
 {
-    // NativeLoader.load 必须在 registerNativesForClass 之前执行（先加载 native 库
-    // 才能绑定 native 方法）。clinit 此时已被 protectClassInitializer 清空，故用
-    // add 顺序累积：load 指令在前，registerNatives 在后。
-    if (!nativeLoaderResourcePath.empty()) {
-        clinit->instructions.add(new LdcInsnNode(nativeLoaderResourcePath));
-        clinit->instructions.add(new LdcInsnNode(nativeLoaderTempSuffix));
-        clinit->instructions.add(
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
-                               ca::str::ZUtf8StringRef::from_static(native_loader::kClassName),
-                               ca::str::ZUtf8StringRef::from_static("load"),
-                               ca::str::ZUtf8StringRef::from_static(native_loader::kLoadDesc),
-                               false));
-    }
+    // native 库加载已收敛到 Loader.<clinit>（CLoaderPostprocessor 注入一次
+    // NativeLoader.load）：JVM 保证首次调用 Loader 的 static 方法前先执行其
+    // <clinit>，故转换类 clinit 只需 registerNativesForClass，不再重复携带
+    // 相同的资源路径字符串与调用。
     clinit->instructions.add(new LdcInsnNode(classId));
     clinit->instructions.add(new LdcInsnNode(Type::getObjectType(className)));
     clinit->instructions.add(
@@ -167,11 +157,7 @@ void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, Compil
     clinit->access &= ~Opcodes::ACC_NATIVE;
     clinit->instructions.clear();
     clearMethodDebugAndHandlers(clinit);
-    emitClassRegistrationCall(clinit,
-                              clazz.classNode->name,
-                              jarNativeLoaderResourcePath,
-                              jarNativeLoaderTempSuffix,
-                              idIt->second);
+    emitClassRegistrationCall(clinit, clazz.classNode->name, idIt->second);
     clinit->instructions.add(new InsnNode(Opcodes::RETURN));
     clinit->maxStack  = 2;
     clinit->maxLocals = 0;

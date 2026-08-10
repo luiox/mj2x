@@ -348,13 +348,6 @@ StackCBackend::StackCBackend()
 
 StackCBackend::~StackCBackend() = default;
 
-void StackCBackend::setJarNativeLoaderResourcePath(const std::string& resourcePath,
-                                                   const std::string& tempSuffix)
-{
-    impl_->jarNativeLoaderResourcePath = resourcePath;
-    impl_->jarNativeLoaderTempSuffix   = tempSuffix;
-}
-
 void StackCBackend::setExceptionCheckLite(bool lite) { impl_->exceptionCheckLite = lite; }
 
 // ============================================================

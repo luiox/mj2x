@@ -848,10 +848,6 @@ int main(int argc, char** argv)
             if (!options.cOutputPath.empty()) stackCBackend->setOutputPath(options.cOutputPath);
             if (options.stackcExceptionCheck == "lite") stackCBackend->setExceptionCheckLite(true);
             nativeSourceBackend = stackCBackend.get();
-            if (jarNativeLoaderEnabled) {
-                stackCBackend->setJarNativeLoaderResourcePath(
-                    nativeResourcePath, nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
-            }
             pipeline.registerBackend(std::move(stackCBackend));
         }
     }
@@ -881,7 +877,13 @@ int main(int argc, char** argv)
          options.cBackendKind == CEmitterBackend::RegC)) {
         // StackC 和 RegC 均使用 RegisterNatives 动态绑定，需要 mj2x/cloader/Loader
         // 桥接类（其 native 方法 registerNativesForClass 由本侧 _mj2x_register_for_class 实现）。
-        pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+        // native 库加载注入到 Loader.<clinit>（只注入一次，转换类 clinit 不再重复 load）。
+        auto cloaderPostprocessor = std::make_unique<mj2x::CLoaderPostprocessor>();
+        if (jarNativeLoaderEnabled) {
+            cloaderPostprocessor->setNativeLoaderResourcePath(
+                nativeResourcePath, nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix);
+        }
+        pipeline.registerPostprocessor(std::move(cloaderPostprocessor));
     }
     if (jarNativeLoaderEnabled) {
         // injectClinitCalls 决定是否往每个 modified 类的 <clinit> 前插 NativeLoader.load：

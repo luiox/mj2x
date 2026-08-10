@@ -41,13 +41,7 @@ public:
     /// 设置 finalize 时写入的 .c 文件路径（空则只记录到 generatedSource）。
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
 
-    /// @brief 配置 JAR 场景下 clinit 里 NativeLoader.load 的资源路径和临时后缀。
-    /// @details StackC 在自己的 protectClassInitializer 里重写 clinit 时使用，
-    /// 不走 NativeLoaderPostprocessor（因 RegisterNatives 绑定耦合）。
-    void setJarNativeLoaderResourcePath(const std::string& resourcePath,
-                                        const std::string& tempSuffix);
-
-    /// @brief 设置 pending 异常检查模式（默认 full）。
+    /// 设置 pending 异常检查模式（默认 full）。
     /// @details full：每个 JNI 调用后都插 `(*env)->ExceptionCheck`（当前行为）。
     ///          lite：只保留异常 handler 边界处的检查（对标 JNIC 的稀疏检查）；
     ///          无 handler 的方法依赖 native 返回时 JVM 自动传播 pending 异常。

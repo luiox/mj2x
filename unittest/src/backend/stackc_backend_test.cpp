@@ -705,10 +705,11 @@ TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall)
     EXPECT_EQ(source.find("bridge_method"), std::string::npos) << source;
 }
 
-TEST(StackCBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge)
+TEST(StackCBackendTest, ClinitRegistersBridgeWithoutNativeLoad)
 {
+    // native 库加载已收敛到 Loader.<clinit>（CLoaderPostprocessor 注入一次
+    // NativeLoader.load），转换类 clinit 只保留 registerNativesForClass。
     StackCBackend backend;
-    backend.setJarNativeLoaderResourcePath("META-INF/mj2x/native/app.dll", ".dll");
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "test", "()V", {new InsnNode(Opcodes::RETURN)});
     CompilerMethod cm;
@@ -727,20 +728,20 @@ TEST(StackCBackendTest, JarNativeLoaderRunsBeforeRegistrationBridge)
 
     auto* clinit = findClassMethod(cls, "<clinit>", "()V");
     ASSERT_NE(clinit, nullptr);
-    ASSERT_EQ(clinit->instructions.size(), 7);
-    auto* loaderCall = clinit->instructions.get(2);
-    ASSERT_EQ(loaderCall->getType(), AbstractInsnNode::METHOD_INSN);
-    auto* loaderInvoke = static_cast<MethodInsnNode*>(loaderCall);
-    EXPECT_EQ(loaderInvoke->owner.to_std_string(), "mj2x/runtime/NativeLoader");
-    EXPECT_EQ(loaderInvoke->name.to_std_string(), "load");
-    EXPECT_EQ(loaderInvoke->desc.to_std_string(), "(Ljava/lang/String;Ljava/lang/String;)V");
-
-    auto* bridgeCall = clinit->instructions.get(5);
+    // [ldc classId, ldc Class, invokestatic registerNativesForClass, return]
+    ASSERT_EQ(clinit->instructions.size(), 4);
+    auto* bridgeCall = clinit->instructions.get(2);
     ASSERT_EQ(bridgeCall->getType(), AbstractInsnNode::METHOD_INSN);
     auto* bridgeInvoke = static_cast<MethodInsnNode*>(bridgeCall);
     EXPECT_EQ(bridgeInvoke->owner.to_std_string(), "mj2x/cloader/Loader");
     EXPECT_EQ(bridgeInvoke->name.to_std_string(), "registerNativesForClass");
     EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(ILjava/lang/Class;)V");
+    for (auto* insn = clinit->instructions.getFirst(); insn; insn = insn->nextInsn) {
+        if (insn->getType() == AbstractInsnNode::METHOD_INSN) {
+            auto* mi = static_cast<MethodInsnNode*>(insn);
+            EXPECT_NE(mi->owner.to_std_string(), "mj2x/runtime/NativeLoader");
+        }
+    }
 }
 
 TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy)

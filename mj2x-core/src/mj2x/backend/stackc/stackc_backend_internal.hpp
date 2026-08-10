@@ -520,8 +520,6 @@ struct StackCBackend::Impl
     std::unordered_map<std::string, size_t> stringPoolLengths;
     std::vector<ca::u16>                    stringPoolUnits;
     std::deque<std::string>                 stableUtf8Storage;
-    std::string                             jarNativeLoaderResourcePath;
-    std::string                             jarNativeLoaderTempSuffix;
     /// pending 异常检查模式：true = lite（只保留 handler 边界检查）。
     bool exceptionCheckLite = false;
 

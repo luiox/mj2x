@@ -2161,7 +2161,22 @@ TEST(CliTest, CompileJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable)
         callsLoader = callsLoader || (call->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
                                       call->name.to_std_string() == "load");
     }
-    EXPECT_TRUE(callsLoader);
+    // native 库加载已收敛到 Loader.<clinit>（转换类 clinit 只 registerNativesForClass）。
+    EXPECT_FALSE(callsLoader);
+    auto                     loaderBytes = readJarEntry(outJar, "mj2x/cloader/Loader.class");
+    ca::str::Utf8StringArena loaderArena;
+    auto                     loaderCn = readClassFromBytes(loaderBytes, loaderArena);
+    auto*                    loaderInit = findMethod(*loaderCn, "<clinit>");
+    ASSERT_NE(loaderInit, nullptr);
+    bool loaderCallsLoad = false;
+    for (auto* insn : loaderInit->instructions.toArray()) {
+        if (insn->getType() != jbytecode::tree::AbstractInsnNode::METHOD_INSN) continue;
+        auto* call           = static_cast<jbytecode::tree::MethodInsnNode*>(insn);
+        loaderCallsLoad = loaderCallsLoad ||
+                          (call->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
+                           call->name.to_std_string() == "load");
+    }
+    EXPECT_TRUE(loaderCallsLoad);
 }
 
 TEST(CliTest, CompileRegCJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable)
