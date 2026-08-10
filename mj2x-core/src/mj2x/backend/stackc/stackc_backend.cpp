@@ -230,6 +230,10 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
             }
         }
     }
+    for (auto& [lbl, bi] : labelToIndex) {
+        (void)lbl;
+        (void)bi;
+    }
     // handler 入口深度恒为 1（异常对象在 s[0]）。
     std::unordered_set<size_t> handlerBlocks;
     for (auto* lbl : handlerLabels) {
@@ -262,26 +266,35 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
             // 出边：终结器目标 + fallthrough（物理下一块）。
             std::vector<size_t> succs;
             Block*              fallthrough = (bi + 1 < n) ? blocks[bi + 1] : nullptr;
-            const MIRKind      lastKind = b->nodes.empty() ? MIRKind::NOP
-                                                           : b->nodes.back()->kind;
+            // 终结指令判定需跳过块尾伪指令（FRAME/LABEL/NOP）：StackMap 帧可能
+            // 落在终结指令之后（如 `goto 82` 后紧跟 82 的帧），若把 FRAME 当终结
+            // 会误走 fallthrough 而丢失 goto 语义（ThreadsController.checkCollision）。
+            const MIRNode* lastReal = nullptr;
+            for (auto it = b->nodes.rbegin(); it != b->nodes.rend(); ++it) {
+                const MIRKind k = (*it)->kind;
+                if (k == MIRKind::FRAME || k == MIRKind::LABEL || k == MIRKind::NOP) continue;
+                lastReal = it->get();
+                break;
+            }
+            const MIRKind lastKind = lastReal != nullptr ? lastReal->kind : MIRKind::NOP;
             auto pushLabel = [&](jbytecode::core::Label* lbl) {
                 auto found = labelToIndex.find(lbl);
                 if (found != labelToIndex.end()) succs.push_back(found->second);
             };
             switch (lastKind) {
             case MIRKind::BRANCH:
-                pushLabel(static_cast<const MIRBranch*>(b->nodes.back().get())->targetLabel);
+                pushLabel(static_cast<const MIRBranch*>(lastReal)->targetLabel);
                 if (fallthrough != nullptr) succs.push_back(bi + 1);
                 break;
             case MIRKind::BRANCH_ZERO:
-                pushLabel(static_cast<const MIRBranchZero*>(b->nodes.back().get())->targetLabel);
+                pushLabel(static_cast<const MIRBranchZero*>(lastReal)->targetLabel);
                 if (fallthrough != nullptr) succs.push_back(bi + 1);
                 break;
             case MIRKind::UNCOND_BRANCH:
-                pushLabel(static_cast<const MIRUncondBranch*>(b->nodes.back().get())->targetLabel);
+                pushLabel(static_cast<const MIRUncondBranch*>(lastReal)->targetLabel);
                 break;
             case MIRKind::SWITCH: {
-                const auto* sw = static_cast<const MIRSwitch*>(b->nodes.back().get());
+                const auto* sw = static_cast<const MIRSwitch*>(lastReal);
                 for (const auto& c : sw->cases) pushLabel(c.targetLabel);
                 pushLabel(sw->defaultLabel);
                 break;
@@ -309,7 +322,20 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
     }
     for (size_t bi = 0; bi < n; ++bi) {
         if (entryDepths[bi] < 0) {
-            printf("[StackCBackend] depth unresolved: block %d (idx %zu)\n", blocks[bi]->id, bi);
+            std::string labels;
+            for (auto& node : blocks[bi]->nodes) {
+                if (node->kind == MIRKind::LABEL) {
+                    labels += std::to_string(
+                                  static_cast<const MIRLabel*>(node.get())->labelNode
+                                      ->bytecodeOffset) +
+                              " ";
+                }
+            }
+            printf("[StackCBackend] depth unresolved: block %d (idx %zu) labels=[%s] preds? "
+                   "terminator=%d\n",
+                   blocks[bi]->id, bi, labels.c_str(),
+                   blocks[bi]->nodes.empty() ? -1
+                                             : static_cast<int>(blocks[bi]->nodes.back()->kind));
             return false;
         }
     }
@@ -962,3 +988,4 @@ void StackCBackend::Impl::emitNodeWithExceptionDispatch(const MIRNode*      node
 }
 
 }   // namespace mj2x
+
