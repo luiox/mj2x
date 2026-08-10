@@ -146,6 +146,61 @@ std::string stackCRuntimePrelude()
     src.emitLine("}");
     src.emitLine("");
 
+    // ---- 缓存慢路径辅助：把 Get*ID / find_class + CAS 发布收敛为单函数，
+    //      使用点只保留「快路径读 + 慢路径调用」两行，压缩生成体积（对标 JNIC
+    //      cached_c_N 的集中初始化）。失败时返回 NULL 且可能设置 pending 异常，
+    //      由调用方既有的 ExceptionCheck / NULL trap 处理。----
+    src.emitLine("static jmethodID _mj2x_mid_slow(JNIEnv* env, jmethodID* slot, jclass cls, "
+                 "const char* name, const char* desc, int is_static) {");
+    src.indent();
+    src.emitLine("jmethodID loaded = is_static ? (*env)->GetStaticMethodID(env, cls, name, desc) "
+                 ": (*env)->GetMethodID(env, cls, name, desc);");
+    src.emitLine("if (loaded != NULL) {");
+    src.indent();
+    src.emitLine("void* previous = _mj2x_cache_cas((void* volatile*)slot, NULL, loaded);");
+    src.emitLine("return (jmethodID)(previous != NULL ? previous : loaded);");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("return NULL;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("");
+    src.emitLine("static jfieldID _mj2x_fid_slow(JNIEnv* env, jfieldID* slot, jclass cls, "
+                 "const char* name, const char* desc, int is_static) {");
+    src.indent();
+    src.emitLine("jfieldID loaded = is_static ? (*env)->GetStaticFieldID(env, cls, name, desc) "
+                 ": (*env)->GetFieldID(env, cls, name, desc);");
+    src.emitLine("if (loaded != NULL) {");
+    src.indent();
+    src.emitLine("void* previous = _mj2x_cache_cas((void* volatile*)slot, NULL, loaded);");
+    src.emitLine("return (jfieldID)(previous != NULL ? previous : loaded);");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("return NULL;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("");
+    src.emitLine("static jclass _mj2x_class_slow(JNIEnv* env, jclass* slot, jclass owner, "
+                 "const char* name) {");
+    src.indent();
+    src.emitLine("jclass loaded = (jclass)_mj2x_find_class(env, owner, name);");
+    src.emitLine("if (loaded != NULL) {");
+    src.indent();
+    src.emitLine("jclass global = (jclass)(*env)->NewGlobalRef(env, loaded);");
+    src.emitLine("(*env)->DeleteLocalRef(env, loaded);");
+    src.emitLine("if (global != NULL) {");
+    src.indent();
+    src.emitLine("void* previous = _mj2x_cache_cas((void* volatile*)slot, NULL, global);");
+    src.emitLine("return (jclass)(previous != NULL ? previous : global);");
+    src.dedent();
+    src.emitLine("}");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("return NULL;");
+    src.dedent();
+    src.emitLine("}");
+    src.emitLine("");
+
     return src.str();
 }
 

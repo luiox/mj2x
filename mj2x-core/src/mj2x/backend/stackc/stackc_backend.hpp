@@ -47,6 +47,13 @@ public:
     void setJarNativeLoaderResourcePath(const std::string& resourcePath,
                                         const std::string& tempSuffix);
 
+    /// @brief 设置 pending 异常检查模式（默认 full）。
+    /// @details full：每个 JNI 调用后都插 `(*env)->ExceptionCheck`（当前行为）。
+    ///          lite：只保留异常 handler 边界处的检查（对标 JNIC 的稀疏检查）；
+    ///          无 handler 的方法依赖 native 返回时 JVM 自动传播 pending 异常。
+    ///          热循环内省掉每轮 ExceptionCheck 的 JNI 边界开销。
+    void setExceptionCheckLite(bool lite);
+
     /// 生成代码访问器（测试用）。
     const std::string& generatedHeader() const { return headerCode_; }
     /// 生成代码访问器（测试用）。

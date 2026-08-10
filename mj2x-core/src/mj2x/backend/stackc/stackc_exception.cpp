@@ -47,6 +47,12 @@ void StackCBackend::Impl::emitNullPointerTrap(const std::string& refExpr, codege
 
 void StackCBackend::Impl::emitPendingExceptionCheck(codegen::CSourceStream& out, int indent)
 {
+    // lite 模式：无异常 handler 时省略检查——JNI 调用失败设置的 pending 异常会在
+    // native 方法返回时由 JVM 自动传播（对标 JNIC 稀疏检查）。有 handler 的
+    // dispatch 边界必须保留（否则异常无法路由到 catch 块）。
+    if (exceptionCheckLite && currentExceptionDispatchTarget.empty()) {
+        return;
+    }
     // indent 是模板内嵌的绝对空格数（8）；dispatch 分支内容在模板内再进一级（12 空格 = 3 层）。
     const int          level = indent / 4;
     const std::string  pad   = std::string(static_cast<size_t>(indent), ' ');

@@ -21,10 +21,9 @@ using codegen::hex64;
 void StackCBackend::Impl::emitFieldIdCache(const std::string& cacheName,
                                            const std::string& localName,
                                            const std::string& classExpr, const std::string& name,
-                                           const std::string& desc, bool isStatic,
-                                           codegen::CSourceStream& out)
+                                            const std::string& desc, bool isStatic,
+                                            codegen::CSourceStream& out)
 {
-    const std::string staticPrefix = isStatic ? "Static" : "";
     out.emitLine("if ((*env)->ExceptionCheck(env)) {");
     out.indent();
     if (!currentExceptionDispatchTarget.empty()) {
@@ -58,19 +57,11 @@ void StackCBackend::Impl::emitFieldIdCache(const std::string& cacheName,
     out.appendLineStart("if (_MJ2X_UNLIKELY(").append(localName).append(" == NULL)) {");
     out.newLine();
     out.indent();
-    out.appendLineStart("jfieldID loaded = (*env)->Get").append(staticPrefix)
-        .append("FieldID(env, ").append(classExpr).append(", ").append(cStringLiteral(name))
-        .append(", ").append(cStringLiteral(desc)).append(");");
+    out.appendLineStart(localName).append(" = _mj2x_fid_slow(env, &").append(cacheName)
+        .append(", ").append(classExpr).append(", ").append(cStringLiteral(name))
+        .append(", ").append(cStringLiteral(desc)).append(", ").append(isStatic ? "1" : "0")
+        .append(");");
     out.newLine();
-    out.emitLine("if (loaded != NULL) {");
-    out.indent();
-    out.appendLineStart("void* previous = _mj2x_cache_cas((void* volatile*)&").append(cacheName)
-        .append(", NULL, loaded);");
-    out.newLine();
-    out.appendLineStart(localName).append(" = (jfieldID)(previous != NULL ? previous : loaded);");
-    out.newLine();
-    out.dedent();
-    out.emitLine("}");
     out.dedent();
     out.emitLine("}");
     emitPendingExceptionCheck(out, 8);
@@ -78,11 +69,10 @@ void StackCBackend::Impl::emitFieldIdCache(const std::string& cacheName,
 
 void StackCBackend::Impl::emitMethodIdCache(const std::string& cacheName,
                                             const std::string& localName,
-                                            const std::string& classExpr, const std::string& name,
-                                            const std::string& desc, bool isStatic,
-                                            codegen::CSourceStream& out)
+                                             const std::string& classExpr, const std::string& name,
+                                             const std::string& desc, bool isStatic,
+                                             codegen::CSourceStream& out)
 {
-    const std::string staticPrefix = isStatic ? "Static" : "";
     out.emitLine("if ((*env)->ExceptionCheck(env)) {");
     out.indent();
     if (!currentExceptionDispatchTarget.empty()) {
@@ -116,19 +106,11 @@ void StackCBackend::Impl::emitMethodIdCache(const std::string& cacheName,
     out.appendLineStart("if (_MJ2X_UNLIKELY(").append(localName).append(" == NULL)) {");
     out.newLine();
     out.indent();
-    out.appendLineStart("jmethodID loaded = (*env)->Get").append(staticPrefix)
-        .append("MethodID(env, ").append(classExpr).append(", ").append(cStringLiteral(name))
-        .append(", ").append(cStringLiteral(desc)).append(");");
+    out.appendLineStart(localName).append(" = _mj2x_mid_slow(env, &").append(cacheName)
+        .append(", ").append(classExpr).append(", ").append(cStringLiteral(name))
+        .append(", ").append(cStringLiteral(desc)).append(", ").append(isStatic ? "1" : "0")
+        .append(");");
     out.newLine();
-    out.emitLine("if (loaded != NULL) {");
-    out.indent();
-    out.appendLineStart("void* previous = _mj2x_cache_cas((void* volatile*)&").append(cacheName)
-        .append(", NULL, loaded);");
-    out.newLine();
-    out.appendLineStart(localName).append(" = (jmethodID)(previous != NULL ? previous : loaded);");
-    out.newLine();
-    out.dedent();
-    out.emitLine("}");
     out.dedent();
     out.emitLine("}");
     emitPendingExceptionCheck(out, 8);
@@ -157,28 +139,9 @@ void StackCBackend::Impl::emitClassRefCache(const std::string& className,
     out.appendLineStart("if (_MJ2X_UNLIKELY(lc == NULL)) {");
     out.newLine();
     out.indent();
-    out.appendLineStart("jclass loaded = (jclass)").append(trackLocalRefExpr(
-        "_mj2x_find_class(env, _mj2x_owner_class, \"" + name + "\")")).append(";");
+    out.appendLineStart("lc = _mj2x_class_slow(env, &").append(cacheName)
+        .append(", _mj2x_owner_class, \"").append(name).append("\");");
     out.newLine();
-    out.appendLineStart("if (loaded != NULL) {");
-    out.newLine();
-    out.indent();
-    out.appendLineStart("jclass global = (jclass)(*env)->NewGlobalRef(env, loaded);");
-    out.newLine();
-    out.appendLineStart("(*env)->DeleteLocalRef(env, loaded);");
-    out.newLine();
-    out.appendLineStart("if (global != NULL) {");
-    out.newLine();
-    out.indent();
-    out.appendLineStart("void* previous = _mj2x_cache_cas((void* volatile*)&").append(cacheName)
-        .append(", NULL, global);");
-    out.newLine();
-    out.appendLineStart("lc = (jclass)(previous != NULL ? previous : global);");
-    out.newLine();
-    out.dedent();
-    out.emitLine("}");
-    out.dedent();
-    out.emitLine("}");
     out.dedent();
     out.emitLine("}");
     out.appendLineStart("if (_MJ2X_UNLIKELY(lc == NULL)) {");

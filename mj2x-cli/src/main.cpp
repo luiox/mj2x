@@ -43,6 +43,8 @@ static void printUsage()
     printf("  --backend <stackc|regc|llvm> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
+    printf("  --stackc-exception-check <full|lite> StackC pending 异常检查密度（默认 full；"
+           "lite 仅保留 handler 边界检查，对标 JNIC 稀疏检查）\n");
     printf("  --emit-native-dir <dir>     RegC: 多文件输出（mj2x_regc_api.h + runtime.c + 每类 "
            "m_<Class>.c + entry.c，库代码与用户代码分离）\n");
     printf(
@@ -150,6 +152,7 @@ struct CliOptions
     bool                     llvmToolSelected = false;
     bool                     dumpMIR          = false;
     bool                     regcTraceCalls   = false;
+    std::string              stackcExceptionCheck = "full";
 };
 
 static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
@@ -585,6 +588,8 @@ int main(int argc, char** argv)
             options.dumpMIR = true;
         else if (arg == "--regc-trace-calls")
             options.regcTraceCalls = true;
+        else if (arg == "--stackc-exception-check" && i + 1 < argc)
+            options.stackcExceptionCheck = argv[++i];
         else if (arg == "-h" || arg == "--help") {
             printUsage();
             return 0;
@@ -640,6 +645,10 @@ int main(int argc, char** argv)
     }
     if (options.regcTraceCalls && options.cBackendKind != CEmitterBackend::RegC) {
         fprintf(stderr, "--regc-trace-calls requires --backend regc.\n");
+        return 1;
+    }
+    if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
+        fprintf(stderr, "--stackc-exception-check must be full or lite.\n");
         return 1;
     }
     if (!options.nativeDirOutput.empty() && options.cBackendKind != CEmitterBackend::RegC) {
@@ -837,6 +846,7 @@ int main(int argc, char** argv)
         else {
             auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
             if (!options.cOutputPath.empty()) stackCBackend->setOutputPath(options.cOutputPath);
+            if (options.stackcExceptionCheck == "lite") stackCBackend->setExceptionCheckLite(true);
             nativeSourceBackend = stackCBackend.get();
             if (jarNativeLoaderEnabled) {
                 stackCBackend->setJarNativeLoaderResourcePath(

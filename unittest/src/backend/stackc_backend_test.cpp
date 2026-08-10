@@ -340,9 +340,8 @@ TEST(StackCBackendTest, FieldAccess)
     EXPECT_NE(result.text.find("GetIntField"), std::string::npos);
     EXPECT_NE(result.text.find("static jfieldID fid_"), std::string::npos);
     EXPECT_NE(result.text.find("_mj2x_cache_load((void* volatile*)&fid_"), std::string::npos);
-    EXPECT_NE(result.text.find("_mj2x_cache_cas((void* volatile*)&fid_"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_fid_slow(env, &fid_"), std::string::npos);
     EXPECT_NE(result.text.find("jfieldID fid_local = NULL"), std::string::npos);
-    EXPECT_NE(result.text.find("GetFieldID(env, lc, \"x\", \"I\")"), std::string::npos);
     EXPECT_NE(result.text.find("GetIntField(env, s["), std::string::npos);
 }
 
@@ -372,9 +371,8 @@ TEST(StackCBackendTest, InvokeMethod)
     EXPECT_NE(result.text.find("CallStaticVoidMethod"), std::string::npos);
     EXPECT_NE(result.text.find("static jmethodID smid_"), std::string::npos);
     EXPECT_NE(result.text.find("_mj2x_cache_load((void* volatile*)&smid_"), std::string::npos);
-    EXPECT_NE(result.text.find("_mj2x_cache_cas((void* volatile*)&smid_"), std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_mid_slow(env, &smid_"), std::string::npos);
     EXPECT_NE(result.text.find("jmethodID mid_local = NULL"), std::string::npos);
-    EXPECT_NE(result.text.find("GetStaticMethodID"), std::string::npos);
     EXPECT_NE(result.text.find("CallStaticVoidMethod(env, lc, mid_local)"), std::string::npos);
 }
 
@@ -435,8 +433,7 @@ TEST(StackCBackendTest, InvokeSpecialLooksUpDeclaringClass)
 
     // 类引用走 static jclass CAS 缓存（对标 JNIC cached_c_N），不再每处 find_class。
     EXPECT_NE(result.text.find("static jclass _mj2x_cc_"), std::string::npos);
-    EXPECT_NE(result.text.find("_mj2x_cache_cas((void* volatile*)&_mj2x_cc_"),
-              std::string::npos);
+    EXPECT_NE(result.text.find("_mj2x_class_slow(env, &_mj2x_cc_"), std::string::npos);
     EXPECT_NE(result.text.find("CallNonvirtualVoidMethod(env, s[1].l, lc, mid"),
               std::string::npos);
 }
@@ -627,8 +624,10 @@ TEST(StackCBackendTest, ClassLookupsUseOwnerClassLoaderHelper)
     EXPECT_NE(result.text.find("_mj2x_find_class(env, _mj2x_owner_class, \"[Lpkg/Foo;\")"),
               std::string::npos)
         << result.text;
-    EXPECT_NE(result.text.find("_mj2x_find_class(env, _mj2x_owner_class, \"pkg/Helper\")"),
-              std::string::npos)
+    // invoke 的类引用走 _mj2x_class_slow 缓存慢路径（JNIC cached_c_N 形态）。
+    EXPECT_NE(result.text.find("_mj2x_class_slow(env, &_mj2x_cc_"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("\"pkg/Helper\")"), std::string::npos)
         << result.text;
     EXPECT_EQ(result.text.find("FindClass(env, \"pkg/Foo\")"), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("FindClass(env, \"[Lpkg/Foo;\")"), std::string::npos) << result.text;

@@ -329,6 +329,8 @@ void StackCBackend::setJarNativeLoaderResourcePath(const std::string& resourcePa
     impl_->jarNativeLoaderTempSuffix   = tempSuffix;
 }
 
+void StackCBackend::setExceptionCheckLite(bool lite) { impl_->exceptionCheckLite = lite; }
+
 // ============================================================
 // Main compile method
 // ============================================================
