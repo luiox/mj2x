@@ -219,6 +219,15 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
 
+    // 实例方法在 MVP 不转：SSA 会把 this 作为 id0 参数进 RegIR，而 JNI wrapper 从
+    // regs[0] 开始填显式参数，两者错位一槽读参即错值；且对象操作本就 fail-closed。
+    // 与 <init>/<clinit> 同策略，待 Phase 2 支持对象 family 后再放开。
+    if (!isStatic) {
+        printf("[Vmc4Backend] Skipping %s.%s%s: instance method not virtualized in MVP\n",
+               className.c_str(), methodName.c_str(), methodDesc.c_str());
+        return backendResult;
+    }
+
     // 参数/返回类型二次防御：含对象引用的方法在编码阶段已 fail-closed，这里提前拒绝
     // 避免无谓的 SSA 构建。
     const auto retKind = returnKind(methodDesc);

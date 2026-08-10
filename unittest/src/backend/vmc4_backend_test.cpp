@@ -16,9 +16,11 @@
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/vmc4/vm_encoder.hpp"
 #include "mj2x/backend/vmc4/vm_interpreter_emit.hpp"
+#include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/backend/vmc4/vmc4_instance.hpp"
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "mj2x/mir/register_ir/reg_block.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
@@ -50,7 +52,7 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name,
 std::unique_ptr<VmProgram> encodeMethod(const std::string& name, const std::string& desc,
                                         std::initializer_list<AbstractInsnNode*> insns,
                                         int maxStack, int maxLocals, const VmInstance& instance,
-                                        std::string& reason)
+                                        std::string& reason, const RegFunction** outReg = nullptr)
 {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack,
                          maxLocals);
@@ -64,7 +66,49 @@ std::unique_ptr<VmProgram> encodeMethod(const std::string& name, const std::stri
     auto        reg = lowering.lower(*ssa, reason);
     if (!reg) return nullptr;
     eliminateDeadRegInstructions(*reg);
+    if (outReg) *outReg = reg.get();
     return VmEncoder::encode(*reg, instance, reason);
+}
+
+/// @brief 计算 RegIR 中使用的最大寄存器索引（与 EncoderState::scanComputeRegisters
+/// 同口径：指令 dest + Register 操作数 + terminator 操作数）。
+uint32_t maxComputeRegister(const RegFunction& reg)
+{
+    uint32_t maxId = 0;
+    auto     scan  = [&maxId](const RegOperand& op) {
+        if (op.kind == RegOperandKind::Register && op.reg.value > maxId)
+            maxId = static_cast<uint32_t>(op.reg.value);
+    };
+    for (const auto& blk : reg.blocks) {
+        for (const auto& ins : blk->instructions) {
+            if (ins.hasDest && ins.dest.id.value > maxId)
+                maxId = static_cast<uint32_t>(ins.dest.id.value);
+            switch (ins.kind) {
+            case RegInstructionKind::Copy:
+            case RegInstructionKind::Unary:
+            case RegInstructionKind::Convert:
+                scan(ins.value);
+                break;
+            case RegInstructionKind::Binary:
+            case RegInstructionKind::Compare:
+                scan(ins.lhs);
+                scan(ins.rhs);
+                break;
+            default: break;
+            }
+        }
+        const auto& term = blk->terminator;
+        std::visit([&scan](const auto& t) {
+            using T = std::decay_t<decltype(t)>;
+            if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                scan(t.condition);
+            } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
+                if (t.hasValue) scan(t.value);
+            }
+        },
+                   term);
+    }
+    return maxId;
 }
 
 }   // namespace
@@ -273,4 +317,137 @@ TEST(Vmc4ComputedGotoEmitTest, EmitsLabelsAsValuesMarker)
     const std::string src = VmInterpreterEmitter::emit(*prog, instance, "cgxyz");
     EXPECT_NE(src.find("goto *"), std::string::npos) << src;
     EXPECT_NE(src.find("&&mj2x_vm_op_"), std::string::npos) << src;
+}
+
+// ===========================================================================
+// 回归 1（P0-1）：常量槽必须隔离在计算寄存器之后，且相同字面量去重复用。
+// ===========================================================================
+TEST(Vmc4BackendTest, ConstantSlotsIsolatedFromComputeRegisters)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    const RegFunction* reg = nullptr;
+    // int addMul3(int a, int b) { return (a + b) * 3 + 3; }  —— 常量 3 出现两次应复用
+    auto prog = encodeMethod("addMul3", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::ICONST_3),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new InsnNode(Opcodes::ICONST_3),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             3, 2, instance, reason, &reg);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_NE(reg, nullptr);
+
+    const uint32_t maxCompute = maxComputeRegister(*reg);
+    int            threeCount = 0;
+    for (const auto& e : prog->constantPool) {
+        // 常量槽必须高于全部计算寄存器（含参数），否则会被计算指令的 dest 覆盖。
+        EXPECT_GT(e.destSlot, maxCompute)
+            << "constant slot " << e.destSlot << " overlaps compute registers [0, " << maxCompute
+            << "]";
+        if (e.type == VmType::I32 && e.intBits == 3) threeCount++;
+    }
+    EXPECT_EQ(threeCount, 1) << "literal 3 must be deduplicated to a single constant slot";
+    EXPECT_GE(prog->numRegs, maxCompute + 1 + static_cast<uint32_t>(prog->constantPool.size()));
+}
+
+// ===========================================================================
+// 回归 2（P0-2）：FuncPtrTable 的 dispatch body 末尾必须有 mj2x_vm_done label
+// 并写回 ctx->pc/status——缺失则 RETURN/BINARY 除零分支引用未定义 label。
+// ===========================================================================
+TEST(Vmc4BackendTest, FuncPtrDispatcherEmitsDoneLabel)
+{
+    Vmc4Options opts;
+    opts.dispatcherKind = VmDispatcherKind::FuncPtrTable;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("fptr", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "fptr1");
+    EXPECT_NE(src.find("mj2x_vm_done:"), std::string::npos)
+        << "done label missing in FuncPtrTable dispatch body\n"
+        << src;
+    EXPECT_NE(src.find("ctx->pc = pc; ctx->status = status;"), std::string::npos)
+        << "pc/status write-back missing in FuncPtrTable dispatch body\n"
+        << src;
+}
+
+// ===========================================================================
+// 回归 3（P0-3）：实例方法 MVP 必须 fail-closed（跳过，不产出 C 源码）。
+// ===========================================================================
+TEST(Vmc4BackendTest, SkipsInstanceMethodFailClosed)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC, "bump", "()I",
+                             {
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1, 1);
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    Vmc4Backend   backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
+
+    // 实例方法不转 VM：不产出 C_SOURCE，也不标 native。
+    EXPECT_EQ(result.kind, BackendResult::Kind::NONE);
+    EXPECT_TRUE(backend.generatedSource().empty());
+    EXPECT_FALSE(method->access & Opcodes::ACC_NATIVE);
+}
+
+// ===========================================================================
+// 回归 4（P1-2/P1-3）：runtime prelude 含饱和 f2i/f2l helper（无硬编码魔数），
+// SwitchTable 的非法 opcode 状态用 InvalidBytecode（2）而非魔法数 3。
+// ===========================================================================
+TEST(Vmc4BackendTest, PreludeHasSaturatingFloatConversionsAndNoStatusMagic)
+{
+    const std::string prelude = VmInterpreterEmitter::emitRuntimePrelude();
+    EXPECT_NE(prelude.find("mj2x_vm_f2i32"), std::string::npos) << prelude;
+    EXPECT_NE(prelude.find("mj2x_vm_f2i64"), std::string::npos) << prelude;
+    EXPECT_NE(prelude.find("(double)INT32_MAX + 1.0"), std::string::npos)
+        << "f2i32 saturation bound must derive from standard macros\n"
+        << prelude;
+    EXPECT_NE(prelude.find("(double)INT64_MAX"), std::string::npos)
+        << "f2i64 saturation bound must derive from standard macros\n"
+        << prelude;
+
+    Vmc4Options opts;
+    opts.dispatcherKind = VmDispatcherKind::SwitchTable;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("sw", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "sw1");
+    EXPECT_NE(src.find("status = (status!=0)?status:2u"), std::string::npos)
+        << "invalid-bytecode fallback must use status 2\n"
+        << src;
+    EXPECT_EQ(src.find("?status:3u"), std::string::npos)
+        << "no magic '3u' status fallback may survive\n"
+        << src;
 }

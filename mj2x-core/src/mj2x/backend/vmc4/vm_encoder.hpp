@@ -10,13 +10,14 @@
 /// RegIR 的虚拟寄存器（RegId）统一映射到 VM 寄存器索引（u16）。映射是**恒等映射**：
 ///   - RegId.value 直接作为 VM 寄存器索引（MVP 不做 per-instance 重映射，Phase 2 起
 ///     VmInstance.opcodeTable 会引入寄存器编号随机化）。
-///   - 字面量（RegOperandKind::IntLiteral/FloatLiteral）收集到 constantPool，分配
-///     高地址常量槽，prologue 预加载。
+///   - 字面量（RegOperandKind::IntLiteral/FloatLiteral）收集到 constantPool，编码前
+///     预扫描全部计算寄存器得到高水位，常量槽分配在其之后（与计算寄存器空间隔离，
+///     避免 SSA value id 密集递增导致的重叠），prologue 预加载。
 ///
 /// 寄存器文件布局（见 vm_opcode.hpp）：
 ///   [0 .. numInputs)         : 方法参数
-///   [numInputs .. numConsts) : 常量槽（prologue 从 constantPool 加载）
-///   [numConsts .. numRegs)   : 计算临时寄存器（= RegId.value 范围）
+///   [numInputs .. maxCompute): 计算临时寄存器（= RegId.value 范围）
+///   [maxCompute .. numRegs)  : 常量槽（prologue 从 constantPool 加载）
 ///
 /// ### 两遍编码
 ///

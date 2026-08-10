@@ -106,7 +106,8 @@ struct EncoderState
     /// 签名 = type(1B) + intBits(8B) / floatValue(8B)，用字符串当 key 简化去重。
     std::unordered_map<std::string, uint16_t> constSlotBySignature;
 
-    /// 常量寄存器槽的起始索引 = numInputs（参数之后就是常量槽）。
+    /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
+    /// 取决于计算寄存器扫描结果，而非固定 numInputs。
     uint16_t numInputs = 0;
 
     /// 已分配的最大寄存器索引 + 1（含参数、常量槽、计算寄存器）。
@@ -116,7 +117,50 @@ struct EncoderState
         : fn(f)
     {
         numInputs = static_cast<uint16_t>(f.parameters.size());
-        maxReg    = numInputs;
+        // 预扫描全部计算寄存器（指令 dest + Register 操作数），把常量槽隔离到
+        // 计算寄存器空间之外——否则常量槽与 SSA value id（密集递增）重叠，
+        // 常量复用或槽被后续 dest 覆盖后读参即错值。
+        maxReg = numInputs;
+        scanComputeRegisters();
+    }
+
+    /// @brief 第一遍：扫描所有指令的 dest 与 Register 操作数，抬高 maxReg。
+    ///
+    /// @details
+    /// 只观察 Register 操作数，字面量由 internConstant 在编码期分配槽位；
+    /// 由于 maxReg 已含全部计算寄存器，常量槽必然落在计算寄存器之后，互不重叠。
+    void scanComputeRegisters()
+    {
+        for (const auto& block : fn.blocks) {
+            for (const auto& ins : block->instructions) {
+                observeReg(static_cast<uint16_t>(ins.dest.id.value));
+                switch (ins.kind) {
+                case RegInstructionKind::Copy:
+                case RegInstructionKind::Unary:
+                    observeReg(static_cast<uint16_t>(ins.value.reg.value));
+                    break;
+                case RegInstructionKind::Binary:
+                case RegInstructionKind::Compare:
+                    observeReg(static_cast<uint16_t>(ins.lhs.reg.value));
+                    observeReg(static_cast<uint16_t>(ins.rhs.reg.value));
+                    break;
+                case RegInstructionKind::Convert:
+                    observeReg(static_cast<uint16_t>(ins.value.reg.value));
+                    break;
+                default: break;
+                }
+            }
+            const auto& term = block->terminator;
+            std::visit([&](const auto& t) {
+                using T = std::decay_t<decltype(t)>;
+                if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                    observeReg(static_cast<uint16_t>(t.condition.reg.value));
+                } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
+                    if (t.hasValue) observeReg(static_cast<uint16_t>(t.value.reg.value));
+                }
+            },
+                       term);
+        }
     }
 
     /// 更新 maxReg（计算寄存器索引来自 RegId.value）。
@@ -128,7 +172,8 @@ struct EncoderState
     /// @brief 为字面量分配/复用一个常量寄存器槽。
     ///
     /// @details
-    /// 常量槽从 numInputs 开始连续分配。相同签名的字面量复用同一槽（去重）。
+    /// 常量槽从 maxReg 高水位（已含全部计算寄存器）之后连续分配，与计算寄存器
+    /// 空间隔离。相同签名的字面量复用同一槽（去重）。
     /// 返回的索引写入 bytecodes 作为操作数，prologue 据此从 constantPool 预加载。
     uint16_t internConstant(VmType type, int64_t intBits, double floatValue)
     {
@@ -237,10 +282,8 @@ bool indexBlocks(EncoderState& ctx, std::string& reason)
 /// @brief 第二遍 A：计算每个 block 的字节码长度，填 blockTargets（起始 offset）。
 ///
 /// @details
-/// 因为指令长度固定（每条指令的字节数由 opcode + 隐含 operand 数决定），
-/// 可以不实际编码就累加长度。但为避免"长度计算与实际编码不一致"的风险，
-/// 这里采用更稳健的策略：先实际编码到临时缓冲，记录每 block 的 offset，再合并。
-/// 性能开销可接受（VM 方法体通常不大）。
+/// 一遍完成：按 block 顺序边编码边记录起始 offset（block 的偏移只取决于前面
+/// block 的字节数，故一遍即够）。末尾追加 Halt 作为停机哨兵。
 bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
 {
     prog.blockTargets.assign(ctx.fn.blocks.size(), 0);
@@ -516,11 +559,8 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     if (!layoutBlocks(ctx, *prog, reason)) return nullptr;
 
     // 填充常量池：constSlotBySignature 存 (签名 → 槽索引)，签名含 type+intBits+floatValue。
-    // 常量槽索引来自 maxReg 递增（可能被计算寄存器穿插，非连续），所以收集
-    // (slotIndex, entry) 对后按 slot 排序；解释器 prologue 按 entry 在数组中的顺序
-    // 写入，但 entry 自身记录它该落到哪个槽——为简化 prologue，这里同时输出
-    // (slotIndex, entry) 让 finalize 把 slot 索引编进解释器常量表。
-    // MVP 简化：constantPool 顺序就是排序后的槽顺序，prologue 知道每个 entry 的目标槽。
+    // 常量槽全部落在计算寄存器之后（EncoderState 构造期预扫描保证隔离），
+    // 收集 (slotIndex, entry) 对后按 slot 排序，prologue 按 entry.destSlot 写入。
     std::vector<std::pair<uint16_t, std::pair<std::string, VmConstantEntry>>> sortedConsts;
     for (const auto& kv : ctx.constSlotBySignature) {
         const std::string& sig = kv.first;

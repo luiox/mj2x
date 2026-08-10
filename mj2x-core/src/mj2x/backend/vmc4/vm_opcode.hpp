@@ -27,9 +27,11 @@
 ///
 /// ### 寄存器文件布局
 ///
-///   [0 .. numInputs)        : 方法参数（对应 RegFunction.parameters）
-///   [numInputs .. numConsts): 常量槽（prologue 从 VmConstantPool 加载）
-///   [numConsts .. numRegs)  : 计算临时寄存器（对应 RegIR 的虚拟寄存器）
+///   [0 .. numInputs)            : 方法参数（对应 RegFunction.parameters）
+///   [numInputs .. maxCompute)   : 计算临时寄存器（对应 RegIR 的虚拟寄存器，
+///                                 SSA value id 恒等映射）
+///   [maxCompute .. numRegs)     : 常量槽（prologue 从 VmConstantPool 加载，
+///                                 隔离在计算寄存器之后，避免 SSA 密集 id 重叠）
 ///
 /// ### MVP 支持范围
 ///

@@ -65,13 +65,18 @@ const char* kHandlerCopy =
     "            regs[dest] = regs[src];\n";
 
 /// UNARY: 取负/位取反
+/// 注意 I32（type 0）在 int32 域环绕：取负/取反结果必须截断回 int32（符号扩展），
+/// 否则 INT32_MIN 取负得到 +2147483648，与后续截断存储的值比较时出错。
 const char* kHandlerUnary =
     "            unsigned char op = code[pc++];\n"
     "            unsigned char type = code[pc++];\n"
     "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
     "            unsigned int src  = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
-    "            if (type == 0 || type == 1) {\n"
-    "                if (op == 0) regs[dest].i = -regs[src].i;\n"
+    "            if (type == 0) {\n"
+    "                if (op == 0) regs[dest].i = (int32_t)(0u - (uint32_t)regs[src].i);\n"
+    "                else regs[dest].i = (int32_t)(~(uint32_t)regs[src].i);\n"
+    "            } else if (type == 1) {\n"
+    "                if (op == 0) regs[dest].i = (int64_t)(0u - (uint64_t)regs[src].i);\n"
     "                else regs[dest].i = ~regs[src].i;\n"
     "            } else { regs[dest].f = -regs[src].f; }\n";
 
@@ -133,6 +138,7 @@ const char* kHandlerCompare =
     "            regs[dest].i = result;\n";
 
 /// CONVERT: 数值宽窄/整浮转换（向零截断，JVM 语义）
+/// 浮点→整数用饱和 helper（NaN→0、超界→min/max），C 原生 cast 对 NaN/超界是 UB。
 const char* kHandlerConvert =
     "            unsigned char from = code[pc++];\n"
     "            unsigned char to = code[pc++];\n"
@@ -146,8 +152,8 @@ const char* kHandlerConvert =
     "                else regs[dest].f = (double)v;\n"
     "            } else {\n"
     "                double v = regs[src].f;\n"
-    "                if (to == 0) regs[dest].i = (int32_t)v;\n"
-    "                else if (to == 1) regs[dest].i = (int64_t)v;\n"
+    "                if (to == 0) regs[dest].i = mj2x_vm_f2i32(v);\n"
+    "                else if (to == 1) regs[dest].i = mj2x_vm_f2i64(v);\n"
     "                else if (to == 2) regs[dest].f = (float)v;\n"
     "                else regs[dest].f = v;\n"
     "            }\n";
@@ -221,7 +227,7 @@ std::string emitSwitchDispatcher(const std::string& progName, const std::string&
         s += "            break;\n        }\n";
     }
     s += "        case 0x00 /*HALT*/:\n";
-    s += "        default: status = (status!=0)?status:3u; goto mj2x_vm_done;\n";
+    s += "        default: status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done;\n";
     s += "        }\n";
     s += "    }\n";
     s += "mj2x_vm_done:\n";
@@ -280,11 +286,13 @@ std::string emitFuncPtrDispatcher(const std::string& progName, const std::string
         s += kHandlers[i].body;
         s += "            break;\n        }\n";
     }
-    s += "        default: ctx->status = 3; ctx->pc = pc; return;\n";
+    s += "        default: ctx->status = 2; /* InvalidBytecode */ ctx->pc = pc; return;\n";
     s += "        }\n";
+    // RETURN handler 与 BINARY 除零分支都经 goto mj2x_vm_done 退出：此标签必须存在，
+    // 否则生成的 C 引用未定义 label 编译失败（其他 4 种 dispatcher 在入口函数末尾定义）。
+    s += "    mj2x_vm_done:\n";
     s += "        ctx->pc = pc; ctx->status = status;\n";
-    // 把 RETURN 的 goto mj2x_vm_done 转成 status 触发退出。
-    s += "        if (status != 0 || (pc > 0 && code[pc-1] == 0x22)) { ctx->status = (status!=0)?status:0; return; }\n";
+    s += "        return;\n";
     s += "    }\n";
     // 函数指针表（每项指向同一 dispatch_body，表的存在本身是间接调用的逆向特征）。
     s += "    static const mj2x_vm_handler_" + tag + " mj2x_vm_table_" + tag + "[256] = {\n";
@@ -299,7 +307,7 @@ std::string emitFuncPtrDispatcher(const std::string& progName, const std::string
     s += "    for (;;) {\n";
     s += "        unsigned char opcode = ctx->code[ctx->pc];\n";
     s += "        mj2x_vm_handler_" + tag + " h = mj2x_vm_table_" + tag + "[opcode];\n";
-    s += "        if (!h) { ctx->status = 3; break; }\n";   // HALT 或非法
+    s += "        if (!h) { ctx->status = 2; /* InvalidBytecode */ break; }\n";   // HALT 或非法
     s += "        h(ctx);\n";
     s += "        if (ctx->status != 0 || (ctx->pc > 0 && ctx->code[ctx->pc-1] == 0x22)) break;\n";
     s += "    }\n";
@@ -312,8 +320,8 @@ std::string emitComputedGotoDispatcher(const std::string& progName,
                                        const std::string& targetsName)
 {
     std::string s = emitCommonDecls(progName, targetsName);
-    s += "    static const void* mj2x_vm_labels[] = {\n";
-    s += "        [0x00] = &&mj2x_vm_halt";
+    // 所有槽默认指向 halt（防御非法 opcode：goto *NULL 是 UB），显式条目覆盖。
+    s += "    static const void* mj2x_vm_labels[256] = { [0 ... 255] = &&mj2x_vm_halt";
     for (size_t i = 0; i < kHandlerCount; ++i) {
         char e[64];
         std::snprintf(e, sizeof(e), ", [0x%02x] = &&mj2x_vm_op_%02x",
@@ -331,7 +339,7 @@ std::string emitComputedGotoDispatcher(const std::string& progName,
         s += "    }\n";
     }
     s += "mj2x_vm_halt:\n";
-    s += "    status = (status!=0)?status:3u;\n";
+    s += "    status = (status!=0)?status:2u /* InvalidBytecode */;\n";
     s += "mj2x_vm_done:\n";
     s += "    return status;\n";
     return s;
@@ -351,7 +359,7 @@ std::string emitIfNestDispatcher(const std::string& progName, const std::string&
         s += kHandlers[i].body;
         s += "        } else ";
     }
-    s += "{ status = (status!=0)?status:3u; goto mj2x_vm_done; }\n";
+    s += "{ status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done; }\n";
     s += "    }\n";
     s += "mj2x_vm_done:\n";
     s += "    return status;\n";
@@ -380,7 +388,7 @@ std::string emitStateDispatcher(const std::string& progName, const std::string& 
         s += "            break;\n        }\n";
     }
     s += "        case 0x00:\n";
-    s += "        default: state = 0; status = (status!=0)?status:3u; break;\n";
+    s += "        default: state = 0; status = (status!=0)?status:2u /* InvalidBytecode */; break;\n";
     s += "        }\n";
     s += "        if (pc > 0 && code[pc-1] == 0x22) { state = 0; }\n";   // RETURN 触发退出
     s += "    }\n";
@@ -423,6 +431,21 @@ std::string VmInterpreterEmitter::emitRuntimePrelude()
         "static int64_t mj2x_vm_rem_i64(int64_t a, int64_t b) {\n"
         "    if (a == INT64_MIN && b == -1) return 0;\n"
         "    return a % b;\n"
+        "}\n"
+        "/* JVM f2i/f2l 语义：NaN -> 0，向零截断；截断后超界才饱和（C cast 对超界/NaN 是 UB）。\n"
+        " * 饱和点取 (double)INTxx_MAX + 1.0 = 2^31/2^63（(double)INT64_MAX 因 53 位尾数\n"
+        " * 本就舍入为 2^63），不用硬编码魔数。 */\n"
+        "static int32_t mj2x_vm_f2i32(double v) {\n"
+        "    if (v != v) return 0;\n"
+        "    if (v >= (double)INT32_MAX + 1.0) return INT32_MAX;\n"
+        "    if (v < (double)INT32_MIN) return INT32_MIN;\n"
+        "    return (int32_t)v;\n"
+        "}\n"
+        "static int64_t mj2x_vm_f2i64(double v) {\n"
+        "    if (v != v) return 0;\n"
+        "    if (v >= (double)INT64_MAX) return INT64_MAX;\n"
+        "    if (v < (double)INT64_MIN) return INT64_MIN;\n"
+        "    return (int64_t)v;\n"
         "}\n"
         "/* ===== end VMC4 runtime prelude ===== */\n\n");
 }
