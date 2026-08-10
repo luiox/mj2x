@@ -60,6 +60,19 @@ struct Vmc4Options
     /// 注入的 bogus handler 数：解释器源码中出现但 dispatch 表不引用的
     /// 假 handler（只污染静态分析，运行时永不命中）。
     int bogusHandlers = 1;
+
+    /// 执行期 dispatch drift 变体数（0 = 关闭，1..4 = 开启）。
+    ///
+    /// @details
+    /// 开启后编码器/解释器按「字节偏移周期」轮转语义标签：字节集合固定不变，
+    /// 但「集合 → 语义」的对应关系随周期切换（语义标签轮转）。解释器用
+    /// per-variant unmap 表把原始字节解回 canonical 字节再分发，指令语义
+    /// 完全不变量（语义保真由 unmap 纯函数保证）。红队对"字节 X = 语义 Y"
+    /// 的一次性分析结论在下一周期即失效。
+    int driftVariants = 0;
+
+    /// drift 变体切换周期（字节流偏移单位）。默认 16：每 16 字节换一个变体。
+    int driftPeriod = 16;
 };
 
 /// @brief 一个 VM 实例的描述对象。
@@ -92,6 +105,41 @@ public:
 
     /// 注入的 bogus handler 数。
     int bogusHandlers() const { return bogusHandlers_; }
+
+    /// drift 变体数（0 = 关闭）。
+    int driftVariants() const { return driftVariants_; }
+
+    /// drift 变体切换周期（字节偏移单位）。
+    int driftPeriod() const { return driftPeriod_; }
+
+    /// drift 是否开启（driftVariants > 0）。
+    bool driftEnabled() const { return driftVariants_ > 0; }
+
+    /// @brief 按字节流偏移计算当前 drift 变体序号。
+    ///
+    /// @details
+    /// 编码器与解释器共用同一公式（字节偏移 / period % D），天然同步，
+    /// 与执行路径（跳转/分支）无关——同一字节位置永远是同一变体。
+    int variantForPc(uint64_t pc) const
+    {
+        if (!driftEnabled()) return 0;
+        return static_cast<int>((pc / static_cast<uint64_t>(driftPeriod_)) %
+                                static_cast<uint64_t>(driftVariants_));
+    }
+
+    /// @brief 在指定 drift 变体下为该语义选一个实例字节。
+    ///
+    /// @details
+    /// 变体 d 下语义 op 使用「集合 P_d(op)」的字节（语义标签轮转：集合固定，
+    /// 归属轮换）。nonce 语义与 pickOpcodeByte 相同（确定性选 canonical/别名）。
+    uint8_t variantPickOpcodeByte(VmOpcode op, uint64_t nonce, int variant) const;
+
+    /// @brief 变体 d 下原始字节 → canonical 字节（unmap 表内容）。
+    ///
+    /// @details
+    /// raw 属于集合 h → 返回 h 的 canonical 字节；不属于任何支持语义集合 →
+    /// 0xFF（发射器把它填进 unmap 表，解释器落 default 走 InvalidBytecode）。
+    uint8_t unmapByte(uint8_t raw, int variant) const;
 
     /// @brief VmOpcode → 实例 canonical 字节。
     ///
@@ -149,15 +197,21 @@ public:
 private:
     void buildOpcodeBytes();
     void buildHandlerOrder();
+    void buildDriftVariants();
 
     VmDispatcherKind dispatcherKind_;
     uint64_t         seed_;
     uint64_t         instanceSeed_;
     int              aliasCount_;
     int              bogusHandlers_;
+    int              driftVariants_;
+    int              driftPeriod_;
     /// VmOpcode 值 → 该语义的实例字节集合（canonical 在前）。
     std::array<std::vector<uint8_t>, 256> opcodeBytes_;
     std::vector<VmOpcode> handlerOrder_;
+    /// drift 变体排列：variantPerm_[d][c] = 变体 d 下 canonical 字节 c 对应
+    /// 的语义集合索引（0..K-1，K = 支持集大小）。字节集合固定，归属轮换。
+    std::array<std::vector<uint8_t>, 4> variantPerm_;
 };
 
 /// @brief 主 seed 与身份哈希混合派生实例 seed（确定性）。

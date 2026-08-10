@@ -41,9 +41,12 @@ VmInstance::VmInstance(const Vmc4Options& options, uint64_t instanceSeed)
     , instanceSeed_(instanceSeed == 0 ? options.seed : instanceSeed)
     , aliasCount_(std::max(0, std::min(options.aliasCount, 3)))
     , bogusHandlers_(std::max(0, std::min(options.bogusHandlers, 4)))
+    , driftVariants_(std::max(0, std::min(options.driftVariants, 4)))
+    , driftPeriod_(std::max(1, options.driftPeriod))
 {
     buildOpcodeBytes();
     buildHandlerOrder();
+    buildDriftVariants();
 }
 
 std::string VmInstance::instanceTag() const
@@ -90,6 +93,8 @@ std::string VmInstance::describe() const
     out += std::string("  instanceSeed: ") + seedBuf + "\n";
     out += "  aliasCount: " + std::to_string(aliasCount_) + "\n";
     out += "  bogusHandlers: " + std::to_string(bogusHandlers_) + "\n";
+    out += "  driftVariants: " + std::to_string(driftVariants_) + "\n";
+    out += "  driftPeriod: " + std::to_string(driftPeriod_) + "\n";
     out += "  handlerOrder:";
     for (const auto op : handlerOrder_) {
         char b[8];
@@ -170,6 +175,81 @@ uint8_t VmInstance::pickOpcodeByte(VmOpcode op, uint64_t nonce) const
     if (bytes.size() == 1) return bytes[0];
     SplitMix64 rng(nonce ^ instanceSeed_);
     return bytes[static_cast<size_t>(rng.nextBounded(bytes.size()))];
+}
+
+uint8_t VmInstance::variantPickOpcodeByte(VmOpcode op, uint64_t nonce, int variant) const
+{
+    if (!driftEnabled() || variant < 0 || variant >= driftVariants_) {
+        return pickOpcodeByte(op, nonce);
+    }
+    // 变体 d 下语义 op 使用「集合索引 variantPerm_[d][canonical(op)]」的字节。
+    // 集合索引 = canonical 字节值（0..K-1 双射），先反查对应枚举再取集合。
+    const uint8_t c = opcodeFor(op);
+    const uint8_t targetIdx = variantPerm_[variant][c];
+    VmOpcode      targetOp  = VmOpcode::Halt;
+    for (const auto& candidate : kAllOpcodes) {
+        if (opcodeFor(candidate) == targetIdx) {
+            targetOp = candidate;
+            break;
+        }
+    }
+    const auto& bytes = opcodeBytes_[static_cast<uint8_t>(targetOp)];
+    if (bytes.size() == 1) return bytes[0];
+    SplitMix64 rng(nonce ^ instanceSeed_ ^ 0x4D595DF4D0F33173ull);
+    return bytes[static_cast<size_t>(rng.nextBounded(bytes.size()))];
+}
+
+uint8_t VmInstance::unmapByte(uint8_t raw, int variant) const
+{
+    if (!driftEnabled() || variant < 0 || variant >= driftVariants_) {
+        // drift 关闭：直接返回（发射器不用 unmap 表）。
+        return raw;
+    }
+    // raw 属于哪个支持语义集合 → 该集合索引 hIdx（= 集合 canonical 字节值）。
+    uint8_t h = 0xFF;
+    for (const auto& candidate : kAllOpcodes) {
+        const auto& bytes = opcodeBytes_[static_cast<uint8_t>(candidate)];
+        for (uint8_t b : bytes) {
+            if (b == raw) {
+                h = static_cast<uint8_t>(candidate);
+                break;
+            }
+        }
+        if (h != 0xFF) break;
+    }
+    if (h == 0xFF) return 0xFF;   // 不属于任何支持语义集合
+    // 集合 h 在变体 d 下被 canonical 字节 c 的语义使用（逆排列）：
+    // variantPerm_[d][c] == hIdx → unmap 输出 c（canonical 字节，即 case 标签）。
+    const uint8_t hIdx = opcodeFor(static_cast<VmOpcode>(h));
+    for (size_t c = 0; c < variantPerm_[variant].size(); ++c) {
+        if (variantPerm_[variant][c] == hIdx) {
+            return static_cast<uint8_t>(c);
+        }
+    }
+    return 0xFF;
+}
+
+void VmInstance::buildDriftVariants()
+{
+    for (auto& perm : variantPerm_) perm.clear();
+    if (!driftEnabled()) return;
+
+    const size_t k = sizeof(kAllOpcodes) / sizeof(kAllOpcodes[0]);
+    std::vector<uint8_t> base(k);
+    for (size_t i = 0; i < k; ++i) base[i] = static_cast<uint8_t>(i);
+
+    // 每个变体：对语义集合索引 [0, K) 做独立洗牌排列。canonical 字节值
+    // 恰为 0..K-1 的排列（buildOpcodeBytes 双射），故可作集合索引。
+    for (int d = 0; d < driftVariants_; ++d) {
+        SplitMix64 rng(instanceSeed_ ^ 0xC2B2AE3D27D4EB4Full ^
+                       static_cast<uint64_t>(d) * 0x9E3779B97F4A7C15ull);
+        std::vector<uint8_t> perm = base;
+        for (size_t i = perm.size(); i > 1; --i) {
+            const size_t j = static_cast<size_t>(rng.nextBounded(i));
+            std::swap(perm[i - 1], perm[j]);
+        }
+        variantPerm_[static_cast<size_t>(d)] = std::move(perm);
+    }
 }
 
 bool VmInstance::usesAltHandlerForm(VmOpcode op) const

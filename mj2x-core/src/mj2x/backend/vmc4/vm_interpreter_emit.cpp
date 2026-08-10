@@ -272,9 +272,16 @@ const char* handlerBodyFor(const VmInstance& instance, const HandlerEntry* entry
     return entry->body;
 }
 
-/// 把某语义的全部实例字节（canonical + ALT 别名）拼成 `opcode == b1 || opcode == b2` 链。
+/// 把某语义的匹配表达式拼成 `opcode == b1 || opcode == b2` 链。
+/// drift 开启时 opcode 已由 unmap 表解回 canonical，只需单字节比较。
 std::string emitOpcodeByteOrChain(const VmInstance& instance, VmOpcode op)
 {
+    if (instance.driftEnabled()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "opcode == 0x%02x",
+                      static_cast<unsigned>(instance.opcodeFor(op)));
+        return buf;
+    }
     std::string out;
     bool        first = true;
     for (uint8_t b : instance.opcodeBytesFor(op)) {
@@ -294,15 +301,23 @@ std::string emitOpcodeByteOrChain(const VmInstance& instance, VmOpcode op)
 ///       <body>
 ///       break;
 ///   }
+/// drift 开启时 unmap 已把原始字节解回 canonical，只发 canonical 一个 case。
 std::string emitHandlerCase(const VmInstance& instance, const HandlerEntry* entry,
                             const char* indent)
 {
     std::string s;
-    for (uint8_t b : instance.opcodeBytesFor(entry->opcode)) {
+    if (instance.driftEnabled()) {
         char head[64];
         std::snprintf(head, sizeof(head), "%scase 0x%02x /*%s*/:\n", indent,
-                      static_cast<unsigned>(b), entry->name);
+                      static_cast<unsigned>(instance.opcodeFor(entry->opcode)), entry->name);
         s += head;
+    } else {
+        for (uint8_t b : instance.opcodeBytesFor(entry->opcode)) {
+            char head[64];
+            std::snprintf(head, sizeof(head), "%scase 0x%02x /*%s*/:\n", indent,
+                          static_cast<unsigned>(b), entry->name);
+            s += head;
+        }
     }
     s += std::string(indent) + "{\n";
     s += handlerBodyFor(instance, entry);
@@ -325,13 +340,90 @@ std::string emitCommonDecls(const std::string& progName, const std::string& targ
            "    mj2x_vm_slot* regs = slots;\n";
 }
 
+/// 生成 per-variant unmap 表（文件级 static const，drift 开启时在 exec 前发射）。
+/// 表 d 把变体 d 下的原始字节解回 canonical 字节；未映射字节填 0xFF（走 default）。
+std::string emitDriftUnmapTables(const VmInstance& instance, const std::string& tag)
+{
+    if (!instance.driftEnabled()) return "";
+    std::string s;
+    for (int d = 0; d < instance.driftVariants(); ++d) {
+        char head[128];
+        std::snprintf(head, sizeof(head), "static const unsigned char mj2x_vm_unmap_%s_%d[256] = {\n",
+                      tag.c_str(), d);
+        s += head;
+        for (int i = 0; i < 256; ++i) {
+            if (i % 16 == 0 && i != 0) s += "\n";
+            else if (i != 0) s += " ";
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "0x%02x,",
+                          static_cast<unsigned>(instance.unmapByte(static_cast<uint8_t>(i), d)));
+            s += buf;
+        }
+        s += "\n};\n";
+    }
+    return s;
+}
+
+/// 生成 unmap 表的选择表达式：按运行时变体序号 d 选出对应表指针。
+/// 形如 `(d == 0 ? T_0 : (d == 1 ? T_1 : T_2))`（嵌套右结合）。
+std::string emitUnmapSelectExpr(const VmInstance& instance, const std::string& tag,
+                                const std::string& dExpr)
+{
+    const int D = instance.driftVariants();
+    std::string s;
+    for (int d = 0; d < D; ++d) {
+        if (d > 0) s += " : ";
+        if (d + 1 < D) s += "(" + dExpr + " == " + std::to_string(d) + " ? ";
+        s += "mj2x_vm_unmap_" + tag + "_" + std::to_string(d);
+    }
+    for (int d = 0; d + 1 < D; ++d) s += ")";
+    return s;
+}
+
+/// 生成 dispatcher 的取码语句：drift 开启时按当前 pc 算变体序号再过 unmap 表；
+/// 关闭时保持 `unsigned char opcode = code[pc++];` 原样（零回归）。
+std::string emitOpcodeFetch(const VmInstance& instance, const std::string& tag,
+                            const std::string& indent)
+{
+    if (!instance.driftEnabled()) {
+        return indent + "unsigned char opcode = code[pc++];\n";
+    }
+    std::string s;
+    s += indent + "unsigned int d = (unsigned)(pc / " + std::to_string(instance.driftPeriod()) +
+         ") % " + std::to_string(instance.driftVariants()) + ";\n";
+    s += indent + "unsigned char opcode = " +
+         emitUnmapSelectExpr(instance, tag, "d") + "[code[pc++]];\n";
+    return s;
+}
+
+/// 生成 Halt 的 case 头：drift 开启时只发 canonical（unmap 已解回）；
+/// 关闭时覆盖 canonical + 全部别名（防御性停机面）。
+std::string emitHaltCaseHeads(const VmInstance& instance, const std::string& indent)
+{
+    std::string s;
+    if (instance.driftEnabled()) {
+        char head[64];
+        std::snprintf(head, sizeof(head), "%scase 0x%02x /*HALT*/:\n", indent.c_str(),
+                      static_cast<unsigned>(instance.opcodeFor(VmOpcode::Halt)));
+        s += head;
+        return s;
+    }
+    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
+        char head[64];
+        std::snprintf(head, sizeof(head), "%scase 0x%02x /*HALT*/:\n", indent.c_str(),
+                      static_cast<unsigned>(b));
+        s += head;
+    }
+    return s;
+}
+
 /// 形态 0：SwitchTable —— 经典 switch/case。
 std::string emitSwitchDispatcher(const VmInstance& instance, const std::string& progName,
-                                 const std::string& targetsName)
+                                 const std::string& targetsName, const std::string& tag)
 {
     std::string s = emitCommonDecls(progName, targetsName);
     s += "    for (;;) {\n";
-    s += "        unsigned char opcode = code[pc++];\n";
+    s += emitOpcodeFetch(instance, tag, "        ");
     s += "        switch (opcode) {\n";
     // handler 顺序随实例洗牌（handlerOrder），每个语义的 canonical+别名共享 body。
     for (const auto& op : instance.handlerOrder()) {
@@ -341,12 +433,7 @@ std::string emitSwitchDispatcher(const VmInstance& instance, const std::string& 
     }
     // Halt 哨兵：实例映射的 halt 字节全集（canonical + 别名）。落到 Halt 或
     // 任何未映射字节都走防御停机。
-    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
-        char head[64];
-        std::snprintf(head, sizeof(head), "        case 0x%02x /*HALT*/:\n",
-                      static_cast<unsigned>(b));
-        s += head;
-    }
+    s += emitHaltCaseHeads(instance, "        ");
     s += "        default: status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done;\n";
     s += "        }\n";
     s += "    }\n";
@@ -389,7 +476,8 @@ std::string emitFuncPtrFilePrelude(const VmInstance& instance, const std::string
     s += "    (void)targets;\n";
     s += "    (void)status;\n";
     s += "    (void)retval;\n";
-    s += "    switch (code[pc++]) {\n";
+    s += emitOpcodeFetch(instance, tag, "    ");
+    s += "    switch (opcode) {\n";
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
@@ -423,18 +511,34 @@ std::string emitFuncPtrDispatcher(const VmInstance& instance, const std::string&
     s += "    typedef void (*mj2x_vm_handler_" + tag + ")(" + ctxType + "*);\n";
     // 函数指针表（每项指向同一 dispatch_body，表的存在本身是间接调用的逆向特征）。
     // Halt 全字节槽 = 0（空指针），未映射字节也默认 0 → 走 InvalidBytecode 分支。
+    // drift 开启时 unmap 已解回 canonical，只填 canonical 槽。
     s += "    static const mj2x_vm_handler_" + tag + " mj2x_vm_table_" + tag + "[256] = {\n";
     bool first = true;
-    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
+    if (instance.driftEnabled()) {
         char e[64];
-        std::snprintf(e, sizeof(e), "%s[0x%02x] = 0", first ? "        " : ", ",
-                      static_cast<unsigned>(b));
+        std::snprintf(e, sizeof(e), "        [0x%02x] = 0",
+                      static_cast<unsigned>(instance.opcodeFor(VmOpcode::Halt)));
         s += e;
         first = false;
+    } else {
+        for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
+            char e[64];
+            std::snprintf(e, sizeof(e), "%s[0x%02x] = 0", first ? "        " : ", ",
+                          static_cast<unsigned>(b));
+            s += e;
+            first = false;
+        }
     }
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
+        if (instance.driftEnabled()) {
+            char e[96];
+            std::snprintf(e, sizeof(e), ", [0x%02x] = mj2x_vm_dispatch_body_%s",
+                          static_cast<unsigned>(instance.opcodeFor(op)), tag.c_str());
+            s += e;
+            continue;
+        }
         for (uint8_t b : instance.opcodeBytesFor(op)) {
             char e[96];
             std::snprintf(e, sizeof(e), ", [0x%02x] = mj2x_vm_dispatch_body_%s",
@@ -444,21 +548,42 @@ std::string emitFuncPtrDispatcher(const VmInstance& instance, const std::string&
     }
     s += "\n    };\n";
     s += "    for (;;) {\n";
-    s += "        unsigned char opcode = ctx->code[ctx->pc];\n";
+    if (instance.driftEnabled()) {
+        s += "        unsigned int d = (unsigned)(ctx->pc / " +
+             std::to_string(instance.driftPeriod()) + ") % " +
+             std::to_string(instance.driftVariants()) + ";\n";
+        s += "        unsigned char opcode = " +
+             emitUnmapSelectExpr(instance, tag, "d") + "[ctx->code[ctx->pc]];\n";
+    } else {
+        s += "        unsigned char opcode = ctx->code[ctx->pc];\n";
+    }
     s += "        mj2x_vm_handler_" + tag + " h = mj2x_vm_table_" + tag + "[opcode];\n";
     s += "        if (!h) { ctx->status = 2; /* InvalidBytecode */ break; }\n";
     // RETURN 在 dispatch body 里经 goto mj2x_vm_done 返回，此时 ctx->pc 已越过
     // RETURN 指令（含 operand），不能靠 code[ctx->pc-1] 判断（那是 operand 末字节）。
-    // 在调用前记录 opcode 位置，用 code[op_pos] 是否属于 Return 字节全集判断。
+    // 在调用前记录 opcode 位置，用 code[op_pos] 是否属于 Return 字节全集判断
+    // （drift 开启时用 op_pos 的变体解回 canonical 后比对）。
     s += "        unsigned int op_pos = ctx->pc;\n";
     s += "        h(ctx);\n";
-    s += "        unsigned char _op = ctx->code[op_pos];\n";
-    s += "        int _is_ret = 0;\n";
-    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Return)) {
-        char e[48];
-        std::snprintf(e, sizeof(e), "        if (_op == 0x%02x) _is_ret = 1;\n",
-                      static_cast<unsigned>(b));
+    if (instance.driftEnabled()) {
+        s += "        unsigned int d2 = (unsigned)(op_pos / " +
+             std::to_string(instance.driftPeriod()) + ") % " +
+             std::to_string(instance.driftVariants()) + ";\n";
+        s += "        unsigned char _op = " +
+             emitUnmapSelectExpr(instance, tag, "d2") + "[ctx->code[op_pos]];\n";
+        char e[64];
+        std::snprintf(e, sizeof(e), "        int _is_ret = (_op == 0x%02x);\n",
+                      static_cast<unsigned>(instance.opcodeFor(VmOpcode::Return)));
         s += e;
+    } else {
+        s += "        unsigned char _op = ctx->code[op_pos];\n";
+        s += "        int _is_ret = 0;\n";
+        for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Return)) {
+            char e[48];
+            std::snprintf(e, sizeof(e), "        if (_op == 0x%02x) _is_ret = 1;\n",
+                          static_cast<unsigned>(b));
+            s += e;
+        }
     }
     s += "        if (ctx->status != 0 || _is_ret) break;\n";
     s += "    }\n";
@@ -468,15 +593,23 @@ std::string emitFuncPtrDispatcher(const VmInstance& instance, const std::string&
 
 /// 形态 2：ComputedGoto —— GCC "Labels as Values" 扩展（MSVC 不支持，调用方需守卫）。
 std::string emitComputedGotoDispatcher(const VmInstance& instance, const std::string& progName,
-                                       const std::string& targetsName)
+                                       const std::string& targetsName, const std::string& tag)
 {
     std::string s = emitCommonDecls(progName, targetsName);
     // 所有槽默认指向 halt（防御非法 opcode：goto *NULL 是 UB），显式条目覆盖。
-    // Halt 别名槽同样指向 halt；各 handler 的 canonical+别名槽指向同一 label。
+    // Halt 别名槽同样指向 halt；drift 开启时 unmap 已解回 canonical，只填 canonical 槽。
     s += "    static const void* mj2x_vm_labels[256] = { [0 ... 255] = &&mj2x_vm_halt";
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
+        if (instance.driftEnabled()) {
+            char e[64];
+            std::snprintf(e, sizeof(e), ", [0x%02x] = &&mj2x_vm_op_%02x",
+                          static_cast<unsigned>(instance.opcodeFor(op)),
+                          static_cast<unsigned>(instance.opcodeFor(op)));
+            s += e;
+            continue;
+        }
         for (uint8_t b : instance.opcodeBytesFor(op)) {
             char e[64];
             std::snprintf(e, sizeof(e), ", [0x%02x] = &&mj2x_vm_op_%02x",
@@ -485,10 +618,32 @@ std::string emitComputedGotoDispatcher(const VmInstance& instance, const std::st
         }
     }
     s += "\n    };\n";
-    s += "    goto *mj2x_vm_labels[code[pc++]];\n";
+    if (instance.driftEnabled()) {
+        s += "    unsigned int d = (unsigned)(pc / " + std::to_string(instance.driftPeriod()) +
+             ") % " + std::to_string(instance.driftVariants()) + ";\n";
+        s += "    goto *mj2x_vm_labels[" + emitUnmapSelectExpr(instance, tag, "d") +
+             "[code[pc++]]];\n";
+    } else {
+        s += "    goto *mj2x_vm_labels[code[pc++]];\n";
+    }
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
+        if (instance.driftEnabled()) {
+            char lbl[32];
+            std::snprintf(lbl, sizeof(lbl), "mj2x_vm_op_%02x:\n",
+                          static_cast<unsigned>(instance.opcodeFor(op)));
+            s += "    {\n";
+            s += lbl;
+            s += handlerBodyFor(instance, entry);
+            s += "        { unsigned int nd = (unsigned)(pc / " +
+                 std::to_string(instance.driftPeriod()) + ") % " +
+                 std::to_string(instance.driftVariants()) +
+                 "; goto *mj2x_vm_labels[" + emitUnmapSelectExpr(instance, tag, "nd") +
+                 "[code[pc++]]]; }\n";
+            s += "    }\n";
+            continue;
+        }
         for (uint8_t b : instance.opcodeBytesFor(op)) {
             char lbl[32];
             std::snprintf(lbl, sizeof(lbl), "mj2x_vm_op_%02x:\n",
@@ -509,11 +664,11 @@ std::string emitComputedGotoDispatcher(const VmInstance& instance, const std::st
 
 /// 形态 3：IfNest —— 线性 if/else if 链（无跳表）。
 std::string emitIfNestDispatcher(const VmInstance& instance, const std::string& progName,
-                                 const std::string& targetsName)
+                                 const std::string& targetsName, const std::string& tag)
 {
     std::string s = emitCommonDecls(progName, targetsName);
     s += "    for (;;) {\n";
-    s += "        unsigned char opcode = code[pc++];\n";
+    s += emitOpcodeFetch(instance, tag, "        ");
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
@@ -535,24 +690,19 @@ std::string emitIfNestDispatcher(const VmInstance& instance, const std::string& 
 /// 下一次迭代走哪个 case。这复刻 RegC CFF 的 state-dispatcher 思路
 /// （reg_transform_passes.hpp 的 ControlFlowFlattening）。
 std::string emitStateDispatcher(const VmInstance& instance, const std::string& progName,
-                                const std::string& targetsName)
+                                 const std::string& targetsName, const std::string& tag)
 {
     std::string s = emitCommonDecls(progName, targetsName);
     s += "    unsigned int state = 1; /* 1=RUNNING 0=DONE */\n";
     s += "    while (state) {\n";
-    s += "        unsigned char opcode = code[pc++];\n";
+    s += emitOpcodeFetch(instance, tag, "        ");
     s += "        switch (opcode) {\n";
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
         s += emitHandlerCase(instance, entry, "        ");
     }
-    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
-        char head[48];
-        std::snprintf(head, sizeof(head), "        case 0x%02x:\n",
-                      static_cast<unsigned>(b));
-        s += head;
-    }
+    s += emitHaltCaseHeads(instance, "        ");
     s += "        default: state = 0; status = (status!=0)?status:2u /* InvalidBytecode */; break;\n";
     s += "        }\n";
     s += "    }\n";
@@ -729,6 +879,12 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         out.emitBlankLine();
     }
 
+    // drift 的 per-variant unmap 表是文件级定义，必须在 exec 函数之前发射。
+    if (instance.driftEnabled()) {
+        out.emitRaw(emitDriftUnmapTables(instance, tag));
+        out.emitBlankLine();
+    }
+
     // FuncPtrTable 的 ctx struct / dispatch body 是文件级定义，必须在 exec 函数
     // 之前发射（MSVC 不支持嵌套函数）。其他 dispatcher 无文件级结构。
     if (instance.dispatcherKind() == VmDispatcherKind::FuncPtrTable) {
@@ -748,19 +904,19 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         std::string body;
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
-            body = emitSwitchDispatcher(instance, progName, targetsName);
+            body = emitSwitchDispatcher(instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::FuncPtrTable:
             body = emitFuncPtrDispatcher(instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::ComputedGoto:
-            body = emitComputedGotoDispatcher(instance, progName, targetsName);
+            body = emitComputedGotoDispatcher(instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::IfNest:
-            body = emitIfNestDispatcher(instance, progName, targetsName);
+            body = emitIfNestDispatcher(instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::StateDispatcher:
-            body = emitStateDispatcher(instance, progName, targetsName);
+            body = emitStateDispatcher(instance, progName, targetsName, tag);
             break;
         }
         out.emitRaw(body);

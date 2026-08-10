@@ -63,6 +63,12 @@
   - 验证：`Vmc4*` 51/51（新增 P4-1 trace surface 确定性/内容/跨实例差异）；RegC/StackC/Cli 无回归。
   - **后续待办**：mjdbg VM 分析 agent（按契约落地）、e2e 扩展（ComputedGoto 需 GCC 工具链；除零 ThrowNew）、对象 family 支持（新阶段，需 VM 对象模型/引用管理/异常语义）。
 
+- [x] **VMC4 Phase 5：执行期 dispatch drift 低风险档**（2026-08-10，issue #762）：竞品共识方向的落地。
+  - 语义标签轮转：字节集合固定、集合→语义标签按 `(pc / driftPeriod) % D` 周期轮换；编码器与解释器共用同一偏移公式天然同步（跳转不影响）；解释器 D 个 unmap 表（逆排列）解回 canonical 后分发，case 精简为每语义一个，语义绝对不变。
+  - CLI `--vmc4-drift <0..4>` / `--vmc4-drift-period <bytes>`（默认 16）；trace surface 新增 drift 字段。
+  - 验证：单测 7 项（round-trip/周期公式/变体差异/emit 结构/流解码）+ 12 项 e2e 在 drift 全开下真编译通过；`Vmc4*` 58/58，RegC/StackC 无回归。
+  - **后续待办（#762 升级档）**：period 语义变义（对齐 jvmtp dispatch-mutation / JShield Tesseract），红队契约升级「变义强度模型」待 mjdbg 就绪；嵌套 VM context（#759 Abyss 方向）为后期阶段。
+
 ## 下一步验证命令
 
 ```bash

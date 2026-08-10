@@ -472,3 +472,42 @@ mjdbg 侧的自动还原工具与 weakness report 属 mjdbg 产品线，不在 m
 
 前置条件（设计 §8）中「RegC/runtime 闭环已稳定 + mjdbg 提供 c2j/VM 分析 agent」——
 RegC 闭环早已稳定；VM 分析 agent 待 mjdbg 按本文契约落地。
+
+---
+
+## 15. Phase 5 已落地（2026-08-10）：执行期 dispatch drift（issue #762 低风险档）
+
+竞品调研共识（#759/#760/#761）：三个竞品独立落地执行期变义（JavaShroud dispatch
+drift + resident rotate、jvmtp dispatch-mutation.period、JShield Tesseract 宣称）。
+vmc4 的对应实现为**语义标签轮转**（semantic label rotation）：
+
+### 15.1 机制
+
+- **字节集合固定，集合 → 语义的标签按周期轮换**：`variantPerm_[d]` 是 per-instance
+  seed 派生的 K 排列（K = 支持集大小）；变体 d 下语义 op 使用集合 `B_{π_d(op)}` 的字节。
+- **编码器/解释器同步**：变体序号由字节流偏移公式 `d = (pc / driftPeriod) % D` 决定，
+  与执行路径无关（同一字节位置永远是同一变体），跳转/分支不影响同步。
+- **解释器 unmap 解码**：生成 D 个 256 项 `mj2x_vm_unmap_<tag>_<d>` 表（逆排列：
+  raw ∈ 集合 h → 输出使用该集合的语义的 canonical 字节），取码后统一 switch canonical
+  case——case 结构精简为每语义一个，逆向者看到的 case 与实际语义的对应关系随周期失效。
+- **语义绝对安全**：unmap 是纯函数，canonical handler 完全不变；drift 关闭时生成
+  逻辑与 Phase 4 完全一致（零回归）。
+
+### 15.2 配置与契约
+
+- CLI：`--vmc4-drift <0..4>`（变体数，0 = 关闭）、`--vmc4-drift-period <bytes>`（默认 16）。
+- trace surface：`describe()` 新增 driftVariants/driftPeriod 字段（红队观测面扩展）。
+
+### 15.3 验证
+
+- 单测 7 项：describe 字段/确定性、变体选字节↔unmap round-trip、pc 周期公式、
+  变体与 baseline 差异、emit 生成 unmap 表 + canonical case 数、drift 关闭无 unmap、
+  编码流按 unmap 全解码合法 + 轮转真实发生（同语义跨变体字节不同）。
+- e2e：**12 项真编译在 drift 全开（2 变体 + 周期 16）下全部通过**——编码器轮转与
+  解释器 unmap 的同步性得到端到端语义保真证明。
+- 全量：Vmc4* 58/58；RegC/StackC 无回归。
+
+### 15.4 后续（issue #762 升级档）
+
+- period 驱动的**语义**变义（对齐 jvmtp dispatch-mutation / JShield Tesseract）——
+  需严格语义保真验证，且红队契约升级为「变义强度模型」依赖 mjdbg 对抗侧就绪。

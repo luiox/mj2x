@@ -1231,3 +1231,250 @@ TEST(Vmc4BackendTest, TraceSurfaceDescribesInstanceDeterministically)
     VmInstance c(other);
     EXPECT_NE(descA, c.describe());
 }
+
+// ===========================================================================
+// Phase 5：执行期 dispatch drift（语义标签轮转）
+// ===========================================================================
+
+/// 按 VmOpcode 查 operand 长度（u8/u16 混合，与 vm_interpreter_emit.cpp 的
+/// handler 片段一致），用于把字节流逐指令解码。
+int operandLenForTest(VmOpcode op)
+{
+    switch (op) {
+    case VmOpcode::Halt:      return 0;
+    case VmOpcode::Jump:      return 2;
+    case VmOpcode::Return:    return 3;   // has_value:u8 + src:u16
+    case VmOpcode::Branch:    return 6;   // cond:u16 + true:u16 + false:u16
+    case VmOpcode::Copy:      return 5;   // type:u8 + dest:u16 + src:u16
+    case VmOpcode::Unary:     return 6;   // op:u8 + type:u8 + dest:u16 + src:u16
+    case VmOpcode::Convert:   return 6;   // from:u8 + to:u8 + dest:u16 + src:u16
+    case VmOpcode::Binary:    return 7;   // op:u8 + type:u8 + dest:u16 + lhs:u16 + rhs:u16
+    case VmOpcode::Compare:   return 7;
+    case VmOpcode::SuperInc:  return 5;
+    case VmOpcode::SuperDec:  return 5;
+    default:                  return 0;
+    }
+}
+
+/// 用 unmap 逐指令解码字节流：全部指令 canonical 合法（非 0xFF）返回 true，
+/// 并统计遇到的变体集合与"同一语义跨变体字节不同"是否发生。
+bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>& bytes,
+                              std::set<int>& variants, bool& sawRotation)
+{
+    variants.clear();
+    sawRotation = false;
+    size_t pc = 0;
+    std::map<uint8_t, uint8_t> firstRawByCanonical;   // canonical -> 首个 raw
+    while (pc < bytes.size()) {
+        const int d = inst.variantForPc(pc);
+        variants.insert(d);
+        const uint8_t raw = bytes[pc];
+        const uint8_t canonical = inst.unmapByte(raw, d);
+        if (canonical == 0xFF) return false;
+        auto it = firstRawByCanonical.find(canonical);
+        if (it != firstRawByCanonical.end() && it->second != raw) sawRotation = true;
+        if (it == firstRawByCanonical.end()) firstRawByCanonical[canonical] = raw;
+        if (canonical == static_cast<uint8_t>(VmOpcode::Halt)) break;
+        pc += 1u + static_cast<size_t>(operandLenForTest(static_cast<VmOpcode>(canonical)));
+    }
+    return true;
+}
+
+TEST(Vmc4BackendTest, DriftDescribeExposesParams)
+{
+    Vmc4Options opts;
+    opts.seed = 0xABCD;
+    VmInstance plain(opts);
+    EXPECT_NE(plain.describe().find("driftVariants: 0"), std::string::npos) << plain.describe();
+    EXPECT_NE(plain.describe().find("driftPeriod: 16"), std::string::npos) << plain.describe();
+
+    opts.driftVariants = 3;
+    opts.driftPeriod   = 32;
+    VmInstance drift(opts);
+    const std::string desc = drift.describe();
+    EXPECT_NE(desc.find("driftVariants: 3"), std::string::npos) << desc;
+    EXPECT_NE(desc.find("driftPeriod: 32"), std::string::npos) << desc;
+
+    // 确定性：同配置同实例 seed → 同描述。
+    VmInstance drift2(opts);
+    EXPECT_EQ(desc, drift2.describe());
+}
+
+TEST(Vmc4BackendTest, DriftVariantPickUnmapRoundTrip)
+{
+    Vmc4Options opts;
+    opts.seed           = 0x12345678;
+    opts.aliasCount     = 2;
+    opts.driftVariants  = 3;
+    opts.driftPeriod    = 16;
+    VmInstance inst(opts);
+
+    const VmOpcode supported[] = {VmOpcode::Copy,       VmOpcode::Unary,  VmOpcode::Binary,
+                                  VmOpcode::Compare,    VmOpcode::Convert, VmOpcode::Jump,
+                                  VmOpcode::Branch,     VmOpcode::Return, VmOpcode::SuperInc,
+                                  VmOpcode::SuperDec,   VmOpcode::Halt};
+    for (const auto op : supported) {
+        for (int d = 0; d < 3; ++d) {
+            for (uint64_t nonce = 0; nonce < 32; ++nonce) {
+                const uint8_t raw = inst.variantPickOpcodeByte(op, nonce, d);
+                // 变体下选出的字节必须能 unmap 回该语义的 canonical。
+                EXPECT_EQ(inst.unmapByte(raw, d), inst.opcodeFor(op))
+                    << "variant " << d << " nonce " << nonce;
+            }
+        }
+    }
+}
+
+TEST(Vmc4BackendTest, DriftVariantForPcIsPeriodic)
+{
+    Vmc4Options opts;
+    opts.seed          = 7;
+    opts.driftVariants = 2;
+    opts.driftPeriod   = 16;
+    VmInstance inst(opts);
+    EXPECT_TRUE(inst.driftEnabled());
+    // (pc / 16) % 2：16 字节一个周期，2 个变体交替。
+    EXPECT_EQ(inst.variantForPc(0), 0);
+    EXPECT_EQ(inst.variantForPc(15), 0);
+    EXPECT_EQ(inst.variantForPc(16), 1);
+    EXPECT_EQ(inst.variantForPc(31), 1);
+    EXPECT_EQ(inst.variantForPc(32), 0);
+    EXPECT_EQ(inst.variantForPc(48), 1);
+    EXPECT_EQ(inst.variantForPc(63), 1);
+}
+
+TEST(Vmc4BackendTest, DriftVariantsDivergeFromBaseline)
+{
+    Vmc4Options base;
+    base.seed = 0xDEADBEEF;
+    base.aliasCount = 1;
+
+    Vmc4Options withDrift = base;
+    withDrift.driftVariants = 2;
+    withDrift.driftPeriod   = 8;
+
+    VmInstance plain(base);
+    VmInstance drift(withDrift);
+
+    // 同一 nonce 下，变体 1 至少有一个语义的字节与 baseline 不同。
+    bool anyDiff = false;
+    const VmOpcode supported[] = {VmOpcode::Copy, VmOpcode::Unary,  VmOpcode::Binary,
+                                  VmOpcode::Compare, VmOpcode::Convert, VmOpcode::Jump,
+                                  VmOpcode::Branch,  VmOpcode::Return, VmOpcode::SuperInc,
+                                  VmOpcode::SuperDec, VmOpcode::Halt};
+    for (const auto op : supported) {
+        for (uint64_t nonce = 0; nonce < 64; ++nonce) {
+            if (drift.variantPickOpcodeByte(op, nonce, 1) != plain.pickOpcodeByte(op, nonce)) {
+                anyDiff = true;
+                break;
+            }
+        }
+        if (anyDiff) break;
+    }
+    EXPECT_TRUE(anyDiff) << "drift variant 1 must change at least one opcode byte";
+}
+
+TEST(Vmc4BackendTest, DriftEmitGeneratesUnmapTablesAndCanonicalCases)
+{
+    Vmc4Options opts;
+    opts.dispatcherKind = VmDispatcherKind::SwitchTable;
+    opts.aliasCount     = 2;
+    opts.driftVariants  = 2;
+    opts.driftPeriod    = 16;
+    VmInstance instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("driftAdd", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "drift1");
+    // 2 个 unmap 表。
+    EXPECT_NE(src.find("mj2x_vm_unmap_drift1_0"), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_unmap_drift1_1"), std::string::npos) << src;
+    // 取码走周期公式 + unmap 选择。
+    EXPECT_NE(src.find("(unsigned)(pc / 16) % 2"), std::string::npos) << src;
+    // drift 开启时 case 只发 canonical：case 数 = handlerOrder + Halt = 11，
+    // 不再为 ALT 别名发 case。
+    const size_t caseCount = countOccurrencesForTest(src, "case 0x");
+    EXPECT_EQ(caseCount, instance.handlerOrder().size() + 1u) << src;
+}
+
+TEST(Vmc4BackendTest, DriftEmitOffHasNoUnmapTables)
+{
+    Vmc4Options opts;
+    opts.dispatcherKind = VmDispatcherKind::SwitchTable;
+    opts.aliasCount     = 2;
+    VmInstance instance(opts);
+    std::string reason;
+    auto prog = encodeMethod("plainAdd", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "plain1");
+    EXPECT_EQ(src.find("mj2x_vm_unmap_"), std::string::npos)
+        << "drift disabled must not emit unmap tables\n"
+        << src;
+    // 关闭时保持别名 case（每个语义 canonical + 别名）。
+    const size_t caseCount = countOccurrencesForTest(src, "case 0x");
+    size_t expected = 0;
+    for (const auto op : instance.handlerOrder()) expected += instance.opcodeBytesFor(op).size();
+    expected += instance.opcodeBytesFor(VmOpcode::Halt).size();
+    EXPECT_EQ(caseCount, expected) << src;
+}
+
+TEST(Vmc4BackendTest, DriftEncoderStreamDecodesCleanly)
+{
+    Vmc4Options opts;
+    opts.seed           = 0x7777;
+    opts.aliasCount     = 2;
+    opts.driftVariants  = 2;
+    opts.driftPeriod    = 8;
+    VmInstance instance(opts);
+    std::string reason;
+    // 循环方法：字节流足够长，能跨越多个变体周期。
+    auto* loop = new LabelNode();
+    auto* done = new LabelNode();
+    auto prog = encodeMethod("driftLoop", "(I)I",
+                             {
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 2),
+                                 loop,
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new IincInsnNode(2, 1),
+                                 new JumpInsnNode(Opcodes::GOTO, loop->label),
+                                 done,
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 3, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    // 编码器/解释器同步性：字节流按 unmap 逐指令解码全部合法，
+    // 且轮转真实发生（同一语义跨变体用了不同字节）。
+    std::set<int> variants;
+    bool          sawRotation = false;
+    EXPECT_TRUE(decodeStreamCleanForTest(instance, prog->bytecodes, variants, sawRotation))
+        << "bytecode stream must decode cleanly under drift";
+    EXPECT_GT(variants.size(), 1u) << "stream must span more than one drift variant";
+    EXPECT_TRUE(sawRotation)
+        << "same semantics must use different raw bytes across drift variants";
+}

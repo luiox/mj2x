@@ -196,6 +196,10 @@ protected:
         backend->setOutputPath(cFile.string());
         mj2x::Vmc4Options opts;
         opts.dispatcherKind = dispatcherKind;
+        // 执行期 dispatch drift：所有 e2e 在 drift 全开（2 变体 + 16 字节周期）下
+        // 验证语义保真——unmap 解码路径与编码器轮转同步。
+        opts.driftVariants = 2;
+        opts.driftPeriod   = 16;
         backend->setOptions(opts);
         pipeline.registerBackend(std::move(backend));
         // VMC4 转 VM 需要方法被标记（MarkAll 跳过 <init>/<clinit>，与 RegC 相同）。

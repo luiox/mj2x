@@ -75,6 +75,9 @@ static void printUsage()
     printf("  --vmc4-alias <n>           VMC4: 每语义 ALT 别名字节数 0..3（默认 1；0 关闭别名）\n");
     printf("  --vmc4-bogus <n>           VMC4: 注入的不可达假 handler 数 0..4（默认 1；"
            "0 关闭，只污染静态分析不参与执行）\n");
+    printf("  --vmc4-drift <n>           VMC4: 执行期 dispatch 变体数 0..4（默认 0 关闭；"
+           "开启后语义标签按字节偏移周期轮转，unmap 表解码）\n");
+    printf("  --vmc4-drift-period <n>    VMC4: drift 变体切换周期（字节偏移单位，默认 16）\n");
     printf("  --vmc4-trace-surface <f>   VMC4: 写 expected trace surface 文件（mjdbg 红队契约，"
            "同 seed+同输入 → 同内容）\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
@@ -181,6 +184,8 @@ struct CliOptions
     std::string              vmc4Granularity     = "class";
     int                      vmc4Alias           = 1;
     int                      vmc4Bogus           = 1;
+    int                      vmc4Drift           = 0;
+    int                      vmc4DriftPeriod     = 16;
     std::string              vmc4TraceSurface;   ///< 非空时写 expected trace surface 文件
 };
 
@@ -647,6 +652,12 @@ int main(int argc, char** argv)
         else if (arg == "--vmc4-bogus" && i + 1 < argc) {
             options.vmc4Bogus = std::atoi(argv[++i]);
         }
+        else if (arg == "--vmc4-drift" && i + 1 < argc) {
+            options.vmc4Drift = std::atoi(argv[++i]);
+        }
+        else if (arg == "--vmc4-drift-period" && i + 1 < argc) {
+            options.vmc4DriftPeriod = std::atoi(argv[++i]);
+        }
         else if (arg == "--vmc4-trace-surface" && i + 1 < argc) {
             options.vmc4TraceSurface = argv[++i];
         }
@@ -936,6 +947,8 @@ int main(int argc, char** argv)
                 vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerClass;
             vmc4Opts.aliasCount = options.vmc4Alias;
             vmc4Opts.bogusHandlers = options.vmc4Bogus;
+            vmc4Opts.driftVariants = options.vmc4Drift;
+            vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
             vmc4Backend->setOptions(vmc4Opts);
             // VMC4 复用同样的 native-loader clinit 注入（NativeLoaderPostprocessor）。
             nativeSourceBackend = vmc4Backend.get();

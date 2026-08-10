@@ -328,11 +328,20 @@ struct EncoderState
     }
 };
 
-/// 发射 VmOpcode 的实例字节（Phase 2 canonical 映射；Phase 3 按 nonce 在
-/// canonical+ALT 别名集合内确定性选取）。
+/// 写入 VmOpcode 的实例字节。drift 开启时按字节流偏移选变体（语义标签轮转），
+/// 与解释器 variantForPc 同一公式天然同步；nonce 负责 canonical/ALT 别名的
+/// 确定性选取（同一语义集合内多字节）。
 void emitOpcode(EncoderState& ctx, VmOpcode op, std::vector<uint8_t>& out)
 {
-    emitU8(out, ctx.instance.pickOpcodeByte(op, ctx.instructionNonce++));
+    const uint64_t pc = out.size();
+    uint8_t byte;
+    if (ctx.instance.driftEnabled()) {
+        const int d = ctx.instance.variantForPc(pc);
+        byte = ctx.instance.variantPickOpcodeByte(op, ctx.instructionNonce++, d);
+    } else {
+        byte = ctx.instance.pickOpcodeByte(op, ctx.instructionNonce++);
+    }
+    emitU8(out, byte);
 }
 
 /// 发射 Halt 哨兵：固定用 canonical 字节（发射器的 Halt case 覆盖全部别名，
