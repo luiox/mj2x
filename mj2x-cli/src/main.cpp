@@ -2,6 +2,8 @@
 #include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
 #include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
+#include "mj2x/backend/vmc4/vmc4_backend.hpp"
+#include "mj2x/backend/vmc4/vm_opcode.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "mj2x/preprocessor/ldc_preprocessor.hpp"
@@ -40,7 +42,7 @@ static void printUsage()
     printf("  --emit-c <file>            Output C source to file\n");
     printf("  --emit-cpp <file>          Output RegC C++17 source to file\n");
     printf("  --emit-llvm <file>         Output LLVM IR source to file\n");
-    printf("  --backend <stackc|regc|llvm> Select native emitter (default: stackc; "
+    printf("  --backend <stackc|regc|llvm|vmc4> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
     printf("  --stackc-exception-check <full|lite> StackC pending 异常检查密度（默认 full；"
@@ -67,6 +69,7 @@ enum class CEmitterBackend
     StackC,
     RegC,
     LlvmIr,
+    Vmc4,
 };
 
 enum class NativeBuildDriver
@@ -153,6 +156,9 @@ struct CliOptions
     bool                     dumpMIR          = false;
     bool                     regcTraceCalls   = false;
     std::string              stackcExceptionCheck = "full";
+    std::string              vmc4Dispatcher      = "switch_table";
+    uint64_t                 vmc4Seed            = 0;
+    bool                     vmc4SeedSelected    = false;
 };
 
 static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
@@ -167,6 +173,10 @@ static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
     }
     if (name == "llvm") {
         backend = CEmitterBackend::LlvmIr;
+        return true;
+    }
+    if (name == "vmc4") {
+        backend = CEmitterBackend::Vmc4;
         return true;
     }
     return false;
@@ -578,7 +588,7 @@ int main(int argc, char** argv)
             options.backendSelected = true;
             if (!parseBackendName(argv[++i], options.cBackendKind)) {
                 fprintf(stderr,
-                        "Unknown --backend value. Expected stackc, regc, or llvm. Legacy alias cbackend "
+                        "Unknown --backend value. Expected stackc, regc, llvm, or vmc4. Legacy alias cbackend "
                         "is also accepted.\n");
                 printUsage();
                 return 1;
@@ -588,6 +598,14 @@ int main(int argc, char** argv)
             options.dumpMIR = true;
         else if (arg == "--regc-trace-calls")
             options.regcTraceCalls = true;
+        else if (arg == "--vmc4-dispatcher" && i + 1 < argc) {
+            options.vmc4Dispatcher = argv[++i];
+        }
+        else if (arg == "--vmc4-seed" && i + 1 < argc) {
+            // 16 进制（0x...）或十进制均可，strtoull 自动识别。
+            options.vmc4Seed = std::strtoull(argv[++i], nullptr, 0);
+            options.vmc4SeedSelected = true;
+        }
         else if (arg == "--stackc-exception-check" && i + 1 < argc)
             options.stackcExceptionCheck = argv[++i];
         else if (arg == "-h" || arg == "--help") {
@@ -842,6 +860,28 @@ int main(int argc, char** argv)
             nativeSourceBackend = regcBackend.get();
             // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
             pipeline.registerBackend(std::move(regcBackend));
+        }
+        else if (options.cBackendKind == CEmitterBackend::Vmc4) {
+            auto vmc4Backend = std::make_unique<mj2x::Vmc4Backend>();
+            if (!options.cOutputPath.empty()) vmc4Backend->setOutputPath(options.cOutputPath);
+            // dispatcher 形态字符串 -> 枚举（默认 switch_table）。
+            mj2x::Vmc4Options vmc4Opts;
+            vmc4Opts.seed = options.vmc4Seed;
+            const std::string& disp = options.vmc4Dispatcher;
+            if (disp == "funcptr_table" || disp == "funcptr")
+                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::FuncPtrTable;
+            else if (disp == "computed_goto" || disp == "goto")
+                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::ComputedGoto;
+            else if (disp == "if_nest" || disp == "ifnest")
+                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::IfNest;
+            else if (disp == "state_dispatcher" || disp == "state")
+                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::StateDispatcher;
+            else
+                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::SwitchTable;
+            vmc4Backend->setOptions(vmc4Opts);
+            // VMC4 复用同样的 native-loader clinit 注入（NativeLoaderPostprocessor）。
+            nativeSourceBackend = vmc4Backend.get();
+            pipeline.registerBackend(std::move(vmc4Backend));
         }
         else {
             auto stackCBackend = std::make_unique<mj2x::StackCBackend>();

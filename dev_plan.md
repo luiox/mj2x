@@ -22,6 +22,14 @@
     - [x] **阶段3：自定义 bootstrap 运行时 call-site helper**（2026-08-09）：SSA 层对无法静态展开的 invokedynamic（非 LambdaMetafactory/StringConcatFactory）登记站点元数据并降级为 `Intrinsic("indy:<index>")`；RegIR/emitter 透传；finalize 为每站点生成文件级 `_mj2x_regc_indy_bsm_<i>(owner)` bootstrap 函数（MethodHandles.lookup + privateLookupIn 回退、MethodType.fromMethodDescriptorString、bsm 静态参数重建（String/Class/MethodType/Handle find* 构造/装箱原语/varargs Object[]）、CallSite.getTarget 全局引用缓存），方法体收集参数装箱 Object[] 后 invokeWithArguments 调用并拆箱回寄存器。owner-class 经 trampoline 存入 thread_local `_mj2x_regc_owner_class`。验证：ASM 生成 invokedynamic 字节码两用例——`(I)I` 无 bsmArgs 与 `(String,I)String` + Handle bsmArg——转换后 INDY_RESULT=6 / INDY2_RESULT=hi:42 全 PASS；TEST.jar 17 项与 snake 回归无破坏。仍 fail-closed 的次要形态：装箱+加宽复合适配。
   - [x] **R6.2：native 库打包/加密技术 wiki**（草稿，知识储备）：已整理 [native_library_packaging.md](doc_ai/native_library_packaging.md)。具体解密算法待实现时逆向补充。
 
+- [x] **VMC4 Phase 0+1：虚拟机后端 MVP**（2026-08-10）：从零搭建 Themida 风格可变多 VM 后端骨架。设计见 [vmc4_multi_vm_design.md](doc_ai/vmc4_multi_vm_design.md)。
+  - **Phase 0（单 VM 管线）**：RegIR → VmEncoder → opcode 字节流 → VmInterpreterEmitter → C 解释器，端到端管线跑通纯算术 + 循环方法。前端链路（L1→SSA→RegIR→DCE→transform）与 RegC 共享，分叉点在 RegIR 之后。产物仍是 ACC_NATIVE + RegisterNatives 绑定，不引入新 class 注入机制。
+  - **Phase 1（5 种 dispatcher）**：SwitchTable / FuncPtrTable / ComputedGoto（GCC 扩展）/ IfNest / StateDispatcher 全部真实落地（非占位 TODO），共享 handler 逻辑片段、外层调度结构各异。
+  - **MVP 支持范围**：Copy/Unary/Binary/Compare/Convert + Jump/Branch/Return；I32/I64/F32/F64；JVM 整数环绕/除零/INT_MIN/-1/UShr 语义精确复刻。LoadField/Call/Allocate/Intrinsic 等对象/数组/调用 family 整体 fail-closed。
+  - **接入**：CLI `--backend vmc4` + `--vmc4-dispatcher <kind>` + `--vmc4-seed <hex>`；新建 `mj2x-core/src/mj2x/backend/vmc4/`（6 文件），`xmake.lua` glob 自动纳入无需改构建脚本。
+  - **验证**：`vmc4_backend_test.cpp` 10/10 通过（编码成功/fail-closed/解释器源码结构/5 种 dispatcher 特征）；RegC/StackC 单测无回归。
+  - **后续待办**：Phase 2（opcode 映射随机化 + seed 驱动 + per-class 粒度）、Phase 3（ALT 别名/super-op/bogus handler/per-method 独立源码）、e2e 测试（`vmc4_backend_e2e_test.cpp`，需 JDK+MSVC 工具链）、Phase 4（mjdbg 红队闭环）。
+
 ## 下一步验证命令
 
 ```bash
