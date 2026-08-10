@@ -293,12 +293,23 @@ bool compileCrtSourcesToObjects(const std::vector<std::filesystem::path>& source
         const auto object = objectDirectory / ("crt_" + std::to_string(index) + ".o");
         ca::process::Command command(compilerExecutable(compiler));
         if (compiler == CCompilerKind::Zig) command.arg("cc");
-        command.arg("-c");
+        // MSVC 用 cl 参数风格，且 CRT 源文件为 UTF-8 注释（无 BOM）：
+        // 必须带 /utf-8，否则默认按 ANSI 代码页解析中文注释（C4819 甚至
+        // 注释字节被误读为续行符吞掉 #if 导致 C1018）。
+        if (compiler == CCompilerKind::Msvc) {
+            command.arg("/c").arg("/utf-8");
+            for (const auto& include : includes) command.arg("/I" + include.string());
+            command.arg("/Fo" + object.string());
+            command.arg(sources[index].string());
+        }
+        else {
+            command.arg("-c");
 #ifndef _WIN32
-        command.arg("-fPIC");
+            command.arg("-fPIC");
 #endif
-        for (const auto& include : includes) command.arg("-I" + include.string());
-        command.arg(sources[index].string()).arg("-o").arg(object.string());
+            for (const auto& include : includes) command.arg("-I" + include.string());
+            command.arg(sources[index].string()).arg("-o").arg(object.string());
+        }
         if (runCompilerCommand(command, compilerExecutable(compiler)) != 0) return false;
         objects.push_back(object);
     }
