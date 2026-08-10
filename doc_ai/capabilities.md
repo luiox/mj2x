@@ -108,6 +108,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 
 - **RegIR dead-code elimination**:在 RegIR→RegC 之间迭代删除未被终结器、CFG edge copy 或异常边消费的纯计算链；可能抛异常、内存访问、调用与 barrier 一律保留。`RegDceTest.*` 覆盖死链删除和 edge copy 活跃值保留，RegC native E2E 覆盖 JVM 语义。
 - **RegIR protection transforms**:RegC 在 DCE 后应用 i32/i64 加法 MBA 恒等式、分支 opaque predicate 与纯控制流 CFF。CFF 通过状态寄存器与 dispatcher switch 路由边，同时保留 edge copy；包含异常区域、内存访问、调用、barrier、throw 或 div/rem 的函数保持原 CFG。`RegTransformPassTest.*` 覆盖变换结构与保守跳过，`RegCBackendE2E.PureArithmeticLoopAndArrayRoundTrip` 覆盖 JVM 循环/数组语义。
+- **safe-env（JNI 函数表保护，#748）**：`--regc-safe-env` 开启后，JNI_OnLoad 首行捕获并做归属校验（表项必须位于 jvm.dll/libjvm.so 代码段，豁免 HotSpot `UseFastJNIAccessors` 的 8 个字段 getter JIT stub），每个 protected native 入口首行内容校验 + 原子恢复被 hook 的函数表。防 `SetJNIFunctionTable` 整表替换、原地改写（指针不变）与单 entry 改写；启动期 agent 污染快照时默认 fail closed（JNI_OnLoad 返回 JNI_ERR），`--regc-safe-env-debug` 改为告警观察。inline detour 与 JVMTI 事件层在射程外（见 `doc_ai/regc_safe_env.md`）。验证：CRT 单测 `test_safe_env` + `RegCSafeEnvE2E.*` 三个真 E2E（运行时原地改写恢复/对照组、启动期污染硬失败、debug 模式继续），E2E 全程走 `ca::process::Command` 无临时 bat。
 
 **已覆盖的 E2E 形状**:
 
@@ -154,6 +155,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。LLVM IR 由 clang 或 `llc -> clang` 编译，不使用 `--c-compiler`。
+- `--regc-trace-calls`、`--regc-safe-env`、`--regc-safe-env-debug` 均要求 `--backend regc`；safe-env 默认关闭，开启才产生运行时开销
 - `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
 - `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-crt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 当前明确拒绝这两条工程生成路径。

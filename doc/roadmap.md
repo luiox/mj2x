@@ -42,6 +42,7 @@ StackC 和 RegC 并行存在：
 | L4 变换 pass | DCE、常量传播、MBA、CFF、opaque predicate | 只有 RegC/R3 live 验证稳定后再扩 |
 | 整类下沉 | 算法密集类内部方法全 native，边界保留 JNI | 先做无反射、无动态类加载、intrinsic 覆盖充分的类 |
 | Protected samples | StackC/RegC 样本、expected trace surface、hardening history | 必须给 mjdbg 攻击 |
+| safe-env（JNI 表保护） | 快照 + 入口恢复，`--regc-safe-env`（#748） | 已实现；临时用 c2j-native-deobfuscator 手工验证，**mjdbg 侧需一个类似 c2j 的 JNI-hook 分析工具做常态化 E2E 对手**（见下） |
 | Release packaging | CLI、runtime、注解包、样本和验证脚本 | v2.1 需要把 mj2x 纳入发布矩阵 |
 | VMC4 | 高价值方法可选 VM 虚拟化支线 | 暂不作为主线，按 mjdbg 反馈决定 |
 
@@ -55,6 +56,12 @@ StackC 和 RegC 并行存在：
 4. runtime 反侦测体系：从参数扫描/简单 debugger 检测，扩展到 agent/JVMTI/native debugger 场景。
 5. String/StringBuilder intrinsic 先做设计和最小垫片；是否进入 v2.1 实现取决于 UTF-16 基础和样本需求。
 6. L4 变换 pass 不急着堆，先保证输出能跑、能被 mjdbg 攻击、能量化变强。
+7. **mjdbg 侧落地类似 c2j 的 JNI-hook 分析工具**：c2j-native-deobfuscator
+   证明了"原地改写 JNI 函数表 + JVMTI 事件"的恢复路径对 native 保护产物
+   的威胁，mj2x 的 safe-env（#748）当前用该工具手工验证；要让抗 hook 能力
+   成为可回归的 E2E 指标，mjdbg 需要一个可独立加载、可复现攻击姿势
+   （原地改写 / SetJNIFunctionTable / JVMTI 事件）的同类工具，作为
+   protected sample 攻击矩阵的常设对手。
 
 ---
 

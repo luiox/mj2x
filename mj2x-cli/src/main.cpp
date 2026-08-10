@@ -45,6 +45,10 @@ static void printUsage()
     printf("  --backend <stackc|regc|llvm|vmc4> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
+    printf("  --regc-safe-env             RegC: 开启 safe-env（JNI 函数表快照 + 方法入口恢复；"
+           "捕获时表已污染则 JNI_OnLoad fail closed）\n");
+    printf("  --regc-safe-env-debug       RegC: safe-env 调试观察模式（检出 hook 只打告警不 fail，"
+           "隐含开启 --regc-safe-env）\n");
     printf("  --stackc-exception-check <full|lite> StackC pending 异常检查密度（默认 full；"
            "lite 仅保留 handler 边界检查，对标 JNIC 稀疏检查）\n");
     printf("  --emit-native-dir <dir>     RegC: 多文件输出（mj2x_regc_api.h + runtime.c + 每类 "
@@ -155,6 +159,8 @@ struct CliOptions
     bool                     llvmToolSelected = false;
     bool                     dumpMIR          = false;
     bool                     regcTraceCalls   = false;
+    bool                     regcSafeEnv      = false;
+    bool                     regcSafeEnvDebug = false;
     std::string              stackcExceptionCheck = "full";
     std::string              vmc4Dispatcher      = "switch_table";
     uint64_t                 vmc4Seed            = 0;
@@ -382,6 +388,9 @@ static int generateCMakeProject(const std::string& projectDirValue,
             out << "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
         }
         out << "find_package(JNI REQUIRED)\n\n";
+        out << "if(MSVC)\n";
+        out << "  add_compile_options(/utf-8)\n";
+        out << "endif()\n\n";
         if (needsCrt) {
             out << "file(GLOB_RECURSE MJ2X_CRT_SOURCES CONFIGURE_DEPENDS "
                    "\"${CMAKE_CURRENT_SOURCE_DIR}/mj2x-crt/*.c\")\n";
@@ -598,6 +607,12 @@ int main(int argc, char** argv)
             options.dumpMIR = true;
         else if (arg == "--regc-trace-calls")
             options.regcTraceCalls = true;
+        else if (arg == "--regc-safe-env")
+            options.regcSafeEnv = true;
+        else if (arg == "--regc-safe-env-debug") {
+            options.regcSafeEnv      = true;
+            options.regcSafeEnvDebug = true;
+        }
         else if (arg == "--vmc4-dispatcher" && i + 1 < argc) {
             options.vmc4Dispatcher = argv[++i];
         }
@@ -663,6 +678,11 @@ int main(int argc, char** argv)
     }
     if (options.regcTraceCalls && options.cBackendKind != CEmitterBackend::RegC) {
         fprintf(stderr, "--regc-trace-calls requires --backend regc.\n");
+        return 1;
+    }
+    if ((options.regcSafeEnv || options.regcSafeEnvDebug) &&
+        options.cBackendKind != CEmitterBackend::RegC) {
+        fprintf(stderr, "--regc-safe-env requires --backend regc.\n");
         return 1;
     }
     if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
@@ -855,6 +875,8 @@ int main(int argc, char** argv)
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
             if (options.regcTraceCalls) regcBackend->setTraceCallLog(true);
+            if (options.regcSafeEnv) regcBackend->setSafeEnv(true);
+            if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);
             if (!options.nativeDirOutput.empty())
                 regcBackend->setSplitOutputDir(options.nativeDirOutput);
             nativeSourceBackend = regcBackend.get();

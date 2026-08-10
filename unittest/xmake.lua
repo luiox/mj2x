@@ -23,7 +23,7 @@ target("mj2x_unittest")
     set_group("mj2x/test")
     set_default(false)
 
-    add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake")
+    add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake", "libca_process")
     add_packages("gtest")
     add_files("src/main.cpp")
     add_files("src/**/*_test.cpp")

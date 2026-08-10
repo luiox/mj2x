@@ -13,6 +13,7 @@ typedef struct thrown_exception
 
 void test_string_buffer_concurrency(void);
 void test_regc_intrinsic_c99_abi(void);
+void test_safe_env(void);
 
 static void record_throw(void* env, const char* class_name, const char* message)
 {
@@ -112,5 +113,6 @@ int main(void)
     test_regc_intrinsic_c99_abi();
     test_string_builder_utf16_and_errors();
     test_string_buffer_concurrency();
+    test_safe_env();
     return 0;
 }

@@ -16,6 +16,7 @@
 
 #include "jdk_fixture.hpp"
 #include "jdk_finder/jdk_finder.hpp"
+#include "libca/process/subprocess.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
@@ -209,8 +210,8 @@ protected:
         std::vector<std::string> compileLines;
         // vcvarsall.bat 需带 x64 参数（libjdk_finder 返回 vcvarsall.bat）。
         compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
-        compileLines.push_back("cl /nologo /O2 /c /Fo" + q(generatedObj) + " " + q(cFile) + " /I" +
-                               q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+        compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(generatedObj) + " " + q(cFile) +
+                               " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
                                q(tc_.jdkIncludeWin));
 
         std::vector<fs::path> runtimeObjs;
@@ -231,11 +232,12 @@ protected:
             ASSERT_TRUE(fileExists(src)) << src;
             fs::path obj = objDir / objName;
             runtimeObjs.push_back(obj);
-            compileLines.push_back("cl /nologo /O2 /TC /c /Fo" + q(obj) + " " + q(src) + " /I" +
+            compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(src) + " /I" +
                                    q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
                                    q(tc_.jdkIncludeWin));
         };
         compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+        compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
         compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
         compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
         compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
@@ -1727,4 +1729,455 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_void(\"java/lang/StringBuilder\""),
               std::string::npos)
         << generatedC;
+}
+
+// ---------------------------------------------------------------------------
+// safe-env E2E：复刻 c2j-native-deobfuscator 的原地改写攻击姿势
+// （*env->functions = hooked_copy，指针不变），验证：
+//   1. 运行时 install（attach 场景）→ 入口恢复后 JNI 调用不再经过 hook；
+//   2. 启动期污染（JNI_OnLoad 前已 hook）→ 硬模式库加载失败；
+//   3. 启动期污染 + debug 模式 → 告警后继续加载。
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// 受保护样例：Integer.valueOf + hashCode 循环 → 逐次 GetObjectClass /
+// CallIntMethodA JNI 调用（被 hook 计数）。
+const char* kSafeEnvSampleJava =
+    "public class SafeEnvSample {\n"
+    "  public static int sumHash(int n) {\n"
+    "    int acc = 0;\n"
+    "    for (int i = 0; i < n; i++) {\n"
+    "      Integer v = Integer.valueOf(i);\n"
+    "      acc += v.hashCode();\n"
+    "    }\n"
+    "    return acc;\n"
+    "  }\n"
+    "}\n";
+
+const char* kSafeEnvHookC = R"hook(
+#include <jni.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <windows.h>
+
+static struct JNINativeInterface_ g_saved;
+static struct JNINativeInterface_* g_live;
+static long volatile g_getobjclass_calls = 0;
+static long volatile g_callint_calls = 0;
+
+static jclass JNICALL h_GetObjectClass(JNIEnv* env, jobject obj)
+{
+    InterlockedIncrement(&g_getobjclass_calls);
+    return g_saved.GetObjectClass(env, obj);
+}
+
+static jint JNICALL h_CallIntMethodA(JNIEnv* env, jobject obj, jmethodID m, const jvalue* a)
+{
+    InterlockedIncrement(&g_callint_calls);
+    return g_saved.CallIntMethodA(env, obj, m, a);
+}
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved)
+{
+    (void)reserved;
+    JNIEnv* env = NULL;
+    if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+    g_live = (struct JNINativeInterface_*)(((const struct JNIEnv_*)(const void*)env)->functions);
+    g_saved = *g_live;
+    if (getenv("HOOK_AT_LOAD")) {
+        g_live->GetObjectClass = h_GetObjectClass;
+        g_live->CallIntMethodA = h_CallIntMethodA;
+    }
+    return JNI_VERSION_1_6;
+}
+
+JNIEXPORT void JNICALL Java_Hook_install(JNIEnv* env, jclass clazz)
+{
+    (void)env; (void)clazz;
+    g_live->GetObjectClass = h_GetObjectClass;
+    g_live->CallIntMethodA = h_CallIntMethodA;
+}
+
+JNIEXPORT jlong JNICALL Java_Hook_count(JNIEnv* env, jclass clazz)
+{
+    (void)env; (void)clazz;
+    return (jlong)(g_getobjclass_calls + g_callint_calls);
+}
+)hook";
+
+const char* kSafeEnvDriverJava =
+    "public class SafeEnvDriver {\n"
+    "  public static void main(String[] a) throws Exception {\n"
+    "    String hook = System.getenv(\"MORPHER_HOOK_DLL\");\n"
+    "    String prot = System.getenv(\"MORPHER_DLL\");\n"
+    "    if (hook != null) System.load(hook);\n"
+    "    if (prot != null) System.load(prot);\n"
+    "    long w1 = SafeEnvSample.sumHash(50);\n"
+    "    Hook.install();\n"
+    "    long c1 = Hook.count();\n"
+    "    long r1 = SafeEnvSample.sumHash(200);\n"
+    "    long c2 = Hook.count();\n"
+    "    long r2 = SafeEnvSample.sumHash(200);\n"
+    "    long c3 = Hook.count();\n"
+    "    System.out.println(\"w1=\" + w1);\n"
+    "    System.out.println(\"r1=\" + r1);\n"
+    "    System.out.println(\"r2=\" + r2);\n"
+    "    System.out.println(\"delta1=\" + (c2 - c1));\n"
+    "    System.out.println(\"delta2=\" + (c3 - c2));\n"
+    "  }\n"
+    "}\n";
+
+const char* kSafeEnvLoadDriverJava =
+    "public class SafeEnvLoadDriver {\n"
+    "  public static void main(String[] a) {\n"
+    "    System.load(System.getenv(\"MORPHER_HOOK_DLL\"));\n"
+    "    try {\n"
+    "      System.load(System.getenv(\"MORPHER_DLL\"));\n"
+    "      System.out.println(\"load=OK\");\n"
+    "    } catch (UnsatisfiedLinkError e) {\n"
+    "      System.out.println(\"load=FAIL:\" + e.getMessage());\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+const char* kSafeEnvHookJava =
+    "public class Hook {\n"
+    "  static { System.load(System.getenv(\"MORPHER_HOOK_DLL\")); }\n"
+    "  public static native void install();\n"
+    "  public static native long count();\n"
+    "}\n";
+
+// ---- libca_process 子进程工具（本节的 javac/cl/link/java 全部直接启动，
+//      不写临时 .bat 脚本；MSVC 环境通过 vcvarsall.bat 的 `set` 输出捕获一次）----
+
+using SafeEnvProcessEnv = std::vector<std::pair<std::string, std::string>>;
+
+struct SafeEnvExecResult
+{
+    int         exitCode = -1;
+    std::string out;
+};
+
+// 捕获 vcvarsall.bat x64 环境（cmd /c "call vcvarsall.bat && set"），
+// 后续 cl/link 以完整环境直接启动。命令串放环境变量，规避 Windows 命令行的
+// 引号转义（同 mj2x-cli native_compiler.cpp loadMsvcEnvironment）。
+SafeEnvProcessEnv loadVcvarsEnv(const Toolchain& tc, std::string& error)
+{
+    SafeEnvProcessEnv env;
+    ca::process::Command shell("cmd.exe");
+    shell.current_dir(tc.vcvars64.parent_path().string());
+    shell.env("MJ2X_VCVARS_COMMAND", "chcp 65001 >nul && call vcvarsall.bat x64 >nul && set");
+    shell.arg("/d").arg("/c").arg("%MJ2X_VCVARS_COMMAND%");
+    auto captured = shell.output();
+    if (captured.is_err()) {
+        error = captured.unwrap_err().to_string();
+        return env;
+    }
+    auto output = std::move(captured).unwrap();
+    if (!output.status.success()) {
+        error = output.stdout_data + output.stderr_data;
+        return env;
+    }
+    std::istringstream lines(output.stdout_data);
+    std::string        line;
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto separator = line.find('=');
+        if (separator == std::string::npos || separator == 0) continue;
+        env.emplace_back(line.substr(0, separator), line.substr(separator + 1));
+    }
+    return env;
+}
+
+// 直接启动程序（不经 shell），可追加环境变量覆盖，返回退出码 + stdout/stderr 合并。
+SafeEnvExecResult runProcess(const fs::path& program, const std::vector<std::string>& args,
+                             const SafeEnvProcessEnv& env, const fs::path& cwd = {})
+{
+    ca::process::Command command(program.string());
+    command.args(args);
+    for (const auto& [key, value] : env) command.env(key, value);
+    if (!cwd.empty()) command.current_dir(cwd.string());
+    command.stdout(ca::process::Stdio::piped());
+    command.stderr(ca::process::Stdio::piped());
+    auto result = command.output();
+    if (result.is_err()) {
+        return {1, "spawn failed: " + result.unwrap_err().to_string()};
+    }
+    auto output = std::move(result).unwrap();
+    return {output.status.code, output.stdout_data + output.stderr_data};
+}
+
+// 编译 hook DLL（复刻 c2j 工具的原地改写 install）。
+void buildHookDll(const Toolchain& tc, const fs::path& dir)
+{
+    fs::path hookC = dir / "hook_dll.c";
+    {
+        std::ofstream out(hookC);
+        out << kSafeEnvHookC;
+    }
+    std::string vcvarsError;
+    auto        env = loadVcvarsEnv(tc, vcvarsError);
+    ASSERT_TRUE(!env.empty()) << vcvarsError;
+
+    std::vector<std::string> includes = {"/I" + tc.jdkInclude.string(),
+                                         "/I" + tc.jdkIncludeWin.string()};
+    std::vector<std::string> clArgs = {"/nologo", "/O2", "/TC", "/utf-8", "/c",
+                                       "/Fo" + (dir / "hook_dll.obj").string(),
+                                       hookC.string()};
+    clArgs.insert(clArgs.end(), includes.begin(), includes.end());
+    auto clResult = runProcess("cl", clArgs, env, dir);
+    ASSERT_EQ(clResult.exitCode, 0) << clResult.out;
+    auto linkResult = runProcess("link",
+                                 {"/nologo", "/DLL", "/OUT:" + (dir / "hook_dll.dll").string(),
+                                  (dir / "hook_dll.obj").string()},
+                                 env, dir);
+    ASSERT_EQ(linkResult.exitCode, 0) << linkResult.out;
+    ASSERT_TRUE(fileExists(dir / "hook_dll.dll"));
+}
+
+// 生成并编译受保护 DLL；safeEnv 控制 RegCBackend::setSafeEnv / setSafeEnvDebug。
+void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
+                       bool safeEnvDebug)
+{
+    fs::path javaFile = dir / "SafeEnvSample.java";
+    {
+        std::ofstream out(javaFile);
+        out << kSafeEnvSampleJava;
+    }
+    auto javac = runProcess(tc.javac, {"-d", dir.string(), javaFile.string()}, {}, dir);
+    ASSERT_EQ(javac.exitCode, 0) << javac.out;
+
+    fs::path inClass  = dir / "SafeEnvSample.class";
+    fs::path outClass = dir / "SafeEnvSample_protected.class";
+    fs::path cFile    = dir / "SafeEnvSample.c";
+
+    mj2x::PipelineConfig config;
+    config.inputPath  = inClass.string();
+    config.outputPath = outClass.string();
+    mj2x::Pipeline pipeline(std::move(config));
+    auto           backend = std::make_unique<mj2x::RegCBackend>();
+    backend->setOutputPath(cFile.string());
+    if (safeEnv) backend->setSafeEnv(true);
+    if (safeEnvDebug) backend->setSafeEnvDebug(true);
+    pipeline.registerBackend(std::move(backend));
+    pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
+    pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
+    pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+    pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+    ASSERT_EQ(pipeline.run(), 0);
+
+    std::string generatedC = readText(cFile);
+    if (safeEnv) {
+        EXPECT_NE(generatedC.find("mj2x_regc_safeenv_restore(env,"), std::string::npos)
+            << generatedC;
+        EXPECT_NE(generatedC.find("mj2x_regc_safeenv_capture(env,"), std::string::npos)
+            << generatedC;
+    }
+    else {
+        EXPECT_EQ(generatedC.find("mj2x_regc_safeenv_"), std::string::npos) << generatedC;
+    }
+
+    std::error_code ec;
+    fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    fs::path dll    = dir / "protected.dll";
+    fs::path objDir = dir / "obj";
+    fs::create_directories(objDir, ec);
+    fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
+
+    std::string vcvarsError;
+    auto        env = loadVcvarsEnv(tc, vcvarsError);
+    ASSERT_TRUE(!env.empty()) << vcvarsError;
+    std::vector<std::string> includes = {"/I" + crtSrc.string(), "/I" + tc.jdkInclude.string(),
+                                         "/I" + tc.jdkIncludeWin.string()};
+
+    std::vector<std::string> genArgs = {"/nologo", "/O2", "/utf-8", "/c",
+                                        "/Fo" + (objDir / "generated.obj").string(),
+                                        cFile.string()};
+    genArgs.insert(genArgs.end(), includes.begin(), includes.end());
+    auto generated = runProcess("cl", genArgs, env, dir);
+    ASSERT_EQ(generated.exitCode, 0) << generated.out;
+
+    std::vector<fs::path> objs;
+    auto                  compileCrt = [&](const std::string& relPath, const std::string& objName) {
+        fs::path src = crtSrc / relPath;
+        ASSERT_TRUE(fileExists(src)) << src;
+        fs::path obj = objDir / objName;
+        objs.push_back(obj);
+        std::vector<std::string> crtArgs = {"/nologo", "/O2", "/TC", "/utf-8", "/c",
+                                            "/Fo" + obj.string(), src.string()};
+        crtArgs.insert(crtArgs.end(), includes.begin(), includes.end());
+        auto rc = runProcess("cl", crtArgs, env, dir);
+        ASSERT_EQ(rc.exitCode, 0) << rc.out;
+    };
+    compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+    compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
+    compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
+    compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+
+    std::vector<std::string> linkArgs = {"/nologo", "/DLL", "/OUT:" + dll.string(),
+                                         (objDir / "generated.obj").string()};
+    for (const auto& obj : objs) linkArgs.push_back(obj.string());
+    auto linkResult = runProcess("link", linkArgs, env, dir);
+    ASSERT_EQ(linkResult.exitCode, 0) << linkResult.out;
+    ASSERT_TRUE(fileExists(dll));
+}
+
+}   // namespace
+
+class RegCSafeEnvE2E : public ::testing::Test
+{
+protected:
+    static Toolchain tc_;
+
+    static void SetUpTestSuite() { tc_ = probeToolchain(); }
+
+    void SetUp() override
+    {
+        if (!tc_.available) {
+            GTEST_SKIP() << "RegC safe-env E2E toolchain unavailable: " << tc_.reason;
+        }
+    }
+
+    fs::path caseDir(const std::string& name) const
+    {
+        return test::getOutPath("mj2x/regc_e2e/" + name + "/.keep").parent_path();
+    }
+};
+
+Toolchain RegCSafeEnvE2E::tc_;
+
+// attach 场景：运行时原地改写（c2j 姿势），safe-env 入口恢复后不再被持续 hook；
+// 对照组（无 safe-env）持续被 hook（delta > 0）。
+TEST_F(RegCSafeEnvE2E, EntryRestoreDefeatsInPlaceHook)
+{
+    const std::string name = "SafeEnvRestore";
+    fs::path          dir  = caseDir(name);
+    std::error_code   ec;
+    fs::create_directories(dir, ec);
+
+    {
+        std::ofstream out(dir / "Hook.java");
+        out << kSafeEnvHookJava;
+    }
+    {
+        std::ofstream out(dir / "SafeEnvDriver.java");
+        out << kSafeEnvDriverJava;
+    }
+
+    buildHookDll(tc_, dir);
+    buildProtectedDll(tc_, dir, /*safeEnv=*/true, /*safeEnvDebug=*/false);
+
+    // SafeEnvSample.class 此时已存在（buildProtectedDll 内 javac 产出）。
+    auto javac = runProcess(tc_.javac,
+                            {"-cp", dir.string(), "-d", dir.string(),
+                             (dir / "Hook.java").string(), (dir / "SafeEnvDriver.java").string()},
+                            {}, dir);
+    ASSERT_EQ(javac.exitCode, 0) << javac.out;
+
+    auto safeRun = runProcess(tc_.java,
+                              {"-cp", dir.string(), "SafeEnvDriver"},
+                              {{"MORPHER_HOOK_DLL", (dir / "hook_dll.dll").string()},
+                               {"MORPHER_DLL", (dir / "protected.dll").string()}},
+                              dir);
+    ASSERT_EQ(safeRun.exitCode, 0) << safeRun.out;
+    auto safe = splitLines(safeRun.out);
+    EXPECT_NE(std::find(safe.begin(), safe.end(), "w1=1225"), safe.end()) << safeRun.out;
+    EXPECT_NE(std::find(safe.begin(), safe.end(), "r1=19900"), safe.end()) << safeRun.out;
+    EXPECT_NE(std::find(safe.begin(), safe.end(), "r2=19900"), safe.end()) << safeRun.out;
+    EXPECT_NE(std::find(safe.begin(), safe.end(), "delta1=0"), safe.end()) << safeRun.out;
+    EXPECT_NE(std::find(safe.begin(), safe.end(), "delta2=0"), safe.end()) << safeRun.out;
+
+    // 对照组：同一样例不开启 safe-env，install 后持续被 hook。
+    buildProtectedDll(tc_, dir, /*safeEnv=*/false, /*safeEnvDebug=*/false);
+    fs::rename(dir / "protected.dll", dir / "protected_off.dll", ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto offRun = runProcess(tc_.java,
+                             {"-cp", dir.string(), "SafeEnvDriver"},
+                             {{"MORPHER_HOOK_DLL", (dir / "hook_dll.dll").string()},
+                              {"MORPHER_DLL", (dir / "protected_off.dll").string()}},
+                             dir);
+    ASSERT_EQ(offRun.exitCode, 0) << offRun.out;
+    auto off = splitLines(offRun.out);
+    bool sawHookedDelta = false;
+    for (const auto& line : off) {
+        if (line.rfind("delta1=", 0) == 0 && line != "delta1=0") sawHookedDelta = true;
+    }
+    EXPECT_TRUE(sawHookedDelta) << offRun.out;
+}
+
+// 启动期污染（HOOK_AT_LOAD）：硬模式 JNI_OnLoad fail closed → 库加载失败。
+TEST_F(RegCSafeEnvE2E, HardModeFailsOnStartupPollution)
+{
+    const std::string name = "SafeEnvHardFail";
+    fs::path          dir  = caseDir(name);
+    std::error_code   ec;
+    fs::create_directories(dir, ec);
+
+    {
+        std::ofstream out(dir / "SafeEnvLoadDriver.java");
+        out << kSafeEnvLoadDriverJava;
+    }
+    auto javac = runProcess(tc_.javac,
+                            {"-d", dir.string(), (dir / "SafeEnvLoadDriver.java").string()}, {},
+                            dir);
+    ASSERT_EQ(javac.exitCode, 0) << javac.out;
+
+    buildHookDll(tc_, dir);
+    buildProtectedDll(tc_, dir, /*safeEnv=*/true, /*safeEnvDebug=*/false);
+
+    auto run = runProcess(tc_.java,
+                          {"-cp", dir.string(), "SafeEnvLoadDriver"},
+                          {{"MORPHER_HOOK_DLL", (dir / "hook_dll.dll").string()},
+                           {"HOOK_AT_LOAD", "1"},
+                           {"MORPHER_DLL", (dir / "protected.dll").string()}},
+                          dir);
+    ASSERT_EQ(run.exitCode, 0) << run.out;
+    auto lines = splitLines(run.out);
+    EXPECT_NE(std::find_if(lines.begin(), lines.end(), [](const std::string& l) {
+                  return l.rfind("load=FAIL", 0) == 0;
+              }),
+              lines.end())
+        << run.out;
+}
+
+// 启动期污染 + debug 模式：告警后继续加载，不 fail。
+TEST_F(RegCSafeEnvE2E, DebugModeContinuesOnStartupPollution)
+{
+    const std::string name = "SafeEnvDebug";
+    fs::path          dir  = caseDir(name);
+    std::error_code   ec;
+    fs::create_directories(dir, ec);
+
+    {
+        std::ofstream out(dir / "SafeEnvLoadDriver.java");
+        out << kSafeEnvLoadDriverJava;
+    }
+    auto javac = runProcess(tc_.javac,
+                            {"-d", dir.string(), (dir / "SafeEnvLoadDriver.java").string()}, {},
+                            dir);
+    ASSERT_EQ(javac.exitCode, 0) << javac.out;
+
+    buildHookDll(tc_, dir);
+    buildProtectedDll(tc_, dir, /*safeEnv=*/true, /*safeEnvDebug=*/true);
+
+    auto run = runProcess(tc_.java,
+                          {"-cp", dir.string(), "SafeEnvLoadDriver"},
+                          {{"MORPHER_HOOK_DLL", (dir / "hook_dll.dll").string()},
+                           {"HOOK_AT_LOAD", "1"},
+                           {"MORPHER_DLL", (dir / "protected.dll").string()}},
+                          dir);
+    ASSERT_EQ(run.exitCode, 0) << run.out;
+    auto lines = splitLines(run.out);
+    EXPECT_NE(std::find(lines.begin(), lines.end(), "load=OK"), lines.end()) << run.out;
+    EXPECT_NE(std::find_if(lines.begin(), lines.end(), [](const std::string& l) {
+                  return l.find("safe-env] WARNING") != std::string::npos;
+              }),
+              lines.end())
+        << run.out;
 }

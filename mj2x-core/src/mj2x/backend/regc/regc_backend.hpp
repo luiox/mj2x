@@ -108,6 +108,24 @@ public:
     /// 用于排查方法调用链/多线程 env 竞态问题；默认关闭，不产生任何输出。
     void setTraceCallLog(bool enabled);
 
+    /// @brief 开启 safe-env：JNI 函数表快照 + 方法入口恢复（--regc-safe-env）。
+    ///
+    /// @details
+    /// 开启后生成的 JNI_OnLoad 首行捕获并校验 `JNINativeInterface_` 快照
+    /// （表项归属必须为 jvm.dll/libjvm.so 代码段），每个 protected native
+    /// 方法入口首行恢复表内容。捕获时表已污染（启动期 agent）默认 fail
+    /// closed（JNI_OnLoad 返回 JNI_ERR）；`setSafeEnvDebug(true)` 改为
+    /// 打印告警后继续。默认关闭，不产生任何运行时开销。设计见
+    /// `doc_ai/regc_safe_env.md`。
+    void setSafeEnv(bool enabled);
+
+    /// @brief safe-env 调试观察模式（--regc-safe-env-debug，隐含开启 safe-env）。
+    ///
+    /// @details
+    /// 捕获污染或入口检出 hook 时只打印 stderr 告警并继续，不 fail closed；
+    /// 用于开发/测试期观察，不用于交付。
+    void setSafeEnvDebug(bool enabled);
+
     /// @brief 设置多文件输出目录（--emit-native-dir）。
     ///
     /// @details

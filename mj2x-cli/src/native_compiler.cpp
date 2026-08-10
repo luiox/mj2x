@@ -452,7 +452,7 @@ int compileMsvcSourceFromTemporaryFile(
     }
 
     ca::process::Command command(compilerPath.string());
-    command.arg("/nologo").arg("/LD").arg("/TC");
+    command.arg("/nologo").arg("/LD").arg("/TC").arg("/utf-8");
     for (const auto& include : includes) command.arg("/I" + include.string());
     std::filesystem::path objectDir = libraryPath.parent_path();
     if (objectDir.empty()) objectDir = ".";
@@ -698,7 +698,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         std::filesystem::path compilerPath;
         if (!loadMsvcEnvironment(environment, compilerPath)) return 1;
         ca::process::Command command(compilerPath.string());
-        command.arg("/nologo").arg("/LD");
+        command.arg("/nologo").arg("/LD").arg("/utf-8");
         if (useCpp17) command.arg("/std:c++17");
         for (const auto& include : includes) command.arg("/I" + include.string());
         std::filesystem::path objectDir = libraryPath.parent_path();

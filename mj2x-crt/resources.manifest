@@ -2,6 +2,8 @@
 # Paths are relative to this directory. Add future C or C++ runtime sources here.
 src/regc/mj2x_regc_crt.h
 src/regc/mj2x_regc_crt.c
+src/regc/mj2x_regc_safe_env.h
+src/regc/mj2x_regc_safe_env.c
 src/regc/mj2x_regc_intrinsic.h
 src/regc/mj2x_regc_intrinsic.c
 src/regc/mj2x_regc_string.c
