@@ -80,7 +80,7 @@ std::string buildResolvedDispatchTable(
 
     src.add_func_declared(
         "static mj2x_regc_fn_ptr_t _mj2x_regc_resolve_verified(const char* name, const char* desc, "
-        "jmethodID resolved_method, jclass receiver_class)",
+        "jmethodID resolved_method, jclass receiver_class, jclass* out_impl_class)",
         [](CSourceStream& s) {
             s.declare_var("const size_t", "count",
                           "sizeof(kRegCResolvedFunctions) / sizeof(kRegCResolvedFunctions[0])");
@@ -117,6 +117,8 @@ std::string buildResolvedDispatchTable(
                           "name, desc)");
             s.iff("declared == NULL || declared != resolved_method",
                   [](CSourceStream& u) { u.ret("NULL"); });
+            s.iff("out_impl_class != NULL",
+                  [](CSourceStream& u) { u.assign("*out_impl_class", "best->ownerClass"); });
             s.ret("best->fn");
         });
     src.add_func_declared(
@@ -129,14 +131,24 @@ std::string buildResolvedDispatchTable(
                           "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, receiver_class, name, "
                           "desc)");
             s.iff("m == NULL", [](CSourceStream& u) { u.ret("NULL"); });
+            s.declare_var("jclass", "impl_class", "NULL");
+            s.assign("site->method", "m");
+            s.assign("site->fn",
+                     "_mj2x_regc_resolve_verified(name, desc, m, receiver_class, &impl_class)");
+            s.iff("site->implClass != NULL", [](CSourceStream& u) {
+                u.emitLine("(*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, "
+                           "site->implClass);");
+            });
+            /* 独立增计数：impl_class 与表条目的 ownerClass 共享同一 global ref，
+               site 必须持有自己的引用，避免 DeleteGlobalRef 误伤表条目。 */
+            s.assign("site->implClass",
+                     "(jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, impl_class)");
             s.iff("site->receiverClass != NULL", [](CSourceStream& u) {
                 u.emitLine("(*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, "
                            "site->receiverClass);");
             });
             s.assign("site->receiverClass",
                      "(jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, receiver_class)");
-            s.assign("site->method", "m");
-            s.assign("site->fn", "_mj2x_regc_resolve_verified(name, desc, m, receiver_class)");
             s.ret("m");
         });
     src.emitBlankLine();

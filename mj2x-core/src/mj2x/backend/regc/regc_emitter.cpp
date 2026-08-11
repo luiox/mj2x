@@ -1782,19 +1782,37 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                   }
                   s.iff("_mj2x_regc_rc != NULL",
                         [&](CSourceStream& t) {
+                            // 快路径 1（单 JNI）：receiver 是已转换实现类（或其未覆盖
+                            // 子类）→ 直接复用 method/fn。implClass 只在 fn != NULL 时设置。
                             t.iff(site +
-                                      ".receiverClass != NULL && (*_mj2x_regc_env)->IsSameObject("
-                                      "_mj2x_regc_env, " +
-                                      site + ".receiverClass, _mj2x_regc_rc)",
+                                      ".implClass != NULL && (*_mj2x_regc_env)->IsInstanceOf("
+                                      "_mj2x_regc_env, _mj2x_regc_rcv, " +
+                                      site + ".implClass)",
                                   [&](CSourceStream& u) {
                                       u.emitLine("_mj2x_regc_m = " + site + ".method;");
                                   },
-                                  [&](CSourceStream& u) {
-                                      u.emitLine("_mj2x_regc_m = " +
-                                                 std::string("_mj2x_regc_resolved_call_site_refresh(&") +
-                                                 site + ", _mj2x_regc_rcv, _mj2x_regc_rc, " +
-                                                 cStringLiteral(ins.method.name) + ", " +
-                                                 cStringLiteral(ins.method.desc) + ");");
+                                  [&](CSourceStream& t2) {
+                                      // 快路径 2（双 JNI）：无已转换实现（fn==NULL）的调用
+                                      // 点按 receiver 精确类缓存 jmethodID。
+                                      t2.iff(site +
+                                                 ".receiverClass != NULL && (*_mj2x_regc_env)"
+                                                 "->IsSameObject(_mj2x_regc_env, " +
+                                                 site + ".receiverClass, _mj2x_regc_rc)",
+                                             [&](CSourceStream& u) {
+                                                 u.emitLine("_mj2x_regc_m = " + site +
+                                                            ".method;");
+                                             },
+                                             [&](CSourceStream& u) {
+                                                 u.emitLine("_mj2x_regc_m = " +
+                                                            std::string(
+                                                                "_mj2x_regc_resolved_call_site_"
+                                                                "refresh(&") +
+                                                            site + ", _mj2x_regc_rcv, "
+                                                                    "_mj2x_regc_rc, " +
+                                                            cStringLiteral(ins.method.name) +
+                                                            ", " +
+                                                            cStringLiteral(ins.method.desc) + ");");
+                                             });
                                   });
                             t.emitLine("(*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
                                        "_mj2x_regc_rc);");
@@ -3322,7 +3340,7 @@ ca::str::Utf8String RegCCachePool::resolvedCallSite(const ca::str::Utf8StringRef
     }
     decl.append("static mj2x_regc_resolved_call_site_t ");
     decl.append(cacheName);
-    decl.append(" = {NULL, NULL, NULL};\n");
+    decl.append(" = {NULL, NULL, NULL, NULL};\n");
     declarations_.push_back(decl.build());
     resolvedCallSiteNames_.emplace(key, cacheName.clone());
     return cacheName;

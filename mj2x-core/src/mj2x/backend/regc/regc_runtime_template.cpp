@@ -161,9 +161,15 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("    mj2x_regc_fn_ptr_t fn;\n");
     out.append("} mj2x_regc_resolved_fn_t;\n");
     out.append("typedef struct mj2x_regc_resolved_call_site {\n");
-    out.append("    jclass receiverClass;\n");
     out.append("    jmethodID method;\n");
     out.append("    mj2x_regc_fn_ptr_t fn;\n");
+    out.append("    /* fn 声明类（global ref）。快路径 IsInstanceOf(rcv, implClass) 单 JNI\n");
+    out.append("       命中即复用 method/fn（假设 implClass 之下无未转换 override）。\n");
+    out.append("       无已转换实现（fn==NULL）时 implClass 为 NULL。 */\n");
+    out.append("    jclass implClass;\n");
+    out.append("    /* 最近解析的 receiver 精确类（global ref）。fn==NULL 的调用点仍\n");
+    out.append("       按类缓存 jmethodID：GetObjectClass + IsSameObject 双 JNI 命中。 */\n");
+    out.append("    jclass receiverClass;\n");
     out.append("} mj2x_regc_resolved_call_site_t;\n");
     out.append("\n");
     if (fwd != nullptr && !fwd->empty()) {
