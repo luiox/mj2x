@@ -7,10 +7,16 @@
 | Step | 内容 | 状态 |
 |---|---|---|
 | 0 | 引擎核心（CExpr/CodeOptions/CodeTemplate/CSourceStream 补充）+ 单测 | 完成（24 个引擎单测 + 422 全量） |
-| 1 | L2 表达式层迁移 | 完成（emitIntrinsicCall/emitCachedCall/emitResolvedInstanceCall/emitMaterializedStringBuilder） |
-| 2+3 | L1 语句层 + L3 结构层迁移 | 完成（emitTerminator/emitEdgeCopies/emitExceptionDispatch/emitInstruction 全部指令/emitInvokeDynamic/emitFunction 骨架 + out 流声明段） |
-| 4 | RegCEmitter 构造参数收敛 CodeOptions + CLI 接入 | 待办 |
-| 5 | 全量验证 | 进行中（422 单测 + 13-probe 已过；待 CodeTemplate 提取片段 + case_ default 修复确认） |
+| 1 | L2 表达式层迁移 | 完成 |
+| 2+3 | L1 语句层 + L3 结构层迁移 | 完成 |
+| 4 | RegCEmitter 构造参数收敛 CodeOptions + CLI 接入 | 完成（`--regc-comment-level none\|summary\|detailed`） |
+| 5 | 全量验证 + CodeTemplate 提取评估 | 完成（422 单测 + 13-probe 全过；提取留待 3+ 次重复触发） |
+
+## 结论
+
+本分支（feat/regc-template-engine）模板引擎改造全部完成。CodeTemplate 提取不强行做
+（emitter 中重复片段已是独立函数如 emitEdgeCopies/emitRegCStatusCheck），机制已由
+引擎单测验证，出现 3+ 次真实重复时再提取。
 
 ## 验证命令
 

@@ -590,15 +590,17 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     const std::string funcKey = methodKey(className, methodName, methodDesc);
     impl_->convertedFunctions[funcKey] = RegCEmitter::functionNameFor(reg->symbol);
 
+    codegen::CodeOptions emitterOptions;
+    emitterOptions.commentLevel    = impl_->commentLevel;
+    emitterOptions.traceCallLog    = impl_->traceCallLog;
+    emitterOptions.resolvedDispatch = splitOutputDir_.empty();
     RegCEmitter emitter(&impl_->cachePool,
-                        impl_->commentLevel,
+                        emitterOptions,
                         &impl_->indySites,
                         impl_->indySites.size(),
-                        impl_->traceCallLog,
                         impl_->currentIndex,
                         &impl_->convertedFunctions,
-                        &impl_->indyFunctions,
-                        splitOutputDir_.empty());
+                        &impl_->indyFunctions);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。

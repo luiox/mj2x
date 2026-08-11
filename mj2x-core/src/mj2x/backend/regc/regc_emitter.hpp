@@ -110,26 +110,22 @@ private:
 class RegCEmitter
 {
 public:
+    /// @param cachePool 文件级缓存槽池（nullptr 时方法级 cache 声明）。
+    /// @param options   生成开关表（注释级别/跟踪/分派形态等，见 codegen::CodeOptions）。
     /// @param fileIndySites 可选：非空时 emitFunction 把本方法的 invokedynamic 站点
     ///                      追加进文件级表（finalize 据此生成 bootstrap 函数）。
     /// @param indySiteBase  文件级表的全局站点偏移（本方法首个站点的全局索引）。
-    /// @param traceCallLog  开启时实例 void 调用保留 varargs 帮手路径以输出调用日志
-    ///                      （其余缓存调用一律内联发射）。
     /// @param classIndex    可选：调用目标元数据（final 判定）；nullptr 关闭直接调用。
     /// @param convertedFunctions 可选：已转换方法表（owner\nname\ndesc -> regc_* 函数名）。
     /// @param indyFunctions      可选：含 invokedynamic 站点的方法键集合（直接调用排除）。
-    /// @param resolvedDispatch   动态实例调用是否启用 resolved native dispatch
-    ///                          （依赖 finalize 发射的单一 TU 函数表，多文件模式关闭）。
     explicit RegCEmitter(RegCCachePool* cachePool = nullptr,
-                         RegCCommentLevel commentLevel = RegCCommentLevel::Summary,
+                         const codegen::CodeOptions& options = {},
                          std::vector<RegFunction::InvokeDynamicSite>* fileIndySites = nullptr,
                          size_t indySiteBase = 0,
-                         bool traceCallLog = false,
                          CompilerIndex* classIndex = nullptr,
                          const std::unordered_map<std::string, std::string>* convertedFunctions =
                              nullptr,
-                         const std::unordered_set<std::string>* indyFunctions = nullptr,
-                         bool resolvedDispatch = false);
+                         const std::unordered_set<std::string>* indyFunctions = nullptr);
 
     /// @brief Emit a C helper function for one RegFunction.
     ///
@@ -149,14 +145,12 @@ public:
 
 private:
     RegCCachePool*   cachePool_;
-    RegCCommentLevel commentLevel_ = RegCCommentLevel::Summary;
+    codegen::CodeOptions options_;
     std::vector<RegFunction::InvokeDynamicSite>* fileIndySites_ = nullptr;
     size_t indySiteBase_ = 0;
-    bool   traceCallLog_ = false;
     CompilerIndex* classIndex_ = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions_ = nullptr;
     const std::unordered_set<std::string>* indyFunctions_ = nullptr;
-    bool   resolvedDispatch_ = false;
 };
 
 /// @brief Emit declarations shared by all RegC function bodies in one C file.

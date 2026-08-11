@@ -138,16 +138,18 @@ void comment(text);           // // text（缩进随上下文；内容不经转�
 
 ## 5. 迁移路线（分步，每步语义等价）
 
-| Step | 范围 | 责任 |
+| Step | 范围 | 状态 |
 |---|---|---|
-| 0 | 引擎核心 + 单测 + 本文档 + dev_plan | 主 agent |
-| 1 | L2 表达式层：emitIntrinsicCall/emitCachedCall/emitResolvedInstanceCall/operandExpr 组合处 → CExpr | sub agent A |
-| 2 | L1 语句层：708 处 append 中 assign/declare_var/ret/call/call_fn_ptr 可替换点 | sub agent B |
-| 3 | L3 结构层：emitTerminator（jump/branch/switch）、emitFunction 骨架、edge copies → switch_/case_/goto_/label_ + block | sub agent C |
-| 4 | RegCEmitter 构造参数收敛为 CodeOptions，接入 CLI 配置 | 主 agent |
-| 5 | 全量验证：13-probe + 401 单测 + 括号配平扫描全部生成文本 | 主 agent |
+| 0 | 引擎核心 + 单测 + 本文档 + dev_plan | 完成 |
+| 1 | L2 表达式层迁移 | 完成 |
+| 2+3 | L1 语句层 + L3 结构层迁移（emitTerminator/emitInstruction 全部/emitCachedCall/emitInvokeDynamic/emitFunction） | 完成 |
+| 4 | RegCEmitter 构造参数收敛为 CodeOptions，CLI 接入（--regc-comment-level） | 完成 |
+| 5 | 全量验证（422 单测 + 13-probe） | 完成 |
 
-每个 step 验收：编译通过 + `RegCTest.*:RegCIntrinsicTest.*` 快测试组全绿 + 生成文本过 `assertBalancedC`。
+CodeTemplate 提取：**不强行提取**。迁移完成后 emitter 中雷同片段已是独立函数
+（emitEdgeCopies/emitRegCStatusCheck/emitDefaultReturnAfterException），未出现
+3+ 次文本级重复；机制已由引擎单测验证，出现真实重复时再提取（触发条件记录于
+issue #781）。
 
 ## 6. 文档联动
 

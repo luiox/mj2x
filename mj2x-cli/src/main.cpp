@@ -46,6 +46,7 @@ static void printUsage()
     printf("  --backend <stackc|regc|llvm|vmc4> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
     printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
+    printf("  --regc-comment-level LEVEL  RegC: 生成注释级别 none|summary|detailed（默认 summary）\n");
     printf("  --regc-safe-env             RegC: 开启 safe-env（JNI 函数表快照 + 方法入口恢复；"
            "捕获时表已污染则 JNI_OnLoad fail closed）\n");
     printf("  --regc-safe-env-debug       RegC: safe-env 调试观察模式（检出 hook 只打告警不 fail，"
@@ -175,6 +176,7 @@ struct CliOptions
     bool                     llvmToolSelected = false;
     bool                     dumpMIR          = false;
     bool                     regcTraceCalls   = false;
+    mj2x::RegCCommentLevel   regcCommentLevel = mj2x::RegCCommentLevel::Summary;
     bool                     regcSafeEnv      = false;
     bool                     regcSafeEnvDebug = false;
     std::string              stackcExceptionCheck = "full";
@@ -629,6 +631,21 @@ int main(int argc, char** argv)
             options.dumpMIR = true;
         else if (arg == "--regc-trace-calls")
             options.regcTraceCalls = true;
+        else if (arg == "--regc-comment-level" && i + 1 < argc) {
+            const std::string level = argv[++i];
+            if (level == "none")
+                options.regcCommentLevel = mj2x::RegCCommentLevel::None;
+            else if (level == "summary")
+                options.regcCommentLevel = mj2x::RegCCommentLevel::Summary;
+            else if (level == "detailed")
+                options.regcCommentLevel = mj2x::RegCCommentLevel::Detailed;
+            else {
+                fprintf(stderr,
+                        "Unknown --regc-comment-level value. Expected none, summary, or detailed.\n");
+                printUsage();
+                return 1;
+            }
+        }
         else if (arg == "--regc-safe-env")
             options.regcSafeEnv = true;
         else if (arg == "--regc-safe-env-debug") {
@@ -915,6 +932,7 @@ int main(int argc, char** argv)
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
             if (options.regcTraceCalls) regcBackend->setTraceCallLog(true);
+            regcBackend->setCommentLevel(options.regcCommentLevel);
             if (options.regcSafeEnv) regcBackend->setSafeEnv(true);
             if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);
             if (!options.nativeDirOutput.empty())

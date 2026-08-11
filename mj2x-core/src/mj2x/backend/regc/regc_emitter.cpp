@@ -3387,21 +3387,18 @@ void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out)
     emitHelperPrelude(out);
 }
 
-RegCEmitter::RegCEmitter(RegCCachePool* cachePool, RegCCommentLevel commentLevel,
+RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& options,
                          std::vector<RegFunction::InvokeDynamicSite>* fileIndySites,
-                         size_t indySiteBase, bool traceCallLog, CompilerIndex* classIndex,
+                         size_t indySiteBase, CompilerIndex* classIndex,
                          const std::unordered_map<std::string, std::string>* convertedFunctions,
-                         const std::unordered_set<std::string>* indyFunctions,
-                         bool resolvedDispatch)
+                         const std::unordered_set<std::string>* indyFunctions)
     : cachePool_(cachePool)
-    , commentLevel_(commentLevel)
+    , options_(options)
     , fileIndySites_(fileIndySites)
     , indySiteBase_(indySiteBase)
-    , traceCallLog_(traceCallLog)
     , classIndex_(classIndex)
     , convertedFunctions_(convertedFunctions)
     , indyFunctions_(indyFunctions)
-    , resolvedDispatch_(resolvedDispatch)
 {}
 
 std::string RegCEmitter::functionNameFor(const SSAFunctionSymbol& symbol)
@@ -3436,12 +3433,12 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.functionName                       = result.functionName;
     emitState.symbol                             = fn.symbol;
     emitState.cachePool                          = cachePool_;
-    emitState.commentLevel                       = commentLevel_;
-    emitState.traceCalls                         = traceCallLog_;
+    emitState.commentLevel                       = options_.commentLevel;
+    emitState.traceCalls                         = options_.traceCallLog;
     emitState.classIndex                         = classIndex_;
     emitState.convertedFunctions                 = convertedFunctions_;
     emitState.indyFunctions                      = indyFunctions_;
-    emitState.resolvedDispatch                   = resolvedDispatch_;
+    emitState.resolvedDispatch                   = options_.resolvedDispatch;
     emitState.nativeStringBuilderRegisters       = stringBuilderPlan.nativeRegisters;
     emitState.nativeStringBuilderOwners          = stringBuilderPlan.ownerRegisters;
     emitState.nativeStringBuilderOwnerByRegister = stringBuilderPlan.ownerByRegister;
@@ -3461,7 +3458,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     body.indent();
     for (const auto& block : fn.blocks) {
         auto activeRegions = activeExceptionRegions(fn, block.get());
-        if (commentLevel_ >= RegCCommentLevel::Summary) {
+        if (options_.commentLevel >= RegCCommentLevel::Summary) {
             std::string header = "block_b" + std::to_string(block->id.value) + ": ";
             if (block.get() == fn.entry) {
                 header += "entry";
@@ -3487,7 +3484,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         }
         body.label_("block_b" + std::to_string(block->id.value));
         for (const auto& ins : block->instructions) {
-            if (commentLevel_ >= RegCCommentLevel::Detailed) {
+            if (options_.commentLevel >= RegCCommentLevel::Detailed) {
                 body.comment(regInstructionLine(ins).to_std_string());
             }
             if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason)) return result;
@@ -3503,7 +3500,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     return result;
             }
         }
-        if (commentLevel_ >= RegCCommentLevel::Detailed) {
+        if (options_.commentLevel >= RegCCommentLevel::Detailed) {
             const ca::str::Utf8String termLines = regTerminatorLines(*block);
             std::string_view          sv(termLines);
             // regTerminatorLines 每行以 '\n' 结尾；逐行加 "// " 前缀作为注释，避免裸 IR 文本进入 C 流。
@@ -3545,7 +3542,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         !emitState.classCacheDeclarations.empty())
         out.append("\n");
 
-    if (commentLevel_ >= RegCCommentLevel::Summary) {
+    if (options_.commentLevel >= RegCCommentLevel::Summary) {
         out.append("// RegC method: ");
         out.append(codegen::escapeCommentIdent(
             ca::str::Utf8StringRef::from_string_view(fn.symbol.owner)));
@@ -3629,7 +3626,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     out.emitBlankLine();
     out.emitRaw(bodySource.to_std_string());
 
-    if (commentLevel_ >= RegCCommentLevel::Summary) {
+    if (options_.commentLevel >= RegCCommentLevel::Summary) {
         out.comment("_mj2x_regc_cleanup: native object teardown + local frame pop");
     }
     out.label_("_mj2x_regc_cleanup");
