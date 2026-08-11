@@ -55,8 +55,11 @@ public:
 
     /// @brief 翻译一个方法的 L1 blocks 为 native 源。
     /// @return 成功时 result.kind=C_SOURCE 且 text 含生成源；失败时 fail-closed。
+    /// @param index 可选：整个编译输入的类索引（调用目标元数据/已转换集合）。
+    ///              纯后端的既有测试不传时为 nullptr，行为与以前一致。
     virtual BackendResult compileMethod(const std::string& className, CompilerMethod& method,
-                                        const std::vector<Block*>& blocks) = 0;
+                                        const std::vector<Block*>& blocks,
+                                        CompilerIndex* index = nullptr) = 0;
 
     /// @brief 把编译结果写回 class（标记 native、清字节码指令）。
     /// @details result.kind 非 C_SOURCE 时应直接返回，保留原字节码。

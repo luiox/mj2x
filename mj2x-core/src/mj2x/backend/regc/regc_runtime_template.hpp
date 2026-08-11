@@ -14,6 +14,7 @@
 #pragma once
 
 #include "libca/str/utf8_string.hpp"
+#include "mj2x/codegen/c_source.hpp"
 
 #include <string>
 
@@ -40,8 +41,8 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
                         const std::string& nullPointerExceptionClassCacheName,
                         const std::string& classCastExceptionClassCacheName,
                         const std::string& outOfMemoryErrorClassCacheName,
-                        const std::string& stringIndexOutOfBoundsClassCacheName,
-                        const std::string& unsupportedOperationExceptionClassCacheName,
-                        bool traceCallLog);
+                         const std::string& stringIndexOutOfBoundsClassCacheName,
+                         const std::string& unsupportedOperationExceptionClassCacheName,
+                         bool traceCallLog, codegen::CForwardDeclarations* fwd = nullptr);
 
 }   // namespace mj2x

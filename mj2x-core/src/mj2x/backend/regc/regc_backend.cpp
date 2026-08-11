@@ -39,6 +39,110 @@ using codegen::hex64;
 using codegen::nativeFunctionName;
 using codegen::registerFunctionName;
 
+/// 方法唯一键（owner\nname\ndesc），用于 convertedFunctions/indyFunctions 查表。
+std::string methodKey(const std::string& owner, const std::string& name, const std::string& desc)
+{
+    return owner + "\n" + name + "\n" + desc;
+}
+
+/// 构建 resolved native dispatch 的运行时定义文本：全局转换函数表 + 按 receiver
+/// 类解析/校验帮手。帮手函数经 add_func_declared 登记前向声明到 fwd（调用方
+/// 需在渲染声明之前先调用本函数），定义文本由调用方追加在方法体之后。
+std::string buildResolvedDispatchTable(
+    const std::unordered_map<std::string, std::string>& functions,
+    const std::unordered_set<std::string>& indyFunctions, codegen::CForwardDeclarations* fwd)
+{
+    CSourceStream src;
+    src.setForwardDeclarations(fwd);
+    src.emitLine("static mj2x_regc_resolved_fn_t kRegCResolvedFunctions[] = {");
+
+    std::vector<std::string> keys;
+    for (const auto& [key, fn] : functions) {
+        if (indyFunctions.count(key) != 0) continue;
+        keys.push_back(key);
+    }
+    std::sort(keys.begin(), keys.end());
+    for (const auto& key : keys) {
+        const size_t first = key.find('\n');
+        const size_t second = key.find('\n', first + 1);
+        if (first == std::string::npos || second == std::string::npos) continue;
+        const std::string owner = key.substr(0, first);
+        const std::string name = key.substr(first + 1, second - first - 1);
+        const std::string desc = key.substr(second + 1);
+        const auto fnIt = functions.find(key);
+        if (fnIt == functions.end() || fnIt->second.empty()) continue;
+        src.emitLine("    {" + codegen::cStringLiteral(owner) + ", " +
+                     codegen::cStringLiteral(name) + ", " + codegen::cStringLiteral(desc) +
+                     ", NULL, (mj2x_regc_fn_ptr_t)&" + fnIt->second + "},");
+    }
+    src.emitLine("};");
+    src.emitBlankLine();
+
+    src.add_func_declared(
+        "static mj2x_regc_fn_ptr_t _mj2x_regc_resolve_verified(const char* name, const char* desc, "
+        "jmethodID resolved_method, jclass receiver_class)",
+        [](CSourceStream& s) {
+            s.declare_var("const size_t", "count",
+                          "sizeof(kRegCResolvedFunctions) / sizeof(kRegCResolvedFunctions[0])");
+            s.declare_var("mj2x_regc_resolved_fn_t*", "best", "NULL");
+            s.for_("size_t i = 0; i < count; ++i", [](CSourceStream& t) {
+                t.declare_var("mj2x_regc_resolved_fn_t*", "e", "&kRegCResolvedFunctions[i]");
+                t.iff("strcmp(e->name, name) != 0 || strcmp(e->desc, desc) != 0",
+                      [](CSourceStream& u) { u.emitLine("continue;"); });
+                t.iff("e->ownerClass == NULL", [](CSourceStream& u) {
+                    u.declare_var("jclass", "local",
+                                  "(*_mj2x_regc_env)->FindClass(_mj2x_regc_env, e->owner)");
+                    u.iff("local == NULL", [](CSourceStream& v) { v.emitLine("continue;"); });
+                    u.assign("e->ownerClass",
+                             "(jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, local)");
+                    u.emitLine("(*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, local);");
+                    u.iff("e->ownerClass == NULL",
+                          [](CSourceStream& v) { v.emitLine("continue;"); });
+                });
+                t.iff("!(*_mj2x_regc_env)->IsAssignableFrom(_mj2x_regc_env, e->ownerClass, "
+                      "receiver_class)",
+                      [](CSourceStream& u) { u.emitLine("continue;"); });
+                t.iff("best == NULL || "
+                      "((*_mj2x_regc_env)->IsAssignableFrom(_mj2x_regc_env, best->ownerClass, "
+                      "e->ownerClass) && "
+                      "!(*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, best->ownerClass, "
+                      "e->ownerClass))",
+                      [](CSourceStream& u) { u.assign("best", "e"); });
+            });
+            s.iff("best == NULL", [](CSourceStream& u) { u.ret("NULL"); });
+            s.emitLine("/* 校验：JVM 实际解析出的方法 == 最具体已转换实现的声明方法。");
+            s.emitLine("   中间类存在未转换 override 时两者不同，回退 JNI 保语义。 */");
+            s.declare_var("jmethodID", "declared",
+                          "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, best->ownerClass, "
+                          "name, desc)");
+            s.iff("declared == NULL || declared != resolved_method",
+                  [](CSourceStream& u) { u.ret("NULL"); });
+            s.ret("best->fn");
+        });
+    src.add_func_declared(
+        "static jmethodID _mj2x_regc_resolved_call_site_refresh("
+        "mj2x_regc_resolved_call_site_t* site, jobject receiver, jclass receiver_class, "
+        "const char* name, const char* desc)",
+        [](CSourceStream& s) {
+            s.emitLine("(void)receiver;");
+            s.declare_var("jmethodID", "m",
+                          "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, receiver_class, name, "
+                          "desc)");
+            s.iff("m == NULL", [](CSourceStream& u) { u.ret("NULL"); });
+            s.iff("site->receiverClass != NULL", [](CSourceStream& u) {
+                u.emitLine("(*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, "
+                           "site->receiverClass);");
+            });
+            s.assign("site->receiverClass",
+                     "(jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, receiver_class)");
+            s.assign("site->method", "m");
+            s.assign("site->fn", "_mj2x_regc_resolve_verified(name, desc, m, receiver_class)");
+            s.ret("m");
+        });
+    src.emitBlankLine();
+    return src.str();
+}
+
 const char* jniType(PrimitiveKind kind)
 {
     switch (kind) {
@@ -360,6 +464,16 @@ struct RegCBackend::Impl
     std::unordered_map<std::string, int>                           classIds;     /// 类名 -> classId
     std::unordered_set<std::string> clinitInjected;   /// 已注入 registerNativesForClass 的类（去重）
 
+    /// 当前编译输入（compileMethod 传入，finalize 前有效）；仅用于调用目标
+    /// 元数据查询（final 判定）。旧测试传 nullptr 时直接调用优化关闭。
+    CompilerIndex* currentIndex = nullptr;
+    /// 已成功转换的方法 -> regc_* 函数体名（owner\nname\ndesc 键）。
+    /// 供 native-to-native 直接调用（deterministic dispatch 目标）使用。
+    std::unordered_map<std::string, std::string> convertedFunctions;
+    /// 含 invokedynamic 站点的方法键集合：直接调用会跳过这些目标
+    /// （indy bootstrap 依赖 per-frame _mj2x_regc_owner_class）。
+    std::unordered_set<std::string> indyFunctions;
+
     /// 记录一条 native 方法注册，并为首次出现的类分配 classId。
     /// compileMethod 成功路径调用。返回该类的 classId（供 injectIntoClass 注入 clinit）。
     int registerNativeMethod(const std::string& className, const std::string& javaName,
@@ -408,9 +522,11 @@ void RegCBackend::setSafeEnvDebug(bool enabled)
 }
 
 BackendResult RegCBackend::compileMethod(const std::string& className, CompilerMethod& method,
-                                         const std::vector<Block*>& blocks)
+                                         const std::vector<Block*>& blocks,
+                                         CompilerIndex* index)
 {
     BackendResult     backendResult;
+    impl_->currentIndex = index;
     auto*             mn         = method.methodNode;
     const std::string methodName = mn->name.to_std_string();
     const std::string methodDesc = mn->desc.to_std_string();
@@ -457,17 +573,34 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     eliminateDeadRegInstructions(*reg);
     applyRegTransformPasses(*reg);
 
+    // 提前登记函数名（供本方法内实例自递归/已转换目标的直接调用决策）；
+    // emit 失败时回滚，避免调用方直接调用到不存在的函数体。
+    const std::string funcKey = methodKey(className, methodName, methodDesc);
+    impl_->convertedFunctions[funcKey] = RegCEmitter::functionNameFor(reg->symbol);
+
     RegCEmitter emitter(&impl_->cachePool,
                         impl_->commentLevel,
                         &impl_->indySites,
-                        impl_->indySites.size());
+                        impl_->indySites.size(),
+                        impl_->traceCallLog,
+                        impl_->currentIndex,
+                        &impl_->convertedFunctions,
+                        &impl_->indyFunctions,
+                        splitOutputDir_.empty());
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。
         printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "emit failed", emitted.reason.c_str());
+        impl_->convertedFunctions.erase(funcKey);
         return backendResult;
+    }
+
+    // native-to-native 直接调用登记：只有成功转换的方法才可被直接调用。
+    impl_->convertedFunctions[funcKey] = emitted.functionName;
+    if (!reg->indySites.empty()) {
+        impl_->indyFunctions.insert(funcKey);
     }
 
     // Keep the stackless helper as the trace surface and add a thin JNI entry
@@ -1160,6 +1293,15 @@ void RegCBackend::finalize(const CompilerIndex& index)
         ZUtf8StringRef::from_static("java/lang/UnsupportedOperationException")).to_std_string();
     const std::string cacheDeclarations = impl_->cachePool.renderDeclarations();
     const std::string emittedSource     = impl_->source.build().to_std_string();
+    // 前向声明注册表：add_func_declared 定义的帮手在此登记。resolved dispatch 的
+    // 帮手必须先登记（buildResolvedDispatchTable 生成定义时登记），声明随后在
+    // emitRuntimeHelpers 渲染到翻译单元头部，方法体无需手工维护声明顺序。
+    codegen::CForwardDeclarations fwd;
+    std::string                   resolvedDispatchText;
+    if (splitOutputDir_.empty()) {
+        resolvedDispatchText =
+            buildResolvedDispatchTable(impl_->convertedFunctions, impl_->indyFunctions, &fwd);
+    }
     emitRuntimeHelpers(full,
                        cacheDeclarations,
                        stringClassCacheName,
@@ -1173,12 +1315,20 @@ void RegCBackend::finalize(const CompilerIndex& index)
                        outOfMemoryErrorClassCacheName,
                        stringIndexOutOfBoundsClassCacheName,
                        unsupportedOperationExceptionClassCacheName,
-                       impl_->traceCallLog);
+                       impl_->traceCallLog,
+                       &fwd);
     emitRegCHelperPrelude(full);
     for (size_t i = 0; i < impl_->indySites.size(); ++i) {
         emitIndyBootstrapFunction(full, i, impl_->indySites[i]);
     }
     full.append(emittedSource.data(), emittedSource.size());
+
+    // resolved native dispatch 定义（表 + 帮手）追加在所有方法体之后；前向声明
+    // 已由 fwd 渲染到头部（emitRuntimeHelpers 内），方法体可先引用。多文件模式
+    // 无全局表，emitter 侧 resolvedDispatch 已关闭，这里也不追加。
+    if (!resolvedDispatchText.empty()) {
+        full.append(resolvedDispatchText.data(), resolvedDispatchText.size());
+    }
 
     // RegisterNatives 基础设施（每类 register fn、_mj2x_reg_methods[] 表、桥接、JNI_OnLoad）。
     // 无任何注册方法时（classOrder 为空）也发射一个不绑任何类的空壳 JNI_OnLoad，

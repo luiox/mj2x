@@ -4,6 +4,7 @@
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
+#include "mj2x/core/compiler_index.hpp"
 #include "mj2x/mir/register_ir/reg_dump.hpp"
 
 #include <algorithm>
@@ -123,6 +124,103 @@ const char* helperSuffix(SSAType type)
     case SSAType::REF: return "ref";
     default: return "i32";
     }
+}
+
+/// 解析方法描述符 "(...)" 中的参数类型标签：基础类型为 Z B C S I J F D，
+/// 引用类型记 L，数组记 [。顺序即调用参数顺序（实例调用不含 receiver）。
+std::vector<char> descriptorParamTags(const ca::str::Utf8StringRef& desc)
+{
+    std::vector<char> tags;
+    const ca::u8*     p = desc.data();
+    if (p == nullptr || *p != '(') return tags;
+    ++p;
+    while (*p != ')' && *p != '\0') {
+        if (*p == '[') {
+            tags.push_back(static_cast<char>('['));
+            while (*p == '[') ++p;
+            if (*p == 'L') {
+                while (*p != ';' && *p != '\0') ++p;
+            }
+        }
+        else if (*p == 'L') {
+            tags.push_back(static_cast<char>('L'));
+            while (*p != ';' && *p != '\0') ++p;
+        }
+        else {
+            tags.push_back(static_cast<char>(*p));
+        }
+        ++p;
+    }
+    return tags;
+}
+
+/// 描述符返回类型标签（')' 之后的首字符），无效描述符返回 '\0'。
+char descriptorReturnTag(const ca::str::Utf8StringRef& desc)
+{
+    const ca::u8* p = desc.data();
+    if (p == nullptr) return '\0';
+    while (*p != ')' && *p != '\0') ++p;
+    if (*p != ')') return '\0';
+    return static_cast<char>(p[1]);
+}
+
+/// JNI CallXxxMethodA 的类型族名，如 'I' -> "Int"。
+const char* jniCallFamily(char tag)
+{
+    switch (tag) {
+    case 'Z': return "Boolean";
+    case 'B': return "Byte";
+    case 'C': return "Char";
+    case 'S': return "Short";
+    case 'I': return "Int";
+    case 'J': return "Long";
+    case 'F': return "Float";
+    case 'D': return "Double";
+    case 'V': return "Void";
+    default: return "Object";
+    }
+}
+
+/// jvalue 联合体成员名，如 'I' -> "i"。
+const char* jvalueSlotName(char tag)
+{
+    switch (tag) {
+    case 'Z': return "z";
+    case 'B': return "b";
+    case 'C': return "c";
+    case 'S': return "s";
+    case 'I': return "i";
+    case 'J': return "j";
+    case 'F': return "f";
+    case 'D': return "d";
+    default: return "l";
+    }
+}
+
+/// 值写入 jvalue 槽前的显式强转，如 'I' -> "(jint)"。
+const char* jniValueCast(char tag)
+{
+    switch (tag) {
+    case 'Z': return "(jboolean)";
+    case 'B': return "(jbyte)";
+    case 'C': return "(jchar)";
+    case 'S': return "(jshort)";
+    case 'I': return "(jint)";
+    case 'J': return "(jlong)";
+    case 'F': return "(jfloat)";
+    case 'D': return "(jdouble)";
+    default: return "(jobject)";
+    }
+}
+
+/// JNI 调用结果到寄存器 C 类型的强转；引用结果转 mj2x_ref。
+ca::str::Utf8String jniResultCast(char returnTag, SSAType destType)
+{
+    CSourceStream os;
+    os.append("(");
+    os.append((returnTag == 'L' || returnTag == '[') ? "mj2x_ref" : cType(destType));
+    os.append(")");
+    return os.build();
 }
 
 ca::str::Utf8String floatingOperandExpr(double value, SSAType type)
@@ -371,6 +469,14 @@ struct RegCFunctionEmitState
     SSAFunctionSymbol                         symbol;
     RegCCachePool*                            cachePool = nullptr;
     RegCCommentLevel                          commentLevel = RegCCommentLevel::Summary;
+    bool                                      traceCalls   = false;
+    /// native-to-native 直接调用上下文（compileMethod 传入，nullptr 关闭）。
+    CompilerIndex*                            classIndex          = nullptr;
+    const std::unordered_map<std::string, std::string>* convertedFunctions = nullptr;
+    const std::unordered_set<std::string>*    indyFunctions       = nullptr;
+    /// 动态实例调用是否启用 resolved native dispatch（多文件模式关闭：
+    /// 函数表只在单文件 TU 内可见）。
+    bool                                      resolvedDispatch    = false;
     std::vector<ca::str::Utf8String>         staticMethodCacheDeclarations;
     std::vector<ca::str::Utf8String>       staticFieldCacheDeclarations;
     std::vector<ca::str::Utf8String>       classCacheDeclarations;
@@ -1419,6 +1525,334 @@ ca::str::Utf8String addInstanceMethodCache(RegCFunctionEmitState& state, const R
     return state.cachePool->instanceMethodCache(ins.method.owner, ins.method.name, ins.method.desc);
 }
 
+/// 判定调用是否确定性分派：静态/特殊调用总是确定；虚调用仅当目标方法 final
+/// 或 owner 类 final（无子类可覆盖）时确定。接口调用保持动态分派。
+bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classIndex)
+{
+    switch (ins.method.invokeOpcode) {
+    case Opcodes::INVOKESTATIC:
+    case Opcodes::INVOKESPECIAL:
+        return true;
+    case Opcodes::INVOKEVIRTUAL:
+        break;
+    default:
+        return false;
+    }
+    if (classIndex == nullptr) return false;
+    const CompilerClass* ownerClass =
+        classIndex->getClass(ins.method.owner.to_std_string());
+    if (ownerClass == nullptr || ownerClass->classNode == nullptr) return false;
+    if ((ownerClass->classNode->access & Opcodes::ACC_FINAL) != 0) return true;
+    for (const auto& member : ownerClass->methods) {
+        if (member.methodNode == nullptr) continue;
+        if (member.methodNode->name != ins.method.name) continue;
+        if (member.methodNode->desc != ins.method.desc) continue;
+        return (member.methodNode->access & Opcodes::ACC_FINAL) != 0;
+    }
+    return false;
+}
+
+/// 发射 native-to-native 直接调用（跳过 JNI 方法分派）。要求：目标方法已成功
+/// 转换、分派确定、无 invokedynamic 站点、无 native 状态参数逃逸。未命中时
+/// 返回 false，调用方继续走 intrinsic/通用 JNI 路径。
+bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
+                       RegCFunctionEmitState& state, CompilerIndex* classIndex,
+                       const std::unordered_map<std::string, std::string>* convertedFunctions,
+                       const std::unordered_set<std::string>* indyFunctions)
+{
+    if (convertedFunctions == nullptr) return false;
+    if (isSelfStaticCall(state, ins)) return false;
+    const std::string name = ins.method.name.to_std_string();
+    if (name.empty() || name[0] == '<') return false;   // <init>/<clinit> 保持 JNI
+    const std::string key = ins.method.owner.to_std_string() + "\n" + name + "\n" +
+                            ins.method.desc.to_std_string();
+    const auto it = convertedFunctions->find(key);
+    if (it == convertedFunctions->end() || it->second.empty()) return false;
+    if (!isDeterministicDispatch(ins, classIndex)) return false;
+    if (indyFunctions != nullptr && indyFunctions->count(key) != 0) return false;
+    // native 状态参数在寄存器里是 NULL，直接调用会破坏被调方 ABI；回退通用路径。
+    for (const auto& arg : ins.args) {
+        if (nativeObjectFor(state, arg) != nullptr) return false;
+    }
+    const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+    out.append("    ");
+    if (ins.hasDest) {
+        out.append(destName);
+        out.append(" = ");
+    }
+    out.append(it->second);
+    out.append("(");
+    out.append(directCallArgs(ins.args));
+    out.append(");\n");
+    return true;
+}
+
+/// 发射缓存化的 JNI 调用点。与 varargs 帮手相比省去了每次调用的描述符
+/// 扫描（_mj2x_regc_count_params / _mj2x_regc_skip_type）与 va_list 搬运，
+/// 直接按已知参数类型填充 jvalue 数组并走 CallXxxMethodA。行为与原有
+/// _mj2x_regc_call_cached_* 帮手一致：方法/类解析失败时目标寄存器落默认值，
+/// 实例调用 receiver 为 NULL 时抛 NullPointerException。
+void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCall,
+                    const ca::str::Utf8StringRef& cacheName,
+                    const std::vector<ca::str::Utf8String>& expressions)
+{
+    const char               returnTag = descriptorReturnTag(ins.method.desc);
+    const std::vector<char>  paramTags = descriptorParamTags(ins.method.desc);
+    const bool               hasDest   = ins.hasDest;
+    const std::string        destName  = hasDest ? regName(ins.dest.id) : std::string();
+    const ca::str::Utf8String argsArg  = paramTags.empty() ? ca::str::Utf8String("NULL")
+                                                          : ca::str::Utf8String("_mj2x_regc_va");
+
+    out.append("    {\n");
+    if (!staticCall) {
+        out.append("        jobject _mj2x_regc_rcv = (jobject)(");
+        out.append(expressions[0]);
+        out.append(");\n");
+    }
+    if (!paramTags.empty()) {
+        out.append("        jvalue _mj2x_regc_va[");
+        out.append(std::to_string(paramTags.size()));
+        out.append("];\n");
+    }
+    out.append("        jmethodID _mj2x_regc_m;\n");
+    if (staticCall) {
+        for (size_t i = 0; i < paramTags.size(); ++i) {
+            out.append("        _mj2x_regc_va[");
+            out.append(std::to_string(i));
+            out.append("].");
+            out.append(jvalueSlotName(paramTags[i]));
+            out.append(" = ");
+            out.append(jniValueCast(paramTags[i]));
+            out.append("(");
+            out.append(expressions[i]);
+            out.append(");\n");
+        }
+        out.append("        _mj2x_regc_m = _mj2x_regc_cached_static_method(&");
+        out.append(cacheName);
+        out.append(");\n");
+        out.append("        if (_mj2x_regc_m != NULL && ");
+        out.append(cacheName);
+        out.append(".ownerClass != NULL) {\n");
+        if (hasDest) {
+            out.append("            ");
+            out.append(destName);
+            out.append(" = ");
+            out.append(jniResultCast(returnTag, ins.dest.type));
+            out.append("(*_mj2x_regc_env)->CallStatic");
+            out.append(jniCallFamily(returnTag));
+            out.append("MethodA(_mj2x_regc_env, ");
+            out.append(cacheName);
+            out.append(".ownerClass, _mj2x_regc_m, ");
+            out.append(argsArg);
+            out.append(");\n");
+        }
+        else {
+            out.append("            (*_mj2x_regc_env)->CallStatic");
+            out.append(jniCallFamily(returnTag));
+            out.append("MethodA(_mj2x_regc_env, ");
+            out.append(cacheName);
+            out.append(".ownerClass, _mj2x_regc_m, ");
+            out.append(argsArg);
+            out.append(");\n");
+        }
+        out.append("        } else {\n");
+        if (hasDest) {
+            out.append("            ");
+            out.append(destName);
+            out.append(" = ");
+            out.append(defaultValue(ins.dest.type));
+            out.append(";\n");
+        }
+        out.append("        }\n");
+    }
+    else {
+        out.append("        if (_mj2x_regc_rcv == NULL) {\n");
+        out.append("            _mj2x_regc_throw_null(\"instance method call\");\n");
+        if (hasDest) {
+            out.append("            ");
+            out.append(destName);
+            out.append(" = ");
+            out.append(defaultValue(ins.dest.type));
+            out.append(";\n");
+        }
+        out.append("        } else {\n");
+        for (size_t i = 0; i < paramTags.size(); ++i) {
+            out.append("            _mj2x_regc_va[");
+            out.append(std::to_string(i));
+            out.append("].");
+            out.append(jvalueSlotName(paramTags[i]));
+            out.append(" = ");
+            out.append(jniValueCast(paramTags[i]));
+            out.append("(");
+            out.append(expressions[i + 1]);
+            out.append(");\n");
+        }
+        out.append("            _mj2x_regc_m = _mj2x_regc_cached_instance_method(&");
+        out.append(cacheName);
+        out.append(", _mj2x_regc_rcv);\n");
+        out.append("            if (_mj2x_regc_m != NULL) {\n");
+        if (hasDest) {
+            out.append("                ");
+            out.append(destName);
+            out.append(" = ");
+            out.append(jniResultCast(returnTag, ins.dest.type));
+            out.append("(*_mj2x_regc_env)->Call");
+            out.append(jniCallFamily(returnTag));
+            out.append("MethodA(_mj2x_regc_env, _mj2x_regc_rcv, _mj2x_regc_m, ");
+            out.append(argsArg);
+            out.append(");\n");
+        }
+        else {
+            out.append("                (*_mj2x_regc_env)->Call");
+            out.append(jniCallFamily(returnTag));
+            out.append("MethodA(_mj2x_regc_env, _mj2x_regc_rcv, _mj2x_regc_m, ");
+            out.append(argsArg);
+            out.append(");\n");
+        }
+        out.append("            } else {\n");
+        if (hasDest) {
+            out.append("                ");
+            out.append(destName);
+            out.append(" = ");
+            out.append(defaultValue(ins.dest.type));
+            out.append(";\n");
+        }
+        out.append("            }\n");
+        out.append("        }\n");
+    }
+    out.append("    }\n");
+}
+
+/// 发射动态实例调用的 resolved native dispatch：按 receiver 实际类解析 jmethodID，
+/// 若该调用点解析出的实现是已转换方法则直接调用其 regc_* 函数体（跳过 JNI
+/// 分派），否则回退 CallXxxMethodA。站点级缓存持有 receiver 类 global ref，
+/// 同类重复调用只做 GetObjectClass + IsSameObject 检查。
+void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
+                              const ca::str::Utf8StringRef& siteName,
+                              const std::vector<ca::str::Utf8String>& expressions)
+{
+    const char              returnTag = descriptorReturnTag(ins.method.desc);
+    const std::vector<char> paramTags = descriptorParamTags(ins.method.desc);
+    const bool              hasDest   = ins.hasDest;
+    const std::string       destName  = hasDest ? regName(ins.dest.id) : std::string();
+    const std::string       site      = siteName.to_std_string();
+    const std::string       argsArg   = paramTags.empty() ? std::string("NULL")
+                                                         : std::string("_mj2x_regc_va");
+
+    // 函数指针签名与实参列表（直接调用专用）：与 regc_* 函数体 ABI 一致。
+    std::string fnPointerSig = std::string(cType(ins.dest.type)) + " (*)(";
+    std::string callArguments = "(mj2x_ref)(_mj2x_regc_rcv)";
+    fnPointerSig += "mj2x_ref";
+    for (size_t i = 0; i < paramTags.size(); ++i) {
+        fnPointerSig += ", ";
+        fnPointerSig += cType(ins.args[i + 1].type);
+        callArguments += ", (";
+        callArguments += cType(ins.args[i + 1].type);
+        callArguments += ")(";
+        callArguments += expressions[i + 1].to_std_string();
+        callArguments += ")";
+    }
+    fnPointerSig += ")";
+    // void 返回值用 void 签名（hasDest=false 时 cType 也是 "void"，但显式构建
+    // 更清晰，避免从 dest 签名里抠参数子串）。
+    std::string voidPointerSig = "void (*)(";
+    voidPointerSig += "mj2x_ref";
+    for (size_t i = 0; i < paramTags.size(); ++i) {
+        voidPointerSig += ", ";
+        voidPointerSig += cType(ins.args[i + 1].type);
+    }
+    voidPointerSig += ")";
+
+    out.block([&](CSourceStream& o) {
+        o.emitLine("jobject _mj2x_regc_rcv = (jobject)(" + expressions[0].to_std_string() + ");");
+        o.iff("_mj2x_regc_rcv == NULL",
+              [&](CSourceStream& s) {
+                  s.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
+                  if (hasDest) {
+                      s.emitLine(destName + " = " + std::string(defaultValue(ins.dest.type)) + ";");
+                  }
+              },
+              [&](CSourceStream& s) {
+                  s.emitLine("jclass _mj2x_regc_rc = (*_mj2x_regc_env)->GetObjectClass("
+                             "_mj2x_regc_env, _mj2x_regc_rcv);");
+                  s.emitLine("jmethodID _mj2x_regc_m = NULL;");
+                  if (!paramTags.empty()) {
+                      s.emitLine("jvalue _mj2x_regc_va[" + std::to_string(paramTags.size()) +
+                                 "];");
+                  }
+                  s.iff("_mj2x_regc_rc != NULL",
+                        [&](CSourceStream& t) {
+                            t.iff(site +
+                                      ".receiverClass != NULL && (*_mj2x_regc_env)->IsSameObject("
+                                      "_mj2x_regc_env, " +
+                                      site + ".receiverClass, _mj2x_regc_rc)",
+                                  [&](CSourceStream& u) {
+                                      u.emitLine("_mj2x_regc_m = " + site + ".method;");
+                                  },
+                                  [&](CSourceStream& u) {
+                                      u.emitLine("_mj2x_regc_m = " +
+                                                 std::string("_mj2x_regc_resolved_call_site_refresh(&") +
+                                                 site + ", _mj2x_regc_rcv, _mj2x_regc_rc, " +
+                                                 cStringLiteral(ins.method.name) + ", " +
+                                                 cStringLiteral(ins.method.desc) + ");");
+                                  });
+                            t.emitLine("(*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
+                                       "_mj2x_regc_rc);");
+                        });
+                  for (size_t i = 0; i < paramTags.size(); ++i) {
+                      s.emitLine("_mj2x_regc_va[" + std::to_string(i) + "]." +
+                                 std::string(jvalueSlotName(paramTags[i])) + " = " +
+                                 std::string(jniValueCast(paramTags[i])) + "(" +
+                                 expressions[i + 1].to_std_string() + ");");
+                  }
+                  if (hasDest) {
+                      s.iff("_mj2x_regc_m == NULL",
+                            [&](CSourceStream& t) {
+                                t.emitLine(destName + " = " +
+                                           std::string(defaultValue(ins.dest.type)) + ";");
+                            },
+                            [&](CSourceStream& t) {
+                                t.iff(site + ".fn != NULL",
+                                      [&](CSourceStream& u) {
+                                          u.emitLine(destName + " = " +
+                                                     jniResultCast(returnTag, ins.dest.type)
+                                                         .to_std_string() +
+                                                     "(((" + fnPointerSig + ")" + site + ".fn)(" +
+                                                     callArguments + "));");
+                                      },
+                                      [&](CSourceStream& u) {
+                                          u.emitLine(destName + " = " +
+                                                     jniResultCast(returnTag, ins.dest.type)
+                                                         .to_std_string() +
+                                                     "(*_mj2x_regc_env)->Call" +
+                                                     std::string(jniCallFamily(returnTag)) +
+                                                     "MethodA(_mj2x_regc_env, _mj2x_regc_rcv, "
+                                                     "_mj2x_regc_m, " +
+                                                     argsArg + ");");
+                                      });
+                            });
+                  }
+                  else {
+                      s.iff("_mj2x_regc_m != NULL",
+                            [&](CSourceStream& t) {
+                                t.iff(site + ".fn != NULL",
+                                      [&](CSourceStream& u) {
+                                          u.emitLine("((" + voidPointerSig + ")" + site +
+                                                     ".fn)(" + callArguments + ");");
+                                      },
+                                      [&](CSourceStream& u) {
+                                          u.emitLine("(*_mj2x_regc_env)->Call" +
+                                                     std::string(jniCallFamily(returnTag)) +
+                                                     "MethodA(_mj2x_regc_env, _mj2x_regc_rcv, "
+                                                     "_mj2x_regc_m, " +
+                                                     argsArg + ");");
+                                      });
+                            });
+                  }
+              });
+    });
+}
+
 ca::str::Utf8String addStaticFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins)
 {
     if (state.cachePool != nullptr) {
@@ -2251,6 +2685,12 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
     case RegInstructionKind::Call:
     {
+        // native-to-native 直接调用优先（确定性分派 + 已转换目标），未命中再走
+        // intrinsic/通用 JNI 路径。
+        if (tryEmitDirectCall(out, ins, state, state.classIndex, state.convertedFunctions,
+                              state.indyFunctions)) {
+            return true;
+        }
         // JDK intrinsic recognition goes through the registry so fallback
         // and unsupported reasons remain explicit as coverage grows.
         {
@@ -2284,7 +2724,24 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         const ca::str::Utf8String instanceCacheName =
             (!staticCall && !selfCall) ? addInstanceMethodCache(state, ins) : ca::str::Utf8String();
         const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
-        if (ins.hasDest) {
+        const bool dynamicInstance = !staticCall && !selfCall && !instanceCacheName.empty();
+        const bool useResolved = dynamicInstance && state.resolvedDispatch && !state.traceCalls;
+        const bool inlineCached =
+            !selfCall && !useResolved && (staticCall || !instanceCacheName.empty()) &&
+            !(state.traceCalls && !staticCall && !ins.hasDest);
+        if (useResolved) {
+            emitResolvedInstanceCall(out,
+                                     ins,
+                                     state.cachePool->resolvedCallSite(ins.method.owner,
+                                                                       ins.method.name,
+                                                                       ins.method.desc),
+                                     argumentExpressions);
+        }
+        else if (inlineCached) {
+            emitCachedCall(out, ins, staticCall, staticCall ? cacheName : instanceCacheName,
+                           argumentExpressions);
+        }
+        else if (ins.hasDest) {
             out.append("    ");
             out.append(destName.data(), destName.size());
             out.append(" = ");
@@ -2835,9 +3292,39 @@ ca::str::Utf8String RegCCachePool::instanceMethodCache(const ca::str::Utf8String
     decl.append(cStringLiteral(name));
     decl.append(", ");
     decl.append(cStringLiteral(desc));
-    decl.append(", NULL, NULL};\n");
+    decl.append(", NULL, NULL, NULL, NULL};\n");
     declarations_.push_back(decl.build());
     instanceMethodCacheNames_.emplace(key, cacheName.clone());
+    return cacheName;
+}
+
+ca::str::Utf8String RegCCachePool::resolvedCallSite(const ca::str::Utf8StringRef& owner,
+                                                    const ca::str::Utf8StringRef& name,
+                                                    const ca::str::Utf8StringRef& desc)
+{
+    const std::string key = poolCacheKey(owner, name, desc);
+    auto              it  = resolvedCallSiteNames_.find(key);
+    if (it != resolvedCallSiteNames_.end()) return it->second.clone();
+
+    CSourceStream cacheNameBuilder;
+    cacheNameBuilder.append("_mj2x_regc_resolved_site_tu_");
+    cacheNameBuilder.append(std::to_string(resolvedCallSiteIndex_++));
+    ca::str::Utf8String cacheName = cacheNameBuilder.build();
+
+    CSourceStream decl;
+    if (commentLevel_ >= RegCCommentLevel::Summary) {
+        decl.append("// cache: resolved call site ");
+        decl.append(codegen::escapeCommentIdent(owner));
+        decl.append(".");
+        decl.append(codegen::escapeCommentIdent(name));
+        decl.append(codegen::escapeCommentIdent(desc));
+        decl.append("\n");
+    }
+    decl.append("static mj2x_regc_resolved_call_site_t ");
+    decl.append(cacheName);
+    decl.append(" = {NULL, NULL, NULL};\n");
+    declarations_.push_back(decl.build());
+    resolvedCallSiteNames_.emplace(key, cacheName.clone());
     return cacheName;
 }
 
@@ -2967,12 +3454,25 @@ void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out)
 
 RegCEmitter::RegCEmitter(RegCCachePool* cachePool, RegCCommentLevel commentLevel,
                          std::vector<RegFunction::InvokeDynamicSite>* fileIndySites,
-                         size_t indySiteBase)
+                         size_t indySiteBase, bool traceCallLog, CompilerIndex* classIndex,
+                         const std::unordered_map<std::string, std::string>* convertedFunctions,
+                         const std::unordered_set<std::string>* indyFunctions,
+                         bool resolvedDispatch)
     : cachePool_(cachePool)
     , commentLevel_(commentLevel)
     , fileIndySites_(fileIndySites)
     , indySiteBase_(indySiteBase)
+    , traceCallLog_(traceCallLog)
+    , classIndex_(classIndex)
+    , convertedFunctions_(convertedFunctions)
+    , indyFunctions_(indyFunctions)
+    , resolvedDispatch_(resolvedDispatch)
 {}
+
+std::string RegCEmitter::functionNameFor(const SSAFunctionSymbol& symbol)
+{
+    return functionName(symbol);
+}
 
 RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
 {
@@ -3002,6 +3502,11 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.symbol                             = fn.symbol;
     emitState.cachePool                          = cachePool_;
     emitState.commentLevel                       = commentLevel_;
+    emitState.traceCalls                         = traceCallLog_;
+    emitState.classIndex                         = classIndex_;
+    emitState.convertedFunctions                 = convertedFunctions_;
+    emitState.indyFunctions                      = indyFunctions_;
+    emitState.resolvedDispatch                   = resolvedDispatch_;
     emitState.nativeStringBuilderRegisters       = stringBuilderPlan.nativeRegisters;
     emitState.nativeStringBuilderOwners          = stringBuilderPlan.ownerRegisters;
     emitState.nativeStringBuilderOwnerByRegister = stringBuilderPlan.ownerByRegister;

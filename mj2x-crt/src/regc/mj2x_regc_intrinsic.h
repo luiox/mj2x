@@ -8,6 +8,8 @@
 /// runtime library.
 #pragma once
 
+#include "regc/mj2x_regc_crt.h"
+
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -106,6 +108,45 @@ double  mj2x_math_floor(double value);
 double  mj2x_math_ceil(double value);
 int64_t mj2x_math_round(double value);
 double  mj2x_math_random(void);
+
+/// @brief java.lang.Integer / java.lang.Long 位操作与无符号 radix 字符串 intrinsic。
+///
+/// 位操作与 OpenJDK 语义一致（distance 按 32/64 取模、无符号旋转与反转、
+/// 符号位扩展仅发生在返回值）；radix 字符串按 Java 语义输出无符号小写
+/// （Integer.toHexString(-1) == "ffffffff"，无前缀、无补零）。
+int32_t mj2x_intrinsic_int_rotate_left(int32_t value, int32_t distance);
+int32_t mj2x_intrinsic_int_rotate_right(int32_t value, int32_t distance);
+int32_t mj2x_intrinsic_int_reverse(int32_t value);
+int32_t mj2x_intrinsic_int_bit_count(int32_t value);
+int32_t mj2x_intrinsic_int_leading_zeros(int32_t value);
+int32_t mj2x_intrinsic_int_trailing_zeros(int32_t value);
+int32_t mj2x_intrinsic_int_highest_one_bit(int32_t value);
+int32_t mj2x_intrinsic_int_lowest_one_bit(int32_t value);
+int32_t mj2x_intrinsic_int_signum(int32_t value);
+int64_t mj2x_intrinsic_long_rotate_left(int64_t value, int32_t distance);
+int64_t mj2x_intrinsic_long_rotate_right(int64_t value, int32_t distance);
+int64_t mj2x_intrinsic_long_reverse(int64_t value);
+int32_t mj2x_intrinsic_long_bit_count(int64_t value);
+int32_t mj2x_intrinsic_long_leading_zeros(int64_t value);
+int32_t mj2x_intrinsic_long_trailing_zeros(int64_t value);
+int64_t mj2x_intrinsic_long_highest_one_bit(int64_t value);
+int64_t mj2x_intrinsic_long_lowest_one_bit(int64_t value);
+int32_t mj2x_intrinsic_long_signum(int64_t value);
+
+mj2x_ref mj2x_intrinsic_int_to_hex_string(mj2x_regc_context* context, int32_t value);
+mj2x_ref mj2x_intrinsic_int_to_octal_string(mj2x_regc_context* context, int32_t value);
+mj2x_ref mj2x_intrinsic_int_to_binary_string(mj2x_regc_context* context, int32_t value);
+mj2x_ref mj2x_intrinsic_long_to_hex_string(mj2x_regc_context* context, int64_t value);
+mj2x_ref mj2x_intrinsic_long_to_octal_string(mj2x_regc_context* context, int64_t value);
+mj2x_ref mj2x_intrinsic_long_to_binary_string(mj2x_regc_context* context, int64_t value);
+
+/// @brief java.lang.Enum.name() / ordinal() 直接字段读取。
+///
+/// 所有枚举类继承 java/lang/Enum 的 final 字段 name/ordinal，缓存的 jfieldID
+/// 对所有枚举实例有效；receiver 为 NULL 时返回 NULL（等价调用路径抛 NPE，
+/// 由后续检查兜底）。
+mj2x_ref  mj2x_intrinsic_enum_name(mj2x_regc_context* context, mj2x_ref receiver);
+int32_t   mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receiver);
 
 #ifdef __cplusplus
 }

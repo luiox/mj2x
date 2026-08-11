@@ -94,7 +94,7 @@ void Pipeline::compileMethods()
             }
 
             for (auto& backend : backends_) {
-                auto result          = backend->compileMethod(name, method, blocks);
+                auto result = backend->compileMethod(name, method, blocks, index_.get());
                 method.backendResult = result;
                 backend->injectIntoClass(cls, method, result);
             }

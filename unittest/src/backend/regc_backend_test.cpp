@@ -250,10 +250,12 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
     EXPECT_EQ(countSubstring(source, "{\"Foo\", \"sink\", \"I\", NULL, NULL}"), 1u) << source;
     EXPECT_EQ(countSubstring(source, "{\"Foo\", \"value\", \"I\", NULL, NULL}"), 1u) << source;
     EXPECT_EQ(countSubstring(source, "{\"Foo\", \"mix\", \"(I)I\", NULL, NULL}"), 1u) << source;
-    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"bump\", \"()I\", NULL, NULL}"), 1u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"Foo\", \"bump\", \"()I\", NULL, NULL, NULL, NULL}"), 1u)
+        << source;
     EXPECT_EQ(
         countSubstring(
-            source, "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL}"),
+            source, "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL, "
+                    "NULL, NULL}"),
         1u)
         << source;
     EXPECT_EQ(

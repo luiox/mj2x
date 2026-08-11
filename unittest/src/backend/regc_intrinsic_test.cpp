@@ -2077,32 +2077,37 @@ TEST(RegCIntrinsicTest, StringBufferUseAfterEscapeFallsBackToJavaObject)
 TEST(RegCIntrinsicTest, NonIntrinsicCallStillUsesJniHelper)
 {
     std::string reason;
-    // An unhandled JDK call (Integer.signum) must fall through to the generic
-    // JNI call helper so we never silently drop a call site.
+    // An unhandled JDK call (Integer.remainderUnsigned) must fall through to the
+    // generic JNI call helper so we never silently drop a call site.
     auto result = emitRegC(
-        "signum",
-        "(I)I",
+        "remainderUnsigned",
+        "(II)I",
         {
             new VarInsnNode(Opcodes::ILOAD, 0),
+            new VarInsnNode(Opcodes::ILOAD, 1),
             new MethodInsnNode(
-                Opcodes::INVOKESTATIC, U("java/lang/Integer"), U("signum"), U("(I)I"), false),
+                Opcodes::INVOKESTATIC, U("java/lang/Integer"), U("remainderUnsigned"), U("(II)I"), false),
             new InsnNode(Opcodes::IRETURN),
         },
-        1,
-        1,
+        2,
+        2,
         reason);
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("{\"java/lang/Integer\", \"signum\", \"(I)I\", NULL, NULL}"),
+    EXPECT_NE(result.source.find("{\"java/lang/Integer\", \"remainderUnsigned\", \"(II)I\", NULL, NULL}"),
               std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_regc_call_cached_i32(&_mj2x_regc_cache_"),
+    EXPECT_NE(result.source.find("_mj2x_regc_cached_static_method(&_mj2x_regc_cache_"),
               std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("(*_mj2x_regc_env)->CallStaticIntMethodA("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_cached_i32"), std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\""), std::string::npos)
         << result.source;
-    // signum must not have been misrecognized as an intrinsic call site.
+    // remainderUnsigned must not have been misrecognized as an intrinsic call site.
     EXPECT_EQ(result.source.find("= mj2x_math_"), std::string::npos) << result.source;
     EXPECT_EQ(result.source.find("= _mj2x_intrinsic_parse_int"), std::string::npos)
         << result.source;

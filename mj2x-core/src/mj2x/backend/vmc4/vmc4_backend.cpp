@@ -224,8 +224,10 @@ std::string Vmc4Backend::traceSurface() const
 // compileMethod：镜像 RegCBackend 的阶段 0-8，阶段 5 换成 VmEncoder + 解释器发射。
 // ===========================================================================
 BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerMethod& method,
-                                         const std::vector<Block*>& blocks)
+                                         const std::vector<Block*>& blocks,
+                                         CompilerIndex* index)
 {
+    (void)index;
     BackendResult     backendResult;
     auto*             mn         = method.methodNode;
     const std::string methodName = mn->name.to_std_string();

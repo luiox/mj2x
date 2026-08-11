@@ -692,8 +692,10 @@ LlvmIrBackend::LlvmIrBackend()
 LlvmIrBackend::~LlvmIrBackend() = default;
 
 BackendResult LlvmIrBackend::compileMethod(const std::string& className, CompilerMethod& method,
-                                           const std::vector<Block*>& blocks)
+                                           const std::vector<Block*>& blocks,
+                                           CompilerIndex* index)
 {
+    (void)index;
     BackendResult result;
     if (method.methodNode == nullptr) {
         result.text = "LLVM IR lowering failed: missing method node";

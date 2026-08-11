@@ -105,6 +105,10 @@ typedef struct mj2x_regc_instance_method_cache
     const char* desc;
     jclass      ownerClass;
     jmethodID   method;
+    /// 最近一次非 owner 类 receiver 的运行时类与解析结果（接口/抽象方法
+    /// 分派用）。jfieldID/jmethodID 在类存活期间有效，global ref 保活。
+    jclass      lastReceiverClass;
+    jmethodID   lastReceiverMethod;
 } mj2x_regc_instance_method_cache;
 
 typedef struct mj2x_regc_static_field_cache

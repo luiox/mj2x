@@ -1,4 +1,4 @@
-﻿/// @file regc_runtime_template.cpp
+/// @file regc_runtime_template.cpp
 /// @brief RegC 运行时 C-source 定义发射（从 regc_backend.cpp 抽出，字节不变）。
 ///
 /// @details 见 regc_runtime_template.hpp。三个函数原先在 regc_backend.cpp 匿名
@@ -147,8 +147,30 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
                         const std::string& outOfMemoryErrorClassCacheName,
                         const std::string& stringIndexOutOfBoundsClassCacheName,
                         const std::string& unsupportedOperationExceptionClassCacheName,
-                        bool traceCallLog)
+                        bool traceCallLog, codegen::CForwardDeclarations* fwd)
 {
+    // resolved native dispatch 的类型定义必须先于 cache 声明（cache 声明里
+    // 有 mj2x_regc_resolved_call_site_t 静态变量）。帮手函数体在 finalize 阶段
+    // 的表之后发射，前向声明由 fwd 注册表渲染在此处。
+    out.append("typedef void (*mj2x_regc_fn_ptr_t)(void);\n");
+    out.append("typedef struct mj2x_regc_resolved_fn {\n");
+    out.append("    const char* owner;\n");
+    out.append("    const char* name;\n");
+    out.append("    const char* desc;\n");
+    out.append("    jclass ownerClass;\n");
+    out.append("    mj2x_regc_fn_ptr_t fn;\n");
+    out.append("} mj2x_regc_resolved_fn_t;\n");
+    out.append("typedef struct mj2x_regc_resolved_call_site {\n");
+    out.append("    jclass receiverClass;\n");
+    out.append("    jmethodID method;\n");
+    out.append("    mj2x_regc_fn_ptr_t fn;\n");
+    out.append("} mj2x_regc_resolved_call_site_t;\n");
+    out.append("\n");
+    if (fwd != nullptr && !fwd->empty()) {
+        const std::string declarations = fwd->render();
+        out.append(declarations.data(), declarations.size());
+        out.append("\n");
+    }
     if (!cacheDeclarations.empty()) {
         out.append(cacheDeclarations.data(), cacheDeclarations.size());
     }
@@ -247,29 +269,49 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("// crashes on the JIT inlined path (observed ACCESS_VIOLATION on HotSpot 17).\n");
     out.append("// Caching: reuse the cached id only when the receiver's runtime class equals the\n");
     out.append("// declared owner (covers the common same-type repeated calls); write back only in\n");
-    out.append("// that case. Subclass receivers re-resolve every call (negligible vs the JNI call)\n");
-    out.append("// to avoid caching one subclass's id and misleading a later different subclass.\n");
+    out.append("// that case. Interface/abstract dispatch additionally keeps one per-receiver-class\n");
+    out.append("// slot (lastReceiverClass + lastReceiverMethod, global-ref pinned): repeated calls on\n");
+    out.append("// the same concrete class reuse the resolved id after an IsSameObject check, while a\n");
+    out.append("// different subclass re-resolves instead of reusing a misleading id.\n");
     out.append("static jmethodID _mj2x_regc_cached_instance_method("
-           "mj2x_regc_instance_method_cache* cache, jobject receiver) {\n");
+            "mj2x_regc_instance_method_cache* cache, jobject receiver) {\n");
     out.append("    if (cache == NULL || receiver == NULL) return NULL;\n");
     out.append("    jclass receiver_class = (*_mj2x_regc_env)->GetObjectClass(_mj2x_regc_env, "
-           "receiver);\n");
+            "receiver);\n");
     out.append("    if (receiver_class == NULL) return NULL;\n");
     out.append("    jclass owner = _mj2x_regc_global_class(cache->owner, &cache->ownerClass);\n");
     out.append("    /* Fast path: receiver class == declared owner, reuse cached id. */\n");
     out.append("    if (owner != NULL && (*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, owner, "
-           "receiver_class) && cache->method != NULL) {\n");
+            "receiver_class) && cache->method != NULL) {\n");
     out.append("        (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, receiver_class);\n");
     out.append("        return cache->method;\n");
     out.append("    }\n");
+    out.append("    /* Subclass/interface path: reuse the per-receiver-class slot when the class matches. */\n");
+    out.append("    if (cache->lastReceiverClass != NULL &&\n");
+    out.append("        (*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, cache->lastReceiverClass, "
+            "receiver_class)) {\n");
+    out.append("        (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, receiver_class);\n");
+    out.append("        return cache->lastReceiverMethod;\n");
+    out.append("    }\n");
     out.append("    jmethodID method = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, receiver_class, "
-           "cache->name, cache->desc);\n");
+            "cache->name, cache->desc);\n");
     out.append("    if (method == NULL) { (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
-           "receiver_class); return NULL; }\n");
+            "receiver_class); return NULL; }\n");
     out.append("    /* Write back only when receiver class == declared owner; never for subclasses. */\n");
     out.append("    if (owner != NULL && (*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, owner, "
-           "receiver_class)) {\n");
+            "receiver_class)) {\n");
     out.append("        cache->method = method;\n");
+    out.append("    }\n");
+    out.append("    else {\n");
+    out.append("        /* Pin the receiver class and its resolved id for the next same-class call. */\n");
+    out.append("        if (cache->lastReceiverClass != NULL) {\n");
+    out.append("            (*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, "
+            "cache->lastReceiverClass);\n");
+    out.append("            cache->lastReceiverClass = NULL;\n");
+    out.append("        }\n");
+    out.append("        cache->lastReceiverClass = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, "
+            "receiver_class);\n");
+    out.append("        cache->lastReceiverMethod = method;\n");
     out.append("    }\n");
     out.append("    (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, receiver_class);\n");
     out.append("    return method;\n");

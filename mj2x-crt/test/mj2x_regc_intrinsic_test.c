@@ -43,3 +43,59 @@ void test_regc_intrinsic_c99_abi(void)
         expect(mj2x_random_next_long(&random) == expected_next_long[index]);
     }
 }
+
+void test_regc_intrinsic_bit_ops(void)
+{
+    // 期望值取自 JDK 实际输出（BitCheck 交叉验证）。
+    // ---- Integer 位操作 ----
+    expect(mj2x_intrinsic_int_rotate_left(0x12345678, 8) == (int32_t)0x34567812);
+    expect(mj2x_intrinsic_int_rotate_left(1, 32) == 1);
+    expect(mj2x_intrinsic_int_rotate_left(-1, 1) == -1);
+    expect(mj2x_intrinsic_int_rotate_right(0x12345678, 8) == (int32_t)0x78123456);
+    expect(mj2x_intrinsic_int_rotate_right(1, -1) == 2);
+    expect(mj2x_intrinsic_int_reverse(0x00000001) == (int32_t)0x80000000);
+    expect(mj2x_intrinsic_int_reverse((int32_t)0x80000000U) == 1);
+    expect(mj2x_intrinsic_int_bit_count(0) == 0);
+    expect(mj2x_intrinsic_int_bit_count(-1) == 32);
+    expect(mj2x_intrinsic_int_bit_count(0x0F0F0F0F) == 16);
+    expect(mj2x_intrinsic_int_leading_zeros(0) == 32);
+    expect(mj2x_intrinsic_int_leading_zeros(1) == 31);
+    expect(mj2x_intrinsic_int_leading_zeros(-1) == 0);
+    expect(mj2x_intrinsic_int_trailing_zeros(0) == 32);
+    expect(mj2x_intrinsic_int_trailing_zeros(8) == 3);
+    expect(mj2x_intrinsic_int_trailing_zeros(-1) == 0);
+    expect(mj2x_intrinsic_int_highest_one_bit(0) == 0);
+    expect(mj2x_intrinsic_int_highest_one_bit(3) == 2);
+    expect(mj2x_intrinsic_int_highest_one_bit(-1) == (int32_t)0x80000000);
+    expect(mj2x_intrinsic_int_lowest_one_bit(12) == 4);
+    expect(mj2x_intrinsic_int_lowest_one_bit(0) == 0);
+    expect(mj2x_intrinsic_int_lowest_one_bit(INT32_MIN) == INT32_MIN);
+    expect(mj2x_intrinsic_int_signum(0) == 0);
+    expect(mj2x_intrinsic_int_signum(5) == 1);
+    expect(mj2x_intrinsic_int_signum(-5) == -1);
+
+    // ---- Long 位操作 ----
+    expect(mj2x_intrinsic_long_rotate_left(INT64_C(0x123456789ABCDEF0), 16) ==
+           INT64_C(0x56789ABCDEF01234));
+    expect(mj2x_intrinsic_long_rotate_left(1, 64) == 1);
+    expect(mj2x_intrinsic_long_rotate_right(INT64_C(0x123456789ABCDEF0), 16) ==
+           INT64_C(0xDEF0123456789ABC));
+    expect(mj2x_intrinsic_long_rotate_right(1, -1) == 2);
+    expect(mj2x_intrinsic_long_reverse(1) == INT64_MIN);
+    expect(mj2x_intrinsic_long_reverse(INT64_MIN) == 1);
+    expect(mj2x_intrinsic_long_bit_count(INT64_C(0)) == 0);
+    expect(mj2x_intrinsic_long_bit_count(INT64_C(-1)) == 64);
+    expect(mj2x_intrinsic_long_bit_count(INT64_C(0x0F0F0F0F0F0F0F0F)) == 32);
+    expect(mj2x_intrinsic_long_leading_zeros(0) == 64);
+    expect(mj2x_intrinsic_long_leading_zeros(1) == 63);
+    expect(mj2x_intrinsic_long_leading_zeros(-1) == 0);
+    expect(mj2x_intrinsic_long_trailing_zeros(0) == 64);
+    expect(mj2x_intrinsic_long_trailing_zeros(INT64_C(1) << 40) == 40);
+    expect(mj2x_intrinsic_long_highest_one_bit(INT64_C(5)) == 4);
+    expect(mj2x_intrinsic_long_highest_one_bit(0) == 0);
+    expect(mj2x_intrinsic_long_lowest_one_bit(INT64_C(-8)) == 8);
+    expect(mj2x_intrinsic_long_lowest_one_bit(0) == 0);
+    expect(mj2x_intrinsic_long_signum(INT64_C(-9)) == -1);
+    expect(mj2x_intrinsic_long_signum(INT64_C(0)) == 0);
+    expect(mj2x_intrinsic_long_signum(INT64_C(9)) == 1);
+}

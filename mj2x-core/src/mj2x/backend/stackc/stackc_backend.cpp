@@ -355,8 +355,10 @@ void StackCBackend::setExceptionCheckLite(bool lite) { impl_->exceptionCheckLite
 // ============================================================
 
 BackendResult StackCBackend::compileMethod(const std::string& className, CompilerMethod& method,
-                                           const std::vector<Block*>& blocks)
+                                           const std::vector<Block*>& blocks,
+                                           CompilerIndex* index)
 {
+    (void)index;
     auto* mn                = method.methodNode;
     impl_->currentClassName = className;
     auto& cls               = impl_->currentClassName;

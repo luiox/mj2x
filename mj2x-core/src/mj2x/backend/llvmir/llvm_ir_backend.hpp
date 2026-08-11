@@ -26,7 +26,8 @@ public:
     std::string_view name() const override { return "llvm_ir"; }
 
     BackendResult compileMethod(const std::string& className, CompilerMethod& method,
-                                const std::vector<Block*>& blocks) override;
+                                const std::vector<Block*>& blocks,
+                                CompilerIndex* index = nullptr) override;
 
     void injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                          const BackendResult& result) override;

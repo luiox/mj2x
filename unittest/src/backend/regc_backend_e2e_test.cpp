@@ -1598,7 +1598,8 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
     EXPECT_NE(generatedC.find("mj2x_string_buffer_destroy("), std::string::npos) << generatedC;
     EXPECT_EQ(generatedC.find("mj2x_regc_local_string_builder"), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find(
-                  "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL}"),
+                  "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL, "
+                  "NULL, NULL}"),
               std::string::npos)
         << generatedC;
     EXPECT_NE(generatedC.find(

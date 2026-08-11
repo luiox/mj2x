@@ -1,4 +1,4 @@
-﻿/// @file stackc_backend.hpp
+/// @file stackc_backend.hpp
 /// @brief StackC 后端：广覆盖、正确性优先的 operand-stack 式 C 源生成。
 ///
 /// @details
@@ -31,7 +31,8 @@ public:
     std::string_view name() const override { return "c_source"; }
 
     BackendResult compileMethod(const std::string& className, CompilerMethod& method,
-                                const std::vector<Block*>& blocks) override;
+                                const std::vector<Block*>& blocks,
+                                CompilerIndex* index = nullptr) override;
 
     void injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                          const BackendResult& result) override;

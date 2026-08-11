@@ -349,7 +349,7 @@ TEST(RegCTest, EmitsObjectFieldAndCallHelpers)
         << result.source;
     EXPECT_NE(result.source.find("{\"Foo\", \"mix\", \"(I)I\", NULL, NULL}"), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_regc_call_cached_i32(&_mj2x_regc_cache_"),
+    EXPECT_NE(result.source.find("_mj2x_regc_cached_static_method(&_mj2x_regc_cache_"),
               std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"Foo\", \"mix\", \"(I)I\""),
@@ -405,7 +405,7 @@ TEST(RegCTest, InternsRepeatedStaticMethodAndFieldCachesWithinFunction)
     EXPECT_NE(result.source.find("_mj2x_regc_store_cached_i32_field(&_mj2x_regc_field_cache_"),
               std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_regc_call_cached_i32(&_mj2x_regc_cache_"),
+    EXPECT_NE(result.source.find("_mj2x_regc_cached_static_method(&_mj2x_regc_cache_"),
               std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);

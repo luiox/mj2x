@@ -264,3 +264,349 @@ double mj2x_math_random(void)
     const uint64_t low  = mj2x_math_next_random_bits(27);
     return (double)((high << 27) + low) / (double)(UINT64_C(1) << 53);
 }
+
+// ---- java.lang.Integer / java.lang.Long 位操作 intrinsic ----
+//
+// 所有实现与 OpenJDK 语义一致：位移量按 32/64 取模，旋转/反转/radix 输出
+// 基于无符号位型，杜绝有符号溢出与 UB 位移。
+
+static uint32_t mj2x_intrinsic_clz32(uint32_t value)
+{
+    uint32_t n = 0;
+    if (value == 0) return 32;
+    if ((value & 0xFFFF0000U) == 0) {
+        n += 16;
+        value <<= 16;
+    }
+    if ((value & 0xFF000000U) == 0) {
+        n += 8;
+        value <<= 8;
+    }
+    if ((value & 0xF0000000U) == 0) {
+        n += 4;
+        value <<= 4;
+    }
+    if ((value & 0xC0000000U) == 0) {
+        n += 2;
+        value <<= 2;
+    }
+    if ((value & 0x80000000U) == 0) {
+        n += 1;
+    }
+    return n;
+}
+
+static uint32_t mj2x_intrinsic_ctz32(uint32_t value)
+{
+    uint32_t n = 0;
+    if (value == 0) return 32;
+    if ((value & 0x0000FFFFU) == 0) {
+        n += 16;
+        value >>= 16;
+    }
+    if ((value & 0x000000FFU) == 0) {
+        n += 8;
+        value >>= 8;
+    }
+    if ((value & 0x0000000FU) == 0) {
+        n += 4;
+        value >>= 4;
+    }
+    if ((value & 0x00000003U) == 0) {
+        n += 2;
+        value >>= 2;
+    }
+    if ((value & 0x00000001U) == 0) {
+        n += 1;
+    }
+    return n;
+}
+
+static uint32_t mj2x_intrinsic_popcount32(uint32_t value)
+{
+    value = value - ((value >> 1) & 0x55555555U);
+    value = (value & 0x33333333U) + ((value >> 2) & 0x33333333U);
+    value = (value + (value >> 4)) & 0x0F0F0F0FU;
+    return (value * 0x01010101U) >> 24;
+}
+
+static uint32_t mj2x_intrinsic_clz64(uint64_t value)
+{
+    uint32_t n = 0;
+    if (value == 0) return 64;
+    if ((value & UINT64_C(0xFFFFFFFF00000000)) == 0) {
+        n += 32;
+        value <<= 32;
+    }
+    if ((value & UINT64_C(0xFFFF000000000000)) == 0) {
+        n += 16;
+        value <<= 16;
+    }
+    if ((value & UINT64_C(0xFF00000000000000)) == 0) {
+        n += 8;
+        value <<= 8;
+    }
+    if ((value & UINT64_C(0xF000000000000000)) == 0) {
+        n += 4;
+        value <<= 4;
+    }
+    if ((value & UINT64_C(0xC000000000000000)) == 0) {
+        n += 2;
+        value <<= 2;
+    }
+    if ((value & UINT64_C(0x8000000000000000)) == 0) {
+        n += 1;
+    }
+    return n;
+}
+
+static uint32_t mj2x_intrinsic_ctz64(uint64_t value)
+{
+    uint32_t n = 0;
+    if (value == 0) return 64;
+    if ((value & UINT64_C(0x00000000FFFFFFFF)) == 0) {
+        n += 32;
+        value >>= 32;
+    }
+    if ((value & UINT64_C(0x000000000000FFFF)) == 0) {
+        n += 16;
+        value >>= 16;
+    }
+    if ((value & UINT64_C(0x00000000000000FF)) == 0) {
+        n += 8;
+        value >>= 8;
+    }
+    if ((value & UINT64_C(0x000000000000000F)) == 0) {
+        n += 4;
+        value >>= 4;
+    }
+    if ((value & UINT64_C(0x0000000000000003)) == 0) {
+        n += 2;
+        value >>= 2;
+    }
+    if ((value & UINT64_C(0x0000000000000001)) == 0) {
+        n += 1;
+    }
+    return n;
+}
+
+static uint32_t mj2x_intrinsic_popcount64(uint64_t value)
+{
+    value = value - ((value >> 1) & UINT64_C(0x5555555555555555));
+    value = (value & UINT64_C(0x3333333333333333)) +
+            ((value >> 2) & UINT64_C(0x3333333333333333));
+    value = (value + (value >> 4)) & UINT64_C(0x0F0F0F0F0F0F0F0F);
+    return (uint32_t)((value * UINT64_C(0x0101010101010101)) >> 56);
+}
+
+int32_t mj2x_intrinsic_int_rotate_left(int32_t value, int32_t distance)
+{
+    const uint32_t v = (uint32_t)value;
+    const uint32_t d = (uint32_t)distance & 31U;
+    if (d == 0) return value;
+    return (int32_t)((v << d) | (v >> (32U - d)));
+}
+
+int32_t mj2x_intrinsic_int_rotate_right(int32_t value, int32_t distance)
+{
+    const uint32_t v = (uint32_t)value;
+    const uint32_t d = (uint32_t)distance & 31U;
+    if (d == 0) return value;
+    return (int32_t)((v >> d) | (v << (32U - d)));
+}
+
+int32_t mj2x_intrinsic_int_reverse(int32_t value)
+{
+    uint32_t v = (uint32_t)value;
+    v = ((v & 0x55555555U) << 1) | ((v >> 1) & 0x55555555U);
+    v = ((v & 0x33333333U) << 2) | ((v >> 2) & 0x33333333U);
+    v = ((v & 0x0F0F0F0FU) << 4) | ((v >> 4) & 0x0F0F0F0FU);
+    v = ((v & 0x00FF00FFU) << 8) | ((v >> 8) & 0x00FF00FFU);
+    v = (v << 16) | (v >> 16);
+    return (int32_t)v;
+}
+
+int32_t mj2x_intrinsic_int_bit_count(int32_t value)
+{
+    return (int32_t)mj2x_intrinsic_popcount32((uint32_t)value);
+}
+
+int32_t mj2x_intrinsic_int_leading_zeros(int32_t value)
+{
+    return (int32_t)mj2x_intrinsic_clz32((uint32_t)value);
+}
+
+int32_t mj2x_intrinsic_int_trailing_zeros(int32_t value)
+{
+    return (int32_t)mj2x_intrinsic_ctz32((uint32_t)value);
+}
+
+int32_t mj2x_intrinsic_int_highest_one_bit(int32_t value)
+{
+    if (value == 0) return 0;
+    return (int32_t)(0x80000000U >> mj2x_intrinsic_clz32((uint32_t)value));
+}
+
+int32_t mj2x_intrinsic_int_lowest_one_bit(int32_t value)
+{
+    const uint32_t v = (uint32_t)value;
+    return (int32_t)(v & (0U - v));
+}
+
+int32_t mj2x_intrinsic_int_signum(int32_t value)
+{
+    return (value > 0) - (value < 0);
+}
+
+int64_t mj2x_intrinsic_long_rotate_left(int64_t value, int32_t distance)
+{
+    const uint64_t v = (uint64_t)value;
+    const uint32_t d = (uint32_t)distance & 63U;
+    if (d == 0) return value;
+    return (int64_t)((v << d) | (v >> (64U - d)));
+}
+
+int64_t mj2x_intrinsic_long_rotate_right(int64_t value, int32_t distance)
+{
+    const uint64_t v = (uint64_t)value;
+    const uint32_t d = (uint32_t)distance & 63U;
+    if (d == 0) return value;
+    return (int64_t)((v >> d) | (v << (64U - d)));
+}
+
+int64_t mj2x_intrinsic_long_reverse(int64_t value)
+{
+    uint64_t v = (uint64_t)value;
+    v = ((v & UINT64_C(0x5555555555555555)) << 1) | ((v >> 1) & UINT64_C(0x5555555555555555));
+    v = ((v & UINT64_C(0x3333333333333333)) << 2) | ((v >> 2) & UINT64_C(0x3333333333333333));
+    v = ((v & UINT64_C(0x0F0F0F0F0F0F0F0F)) << 4) | ((v >> 4) & UINT64_C(0x0F0F0F0F0F0F0F0F));
+    v = ((v & UINT64_C(0x00FF00FF00FF00FF)) << 8) | ((v >> 8) & UINT64_C(0x00FF00FF00FF00FF));
+    v = ((v & UINT64_C(0x0000FFFF0000FFFF)) << 16) | ((v >> 16) & UINT64_C(0x0000FFFF0000FFFF));
+    v = (v << 32) | (v >> 32);
+    return (int64_t)v;
+}
+
+int32_t mj2x_intrinsic_long_bit_count(int64_t value)
+{
+    return (int32_t)mj2x_intrinsic_popcount64((uint64_t)value);
+}
+
+int32_t mj2x_intrinsic_long_leading_zeros(int64_t value)
+{
+    return (int32_t)mj2x_intrinsic_clz64((uint64_t)value);
+}
+
+int32_t mj2x_intrinsic_long_trailing_zeros(int64_t value)
+{
+    return (int32_t)mj2x_intrinsic_ctz64((uint64_t)value);
+}
+
+int64_t mj2x_intrinsic_long_highest_one_bit(int64_t value)
+{
+    if (value == 0) return 0;
+    return (int64_t)(UINT64_C(0x8000000000000000) >> mj2x_intrinsic_clz64((uint64_t)value));
+}
+
+int64_t mj2x_intrinsic_long_lowest_one_bit(int64_t value)
+{
+    const uint64_t v = (uint64_t)value;
+    return (int64_t)(v & (UINT64_C(0) - v));
+}
+
+int32_t mj2x_intrinsic_long_signum(int64_t value)
+{
+    return (value > 0) - (value < 0);
+}
+
+// ---- 无符号 radix 字符串（Integer/Long.toHexString/toOctalString/toBinaryString）----
+//
+// Java 语义：无符号位型 + 小写 digits，无前缀、无补零；0 -> "0"。
+
+static mj2x_ref mj2x_intrinsic_unsigned_to_string(mj2x_regc_context* context, uint64_t value,
+                                                  uint32_t shift)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL) return NULL;
+    static const char kDigits[] = "0123456789abcdef";
+    const uint64_t    mask      = (UINT64_C(1) << shift) - UINT64_C(1);
+    char              buffer[66];
+    int               pos = (int)sizeof(buffer) - 1;
+    buffer[pos]           = '\0';
+    do {
+        buffer[--pos] = kDigits[value & mask];
+        value >>= shift;
+    } while (value != 0 && pos > 0);
+    return (mj2x_ref)(*env)->NewStringUTF(env, buffer + pos);
+}
+
+mj2x_ref mj2x_intrinsic_int_to_hex_string(mj2x_regc_context* context, int32_t value)
+{
+    return mj2x_intrinsic_unsigned_to_string(context, (uint32_t)value, 4);
+}
+
+mj2x_ref mj2x_intrinsic_int_to_octal_string(mj2x_regc_context* context, int32_t value)
+{
+    return mj2x_intrinsic_unsigned_to_string(context, (uint32_t)value, 3);
+}
+
+mj2x_ref mj2x_intrinsic_int_to_binary_string(mj2x_regc_context* context, int32_t value)
+{
+    return mj2x_intrinsic_unsigned_to_string(context, (uint32_t)value, 1);
+}
+
+mj2x_ref mj2x_intrinsic_long_to_hex_string(mj2x_regc_context* context, int64_t value)
+{
+    return mj2x_intrinsic_unsigned_to_string(context, (uint64_t)value, 4);
+}
+
+mj2x_ref mj2x_intrinsic_long_to_octal_string(mj2x_regc_context* context, int64_t value)
+{
+    return mj2x_intrinsic_unsigned_to_string(context, (uint64_t)value, 3);
+}
+
+mj2x_ref mj2x_intrinsic_long_to_binary_string(mj2x_regc_context* context, int64_t value)
+{
+    return mj2x_intrinsic_unsigned_to_string(context, (uint64_t)value, 1);
+}
+
+// ---- java.lang.Enum.name() / ordinal() 直接字段读取 ----
+
+static jfieldID mj2x_intrinsic_enum_name_field(JNIEnv* env)
+{
+    static jfieldID cached = NULL;
+    if (cached != NULL) return cached;
+    jclass cls = (*env)->FindClass(env, "java/lang/Enum");
+    if (cls == NULL) return NULL;
+    cached = (*env)->GetFieldID(env, cls, "name", "Ljava/lang/String;");
+    (*env)->DeleteLocalRef(env, cls);
+    return cached;
+}
+
+static jfieldID mj2x_intrinsic_enum_ordinal_field(JNIEnv* env)
+{
+    static jfieldID cached = NULL;
+    if (cached != NULL) return cached;
+    jclass cls = (*env)->FindClass(env, "java/lang/Enum");
+    if (cls == NULL) return NULL;
+    cached = (*env)->GetFieldID(env, cls, "ordinal", "I");
+    (*env)->DeleteLocalRef(env, cls);
+    return cached;
+}
+
+mj2x_ref mj2x_intrinsic_enum_name(mj2x_regc_context* context, mj2x_ref receiver)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL || receiver == NULL) return NULL;
+    const jfieldID field = mj2x_intrinsic_enum_name_field(env);
+    if (field == NULL) return NULL;
+    return (mj2x_ref)(*env)->GetObjectField(env, (jobject)receiver, field);
+}
+
+int32_t mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receiver)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL || receiver == NULL) return 0;
+    const jfieldID field = mj2x_intrinsic_enum_ordinal_field(env);
+    if (field == NULL) return 0;
+    return (*env)->GetIntField(env, (jobject)receiver, field);
+}

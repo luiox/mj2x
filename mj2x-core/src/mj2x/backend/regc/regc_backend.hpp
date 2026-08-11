@@ -1,4 +1,4 @@
-﻿/// @defgroup regc_native_backend RegC Native Backend
+/// @defgroup regc_native_backend RegC Native Backend
 ///
 /// 无栈 RegC 行的 native facade。连接共享 mj2x backend 接口到较新的
 /// SSA → RegIR → RegC 管线，使 RegC 可以开始替换旧的 operand-stack 形状
@@ -77,7 +77,8 @@ public:
     std::string_view name() const override { return "regc_native"; }
 
     BackendResult compileMethod(const std::string& className, CompilerMethod& method,
-                                const std::vector<Block*>& blocks) override;
+                                const std::vector<Block*>& blocks,
+                                CompilerIndex* index = nullptr) override;
 
     void injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                          const BackendResult& result) override;

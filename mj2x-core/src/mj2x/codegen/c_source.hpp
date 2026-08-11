@@ -21,10 +21,62 @@
 #include "libca/str/utf8_string.hpp"
 
 #include <cstdint>
+#include <functional>
+#include <initializer_list>
+#include <set>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace mj2x::codegen {
+
+class CSourceStream;
+
+/// @brief C 语句体 lambda：接收流引用，块内缩进由 CSourceStream 自动管理。
+/// @details 用 `iff`/`block`/`add_func` 的 lambda 重载生成嵌套块时，花括号、
+///          缩进与换行全部由流负责，调用方只写语句内容，杜绝手拼括号漂移。
+using CBody = std::function<void(CSourceStream&)>;
+
+/// @brief 前向声明注册表：add_func 定义的函数在此登记，render 输出到文件头部。
+/// @details 生成器用 add_func 定义函数时自动登记声明；调用点出现在定义之前
+///          （如帮手函数被更早的方法体引用）时，把注册表渲染到翻译单元头部
+///          即可，无需手工维护前向声明列表。重复登记幂等。
+class CForwardDeclarations
+{
+public:
+    /// @brief 登记一条前向声明文本（如 `static int32_t foo(int32_t x);`）。
+    void declare(const std::string& declaration)
+    {
+        if (seen_.insert(declaration).second) {
+            decls_.push_back(declaration);
+        }
+    }
+
+    /// @brief 渲染全部已登记声明（每条一行，末尾换行）。
+    std::string render() const
+    {
+        std::string text;
+        for (const auto& decl : decls_) {
+            text += decl;
+            text += "\n";
+        }
+        return text;
+    }
+
+    bool empty() const { return decls_.empty(); }
+
+private:
+    std::vector<std::string> decls_;
+    std::set<std::string>    seen_;
+};
+
+/// @brief add_func 的结果：函数名 + 完整签名行（不含 `{`），供调用点引用。
+struct CFuncRef
+{
+    std::string name;
+    std::string signature;
+};
 
 /// @brief Indent-aware sink for generated C/C++ source text.
 class CSourceStream
@@ -83,6 +135,215 @@ public:
         ~IndentGuard() { stream.dedent(); }
         CSourceStream& stream;
     };
+
+    // ---- 块级结构辅助（lambda 驱动，自动缩进/花括号/换行） ----------------
+    //
+    // 嵌套控制流用 `iff`/`block` 表达，花括号与缩进由流统一管理，避免手工
+    // 拼接 `{`/`}` 与缩进漂移。语句内容仍可用 `emitLine` 或 `appendLineStart`
+    // 多片段拼接（两者混用安全）。
+
+    /// @brief 发射 `{ ... }` 语句块。
+    void block(const CBody& body)
+    {
+        emitLine("{");
+        {
+            IndentGuard g(*this);
+            body(*this);
+        }
+        emitLine("}");
+    }
+
+    /// @brief 发射 `if (cond) { then }`，可选 `else { else }`。
+    /// @param condition C 条件表达式文本（不含外层括号）。
+    /// @param elseBody  为空（默认）时省略 else 分支。
+    void iff(std::string_view condition, const CBody& thenBody, const CBody& elseBody = CBody())
+    {
+        emitLine("if (" + std::string(condition) + ") {");
+        {
+            IndentGuard g(*this);
+            thenBody(*this);
+        }
+        if (elseBody) {
+            emitLine("} else {");
+            {
+                IndentGuard g(*this);
+                elseBody(*this);
+            }
+        }
+        emitLine("}");
+    }
+
+    /// @brief 发射一个函数/语句块定义；signature 为完整签名行（不含 `{`）。
+    /// @example add_func("static int32_t foo(int32_t x)", [](CSourceStream& s){ ... });
+    void add_func(std::string_view signature, const CBody& body)
+    {
+        emitLine(signature);
+        emitLine("{");
+        {
+            IndentGuard g(*this);
+            body(*this);
+        }
+        emitLine("}");
+    }
+
+    /// @brief 发射 `returnType name(argType argName, ...)` 风格的函数定义。
+    /// @details 参数为 (类型, 名) 列表，逐个拼进签名行；body 写函数体语句。
+    void add_func(std::string_view returnType, std::string_view name,
+                  std::initializer_list<std::pair<std::string_view, std::string_view>> args,
+                  const CBody& body)
+    {
+        std::string signature(returnType);
+        signature += " ";
+        signature += name;
+        signature += "(";
+        size_t index = 0;
+        for (const auto& [type, arg] : args) {
+            if (index++ != 0) signature += ", ";
+            signature += type;
+            signature += " ";
+            signature += arg;
+        }
+        signature += ")";
+        add_func(signature, body);
+    }
+
+    /// @brief 发射函数定义并登记前向声明（挂注册表时）。
+    /// @details 返回的 CFuncRef 携带函数名与签名行；调用点出现在定义之前时，
+    ///          把注册表 render 到翻译单元头部即得前向声明。
+    CFuncRef add_func_declared(std::string_view signature, const CBody& body)
+    {
+        if (fwd_ != nullptr) fwd_->declare(std::string(signature) + ";");
+        add_func(signature, body);
+        CFuncRef ref;
+        ref.signature = std::string(signature);
+        ref.name      = functionNameFromSignature(ref.signature);
+        return ref;
+    }
+
+    /// @brief 发射函数定义（returnType name(args) 形式）并登记前向声明。
+    CFuncRef add_func_declared(
+        std::string_view returnType, std::string_view name,
+        std::initializer_list<std::pair<std::string_view, std::string_view>> args,
+        const CBody& body)
+    {
+        std::string signature(returnType);
+        signature += " ";
+        signature += name;
+        signature += "(";
+        size_t index = 0;
+        for (const auto& [type, arg] : args) {
+            if (index++ != 0) signature += ", ";
+            signature += type;
+            signature += " ";
+            signature += arg;
+        }
+        signature += ")";
+        return add_func_declared(signature, body);
+    }
+
+    /// @brief 挂接前向声明注册表（通常由翻译单元构建方设置）。
+    void setForwardDeclarations(CForwardDeclarations* fwd) { fwd_ = fwd; }
+
+    // ---- 常用语句辅助（单行语句，自动缩进） --------------------------------
+
+    /// @brief 赋值语句：`dest = expr;`。
+    void assign(std::string_view dest, std::string_view expr)
+    {
+        emitLine(std::string(dest) + " = " + std::string(expr) + ";");
+    }
+
+    /// @brief 变量声明：`type name;` 或 `type name = init;`。
+    void declare_var(std::string_view type, std::string_view name,
+                     std::string_view init = {})
+    {
+        if (init.empty()) {
+            emitLine(std::string(type) + " " + std::string(name) + ";");
+        }
+        else {
+            emitLine(std::string(type) + " " + std::string(name) + " = " + std::string(init) +
+                     ";");
+        }
+    }
+
+    /// @brief return 语句：`return;` 或 `return expr;`。
+    void ret(std::string_view expr = {})
+    {
+        if (expr.empty()) {
+            emitLine("return;");
+        }
+        else {
+            emitLine("return " + std::string(expr) + ";");
+        }
+    }
+
+    /// @brief while 循环：`while (cond) { body }`。
+    void while_(std::string_view cond, const CBody& body)
+    {
+        emitLine("while (" + std::string(cond) + ") {");
+        {
+            IndentGuard g(*this);
+            body(*this);
+        }
+        emitLine("}");
+    }
+
+    /// @brief for 循环：`for (header) { body }`，header 不含括号。
+    void for_(std::string_view header, const CBody& body)
+    {
+        emitLine("for (" + std::string(header) + ") {");
+        {
+            IndentGuard g(*this);
+            body(*this);
+        }
+        emitLine("}");
+    }
+
+    /// @brief 调用语句：`name(args);`。
+    void call(std::string_view name, std::initializer_list<std::string_view> args)
+    {
+        std::string text(name);
+        text += "(";
+        size_t index = 0;
+        for (const auto& arg : args) {
+            if (index++ != 0) text += ", ";
+            text += arg;
+        }
+        text += ");";
+        emitLine(text);
+    }
+
+    /// @brief 函数指针调用语句：`((sig)expr)(args);`。
+    void call_fn_ptr(std::string_view fnPointerSig, std::string_view expr,
+                     std::initializer_list<std::string_view> args)
+    {
+        std::string text("((");
+        text += fnPointerSig;
+        text += ")";
+        text += expr;
+        text += ")(";
+        size_t index = 0;
+        for (const auto& arg : args) {
+            if (index++ != 0) text += ", ";
+            text += arg;
+        }
+        text += ");";
+        emitLine(text);
+    }
+
+    /// @brief 发射一条普通语句（`emitLine` 的 std::string 便捷重载）。
+    void emitLine(const std::string& line)
+    {
+        writeIndent();
+        appendStr(line);
+        out_.append("\n");
+    }
+    /// @brief 发射一条普通语句（`emitLine` 的 const char* 便捷重载）。
+    void emitLine(const char* line)
+    {
+        writeIndent();
+        appendStr(line);
+        out_.append("\n");
+    }
 
     // ---- 行内续接（不加缩进、不加换行） ----------------------------------
     //
@@ -152,8 +413,19 @@ private:
     }
     void appendStr(std::string_view sv) { out_.append(sv.data(), sv.size()); }
 
+    /// 从签名行提取函数名：取 '(' 前最后一段标识符。
+    static std::string functionNameFromSignature(const std::string& signature)
+    {
+        const size_t paren   = signature.find('(');
+        const std::string prefix =
+            paren == std::string::npos ? signature : signature.substr(0, paren);
+        const size_t space = prefix.find_last_of(" *");
+        return space == std::string::npos ? prefix : prefix.substr(space + 1);
+    }
+
     ca::str::Utf8StringBuilder out_;
     int                        indentLevel_ = 0;
+    CForwardDeclarations*      fwd_         = nullptr;
 };
 
 }   // namespace mj2x::codegen
