@@ -571,21 +571,23 @@ void emitRegCStatusCheck(CSourceStream& out, RegCFunctionEmitState& state,
                          const std::string&            operation)
 {
     const int temp = state.stringBuilderTempIndex++;
-    out.append("    mj2x_regc_status runtime_status_");
-    out.append(std::to_string(temp));
-    out.append(" = ");
-    out.append(statusExpr);
-    out.append(";\n");
-    out.append("    if (runtime_status_");
-    out.append(std::to_string(temp));
-    out.append(" != MJ2X_REGC_STATUS_OK && runtime_status_");
-    out.append(std::to_string(temp));
-    out.append(" != MJ2X_REGC_STATUS_PENDING_EXCEPTION && !_mj2x_regc_exception_check())\n");
-    out.append("        mj2x_regc_report_status(_mj2x_regc_current_context(), runtime_status_");
-    out.append(std::to_string(temp));
-    out.append(", ");
-    out.append(cStringLiteral(operation));
-    out.append(");\n");
+    out.appendLineStart("mj2x_regc_status runtime_status_")
+        .appendInt(temp)
+        .append(" = ")
+        .append(statusExpr)
+        .append(";")
+        .newLine();
+    out.iff("runtime_status_" + std::to_string(temp) + " != MJ2X_REGC_STATUS_OK && runtime_status_" +
+                std::to_string(temp) + " != MJ2X_REGC_STATUS_PENDING_EXCEPTION && " +
+                "!_mj2x_regc_exception_check()",
+            [&](CSourceStream& u) {
+                u.appendLineStart("mj2x_regc_report_status(_mj2x_regc_current_context(), runtime_status_")
+                    .appendInt(temp)
+                    .append(", ")
+                    .append(cStringLiteral(operation))
+                    .append(");")
+                    .newLine();
+            });
 }
 
 ca::str::Utf8String nativeObjectStorageName(RegId id)
@@ -631,17 +633,17 @@ bool emitMaterializedStringBuilder(CSourceStream& out, RegCFunctionEmitState& st
             : "mj2x_string_builder_materialize";
     const std::string operation =
         std::string(mutableStringDisplayName(objectState->kind)) + ".materialize";
-    out.append("    if (");
-    out.append(expression);
-    out.append(" == NULL && !_mj2x_regc_exception_check()) {\n");
-    const std::string statusExpr = codegen::exprCall(
-        materializeSymbol,
-        {"_mj2x_regc_current_context()",
-         stringBuilderStateExpr(operand, objectState->kind).to_std_string(),
-         "&" + expression.to_std_string()});
-    emitRegCStatusCheck(out, state, ca::str::Utf8StringRef::from_string_view(statusExpr),
-                        operation);
-    out.append("    }\n");
+    out.iff(expression.to_std_string() + " == NULL && !_mj2x_regc_exception_check()",
+            [&](CSourceStream& u) {
+                const std::string statusExpr = codegen::exprCall(
+                    materializeSymbol,
+                    {"_mj2x_regc_current_context()",
+                     stringBuilderStateExpr(operand, objectState->kind).to_std_string(),
+                     "&" + expression.to_std_string()});
+                emitRegCStatusCheck(u, state,
+                                    ca::str::Utf8StringRef::from_string_view(statusExpr),
+                                    operation);
+            });
     return true;
 }
 
@@ -1575,15 +1577,15 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
         if (nativeObjectFor(state, arg) != nullptr) return false;
     }
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
-    out.append("    ");
+    out.appendLineStart();
     if (ins.hasDest) {
-        out.append(destName);
-        out.append(" = ");
+        out.append(destName).append(" = ");
     }
-    out.append(it->second);
-    out.append("(");
-    out.append(directCallArgs(ins.args));
-    out.append(");\n");
+    out.append(it->second)
+        .append("(")
+        .append(directCallArgs(ins.args))
+        .append(");")
+        .newLine();
     return true;
 }
 
@@ -1603,123 +1605,94 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
     const ca::str::Utf8String argsArg  = paramTags.empty() ? ca::str::Utf8String("NULL")
                                                           : ca::str::Utf8String("_mj2x_regc_va");
 
-    out.append("    {\n");
-    if (!staticCall) {
-        out.append("        jobject _mj2x_regc_rcv = ");
-        out.append(codegen::exprCast("jobject",
-                                     codegen::exprParen(expressions[0].to_std_string())));
-        out.append(";\n");
-    }
-    if (!paramTags.empty()) {
-        out.append("        jvalue _mj2x_regc_va[");
-        out.append(std::to_string(paramTags.size()));
-        out.append("];\n");
-    }
-    out.append("        jmethodID _mj2x_regc_m;\n");
-    if (staticCall) {
-        for (size_t i = 0; i < paramTags.size(); ++i) {
-            out.append("        ");
-            out.append(codegen::exprMember(codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
-                                           jvalueSlotName(paramTags[i])));
-            out.append(" = ");
-            out.append(codegen::exprCast(jniValueCast(paramTags[i]),
-                                         codegen::exprParen(expressions[i].to_std_string())));
-            out.append(";\n");
+    out.block([&](CSourceStream& o) {
+        if (!staticCall) {
+            o.declare_var("jobject", "_mj2x_regc_rcv",
+                          codegen::exprCast("jobject",
+                                            codegen::exprParen(expressions[0].to_std_string())));
         }
-        out.append("        _mj2x_regc_m = ");
-        out.append(codegen::exprCall("_mj2x_regc_cached_static_method",
-                                     {"&" + cacheName.to_std_string()}));
-        out.append(";\n");
-        out.append("        if (");
-        out.append(codegen::exprBinop(
-            "&&", codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
-            codegen::exprBinop("!=", codegen::exprMember(cacheName.to_std_string(), "ownerClass"),
-                               "NULL")));
-        out.append(") {\n");
-        const std::string callExpr = codegen::exprCall(
-            std::string("(*_mj2x_regc_env)->CallStatic") + jniCallFamily(returnTag) + "MethodA",
-            {"_mj2x_regc_env", codegen::exprMember(cacheName.to_std_string(), "ownerClass"),
-             "_mj2x_regc_m", argsArg.to_std_string()});
-        if (hasDest) {
-            out.append("            ");
-            out.append(destName);
-            out.append(" = ");
-            out.append(jniResultCast(returnTag, ins.dest.type));
-            out.append(callExpr);
-            out.append(";\n");
+        if (!paramTags.empty()) {
+            o.declare_var("jvalue", "_mj2x_regc_va[" + std::to_string(paramTags.size()) + "]");
         }
-        else {
-            out.append("            ");
-            out.append(callExpr);
-            out.append(";\n");
-        }
-        out.append("        } else {\n");
-        if (hasDest) {
-            out.append("            ");
-            out.append(destName);
-            out.append(" = ");
-            out.append(defaultValue(ins.dest.type));
-            out.append(";\n");
-        }
-        out.append("        }\n");
-    }
-    else {
-        out.append("        if (");
-        out.append(codegen::exprBinop("==", "_mj2x_regc_rcv", "NULL"));
-        out.append(") {\n");
-        out.append("            _mj2x_regc_throw_null(\"instance method call\");\n");
-        if (hasDest) {
-            out.append("            ");
-            out.append(destName);
-            out.append(" = ");
-            out.append(defaultValue(ins.dest.type));
-            out.append(";\n");
-        }
-        out.append("        } else {\n");
-        for (size_t i = 0; i < paramTags.size(); ++i) {
-            out.append("            ");
-            out.append(codegen::exprMember(codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
-                                           jvalueSlotName(paramTags[i])));
-            out.append(" = ");
-            out.append(codegen::exprCast(jniValueCast(paramTags[i]),
-                                         codegen::exprParen(expressions[i + 1].to_std_string())));
-            out.append(";\n");
-        }
-        out.append("            _mj2x_regc_m = ");
-        out.append(codegen::exprCall("_mj2x_regc_cached_instance_method",
-                                     {"&" + cacheName.to_std_string(), "_mj2x_regc_rcv"}));
-        out.append(";\n");
-        out.append("            if (");
-        out.append(codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"));
-        out.append(") {\n");
-        const std::string callExpr = codegen::exprCall(
-            std::string("(*_mj2x_regc_env)->Call") + jniCallFamily(returnTag) + "MethodA",
-            {"_mj2x_regc_env", "_mj2x_regc_rcv", "_mj2x_regc_m", argsArg.to_std_string()});
-        if (hasDest) {
-            out.append("                ");
-            out.append(destName);
-            out.append(" = ");
-            out.append(jniResultCast(returnTag, ins.dest.type));
-            out.append(callExpr);
-            out.append(";\n");
+        o.declare_var("jmethodID", "_mj2x_regc_m");
+        if (staticCall) {
+            for (size_t i = 0; i < paramTags.size(); ++i) {
+                o.assign(codegen::exprMember(codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                                             jvalueSlotName(paramTags[i])),
+                         std::string(jniValueCast(paramTags[i])) +
+                             codegen::exprParen(expressions[i].to_std_string()));
+            }
+            o.assign("_mj2x_regc_m",
+                     codegen::exprCall("_mj2x_regc_cached_static_method",
+                                       {"&" + cacheName.to_std_string()}));
+            const std::string callExpr = codegen::exprCall(
+                std::string("(*_mj2x_regc_env)->CallStatic") + jniCallFamily(returnTag) + "MethodA",
+                {"_mj2x_regc_env", codegen::exprMember(cacheName.to_std_string(), "ownerClass"),
+                 "_mj2x_regc_m", argsArg.to_std_string()});
+            o.iff(codegen::exprBinop(
+                      "&&", codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
+                      codegen::exprBinop("!=", codegen::exprMember(cacheName.to_std_string(),
+                                                                   "ownerClass"),
+                                         "NULL")),
+                  [&](CSourceStream& u) {
+                      if (hasDest) {
+                          u.assign(destName,
+                                   std::string(jniResultCast(returnTag, ins.dest.type)) + callExpr);
+                      }
+                      else {
+                          u.emitLine(callExpr + ";");
+                      }
+                  },
+                  [&](CSourceStream& u) {
+                      if (hasDest) {
+                          u.assign(destName, std::string(defaultValue(ins.dest.type)));
+                      }
+                  });
         }
         else {
-            out.append("                ");
-            out.append(callExpr);
-            out.append(";\n");
+            o.iff(codegen::exprBinop("==", "_mj2x_regc_rcv", "NULL"),
+                  [&](CSourceStream& u) {
+                      u.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
+                      if (hasDest) {
+                          u.assign(destName, std::string(defaultValue(ins.dest.type)));
+                      }
+                  },
+                  [&](CSourceStream& u) {
+                      for (size_t i = 0; i < paramTags.size(); ++i) {
+                          u.assign(codegen::exprMember(
+                                       codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                                       jvalueSlotName(paramTags[i])),
+                                   std::string(jniValueCast(paramTags[i])) +
+                                       codegen::exprParen(expressions[i + 1].to_std_string()));
+                      }
+                      u.assign("_mj2x_regc_m",
+                               codegen::exprCall("_mj2x_regc_cached_instance_method",
+                                                 {"&" + cacheName.to_std_string(),
+                                                  "_mj2x_regc_rcv"}));
+                      const std::string callExpr = codegen::exprCall(
+                          std::string("(*_mj2x_regc_env)->Call") + jniCallFamily(returnTag) +
+                              "MethodA",
+                          {"_mj2x_regc_env", "_mj2x_regc_rcv", "_mj2x_regc_m",
+                           argsArg.to_std_string()});
+                      u.iff(codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
+                            [&](CSourceStream& v) {
+                                if (hasDest) {
+                                    v.assign(destName,
+                                             std::string(jniResultCast(returnTag, ins.dest.type)) +
+                                                 callExpr);
+                                }
+                                else {
+                                    v.emitLine(callExpr + ";");
+                                }
+                            },
+                            [&](CSourceStream& v) {
+                                if (hasDest) {
+                                    v.assign(destName, std::string(defaultValue(ins.dest.type)));
+                                }
+                            });
+                  });
         }
-        out.append("            } else {\n");
-        if (hasDest) {
-            out.append("                ");
-            out.append(destName);
-            out.append(" = ");
-            out.append(defaultValue(ins.dest.type));
-            out.append(";\n");
-        }
-        out.append("            }\n");
-        out.append("        }\n");
-    }
-    out.append("    }\n");
+    });
 }
 
 /// 发射动态实例调用的 resolved native dispatch：按 receiver 实际类解析 jmethodID，
@@ -1850,9 +1823,8 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                                      codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
                                      jvalueSlotName(paramTags[i])) +
                                  " = " +
-                                 codegen::exprCast(jniValueCast(paramTags[i]),
-                                                   codegen::exprParen(
-                                                       expressions[i + 1].to_std_string())) +
+                                 std::string(jniValueCast(paramTags[i])) +
+                                 codegen::exprParen(expressions[i + 1].to_std_string()) +
                                  ";");
                   }
                   if (hasDest) {
@@ -1864,22 +1836,18 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                             [&](CSourceStream& t) {
                                 t.iff(codegen::exprBinop("!=", codegen::exprMember(site, "fn"),
                                                          "NULL"),
-                                      [&](CSourceStream& u) {
-                                          u.emitLine(destName + " = " +
-                                                     codegen::exprCast(
-                                                         jniResultCast(returnTag, ins.dest.type)
-                                                             .to_std_string(),
-                                                         fnPtrCallExpr) +
-                                                     ";");
-                                      },
-                                      [&](CSourceStream& u) {
-                                          u.emitLine(destName + " = " +
-                                                     codegen::exprCast(
-                                                         jniResultCast(returnTag, ins.dest.type)
-                                                             .to_std_string(),
-                                                         jniCallExpr) +
-                                                     ";");
-                                      });
+                                    [&](CSourceStream& u) {
+                                        u.emitLine(destName + " = " +
+                                                   jniResultCast(returnTag, ins.dest.type)
+                                                       .to_std_string() +
+                                                   fnPtrCallExpr + ";");
+                                    },
+                                    [&](CSourceStream& u) {
+                                        u.emitLine(destName + " = " +
+                                                   jniResultCast(returnTag, ins.dest.type)
+                                                       .to_std_string() +
+                                                   jniCallExpr + ";");
+                                    });
                             });
                   }
                   else {
@@ -1996,20 +1964,17 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             decision.reason = "wrapper value escapes native state";
             return decision;
         }
-        out.append("    ");
-        out.append(nativeObjectType(decision.nativeObjectKind));
-        out.append(" ");
-        out.append(nativeObjectStorageName(ins.dest.id));
-        out.append(" = ");
+        out.appendLineStart(nativeObjectType(decision.nativeObjectKind))
+            .append(" ")
+            .append(nativeObjectStorageName(ins.dest.id))
+            .append(" = ");
         std::vector<std::string> valueOfArgs;
         if (!ins.args.empty()) valueOfArgs.push_back(operandExpr(ins.args[0]).to_std_string());
         out.append(codegen::exprCallArgs(decision.symbol, valueOfArgs));
-        out.append(";\n");
+        out.append(";").newLine();
         const ca::str::Utf8String storageName = nativeObjectStorageName(ins.dest.id);
         const std::string         destName    = regName(ins.dest.id);
-        out.append("    ");
-        out.append(destName.data(), destName.size());
-        out.append(" = NULL;\n");
+        out.assign(destName, "NULL");
         state.nativeObjects[ins.dest.id.value] =
             RegCNativeObjectState{decision.nativeObjectKind, storageName.to_std_string()};
         return decision;
@@ -2027,14 +1992,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             decision.reason = "wrapper receiver is not native state";
             return decision;
         }
-        out.append("    ");
+        out.appendLineStart();
         if (ins.hasDest) {
-            const std::string name = regName(ins.dest.id);
-            out.append(name.data(), name.size());
-            out.append(" = ");
+            out.append(regName(ins.dest.id)).append(" = ");
         }
         out.append(codegen::exprCall(decision.symbol, {objectState->storageName}));
-        out.append(";\n");
+        out.append(";").newLine();
         return decision;
     }
 
@@ -2050,11 +2013,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             decision.reason = "Random receiver is not native state";
             return decision;
         }
-        out.append("    ");
-        out.append(codegen::exprCall(decision.symbol,
-                                     {"&" + objectState->storageName,
-                                      operandExpr(ins.args[1]).to_std_string()}));
-        out.append(";\n");
+        out.appendLineStart()
+            .append(codegen::exprCall(decision.symbol,
+                                      {"&" + objectState->storageName,
+                                       operandExpr(ins.args[1]).to_std_string()}))
+            .append(";")
+            .newLine();
         return decision;
     }
 
@@ -2070,11 +2034,9 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             decision.reason = "receiver is not native object state";
             return decision;
         }
-        out.append("    ");
+        out.appendLineStart();
         if (ins.hasDest) {
-            const std::string destName = regName(ins.dest.id);
-            out.append(destName.data(), destName.size());
-            out.append(" = ");
+            out.append(regName(ins.dest.id)).append(" = ");
         }
         std::vector<std::string> nativeArgs;
         nativeArgs.push_back("&" + objectState->storageName);
@@ -2082,7 +2044,7 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             nativeArgs.push_back(operandExpr(ins.args[i]).to_std_string());
         }
         out.append(codegen::exprCallArgs(decision.symbol, nativeArgs));
-        out.append(";\n");
+        out.append(";").newLine();
         return decision;
     }
 
@@ -2117,13 +2079,13 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             const char* resultType = ins.method.name == "charAt" && ins.method.desc == "(I)C"
                                          ? "uint16_t"
                                          : cType(ins.dest.type);
-            out.append("    ");
-            out.append(resultType);
-            out.append(" mutable_string_value_");
-            out.append(std::to_string(valueTemp));
-            out.append(" = ");
-            out.append(defaultValue(ins.dest.type));
-            out.append(";\n");
+            out.appendLineStart(resultType)
+                .append(" mutable_string_value_")
+                .appendInt(valueTemp)
+                .append(" = ")
+                .append(defaultValue(ins.dest.type))
+                .append(";")
+                .newLine();
             callArgs.push_back("&mutable_string_value_" + std::to_string(valueTemp));
         }
         const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
@@ -2132,12 +2094,8 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                             ca::str::Utf8StringRef::from_string_view(callText),
                             std::string(mutableStringDisplayName(objectState->kind)) + ".method");
         if (ins.hasDest) {
-            const std::string destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = mutable_string_value_");
-            out.append(std::to_string(valueTemp));
-            out.append(";\n");
+            out.assign(regName(ins.dest.id),
+                       "mutable_string_value_" + std::to_string(valueTemp));
         }
         return decision;
     }
@@ -2213,14 +2171,11 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                             ca::str::Utf8StringRef::from_string_view(callText),
                             std::string(mutableStringDisplayName(objectState->kind)) + ".append");
         if (ins.hasDest) {
-            const std::string destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = ");
-            out.append(operandExpr(ins.args[0]));
-            out.append(";\n");
+            out.assign(regName(ins.dest.id),
+                       operandExpr(ins.args[0]).to_std_string());
             state.nativeObjects[ins.dest.id.value] =
-                RegCNativeObjectState{objectState->kind, destName};
+                RegCNativeObjectState{objectState->kind,
+                                      regName(ins.dest.id)};
         }
         return decision;
     }
@@ -2239,13 +2194,13 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             }
         }
         const int valueTemp = state.stringBuilderTempIndex++;
-        out.append("    ");
-        out.append(cType(ins.dest.type));
-        out.append(" string_value_");
-        out.append(std::to_string(valueTemp));
-        out.append(" = ");
-        out.append(defaultValue(ins.dest.type));
-        out.append(";\n");
+        out.appendLineStart(cType(ins.dest.type))
+            .append(" string_value_")
+            .appendInt(valueTemp)
+            .append(" = ")
+            .append(defaultValue(ins.dest.type))
+            .append(";")
+            .newLine();
         std::vector<std::string> callArgs;
         callArgs.push_back("_mj2x_regc_current_context()");
         for (const auto& arg : ins.args) {
@@ -2255,12 +2210,8 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
         emitRegCStatusCheck(out, state, ca::str::Utf8StringRef::from_string_view(callText),
                             "String intrinsic");
-        const std::string destName = regName(ins.dest.id);
-        out.append("    ");
-        out.append(destName.data(), destName.size());
-        out.append(" = string_value_");
-        out.append(std::to_string(valueTemp));
-        out.append(";\n");
+        out.assign(regName(ins.dest.id),
+                   "string_value_" + std::to_string(valueTemp));
         return decision;
     }
 
@@ -2278,13 +2229,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         for (const auto& arg : ins.args) {
             stringArgs.push_back(operandExpr(arg).to_std_string());
         }
-        out.append("    ");
+        out.appendLineStart();
         if (ins.hasDest) {
-            out.append(destName.data(), destName.size());
-            out.append(" = ");
+            out.append(destName).append(" = ");
         }
         out.append(codegen::exprCallArgs(decision.symbol, stringArgs));
-        out.append(";\n");
+        out.append(";").newLine();
         return decision;
     }
 
@@ -2295,13 +2245,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
     for (const auto& arg : ins.args) {
         fallbackArgs.push_back(operandExpr(arg).to_std_string());
     }
-    out.append("    ");
+    out.appendLineStart();
     if (ins.hasDest) {
-        out.append(destName.data(), destName.size());
-        out.append(" = ");
+        out.append(destName).append(" = ");
     }
     out.append(codegen::exprCallArgs(decision.symbol, fallbackArgs));
-    out.append(";\n");
+    out.append(";").newLine();
     return decision;
 }
 
@@ -2329,21 +2278,17 @@ bool emitEdgeCopies(CSourceStream& out, const std::vector<RegCopy>& copies,
         if (static_cast<int>(state.edgeTempTypes.size()) <= tempId) {
             state.edgeTempTypes.resize(static_cast<size_t>(tempId) + 1, copies[i].dest.type);
         }
-        out.append("    edge_tmp_");
-        out.append(std::to_string(tempId));
-        out.append(" = (");
-        out.append(cType(copies[i].dest.type));
-        out.append(")(");
-        out.append(operandExpr(copies[i].source));
-        out.append(");\n");
+        out.appendLineStart("edge_tmp_")
+            .appendInt(tempId)
+            .append(" = ")
+            .append(codegen::exprCast(cType(copies[i].dest.type),
+                                      codegen::exprParen(operandExpr(copies[i].source).to_std_string())))
+            .append(";")
+            .newLine();
     }
     for (size_t i = 0; i < copies.size(); ++i) {
         const std::string destName = regName(copies[i].dest.id);
-        out.append("    ");
-        out.append(destName.data(), destName.size());
-        out.append(" = edge_tmp_");
-        out.append(std::to_string(tempIds[i]));
-        out.append(";\n");
+        out.assign(destName, "edge_tmp_" + std::to_string(tempIds[i]));
     }
     return true;
 }
@@ -2367,13 +2312,11 @@ std::vector<const RegExceptionRegion*> activeExceptionRegions(const RegFunction&
 void emitDefaultReturnAfterException(CSourceStream& out, SSAType returnType)
 {
     if (returnType == SSAType::VOID) {
-        out.append("        goto _mj2x_regc_cleanup;\n");
+        out.goto_("_mj2x_regc_cleanup");
     }
     else {
-        out.append("        _mj2x_regc_result = ");
-        out.append(defaultValue(returnType));
-        out.append(";\n");
-        out.append("        goto _mj2x_regc_cleanup;\n");
+        out.assign("_mj2x_regc_result", defaultValue(returnType));
+        out.goto_("_mj2x_regc_cleanup");
     }
 }
 
@@ -2406,47 +2349,40 @@ bool emitExceptionDispatch(CSourceStream&                        out,
                            int& edgeTempIndex, std::string& reason)
 {
     const int index = dispatchIndex++;
-    out.append("    if (_mj2x_regc_exception_check()) {\n");
-    if (regions.empty()) {
-        emitDefaultReturnAfterException(out, returnType);
-        out.append("    }\n");
-        return true;
-    }
-    out.append("        mj2x_ref ex_");
-    out.append(std::to_string(index));
-    out.append(" = _mj2x_regc_exception_occurred();\n");
-    out.append("        _mj2x_regc_exception_clear();\n");
-    // Match in exception-table order. A matched handler receives the caught
-    // exception through its synthetic exception register before the jump.
-    for (const auto* region : regions) {
-        out.append("        if (_mj2x_regc_exception_matches(ex_");
-        out.append(std::to_string(index));
-        out.append(", ");
-        out.append(cStringLiteral(region->caughtType));
-        out.append(")) {\n");
-        for (const auto& edge : region->edges) {
-            if (edge.protectedBlock != block) continue;
-            if (!emitEdgeCopies(out, edge.copies, state, edgeTempIndex, reason)) return false;
-            break;
+    bool      copiesOk = true;
+    out.iff("_mj2x_regc_exception_check()", [&](CSourceStream& u) {
+        if (regions.empty()) {
+            emitDefaultReturnAfterException(u, returnType);
+            return;
         }
-        const std::string exceptionName = regName(region->exceptionValue.id);
-        out.append("            ");
-        out.append(exceptionName.data(), exceptionName.size());
-        out.append(" = ex_");
-        out.append(std::to_string(index));
-        out.append(";\n");
-        out.append("            goto block_b");
-        out.append(std::to_string(region->handler->id.value));
-        out.append(";\n");
-        out.append("        }\n");
-    }
-    // 若没有任何 handler 接受挂起的异常，保持 Java 传播语义。
-    out.append("        _mj2x_regc_throw(ex_");
-    out.append(std::to_string(index));
-    out.append(");\n");
-    emitDefaultReturnAfterException(out, returnType);
-    out.append("    }\n");
-    return true;
+        u.declare_var("mj2x_ref", "ex_" + std::to_string(index),
+                      "_mj2x_regc_exception_occurred()");
+            u.call("_mj2x_regc_exception_clear", {});
+        // Match in exception-table order. A matched handler receives the caught
+        // exception through its synthetic exception register before the jump.
+        for (const auto* region : regions) {
+            u.iff("_mj2x_regc_exception_matches(ex_" + std::to_string(index) + ", " +
+                      cStringLiteral(region->caughtType) + ")",
+                  [&](CSourceStream& v) {
+                      for (const auto& edge : region->edges) {
+                          if (edge.protectedBlock != block) continue;
+                          if (!emitEdgeCopies(v, edge.copies, state, edgeTempIndex, reason)) {
+                              copiesOk = false;
+                              return;
+                          }
+                          break;
+                      }
+                      v.assign(regName(region->exceptionValue.id),
+                               "ex_" + std::to_string(index));
+                      v.goto_("block_b" + std::to_string(region->handler->id.value));
+                  });
+            if (!copiesOk) return;
+        }
+        // 若没有任何 handler 接受挂起的异常，保持 Java 传播语义。
+        u.call("_mj2x_regc_throw", {"ex_" + std::to_string(index)});
+        emitDefaultReturnAfterException(u, returnType);
+    });
+    return copiesOk;
 }
 
 bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
@@ -2460,27 +2396,21 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         if (const auto* objectState = nativeObjectFor(state, ins.copy.source)) {
             if (isMutableStringKind(objectState->kind)) {
                 const std::string destName = regName(ins.copy.dest.id);
-                out.append("    ");
-                out.append(destName.data(), destName.size());
-                out.append(" = ");
-                out.append(operandExpr(ins.copy.source));
-                out.append(";\n");
+                out.assign(destName, operandExpr(ins.copy.source).to_std_string());
                 state.nativeObjects[ins.copy.dest.id.value] =
                     RegCNativeObjectState{objectState->kind, destName};
             }
             else {
                 const ca::str::Utf8String storageName = nativeObjectStorageName(ins.copy.dest.id);
-                out.append("    ");
-                out.append(nativeObjectType(objectState->kind));
-                out.append(" ");
-                out.append(storageName);
-                out.append(" = ");
-                out.append(objectState->storageName.data(), objectState->storageName.size());
-                out.append(";\n");
+                out.appendLineStart(nativeObjectType(objectState->kind))
+                    .append(" ")
+                    .append(storageName)
+                    .append(" = ")
+                    .append(objectState->storageName)
+                    .append(";")
+                    .newLine();
                 const std::string destName = regName(ins.copy.dest.id);
-                out.append("    ");
-                out.append(destName.data(), destName.size());
-                out.append(" = NULL;\n");
+                out.assign(destName, "NULL");
                 state.nativeObjects[ins.copy.dest.id.value] =
                     RegCNativeObjectState{objectState->kind, storageName.to_std_string()};
             }
@@ -2488,35 +2418,23 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         else {
             state.nativeObjects.erase(ins.copy.dest.id.value);
             const std::string destName = regName(ins.copy.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = (");
-            out.append(cType(ins.copy.dest.type));
-            out.append(")(");
-            out.append(operandExpr(ins.copy.source));
-            out.append(");\n");
+            out.assign(destName, codegen::exprCast(cType(ins.copy.dest.type),
+                                                   codegen::exprParen(
+                                                       operandExpr(ins.copy.source).to_std_string())));
         }
         return true;
     case RegInstructionKind::Unary:
     {
         const std::string destName = regName(ins.dest.id);
-        out.append("    ");
-        out.append(destName.data(), destName.size());
-        out.append(" = (");
-        out.append(cType(ins.dest.type));
-        out.append(")(-");
-        out.append(operandExpr(ins.value));
-        out.append(");\n");
+        out.assign(destName,
+                   codegen::exprCast(cType(ins.dest.type),
+                                     "(-" + operandExpr(ins.value).to_std_string() + ")"));
         return true;
     }
     case RegInstructionKind::Binary:
     {
         const std::string destName = regName(ins.dest.id);
-        out.append("    ");
-        out.append(destName.data(), destName.size());
-        out.append(" = ");
-        out.append(binaryExpr(ins));
-        out.append(";\n");
+        out.assign(destName, binaryExpr(ins).to_std_string());
         return true;
     }
     case RegInstructionKind::Compare:
@@ -2526,28 +2444,21 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         // acmp 在字节码只有 eq/ne 两种谓词。
         if (ins.lhs.type == SSAType::REF || ins.rhs.type == SSAType::REF) {
             const std::string destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = (");
-            if (ins.comparePredicate == SSAComparePredicate::Ne) out.append("!");
-            out.append("(*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, (jobject)");
-            out.append(operandExpr(ins.lhs));
-            out.append(", (jobject)");
-            out.append(operandExpr(ins.rhs));
-            out.append("));\n");
+            const std::string sameObject = codegen::exprCall(
+                "(*_mj2x_regc_env)->IsSameObject",
+                {"_mj2x_regc_env", codegen::exprCast("jobject", operandExpr(ins.lhs).to_std_string()),
+                 codegen::exprCast("jobject", operandExpr(ins.rhs).to_std_string())});
+            out.assign(destName,
+                       codegen::exprParen((ins.comparePredicate == SSAComparePredicate::Ne ? "!" : "") +
+                                          sameObject));
             return true;
         }
     {
         const std::string destName = regName(ins.dest.id);
-        out.append("    ");
-        out.append(destName.data(), destName.size());
-        out.append(" = (");
-        out.append(operandExpr(ins.lhs));
-        out.append(" ");
-        out.append(compareOp(ins.comparePredicate));
-        out.append(" ");
-        out.append(operandExpr(ins.rhs));
-        out.append(");\n");
+        out.assign(destName, codegen::exprParen(
+                                 codegen::exprBinop(compareOp(ins.comparePredicate),
+                                                    operandExpr(ins.lhs).to_std_string(),
+                                                    operandExpr(ins.rhs).to_std_string())));
         return true;
     }
     case RegInstructionKind::Convert:
@@ -2556,23 +2467,19 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         if (ins.convertKind == SSAConvertKind::ReferenceCast) {
             const ca::str::Utf8String cacheName = addClassCache(state, ins.referenceTypeDesc);
             const std::string         destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = _mj2x_regc_checkcast_cached(");
-            out.append(operandExpr(ins.value));
-            out.append(", &");
-            out.append(cacheName);
-            out.append(");\n");
+            out.appendLineStart(destName)
+                .append(" = _mj2x_regc_checkcast_cached(")
+                .append(operandExpr(ins.value))
+                .append(", &")
+                .append(cacheName)
+                .append(");")
+                .newLine();
         }
         else {
             const std::string destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = (");
-            out.append(cType(ins.targetType));
-            out.append(")(");
-            out.append(operandExpr(ins.value));
-            out.append(");\n");
+            out.assign(destName, codegen::exprCast(cType(ins.targetType),
+                                                   codegen::exprParen(
+                                                       operandExpr(ins.value).to_std_string())));
         }
         return true;
     case RegInstructionKind::LoadField:
@@ -2581,40 +2488,40 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         if (ins.field.isStatic) {
             const ca::str::Utf8String cacheName = addStaticFieldCache(state, ins);
             const std::string         destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = _mj2x_regc_load_cached_");
-            out.append(fieldHelperSuffix(ins.field.desc, ins.dest.type));
-            out.append("_field(&");
-            out.append(cacheName);
-            out.append(");\n");
+            out.appendLineStart(destName)
+                .append(" = _mj2x_regc_load_cached_")
+                .append(fieldHelperSuffix(ins.field.desc, ins.dest.type))
+                .append("_field(&")
+                .append(cacheName)
+                .append(");")
+                .newLine();
         }
         else {
             const ca::str::Utf8String cacheName = addInstanceFieldCache(state, ins);
             const std::string         destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = _mj2x_regc_load_");
+            out.appendLineStart(destName).append(" = _mj2x_regc_load_");
             if (!cacheName.empty()) {
-                out.append("cached_instance_");
-                out.append(fieldHelperSuffix(ins.field.desc, ins.dest.type));
-                out.append("_field(&");
-                out.append(cacheName);
-                out.append(", ");
-                out.append(operandExpr(ins.receiver));
-                out.append(");\n");
+                out.append("cached_instance_")
+                    .append(fieldHelperSuffix(ins.field.desc, ins.dest.type))
+                    .append("_field(&")
+                    .append(cacheName)
+                    .append(", ")
+                    .append(operandExpr(ins.receiver))
+                    .append(");")
+                    .newLine();
             }
             else {
-                out.append(fieldHelperSuffix(ins.field.desc, ins.dest.type));
-                out.append("_field(0, ");
-                out.append(operandExpr(ins.receiver));
-                out.append(", ");
-                out.append(cStringLiteral(ins.field.owner));
-                out.append(", ");
-                out.append(cStringLiteral(ins.field.name));
-                out.append(", ");
-                out.append(cStringLiteral(ins.field.desc));
-                out.append(");\n");
+                out.append(fieldHelperSuffix(ins.field.desc, ins.dest.type))
+                    .append("_field(0, ")
+                    .append(operandExpr(ins.receiver))
+                    .append(", ")
+                    .append(cStringLiteral(ins.field.owner))
+                    .append(", ")
+                    .append(cStringLiteral(ins.field.name))
+                    .append(", ")
+                    .append(cStringLiteral(ins.field.desc))
+                    .append(");")
+                    .newLine();
             }
         }
         return true;
@@ -2629,47 +2536,52 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 !rejectNativeObjectEscape(state, ins.value, "field store value", reason)) {
                 return false;
             }
-            if (materialized) out.append("    if (!_mj2x_regc_exception_check()) {\n");
-            if (ins.field.isStatic) {
-                const ca::str::Utf8String cacheName = addStaticFieldCache(state, ins);
-                out.append("    _mj2x_regc_store_cached_");
-                out.append(fieldHelperSuffix(ins.field.desc, ins.value.type));
-                out.append("_field(&");
-                out.append(cacheName);
-                out.append(", ");
-                out.append(valueExpression);
-                out.append(");\n");
-            }
-            else {
-                const ca::str::Utf8String cacheName = addInstanceFieldCache(state, ins);
-                out.append("    _mj2x_regc_store_");
-                if (!cacheName.empty()) {
-                    out.append("cached_instance_");
-                    out.append(fieldHelperSuffix(ins.field.desc, ins.value.type));
-                    out.append("_field(&");
-                    out.append(cacheName);
-                    out.append(", ");
-                    out.append(operandExpr(ins.receiver));
-                    out.append(", ");
-                    out.append(valueExpression);
-                    out.append(");\n");
+            const auto emitStore = [&](CSourceStream& u) {
+                if (ins.field.isStatic) {
+                    const ca::str::Utf8String cacheName = addStaticFieldCache(state, ins);
+                    u.appendLineStart("_mj2x_regc_store_cached_")
+                        .append(fieldHelperSuffix(ins.field.desc, ins.value.type))
+                        .append("_field(&")
+                        .append(cacheName)
+                        .append(", ")
+                        .append(valueExpression)
+                        .append(");")
+                        .newLine();
                 }
                 else {
-                    out.append(fieldHelperSuffix(ins.field.desc, ins.value.type));
-                    out.append("_field(0, ");
-                    out.append(operandExpr(ins.receiver));
-                    out.append(", ");
-                    out.append(cStringLiteral(ins.field.owner));
-                    out.append(", ");
-                    out.append(cStringLiteral(ins.field.name));
-                    out.append(", ");
-                    out.append(cStringLiteral(ins.field.desc));
-                    out.append(", ");
-                    out.append(valueExpression);
-                    out.append(");\n");
+                    const ca::str::Utf8String cacheName = addInstanceFieldCache(state, ins);
+                    u.appendLineStart("_mj2x_regc_store_");
+                    if (!cacheName.empty()) {
+                        u.append("cached_instance_")
+                            .append(fieldHelperSuffix(ins.field.desc, ins.value.type))
+                            .append("_field(&")
+                            .append(cacheName)
+                            .append(", ")
+                            .append(operandExpr(ins.receiver))
+                            .append(", ")
+                            .append(valueExpression)
+                            .append(");")
+                            .newLine();
+                    }
+                    else {
+                        u.append(fieldHelperSuffix(ins.field.desc, ins.value.type))
+                            .append("_field(0, ")
+                            .append(operandExpr(ins.receiver))
+                            .append(", ")
+                            .append(cStringLiteral(ins.field.owner))
+                            .append(", ")
+                            .append(cStringLiteral(ins.field.name))
+                            .append(", ")
+                            .append(cStringLiteral(ins.field.desc))
+                            .append(", ")
+                            .append(valueExpression)
+                            .append(");")
+                            .newLine();
+                    }
                 }
-            }
-            if (materialized) out.append("    }\n");
+            };
+            if (materialized) out.iff("!_mj2x_regc_exception_check()", emitStore);
+            else emitStore(out);
             return true;
         }
     case RegInstructionKind::ArrayLoad:
@@ -2677,15 +2589,15 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             return false;
     {
         const std::string destName = regName(ins.dest.id);
-        out.append("    ");
-        out.append(destName.data(), destName.size());
-        out.append(" = _mj2x_regc_load_");
-        out.append(arrayHelperSuffix(ins.elementType));
-        out.append("_array(");
-        out.append(operandExpr(ins.receiver));
-        out.append(", ");
-        out.append(operandExpr(ins.index));
-        out.append(");\n");
+        out.appendLineStart(destName)
+            .append(" = _mj2x_regc_load_")
+            .append(arrayHelperSuffix(ins.elementType))
+            .append("_array(")
+            .append(operandExpr(ins.receiver))
+            .append(", ")
+            .append(operandExpr(ins.index))
+            .append(");")
+            .newLine();
         return true;
     }
     case RegInstructionKind::ArrayStore:
@@ -2699,17 +2611,20 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 !rejectNativeObjectEscape(state, ins.value, "array store value", reason)) {
                 return false;
             }
-            if (materialized) out.append("    if (!_mj2x_regc_exception_check()) {\n");
-            out.append("    _mj2x_regc_store_");
-            out.append(arrayHelperSuffix(ins.elementType));
-            out.append("_array(");
-            out.append(operandExpr(ins.receiver));
-            out.append(", ");
-            out.append(operandExpr(ins.index));
-            out.append(", ");
-            out.append(valueExpression);
-            out.append(");\n");
-            if (materialized) out.append("    }\n");
+            const auto emitStore = [&](CSourceStream& u) {
+                u.appendLineStart("_mj2x_regc_store_")
+                    .append(arrayHelperSuffix(ins.elementType))
+                    .append("_array(")
+                    .append(operandExpr(ins.receiver))
+                    .append(", ")
+                    .append(operandExpr(ins.index))
+                    .append(", ")
+                    .append(valueExpression)
+                    .append(");")
+                    .newLine();
+            };
+            if (materialized) out.iff("!_mj2x_regc_exception_check()", emitStore);
+            else emitStore(out);
             return true;
         }
     case RegInstructionKind::Call:
@@ -2745,7 +2660,6 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             hasMaterializedArgument = hasMaterializedArgument || materialized;
             argumentExpressions.push_back(std::move(expression));
         }
-        if (hasMaterializedArgument) out.append("    if (!_mj2x_regc_exception_check()) {\n");
         const bool              staticCall = isStaticCall(ins);
         const bool              selfCall   = isSelfStaticCall(state, ins);
         const ca::str::Utf8String cacheName =
@@ -2758,112 +2672,120 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         const bool inlineCached =
             !selfCall && !useResolved && (staticCall || !instanceCacheName.empty()) &&
             !(state.traceCalls && !staticCall && !ins.hasDest);
-        if (useResolved) {
-            emitResolvedInstanceCall(out,
-                                     ins,
-                                     state.cachePool->resolvedCallSite(ins.method.owner,
-                                                                       ins.method.name,
-                                                                       ins.method.desc),
-                                     argumentExpressions);
-        }
-        else if (inlineCached) {
-            emitCachedCall(out, ins, staticCall, staticCall ? cacheName : instanceCacheName,
-                           argumentExpressions);
-        }
-        else if (ins.hasDest) {
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = ");
-            if (selfCall) {
-                out.append(state.functionName);
-                out.append("(");
-                out.append(directCallArgs(ins.args, argumentExpressions));
-                out.append(");\n");
+        const auto emitCall = [&](CSourceStream& u) {
+            if (useResolved) {
+                emitResolvedInstanceCall(u,
+                                         ins,
+                                         state.cachePool->resolvedCallSite(ins.method.owner,
+                                                                           ins.method.name,
+                                                                           ins.method.desc),
+                                         argumentExpressions);
             }
-            else {
-                out.append("_mj2x_regc_call_");
-                if (staticCall) {
-                    out.append("cached_");
-                    out.append(helperSuffix(ins.dest.type));
-                    out.append("(&");
-                    out.append(cacheName);
-                    out.append(", ");
-                    out.append(callArgs(ins.args, argumentExpressions));
-                    out.append(");\n");
-                }
-                else if (!instanceCacheName.empty()) {
-                    out.append("cached_instance_");
-                    out.append(helperSuffix(ins.dest.type));
-                    out.append("(&");
-                    out.append(instanceCacheName);
-                    out.append(", ");
-                    out.append(callArgs(ins.args, argumentExpressions));
-                    out.append(");\n");
+            else if (inlineCached) {
+                emitCachedCall(u, ins, staticCall, staticCall ? cacheName : instanceCacheName,
+                               argumentExpressions);
+            }
+            else if (ins.hasDest) {
+                u.appendLineStart(destName).append(" = ");
+                if (selfCall) {
+                    u.append(state.functionName)
+                        .append("(")
+                        .append(directCallArgs(ins.args, argumentExpressions))
+                        .append(");")
+                        .newLine();
                 }
                 else {
-                    out.append(helperSuffix(ins.dest.type));
-                    out.append("(");
-                    out.append(cStringLiteral(ins.method.owner));
-                    out.append(", ");
-                    out.append(cStringLiteral(ins.method.name));
-                    out.append(", ");
-                    out.append(cStringLiteral(ins.method.desc));
-                    out.append(", 0, ");
-                    out.append(callArgs(ins.args, argumentExpressions));
-                    out.append(");\n");
+                    u.append("_mj2x_regc_call_");
+                    if (staticCall) {
+                        u.append("cached_")
+                            .append(helperSuffix(ins.dest.type))
+                            .append("(&")
+                            .append(cacheName)
+                            .append(", ")
+                            .append(callArgs(ins.args, argumentExpressions))
+                            .append(");")
+                            .newLine();
+                    }
+                    else if (!instanceCacheName.empty()) {
+                        u.append("cached_instance_")
+                            .append(helperSuffix(ins.dest.type))
+                            .append("(&")
+                            .append(instanceCacheName)
+                            .append(", ")
+                            .append(callArgs(ins.args, argumentExpressions))
+                            .append(");")
+                            .newLine();
+                    }
+                    else {
+                        u.append(helperSuffix(ins.dest.type))
+                            .append("(")
+                            .append(cStringLiteral(ins.method.owner))
+                            .append(", ")
+                            .append(cStringLiteral(ins.method.name))
+                            .append(", ")
+                            .append(cStringLiteral(ins.method.desc))
+                            .append(", 0, ")
+                            .append(callArgs(ins.args, argumentExpressions))
+                            .append(");")
+                            .newLine();
+                    }
                 }
-            }
-        }
-        else {
-            out.append("    ");
-            if (selfCall) {
-                out.append(state.functionName);
-                out.append("(");
-                out.append(directCallArgs(ins.args, argumentExpressions));
-                out.append(");\n");
             }
             else {
-                out.append("_mj2x_regc_call_");
-                if (staticCall) {
-                    out.append("cached_void(&");
-                    out.append(cacheName);
-                    out.append(", ");
-                    out.append(callArgs(ins.args, argumentExpressions));
-                    out.append(");\n");
-                }
-                else if (!instanceCacheName.empty()) {
-                    out.append("cached_instance_void(&");
-                    out.append(instanceCacheName);
-                    out.append(", ");
-                    out.append(callArgs(ins.args, argumentExpressions));
-                    out.append(");\n");
+                u.appendLineStart();
+                if (selfCall) {
+                    u.append(state.functionName)
+                        .append("(")
+                        .append(directCallArgs(ins.args, argumentExpressions))
+                        .append(");")
+                        .newLine();
                 }
                 else {
-                    out.append("void(");
-                    out.append(cStringLiteral(ins.method.owner));
-                    out.append(", ");
-                    out.append(cStringLiteral(ins.method.name));
-                    out.append(", ");
-                    out.append(cStringLiteral(ins.method.desc));
-                    out.append(", 0, ");
-                    out.append(callArgs(ins.args, argumentExpressions));
-                    out.append(");\n");
+                    u.append("_mj2x_regc_call_");
+                    if (staticCall) {
+                        u.append("cached_void(&")
+                            .append(cacheName)
+                            .append(", ")
+                            .append(callArgs(ins.args, argumentExpressions))
+                            .append(");")
+                            .newLine();
+                    }
+                    else if (!instanceCacheName.empty()) {
+                        u.append("cached_instance_void(&")
+                            .append(instanceCacheName)
+                            .append(", ")
+                            .append(callArgs(ins.args, argumentExpressions))
+                            .append(");")
+                            .newLine();
+                    }
+                    else {
+                        u.append("void(")
+                            .append(cStringLiteral(ins.method.owner))
+                            .append(", ")
+                            .append(cStringLiteral(ins.method.name))
+                            .append(", ")
+                            .append(cStringLiteral(ins.method.desc))
+                            .append(", 0, ")
+                            .append(callArgs(ins.args, argumentExpressions))
+                            .append(");")
+                            .newLine();
+                    }
                 }
             }
-        }
-        if (hasMaterializedArgument) out.append("    }\n");
+        };
+        if (hasMaterializedArgument) out.iff("!_mj2x_regc_exception_check()", emitCall);
+        else emitCall(out);
         return true;
     }
     case RegInstructionKind::Allocate:
         if (ins.allocationKind == SSAAllocationKind::Object) {
             if (ins.typeDesc == "java/util/Random") {
-                out.append("    mj2x_random ");
-                out.append(nativeObjectStorageName(ins.dest.id));
-                out.append(" = {0};\n");
+                out.appendLineStart("mj2x_random ")
+                    .append(nativeObjectStorageName(ins.dest.id))
+                    .append(" = {0};")
+                    .newLine();
                 const std::string destRandomName = regName(ins.dest.id);
-                out.append("    ");
-                out.append(destRandomName.data(), destRandomName.size());
-                out.append(" = NULL;\n");
+                out.assign(destRandomName, "NULL");
                 state.nativeObjects[ins.dest.id.value] = RegCNativeObjectState{
                     RegCIntrinsicNativeObjectKind::Random,
                     nativeObjectStorageName(ins.dest.id).to_std_string()};
@@ -2877,29 +2799,26 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                     return false;
                 }
                 const std::string sbDestName = regName(ins.dest.id);
-                out.append("    ");
-                out.append(sbDestName.data(), sbDestName.size());
-                out.append(" = (void*)&");
-                out.append(stringBuilderOwnerName(ins.dest.id));
-                out.append(";\n");
+                out.assign(sbDestName, "(void*)&" + stringBuilderOwnerName(ins.dest.id).to_std_string());
                 state.nativeObjects[ins.dest.id.value] =
                     RegCNativeObjectState{nativeIt->second.kind, sbDestName};
             }
             else {
                 const std::string allocDestName = regName(ins.dest.id);
-                out.append("    ");
-                out.append(allocDestName.data(), allocDestName.size());
-                out.append(" = ");
                 if (state.cachePool != nullptr) {
                     const ca::str::Utf8String cacheName = addClassCache(state, ins.typeDesc);
-                    out.append("_mj2x_regc_alloc_object_cached(&");
-                    out.append(cacheName);
-                    out.append(");\n");
+                    out.appendLineStart(allocDestName)
+                        .append(" = _mj2x_regc_alloc_object_cached(&")
+                        .append(cacheName)
+                        .append(");")
+                        .newLine();
                 }
                 else {
-                    out.append("_mj2x_regc_alloc_object(");
-                    out.append(cStringLiteral(ins.typeDesc));
-                    out.append(");\n");
+                    out.appendLineStart(allocDestName)
+                        .append(" = _mj2x_regc_alloc_object(")
+                        .append(cStringLiteral(ins.typeDesc))
+                        .append(");")
+                        .newLine();
                 }
             }
         }
@@ -2911,73 +2830,72 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 const ca::str::Utf8String cacheName = addClassCache(
                     state,
                     ca::str::Utf8StringRef::from_string_view(arrayComponentDesc(ins.typeDesc)));
-                out.append("    ");
-                out.append(allocArrayDest.data(), allocArrayDest.size());
-                out.append(" = _mj2x_regc_alloc_ref_array_cached(&");
-                out.append(cacheName);
-                out.append(", ");
-                out.append(operandExpr(length));
-                out.append(");\n");
+                out.appendLineStart(allocArrayDest)
+                    .append(" = _mj2x_regc_alloc_ref_array_cached(&")
+                    .append(cacheName)
+                    .append(", ")
+                    .append(operandExpr(length))
+                    .append(");")
+                    .newLine();
             }
             else {
-                out.append("    ");
-                out.append(allocArrayDest.data(), allocArrayDest.size());
-                out.append(" = _mj2x_regc_alloc_array(");
-                out.append(cStringLiteral(ins.typeDesc));
-                out.append(", ");
-                out.append(operandExpr(length));
-                out.append(");\n");
+                out.appendLineStart(allocArrayDest)
+                    .append(" = _mj2x_regc_alloc_array(")
+                    .append(cStringLiteral(ins.typeDesc))
+                    .append(", ")
+                    .append(operandExpr(length))
+                    .append(");")
+                    .newLine();
             }
         }
         else {
-            out.append("    {\n");
-            out.append("        int32_t dims[");
-            out.append(std::to_string(ins.args.size()));
-            out.append("];\n");
-            for (size_t i = 0; i < ins.args.size(); ++i) {
-                out.append("        dims[");
-                out.append(std::to_string(i));
-                out.append("] = ");
-                out.append(operandExpr(ins.args[i]));
-                out.append(";\n");
-            }
-            const std::vector<std::string> componentDescs =
-                state.cachePool != nullptr
-                    ? multiArrayComponentDescs(ins.typeDesc, ins.args.size())
-                    : std::vector<std::string>{};
-            if (!componentDescs.empty()) {
-                out.append("        mj2x_regc_class_cache* component_caches[");
-                out.append(std::to_string(componentDescs.size()));
-                out.append("] = {");
-                for (size_t i = 0; i < componentDescs.size(); ++i) {
-                    if (i != 0) out.append(", ");
-                    const ca::str::Utf8String cacheName = addClassCache(
-                        state,
-                        ca::str::Utf8StringRef::from_string_view(componentDescs[i]));
-                    out.append("&");
-                    out.append(cacheName);
+            out.block([&](CSourceStream& u) {
+                u.appendLineStart("int32_t dims[")
+                    .appendInt(static_cast<ca::i64>(ins.args.size()))
+                    .append("];")
+                    .newLine();
+                for (size_t i = 0; i < ins.args.size(); ++i) {
+                    u.appendLineStart("dims[")
+                        .appendInt(static_cast<ca::i64>(i))
+                        .append("] = ")
+                        .append(operandExpr(ins.args[i]))
+                        .append(";")
+                        .newLine();
                 }
-                out.append("};\n");
-                const std::string multiDestName = regName(ins.dest.id);
-                out.append("        ");
-                out.append(multiDestName.data(), multiDestName.size());
-                out.append(" = _mj2x_regc_alloc_multi_array_cached(");
-                out.append(cStringLiteral(ins.typeDesc));
-                out.append(", ");
-                out.append(std::to_string(ins.args.size()));
-                out.append(", dims, component_caches);\n");
-            }
-            else {
-                const std::string multiDestName = regName(ins.dest.id);
-                out.append("        ");
-                out.append(multiDestName.data(), multiDestName.size());
-                out.append(" = _mj2x_regc_alloc_multi_array(");
-                out.append(cStringLiteral(ins.typeDesc));
-                out.append(", ");
-                out.append(std::to_string(ins.args.size()));
-                out.append(", dims);\n");
-            }
-            out.append("    }\n");
+                const std::vector<std::string> componentDescs =
+                    state.cachePool != nullptr
+                        ? multiArrayComponentDescs(ins.typeDesc, ins.args.size())
+                        : std::vector<std::string>{};
+                if (!componentDescs.empty()) {
+                    u.appendLineStart("mj2x_regc_class_cache* component_caches[")
+                        .appendInt(static_cast<ca::i64>(componentDescs.size()))
+                        .append("] = {");
+                    for (size_t i = 0; i < componentDescs.size(); ++i) {
+                        if (i != 0) u.append(", ");
+                        const ca::str::Utf8String cacheName = addClassCache(
+                            state,
+                            ca::str::Utf8StringRef::from_string_view(componentDescs[i]));
+                        u.append("&").append(cacheName);
+                    }
+                    u.append("};").newLine();
+                    u.appendLineStart(regName(ins.dest.id))
+                        .append(" = _mj2x_regc_alloc_multi_array_cached(")
+                        .append(cStringLiteral(ins.typeDesc))
+                        .append(", ")
+                        .appendInt(static_cast<ca::i64>(ins.args.size()))
+                        .append(", dims, component_caches);")
+                        .newLine();
+                }
+                else {
+                    u.appendLineStart(regName(ins.dest.id))
+                        .append(" = _mj2x_regc_alloc_multi_array(")
+                        .append(cStringLiteral(ins.typeDesc))
+                        .append(", ")
+                        .appendInt(static_cast<ca::i64>(ins.args.size()))
+                        .append(", dims);")
+                        .newLine();
+                }
+            });
         }
         return true;
     case RegInstructionKind::Intrinsic:
@@ -3008,11 +2926,11 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                           reason))
                 return false;
             const std::string destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = _mj2x_regc_array_length(");
-            out.append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]));
-            out.append(");\n");
+            out.appendLineStart(destName)
+                .append(" = _mj2x_regc_array_length(")
+                .append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]))
+                .append(");")
+                .newLine();
             return true;
         }
         if (ins.intrinsicName.rfind("instanceof:", 0) == 0) {
@@ -3024,13 +2942,13 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             const ca::str::Utf8String cacheName = addClassCache(
                 state, ca::str::Utf8StringRef::from_string_view(ins.intrinsicName.substr(11)));
             const std::string destName = regName(ins.dest.id);
-            out.append("    ");
-            out.append(destName.data(), destName.size());
-            out.append(" = _mj2x_regc_instanceof_cached(");
-            out.append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]));
-            out.append(", &");
-            out.append(cacheName);
-            out.append(");\n");
+            out.appendLineStart(destName)
+                .append(" = _mj2x_regc_instanceof_cached(")
+                .append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]))
+                .append(", &")
+                .append(cacheName)
+                .append(");")
+                .newLine();
             return true;
         }
         if (ins.intrinsicName == "monitor.enter") {
@@ -3039,9 +2957,10 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                           "monitor.enter",
                                           reason))
                 return false;
-            out.append("    _mj2x_regc_monitor_enter(");
-            out.append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]));
-            out.append(");\n");
+            out.appendLineStart("_mj2x_regc_monitor_enter(")
+                .append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]))
+                .append(");")
+                .newLine();
             return true;
         }
         if (ins.intrinsicName == "monitor.exit") {
@@ -3050,9 +2969,10 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                           "monitor.exit",
                                           reason))
                 return false;
-            out.append("    _mj2x_regc_monitor_exit(");
-            out.append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]));
-            out.append(");\n");
+            out.appendLineStart("_mj2x_regc_monitor_exit(")
+                .append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]))
+                .append(");")
+                .newLine();
             return true;
         }
         // JVM 的 LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较（-1/0/1），由 ssa_builder 的
@@ -3083,34 +3003,27 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             if (ssaIsFloat(type)) {
                 // 浮点：任一为 NaN 时按 nanGreater 取 1（dcmpg/fcmpg）或 -1（dcmpl/fcmpl）。
                 const char* nanValue = nanGreater ? "1" : "-1";
-                out.append("    ");
-                out.append(destName.data(), destName.size());
-                out.append(" = (isnan(");
-                out.append(lhs);
-                out.append(") || isnan(");
-                out.append(rhs);
-                out.append(")) ? ");
-                out.append(nanValue);
-                out.append(" : ");
-                out.append(threeWay);
-                out.append(";\n");
+                out.assign(destName,
+                           codegen::exprTernary(
+                               codegen::exprParen(codegen::exprBinop(
+                                   "||",
+                                   codegen::exprCall("isnan", {lhs.to_std_string()}),
+                                   codegen::exprCall("isnan", {rhs.to_std_string()}))),
+                               nanValue, threeWay.to_std_string()));
             }
             else {
                 // 整型（LCMP）：long 不可能为 NaN，直接三值比较。
-                out.append("    ");
-                out.append(destName.data(), destName.size());
-                out.append(" = ");
-                out.append(threeWay);
-                out.append(";\n");
+                out.assign(destName, threeWay.to_std_string());
             }
             return true;
         }
         reason = "unsupported RegC intrinsic: " + ins.intrinsicName;
         return false;
     case RegInstructionKind::Barrier:
-        out.append("    mj2x_regc_barrier(_mj2x_regc_current_context(), ");
-        out.append(cStringLiteral(ins.barrierReason));
-        out.append(");\n");
+        out.appendLineStart("mj2x_regc_barrier(_mj2x_regc_current_context(), ")
+            .append(cStringLiteral(ins.barrierReason))
+            .append(");")
+            .newLine();
         return true;
     default: break;
     }
@@ -3129,60 +3042,63 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
         [&](const auto& t) -> bool {
             using T = std::decay_t<decltype(t)>;
             if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-                out.append("    {\n");
-                if (!emitEdgeCopies(out, t.target.copies, state, edgeTempIndex, reason))
-                    return false;
-                out.append("    goto block_b");
-                out.append(std::to_string(t.target.block->id.value));
-                out.append(";\n");
-                out.append("    }\n");
-                return true;
+                bool copiesOk = true;
+                out.block([&](CSourceStream& u) {
+                    if (!emitEdgeCopies(u, t.target.copies, state, edgeTempIndex, reason)) {
+                        copiesOk = false;
+                        return;
+                    }
+                    u.goto_("block_b" + std::to_string(t.target.block->id.value));
+                });
+                return copiesOk;
             }
             else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
                 if (!rejectNativeObjectEscape(state, t.condition, "branch condition", reason))
                     return false;
-                out.append("    if (");
-                out.append(operandExpr(t.condition));
-                out.append(") {\n");
-                if (!emitEdgeCopies(out, t.trueTarget.copies, state, edgeTempIndex, reason))
-                    return false;
-                out.append("        goto block_b");
-                out.append(std::to_string(t.trueTarget.block->id.value));
-                out.append(";\n");
-                out.append("    } else {\n");
-                if (!emitEdgeCopies(out, t.falseTarget.copies, state, edgeTempIndex, reason))
-                    return false;
-                out.append("        goto block_b");
-                out.append(std::to_string(t.falseTarget.block->id.value));
-                out.append(";\n");
-                out.append("    }\n");
-                return true;
+                bool copiesOk = true;
+                out.iff(operandExpr(t.condition).to_std_string(),
+                        [&](CSourceStream& u) {
+                            if (!emitEdgeCopies(u, t.trueTarget.copies, state, edgeTempIndex,
+                                                reason)) {
+                                copiesOk = false;
+                                return;
+                            }
+                            u.goto_("block_b" + std::to_string(t.trueTarget.block->id.value));
+                        },
+                        [&](CSourceStream& u) {
+                            if (!emitEdgeCopies(u, t.falseTarget.copies, state, edgeTempIndex,
+                                                reason)) {
+                                copiesOk = false;
+                                return;
+                            }
+                            u.goto_("block_b" + std::to_string(t.falseTarget.block->id.value));
+                        });
+                return copiesOk;
             }
             else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
                 if (!rejectNativeObjectEscape(state, t.value, "switch value", reason)) return false;
-                out.append("    switch (");
-                out.append(operandExpr(t.value));
-                out.append(") {\n");
-                for (const auto& c : t.cases) {
-                    out.append("    case ");
-                    out.append(std::to_string(c.key));
-                    out.append(": {\n");
-                    if (!emitEdgeCopies(out, c.target.copies, state, edgeTempIndex, reason))
-                        return false;
-                    out.append("        goto block_b");
-                    out.append(std::to_string(c.target.block->id.value));
-                    out.append(";\n");
-                    out.append("    }\n");
-                }
-                out.append("    default: {\n");
-                if (!emitEdgeCopies(out, t.defaultTarget.copies, state, edgeTempIndex, reason))
-                    return false;
-                out.append("        goto block_b");
-                out.append(std::to_string(t.defaultTarget.block->id.value));
-                out.append(";\n");
-                out.append("    }\n");
-                out.append("    }\n");
-                return true;
+                bool copiesOk = true;
+                out.switch_(operandExpr(t.value).to_std_string(), [&](CSourceStream& u) {
+                    for (const auto& c : t.cases) {
+                        u.case_(std::to_string(c.key), [&](CSourceStream& v) {
+                            if (!emitEdgeCopies(v, c.target.copies, state, edgeTempIndex, reason)) {
+                                copiesOk = false;
+                                return;
+                            }
+                            v.goto_("block_b" + std::to_string(c.target.block->id.value));
+                        });
+                        if (!copiesOk) return;
+                    }
+                    u.case_("default", [&](CSourceStream& v) {
+                        if (!emitEdgeCopies(v, t.defaultTarget.copies, state, edgeTempIndex,
+                                            reason)) {
+                            copiesOk = false;
+                            return;
+                        }
+                        v.goto_("block_b" + std::to_string(t.defaultTarget.block->id.value));
+                    });
+                });
+                return copiesOk;
             }
             else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
                 if (t.hasValue) {
@@ -3193,46 +3109,36 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                         if (!emitExceptionDispatch(out, activeRegions, block, returnType, state,
                                                    dispatchIndex, edgeTempIndex, reason))
                             return false;
-                        out.append("    _mj2x_regc_result = ");
-                        out.append(materializedExpression);
-                        out.append(";\n");
+                        out.assign("_mj2x_regc_result", materializedExpression.to_std_string());
                     }
                     else {
                         if (objectState != nullptr) {
                             reason = "native object escaped through method return";
                             return false;
                         }
-                        out.append("    _mj2x_regc_result = ");
-                        out.append(operandExpr(t.value));
-                        out.append(";\n");
+                        out.assign("_mj2x_regc_result", operandExpr(t.value).to_std_string());
                     }
                 }
-                out.append("    goto _mj2x_regc_cleanup;\n");
+                out.goto_("_mj2x_regc_cleanup");
                 return true;
             }
             else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
                 if (!rejectNativeObjectEscape(state, t.value, "throw", reason)) return false;
-                out.append("    _mj2x_regc_throw(");
-                out.append(operandExpr(t.value));
-                out.append(");\n");
+                out.call("_mj2x_regc_throw", {operandExpr(t.value).to_std_string()});
                 if (!emitExceptionDispatch(out, activeRegions, block, returnType, state,
                                            dispatchIndex, edgeTempIndex, reason))
                     return false;
                 if (returnType != SSAType::VOID) {
-                    out.append("    _mj2x_regc_result = ");
-                    out.append(defaultValue(returnType));
-                    out.append(";\n");
+                    out.assign("_mj2x_regc_result", defaultValue(returnType));
                 }
-                out.append("    goto _mj2x_regc_cleanup;\n");
+                out.goto_("_mj2x_regc_cleanup");
                 return true;
             }
             else if constexpr (std::is_same_v<T, RegUnreachableTerminator>) {
                 if (returnType != SSAType::VOID) {
-                    out.append("    _mj2x_regc_result = ");
-                    out.append(defaultValue(returnType));
-                    out.append(";\n");
+                    out.assign("_mj2x_regc_result", defaultValue(returnType));
                 }
-                out.append("    goto _mj2x_regc_cleanup;\n");
+                out.goto_("_mj2x_regc_cleanup");
                 return true;
             }
             else {
@@ -3552,14 +3458,13 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     int                dispatchIndex = 0;
     int                edgeTempIndex = 0;
     CSourceStream body;
+    body.indent();
     for (const auto& block : fn.blocks) {
         auto activeRegions = activeExceptionRegions(fn, block.get());
         if (commentLevel_ >= RegCCommentLevel::Summary) {
-            body.append("// block_b");
-            body.append(std::to_string(block->id.value));
-            body.append(": ");
+            std::string header = "block_b" + std::to_string(block->id.value) + ": ";
             if (block.get() == fn.entry) {
-                body.append("entry");
+                header += "entry";
             }
             else {
                 const RegExceptionRegion* handlerRegion = nullptr;
@@ -3570,24 +3475,20 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     }
                 }
                 if (handlerRegion != nullptr) {
-                    body.append("exception handler of ");
-                    body.append(codegen::escapeCommentIdent(
-                        ca::str::Utf8StringRef::from_string_view(handlerRegion->caughtType)));
+                    header += "exception handler of ";
+                    header += codegen::escapeCommentIdent(
+                        ca::str::Utf8StringRef::from_string_view(handlerRegion->caughtType));
                 }
                 else {
-                    body.append("block");
+                    header += "block";
                 }
             }
-            body.append("\n");
+            body.comment(header);
         }
-        body.append("block_b");
-        body.append(std::to_string(block->id.value));
-        body.append(":\n");
+        body.label_("block_b" + std::to_string(block->id.value));
         for (const auto& ins : block->instructions) {
             if (commentLevel_ >= RegCCommentLevel::Detailed) {
-                body.append("// ");
-                body.append(regInstructionLine(ins));
-                body.append("\n");
+                body.comment(regInstructionLine(ins).to_std_string());
             }
             if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason)) return result;
             if (ins.effect.mayThrow) {
@@ -3610,9 +3511,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             while (pos < sv.size()) {
                 size_t nl = sv.find('\n', pos);
                 if (nl == std::string_view::npos) nl = sv.size();
-                body.append("// ");
-                body.append(sv.substr(pos, nl - pos));
-                body.append("\n");
+                body.comment(sv.substr(pos, nl - pos));
                 pos = nl + 1;
             }
         }
@@ -3627,8 +3526,9 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                             result.reason)) {
             return result;
         }
-        body.append("\n");
+        body.emitBlankLine();
     }
+    body.dedent();
 
     CSourceStream out;
     for (const auto& declaration : emitState.staticMethodCacheDeclarations) {
@@ -3672,13 +3572,11 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         }
     }
     out.append(") {\n");
+    out.indent();
 
     if (fn.symbol.returnType != SSAType::VOID) {
-        out.append("    ");
-        out.append(cType(fn.symbol.returnType));
-        out.append(" _mj2x_regc_result = ");
-        out.append(defaultValue(fn.symbol.returnType));
-        out.append(";\n");
+        out.declare_var(cType(fn.symbol.returnType), "_mj2x_regc_result",
+                        defaultValue(fn.symbol.returnType));
     }
 
     for (const auto& [id, type] : regs) {
@@ -3690,12 +3588,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             }
         }
         if (!isParameter) {
-            const std::string localRegName = regName(RegId{id});
-            out.append("    ");
-            out.append(cType(type));
-            out.append(" ");
-            out.append(localRegName.data(), localRegName.size());
-            out.append(" = 0;\n");
+            out.declare_var(cType(type), regName(RegId{id}), "0");
         }
     }
     // Declare edge-copy temporaries based on the types actually captured during emit
@@ -3703,11 +3596,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     // exception-dispatch re-emission that a static CFG walk (collectEdgeCopyTempTypes)
     // would undercount when a protected block has multiple mayThrow instructions.
     for (size_t i = 0; i < emitState.edgeTempTypes.size(); ++i) {
-        out.append("    ");
-        out.append(cType(emitState.edgeTempTypes[i]));
-        out.append(" edge_tmp_");
-        out.append(std::to_string(i));
-        out.append(" = 0;\n");
+        out.declare_var(cType(emitState.edgeTempTypes[i]), "edge_tmp_" + std::to_string(i), "0");
     }
     for (uint32_t owner : emitState.nativeStringBuilderOwners) {
         const auto objectIt = emitState.nativeObjects.find(owner);
@@ -3715,16 +3604,11 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             result.reason = "mutable string owner is missing native object state";
             return result;
         }
-        out.append("    ");
-        out.append(nativeObjectType(objectIt->second.kind));
-        out.append("* ");
-        out.append(stringBuilderOwnerName(RegId{owner}));
-        out.append(" = NULL;\n");
-        out.append("    mj2x_ref ");
-        out.append(stringBuilderMaterializedName(RegId{owner}));
-        out.append(" = NULL;\n");
+        out.declare_var(std::string(nativeObjectType(objectIt->second.kind)) + "*",
+                        stringBuilderOwnerName(RegId{owner}), "NULL");
+        out.declare_var("mj2x_ref", stringBuilderMaterializedName(RegId{owner}), "NULL");
     }
-    if (!regs.empty()) out.append("\n");
+    if (!regs.empty()) out.emitBlankLine();
 
     // R6 前置：JNI local ref 引用管理。RegC 每个 native 方法在单一 JNI 帧内运行，
     // 产 object 的 helper（call_ref / class_literal / alloc / ref-field load 等）返回的
@@ -3735,22 +3619,20 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     const ca::str::Utf8String bodySource = body.build();
     const bool                needsLocalFrame = bodyProducesLocalRefs(bodySource);
     if (needsLocalFrame) {
-        out.append("    if ((*_mj2x_regc_env)->PushLocalFrame(_mj2x_regc_env, 16) != 0) {\n");
-        if (fn.symbol.returnType == SSAType::VOID)
-            out.append("        return;\n");
-        else
-            out.append("        return _mj2x_regc_result;\n");
-        out.append("    }\n");
+        out.iff("(*_mj2x_regc_env)->PushLocalFrame(_mj2x_regc_env, 16) != 0",
+                [&](CSourceStream& u) {
+                    if (fn.symbol.returnType == SSAType::VOID) u.ret();
+                    else u.ret("_mj2x_regc_result");
+                });
     }
-    out.append("    goto block_b");
-    out.append(std::to_string(fn.entry->id.value));
-    out.append(";\n\n");
-    out.append(bodySource);
+    out.goto_("block_b" + std::to_string(fn.entry->id.value));
+    out.emitBlankLine();
+    out.emitRaw(bodySource.to_std_string());
 
     if (commentLevel_ >= RegCCommentLevel::Summary) {
-        out.append("// _mj2x_regc_cleanup: native object teardown + local frame pop\n");
+        out.comment("_mj2x_regc_cleanup: native object teardown + local frame pop");
     }
-    out.append("_mj2x_regc_cleanup:\n");
+    out.label_("_mj2x_regc_cleanup");
     for (uint32_t owner : emitState.nativeStringBuilderOwners) {
         const auto  objectIt = emitState.nativeObjects.find(owner);
         const char* destroySymbol =
@@ -3758,28 +3640,24 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     objectIt->second.kind == RegCIntrinsicNativeObjectKind::StringBuffer
                 ? "mj2x_string_buffer_destroy"
                 : "mj2x_string_builder_destroy";
-        out.append("    ");
-        out.append(destroySymbol);
-        out.append("(");
-        out.append(stringBuilderOwnerName(RegId{owner}));
-        out.append(");\n");
+        out.call(destroySymbol, {stringBuilderOwnerName(RegId{owner}).to_std_string()});
     }
     // PopLocalFrame 释放本帧全部 local ref；REF 返回值通过 result 参数 promote 到父帧，
     // 非 REF/VOID 传 NULL。PopLocalFrame 对 pending exception 安全（返回值可能为 NULL）。
     if (needsLocalFrame) {
         if (fn.symbol.returnType == SSAType::REF) {
-            out.append("    _mj2x_regc_result = (mj2x_ref)(*_mj2x_regc_env)->PopLocalFrame("
-                       "_mj2x_regc_env, (jobject)_mj2x_regc_result);\n");
+            out.assign("_mj2x_regc_result",
+                       "(mj2x_ref)(*_mj2x_regc_env)->PopLocalFrame("
+                       "_mj2x_regc_env, (jobject)_mj2x_regc_result)");
         }
         else {
-            out.append("    (*_mj2x_regc_env)->PopLocalFrame(_mj2x_regc_env, NULL);\n");
+            out.emitLine("(*_mj2x_regc_env)->PopLocalFrame(_mj2x_regc_env, NULL);");
         }
     }
-    if (fn.symbol.returnType == SSAType::VOID)
-        out.append("    return;\n");
-    else
-        out.append("    return _mj2x_regc_result;\n");
+    if (fn.symbol.returnType == SSAType::VOID) out.ret();
+    else out.ret("_mj2x_regc_result");
 
+    out.dedent();
     out.append("}\n");
 
     const std::string sourceCode = out.build().to_std_string();
@@ -3806,106 +3684,114 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
     }
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
 
-    out.append("    {\n");
-    out.append("        jclass _mj2x_indy_obj_cls = (jclass)_mj2x_regc_class_literal("
-               "_mj2x_regc_current_context(), \"java/lang/Object\");\n");
-    out.append("        jobjectArray _mj2x_indy_args = (jobjectArray)(*_mj2x_regc_env)"
-               "->NewObjectArray(_mj2x_regc_env, ");
-    out.append(std::to_string(argCount));
-    out.append(", _mj2x_indy_obj_cls, NULL);\n");
-    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
-    for (int i = 0; i < argCount; ++i) {
-        const ca::str::Utf8String expr = operandExpr(ins.args[i]);
-        std::string               boxExpr;
-        switch (ins.args[i].type) {
-        case SSAType::REF:
-            boxExpr = codegen::exprCast("jobject", codegen::exprParen(expr.to_std_string()));
-            break;
-        case SSAType::BOOL:
-        case SSAType::I8:
-        case SSAType::I16:
-        case SSAType::CHAR:
-        case SSAType::I32:
-            boxExpr = codegen::exprCall("_mj2x_regc_box_i32",
-                                        {codegen::exprCast("int32_t",
-                                                           codegen::exprParen(expr.to_std_string()))});
-            break;
-        case SSAType::I64:
-            boxExpr = codegen::exprCall("_mj2x_regc_box_i64",
-                                        {codegen::exprCast("int64_t",
-                                                           codegen::exprParen(expr.to_std_string()))});
-            break;
-        case SSAType::F32:
-            boxExpr = codegen::exprCall("_mj2x_regc_box_f32",
-                                        {codegen::exprCast("float",
-                                                           codegen::exprParen(expr.to_std_string()))});
-            break;
-        case SSAType::F64:
-            boxExpr = codegen::exprCall("_mj2x_regc_box_f64",
-                                        {codegen::exprCast("double",
-                                                           codegen::exprParen(expr.to_std_string()))});
-            break;
-        default:
-            reason = "unsupported indy argument type";
-            return false;
+    bool ok = true;
+    out.block([&](CSourceStream& o) {
+        o.declare_var("jclass", "_mj2x_indy_obj_cls",
+                      "(jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), "
+                      "\"java/lang/Object\")");
+        o.appendLineStart("jobjectArray _mj2x_indy_args = (jobjectArray)(*_mj2x_regc_env)"
+                          "->NewObjectArray(_mj2x_regc_env, ")
+            .appendInt(argCount)
+            .append(", _mj2x_indy_obj_cls, NULL);")
+            .newLine();
+        o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+        for (int i = 0; i < argCount; ++i) {
+            const ca::str::Utf8String expr = operandExpr(ins.args[i]);
+            std::string               boxExpr;
+            switch (ins.args[i].type) {
+            case SSAType::REF:
+                boxExpr = codegen::exprCast("jobject", codegen::exprParen(expr.to_std_string()));
+                break;
+            case SSAType::BOOL:
+            case SSAType::I8:
+            case SSAType::I16:
+            case SSAType::CHAR:
+            case SSAType::I32:
+                boxExpr = codegen::exprCall("_mj2x_regc_box_i32",
+                                            {codegen::exprCast(
+                                                "int32_t",
+                                                codegen::exprParen(expr.to_std_string()))});
+                break;
+            case SSAType::I64:
+                boxExpr = codegen::exprCall("_mj2x_regc_box_i64",
+                                            {codegen::exprCast(
+                                                "int64_t",
+                                                codegen::exprParen(expr.to_std_string()))});
+                break;
+            case SSAType::F32:
+                boxExpr = codegen::exprCall("_mj2x_regc_box_f32",
+                                            {codegen::exprCast(
+                                                "float",
+                                                codegen::exprParen(expr.to_std_string()))});
+                break;
+            case SSAType::F64:
+                boxExpr = codegen::exprCall("_mj2x_regc_box_f64",
+                                            {codegen::exprCast(
+                                                "double",
+                                                codegen::exprParen(expr.to_std_string()))});
+                break;
+            default:
+                reason = "unsupported indy argument type";
+                ok = false;
+                return;
+            }
+            if (!ok) return;
+            o.emitLine(codegen::exprCall("(*_mj2x_regc_env)->SetObjectArrayElement",
+                                         {"_mj2x_regc_env", "_mj2x_indy_args",
+                                          std::to_string(i), boxExpr}) +
+                       ";");
         }
-        out.append("        ");
-        out.append(codegen::exprCall("(*_mj2x_regc_env)->SetObjectArrayElement",
-                                     {"_mj2x_regc_env", "_mj2x_indy_args", std::to_string(i),
-                                      boxExpr}));
-        out.append(";\n");
-    }
-    out.append("        jobject _mj2x_indy_target = _mj2x_regc_indy_bsm_");
-    out.append(std::to_string(globalSiteIndex));
-    out.append("(_mj2x_regc_owner_class);\n");
-    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
-    out.append("        if (_mj2x_indy_target == NULL) { goto _mj2x_regc_cleanup; }\n");
-    out.append("        jclass _mj2x_indy_mh_cls = (jclass)_mj2x_regc_class_literal("
-               "_mj2x_regc_current_context(), \"java/lang/invoke/MethodHandle\");\n");
-    out.append("        jmethodID _mj2x_indy_invoke_mid = (*_mj2x_regc_env)->GetMethodID("
-               "_mj2x_regc_env, _mj2x_indy_mh_cls, \"invokeWithArguments\", "
-               "\"([Ljava/lang/Object;)Ljava/lang/Object;\");\n");
-    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
-    out.append("        jobject _mj2x_indy_result = (jobject)(*_mj2x_regc_env)->CallObjectMethod("
-               "_mj2x_regc_env, _mj2x_indy_target, _mj2x_indy_invoke_mid, _mj2x_indy_args);\n");
-    out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
-    if (ins.hasDest) {
-        out.append("        ");
-        out.append(destName.data(), destName.size());
-        out.append(" = ");
-        std::string resultExpr;
-        switch (ins.dest.type) {
-        case SSAType::REF:
-            resultExpr = codegen::exprCast("mj2x_ref", "_mj2x_indy_result");
-            break;
-        case SSAType::BOOL:
-        case SSAType::I8:
-        case SSAType::I16:
-        case SSAType::CHAR:
-        case SSAType::I32:
-            resultExpr = codegen::exprCall("_mj2x_regc_unbox_i32", {"_mj2x_indy_result"});
-            break;
-        case SSAType::I64:
-            resultExpr = codegen::exprCall("_mj2x_regc_unbox_i64", {"_mj2x_indy_result"});
-            break;
-        case SSAType::F32:
-            resultExpr = codegen::exprCall("_mj2x_regc_unbox_f32", {"_mj2x_indy_result"});
-            break;
-        case SSAType::F64:
-            resultExpr = codegen::exprCall("_mj2x_regc_unbox_f64", {"_mj2x_indy_result"});
-            break;
-        default:
-            reason = "unsupported indy result type";
-            return false;
+        if (!ok) return;
+        o.appendLineStart("jobject _mj2x_indy_target = _mj2x_regc_indy_bsm_")
+            .appendInt(static_cast<ca::i64>(globalSiteIndex))
+            .append("(_mj2x_regc_owner_class);")
+            .newLine();
+        o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+        o.emitLine("if (_mj2x_indy_target == NULL) { goto _mj2x_regc_cleanup; }");
+        o.emitLine("jclass _mj2x_indy_mh_cls = (jclass)_mj2x_regc_class_literal("
+                   "_mj2x_regc_current_context(), \"java/lang/invoke/MethodHandle\");");
+        o.emitLine("jmethodID _mj2x_indy_invoke_mid = (*_mj2x_regc_env)->GetMethodID("
+                   "_mj2x_regc_env, _mj2x_indy_mh_cls, \"invokeWithArguments\", "
+                   "\"([Ljava/lang/Object;)Ljava/lang/Object;\");");
+        o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+        o.emitLine("jobject _mj2x_indy_result = (jobject)(*_mj2x_regc_env)->CallObjectMethod("
+                   "_mj2x_regc_env, _mj2x_indy_target, _mj2x_indy_invoke_mid, _mj2x_indy_args);");
+        o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+        if (ins.hasDest) {
+            std::string resultExpr;
+            switch (ins.dest.type) {
+            case SSAType::REF:
+                resultExpr = codegen::exprCast("mj2x_ref", "_mj2x_indy_result");
+                break;
+            case SSAType::BOOL:
+            case SSAType::I8:
+            case SSAType::I16:
+            case SSAType::CHAR:
+            case SSAType::I32:
+                resultExpr = codegen::exprCall("_mj2x_regc_unbox_i32", {"_mj2x_indy_result"});
+                break;
+            case SSAType::I64:
+                resultExpr = codegen::exprCall("_mj2x_regc_unbox_i64", {"_mj2x_indy_result"});
+                break;
+            case SSAType::F32:
+                resultExpr = codegen::exprCall("_mj2x_regc_unbox_f32", {"_mj2x_indy_result"});
+                break;
+            case SSAType::F64:
+                resultExpr = codegen::exprCall("_mj2x_regc_unbox_f64", {"_mj2x_indy_result"});
+                break;
+            default:
+                reason = "unsupported indy result type";
+                ok = false;
+                return;
+            }
+            if (!ok) return;
+            o.assign(destName, resultExpr);
         }
-        out.append(resultExpr);
-        out.append(";\n");
-    }
-    else {
-        out.append("        (void)_mj2x_indy_result;\n");
-    }
-    out.append("    }\n");
-    return true;
+        else {
+            o.emitLine("(void)_mj2x_indy_result;");
+        }
+    });
+    return ok;
 }
 
 bool validateRegCNoStackAnchors(const std::string& source, std::string& reason)

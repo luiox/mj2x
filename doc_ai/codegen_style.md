@@ -86,34 +86,47 @@ _mj2x_register_<sanitize(className)>
 | native 对象存储 | `native_r<n>` | 寄存器上的原生对象存储 |
 | 状态检查临时 | `runtime_status_<n>` | 运行时状态码临时 |
 
-## 3. 源码拼接规范（Utf8 字符串家族 + CSourceStream 三层模型）
+## 3. 源码拼接规范（Utf8 字符串家族 + CSourceStream 五层模型）
 
-生成源码是 UTF-8 文本流。三层工具职责固定，缺一不可：
+生成源码是 UTF-8 文本流。五层工具职责固定，缺一不可：
 
-### 3.1 三层分工
+### 3.1 五层分工
 
 | 层 | 工具 | 职责 |
 |---|---|---|
-| 排版 | `codegen::CSourceStream`（`c_source.hpp`） | 缩进层级与换行：底层存储即 `Utf8StringBuilder`（三同一体）；`emitLine()` 一行一调用，嵌套块 `indent()/dedent()` 成对（可用 RAII `IndentGuard`）；多片段拼一条语句用 `appendLineStart()` + `append()` + `newLine()`；`emitRaw()` 仅用于外部已格式化的整块（runtime 模板段），禁止用它逃脱缩进统一 |
+| L0 排版 | `codegen::CSourceStream`（`c_source.hpp`） | 缩进层级与换行：底层存储即 `Utf8StringBuilder`（三同一体）；`emitLine()` 一行一调用，嵌套块 `indent()/dedent()` 成对（可用 RAII `IndentGuard`）；多片段拼一条语句用 `appendLineStart()` + `append()` + `newLine()`；`emitRaw()` 仅用于外部已格式化的整块（runtime 模板段），禁止用它逃脱缩进统一 |
+| L1 语句 | `CSourceStream` 语句辅助 | `assign/declare_var/ret/call/call_fn_ptr/while_/for_/switch_/case_/goto_/label_/comment`——花括号/缩进由流管理，杜绝手拼 `"    {\n"`/`"} else"` |
+| L2 表达式 | `codegen::CExpr`（`c_expr.hpp`，纯函数） | 构建 C 表达式文本，括号内聚（`exprCall/exprCast/exprFnPtrCall/exprMember/exprIndex/exprBinop/exprTernary/exprParen`）；调用方永远不手写 `"(" + ... + ")"` |
+| L3 结构 | `codegen::CodeTemplate` + `codegen::CodeOptions`（`c_template.hpp`/`c_options.hpp`） | 命名模板复用（参数值捕获 + `dependsOn` 依赖声明 + 注册表）；开关系统（强类型字段 + `ScopeOverride` RAII 作用域覆盖） |
+| L4 指令 | RegC/StackC/vmc4 emitter | 消费 IR，组合 L1-L3 产物；`"是否生成"决策查 `CodeOptions` 字段 |
+
+详细设计见 `doc_ai/regc_template_engine.md`。
+
+### 3.2 拼接与驻留
+
+| 层 | 工具 | 职责 |
+|---|---|---|
 | 拼接 | `ca::str::Utf8StringBuilder`（可变 UTF-8 字符串容器） | 逐段/逐行构建源码文本；`append(const char*, usize)` 不校验字节，混淆样本的任意字节 owner/desc 可安全入流 |
 | 驻留 | `ca::str::Utf8StringArena` | 产物文本 `intern_raw` 入 arena，翻译单元存活期内有效；结束 `clear()` 一次性释放全部 chunk（ref 全部失效） |
 
 `CSourceStream` 的 `append` 重载与 `Utf8StringBuilder` 对齐（Utf8String/Utf8StringRef/`const char*`/字节对/`string_view`/`appendInt`），emitter 的多片段拼接（如 `out.append(operandExpr(...))`）可直接落到 CSourceStream，无需跨容器转换。
 
-### 3.2 生命周期
+### 3.3 生命周期
 
 - 一个 C 翻译单元 = 一个 arena。backend 组装 helper/cache/注册代码全部入 arena，交付边界一次性转出；转出后 `clear()` 回收。
 - 行级临时拼段用 `Utf8StringBuilder`（栈上），不 intern；只有产物块才落 arena。
 
-### 3.3 禁止
+### 3.4 禁止
 
-- `std::ostringstream` / `std::string` 作为源码拼接容器（唯一例外见 §3.4）。
+- `std::ostringstream` / `std::string` 作为源码拼接容器（唯一例外见 §3.5）。
 - 字符串字面量里手数空格模拟缩进。
+- 手拼 `"(" + sig + ")" + expr + "(" + args + ")"` 表达式文本（一律走 CExpr）。
+- 手拼 `"    {\n"` / `"} else {\n"` / `"        goto ...;\n"` 结构文本（一律走 L1 结构辅助）。
 - 存量 `std::ostringstream` 发射点是已知技术债：新增/修改代码一律走本规范，存量渐进迁移。
 
-### 3.4 外部 API 边界
+### 3.5 外部 API 边界
 
-`RegCEmitResult.source`、`RegCBackend` 产物文本、测试断言的 `std::string` 是合法交付边界：arena/builder 文本在交付点一次 `to_std_string()`。边界内不再出现 `std::string` 拼接。
+`RegCEmitResult.source`、`RegCBackend` 产物文本、测试断言的 `std::string` 是合法交付边界：arena/builder 文本在交付点一次 `to_std_string()`。边界内不再出现 `std::string` 拼接（CExpr 返回的短生命周期表达式值对象除外）。
 
 ### 3.5 `<init>` / `<clinit>` 特殊 bridge 方法
 

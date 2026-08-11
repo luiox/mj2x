@@ -310,12 +310,17 @@ public:
         emitLine("}");
     }
 
-    /// @brief case 分支：`case <label>: { ... }`。
+    /// @brief case 分支：`case <label>: { ... }`；label 为 `"default"` 时输出 `default: { ... }`。
     /// @details 分支体自动加花括号并缩进；`break` 语句由 body 内 `emitLine("break;")`
     ///          显式发出（需要 fallthrough 时天然省略）。
     void case_(std::string_view label, const CBody& body)
     {
-        emitLine("case " + std::string(label) + ": {");
+        if (label == "default") {
+            emitLine("default: {");
+        }
+        else {
+            emitLine("case " + std::string(label) + ": {");
+        }
         {
             IndentGuard g(*this);
             body(*this);

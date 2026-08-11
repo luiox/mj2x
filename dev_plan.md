@@ -7,11 +7,10 @@
 | Step | 内容 | 状态 |
 |---|---|---|
 | 0 | 引擎核心（CExpr/CodeOptions/CodeTemplate/CSourceStream 补充）+ 单测 | 完成（24 个引擎单测 + 422 全量） |
-| 1 | L2 表达式层迁移 | 待办 |
-| 2 | L1 语句层迁移 | 待办 |
-| 3 | L3 结构层迁移（emitTerminator/emitFunction/edge copies） | 待办 |
+| 1 | L2 表达式层迁移 | 完成（emitIntrinsicCall/emitCachedCall/emitResolvedInstanceCall/emitMaterializedStringBuilder） |
+| 2+3 | L1 语句层 + L3 结构层迁移 | 完成（emitTerminator/emitEdgeCopies/emitExceptionDispatch/emitInstruction 全部指令/emitInvokeDynamic/emitFunction 骨架 + out 流声明段） |
 | 4 | RegCEmitter 构造参数收敛 CodeOptions + CLI 接入 | 待办 |
-| 5 | 全量验证 | 待办 |
+| 5 | 全量验证 | 进行中（422 单测 + 13-probe 已过；待 CodeTemplate 提取片段 + case_ default 修复确认） |
 
 ## 验证命令
 
