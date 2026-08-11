@@ -1,6 +1,7 @@
 #include "regc_emitter.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
@@ -633,14 +634,13 @@ bool emitMaterializedStringBuilder(CSourceStream& out, RegCFunctionEmitState& st
     out.append("    if (");
     out.append(expression);
     out.append(" == NULL && !_mj2x_regc_exception_check()) {\n");
-    CSourceStream statusExpr;
-    statusExpr.append(materializeSymbol);
-    statusExpr.append("(_mj2x_regc_current_context(), ");
-    statusExpr.append(stringBuilderStateExpr(operand, objectState->kind));
-    statusExpr.append(", &");
-    statusExpr.append(expression);
-    statusExpr.append(")");
-    emitRegCStatusCheck(out, state, statusExpr.build(), operation);
+    const std::string statusExpr = codegen::exprCall(
+        materializeSymbol,
+        {"_mj2x_regc_current_context()",
+         stringBuilderStateExpr(operand, objectState->kind).to_std_string(),
+         "&" + expression.to_std_string()});
+    emitRegCStatusCheck(out, state, ca::str::Utf8StringRef::from_string_view(statusExpr),
+                        operation);
     out.append("    }\n");
     return true;
 }
@@ -1605,9 +1605,10 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
 
     out.append("    {\n");
     if (!staticCall) {
-        out.append("        jobject _mj2x_regc_rcv = (jobject)(");
-        out.append(expressions[0]);
-        out.append(");\n");
+        out.append("        jobject _mj2x_regc_rcv = ");
+        out.append(codegen::exprCast("jobject",
+                                     codegen::exprParen(expressions[0].to_std_string())));
+        out.append(";\n");
     }
     if (!paramTags.empty()) {
         out.append("        jvalue _mj2x_regc_va[");
@@ -1617,43 +1618,40 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
     out.append("        jmethodID _mj2x_regc_m;\n");
     if (staticCall) {
         for (size_t i = 0; i < paramTags.size(); ++i) {
-            out.append("        _mj2x_regc_va[");
-            out.append(std::to_string(i));
-            out.append("].");
-            out.append(jvalueSlotName(paramTags[i]));
+            out.append("        ");
+            out.append(codegen::exprMember(codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                                           jvalueSlotName(paramTags[i])));
             out.append(" = ");
-            out.append(jniValueCast(paramTags[i]));
-            out.append("(");
-            out.append(expressions[i]);
-            out.append(");\n");
+            out.append(codegen::exprCast(jniValueCast(paramTags[i]),
+                                         codegen::exprParen(expressions[i].to_std_string())));
+            out.append(";\n");
         }
-        out.append("        _mj2x_regc_m = _mj2x_regc_cached_static_method(&");
-        out.append(cacheName);
-        out.append(");\n");
-        out.append("        if (_mj2x_regc_m != NULL && ");
-        out.append(cacheName);
-        out.append(".ownerClass != NULL) {\n");
+        out.append("        _mj2x_regc_m = ");
+        out.append(codegen::exprCall("_mj2x_regc_cached_static_method",
+                                     {"&" + cacheName.to_std_string()}));
+        out.append(";\n");
+        out.append("        if (");
+        out.append(codegen::exprBinop(
+            "&&", codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
+            codegen::exprBinop("!=", codegen::exprMember(cacheName.to_std_string(), "ownerClass"),
+                               "NULL")));
+        out.append(") {\n");
+        const std::string callExpr = codegen::exprCall(
+            std::string("(*_mj2x_regc_env)->CallStatic") + jniCallFamily(returnTag) + "MethodA",
+            {"_mj2x_regc_env", codegen::exprMember(cacheName.to_std_string(), "ownerClass"),
+             "_mj2x_regc_m", argsArg.to_std_string()});
         if (hasDest) {
             out.append("            ");
             out.append(destName);
             out.append(" = ");
             out.append(jniResultCast(returnTag, ins.dest.type));
-            out.append("(*_mj2x_regc_env)->CallStatic");
-            out.append(jniCallFamily(returnTag));
-            out.append("MethodA(_mj2x_regc_env, ");
-            out.append(cacheName);
-            out.append(".ownerClass, _mj2x_regc_m, ");
-            out.append(argsArg);
-            out.append(");\n");
+            out.append(callExpr);
+            out.append(";\n");
         }
         else {
-            out.append("            (*_mj2x_regc_env)->CallStatic");
-            out.append(jniCallFamily(returnTag));
-            out.append("MethodA(_mj2x_regc_env, ");
-            out.append(cacheName);
-            out.append(".ownerClass, _mj2x_regc_m, ");
-            out.append(argsArg);
-            out.append(");\n");
+            out.append("            ");
+            out.append(callExpr);
+            out.append(";\n");
         }
         out.append("        } else {\n");
         if (hasDest) {
@@ -1666,7 +1664,9 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
         out.append("        }\n");
     }
     else {
-        out.append("        if (_mj2x_regc_rcv == NULL) {\n");
+        out.append("        if (");
+        out.append(codegen::exprBinop("==", "_mj2x_regc_rcv", "NULL"));
+        out.append(") {\n");
         out.append("            _mj2x_regc_throw_null(\"instance method call\");\n");
         if (hasDest) {
             out.append("            ");
@@ -1677,37 +1677,36 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
         }
         out.append("        } else {\n");
         for (size_t i = 0; i < paramTags.size(); ++i) {
-            out.append("            _mj2x_regc_va[");
-            out.append(std::to_string(i));
-            out.append("].");
-            out.append(jvalueSlotName(paramTags[i]));
+            out.append("            ");
+            out.append(codegen::exprMember(codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                                           jvalueSlotName(paramTags[i])));
             out.append(" = ");
-            out.append(jniValueCast(paramTags[i]));
-            out.append("(");
-            out.append(expressions[i + 1]);
-            out.append(");\n");
+            out.append(codegen::exprCast(jniValueCast(paramTags[i]),
+                                         codegen::exprParen(expressions[i + 1].to_std_string())));
+            out.append(";\n");
         }
-        out.append("            _mj2x_regc_m = _mj2x_regc_cached_instance_method(&");
-        out.append(cacheName);
-        out.append(", _mj2x_regc_rcv);\n");
-        out.append("            if (_mj2x_regc_m != NULL) {\n");
+        out.append("            _mj2x_regc_m = ");
+        out.append(codegen::exprCall("_mj2x_regc_cached_instance_method",
+                                     {"&" + cacheName.to_std_string(), "_mj2x_regc_rcv"}));
+        out.append(";\n");
+        out.append("            if (");
+        out.append(codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"));
+        out.append(") {\n");
+        const std::string callExpr = codegen::exprCall(
+            std::string("(*_mj2x_regc_env)->Call") + jniCallFamily(returnTag) + "MethodA",
+            {"_mj2x_regc_env", "_mj2x_regc_rcv", "_mj2x_regc_m", argsArg.to_std_string()});
         if (hasDest) {
             out.append("                ");
             out.append(destName);
             out.append(" = ");
             out.append(jniResultCast(returnTag, ins.dest.type));
-            out.append("(*_mj2x_regc_env)->Call");
-            out.append(jniCallFamily(returnTag));
-            out.append("MethodA(_mj2x_regc_env, _mj2x_regc_rcv, _mj2x_regc_m, ");
-            out.append(argsArg);
-            out.append(");\n");
+            out.append(callExpr);
+            out.append(";\n");
         }
         else {
-            out.append("                (*_mj2x_regc_env)->Call");
-            out.append(jniCallFamily(returnTag));
-            out.append("MethodA(_mj2x_regc_env, _mj2x_regc_rcv, _mj2x_regc_m, ");
-            out.append(argsArg);
-            out.append(");\n");
+            out.append("                ");
+            out.append(callExpr);
+            out.append(";\n");
         }
         out.append("            } else {\n");
         if (hasDest) {
@@ -1741,16 +1740,14 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
 
     // 函数指针签名与实参列表（直接调用专用）：与 regc_* 函数体 ABI 一致。
     std::string fnPointerSig = std::string(cType(ins.dest.type)) + " (*)(";
-    std::string callArguments = "(mj2x_ref)(_mj2x_regc_rcv)";
+    std::vector<std::string> callArguments;
+    callArguments.push_back(codegen::exprCast("mj2x_ref", codegen::exprParen("_mj2x_regc_rcv")));
     fnPointerSig += "mj2x_ref";
     for (size_t i = 0; i < paramTags.size(); ++i) {
         fnPointerSig += ", ";
         fnPointerSig += cType(ins.args[i + 1].type);
-        callArguments += ", (";
-        callArguments += cType(ins.args[i + 1].type);
-        callArguments += ")(";
-        callArguments += expressions[i + 1].to_std_string();
-        callArguments += ")";
+        callArguments.push_back(codegen::exprCast(
+            cType(ins.args[i + 1].type), codegen::exprParen(expressions[i + 1].to_std_string())));
     }
     fnPointerSig += ")";
     // void 返回值用 void 签名（hasDest=false 时 cType 也是 "void"，但显式构建
@@ -1763,9 +1760,24 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
     }
     voidPointerSig += ")";
 
+    const std::string fnPtrCallExpr =
+        codegen::exprCallArgs(codegen::exprParen(codegen::exprCast(fnPointerSig,
+                                                                  codegen::exprMember(site, "fn"))),
+                              callArguments);
+    const std::string voidFnPtrCallExpr =
+        codegen::exprCallArgs(codegen::exprParen(codegen::exprCast(voidPointerSig,
+                                                                  codegen::exprMember(site, "fn"))),
+                              callArguments);
+    const std::string jniCallExpr = codegen::exprCall(
+        std::string("(*_mj2x_regc_env)->Call") + jniCallFamily(returnTag) + "MethodA",
+        {"_mj2x_regc_env", "_mj2x_regc_rcv", "_mj2x_regc_m", argsArg});
+
     out.block([&](CSourceStream& o) {
-        o.emitLine("jobject _mj2x_regc_rcv = (jobject)(" + expressions[0].to_std_string() + ");");
-        o.iff("_mj2x_regc_rcv == NULL",
+        o.emitLine("jobject _mj2x_regc_rcv = " +
+                   codegen::exprCast("jobject",
+                                     codegen::exprParen(expressions[0].to_std_string())) +
+                   ";");
+        o.iff(codegen::exprBinop("==", "_mj2x_regc_rcv", "NULL"),
               [&](CSourceStream& s) {
                   s.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
                   if (hasDest) {
@@ -1773,97 +1785,113 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                   }
               },
               [&](CSourceStream& s) {
-                  s.emitLine("jclass _mj2x_regc_rc = (*_mj2x_regc_env)->GetObjectClass("
-                             "_mj2x_regc_env, _mj2x_regc_rcv);");
+                  s.emitLine("jclass _mj2x_regc_rc = " +
+                             codegen::exprCall("(*_mj2x_regc_env)->GetObjectClass",
+                                               {"_mj2x_regc_env", "_mj2x_regc_rcv"}) +
+                             ";");
                   s.emitLine("jmethodID _mj2x_regc_m = NULL;");
                   if (!paramTags.empty()) {
                       s.emitLine("jvalue _mj2x_regc_va[" + std::to_string(paramTags.size()) +
                                  "];");
                   }
-                  s.iff("_mj2x_regc_rc != NULL",
+                  s.iff(codegen::exprBinop("!=", "_mj2x_regc_rc", "NULL"),
                         [&](CSourceStream& t) {
                             // 快路径 1（单 JNI）：receiver 是已转换实现类（或其未覆盖
                             // 子类）→ 直接复用 method/fn。implClass 只在 fn != NULL 时设置。
-                            t.iff(site +
-                                      ".implClass != NULL && (*_mj2x_regc_env)->IsInstanceOf("
-                                      "_mj2x_regc_env, _mj2x_regc_rcv, " +
-                                      site + ".implClass)",
+                            t.iff(codegen::exprBinop(
+                                      "&&",
+                                      codegen::exprBinop("!=",
+                                                         codegen::exprMember(site, "implClass"),
+                                                         "NULL"),
+                                      codegen::exprCall("(*_mj2x_regc_env)->IsInstanceOf",
+                                                        {"_mj2x_regc_env", "_mj2x_regc_rcv",
+                                                         codegen::exprMember(site, "implClass")})),
                                   [&](CSourceStream& u) {
-                                      u.emitLine("_mj2x_regc_m = " + site + ".method;");
+                                      u.emitLine("_mj2x_regc_m = " +
+                                                 codegen::exprMember(site, "method") + ";");
                                   },
                                   [&](CSourceStream& t2) {
                                       // 快路径 2（双 JNI）：无已转换实现（fn==NULL）的调用
                                       // 点按 receiver 精确类缓存 jmethodID。
-                                      t2.iff(site +
-                                                 ".receiverClass != NULL && (*_mj2x_regc_env)"
-                                                 "->IsSameObject(_mj2x_regc_env, " +
-                                                 site + ".receiverClass, _mj2x_regc_rc)",
-                                             [&](CSourceStream& u) {
-                                                 u.emitLine("_mj2x_regc_m = " + site +
-                                                            ".method;");
-                                             },
+                                      t2.iff(codegen::exprBinop(
+                                                 "&&",
+                                                 codegen::exprBinop(
+                                                     "!=",
+                                                     codegen::exprMember(site, "receiverClass"),
+                                                     "NULL"),
+                                                 codegen::exprCall(
+                                                     "(*_mj2x_regc_env)->IsSameObject",
+                                                     {"_mj2x_regc_env",
+                                                      codegen::exprMember(site, "receiverClass"),
+                                                      "_mj2x_regc_rc"})),
                                              [&](CSourceStream& u) {
                                                  u.emitLine("_mj2x_regc_m = " +
-                                                            std::string(
-                                                                "_mj2x_regc_resolved_call_site_"
-                                                                "refresh(&") +
-                                                            site + ", _mj2x_regc_rcv, "
-                                                                    "_mj2x_regc_rc, " +
-                                                            cStringLiteral(ins.method.name) +
-                                                            ", " +
-                                                            cStringLiteral(ins.method.desc) + ");");
+                                                            codegen::exprMember(site, "method") +
+                                                            ";");
+                                             },
+                                             [&](CSourceStream& u) {
+                                                 u.emitLine(
+                                                     "_mj2x_regc_m = " +
+                                                     codegen::exprCall(
+                                                         "_mj2x_regc_resolved_call_site_refresh",
+                                                         {"&" + site, "_mj2x_regc_rcv",
+                                                          "_mj2x_regc_rc",
+                                                          cStringLiteral(ins.method.name),
+                                                          cStringLiteral(ins.method.desc)}) +
+                                                     ";");
                                              });
                                   });
-                            t.emitLine("(*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, "
-                                       "_mj2x_regc_rc);");
+                            t.emitLine(codegen::exprCall("(*_mj2x_regc_env)->DeleteLocalRef",
+                                                        {"_mj2x_regc_env", "_mj2x_regc_rc"}) +
+                                       ";");
                         });
                   for (size_t i = 0; i < paramTags.size(); ++i) {
-                      s.emitLine("_mj2x_regc_va[" + std::to_string(i) + "]." +
-                                 std::string(jvalueSlotName(paramTags[i])) + " = " +
-                                 std::string(jniValueCast(paramTags[i])) + "(" +
-                                 expressions[i + 1].to_std_string() + ");");
+                      s.emitLine(codegen::exprMember(
+                                     codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                                     jvalueSlotName(paramTags[i])) +
+                                 " = " +
+                                 codegen::exprCast(jniValueCast(paramTags[i]),
+                                                   codegen::exprParen(
+                                                       expressions[i + 1].to_std_string())) +
+                                 ";");
                   }
                   if (hasDest) {
-                      s.iff("_mj2x_regc_m == NULL",
+                      s.iff(codegen::exprBinop("==", "_mj2x_regc_m", "NULL"),
                             [&](CSourceStream& t) {
                                 t.emitLine(destName + " = " +
                                            std::string(defaultValue(ins.dest.type)) + ";");
                             },
                             [&](CSourceStream& t) {
-                                t.iff(site + ".fn != NULL",
+                                t.iff(codegen::exprBinop("!=", codegen::exprMember(site, "fn"),
+                                                         "NULL"),
                                       [&](CSourceStream& u) {
                                           u.emitLine(destName + " = " +
-                                                     jniResultCast(returnTag, ins.dest.type)
-                                                         .to_std_string() +
-                                                     "(((" + fnPointerSig + ")" + site + ".fn)(" +
-                                                     callArguments + "));");
+                                                     codegen::exprCast(
+                                                         jniResultCast(returnTag, ins.dest.type)
+                                                             .to_std_string(),
+                                                         fnPtrCallExpr) +
+                                                     ";");
                                       },
                                       [&](CSourceStream& u) {
                                           u.emitLine(destName + " = " +
-                                                     jniResultCast(returnTag, ins.dest.type)
-                                                         .to_std_string() +
-                                                     "(*_mj2x_regc_env)->Call" +
-                                                     std::string(jniCallFamily(returnTag)) +
-                                                     "MethodA(_mj2x_regc_env, _mj2x_regc_rcv, "
-                                                     "_mj2x_regc_m, " +
-                                                     argsArg + ");");
+                                                     codegen::exprCast(
+                                                         jniResultCast(returnTag, ins.dest.type)
+                                                             .to_std_string(),
+                                                         jniCallExpr) +
+                                                     ";");
                                       });
                             });
                   }
                   else {
-                      s.iff("_mj2x_regc_m != NULL",
+                      s.iff(codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
                             [&](CSourceStream& t) {
-                                t.iff(site + ".fn != NULL",
+                                t.iff(codegen::exprBinop("!=", codegen::exprMember(site, "fn"),
+                                                         "NULL"),
                                       [&](CSourceStream& u) {
-                                          u.emitLine("((" + voidPointerSig + ")" + site +
-                                                     ".fn)(" + callArguments + ");");
+                                          u.emitLine(voidFnPtrCallExpr + ";");
                                       },
                                       [&](CSourceStream& u) {
-                                          u.emitLine("(*_mj2x_regc_env)->Call" +
-                                                     std::string(jniCallFamily(returnTag)) +
-                                                     "MethodA(_mj2x_regc_env, _mj2x_regc_rcv, "
-                                                     "_mj2x_regc_m, " +
-                                                     argsArg + ");");
+                                          u.emitLine(jniCallExpr + ";");
                                       });
                             });
                   }
@@ -1973,10 +2001,10 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         out.append(" ");
         out.append(nativeObjectStorageName(ins.dest.id));
         out.append(" = ");
-        out.append(decision.symbol);
-        out.append("(");
-        if (!ins.args.empty()) out.append(operandExpr(ins.args[0]));
-        out.append(");\n");
+        std::vector<std::string> valueOfArgs;
+        if (!ins.args.empty()) valueOfArgs.push_back(operandExpr(ins.args[0]).to_std_string());
+        out.append(codegen::exprCallArgs(decision.symbol, valueOfArgs));
+        out.append(";\n");
         const ca::str::Utf8String storageName = nativeObjectStorageName(ins.dest.id);
         const std::string         destName    = regName(ins.dest.id);
         out.append("    ");
@@ -2005,10 +2033,8 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             out.append(name.data(), name.size());
             out.append(" = ");
         }
-        out.append(decision.symbol);
-        out.append("(");
-        out.append(objectState->storageName.data(), objectState->storageName.size());
-        out.append(");\n");
+        out.append(codegen::exprCall(decision.symbol, {objectState->storageName}));
+        out.append(";\n");
         return decision;
     }
 
@@ -2025,12 +2051,10 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             return decision;
         }
         out.append("    ");
-        out.append(decision.symbol);
-        out.append("(&");
-        out.append(objectState->storageName.data(), objectState->storageName.size());
-        out.append(", ");
-        out.append(operandExpr(ins.args[1]));
-        out.append(");\n");
+        out.append(codegen::exprCall(decision.symbol,
+                                     {"&" + objectState->storageName,
+                                      operandExpr(ins.args[1]).to_std_string()}));
+        out.append(";\n");
         return decision;
     }
 
@@ -2052,14 +2076,13 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             out.append(destName.data(), destName.size());
             out.append(" = ");
         }
-        out.append(decision.symbol);
-        out.append("(&");
-        out.append(objectState->storageName.data(), objectState->storageName.size());
+        std::vector<std::string> nativeArgs;
+        nativeArgs.push_back("&" + objectState->storageName);
         for (size_t i = 1; i < ins.args.size(); ++i) {
-            out.append(", ");
-            out.append(operandExpr(ins.args[i]));
+            nativeArgs.push_back(operandExpr(ins.args[i]).to_std_string());
         }
-        out.append(");\n");
+        out.append(codegen::exprCallArgs(decision.symbol, nativeArgs));
+        out.append(";\n");
         return decision;
     }
 
@@ -2083,13 +2106,11 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                 return decision;
             }
         }
-        CSourceStream call;
-        call.append(decision.symbol);
-        call.append("(_mj2x_regc_current_context(), ");
-        call.append(stringBuilderStateExpr(ins.args[0], objectState->kind));
+        std::vector<std::string> callArgs;
+        callArgs.push_back("_mj2x_regc_current_context()");
+        callArgs.push_back(stringBuilderStateExpr(ins.args[0], objectState->kind).to_std_string());
         for (size_t i = 1; i < ins.args.size(); ++i) {
-            call.append(", ");
-            call.append(operandExpr(ins.args[i]));
+            callArgs.push_back(operandExpr(ins.args[i]).to_std_string());
         }
         const int valueTemp = state.stringBuilderTempIndex++;
         if (ins.hasDest) {
@@ -2103,13 +2124,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             out.append(" = ");
             out.append(defaultValue(ins.dest.type));
             out.append(";\n");
-            call.append(", &mutable_string_value_");
-            call.append(std::to_string(valueTemp));
+            callArgs.push_back("&mutable_string_value_" + std::to_string(valueTemp));
         }
-        call.append(")");
+        const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
         emitRegCStatusCheck(out,
                             state,
-                            call.build(),
+                            ca::str::Utf8StringRef::from_string_view(callText),
                             std::string(mutableStringDisplayName(objectState->kind)) + ".method");
         if (ins.hasDest) {
             const std::string destName = regName(ins.dest.id);
@@ -2142,21 +2162,21 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                 return decision;
             }
         }
-        CSourceStream call;
-        call.append(decision.symbol);
-        call.append("(_mj2x_regc_current_context(), ");
+        std::vector<std::string> callArgs;
+        callArgs.push_back("_mj2x_regc_current_context()");
         if (ins.args.size() == 1) {
-            call.append(stringBuilderHandleExpr(ins.args[0], objectState->kind));
+            callArgs.push_back(
+                stringBuilderHandleExpr(ins.args[0], objectState->kind).to_std_string());
         }
         else {
-            call.append(operandExpr(ins.args[1]));
-            call.append(", ");
-            call.append(stringBuilderHandleExpr(ins.args[0], objectState->kind));
+            callArgs.push_back(operandExpr(ins.args[1]).to_std_string());
+            callArgs.push_back(
+                stringBuilderHandleExpr(ins.args[0], objectState->kind).to_std_string());
         }
-        call.append(")");
+        const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
         emitRegCStatusCheck(out,
                             state,
-                            call.build(),
+                            ca::str::Utf8StringRef::from_string_view(callText),
                             std::string(mutableStringDisplayName(objectState->kind)) + ".<init>");
         return decision;
     }
@@ -2181,18 +2201,16 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                 return decision;
             }
         }
-        CSourceStream call;
-        call.append(decision.symbol);
-        call.append("(_mj2x_regc_current_context(), ");
-        call.append(stringBuilderStateExpr(ins.args[0], objectState->kind));
+        std::vector<std::string> callArgs;
+        callArgs.push_back("_mj2x_regc_current_context()");
+        callArgs.push_back(stringBuilderStateExpr(ins.args[0], objectState->kind).to_std_string());
         for (size_t i = 1; i < ins.args.size(); ++i) {
-            call.append(", ");
-            call.append(operandExpr(ins.args[i]));
+            callArgs.push_back(operandExpr(ins.args[i]).to_std_string());
         }
-        call.append(")");
+        const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
         emitRegCStatusCheck(out,
                             state,
-                            call.build(),
+                            ca::str::Utf8StringRef::from_string_view(callText),
                             std::string(mutableStringDisplayName(objectState->kind)) + ".append");
         if (ins.hasDest) {
             const std::string destName = regName(ins.dest.id);
@@ -2228,17 +2246,15 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         out.append(" = ");
         out.append(defaultValue(ins.dest.type));
         out.append(";\n");
-        CSourceStream call;
-        call.append(decision.symbol);
-        call.append("(_mj2x_regc_current_context()");
+        std::vector<std::string> callArgs;
+        callArgs.push_back("_mj2x_regc_current_context()");
         for (const auto& arg : ins.args) {
-            call.append(", ");
-            call.append(operandExpr(arg));
+            callArgs.push_back(operandExpr(arg).to_std_string());
         }
-        call.append(", &string_value_");
-        call.append(std::to_string(valueTemp));
-        call.append(")");
-        emitRegCStatusCheck(out, state, call.build(), "String intrinsic");
+        callArgs.push_back("&string_value_" + std::to_string(valueTemp));
+        const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
+        emitRegCStatusCheck(out, state, ca::str::Utf8StringRef::from_string_view(callText),
+                            "String intrinsic");
         const std::string destName = regName(ins.dest.id);
         out.append("    ");
         out.append(destName.data(), destName.size());
@@ -2257,40 +2273,35 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             }
         }
         const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+        std::vector<std::string> stringArgs;
+        stringArgs.reserve(ins.args.size());
+        for (const auto& arg : ins.args) {
+            stringArgs.push_back(operandExpr(arg).to_std_string());
+        }
         out.append("    ");
         if (ins.hasDest) {
             out.append(destName.data(), destName.size());
             out.append(" = ");
         }
-        out.append(decision.symbol);
-        out.append("(");
-        for (size_t i = 0; i < ins.args.size(); ++i) {
-            if (i) out.append(", ");
-            out.append(operandExpr(ins.args[i]));
-        }
-        out.append(");\n");
+        out.append(codegen::exprCallArgs(decision.symbol, stringArgs));
+        out.append(";\n");
         return decision;
     }
 
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+    std::vector<std::string> fallbackArgs;
+    fallbackArgs.reserve(ins.args.size() + 1);
+    if (decision.passContext) fallbackArgs.push_back("_mj2x_regc_current_context()");
+    for (const auto& arg : ins.args) {
+        fallbackArgs.push_back(operandExpr(arg).to_std_string());
+    }
     out.append("    ");
     if (ins.hasDest) {
         out.append(destName.data(), destName.size());
         out.append(" = ");
     }
-    out.append(decision.symbol);
-    out.append("(");
-    bool needComma = false;
-    if (decision.passContext) {
-        out.append("_mj2x_regc_current_context()");
-        needComma = true;
-    }
-    for (const auto& arg : ins.args) {
-        if (needComma) out.append(", ");
-        out.append(operandExpr(arg));
-        needComma = true;
-    }
-    out.append(");\n");
+    out.append(codegen::exprCallArgs(decision.symbol, fallbackArgs));
+    out.append(";\n");
     return decision;
 }
 
@@ -3805,45 +3816,44 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
     out.append("        if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }\n");
     for (int i = 0; i < argCount; ++i) {
         const ca::str::Utf8String expr = operandExpr(ins.args[i]);
-        out.append("        (*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, "
-                   "_mj2x_indy_args, ");
-        out.append(std::to_string(i));
-        out.append(", ");
+        std::string               boxExpr;
         switch (ins.args[i].type) {
         case SSAType::REF:
-            out.append("(jobject)(");
-            out.append(expr);
-            out.append(")");
+            boxExpr = codegen::exprCast("jobject", codegen::exprParen(expr.to_std_string()));
             break;
         case SSAType::BOOL:
         case SSAType::I8:
         case SSAType::I16:
         case SSAType::CHAR:
         case SSAType::I32:
-            out.append("_mj2x_regc_box_i32((int32_t)(");
-            out.append(expr);
-            out.append("))");
+            boxExpr = codegen::exprCall("_mj2x_regc_box_i32",
+                                        {codegen::exprCast("int32_t",
+                                                           codegen::exprParen(expr.to_std_string()))});
             break;
         case SSAType::I64:
-            out.append("_mj2x_regc_box_i64((int64_t)(");
-            out.append(expr);
-            out.append("))");
+            boxExpr = codegen::exprCall("_mj2x_regc_box_i64",
+                                        {codegen::exprCast("int64_t",
+                                                           codegen::exprParen(expr.to_std_string()))});
             break;
         case SSAType::F32:
-            out.append("_mj2x_regc_box_f32((float)(");
-            out.append(expr);
-            out.append("))");
+            boxExpr = codegen::exprCall("_mj2x_regc_box_f32",
+                                        {codegen::exprCast("float",
+                                                           codegen::exprParen(expr.to_std_string()))});
             break;
         case SSAType::F64:
-            out.append("_mj2x_regc_box_f64((double)(");
-            out.append(expr);
-            out.append("))");
+            boxExpr = codegen::exprCall("_mj2x_regc_box_f64",
+                                        {codegen::exprCast("double",
+                                                           codegen::exprParen(expr.to_std_string()))});
             break;
         default:
             reason = "unsupported indy argument type";
             return false;
         }
-        out.append(");\n");
+        out.append("        ");
+        out.append(codegen::exprCall("(*_mj2x_regc_env)->SetObjectArrayElement",
+                                     {"_mj2x_regc_env", "_mj2x_indy_args", std::to_string(i),
+                                      boxExpr}));
+        out.append(";\n");
     }
     out.append("        jobject _mj2x_indy_target = _mj2x_regc_indy_bsm_");
     out.append(std::to_string(globalSiteIndex));
@@ -3863,30 +3873,32 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
         out.append("        ");
         out.append(destName.data(), destName.size());
         out.append(" = ");
+        std::string resultExpr;
         switch (ins.dest.type) {
         case SSAType::REF:
-            out.append("(mj2x_ref)_mj2x_indy_result");
+            resultExpr = codegen::exprCast("mj2x_ref", "_mj2x_indy_result");
             break;
         case SSAType::BOOL:
         case SSAType::I8:
         case SSAType::I16:
         case SSAType::CHAR:
         case SSAType::I32:
-            out.append("_mj2x_regc_unbox_i32(_mj2x_indy_result)");
+            resultExpr = codegen::exprCall("_mj2x_regc_unbox_i32", {"_mj2x_indy_result"});
             break;
         case SSAType::I64:
-            out.append("_mj2x_regc_unbox_i64(_mj2x_indy_result)");
+            resultExpr = codegen::exprCall("_mj2x_regc_unbox_i64", {"_mj2x_indy_result"});
             break;
         case SSAType::F32:
-            out.append("_mj2x_regc_unbox_f32(_mj2x_indy_result)");
+            resultExpr = codegen::exprCall("_mj2x_regc_unbox_f32", {"_mj2x_indy_result"});
             break;
         case SSAType::F64:
-            out.append("_mj2x_regc_unbox_f64(_mj2x_indy_result)");
+            resultExpr = codegen::exprCall("_mj2x_regc_unbox_f64", {"_mj2x_indy_result"});
             break;
         default:
             reason = "unsupported indy result type";
             return false;
         }
+        out.append(resultExpr);
         out.append(";\n");
     }
     else {
