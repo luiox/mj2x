@@ -298,6 +298,54 @@ public:
         emitLine("}");
     }
 
+    /// @brief switch 语句：`switch (expr) { ... }`，expr 不含外层括号。
+    /// @details case 分支体用 `case_` 或 `block` 发出；`break`/`goto` 由分支体内显式发出。
+    void switch_(std::string_view expr, const CBody& body)
+    {
+        emitLine("switch (" + std::string(expr) + ") {");
+        {
+            IndentGuard g(*this);
+            body(*this);
+        }
+        emitLine("}");
+    }
+
+    /// @brief case 分支：`case <label>: { ... }`。
+    /// @details 分支体自动加花括号并缩进；`break` 语句由 body 内 `emitLine("break;")`
+    ///          显式发出（需要 fallthrough 时天然省略）。
+    void case_(std::string_view label, const CBody& body)
+    {
+        emitLine("case " + std::string(label) + ": {");
+        {
+            IndentGuard g(*this);
+            body(*this);
+        }
+        emitLine("}");
+    }
+
+    /// @brief goto 语句：`goto <label>;`。
+    void goto_(std::string_view label)
+    {
+        emitLine("goto " + std::string(label) + ";");
+    }
+
+    /// @brief 标签：`<name>:`。
+    /// @details 标签不缩进（C 惯例贴左）；emitFunction 的 block_b<n> 标签用本方法发出。
+    void label_(std::string_view name)
+    {
+        const int saved = indentLevel_;
+        indentLevel_    = 0;
+        emitLine(std::string(name) + ":");
+        indentLevel_ = saved;
+    }
+
+    /// @brief 注释行：`// <text>`（缩进随上下文）。
+    /// @details 内容不经转义，调用方负责 escapeCommentIdent（混淆符号安全）。
+    void comment(std::string_view text)
+    {
+        emitLine("// " + std::string(text));
+    }
+
     /// @brief 调用语句：`name(args);`。
     void call(std::string_view name, std::initializer_list<std::string_view> args)
     {

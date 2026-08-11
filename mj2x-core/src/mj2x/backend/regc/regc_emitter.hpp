@@ -13,6 +13,7 @@
 #include "mj2x/mir/register_ir/reg_function.hpp"
 
 #include "libca/str/utf8_string.hpp"
+#include "mj2x/codegen/c_options.hpp"
 #include "mj2x/codegen/c_source.hpp"
 
 #include <map>
@@ -26,18 +27,8 @@ namespace mj2x {
 
 class CompilerIndex;
 
-/// @brief 生成注释的分级（与日志分级一致：默认 Summary，最详细级逐指令出注释）。
-///
-/// @details
-/// 见 doc_ai/reg_codegen_syntax.md §4.2。Summary 是默认产出（函数头/块/缓存槽溯源）；
-/// Detailed 在 Summary 基础上对每条 RegIR 指令与终结器输出一行典型指令文本（复用
-/// reg_dump 的行渲染），供逐字节排查生成代码与 IR 的一致性。None 用于最小输出基线。
-enum class RegCCommentLevel : uint8_t
-{
-    None = 0,     ///< 不生成任何注释。
-    Summary = 1,  ///< 函数头 + 基本块 + 缓存槽溯源注释（默认）。
-    Detailed = 2, ///< Summary + 每条指令/终结器的溯源注释。
-};
+/// @brief 生成注释级别（定义见 codegen/c_options.hpp，本 using 保持既有引用兼容）。
+using RegCCommentLevel = codegen::RegCCommentLevel;
 
 /// @brief Result of one RegC emission attempt.
 ///
