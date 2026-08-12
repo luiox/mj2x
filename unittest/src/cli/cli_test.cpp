@@ -50,6 +50,47 @@ std::string quoteArg(const std::string& value)
     return "\"" + value + "\"";
 }
 
+/// Sanitize an inherited PATH for batch scripts:
+///   - drop segments that still contain an unexpanded `%VAR%` (e.g.
+///     `D:\WorkSpace\morpher\%HOME_NODE%\bin` from a developer shell);
+///   - collapse double backslashes in non-UNC segments (`morpher\\bin`), which
+///     cmd produces when an undefined variable above expands to empty.
+/// Both shield the real `xmake f` from a malformed PATH that crashes xmake 3.0.9.
+std::string sanitizePathForBatch(const char* pathEnv)
+{
+    std::string out;
+    std::string seg;
+    if (!pathEnv) return out;
+    for (const char* p = pathEnv;; ++p) {
+        if (*p == ';' || *p == '\0') {
+            if (!seg.empty() && seg.find('%') == std::string::npos) {
+                if (seg[0] != '\\' || seg.size() < 2 || seg[1] != '\\') {
+                    std::string folded;
+                    for (size_t i = 0; i < seg.size();) {
+                        if (seg[i] == '\\' && i + 1 < seg.size() && seg[i + 1] == '\\') {
+                            folded += '\\';
+                            i += 2;
+                        }
+                        else {
+                            folded += seg[i];
+                            ++i;
+                        }
+                    }
+                    seg = folded;
+                }
+                if (!out.empty()) out += ';';
+                out += seg;
+            }
+            seg.clear();
+            if (*p == '\0') break;
+        }
+        else {
+            seg += *p;
+        }
+    }
+    return out;
+}
+
 ExecResult runScript(const std::vector<std::string>& lines)
 {
     ExecResult result;
@@ -63,13 +104,9 @@ ExecResult runScript(const std::vector<std::string>& lines)
         std::ofstream out(script);
         out << "@echo off\n";
         out << "chcp 65001 >nul 2>&1\n";
-        out << "set > \"" << (tmpDir / "mj2x_cli_test_env_dump.txt").string() << "\" 2>nul\n";
-        out << "echo CWD=%CD% > \"" << (tmpDir / "mj2x_cli_test_debug.txt").string() << "\"\n";
-        for (const auto& line : lines) {
-            out << "echo LINE=" << line << " >> \"" << (tmpDir / "mj2x_cli_test_debug.txt").string() << "\"\n";
-            out << line << "\n";
-            out << "echo [exit=" << "\" %errorlevel%\"]\n";
-        }
+        std::string cleanPath = sanitizePathForBatch(std::getenv("PATH"));
+        if (!cleanPath.empty()) out << "set \"PATH=" << cleanPath << "\"\n";
+        for (const auto& line : lines) out << line << "\n";
         out << "exit /b %errorlevel%\n";
     }
 #else
@@ -1164,81 +1201,11 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
               readText(test::getResourcePath("native_project/gitignore.golden")));
 
     if (commandAvailable("xmake")) {
-        const char* pathEnv = std::getenv("PATH");
-        std::string fullPath = pathEnv ? pathEnv : "";
-        std::vector<std::string> segs;
-        {
-            std::string cur;
-            for (char c : fullPath) {
-                if (c == ';') { segs.push_back(cur); cur.clear(); }
-                else cur += c;
-            }
-            if (!cur.empty()) segs.push_back(cur);
-        }
-        auto join = [&](size_t n) {
-            std::string s;
-            for (size_t i = 0; i < n && i < segs.size(); ++i) {
-                if (!s.empty()) s += ';';
-                s += segs[i];
-            }
-            return s;
-        };
-        std::string clean = "C:\\Windows\\System32;C:\\Windows;C:\\Program Files\\xmake";
-        std::string seg84 = "C:\\Users\\Canrad\\.local\\bin";
-        std::string noHome(segs.size() > 61 ? segs[61] : std::string());
-        {
-            std::string& s = noHome;
-            size_t p = s.find("%HOME_NODE%");
-            if (p != std::string::npos) s = s.substr(0, p) + s.substr(p + 12);
-        }
-        std::string join84WithCleanSeg61;
-        for (size_t i = 0; i < 84; ++i) {
-            if (i >= segs.size()) break;
-            if (!join84WithCleanSeg61.empty()) join84WithCleanSeg61 += ';';
-            join84WithCleanSeg61 += (i == 61) ? noHome : segs[i];
-        }
-        std::string join84WithoutSeg61;
-        for (size_t i = 0; i < 84; ++i) {
-            if (i == 61) continue;
-            if (!join84WithoutSeg61.empty()) join84WithoutSeg61 += ';';
-            join84WithoutSeg61 += segs[i];
-        }
-        std::vector<std::string> variants = {
-            "",                                            // V0 inherit (crash)
-            clean + ";" + join(84),                        // V1 4436 pass
-            clean + ";" + join(84) + ";" + seg84,          // V2 4463 crash
-            clean + ";" + join84WithCleanSeg61 + ";" + seg84, // V3 4451 pass
-            clean + ";" + join(84) + ";C:\\Windows\\System32", // V5 V1 加无害尾段
-            clean + ";" + join(84) + ";" + seg84 + ";" + seg84, // V6 V2 双 seg84
-            clean + ";" + join84WithoutSeg61 + ";" + seg84, // V8 删 morpher 段
-            clean + ";" + join(84) + ";C:\\Nonexistent\\bin", // V9 不存在的尾段
-        };
-        for (size_t vi = 0; vi < variants.size(); ++vi) {
-            fs::path proj = projectDir.parent_path() / ("project_iso_" + std::to_string(vi));
-            std::error_code ec;
-            fs::remove_all(proj, ec);
-            fs::copy(projectDir, proj, fs::copy_options::recursive, ec);
-            std::vector<std::string> lines;
-            if (!variants[vi].empty()) {
-                lines.push_back("set PATH=" + variants[vi]);
-            }
-            lines.push_back("echo P%PATH%> " + q(outDir / ("v" + std::to_string(vi) + "_pathchk.txt")));
-            lines.push_back("rd /s /q " + q(outDir / ".xmake") + " 2>&1");
-            lines.push_back("cd /d " + q(outDir));
-            lines.push_back("xmake f -P " + q(proj) + " -m release > f" + std::to_string(vi) +
-                            ".log 2>&1");
-            lines.push_back("echo V" + std::to_string(vi) + "-exit=%errorlevel%");
-            auto r = runScript(lines);
-            std::string pc;
-            if (fileExists(outDir / ("v" + std::to_string(vi) + "_pathchk.txt")))
-                pc = readText(outDir / ("v" + std::to_string(vi) + "_pathchk.txt"));
-            std::string flog;
-            if (fileExists(outDir / ("f" + std::to_string(vi) + ".log")))
-                flog = readText(outDir / ("f" + std::to_string(vi) + ".log"));
-            std::printf("[DIAG] V%zu exit=%d flog_len=%zu flog=%.60s\n",
-                        vi, r.exitCode, flog.size(), flog.c_str());
-            fflush(stdout);
-        }
+        auto standaloneBuild = runScript({
+            "xmake f -P " + q(projectDir) + " -m release",
+            "xmake build -P " + q(projectDir) + " mj2x_native",
+        });
+        ASSERT_EQ(standaloneBuild.exitCode, 0) << standaloneBuild.out;
     }
 }
 
