@@ -42,9 +42,16 @@ static void printUsage()
     printf("  --config <file>           Load JSON options; command line values override it\n");
     printf("  --emit-c <file>            Output C source to file\n");
     printf("  --emit-cpp <file>          Output RegC C++17 source to file\n");
+#ifndef MJ2X_DISABLE_LLVM_BACKEND
     printf("  --emit-llvm <file>         Output LLVM IR source to file\n");
+#endif
+#ifdef MJ2X_DISABLE_LLVM_BACKEND
+    printf("  --backend <stackc|regc|vmc4> Select native emitter (default: stackc; "
+           "cbackend is a legacy alias)\n");
+#else
     printf("  --backend <stackc|regc|llvm|vmc4> Select native emitter (default: stackc; "
            "cbackend is a legacy alias)\n");
+#endif
     printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
     printf("  --regc-comment-level LEVEL  RegC: 生成注释级别 none|summary|detailed（默认 summary）\n");
     printf("  --regc-safe-env             RegC: 开启 safe-env（JNI 函数表快照 + 方法入口恢复；"
@@ -63,10 +70,12 @@ static void printUsage()
         "  --compile                  Compile emitted C into a native library beside --output\n");
     printf("  --compile-mode <mode>      Select native compile input mode (file, pipe)\n");
     printf("  --c-compiler <name>        C compiler or build driver (msvc, gcc, clang, zig, xmake)\n");
+#ifndef MJ2X_DISABLE_LLVM_BACKEND
     printf("  --llvm-tool <clang|llc>    LLVM IR compiler path (default: clang)\n");
+#endif
     printf("  --generate-cmake <dir>     Generate a standalone CMake project for emitted C\n");
     printf("  --generate-xmake <dir>     Generate a standalone xmake project with mj2x-crt\n");
-    printf("  --vmc4-dispatcher <kind>   VMC4: dispatcher 形态 switch_table|funcptr_table|"
+    printf("  --vmc4-dispatcher <kind>   VMC4(测试性): dispatcher 形态 switch_table|funcptr_table|"
            "computed_goto|if_nest|state_dispatcher（默认 switch_table；computed_goto 需 "
            "GCC/clang 编译）\n");
     printf("  --vmc4-seed <hex>          VMC4: 主 seed，驱动每实例 opcode 映射/handler 顺序"
@@ -201,10 +210,12 @@ static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
         backend = CEmitterBackend::RegC;
         return true;
     }
+#ifndef MJ2X_DISABLE_LLVM_BACKEND
     if (name == "llvm") {
         backend = CEmitterBackend::LlvmIr;
         return true;
     }
+#endif
     if (name == "vmc4") {
         backend = CEmitterBackend::Vmc4;
         return true;
@@ -243,7 +254,11 @@ static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOp
     if (config.backend) {
         options.backendSelected = true;
         if (!parseBackendName(*config.backend, options.cBackendKind)) {
+#ifdef MJ2X_DISABLE_LLVM_BACKEND
+            error = "Unknown config backend value. Expected stackc, regc, or vmc4.";
+#else
             error = "Unknown config backend value. Expected stackc, regc, or llvm.";
+#endif
             return false;
         }
     }
@@ -564,6 +579,7 @@ int main(int argc, char** argv)
             }
             options.nativeDirOutput = argv[++i];
         }
+#ifndef MJ2X_DISABLE_LLVM_BACKEND
         else if (arg == "--emit-llvm" && i + 1 < argc) {
             if (!commandLineNativeOutputSeen) {
                 options.cOutputPath.clear();
@@ -573,6 +589,7 @@ int main(int argc, char** argv)
             }
             options.llvmOutputPath = argv[++i];
         }
+#endif
         else if (arg == "--native-annotation" && i + 1 < argc)
             options.nativeAnnotation = argv[++i];
         else if (arg == "--native-method-prefix" && i + 1 < argc) {
@@ -609,6 +626,7 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
+#ifndef MJ2X_DISABLE_LLVM_BACKEND
         else if (arg == "--llvm-tool" && i + 1 < argc) {
             options.llvmToolSelected = true;
             if (!mj2x::cli::parseLlvmToolName(argv[++i], options.llvmTool)) {
@@ -617,12 +635,19 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
+#endif
         else if (arg == "--backend" && i + 1 < argc) {
             options.backendSelected = true;
             if (!parseBackendName(argv[++i], options.cBackendKind)) {
+#ifdef MJ2X_DISABLE_LLVM_BACKEND
+                fprintf(stderr,
+                        "Unknown --backend value. Expected stackc, regc, or vmc4. Legacy alias cbackend "
+                        "is also accepted.\n");
+#else
                 fprintf(stderr,
                         "Unknown --backend value. Expected stackc, regc, llvm, or vmc4. Legacy alias cbackend "
                         "is also accepted.\n");
+#endif
                 printUsage();
                 return 1;
             }
