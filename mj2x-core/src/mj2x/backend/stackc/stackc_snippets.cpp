@@ -16,48 +16,50 @@ using codegen::CSourceStream;
 static const codegen::CodeSnippetSet<StackCSnippet>& stackCSnippets()
 {
     static const codegen::CodeSnippetSet<StackCSnippet> snippets({
-        {StackCSnippet::LocalLoad, "    stack[++sp]${acc} = locals[${slot}]${acc};\n"},
-        {StackCSnippet::LocalStore, "    locals[${slot}]${acc} = stack[sp--]${acc};\n"},
+        // 缩进约定：模板只保留块内相对缩进（首层缩进由调用方 CSourceStream 的
+        // emitMultiline 按当前 indent 自动平移），不再自带 4 空格 + append。
+        {StackCSnippet::LocalLoad, "stack[++sp]${acc} = locals[${slot}]${acc};\n"},
+        {StackCSnippet::LocalStore, "locals[${slot}]${acc} = stack[sp--]${acc};\n"},
         {StackCSnippet::BinaryUnsignedWrap,
-         "    ${lhs}${acc} = (${signed_type})((${unsigned_type})${lhs}${acc} ${op} "
+         "${lhs}${acc} = (${signed_type})((${unsigned_type})${lhs}${acc} ${op} "
          "(${unsigned_type})${rhs}${acc});\n"
-         "    sp--;\n"},
+         "sp--;\n"},
         {StackCSnippet::ReturnVoid,
-         "    return;\n"},
+         "return;\n"},
         {StackCSnippet::NullPointerTrap,
-         "    if (_MJ2X_UNLIKELY(${ref} == NULL)) {\n"
-         "        jclass ex_class = (jclass)${ex_class};\n"
-         "        (*env)->ThrowNew(env, ex_class, \"null reference\");\n"
+         "if (_MJ2X_UNLIKELY(${ref} == NULL)) {\n"
+         "    jclass ex_class = (jclass)${ex_class};\n"
+         "    (*env)->ThrowNew(env, ex_class, \"null reference\");\n"
          "${dispatch}"
-         "    }\n"},
+         "}\n"},
         {StackCSnippet::PendingExceptionCheck,
-         "${pad}if (_MJ2X_UNLIKELY((*env)->ExceptionCheck(env))) {\n"
+         "if (_MJ2X_UNLIKELY((*env)->ExceptionCheck(env))) {\n"
          "${dispatch}"
-         "${pad}}\n"},
+         "}\n"},
         {StackCSnippet::ArrayLength,
-         "    stack[sp].i = (*env)->GetArrayLength(env, stack[sp].l);\n"},
+         "stack[sp].i = (*env)->GetArrayLength(env, stack[sp].l);\n"},
         {StackCSnippet::ObjectArrayLoad,
-         "    stack[sp - 1].l = ${value};\n"
-         "    sp--;\n"},
+         "stack[sp - 1].l = ${value};\n"
+         "sp--;\n"},
         {StackCSnippet::ObjectArrayStore,
-         "    (*env)->SetObjectArrayElement(env, (jobjectArray)stack[sp - 2].l, "
+         "(*env)->SetObjectArrayElement(env, (jobjectArray)stack[sp - 2].l, "
          "stack[sp - 1].i, stack[sp].l);\n"
-         "    sp -= 3;\n"},
+         "sp -= 3;\n"},
         {StackCSnippet::PrimitiveArrayLoad,
-         "    {\n"
-         "        ${type} value;\n"
-         "        (*env)->Get${suffix}ArrayRegion(env, (${array_type})stack[sp - 1].l, "
+         "{\n"
+         "    ${type} value;\n"
+         "    (*env)->Get${suffix}ArrayRegion(env, (${array_type})stack[sp - 1].l, "
          "stack[sp].i, 1, &value);\n"
-         "        stack[sp - 1]${acc} = (${target_type})value;\n"
-         "    }\n"
-         "    sp--;\n"},
+         "    stack[sp - 1]${acc} = (${target_type})value;\n"
+         "}\n"
+         "sp--;\n"},
         {StackCSnippet::PrimitiveArrayStore,
-         "    {\n"
-         "        ${type} value = (${type})stack[sp]${acc};\n"
-         "        (*env)->Set${suffix}ArrayRegion(env, (${array_type})stack[sp - 2].l, "
+         "{\n"
+         "    ${type} value = (${type})stack[sp]${acc};\n"
+         "    (*env)->Set${suffix}ArrayRegion(env, (${array_type})stack[sp - 2].l, "
          "stack[sp - 1].i, 1, &value);\n"
-         "    }\n"
-         "    sp -= 3;\n"},
+         "}\n"
+         "sp -= 3;\n"},
     });
     return snippets;
 }

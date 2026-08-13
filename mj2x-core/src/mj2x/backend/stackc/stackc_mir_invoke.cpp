@@ -98,7 +98,7 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, codegen::CSourceStre
     }
     out.append(");");
     out.newLine();
-    emitPendingExceptionCheck(out, 8);
+    emitPendingExceptionCheck(out);
     out.dedent();
     out.emitLine("}");
 

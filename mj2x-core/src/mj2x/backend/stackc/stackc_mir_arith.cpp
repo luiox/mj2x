@@ -6,6 +6,7 @@
 ///          自带完整缩进文本经 append 整体写入。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "libca/str/format.hpp"
 #include <cmath>
 
 namespace mj2x {
@@ -25,16 +26,14 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
         if (node->type == PrimitiveKind::LONG) {
             // 用 unsigned 64-bit 字面量再转 jlong，避免 INT64_MIN 被解析成越界有符号字面量。
             const auto u = static_cast<uint64_t>(v);
-            out.appendLineStart("stack[++sp]").append(acc).append(" = (jlong)")
-                .appendInt(static_cast<int64_t>(u)).append("ULL;");
-            out.newLine();
+            out.emitLine(ca::str::format_std("stack[++sp]{} = (jlong){}ULL;",
+                                            acc, static_cast<int64_t>(u)));
         }
         else {
             // int：先转 uint32 再转 jint，保证 INT_MIN 等值无符号环绕语义、字面量不越界。
             const auto u = static_cast<uint32_t>(static_cast<int32_t>(v));
-            out.appendLineStart("stack[++sp]").append(acc).append(" = (jint)")
-                .appendInt(static_cast<int64_t>(u)).append("u;");
-            out.newLine();
+            out.emitLine(ca::str::format_std("stack[++sp]{} = (jint){}u;",
+                                            acc, static_cast<int64_t>(u)));
         }
     }
     else if (std::holds_alternative<double>(node->value)) {
@@ -48,8 +47,7 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
                 value = "(" + std::string(d < 0 ? "-" : "") + "INFINITY)";
             else
                 value = formatFloatLiteral(d, 9) + "f";
-            out.appendLineStart("stack[++sp]").append(acc).append(" = ").append(value).append(";");
-            out.newLine();
+            out.emitLine(ca::str::format_std("stack[++sp]{} = {};", acc, value));
         }
         else {
             std::string value;
@@ -59,8 +57,7 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
                 value = "(" + std::string(d < 0 ? "-" : "") + "(double)INFINITY)";
             else
                 value = formatFloatLiteral(d, 17);
-            out.appendLineStart("stack[++sp]").append(acc).append(" = ").append(value).append(";");
-            out.newLine();
+            out.emitLine(ca::str::format_std("stack[++sp]{} = {};", acc, value));
         }
     }
     else if (std::holds_alternative<ca::str::Utf8StringRef>(node->value)) {
@@ -69,10 +66,10 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
         const auto value  = std::get<ca::str::Utf8StringRef>(node->value).to_std_string();
         const auto offset = stringPoolOffsetFor(value);
         const auto length = stringPoolLengthFor(value);
-        out.appendLineStart("stack[++sp].l = ").append(
-            trackLocalRefExpr("(*env)->NewString(env, (const jchar*)(_mj2x_string_pool + " +
-                              std::to_string(offset) + "), " + std::to_string(length) + ")")).append(";");
-        out.newLine();
+        out.emitLine(ca::str::format_std("stack[++sp].l = {};",
+            trackLocalRefExpr(ca::str::format_std(
+                "(*env)->NewString(env, (const jchar*)(_mj2x_string_pool + {}), {})",
+                offset, length))));
     }
     else if (std::holds_alternative<Type>(node->value)) {
         const auto type = std::get<Type>(node->value);
@@ -117,14 +114,14 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
 
 void StackCBackend::Impl::emitLocalLoad(const MIRLocalLoad* node, codegen::CSourceStream& out)
 {
-    out.append(renderStackCSnippet(
+    out.emitMultiline(renderStackCSnippet(
         StackCSnippet::LocalLoad,
         {{"acc", stackAccessor(node->type)}, {"slot", std::to_string(node->varIndex)}}));
 }
 
 void StackCBackend::Impl::emitLocalStore(const MIRLocalStore* node, codegen::CSourceStream& out)
 {
-    out.append(renderStackCSnippet(
+    out.emitMultiline(renderStackCSnippet(
         StackCSnippet::LocalStore,
         {{"acc", stackAccessor(node->type)}, {"slot", std::to_string(node->varIndex)}}));
 }
@@ -151,7 +148,7 @@ void StackCBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, codegen::CSource
         case BinaryOp::ADD:
         case BinaryOp::SUB:
         case BinaryOp::MUL:
-            out.append(renderStackCSnippet(StackCSnippet::BinaryUnsignedWrap,
+            out.emitMultiline(renderStackCSnippet(StackCSnippet::BinaryUnsignedWrap,
                                            {{"lhs", lhs},
                                             {"rhs", rhs},
                                             {"acc", acc},
@@ -225,7 +222,7 @@ void StackCBackend::Impl::emitBinaryOp(const MIRBinaryOp* node, codegen::CSource
         case BinaryOp::ADD:
         case BinaryOp::SUB:
         case BinaryOp::MUL:
-            out.append(renderStackCSnippet(StackCSnippet::BinaryUnsignedWrap,
+            out.emitMultiline(renderStackCSnippet(StackCSnippet::BinaryUnsignedWrap,
                                            {{"lhs", lhs},
                                             {"rhs", rhs},
                                             {"acc", acc},

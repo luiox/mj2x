@@ -575,7 +575,7 @@ struct StackCBackend::Impl
     void   emitArrayStore(const MIRArrayStore* node, codegen::CSourceStream& out);
     void   emitIntegerDivZeroTrap(const char* rhsAccessor, codegen::CSourceStream& out);
     void   emitNullPointerTrap(const std::string& refExpr, codegen::CSourceStream& out);
-    void   emitPendingExceptionCheck(codegen::CSourceStream& out, int indent = 8);
+    void   emitPendingExceptionCheck(codegen::CSourceStream& out);
     void   emitFieldIdCache(const std::string& cacheName, const std::string& localName,
                             const std::string& classExpr, const std::string& name,
                             const std::string& desc, bool isStatic, codegen::CSourceStream& out);

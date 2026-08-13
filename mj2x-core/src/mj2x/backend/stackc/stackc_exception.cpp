@@ -30,14 +30,14 @@ void StackCBackend::Impl::emitIntegerDivZeroTrap(const char* rhsAccessor, codege
 void StackCBackend::Impl::emitNullPointerTrap(const std::string& refExpr, codegen::CSourceStream& out)
 {
     codegen::CSourceStream dispatch;
-    for (int i = 0; i < 2; ++i) dispatch.indent();
+    dispatch.indent();
     if (!currentExceptionDispatchTarget.empty()) {
         dispatch.emitLine("goto " + currentExceptionDispatchTarget + ";");
     }
     else {
         emitExceptionReturn(currentMethodDesc, dispatch);
     }
-    out.append(renderStackCSnippet(
+    out.emitMultiline(renderStackCSnippet(
         StackCSnippet::NullPointerTrap,
         {{"ref", refExpr},
          {"ex_class",
@@ -45,7 +45,7 @@ void StackCBackend::Impl::emitNullPointerTrap(const std::string& refExpr, codege
          {"dispatch", dispatch.str()}}));
 }
 
-void StackCBackend::Impl::emitPendingExceptionCheck(codegen::CSourceStream& out, int indent)
+void StackCBackend::Impl::emitPendingExceptionCheck(codegen::CSourceStream& out)
 {
     // lite 模式：无异常 handler 时省略检查——JNI 调用失败设置的 pending 异常会在
     // native 方法返回时由 JVM 自动传播（对标 JNIC 稀疏检查）。有 handler 的
@@ -53,19 +53,18 @@ void StackCBackend::Impl::emitPendingExceptionCheck(codegen::CSourceStream& out,
     if (exceptionCheckLite && currentExceptionDispatchTarget.empty()) {
         return;
     }
-    // indent 是模板内嵌的绝对空格数（8）；dispatch 分支内容在模板内再进一级（12 空格 = 3 层）。
-    const int          level = indent / 4;
-    const std::string  pad   = std::string(static_cast<size_t>(indent), ' ');
+    // dispatch 在 if 块内（相对 1 层）；模板去首层缩进后由 emitMultiline 按 out.indent
+    // 平移整段，调用点处于任意缩进层都正确（旧式用 ${pad} 注入绝对空格已移除）。
     codegen::CSourceStream dispatch;
-    for (int i = 0; i < level + 1; ++i) dispatch.indent();
+    dispatch.indent();
     if (!currentExceptionDispatchTarget.empty()) {
         dispatch.emitLine("goto " + currentExceptionDispatchTarget + ";");
     }
     else {
         emitExceptionReturn(currentMethodDesc, dispatch);
     }
-    out.append(renderStackCSnippet(StackCSnippet::PendingExceptionCheck,
-                                   {{"pad", pad}, {"dispatch", dispatch.str()}}));
+    out.emitMultiline(renderStackCSnippet(StackCSnippet::PendingExceptionCheck,
+                                         {{"dispatch", dispatch.str()}}));
 }
 
 void StackCBackend::Impl::emitMonitor(const MIRMonitor* node, codegen::CSourceStream& out)

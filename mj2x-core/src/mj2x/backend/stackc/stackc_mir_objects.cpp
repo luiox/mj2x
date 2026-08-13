@@ -10,6 +10,8 @@
 /// 缩进约定：调用方保证 out 处于 2 层（8 空格），内部块用 indent()/dedent()。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "libca/str/format.hpp"
+
 namespace mj2x {
 
 using namespace jbytecode::core;
@@ -64,7 +66,7 @@ void StackCBackend::Impl::emitFieldIdCache(const std::string& cacheName,
     out.newLine();
     out.dedent();
     out.emitLine("}");
-    emitPendingExceptionCheck(out, 8);
+    emitPendingExceptionCheck(out);
 }
 
 void StackCBackend::Impl::emitMethodIdCache(const std::string& cacheName,
@@ -113,7 +115,7 @@ void StackCBackend::Impl::emitMethodIdCache(const std::string& cacheName,
     out.newLine();
     out.dedent();
     out.emitLine("}");
-    emitPendingExceptionCheck(out, 8);
+    emitPendingExceptionCheck(out);
 }
 
 /// @brief 发射「jclass lc = 缓存的类引用」（对标 JNIC cached_c_N）。
@@ -202,11 +204,9 @@ void StackCBackend::Impl::emitMultiNewArray(const MIRMultiNewArray* node, codege
 {
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jint dims[").appendInt(node->dims).append("];");
-    out.newLine();
+    out.emitLine(ca::str::format_std("jint dims[{}];", node->dims));
     for (int i = node->dims - 1; i >= 0; --i) {
-        out.appendLineStart("dims[").appendInt(i).append("] = stack[sp--].i;");
-        out.newLine();
+        out.emitLine(ca::str::format_std("dims[{}] = stack[sp--].i;", i));
     }
     out.appendLineStart("stack[++sp].l = ").append(trackLocalRefExpr(
         "_mj2x_new_multi_array(env, _mj2x_owner_class, \"" + node->typeDesc.to_std_string() +
@@ -220,14 +220,14 @@ void StackCBackend::Impl::emitArrayLength(const MIRArrayLength* node, codegen::C
 {
     (void)node;
     emitNullPointerTrap("stack[sp].l", out);
-    out.append(renderStackCSnippet(StackCSnippet::ArrayLength, {}));
+    out.emitMultiline(renderStackCSnippet(StackCSnippet::ArrayLength, {}));
 }
 
 void StackCBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, codegen::CSourceStream& out)
 {
     emitNullPointerTrap("stack[sp - 1].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
-        out.append(renderStackCSnippet(
+        out.emitMultiline(renderStackCSnippet(
             StackCSnippet::ObjectArrayLoad,
             {{"value",
               trackLocalRefExpr("(*env)->GetObjectArrayElement(env, (jobjectArray)stack[sp - 1].l, "
@@ -262,7 +262,7 @@ void StackCBackend::Impl::emitArrayLoad(const MIRArrayLoad* node, codegen::CSour
     }
     const char* suffix = primitiveToJNISuffix(node->componentType);
     const char* type   = primitiveToJNIType(node->componentType);
-    out.append(renderStackCSnippet(
+    out.emitMultiline(renderStackCSnippet(
         StackCSnippet::PrimitiveArrayLoad,
         {{"type", type},
          {"suffix", suffix},
@@ -275,7 +275,7 @@ void StackCBackend::Impl::emitArrayStore(const MIRArrayStore* node, codegen::CSo
 {
     emitNullPointerTrap("stack[sp - 2].l", out);
     if (node->componentType == PrimitiveKind::OBJECT) {
-        out.append(renderStackCSnippet(StackCSnippet::ObjectArrayStore, {}));
+        out.emitMultiline(renderStackCSnippet(StackCSnippet::ObjectArrayStore, {}));
         return;
     }
     if (node->componentType == PrimitiveKind::BYTE) {
@@ -304,7 +304,7 @@ void StackCBackend::Impl::emitArrayStore(const MIRArrayStore* node, codegen::CSo
     }
     const char* suffix = primitiveToJNISuffix(node->componentType);
     const char* type   = primitiveToJNIType(node->componentType);
-    out.append(renderStackCSnippet(StackCSnippet::PrimitiveArrayStore,
+    out.emitMultiline(renderStackCSnippet(StackCSnippet::PrimitiveArrayStore,
                                    {{"type", type},
                                     {"suffix", suffix},
                                     {"array_type", primitiveToJNIArrayType(node->componentType)},

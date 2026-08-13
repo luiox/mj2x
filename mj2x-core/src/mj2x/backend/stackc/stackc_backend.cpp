@@ -931,7 +931,7 @@ void StackCBackend::Impl::emitNode(const MIRNode* node, codegen::CSourceStream& 
         emitUncondBranch(static_cast<const MIRUncondBranch*>(node), out);
         break;
     case MIRKind::SWITCH: emitSwitch(static_cast<const MIRSwitch*>(node), out); break;
-    case MIRKind::RETURN: out.append(renderStackCSnippet(StackCSnippet::ReturnVoid, {})); break;
+    case MIRKind::RETURN: out.emitMultiline(renderStackCSnippet(StackCSnippet::ReturnVoid, {})); break;
     case MIRKind::RETURN_VALUE:
         emitReturnValue(static_cast<const MIRReturnValue*>(node), out);
         break;
