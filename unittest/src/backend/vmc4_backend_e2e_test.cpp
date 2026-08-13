@@ -761,6 +761,46 @@ TEST_P(Vmc4BackendE2E, AllocateAndArrayLengthRoundTrip)
             6, GetParam().kind);
 }
 
+// Phase 2.E：String LDC（ldc_string Opaque 物质化为常量槽，wrapper NewStringUTF
+// 预加载）+ MULTIANEWARRAY（递归 NewObjectArray，Phase 2.E 起支持）。
+// greeting：LDC + ARETURN；greetLen/isHello/startsWithHi：LDC 参与方法调用
+// （String.length/equals/startsWith 是 JNI 调用，LDC 槽作为实参传入）；
+// multi*：多维 int/String 数组分配 + 元素读写/长度访问。
+// 注：String 连接（"tag:" + s）javac 9+ 编译为 invokedynamic（indy:0），
+// 不在本用例范围。
+TEST_P(Vmc4BackendE2E, StringLdcAndMultiArrayRoundTrip)
+{
+    runCase("Vmc4NativeStrArr",
+            "public class Vmc4NativeStrArr {\n"
+            "  public static String greeting() { return \"hello\"; }\n"
+            "  public static int greetLen() { return \"hello\".length(); }\n"
+            "  public static boolean isHello(String s) { return \"hello\".equals(s); }\n"
+            "  public static boolean startsWithHi(String s) { return s.startsWith(\"hi\"); }\n"
+            "  public static int multiRows() { int[][] m = new int[2][3]; return m.length; }\n"
+            "  public static int multiDims() { int[][] m = new int[2][3]; return m[0].length; }\n"
+            "  public static int multiFill() {\n"
+            "    int[][] m = new int[2][3];\n"
+            "    m[0][1] = 7; m[1][2] = 9;\n"
+            "    return m[0][1] + m[1][2];\n"
+            "  }\n"
+            "  public static int multiRefLen() { String[][] m = new String[2][3]; return "
+            "m.length + m[0].length; }\n"
+            "}\n",
+            {
+                {"greeting", "Vmc4NativeStrArr.greeting()"},
+                {"greetLen", "Vmc4NativeStrArr.greetLen()"},
+                {"isHelloTrue", "Vmc4NativeStrArr.isHello(\"hello\")"},
+                {"isHelloFalse", "Vmc4NativeStrArr.isHello(\"world\")"},
+                {"startsHiTrue", "Vmc4NativeStrArr.startsWithHi(\"hi there\")"},
+                {"startsHiFalse", "Vmc4NativeStrArr.startsWithHi(\"yo\")"},
+                {"multiRows", "Vmc4NativeStrArr.multiRows()"},
+                {"multiDims", "Vmc4NativeStrArr.multiDims()"},
+                {"multiFill", "Vmc4NativeStrArr.multiFill()"},
+                {"multiRefLen", "Vmc4NativeStrArr.multiRefLen()"},
+            },
+            8, GetParam().kind);
+}
+
 // Phase 2.B：虚分派 + 接口调用 + 实例方法调用链（单类输入：只有主类方法转 VM）。
 // viaInterface：invokeinterface 经接口引用调用 → JVM 虚分派到主类已转 VM 的 calc
 // （VM→JNI→JVM 分派→VM 闭环）；chain/double_：实例方法互相调用（this 经 regs[0]）；

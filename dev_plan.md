@@ -17,10 +17,10 @@
 |---|---|---|---|
 | 2.0 | VMC4 | Spike：REF 类型 + 调用链最小闭环 + 决策 handler 复用方案 | ✅ 完成 |
 | 2.A | VMC4 | LoadField/StoreField/ArrayLoad/ArrayStore/Allocate | ✅ 完成 |
-| 2.B | VMC4 | Call（virtual/special/static/interface + cache） | 待开始 |
-| 2.C | VMC4 | Throw + 异常区域编码 | 待开始 |
-| 2.D | VMC4 | Intrinsic 子集 + 双后端对拍 | 待开始 |
-| 2.E | VMC4 | 可用化收口（真实 jar 转化率 + e2e 扩展 + trace surface） | 待开始 |
+| 2.B | VMC4 | Call（virtual/special/static/interface + cache） | ✅ 完成 |
+| 2.C | VMC4 | Throw + 异常区域编码 | ✅ 完成 |
+| 2.D | VMC4 | Intrinsic 子集 + 双后端对拍 | ✅ 完成 |
+| 2.E | VMC4 | 可用化收口（真实 jar 转化率 + e2e 扩展 + trace surface） | ✅ 完成 |
 | 1.1 | RegC 性能 | 基准套件扩展（含 JNIC 对比 + JDK 17/21） | 待开始 |
 | 1.2 | RegC 性能 | 针对性优化（intrinsic 扩面 / 通用 helper 收敛 / 内联评估） | 待开始 |
 
@@ -107,33 +107,82 @@ VMC4 工作的落地形态。
 > handler 复用方案：未走 RegC `_mj2x_regc_*` helper（varargs + 全局 env 与 VMC4 寄存器
 > 索引签名不兼容），改用 per-site 独立 helper（与 Call 一致）。VMC4 测试 66→78 全通过。
 
-### Phase 2.B — 调用与虚分派
+### Phase 2.B — 调用与虚分派 ✅
 
 - 实现 opcode：Call（invokevirtual/special/static/interface 四种 dispatch）
 - 复用 RegC class/method cache 机制（懒缓存 + 无锁 CAS）
 - 验收：G6 方法调用样本 + 含虚分派/接口调用样本 round-trip 绿
 
-### Phase 2.C — 异常语义（工程难度最大）
+**落地记录（2026-08-13，feat/mj2x-vmc4-calls）**：
+- backend 不再跳过实例方法：wrapper 把 this 写 regs[0].ref（SSA 约定 this=参数 id0），
+  显式参数从 regs[1] 开始——与 encoder 的 numInputs 对齐
+- invokespecial → CallNonvirtual<Type>MethodA（私有方法/构造器不走虚分派，helper
+  需要 _cls 定义类）；invokevirtual/interface 走 Call<Type>MethodA（JVM 侧虚分派）
+- 新增 e2e：VirtualDispatchAndInterfaceRoundTrip / InvokeSpecialAndNullReceiverRoundTrip
+  （null receiver → NPE）
+- 验收：40 e2e 全绿
+
+### Phase 2.C — 异常语义（工程难度最大） ✅
 
 - 实现 opcode：Throw
 - 突破"异常区域非空整体 fail-closed"：编码异常区域 + 解释器 try-catch 分派
 - athrow + try-catch handler 匹配 + 未捕获传播 + finally
 - 验收：G10 异常/monitor 样本 round-trip 绿
 
-### Phase 2.D — Intrinsic 子集 + 双后端对拍
+**落地记录（2026-08-13，feat/mj2x-vmc4-calls）**：
+- 编码期把 RegFunction.exceptionRegions 静态展开：每 (region, 受保护块) 一个
+  VmExceptionRegionEntry（handlerBlock/caughtTypeIdx/exceptionReg/blockIdx + 边拷贝），
+  catch 类型去重到 catchTypes（0xFFFF = catch-all/finally）；blockExcRegions 按块索引
+  给活跃条目（异常表顺序）
+- 检查点模式：每种 dispatcher 循环底部统一做 ExceptionCheck → ExceptionOccurred →
+  ExceptionClear → 按块线性扫描活跃条目 → mj2x_vm_exception_matches（IsInstanceOf）
+  → 匹配：执行边拷贝 + 异常对象写 exceptionReg + pc=handler；未匹配：重新 Throw 挂起
+  pending exception + status=1 传播（wrapper 返回默认值，Java 侧抛）
+- 除零在 Binary handler 直接 mj2x_vm_throw_arith；athrow（null → NPE）走 mj2x_vm_throw
+- 新增 e2e：ExceptionRoundTrip（div/throw/nested catch 匹配与传播）；prelude 新增
+  mj2x_vm_throw / mj2x_vm_throw_arith / mj2x_vm_exception_matches
+- 验收：44 e2e 全绿
+
+### Phase 2.D — Intrinsic 子集 + 双后端对拍 ✅
 
 - Intrinsic opcode 透传 RegIR `Intrinsic("...")`，复用 RegC intrinsic registry
   子集（Math / wrapper / String）
 - 对拍：VMC4 与 RegC 对同一方法输出一致
 - 验收：intrinsic 子集双后端对拍通过
 
-### Phase 2.E — 可用化收口
+**落地记录（2026-08-13，feat/mj2x-vmc4-calls）**：
+- SSA 产生的 intrinsic（array.length / cmp.nan_greater|nan_less / instanceof:<desc> /
+  monitor.enter|exit）按名称泛化分派：VmIntrinsicRef 表（按 name 去重），字节流
+  [Intrinsic][siteIdx][recv=0][dest][argc][args...]，发射 per-intrinsic helper
+  （懒缓存 class / 纯计算 / JNI accessor）+ intrinsic_table
+- 与 RegC 的差异：RegC 在 emitter 内联 intrinsic（如 cmp 三值比较展开成 C 表达式），
+  VMC4 统一走 per-intrinsic helper；Math/wrapper 方法两后端都是普通 Call（JNI）
+- 新增 e2e：IntrinsicAndMonitorRoundTrip（array.length/cmp/instanceof/monitor）、
+  MathIntrinsicDualBackendParity（VMC4 自包含 vs RegC 链接 CRT 的对拍）
+- 验收：48 e2e 全绿（含 4 dispatcher × dual-backend parity）
+
+### Phase 2.E — 可用化收口 ✅
 
 - 真实 jar（JavaObfuscatorTest TEST.jar）业务方法 VMC4 转化率从当前 0%（全
   fail-closed）拉到可用水平
 - 12 个 e2e 扩展到含 A/B/C/D 场景
 - trace surface 更新（`describe()` 纳入新 family），交付 mjdbg 红队
 - 验收：TEST.jar 业务方法 VMC4 转化率报告 + 全 e2e 绿
+
+**落地记录（2026-08-13，feat/mj2x-vmc4-calls）**：
+- 转化率报告基建：`vmc4_conversion_test` 跑 pipeline 后解析日志（Compiling/Skipping），
+  按签名回填状态，报告写入 test/mj2x/vmc4_conversion_report.md。初版 25%（1/4，
+  Main.main / StringKernel.mix 的 String LDC、ArrayKernel.multi 的 MULTIANEWARRAY
+  fail-closed）
+- **String LDC**：ldc_string Opaque（tag 携带 UTF-8 内容，ssa_builder.cpp:99）在
+  resolveOperand 普通路径物质化为字符串常量槽（VmStringLiteral，按内容去重，槽落在
+  计算寄存器之后），wrapper 在 exec 前用 NewStringUTF 预加载
+- **MULTIANEWARRAY**：移除 encodeAllocate 的 fail-closed，维度寄存器全在 argIdx[]
+  （argc=维度数）；发射共享递归 helper（mj2x_vm_alloc_multi_array_<tag>，按 JVM
+  eager 语义逐层 NewObjectArray/New<Type>Array，对齐 RegC _mj2x_regc_alloc_multi_array）
+- e2e 扩展到 14 用例 × 4 dispatcher（新增 StringLdcAndMultiArrayRoundTrip，9 检查点；
+  String 连接 `+` 在 javac 9+ 是 invokedynamic（indy:0），不在本 Phase 范围）
+- **转化率：25% → 100%（4/4 全部转 VM）**；VMC4 测试 45 单测 + 56 e2e 全绿
 
 ## 主线一：RegC 性能基线（P1，贯穿）
 
@@ -185,3 +234,22 @@ xmake run mj2x_integration_test
   helper 模式（exec 按 family 加表参数）。新增 3 个 e2e（FieldAccess/ArrayAccess/
   AllocateAndArrayLength），4 dispatcher × drift 全开 round-trip 绿，VMC4 测试 66→78 全通过。
   MULTIANEWARRAY 暂 fail-closed；instance field/array null NPE 已处理（field null 待补）
+- 2026-08-13：**Phase 2.B 完成**（feat/mj2x-vmc4-calls）——backend 不再跳过实例方法
+  （this → regs[0].ref），invokespecial → CallNonvirtual（_cls 定义类），wrapper 传
+  intrinsic_table；新增 VirtualDispatchAndInterfaceRoundTrip /
+  InvokeSpecialAndNullReceiverRoundTrip，40 e2e 全绿
+- 2026-08-13：**Phase 2.C 完成**（feat/mj2x-vmc4-calls）——VmExceptionRegionEntry 编码
+  （region×保护块展开 + catch 类型去重 + blockExcRegions 按块活跃条目）、检查点模式
+  （每个 dispatcher 循环底部 ExceptionCheck → 按块线性扫描 → IsInstanceOf 匹配 →
+  边拷贝 + 异常写 exceptionReg；未匹配重新 Throw + status=1 传播）、除零
+  mj2x_vm_throw_arith；新增 ExceptionRoundTrip，44 e2e 全绿
+- 2026-08-13：**Phase 2.D 完成**（feat/mj2x-vmc4-calls）——Intrinsic 按名称泛化分派
+  （array.length/cmp.nan_*/instanceof:<desc>/monitor.enter|exit 进 intrinsics 表），
+  Math/wrapper 走普通 Call；新增 IntrinsicAndMonitorRoundTrip +
+  MathIntrinsicDualBackendParity（VMC4 vs RegC 对拍），48 e2e 全绿
+- 2026-08-13：**Phase 2.E 完成**（feat/mj2x-vmc4-calls）——String LDC（ldc_string Opaque
+  物质化为常量槽，wrapper NewStringUTF 预加载）+ MULTIANEWARRAY（共享递归 helper，
+  按 JVM eager 语义）落地，转化率报告基建（test/mj2x/vmc4_conversion_report.md）；
+  TEST.jar 转化率 25%→100%（4/4）；新增 StringLdcAndMultiArrayRoundTrip e2e；
+  45 单测 + 56 e2e 全绿。VMC4 可用版主线（2.0-2.E）收口完成；RegC 性能线 1.1/1.2
+  留待数据驱动迭代

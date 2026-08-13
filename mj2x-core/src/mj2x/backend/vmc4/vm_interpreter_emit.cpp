@@ -4,6 +4,7 @@
 #include "mj2x/codegen/c_source.hpp"
 #include "libca/str/format.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -1532,11 +1533,93 @@ bool isRefArrayAlloc(const std::string& typeDesc)
     return typeDesc.size() >= 2 && (typeDesc[1] == 'L' || typeDesc[1] == '[');
 }
 
-/// @brief 发射单个 Allocate helper（Object 或 Array）。
+/// @brief 发射 Allocate 的共享多维奇数组递归 helper（Phase 2.E）。
+///
+/// @details
+/// MULTIANEWARRAY 语义：按 JVM 规定 eager 分配所有声明的维度（多余维数保持
+/// NULL，对齐 RegC _mj2x_regc_alloc_multi_array）。递归按描述符逐层剥离前导
+/// '['；typeDesc 是完整数组描述符（如 "[[I"），dim_count ≤ '[' 数量。base 层
+/// 用 New<Type>Array，ref 层用 FindClass(component)+NewObjectArray。
+/// 名字带 tag（每个方法一份 C 文件/翻译单元，避免跨方法重复定义）。
+void emitAllocMultiArraySharedHelper(CSourceStream& out, const std::string& tag)
+{
+    const std::string helper = format_std("mj2x_vm_alloc_multi_array_{}", tag);
+    out.add_func(format_std("static void* {}(JNIEnv* env, const char* type_desc, "
+                            "int dim_count, const int* dims)", helper),
+                 [&](CSourceStream& fnc) {
+        fnc.emitLine("if (type_desc == NULL || dims == NULL || dim_count <= 0 || "
+                     "type_desc[0] != '[') {");
+        {
+            CSourceStream::IndentGuard g(fnc);
+            fnc.emitLine("(*env)->ThrowNew(env, (*env)->FindClass(env, "
+                         "\"java/lang/InternalError\"), \"mj2x_vm_alloc_multi_array: "
+                         "malformed descriptor\");");
+            fnc.emitLine("return NULL;");
+        }
+        fnc.emitLine("}");
+        fnc.emitLine("if (dim_count == 1) {");
+        {
+            CSourceStream::IndentGuard g(fnc);
+            fnc.emitLine("switch (type_desc[1]) {");
+            {
+                CSourceStream::IndentGuard g2(fnc);
+                // base 层（'Z'/'B'/'C'/'S'/'I'/'J'/'F'/'D'）：New<Type>Array。
+                struct BaseCase
+                {
+                    char        code;
+                    const char* suffix;
+                };
+                const BaseCase kBaseCases[] = {
+                    {'Z', "Boolean"}, {'B', "Byte"},   {'C', "Char"}, {'S', "Short"},
+                    {'I', "Int"},    {'J', "Long"},    {'F', "Float"}, {'D', "Double"},
+                };
+                for (const auto& bc : kBaseCases) {
+                    fnc.emitLine(format_std("case '{}': return (*env)->New{}Array(env, "
+                                            "(jsize)dims[0]);",
+                                            bc.code, bc.suffix));
+                }
+                fnc.emitLine("default: {");
+                {
+                    CSourceStream::IndentGuard g3(fnc);
+                    // ref 层：component = type_desc+1（'L' 内部名或更深数组描述符，
+                    // FindClass 两者都接受）。
+                    fnc.emitLine("jclass _cc = (*env)->FindClass(env, type_desc + 1);");
+                    fnc.emitLine("if (_cc == NULL) return NULL;");
+                    fnc.emitLine("return (*env)->NewObjectArray(env, (jsize)dims[0], "
+                                 "_cc, NULL);");
+                }
+                fnc.emitLine("}");
+            }
+            fnc.emitLine("}");
+        }
+        fnc.emitLine("}");
+        fnc.emitLine("jclass _component = (*env)->FindClass(env, type_desc + 1);");
+        fnc.emitLine("if (_component == NULL) return NULL;");
+        fnc.emitLine("jobjectArray _array = (*env)->NewObjectArray(env, (jsize)dims[0], "
+                     "_component, NULL);");
+        fnc.emitLine("if (_array == NULL || (*env)->ExceptionCheck(env)) return _array;");
+        fnc.emitLine("for (int _i = 0; _i < dims[0]; ++_i) {");
+        {
+            CSourceStream::IndentGuard g(fnc);
+            fnc.emitLine(format_std("void* _child = {}(env, type_desc + 1, "
+                                    "dim_count - 1, dims + 1);",
+                                    helper));
+            fnc.emitLine("if ((*env)->ExceptionCheck(env)) return _array;");
+            fnc.emitLine("(*env)->SetObjectArrayElement(env, _array, _i, (jobject)_child);");
+            fnc.emitLine("if ((*env)->ExceptionCheck(env)) return _array;");
+        }
+        fnc.emitLine("}");
+        fnc.emitLine("return _array;");
+    });
+    out.emitBlankLine();
+}
+
+/// @brief 发射单个 Allocate helper（Object / Array / MultiArray）。
 ///
 /// @details
 /// Object：懒缓存 owner class + AllocObject（不调构造器，<init> 由独立 Call 调）。
 /// Array base：New<Type>Array(length)。Array ref：懒缓存 component class + NewObjectArray。
+/// MultiArray：维度寄存器全在 argIdx[]（argc=维度数），交给共享递归 helper。
 /// 结果一律 jobject 写 regs[dest].ref。
 void emitAllocHelper(CSourceStream& out, const VmAllocRef& aref, size_t i, const std::string& tag)
 {
@@ -1561,6 +1644,15 @@ void emitAllocHelper(CSourceStream& out, const VmAllocRef& aref, size_t i, const
             fnc.emitLine("}");
             fnc.emitLine("regs[dest].ref = (void*)(*env)->AllocObject(env, _cls);");
             fnc.emitLine("(void)argc; (void)argIdx;");
+        } else if (aref.kind == VmAllocKind::MultiArray) {
+            // 维度寄存器全在 argIdx[]（argc = 维度数，字节流按 dimCount 写入）。
+            // 共享递归 helper 按描述符逐层分配（Phase 2.E）。
+            fnc.emitLine("int _dims[32];");
+            fnc.emitLine("for (unsigned char _di = 0; _di < argc; ++_di) "
+                         "_dims[_di] = (int)regs[argIdx[_di]].i;");
+            fnc.emitLine(format_std("regs[dest].ref = (void*)mj2x_vm_alloc_multi_array_{}(env, "
+                                    "{}, (int)argc, _dims);",
+                                    tag, codegen::cStringLiteral(aref.typeDesc)));
         } else {
             // Array：length 在 argIdx[0]。
             fnc.emitLine("(void)argc;");
@@ -1594,6 +1686,11 @@ void emitAllocHelper(CSourceStream& out, const VmAllocRef& aref, size_t i, const
 void emitAllocInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
 {
     if (program.allocRefs.empty()) return;
+    const bool hasMulti = std::any_of(program.allocRefs.begin(), program.allocRefs.end(),
+                                      [](const VmAllocRef& a) {
+                                          return a.kind == VmAllocKind::MultiArray;
+                                      });
+    if (hasMulti) emitAllocMultiArraySharedHelper(out, tag);
     for (size_t i = 0; i < program.allocRefs.size(); ++i) {
         emitAllocHelper(out, program.allocRefs[i], i, tag);
     }

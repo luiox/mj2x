@@ -193,6 +193,10 @@ struct EncoderState
     std::vector<VmIntrinsicRef>                              intrinsicRefs;
     std::unordered_map<std::string, uint16_t>                intrinsicByKey;
 
+    /// String LDC 常量槽（Phase 2.E）：按内容去重（ldc_string Opaque 物质化）。
+    std::vector<VmStringLiteral>                             stringLiterals;
+    std::unordered_map<std::string, uint16_t>                stringSlotByValue;
+
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
     uint16_t numInputs = 0;
@@ -464,15 +468,40 @@ struct EncoderState
         return idx;
     }
 
+    /// @brief 分配/复用 String LDC 常量槽（Phase 2.E）。
+    ///
+    /// @details
+    /// ldc_string Opaque 在普通指令路径物质化为专用寄存器槽（与 internConstant
+    /// 同模式：槽落在计算寄存器之后），wrapper 在 exec 前用 NewStringUTF 预加载。
+    /// 按内容去重：同一字面量多处 LDC 共享一个槽。
+    uint16_t internStringLiteral(const std::string& value)
+    {
+        auto it = stringSlotByValue.find(value);
+        if (it != stringSlotByValue.end()) {
+            observeReg(it->second);
+            return it->second;
+        }
+        const uint16_t slot = maxReg;   // 常量槽紧接在已分配寄存器之后
+        observeReg(slot);
+        stringSlotByValue[value] = slot;
+        VmStringLiteral lit;
+        lit.slot  = slot;
+        lit.value = value;
+        stringLiterals.push_back(std::move(lit));
+        return slot;
+    }
+
     /// @brief 解析一个 RegOperand 为 VM 寄存器索引。
     ///
     /// @details
     /// - Register：直接用 reg.value（计算寄存器）
     /// - IntLiteral/FloatLiteral：intern 到常量池，返回常量槽索引
     /// - NullLiteral：MVP 不支持（fail-closed）
-    /// - Opaque：边拷贝路径（allowOpaqueNull）容忍为 REF NULL 常量槽（对齐 RegC
+    /// - Opaque：tag 以 "ldc_string:" 开头的 String LDC 物质化为字符串常量槽
+    ///   （wrapper 用 NewStringUTF 预加载，见 internStringLiteral）；边拷贝路径
+    ///   （allowOpaqueNull）容忍其余 Opaque 为 REF NULL 常量槽（对齐 RegC
     ///   "Opaque → NULL"：异常 handler 参数/undef 边值在 JVM 语义下不可达或为
-    ///   null，赋 NULL 安全）；普通指令路径 fail-closed（LDC String 不应静默变 NULL）
+    ///   null，赋 NULL 安全）；普通指令路径 fail-closed
     ///
     /// @return 成功返回 true 并填 regIdx；失败返回 false 并填 reason。
     bool resolveOperand(const RegOperand& op, uint16_t& regIdx, std::string& reason,
@@ -505,7 +534,14 @@ struct EncoderState
         case RegOperandKind::NullLiteral:
             reason = "NullLiteral operand (object ref) not supported in MVP";
             return false;
-        case RegOperandKind::Opaque:
+        case RegOperandKind::Opaque: {
+            // String LDC（Phase 2.E）：Opaque tag 携带 UTF-8 内容（ssa_builder.cpp:99），
+            // 物质化为字符串常量槽，wrapper 在 exec 前 NewStringUTF 预加载。
+            constexpr const char* kLdcStringPrefix = "ldc_string:";
+            if (op.tag.rfind(kLdcStringPrefix, 0) == 0) {
+                regIdx = internStringLiteral(op.tag.substr(std::strlen(kLdcStringPrefix)));
+                return true;
+            }
             // undef 值在边拷贝上下文按 NULL 引用物质化：REF NULL 常量槽 prologue
             // 写 .i=0（union 双关，.ref==NULL）。
             if (allowOpaqueNull) {
@@ -515,6 +551,7 @@ struct EncoderState
             reason = "Opaque operand not supported in MVP";
             if (!op.tag.empty()) reason += " (tag: " + op.tag + ")";
             return false;
+        }
         }
         reason = "unknown RegOperandKind";
         return false;
@@ -1055,10 +1092,6 @@ bool encodeArrayStore(EncoderState& ctx, const RegInstruction& ins, VmProgram& p
 bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
 {
     const VmAllocKind kind = toVmAllocKind(ins.allocationKind);
-    if (kind == VmAllocKind::MultiArray) {
-        reason = "Allocate: MULTIANEWARRAY not supported yet (recursive alloc)";
-        return false;
-    }
     VmAllocRef aref;
     aref.kind     = kind;
     aref.typeDesc = ins.typeDesc.to_std_string();
@@ -1067,7 +1100,8 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
-    // Array 的 length 在 args[0]（Object 无 args）。
+    // 维度寄存器（MultiArray：每维一个 int；Array：length；Object：无 args）。
+    // MultiArray 的 dimCount 编码在 argc，解释器据此递归分配（Phase 2.E）。
     std::vector<uint16_t> dimIdxs;
     for (const auto& a : ins.args) {
         uint16_t di;
@@ -1392,6 +1426,8 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     prog->hasArrayLength = ctx.hasArrayLength;
     // Intrinsic 表（Phase 2.D 泛化）。
     prog->intrinsics = std::move(ctx.intrinsicRefs);
+    // String LDC 常量槽（Phase 2.E）。
+    prog->stringLiterals = std::move(ctx.stringLiterals);
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;

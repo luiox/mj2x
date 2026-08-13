@@ -910,6 +910,58 @@ TEST(Vmc4BackendTest, EncodesAllocateInstruction)
     EXPECT_EQ(prog->methodRefs[0].name, "<init>");
 }
 
+// P2-10b：String LDC（Phase 2.E）—— ldc_string Opaque 物质化为字符串常量槽，
+// wrapper 用 NewStringUTF 预加载（不再 fail-closed）。
+TEST(Vmc4BackendTest, EncodesStringLdc)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    // static String greet() { return "hello"; }
+    auto prog = encodeMethod("greet", "()Ljava/lang/String;",
+                             {
+                                 new LdcInsnNode(ca::core::Any(
+                                     ca::str::Utf8StringRef::from_cstr("hello"))),
+                                 new InsnNode(Opcodes::ARETURN),
+                             },
+                             1, 1, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_EQ(prog->stringLiterals.size(), 1u);
+    EXPECT_EQ(prog->stringLiterals[0].value, "hello");
+    // 常量槽落在计算寄存器之后（wrapper 预加载 NewStringUTF 由 e2e 行为验证）。
+    EXPECT_GE(prog->stringLiterals[0].slot, prog->numInputs);
+    EXPECT_LT(prog->stringLiterals[0].slot, prog->numRegs);
+    // 解释器字节流引用该槽作为返回操作数（Copy REF 到 dest）。
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "greet1");
+    EXPECT_NE(src.find("mj2x_vm_exec_greet1"), std::string::npos) << src;
+}
+
+// P2-10c：MULTIANEWARRAY（Phase 2.E）—— 不再 fail-closed，编码为 MultiArray
+// Allocate（argc = 维度数），发射共享递归 helper（NewObjectArray 逐层填充）。
+TEST(Vmc4BackendTest, EncodesMultiArrayAllocate)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    // static int[][] make() { return new int[2][3]; }
+    auto prog = encodeMethod("make2", "()[[I",
+                             {
+                                 new InsnNode(Opcodes::ICONST_2),
+                                 new InsnNode(Opcodes::ICONST_3),
+                                 new MultiANewArrayInsnNode(
+                                     ca::str::Utf8StringRef::from_cstr("[[I"), 2),
+                                 new InsnNode(Opcodes::ARETURN),
+                             },
+                             2, 0, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_EQ(prog->allocRefs.size(), 1u);
+    EXPECT_EQ(prog->allocRefs[0].kind, VmAllocKind::MultiArray);
+    EXPECT_EQ(prog->allocRefs[0].typeDesc, "[[I");
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "make2_1");
+    EXPECT_NE(src.find("mj2x_vm_alloc_multi_array"), std::string::npos) << src;
+    EXPECT_NE(src.find("NewObjectArray"), std::string::npos) << src;
+}
+
 // P2-11：Intrinsic array.length（Phase 2.A）—— 不再 fail-closed。
 TEST(Vmc4BackendTest, EncodesArrayLengthIntrinsic)
 {

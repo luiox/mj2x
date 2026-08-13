@@ -454,6 +454,19 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                 out.emitLine(line.build());
             }
         }
+        // 预加载 String LDC 常量槽（Phase 2.E）：NewStringUTF 把 UTF-8 内容物化为
+        // jstring，写入编码期分配的专用槽（按内容去重）。调用帧内局部引用，
+        // 方法返回后由 JVM 释放——寄存器仅在本帧解释期间使用，安全。
+        for (size_t i = 0; i < program.stringLiterals.size(); ++i) {
+            const auto& lit = program.stringLiterals[i];
+            CSourceStream line;
+            line.append("regs[");
+            line.appendInt(static_cast<ca::i64>(lit.slot));
+            line.append("].ref = (void*)(*env)->NewStringUTF(env, ");
+            line.append(codegen::cStringLiteral(lit.value));
+            line.append(");");
+            out.emitLine(line.build());
+        }
         // 调解释器。各 object-op 分派表：含该 family 的方法传对应表（backend finalize
         // 发射），不含的传 0（handler 不触发，解释器不读）。空表传 0 而非表名，避免
         // 引用未发射的符号。

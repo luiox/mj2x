@@ -259,7 +259,7 @@ enum class VmAllocKind : uint8_t
 {
     Object     = 0,   ///< NEW → AllocObject（<init> 由独立 Call 调用）
     Array      = 1,   ///< NEWARRAY/ANEWARRAY → New<Type>Array / NewObjectArray
-    MultiArray = 2,   ///< MULTIANEWARRAY（Phase 2.A 暂 fail-closed，递归分配复杂）
+    MultiArray = 2,   ///< MULTIANEWARRAY（Phase 2.E 支持：递归 NewObjectArray）
 };
 
 /// @brief 分配引用：一个 Allocate 调用点的静态信息（Phase 2.A）。
@@ -306,6 +306,18 @@ struct VmExceptionRegionEntry
     std::vector<std::pair<uint16_t, uint16_t>> copies;
 };
 
+/// @brief String 字面量常量槽（Phase 2.E）：LDC String（Opaque "ldc_string:"）物质化。
+///
+/// @details
+/// 编码期把 ldc_string Opaque 分配为专用寄存器槽，wrapper 在 exec 前用
+/// NewStringUTF 预加载 jstring（global ref 语义由 JNI 局部引用 + 方法帧保证）。
+/// 按内容去重（同字面量共享一槽）。
+struct VmStringLiteral
+{
+    uint16_t    slot = 0;     ///< 常量寄存器槽（prologue 写入位置）
+    std::string value;        ///< UTF-8 字面量内容
+};
+
 /// @brief 一个方法的完整 VM 程序（编码产物）。
 ///
 /// @details
@@ -324,6 +336,7 @@ struct VmProgram
     std::vector<VmAllocRef>      allocRefs;      ///< Allocate 分配引用（Phase 2.A）
     bool                         hasArrayLength = false;   ///< 含 array.length intrinsic（Phase 2.A）
     std::vector<VmIntrinsicRef>  intrinsics;     ///< Intrinsic 引用表（Phase 2.D，按 name 去重）
+    std::vector<VmStringLiteral> stringLiterals; ///< String LDC 常量槽（Phase 2.E，按内容去重）
 
     /// 异常区域（Phase 2.C）：每 (region, 保护块) 一条；blockExcRegions 按块索引
     /// 给出活跃条目（异常表顺序），供解释器异常分派查表。
