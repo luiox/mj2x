@@ -35,6 +35,21 @@ using codegen::cStringLiteral;
 // string_view，消除了 Utf8StringBuilder 无法直接接 std::string 的缺口。
 using codegen::CSourceStream;
 
+/// @brief 纯计算 intrinsic 判定（issue #778 P2 异常检查稀疏化）。
+///
+/// RuntimeFunction emitKind 的 intrinsic（位操作/Math 等）在 emitIntrinsicCall
+/// 兜底分支发射为纯 C 表达式调用，不经过 JNI、不可能抛异常；SSA 阶段无法区分
+/// intrinsic 与普通调用，统一标 mayThrow，导致热循环每轮都做 ExceptionCheck。
+/// 这里在发射异常分发前复判一次：匹配成功且为 RuntimeFunction 时省略检查
+/// （与 emitIntrinsicCall 的发射行为一致——该分支无 native-state 回退）。
+bool isPureRuntimeIntrinsic(const RegInstruction& ins)
+{
+    if (ins.kind != RegInstructionKind::Call) return false;
+    const RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+    return decision.kind == RegCIntrinsicDecisionKind::Emit &&
+           decision.emitKind == RegCIntrinsicEmitKind::RuntimeFunction;
+}
+
 }   // namespace
 
 void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out)
@@ -143,7 +158,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                 body.comment(regInstructionLine(ins).to_std_string());
             }
             if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason)) return result;
-            if (ins.effect.mayThrow) {
+            if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins)) {
                 if (!emitExceptionDispatch(body,
                                            activeRegions,
                                            block.get(),

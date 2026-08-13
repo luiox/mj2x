@@ -343,6 +343,15 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      1,
      true},
     {"java/lang/Integer",
+     "reverseBytes",
+     "(I)I",
+     "mj2x_intrinsic_int_reverse_bytes",
+     RegCIntrinsicEmitKind::RuntimeFunction,
+     RegCIntrinsicNativeObjectKind::None,
+     false,
+     1,
+     true},
+    {"java/lang/Integer",
      "bitCount",
      "(I)I",
      "mj2x_intrinsic_int_bit_count",
@@ -445,6 +454,15 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      "reverse",
      "(J)J",
      "mj2x_intrinsic_long_reverse",
+     RegCIntrinsicEmitKind::RuntimeFunction,
+     RegCIntrinsicNativeObjectKind::None,
+     false,
+     1,
+     true},
+    {"java/lang/Long",
+     "reverseBytes",
+     "(J)J",
+     "mj2x_intrinsic_long_reverse_bytes",
      RegCIntrinsicEmitKind::RuntimeFunction,
      RegCIntrinsicNativeObjectKind::None,
      false,
@@ -1747,6 +1765,7 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("int32_t mj2x_intrinsic_int_rotate_left(int32_t value, int32_t distance);\n");
     out.append("int32_t mj2x_intrinsic_int_rotate_right(int32_t value, int32_t distance);\n");
     out.append("int32_t mj2x_intrinsic_int_reverse(int32_t value);\n");
+    out.append("int32_t mj2x_intrinsic_int_reverse_bytes(int32_t value);\n");
     out.append("int32_t mj2x_intrinsic_int_bit_count(int32_t value);\n");
     out.append("int32_t mj2x_intrinsic_int_leading_zeros(int32_t value);\n");
     out.append("int32_t mj2x_intrinsic_int_trailing_zeros(int32_t value);\n");
@@ -1756,6 +1775,7 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("int64_t mj2x_intrinsic_long_rotate_left(int64_t value, int32_t distance);\n");
     out.append("int64_t mj2x_intrinsic_long_rotate_right(int64_t value, int32_t distance);\n");
     out.append("int64_t mj2x_intrinsic_long_reverse(int64_t value);\n");
+    out.append("int64_t mj2x_intrinsic_long_reverse_bytes(int64_t value);\n");
     out.append("int32_t mj2x_intrinsic_long_bit_count(int64_t value);\n");
     out.append("int32_t mj2x_intrinsic_long_leading_zeros(int64_t value);\n");
     out.append("int32_t mj2x_intrinsic_long_trailing_zeros(int64_t value);\n");

@@ -1205,10 +1205,20 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
               readText(test::getResourcePath("native_project/gitignore.golden")));
 
     if (commandAvailable("xmake")) {
+        // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
+        // program for cc"——Windows 分支显式锁定 windows + msvc 工具链
+        // （与 native_project_builder 的子进程调用一致）。
+#ifdef _WIN32
+        auto standaloneBuild = runScript({
+            "xmake f -P " + q(projectDir) + " -m release -p windows --toolchain=msvc",
+            "xmake build -P " + q(projectDir) + " mj2x_native",
+        });
+#else
         auto standaloneBuild = runScript({
             "xmake f -P " + q(projectDir) + " -m release",
             "xmake build -P " + q(projectDir) + " mj2x_native",
         });
+#endif
         ASSERT_EQ(standaloneBuild.exitCode, 0) << standaloneBuild.out;
     }
 }

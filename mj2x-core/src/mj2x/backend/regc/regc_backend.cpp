@@ -132,23 +132,47 @@ std::string buildResolvedDispatchTable(
                           "desc)");
             s.iff("m == NULL", [](CSourceStream& u) { u.ret("NULL"); });
             s.declare_var("jclass", "impl_class", "NULL");
-            s.assign("site->method", "m");
-            s.assign("site->fn",
+            /* 目标槽：槽 0 空闲（首个调用）写槽 0，否则写槽 1 再与槽 0 交换。
+               交替 receiver 时两槽各自命中，避免每轮 refresh（issue #780）。 */
+            s.declare_var("const int", "use_slot1", "(site->receiverClass != NULL)");
+            s.declare_var("jmethodID*", "dst_m",
+                          "use_slot1 ? &site->method1 : &site->method");
+            s.declare_var("mj2x_regc_fn_ptr_t*", "dst_fn",
+                          "use_slot1 ? &site->fn1 : &site->fn");
+            s.declare_var("jclass*", "dst_impl",
+                          "use_slot1 ? &site->implClass1 : &site->implClass");
+            s.declare_var("jclass*", "dst_rcv",
+                          "use_slot1 ? &site->receiverClass1 : &site->receiverClass");
+            s.assign("*dst_m", "m");
+            s.assign("*dst_fn",
                      "_mj2x_regc_resolve_verified(name, desc, m, receiver_class, &impl_class)");
-            s.iff("site->implClass != NULL", [](CSourceStream& u) {
-                u.emitLine("(*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, "
-                           "site->implClass);");
+            s.iff("*dst_impl != NULL", [](CSourceStream& u) {
+                u.emitLine("(*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, *dst_impl);");
             });
             /* 独立增计数：impl_class 与表条目的 ownerClass 共享同一 global ref，
-               site 必须持有自己的引用，避免 DeleteGlobalRef 误伤表条目。 */
-            s.assign("site->implClass",
+               目标槽必须持有自己的引用，避免 DeleteGlobalRef 误伤表条目。 */
+            s.assign("*dst_impl",
                      "(jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, impl_class)");
-            s.iff("site->receiverClass != NULL", [](CSourceStream& u) {
-                u.emitLine("(*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, "
-                           "site->receiverClass);");
+            s.iff("*dst_rcv != NULL", [](CSourceStream& u) {
+                u.emitLine("(*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, *dst_rcv);");
             });
-            s.assign("site->receiverClass",
+            s.assign("*dst_rcv",
                      "(jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, receiver_class)");
+            s.iff("use_slot1", [](CSourceStream& u) {
+                /* 槽 1 提升为槽 0：字段互换，global ref 计数不变（每个 ref 仍只释放一次）。 */
+                u.declare_var("jmethodID", "tm", "site->method");
+                u.assign("site->method", "site->method1");
+                u.assign("site->method1", "tm");
+                u.declare_var("mj2x_regc_fn_ptr_t", "tf", "site->fn");
+                u.assign("site->fn", "site->fn1");
+                u.assign("site->fn1", "tf");
+                u.declare_var("jclass", "ti", "site->implClass");
+                u.assign("site->implClass", "site->implClass1");
+                u.assign("site->implClass1", "ti");
+                u.declare_var("jclass", "tr", "site->receiverClass");
+                u.assign("site->receiverClass", "site->receiverClass1");
+                u.assign("site->receiverClass1", "tr");
+            });
             s.ret("m");
         });
     src.emitBlankLine();

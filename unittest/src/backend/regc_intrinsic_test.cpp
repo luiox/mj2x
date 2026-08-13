@@ -102,6 +102,65 @@ RegInstruction makeStaticCall(const char* owner, const char* name, const char* d
 
 }   // namespace
 
+TEST(RegCIntrinsicRegistryTest, MatchesIntegerBitIntrinsicsThroughRegistry)
+{
+    // issue #778：Integer/Long 位操作族曾走通用 JNI helper（热循环 66x 差距），
+    // registry 条目存在但必须验证 matchCall 真正命中并发射 runtime 符号。
+    struct BitCase
+    {
+        const char* owner;
+        const char* name;
+        const char* desc;
+        const char* symbol;
+    };
+    const BitCase kCases[] = {
+        {"java/lang/Integer", "rotateLeft", "(II)I", "mj2x_intrinsic_int_rotate_left"},
+        {"java/lang/Integer", "rotateRight", "(II)I", "mj2x_intrinsic_int_rotate_right"},
+        {"java/lang/Integer", "reverse", "(I)I", "mj2x_intrinsic_int_reverse"},
+        {"java/lang/Integer", "reverseBytes", "(I)I", "mj2x_intrinsic_int_reverse_bytes"},
+        {"java/lang/Integer", "bitCount", "(I)I", "mj2x_intrinsic_int_bit_count"},
+        {"java/lang/Integer",
+         "numberOfLeadingZeros",
+         "(I)I",
+         "mj2x_intrinsic_int_leading_zeros"},
+        {"java/lang/Integer",
+         "numberOfTrailingZeros",
+         "(I)I",
+         "mj2x_intrinsic_int_trailing_zeros"},
+        {"java/lang/Integer", "highestOneBit", "(I)I", "mj2x_intrinsic_int_highest_one_bit"},
+        {"java/lang/Integer", "lowestOneBit", "(I)I", "mj2x_intrinsic_int_lowest_one_bit"},
+        {"java/lang/Integer", "signum", "(I)I", "mj2x_intrinsic_int_signum"},
+        {"java/lang/Long", "rotateLeft", "(JI)J", "mj2x_intrinsic_long_rotate_left"},
+        {"java/lang/Long", "rotateRight", "(JI)J", "mj2x_intrinsic_long_rotate_right"},
+        {"java/lang/Long", "reverse", "(J)J", "mj2x_intrinsic_long_reverse"},
+        {"java/lang/Long", "reverseBytes", "(J)J", "mj2x_intrinsic_long_reverse_bytes"},
+        {"java/lang/Long", "bitCount", "(J)I", "mj2x_intrinsic_long_bit_count"},
+        {"java/lang/Long", "numberOfLeadingZeros", "(J)I", "mj2x_intrinsic_long_leading_zeros"},
+        {"java/lang/Long", "numberOfTrailingZeros", "(J)I", "mj2x_intrinsic_long_trailing_zeros"},
+        {"java/lang/Long", "highestOneBit", "(J)J", "mj2x_intrinsic_long_highest_one_bit"},
+        {"java/lang/Long", "lowestOneBit", "(J)J", "mj2x_intrinsic_long_lowest_one_bit"},
+        {"java/lang/Long", "signum", "(J)I", "mj2x_intrinsic_long_signum"},
+    };
+    for (const auto& c : kCases) {
+        // desc 形如 `(II)I` / `(JI)J` / `(I)I` / `(J)I`：括号内字符数即参数个数。
+        const std::string desc(c.desc);
+        const size_t      argCount = desc.find(')') - 1;
+        RegInstruction    ins      = makeStaticCall(c.owner, c.name, c.desc, {});
+        ins.args.reserve(argCount);
+        for (size_t i = 0; i < argCount; ++i) {
+            const char ty = desc[1 + i];
+            ins.args.push_back(ty == 'J' ? RegOperand::fromInt(1, SSAType::I64)
+                                         : RegOperand::fromInt(1, SSAType::I32));
+        }
+        auto decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+
+        EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.emitKind, RegCIntrinsicEmitKind::RuntimeFunction)
+            << c.owner << "." << c.name;
+        EXPECT_EQ(decision.symbol, c.symbol) << c.owner << "." << c.name;
+    }
+}
+
 TEST(RegCIntrinsicRegistryTest, MatchesMathIntrinsicThroughRegistry)
 {
     auto ins = makeStaticCall("java/lang/Math",

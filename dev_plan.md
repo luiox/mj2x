@@ -21,8 +21,8 @@
 | 2.C | VMC4 | Throw + 异常区域编码 | ✅ 完成 |
 | 2.D | VMC4 | Intrinsic 子集 + 双后端对拍 | ✅ 完成 |
 | 2.E | VMC4 | 可用化收口（真实 jar 转化率 + e2e 扩展 + trace surface） | ✅ 完成 |
-| 1.1 | RegC 性能 | 基准套件扩展（含 JNIC 对比 + JDK 17/21） | 待开始 |
-| 1.2 | RegC 性能 | 针对性优化（intrinsic 扩面 / 通用 helper 收敛 / 内联评估） | 待开始 |
+| 1.1 | RegC 性能 | 基准套件扩展（含 JNIC 对比 + JDK 17/21） | ✅ 完成 |
+| 1.2 | RegC 性能 | 针对性优化（intrinsic 扩面 / 通用 helper 收敛 / 内联评估） | 部分完成 |
 
 ## 执行顺序与依赖
 
@@ -193,6 +193,12 @@ VMC4 工作的落地形态。
 - JDK 17 / 21 双矩阵
 - 验收：每份基准附覆盖率审计表（强制）+ JVM/StackC/RegC/JNIC 四列数据
 
+> **完成（2026-08-13，feat/mj2x-regc-perf）**：jvm-obf-tester 13-probe 基准脚本
+> （`benchmark/jvm_obfuscator_test_benchmark.ps1`，参数化 + javap 覆盖率审计）入库；
+> JDK17 总耗时 2.25x→1.16x（122ms vs 105ms，Control flow 0.87x 已反超）、JDK21 1.56x；
+> 正式报告 `benchmark/results/2026-08-13-jvm-obf-tester-os30.md`（RegC native 74.7% vs
+> os30 61.6%）。
+
 ### Phase 1.2 — 针对性优化
 
 - 通用 JNI helper 命中率审计：统计 `_mj2x_regc_call_*` 派发占比，定位未命中
@@ -200,6 +206,12 @@ VMC4 工作的落地形态。
 - 新增 intrinsic：System.arraycopy 等
 - 方法内联 pass（RegIR 层）—— 按 1.1 数据决策是否必要
 - 验收：基线上量化加速比（before/after）
+
+> **部分完成（2026-08-13）**：Integer/Long 位操作 intrinsic 补全（rotate/reverse/
+> reverseBytes/bitCount/前导尾随零/最高最低位/signum，issue #778）；异常检查稀疏化
+> （纯计算 intrinsic 后省略 ExceptionCheck，Arithmetic 热循环 66x→2x）；resolved
+> dispatch 双槽缓存（交替 receiver 不再每轮 refresh，issue #780）。仍待办：System.
+> arraycopy 等更宽 intrinsic、方法内联 pass（按 1.1 数据决策）。
 
 ## 验证命令
 
@@ -253,3 +265,9 @@ xmake run mj2x_integration_test
   TEST.jar 转化率 25%→100%（4/4）；新增 StringLdcAndMultiArrayRoundTrip e2e；
   45 单测 + 56 e2e 全绿。VMC4 可用版主线（2.0-2.E）收口完成；RegC 性能线 1.1/1.2
   留待数据驱动迭代
+- 2026-08-13：**RegC 性能主线（feat/mj2x-regc-perf）**——Phase 1.1 完成：jvm-obf-tester
+  13-probe 基准脚本 + javap 覆盖率审计入库，JDK17 总耗时 2.25x→1.16x（122ms vs 105ms，
+  Control flow 0.87x 反超）、JDK21 1.56x，正式报告 `benchmark/results/2026-08-13-jvm-obf-tester-os30.md`。
+  Phase 1.2 部分完成：Integer/Long 位操作 intrinsic 补全（#778）、异常检查稀疏化
+  （Arithmetic 66x→2x）、resolved dispatch 双槽缓存（#780）。回归：mj2x_unittest 442/442、
+  mj2x_integration_test 36/36 全过
