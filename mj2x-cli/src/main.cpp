@@ -1028,9 +1028,12 @@ int main(int argc, char** argv)
     }
     if (needsNativeSource &&
         (options.cBackendKind == CEmitterBackend::StackC ||
-         options.cBackendKind == CEmitterBackend::RegC)) {
-        // StackC 和 RegC 均使用 RegisterNatives 动态绑定，需要 mj2x/cloader/Loader
-        // 桥接类（其 native 方法 registerNativesForClass 由本侧 _mj2x_register_for_class 实现）。
+         options.cBackendKind == CEmitterBackend::RegC ||
+         options.cBackendKind == CEmitterBackend::Vmc4)) {
+        // StackC / RegC / VMC4 均使用 RegisterNatives 动态绑定，需要
+        // mj2x/cloader/Loader 桥接类（其 native 方法 registerNativesForClass 由
+        // 本侧 _mj2x_register_for_class 实现；VMC4 finalize 同样发射该桥接 C
+        // 函数，缺 Loader.class 时 jar 模式运行报 NoClassDefFoundError）。
         // native 库加载注入到 Loader.<clinit>（只注入一次，转换类 clinit 不再重复 load）。
         auto cloaderPostprocessor = std::make_unique<mj2x::CLoaderPostprocessor>();
         if (jarNativeLoaderEnabled) {

@@ -2290,6 +2290,53 @@ TEST(CliTest, CompileRegCJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable
     EXPECT_TRUE(callsLoader);
 }
 
+// VMC4 复用 RegisterNatives + mj2x/cloader/Loader 桥接：jar 模式必须注入
+// Loader.class（修复前缺失 → 运行期 NoClassDefFoundError: mj2x/cloader/Loader）。
+TEST(CliTest, CompileVmc4JarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+    if (!hasAutoNativeCompiler()) {
+        GTEST_SKIP() << "no supported C compiler is available on PATH";
+    }
+
+    fs::path        inJar         = writeTinyJar();
+    fs::path        outJar        = test::getTempOutPath("mj2x_cli_compile_vmc4_output.jar");
+    fs::path        cFile         = test::getTempOutPath("mj2x_cli_compile_vmc4_output.c");
+    fs::path        nativeLibrary = nativeLibraryPathFor(outJar);
+    std::error_code ec;
+    fs::remove(nativeLibrary, ec);
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) + " --emit-c " + q(cFile) +
+            " --backend vmc4 --compile",
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+
+    // 桥接类 + 运行时 loader + native 资源都在 jar 内。
+    auto cloaderClass = readJarEntry(outJar, "mj2x/cloader/Loader.class");
+    EXPECT_FALSE(cloaderClass.empty()) << result.out;
+    auto loaderClass = readJarEntry(outJar, "mj2x/runtime/NativeLoader.class");
+    EXPECT_FALSE(loaderClass.empty()) << result.out;
+    auto nativeResource =
+        readJarEntry(outJar, "META-INF/mj2x/native/" + nativeLibrary.filename().string());
+    EXPECT_FALSE(nativeResource.empty()) << result.out;
+
+    // 方法被标 native（转 VM）。
+    auto                     classBytes = readJarEntry(outJar, "demo/CliJarA.class");
+    ca::str::Utf8StringArena arena;
+    auto                     cn  = readClassFromBytes(classBytes, arena);
+    auto*                    add = findMethod(*cn, "add");
+    ASSERT_NE(add, nullptr);
+    EXPECT_TRUE((add->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+}
+
 TEST(CliTest, PipeCompileRegCJarEmbedsNativeLoaderAndLibraryWithClang)
 {
     fs::path cli = findCli();
