@@ -318,6 +318,20 @@ struct VmStringLiteral
     std::string value;        ///< UTF-8 字面量内容
 };
 
+/// @brief `.class` 字面量（ldc_class Opaque）常量槽。
+///
+/// @details
+/// 编码期把 ldc_class Opaque 分配为专用寄存器槽，wrapper 在 exec 前用
+/// FindClass 预加载 jclass（JNI 局部引用 + 方法帧语义与 String LDC 相同）。
+/// FindClass 触发类加载但不触发初始化（对齐 JVM ldc 类常量语义）；失败时
+/// pending exception 由解释器检查点传播（NoClassDefFoundError）。
+/// 按内部名去重（同一类多处 .class 共享一槽）。
+struct VmClassLiteral
+{
+    uint16_t    slot = 0;     ///< 常量寄存器槽（prologue 写入位置）
+    std::string typeDesc;     ///< 内部名（如 java/lang/String）
+};
+
 /// @brief 一个方法的完整 VM 程序（编码产物）。
 ///
 /// @details
@@ -337,6 +351,7 @@ struct VmProgram
     bool                         hasArrayLength = false;   ///< 含 array.length intrinsic（Phase 2.A）
     std::vector<VmIntrinsicRef>  intrinsics;     ///< Intrinsic 引用表（Phase 2.D，按 name 去重）
     std::vector<VmStringLiteral> stringLiterals; ///< String LDC 常量槽（Phase 2.E，按内容去重）
+    std::vector<VmClassLiteral>  classLiterals;  ///< .class 字面量常量槽（按内部名去重）
 
     /// 异常区域（Phase 2.C）：每 (region, 保护块) 一条；blockExcRegions 按块索引
     /// 给出活跃条目（异常表顺序），供解释器异常分派查表。

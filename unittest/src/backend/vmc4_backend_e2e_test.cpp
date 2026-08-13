@@ -942,6 +942,50 @@ TEST_P(Vmc4BackendE2E, CheckCastRoundTrip)
             4, GetParam().kind);
 }
 
+// 后续项：NullLiteral (object ref) → REF NULL 常量槽——null 比较/返回 null/
+// null 实参/checkcast+null 比较（jvm-obf-tester 剩余 fail-closed 主因之一）。
+TEST_P(Vmc4BackendE2E, NullLiteralRoundTrip)
+{
+    runCase("Vmc4NativeNull",
+            "public class Vmc4NativeNull {\n"
+            "  public static boolean isNull(Object o) { return o == null; }\n"
+            "  public static String retNull(int x) { return x < 0 ? null : \"ok\"; }\n"
+            "  public static boolean passNull() { return accept(null); }\n"
+            "  public static boolean accept(String s) { return s == null; }\n"
+            "  public static int castNullCmp(Object o) { return (String)o == null ? 7 : 0; }\n"
+            "}\n",
+            {
+                {"isNullTrue", "Vmc4NativeNull.isNull(null)"},
+                {"isNullFalse", "Vmc4NativeNull.isNull(\"x\")"},
+                {"retNullNeg", "Vmc4NativeNull.retNull(-1)"},
+                {"retNullOk", "Vmc4NativeNull.retNull(3)"},
+                {"passNull", "Vmc4NativeNull.passNull()"},
+                {"castNullCmp", "Vmc4NativeNull.castNullCmp(null)"},
+            },
+            5, GetParam().kind);
+}
+
+// 后续项：`.class` 字面量（ldc_class Opaque）→ FindClass 预加载 Class 常量槽
+// （JVM ldc 类常量语义：触发加载不触发初始化；jvm-obf-tester 剩余 fail-closed
+// 主因之一）。
+TEST_P(Vmc4BackendE2E, ClassLiteralRoundTrip)
+{
+    runCase("Vmc4NativeClass",
+            "public class Vmc4NativeClass {\n"
+            "  public static String selfName() { return Vmc4NativeClass.class.getName(); }\n"
+            "  public static boolean isString(Object o) { return o.getClass() == String.class; }\n"
+            "  public static boolean isSelf(Class<?> c) { return c == Vmc4NativeClass.class; }\n"
+            "}\n",
+            {
+                {"selfName", "Vmc4NativeClass.selfName()"},
+                {"isStringTrue", "Vmc4NativeClass.isString(\"x\")"},
+                {"isStringFalse", "Vmc4NativeClass.isString(Integer.valueOf(1))"},
+                {"isSelfTrue", "Vmc4NativeClass.isSelf(Vmc4NativeClass.class)"},
+                {"isSelfFalse", "Vmc4NativeClass.isSelf(String.class)"},
+            },
+            3, GetParam().kind);
+}
+
 // Phase 2.C 回归：athrow 异常归属 = athrow 所在块，而非布局顺序的下一块。
 // throwCatchTail 的 athrow 块（保护区内）之后紧跟 handler/未保护块（try 内
 // throw、try 外 return）：若检查点按「pc 之后的块」归属，异常会逃逸传播

@@ -467,6 +467,20 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append(");");
             out.emitLine(line.build());
         }
+        // 预加载 `.class` 字面量常量槽：FindClass 物化 jclass（按内部名去重）。
+        // JVM ldc 类常量语义：触发类加载不触发初始化；FindClass 失败置 pending
+        // exception，解释器入口检查点传播（NoClassDefFoundError）。局部引用，
+        // 本帧解释期间使用安全。
+        for (size_t i = 0; i < program.classLiterals.size(); ++i) {
+            const auto& lit = program.classLiterals[i];
+            CSourceStream line;
+            line.append("regs[");
+            line.appendInt(static_cast<ca::i64>(lit.slot));
+            line.append("].ref = (void*)(*env)->FindClass(env, ");
+            line.append(codegen::cStringLiteral(lit.typeDesc));
+            line.append(");");
+            out.emitLine(line.build());
+        }
         // 调解释器。各 object-op 分派表：含该 family 的方法传对应表（backend finalize
         // 发射），不含的传 0（handler 不触发，解释器不读）。空表传 0 而非表名，避免
         // 引用未发射的符号。

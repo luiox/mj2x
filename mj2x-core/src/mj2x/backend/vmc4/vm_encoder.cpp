@@ -197,6 +197,10 @@ struct EncoderState
     std::vector<VmStringLiteral>                             stringLiterals;
     std::unordered_map<std::string, uint16_t>                stringSlotByValue;
 
+    /// `.class` 字面量常量槽：按内部名去重（ldc_class Opaque 物质化）。
+    std::vector<VmClassLiteral>                              classLiterals;
+    std::unordered_map<std::string, uint16_t>                classSlotByDesc;
+
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
     uint16_t numInputs = 0;
@@ -491,6 +495,27 @@ struct EncoderState
         return slot;
     }
 
+    /// @brief 分配/复用 `.class` 字面量常量槽（ldc_class Opaque）。
+    ///
+    /// @details 与 internStringLiteral 同模式：专用寄存器槽 + wrapper 预加载
+    /// （FindClass）。按内部名去重。
+    uint16_t internClassLiteral(const std::string& typeDesc)
+    {
+        auto it = classSlotByDesc.find(typeDesc);
+        if (it != classSlotByDesc.end()) {
+            observeReg(it->second);
+            return it->second;
+        }
+        const uint16_t slot = maxReg;
+        observeReg(slot);
+        classSlotByDesc[typeDesc] = slot;
+        VmClassLiteral lit;
+        lit.slot     = slot;
+        lit.typeDesc = typeDesc;
+        classLiterals.push_back(std::move(lit));
+        return slot;
+    }
+
     /// @brief 解析一个 RegOperand 为 VM 寄存器索引。
     ///
     /// @details
@@ -532,14 +557,26 @@ struct EncoderState
             return true;
         }
         case RegOperandKind::NullLiteral:
-            reason = "NullLiteral operand (object ref) not supported in MVP";
-            return false;
+            // REF NULL 常量槽（prologue 写 .i=0，union 双关 .ref==NULL）——
+            // 与 allowOpaqueNull 的 undef 边值物质化同一机制。NullLiteral 的
+            // 语义场景（== null 比较 / return null / null 实参 / checkcast null
+            // / null 存储）全部等价于 REF NULL。
+            regIdx = internConstant(VmType::REF, 0, 0.0);
+            return true;
         case RegOperandKind::Opaque: {
             // String LDC（Phase 2.E）：Opaque tag 携带 UTF-8 内容（ssa_builder.cpp:99），
             // 物质化为字符串常量槽，wrapper 在 exec 前 NewStringUTF 预加载。
             constexpr const char* kLdcStringPrefix = "ldc_string:";
             if (op.tag.rfind(kLdcStringPrefix, 0) == 0) {
                 regIdx = internStringLiteral(op.tag.substr(std::strlen(kLdcStringPrefix)));
+                return true;
+            }
+            // `.class` 字面量：Opaque tag 携带内部名（ldc_class:<内部名>），
+            // 物质化为 Class 常量槽，wrapper 在 exec 前 FindClass 预加载
+            // （JVM ldc 类常量语义：触发加载不触发初始化）。
+            constexpr const char* kLdcClassPrefix = "ldc_class:";
+            if (op.tag.rfind(kLdcClassPrefix, 0) == 0) {
+                regIdx = internClassLiteral(op.tag.substr(std::strlen(kLdcClassPrefix)));
                 return true;
             }
             // undef 值在边拷贝上下文按 NULL 引用物质化：REF NULL 常量槽 prologue
@@ -813,6 +850,12 @@ bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     VmComparePred pred;
     if (!toVmComparePred(ins.comparePredicate, pred)) {
         reason = "Compare predicate not supported";
+        return false;
+    }
+    // REF 只支持 Eq/Ne（对象身份比较，解释器用 IsSameObject）；有序比较
+    // 在 JVM 字节码中不存在（IF_ACMPEQ/IF_ACMPNE 只有 eq/ne）。
+    if (operandType == VmType::REF && pred != VmComparePred::Eq && pred != VmComparePred::Ne) {
+        reason = "REF ordered comparison not supported";
         return false;
     }
     uint16_t lhs, rhs;
@@ -1452,6 +1495,7 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     prog->intrinsics = std::move(ctx.intrinsicRefs);
     // String LDC 常量槽（Phase 2.E）。
     prog->stringLiterals = std::move(ctx.stringLiterals);
+    prog->classLiterals  = std::move(ctx.classLiterals);
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;
