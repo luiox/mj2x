@@ -11,6 +11,8 @@
 
 #include <cstdint>
 
+#include "mj2x/codegen/runtime_protection.hpp"
+
 namespace mj2x::codegen {
 
 /// @brief 生成注释的分级（与日志分级一致：默认 Summary，最详细级逐指令出注释）。
@@ -52,6 +54,10 @@ struct CodeOptions
 
     /// @brief 生成类型断言代码（默认开，关闭缩小产物但丢失运行时校验）。
     bool emitTypeAsserts = true;
+
+    /// @brief 反侦测检查点注入（方法入口 mj2x_rt_checkpoint_run；默认关闭）。
+    /// @details 依赖 mj2x-crt 的 rt_protect 模块（resources.manifest 内嵌）。
+    RuntimeProtectionOptions runtimeProtection;
 
     /// @brief RAII 作用域覆盖：构造保存旧值，析构恢复。
     /// @details 函数级/调用点级临时改开关用；支持嵌套（内层先析构先恢复）。

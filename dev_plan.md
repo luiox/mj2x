@@ -270,27 +270,24 @@ try 范围外抛出的异常不会被 catch，当前 VMC4/RegC 都会 catch。�
 
 ### 主线四：反侦测体系（antidebug / antiagent）—— P2
 
-**背景**：探测层已就绪——antidebug（Windows：IsDebuggerPresent/CheckRemote/
-PEB BeingDebugged+NtGlobalFlag/NtQuery debug port/object/flags/硬件断点/软断点
-扫描）、antijvmti（JNI 表快照/参数扫描/模块枚举 Win Toolhelp + Linux proc maps/
-JVMTI capability 查询）、detection 聚合。缺口：
+**已完成（feat/mj2x-antidebug-agent）**：
 
-| 缺口 | 说明 |
-|---|---|
-| Linux 原生反调试 | antidebug 现为 Windows-only（`#ifdef _WIN32` 外为空）；补 TracerPid（/proc/self/status）、ptrace(PTRACE_TRACEME) 自检、/proc/self/maps 可疑段、时间差检测 |
-| 反制响应层 | 现只有探测（collect/has），无"检测到之后做什么"；补可配置 policy（terminate/假数据/延迟/降级/白噪声）+ 多阶段随机化检查点 |
-| 后端接入 | RegC 方法入口 barrier + 热路径稀疏检查（runtime_kernel barrier 钩子）；VMC4 wrapper/检查点注入；CLI 开关 |
-| agent 检测增强 | 运行时 JVM 参数收集（JNI 侧经 RuntimeMXBean/系统属性）；java agent 特征（MANIFEST Agent-Class/Launcher-Agent-Class）；JDWP 端口探测 |
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| 4.1 | Linux antidebug：TracerPid（/proc/self/status 解析谓词 `hasTracerPid`）、PTRACE_TRACEME 自检（EPERM+TracerPid 非零 = 被跟踪；EPERM+零 = seccomp 限制 → nativeProbeFailed）、maps rwx 段（`hasWritableExecutableMapping`）、单调时钟时间差（弱信号，不进聚合） | ✅（stub 头 + MSVC 交叉编译验证 Linux 分支语法） |
+| 4.2 | 反制响应层 `detection/enforcement`：EnforcementAction（LogOnly/Delay/FakeData/Terminate）+ 多阶段检查点（step 确定性下限 + xorshift 随机提前命中）+ force 语义 + checkAndEnforce 组合；Terminate 返回 outcome 由集成层执行（可测） | ✅ |
+| 4.3 | 后端接入：mj2x-crt 新增 `rt_protect/mj2x_rt_protect.{h,c}`（C99 自包含检查点，resources.manifest 内嵌）；RegC/VMC4 生成器方法入口注入（`codegen/runtime_protection` 共用片段，默认不注入零产物变化）；CLI `--runtime-protection <none\|log\|delay\|fake\|terminate>` + `--runtime-protection-step` + `--runtime-protection-delay`（RegC/VMC4 通用，其他 backend 报错）；真实 MSVC 编译链验证（VMC4/RegC 注入产物 + rt_protect.c → DLL） | ✅ |
+| 4.4 | agent 检测增强：`collectProcessArguments`（Windows GetCommandLineW + 引号感知 `splitCommandLineArgs`；Linux /proc/self/cmdline）+ `collectLiveAgentSignals(javaVm)` 自动收集重载 | ✅ |
+| 4.5 | 验证：runtime 单测（Linux 谓词 mock、enforcement 状态机、命令行切分）+ crt 检查点单测 + backend 注入单测 + CLI 校验单测 + 编译链 e2e | ✅ |
 
-**阶段**：
-- 4.1 Linux antidebug：TracerPid/ptrace/maps/时间差 + mock 化单测（对齐 Windows 侧
-  `collectDebugSignals` 结构）
-- 4.2 反制响应层：`runtime_detection` 之上加 enforcement（探测不变、响应可插拔、
-  策略可配置），多阶段+随机化检查点防单点绕过
-- 4.3 后端接入：RegC/VMC4 注入点 + CLI 开关 + 性能评估（检查点开销需覆盖率审计）
-- 4.4 agent 检测增强：运行时参数收集 + agent 特征匹配 + JDWP 探测
-- 4.5 验证与闭环：runtime 单测（mock 注入）+ 真调试器/agent E2E（Windows
-  x64dbg/WinDbg attach、Linux gdb/ptrace）+ mjdbg 攻击报告反馈
+**后续（可做，记录不阻塞）**：
+- agent 特征深度检测：javaagent jar 的 MANIFEST Agent-Class/Launcher-Agent-Class
+  扫描（需类路径枚举，重）；JDWP 端口主动探测（易误报，命令行覆盖已足够）
+- mj2x-runtime C++ 版与 crt C 版的检测面统一（当前独立实现，C 版为第一版
+  子集：Windows 无 PEB/NtQuery 探测，Linux 无 ptrace 探测）
+- 检查点注入位置扩展：热路径稀疏检查（循环内）而非仅方法入口；随机化注入位置
+- 真调试器/agent 场景 E2E（Windows x64dbg/WinDbg attach、Linux gdb/ptrace +
+  -javaagent 启动）→ mjdbg 攻击报告反馈
 
 ### 主线五：文档整理（贯穿）
 
@@ -342,3 +339,16 @@ JVMTI capability 查询）、detection 聚合。缺口：
   Phase 1.2 部分完成：Integer/Long 位操作 intrinsic 补全（#778）、异常检查稀疏化
   （Arithmetic 66x→2x）、resolved dispatch 双槽缓存（#780）。回归：mj2x_unittest 442/442、
   mj2x_integration_test 36/36 全过
+- 2026-08-13：**主线三 异常精确化（feat/mj2x-exc-exact，PR #796）**——审计实证 javac
+  异常表覆盖整个 try（throwCatch 实测 [0,15) 而非初版假设 [8,16)），且 code_converter
+  强制异常表 label 成块入口 → javac 字节码下块粒度==指令粒度（推翻 PR #792 审查的
+  初版"过度保护"结论）；blockInProtectedRange 判定真源改为指令序号区间（handler
+  start/end insn idx ∩ block first/last insn idx），与 L1 切分解耦；新增 SSA 保护区
+  集合断言 + VMC4 semi 形态 e2e；184+36 回归全绿
+- 2026-08-13：**主线四 反侦测体系（feat/mj2x-antidebug-agent，PR #797）**——4.1 Linux
+  antidebug（TracerPid/PTRACE_TRACEME 自检/maps rwx/时间差弱信号）；4.2 enforcement
+  反制响应层（4 action + 多阶段检查点）；4.3 mj2x-crt rt_protect C99 检查点 +
+  RegC/VMC4 方法入口注入 + CLI --runtime-protection（默认不注入零产物变化，真实
+  MSVC 编译链 → DLL 验证）；4.4 agent 参数收集（Windows 引号感知切分/Linux
+  cmdline）；61+全量回归绿；真实样本转化率 TEST.jar 100% / snake(AquaShield) 73% /
+  jvm-obf-tester 85%（fail-closed 均已知 MVP 边界，报告本地）

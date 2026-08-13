@@ -53,6 +53,7 @@
 
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
+#include "mj2x/codegen/runtime_protection.hpp"
 
 #include <memory>
 #include <string>
@@ -127,6 +128,20 @@ public:
     /// 用于开发/测试期观察，不用于交付。
     void setSafeEnvDebug(bool enabled);
 
+    /// @brief 设置反侦测检查点注入（--runtime-protection，RegC/VMC4 通用）。
+    ///
+    /// @details
+    /// 开启后在每个生成方法入口注入 `mj2x_rt_checkpoint_run` 调用（依赖
+    /// mj2x-crt 的 rt_protect 模块，随生成工程分发）；action 见
+    /// codegen::RuntimeProtectionAction。默认关闭（零产物变化）。
+    void setRuntimeProtection(codegen::RuntimeProtectionAction action, std::uint32_t step,
+                              std::uint32_t delayMs)
+    {
+        runtimeProtection_.action  = action;
+        runtimeProtection_.step    = step;
+        runtimeProtection_.delayMs = delayMs;
+    }
+
     /// @brief 设置多文件输出目录（--emit-native-dir）。
     ///
     /// @details
@@ -155,6 +170,7 @@ private:
     std::string cOutputPath_;
     std::string splitOutputDir_;
     std::string sourceCode_;
+    codegen::RuntimeProtectionOptions runtimeProtection_;
 };
 
 }   // namespace mj2x

@@ -66,7 +66,34 @@ bool checkTiming() {
 
 RDTSC 在多核 CPU 上的值可能不一致，更好的方案是用 `QueryPerformanceCounter`。
 
-## 反 JVMTI
+### Linux 调试器检测
+
+Linux 下没有与 Windows `IsDebuggerPresent` 等价的单 API；常见信号来自 procfs 与 ptrace：
+
+| 方法 | 实现 | 优缺点 |
+|---|---|---|
+| `TracerPid` | 读 `/proc/self/status`，解析 `TracerPid:` 字段非零 | 最直接；调试器 attach 后必非零（gdb/strace 都算） |
+| `ptrace(PTRACE_TRACEME)` | 自检：成功 = 未被跟踪；`EPERM` = 已被跟踪或 seccomp 限制 | 需要区分"被跟踪"与"沙箱禁用 ptrace"（后者 TracerPid 为零 → 探测不可用而非被跟踪） |
+| 可写可执行段 | 解析 `/proc/self/maps`，perms 含 `w`+`x`（如 `rwxp`） | 注入器/shellcode 特征；正常共享库为 r-xp/rw-p 分离 |
+| 时间差 | `clock_gettime(CLOCK_MONOTONIC)` 两段测量 | 弱信号：调度/节能易误报，只报告不进聚合 |
+
+```c
+// TracerPid 解析（纯文本谓词，可 mock 测试；注意按行解析避免误匹配相邻字段）
+bool hasTracerPid(const char* statusText) {
+    while (*statusText) {
+        if (strncmp(statusText, "TracerPid:", 10) == 0) {
+            const char* v = statusText + 10;
+            while (*v == ' ' || *v == '\t' || *v == '\r') v++;
+            return atol(v) != 0;
+        }
+        while (*statusText && *statusText != '\n') statusText++;
+        if (*statusText == '\n') statusText++;
+    }
+    return false;
+}
+```
+
+## 反 JVMTI / 反 Java agent
 
 JVMTI agent 依赖 `jvm.dll` 的导出函数来注册回调。可以通过检查 `jvm.dll` 中关键导出函数的首字节是否为原始值来检测 hook：
 
@@ -96,6 +123,47 @@ bool checkAgentModules() {
     // 或检查是否有除 jvm.dll 以外的 DLL 也导出了 Agent_OnLoad
 }
 ```
+
+### Java agent 检测（javaagent / JVMTI agent / JDWP）
+
+Java 侧 agent 按加载方式分两类，检测信号也分两类：
+
+| 加载方式 | 信号 | 检测手段 |
+|---|---|---|
+| 启动型（`-javaagent:` / `-agentpath:` / `-agentlib:` / `-Xrunjdwp:`） | 命令行参数 | 扫描进程命令行：Windows `GetCommandLineW`（引号感知切分），Linux `/proc/self/cmdline`（`\0` 分隔） |
+| 动态 attach（jcmd/jattach 注入） | 已加载 native 模块 + JVMTI capability | 模块枚举（Windows Toolhelp / Linux `/proc/self/maps`）匹配已知 agent 工具名；`JavaVM::GetEnv(JVMTI)` + `GetCapabilities` 检查 dump 相关位（can_get_bytecodes / can_retransform_classes / can_generate_all_class_hook_events） |
+| IDE 调试 | JDWP 参数 | `jdwp` / `transport=dt_socket` 子串（含 `-agentlib:jdwp=` 与旧式 `-Xrunjdwp:`） |
+
+```c
+// 命令行扫描（启动型 agent 的强信号；引号内空格不切分）
+bool containsAgentOption(const char** args, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (!strncmp(args[i], "-javaagent:", 11) ||
+            !strncmp(args[i], "-agentpath:", 11) ||
+            !strncmp(args[i], "-agentlib:", 10))
+            return true;
+    }
+    return false;
+}
+```
+
+JNI 函数表本身也是 hook 锚点：启动期快照 `env->functions` 地址，后续调用前比对
+是否仍指向原始表（agent 原地改写表项或整体换表都会暴露）。注意 capability 查询
+只能看到自己的 JVMTI 环境，跨 agent 检测要靠模块枚举互补。
+
+### 检测响应策略：多阶段检查点
+
+检测命中后的动作按策略分层，避免"检测即退出"成为可预测 oracle：
+
+| 动作 | 语义 | 适用 |
+|---|---|---|
+| 只记录 | 计数/日志，行为不变 | 观察期、误报容忍 |
+| 延迟 | 命中后睡眠固定时长 | 拖慢人工分析，不破坏正常路径 |
+| 假数据 | 返回类型默认值/降级结果 | 高价值方法，让攻击者拿到"看似正常"的假结果 |
+| 终止 | 退出进程 | 最激进；命中点可预测 |
+
+检查点本身也应多阶段：每个检查点独立计数，命中概率随调用次数上升（确定性下限
++ 伪随机提前），攻击者无法靠"精确等到第 N 次调用"定位或规避。
 
 ## 加密原语
 

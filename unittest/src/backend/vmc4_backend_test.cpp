@@ -1706,6 +1706,55 @@ TEST(Vmc4BackendTest, DriftEncoderStreamDecodesCleanly)
         << "same semantics must use different raw bytes across drift variants";
 }
 
+// ===========================================================================
+// 反侦测检查点注入（--runtime-protection）：
+//   - 默认不注入（零产物变化，既有 e2e 不回归）
+//   - 开启后 wrapper 入口含 mj2x_rt_checkpoint_run 调用 + FAKE 默认值返回
+// ===========================================================================
+TEST(Vmc4BackendTest, RuntimeProtectionInjection)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2);
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*method);
+
+    // 默认：不注入。
+    Vmc4Backend plain;
+    auto        plainResult = plain.compileMethod("Test", cls.methods[0], blocks);
+    ASSERT_EQ(plainResult.kind, BackendResult::Kind::C_SOURCE);
+    EXPECT_EQ(plainResult.text.find("mj2x_rt_checkpoint_run"), std::string::npos)
+        << plainResult.text;
+
+    // 开启 FAKE：wrapper 入口注入检查点，命中返回 (jint)0。
+    Vmc4Options opts;
+    opts.runtimeProtection.action  = codegen::RuntimeProtectionAction::Fake;
+    opts.runtimeProtection.step    = 16;
+    opts.runtimeProtection.delayMs = 500;
+    Vmc4Backend injected;
+    injected.setOptions(opts);
+    auto injectedResult = injected.compileMethod("Test", cls.methods[0], blocks);
+    ASSERT_EQ(injectedResult.kind, BackendResult::Kind::C_SOURCE);
+    EXPECT_NE(injectedResult.text.find("mj2x_rt_checkpoint_run"), std::string::npos)
+        << injectedResult.text;
+    EXPECT_NE(injectedResult.text.find("MJ2X_RT_PROTECT_FAKE"), std::string::npos)
+        << injectedResult.text;
+    EXPECT_NE(injectedResult.text.find("static mj2x_rt_checkpoint mj2x_rt_cp_"),
+              std::string::npos)
+        << injectedResult.text;
+    EXPECT_NE(injectedResult.text.find("return (jint)0;"), std::string::npos)
+        << injectedResult.text;
 // 后续项：CHECKCAST（ReferenceCast）→ castcheck:<desc> intrinsic
 // （IsInstanceOf + 失败抛 ClassCastException，null 通过）——真实样本转化率
 // 第一瓶颈（snake/jvm-obf-tester 主要 fail-closed 原因）。

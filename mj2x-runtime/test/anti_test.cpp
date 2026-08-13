@@ -2,6 +2,7 @@
 
 #include "antidebug/antidebug.hpp"
 #include "antijvmti/antijvmti.hpp"
+#include "detection/enforcement.hpp"
 #include "detection/runtime_detection.hpp"
 
 TEST(RuntimeAntiJvmtiTest, DetectsJniTableReplacement)
@@ -113,6 +114,36 @@ TEST(RuntimeAntiJvmtiTest, CollectsLiveAgentProbeWithModuleFacts)
     EXPECT_FALSE(mj2x::runtime::antijvmti::hasAgentSignal(probe.signals));
 }
 
+TEST(RuntimeAntiJvmtiTest, SplitsCommandLineWithQuotedTokens)
+{
+    using mj2x::runtime::antijvmti::splitCommandLineArgs;
+    const auto simple = splitCommandLineArgs("java -Xmx256m -jar app.jar");
+    ASSERT_EQ(simple.size(), 4u);
+    EXPECT_EQ(simple[0], "java");
+    EXPECT_EQ(simple[3], "app.jar");
+
+    const auto quoted =
+        splitCommandLineArgs("java -javaagent:\"C:\\path with space\\agent.jar\" Main");
+    ASSERT_EQ(quoted.size(), 3u);
+    EXPECT_EQ(quoted[1], "-javaagent:C:\\path with space\\agent.jar");
+    EXPECT_EQ(quoted[2], "Main");
+
+    const auto singleQuoted = splitCommandLineArgs("java '-agentlib:jdwp=transport=dt_socket' -cp a");
+    ASSERT_EQ(singleQuoted.size(), 4u);
+    EXPECT_EQ(singleQuoted[1], "-agentlib:jdwp=transport=dt_socket");
+
+    EXPECT_TRUE(splitCommandLineArgs("").empty());
+    EXPECT_EQ(splitCommandLineArgs("   ").size(), 0u);
+}
+
+TEST(RuntimeAntiJvmtiTest, AutoCollectsProcessArgumentsWithoutCrashing)
+{
+    // 自动收集版本：进程命令行（Windows GetCommandLineW / Linux /proc）不可
+    // mock，只断言不崩且聚合路径可用；显式参数版本覆盖信号逻辑。
+    const auto probe = mj2x::runtime::antijvmti::collectLiveAgentSignals(nullptr);
+    EXPECT_EQ(probe.jvmti.status, mj2x::runtime::antijvmti::LiveProbeStatus::Unavailable);
+}
+
 TEST(RuntimeAntiDebugTest, AggregatesDebugSignals)
 {
     mj2x::runtime::antidebug::DebugSignals none;
@@ -151,6 +182,71 @@ TEST(RuntimeAntiDebugTest, DetectsWindowsSnapshotPrimitives)
     EXPECT_TRUE(mj2x::runtime::antidebug::hasEnabledHardwareBreakpoint(0x1234, 0, 0, 0, 0x1));
 }
 
+TEST(RuntimeAntiDebugTest, DetectsTracerPidFromProcStatusText)
+{
+    using mj2x::runtime::antidebug::hasTracerPid;
+    // 正常：TracerPid 为 0。
+    EXPECT_FALSE(hasTracerPid("Name:\ttest\nState:\tS (sleeping)\nTracerPid:\t0\nUid:\t0\n"));
+    // 被跟踪：TracerPid 非零。
+    EXPECT_TRUE(hasTracerPid("TracerPid:\t12345\n"));
+    EXPECT_TRUE(hasTracerPid("Name:\ttest\nTracerPid: 9876\n"));
+    // 字段缺失 / 空输入。
+    EXPECT_FALSE(hasTracerPid("Name:\ttest\nState:\tR\n"));
+    EXPECT_FALSE(hasTracerPid(""));
+    EXPECT_FALSE(hasTracerPid(nullptr));
+    // 只匹配字段前缀，不匹配 TracerPidXxx。
+    EXPECT_FALSE(hasTracerPid("TracerPidX:\t5\n"));
+}
+
+TEST(RuntimeAntiDebugTest, DetectsWritableExecutableMappings)
+{
+    using mj2x::runtime::antidebug::hasWritableExecutableMapping;
+    const char* clean =
+        "00400000-00452000 r-xp 00000000 08:01 123 /usr/bin/test\n"
+        "00652000-00653000 rw-p 00052000 08:01 123 /usr/bin/test\n"
+        "7f000000-7f001000 r-xp 00000000 08:01 456 /lib/libc.so\n";
+    EXPECT_FALSE(hasWritableExecutableMapping(clean));
+    // rwxp 段（注入器/自修改代码特征）。
+    const char* injected =
+        "7f123000-7f124000 rwxp 00000000 00:00 0 \n"
+        "00400000-00452000 r-xp 00000000 08:01 123 /usr/bin/test\n";
+    EXPECT_TRUE(hasWritableExecutableMapping(injected));
+    // 首行不是地址段的防御：行无空格前缀时不应误报。
+    EXPECT_FALSE(hasWritableExecutableMapping("rwxp\n"));
+    EXPECT_FALSE(hasWritableExecutableMapping(""));
+    EXPECT_FALSE(hasWritableExecutableMapping(nullptr));
+}
+
+TEST(RuntimeAntiDebugTest, DetectsSuspiciousTimingGap)
+{
+    using mj2x::runtime::antidebug::hasSuspiciousTimingGap;
+    EXPECT_TRUE(hasSuspiciousTimingGap(200ULL * 1000 * 1000, 100ULL * 1000 * 1000));
+    EXPECT_FALSE(hasSuspiciousTimingGap(50ULL * 1000 * 1000, 100ULL * 1000 * 1000));
+    // 边界：等于阈值不算超。
+    EXPECT_FALSE(hasSuspiciousTimingGap(100ULL * 1000 * 1000, 100ULL * 1000 * 1000));
+    // 弱信号不进 hasDebugSignal 聚合。
+    mj2x::runtime::antidebug::DebugSignals weak;
+    weak.timingGapSuspicious = true;
+    EXPECT_FALSE(mj2x::runtime::antidebug::hasDebugSignal(weak));
+}
+
+TEST(RuntimeAntiDebugTest, AggregatesLinuxStrongSignals)
+{
+    mj2x::runtime::antidebug::DebugSignals traced;
+    traced.tracerPidAttached = true;
+    EXPECT_TRUE(mj2x::runtime::antidebug::hasDebugSignal(traced));
+
+    mj2x::runtime::antidebug::DebugSignals rwx;
+    rwx.writableExecutableMapping = true;
+    EXPECT_TRUE(mj2x::runtime::antidebug::hasDebugSignal(rwx));
+
+    // 探测状态字段不进聚合。
+    mj2x::runtime::antidebug::DebugSignals healthy;
+    healthy.ptraceTracemeSucceeded = true;
+    healthy.procFsProbeAvailable   = true;
+    EXPECT_FALSE(mj2x::runtime::antidebug::hasDebugSignal(healthy));
+}
+
 TEST(RuntimeDetectionTest, AppliesFailClosedPolicyWithoutTerminating)
 {
     mj2x::runtime::detection::RuntimeDetectionReport clean;
@@ -164,4 +260,87 @@ TEST(RuntimeDetectionTest, AppliesFailClosedPolicyWithoutTerminating)
     EXPECT_TRUE(mj2x::runtime::detection::shouldFailClosed(clean));
     EXPECT_FALSE(mj2x::runtime::detection::shouldFailClosed(
         clean, mj2x::runtime::detection::DetectionPolicy{true, false}));
+}
+
+TEST(RuntimeEnforcementTest, CheckpointHasDeterministicLowerBound)
+{
+    using mj2x::runtime::detection::CheckpointState;
+    using mj2x::runtime::detection::EnforcementPolicy;
+    using mj2x::runtime::detection::makeCheckpointState;
+    using mj2x::runtime::detection::checkpointShouldTrigger;
+
+    CheckpointState state = makeCheckpointState(0x1234u);
+    EnforcementPolicy policy;
+    policy.checkpointStep = 3;
+    bool hit = false;
+    for (int i = 0; i < 3; ++i) {
+        hit = checkpointShouldTrigger(state, policy) || hit;
+    }
+    // step=3：3 次调用内必然至少一次触发（确定性下限）。
+    EXPECT_TRUE(hit);
+    EXPECT_EQ(state.invocations, 3u);
+    EXPECT_GE(state.triggers, 1u);
+
+    // 相同 seed → 相同触发序列（确定性，可复现测试）。
+    CheckpointState a = makeCheckpointState(0xABCDu);
+    CheckpointState b = makeCheckpointState(0xABCDu);
+    policy.checkpointStep = 5;
+    for (int i = 0; i < 10; ++i) {
+        EXPECT_EQ(checkpointShouldTrigger(a, policy), checkpointShouldTrigger(b, policy));
+    }
+}
+
+TEST(RuntimeEnforcementTest, ForceTriggerSkipsProbability)
+{
+    using mj2x::runtime::detection::CheckpointState;
+    using mj2x::runtime::detection::EnforcementAction;
+    using mj2x::runtime::detection::EnforcementOutcome;
+    using mj2x::runtime::detection::EnforcementPolicy;
+    using mj2x::runtime::detection::enforceCheckpoint;
+    using mj2x::runtime::detection::makeCheckpointState;
+
+    CheckpointState state = makeCheckpointState(1u);
+    EnforcementPolicy policy;
+    policy.checkpointStep = 1000;   // 概率路径几乎不可能命中，验证 force 语义。
+
+    // LogOnly + force → 必然命中。
+    policy.action = EnforcementAction::LogOnly;
+    EXPECT_EQ(enforceCheckpoint(state, policy, true), EnforcementOutcome::TriggeredLogOnly);
+    EXPECT_EQ(state.invocations, 1u);
+    EXPECT_EQ(state.triggers, 1u);
+
+    // FakeData / Terminate 只返回 outcome，不执行。
+    policy.action = EnforcementAction::FakeData;
+    EXPECT_EQ(enforceCheckpoint(state, policy, true), EnforcementOutcome::TriggeredFakeData);
+    policy.action = EnforcementAction::Terminate;
+    EXPECT_EQ(enforceCheckpoint(state, policy, true), EnforcementOutcome::TriggeredTerminate);
+
+    // Delay：delayMs=0 不睡眠，仍返回 TriggeredDelay。
+    policy.action = EnforcementAction::Delay;
+    policy.delayMs = 0;
+    EXPECT_EQ(enforceCheckpoint(state, policy, true), EnforcementOutcome::TriggeredDelay);
+
+    // 非 force 且未到步长 → NoTrigger（step 很大，概率忽略不计）。
+    policy.action = EnforcementAction::LogOnly;
+    CheckpointState idle = makeCheckpointState(2u);
+    EXPECT_EQ(enforceCheckpoint(idle, policy), EnforcementOutcome::NoTrigger);
+}
+
+TEST(RuntimeEnforcementTest, CheckAndEnforceRunsLiveProbes)
+{
+    using mj2x::runtime::detection::CheckpointState;
+    using mj2x::runtime::detection::EnforcementAction;
+    using mj2x::runtime::detection::EnforcementOutcome;
+    using mj2x::runtime::detection::EnforcementPolicy;
+    using mj2x::runtime::detection::checkAndEnforce;
+    using mj2x::runtime::detection::makeCheckpointState;
+
+    EnforcementPolicy policy;
+    policy.action = EnforcementAction::LogOnly;
+    CheckpointState state = makeCheckpointState(3u);
+    auto            outcome = checkAndEnforce(state, policy, {}, nullptr);
+    // 干净进程下：NoTrigger 或概率触发 LogOnly（探测本身不终止/不睡眠）。
+    EXPECT_TRUE(outcome == EnforcementOutcome::NoTrigger ||
+                outcome == EnforcementOutcome::TriggeredLogOnly);
+    EXPECT_GE(state.invocations, 1u);
 }

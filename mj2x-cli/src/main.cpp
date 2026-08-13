@@ -4,6 +4,7 @@
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
+#include "mj2x/codegen/runtime_protection.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "mj2x/preprocessor/ldc_preprocessor.hpp"
@@ -90,6 +91,10 @@ static void printUsage()
     printf("  --vmc4-drift-period <n>    VMC4: drift 变体切换周期（字节偏移单位，默认 16）\n");
     printf("  --vmc4-trace-surface <f>   VMC4: 写 expected trace surface 文件（mjdbg 红队契约，"
            "同 seed+同输入 → 同内容）\n");
+    printf("  --runtime-protection <a>   RegC/VMC4: 方法入口反侦测检查点 none|log|delay|fake|"
+           "terminate（默认 none 不注入；依赖 mj2x-crt rt_protect 模块）\n");
+    printf("  --runtime-protection-step <n>   检查点概率触发步长（默认 16）\n");
+    printf("  --runtime-protection-delay <ms> Delay 动作睡眠毫秒数（默认 500）\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
     printf("  --help                     Print help\n");
 }
@@ -198,11 +203,24 @@ struct CliOptions
     int                      vmc4Drift           = 0;
     int                      vmc4DriftPeriod     = 16;
     std::string              vmc4TraceSurface;   ///< 非空时写 expected trace surface 文件
+    std::string              runtimeProtection        = "none";   ///< none|log|delay|fake|terminate
+    int                      runtimeProtectionStep    = 16;
+    int                      runtimeProtectionDelayMs = 500;
 };
 
-static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
+/// @brief --runtime-protection 字符串 → codegen::RuntimeProtectionAction。
+static mj2x::codegen::RuntimeProtectionAction parseRuntimeProtectionAction(
+    const std::string& name)
 {
-    if (name == "stackc" || name == "cbackend" || name == "c") {
+    if (name == "log") return mj2x::codegen::RuntimeProtectionAction::Log;
+    if (name == "delay") return mj2x::codegen::RuntimeProtectionAction::Delay;
+    if (name == "fake") return mj2x::codegen::RuntimeProtectionAction::Fake;
+    if (name == "terminate") return mj2x::codegen::RuntimeProtectionAction::Terminate;
+    return mj2x::codegen::RuntimeProtectionAction::None;
+}
+
+static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
+{    if (name == "stackc" || name == "cbackend" || name == "c") {
         backend = CEmitterBackend::StackC;
         return true;
     }
@@ -703,6 +721,15 @@ int main(int argc, char** argv)
         else if (arg == "--vmc4-trace-surface" && i + 1 < argc) {
             options.vmc4TraceSurface = argv[++i];
         }
+        else if (arg == "--runtime-protection" && i + 1 < argc) {
+            options.runtimeProtection = argv[++i];
+        }
+        else if (arg == "--runtime-protection-step" && i + 1 < argc) {
+            options.runtimeProtectionStep = std::atoi(argv[++i]);
+        }
+        else if (arg == "--runtime-protection-delay" && i + 1 < argc) {
+            options.runtimeProtectionDelayMs = std::atoi(argv[++i]);
+        }
         else if (arg == "--stackc-exception-check" && i + 1 < argc)
             options.stackcExceptionCheck = argv[++i];
         else if (arg == "-h" || arg == "--help") {
@@ -765,6 +792,19 @@ int main(int argc, char** argv)
     if ((options.regcSafeEnv || options.regcSafeEnvDebug) &&
         options.cBackendKind != CEmitterBackend::RegC) {
         fprintf(stderr, "--regc-safe-env requires --backend regc.\n");
+        return 1;
+    }
+    if (options.runtimeProtection != "none" && options.runtimeProtection != "log" &&
+        options.runtimeProtection != "delay" && options.runtimeProtection != "fake" &&
+        options.runtimeProtection != "terminate") {
+        fprintf(stderr,
+                "Unknown --runtime-protection value. Expected none, log, delay, fake, or "
+                "terminate.\n");
+        return 1;
+    }
+    if (options.runtimeProtection != "none" && options.cBackendKind != CEmitterBackend::RegC &&
+        options.cBackendKind != CEmitterBackend::Vmc4) {
+        fprintf(stderr, "--runtime-protection requires --backend regc or vmc4.\n");
         return 1;
     }
     if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
@@ -962,6 +1002,12 @@ int main(int argc, char** argv)
             if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);
             if (!options.nativeDirOutput.empty())
                 regcBackend->setSplitOutputDir(options.nativeDirOutput);
+            if (options.runtimeProtection != "none") {
+                regcBackend->setRuntimeProtection(
+                    parseRuntimeProtectionAction(options.runtimeProtection),
+                    static_cast<uint32_t>(options.runtimeProtectionStep),
+                    static_cast<uint32_t>(options.runtimeProtectionDelayMs));
+            }
             nativeSourceBackend = regcBackend.get();
             // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
             pipeline.registerBackend(std::move(regcBackend));
@@ -992,6 +1038,14 @@ int main(int argc, char** argv)
             vmc4Opts.bogusHandlers = options.vmc4Bogus;
             vmc4Opts.driftVariants = options.vmc4Drift;
             vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
+            if (options.runtimeProtection != "none") {
+                vmc4Opts.runtimeProtection.action  =
+                    parseRuntimeProtectionAction(options.runtimeProtection);
+                vmc4Opts.runtimeProtection.step    =
+                    static_cast<uint32_t>(options.runtimeProtectionStep);
+                vmc4Opts.runtimeProtection.delayMs =
+                    static_cast<uint32_t>(options.runtimeProtectionDelayMs);
+            }
             vmc4Backend->setOptions(vmc4Opts);
             // VMC4 复用同样的 native-loader clinit 注入（NativeLoaderPostprocessor）。
             nativeSourceBackend = vmc4Backend.get();

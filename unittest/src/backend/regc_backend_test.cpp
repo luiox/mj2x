@@ -94,6 +94,55 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
     EXPECT_TRUE(cls.modified);
 }
 
+// 反侦测检查点注入（--runtime-protection）：
+//   - 默认不注入（零产物变化）
+//   - 开启后 helper 入口含 mj2x_rt_checkpoint_run + FAKE 默认值走 cleanup
+TEST(RegCBackendTest, RuntimeProtectionInjection)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "add",
+                             "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2,
+                             2);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*method);
+
+    // 默认：不注入。
+    RegCBackend plain;
+    auto        plainResult = plain.compileMethod("Test", cls.methods[0], blocks);
+    ASSERT_EQ(plainResult.kind, BackendResult::Kind::C_SOURCE);
+    EXPECT_EQ(plainResult.text.find("mj2x_rt_checkpoint_run"), std::string::npos)
+        << plainResult.text;
+
+    // 开启 FAKE：helper 入口注入检查点，命中返回默认值走 cleanup。
+    RegCBackend injected;
+    injected.setRuntimeProtection(codegen::RuntimeProtectionAction::Fake, 16, 500);
+    auto injectedResult = injected.compileMethod("Test", cls.methods[0], blocks);
+    ASSERT_EQ(injectedResult.kind, BackendResult::Kind::C_SOURCE);
+    EXPECT_NE(injectedResult.text.find("mj2x_rt_checkpoint_run"), std::string::npos)
+        << injectedResult.text;
+    EXPECT_NE(injectedResult.text.find("MJ2X_RT_PROTECT_FAKE"), std::string::npos)
+        << injectedResult.text;
+    EXPECT_NE(injectedResult.text.find("static mj2x_rt_checkpoint mj2x_rt_cp_"),
+              std::string::npos)
+        << injectedResult.text;
+    EXPECT_NE(injectedResult.text.find("goto _mj2x_regc_cleanup;"), std::string::npos)
+        << injectedResult.text;
+}
+
 TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister)
 {
     auto method = makeMethod(Opcodes::ACC_PUBLIC,

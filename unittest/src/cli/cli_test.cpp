@@ -2564,6 +2564,26 @@ TEST(CliTest, NegativeArgumentsFail)
     EXPECT_NE(cppWithWrongExtension.out.find("requires a .cpp output path"), std::string::npos)
         << cppWithWrongExtension.out;
 
+    auto badRuntimeProtection = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --backend regc --emit-c " +
+            q(test::getTempOutPath("mj2x_cli_negative_output.c")) +
+            " --runtime-protection nope",
+    });
+    EXPECT_NE(badRuntimeProtection.exitCode, 0);
+    EXPECT_NE(badRuntimeProtection.out.find("Unknown --runtime-protection value"),
+              std::string::npos)
+        << badRuntimeProtection.out;
+
+    auto rtProtectionWrongBackend = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+            q(test::getTempOutPath("mj2x_cli_negative_output.c")) +
+            " --runtime-protection fake",
+    });
+    EXPECT_NE(rtProtectionWrongBackend.exitCode, 0);
+    EXPECT_NE(rtProtectionWrongBackend.out.find("requires --backend regc or vmc4"),
+              std::string::npos)
+        << rtProtectionWrongBackend.out;
+
 #ifndef MJ2X_DISABLE_LLVM_BACKEND
     auto llvmWithoutBackend = runScript({
         q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-llvm " + q(llvmFile),

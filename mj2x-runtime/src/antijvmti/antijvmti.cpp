@@ -81,6 +81,74 @@ bool containsJdwpOption(const std::vector<std::string>& arguments)
     return containsAnyToken(arguments, {"jdwp", "xrunjdwp", "transport=dt_socket"});
 }
 
+std::vector<std::string> splitCommandLineArgs(const std::string& commandLine)
+{
+    std::vector<std::string> args;
+    std::string              current;
+    bool                     inDouble = false;
+    bool                     inSingle = false;
+    bool                     any      = false;
+    for (const char c : commandLine) {
+        if (inDouble) {
+            if (c == '"') {
+                inDouble = false;
+            }
+            else {
+                current += c;
+            }
+        }
+        else if (inSingle) {
+            if (c == '\'') {
+                inSingle = false;
+            }
+            else {
+                current += c;
+            }
+        }
+        else if (c == '"') {
+            inDouble = true;
+            any      = true;
+        }
+        else if (c == '\'') {
+            inSingle = true;
+            any      = true;
+        }
+        else if (c == ' ' || c == '\t') {
+            if (any) {
+                args.push_back(current);
+                current.clear();
+                any = false;
+            }
+        }
+        else {
+            current += c;
+            any = true;
+        }
+    }
+    if (any) args.push_back(current);
+    return args;
+}
+
+std::vector<std::string> collectProcessArguments()
+{
+#ifdef _WIN32
+    const wchar_t* commandLine = GetCommandLineW();
+    if (commandLine == nullptr) return {};
+    return splitCommandLineArgs(wideToUtf8(commandLine));
+#elif defined(__linux__)
+    std::vector<std::string> args;
+    std::ifstream            cmdline("/proc/self/cmdline");
+    if (!cmdline) return args;
+    std::string token;
+    while (std::getline(cmdline, token, '\0')) {
+        if (!token.empty()) args.push_back(token);
+    }
+    return args;
+#else
+    return {};
+#endif
+}
+
 bool containsSuspiciousAgentModule(const std::vector<std::string>& moduleNames)
 {
     return containsAnyToken(moduleNames,
@@ -214,6 +282,11 @@ LiveAgentProbe collectLiveAgentSignals(const std::vector<std::string>& arguments
     probe.signals =
         collectAgentSignals(arguments, probe.modules.moduleNames, probe.jvmti.capabilities);
     return probe;
+}
+
+LiveAgentProbe collectLiveAgentSignals(void* javaVm)
+{
+    return collectLiveAgentSignals(collectProcessArguments(), javaVm);
 }
 
 bool hasAgentSignal(const AgentSignals& signals)

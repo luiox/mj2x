@@ -184,9 +184,11 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
 | String UTF-16 intrinsic | ✅ read hot paths + concat/substring/compareTo/indexOf overloads/replace/trim/split;split 字面量 fast path 与 JDK regex fallback 均有 native E2E |
 | StringBuilder/StringBuffer opaque CRT state + materialize | ✅ range/capacity 常用 API、escape-aware materialize/fallback、StringBuffer 可重入平台锁与并发 CRT 测试 + native E2E |
-| antidebug live probe | ✅ Windows IsDebuggerPresent/PEB/NtGlobalFlag/NtQuery debug port/object/flags/硬件断点 + mockable 软件断点扫描 |
-| antijvmti live probe | ✅ Windows Toolhelp/Linux proc maps 模块枚举 + JavaVM/JVMTI capability query + agent/JDWP/dump 信号聚合 |
+| antidebug live probe | ✅ Windows IsDebuggerPresent/PEB/NtGlobalFlag/NtQuery debug port/object/flags/硬件断点 + mockable 软件断点扫描；**Linux**（v2.2）：TracerPid（/proc/self/status 文本谓词）、PTRACE_TRACEME 自检（seccomp 限制不误判）、maps 可写可执行段、单调时钟时间差（弱信号不进聚合） |
+| antijvmti live probe | ✅ Windows Toolhelp/Linux proc maps 模块枚举 + JavaVM/JVMTI capability query + agent/JDWP/dump 信号聚合；**参数自动收集**（v2.2）：Windows GetCommandLineW 引号感知切分 / Linux /proc/self/cmdline |
 | runtime detection policy | ✅ 聚合 debug/agent/probe-failure 报告并显式返回 fail-closed 判定,不在探针内主动退出 |
+| **enforcement 反制响应层**（v2.2） | ✅ LogOnly/Delay/FakeData/Terminate 可配置 action + 多阶段检查点（step 确定性下限 + xorshift 随机提前命中 + force 语义）；Terminate 返回 outcome 由集成层执行 |
+| **rt_protect 生成代码检查点**（v2.2） | ✅ mj2x-crt C99 自包含检查点（随 resources.manifest 分发）；RegC/VMC4 方法入口注入（CLI `--runtime-protection none\|log\|delay\|fake\|terminate` + step/delay，默认不注入零产物变化）；真实 MSVC 编译链验证 |
 
 ---
 

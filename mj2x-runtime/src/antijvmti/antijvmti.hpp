@@ -1,4 +1,4 @@
-﻿/// @defgroup runtime_antijvmti 运行时 Anti-JVMTI
+/// @defgroup runtime_antijvmti 运行时 Anti-JVMTI
 ///
 /// 针对 c2j 风格 agent 使用的 JNI vtable hook 锚点。
 /// R3 需要一个运行时位置，generated native 代码可在此检测活跃 JNI 函数表
@@ -109,6 +109,23 @@ bool containsAgentOption(const std::vector<std::string>& arguments);
 /// @brief 检测 JDWP/IDE 调试参数。
 bool containsJdwpOption(const std::vector<std::string>& arguments);
 
+/// @brief 按 Windows 命令行规则切分参数（引号感知，简化版）。
+///
+/// @param commandLine 原始命令行文本。
+/// @return 参数 token 列表；引号内的空格保留在同一 token 内。
+///
+/// @details 供 `collectProcessArguments` 使用并独立可测。简化规则：`"` 与
+/// `'` 成对包裹（不处理 `\"` 转义），空白分隔。Java 启动命令行的
+/// `-javaagent:"path with space.jar"` 形态可正确切分。
+std::vector<std::string> splitCommandLineArgs(const std::string& commandLine);
+
+/// @brief 收集当前进程的命令行参数。
+///
+/// @details Windows 用 `GetCommandLineW` + `splitCommandLineArgs`；Linux 解析
+/// `/proc/self/cmdline`（`\0` 分隔）；其余平台返回空。覆盖启动型 agent 选项
+/// （-javaagent / -agentpath / -agentlib / JDWP），与模块枚举互补。
+std::vector<std::string> collectProcessArguments();
+
 /// @brief 从已加载模块名中识别常见 Java agent / attach 工具痕迹。
 ///
 /// @param moduleNames 进程模块文件名或完整路径,大小写不敏感。
@@ -141,6 +158,9 @@ AgentSignals collectAgentSignals(const std::vector<std::string>& arguments,
 
 /// @brief Collect module and JVMTI live facts and aggregate agent signals.
 LiveAgentProbe collectLiveAgentSignals(const std::vector<std::string>& arguments, void* javaVm);
+
+/// @brief 同 collectLiveAgentSignals，但参数自动从进程命令行收集。
+LiveAgentProbe collectLiveAgentSignals(void* javaVm);
 
 /// @brief 任一 Java/JVMTI agent 信号命中时返回 true。
 bool hasAgentSignal(const AgentSignals& signals);

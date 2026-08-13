@@ -8,5 +8,7 @@ src/regc/mj2x_regc_intrinsic.h
 src/regc/mj2x_regc_intrinsic.c
 src/regc/mj2x_regc_string.c
 src/regc/mj2x_regc_string_builder.c
+src/rt_protect/mj2x_rt_protect.h
+src/rt_protect/mj2x_rt_protect.c
 templates/xmake.lua.in
 templates/README.md.in

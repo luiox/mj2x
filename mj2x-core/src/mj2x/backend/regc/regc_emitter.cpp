@@ -4,6 +4,7 @@
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
+#include "mj2x/codegen/runtime_protection.hpp"
 #include "libca/str/format.hpp"
 #include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
 #include "mj2x/core/compiler_index.hpp"
@@ -244,6 +245,19 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     if (fn.symbol.returnType != SSAType::VOID) {
         out.declare_var(cType(fn.symbol.returnType), "_mj2x_regc_result",
                         defaultValue(fn.symbol.returnType));
+    }
+
+    // 反侦测检查点注入（--runtime-protection）：FAKE 命中时返回默认值走收尾。
+    // 必须放在 _mj2x_regc_result 声明之后（fakeReturn 引用它）。
+    if (options_.runtimeProtection.enabled()) {
+        std::string fakeReturn = "goto _mj2x_regc_cleanup;";
+        if (fn.symbol.returnType != SSAType::VOID) {
+            fakeReturn = std::string("_mj2x_regc_result = ") + defaultValue(fn.symbol.returnType) +
+                         "; goto _mj2x_regc_cleanup;";
+        }
+        codegen::emitRuntimeProtectionCheckpoint(out, options_.runtimeProtection,
+                                                 std::string("mj2x_rt_cp_") + result.functionName,
+                                                 fakeReturn);
     }
 
     for (const auto& [id, type] : regs) {

@@ -1,7 +1,9 @@
 #include "regc/mj2x_regc_crt.h"
+#include "rt_protect/mj2x_rt_protect.h"
 
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct thrown_exception
@@ -108,6 +110,61 @@ static void test_string_builder_utf16_and_errors(void)
     mj2x_string_builder_destroy(builder);
 }
 
+// ---- mj2x_rt_protect 检查点（纯逻辑部分；平台探测走真实进程）----
+
+static void test_rt_protect_deterministic_lower_bound(void)
+{
+    mj2x_rt_checkpoint cp;
+    memset(&cp, 0, sizeof(cp));
+    int hit = 0;
+    for (int i = 0; i < 3; ++i) {
+        hit = mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_LOG, 3, 0, 0) == 0 ? hit : 1;
+    }
+    // step=3：3 次调用内必然至少一次触发（确定性下限）；计数推进。
+    assert(hit);
+    assert(cp.invocations == 3);
+    assert(cp.triggers >= 1);
+    assert(cp.seed != 0);   // 懒初始化生效。
+}
+
+static void test_rt_protect_step_one_triggers_every_call(void)
+{
+    mj2x_rt_checkpoint cp;
+    memset(&cp, 0, sizeof(cp));
+    for (int i = 0; i < 5; ++i) {
+        assert(mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_LOG, 1, 0, 0) == 0);
+    }
+    assert(cp.invocations == 5);
+    assert(cp.triggers == 5);
+}
+
+static void test_rt_protect_fake_and_delay(void)
+{
+    mj2x_rt_checkpoint cp;
+    memset(&cp, 0, sizeof(cp));
+    // step=1 + FAKE：每次命中都返回 1（调用方应伪造数据）。
+    assert(mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_FAKE, 1, 0, 0) == 1);
+    // LOG 命中返回 0。
+    assert(mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_LOG, 1, 0, 0) == 0);
+    // DELAY：delay_ms=0 立即返回。
+    assert(mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_DELAY, 1, 0, 0) == 0);
+    assert(cp.triggers == 3);
+}
+
+static void test_rt_protect_large_step_stays_quiet(void)
+{
+    mj2x_rt_checkpoint cp;
+    memset(&cp, 0, sizeof(cp));
+    cp.seed = 0x12345678u;   // 固定 seed，序列可复现。
+    for (int i = 0; i < 100; ++i) {
+        mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_LOG, 1000000u, 0, 0);
+    }
+    assert(cp.invocations == 100);
+    // 100 次调用、step=1e6：确定性下限不触发；随机命中概率 100/1e6，
+    // 固定 seed 下要么 0 要么 1（不脆断）。
+    assert(cp.triggers <= 1);
+}
+
 int main(void)
 {
     test_div_rem_and_status_bridge();
@@ -118,5 +175,10 @@ int main(void)
     test_string_builder_utf16_and_errors();
     test_string_buffer_concurrency();
     test_safe_env();
+    test_rt_protect_deterministic_lower_bound();
+    test_rt_protect_step_one_triggers_every_call();
+    test_rt_protect_fake_and_delay();
+    test_rt_protect_large_step_stays_quiet();
+    printf("mj2x_regc_crt_test: all passed\n");
     return 0;
 }

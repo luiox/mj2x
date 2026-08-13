@@ -34,6 +34,7 @@
 
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/backend/vmc4/vmc4_instance.hpp"
+#include "mj2x/codegen/runtime_protection.hpp"
 
 #include <memory>
 #include <string>
@@ -88,7 +89,9 @@ public:
                                          const std::vector<PrimitiveKind>& args,
                                          const VmProgram& program,
                                          const std::string& cFuncName,
-                                         const std::string& methodTag);
+                                         const std::string& methodTag,
+                                         const codegen::RuntimeProtectionOptions&
+                                             runtimeProtection = {});
 
 private:
     struct Impl;
