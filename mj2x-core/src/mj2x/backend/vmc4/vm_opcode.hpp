@@ -127,14 +127,41 @@ enum class VmComparePred : uint8_t
 /// @brief VM 值类型 tag（对应 SSAType 的 VM 视角子集）。
 ///
 /// @details
-/// MVP 只用 I32/I64/F32/F64 四种计算类型。REF（对象引用）留给后续 family。
-/// 编码在每条计算指令的 type operand 里，handler 据此解释寄存器槽的位模式。
+/// I32/I64/F32/F64 是计算类型；REF（对象引用）承载 jobject，自 Phase 2.0 起用于
+/// 对象参数/返回值/字段。编码在每条计算指令的 type operand 里，handler 据此解释
+/// 寄存器槽的位模式。Copy 的 handler 整体拷贝 union（`(void)type`），故 REF 值在
+/// 寄存器间传递无需特殊处理。
 enum class VmType : uint8_t
 {
     I32 = 0,
     I64 = 1,
     F32 = 2,
     F64 = 3,
+    REF = 4,   ///< 对象引用（slot.ref 承载 jobject）
+};
+
+/// @brief 方法调用形态（对应 JVM invoke 指令的 4 种 dispatch）。
+enum class VmInvokeKind : uint8_t
+{
+    Virtual    = 0,
+    Special    = 1,
+    Static     = 2,
+    Interface  = 3,
+};
+
+/// @brief 方法引用：一个 Call 调用点的静态信息（Phase 2.0）。
+///
+/// @details
+/// 编码期把每个 Call 指令的 SSAMethodRef 收集到 VmProgram.methodRefs，字节流只存
+/// callSiteIdx（索引）。backend 为每个 VmMethodRef 发射一个 TU-local helper 函数
+/// （内部按 owner/name/desc/invokeKind 调 JNI），解释器经函数指针表分派。
+struct VmMethodRef
+{
+    std::string   owner;       ///< 方法所属类（JVM 内部名，如 "java/lang/String"）
+    std::string   name;        ///< 方法名
+    std::string   desc;        ///< 方法描述符（如 "(Ljava/lang/String;)I"）
+    VmInvokeKind  invokeKind = VmInvokeKind::Virtual;
+    bool          hasDest = false;   ///< 是否有返回值（void=false）
 };
 
 /// @brief 解释器调用结果。
@@ -170,6 +197,7 @@ struct VmProgram
     std::vector<uint8_t>         bytecodes;      ///< 指令字节流
     std::vector<uint32_t>        blockTargets;   ///< block 索引 → bytecodes 偏移
     std::vector<VmConstantEntry> constantPool;   ///< 常量条目（prologue 预加载）
+    std::vector<VmMethodRef>     methodRefs;     ///< Call 调用点的方法引用（Phase 2.0）
     uint16_t                     numInputs = 0;  ///< 方法参数占用的寄存器数
     uint16_t                     numRegs   = 0;  ///< 寄存器文件总大小
 };

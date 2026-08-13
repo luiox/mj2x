@@ -31,11 +31,12 @@ void emitU16(std::vector<uint8_t>& out, uint16_t v)
     out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
 }
 
-/// @brief SSAType → VmType 映射（计算类型子集）。
+/// @brief SSAType → VmType 映射（计算类型 + 对象引用）。
 ///
 /// @details
-/// MVP 只处理 I32/I64/F32/F64。BOOL/I8/I16/CHAR 归一到 I32（计算位宽一致，
-/// 见 ssa_type.hpp:38 ssaIsIntLike）。REF/UNKNOWN 在 MVP fail-closed。
+/// I32/I64/F32/F64 是计算类型；BOOL/I8/I16/CHAR 归一到 I32（计算位宽一致，
+/// 见 ssa_type.hpp:38 ssaIsIntLike）。REF 映射到 VmType::REF（对象引用，
+/// Phase 2.0 起支持，用于对象参数/返回值/字段/Copy）。UNKNOWN 不支持。
 bool toVmType(SSAType s, VmType& out)
 {
     switch (s) {
@@ -47,7 +48,8 @@ bool toVmType(SSAType s, VmType& out)
     case SSAType::I64: out = VmType::I64; return true;
     case SSAType::F32: out = VmType::F32; return true;
     case SSAType::F64: out = VmType::F64; return true;
-    default: return false;   // REF/UNKNOWN 等 MVP 不支持
+    case SSAType::REF: out = VmType::REF; return true;
+    default: return false;   // UNKNOWN 等不支持
     }
 }
 
@@ -106,6 +108,11 @@ struct EncoderState
     /// 每个常量的签名 → 在 constantPool 的索引（去重）。
     /// 签名 = type(1B) + intBits(8B) / floatValue(8B)，用字符串当 key 简化去重。
     std::unordered_map<std::string, uint16_t> constSlotBySignature;
+
+    /// Call 调用点的方法引用表（Phase 2.0）：每个 Call 指令收集一个 VmMethodRef，
+    /// 字节流只存 callSiteIdx（索引）。backend 为每项发射一个 TU-local helper。
+    std::vector<VmMethodRef>                                  methodRefs;
+    std::unordered_map<std::string, uint16_t>                methodRefByKey;
 
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
@@ -281,6 +288,29 @@ struct EncoderState
         return slot;
     }
 
+    /// @brief 为一个 Call 调用点分配/复用方法引用索引（Phase 2.0）。
+    ///
+    /// @details
+    /// 相同 (owner, name, desc, invokeKind, hasDest) 的调用点复用同一 callSiteIdx，
+    /// 共享一个 backend 发射的 helper。返回值写入字节流作为 Call 指令的操作数。
+    uint16_t internMethodRef(VmMethodRef mref)
+    {
+        std::string key = mref.owner;
+        key.push_back('\0');
+        key += mref.name;
+        key.push_back('\0');
+        key += mref.desc;
+        key.push_back('\0');
+        key.push_back(static_cast<char>(mref.invokeKind));
+        key.push_back(mref.hasDest ? '\1' : '\0');
+        auto it = methodRefByKey.find(key);
+        if (it != methodRefByKey.end()) return it->second;
+        const uint16_t idx = static_cast<uint16_t>(methodRefs.size());
+        methodRefByKey[key] = idx;
+        methodRefs.push_back(std::move(mref));
+        return idx;
+    }
+
     /// @brief 解析一个 RegOperand 为 VM 寄存器索引。
     ///
     /// @details
@@ -365,6 +395,7 @@ bool encodeUnary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, 
 bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeJump(EncoderState& ctx, const RegJumpTerminator& term, VmProgram& prog,
                 std::string& reason);
 bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram& prog,
@@ -455,15 +486,15 @@ bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& 
     case RegInstructionKind::Binary: return encodeBinary(ctx, ins, prog, reason);
     case RegInstructionKind::Compare: return encodeCompare(ctx, ins, prog, reason);
     case RegInstructionKind::Convert: return encodeConvert(ctx, ins, prog, reason);
+    case RegInstructionKind::Call: return encodeCall(ctx, ins, prog, reason);
     case RegInstructionKind::LoadField:
     case RegInstructionKind::StoreField:
     case RegInstructionKind::ArrayLoad:
     case RegInstructionKind::ArrayStore:
-    case RegInstructionKind::Call:
     case RegInstructionKind::Allocate:
     case RegInstructionKind::Intrinsic:
     case RegInstructionKind::Barrier:
-        reason = "RegIR family not supported in VMC4 MVP (object/array/call/intrinsic)";
+        reason = "RegIR family not supported in VMC4 yet (field/array/alloc/intrinsic)";
         return false;
     }
     reason = "unknown RegInstructionKind";
@@ -619,6 +650,75 @@ bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     return true;
 }
 
+/// @brief 编码 Call 指令（Phase 2.0）。
+///
+/// @details
+/// 把 SSAMethodRef 收集到 VmProgram.methodRefs，字节流只存 callSiteIdx。
+/// backend 为每个 methodRef 发射一个 TU-local helper（按 invokeKind + desc 调 JNI），
+/// 解释器经函数指针表 mj2x_vm_call_table_<tag>[callSiteIdx] 分派。
+///
+/// 字节流：[Call][callSiteIdx:u16][recv:u16][dest:u16][argCount:u8][args:argCount×u16]
+/// - recv：receiver 寄存器（static 调用时填 0，helper 不读）
+/// - dest：结果寄存器（void 方法填 0，helper 不写）
+bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+{
+    // JVM invoke opcode → VmInvokeKind（182=virtual,183=special,184=static,185=interface）。
+    VmInvokeKind ik;
+    switch (ins.method.invokeOpcode) {
+    case 182: ik = VmInvokeKind::Virtual; break;
+    case 183: ik = VmInvokeKind::Special; break;
+    case 184: ik = VmInvokeKind::Static; break;
+    case 185: ik = VmInvokeKind::Interface; break;
+    default:
+        reason = "Call: unknown invoke opcode " + std::to_string(ins.method.invokeOpcode);
+        return false;
+    }
+    const bool isStatic = (ik == VmInvokeKind::Static);
+
+    VmMethodRef mref;
+    mref.owner      = ins.method.owner.to_std_string();
+    mref.name       = ins.method.name.to_std_string();
+    mref.desc       = ins.method.desc.to_std_string();
+    mref.invokeKind = ik;
+    mref.hasDest    = ins.hasDest;
+    const uint16_t callSiteIdx = ctx.internMethodRef(std::move(mref));
+
+    // receiver（instance 调用）；static 调用无 receiver。
+    uint16_t recv = 0;
+    if (!isStatic) {
+        if (!ctx.resolveOperand(ins.receiver, recv, reason)) return false;
+    }
+
+    // 返回值寄存器（void 方法无 dest）。
+    uint16_t dest = 0;
+    if (ins.hasDest) {
+        dest = static_cast<uint16_t>(ins.dest.id.value);
+        ctx.observeReg(dest);
+    }
+
+    // 参数寄存器列表（变长）。argCount 上限 32：解释器 handler 用固定大小 argBuf[32]
+    // 承载参数索引数组（避免动态分配）；JVM 实际方法参数极少超此数。
+    if (ins.args.size() > 32) {
+        reason = "Call: too many arguments (>32)";
+        return false;
+    }
+    std::vector<uint16_t> argIdxs;
+    argIdxs.reserve(ins.args.size());
+    for (const auto& a : ins.args) {
+        uint16_t ai;
+        if (!ctx.resolveOperand(a, ai, reason)) return false;
+        argIdxs.push_back(ai);
+    }
+
+    emitOpcode(ctx, VmOpcode::Call, prog.bytecodes);
+    emitU16(prog.bytecodes, callSiteIdx);
+    emitU16(prog.bytecodes, recv);
+    emitU16(prog.bytecodes, dest);
+    emitU8(prog.bytecodes, static_cast<uint8_t>(argIdxs.size()));
+    for (uint16_t ai : argIdxs) emitU16(prog.bytecodes, ai);
+    return true;
+}
+
 bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog, std::string& reason)
 {
     // std::variant 访问：按 terminator 类型分派。
@@ -746,6 +846,9 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     for (auto& sc : sortedConsts) {
         prog->constantPool.push_back(sc.second.second);
     }
+
+    // Call 调用点的方法引用表（Phase 2.0）：直接搬移 EncoderState 收集的结果。
+    prog->methodRefs = std::move(ctx.methodRefs);
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;

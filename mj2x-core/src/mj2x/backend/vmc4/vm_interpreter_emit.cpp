@@ -234,6 +234,19 @@ const char* kHandlerSuperDec =
     "            else if (type == 1) regs[dest].i = regs[src].i - 1;\n"
     "            else regs[dest].f = regs[src].f - 1.0;\n";
 
+/// CALL: 经函数指针表分派到 per-callsite JNI helper（Phase 2.0）。
+/// argBuf[32] 承载参数寄存器索引（argCount 上限 32，见 encodeCall）。
+/// handler 引用 exec 参数 env 与 call_table（SwitchTable 等 dispatcher 内直接可见；
+/// FuncPtrTable 经 ctx 字段传入）。
+const char* kHandlerCall =
+    "            unsigned int callIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned char argc = code[pc++];\n"
+    "            unsigned int argBuf[32];\n"
+    "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
+    "            call_table[callIdx](env, regs, recv, argBuf, argc, dest);\n";
+
 /// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
 /// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
 struct HandlerEntry
@@ -255,6 +268,7 @@ const HandlerEntry kHandlers[] = {
     {VmOpcode::Return,   "RETURN",     kHandlerReturn},
     {VmOpcode::SuperInc, "SUPER_INC",  kHandlerSuperInc},
     {VmOpcode::SuperDec, "SUPER_DEC",  kHandlerSuperDec},
+    {VmOpcode::Call,     "CALL",       kHandlerCall},
 };
 constexpr size_t kHandlerCount = sizeof(kHandlers) / sizeof(kHandlers[0]);
 
@@ -462,7 +476,8 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
 {
     const std::string ctxType = "mj2x_vm_ctx_" + tag;
     out.emitLine("struct " + ctxType + " { const unsigned char* code; const unsigned int* targets; "
-                 "unsigned int pc; unsigned int status; mj2x_vm_slot* regs; mj2x_vm_slot* retval; };");
+                 "unsigned int pc; unsigned int status; JNIEnv* env; const mj2x_vm_call_fn* call_table; "
+                 "mj2x_vm_slot* regs; mj2x_vm_slot* retval; };");
     out.emitLine("typedef struct " + ctxType + " " + ctxType + ";");
     out.add_func("static void mj2x_vm_dispatch_body_" + tag + "(" + ctxType + "* ctx)",
                  [&](CSourceStream& f) {
@@ -470,6 +485,8 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         f.emitLine("const unsigned int* targets = ctx->targets;");
         f.emitLine("unsigned int pc = ctx->pc;");
         f.emitLine("unsigned int status = ctx->status;");
+        f.emitLine("JNIEnv* env = ctx->env;");
+        f.emitLine("const mj2x_vm_call_fn* call_table = ctx->call_table;");
         f.emitLine("mj2x_vm_slot* regs = ctx->regs;");
         f.emitLine("mj2x_vm_slot* retval = ctx->retval;");
         f.emitLine("(void)targets;");
@@ -506,6 +523,8 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmInstance& instance,
     out.emitLine("_ctx.targets = " + targetsName + ";");
     out.emitLine("_ctx.pc = _ctx.targets[0];");
     out.emitLine("_ctx.status = 0;");
+    out.emitLine("_ctx.env = env;");
+    out.emitLine("_ctx.call_table = call_table;");
     out.emitLine("_ctx.regs = slots;");
     out.emitLine("_ctx.retval = retval;");
     out.emitLine(ctxType + "* ctx = &_ctx;");
@@ -761,14 +780,24 @@ void emitBogusHandlers(CSourceStream& out, const VmInstance& instance, const std
 std::string VmInterpreterEmitter::emitRuntimePrelude()
 {
     // mj2x_vm_slot 联合体：寄存器槽。i 用于 I32/I64（I32 写入时由 handler 截断到 32 位），
-    // f 用于 F32/F64（同理用 double 统一）。div/rem helper 精确复刻 JVM 语义
-    // （INT_MIN / -1 = INT_MIN 不抛、除零报 status=1）。
+    // f 用于 F32/F64（同理用 double 统一）。ref 承载 jobject（对象引用，Phase 2.0 起）。
+    // ref 用 void* 而非 jobject，使 prelude 自包含（不依赖 jni.h）；wrapper/handler 侧
+    // 在存取时做 (jobject) 与 (void*) 的双向 cast。
+    // mj2x_vm_call_fn 是 Call helper 函数指针类型（解释器经函数指针表分派到 per-callsite
+    // 的 JNI helper）。div/rem helper 精确复刻 JVM 语义（INT_MIN / -1 = INT_MIN 不抛、
+    // 除零报 status=1）。
     return std::string(
         "/* ===== VMC4 runtime prelude (auto-generated) ===== */\n"
         "typedef union mj2x_vm_slot {\n"
         "    int64_t i;\n"
         "    double  f;\n"
+        "    void*   ref;\n"
         "} mj2x_vm_slot;\n"
+        "\n"
+        "/* Call helper 函数指针类型（Phase 2.0）：解释器经函数指针表分派到 per-callsite\n"
+        " * 的 JNI helper。参数：(env, regs, recv, argIdxArr, argc, dest)。 */\n"
+        "typedef void (*mj2x_vm_call_fn)(JNIEnv*, mj2x_vm_slot*, unsigned int, unsigned int*,\n"
+        "                               unsigned char, unsigned int);\n"
         "\n"
         "/* JVM 整数除法语义：INT_MIN / -1 不抛（回绕到 INT_MIN），其余交给硬件。 */\n"
         "static int32_t mj2x_vm_div_i32(int32_t a, int32_t b) {\n"
@@ -904,9 +933,13 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
     }
 
     // --- 解释器入口函数（按 dispatcherKind 选择形态）---
-    out.add_func("static unsigned int " + funcName + "(mj2x_vm_slot* slots, mj2x_vm_slot* retval)",
+    out.add_func("static unsigned int " + funcName +
+                     "(JNIEnv* env, mj2x_vm_slot* slots, mj2x_vm_slot* retval, "
+                     "const mj2x_vm_call_fn* call_table)",
                  [&](CSourceStream& f) {
+        f.emitLine("(void)env;");
         f.emitLine("(void)retval;");
+        f.emitLine("(void)call_table;");
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
             emitSwitchDispatcher(f, instance, progName, targetsName, tag);

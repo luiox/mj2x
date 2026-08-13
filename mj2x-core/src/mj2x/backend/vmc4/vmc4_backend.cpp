@@ -92,19 +92,20 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
 ///
 /// @details
 /// JNI wrapper 把 jxxx 参数写进 mj2x_vm_slot（联合体），解释器消费 regs[]。
-/// I32/I64 写 .i，F32/F64 写 .f。REF 在 MVP 不出现（fail-closed 的方法才可能有）。
+/// I32/I64 写 .i，F32/F64 写 .f，OBJECT 写 .ref（承载 jobject，Phase 2.0 起）。
 const char* slotField(PrimitiveKind k)
 {
     switch (k) {
     case PrimitiveKind::FLOAT:
     case PrimitiveKind::DOUBLE: return ".f";
+    case PrimitiveKind::OBJECT: return ".ref";
     default: return ".i";
     }
 }
 
-/// 仅当返回/参数全是 VM 计算类型（BOOL/I8/I16/CHAR/I32/I64/F32/F64）时，
-/// VMC4 JNI wrapper 能正确转接。含 REF（对象）的方法在编码阶段已 fail-closed，
-/// 这里二次防御。
+/// 返回/参数是 VM 支持类型（标量或对象引用）时，VMC4 JNI wrapper 能正确转接。
+/// OBJECT 自 Phase 2.0 起支持（slot.ref 承载 jobject）；具体对象操作（field/call）
+/// 由 encoder 决定能否编码，不能则 fail-closed。
 bool isVmCompatibleKind(PrimitiveKind k)
 {
     switch (k) {
@@ -116,7 +117,8 @@ bool isVmCompatibleKind(PrimitiveKind k)
     case PrimitiveKind::LONG:
     case PrimitiveKind::FLOAT:
     case PrimitiveKind::DOUBLE:
-    case PrimitiveKind::VOID: return true;
+    case PrimitiveKind::VOID:
+    case PrimitiveKind::OBJECT: return true;
     default: return false;
     }
 }
@@ -383,7 +385,6 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
     }
     {
         CSourceStream::IndentGuard g(out);
-        out.emitLine("(void)env;");
         {
             CSourceStream line;
             line.append("(void)");
@@ -396,15 +397,18 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                      "];");
         out.emitLine("mj2x_vm_slot ret;");
         out.emitLine("ret.i = 0;");
-        // 填参数：regs[0..n)。注意：实例方法 thisObject 不进 VM（MVP 不支持对象操作），
-        // 故参数从 regs[0] 开始对应 p0..p(n-1)。静态方法同理。
+        // 填参数：regs[0..n)。实例方法 thisObject 不进 VM（实例方法整体 fail-closed
+        // 至 Phase 2.B），故参数从 regs[0] 开始对应 p0..p(n-1)。静态方法同理。
+        // 对象参数（OBJECT）经 (void*) cast 存入 slot.ref。
         for (size_t i = 0; i < args.size(); ++i) {
             CSourceStream line;
             line.append("regs[");
             line.appendInt(static_cast<ca::i64>(i));
             line.append("]");
             line.append(slotField(args[i]));
-            line.append(" = p");
+            line.append(" = ");
+            if (args[i] == PrimitiveKind::OBJECT) line.append("(void*)");
+            line.append("p");
             line.appendInt(static_cast<ca::i64>(i));
             line.append(";");
             out.emitLine(line.build());
@@ -453,12 +457,16 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                 out.emitLine(line.build());
             }
         }
-        // 调解释器。
+        // 调解释器。call_table：含 Call 的方法传 mj2x_vm_call_table_<tag>（backend
+        // finalize 发射），纯计算方法传 0（解释器不读）。
         {
             CSourceStream line;
             line.append("unsigned int status = mj2x_vm_exec_");
             line.append(methodTag);
-            line.append("(regs, &ret);");
+            line.append("(env, regs, &ret, ");
+            line.append(program.methodRefs.empty() ? std::string("0")
+                                                    : ("mj2x_vm_call_table_" + methodTag));
+            line.append(");");
             out.emitLine(line.build());
         }
         out.emitLine("(void)status; /* MVP: 除零 status==1 时仍返回计算值，后续 Phase 抛异常 */");

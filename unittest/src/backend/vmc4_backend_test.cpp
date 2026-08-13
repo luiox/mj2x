@@ -528,7 +528,7 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
     for (const auto op : {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
                           VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
                           VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
-                          VmOpcode::SuperInc, VmOpcode::SuperDec}) {
+                          VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call}) {
         bytes.push_back(instance.opcodeFor(op));
     }
     return bytes;
@@ -574,14 +574,14 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
     EXPECT_EQ(bytes[0], instance.haltByte());
 
     const auto& order = instance.handlerOrder();
-    EXPECT_EQ(order.size(), 10u) << "handler order covers the 10 compute/control opcodes";
+    EXPECT_EQ(order.size(), 11u) << "handler order covers the 11 compute/control/call opcodes";
     std::vector<VmOpcode> sortedOrder = order;
     std::sort(sortedOrder.begin(), sortedOrder.end(),
               [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
     std::vector<VmOpcode> expected = {VmOpcode::Copy,   VmOpcode::Unary,  VmOpcode::Binary,
                                       VmOpcode::Compare, VmOpcode::Convert, VmOpcode::Jump,
                                       VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
-                                      VmOpcode::SuperDec};
+                                      VmOpcode::SuperDec, VmOpcode::Call};
     EXPECT_EQ(sortedOrder, expected) << "handler order must be a permutation of the supported set";
 }
 
@@ -744,7 +744,8 @@ TEST(Vmc4BackendTest, FailClosedOnArrayAccess)
 }
 
 // P2-9：Call（INVOKESTATIC）。
-TEST(Vmc4BackendTest, FailClosedOnCall)
+// Phase 2.0：Call 不再 fail-closed。INVOKESTATIC 编码为 Call opcode + methodRef。
+TEST(Vmc4BackendTest, EncodesCallInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
@@ -760,8 +761,15 @@ TEST(Vmc4BackendTest, FailClosedOnCall)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              1, 1, instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_FALSE(prog->bytecodes.empty());
+    // INVOKESTATIC test/Helper.twice(I)I 收集为单个 methodRef。
+    ASSERT_EQ(prog->methodRefs.size(), 1u);
+    EXPECT_EQ(prog->methodRefs[0].owner, "test/Helper");
+    EXPECT_EQ(prog->methodRefs[0].name, "twice");
+    EXPECT_EQ(prog->methodRefs[0].desc, "(I)I");
+    EXPECT_EQ(prog->methodRefs[0].invokeKind, VmInvokeKind::Static);
+    EXPECT_TRUE(prog->methodRefs[0].hasDest);
 }
 
 // P2-10：Allocate（NEW）。
@@ -1265,17 +1273,30 @@ bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>
     sawRotation = false;
     size_t pc = 0;
     std::map<uint8_t, uint8_t> firstRawByCanonical;   // canonical -> 首个 raw
+    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 的 Call）。
+    static const VmOpcode kAllOps[] = {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
+                                       VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
+                                       VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
+                                       VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call};
     while (pc < bytes.size()) {
         const int d = inst.variantForPc(pc);
         variants.insert(d);
         const uint8_t raw = bytes[pc];
         const uint8_t canonical = inst.unmapByte(raw, d);
         if (canonical == 0xFF) return false;
+        // canonical 是洗牌后的字节值，必须反查成语义，再按语义推进 pc
+        // （不能把 canonical 字节值 cast 成 VmOpcode，也不能把 operand 字节当 opcode）。
+        VmOpcode op       = VmOpcode::Halt;
+        bool     found    = false;
+        for (const auto cand : kAllOps) {
+            if (inst.opcodeFor(cand) == canonical) { op = cand; found = true; break; }
+        }
+        if (!found) return false;
         auto it = firstRawByCanonical.find(canonical);
         if (it != firstRawByCanonical.end() && it->second != raw) sawRotation = true;
         if (it == firstRawByCanonical.end()) firstRawByCanonical[canonical] = raw;
-        if (canonical == static_cast<uint8_t>(VmOpcode::Halt)) break;
-        pc += 1u + static_cast<size_t>(operandLenForTest(static_cast<VmOpcode>(canonical)));
+        if (op == VmOpcode::Halt) break;
+        pc += 1u + static_cast<size_t>(operandLenForTest(op));
     }
     return true;
 }

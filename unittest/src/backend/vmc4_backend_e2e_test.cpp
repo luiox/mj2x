@@ -426,7 +426,7 @@ TEST_P(Vmc4BackendE2E, MixedNativeAndFailClosedRoundTrip)
                 {"useInst(5)", "Vmc4NativeMixed.useInst(5)"},
                 {"inst(3)", "new Vmc4NativeMixed().inst(3)"},
             },
-            1, GetParam().kind);
+            2, GetParam().kind);
 }
 
 }   // namespace
