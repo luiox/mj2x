@@ -9,6 +9,7 @@
 #include "regc_emitter_internal.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "libca/str/format.hpp"
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
@@ -179,7 +180,7 @@ bool emitEdgeCopies(CSourceStream& out, const std::vector<RegCopy>& copies,
             state.edgeTempTypes.resize(static_cast<size_t>(tempId) + 1, copies[i].dest.type);
         }
         out.appendLineStart("edge_tmp_")
-            .appendInt(tempId)
+            .append(ca::str::format_std("{}", tempId))
             .append(" = ")
             .append(codegen::exprCast(cType(copies[i].dest.type),
                                       codegen::exprParen(operandExpr(copies[i].source).to_std_string())))
@@ -188,7 +189,7 @@ bool emitEdgeCopies(CSourceStream& out, const std::vector<RegCopy>& copies,
     }
     for (size_t i = 0; i < copies.size(); ++i) {
         const std::string destName = regName(copies[i].dest.id);
-        out.assign(destName, "edge_tmp_" + std::to_string(tempIds[i]));
+        out.assign(destName, ca::str::format_std("edge_tmp_{}", tempIds[i]));
     }
     return true;
 }
@@ -473,14 +474,14 @@ bool emitExceptionDispatch(CSourceStream&                        out,
             emitDefaultReturnAfterException(u, returnType);
             return;
         }
-        u.declare_var("mj2x_ref", "ex_" + std::to_string(index),
+        u.declare_var("mj2x_ref", ca::str::format_std("ex_{}", index),
                       "_mj2x_regc_exception_occurred()");
             u.call("_mj2x_regc_exception_clear", {});
         // Match in exception-table order. A matched handler receives the caught
         // exception through its synthetic exception register before the jump.
         for (const auto* region : regions) {
-            u.iff("_mj2x_regc_exception_matches(ex_" + std::to_string(index) + ", " +
-                      cStringLiteral(region->caughtType) + ")",
+            u.iff(ca::str::format_std("_mj2x_regc_exception_matches(ex_{}, {})", index,
+                                      cStringLiteral(region->caughtType)),
                   [&](CSourceStream& v) {
                       for (const auto& edge : region->edges) {
                           if (edge.protectedBlock != block) continue;
@@ -491,13 +492,13 @@ bool emitExceptionDispatch(CSourceStream&                        out,
                           break;
                       }
                       v.assign(regName(region->exceptionValue.id),
-                               "ex_" + std::to_string(index));
-                      v.goto_("block_b" + std::to_string(region->handler->id.value));
+                               ca::str::format_std("ex_{}", index));
+                      v.goto_(ca::str::format_std("block_b{}", region->handler->id.value));
                   });
             if (!copiesOk) return;
         }
         // 若没有任何 handler 接受挂起的异常，保持 Java 传播语义。
-        u.call("_mj2x_regc_throw", {"ex_" + std::to_string(index)});
+        u.call("_mj2x_regc_throw", {ca::str::format_std("ex_{}", index)});
         emitDefaultReturnAfterException(u, returnType);
     });
     return copiesOk;
@@ -969,12 +970,12 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         else {
             out.block([&](CSourceStream& u) {
                 u.appendLineStart("int32_t dims[")
-                    .appendInt(static_cast<ca::i64>(ins.args.size()))
+                    .append(ca::str::format_std("{}", ins.args.size()))
                     .append("];")
                     .newLine();
                 for (size_t i = 0; i < ins.args.size(); ++i) {
                     u.appendLineStart("dims[")
-                        .appendInt(static_cast<ca::i64>(i))
+                        .append(ca::str::format_std("{}", i))
                         .append("] = ")
                         .append(operandExpr(ins.args[i]))
                         .append(";")
@@ -986,7 +987,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         : std::vector<std::string>{};
                 if (!componentDescs.empty()) {
                     u.appendLineStart("mj2x_regc_class_cache* component_caches[")
-                        .appendInt(static_cast<ca::i64>(componentDescs.size()))
+                        .append(ca::str::format_std("{}", componentDescs.size()))
                         .append("] = {");
                     for (size_t i = 0; i < componentDescs.size(); ++i) {
                         if (i != 0) u.append(", ");
@@ -1000,7 +1001,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         .append(" = _mj2x_regc_alloc_multi_array_cached(")
                         .append(cStringLiteral(ins.typeDesc))
                         .append(", ")
-                        .appendInt(static_cast<ca::i64>(ins.args.size()))
+                        .append(ca::str::format_std("{}", ins.args.size()))
                         .append(", dims, component_caches);")
                         .newLine();
                 }
@@ -1009,7 +1010,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         .append(" = _mj2x_regc_alloc_multi_array(")
                         .append(cStringLiteral(ins.typeDesc))
                         .append(", ")
-                        .appendInt(static_cast<ca::i64>(ins.args.size()))
+                        .append(ca::str::format_std("{}", ins.args.size()))
                         .append(", dims);")
                         .newLine();
                 }
@@ -1166,7 +1167,7 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                         copiesOk = false;
                         return;
                     }
-                    u.goto_("block_b" + std::to_string(t.target.block->id.value));
+                    u.goto_(ca::str::format_std("block_b{}", t.target.block->id.value));
                 });
                 return copiesOk;
             }
@@ -1181,7 +1182,7 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                                 copiesOk = false;
                                 return;
                             }
-                            u.goto_("block_b" + std::to_string(t.trueTarget.block->id.value));
+                            u.goto_(ca::str::format_std("block_b{}", t.trueTarget.block->id.value));
                         },
                         [&](CSourceStream& u) {
                             if (!emitEdgeCopies(u, t.falseTarget.copies, state, edgeTempIndex,
@@ -1189,7 +1190,7 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                                 copiesOk = false;
                                 return;
                             }
-                            u.goto_("block_b" + std::to_string(t.falseTarget.block->id.value));
+                            u.goto_(ca::str::format_std("block_b{}", t.falseTarget.block->id.value));
                         });
                 return copiesOk;
             }
@@ -1198,12 +1199,12 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                 bool copiesOk = true;
                 out.switch_(operandExpr(t.value).to_std_string(), [&](CSourceStream& u) {
                     for (const auto& c : t.cases) {
-                        u.case_(std::to_string(c.key), [&](CSourceStream& v) {
+                        u.case_(ca::str::format_std("{}", c.key), [&](CSourceStream& v) {
                             if (!emitEdgeCopies(v, c.target.copies, state, edgeTempIndex, reason)) {
                                 copiesOk = false;
                                 return;
                             }
-                            v.goto_("block_b" + std::to_string(c.target.block->id.value));
+                            v.goto_(ca::str::format_std("block_b{}", c.target.block->id.value));
                         });
                         if (!copiesOk) return;
                     }
@@ -1213,7 +1214,7 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                             copiesOk = false;
                             return;
                         }
-                        v.goto_("block_b" + std::to_string(t.defaultTarget.block->id.value));
+                        v.goto_(ca::str::format_std("block_b{}", t.defaultTarget.block->id.value));
                     });
                 });
                 return copiesOk;

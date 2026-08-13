@@ -114,7 +114,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     for (const auto& block : fn.blocks) {
         auto activeRegions = activeExceptionRegions(fn, block.get());
         if (options_.commentLevel >= RegCCommentLevel::Summary) {
-            std::string header = "block_b" + std::to_string(block->id.value) + ": ";
+            std::string header = ca::str::format_std("block_b{}: ", block->id.value);
             if (block.get() == fn.entry) {
                 header += "entry";
             }
@@ -137,7 +137,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             }
             body.comment(header);
         }
-        body.label_("block_b" + std::to_string(block->id.value));
+        body.label_(ca::str::format_std("block_b{}", block->id.value));
         for (const auto& ins : block->instructions) {
             if (options_.commentLevel >= RegCCommentLevel::Detailed) {
                 body.comment(regInstructionLine(ins).to_std_string());
@@ -248,7 +248,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     // exception-dispatch re-emission that a static CFG walk (collectEdgeCopyTempTypes)
     // would undercount when a protected block has multiple mayThrow instructions.
     for (size_t i = 0; i < emitState.edgeTempTypes.size(); ++i) {
-        out.declare_var(cType(emitState.edgeTempTypes[i]), "edge_tmp_" + std::to_string(i), "0");
+        out.declare_var(cType(emitState.edgeTempTypes[i]), ca::str::format_std("edge_tmp_{}", i),
+                        "0");
     }
     for (uint32_t owner : emitState.nativeStringBuilderOwners) {
         const auto objectIt = emitState.nativeObjects.find(owner);
@@ -277,7 +278,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     else u.ret("_mj2x_regc_result");
                 });
     }
-    out.goto_("block_b" + std::to_string(fn.entry->id.value));
+    out.goto_(ca::str::format_std("block_b{}", fn.entry->id.value));
     out.emitBlankLine();
     out.emitRaw(bodySource.to_std_string());
 
@@ -343,7 +344,7 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
                       "\"java/lang/Object\")");
         o.appendLineStart("jobjectArray _mj2x_indy_args = (jobjectArray)(*_mj2x_regc_env)"
                           "->NewObjectArray(_mj2x_regc_env, ")
-            .appendInt(argCount)
+            .append(ca::str::format_std("{}", argCount))
             .append(", _mj2x_indy_obj_cls, NULL);")
             .newLine();
         o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
@@ -390,12 +391,12 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
             if (!ok) return;
             o.emitLine(codegen::exprCall("(*_mj2x_regc_env)->SetObjectArrayElement",
                                          {"_mj2x_regc_env", "_mj2x_indy_args",
-                                          std::to_string(i), boxExpr}) +
+                                          ca::str::format_std("{}", i), boxExpr}) +
                        ";");
         }
         if (!ok) return;
         o.appendLineStart("jobject _mj2x_indy_target = _mj2x_regc_indy_bsm_")
-            .appendInt(static_cast<ca::i64>(globalSiteIndex))
+            .append(ca::str::format_std("{}", globalSiteIndex))
             .append("(_mj2x_regc_owner_class);")
             .newLine();
         o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");

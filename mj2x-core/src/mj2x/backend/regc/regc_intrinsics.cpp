@@ -25,31 +25,21 @@ void emitRegCStatusCheck(CSourceStream& out, RegCFunctionEmitState& state,
                          const std::string&            operation)
 {
     const int temp = state.stringBuilderTempIndex++;
-    out.appendLineStart("mj2x_regc_status runtime_status_")
-        .appendInt(temp)
-        .append(" = ")
-        .append(statusExpr)
-        .append(";")
-        .newLine();
-    out.iff("runtime_status_" + std::to_string(temp) + " != MJ2X_REGC_STATUS_OK && runtime_status_" +
-                std::to_string(temp) + " != MJ2X_REGC_STATUS_PENDING_EXCEPTION && " +
-                "!_mj2x_regc_exception_check()",
-            [&](CSourceStream& u) {
-                u.appendLineStart("mj2x_regc_report_status(_mj2x_regc_current_context(), runtime_status_")
-                    .appendInt(temp)
-                    .append(", ")
-                    .append(cStringLiteral(operation))
-                    .append(");")
-                    .newLine();
-            });
+    out.emitLine(ca::str::format_std("mj2x_regc_status runtime_status_{} = {};", temp, statusExpr));
+    out.iff(ca::str::format_std(
+                "runtime_status_{} != MJ2X_REGC_STATUS_OK && runtime_status_{} != "
+                "MJ2X_REGC_STATUS_PENDING_EXCEPTION && !_mj2x_regc_exception_check()",
+                temp, temp),
+        [&](CSourceStream& u) {
+            u.emitLine(ca::str::format_std(
+                "mj2x_regc_report_status(_mj2x_regc_current_context(), runtime_status_{}, {});",
+                temp, cStringLiteral(operation)));
+        });
 }
 
 ca::str::Utf8String nativeObjectStorageName(RegId id)
 {
-    CSourceStream os;
-    os.append("native_r");
-    os.append(std::to_string(id.value));
-    return os.build();
+    return ca::str::format("native_r{}", id.value);
 }
 
 bool emitMaterializedStringBuilder(CSourceStream& out, RegCFunctionEmitState& state,
@@ -692,12 +682,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                                          : cType(ins.dest.type);
             out.appendLineStart(resultType)
                 .append(" mutable_string_value_")
-                .appendInt(valueTemp)
+                .append(ca::str::format_std("{}", valueTemp))
                 .append(" = ")
                 .append(defaultValue(ins.dest.type))
                 .append(";")
                 .newLine();
-            callArgs.push_back("&mutable_string_value_" + std::to_string(valueTemp));
+            callArgs.push_back(ca::str::format_std("&mutable_string_value_{}", valueTemp));
         }
         const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
         emitRegCStatusCheck(out,
@@ -706,7 +696,7 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                             std::string(mutableStringDisplayName(objectState->kind)) + ".method");
         if (ins.hasDest) {
             out.assign(regName(ins.dest.id),
-                       "mutable_string_value_" + std::to_string(valueTemp));
+                       ca::str::format_std("mutable_string_value_{}", valueTemp));
         }
         return decision;
     }
@@ -807,7 +797,7 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         const int valueTemp = state.stringBuilderTempIndex++;
         out.appendLineStart(cType(ins.dest.type))
             .append(" string_value_")
-            .appendInt(valueTemp)
+            .append(ca::str::format_std("{}", valueTemp))
             .append(" = ")
             .append(defaultValue(ins.dest.type))
             .append(";")
@@ -817,12 +807,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         for (const auto& arg : ins.args) {
             callArgs.push_back(operandExpr(arg).to_std_string());
         }
-        callArgs.push_back("&string_value_" + std::to_string(valueTemp));
+        callArgs.push_back(ca::str::format_std("&string_value_{}", valueTemp));
         const std::string callText = codegen::exprCallArgs(decision.symbol, callArgs);
         emitRegCStatusCheck(out, state, ca::str::Utf8StringRef::from_string_view(callText),
                             "String intrinsic");
         out.assign(regName(ins.dest.id),
-                   "string_value_" + std::to_string(valueTemp));
+                   ca::str::format_std("string_value_{}", valueTemp));
         return decision;
     }
 

@@ -7,6 +7,7 @@
 /// 共享同一个 static cache 对象。本文件只实现池本身，与发射路径解耦。
 #include "regc_emitter.hpp"
 
+#include "libca/str/format.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 
@@ -40,7 +41,7 @@ ca::str::Utf8String RegCCachePool::staticMethodCache(const ca::str::Utf8StringRe
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_cache_tu_");
-    cacheNameBuilder.append(std::to_string(staticMethodCacheIndex_++));
+    cacheNameBuilder.append(ca::str::format_std("{}", staticMethodCacheIndex_++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
@@ -76,7 +77,7 @@ ca::str::Utf8String RegCCachePool::instanceMethodCache(const ca::str::Utf8String
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_instance_cache_tu_");
-    cacheNameBuilder.append(std::to_string(instanceMethodCacheIndex_++));
+    cacheNameBuilder.append(ca::str::format_std("{}", instanceMethodCacheIndex_++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
@@ -112,7 +113,7 @@ ca::str::Utf8String RegCCachePool::resolvedCallSite(const ca::str::Utf8StringRef
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_resolved_site_tu_");
-    cacheNameBuilder.append(std::to_string(resolvedCallSiteIndex_++));
+    cacheNameBuilder.append(ca::str::format_std("{}", resolvedCallSiteIndex_++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
@@ -142,7 +143,7 @@ ca::str::Utf8String RegCCachePool::staticFieldCache(const ca::str::Utf8StringRef
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_field_cache_tu_");
-    cacheNameBuilder.append(std::to_string(staticFieldCacheIndex_++));
+    cacheNameBuilder.append(ca::str::format_std("{}", staticFieldCacheIndex_++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
@@ -179,7 +180,7 @@ ca::str::Utf8String RegCCachePool::instanceFieldCache(const ca::str::Utf8StringR
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_instance_field_cache_tu_");
-    cacheNameBuilder.append(std::to_string(instanceFieldCacheIndex_++));
+    cacheNameBuilder.append(ca::str::format_std("{}", instanceFieldCacheIndex_++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
@@ -213,7 +214,7 @@ ca::str::Utf8String RegCCachePool::classCache(const ca::str::Utf8StringRef& desc
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_class_cache_tu_");
-    cacheNameBuilder.append(std::to_string(classCacheIndex_++));
+    cacheNameBuilder.append(ca::str::format_std("{}", classCacheIndex_++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;

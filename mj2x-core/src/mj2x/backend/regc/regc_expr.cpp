@@ -7,6 +7,7 @@
 /// 从原 regc_emitter.cpp 纯搬移，生成代码零差异。
 #include "regc_emitter_internal.hpp"
 
+#include "libca/str/format.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 
 #include <cstdio>
@@ -74,7 +75,7 @@ std::string functionName(const SSAFunctionSymbol& symbol)
 
 std::string regName(RegId id)
 {
-    return "r" + std::to_string(id.value);
+    return ca::str::format_std("r{}", id.value);
 }
 
 const char* defaultValue(SSAType type)
@@ -241,11 +242,11 @@ ca::str::Utf8String operandExpr(const RegOperand& operand)
         CSourceStream os;
         if (operand.type == SSAType::I64) {
             os.append("(int64_t)");
-            os.append(std::to_string(operand.intValue));
+            os.append(ca::str::format_std("{}", operand.intValue));
             os.append("LL");
         }
         else {
-            os.append(std::to_string(operand.intValue));
+            os.append(ca::str::format_std("{}", operand.intValue));
         }
         return os.build();
     }
@@ -405,18 +406,12 @@ const char* mutableStringDisplayName(RegCIntrinsicNativeObjectKind kind)
 
 ca::str::Utf8String stringBuilderOwnerName(RegId id)
 {
-    CSourceStream os;
-    os.append("native_owner_r");
-    os.append(std::to_string(id.value));
-    return os.build();
+    return ca::str::format("native_owner_r{}", id.value);
 }
 
 ca::str::Utf8String stringBuilderMaterializedName(RegId id)
 {
-    CSourceStream os;
-    os.append("native_materialized_r");
-    os.append(std::to_string(id.value));
-    return os.build();
+    return ca::str::format("native_materialized_r{}", id.value);
 }
 
 ca::str::Utf8String stringBuilderHandleExpr(const RegOperand&             operand,
@@ -443,7 +438,7 @@ ca::str::Utf8String stringBuilderStateExpr(const RegOperand&             operand
 ca::str::Utf8String callArgs(const std::vector<RegOperand>& args)
 {
     CSourceStream os;
-    os.append(std::to_string(args.size()));
+    os.append(ca::str::format_std("{}", args.size()));
     for (const auto& arg : args) {
         os.append(", (");
         os.append(cType(arg.type));
@@ -458,7 +453,7 @@ ca::str::Utf8String callArgs(const std::vector<RegOperand>& args,
                              const std::vector<ca::str::Utf8String>& expressions)
 {
     CSourceStream os;
-    os.append(std::to_string(args.size()));
+    os.append(ca::str::format_std("{}", args.size()));
     for (size_t i = 0; i < args.size(); ++i) {
         os.append(", (");
         os.append(cType(args[i].type));

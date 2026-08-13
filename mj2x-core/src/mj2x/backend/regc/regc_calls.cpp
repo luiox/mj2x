@@ -8,6 +8,7 @@
 #include "regc_emitter_internal.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "libca/str/format.hpp"
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
@@ -64,7 +65,7 @@ ca::str::Utf8String addStaticMethodCache(RegCFunctionEmitState& state, const Reg
     cacheNameBuilder.append("_mj2x_regc_cache_");
     cacheNameBuilder.append(state.functionName);
     cacheNameBuilder.append("_");
-    cacheNameBuilder.append(std::to_string(state.staticMethodCacheIndex++));
+    cacheNameBuilder.append(ca::str::format_std("{}", state.staticMethodCacheIndex++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
@@ -181,12 +182,13 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
                                             codegen::exprParen(expressions[0].to_std_string())));
         }
         if (!paramTags.empty()) {
-            o.declare_var("jvalue", "_mj2x_regc_va[" + std::to_string(paramTags.size()) + "]");
+            o.declare_var("jvalue", ca::str::format_std("_mj2x_regc_va[{}]", paramTags.size()));
         }
         o.declare_var("jmethodID", "_mj2x_regc_m");
         if (staticCall) {
             for (size_t i = 0; i < paramTags.size(); ++i) {
-                o.assign(codegen::exprMember(codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                o.assign(codegen::exprMember(codegen::exprIndex("_mj2x_regc_va",
+                                                                ca::str::format_std("{}", i)),
                                              jvalueSlotName(paramTags[i])),
                          std::string(jniValueCast(paramTags[i])) +
                              codegen::exprParen(expressions[i].to_std_string()));
@@ -229,7 +231,8 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
                   [&](CSourceStream& u) {
                       for (size_t i = 0; i < paramTags.size(); ++i) {
                           u.assign(codegen::exprMember(
-                                       codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                                       codegen::exprIndex("_mj2x_regc_va",
+                                                          ca::str::format_std("{}", i)),
                                        jvalueSlotName(paramTags[i])),
                                    std::string(jniValueCast(paramTags[i])) +
                                        codegen::exprParen(expressions[i + 1].to_std_string()));
@@ -332,10 +335,10 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                                                {"_mj2x_regc_env", "_mj2x_regc_rcv"}) +
                              ";");
                   s.emitLine("jmethodID _mj2x_regc_m = NULL;");
-                  if (!paramTags.empty()) {
-                      s.emitLine("jvalue _mj2x_regc_va[" + std::to_string(paramTags.size()) +
-                                 "];");
-                  }
+                   if (!paramTags.empty()) {
+                       s.emitLine(ca::str::format_std("jvalue _mj2x_regc_va[{}];",
+                                                      paramTags.size()));
+                   }
                   s.iff(codegen::exprBinop("!=", "_mj2x_regc_rc", "NULL"),
                         [&](CSourceStream& t) {
                             // 快路径 1（单 JNI）：receiver 是已转换实现类（或其未覆盖
@@ -389,7 +392,8 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                         });
                   for (size_t i = 0; i < paramTags.size(); ++i) {
                       s.emitLine(codegen::exprMember(
-                                     codegen::exprIndex("_mj2x_regc_va", std::to_string(i)),
+                                     codegen::exprIndex("_mj2x_regc_va",
+                                                        ca::str::format_std("{}", i)),
                                      jvalueSlotName(paramTags[i])) +
                                  " = " +
                                  std::string(jniValueCast(paramTags[i])) +
@@ -450,7 +454,7 @@ ca::str::Utf8String addStaticFieldCache(RegCFunctionEmitState& state, const RegI
     cacheNameBuilder.append("_mj2x_regc_field_cache_");
     cacheNameBuilder.append(state.functionName);
     cacheNameBuilder.append("_");
-    cacheNameBuilder.append(std::to_string(state.staticFieldCacheIndex++));
+    cacheNameBuilder.append(ca::str::format_std("{}", state.staticFieldCacheIndex++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
@@ -497,7 +501,7 @@ ca::str::Utf8String addClassCache(RegCFunctionEmitState& state, const ca::str::U
     cacheNameBuilder.append("_mj2x_regc_class_cache_");
     cacheNameBuilder.append(state.functionName);
     cacheNameBuilder.append("_");
-    cacheNameBuilder.append(std::to_string(state.classCacheIndex++));
+    cacheNameBuilder.append(ca::str::format_std("{}", state.classCacheIndex++));
     ca::str::Utf8String cacheName = cacheNameBuilder.build();
 
     CSourceStream decl;
