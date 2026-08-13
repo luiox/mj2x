@@ -483,10 +483,8 @@ TEST(Vmc4BackendTest, VirtualizesInstanceMethodWithThisInReg0)
     EXPECT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
     EXPECT_NE(result.text.find("regs[0].ref = (void*)thisObject;"), std::string::npos)
         << result.text;
-    // 静态 wrapper 不引用 thisObject（不填 regs[0]）。
-    EXPECT_NE(result.text.find("(void)clazz;"), std::string::npos)
-        << "static wrapper must still void clazz\n"
-        << result.text;
+    // thisObject 被使用，不应再被 (void) 抑制。
+    EXPECT_EQ(result.text.find("(void)thisObject;"), std::string::npos) << result.text;
 }
 
 // ===========================================================================
@@ -573,7 +571,7 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
                           VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
                           VmOpcode::LoadField, VmOpcode::StoreField,
                           VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
-                          VmOpcode::Allocate, VmOpcode::Intrinsic}) {
+                          VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw}) {
         bytes.push_back(instance.opcodeFor(op));
     }
     return bytes;
@@ -601,8 +599,8 @@ TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
 }
 
 // P2-2：映射是支持集上的双射（互不相同）+ handler 顺序是排列。
-// Phase 2.A 起支持集 = 17 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField
-// + ArrayLoad/ArrayStore + Allocate/Intrinsic）。
+// Phase 2.C 起支持集 = 18 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField
+// + ArrayLoad/ArrayStore + Allocate/Intrinsic + Throw）。
 TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
 {
     Vmc4Options opts;
@@ -620,7 +618,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
     EXPECT_EQ(bytes[0], instance.haltByte());
 
     const auto& order = instance.handlerOrder();
-    EXPECT_EQ(order.size(), 17u) << "handler order covers the 17 supported opcodes";
+    EXPECT_EQ(order.size(), 18u) << "handler order covers the 18 supported opcodes";
     std::vector<VmOpcode> sortedOrder = order;
     std::sort(sortedOrder.begin(), sortedOrder.end(),
               [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
@@ -629,7 +627,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
                                       VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
                                       VmOpcode::SuperDec, VmOpcode::LoadField, VmOpcode::StoreField,
                                       VmOpcode::ArrayLoad, VmOpcode::ArrayStore, VmOpcode::Call,
-                                      VmOpcode::Allocate, VmOpcode::Intrinsic};
+                                      VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw};
     EXPECT_EQ(sortedOrder, expected) << "handler order must be a permutation of the supported set";
 }
 
@@ -883,7 +881,8 @@ TEST(Vmc4BackendTest, SpecialCallEmitsNonvirtualAndNullReceiverNpe)
         << vsrc;
 }
 
-// P2-10：Allocate（NEW，Phase 2.A）—— Object 分配不再 fail-closed，<init> 由独立 Call。TEST(Vmc4BackendTest, EncodesAllocateInstruction)
+// P2-10：Allocate（NEW，Phase 2.A）—— Object 分配不再 fail-closed，<init> 由独立 Call。
+TEST(Vmc4BackendTest, EncodesAllocateInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
@@ -949,8 +948,8 @@ TEST(Vmc4BackendTest, FailClosedOnBarrier)
     EXPECT_FALSE(reason.empty());
 }
 
-// P2-13：Throw（ATHROW）。
-TEST(Vmc4BackendTest, FailClosedOnThrow)
+// P2-13：Throw（ATHROW，Phase 2.C 起支持）。
+TEST(Vmc4BackendTest, EncodesThrowInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
@@ -961,8 +960,13 @@ TEST(Vmc4BackendTest, FailClosedOnThrow)
                                  new InsnNode(Opcodes::ATHROW),
                              },
                              1, 1, instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_TRUE(prog->hasThrow);
+    EXPECT_FALSE(prog->bytecodes.empty());
+    // 发射的解释器含 THROW handler + 异常检查点。
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "raise1");
+    EXPECT_NE(src.find("mj2x_vm_throw(env, regs[src].ref)"), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_exc:"), std::string::npos) << src;
 }
 
 // P2-14：Switch（TABLESWITCH）。
@@ -994,8 +998,8 @@ TEST(Vmc4BackendTest, FailClosedOnSwitchTerminator)
     EXPECT_FALSE(reason.empty());
 }
 
-// P2-15：异常区域（try/catch 表）整体 fail-closed。
-TEST(Vmc4BackendTest, FailClosedOnExceptionRegion)
+// P2-15：异常区域（try/catch 表，Phase 2.C 起支持）——编码为区域表 + 块活跃条目。
+TEST(Vmc4BackendTest, EncodesExceptionRegion)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
@@ -1004,6 +1008,8 @@ TEST(Vmc4BackendTest, FailClosedOnExceptionRegion)
     auto* start = new LabelNode();
     auto* end   = new LabelNode();
     auto* handler = new LabelNode();
+    // javac 真实 try/catch 形态：try 块正常流直接 IRETURN（无 GOTO 正常边进入
+    // handler），handler 入口 ASTORE 收异常对象（SSA 作为 exceptionValue 参数）。
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "divCatch", "(II)I",
                          {
                              start,
@@ -1012,22 +1018,31 @@ TEST(Vmc4BackendTest, FailClosedOnExceptionRegion)
                              new InsnNode(Opcodes::IDIV),
                              new InsnNode(Opcodes::IRETURN),
                              end,
-                             new JumpInsnNode(Opcodes::GOTO, handler->label),
                              handler,
-                             new InsnNode(Opcodes::POP),
+                             new VarInsnNode(Opcodes::ASTORE, 2),
                              new InsnNode(Opcodes::ICONST_1),
                              new InsnNode(Opcodes::IRETURN),
                          },
-                         2, 2);
+                         2, 3);
     mn->tryCatchBlocks.push_back(
         new TryCatchBlockNode(start->label, end->label, handler->label,
                               ca::str::Utf8StringRef::from_cstr("java/lang/ArithmeticException")));
 
     auto prog = encodeMethodNode(std::move(mn), instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_NE(reason.find("exception"), std::string::npos)
-        << "reason should mention exception regions\n"
-        << reason;
+    ASSERT_NE(prog, nullptr) << reason;
+    // 区域表：至少一条 (region, 保护块) 条目；catch 类型进表；保护块活跃条目非空。
+    EXPECT_FALSE(prog->excRegions.empty());
+    EXPECT_EQ(prog->catchTypes.size(), 1u);
+    EXPECT_EQ(prog->catchTypes[0], "java/lang/ArithmeticException");
+    bool anyActive = false;
+    for (const auto& entries : prog->blockExcRegions) {
+        if (!entries.empty()) anyActive = true;
+    }
+    EXPECT_TRUE(anyActive);
+    // 发射的解释器含区域匹配（IsInstanceOf 经 mj2x_vm_exception_matches）+ 检查点。
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "divc1");
+    EXPECT_NE(src.find("mj2x_vm_exception_matches"), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_exc:"), std::string::npos) << src;
 }
 
 // P2-16：构造器/类初始化器在 backend 层整体跳过（不产 C_SOURCE、不标 native）。

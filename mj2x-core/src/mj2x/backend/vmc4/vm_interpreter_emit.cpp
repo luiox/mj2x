@@ -99,6 +99,8 @@ const char* kHandlerUnaryAlt =
     "            } else { regs[dest].f = -regs[src].f; }\n";
 
 /// BINARY: 算术/位运算（含 JVM 整数环绕、除零、UShr 语义）
+/// 除零/除模抛 ArithmeticException（JVM 语义，Phase 2.C）并进入异常检查点
+/// （mj2x_vm_exc 由每个 dispatcher 无条件提供）——有异常区域则匹配，否则传播。
 const char* kHandlerBinary =
     "            unsigned char op = code[pc++];\n"
     "            unsigned char type = code[pc++];\n"
@@ -111,8 +113,8 @@ const char* kHandlerBinary =
     "                case 0: r = (int64_t)((uint64_t)a + (uint64_t)b); break;\n"
     "                case 1: r = (int64_t)((uint64_t)a - (uint64_t)b); break;\n"
     "                case 2: r = (int64_t)((uint64_t)a * (uint64_t)b); break;\n"
-    "                case 3: if (b==0){status=1;goto mj2x_vm_done;} r = (type==0)?mj2x_vm_div_i32((int32_t)a,(int32_t)b):mj2x_vm_div_i64(a,b); break;\n"
-    "                case 4: if (b==0){status=1;goto mj2x_vm_done;} r = (type==0)?mj2x_vm_rem_i32((int32_t)a,(int32_t)b):mj2x_vm_rem_i64(a,b); break;\n"
+    "                case 3: if (b==0){mj2x_vm_throw_arith(env);goto mj2x_vm_exc;} r = (type==0)?mj2x_vm_div_i32((int32_t)a,(int32_t)b):mj2x_vm_div_i64(a,b); break;\n"
+    "                case 4: if (b==0){mj2x_vm_throw_arith(env);goto mj2x_vm_exc;} r = (type==0)?mj2x_vm_rem_i32((int32_t)a,(int32_t)b):mj2x_vm_rem_i64(a,b); break;\n"
     "                case 5: r = a & b; break;\n"
     "                case 6: r = a | b; break;\n"
     "                case 7: r = a ^ b; break;\n"
@@ -315,6 +317,14 @@ const char* kHandlerIntrinsic =
     "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
     "            array_length_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
 
+/// THROW（Phase 2.C）：athrow。mj2x_vm_throw 设 pending exception（null → NPE），
+/// 随后 goto 异常检查点 mj2x_vm_exc（每个 dispatcher 无条件提供）——有异常区域则
+/// 按当前块活跃区域匹配，否则传播（wrapper 检测 status=1 返回，Java 侧抛）。
+const char* kHandlerThrow =
+    "            unsigned int src = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            mj2x_vm_throw(env, regs[src].ref);\n"
+    "            goto mj2x_vm_exc;\n";
+
 /// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
 /// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
 struct HandlerEntry
@@ -343,6 +353,7 @@ const HandlerEntry kHandlers[] = {
     {VmOpcode::ArrayStore, "ARRAY_STORE", kHandlerArrayStore},
     {VmOpcode::Allocate,   "ALLOCATE",    kHandlerAllocate},
     {VmOpcode::Intrinsic,  "INTRINSIC",   kHandlerIntrinsic},
+    {VmOpcode::Throw,      "THROW",       kHandlerThrow},
 };
 constexpr size_t kHandlerCount = sizeof(kHandlers) / sizeof(kHandlers[0]);
 
@@ -419,6 +430,101 @@ void emitCommonDecls(CSourceStream& out, const std::string& progName, const std:
     out.emitLine("mj2x_vm_slot* regs = slots;");
 }
 
+/// @brief 异常检查点（Phase 2.C）：所有 dispatcher 无条件提供。
+///
+/// @details
+/// 语义：检查 JNI pending exception（可能由 Call/Field/Array/Alloc/Intrinsic helper、
+/// 除零、athrow 产生）——有则取异常对象并清除，按「当前 pc 所在块的活跃异常区域」
+/// （异常表顺序）匹配：命中执行该块的边拷贝（handler 参数 ← 来源寄存器）、把异常
+/// 对象写进 exceptionReg、pc 跳到 handler 块；全不匹配保持传播（failure 语句）。
+///
+/// 生成参数：
+///   - targetsName：blockTargets 数组名（块反查用）
+///   - pcExpr：当前 pc 表达式（SwitchTable 等 "pc"，FuncPtrTable "ctx->pc"）
+///   - matchedLabel：匹配成功后的跳转目标（紧随检查点之后的 label，跳过 failure）
+///   - failure：未匹配时的传播语句（Switch 等 "status = 1; goto mj2x_vm_done;"，
+///     FuncPtrTable 循环里 "ctx->status = 1; break;"）
+///
+/// 块反查：pc 落在哪个 blockTargets 区间（blockTargets 含真实块 + 合成块；合成块
+/// 无活跃区域——异常边只在真实块上，反查到合成块时 switch 无 case 直接传播）。
+void emitExceptionCheckpoint(CSourceStream& out, const VmProgram& program,
+                             const std::string& targetsName, const std::string& pcExpr,
+                             const std::string& matchedLabel, const std::string& failure)
+{
+    const unsigned int totalBlocks = static_cast<unsigned int>(program.blockTargets.size());
+    out.emitLine("mj2x_vm_exc:");
+    out.emitLine("if ((*env)->ExceptionCheck(env)) {");
+    {
+        CSourceStream::IndentGuard g(out);
+        // 取异常对象并清除（JNI 规定 pending 未清时只能调 ExceptionCheck/Occurred/
+        // Clear——IsInstanceOf/FindClass 在有 pending 时行为未定义）。匹配成功即
+        // 消费；未匹配时重新 Throw 挂起（对齐 RegC _mj2x_regc_throw 语义），
+        // wrapper 检测 status=1 返回后 JVM 抛原异常。
+        out.emitLine("jthrowable _ex = (*env)->ExceptionOccurred(env);");
+        out.emitLine("(*env)->ExceptionClear(env);");
+        // 块反查：线性扫 blockTargets 找 pc 所在区间（块数少，MVP 正确性优先）。
+        out.emitLine("unsigned int _bi = 0;");
+        out.emitLine(format_std("while (_bi + 1 < {}u && {} >= targets[_bi + 1]) _bi++;",
+                                totalBlocks, pcExpr));
+        if (program.excRegions.empty()) {
+            // 无异常区域：无法匹配，重新挂起异常并传播。
+            out.emitLine("(*env)->Throw(env, _ex);");
+            out.emitLine(failure);
+        } else {
+            out.emitLine("switch (_bi) {");
+            {
+                CSourceStream::IndentGuard g2(out);
+                for (unsigned int bi = 0; bi < totalBlocks; ++bi) {
+                    const auto& entries =
+                        bi < program.blockExcRegions.size() ? program.blockExcRegions[bi]
+                                                            : decltype(program.blockExcRegions[bi]){};
+                    if (entries.empty()) continue;
+                    out.emitLine(format_std("case {}: {{", bi));
+                    {
+                        CSourceStream::IndentGuard g3(out);
+                        for (uint16_t entryIdx : entries) {
+                            const auto& entry = program.excRegions[entryIdx];
+                            const std::string typeExpr =
+                                entry.caughtTypeIdx == 0xFFFF
+                                    ? std::string("NULL")
+                                    : (entry.caughtTypeIdx < program.catchTypes.size()
+                                           ? codegen::cStringLiteral(
+                                                 program.catchTypes[entry.caughtTypeIdx])
+                                           : std::string("NULL"));
+                            out.emitLine(format_std(
+                                "if (mj2x_vm_exception_matches(env, (jobject)_ex, {})) {{",
+                                typeExpr));
+                            {
+                                CSourceStream::IndentGuard g4(out);
+                                for (const auto& copy : entry.copies) {
+                                    out.emitLine(format_std("regs[{}] = regs[{}];", copy.first,
+                                                            copy.second));
+                                }
+                                out.emitLine(format_std("regs[{}].ref = (void*)_ex;",
+                                                        entry.exceptionReg));
+                                out.emitLine(format_std("pc = targets[{}];", entry.handlerBlock));
+                                out.emitLine(format_std("goto {};", matchedLabel));
+                            }
+                            out.emitLine("}");
+                        }
+                        // 本块所有区域都不匹配 → 重新挂起异常并传播。
+                        out.emitLine("(*env)->Throw(env, _ex);");
+                        out.emitLine("break;");
+                    }
+                    out.emitLine("}");
+                }
+            }
+            out.emitLine("}");
+            out.emitLine("(*env)->Throw(env, _ex);");
+            out.emitLine(failure);
+        }
+    }
+    out.emitLine("}");
+    // label 后必须跟语句（MSVC：label 后直接 `}` 是 C2143）。
+    out.emitLine(format_std("{}: ;", matchedLabel));
+    out.emitLine("/* end exception checkpoint */");
+}
+
 /// 生成 per-variant unmap 表（文件级 static const，drift 开启时在 exec 前发射）。
 /// 表 d 把变体 d 下的原始字节解回 canonical 字节；未映射字节填 0xFF（走 default）。
 void emitDriftUnmapTables(CSourceStream& out, const VmInstance& instance, const std::string& tag)
@@ -489,7 +595,7 @@ void emitHaltCaseHeads(CSourceStream& out, const VmInstance& instance)
 }
 
 /// 形态 0：SwitchTable —— 经典 switch/case。
-void emitSwitchDispatcher(CSourceStream& out, const VmInstance& instance,
+void emitSwitchDispatcher(CSourceStream& out, const VmProgram& program, const VmInstance& instance,
                           const std::string& progName, const std::string& targetsName,
                           const std::string& tag)
 {
@@ -513,6 +619,9 @@ void emitSwitchDispatcher(CSourceStream& out, const VmInstance& instance,
             out.emitLine("default: status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done;");
         }
         out.emitLine("}");
+        // 异常检查点（Phase 2.C）：循环体末尾，所有 handler 之后。
+        emitExceptionCheckpoint(out, program, targetsName, "pc", "mj2x_vm_exc_matched",
+                                "status = 1; goto mj2x_vm_done;");
     }
     out.emitLine("}");
     out.label_("mj2x_vm_done");
@@ -531,7 +640,8 @@ void emitSwitchDispatcher(CSourceStream& out, const VmInstance& instance,
 /// 表里每项指向同一文件级函数，但函数指针表本身仍是间接调用结构。
 
 /// 文件级 prelude：ctx struct + typedef + dispatch body 函数（在 exec 函数之前发射）。
-void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, const std::string& tag)
+void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
+                            const VmInstance& instance, const std::string& tag)
 {
     const std::string ctxType = format_std("mj2x_vm_ctx_{}", tag);
     out.emitLine(format_std(
@@ -579,6 +689,12 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
             f.emitLine("default: ctx->status = 2; /* InvalidBytecode */ ctx->pc = pc; return;");
         }
         f.emitLine("}");
+        // 异常检查点（Phase 2.C）：handler 的 goto mj2x_vm_exc 汇到这里（除零/athrow/
+        // JNI helper pending）。匹配成功：写回 ctx->pc 并返回（exec 循环继续）；
+        // 未匹配：重新挂起异常 + ctx->status=1 返回（exec 循环 break 传播）。
+        emitExceptionCheckpoint(f, program, "targets", "pc", "mj2x_vm_exc_matched",
+                                "ctx->status = 1; goto mj2x_vm_done;");
+        f.emitLine("ctx->pc = pc; goto mj2x_vm_done;");
         // RETURN handler 与 BINARY 除零分支都经 goto mj2x_vm_done 退出：此标签必须存在，
         // 否则生成的 C 引用未定义 label 编译失败。
         f.label_("mj2x_vm_done");
@@ -588,9 +704,9 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
 }
 
 /// 函数体：ctx 初始化 + 函数指针表 + 分发循环（在 exec 函数内发射）。
-void emitFuncPtrDispatcher(CSourceStream& out, const VmInstance& instance,
-                           const std::string& progName, const std::string& targetsName,
-                           const std::string& tag)
+void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
+                           const VmInstance& instance, const std::string& progName,
+                           const std::string& targetsName, const std::string& tag)
 {
     const std::string ctxType = format_std("mj2x_vm_ctx_{}", tag);
     out.emitLine(format_std("{} _ctx;", ctxType));
@@ -674,15 +790,17 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmInstance& instance,
             }
         }
         out.emitLine("if (ctx->status != 0 || _is_ret) break;");
+        // 注意：异常分派在 dispatch body 内完成（emitFuncPtrFilePrelude 的检查点），
+        // 匹配成功写回 ctx->pc 返回（此处 status=0 继续），未匹配 status=1（break 传播）。
     }
     out.emitLine("}");
     out.emitLine("return ctx->status;");
 }
 
 /// 形态 2：ComputedGoto —— GCC "Labels as Values" 扩展（MSVC 不支持，调用方需守卫）。
-void emitComputedGotoDispatcher(CSourceStream& out, const VmInstance& instance,
-                                const std::string& progName, const std::string& targetsName,
-                                const std::string& tag)
+void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
+                                const VmInstance& instance, const std::string& progName,
+                                const std::string& targetsName, const std::string& tag)
 {
     emitCommonDecls(out, progName, targetsName);
     // 所有槽默认指向 halt（防御非法 opcode：goto *NULL 是 UB），显式条目覆盖。
@@ -739,14 +857,20 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmInstance& instance,
     }
     out.label_("mj2x_vm_halt");
     out.emitLine("status = (status!=0)?status:2u /* InvalidBytecode */;");
+    // 异常检查点（Phase 2.C）：函数级公共块（label 必须唯一，ComputedGoto 无循环
+    // 结构）。handler body 的 goto mj2x_vm_exc 都汇到这里；匹配成功 pc 已设，落到
+    // matched label 后重新取码；未匹配传播。
+    emitExceptionCheckpoint(out, program, targetsName, "pc", "mj2x_vm_exc_fetch",
+                            "status = 1; goto mj2x_vm_done;");
+    out.emitLine("goto *mj2x_vm_labels[code[pc++]];");
     out.label_("mj2x_vm_done");
     out.emitLine("return status;");
 }
 
 /// 形态 3：IfNest —— 线性 if/else if 链（无跳表）。
-void emitIfNestDispatcher(CSourceStream& out, const VmInstance& instance,
-                          const std::string& progName, const std::string& targetsName,
-                          const std::string& tag)
+void emitIfNestDispatcher(CSourceStream& out, const VmProgram& program,
+                          const VmInstance& instance, const std::string& progName,
+                          const std::string& targetsName, const std::string& tag)
 {
     emitCommonDecls(out, progName, targetsName);
     out.emitLine("for (;;) {");
@@ -764,6 +888,9 @@ void emitIfNestDispatcher(CSourceStream& out, const VmInstance& instance,
             out.emitLine("} else");
         }
         out.emitLine("{ status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done; }");
+        // 异常检查点（Phase 2.C）：循环体末尾，所有 if 分支之后。
+        emitExceptionCheckpoint(out, program, targetsName, "pc", "mj2x_vm_exc_matched",
+                                "status = 1; goto mj2x_vm_done;");
     }
     out.emitLine("}");
     out.label_("mj2x_vm_done");
@@ -776,9 +903,9 @@ void emitIfNestDispatcher(CSourceStream& out, const VmInstance& instance,
 /// 把 dispatch loop 包进一个 while(state==RUNNING) 的平坦结构，opcode 决定
 /// 下一次迭代走哪个 case。这复刻 RegC CFF 的 state-dispatcher 思路
 /// （reg_transform_passes.hpp 的 ControlFlowFlattening）。
-void emitStateDispatcher(CSourceStream& out, const VmInstance& instance,
-                         const std::string& progName, const std::string& targetsName,
-                         const std::string& tag)
+void emitStateDispatcher(CSourceStream& out, const VmProgram& program,
+                         const VmInstance& instance, const std::string& progName,
+                         const std::string& targetsName, const std::string& tag)
 {
     emitCommonDecls(out, progName, targetsName);
     out.emitLine("unsigned int state = 1; /* 1=RUNNING 0=DONE */");
@@ -798,6 +925,9 @@ void emitStateDispatcher(CSourceStream& out, const VmInstance& instance,
             out.emitLine("default: state = 0; status = (status!=0)?status:2u /* InvalidBytecode */; break;");
         }
         out.emitLine("}");
+        // 异常检查点（Phase 2.C）：while 循环体末尾，所有 case 之后。
+        emitExceptionCheckpoint(out, program, targetsName, "pc", "mj2x_vm_exc_matched",
+                                "status = 1; goto mj2x_vm_done;");
     }
     out.emitLine("}");
     out.label_("mj2x_vm_done");
@@ -1570,6 +1700,26 @@ std::string VmInterpreterEmitter::emitRuntimePrelude()
         "    jclass _c = (*env)->FindClass(env, \"java/lang/NullPointerException\");\n"
         "    if (_c != NULL) { (*env)->ThrowNew(env, _c, msg); (*env)->DeleteLocalRef(env, _c); }\n"
         "}\n"
+        "/* 抛已有异常对象（athrow，Phase 2.C）：null -> NPE（JVM 语义）。 */\n"
+        "static void mj2x_vm_throw(JNIEnv* env, void* value) {\n"
+        "    if (value == NULL) { mj2x_vm_throw_npe(env, \"athrow null\"); return; }\n"
+        "    (*env)->Throw(env, (jthrowable)value);\n"
+        "}\n"
+        "/* 除零抛 ArithmeticException（JVM 语义，Phase 2.C）。 */\n"
+        "static void mj2x_vm_throw_arith(JNIEnv* env) {\n"
+        "    jclass _c = (*env)->FindClass(env, \"java/lang/ArithmeticException\");\n"
+        "    if (_c != NULL) { (*env)->ThrowNew(env, _c, \"divide by zero\"); (*env)->DeleteLocalRef(env, _c); }\n"
+        "}\n"
+        "/* 异常类型匹配（Phase 2.C）：catch-all（caught_type 空/NULL）恒匹配；\n"
+        " * FindClass 失败（类型不可解析）清 pending 并按不匹配处理（对齐 RegC 语义）。 */\n"
+        "static int32_t mj2x_vm_exception_matches(JNIEnv* env, jobject ex, const char* caught_type) {\n"
+        "    if (caught_type == NULL || caught_type[0] == '\\0') return 1;\n"
+        "    jclass _c = (*env)->FindClass(env, caught_type);\n"
+        "    if (_c == NULL) { (*env)->ExceptionClear(env); return 0; }\n"
+        "    int32_t _r = (*env)->IsInstanceOf(env, ex, _c) ? 1 : 0;\n"
+        "    (*env)->DeleteLocalRef(env, _c);\n"
+        "    return _r;\n"
+        "}\n"
         "/* ===== end VMC4 runtime prelude ===== */\n\n");
 }
 
@@ -1657,7 +1807,7 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
     // FuncPtrTable 的 ctx struct / dispatch body 是文件级定义，必须在 exec 函数
     // 之前发射（MSVC 不支持嵌套函数）。其他 dispatcher 无文件级结构。
     if (instance.dispatcherKind() == VmDispatcherKind::FuncPtrTable) {
-        emitFuncPtrFilePrelude(out, instance, tag);
+        emitFuncPtrFilePrelude(out, program, instance, tag);
         out.emitBlankLine();
     }
 
@@ -1706,19 +1856,19 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         f.emitLine("(void)array_length_table;");
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
-            emitSwitchDispatcher(f, instance, progName, targetsName, tag);
+            emitSwitchDispatcher(f, program, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::FuncPtrTable:
-            emitFuncPtrDispatcher(f, instance, progName, targetsName, tag);
+            emitFuncPtrDispatcher(f, program, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::ComputedGoto:
-            emitComputedGotoDispatcher(f, instance, progName, targetsName, tag);
+            emitComputedGotoDispatcher(f, program, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::IfNest:
-            emitIfNestDispatcher(f, instance, progName, targetsName, tag);
+            emitIfNestDispatcher(f, program, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::StateDispatcher:
-            emitStateDispatcher(f, instance, progName, targetsName, tag);
+            emitStateDispatcher(f, program, instance, progName, targetsName, tag);
             break;
         }
     });

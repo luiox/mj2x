@@ -491,7 +491,24 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append(");");
             out.emitLine(line.build());
         }
-        out.emitLine("(void)status; /* MVP: 除零 status==1 时仍返回计算值，后续 Phase 抛异常 */");
+        // 异常传播（Phase 2.C）：status==1（PendingException）时 pending exception
+        // 已在 env 上，直接返回默认值让 JVM 抛（void 方法直接 return）。
+        out.emitLine("if (status == 1) {");
+        {
+            CSourceStream::IndentGuard g2(out);
+            if (retKind != PrimitiveKind::VOID) {
+                CSourceStream line;
+                line.append("return (");
+                line.append(jniType(retKind));
+                line.append(")");
+                line.append(defaultReturnValue(retKind));
+                line.append(";");
+                out.emitLine(line.build());
+            } else {
+                out.emitLine("return;");
+            }
+        }
+        out.emitLine("}");
         // 返回。
         if (retKind != PrimitiveKind::VOID) {
             CSourceStream line;

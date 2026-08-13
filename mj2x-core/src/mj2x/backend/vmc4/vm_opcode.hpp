@@ -273,6 +273,24 @@ struct VmAllocRef
     std::string typeDesc;   ///< 类内部名 / 数组描述符
 };
 
+/// @brief 异常区域条目（Phase 2.C）：一个 (异常区域, 保护块) 对的编码产物。
+///
+/// @details
+/// 编码期把 RegFunction.exceptionRegions 静态展开：每个 region 对每个受保护块
+/// 生成一个条目，解释器在「可能抛异常的操作」后按当前块的活跃条目（异常表顺序）
+/// 匹配。匹配成功：执行该块的边拷贝（handler 参数寄存器 ← 来源值），把异常对象
+/// 写进 exceptionReg（RegExceptionRegion.exceptionValue 对应的寄存器），pc 跳到
+/// handler 块；全不匹配则保持 pending exception 返回（Java 侧传播）。
+struct VmExceptionRegionEntry
+{
+    uint16_t handlerBlock = 0;   ///< handler 入口块索引（blockTargets 下标）
+    uint16_t caughtTypeIdx = 0;  ///< catch 类型在 catchTypes 表的索引（0xFFFF = catch-all/finally）
+    uint16_t exceptionReg = 0;   ///< 承接异常对象的寄存器（.ref 承载 jthrowable）
+    uint16_t blockIdx = 0;       ///< 受保护块索引（异常分派反查用）
+    /// 边拷贝：(dest 寄存器, 来源寄存器) 对（来源含常量槽，prologue 已预加载）。
+    std::vector<std::pair<uint16_t, uint16_t>> copies;
+};
+
 /// @brief 一个方法的完整 VM 程序（编码产物）。
 ///
 /// @details
@@ -290,6 +308,14 @@ struct VmProgram
     std::vector<VmArrayRef>      arrayStoreRefs; ///< ArrayStore 元素类型引用（Phase 2.A）
     std::vector<VmAllocRef>      allocRefs;      ///< Allocate 分配引用（Phase 2.A）
     bool                         hasArrayLength = false;   ///< 含 array.length intrinsic（Phase 2.A）
+
+    /// 异常区域（Phase 2.C）：每 (region, 保护块) 一条；blockExcRegions 按块索引
+    /// 给出活跃条目（异常表顺序），供解释器异常分派查表。
+    std::vector<VmExceptionRegionEntry>         excRegions;        ///< 区域条目（异常表顺序）
+    std::vector<std::string>                    catchTypes;        ///< catch 类型内部名（去重）
+    std::vector<std::vector<uint16_t>>          blockExcRegions;   ///< blockIdx → 活跃条目（异常表顺序）
+    bool                                        hasThrow = false;  ///< 含 THROW（athrow）
+
     uint16_t                     numInputs = 0;  ///< 方法参数占用的寄存器数
     uint16_t                     numRegs   = 0;  ///< 寄存器文件总大小
 };

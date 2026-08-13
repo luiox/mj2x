@@ -449,10 +449,14 @@ struct EncoderState
     /// @details
     /// - Register：直接用 reg.value（计算寄存器）
     /// - IntLiteral/FloatLiteral：intern 到常量池，返回常量槽索引
-    /// - NullLiteral/Opaque：MVP 不支持（fail-closed）
+    /// - NullLiteral：MVP 不支持（fail-closed）
+    /// - Opaque：边拷贝路径（allowOpaqueNull）容忍为 REF NULL 常量槽（对齐 RegC
+    ///   "Opaque → NULL"：异常 handler 参数/undef 边值在 JVM 语义下不可达或为
+    ///   null，赋 NULL 安全）；普通指令路径 fail-closed（LDC String 不应静默变 NULL）
     ///
     /// @return 成功返回 true 并填 regIdx；失败返回 false 并填 reason。
-    bool resolveOperand(const RegOperand& op, uint16_t& regIdx, std::string& reason)
+    bool resolveOperand(const RegOperand& op, uint16_t& regIdx, std::string& reason,
+                        bool allowOpaqueNull = false)
     {
         switch (op.kind) {
         case RegOperandKind::Register: {
@@ -482,6 +486,12 @@ struct EncoderState
             reason = "NullLiteral operand (object ref) not supported in MVP";
             return false;
         case RegOperandKind::Opaque:
+            // undef 值在边拷贝上下文按 NULL 引用物质化：REF NULL 常量槽 prologue
+            // 写 .i=0（union 双关，.ref==NULL）。
+            if (allowOpaqueNull) {
+                regIdx = internConstant(VmType::REF, 0, 0.0);
+                return true;
+            }
             reason = "Opaque operand not supported in MVP";
             if (!op.tag.empty()) reason += " (tag: " + op.tag + ")";
             return false;
@@ -537,6 +547,8 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
 bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeJump(EncoderState& ctx, const RegJumpTerminator& term, VmProgram& prog,
                 std::string& reason);
+bool encodeThrow(EncoderState& ctx, const RegThrowTerminator& term, VmProgram& prog,
+                 std::string& reason);
 bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram& prog,
                   std::string& reason);
 bool encodeReturn(EncoderState& ctx, const RegReturnTerminator& term, VmProgram& prog,
@@ -575,7 +587,7 @@ bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
         if (!encodeBlock(ctx, *ctx.fn.blocks[bi], prog, reason)) return false;
     }
     // 合成块：边拷贝 + Jump 到真实目标。
-    for (const auto& edge : ctx.syntheticEdges) {
+        for (const auto& edge : ctx.syntheticEdges) {
         prog.blockTargets[edge.index] = static_cast<uint32_t>(prog.bytecodes.size());
         for (const auto& copy : edge.copies) {
             VmType type;
@@ -584,7 +596,8 @@ bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
                 return false;
             }
             uint16_t src;
-            if (!ctx.resolveOperand(copy.source, src, reason)) return false;
+            // 边拷贝的 undef 源（异常 handler 参数未定义）容忍为 NULL 引用。
+            if (!ctx.resolveOperand(copy.source, src, reason, true)) return false;
             emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
             emitU8(prog.bytecodes, static_cast<uint8_t>(type));
             emitU16(prog.bytecodes, static_cast<uint16_t>(copy.dest.id.value));
@@ -1099,9 +1112,7 @@ bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog,
                 (void)term;
                 return false;
             } else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
-                reason = "Throw terminator not supported in MVP";
-                (void)term;
-                return false;
+                return encodeThrow(ctx, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegUnreachableTerminator>) {
                 // Unreachable：发射 Halt 作为防御性停机（不应被执行到）。
                 emitHaltOpcode(ctx, prog.bytecodes);
@@ -1128,6 +1139,94 @@ bool encodeJump(EncoderState& ctx, const RegBlock* srcBlock, const RegJumpTermin
     emitOpcode(ctx, VmOpcode::Jump, prog.bytecodes);
     emitU16(prog.bytecodes, target);
     return true;
+}
+
+/// @brief 编码 THROW（athrow，Phase 2.C）。
+///
+/// @details
+/// 字节流：[Throw][src:u16]——src 是异常对象寄存器（.ref 承载 jthrowable）。
+/// 解释器 handler 调 mj2x_vm_throw（null → NPE），随后主循环的异常检查点
+/// 按当前块活跃区域匹配/传播。无异常区域时 throw 直接传播到 Java。
+bool encodeThrow(EncoderState& ctx, const RegThrowTerminator& term, VmProgram& prog,
+                 std::string& reason)
+{
+    uint16_t src;
+    if (!ctx.resolveOperand(term.value, src, reason)) return false;
+    emitOpcode(ctx, VmOpcode::Throw, prog.bytecodes);
+    emitU16(prog.bytecodes, src);
+    prog.hasThrow = true;
+    return true;
+}
+
+/// @brief 编码异常区域（Phase 2.C）：RegFunction.exceptionRegions → VmProgram 区域表。
+///
+/// @details
+/// 每个 (region, 保护块) 生成一条 VmExceptionRegionEntry：handler 块索引、catch 类型
+/// （空 = catch-all/finally，索引 0xFFFF）、exceptionValue 寄存器、保护块索引、边拷贝
+/// （handler 参数寄存器 ← 来源）。blockExcRegions[blockIdx] 按异常表顺序（= region
+/// 收集顺序）给出活跃条目，解释器异常分派据此匹配。边拷贝的源经 resolveOperand
+/// 解析（字面量 intern 常量槽，prologue 预加载），目标/异常寄存器 observeReg 确保
+/// 寄存器文件覆盖。
+void encodeExceptionRegions(EncoderState& ctx, VmProgram& prog, std::string& reason)
+{
+    if (ctx.fn.exceptionRegions.empty()) return;
+    const uint16_t totalBlocks =
+        static_cast<uint16_t>(ctx.fn.blocks.size() + ctx.syntheticEdges.size());
+    prog.blockExcRegions.assign(totalBlocks, {});
+    for (const auto& region : ctx.fn.exceptionRegions) {
+        if (region.handler == nullptr) {
+            reason = "exception region missing handler block";
+            return;
+        }
+        const auto handlerIt = ctx.blockIndex.find(region.handler);
+        if (handlerIt == ctx.blockIndex.end()) {
+            reason = "exception region handler block not indexed";
+            return;
+        }
+        // catch 类型去重（空串 = catch-all/finally，用 0xFFFF 标记，不进表）。
+        uint16_t caughtTypeIdx = 0xFFFF;
+        if (!region.caughtType.empty()) {
+            const auto it = std::find(prog.catchTypes.begin(), prog.catchTypes.end(),
+                                      region.caughtType);
+            if (it != prog.catchTypes.end()) {
+                caughtTypeIdx = static_cast<uint16_t>(it - prog.catchTypes.begin());
+            } else {
+                caughtTypeIdx = static_cast<uint16_t>(prog.catchTypes.size());
+                prog.catchTypes.push_back(region.caughtType);
+            }
+        }
+        // 该 region 各保护块的边拷贝（edges 按 protectedBlock 对齐）。
+        for (auto* protectedBlock : region.protectedBlocks) {
+            if (protectedBlock == nullptr) continue;
+            const auto blockIt = ctx.blockIndex.find(protectedBlock);
+            if (blockIt == ctx.blockIndex.end()) {
+                reason = "exception region protected block not indexed";
+                return;
+            }
+            VmExceptionRegionEntry entry;
+            entry.handlerBlock  = handlerIt->second;
+            entry.caughtTypeIdx = caughtTypeIdx;
+            entry.exceptionReg  = static_cast<uint16_t>(region.exceptionValue.id.value);
+            entry.blockIdx      = blockIt->second;
+            ctx.observeReg(entry.exceptionReg);
+            // 该块的边拷贝（edges 中 protectedBlock 匹配的项）。
+            for (const auto& edge : region.edges) {
+                if (edge.protectedBlock != protectedBlock) continue;
+                for (const auto& copy : edge.copies) {
+                    uint16_t src;
+                    // 异常边拷贝的 undef 源（handler 参数在该帧未定义）容忍为 NULL。
+                    if (!ctx.resolveOperand(copy.source, src, reason, true)) return;
+                    const uint16_t dest = static_cast<uint16_t>(copy.dest.id.value);
+                    ctx.observeReg(dest);
+                    entry.copies.emplace_back(dest, src);
+                }
+                break;
+            }
+            const uint16_t entryIdx = static_cast<uint16_t>(prog.excRegions.size());
+            prog.excRegions.push_back(std::move(entry));
+            prog.blockExcRegions[entry.blockIdx].push_back(entryIdx);
+        }
+    }
 }
 
 bool encodeBranch(EncoderState& ctx, const RegBlock* srcBlock, const RegBranchTerminator& term,
@@ -1178,15 +1277,13 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     auto prog = std::make_unique<VmProgram>();
     EncoderState ctx(fn, instance);
 
-    // 异常区域的隐式边（handler 参数）MVP 不支持：编码器既不编码 exception edges
-    // 也不抛 Java 异常，含 try/catch 的方法整体 fail-closed。
-    if (!fn.exceptionRegions.empty()) {
-        reason = "exception regions not supported in MVP";
-        return nullptr;
-    }
-
     if (!indexBlocks(ctx, reason)) return nullptr;
     ctx.planSyntheticEdges();
+    // 异常区域（Phase 2.C）：先于 layoutBlocks 收集（边拷贝可能 intern 新常量槽，
+    // 常量槽分配独立于字节流布局，顺序无影响；但必须保证区域表在 layoutBlocks
+    // 之后仍有效——区域表只存块索引/寄存器索引，不依赖字节流偏移）。
+    encodeExceptionRegions(ctx, *prog, reason);
+    if (!reason.empty()) return nullptr;
     if (!layoutBlocks(ctx, *prog, reason)) return nullptr;
 
     // 填充常量池：constSlotBySignature 存 (签名 → 槽索引)，签名含 type+intBits+floatValue。

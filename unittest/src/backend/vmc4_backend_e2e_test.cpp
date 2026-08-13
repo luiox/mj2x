@@ -679,4 +679,51 @@ TEST_P(Vmc4BackendE2E, InvokeSpecialAndNullReceiverRoundTrip)
             6, GetParam().kind);
 }
 
+// Phase 2.C：异常语义 round-trip。
+// divCatch：try 块内除零 → 解释器抛 ArithmeticException → 检查点按区域表匹配
+// handler（IsInstanceOf）→ exceptionReg 承接异常 → 跳 handler 返回 -1；
+// divUncaught：除零无区域 → 检查点不匹配 → status=1 传播 → Java 侧抛
+// ArithmeticException（Driver 捕获 THROW:...）；
+// throwCatch/throwUncaught：athrow（mj2x_vm_throw）+ 区域匹配 / 传播；
+// nestedCatch：嵌套 try（内层 ArithmeticException 先匹配）。
+TEST_P(Vmc4BackendE2E, ExceptionRoundTrip)
+{
+    runCase("Vmc4NativeExc",
+            "public class Vmc4NativeExc {\n"
+            "  public static int divCatch(int a, int b) {\n"
+            "    try { return a / b; }\n"
+            "    catch (ArithmeticException e) { return -1; }\n"
+            "  }\n"
+            "  public static int divUncaught(int a, int b) { return a / b; }\n"
+            "  public static int throwCatch(int x) {\n"
+            "    try {\n"
+            "      if (x < 0) throw new IllegalArgumentException();\n"
+            "      return x * 2;\n"
+            "    } catch (IllegalArgumentException e) { return -100; }\n"
+            "  }\n"
+            "  public static int throwUncaught(int x) {\n"
+            "    if (x < 0) throw new IllegalStateException();\n"
+            "    return x;\n"
+            "  }\n"
+            "  public static int nestedCatch(int a, int b) {\n"
+            "    try {\n"
+            "      try { return a / b; }\n"
+            "      catch (ArithmeticException e) { return 1; }\n"
+            "    } catch (Exception e) { return 2; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"divCatchOk", "Vmc4NativeExc.divCatch(10, 2)"},
+                {"divCatchZero", "Vmc4NativeExc.divCatch(10, 0)"},
+                {"divUncaught", "Vmc4NativeExc.divUncaught(10, 0)"},
+                {"throwCatchOk", "Vmc4NativeExc.throwCatch(5)"},
+                {"throwCatchNeg", "Vmc4NativeExc.throwCatch(-1)"},
+                {"throwUncaughtNeg", "Vmc4NativeExc.throwUncaught(-1)"},
+                {"throwUncaughtOk", "Vmc4NativeExc.throwUncaught(7)"},
+                {"nestedInner", "Vmc4NativeExc.nestedCatch(10, 0)"},
+                {"nestedOk", "Vmc4NativeExc.nestedCatch(10, 2)"},
+            },
+            5, GetParam().kind);
+}
+
 }   // namespace
