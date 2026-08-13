@@ -51,6 +51,53 @@ bool isPureRuntimeIntrinsic(const RegInstruction& ins)
            decision.emitKind == RegCIntrinsicEmitKind::RuntimeFunction;
 }
 
+/// Object.getClass() intrinsic（发射为 JNI GetObjectClass）本身不抛 Java 异常，
+/// NULL receiver 的 NPE 已在发射点显式处理。无异常区域的方法可省略调用后
+/// ExceptionCheck（有异常区域时保守保留，避免 NPE 挂起后错过 catch 分发）。
+bool isObjectGetClass(const RegInstruction& ins)
+{
+    if (ins.kind != RegInstructionKind::Call) return false;
+    const RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+    return decision.kind == RegCIntrinsicDecisionKind::Emit &&
+           decision.emitKind == RegCIntrinsicEmitKind::ObjectGetClass;
+}
+
+/// IR 级"方法体是否产 JNI local ref"判定：PushLocalFrame 帧发射的补充判定
+/// （文本级 bodyProducesLocalRefs 不识别 resolved 调用产生的 GetObjectClass
+/// ref）与 resolved 调用省略 DeleteLocalRef 的门槛。规则：
+/// - Call（非纯计算 intrinsic）：返回 ref 或经物化/helper 产 ref → true
+/// - Allocate：true
+/// - LoadField/StoreField 的 desc 以 'L'/'[' 开头（引用字段）：true
+/// - ArrayLoad/ArrayStore 的 elementType 为 REF：true
+/// - Intrinsic 指令（array.length/monitor/cmp.nan）纯计算不产 ref；string
+///   literal 物化走 LDC 表达式路径（tag 前缀），不在指令层面 → false
+bool fnProducesLocalRefsIR(const RegFunction& fn)
+{
+    for (const auto& block : fn.blocks) {
+        for (const auto& ins : block->instructions) {
+            switch (ins.kind) {
+                case RegInstructionKind::Call:
+                    if (!isPureRuntimeIntrinsic(ins)) return true;
+                    break;
+                case RegInstructionKind::Allocate: return true;
+                case RegInstructionKind::LoadField:
+                case RegInstructionKind::StoreField: {
+                    const char first =
+                        ins.field.desc.is_empty() ? '\0' : (char)ins.field.desc.data()[0];
+                    if (first == 'L' || first == '[') return true;
+                    break;
+                }
+                case RegInstructionKind::ArrayLoad:
+                case RegInstructionKind::ArrayStore:
+                    if (ins.elementType == SSAType::REF) return true;
+                    break;
+                default: break;
+            }
+        }
+    }
+    return false;
+}
+
 }   // namespace
 
 void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out)
@@ -110,6 +157,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.convertedFunctions                 = convertedFunctions_;
     emitState.indyFunctions                      = indyFunctions_;
     emitState.resolvedDispatch                   = options_.resolvedDispatch;
+    emitState.hasLocalFrame                      = fnProducesLocalRefsIR(fn);
     emitState.nativeStringBuilderRegisters       = stringBuilderPlan.nativeRegisters;
     emitState.nativeStringBuilderOwners          = stringBuilderPlan.ownerRegisters;
     emitState.nativeStringBuilderOwnerByRegister = stringBuilderPlan.ownerByRegister;
@@ -159,7 +207,11 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                 body.comment(regInstructionLine(ins).to_std_string());
             }
             if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason)) return result;
-            if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins)) {
+            // 无异常区域（方法无 try/catch）时省略调用后 ExceptionCheck：pending
+            // 异常直接泄漏到 JNI 边界由 JVM 处理（与 Java 语义及 os30 一致），省
+            // 每次调用的 check 开销；有异常区域时保留（分发到 handler 必需）。
+            if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins) &&
+                !activeRegions.empty()) {
                 if (!emitExceptionDispatch(body,
                                            activeRegions,
                                            block.get(),
@@ -299,7 +351,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     // StackC 的 trackLocalRef/clear，但零 C 数组、无 c2j stack anchor。缓存 class/method
     // 走 NewGlobalRef，不受帧影响。纯标量方法（无产 ref 操作）不发射，保留「零 JNI」形态。
     const ca::str::Utf8String bodySource = body.build();
-    const bool                needsLocalFrame = bodyProducesLocalRefs(bodySource);
+    const bool                needsLocalFrame =
+        bodyProducesLocalRefs(bodySource) || emitState.hasLocalFrame;
     if (needsLocalFrame) {
         out.iff("(*_mj2x_regc_env)->PushLocalFrame(_mj2x_regc_env, 16) != 0",
                 [&](CSourceStream& u) {

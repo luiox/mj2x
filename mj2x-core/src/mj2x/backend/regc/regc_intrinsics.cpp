@@ -816,6 +816,35 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         return decision;
     }
 
+    if (decision.emitKind == RegCIntrinsicEmitKind::ObjectGetClass) {
+        if (ins.args.empty()) {
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "getClass intrinsic missing receiver";
+            return decision;
+        }
+        // 语义 == Object.getClass()：返回 receiver 的运行时类。发射为 JNI
+        // GetObjectClass（1 个 JNI），替代 resolved dispatch 的 GetObjectClass +
+        // IsSameObject/IsInstanceOf 检查 + DeleteLocalRef（2-3 个 JNI）。
+        // GetObjectClass 不抛 Java 异常；NULL receiver 显式抛 NPE（与 Java
+        // 语义一致，emitter 对无异常区域的方法省略调用后 check，见
+        // regc_emitter.cpp isObjectGetClass）。receiver 是 SSA 寄存器（纯
+        // 标识符），两次引用无重复求值问题。
+        const std::string receiverExpr = operandExpr(ins.args[0]).to_std_string();
+        const std::string destName     = ins.hasDest ? regName(ins.dest.id) : std::string();
+        out.iff(receiverExpr + " == NULL",
+                [&](CSourceStream& u) {
+                    u.emitLine("_mj2x_regc_throw_null(\"Object.getClass\");");
+                    if (ins.hasDest) u.emitLine(destName + " = NULL;");
+                },
+                [&](CSourceStream& u) {
+                    if (ins.hasDest) u.appendLineStart(destName).append(" = ");
+                    u.append(codegen::exprCall("(*_mj2x_regc_env)->GetObjectClass",
+                                               {"_mj2x_regc_env", receiverExpr}));
+                    u.append(";").newLine();
+                });
+        return decision;
+    }
+
     if (decision.emitKind == RegCIntrinsicEmitKind::StringMethod) {
         for (const auto& arg : ins.args) {
             if (nativeObjectFor(state, arg)) {

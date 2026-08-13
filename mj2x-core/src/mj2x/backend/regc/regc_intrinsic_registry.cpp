@@ -1602,6 +1602,15 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      false,
      2,
      false},
+    {"java/lang/Object",
+     "getClass",
+     "()Ljava/lang/Class;",
+     "",
+     RegCIntrinsicEmitKind::ObjectGetClass,
+     RegCIntrinsicNativeObjectKind::None,
+     false,
+     1,
+     false},
 };
 
 bool sameSignature(const RegCIntrinsicCall& call, const RegCIntrinsicEntry& entry)

@@ -74,7 +74,9 @@ function Run-ProcessChecked([string]$FilePath, [string[]]$Arguments, [string]$Wo
 # ---- 0. 构建 CLI（默认） ----
 if (-not $SkipBuild) {
     Write-Host "==> 构建 mj2x-cli ..."
-    & xmake f -P $repo --with_mj2x=y --with_tests=y 2>&1 | Out-Null
+    # 注意：必须 -c 重置配置 + 显式 -p windows -m release（裸 `xmake f -P` 会
+    # 破坏 root 配置，见 issue #782 与交接备忘；缺 -c 时 build 报 invalid argument）。
+    & xmake f -c -P $repo -p windows -m release --with_mj2x=y --with_tests=y 2>&1 | Out-Null
     $buildLog = Join-Path $outDir "cli-build.log"
     $out = & xmake -P $repo build mj2x-cli 2>&1 | ForEach-Object { $_.ToString() }
     Set-Content -Path $buildLog -Value ($out -join [Environment]::NewLine) -Encoding UTF8

@@ -332,6 +332,24 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("    (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, receiver_class);\n");
     out.append("    return method;\n");
     out.append("}\n\n");
+    out.append("/* 按声明 owner 解析的实例方法缓存（libraryOwner 调用点专用）：GetMethodID 只\n");
+    out.append(" * 解析一次并缓存，之后每次调用 0 JNI（相比 _mj2x_regc_cached_instance_method 的\n");
+    out.append(" * 每调用 GetObjectClass+IsSameObject）。CallXxxMethodA 对任意 receiver 做 JNI 虚\n");
+    out.append(" * 分派（按实际对象类找覆写），methodID 来自声明类即可，语义正确；对接口 owner\n");
+    out.append(" * 同样适用（HotSpot 支持接口 methodID）。解析失败清异常防 pending 挂起。 */\n");
+    out.append("static jmethodID _mj2x_regc_cached_owner_method("
+            "mj2x_regc_instance_method_cache* cache, jobject receiver) {\n");
+    out.append("    if (cache == NULL || receiver == NULL) return NULL;\n");
+    out.append("    if (cache->method != NULL) return cache->method;\n");
+    out.append("    jclass owner = _mj2x_regc_global_class(cache->owner, &cache->ownerClass);\n");
+    out.append("    if (owner == NULL) return NULL;\n");
+    out.append("    cache->method = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, owner, cache->name, "
+            "cache->desc);\n");
+    out.append("    if (cache->method == NULL) {\n");
+    out.append("        (*_mj2x_regc_env)->ExceptionClear(_mj2x_regc_env);\n");
+    out.append("    }\n");
+    out.append("    return cache->method;\n");
+    out.append("}\n\n");
     out.append("static jfieldID _mj2x_regc_cached_static_field(mj2x_regc_static_field_cache* cache) "
            "{\n");
     out.append("    if (cache == NULL) return NULL;\n");

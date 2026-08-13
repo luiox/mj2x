@@ -54,6 +54,10 @@ struct RegCFunctionEmitState
     /// 动态实例调用是否启用 resolved native dispatch（多文件模式关闭：
     /// 函数表只在单文件 TU 内可见）。
     bool                                      resolvedDispatch    = false;
+    /// 本方法是否发射 PushLocalFrame 帧（IR 级判定，见 regc_emitter.cpp
+    /// fnProducesLocalRefsIR）。resolved 调用点据此省略每次 GetObjectClass 后
+    /// 的 DeleteLocalRef——帧内 local ref 由 PopLocalFrame 批量释放。
+    bool                                      hasLocalFrame       = false;
     std::vector<ca::str::Utf8String>         staticMethodCacheDeclarations;
     std::vector<ca::str::Utf8String>       staticFieldCacheDeclarations;
     std::vector<ca::str::Utf8String>       classCacheDeclarations;
@@ -171,13 +175,17 @@ bool tryEmitDirectCall(CSourceStream&                                     out,
                        const std::unordered_map<std::string, std::string>* convertedFunctions,
                        const std::unordered_set<std::string>*             indyFunctions);
 /// 发射缓存化的 JNI 调用点（jvalue 数组 + CallXxxMethodA）。
+/// ownerMethodOnly：仅按声明 owner 解析 methodID（GetMethodID 一次 + 缓存，
+/// 之后每调用 0 JNI 解析；CallXxxMethodA 的 JNI 虚分派保证语义正确）。
 void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCall,
                     const ca::str::Utf8StringRef&            cacheName,
-                    const std::vector<ca::str::Utf8String>& expressions);
+                    const std::vector<ca::str::Utf8String>& expressions,
+                    bool ownerMethodOnly = false);
 /// 发射动态实例调用的 resolved native dispatch。
 void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                               const ca::str::Utf8StringRef&            siteName,
-                              const std::vector<ca::str::Utf8String>& expressions);
+                              const std::vector<ca::str::Utf8String>& expressions,
+                              bool omitDeleteLocalRef = false);
 /// @}
 
 /// @name regc_intrinsics.cpp：native 对象分析与 intrinsic 调用发射

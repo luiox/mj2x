@@ -509,6 +509,12 @@ struct RegCBackend::Impl
     /// 含 invokedynamic 站点的方法键集合：直接调用会跳过这些目标
     /// （indy bootstrap 依赖 per-frame _mj2x_regc_owner_class）。
     std::unordered_set<std::string> indyFunctions;
+    /// 已做「类内预登记」的类名集合：compileMethod 对每类首次转换时预登记
+    /// 该类的全部计划方法函数名，使先转换的方法也能直调后转换的同类方法
+    /// （private-this 调用只在同类内，javac 语义保证；转换顺序不保证依赖序，
+    /// 如 ExceptionProbe.run 先于 risky）。实际转换失败的方法在早退路径
+    /// erase 回滚，避免直调不存在的函数体。
+    std::unordered_set<std::string> preRegisteredClasses;
 
     /// 记录一条 native 方法注册，并为首次出现的类分配 classId。
     /// compileMethod 成功路径调用。返回该类的 classId（供 injectIntoClass 注入 clinit）。
@@ -580,6 +586,26 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
 
+    // 类内预登记：本类全部计划转换方法的 regc_* 函数名提前可知（functionName
+    // 只依赖 owner/name/desc）。private-this 直接调用依赖它——同类方法转换
+    // 顺序不保证（如 ExceptionProbe.run 先于 risky）。失败的转换在早退路径
+    // erase 回滚。
+    if (index != nullptr && impl_->preRegisteredClasses.insert(className).second) {
+        CompilerClass* cls = index->getClass(className);
+        if (cls != nullptr) {
+            for (const auto& m : cls->methods) {
+                if (!m.markedForCompile) continue;
+                auto                mn     = m.methodNode;
+                const std::string   mnName = mn->name.to_std_string();
+                const std::string   mnDesc = mn->desc.to_std_string();
+                const std::string   key    = methodKey(className, mnName, mnDesc);
+                impl_->convertedFunctions[key] =
+                    RegCEmitter::functionNameFor(SSAFunctionSymbol{
+                        className, mnName, mnDesc, {}, SSAType::UNKNOWN});
+            }
+        }
+    }
+
     SSABuilder ssaBuilder;
     // RegCBackend is a facade over the existing IR pipeline: L1 blocks are
     // supplied by Pipeline, then this backend owns the SSA and RegIR handoff.
@@ -594,6 +620,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "SSA build failed", reason.c_str());
+        impl_->convertedFunctions.erase(methodKey(className, methodName, methodDesc));
         return backendResult;
     }
 
@@ -604,6 +631,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
                className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "lowering failed", reason.c_str());
+        impl_->convertedFunctions.erase(methodKey(className, methodName, methodDesc));
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);

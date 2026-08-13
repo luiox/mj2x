@@ -20,6 +20,26 @@ using namespace jbytecode::core;
 using codegen::cStringLiteral;
 using codegen::CSourceStream;
 
+/// 生成「指针相等短路」的 JNI 对象关系检查表达式：
+///   (lhs == rhs || (*env)->JniFn(env, lhs, rhs))
+/// 短路仅在指针相等时生效——此时 JNI 语义必为 true（同一对象 self-equal），
+/// 因此语义与纯 JNI 调用完全一致，不引入任何行为差异。实证：HotSpot 的
+/// jobject 是间接句柄（local/global handle 指针不同），该比较恒为 false，
+/// 本优化在 HotSpot 上不省 JNI（代价 ~1 次 C 比较/检查）；保留价值：非句柄
+/// 式 JVM 上若句柄指针相等则跳过 JNI 调用，且恒等比较无副作用。
+std::string shortCircuitRefCheck(const char* jniFn, const std::string& lhs,
+                                 const std::string& rhs)
+{
+    // 返回 (lhs == rhs || (*env)->JniFn(env, lhs, rhs))：外层括号保证与
+    // `&&` 组合时优先级正确（A != NULL && (ptr_eq || JNI(...))），且 A==NULL
+    // 时整体为 false，绝不调用 JNI（IsInstanceOf 的 clazz 参数 NULL 是 JNI
+    // 未定义行为，曾导致 JVM 崩溃——issue #8xx 回归教训）。
+    return codegen::exprParen(codegen::exprBinop(
+        "||",
+        codegen::exprBinop("==", lhs, rhs),
+        codegen::exprCall(jniFn, {"_mj2x_regc_env", lhs, rhs})));
+}
+
 /// 查寄存器对应的 native 包装对象（StringBuilder/StringBuffer），非寄存器或未登记返回
 /// nullptr。
 const RegCNativeObjectState* nativeObjectFor(const RegCFunctionEmitState& state,
@@ -98,7 +118,10 @@ ca::str::Utf8String addInstanceMethodCache(RegCFunctionEmitState& state, const R
 }
 
 /// 判定调用是否确定性分派：静态/特殊调用总是确定；虚调用仅当目标方法 final
-/// 或 owner 类 final（无子类可覆盖）时确定。接口调用保持动态分派。
+/// 或 owner 类 final（无子类可覆盖）时确定；虚调用在 owner 的所有编译输入
+/// 子类中无同名同描述方法覆写时也确定（protected/package 方法常见场景，如
+/// AbstractWorker.bias——子类只覆写 apply）。接口调用保持动态分派。类层级
+/// 闭包只含编译输入：owner 是编译类时不可能存在库（JDK）子类，分析安全。
 bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classIndex)
 {
     switch (ins.method.invokeOpcode) {
@@ -121,7 +144,30 @@ bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classInde
         if (member.methodNode->desc != ins.method.desc) continue;
         return (member.methodNode->access & Opcodes::ACC_FINAL) != 0;
     }
-    return false;
+    // 无覆写分析：owner 的每个编译输入子类（含递归）都不声明该方法 → 确定。
+    for (const auto& [clsName, cls] : classIndex->getClasses()) {
+        if (clsName == ins.method.owner.to_std_string() || cls.isLibrary) continue;
+        const CompilerClass* cur = &cls;
+        std::string          curName = clsName;
+        bool                 isSub = false;
+        while (cur != nullptr && cur->classNode != nullptr) {
+            curName = cur->classNode->superName.to_std_string();
+            if (curName.empty()) break;
+            if (curName == ins.method.owner.to_std_string()) {
+                isSub = true;
+                break;
+            }
+            cur = classIndex->getClass(curName);
+        }
+        if (!isSub) continue;
+        for (const auto& member : cls.methods) {
+            if (member.methodNode == nullptr) continue;
+            if (member.methodNode->name != ins.method.name) continue;
+            if (member.methodNode->desc != ins.method.desc) continue;
+            return false;   // 有子类覆写 → 动态分派
+        }
+    }
+    return true;
 }
 
 /// 发射 native-to-native 直接调用（跳过 JNI 方法分派）。要求：目标方法已成功
@@ -147,6 +193,20 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
         if (nativeObjectFor(state, arg) != nullptr) return false;
     }
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+    // 前向声明：目标函数定义可能在本调用点之后（同类方法转换顺序不保证，
+    // 类内预登记使后转换方法也可直调）。无声明时 C 隐式 int() 声明与 REF
+    // 返回值冲突（C2040）。参数类型与 emitFunction 参数发射一致（receiver
+    // = void* r0，后续按实参 SSAType）。
+    out.appendLineStart("static ")
+        .append(ins.hasDest ? cType(ins.dest.type) : "void")
+        .append(" ")
+        .append(it->second)
+        .append("(");
+    for (size_t i = 0; i < ins.args.size(); ++i) {
+        if (i) out.append(", ");
+        out.append(cType(ins.args[i].type)).append(" r").append(ca::str::format_std("{}", i));
+    }
+    out.append(");").newLine();
     out.appendLineStart();
     if (ins.hasDest) {
         out.append(destName).append(" = ");
@@ -166,7 +226,7 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
 /// 实例调用 receiver 为 NULL 时抛 NullPointerException。
 void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCall,
                     const ca::str::Utf8StringRef& cacheName,
-                    const std::vector<ca::str::Utf8String>& expressions)
+                    const std::vector<ca::str::Utf8String>& expressions, bool ownerMethodOnly)
 {
     const char               returnTag = descriptorReturnTag(ins.method.desc);
     const std::vector<char>  paramTags = descriptorParamTags(ins.method.desc);
@@ -238,9 +298,10 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
                                        codegen::exprParen(expressions[i + 1].to_std_string()));
                       }
                       u.assign("_mj2x_regc_m",
-                               codegen::exprCall("_mj2x_regc_cached_instance_method",
-                                                 {"&" + cacheName.to_std_string(),
-                                                  "_mj2x_regc_rcv"}));
+                               codegen::exprCall(
+                                   ownerMethodOnly ? "_mj2x_regc_cached_owner_method"
+                                                   : "_mj2x_regc_cached_instance_method",
+                                   {"&" + cacheName.to_std_string(), "_mj2x_regc_rcv"}));
                       const std::string callExpr = codegen::exprCall(
                           std::string("(*_mj2x_regc_env)->Call") + jniCallFamily(returnTag) +
                               "MethodA",
@@ -271,9 +332,13 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
 /// 若该调用点解析出的实现是已转换方法则直接调用其 regc_* 函数体（跳过 JNI
 /// 分派），否则回退 CallXxxMethodA。站点级缓存持有 receiver 类 global ref，
 /// 同类重复调用只做 GetObjectClass + IsSameObject 检查。
+/// omitDeleteLocalRef：方法已发射 PushLocalFrame 帧时省略每次 GetObjectClass
+/// 后的 DeleteLocalRef（帧内 local ref 由 PopLocalFrame 批量释放，省 1 个 JNI
+/// 调用/调用点；帧判定见 regc_emitter.cpp fnProducesLocalRefsIR）。
 void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                               const ca::str::Utf8StringRef& siteName,
-                              const std::vector<ca::str::Utf8String>& expressions)
+                              const std::vector<ca::str::Utf8String>& expressions,
+                              bool omitDeleteLocalRef)
 {
     const char              returnTag = descriptorReturnTag(ins.method.desc);
     const std::vector<char> paramTags = descriptorParamTags(ins.method.desc);
@@ -349,114 +414,124 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                        s.emitLine(ca::str::format_std("jvalue _mj2x_regc_va[{}];",
                                                       paramTags.size()));
                    }
-                  s.iff(codegen::exprBinop("!=", "_mj2x_regc_rc", "NULL"),
-                        [&](CSourceStream& t) {
-                            // 快路径 1（单 JNI）：receiver 是已转换实现类（或其未覆盖
-                            // 子类）→ 直接复用 method/fn。implClass 只在 fn != NULL 时设置。
-                            t.iff(codegen::exprBinop(
-                                      "&&",
-                                      codegen::exprBinop("!=",
-                                                         codegen::exprMember(site, "implClass"),
-                                                         "NULL"),
-                                      codegen::exprCall("(*_mj2x_regc_env)->IsInstanceOf",
-                                                        {"_mj2x_regc_env", "_mj2x_regc_rcv",
-                                                         codegen::exprMember(site, "implClass")})),
-                                  [&](CSourceStream& u) {
-                                      u.emitLine("_mj2x_regc_m = " +
-                                                 codegen::exprMember(site, "method") + ";");
-                                  },
-                                  [&](CSourceStream& t2) {
-                                      // 快路径 2（双 JNI）：无已转换实现（fn==NULL）的调用
-                                      // 点按 receiver 精确类缓存 jmethodID。
-                                      t2.iff(codegen::exprBinop(
-                                                 "&&",
-                                                 codegen::exprBinop(
-                                                     "!=",
-                                                     codegen::exprMember(site, "receiverClass"),
-                                                     "NULL"),
-                                                 codegen::exprCall(
-                                                     "(*_mj2x_regc_env)->IsSameObject",
-                                                     {"_mj2x_regc_env",
-                                                      codegen::exprMember(site, "receiverClass"),
-                                                      "_mj2x_regc_rc"})),
-                                             [&](CSourceStream& u) {
-                                                 u.emitLine("_mj2x_regc_m = " +
-                                                            codegen::exprMember(site, "method") +
-                                                            ";");
-                                             },
-                                             [&](CSourceStream& t3) {
-                                                 // 槽 1（交替 receiver 优化，issue #780）：
-                                                 // 槽 0 未命中时检查上一 receiver 的完整组。
-                                                 t3.iff(codegen::exprBinop(
-                                                           "&&",
-                                                           codegen::exprBinop(
-                                                               "!=",
-                                                               codegen::exprMember(site,
-                                                                                   "implClass1"),
-                                                               "NULL"),
-                                                           codegen::exprCall(
-                                                               "(*_mj2x_regc_env)->IsInstanceOf",
-                                                               {"_mj2x_regc_env",
-                                                                "_mj2x_regc_rcv",
-                                                                codegen::exprMember(
-                                                                    site, "implClass1")})),
-                                                       [&](CSourceStream& u) {
-                                                           u.emitLine(
-                                                               "_mj2x_regc_m = " +
-                                                               codegen::exprMember(site,
-                                                                                   "method1") +
-                                                               ";");
-                                                       },
-                                                       [&](CSourceStream& t4) {
-                                                           t4.iff(
-                                                               codegen::exprBinop(
-                                                                   "&&",
-                                                                   codegen::exprBinop(
-                                                                       "!=",
-                                                                       codegen::exprMember(
-                                                                           site,
+                   s.iff(codegen::exprBinop("!=", "_mj2x_regc_rc", "NULL"),
+                         [&](CSourceStream& t) {
+                             // 检查顺序：receiverClass 精确匹配（IsSameObject，HotSpot 下
+                             // 等价指针比较）优先——双槽各自命中一个精确 receiver 类，
+                             // 交替 receiver 时每次调用只需 1 次检查（issue #780 双槽
+                             // 缓存的正确用法）；implClass 的 IsInstanceOf 作为兜底，
+                             // 保留「已转换实现类的未覆盖子类」语义（子类 receiver 精确
+                             // 匹配 miss 后仍能命中 implClass，不改变分派结果）。
+                             t.iff(codegen::exprBinop(
+                                       "&&",
+                                       codegen::exprBinop("!=",
+                                                          codegen::exprMember(site,
+                                                                              "receiverClass"),
+                                                          "NULL"),
+                                       shortCircuitRefCheck(
+                                           "(*_mj2x_regc_env)->IsSameObject",
+                                           codegen::exprMember(site, "receiverClass"),
+                                           "_mj2x_regc_rc")),
+                                   [&](CSourceStream& u) {
+                                       u.emitLine("_mj2x_regc_m = " +
+                                                  codegen::exprMember(site, "method") + ";");
+                                   },
+                                   [&](CSourceStream& t2) {
+                                       // 槽 1（交替 receiver 优化，issue #780）：槽 0 未命中
+                                       // 时检查上一 receiver 的精确类（同样 IsSameObject）。
+                                       t2.iff(codegen::exprBinop(
+                                                  "&&",
+                                                  codegen::exprBinop(
+                                                      "!=",
+                                                      codegen::exprMember(site,
+                                                                          "receiverClass1"),
+                                                      "NULL"),
+                                                   shortCircuitRefCheck(
+                                                       "(*_mj2x_regc_env)->IsSameObject",
+                                                       codegen::exprMember(site,
                                                                            "receiverClass1"),
-                                                                       "NULL"),
-                                                                   codegen::exprCall(
-                                                                       "(*_mj2x_regc_env)"
-                                                                       "->IsSameObject",
-                                                                       {"_mj2x_regc_env",
+                                                       "_mj2x_regc_rc")),
+                                              [&](CSourceStream& u) {
+                                                  u.emitLine("_mj2x_regc_m = " +
+                                                             codegen::exprMember(site,
+                                                                                 "method1") +
+                                                             ";");
+                                              },
+                                              [&](CSourceStream& t3) {
+                                                  // 快路径 2（单 JNI）：receiver 是已转换
+                                                  // 实现类（或其未覆盖子类）→ 直接复用
+                                                  // method/fn。implClass 只在 fn != NULL 时设置。
+                                                  t3.iff(codegen::exprBinop(
+                                                            "&&",
+                                                            codegen::exprBinop(
+                                                                "!=",
+                                                                codegen::exprMember(
+                                                                    site, "implClass"),
+                                                                "NULL"),
+                                                                shortCircuitRefCheck(
+                                                                    "(*_mj2x_regc_env)"
+                                                                    "->IsInstanceOf",
+                                                                    "_mj2x_regc_rcv",
+                                                                    codegen::exprMember(
+                                                                        site, "implClass"))),
+                                                        [&](CSourceStream& u) {
+                                                            u.emitLine(
+                                                                "_mj2x_regc_m = " +
+                                                                codegen::exprMember(site,
+                                                                                    "method") +
+                                                                ";");
+                                                        },
+                                                        [&](CSourceStream& t4) {
+                                                            t4.iff(
+                                                                codegen::exprBinop(
+                                                                    "&&",
+                                                                    codegen::exprBinop(
+                                                                        "!=",
                                                                         codegen::exprMember(
                                                                             site,
-                                                                            "receiverClass1"),
-                                                                        "_mj2x_regc_rc"})),
-                                                               [&](CSourceStream& u) {
-                                                                   u.emitLine(
-                                                                       "_mj2x_regc_m = " +
-                                                                       codegen::exprMember(
-                                                                           site, "method1") +
-                                                                       ";");
-                                                               },
-                                                               [&](CSourceStream& u) {
-                                                                   u.emitLine(
-                                                                       "_mj2x_regc_m = " +
-                                                                       codegen::exprCall(
-                                                                           "_mj2x_regc_"
-                                                                           "resolved_call_site_"
-                                                                           "refresh",
-                                                                           {"&" + site,
+                                                                            "implClass1"),
+                                                                        "NULL"),
+                                                                        shortCircuitRefCheck(
+                                                                            "(*_mj2x_regc_env)"
+                                                                            "->IsInstanceOf",
                                                                             "_mj2x_regc_rcv",
-                                                                            "_mj2x_regc_rc",
-                                                                            cStringLiteral(
-                                                                                ins.method.name),
-                                                                            cStringLiteral(
-                                                                                ins.method
-                                                                                    .desc)}) +
-                                                                       ";");
-                                                               });
-                                                       });
-                                             });
-                                  });
-                            t.emitLine(codegen::exprCall("(*_mj2x_regc_env)->DeleteLocalRef",
-                                                        {"_mj2x_regc_env", "_mj2x_regc_rc"}) +
-                                       ";");
+                                                                            codegen::exprMember(
+                                                                                site,
+                                                                                "implClass1"))),
+                                                                  [&](CSourceStream& u) {
+                                                                      u.emitLine(
+                                                                        "_mj2x_regc_m = " +
+                                                                        codegen::exprMember(
+                                                                            site, "method1") +
+                                                                        ";");
+                                                                },
+                                                                [&](CSourceStream& u) {
+                                                                    u.emitLine(
+                                                                        "_mj2x_regc_m = " +
+                                                                        codegen::exprCall(
+                                                                            "_mj2x_regc_"
+                                                                            "resolved_call_site_"
+                                                                            "refresh",
+                                                                            {"&" + site,
+                                                                             "_mj2x_regc_rcv",
+                                                                             "_mj2x_regc_rc",
+                                                                             cStringLiteral(
+                                                                                 ins.method.name),
+                                                                             cStringLiteral(
+                                                                                 ins.method
+                                                                                     .desc)}) +
+                                                                        ";");
+                                                                });
+                                                        });
+                                              });
+                                   });
+                   if (!omitDeleteLocalRef) {
+                       t.emitLine(codegen::exprCall("(*_mj2x_regc_env)->DeleteLocalRef",
+                                                    {"_mj2x_regc_env", "_mj2x_regc_rc"}) +
+                                  ";");
+                   }
                         });
-                  for (size_t i = 0; i < paramTags.size(); ++i) {
+                   for (size_t i = 0; i < paramTags.size(); ++i) {
                       s.emitLine(codegen::exprMember(
                                      codegen::exprIndex("_mj2x_regc_va",
                                                         ca::str::format_std("{}", i)),

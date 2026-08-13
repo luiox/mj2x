@@ -1,4 +1,4 @@
-﻿/// @file regc_intrinsic_registry.hpp
+/// @file regc_intrinsic_registry.hpp
 /// @brief Registry of JDK call sites that RegC can lower as native intrinsics.
 #pragma once
 
@@ -32,6 +32,11 @@ enum class RegCIntrinsicEmitKind
     StringBuilderInit,
     StringBuilderAppend,
     StringBuilderMethod,
+    /// Object.getClass()：语义等价 JNI GetObjectClass（返回 receiver 运行时类），
+    /// 发射为 GetObjectClass 表达式而非 resolved dispatch（省 GetObjectClass +
+    /// IsSameObject 检查 + DeleteLocalRef 每调用 2-3 个 JNI）。GetObjectClass
+    /// 本身不抛异常；NULL receiver 的 NPE 由发射点处理。
+    ObjectGetClass,
 };
 
 /// @brief Native object state carried by wrapper-class intrinsics.

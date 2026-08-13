@@ -461,6 +461,31 @@ bool bodyProducesLocalRefs(const ca::str::Utf8StringRef& body)
     return false;
 }
 
+/// 判定「私有实例方法 + this receiver」调用点：JVM 语义下 private 方法无覆写、
+/// 精确分派到声明类实现，因此可跳过 resolved dispatch 的运行时类检查
+/// （GetObjectClass + IsSameObject，2 JNI/调用）。已转换的 private 实现 →
+/// 直接调用 regc 函数（0 JNI）；未转换 → cached instance 调用（GetMethodID
+/// 缓存 + CallXxxMethodA）。classIndex 缺失或方法未找到时保守返回 false。
+bool isPrivateThisCall(const RegCFunctionEmitState& state, const RegInstruction& ins,
+                       const RegFunction& fn)
+{
+    if (ins.args.empty() || fn.parameters.empty()) return false;
+    const RegOperand& receiver = ins.args[0];
+    if (receiver.kind != RegOperandKind::Register) return false;
+    if (receiver.reg.value != fn.parameters[0].id.value) return false;
+    if (state.classIndex == nullptr) return false;
+    CompilerClass* cls = state.classIndex->getClass(ins.method.owner.to_std_string());
+    if (cls == nullptr || cls->classNode == nullptr) return false;
+    const std::string name = ins.method.name.to_std_string();
+    const std::string desc = ins.method.desc.to_std_string();
+    for (const auto& mn : cls->classNode->methods) {
+        if (mn->name.to_std_string() == name && mn->desc.to_std_string() == desc) {
+            return (mn->access & jbytecode::core::Opcodes::ACC_PRIVATE) != 0;
+        }
+    }
+    return false;
+}
+
 bool emitExceptionDispatch(CSourceStream&                        out,
                            const std::vector<const RegExceptionRegion*>&     regions,
                            const RegBlock* block, SSAType returnType,
@@ -787,9 +812,23 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             (!staticCall && !selfCall) ? addInstanceMethodCache(state, ins) : ca::str::Utf8String();
         const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
         const bool dynamicInstance = !staticCall && !selfCall && !instanceCacheName.empty();
-        const bool useResolved = dynamicInstance && state.resolvedDispatch && !state.traceCalls;
+        const bool privateThis =
+            dynamicInstance && isPrivateThisCall(state, ins, fn) && !state.traceCalls;
+        // JDK/库类调用点：方法 owner 不在编译输入（isLibrary），receiver 不可能是
+        // 已转换类 → resolved 的 GetObjectClass + IsSameObject 类检查是纯开销
+        // （2 JNI/调用）。cached instance 调用（GetMethodID 缓存 + CallXxxMethodA）
+        // 对任意 receiver 语义正确（JNI 虚分派按实际对象类找覆写），直接走 cached。
+        const bool libraryOwner = [&]() {
+            if (state.classIndex == nullptr) return false;
+            CompilerClass* cls = state.classIndex->getClass(ins.method.owner.to_std_string());
+            // 不在编译索引（JDK/第三方，index 通常只含编译输入）或标记为库的类：
+            // receiver 不可能是已转换类 → cached（owner 解析）语义正确且省 JNI。
+            return cls == nullptr || cls->isLibrary;
+        }();
+        const bool useResolved = dynamicInstance && state.resolvedDispatch && !state.traceCalls &&
+                                 !privateThis && !libraryOwner;
         const bool inlineCached =
-            !selfCall && !useResolved && (staticCall || !instanceCacheName.empty()) &&
+            !selfCall && !useResolved && !privateThis && (staticCall || !instanceCacheName.empty()) &&
             !(state.traceCalls && !staticCall && !ins.hasDest);
         const auto emitCall = [&](CSourceStream& u) {
             if (useResolved) {
@@ -798,11 +837,60 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                          state.cachePool->resolvedCallSite(ins.method.owner,
                                                                            ins.method.name,
                                                                            ins.method.desc),
-                                         argumentExpressions);
+                                         argumentExpressions,
+                                         state.hasLocalFrame);
+            }
+            else if (privateThis) {
+                // 私有方法 + this：无覆写、精确分派。已转换实现 → 直接调用
+                // regc 函数（0 JNI，参数 = this + 实参）；未转换 → cached
+                // instance 调用（省 resolved 的 GetObjectClass + IsSameObject）。
+                const std::string methodKey = ins.method.owner.to_std_string() + "\n" +
+                                              ins.method.name.to_std_string() + "\n" +
+                                              ins.method.desc.to_std_string();
+                const auto direct = state.convertedFunctions->find(methodKey);
+                bool        safeDirect = true;
+                if (state.indyFunctions != nullptr &&
+                    state.indyFunctions->count(methodKey) != 0) {
+                    safeDirect = false;
+                }
+                for (const auto& arg : ins.args) {
+                    if (nativeObjectFor(state, arg) != nullptr) {
+                        safeDirect = false;
+                        break;
+                    }
+                }
+                if (safeDirect && direct != state.convertedFunctions->end()) {
+                    // 前向声明：目标函数定义可能在本调用点之后（同类方法转换
+                    // 顺序不保证），无声明时 C 隐式 int() 声明与 REF 返回值冲突
+                    // （C2040）。参数类型与 emitFunction 的参数发射一致
+                    // （receiver = void* r0，后续按实参 SSAType）。
+                    u.appendLineStart("static ")
+                        .append(ins.hasDest ? cType(ins.dest.type) : "void")
+                        .append(" ")
+                        .append(direct->second)
+                        .append("(");
+                    for (size_t i = 0; i < ins.args.size(); ++i) {
+                        if (i) u.append(", ");
+                        u.append(cType(ins.args[i].type))
+                            .append(" r")
+                            .append(ca::str::format_std("{}", i));
+                    }
+                    u.append(");").newLine();
+                    if (ins.hasDest) u.appendLineStart(destName).append(" = ");
+                    u.append(direct->second)
+                        .append("(")
+                        .append(directCallArgs(ins.args, argumentExpressions))
+                        .append(");")
+                        .newLine();
+                }
+                else {
+                    // private 无覆写：按声明 owner 解析即可（免每调用 GetObjectClass）。
+                    emitCachedCall(u, ins, false, instanceCacheName, argumentExpressions, true);
+                }
             }
             else if (inlineCached) {
                 emitCachedCall(u, ins, staticCall, staticCall ? cacheName : instanceCacheName,
-                               argumentExpressions);
+                               argumentExpressions, libraryOwner && !staticCall);
             }
             else if (ins.hasDest) {
                 u.appendLineStart(destName).append(" = ");
