@@ -125,11 +125,12 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - null trap
 - integer div / rem trap(走 R3 runtime ABI)
 - generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池。动态 descriptor 与 runtime `class_name` 不进入全局 cache，避免破坏 class-loader identity 和类卸载语义；决策理由见 `regc_codegen.md` §6
-- **JDK intrinsic(Math / wrapper parse/toString/compare/value-unbox / Random next* / String UTF-16 hot paths / mutable String CRT 链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接调用 CRT ABI 或 TU-local cache helper
+- **JDK intrinsic(Math / Integer/Long 位操作 / wrapper parse/toString/compare/value-unbox / Random next* / String UTF-16 hot paths / mutable String CRT 链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接调用 CRT ABI 或 TU-local cache helper
 
 **JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
 
 - `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
+- `java.lang.Integer/Long` 位操作:rotateLeft/rotateRight、reverse/reverseBytes、bitCount、numberOfLeadingZeros/numberOfTrailingZeros、highestOneBit/lowestOneBit、signum——纯 C 计算(`mj2x_intrinsic_{int,long}_*`),语义与 OpenJDK 一致(distance 按 32/64 取模、无符号旋转/反转、符号位仅扩展在返回值),CRT 实现与 JDK 交叉验证(`mj2x-crt/test/mj2x_regc_intrinsic_test.c`);`RuntimeFunction` emitKind 纯计算 intrinsic 发射为纯 C 表达式并省略 ExceptionCheck(异常检查稀疏化,见 `regc_codegen.md` §4)
 - `java.lang.Integer.parseInt(String[,radix])`、`Long.parseLong(String[,radix])`、`Short.parseShort(String[,radix])`、`Byte.parseByte(String[,radix])`:native digit parser 解析并检查目标类型范围,NumberFormatException 经 context 回调路由
 - `java.lang.Boolean.parseBoolean(String)`:按 UTF-16 ASCII 大小写不敏感匹配 `true`;`Float.parseFloat(String)` / `Double.parseDouble(String)` 通过专用 TU 级缓存调用 JDK parser,保留 NaN、Infinity、hex float 与异常语义
 - `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.compare`:无状态 compare 与基础整型/布尔/字符 `toString` 走 `mj2x-crt` C ABI;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式,`Float/Double.compare` 显式处理 NaN 与 signed zero 语义
@@ -146,6 +147,12 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
   nextInt/nextLong/nextBoolean/nextFloat/nextDouble 不发 JNI call
 
 **intrinsic 限制(当前)**:Random shadow state 仍只支持非逃逸路径。StringBuilder/StringBuffer 仅覆盖 registry 中的常用构造、append 与 range/capacity API;未登记方法正常走 Java fallback。`String.split` 的 native fast path 不实现正则,所有正则语义由 JDK 保持。
+
+**RegC 性能优化(2026-08,issue #778/#780)与对比基线**:
+
+- **异常检查稀疏化(#778 P2)**:纯计算 intrinsic(`RuntimeFunction` emitKind:位操作/Math 等)发射为纯 C 表达式、不经过 JNI、不可能抛异常,异常分发前复判省略 ExceptionCheck;Arithmetic 热循环探针 66x→2x
+- **resolved native dispatch 双槽缓存(#780)**:站点级缓存按 receiver 精确类持有 `{method, fn, implClass, receiverClass}` global-ref 组;refresh 只写槽 1、槽 0 保留上次命中,A/B 交替 receiver 时两槽各自命中避免每轮 refresh(每轮 5-6 个 JNI),命中槽 1 时交换让热 receiver 留在槽 0
+- **JDK 17/21 矩阵 vs JNIC 竞品(os30)**:13-probe jvm-obf-tester 总耗时 JDK17 2.25x→1.16x(122ms vs 105ms,Control flow 0.87x 已反超),JDK21 1.56x(157.7ms vs 101.3ms);报告见 `benchmark/results/2026-08-13-jvm-obf-tester-os30.md`(含 javap 覆盖率审计:RegC native 74.7% vs os30 61.6%)
 
 **CLI**:
 

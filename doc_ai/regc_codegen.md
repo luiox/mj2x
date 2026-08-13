@@ -93,11 +93,13 @@ emitter 逐条消费 RegIR 指令。每类指令的核心问题是"如何在不�
 方法调用是最复杂的指令，因为它要同时处理：intrinsic 识别、参数物化、self-call 优化、按 receiver 类解析。
 
 **调用生成的决策顺序**：
-1. **先试 intrinsic**：`RegCIntrinsicRegistry` 按 owner/name/desc 识别 JDK 常用方法（Math、parseInt、wrapper、Random、String/StringBuilder）。命中则生成 runtime 直调，绕过 JNI 派发（策略与 shadow state 见 `regc_intrinsic.md`）。
+1. **先试 intrinsic**：`RegCIntrinsicRegistry` 按 owner/name/desc 识别 JDK 常用方法（Math、Integer/Long 位操作、parseInt、wrapper、Random、String/StringBuilder）。命中则生成 runtime 直调，绕过 JNI 派发（策略与 shadow state 见 `regc_intrinsic.md`）。
 2. **self static call → 直接 C 调用**：同类同签名的静态调用，绕过 JNI helper 直接调 `regc_*`（C 函数递归）。这是免费的性能优化，且语义无损。
 3. **否则 → `_mj2x_regc_call_*` 系列**：走 JNI `Call*MethodA`，参数由描述符驱动的 `va_list` 打包成 `jvalue[]`。
 
 **实例方法解析的关键正确性问题**：jmethodID **必须按 receiver 的实际运行时类解析**，不能按声明 owner 解析。当 owner 是抽象类/接口时（如 `InputStream.read`），按 owner 解析拿到的是抽象条目，调用会触发 `AbstractMethodError` 甚至 JIT 内联路径崩溃。helper 对此的处理：仅当 receiver 类 == 声明 owner 时复用缓存的 id 并写回，子类 receiver 每次重新解析。
+
+**resolved native dispatch（双槽缓存，issue #780）**：对已转换实现类（或 owner 未覆盖方法）的动态实例调用走 resolved dispatch——站点级缓存 `mj2x_regc_resolved_call_site_t` 持有 `{method, fn, implClass, receiverClass}` 完整组（receiverClass 为 global ref 钉住），快路径单 JNI 直调实现类函数。`_mj2x_regc_resolved_call_site_refresh` 只写槽 1，槽 0 保留上次命中：A/B 交替 receiver 时两槽各自命中，避免每轮 refresh（每轮 5-6 个 JNI）；命中槽 1 时两槽交换，让热 receiver 留在槽 0。method/fn/implClass/receiverClass 必须来自同一次解析，杜绝 methodID 与 receiver 错配。
 
 **mutable string 参数物化**：当调用参数是 StringBuilder/StringBuffer 的 shadow state 时，先物化成 Java 句柄再传（见 §5），且整个调用被 `if (!_mj2x_regc_exception_check())` 守护，避免物化抛异常后继续执行调用。
 
@@ -115,6 +117,7 @@ RegIR 有独立的 `Intrinsic` 指令（区别于上面 Call 分支的方法调�
 JVM 的 try/catch 在 RegIR 里表示为 `RegExceptionRegion`（保护块集合 + handler 块 + 捕获类型 + 异常寄存器）。生成策略：
 
 - **每条可能抛异常的指令后插入检查**：`if (_mj2x_regc_exception_check()) { ... }`。这是 fail-safe 的——宁可多检查（C 分支开销极小）也不漏掉异常传播。
+- **异常检查稀疏化（issue #778 P2）**：SSA 阶段无法区分 intrinsic 与普通调用，统一标 mayThrow，导致热循环每轮都做 ExceptionCheck；emitter 在发射异常分发前用 `isPureRuntimeIntrinsic` 复判——`RuntimeFunction` emitKind 的纯计算 intrinsic（位操作/Math 等）发射为纯 C 表达式调用，不经过 JNI、不可能抛异常，省略该检查（与 `emitIntrinsicCall` 的发射行为一致，该分支无 native-state 回退）。Arithmetic 热循环探针 66x→2x。
 - **按异常表顺序匹配**：取到 pending exception 后，按 region 顺序逐个 `_mj2x_regc_exception_matches`，命中则把异常装入 handler 的合成寄存器、复制 CFG 边、`goto` handler 块。空捕获类型视为 catch-all（finally）。
 - **未命中则重抛**：没有任何 handler 接住时，`_mj2x_regc_throw` 重新抛出，保持 Java 的向上传播语义，然后走默认返回 + cleanup。
 - **多 throw 站点**：用单调递增的 dispatch index 给每个异常临时量编号（`ex_<n>`），避免命名冲突。
