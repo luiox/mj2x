@@ -2,6 +2,7 @@
 
 #include <gmock/gmock.h>
 
+#include <stdexcept>
 #include <string>
 
 #include "mj2x/codegen/c_helpers.hpp"
@@ -51,6 +52,35 @@ TEST(CSourceStreamTest, EmitRawPreservesContentVerbatim)
               "extern \"C\" {\n"
               "    void f(void);\n"
               "}\n");
+}
+
+TEST(CSourceStreamTest, EmitMultilineAppliesIndentToEachLine)
+{
+    // snippet 模板只保留块内相对缩进，首层缩进由 emitMultiline 按当前 indent 平移。
+    CSourceStream s;
+    s.emitLine("void f(void) {");
+    s.indent();
+    s.emitMultiline("if (cond) {\n    do_thing();\n}\n");
+    s.dedent();
+    s.emitLine("}");
+    EXPECT_EQ(s.str(),
+              "void f(void) {\n"
+              "    if (cond) {\n"
+              "        do_thing();\n"
+              "    }\n"
+              "}\n");
+}
+
+TEST(CSourceStreamTest, EmitMultilineKeepsBlankLineUnindented)
+{
+    // 空行保留为空行（不加缩进，避免行尾空格）。
+    CSourceStream s;
+    s.indent();
+    s.emitMultiline("first\n\nthird\n");
+    EXPECT_EQ(s.str(),
+              "    first\n"
+              "\n"
+              "    third\n");
 }
 
 TEST(IncludeSetTest, DeduplicatesAndGroupsSystemBeforeProject)
@@ -129,9 +159,10 @@ TEST(CodeSnippetTest, RendersTypedSnippetVariables)
               "stack[++sp].i = (jint)7;");
 }
 
-TEST(CodeSnippetTest, LeavesUnknownVariablesVisible)
+TEST(CodeSnippetTest, ThrowsOnUnknownVariable)
 {
-    EXPECT_EQ(renderSnippet("${known} ${missing}", {{"known", "ok"}}), "ok ${missing}");
+    // 未定义变量属契约违背，尽早抛异常而非把 ${missing} 留在生成代码里。
+    EXPECT_THROW(renderSnippet("${known} ${missing}", {{"known", "ok"}}), std::runtime_error);
 }
 
 }   // namespace

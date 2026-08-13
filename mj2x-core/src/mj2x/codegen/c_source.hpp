@@ -18,6 +18,7 @@
 /// 模式可无缝迁移到这里，无需跨容器转换。
 #pragma once
 
+#include "libca/str/format.hpp"
 #include "libca/str/utf8_string.hpp"
 
 #include <cstdint>
@@ -101,6 +102,29 @@ public:
     ///          controls all whitespace (e.g. raw-string runtime templates).
     void emitRaw(std::string_view text) { appendStr(text); }
 
+    /// @brief 按当前缩进逐行发射多行文本。
+    /// @details 将 text 按 '\n' 拆分：每个非空行写入「当前缩进 + 行内容 + 换行」，
+    ///          空行只写换行（保留空行但不加缩进，避免行尾空格）。用于把 snippet
+    ///          渲染结果接入 CSourceStream 的缩进管理——snippet 模板只需保留块内
+    ///          相对缩进，首层缩进由本方法按当前 indent 自动平移，调用点处于任意
+    ///          缩进层都能正确排版（替代旧式「模板自带 4 空格 + out.append」）。
+    void emitMultiline(std::string_view text)
+    {
+        size_t pos = 0;
+        while (pos < text.size()) {
+            const size_t end     = text.find('\n', pos);
+            const size_t lineLen = (end == std::string_view::npos) ? (text.size() - pos) : (end - pos);
+            std::string_view line(text.data() + pos, lineLen);
+            if (!line.empty()) {
+                writeIndent();
+                appendStr(line);
+            }
+            out_.append("\n");
+            if (end == std::string_view::npos) break;
+            pos = end + 1;
+        }
+    }
+
     /// @brief 在当前缩进处开始一条逻辑行，不追加换行。
     /// @details 写入当前缩进后返回，调用方继续用 `append` 拼该行剩余片段，
     ///          最后用 `newLine()` 收尾。与 Utf8StringBuilder 多片段拼接模式对接：
@@ -158,7 +182,7 @@ public:
     /// @param elseBody  为空（默认）时省略 else 分支。
     void iff(std::string_view condition, const CBody& thenBody, const CBody& elseBody = CBody())
     {
-        emitLine("if (" + std::string(condition) + ") {");
+        emitLine(ca::str::format_std("if ({}) {{", condition));
         {
             IndentGuard g(*this);
             thenBody(*this);
@@ -249,7 +273,7 @@ public:
     /// @brief 赋值语句：`dest = expr;`。
     void assign(std::string_view dest, std::string_view expr)
     {
-        emitLine(std::string(dest) + " = " + std::string(expr) + ";");
+        emitLine(ca::str::format_std("{} = {};", dest, expr));
     }
 
     /// @brief 变量声明：`type name;` 或 `type name = init;`。
@@ -257,11 +281,10 @@ public:
                      std::string_view init = {})
     {
         if (init.empty()) {
-            emitLine(std::string(type) + " " + std::string(name) + ";");
+            emitLine(ca::str::format_std("{} {};", type, name));
         }
         else {
-            emitLine(std::string(type) + " " + std::string(name) + " = " + std::string(init) +
-                     ";");
+            emitLine(ca::str::format_std("{} {} = {};", type, name, init));
         }
     }
 
@@ -272,14 +295,14 @@ public:
             emitLine("return;");
         }
         else {
-            emitLine("return " + std::string(expr) + ";");
+            emitLine(ca::str::format_std("return {};", expr));
         }
     }
 
     /// @brief while 循环：`while (cond) { body }`。
     void while_(std::string_view cond, const CBody& body)
     {
-        emitLine("while (" + std::string(cond) + ") {");
+        emitLine(ca::str::format_std("while ({}) {{", cond));
         {
             IndentGuard g(*this);
             body(*this);
@@ -290,7 +313,7 @@ public:
     /// @brief for 循环：`for (header) { body }`，header 不含括号。
     void for_(std::string_view header, const CBody& body)
     {
-        emitLine("for (" + std::string(header) + ") {");
+        emitLine(ca::str::format_std("for ({}) {{", header));
         {
             IndentGuard g(*this);
             body(*this);
@@ -302,7 +325,7 @@ public:
     /// @details case 分支体用 `case_` 或 `block` 发出；`break`/`goto` 由分支体内显式发出。
     void switch_(std::string_view expr, const CBody& body)
     {
-        emitLine("switch (" + std::string(expr) + ") {");
+        emitLine(ca::str::format_std("switch ({}) {{", expr));
         {
             IndentGuard g(*this);
             body(*this);
@@ -319,7 +342,7 @@ public:
             emitLine("default: {");
         }
         else {
-            emitLine("case " + std::string(label) + ": {");
+            emitLine(ca::str::format_std("case {}: {{", label));
         }
         {
             IndentGuard g(*this);
@@ -331,7 +354,7 @@ public:
     /// @brief goto 语句：`goto <label>;`。
     void goto_(std::string_view label)
     {
-        emitLine("goto " + std::string(label) + ";");
+        emitLine(ca::str::format_std("goto {};", label));
     }
 
     /// @brief 标签：`<name>:`。
@@ -340,7 +363,7 @@ public:
     {
         const int saved = indentLevel_;
         indentLevel_    = 0;
-        emitLine(std::string(name) + ":");
+        emitLine(ca::str::format_std("{}:", name));
         indentLevel_ = saved;
     }
 
@@ -348,7 +371,7 @@ public:
     /// @details 内容不经转义，调用方负责 escapeCommentIdent（混淆符号安全）。
     void comment(std::string_view text)
     {
-        emitLine("// " + std::string(text));
+        emitLine(ca::str::format_std("// {}", text));
     }
 
     /// @brief 调用语句：`name(args);`。

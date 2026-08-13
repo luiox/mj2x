@@ -618,7 +618,6 @@ struct StackCBackend::Impl
 
 enum class StackCSnippet
 {
-    PushStackValue,
     LocalLoad,
     LocalStore,
     BinaryUnsignedWrap,

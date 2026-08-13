@@ -1,5 +1,7 @@
 #include "mj2x/codegen/code_snippet.hpp"
 
+#include <stdexcept>
+
 namespace mj2x::codegen {
 
 std::string renderSnippet(std::string_view text, const SnippetVars& vars)
@@ -16,7 +18,10 @@ std::string renderSnippet(std::string_view text, const SnippetVars& vars)
                     out += found->second;
                 }
                 else {
-                    out += text.substr(i, end - i + 1);
+                    // 未定义变量属调用方契约违背（漏传 var）：抛异常以便尽早暴露，
+                    // 而非把 ${name} 原样留在生成代码里（旧式的静默保留隐患）。
+                    throw std::runtime_error(
+                        "renderSnippet: undefined variable '${" + key + "}'");
                 }
                 i = end + 1;
                 continue;

@@ -16,7 +16,6 @@ using codegen::CSourceStream;
 static const codegen::CodeSnippetSet<StackCSnippet>& stackCSnippets()
 {
     static const codegen::CodeSnippetSet<StackCSnippet> snippets({
-        {StackCSnippet::PushStackValue, "    stack[++sp]${acc} = ${value};\n"},
         {StackCSnippet::LocalLoad, "    stack[++sp]${acc} = locals[${slot}]${acc};\n"},
         {StackCSnippet::LocalStore, "    locals[${slot}]${acc} = stack[sp--]${acc};\n"},
         {StackCSnippet::BinaryUnsignedWrap,
