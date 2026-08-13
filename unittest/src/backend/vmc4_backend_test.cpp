@@ -571,7 +571,8 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
                           VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
                           VmOpcode::LoadField, VmOpcode::StoreField,
                           VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
-                          VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw}) {
+                          VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw,
+                          VmOpcode::Switch}) {
         bytes.push_back(instance.opcodeFor(op));
     }
     return bytes;
@@ -599,8 +600,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
 }
 
 // P2-2：映射是支持集上的双射（互不相同）+ handler 顺序是排列。
-// Phase 2.C 起支持集 = 18 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField
-// + ArrayLoad/ArrayStore + Allocate/Intrinsic + Throw）。
+// Phase 2.C 起支持集 = 18 语义；Switch（Phase 3 增补）加入后 = 19。
 TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
 {
     Vmc4Options opts;
@@ -618,7 +618,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
     EXPECT_EQ(bytes[0], instance.haltByte());
 
     const auto& order = instance.handlerOrder();
-    EXPECT_EQ(order.size(), 18u) << "handler order covers the 18 supported opcodes";
+    EXPECT_EQ(order.size(), 19u) << "handler order covers the 19 supported opcodes";
     std::vector<VmOpcode> sortedOrder = order;
     std::sort(sortedOrder.begin(), sortedOrder.end(),
               [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
@@ -627,7 +627,8 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
                                       VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
                                       VmOpcode::SuperDec, VmOpcode::LoadField, VmOpcode::StoreField,
                                       VmOpcode::ArrayLoad, VmOpcode::ArrayStore, VmOpcode::Call,
-                                      VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw};
+                                      VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw,
+                                      VmOpcode::Switch};
     EXPECT_EQ(sortedOrder, expected) << "handler order must be a permutation of the supported set";
 }
 
@@ -1035,7 +1036,9 @@ TEST(Vmc4BackendTest, EncodesThrowInstruction)
 }
 
 // P2-14：Switch（TABLESWITCH）。
-TEST(Vmc4BackendTest, FailClosedOnSwitchTerminator)
+// switch terminator（tableswitch/lookupswitch 统一形态，Phase 3 增补）：
+// 编码为 Switch opcode + key 表，不再 fail-closed。
+TEST(Vmc4BackendTest, EncodesSwitchTerminator)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
@@ -1059,8 +1062,17 @@ TEST(Vmc4BackendTest, FailClosedOnSwitchTerminator)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              1, 1, instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    // 字节流含 Switch 的实例字节（canonical 或 ALT 别名）。
+    const auto& opBytes = instance.opcodeBytesFor(VmOpcode::Switch);
+    const bool found =
+        std::any_of(opBytes.begin(), opBytes.end(), [&](uint8_t b) {
+            return std::find(prog->bytecodes.begin(), prog->bytecodes.end(), b) !=
+                   prog->bytecodes.end();
+        });
+    EXPECT_TRUE(found) << "switch must be encoded as Switch opcode";
+    // blockTargets 覆盖 case/default 目标（4 个可达块：头部 + 3 个 case 块）。
+    EXPECT_GE(prog->blockTargets.size(), 4u);
 }
 
 // P2-15：异常区域（try/catch 表，Phase 2.C 起支持）——编码为区域表 + 块活跃条目。
@@ -1755,6 +1767,8 @@ TEST(Vmc4BackendTest, RuntimeProtectionInjection)
         << injectedResult.text;
     EXPECT_NE(injectedResult.text.find("return (jint)0;"), std::string::npos)
         << injectedResult.text;
+}
+
 // 后续项：CHECKCAST（ReferenceCast）→ castcheck:<desc> intrinsic
 // （IsInstanceOf + 失败抛 ClassCastException，null 通过）——真实样本转化率
 // 第一瓶颈（snake/jvm-obf-tester 主要 fail-closed 原因）。
@@ -1784,8 +1798,13 @@ TEST(Vmc4BackendTest, EncodesCheckCast)
     EXPECT_EQ(prog->intrinsics[0].name, "castcheck:java/lang/String");
     EXPECT_EQ(prog->intrinsics[0].arg0Kind, VmJniKind::Ref);
     EXPECT_EQ(prog->intrinsics[0].retKind, VmJniKind::Ref);
-    // 字节流含 Intrinsic opcode（canonical 字节）。
-    const auto it = std::find(prog->bytecodes.begin(), prog->bytecodes.end(),
-                              static_cast<uint8_t>(instance.opcodeFor(VmOpcode::Intrinsic)));
-    EXPECT_NE(it, prog->bytecodes.end()) << "checkcast must be encoded as Intrinsic opcode";
+    // 字节流含 Intrinsic 的实例字节（canonical 或 ALT 别名——emitOpcode 按
+    // nonce 选字节，两者都可能出现）。
+    const auto& opBytes = instance.opcodeBytesFor(VmOpcode::Intrinsic);
+    const bool found =
+        std::any_of(opBytes.begin(), opBytes.end(), [&](uint8_t b) {
+            return std::find(prog->bytecodes.begin(), prog->bytecodes.end(), b) !=
+                   prog->bytecodes.end();
+        });
+    EXPECT_TRUE(found) << "checkcast must be encoded as Intrinsic opcode";
 }

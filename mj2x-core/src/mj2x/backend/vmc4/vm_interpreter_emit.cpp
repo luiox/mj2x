@@ -343,6 +343,23 @@ const char* kHandlerThrow =
     "            pc -= 3;  /* 异常归属 = athrow 所在块（块反查按抛出指令 pc） */\n"
     "            goto mj2x_vm_exc;\n";
 
+/// SWITCH（tableswitch/lookupswitch 统一形态）：线性扫描 key 表，命中取对应
+/// target，未命中取 default；pc = targets[target]。key 按 I32 编码（字节码
+/// switch 只支持 int）。
+const char* kHandlerSwitch =
+    "            unsigned int value_reg = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int default_t = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int count = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            int32_t key = regs[value_reg].i;\n"
+    "            unsigned int target = default_t;\n"
+    "            for (unsigned int i = 0; i < count; ++i) {\n"
+    "                int32_t ck = (int32_t)((unsigned)code[pc] | ((unsigned)code[pc+1] << 8) |\n"
+    "                                       ((unsigned)code[pc+2] << 16) | ((unsigned)code[pc+3] << 24)); pc += 4;\n"
+    "                unsigned int t = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "                if (key == ck) target = t;\n"
+    "            }\n"
+    "            pc = targets[target];\n";
+
 /// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
 /// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
 struct HandlerEntry
@@ -372,6 +389,7 @@ const HandlerEntry kHandlers[] = {
     {VmOpcode::Allocate,   "ALLOCATE",    kHandlerAllocate},
     {VmOpcode::Intrinsic,  "INTRINSIC",   kHandlerIntrinsic},
     {VmOpcode::Throw,      "THROW",       kHandlerThrow},
+    {VmOpcode::Switch,     "SWITCH",      kHandlerSwitch},
 };
 constexpr size_t kHandlerCount = sizeof(kHandlers) / sizeof(kHandlers[0]);
 

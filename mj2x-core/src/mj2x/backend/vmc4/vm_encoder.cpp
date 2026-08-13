@@ -31,6 +31,15 @@ void emitU16(std::vector<uint8_t>& out, uint16_t v)
     out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
 }
 
+void emitI32(std::vector<uint8_t>& out, int32_t v)
+{
+    const uint32_t u = static_cast<uint32_t>(v);
+    out.push_back(static_cast<uint8_t>(u & 0xFF));
+    out.push_back(static_cast<uint8_t>((u >> 8) & 0xFF));
+    out.push_back(static_cast<uint8_t>((u >> 16) & 0xFF));
+    out.push_back(static_cast<uint8_t>((u >> 24) & 0xFF));
+}
+
 /// @brief SSAType → VmType 映射（计算类型 + 对象引用）。
 ///
 /// @details
@@ -271,9 +280,17 @@ struct EncoderState
                     } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
                         plan(block.get(), term.trueTarget, 0);
                         plan(block.get(), term.falseTarget, 1);
+                    } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                        // Switch 每条 case 边 + default 边都可能带拷贝（块参数
+                        // RegCopy）。slot 按后继序编号（case 0..n-1，default=n），
+                        // 与 encodeSwitch 的 resolveEdgeTarget 约定一致——同一
+                        // dst 的多条边（如循环内 switch 各 case 汇入循环尾）靠
+                        // 不同 slot 区分合成块，各自执行自己的拷贝。
+                        uint16_t slot = 0;
+                        for (const auto& c : term.cases) plan(block.get(), c.target, slot++);
+                        plan(block.get(), term.defaultTarget, slot);
                     }
-                    // Switch/Throw/Return/Unreachable：MVP 分别 fail-closed/无后继，
-                    // 无需合成块。
+                    // Throw/Return/Unreachable：无后继边拷贝。
                 },
                 block->terminator);
         }
@@ -1280,9 +1297,7 @@ bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog,
             } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
                 return encodeReturn(ctx, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
-                reason = "Switch terminator not supported in MVP";
-                (void)term;
-                return false;
+                return encodeSwitch(ctx, &block, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
                 return encodeThrow(ctx, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegUnreachableTerminator>) {
@@ -1435,6 +1450,53 @@ bool encodeReturn(EncoderState& ctx, const RegReturnTerminator& term, VmProgram&
     emitOpcode(ctx, VmOpcode::Return, prog.bytecodes);
     emitU8(prog.bytecodes, 1);   // has_value = 1
     emitU16(prog.bytecodes, src);
+    return true;
+}
+
+/// @brief 编码 SWITCH（tableswitch/lookupswitch 统一形态，RegIR 已平坦化）。
+///
+/// @details
+/// 字节流：[Switch][value:u16][default:u16][count:u16] + count ×
+/// [key:i32][target:u16]。key 按 I32 编码（字节码 switch 只支持 int；
+/// RegSwitchCase.key 是 int64 但来自字节码 int，高位必然为零）。case 与
+/// default 目标都经 resolveEdgeTarget（边拷贝走合成块，与 Jump/Branch 同）。
+/// 解释器线性扫描匹配（case 数少；二分/跳表为后续优化）。
+bool encodeSwitch(EncoderState& ctx, const RegBlock* srcBlock, const RegSwitchTerminator& term,
+                  VmProgram& prog, std::string& reason)
+{
+    uint16_t value;
+    if (!ctx.resolveOperand(term.value, value, reason)) return false;
+    if (term.cases.size() > 0xFFFF) {
+        reason = "Switch: too many cases (>65535)";
+        return false;
+    }
+    // 目标 slot 约定与 planSyntheticEdges 一致：case 0..n-1，default=n
+    // （同一 dst 的多条边靠不同 slot 区分合成块，各自执行自己的边拷贝）。
+    // 字节流布局：[Switch][value:u16][default:u16][count:u16] +
+    // count × [key:i32][target:u16]（解释器 handler 按此顺序解码）。
+    const auto defIt = ctx.blockIndex.find(term.defaultTarget.block);
+    if (defIt == ctx.blockIndex.end()) {
+        reason = "Switch default target block not indexed";
+        return false;
+    }
+    const uint16_t defTarget = ctx.resolveEdgeTarget(
+        srcBlock, term.defaultTarget.block, static_cast<uint16_t>(term.cases.size()), defIt->second);
+    emitOpcode(ctx, VmOpcode::Switch, prog.bytecodes);
+    emitU16(prog.bytecodes, value);
+    emitU16(prog.bytecodes, defTarget);
+    emitU16(prog.bytecodes, static_cast<uint16_t>(term.cases.size()));
+    for (size_t i = 0; i < term.cases.size(); ++i) {
+        const auto& c  = term.cases[i];
+        const auto  it = ctx.blockIndex.find(c.target.block);
+        if (it == ctx.blockIndex.end()) {
+            reason = "Switch case target block not indexed";
+            return false;
+        }
+        const uint16_t t =
+            ctx.resolveEdgeTarget(srcBlock, c.target.block, static_cast<uint16_t>(i), it->second);
+        emitI32(prog.bytecodes, static_cast<int32_t>(c.key));
+        emitU16(prog.bytecodes, t);
+    }
     return true;
 }
 

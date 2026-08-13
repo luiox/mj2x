@@ -556,8 +556,8 @@ TEST_P(Vmc4BackendE2E, FloatDoubleAndConvertRoundTrip)
             11, GetParam().kind);
 }
 
-// fail-closed 混合：同一类里纯计算方法转 VM，含对象/switch/实例方法的方法
-// 保留字节码。验证两类方法在同一类中共存并各自正确。
+// fail-closed 混合：同一类里纯计算方法转 VM，含对象/实例方法的方法保留字节码。
+// 验证两类方法在同一类中共存并各自正确。（switch 自 Phase 3 起支持，sw 转 VM。）
 TEST_P(Vmc4BackendE2E, MixedNativeAndFailClosedRoundTrip)
 {
     runCase("Vmc4NativeMixed",
@@ -578,9 +578,8 @@ TEST_P(Vmc4BackendE2E, MixedNativeAndFailClosedRoundTrip)
                 {"useInst(5)", "Vmc4NativeMixed.useInst(5)"},
                 {"inst(3)", "new Vmc4NativeMixed().inst(3)"},
             },
-            // Phase 2.B 起实例方法也转 VM：pure/echo/useInst/inst 四方法虚拟化；
-            // sw（switch）仍 fail-closed 保留字节码。
-            4, GetParam().kind);
+            // pure/echo/sw/useInst/inst 五方法全部虚拟化（switch 已支持）。
+            5, GetParam().kind);
 }
 
 // Phase 2.0 spike：静态调用链。viaAdd/viaLong/viaDouble 各含一条 invokestatic Call
@@ -984,6 +983,78 @@ TEST_P(Vmc4BackendE2E, ClassLiteralRoundTrip)
                 {"isSelfFalse", "Vmc4NativeClass.isSelf(String.class)"},
             },
             3, GetParam().kind);
+}
+
+// switch terminator（tableswitch/lookupswitch 统一形态，Phase 3 增补）：
+// 密集表（0-2）、default、稀疏表（lookupswitch：5/-3/100）、0-6 密集表
+// （对齐 jvm-obf-tester ControlFlowProbe 形态）、循环内 switch、try 内 switch。
+TEST_P(Vmc4BackendE2E, SwitchRoundTrip)
+{
+    runCase("Vmc4NativeSwitch",
+            "public class Vmc4NativeSwitch {\n"
+            "  public static int table(int x) {\n"
+            "    switch (x) {\n"
+            "      case 0: return 10;\n"
+            "      case 1: return 11;\n"
+            "      case 2: return 12;\n"
+            "      default: return 99;\n"
+            "    }\n"
+            "  }\n"
+            "  public static int lookup(int x) {\n"
+            "    switch (x) {\n"
+            "      case 5: return 50;\n"
+            "      case -3: return 30;\n"
+            "      case 100: return 100;\n"
+            "      default: return -1;\n"
+            "    }\n"
+            "  }\n"
+            "  public static int dense(int x) {\n"
+            "    switch (x) {\n"
+            "      case 0: return 0;\n"
+            "      case 1: return 1;\n"
+            "      case 2: return 2;\n"
+            "      case 3: return 3;\n"
+            "      case 4: return 4;\n"
+            "      case 5: return 5;\n"
+            "      default: return 6;\n"
+            "    }\n"
+            "  }\n"
+            "  public static int loopSwitch(int n) {\n"
+            "    int acc = 0;\n"
+            "    for (int i = 0; i < n; i++) {\n"
+            "      switch (i % 3) {\n"
+            "        case 0: acc += 1; break;\n"
+            "        case 1: acc += 10; break;\n"
+            "        default: acc += 100;\n"
+            "      }\n"
+            "    }\n"
+            "    return acc;\n"
+            "  }\n"
+            "  public static int trySwitch(int x) {\n"
+            "    try {\n"
+            "      switch (x) { case 0: return 7; default: return 8; }\n"
+            "    } catch (Exception e) { return -7; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"table0", "Vmc4NativeSwitch.table(0)"},
+                {"table1", "Vmc4NativeSwitch.table(1)"},
+                {"table2", "Vmc4NativeSwitch.table(2)"},
+                {"tableDefault", "Vmc4NativeSwitch.table(9)"},
+                {"lookup5", "Vmc4NativeSwitch.lookup(5)"},
+                {"lookupNeg3", "Vmc4NativeSwitch.lookup(-3)"},
+                {"lookup100", "Vmc4NativeSwitch.lookup(100)"},
+                {"lookupDefault", "Vmc4NativeSwitch.lookup(7)"},
+                {"dense0", "Vmc4NativeSwitch.dense(0)"},
+                {"dense3", "Vmc4NativeSwitch.dense(3)"},
+                {"dense5", "Vmc4NativeSwitch.dense(5)"},
+                {"denseDefault", "Vmc4NativeSwitch.dense(9)"},
+                {"loop5", "Vmc4NativeSwitch.loopSwitch(5)"},
+                {"loop1", "Vmc4NativeSwitch.loopSwitch(1)"},
+                {"try0", "Vmc4NativeSwitch.trySwitch(0)"},
+                {"tryDefault", "Vmc4NativeSwitch.trySwitch(5)"},
+            },
+            5, GetParam().kind);
 }
 
 // Phase 2.C 回归：athrow 异常归属 = athrow 所在块，而非布局顺序的下一块。

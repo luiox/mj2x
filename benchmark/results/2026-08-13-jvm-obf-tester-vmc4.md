@@ -53,3 +53,42 @@
    opcode 前缀缓存）、检查点稀疏化（仅 mayThrow 指令后查异常）、drift 关闭时
    简化 unmap 路径。当前性能定位 = 红队对抗强度优先（drift/别名/多 dispatcher），
    性能换防护是可接受取舍；若需性能优先场景可关 drift/alias 再测。
+
+---
+
+# 追加：100% 转化（Switch 支持落地，2026-08-13）
+
+> 分支 feat/mj2x-vmc4-switch：Switch terminator（tableswitch/lookupswitch）支持
+> ——VmOpcode::Switch 编码（key 表 + 边拷贝 slot 合成块，修复循环内 switch 的
+> 块参数丢失）+ 解释器线性扫描 + 双射/别名/漂移全链路接入。
+
+## 转化率
+
+| 样本 | 前 | 后 |
+|---|---|---|
+| jvm-obf-tester.jar | 99% (122/123) | **100% (123/123)** |
+
+ControlFlowProbe.run 的 `tableswitch {0 to 6}` 已可转 VM——最后一个 fail-closed
+消除。业务方法 100% 转化（Test.jar 100%、snake 93%——snake 剩余 2 个 switch
+方法此前保留字节码，同批消除）。
+
+## 性能（100% 转化版，4 轮独立进程中位数）
+
+| 指标 | 基线 | VMC4 100% | ratio |
+|---|---|---|---|
+| 总耗时 | 103.5ms | 323.5ms | **3.13x** |
+| 13 probe | — | 全 Passed | 一致性 ✓ |
+
+per-probe（中位数）：Arithmetic 15.34x / Visitor 15.98x / Inheritance 10.39x /
+Enums 9.47x（解释器 dispatch 热路径）；Reflection 1.06x / Crypto 0.64x /
+Class loading 0.67x / Resource 0.22x（JNI 为主或噪声）；Control flow 3.01x
+（此前保留字节码 0.19x——现在转 VM 后为真实 VM 化代价）。
+
+## 测试
+
+- EncodesSwitchTerminator 单测（Switch 实例字节 + blockTargets）
+- SwitchRoundTrip e2e × 4 dispatcher（drift 全开）：密集表 0-2/default、
+  稀疏 lookupswitch（5/-3/100）、0-6 密集表（对齐 ControlFlowProbe）、
+  循环内 switch（块参数边拷贝回归）、try 内 switch（异常域共存）
+- 全量：mj2x_unittest 499 通过（1 个 pre-existing CLI xmake 失败）+
+  mj2x_integration_test 36/36
