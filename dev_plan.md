@@ -229,6 +229,77 @@ xmake run mj2x_integration_test
 > 注意：`xmake f -P <子项目>` 会破坏 root 配置（issue #782），统一在脚本内每次 `f -c`。
 > 性能数据必须先做覆盖率审计（见 `performance_evaluation_spec.md`），未附覆盖率的数据不予采信。
 
+## 下一阶段（v2.2 二期）：异常精确化 + 反侦测体系 + 文档整理
+
+> 依据：PR #792 审查结论（issue comment 5282290947 的下一轮待办）+ mj2x `doc/roadmap.md`
+> §3.4（"runtime 反侦测体系：从参数扫描/简单 debugger 检测，扩展到 agent/JVMTI/native
+> debugger 场景"）。三条主线：
+
+| 主线 | 内容 | 优先级 | 分支建议 |
+|---|---|---|---|
+| 三 | 异常语义精确化（稀疏异常：保护区对齐 JVM 指令级 `[start_pc, end_pc)`） | P1 | 独立分支（共享前端，风险高） |
+| 四 | 反侦测体系（Linux antidebug + 反制响应层 + 后端接入 + agent 检测增强） | P2 | 一个分支承载（可含主线五文档） |
+| 五 | 文档整理（capabilities/dev_plan/techniques/doc_ai 设计文档） | 贯穿 | 随主线四收口，或独立小提交 |
+
+### 主线三：异常语义精确化（稀疏异常）—— P1
+
+**背景**：PR #792 审查发现的共享前端近似：`SSABuilder::blockInProtectedRange`
+（ssa_builder.cpp:370）按 L1 块序线性扫描判定保护区（从含 startLabel 的块到含
+endLabel 的块），比 JVM 的指令级 `[start_pc, end_pc)` 粗。实测 `throwCatch`
+（try 内 if/throw、try 外 return）的 if 块与 return 块被**过度保护**：JVM 语义下
+try 范围外抛出的异常不会被 catch，当前 VMC4/RegC 都会 catch。两个后端消费同一
+结构：VMC4 `blockExcRegions`（按块索引给活跃条目）、RegC `activeExceptionRegions`
+（regc_flow.cpp:432，块粒度）。
+
+**目标**：保护区精确对齐异常表 `[start_pc, end_pc)`；双后端除"过度保护修正"外
+无行为变化；全量回归。
+
+**阶段**：
+- 3.1 审计与复现：确认 MIR/L1 指令是否保留字节码 offset（决定方案 A 还是 B）；
+  写"过度保护" e2e（try 范围外首个/末个可抛指令抛异常），确认 VMC4/RegC 双端
+  当前行为
+- 3.2 共享 IR 精确化，两方案选型：
+  - 方案 A：RegExceptionRegion 增加 per-block 指令区间（protected 判定按指令）
+  - 方案 B：L1 在异常表 start/end 边界切块（块粒度 = 指令粒度，前端改动最小，
+    需确认 code_converter 的 label 切块行为）
+- 3.3 VMC4 改造：`VmExceptionRegionEntry` 增加块内指令区间；检查点块反查升级为
+  "pc → 块内指令序号 → 区间匹配"（编码期把块内指令序列映射为字节流区间）
+- 3.4 RegC 改造：`activeExceptionRegions` 改为当前指令粒度（RegC 每 mayThrow 指令
+  分发，天然可精确）
+- 3.5 回归：VMC4 全套 + RegC 快测 + mtest_set 矩阵
+
+### 主线四：反侦测体系（antidebug / antiagent）—— P2
+
+**背景**：探测层已就绪——antidebug（Windows：IsDebuggerPresent/CheckRemote/
+PEB BeingDebugged+NtGlobalFlag/NtQuery debug port/object/flags/硬件断点/软断点
+扫描）、antijvmti（JNI 表快照/参数扫描/模块枚举 Win Toolhelp + Linux proc maps/
+JVMTI capability 查询）、detection 聚合。缺口：
+
+| 缺口 | 说明 |
+|---|---|
+| Linux 原生反调试 | antidebug 现为 Windows-only（`#ifdef _WIN32` 外为空）；补 TracerPid（/proc/self/status）、ptrace(PTRACE_TRACEME) 自检、/proc/self/maps 可疑段、时间差检测 |
+| 反制响应层 | 现只有探测（collect/has），无"检测到之后做什么"；补可配置 policy（terminate/假数据/延迟/降级/白噪声）+ 多阶段随机化检查点 |
+| 后端接入 | RegC 方法入口 barrier + 热路径稀疏检查（runtime_kernel barrier 钩子）；VMC4 wrapper/检查点注入；CLI 开关 |
+| agent 检测增强 | 运行时 JVM 参数收集（JNI 侧经 RuntimeMXBean/系统属性）；java agent 特征（MANIFEST Agent-Class/Launcher-Agent-Class）；JDWP 端口探测 |
+
+**阶段**：
+- 4.1 Linux antidebug：TracerPid/ptrace/maps/时间差 + mock 化单测（对齐 Windows 侧
+  `collectDebugSignals` 结构）
+- 4.2 反制响应层：`runtime_detection` 之上加 enforcement（探测不变、响应可插拔、
+  策略可配置），多阶段+随机化检查点防单点绕过
+- 4.3 后端接入：RegC/VMC4 注入点 + CLI 开关 + 性能评估（检查点开销需覆盖率审计）
+- 4.4 agent 检测增强：运行时参数收集 + agent 特征匹配 + JDWP 探测
+- 4.5 验证与闭环：runtime 单测（mock 注入）+ 真调试器/agent E2E（Windows
+  x64dbg/WinDbg attach、Linux gdb/ptrace）+ mjdbg 攻击报告反馈
+
+### 主线五：文档整理（贯穿）
+
+- **capabilities.md 修正 VMC4 现状**（本次已同步 2.B-2.E：对象/字段/数组/调用/
+  异常/intrinsic 全支持、45 单测 + 56 e2e、TEST.jar 转化率 100%、athrow 归属修复）
+- doc/techniques/runtime_protection.md 补充 Linux 反调试/Java agent 检测通用技术
+- doc_ai/ 新增设计文档：异常精确化设计（随主线三）、反侦测体系设计（随主线四）
+- doc/roadmap.md 状态同步（VMC4 可用版收口；反侦测体系列入 v2.2）
+
 ## 日志
 
 - 2026-08-13：开分支 feat/mj2x-v2.2；依据 issue #787 §3 建立本计划（替换已完结的
