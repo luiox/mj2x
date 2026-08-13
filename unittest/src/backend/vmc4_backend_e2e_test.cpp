@@ -918,6 +918,30 @@ TEST_P(Vmc4BackendE2E, ExceptionRoundTrip)
             5, GetParam().kind);
 }
 
+// 后续项：CHECKCAST（castcheck:<desc> intrinsic）语义锁定——
+// null 通过（JVM 语义）、命中原值传递、失败抛 ClassCastException（经 Driver
+// 捕获 THROW:...）、try 内失败被保护区捕获（异常精确化链路对 castcheck 生效）。
+TEST_P(Vmc4BackendE2E, CheckCastRoundTrip)
+{
+    runCase("Vmc4NativeCast",
+            "public class Vmc4NativeCast {\n"
+            "  public static int castOk(Object o) { return ((String)o).length(); }\n"
+            "  public static String castNull(Object o) { return (String)o; }\n"
+            "  public static int castFail(Object o) { return ((String)o).length(); }\n"
+            "  public static int castCatch(Object o) {\n"
+            "    try { return ((String)o).length(); }\n"
+            "    catch (ClassCastException e) { return -7; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"ok", "Vmc4NativeCast.castOk(\"hello\")"},
+                {"nullPass", "Vmc4NativeCast.castNull(null)"},
+                {"fail", "Vmc4NativeCast.castFail(Integer.valueOf(1))"},
+                {"catchIt", "Vmc4NativeCast.castCatch(Integer.valueOf(1))"},
+            },
+            4, GetParam().kind);
+}
+
 // Phase 2.C 回归：athrow 异常归属 = athrow 所在块，而非布局顺序的下一块。
 // throwCatchTail 的 athrow 块（保护区内）之后紧跟 handler/未保护块（try 内
 // throw、try 外 return）：若检查点按「pc 之后的块」归属，异常会逃逸传播

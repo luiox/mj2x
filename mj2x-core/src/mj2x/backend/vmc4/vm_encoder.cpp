@@ -832,10 +832,24 @@ bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
 
 bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
 {
-    // MVP 只支持 Numeric convert（ReferenceCast 即 CHECKCAST 属对象语义，fail-closed）。
+    // CHECKCAST（ReferenceCast）→ castcheck:<desc> intrinsic：IsInstanceOf +
+    // 失败抛 ClassCastException（null 通过）。其余非 Numeric convert 形态
+    // 保持 fail-closed。
     if (ins.convertKind != SSAConvertKind::Numeric) {
-        reason = "Convert: ReferenceCast not supported in MVP";
-        return false;
+        if (ins.convertKind != SSAConvertKind::ReferenceCast) {
+            reason = "Convert: unsupported convert kind";
+            return false;
+        }
+        if (ins.referenceTypeDesc.is_empty()) {
+            reason = "Convert: ReferenceCast missing type descriptor";
+            return false;
+        }
+        RegInstruction asIntrinsic = ins;
+        asIntrinsic.kind           = RegInstructionKind::Intrinsic;
+        asIntrinsic.intrinsicName =
+            std::string("castcheck:") + ins.referenceTypeDesc.to_std_string();
+        asIntrinsic.args = {ins.value};
+        return encodeIntrinsic(ctx, asIntrinsic, prog, reason);
     }
     VmType from, to;
     if (!toVmType(ins.value.type, from)) {
@@ -1159,6 +1173,16 @@ bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& pr
         }
         iref.arg0Kind = VmJniKind::Ref;
         iref.retKind  = VmJniKind::Int32;
+        iref.hasArgs  = true;
+    } else if (ins.intrinsicName.rfind("castcheck:", 0) == 0) {
+        // CHECKCAST 语义（encodeConvert 重定向而来）：IsInstanceOf + 失败抛
+        // ClassCastException（null 通过）；结果 REF 原样传递。
+        if (ins.args.empty()) {
+            reason = "castcheck intrinsic missing operand";
+            return false;
+        }
+        iref.arg0Kind = VmJniKind::Ref;
+        iref.retKind  = VmJniKind::Ref;
         iref.hasArgs  = true;
     } else if (ins.intrinsicName == "monitor.enter" || ins.intrinsicName == "monitor.exit") {
         if (ins.args.empty()) {

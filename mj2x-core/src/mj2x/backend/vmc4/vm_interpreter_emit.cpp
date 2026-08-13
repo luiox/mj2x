@@ -1776,6 +1776,31 @@ void emitIntrinsicInfrastructure(CSourceStream& out, const VmProgram& program,
                 f.emitLine("}");
                 f.emitLine("regs[dest].i = (*env)->IsInstanceOf(env, (jobject)regs[argIdx[0]].ref, "
                            "_cls) ? 1 : 0;");
+            } else if (iref.name.rfind("castcheck:", 0) == 0) {
+                // CHECKCAST（encodeConvert 重定向）：null → 通过（JVM 语义）；
+                // IsInstanceOf 命中 → 原值传递；未命中 → 抛 ClassCastException
+                // （pending exception 由检查点分派，归属 = checkcast 所在块）。
+                const std::string typeName = iref.name.substr(std::string("castcheck:").size());
+                f.emitLine("(void)argc;");
+                f.emitLine("jobject _v = (jobject)regs[argIdx[0]].ref;");
+                f.emitLine("if (_v == NULL) { regs[dest].ref = NULL; return; }");
+                f.emitLine("static jclass _cls = NULL;");
+                f.emitLine("if (_cls == NULL) {");
+                {
+                    CSourceStream::IndentGuard g(f);
+                    f.emitLine(format_std("jclass _local = (*env)->FindClass(env, {});",
+                                          codegen::cStringLiteral(typeName)));
+                    f.emitLine("if (_local == NULL) return;  /* pending exception */");
+                    f.emitLine("_cls = (*env)->NewGlobalRef(env, _local);");
+                    f.emitLine("(*env)->DeleteLocalRef(env, _local);");
+                }
+                f.emitLine("}");
+                f.emitLine("if ((*env)->IsInstanceOf(env, _v, _cls)) { regs[dest].ref = (void*)_v; "
+                           "return; }");
+                f.emitLine("jclass _cc = (*env)->FindClass(env, \"java/lang/ClassCastException\");");
+                f.emitLine("if (_cc != NULL) { (*env)->ThrowNew(env, _cc, \"\"); "
+                           "(*env)->DeleteLocalRef(env, _cc); }");
+                f.emitLine("regs[dest].ref = NULL;");
             } else if (iref.name == "monitor.enter" || iref.name == "monitor.exit") {
                 const bool isEnter = iref.name == "monitor.enter";
                 f.emitLine("(void)argc; (void)dest;  /* monitor 无结果 */");

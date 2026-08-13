@@ -1705,3 +1705,38 @@ TEST(Vmc4BackendTest, DriftEncoderStreamDecodesCleanly)
     EXPECT_TRUE(sawRotation)
         << "same semantics must use different raw bytes across drift variants";
 }
+
+// 后续项：CHECKCAST（ReferenceCast）→ castcheck:<desc> intrinsic
+// （IsInstanceOf + 失败抛 ClassCastException，null 通过）——真实样本转化率
+// 第一瓶颈（snake/jvm-obf-tester 主要 fail-closed 原因）。
+TEST(Vmc4BackendTest, EncodesCheckCast)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    // static int castLen(Object o) { return ((String)o).length(); }
+    auto prog = encodeMethod("castLen", "(Ljava/lang/Object;)I",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new TypeInsnNode(
+                                     Opcodes::CHECKCAST,
+                                     ca::str::Utf8StringRef::from_cstr("java/lang/String")),
+                                 new MethodInsnNode(
+                                     Opcodes::INVOKEVIRTUAL,
+                                     ca::str::Utf8StringRef::from_cstr("java/lang/String"),
+                                     ca::str::Utf8StringRef::from_cstr("length"),
+                                     ca::str::Utf8StringRef::from_cstr("()I"), false),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1, 1, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    // castcheck 入 intrinsic 表（按 desc 去重），结果 REF 原样传递。
+    ASSERT_EQ(prog->intrinsics.size(), 1u);
+    EXPECT_EQ(prog->intrinsics[0].name, "castcheck:java/lang/String");
+    EXPECT_EQ(prog->intrinsics[0].arg0Kind, VmJniKind::Ref);
+    EXPECT_EQ(prog->intrinsics[0].retKind, VmJniKind::Ref);
+    // 字节流含 Intrinsic opcode（canonical 字节）。
+    const auto it = std::find(prog->bytecodes.begin(), prog->bytecodes.end(),
+                              static_cast<uint8_t>(instance.opcodeFor(VmOpcode::Intrinsic)));
+    EXPECT_NE(it, prog->bytecodes.end()) << "checkcast must be encoded as Intrinsic opcode";
+}
