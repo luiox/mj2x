@@ -1028,6 +1028,10 @@ TEST(Vmc4BackendTest, EncodesThrowInstruction)
     const std::string src = VmInterpreterEmitter::emit(*prog, instance, "raise1");
     EXPECT_NE(src.find("mj2x_vm_throw(env, regs[src].ref)"), std::string::npos) << src;
     EXPECT_NE(src.find("mj2x_vm_exc:"), std::string::npos) << src;
+    // 回归：THROW handler 进检查点前 pc 回退到抛出指令——否则块反查把异常
+    // 归属到布局顺序的下一块，保护块后跟未保护块时 catch 漏接（见 e2e
+    // AthrowAttributionRoundTrip）。
+    EXPECT_NE(src.find("pc -= 3;"), std::string::npos) << src;
 }
 
 // P2-14：Switch（TABLESWITCH）。

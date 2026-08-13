@@ -918,6 +918,28 @@ TEST_P(Vmc4BackendE2E, ExceptionRoundTrip)
             5, GetParam().kind);
 }
 
+// Phase 2.C 回归：athrow 异常归属 = athrow 所在块，而非布局顺序的下一块。
+// throwCatchTail 的 athrow 块（保护区内）之后紧跟 handler/未保护块（try 内
+// throw、try 外 return）：若检查点按「pc 之后的块」归属，异常会逃逸传播
+// （修复前 4 dispatcher 实测均为 THROW 而非 -1）。
+TEST_P(Vmc4BackendE2E, AthrowAttributionRoundTrip)
+{
+    runCase("Vmc4NativeExcTail",
+            "public class Vmc4NativeExcTail {\n"
+            "  public static int throwCatchTail(int x) {\n"
+            "    try {\n"
+            "      if (x < 0) throw new IllegalArgumentException();\n"
+            "    } catch (IllegalArgumentException e) { return -1; }\n"
+            "    return x;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"neg", "Vmc4NativeExcTail.throwCatchTail(-1)"},
+                {"pos", "Vmc4NativeExcTail.throwCatchTail(5)"},
+            },
+            1, GetParam().kind);
+}
+
 // Phase 2.D：Intrinsic 子集 round-trip。
 // isString/isNullInstanceOf：instanceof:<desc>（null → false，IsInstanceOf 懒缓存）；
 // longCmp：LCMP（cmp.nan_less 整型路径，三值 -1/0/1）；

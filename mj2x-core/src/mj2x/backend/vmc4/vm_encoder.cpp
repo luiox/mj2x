@@ -644,7 +644,7 @@ bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
         if (!encodeBlock(ctx, *ctx.fn.blocks[bi], prog, reason)) return false;
     }
     // 合成块：边拷贝 + Jump 到真实目标。
-        for (const auto& edge : ctx.syntheticEdges) {
+    for (const auto& edge : ctx.syntheticEdges) {
         prog.blockTargets[edge.index] = static_cast<uint32_t>(prog.bytecodes.size());
         for (const auto& copy : edge.copies) {
             VmType type;

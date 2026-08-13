@@ -321,9 +321,15 @@ const char* kHandlerIntrinsic =
 /// THROW（Phase 2.C）：athrow。mj2x_vm_throw 设 pending exception（null → NPE），
 /// 随后 goto 异常检查点 mj2x_vm_exc（每个 dispatcher 无条件提供）——有异常区域则
 /// 按当前块活跃区域匹配，否则传播（wrapper 检测 status=1 返回，Java 侧抛）。
+/// 注意：进入检查点前 pc 必须回退到 [Throw][src] 起点——检查点的块反查按 pc
+/// 落在哪个 blockTargets 区间归属异常，而 pc 已被推进到块尾之后（athrow 是
+/// 块 terminator），不回退会把异常归属到布局顺序的下一个块；保护块后紧跟
+/// 未保护块（try 内 throw、try 外 return）时 catch 会漏接、异常逃逸。
+/// 回退安全：匹配成功路径会覆盖 pc（= handler 目标），未匹配传播路径不读 pc。
 const char* kHandlerThrow =
     "            unsigned int src = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
     "            mj2x_vm_throw(env, regs[src].ref);\n"
+    "            pc -= 3;  /* 异常归属 = athrow 所在块（块反查按抛出指令 pc） */\n"
     "            goto mj2x_vm_exc;\n";
 
 /// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
@@ -692,9 +698,13 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
         f.emitLine("}");
         // 异常检查点（Phase 2.C）：handler 的 goto mj2x_vm_exc 汇到这里（除零/athrow/
         // JNI helper pending）。匹配成功：写回 ctx->pc 并返回（exec 循环继续）；
-        // 未匹配：重新挂起异常 + ctx->status=1 返回（exec 循环 break 传播）。
+        // 未匹配：重新挂起异常 + 局部 status=1（经 mj2x_vm_done 提交 ctx->status）
+        // 返回（exec 循环 break 传播）。注意 failure 必须写局部 status 而非
+        // ctx->status：mj2x_vm_done 的 `ctx->status = status` 会覆盖直接写
+        // ctx->status 的赋值（局部 status 恒 0 → 传播被吞 + pc 停在异常点
+        // → 无限重抛死循环）。
         emitExceptionCheckpoint(f, program, "targets", "pc", "mj2x_vm_exc_matched",
-                                "ctx->status = 1; goto mj2x_vm_done;");
+                                "status = 1; goto mj2x_vm_done;");
         f.emitLine("ctx->pc = pc; goto mj2x_vm_done;");
         // RETURN handler 与 BINARY 除零分支都经 goto mj2x_vm_done 退出：此标签必须存在，
         // 否则生成的 C 引用未定义 label 编译失败。
