@@ -15,6 +15,8 @@ using codegen::CSourceStream;
 
 // ---------------------------------------------------------------------------
 // 数值编码 helpers：把字节/字拆成 C 字面量。
+// 这些是「数据格式化」片段（数组初始化列表），返回 std::string 供 emitRaw 嵌入，
+// 不是源码结构拼接（codegen_style.md §3 禁止的是手拼缩进语句，非数据片段）。
 // ---------------------------------------------------------------------------
 
 /// 把字节流编码成 C 数组初始化列表（"0xNN, 0xNN, ..."），每行 16 字节。
@@ -48,13 +50,15 @@ std::string emitU32Array(const std::vector<uint32_t>& vals, const std::string& i
 // ===========================================================================
 // Handler 逻辑片段：每个 opcode 一段 C 代码（读 operand、执行、推进 pc）。
 //
-// 关键设计：handler 片段假设 dispatcher 已声明局部变量 code/pc/regs/status/targets，
-// 并以 break/goto mj2x_vm_done 结束。5 种 dispatcher 形态共享这些 handler 片段，
-// 只在外层调度结构（switch / 函数指针表 / goto 表 / if 链 / state 平坦化）上不同。
+// 这些片段是「操作码语义模板」（类似 raw-string runtime template），自带固定
+// 缩进，经 CSourceStream::emitRaw 原样嵌入 case 体（emitRaw 的设计用途即
+// 「pre-formatted blocks where the caller controls whitespace」，c_source.hpp:99）。
+// 片段假设 dispatcher 已声明局部变量 code/pc/regs/status/targets，并以
+// break/goto mj2x_vm_done 结束。5 种 dispatcher 共享这些片段。
 //
 // handler 读 u16 operand 的内联表达式统一为：
 //   (unsigned)code[pc] | ((unsigned)code[pc+1] << 8)
-// 配合 pc += 2 推进。这让 handler 片段对 dispatcher 形态无感。
+// 配合 pc += 2 推进。
 // ===========================================================================
 
 /// COPY: regs[dest] = regs[src]
@@ -272,8 +276,8 @@ const char* handlerBodyFor(const VmInstance& instance, const HandlerEntry* entry
     return entry->body;
 }
 
-/// 把某语义的匹配表达式拼成 `opcode == b1 || opcode == b2` 链。
-/// drift 开启时 opcode 已由 unmap 表解回 canonical，只需单字节比较。
+/// 把某语义的匹配表达式拼成 `opcode == b1 || opcode == b2` 链（IfNest 用）。
+/// 返回表达式片段（非源码结构拼接），drift 开启时 opcode 已由 unmap 表解回 canonical。
 std::string emitOpcodeByteOrChain(const VmInstance& instance, VmOpcode op)
 {
     if (instance.driftEnabled()) {
@@ -294,78 +298,79 @@ std::string emitOpcodeByteOrChain(const VmInstance& instance, VmOpcode op)
     return out;
 }
 
-/// 发射一个 handler 的 case 块：canonical + 全部 ALT 别名共享同一 body。
-/// 输出形如：
-///   case 0xNN /*NAME*/:
-///   case 0xMM /*NAME*/: {
-///       <body>
-///       break;
-///   }
-/// drift 开启时 unmap 已把原始字节解回 canonical，只发 canonical 一个 case。
-std::string emitHandlerCase(const VmInstance& instance, const HandlerEntry* entry,
-                            const char* indent)
-{
-    std::string s;
-    if (instance.driftEnabled()) {
-        char head[64];
-        std::snprintf(head, sizeof(head), "%scase 0x%02x /*%s*/:\n", indent,
-                      static_cast<unsigned>(instance.opcodeFor(entry->opcode)), entry->name);
-        s += head;
-    } else {
-        for (uint8_t b : instance.opcodeBytesFor(entry->opcode)) {
-            char head[64];
-            std::snprintf(head, sizeof(head), "%scase 0x%02x /*%s*/:\n", indent,
-                          static_cast<unsigned>(b), entry->name);
-            s += head;
-        }
-    }
-    s += std::string(indent) + "{\n";
-    s += handlerBodyFor(instance, entry);
-    s += std::string(indent) + "    break;\n";
-    s += std::string(indent) + "}\n";
-    return s;
-}
-
 // ===========================================================================
 // 5 种 dispatcher 形态：共享 handler 片段，调度结构各异。
+// 所有 emit* 函数写入 CSourceStream&（流贯穿，缩进由调用上下文继承），
+// 不再用 std::string s; s += "..." 手拼。
 // ===========================================================================
 
-/// 公共局部变量声明（所有 dispatcher 都在函数体开头需要这些）。
-std::string emitCommonDecls(const std::string& progName, const std::string& targetsName)
+/// 发射一个 handler 的 case 块：canonical + 全部 ALT 别名共享同一 body。
+/// 多个 case 头（每字节一个）后跟一个 { handler body + break; } 块。
+/// drift 开启时 unmap 已把原始字节解回 canonical，只发 canonical 一个 case。
+void emitHandlerCase(CSourceStream& out, const VmInstance& instance, const HandlerEntry* entry)
 {
-    return "    const unsigned char* code = " + progName + ";\n"
-           "    const unsigned int* targets = " + targetsName + ";\n"
-           "    unsigned int pc = targets[0];\n"
-           "    unsigned int status = 0;\n"
-           "    mj2x_vm_slot* regs = slots;\n";
+    auto emitHead = [&](uint8_t byte) {
+        char head[64];
+        std::snprintf(head, sizeof(head), "case 0x%02x /*%s*/:",
+                      static_cast<unsigned>(byte), entry->name);
+        out.emitLine(head);
+    };
+    if (instance.driftEnabled()) {
+        emitHead(instance.opcodeFor(entry->opcode));
+    } else {
+        for (uint8_t b : instance.opcodeBytesFor(entry->opcode)) emitHead(b);
+    }
+    out.emitLine("{");
+    {
+        CSourceStream::IndentGuard g(out);
+        out.emitRaw(handlerBodyFor(instance, entry));
+        out.emitLine("break;");
+    }
+    out.emitLine("}");
+}
+
+/// 公共局部变量声明（所有 dispatcher 都在函数体开头需要这些）。
+void emitCommonDecls(CSourceStream& out, const std::string& progName, const std::string& targetsName)
+{
+    out.emitLine("const unsigned char* code = " + progName + ";");
+    out.emitLine("const unsigned int* targets = " + targetsName + ";");
+    out.emitLine("unsigned int pc = targets[0];");
+    out.emitLine("unsigned int status = 0;");
+    out.emitLine("mj2x_vm_slot* regs = slots;");
 }
 
 /// 生成 per-variant unmap 表（文件级 static const，drift 开启时在 exec 前发射）。
 /// 表 d 把变体 d 下的原始字节解回 canonical 字节；未映射字节填 0xFF（走 default）。
-std::string emitDriftUnmapTables(const VmInstance& instance, const std::string& tag)
+void emitDriftUnmapTables(CSourceStream& out, const VmInstance& instance, const std::string& tag)
 {
-    if (!instance.driftEnabled()) return "";
-    std::string s;
+    if (!instance.driftEnabled()) return;
     for (int d = 0; d < instance.driftVariants(); ++d) {
         char head[128];
-        std::snprintf(head, sizeof(head), "static const unsigned char mj2x_vm_unmap_%s_%d[256] = {\n",
+        std::snprintf(head, sizeof(head),
+                      "static const unsigned char mj2x_vm_unmap_%s_%d[256] = {",
                       tag.c_str(), d);
-        s += head;
-        for (int i = 0; i < 256; ++i) {
-            if (i % 16 == 0 && i != 0) s += "\n";
-            else if (i != 0) s += " ";
-            char buf[8];
-            std::snprintf(buf, sizeof(buf), "0x%02x,",
-                          static_cast<unsigned>(instance.unmapByte(static_cast<uint8_t>(i), d)));
-            s += buf;
+        out.emitLine(head);
+        {
+            CSourceStream::IndentGuard g(out);
+            std::string body;
+            for (int i = 0; i < 256; ++i) {
+                if (i % 16 == 0 && i != 0) body += "\n";
+                else if (i != 0) body += " ";
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "0x%02x,",
+                              static_cast<unsigned>(instance.unmapByte(static_cast<uint8_t>(i), d)));
+                body += buf;
+            }
+            out.emitRaw(body);
         }
-        s += "\n};\n";
+        out.emitLine("");
+        out.emitLine("};");
     }
-    return s;
 }
 
 /// 生成 unmap 表的选择表达式：按运行时变体序号 d 选出对应表指针。
 /// 形如 `(d == 0 ? T_0 : (d == 1 ? T_1 : T_2))`（嵌套右结合）。
+/// 返回表达式片段（嵌入语句，非结构拼接）。
 std::string emitUnmapSelectExpr(const VmInstance& instance, const std::string& tag,
                                 const std::string& dExpr)
 {
@@ -382,64 +387,63 @@ std::string emitUnmapSelectExpr(const VmInstance& instance, const std::string& t
 
 /// 生成 dispatcher 的取码语句：drift 开启时按当前 pc 算变体序号再过 unmap 表；
 /// 关闭时保持 `unsigned char opcode = code[pc++];` 原样（零回归）。
-std::string emitOpcodeFetch(const VmInstance& instance, const std::string& tag,
-                            const std::string& indent)
+void emitOpcodeFetch(CSourceStream& out, const VmInstance& instance, const std::string& tag)
 {
     if (!instance.driftEnabled()) {
-        return indent + "unsigned char opcode = code[pc++];\n";
+        out.emitLine("unsigned char opcode = code[pc++];");
+        return;
     }
-    std::string s;
-    s += indent + "unsigned int d = (unsigned)(pc / " + std::to_string(instance.driftPeriod()) +
-         ") % " + std::to_string(instance.driftVariants()) + ";\n";
-    s += indent + "unsigned char opcode = " +
-         emitUnmapSelectExpr(instance, tag, "d") + "[code[pc++]];\n";
-    return s;
+    out.emitLine("unsigned int d = (unsigned)(pc / " + std::to_string(instance.driftPeriod()) +
+                 ") % " + std::to_string(instance.driftVariants()) + ";");
+    out.emitLine("unsigned char opcode = " +
+                 emitUnmapSelectExpr(instance, tag, "d") + "[code[pc++]];");
 }
 
 /// 生成 Halt 的 case 头：drift 开启时只发 canonical（unmap 已解回）；
 /// 关闭时覆盖 canonical + 全部别名（防御性停机面）。
-std::string emitHaltCaseHeads(const VmInstance& instance, const std::string& indent)
+void emitHaltCaseHeads(CSourceStream& out, const VmInstance& instance)
 {
-    std::string s;
+    auto emitHead = [&](uint8_t byte) {
+        char head[64];
+        std::snprintf(head, sizeof(head), "case 0x%02x /*HALT*/:", static_cast<unsigned>(byte));
+        out.emitLine(head);
+    };
     if (instance.driftEnabled()) {
-        char head[64];
-        std::snprintf(head, sizeof(head), "%scase 0x%02x /*HALT*/:\n", indent.c_str(),
-                      static_cast<unsigned>(instance.opcodeFor(VmOpcode::Halt)));
-        s += head;
-        return s;
+        emitHead(instance.opcodeFor(VmOpcode::Halt));
+        return;
     }
-    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
-        char head[64];
-        std::snprintf(head, sizeof(head), "%scase 0x%02x /*HALT*/:\n", indent.c_str(),
-                      static_cast<unsigned>(b));
-        s += head;
-    }
-    return s;
+    for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) emitHead(b);
 }
 
 /// 形态 0：SwitchTable —— 经典 switch/case。
-std::string emitSwitchDispatcher(const VmInstance& instance, const std::string& progName,
-                                 const std::string& targetsName, const std::string& tag)
+void emitSwitchDispatcher(CSourceStream& out, const VmInstance& instance,
+                          const std::string& progName, const std::string& targetsName,
+                          const std::string& tag)
 {
-    std::string s = emitCommonDecls(progName, targetsName);
-    s += "    for (;;) {\n";
-    s += emitOpcodeFetch(instance, tag, "        ");
-    s += "        switch (opcode) {\n";
-    // handler 顺序随实例洗牌（handlerOrder），每个语义的 canonical+别名共享 body。
-    for (const auto& op : instance.handlerOrder()) {
-        const HandlerEntry* entry = findHandler(op);
-        if (entry == nullptr) continue;
-        s += emitHandlerCase(instance, entry, "        ");
+    emitCommonDecls(out, progName, targetsName);
+    out.emitLine("for (;;) {");
+    {
+        CSourceStream::IndentGuard g(out);
+        emitOpcodeFetch(out, instance, tag);
+        out.emitLine("switch (opcode) {");
+        {
+            CSourceStream::IndentGuard g2(out);
+            // handler 顺序随实例洗牌（handlerOrder），每个语义的 canonical+别名共享 body。
+            for (const auto& op : instance.handlerOrder()) {
+                const HandlerEntry* entry = findHandler(op);
+                if (entry == nullptr) continue;
+                emitHandlerCase(out, instance, entry);
+            }
+            // Halt 哨兵：实例映射的 halt 字节全集（canonical + 别名）。落到 Halt 或
+            // 任何未映射字节都走防御停机。
+            emitHaltCaseHeads(out, instance);
+            out.emitLine("default: status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done;");
+        }
+        out.emitLine("}");
     }
-    // Halt 哨兵：实例映射的 halt 字节全集（canonical + 别名）。落到 Halt 或
-    // 任何未映射字节都走防御停机。
-    s += emitHaltCaseHeads(instance, "        ");
-    s += "        default: status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done;\n";
-    s += "        }\n";
-    s += "    }\n";
-    s += "mj2x_vm_done:\n";
-    s += "    return status;\n";
-    return s;
+    out.emitLine("}");
+    out.label_("mj2x_vm_done");
+    out.emitLine("return status;");
 }
 
 /// 形态 1：FuncPtrTable —— 函数指针表分发。
@@ -449,238 +453,238 @@ std::string emitSwitchDispatcher(const VmInstance& instance, const std::string& 
 /// dispatcher 用 handlers[opcode](...) 间接调用。这是结构性差异：逆向者看到的是
 /// 一组函数指针表 + 间接调用，不是 switch 跳表。
 ///
-/// 共享上下文 struct 避免 handler 函数参数列表过长。
-///
 /// C 兼容性：ctx struct / typedef / dispatch body 必须是**文件级**定义——
-/// MSVC 不支持嵌套函数（在函数体内定义函数是语法错误），而 per-opcode 独立
-/// 函数又需要 C++ 或 GCC nested function。MVP 采用「单一 dispatch body + 函数
-/// 指针表别名」折中：表里每项指向同一文件级函数，但函数指针表本身仍是间接
-/// 调用结构。Phase 2 引入 per-opcode 独立函数（C++ 模式）。
+/// MSVC 不支持嵌套函数。MVP 采用「单一 dispatch body + 函数指针表别名」折中：
+/// 表里每项指向同一文件级函数，但函数指针表本身仍是间接调用结构。
 
 /// 文件级 prelude：ctx struct + typedef + dispatch body 函数（在 exec 函数之前发射）。
-std::string emitFuncPtrFilePrelude(const VmInstance& instance, const std::string& tag)
+void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, const std::string& tag)
 {
-    std::string ctxType = "mj2x_vm_ctx_" + tag;
-    std::string s;
-    // C 模式必须 typedef 才能用裸类型名（`struct X {...}; X v;` 是 C++ 写法）。
-    s += "struct " + ctxType + " { const unsigned char* code; const unsigned int* targets; "
-         "unsigned int pc; unsigned int status; mj2x_vm_slot* regs; mj2x_vm_slot* retval; };\n";
-    s += "typedef struct " + ctxType + " " + ctxType + ";\n";
-    s += "static void mj2x_vm_dispatch_body_" + tag + "(" + ctxType + "* ctx) {\n";
-    s += "    const unsigned char* code = ctx->code;\n";
-    s += "    const unsigned int* targets = ctx->targets;\n";
-    s += "    unsigned int pc = ctx->pc;\n";
-    s += "    unsigned int status = ctx->status;\n";
-    s += "    mj2x_vm_slot* regs = ctx->regs;\n";
-    s += "    mj2x_vm_slot* retval = ctx->retval;\n";
-    s += "    (void)targets;\n";
-    s += "    (void)status;\n";
-    s += "    (void)retval;\n";
-    s += emitOpcodeFetch(instance, tag, "    ");
-    s += "    switch (opcode) {\n";
-    for (const auto& op : instance.handlerOrder()) {
-        const HandlerEntry* entry = findHandler(op);
-        if (entry == nullptr) continue;
-        s += emitHandlerCase(instance, entry, "    ");
-    }
-    s += "    default: ctx->status = 2; /* InvalidBytecode */ ctx->pc = pc; return;\n";
-    s += "    }\n";
-    // RETURN handler 与 BINARY 除零分支都经 goto mj2x_vm_done 退出：此标签必须存在，
-    // 否则生成的 C 引用未定义 label 编译失败。
-    s += "mj2x_vm_done:\n";
-    s += "    ctx->pc = pc; ctx->status = status;\n";
-    s += "    return;\n";
-    s += "}\n";
-    return s;
+    const std::string ctxType = "mj2x_vm_ctx_" + tag;
+    out.emitLine("struct " + ctxType + " { const unsigned char* code; const unsigned int* targets; "
+                 "unsigned int pc; unsigned int status; mj2x_vm_slot* regs; mj2x_vm_slot* retval; };");
+    out.emitLine("typedef struct " + ctxType + " " + ctxType + ";");
+    out.add_func("static void mj2x_vm_dispatch_body_" + tag + "(" + ctxType + "* ctx)",
+                 [&](CSourceStream& f) {
+        f.emitLine("const unsigned char* code = ctx->code;");
+        f.emitLine("const unsigned int* targets = ctx->targets;");
+        f.emitLine("unsigned int pc = ctx->pc;");
+        f.emitLine("unsigned int status = ctx->status;");
+        f.emitLine("mj2x_vm_slot* regs = ctx->regs;");
+        f.emitLine("mj2x_vm_slot* retval = ctx->retval;");
+        f.emitLine("(void)targets;");
+        f.emitLine("(void)status;");
+        f.emitLine("(void)retval;");
+        emitOpcodeFetch(f, instance, tag);
+        f.emitLine("switch (opcode) {");
+        {
+            CSourceStream::IndentGuard g(f);
+            for (const auto& op : instance.handlerOrder()) {
+                const HandlerEntry* entry = findHandler(op);
+                if (entry == nullptr) continue;
+                emitHandlerCase(f, instance, entry);
+            }
+            f.emitLine("default: ctx->status = 2; /* InvalidBytecode */ ctx->pc = pc; return;");
+        }
+        f.emitLine("}");
+        // RETURN handler 与 BINARY 除零分支都经 goto mj2x_vm_done 退出：此标签必须存在，
+        // 否则生成的 C 引用未定义 label 编译失败。
+        f.label_("mj2x_vm_done");
+        f.emitLine("ctx->pc = pc; ctx->status = status;");
+        f.emitLine("return;");
+    });
 }
 
 /// 函数体：ctx 初始化 + 函数指针表 + 分发循环（在 exec 函数内发射）。
-std::string emitFuncPtrDispatcher(const VmInstance& instance, const std::string& progName,
-                                  const std::string& targetsName, const std::string& tag)
+void emitFuncPtrDispatcher(CSourceStream& out, const VmInstance& instance,
+                           const std::string& progName, const std::string& targetsName,
+                           const std::string& tag)
 {
-    std::string ctxType = "mj2x_vm_ctx_" + tag;
-    std::string s;
-    s += "    " + ctxType + " _ctx;\n";
-    s += "    _ctx.code = " + progName + ";\n";
-    s += "    _ctx.targets = " + targetsName + ";\n";
-    s += "    _ctx.pc = _ctx.targets[0];\n";
-    s += "    _ctx.status = 0;\n";
-    s += "    _ctx.regs = slots;\n";
-    s += "    _ctx.retval = retval;\n";
-    s += "    " + ctxType + "* ctx = &_ctx;\n";
-    s += "    typedef void (*mj2x_vm_handler_" + tag + ")(" + ctxType + "*);\n";
+    const std::string ctxType = "mj2x_vm_ctx_" + tag;
+    out.emitLine(ctxType + " _ctx;");
+    out.emitLine("_ctx.code = " + progName + ";");
+    out.emitLine("_ctx.targets = " + targetsName + ";");
+    out.emitLine("_ctx.pc = _ctx.targets[0];");
+    out.emitLine("_ctx.status = 0;");
+    out.emitLine("_ctx.regs = slots;");
+    out.emitLine("_ctx.retval = retval;");
+    out.emitLine(ctxType + "* ctx = &_ctx;");
+    out.emitLine("typedef void (*mj2x_vm_handler_" + tag + ")(" + ctxType + "*);");
     // 函数指针表（每项指向同一 dispatch_body，表的存在本身是间接调用的逆向特征）。
     // Halt 全字节槽 = 0（空指针），未映射字节也默认 0 → 走 InvalidBytecode 分支。
     // drift 开启时 unmap 已解回 canonical，只填 canonical 槽。
-    s += "    static const mj2x_vm_handler_" + tag + " mj2x_vm_table_" + tag + "[256] = {\n";
-    bool first = true;
-    if (instance.driftEnabled()) {
-        char e[64];
-        std::snprintf(e, sizeof(e), "        [0x%02x] = 0",
-                      static_cast<unsigned>(instance.opcodeFor(VmOpcode::Halt)));
-        s += e;
-        first = false;
-    } else {
-        for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) {
+    out.emitLine("static const mj2x_vm_handler_" + tag + " mj2x_vm_table_" + tag + "[256] = {");
+    {
+        CSourceStream::IndentGuard g(out);
+        bool first = true;
+        auto emitHaltSlot = [&](uint8_t byte) {
             char e[64];
-            std::snprintf(e, sizeof(e), "%s[0x%02x] = 0", first ? "        " : ", ",
-                          static_cast<unsigned>(b));
-            s += e;
+            std::snprintf(e, sizeof(e), "%s[0x%02x] = 0", first ? "" : ", ",
+                          static_cast<unsigned>(byte));
+            out.emitLine(e);
             first = false;
-        }
-    }
-    for (const auto& op : instance.handlerOrder()) {
-        const HandlerEntry* entry = findHandler(op);
-        if (entry == nullptr) continue;
+        };
         if (instance.driftEnabled()) {
+            emitHaltSlot(instance.opcodeFor(VmOpcode::Halt));
+        } else {
+            for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) emitHaltSlot(b);
+        }
+        auto emitHandlerSlot = [&](uint8_t byte) {
             char e[96];
-            std::snprintf(e, sizeof(e), ", [0x%02x] = mj2x_vm_dispatch_body_%s",
-                          static_cast<unsigned>(instance.opcodeFor(op)), tag.c_str());
-            s += e;
-            continue;
-        }
-        for (uint8_t b : instance.opcodeBytesFor(op)) {
-            char e[96];
-            std::snprintf(e, sizeof(e), ", [0x%02x] = mj2x_vm_dispatch_body_%s",
-                          static_cast<unsigned>(b), tag.c_str());
-            s += e;
-        }
-    }
-    s += "\n    };\n";
-    s += "    for (;;) {\n";
-    if (instance.driftEnabled()) {
-        s += "        unsigned int d = (unsigned)(ctx->pc / " +
-             std::to_string(instance.driftPeriod()) + ") % " +
-             std::to_string(instance.driftVariants()) + ";\n";
-        s += "        unsigned char opcode = " +
-             emitUnmapSelectExpr(instance, tag, "d") + "[ctx->code[ctx->pc]];\n";
-    } else {
-        s += "        unsigned char opcode = ctx->code[ctx->pc];\n";
-    }
-    s += "        mj2x_vm_handler_" + tag + " h = mj2x_vm_table_" + tag + "[opcode];\n";
-    s += "        if (!h) { ctx->status = 2; /* InvalidBytecode */ break; }\n";
-    // RETURN 在 dispatch body 里经 goto mj2x_vm_done 返回，此时 ctx->pc 已越过
-    // RETURN 指令（含 operand），不能靠 code[ctx->pc-1] 判断（那是 operand 末字节）。
-    // 在调用前记录 opcode 位置，用 code[op_pos] 是否属于 Return 字节全集判断
-    // （drift 开启时用 op_pos 的变体解回 canonical 后比对）。
-    s += "        unsigned int op_pos = ctx->pc;\n";
-    s += "        h(ctx);\n";
-    if (instance.driftEnabled()) {
-        s += "        unsigned int d2 = (unsigned)(op_pos / " +
-             std::to_string(instance.driftPeriod()) + ") % " +
-             std::to_string(instance.driftVariants()) + ";\n";
-        s += "        unsigned char _op = " +
-             emitUnmapSelectExpr(instance, tag, "d2") + "[ctx->code[op_pos]];\n";
-        char e[64];
-        std::snprintf(e, sizeof(e), "        int _is_ret = (_op == 0x%02x);\n",
-                      static_cast<unsigned>(instance.opcodeFor(VmOpcode::Return)));
-        s += e;
-    } else {
-        s += "        unsigned char _op = ctx->code[op_pos];\n";
-        s += "        int _is_ret = 0;\n";
-        for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Return)) {
-            char e[48];
-            std::snprintf(e, sizeof(e), "        if (_op == 0x%02x) _is_ret = 1;\n",
-                          static_cast<unsigned>(b));
-            s += e;
+            std::snprintf(e, sizeof(e), "%s[0x%02x] = mj2x_vm_dispatch_body_%s",
+                          first ? "" : ", ", static_cast<unsigned>(byte), tag.c_str());
+            out.emitLine(e);
+            first = false;
+        };
+        for (const auto& op : instance.handlerOrder()) {
+            if (instance.driftEnabled()) {
+                emitHandlerSlot(instance.opcodeFor(op));
+                continue;
+            }
+            for (uint8_t b : instance.opcodeBytesFor(op)) emitHandlerSlot(b);
         }
     }
-    s += "        if (ctx->status != 0 || _is_ret) break;\n";
-    s += "    }\n";
-    s += "    return ctx->status;\n";
-    return s;
+    out.emitLine("};");
+    out.emitLine("for (;;) {");
+    {
+        CSourceStream::IndentGuard g(out);
+        if (instance.driftEnabled()) {
+            out.emitLine("unsigned int d = (unsigned)(ctx->pc / " +
+                         std::to_string(instance.driftPeriod()) + ") % " +
+                         std::to_string(instance.driftVariants()) + ";");
+            out.emitLine("unsigned char opcode = " +
+                         emitUnmapSelectExpr(instance, tag, "d") + "[ctx->code[ctx->pc]];");
+        } else {
+            out.emitLine("unsigned char opcode = ctx->code[ctx->pc];");
+        }
+        out.emitLine("mj2x_vm_handler_" + tag + " h = mj2x_vm_table_" + tag + "[opcode];");
+        out.emitLine("if (!h) { ctx->status = 2; /* InvalidBytecode */ break; }");
+        // RETURN 在 dispatch body 里经 goto mj2x_vm_done 返回，此时 ctx->pc 已越过
+        // RETURN 指令（含 operand），不能靠 code[ctx->pc-1] 判断（那是 operand 末字节）。
+        // 在调用前记录 opcode 位置，用 code[op_pos] 是否属于 Return 字节全集判断
+        // （drift 开启时用 op_pos 的变体解回 canonical 后比对）。
+        out.emitLine("unsigned int op_pos = ctx->pc;");
+        out.emitLine("h(ctx);");
+        if (instance.driftEnabled()) {
+            out.emitLine("unsigned int d2 = (unsigned)(op_pos / " +
+                         std::to_string(instance.driftPeriod()) + ") % " +
+                         std::to_string(instance.driftVariants()) + ";");
+            out.emitLine("unsigned char _op = " +
+                         emitUnmapSelectExpr(instance, tag, "d2") + "[ctx->code[op_pos]];");
+            char e[64];
+            std::snprintf(e, sizeof(e), "int _is_ret = (_op == 0x%02x);",
+                          static_cast<unsigned>(instance.opcodeFor(VmOpcode::Return)));
+            out.emitLine(e);
+        } else {
+            out.emitLine("unsigned char _op = ctx->code[op_pos];");
+            out.emitLine("int _is_ret = 0;");
+            for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Return)) {
+                char e[48];
+                std::snprintf(e, sizeof(e), "if (_op == 0x%02x) _is_ret = 1;", static_cast<unsigned>(b));
+                out.emitLine(e);
+            }
+        }
+        out.emitLine("if (ctx->status != 0 || _is_ret) break;");
+    }
+    out.emitLine("}");
+    out.emitLine("return ctx->status;");
 }
 
 /// 形态 2：ComputedGoto —— GCC "Labels as Values" 扩展（MSVC 不支持，调用方需守卫）。
-std::string emitComputedGotoDispatcher(const VmInstance& instance, const std::string& progName,
-                                       const std::string& targetsName, const std::string& tag)
+void emitComputedGotoDispatcher(CSourceStream& out, const VmInstance& instance,
+                                const std::string& progName, const std::string& targetsName,
+                                const std::string& tag)
 {
-    std::string s = emitCommonDecls(progName, targetsName);
+    emitCommonDecls(out, progName, targetsName);
     // 所有槽默认指向 halt（防御非法 opcode：goto *NULL 是 UB），显式条目覆盖。
-    // Halt 别名槽同样指向 halt；drift 开启时 unmap 已解回 canonical，只填 canonical 槽。
-    s += "    static const void* mj2x_vm_labels[256] = { [0 ... 255] = &&mj2x_vm_halt";
-    for (const auto& op : instance.handlerOrder()) {
-        const HandlerEntry* entry = findHandler(op);
-        if (entry == nullptr) continue;
-        if (instance.driftEnabled()) {
+    out.emitLine("static const void* mj2x_vm_labels[256] = { [0 ... 255] = &&mj2x_vm_halt");
+    {
+        CSourceStream::IndentGuard g(out);
+        auto emitLabel = [&](uint8_t byte) {
             char e[64];
             std::snprintf(e, sizeof(e), ", [0x%02x] = &&mj2x_vm_op_%02x",
-                          static_cast<unsigned>(instance.opcodeFor(op)),
-                          static_cast<unsigned>(instance.opcodeFor(op)));
-            s += e;
-            continue;
-        }
-        for (uint8_t b : instance.opcodeBytesFor(op)) {
-            char e[64];
-            std::snprintf(e, sizeof(e), ", [0x%02x] = &&mj2x_vm_op_%02x",
-                          static_cast<unsigned>(b), static_cast<unsigned>(b));
-            s += e;
+                          static_cast<unsigned>(byte), static_cast<unsigned>(byte));
+            out.emitLine(e);
+        };
+        for (const auto& op : instance.handlerOrder()) {
+            const HandlerEntry* entry = findHandler(op);
+            if (entry == nullptr) continue;
+            if (instance.driftEnabled()) {
+                emitLabel(instance.opcodeFor(op));
+                continue;
+            }
+            for (uint8_t b : instance.opcodeBytesFor(op)) emitLabel(b);
         }
     }
-    s += "\n    };\n";
+    out.emitLine("};");
     if (instance.driftEnabled()) {
-        s += "    unsigned int d = (unsigned)(pc / " + std::to_string(instance.driftPeriod()) +
-             ") % " + std::to_string(instance.driftVariants()) + ";\n";
-        s += "    goto *mj2x_vm_labels[" + emitUnmapSelectExpr(instance, tag, "d") +
-             "[code[pc++]]];\n";
+        out.emitLine("unsigned int d = (unsigned)(pc / " + std::to_string(instance.driftPeriod()) +
+                     ") % " + std::to_string(instance.driftVariants()) + ";");
+        out.emitLine("goto *mj2x_vm_labels[" + emitUnmapSelectExpr(instance, tag, "d") +
+                     "[code[pc++]]];");
     } else {
-        s += "    goto *mj2x_vm_labels[code[pc++]];\n";
+        out.emitLine("goto *mj2x_vm_labels[code[pc++]];");
     }
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
-        if (instance.driftEnabled()) {
+        auto emitOpBlock = [&](uint8_t byte) {
             char lbl[32];
-            std::snprintf(lbl, sizeof(lbl), "mj2x_vm_op_%02x:\n",
-                          static_cast<unsigned>(instance.opcodeFor(op)));
-            s += "    {\n";
-            s += lbl;
-            s += handlerBodyFor(instance, entry);
-            s += "        { unsigned int nd = (unsigned)(pc / " +
-                 std::to_string(instance.driftPeriod()) + ") % " +
-                 std::to_string(instance.driftVariants()) +
-                 "; goto *mj2x_vm_labels[" + emitUnmapSelectExpr(instance, tag, "nd") +
-                 "[code[pc++]]]; }\n";
-            s += "    }\n";
+            std::snprintf(lbl, sizeof(lbl), "mj2x_vm_op_%02x:", static_cast<unsigned>(byte));
+            out.label_(lbl);
+            out.emitLine("{");
+            {
+                CSourceStream::IndentGuard g(out);
+                out.emitRaw(handlerBodyFor(instance, entry));
+                if (instance.driftEnabled()) {
+                    out.emitLine("unsigned int nd = (unsigned)(pc / " +
+                                 std::to_string(instance.driftPeriod()) + ") % " +
+                                 std::to_string(instance.driftVariants()) +
+                                 "; goto *mj2x_vm_labels[" + emitUnmapSelectExpr(instance, tag, "nd") +
+                                 "[code[pc++]]];");
+                } else {
+                    out.emitLine("goto *mj2x_vm_labels[code[pc++]];");
+                }
+            }
+            out.emitLine("}");
+        };
+        if (instance.driftEnabled()) {
+            emitOpBlock(instance.opcodeFor(op));
             continue;
         }
-        for (uint8_t b : instance.opcodeBytesFor(op)) {
-            char lbl[32];
-            std::snprintf(lbl, sizeof(lbl), "mj2x_vm_op_%02x:\n",
-                          static_cast<unsigned>(b));
-            s += "    {\n";
-            s += lbl;
-            s += handlerBodyFor(instance, entry);
-            s += "        goto *mj2x_vm_labels[code[pc++]];\n";
-            s += "    }\n";
-        }
+        for (uint8_t b : instance.opcodeBytesFor(op)) emitOpBlock(b);
     }
-    s += "mj2x_vm_halt:\n";
-    s += "    status = (status!=0)?status:2u /* InvalidBytecode */;\n";
-    s += "mj2x_vm_done:\n";
-    s += "    return status;\n";
-    return s;
+    out.label_("mj2x_vm_halt");
+    out.emitLine("status = (status!=0)?status:2u /* InvalidBytecode */;");
+    out.label_("mj2x_vm_done");
+    out.emitLine("return status;");
 }
 
 /// 形态 3：IfNest —— 线性 if/else if 链（无跳表）。
-std::string emitIfNestDispatcher(const VmInstance& instance, const std::string& progName,
-                                 const std::string& targetsName, const std::string& tag)
+void emitIfNestDispatcher(CSourceStream& out, const VmInstance& instance,
+                          const std::string& progName, const std::string& targetsName,
+                          const std::string& tag)
 {
-    std::string s = emitCommonDecls(progName, targetsName);
-    s += "    for (;;) {\n";
-    s += emitOpcodeFetch(instance, tag, "        ");
-    for (const auto& op : instance.handlerOrder()) {
-        const HandlerEntry* entry = findHandler(op);
-        if (entry == nullptr) continue;
-        s += "        if (" + emitOpcodeByteOrChain(instance, op) + ") {\n";
-        s += handlerBodyFor(instance, entry);
-        s += "        } else ";
+    emitCommonDecls(out, progName, targetsName);
+    out.emitLine("for (;;) {");
+    {
+        CSourceStream::IndentGuard g(out);
+        emitOpcodeFetch(out, instance, tag);
+        for (const auto& op : instance.handlerOrder()) {
+            const HandlerEntry* entry = findHandler(op);
+            if (entry == nullptr) continue;
+            out.emitLine("if (" + emitOpcodeByteOrChain(instance, op) + ") {");
+            {
+                CSourceStream::IndentGuard g2(out);
+                out.emitRaw(handlerBodyFor(instance, entry));
+            }
+            out.emitLine("} else");
+        }
+        out.emitLine("{ status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done; }");
     }
-    s += "{ status = (status!=0)?status:2u /* InvalidBytecode */; goto mj2x_vm_done; }\n";
-    s += "    }\n";
-    s += "mj2x_vm_done:\n";
-    s += "    return status;\n";
-    return s;
+    out.emitLine("}");
+    out.label_("mj2x_vm_done");
+    out.emitLine("return status;");
 }
 
 /// 形态 4：StateDispatcher —— state 寄存器 + 控制流平坦化。
@@ -689,33 +693,39 @@ std::string emitIfNestDispatcher(const VmInstance& instance, const std::string& 
 /// 把 dispatch loop 包进一个 while(state==RUNNING) 的平坦结构，opcode 决定
 /// 下一次迭代走哪个 case。这复刻 RegC CFF 的 state-dispatcher 思路
 /// （reg_transform_passes.hpp 的 ControlFlowFlattening）。
-std::string emitStateDispatcher(const VmInstance& instance, const std::string& progName,
-                                 const std::string& targetsName, const std::string& tag)
+void emitStateDispatcher(CSourceStream& out, const VmInstance& instance,
+                         const std::string& progName, const std::string& targetsName,
+                         const std::string& tag)
 {
-    std::string s = emitCommonDecls(progName, targetsName);
-    s += "    unsigned int state = 1; /* 1=RUNNING 0=DONE */\n";
-    s += "    while (state) {\n";
-    s += emitOpcodeFetch(instance, tag, "        ");
-    s += "        switch (opcode) {\n";
-    for (const auto& op : instance.handlerOrder()) {
-        const HandlerEntry* entry = findHandler(op);
-        if (entry == nullptr) continue;
-        s += emitHandlerCase(instance, entry, "        ");
+    emitCommonDecls(out, progName, targetsName);
+    out.emitLine("unsigned int state = 1; /* 1=RUNNING 0=DONE */");
+    out.emitLine("while (state) {");
+    {
+        CSourceStream::IndentGuard g(out);
+        emitOpcodeFetch(out, instance, tag);
+        out.emitLine("switch (opcode) {");
+        {
+            CSourceStream::IndentGuard g2(out);
+            for (const auto& op : instance.handlerOrder()) {
+                const HandlerEntry* entry = findHandler(op);
+                if (entry == nullptr) continue;
+                emitHandlerCase(out, instance, entry);
+            }
+            emitHaltCaseHeads(out, instance);
+            out.emitLine("default: state = 0; status = (status!=0)?status:2u /* InvalidBytecode */; break;");
+        }
+        out.emitLine("}");
     }
-    s += emitHaltCaseHeads(instance, "        ");
-    s += "        default: state = 0; status = (status!=0)?status:2u /* InvalidBytecode */; break;\n";
-    s += "        }\n";
-    s += "    }\n";
-    s += "mj2x_vm_done:\n";
-    s += "    return status;\n";
-    return s;
+    out.emitLine("}");
+    out.label_("mj2x_vm_done");
+    out.emitLine("return status;");
 }
 
 /// 注入 bogus handler：文件级 static 函数，dispatch 结构不引用它们
 /// （只污染静态分析，运行时永不命中）。内容由实例 seed 确定性生成。
-std::string emitBogusHandlers(const VmInstance& instance, const std::string& tag)
+void emitBogusHandlers(CSourceStream& out, const VmInstance& instance, const std::string& tag)
 {
-    if (instance.bogusHandlers() <= 0) return "";
+    if (instance.bogusHandlers() <= 0) return;
     auto splitmix = [](uint64_t& x) {
         x += 0x9E3779B97F4A7C15ull;
         uint64_t z = x;
@@ -723,7 +733,6 @@ std::string emitBogusHandlers(const VmInstance& instance, const std::string& tag
         z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
         return z ^ (z >> 31);
     };
-    std::string s;
     for (int i = 0; i < instance.bogusHandlers(); ++i) {
         uint64_t state = instance.instanceSeed() ^ (static_cast<uint64_t>(i + 1) * 0xABCDEF0123456789ull);
         const uint64_t a = splitmix(state);
@@ -731,16 +740,16 @@ std::string emitBogusHandlers(const VmInstance& instance, const std::string& tag
         const uint64_t c = splitmix(state);
         char name[64];
         std::snprintf(name, sizeof(name), "mj2x_vm_bogus_%s_%d", tag.c_str(), i);
-        s += std::string("static unsigned int ") + name +
-             "(mj2x_vm_slot* _slots, mj2x_vm_slot* _ret) {\n";
-        s += "    (void)_slots; (void)_ret;\n";
-        s += "    /* 不可达假 handler：不存在于任何 dispatch 结构，仅污染静态分析 */\n";
-        s += "    unsigned int _acc = " + std::to_string(a) + "u;\n";
-        s += "    _acc = (_acc * " + std::to_string(b) + "u) ^ " + std::to_string(c) + "u;\n";
-        s += "    return _acc & 0u;\n";
-        s += "}\n";
+        out.add_func(std::string("static unsigned int ") + name +
+                         "(mj2x_vm_slot* _slots, mj2x_vm_slot* _ret)",
+                     [&](CSourceStream& f) {
+            f.emitLine("(void)_slots; (void)_ret;");
+            f.comment("不可达假 handler：不存在于任何 dispatch 结构，仅污染静态分析");
+            f.emitLine("unsigned int _acc = " + std::to_string(a) + "u;");
+            f.emitLine("_acc = (_acc * " + std::to_string(b) + "u) ^ " + std::to_string(c) + "u;");
+            f.emitLine("return _acc & 0u;");
+        });
     }
-    return s;
 }
 
 }   // namespace
@@ -838,7 +847,7 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
                         bits = static_cast<unsigned long long>(c.intBits);
                     }
                     char buf[48];
-                    std::snprintf(buf, sizeof(buf), "    {%u, %uu, 0x%016llxULL},",
+                    std::snprintf(buf, sizeof(buf), "{%u, %uu, 0x%016llxULL},",
                                   static_cast<unsigned>(c.type), c.destSlot,
                                   static_cast<unsigned long long>(bits));
                     out.emitLine(buf);
@@ -856,9 +865,10 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         line.append(targetsName);
         line.append("[] = {");
         out.emitLine(line.build());
-        CSourceStream body;
-        body.append(emitU32Array(program.blockTargets, "    "));
-        out.emitRaw(body.build().to_std_string());
+        {
+            CSourceStream::IndentGuard g(out);
+            out.emitRaw(emitU32Array(program.blockTargets, "    "));
+        }
         out.emitLine("");
         out.emitLine("};");
         out.emitBlankLine();
@@ -871,9 +881,10 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         line.append(progName);
         line.append("[] = {");
         out.emitLine(line.build());
-        CSourceStream body;
-        body.append(emitByteArray(program.bytecodes, "    "));
-        out.emitRaw(body.build().to_std_string());
+        {
+            CSourceStream::IndentGuard g(out);
+            out.emitRaw(emitByteArray(program.bytecodes, "    "));
+        }
         out.emitLine("");
         out.emitLine("};");
         out.emitBlankLine();
@@ -881,56 +892,43 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
 
     // drift 的 per-variant unmap 表是文件级定义，必须在 exec 函数之前发射。
     if (instance.driftEnabled()) {
-        out.emitRaw(emitDriftUnmapTables(instance, tag));
+        emitDriftUnmapTables(out, instance, tag);
         out.emitBlankLine();
     }
 
     // FuncPtrTable 的 ctx struct / dispatch body 是文件级定义，必须在 exec 函数
     // 之前发射（MSVC 不支持嵌套函数）。其他 dispatcher 无文件级结构。
     if (instance.dispatcherKind() == VmDispatcherKind::FuncPtrTable) {
-        out.emitRaw(emitFuncPtrFilePrelude(instance, tag));
+        emitFuncPtrFilePrelude(out, instance, tag);
         out.emitBlankLine();
     }
 
     // --- 解释器入口函数（按 dispatcherKind 选择形态）---
-    {
-        CSourceStream sig;
-        sig.append("static unsigned int ");
-        sig.append(funcName);
-        sig.append("(mj2x_vm_slot* slots, mj2x_vm_slot* retval) {");
-        out.emitLine(sig.build());
-        out.emitLine("(void)retval;");
-
-        std::string body;
+    out.add_func("static unsigned int " + funcName + "(mj2x_vm_slot* slots, mj2x_vm_slot* retval)",
+                 [&](CSourceStream& f) {
+        f.emitLine("(void)retval;");
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
-            body = emitSwitchDispatcher(instance, progName, targetsName, tag);
+            emitSwitchDispatcher(f, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::FuncPtrTable:
-            body = emitFuncPtrDispatcher(instance, progName, targetsName, tag);
+            emitFuncPtrDispatcher(f, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::ComputedGoto:
-            body = emitComputedGotoDispatcher(instance, progName, targetsName, tag);
+            emitComputedGotoDispatcher(f, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::IfNest:
-            body = emitIfNestDispatcher(instance, progName, targetsName, tag);
+            emitIfNestDispatcher(f, instance, progName, targetsName, tag);
             break;
         case VmDispatcherKind::StateDispatcher:
-            body = emitStateDispatcher(instance, progName, targetsName, tag);
+            emitStateDispatcher(f, instance, progName, targetsName, tag);
             break;
         }
-        out.emitRaw(body);
-
-        out.emitLine("}");
-        out.emitBlankLine();
-    }
+    });
+    out.emitBlankLine();
 
     // bogus handler 注入（文件级，dispatch 结构不引用，只污染静态分析）。
-    const std::string bogus = emitBogusHandlers(instance, tag);
-    if (!bogus.empty()) {
-        out.emitRaw(bogus);
-        out.emitBlankLine();
-    }
+    emitBogusHandlers(out, instance, tag);
 
     return out.str();
 }
