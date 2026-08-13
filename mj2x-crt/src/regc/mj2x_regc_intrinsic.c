@@ -426,6 +426,14 @@ int32_t mj2x_intrinsic_int_reverse(int32_t value)
     return (int32_t)v;
 }
 
+int32_t mj2x_intrinsic_int_reverse_bytes(int32_t value)
+{
+    uint32_t v = (uint32_t)value;
+    v = ((v & 0x00FF00FFU) << 8) | ((v >> 8) & 0x00FF00FFU);
+    v = (v << 16) | (v >> 16);
+    return (int32_t)v;
+}
+
 int32_t mj2x_intrinsic_int_bit_count(int32_t value)
 {
     return (int32_t)mj2x_intrinsic_popcount32((uint32_t)value);
@@ -480,6 +488,15 @@ int64_t mj2x_intrinsic_long_reverse(int64_t value)
     v = ((v & UINT64_C(0x5555555555555555)) << 1) | ((v >> 1) & UINT64_C(0x5555555555555555));
     v = ((v & UINT64_C(0x3333333333333333)) << 2) | ((v >> 2) & UINT64_C(0x3333333333333333));
     v = ((v & UINT64_C(0x0F0F0F0F0F0F0F0F)) << 4) | ((v >> 4) & UINT64_C(0x0F0F0F0F0F0F0F0F));
+    v = ((v & UINT64_C(0x00FF00FF00FF00FF)) << 8) | ((v >> 8) & UINT64_C(0x00FF00FF00FF00FF));
+    v = ((v & UINT64_C(0x0000FFFF0000FFFF)) << 16) | ((v >> 16) & UINT64_C(0x0000FFFF0000FFFF));
+    v = (v << 32) | (v >> 32);
+    return (int64_t)v;
+}
+
+int64_t mj2x_intrinsic_long_reverse_bytes(int64_t value)
+{
+    uint64_t v = (uint64_t)value;
     v = ((v & UINT64_C(0x00FF00FF00FF00FF)) << 8) | ((v >> 8) & UINT64_C(0x00FF00FF00FF00FF));
     v = ((v & UINT64_C(0x0000FFFF0000FFFF)) << 16) | ((v >> 16) & UINT64_C(0x0000FFFF0000FFFF));
     v = (v << 32) | (v >> 32);

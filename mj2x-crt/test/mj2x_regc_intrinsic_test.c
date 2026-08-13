@@ -55,6 +55,9 @@ void test_regc_intrinsic_bit_ops(void)
     expect(mj2x_intrinsic_int_rotate_right(1, -1) == 2);
     expect(mj2x_intrinsic_int_reverse(0x00000001) == (int32_t)0x80000000);
     expect(mj2x_intrinsic_int_reverse((int32_t)0x80000000U) == 1);
+    expect(mj2x_intrinsic_int_reverse_bytes(0x12345678) == (int32_t)0x78563412);
+    expect(mj2x_intrinsic_int_reverse_bytes(0x00000001) == (int32_t)0x01000000);
+    expect(mj2x_intrinsic_int_reverse_bytes(-1) == -1);
     expect(mj2x_intrinsic_int_bit_count(0) == 0);
     expect(mj2x_intrinsic_int_bit_count(-1) == 32);
     expect(mj2x_intrinsic_int_bit_count(0x0F0F0F0F) == 16);
@@ -82,6 +85,9 @@ void test_regc_intrinsic_bit_ops(void)
            INT64_C(0xDEF0123456789ABC));
     expect(mj2x_intrinsic_long_rotate_right(1, -1) == 2);
     expect(mj2x_intrinsic_long_reverse(1) == INT64_MIN);
+    expect(mj2x_intrinsic_long_reverse_bytes(INT64_C(0x1122334455667788)) ==
+           INT64_C(0x8877665544332211));
+    expect(mj2x_intrinsic_long_reverse_bytes(1) == INT64_C(0x0100000000000000));
     expect(mj2x_intrinsic_long_reverse(INT64_MIN) == 1);
     expect(mj2x_intrinsic_long_bit_count(INT64_C(0)) == 0);
     expect(mj2x_intrinsic_long_bit_count(INT64_C(-1)) == 64);
