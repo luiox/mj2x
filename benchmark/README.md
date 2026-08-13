@@ -34,3 +34,27 @@ Results are written under `test/java_obfuscator_test/benchmark-current/`:
 
 The benchmark requires a JDK. The script adds `JAVA_HOME/bin` to `PATH` for
 `java`, `javac`, and `jar` discovery.
+
+## RegC vs os30(JNIC) 13-probe 对比（`jvm_obfuscator_test_benchmark.ps1`）
+
+RegC 性能对比主路径：把 jvm-obf-tester（13 个探针 jar）用
+`mj2x-cli --backend regc` 全量 native 化，与竞品 os30（JNIC 混淆产物）在同一
+JDK 下对比各探针耗时。方法学遵循 performance_evaluation_spec：覆盖率审计
+（javap 验证 ACC_NATIVE）+ 预热 1 轮 + `-Runs` 次取样取平均。
+
+```powershell
+# JDK21（默认输入 D:\WorkSpace\jvm-obf-tester\target\jvm-obf-tester.jar 与 _os30.jar）
+pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHome C:\Users\Canrad\.jdks\corretto-21.0.4 -Runs 3 -SkipBuild
+
+# JDK17
+pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHome D:\sdk\java\jdk17 -Runs 3 -SkipBuild
+```
+
+产物与报告：
+
+- RegC 产物：`test/jvm-obf-tester/jvm-obf-tester-regc.jar`（含嵌入的 native DLL）。
+- 报告：`results/<日期>-jvm-obf-tester-os30.md`（总耗时 + 13-probe 明细 + 覆盖率审计）。
+- 脚本内部处理 xmake 配置稳定性（issue #782）：`-P` 显式指定 + `-c` 重置，
+  避免子项目配置破坏 root。
+
+测试分层与各组执行命令见 `mj2x/doc/regc_test_strategy.md`。
