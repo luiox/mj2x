@@ -11,6 +11,9 @@
 #include <sstream>
 #include <vector>
 
+// libca/process/subprocess.hpp 会 #undef 全局 stdout/stderr 宏（Command 成员
+// 同名防污染），这里在 include 之前固化宏值，供文件尾部导出的 MSVC 环境
+// 加载函数（loadMsvcEnvironment）使用。
 namespace {
 std::FILE* const kStdoutStream = stdout;
 std::FILE* const kStderrStream = stderr;
@@ -20,6 +23,98 @@ std::FILE* const kStderrStream = stderr;
 #include "libca/process/subprocess.hpp"
 
 namespace mj2x::cli {
+
+// 导出给 native_project_builder（xmake 子进程复用 MSVC 环境）：加载
+// INCLUDE/LIB/PATH，必要时调 vcvarsall.bat x64。自包含实现——匿名 namespace
+// 内的同名函数是 internal linkage 无法跨 TU 链接，这里独立实现（宏值取自
+// kStdoutStream/kStderrStream，其在 subprocess.hpp 之前已固化）。
+using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
+
+bool loadMsvcEnvironment(ProcessEnvironment& environment,
+                         std::filesystem::path& compilerPath)
+{
+    const char* includeValue = std::getenv("INCLUDE");
+    if (includeValue != nullptr && includeValue[0] != '\0') {
+        compilerPath = "cl";
+        return true;
+    }
+
+    const auto vcvars = jdk_finder::findVcvarsAll();
+    if (vcvars.empty()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: MSVC environment is not configured and vcvarsall.bat was not "
+                "found.\n");
+        return false;
+    }
+    std::string shellPath = std::getenv("ComSpec") != nullptr ? std::getenv("ComSpec")
+                                                              : "cmd.exe";
+    ca::process::Command shell(shellPath);
+    shell.current_dir(vcvars.parent_path().string());
+    shell.env("MJ2X_VCVARS_COMMAND",
+              "chcp 65001 >nul && call vcvarsall.bat x64 >nul && set");
+    shell.arg("/d").arg("/c").arg("%MJ2X_VCVARS_COMMAND%");
+    auto captured = shell.output();
+    if (captured.is_err()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot configure MSVC environment: %s\n",
+                captured.unwrap_err().to_string().c_str());
+        return false;
+    }
+    auto output = std::move(captured).unwrap();
+    if (!output.status.success()) {
+        if (!output.stdout_data.empty())
+            fwrite(output.stdout_data.data(), 1, output.stdout_data.size(), kStdoutStream);
+        if (!output.stderr_data.empty())
+            fwrite(output.stderr_data.data(), 1, output.stderr_data.size(), kStderrStream);
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: vcvarsall.bat failed with exit code %d.\n",
+                output.status.code);
+        return false;
+    }
+
+    std::istringstream lines(output.stdout_data);
+    std::string        line;
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto separator = line.find('=');
+        if (separator == std::string::npos || separator == 0) continue;
+        environment.emplace_back(line.substr(0, separator), line.substr(separator + 1));
+    }
+    std::filesystem::path found;
+    std::string           pathValue;
+    for (const auto& [key, value] : environment) {
+        if (_stricmp(key.c_str(), "PATH") == 0) {
+            pathValue = value;
+            break;
+        }
+    }
+    std::istringstream paths(pathValue);
+    std::string        entry;
+    std::error_code    ec;
+    while (std::getline(paths, entry, ';')) {
+        const auto first = entry.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) continue;
+        const auto last = entry.find_last_not_of(" \t\r\n");
+        entry = entry.substr(first, last - first + 1);
+        if (entry.size() >= 2 && entry.front() == '"' && entry.back() == '"')
+            entry = entry.substr(1, entry.size() - 2);
+        if (entry.empty()) continue;
+        const auto candidate = std::filesystem::path(entry) / "cl.exe";
+        if (std::filesystem::is_regular_file(candidate, ec)) {
+            found = candidate;
+            break;
+        }
+        ec.clear();
+    }
+    if (found.empty()) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: vcvarsall.bat completed without making cl.exe available.\n");
+        return false;
+    }
+    compilerPath = found;
+    return true;
+}
+
 namespace {
 
 /// 跨平台读环境变量（编译流程用：判断 INCLUDE 是否配置等）。JDK/工具链探测
@@ -356,61 +451,6 @@ std::filesystem::path findExecutableOnPath(const std::string& pathValue,
         ec.clear();
     }
     return {};
-}
-
-bool loadMsvcEnvironment(ProcessEnvironment& environment,
-                         std::filesystem::path& compilerPath)
-{
-    if (!envValue("INCLUDE").empty()) {
-        compilerPath = "cl";
-        return true;
-    }
-
-    const auto vcvars = findVcvarsAll();
-    if (vcvars.empty()) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: MSVC environment is not configured and vcvarsall.bat was not "
-                "found.\n");
-        return false;
-    }
-    std::string shellPath = envValue("ComSpec");
-    if (shellPath.empty()) shellPath = "cmd.exe";
-    ca::process::Command shell(shellPath);
-    shell.current_dir(vcvars.parent_path().string());
-    shell.env("MJ2X_VCVARS_COMMAND",
-              "chcp 65001 >nul && call vcvarsall.bat x64 >nul && set");
-    shell.arg("/d").arg("/c").arg("%MJ2X_VCVARS_COMMAND%");
-    auto captured = shell.output();
-    if (captured.is_err()) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: cannot configure MSVC environment: %s\n",
-                captured.unwrap_err().to_string().c_str());
-        return false;
-    }
-    auto output = std::move(captured).unwrap();
-    if (!output.status.success()) {
-        writeProcessOutput(output);
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: vcvarsall.bat failed with exit code %d.\n",
-                output.status.code);
-        return false;
-    }
-
-    std::istringstream lines(output.stdout_data);
-    std::string        line;
-    while (std::getline(lines, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        const auto separator = line.find('=');
-        if (separator == std::string::npos || separator == 0) continue;
-        environment.emplace_back(line.substr(0, separator), line.substr(separator + 1));
-    }
-    compilerPath = findExecutableOnPath(environmentValue(environment, "PATH"), "cl.exe");
-    if (compilerPath.empty()) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: vcvarsall.bat completed without making cl.exe available.\n");
-        return false;
-    }
-    return true;
 }
 
 class ScopedTemporarySource

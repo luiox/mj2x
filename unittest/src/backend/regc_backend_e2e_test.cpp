@@ -1894,6 +1894,9 @@ SafeEnvProcessEnv loadVcvarsEnv(const Toolchain& tc, std::string& error)
 }
 
 // 直接启动程序（不经 shell），可追加环境变量覆盖，返回退出码 + stdout/stderr 合并。
+// 注意：程序名必须是全路径 —— CreateProcessW 的裸名搜索只查父进程（测试运行器）
+// 的 PATH，不查 lpEnvironment 里传入的 PATH；测试运行器在 Git Bash 下启动，
+// 父 PATH 未必含 MSVC，故工具名一律先经 findToolInPath 解析为全路径。
 SafeEnvExecResult runProcess(const fs::path& program, const std::vector<std::string>& args,
                              const SafeEnvProcessEnv& env, const fs::path& cwd = {})
 {
@@ -1911,6 +1914,25 @@ SafeEnvExecResult runProcess(const fs::path& program, const std::vector<std::str
     return {output.status.code, output.stdout_data + output.stderr_data};
 }
 
+// 在 vcvars 环境里按 PATH 顺序找 cl.exe/link.exe（CreateProcessW 裸名搜索
+// 不查子进程环境块，见 runProcess 注释；与 CLI loadMsvcEnvironment 的
+// 全路径解析同模式）。
+fs::path findToolInPath(const SafeEnvProcessEnv& env, const char* exeName)
+{
+    for (const auto& [key, value] : env) {
+        if (key != "PATH" && key != "Path") continue;
+        std::istringstream pathStream(value);
+        std::string        entry;
+        while (std::getline(pathStream, entry, ';')) {
+            if (entry.empty()) continue;
+            const auto candidate = fs::path(entry) / exeName;
+            std::error_code ec;
+            if (fs::exists(candidate, ec)) return candidate;
+        }
+    }
+    return {};
+}
+
 // 编译 hook DLL（复刻 c2j 工具的原地改写 install）。
 void buildHookDll(const Toolchain& tc, const fs::path& dir)
 {
@@ -1922,6 +1944,10 @@ void buildHookDll(const Toolchain& tc, const fs::path& dir)
     std::string vcvarsError;
     auto        env = loadVcvarsEnv(tc, vcvarsError);
     ASSERT_TRUE(!env.empty()) << vcvarsError;
+    const auto clPath   = findToolInPath(env, "cl.exe");
+    const auto linkPath = findToolInPath(env, "link.exe");
+    ASSERT_FALSE(clPath.empty()) << "cl.exe not found in vcvars PATH";
+    ASSERT_FALSE(linkPath.empty()) << "link.exe not found in vcvars PATH";
 
     std::vector<std::string> includes = {"/I" + tc.jdkInclude.string(),
                                          "/I" + tc.jdkIncludeWin.string()};
@@ -1929,9 +1955,9 @@ void buildHookDll(const Toolchain& tc, const fs::path& dir)
                                        "/Fo" + (dir / "hook_dll.obj").string(),
                                        hookC.string()};
     clArgs.insert(clArgs.end(), includes.begin(), includes.end());
-    auto clResult = runProcess("cl", clArgs, env, dir);
+    auto clResult = runProcess(clPath, clArgs, env, dir);
     ASSERT_EQ(clResult.exitCode, 0) << clResult.out;
-    auto linkResult = runProcess("link",
+    auto linkResult = runProcess(linkPath,
                                  {"/nologo", "/DLL", "/OUT:" + (dir / "hook_dll.dll").string(),
                                   (dir / "hook_dll.obj").string()},
                                  env, dir);
@@ -1993,6 +2019,10 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
     std::string vcvarsError;
     auto        env = loadVcvarsEnv(tc, vcvarsError);
     ASSERT_TRUE(!env.empty()) << vcvarsError;
+    const auto clPath   = findToolInPath(env, "cl.exe");
+    const auto linkPath = findToolInPath(env, "link.exe");
+    ASSERT_FALSE(clPath.empty()) << "cl.exe not found in vcvars PATH";
+    ASSERT_FALSE(linkPath.empty()) << "link.exe not found in vcvars PATH";
     std::vector<std::string> includes = {"/I" + crtSrc.string(), "/I" + tc.jdkInclude.string(),
                                          "/I" + tc.jdkIncludeWin.string()};
 
@@ -2000,7 +2030,7 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
                                         "/Fo" + (objDir / "generated.obj").string(),
                                         cFile.string()};
     genArgs.insert(genArgs.end(), includes.begin(), includes.end());
-    auto generated = runProcess("cl", genArgs, env, dir);
+    auto generated = runProcess(clPath, genArgs, env, dir);
     ASSERT_EQ(generated.exitCode, 0) << generated.out;
 
     std::vector<fs::path> objs;
@@ -2012,7 +2042,7 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
         std::vector<std::string> crtArgs = {"/nologo", "/O2", "/TC", "/utf-8", "/c",
                                             "/Fo" + obj.string(), src.string()};
         crtArgs.insert(crtArgs.end(), includes.begin(), includes.end());
-        auto rc = runProcess("cl", crtArgs, env, dir);
+        auto rc = runProcess(clPath, crtArgs, env, dir);
         ASSERT_EQ(rc.exitCode, 0) << rc.out;
     };
     compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
@@ -2023,7 +2053,7 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
     std::vector<std::string> linkArgs = {"/nologo", "/DLL", "/OUT:" + dll.string(),
                                          (objDir / "generated.obj").string()};
     for (const auto& obj : objs) linkArgs.push_back(obj.string());
-    auto linkResult = runProcess("link", linkArgs, env, dir);
+    auto linkResult = runProcess(linkPath, linkArgs, env, dir);
     ASSERT_EQ(linkResult.exitCode, 0) << linkResult.out;
     ASSERT_TRUE(fileExists(dll));
 }

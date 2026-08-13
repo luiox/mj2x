@@ -20,6 +20,14 @@ std::FILE* const kStderrStream = stderr;
 #include "libca/process/subprocess.hpp"
 
 namespace mj2x::cli {
+
+// native_compiler.cpp 提供的外部链接实现（无头文件声明）：加载 MSVC 编译环境
+// （INCLUDE/LIB/PATH，必要时调 vcvarsall.bat x64）。xmake 子进程复用同一环境，
+// 否则在 PATH 含 mingw64 的 shell（Git Bash）下 xmake 会探测 mingw 工具链导致
+// "cannot get program for cc"。
+using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
+bool loadMsvcEnvironment(ProcessEnvironment& environment, std::filesystem::path& compilerPath);
+
 namespace fs = std::filesystem;
 namespace {
 
@@ -137,10 +145,13 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         .arg("-P")
         .arg(".")
         .arg("-m")
-        .arg(config.mode)
-        .arg("-y");
-    if (!runXmake(configure, "configure")) return 1;
-
+        .arg(config.mode);
+#if defined(_WIN32)
+    // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
+    // program for cc"——显式锁定 windows + msvc 工具链。
+    configure.arg("-p").arg("windows").arg("--toolchain=msvc");
+#endif
+    configure.arg("-y");
     ca::process::Command build("xmake");
     build.current_dir(config.projectDir.string())
         .arg("build")
@@ -148,6 +159,21 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         .arg(".")
         .arg("-y")
         .arg("mj2x_native");
+#if defined(_WIN32)
+    ProcessEnvironment    environment;
+    std::filesystem::path compilerPath;
+    if (!loadMsvcEnvironment(environment, compilerPath)) {
+        fprintf(kStderrStream,
+                "[mj2x] ERROR: cannot configure MSVC environment for xmake build.\n");
+        return 1;
+    }
+    for (const auto& [key, value] : environment) {
+        configure.env(key, value);
+        build.env(key, value);
+    }
+#endif
+    if (!runXmake(configure, "configure")) return 1;
+
     if (!runXmake(build, "build")) return 1;
 
     std::vector<fs::path> libraries;
