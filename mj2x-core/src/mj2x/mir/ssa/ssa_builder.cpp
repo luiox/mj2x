@@ -367,9 +367,27 @@ bool blockContainsLabel(const Block* block, int labelId)
     return false;
 }
 
+/// @brief 块是否落在异常表保护区 `[startLabel, endLabel)` 内。
+///
+/// @details
+/// 判定真源 = 指令序号区间（ExceptionHandler::startInsnIdx/endInsnIdx 与
+/// Block::firstInsnIdx/lastInsnIdx，同一条指令列表的下标）：块的指令范围与
+/// 保护区相交即受保护。这与 JVM 指令级 `[start_pc, end_pc)` 语义对齐，且不
+/// 依赖"块序 == 字节码序"的 label 区间扫描（旧实现：从含 startLabel 的块到
+/// 含 endLabel 的块之间所有块都算保护，块序乱序或 label 与指令同块时会扩大
+/// 保护区）。start/end 指令序号未解析（-1）时退化为旧 label 扫描语义
+/// （防御，宁可过度保护也不漏保护）。
 bool blockInProtectedRange(const std::vector<Block*>& blocks, const ExceptionHandler& handler,
                            const Block* needle)
 {
+    if (needle == nullptr) return false;
+    if (handler.startInsnIdx >= 0 && handler.endInsnIdx >= 0 && needle->firstInsnIdx >= 0 &&
+        needle->lastInsnIdx >= 0) {
+        // [start, end) 半开区间与块指令范围相交（含块首伪指令 idx，同尺一致）。
+        return needle->firstInsnIdx < handler.endInsnIdx &&
+               needle->lastInsnIdx >= handler.startInsnIdx;
+    }
+    // 未解析 fallback：旧语义（块序区间扫描）。
     bool active = false;
     for (auto* block : blocks) {
         if (blockContainsLabel(block, handler.startLabel)) active = true;

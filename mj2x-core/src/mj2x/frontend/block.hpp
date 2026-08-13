@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "mir_node.hpp"
 
@@ -14,11 +14,22 @@ namespace mj2x {
 /// table semantics.  Labels are CodeConverter's pointer-derived label keys, not
 /// bytecode offsets, because libjbytecode tree reconstruction may reset offsets.
 /// An empty `catchType` represents a catch-all/finally handler.
+///
+/// `startInsnIdx`/`endInsnIdx` are the instruction-list indices of the
+/// start/end labels (filled by CodeConverter::translateInstructions).  They are
+/// the authoritative protected-range representation for block-granularity
+/// decisions (SSABuilder::blockInProtectedRange): a block is protected iff its
+/// instruction range intersects `[startInsnIdx, endInsnIdx)`.  This decouples
+/// protection from label-to-block splitting, so the range stays exact even if
+/// the L1 splitter later merges or reorders blocks.  -1 means not yet resolved
+/// (defensive fallback keeps the legacy label-scan semantics).
 struct ExceptionHandler
 {
     int                    startLabel   = 0;   ///< Inclusive protected-range start label key.
     int                    endLabel     = 0;   ///< Exclusive protected-range end label key.
     int                    handlerLabel = 0;   ///< Handler entry label key.
+    int                    startInsnIdx = -1;  ///< Instruction-list index of start label.
+    int                    endInsnIdx   = -1;  ///< Instruction-list index of end label.
     ca::str::Utf8StringRef catchType;          ///< JVM internal class name; empty means catch-all.
 };
 
@@ -38,6 +49,16 @@ struct Block
     /// can model handler entry and protected ranges without re-reading bytecode
     /// tree nodes.
     std::vector<ExceptionHandler> exceptionTable;
+
+    /// @brief 块内指令的 instruction-list 序号范围（CodeConverter 填充）。
+    ///
+    /// @details
+    /// firstInsnIdx 是块首指令（含 LABEL 等伪指令）的序号，lastInsnIdx 是块尾
+    /// 指令序号。与 ExceptionHandler::startInsnIdx/endInsnIdx 同尺（同一指令
+    /// 列表的下标），SSABuilder 用「块范围 ∩ 保护区」判定块是否受保护，取代
+    /// 依赖块序的 label 区间扫描。空块（无节点）保持 -1。
+    int firstInsnIdx = -1;
+    int lastInsnIdx  = -1;
 
     explicit Block(int id_)
         : id(id_)

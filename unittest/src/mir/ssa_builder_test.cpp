@@ -1100,6 +1100,77 @@ TEST(SSABuilderJavaSamples, NullTrapHandlersFromJavaSource)
     EXPECT_NE(arrayDump.find("@slot-1"), std::string::npos) << arrayDump;
 }
 
+// 异常保护区精确性（稀疏异常加固）：保护区判定改用指令序号区间
+// （ExceptionHandler::startInsnIdx/endInsnIdx ∩ Block 指令范围），与 L1
+// label 切分解耦，不再依赖"块序 == 字节码序"的 label 区间扫描。断言：
+//   1. handler 的 start/end 指令序号已解析且范围非空；
+//   2. SSA region 的 protectedBlocks 集合 == { L1 块 | 块指令范围与保护区相交 }
+//      —— semiCatch：try 前 x*2 块、try 后 return 块不在保护区；semiAfter：
+//      try 后的 x/0 块不在保护区（JVM 语义：try 外异常必须传播）。
+TEST(SSABuilderJavaSamples, ExceptionPrecisionRanges)
+{
+    fs::path javac = findJavac();
+    if (javac.empty()) {
+        GTEST_SKIP() << "javac not found; set JAVA_HOME to enable Java-source SSA samples";
+    }
+
+    fs::path classFile = compileJavaSample(
+        javac, "exc_precision", "ssa_cases/SsaExceptionPrecisionCases.java",
+        "SsaExceptionPrecisionCases");
+    ASSERT_TRUE(fileExists(classFile)) << classFile;
+
+    Utf8StringArena     arena;
+    std::vector<ca::u8> bytes;
+    auto                cn = loadClassFile(arena, classFile, bytes);
+    ASSERT_NE(cn, nullptr);
+
+    auto checkRegion = [&](const char* name, const char* desc) {
+        auto* m = findMethod(cn.get(), name, desc);
+        ASSERT_NE(m, nullptr);
+        std::string reason;
+        CodeConverter converter(arena);
+        auto          l1 = converter.convert(*m);
+        ASSERT_FALSE(l1.empty());
+        ASSERT_FALSE(l1.front()->exceptionTable.empty()) << name << " should have try/catch";
+        const auto& h = l1.front()->exceptionTable[0];
+        // 1) start/end 指令序号已解析（-1 = 未回填，判定会退化）。
+        EXPECT_GE(h.startInsnIdx, 0) << name;
+        EXPECT_GT(h.endInsnIdx, h.startInsnIdx) << name;
+        // 2) 预期保护区集合：块指令范围与 [start, end) 相交。
+        std::vector<bool> expectProtected(l1.size(), false);
+        for (size_t i = 0; i < l1.size(); ++i) {
+            auto* b = l1[i];
+            expectProtected[i] = b->firstInsnIdx >= 0 && b->lastInsnIdx >= 0 &&
+                                 b->firstInsnIdx < h.endInsnIdx &&
+                                 b->lastInsnIdx >= h.startInsnIdx;
+        }
+        // 3) SSA region protectedBlocks 与预期逐块对应（L1 与 SSA 块 1:1，
+        //    通过 l1LabelId 关联）。
+        SSABuilder builder;
+        bool       isStatic = (m->access & Opcodes::ACC_STATIC) != 0;
+        auto fn = builder.build(l1, toStr(cn->name), name, desc, isStatic, m->maxLocals, arena,
+                                reason);
+        ASSERT_NE(fn, nullptr) << reason;
+        ASSERT_EQ(fn->exceptionRegions.size(), 1u) << name;
+        for (size_t i = 0; i < l1.size(); ++i) {
+            const int  l1Id    = l1[i]->id;
+            bool       inRegion = false;
+            for (const auto* pb : fn->exceptionRegions[0].protectedBlocks) {
+                if (pb->l1LabelId == l1Id) {
+                    inRegion = true;
+                    break;
+                }
+            }
+            EXPECT_EQ(inRegion, expectProtected[i])
+                << name << " L1 block " << i << " (id=" << l1Id << ", insns ["
+                << l1[i]->firstInsnIdx << "," << l1[i]->lastInsnIdx << "]) protected="
+                << inRegion << " expected=" << expectProtected[i];
+        }
+    };
+    checkRegion("semiCatch", "(I)I");
+    checkRegion("semiAfter", "(I)I");
+}
+
 // 临时 dump 查看（人工检查 loopSum 的 phi 形态）。跑一次后可 DISABLED。
 TEST(SSABuilderE2E, DISABLED_DumpLoopSumSsa)
 {

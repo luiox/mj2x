@@ -182,6 +182,11 @@ struct CodeConverter::Impl
     std::unordered_set<int> blockStartIndices;
     int nextSyntheticBlockId = -1000;   // fallthrough 块的合成 id 发放（负数，避开正数 label id）
 
+    // labelKey → 指令列表序号（translateInstructions 填充）。
+    // 异常表保护区用指令序号表达（ExceptionHandler::startInsnIdx/endInsnIdx），
+    // 与块切分解耦（见 block.hpp ExceptionHandler 注释）。
+    std::unordered_map<int, int> labelToInsnIdx;
+
     void initMethodState(MethodNode& mn)
     {
         operandStack.clear();
@@ -1059,7 +1064,17 @@ void CodeConverter::translateInstructions(MethodNode& mn)
 
         if (!impl_->currentBlock) impl_->currentBlock = getOrCreateBlock(0);
 
+        // 维护块内指令序号范围（含伪指令，与 label 的 idx 同尺）。
+        if (impl_->currentBlock->firstInsnIdx < 0) impl_->currentBlock->firstInsnIdx = idx;
+        impl_->currentBlock->lastInsnIdx = idx;
+
         processInsn(insn);
+
+        // 记录 label 的指令序号（异常表保护区用；伪指令也占 idx，与块范围一致）。
+        if (insn->getType() == AbstractInsnNode::LABEL) {
+            auto* lb  = typed::cast<LabelNode>(insn);
+            impl_->labelToInsnIdx[labelKey(lb->label)] = idx;
+        }
     }
 }
 
@@ -1074,6 +1089,13 @@ std::vector<Block*> CodeConverter::convert(MethodNode& mn)
         getOrCreateBlock(0);
     }
     if (!impl_->blockOrder.empty()) {
+        // 回填异常表保护区的指令序号（labelToInsnIdx 在 translateInstructions 填充）。
+        for (auto& handler : impl_->handlers) {
+            auto startIt = impl_->labelToInsnIdx.find(handler.startLabel);
+            auto endIt   = impl_->labelToInsnIdx.find(handler.endLabel);
+            if (startIt != impl_->labelToInsnIdx.end()) handler.startInsnIdx = startIt->second;
+            if (endIt != impl_->labelToInsnIdx.end()) handler.endInsnIdx = endIt->second;
+        }
         impl_->blockOrder.front()->exceptionTable = impl_->handlers;
     }
     return impl_->blockOrder;

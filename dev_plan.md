@@ -243,30 +243,28 @@ xmake run mj2x_integration_test
 
 ### 主线三：异常语义精确化（稀疏异常）—— P1
 
-**背景**：PR #792 审查发现的共享前端近似：`SSABuilder::blockInProtectedRange`
-（ssa_builder.cpp:370）按 L1 块序线性扫描判定保护区（从含 startLabel 的块到含
-endLabel 的块），比 JVM 的指令级 `[start_pc, end_pc)` 粗。实测 `throwCatch`
-（try 内 if/throw、try 外 return）的 if 块与 return 块被**过度保护**：JVM 语义下
-try 范围外抛出的异常不会被 catch，当前 VMC4/RegC 都会 catch。两个后端消费同一
-结构：VMC4 `blockExcRegions`（按块索引给活跃条目）、RegC `activeExceptionRegions`
-（regc_flow.cpp:432，块粒度）。
+**审计结论（2026-08-13，推翻初版假设）**：javac 的异常表范围是整个 try 语句
+（如 `try { if (x<0) throw ...; return x*2; }` 实测为 `[0, 15)`，不是仅 throw
+块），且 code_converter 已把异常表 start/end/handler label 强制设为块入口
+（analyzeControlFlow），因此 **javac 字节码下块粒度 == 指令粒度，不存在
+实质性过度保护**（PR #792 审查时的初版分析基于错误的 `[8,16)` 假设）。
 
-**目标**：保护区精确对齐异常表 `[start_pc, end_pc)`；双后端除"过度保护修正"外
-无行为变化；全量回归。
+**已完成加固（feat/mj2x-exc-exact）**：保护区判定真源改为**指令序号区间**
+（`ExceptionHandler::startInsnIdx/endInsnIdx` ∩ `Block::firstInsnIdx/lastInsnIdx`，
+同一指令列表下标），取代依赖"块序 == 字节码序"的 label 区间扫描。收益：
+- 判定与 L1 label 切分解耦——未来块合并/重排/手工字节码（label 与指令同块）
+  下仍精确
+- 未解析时保留旧 label 扫描语义作 fallback（宁可过度保护不漏保护）
+- 新测试锁定语义：`SSABuilderJavaSamples.ExceptionPrecisionRanges`
+  （protectedBlocks 集合 == {块指令范围与保护区相交}）+
+  `Vmc4BackendE2E.ExceptionPrecisionRoundTrip`（semiCatch 除零进 catch /
+  semiAfter try 后除零传播，4 dispatcher）
 
-**阶段**：
-- 3.1 审计与复现：确认 MIR/L1 指令是否保留字节码 offset（决定方案 A 还是 B）；
-  写"过度保护" e2e（try 范围外首个/末个可抛指令抛异常），确认 VMC4/RegC 双端
-  当前行为
-- 3.2 共享 IR 精确化，两方案选型：
-  - 方案 A：RegExceptionRegion 增加 per-block 指令区间（protected 判定按指令）
-  - 方案 B：L1 在异常表 start/end 边界切块（块粒度 = 指令粒度，前端改动最小，
-    需确认 code_converter 的 label 切块行为）
-- 3.3 VMC4 改造：`VmExceptionRegionEntry` 增加块内指令区间；检查点块反查升级为
-  "pc → 块内指令序号 → 区间匹配"（编码期把块内指令序列映射为字节流区间）
-- 3.4 RegC 改造：`activeExceptionRegions` 改为当前指令粒度（RegC 每 mayThrow 指令
-  分发，天然可精确）
-- 3.5 回归：VMC4 全套 + RegC 快测 + mtest_set 矩阵
+**后续（可做，记录不阻塞）**：
+- VMC4 检查点/RegC 分发的**指令级匹配**（blockExcRegions 升级为块内指令区间表，
+  pc → 块内指令序号 → 区间匹配），彻底消除"半覆盖块"残留（当前 javac 字节码
+  下不存在半覆盖块，故优先级低；需要给 MIR/SSA/RegIR 指令带原始指令序号）
+- 异常表多 region 覆盖同一块的匹配顺序测试（嵌套 try 已有覆盖，可扩展）
 
 ### 主线四：反侦测体系（antidebug / antiagent）—— P2
 

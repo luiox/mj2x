@@ -1008,6 +1008,35 @@ TEST_P(Vmc4BackendE2E, AthrowAttributionRoundTrip)
             1, GetParam().kind);
 }
 
+// Phase 2.C 稀疏异常语义锁定：保护区边界精确性（try 前/后指令不在保护区内）。
+// semiCatch：try 前 x*2 与 try 后 return 不受保护；try 内除零（y/x）进 catch，
+// try 以非终结指令 y++ 结束（end label 切块边界形态）。semiAfter：try 后的
+// x/0 除零必须传播（不被 catch）。
+TEST_P(Vmc4BackendE2E, ExceptionPrecisionRoundTrip)
+{
+    runCase("Vmc4NativeExcPrec",
+            "public class Vmc4NativeExcPrec {\n"
+            "  public static int semiCatch(int x) {\n"
+            "    int y = x * 2;\n"
+            "    try {\n"
+            "      y = y / x;\n"
+            "      y++;\n"
+            "    } catch (ArithmeticException e) { return -1; }\n"
+            "    return y;\n"
+            "  }\n"
+            "  public static int semiAfter(int x) {\n"
+            "    try { x /= 1; } catch (ArithmeticException e) { return -1; }\n"
+            "    return x / 0;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"semiCatchZero", "Vmc4NativeExcPrec.semiCatch(0)"},
+                {"semiCatchOk", "Vmc4NativeExcPrec.semiCatch(4)"},
+                {"semiAfter", "Vmc4NativeExcPrec.semiAfter(5)"},
+            },
+            2, GetParam().kind);
+}
+
 // Phase 2.D：Intrinsic 子集 round-trip。
 // isString/isNullInstanceOf：instanceof:<desc>（null → false，IsInstanceOf 懒缓存）；
 // longCmp：LCMP（cmp.nan_less 整型路径，三值 -1/0/1）；
