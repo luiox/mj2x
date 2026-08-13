@@ -429,4 +429,58 @@ TEST_P(Vmc4BackendE2E, MixedNativeAndFailClosedRoundTrip)
             2, GetParam().kind);
 }
 
+// Phase 2.0 spike：静态调用链。viaAdd/viaLong/viaDouble 各含一条 invokestatic Call
+// 指令；chain 含两条同目标调用（验证 methodRef 去重 + argBuf 复用同一 helper）。
+// 7 个方法全部转 VM：叶子方法（add/addLong/addDouble）methodRefs 空（传 call_table=0），
+// 调用方方法 methodRefs 非空 → 发射 per-callsite helper + mj2x_vm_call_table_<tag>，
+// 运行时经 JNI CallStatic<Type>MethodA 链回叶子方法的 VM 实现。
+TEST_P(Vmc4BackendE2E, StaticCallChainRoundTrip)
+{
+    runCase("Vmc4NativeCall",
+            "public class Vmc4NativeCall {\n"
+            "  public static int add(int a, int b) { return a + b; }\n"
+            "  public static int viaAdd(int x, int y) { return add(x, y); }\n"
+            "  public static int chain(int a, int b, int c) { return add(add(a, b), c); }\n"
+            "  public static long addLong(long a, long b) { return a + b; }\n"
+            "  public static long viaLong(long a, long b) { return addLong(a, b); }\n"
+            "  public static double addDouble(double a, double b) { return a + b; }\n"
+            "  public static double viaDouble(double a, double b) { return addDouble(a, b); }\n"
+            "}\n",
+            {
+                {"add(7, 8)", "Vmc4NativeCall.add(7, 8)"},
+                {"viaAdd(3, 4)", "Vmc4NativeCall.viaAdd(3, 4)"},
+                {"viaAdd(-5, 2)", "Vmc4NativeCall.viaAdd(-5, 2)"},
+                {"chain(1, 2, 3)", "Vmc4NativeCall.chain(1, 2, 3)"},
+                {"chain(100, 200, 300)", "Vmc4NativeCall.chain(100, 200, 300)"},
+                {"addLong(10, 20)", "Vmc4NativeCall.addLong(10L, 20L)"},
+                {"viaLong(10, 20)", "Vmc4NativeCall.viaLong(10L, 20L)"},
+                {"viaLong(-5, -7)", "Vmc4NativeCall.viaLong(-5L, -7L)"},
+                {"addDouble(2, 3)", "Vmc4NativeCall.addDouble(2.0, 3.0)"},
+                {"viaDouble(1.5, 2.5)", "Vmc4NativeCall.viaDouble(1.5, 2.5)"},
+                {"viaDouble(-1.0, 0.5)", "Vmc4NativeCall.viaDouble(-1.0, 0.5)"},
+            },
+            7, GetParam().kind);
+}
+
+// Phase 2.0 spike：instance 调用路径。viaBox 是 static 方法，对对象参数 b 做
+// invokevirtual（b.get()）。验证 helper 的非 static 分支：GetMethodID（非 GetStatic）+
+// CallIntMethodA(env, (jobject)regs[recv].ref, ...) + 对象 receiver marshalling。
+// Box 是内部类，其构造器/get() 是实例方法（fail-closed 保留字节码），viaBox 调它们时
+// 经 JNI 链回字节码实现。仅 viaBox 转 VM（expectedNativeMethods=1）。
+TEST_P(Vmc4BackendE2E, InstanceCallOnObjectParamRoundTrip)
+{
+    runCase("Vmc4NativeInstCall",
+            "public class Vmc4NativeInstCall {\n"
+            "  public static class Box { int v; public Box(int v) { this.v = v; } "
+            "public int get() { return v; } }\n"
+            "  public static int viaBox(Box b) { return b.get(); }\n"
+            "}\n",
+            {
+                {"viaBox(42)", "Vmc4NativeInstCall.viaBox(new Vmc4NativeInstCall.Box(42))"},
+                {"viaBox(-7)", "Vmc4NativeInstCall.viaBox(new Vmc4NativeInstCall.Box(-7))"},
+                {"viaBox(0)", "Vmc4NativeInstCall.viaBox(new Vmc4NativeInstCall.Box(0))"},
+            },
+            1, GetParam().kind);
+}
+
 }   // namespace

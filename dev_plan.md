@@ -15,7 +15,7 @@
 
 | Phase | 主线 | 内容 | 状态 |
 |---|---|---|---|
-| 2.0 | VMC4 | Spike：REF 类型 + 调用链最小闭环 + 决策 handler 复用方案 | 待开始 |
+| 2.0 | VMC4 | Spike：REF 类型 + 调用链最小闭环 + 决策 handler 复用方案 | ✅ 完成 |
 | 2.A | VMC4 | LoadField/StoreField/ArrayLoad/ArrayStore/Allocate | 待开始 |
 | 2.B | VMC4 | Call（virtual/special/static/interface + cache） | 待开始 |
 | 2.C | VMC4 | Throw + 异常区域编码 | 待开始 |
@@ -50,16 +50,37 @@ field/call/array/alloc/throw 全语义且经 `-Xverify:all` E2E 验证，复用�
 继承语义正确性。前置工作：把 RegC runtime prelude 抽成 VMC4 解释器可 include 的
 共享片段（2.0 Spike 落实）。
 
-### Phase 2.0 — Spike：对象模型 + 调用链最小闭环
+> **2.0 Spike 落地修正（2026-08-13）**：Call family 未走方案 A 的 RegC helper 复用，
+> 而是采用了 **per-callsite 独立 JNI helper**（方案 B 的变体）。原因：RegC 的
+> `_mj2x_regc_call_*` 是 varargs + 全局 `_mj2x_regc_env` 形态，而 VMC4 的参数在
+> `regs[argIdx[i]]`（寄存器索引数组），两者签名不兼容；且 VMC4 既有设计明确
+> "不依赖 RegC CRT"（vmc4_backend.cpp:46）。落地形态：每个 VmMethodRef 发射一个
+> `mj2x_vm_call_<tag>_<idx>` TU-local helper（懒缓存 class/methodID + 按 argKinds
+> marshalling + Call[Static]<Type>MethodA），解释器经 `mj2x_vm_call_table_<tag>[]`
+> 函数指针表分派。后续 2.A 的 field/array 若同样与 RegC helper 签名不兼容，沿用此
+> per-site helper 模式；2.A 起再评估是否抽共享 marshalling 片段。
 
-**目标**：验证 REF 类型承载 jobject、handler 复用 CRT 共享机制、含 `getfield` +
-`invokevirtual` 的真实方法端到端跑通。此 Phase 决策后续全部 VMC4 工作的落地形态。
+### Phase 2.0 — Spike：对象模型 + 调用链最小闭环 ✅
 
-- REF 类型建模：确认 `mj2x_vm_slot` 能承载 jobject（当前只放 i32/i64/f32/f64 标量）
-- CRT 共享机制：RegC runtime prelude 抽出为 VMC4 解释器可 include 的片段
-- 最小闭环：LoadField + Call 各一个 opcode 跑通 round-trip
-- 验收：一个含 `getfield` + `invokevirtual` 的真实方法，4 种 MSVC 可编译 dispatcher
-  下 `-Xverify:all` round-trip 绿
+**目标**：验证 REF 类型承载 jobject、Call 调用链端到端跑通。此 Phase 决策后续全部
+VMC4 工作的落地形态。
+
+- REF 类型建模：`mj2x_vm_slot` 加 `void* ref` 承载 jobject（slot.ref ↔ jobject 双向 cast）
+- Call 编码：`encodeCall` 把 invokestatic/virtual/special/interface 收集为 `VmMethodRef`
+  （含 argKinds/retKind），字节流存 callSiteIdx；instance 调用 receiver 取 args[0]
+  （SSA 约定），描述符参数从 args[1..]
+- Call 发射：per-callsite `mj2x_vm_call_<tag>_<idx>` helper（懒缓存 class/methodID +
+  按 argKinds marshalling + Call[Static]<Type>MethodA）+ `mj2x_vm_call_table_<tag>[]`
+  分派表；wrapper 传该表给 exec（纯计算方法传 0）
+- 验收（已达成）：4 种 MSVC 可编译 dispatcher（switch/funcptr/ifnest/state）下，
+  drift 全开（2 变体 + 16 字节周期），`-Xverify:all` round-trip 绿：
+  - `StaticCallChainRoundTrip`：7 方法（int/long/double 调用链 + methodRef 去重）
+  - `InstanceCallOnObjectParamRoundTrip`：static 方法对对象参数做 invokevirtual
+
+> 注：原计划 "getfield + invokevirtual" 中的 getfield 属 2.A（LoadField 未实现），
+> spike 以 "REF + Call" 闭环先行验证对象/调用语义；invokevirtual 经 static 调用方
+> 对对象参数的调用路径验证（full 实例方法 virtual dispatch 仍待 2.B，因 backend
+> 当前整体跳过实例方法）。
 
 ### Phase 2.A — 对象 / 字段 / 数组
 
@@ -135,3 +156,11 @@ xmake run mj2x_integration_test
 
 - 2026-08-13：开分支 feat/mj2x-v2.2；依据 issue #787 §3 建立本计划（替换已完结的
   RegC 模板引擎旧计划）
+- 2026-08-13：VMC4 发射器迁移到 codegen 工具层（CSourceStream），消除源码 `+=` 拼接
+- 2026-08-13：spike 基础设施——REF 类型 + Call 编码/wrapper/exec 签名（不含 helper 发射）
+- 2026-08-13：适配 libca 最新 API（startsWith/SHA1 getHash）+ 发射器改用 ca::str::format
+- 2026-08-13：**Phase 2.0 spike 收尾完成**——per-callsite JNI helper + call_table 发射
+  （`emitCallInfrastructure`），encodeCall 修正 instance 调用 receiver 取 args[0]
+  （SSA 约定），VmMethodRef 加 argKinds/retKind 供 helper marshalling。新增 2 个 e2e
+  （StaticCallChain / InstanceCallOnObjectParam），4 dispatcher × drift 全开 round-trip
+  绿，VMC4 测试 58→66 全通过

@@ -149,12 +149,30 @@ enum class VmInvokeKind : uint8_t
     Interface  = 3,
 };
 
+/// @brief JNI 类型类别：per-callsite helper 发射时 marshalling 用。
+///
+/// @details
+/// 把 SSAType 收敛到 JNI 边界关心的 6 类，决定 jvalue 字段 / JNI Call 函数后缀 /
+/// 寄存器槽读写位。boolean/byte/char/short/int 统一归 Int32（计算位宽一致，
+/// JNI 侧用 jint 传递，VMC4 slot 用 .i 承载）。
+enum class VmJniKind : uint8_t
+{
+    Void   = 0,
+    Int32  = 1,   ///< boolean/byte/char/short/int → jint
+    Int64  = 2,   ///< long → jlong
+    Float  = 3,   ///< float → jfloat
+    Double = 4,   ///< double → jdouble
+    Ref    = 5,   ///< object/array → jobject
+};
+
 /// @brief 方法引用：一个 Call 调用点的静态信息（Phase 2.0）。
 ///
 /// @details
 /// 编码期把每个 Call 指令的 SSAMethodRef 收集到 VmProgram.methodRefs，字节流只存
 /// callSiteIdx（索引）。backend 为每个 VmMethodRef 发射一个 TU-local helper 函数
 /// （内部按 owner/name/desc/invokeKind 调 JNI），解释器经函数指针表分派。
+/// argKinds/retKind 由编码期从 SSAType 推导，helper 据此 marshalling 参数/返回值。
+/// 去重键 (owner,name,desc,invokeKind,hasDest) 已含 desc，故 argKinds/retKind 一致。
 struct VmMethodRef
 {
     std::string   owner;       ///< 方法所属类（JVM 内部名，如 "java/lang/String"）
@@ -162,6 +180,8 @@ struct VmMethodRef
     std::string   desc;        ///< 方法描述符（如 "(Ljava/lang/String;)I"）
     VmInvokeKind  invokeKind = VmInvokeKind::Virtual;
     bool          hasDest = false;   ///< 是否有返回值（void=false）
+    VmJniKind                retKind  = VmJniKind::Void;   ///< 返回值类型类别
+    std::vector<VmJniKind>   argKinds;                    ///< 参数类型类别（顺序对齐 args）
 };
 
 /// @brief 解释器调用结果。

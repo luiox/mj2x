@@ -1,5 +1,6 @@
 #include "mj2x/backend/vmc4/vm_interpreter_emit.hpp"
 
+#include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "libca/str/format.hpp"
 
@@ -737,6 +738,189 @@ void emitBogusHandlers(CSourceStream& out, const VmInstance& instance, const std
     }
 }
 
+// ===========================================================================
+// Call 基础设施（Phase 2.0）：per-callsite JNI helper + 函数指针表。
+//
+// methodRefs 非空时，为每个 VmMethodRef 发射一个 mj2x_vm_call_<tag>_<idx> helper
+// （懒缓存 class/methodID，按 argKinds marshalling 参数，按 retKind 调 JNI 并写回），
+// 再发射 mj2x_vm_call_table_<tag>[] 函数指针表。解释器 CALL handler 经该表分派。
+// ===========================================================================
+
+/// VmJniKind → jvalue 联合体字段名（"i"/"j"/"f"/"d"/"l"）。
+const char* jvalueField(VmJniKind k)
+{
+    switch (k) {
+    case VmJniKind::Int32: return "i";
+    case VmJniKind::Int64: return "j";
+    case VmJniKind::Float: return "f";
+    case VmJniKind::Double: return "d";
+    case VmJniKind::Ref: return "l";
+    default: return "i";
+    }
+}
+
+/// VmJniKind → 寄存器槽读取字段（regs[idx].<field>）。
+const char* slotReadField(VmJniKind k)
+{
+    switch (k) {
+    case VmJniKind::Float:
+    case VmJniKind::Double: return ".f";
+    case VmJniKind::Ref: return ".ref";
+    default: return ".i";
+    }
+}
+
+/// VmJniKind → jvalue 写入时的中间 cast（保证 JNI 侧拿到正确位宽）。
+const char* jvalueCast(VmJniKind k)
+{
+    switch (k) {
+    case VmJniKind::Int32: return "(jint)";
+    case VmJniKind::Int64: return "(jlong)";
+    case VmJniKind::Float: return "(jfloat)";
+    case VmJniKind::Double: return "(jdouble)";
+    case VmJniKind::Ref: return "(jobject)";
+    default: return "(jint)";
+    }
+}
+
+/// VmJniKind → JNI Call 函数后缀（不含 Static/前缀），如 "Int"/"Void"/"Object"。
+const char* jniCallTypeSuffix(VmJniKind k)
+{
+    switch (k) {
+    case VmJniKind::Void: return "Void";
+    case VmJniKind::Int32: return "Int";
+    case VmJniKind::Int64: return "Long";
+    case VmJniKind::Float: return "Float";
+    case VmJniKind::Double: return "Double";
+    case VmJniKind::Ref: return "Object";
+    default: return "Void";
+    }
+}
+
+/// VmJniKind → JNI 返回值 C 类型名（jint/jlong/...）。
+const char* jniReturnType(VmJniKind k)
+{
+    switch (k) {
+    case VmJniKind::Int32: return "jint";
+    case VmJniKind::Int64: return "jlong";
+    case VmJniKind::Float: return "jfloat";
+    case VmJniKind::Double: return "jdouble";
+    case VmJniKind::Ref: return "jobject";
+    default: return "void";
+    }
+}
+
+/// VmJniKind → 写回 regs[dest] 的 cast（slot .i/.f/.ref 位宽匹配；Double 无需 cast）。
+const char* resultWriteCast(VmJniKind k)
+{
+    switch (k) {
+    case VmJniKind::Int32: return "(int64_t)";
+    case VmJniKind::Int64: return "(int64_t)";
+    case VmJniKind::Float: return "(double)";
+    case VmJniKind::Ref: return "(void*)";
+    default: return "";
+    }
+}
+
+/// @brief 发射 per-callsite JNI helper + call_table（methodRefs 非空时）。
+///
+/// @details
+/// 每个 VmMethodRef 一个 helper：懒缓存 class（FindClass + NewGlobalRef）+ methodID
+/// （Get[Static]MethodID），按 argKinds 把 regs[argIdx[i]] 装进 jvalue[]，调
+/// Call[Static]<Type>MethodA，按 retKind 写回 regs[dest]（void 不写）。
+/// helper 签名固定为 mj2x_vm_call_fn：参数 (env, regs, recv, argIdx, argc, dest)。
+/// argc/recv/dest/argIdx 视 invokeKind/hasDest/argCount 可能未用，按需 (void) 抑制。
+void emitCallInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
+{
+    if (program.methodRefs.empty()) return;
+
+    for (size_t i = 0; i < program.methodRefs.size(); ++i) {
+        const auto&        m        = program.methodRefs[i];
+        const bool         isStatic = (m.invokeKind == VmInvokeKind::Static);
+        const bool         isVoid   = (m.retKind == VmJniKind::Void);
+        const char*        getMid   = isStatic ? "GetStaticMethodID" : "GetMethodID";
+        const std::string  suffix   = jniCallTypeSuffix(m.retKind);
+        const std::string  callFn   = isStatic ? format_std("CallStatic{}MethodA", suffix)
+                                               : format_std("Call{}MethodA", suffix);
+        const std::string  helper   = format_std("mj2x_vm_call_{}_{}", tag, i);
+
+        out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
+                                "unsigned int recv, unsigned int* argIdx, "
+                                "unsigned char argc, unsigned int dest)", helper),
+                     [&](CSourceStream& f) {
+            f.emitLine("(void)argc;  /* 参数数编译期固定（argKinds.size），argc 仅签名兼容 */");
+            if (isStatic) f.emitLine("(void)recv;  /* static 调用无 receiver */");
+            if (isVoid) f.emitLine("(void)dest;  /* void 返回不写 dest */");
+            if (m.argKinds.empty()) f.emitLine("(void)argIdx;  /* 无参数 */");
+
+            // 懒缓存 owner class（FindClass 失败留 pending exception，直接返回让异常传播）。
+            f.emitLine("static jclass _cls = NULL;");
+            f.emitLine("if (_cls == NULL) {");
+            {
+                CSourceStream::IndentGuard g(f);
+                f.emitLine(format_std("jclass _local = (*env)->FindClass(env, {});",
+                                      codegen::cStringLiteral(m.owner)));
+                f.emitLine("if (_local == NULL) return;  /* pending exception */");
+                f.emitLine("_cls = (*env)->NewGlobalRef(env, _local);");
+                f.emitLine("(*env)->DeleteLocalRef(env, _local);");
+            }
+            f.emitLine("}");
+
+            // 懒缓存 methodID（static 用 GetStaticMethodID，其余用 GetMethodID）。
+            f.emitLine("static jmethodID _mid = NULL;");
+            f.emitLine("if (_mid == NULL) {");
+            {
+                CSourceStream::IndentGuard g(f);
+                f.emitLine(format_std("_mid = (*env)->{}(env, _cls, {}, {});",
+                                      getMid, codegen::cStringLiteral(m.name),
+                                      codegen::cStringLiteral(m.desc)));
+                f.emitLine("if (_mid == NULL) return;  /* pending exception */");
+            }
+            f.emitLine("}");
+
+            // 装配 jvalue[]（参数数编译期已知，按 argKinds 逐个 marshalling）。
+            const size_t nargs = m.argKinds.size();
+            f.emitLine(format_std("jvalue _a[{}];", nargs > 0 ? nargs : 1));
+            for (size_t a = 0; a < nargs; ++a) {
+                f.emitLine(format_std("_a[{}].{} = {}regs[argIdx[{}]]{};",
+                                      a, jvalueField(m.argKinds[a]),
+                                      jvalueCast(m.argKinds[a]), a,
+                                      slotReadField(m.argKinds[a])));
+            }
+
+            // 调用 + 写回。instance 调用 receiver 取 regs[recv].ref（Call<Type>MethodA
+            // 按 receiver 实际类虚分派；methodID 可来自声明 owner 类，JNI 规范保证有效）。
+            if (isVoid) {
+                if (isStatic) {
+                    f.emitLine(format_std("(*env)->{}(env, _cls, _mid, _a);", callFn));
+                } else {
+                    f.emitLine(format_std(
+                        "(*env)->{}(env, (jobject)regs[recv].ref, _mid, _a);", callFn));
+                }
+            } else {
+                f.emitLine(format_std("{} _r = (*env)->{}(env, {}, _mid, _a);",
+                                      jniReturnType(m.retKind), callFn,
+                                      isStatic ? "_cls" : "(jobject)regs[recv].ref"));
+                f.emitLine(format_std("regs[dest]{} = {}_r;",
+                                      slotReadField(m.retKind), resultWriteCast(m.retKind)));
+            }
+        });
+        out.emitBlankLine();
+    }
+
+    // 函数指针表：call_table[callSiteIdx] → helper。wrapper 传它给 exec。
+    out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_call_table_{}[{}] = {{",
+                            tag, program.methodRefs.size()));
+    {
+        CSourceStream::IndentGuard g(out);
+        for (size_t i = 0; i < program.methodRefs.size(); ++i) {
+            out.emitLine(format_std("mj2x_vm_call_{}_{},", tag, i));
+        }
+    }
+    out.emitLine("};");
+    out.emitBlankLine();
+}
+
 }   // namespace
 
 // ===========================================================================
@@ -886,6 +1070,12 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
     if (instance.dispatcherKind() == VmDispatcherKind::FuncPtrTable) {
         emitFuncPtrFilePrelude(out, instance, tag);
         out.emitBlankLine();
+    }
+
+    // Call 基础设施（methodRefs 非空时）：per-callsite helper + mj2x_vm_call_table_<tag>。
+    // 文件级定义，须在 exec 之前（wrapper 在其后引用 mj2x_vm_call_table_<tag>）。
+    if (!program.methodRefs.empty()) {
+        emitCallInfrastructure(out, program, tag);
     }
 
     // --- 解释器入口函数（按 dispatcherKind 选择形态）---

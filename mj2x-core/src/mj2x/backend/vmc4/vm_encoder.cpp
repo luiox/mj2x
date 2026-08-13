@@ -82,6 +82,28 @@ bool toVmBinaryOp(SSABinaryOp op, VmBinaryOp& out)
     return false;
 }
 
+/// @brief SSAType → VmJniKind（per-callsite helper marshalling 用）。
+///
+/// @details
+/// boolean/byte/char/short/int 归 Int32（JNI 侧 jint，slot .i）；long → Int64（slot .i）；
+/// float/double → Float/Double（slot .f）；REF → Ref（slot .ref）。UNKNOWN 不应出现在
+/// 已通过 toVmType 校验的调用点，兜底归 Void（helper 不读该参数，调用结果错位会显式失败）。
+VmJniKind toVmJniKind(SSAType s)
+{
+    switch (s) {
+    case SSAType::BOOL:
+    case SSAType::I8:
+    case SSAType::I16:
+    case SSAType::CHAR:
+    case SSAType::I32: return VmJniKind::Int32;
+    case SSAType::I64: return VmJniKind::Int64;
+    case SSAType::F32: return VmJniKind::Float;
+    case SSAType::F64: return VmJniKind::Double;
+    case SSAType::REF: return VmJniKind::Ref;
+    default: return VmJniKind::Void;
+    }
+}
+
 /// @brief SSAComparePredicate → VmComparePred。
 bool toVmComparePred(SSAComparePredicate p, VmComparePred& out)
 {
@@ -675,18 +697,33 @@ bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
     }
     const bool isStatic = (ik == VmInvokeKind::Static);
 
+    // SSA 约定（ssa_instruction.hpp:223）：instance 调用 args[0]=receiver，其后是描述符
+    // 参数；static 调用 args 全是描述符参数。RegInstruction.receiver 字段 Call 不填（留
+    // 默认 Opaque），receiver 经 args[0] 取。故 argKinds/argIdxs 只含描述符参数。
+    const size_t startArg = isStatic ? 0 : 1;
+    if (!isStatic && ins.args.empty()) {
+        reason = "Call: instance invoke missing receiver (args[0])";
+        return false;
+    }
+
     VmMethodRef mref;
     mref.owner      = ins.method.owner.to_std_string();
     mref.name       = ins.method.name.to_std_string();
     mref.desc       = ins.method.desc.to_std_string();
     mref.invokeKind = ik;
     mref.hasDest    = ins.hasDest;
+    mref.retKind    = ins.hasDest ? toVmJniKind(ins.dest.type) : VmJniKind::Void;
+    // argKinds 仅含描述符参数（不含 receiver），与 desc 对齐，与下方 argIdxs 同序。
+    mref.argKinds.reserve(ins.args.size() - startArg);
+    for (size_t a = startArg; a < ins.args.size(); ++a) {
+        mref.argKinds.push_back(toVmJniKind(ins.args[a].type));
+    }
     const uint16_t callSiteIdx = ctx.internMethodRef(std::move(mref));
 
-    // receiver（instance 调用）；static 调用无 receiver。
+    // receiver 寄存器（instance 调用取 args[0]）；static 调用 recv=0（helper 不读）。
     uint16_t recv = 0;
     if (!isStatic) {
-        if (!ctx.resolveOperand(ins.receiver, recv, reason)) return false;
+        if (!ctx.resolveOperand(ins.args[0], recv, reason)) return false;
     }
 
     // 返回值寄存器（void 方法无 dest）。
@@ -696,17 +733,18 @@ bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
         ctx.observeReg(dest);
     }
 
-    // 参数寄存器列表（变长）。argCount 上限 32：解释器 handler 用固定大小 argBuf[32]
-    // 承载参数索引数组（避免动态分配）；JVM 实际方法参数极少超此数。
-    if (ins.args.size() > 32) {
+    // 描述符参数寄存器列表（变长，不含 receiver）。argCount 上限 32：解释器 handler
+    // 用固定大小 argBuf[32] 承载参数索引数组（避免动态分配）；JVM 实际参数极少超此数。
+    const size_t descArgCount = ins.args.size() - startArg;
+    if (descArgCount > 32) {
         reason = "Call: too many arguments (>32)";
         return false;
     }
     std::vector<uint16_t> argIdxs;
-    argIdxs.reserve(ins.args.size());
-    for (const auto& a : ins.args) {
+    argIdxs.reserve(descArgCount);
+    for (size_t a = startArg; a < ins.args.size(); ++a) {
         uint16_t ai;
-        if (!ctx.resolveOperand(a, ai, reason)) return false;
+        if (!ctx.resolveOperand(ins.args[a], ai, reason)) return false;
         argIdxs.push_back(ai);
     }
 
