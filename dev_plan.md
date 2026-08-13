@@ -16,7 +16,7 @@
 | Phase | 主线 | 内容 | 状态 |
 |---|---|---|---|
 | 2.0 | VMC4 | Spike：REF 类型 + 调用链最小闭环 + 决策 handler 复用方案 | ✅ 完成 |
-| 2.A | VMC4 | LoadField/StoreField/ArrayLoad/ArrayStore/Allocate | 待开始 |
+| 2.A | VMC4 | LoadField/StoreField/ArrayLoad/ArrayStore/Allocate | ✅ 完成 |
 | 2.B | VMC4 | Call（virtual/special/static/interface + cache） | 待开始 |
 | 2.C | VMC4 | Throw + 异常区域编码 | 待开始 |
 | 2.D | VMC4 | Intrinsic 子集 + 双后端对拍 | 待开始 |
@@ -82,14 +82,30 @@ VMC4 工作的落地形态。
 > 对对象参数的调用路径验证（full 实例方法 virtual dispatch 仍待 2.B，因 backend
 > 当前整体跳过实例方法）。
 
-### Phase 2.A — 对象 / 字段 / 数组
+### Phase 2.A — 对象 / 字段 / 数组 ✅
 
-- 实现 opcode：LoadField / StoreField / ArrayLoad / ArrayStore / Allocate（+ ArrayLength）
-- handler 委托 RegC `_mj2x_regc_load/store_*_field` / `_mj2x_regc_alloc_*` /
-  `_mj2x_regc_array_length`
-- 编码器：字段/数组元素类型 tag、static/instance 区分、class/field cache CSE
-- 验收：mtest_set G3（类型转换）/G6（方法调用里的字段）/G7（字段）/G9（对象与类型）
-  样本在 VMC4 ≥2 种 dispatcher 下 round-trip 绿
+五 opcode 全部落地，沿用 Phase 2.0 的 per-site helper + 分派表模式（统一签名
+`mj2x_vm_call_fn`，exec 按 family 加表参数，空表传 0）：
+
+- **LoadField/StoreField**（getfield/putfield/getstatic/putstatic）：per-site field
+  helper，懒缓存 owner class + fieldID，按 desc 首字符精确选 JNI accessor
+  （GetBooleanField/GetByteField/.../GetObjectField——字段 accessor 必须匹配声明类型）
+- **ArrayLoad/ArrayStore**（iaload..aaload / iastore..aastore）：per-site helper，按
+  VmArrayElemKind（9 精确类型，区分 boolean[]/byte[]——同 baload 但 elementType 不同）
+  选 Get/Set<Type>ArrayRegion(len=1) 或 Get/SetObjectArrayElement；null 数组显式抛 NPE
+  （prelude 新增 mj2x_vm_throw_npe），越界交 JNI 抛 AIOOBE
+- **Allocate**（NEW/NEWARRAY/ANEWARRAY）：Object = AllocObject（<init> 由独立 Call 调），
+  Array = New<Type>Array / NewObjectArray；MULTIANEWARRAY 暂 fail-closed（递归分配复杂）
+- **array.length** intrinsic：GetArrayLength + null NPE，单一 helper（siteIdx 恒 0）
+
+验收（已达成）：4 dispatcher × drift 全开 `-Xverify:all` round-trip 绿：
+- `FieldAccessRoundTrip`（12 方法：int/long/double/ref/boolean/byte/char/short 字段 + 静态）
+- `ArrayAccessRoundTrip`（10 方法：各元素类型读写）
+- `AllocateAndArrayLengthRoundTrip`（6 方法：对象分配+字段、int/double/ref 数组、array.length）
+- `MixedNativeAndFailClosedRoundTrip` 的 useInst（new+<init>+invokevirtual）现转 VM
+
+> handler 复用方案：未走 RegC `_mj2x_regc_*` helper（varargs + 全局 env 与 VMC4 寄存器
+> 索引签名不兼容），改用 per-site 独立 helper（与 Call 一致）。VMC4 测试 66→78 全通过。
 
 ### Phase 2.B — 调用与虚分派
 
@@ -164,3 +180,8 @@ xmake run mj2x_integration_test
   （SSA 约定），VmMethodRef 加 argKinds/retKind 供 helper marshalling。新增 2 个 e2e
   （StaticCallChain / InstanceCallOnObjectParam），4 dispatcher × drift 全开 round-trip
   绿，VMC4 测试 58→66 全通过
+- 2026-08-13：**Phase 2.A 完成**（feat/mj2x-vmc4-fields-arrays）——五 opcode（LoadField/
+  StoreField/ArrayLoad/ArrayStore/Allocate）+ array.length intrinsic 全部落地，per-site
+  helper 模式（exec 按 family 加表参数）。新增 3 个 e2e（FieldAccess/ArrayAccess/
+  AllocateAndArrayLength），4 dispatcher × drift 全开 round-trip 绿，VMC4 测试 66→78 全通过。
+  MULTIANEWARRAY 暂 fail-closed；instance field/array null NPE 已处理（field null 待补）
