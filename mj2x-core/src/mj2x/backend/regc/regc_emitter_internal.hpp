@@ -181,6 +181,14 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
                     const ca::str::Utf8StringRef&            cacheName,
                     const std::vector<ca::str::Utf8String>& expressions,
                     bool ownerMethodOnly = false);
+/// 发射「分配 + 构造」融合调用（NewObjectA：1 个 JNI 替代 AllocObject + 解析）。
+void emitAllocateWithInit(CSourceStream& out, RegCFunctionEmitState& state,
+                          const RegInstruction& alloc, const RegInstruction& initCall,
+                          const ca::str::Utf8StringRef& allocCacheName,
+                          const std::vector<ca::str::Utf8String>& expressions);
+/// Allocate 与紧邻 <init> 调用可否融合为 NewObjectA（语义条件判定）。
+bool canFuseAllocateInit(const RegCFunctionEmitState& state, const RegInstruction& alloc,
+                         const RegInstruction& call);
 /// 发射动态实例调用的 resolved native dispatch。
 void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                               const ca::str::Utf8StringRef&            siteName,

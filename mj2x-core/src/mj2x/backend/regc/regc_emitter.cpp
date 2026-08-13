@@ -202,11 +202,62 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             body.comment(header);
         }
         body.label_(ca::str::format_std("block_b{}", block->id.value));
-        for (const auto& ins : block->instructions) {
+        // Allocate + 后续 <init> 融合为 NewObjectA：Allocate 处前瞻扫描同块内
+        // 首个 receiver 匹配的 <init>（中间只允许纯计算指令且不得使用分配结果），
+        // 分配结果延迟到 <init> 位置一次发射（NewObjectA 1 JNI 替代 AllocObject +
+        // <init> 解析，JDK 类构造场景省 1-2 JNI/对象）。
+        struct PendingAllocInit
+        {
+            bool                    active = false;
+            const RegInstruction*   alloc  = nullptr;
+            const RegInstruction*   initCall = nullptr;
+            ca::str::Utf8String     allocCacheName;
+            std::vector<ca::str::Utf8String> fusedArgs;
+        } pendingFuse;
+        const auto operandUsesReg = [](const RegOperand& op, RegId id) {
+            return op.kind == RegOperandKind::Register && op.reg.value == id.value;
+        };
+        const auto instructionUsesReg = [&](const RegInstruction& ins, RegId id) {
+            if (operandUsesReg(ins.copy.source, id)) return true;
+            if (operandUsesReg(ins.value, id)) return true;
+            if (operandUsesReg(ins.lhs, id)) return true;
+            if (operandUsesReg(ins.rhs, id)) return true;
+            if (operandUsesReg(ins.receiver, id)) return true;
+            if (operandUsesReg(ins.index, id)) return true;
+            if (ins.hasDest && ins.dest.id.value == id.value) return true;
+            for (const auto& a : ins.args) {
+                if (operandUsesReg(a, id)) return true;
+            }
+            return false;
+        };
+        const auto isFuseTransparent = [](const RegInstruction& ins) {
+            switch (ins.kind) {
+            case RegInstructionKind::Copy:
+            case RegInstructionKind::Unary:
+            case RegInstructionKind::Binary:
+            case RegInstructionKind::Compare:
+            case RegInstructionKind::Convert:
+            // 字段/数组读写与 intrinsic 也允许：它们在 NewObjectA 前原位执行
+            // （顺序保持，异常语义等价——分配对象未初始化不可见，异常时丢弃），
+            // 只要不使用分配结果（instructionUsesReg 已检查）。典型收益：
+            // new String(bytes, UTF_8)（alloc → getstatic Charset → <init>）从
+            // AllocObject+解析 4 JNI 降为 NewObjectA 2 JNI。
+            case RegInstructionKind::LoadField:
+            case RegInstructionKind::StoreField:
+            case RegInstructionKind::ArrayLoad:
+            case RegInstructionKind::ArrayStore:
+            case RegInstructionKind::Intrinsic:
+                return true;
+            default:
+                return false;
+            }
+        };
+        const auto emitInstructionWithCheck = [&](const RegInstruction& ins) -> bool {
             if (options_.commentLevel >= RegCCommentLevel::Detailed) {
                 body.comment(regInstructionLine(ins).to_std_string());
             }
-            if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason)) return result;
+            if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason))
+                return false;
             // 无异常区域（方法无 try/catch）时省略调用后 ExceptionCheck：pending
             // 异常直接泄漏到 JNI 边界由 JVM 处理（与 Java 语义及 os30 一致），省
             // 每次调用的 check 开销；有异常区域时保留（分发到 handler 必需）。
@@ -220,8 +271,74 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                                            dispatchIndex,
                                            edgeTempIndex,
                                            result.reason))
-                    return result;
+                    return false;
             }
+            return true;
+        };
+        for (size_t insIdx = 0; insIdx < block->instructions.size(); ++insIdx) {
+            const RegInstruction& ins = block->instructions[insIdx];
+            if (pendingFuse.active) {
+                if (&ins == pendingFuse.initCall) {
+                    // 到达 <init>：发射融合 NewObjectA（分配结果延迟赋值）。
+                    if (options_.commentLevel >= RegCCommentLevel::Detailed) {
+                        body.comment("// fused allocate+init: " +
+                                     pendingFuse.initCall->method.owner.to_std_string() + "." +
+                                     pendingFuse.initCall->method.name.to_std_string() +
+                                     pendingFuse.initCall->method.desc.to_std_string());
+                    }
+                    emitAllocateWithInit(body, emitState, *pendingFuse.alloc, ins,
+                                         pendingFuse.allocCacheName, pendingFuse.fusedArgs);
+                    pendingFuse.active = false;
+                    if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins) &&
+                        !activeRegions.empty()) {
+                        if (!emitExceptionDispatch(body,
+                                                   activeRegions,
+                                                   block.get(),
+                                                   fn.symbol.returnType,
+                                                   emitState,
+                                                   dispatchIndex,
+                                                   edgeTempIndex,
+                                                   result.reason))
+                            return result;
+                    }
+                    continue;
+                }
+                if (!emitInstructionWithCheck(ins)) return result;
+                continue;
+            }
+            if (ins.kind == RegInstructionKind::Allocate &&
+                ins.allocationKind == SSAAllocationKind::Object) {
+                // 前瞻扫描同块内可融合 <init>。
+                size_t scan = insIdx + 1;
+                while (scan < block->instructions.size()) {
+                    const RegInstruction& cand = block->instructions[scan];
+                    if (cand.kind == RegInstructionKind::Call &&
+                        cand.method.name.to_std_string() == "<init>" && !cand.args.empty() &&
+                        operandUsesReg(cand.args[0], ins.dest.id)) {
+                        if (canFuseAllocateInit(emitState, ins, cand)) {
+                            pendingFuse.active         = true;
+                            pendingFuse.alloc          = &ins;
+                            pendingFuse.initCall       = &cand;
+                            pendingFuse.allocCacheName = addClassCache(emitState, ins.typeDesc);
+                            // 必须清空：pendingFuse 是块级复用对象，上一融合的
+                            // 参数表达式会残留（曾致参数错位取到 receiver）。
+                            pendingFuse.fusedArgs.clear();
+                            pendingFuse.fusedArgs.reserve(cand.args.size());
+                            for (const auto& arg : cand.args) {
+                                pendingFuse.fusedArgs.push_back(operandExpr(arg));
+                            }
+                        }
+                        break;
+                    }
+                    if (instructionUsesReg(cand, ins.dest.id) || !isFuseTransparent(cand)) break;
+                    scan++;
+                }
+                if (!pendingFuse.active) {
+                    if (!emitInstructionWithCheck(ins)) return result;
+                }
+                continue;
+            }
+            if (!emitInstructionWithCheck(ins)) return result;
         }
         if (options_.commentLevel >= RegCCommentLevel::Detailed) {
             const ca::str::Utf8String termLines = regTerminatorLines(*block);
