@@ -539,4 +539,40 @@ TEST_P(Vmc4BackendE2E, FieldAccessRoundTrip)
             12, GetParam().kind);
 }
 
+// Phase 2.A：数组访问（iaload..aaload / iastore..aastore）。
+// static 方法经对象参数（数组）做 ArrayLoad/ArrayStore。验证 per-site helper：按
+// VmArrayElemKind 精确选 JNI accessor（GetIntArrayRegion/GetBooleanArrayRegion/...，
+// GetObjectArrayElement for ref），null 数组显式抛 NPE，越界交 JNI 抛 AIOOBE。
+// 关键：boolean[] 与 byte[] 都用 baload，但 elementType 区分（BOOL→Boolean vs I8→Byte）。
+TEST_P(Vmc4BackendE2E, ArrayAccessRoundTrip)
+{
+    runCase("Vmc4NativeArray",
+            "public class Vmc4NativeArray {\n"
+            "  public static int readI(int[] a, int i) { return a[i]; }\n"
+            "  public static long readL(long[] a, int i) { return a[i]; }\n"
+            "  public static float readF(float[] a, int i) { return a[i]; }\n"
+            "  public static double readD(double[] a, int i) { return a[i]; }\n"
+            "  public static String readRef(String[] a, int i) { return a[i]; }\n"
+            "  public static boolean readFlag(boolean[] a, int i) { return a[i]; }\n"
+            "  public static int readByte(byte[] a, int i) { return a[i]; }\n"
+            "  public static int readChar(char[] a, int i) { return a[i]; }\n"
+            "  public static int readShort(short[] a, int i) { return a[i]; }\n"
+            "  public static int writeI(int[] a, int i, int v) { a[i] = v; return a[i]; }\n"
+            "}\n",
+            {
+                {"readI", "Vmc4NativeArray.readI(new int[]{10, 20, 30}, 1)"},
+                {"readL", "Vmc4NativeArray.readL(new long[]{1L, 2L, 3L}, 2)"},
+                {"readF", "Vmc4NativeArray.readF(new float[]{1.5f, 2.5f}, 1)"},
+                {"readD", "Vmc4NativeArray.readD(new double[]{1.5, 2.5}, 0)"},
+                {"readRef", "Vmc4NativeArray.readRef(new String[]{\"a\", \"b\"}, 1)"},
+                {"readFlagT", "Vmc4NativeArray.readFlag(new boolean[]{true, false}, 0)"},
+                {"readFlagF", "Vmc4NativeArray.readFlag(new boolean[]{true, false}, 1)"},
+                {"readByte", "Vmc4NativeArray.readByte(new byte[]{(byte)-1, (byte)7}, 1)"},
+                {"readChar", "Vmc4NativeArray.readChar(new char[]{65, 66}, 0)"},
+                {"readShort", "Vmc4NativeArray.readShort(new short[]{(short)5, (short)-3}, 1)"},
+                {"writeI", "Vmc4NativeArray.writeI(new int[]{0, 0, 0}, 1, 42)"},
+            },
+            10, GetParam().kind);
+}
+
 }   // namespace

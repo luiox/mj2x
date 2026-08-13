@@ -165,6 +165,26 @@ enum class VmJniKind : uint8_t
     Ref    = 5,   ///< object/array → jobject
 };
 
+/// @brief 数组元素 JNI 类型（精确，Phase 2.A）。
+///
+/// @details
+/// 数组元素访问必须用精确类型：GetIntArrayRegion 与 GetBooleanArrayRegion 不可互换
+/// （不同数组类型）。故不沿用 VmJniKind 的粗粒度（boolean/byte/char/short 归 Int32），
+/// 而保留 9 个精确类别，编码期由 SSAType 推导。base 类型用 Get/Set<Type>ArrayRegion
+/// （长度 1），ref 用 Get/SetObjectArrayElement。
+enum class VmArrayElemKind : uint8_t
+{
+    Boolean = 0,
+    Byte    = 1,
+    Char    = 2,
+    Short   = 3,
+    Int     = 4,
+    Long    = 5,
+    Float   = 6,
+    Double  = 7,
+    Ref     = 8,
+};
+
 /// @brief 方法引用：一个 Call 调用点的静态信息（Phase 2.0）。
 ///
 /// @details
@@ -224,6 +244,16 @@ struct VmFieldRef
     VmJniKind     jniKind = VmJniKind::Int32;   ///< 字段类型类别（从 desc 推导）
 };
 
+/// @brief 数组访问引用：一个 ArrayLoad/ArrayStore 调用点的静态信息（Phase 2.A）。
+///
+/// @details
+/// 数组访问无 ID 解析（数组直接传），按 elemKind 精确选 JNI accessor。去重按 elemKind
+/// （同元素类型的访问点共享一个 helper——helper 只依赖元素类型，数组/索引/值经参数传）。
+struct VmArrayRef
+{
+    VmArrayElemKind elemKind = VmArrayElemKind::Int;   ///< 数组元素类型（决定 accessor）
+};
+
 /// @brief 一个方法的完整 VM 程序（编码产物）。
 ///
 /// @details
@@ -237,6 +267,8 @@ struct VmProgram
     std::vector<VmMethodRef>     methodRefs;     ///< Call 调用点的方法引用（Phase 2.0）
     std::vector<VmFieldRef>      loadFieldRefs;  ///< LoadField 字段引用（Phase 2.A）
     std::vector<VmFieldRef>      storeFieldRefs; ///< StoreField 字段引用（Phase 2.A）
+    std::vector<VmArrayRef>      arrayLoadRefs;  ///< ArrayLoad 元素类型引用（Phase 2.A）
+    std::vector<VmArrayRef>      arrayStoreRefs; ///< ArrayStore 元素类型引用（Phase 2.A）
     uint16_t                     numInputs = 0;  ///< 方法参数占用的寄存器数
     uint16_t                     numRegs   = 0;  ///< 寄存器文件总大小
 };

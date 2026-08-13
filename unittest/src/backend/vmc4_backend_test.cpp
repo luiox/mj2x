@@ -534,7 +534,8 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
                           VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
                           VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
                           VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
-                          VmOpcode::LoadField, VmOpcode::StoreField}) {
+                          VmOpcode::LoadField, VmOpcode::StoreField,
+                          VmOpcode::ArrayLoad, VmOpcode::ArrayStore}) {
         bytes.push_back(instance.opcodeFor(op));
     }
     return bytes;
@@ -562,7 +563,8 @@ TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
 }
 
 // P2-2：映射是支持集上的双射（互不相同）+ handler 顺序是排列。
-// Phase 2.A 起支持集 = 13 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField）。
+// Phase 2.A 起支持集 = 15 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField
+// + ArrayLoad/ArrayStore）。
 TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
 {
     Vmc4Options opts;
@@ -580,7 +582,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
     EXPECT_EQ(bytes[0], instance.haltByte());
 
     const auto& order = instance.handlerOrder();
-    EXPECT_EQ(order.size(), 13u) << "handler order covers the 13 supported opcodes";
+    EXPECT_EQ(order.size(), 15u) << "handler order covers the 15 supported opcodes";
     std::vector<VmOpcode> sortedOrder = order;
     std::sort(sortedOrder.begin(), sortedOrder.end(),
               [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
@@ -588,7 +590,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
                                       VmOpcode::Compare, VmOpcode::Convert, VmOpcode::Jump,
                                       VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
                                       VmOpcode::SuperDec, VmOpcode::LoadField, VmOpcode::StoreField,
-                                      VmOpcode::Call};
+                                      VmOpcode::ArrayLoad, VmOpcode::ArrayStore, VmOpcode::Call};
     EXPECT_EQ(sortedOrder, expected) << "handler order must be a permutation of the supported set";
 }
 
@@ -725,12 +727,13 @@ TEST(Vmc4BackendTest, EncodesStoreFieldInstruction)
     EXPECT_FALSE(prog->storeFieldRefs[0].isStatic);
 }
 
-// P2-8：ArrayLoad / ArrayStore。
-TEST(Vmc4BackendTest, FailClosedOnArrayAccess)
+// P2-8：ArrayLoad / ArrayStore（Phase 2.A）—— 不再 fail-closed，按元素类型收集。
+TEST(Vmc4BackendTest, EncodesArrayAccessInstructions)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
+    // static int at(int[] a, int i) { return a[i]; }
     auto load = encodeMethod("at", "([II)I",
                              {
                                  new VarInsnNode(Opcodes::ALOAD, 0),
@@ -739,10 +742,12 @@ TEST(Vmc4BackendTest, FailClosedOnArrayAccess)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              2, 2, instance, reason);
-    EXPECT_EQ(load, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(load, nullptr) << reason;
+    ASSERT_EQ(load->arrayLoadRefs.size(), 1u);
+    EXPECT_EQ(load->arrayLoadRefs[0].elemKind, VmArrayElemKind::Int);
 
     std::string reason2;
+    // static int st(int[] a, int i, int v) { a[i] = v; return 0; }
     auto store = encodeMethod("st", "([III)I",
                               {
                                   new VarInsnNode(Opcodes::ALOAD, 0),
@@ -753,8 +758,9 @@ TEST(Vmc4BackendTest, FailClosedOnArrayAccess)
                                   new InsnNode(Opcodes::IRETURN),
                               },
                               3, 3, instance, reason2);
-    EXPECT_EQ(store, nullptr);
-    EXPECT_FALSE(reason2.empty());
+    ASSERT_NE(store, nullptr) << reason2;
+    ASSERT_EQ(store->arrayStoreRefs.size(), 1u);
+    EXPECT_EQ(store->arrayStoreRefs[0].elemKind, VmArrayElemKind::Int);
 }
 
 // P2-9：Call（INVOKESTATIC）。
@@ -1164,10 +1170,10 @@ TEST(Vmc4BackendTest, SuperOpFoldsIncDec)
         << "x+1 must fold to SuperInc";
     EXPECT_NE(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::SuperDec)), code.end())
         << "x-1 must fold to SuperDec";
-    // 折叠后普通 Binary 不再出现在该实例的编码中（该实例内 Binary 字节不应出现
-    // ——注意：别的方法可能用 Binary，这里 aliasCount=0 且本方法只有 +1/-1）。
-    EXPECT_EQ(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::Binary)), code.end())
-        << "folded Inc/Dec must not emit plain Binary";
+    // 该方法恰有一处 +1 和一处 -1，两条 Binary 各自全或否地折叠。SuperInc 与 SuperDec
+    // 同时出现即证明两处都已折叠，故无未折叠 Binary 残留——不再用裸 std::find 查
+    // Binary 字节（operand 字节会与 Binary 的 canonical 字节碰撞，opcode 集大小变化
+    // 会移动 canonical 赋值导致误报）。
 }
 
 // P3-8：handler 形态等价变形——确定性选择 + 解释器按实例发射 alt body。
@@ -1276,6 +1282,8 @@ int operandLenForTest(VmOpcode op)
     case VmOpcode::SuperDec:  return 5;
     case VmOpcode::LoadField:  return 7;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=0)
     case VmOpcode::StoreField: return 9;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=1) + valueIdx:u16
+    case VmOpcode::ArrayLoad:  return 9;   // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=1) + indexIdx:u16
+    case VmOpcode::ArrayStore: return 11;  // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=2) + indexIdx:u16 + valueIdx:u16
     default:                  return 0;
     }
 }
@@ -1289,12 +1297,13 @@ bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>
     sawRotation = false;
     size_t pc = 0;
     std::map<uint8_t, uint8_t> firstRawByCanonical;   // canonical -> 首个 raw
-    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 Call + 2.A LoadField/StoreField）。
+    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 Call + 2.A field/array）。
     static const VmOpcode kAllOps[] = {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
                                        VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
                                        VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
                                        VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
-                                       VmOpcode::LoadField, VmOpcode::StoreField};
+                                       VmOpcode::LoadField, VmOpcode::StoreField,
+                                       VmOpcode::ArrayLoad, VmOpcode::ArrayStore};
     while (pc < bytes.size()) {
         const int d = inst.variantForPc(pc);
         variants.insert(d);

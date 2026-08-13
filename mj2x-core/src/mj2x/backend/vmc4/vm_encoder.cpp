@@ -104,6 +104,27 @@ VmJniKind toVmJniKind(SSAType s)
     }
 }
 
+/// @brief SSAType → VmArrayElemKind（数组元素访问 accessor 用，精确）。
+///
+/// @details
+/// 数组元素必须用精确类型 accessor（GetIntArrayRegion vs GetBooleanArrayRegion 不可互换）。
+/// BOOL/I8/CHAR/I16 在 SSAType 里是独立值，保留精确；UNKNOWN 不应出现在已校验的数组访问。
+VmArrayElemKind toVmArrayElemKind(SSAType s)
+{
+    switch (s) {
+    case SSAType::BOOL: return VmArrayElemKind::Boolean;
+    case SSAType::I8: return VmArrayElemKind::Byte;
+    case SSAType::CHAR: return VmArrayElemKind::Char;
+    case SSAType::I16: return VmArrayElemKind::Short;
+    case SSAType::I32: return VmArrayElemKind::Int;
+    case SSAType::I64: return VmArrayElemKind::Long;
+    case SSAType::F32: return VmArrayElemKind::Float;
+    case SSAType::F64: return VmArrayElemKind::Double;
+    case SSAType::REF: return VmArrayElemKind::Ref;
+    default: return VmArrayElemKind::Int;
+    }
+}
+
 /// @brief SSAComparePredicate → VmComparePred。
 bool toVmComparePred(SSAComparePredicate p, VmComparePred& out)
 {
@@ -142,6 +163,13 @@ struct EncoderState
     std::unordered_map<std::string, uint16_t>                loadFieldByKey;
     std::vector<VmFieldRef>                                  storeFieldRefs;
     std::unordered_map<std::string, uint16_t>                storeFieldByKey;
+
+    /// ArrayLoad/ArrayStore 元素类型表（Phase 2.A）：按 elemKind 去重（helper 只依赖
+    /// 元素类型，数组/索引/值经参数传）。load/store 各一张表。
+    std::vector<VmArrayRef>                                  arrayLoadRefs;
+    std::unordered_map<uint8_t, uint16_t>                    arrayLoadByKey;
+    std::vector<VmArrayRef>                                  arrayStoreRefs;
+    std::unordered_map<uint8_t, uint16_t>                    arrayStoreByKey;
 
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
@@ -364,6 +392,23 @@ struct EncoderState
         return idx;
     }
 
+    /// @brief 为一个数组访问点分配/复用元素类型索引（Phase 2.A）。
+    ///
+    /// @details
+    /// 按 elemKind 去重（同元素类型的访问点共享一个 helper）。elemKind 用 uint8_t 当 key。
+    uint16_t internArrayRef(std::vector<VmArrayRef>& refs,
+                            std::unordered_map<uint8_t, uint16_t>& keyMap,
+                            VmArrayElemKind elemKind)
+    {
+        const uint8_t k = static_cast<uint8_t>(elemKind);
+        auto it = keyMap.find(k);
+        if (it != keyMap.end()) return it->second;
+        const uint16_t idx = static_cast<uint16_t>(refs.size());
+        keyMap[k] = idx;
+        refs.push_back(VmArrayRef{elemKind});
+        return idx;
+    }
+
     /// @brief 解析一个 RegOperand 为 VM 寄存器索引。
     ///
     /// @details
@@ -451,6 +496,8 @@ bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
 bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeLoadField(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeStoreField(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeArrayLoad(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeArrayStore(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeJump(EncoderState& ctx, const RegJumpTerminator& term, VmProgram& prog,
                 std::string& reason);
 bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram& prog,
@@ -544,12 +591,12 @@ bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& 
     case RegInstructionKind::Call: return encodeCall(ctx, ins, prog, reason);
     case RegInstructionKind::LoadField: return encodeLoadField(ctx, ins, prog, reason);
     case RegInstructionKind::StoreField: return encodeStoreField(ctx, ins, prog, reason);
-    case RegInstructionKind::ArrayLoad:
-    case RegInstructionKind::ArrayStore:
+    case RegInstructionKind::ArrayLoad: return encodeArrayLoad(ctx, ins, prog, reason);
+    case RegInstructionKind::ArrayStore: return encodeArrayStore(ctx, ins, prog, reason);
     case RegInstructionKind::Allocate:
     case RegInstructionKind::Intrinsic:
     case RegInstructionKind::Barrier:
-        reason = "RegIR family not supported in VMC4 yet (array/alloc/intrinsic)";
+        reason = "RegIR family not supported in VMC4 yet (alloc/intrinsic)";
         return false;
     }
     reason = "unknown RegInstructionKind";
@@ -866,6 +913,65 @@ bool encodeStoreField(EncoderState& ctx, const RegInstruction& ins, VmProgram& p
     return true;
 }
 
+/// @brief 编码 ArrayLoad 指令（Phase 2.A：iaload..aaload）。
+///
+/// @details
+/// 按 elementType 收集到 VmProgram.arrayLoadRefs，字节流只存 siteIdx。
+/// RegIR 中 array 存于 ins.receiver，index 存于 ins.index。
+///
+/// 字节流：[ArrayLoad][siteIdx:u16][arrayIdx:u16][dest:u16][argc:u8=1][indexIdx:u16]
+/// - arrayIdx：数组寄存器（helper 的 recv）
+/// - dest：结果寄存器（元素值写入处）
+/// - argc=1，argIdx[0]=indexIdx：索引（helper 经 argIdx 取）
+bool encodeArrayLoad(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+{
+    const VmArrayElemKind elemKind = toVmArrayElemKind(ins.elementType);
+    const uint16_t siteIdx = ctx.internArrayRef(ctx.arrayLoadRefs, ctx.arrayLoadByKey, elemKind);
+
+    // RegIR：array 在 ins.receiver，index 在 ins.index。
+    uint16_t arrayIdx;
+    if (!ctx.resolveOperand(ins.receiver, arrayIdx, reason)) return false;
+    uint16_t indexIdx;
+    if (!ctx.resolveOperand(ins.index, indexIdx, reason)) return false;
+    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    ctx.observeReg(dest);
+
+    emitOpcode(ctx, VmOpcode::ArrayLoad, prog.bytecodes);
+    emitU16(prog.bytecodes, siteIdx);
+    emitU16(prog.bytecodes, arrayIdx);
+    emitU16(prog.bytecodes, dest);
+    emitU8(prog.bytecodes, 1);    // argc = 1（index）
+    emitU16(prog.bytecodes, indexIdx);
+    return true;
+}
+
+/// @brief 编码 ArrayStore 指令（Phase 2.A：iastore..aastore）。
+///
+/// @details
+/// 字节流：[ArrayStore][siteIdx:u16][arrayIdx:u16][dest:u16=0][argc:u8=2][indexIdx:u16][valueIdx:u16]
+/// - argc=2，argIdx[0]=indexIdx，argIdx[1]=valueIdx。
+bool encodeArrayStore(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+{
+    const VmArrayElemKind elemKind = toVmArrayElemKind(ins.elementType);
+    const uint16_t siteIdx = ctx.internArrayRef(ctx.arrayStoreRefs, ctx.arrayStoreByKey, elemKind);
+
+    uint16_t arrayIdx;
+    if (!ctx.resolveOperand(ins.receiver, arrayIdx, reason)) return false;
+    uint16_t indexIdx;
+    if (!ctx.resolveOperand(ins.index, indexIdx, reason)) return false;
+    uint16_t valueIdx;
+    if (!ctx.resolveOperand(ins.value, valueIdx, reason)) return false;
+
+    emitOpcode(ctx, VmOpcode::ArrayStore, prog.bytecodes);
+    emitU16(prog.bytecodes, siteIdx);
+    emitU16(prog.bytecodes, arrayIdx);
+    emitU16(prog.bytecodes, 0);   // dest unused（store 无结果）
+    emitU8(prog.bytecodes, 2);    // argc = 2（index + value）
+    emitU16(prog.bytecodes, indexIdx);
+    emitU16(prog.bytecodes, valueIdx);
+    return true;
+}
+
 bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog, std::string& reason)
 {
     // std::variant 访问：按 terminator 类型分派。
@@ -1000,6 +1106,9 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     // LoadField/StoreField 字段引用表（Phase 2.A）。
     prog->loadFieldRefs  = std::move(ctx.loadFieldRefs);
     prog->storeFieldRefs = std::move(ctx.storeFieldRefs);
+    // ArrayLoad/ArrayStore 元素类型表（Phase 2.A）。
+    prog->arrayLoadRefs  = std::move(ctx.arrayLoadRefs);
+    prog->arrayStoreRefs = std::move(ctx.arrayStoreRefs);
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;

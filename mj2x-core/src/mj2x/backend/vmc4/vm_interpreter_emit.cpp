@@ -271,6 +271,27 @@ const char* kHandlerStoreField =
     "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
     "            store_field_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
 
+/// ARRAY_LOAD（Phase 2.A）：经函数指针表分派到 per-site array load helper。
+/// recv=arrayIdx，argIdx[0]=indexIdx，dest=结果槽。结构与 CALL/LOAD_FIELD 对称。
+const char* kHandlerArrayLoad =
+    "            unsigned int siteIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned char argc = code[pc++];\n"
+    "            unsigned int argBuf[32];\n"
+    "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
+    "            array_load_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
+
+/// ARRAY_STORE（Phase 2.A）：recv=arrayIdx，argIdx[0]=indexIdx，argIdx[1]=valueIdx，dest=0。
+const char* kHandlerArrayStore =
+    "            unsigned int siteIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned char argc = code[pc++];\n"
+    "            unsigned int argBuf[32];\n"
+    "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
+    "            array_store_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
+
 /// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
 /// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
 struct HandlerEntry
@@ -295,6 +316,8 @@ const HandlerEntry kHandlers[] = {
     {VmOpcode::Call,     "CALL",       kHandlerCall},
     {VmOpcode::LoadField,  "LOAD_FIELD",  kHandlerLoadField},
     {VmOpcode::StoreField, "STORE_FIELD", kHandlerStoreField},
+    {VmOpcode::ArrayLoad,  "ARRAY_LOAD",  kHandlerArrayLoad},
+    {VmOpcode::ArrayStore, "ARRAY_STORE", kHandlerArrayStore},
 };
 constexpr size_t kHandlerCount = sizeof(kHandlers) / sizeof(kHandlers[0]);
 
@@ -490,6 +513,7 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         "struct {} {{ const unsigned char* code; const unsigned int* targets; "
         "unsigned int pc; unsigned int status; JNIEnv* env; const mj2x_vm_call_fn* call_table; "
         "const mj2x_vm_call_fn* load_field_table; const mj2x_vm_call_fn* store_field_table; "
+        "const mj2x_vm_call_fn* array_load_table; const mj2x_vm_call_fn* array_store_table; "
         "mj2x_vm_slot* regs; mj2x_vm_slot* retval; }};", ctxType));
     out.emitLine(format_std("typedef struct {} {};", ctxType, ctxType));
     out.add_func(format_std("static void mj2x_vm_dispatch_body_{}({}* ctx)", tag, ctxType),
@@ -502,6 +526,8 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         f.emitLine("const mj2x_vm_call_fn* call_table = ctx->call_table;");
         f.emitLine("const mj2x_vm_call_fn* load_field_table = ctx->load_field_table;");
         f.emitLine("const mj2x_vm_call_fn* store_field_table = ctx->store_field_table;");
+        f.emitLine("const mj2x_vm_call_fn* array_load_table = ctx->array_load_table;");
+        f.emitLine("const mj2x_vm_call_fn* array_store_table = ctx->array_store_table;");
         f.emitLine("mj2x_vm_slot* regs = ctx->regs;");
         f.emitLine("mj2x_vm_slot* retval = ctx->retval;");
         f.emitLine("(void)targets;");
@@ -509,6 +535,8 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         f.emitLine("(void)retval;");
         f.emitLine("(void)load_field_table;");
         f.emitLine("(void)store_field_table;");
+        f.emitLine("(void)array_load_table;");
+        f.emitLine("(void)array_store_table;");
         emitOpcodeFetch(f, instance, tag);
         f.emitLine("switch (opcode) {");
         {
@@ -544,6 +572,8 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmInstance& instance,
     out.emitLine("_ctx.call_table = call_table;");
     out.emitLine("_ctx.load_field_table = load_field_table;");
     out.emitLine("_ctx.store_field_table = store_field_table;");
+    out.emitLine("_ctx.array_load_table = array_load_table;");
+    out.emitLine("_ctx.array_store_table = array_store_table;");
     out.emitLine("_ctx.regs = slots;");
     out.emitLine("_ctx.retval = retval;");
     out.emitLine(format_std("{}* ctx = &_ctx;", ctxType));
@@ -1135,6 +1165,153 @@ void emitFieldInfrastructure(CSourceStream& out, const VmProgram& program, const
     }
 }
 
+// ===========================================================================
+// Array 基础设施（Phase 2.A）：per-site array load/store helper + 分派表。
+//
+// 为每个 ArrayLoad/ArrayStore 元素类型发射一个 helper（按 elemKind 去重），base 类型
+// 用 Get/Set<Type>ArrayRegion(len=1)，ref 用 Get/SetObjectArrayElement。null 数组显式
+// 抛 NPE（与 JVM 语义一致），越界交由 JNI 抛 AIOOBE。helper 签名复用 mj2x_vm_call_fn。
+// ===========================================================================
+
+/// VmArrayElemKind → JNI Region accessor 后缀（仅 base 类型；Ref 单独处理）。
+const char* arrayRegionSuffix(VmArrayElemKind k)
+{
+    switch (k) {
+    case VmArrayElemKind::Boolean: return "Boolean";
+    case VmArrayElemKind::Byte: return "Byte";
+    case VmArrayElemKind::Char: return "Char";
+    case VmArrayElemKind::Short: return "Short";
+    case VmArrayElemKind::Int: return "Int";
+    case VmArrayElemKind::Long: return "Long";
+    case VmArrayElemKind::Float: return "Float";
+    case VmArrayElemKind::Double: return "Double";
+    default: return "";   // Ref
+    }
+}
+
+/// VmArrayElemKind → 元素 C 类型名。
+const char* arrayElemCType(VmArrayElemKind k)
+{
+    switch (k) {
+    case VmArrayElemKind::Boolean: return "jboolean";
+    case VmArrayElemKind::Byte: return "jbyte";
+    case VmArrayElemKind::Char: return "jchar";
+    case VmArrayElemKind::Short: return "jshort";
+    case VmArrayElemKind::Int: return "jint";
+    case VmArrayElemKind::Long: return "jlong";
+    case VmArrayElemKind::Float: return "jfloat";
+    case VmArrayElemKind::Double: return "jdouble";
+    default: return "jobject";
+    }
+}
+
+/// VmArrayElemKind → 寄存器槽读写字段。
+const char* arraySlotField(VmArrayElemKind k)
+{
+    switch (k) {
+    case VmArrayElemKind::Float:
+    case VmArrayElemKind::Double: return ".f";
+    case VmArrayElemKind::Ref: return ".ref";
+    default: return ".i";
+    }
+}
+
+/// VmArrayElemKind → 写回 regs[dest] 的 cast（load 用）。
+const char* arrayWriteCast(VmArrayElemKind k)
+{
+    switch (k) {
+    case VmArrayElemKind::Float: return "(double)";
+    case VmArrayElemKind::Double: return "";
+    case VmArrayElemKind::Ref: return "(void*)";
+    default: return "(int64_t)";
+    }
+}
+
+/// @brief 发射单个 array helper（load 或 store）。
+void emitArrayHelper(CSourceStream& out, VmArrayElemKind elemKind, size_t i, bool isStore,
+                     const std::string& tag)
+{
+    const bool        isRef  = (elemKind == VmArrayElemKind::Ref);
+    const std::string kind   = isStore ? "array_store" : "array_load";
+    const std::string helper = format_std("mj2x_vm_{}_{}_{}", kind, tag, i);
+
+    out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
+                            "unsigned int recv, unsigned int* argIdx, "
+                            "unsigned char argc, unsigned int dest)", helper),
+                 [&](CSourceStream& fnc) {
+        if (isStore) fnc.emitLine("(void)dest;  /* store 无结果 */");
+        // null 数组显式抛 NPE（JNI Get/SetArrayRegion 对 NULL 行为未定义）。
+        fnc.emitLine("jobject _arr = (jobject)regs[recv].ref;");
+        fnc.emitLine(format_std("if (_arr == NULL) {{ mj2x_vm_throw_npe(env, \"{}\"); return; }}",
+                                isStore ? "array store" : "array load"));
+        fnc.emitLine("jsize _idx = (jsize)regs[argIdx[0]].i;");
+
+        if (isStore) {
+            // value 在 argIdx[1]。
+            if (isRef) {
+                fnc.emitLine("(*env)->SetObjectArrayElement(env, _arr, _idx, "
+                             "(jobject)regs[argIdx[1]].ref);");
+            } else {
+                fnc.emitLine(format_std("{} _v = ({})regs[argIdx[1]]{};",
+                                        arrayElemCType(elemKind), arrayElemCType(elemKind),
+                                        arraySlotField(elemKind)));
+                fnc.emitLine(format_std("(*env)->Set{}ArrayRegion(env, _arr, _idx, 1, &_v);",
+                                        arrayRegionSuffix(elemKind)));
+            }
+        } else {
+            if (isRef) {
+                fnc.emitLine(format_std("regs[dest]{} = {}(*env)->GetObjectArrayElement(env, _arr, _idx);",
+                                        arraySlotField(elemKind), arrayWriteCast(elemKind)));
+            } else {
+                fnc.emitLine(format_std("{} _v;", arrayElemCType(elemKind)));
+                fnc.emitLine(format_std("(*env)->Get{}ArrayRegion(env, _arr, _idx, 1, &_v);",
+                                        arrayRegionSuffix(elemKind)));
+                fnc.emitLine(format_std("regs[dest]{} = {}_v;",
+                                        arraySlotField(elemKind), arrayWriteCast(elemKind)));
+            }
+        }
+    });
+    out.emitBlankLine();
+}
+
+/// 发射 ArrayLoad/ArrayStore 的 per-site helper + 分派表（refs 非空时）。
+void emitArrayInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
+{
+    if (program.arrayLoadRefs.empty() && program.arrayStoreRefs.empty()) return;
+
+    for (size_t i = 0; i < program.arrayLoadRefs.size(); ++i) {
+        emitArrayHelper(out, program.arrayLoadRefs[i].elemKind, i, false, tag);
+    }
+    for (size_t i = 0; i < program.arrayStoreRefs.size(); ++i) {
+        emitArrayHelper(out, program.arrayStoreRefs[i].elemKind, i, true, tag);
+    }
+
+    if (!program.arrayLoadRefs.empty()) {
+        out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_array_load_table_{}[{}] = {{",
+                                tag, program.arrayLoadRefs.size()));
+        {
+            CSourceStream::IndentGuard g(out);
+            for (size_t i = 0; i < program.arrayLoadRefs.size(); ++i) {
+                out.emitLine(format_std("mj2x_vm_array_load_{}_{},", tag, i));
+            }
+        }
+        out.emitLine("};");
+        out.emitBlankLine();
+    }
+    if (!program.arrayStoreRefs.empty()) {
+        out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_array_store_table_{}[{}] = {{",
+                                tag, program.arrayStoreRefs.size()));
+        {
+            CSourceStream::IndentGuard g(out);
+            for (size_t i = 0; i < program.arrayStoreRefs.size(); ++i) {
+                out.emitLine(format_std("mj2x_vm_array_store_{}_{},", tag, i));
+            }
+        }
+        out.emitLine("};");
+        out.emitBlankLine();
+    }
+}
+
 }   // namespace
 
 // ===========================================================================
@@ -1194,6 +1371,12 @@ std::string VmInterpreterEmitter::emitRuntimePrelude()
         "    if (v >= (double)INT64_MAX) return INT64_MAX;\n"
         "    if (v < (double)INT64_MIN) return INT64_MIN;\n"
         "    return (int64_t)v;\n"
+        "}\n"
+        "/* 抛 NullPointerException（数组/对象 null 访问，Phase 2.A）。pending exception\n"
+        " * 由调用方检测并 return，让异常传播回 Java。 */\n"
+        "static void mj2x_vm_throw_npe(JNIEnv* env, const char* msg) {\n"
+        "    jclass _c = (*env)->FindClass(env, \"java/lang/NullPointerException\");\n"
+        "    if (_c != NULL) { (*env)->ThrowNew(env, _c, msg); (*env)->DeleteLocalRef(env, _c); }\n"
         "}\n"
         "/* ===== end VMC4 runtime prelude ===== */\n\n");
 }
@@ -1297,17 +1480,26 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         emitFieldInfrastructure(out, program, tag);
     }
 
+    // Array 基础设施（arrayLoadRefs/arrayStoreRefs 非空时）：per-site helper + 分派表。
+    if (!program.arrayLoadRefs.empty() || !program.arrayStoreRefs.empty()) {
+        emitArrayInfrastructure(out, program, tag);
+    }
+
     // --- 解释器入口函数（按 dispatcherKind 选择形态）---
     out.add_func(format_std("static unsigned int {}(JNIEnv* env, mj2x_vm_slot* slots, "
                             "mj2x_vm_slot* retval, const mj2x_vm_call_fn* call_table, "
                             "const mj2x_vm_call_fn* load_field_table, "
-                            "const mj2x_vm_call_fn* store_field_table)", funcName),
+                            "const mj2x_vm_call_fn* store_field_table, "
+                            "const mj2x_vm_call_fn* array_load_table, "
+                            "const mj2x_vm_call_fn* array_store_table)", funcName),
                  [&](CSourceStream& f) {
         f.emitLine("(void)env;");
         f.emitLine("(void)retval;");
         f.emitLine("(void)call_table;");
         f.emitLine("(void)load_field_table;");
         f.emitLine("(void)store_field_table;");
+        f.emitLine("(void)array_load_table;");
+        f.emitLine("(void)array_store_table;");
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
             emitSwitchDispatcher(f, instance, progName, targetsName, tag);

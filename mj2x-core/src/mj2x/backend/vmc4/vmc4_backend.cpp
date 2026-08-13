@@ -475,6 +475,14 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append(program.storeFieldRefs.empty()
                             ? std::string("0")
                             : ("mj2x_vm_store_field_table_" + methodTag));
+            line.append(", ");
+            line.append(program.arrayLoadRefs.empty()
+                            ? std::string("0")
+                            : ("mj2x_vm_array_load_table_" + methodTag));
+            line.append(", ");
+            line.append(program.arrayStoreRefs.empty()
+                            ? std::string("0")
+                            : ("mj2x_vm_array_store_table_" + methodTag));
             line.append(");");
             out.emitLine(line.build());
         }
