@@ -457,8 +457,9 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                 out.emitLine(line.build());
             }
         }
-        // 调解释器。call_table：含 Call 的方法传 mj2x_vm_call_table_<tag>（backend
-        // finalize 发射），纯计算方法传 0（解释器不读）。
+        // 调解释器。各 object-op 分派表：含该 family 的方法传对应表（backend finalize
+        // 发射），不含的传 0（handler 不触发，解释器不读）。空表传 0 而非表名，避免
+        // 引用未发射的符号。
         {
             CSourceStream line;
             line.append("unsigned int status = mj2x_vm_exec_");
@@ -466,6 +467,14 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append("(env, regs, &ret, ");
             line.append(program.methodRefs.empty() ? std::string("0")
                                                     : ("mj2x_vm_call_table_" + methodTag));
+            line.append(", ");
+            line.append(program.loadFieldRefs.empty()
+                            ? std::string("0")
+                            : ("mj2x_vm_load_field_table_" + methodTag));
+            line.append(", ");
+            line.append(program.storeFieldRefs.empty()
+                            ? std::string("0")
+                            : ("mj2x_vm_store_field_table_" + methodTag));
             line.append(");");
             out.emitLine(line.build());
         }

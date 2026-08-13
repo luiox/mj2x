@@ -483,4 +483,60 @@ TEST_P(Vmc4BackendE2E, InstanceCallOnObjectParamRoundTrip)
             1, GetParam().kind);
 }
 
+// Phase 2.A：字段访问（getfield/putfield/getstatic/putstatic）。
+// static 方法经对象参数做 getfield（receiver=参数），或直接访问 static 字段。
+// 验证 per-site field helper：懒缓存 class + fieldID，按 desc 精确选 JNI accessor
+// （GetIntField/GetLongField/GetDoubleField/GetObjectField/GetBooleanField/GetByteField）。
+// Box/Narrow 的 <init> 是实例方法（fail-closed 保留字节码），字段由 VM 经 JNI 访问。
+TEST_P(Vmc4BackendE2E, FieldAccessRoundTrip)
+{
+    runCase("Vmc4NativeField",
+            "public class Vmc4NativeField {\n"
+            "  public static int counter = 10;\n"
+            "  public static String label = \"init\";\n"
+            "  public static class Box {\n"
+            "    public int x; public long y; public double z; public String name;\n"
+            "    public Box(int x, long y, double z, String n) { this.x=x; this.y=y; this.z=z; "
+            "this.name=n; }\n"
+            "  }\n"
+            "  public static class Narrow {\n"
+            "    public boolean flag; public byte by; public char ch; public short sh;\n"
+            "    public Narrow(boolean f, byte b, char c, short s) { flag=f; by=b; ch=c; sh=s; }\n"
+            "  }\n"
+            "  public static int readX(Box b) { return b.x; }\n"
+            "  public static long readY(Box b) { return b.y; }\n"
+            "  public static double readZ(Box b) { return b.z; }\n"
+            "  public static String readName(Box b) { return b.name; }\n"
+            "  public static int writeX(Box b, int v) { b.x = v; return b.x; }\n"
+            "  public static boolean readFlag(Narrow n) { return n.flag; }\n"
+            "  public static int readByte(Narrow n) { return n.by; }\n"
+            "  public static int readChar(Narrow n) { return n.ch; }\n"
+            "  public static int readShort(Narrow n) { return n.sh; }\n"
+            "  public static int getCounter() { return counter; }\n"
+            "  public static String getLabel() { return label; }\n"
+            "  public static int setCounter(int v) { counter = v; return counter; }\n"
+            "}\n",
+            {
+                {"readX", "Vmc4NativeField.readX(new Vmc4NativeField.Box(7, 0L, 0.0, null))"},
+                {"readY", "Vmc4NativeField.readY(new Vmc4NativeField.Box(0, 100L, 0.0, null))"},
+                {"readZ", "Vmc4NativeField.readZ(new Vmc4NativeField.Box(0, 0L, 2.5, null))"},
+                {"readName", "Vmc4NativeField.readName(new Vmc4NativeField.Box(0, 0L, 0.0, \"hi\"))"},
+                {"writeX", "Vmc4NativeField.writeX(new Vmc4NativeField.Box(0, 0L, 0.0, null), 42)"},
+                {"readFlagT", "Vmc4NativeField.readFlag(new Vmc4NativeField.Narrow(true, (byte)0, "
+                              "(char)0, (short)0))"},
+                {"readFlagF", "Vmc4NativeField.readFlag(new Vmc4NativeField.Narrow(false, (byte)0, "
+                              "(char)0, (short)0))"},
+                {"readByte", "Vmc4NativeField.readByte(new Vmc4NativeField.Narrow(true, (byte)-7, "
+                             "(char)0, (short)0))"},
+                {"readChar", "Vmc4NativeField.readChar(new Vmc4NativeField.Narrow(true, (byte)0, "
+                             "(char)65, (short)0))"},
+                {"readShort", "Vmc4NativeField.readShort(new Vmc4NativeField.Narrow(true, (byte)0, "
+                              "(char)0, (short)-99))"},
+                {"getCounter", "Vmc4NativeField.getCounter()"},
+                {"getLabel", "Vmc4NativeField.getLabel()"},
+                {"setCounter", "Vmc4NativeField.setCounter(99)"},
+            },
+            12, GetParam().kind);
+}
+
 }   // namespace

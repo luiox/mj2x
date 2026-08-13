@@ -136,6 +136,13 @@ struct EncoderState
     std::vector<VmMethodRef>                                  methodRefs;
     std::unordered_map<std::string, uint16_t>                methodRefByKey;
 
+    /// LoadField/StoreField 字段引用表（Phase 2.A）：每个字段访问点收集一个 VmFieldRef，
+    /// 字节流只存 fieldSiteIdx。load/store 各一张表（helper 语义不同：Get vs Set）。
+    std::vector<VmFieldRef>                                  loadFieldRefs;
+    std::unordered_map<std::string, uint16_t>                loadFieldByKey;
+    std::vector<VmFieldRef>                                  storeFieldRefs;
+    std::unordered_map<std::string, uint16_t>                storeFieldByKey;
+
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
     uint16_t numInputs = 0;
@@ -333,6 +340,30 @@ struct EncoderState
         return idx;
     }
 
+    /// @brief 为一个字段访问点分配/复用字段引用索引（Phase 2.A）。
+    ///
+    /// @details
+    /// 相同 (owner, name, desc, isStatic) 的访问点复用同一 fieldSiteIdx，共享一个
+    /// backend 发射的 helper。load/store 各自的表传入（refs/keyMap），故同名同表内去重。
+    uint16_t internFieldRef(std::vector<VmFieldRef>& refs,
+                            std::unordered_map<std::string, uint16_t>& keyMap,
+                            VmFieldRef fref)
+    {
+        std::string key = fref.owner;
+        key.push_back('\0');
+        key += fref.name;
+        key.push_back('\0');
+        key += fref.desc;
+        key.push_back('\0');
+        key.push_back(fref.isStatic ? '\1' : '\0');
+        auto it = keyMap.find(key);
+        if (it != keyMap.end()) return it->second;
+        const uint16_t idx = static_cast<uint16_t>(refs.size());
+        keyMap[key] = idx;
+        refs.push_back(std::move(fref));
+        return idx;
+    }
+
     /// @brief 解析一个 RegOperand 为 VM 寄存器索引。
     ///
     /// @details
@@ -418,6 +449,8 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
 bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeLoadField(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeStoreField(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeJump(EncoderState& ctx, const RegJumpTerminator& term, VmProgram& prog,
                 std::string& reason);
 bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram& prog,
@@ -509,14 +542,14 @@ bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& 
     case RegInstructionKind::Compare: return encodeCompare(ctx, ins, prog, reason);
     case RegInstructionKind::Convert: return encodeConvert(ctx, ins, prog, reason);
     case RegInstructionKind::Call: return encodeCall(ctx, ins, prog, reason);
-    case RegInstructionKind::LoadField:
-    case RegInstructionKind::StoreField:
+    case RegInstructionKind::LoadField: return encodeLoadField(ctx, ins, prog, reason);
+    case RegInstructionKind::StoreField: return encodeStoreField(ctx, ins, prog, reason);
     case RegInstructionKind::ArrayLoad:
     case RegInstructionKind::ArrayStore:
     case RegInstructionKind::Allocate:
     case RegInstructionKind::Intrinsic:
     case RegInstructionKind::Barrier:
-        reason = "RegIR family not supported in VMC4 yet (field/array/alloc/intrinsic)";
+        reason = "RegIR family not supported in VMC4 yet (array/alloc/intrinsic)";
         return false;
     }
     reason = "unknown RegInstructionKind";
@@ -757,6 +790,82 @@ bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
     return true;
 }
 
+/// @brief 编码 LoadField 指令（Phase 2.A：getfield/getstatic）。
+///
+/// @details
+/// 把 SSAFieldRef 收集到 VmProgram.loadFieldRefs，字节流只存 fieldSiteIdx。
+/// backend 为每项发射一个 helper（懒缓存 fieldID + Get[Static]<Type>Field）。
+///
+/// 字节流：[LoadField][fieldSiteIdx:u16][recv:u16][dest:u16][argc:u8=0]
+/// - recv：receiver 寄存器（static 时填 0，helper 不读）
+/// - dest：结果寄存器（字段值写入处）
+/// - argc 恒为 0：field load 无额外参数，handler 与 Call 同结构以复用 argBuf 机制
+bool encodeLoadField(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+{
+    VmFieldRef fref;
+    fref.owner    = ins.field.owner.to_std_string();
+    fref.name     = ins.field.name.to_std_string();
+    fref.desc     = ins.field.desc.to_std_string();
+    fref.isStatic = ins.field.isStatic;
+    fref.jniKind  = toVmJniKind(ins.dest.type);
+    const uint16_t siteIdx =
+        ctx.internFieldRef(ctx.loadFieldRefs, ctx.loadFieldByKey, std::move(fref));
+
+    // instance 字段 receiver；static 字段无 receiver（helper 不读 recv）。
+    uint16_t recv = 0;
+    if (!ins.field.isStatic) {
+        if (!ctx.resolveOperand(ins.receiver, recv, reason)) return false;
+    }
+    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    ctx.observeReg(dest);
+
+    emitOpcode(ctx, VmOpcode::LoadField, prog.bytecodes);
+    emitU16(prog.bytecodes, siteIdx);
+    emitU16(prog.bytecodes, recv);
+    emitU16(prog.bytecodes, dest);
+    emitU8(prog.bytecodes, 0);   // argc = 0（LoadField 无额外参数）
+    return true;
+}
+
+/// @brief 编码 StoreField 指令（Phase 2.A：putfield/putstatic）。
+///
+/// @details
+/// 把 SSAFieldRef 收集到 VmProgram.storeFieldRefs，字节流只存 fieldSiteIdx。
+/// backend 为每项发射一个 helper（懒缓存 fieldID + Set[Static]<Type>Field）。
+///
+/// 字节流：[StoreField][fieldSiteIdx:u16][recv:u16][dest:u16=0][argc:u8=1][valueIdx:u16]
+/// - recv：receiver 寄存器（static 时填 0）
+/// - dest 恒为 0：store 无结果（helper 不写 dest）
+/// - argc=1，argIdx[0]=valueIdx：要存的值（helper 经 argIdx 取值）
+bool encodeStoreField(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+{
+    VmFieldRef fref;
+    fref.owner    = ins.field.owner.to_std_string();
+    fref.name     = ins.field.name.to_std_string();
+    fref.desc     = ins.field.desc.to_std_string();
+    fref.isStatic = ins.field.isStatic;
+    fref.jniKind  = toVmJniKind(ins.value.type);
+    const uint16_t siteIdx =
+        ctx.internFieldRef(ctx.storeFieldRefs, ctx.storeFieldByKey, std::move(fref));
+
+    // instance 字段 receiver；static 字段无 receiver。
+    uint16_t recv = 0;
+    if (!ins.field.isStatic) {
+        if (!ctx.resolveOperand(ins.receiver, recv, reason)) return false;
+    }
+    // 要存的值经 argIdx 传给 helper（argc=1）。
+    uint16_t valueIdx;
+    if (!ctx.resolveOperand(ins.value, valueIdx, reason)) return false;
+
+    emitOpcode(ctx, VmOpcode::StoreField, prog.bytecodes);
+    emitU16(prog.bytecodes, siteIdx);
+    emitU16(prog.bytecodes, recv);
+    emitU16(prog.bytecodes, 0);   // dest unused（store 无结果）
+    emitU8(prog.bytecodes, 1);    // argc = 1（value）
+    emitU16(prog.bytecodes, valueIdx);
+    return true;
+}
+
 bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog, std::string& reason)
 {
     // std::variant 访问：按 terminator 类型分派。
@@ -887,6 +996,10 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
 
     // Call 调用点的方法引用表（Phase 2.0）：直接搬移 EncoderState 收集的结果。
     prog->methodRefs = std::move(ctx.methodRefs);
+
+    // LoadField/StoreField 字段引用表（Phase 2.A）。
+    prog->loadFieldRefs  = std::move(ctx.loadFieldRefs);
+    prog->storeFieldRefs = std::move(ctx.storeFieldRefs);
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;

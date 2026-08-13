@@ -219,14 +219,14 @@ TEST(Vmc4BackendTest, EncodesLoopMethod)
 }
 
 // ===========================================================================
-// 测试 3：fail-closed —— 含对象操作（ALOAD + getfield）的方法编码失败。
+// 测试 3：LoadField（Phase 2.A）—— getfield 收集为 loadFieldRefs，不再 fail-closed。
 // ===========================================================================
-TEST(Vmc4BackendTest, FailClosedOnObjectFieldAccess)
+TEST(Vmc4BackendTest, EncodesLoadFieldInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
-    // int getField(MyObj o) { return o.x; }  —— LoadField 在 MVP fail-closed
+    // static int getField(MyObj o) { return o.x; }  —— ALOAD0 + getfield
     auto prog = encodeMethod("getField", "(Ltest/MyObj;)I",
                              {
                                  new VarInsnNode(Opcodes::ALOAD, 0),
@@ -237,9 +237,14 @@ TEST(Vmc4BackendTest, FailClosedOnObjectFieldAccess)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              1, 1, instance, reason);
-    // 编码应失败（LoadField 不支持），返回 nullptr 并填 reason。
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_FALSE(prog->bytecodes.empty());
+    // getfield test/MyObj.x:I 收集为单个 loadFieldRef（instance 字段）。
+    ASSERT_EQ(prog->loadFieldRefs.size(), 1u);
+    EXPECT_EQ(prog->loadFieldRefs[0].owner, "test/MyObj");
+    EXPECT_EQ(prog->loadFieldRefs[0].name, "x");
+    EXPECT_EQ(prog->loadFieldRefs[0].desc, "I");
+    EXPECT_FALSE(prog->loadFieldRefs[0].isStatic);
 }
 
 // ===========================================================================
@@ -528,7 +533,8 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
     for (const auto op : {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
                           VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
                           VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
-                          VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call}) {
+                          VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
+                          VmOpcode::LoadField, VmOpcode::StoreField}) {
         bytes.push_back(instance.opcodeFor(op));
     }
     return bytes;
@@ -556,7 +562,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
 }
 
 // P2-2：映射是支持集上的双射（互不相同）+ handler 顺序是排列。
-// Phase 3 起支持集 = 11 语义（9 基础 + SuperInc/SuperDec），canonical 占 [0, 11)。
+// Phase 2.A 起支持集 = 13 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField）。
 TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
 {
     Vmc4Options opts;
@@ -574,14 +580,15 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
     EXPECT_EQ(bytes[0], instance.haltByte());
 
     const auto& order = instance.handlerOrder();
-    EXPECT_EQ(order.size(), 11u) << "handler order covers the 11 compute/control/call opcodes";
+    EXPECT_EQ(order.size(), 13u) << "handler order covers the 13 supported opcodes";
     std::vector<VmOpcode> sortedOrder = order;
     std::sort(sortedOrder.begin(), sortedOrder.end(),
               [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
     std::vector<VmOpcode> expected = {VmOpcode::Copy,   VmOpcode::Unary,  VmOpcode::Binary,
                                       VmOpcode::Compare, VmOpcode::Convert, VmOpcode::Jump,
                                       VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
-                                      VmOpcode::SuperDec, VmOpcode::Call};
+                                      VmOpcode::SuperDec, VmOpcode::LoadField, VmOpcode::StoreField,
+                                      VmOpcode::Call};
     EXPECT_EQ(sortedOrder, expected) << "handler order must be a permutation of the supported set";
 }
 
@@ -689,12 +696,13 @@ TEST(Vmc4BackendTest, PerClassInstancesDivergeAcrossClasses)
 // 语义保真，按 fail-closed 哲学保留字节码。）
 // ===========================================================================
 
-// P2-7：StoreField（PUTFIELD）。
-TEST(Vmc4BackendTest, FailClosedOnStoreField)
+// P2-7：StoreField（PUTFIELD，Phase 2.A）—— putfield 收集为 storeFieldRefs，不再 fail-closed。
+TEST(Vmc4BackendTest, EncodesStoreFieldInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
+    // static int store(Box o, int i1, int i2) { o.x = i1; return i2; }
     auto prog = encodeMethod("store", "(Ltest/Box;II)I",
                              {
                                  new VarInsnNode(Opcodes::ALOAD, 0),
@@ -707,8 +715,14 @@ TEST(Vmc4BackendTest, FailClosedOnStoreField)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              2, 3, instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_FALSE(prog->bytecodes.empty());
+    // putfield test/Box.x:I 收集为单个 storeFieldRef（instance 字段）。
+    ASSERT_EQ(prog->storeFieldRefs.size(), 1u);
+    EXPECT_EQ(prog->storeFieldRefs[0].owner, "test/Box");
+    EXPECT_EQ(prog->storeFieldRefs[0].name, "x");
+    EXPECT_EQ(prog->storeFieldRefs[0].desc, "I");
+    EXPECT_FALSE(prog->storeFieldRefs[0].isStatic);
 }
 
 // P2-8：ArrayLoad / ArrayStore。
@@ -1260,6 +1274,8 @@ int operandLenForTest(VmOpcode op)
     case VmOpcode::Compare:   return 7;
     case VmOpcode::SuperInc:  return 5;
     case VmOpcode::SuperDec:  return 5;
+    case VmOpcode::LoadField:  return 7;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=0)
+    case VmOpcode::StoreField: return 9;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=1) + valueIdx:u16
     default:                  return 0;
     }
 }
@@ -1273,11 +1289,12 @@ bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>
     sawRotation = false;
     size_t pc = 0;
     std::map<uint8_t, uint8_t> firstRawByCanonical;   // canonical -> 首个 raw
-    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 的 Call）。
+    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 Call + 2.A LoadField/StoreField）。
     static const VmOpcode kAllOps[] = {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
                                        VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
                                        VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
-                                       VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call};
+                                       VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
+                                       VmOpcode::LoadField, VmOpcode::StoreField};
     while (pc < bytes.size()) {
         const int d = inst.variantForPc(pc);
         variants.insert(d);

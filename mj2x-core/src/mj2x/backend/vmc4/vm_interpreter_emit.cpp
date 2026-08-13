@@ -247,6 +247,30 @@ const char* kHandlerCall =
     "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
     "            call_table[callIdx](env, regs, recv, argBuf, argc, dest);\n";
 
+/// LOAD_FIELD（Phase 2.A）：经函数指针表分派到 per-site field load helper。
+/// 结构与 CALL 对称：读 siteIdx + recv + dest + argc + argBuf，调 load_field_table[siteIdx]。
+/// LoadField 的 argc 恒为 0（field load 无额外参数），argBuf 循环不执行。
+/// 引用 exec 参数 load_field_table（SwitchTable 等直接可见；FuncPtrTable 经 ctx 字段）。
+const char* kHandlerLoadField =
+    "            unsigned int siteIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned char argc = code[pc++];\n"
+    "            unsigned int argBuf[32];\n"
+    "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
+    "            load_field_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
+
+/// STORE_FIELD（Phase 2.A）：经函数指针表分派到 per-site field store helper。
+/// recv=receiver（static=0），dest 恒为 0（store 无结果），argc=1，argBuf[0]=valueIdx。
+const char* kHandlerStoreField =
+    "            unsigned int siteIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned char argc = code[pc++];\n"
+    "            unsigned int argBuf[32];\n"
+    "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
+    "            store_field_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
+
 /// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
 /// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
 struct HandlerEntry
@@ -269,6 +293,8 @@ const HandlerEntry kHandlers[] = {
     {VmOpcode::SuperInc, "SUPER_INC",  kHandlerSuperInc},
     {VmOpcode::SuperDec, "SUPER_DEC",  kHandlerSuperDec},
     {VmOpcode::Call,     "CALL",       kHandlerCall},
+    {VmOpcode::LoadField,  "LOAD_FIELD",  kHandlerLoadField},
+    {VmOpcode::StoreField, "STORE_FIELD", kHandlerStoreField},
 };
 constexpr size_t kHandlerCount = sizeof(kHandlers) / sizeof(kHandlers[0]);
 
@@ -463,6 +489,7 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
     out.emitLine(format_std(
         "struct {} {{ const unsigned char* code; const unsigned int* targets; "
         "unsigned int pc; unsigned int status; JNIEnv* env; const mj2x_vm_call_fn* call_table; "
+        "const mj2x_vm_call_fn* load_field_table; const mj2x_vm_call_fn* store_field_table; "
         "mj2x_vm_slot* regs; mj2x_vm_slot* retval; }};", ctxType));
     out.emitLine(format_std("typedef struct {} {};", ctxType, ctxType));
     out.add_func(format_std("static void mj2x_vm_dispatch_body_{}({}* ctx)", tag, ctxType),
@@ -473,11 +500,15 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         f.emitLine("unsigned int status = ctx->status;");
         f.emitLine("JNIEnv* env = ctx->env;");
         f.emitLine("const mj2x_vm_call_fn* call_table = ctx->call_table;");
+        f.emitLine("const mj2x_vm_call_fn* load_field_table = ctx->load_field_table;");
+        f.emitLine("const mj2x_vm_call_fn* store_field_table = ctx->store_field_table;");
         f.emitLine("mj2x_vm_slot* regs = ctx->regs;");
         f.emitLine("mj2x_vm_slot* retval = ctx->retval;");
         f.emitLine("(void)targets;");
         f.emitLine("(void)status;");
         f.emitLine("(void)retval;");
+        f.emitLine("(void)load_field_table;");
+        f.emitLine("(void)store_field_table;");
         emitOpcodeFetch(f, instance, tag);
         f.emitLine("switch (opcode) {");
         {
@@ -511,6 +542,8 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmInstance& instance,
     out.emitLine("_ctx.status = 0;");
     out.emitLine("_ctx.env = env;");
     out.emitLine("_ctx.call_table = call_table;");
+    out.emitLine("_ctx.load_field_table = load_field_table;");
+    out.emitLine("_ctx.store_field_table = store_field_table;");
     out.emitLine("_ctx.regs = slots;");
     out.emitLine("_ctx.retval = retval;");
     out.emitLine(format_std("{}* ctx = &_ctx;", ctxType));
@@ -921,6 +954,187 @@ void emitCallInfrastructure(CSourceStream& out, const VmProgram& program, const 
     out.emitBlankLine();
 }
 
+// ===========================================================================
+// Field 基础设施（Phase 2.A）：per-site field load/store helper + 分派表。
+//
+// 为每个 LoadField/StoreField 访问点发射一个 helper（懒缓存 owner class + fieldID，
+// static/instance 分别 Get/Set[Static]<Type>Field），再发射 mj2x_vm_load/store_field_table。
+// 解释器 LOAD_FIELD/STORE_FIELD handler 经该表分派。helper 签名复用 mj2x_vm_call_fn。
+// ===========================================================================
+
+/// 字段描述符首字符 → JNI Get/Set accessor 后缀（精确，含 Boolean/Byte/Char/Short）。
+///
+/// @details
+/// 字段访问必须用精确类型：GetBooleanField 与 GetIntField 不可互换（jfieldID 相同但
+/// accessor 必须匹配声明类型，否则行为未定义）。故不沿用 Call 的粗粒度 jniKind，
+/// 而按 desc 首字符精确选 accessor。VMC4 slot 统一用 .i 承载 Z/B/C/S/I/J。
+const char* fieldJniSuffix(const std::string& desc)
+{
+    if (desc.empty()) return "Object";
+    switch (desc[0]) {
+    case 'Z': return "Boolean";
+    case 'B': return "Byte";
+    case 'C': return "Char";
+    case 'S': return "Short";
+    case 'I': return "Int";
+    case 'J': return "Long";
+    case 'F': return "Float";
+    case 'D': return "Double";
+    default: return "Object";   // 'L' / '['
+    }
+}
+
+/// 字段描述符首字符 → 寄存器槽读写字段（.i/.f/.ref）。
+const char* fieldSlotField(const std::string& desc)
+{
+    if (desc.empty()) return ".i";
+    switch (desc[0]) {
+    case 'F':
+    case 'D': return ".f";
+    case 'L':
+    case '[': return ".ref";
+    default: return ".i";
+    }
+}
+
+/// 字段描述符首字符 → JNI 返回/参数 C 类型名（jint/jboolean/...）。
+const char* fieldJniCType(const std::string& desc)
+{
+    if (desc.empty()) return "jobject";
+    switch (desc[0]) {
+    case 'Z': return "jboolean";
+    case 'B': return "jbyte";
+    case 'C': return "jchar";
+    case 'S': return "jshort";
+    case 'I': return "jint";
+    case 'J': return "jlong";
+    case 'F': return "jfloat";
+    case 'D': return "jdouble";
+    default: return "jobject";
+    }
+}
+
+/// 字段描述符首字符 → 写回 regs[dest] 的 cast（load 用；Double 无需 cast）。
+const char* fieldWriteCast(const std::string& desc)
+{
+    if (desc.empty()) return "";
+    switch (desc[0]) {
+    case 'L':
+    case '[': return "(void*)";
+    case 'F': return "(double)";
+    case 'D': return "";
+    default: return "(int64_t)";   // Z B C S I J → slot .i
+    }
+}
+
+/// @brief 发射单个 field helper（load 或 store）。
+///
+/// @details
+/// 懒缓存 owner class（FindClass + NewGlobalRef）+ fieldID（Get[Static]FieldID），
+/// load 调 Get[Static]<Type>Field 写回 regs[dest]，store 调 Set[Static]<Type>Field
+/// 从 regs[argIdx[0]] 取值。instance 访问 receiver 取 regs[recv].ref（null 时 JNI
+/// 自身抛 NPE，与 JVM 语义一致）。
+void emitFieldHelper(CSourceStream& out, const VmFieldRef& fld, size_t i, bool isStore,
+                     const std::string& tag)
+{
+    const bool        isStatic = fld.isStatic;
+    const std::string kind     = isStore ? "store_field" : "load_field";
+    const std::string suffix   = fieldJniSuffix(fld.desc);
+    const std::string helper   = format_std("mj2x_vm_{}_{}_{}", kind, tag, i);
+
+    out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
+                            "unsigned int recv, unsigned int* argIdx, "
+                            "unsigned char argc, unsigned int dest)", helper),
+                 [&](CSourceStream& fnc) {
+        if (isStore) {
+            fnc.emitLine("(void)dest;  /* store 无结果 */");
+        } else {
+            fnc.emitLine("(void)argc; (void)argIdx;  /* LoadField 无参数 */");
+            if (isStatic) fnc.emitLine("(void)recv;  /* static 字段无 receiver */");
+        }
+
+        // 懒缓存 owner class（fieldID 解析需要；FindClass 失败留 pending exception）。
+        fnc.emitLine("static jclass _cls = NULL;");
+        fnc.emitLine("if (_cls == NULL) {");
+        {
+            CSourceStream::IndentGuard g(fnc);
+            fnc.emitLine(format_std("jclass _local = (*env)->FindClass(env, {});",
+                                    codegen::cStringLiteral(fld.owner)));
+            fnc.emitLine("if (_local == NULL) return;  /* pending exception */");
+            fnc.emitLine("_cls = (*env)->NewGlobalRef(env, _local);");
+            fnc.emitLine("(*env)->DeleteLocalRef(env, _local);");
+        }
+        fnc.emitLine("}");
+
+        // 懒缓存 fieldID（static 用 GetStaticFieldID，instance 用 GetFieldID）。
+        fnc.emitLine("static jfieldID _fid = NULL;");
+        fnc.emitLine("if (_fid == NULL) {");
+        {
+            CSourceStream::IndentGuard g(fnc);
+            const char* getFid = isStatic ? "GetStaticFieldID" : "GetFieldID";
+            fnc.emitLine(format_std("_fid = (*env)->{}(env, _cls, {}, {});",
+                                    getFid, codegen::cStringLiteral(fld.name),
+                                    codegen::cStringLiteral(fld.desc)));
+            fnc.emitLine("if (_fid == NULL) return;  /* pending exception */");
+        }
+        fnc.emitLine("}");
+
+        if (isStore) {
+            const char* setFn = isStatic ? "SetStatic" : "Set";
+            fnc.emitLine(format_std("(*env)->{}{}Field(env, {}, _fid, ({})regs[argIdx[0]]{});",
+                                    setFn, suffix,
+                                    isStatic ? "_cls" : "(jobject)regs[recv].ref",
+                                    fieldJniCType(fld.desc), fieldSlotField(fld.desc)));
+        } else {
+            const char* getFn = isStatic ? "GetStatic" : "Get";
+            fnc.emitLine(format_std("{} _r = (*env)->{}{}Field(env, {}, _fid);",
+                                    fieldJniCType(fld.desc), getFn, suffix,
+                                    isStatic ? "_cls" : "(jobject)regs[recv].ref"));
+            fnc.emitLine(format_std("regs[dest]{} = {}_r;",
+                                    fieldSlotField(fld.desc), fieldWriteCast(fld.desc)));
+        }
+    });
+    out.emitBlankLine();
+}
+
+/// 发射 LoadField/StoreField 的 per-site helper + 分派表（refs 非空时）。
+void emitFieldInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
+{
+    if (program.loadFieldRefs.empty() && program.storeFieldRefs.empty()) return;
+
+    for (size_t i = 0; i < program.loadFieldRefs.size(); ++i) {
+        emitFieldHelper(out, program.loadFieldRefs[i], i, false, tag);
+    }
+    for (size_t i = 0; i < program.storeFieldRefs.size(); ++i) {
+        emitFieldHelper(out, program.storeFieldRefs[i], i, true, tag);
+    }
+
+    if (!program.loadFieldRefs.empty()) {
+        out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_load_field_table_{}[{}] = {{",
+                                tag, program.loadFieldRefs.size()));
+        {
+            CSourceStream::IndentGuard g(out);
+            for (size_t i = 0; i < program.loadFieldRefs.size(); ++i) {
+                out.emitLine(format_std("mj2x_vm_load_field_{}_{},", tag, i));
+            }
+        }
+        out.emitLine("};");
+        out.emitBlankLine();
+    }
+    if (!program.storeFieldRefs.empty()) {
+        out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_store_field_table_{}[{}] = {{",
+                                tag, program.storeFieldRefs.size()));
+        {
+            CSourceStream::IndentGuard g(out);
+            for (size_t i = 0; i < program.storeFieldRefs.size(); ++i) {
+                out.emitLine(format_std("mj2x_vm_store_field_{}_{},", tag, i));
+            }
+        }
+        out.emitLine("};");
+        out.emitBlankLine();
+    }
+}
+
 }   // namespace
 
 // ===========================================================================
@@ -1078,13 +1292,22 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         emitCallInfrastructure(out, program, tag);
     }
 
+    // Field 基础设施（loadFieldRefs/storeFieldRefs 非空时）：per-site helper + 分派表。
+    if (!program.loadFieldRefs.empty() || !program.storeFieldRefs.empty()) {
+        emitFieldInfrastructure(out, program, tag);
+    }
+
     // --- 解释器入口函数（按 dispatcherKind 选择形态）---
     out.add_func(format_std("static unsigned int {}(JNIEnv* env, mj2x_vm_slot* slots, "
-                            "mj2x_vm_slot* retval, const mj2x_vm_call_fn* call_table)", funcName),
+                            "mj2x_vm_slot* retval, const mj2x_vm_call_fn* call_table, "
+                            "const mj2x_vm_call_fn* load_field_table, "
+                            "const mj2x_vm_call_fn* store_field_table)", funcName),
                  [&](CSourceStream& f) {
         f.emitLine("(void)env;");
         f.emitLine("(void)retval;");
         f.emitLine("(void)call_table;");
+        f.emitLine("(void)load_field_table;");
+        f.emitLine("(void)store_field_table;");
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
             emitSwitchDispatcher(f, instance, progName, targetsName, tag);

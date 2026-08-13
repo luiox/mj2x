@@ -207,6 +207,23 @@ struct VmConstantEntry
     uint16_t destSlot = 0;   ///< 目标寄存器槽索引（prologue 写入位置）
 };
 
+/// @brief 字段引用：一个 LoadField/StoreField 调用点的静态信息（Phase 2.A）。
+///
+/// @details
+/// 编码期把每个字段访问点的 SSAFieldRef 收集到 VmProgram.loadFieldRefs/
+/// storeFieldRefs，字节流只存 fieldSiteIdx（索引）。backend 为每项发射一个
+/// TU-local helper（懒缓存 fieldID + Get/Set[Static]<Type>Field），解释器经函数
+/// 指针表分派。jniKind 由字段描述符推导，helper 据此 marshalling 值。
+/// 去重键 (owner,name,desc,isStatic) 已含 desc，故 jniKind 一致。
+struct VmFieldRef
+{
+    std::string   owner;       ///< 字段所属类（JVM 内部名）
+    std::string   name;        ///< 字段名
+    std::string   desc;        ///< 字段描述符（如 "I"/"Ljava/lang/String;"）
+    bool          isStatic = false;   ///< getstatic/putstatic=true，getfield/putfield=false
+    VmJniKind     jniKind = VmJniKind::Int32;   ///< 字段类型类别（从 desc 推导）
+};
+
 /// @brief 一个方法的完整 VM 程序（编码产物）。
 ///
 /// @details
@@ -218,6 +235,8 @@ struct VmProgram
     std::vector<uint32_t>        blockTargets;   ///< block 索引 → bytecodes 偏移
     std::vector<VmConstantEntry> constantPool;   ///< 常量条目（prologue 预加载）
     std::vector<VmMethodRef>     methodRefs;     ///< Call 调用点的方法引用（Phase 2.0）
+    std::vector<VmFieldRef>      loadFieldRefs;  ///< LoadField 字段引用（Phase 2.A）
+    std::vector<VmFieldRef>      storeFieldRefs; ///< StoreField 字段引用（Phase 2.A）
     uint16_t                     numInputs = 0;  ///< 方法参数占用的寄存器数
     uint16_t                     numRegs   = 0;  ///< 寄存器文件总大小
 };
