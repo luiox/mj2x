@@ -309,9 +309,19 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
         codegen::exprCallArgs(codegen::exprParen(codegen::exprCast(fnPointerSig,
                                                                   codegen::exprMember(site, "fn"))),
                               callArguments);
+    const std::string fnPtrCallExpr1 =
+        codegen::exprCallArgs(codegen::exprParen(codegen::exprCast(fnPointerSig,
+                                                                   codegen::exprMember(site,
+                                                                                       "fn1"))),
+                              callArguments);
     const std::string voidFnPtrCallExpr =
         codegen::exprCallArgs(codegen::exprParen(codegen::exprCast(voidPointerSig,
                                                                   codegen::exprMember(site, "fn"))),
+                              callArguments);
+    const std::string voidFnPtrCallExpr1 =
+        codegen::exprCallArgs(codegen::exprParen(codegen::exprCast(voidPointerSig,
+                                                                   codegen::exprMember(site,
+                                                                                       "fn1"))),
                               callArguments);
     const std::string jniCallExpr = codegen::exprCall(
         std::string("(*_mj2x_regc_env)->Call") + jniCallFamily(returnTag) + "MethodA",
@@ -374,16 +384,72 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                                                             codegen::exprMember(site, "method") +
                                                             ";");
                                              },
-                                             [&](CSourceStream& u) {
-                                                 u.emitLine(
-                                                     "_mj2x_regc_m = " +
-                                                     codegen::exprCall(
-                                                         "_mj2x_regc_resolved_call_site_refresh",
-                                                         {"&" + site, "_mj2x_regc_rcv",
-                                                          "_mj2x_regc_rc",
-                                                          cStringLiteral(ins.method.name),
-                                                          cStringLiteral(ins.method.desc)}) +
-                                                     ";");
+                                             [&](CSourceStream& t3) {
+                                                 // 槽 1（交替 receiver 优化，issue #780）：
+                                                 // 槽 0 未命中时检查上一 receiver 的完整组。
+                                                 t3.iff(codegen::exprBinop(
+                                                           "&&",
+                                                           codegen::exprBinop(
+                                                               "!=",
+                                                               codegen::exprMember(site,
+                                                                                   "implClass1"),
+                                                               "NULL"),
+                                                           codegen::exprCall(
+                                                               "(*_mj2x_regc_env)->IsInstanceOf",
+                                                               {"_mj2x_regc_env",
+                                                                "_mj2x_regc_rcv",
+                                                                codegen::exprMember(
+                                                                    site, "implClass1")})),
+                                                       [&](CSourceStream& u) {
+                                                           u.emitLine(
+                                                               "_mj2x_regc_m = " +
+                                                               codegen::exprMember(site,
+                                                                                   "method1") +
+                                                               ";");
+                                                       },
+                                                       [&](CSourceStream& t4) {
+                                                           t4.iff(
+                                                               codegen::exprBinop(
+                                                                   "&&",
+                                                                   codegen::exprBinop(
+                                                                       "!=",
+                                                                       codegen::exprMember(
+                                                                           site,
+                                                                           "receiverClass1"),
+                                                                       "NULL"),
+                                                                   codegen::exprCall(
+                                                                       "(*_mj2x_regc_env)"
+                                                                       "->IsSameObject",
+                                                                       {"_mj2x_regc_env",
+                                                                        codegen::exprMember(
+                                                                            site,
+                                                                            "receiverClass1"),
+                                                                        "_mj2x_regc_rc"})),
+                                                               [&](CSourceStream& u) {
+                                                                   u.emitLine(
+                                                                       "_mj2x_regc_m = " +
+                                                                       codegen::exprMember(
+                                                                           site, "method1") +
+                                                                       ";");
+                                                               },
+                                                               [&](CSourceStream& u) {
+                                                                   u.emitLine(
+                                                                       "_mj2x_regc_m = " +
+                                                                       codegen::exprCall(
+                                                                           "_mj2x_regc_"
+                                                                           "resolved_call_site_"
+                                                                           "refresh",
+                                                                           {"&" + site,
+                                                                            "_mj2x_regc_rcv",
+                                                                            "_mj2x_regc_rc",
+                                                                            cStringLiteral(
+                                                                                ins.method.name),
+                                                                            cStringLiteral(
+                                                                                ins.method
+                                                                                    .desc)}) +
+                                                                       ";");
+                                                               });
+                                                       });
                                              });
                                   });
                             t.emitLine(codegen::exprCall("(*_mj2x_regc_env)->DeleteLocalRef",
@@ -407,32 +473,78 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                                            std::string(defaultValue(ins.dest.type)) + ";");
                             },
                             [&](CSourceStream& t) {
-                                t.iff(codegen::exprBinop("!=", codegen::exprMember(site, "fn"),
-                                                         "NULL"),
-                                    [&](CSourceStream& u) {
-                                        u.emitLine(destName + " = " +
-                                                   jniResultCast(returnTag, ins.dest.type)
-                                                       .to_std_string() +
-                                                   fnPtrCallExpr + ";");
-                                    },
-                                    [&](CSourceStream& u) {
-                                        u.emitLine(destName + " = " +
-                                                   jniResultCast(returnTag, ins.dest.type)
-                                                       .to_std_string() +
-                                                   jniCallExpr + ";");
-                                    });
+                                // fn 必须与 m 同槽（issue #780 错配教训）：m 来自槽 0
+                                // （method 或 refresh 后交换）用 fn，来自槽 1 用 fn1。
+                                t.iff(codegen::exprBinop(
+                                          "==", "_mj2x_regc_m",
+                                          codegen::exprMember(site, "method")),
+                                      [&](CSourceStream& u) {
+                                          u.iff(codegen::exprBinop(
+                                                    "!=",
+                                                    codegen::exprMember(site, "fn"), "NULL"),
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(destName + " = " +
+                                                               jniResultCast(returnTag,
+                                                                             ins.dest.type)
+                                                                   .to_std_string() +
+                                                               fnPtrCallExpr + ";");
+                                                },
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(destName + " = " +
+                                                               jniResultCast(returnTag,
+                                                                             ins.dest.type)
+                                                                   .to_std_string() +
+                                                               jniCallExpr + ";");
+                                                });
+                                      },
+                                      [&](CSourceStream& u) {
+                                          u.iff(codegen::exprBinop(
+                                                    "!=",
+                                                    codegen::exprMember(site, "fn1"), "NULL"),
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(destName + " = " +
+                                                               jniResultCast(returnTag,
+                                                                             ins.dest.type)
+                                                                   .to_std_string() +
+                                                               fnPtrCallExpr1 + ";");
+                                                },
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(destName + " = " +
+                                                               jniResultCast(returnTag,
+                                                                             ins.dest.type)
+                                                                   .to_std_string() +
+                                                               jniCallExpr + ";");
+                                                });
+                                      });
                             });
                   }
                   else {
                       s.iff(codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
                             [&](CSourceStream& t) {
-                                t.iff(codegen::exprBinop("!=", codegen::exprMember(site, "fn"),
-                                                         "NULL"),
+                                t.iff(codegen::exprBinop(
+                                          "==", "_mj2x_regc_m",
+                                          codegen::exprMember(site, "method")),
                                       [&](CSourceStream& u) {
-                                          u.emitLine(voidFnPtrCallExpr + ";");
+                                          u.iff(codegen::exprBinop(
+                                                    "!=",
+                                                    codegen::exprMember(site, "fn"), "NULL"),
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(voidFnPtrCallExpr + ";");
+                                                },
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(jniCallExpr + ";");
+                                                });
                                       },
                                       [&](CSourceStream& u) {
-                                          u.emitLine(jniCallExpr + ";");
+                                          u.iff(codegen::exprBinop(
+                                                    "!=",
+                                                    codegen::exprMember(site, "fn1"), "NULL"),
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(voidFnPtrCallExpr1 + ";");
+                                                },
+                                                [&](CSourceStream& v) {
+                                                    v.emitLine(jniCallExpr + ";");
+                                                });
                                       });
                             });
                   }

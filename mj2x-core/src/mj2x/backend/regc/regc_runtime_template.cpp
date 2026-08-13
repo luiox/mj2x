@@ -170,6 +170,16 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("    /* 最近解析的 receiver 精确类（global ref）。fn==NULL 的调用点仍\n");
     out.append("       按类缓存 jmethodID：GetObjectClass + IsSameObject 双 JNI 命中。 */\n");
     out.append("    jclass receiverClass;\n");
+    out.append("    /* 槽 1（交替 receiver 优化，issue #780）：与槽 0 完全独立的\n");
+    out.append("       {method, fn, implClass, receiverClass} 完整组。refresh 只写槽 1，\n");
+    out.append("       槽 0 保留上次命中——A/B 交替 receiver 时两槽各自命中，避免每轮\n");
+    out.append("       refresh（每轮 5-6 个 JNI）。命中槽 1 时两槽交换，让热 receiver\n");
+    out.append("       留在槽 0。method/fn/implClass/receiverClass 必须来自同一次解析，\n");
+    out.append("       槽 1 单独成组，杜绝 methodID 与 receiver 错配。 */\n");
+    out.append("    jmethodID method1;\n");
+    out.append("    mj2x_regc_fn_ptr_t fn1;\n");
+    out.append("    jclass implClass1;\n");
+    out.append("    jclass receiverClass1;\n");
     out.append("} mj2x_regc_resolved_call_site_t;\n");
     out.append("\n");
     if (fwd != nullptr && !fwd->empty()) {
