@@ -716,11 +716,32 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     // NewStringUTF so it can flow into parseInt/toString without per-call JNI
     // method dispatch.  context is accepted for ABI symmetry with future
     // throwing String intrinsics.
+    // 字符串常量按内容缓存：每次 NewStringUTF 会产生新 jstring 且每次 1 个 JNI
+    // + 1 个 local ref，热路径（如 Crypto 探针每迭代 4 处常量）下开销显著。
+    // global ref 跨帧安全（函数返回后 local ref 失效，静态缓存必须持 global）。
     out.append("static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* "
            "utf8) {\n");
     out.append("    (void)context;\n");
     out.append("    if (utf8 == NULL) return NULL;\n");
-    out.append("    return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);\n");
+    out.append("    static struct { const char* key; jstring value; } literal_cache[32];\n");
+    out.append("    static int literal_cache_count = 0;\n");
+    out.append("    for (int i = 0; i < literal_cache_count; ++i) {\n");
+    out.append("        if (literal_cache[i].key == utf8 ||\n");
+    out.append("            strcmp(literal_cache[i].key, utf8) == 0) {\n");
+    out.append("            return literal_cache[i].value;\n");
+    out.append("        }\n");
+    out.append("    }\n");
+    out.append("    jstring s = (jstring)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);\n");
+    out.append("    if (s != NULL) {\n");
+    out.append("        s = (jstring)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, s);\n");
+    out.append("    }\n");
+    out.append("    if (s != NULL && literal_cache_count < 32) {\n");
+    out.append("        /* 索引按位保护：多线程首次并发的瞬时竞态最多覆盖已有槽，不越界 */\n");
+    out.append("        literal_cache[literal_cache_count & 31].key = utf8;\n");
+    out.append("        literal_cache[literal_cache_count & 31].value = s;\n");
+    out.append("        ++literal_cache_count;\n");
+    out.append("    }\n");
+    out.append("    return (mj2x_ref)s;\n");
     out.append("}\n\n");
     // LDC Class constant (Foo.class) materialization: FindClass returns a jclass.
     // Class objects are JVM singletons; local-ref lifetime is covered by the
