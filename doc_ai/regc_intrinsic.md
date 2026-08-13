@@ -66,6 +66,16 @@ emitter TU (regc_backend.cpp::emitRuntimeHelpers)
 - StringBuilder/StringBuffer 使用 escape-aware opaque UTF-16 state;range/capacity 常用
   API 直接调用 CRT,逃逸时 materialize,逃逸后继续修改则从创建点回退 Java。
 
+### Integer / Long 位操作(issue #778,#787,纯计算无 JNI)
+- `Integer/Long.rotateLeft/rotateRight` → `mj2x_intrinsic_{int,long}_rotate_left/right`
+- `Integer/Long.reverse`、`reverseBytes` → `mj2x_intrinsic_{int,long}_reverse(_bytes)`
+- `Integer/Long.bitCount`、`numberOfLeadingZeros`、`numberOfTrailingZeros`、
+  `highestOneBit`、`lowestOneBit`、`signum` → `mj2x_intrinsic_{int,long}_*`
+- 语义与 OpenJDK 一致(distance 按 32/64 取模、无符号旋转/反转、符号位仅扩展在
+  返回值),CRT 实现与 JDK 交叉验证(`mj2x-crt/test/mj2x_regc_intrinsic_test.c`)。
+- RuntimeFunction emitKind 是**纯 C 计算**——emitter 对其省略 exception dispatch
+  (见 `regc_codegen.md` 异常检查稀疏化),热循环每轮省一次 `ExceptionCheck` JNI。
+
 ### Primitive wrappers(第一切片,非逃逸)
 - `Integer.valueOf(I)` + `Integer.intValue()` → `mj2x_int_value_of` / `mj2x_int_int_value`
 - `Long/Short/Byte/Float/Double/Boolean/Character.valueOf` + 对应 `xxxValue`
@@ -109,7 +119,8 @@ materialize 并把 48-bit seed 写回 Java 对象,否则不能保持 Java 语义
 - **未登记的 String/mutable String 方法**:正常走 Java fallback。当前 registry 是常用
   签名集合,不是对 JDK 全量 API 的替代;正则 split 始终由 JDK 保持语义。
 
-`Integer.signum` 等未覆盖方法正常走 `_mj2x_regc_call_*`,不会误识别。
+未登记的 JDK 方法正常走 `_mj2x_regc_call_*`,不会误识别(registry 条目与匹配断言见
+`regc_intrinsic_registry_test.cpp`)。
 
 ## 5. 验证
 
