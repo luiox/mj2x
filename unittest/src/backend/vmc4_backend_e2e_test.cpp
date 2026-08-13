@@ -23,9 +23,12 @@
 
 #include "jdk_fixture.hpp"
 #include "jdk_finder/jdk_finder.hpp"
+#include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
+#include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
+#include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "test_helper.hpp"
 
@@ -254,7 +257,156 @@ protected:
         }
     }
 
+protected:
+    /// 双后端对拍（Phase 2.D）：同一 Java 方法集分别经 Vmc4Backend / RegCBackend
+    /// 虚拟化，各自编译 DLL 跑 Driver，输出必须与 baseline 完全一致。
+    void runDualBackendCase(const std::string& className, const std::string& javaSource,
+                            const std::vector<JavaCheck>& checks,
+                            mj2x::VmDispatcherKind dispatcherKind)
+    {
+        const std::string suffix = std::string("_") + GetParam().tag;
+        fs::path          dir    = caseDir(className + suffix);
+        std::error_code   ec;
+        fs::create_directories(dir, ec);
+
+        fs::path javaFile = dir / (className + ".java");
+        {
+            std::ofstream out(javaFile);
+            out << javaSource;
+        }
+        auto javac = runBat({q(tc_.javac) + " -d " + q(dir) + " " + q(javaFile)});
+        ASSERT_EQ(javac.exitCode, 0) << javac.out;
+
+        fs::path driverFile = dir / "Driver.java";
+        {
+            std::ofstream out(driverFile);
+            out << buildDriver(checks);
+        }
+        auto driverCompile =
+            runBat({q(tc_.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(driverFile)});
+        ASSERT_EQ(driverCompile.exitCode, 0) << driverCompile.out;
+
+        auto baselineRun = runBat({q(tc_.java) + " -cp " + q(dir) + " Driver"});
+        ASSERT_EQ(baselineRun.exitCode, 0) << baselineRun.out;
+        auto baseline = splitLines(baselineRun.out);
+
+        fs::path inClass = dir / (className + ".class");
+
+        // ---- VMC4 侧 ----
+        std::vector<std::string> vmc4Out;
+        runProtected(className, inClass, dir, "vmc4", dispatcherKind, vmc4Out);
+        // ---- RegC 侧 ----
+        std::vector<std::string> regcOut;
+        runProtected(className, inClass, dir, "regc", dispatcherKind, regcOut);
+
+        for (const auto& [label, actual] : {std::pair{"vmc4", vmc4Out},
+                                            std::pair{"regc", regcOut}}) {
+            ASSERT_EQ(baseline.size(), actual.size())
+                << label << " baseline:\n" << joinLines(baseline) << label << ":\n"
+                << joinLines(actual);
+            for (size_t i = 0; i < baseline.size(); ++i) {
+                EXPECT_EQ(baseline[i], actual[i]) << label << " line " << i;
+            }
+        }
+    }
+
 private:
+
+    /// 单后端跑一轮：pipeline（后端由 backendName 选择）→ 编译 DLL → Driver 输出。
+    /// 注意：inClass 每次跑前都是原始字节码（对拍用独立输出名，不覆盖输入）。
+    void runProtected(const std::string& className, const fs::path& inClass, const fs::path& dir,
+                      const std::string& backendName, mj2x::VmDispatcherKind dispatcherKind,
+                      std::vector<std::string>& out)
+    {
+        std::error_code ec;
+        fs::path outClass = dir / (className + "_" + backendName + ".class");
+        fs::path cFile    = dir / (className + "_" + backendName + ".c");
+
+        mj2x::PipelineConfig config;
+        config.inputPath  = inClass.string();
+        config.outputPath = outClass.string();
+        mj2x::Pipeline pipeline(std::move(config));
+        if (backendName == "regc") {
+            auto backend = std::make_unique<mj2x::RegCBackend>();
+            backend->setOutputPath(cFile.string());
+            pipeline.registerBackend(std::move(backend));
+            pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
+            pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
+            pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+            pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+        } else {
+            auto backend = std::make_unique<mj2x::Vmc4Backend>();
+            backend->setOutputPath(cFile.string());
+            mj2x::Vmc4Options opts;
+            opts.dispatcherKind = dispatcherKind;
+            opts.driftVariants  = 2;
+            opts.driftPeriod    = 16;
+            backend->setOptions(opts);
+            pipeline.registerBackend(std::move(backend));
+            pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+            pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+        }
+        ASSERT_EQ(pipeline.run(), 0) << backendName;
+        ASSERT_TRUE(fileExists(cFile)) << backendName;
+
+        // 编译 DLL（VMC4 自包含 /TC；RegC 需 CRT + runtime 目标文件）。
+        fs::path dll    = dir / (className + "_" + backendName + ".dll");
+        fs::path objDir = dir / ("obj_" + backendName);
+        fs::create_directories(objDir, ec);
+        std::vector<std::string> compileLines;
+        compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
+        fs::path crtSrc     = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
+        fs::path runtimeSrc = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
+        if (backendName == "regc") {
+            fs::path generatedObj = objDir / "generated.obj";
+            compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(generatedObj) + " " +
+                                   q(cFile) + " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) +
+                                   " /I" + q(tc_.jdkIncludeWin));
+            std::vector<fs::path> objs;
+            auto compileCrt = [&](const std::string& rel, const std::string& objName) {
+                fs::path src = crtSrc / rel;
+                fs::path obj = objDir / objName;
+                objs.push_back(obj);
+                compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(src) +
+                                       " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                                       q(tc_.jdkIncludeWin));
+            };
+            auto compileRuntime = [&](const std::string& rel, const std::string& objName) {
+                fs::path src = runtimeSrc / rel;
+                fs::path obj = objDir / objName;
+                objs.push_back(obj);
+                compileLines.push_back("cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) + " /I" +
+                                       q(runtimeSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                                       q(tc_.jdkIncludeWin));
+            };
+            compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+            compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
+            compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
+            compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+            compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
+            compileRuntime("intrinsic/intrinsic_math.cpp", "intrinsic_math.obj");
+            compileRuntime("intrinsic/intrinsic_random.cpp", "intrinsic_random.obj");
+            std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
+            for (const auto& obj : objs) linkLine += " " + q(obj);
+            compileLines.push_back(linkLine);
+        } else {
+            fs::path obj = objDir / (className + ".obj");
+            compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(cFile) +
+                                   " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+            compileLines.push_back("link /nologo /DLL /OUT:" + q(dll) + " " + q(obj));
+        }
+        auto cl = runBat(compileLines);
+        ASSERT_EQ(cl.exitCode, 0) << backendName << " compile:\n" << cl.out;
+        ASSERT_TRUE(fileExists(dll)) << backendName;
+
+        auto protectedRun = runBat({
+            "set \"MORPHER_DLL=" + dll.string() + "\"",
+            q(tc_.java) + " -cp " + q(dir) + " Driver",
+        });
+        ASSERT_EQ(protectedRun.exitCode, 0) << backendName << " run:\n" << protectedRun.out;
+        out = splitLines(protectedRun.out);
+    }
+
     static std::string javaString(const std::string& text)
     {
         std::ostringstream out;
@@ -426,9 +578,9 @@ TEST_P(Vmc4BackendE2E, MixedNativeAndFailClosedRoundTrip)
                 {"useInst(5)", "Vmc4NativeMixed.useInst(5)"},
                 {"inst(3)", "new Vmc4NativeMixed().inst(3)"},
             },
-            // Phase 2.A 起 useInst（含 new + <init> + invokevirtual）也转 VM：pure/echo/useInst
-            // 三方法虚拟化；sw（switch）仍 fail-closed，inst（实例方法）保留字节码。
-            3, GetParam().kind);
+            // Phase 2.B 起实例方法也转 VM：pure/echo/useInst/inst 四方法虚拟化；
+            // sw（switch）仍 fail-closed 保留字节码。
+            4, GetParam().kind);
 }
 
 // Phase 2.0 spike：静态调用链。viaAdd/viaLong/viaDouble 各含一条 invokestatic Call
@@ -607,6 +759,246 @@ TEST_P(Vmc4BackendE2E, AllocateAndArrayLengthRoundTrip)
                 {"newRefArrayLen", "Vmc4NativeAlloc.newRefArrayLen(6)"},
             },
             6, GetParam().kind);
+}
+
+// Phase 2.E：String LDC（ldc_string Opaque 物质化为常量槽，wrapper NewStringUTF
+// 预加载）+ MULTIANEWARRAY（递归 NewObjectArray，Phase 2.E 起支持）。
+// greeting：LDC + ARETURN；greetLen/isHello/startsWithHi：LDC 参与方法调用
+// （String.length/equals/startsWith 是 JNI 调用，LDC 槽作为实参传入）；
+// multi*：多维 int/String 数组分配 + 元素读写/长度访问。
+// 注：String 连接（"tag:" + s）javac 9+ 编译为 invokedynamic（indy:0），
+// 不在本用例范围。
+TEST_P(Vmc4BackendE2E, StringLdcAndMultiArrayRoundTrip)
+{
+    runCase("Vmc4NativeStrArr",
+            "public class Vmc4NativeStrArr {\n"
+            "  public static String greeting() { return \"hello\"; }\n"
+            "  public static int greetLen() { return \"hello\".length(); }\n"
+            "  public static boolean isHello(String s) { return \"hello\".equals(s); }\n"
+            "  public static boolean startsWithHi(String s) { return s.startsWith(\"hi\"); }\n"
+            "  public static int multiRows() { int[][] m = new int[2][3]; return m.length; }\n"
+            "  public static int multiDims() { int[][] m = new int[2][3]; return m[0].length; }\n"
+            "  public static int multiFill() {\n"
+            "    int[][] m = new int[2][3];\n"
+            "    m[0][1] = 7; m[1][2] = 9;\n"
+            "    return m[0][1] + m[1][2];\n"
+            "  }\n"
+            "  public static int multiRefLen() { String[][] m = new String[2][3]; return "
+            "m.length + m[0].length; }\n"
+            "}\n",
+            {
+                {"greeting", "Vmc4NativeStrArr.greeting()"},
+                {"greetLen", "Vmc4NativeStrArr.greetLen()"},
+                {"isHelloTrue", "Vmc4NativeStrArr.isHello(\"hello\")"},
+                {"isHelloFalse", "Vmc4NativeStrArr.isHello(\"world\")"},
+                {"startsHiTrue", "Vmc4NativeStrArr.startsWithHi(\"hi there\")"},
+                {"startsHiFalse", "Vmc4NativeStrArr.startsWithHi(\"yo\")"},
+                {"multiRows", "Vmc4NativeStrArr.multiRows()"},
+                {"multiDims", "Vmc4NativeStrArr.multiDims()"},
+                {"multiFill", "Vmc4NativeStrArr.multiFill()"},
+                {"multiRefLen", "Vmc4NativeStrArr.multiRefLen()"},
+            },
+            8, GetParam().kind);
+}
+
+// Phase 2.B：虚分派 + 接口调用 + 实例方法调用链（单类输入：只有主类方法转 VM）。
+// viaInterface：invokeinterface 经接口引用调用 → JVM 虚分派到主类已转 VM 的 calc
+// （VM→JNI→JVM 分派→VM 闭环）；chain/double_：实例方法互相调用（this 经 regs[0]）；
+// shapeArea：invokevirtual 经声明类型 Shape 引用虚分派到 Square 覆盖实现（嵌套类
+// 保留字节码，JVM 侧分派，验证 VM 内 JNI 虚分派语义与基线一致）。
+TEST_P(Vmc4BackendE2E, VirtualDispatchAndInterfaceRoundTrip)
+{
+    runCase("Vmc4NativeVirt",
+            "public class Vmc4NativeVirt implements Calc {\n"
+            "  public int calc(int x) { return x * 3; }\n"
+            "  public static int viaInterface(Calc c, int x) { return c.calc(x); }\n"
+            "  public int chain(int x) { return this.double_(x) + 1; }\n"
+            "  public int double_(int x) { return x * 2; }\n"
+            "  public static class Shape {\n"
+            "    public int area() { return 0; }\n"
+            "  }\n"
+            "  public static class Square extends Shape {\n"
+            "    int side;\n"
+            "    public Square(int s) { this.side = s; }\n"
+            "    public int area() { return side * side; }\n"
+            "  }\n"
+            "  public static int shapeArea(Shape s) { return s.area(); }\n"
+            "}\n"
+            "interface Calc {\n"
+            "  int calc(int x);\n"
+            "}\n",
+            {
+                {"viaInterface", "Vmc4NativeVirt.viaInterface(new Vmc4NativeVirt(), 7)"},
+                {"chain", "new Vmc4NativeVirt().chain(4)"},
+                {"shapeAreaSquare", "Vmc4NativeVirt.shapeArea(new Vmc4NativeVirt.Square(5))"},
+                {"shapeAreaShape", "Vmc4NativeVirt.shapeArea(new Vmc4NativeVirt.Shape())"},
+            },
+            // 主类 5 方法转 VM：calc/viaInterface/chain/double_/shapeArea（嵌套类不转）。
+            5, GetParam().kind);
+}
+
+// Phase 2.B：invokespecial（private）在 VM 内执行（CallNonvirtual）+ null receiver NPE。
+// callPriv 里的 priv() 由 javac 编译为 INVOKESPECIAL Vmc4NativeSpec.priv（私有方法
+// 不虚分派）→ VM 内 CallNonvirtualIntMethodA 到已转 VM 的 priv；subWho/baseWho：
+// invokevirtual 经 Base 引用虚分派到嵌套类 Sub 覆盖（保留字节码，JVM 侧分派）；
+// nullCall(null)：instance 调用 null receiver 显式抛 NPE（JVM 语义）。
+TEST_P(Vmc4BackendE2E, InvokeSpecialAndNullReceiverRoundTrip)
+{
+    runCase("Vmc4NativeSpec",
+            "public class Vmc4NativeSpec {\n"
+            "  public static class Base {\n"
+            "    public int who() { return 1; }\n"
+            "  }\n"
+            "  public static class Sub extends Base {\n"
+            "    public int who() { return 2; }\n"
+            "  }\n"
+            "  private int priv() { return 42; }\n"
+            "  public int callPriv() { return priv(); }\n"
+            "  public static int viaPriv(Vmc4NativeSpec o) { return o.callPriv(); }\n"
+            "  public static int subWho(Sub s) { return s.who(); }\n"
+            "  public static int baseWho(Base b) { return b.who(); }\n"
+            "  public static int nullCall(Vmc4NativeSpec o) { return o.callPriv(); }\n"
+            "}\n",
+            {
+                {"callPriv", "new Vmc4NativeSpec().callPriv()"},
+                {"viaPriv", "Vmc4NativeSpec.viaPriv(new Vmc4NativeSpec())"},
+                {"subWho", "Vmc4NativeSpec.subWho(new Vmc4NativeSpec.Sub())"},
+                {"baseWhoSub", "Vmc4NativeSpec.baseWho(new Vmc4NativeSpec.Sub())"},
+                {"baseWhoBase", "Vmc4NativeSpec.baseWho(new Vmc4NativeSpec.Base())"},
+                {"nullCall", "Vmc4NativeSpec.nullCall(null)"},
+            },
+            // 主类 6 方法转 VM：priv/callPriv/viaPriv/subWho/baseWho/nullCall。
+            6, GetParam().kind);
+}
+
+// Phase 2.C：异常语义 round-trip。
+// divCatch：try 块内除零 → 解释器抛 ArithmeticException → 检查点按区域表匹配
+// handler（IsInstanceOf）→ exceptionReg 承接异常 → 跳 handler 返回 -1；
+// divUncaught：除零无区域 → 检查点不匹配 → status=1 传播 → Java 侧抛
+// ArithmeticException（Driver 捕获 THROW:...）；
+// throwCatch/throwUncaught：athrow（mj2x_vm_throw）+ 区域匹配 / 传播；
+// nestedCatch：嵌套 try（内层 ArithmeticException 先匹配）。
+TEST_P(Vmc4BackendE2E, ExceptionRoundTrip)
+{
+    runCase("Vmc4NativeExc",
+            "public class Vmc4NativeExc {\n"
+            "  public static int divCatch(int a, int b) {\n"
+            "    try { return a / b; }\n"
+            "    catch (ArithmeticException e) { return -1; }\n"
+            "  }\n"
+            "  public static int divUncaught(int a, int b) { return a / b; }\n"
+            "  public static int throwCatch(int x) {\n"
+            "    try {\n"
+            "      if (x < 0) throw new IllegalArgumentException();\n"
+            "      return x * 2;\n"
+            "    } catch (IllegalArgumentException e) { return -100; }\n"
+            "  }\n"
+            "  public static int throwUncaught(int x) {\n"
+            "    if (x < 0) throw new IllegalStateException();\n"
+            "    return x;\n"
+            "  }\n"
+            "  public static int nestedCatch(int a, int b) {\n"
+            "    try {\n"
+            "      try { return a / b; }\n"
+            "      catch (ArithmeticException e) { return 1; }\n"
+            "    } catch (Exception e) { return 2; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"divCatchOk", "Vmc4NativeExc.divCatch(10, 2)"},
+                {"divCatchZero", "Vmc4NativeExc.divCatch(10, 0)"},
+                {"divUncaught", "Vmc4NativeExc.divUncaught(10, 0)"},
+                {"throwCatchOk", "Vmc4NativeExc.throwCatch(5)"},
+                {"throwCatchNeg", "Vmc4NativeExc.throwCatch(-1)"},
+                {"throwUncaughtNeg", "Vmc4NativeExc.throwUncaught(-1)"},
+                {"throwUncaughtOk", "Vmc4NativeExc.throwUncaught(7)"},
+                {"nestedInner", "Vmc4NativeExc.nestedCatch(10, 0)"},
+                {"nestedOk", "Vmc4NativeExc.nestedCatch(10, 2)"},
+            },
+            5, GetParam().kind);
+}
+
+// Phase 2.C 回归：athrow 异常归属 = athrow 所在块，而非布局顺序的下一块。
+// throwCatchTail 的 athrow 块（保护区内）之后紧跟 handler/未保护块（try 内
+// throw、try 外 return）：若检查点按「pc 之后的块」归属，异常会逃逸传播
+// （修复前 4 dispatcher 实测均为 THROW 而非 -1）。
+TEST_P(Vmc4BackendE2E, AthrowAttributionRoundTrip)
+{
+    runCase("Vmc4NativeExcTail",
+            "public class Vmc4NativeExcTail {\n"
+            "  public static int throwCatchTail(int x) {\n"
+            "    try {\n"
+            "      if (x < 0) throw new IllegalArgumentException();\n"
+            "    } catch (IllegalArgumentException e) { return -1; }\n"
+            "    return x;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"neg", "Vmc4NativeExcTail.throwCatchTail(-1)"},
+                {"pos", "Vmc4NativeExcTail.throwCatchTail(5)"},
+            },
+            1, GetParam().kind);
+}
+
+// Phase 2.D：Intrinsic 子集 round-trip。
+// isString/isNullInstanceOf：instanceof:<desc>（null → false，IsInstanceOf 懒缓存）；
+// longCmp：LCMP（cmp.nan_less 整型路径，三值 -1/0/1）；
+// floatCmpG：FCMPG（cmp.nan_greater 浮点 NaN-aware：NaN → 1）；
+// syncInc：synchronized 块（monitor.enter/exit + 异常表 catch-all + athrow 重抛组合）。
+TEST_P(Vmc4BackendE2E, IntrinsicAndMonitorRoundTrip)
+{
+    runCase("Vmc4NativeIntr",
+            "public class Vmc4NativeIntr {\n"
+            "  public static int isString(Object o) { return o instanceof String ? 1 : 0; }\n"
+            "  public static int isIntr(Object o) { return o instanceof Vmc4NativeIntr ? 1 : 0; }\n"
+            "  public static int longCmp(long a, long b) { return a > b ? 1 : (a < b ? -1 : 0); }\n"
+            "  public static int floatCmpG(float a, float b) { return a > b ? 1 : (a < b ? -1 : 0); }\n"
+            "  public static int syncInc(Object lock, int x) {\n"
+            "    synchronized (lock) { return x + 1; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"isStringOk", "Vmc4NativeIntr.isString(\"x\")"},
+                {"isStringNot", "Vmc4NativeIntr.isString(Integer.valueOf(5))"},
+                {"isIntrNull", "Vmc4NativeIntr.isIntr(null)"},
+                {"isIntrSelf", "Vmc4NativeIntr.isIntr(new Vmc4NativeIntr())"},
+                {"longCmpGt", "Vmc4NativeIntr.longCmp(5, 3)"},
+                {"longCmpLt", "Vmc4NativeIntr.longCmp(3, 5)"},
+                {"longCmpEq", "Vmc4NativeIntr.longCmp(4, 4)"},
+                {"floatCmpGGt", "Vmc4NativeIntr.floatCmpG(1.5f, 1.0f)"},
+                {"floatCmpGLt", "Vmc4NativeIntr.floatCmpG(1.0f, 1.5f)"},
+                {"floatCmpGNaN", "Vmc4NativeIntr.floatCmpG(Float.NaN, 1.0f)"},
+                {"syncInc", "Vmc4NativeIntr.syncInc(new Object(), 5)"},
+            },
+            5, GetParam().kind);
+}
+
+// Phase 2.D：双后端对拍——同一 Math/wrapper 方法集分别经 VMC4（JNI Call 路径）
+// 与 RegC（intrinsic helper 路径）虚拟化，输出必须与 baseline 完全一致。
+// abs/sqrt/max/min 走 invokestatic（VMC4 per-callsite JNI helper ↔ RegC intrinsic
+// registry 特化 helper）；parseInt 走 Integer.parseInt 静态调用。
+TEST_P(Vmc4BackendE2E, MathIntrinsicDualBackendParity)
+{
+    runDualBackendCase("Vmc4NativeMath",
+                       "public class Vmc4NativeMath {\n"
+                       "  public static int absInt(int x) { return Math.abs(x); }\n"
+                       "  public static long absLong(long x) { return Math.abs(x); }\n"
+                       "  public static double absDouble(double x) { return Math.abs(x); }\n"
+                       "  public static double sqrt(double x) { return Math.sqrt(x); }\n"
+                       "  public static int maxInt(int a, int b) { return Math.max(a, b); }\n"
+                       "  public static int minInt(int a, int b) { return Math.min(a, b); }\n"
+                       "  public static int parseInt(String s) { return Integer.parseInt(s); }\n"
+                       "}\n",
+                       {
+                           {"absIntNeg", "Vmc4NativeMath.absInt(-42)"},
+                           {"absLongMin", "Vmc4NativeMath.absLong(-9223372036854775807L - 1)"},
+                           {"absDoubleNeg", "Vmc4NativeMath.absDouble(-3.25)"},
+                           {"sqrt", "Vmc4NativeMath.sqrt(2.0)"},
+                           {"maxInt", "Vmc4NativeMath.maxInt(7, 3)"},
+                           {"minInt", "Vmc4NativeMath.minInt(7, 3)"},
+                           {"parseInt", "Vmc4NativeMath.parseInt(\"12345\")"},
+                       },
+                       GetParam().kind);
 }
 
 }   // namespace

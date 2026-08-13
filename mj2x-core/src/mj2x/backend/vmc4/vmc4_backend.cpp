@@ -243,14 +243,9 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
 
-    // 实例方法在 MVP 不转：SSA 会把 this 作为 id0 参数进 RegIR，而 JNI wrapper 从
-    // regs[0] 开始填显式参数，两者错位一槽读参即错值；且对象操作本就 fail-closed。
-    // 与 <init>/<clinit> 同策略，待 Phase 2 支持对象 family 后再放开。
-    if (!isStatic) {
-        printf("[Vmc4Backend] Skipping %s.%s%s: instance method not virtualized in MVP\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str());
-        return backendResult;
-    }
+    // 实例方法自 Phase 2.B 起支持：SSA 把 this 作为 id0 参数进 RegIR（REF），
+    // JNI wrapper 把 thisObject 填进 regs[0]，显式参数从 regs[1] 开始，两者对齐。
+    // <init> 仍跳过（JVM 拒收 native 构造器）。
 
     // 参数/返回类型二次防御：含对象引用的方法在编码阶段已 fail-closed，这里提前拒绝
     // 避免无谓的 SSA 构建。
@@ -385,25 +380,27 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
     }
     {
         CSourceStream::IndentGuard g(out);
-        {
-            CSourceStream line;
-            line.append("(void)");
-            line.append(isStatic ? "clazz" : "thisObject");
-            line.append(";");
-            out.emitLine(line.build());
+        if (isStatic) {
+            out.emitLine("(void)clazz;");
         }
         // 分配寄存器文件 + 返回值槽。
         out.emitLine("mj2x_vm_slot regs[" + std::to_string(program.numRegs ? program.numRegs : 1) +
                      "];");
         out.emitLine("mj2x_vm_slot ret;");
         out.emitLine("ret.i = 0;");
-        // 填参数：regs[0..n)。实例方法 thisObject 不进 VM（实例方法整体 fail-closed
-        // 至 Phase 2.B），故参数从 regs[0] 开始对应 p0..p(n-1)。静态方法同理。
+        if (!isStatic) {
+            // 实例方法：this 进 regs[0]（SSA 约定 this=参数 id0，SSABuilder 把 this
+            // 作为 parameters[0]），显式参数从 regs[1] 开始——与 encoder 的
+            // numInputs（f.parameters.size()，含 this）对齐。
+            out.emitLine("regs[0].ref = (void*)thisObject;");
+        }
+        // 填参数：静态方法从 regs[0] 开始对应 p0..p(n-1)；实例方法 this 已占 regs[0]，
+        // 显式参数从 regs[1] 开始（desc 参数与 JNI 参数一一对应）。
         // 对象参数（OBJECT）经 (void*) cast 存入 slot.ref。
         for (size_t i = 0; i < args.size(); ++i) {
             CSourceStream line;
             line.append("regs[");
-            line.appendInt(static_cast<ca::i64>(i));
+            line.appendInt(static_cast<ca::i64>(i + (isStatic ? 0 : 1)));
             line.append("]");
             line.append(slotField(args[i]));
             line.append(" = ");
@@ -457,6 +454,19 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                 out.emitLine(line.build());
             }
         }
+        // 预加载 String LDC 常量槽（Phase 2.E）：NewStringUTF 把 UTF-8 内容物化为
+        // jstring，写入编码期分配的专用槽（按内容去重）。调用帧内局部引用，
+        // 方法返回后由 JVM 释放——寄存器仅在本帧解释期间使用，安全。
+        for (size_t i = 0; i < program.stringLiterals.size(); ++i) {
+            const auto& lit = program.stringLiterals[i];
+            CSourceStream line;
+            line.append("regs[");
+            line.appendInt(static_cast<ca::i64>(lit.slot));
+            line.append("].ref = (void*)(*env)->NewStringUTF(env, ");
+            line.append(codegen::cStringLiteral(lit.value));
+            line.append(");");
+            out.emitLine(line.build());
+        }
         // 调解释器。各 object-op 分派表：含该 family 的方法传对应表（backend finalize
         // 发射），不含的传 0（handler 不触发，解释器不读）。空表传 0 而非表名，避免
         // 引用未发射的符号。
@@ -488,13 +498,31 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                             ? std::string("0")
                             : ("mj2x_vm_alloc_table_" + methodTag));
             line.append(", ");
-            line.append(program.hasArrayLength
-                            ? ("mj2x_vm_array_length_table_" + methodTag)
-                            : std::string("0"));
+            // Intrinsic 表（Phase 2.D 泛化：array.length/cmp.nan_*/instanceof/monitor）。
+            line.append(program.intrinsics.empty()
+                            ? std::string("0")
+                            : ("mj2x_vm_intrinsic_table_" + methodTag));
             line.append(");");
             out.emitLine(line.build());
         }
-        out.emitLine("(void)status; /* MVP: 除零 status==1 时仍返回计算值，后续 Phase 抛异常 */");
+        // 异常传播（Phase 2.C）：status==1（PendingException）时 pending exception
+        // 已在 env 上，直接返回默认值让 JVM 抛（void 方法直接 return）。
+        out.emitLine("if (status == 1) {");
+        {
+            CSourceStream::IndentGuard g2(out);
+            if (retKind != PrimitiveKind::VOID) {
+                CSourceStream line;
+                line.append("return (");
+                line.append(jniType(retKind));
+                line.append(")");
+                line.append(defaultReturnValue(retKind));
+                line.append(";");
+                out.emitLine(line.build());
+            } else {
+                out.emitLine("return;");
+            }
+        }
+        out.emitLine("}");
         // 返回。
         if (retKind != PrimitiveKind::VOID) {
             CSourceStream line;

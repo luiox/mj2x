@@ -259,7 +259,7 @@ enum class VmAllocKind : uint8_t
 {
     Object     = 0,   ///< NEW → AllocObject（<init> 由独立 Call 调用）
     Array      = 1,   ///< NEWARRAY/ANEWARRAY → New<Type>Array / NewObjectArray
-    MultiArray = 2,   ///< MULTIANEWARRAY（Phase 2.A 暂 fail-closed，递归分配复杂）
+    MultiArray = 2,   ///< MULTIANEWARRAY（Phase 2.E 支持：递归 NewObjectArray）
 };
 
 /// @brief 分配引用：一个 Allocate 调用点的静态信息（Phase 2.A）。
@@ -271,6 +271,51 @@ struct VmAllocRef
 {
     VmAllocKind kind     = VmAllocKind::Object;
     std::string typeDesc;   ///< 类内部名 / 数组描述符
+};
+
+/// @brief Intrinsic 引用：一个 Intrinsic 调用点的静态信息（Phase 2.D 泛化）。
+///
+/// @details
+/// SSA 产生的 intrinsic 名称：array.length、cmp.nan_greater/nan_less（FCMPG/FCMPL
+/// 三值比较）、instanceof:<内部名>、monitor.enter/exit。Math/wrapper 等方法是普通
+/// Call（invokestatic），不走此表。arg0Kind 记录首个参数类别（浮点比较/引用操作
+/// 需要区分槽位），retKind 为结果类别。去重按 name。
+struct VmIntrinsicRef
+{
+    std::string name;                          ///< intrinsic 名称（含 instanceof: 前缀）
+    VmJniKind   arg0Kind = VmJniKind::Int32;   ///< 参数 0 类别（Float/Double/Int64/Ref）
+    VmJniKind   retKind  = VmJniKind::Int32;   ///< 结果类别
+    bool        hasArgs  = false;              ///< 是否有参数（防御空 args）
+};
+
+/// @brief 异常区域条目（Phase 2.C）：一个 (异常区域, 保护块) 对的编码产物。
+///
+/// @details
+/// 编码期把 RegFunction.exceptionRegions 静态展开：每个 region 对每个受保护块
+/// 生成一个条目，解释器在「可能抛异常的操作」后按当前块的活跃条目（异常表顺序）
+/// 匹配。匹配成功：执行该块的边拷贝（handler 参数寄存器 ← 来源值），把异常对象
+/// 写进 exceptionReg（RegExceptionRegion.exceptionValue 对应的寄存器），pc 跳到
+/// handler 块；全不匹配则保持 pending exception 返回（Java 侧传播）。
+struct VmExceptionRegionEntry
+{
+    uint16_t handlerBlock = 0;   ///< handler 入口块索引（blockTargets 下标）
+    uint16_t caughtTypeIdx = 0;  ///< catch 类型在 catchTypes 表的索引（0xFFFF = catch-all/finally）
+    uint16_t exceptionReg = 0;   ///< 承接异常对象的寄存器（.ref 承载 jthrowable）
+    uint16_t blockIdx = 0;       ///< 受保护块索引（异常分派反查用）
+    /// 边拷贝：(dest 寄存器, 来源寄存器) 对（来源含常量槽，prologue 已预加载）。
+    std::vector<std::pair<uint16_t, uint16_t>> copies;
+};
+
+/// @brief String 字面量常量槽（Phase 2.E）：LDC String（Opaque "ldc_string:"）物质化。
+///
+/// @details
+/// 编码期把 ldc_string Opaque 分配为专用寄存器槽，wrapper 在 exec 前用
+/// NewStringUTF 预加载 jstring（global ref 语义由 JNI 局部引用 + 方法帧保证）。
+/// 按内容去重（同字面量共享一槽）。
+struct VmStringLiteral
+{
+    uint16_t    slot = 0;     ///< 常量寄存器槽（prologue 写入位置）
+    std::string value;        ///< UTF-8 字面量内容
 };
 
 /// @brief 一个方法的完整 VM 程序（编码产物）。
@@ -290,6 +335,16 @@ struct VmProgram
     std::vector<VmArrayRef>      arrayStoreRefs; ///< ArrayStore 元素类型引用（Phase 2.A）
     std::vector<VmAllocRef>      allocRefs;      ///< Allocate 分配引用（Phase 2.A）
     bool                         hasArrayLength = false;   ///< 含 array.length intrinsic（Phase 2.A）
+    std::vector<VmIntrinsicRef>  intrinsics;     ///< Intrinsic 引用表（Phase 2.D，按 name 去重）
+    std::vector<VmStringLiteral> stringLiterals; ///< String LDC 常量槽（Phase 2.E，按内容去重）
+
+    /// 异常区域（Phase 2.C）：每 (region, 保护块) 一条；blockExcRegions 按块索引
+    /// 给出活跃条目（异常表顺序），供解释器异常分派查表。
+    std::vector<VmExceptionRegionEntry>         excRegions;        ///< 区域条目（异常表顺序）
+    std::vector<std::string>                    catchTypes;        ///< catch 类型内部名（去重）
+    std::vector<std::vector<uint16_t>>          blockExcRegions;   ///< blockIdx → 活跃条目（异常表顺序）
+    bool                                        hasThrow = false;  ///< 含 THROW（athrow）
+
     uint16_t                     numInputs = 0;  ///< 方法参数占用的寄存器数
     uint16_t                     numRegs   = 0;  ///< 寄存器文件总大小
 };

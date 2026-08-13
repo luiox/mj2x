@@ -188,6 +188,15 @@ struct EncoderState
     std::unordered_map<std::string, uint16_t>                allocByKey;
     bool                                                     hasArrayLength = false;
 
+    /// Intrinsic 表（Phase 2.D 泛化）：按 name 去重（array.length/cmp.nan_*/
+    /// instanceof:<desc>/monitor.enter/exit），字节流存 siteIdx。
+    std::vector<VmIntrinsicRef>                              intrinsicRefs;
+    std::unordered_map<std::string, uint16_t>                intrinsicByKey;
+
+    /// String LDC 常量槽（Phase 2.E）：按内容去重（ldc_string Opaque 物质化）。
+    std::vector<VmStringLiteral>                             stringLiterals;
+    std::unordered_map<std::string, uint16_t>                stringSlotByValue;
+
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
     uint16_t numInputs = 0;
@@ -444,15 +453,59 @@ struct EncoderState
         return idx;
     }
 
+    /// @brief 为一个 Intrinsic 调用点分配/复用索引（Phase 2.D）。
+    ///
+    /// @details
+    /// 按 name 去重（同 intrinsic 共享 helper；instanceof:<desc> 的 desc 在 name 里，
+    /// 不同 desc 是不同 intrinsic）。
+    uint16_t internIntrinsicRef(VmIntrinsicRef iref)
+    {
+        auto it = intrinsicByKey.find(iref.name);
+        if (it != intrinsicByKey.end()) return it->second;
+        const uint16_t idx = static_cast<uint16_t>(intrinsicRefs.size());
+        intrinsicByKey[iref.name] = idx;
+        intrinsicRefs.push_back(std::move(iref));
+        return idx;
+    }
+
+    /// @brief 分配/复用 String LDC 常量槽（Phase 2.E）。
+    ///
+    /// @details
+    /// ldc_string Opaque 在普通指令路径物质化为专用寄存器槽（与 internConstant
+    /// 同模式：槽落在计算寄存器之后），wrapper 在 exec 前用 NewStringUTF 预加载。
+    /// 按内容去重：同一字面量多处 LDC 共享一个槽。
+    uint16_t internStringLiteral(const std::string& value)
+    {
+        auto it = stringSlotByValue.find(value);
+        if (it != stringSlotByValue.end()) {
+            observeReg(it->second);
+            return it->second;
+        }
+        const uint16_t slot = maxReg;   // 常量槽紧接在已分配寄存器之后
+        observeReg(slot);
+        stringSlotByValue[value] = slot;
+        VmStringLiteral lit;
+        lit.slot  = slot;
+        lit.value = value;
+        stringLiterals.push_back(std::move(lit));
+        return slot;
+    }
+
     /// @brief 解析一个 RegOperand 为 VM 寄存器索引。
     ///
     /// @details
     /// - Register：直接用 reg.value（计算寄存器）
     /// - IntLiteral/FloatLiteral：intern 到常量池，返回常量槽索引
-    /// - NullLiteral/Opaque：MVP 不支持（fail-closed）
+    /// - NullLiteral：MVP 不支持（fail-closed）
+    /// - Opaque：tag 以 "ldc_string:" 开头的 String LDC 物质化为字符串常量槽
+    ///   （wrapper 用 NewStringUTF 预加载，见 internStringLiteral）；边拷贝路径
+    ///   （allowOpaqueNull）容忍其余 Opaque 为 REF NULL 常量槽（对齐 RegC
+    ///   "Opaque → NULL"：异常 handler 参数/undef 边值在 JVM 语义下不可达或为
+    ///   null，赋 NULL 安全）；普通指令路径 fail-closed
     ///
     /// @return 成功返回 true 并填 regIdx；失败返回 false 并填 reason。
-    bool resolveOperand(const RegOperand& op, uint16_t& regIdx, std::string& reason)
+    bool resolveOperand(const RegOperand& op, uint16_t& regIdx, std::string& reason,
+                        bool allowOpaqueNull = false)
     {
         switch (op.kind) {
         case RegOperandKind::Register: {
@@ -481,10 +534,24 @@ struct EncoderState
         case RegOperandKind::NullLiteral:
             reason = "NullLiteral operand (object ref) not supported in MVP";
             return false;
-        case RegOperandKind::Opaque:
+        case RegOperandKind::Opaque: {
+            // String LDC（Phase 2.E）：Opaque tag 携带 UTF-8 内容（ssa_builder.cpp:99），
+            // 物质化为字符串常量槽，wrapper 在 exec 前 NewStringUTF 预加载。
+            constexpr const char* kLdcStringPrefix = "ldc_string:";
+            if (op.tag.rfind(kLdcStringPrefix, 0) == 0) {
+                regIdx = internStringLiteral(op.tag.substr(std::strlen(kLdcStringPrefix)));
+                return true;
+            }
+            // undef 值在边拷贝上下文按 NULL 引用物质化：REF NULL 常量槽 prologue
+            // 写 .i=0（union 双关，.ref==NULL）。
+            if (allowOpaqueNull) {
+                regIdx = internConstant(VmType::REF, 0, 0.0);
+                return true;
+            }
             reason = "Opaque operand not supported in MVP";
             if (!op.tag.empty()) reason += " (tag: " + op.tag + ")";
             return false;
+        }
         }
         reason = "unknown RegOperandKind";
         return false;
@@ -537,6 +604,8 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
 bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeJump(EncoderState& ctx, const RegJumpTerminator& term, VmProgram& prog,
                 std::string& reason);
+bool encodeThrow(EncoderState& ctx, const RegThrowTerminator& term, VmProgram& prog,
+                 std::string& reason);
 bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram& prog,
                   std::string& reason);
 bool encodeReturn(EncoderState& ctx, const RegReturnTerminator& term, VmProgram& prog,
@@ -584,7 +653,8 @@ bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
                 return false;
             }
             uint16_t src;
-            if (!ctx.resolveOperand(copy.source, src, reason)) return false;
+            // 边拷贝的 undef 源（异常 handler 参数未定义）容忍为 NULL 引用。
+            if (!ctx.resolveOperand(copy.source, src, reason, true)) return false;
             emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
             emitU8(prog.bytecodes, static_cast<uint8_t>(type));
             emitU16(prog.bytecodes, static_cast<uint16_t>(copy.dest.id.value));
@@ -1022,10 +1092,6 @@ bool encodeArrayStore(EncoderState& ctx, const RegInstruction& ins, VmProgram& p
 bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
 {
     const VmAllocKind kind = toVmAllocKind(ins.allocationKind);
-    if (kind == VmAllocKind::MultiArray) {
-        reason = "Allocate: MULTIANEWARRAY not supported yet (recursive alloc)";
-        return false;
-    }
     VmAllocRef aref;
     aref.kind     = kind;
     aref.typeDesc = ins.typeDesc.to_std_string();
@@ -1034,7 +1100,8 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
-    // Array 的 length 在 args[0]（Object 无 args）。
+    // 维度寄存器（MultiArray：每维一个 int；Array：length；Object：无 args）。
+    // MultiArray 的 dimCount 编码在 argc，解释器据此递归分配（Phase 2.E）。
     std::vector<uint16_t> dimIdxs;
     for (const auto& a : ins.args) {
         uint16_t di;
@@ -1051,34 +1118,85 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
     return true;
 }
 
-/// @brief 编码 Intrinsic 指令（Phase 2.A：仅 array.length）。
+/// @brief 编码 Intrinsic 指令（Phase 2.D 泛化）。
 ///
 /// @details
-/// array.length → GetArrayLength，单一无状态 helper（siteIdx 恒为 0）。其余 intrinsic
-/// （monitor.enter/instanceof 等）暂 fail-closed（Phase 2.D）。
+/// SSA 产生的 intrinsic 名称（ssa_builder lower*）：
+///   - array.length：GetArrayLength（null → NPE）
+///   - cmp.nan_greater/nan_less：FCMPG/FCMPL/LCMP 三值比较（-1/0/1），纯计算
+///     （浮点 NaN-aware：nan_greater 取 1，nan_less 取 -1）
+///   - instanceof:<内部名>：IsInstanceOf（null → false）
+///   - monitor.enter/exit：MonitorEnter/MonitorExit（null → NPE）
+/// 其余（indy:<idx> 等）保持 fail-closed。所有 intrinsic 进 intrinsics 表
+/// （按 name 去重），字节流只存 siteIdx。
 ///
-/// 字节流：[Intrinsic][siteIdx:u16=0][arrayIdx:u16][dest:u16][argc:u8=0]
-bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+/// 字节流：[Intrinsic][siteIdx:u16][recv:u16=0][dest:u16][argc:u8][args...]
+/// - args 是操作数寄存器列表（array.length 的数组 / cmp 的双操作数 / instanceof
+///   与 monitor 的引用）
+bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
+                     std::string& reason)
 {
-    if (ins.intrinsicName != "array.length") {
-        reason = "Intrinsic not supported yet (only array.length): " + ins.intrinsicName;
+    VmIntrinsicRef iref;
+    iref.name = ins.intrinsicName;
+
+    if (ins.intrinsicName == "array.length") {
+        iref.arg0Kind = VmJniKind::Ref;
+        iref.retKind  = VmJniKind::Int32;
+        iref.hasArgs  = !ins.args.empty();
+    } else if (ins.intrinsicName == "cmp.nan_greater" ||
+               ins.intrinsicName == "cmp.nan_less") {
+        if (ins.args.size() < 2) {
+            reason = "cmp.nan_* intrinsic requires two operands";
+            return false;
+        }
+        iref.arg0Kind = toVmJniKind(ins.args[0].type);   // Float/Double/Int64
+        iref.retKind  = VmJniKind::Int32;
+        iref.hasArgs  = true;
+    } else if (ins.intrinsicName.rfind("instanceof:", 0) == 0) {
+        if (ins.args.empty()) {
+            reason = "instanceof intrinsic missing operand";
+            return false;
+        }
+        iref.arg0Kind = VmJniKind::Ref;
+        iref.retKind  = VmJniKind::Int32;
+        iref.hasArgs  = true;
+    } else if (ins.intrinsicName == "monitor.enter" || ins.intrinsicName == "monitor.exit") {
+        if (ins.args.empty()) {
+            reason = "monitor intrinsic missing operand";
+            return false;
+        }
+        iref.arg0Kind = VmJniKind::Ref;
+        iref.retKind  = VmJniKind::Void;
+        iref.hasArgs  = true;
+    } else {
+        reason = "Intrinsic not supported yet: " + ins.intrinsicName;
         return false;
     }
-    if (ins.args.empty()) {
-        reason = "array.length: missing array operand";
+
+    const uint16_t siteIdx = ctx.internIntrinsicRef(std::move(iref));
+
+    // 操作数寄存器列表（变长）。argc 上限 8（intrinsic 操作数少，防御上限）。
+    if (ins.args.size() > 8) {
+        reason = "Intrinsic: too many arguments (>8)";
         return false;
     }
-    uint16_t arrayIdx;
-    if (!ctx.resolveOperand(ins.args[0], arrayIdx, reason)) return false;
+    std::vector<uint16_t> argIdxs;
+    argIdxs.reserve(ins.args.size());
+    for (const auto& a : ins.args) {
+        uint16_t ai;
+        if (!ctx.resolveOperand(a, ai, reason)) return false;
+        argIdxs.push_back(ai);
+    }
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
-    ctx.hasArrayLength = true;
+    if (ins.intrinsicName == "array.length") ctx.hasArrayLength = true;
 
     emitOpcode(ctx, VmOpcode::Intrinsic, prog.bytecodes);
-    emitU16(prog.bytecodes, 0);   // siteIdx 恒为 0（单一 array.length helper）
-    emitU16(prog.bytecodes, arrayIdx);
+    emitU16(prog.bytecodes, siteIdx);
+    emitU16(prog.bytecodes, 0);   // recv unused（操作数全在 args）
     emitU16(prog.bytecodes, dest);
-    emitU8(prog.bytecodes, 0);    // argc = 0
+    emitU8(prog.bytecodes, static_cast<uint8_t>(argIdxs.size()));
+    for (uint16_t ai : argIdxs) emitU16(prog.bytecodes, ai);
     return true;
 }
 
@@ -1099,9 +1217,7 @@ bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog,
                 (void)term;
                 return false;
             } else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
-                reason = "Throw terminator not supported in MVP";
-                (void)term;
-                return false;
+                return encodeThrow(ctx, term, prog, reason);
             } else if constexpr (std::is_same_v<T, RegUnreachableTerminator>) {
                 // Unreachable：发射 Halt 作为防御性停机（不应被执行到）。
                 emitHaltOpcode(ctx, prog.bytecodes);
@@ -1128,6 +1244,94 @@ bool encodeJump(EncoderState& ctx, const RegBlock* srcBlock, const RegJumpTermin
     emitOpcode(ctx, VmOpcode::Jump, prog.bytecodes);
     emitU16(prog.bytecodes, target);
     return true;
+}
+
+/// @brief 编码 THROW（athrow，Phase 2.C）。
+///
+/// @details
+/// 字节流：[Throw][src:u16]——src 是异常对象寄存器（.ref 承载 jthrowable）。
+/// 解释器 handler 调 mj2x_vm_throw（null → NPE），随后主循环的异常检查点
+/// 按当前块活跃区域匹配/传播。无异常区域时 throw 直接传播到 Java。
+bool encodeThrow(EncoderState& ctx, const RegThrowTerminator& term, VmProgram& prog,
+                 std::string& reason)
+{
+    uint16_t src;
+    if (!ctx.resolveOperand(term.value, src, reason)) return false;
+    emitOpcode(ctx, VmOpcode::Throw, prog.bytecodes);
+    emitU16(prog.bytecodes, src);
+    prog.hasThrow = true;
+    return true;
+}
+
+/// @brief 编码异常区域（Phase 2.C）：RegFunction.exceptionRegions → VmProgram 区域表。
+///
+/// @details
+/// 每个 (region, 保护块) 生成一条 VmExceptionRegionEntry：handler 块索引、catch 类型
+/// （空 = catch-all/finally，索引 0xFFFF）、exceptionValue 寄存器、保护块索引、边拷贝
+/// （handler 参数寄存器 ← 来源）。blockExcRegions[blockIdx] 按异常表顺序（= region
+/// 收集顺序）给出活跃条目，解释器异常分派据此匹配。边拷贝的源经 resolveOperand
+/// 解析（字面量 intern 常量槽，prologue 预加载），目标/异常寄存器 observeReg 确保
+/// 寄存器文件覆盖。
+void encodeExceptionRegions(EncoderState& ctx, VmProgram& prog, std::string& reason)
+{
+    if (ctx.fn.exceptionRegions.empty()) return;
+    const uint16_t totalBlocks =
+        static_cast<uint16_t>(ctx.fn.blocks.size() + ctx.syntheticEdges.size());
+    prog.blockExcRegions.assign(totalBlocks, {});
+    for (const auto& region : ctx.fn.exceptionRegions) {
+        if (region.handler == nullptr) {
+            reason = "exception region missing handler block";
+            return;
+        }
+        const auto handlerIt = ctx.blockIndex.find(region.handler);
+        if (handlerIt == ctx.blockIndex.end()) {
+            reason = "exception region handler block not indexed";
+            return;
+        }
+        // catch 类型去重（空串 = catch-all/finally，用 0xFFFF 标记，不进表）。
+        uint16_t caughtTypeIdx = 0xFFFF;
+        if (!region.caughtType.empty()) {
+            const auto it = std::find(prog.catchTypes.begin(), prog.catchTypes.end(),
+                                      region.caughtType);
+            if (it != prog.catchTypes.end()) {
+                caughtTypeIdx = static_cast<uint16_t>(it - prog.catchTypes.begin());
+            } else {
+                caughtTypeIdx = static_cast<uint16_t>(prog.catchTypes.size());
+                prog.catchTypes.push_back(region.caughtType);
+            }
+        }
+        // 该 region 各保护块的边拷贝（edges 按 protectedBlock 对齐）。
+        for (auto* protectedBlock : region.protectedBlocks) {
+            if (protectedBlock == nullptr) continue;
+            const auto blockIt = ctx.blockIndex.find(protectedBlock);
+            if (blockIt == ctx.blockIndex.end()) {
+                reason = "exception region protected block not indexed";
+                return;
+            }
+            VmExceptionRegionEntry entry;
+            entry.handlerBlock  = handlerIt->second;
+            entry.caughtTypeIdx = caughtTypeIdx;
+            entry.exceptionReg  = static_cast<uint16_t>(region.exceptionValue.id.value);
+            entry.blockIdx      = blockIt->second;
+            ctx.observeReg(entry.exceptionReg);
+            // 该块的边拷贝（edges 中 protectedBlock 匹配的项）。
+            for (const auto& edge : region.edges) {
+                if (edge.protectedBlock != protectedBlock) continue;
+                for (const auto& copy : edge.copies) {
+                    uint16_t src;
+                    // 异常边拷贝的 undef 源（handler 参数在该帧未定义）容忍为 NULL。
+                    if (!ctx.resolveOperand(copy.source, src, reason, true)) return;
+                    const uint16_t dest = static_cast<uint16_t>(copy.dest.id.value);
+                    ctx.observeReg(dest);
+                    entry.copies.emplace_back(dest, src);
+                }
+                break;
+            }
+            const uint16_t entryIdx = static_cast<uint16_t>(prog.excRegions.size());
+            prog.excRegions.push_back(std::move(entry));
+            prog.blockExcRegions[entry.blockIdx].push_back(entryIdx);
+        }
+    }
 }
 
 bool encodeBranch(EncoderState& ctx, const RegBlock* srcBlock, const RegBranchTerminator& term,
@@ -1178,15 +1382,13 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     auto prog = std::make_unique<VmProgram>();
     EncoderState ctx(fn, instance);
 
-    // 异常区域的隐式边（handler 参数）MVP 不支持：编码器既不编码 exception edges
-    // 也不抛 Java 异常，含 try/catch 的方法整体 fail-closed。
-    if (!fn.exceptionRegions.empty()) {
-        reason = "exception regions not supported in MVP";
-        return nullptr;
-    }
-
     if (!indexBlocks(ctx, reason)) return nullptr;
     ctx.planSyntheticEdges();
+    // 异常区域（Phase 2.C）：先于 layoutBlocks 收集（边拷贝可能 intern 新常量槽，
+    // 常量槽分配独立于字节流布局，顺序无影响；但必须保证区域表在 layoutBlocks
+    // 之后仍有效——区域表只存块索引/寄存器索引，不依赖字节流偏移）。
+    encodeExceptionRegions(ctx, *prog, reason);
+    if (!reason.empty()) return nullptr;
     if (!layoutBlocks(ctx, *prog, reason)) return nullptr;
 
     // 填充常量池：constSlotBySignature 存 (签名 → 槽索引)，签名含 type+intBits+floatValue。
@@ -1222,6 +1424,10 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     // Allocate 分配表 + array.length 标记（Phase 2.A）。
     prog->allocRefs      = std::move(ctx.allocRefs);
     prog->hasArrayLength = ctx.hasArrayLength;
+    // Intrinsic 表（Phase 2.D 泛化）。
+    prog->intrinsics = std::move(ctx.intrinsicRefs);
+    // String LDC 常量槽（Phase 2.E）。
+    prog->stringLiterals = std::move(ctx.stringLiterals);
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;
