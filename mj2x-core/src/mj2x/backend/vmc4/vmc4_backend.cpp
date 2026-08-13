@@ -485,9 +485,10 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                             ? std::string("0")
                             : ("mj2x_vm_alloc_table_" + methodTag));
             line.append(", ");
-            line.append(program.hasArrayLength
-                            ? ("mj2x_vm_array_length_table_" + methodTag)
-                            : std::string("0"));
+            // Intrinsic 表（Phase 2.D 泛化：array.length/cmp.nan_*/instanceof/monitor）。
+            line.append(program.intrinsics.empty()
+                            ? std::string("0")
+                            : ("mj2x_vm_intrinsic_table_" + methodTag));
             line.append(");");
             out.emitLine(line.build());
         }

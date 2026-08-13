@@ -188,6 +188,11 @@ struct EncoderState
     std::unordered_map<std::string, uint16_t>                allocByKey;
     bool                                                     hasArrayLength = false;
 
+    /// Intrinsic 表（Phase 2.D 泛化）：按 name 去重（array.length/cmp.nan_*/
+    /// instanceof:<desc>/monitor.enter/exit），字节流存 siteIdx。
+    std::vector<VmIntrinsicRef>                              intrinsicRefs;
+    std::unordered_map<std::string, uint16_t>                intrinsicByKey;
+
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
     uint16_t numInputs = 0;
@@ -441,6 +446,21 @@ struct EncoderState
         const uint16_t idx = static_cast<uint16_t>(allocRefs.size());
         allocByKey[key] = idx;
         allocRefs.push_back(std::move(aref));
+        return idx;
+    }
+
+    /// @brief 为一个 Intrinsic 调用点分配/复用索引（Phase 2.D）。
+    ///
+    /// @details
+    /// 按 name 去重（同 intrinsic 共享 helper；instanceof:<desc> 的 desc 在 name 里，
+    /// 不同 desc 是不同 intrinsic）。
+    uint16_t internIntrinsicRef(VmIntrinsicRef iref)
+    {
+        auto it = intrinsicByKey.find(iref.name);
+        if (it != intrinsicByKey.end()) return it->second;
+        const uint16_t idx = static_cast<uint16_t>(intrinsicRefs.size());
+        intrinsicByKey[iref.name] = idx;
+        intrinsicRefs.push_back(std::move(iref));
         return idx;
     }
 
@@ -1064,34 +1084,85 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
     return true;
 }
 
-/// @brief 编码 Intrinsic 指令（Phase 2.A：仅 array.length）。
+/// @brief 编码 Intrinsic 指令（Phase 2.D 泛化）。
 ///
 /// @details
-/// array.length → GetArrayLength，单一无状态 helper（siteIdx 恒为 0）。其余 intrinsic
-/// （monitor.enter/instanceof 等）暂 fail-closed（Phase 2.D）。
+/// SSA 产生的 intrinsic 名称（ssa_builder lower*）：
+///   - array.length：GetArrayLength（null → NPE）
+///   - cmp.nan_greater/nan_less：FCMPG/FCMPL/LCMP 三值比较（-1/0/1），纯计算
+///     （浮点 NaN-aware：nan_greater 取 1，nan_less 取 -1）
+///   - instanceof:<内部名>：IsInstanceOf（null → false）
+///   - monitor.enter/exit：MonitorEnter/MonitorExit（null → NPE）
+/// 其余（indy:<idx> 等）保持 fail-closed。所有 intrinsic 进 intrinsics 表
+/// （按 name 去重），字节流只存 siteIdx。
 ///
-/// 字节流：[Intrinsic][siteIdx:u16=0][arrayIdx:u16][dest:u16][argc:u8=0]
-bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+/// 字节流：[Intrinsic][siteIdx:u16][recv:u16=0][dest:u16][argc:u8][args...]
+/// - args 是操作数寄存器列表（array.length 的数组 / cmp 的双操作数 / instanceof
+///   与 monitor 的引用）
+bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
+                     std::string& reason)
 {
-    if (ins.intrinsicName != "array.length") {
-        reason = "Intrinsic not supported yet (only array.length): " + ins.intrinsicName;
+    VmIntrinsicRef iref;
+    iref.name = ins.intrinsicName;
+
+    if (ins.intrinsicName == "array.length") {
+        iref.arg0Kind = VmJniKind::Ref;
+        iref.retKind  = VmJniKind::Int32;
+        iref.hasArgs  = !ins.args.empty();
+    } else if (ins.intrinsicName == "cmp.nan_greater" ||
+               ins.intrinsicName == "cmp.nan_less") {
+        if (ins.args.size() < 2) {
+            reason = "cmp.nan_* intrinsic requires two operands";
+            return false;
+        }
+        iref.arg0Kind = toVmJniKind(ins.args[0].type);   // Float/Double/Int64
+        iref.retKind  = VmJniKind::Int32;
+        iref.hasArgs  = true;
+    } else if (ins.intrinsicName.rfind("instanceof:", 0) == 0) {
+        if (ins.args.empty()) {
+            reason = "instanceof intrinsic missing operand";
+            return false;
+        }
+        iref.arg0Kind = VmJniKind::Ref;
+        iref.retKind  = VmJniKind::Int32;
+        iref.hasArgs  = true;
+    } else if (ins.intrinsicName == "monitor.enter" || ins.intrinsicName == "monitor.exit") {
+        if (ins.args.empty()) {
+            reason = "monitor intrinsic missing operand";
+            return false;
+        }
+        iref.arg0Kind = VmJniKind::Ref;
+        iref.retKind  = VmJniKind::Void;
+        iref.hasArgs  = true;
+    } else {
+        reason = "Intrinsic not supported yet: " + ins.intrinsicName;
         return false;
     }
-    if (ins.args.empty()) {
-        reason = "array.length: missing array operand";
+
+    const uint16_t siteIdx = ctx.internIntrinsicRef(std::move(iref));
+
+    // 操作数寄存器列表（变长）。argc 上限 8（intrinsic 操作数少，防御上限）。
+    if (ins.args.size() > 8) {
+        reason = "Intrinsic: too many arguments (>8)";
         return false;
     }
-    uint16_t arrayIdx;
-    if (!ctx.resolveOperand(ins.args[0], arrayIdx, reason)) return false;
+    std::vector<uint16_t> argIdxs;
+    argIdxs.reserve(ins.args.size());
+    for (const auto& a : ins.args) {
+        uint16_t ai;
+        if (!ctx.resolveOperand(a, ai, reason)) return false;
+        argIdxs.push_back(ai);
+    }
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
-    ctx.hasArrayLength = true;
+    if (ins.intrinsicName == "array.length") ctx.hasArrayLength = true;
 
     emitOpcode(ctx, VmOpcode::Intrinsic, prog.bytecodes);
-    emitU16(prog.bytecodes, 0);   // siteIdx 恒为 0（单一 array.length helper）
-    emitU16(prog.bytecodes, arrayIdx);
+    emitU16(prog.bytecodes, siteIdx);
+    emitU16(prog.bytecodes, 0);   // recv unused（操作数全在 args）
     emitU16(prog.bytecodes, dest);
-    emitU8(prog.bytecodes, 0);    // argc = 0
+    emitU8(prog.bytecodes, static_cast<uint8_t>(argIdxs.size()));
+    for (uint16_t ai : argIdxs) emitU16(prog.bytecodes, ai);
     return true;
 }
 
@@ -1319,6 +1390,8 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     // Allocate 分配表 + array.length 标记（Phase 2.A）。
     prog->allocRefs      = std::move(ctx.allocRefs);
     prog->hasArrayLength = ctx.hasArrayLength;
+    // Intrinsic 表（Phase 2.D 泛化）。
+    prog->intrinsics = std::move(ctx.intrinsicRefs);
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;

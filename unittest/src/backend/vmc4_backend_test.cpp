@@ -934,6 +934,8 @@ TEST(Vmc4BackendTest, FailClosedOnBarrier)
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
+    // Phase 2.D 起 MONITORENTER/EXIT（SSA Intrinsic("monitor.enter/exit")）不再
+    // fail-closed：编码为 Intrinsic 表条目，发射 MonitorEnter/MonitorExit helper。
     auto prog = encodeMethod("sync", "(Ljava/lang/Object;)I",
                              {
                                  new VarInsnNode(Opcodes::ALOAD, 0),
@@ -944,8 +946,15 @@ TEST(Vmc4BackendTest, FailClosedOnBarrier)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              1, 1, instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    // monitor.enter/exit 各一条 intrinsic（按 name 去重）。
+    ASSERT_EQ(prog->intrinsics.size(), 2u);
+    EXPECT_EQ(prog->intrinsics[0].name, "monitor.enter");
+    EXPECT_EQ(prog->intrinsics[1].name, "monitor.exit");
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "sync1");
+    EXPECT_NE(src.find("MonitorEnter(env, _o)"), std::string::npos) << src;
+    EXPECT_NE(src.find("MonitorExit(env, _o)"), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_intrinsic_table_sync1"), std::string::npos) << src;
 }
 
 // P2-13：Throw（ATHROW，Phase 2.C 起支持）。

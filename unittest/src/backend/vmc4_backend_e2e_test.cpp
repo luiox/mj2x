@@ -23,9 +23,12 @@
 
 #include "jdk_fixture.hpp"
 #include "jdk_finder/jdk_finder.hpp"
+#include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
+#include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
+#include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "test_helper.hpp"
 
@@ -254,7 +257,156 @@ protected:
         }
     }
 
+protected:
+    /// 双后端对拍（Phase 2.D）：同一 Java 方法集分别经 Vmc4Backend / RegCBackend
+    /// 虚拟化，各自编译 DLL 跑 Driver，输出必须与 baseline 完全一致。
+    void runDualBackendCase(const std::string& className, const std::string& javaSource,
+                            const std::vector<JavaCheck>& checks,
+                            mj2x::VmDispatcherKind dispatcherKind)
+    {
+        const std::string suffix = std::string("_") + GetParam().tag;
+        fs::path          dir    = caseDir(className + suffix);
+        std::error_code   ec;
+        fs::create_directories(dir, ec);
+
+        fs::path javaFile = dir / (className + ".java");
+        {
+            std::ofstream out(javaFile);
+            out << javaSource;
+        }
+        auto javac = runBat({q(tc_.javac) + " -d " + q(dir) + " " + q(javaFile)});
+        ASSERT_EQ(javac.exitCode, 0) << javac.out;
+
+        fs::path driverFile = dir / "Driver.java";
+        {
+            std::ofstream out(driverFile);
+            out << buildDriver(checks);
+        }
+        auto driverCompile =
+            runBat({q(tc_.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(driverFile)});
+        ASSERT_EQ(driverCompile.exitCode, 0) << driverCompile.out;
+
+        auto baselineRun = runBat({q(tc_.java) + " -cp " + q(dir) + " Driver"});
+        ASSERT_EQ(baselineRun.exitCode, 0) << baselineRun.out;
+        auto baseline = splitLines(baselineRun.out);
+
+        fs::path inClass = dir / (className + ".class");
+
+        // ---- VMC4 侧 ----
+        std::vector<std::string> vmc4Out;
+        runProtected(className, inClass, dir, "vmc4", dispatcherKind, vmc4Out);
+        // ---- RegC 侧 ----
+        std::vector<std::string> regcOut;
+        runProtected(className, inClass, dir, "regc", dispatcherKind, regcOut);
+
+        for (const auto& [label, actual] : {std::pair{"vmc4", vmc4Out},
+                                            std::pair{"regc", regcOut}}) {
+            ASSERT_EQ(baseline.size(), actual.size())
+                << label << " baseline:\n" << joinLines(baseline) << label << ":\n"
+                << joinLines(actual);
+            for (size_t i = 0; i < baseline.size(); ++i) {
+                EXPECT_EQ(baseline[i], actual[i]) << label << " line " << i;
+            }
+        }
+    }
+
 private:
+
+    /// 单后端跑一轮：pipeline（后端由 backendName 选择）→ 编译 DLL → Driver 输出。
+    /// 注意：inClass 每次跑前都是原始字节码（对拍用独立输出名，不覆盖输入）。
+    void runProtected(const std::string& className, const fs::path& inClass, const fs::path& dir,
+                      const std::string& backendName, mj2x::VmDispatcherKind dispatcherKind,
+                      std::vector<std::string>& out)
+    {
+        std::error_code ec;
+        fs::path outClass = dir / (className + "_" + backendName + ".class");
+        fs::path cFile    = dir / (className + "_" + backendName + ".c");
+
+        mj2x::PipelineConfig config;
+        config.inputPath  = inClass.string();
+        config.outputPath = outClass.string();
+        mj2x::Pipeline pipeline(std::move(config));
+        if (backendName == "regc") {
+            auto backend = std::make_unique<mj2x::RegCBackend>();
+            backend->setOutputPath(cFile.string());
+            pipeline.registerBackend(std::move(backend));
+            pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
+            pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
+            pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+            pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+        } else {
+            auto backend = std::make_unique<mj2x::Vmc4Backend>();
+            backend->setOutputPath(cFile.string());
+            mj2x::Vmc4Options opts;
+            opts.dispatcherKind = dispatcherKind;
+            opts.driftVariants  = 2;
+            opts.driftPeriod    = 16;
+            backend->setOptions(opts);
+            pipeline.registerBackend(std::move(backend));
+            pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+            pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+        }
+        ASSERT_EQ(pipeline.run(), 0) << backendName;
+        ASSERT_TRUE(fileExists(cFile)) << backendName;
+
+        // 编译 DLL（VMC4 自包含 /TC；RegC 需 CRT + runtime 目标文件）。
+        fs::path dll    = dir / (className + "_" + backendName + ".dll");
+        fs::path objDir = dir / ("obj_" + backendName);
+        fs::create_directories(objDir, ec);
+        std::vector<std::string> compileLines;
+        compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
+        fs::path crtSrc     = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
+        fs::path runtimeSrc = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
+        if (backendName == "regc") {
+            fs::path generatedObj = objDir / "generated.obj";
+            compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(generatedObj) + " " +
+                                   q(cFile) + " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) +
+                                   " /I" + q(tc_.jdkIncludeWin));
+            std::vector<fs::path> objs;
+            auto compileCrt = [&](const std::string& rel, const std::string& objName) {
+                fs::path src = crtSrc / rel;
+                fs::path obj = objDir / objName;
+                objs.push_back(obj);
+                compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(src) +
+                                       " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                                       q(tc_.jdkIncludeWin));
+            };
+            auto compileRuntime = [&](const std::string& rel, const std::string& objName) {
+                fs::path src = runtimeSrc / rel;
+                fs::path obj = objDir / objName;
+                objs.push_back(obj);
+                compileLines.push_back("cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) + " /I" +
+                                       q(runtimeSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                                       q(tc_.jdkIncludeWin));
+            };
+            compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+            compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
+            compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
+            compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+            compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
+            compileRuntime("intrinsic/intrinsic_math.cpp", "intrinsic_math.obj");
+            compileRuntime("intrinsic/intrinsic_random.cpp", "intrinsic_random.obj");
+            std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
+            for (const auto& obj : objs) linkLine += " " + q(obj);
+            compileLines.push_back(linkLine);
+        } else {
+            fs::path obj = objDir / (className + ".obj");
+            compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(cFile) +
+                                   " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+            compileLines.push_back("link /nologo /DLL /OUT:" + q(dll) + " " + q(obj));
+        }
+        auto cl = runBat(compileLines);
+        ASSERT_EQ(cl.exitCode, 0) << backendName << " compile:\n" << cl.out;
+        ASSERT_TRUE(fileExists(dll)) << backendName;
+
+        auto protectedRun = runBat({
+            "set \"MORPHER_DLL=" + dll.string() + "\"",
+            q(tc_.java) + " -cp " + q(dir) + " Driver",
+        });
+        ASSERT_EQ(protectedRun.exitCode, 0) << backendName << " run:\n" << protectedRun.out;
+        out = splitLines(protectedRun.out);
+    }
+
     static std::string javaString(const std::string& text)
     {
         std::ostringstream out;
@@ -724,6 +876,67 @@ TEST_P(Vmc4BackendE2E, ExceptionRoundTrip)
                 {"nestedOk", "Vmc4NativeExc.nestedCatch(10, 2)"},
             },
             5, GetParam().kind);
+}
+
+// Phase 2.D：Intrinsic 子集 round-trip。
+// isString/isNullInstanceOf：instanceof:<desc>（null → false，IsInstanceOf 懒缓存）；
+// longCmp：LCMP（cmp.nan_less 整型路径，三值 -1/0/1）；
+// floatCmpG：FCMPG（cmp.nan_greater 浮点 NaN-aware：NaN → 1）；
+// syncInc：synchronized 块（monitor.enter/exit + 异常表 catch-all + athrow 重抛组合）。
+TEST_P(Vmc4BackendE2E, IntrinsicAndMonitorRoundTrip)
+{
+    runCase("Vmc4NativeIntr",
+            "public class Vmc4NativeIntr {\n"
+            "  public static int isString(Object o) { return o instanceof String ? 1 : 0; }\n"
+            "  public static int isIntr(Object o) { return o instanceof Vmc4NativeIntr ? 1 : 0; }\n"
+            "  public static int longCmp(long a, long b) { return a > b ? 1 : (a < b ? -1 : 0); }\n"
+            "  public static int floatCmpG(float a, float b) { return a > b ? 1 : (a < b ? -1 : 0); }\n"
+            "  public static int syncInc(Object lock, int x) {\n"
+            "    synchronized (lock) { return x + 1; }\n"
+            "  }\n"
+            "}\n",
+            {
+                {"isStringOk", "Vmc4NativeIntr.isString(\"x\")"},
+                {"isStringNot", "Vmc4NativeIntr.isString(Integer.valueOf(5))"},
+                {"isIntrNull", "Vmc4NativeIntr.isIntr(null)"},
+                {"isIntrSelf", "Vmc4NativeIntr.isIntr(new Vmc4NativeIntr())"},
+                {"longCmpGt", "Vmc4NativeIntr.longCmp(5, 3)"},
+                {"longCmpLt", "Vmc4NativeIntr.longCmp(3, 5)"},
+                {"longCmpEq", "Vmc4NativeIntr.longCmp(4, 4)"},
+                {"floatCmpGGt", "Vmc4NativeIntr.floatCmpG(1.5f, 1.0f)"},
+                {"floatCmpGLt", "Vmc4NativeIntr.floatCmpG(1.0f, 1.5f)"},
+                {"floatCmpGNaN", "Vmc4NativeIntr.floatCmpG(Float.NaN, 1.0f)"},
+                {"syncInc", "Vmc4NativeIntr.syncInc(new Object(), 5)"},
+            },
+            5, GetParam().kind);
+}
+
+// Phase 2.D：双后端对拍——同一 Math/wrapper 方法集分别经 VMC4（JNI Call 路径）
+// 与 RegC（intrinsic helper 路径）虚拟化，输出必须与 baseline 完全一致。
+// abs/sqrt/max/min 走 invokestatic（VMC4 per-callsite JNI helper ↔ RegC intrinsic
+// registry 特化 helper）；parseInt 走 Integer.parseInt 静态调用。
+TEST_P(Vmc4BackendE2E, MathIntrinsicDualBackendParity)
+{
+    runDualBackendCase("Vmc4NativeMath",
+                       "public class Vmc4NativeMath {\n"
+                       "  public static int absInt(int x) { return Math.abs(x); }\n"
+                       "  public static long absLong(long x) { return Math.abs(x); }\n"
+                       "  public static double absDouble(double x) { return Math.abs(x); }\n"
+                       "  public static double sqrt(double x) { return Math.sqrt(x); }\n"
+                       "  public static int maxInt(int a, int b) { return Math.max(a, b); }\n"
+                       "  public static int minInt(int a, int b) { return Math.min(a, b); }\n"
+                       "  public static int parseInt(String s) { return Integer.parseInt(s); }\n"
+                       "}\n",
+                       {
+                           {"absIntNeg", "Vmc4NativeMath.absInt(-42)"},
+                           {"absLongMin", "Vmc4NativeMath.absLong(-9223372036854775807L - 1)"},
+                           {"absDoubleNeg", "Vmc4NativeMath.absDouble(-3.25)"},
+                           {"sqrt", "Vmc4NativeMath.sqrt(2.0)"},
+                           {"maxInt", "Vmc4NativeMath.maxInt(7, 3)"},
+                           {"minInt", "Vmc4NativeMath.minInt(7, 3)"},
+                           {"parseInt", "Vmc4NativeMath.parseInt(\"12345\")"},
+                       },
+                       GetParam().kind);
 }
 
 }   // namespace

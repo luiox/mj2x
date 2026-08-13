@@ -305,9 +305,9 @@ const char* kHandlerAllocate =
     "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
     "            alloc_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
 
-/// INTRINSIC（Phase 2.A：仅 array.length）：单一 helper（siteIdx 恒 0），GetArrayLength。
-/// recv=arrayIdx，dest=length，argc 恒为 0（for 循环不执行）。其余 intrinsic 在编码期
-/// fail-closed，不会到达此 handler。
+/// INTRINSIC（Phase 2.D 泛化）：经函数指针表分派到 per-intrinsic helper。
+/// recv=0，操作数全在 argBuf[]（array.length 的数组 / cmp 双操作数 / instanceof
+/// 与 monitor 的引用），dest=结果槽（void 的 monitor 不写）。siteIdx 按 name 去重。
 const char* kHandlerIntrinsic =
     "            unsigned int siteIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
     "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
@@ -315,7 +315,7 @@ const char* kHandlerIntrinsic =
     "            unsigned char argc = code[pc++];\n"
     "            unsigned int argBuf[32];\n"
     "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
-    "            array_length_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
+    "            intrinsic_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
 
 /// THROW（Phase 2.C）：athrow。mj2x_vm_throw 设 pending exception（null → NPE），
 /// 随后 goto 异常检查点 mj2x_vm_exc（每个 dispatcher 无条件提供）——有异常区域则
@@ -649,7 +649,7 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
         "unsigned int pc; unsigned int status; JNIEnv* env; const mj2x_vm_call_fn* call_table; "
         "const mj2x_vm_call_fn* load_field_table; const mj2x_vm_call_fn* store_field_table; "
         "const mj2x_vm_call_fn* array_load_table; const mj2x_vm_call_fn* array_store_table; "
-        "const mj2x_vm_call_fn* alloc_table; const mj2x_vm_call_fn* array_length_table; "
+        "const mj2x_vm_call_fn* alloc_table; const mj2x_vm_call_fn* intrinsic_table; "
         "mj2x_vm_slot* regs; mj2x_vm_slot* retval; }};", ctxType));
     out.emitLine(format_std("typedef struct {} {};", ctxType, ctxType));
     out.add_func(format_std("static void mj2x_vm_dispatch_body_{}({}* ctx)", tag, ctxType),
@@ -665,7 +665,7 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
         f.emitLine("const mj2x_vm_call_fn* array_load_table = ctx->array_load_table;");
         f.emitLine("const mj2x_vm_call_fn* array_store_table = ctx->array_store_table;");
         f.emitLine("const mj2x_vm_call_fn* alloc_table = ctx->alloc_table;");
-        f.emitLine("const mj2x_vm_call_fn* array_length_table = ctx->array_length_table;");
+        f.emitLine("const mj2x_vm_call_fn* intrinsic_table = ctx->intrinsic_table;");
         f.emitLine("mj2x_vm_slot* regs = ctx->regs;");
         f.emitLine("mj2x_vm_slot* retval = ctx->retval;");
         f.emitLine("(void)targets;");
@@ -676,7 +676,7 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
         f.emitLine("(void)array_load_table;");
         f.emitLine("(void)array_store_table;");
         f.emitLine("(void)alloc_table;");
-        f.emitLine("(void)array_length_table;");
+        f.emitLine("(void)intrinsic_table;");
         emitOpcodeFetch(f, instance, tag);
         f.emitLine("switch (opcode) {");
         {
@@ -721,7 +721,7 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("_ctx.array_load_table = array_load_table;");
     out.emitLine("_ctx.array_store_table = array_store_table;");
     out.emitLine("_ctx.alloc_table = alloc_table;");
-    out.emitLine("_ctx.array_length_table = array_length_table;");
+    out.emitLine("_ctx.intrinsic_table = intrinsic_table;");
     out.emitLine("_ctx.regs = slots;");
     out.emitLine("_ctx.retval = retval;");
     out.emitLine(format_std("{}* ctx = &_ctx;", ctxType));
@@ -1609,26 +1609,87 @@ void emitAllocInfrastructure(CSourceStream& out, const VmProgram& program, const
     out.emitBlankLine();
 }
 
-/// 发射 array.length helper + 1-entry 分派表（hasArrayLength 时）。
-/// 单一无状态 helper：GetArrayLength(array) → regs[dest].i，null 抛 NPE。
-void emitArrayLengthInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
+/// 发射 Intrinsic 的 per-intrinsic helper + 分派表（intrinsics 非空时，Phase 2.D）。
+///
+/// @details
+/// 按 name 分派语义（SSA 产生的 intrinsic 全集）：
+///   - array.length：GetArrayLength（null → NPE）
+///   - cmp.nan_greater/nan_less：三值比较 (lhs>rhs)-(lhs<rhs)，浮点 NaN-aware
+///     （nan_greater → 1，nan_less → -1），纯计算无 JNI
+///   - instanceof:<desc>：懒缓存 class + IsInstanceOf（null → false）
+///   - monitor.enter/exit：MonitorEnter/MonitorExit（null → NPE）
+/// helper 签名复用 mj2x_vm_call_fn。
+void emitIntrinsicInfrastructure(CSourceStream& out, const VmProgram& program,
+                                 const std::string& tag)
 {
-    if (!program.hasArrayLength) return;
-    out.add_func(format_std("static void mj2x_vm_arr_length_{}_0(JNIEnv* env, mj2x_vm_slot* regs, "
-                            "unsigned int recv, unsigned int* argIdx, "
-                            "unsigned char argc, unsigned int dest)", tag),
-                 [&](CSourceStream& fnc) {
-        fnc.emitLine("(void)argc; (void)argIdx;  /* array.length 无参数 */");
-        fnc.emitLine("jobject _arr = (jobject)regs[recv].ref;");
-        fnc.emitLine("if (_arr == NULL) { mj2x_vm_throw_npe(env, \"array.length\"); return; }");
-        fnc.emitLine("regs[dest].i = (int64_t)(*env)->GetArrayLength(env, _arr);");
-    });
-    out.emitBlankLine();
-    out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_array_length_table_{}[1] = {{",
-                            tag));
+    if (program.intrinsics.empty()) return;
+    for (size_t i = 0; i < program.intrinsics.size(); ++i) {
+        const auto&        iref   = program.intrinsics[i];
+        const std::string  helper = format_std("mj2x_vm_intrinsic_{}_{}", tag, i);
+        out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
+                                "unsigned int recv, unsigned int* argIdx, "
+                                "unsigned char argc, unsigned int dest)", helper),
+                     [&](CSourceStream& f) {
+            f.emitLine("(void)recv;  /* intrinsic 无 receiver（操作数全在 argBuf） */");
+            if (!iref.hasArgs) f.emitLine("(void)argIdx; (void)argc;");
+            if (iref.name == "array.length") {
+                f.emitLine("(void)argc; (void)argIdx;  /* array.length 无参数 */");
+                f.emitLine("jobject _arr = (jobject)regs[argIdx[0]].ref;");
+                f.emitLine("if (_arr == NULL) { mj2x_vm_throw_npe(env, \"array.length\"); return; }");
+                f.emitLine("regs[dest].i = (int64_t)(*env)->GetArrayLength(env, _arr);");
+            } else if (iref.name == "cmp.nan_greater" || iref.name == "cmp.nan_less") {
+                const bool nanGreater = iref.name == "cmp.nan_greater";
+                f.emitLine("(void)env;  /* 纯计算，无 JNI */");
+                if (iref.arg0Kind == VmJniKind::Float || iref.arg0Kind == VmJniKind::Double) {
+                    // 浮点：任一 NaN → nanGreater ? 1 : -1；否则三值比较。
+                    f.emitLine("double _a = regs[argIdx[0]].f, _b = regs[argIdx[1]].f;");
+                    f.emitLine(format_std(
+                        "regs[dest].i = (isnan(_a) || isnan(_b)) ? {} : (int64_t)((_a > _b) - (_a < _b));",
+                        nanGreater ? "1" : "-1"));
+                } else {
+                    // 整型（LCMP）：无 NaN，直接三值比较。
+                    f.emitLine("int64_t _a = regs[argIdx[0]].i, _b = regs[argIdx[1]].i;");
+                    f.emitLine("regs[dest].i = (_a > _b) - (_a < _b);");
+                }
+            } else if (iref.name.rfind("instanceof:", 0) == 0) {
+                const std::string typeName = iref.name.substr(std::string("instanceof:").size());
+                f.emitLine("(void)argc;");
+                // null instanceof T → false（JVM 语义，不抛异常）。
+                f.emitLine("if (regs[argIdx[0]].ref == NULL) { regs[dest].i = 0; return; }");
+                f.emitLine("static jclass _cls = NULL;");
+                f.emitLine("if (_cls == NULL) {");
+                {
+                    CSourceStream::IndentGuard g(f);
+                    f.emitLine(format_std("jclass _local = (*env)->FindClass(env, {});",
+                                          codegen::cStringLiteral(typeName)));
+                    f.emitLine("if (_local == NULL) return;  /* pending exception */");
+                    f.emitLine("_cls = (*env)->NewGlobalRef(env, _local);");
+                    f.emitLine("(*env)->DeleteLocalRef(env, _local);");
+                }
+                f.emitLine("}");
+                f.emitLine("regs[dest].i = (*env)->IsInstanceOf(env, (jobject)regs[argIdx[0]].ref, "
+                           "_cls) ? 1 : 0;");
+            } else if (iref.name == "monitor.enter" || iref.name == "monitor.exit") {
+                const bool isEnter = iref.name == "monitor.enter";
+                f.emitLine("(void)argc; (void)dest;  /* monitor 无结果 */");
+                f.emitLine("jobject _o = (jobject)regs[argIdx[0]].ref;");
+                f.emitLine("if (_o == NULL) { mj2x_vm_throw_npe(env, \"monitor\"); return; }");
+                f.emitLine(isEnter ? "(*env)->MonitorEnter(env, _o);"
+                                   : "(*env)->MonitorExit(env, _o);");
+            } else {
+                // 编码器已 fail-closed，理论上不可达（防御）。
+                f.emitLine("(void)argIdx; (void)argc; (void)dest; (void)env;");
+            }
+        });
+        out.emitBlankLine();
+    }
+    out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_intrinsic_table_{}[{}] = {{",
+                            tag, program.intrinsics.size()));
     {
         CSourceStream::IndentGuard g(out);
-        out.emitLine(format_std("mj2x_vm_arr_length_{}_0,", tag));
+        for (size_t i = 0; i < program.intrinsics.size(); ++i) {
+            out.emitLine(format_std("mj2x_vm_intrinsic_{}_{},", tag, i));
+        }
     }
     out.emitLine("};");
     out.emitBlankLine();
@@ -1827,12 +1888,13 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         emitArrayInfrastructure(out, program, tag);
     }
 
-    // Allocate 基础设施（allocRefs 非空时）+ array.length（hasArrayLength 时）。
+    // Allocate 基础设施（allocRefs 非空时）+ Intrinsic 表（intrinsics 非空时，Phase 2.D
+    // 泛化：array.length/cmp.nan_*/instanceof/monitor 全部经 intrinsic_table 分派）。
     if (!program.allocRefs.empty()) {
         emitAllocInfrastructure(out, program, tag);
     }
-    if (program.hasArrayLength) {
-        emitArrayLengthInfrastructure(out, program, tag);
+    if (!program.intrinsics.empty()) {
+        emitIntrinsicInfrastructure(out, program, tag);
     }
 
     // --- 解释器入口函数（按 dispatcherKind 选择形态）---
@@ -1843,7 +1905,7 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
                             "const mj2x_vm_call_fn* array_load_table, "
                             "const mj2x_vm_call_fn* array_store_table, "
                             "const mj2x_vm_call_fn* alloc_table, "
-                            "const mj2x_vm_call_fn* array_length_table)", funcName),
+                            "const mj2x_vm_call_fn* intrinsic_table)", funcName),
                  [&](CSourceStream& f) {
         f.emitLine("(void)env;");
         f.emitLine("(void)retval;");
@@ -1853,7 +1915,7 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         f.emitLine("(void)array_load_table;");
         f.emitLine("(void)array_store_table;");
         f.emitLine("(void)alloc_table;");
-        f.emitLine("(void)array_length_table;");
+        f.emitLine("(void)intrinsic_table;");
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
             emitSwitchDispatcher(f, program, instance, progName, targetsName, tag);

@@ -273,6 +273,21 @@ struct VmAllocRef
     std::string typeDesc;   ///< 类内部名 / 数组描述符
 };
 
+/// @brief Intrinsic 引用：一个 Intrinsic 调用点的静态信息（Phase 2.D 泛化）。
+///
+/// @details
+/// SSA 产生的 intrinsic 名称：array.length、cmp.nan_greater/nan_less（FCMPG/FCMPL
+/// 三值比较）、instanceof:<内部名>、monitor.enter/exit。Math/wrapper 等方法是普通
+/// Call（invokestatic），不走此表。arg0Kind 记录首个参数类别（浮点比较/引用操作
+/// 需要区分槽位），retKind 为结果类别。去重按 name。
+struct VmIntrinsicRef
+{
+    std::string name;                          ///< intrinsic 名称（含 instanceof: 前缀）
+    VmJniKind   arg0Kind = VmJniKind::Int32;   ///< 参数 0 类别（Float/Double/Int64/Ref）
+    VmJniKind   retKind  = VmJniKind::Int32;   ///< 结果类别
+    bool        hasArgs  = false;              ///< 是否有参数（防御空 args）
+};
+
 /// @brief 异常区域条目（Phase 2.C）：一个 (异常区域, 保护块) 对的编码产物。
 ///
 /// @details
@@ -308,6 +323,7 @@ struct VmProgram
     std::vector<VmArrayRef>      arrayStoreRefs; ///< ArrayStore 元素类型引用（Phase 2.A）
     std::vector<VmAllocRef>      allocRefs;      ///< Allocate 分配引用（Phase 2.A）
     bool                         hasArrayLength = false;   ///< 含 array.length intrinsic（Phase 2.A）
+    std::vector<VmIntrinsicRef>  intrinsics;     ///< Intrinsic 引用表（Phase 2.D，按 name 去重）
 
     /// 异常区域（Phase 2.C）：每 (region, 保护块) 一条；blockExcRegions 按块索引
     /// 给出活跃条目（异常表顺序），供解释器异常分派查表。
