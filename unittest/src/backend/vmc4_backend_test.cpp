@@ -535,7 +535,8 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
                           VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
                           VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
                           VmOpcode::LoadField, VmOpcode::StoreField,
-                          VmOpcode::ArrayLoad, VmOpcode::ArrayStore}) {
+                          VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
+                          VmOpcode::Allocate, VmOpcode::Intrinsic}) {
         bytes.push_back(instance.opcodeFor(op));
     }
     return bytes;
@@ -563,8 +564,8 @@ TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
 }
 
 // P2-2：映射是支持集上的双射（互不相同）+ handler 顺序是排列。
-// Phase 2.A 起支持集 = 15 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField
-// + ArrayLoad/ArrayStore）。
+// Phase 2.A 起支持集 = 17 语义（9 基础 + SuperInc/SuperDec + Call + LoadField/StoreField
+// + ArrayLoad/ArrayStore + Allocate/Intrinsic）。
 TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
 {
     Vmc4Options opts;
@@ -582,7 +583,7 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
     EXPECT_EQ(bytes[0], instance.haltByte());
 
     const auto& order = instance.handlerOrder();
-    EXPECT_EQ(order.size(), 15u) << "handler order covers the 15 supported opcodes";
+    EXPECT_EQ(order.size(), 17u) << "handler order covers the 17 supported opcodes";
     std::vector<VmOpcode> sortedOrder = order;
     std::sort(sortedOrder.begin(), sortedOrder.end(),
               [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
@@ -590,7 +591,8 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
                                       VmOpcode::Compare, VmOpcode::Convert, VmOpcode::Jump,
                                       VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
                                       VmOpcode::SuperDec, VmOpcode::LoadField, VmOpcode::StoreField,
-                                      VmOpcode::ArrayLoad, VmOpcode::ArrayStore, VmOpcode::Call};
+                                      VmOpcode::ArrayLoad, VmOpcode::ArrayStore, VmOpcode::Call,
+                                      VmOpcode::Allocate, VmOpcode::Intrinsic};
     EXPECT_EQ(sortedOrder, expected) << "handler order must be a permutation of the supported set";
 }
 
@@ -792,12 +794,13 @@ TEST(Vmc4BackendTest, EncodesCallInstruction)
     EXPECT_TRUE(prog->methodRefs[0].hasDest);
 }
 
-// P2-10：Allocate（NEW）。
-TEST(Vmc4BackendTest, FailClosedOnAllocate)
+// P2-10：Allocate（NEW，Phase 2.A）—— Object 分配不再 fail-closed，<init> 由独立 Call。
+TEST(Vmc4BackendTest, EncodesAllocateInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
+    // static Object make() { return new Object(); }
     auto prog = encodeMethod("make", "()Ljava/lang/Object;",
                              {
                                  new TypeInsnNode(Opcodes::NEW,
@@ -811,16 +814,22 @@ TEST(Vmc4BackendTest, FailClosedOnAllocate)
                                  new InsnNode(Opcodes::ARETURN),
                              },
                              2, 1, instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_EQ(prog->allocRefs.size(), 1u);
+    EXPECT_EQ(prog->allocRefs[0].kind, VmAllocKind::Object);
+    EXPECT_EQ(prog->allocRefs[0].typeDesc, "java/lang/Object");
+    // <init> 经独立 Call 调用（invokespecial）。
+    ASSERT_EQ(prog->methodRefs.size(), 1u);
+    EXPECT_EQ(prog->methodRefs[0].name, "<init>");
 }
 
-// P2-11：Intrinsic（ARRAYLENGTH → Intrinsic("array.length")）。
-TEST(Vmc4BackendTest, FailClosedOnIntrinsic)
+// P2-11：Intrinsic array.length（Phase 2.A）—— 不再 fail-closed。
+TEST(Vmc4BackendTest, EncodesArrayLengthIntrinsic)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
+    // static int len(int[] a) { return a.length; }
     auto prog = encodeMethod("len", "([I)I",
                              {
                                  new VarInsnNode(Opcodes::ALOAD, 0),
@@ -828,8 +837,8 @@ TEST(Vmc4BackendTest, FailClosedOnIntrinsic)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              1, 1, instance, reason);
-    EXPECT_EQ(prog, nullptr);
-    EXPECT_FALSE(reason.empty());
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_TRUE(prog->hasArrayLength);
 }
 
 // P2-12：Barrier（MONITORENTER）。
@@ -1284,6 +1293,8 @@ int operandLenForTest(VmOpcode op)
     case VmOpcode::StoreField: return 9;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=1) + valueIdx:u16
     case VmOpcode::ArrayLoad:  return 9;   // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=1) + indexIdx:u16
     case VmOpcode::ArrayStore: return 11;  // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=2) + indexIdx:u16 + valueIdx:u16
+    case VmOpcode::Allocate:  return 7;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8（Object=0；Array=1 +lenIdx）
+    case VmOpcode::Intrinsic: return 7;   // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=0)
     default:                  return 0;
     }
 }
@@ -1297,13 +1308,14 @@ bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>
     sawRotation = false;
     size_t pc = 0;
     std::map<uint8_t, uint8_t> firstRawByCanonical;   // canonical -> 首个 raw
-    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 Call + 2.A field/array）。
+    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 Call + 2.A field/array/alloc）。
     static const VmOpcode kAllOps[] = {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
                                        VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
                                        VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
                                        VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
                                        VmOpcode::LoadField, VmOpcode::StoreField,
-                                       VmOpcode::ArrayLoad, VmOpcode::ArrayStore};
+                                       VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
+                                       VmOpcode::Allocate, VmOpcode::Intrinsic};
     while (pc < bytes.size()) {
         const int d = inst.variantForPc(pc);
         variants.insert(d);

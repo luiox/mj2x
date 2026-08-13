@@ -254,6 +254,25 @@ struct VmArrayRef
     VmArrayElemKind elemKind = VmArrayElemKind::Int;   ///< 数组元素类型（决定 accessor）
 };
 
+/// @brief 分配形态（对应 JVM NEW/NEWARRAY/ANEWARRAY/MULTIANEWARRAY，Phase 2.A）。
+enum class VmAllocKind : uint8_t
+{
+    Object     = 0,   ///< NEW → AllocObject（<init> 由独立 Call 调用）
+    Array      = 1,   ///< NEWARRAY/ANEWARRAY → New<Type>Array / NewObjectArray
+    MultiArray = 2,   ///< MULTIANEWARRAY（Phase 2.A 暂 fail-closed，递归分配复杂）
+};
+
+/// @brief 分配引用：一个 Allocate 调用点的静态信息（Phase 2.A）。
+///
+/// @details
+/// typeDesc 是 JVM 类型描述符：对象为内部类名（如 "test/Box"），数组为数组描述符
+/// （如 "[I"/"[Ljava/lang/String;"）。去重按 (kind, typeDesc)。
+struct VmAllocRef
+{
+    VmAllocKind kind     = VmAllocKind::Object;
+    std::string typeDesc;   ///< 类内部名 / 数组描述符
+};
+
 /// @brief 一个方法的完整 VM 程序（编码产物）。
 ///
 /// @details
@@ -269,6 +288,8 @@ struct VmProgram
     std::vector<VmFieldRef>      storeFieldRefs; ///< StoreField 字段引用（Phase 2.A）
     std::vector<VmArrayRef>      arrayLoadRefs;  ///< ArrayLoad 元素类型引用（Phase 2.A）
     std::vector<VmArrayRef>      arrayStoreRefs; ///< ArrayStore 元素类型引用（Phase 2.A）
+    std::vector<VmAllocRef>      allocRefs;      ///< Allocate 分配引用（Phase 2.A）
+    bool                         hasArrayLength = false;   ///< 含 array.length intrinsic（Phase 2.A）
     uint16_t                     numInputs = 0;  ///< 方法参数占用的寄存器数
     uint16_t                     numRegs   = 0;  ///< 寄存器文件总大小
 };

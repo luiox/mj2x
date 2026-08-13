@@ -76,6 +76,8 @@ static const VmOpcode kAllOpcodes[] = {
     VmOpcode::StoreField,
     VmOpcode::ArrayLoad,
     VmOpcode::ArrayStore,
+    VmOpcode::Allocate,
+    VmOpcode::Intrinsic,
 };
 
 /// 某语义是否属于支持集。
@@ -271,7 +273,8 @@ void VmInstance::buildHandlerOrder()
                      VmOpcode::Compare, VmOpcode::Convert,   VmOpcode::Jump,
                      VmOpcode::Branch,  VmOpcode::Return,    VmOpcode::SuperInc,
                      VmOpcode::SuperDec, VmOpcode::Call,     VmOpcode::LoadField,
-                     VmOpcode::StoreField, VmOpcode::ArrayLoad, VmOpcode::ArrayStore};
+                     VmOpcode::StoreField, VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
+                     VmOpcode::Allocate, VmOpcode::Intrinsic};
     // 用独立种子段洗牌，避免与 opcode 映射的随机流耦合。
     SplitMix64 rng(instanceSeed_ ^ 0x9E3779B97F4A7C15ull);
     for (size_t i = handlerOrder_.size(); i > 1; --i) {

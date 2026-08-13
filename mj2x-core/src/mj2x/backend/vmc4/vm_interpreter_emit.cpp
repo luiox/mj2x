@@ -292,6 +292,29 @@ const char* kHandlerArrayStore =
     "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
     "            array_store_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
 
+/// ALLOCATE（Phase 2.A）：经函数指针表分派到 per-site alloc helper（Object/Array）。
+/// recv=0（分配无 receiver），argc = 维度数（Object=0, Array=1），dest=新对象/数组。
+const char* kHandlerAllocate =
+    "            unsigned int siteIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned char argc = code[pc++];\n"
+    "            unsigned int argBuf[32];\n"
+    "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
+    "            alloc_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
+
+/// INTRINSIC（Phase 2.A：仅 array.length）：单一 helper（siteIdx 恒 0），GetArrayLength。
+/// recv=arrayIdx，dest=length，argc 恒为 0（for 循环不执行）。其余 intrinsic 在编码期
+/// fail-closed，不会到达此 handler。
+const char* kHandlerIntrinsic =
+    "            unsigned int siteIdx = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int recv = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned char argc = code[pc++];\n"
+    "            unsigned int argBuf[32];\n"
+    "            for (unsigned char ai = 0; ai < argc; ++ai) { argBuf[ai] = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2; }\n"
+    "            array_length_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
+
 /// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
 /// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
 struct HandlerEntry
@@ -318,6 +341,8 @@ const HandlerEntry kHandlers[] = {
     {VmOpcode::StoreField, "STORE_FIELD", kHandlerStoreField},
     {VmOpcode::ArrayLoad,  "ARRAY_LOAD",  kHandlerArrayLoad},
     {VmOpcode::ArrayStore, "ARRAY_STORE", kHandlerArrayStore},
+    {VmOpcode::Allocate,   "ALLOCATE",    kHandlerAllocate},
+    {VmOpcode::Intrinsic,  "INTRINSIC",   kHandlerIntrinsic},
 };
 constexpr size_t kHandlerCount = sizeof(kHandlers) / sizeof(kHandlers[0]);
 
@@ -514,6 +539,7 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         "unsigned int pc; unsigned int status; JNIEnv* env; const mj2x_vm_call_fn* call_table; "
         "const mj2x_vm_call_fn* load_field_table; const mj2x_vm_call_fn* store_field_table; "
         "const mj2x_vm_call_fn* array_load_table; const mj2x_vm_call_fn* array_store_table; "
+        "const mj2x_vm_call_fn* alloc_table; const mj2x_vm_call_fn* array_length_table; "
         "mj2x_vm_slot* regs; mj2x_vm_slot* retval; }};", ctxType));
     out.emitLine(format_std("typedef struct {} {};", ctxType, ctxType));
     out.add_func(format_std("static void mj2x_vm_dispatch_body_{}({}* ctx)", tag, ctxType),
@@ -528,6 +554,8 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         f.emitLine("const mj2x_vm_call_fn* store_field_table = ctx->store_field_table;");
         f.emitLine("const mj2x_vm_call_fn* array_load_table = ctx->array_load_table;");
         f.emitLine("const mj2x_vm_call_fn* array_store_table = ctx->array_store_table;");
+        f.emitLine("const mj2x_vm_call_fn* alloc_table = ctx->alloc_table;");
+        f.emitLine("const mj2x_vm_call_fn* array_length_table = ctx->array_length_table;");
         f.emitLine("mj2x_vm_slot* regs = ctx->regs;");
         f.emitLine("mj2x_vm_slot* retval = ctx->retval;");
         f.emitLine("(void)targets;");
@@ -537,6 +565,8 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmInstance& instance, cons
         f.emitLine("(void)store_field_table;");
         f.emitLine("(void)array_load_table;");
         f.emitLine("(void)array_store_table;");
+        f.emitLine("(void)alloc_table;");
+        f.emitLine("(void)array_length_table;");
         emitOpcodeFetch(f, instance, tag);
         f.emitLine("switch (opcode) {");
         {
@@ -574,6 +604,8 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmInstance& instance,
     out.emitLine("_ctx.store_field_table = store_field_table;");
     out.emitLine("_ctx.array_load_table = array_load_table;");
     out.emitLine("_ctx.array_store_table = array_store_table;");
+    out.emitLine("_ctx.alloc_table = alloc_table;");
+    out.emitLine("_ctx.array_length_table = array_length_table;");
     out.emitLine("_ctx.regs = slots;");
     out.emitLine("_ctx.retval = retval;");
     out.emitLine(format_std("{}* ctx = &_ctx;", ctxType));
@@ -1312,6 +1344,135 @@ void emitArrayInfrastructure(CSourceStream& out, const VmProgram& program, const
     }
 }
 
+// ===========================================================================
+// Allocate / array.length 基础设施（Phase 2.A）。
+// ===========================================================================
+
+/// 数组描述符首字符 → New<Type>Array 函数名后缀（base 数组）。ref 单独处理。
+const char* newArraySuffix(const std::string& typeDesc)
+{
+    if (typeDesc.size() < 2) return "Int";
+    switch (typeDesc[1]) {
+    case 'Z': return "Boolean";
+    case 'B': return "Byte";
+    case 'C': return "Char";
+    case 'S': return "Short";
+    case 'I': return "Int";
+    case 'J': return "Long";
+    case 'F': return "Float";
+    case 'D': return "Double";
+    default: return "";   // 'L' / '[' → ref array
+    }
+}
+
+/// 数组分配是否为引用数组（typeDesc[1] == 'L' 或 '['）。
+bool isRefArrayAlloc(const std::string& typeDesc)
+{
+    return typeDesc.size() >= 2 && (typeDesc[1] == 'L' || typeDesc[1] == '[');
+}
+
+/// @brief 发射单个 Allocate helper（Object 或 Array）。
+///
+/// @details
+/// Object：懒缓存 owner class + AllocObject（不调构造器，<init> 由独立 Call 调）。
+/// Array base：New<Type>Array(length)。Array ref：懒缓存 component class + NewObjectArray。
+/// 结果一律 jobject 写 regs[dest].ref。
+void emitAllocHelper(CSourceStream& out, const VmAllocRef& aref, size_t i, const std::string& tag)
+{
+    const std::string helper = format_std("mj2x_vm_alloc_{}_{}", tag, i);
+    out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
+                            "unsigned int recv, unsigned int* argIdx, "
+                            "unsigned char argc, unsigned int dest)", helper),
+                 [&](CSourceStream& fnc) {
+        fnc.emitLine("(void)recv;  /* 分配无 receiver */");
+        if (aref.kind == VmAllocKind::Object) {
+            // 懒缓存 owner class + AllocObject。
+            fnc.emitLine("static jclass _cls = NULL;");
+            fnc.emitLine("if (_cls == NULL) {");
+            {
+                CSourceStream::IndentGuard g(fnc);
+                fnc.emitLine(format_std("jclass _local = (*env)->FindClass(env, {});",
+                                        codegen::cStringLiteral(aref.typeDesc)));
+                fnc.emitLine("if (_local == NULL) return;  /* pending exception */");
+                fnc.emitLine("_cls = (*env)->NewGlobalRef(env, _local);");
+                fnc.emitLine("(*env)->DeleteLocalRef(env, _local);");
+            }
+            fnc.emitLine("}");
+            fnc.emitLine("regs[dest].ref = (void*)(*env)->AllocObject(env, _cls);");
+            fnc.emitLine("(void)argc; (void)argIdx;");
+        } else {
+            // Array：length 在 argIdx[0]。
+            fnc.emitLine("(void)argc;");
+            if (isRefArrayAlloc(aref.typeDesc)) {
+                // 懒缓存 component class + NewObjectArray。
+                fnc.emitLine("static jclass _cc = NULL;");
+                fnc.emitLine("if (_cc == NULL) {");
+                {
+                    CSourceStream::IndentGuard g(fnc);
+                    // component 描述符 = typeDesc 去掉前导 '['（如 "[LBox;" → "LBox;"）。
+                    fnc.emitLine(format_std("jclass _local = (*env)->FindClass(env, {});",
+                                            codegen::cStringLiteral(aref.typeDesc.substr(1))));
+                    fnc.emitLine("if (_local == NULL) return;");
+                    fnc.emitLine("_cc = (*env)->NewGlobalRef(env, _local);");
+                    fnc.emitLine("(*env)->DeleteLocalRef(env, _local);");
+                }
+                fnc.emitLine("}");
+                fnc.emitLine("regs[dest].ref = (void*)(*env)->NewObjectArray(env, "
+                             "(jsize)regs[argIdx[0]].i, _cc, NULL);");
+            } else {
+                fnc.emitLine(format_std("regs[dest].ref = (void*)(*env)->New{}Array(env, "
+                                        "(jsize)regs[argIdx[0]].i);",
+                                        newArraySuffix(aref.typeDesc)));
+            }
+        }
+    });
+    out.emitBlankLine();
+}
+
+/// 发射 Allocate 的 per-site helper + 分派表（allocRefs 非空时）。
+void emitAllocInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
+{
+    if (program.allocRefs.empty()) return;
+    for (size_t i = 0; i < program.allocRefs.size(); ++i) {
+        emitAllocHelper(out, program.allocRefs[i], i, tag);
+    }
+    out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_alloc_table_{}[{}] = {{",
+                            tag, program.allocRefs.size()));
+    {
+        CSourceStream::IndentGuard g(out);
+        for (size_t i = 0; i < program.allocRefs.size(); ++i) {
+            out.emitLine(format_std("mj2x_vm_alloc_{}_{},", tag, i));
+        }
+    }
+    out.emitLine("};");
+    out.emitBlankLine();
+}
+
+/// 发射 array.length helper + 1-entry 分派表（hasArrayLength 时）。
+/// 单一无状态 helper：GetArrayLength(array) → regs[dest].i，null 抛 NPE。
+void emitArrayLengthInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
+{
+    if (!program.hasArrayLength) return;
+    out.add_func(format_std("static void mj2x_vm_arr_length_{}_0(JNIEnv* env, mj2x_vm_slot* regs, "
+                            "unsigned int recv, unsigned int* argIdx, "
+                            "unsigned char argc, unsigned int dest)", tag),
+                 [&](CSourceStream& fnc) {
+        fnc.emitLine("(void)argc; (void)argIdx;  /* array.length 无参数 */");
+        fnc.emitLine("jobject _arr = (jobject)regs[recv].ref;");
+        fnc.emitLine("if (_arr == NULL) { mj2x_vm_throw_npe(env, \"array.length\"); return; }");
+        fnc.emitLine("regs[dest].i = (int64_t)(*env)->GetArrayLength(env, _arr);");
+    });
+    out.emitBlankLine();
+    out.emitLine(format_std("static const mj2x_vm_call_fn mj2x_vm_array_length_table_{}[1] = {{",
+                            tag));
+    {
+        CSourceStream::IndentGuard g(out);
+        out.emitLine(format_std("mj2x_vm_arr_length_{}_0,", tag));
+    }
+    out.emitLine("};");
+    out.emitBlankLine();
+}
+
 }   // namespace
 
 // ===========================================================================
@@ -1485,13 +1646,23 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         emitArrayInfrastructure(out, program, tag);
     }
 
+    // Allocate 基础设施（allocRefs 非空时）+ array.length（hasArrayLength 时）。
+    if (!program.allocRefs.empty()) {
+        emitAllocInfrastructure(out, program, tag);
+    }
+    if (program.hasArrayLength) {
+        emitArrayLengthInfrastructure(out, program, tag);
+    }
+
     // --- 解释器入口函数（按 dispatcherKind 选择形态）---
     out.add_func(format_std("static unsigned int {}(JNIEnv* env, mj2x_vm_slot* slots, "
                             "mj2x_vm_slot* retval, const mj2x_vm_call_fn* call_table, "
                             "const mj2x_vm_call_fn* load_field_table, "
                             "const mj2x_vm_call_fn* store_field_table, "
                             "const mj2x_vm_call_fn* array_load_table, "
-                            "const mj2x_vm_call_fn* array_store_table)", funcName),
+                            "const mj2x_vm_call_fn* array_store_table, "
+                            "const mj2x_vm_call_fn* alloc_table, "
+                            "const mj2x_vm_call_fn* array_length_table)", funcName),
                  [&](CSourceStream& f) {
         f.emitLine("(void)env;");
         f.emitLine("(void)retval;");
@@ -1500,6 +1671,8 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         f.emitLine("(void)store_field_table;");
         f.emitLine("(void)array_load_table;");
         f.emitLine("(void)array_store_table;");
+        f.emitLine("(void)alloc_table;");
+        f.emitLine("(void)array_length_table;");
         switch (instance.dispatcherKind()) {
         case VmDispatcherKind::SwitchTable:
             emitSwitchDispatcher(f, instance, progName, targetsName, tag);

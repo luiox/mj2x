@@ -125,6 +125,17 @@ VmArrayElemKind toVmArrayElemKind(SSAType s)
     }
 }
 
+/// @brief SSAAllocationKind → VmAllocKind。
+VmAllocKind toVmAllocKind(SSAAllocationKind k)
+{
+    switch (k) {
+    case SSAAllocationKind::Object: return VmAllocKind::Object;
+    case SSAAllocationKind::Array: return VmAllocKind::Array;
+    case SSAAllocationKind::MultiArray: return VmAllocKind::MultiArray;
+    }
+    return VmAllocKind::Object;
+}
+
 /// @brief SSAComparePredicate → VmComparePred。
 bool toVmComparePred(SSAComparePredicate p, VmComparePred& out)
 {
@@ -170,6 +181,12 @@ struct EncoderState
     std::unordered_map<uint8_t, uint16_t>                    arrayLoadByKey;
     std::vector<VmArrayRef>                                  arrayStoreRefs;
     std::unordered_map<uint8_t, uint16_t>                    arrayStoreByKey;
+
+    /// Allocate 分配表（Phase 2.A）：按 (kind, typeDesc) 去重。hasArrayLength 标记
+    /// 是否含 array.length intrinsic（单一无状态 helper，siteIdx 恒为 0）。
+    std::vector<VmAllocRef>                                  allocRefs;
+    std::unordered_map<std::string, uint16_t>                allocByKey;
+    bool                                                     hasArrayLength = false;
 
     /// 常量寄存器槽从 maxReg 高水位之后分配（见 internConstant），起始索引
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
@@ -409,6 +426,24 @@ struct EncoderState
         return idx;
     }
 
+    /// @brief 为一个 Allocate 调用点分配/复用索引（Phase 2.A）。
+    ///
+    /// @details
+    /// 按 (kind, typeDesc) 去重，相同分配形态共享一个 helper。
+    uint16_t internAllocRef(VmAllocRef aref)
+    {
+        std::string key;
+        key.push_back(static_cast<char>(aref.kind));
+        key.push_back('\0');
+        key += aref.typeDesc;
+        auto it = allocByKey.find(key);
+        if (it != allocByKey.end()) return it->second;
+        const uint16_t idx = static_cast<uint16_t>(allocRefs.size());
+        allocByKey[key] = idx;
+        allocRefs.push_back(std::move(aref));
+        return idx;
+    }
+
     /// @brief 解析一个 RegOperand 为 VM 寄存器索引。
     ///
     /// @details
@@ -498,6 +533,8 @@ bool encodeLoadField(EncoderState& ctx, const RegInstruction& ins, VmProgram& pr
 bool encodeStoreField(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeArrayLoad(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeArrayStore(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeJump(EncoderState& ctx, const RegJumpTerminator& term, VmProgram& prog,
                 std::string& reason);
 bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram& prog,
@@ -593,10 +630,10 @@ bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& 
     case RegInstructionKind::StoreField: return encodeStoreField(ctx, ins, prog, reason);
     case RegInstructionKind::ArrayLoad: return encodeArrayLoad(ctx, ins, prog, reason);
     case RegInstructionKind::ArrayStore: return encodeArrayStore(ctx, ins, prog, reason);
-    case RegInstructionKind::Allocate:
-    case RegInstructionKind::Intrinsic:
+    case RegInstructionKind::Allocate: return encodeAllocate(ctx, ins, prog, reason);
+    case RegInstructionKind::Intrinsic: return encodeIntrinsic(ctx, ins, prog, reason);
     case RegInstructionKind::Barrier:
-        reason = "RegIR family not supported in VMC4 yet (alloc/intrinsic)";
+        reason = "RegIR family not supported in VMC4 yet (barrier)";
         return false;
     }
     reason = "unknown RegInstructionKind";
@@ -972,6 +1009,79 @@ bool encodeArrayStore(EncoderState& ctx, const RegInstruction& ins, VmProgram& p
     return true;
 }
 
+/// @brief 编码 Allocate 指令（Phase 2.A：NEW/NEWARRAY/ANEWARRAY）。
+///
+/// @details
+/// Object → AllocObject（<init> 由独立 Call 调用，已在 Phase 2.0 支持）；
+/// Array → New<Type>Array / NewObjectArray（length 在 args[0]）；
+/// MultiArray 暂 fail-closed（递归分配复杂，后续补）。
+///
+/// 字节流：[Allocate][siteIdx:u16][recv:u16=0][dest:u16][argc:u8][dims...]
+/// - Object：argc=0
+/// - Array：argc=1，argIdx[0]=lengthIdx
+bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+{
+    const VmAllocKind kind = toVmAllocKind(ins.allocationKind);
+    if (kind == VmAllocKind::MultiArray) {
+        reason = "Allocate: MULTIANEWARRAY not supported yet (recursive alloc)";
+        return false;
+    }
+    VmAllocRef aref;
+    aref.kind     = kind;
+    aref.typeDesc = ins.typeDesc.to_std_string();
+    const uint16_t siteIdx = ctx.internAllocRef(std::move(aref));
+
+    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    ctx.observeReg(dest);
+
+    // Array 的 length 在 args[0]（Object 无 args）。
+    std::vector<uint16_t> dimIdxs;
+    for (const auto& a : ins.args) {
+        uint16_t di;
+        if (!ctx.resolveOperand(a, di, reason)) return false;
+        dimIdxs.push_back(di);
+    }
+
+    emitOpcode(ctx, VmOpcode::Allocate, prog.bytecodes);
+    emitU16(prog.bytecodes, siteIdx);
+    emitU16(prog.bytecodes, 0);   // recv unused（分配无 receiver）
+    emitU16(prog.bytecodes, dest);
+    emitU8(prog.bytecodes, static_cast<uint8_t>(dimIdxs.size()));
+    for (uint16_t di : dimIdxs) emitU16(prog.bytecodes, di);
+    return true;
+}
+
+/// @brief 编码 Intrinsic 指令（Phase 2.A：仅 array.length）。
+///
+/// @details
+/// array.length → GetArrayLength，单一无状态 helper（siteIdx 恒为 0）。其余 intrinsic
+/// （monitor.enter/instanceof 等）暂 fail-closed（Phase 2.D）。
+///
+/// 字节流：[Intrinsic][siteIdx:u16=0][arrayIdx:u16][dest:u16][argc:u8=0]
+bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
+{
+    if (ins.intrinsicName != "array.length") {
+        reason = "Intrinsic not supported yet (only array.length): " + ins.intrinsicName;
+        return false;
+    }
+    if (ins.args.empty()) {
+        reason = "array.length: missing array operand";
+        return false;
+    }
+    uint16_t arrayIdx;
+    if (!ctx.resolveOperand(ins.args[0], arrayIdx, reason)) return false;
+    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    ctx.observeReg(dest);
+    ctx.hasArrayLength = true;
+
+    emitOpcode(ctx, VmOpcode::Intrinsic, prog.bytecodes);
+    emitU16(prog.bytecodes, 0);   // siteIdx 恒为 0（单一 array.length helper）
+    emitU16(prog.bytecodes, arrayIdx);
+    emitU16(prog.bytecodes, dest);
+    emitU8(prog.bytecodes, 0);    // argc = 0
+    return true;
+}
+
 bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog, std::string& reason)
 {
     // std::variant 访问：按 terminator 类型分派。
@@ -1109,6 +1219,9 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     // ArrayLoad/ArrayStore 元素类型表（Phase 2.A）。
     prog->arrayLoadRefs  = std::move(ctx.arrayLoadRefs);
     prog->arrayStoreRefs = std::move(ctx.arrayStoreRefs);
+    // Allocate 分配表 + array.length 标记（Phase 2.A）。
+    prog->allocRefs      = std::move(ctx.allocRefs);
+    prog->hasArrayLength = ctx.hasArrayLength;
 
     prog->numInputs = ctx.numInputs;
     prog->numRegs   = ctx.maxReg;

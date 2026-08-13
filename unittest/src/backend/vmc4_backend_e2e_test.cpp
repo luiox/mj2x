@@ -426,7 +426,9 @@ TEST_P(Vmc4BackendE2E, MixedNativeAndFailClosedRoundTrip)
                 {"useInst(5)", "Vmc4NativeMixed.useInst(5)"},
                 {"inst(3)", "new Vmc4NativeMixed().inst(3)"},
             },
-            2, GetParam().kind);
+            // Phase 2.A 起 useInst（含 new + <init> + invokevirtual）也转 VM：pure/echo/useInst
+            // 三方法虚拟化；sw（switch）仍 fail-closed，inst（实例方法）保留字节码。
+            3, GetParam().kind);
 }
 
 // Phase 2.0 spike：静态调用链。viaAdd/viaLong/viaDouble 各含一条 invokestatic Call
@@ -573,6 +575,38 @@ TEST_P(Vmc4BackendE2E, ArrayAccessRoundTrip)
                 {"writeI", "Vmc4NativeArray.writeI(new int[]{0, 0, 0}, 1, 42)"},
             },
             10, GetParam().kind);
+}
+
+// Phase 2.A：Allocate（NEW/NEWARRAY/ANEWARRAY）+ array.length。
+// static 方法内部分配对象/数组并使用。Object 分配 = AllocObject + 独立 <init> Call；
+// Array = New<Type>Array / NewObjectArray；array.length = GetArrayLength。
+TEST_P(Vmc4BackendE2E, AllocateAndArrayLengthRoundTrip)
+{
+    runCase("Vmc4NativeAlloc",
+            "public class Vmc4NativeAlloc {\n"
+            "  public static class Box {\n"
+            "    public int v;\n"
+            "    public Box(int v) { this.v = v; }\n"
+            "  }\n"
+            "  public static int newBoxValue(int v) { return new Box(v).v; }\n"
+            "  public static int newIntArrayLen(int n) { return new int[n].length; }\n"
+            "  public static int newIntArrayFirst(int n) { int[] a = new int[n]; return a[0]; }\n"
+            "  public static int newIntArrayWrite(int n, int idx, int val) {\n"
+            "    int[] a = new int[n]; a[idx] = val; return a[idx];\n"
+            "  }\n"
+            "  public static int newDoubleArrayLen(int n) { return new double[n].length; }\n"
+            "  public static int newRefArrayLen(int n) { return new Box[n].length; }\n"
+            "}\n",
+            {
+                {"newBoxValue", "Vmc4NativeAlloc.newBoxValue(42)"},
+                {"newBoxValue0", "Vmc4NativeAlloc.newBoxValue(0)"},
+                {"newIntArrayLen", "Vmc4NativeAlloc.newIntArrayLen(7)"},
+                {"newIntArrayFirst", "Vmc4NativeAlloc.newIntArrayFirst(3)"},
+                {"newIntArrayWrite", "Vmc4NativeAlloc.newIntArrayWrite(5, 2, 99)"},
+                {"newDoubleArrayLen", "Vmc4NativeAlloc.newDoubleArrayLen(4)"},
+                {"newRefArrayLen", "Vmc4NativeAlloc.newRefArrayLen(6)"},
+            },
+            6, GetParam().kind);
 }
 
 }   // namespace
