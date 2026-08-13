@@ -3,6 +3,7 @@
 #include <memory>
 #include <limits>
 #include <string>
+#include <unordered_map>
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
@@ -759,5 +760,107 @@ TEST(RegCTest, EmitsIntegerDivRemHelpers)
     EXPECT_NE(result.source.find("mj2x_regc_rem_i32(_mj2x_regc_current_context()"),
               std::string::npos)
         << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+/// 带 resolved dispatch + convertedFunctions 的发射辅助（静态绑定测试用）。
+/// converted 表里预置目标方法键 -> regc_* 函数名。
+RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc,
+                                std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                                int maxLocals, std::string& reason,
+                                const std::unordered_map<std::string, std::string>& converted)
+{
+    auto mn = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*mn);
+    SSABuilder               builder;
+    auto ssa = builder.build(blocks, "InlineRegC", name, desc, true, maxLocals, arena, reason);
+    if (!ssa) {
+        RegCEmitResult result;
+        result.reason = reason;
+        return result;
+    }
+
+    RegLowering lowering;
+    auto        reg = lowering.lower(*ssa, reason);
+    if (!reg) {
+        RegCEmitResult result;
+        result.reason = reason;
+        return result;
+    }
+
+    RegCCachePool            pool;
+    codegen::CodeOptions     options;
+    options.resolvedDispatch = true;
+    RegCEmitter emitter(&pool, options, nullptr, 0, nullptr, &converted, nullptr);
+    return emitter.emitFunction(*reg);
+}
+
+TEST(RegCTest, EmitsStaticBoundCallForSingleAllocationReceiver)
+{
+    // 动态实例调用 receiver 是单一分配点（new Bar()）且目标方法已转换：
+    // 跳过 resolved 运行时类检查，直接调用 regc_* 函数（保留 null 检查）。
+    std::string reason;
+    auto result = emitRegCResolved("staticBound",
+                                   "(I)I",
+                                   {
+                                       new TypeInsnNode(Opcodes::NEW,
+                                                        ca::str::Utf8StringRef::from_cstr("Bar")),
+                                       new InsnNode(Opcodes::DUP),
+                                       new InsnNode(Opcodes::ICONST_1),
+                                       new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("<init>"),
+                                                          ca::str::Utf8StringRef::from_cstr("(I)V"),
+                                                          false),
+                                       new VarInsnNode(Opcodes::ILOAD, 0),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("compute"),
+                                                          ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   2,
+                                   1,
+                                   reason,
+                                   {{"Bar\ncompute\n(I)I", "regc_test_Bar_compute__I_I"}});
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("regc_test_Bar_compute__I_I("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_resolved_site"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_throw_null(\"instance method call\")"),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCTest, KeepsResolvedDispatchForUnknownReceiverType)
+{
+    // receiver 是方法参数（类型不可静态确定）：保持 resolved dispatch 检查链。
+    std::string reason;
+    auto        result = emitRegCResolved("paramReceiver",
+                                   "(LBar;I)I",
+                                          {
+                                       new VarInsnNode(Opcodes::ALOAD, 0),
+                                       new VarInsnNode(Opcodes::ILOAD, 1),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("compute"),
+                                                          ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   2,
+                                   2,
+                                   reason,
+                                   {{"Bar\ncompute\n(I)I", "regc_test_Bar_compute__I_I"}});
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_regc_resolved_site"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }

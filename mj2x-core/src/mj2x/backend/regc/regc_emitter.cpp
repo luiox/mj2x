@@ -256,7 +256,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             if (options_.commentLevel >= RegCCommentLevel::Detailed) {
                 body.comment(regInstructionLine(ins).to_std_string());
             }
-            if (!emitInstruction(body, ins, emitState, fn, indySiteBase_, result.reason))
+            if (!emitInstruction(body, ins, emitState, fn, block.get(), indySiteBase_,
+                                 result.reason))
                 return false;
             // 无异常区域（方法无 try/catch）时省略调用后 ExceptionCheck：pending
             // 异常直接泄漏到 JNI 边界由 JVM 处理（与 Java 语义及 os30 一致），省

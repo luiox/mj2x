@@ -245,9 +245,11 @@ bool emitExceptionDispatch(CSourceStream& out,
                            RegCFunctionEmitState& state, int& dispatchIndex,
                            int& edgeTempIndex, std::string& reason);
 /// 发射一条指令（表达式/JNI 调用/字段/数组/分配/native 包装等）。
+/// block 为指令所在块：receiver 精确类型静态绑定（分配点传播）需要回溯
+/// 前驱边拷贝查询 SSA def。
 bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
-                     RegCFunctionEmitState& state, const RegFunction& fn, size_t indySiteBase,
-                     std::string& reason);
+                     RegCFunctionEmitState& state, const RegFunction& fn, const RegBlock* block,
+                     size_t indySiteBase, std::string& reason);
 /// 发射块终结符（跳转/分支/switch/返回/异常），含跨边引用拷贝。
 bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                     const RegBlock* block, SSAType returnType,

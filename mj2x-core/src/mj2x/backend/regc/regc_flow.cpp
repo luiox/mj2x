@@ -14,6 +14,10 @@
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 
+#include <algorithm>
+#include <set>
+#include <utility>
+
 namespace mj2x {
 
 using namespace jbytecode::core;
@@ -302,6 +306,161 @@ bool isPrivateThisCall(const RegCFunctionEmitState& state, const RegInstruction&
     return false;
 }
 
+/// 收集 value 在 block 内的可能精确类（分配点传播，receiver 静态绑定用）。
+///
+/// @details
+/// 沿 SSA def 回溯：Allocate(Object) 给出精确类；Copy 穿透；块入口值沿前驱
+/// 边拷贝（RegSuccessor.copies）递归，多前驱取并集；其余来源（调用返回、
+/// 字段/数组 load、转换等）与参数视为未知（返回 false）。回边环来源跳过
+/// （环内值类型由非回边来源决定，不贡献新信息）。返回 true 表示至少一个
+/// 来源给出精确类；out 为去重后的类描述符列表（内部名）。
+static bool receiverExactTypes(const RegFunction& fn, const RegBlock* block, const RegId& value,
+                               std::vector<std::string>& out,
+                               std::set<std::pair<uint32_t, uint32_t>>& visited)
+{
+    if (block == nullptr) return false;
+    const auto key = std::make_pair(block->id.value, value.value);
+    if (!visited.insert(key).second) {
+        // 回边环：该来源不贡献新信息（环内值类型由非回边来源决定），跳过。
+        return true;
+    }
+    // 1) 块内 def（SSA 每值一次定义）。
+    for (const auto& ins : block->instructions) {
+        if (!ins.hasDest || ins.dest.id != value) continue;
+        if (ins.kind == RegInstructionKind::Allocate) {
+            if (ins.allocationKind != SSAAllocationKind::Object || ins.typeDesc.is_empty()) {
+                return false;
+            }
+            const std::string desc = ins.typeDesc.to_std_string();
+            if (std::find(out.begin(), out.end(), desc) == out.end()) out.push_back(desc);
+            return true;
+        }
+        if (ins.kind == RegInstructionKind::Copy) {
+            if (ins.copy.source.kind != RegOperandKind::Register) return false;
+            return receiverExactTypes(fn, block, ins.copy.source.reg, out, visited);
+        }
+        return false;   // 调用返回/字段/数组 load/转换等 → 未知
+    }
+    // 2) 块入口值：参数 → 未知；否则沿前驱边拷贝回溯。
+    for (const auto& param : fn.parameters) {
+        if (param.id == value) return false;
+    }
+    bool foundAny = false;
+    for (const auto& pred : fn.blocks) {
+        std::vector<const RegSuccessor*> successors;
+        std::visit(
+            [&](const auto& t) {
+                using T = std::decay_t<decltype(t)>;
+                if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                    successors.push_back(&t.target);
+                }
+                else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                    successors.push_back(&t.trueTarget);
+                    successors.push_back(&t.falseTarget);
+                }
+                else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                    for (const auto& c : t.cases) successors.push_back(&c.target);
+                    successors.push_back(&t.defaultTarget);
+                }
+            },
+            pred->terminator);
+        for (const auto* succ : successors) {
+            if (succ->block != block) continue;
+            const RegCopy* match = nullptr;
+            for (const auto& c : succ->copies) {
+                if (c.dest.id == value) {
+                    match = &c;
+                    break;
+                }
+            }
+            if (match == nullptr) return false;   // 无提供该值的 pred → 保守未知
+            if (match->source.kind != RegOperandKind::Register) return false;
+            if (!receiverExactTypes(fn, pred.get(), match->source.reg, out, visited)) return false;
+            foundAny = true;
+        }
+    }
+    fprintf(stderr, "[SB-Q]   done foundAny=%d\n", foundAny ? 1 : 0);
+    return foundAny;
+}
+
+/// 尝试发射「receiver 精确类型静态绑定」调用：receiver 的 SSA def 可证为
+/// 单一分配点类（receiverExactTypes）且该类的目标方法已转换时，跳过 resolved
+/// dispatch 的运行时类检查（双槽 IsInstanceOf，平均 1.5-2 JNI/调用），直接
+/// 调用 regc_* 函数体（0 JNI，保留 null 检查以符合 JVM 动态调用语义）。
+/// 未命中任何条件返回 false，由调用方走原 resolved dispatch 路径。
+static bool tryEmitStaticBoundCall(CSourceStream& out, const RegInstruction& ins,
+                                   RegCFunctionEmitState& state, const RegFunction& fn,
+                                   const RegBlock* block,
+                                   const std::vector<ca::str::Utf8String>& expressions)
+{
+    if (ins.args.empty()) return false;
+    const RegOperand& receiver = ins.args[0];
+    if (receiver.kind != RegOperandKind::Register) return false;
+    if (state.convertedFunctions == nullptr) return false;
+    // 参数不得携带 native 对象（与 privateThis 直调一致）。
+    for (size_t i = 1; i < ins.args.size(); ++i) {
+        if (nativeObjectFor(state, ins.args[i]) != nullptr) return false;
+    }
+    std::vector<std::string>               types;
+    std::set<std::pair<uint32_t, uint32_t>> visited;
+    if (!receiverExactTypes(fn, block, receiver.reg, types, visited) || types.size() != 1) {
+        return false;
+    }
+    const std::string owner = types[0];
+    const std::string name  = ins.method.name.to_std_string();
+    const std::string desc  = ins.method.desc.to_std_string();
+    const std::string key   = owner + "\n" + name + "\n" + desc;
+    if (state.indyFunctions != nullptr && state.indyFunctions->count(key) != 0) return false;
+    const auto direct = state.convertedFunctions->find(key);
+    if (direct == state.convertedFunctions->end() || direct->second.empty()) return false;
+
+    const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+    out.block([&](CSourceStream& o) {
+        o.emitLine("jobject _mj2x_regc_rcv = " +
+                   codegen::exprCast("jobject",
+                                     codegen::exprParen(expressions[0].to_std_string())) +
+                   ";");
+        o.iff(codegen::exprBinop("==", "_mj2x_regc_rcv", "NULL"),
+              [&](CSourceStream& s) {
+                  s.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
+                  if (ins.hasDest) {
+                      s.emitLine(destName + " = " + std::string(defaultValue(ins.dest.type)) + ";");
+                  }
+              },
+              [&](CSourceStream& s) {
+                  // 前向声明：目标函数定义可能在本调用点之后（同类方法转换
+                  // 顺序不保证）；参数类型与 emitFunction 的参数发射一致
+                  // （receiver = 首个实参，按实参 SSAType）。
+                  s.appendLineStart("static ")
+                      .append(ins.hasDest ? cType(ins.dest.type) : "void")
+                      .append(" ")
+                      .append(direct->second)
+                      .append("(");
+                  for (size_t i = 0; i < ins.args.size(); ++i) {
+                      if (i) s.append(", ");
+                      s.append(cType(ins.args[i].type))
+                          .append(" r")
+                          .append(ca::str::format_std("{}", i));
+                  }
+                  s.append(");").newLine();
+                  // 实参：receiver 用检查过的 _mj2x_regc_rcv（null 已排除），
+                  // 其余按调用点表达式。
+                  s.appendLineStart();
+                  if (ins.hasDest) s.append(destName).append(" = ");
+                  s.append(direct->second)
+                      .append("((mj2x_ref)_mj2x_regc_rcv");
+                  for (size_t i = 1; i < ins.args.size(); ++i) {
+                      s.append(", ")
+                          .append(codegen::exprCast(cType(ins.args[i].type),
+                                                    codegen::exprParen(
+                                                        expressions[i].to_std_string())));
+                  }
+                  s.append(");").newLine();
+              });
+    });
+    return true;
+}
+
 bool emitExceptionDispatch(CSourceStream&                        out,
                            const std::vector<const RegExceptionRegion*>&     regions,
                            const RegBlock* block, SSAType returnType,
@@ -346,8 +505,8 @@ bool emitExceptionDispatch(CSourceStream&                        out,
 }
 
 bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
-                     RegCFunctionEmitState& state, const RegFunction& fn, size_t indySiteBase,
-                     std::string& reason)
+                     RegCFunctionEmitState& state, const RegFunction& fn, const RegBlock* block,
+                     size_t indySiteBase, std::string& reason)
 {
     if (!isSupportedInstruction(ins, reason)) return false;
 
@@ -648,6 +807,12 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             !(state.traceCalls && !staticCall && !ins.hasDest);
         const auto emitCall = [&](CSourceStream& u) {
             if (useResolved) {
+                // receiver 精确类型静态绑定优先：receiver 的 SSA def 可证为
+                // 单一分配点类且目标方法已转换时，跳过运行时类检查直接调用
+                // regc 函数体（0 JNI，替代双槽 IsInstanceOf 的 1.5-2 JNI）。
+                if (tryEmitStaticBoundCall(u, ins, state, fn, block, argumentExpressions)) {
+                    return;
+                }
                 emitResolvedInstanceCall(u,
                                          ins,
                                          state.cachePool->resolvedCallSite(ins.method.owner,
