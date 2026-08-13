@@ -925,18 +925,31 @@ const char* resultWriteCast(VmJniKind k)
 /// Call[Static]<Type>MethodA，按 retKind 写回 regs[dest]（void 不写）。
 /// helper 签名固定为 mj2x_vm_call_fn：参数 (env, regs, recv, argIdx, argc, dest)。
 /// argc/recv/dest/argIdx 视 invokeKind/hasDest/argCount 可能未用，按需 (void) 抑制。
+///
+/// 四种 dispatch 的 JNI 语义（Phase 2.B）：
+///   - Virtual/Interface：Call<Type>MethodA（按 receiver 实际类虚分派；interface
+///     方法用 GetMethodID 取 methodID 后同样经 CallMethodA 分派，JNI 规范允许）
+///   - Special（invokespecial：<init>/private/super 调用）：CallNonvirtual<Type>MethodA
+///     ——必须带定义类参数，禁止虚分派（super 调用语义：调父类实现而非子类覆盖）
+///   - Static：CallStatic<Type>MethodA（无 receiver）
+/// instance 调用（Virtual/Special/Interface）的 null receiver 显式抛 NPE（与 JVM
+/// 语义一致；JNI 对 null receiver 的调用行为未定义，不能依赖）。
 void emitCallInfrastructure(CSourceStream& out, const VmProgram& program, const std::string& tag)
 {
     if (program.methodRefs.empty()) return;
 
     for (size_t i = 0; i < program.methodRefs.size(); ++i) {
-        const auto&        m        = program.methodRefs[i];
-        const bool         isStatic = (m.invokeKind == VmInvokeKind::Static);
-        const bool         isVoid   = (m.retKind == VmJniKind::Void);
-        const char*        getMid   = isStatic ? "GetStaticMethodID" : "GetMethodID";
-        const std::string  suffix   = jniCallTypeSuffix(m.retKind);
-        const std::string  callFn   = isStatic ? format_std("CallStatic{}MethodA", suffix)
-                                               : format_std("Call{}MethodA", suffix);
+        const auto&        m         = program.methodRefs[i];
+        const bool         isStatic  = (m.invokeKind == VmInvokeKind::Static);
+        const bool         isSpecial = (m.invokeKind == VmInvokeKind::Special);
+        const bool         isVoid    = (m.retKind == VmJniKind::Void);
+        const char*        getMid    = isStatic ? "GetStaticMethodID" : "GetMethodID";
+        const std::string  suffix    = jniCallTypeSuffix(m.retKind);
+        // special 必须 CallNonvirtual（super/<init>/private 语义：禁止虚分派）。
+        const std::string callFn =
+            isStatic ? format_std("CallStatic{}MethodA", suffix)
+                     : (isSpecial ? format_std("CallNonvirtual{}MethodA", suffix)
+                                  : format_std("Call{}MethodA", suffix));
         const std::string  helper   = format_std("mj2x_vm_call_{}_{}", tag, i);
 
         out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
@@ -983,19 +996,37 @@ void emitCallInfrastructure(CSourceStream& out, const VmProgram& program, const 
                                       slotReadField(m.argKinds[a])));
             }
 
-            // 调用 + 写回。instance 调用 receiver 取 regs[recv].ref（Call<Type>MethodA
-            // 按 receiver 实际类虚分派；methodID 可来自声明 owner 类，JNI 规范保证有效）。
+            // instance 调用（Virtual/Special/Interface）：null receiver 显式抛 NPE
+            // （JNI 对 null receiver 调用行为未定义；JVM 语义是 NPE）。
+            if (!isStatic) {
+                f.emitLine("if (regs[recv].ref == NULL) { mj2x_vm_throw_npe(env, "
+                           "\"instance method call\"); return; }");
+            }
+
+            // 调用 + 写回。Virtual/Interface 经 Call<Type>MethodA 按 receiver 实际类
+            // 虚分派（methodID 可来自声明 owner 类，JNI 规范保证有效）；Special 经
+            // CallNonvirtual<Type>MethodA 直接调定义类实现（_cls = 方法定义类），
+            // super 调用语义正确。Static 无 receiver。
             if (isVoid) {
                 if (isStatic) {
                     f.emitLine(format_std("(*env)->{}(env, _cls, _mid, _a);", callFn));
+                } else if (isSpecial) {
+                    f.emitLine(format_std(
+                        "(*env)->{}(env, (jobject)regs[recv].ref, _cls, _mid, _a);", callFn));
                 } else {
                     f.emitLine(format_std(
                         "(*env)->{}(env, (jobject)regs[recv].ref, _mid, _a);", callFn));
                 }
             } else {
-                f.emitLine(format_std("{} _r = (*env)->{}(env, {}, _mid, _a);",
-                                      jniReturnType(m.retKind), callFn,
-                                      isStatic ? "_cls" : "(jobject)regs[recv].ref"));
+                if (isSpecial) {
+                    f.emitLine(format_std("{} _r = (*env)->{}(env, (jobject)regs[recv].ref, _cls, "
+                                          "_mid, _a);",
+                                          jniReturnType(m.retKind), callFn));
+                } else {
+                    f.emitLine(format_std("{} _r = (*env)->{}(env, {}, _mid, _a);",
+                                          jniReturnType(m.retKind), callFn,
+                                          isStatic ? "_cls" : "(jobject)regs[recv].ref"));
+                }
                 f.emitLine(format_std("regs[dest]{} = {}_r;",
                                       slotReadField(m.retKind), resultWriteCast(m.retKind)));
             }

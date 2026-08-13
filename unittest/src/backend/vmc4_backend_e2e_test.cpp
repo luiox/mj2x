@@ -426,9 +426,9 @@ TEST_P(Vmc4BackendE2E, MixedNativeAndFailClosedRoundTrip)
                 {"useInst(5)", "Vmc4NativeMixed.useInst(5)"},
                 {"inst(3)", "new Vmc4NativeMixed().inst(3)"},
             },
-            // Phase 2.A 起 useInst（含 new + <init> + invokevirtual）也转 VM：pure/echo/useInst
-            // 三方法虚拟化；sw（switch）仍 fail-closed，inst（实例方法）保留字节码。
-            3, GetParam().kind);
+            // Phase 2.B 起实例方法也转 VM：pure/echo/useInst/inst 四方法虚拟化；
+            // sw（switch）仍 fail-closed 保留字节码。
+            4, GetParam().kind);
 }
 
 // Phase 2.0 spike：静态调用链。viaAdd/viaLong/viaDouble 各含一条 invokestatic Call
@@ -606,6 +606,76 @@ TEST_P(Vmc4BackendE2E, AllocateAndArrayLengthRoundTrip)
                 {"newDoubleArrayLen", "Vmc4NativeAlloc.newDoubleArrayLen(4)"},
                 {"newRefArrayLen", "Vmc4NativeAlloc.newRefArrayLen(6)"},
             },
+            6, GetParam().kind);
+}
+
+// Phase 2.B：虚分派 + 接口调用 + 实例方法调用链（单类输入：只有主类方法转 VM）。
+// viaInterface：invokeinterface 经接口引用调用 → JVM 虚分派到主类已转 VM 的 calc
+// （VM→JNI→JVM 分派→VM 闭环）；chain/double_：实例方法互相调用（this 经 regs[0]）；
+// shapeArea：invokevirtual 经声明类型 Shape 引用虚分派到 Square 覆盖实现（嵌套类
+// 保留字节码，JVM 侧分派，验证 VM 内 JNI 虚分派语义与基线一致）。
+TEST_P(Vmc4BackendE2E, VirtualDispatchAndInterfaceRoundTrip)
+{
+    runCase("Vmc4NativeVirt",
+            "public class Vmc4NativeVirt implements Calc {\n"
+            "  public int calc(int x) { return x * 3; }\n"
+            "  public static int viaInterface(Calc c, int x) { return c.calc(x); }\n"
+            "  public int chain(int x) { return this.double_(x) + 1; }\n"
+            "  public int double_(int x) { return x * 2; }\n"
+            "  public static class Shape {\n"
+            "    public int area() { return 0; }\n"
+            "  }\n"
+            "  public static class Square extends Shape {\n"
+            "    int side;\n"
+            "    public Square(int s) { this.side = s; }\n"
+            "    public int area() { return side * side; }\n"
+            "  }\n"
+            "  public static int shapeArea(Shape s) { return s.area(); }\n"
+            "}\n"
+            "interface Calc {\n"
+            "  int calc(int x);\n"
+            "}\n",
+            {
+                {"viaInterface", "Vmc4NativeVirt.viaInterface(new Vmc4NativeVirt(), 7)"},
+                {"chain", "new Vmc4NativeVirt().chain(4)"},
+                {"shapeAreaSquare", "Vmc4NativeVirt.shapeArea(new Vmc4NativeVirt.Square(5))"},
+                {"shapeAreaShape", "Vmc4NativeVirt.shapeArea(new Vmc4NativeVirt.Shape())"},
+            },
+            // 主类 5 方法转 VM：calc/viaInterface/chain/double_/shapeArea（嵌套类不转）。
+            5, GetParam().kind);
+}
+
+// Phase 2.B：invokespecial（private）在 VM 内执行（CallNonvirtual）+ null receiver NPE。
+// callPriv 里的 priv() 由 javac 编译为 INVOKESPECIAL Vmc4NativeSpec.priv（私有方法
+// 不虚分派）→ VM 内 CallNonvirtualIntMethodA 到已转 VM 的 priv；subWho/baseWho：
+// invokevirtual 经 Base 引用虚分派到嵌套类 Sub 覆盖（保留字节码，JVM 侧分派）；
+// nullCall(null)：instance 调用 null receiver 显式抛 NPE（JVM 语义）。
+TEST_P(Vmc4BackendE2E, InvokeSpecialAndNullReceiverRoundTrip)
+{
+    runCase("Vmc4NativeSpec",
+            "public class Vmc4NativeSpec {\n"
+            "  public static class Base {\n"
+            "    public int who() { return 1; }\n"
+            "  }\n"
+            "  public static class Sub extends Base {\n"
+            "    public int who() { return 2; }\n"
+            "  }\n"
+            "  private int priv() { return 42; }\n"
+            "  public int callPriv() { return priv(); }\n"
+            "  public static int viaPriv(Vmc4NativeSpec o) { return o.callPriv(); }\n"
+            "  public static int subWho(Sub s) { return s.who(); }\n"
+            "  public static int baseWho(Base b) { return b.who(); }\n"
+            "  public static int nullCall(Vmc4NativeSpec o) { return o.callPriv(); }\n"
+            "}\n",
+            {
+                {"callPriv", "new Vmc4NativeSpec().callPriv()"},
+                {"viaPriv", "Vmc4NativeSpec.viaPriv(new Vmc4NativeSpec())"},
+                {"subWho", "Vmc4NativeSpec.subWho(new Vmc4NativeSpec.Sub())"},
+                {"baseWhoSub", "Vmc4NativeSpec.baseWho(new Vmc4NativeSpec.Sub())"},
+                {"baseWhoBase", "Vmc4NativeSpec.baseWho(new Vmc4NativeSpec.Base())"},
+                {"nullCall", "Vmc4NativeSpec.nullCall(null)"},
+            },
+            // 主类 6 方法转 VM：priv/callPriv/viaPriv/subWho/baseWho/nullCall。
             6, GetParam().kind);
 }
 

@@ -457,9 +457,10 @@ TEST(Vmc4BackendTest, FuncPtrDispatcherEmitsDoneLabel)
 }
 
 // ===========================================================================
-// 回归 3（P0-3）：实例方法 MVP 必须 fail-closed（跳过，不产出 C 源码）。
+// Phase 2.B：实例方法可转 VM —— SSA 把 this 作为参数 id0（REF），wrapper 把
+// thisObject 填进 regs[0]、显式参数从 regs[1] 开始（与 encoder numInputs 对齐）。
 // ===========================================================================
-TEST(Vmc4BackendTest, SkipsInstanceMethodFailClosed)
+TEST(Vmc4BackendTest, VirtualizesInstanceMethodWithThisInReg0)
 {
     auto method = makeMethod(Opcodes::ACC_PUBLIC, "bump", "()I",
                              {
@@ -478,10 +479,46 @@ TEST(Vmc4BackendTest, SkipsInstanceMethodFailClosed)
     auto          blocks = converter.convert(*method);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
-    // 实例方法不转 VM：不产出 C_SOURCE，也不标 native。
-    EXPECT_EQ(result.kind, BackendResult::Kind::NONE);
-    EXPECT_TRUE(backend.generatedSource().empty());
-    EXPECT_FALSE(method->access & Opcodes::ACC_NATIVE);
+    // 实例方法转 VM：产出 C_SOURCE，wrapper 填 this 到 regs[0]。
+    EXPECT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
+    EXPECT_NE(result.text.find("regs[0].ref = (void*)thisObject;"), std::string::npos)
+        << result.text;
+    // 静态 wrapper 不引用 thisObject（不填 regs[0]）。
+    EXPECT_NE(result.text.find("(void)clazz;"), std::string::npos)
+        << "static wrapper must still void clazz\n"
+        << result.text;
+}
+
+// ===========================================================================
+// Phase 2.B：实例方法显式参数从 regs[1] 开始（this 占 regs[0]）。
+// ===========================================================================
+TEST(Vmc4BackendTest, InstanceMethodArgsStartAtReg1)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC, "addOffset", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2);
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    Vmc4Backend   backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
+    // this 占 regs[0]，p0/p1 填 regs[1]/regs[2]。
+    EXPECT_NE(result.text.find("regs[1].i = p0;"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("regs[2].i = p1;"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("regs[0].i = p0;"), std::string::npos)
+        << "instance arg must not clobber regs[0] (this)\n"
+        << result.text;
 }
 
 // ===========================================================================
@@ -794,8 +831,59 @@ TEST(Vmc4BackendTest, EncodesCallInstruction)
     EXPECT_TRUE(prog->methodRefs[0].hasDest);
 }
 
-// P2-10：Allocate（NEW，Phase 2.A）—— Object 分配不再 fail-closed，<init> 由独立 Call。
-TEST(Vmc4BackendTest, EncodesAllocateInstruction)
+// Phase 2.B：invokespecial 发射 CallNonvirtual<Type>MethodA（super/<init>/private
+// 语义禁止虚分派），instance 调用带 null receiver 显式 NPE；virtual 仍是 CallMethodA。
+TEST(Vmc4BackendTest, SpecialCallEmitsNonvirtualAndNullReceiverNpe)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    // static int callSpec(Object o) { return ((Helper)o).priv(); }（invokespecial）
+    auto prog = encodeMethod("callSpec", "(Ljava/lang/Object;)I",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                                   ca::str::Utf8StringRef::from_cstr("test/Helper"),
+                                                   ca::str::Utf8StringRef::from_cstr("priv"),
+                                                   ca::str::Utf8StringRef::from_cstr("()I"),
+                                                   false),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1, 1, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_EQ(prog->methodRefs.size(), 1u);
+    EXPECT_EQ(prog->methodRefs[0].invokeKind, VmInvokeKind::Special);
+
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "spec");
+    // Special → CallNonvirtualIntMethodA，且带定义类参数（_cls）。
+    EXPECT_NE(src.find("CallNonvirtualIntMethodA(env, (jobject)regs[recv].ref, _cls, _mid, _a)"),
+              std::string::npos)
+        << src;
+    // instance 调用必须显式检查 null receiver（JVM 语义 NPE）。
+    EXPECT_NE(src.find("mj2x_vm_throw_npe(env, \"instance method call\")"), std::string::npos)
+        << src;
+
+    // Virtual 调用仍是 CallIntMethodA（虚分派，无 _cls 参数）。
+    std::string reason2;
+    auto vprog = encodeMethod("callVirt", "(Ljava/lang/Object;)I",
+                              {
+                                  new VarInsnNode(Opcodes::ALOAD, 0),
+                                  new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                    ca::str::Utf8StringRef::from_cstr("test/Helper"),
+                                                    ca::str::Utf8StringRef::from_cstr("virt"),
+                                                    ca::str::Utf8StringRef::from_cstr("()I"),
+                                                    false),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              1, 1, instance, reason2);
+    ASSERT_NE(vprog, nullptr) << reason2;
+    const std::string vsrc = VmInterpreterEmitter::emit(*vprog, instance, "virt");
+    EXPECT_NE(vsrc.find("CallIntMethodA(env, (jobject)regs[recv].ref, _mid, _a)"),
+              std::string::npos)
+        << vsrc;
+}
+
+// P2-10：Allocate（NEW，Phase 2.A）—— Object 分配不再 fail-closed，<init> 由独立 Call。TEST(Vmc4BackendTest, EncodesAllocateInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
