@@ -14,11 +14,17 @@
 namespace mj2x {
 
 /// @brief Select which R4 transforms are applied to a RegIR function.
+///
+/// @details
+/// 基础三项（MBA / opaque / CFF）默认全部关闭：RegC 定位高性能 native 生成器，
+/// 默认产物零混淆（语义直译、最快路径）。需要保护时经 CLI 显式开启：
+/// `--regc-obfuscate` 开启基础三项；`--regc-mba-deep` / `--regc-opaque-zero` /
+/// `--regc-cff-*` 各自联动开启对应基础项并叠加增强（#829）。
 struct RegTransformOptions
 {
-    bool enableMba                   = true;
-    bool enableOpaquePredicates      = true;
-    bool enableControlFlowFlattening = true;
+    bool enableMba                   = false;
+    bool enableOpaquePredicates      = false;
+    bool enableControlFlowFlattening = false;
 
     // ---- #829 P0：Cloakwork 借鉴项（全部默认关闭，保 RegC 高性能定位）----
     /// CFF 恒假死块密度：0 = 关闭；N > 0 = 每 N 个 dispatcher 跳转注入 1 个
@@ -30,8 +36,8 @@ struct RegTransformOptions
     /// 深 MBA：Add 展开为 De Morgan/进位链（per-site 变体），链中夹
     /// `mj2x_regc_barrier` 防编译器折叠。
     bool mbaDeep = false;
-    /// opaque-零恒等变体扩展：consec_product / demorgan / gauss（恒真且
-    /// 溢出安全，位运算语义），按块序选变体。
+    /// opaque-零恒等变体扩展：demorgan / shift-pair / or-dec（恒真、零 UB
+    /// 位运算恒等），按 (seed, site) 选变体。
     bool opaqueZero = false;
     /// 变换种子：派生 state 码 / 变体选择均从此确定性派生（同 seed 同产物）。
     uint64_t transformSeed = 0;

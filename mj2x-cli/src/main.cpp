@@ -68,6 +68,8 @@ static void printUsage()
            "捕获时表已污染则 JNI_OnLoad fail closed）\n");
     printf("  --regc-safe-env-debug       RegC: safe-env 调试观察模式（检出 hook 只打告警不 fail，"
            "隐含开启 --regc-safe-env）\n");
+    printf("  --regc-obfuscate           RegC: 开启基础混淆变换（MBA + opaque 谓词 + CFF"
+           "平坦化；默认全部关闭，RegC 保持语义直译最快路径）\n");
     printf("  --regc-cff-dead <n>         RegC: CFF 恒假死块密度（默认 0 关闭；N = 每 N 个跳转插 1 "
            "死块；死块条件依赖运行时 state，编译器无法证明恒假不可 DCE，issue #829）\n");
     printf("  --regc-cff-state-encrypt    RegC: CFF 派生随机 state 码 + dispatcher 状态异或"
@@ -221,6 +223,7 @@ struct CliOptions
     bool                     regcSafeEnv      = false;
     bool                     regcSafeEnvDebug = false;
     // issue #829：Cloakwork 借鉴项（默认关闭，RegC 高性能定位）。
+    bool                     regcObfuscate       = false;
     int                      regcCffDead        = 0;
     bool                     regcCffStateEncrypt = false;
     bool                     regcMbaDeep         = false;
@@ -840,6 +843,8 @@ int main(int argc, char** argv)
             const int parsed = std::atoi(argv[++i]);
             options.regcCffDead = parsed < 0 ? 0 : parsed;
         }
+        else if (arg == "--regc-obfuscate")
+            options.regcObfuscate = true;
         else if (arg == "--regc-cff-state-encrypt")
             options.regcCffStateEncrypt = true;
         else if (arg == "--regc-mba-deep")
@@ -1170,9 +1175,18 @@ int main(int argc, char** argv)
             regcBackend->setCommentLevel(options.regcCommentLevel);
             if (options.regcSafeEnv) regcBackend->setSafeEnv(true);
             if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);
-            if (options.regcCffDead != 0 || options.regcCffStateEncrypt || options.regcMbaDeep ||
+            // 基础混淆默认关闭；--regc-obfuscate 显式开启基础三项，
+            // #829 增强开关各自联动对应基础项（mbaDeep→MBA、opaqueZero→opaque、
+            // cffDead/stateEncrypt→CFF）。
+            if (options.regcObfuscate || options.regcCffDead != 0 ||
+                options.regcCffStateEncrypt || options.regcMbaDeep ||
                 options.regcOpaqueZero) {
                 mj2x::RegTransformOptions transform;
+                transform.enableMba                   = options.regcObfuscate || options.regcMbaDeep;
+                transform.enableOpaquePredicates      = options.regcObfuscate || options.regcOpaqueZero;
+                transform.enableControlFlowFlattening = options.regcObfuscate ||
+                                                        options.regcCffDead != 0 ||
+                                                        options.regcCffStateEncrypt;
                 transform.cffDeadBlockDensity = static_cast<ca::u32>(options.regcCffDead);
                 transform.cffStateEncryption  = options.regcCffStateEncrypt;
                 transform.mbaDeep             = options.regcMbaDeep;
