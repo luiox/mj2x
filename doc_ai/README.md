@@ -9,6 +9,8 @@
 |---|---|
 | [capabilities.md](capabilities.md) | 已实现功能清单（三后端支持矩阵、runtime、验证入口） |
 | [test_strategy.md](test_strategy.md) | 测试分层策略（单测 / e2e / mtest_set / 覆盖率审计） |
+| [config_system_design.md](config_system_design.md) | 配置系统设计（参数注册表单源 + JSON Schema 导出，GUI 工具路径；P1 未实现） |
+| [competitor_config_reference.md](competitor_config_reference.md) | 竞品配置系统调研（jvmtp / skidoni，配置设计输入依据） |
 
 ## IR 与前端
 
