@@ -137,7 +137,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--emit-c <file>` | 输出的 C 源码路径 |
 | `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
 | `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm`。**v2.1 发布关闭**：`with_mj2x_llvm` 默认 off，CLI 不暴露该选项 |
-| `--config <file>` | 从 JSON 配置读取默认参数,命令行显式参数覆盖配置 |
+| `--config <file>` | 从 JSON 配置读取默认参数，命令行显式参数覆盖配置。**现状仅覆盖基础字段**（input/output/emit/backend/compile 等，见 [config_file.md](config_file.md)）；`--regc-*`/`--vmc4-*`/`--runtime-protection*`/`--client-id` 等 40+ 参数暂不能进配置——全量配置化 + schema 导出设计见 [doc_ai/config_system_design.md](../doc_ai/config_system_design.md) |
 | `--intrinsic-config <file>` | 用户自定义 intrinsic 配置（JSON，三后端通用；详见 [user_intrinsic.md](user_intrinsic.md)） |
 | `--intrinsic-src <file>` | 追加用户 intrinsic 实现源文件（可重复，与配置内 `sources` 叠加） |
 | `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码（**v2.1 起关闭**）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |

@@ -13,11 +13,12 @@
 | 四（反侦测体系） | antidebug / enforcement / rt_protect 注入 / agent 收集 | ✅ 完成（feat/mj2x-antidebug-agent） |
 | 五（文档整理） | capabilities / roadmap / user_guide 等同步 | ✅ 完成（随各主线） |
 | 六（剩余 issue） | 方法内联 / arraycopy 更宽 intrinsic / VMC4 升级档 | arraycopy 已完成（#819）；其余待做（见下） |
-| 七（#820 测试集） | 语义样本 Wave3 + 三后端矩阵 + jar 整体 E2E | 步骤 1-4 完成；5-6 待做 |
+| 7（#820 测试集） | 语义样本 Wave3 + 三后端矩阵 + jar 整体 E2E | 步骤 1-5 完成；6 待做（mj2x 侧自验闭环已并入，mjdbg 对抗工具端未落地） |
 | 八（#818 intrinsic） | 用户自定义 intrinsic 三后端机制 | ✅ 完成（PR #826，已合并） |
 | 九（#827 VMC4 粒度） | program 粒度（全程序共享 VM） | ✅ 完成（见 PR） |
 | 十（#829 混淆借鉴） | Cloakwork 借鉴项：RegC 可选混淆增强（CFF 死块/state 加密/深 MBA/opaque-零），全部默认关闭 | ✅ 完成（见 PR；默认产物零变化） |
 | 十一（混淆默认关） | RegC 基础三项（MBA/opaque/CFF）默认关闭；`--regc-obfuscate` 显式开启；#829 开关联动基础项 | ✅ 完成（见 PR；RegC 默认产物语义直译零混淆） |
+| 十二（配置系统） | 参数注册表单源 + 全量参数配置化 + JSON Schema 导出（GUI 配置工具路径） | 📋 设计完成（`doc_ai/config_system_design.md` v1 + 竞品调研）；P1 实现待做 |
 
 ## 待做项
 
@@ -25,12 +26,13 @@
 
 - **方法内联 pass（RegIR 层）**：1.1 基线数据已就绪；直调默认关闭后 JNI 开销成为
   热点，内联收益放大。建议独立分支 feat/mj2x-regc-inline；验收 = benchmark 加速比 +
-  全量单测。
+  全量单测。**已完成**（#820 步骤 5 后：SSA 方法内联默认开启，`--regc-no-inline`
+  关闭；同环境对照数据见 benchmark 记录）。
 
 ### B. VMC4 升级档（P2）
 
-- **period 语义变义**（#762 升级档）：低风险档已达成；mjdbg 对抗验证闭环就绪后开
-  feat/mj2x-vmc4-mutation；红队契约扩展同批。
+- ~~period 语义变义（#762 升级档）~~ **已完成**（case 标签周期轮换，见日志
+  「主线四完成（#762）」；强度实测待 mjdbg 对抗侧）。
 
 ### C. mj2x 自建测试集（#820，步骤 5-6）
 
@@ -50,6 +52,15 @@
 - 异常表多 region 覆盖同一块的匹配顺序测试扩展
 - mj2x-runtime C++ 版与 crt C 版检测面统一
 
+### E. 配置系统（P1，主线十二）
+
+- **参数注册表 + 全量配置化 + schema 导出**：设计已定（`doc_ai/config_system_design.md`
+  v1）；实现 = param_registry（单源 ParamDef 表）→ 重写 config_file 解析 →
+  CLI 解析/help 查表化 → `--dump-config-schema`（JSON Schema draft-07）→
+  config_schema_test 新增。验收：§4.2 全表参数可配置、schema 通过 ajv、
+  全默认产物逐字节不变、全量回归绿。
+- GUI 配置工具（P2，独立）：消费 schema 渲染表单，输出配置文件。
+
 ## 验证命令
 
 ```bash
@@ -62,6 +73,12 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-15：**主线十二（配置系统）设计完成**——竞品调研（jvmtp properties
+  域前缀平铺 + obfuscation 模块 opt-in/作用域；skidoni YAML 分组块/注释即关闭）
+  结论：JSON + 参数注册表单源 + JSON Schema 导出（GUI 工具最短路径）。交付：
+  `doc_ai/competitor_config_reference.md` + `doc_ai/config_system_design.md`
+  （§4.2 全量 50+ 参数映射表、schema 设计、合并/校验语义、P1 实现方案与验收）。
+  文档同步：`doc/config_file.md`（现状+缺口）、user_guide §4、doc_ai README。
 - 2026-08-15：**主线四完成（#762 升级档：period 语义变义）**——case 标签周期
   轮换（`d*K + caseLabelPerm_[d][canonical]`，跨变体不相交 + case 共享 body）；
   全 dispatcher 覆盖（switch/funcptr/computed_goto/if_nest/state）；describe 新增
