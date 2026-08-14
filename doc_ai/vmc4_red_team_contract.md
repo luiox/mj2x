@@ -83,8 +83,16 @@
 
 ## 6. 待 mjdbg 落地的部分
 
-> 状态：已排期（mjdbg dev_plan N-7，P1；2026-08-15）。ISA 恢复工具交付后
-> 按本契约 §2 表逐维度对账，强度归零判定回填本文件与 mj2x dev_plan B 项。
+> 状态：**v1 已完成**（mjdbg dev_plan N-7，2026-08-15；PR #845）。
+> ISA 恢复工具（`mjdbg/mjdbg-isa-recovery/`）已交付：dispatcher 五形态识别、
+> 字节集合枚举（canonical+别名+drift unmap）、handler 语义标注（真实产物
+> 20/20 对映）、trace-surface 对账 verdict；动态对拍（
+> `mjdbg-protected-sample-smoke-runner --backend vmc4`，Vmc4IsaSurfaceSample
+> 真机 E2E）与 weakness report 回流（observation report 判据 2
+> strength_reconciliation 三条目，verdict 随实测联动）均完成。强度归零
+> 实测：不同 seed/参数样本静态全恢复、跨实例复用率 100%——按 §3 归零
+> 基准，VMC4 低风险档「跨实例可复用」已达，升级档 S2（period 语义变义）
+> 启动条件满足（mj2x dev_plan B 项已同步）。
 
 - 对 VMC4 样本的自动化 ISA 还原工具（dispatcher 识别 + 字节集合枚举 + handler 语义标注）。
 - weakness report 按 §2 表逐维度产出，并带 §4.1 复用率数值。
