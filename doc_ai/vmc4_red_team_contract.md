@@ -83,6 +83,9 @@
 
 ## 6. 待 mjdbg 落地的部分
 
+> 状态：已排期（mjdbg dev_plan N-7，P1；2026-08-15）。ISA 恢复工具交付后
+> 按本契约 §2 表逐维度对账，强度归零判定回填本文件与 mj2x dev_plan B 项。
+
 - 对 VMC4 样本的自动化 ISA 还原工具（dispatcher 识别 + 字节集合枚举 + handler 语义标注）。
 - weakness report 按 §2 表逐维度产出，并带 §4.1 复用率数值。
 - 红队结论回填 mj2x `dev_plan.md`，驱动下一次可变性调参。
