@@ -33,6 +33,11 @@
 
 - ~~period 语义变义（#762 升级档）~~ **已完成**（case 标签周期轮换，见日志
   「主线四完成（#762）」；强度实测待 mjdbg 对抗侧）。
+- **computed_goto 产物修复（2026-08-19，红队验证发现）**：N-7 真实验证
+  发现 computed_goto label 定义误发 `::`（C++ 语法，C 非法，clang/MSVC
+  均拒绝编译）→ 修复为单冒号（`vm_interpreter_emit.cpp` emitOpBlock）。
+  修复后 clang 编译通过 + 动态对拍 E2E 全 PASS；mj2x 侧 143 VMC4 测试
+  无回归。
 - **红队前置已就绪（2026-08-15）**：mjdbg N-7 VMC4 ISA 恢复工具 v1 交付
   （`mjdbg/mjdbg-isa-recovery/`，PR #845）——五 dispatcher 形态识别 +
   字节集合枚举（canonical/别名/drift unmap）+ handler 语义标注（真实产物

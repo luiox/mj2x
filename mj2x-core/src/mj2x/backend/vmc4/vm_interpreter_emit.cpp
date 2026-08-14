@@ -966,7 +966,8 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
         auto emitOpBlock = [&](const std::vector<uint8_t>& bytes) {
-            for (uint8_t byte : bytes) out.label_(format_std("mj2x_vm_op_{:02x}:", byte));
+            // label_ 已追加 ':'，这里不再自带冒号（否则产物为 `::` 非法）。
+            for (uint8_t byte : bytes) out.label_(format_std("mj2x_vm_op_{:02x}", byte));
             out.emitLine("{");
             {
                 CSourceStream::IndentGuard g(out);
