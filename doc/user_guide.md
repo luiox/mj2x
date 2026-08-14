@@ -163,6 +163,12 @@ RegC：
 | `--regc-safe-env` | 开启 safe-env：JNI 函数表快照 + 方法入口恢复，阻断 agent 的 JNI hook（issue #748） |
 | `--regc-safe-env-debug` | safe-env 调试观察模式（检出 hook 只告警不 fail，隐含开启 `--regc-safe-env`） |
 | `--regc-comment-level <none\|summary\|detailed>` | 生成注释级别（默认 summary） |
+| `--regc-obfuscate` | 开启基础混淆变换（MBA + opaque 谓词 + CFF 平坦化）。**默认全部关闭**：RegC 定位高性能 native 生成器，默认产物语义直译零混淆 |
+| `--regc-cff-dead <n>` | CFF 恒假死块注入密度（默认 0 关闭；N = 每 N 个 dispatcher 跳转插 1 死块；死块条件 `(state*state+1)==0` 模 2³² 无解恒假、依赖运行时 state 不可被编译器证明，内容夹 `mj2x_regc_barrier` 防 DCE）。隐含开启 CFF（issue #829） |
+| `--regc-cff-state-encrypt` | CFF 派生随机 state 码（splitmix64(seed,index) 替代顺序 1,2,3）+ dispatcher 入口状态异或。隐含开启 CFF（issue #829） |
+| `--regc-mba-deep` | Add 深展开（De Morgan/进位恒等链 + barrier 防折叠 + per-site 按 seed 选变体）。隐含开启 MBA（issue #829） |
+| `--regc-opaque-zero` | opaque 恒真谓词变体（demorgan `~(~x)==x` / shift-pair / or-dec，零 UB 位运算恒等）。隐含开启 opaque（issue #829） |
+| `--regc-transform-seed <n>` | 混淆变换种子（state 码/变体选择，默认 0；同 seed 同产物） |
 
 VMC4：
 

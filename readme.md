@@ -10,7 +10,7 @@
 | 后端 | 定位 | 输出风格 |
 |---|---|---|
 | **StackC** | 广覆盖正确性基线 | `union jvalue stack[]` + `sp` 操作(stack-style) |
-| **RegC** | 保护导向,抗 c2j 分析 | 虚拟寄存器 + block label,无栈锚点(默认走 JNI 调用保 JVM 栈帧语义,`--regc-direct-calls` 可开启直调) |
+| **RegC** | 高性能 native 生成器（默认零混淆；`--regc-obfuscate` 显式开启混淆，`--regc-*` 增强档见 [doc/user_guide.md](doc/user_guide.md)） | 虚拟寄存器 + block label,无栈锚点(默认走 JNI 调用保 JVM 栈帧语义,`--regc-direct-calls` 可开启直调) |
 | **VMC4** | VM 虚拟化(保护导向,性能非关键) | 表驱动解释器,编译期随机化 + 执行期 dispatch drift(`--vmc4-drift`) |
 
 ## 用户自定义 intrinsic（#818）
@@ -69,6 +69,12 @@ xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
 - [doc/compile_system_tech.md](doc/compile_system_tech.md) — 编译系统(pipe / xmake / cmake)技术说明
 - [doc/dependencies.md](doc/dependencies.md) — 依赖
 
+### 混淆与保护
+
+- [doc_ai/cloakwork_research.md](doc_ai/cloakwork_research.md) — Cloakwork 借鉴项评估（issue #829）
+- [doc_ai/regc_safe_env.md](doc_ai/regc_safe_env.md) — safe-env(JNI 函数表恢复)
+- 产物 DLL 加壳（sepacker 扩展）需求见根 [doc_ai/dll_packer_requirements.md](../doc_ai/dll_packer_requirements.md)
+
 ### 架构与设计
 
 - [doc/architecture.md](doc/architecture.md) — 当前架构概览
@@ -82,7 +88,6 @@ xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
 ### 后端
 
 - [doc/stackc_backend_readme.md](doc/stackc_backend_readme.md) / [doc/regc_backend_readme.md](doc/regc_backend_readme.md) — 各后端支持矩阵
-- [doc_ai/regc_safe_env.md](doc_ai/regc_safe_env.md) — safe-env(JNI 函数表恢复)
 - [doc_ai/regc_template_engine.md](doc_ai/regc_template_engine.md) — 模板化源码生成引擎
 
 ### 测试与验证
