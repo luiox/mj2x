@@ -90,8 +90,9 @@ static void printUsage()
            "GCC/clang 编译）\n");
     printf("  --vmc4-seed <hex>          VMC4: 主 seed，驱动每实例 opcode 映射/handler 顺序"
            "（同 seed 同输入 → 同产物，可复现构建）\n");
-    printf("  --vmc4-granularity <g>     VMC4: 实例粒度 class|method（默认 class；method 每方法"
-           "独立 VM 实例，最强可变性、体积膨胀最大）\n");
+    printf("  --vmc4-granularity <g>     VMC4: 实例粒度 class|method|program（默认 class；"
+           "method 每方法独立 VM 实例，最强可变性、体积膨胀最大；program 全程序共享"
+           "一个 VM 实例，opcode 空间全局统一、体积最优）\n");
     printf("  --vmc4-alias <n>           VMC4: 每语义 ALT 别名字节数 0..3（默认 1；0 关闭别名）\n");
     printf("  --vmc4-bogus <n>           VMC4: 注入的不可达假 handler 数 0..4（默认 1；"
            "0 关闭，只污染静态分析不参与执行）\n");
@@ -1170,9 +1171,13 @@ int main(int argc, char** argv)
                 vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::StateDispatcher;
             else
                 vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::SwitchTable;
-            // 实例粒度：per-class（默认，同类方法共享 VM 实例）/ per-method。
+            // 实例粒度：per-class（默认，同类方法共享 VM 实例）/ per-method /
+            // per-program（全程序共享一个 VM 实例，opcode 空间全局统一）。
             if (options.vmc4Granularity == "method" || options.vmc4Granularity == "per-method")
                 vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerMethod;
+            else if (options.vmc4Granularity == "program" ||
+                     options.vmc4Granularity == "per-program")
+                vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerProgram;
             else
                 vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerClass;
             vmc4Opts.aliasCount = options.vmc4Alias;

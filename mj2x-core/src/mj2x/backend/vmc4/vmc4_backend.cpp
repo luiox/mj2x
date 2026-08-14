@@ -297,11 +297,14 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
 
     // --- 阶段 5：VMC4 分叉点 —— RegIR → opcode 流 ---
     // 实例按粒度派生：per-class 同类方法共享同一 VmInstance（缓存），
-    // per-method 每方法独立实例。instanceSeed = mix(主 seed, 身份哈希)，
-    // 保证可复现（同 seed+同输入 → 同产物）且跨类/方法实例互不相同。
+    // per-method 每方法独立实例，per-program 全程序共享同一实例。
+    // instanceSeed = mix(主 seed, 身份哈希)，保证可复现（同 seed+同输入 →
+    // 同产物）且跨类/方法实例互不相同（per-program 恒为固定程序身份）。
     const bool      perMethod   = options_.granularity == Vmc4Options::Granularity::PerMethod;
+    const bool      perProgram  = options_.granularity == Vmc4Options::Granularity::PerProgram;
     const std::string instanceKey =
-        perMethod ? (className + "." + methodName + methodDesc) : className;
+        perProgram ? std::string("__program__")
+                   : (perMethod ? (className + "." + methodName + methodDesc) : className);
     auto it = impl_->instances.find(instanceKey);
     if (it == impl_->instances.end()) {
         const uint64_t identityHash = fnv1a64(instanceKey);

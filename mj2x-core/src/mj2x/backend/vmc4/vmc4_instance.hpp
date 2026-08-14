@@ -45,11 +45,14 @@ struct Vmc4Options
     uint64_t seed = 0;
 
     /// 实例粒度：per-class 同类方法共享一个 VmInstance（推荐默认，体积可控）；
-    /// per-method 每方法独立实例（最强可变性，代码膨胀最大）。
+    /// per-method 每方法独立实例（最强可变性，代码膨胀最大）；
+    /// per-program 整个程序共享一个 VmInstance（opcode 空间全局统一，方法间
+    /// 字节流互相参照，体积最优——解释器只生成一份）。
     enum class Granularity
     {
         PerClass = 0,
         PerMethod = 1,
+        PerProgram = 2,
     };
     Granularity granularity = Granularity::PerClass;
 

@@ -1808,3 +1808,132 @@ TEST(Vmc4BackendTest, EncodesCheckCast)
         });
     EXPECT_TRUE(found) << "checkcast must be encoded as Intrinsic opcode";
 }
+
+// ===========================================================================
+// 粒度矩阵（issue #827）：per-program 全程序共享一个 VM 实例。
+// ===========================================================================
+
+namespace {
+
+/// 编译一个类的单个静态方法，返回生成 C 文本（backend 必须已 setOptions）。
+/// 用同一个 backend 编译多个方法以观察实例缓存（共享/独立）。
+std::string compileSingleMethodWithBackend(Vmc4Backend& backend, const std::string& cls,
+                                           const std::string& method, std::string& reason)
+{
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, method.c_str(), "(II)I",
+                         {
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new VarInsnNode(Opcodes::ILOAD, 1),
+                             new InsnNode(Opcodes::IADD),
+                             new InsnNode(Opcodes::IRETURN),
+                         },
+                         2, 2);
+    CompilerMethod cm;
+    cm.methodNode       = mn.get();
+    cm.markedForCompile = true;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
+    auto                     blocks = cc.convert(*mn);
+    auto result = backend.compileMethod(cls, cm, blocks);
+    if (result.kind != BackendResult::Kind::C_SOURCE) {
+        reason = result.text;
+        return {};
+    }
+    return result.text;
+}
+
+/// 提取生成 C 里的实例 opcode 字节集合（switch dispatcher 的 `case 0xNN` 链），
+/// 同一 VmInstance 的所有方法该集合一致——共享实例的直接证据。
+std::string firstOpcodeChain(const std::string& c)
+{
+    const std::string marker = "case 0x";
+    std::string       out;
+    size_t            pos = 0;
+    while ((pos = c.find(marker, pos)) != std::string::npos) {
+        // 取 "0xNN" 后到下一个非 hex 字符。
+        size_t i = pos + marker.size();
+        while (i < c.size() && std::isxdigit(static_cast<unsigned char>(c[i]))) ++i;
+        out += c.substr(pos + marker.size(), i - (pos + marker.size()));
+        out += ';';
+        pos = i;
+    }
+    return out;
+}
+
+}   // namespace
+
+/// per-program：同 backend（同主 seed）下不同类的方法共享同一 VmInstance →
+/// 解释器 opcode 字节链一致。
+TEST(Vmc4BackendTest, PerProgramGranularitySharesOneInstanceAcrossClasses)
+{
+    Vmc4Options opts;
+    opts.seed        = 42;
+    opts.granularity = Vmc4Options::Granularity::PerProgram;
+    Vmc4Backend backend;
+    backend.setOptions(opts);
+    backend.setOutputPath("unused.c");
+
+    std::string reason;
+    const std::string a = compileSingleMethodWithBackend(backend, "Alpha", "add", reason);
+    ASSERT_FALSE(a.empty()) << reason;
+    const std::string b = compileSingleMethodWithBackend(backend, "Beta", "add", reason);
+    ASSERT_FALSE(b.empty()) << reason;
+
+    const std::string chainA = firstOpcodeChain(a);
+    const std::string chainB = firstOpcodeChain(b);
+    ASSERT_FALSE(chainA.empty()) << a;
+    ASSERT_FALSE(chainB.empty()) << b;
+    EXPECT_EQ(chainA, chainB)
+        << "per-program: different classes must share one VM instance (same opcode chain)\n"
+        << "A: " << chainA << "\nB: " << chainB;
+}
+
+/// per-method：同 backend 下不同类的方法各自独立实例 → opcode 字节链不同。
+TEST(Vmc4BackendTest, PerMethodGranularityDivergeAcrossClasses)
+{
+    Vmc4Options opts;
+    opts.seed        = 42;
+    opts.granularity = Vmc4Options::Granularity::PerMethod;
+    Vmc4Backend backend;
+    backend.setOptions(opts);
+    backend.setOutputPath("unused.c");
+
+    std::string reason;
+    const std::string a = compileSingleMethodWithBackend(backend, "Alpha", "add", reason);
+    ASSERT_FALSE(a.empty()) << reason;
+    const std::string b = compileSingleMethodWithBackend(backend, "Beta", "add", reason);
+    ASSERT_FALSE(b.empty()) << reason;
+
+    const std::string chainA = firstOpcodeChain(a);
+    const std::string chainB = firstOpcodeChain(b);
+    ASSERT_FALSE(chainA.empty()) << a;
+    ASSERT_FALSE(chainB.empty()) << b;
+    EXPECT_NE(chainA, chainB)
+        << "per-method: different classes must have independent VM instances\n"
+        << "A: " << chainA << "\nB: " << chainB;
+}
+
+/// per-class：同类方法共享（链一致），跨类独立（链不同）—— 既有语义回归锚。
+TEST(Vmc4BackendTest, PerClassGranularitySharesWithinClassDivergeAcross)
+{
+    Vmc4Options opts;
+    opts.seed        = 42;
+    opts.granularity = Vmc4Options::Granularity::PerClass;
+    Vmc4Backend backend;
+    backend.setOptions(opts);
+    backend.setOutputPath("unused.c");
+
+    std::string reason;
+    // Alpha 类的两个方法（共享实例）。
+    const std::string a1 = compileSingleMethodWithBackend(backend, "Alpha", "add", reason);
+    ASSERT_FALSE(a1.empty()) << reason;
+    const std::string a2 = compileSingleMethodWithBackend(backend, "Alpha", "add", reason);
+    ASSERT_FALSE(a2.empty()) << reason;
+    EXPECT_EQ(firstOpcodeChain(a1), firstOpcodeChain(a2))
+        << "per-class: same class methods share one instance";
+    // Beta 类（独立实例）。
+    const std::string b = compileSingleMethodWithBackend(backend, "Beta", "add", reason);
+    ASSERT_FALSE(b.empty()) << reason;
+    EXPECT_NE(firstOpcodeChain(a1), firstOpcodeChain(b))
+        << "per-class: different classes have independent instances";
+}
