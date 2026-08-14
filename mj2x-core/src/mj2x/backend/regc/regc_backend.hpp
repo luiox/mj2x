@@ -171,6 +171,12 @@ public:
     /// 必须在 compileMethod 之前调用。同 seed 同产物（可复现构建不变量）。
     void setTransformOptions(const RegTransformOptions& options) { transformOptions_ = options; }
 
+    /// @brief 开关 SSA 方法内联（性能主线：消除 JNI 往返；默认开启）。
+    ///
+    /// @details 内联是语义等价的纯性能优化（静态调用 + 无异常区 + 大小/递归
+    /// 门控，fail-closed）。`--regc-no-inline` 关闭，供 benchmark 对比与排查。
+    void setInlineEnabled(bool enabled) { inlineEnabled_ = enabled; }
+
     /// @brief Full generated C translation unit after finalize.
     ///
     /// @details
@@ -192,6 +198,7 @@ private:
     std::string sourceCode_;
     codegen::RuntimeProtectionOptions runtimeProtection_;
     RegTransformOptions               transformOptions_;
+    bool                              inlineEnabled_ = true;
 };
 
 }   // namespace mj2x

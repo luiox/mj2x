@@ -50,7 +50,9 @@ bool mapValue(const SSAValue* value, ValueMap& values, std::string& reason, RegO
         }
 
         std::ostringstream os;
-        os << "SSA value v" << value->id.value << " is used before RegIR definition";
+        os << "SSA value v" << value->id.value << " kind="
+           << static_cast<int>(value->valueKind)
+           << " is used before RegIR definition";
         reason = os.str();
         return false;
     }

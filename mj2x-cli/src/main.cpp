@@ -70,6 +70,8 @@ static void printUsage()
            "隐含开启 --regc-safe-env）\n");
     printf("  --regc-obfuscate           RegC: 开启基础混淆变换（MBA + opaque 谓词 + CFF"
            "平坦化；默认全部关闭，RegC 保持语义直译最快路径）\n");
+    printf("  --regc-no-inline           RegC: 关闭 SSA 方法内联（默认开启：静态调用 + "
+           "无异常区 + 大小/递归门控的语义等价内联，benchmark 对比用）\n");
     printf("  --regc-cff-dead <n>         RegC: CFF 恒假死块密度（默认 0 关闭；N = 每 N 个跳转插 1 "
            "死块；死块条件依赖运行时 state，编译器无法证明恒假不可 DCE，issue #829）\n");
     printf("  --regc-cff-state-encrypt    RegC: CFF 派生随机 state 码 + dispatcher 状态异或"
@@ -224,6 +226,7 @@ struct CliOptions
     bool                     regcSafeEnvDebug = false;
     // issue #829：Cloakwork 借鉴项（默认关闭，RegC 高性能定位）。
     bool                     regcObfuscate       = false;
+    bool                     regcNoInline        = false;
     int                      regcCffDead        = 0;
     bool                     regcCffStateEncrypt = false;
     bool                     regcMbaDeep         = false;
@@ -845,6 +848,8 @@ int main(int argc, char** argv)
         }
         else if (arg == "--regc-obfuscate")
             options.regcObfuscate = true;
+        else if (arg == "--regc-no-inline")
+            options.regcNoInline = true;
         else if (arg == "--regc-cff-state-encrypt")
             options.regcCffStateEncrypt = true;
         else if (arg == "--regc-mba-deep")
@@ -1175,6 +1180,7 @@ int main(int argc, char** argv)
             regcBackend->setCommentLevel(options.regcCommentLevel);
             if (options.regcSafeEnv) regcBackend->setSafeEnv(true);
             if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);
+            if (options.regcNoInline) regcBackend->setInlineEnabled(false);
             // 基础混淆默认关闭；--regc-obfuscate 显式开启基础三项，
             // #829 增强开关各自联动对应基础项（mbaDeep→MBA、opaqueZero→opaque、
             // cffDead/stateEncrypt→CFF）。

@@ -8,8 +8,10 @@
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/codegen/include_set.hpp"
+#include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
+#include "mj2x/mir/passes/ssa_inline_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
@@ -636,6 +638,44 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                "SSA build failed", reason.c_str());
         impl_->convertedFunctions.erase(methodKey(className, methodName, methodDesc));
         return backendResult;
+    }
+
+    // SSA 方法内联（性能主线：消除 JNI 往返；默认开启，--regc-no-inline 关闭）。
+    // resolver：从 CompilerIndex 取被调方法 MethodNode → CodeConverter → SSABuilder。
+    if (inlineEnabled_) {
+        const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+            if (index == nullptr) return nullptr;
+            CompilerClass* cls = index->getClass(ref.owner.to_std_string());
+            if (cls == nullptr) return nullptr;
+            for (const auto& m : cls->methods) {
+                auto* mn = m.methodNode;
+                if (mn == nullptr || mn->instructions.isEmpty()) continue;   // native/abstract
+                // synchronized 方法：JVM 方法级锁在调用点自动获取，内联会丢锁语义，拒绝。
+                if ((mn->access & jbytecode::core::Opcodes::ACC_SYNCHRONIZED) != 0) continue;
+                if (mn->name != ref.name || mn->desc != ref.desc) continue;
+                // 只有静态方法进入内联候选（invokeOpcode 检查在 pass 侧）。
+                CodeConverter            converter(index->arena());
+                const std::vector<Block*> calleeBlocks = converter.convert(*mn);
+                SSABuilder               calleeBuilder;
+                std::string              calleeReason;
+                const bool               calleeStatic =
+                    (mn->access & jbytecode::core::Opcodes::ACC_STATIC) != 0;
+                auto calleeSsa = calleeBuilder.build(
+                    calleeBlocks, ref.owner.to_std_string(), ref.name.to_std_string(),
+                    ref.desc.to_std_string(), calleeStatic, mn->maxLocals, ssaArena, calleeReason);
+                return calleeSsa;
+            }
+            return nullptr;
+        };
+        SsaInlineStats stats = applySsaInlining(*ssa, SsaInlineOptions{}, resolver, ssaArena);
+        if (stats.inlinedCalls > 0) {
+            CA_LOGT_INFO("regc", "inline {} calls in {}.{}{}: unresolvable={} exc={} size={} "
+                                 "rec={} depth={} notinlinable={}\n",
+                         stats.inlinedCalls, className.c_str(), methodName.c_str(),
+                         methodDesc.c_str(), stats.skippedUnresolvable, stats.skippedByException,
+                         stats.skippedBySize, stats.skippedByRecursion, stats.skippedByDepth,
+                         stats.skippedNotInlinable);
+        }
     }
 
     RegLowering lowering;
