@@ -57,4 +57,25 @@ pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHome D:\sdk\java
 - 脚本内部处理 xmake 配置稳定性（issue #782）：`-P` 显式指定 + `-c` 重置，
   避免子项目配置破坏 root。
 
+### 性能回归模式（#820 步骤 5）
+
+`-Regression` 把 13-probe 基准变成带断言的回归测试：13-probe 全 Passed（功能门）+
+native 覆盖率 ≥ 基线 × `-MinCoverageRatio`（默认 0.9）+ RegC total ≤ 基线 ×
+`-MaxTotalRatio`（默认 2.0），任一失败退出码非零。跳过 os30 取样（不依赖竞品
+jar）。基线文件：`baseline/regc-perf-baseline.json`（`-UpdateBaseline` 用本次
+结果刷新基线）。
+
+```powershell
+pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -Runs 3 -Regression -SkipBuild
+pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -Runs 5 -UpdateBaseline -SkipBuild
+```
+
+回归已并入测试集：`mj2x_integration_test` 的 `RegcPerfRegression` 用例（门控
+`MJ2X_PERF_REGRESSION=1`，耗时 2-3 分钟不进默认回归）：
+
+```powershell
+$env:MJ2X_PERF_REGRESSION=1
+xmake run mj2x_integration_test --gtest_filter="RegcPerfRegression.*"
+```
+
 测试分层与各组执行命令见 `mj2x/doc/regc_test_strategy.md`。

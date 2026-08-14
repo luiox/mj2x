@@ -51,7 +51,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 | VMC4 可用版 | 完整方法语义的 VM 后端 | **已完成**（PR #789/#790/#792/#796/#798/#802：对象/字段/数组/调用/异常/intrinsic，转化率 100%）；执行期 dispatch drift 低风险档已落地（PR #766，#762 升级档待 mjdbg 对抗验证） |
 | VMC4 实例粒度 | class / method / program 三档（program = 全程序共享一个 VM，opcode 空间全局统一） | **program 粒度已落地**（#827）；三粒度测试锚定（class/method/program 实例共享/独立语义） |
 | 用户 intrinsic | 任意 Java 静态调用点降级为用户 native symbol 直调 | **已完成**（#818，PR #826，三后端统一 ABI + CLI JSON 配置；文档 `doc/user_intrinsic.md`） |
-| 自建测试集 | mtest_set 语义样本 + 三后端矩阵 + jar 整体 E2E | **第一批已完成**（#820：Wave1-3 G1-G15 样本；用户 intrinsic 三后端 E2E；多类 jar 整体程序三后端 E2E）；性能回归并入测试集与 mjdbg 对抗闭环待做 |
+| 自建测试集 | mtest_set 语义样本 + 三后端矩阵 + jar 整体 E2E | **第一批已完成**（#820：Wave1-3 G1-G15 样本；用户 intrinsic 三后端 E2E；多类 jar 整体程序三后端 E2E）；**性能回归已并入测试集**（#820 步骤 5：benchmark `-Regression` 断言 + `mj2x_integration_test` 门控用例）；mjdbg 对抗闭环待做 |
 | RegC 性能 | 追平/反超 JNIC（os30）基线 | **已完成第一轮**（PR #793/#803：JDK17/21 双矩阵，0.88x-1.16x）；方法内联待办 |
 | Release packaging | CLI、runtime、注解包、样本和验证脚本 | v2.1 已纳入发布矩阵；v2.2 持续 |
 

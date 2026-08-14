@@ -40,7 +40,7 @@
 | 2 | 设计：mtest_set 目录结构 + 断言器 + 矩阵配置 | ✅ 完成 |
 | 3 | 首批用例：语义核心面（Wave1-3：G1-G15） | ✅ 完成 |
 | 4 | 三后端矩阵：mtest_set 18 fixture × StackC/RegC + 用户 intrinsic 三后端 E2E + jar 整体 E2E（三后端） | ✅ 完成 |
-| 5 | 性能回归自动化（benchmark 13-probe 扩展并入测试集） | 待做（沿用 benchmark/ 基线） |
+| 5 | 性能回归自动化（benchmark 13-probe 扩展并入测试集） | ✅ 完成（脚本 `-Regression` 断言 + `mj2x_integration_test` 门控用例 `RegcPerfRegression`；基线 `benchmark/baseline/regc-perf-baseline.json`） |
 | 6 | mjdbg 对抗闭环（每用例 expected trace surface + weakness report） | 待做 |
 
 ### D. 记录不阻塞（P3）
@@ -62,6 +62,12 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-15：**主线七步骤 5（#820 性能回归自动化）**——benchmark 13-probe 扩展
+  `-Regression` 回归模式（13-probe 全过 + 覆盖率 ≥ 基线×0.9 + total ≤ 基线×2.0，
+  失败 exit 非零；`-UpdateBaseline` 刷新基线）+ 基线文件
+  `benchmark/baseline/regc-perf-baseline.json` + `mj2x_integration_test`
+  `RegcPerfRegression` 门控用例（`MJ2X_PERF_REGRESSION=1`）；修复
+  `Get-ProbeTimes` Status 取值的既有解析 bug。
 - 2026-08-15：**主线十（#829 Cloakwork 借鉴项）**——RegC 可选混淆增强：CFF 恒假死块
   注入（barrier 防 DCE，条件依赖运行时 state）+ 派生随机 state 码 + 状态异或、深 MBA
   （De Morgan/进位链 + barrier 防折叠 + per-site 变体）、opaque-零恒等变体
