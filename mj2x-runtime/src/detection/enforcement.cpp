@@ -33,6 +33,26 @@ void platformSleepMs(std::uint32_t ms)
 #endif
 }
 
+/// @brief 单调时钟（毫秒）：周期复查的时间基准。
+/// Windows 用 QueryPerformanceCounter，POSIX 用 steady_clock（均单调，不受
+/// 系统时间调整影响）。
+std::uint64_t monotonicMs()
+{
+#ifdef _WIN32
+    LARGE_INTEGER freq, counter;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&counter);
+    if (freq.QuadPart > 0) {
+        return static_cast<std::uint64_t>((counter.QuadPart * 1000) / freq.QuadPart);
+    }
+    return 0;
+#else
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+#endif
+}
+
 }   // namespace
 
 CheckpointState makeCheckpointState(std::uint32_t seed)
@@ -81,7 +101,16 @@ EnforcementOutcome checkAndEnforce(CheckpointState& state, const EnforcementPoli
                                    const std::vector<std::string>& arguments, void* javaVm,
                                    RuntimeDetectionReport* reportOut)
 {
-    RuntimeDetectionReport report = collectRuntimeDetection(arguments, javaVm);
+    // 周期复查（竞品借鉴低成本项）：probeIntervalMs == 0 时每次检查点全量探测
+    // （现状兼容）；> 0 时按单调时钟间隔复用缓存报告——高频检查点路径免去全量
+    // 探测（模块枚举/JVMTI 查询）开销，攻击者中途 attach 后最多一个间隔内被检出。
+    const std::uint64_t nowMs = monotonicMs();
+    if (policy.probeIntervalMs == 0 || state.lastProbeMs == 0 ||
+        nowMs - state.lastProbeMs >= policy.probeIntervalMs) {
+        state.cachedReport = collectRuntimeDetection(arguments, javaVm);
+        state.lastProbeMs  = nowMs;
+    }
+    RuntimeDetectionReport& report = state.cachedReport;
     if (reportOut != nullptr) *reportOut = report;
     const bool signaled = shouldFailClosed(report);
     return enforceCheckpoint(state, policy, signaled);

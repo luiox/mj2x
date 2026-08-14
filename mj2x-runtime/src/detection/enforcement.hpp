@@ -35,6 +35,10 @@ struct EnforcementPolicy
     EnforcementAction action           = EnforcementAction::LogOnly;
     std::uint32_t     delayMs          = 500;    ///< Delay 动作的睡眠时长（毫秒）。
     std::uint32_t     checkpointStep   = 16;     ///< 触发步长（见 checkpointShouldTrigger）。
+    std::uint32_t     probeIntervalMs  = 0;      ///< 检测周期复查间隔（毫秒；0 = 每次检查点
+                                                 ///<  都全量探测，>0 = 间隔内复用缓存报告，
+                                                 ///<  高频检查点路径免去全量探测开销，攻击者
+                                                 ///<  attach 后最多一个间隔内被检出）。
 };
 
 /// @brief 检查点状态（调用方按检查点位置持有，跨调用累积）。
@@ -43,6 +47,8 @@ struct CheckpointState
     std::uint32_t seed        = 0x9E3779B9u;   ///< xorshift 状态（确定性序列）。
     std::uint32_t invocations = 0;             ///< 已推进次数。
     std::uint32_t triggers    = 0;             ///< 已命中次数。
+    std::uint64_t lastProbeMs = 0;             ///< 上次全量探测的单调时钟（毫秒）。
+    RuntimeDetectionReport cachedReport;       ///< 周期复查间隔内复用的检测报告。
 };
 
 /// @brief 创建检查点状态；seed 可注入（测试用固定值，生产用系统熵）。

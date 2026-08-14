@@ -344,3 +344,52 @@ TEST(RuntimeEnforcementTest, CheckAndEnforceRunsLiveProbes)
                 outcome == EnforcementOutcome::TriggeredLogOnly);
     EXPECT_GE(state.invocations, 1u);
 }
+
+TEST(RuntimeEnforcementTest, ProbeIntervalReusesCachedReport)
+{
+    using mj2x::runtime::detection::CheckpointState;
+    using mj2x::runtime::detection::EnforcementAction;
+    using mj2x::runtime::detection::EnforcementPolicy;
+    using mj2x::runtime::detection::RuntimeDetectionReport;
+    using mj2x::runtime::detection::checkAndEnforce;
+    using mj2x::runtime::detection::makeCheckpointState;
+
+    // 大间隔：间隔内第二次调用必须复用缓存报告（不重新全量探测）。
+    EnforcementPolicy policy;
+    policy.action          = EnforcementAction::LogOnly;
+    policy.probeIntervalMs = 3600000;
+    CheckpointState state = makeCheckpointState(3u);
+
+    RuntimeDetectionReport out1;
+    checkAndEnforce(state, policy, {}, nullptr, &out1);
+    // 篡改缓存（模拟检测到信号）→ 间隔内复用，第二次应看到篡改值。
+    state.cachedReport.suspicious = true;
+    RuntimeDetectionReport out2;
+    checkAndEnforce(state, policy, {}, nullptr, &out2);
+    EXPECT_TRUE(out2.suspicious) << "间隔内应复用缓存报告（不重新探测覆盖）";
+    // 检查点仍推进（周期复查不改变 checkpoint 语义）。
+    EXPECT_GE(state.invocations, 2u);
+}
+
+TEST(RuntimeEnforcementTest, ZeroIntervalProbesEveryCall)
+{
+    using mj2x::runtime::detection::CheckpointState;
+    using mj2x::runtime::detection::EnforcementAction;
+    using mj2x::runtime::detection::EnforcementPolicy;
+    using mj2x::runtime::detection::RuntimeDetectionReport;
+    using mj2x::runtime::detection::checkAndEnforce;
+    using mj2x::runtime::detection::makeCheckpointState;
+
+    // 默认 0 间隔 = 每次检查点全量探测（现状兼容）：篡改缓存后第二次调用
+    // 会被真实探测覆盖（干净进程下 suspicious 复位）。
+    EnforcementPolicy policy;
+    policy.action = EnforcementAction::LogOnly;
+    CheckpointState state = makeCheckpointState(3u);
+
+    RuntimeDetectionReport out1;
+    checkAndEnforce(state, policy, {}, nullptr, &out1);
+    state.cachedReport.suspicious = true;
+    RuntimeDetectionReport out2;
+    checkAndEnforce(state, policy, {}, nullptr, &out2);
+    EXPECT_FALSE(out2.suspicious) << "0 间隔应每次重新探测";
+}
