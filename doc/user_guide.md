@@ -186,6 +186,7 @@ VMC4：
 
 | 参数 | 说明 |
 |---|---|
+| `--client-id <n>` | per-client 唯一派生（默认 0 = 不变，产物与历史逐字节一致；非 0 时所有后端 seed 经 `splitmix64(baseSeed ^ clientId)` 派生——每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物，可复现构建不受影响）。竞品借鉴（#759/#760）低成本项：分发时为每个客户独立构建 |
 | `--runtime-protection <none\|log\|delay\|fake\|terminate>` | 反侦测检查点注入（方法入口 `mj2x_rt_checkpoint_run`） |
 | `--runtime-protection-step <n>` / `--runtime-protection-delay <ms>` | 检查点步长/延迟参数 |
 

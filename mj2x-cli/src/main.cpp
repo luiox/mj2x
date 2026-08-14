@@ -6,6 +6,7 @@
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
 #include "mj2x/codegen/runtime_protection.hpp"
+#include "mj2x/core/seed_derivation.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
 
 #include <fstream>
@@ -82,6 +83,9 @@ static void printUsage()
            "按种子选变体；默认关闭）\n");
     printf("  --regc-transform-seed <n>   RegC: 变换种子（默认 0；决定 state 码/变体选择，"
            "同 seed 同产物）\n");
+    printf("  --client-id <n>             per-client 唯一派生（默认 0 = 不变：产物与历史"
+           "逐字节一致；非 0 时所有后端 seed 经 splitmix64(baseSeed ^ clientId) 派生，"
+           "每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物）\n");
     printf("  --stackc-exception-check <full|lite> StackC pending 异常检查密度（默认 full；"
            "lite 仅保留 handler 边界检查，对标 JNIC 稀疏检查）\n");
     printf("  --emit-native-dir <dir>     RegC: 多文件输出（mj2x_regc_api.h + runtime.c + 每类 "
@@ -236,6 +240,7 @@ struct CliOptions
     std::string              vmc4Dispatcher      = "switch_table";
     uint64_t                 vmc4Seed            = 0;
     bool                     vmc4SeedSelected    = false;
+    uint64_t                 clientId            = 0;   ///< per-client 唯一派生（0 = 不变）
     std::string              vmc4Granularity     = "class";
     int                      vmc4Alias           = 1;
     int                      vmc4Bogus           = 1;
@@ -867,6 +872,9 @@ int main(int argc, char** argv)
             options.vmc4Seed = std::strtoull(argv[++i], nullptr, 0);
             options.vmc4SeedSelected = true;
         }
+        else if (arg == "--client-id" && i + 1 < argc) {
+            options.clientId = std::strtoull(argv[++i], nullptr, 0);
+        }
         else if (arg == "--vmc4-granularity" && i + 1 < argc) {
             options.vmc4Granularity = argv[++i];
         }
@@ -1197,7 +1205,8 @@ int main(int argc, char** argv)
                 transform.cffStateEncryption  = options.regcCffStateEncrypt;
                 transform.mbaDeep             = options.regcMbaDeep;
                 transform.opaqueZero          = options.regcOpaqueZero;
-                transform.transformSeed       = options.regcTransformSeed;
+                transform.transformSeed =
+                    mj2x::deriveClientSeed(options.regcTransformSeed, options.clientId);
                 regcBackend->setTransformOptions(transform);
             }
             if (!options.nativeDirOutput.empty())
@@ -1218,7 +1227,7 @@ int main(int argc, char** argv)
             if (!options.cOutputPath.empty()) vmc4Backend->setOutputPath(options.cOutputPath);
             // dispatcher 形态字符串 -> 枚举（默认 switch_table）。
             mj2x::Vmc4Options vmc4Opts;
-            vmc4Opts.seed = options.vmc4Seed;
+            vmc4Opts.seed = mj2x::deriveClientSeed(options.vmc4Seed, options.clientId);
             const std::string& disp = options.vmc4Dispatcher;
             if (disp == "funcptr_table" || disp == "funcptr")
                 vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::FuncPtrTable;
