@@ -158,6 +158,7 @@ RegC：
 
 | 参数 | 说明 |
 |---|---|
+| `--regc-no-inline` | 关闭 SSA 方法内联（**默认开启**：静态调用 + 无异常区 + 大小(≤48 指令)/深度(≤2)/递归门控的语义等价内联，消除 native 方法间 JNI 往返；benchmark 对照用） |
 | `--regc-trace-calls` | 生成运行时调用日志（`[CALL]`/`[DEEP]`，stderr，排查用） |
 | `--regc-direct-calls` | 启用 native-to-native 直接 C 调用（**默认关闭**：直调不产生 JVM 栈帧，`Throwable.getStackTrace` 等语义失真，issue #814/#816）。仅用于性能优先且确认无栈观察的产物 |
 | `--regc-safe-env` | 开启 safe-env：JNI 函数表快照 + 方法入口恢复，阻断 agent 的 JNI hook（issue #748） |
