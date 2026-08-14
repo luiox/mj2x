@@ -175,6 +175,28 @@ RegFunction makePureBranchFunction()
     return function;
 }
 
+/// 单块纯 Add 函数（深 MBA / 基础 MBA 测试用）：int f() { return 9 + 4; }
+RegFunction makePureAddFunction()
+{
+    RegFunction    function;
+    auto           block = std::make_unique<RegBlock>(SSABlockId{0});
+    const RegValue result{RegId{0}, SSAType::I32};
+
+    RegInstruction add;
+    add.kind     = RegInstructionKind::Binary;
+    add.hasDest  = true;
+    add.dest     = result;
+    add.lhs      = RegOperand::fromInt(9, SSAType::I32);
+    add.rhs      = RegOperand::fromInt(4, SSAType::I32);
+    add.binaryOp = SSABinaryOp::Add;
+    add.effect   = SSAEffect::pure();
+    block->instructions.push_back(add);
+    block->terminator = RegReturnTerminator{true, RegOperand::fromRegister(result)};
+    function.entry    = block.get();
+    function.blocks.push_back(std::move(block));
+    return function;
+}
+
 }   // namespace
 
 TEST(RegLoweringTest, LowersArithmeticToVirtualRegisters)
@@ -492,4 +514,147 @@ TEST(RegTransformPassTest, SkipsEffectfulAndExceptionalFunctions)
     const auto exceptionalStats = applyRegTransformPasses(exceptional, options);
     EXPECT_FALSE(exceptionalStats.controlFlowFlattened);
     EXPECT_EQ(exceptional.blocks.size(), 3U);
+}
+
+// ===========================================================================
+// issue #829：Cloakwork 借鉴项（全部默认关闭；开启后 stats 计数 + 结构断言）。
+// ===========================================================================
+
+TEST(RegTransformPassTest, MbaDeepExpandsAddWithBarriers)
+{
+    RegFunction function = makePureAddFunction();
+
+    RegTransformOptions options;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = false;
+    options.mbaDeep                     = true;
+    options.transformSeed               = 42;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.mbaRewrites, 0U);
+    EXPECT_GT(stats.mbaDeepRewrites, 0U);
+    // 展开链夹 barrier（mj2x_regc_barrier 防折叠证据）且结果语义不变
+    // （最终 Copy 写回原 dest）。
+    bool sawBarrier = false;
+    bool sawCopy    = false;
+    for (const auto& ins : function.blocks.front()->instructions) {
+        if (ins.kind == RegInstructionKind::Barrier) sawBarrier = true;
+        if (ins.kind == RegInstructionKind::Copy) sawCopy = true;
+    }
+    EXPECT_TRUE(sawBarrier) << "deep MBA must interleave barriers to defeat folding";
+    EXPECT_TRUE(sawCopy);
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+TEST(RegTransformPassTest, MbaDeepOffKeepsLegacySingleForm)
+{
+    RegFunction function = makePureAddFunction();
+
+    RegTransformOptions options;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = false;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.mbaRewrites, 1U);
+    EXPECT_EQ(stats.mbaDeepRewrites, 0U);
+    ASSERT_EQ(function.blocks.front()->instructions.size(), 3U);
+    EXPECT_EQ(function.blocks.front()->instructions[0].binaryOp, SSABinaryOp::Or);
+}
+
+TEST(RegTransformPassTest, OpaqueZeroSelectsVariantsBySeed)
+{
+    RegFunction function = makePureBranchFunction();
+
+    RegTransformOptions options;
+    options.enableMba                   = false;
+    options.enableControlFlowFlattening = false;
+    options.opaqueZero                  = true;
+    options.transformSeed               = 7;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.opaquePredicates, 0U);
+    EXPECT_EQ(stats.opaqueZeroPredicates, 1U);
+    // 条件仍是合并后的寄存器（恒真谓词 && 原条件）。
+    const auto* branch = std::get_if<RegBranchTerminator>(&function.blocks.front()->terminator);
+    ASSERT_NE(branch, nullptr);
+    EXPECT_EQ(branch->condition.kind, RegOperandKind::Register);
+    EXPECT_GT(function.blocks.front()->instructions.size(), 5U)
+        << "variant chain must add instructions beyond the legacy 5";
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+TEST(RegTransformPassTest, CffDeadBlocksInjectNeverTakenBranches)
+{
+    RegFunction function = makePureBranchFunction();
+
+    RegTransformOptions options;
+    options.enableMba              = false;
+    options.enableOpaquePredicates = false;
+    options.cffDeadBlockDensity    = 1;   // 每个 setter 都插死块
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_TRUE(stats.controlFlowFlattened);
+    EXPECT_GT(stats.cffDeadBlocks, 0U);
+    // 死块 = 含 barrier 的块（防 DCE 证据）。
+    bool sawDeadBarrier = false;
+    for (const auto& block : function.blocks) {
+        for (const auto& ins : block->instructions) {
+            if (ins.kind == RegInstructionKind::Barrier) sawDeadBarrier = true;
+        }
+    }
+    EXPECT_TRUE(sawDeadBarrier) << "dead blocks must carry barriers to survive DCE";
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+TEST(RegTransformPassTest, CffStateEncryptionDerivesRandomizedStateCodes)
+{
+    RegFunction function = makePureBranchFunction();
+
+    RegTransformOptions options;
+    options.enableMba              = false;
+    options.enableOpaquePredicates = false;
+    options.cffStateEncryption     = true;
+    options.transformSeed          = 99;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_TRUE(stats.controlFlowFlattened);
+    const RegSwitchTerminator* dispatcher = nullptr;
+    for (const auto& block : function.blocks) {
+        const auto* candidate = std::get_if<RegSwitchTerminator>(&block->terminator);
+        if (candidate != nullptr && candidate->cases.size() == 3U) {
+            dispatcher = candidate;
+            break;
+        }
+    }
+    ASSERT_NE(dispatcher, nullptr);
+    // 派生 state 码不是顺序 1,2,3；且 case 常量被异或（≠ 写入值）。
+    EXPECT_NE(dispatcher->cases[0].key, 1);
+    // dispatcher 块含异或指令（状态解密）。
+    bool sawXor = false;
+    for (const auto& block : function.blocks) {
+        for (const auto& ins : block->instructions) {
+            if (ins.kind == RegInstructionKind::Binary && ins.binaryOp == SSABinaryOp::Xor)
+                sawXor = true;
+        }
+    }
+    EXPECT_TRUE(sawXor) << "state encryption must xor state before dispatch";
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+TEST(RegTransformPassTest, All829OptionsDefaultOff)
+{
+    RegTransformOptions options;
+    EXPECT_EQ(options.cffDeadBlockDensity, 0U);
+    EXPECT_FALSE(options.cffStateEncryption);
+    EXPECT_FALSE(options.mbaDeep);
+    EXPECT_FALSE(options.opaqueZero);
+    EXPECT_EQ(options.transformSeed, 0ULL);
 }
