@@ -427,6 +427,7 @@ TEST(RegTransformPassTest, RewritesI32AdditionWithMbaIdentity)
     function.blocks.push_back(std::move(block));
 
     RegTransformOptions options;
+    options.enableMba                   = true;
     options.enableOpaquePredicates      = false;
     options.enableControlFlowFlattening = false;
     const auto stats                    = applyRegTransformPasses(function, options);
@@ -447,6 +448,7 @@ TEST(RegTransformPassTest, MergesOpaquePredicateIntoBranchCondition)
 
     RegTransformOptions options;
     options.enableMba                   = false;
+    options.enableOpaquePredicates      = true;
     options.enableControlFlowFlattening = false;
     const auto stats                    = applyRegTransformPasses(function, options);
 
@@ -469,9 +471,10 @@ TEST(RegTransformPassTest, FlattensPureControlFlowAndRetainsEdgeCopies)
     RegBlock*   originalEntry = function.entry;
 
     RegTransformOptions options;
-    options.enableMba              = false;
-    options.enableOpaquePredicates = false;
-    const auto stats               = applyRegTransformPasses(function, options);
+    options.enableMba                   = false;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = true;
+    const auto stats                    = applyRegTransformPasses(function, options);
 
     EXPECT_TRUE(stats.controlFlowFlattened);
     EXPECT_EQ(stats.cffEdgeSetters, 2U);
@@ -497,8 +500,9 @@ TEST(RegTransformPassTest, FlattensPureControlFlowAndRetainsEdgeCopies)
 TEST(RegTransformPassTest, SkipsEffectfulAndExceptionalFunctions)
 {
     RegTransformOptions options;
-    options.enableMba              = false;
-    options.enableOpaquePredicates = false;
+    options.enableMba                   = false;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = true;
 
     RegFunction    effectful = makePureBranchFunction();
     RegInstruction call;
@@ -525,6 +529,7 @@ TEST(RegTransformPassTest, MbaDeepExpandsAddWithBarriers)
     RegFunction function = makePureAddFunction();
 
     RegTransformOptions options;
+    options.enableMba                   = true;
     options.enableOpaquePredicates      = false;
     options.enableControlFlowFlattening = false;
     options.mbaDeep                     = true;
@@ -553,6 +558,7 @@ TEST(RegTransformPassTest, MbaDeepOffKeepsLegacySingleForm)
     RegFunction function = makePureAddFunction();
 
     RegTransformOptions options;
+    options.enableMba                   = true;
     options.enableOpaquePredicates      = false;
     options.enableControlFlowFlattening = false;
     const auto stats = applyRegTransformPasses(function, options);
@@ -569,6 +575,7 @@ TEST(RegTransformPassTest, OpaqueZeroSelectsVariantsBySeed)
 
     RegTransformOptions options;
     options.enableMba                   = false;
+    options.enableOpaquePredicates      = true;
     options.enableControlFlowFlattening = false;
     options.opaqueZero                  = true;
     options.transformSeed               = 7;
@@ -592,9 +599,10 @@ TEST(RegTransformPassTest, CffDeadBlocksInjectNeverTakenBranches)
     RegFunction function = makePureBranchFunction();
 
     RegTransformOptions options;
-    options.enableMba              = false;
-    options.enableOpaquePredicates = false;
-    options.cffDeadBlockDensity    = 1;   // 每个 setter 都插死块
+    options.enableMba                   = false;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = true;
+    options.cffDeadBlockDensity         = 1;   // 每个 setter 都插死块
     const auto stats = applyRegTransformPasses(function, options);
 
     EXPECT_TRUE(stats.controlFlowFlattened);
@@ -617,10 +625,11 @@ TEST(RegTransformPassTest, CffStateEncryptionDerivesRandomizedStateCodes)
     RegFunction function = makePureBranchFunction();
 
     RegTransformOptions options;
-    options.enableMba              = false;
-    options.enableOpaquePredicates = false;
-    options.cffStateEncryption     = true;
-    options.transformSeed          = 99;
+    options.enableMba                   = false;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = true;
+    options.cffStateEncryption          = true;
+    options.transformSeed               = 99;
     const auto stats = applyRegTransformPasses(function, options);
 
     EXPECT_TRUE(stats.controlFlowFlattened);
@@ -652,6 +661,11 @@ TEST(RegTransformPassTest, CffStateEncryptionDerivesRandomizedStateCodes)
 TEST(RegTransformPassTest, All829OptionsDefaultOff)
 {
     RegTransformOptions options;
+    // 基础三项默认关闭（RegC 高性能定位：默认产物零混淆）。
+    EXPECT_FALSE(options.enableMba);
+    EXPECT_FALSE(options.enableOpaquePredicates);
+    EXPECT_FALSE(options.enableControlFlowFlattening);
+    // #829 增强项默认关闭（fail-closed 基线）。
     EXPECT_EQ(options.cffDeadBlockDensity, 0U);
     EXPECT_FALSE(options.cffStateEncryption);
     EXPECT_FALSE(options.mbaDeep);
