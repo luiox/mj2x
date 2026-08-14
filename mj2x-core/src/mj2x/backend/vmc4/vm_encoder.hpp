@@ -34,6 +34,7 @@
 #pragma once
 
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
+#include "mj2x/core/user_intrinsics.hpp"
 
 #include <memory>
 #include <string>
@@ -52,9 +53,12 @@ public:
     /// @param fn 已经过 DCE + transform 的 RegIR 函数。
     /// @param instance VM 实例（MVP 只影响命名，Phase 2 影响寄存器/opcode 映射）。
     /// @param reason 失败时填充原因（fail-closed 日志）。
+    /// @param userIntrinsics 用户自定义 intrinsic（issue #818）；nullptr 时不匹配。
     /// @return 成功返回 VmProgram；失败返回 nullptr（含 MVP 不支持的 family）。
     static std::unique_ptr<VmProgram> encode(const RegFunction& fn, const VmInstance& instance,
-                                             std::string& reason);
+                                             std::string& reason,
+                                             const std::vector<UserIntrinsic>* userIntrinsics =
+                                                 nullptr);
 };
 
 }   // namespace mj2x

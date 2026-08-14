@@ -109,7 +109,8 @@ RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& o
                          std::vector<RegFunction::InvokeDynamicSite>* fileIndySites,
                          size_t indySiteBase, CompilerIndex* classIndex,
                          const std::unordered_map<std::string, std::string>* convertedFunctions,
-                         const std::unordered_set<std::string>* indyFunctions)
+                         const std::unordered_set<std::string>* indyFunctions,
+                         const RegCIntrinsicRegistry* intrinsicRegistry)
     : cachePool_(cachePool)
     , options_(options)
     , fileIndySites_(fileIndySites)
@@ -117,6 +118,7 @@ RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& o
     , classIndex_(classIndex)
     , convertedFunctions_(convertedFunctions)
     , indyFunctions_(indyFunctions)
+    , intrinsicRegistry_(intrinsicRegistry)
 {}
 
 std::string RegCEmitter::functionNameFor(const SSAFunctionSymbol& symbol)
@@ -144,7 +146,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
 
     std::map<uint32_t, SSAType> regs;
     if (!collectRegisters(fn, regs, result.reason)) return result;
-    const RegCStringBuilderPlan stringBuilderPlan      = analyzeStringBuilders(fn);
+    const RegCStringBuilderPlan stringBuilderPlan = analyzeStringBuilders(fn, intrinsicRegistry_);
     const std::set<uint32_t>    nativeWrapperRegisters = analyzeNativeWrappers(fn);
 
     RegCFunctionEmitState emitState;
@@ -157,6 +159,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.classIndex                         = classIndex_;
     emitState.convertedFunctions                 = convertedFunctions_;
     emitState.indyFunctions                      = indyFunctions_;
+    emitState.intrinsicRegistry                  = intrinsicRegistry_;
     emitState.resolvedDispatch                   = options_.resolvedDispatch;
     emitState.hasLocalFrame                      = fnProducesLocalRefsIR(fn);
     emitState.nativeStringBuilderRegisters       = stringBuilderPlan.nativeRegisters;

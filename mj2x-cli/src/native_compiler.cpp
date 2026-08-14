@@ -637,7 +637,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
 
 int compileNativeSource(const std::string& sourcePath, const std::string& outputPath,
                         CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
-                        bool useCpp17)
+                        bool useCpp17, const std::vector<std::string>& extraSources)
 {
     std::error_code ec;
     if (!std::filesystem::exists(sourcePath, ec)) {
@@ -675,6 +675,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
     else {
         sources.push_back(std::filesystem::path(sourcePath));
     }
+    for (const auto& s : extraSources) sources.push_back(std::filesystem::path(s));
     std::vector<std::filesystem::path> crtSources;
     if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, crtSources)) return 1;
 
@@ -761,19 +762,24 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
 }
 
 int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
-                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                   const std::vector<std::string>& extraSources)
 {
-    return compileNativeSource(cOutputPath, outputPath, requestedCompiler, crtRoot, false);
+    return compileNativeSource(cOutputPath, outputPath, requestedCompiler, crtRoot, false,
+                               extraSources);
 }
 
 int compileCppSource(const std::string& cppOutputPath, const std::string& outputPath,
-                     CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+                     CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                     const std::vector<std::string>& extraSources)
 {
-    return compileNativeSource(cppOutputPath, outputPath, requestedCompiler, crtRoot, true);
+    return compileNativeSource(cppOutputPath, outputPath, requestedCompiler, crtRoot, true,
+                               extraSources);
 }
 
 int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
-                           CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot)
+                           CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                           const std::vector<std::string>& extraSources)
 {
     if (cSource.empty()) {
         CA_LOGT_ERROR("compile", "generated C source is empty.\n");
@@ -795,6 +801,7 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 
     std::vector<std::filesystem::path> sources;
     if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources)) return 1;
+    for (const auto& s : extraSources) sources.push_back(std::filesystem::path(s));
 
     const std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::error_code             ec;

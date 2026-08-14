@@ -159,6 +159,11 @@ public:
     /// 为空时保持单文件（--emit-cpp，全 static 自包含）。
     void setSplitOutputDir(const std::string& dir) { splitOutputDir_ = dir; }
 
+    /// @brief 设置用户自定义 intrinsic（issue #818）。
+    /// @details 用户条目并入 intrinsic registry（用户优先于 builtins 匹配）；
+    /// 必须在 compileMethod 之前调用。
+    void setUserIntrinsics(const UserIntrinsicConfig& config) override;
+
     /// @brief Full generated C translation unit after finalize.
     ///
     /// @details

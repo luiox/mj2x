@@ -394,3 +394,24 @@ xmake run mj2x_integration_test
 
 验收：测试集覆盖面和断言强度超过三家参考；三后端/多 JDK 一键矩阵；性能与语义
 同一入口回归。
+
+---
+
+### 主线八：用户自定义 intrinsic（issue #818）+ 测试集 Wave3（issue #820，2026-08-15 完成）
+
+> 2026-08-15：三后端用户 intrinsic 机制完成（#818）+ mtest_set Wave3 语义样本与
+> 用户 intrinsic 三后端 E2E 矩阵（#820 首批）。PR 合并前状态。
+
+| 步骤 | 内容 | 状态 |
+|---|---|---|
+| 818.1 | 统一 ABI：UserIntrinsicConfig（owner/name/desc/symbol/passContext/mayThrow）+ Backend::setUserIntrinsics | ✅ 完成 |
+| 818.2 | RegC：registry 用户条目 + UserIntrinsic emitKind（恒保留 ExceptionCheck）+ extern 声明发射 | ✅ 完成 |
+| 818.3 | StackC：Impl 用户条目 + emitInvoke 静态调用点降级（栈槽弹参，mayThrow 保留检查） | ✅ 完成 |
+| 818.4 | VMC4：VmMethodRef.userSymbol + encodeCall 匹配 + helper 解包 regs 直调 | ✅ 完成 |
+| 818.5 | CLI：--intrinsic-config JSON（nlohmann）+ --intrinsic-src；sources 并入 --compile / --generate-xmake | ✅ 完成 |
+| 818.6 | 单测：user_intrinsic_test（RegC/StackC/VMC4 发射形态 9 例）+ 全量回归 38/38 | ✅ 完成 |
+| 818.7 | E2E：user_intrinsic_e2e_test 三后端执行矩阵（my_m 接管 F.m，run=2003）3/3 | ✅ 完成 |
+| 820.1 | mtest_set Wave3：G12 StringOps / G13 BitOps / G14 DeepRecursion / G15 CollectionOps（吸收 bludnov/ttvar 覆盖面） | ✅ 完成 |
+| 820.2 | 三后端矩阵种子：用户 intrinsic E2E 参数化（stackc/regc/vmc4） | ✅ 完成 |
+| 820.3 | 性能回归（huzpsb 13-probe benchmark 并入测试集） | 待做（沿用 benchmark/ 基线） |
+| 820.4 | mjdbg 对抗闭环 per-case trace surface | 待做 |

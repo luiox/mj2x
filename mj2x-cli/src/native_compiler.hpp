@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <filesystem>
 #include <string>
@@ -51,18 +51,22 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath);
 /// crtRoot 后,编译器按其 manifest
 /// 加入 CRT C 源码与 public include 根。失败时向 stderr
 /// 打印明确错误并返回非 0。
+/// @param extraSources 用户自定义 intrinsic 实现文件（issue #818），追加进编译。
 int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
-                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot = {});
+                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot = {},
+                   const std::vector<std::string>& extraSources = {});
 
 /// @brief 把已生成的 C++17 源码编译为与输出 class/JAR 同目录的 native library。
 int compileCppSource(const std::string& cppOutputPath, const std::string& outputPath,
                      CCompilerKind requestedCompiler,
-                     const std::filesystem::path& crtRoot = {});
+                     const std::filesystem::path& crtRoot = {},
+                     const std::vector<std::string>& extraSources = {});
 
 /// @brief 编译内存中的 C 源码；GCC/Clang/Zig 使用 stdin，MSVC 使用并清理临时源文件。
 int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
                            CCompilerKind requestedCompiler,
-                           const std::filesystem::path& crtRoot = {});
+                           const std::filesystem::path& crtRoot = {},
+                           const std::vector<std::string>& extraSources = {});
 
 /// @brief 把 textual LLVM IR 编译为与输出 class/JAR 同目录的 native library。
 ///

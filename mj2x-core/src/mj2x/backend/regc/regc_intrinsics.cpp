@@ -169,8 +169,11 @@ void connectTerminatorCopies(RegIdUnionFind& ids, const RegTerminator& terminato
 
 }   // namespace
 
-RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn)
+RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
+                                            const RegCIntrinsicRegistry* registry)
 {
+    const RegCIntrinsicRegistry& intrinsicRegistry =
+        registry == nullptr ? RegCIntrinsicRegistry::builtins() : *registry;
     RegIdUnionFind                                                  ids;
     std::vector<std::pair<uint32_t, RegCIntrinsicNativeObjectKind>> allocations;
 
@@ -195,7 +198,7 @@ RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn)
             }
             else if (ins.kind == RegInstructionKind::Call) {
                 const RegCIntrinsicDecision decision =
-                    RegCIntrinsicRegistry::builtins().matchCall(ins);
+                    intrinsicRegistry.matchCall(ins);
                 if (decision.kind == RegCIntrinsicDecisionKind::Emit &&
                     decision.emitKind == RegCIntrinsicEmitKind::StringBuilderAppend &&
                     ins.hasDest && !ins.args.empty()) {
@@ -551,7 +554,10 @@ std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn)
 RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                                         const RegInstruction& ins, RegCFunctionEmitState& state)
 {
-    RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+    const RegCIntrinsicRegistry& intrinsicRegistry =
+        state.intrinsicRegistry == nullptr ? RegCIntrinsicRegistry::builtins()
+                                           : *state.intrinsicRegistry;
+    RegCIntrinsicDecision decision = intrinsicRegistry.matchCall(ins);
     if (decision.kind != RegCIntrinsicDecisionKind::Emit) return decision;
 
     if (decision.emitKind == RegCIntrinsicEmitKind::WrapperValueOf) {
@@ -865,6 +871,25 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         }
         out.append(codegen::exprCallArgs(decision.symbol, stringArgs));
         out.append(";").newLine();
+        return decision;
+    }
+
+    if (decision.emitKind == RegCIntrinsicEmitKind::UserIntrinsic) {
+        // 用户自定义 intrinsic（issue #818）：直接调用户 symbol。
+        // 参数顺序（三后端一致）：passContext 时第一参数 JNIEnv* env。
+        std::vector<std::string> userArgs;
+        if (decision.passContext) userArgs.push_back("_mj2x_regc_current_context()->env");
+        for (const auto& arg : ins.args) {
+            userArgs.push_back(operandExpr(arg).to_std_string());
+        }
+        out.appendLineStart();
+        if (ins.hasDest) {
+            out.append(regName(ins.dest.id)).append(" = ");
+        }
+        out.append(codegen::exprCallArgs(decision.symbol, userArgs));
+        out.append(";").newLine();
+        // 用户实现可能经 JNI 抛异常：恒保留 pending 异常检查（不做 pure 豁免）。
+        out.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
         return decision;
     }
 

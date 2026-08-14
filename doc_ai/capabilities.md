@@ -297,7 +297,24 @@ monitor/exception/invokedynamic 等更广形状；共享矩阵逐步接管可双
 Wave 1 首次运行发现并修复包内单 class 的 StackC cloader sidecar 错写到 package 子目录，
 现在统一输出到 classpath 根 `mj2x/cloader/Loader.class`。Wave 2 首次运行发现并修复
 RegC exception handler local 未通过异常边传递的问题，`g10.monitor` 的异常释放路径现已
-完成 native/JVM 行为验证。
+完成 native/JVM 行为验证。Wave 3（#820）新增 G12 StringOps / G13 BitOps /
+G14 DeepRecursion / G15 CollectionOps（吸收 bludnov/ttvar 语义覆盖面）。
+
+### 8.1 用户自定义 intrinsic（issue #818）
+
+三后端统一支持把 Java 静态调用点降级为用户 native symbol 直调：
+
+- 配置：`--intrinsic-config <json>`（`intrinsics` 数组 + `sources` 数组）+ `--intrinsic-src <file>`（可重复）
+- ABI：`passContext:true` 时第一参数 `JNIEnv* env`（三后端一致）
+- RegC：`RegCIntrinsicRegistry` 用户条目，`UserIntrinsic` emitKind 恒保留 pending
+  异常检查与 local-ref 帧；生成 C 头部发射 `extern <ret> <symbol>(...)` 声明
+- StackC：`Impl::userIntrinsics`，`emitInvoke` 静态调用点匹配后从栈槽弹参直调；
+  `mayThrow:true` 保留调用后 ExceptionCheck
+- VMC4：`VmMethodRef.userSymbol` 参与去重，helper 解包 `regs[argIdx[]]` 直调
+- sources 并入：`--compile` 直接模式追加进编译命令；`--generate-xmake` 复制到
+  工程 `src/mj2x-crt/user_intrinsics/`（模板 glob 自动编译）
+- 测试：`user_intrinsic_test`（发射形态 9 例）+ `user_intrinsic_e2e_test`
+  （三后端执行矩阵，`my_m` 接管 `F.m` 验证 2003）
 
 ---
 

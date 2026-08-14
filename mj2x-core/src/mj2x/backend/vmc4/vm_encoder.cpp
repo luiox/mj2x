@@ -164,6 +164,8 @@ struct EncoderState
 {
     const RegFunction& fn;
     const VmInstance&  instance;
+    /// 用户自定义 intrinsic（issue #818）；nullptr 表示未启用。
+    const std::vector<UserIntrinsic>* userIntrinsics = nullptr;
 
     /// block 指针 → 在 fn.blocks 里的索引（也用作 blockTargets/Jump/Branch 的目标索引）。
     std::unordered_map<const RegBlock*, uint16_t> blockIndex;
@@ -407,6 +409,11 @@ struct EncoderState
         key.push_back('\0');
         key.push_back(static_cast<char>(mref.invokeKind));
         key.push_back(mref.hasDest ? '\1' : '\0');
+        // 用户自定义 intrinsic（issue #818）：userSymbol 参与去重，用户降级
+        // 与普通 JNI helper 是不同实现，不得共享 callSiteIdx。
+        key.push_back('\0');
+        key += mref.userSymbol;
+        key.push_back(mref.userPassContext ? '\1' : '\0');
         auto it = methodRefByKey.find(key);
         if (it != methodRefByKey.end()) return it->second;
         const uint16_t idx = static_cast<uint16_t>(methodRefs.size());
@@ -979,6 +986,20 @@ bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
     for (size_t a = startArg; a < ins.args.size(); ++a) {
         mref.argKinds.push_back(toVmJniKind(ins.args[a].type));
     }
+    // 用户自定义 intrinsic（issue #818）：静态调用点匹配用户条目时降级为
+    // 直接调用用户 symbol（helper 解包参数，不经 JNI 通用派发）。
+    if (isStatic && ctx.userIntrinsics != nullptr) {
+        const std::string owner = ins.method.owner.to_std_string();
+        const std::string name  = ins.method.name.to_std_string();
+        const std::string desc  = ins.method.desc.to_std_string();
+        for (const auto& u : *ctx.userIntrinsics) {
+            if (u.owner == owner && u.name == name && u.desc == desc) {
+                mref.userSymbol      = u.symbol;
+                mref.userPassContext = u.passContext;
+                break;
+            }
+        }
+    }
     const uint16_t callSiteIdx = ctx.internMethodRef(std::move(mref));
 
     // receiver 寄存器（instance 调用取 args[0]）；static 调用 recv=0（helper 不读）。
@@ -1506,10 +1527,12 @@ bool encodeSwitch(EncoderState& ctx, const RegBlock* srcBlock, const RegSwitchTe
 // VmEncoder 公开入口
 // ===========================================================================
 std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInstance& instance,
-                                             std::string& reason)
+                                             std::string& reason,
+                                             const std::vector<UserIntrinsic>* userIntrinsics)
 {
     auto prog = std::make_unique<VmProgram>();
     EncoderState ctx(fn, instance);
+    ctx.userIntrinsics = userIntrinsics;
 
     if (!indexBlocks(ctx, reason)) return nullptr;
     ctx.planSyntheticEdges();

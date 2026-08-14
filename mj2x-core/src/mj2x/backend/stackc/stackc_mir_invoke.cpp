@@ -50,6 +50,67 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, codegen::CSourceStre
                                              owner + "." + name + ":" + desc +
                                                  ":" + std::to_string(node->invokeOpcode));
 
+    // 用户自定义 intrinsic（issue #818）：匹配调用点降级为直接 symbol 调用，
+    // 参数从 operand stack 弹出（与 JNI 调用同一参数区），结果写回接收者槽，
+    // sp 调整与普通调用一致；mayThrow 时保留 pending 异常检查。
+    {
+        const UserIntrinsic* userIntr = nullptr;
+        for (const auto& u : userIntrinsics) {
+            if (u.owner == owner && u.name == name && u.desc == desc && isStatic) {
+                userIntr = &u;
+                break;
+            }
+        }
+        if (userIntr != nullptr) {
+            std::string call = userIntr->symbol + "(";
+            bool        first = true;
+            if (userIntr->passContext) {
+                call += "env";
+                first = false;
+            }
+            for (int i = 0; i < argCount; ++i) {
+                if (!first) call += ", ";
+                first = false;
+                const auto pka = jvmSortToPrimitive(argTypes[static_cast<size_t>(i)].getSort());
+                call += "stack[sp - " + std::to_string(argCount - 1 - i) + "]" +
+                        std::string(stackValueAccessor(pka));
+            }
+            call += ")";
+            if (retType != PrimitiveKind::VOID) {
+                if (argCount == 0) {
+                    out.appendLineStart("stack[++sp]").append(stackValueAccessor(retType));
+                }
+                else {
+                    out.appendLineStart("stack[sp - ").appendInt(resultIndex).append("]")
+                        .append(stackValueAccessor(retType));
+                }
+                out.append(" = ").append(call).append(";").newLine();
+            }
+            else {
+                out.appendLineStart(call).append(";").newLine();
+            }
+            if (isStatic) {
+                if (retType == PrimitiveKind::VOID) {
+                    if (argCount > 0) {
+                        out.appendLineStart("sp -= ").appendInt(argCount).append(";").newLine();
+                    }
+                }
+                else if (argCount > 0) {
+                    out.appendLineStart("sp -= ").appendInt(argCount - 1).append(";").newLine();
+                }
+            }
+            else {
+                int popCount = argCount + 1;
+                if (retType != PrimitiveKind::VOID) popCount -= 1;
+                if (popCount > 0) {
+                    out.appendLineStart("sp -= ").appendInt(popCount).append(";").newLine();
+                }
+            }
+            if (userIntr->mayThrow) emitPendingExceptionCheck(out);
+            return;
+        }
+    }
+
     // 整段放 block 内：先查 jclass/jmethodID，再调用。返回值写入接收者槽（非 void）。
     out.emitLine("{");
     out.indent();

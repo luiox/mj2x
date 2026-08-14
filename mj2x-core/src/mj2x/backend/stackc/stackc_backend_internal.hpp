@@ -522,6 +522,9 @@ struct StackCBackend::Impl
     std::deque<std::string>                 stableUtf8Storage;
     /// pending 异常检查模式：true = lite（只保留 handler 边界检查）。
     bool exceptionCheckLite = false;
+    /// 用户自定义 intrinsic（issue #818）：emitInvoke 匹配的调用点降级为
+    /// 直接调用用户 symbol（参数从 operand stack 弹出，结果写回接收者槽）。
+    std::vector<UserIntrinsic> userIntrinsics;
 
     // Cache current method info for codegen
     std::string currentClassName;

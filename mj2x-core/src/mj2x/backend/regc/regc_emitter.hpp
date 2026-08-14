@@ -26,6 +26,7 @@
 namespace mj2x {
 
 class CompilerIndex;
+class RegCIntrinsicRegistry;
 
 /// @brief 生成注释级别（定义见 codegen/c_options.hpp，本 using 保持既有引用兼容）。
 using RegCCommentLevel = codegen::RegCCommentLevel;
@@ -118,6 +119,8 @@ public:
     /// @param classIndex    可选：调用目标元数据（final 判定）；nullptr 关闭直接调用。
     /// @param convertedFunctions 可选：已转换方法表（owner\nname\ndesc -> regc_* 函数名）。
     /// @param indyFunctions      可选：含 invokedynamic 站点的方法键集合（直接调用排除）。
+    /// @param intrinsicRegistry  可选：用户自定义 intrinsic registry（issue #818）；
+    ///                           nullptr 时用 builtins()。
     explicit RegCEmitter(RegCCachePool* cachePool = nullptr,
                          const codegen::CodeOptions& options = {},
                          std::vector<RegFunction::InvokeDynamicSite>* fileIndySites = nullptr,
@@ -125,7 +128,8 @@ public:
                          CompilerIndex* classIndex = nullptr,
                          const std::unordered_map<std::string, std::string>* convertedFunctions =
                              nullptr,
-                         const std::unordered_set<std::string>* indyFunctions = nullptr);
+                         const std::unordered_set<std::string>* indyFunctions = nullptr,
+                         const RegCIntrinsicRegistry* intrinsicRegistry = nullptr);
 
     /// @brief Emit a C helper function for one RegFunction.
     ///
@@ -151,6 +155,7 @@ private:
     CompilerIndex* classIndex_ = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions_ = nullptr;
     const std::unordered_set<std::string>* indyFunctions_ = nullptr;
+    const RegCIntrinsicRegistry* intrinsicRegistry_ = nullptr;
 };
 
 /// @brief Emit declarations shared by all RegC function bodies in one C file.

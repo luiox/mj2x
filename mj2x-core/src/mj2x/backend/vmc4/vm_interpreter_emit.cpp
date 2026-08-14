@@ -1140,6 +1140,45 @@ void emitCallInfrastructure(CSourceStream& out, const VmProgram& program, const 
                                   : format_std("Call{}MethodA", suffix));
         const std::string  helper   = format_std("mj2x_vm_call_{}_{}", tag, i);
 
+        // 用户自定义 intrinsic（issue #818）：直接调用户 symbol——解包 regs 参数
+        // 按 desc 类型调用（passContext 时第一参数传 env），结果写回 regs[dest]。
+        if (!m.userSymbol.empty()) {
+            out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
+                                    "unsigned int recv, unsigned int* argIdx, "
+                                    "unsigned char argc, unsigned int dest)", helper),
+                         [&](CSourceStream& f) {
+                f.emitLine("(void)argc;  /* 参数数编译期固定（argKinds.size） */");
+                f.emitLine("(void)recv;  /* 用户 intrinsic 仅匹配静态调用点 */");
+                if (isVoid) f.emitLine("(void)dest;  /* void 返回不写 dest */");
+                if (m.argKinds.empty()) f.emitLine("(void)argIdx;  /* 无参数 */");
+
+                std::string call = m.userSymbol + "(";
+                bool        first = true;
+                if (m.userPassContext) {
+                    call += "env";
+                    first = false;
+                }
+                for (size_t a = 0; a < m.argKinds.size(); ++a) {
+                    if (!first) call += ", ";
+                    first = false;
+                    // 寄存器槽 union 直接取值（regs[argIdx[a]].i / .j / .f / .d / .ref），
+                    // 与普通 JNI helper 的取值方式一致；用户 symbol 按 desc 类型收参。
+                    call += format_std("regs[argIdx[{}]]{}", a, slotReadField(m.argKinds[a]));
+                }
+                call += ")";
+                if (isVoid) {
+                    f.emitLine(call + ";");
+                }
+                else {
+                    f.emitLine(format_std("{} _r = {};", jniReturnType(m.retKind), call));
+                    f.emitLine(format_std("regs[dest]{} = {}_r;", slotReadField(m.retKind),
+                                          resultWriteCast(m.retKind)));
+                }
+            });
+            out.emitBlankLine();
+            continue;
+        }
+
         out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
                                 "unsigned int recv, unsigned int* argIdx, "
                                 "unsigned char argc, unsigned int dest)", helper),

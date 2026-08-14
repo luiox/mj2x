@@ -6,6 +6,10 @@
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
 #include "mj2x/codegen/runtime_protection.hpp"
+#include "mj2x/core/user_intrinsics.hpp"
+
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "mj2x/preprocessor/ldc_preprocessor.hpp"
@@ -100,6 +104,12 @@ static void printUsage()
            "terminate（默认 none 不注入；依赖 mj2x-crt rt_protect 模块）\n");
     printf("  --runtime-protection-step <n>   检查点概率触发步长（默认 16）\n");
     printf("  --runtime-protection-delay <ms> Delay 动作睡眠毫秒数（默认 500）\n");
+    printf("  --intrinsic-config <file>  用户自定义 intrinsic JSON（issue #818）：\n"
+           "                              {\"intrinsics\":[{\"owner\":\"com/x/F\",\"name\":\"m\",\n"
+           "                              \"desc\":\"(II)I\",\"symbol\":\"my_m\",\n"
+           "                              \"passContext\":false,\"mayThrow\":false}],\n"
+           "                              \"sources\":[\"path/to/my_m.c\"]}\n");
+    printf("  --intrinsic-src <file>     追加用户 intrinsic 实现源文件（可重复；并入生成工程编译）\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
     printf("  --quiet                    Only warnings and errors on stderr\n");
     printf("  --verbose                  Debug-level logs on stderr\n");
@@ -212,6 +222,9 @@ struct CliOptions
     std::string              runtimeProtection        = "none";   ///< none|log|delay|fake|terminate
     int                      runtimeProtectionStep    = 16;
     int                      runtimeProtectionDelayMs = 500;
+    /// 用户自定义 intrinsic 配置（issue #818）。
+    std::string              intrinsicConfigPath;
+    std::vector<std::string> intrinsicSources;
 };
 
 /// @brief --runtime-protection 字符串 → codegen::RuntimeProtectionAction。
@@ -305,6 +318,105 @@ static bool hasExtension(std::string path, const std::string& ext)
     auto suffix = path.substr(path.size() - ext.size());
     for (char& ch : suffix) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     return suffix == ext;
+}
+
+/// @brief 加载用户自定义 intrinsic 配置 JSON（issue #818）。
+///
+/// @details 格式：
+/// {"intrinsics":[{"owner":"com/x/F","name":"m","desc":"(II)I","symbol":"my_m",
+///                 "passContext":false,"mayThrow":false}],
+///  "sources":["path/to/my_m.c"]}
+/// owner/name/desc/symbol 必填；passContext/mayThrow 可选（默认 false）。
+static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsicConfig& out,
+                                    std::string& error)
+{
+    using json = nlohmann::json;
+    json root;
+    try {
+        std::ifstream file(path);
+        if (!file) {
+            error = "cannot open intrinsic config: " + path;
+            return false;
+        }
+        file >> root;
+    }
+    catch (const json::exception& ex) {
+        error = std::string("invalid JSON intrinsic config: ") + ex.what();
+        return false;
+    }
+    if (!root.is_object()) {
+        error = "intrinsic config root must be a JSON object";
+        return false;
+    }
+    if (root.contains("intrinsics")) {
+        const auto& arr = root["intrinsics"];
+        if (!arr.is_array()) {
+            error = "intrinsics must be a JSON array";
+            return false;
+        }
+        for (const auto& item : arr) {
+            if (!item.is_object()) {
+                error = "intrinsic entry must be a JSON object";
+                return false;
+            }
+            mj2x::UserIntrinsic u;
+            auto               getStr = [&](const char* key, std::string& field) -> bool {
+                if (!item.contains(key) || !item[key].is_string()) return false;
+                field = item[key].get<std::string>();
+                return true;
+            };
+            if (!getStr("owner", u.owner) || !getStr("name", u.name) ||
+                !getStr("desc", u.desc) || !getStr("symbol", u.symbol)) {
+                error = "intrinsic entry requires owner/name/desc/symbol strings";
+                return false;
+            }
+            if (item.contains("passContext") && item["passContext"].is_boolean())
+                u.passContext = item["passContext"].get<bool>();
+            if (item.contains("mayThrow") && item["mayThrow"].is_boolean())
+                u.mayThrow = item["mayThrow"].get<bool>();
+            out.intrinsics.push_back(std::move(u));
+        }
+    }
+    if (root.contains("sources")) {
+        const auto& arr = root["sources"];
+        if (!arr.is_array()) {
+            error = "sources must be a JSON array";
+            return false;
+        }
+        for (const auto& s : arr) {
+            if (!s.is_string()) {
+                error = "source entry must be a string";
+                return false;
+            }
+            out.sources.push_back(s.get<std::string>());
+        }
+    }
+    return true;
+}
+
+/// @brief 把用户 intrinsic 实现源文件复制进生成工程（xmake 模板用 glob 编译
+/// `src/mj2x-crt/**.c`，故复制到 `src/mj2x-crt/user_intrinsics/` 即自动并入）。
+static bool copyUserIntrinsicSources(const std::vector<std::string>& sources,
+                                     const std::filesystem::path& projectDir, std::string& error)
+{
+    if (sources.empty()) return true;
+    const std::filesystem::path destDir = projectDir / "src" / "mj2x-crt" / "user_intrinsics";
+    std::error_code             ec;
+    std::filesystem::create_directories(destDir, ec);
+    if (ec) {
+        error = "cannot create user intrinsic dir: " + destDir.string();
+        return false;
+    }
+    for (const auto& src : sources) {
+        const std::filesystem::path from(src);
+        const std::filesystem::path to = destDir / from.filename();
+        std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            error = "cannot copy user intrinsic source: " + from.string();
+            return false;
+        }
+    }
+    return true;
 }
 
 static std::vector<ca::u8> readFileBytes(const std::filesystem::path& path)
@@ -739,6 +851,12 @@ int main(int argc, char** argv)
         else if (arg == "--runtime-protection-step" && i + 1 < argc) {
             options.runtimeProtectionStep = std::atoi(argv[++i]);
         }
+        else if (arg == "--intrinsic-config" && i + 1 < argc) {
+            options.intrinsicConfigPath = argv[++i];
+        }
+        else if (arg == "--intrinsic-src" && i + 1 < argc) {
+            options.intrinsicSources.push_back(argv[++i]);
+        }
         else if (arg == "--runtime-protection-delay" && i + 1 < argc) {
             options.runtimeProtectionDelayMs = std::atoi(argv[++i]);
         }
@@ -977,6 +1095,19 @@ int main(int argc, char** argv)
     config.outputPath = options.outputPath;
     config.dumpMIR    = options.dumpMIR;
 
+    // 用户自定义 intrinsic（issue #818）：--intrinsic-config JSON + --intrinsic-src 追加。
+    mj2x::UserIntrinsicConfig userIntrinsicConfig;
+    if (!options.intrinsicConfigPath.empty()) {
+        std::string error;
+        if (!loadUserIntrinsicConfig(options.intrinsicConfigPath, userIntrinsicConfig, error)) {
+            CA_LOGT_ERROR("cli", "{}\n", error.c_str());
+            return 1;
+        }
+    }
+    for (const auto& s : options.intrinsicSources) userIntrinsicConfig.sources.push_back(s);
+    const bool hasUserIntrinsics =
+        !userIntrinsicConfig.intrinsics.empty() || !userIntrinsicConfig.sources.empty();
+
     const bool jarOutput =
         hasExtension(options.inputPath, ".jar") && hasExtension(options.outputPath, ".jar");
     const bool jarNativeLoaderEnabled =
@@ -1002,6 +1133,7 @@ int main(int argc, char** argv)
         }
         else if (options.cBackendKind == CEmitterBackend::RegC) {
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
+            if (hasUserIntrinsics) regcBackend->setUserIntrinsics(userIntrinsicConfig);
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
             if (options.regcTraceCalls) regcBackend->setTraceCallLog(true);
             if (options.regcDirectCalls) regcBackend->setDirectCalls(true);
@@ -1022,6 +1154,7 @@ int main(int argc, char** argv)
         }
         else if (options.cBackendKind == CEmitterBackend::Vmc4) {
             auto vmc4Backend = std::make_unique<mj2x::Vmc4Backend>();
+            if (hasUserIntrinsics) vmc4Backend->setUserIntrinsics(userIntrinsicConfig);
             if (!options.cOutputPath.empty()) vmc4Backend->setOutputPath(options.cOutputPath);
             // dispatcher 形态字符串 -> 枚举（默认 switch_table）。
             mj2x::Vmc4Options vmc4Opts;
@@ -1061,6 +1194,7 @@ int main(int argc, char** argv)
         }
         else {
             auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
+            if (hasUserIntrinsics) stackCBackend->setUserIntrinsics(userIntrinsicConfig);
             if (!options.cOutputPath.empty()) stackCBackend->setOutputPath(options.cOutputPath);
             if (options.stackcExceptionCheck == "lite") stackCBackend->setExceptionCheckLite(true);
             nativeSourceBackend = stackCBackend.get();
@@ -1185,6 +1319,16 @@ int main(int argc, char** argv)
         projectConfig.projectName         = "mj2x_native_project";
         int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
         if (projectRc != 0) return projectRc;
+        // 用户 intrinsic 实现文件（issue #818）：复制进工程 src/mj2x-crt/ 下，
+        // xmake 模板的 glob（src/mj2x-crt/**.c）自动并入编译。
+        if (!userIntrinsicConfig.sources.empty()) {
+            std::string error;
+            if (!copyUserIntrinsicSources(userIntrinsicConfig.sources,
+                                          std::filesystem::path(options.xmakeProjectDir), error)) {
+                CA_LOGT_ERROR("cli", "{}\n", error.c_str());
+                return 1;
+            }
+        }
     }
 
     if (options.compileNative) {
@@ -1222,7 +1366,8 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 compileRc = mj2x::cli::compileCSourceFromPipe(
-                    nativeArtifact.content, options.outputPath, options.cCompilerKind, crtRoot);
+                    nativeArtifact.content, options.outputPath, options.cCompilerKind, crtRoot,
+                    userIntrinsicConfig.sources);
             }
             else {
                 // 多文件模式（--emit-native-dir）：编译目录内全部 .c。
@@ -1233,12 +1378,14 @@ int main(int argc, char** argv)
                                       compileSource,
                                       options.outputPath,
                                       options.cCompilerKind,
-                                      crtRoot)
+                                      crtRoot,
+                                      userIntrinsicConfig.sources)
                                 : mj2x::cli::compileCSource(
                                       compileSource,
                                       options.outputPath,
                                       options.cCompilerKind,
-                                      crtRoot);
+                                      crtRoot,
+                                      userIntrinsicConfig.sources);
             }
         }
         if (compileRc != 0) return compileRc;

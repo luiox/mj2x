@@ -1,5 +1,7 @@
 #include "regc_intrinsic_registry.hpp"
 
+#include "jbytecode/jbytecode.hpp"
+
 namespace mj2x {
 
 namespace {
@@ -1652,9 +1654,53 @@ const RegCIntrinsicRegistry& RegCIntrinsicRegistry::builtins()
     return registry;
 }
 
+RegCIntrinsicRegistry::RegCIntrinsicRegistry(const std::vector<UserIntrinsic>& userEntries)
+{
+    userEntries_.reserve(userEntries.size());
+    for (const auto& u : userEntries) {
+        UserEntry entry;
+        entry.owner       = u.owner;
+        entry.name        = u.name;
+        entry.desc        = u.desc;
+        entry.symbol      = u.symbol;
+        entry.passContext = u.passContext;
+        userEntries_.push_back(std::move(entry));
+    }
+}
+
 RegCIntrinsicDecision RegCIntrinsicRegistry::matchCall(const RegInstruction& ins) const
 {
-    return matchNormalizedCall(RegCIntrinsicCallMatcher::fromInstruction(ins));
+    const RegCIntrinsicCall call = RegCIntrinsicCallMatcher::fromInstruction(ins);
+    if (!userEntries_.empty()) {
+        const RegCIntrinsicDecision userDecision = matchUserCall(call);
+        if (userDecision.kind != RegCIntrinsicDecisionKind::Fallback) return userDecision;
+    }
+    return matchNormalizedCall(call);
+}
+
+RegCIntrinsicDecision RegCIntrinsicRegistry::matchUserCall(const RegCIntrinsicCall& call) const
+{
+    for (const auto& entry : userEntries_) {
+        if (call.owner != entry.owner || call.name != entry.name || call.desc != entry.desc) {
+            continue;
+        }
+        const auto argTypes =
+            jbytecode::core::Type::getMethodType(ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
+                .getArgumentTypes();
+        RegCIntrinsicDecision decision;
+        if (call.argCount != static_cast<int>(argTypes.size())) {
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "malformed RegIR argument count for user intrinsic " +
+                              call.displayName();
+            return decision;
+        }
+        decision.kind        = RegCIntrinsicDecisionKind::Emit;
+        decision.emitKind    = RegCIntrinsicEmitKind::UserIntrinsic;
+        decision.symbol      = entry.symbol;
+        decision.passContext = entry.passContext;
+        return decision;
+    }
+    return RegCIntrinsicDecision{};
 }
 
 RegCIntrinsicDecision RegCIntrinsicRegistry::matchNormalizedCall(
@@ -1811,6 +1857,50 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("mj2x_ref mj2x_intrinsic_long_to_binary_string(mj2x_regc_context* context, int64_t value);\n");
     out.append("mj2x_ref mj2x_intrinsic_enum_name(mj2x_regc_context* context, mj2x_ref receiver);\n");
     out.append("int32_t mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receiver);\n");
+    // 用户自定义 intrinsic symbol 声明（issue #818）：返回/参数类型由 desc 派生。
+    // 参数顺序与各后端发射一致：passContext 时第一个参数是 JNIEnv*（三后端一致）。
+    {
+        auto cType = [](const ca::str::Utf8StringRef& desc) -> const char* {
+            if (desc.is_empty()) return "void";
+            switch (desc.data()[0]) {
+                case 'V': return "void";
+                case 'I':
+                case 'Z':
+                case 'B':
+                case 'S':
+                case 'C': return "int32_t";
+                case 'J': return "int64_t";
+                case 'F': return "float";
+                case 'D': return "double";
+                default: return "mj2x_ref";   // L...; / [
+            }
+        };
+        for (const auto& entry : userEntries_) {
+            std::string decl =
+                std::string("extern ") +
+                cType(jbytecode::core::Type::getMethodType(
+                          ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
+                          .getReturnType()
+                          .getDescriptor()) +
+                " " + entry.symbol + "(";
+            const auto argTypes =
+                jbytecode::core::Type::getMethodType(
+                    ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
+                    .getArgumentTypes();
+            size_t     printed  = 0;
+            if (entry.passContext) {
+                decl += "JNIEnv* env";
+                ++printed;
+            }
+            for (const auto& arg : argTypes) {
+                if (printed > 0) decl += ", ";
+                decl += cType(arg.getDescriptor());
+                ++printed;
+            }
+            decl += ");\n";
+            out.append(decl.c_str());
+        }
+    }
     out.append("#ifdef __cplusplus\n");
     out.append("}\n");
     out.append("#endif\n");

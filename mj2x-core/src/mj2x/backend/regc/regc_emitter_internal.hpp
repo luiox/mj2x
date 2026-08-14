@@ -54,6 +54,9 @@ struct RegCFunctionEmitState
     CompilerIndex*                            classIndex          = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions = nullptr;
     const std::unordered_set<std::string>*    indyFunctions       = nullptr;
+    /// intrinsic 匹配 registry（issue #818）：nullptr 时用 builtins()。
+    /// RegCBackend::setUserIntrinsics 构造带用户条目的 registry 实例后设置。
+    const RegCIntrinsicRegistry*              intrinsicRegistry   = nullptr;
     /// 动态实例调用是否启用 resolved native dispatch（多文件模式关闭：
     /// 函数表只在单文件 TU 内可见）。
     bool                                      resolvedDispatch    = false;
@@ -220,7 +223,9 @@ bool rejectNativeObjectEscapes(const RegCFunctionEmitState&   state,
 /// 分析函数内登记的 native 包装寄存器集合（含参数传入的包装对象）。
 std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn);
 /// 分析 StringBuilder/StringBuffer 的分配/连接/逃逸，产出 materialize 计划。
-RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn);
+/// registry 用于识别 StringBuilder 方法 intrinsic（nullptr 时用 builtins()）。
+RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
+                                            const RegCIntrinsicRegistry* registry = nullptr);
 /// 尝试发射 intrinsic 调用（StringBuilder/StringBuffer/字符串运行时方法）。
 RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out, const RegInstruction& ins,
                                         RegCFunctionEmitState& state);

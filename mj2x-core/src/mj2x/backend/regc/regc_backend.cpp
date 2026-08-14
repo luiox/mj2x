@@ -3,6 +3,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
+#include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
 #include "mj2x/backend/regc/regc_runtime_template.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
@@ -516,6 +517,9 @@ struct RegCBackend::Impl
     /// 如 ExceptionProbe.run 先于 risky）。实际转换失败的方法在早退路径
     /// erase 回滚，避免直调不存在的函数体。
     std::unordered_set<std::string> preRegisteredClasses;
+    /// 用户自定义 intrinsic registry（issue #818）：setUserIntrinsics 构造，
+    /// nullptr 表示未设置（用 builtins()）。
+    std::unique_ptr<RegCIntrinsicRegistry> userIntrinsicRegistry;
 
     /// 记录一条 native 方法注册，并为首次出现的类分配 classId。
     /// compileMethod 成功路径调用。返回该类的 classId（供 injectIntoClass 注入 clinit）。
@@ -556,6 +560,12 @@ void RegCBackend::setTraceCallLog(bool enabled)
 void RegCBackend::setDirectCalls(bool enabled)
 {
     impl_->directCalls = enabled;
+}
+
+void RegCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
+{
+    impl_->userIntrinsicRegistry =
+        std::make_unique<RegCIntrinsicRegistry>(config.intrinsics);
 }
 
 void RegCBackend::setSafeEnv(bool enabled)
@@ -657,7 +667,8 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                         impl_->indySites.size(),
                         impl_->currentIndex,
                         &impl_->convertedFunctions,
-                        &impl_->indyFunctions);
+                        &impl_->indyFunctions,
+                        impl_->userIntrinsicRegistry.get());
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。

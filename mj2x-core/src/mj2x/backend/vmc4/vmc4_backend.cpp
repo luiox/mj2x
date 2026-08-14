@@ -188,6 +188,9 @@ struct Vmc4Backend::Impl
     /// per-method 粒度按 className.method+desc 键。构造确定性（同 seed 同产物）。
     std::unordered_map<std::string, std::unique_ptr<VmInstance>> instances;
 
+    /// 用户自定义 intrinsic（issue #818）：编码期传入 VmEncoder 匹配调用点。
+    std::vector<UserIntrinsic> userIntrinsics;
+
     int registerNativeMethod(const std::string& className, const std::string& javaName,
                              const std::string& javaDesc, const std::string& cFunctionName)
     {
@@ -208,6 +211,11 @@ Vmc4Backend::Vmc4Backend()
 {}
 
 Vmc4Backend::~Vmc4Backend() = default;
+
+void Vmc4Backend::setUserIntrinsics(const UserIntrinsicConfig& config)
+{
+    impl_->userIntrinsics = config.intrinsics;
+}
 
 std::string Vmc4Backend::traceSurface() const
 {
@@ -303,7 +311,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
         it = inserted.first;
     }
     VmInstance& instance = *it->second;
-    auto        program  = VmEncoder::encode(*reg, instance, reason);
+    auto        program  = VmEncoder::encode(*reg, instance, reason, &impl_->userIntrinsics);
     if (!program) {
         CA_LOGT_ERROR("vmc4", "Skipping {}.{}{}: VM encode failed: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
         return backendResult;

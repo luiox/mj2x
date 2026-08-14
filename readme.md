@@ -13,6 +13,27 @@
 | **RegC** | 保护导向,抗 c2j 分析 | 虚拟寄存器 + block label,无栈锚点(默认走 JNI 调用保 JVM 栈帧语义,`--regc-direct-calls` 可开启直调) |
 | **VMC4** | VM 虚拟化(保护导向,性能非关键) | 表驱动解释器,编译期随机化 + 执行期 dispatch drift(`--vmc4-drift`) |
 
+## 用户自定义 intrinsic（#818）
+
+三个后端（StackC / RegC / VMC4）都支持把任意 Java 静态调用点降级为对用户
+提供的 native symbol 的直接调用，替代通用 JNI 派发。JSON 配置：
+
+```json
+{
+  "intrinsics": [
+    {"owner": "F", "name": "m", "desc": "(II)I", "symbol": "my_m",
+     "passContext": false, "mayThrow": false}
+  ],
+  "sources": ["path/to/my_m.c"]
+}
+```
+
+- `owner` 用内部形式（`F` / `com/x/F`，不带 `L...;`），`desc` 是 JVM 描述符。
+- `passContext: true` 时用户函数第一参数收 `JNIEnv* env`（三后端一致）。
+- `mayThrow: true` 时调用点保留调用后 pending 异常检查（RegC 恒保留）。
+- `sources` 里的实现文件自动并入 `--compile` 直接编译或 `--generate-xmake` 工程。
+- 命令行：`--intrinsic-config <file>`（JSON）+ `--intrinsic-src <file>`（可重复追加）。
+
 详细支持矩阵和限制见 [doc_ai/capabilities.md](doc_ai/capabilities.md)。
 
 ## 模块组成

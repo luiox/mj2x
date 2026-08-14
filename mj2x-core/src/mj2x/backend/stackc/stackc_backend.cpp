@@ -347,6 +347,11 @@ StackCBackend::~StackCBackend() = default;
 
 void StackCBackend::setExceptionCheckLite(bool lite) { impl_->exceptionCheckLite = lite; }
 
+void StackCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
+{
+    impl_->userIntrinsics = config.intrinsics;
+}
+
 // ============================================================
 // Main compile method
 // ============================================================

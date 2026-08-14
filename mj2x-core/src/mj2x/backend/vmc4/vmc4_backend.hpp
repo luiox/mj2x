@@ -71,6 +71,11 @@ public:
     /// 必须在 compileMethod 之前调用：选项透传给每个方法的 VmInstance 构造。
     void setOptions(const Vmc4Options& options) { options_ = options; }
 
+    /// @brief 设置用户自定义 intrinsic（issue #818）。
+    /// @details 静态调用点匹配用户条目时降级为直接调用用户 symbol；
+    /// 必须在 compileMethod 之前调用。
+    void setUserIntrinsics(const UserIntrinsicConfig& config) override;
+
     /// @brief Set a `.c` output path written during finalize.
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
 

@@ -202,6 +202,10 @@ struct VmMethodRef
     bool          hasDest = false;   ///< 是否有返回值（void=false）
     VmJniKind                retKind  = VmJniKind::Void;   ///< 返回值类型类别
     std::vector<VmJniKind>   argKinds;                    ///< 参数类型类别（顺序对齐 args）
+    /// 用户自定义 intrinsic（issue #818）：非空时本调用点降级为直接调用用户
+    /// symbol（helper 解包 regs 参数 → symbol，不经 JNI 通用派发）。
+    std::string userSymbol;
+    bool        userPassContext = false;   ///< 用户 symbol 第一参数传 JNIEnv* env
 };
 
 /// @brief 解释器调用结果。

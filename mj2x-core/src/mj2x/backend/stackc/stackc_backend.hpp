@@ -49,6 +49,11 @@ public:
     ///          热循环内省掉每轮 ExceptionCheck 的 JNI 边界开销。
     void setExceptionCheckLite(bool lite);
 
+    /// @brief 设置用户自定义 intrinsic（issue #818）。
+    /// @details 匹配的调用点在 emitInvoke 中降级为对用户 symbol 的直接调用
+    /// （参数从 operand stack 弹出）；必须在 compileMethod 之前调用。
+    void setUserIntrinsics(const UserIntrinsicConfig& config) override;
+
     /// 生成代码访问器（测试用）。
     const std::string& generatedHeader() const { return headerCode_; }
     /// 生成代码访问器（测试用）。

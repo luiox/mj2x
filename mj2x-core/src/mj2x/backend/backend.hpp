@@ -1,4 +1,4 @@
-﻿/// @file backend.hpp
+/// @file backend.hpp
 /// @brief 抽象后端接口：L1 MIR -> native 翻译的统一契约。
 ///
 /// @details
@@ -10,6 +10,7 @@
 
 #include "backend_result.hpp"
 #include "mj2x/core/compiler_index.hpp"
+#include "mj2x/core/user_intrinsics.hpp"
 #include "mj2x/frontend/block.hpp"
 
 #include <string>
@@ -75,6 +76,12 @@ public:
 
     /// @brief 返回 finalize 后生成的 native 源产物元数据与内容。
     virtual NativeSourceArtifact generatedSourceArtifact() const = 0;
+
+    /// @brief 设置用户自定义 intrinsic（issue #818）。
+    /// @details 默认无操作；StackC / RegC / VMC4 override 把用户条目接入各自
+    /// 的调用发射路径（RegC registry 合并、StackC emitInvoke 匹配、VMC4
+    /// encodeCall 自定义 helper）。在 compileMethod 前调用。
+    virtual void setUserIntrinsics(const UserIntrinsicConfig& /*config*/) {}
 };
 
 }   // namespace mj2x
