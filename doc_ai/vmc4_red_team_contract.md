@@ -85,3 +85,18 @@
 - 对 VMC4 样本的自动化 ISA 还原工具（dispatcher 识别 + 字节集合枚举 + handler 语义标注）。
 - weakness report 按 §2 表逐维度产出，并带 §4.1 复用率数值。
 - 红队结论回填 mj2x `dev_plan.md`，驱动下一次可变性调参。
+
+## 7. mj2x 侧自验闭环（2026-08-15，mjdbg 工具就绪前的自动化替代）
+
+mjdbg 对抗工具未落地期间，mj2x 侧用 `Vmc4TraceSurfaceConsistencyTest` 自动化
+执行 §4.1/§4.3 的核对方法，防止「声明的 trace surface 与产物漂移」与
+「实例独立失效」在无人观测时悄然发生：
+
+| 测试 | 核对内容（对应红队方法） |
+|---|---|
+| `DescribeFileRoundTripsToInstanceState` | 把 describe() 输出当作 trace-surface 文件解析，与 VmInstance 产物状态逐字节比对：每语义字节集合、alt-form 标记、handlerOrder 字节序列、alias/bogus/drift 字段、全集双射（§4.3 声明↔产物一致性） |
+| `DescribeFileRoundTripsDriftInstance` | drift 开启实例：声明字段、每个变体 unmap 输出 canonical 全排列（双射）、跨变体轮转真实发生（§2 opcode 编码熵 / handler 数量的观测面支撑） |
+| `CrossInstanceSemanticMappingIsUnreusable` | §4.1 低配量化：实例 A 的语义表对实例 B 字节的命中率——实测 **2.50%**（随机期望 ~5%，阈值 20%）——跨实例复用性 ≈ 0，实例独立成立 |
+
+红队工具就绪后：§7 自验结果作为 §4 量化方法的前置基线；工具结论与 §7
+数值不一致时按「发现未声明结构」处理（§4.3）。

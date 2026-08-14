@@ -62,6 +62,11 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-15：**#820 步骤 6 mj2x 侧闭环（trace surface 自验）**——新增
+  Vmc4TraceSurfaceConsistencyTest 3 项：describe↔产物逐字节核对（含 drift 变体
+  unmap 全排列双射 + 轮转真实性）、跨实例语义命中率 2.50%（随机期望 ~5%，
+  阈值 20%——§4.1 实例独立判据的自动化替代）；mjdbg 对抗工具就绪后作为
+  §4 量化方法的前置基线（vmc4_red_team_contract.md §7）。
 - 2026-08-15：**主线七步骤 5（#820 性能回归自动化）**——benchmark 13-probe 扩展
   `-Regression` 回归模式（13-probe 全过 + 覆盖率 ≥ 基线×0.9 + total ≤ 基线×2.0，
   失败 exit 非零；`-UpdateBaseline` 刷新基线）+ 基线文件
