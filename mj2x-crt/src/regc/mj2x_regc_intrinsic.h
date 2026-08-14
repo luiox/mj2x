@@ -150,6 +150,14 @@ mj2x_ref mj2x_intrinsic_long_to_binary_string(mj2x_regc_context* context, int64_
 mj2x_ref  mj2x_intrinsic_enum_name(mj2x_regc_context* context, mj2x_ref receiver);
 int32_t   mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receiver);
 
+/// @brief java.lang.System.arraycopy(Object,int,Object,int,int) 安全子集。
+///
+/// 覆盖 JVM 语义：null → NPE、len<0 / 越界 → ArrayIndexOutOfBoundsException、
+/// 同类型 primitive 数组 → Get/Set<Type>ArrayRegion 复制（重叠安全）；
+/// 对象数组、类型不兼容与任何不支持情形回退 JNI System.arraycopy（语义保真）。
+void mj2x_intrinsic_arraycopy(mj2x_regc_context* context, mj2x_ref src, int32_t srcPos,
+                              mj2x_ref dst, int32_t dstPos, int32_t len);
+
 #ifdef __cplusplus
 }
 #endif

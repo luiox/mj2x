@@ -567,6 +567,18 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      true,
      1,
      false},
+    {"java/lang/System",
+     "arraycopy",
+     "(Ljava/lang/Object;ILjava/lang/Object;II)V",
+     "mj2x_intrinsic_arraycopy",
+     /* RegCLocalHelper（而非 RuntimeFunction）：arraycopy 会抛 NPE/AIOOBE，
+      * 必须保留调用后 ExceptionCheck 与 local-ref 帧（RuntimeFunction 被
+      * isPureRuntimeIntrinsic 判定为纯计算而省略）。 */
+     RegCIntrinsicEmitKind::RegCLocalHelper,
+     RegCIntrinsicNativeObjectKind::None,
+     true,
+     5,
+     true},
     {"java/lang/Short",
      "toString",
      "(S)Ljava/lang/String;",

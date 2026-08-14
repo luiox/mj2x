@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 #define MJ2X_RANDOM_MULT UINT64_C(0x5DEECE66D)
 #define MJ2X_RANDOM_ADD UINT64_C(0xB)
@@ -626,4 +627,178 @@ int32_t mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receive
     const jfieldID field = mj2x_intrinsic_enum_ordinal_field(env);
     if (field == NULL) return 0;
     return (*env)->GetIntField(env, (jobject)receiver, field);
+}
+
+// ---- java.lang.System.arraycopy 安全子集 ----
+
+/// @brief 回退 JNI System.arraycopy（对象数组 / 类型不兼容 / 不支持情形）。
+///
+/// 懒缓存 class + methodID；失败（如异常挂起）时保持 pending exception。
+static void mj2x_intrinsic_arraycopy_fallback(JNIEnv* env, jobject src, jint srcPos,
+                                              jobject dst, jint dstPos, jint len)
+{
+    static jclass    system_class = NULL;
+    static jmethodID arraycopy    = NULL;
+    if (system_class == NULL) {
+        jclass local = (*env)->FindClass(env, "java/lang/System");
+        if (local == NULL) return;
+        system_class = (jclass)(*env)->NewGlobalRef(env, local);
+        (*env)->DeleteLocalRef(env, local);
+    }
+    if (arraycopy == NULL && system_class != NULL) {
+        arraycopy = (*env)->GetStaticMethodID(env, system_class, "arraycopy",
+                                              "(Ljava/lang/Object;ILjava/lang/Object;II)V");
+    }
+    if (arraycopy == NULL) return;
+    (*env)->CallStaticVoidMethod(env, system_class, arraycopy, src, srcPos, dst, dstPos, len);
+}
+
+/// @brief 8 种 primitive 数组的 IsInstanceOf jclass（按数组描述符索引懒缓存）。
+static jclass mj2x_intrinsic_arraycopy_prim_class(JNIEnv* env, int idx)
+{
+    static const char* kNames[8] = {"[Z", "[B", "[C", "[S", "[I", "[J", "[F", "[D"};
+    static jclass      cached[8] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    if (cached[idx] != NULL) return cached[idx];
+    jclass local = (*env)->FindClass(env, kNames[idx]);
+    if (local == NULL) return NULL;
+    cached[idx] = (jclass)(*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    return cached[idx];
+}
+
+void mj2x_intrinsic_arraycopy(mj2x_regc_context* context, mj2x_ref src, int32_t srcPos,
+                              mj2x_ref dst, int32_t dstPos, int32_t len)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL) return;
+    jobject srcObj = (jobject)src;
+    jobject dstObj = (jobject)dst;
+
+    if (srcObj == NULL || dstObj == NULL) {
+        if (context != NULL && context->throwException != NULL) {
+            context->throwException(env, "java/lang/NullPointerException",
+                                    (srcObj == NULL) ? "source array is null"
+                                                     : "destination array is null");
+        }
+        return;
+    }
+    if (len < 0) {
+        if (context != NULL && context->throwException != NULL) {
+            context->throwException(env, "java/lang/ArrayIndexOutOfBoundsException",
+                                    "negative arraycopy length");
+        }
+        return;
+    }
+    if (srcPos < 0 || dstPos < 0) {
+        if (context != NULL && context->throwException != NULL) {
+            context->throwException(env, "java/lang/ArrayIndexOutOfBoundsException",
+                                    "negative arraycopy position");
+        }
+        return;
+    }
+
+    const jsize srcLen = (*env)->GetArrayLength(env, (jarray)srcObj);
+    const jsize dstLen = (*env)->GetArrayLength(env, (jarray)dstObj);
+    if ((jsize)srcPos > srcLen - (jsize)len || (jsize)dstPos > dstLen - (jsize)len) {
+        if (context != NULL && context->throwException != NULL) {
+            context->throwException(env, "java/lang/ArrayIndexOutOfBoundsException",
+                                    "arraycopy range out of bounds");
+        }
+        return;
+    }
+
+    jclass srcClass = (*env)->GetObjectClass(env, srcObj);
+    jclass dstClass = (*env)->GetObjectClass(env, dstObj);
+    if (srcClass == NULL || dstClass == NULL) return;
+    const jboolean sameType = (*env)->IsSameObject(env, srcClass, dstClass);
+    (*env)->DeleteLocalRef(env, srcClass);
+    (*env)->DeleteLocalRef(env, dstClass);
+    if (!sameType) {
+        /* 类型不兼容（不同 primitive 类型 / 对象数组子类关系等）→ 回退 JNI 保语义 */
+        mj2x_intrinsic_arraycopy_fallback(env, srcObj, (jint)srcPos, dstObj, (jint)dstPos,
+                                          (jint)len);
+        return;
+    }
+
+    /* 同类型数组：先识别 primitive 元素类型，非 primitive（对象数组）回退 JNI
+     * （System.arraycopy 自身有对象路径优化）。复制走 Get/Set<Type>ArrayRegion
+     * 临时缓冲——重叠安全且不依赖数组内存布局。 */
+    int elemKind = -1; /* 0=[Z 1=[B 2=[C 3=[S 4=[I 5=[J 6=[F 7=[D */
+    for (int t = 0; t < 8; ++t) {
+        jclass c = mj2x_intrinsic_arraycopy_prim_class(env, t);
+        if (c == NULL) continue;
+        if ((*env)->IsInstanceOf(env, srcObj, c)) {
+            elemKind = t;
+            break;
+        }
+    }
+    if (elemKind < 0) {
+        /* 对象数组（或未知数组类型）→ 回退 JNI */
+        mj2x_intrinsic_arraycopy_fallback(env, srcObj, (jint)srcPos, dstObj, (jint)dstPos,
+                                          (jint)len);
+        return;
+    }
+
+    static const int kElemSizes[8] = {1, 1, 2, 2, 4, 8, 4, 8};
+    const size_t     bytes        = (size_t)(jsize)len * (size_t)kElemSizes[elemKind];
+    void*            tmp          = malloc(bytes > 0 ? bytes : 1);
+    if (tmp == NULL) return; /* OOM：保持无副作用 */
+    switch (elemKind) {
+    case 0: /* boolean[] */
+        (*env)->GetBooleanArrayRegion(env, (jbooleanArray)srcObj, (jsize)srcPos, (jsize)len,
+                                      (jboolean*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetBooleanArrayRegion(env, (jbooleanArray)dstObj, (jsize)dstPos, (jsize)len,
+                                          (jboolean*)tmp);
+        break;
+    case 1: /* byte[] */
+        (*env)->GetByteArrayRegion(env, (jbyteArray)srcObj, (jsize)srcPos, (jsize)len,
+                                   (jbyte*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetByteArrayRegion(env, (jbyteArray)dstObj, (jsize)dstPos, (jsize)len,
+                                       (jbyte*)tmp);
+        break;
+    case 2: /* char[] */
+        (*env)->GetCharArrayRegion(env, (jcharArray)srcObj, (jsize)srcPos, (jsize)len,
+                                   (jchar*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetCharArrayRegion(env, (jcharArray)dstObj, (jsize)dstPos, (jsize)len,
+                                       (jchar*)tmp);
+        break;
+    case 3: /* short[] */
+        (*env)->GetShortArrayRegion(env, (jshortArray)srcObj, (jsize)srcPos, (jsize)len,
+                                    (jshort*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetShortArrayRegion(env, (jshortArray)dstObj, (jsize)dstPos, (jsize)len,
+                                        (jshort*)tmp);
+        break;
+    case 4: /* int[] */
+        (*env)->GetIntArrayRegion(env, (jintArray)srcObj, (jsize)srcPos, (jsize)len, (jint*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetIntArrayRegion(env, (jintArray)dstObj, (jsize)dstPos, (jsize)len,
+                                      (jint*)tmp);
+        break;
+    case 5: /* long[] */
+        (*env)->GetLongArrayRegion(env, (jlongArray)srcObj, (jsize)srcPos, (jsize)len,
+                                   (jlong*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetLongArrayRegion(env, (jlongArray)dstObj, (jsize)dstPos, (jsize)len,
+                                       (jlong*)tmp);
+        break;
+    case 6: /* float[] */
+        (*env)->GetFloatArrayRegion(env, (jfloatArray)srcObj, (jsize)srcPos, (jsize)len,
+                                    (jfloat*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetFloatArrayRegion(env, (jfloatArray)dstObj, (jsize)dstPos, (jsize)len,
+                                        (jfloat*)tmp);
+        break;
+    default: /* double[] */
+        (*env)->GetDoubleArrayRegion(env, (jdoubleArray)srcObj, (jsize)srcPos, (jsize)len,
+                                     (jdouble*)tmp);
+        if (!(*env)->ExceptionCheck(env))
+            (*env)->SetDoubleArrayRegion(env, (jdoubleArray)dstObj, (jsize)dstPos, (jsize)len,
+                                         (jdouble*)tmp);
+        break;
+    }
+    free(tmp);
 }

@@ -240,9 +240,11 @@ protected:
         compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
         compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
         compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
-        compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
-        compileRuntime("intrinsic/intrinsic_math.cpp", "intrinsic_math.obj");
-        compileRuntime("intrinsic/intrinsic_random.cpp", "intrinsic_random.obj");
+        // 权威 wrapper/Math/Random/位操作 intrinsic 全部在 crt 的
+        // mj2x_regc_intrinsic.c（可分发 C99 版，生成工程同源）；runtime 的
+        // intrinsic_wrapper/intrinsic_math/intrinsic_random 是历史 in-tree 版，
+        // 与 crt 重复定义，不再链接。
+        compileCrt("regc/mj2x_regc_intrinsic.c", "mj2x_regc_intrinsic.obj");
 
         std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
         for (const auto& obj : runtimeObjs) linkLine += " " + q(obj);
@@ -393,6 +395,73 @@ TEST_F(RegCBackendE2E, MultiArrayHelpersRoundTrip)
             "}\n",
             {
                 {"cube(2, 3, 4)", "RegCMultiArrayHelpers.cube(2, 3, 4)"},
+            });
+}
+
+TEST_F(RegCBackendE2E, SystemArraycopyRoundTrip)
+{
+    runCase("RegCNativeArrayCopy",
+            "public class RegCNativeArrayCopy {\n"
+            "  public static int copyInts(int n) {\n"
+            "    int[] src = new int[4];\n"
+            "    for (int i = 0; i < 4; i++) src[i] = i * 10 + n;\n"
+            "    int[] dst = new int[4];\n"
+            "    System.arraycopy(src, 1, dst, 0, 3);\n"
+            "    return dst[0] + dst[1] + dst[2] + dst[3];\n"
+            "  }\n"
+            "  public static int overlapCopy() {\n"
+            "    int[] a = {1, 2, 3, 4, 5};\n"
+            "    System.arraycopy(a, 0, a, 1, 4);\n"
+            "    return a[0] * 10000 + a[1] * 1000 + a[2] * 100 + a[3] * 10 + a[4];\n"
+            "  }\n"
+            "  public static long copyLongs(int n) {\n"
+            "    long[] src = {n, n + 1, n + 2};\n"
+            "    long[] dst = new long[3];\n"
+            "    System.arraycopy(src, 0, dst, 0, 3);\n"
+            "    return dst[0] + dst[1] + dst[2];\n"
+            "  }\n"
+            "  public static int copyBytes(int n) {\n"
+            "    byte[] src = {1, 2, 3};\n"
+            "    byte[] dst = new byte[3];\n"
+            "    System.arraycopy(src, 1, dst, 0, 2);\n"
+            "    return dst[0] + dst[1] + dst[2];\n"
+            "  }\n"
+            "  public static int copyChars() {\n"
+            "    char[] src = {'a', 'b', 'c'};\n"
+            "    char[] dst = new char[3];\n"
+            "    System.arraycopy(src, 2, dst, 0, 1);\n"
+            "    return dst[0];\n"
+            "  }\n"
+            "  public static int nullSource() {\n"
+            "    try { System.arraycopy(null, 0, new int[1], 0, 1); return 0; }\n"
+            "    catch (NullPointerException e) { return 1; }\n"
+            "  }\n"
+            "  public static int negativeLen() {\n"
+            "    try { System.arraycopy(new int[2], 0, new int[2], 0, -1); return 0; }\n"
+            "    catch (IndexOutOfBoundsException e) { return 2; }\n"
+            "  }\n"
+            "  public static int outOfRange() {\n"
+            "    try { System.arraycopy(new int[2], 0, new int[2], 0, 3); return 0; }\n"
+            "    catch (IndexOutOfBoundsException e) { return 3; }\n"
+            "  }\n"
+            "  public static int objectArrayFallback(int n) {\n"
+            "    String[] src = {\"a\", \"b\", \"c\"};\n"
+            "    Object[] dst = new Object[3];\n"
+            "    System.arraycopy(src, 0, dst, 0, 3);\n"
+            "    return dst[2].toString().length();\n"
+            "  }\n"
+            "}\n",
+            {
+                {"copyInts(5)", "RegCNativeArrayCopy.copyInts(5)"},
+                {"copyInts(0)", "RegCNativeArrayCopy.copyInts(0)"},
+                {"overlapCopy()", "RegCNativeArrayCopy.overlapCopy()"},
+                {"copyLongs(7)", "RegCNativeArrayCopy.copyLongs(7)"},
+                {"copyBytes(0)", "RegCNativeArrayCopy.copyBytes(0)"},
+                {"copyChars()", "RegCNativeArrayCopy.copyChars()"},
+                {"nullSource()", "RegCNativeArrayCopy.nullSource()"},
+                {"negativeLen()", "RegCNativeArrayCopy.negativeLen()"},
+                {"outOfRange()", "RegCNativeArrayCopy.outOfRange()"},
+                {"objectArrayFallback(0)", "RegCNativeArrayCopy.objectArrayFallback(0)"},
             });
 }
 

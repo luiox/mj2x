@@ -194,6 +194,26 @@ TEST(RegCIntrinsicRegistryTest, UnsupportedOverloadFallsBackWithReason)
               std::string::npos);
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesSystemArraycopy)
+{
+    auto decision = RegCIntrinsicRegistry::builtins().matchCall(makeStaticCall(
+        "java/lang/System",
+        "arraycopy",
+        "(Ljava/lang/Object;ILjava/lang/Object;II)V",
+        {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+         RegOperand::fromInt(0, SSAType::I32),
+         RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF}),
+         RegOperand::fromInt(1, SSAType::I32),
+         RegOperand::fromInt(2, SSAType::I32)}));
+
+    EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(decision.symbol, "mj2x_intrinsic_arraycopy");
+    EXPECT_TRUE(decision.passContext);
+    // RegCLocalHelper（非 RuntimeFunction）：arraycopy 会抛 NPE/AIOOBE，
+    // 发射必须保留调用后 ExceptionCheck 与 local-ref 帧。
+    EXPECT_EQ(decision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+}
+
 TEST(RegCIntrinsicRegistryTest, MalformedIntrinsicArgumentCountIsUnsupported)
 {
     auto ins = makeStaticCall("java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", {});
