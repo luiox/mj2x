@@ -23,7 +23,12 @@ param(
     [string]$Os30Jar = "D:\WorkSpace\jvm-obf-tester\target\jvm-obf-tester_os30.jar",
     [string]$JdkHome = "",                                # 默认 $env:JAVA_HOME；JAVA_HOME 未设置则用 D:\sdk\java\jdk17
     [int]$Runs = 3,                                       # 取样轮数（不含预热）
-    [switch]$SkipBuild                                    # 跳过 CLI 构建（复用已有产物）
+    [switch]$SkipBuild,                                   # 跳过 CLI 构建（复用已有产物）
+    [string]$BaselineFile = "",                           # 回归基线 JSON；默认 <repo>/mj2x/benchmark/baseline/regc-perf-baseline.json
+    [double]$MaxTotalRatio = 2.0,                         # 回归：RegC total 允许相对基线的最差倍率（防性能退化）
+    [double]$MinCoverageRatio = 0.9,                      # 回归：native 覆盖率允许相对基线的最低比例
+    [switch]$Regression,                                  # 回归模式：#820 步骤 5。断言 13-probe 全过 + 覆盖率 + 总耗时阈值，失败退出非零；跳过 os30 取样
+    [switch]$UpdateBaseline                               # 把本次 RegC 结果写入基线文件（维护基线用）
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,7 +57,10 @@ if ([string]::IsNullOrWhiteSpace($Cli)) {
 }
 if (-not (Test-Path $Cli)) { throw "mj2x-cli 未找到: $Cli（先构建或传 -Cli）" }
 if (-not (Test-Path $InputJar)) { throw "输入 jar 未找到: $InputJar" }
-if (-not (Test-Path $Os30Jar)) { throw "os30 jar 未找到: $Os30Jar" }
+if (-not $Regression -and -not (Test-Path $Os30Jar)) { throw "os30 jar 未找到: $Os30Jar" }
+if ([string]::IsNullOrWhiteSpace($BaselineFile)) {
+    $BaselineFile = Join-Path $PSScriptRoot "baseline\regc-perf-baseline.json"
+}
 
 function Run-ProcessChecked([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory, [string]$LogPath) {
     Push-Location $WorkingDirectory
@@ -140,7 +148,11 @@ function Get-NativeCoverage([string]$JarPath, [string]$WorkDir) {
 
 Write-Host "==> 覆盖率审计（javap） ..."
 $audit = Get-NativeCoverage $outJar (Join-Path $outDir "audit-regc")
-$auditOs30 = Get-NativeCoverage $Os30Jar (Join-Path $outDir "audit-os30")
+if ($Regression) {
+    $auditOs30 = $null
+} else {
+    $auditOs30 = Get-NativeCoverage $Os30Jar (Join-Path $outDir "audit-os30")
+}
 
 # ---- 4. 跑 13-probe（预热 1 轮 + Runs 次取样） ----
 function Run-Probes([string]$JarPath) {
@@ -150,10 +162,12 @@ function Run-Probes([string]$JarPath) {
 function Get-ProbeTimes([string[]]$Lines) {
     $map = @{}
     foreach ($line in $Lines) {
+        # 先取 Status，再取 Time（$Matches 会被下一次 -match 覆盖）。
         if ($line -match '^\| (.+) \| (Passed|Failed) \|') {
-            $name = $Matches[1].Trim()
-            $time = if ($line -match '(\d+\.?\d*)ms') { [double]$Matches[1] } else { 0 }
-            $map[$name] = [pscustomobject]@{ Time = $time; Status = $Matches[2] }
+            $name   = $Matches[1].Trim()
+            $status = $Matches[2]
+            $time   = if ($line -match '(\d+\.?\d*)ms') { [double]$Matches[1] } else { 0 }
+            $map[$name] = [pscustomobject]@{ Time = $time; Status = $status }
         }
     }
     return $map
@@ -170,22 +184,28 @@ for ($i = 1; $i -le $Runs; $i++) {
     $regcMaps += Get-ProbeTimes $regcOut
 }
 $os30Maps = @(); $os30Totals = @(); $os30Out = $null
-for ($i = 1; $i -le $Runs; $i++) {
-    $os30Out = Run-Probes $Os30Jar
-    $m = [regex]::Match(($os30Out -join "`n"), "Total time:\s*(\d+)ms")
-    $os30Totals += [int]$m.Groups[1].Value
-    $os30Maps += Get-ProbeTimes $os30Out
+if (-not $Regression) {
+    for ($i = 1; $i -le $Runs; $i++) {
+        $os30Out = Run-Probes $Os30Jar
+        $m = [regex]::Match(($os30Out -join "`n"), "Total time:\s*(\d+)ms")
+        $os30Totals += [int]$m.Groups[1].Value
+        $os30Maps += Get-ProbeTimes $os30Out
+    }
 }
 # 取各 probe 平均
 $regcAvg = @{}; $os30Avg = @{}
 foreach ($name in $regcMaps[0].Keys) {
     $regcAvg[$name] = ($regcMaps | ForEach-Object { $_.$name.Time } | Measure-Object -Average).Average
 }
-foreach ($name in $os30Maps[0].Keys) {
-    $os30Avg[$name] = ($os30Maps | ForEach-Object { $_.$name.Time } | Measure-Object -Average).Average
+if (-not $Regression) {
+    foreach ($name in $os30Maps[0].Keys) {
+        $os30Avg[$name] = ($os30Maps | ForEach-Object { $_.$name.Time } | Measure-Object -Average).Average
+    }
 }
 $regcTotalAvg = ($regcTotals | Measure-Object -Average).Average
-$os30TotalAvg = ($os30Totals | Measure-Object -Average).Average
+$os30TotalAvg = if (-not $Regression -and $os30Totals.Count -gt 0) {
+    ($os30Totals | Measure-Object -Average).Average
+} else { 0 }
 
 # ---- 5. 报告 ----
 $lines = New-Object System.Collections.Generic.List[string]
@@ -194,44 +214,120 @@ $lines.Add("")
 $lines.Add("- 环境：JDK $((& $java -version 2>&1 | Select-Object -First 1))")
 $lines.Add("- 取样：预热 1 轮 + $Runs 轮取平均")
 $lines.Add("- RegC 产物：$outJar（mj2x-cli --backend regc 全量转换 + xmake 编译嵌入）")
-$lines.Add("- os30 产物：$Os30Jar（JNIC 竞品，黑盒对比）")
+if ($Regression) {
+    $lines.Add("- 模式：性能回归（#820 步骤 5，基线 $BaselineFile，MaxTotalRatio=$MaxTotalRatio，MinCoverageRatio=$MinCoverageRatio）")
+} else {
+    $lines.Add("- os30 产物：$Os30Jar（JNIC 竞品，黑盒对比）")
+}
 $lines.Add("")
 $lines.Add("## 覆盖率审计（javap 验证 ACC_NATIVE，无 Code 属性）")
 $lines.Add("")
 $lines.Add("| 产物 | 方法总数 | 可执行(非 abstract) | native | native 比例 |")
 $lines.Add("|---|---|---|---|---|")
 $lines.Add("| RegC | $($audit.Total) | $($audit.Executable) | $($audit.Native) | $($audit.Percent)% |")
-$lines.Add("| os30 | $($auditOs30.Total) | $($auditOs30.Executable) | $($auditOs30.Native) | $($auditOs30.Percent)% |")
+if (-not $Regression) {
+    $lines.Add("| os30 | $($auditOs30.Total) | $($auditOs30.Executable) | $($auditOs30.Native) | $($auditOs30.Percent)% |")
+}
 $lines.Add("")
 $lines.Add("## 总耗时（ms）")
 $lines.Add("")
-$lines.Add("| 项 | RegC | os30 | ratio (RegC/os30) |")
-$lines.Add("|---|---|---|---|")
-$lines.Add("| Total | $([math]::Round($regcTotalAvg, 1)) | $([math]::Round($os30TotalAvg, 1)) | $([math]::Round($regcTotalAvg / $os30TotalAvg, 2)) |")
+if ($Regression) {
+    $lines.Add("| 项 | RegC |")
+    $lines.Add("|---|---|")
+    $lines.Add("| Total | $([math]::Round($regcTotalAvg, 1)) |")
+} else {
+    $lines.Add("| 项 | RegC | os30 | ratio (RegC/os30) |")
+    $lines.Add("|---|---|---|---|")
+    $lines.Add("| Total | $([math]::Round($regcTotalAvg, 1)) | $([math]::Round($os30TotalAvg, 1)) | $([math]::Round($regcTotalAvg / $os30TotalAvg, 2)) |")
+}
 $lines.Add("")
 $lines.Add("## 各探针耗时（ms，平均）")
 $lines.Add("")
-$lines.Add("| Probe | RegC | os30 | ratio |")
-$lines.Add("|---|---|---|---|")
-foreach ($k in ($os30Avg.Keys | Sort-Object)) {
-    $r = if ($regcAvg.ContainsKey($k)) { $regcAvg[$k] } else { 0 }
-    $o = $os30Avg[$k]
-    $rr = if ($o -gt 0) { [math]::Round($r / $o, 2) } else { "-" }
-    $lines.Add("| $k | $([math]::Round($r, 3)) | $([math]::Round($o, 3)) | $rr |")
+if ($Regression) {
+    $lines.Add("| Probe | RegC |")
+    $lines.Add("|---|---|")
+    foreach ($k in ($regcAvg.Keys | Sort-Object)) {
+        $lines.Add("| $k | $([math]::Round($regcAvg[$k], 3)) |")
+    }
+} else {
+    $lines.Add("| Probe | RegC | os30 | ratio |")
+    $lines.Add("|---|---|---|---|")
+    foreach ($k in ($os30Avg.Keys | Sort-Object)) {
+        $r = if ($regcAvg.ContainsKey($k)) { $regcAvg[$k] } else { 0 }
+        $o = $os30Avg[$k]
+        $rr = if ($o -gt 0) { [math]::Round($r / $o, 2) } else { "-" }
+        $lines.Add("| $k | $([math]::Round($r, 3)) | $([math]::Round($o, 3)) | $rr |")
+    }
 }
 $reportPath = Join-Path $reportDir "$stamp-jvm-obf-tester-os30.md"
 Set-Content -Path $reportPath -Value ($lines -join [Environment]::NewLine) -Encoding UTF8
 
 # 控制台输出
 "`n=== RegC total (${Runs} runs): $($regcTotals -join ', ') ms  avg=$([math]::Round($regcTotalAvg, 1))"
-"=== os30 total (${Runs} runs): $($os30Totals -join ', ') ms  avg=$([math]::Round($os30TotalAvg, 1))"
-"=== ratio regc/os30: $([math]::Round($regcTotalAvg / $os30TotalAvg, 2))"
-"=== 覆盖率审计: RegC $($audit.Native)/$($audit.Executable) ($($audit.Percent)%)  os30 $($auditOs30.Native)/$($auditOs30.Executable) ($($auditOs30.Percent)%)"
-"{0,-32} {1,10} {2,10} {3,8}" -f "Probe", "regc(ms)", "os30(ms)", "ratio"
-foreach ($k in ($os30Avg.Keys | Sort-Object)) {
-    $r = if ($regcAvg.ContainsKey($k)) { $regcAvg[$k] } else { 0 }
-    $o = $os30Avg[$k]
-    $rr = if ($o -gt 0) { [math]::Round($r / $o, 2) } else { "-" }
-    "{0,-32} {1,10} {2,10} {3,8}" -f $k, [math]::Round($r, 3), [math]::Round($o, 3), $rr
+if (-not $Regression) {
+    "=== os30 total (${Runs} runs): $($os30Totals -join ', ') ms  avg=$([math]::Round($os30TotalAvg, 1))"
+    "=== ratio regc/os30: $([math]::Round($regcTotalAvg / $os30TotalAvg, 2))"
+    "=== 覆盖率审计: RegC $($audit.Native)/$($audit.Executable) ($($audit.Percent)%)  os30 $($auditOs30.Native)/$($auditOs30.Executable) ($($auditOs30.Percent)%)"
+    "{0,-32} {1,10} {2,10} {3,8}" -f "Probe", "regc(ms)", "os30(ms)", "ratio"
+    foreach ($k in ($os30Avg.Keys | Sort-Object)) {
+        $r = if ($regcAvg.ContainsKey($k)) { $regcAvg[$k] } else { 0 }
+        $o = $os30Avg[$k]
+        $rr = if ($o -gt 0) { [math]::Round($r / $o, 2) } else { "-" }
+        "{0,-32} {1,10} {2,10} {3,8}" -f $k, [math]::Round($r, 3), [math]::Round($o, 3), $rr
+    }
+} else {
+    "=== 覆盖率审计: RegC $($audit.Native)/$($audit.Executable) ($($audit.Percent)%)"
+    "{0,-32} {1,10}" -f "Probe", "regc(ms)"
+    foreach ($k in ($regcAvg.Keys | Sort-Object)) {
+        "{0,-32} {1,10}" -f $k, [math]::Round($regcAvg[$k], 3)
+    }
 }
 "`n报告已写入: $reportPath"
+
+# ---- 6. 基线维护与回归断言（#820 步骤 5） ----
+if ($Regression -or $UpdateBaseline) {
+    if (-not (Test-Path $BaselineFile)) { throw "基线文件未找到: $BaselineFile" }
+    $baseline = Get-Content $BaselineFile -Raw | ConvertFrom-Json
+
+    if ($UpdateBaseline) {
+        $baseline.meta.generated = $stamp
+        $baseline.meta.jdk = (& $java -version 2>&1 | Select-Object -First 1)
+        $baseline.meta.runs = $Runs
+        $baseline.baseline.totalMs = [math]::Round($regcTotalAvg, 1)
+        $baseline.baseline.coverage.native = $audit.Native
+        $baseline.baseline.coverage.executable = $audit.Executable
+        $baseline.baseline.coverage.percent = $audit.Percent
+        $baseline.baseline.probesMs = [ordered]@{}
+        foreach ($k in ($regcAvg.Keys | Sort-Object)) {
+            $baseline.baseline.probesMs | Add-Member -NotePropertyName $k -NotePropertyValue ([math]::Round($regcAvg[$k], 3))
+        }
+        $baseline | ConvertTo-Json -Depth 6 | Set-Content $BaselineFile -Encoding UTF8
+        Write-Host "`n基线已更新: $BaselineFile"
+    }
+
+    if ($Regression) {
+        $errors = New-Object System.Collections.Generic.List[string]
+        # 功能门：13-probe 全部 Passed
+        foreach ($name in $regcAvg.Keys) {
+            $failedRun = $regcMaps | Where-Object { $_.$name.Status -ne "Passed" } | Select-Object -First 1
+            if ($failedRun) { $errors.Add("probe '$name' 未通过（功能门）") }
+        }
+        # 覆盖率门：native 比例不低于基线 × MinCoverageRatio
+        $covFloor = [math]::Round($baseline.baseline.coverage.percent * $MinCoverageRatio, 1)
+        if ($audit.Percent -lt $covFloor) {
+            $errors.Add("覆盖率退化: $($audit.Percent)% < 基线 $($baseline.baseline.coverage.percent)% × $MinCoverageRatio = $covFloor%")
+        }
+        # 总耗时门：RegC total 不高于基线 × MaxTotalRatio
+        $totalCeil = [math]::Round($baseline.baseline.totalMs * $MaxTotalRatio, 1)
+        if ($regcTotalAvg -gt $totalCeil) {
+            $errors.Add("性能退化: RegC total $([math]::Round($regcTotalAvg, 1))ms > 基线 $($baseline.baseline.totalMs)ms × $MaxTotalRatio = ${totalCeil}ms")
+        }
+        if ($errors.Count -gt 0) {
+            Write-Host "`n[回归失败]"
+            $errors | ForEach-Object { Write-Host "  - $_" }
+            Write-Host "  基线: $BaselineFile (total=$($baseline.baseline.totalMs)ms, coverage=$($baseline.baseline.coverage.percent)%)"
+            exit 1
+        }
+        Write-Host "`n[回归通过] RegC total=$([math]::Round($regcTotalAvg, 1))ms (≤ ${totalCeil}ms)，覆盖率 $($audit.Percent)% (≥ $covFloor%)，13-probe 全过"
+    }
+}

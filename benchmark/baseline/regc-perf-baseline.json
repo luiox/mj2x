@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "description": "RegC 13-probe 性能回归基线（mj2x benchmark 13-probe，--backend regc 全量 native 化）",
+    "generated": "2026-08-14",
+    "jdk": "17.0.8",
+    "runs": 5,
+    "methodology": "预热 1 轮 + Runs 次取样取平均；覆盖率审计 javap 验证 ACC_NATIVE；基线含 SSA 方法内联（默认开启）",
+    "thresholds": {
+      "maxTotalRatio": 2.0,
+      "minCoverageRatio": 0.9,
+      "allProbesPassed": true
+    }
+  },
+  "baseline": {
+    "totalMs": 361.4,
+    "coverage": {
+      "native": 112,
+      "executable": 150,
+      "percent": 74.7
+    },
+    "probesMs": {
+      "Arithmetic operations": 3.519,
+      "Class loading": 0.416,
+      "Collections and generics": 19.609,
+      "Control flow": 0.38,
+      "Crypto APIs": 95.82,
+      "Enums": 62.705,
+      "Exception handling": 5.363,
+      "Inheritance and interfaces": 47.38,
+      "Inner classes": 21.077,
+      "Reflection and annotations": 50.989,
+      "Resource loading": 2.328,
+      "String and Unicode handling": 11.266,
+      "Visitor pattern": 37.746
+    }
+  }
+}
