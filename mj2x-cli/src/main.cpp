@@ -32,10 +32,20 @@
 #include "zip/checksum.hpp"
 
 #include "libca/log/log_macros.hpp"
+#include "libca/process/subprocess.hpp"
+
+#ifdef _WIN32
+// subprocess.hpp 为保护 Command 同名成员标识符 #undef 了全局 stdout/stderr
+// 宏；恢复 MSVC CRT 语义（本文件 setvbuf 等 <cstdio> 接口需要）。
+#    include <cstdio>
+#    define stdout (__acrt_iob_func(1))
+#    define stderr (__acrt_iob_func(2))
+#endif
 
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -113,6 +123,9 @@ static void printUsage()
     printf("  --native-lib-key <hex>     native lib 加密存储：嵌入前 XOR 加密（xorshift32"
            " 密钥流），资源入口加 .enc 后缀，运行时 NativeLoader 解密加载；静态提取"
            "不可直接加载（默认关闭 = 明文嵌入）\n");
+    printf("  --native-lib-pack-hook <cmd> 嵌入前外部处理钩子（sepacker DLL 加壳等）："
+           "{in} 占位符替换为编译产物路径，hook 应就地改写该文件；非零退出码视为失败；"
+           "顺序：hook → 可选加密 → 嵌入（默认关闭）\n");
     printf("  --vmc4-granularity <g>     VMC4: 实例粒度 class|method|program（默认 class；"
            "method 每方法独立 VM 实例，最强可变性、体积膨胀最大；program 全程序共享"
            "一个 VM 实例，opcode 空间全局统一、体积最优）\n");
@@ -260,6 +273,7 @@ struct CliOptions
     std::vector<std::string> intrinsicSources;
     std::uint32_t            nativeLibKey         = 0;   ///< native lib 加密密钥（--native-lib-key，hex）
     bool                     nativeLibKeySelected = false;
+    std::string              nativeLibPackHook;          ///< 嵌入前外部处理钩子（--native-lib-pack-hook）
 };
 
 /// @brief --runtime-protection 字符串 → codegen::RuntimeProtectionAction。
@@ -480,6 +494,57 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&
     local->setFileData(data);
     local->setOffset(0);
     return local;
+}
+
+/// @brief --native-lib-pack-hook：嵌入前外部处理钩子（sepacker DLL 加壳等，
+/// 主线第 6 项的代码级预留接口）。
+///
+/// `{in}` 占位符替换为编译产物路径；hook 应就地改写该文件（加壳/签名等），
+/// 随后的嵌入（可选 --native-lib-key 加密）使用处理后的产物。经系统 shell
+/// 执行（Windows: ComSpec /d /c；POSIX: sh -c），非零退出码视为失败。
+static int runNativeLibPackHook(const std::string&    hookTemplate,
+                                const std::filesystem::path& nativeLibraryPath)
+{
+    std::string commandLine = hookTemplate;
+    const std::string marker  = "{in}";
+    const std::string libPath = nativeLibraryPath.string();
+    std::size_t       pos     = 0;
+    while ((pos = commandLine.find(marker, pos)) != std::string::npos) {
+        commandLine.replace(pos, marker.size(), libPath);
+        pos += libPath.size();
+    }
+
+#ifdef _WIN32
+    const char* shellEnv = std::getenv("ComSpec");
+    const std::string shellProgram = shellEnv != nullptr ? shellEnv : "cmd.exe";
+#else
+    const std::string shellProgram = "/bin/sh";
+#endif
+    ca::process::Command command(shellProgram);
+#ifdef _WIN32
+    command.arg("/d").arg("/c").arg(commandLine);
+#else
+    command.arg("-c").arg(commandLine);
+#endif
+    auto completed = command.output();
+    CA_LOGT_INFO("cli", "native pack hook command line: {}\n", commandLine.c_str());
+    if (completed.is_err()) {
+        CA_LOGT_ERROR("cli", "cannot start native pack hook: {}\n",
+                      completed.unwrap_err().to_string().c_str());
+        return 1;
+    }
+    auto output = std::move(completed).unwrap();
+    if (!output.status.success()) {
+        CA_LOGT_ERROR("cli", "native pack hook failed with exit code {}\n", output.status.code);
+        if (!output.stdout_data.empty()) {
+            fprintf(stderr, "%s", output.stdout_data.c_str());
+        }
+        if (!output.stderr_data.empty()) {
+            fprintf(stderr, "%s", output.stderr_data.c_str());
+        }
+        return 1;
+    }
+    return 0;
 }
 
 static int embedNativeLibraryInJar(const std::string& jarPath, const std::string& entryName,
@@ -891,6 +956,8 @@ int main(int argc, char** argv)
             options.nativeLibKey = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 16));
             options.nativeLibKeySelected = true;
         }
+        else if (arg == "--native-lib-pack-hook" && i + 1 < argc) {
+            options.nativeLibPackHook = argv[++i];
         }
         else if (arg == "--vmc4-granularity" && i + 1 < argc) {
             options.vmc4Granularity = argv[++i];
@@ -1485,10 +1552,18 @@ int main(int argc, char** argv)
             }
         }
         if (compileRc != 0) return compileRc;
-        if (jarNativeLoaderEnabled)
+        if (jarNativeLoaderEnabled) {
+            // 嵌入前外部处理钩子（sepacker 加壳等）：就地改写编译产物，
+            // 随后嵌入（可选 --native-lib-key 加密）使用处理后的文件。
+            if (!options.nativeLibPackHook.empty()) {
+                const int hookRc = runNativeLibPackHook(options.nativeLibPackHook,
+                                                        nativeLibraryPath);
+                if (hookRc != 0) return hookRc;
+            }
             return embedNativeLibraryInJar(options.outputPath, nativeResourceEntry,
                                            nativeLibraryPath, options.nativeLibKey,
                                            options.nativeLibKeySelected);
+        }
     }
 
     return 0;

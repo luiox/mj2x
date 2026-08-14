@@ -68,6 +68,10 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   `benchmark/baseline/regc-perf-baseline.json` + `mj2x_integration_test`
   `RegcPerfRegression` 门控用例（`MJ2X_PERF_REGRESSION=1`）；修复
   `Get-ProbeTimes` Status 取值的既有解析 bug。
+- 2026-08-15：**sepacker 对接预留（主线第 6 项接口）**——`--native-lib-pack-hook`：
+  嵌入前外部处理钩子（`{in}` 占位符 = 编译产物路径，就地改写，非零退出失败）；
+  顺序 编译→hook→可选加密（`--native-lib-key`）→嵌入；加壳 DLL 走同一 `.enc`
+  存储形态，运行时链路不变（E2E：hook 执行 + {in} 替换 + 产物照常运行 42）。
 - 2026-08-15：**主线十（#829 Cloakwork 借鉴项）**——RegC 可选混淆增强：CFF 恒假死块
   注入（barrier 防 DCE，条件依赖运行时 state）+ 派生随机 state 码 + 状态异或、深 MBA
   （De Morgan/进位链 + barrier 防折叠 + per-site 变体）、opaque-零恒等变体

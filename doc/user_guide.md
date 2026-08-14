@@ -190,6 +190,7 @@ VMC4：
 | `--runtime-protection <none\|log\|delay\|fake\|terminate>` | 反侦测检查点注入（方法入口 `mj2x_rt_checkpoint_run`） |
 | `--runtime-protection-step <n>` / `--runtime-protection-delay <ms>` | 检查点步长/延迟参数 |
 | `--native-lib-key <hex>` | native lib 加密存储（默认关闭 = 明文嵌入）：嵌入前 XOR 加密（xorshift32 密钥流），资源入口加 `.enc` 后缀，运行时 NativeLoader 解密加载；静态 `jar tf` 提取不可直接加载（sepacker 加壳 DLL 走同一形态，见 doc_ai/native_library_packaging.md） |
+| `--native-lib-pack-hook <cmd>` | 嵌入前外部处理钩子（sepacker DLL 加壳等，默认关闭）：`{in}` 替换为编译产物路径，hook 应就地改写该文件，非零退出码视为失败；顺序：hook → 可选加密 → 嵌入 |
 
 ### 4.1 日志
 

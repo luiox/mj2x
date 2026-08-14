@@ -26,6 +26,20 @@
   范围——sepacker 加壳 DLL 走同一 `.enc` 存储形态（`kNativeLibEncryptedSuffix`
   约定）。
 
+## sepacker 对接（--native-lib-pack-hook，代码级预留接口）
+
+- `--native-lib-pack-hook <cmd>`：嵌入前把编译产物交给外部命令处理（sepacker
+  加壳/签名等），`{in}` 占位符替换为产物路径，hook 应**就地改写该文件**；
+  非零退出码视为失败（CLI 报错并终止）。
+- 处理顺序：**编译 → hook（加壳）→ 可选 `--native-lib-key` 加密 → 嵌入**。
+  加壳后 DLL 与明文 DLL 走同一 `.enc` 存储形态，运行时加载链路不变。
+- 实现：`main.cpp::runNativeLibPackHook`（`ca::process::Command` + 系统 shell，
+  Windows `ComSpec /d /c`、POSIX `sh -c`）；占位符替换先于 shell 展开。
+- 验证：E2E（hook 执行 + `{in}` 替换正确 + 产物照常嵌入运行；hook 非零
+  退出 → CLI 失败）。
+- 约定：sepacker 工具接入时提供 `sepacker pack <dll> -o <dll>`（就地）形态
+  的命令即可，无需改动 mj2x 核心。
+
 ## 平台资源命名
 
 `x64-windows.dll` / `x64-linux.so` / `x64-macos.dylib` / arm 变体（参考

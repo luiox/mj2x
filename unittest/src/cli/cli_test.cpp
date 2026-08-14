@@ -1890,6 +1890,85 @@ TEST(CliTest, CompileRegCJarWithEncryptedNativeLibRunsJvm)
     EXPECT_EQ(result.out, "42");
 }
 
+TEST(CliTest, CompileRegCJarWithNativeLibPackHookRunsJvm)
+{
+    // --native-lib-pack-hook：嵌入前外部处理钩子（sepacker 加壳对接的代码级
+    // 预留接口）。验证：hook 被执行、{in} 占位符替换正确、产物照常嵌入运行；
+    // 非零退出码 → CLI 失败。
+    const fs::path cli   = findCli();
+    const fs::path javac = findJavac();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
+    if (!hasAutoNativeCompiler()) GTEST_SKIP() << "no supported C compiler is available on PATH";
+
+#ifdef _WIN32
+    const fs::path java = javac.parent_path() / "java.exe";
+#else
+    const fs::path java = javac.parent_path() / "java";
+#endif
+    if (!fileExists(java)) GTEST_SKIP() << "java executable is unavailable beside javac";
+
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_pack_hook.keep").parent_path() / "mj2x_cli_pack_hook";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+
+    const fs::path jarDir = workDir / "jar";
+    fs::create_directories(jarDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    const fs::path inputJar  = writeTinyJar();
+    const fs::path outputJar = jarDir / "output_hook.jar";
+    const fs::path jarDriver = jarDir / "Driver.java";
+    {
+        std::ofstream out(jarDriver);
+        ASSERT_TRUE(out) << jarDriver.string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    System.out.print(demo.CliJarA.add(20, 22));\n"
+               "  }\n"
+               "}\n";
+    }
+    auto result = runScript({q(javac) + " -cp " + q(inputJar) + " -d " + q(jarDir) + " " +
+                             q(jarDriver)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+
+    // hook：把编译产物复制到标记位置（验证执行 + {in} 替换），不改动原文件。
+    // 注意：hookCmd 是命令字符串（含 /y 等 shell 语法），不能走 q()（q 经
+    // fs::path 规范化会把 / 转成 \）；手动加引号。
+    const fs::path markerDll = workDir / "hook_marker.dll";
+#ifdef _WIN32
+    const std::string hookCmd      = "copy /y {in} " + markerDll.string();
+#else
+    const std::string hookCmd      = "cp {in} " + markerDll.string();
+#endif
+    const std::string quotedHook   = "\"" + hookCmd + "\"";
+
+    const fs::path nativeLibrary = nativeLibraryPathFor(outputJar);
+    const fs::path cFile         = workDir / "hook_output.c";
+    result = runScript({q(cli) + " -i " + q(inputJar) + " -o " + q(outputJar) +
+                        " --emit-c " + q(cFile) + " --backend regc --compile" +
+                        " --native-lib-pack-hook " + quotedHook});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+    EXPECT_TRUE(fileExists(markerDll)) << "hook 未执行或 {in} 占位符未替换";
+    EXPECT_GT(fs::file_size(markerDll, ec), 0u) << "hook 复制产物为空";
+
+    // 运行 hook 产物 jar：正常加载（hook 未破坏产物）。
+    result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(outputJar, jarDir)) +
+                        " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    // hook 失败路径：非零退出 → CLI 报错。
+    const fs::path badJar = jarDir / "output_bad_hook.jar";
+    const fs::path badC   = workDir / "bad_hook.c";
+    result = runScript({q(cli) + " -i " + q(inputJar) + " -o " + q(badJar) +
+                        " --emit-c " + q(badC) + " --backend regc --compile" +
+                        " --native-lib-pack-hook " + q("exit 1")});
+    EXPECT_NE(result.exitCode, 0) << "hook 非零退出应使 CLI 失败";
+}
+
 TEST(CliTest, RealZigCompilesRegcCppClassAndRunsJvm)
 {
     const fs::path cli   = findCli();
