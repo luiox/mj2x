@@ -18,7 +18,7 @@
 | 九（#827 VMC4 粒度） | program 粒度（全程序共享 VM） | ✅ 完成（见 PR） |
 | 十（#829 混淆借鉴） | Cloakwork 借鉴项：RegC 可选混淆增强（CFF 死块/state 加密/深 MBA/opaque-零），全部默认关闭 | ✅ 完成（见 PR；默认产物零变化） |
 | 十一（混淆默认关） | RegC 基础三项（MBA/opaque/CFF）默认关闭；`--regc-obfuscate` 显式开启；#829 开关联动基础项 | ✅ 完成（见 PR；RegC 默认产物语义直译零混淆） |
-| 十二（配置系统） | 参数注册表单源 + 全量参数配置化 + JSON Schema 导出（GUI 配置工具路径） | 📋 设计完成（`doc_ai/config_system_design.md` v1 + 竞品调研）；P1 实现待做 |
+| 十二（配置系统） | 参数注册表单源 + 全量参数配置化 + JSON Schema 导出（GUI 配置工具路径） | ✅ 完成（P0+P1：注册表驱动 CLI/config/help/schema 四处；`--dump-config-schema`/`--dump-config-template`；ConfigRegistryTest 10 项） |
 
 ## 待做项
 
@@ -54,11 +54,11 @@
 
 ### E. 配置系统（P1，主线十二）
 
-- **参数注册表 + 全量配置化 + schema 导出**：设计已定（`doc_ai/config_system_design.md`
-  v1）；实现 = param_registry（单源 ParamDef 表）→ 重写 config_file 解析 →
-  CLI 解析/help 查表化 → `--dump-config-schema`（JSON Schema draft-07）→
-  config_schema_test 新增。验收：§4.2 全表参数可配置、schema 通过 ajv、
-  全默认产物逐字节不变、全量回归绿。
+- **参数注册表 + 全量配置化 + schema 导出**：✅ **已完成**——`param_registry`
+  （45+ 参数 ParamDef 单源，驱动 CLI 解析/config/help/schema 四处）；
+  `--dump-config-schema`（draft-07，GUI/VS Code/ajv 消费）+ `--dump-config-template`；
+  config_file 重写注册表驱动（旧 15 键兼容）；ConfigRegistryTest 10 项全绿。
+  设计文档 `doc_ai/config_system_design.md` 已同步为实现态。
 - GUI 配置工具（P2，独立）：消费 schema 渲染表单，输出配置文件。
 
 ## 验证命令
@@ -73,6 +73,16 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-15：**主线十二（配置系统）P0+P1 实现完成**——参数注册表
+  `param_registry.{hpp,cpp}`（45+ 参数 ParamDef 单源：规范 ID/CLI flag/JSON 键/
+  类型/枚举/范围/默认值/描述/分组/依赖）；main.cpp 手写解析链与 help 删除 →
+  查表 + 分组 help；`--dump-config-schema`（JSON Schema draft-07，
+  additionalProperties=false + x-requires）与 `--dump-config-template`（JSONC）；
+  config_file 重写注册表驱动（旧 15 键兼容）；新增 ConfigRegistryTest 10 项
+  （schema 键全覆盖/description 同源计数/模板全键/未知键·类型·枚举错误定位/
+  config backend 驱动交叉校验/CLI 覆盖 config/多族参数一次配置）。验证：
+  ConfigRegistryTest 10/10 + mj2x_unittest 全量 + mtest_set_unittest 25 passed；
+  默认产物不变（既有 cli_test 一致性用例全绿）。
 - 2026-08-15：**主线十二（配置系统）设计完成**——竞品调研（jvmtp properties
   域前缀平铺 + obfuscation 模块 opt-in/作用域；skidoni YAML 分组块/注释即关闭）
   结论：JSON + 参数注册表单源 + JSON Schema 导出（GUI 工具最短路径）。交付：

@@ -1,60 +1,77 @@
-# mj2x JSON config（现状）与配置系统设计指向
+# mj2x JSON config（配置系统）
 
-## 现状（v2.2）
+## 概览
 
-`mj2x-cli --config <file>` loads command-line defaults from a JSON object.
-Explicit command-line arguments override values from the config file.
-
-Supported keys（**现状仅覆盖以下平铺键**；完整参数面见 §2 缺口）：
-
-| key | type | CLI equivalent |
-|---|---|---|
-| `input` | string | `-i` |
-| `output` | string | `-o` |
-| `emit_c` | string | `--emit-c` |
-| `emit_cpp` | string | `--emit-cpp` |
-| `emit_llvm` | string | `--emit-llvm` |
-| `backend` | string: `stackc`, `regc`, `cbackend`, or `c` | `--backend` |
-| `native_annotation` | string | `--native-annotation` |
-| `native_method_prefixes` | string array | repeated `--native-method-prefix` |
-| `compile` | boolean | `--compile` |
-| `compile_mode` | string: `file` or `pipe` | `--compile-mode` |
-| `c_compiler` | string: `msvc`, `gcc`, `clang`, `zig`, or `xmake` | `--c-compiler` |
-| `llvm_tool` | string: `clang` or `llc` | `--llvm-tool` |
-| `generate_xmake` | string | `--generate-xmake` |
-| `generate_cmake` | string | `--generate-cmake` |
-| `dump_mir` | boolean | `--dump-mir` |
-
-Example:
+`mj2x-cli --config <file>` 从 JSON 配置读取默认参数，命令行显式参数覆盖配置。
+**全量 45+ 参数均可配置**（参数注册表单源驱动，见 `doc_ai/config_system_design.md`）。
+未知键与类型错误被拒绝，报错定位到键名。
 
 ```json
 {
-  "input": "Hello.class",
-  "output": "Hello_native.class",
-  "emit_cpp": "Hello.cpp",
+  "input": "app.jar",
+  "output": "app_protected.jar",
   "backend": "regc",
-  "dump_mir": true
+  "regc_obfuscate": true,
+  "regc_transform_seed": 42,
+  "client_id": 7,
+  "runtime_protection": "fake",
+  "native_lib_key": "1a2b3c4d"
 }
 ```
 
-Unknown keys and type mismatches are rejected. Normal CLI validation still
-applies after config loading, including mutually exclusive options such as
-`native_annotation` versus `native_method_prefixes`, and `generate_cmake`
-versus `generate_xmake`. `c_compiler: "xmake"` selects the xmake build driver rather than a C
-compiler and creates a cleaned temporary project unless `generate_xmake` supplies a durable path.
+## 键表
 
-## 缺口与设计
+键名 = snake_case 平铺（规范 ID `域.键` 的 `.` → `_`）。完整清单与默认值：
 
-现状 `--config` 只覆盖 15 个字段；`--regc-*`、`--vmc4-*`、`--runtime-protection*`、
-`--client-id`、`--native-lib-key`、`--native-lib-pack-hook`、`--intrinsic-*`、
-`--emit-native-dir` 等 **40+ 参数不能进配置文件**，且无 schema 导出（GUI 配置
-工具无从接入）。
+| 域 | 键 | 类型/枚举 | 默认 |
+|---|---|---|---|
+| global | `input` / `output` | string | — |
+| global | `backend` | `stackc` \| `regc` \| `vmc4`（LLVM 构建含 `llvm`） | `stackc` |
+| global | `emit_c` / `emit_cpp` / `emit_llvm` / `emit_native_dir` | string | — |
+| global | `dump_mir` | boolean | `false` |
+| selection | `native_annotation` | string（JVM desc） | — |
+| selection | `native_method_prefixes` | string[] | — |
+| compile | `compile` | boolean | `false` |
+| compile | `compile_mode` | `file` \| `pipe` | `file` |
+| compile | `c_compiler` | `msvc` \| `gcc` \| `clang` \| `zig` \| `xmake` | `auto` |
+| compile | `llvm_tool` | `clang` \| `llc` | `clang` |
+| compile | `generate_cmake` / `generate_xmake` | string | — |
+| stackc | `stackc_exception_check` | `full` \| `lite` | `full` |
+| regc | `regc_trace_calls` / `regc_direct_calls` / `regc_safe_env` / `regc_safe_env_debug` / `regc_no_inline` / `regc_obfuscate` / `regc_cff_state_encrypt` / `regc_mba_deep` / `regc_opaque_zero` | boolean | `false` |
+| regc | `regc_comment_level` | `none` \| `summary` \| `detailed` | `summary` |
+| regc | `regc_cff_dead` | integer ≥ 0 | `0` |
+| regc | `regc_transform_seed` | integer ≥ 0 | `0` |
+| vmc4 | `vmc4_dispatcher` | `switch_table` \| `funcptr_table` \| `computed_goto` \| `if_nest` \| `state_dispatcher` | `switch_table` |
+| vmc4 | `vmc4_seed` | hex string / number | `0` |
+| vmc4 | `vmc4_granularity` | `class` \| `method` \| `program` | `class` |
+| vmc4 | `vmc4_alias`（0..3）/ `vmc4_bogus`（0..4）/ `vmc4_drift`（0..4）/ `vmc4_drift_period`（≥1） | integer | `1` / `1` / `0` / `16` |
+| vmc4 | `vmc4_trace_surface` | string | — |
+| runtime | `runtime_protection` | `none` \| `log` \| `delay` \| `fake` \| `terminate` | `none` |
+| runtime | `runtime_protection_step`（≥1）/ `runtime_protection_delay_ms`（≥0） | integer | `16` / `500` |
+| nativeLib | `native_lib_key` | hex string / number | — |
+| nativeLib | `native_lib_pack_hook` | string | — |
+| client | `client_id` | integer ≥ 0 | `0` |
+| intrinsic | `intrinsic_config` | string（外部 intrinsic JSON 路径） | — |
+| intrinsic | `intrinsic_src` | string[] | — |
+| log | `log_quiet` / `log_verbose` | boolean | `false` |
 
-目标形态见 **`doc_ai/config_system_design.md`**（设计稿 v1）：
+## Schema 与模板
 
-- 参数注册表单源定义（类型/默认值/描述/枚举/范围），统一驱动 CLI 解析、
-  配置文件解析、`--help` 与 `--dump-config-schema`（JSON Schema draft-07）。
-- 配置 JSON 按域嵌套分组（global/selection/compile/stackc/regc/vmc4/runtime/
-  nativeLib/client/intrinsic/log），规范 ID 为 `域.键`。
-- 合并语义不变：默认值 < 配置文件 < CLI 参数；全默认产物逐字节一致。
-- 竞品调研依据：`doc_ai/competitor_config_reference.md`（jvmtp / skidoni）。
+```sh
+mj2x-cli --dump-config-schema [<file>]      # JSON Schema draft-07（stdout 或文件）
+mj2x-cli --dump-config-template [<file>]    # 全量键 + 默认值 + 注释模板（JSONC）
+```
+
+- **schema** 供 GUI 配置工具 / VS Code（`json.schemas`）/ ajv 校验直接消费；
+  键含 `description`/`default`/`enum`/`minimum`/`maximum`/`x-requires`。
+- **模板** 是带注释的手写起点（删除注释即得合法配置）。
+
+## 语义
+
+- 合并顺序：默认值 < 配置文件 < CLI 参数（CLI 显式给出即覆盖）。
+- 未知键/类型错误/枚举越界/范围越界 → 报错含键名（如
+  `unknown config key: foo_bar`、`config key must be an integer: regc_cff_dead`）。
+- 后端相关性（regc/vmc4/runtime 族）沿用 main.cpp 交叉校验，schema 以
+  `x-requires` 标注。
+- 用户 intrinsic JSON（`intrinsic_config` 指向的文件）格式独立，见
+  [user_intrinsic.md](user_intrinsic.md)。

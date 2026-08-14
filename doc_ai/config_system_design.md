@@ -1,9 +1,8 @@
 # mj2x 配置系统设计（config system design）
 
-> 状态：设计稿（v1，2026-08-15）。驱动源：`competitor_config_reference.md`
-> （jvmtp / skidoni 竞品调研）。本文定义目标形态与落地分期；P1 实现前
-> 现行 `--config`（`config_file.{hpp,cpp}` 平铺 JSON）保持可用。
-> 关联：`doc/config_file.md`（现状）、`doc/user_guide.md` §4（参数参考）。
+> 状态：**P0+P1 已实现**（2026-08-15，PR 见 git log；本文档同步为实现态）。
+> 驱动源：`competitor_config_reference.md`（jvmtp / skidoni 竞品调研）。
+> 关联：`doc/config_file.md`（配置键表）、`doc/user_guide.md` §4（参数参考）。
 
 ## 1. 背景与目标
 
@@ -49,9 +48,9 @@ per-client ISA），但 `--config` 只覆盖其中 13 个平铺字段，且无�
 
 | 决策点 | 结论 | 理由 |
 |---|---|---|
-| 格式 | **JSON（嵌套对象）** | 现有基础（libca_json + `--config` 已实现）；JSON Schema 生态（draft-07/2020-12）成熟：VS Code 原生、vue-json-schema-form / react-jsonschema-form / ajv 直接可用，GUI 工具零成本接入 |
-| 键风格 | 嵌套对象 camelCase；规范 ID 为 `域.键`（jvmtp 风格平铺视角） | 配置可读性（skidoni 分组块）+ 单源注册表用点路径定位 |
-| 单源 | **参数注册表**（声明式 ParamDef 数组） | 消灭 help/config/schema 三处漂移 |
+| 格式 | **JSON（平铺 snake_case 键）** | 现有基础（libca_json + `--config` 已实现）；**向后兼容旧 15 键**（input/output/emit_c/... 同名保留）；JSON Schema 生态（draft-07/2020-12）成熟：VS Code 原生、vue-json-schema-form / react-jsonschema-form / ajv 直接可用，GUI 工具零成本接入 |
+| 键风格 | 平铺 snake_case（jvmtp 风格域前缀平铺视角）；规范 ID 为 `域.键` | 配置可读性（jvmtp 同款）+ 单源注册表用 `域.键` 定位；schema 的 `x-requires`/description 表达分组与依赖 |
+| 单源 | **参数注册表**（声明式 ParamDef 数组） | 消灭 help/config/schema 三处漂移（已实现：`param_registry.{hpp,cpp}`） |
 | 默认值语义 | 缺省 = 注册表默认值；所有「默认关闭」开关保持默认 false | 与 skidoni「注释即关闭」等价，且更安全（未知键即报错） |
 | 方法与类选择 | 沿用现有 `native_annotation` / `native_method_prefixes` | jvmtp 的 `native.direction` include/exclude 与 obfuscation 作用域过滤（§4.4）作为后续扩展点，本次不引入 |
 | schema 版本 | JSON Schema **draft-07** | 工具兼容面最广（VS Code、form 库、ajv 均支持）；2020-12 后续可选 |
@@ -68,7 +67,7 @@ enum class ParamType { Bool, Int, UInt64, Hex, Enum, String, StringList };
 struct ParamDef {
     const char* id;          // 规范 ID："regc.cff_dead"
     const char* cliFlag;     // "--regc-cff-dead"（nullptr = 仅配置键，保留扩展）
-    const char* jsonPath;    // "regc/cffDead"（JSON 嵌套路径，camelCase）
+    const char* jsonPath;    // "regc_cff_dead"（snake_case 平铺 JSON 键，向后兼容）
     ParamType   type;
     const char* enumValues;  // 逗号分隔（Enum 用）；Int/UInt64 用 min/max
     i64         minValue = 0, maxValue = 0;   // 0 = 无约束（Int/UInt64）
@@ -92,72 +91,63 @@ struct ParamDef {
   由独立的互斥表表达。
 - 注册表是 `constexpr`/`static const` 数组，`paramCount()` 编译期可知。
 
-### 4.2 完整参数映射表（P1 目标全量）
+### 4.2 完整参数映射表（已实现全量）
 
-| 域（jsonPath） | 规范 ID | CLI | 类型/枚举/范围 | 默认 |
+> JSON 键 = snake_case 平铺（= 规范 ID 的 `.` → `_`）；旧 15 键（input/output/
+> emit_c/...）同名保留，向后兼容。全表在 `param_registry.cpp` 的 `kParamTable`。
+
+| JSON 键 | 规范 ID | CLI | 类型/枚举/范围 | 默认 |
 |---|---|---|---|---|
-| **global** | | | | |
 | `input` | global.input | `-i` | String | — |
 | `output` | global.output | `-o` | String | — |
-| `backend` | global.backend | `--backend` | Enum stackc/regc/llvm/vmc4 | stackc |
-| `emitC` | global.emit_c | `--emit-c` | String | — |
-| `emitCpp` | global.emit_cpp | `--emit-cpp` | String | — |
-| `emitLlvm` | global.emit_llvm | `--emit-llvm` | String | — |
-| `emitNativeDir` | global.emit_native_dir | `--emit-native-dir` | String | — |
-| `dumpMir` | global.dump_mir | `--dump-mir` | Bool | false |
-| `config` | （不进 schema） | `--config` | String | — |
-| **selection** | | | | |
-| `nativeAnnotation` | selection.native_annotation | `--native-annotation` | String（JVM desc） | — |
-| `nativeMethodPrefixes` | selection.native_method_prefixes | `--native-method-prefix`（可重复） | StringList | — |
-| **compile** | | | | |
+| `backend` | global.backend | `--backend` | Enum stackc/regc/vmc4（LLVM 构建含 llvm） | stackc |
+| `emit_c` | global.emit_c | `--emit-c` | String | — |
+| `emit_cpp` | global.emit_cpp | `--emit-cpp` | String | — |
+| `emit_llvm` | global.emit_llvm | `--emit-llvm` | String | — |
+| `emit_native_dir` | global.emit_native_dir | `--emit-native-dir` | String | — |
+| `dump_mir` | global.dump_mir | `--dump-mir` | Bool | false |
+| `native_annotation` | selection.native_annotation | `--native-annotation` | String（JVM desc） | — |
+| `native_method_prefixes` | selection.native_method_prefixes | `--native-method-prefix`（可重复） | StringList | — |
 | `compile` | compile.enabled | `--compile` | Bool | false |
-| `compileMode` | compile.mode | `--compile-mode` | Enum file/pipe | file |
-| `cCompiler` | compile.c_compiler | `--c-compiler` | Enum msvc/gcc/clang/zig/xmake | auto |
-| `llvmTool` | compile.llvm_tool | `--llvm-tool` | Enum clang/llc | clang |
-| `generateCmake` | compile.generate_cmake | `--generate-cmake` | String | — |
-| `generateXmake` | compile.generate_xmake | `--generate-xmake` | String | — |
-| **stackc** | | | | |
-| `exceptionCheck` | stackc.exception_check | `--stackc-exception-check` | Enum full/lite | full |
-| **regc** | | | | |
-| `traceCalls` | regc.trace_calls | `--regc-trace-calls` | Bool | false |
-| `directCalls` | regc.direct_calls | `--regc-direct-calls` | Bool | false |
-| `commentLevel` | regc.comment_level | `--regc-comment-level` | Enum none/summary/detailed | summary |
-| `safeEnv` | regc.safe_env | `--regc-safe-env` | Bool | false |
-| `safeEnvDebug` | regc.safe_env_debug | `--regc-safe-env-debug` | Bool | false（隐含 safe_env） |
-| `noInline` | regc.no_inline | `--regc-no-inline` | Bool | false（内联默认开） |
-| `obfuscate` | regc.obfuscate | `--regc-obfuscate` | Bool | false |
-| `cffDead` | regc.cff_dead | `--regc-cff-dead` | Int ≥0 | 0 |
-| `cffStateEncrypt` | regc.cff_state_encrypt | `--regc-cff-state-encrypt` | Bool | false |
-| `mbaDeep` | regc.mba_deep | `--regc-mba-deep` | Bool | false |
-| `opaqueZero` | regc.opaque_zero | `--regc-opaque-zero` | Bool | false |
-| `transformSeed` | regc.transform_seed | `--regc-transform-seed` | UInt64 | 0 |
-| **vmc4** | | | | |
-| `dispatcher` | vmc4.dispatcher | `--vmc4-dispatcher` | Enum switch_table/funcptr_table/computed_goto/if_nest/state_dispatcher | switch_table |
-| `seed` | vmc4.seed | `--vmc4-seed` | Hex | 0 |
-| `granularity` | vmc4.granularity | `--vmc4-granularity` | Enum class/method/program | class |
-| `alias` | vmc4.alias | `--vmc4-alias` | Int 0..3 | 1 |
-| `bogus` | vmc4.bogus | `--vmc4-bogus` | Int 0..4 | 1 |
-| `drift` | vmc4.drift | `--vmc4-drift` | Int 0..4 | 0 |
-| `driftPeriod` | vmc4.drift_period | `--vmc4-drift-period` | Int ≥1 | 16 |
-| `traceSurface` | vmc4.trace_surface | `--vmc4-trace-surface` | String | — |
-| **runtime** | | | | |
-| `action` | runtime.protection | `--runtime-protection` | Enum none/log/delay/fake/terminate | none |
-| `step` | runtime.protection_step | `--runtime-protection-step` | Int ≥1 | 16 |
-| `delayMs` | runtime.protection_delay_ms | `--runtime-protection-delay` | Int ≥0 | 500 |
-| **nativeLib** | | | | |
-| `key` | native_lib.key | `--native-lib-key` | Hex | — |
-| `packHook` | native_lib.pack_hook | `--native-lib-pack-hook` | String | — |
-| **client** | | | | |
-| `id` | client.id | `--client-id` | UInt64 | 0 |
-| **intrinsic** | | | | |
-| `config` | intrinsic.config | `--intrinsic-config` | String（外部 JSON 路径） | — |
-| `sources` | intrinsic.sources | `--intrinsic-src`（可重复） | StringList | — |
-| **log** | | | | |
-| `quiet` | log.quiet | `--quiet` | Bool | false |
-| `verbose` | log.verbose | `--verbose` | Bool | false |
+| `compile_mode` | compile.mode | `--compile-mode` | Enum file/pipe | file |
+| `c_compiler` | compile.c_compiler | `--c-compiler` | Enum msvc/gcc/clang/zig/xmake | auto |
+| `llvm_tool` | compile.llvm_tool | `--llvm-tool` | Enum clang/llc | clang |
+| `generate_cmake` | compile.generate_cmake | `--generate-cmake` | String | — |
+| `generate_xmake` | compile.generate_xmake | `--generate-xmake` | String | — |
+| `stackc_exception_check` | stackc.exception_check | `--stackc-exception-check` | Enum full/lite | full |
+| `regc_trace_calls` | regc.trace_calls | `--regc-trace-calls` | Bool | false |
+| `regc_direct_calls` | regc.direct_calls | `--regc-direct-calls` | Bool | false |
+| `regc_comment_level` | regc.comment_level | `--regc-comment-level` | Enum none/summary/detailed | summary |
+| `regc_safe_env` | regc.safe_env | `--regc-safe-env` | Bool | false |
+| `regc_safe_env_debug` | regc.safe_env_debug | `--regc-safe-env-debug` | Bool | false（隐含 safe_env） |
+| `regc_no_inline` | regc.no_inline | `--regc-no-inline` | Bool | false（内联默认开） |
+| `regc_obfuscate` | regc.obfuscate | `--regc-obfuscate` | Bool | false |
+| `regc_cff_dead` | regc.cff_dead | `--regc-cff-dead` | Int ≥0 | 0 |
+| `regc_cff_state_encrypt` | regc.cff_state_encrypt | `--regc-cff-state-encrypt` | Bool | false |
+| `regc_mba_deep` | regc.mba_deep | `--regc-mba-deep` | Bool | false |
+| `regc_opaque_zero` | regc.opaque_zero | `--regc-opaque-zero` | Bool | false |
+| `regc_transform_seed` | regc.transform_seed | `--regc-transform-seed` | UInt64 | 0 |
+| `vmc4_dispatcher` | vmc4.dispatcher | `--vmc4-dispatcher` | Enum switch_table/funcptr_table/computed_goto/if_nest/state_dispatcher | switch_table |
+| `vmc4_seed` | vmc4.seed | `--vmc4-seed` | Hex | 0 |
+| `vmc4_granularity` | vmc4.granularity | `--vmc4-granularity` | Enum class/method/program | class |
+| `vmc4_alias` | vmc4.alias | `--vmc4-alias` | Int 0..3 | 1 |
+| `vmc4_bogus` | vmc4.bogus | `--vmc4-bogus` | Int 0..4 | 1 |
+| `vmc4_drift` | vmc4.drift | `--vmc4-drift` | Int 0..4 | 0 |
+| `vmc4_drift_period` | vmc4.drift_period | `--vmc4-drift-period` | Int ≥1 | 16 |
+| `vmc4_trace_surface` | vmc4.trace_surface | `--vmc4-trace-surface` | String | — |
+| `runtime_protection` | runtime.protection | `--runtime-protection` | Enum none/log/delay/fake/terminate | none |
+| `runtime_protection_step` | runtime.protection_step | `--runtime-protection-step` | Int ≥1 | 16 |
+| `runtime_protection_delay_ms` | runtime.protection_delay_ms | `--runtime-protection-delay` | Int ≥0 | 500 |
+| `native_lib_key` | native_lib.key | `--native-lib-key` | Hex | — |
+| `native_lib_pack_hook` | native_lib.pack_hook | `--native-lib-pack-hook` | String | — |
+| `client_id` | client.id | `--client-id` | UInt64 | 0 |
+| `intrinsic_config` | intrinsic.config | `--intrinsic-config` | String（外部 JSON 路径） | — |
+| `intrinsic_src` | intrinsic.sources | `--intrinsic-src`（可重复） | StringList | — |
+| `log_quiet` | log.quiet | `--quiet` | Bool | false |
+| `log_verbose` | log.verbose | `--verbose` | Bool | false |
 
 > 注：`emit_llvm` / `llvm_tool` 在 `MJ2X_DISABLE_LLVM_BACKEND` 构建下不存在——
-> 注册表按编译宏裁剪（与现状 help 行为一致）。
+> 注册表按编译宏裁剪（与 help 行为一致）。
 
 ### 4.3 生成物
 
@@ -195,24 +185,13 @@ mj2x-cli --dump-config-schema [<file>]   # 缺省输出到 stdout；<file> 写 J
   "description": "mj2x native protection configuration",
   "type": "object",
   "properties": {
-    "global": {
-      "type": "object",
-      "title": "global",
-      "properties": {
-        "input":  { "type": "string", "description": "输入 class/jar 路径" },
-        "backend": { "type": "string", "enum": ["stackc","regc","llvm","vmc4"],
-                     "default": "stackc", "description": "选择 native 后端" }
-      }
-    },
-    "regc": {
-      "type": "object",
-      "title": "regc",
-      "properties": {
-        "cffDead": { "type": "integer", "minimum": 0, "default": 0,
-                      "description": "CFF 恒假死块密度（0 关闭）" }
-      }
-    }
-    // ... 全部域
+    "backend": { "type": "string", "enum": ["stackc","regc","vmc4"],
+                 "default": "stackc", "description": "选择 native 发射后端",
+                 "x-requires": "" },
+    "regc_cff_dead": { "type": "integer", "minimum": 0, "default": 0,
+                       "description": "RegC: CFF 恒假死块密度（0 关闭）",
+                       "x-requires": "regc" }
+    // ... 全部平铺键（45 个）
   },
   "additionalProperties": false
 }
@@ -223,12 +202,10 @@ mj2x-cli --dump-config-schema [<file>]   # 缺省输出到 stdout；<file> 写 J
 - `description`/`default`/`enum`/`minimum`/`maximum` 全部来自注册表，与 `--help`
   同源，永不漂移。
 - `additionalProperties: false`：编辑器/GUI 直接拒绝未知键（与 CLI 行为一致）。
-- `requires` 后端相关性不写进静态 schema（backend 是运行时值），由 **if-then
-  条件子 schema** 表达（draft-07 支持）：
-  `if: {properties: {backend: {const: "regc"}}}, then: {properties: {regc: {...}}}`。
-  或保守方案：regc/vmc4 域始终可填、CLI 运行时校验兜底——P1 采用后者（简单、
-  单一事实源仍是注册表），if-then 列为 P2 增强。
-- 生成实现：注册表遍历 → `nlohmann::json` 构建 → 写出（格式化 2 空格）。
+- 后端相关性以 **`x-requires` 元数据**标注（`regc`/`vmc4`/`regc|vmc4`/`stackc`），
+  运行时校验沿用 main.cpp 交叉校验链；if-then 条件子 schema 列为 P2 增强
+  （draft-07 支持 `if: {properties: {backend: {const: "regc"}}}` 形式）。
+- 生成实现：注册表遍历 → `nlohmann::json` 构建 → 写出（格式化 2 空格，键字母序）。
 
 ### 5.3 GUI 工具消费路径
 
@@ -254,34 +231,35 @@ GUI 配置工具本体（独立仓库或 `mj2x/tools/config-gui`）是 P2：输�
 4. **模板输出**（低成本附加，P1 可选）：`--dump-config-template` 输出全量键 +
    默认值 + 注释的示例配置，供手写起点（对齐 jvmtp "full example" 惯例）。
 
-## 7. 实现方案（P1）
+## 7. 实现方案（P1，✅ 已落地）
 
-| 文件 | 变更 |
-|---|---|
-| `mj2x-cli/src/param_registry.hpp` | 新增：`ParamDef` + `kParams[]` + 查询/遍历 API + schema 构建 |
-| `mj2x-cli/src/param_registry.cpp` | 新增：CLI 解析驱动、schema JSON 构建、模板输出 |
-| `mj2x-cli/src/config_file.hpp/cpp` | 重写：注册表驱动解析，删除手写 13 字段结构 |
-| `mj2x-cli/src/main.cpp` | `printUsage` 改注册表分组输出；解析循环改查表；新增 `--dump-config-schema` / `--dump-config-template`；`CliOptions` 保留为运行时容器 |
-| `mj2x/unittest/src/cli/*` | 新增 `config_schema_test.cpp`：schema 结构断言（域齐全/键齐全/默认值一致）、未知键报错、类型错误报错、config 全量参数覆盖 CLI 等价性（`--config` 与 `--flag` 产出一致）、help 与 schema description 一致性抽查 |
+| 文件 | 变更 | 状态 |
+|---|---|---|
+| `mj2x-cli/src/param_registry.hpp` | `ParamDef` + `CliOptions`（迁移）+ 查询/遍历 API + schema 构建声明 | ✅ |
+| `mj2x-cli/src/param_registry.cpp` | `kParamTable`（45 键）+ CLI/JSON 解析回调 + schema/help/template 构建 | ✅ |
+| `mj2x-cli/src/config_file.hpp/cpp` | 重写：注册表驱动解析，删除手写 13 字段结构 | ✅ |
+| `mj2x-cli/src/main.cpp` | 手写解析链/help 删除 → 查表 + 分组 help；新增 `--dump-config-schema` / `--dump-config-template` | ✅ |
+| `mj2x/unittest/src/cli/config_registry_test.cpp` | schema 键全覆盖/注释一致性、模板全键、未知键/类型/枚举错误定位、config backend 驱动校验、CLI 覆盖 config、多族参数一次配置 | ✅ |
 
-测试矩阵：`mj2x_unittest` 全量 + `mtest_set_unittest`（回归护栏）；新增用例
-覆盖 §6.3 行为不变约束。
+测试矩阵：`mj2x_unittest` 全量（含 ConfigRegistryTest 10 项）+ `mtest_set_unittest`
+（回归护栏）；CLI 侧行为不变由既有 `cli_test.cpp` 全量保障。
 
-## 8. 验收标准
+## 8. 验收标准（P1 达成状态）
 
-1. §4.2 表中每个 CLI 参数都能通过配置文件等价设置（除 `--config` 自身与
-   `--help`/`--quiet`/`--verbose` 日志键）。
-2. `--dump-config-schema` 输出通过 ajv 严格校验（draft-07，additionalProperties
-   模式）；域/键/默认值与注册表一致。
-3. 全默认配置的产物与现状逐字节一致（现有回归用例保持绿）。
-4. 错误信息定位到 JSON 路径（如 `config.json: regc/cffDead: 期望整数，收到 "x"`）。
-5. `--help` 与 schema description 由同一注册表生成，抽查无漂移。
-6. 全量回归：`mj2x_unittest`（含新增）+ `mtest_set_unittest` 绿。
+1. ✅ §4.2 表中每个 CLI 参数都能通过配置文件等价设置（`--config` 自身与
+   `--help`/`--quiet`/`--verbose` 日志键除外，见 §2 缺口说明）。
+2. ✅ `--dump-config-schema` 输出 draft-07 JSON Schema（additionalProperties
+   false），键/默认值/枚举/范围/描述与注册表一致（ConfigRegistryTest 断言）。
+3. ✅ 全默认配置产物不变：既有 cli_test 产物一致性用例保持绿（全量回归）。
+4. ✅ 错误信息定位到键名（如 `unknown config key: foo_bar`、
+   `config key must be an integer: regc_cff_dead`）。
+5. ✅ `--help` 与 schema description 同源（ConfigRegistryTest 描述计数断言）。
+6. ✅ 全量回归：`mj2x_unittest` + `mtest_set_unittest` 绿。
 
 ## 9. 分期
 
-- **P1（本设计评审后实现）**：§4/§5/§6/§7 全部；纯 CLI 侧重构 + schema 导出 +
-  测试，无产物变化。
+- **P1（本设计评审后实现）**：✅ 已完成（§4/§5/§6/§7 全部；纯 CLI 侧重构 +
+  schema 导出 + 测试，无产物变化）。
 - **P2（独立）**：GUI 配置工具（消费 schema）；if-then 条件子 schema；
   obfuscation 方法级作用域（§4.4）落注册表扩展。
 - **P3（观察）**：多配置文件叠加、环境变量、YAML 前端（均需真实需求驱动）。

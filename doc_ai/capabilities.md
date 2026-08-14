@@ -283,7 +283,28 @@ mj2x/
 | RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` + `mj2x/mj2x-crt/src/regc/` |
 | 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` |
 | 用户注解包 | `mj2x/mj2x-annotations/` |
+| 配置系统（参数注册表） | `mj2x/mj2x-cli/src/param_registry.{hpp,cpp}` + `mj2x/doc/config_file.md` |
 | protected samples | `mj2x/test_resource/protected_samples/` |
+
+### 7.1 配置系统（参数注册表单源，主线十二）
+
+全量参数单源注册表（`ParamDef` 表）驱动 CLI 解析 / 配置文件 / `--help` /
+schema 导出四处，消灭 help 与 config 文档漂移：
+
+- **注册表**：`mj2x-cli/src/param_registry.{hpp,cpp}`——45+ 参数（三后端 +
+  混淆 + 反侦测 + native 打包 + per-client ISA + intrinsic + 日志）；
+  规范 ID `域.键` ↔ snake_case JSON 键 ↔ CLI flag 同源；枚举/范围/默认值/
+  描述集中声明。
+- **配置**：`--config <file>` 全量键 JSON（旧 15 键向后兼容）；未知键/类型/
+  枚举/范围错误定位键名；合并语义 默认值 < 配置 < CLI（CLI 显式覆盖）。
+- **Schema**：`--dump-config-schema` 输出 JSON Schema draft-07
+  （`additionalProperties:false` + `description/default/enum/minimum/maximum/
+  x-requires`）——GUI 配置工具 / VS Code `json.schemas` / ajv 直接消费。
+- **模板**：`--dump-config-template` 输出全量键 + 默认值 + 注释的 JSONC 起点。
+- 测试：`config_registry_test.cpp` 10 项（schema 键全覆盖、description 同源计数、
+  模板全键、未知键/类型/枚举错误定位、config backend 驱动交叉校验、CLI 覆盖
+  config、多族参数一次配置）。
+- 文档：`doc/config_file.md`（键表）+ `doc_ai/config_system_design.md`（设计）。
 
 ## 8. mtest_set 集成（跨产品共享样本）
 
