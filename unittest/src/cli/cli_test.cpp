@@ -15,6 +15,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "jzip/zip_io.hpp"
 #include "libca/str/utf8_string_arena.hpp"
+#include "mj2x/core/native_lib_crypto.hpp"
 #include "zip/checksum.hpp"
 #include "test_helper.hpp"
 
@@ -1810,6 +1811,79 @@ TEST(CliTest, RealZigCompilesClassAndJarAndRunsJvm)
                      .empty())
         << result.out;
 
+    result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(outputJar, jarDir)) +
+                        " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+}
+
+TEST(CliTest, CompileRegCJarWithEncryptedNativeLibRunsJvm)
+{
+    const fs::path cli   = findCli();
+    const fs::path javac = findJavac();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
+    if (!hasAutoNativeCompiler()) GTEST_SKIP() << "no supported C compiler is available on PATH";
+
+#ifdef _WIN32
+    const fs::path java = javac.parent_path() / "java.exe";
+#else
+    const fs::path java = javac.parent_path() / "java";
+#endif
+    if (!fileExists(java)) GTEST_SKIP() << "java executable is unavailable beside javac";
+
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_enc_lib.keep").parent_path() / "mj2x_cli_enc_lib";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+
+    const fs::path jarDir = workDir / "jar";
+    fs::create_directories(jarDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    const fs::path inputJar  = writeTinyJar();
+    const fs::path outputJar = jarDir / "output_enc.jar";
+    const fs::path jarDriver = jarDir / "Driver.java";
+    {
+        std::ofstream out(jarDriver);
+        ASSERT_TRUE(out) << jarDriver.string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    System.out.print(demo.CliJarA.add(20, 22));\n"
+               "  }\n"
+               "}\n";
+    }
+    auto result = runScript({q(javac) + " -cp " + q(inputJar) + " -d " + q(jarDir) + " " +
+                             q(jarDriver)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(inputJar, jarDir)) +
+                        " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    // 加密存储形态：--native-lib-key 时嵌入入口加 .enc 后缀，内容 XOR 加密。
+    const fs::path nativeLibrary = nativeLibraryPathFor(outputJar);
+    const fs::path cFile         = workDir / "enc_output.c";
+    result = runScript({q(cli) + " -i " + q(inputJar) + " -o " + q(outputJar) +
+                        " --emit-c " + q(cFile) + " --backend regc --compile --native-lib-key 1234abcd"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
+
+    const std::string encEntry =
+        "META-INF/mj2x/native/" + nativeLibrary.filename().string() + ".enc";
+    auto encBytes = readJarEntry(outputJar, encEntry);
+    ASSERT_FALSE(encBytes.empty()) << result.out << "（加密资源入口 " << encEntry << " 缺失）";
+    // 静态提取的 blob ≠ 明文 dll。
+    auto plainBytes = readFileBytes(nativeLibrary);
+    ASSERT_FALSE(plainBytes.empty());
+    EXPECT_NE(encBytes, plainBytes) << "加密 blob 与明文不应一致";
+
+    // 解密往返：C++ 侧 xorStreamBytes 解出 == 明文（与 NativeLoader 字节码同算法）。
+    auto decrypted = encBytes;
+    mj2x::xorStreamBytes(decrypted.data(), decrypted.size(), 0x1234ABCDu);
+    EXPECT_EQ(decrypted, plainBytes) << "XOR 解密往返与打包侧算法不一致";
+
+    // 运行加密 jar：NativeLoader 检测 .enc 后缀 → 解密 → System.load。
     result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(outputJar, jarDir)) +
                         " Driver"});
     ASSERT_EQ(result.exitCode, 0) << result.out;

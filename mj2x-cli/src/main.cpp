@@ -6,7 +6,9 @@
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
 #include "mj2x/codegen/runtime_protection.hpp"
+#include "mj2x/core/native_lib_crypto.hpp"
 #include "mj2x/core/seed_derivation.hpp"
+#include "mj2x/core/user_intrinsics.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
 
 #include <fstream>
@@ -108,6 +110,9 @@ static void printUsage()
            "GCC/clang 编译）\n");
     printf("  --vmc4-seed <hex>          VMC4: 主 seed，驱动每实例 opcode 映射/handler 顺序"
            "（同 seed 同输入 → 同产物，可复现构建）\n");
+    printf("  --native-lib-key <hex>     native lib 加密存储：嵌入前 XOR 加密（xorshift32"
+           " 密钥流），资源入口加 .enc 后缀，运行时 NativeLoader 解密加载；静态提取"
+           "不可直接加载（默认关闭 = 明文嵌入）\n");
     printf("  --vmc4-granularity <g>     VMC4: 实例粒度 class|method|program（默认 class；"
            "method 每方法独立 VM 实例，最强可变性、体积膨胀最大；program 全程序共享"
            "一个 VM 实例，opcode 空间全局统一、体积最优）\n");
@@ -253,6 +258,8 @@ struct CliOptions
     /// 用户自定义 intrinsic 配置（issue #818）。
     std::string              intrinsicConfigPath;
     std::vector<std::string> intrinsicSources;
+    std::uint32_t            nativeLibKey         = 0;   ///< native lib 加密密钥（--native-lib-key，hex）
+    bool                     nativeLibKeySelected = false;
 };
 
 /// @brief --runtime-protection 字符串 → codegen::RuntimeProtectionAction。
@@ -476,13 +483,17 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&
 }
 
 static int embedNativeLibraryInJar(const std::string& jarPath, const std::string& entryName,
-                                   const std::filesystem::path& nativeLibraryPath)
+                                   const std::filesystem::path& nativeLibraryPath,
+                                   std::uint32_t xorKey, bool encryptEntry)
 {
     auto jarBytes    = readFileBytes(jarPath);
     auto nativeBytes = readFileBytes(nativeLibraryPath);
     if (jarBytes.empty() || nativeBytes.empty()) {
         CA_LOGT_ERROR("cli", "cannot embed native library into output JAR.\n");
         return 1;
+    }
+    if (encryptEntry) {
+        mj2x::xorStreamBytes(nativeBytes.data(), nativeBytes.size(), xorKey);
     }
 
     auto             original = jzip::ZipIO::readJvm(jzip::MemorySegment(jarBytes));
@@ -875,6 +886,12 @@ int main(int argc, char** argv)
         else if (arg == "--client-id" && i + 1 < argc) {
             options.clientId = std::strtoull(argv[++i], nullptr, 0);
         }
+        else if (arg == "--native-lib-key" && i + 1 < argc) {
+            // hex 密钥；非 0 时嵌入前加密 native lib 资源（XOR 密钥流）。
+            options.nativeLibKey = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 16));
+            options.nativeLibKeySelected = true;
+        }
+        }
         else if (arg == "--vmc4-granularity" && i + 1 < argc) {
             options.vmc4Granularity = argv[++i];
         }
@@ -1162,8 +1179,13 @@ int main(int argc, char** argv)
         (options.compileNative || !options.xmakeProjectDir.empty()) && jarOutput;
     std::filesystem::path nativeLibraryPath =
         mj2x::cli::nativeLibraryPathForOutput(options.outputPath);
-    const std::string nativeResourceEntry =
+    std::string nativeResourceEntry =
         "META-INF/mj2x/native/" + nativeLibraryPath.filename().string();
+    if (options.nativeLibKeySelected) {
+        // 加密存储形态：入口加 .enc 后缀，嵌入前 XOR 加密（NativeLoader 按
+        // 后缀解密；sepacker 加壳 DLL 走同一形态）。
+        nativeResourceEntry += mj2x::kNativeLibEncryptedSuffix;
+    }
     const std::string nativeResourcePath = nativeResourceEntry;
     const std::string nativeTempSuffix   = nativeLibraryPath.extension().string();
 
@@ -1321,7 +1343,8 @@ int main(int argc, char** argv)
         pipeline.registerPostprocessor(std::make_unique<mj2x::NativeLoaderPostprocessor>(
             nativeResourcePath,
             nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix,
-            injectLoadIntoClinit));
+            injectLoadIntoClinit,
+            options.nativeLibKey));
     }
 
     int rc = pipeline.run();
@@ -1463,8 +1486,9 @@ int main(int argc, char** argv)
         }
         if (compileRc != 0) return compileRc;
         if (jarNativeLoaderEnabled)
-            return embedNativeLibraryInJar(
-                options.outputPath, nativeResourceEntry, nativeLibraryPath);
+            return embedNativeLibraryInJar(options.outputPath, nativeResourceEntry,
+                                           nativeLibraryPath, options.nativeLibKey,
+                                           options.nativeLibKeySelected);
     }
 
     return 0;

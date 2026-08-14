@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "mj2x/postprocessor/postprocessor.hpp"
 
@@ -23,14 +23,16 @@ namespace mj2x {
 class NativeLoaderPostprocessor : public Postprocessor
 {
 public:
+    /// @param xorKey native lib 加密密钥（0 = 明文形态，NativeLoader 不做解密）。
     NativeLoaderPostprocessor(std::string resourcePath, std::string tempSuffix,
-                              bool injectClinitCalls = true);
+                              bool injectClinitCalls = true, std::uint32_t xorKey = 0);
     void process(CompilerIndex& index) override;
 
 private:
-    std::string resourcePath_;
-    std::string tempSuffix_;
-    bool        injectClinitCalls_;
+    std::string  resourcePath_;
+    std::string  tempSuffix_;
+    bool         injectClinitCalls_;
+    std::uint32_t xorKey_;
 };
 
 }   // namespace mj2x

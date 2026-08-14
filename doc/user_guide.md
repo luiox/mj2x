@@ -189,6 +189,7 @@ VMC4：
 | `--client-id <n>` | per-client 唯一派生（默认 0 = 不变，产物与历史逐字节一致；非 0 时所有后端 seed 经 `splitmix64(baseSeed ^ clientId)` 派生——每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物，可复现构建不受影响）。竞品借鉴（#759/#760）低成本项：分发时为每个客户独立构建 |
 | `--runtime-protection <none\|log\|delay\|fake\|terminate>` | 反侦测检查点注入（方法入口 `mj2x_rt_checkpoint_run`） |
 | `--runtime-protection-step <n>` / `--runtime-protection-delay <ms>` | 检查点步长/延迟参数 |
+| `--native-lib-key <hex>` | native lib 加密存储（默认关闭 = 明文嵌入）：嵌入前 XOR 加密（xorshift32 密钥流），资源入口加 `.enc` 后缀，运行时 NativeLoader 解密加载；静态 `jar tf` 提取不可直接加载（sepacker 加壳 DLL 走同一形态，见 doc_ai/native_library_packaging.md） |
 
 ### 4.1 日志
 
