@@ -1,31 +1,15 @@
 #pragma once
 
-#include <optional>
 #include <string>
-#include <vector>
+
+#include "param_registry.hpp"
 
 namespace mj2x::cli {
 
-struct ConfigFileOptions
-{
-    std::optional<std::string> input;
-    std::optional<std::string> output;
-    std::optional<std::string> emitC;
-    std::optional<std::string> emitCpp;
-    std::optional<std::string> emitLlvm;
-    std::optional<std::string> backend;
-    std::optional<std::string> nativeAnnotation;
-    std::vector<std::string>   nativeMethodPrefixes;
-    bool                       hasNativeMethodPrefixes = false;
-    std::optional<bool>        compile;
-    std::optional<std::string> compileMode;
-    std::optional<std::string> cCompiler;
-    std::optional<std::string> llvmTool;
-    std::optional<std::string> generateXmake;
-    std::optional<std::string> generateCmake;
-    std::optional<bool>        dumpMir;
-};
-
-bool loadConfigFile(const std::string& path, ConfigFileOptions& options, std::string& error);
+/// @brief 从 JSON 配置文件加载参数（注册表驱动，全量键）。
+///
+/// 键名 = 注册表 jsonPath（snake_case 平铺）；未知键与类型错误被拒绝，
+/// 报错定位到键名。命令行显式参数在之后覆盖（main.cpp 顺序保证）。
+bool loadConfigFile(const std::string& path, CliOptions& options, std::string& error);
 
 }   // namespace mj2x::cli

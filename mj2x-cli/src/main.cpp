@@ -26,6 +26,7 @@
 #include "cpp_source_dialect.hpp"
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
+#include "param_registry.hpp"
 #include "jzip/memory_segment.hpp"
 #include "typed/cast.hpp"
 #include "jzip/zip_io.hpp"
@@ -56,116 +57,15 @@
 #include <windows.h>
 #endif
 
+// 参数容器/后端枚举已迁入参数注册表（param_registry.hpp）。
+using mj2x::cli::CEmitterBackend;
+using mj2x::cli::CliOptions;
+using mj2x::cli::NativeBuildDriver;
+
 static void printUsage()
 {
-    printf("Usage: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]\n");
-    printf("Options:\n");
-    printf("  --config <file>           Load JSON options; command line values override it\n");
-    printf("  --emit-c <file>            Output C source to file\n");
-    printf("  --emit-cpp <file>          Output RegC C++17 source to file\n");
-#ifndef MJ2X_DISABLE_LLVM_BACKEND
-    printf("  --emit-llvm <file>         Output LLVM IR source to file\n");
-#endif
-#ifdef MJ2X_DISABLE_LLVM_BACKEND
-    printf("  --backend <stackc|regc|vmc4> Select native emitter (default: stackc; "
-           "cbackend is a legacy alias)\n");
-#else
-    printf("  --backend <stackc|regc|llvm|vmc4> Select native emitter (default: stackc; "
-           "cbackend is a legacy alias)\n");
-#endif
-    printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
-    printf("  --regc-direct-calls         RegC: 启用 native-to-native 直接 C 调用（默认关闭：\n"
-           "                                      直调不产生 JVM 栈帧，getStackTrace 等语义失真）\n");
-    printf("  --regc-comment-level LEVEL  RegC: 生成注释级别 none|summary|detailed（默认 summary）\n");
-    printf("  --regc-safe-env             RegC: 开启 safe-env（JNI 函数表快照 + 方法入口恢复；"
-           "捕获时表已污染则 JNI_OnLoad fail closed）\n");
-    printf("  --regc-safe-env-debug       RegC: safe-env 调试观察模式（检出 hook 只打告警不 fail，"
-           "隐含开启 --regc-safe-env）\n");
-    printf("  --regc-obfuscate           RegC: 开启基础混淆变换（MBA + opaque 谓词 + CFF"
-           "平坦化；默认全部关闭，RegC 保持语义直译最快路径）\n");
-    printf("  --regc-no-inline           RegC: 关闭 SSA 方法内联（默认开启：静态调用 + "
-           "无异常区 + 大小/递归门控的语义等价内联，benchmark 对比用）\n");
-    printf("  --regc-cff-dead <n>         RegC: CFF 恒假死块密度（默认 0 关闭；N = 每 N 个跳转插 1 "
-           "死块；死块条件依赖运行时 state，编译器无法证明恒假不可 DCE，issue #829）\n");
-    printf("  --regc-cff-state-encrypt    RegC: CFF 派生随机 state 码 + dispatcher 状态异或"
-           "（默认关闭；同 seed 同产物）\n");
-    printf("  --regc-mba-deep             RegC: 深 MBA（De Morgan/进位链 + barrier 防折叠，"
-           "per-site 变体；默认关闭）\n");
-    printf("  --regc-opaque-zero          RegC: opaque-零恒等变体（demorgan/shift-pair/or-dec，"
-           "按种子选变体；默认关闭）\n");
-    printf("  --regc-transform-seed <n>   RegC: 变换种子（默认 0；决定 state 码/变体选择，"
-           "同 seed 同产物）\n");
-    printf("  --client-id <n>             per-client 唯一派生（默认 0 = 不变：产物与历史"
-           "逐字节一致；非 0 时所有后端 seed 经 splitmix64(baseSeed ^ clientId) 派生，"
-           "每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物）\n");
-    printf("  --stackc-exception-check <full|lite> StackC pending 异常检查密度（默认 full；"
-           "lite 仅保留 handler 边界检查，对标 JNIC 稀疏检查）\n");
-    printf("  --emit-native-dir <dir>     RegC: 多文件输出（mj2x_regc_api.h + runtime.c + 每类 "
-           "m_<Class>.c + entry.c，库代码与用户代码分离）\n");
-    printf(
-        "  --native-annotation <desc> Only compile methods annotated with JVM descriptor desc\n");
-    printf("  --native-method-prefix <p> Only compile methods whose owner.name starts with p; "
-           "repeatable\n");
-    printf(
-        "  --compile                  Compile emitted C into a native library beside --output\n");
-    printf("  --compile-mode <mode>      Select native compile input mode (file, pipe)\n");
-    printf("  --c-compiler <name>        C compiler or build driver (msvc, gcc, clang, zig, xmake)\n");
-#ifndef MJ2X_DISABLE_LLVM_BACKEND
-    printf("  --llvm-tool <clang|llc>    LLVM IR compiler path (default: clang)\n");
-#endif
-    printf("  --generate-cmake <dir>     Generate a standalone CMake project for emitted C\n");
-    printf("  --generate-xmake <dir>     Generate a standalone xmake project with mj2x-crt\n");
-    printf("  --vmc4-dispatcher <kind>   VMC4(测试性): dispatcher 形态 switch_table|funcptr_table|"
-           "computed_goto|if_nest|state_dispatcher（默认 switch_table；computed_goto 需 "
-           "GCC/clang 编译）\n");
-    printf("  --vmc4-seed <hex>          VMC4: 主 seed，驱动每实例 opcode 映射/handler 顺序"
-           "（同 seed 同输入 → 同产物，可复现构建）\n");
-    printf("  --native-lib-key <hex>     native lib 加密存储：嵌入前 XOR 加密（xorshift32"
-           " 密钥流），资源入口加 .enc 后缀，运行时 NativeLoader 解密加载；静态提取"
-           "不可直接加载（默认关闭 = 明文嵌入）\n");
-    printf("  --native-lib-pack-hook <cmd> 嵌入前外部处理钩子（sepacker DLL 加壳等）："
-           "{in} 占位符替换为编译产物路径，hook 应就地改写该文件；非零退出码视为失败；"
-           "顺序：hook → 可选加密 → 嵌入（默认关闭）\n");
-    printf("  --vmc4-granularity <g>     VMC4: 实例粒度 class|method|program（默认 class；"
-           "method 每方法独立 VM 实例，最强可变性、体积膨胀最大；program 全程序共享"
-           "一个 VM 实例，opcode 空间全局统一、体积最优）\n");
-    printf("  --vmc4-alias <n>           VMC4: 每语义 ALT 别名字节数 0..3（默认 1；0 关闭别名）\n");
-    printf("  --vmc4-bogus <n>           VMC4: 注入的不可达假 handler 数 0..4（默认 1；"
-           "0 关闭，只污染静态分析不参与执行）\n");
-    printf("  --vmc4-drift <n>           VMC4: 执行期 dispatch 变体数 0..4（默认 0 关闭；"
-           "开启后语义标签按字节偏移周期轮转，unmap 表解码）\n");
-    printf("  --vmc4-drift-period <n>    VMC4: drift 变体切换周期（字节偏移单位，默认 16）\n");
-    printf("  --vmc4-trace-surface <f>   VMC4: 写 expected trace surface 文件（mjdbg 红队契约，"
-           "同 seed+同输入 → 同内容）\n");
-    printf("  --runtime-protection <a>   RegC/VMC4: 方法入口反侦测检查点 none|log|delay|fake|"
-           "terminate（默认 none 不注入；依赖 mj2x-crt rt_protect 模块）\n");
-    printf("  --runtime-protection-step <n>   检查点概率触发步长（默认 16）\n");
-    printf("  --runtime-protection-delay <ms> Delay 动作睡眠毫秒数（默认 500）\n");
-    printf("  --intrinsic-config <file>  用户自定义 intrinsic JSON（issue #818）：\n"
-           "                              {\"intrinsics\":[{\"owner\":\"com/x/F\",\"name\":\"m\",\n"
-           "                              \"desc\":\"(II)I\",\"symbol\":\"my_m\",\n"
-           "                              \"passContext\":false,\"mayThrow\":false}],\n"
-           "                              \"sources\":[\"path/to/my_m.c\"]}\n");
-    printf("  --intrinsic-src <file>     追加用户 intrinsic 实现源文件（可重复；并入生成工程编译）\n");
-    printf("  --dump-mir                 Dump MIR intermediate representation\n");
-    printf("  --quiet                    Only warnings and errors on stderr\n");
-    printf("  --verbose                  Debug-level logs on stderr\n");
-    printf("  --help                     Print help\n");
+    mj2x::cli::printHelp();
 }
-
-enum class CEmitterBackend
-{
-    StackC,
-    RegC,
-    LlvmIr,
-    Vmc4,
-};
-
-enum class NativeBuildDriver
-{
-    Direct,
-    Xmake,
-};
 
 class TemporaryProjectCleanup
 {
@@ -218,64 +118,6 @@ private:
     std::filesystem::path path_;
 };
 
-struct CliOptions
-{
-    std::string              inputPath;
-    std::string              outputPath;
-    std::string              cOutputPath;
-    std::string              cppOutputPath;
-    std::string              llvmOutputPath;
-    std::string              nativeDirOutput;
-    std::string              cmakeProjectDir;
-    std::string              xmakeProjectDir;
-    std::string              nativeAnnotation;
-    std::vector<std::string> nativeMethodPrefixes;
-    CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
-    mj2x::cli::CCompilerKind cCompilerKind    = mj2x::cli::CCompilerKind::Auto;
-    mj2x::cli::CompileMode   compileMode      = mj2x::cli::CompileMode::File;
-    mj2x::cli::LlvmTool      llvmTool         = mj2x::cli::LlvmTool::Clang;
-    NativeBuildDriver        buildDriver      = NativeBuildDriver::Direct;
-    bool                     backendSelected  = false;
-    bool                     compileNative    = false;
-    bool                     compileModeSelected = false;
-    bool                     compilerSelected = false;
-    bool                     llvmToolSelected = false;
-    bool                     dumpMIR          = false;
-    bool                     regcTraceCalls   = false;
-    bool                     regcDirectCalls  = false;
-    mj2x::RegCCommentLevel   regcCommentLevel = mj2x::RegCCommentLevel::Summary;
-    bool                     regcSafeEnv      = false;
-    bool                     regcSafeEnvDebug = false;
-    // issue #829：Cloakwork 借鉴项（默认关闭，RegC 高性能定位）。
-    bool                     regcObfuscate       = false;
-    bool                     regcNoInline        = false;
-    int                      regcCffDead        = 0;
-    bool                     regcCffStateEncrypt = false;
-    bool                     regcMbaDeep         = false;
-    bool                     regcOpaqueZero      = false;
-    uint64_t                 regcTransformSeed   = 0;
-    std::string              stackcExceptionCheck = "full";
-    std::string              vmc4Dispatcher      = "switch_table";
-    uint64_t                 vmc4Seed            = 0;
-    bool                     vmc4SeedSelected    = false;
-    uint64_t                 clientId            = 0;   ///< per-client 唯一派生（0 = 不变）
-    std::string              vmc4Granularity     = "class";
-    int                      vmc4Alias           = 1;
-    int                      vmc4Bogus           = 1;
-    int                      vmc4Drift           = 0;
-    int                      vmc4DriftPeriod     = 16;
-    std::string              vmc4TraceSurface;   ///< 非空时写 expected trace surface 文件
-    std::string              runtimeProtection        = "none";   ///< none|log|delay|fake|terminate
-    int                      runtimeProtectionStep    = 16;
-    int                      runtimeProtectionDelayMs = 500;
-    /// 用户自定义 intrinsic 配置（issue #818）。
-    std::string              intrinsicConfigPath;
-    std::vector<std::string> intrinsicSources;
-    std::uint32_t            nativeLibKey         = 0;   ///< native lib 加密密钥（--native-lib-key，hex）
-    bool                     nativeLibKeySelected = false;
-    std::string              nativeLibPackHook;          ///< 嵌入前外部处理钩子（--native-lib-pack-hook）
-};
-
 /// @brief --runtime-protection 字符串 → codegen::RuntimeProtectionAction。
 static mj2x::codegen::RuntimeProtectionAction parseRuntimeProtectionAction(
     const std::string& name)
@@ -285,80 +127,6 @@ static mj2x::codegen::RuntimeProtectionAction parseRuntimeProtectionAction(
     if (name == "fake") return mj2x::codegen::RuntimeProtectionAction::Fake;
     if (name == "terminate") return mj2x::codegen::RuntimeProtectionAction::Terminate;
     return mj2x::codegen::RuntimeProtectionAction::None;
-}
-
-static bool parseBackendName(const std::string& name, CEmitterBackend& backend)
-{    if (name == "stackc" || name == "cbackend" || name == "c") {
-        backend = CEmitterBackend::StackC;
-        return true;
-    }
-    if (name == "regc") {
-        backend = CEmitterBackend::RegC;
-        return true;
-    }
-#ifndef MJ2X_DISABLE_LLVM_BACKEND
-    if (name == "llvm") {
-        backend = CEmitterBackend::LlvmIr;
-        return true;
-    }
-#endif
-    if (name == "vmc4") {
-        backend = CEmitterBackend::Vmc4;
-        return true;
-    }
-    return false;
-}
-
-static bool applyConfigOptions(const mj2x::cli::ConfigFileOptions& config, CliOptions& options,
-                               std::string& error)
-{
-    if (config.input) options.inputPath = *config.input;
-    if (config.output) options.outputPath = *config.output;
-    if (config.emitC) options.cOutputPath = *config.emitC;
-    if (config.emitCpp) options.cppOutputPath = *config.emitCpp;
-    if (config.emitLlvm) options.llvmOutputPath = *config.emitLlvm;
-    if (config.nativeAnnotation) options.nativeAnnotation = *config.nativeAnnotation;
-    if (config.hasNativeMethodPrefixes) options.nativeMethodPrefixes = config.nativeMethodPrefixes;
-    if (config.compile) options.compileNative = *config.compile;
-    if (config.compileMode) {
-        options.compileModeSelected = true;
-        if (!mj2x::cli::parseCompileModeName(*config.compileMode, options.compileMode)) {
-            error = "Unknown config compile_mode value. Expected file or pipe.";
-            return false;
-        }
-    }
-    if (config.llvmTool) {
-        options.llvmToolSelected = true;
-        if (!mj2x::cli::parseLlvmToolName(*config.llvmTool, options.llvmTool)) {
-            error = "Unknown config llvm_tool value. Expected clang or llc.";
-            return false;
-        }
-    }
-    if (config.generateXmake) options.xmakeProjectDir = *config.generateXmake;
-    if (config.generateCmake) options.cmakeProjectDir = *config.generateCmake;
-    if (config.dumpMir) options.dumpMIR = *config.dumpMir;
-    if (config.backend) {
-        options.backendSelected = true;
-        if (!parseBackendName(*config.backend, options.cBackendKind)) {
-#ifdef MJ2X_DISABLE_LLVM_BACKEND
-            error = "Unknown config backend value. Expected stackc, regc, or vmc4.";
-#else
-            error = "Unknown config backend value. Expected stackc, regc, or llvm.";
-#endif
-            return false;
-        }
-    }
-    if (config.cCompiler) {
-        options.compilerSelected = true;
-        if (*config.cCompiler == "xmake") {
-            options.buildDriver = NativeBuildDriver::Xmake;
-        }
-        else if (!mj2x::cli::parseCompilerName(*config.cCompiler, options.cCompilerKind)) {
-            error = "Unknown config c_compiler value. Expected msvc, gcc, clang, zig, or xmake.";
-            return false;
-        }
-    }
-    return true;
 }
 
 static bool hasExtension(std::string path, const std::string& ext)
@@ -749,10 +517,9 @@ int main(int argc, char** argv)
     std::string              configPath;
     TemporaryProjectCleanup temporaryProjectCleanup;
 
-    bool quiet                  = false;
-    bool verbose                = false;
-    bool commandLineNativePrefixesSeen = false;
-    bool commandLineNativeOutputSeen   = false;
+    // 第一遍扫描：--config 路径与日志级别（CLI 显式优先于配置）。
+    bool cliQuiet   = false;
+    bool cliVerbose = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--config") {
@@ -769,242 +536,95 @@ int main(int argc, char** argv)
             configPath = argv[++i];
         }
         else if (arg == "--quiet")
-            quiet = true;
+            cliQuiet = true;
         else if (arg == "--verbose")
-            verbose = true;
+            cliVerbose = true;
     }
-    if (quiet) mj2x::setLogLevel(ca::log::Level::Warn);
-    else if (verbose) mj2x::setLogLevel(ca::log::Level::Debug);
+    if (cliQuiet) mj2x::setLogLevel(ca::log::Level::Warn);
+    else if (cliVerbose) mj2x::setLogLevel(ca::log::Level::Debug);
 
+    // 配置文件：注册表驱动加载（默认值 < 配置 < CLI 由解析顺序保证）。
     if (!configPath.empty()) {
-        mj2x::cli::ConfigFileOptions configOptions;
-        std::string                  error;
-        if (!mj2x::cli::loadConfigFile(configPath, configOptions, error) ||
-            !applyConfigOptions(configOptions, options, error)) {
+        std::string error;
+        if (!mj2x::cli::loadConfigFile(configPath, options, error)) {
             CA_LOGT_ERROR("cli", "{}\n", error.c_str());
             return 1;
         }
+        if (!cliQuiet && !cliVerbose) {
+            if (options.quiet) mj2x::setLogLevel(ca::log::Level::Warn);
+            else if (options.verbose) mj2x::setLogLevel(ca::log::Level::Debug);
+        }
     }
 
+    // 第二遍：注册表驱动参数解析（--config 第一遍已消费；--quiet/--verbose
+    // 走注册表 log_quiet/log_verbose，最终日志级别按 CLI 优先）。
+    bool         dumpSchema   = false;
+    bool         dumpTemplate = false;
+    std::string  dumpFile;
     for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "--config" && i + 1 < argc) {
-            ++i;
+        const std::string arg = argv[i];
+        if (arg == "--config") {
+            ++i;   // 第一遍已记录路径；这里跳过其值。
             continue;
         }
-        if (arg == "-i" && i + 1 < argc)
-            options.inputPath = argv[++i];
-        else if (arg == "-o" && i + 1 < argc)
-            options.outputPath = argv[++i];
-        else if (arg == "--emit-c" && i + 1 < argc) {
-            if (!commandLineNativeOutputSeen) {
-                options.cOutputPath.clear();
-                options.cppOutputPath.clear();
-                options.llvmOutputPath.clear();
-                commandLineNativeOutputSeen = true;
-            }
-            options.cOutputPath = argv[++i];
-        }
-        else if (arg == "--emit-cpp" && i + 1 < argc) {
-            if (!commandLineNativeOutputSeen) {
-                options.cOutputPath.clear();
-                options.cppOutputPath.clear();
-                options.llvmOutputPath.clear();
-                options.nativeDirOutput.clear();
-                commandLineNativeOutputSeen = true;
-            }
-            options.cppOutputPath = argv[++i];
-        }
-        else if (arg == "--emit-native-dir" && i + 1 < argc) {
-            if (!commandLineNativeOutputSeen) {
-                options.cOutputPath.clear();
-                options.cppOutputPath.clear();
-                options.llvmOutputPath.clear();
-                options.nativeDirOutput.clear();
-                commandLineNativeOutputSeen = true;
-            }
-            options.nativeDirOutput = argv[++i];
-        }
-#ifndef MJ2X_DISABLE_LLVM_BACKEND
-        else if (arg == "--emit-llvm" && i + 1 < argc) {
-            if (!commandLineNativeOutputSeen) {
-                options.cOutputPath.clear();
-                options.cppOutputPath.clear();
-                options.llvmOutputPath.clear();
-                commandLineNativeOutputSeen = true;
-            }
-            options.llvmOutputPath = argv[++i];
-        }
-#endif
-        else if (arg == "--native-annotation" && i + 1 < argc)
-            options.nativeAnnotation = argv[++i];
-        else if (arg == "--native-method-prefix" && i + 1 < argc) {
-            if (!commandLineNativePrefixesSeen) {
-                options.nativeMethodPrefixes.clear();
-                commandLineNativePrefixesSeen = true;
-            }
-            options.nativeMethodPrefixes.push_back(argv[++i]);
-        }
-        else if (arg == "--compile")
-            options.compileNative = true;
-        else if (arg == "--compile-mode" && i + 1 < argc) {
-            options.compileModeSelected = true;
-            if (!mj2x::cli::parseCompileModeName(argv[++i], options.compileMode)) {
-                CA_LOGT_ERROR("cli", "Unknown --compile-mode value. Expected file or pipe.\n");
-                printUsage();
-                return 1;
-            }
-        }
-        else if (arg == "--generate-cmake" && i + 1 < argc)
-            options.cmakeProjectDir = argv[++i];
-        else if (arg == "--generate-xmake" && i + 1 < argc)
-            options.xmakeProjectDir = argv[++i];
-        else if (arg == "--c-compiler" && i + 1 < argc) {
-            options.compilerSelected = true;
-            const std::string compilerName = argv[++i];
-            if (compilerName == "xmake") {
-                options.buildDriver = NativeBuildDriver::Xmake;
-            }
-            else if (!mj2x::cli::parseCompilerName(compilerName, options.cCompilerKind)) {
-                CA_LOGT_ERROR("cli", "Unknown --c-compiler value. Expected msvc, gcc, clang, zig, or xmake.\n");
-                printUsage();
-                return 1;
-            }
-        }
-#ifndef MJ2X_DISABLE_LLVM_BACKEND
-        else if (arg == "--llvm-tool" && i + 1 < argc) {
-            options.llvmToolSelected = true;
-            if (!mj2x::cli::parseLlvmToolName(argv[++i], options.llvmTool)) {
-                CA_LOGT_ERROR("cli", "Unknown --llvm-tool value. Expected clang or llc.\n");
-                printUsage();
-                return 1;
-            }
-        }
-#endif
-        else if (arg == "--backend" && i + 1 < argc) {
-            options.backendSelected = true;
-            if (!parseBackendName(argv[++i], options.cBackendKind)) {
-#ifdef MJ2X_DISABLE_LLVM_BACKEND
-                CA_LOGT_ERROR("cli",
-                              "Unknown --backend value. Expected stackc, regc, or vmc4. "
-                              "Legacy alias cbackend is also accepted.\n");
-#else
-                CA_LOGT_ERROR("cli",
-                              "Unknown --backend value. Expected stackc, regc, llvm, or vmc4. "
-                              "Legacy alias cbackend is also accepted.\n");
-#endif
-                printUsage();
-                return 1;
-            }
-        }
-        else if (arg == "--dump-mir")
-            options.dumpMIR = true;
-        else if (arg == "--regc-trace-calls")
-            options.regcTraceCalls = true;
-        else if (arg == "--regc-direct-calls")
-            options.regcDirectCalls = true;
-        else if (arg == "--regc-comment-level" && i + 1 < argc) {
-            const std::string level = argv[++i];
-            if (level == "none")
-                options.regcCommentLevel = mj2x::RegCCommentLevel::None;
-            else if (level == "summary")
-                options.regcCommentLevel = mj2x::RegCCommentLevel::Summary;
-            else if (level == "detailed")
-                options.regcCommentLevel = mj2x::RegCCommentLevel::Detailed;
-            else {
-                CA_LOGT_ERROR("cli", "Unknown --regc-comment-level value. Expected none, summary, or detailed.\n");
-                printUsage();
-                return 1;
-            }
-        }
-        else if (arg == "--regc-safe-env")
-            options.regcSafeEnv = true;
-        else if (arg == "--regc-safe-env-debug") {
-            options.regcSafeEnv      = true;
-            options.regcSafeEnvDebug = true;
-        }
-        else if (arg == "--regc-cff-dead" && i + 1 < argc) {
-            const int parsed = std::atoi(argv[++i]);
-            options.regcCffDead = parsed < 0 ? 0 : parsed;
-        }
-        else if (arg == "--regc-obfuscate")
-            options.regcObfuscate = true;
-        else if (arg == "--regc-no-inline")
-            options.regcNoInline = true;
-        else if (arg == "--regc-cff-state-encrypt")
-            options.regcCffStateEncrypt = true;
-        else if (arg == "--regc-mba-deep")
-            options.regcMbaDeep = true;
-        else if (arg == "--regc-opaque-zero")
-            options.regcOpaqueZero = true;
-        else if (arg == "--regc-transform-seed" && i + 1 < argc) {
-            options.regcTransformSeed = std::strtoull(argv[++i], nullptr, 0);
-        }
-        else if (arg == "--vmc4-dispatcher" && i + 1 < argc) {
-            options.vmc4Dispatcher = argv[++i];
-        }
-        else if (arg == "--vmc4-seed" && i + 1 < argc) {
-            // 16 进制（0x...）或十进制均可，strtoull 自动识别。
-            options.vmc4Seed = std::strtoull(argv[++i], nullptr, 0);
-            options.vmc4SeedSelected = true;
-        }
-        else if (arg == "--client-id" && i + 1 < argc) {
-            options.clientId = std::strtoull(argv[++i], nullptr, 0);
-        }
-        else if (arg == "--native-lib-key" && i + 1 < argc) {
-            // hex 密钥；非 0 时嵌入前加密 native lib 资源（XOR 密钥流）。
-            options.nativeLibKey = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 16));
-            options.nativeLibKeySelected = true;
-        }
-        else if (arg == "--native-lib-pack-hook" && i + 1 < argc) {
-            options.nativeLibPackHook = argv[++i];
-        }
-        else if (arg == "--vmc4-granularity" && i + 1 < argc) {
-            options.vmc4Granularity = argv[++i];
-        }
-        else if (arg == "--vmc4-alias" && i + 1 < argc) {
-            options.vmc4Alias = std::atoi(argv[++i]);
-        }
-        else if (arg == "--vmc4-bogus" && i + 1 < argc) {
-            options.vmc4Bogus = std::atoi(argv[++i]);
-        }
-        else if (arg == "--vmc4-drift" && i + 1 < argc) {
-            options.vmc4Drift = std::atoi(argv[++i]);
-        }
-        else if (arg == "--vmc4-drift-period" && i + 1 < argc) {
-            options.vmc4DriftPeriod = std::atoi(argv[++i]);
-        }
-        else if (arg == "--vmc4-trace-surface" && i + 1 < argc) {
-            options.vmc4TraceSurface = argv[++i];
-        }
-        else if (arg == "--runtime-protection" && i + 1 < argc) {
-            options.runtimeProtection = argv[++i];
-        }
-        else if (arg == "--runtime-protection-step" && i + 1 < argc) {
-            options.runtimeProtectionStep = std::atoi(argv[++i]);
-        }
-        else if (arg == "--intrinsic-config" && i + 1 < argc) {
-            options.intrinsicConfigPath = argv[++i];
-        }
-        else if (arg == "--intrinsic-src" && i + 1 < argc) {
-            options.intrinsicSources.push_back(argv[++i]);
-        }
-        else if (arg == "--runtime-protection-delay" && i + 1 < argc) {
-            options.runtimeProtectionDelayMs = std::atoi(argv[++i]);
-        }
-        else if (arg == "--stackc-exception-check" && i + 1 < argc)
-            options.stackcExceptionCheck = argv[++i];
-        else if (arg == "-h" || arg == "--help") {
+        if (arg == "-h" || arg == "--help") {
             printUsage();
             return 0;
         }
-        else if (arg == "--quiet" || arg == "--verbose") {
-            // 第一遍扫描已处理级别；这里仅跳过，避免落入未知参数分支。
+        if (arg == "--dump-config-schema" || arg == "--dump-config-template") {
+            if (dumpSchema || dumpTemplate) {
+                CA_LOGT_ERROR("cli",
+                              "--dump-config-schema/--dump-config-template may only be "
+                              "specified once.\n");
+                return 1;
+            }
+            dumpSchema   = (arg == "--dump-config-schema");
+            dumpTemplate = !dumpSchema;
+            if (i + 1 < argc && argv[i + 1][0] != '-') dumpFile = argv[++i];
+            continue;
         }
-        else {
+        const mj2x::cli::ParamDef* param = mj2x::cli::findParamByCli(arg);
+        if (!param) {
+            CA_LOGT_ERROR("cli", "unknown option: {}\n", arg.c_str());
             printUsage();
             return 1;
         }
+        const char* value = nullptr;
+        if (param->type != mj2x::cli::ParamType::Bool) {
+            if (i + 1 >= argc) {
+                CA_LOGT_ERROR("cli", "{} requires a value.\n", arg.c_str());
+                printUsage();
+                return 1;
+            }
+            value = argv[++i];
+        }
+        std::string error;
+        if (!param->parseCli(options, value, error)) {
+            CA_LOGT_ERROR("cli", "{}\n", error.c_str());
+            printUsage();
+            return 1;
+        }
+    }
+
+    // --dump-config-schema / --dump-config-template：不要求 -i/-o，输出后退出。
+    if (dumpSchema || dumpTemplate) {
+        const std::string text = dumpSchema
+                                     ? mj2x::cli::buildConfigSchemaJson().dump(2)
+                                     : mj2x::cli::buildConfigTemplateText();
+        if (dumpFile.empty()) {
+            printf("%s\n", text.c_str());
+        }
+        else {
+            std::ofstream out(dumpFile, std::ios::binary);
+            if (!out) {
+                CA_LOGT_ERROR("cli", "cannot write {}: {}\n",
+                              dumpSchema ? "config schema" : "config template",
+                              dumpFile.c_str());
+                return 1;
+            }
+            out << text << "\n";
+        }
+        return 0;
     }
 
     if (options.inputPath.empty() || options.outputPath.empty()) {
