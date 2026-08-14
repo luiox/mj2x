@@ -16,6 +16,7 @@
 | 七（#820 测试集） | 语义样本 Wave3 + 三后端矩阵 + jar 整体 E2E | 步骤 1-4 完成；5-6 待做 |
 | 八（#818 intrinsic） | 用户自定义 intrinsic 三后端机制 | ✅ 完成（PR #826，已合并） |
 | 九（#827 VMC4 粒度） | program 粒度（全程序共享 VM） | ✅ 完成（见 PR） |
+| 十（#829 混淆借鉴） | Cloakwork 借鉴项：RegC 可选混淆增强（CFF 死块/state 加密/深 MBA/opaque-零），全部默认关闭 | ✅ 完成（见 PR；默认产物零变化） |
 
 ## 待做项
 
@@ -60,6 +61,12 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-15：**主线十（#829 Cloakwork 借鉴项）**——RegC 可选混淆增强：CFF 恒假死块
+  注入（barrier 防 DCE，条件依赖运行时 state）+ 派生随机 state 码 + 状态异或、深 MBA
+  （De Morgan/进位链 + barrier 防折叠 + per-site 变体）、opaque-零恒等变体
+  （demorgan/shift-pair/or-dec）。全部默认关闭（新 CLI 开关：`--regc-cff-dead` /
+  `--regc-cff-state-encrypt` / `--regc-mba-deep` / `--regc-opaque-zero` /
+  `--regc-transform-seed`）；默认产物零变化，同 seed 同产物。
 - 2026-08-15：**主线八完成（PR #826 已合并）**——用户 intrinsic 三后端（#818）+
   mtest_set Wave3（#820 首批）。
 - 2026-08-15：**主线九（#827）**——VMC4 granularity=program（全程序共享 VM 实例），
@@ -82,3 +89,4 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 | 五（文档） | `mj2x/doc/*.md`、`mj2x/doc_ai/capabilities.md` |
 | 八（#818 intrinsic） | `mj2x/doc/user_intrinsic.md`；git log PR #826；`user_intrinsic_test.cpp` / `user_intrinsic_e2e_test.cpp` |
 | 九（#827 program 粒度） | `vmc4_backend_test.cpp` 粒度矩阵测试；`vmc4_backend.cpp` 实例缓存 |
+| 十（#829 混淆借鉴） | `reg_transform_passes.{hpp,cpp}`（Cloakwork 借鉴项 P0）；`register_ir_test.cpp` RegTransformPassTest 扩展 |

@@ -162,6 +162,12 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。LLVM IR 由 clang 或 `llc -> clang` 编译，不使用 `--c-compiler`。
 - `--regc-trace-calls`、`--regc-safe-env`、`--regc-safe-env-debug` 均要求 `--backend regc`；safe-env 默认关闭，开启才产生运行时开销
+- **RegC 可选混淆增强（#829，Cloakwork 借鉴）**：默认全部关闭（RegC 保持高性能定位，默认产物零变化）；开启项均确定性（同 seed 同产物）：
+  - `--regc-cff-dead <n>`：CFF 恒假死块注入密度（每 N 个 dispatcher 跳转插 1 死块）。死块条件 `(state*state+1)==0`（模 2³² 无解恒假、依赖运行时 state 不可被编译器证明），内容夹 `mj2x_regc_barrier`（副作用语义）→ MSVC/GCC O2 下不可 DCE（已验证 DLL 存活）。
+  - `--regc-cff-state-encrypt`：派生随机 state 码（splitmix64(seed,index) 替代顺序 1,2,3）+ dispatcher 入口状态异或（case 常量 ≠ 写入值）。
+  - `--regc-mba-deep`：Add 展开为 De Morgan/进位恒等链（per-site 按 seed 选变体），链中夹 barrier 防折叠。
+  - `--regc-opaque-zero`：opaque 恒真谓词变体（demorgan `~(~x)==x` / shift-pair / or-dec，零 UB 位运算）。
+  - `--regc-transform-seed <n>`：变换种子（state 码/变体选择），默认 0。
 - **native-to-native 调用默认走 JNI（#814/#816）**：已转换目标间的 direct C 调用不产生 JVM 栈帧，`Throwable.getStackTrace` / `StackWalker` / 反射的栈观察语义会失真（regc 2.6 ReTrace 实证）。默认 `CodeOptions.directCalls=false`，所有调用经 JNI `Call*MethodA` 保帧；`--regc-direct-calls` 显式开启直调（性能优先且确认无栈观察的产物）。实测 obf.jar 总耗时影响约 1%
 - `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
