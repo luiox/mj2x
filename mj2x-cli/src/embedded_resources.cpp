@@ -1,5 +1,7 @@
 #include "embedded_resources.hpp"
 
+#include "libca/log/log_macros.hpp"
+
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -18,15 +20,13 @@ bool writeResource(const fs::path& base, const EmbeddedResource& resource)
     const auto      dest = base / resource.path;
     fs::create_directories(dest.parent_path(), ec);
     if (ec) {
-        fprintf(
-            stderr, "[mj2x] ERROR: cannot create resource directory: %s\n", ec.message().c_str());
+        CA_LOGT_ERROR("compile", "cannot create resource directory: {}\n", ec.message().c_str());
         return false;
     }
 
     std::ofstream out(dest, std::ios::binary);
     if (!out) {
-        fprintf(
-            stderr, "[mj2x] ERROR: cannot write embedded resource: %s\n", dest.string().c_str());
+        CA_LOGT_ERROR("compile", "cannot write embedded resource: {}\n", dest.string().c_str());
         return false;
     }
     out.write(reinterpret_cast<const char*>(resource.data),

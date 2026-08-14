@@ -20,6 +20,7 @@
 #include "jdk_fixture.hpp"
 #include "jdk_finder/jdk_finder.hpp"
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
+#include "mj2x/logging.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
@@ -41,12 +42,12 @@ struct ConversionCounts
     std::vector<std::pair<std::string, std::string>> details;   ///< (方法签名, 状态/原因)
 };
 
-/// 解析 pipeline stdout 的 [Vmc4Backend] Skipping / [mj2x] Compiling 日志。
+/// 解析 pipeline 日志（stderr，经 libca log 门面）的 Compiling / Skipping 行。
 ///
-/// 日志语义（pipeline.cpp compileMethods）：每个标记方法先打印
-/// "  Compiling <类>.<名><描述>"，VMC4 编码失败再打印
-/// "[Vmc4Backend] Skipping <类>.<名><描述>: VM encode failed: <原因>"。
-/// 故：方法总数 = Compiling 数；转 VM = Compiling - Skipping。
+/// 日志语义（pipeline.cpp compileMethods）：每个标记方法先打
+/// "  Compiling <类>.<名><描述>"（pipeline target，INFO），VMC4 编码失败再打
+/// "<...> Skipping <类>.<名><描述>: <原因>"（vmc4 target，WARN，SimpleLogBackend
+/// 自带 [LEVEL] [target] 前缀）。故：方法总数 = Compiling 数；转 VM = Compiling - Skipping。
 ConversionCounts parsePipelineLog(const std::string& log)
 {
     ConversionCounts counts;
@@ -57,7 +58,7 @@ ConversionCounts parsePipelineLog(const std::string& log)
             counts.total++;
             const std::string sig = line.substr(line.find("Compiling ") + 10);
             counts.details.emplace_back(sig, "");
-        } else if (line.find("[Vmc4Backend] Skipping ") != std::string::npos) {
+        } else if (line.find("Skipping ") != std::string::npos) {
             const size_t skipPos = line.find("Skipping ") + 9;
             const size_t colon   = line.find(": ", skipPos);
             const std::string sig =
@@ -98,6 +99,8 @@ protected:
     void SetUp() override
     {
         if (!tc_.available) GTEST_SKIP() << "VMC4 conversion report requires a JDK: " << tc_.reason;
+        // 日志走 libca log 门面（stderr），测试捕获 stderr；未初始化时宏调用静默丢弃。
+        mj2x::initLogging(ca::log::Level::Debug);
     }
 };
 
@@ -145,16 +148,16 @@ TEST_F(Vmc4ConversionTest, FixtureConversionReport)
     pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
 
-    // 捕获 pipeline stdout（printf 的 Skipping/Compiling 日志）。
+    // 捕获 pipeline stderr（日志门面输出：Compiling/Skipping 行）。
     const fs::path logPath = outDir / "pipeline.log";
-    fflush(stdout);
-    const int saved = _dup(_fileno(stdout));
+    fflush(stderr);
+    const int saved = _dup(_fileno(stderr));
     ASSERT_GE(saved, 0);
-    FILE* logFile = freopen(logPath.string().c_str(), "w", stdout);
+    FILE* logFile = freopen(logPath.string().c_str(), "w", stderr);
     ASSERT_NE(logFile, nullptr);
     const int runResult = pipeline.run();
-    fflush(stdout);
-    _dup2(saved, _fileno(stdout));
+    fflush(stderr);
+    _dup2(saved, _fileno(stderr));
     _close(saved);
 
     std::ifstream logIn(logPath);

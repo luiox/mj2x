@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mj2x/preprocessor/preprocessor.hpp"
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -26,7 +27,7 @@ public:
                 method.markedForCompile = true;
             }
         }
-        printf("[MarkAll] All methods marked for compilation\n");
+        CA_LOGT_INFO("preprocess", "All methods marked for compilation\n");
     }
 };
 

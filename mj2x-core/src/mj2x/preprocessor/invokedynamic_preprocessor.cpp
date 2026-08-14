@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -949,20 +950,13 @@ void processImpl(CompilerIndex& index)
     }
 
     if (expanded > 0) {
-        printf("[InvokeDynamicPreproc] Expanded %d StringConcatFactory site(s) into "
-               "StringBuilder bytecode (RegC-native).\n",
-               expanded);
+        CA_LOGT_INFO("preprocess", "Expanded {} StringConcatFactory site(s) into StringBuilder bytecode (RegC-native).\n", expanded);
     }
     if (lambdaExpanded > 0) {
-        printf("[InvokeDynamicPreproc] Expanded %d lambda site(s) into synthesized "
-               "functional-interface class(es) (RegC-native).\n",
-               lambdaExpanded);
+        CA_LOGT_INFO("preprocess", "Expanded {} lambda site(s) into synthesized functional-interface class(es) (RegC-native).\n", lambdaExpanded);
     }
     if (remainingIndy > 0) {
-        printf("[InvokeDynamicPreproc] %d invokedynamic site(s) remain unexpanded "
-               "(primitive narrowing / box+widen / custom bootstrap); StackC lowers via "
-               "runtime bridge, RegC/SSA still fail-closed until later expansion phases.\n",
-               remainingIndy);
+        CA_LOGT_INFO("preprocess", "{} invokedynamic site(s) remain unexpanded (primitive narrowing / box+widen / custom bootstrap); StackC lowers via runtime bridge, RegC/SSA still fail-closed until later expansion phases.\n", remainingIndy);
     }
 }
 

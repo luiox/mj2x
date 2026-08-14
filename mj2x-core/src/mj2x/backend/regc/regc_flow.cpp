@@ -379,7 +379,6 @@ static bool receiverExactTypes(const RegFunction& fn, const RegBlock* block, con
             foundAny = true;
         }
     }
-    fprintf(stderr, "[SB-Q]   done foundAny=%d\n", foundAny ? 1 : 0);
     return foundAny;
 }
 

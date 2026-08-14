@@ -135,7 +135,24 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用（**v2.1 发布关闭**，与 `--backend llvm` 一并不可用） |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
 | `--dump-mir` | 打印中间表示(调试用) |
+| `--quiet` | 日志只保留警告与错误（stderr） |
+| `--verbose` | 日志提升到 debug 级别（stderr） |
 | `--help` | 打印帮助 |
+
+### 4.1 日志
+
+mj2x 的日志统一走 **libca log 门面 + SimpleLogBackend**（stderr 彩色输出，
+格式 `[时间] [级别] [模块] 消息 (文件:行)`），模块标签包括 `cli` / `compile` /
+`pipeline` / `regc` / `stackc` / `vmc4` / `llvm` / `preprocess` / `io`。
+
+- 默认级别 `Info`：进度与统计（Pipeline 阶段、Compiling 方法、写出的产物）。
+- `--quiet`：只显示 `Warn`/`Error`（如后端 fail-closed 跳过、参数校验失败）。
+- `--verbose`：显示 `Debug` 细节（如逐方法编译过程）。
+- 库使用者可调 `mj2x::initLogging(level)` / `mj2x::setLogLevel(level)`
+  （`mj2x/logging.hpp`）自行初始化；未初始化时日志宏静默丢弃。
+
+`--dump-mir` 的 MIR 文本、`--emit-*` 的产物与编译器子进程的透传输出仍走
+stdout/原通道，不属于日志。
 
 生成 CMake 工程示例:
 

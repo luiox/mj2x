@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include "jbytecode/jbytecode.hpp"
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -58,7 +59,7 @@ static void writeBytes(const std::string& path, const std::vector<ca::u8>& bytes
 {
     std::ofstream ofs(path, std::ios::binary);
     if (!ofs) {
-        printf("[OutputWriter] ERROR: cannot write %s\n", path.c_str());
+        CA_LOGT_ERROR("io", "cannot write {}\n", path.c_str());
         return;
     }
     ofs.write(reinterpret_cast<const char*>(bytes.data()),
@@ -94,8 +95,7 @@ static void writeJar(const std::string& path, CompilerIndex& index)
     // deterministic while preserving resource payloads byte-for-byte.
     auto bytes = jzip::ZipIO::writeDirect(archive);
     writeBytes(path, bytes);
-    printf("[OutputWriter] Written JAR: %s (%zu bytes, %zu classes, %zu resources)\n",
-           path.c_str(),
+    CA_LOGT_INFO("io", "Written JAR: {} ({} bytes, {} classes, {} resources)\n", path.c_str(),
            bytes.size(),
            classCount,
            resourceCount);
@@ -154,7 +154,7 @@ static void writeClassFile(const std::string& path, CompilerIndex& index)
 
     auto bytes = writeClassBytes(index, *primary);
     writeBytes(path, bytes);
-    printf("[OutputWriter] Written: %s (%zu bytes)\n", path.c_str(), bytes.size());
+    CA_LOGT_INFO("io", "Written: {} ({} bytes)\n", path.c_str(), bytes.size());
 
     const fs::path outputPath(path);
     for (auto& [name, cls] : classes) {
@@ -165,8 +165,7 @@ static void writeClassFile(const std::string& path, CompilerIndex& index)
         fs::create_directories(sidecarPath.parent_path(), ec);
         auto sidecarBytes = writeClassBytes(index, cls);
         writeBytes(sidecarPath.string(), sidecarBytes);
-        printf("[OutputWriter] Written sidecar: %s (%zu bytes)\n",
-               sidecarPath.string().c_str(),
+        CA_LOGT_INFO("io", "Written sidecar: {} ({} bytes)\n", sidecarPath.string().c_str(),
                sidecarBytes.size());
     }
 }
@@ -175,7 +174,7 @@ void OutputWriter::write(const std::string& path, CompilerIndex& index)
 {
     auto& classes = index.getClasses();
     if (classes.empty()) {
-        printf("[OutputWriter] No classes to write\n");
+        CA_LOGT_INFO("io", "No classes to write\n");
         return;
     }
 

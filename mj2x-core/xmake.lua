@@ -6,7 +6,7 @@ target("mj2x-core")
     set_group("mj2x")
     set_policy("build.merge_archive", true)
 
-    add_deps("libtyped", "libjbytecode", "libjstr", "libjzip")
+    add_deps("libtyped", "libjbytecode", "libjstr", "libjzip", "libca_log")
 
     add_files("src/mj2x/**.cpp")
     add_headerfiles("src/mj2x/**.hpp")

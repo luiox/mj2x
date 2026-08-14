@@ -10,6 +10,7 @@
 #include <string>
 
 #include "jbytecode/jbytecode.hpp"
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -248,8 +249,7 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
     bool      changed   = true;
     while (changed) {
         if (++rounds > maxRounds) {
-            printf("[StackCBackend] depth analysis did not converge after %d rounds\n",
-                   maxRounds);
+            CA_LOGT_WARN("stackc", "depth analysis did not converge after {} rounds\n", maxRounds);
             return false;
         }
         changed = false;
@@ -313,8 +313,7 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
                     changed = true;
                 }
                 else if (entryDepths[si] != depth) {
-                    printf("[StackCBackend] depth conflict: block %d entry=%d pred=%d out=%d\n",
-                           blocks[si]->id, entryDepths[si], b->id, depth);
+                    CA_LOGT_WARN("stackc", "depth conflict: block {} entry={} pred={} out={}\n", blocks[si]->id, entryDepths[si], b->id, depth);
                     return false;
                 }
             }
@@ -331,9 +330,7 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
                               " ";
                 }
             }
-            printf("[StackCBackend] depth unresolved: block %d (idx %zu) labels=[%s] preds? "
-                   "terminator=%d\n",
-                   blocks[bi]->id, bi, labels.c_str(),
+            CA_LOGT_WARN("stackc", "depth unresolved: block {} (idx {}) labels=[{}] preds? terminator={}\n", blocks[bi]->id, bi, labels.c_str(),
                    blocks[bi]->nodes.empty() ? -1
                                              : static_cast<int>(blocks[bi]->nodes.back()->kind));
             return false;
@@ -517,8 +514,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     std::vector<jbytecode::core::Label*> handlerLabels;
     for (const auto& h : exceptionHandlers) handlerLabels.push_back(h.handler);
     if (!impl_->computeBlockDepths(blocks, handlerLabels, blockEntryDepths)) {
-        printf("[StackCBackend] Skipping %s.%s%s: stack depth analysis failed\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str());
+        CA_LOGT_ERROR("stackc", "Skipping {}.{}{}: stack depth analysis failed\n", className.c_str(), methodName.c_str(), methodDesc.c_str());
         impl_->removeRegistration(cls, methodName, methodDesc);
         BackendResult failed;
         failed.kind = BackendResult::Kind::NONE;
@@ -683,12 +679,11 @@ void StackCBackend::finalize(const CompilerIndex& index)
         std::ofstream ofs(cOutputPath_, std::ios::binary);
         if (ofs) {
             ofs << sourceCode_;
-            printf("[StackCBackend] Written: %s (%zu bytes)\n",
-                   cOutputPath_.c_str(),
+            CA_LOGT_INFO("stackc", "Written: {} ({} bytes)\n", cOutputPath_.c_str(),
                    sourceCode_.size());
         }
         else {
-            printf("[StackCBackend] ERROR: cannot write %s\n", cOutputPath_.c_str());
+            CA_LOGT_ERROR("stackc", "cannot write {}\n", cOutputPath_.c_str());
         }
     }
 }

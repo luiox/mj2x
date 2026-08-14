@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <algorithm>
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -239,8 +240,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
 
     // 构造器/类初始化器不直接标 ACC_NATIVE（JVM 部分实现拒收），MVP 不转。
     if (methodName == "<init>" || methodName == "<clinit>") {
-        printf("[Vmc4Backend] Skipping %s.%s%s: constructor/<clinit> not virtualized in MVP\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str());
+        CA_LOGT_WARN("vmc4", "Skipping {}.{}{}: constructor/<clinit> not virtualized in MVP\n", className.c_str(), methodName.c_str(), methodDesc.c_str());
         return backendResult;
     }
 
@@ -253,14 +253,12 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     const auto retKind = returnKind(methodDesc);
     const auto args    = argumentKinds(methodDesc);
     if (!isVmCompatibleKind(retKind)) {
-        printf("[Vmc4Backend] Skipping %s.%s%s: object return type not supported in MVP\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str());
+        CA_LOGT_WARN("vmc4", "Skipping {}.{}{}: object return type not supported in MVP\n", className.c_str(), methodName.c_str(), methodDesc.c_str());
         return backendResult;
     }
     for (auto ak : args) {
         if (!isVmCompatibleKind(ak)) {
-            printf("[Vmc4Backend] Skipping %s.%s%s: object parameter not supported in MVP\n",
-                   className.c_str(), methodName.c_str(), methodDesc.c_str());
+            CA_LOGT_WARN("vmc4", "Skipping {}.{}{}: object parameter not supported in MVP\n", className.c_str(), methodName.c_str(), methodDesc.c_str());
             return backendResult;
         }
     }
@@ -272,8 +270,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     auto ssa = ssaBuilder.build(blocks, className, methodName, methodDesc, isStatic, mn->maxLocals,
                                 ssaArena, reason);
     if (!ssa) {
-        printf("[Vmc4Backend] Skipping %s.%s%s: SSA build failed: %s\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
+        CA_LOGT_ERROR("vmc4", "Skipping {}.{}{}: SSA build failed: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
         return backendResult;
     }
 
@@ -281,8 +278,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     RegLowering lowering;
     auto        reg = lowering.lower(*ssa, reason);
     if (!reg) {
-        printf("[Vmc4Backend] Skipping %s.%s%s: lowering failed: %s\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
+        CA_LOGT_ERROR("vmc4", "Skipping {}.{}{}: lowering failed: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
@@ -309,8 +305,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     VmInstance& instance = *it->second;
     auto        program  = VmEncoder::encode(*reg, instance, reason);
     if (!program) {
-        printf("[Vmc4Backend] Skipping %s.%s%s: VM encode failed: %s\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
+        CA_LOGT_ERROR("vmc4", "Skipping {}.{}{}: VM encode failed: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
         return backendResult;
     }
 
@@ -679,8 +674,7 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
         }
         src.dedent();
         src.emitLine("};");
-        src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, "
-                     "sizeof(methods) / sizeof(methods[0])) != 0) {");
+        src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, sizeof(methods) / sizeof(methods[0])) != 0) {");
         src.indent();
         src.emitLine("result = JNI_ERR;");
         src.emitLine("goto " + registerName + "_exit;");
@@ -704,16 +698,14 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
                  " || _mj2x_reg_methods[class_id] == NULL) {");
     src.indent();
     src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id "
-                 "mismatch\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id mismatch\");");
     src.emitLine("return;");
     src.dedent();
     src.emitLine("}");
     src.emitLine("if (clazz == NULL) {");
     src.indent();
     src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class is "
-                 "null\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class is null\");");
     src.emitLine("return;");
     src.dedent();
     src.emitLine("}");
@@ -722,8 +714,7 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
     src.emitLine("if (!(*env)->ExceptionCheck(env)) {");
     src.indent();
     src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native "
-                 "registration failed\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native registration failed\");");
     src.dedent();
     src.emitLine("}");
     src.emitLine("return;");
@@ -757,8 +748,7 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
                  "},");
     src.dedent();
     src.emitLine("};");
-    src.emitLine("if ((*env)->RegisterNatives(env, loader_class, loader_methods, "
-                 "sizeof(loader_methods) / sizeof(loader_methods[0])) != 0) return JNI_ERR;");
+    src.emitLine("if ((*env)->RegisterNatives(env, loader_class, loader_methods, sizeof(loader_methods) / sizeof(loader_methods[0])) != 0) return JNI_ERR;");
     src.emitLine("(*env)->DeleteLocalRef(env, loader_class);");
     src.emitLine("return JNI_VERSION_1_6;");
     src.dedent();

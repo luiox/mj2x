@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -35,7 +36,7 @@ public:
                 marked++;
             }
         }
-        printf("[NativeAnnotation] Marked %d method(s) with %s\n", marked, descriptor_.c_str());
+        CA_LOGT_INFO("preprocess", "Marked {} method(s) with {}\n", marked, descriptor_.c_str());
     }
 
 private:

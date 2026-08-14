@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -79,8 +80,7 @@ std::string buildResolvedDispatchTable(
     src.emitBlankLine();
 
     src.add_func_declared(
-        "static mj2x_regc_fn_ptr_t _mj2x_regc_resolve_verified(const char* name, const char* desc, "
-        "jmethodID resolved_method, jclass receiver_class, jclass* out_impl_class)",
+        "static mj2x_regc_fn_ptr_t _mj2x_regc_resolve_verified(const char* name, const char* desc, jmethodID resolved_method, jclass receiver_class, jclass* out_impl_class)",
         [](CSourceStream& s) {
             s.declare_var("const size_t", "count",
                           "sizeof(kRegCResolvedFunctions) / sizeof(kRegCResolvedFunctions[0])");
@@ -99,22 +99,16 @@ std::string buildResolvedDispatchTable(
                     u.iff("e->ownerClass == NULL",
                           [](CSourceStream& v) { v.emitLine("continue;"); });
                 });
-                t.iff("!(*_mj2x_regc_env)->IsAssignableFrom(_mj2x_regc_env, e->ownerClass, "
-                      "receiver_class)",
+                t.iff("!(*_mj2x_regc_env)->IsAssignableFrom(_mj2x_regc_env, e->ownerClass, receiver_class)",
                       [](CSourceStream& u) { u.emitLine("continue;"); });
-                t.iff("best == NULL || "
-                      "((*_mj2x_regc_env)->IsAssignableFrom(_mj2x_regc_env, best->ownerClass, "
-                      "e->ownerClass) && "
-                      "!(*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, best->ownerClass, "
-                      "e->ownerClass))",
+                t.iff("best == NULL || ((*_mj2x_regc_env)->IsAssignableFrom(_mj2x_regc_env, best->ownerClass, e->ownerClass) && !(*_mj2x_regc_env)->IsSameObject(_mj2x_regc_env, best->ownerClass, e->ownerClass))",
                       [](CSourceStream& u) { u.assign("best", "e"); });
             });
             s.iff("best == NULL", [](CSourceStream& u) { u.ret("NULL"); });
             s.emitLine("/* 校验：JVM 实际解析出的方法 == 最具体已转换实现的声明方法。");
             s.emitLine("   中间类存在未转换 override 时两者不同，回退 JNI 保语义。 */");
             s.declare_var("jmethodID", "declared",
-                          "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, best->ownerClass, "
-                          "name, desc)");
+                          "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, best->ownerClass, name, desc)");
             s.iff("declared == NULL || declared != resolved_method",
                   [](CSourceStream& u) { u.ret("NULL"); });
             s.iff("out_impl_class != NULL",
@@ -122,14 +116,11 @@ std::string buildResolvedDispatchTable(
             s.ret("best->fn");
         });
     src.add_func_declared(
-        "static jmethodID _mj2x_regc_resolved_call_site_refresh("
-        "mj2x_regc_resolved_call_site_t* site, jobject receiver, jclass receiver_class, "
-        "const char* name, const char* desc)",
+        "static jmethodID _mj2x_regc_resolved_call_site_refresh(mj2x_regc_resolved_call_site_t* site, jobject receiver, jclass receiver_class, const char* name, const char* desc)",
         [](CSourceStream& s) {
             s.emitLine("(void)receiver;");
             s.declare_var("jmethodID", "m",
-                          "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, receiver_class, name, "
-                          "desc)");
+                          "(*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, receiver_class, name, desc)");
             s.iff("m == NULL", [](CSourceStream& u) { u.ret("NULL"); });
             s.declare_var("jclass", "impl_class", "NULL");
             /* 目标槽：槽 0 空闲（首个调用）写槽 0，否则写槽 1 再与槽 0 交换。
@@ -412,8 +403,7 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
         {
             CSourceStream line;
             line.append(isStatic ? "_mj2x_regc_owner_class = clazz;"
-                                 : "_mj2x_regc_owner_class = (jclass)(*env)->GetObjectClass(env, "
-                                   "thisObject);");
+                                 : "_mj2x_regc_owner_class = (jclass)(*env)->GetObjectClass(env, thisObject);");
             out.emitLine(line.build());
         }
         out.emitLine("mj2x_regc_init_context(&_mj2x_regc_ctx, env, _mj2x_regc_throw_runtime);");
@@ -578,8 +568,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     // 内部类（含 $）整体 skip 已撤销：RegC 现用 RegisterNatives 动态绑定，
     // 函数名/符号导出与 JNI 查找完全脱钩，内部类的 native 方法可以像普通类一样注册。
     if (shouldKeepBytecodeForCompatibility(blocks, reason)) {
-        printf("[RegCBackend] Skipping %s.%s%s: %s\n",
-               className.c_str(),
+        CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}\n", className.c_str(),
                methodName.c_str(),
                methodDesc.c_str(),
                reason.c_str());
@@ -617,8 +606,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         blocks, className, methodName, methodDesc, isStatic, mn->maxLocals, ssaArena, reason);
     if (!ssa) {
         // F1: 静默 fail-closed 补可观测日志，消除 SSA 构建阶段的诊断盲区。
-        printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str(),
+        CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "SSA build failed", reason.c_str());
         impl_->convertedFunctions.erase(methodKey(className, methodName, methodDesc));
         return backendResult;
@@ -628,8 +616,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     auto        reg = lowering.lower(*ssa, reason);
     if (!reg) {
         // F2: 静默 fail-closed 补可观测日志，消除 RegIR lowering 阶段的诊断盲区。
-        printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str(),
+        CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "lowering failed", reason.c_str());
         impl_->convertedFunctions.erase(methodKey(className, methodName, methodDesc));
         return backendResult;
@@ -657,8 +644,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。
-        printf("[RegCBackend] Skipping %s.%s%s: %s: %s\n",
-               className.c_str(), methodName.c_str(), methodDesc.c_str(),
+        CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "emit failed", emitted.reason.c_str());
         impl_->convertedFunctions.erase(funcKey);
         return backendResult;
@@ -809,20 +795,14 @@ void emitIndyMethodType(CSourceStream& out, const std::string& var, const std::s
 {
     out.emitLine("jstring " + var + "_desc = (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                  codegen::cStringLiteral(methodDesc) + ");");
-    out.emitLine("jclass " + var + "_class_cls = (jclass)_mj2x_regc_class_literal("
-                 "_mj2x_regc_current_context(), \"java/lang/Class\");");
+    out.emitLine("jclass " + var + "_class_cls = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/Class\");");
     out.emitLine("jmethodID " + var + "_loader_mid = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, " +
                  var + "_class_cls, \"getClassLoader\", \"()Ljava/lang/ClassLoader;\");");
-    out.emitLine("jobject " + var + "_loader = (jobject)(*_mj2x_regc_env)->CallObjectMethod("
-                 "_mj2x_regc_env, _mj2x_regc_owner_class, " + var + "_loader_mid);");
+    out.emitLine("jobject " + var + "_loader = (jobject)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, _mj2x_regc_owner_class, " + var + "_loader_mid);");
     out.emitLine("if (_mj2x_regc_exception_check()) { return NULL; }");
-    out.emitLine("jclass " + var + "_mt_cls = (jclass)_mj2x_regc_class_literal("
-                 "_mj2x_regc_current_context(), \"java/lang/invoke/MethodType\");");
-    out.emitLine("jmethodID " + var + "_from_desc_mid = (*_mj2x_regc_env)->GetStaticMethodID("
-                 "_mj2x_regc_env, " + var + "_mt_cls, \"fromMethodDescriptorString\", "
-                 "\"(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;\");");
-    out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->CallStaticObjectMethod("
-                 "_mj2x_regc_env, " + var + "_mt_cls, " + var + "_from_desc_mid, " + var +
+    out.emitLine("jclass " + var + "_mt_cls = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/invoke/MethodType\");");
+    out.emitLine("jmethodID " + var + "_from_desc_mid = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, " + var + "_mt_cls, \"fromMethodDescriptorString\", \"(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;\");");
+    out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, " + var + "_mt_cls, " + var + "_from_desc_mid, " + var +
                  "_desc, " + var + "_loader);");
     out.emitLine("if (_mj2x_regc_exception_check()) { return NULL; }");
 }
@@ -830,8 +810,7 @@ void emitIndyMethodType(CSourceStream& out, const std::string& var, const std::s
 void emitIndyClassObject(CSourceStream& out, const std::string& var, const std::string& desc)
 {
     if (desc == "V" || desc.empty()) {
-        out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_class_literal("
-                     "_mj2x_regc_current_context(), \"java/lang/Void\");");
+        out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/Void\");");
         return;
     }
     const char head = desc[0];
@@ -839,12 +818,9 @@ void emitIndyClassObject(CSourceStream& out, const std::string& var, const std::
                            head == 'I' || head == 'J' || head == 'F' || head == 'D';
     if (primitive) {
         const std::string boxed = indyBoxedClassName(ca::str::Utf8StringRef::from_cstr(desc.c_str()));
-        out.emitLine("jclass " + var + "_wrapper = (jclass)_mj2x_regc_class_literal("
-                     "_mj2x_regc_current_context(), " + codegen::cStringLiteral(boxed) + ");");
-        out.emitLine("jfieldID " + var + "_type_fid = (*_mj2x_regc_env)->GetStaticFieldID("
-                     "_mj2x_regc_env, " + var + "_wrapper, \"TYPE\", \"Ljava/lang/Class;\");");
-        out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->GetStaticObjectField("
-                     "_mj2x_regc_env, " + var + "_wrapper, " + var + "_type_fid);");
+        out.emitLine("jclass " + var + "_wrapper = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), " + codegen::cStringLiteral(boxed) + ");");
+        out.emitLine("jfieldID " + var + "_type_fid = (*_mj2x_regc_env)->GetStaticFieldID(_mj2x_regc_env, " + var + "_wrapper, \"TYPE\", \"Ljava/lang/Class;\");");
+        out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->GetStaticObjectField(_mj2x_regc_env, " + var + "_wrapper, " + var + "_type_fid);");
     }
     else {
         out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_find_class(" +
@@ -862,8 +838,7 @@ void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode:
     out.emitLine("{");
     {
         CSourceStream::IndentGuard g(out);
-        out.emitLine("jclass " + var + "_lookup_cls = (jclass)_mj2x_regc_class_literal("
-                     "_mj2x_regc_current_context(), \"java/lang/invoke/MethodHandles$Lookup\");");
+        out.emitLine("jclass " + var + "_lookup_cls = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/invoke/MethodHandles$Lookup\");");
         out.emitLine("jclass " + var + "_owner_cls = (jclass)_mj2x_regc_find_class(" +
                      codegen::cStringLiteral(owner) + ");");
         std::string fieldDesc;
@@ -877,35 +852,30 @@ void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode:
         }
         const char* findName  = "findVirtual";
         const char* findDesc =
-            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
-            "Ljava/lang/invoke/MethodHandle;";
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;";
         std::string args = var + "_owner_cls";
         switch (tag) {
         case Opcodes::H_GETFIELD:
             findName = "findGetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                     codegen::cStringLiteral(name) + "), " + var + "_field_type";
             break;
         case Opcodes::H_GETSTATIC:
             findName = "findStaticGetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                     codegen::cStringLiteral(name) + "), " + var + "_field_type";
             break;
         case Opcodes::H_PUTFIELD:
             findName = "findSetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                     codegen::cStringLiteral(name) + "), " + var + "_field_type";
             break;
         case Opcodes::H_PUTSTATIC:
             findName = "findStaticSetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                     codegen::cStringLiteral(name) + "), " + var + "_field_type";
             break;
@@ -916,16 +886,13 @@ void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode:
             break;
         case Opcodes::H_INVOKESPECIAL:
             findName = "findSpecial";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/"
-                       "lang/Class;)Ljava/lang/invoke/MethodHandle;";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                    codegen::cStringLiteral(name) + "), " + var + "_type, "
-                    "_mj2x_regc_owner_class";
+                    codegen::cStringLiteral(name) + "), " + var + "_type, _mj2x_regc_owner_class";
             break;
         case Opcodes::H_NEWINVOKESPECIAL:
             findName = "findConstructor";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+            findDesc = "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;";
             args += ", " + var + "_type";
             break;
         case Opcodes::H_INVOKEINTERFACE:
@@ -935,12 +902,10 @@ void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode:
                     codegen::cStringLiteral(name) + "), " + var + "_type";
             break;
         }
-        out.emitLine("jmethodID " + var + "_find_mid = (*_mj2x_regc_env)->GetMethodID("
-                     "_mj2x_regc_env, " + var + "_lookup_cls, " +
+        out.emitLine("jmethodID " + var + "_find_mid = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, " + var + "_lookup_cls, " +
                      codegen::cStringLiteral(findName) + ", " + codegen::cStringLiteral(findDesc) +
                      ");");
-        out.emitLine(var + " = (jobject)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, "
-                     "_mj2x_indy_lookup, " + var + "_find_mid, " + args + ");");
+        out.emitLine(var + " = (jobject)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, _mj2x_indy_lookup, " + var + "_find_mid, " + args + ");");
         out.emitLine("if (_mj2x_regc_exception_check()) { return NULL; }");
     }
     out.emitLine("}");
@@ -1013,45 +978,29 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                      " = NULL;");
         src.emitLine("jobject _mj2x_regc_indy_target = NULL;");
         src.emitLine("if (_mj2x_regc_indy_target_cache_" + std::to_string(index) + " != NULL) {");
-        src.emitLine("    _mj2x_regc_indy_target = (*_mj2x_regc_env)->NewLocalRef(_mj2x_regc_env, "
-                     "_mj2x_regc_indy_target_cache_" + std::to_string(index) + ");");
+        src.emitLine("    _mj2x_regc_indy_target = (*_mj2x_regc_env)->NewLocalRef(_mj2x_regc_env, _mj2x_regc_indy_target_cache_" + std::to_string(index) + ");");
         src.emitLine("    if (_mj2x_regc_indy_target == NULL) _mj2x_regc_indy_target_cache_" +
                      std::to_string(index) + " = NULL;");
         src.emitLine("}");
         src.emitLine("if (_mj2x_regc_indy_target == NULL) {");
         {
             CSourceStream::IndentGuard g2(src);
-            src.emitLine("jclass _mj2x_indy_mh_cls = (jclass)_mj2x_regc_class_literal("
-                         "_mj2x_regc_current_context(), \"java/lang/invoke/MethodHandles\");");
-            src.emitLine("jmethodID _mj2x_indy_lookup_mid = (*_mj2x_regc_env)->GetStaticMethodID("
-                         "_mj2x_regc_env, _mj2x_indy_mh_cls, \"lookup\", "
-                         "\"()Ljava/lang/invoke/MethodHandles$Lookup;\");");
-            src.emitLine("jobject _mj2x_indy_lookup = (jobject)(*_mj2x_regc_env)"
-                         "->CallStaticObjectMethod(_mj2x_regc_env, _mj2x_indy_mh_cls, "
-                         "_mj2x_indy_lookup_mid);");
+            src.emitLine("jclass _mj2x_indy_mh_cls = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/invoke/MethodHandles\");");
+            src.emitLine("jmethodID _mj2x_indy_lookup_mid = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, _mj2x_indy_mh_cls, \"lookup\", \"()Ljava/lang/invoke/MethodHandles$Lookup;\");");
+            src.emitLine("jobject _mj2x_indy_lookup = (jobject)(*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, _mj2x_indy_mh_cls, _mj2x_indy_lookup_mid);");
             src.emitLine("if (_mj2x_regc_exception_check()) { return NULL; }");
-            src.emitLine("jmethodID _mj2x_indy_pli_mid = (*_mj2x_regc_env)->GetStaticMethodID("
-                         "_mj2x_regc_env, _mj2x_indy_mh_cls, \"privateLookupIn\", "
-                         "\"(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)"
-                         "Ljava/lang/invoke/MethodHandles$Lookup;\");");
-            src.emitLine("if (_mj2x_regc_exception_check()) (*_mj2x_regc_env)"
-                         "->ExceptionClear(_mj2x_regc_env);");
+            src.emitLine("jmethodID _mj2x_indy_pli_mid = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, _mj2x_indy_mh_cls, \"privateLookupIn\", \"(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;\");");
+            src.emitLine("if (_mj2x_regc_exception_check()) (*_mj2x_regc_env)->ExceptionClear(_mj2x_regc_env);");
             src.emitLine("if (_mj2x_indy_pli_mid != NULL) {");
-            src.emitLine("    jobject _mj2x_indy_pli = (jobject)(*_mj2x_regc_env)"
-                         "->CallStaticObjectMethod(_mj2x_regc_env, _mj2x_indy_mh_cls, "
-                         "_mj2x_indy_pli_mid, _mj2x_regc_owner_class, _mj2x_indy_lookup);");
-            src.emitLine("    if (_mj2x_regc_exception_check()) (*_mj2x_regc_env)"
-                         "->ExceptionClear(_mj2x_regc_env);");
+            src.emitLine("    jobject _mj2x_indy_pli = (jobject)(*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, _mj2x_indy_mh_cls, _mj2x_indy_pli_mid, _mj2x_regc_owner_class, _mj2x_indy_lookup);");
+            src.emitLine("    if (_mj2x_regc_exception_check()) (*_mj2x_regc_env)->ExceptionClear(_mj2x_regc_env);");
             src.emitLine("    else _mj2x_indy_lookup = _mj2x_indy_pli;");
             src.emitLine("}");
             src.emitLine("jstring _mj2x_indy_name = (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                          codegen::cStringLiteral(site.name) + ");");
             emitIndyMethodType(src, "_mj2x_indy_type", site.desc);
             if (!site.bsm) {
-                src.emitLine("(*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, "
-                             "_mj2x_regc_throw_runtime(_mj2x_regc_current_context(), "
-                             "\"invokedynamic without bootstrap metadata\"), "
-                             "\"invokedynamic without bootstrap metadata\");");
+                src.emitLine("(*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, _mj2x_regc_throw_runtime(_mj2x_regc_current_context(), \"invokedynamic without bootstrap metadata\"), \"invokedynamic without bootstrap metadata\");");
                 src.emitLine("return NULL;");
             }
             else {
@@ -1061,8 +1010,7 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                 const std::string bsmDesc  = bsm.getDesc().to_std_string();
                 src.emitLine("jclass _mj2x_indy_bsm_cls = (jclass)_mj2x_regc_find_class(" +
                              codegen::cStringLiteral(bsmOwner) + ");");
-                src.emitLine("jmethodID _mj2x_indy_bsm_mid = (*_mj2x_regc_env)->GetStaticMethodID("
-                             "_mj2x_regc_env, _mj2x_indy_bsm_cls, " +
+                src.emitLine("jmethodID _mj2x_indy_bsm_mid = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, _mj2x_indy_bsm_cls, " +
                              codegen::cStringLiteral(bsmName) + ", " +
                              codegen::cStringLiteral(bsmDesc) + ");");
                 const auto bsmArgTypes =
@@ -1089,16 +1037,13 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                     if (isTrailingObjectArray) {
                         const size_t remaining =
                             bsmArgIndex < site.bsmArgs.size() ? site.bsmArgs.size() - bsmArgIndex : 0;
-                        src.emitLine("jclass _mj2x_indy_obj_cls = (jclass)_mj2x_regc_class_literal("
-                                     "_mj2x_regc_current_context(), \"java/lang/Object\");");
-                        src.emitLine("jobjectArray _mj2x_indy_bsm_varargs = (jobjectArray)"
-                                     "(*_mj2x_regc_env)->NewObjectArray(_mj2x_regc_env, " +
+                        src.emitLine("jclass _mj2x_indy_obj_cls = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/Object\");");
+                        src.emitLine("jobjectArray _mj2x_indy_bsm_varargs = (jobjectArray)(*_mj2x_regc_env)->NewObjectArray(_mj2x_regc_env, " +
                                      std::to_string(remaining) + ", _mj2x_indy_obj_cls, NULL);");
                         for (size_t j = 0; j < remaining; ++j) {
                             const std::string argVar = "_mj2x_indy_bsm_vararg_" + std::to_string(j);
                             emitIndyBsmArg(src, argVar, site.bsmArgs[bsmArgIndex + j], false);
-                            src.emitLine("(*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, "
-                                         "_mj2x_indy_bsm_varargs, " + std::to_string(j) + ", " +
+                            src.emitLine("(*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, _mj2x_indy_bsm_varargs, " + std::to_string(j) + ", " +
                                          argVar + ");");
                         }
                         bsmArgIndex = site.bsmArgs.size();
@@ -1114,8 +1059,7 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                     bsmExprs.push_back(argVar);
                     ++bsmArgIndex;
                 }
-                std::string bsmCall = "(*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, "
-                                      "_mj2x_indy_bsm_cls, _mj2x_indy_bsm_mid";
+                std::string bsmCall = "(*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, _mj2x_indy_bsm_cls, _mj2x_indy_bsm_mid";
                 for (const auto& expr : bsmExprs) {
                     bsmCall += ", ";
                     bsmCall += expr;
@@ -1123,20 +1067,13 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                 bsmCall += ")";
                 src.emitLine("jobject _mj2x_indy_callsite = (jobject)" + bsmCall + ";");
                 src.emitLine("if (_mj2x_regc_exception_check()) { return NULL; }");
-                src.emitLine("jclass _mj2x_indy_callsite_cls = (jclass)_mj2x_regc_class_literal("
-                             "_mj2x_regc_current_context(), \"java/lang/invoke/CallSite\");");
-                src.emitLine("jmethodID _mj2x_indy_get_target_mid = (*_mj2x_regc_env)"
-                             "->GetMethodID(_mj2x_regc_env, _mj2x_indy_callsite_cls, "
-                             "\"getTarget\", \"()Ljava/lang/invoke/MethodHandle;\");");
-                src.emitLine("_mj2x_regc_indy_target = (jobject)(*_mj2x_regc_env)"
-                             "->CallObjectMethod(_mj2x_regc_env, _mj2x_indy_callsite, "
-                             "_mj2x_indy_get_target_mid);");
+                src.emitLine("jclass _mj2x_indy_callsite_cls = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/invoke/CallSite\");");
+                src.emitLine("jmethodID _mj2x_indy_get_target_mid = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, _mj2x_indy_callsite_cls, \"getTarget\", \"()Ljava/lang/invoke/MethodHandle;\");");
+                src.emitLine("_mj2x_regc_indy_target = (jobject)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, _mj2x_indy_callsite, _mj2x_indy_get_target_mid);");
                 src.emitLine("if (_mj2x_regc_exception_check()) { return NULL; }");
                 src.emitLine("if (_mj2x_regc_indy_target != NULL) {");
-                src.emitLine("    jobject _mj2x_regc_indy_target_global = (*_mj2x_regc_env)"
-                             "->NewGlobalRef(_mj2x_regc_env, _mj2x_regc_indy_target);");
-                src.emitLine("    if (_mj2x_regc_indy_target_global != NULL) "
-                             "_mj2x_regc_indy_target_cache_" + std::to_string(index) +
+                src.emitLine("    jobject _mj2x_regc_indy_target_global = (*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, _mj2x_regc_indy_target);");
+                src.emitLine("    if (_mj2x_regc_indy_target_global != NULL) _mj2x_regc_indy_target_cache_" + std::to_string(index) +
                              " = _mj2x_regc_indy_target_global;");
                 src.emitLine("}");
             }
@@ -1294,10 +1231,10 @@ void writeFileIfNeeded(const std::filesystem::path& path, const std::string& con
     std::ofstream out(path, std::ios::binary);
     if (out) {
         out << content;
-        printf("[RegCBackend] Written: %s (%zu bytes)\n", label.c_str(), content.size());
+        CA_LOGT_INFO("regc", "Written: {} ({} bytes)\n", label.c_str(), content.size());
     }
     else {
-        printf("[RegCBackend] ERROR: cannot write %s\n", label.c_str());
+        CA_LOGT_ERROR("regc", "cannot write {}\n", label.c_str());
     }
 }
 
@@ -1546,8 +1483,7 @@ void RegCBackend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
         }
         src.dedent();
         src.emitLine("};");
-        src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, "
-                     "sizeof(methods) / sizeof(methods[0])) != 0) {");
+        src.emitLine("if ((*env)->RegisterNatives(env, clazz, methods, sizeof(methods) / sizeof(methods[0])) != 0) {");
         src.indent();
         src.emitLine("result = JNI_ERR;");
         src.emitLine("goto " + registerName + "_exit;");
@@ -1571,16 +1507,14 @@ void RegCBackend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
                  " || _mj2x_reg_methods[class_id] == NULL) {");
     src.indent();
     src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id "
-                 "mismatch\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class id mismatch\");");
     src.emitLine("return;");
     src.dedent();
     src.emitLine("}");
     src.emitLine("if (clazz == NULL) {");
     src.indent();
     src.emitLine("jclass ex_class = (*env)->FindClass(env, \"java/lang/UnsatisfiedLinkError\");");
-    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class is "
-                 "null\");");
+    src.emitLine("if (ex_class != NULL) (*env)->ThrowNew(env, ex_class, \"mj2x native class is null\");");
     src.emitLine("return;");
     src.dedent();
     src.emitLine("}");
@@ -1633,8 +1567,7 @@ void RegCBackend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
                  cloader::kBridgeCFunc + "},");
     src.dedent();
     src.emitLine("};");
-    src.emitLine("if ((*env)->RegisterNatives(env, loader_class, loader_methods, "
-                 "sizeof(loader_methods) / sizeof(loader_methods[0])) != 0) return JNI_ERR;");
+    src.emitLine("if ((*env)->RegisterNatives(env, loader_class, loader_methods, sizeof(loader_methods) / sizeof(loader_methods[0])) != 0) return JNI_ERR;");
     src.emitLine("(*env)->DeleteLocalRef(env, loader_class);");
     src.emitLine("return JNI_VERSION_1_6;");
     src.dedent();

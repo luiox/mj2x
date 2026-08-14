@@ -17,6 +17,7 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -771,12 +772,12 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
 
     std::ofstream output(llvmOutputPath_, std::ios::binary | std::ios::trunc);
     if (!output) {
-        fprintf(stderr, "[LlvmIrBackend] ERROR: cannot open output: %s\n", llvmOutputPath_.c_str());
+        CA_LOGT_ERROR("llvm", "cannot open output: {}\n", llvmOutputPath_.c_str());
         return;
     }
     output.write(sourceCode_.data(), static_cast<std::streamsize>(sourceCode_.size()));
     if (!output) {
-        fprintf(stderr, "[LlvmIrBackend] ERROR: cannot write output: %s\n", llvmOutputPath_.c_str());
+        CA_LOGT_ERROR("llvm", "cannot write output: {}\n", llvmOutputPath_.c_str());
     }
 }
 

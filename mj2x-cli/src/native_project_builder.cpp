@@ -18,6 +18,7 @@ std::FILE* const kStderrStream = stderr;
 }
 
 #include "libca/process/subprocess.hpp"
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x::cli {
 
@@ -43,18 +44,14 @@ bool runXmake(ca::process::Command& command, const char* phase)
 {
     auto completed = command.output();
     if (completed.is_err()) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: cannot start xmake for %s: %s\n",
-                phase,
+        CA_LOGT_ERROR("compile", "cannot start xmake for {}: {}\n", phase,
                 completed.unwrap_err().to_string().c_str());
         return false;
     }
     auto output = std::move(completed).unwrap();
     writeProcessOutput(output);
     if (!output.status.success()) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: xmake %s failed with exit code %d.\n",
-                phase,
+        CA_LOGT_ERROR("compile", "xmake {} failed with exit code {}.\n", phase,
                 output.status.code);
         return false;
     }
@@ -124,18 +121,16 @@ int buildXmakeProject(const XmakeBuildConfig& config)
 {
     std::error_code ec;
     if (config.projectDir.empty() || !fs::is_regular_file(config.projectDir / "xmake.lua", ec)) {
-        fprintf(kStderrStream, "[mj2x] ERROR: xmake project is missing xmake.lua.\n");
+        CA_LOGT_ERROR("compile", "xmake project is missing xmake.lua.\n");
         return 1;
     }
     if (config.outputLibraryPath.empty()) {
-        fprintf(kStderrStream, "[mj2x] ERROR: xmake output library path is empty.\n");
+        CA_LOGT_ERROR("compile", "xmake output library path is empty.\n");
         return 1;
     }
     fs::remove(config.outputLibraryPath, ec);
     if (ec) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: cannot remove previous native library: %s\n",
-                config.outputLibraryPath.string().c_str());
+        CA_LOGT_ERROR("compile", "cannot remove previous native library: {}\n", config.outputLibraryPath.string().c_str());
         return 1;
     }
 
@@ -163,8 +158,7 @@ int buildXmakeProject(const XmakeBuildConfig& config)
     ProcessEnvironment    environment;
     std::filesystem::path compilerPath;
     if (!loadMsvcEnvironment(environment, compilerPath)) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: cannot configure MSVC environment for xmake build.\n");
+        CA_LOGT_ERROR("compile", "cannot configure MSVC environment for xmake build.\n");
         return 1;
     }
     for (const auto& [key, value] : environment) {
@@ -186,18 +180,14 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         }
     }
     if (ec || libraries.size() != 1) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: xmake build produced %zu matching native libraries; expected 1.\n",
-                libraries.size());
+        CA_LOGT_ERROR("compile", "xmake build produced {} matching native libraries; expected 1.\n", libraries.size());
         return 1;
     }
     if (!copyLibraryAtomically(libraries.front(), config.outputLibraryPath)) {
-        fprintf(kStderrStream,
-                "[mj2x] ERROR: cannot copy xmake native library to: %s\n",
-                config.outputLibraryPath.string().c_str());
+        CA_LOGT_ERROR("compile", "cannot copy xmake native library to: {}\n", config.outputLibraryPath.string().c_str());
         return 1;
     }
-    printf("[mj2x] Native library written: %s\n", config.outputLibraryPath.string().c_str());
+    CA_LOGT_INFO("compile", "Native library written: {}\n", config.outputLibraryPath.string().c_str());
     return 0;
 }
 

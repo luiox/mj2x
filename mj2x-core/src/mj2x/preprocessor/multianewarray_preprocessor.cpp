@@ -1,5 +1,7 @@
 #include "multianewarray_preprocessor.hpp"
 
+#include "libca/log/log_macros.hpp"
+
 #include <vector>
 
 namespace mj2x {
@@ -24,10 +26,10 @@ void MultiANewArrayPreprocessor::process(CompilerIndex& index)
         }
     }
     if (total > 0) {
-        printf(
-            "[MultiANewArrayPreproc] Detected %d multianewarray site(s). "
-            "Keeping bytecode shape; RegC lowers supported sites through its multi-array helper.\n",
-            total);
+        CA_LOGT_INFO("preprocess",
+                     "Detected {} multianewarray site(s). Keeping bytecode shape; RegC lowers "
+                     "supported sites through its multi-array helper.\n",
+                     total);
     }
 }
 

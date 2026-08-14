@@ -1,4 +1,5 @@
 #include "mj2x/mj2x.hpp"
+#include "mj2x/logging.hpp"
 #include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
 #include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
@@ -22,6 +23,8 @@
 #include "typed/cast.hpp"
 #include "jzip/zip_io.hpp"
 #include "zip/checksum.hpp"
+
+#include "libca/log/log_macros.hpp"
 
 #include <cctype>
 #include <chrono>
@@ -96,6 +99,8 @@ static void printUsage()
     printf("  --runtime-protection-step <n>   检查点概率触发步长（默认 16）\n");
     printf("  --runtime-protection-delay <ms> Delay 动作睡眠毫秒数（默认 500）\n");
     printf("  --dump-mir                 Dump MIR intermediate representation\n");
+    printf("  --quiet                    Only warnings and errors on stderr\n");
+    printf("  --verbose                  Debug-level logs on stderr\n");
     printf("  --help                     Print help\n");
 }
 
@@ -120,9 +125,7 @@ public:
     {
         if (path_.empty()) return;
         if (removeAll(path_)) return;
-        fprintf(stderr,
-                "[mj2x] WARNING: cannot clean temporary xmake project: %s\n",
-                path_.string().c_str());
+        CA_LOGT_WARN("cli", "cannot clean temporary xmake project: {}\n", path_.string().c_str());
     }
 
     void set(std::filesystem::path path) { path_ = std::move(path); }
@@ -335,7 +338,7 @@ static int embedNativeLibraryInJar(const std::string& jarPath, const std::string
     auto jarBytes    = readFileBytes(jarPath);
     auto nativeBytes = readFileBytes(nativeLibraryPath);
     if (jarBytes.empty() || nativeBytes.empty()) {
-        fprintf(stderr, "[mj2x] ERROR: cannot embed native library into output JAR.\n");
+        CA_LOGT_ERROR("cli", "cannot embed native library into output JAR.\n");
         return 1;
     }
 
@@ -353,12 +356,12 @@ static int embedNativeLibraryInJar(const std::string& jarPath, const std::string
     auto          outBytes = jzip::ZipIO::writeDirect(rewritten);
     std::ofstream ofs(jarPath, std::ios::binary);
     if (!ofs) {
-        fprintf(stderr, "[mj2x] ERROR: cannot rewrite output JAR: %s\n", jarPath.c_str());
+        CA_LOGT_ERROR("cli", "cannot rewrite output JAR: {}\n", jarPath.c_str());
         return 1;
     }
     ofs.write(reinterpret_cast<const char*>(outBytes.data()),
               static_cast<std::streamsize>(outBytes.size()));
-    printf("[mj2x] Embedded native library in JAR: %s\n", entryName.c_str());
+    printf("Embedded native library in JAR: %s\n", entryName.c_str());
     return 0;
 }
 
@@ -400,17 +403,13 @@ static int generateCMakeProject(const std::string& projectDirValue,
     fs::path        projectDir(projectDirValue);
     fs::create_directories(projectDir, ec);
     if (ec) {
-        fprintf(stderr,
-                "[mj2x] ERROR: cannot create CMake project directory: %s\n",
-                projectDir.string().c_str());
+        CA_LOGT_ERROR("cli", "cannot create CMake project directory: {}\n", projectDir.string().c_str());
         return 1;
     }
 
     fs::path sourcePath(nativeOutputPath);
     if (!fs::exists(sourcePath, ec)) {
-        fprintf(stderr,
-                "[mj2x] ERROR: emitted native source does not exist: %s\n",
-                sourcePath.string().c_str());
+        CA_LOGT_ERROR("cli", "emitted native source does not exist: {}\n", sourcePath.string().c_str());
         return 1;
     }
 
@@ -419,23 +418,21 @@ static int generateCMakeProject(const std::string& projectDirValue,
     if (fs::absolute(sourcePath, ec) != fs::absolute(expectedSource, ec)) {
         fs::copy_file(sourcePath, expectedSource, fs::copy_options::overwrite_existing, ec);
         if (ec) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: cannot copy emitted C into CMake project: %s\n",
-                    ec.message().c_str());
+            CA_LOGT_ERROR("cli", "cannot copy emitted C into CMake project: {}\n", ec.message().c_str());
             return 1;
         }
     }
 
     const bool needsCrt = !crtRoot.empty();
     if (needsCrt && !copyCrtForCMakeProject(projectDir, crtRoot)) {
-        fprintf(stderr, "[mj2x] ERROR: cannot copy mj2x-crt into CMake project.\n");
+        CA_LOGT_ERROR("cli", "cannot copy mj2x-crt into CMake project.\n");
         return 1;
     }
 
     {
         std::ofstream out(projectDir / "CMakeLists.txt", std::ios::binary);
         if (!out) {
-            fprintf(stderr, "[mj2x] ERROR: cannot write CMakeLists.txt\n");
+            CA_LOGT_ERROR("cli", "cannot write CMakeLists.txt\n");
             return 1;
         }
         out << "cmake_minimum_required(VERSION 3.16)\n";
@@ -469,7 +466,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
     {
         std::ofstream out(projectDir / ".gitignore", std::ios::binary);
         if (!out) {
-            fprintf(stderr, "[mj2x] ERROR: cannot write .gitignore\n");
+            CA_LOGT_ERROR("cli", "cannot write .gitignore\n");
             return 1;
         }
         out << "build/\n";
@@ -480,7 +477,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
     {
         std::ofstream out(projectDir / "README.md", std::ios::binary);
         if (!out) {
-            fprintf(stderr, "[mj2x] ERROR: cannot write README.md\n");
+            CA_LOGT_ERROR("cli", "cannot write README.md\n");
             return 1;
         }
         out << "# mj2x native CMake project\n\n";
@@ -492,7 +489,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
         out << "`JAVA_HOME` or CMake's JNI discovery must point at a JDK with JNI headers.\n";
     }
 
-    printf("[mj2x] CMake project written: %s\n", projectDir.string().c_str());
+    printf("CMake project written: %s\n", projectDir.string().c_str());
     return 0;
 }
 
@@ -525,35 +522,47 @@ int main(int argc, char** argv)
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 
+    // 日志门面（libca log + SimpleLogBackend）：默认 Info；--quiet/--verbose
+    // 在第一遍选项扫描后调整级别（init 前的参数校验错误用 fprintf 兜底）。
+    mj2x::initLogging();
+
     CliOptions               options;
     std::string              configPath;
     TemporaryProjectCleanup temporaryProjectCleanup;
 
+    bool quiet                  = false;
+    bool verbose                = false;
     bool commandLineNativePrefixesSeen = false;
     bool commandLineNativeOutputSeen   = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--config") {
             if (i + 1 >= argc) {
-                fprintf(stderr, "--config requires a JSON file path.\n");
+                CA_LOGT_ERROR("cli", "--config requires a JSON file path.\n");
                 printUsage();
                 return 1;
             }
             if (!configPath.empty()) {
-                fprintf(stderr, "--config may only be specified once.\n");
+                CA_LOGT_ERROR("cli", "--config may only be specified once.\n");
                 printUsage();
                 return 1;
             }
             configPath = argv[++i];
         }
+        else if (arg == "--quiet")
+            quiet = true;
+        else if (arg == "--verbose")
+            verbose = true;
     }
+    if (quiet) mj2x::setLogLevel(ca::log::Level::Warn);
+    else if (verbose) mj2x::setLogLevel(ca::log::Level::Debug);
 
     if (!configPath.empty()) {
         mj2x::cli::ConfigFileOptions configOptions;
         std::string                  error;
         if (!mj2x::cli::loadConfigFile(configPath, configOptions, error) ||
             !applyConfigOptions(configOptions, options, error)) {
-            fprintf(stderr, "[mj2x] ERROR: %s\n", error.c_str());
+            CA_LOGT_ERROR("cli", "{}\n", error.c_str());
             return 1;
         }
     }
@@ -622,7 +631,7 @@ int main(int argc, char** argv)
         else if (arg == "--compile-mode" && i + 1 < argc) {
             options.compileModeSelected = true;
             if (!mj2x::cli::parseCompileModeName(argv[++i], options.compileMode)) {
-                fprintf(stderr, "Unknown --compile-mode value. Expected file or pipe.\n");
+                CA_LOGT_ERROR("cli", "Unknown --compile-mode value. Expected file or pipe.\n");
                 printUsage();
                 return 1;
             }
@@ -638,8 +647,7 @@ int main(int argc, char** argv)
                 options.buildDriver = NativeBuildDriver::Xmake;
             }
             else if (!mj2x::cli::parseCompilerName(compilerName, options.cCompilerKind)) {
-                fprintf(stderr,
-                        "Unknown --c-compiler value. Expected msvc, gcc, clang, zig, or xmake.\n");
+                CA_LOGT_ERROR("cli", "Unknown --c-compiler value. Expected msvc, gcc, clang, zig, or xmake.\n");
                 printUsage();
                 return 1;
             }
@@ -648,7 +656,7 @@ int main(int argc, char** argv)
         else if (arg == "--llvm-tool" && i + 1 < argc) {
             options.llvmToolSelected = true;
             if (!mj2x::cli::parseLlvmToolName(argv[++i], options.llvmTool)) {
-                fprintf(stderr, "Unknown --llvm-tool value. Expected clang or llc.\n");
+                CA_LOGT_ERROR("cli", "Unknown --llvm-tool value. Expected clang or llc.\n");
                 printUsage();
                 return 1;
             }
@@ -658,13 +666,13 @@ int main(int argc, char** argv)
             options.backendSelected = true;
             if (!parseBackendName(argv[++i], options.cBackendKind)) {
 #ifdef MJ2X_DISABLE_LLVM_BACKEND
-                fprintf(stderr,
-                        "Unknown --backend value. Expected stackc, regc, or vmc4. Legacy alias cbackend "
-                        "is also accepted.\n");
+                CA_LOGT_ERROR("cli",
+                              "Unknown --backend value. Expected stackc, regc, or vmc4. "
+                              "Legacy alias cbackend is also accepted.\n");
 #else
-                fprintf(stderr,
-                        "Unknown --backend value. Expected stackc, regc, llvm, or vmc4. Legacy alias cbackend "
-                        "is also accepted.\n");
+                CA_LOGT_ERROR("cli",
+                              "Unknown --backend value. Expected stackc, regc, llvm, or vmc4. "
+                              "Legacy alias cbackend is also accepted.\n");
 #endif
                 printUsage();
                 return 1;
@@ -683,8 +691,7 @@ int main(int argc, char** argv)
             else if (level == "detailed")
                 options.regcCommentLevel = mj2x::RegCCommentLevel::Detailed;
             else {
-                fprintf(stderr,
-                        "Unknown --regc-comment-level value. Expected none, summary, or detailed.\n");
+                CA_LOGT_ERROR("cli", "Unknown --regc-comment-level value. Expected none, summary, or detailed.\n");
                 printUsage();
                 return 1;
             }
@@ -736,6 +743,9 @@ int main(int argc, char** argv)
             printUsage();
             return 0;
         }
+        else if (arg == "--quiet" || arg == "--verbose") {
+            // 第一遍扫描已处理级别；这里仅跳过，避免落入未知参数分支。
+        }
         else {
             printUsage();
             return 1;
@@ -751,130 +761,126 @@ int main(int argc, char** argv)
                                   static_cast<int>(!options.cppOutputPath.empty()) +
                                   static_cast<int>(!options.llvmOutputPath.empty());
     if (nativeOutputCount > 1) {
-        fprintf(stderr, "--emit-c, --emit-cpp, and --emit-llvm are mutually exclusive.\n");
+        CA_LOGT_ERROR("cli", "--emit-c, --emit-cpp, and --emit-llvm are mutually exclusive.\n");
         return 1;
     }
     if (!options.cppOutputPath.empty() && !hasExtension(options.cppOutputPath, ".cpp")) {
-        fprintf(stderr,
-                "--emit-cpp requires a .cpp output path.\n");
+        CA_LOGT_ERROR("cli", "--emit-cpp requires a .cpp output path.\n");
         return 1;
     }
     if (!options.cppOutputPath.empty() && options.cBackendKind != CEmitterBackend::RegC) {
-        fprintf(stderr, "--emit-cpp currently requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "--emit-cpp currently requires --backend regc.\n");
         return 1;
     }
     if (!options.llvmOutputPath.empty() && !hasExtension(options.llvmOutputPath, ".ll")) {
-        fprintf(stderr, "--emit-llvm requires a .ll output path.\n");
+        CA_LOGT_ERROR("cli", "--emit-llvm requires a .ll output path.\n");
         return 1;
     }
     if (!options.llvmOutputPath.empty() && options.cBackendKind != CEmitterBackend::LlvmIr) {
-        fprintf(stderr, "--emit-llvm requires --backend llvm.\n");
+        CA_LOGT_ERROR("cli", "--emit-llvm requires --backend llvm.\n");
         return 1;
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr && options.llvmOutputPath.empty() &&
         options.compileMode != mj2x::cli::CompileMode::Pipe) {
-        fprintf(stderr, "--backend llvm requires --emit-llvm.\n");
+        CA_LOGT_ERROR("cli", "--backend llvm requires --emit-llvm.\n");
         return 1;
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr &&
         options.compileMode == mj2x::cli::CompileMode::Pipe) {
-        fprintf(stderr, "--backend llvm does not support --compile-mode pipe.\n");
+        CA_LOGT_ERROR("cli", "--backend llvm does not support --compile-mode pipe.\n");
         return 1;
     }
     if (options.llvmToolSelected && options.cBackendKind != CEmitterBackend::LlvmIr) {
-        fprintf(stderr, "--llvm-tool requires --backend llvm.\n");
+        CA_LOGT_ERROR("cli", "--llvm-tool requires --backend llvm.\n");
         return 1;
     }
     if (options.regcTraceCalls && options.cBackendKind != CEmitterBackend::RegC) {
-        fprintf(stderr, "--regc-trace-calls requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "--regc-trace-calls requires --backend regc.\n");
         return 1;
     }
     if ((options.regcSafeEnv || options.regcSafeEnvDebug) &&
         options.cBackendKind != CEmitterBackend::RegC) {
-        fprintf(stderr, "--regc-safe-env requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "--regc-safe-env requires --backend regc.\n");
         return 1;
     }
     if (options.runtimeProtection != "none" && options.runtimeProtection != "log" &&
         options.runtimeProtection != "delay" && options.runtimeProtection != "fake" &&
         options.runtimeProtection != "terminate") {
-        fprintf(stderr,
-                "Unknown --runtime-protection value. Expected none, log, delay, fake, or "
-                "terminate.\n");
+        CA_LOGT_ERROR("cli",
+                      "Unknown --runtime-protection value. Expected none, log, delay, fake, or "
+                      "terminate.\n");
         return 1;
     }
     if (options.runtimeProtection != "none" && options.cBackendKind != CEmitterBackend::RegC &&
         options.cBackendKind != CEmitterBackend::Vmc4) {
-        fprintf(stderr, "--runtime-protection requires --backend regc or vmc4.\n");
+        CA_LOGT_ERROR("cli", "--runtime-protection requires --backend regc or vmc4.\n");
         return 1;
     }
     if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
-        fprintf(stderr, "--stackc-exception-check must be full or lite.\n");
+        CA_LOGT_ERROR("cli", "--stackc-exception-check must be full or lite.\n");
         return 1;
     }
     if (!options.nativeDirOutput.empty() && options.cBackendKind != CEmitterBackend::RegC) {
-        fprintf(stderr, "--emit-native-dir requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "--emit-native-dir requires --backend regc.\n");
         return 1;
     }
     if (options.llvmToolSelected && !options.compileNative) {
-        fprintf(stderr, "--llvm-tool requires --compile.\n");
+        CA_LOGT_ERROR("cli", "--llvm-tool requires --compile.\n");
         return 1;
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr && options.compilerSelected) {
-        fprintf(stderr, "--backend llvm cannot be combined with --c-compiler.\n");
+        CA_LOGT_ERROR("cli", "--backend llvm cannot be combined with --c-compiler.\n");
         return 1;
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr &&
         (!options.cmakeProjectDir.empty() || !options.xmakeProjectDir.empty())) {
-        fprintf(stderr,
-                "--backend llvm does not support --generate-cmake or --generate-xmake.\n");
+        CA_LOGT_ERROR("cli", "--backend llvm does not support --generate-cmake or --generate-xmake.\n");
         return 1;
     }
 
     if (!options.nativeAnnotation.empty() &&
         !isNativeAnnotationDescriptor(options.nativeAnnotation)) {
-        fprintf(
-            stderr,
-            "--native-annotation must be a JVM annotation descriptor like Lcom/example/Native;.\n");
+        CA_LOGT_ERROR("cli", "--native-annotation must be a JVM annotation descriptor like Lcom/example/Native;.\n");
         printUsage();
         return 1;
     }
 
     if (!options.nativeAnnotation.empty() && !options.nativeMethodPrefixes.empty()) {
-        fprintf(stderr, "--native-annotation and --native-method-prefix are mutually exclusive.\n");
+        CA_LOGT_ERROR("cli", "--native-annotation and --native-method-prefix are mutually exclusive.\n");
         printUsage();
         return 1;
     }
 
     if (!options.cmakeProjectDir.empty() && !options.xmakeProjectDir.empty()) {
-        fprintf(stderr, "--generate-cmake and --generate-xmake are mutually exclusive.\n");
+        CA_LOGT_ERROR("cli", "--generate-cmake and --generate-xmake are mutually exclusive.\n");
         printUsage();
         return 1;
     }
 
     if (options.compileNative && !options.xmakeProjectDir.empty()) {
         if (options.compilerSelected && options.buildDriver == NativeBuildDriver::Direct) {
-            fprintf(stderr,
-                    "A direct --c-compiler cannot be combined with --generate-xmake and "
-                    "--compile.\n");
+            CA_LOGT_ERROR("cli",
+                          "A direct --c-compiler cannot be combined with --generate-xmake and "
+                          "--compile.\n");
             return 1;
         }
         options.buildDriver = NativeBuildDriver::Xmake;
     }
     if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
         !options.cmakeProjectDir.empty()) {
-        fprintf(stderr, "--c-compiler xmake cannot be combined with --generate-cmake.\n");
+        CA_LOGT_ERROR("cli", "--c-compiler xmake cannot be combined with --generate-cmake.\n");
         return 1;
     }
     if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
         options.compileMode == mj2x::cli::CompileMode::Pipe) {
-        fprintf(stderr, "xmake compilation does not support --compile-mode pipe.\n");
+        CA_LOGT_ERROR("cli", "xmake compilation does not support --compile-mode pipe.\n");
         return 1;
     }
     if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
         options.xmakeProjectDir.empty()) {
         std::filesystem::path temporaryProject;
         if (!createTemporaryXmakeProject(options.outputPath, temporaryProject)) {
-            fprintf(stderr, "[mj2x] ERROR: cannot create temporary xmake project.\n");
+            CA_LOGT_ERROR("cli", "cannot create temporary xmake project.\n");
             return 1;
         }
         temporaryProjectCleanup.set(temporaryProject);
@@ -886,9 +892,9 @@ int main(int argc, char** argv)
          !options.llvmOutputPath.empty() ||
          !options.cmakeProjectDir.empty() ||
          !options.xmakeProjectDir.empty())) {
-        fprintf(stderr,
-                "--compile-mode pipe cannot be combined with --emit-c or generated native "
-                "projects.\n");
+        CA_LOGT_ERROR("cli",
+                      "--compile-mode pipe cannot be combined with --emit-c or generated native "
+                      "projects.\n");
         return 1;
     }
 
@@ -915,23 +921,23 @@ int main(int argc, char** argv)
                                                     : options.cppOutputPath);
 
     if (options.backendSelected && nativeOutputPath.empty() && !nativeDirMode && !pipeCompile) {
-        fprintf(stderr,
-                "--backend requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, or a "
-                "generated native project.\n");
+        CA_LOGT_ERROR("cli",
+                      "--backend requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, "
+                      "or a generated native project.\n");
         printUsage();
         return 1;
     }
 
     if (options.compileNative && nativeOutputPath.empty() && !nativeDirMode && !pipeCompile) {
-        fprintf(stderr,
-                "--compile requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, or a "
-                "generated native project.\n");
+        CA_LOGT_ERROR("cli",
+                      "--compile requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, "
+                      "or a generated native project.\n");
         printUsage();
         return 1;
     }
 
     if (options.compileModeSelected && !options.compileNative) {
-        fprintf(stderr, "--compile-mode requires --compile.\n");
+        CA_LOGT_ERROR("cli", "--compile-mode requires --compile.\n");
         printUsage();
         return 1;
     }
@@ -940,9 +946,7 @@ int main(int argc, char** argv)
         std::error_code ec;
         std::filesystem::create_directories(options.cmakeProjectDir, ec);
         if (ec) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: cannot create CMake project directory: %s\n",
-                    options.cmakeProjectDir.c_str());
+            CA_LOGT_ERROR("cli", "cannot create CMake project directory: {}\n", options.cmakeProjectDir.c_str());
             return 1;
         }
     }
@@ -952,15 +956,13 @@ int main(int argc, char** argv)
         std::filesystem::create_directories(
             std::filesystem::path(options.xmakeProjectDir) / "src" / "generated", ec);
         if (ec) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: cannot create xmake project directory: %s\n",
-                    options.xmakeProjectDir.c_str());
+            CA_LOGT_ERROR("cli", "cannot create xmake project directory: {}\n", options.xmakeProjectDir.c_str());
             return 1;
         }
     }
 
     if (options.compilerSelected && !options.compileNative) {
-        fprintf(stderr, "--c-compiler requires --compile.\n");
+        CA_LOGT_ERROR("cli", "--c-compiler requires --compile.\n");
         printUsage();
         return 1;
     }
@@ -1124,37 +1126,32 @@ int main(int argc, char** argv)
     mj2x::NativeSourceArtifact nativeArtifact{mj2x::NativeSourceLanguage::C99, {}, {}};
     if (needsNativeSource) {
         if (nativeSourceBackend == nullptr) {
-            fprintf(stderr, "[mj2x] ERROR: native source backend is unavailable.\n");
+            CA_LOGT_ERROR("cli", "native source backend is unavailable.\n");
             return 1;
         }
         nativeArtifact = nativeSourceBackend->generatedSourceArtifact();
     }
     if (!options.cppOutputPath.empty()) {
         if (nativeArtifact.language != mj2x::NativeSourceLanguage::C99) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: --emit-cpp requires a C99 backend source artifact.\n");
+            CA_LOGT_ERROR("cli", "--emit-cpp requires a C99 backend source artifact.\n");
             return 1;
         }
         cppSource = mj2x::cli::emitCpp17Dialect(nativeArtifact.content);
         std::ofstream output(options.cppOutputPath, std::ios::binary | std::ios::trunc);
         if (!output) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: cannot write emitted C++ source: %s\n",
-                    options.cppOutputPath.c_str());
+            CA_LOGT_ERROR("cli", "cannot write emitted C++ source: {}\n", options.cppOutputPath.c_str());
             return 1;
         }
         output.write(cppSource.data(), static_cast<std::streamsize>(cppSource.size()));
         if (!output) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: cannot write emitted C++ source: %s\n",
-                    options.cppOutputPath.c_str());
+            CA_LOGT_ERROR("cli", "cannot write emitted C++ source: {}\n", options.cppOutputPath.c_str());
             return 1;
         }
         nativeArtifact = {mj2x::NativeSourceLanguage::Cpp17, cppSource, "native.cpp"};
     }
     if (!options.llvmOutputPath.empty() &&
         nativeArtifact.language != mj2x::NativeSourceLanguage::LlvmIr) {
-        fprintf(stderr, "[mj2x] ERROR: --emit-llvm requires an LLVM IR backend source artifact.\n");
+        CA_LOGT_ERROR("cli", "--emit-llvm requires an LLVM IR backend source artifact.\n");
         return 1;
     }
 
@@ -1163,9 +1160,9 @@ int main(int argc, char** argv)
         if (options.cBackendKind == CEmitterBackend::RegC) {
             cmakeCrtRoot = mj2x::cli::findCrtRoot(argv[0]);
             if (cmakeCrtRoot.empty()) {
-                fprintf(stderr,
-                        "[mj2x] ERROR: RegC CMake project requires an mj2x-crt source pack; "
-                        "set MJ2X_CRT_DIR.\n");
+                CA_LOGT_ERROR("cli",
+                              "RegC CMake project requires an mj2x-crt source pack; set "
+                              "MJ2X_CRT_DIR.\n");
                 return 1;
             }
         }
@@ -1197,9 +1194,9 @@ int main(int argc, char** argv)
             if (options.cBackendKind == CEmitterBackend::RegC) {
                 crtRoot = mj2x::cli::findCrtRoot(argv[0]);
                 if (crtRoot.empty()) {
-                    fprintf(stderr,
-                            "[mj2x] ERROR: RegC --compile requires an mj2x-crt source pack; set "
-                            "MJ2X_CRT_DIR or use --generate-xmake.\n");
+                    CA_LOGT_ERROR("cli",
+                                  "RegC --compile requires an mj2x-crt source pack; set "
+                                  "MJ2X_CRT_DIR or use --generate-xmake.\n");
                     return 1;
                 }
             }
@@ -1209,13 +1206,13 @@ int main(int argc, char** argv)
             }
             else if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
                 if (nativeSourceBackend == nullptr) {
-                    fprintf(stderr, "[mj2x] ERROR: native source backend is unavailable.\n");
+                    CA_LOGT_ERROR("cli", "native source backend is unavailable.\n");
                     return 1;
                 }
                 if (nativeArtifact.language != mj2x::NativeSourceLanguage::C99) {
-                    fprintf(stderr,
-                            "[mj2x] ERROR: --compile-mode pipe only supports C99 native "
-                            "source artifacts.\n");
+                    CA_LOGT_ERROR("cli",
+                                  "--compile-mode pipe only supports C99 native source "
+                                  "artifacts.\n");
                     return 1;
                 }
                 compileRc = mj2x::cli::compileCSourceFromPipe(

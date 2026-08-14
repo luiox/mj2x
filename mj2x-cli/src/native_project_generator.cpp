@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x::cli {
 namespace fs = std::filesystem;
@@ -36,7 +37,7 @@ bool writeText(const fs::path& path, const std::string& text)
 {
     std::ofstream out(path, std::ios::binary);
     if (!out) {
-        fprintf(stderr, "[mj2x] ERROR: cannot write %s\n", path.string().c_str());
+        CA_LOGT_ERROR("compile", "cannot write {}\n", path.string().c_str());
         return false;
     }
     out << text;
@@ -48,9 +49,7 @@ bool writeProjectTemplate(const fs::path& path, std::string_view source,
 {
     constexpr std::string_view projectNameToken = "@PROJECT_NAME@";
     if (source.find(projectNameToken) == std::string_view::npos) {
-        fprintf(stderr,
-                "[mj2x] ERROR: project template is missing %.*s: %s\n",
-                static_cast<int>(projectNameToken.size()),
+        CA_LOGT_ERROR("compile", "project template is missing %.*s: {}\n", static_cast<int>(projectNameToken.size()),
                 projectNameToken.data(),
                 path.string().c_str());
         return false;
@@ -58,7 +57,7 @@ bool writeProjectTemplate(const fs::path& path, std::string_view source,
 
     std::ofstream out(path, std::ios::binary);
     if (!out) {
-        fprintf(stderr, "[mj2x] ERROR: cannot write %s\n", path.string().c_str());
+        CA_LOGT_ERROR("compile", "cannot write {}\n", path.string().c_str());
         return false;
     }
 
@@ -89,15 +88,13 @@ bool copyManifestSources(const fs::path& root, const fs::path& to)
     std::error_code ec;
     const auto      manifest = root / "resources.manifest";
     if (!fs::exists(manifest, ec)) {
-        fprintf(stderr,
-                "[mj2x] ERROR: CRT resource manifest not found: %s\n",
-                manifest.string().c_str());
+        CA_LOGT_ERROR("compile", "CRT resource manifest not found: {}\n", manifest.string().c_str());
         return false;
     }
 
     fs::create_directories(to, ec);
     if (ec) {
-        fprintf(stderr, "[mj2x] ERROR: cannot create CRT destination: %s\n", ec.message().c_str());
+        CA_LOGT_ERROR("compile", "cannot create CRT destination: {}\n", ec.message().c_str());
         return false;
     }
 
@@ -108,22 +105,20 @@ bool copyManifestSources(const fs::path& root, const fs::path& to)
         if (line.empty() || line[0] == '#') continue;
         if (line.rfind("src/", 0) != 0) continue;
         if (line.find("../") != std::string::npos) {
-            fprintf(stderr, "[mj2x] ERROR: invalid CRT manifest path: %s\n", line.c_str());
+            CA_LOGT_ERROR("compile", "invalid CRT manifest path: {}\n", line.c_str());
             return false;
         }
 
         const fs::path source = root / line;
         const fs::path dest   = to / fs::path(line).lexically_relative("src");
         if (!fs::exists(source, ec) || !fs::is_regular_file(source, ec)) {
-            fprintf(stderr,
-                    "[mj2x] ERROR: CRT manifest source not found: %s\n",
-                    source.string().c_str());
+            CA_LOGT_ERROR("compile", "CRT manifest source not found: {}\n", source.string().c_str());
             return false;
         }
         fs::create_directories(dest.parent_path(), ec);
         if (!ec) fs::copy_file(source, dest, fs::copy_options::overwrite_existing, ec);
         if (ec) {
-            fprintf(stderr, "[mj2x] ERROR: cannot copy CRT file: %s\n", ec.message().c_str());
+            CA_LOGT_ERROR("compile", "cannot copy CRT file: {}\n", ec.message().c_str());
             return false;
         }
     }
@@ -198,13 +193,11 @@ int generateXmakeProject(const XmakeProjectConfig& config)
 {
     std::error_code ec;
     if (config.projectDir.empty()) {
-        fprintf(stderr, "[mj2x] ERROR: xmake project directory is empty.\n");
+        CA_LOGT_ERROR("compile", "xmake project directory is empty.\n");
         return 1;
     }
     if (!fs::exists(config.generatedSourcePath, ec)) {
-        fprintf(stderr,
-                "[mj2x] ERROR: emitted C source does not exist: %s\n",
-                config.generatedSourcePath.string().c_str());
+        CA_LOGT_ERROR("compile", "emitted C source does not exist: {}\n", config.generatedSourcePath.string().c_str());
         return 1;
     }
     const bool useExternalCrt = isCrtRoot(config.crtRoot);
@@ -213,7 +206,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     const fs::path crtDest      = config.projectDir / "src" / "mj2x-crt";
     fs::create_directories(generatedDir, ec);
     if (ec) {
-        fprintf(stderr, "[mj2x] ERROR: cannot create xmake project: %s\n", ec.message().c_str());
+        CA_LOGT_ERROR("compile", "cannot create xmake project: {}\n", ec.message().c_str());
         return 1;
     }
 
@@ -224,8 +217,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         fs::copy_file(
             config.generatedSourcePath, nativeDest, fs::copy_options::overwrite_existing, ec);
         if (ec) {
-            fprintf(
-                stderr, "[mj2x] ERROR: cannot copy emitted C source: %s\n", ec.message().c_str());
+            CA_LOGT_ERROR("compile", "cannot copy emitted C source: {}\n", ec.message().c_str());
             return 1;
         }
     }
@@ -234,7 +226,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         if (!copyManifestSources(config.crtRoot, crtDest)) return 1;
     }
     else if (!writeEmbeddedCrtTree(config.projectDir)) {
-        fprintf(stderr, "[mj2x] ERROR: embedded mj2x-crt resources are unavailable.\n");
+        CA_LOGT_ERROR("compile", "embedded mj2x-crt resources are unavailable.\n");
         return 1;
     }
 
@@ -243,7 +235,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     auto readmeTemplate = useExternalCrt ? readText(config.crtRoot / "templates" / "README.md.in")
                                          : readEmbeddedText("templates/README.md.in");
     if (xmakeTemplate.empty() || readmeTemplate.empty()) {
-        fprintf(stderr, "[mj2x] ERROR: mj2x-crt templates are missing.\n");
+        CA_LOGT_ERROR("compile", "mj2x-crt templates are missing.\n");
         return 1;
     }
     if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate, config.projectName)) {
@@ -258,7 +250,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         return 1;
     }
 
-    printf("[mj2x] xmake project written: %s\n", config.projectDir.string().c_str());
+    CA_LOGT_INFO("compile", "xmake project written: {}\n", config.projectDir.string().c_str());
     return 0;
 }
 

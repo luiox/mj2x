@@ -13,6 +13,7 @@
 #include "jbytecode/tree/nodes.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "libca/str/utf8_string_arena.hpp"
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -367,7 +368,7 @@ void InitClinitMoverPreprocessor::process(CompilerIndex& index)
             }
         }
     }
-    printf("[InitClinitMover] <init>/<clinit> move pass done\n");
+    CA_LOGT_INFO("preprocess", "<init>/<clinit> move pass done\n");
 }
 
 } // namespace mj2x

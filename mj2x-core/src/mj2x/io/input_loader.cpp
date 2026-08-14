@@ -14,6 +14,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
@@ -88,8 +89,7 @@ static void addClassToIndex(CompilerIndex& index, CompilerClass cls)
 
     index.addClass(className, std::move(cls));
 
-    printf("[InputLoader] Loaded: %s (%zu methods, %zu fields)\n",
-           className.c_str(),
+    CA_LOGT_INFO("io", "Loaded: {} ({} methods, {} fields)\n", className.c_str(),
            numMethods,
            numFields);
 }
@@ -163,8 +163,7 @@ std::unique_ptr<CompilerIndex> InputLoader::load(const std::string& path)
             throw std::runtime_error("JAR contains no root class entries");
         }
 
-        printf("[InputLoader] Loaded JAR: %s (%zu classes, %zu resources)\n",
-               path.c_str(),
+        CA_LOGT_INFO("io", "Loaded JAR: {} ({} classes, {} resources)\n", path.c_str(),
                classCount,
                resourceCount);
         return index;

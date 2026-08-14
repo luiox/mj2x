@@ -2,6 +2,8 @@
 #include "mj2x/io/input_loader.hpp"
 #include "mj2x/io/output_writer.hpp"
 
+#include "libca/log/log_macros.hpp"
+
 #include <cstdio>
 #include <string>
 #include "jbytecode/jbytecode.hpp"
@@ -32,15 +34,14 @@ void Pipeline::registerPostprocessor(std::unique_ptr<Postprocessor> postproc)
 
 int Pipeline::run()
 {
-    printf("[mj2x] Pipeline start (input=%s, output=%s)\n",
-           config_.inputPath.c_str(),
-           config_.outputPath.c_str());
+    CA_LOGT_INFO("pipeline", "Pipeline start (input={}, output={})\n",
+                 config_.inputPath.c_str(), config_.outputPath.c_str());
 
     try {
         loadInput();
     }
     catch (const std::exception& e) {
-        printf("[mj2x] ERROR: load failed - %s\n", e.what());
+        CA_LOGT_ERROR("pipeline", "load failed - {}\n", e.what());
         return 1;
     }
 
@@ -52,11 +53,11 @@ int Pipeline::run()
         writeOutput();
     }
     catch (const std::exception& e) {
-        printf("[mj2x] ERROR: write failed - %s\n", e.what());
+        CA_LOGT_ERROR("pipeline", "write failed - {}\n", e.what());
         return 1;
     }
 
-    printf("[mj2x] Pipeline done\n");
+    CA_LOGT_INFO("pipeline", "Pipeline done\n");
     return 0;
 }
 
@@ -85,7 +86,7 @@ void Pipeline::compileMethods()
 
             auto mnName = method.methodNode->name.to_std_string();
             auto mnDesc = method.methodNode->desc.to_std_string();
-            printf("  Compiling %s.%s%s\n", name.c_str(), mnName.c_str(), mnDesc.c_str());
+            CA_LOGT_INFO("pipeline", "  Compiling {}.{}{}\n", name.c_str(), mnName.c_str(), mnDesc.c_str());
 
             auto blocks = converter.convert(*method.methodNode);
 

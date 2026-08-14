@@ -41,6 +41,9 @@ native。JAR 输入仍沿用 mj2x pipeline 的整包读写能力；signed-JAR me
 | `.jar` 输入/输出 | MVP 支持 | `CliTest.RegCJarInputEmitsJarAndRegCSource`；核心 JAR I/O 由 `IOTest` / `PipelineTest` 覆盖 |
 | JAR 负向边界 | fail-closed | `CliTest.BadJarInputsFailClosed`、`IOTest.JarInputLoaderRejectsSignedJarMetadata`、`IOTest.JarInputLoaderRejectsJarWithoutRootClasses` |
 | mjdbg register/runtime samples | 支持生成 | `RegCTraceSamples.GenerateMjdbgFixtures` |
+| receiver 精确类型静态绑定（分配点传播） | 支持 | `RegCTest.EmitsStaticBoundCallForSingleAllocationReceiver`、`KeepsResolvedDispatchForUnknownReceiverType` |
+| 字符串常量按内容缓存（免每次 NewStringUTF） | 支持 | RegC 单测 98/98 回归（intrinsic string literal 缓存） |
+| 性能：13-probe 双 JDK 对比 os30(JNIC) | 反超 | `mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1`（JDK21 0.88x） |
 
 ## RegC E2E 覆盖
 
