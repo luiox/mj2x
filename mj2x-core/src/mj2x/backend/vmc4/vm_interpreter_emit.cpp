@@ -126,13 +126,29 @@ const char* kHandlerBinary =
     "                regs[dest].i = (type==0) ? (int32_t)r : r;\n"
     "            } else {\n"
     "                double a = regs[lhs].f, b = regs[rhs].f, r = 0;\n"
-    "                switch (op) {\n"
-    "                case 0: r = a + b; break;\n"
-    "                case 1: r = a - b; break;\n"
-    "                case 2: r = a * b; break;\n"
-    "                case 3: r = a / b; break;\n"
-    "                case 4: r = (type==2)?fmodf((float)a,(float)b):fmod(a,b); break;\n"
-    "                default: break;\n"
+    "                if (type == 2) {\n"
+    "                    /* JVM FADD/FSUB/FMUL/FDIV/FREM：float 精度运算，结果正确舍入\n"
+    "                     * 回 float 后存槽（slot 是 double——不做 float 舍入会引入\n"
+    "                     * double 中间精度，比较/再次运算时差 1 ULP）。 */\n"
+    "                    float fa = (float)a, fb = (float)b, fr = 0;\n"
+    "                    switch (op) {\n"
+    "                    case 0: fr = fa + fb; break;\n"
+    "                    case 1: fr = fa - fb; break;\n"
+    "                    case 2: fr = fa * fb; break;\n"
+    "                    case 3: fr = fa / fb; break;\n"
+    "                    case 4: fr = fmodf(fa, fb); break;\n"
+    "                    default: break;\n"
+    "                    }\n"
+    "                    r = fr;\n"
+    "                } else {\n"
+    "                    switch (op) {\n"
+    "                    case 0: r = a + b; break;\n"
+    "                    case 1: r = a - b; break;\n"
+    "                    case 2: r = a * b; break;\n"
+    "                    case 3: r = a / b; break;\n"
+    "                    case 4: r = fmod(a, b); break;\n"
+    "                    default: break;\n"
+    "                    }\n"
     "                }\n"
     "                regs[dest].f = r;\n"
     "            }\n";
@@ -237,6 +253,7 @@ const char* kHandlerSuperInc =
     "            unsigned int src  = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
     "            if (type == 0) regs[dest].i = (int32_t)((uint32_t)regs[src].i + 1u);\n"
     "            else if (type == 1) regs[dest].i = regs[src].i + 1;\n"
+    "            else if (type == 2) regs[dest].f = (float)((float)regs[src].f + 1.0f);\n"
     "            else regs[dest].f = regs[src].f + 1.0;\n";
 
 /// SUPER_DEC: regs[dest] = regs[src] - 1（super-operator，Binary(x,1,Sub) 折叠）
@@ -246,6 +263,7 @@ const char* kHandlerSuperDec =
     "            unsigned int src  = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
     "            if (type == 0) regs[dest].i = (int32_t)((uint32_t)regs[src].i - 1u);\n"
     "            else if (type == 1) regs[dest].i = regs[src].i - 1;\n"
+    "            else if (type == 2) regs[dest].f = (float)((float)regs[src].f - 1.0f);\n"
     "            else regs[dest].f = regs[src].f - 1.0;\n";
 
 /// CALL: 经函数指针表分派到 per-callsite JNI helper（Phase 2.0）。
