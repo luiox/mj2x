@@ -1533,10 +1533,64 @@ TEST(Vmc4BackendTest, DriftDescribeExposesParams)
     const std::string desc = drift.describe();
     EXPECT_NE(desc.find("driftVariants: 3"), std::string::npos) << desc;
     EXPECT_NE(desc.find("driftPeriod: 32"), std::string::npos) << desc;
+    // period 语义变义观测面（#762 升级档）：每变体一个 caseLabelPerms 段。
+    EXPECT_NE(desc.find("caseLabelPerms:"), std::string::npos) << desc;
+    EXPECT_NE(desc.find("    d0:"), std::string::npos) << desc;
+    EXPECT_NE(desc.find("    d2:"), std::string::npos) << desc;
 
     // 确定性：同配置同实例 seed → 同描述。
     VmInstance drift2(opts);
     EXPECT_EQ(desc, drift2.describe());
+}
+
+// period 语义变义（#762 升级档）：case 标签周期轮换
+TEST(Vmc4BackendTest, DriftCaseLabelsDeterministicRotatedDisjoint)
+{
+    Vmc4Options opts;
+    opts.seed          = 0x1357;
+    opts.driftVariants = 3;
+    opts.driftPeriod   = 8;
+    VmInstance a(opts);
+    VmInstance b(opts);
+    const size_t kCount = a.caseLabelPerm(0).size();
+
+    // 确定性 + 每变体段内是 0..K-1 全排列。
+    for (int d = 0; d < a.driftVariants(); ++d) {
+        EXPECT_EQ(a.caseLabelPerm(d), b.caseLabelPerm(d));
+        auto perm = a.caseLabelPerm(d);
+        std::sort(perm.begin(), perm.end());
+        for (size_t i = 0; i < perm.size(); ++i) {
+            EXPECT_EQ(perm[i], static_cast<uint8_t>(i)) << "变体 " << d << " 非排列";
+        }
+    }
+    // 标签空间 = D × K；case 常量 = d*K + 段内值，跨变体不相交（无碰撞）。
+    EXPECT_EQ(a.caseLabelSpace(), a.driftVariants() * static_cast<int>(kCount));
+    for (int d1 = 0; d1 < a.driftVariants(); ++d1) {
+        for (int d2 = d1 + 1; d2 < a.driftVariants(); ++d2) {
+            for (uint8_t v1 : a.caseLabelPerm(d1)) {
+                for (uint8_t v2 : a.caseLabelPerm(d2)) {
+                    EXPECT_NE(static_cast<int>(v1) + d1 * static_cast<int>(kCount),
+                              static_cast<int>(v2) + d2 * static_cast<int>(kCount))
+                        << "跨变体 case 常量碰撞";
+                }
+            }
+        }
+    }
+    // 轮换真实发生：存在语义其 case 标签在不同变体下不同。
+    bool rotated = false;
+    for (const auto& op : a.handlerOrder()) {
+        const int l0 = a.caseLabelFor(op, 0);
+        for (int d = 1; d < a.driftVariants(); ++d) {
+            if (a.caseLabelFor(op, d) != l0) rotated = true;
+        }
+    }
+    EXPECT_TRUE(rotated) << "case 标签跨变体无轮换（变义未发生）";
+    // drift 关闭：无标签空间，caseLabelFor 回落 canonical。
+    Vmc4Options plain;
+    VmInstance p(plain);
+    EXPECT_FALSE(p.driftEnabled());
+    EXPECT_EQ(p.caseLabelSpace(), 0);
+    EXPECT_EQ(p.caseLabelFor(VmOpcode::Copy, 0), static_cast<int>(p.opcodeFor(VmOpcode::Copy)));
 }
 
 TEST(Vmc4BackendTest, DriftVariantPickUnmapRoundTrip)
@@ -1633,15 +1687,20 @@ TEST(Vmc4BackendTest, DriftEmitGeneratesUnmapTablesAndCanonicalCases)
     ASSERT_NE(prog, nullptr) << reason;
 
     const std::string src = VmInterpreterEmitter::emit(*prog, instance, "drift1");
-    // 2 个 unmap 表。
+    // 2 个 unmap 表 + 2 个 case 标签表（period 语义变义，#762 升级档）。
     EXPECT_NE(src.find("mj2x_vm_unmap_drift1_0"), std::string::npos) << src;
     EXPECT_NE(src.find("mj2x_vm_unmap_drift1_1"), std::string::npos) << src;
-    // 取码走周期公式 + unmap 选择。
+    EXPECT_NE(src.find("mj2x_vm_label_drift1_0"), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_label_drift1_1"), std::string::npos) << src;
+    // 取码走周期公式 + unmap 选择 + case 标签映射。
     EXPECT_NE(src.find("(unsigned)(pc / 16) % 2"), std::string::npos) << src;
-    // drift 开启时 case 只发 canonical：case 数 = handlerOrder + Halt = 11，
-    // 不再为 ALT 别名发 case。
+    EXPECT_NE(src.find("mj2x_vm_label_drift1_"), std::string::npos) << src;
+    // case 数 = (handlerOrder + Halt) × driftVariants（每语义每变体一个标签，
+    // 共享 body；不再为 ALT 别名发 case）。
     const size_t caseCount = countOccurrencesForTest(src, "case 0x");
-    EXPECT_EQ(caseCount, instance.handlerOrder().size() + 1u) << src;
+    EXPECT_EQ(caseCount, (instance.handlerOrder().size() + 1u) *
+                             static_cast<size_t>(instance.driftVariants()))
+        << src;
 }
 
 TEST(Vmc4BackendTest, DriftEmitOffHasNoUnmapTables)

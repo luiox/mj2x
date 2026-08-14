@@ -191,6 +191,24 @@ public:
     /// 实例的 Halt canonical 字节（停机哨兵，随映射随机化）。
     uint8_t haltByte() const { return opcodeFor(VmOpcode::Halt); }
 
+    /// @brief 变体 d 的 case 标签排列（段内值 0..K-1，K = 支持集大小）。
+    ///
+    /// @details
+    /// period 语义变义（#762 升级档）：drift 的编码轮换之上，case 标签本身
+    /// 按周期轮换——语义 op 在变体 d 下的 case 常量 = d*K + perm_d[canonical]。
+    /// 各变体标签段互不相交（跨变体无碰撞）；case 体按语义共享（行为不变，
+    /// 语义保真由 e2e 验证）。drift 关闭时为空。
+    const std::vector<uint8_t>& caseLabelPerm(int variant) const
+    {
+        return caseLabelPerm_[static_cast<size_t>(variant)];
+    }
+
+    /// @brief 语义 op 在变体 d 下的 case 标签常量（drift 关闭时 = canonical 字节）。
+    int caseLabelFor(VmOpcode op, int variant) const;
+
+    /// @brief case 标签空间大小（= driftVariants × K；drift 关闭时为 0）。
+    int caseLabelSpace() const;
+
     /// @brief 实例的简短标识（用于生成的函数名后缀，避免多实例命名冲突）。
     std::string instanceTag() const;
 
@@ -206,6 +224,7 @@ private:
     void buildOpcodeBytes();
     void buildHandlerOrder();
     void buildDriftVariants();
+    void buildCaseLabelPerms();
 
     VmDispatcherKind dispatcherKind_;
     uint64_t         seed_;
@@ -220,6 +239,9 @@ private:
     /// drift 变体排列：variantPerm_[d][c] = 变体 d 下 canonical 字节 c 对应
     /// 的语义集合索引（0..K-1，K = 支持集大小）。字节集合固定，归属轮换。
     std::array<std::vector<uint8_t>, 4> variantPerm_;
+    /// period 语义变义：caseLabelPerm_[d][canonical] = 变体 d 下 canonical
+    /// 字节的 case 标签段内值（0..K-1）；case 常量 = d*K + 段内值。
+    std::array<std::vector<uint8_t>, 4> caseLabelPerm_;
 };
 
 /// @brief 主 seed 与身份哈希混合派生实例 seed（确定性）。

@@ -62,6 +62,12 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-15：**主线四完成（#762 升级档：period 语义变义）**——case 标签周期
+  轮换（`d*K + caseLabelPerm_[d][canonical]`，跨变体不相交 + case 共享 body）；
+  全 dispatcher 覆盖（switch/funcptr/computed_goto/if_nest/state）；describe 新增
+  caseLabelPerms 观测面（红队契约升级）；单测 10/10 + e2e 80/80（5 dispatcher ×
+  16 用例 drift 全开语义保真）+ 无 drift 零回归。强度实测（变义强度模型）待
+  mjdbg 对抗侧（vmc4_red_team_contract.md §7 自验闭环已纳入观测面）。
 - 2026-08-15：**#820 步骤 6 mj2x 侧闭环（trace surface 自验）**——新增
   Vmc4TraceSurfaceConsistencyTest 3 项：describe↔产物逐字节核对（含 drift 变体
   unmap 全排列双射 + 轮转真实性）、跨实例语义命中率 2.50%（随机期望 ~5%，

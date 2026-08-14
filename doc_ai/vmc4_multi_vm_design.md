@@ -508,7 +508,29 @@ vmc4 的对应实现为**语义标签轮转**（semantic label rotation）：
   解释器 unmap 的同步性得到端到端语义保真证明。
 - 全量：Vmc4* 58/58；RegC/StackC 无回归。
 
-### 15.4 后续（issue #762 升级档）
+### 15.4 升级档已实现（2026-08-15）：period 语义变义（case 标签周期轮换）
 
-- period 驱动的**语义**变义（对齐 jvmtp dispatch-mutation / JShield Tesseract）——
-  需严格语义保真验证，且红队契约升级为「变义强度模型」依赖 mjdbg 对抗侧就绪。
+对齐 jvmtp dispatch-mutation / JShield Tesseract 的「dispatch 结构按周期变异」，
+在 drift 编码轮换之上增加**case 标签周期轮换**（语义保真硬约束下可实现的
+最深层变义——行为不变，可观测 dispatch 结构随周期失效）：
+
+- **机制**：语义 op 在变体 d 下的 case 常量 = `d*K + caseLabelPerm_[d][canonical]`
+  （K = 支持集大小；每变体独立洗牌排列）。各变体标签段 `[d*K, d*K+K)` 互不
+  相交 → 跨变体无碰撞，case 体按语义共享（同一 handler body）。
+- **取码链路**：`raw → unmap_d → canonical → labelTable_d → case 标签`；
+  标签表 `mj2x_vm_label_<tag>_<d>[K]` 与 unmap 表同列文件级静态表。
+- **全 dispatcher 覆盖**：switch_table / funcptr_table / computed_goto / if_nest /
+  state_dispatcher 均按标签发射（funcptr 表槽、computed_goto label 堆叠、
+  if_nest 标签链、RETURN 判定改全变体标签集）。
+- **红队观测面**（契约升级）：describe() 新增 `caseLabelPerms:` 段（每变体
+  排列）；红队还原的「case 常量 ↔ 语义」表必须按变体分组且依赖排列派生，
+  一次分析结论跨周期失效。
+- **验证**：
+  - 单测：caseLabel 确定性/段内全排列/跨变体不相交/轮换真实发生/drift 关闭
+    回落 canonical（零回归）；emit 生成标签表 + case 数 = (handler+Halt)×D
+  - e2e：**80/80 通过**（5 dispatcher × 16 用例在 drift 全开 + case 标签轮换
+    下语义保真——编码器轮转、unmap 解码、标签映射三段同步）
+  - 全量：Vmc4* 全绿；RegC/StackC 无回归；无 drift 产物零变化
+
+> 强度验证（红队实测「变义强度模型」）仍依赖 mjdbg 对抗侧；mj2x 侧自验闭环
+> （vmc4_red_team_contract.md §7）已把 caseLabelPerms 纳入观测面核对。

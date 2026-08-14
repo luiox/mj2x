@@ -47,6 +47,7 @@ VmInstance::VmInstance(const Vmc4Options& options, uint64_t instanceSeed)
     buildOpcodeBytes();
     buildHandlerOrder();
     buildDriftVariants();
+    buildCaseLabelPerms();
 }
 
 std::string VmInstance::instanceTag() const
@@ -111,6 +112,21 @@ std::string VmInstance::describe() const
         out += b;
     }
     out += "\n";
+    if (driftEnabled()) {
+        // period 语义变义观测面：每变体的 case 标签段内值排列（canonical → 标签）。
+        out += "  caseLabelPerms:\n";
+        for (int d = 0; d < driftVariants_; ++d) {
+            char line[32];
+            std::snprintf(line, sizeof(line), "    d%d:", d);
+            out += line;
+            for (uint8_t v : caseLabelPerm_[static_cast<size_t>(d)]) {
+                char bb[8];
+                std::snprintf(bb, sizeof(bb), " %u", static_cast<unsigned>(v));
+                out += bb;
+            }
+            out += "\n";
+        }
+    }
     out += "  opcodeTable:\n";
     for (const auto& candidate : kAllOpcodes) {
         char line[64];
@@ -259,6 +275,49 @@ void VmInstance::buildDriftVariants()
         }
         variantPerm_[static_cast<size_t>(d)] = std::move(perm);
     }
+}
+
+void VmInstance::buildCaseLabelPerms()
+{
+    for (auto& perm : caseLabelPerm_) perm.clear();
+    if (!driftEnabled()) return;
+
+    const size_t k = sizeof(kAllOpcodes) / sizeof(kAllOpcodes[0]);
+    std::vector<uint8_t> base(k);
+    for (size_t i = 0; i < k; ++i) base[i] = static_cast<uint8_t>(i);
+
+    // period 语义变义：每个变体对 canonical 字节做独立洗牌，得到该变体的
+    // case 标签段内值。canonical 字节值恰为 0..K-1（双射），可直接作索引。
+    // case 常量 = d*K + perm_d[canonical]，跨变体段不相交（无碰撞）。
+    for (int d = 0; d < driftVariants_; ++d) {
+        SplitMix64 rng(instanceSeed_ ^ 0x9E4A6B7C8D9E0F11ull ^
+                       static_cast<uint64_t>(d) * 0x9E3779B97F4A7C15ull);
+        std::vector<uint8_t> perm = base;
+        for (size_t i = perm.size(); i > 1; --i) {
+            const size_t j = static_cast<size_t>(rng.nextBounded(i));
+            std::swap(perm[i - 1], perm[j]);
+        }
+        caseLabelPerm_[static_cast<size_t>(d)] = std::move(perm);
+    }
+}
+
+int VmInstance::caseLabelFor(VmOpcode op, int variant) const
+{
+    if (!driftEnabled() || variant < 0 || variant >= driftVariants_) {
+        return static_cast<int>(opcodeFor(op));
+    }
+    const size_t k = sizeof(kAllOpcodes) / sizeof(kAllOpcodes[0]);
+    const int    canonical = static_cast<int>(opcodeFor(op));
+    return variant * static_cast<int>(k) +
+           static_cast<int>(caseLabelPerm_[static_cast<size_t>(variant)]
+                                [static_cast<size_t>(canonical)]);
+}
+
+int VmInstance::caseLabelSpace() const
+{
+    if (!driftEnabled()) return 0;
+    const size_t k = sizeof(kAllOpcodes) / sizeof(kAllOpcodes[0]);
+    return driftVariants_ * static_cast<int>(k);
 }
 
 bool VmInstance::usesAltHandlerForm(VmOpcode op) const

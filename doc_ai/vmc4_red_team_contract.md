@@ -31,6 +31,7 @@
 | super-operator | SuperInc/SuperDec 出现（`+1`/`-1` 折叠，无 rhs operand） | 报告是否存在折叠指令 |
 | 寄存器文件 | JNI wrapper 的 `regs[N]`、常量槽高水位、边拷贝合成块 | 寄存器数量与布局 |
 | 多实例差异 | 不同类/方法（per-class/per-method）的字节集合/handler 顺序 | **跨实例分析复用性测试**（§4.1）的输入 |
+| case 标签轮换（#762 升级档） | drift 开启时 `caseLabelPerms:` 段的每变体排列；dispatch case 常量 = `d*K + perm_d[canonical]` | 红队还原的「case 常量 ↔ 语义」表须按变体分组且依赖排列派生；单次分析结论跨周期失效（变义强度观测面） |
 
 ## 3. 强度归零基准
 

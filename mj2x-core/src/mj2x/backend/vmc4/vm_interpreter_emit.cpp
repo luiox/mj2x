@@ -430,11 +430,20 @@ const char* handlerBodyFor(const VmInstance& instance, const HandlerEntry* entry
 }
 
 /// 把某语义的匹配表达式拼成 `opcode == b1 || opcode == b2` 链（IfNest 用）。
-/// 返回表达式片段（非源码结构拼接），drift 开启时 opcode 已由 unmap 表解回 canonical。
+/// 返回表达式片段（非源码结构拼接）；drift 开启时 opcode 已是 case 标签
+/// （period 语义变义），比对全变体标签集（跨变体不相交 → 唯一标识语义）。
 std::string emitOpcodeByteOrChain(const VmInstance& instance, VmOpcode op)
 {
     if (instance.driftEnabled()) {
-        return format_std("opcode == 0x{:02x}", static_cast<unsigned>(instance.opcodeFor(op)));
+        std::string out;
+        bool        first = true;
+        for (int d = 0; d < instance.driftVariants(); ++d) {
+            if (!first) format_to(out, " || ");
+            format_to(out, "opcode == 0x{:02x}",
+                      static_cast<unsigned>(instance.caseLabelFor(op, d)));
+            first = false;
+        }
+        return out;
     }
     std::string out;
     bool        first = true;
@@ -454,14 +463,17 @@ std::string emitOpcodeByteOrChain(const VmInstance& instance, VmOpcode op)
 
 /// 发射一个 handler 的 case 块：canonical + 全部 ALT 别名共享同一 body。
 /// 多个 case 头（每字节一个）后跟一个 { handler body + break; } 块。
-/// drift 开启时 unmap 已把原始字节解回 canonical，只发 canonical 一个 case。
+/// drift 开启时 unmap + case 标签映射已把原始字节解回语义标签（period 语义
+/// 变义），发每变体一个标签（共享同一 body——行为不变）。
 void emitHandlerCase(CSourceStream& out, const VmInstance& instance, const HandlerEntry* entry)
 {
     auto emitHead = [&](uint8_t byte) {
         out.emitLine(format_std("case 0x{:02x} /*{}*/:", byte, entry->name));
     };
     if (instance.driftEnabled()) {
-        emitHead(instance.opcodeFor(entry->opcode));
+        for (int d = 0; d < instance.driftVariants(); ++d) {
+            emitHead(static_cast<uint8_t>(instance.caseLabelFor(entry->opcode, d)));
+        }
     } else {
         for (uint8_t b : instance.opcodeBytesFor(entry->opcode)) emitHead(b);
     }
@@ -620,6 +632,48 @@ std::string emitUnmapSelectExpr(const VmInstance& instance, const std::string& t
     return s;
 }
 
+/// 生成 per-variant case 标签表（period 语义变义，#762 升级档）：表 d 的
+/// entry[canonical] = d*K + caseLabelPerm_[d][canonical]（case 常量；各变体
+/// 段 [d*K, d*K+K) 互不相交 → 跨变体无碰撞，case 体按语义共享仍成立）。
+void emitDriftLabelTables(CSourceStream& out, const VmInstance& instance, const std::string& tag)
+{
+    if (!instance.driftEnabled()) return;
+    const int K = instance.caseLabelSpace() / instance.driftVariants();
+    for (int d = 0; d < instance.driftVariants(); ++d) {
+        out.emitLine(
+            format_std("static const unsigned char mj2x_vm_label_{}_{}[{}] = {{", tag, d, K));
+        {
+            CSourceStream::IndentGuard g(out);
+            std::string body;
+            const auto& perm = instance.caseLabelPerm(d);
+            for (int i = 0; i < K; ++i) {
+                if (i % 16 == 0 && i != 0) body += "\n";
+                else if (i != 0) body += " ";
+                format_to(body, "{},",
+                          static_cast<unsigned>(d * K) + static_cast<unsigned>(perm[i]));
+            }
+            out.emitRaw(body);
+        }
+        out.emitLine("");
+        out.emitLine("};");
+    }
+}
+
+/// 生成 case 标签表的选择表达式（按运行时变体序号 d 选出对应表指针）。
+std::string emitLabelSelectExpr(const VmInstance& instance, const std::string& tag,
+                                const std::string& dExpr)
+{
+    const int D = instance.driftVariants();
+    std::string s;
+    for (int d = 0; d < D; ++d) {
+        if (d > 0) format_to(s, " : ");
+        if (d + 1 < D) format_to(s, "({} == {} ? ", dExpr, d);
+        format_to(s, "mj2x_vm_label_{}_{}", tag, d);
+    }
+    for (int d = 0; d + 1 < D; ++d) s += ")";
+    return s;
+}
+
 /// 生成 dispatcher 的取码语句：drift 开启时按当前 pc 算变体序号再过 unmap 表；
 /// 关闭时保持 `unsigned char opcode = code[pc++];` 原样（零回归）。
 void emitOpcodeFetch(CSourceStream& out, const VmInstance& instance, const std::string& tag)
@@ -630,11 +684,12 @@ void emitOpcodeFetch(CSourceStream& out, const VmInstance& instance, const std::
     }
     out.emitLine(format_std("unsigned int d = (unsigned)(pc / {}) % {};",
                             instance.driftPeriod(), instance.driftVariants()));
-    out.emitLine(format_std("unsigned char opcode = {}[code[pc++]];",
+    out.emitLine(format_std("unsigned char opcode = {}[{}[code[pc++]]];",
+                            emitLabelSelectExpr(instance, tag, "d"),
                             emitUnmapSelectExpr(instance, tag, "d")));
 }
 
-/// 生成 Halt 的 case 头：drift 开启时只发 canonical（unmap 已解回）；
+/// 生成 Halt 的 case 头：drift 开启时发每变体标签（unmap + 标签映射已解回）；
 /// 关闭时覆盖 canonical + 全部别名（防御性停机面）。
 void emitHaltCaseHeads(CSourceStream& out, const VmInstance& instance)
 {
@@ -642,7 +697,9 @@ void emitHaltCaseHeads(CSourceStream& out, const VmInstance& instance)
         out.emitLine(format_std("case 0x{:02x} /*HALT*/:", byte));
     };
     if (instance.driftEnabled()) {
-        emitHead(instance.opcodeFor(VmOpcode::Halt));
+        for (int d = 0; d < instance.driftVariants(); ++d) {
+            emitHead(static_cast<uint8_t>(instance.caseLabelFor(VmOpcode::Halt, d)));
+        }
         return;
     }
     for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) emitHead(b);
@@ -796,7 +853,10 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
             first = false;
         };
         if (instance.driftEnabled()) {
-            emitHaltSlot(instance.opcodeFor(VmOpcode::Halt));
+            // period 语义变义：Halt 全变体标签槽 = 0（空指针）。
+            for (int d = 0; d < instance.driftVariants(); ++d) {
+                emitHaltSlot(static_cast<uint8_t>(instance.caseLabelFor(VmOpcode::Halt, d)));
+            }
         } else {
             for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) emitHaltSlot(b);
         }
@@ -807,7 +867,10 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
         };
         for (const auto& op : instance.handlerOrder()) {
             if (instance.driftEnabled()) {
-                emitHandlerSlot(instance.opcodeFor(op));
+                // 每变体一个标签槽（共享同一 dispatch body——行为不变）。
+                for (int d = 0; d < instance.driftVariants(); ++d) {
+                    emitHandlerSlot(static_cast<uint8_t>(instance.caseLabelFor(op, d)));
+                }
                 continue;
             }
             for (uint8_t b : instance.opcodeBytesFor(op)) emitHandlerSlot(b);
@@ -820,7 +883,8 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
         if (instance.driftEnabled()) {
             out.emitLine(format_std("unsigned int d = (unsigned)(ctx->pc / {}) % {};",
                                     instance.driftPeriod(), instance.driftVariants()));
-            out.emitLine(format_std("unsigned char opcode = {}[ctx->code[ctx->pc]];",
+            out.emitLine(format_std("unsigned char opcode = {}[{}[ctx->code[ctx->pc]]];",
+                                    emitLabelSelectExpr(instance, tag, "d"),
                                     emitUnmapSelectExpr(instance, tag, "d")));
         } else {
             out.emitLine("unsigned char opcode = ctx->code[ctx->pc];");
@@ -836,10 +900,17 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
         if (instance.driftEnabled()) {
             out.emitLine(format_std("unsigned int d2 = (unsigned)(op_pos / {}) % {};",
                                     instance.driftPeriod(), instance.driftVariants()));
-            out.emitLine(format_std("unsigned char _op = {}[ctx->code[op_pos]];",
+            out.emitLine(format_std("unsigned char _op = {}[{}[ctx->code[op_pos]]];",
+                                    emitLabelSelectExpr(instance, tag, "d2"),
                                     emitUnmapSelectExpr(instance, tag, "d2")));
-            out.emitLine(format_std("int _is_ret = (_op == 0x{:02x});",
-                                    static_cast<unsigned>(instance.opcodeFor(VmOpcode::Return))));
+            // period 语义变义：标签空间跨变体不相交——Return 的全变体标签集
+            // 唯一标识 Return（opcode 已是标签，不能直接比 canonical）。
+            out.emitLine("int _is_ret = 0;");
+            for (int d = 0; d < instance.driftVariants(); ++d) {
+                out.emitLine(format_std("if (_op == 0x{:02x}) _is_ret = 1;",
+                                        static_cast<unsigned>(
+                                            instance.caseLabelFor(VmOpcode::Return, d))));
+            }
         } else {
             out.emitLine("unsigned char _op = ctx->code[op_pos];");
             out.emitLine("int _is_ret = 0;");
@@ -872,7 +943,10 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
             const HandlerEntry* entry = findHandler(op);
             if (entry == nullptr) continue;
             if (instance.driftEnabled()) {
-                emitLabel(instance.opcodeFor(op));
+                // period 语义变义：每变体一个标签槽（label 名 = 标签值，跨变体唯一）。
+                for (int d = 0; d < instance.driftVariants(); ++d) {
+                    emitLabel(static_cast<uint8_t>(instance.caseLabelFor(op, d)));
+                }
                 continue;
             }
             for (uint8_t b : instance.opcodeBytesFor(op)) emitLabel(b);
@@ -882,7 +956,8 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
     if (instance.driftEnabled()) {
         out.emitLine(format_std("unsigned int d = (unsigned)(pc / {}) % {};",
                                 instance.driftPeriod(), instance.driftVariants()));
-        out.emitLine(format_std("goto *mj2x_vm_labels[{}[code[pc++]]];",
+        out.emitLine(format_std("goto *mj2x_vm_labels[{}[{}[code[pc++]]]];",
+                                emitLabelSelectExpr(instance, tag, "d"),
                                 emitUnmapSelectExpr(instance, tag, "d")));
     } else {
         out.emitLine("goto *mj2x_vm_labels[code[pc++]];");
@@ -890,16 +965,17 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
     for (const auto& op : instance.handlerOrder()) {
         const HandlerEntry* entry = findHandler(op);
         if (entry == nullptr) continue;
-        auto emitOpBlock = [&](uint8_t byte) {
-            out.label_(format_std("mj2x_vm_op_{:02x}:", byte));
+        auto emitOpBlock = [&](const std::vector<uint8_t>& bytes) {
+            for (uint8_t byte : bytes) out.label_(format_std("mj2x_vm_op_{:02x}:", byte));
             out.emitLine("{");
             {
                 CSourceStream::IndentGuard g(out);
                 out.emitRaw(handlerBodyFor(instance, entry));
                 if (instance.driftEnabled()) {
                     out.emitLine(format_std(
-                        "unsigned int nd = (unsigned)(pc / {}) % {}; goto *mj2x_vm_labels[{}[code[pc++]]];",
+                        "unsigned int nd = (unsigned)(pc / {}) % {}; goto *mj2x_vm_labels[{}[{}[code[pc++]]]];",
                         instance.driftPeriod(), instance.driftVariants(),
+                        emitLabelSelectExpr(instance, tag, "nd"),
                         emitUnmapSelectExpr(instance, tag, "nd")));
                 } else {
                     out.emitLine("goto *mj2x_vm_labels[code[pc++]];");
@@ -908,10 +984,16 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
             out.emitLine("}");
         };
         if (instance.driftEnabled()) {
-            emitOpBlock(instance.opcodeFor(op));
+            std::vector<uint8_t> labels;
+            for (int d = 0; d < instance.driftVariants(); ++d) {
+                labels.push_back(static_cast<uint8_t>(instance.caseLabelFor(op, d)));
+            }
+            emitOpBlock(labels);
             continue;
         }
-        for (uint8_t b : instance.opcodeBytesFor(op)) emitOpBlock(b);
+        std::vector<uint8_t> bytes;
+        for (uint8_t b : instance.opcodeBytesFor(op)) bytes.push_back(b);
+        emitOpBlock(bytes);
     }
     out.label_("mj2x_vm_halt");
     out.emitLine("status = (status!=0)?status:2u /* InvalidBytecode */;");
@@ -2077,9 +2159,12 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         out.emitBlankLine();
     }
 
-    // drift 的 per-variant unmap 表是文件级定义，必须在 exec 函数之前发射。
+    // drift 的 per-variant unmap 表 + period 语义变义的 case 标签表是文件级
+    // 定义，必须在 exec 函数之前发射。
     if (instance.driftEnabled()) {
         emitDriftUnmapTables(out, instance, tag);
+        out.emitBlankLine();
+        emitDriftLabelTables(out, instance, tag);
         out.emitBlankLine();
     }
 
