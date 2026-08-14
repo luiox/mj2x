@@ -19,6 +19,8 @@ Supported keys:
 | `c_compiler` | string: `msvc`, `gcc`, `clang`, `zig`, or `xmake` | `--c-compiler` |
 | `generate_xmake` | string | `--generate-xmake` |
 | `generate_cmake` | string | `--generate-cmake` |
+| `intrinsic_config` | string | `--intrinsic-config`（用户 intrinsic JSON，见 user_intrinsic.md） |
+| `vmc4_granularity` | string: `class`, `method`, `program` | `--vmc4-granularity` |
 | `dump_mir` | boolean | `--dump-mir` |
 
 Example:

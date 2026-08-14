@@ -61,6 +61,16 @@ mj2x-cli -i myapp.jar -o myapp_native.jar --emit-c myapp.c
 
 JAR 内多个 class 会被逐个处理,非 class 资源原样保留,entry 顺序保留。
 
+JAR + `--compile` 的整体模式（改写全部类 + 编译 DLL 并内嵌 + NativeLoader 自动加载）：
+
+```bash
+mj2x-cli -i myapp.jar -o myapp_native.jar --emit-c myapp.c --compile
+java -cp myapp_native.jar app.Main   # 运行改写后的完整程序
+```
+
+生成的 DLL 内嵌在 `META-INF/mj2x/native/`，类加载时自动释放加载，无需改运行命令。
+整程序语义对比（多类 jar 三后端一致）由 `jar_whole_program_e2e_test` 锁定。
+
 ### 3.3 选择后端
 
 ```bash
@@ -128,6 +138,8 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
 | `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm`。**v2.1 发布关闭**：`with_mj2x_llvm` 默认 off，CLI 不暴露该选项 |
 | `--config <file>` | 从 JSON 配置读取默认参数,命令行显式参数覆盖配置 |
+| `--intrinsic-config <file>` | 用户自定义 intrinsic 配置（JSON，三后端通用；详见 [user_intrinsic.md](user_intrinsic.md)） |
+| `--intrinsic-src <file>` | 追加用户 intrinsic 实现源文件（可重复，与配置内 `sources` 叠加） |
 | `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码（**v2.1 起关闭**）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
@@ -158,7 +170,7 @@ VMC4：
 |---|---|
 | `--vmc4-dispatcher <switch_table\|func_ptr\|if_nest\|state>` | 解释器分派形态（默认 switch_table） |
 | `--vmc4-seed <n>` | 编译期随机化种子 |
-| `--vmc4-granularity <class\|method>` | 随机化粒度（默认 class） |
+| `--vmc4-granularity <class\|method\|program>` | 实例粒度（默认 class；method 每方法独立 VM；program 全程序共享一个 VM，opcode 空间全局统一、体积最优） |
 | `--vmc4-alias <n>` / `--vmc4-bogus <n>` | 别名/伪 handler 数量 |
 | `--vmc4-drift <0..4>` | 执行期 dispatch 变体数（默认 0 关闭；issue #762 低风险档） |
 | `--vmc4-drift-period <bytes>` | drift 变体切换周期（默认 16） |

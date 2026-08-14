@@ -423,6 +423,7 @@ Phase 0+1 的单测只验证"编码成功 + 文本结构"，从未把生成的 C
 | handler 顺序随机化 | `VmInstance::handlerOrder`：8 个 opcode 独立种子段洗牌，决定 switch case / 函数指针表项 / if 链的排列 | P2-2：排列是支持集的置换 |
 | per-class 粒度 | backend 按 className 缓存 VmInstance，同类方法共享实例 | P2-6：同主 seed 下不同类实例映射互异 |
 | per-method 粒度 | `--vmc4-granularity method`（className.method+desc 为实例键，每方法独立实例） | 单测 P2-5：身份哈希派生互异 |
+| per-program 粒度 | `--vmc4-granularity program`（#827，2026-08-15）：全程序共享一个 VmInstance（固定实例键 `__program__`），opcode 空间全局统一、方法间字节流互相参照、解释器只生成一份（体积最优） | 粒度矩阵单测：program 下不同类方法 opcode 链一致；method 下互异；class 下同类共享/跨类独立 |
 | 可复现构建 | 实例 seed = `vmc4DeriveInstanceSeed(mainSeed, fnv1a64(identity))`，确定性 splitmix64 派生，无未播种随机源 | P2-1/P2-5：同 seed 同身份 → 同产物 |
 | CLI | `--vmc4-granularity <class|method>`；`--vmc4-seed` 起真正驱动映射（此前仅记录） | CliTest 106/106 无回归 |
 

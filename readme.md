@@ -16,25 +16,8 @@
 ## 用户自定义 intrinsic（#818）
 
 三个后端（StackC / RegC / VMC4）都支持把任意 Java 静态调用点降级为对用户
-提供的 native symbol 的直接调用，替代通用 JNI 派发。JSON 配置：
-
-```json
-{
-  "intrinsics": [
-    {"owner": "F", "name": "m", "desc": "(II)I", "symbol": "my_m",
-     "passContext": false, "mayThrow": false}
-  ],
-  "sources": ["path/to/my_m.c"]
-}
-```
-
-- `owner` 用内部形式（`F` / `com/x/F`，不带 `L...;`），`desc` 是 JVM 描述符。
-- `passContext: true` 时用户函数第一参数收 `JNIEnv* env`（三后端一致）。
-- `mayThrow: true` 时调用点保留调用后 pending 异常检查（RegC 恒保留）。
-- `sources` 里的实现文件自动并入 `--compile` 直接编译或 `--generate-xmake` 工程。
-- 命令行：`--intrinsic-config <file>`（JSON）+ `--intrinsic-src <file>`（可重复追加）。
-
-详细支持矩阵和限制见 [doc_ai/capabilities.md](doc_ai/capabilities.md)。
+native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <file>`）。
+配置格式、ABI 契约与示例见 [doc/user_intrinsic.md](doc/user_intrinsic.md)。
 
 ## 模块组成
 
@@ -60,6 +43,22 @@ xmake build mj2x_unittest        # 单元测试
 
 需要 JDK(`JAVA_HOME` 含 `jni.h`)。`--with_tests=y` 时才拉取 gtest(见根目录
 `doc/build-system.md`「gtest 的获取」);`with_mj2x_vmc4` 关闭时 vmc4 后端与测试跳过。
+
+## 运行
+
+```bash
+# 单 class：翻译 + 生成 C（方法标 native）
+mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c
+
+# 完整 jar：整体翻译 + 编译 DLL 并内嵌（运行命令不变）
+mj2x-cli -i app.jar -o app_protected.jar --emit-c app.c --compile
+java -cp app_protected.jar app.Main
+
+# 测试
+xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
+```
+
+详细用法见 [doc/user_guide.md](doc/user_guide.md)。
 
 ## 文档
 
