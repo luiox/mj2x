@@ -40,7 +40,7 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
 // 放同一作用域，对齐该寿命约定。
 RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
                         std::initializer_list<AbstractInsnNode*> insns, int maxStack, int maxLocals,
-                        std::string& reason)
+                        std::string& reason, bool directCalls = false)
 {
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
@@ -64,7 +64,9 @@ RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
         return result;
     }
 
-    RegCEmitter emitter;
+    codegen::CodeOptions options;
+    options.directCalls = directCalls;
+    RegCEmitter emitter(nullptr, options);
     return emitter.emitFunction(*reg);
 }
 
@@ -414,6 +416,39 @@ TEST(RegCTest, InternsRepeatedStaticMethodAndFieldCachesWithinFunction)
 
 TEST(RegCTest, EmitsSelfStaticCallAsDirectCDispatch)
 {
+    // 自递归直调仅在显式开启 directCalls 时发射（默认关闭保持 JVM 栈帧语义）。
+    std::string reason;
+    auto        result = emitRegC("self",
+                           "(I)I",
+                                  {
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new InsnNode(Opcodes::ICONST_1),
+                               new InsnNode(Opcodes::ISUB),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  ca::str::Utf8StringRef::from_cstr("InlineRegC"),
+                                                  ca::str::Utf8StringRef::from_cstr("self"),
+                                                  ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                  false),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           2,
+                           1,
+                           reason,
+                           /*directCalls=*/true);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_cached_i32"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCTest, EmitsJniCallForSelfStaticByDefault)
+{
+    // 默认（directCalls=false）时自递归走 cached JNI（保 JVM 栈帧语义），
+    // 不发射 regc_* 直调（issue #814 regc 2.6 ReTrace）。
     std::string reason;
     auto        result = emitRegC("self",
                            "(I)I",
@@ -433,11 +468,11 @@ TEST(RegCTest, EmitsSelfStaticCallAsDirectCDispatch)
                            reason);
 
     ASSERT_TRUE(result.ok) << result.reason;
-    EXPECT_NE(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
+    EXPECT_EQ(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
+    EXPECT_NE(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("_mj2x_regc_call_cached_i32"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_call_cached_i32"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }
 
@@ -768,7 +803,8 @@ TEST(RegCTest, EmitsIntegerDivRemHelpers)
 RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc,
                                 std::initializer_list<AbstractInsnNode*> insns, int maxStack,
                                 int maxLocals, std::string& reason,
-                                const std::unordered_map<std::string, std::string>& converted)
+                                const std::unordered_map<std::string, std::string>& converted,
+                                bool directCalls = false)
 {
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
@@ -795,6 +831,7 @@ RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc
     RegCCachePool            pool;
     codegen::CodeOptions     options;
     options.resolvedDispatch = true;
+    options.directCalls      = directCalls;
     RegCEmitter emitter(&pool, options, nullptr, 0, nullptr, &converted, nullptr);
     return emitter.emitFunction(*reg);
 }
@@ -803,6 +840,7 @@ TEST(RegCTest, EmitsStaticBoundCallForSingleAllocationReceiver)
 {
     // 动态实例调用 receiver 是单一分配点（new Bar()）且目标方法已转换：
     // 跳过 resolved 运行时类检查，直接调用 regc_* 函数（保留 null 检查）。
+    // 该直调仅在显式开启 directCalls 时发射（默认关闭保持 JVM 栈帧语义）。
     std::string reason;
     auto result = emitRegCResolved("staticBound",
                                    "(I)I",
@@ -827,7 +865,8 @@ TEST(RegCTest, EmitsStaticBoundCallForSingleAllocationReceiver)
                                    2,
                                    1,
                                    reason,
-                                   {{"Bar\ncompute\n(I)I", "regc_test_Bar_compute__I_I"}});
+                                   {{"Bar\ncompute\n(I)I", "regc_test_Bar_compute__I_I"}},
+                                   /*directCalls=*/true);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("regc_test_Bar_compute__I_I("), std::string::npos)

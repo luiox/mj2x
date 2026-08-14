@@ -46,6 +46,12 @@ struct CodeOptions
     /// @details 依赖 finalize 发射的单一 TU 函数表；多文件模式必须关闭。
     bool resolvedDispatch = false;
 
+    /// @brief native-to-native 直接 C 调用（默认关闭）。
+    /// @details 开启时已转换目标走 C 直调（省 JNI 开销），但调用链不产生 JVM
+    /// 栈帧——`Throwable.getStackTrace` / `StackWalker` / 反射等栈观察语义会
+    /// 失真（issue #814 regc 2.6 ReTrace）。默认关闭保证 JVM 栈语义完整。
+    bool directCalls = false;
+
     /// @brief 生成缓存槽溯源注释（默认开，关闭可缩小产物）。
     bool emitCacheTrace = true;
 

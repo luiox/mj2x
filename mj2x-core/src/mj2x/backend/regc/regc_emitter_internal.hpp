@@ -47,6 +47,9 @@ struct RegCFunctionEmitState
     RegCCachePool*                            cachePool = nullptr;
     RegCCommentLevel                          commentLevel = RegCCommentLevel::Summary;
     bool                                      traceCalls   = false;
+    /// native-to-native 直接调用开关（CodeOptions.directCalls；默认关闭保持
+    /// JVM 栈帧语义，见 c_options.hpp）。
+    bool                                      directCalls  = false;
     /// native-to-native 直接调用上下文（compileMethod 传入，nullptr 关闭）。
     CompilerIndex*                            classIndex          = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions = nullptr;

@@ -153,6 +153,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.cachePool                          = cachePool_;
     emitState.commentLevel                       = options_.commentLevel;
     emitState.traceCalls                         = options_.traceCallLog;
+    emitState.directCalls                        = options_.directCalls;
     emitState.classIndex                         = classIndex_;
     emitState.convertedFunctions                 = convertedFunctions_;
     emitState.indyFunctions                      = indyFunctions_;

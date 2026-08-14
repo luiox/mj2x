@@ -57,6 +57,8 @@ static void printUsage()
            "cbackend is a legacy alias)\n");
 #endif
     printf("  --regc-trace-calls          RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）\n");
+    printf("  --regc-direct-calls         RegC: 启用 native-to-native 直接 C 调用（默认关闭：\n"
+           "                                      直调不产生 JVM 栈帧，getStackTrace 等语义失真）\n");
     printf("  --regc-comment-level LEVEL  RegC: 生成注释级别 none|summary|detailed（默认 summary）\n");
     printf("  --regc-safe-env             RegC: 开启 safe-env（JNI 函数表快照 + 方法入口恢复；"
            "捕获时表已污染则 JNI_OnLoad fail closed）\n");
@@ -193,6 +195,7 @@ struct CliOptions
     bool                     llvmToolSelected = false;
     bool                     dumpMIR          = false;
     bool                     regcTraceCalls   = false;
+    bool                     regcDirectCalls  = false;
     mj2x::RegCCommentLevel   regcCommentLevel = mj2x::RegCCommentLevel::Summary;
     bool                     regcSafeEnv      = false;
     bool                     regcSafeEnvDebug = false;
@@ -682,6 +685,8 @@ int main(int argc, char** argv)
             options.dumpMIR = true;
         else if (arg == "--regc-trace-calls")
             options.regcTraceCalls = true;
+        else if (arg == "--regc-direct-calls")
+            options.regcDirectCalls = true;
         else if (arg == "--regc-comment-level" && i + 1 < argc) {
             const std::string level = argv[++i];
             if (level == "none")
@@ -999,6 +1004,7 @@ int main(int argc, char** argv)
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
             if (options.regcTraceCalls) regcBackend->setTraceCallLog(true);
+            if (options.regcDirectCalls) regcBackend->setDirectCalls(true);
             regcBackend->setCommentLevel(options.regcCommentLevel);
             if (options.regcSafeEnv) regcBackend->setSafeEnv(true);
             if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);

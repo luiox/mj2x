@@ -51,7 +51,8 @@ std::string methodKey(const std::string& owner, const std::string& name, const s
 /// 需在渲染声明之前先调用本函数），定义文本由调用方追加在方法体之后。
 std::string buildResolvedDispatchTable(
     const std::unordered_map<std::string, std::string>& functions,
-    const std::unordered_set<std::string>& indyFunctions, codegen::CForwardDeclarations* fwd)
+    const std::unordered_set<std::string>& indyFunctions, codegen::CForwardDeclarations* fwd,
+    bool directCalls)
 {
     CSourceStream src;
     src.setForwardDeclarations(fwd);
@@ -72,9 +73,17 @@ std::string buildResolvedDispatchTable(
         const std::string desc = key.substr(second + 1);
         const auto fnIt = functions.find(key);
         if (fnIt == functions.end() || fnIt->second.empty()) continue;
-        src.emitLine("    {" + codegen::cStringLiteral(owner) + ", " +
-                     codegen::cStringLiteral(name) + ", " + codegen::cStringLiteral(desc) +
-                     ", NULL, (mj2x_regc_fn_ptr_t)&" + fnIt->second + "},");
+        // directCalls 关闭（默认）时 fn 绑 NULL：resolved 调用点命中后走 JNI
+        // CallXxxMethodA（产生 JVM 栈帧，getStackTrace 语义正确，issue #814）。
+        if (directCalls) {
+            src.emitLine("    {" + codegen::cStringLiteral(owner) + ", " +
+                         codegen::cStringLiteral(name) + ", " + codegen::cStringLiteral(desc) +
+                         ", NULL, (mj2x_regc_fn_ptr_t)&" + fnIt->second + "},");
+        } else {
+            src.emitLine("    {" + codegen::cStringLiteral(owner) + ", " +
+                         codegen::cStringLiteral(name) + ", " + codegen::cStringLiteral(desc) +
+                         ", NULL, NULL},");
+        }
     }
     src.emitLine("};");
     src.emitBlankLine();
@@ -468,6 +477,8 @@ struct RegCBackend::Impl
     RegCCachePool             cachePool;
     RegCCommentLevel          commentLevel = RegCCommentLevel::Summary;
     bool                      traceCallLog = false;
+    /// native-to-native 直接 C 调用（--regc-direct-calls；默认关闭保持 JVM 栈帧语义）。
+    bool directCalls = false;
     /// safe-env：JNI 函数表快照 + 方法入口恢复（--regc-safe-env）。
     bool safeEnvEnabled = false;
     bool safeEnvDebug   = false;
@@ -540,6 +551,11 @@ void RegCBackend::setCommentLevel(RegCCommentLevel level)
 void RegCBackend::setTraceCallLog(bool enabled)
 {
     impl_->traceCallLog = enabled;
+}
+
+void RegCBackend::setDirectCalls(bool enabled)
+{
+    impl_->directCalls = enabled;
 }
 
 void RegCBackend::setSafeEnv(bool enabled)
@@ -632,6 +648,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     codegen::CodeOptions emitterOptions;
     emitterOptions.commentLevel    = impl_->commentLevel;
     emitterOptions.traceCallLog    = impl_->traceCallLog;
+    emitterOptions.directCalls     = impl_->directCalls;
     emitterOptions.resolvedDispatch = splitOutputDir_.empty();
     emitterOptions.runtimeProtection = runtimeProtection_;
     RegCEmitter emitter(&impl_->cachePool,
@@ -1306,8 +1323,10 @@ void RegCBackend::finalize(const CompilerIndex& index)
     codegen::CForwardDeclarations fwd;
     std::string                   resolvedDispatchText;
     if (splitOutputDir_.empty()) {
-        resolvedDispatchText =
-            buildResolvedDispatchTable(impl_->convertedFunctions, impl_->indyFunctions, &fwd);
+        resolvedDispatchText = buildResolvedDispatchTable(impl_->convertedFunctions,
+                                                          impl_->indyFunctions,
+                                                          &fwd,
+                                                          impl_->directCalls);
     }
     emitRuntimeHelpers(full,
                        cacheDeclarations,

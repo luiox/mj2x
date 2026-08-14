@@ -392,6 +392,9 @@ static bool tryEmitStaticBoundCall(CSourceStream& out, const RegInstruction& ins
                                    const RegBlock* block,
                                    const std::vector<ca::str::Utf8String>& expressions)
 {
+    // 与 tryEmitDirectCall 一致：直调默认关闭（CodeOptions.directCalls），
+    // 保持 JVM 栈帧语义（getStackTrace/StackWalker/反射，issue #814）。
+    if (!state.directCalls) return false;
     if (ins.args.empty()) return false;
     const RegOperand& receiver = ins.args[0];
     if (receiver.kind != RegOperandKind::Register) return false;
@@ -780,8 +783,11 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
         const bool              staticCall = isStaticCall(ins);
         const bool              selfCall   = isSelfStaticCall(state, ins);
+        // 自递归直调默认关闭（JVM 栈帧语义）；关闭时 selfCall 也走 cached JNI，
+        // 需要 static method cache（原逻辑 selfCall 无 cache）。
+        const bool              selfCallJni = selfCall && !state.directCalls;
         const ca::str::Utf8String cacheName =
-            (staticCall && !selfCall) ? addStaticMethodCache(state, ins) : ca::str::Utf8String();
+            (staticCall && (!selfCall || selfCallJni)) ? addStaticMethodCache(state, ins) : ca::str::Utf8String();
         const ca::str::Utf8String instanceCacheName =
             (!staticCall && !selfCall) ? addInstanceMethodCache(state, ins) : ca::str::Utf8String();
         const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
@@ -828,7 +834,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                               ins.method.name.to_std_string() + "\n" +
                                               ins.method.desc.to_std_string();
                 const auto direct = state.convertedFunctions->find(methodKey);
-                bool        safeDirect = true;
+                bool        safeDirect = state.directCalls;   // 直调默认关闭（JVM 栈帧语义）
                 if (state.indyFunctions != nullptr &&
                     state.indyFunctions->count(methodKey) != 0) {
                     safeDirect = false;
@@ -874,7 +880,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             }
             else if (ins.hasDest) {
                 u.appendLineStart(destName).append(" = ");
-                if (selfCall) {
+                if (selfCall && state.directCalls) {
                     u.append(state.functionName)
                         .append("(")
                         .append(directCallArgs(ins.args, argumentExpressions))
@@ -920,7 +926,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             }
             else {
                 u.appendLineStart();
-                if (selfCall) {
+                if (selfCall && state.directCalls) {
                     u.append(state.functionName)
                         .append("(")
                         .append(directCallArgs(ins.args, argumentExpressions))

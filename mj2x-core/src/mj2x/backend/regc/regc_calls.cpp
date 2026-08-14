@@ -178,6 +178,10 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
                        const std::unordered_map<std::string, std::string>* convertedFunctions,
                        const std::unordered_set<std::string>* indyFunctions)
 {
+    // 直调默认关闭（CodeOptions.directCalls）：C 直调不产生 JVM 栈帧，
+    // getStackTrace/StackWalker/反射等栈观察语义失真（issue #814）。开启仅
+    // 用于性能优先且确认无栈观察的产物。
+    if (!state.directCalls) return false;
     if (convertedFunctions == nullptr) return false;
     if (isSelfStaticCall(state, ins)) return false;
     const std::string name = ins.method.name.to_std_string();
