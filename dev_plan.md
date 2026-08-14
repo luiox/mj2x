@@ -17,6 +17,7 @@
 | 八（#818 intrinsic） | 用户自定义 intrinsic 三后端机制 | ✅ 完成（PR #826，已合并） |
 | 九（#827 VMC4 粒度） | program 粒度（全程序共享 VM） | ✅ 完成（见 PR） |
 | 十（#829 混淆借鉴） | Cloakwork 借鉴项：RegC 可选混淆增强（CFF 死块/state 加密/深 MBA/opaque-零），全部默认关闭 | ✅ 完成（见 PR；默认产物零变化） |
+| 十一（混淆默认关） | RegC 基础三项（MBA/opaque/CFF）默认关闭；`--regc-obfuscate` 显式开启；#829 开关联动基础项 | ✅ 完成（见 PR；RegC 默认产物语义直译零混淆） |
 
 ## 待做项
 
@@ -67,6 +68,9 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   （demorgan/shift-pair/or-dec）。全部默认关闭（新 CLI 开关：`--regc-cff-dead` /
   `--regc-cff-state-encrypt` / `--regc-mba-deep` / `--regc-opaque-zero` /
   `--regc-transform-seed`）；默认产物零变化，同 seed 同产物。
+- 2026-08-15：**主线十一（混淆默认关）**——基础三项 MBA/opaque/CFF 默认关闭
+  （RegC 语义直译、最快路径）；新增 `--regc-obfuscate` 显式开启基础三项；
+  #829 增强开关联动对应基础项（mbaDeep→MBA、opaqueZero→opaque、cff-*→CFF）。
 - 2026-08-15：**主线八完成（PR #826 已合并）**——用户 intrinsic 三后端（#818）+
   mtest_set Wave3（#820 首批）。
 - 2026-08-15：**主线九（#827）**——VMC4 granularity=program（全程序共享 VM 实例），
