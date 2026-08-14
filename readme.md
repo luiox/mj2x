@@ -10,35 +10,63 @@
 | 后端 | 定位 | 输出风格 |
 |---|---|---|
 | **StackC** | 广覆盖正确性基线 | `union jvalue stack[]` + `sp` 操作(stack-style) |
-| **RegC** | 保护导向,抗 c2j 分析 | 虚拟寄存器 + block label,无栈锚点 |
+| **RegC** | 保护导向,抗 c2j 分析 | 虚拟寄存器 + block label,无栈锚点(默认走 JNI 调用保 JVM 栈帧语义,`--regc-direct-calls` 可开启直调) |
+| **VMC4** | VM 虚拟化(保护导向,性能非关键) | 表驱动解释器,编译期随机化 + 执行期 dispatch drift(`--vmc4-drift`) |
 
 详细支持矩阵和限制见 [doc_ai/capabilities.md](doc_ai/capabilities.md)。
 
 ## 模块组成
 
-- `mj2x-cli/` — 命令行入口、参数解析、native 编译器调用
+- `mj2x-cli/` — 命令行入口、参数解析、native 编译器调用(xmake / CMake / pipe)
 - `mj2x-core/src/mj2x/core/` — Pipeline / CompilerIndex
 - `mj2x-core/src/mj2x/io/` — InputLoader / OutputWriter(`.class` / `.jar`)
 - `mj2x-core/src/mj2x/frontend/` — MIR / Block / CodeConverter / MethodStack
-- `mj2x-core/src/mj2x/backend/` — StackCBackend / RegCBackend
+- `mj2x-core/src/mj2x/backend/` — StackCBackend / RegCBackend / Vmc4Backend(及 LLVM IR 后端,默认关闭)
 - `mj2x-core/src/mj2x/preprocessor/` — 可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll / NativeAnnotation)
 - `mj2x-annotations/` — 用户可引入的 `@mj2x.Native` 注解源码
 - `mj2x-runtime/` — RegC R3 runtime(crypto / kernel / stringpool / antidebug / antijvmti)
+- `mj2x-crt/` — C 运行时(regc/vmc4 生成工程内嵌源,含 safe-env、rt_protect 反侦测)
+- `unittest/` — 单元测试 + E2E(backend / cli / codegen / core)
+- `benchmark/` — 性能基准(jvm-obf-tester 13-probe vs os30,JNIC 对比)
 
 ## 构建
 
 ```bash
-xmake f --with_mj2x=y
-xmake build mj2x-cli
+xmake f --with_mj2x=y            # 启用 mj2x(可选 --with_mj2x_vmc4=y --with_tests=y)
+xmake build mj2x-cli             # CLI
+xmake build mj2x_unittest        # 单元测试
 ```
 
-需要 JDK(`JAVA_HOME` 含 `jni.h`)。
+需要 JDK(`JAVA_HOME` 含 `jni.h`)。`--with_tests=y` 时才拉取 gtest(见根目录
+`doc/build-system.md`「gtest 的获取」);`with_mj2x_vmc4` 关闭时 vmc4 后端与测试跳过。
 
 ## 文档
 
+### 使用
+
 - **[doc/user_guide.md](doc/user_guide.md)** — 怎么用(命令、参数、示例、FAQ)
-- **[doc_ai/capabilities.md](doc_ai/capabilities.md)** — 已实现功能清单 + MVP 边界
-- [doc/roadmap.md](doc/roadmap.md) — 能力路线图和 v2.1 优先级
+- [doc/config_file.md](doc/config_file.md) — JSON 配置文件
+- [doc/compile_system_tech.md](doc/compile_system_tech.md) — 编译系统(pipe / xmake / cmake)技术说明
+- [doc/dependencies.md](doc/dependencies.md) — 依赖
+
+### 架构与设计
+
 - [doc/architecture.md](doc/architecture.md) — 当前架构概览
+- [doc/roadmap.md](doc/roadmap.md) — v2.2 能力路线图与优先级
+- [doc_ai/ir_design.md](doc_ai/ir_design.md) / [doc_ai/ssa_algorithm.md](doc_ai/ssa_algorithm.md) — MIR/SSA
+- [doc_ai/regc_codegen.md](doc_ai/regc_codegen.md) / [doc_ai/regc_intrinsic.md](doc_ai/regc_intrinsic.md) — RegC 生成与 intrinsic
+- [doc_ai/vmc4_multi_vm_design.md](doc_ai/vmc4_multi_vm_design.md) / [doc_ai/vmc4_red_team_contract.md](doc_ai/vmc4_red_team_contract.md) — VMC4 设计与红队契约
+- [doc_ai/capabilities.md](doc_ai/capabilities.md) — 已实现功能清单 + 边界
+- doc_ai/ 完整索引见 [doc_ai/README.md](doc_ai/README.md)
+
+### 后端
+
 - [doc/stackc_backend_readme.md](doc/stackc_backend_readme.md) / [doc/regc_backend_readme.md](doc/regc_backend_readme.md) — 各后端支持矩阵
-- [doc/mvp_release_scope.md](doc/mvp_release_scope.md) — MVP 功能冻结范围
+- [doc_ai/regc_safe_env.md](doc_ai/regc_safe_env.md) — safe-env(JNI 函数表恢复)
+- [doc_ai/regc_template_engine.md](doc_ai/regc_template_engine.md) — 模板化源码生成引擎
+
+### 测试与验证
+
+- [doc_ai/test_strategy.md](doc_ai/test_strategy.md) / [doc/regc_test_strategy.md](doc/regc_test_strategy.md)
+- [doc_ai/performance_evaluation_spec.md](doc_ai/performance_evaluation_spec.md) — 性能评测方法学
+- [benchmark/README.md](benchmark/README.md) — 基准脚本与结果

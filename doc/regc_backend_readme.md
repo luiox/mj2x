@@ -11,8 +11,9 @@ L1 stack MIR -> SSA -> RegIR -> RegC -> JNI wrapper / R3 runtime helpers
 目标是让生成 C 呈现 virtual-register、block label、edge copy、helper/runtime call 的结构，
 逐步减少 c2j 对 `cstack[]`、`sp`、全局 method/class table 等固定形状的依赖。
 
-当前 RegC 已达到内部 MVP：可通过 CLI 生成 RegC C 源，能对一组 javac 常见形状做 native
-DLL E2E 行为对比，并已把 integer div/rem/barrier 迁到 R3 runtime ABI。
+当前 RegC 已过 MVP：真实 jar（JavaObfuscatorTest）业务方法 100% 转 native（零 skip），
+JDK17/21 双矩阵性能追平并反超 JNIC 竞品 os30（见 benchmark/results）；v2.2 持续
+迭代（safe-env、反侦测、模板化发射器、栈帧语义修复）。
 
 ## CLI 用法
 
@@ -43,6 +44,7 @@ native。JAR 输入仍沿用 mj2x pipeline 的整包读写能力；signed-JAR me
 | mjdbg register/runtime samples | 支持生成 | `RegCTraceSamples.GenerateMjdbgFixtures` |
 | receiver 精确类型静态绑定（分配点传播） | 支持 | `RegCTest.EmitsStaticBoundCallForSingleAllocationReceiver`、`KeepsResolvedDispatchForUnknownReceiverType` |
 | 字符串常量按内容缓存（免每次 NewStringUTF） | 支持 | RegC 单测 98/98 回归（intrinsic string literal 缓存） |
+| native 互调默认走 JNI（JVM 栈帧语义） | 支持 | `RegCTest.EmitsJniCallForSelfStaticByDefault`；`--regc-direct-calls` 显式开启直调（#814/#816） |
 | 性能：13-probe 双 JDK 对比 os30(JNIC) | 反超 | `mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1`（JDK21 0.88x） |
 
 ## RegC E2E 覆盖

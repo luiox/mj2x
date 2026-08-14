@@ -1,5 +1,11 @@
 # mj2x MVP Release Scope
 
+> **历史文档（归档）**：本文是 2026-07-06 冻结的 mj2x 0.1 内部 MVP 发布范围。
+> v2.1 已发布（2026-08），v2.2（转正与可用化）进行中——当前范围以
+> [roadmap.md](roadmap.md) 与 [dev_plan.md](../dev_plan.md) 为准。本文仅作历史
+> 依据保留，其中"Explicitly Out of Scope"多项（VMC4、invokedynamic、JNI ID 缓存、
+> L4 变换等）已在后续迭代落地。
+
 > 2026-07-06 freeze decision: this document is the authority for the mj2x 0.1
 > internal MVP release scope.  It supersedes the historical `mvp_plan.md`,
 > which described the first single-class StackC prototype.

@@ -295,8 +295,32 @@ xmake run mj2x_integration_test
 - doc_ai/ 新增设计文档：异常精确化设计（随主线三）、反侦测体系设计（随主线四）
 - doc/roadmap.md 状态同步（VMC4 可用版收口；反侦测体系列入 v2.2）
 
+### 主线六：剩余 issue 规划（2026-08-14 梳理）
+
+> 依据：#787 §3 余项、#762 升级档。已完成的 issue 状态与 PR 对应见 issue 本体
+> （#748→#754/#768、#762 低风险档→#766、#814→#816）。
+
+| 待办 | 依据 | 优先级 | 前置条件 | 建议形态 |
+|---|---|---|---|---|
+| **方法内联 pass（RegIR 层）** | #787 §3.1 余项 | P1（性能） | 1.1 基线数据已就绪；直调默认关闭后 JNI 开销成为热点，内联收益放大 | 独立分支 feat/mj2x-regc-inline；验收 = benchmark 加速比 + 全量单测 |
+| **System.arraycopy 等更宽 intrinsic** | #787 §3.1 / dev_plan 1.2 | P1（性能） | 无 | 并入内联分支或独立小提交 |
+| **VMC4 升级档：period 语义变义** | #762 升级档 | P2 | 低风险档验证通过（已达成）；mjdbg 对抗验证闭环（#756 就绪） | 独立分支 feat/mj2x-vmc4-mutation；红队契约扩展同批 |
+| **红队契约扩展（变义强度模型）** | #762 | P2 | mjdbg 就绪 | 随升级档 |
+| **VMC4 检查点指令级异常匹配** | dev_plan 主线三"后续" | P3（记录不阻塞） | javac 字节码下块粒度==指令粒度，无实际缺口 | 需要 MIR/SSA/RegIR 指令带原始指令序号 |
+| **agent 特征深度检测（javaagent MANIFEST 扫描 / JDWP 探测）** | 主线四"后续" | P3（记录不阻塞） | 类路径枚举；JDWP 易误报 | 随反侦测迭代 |
+
+> 注：1.6 Pool（#814）与 2.8 Sec 为测试固有竞态/良性项，不做转换侧修复；
+> 直调开关（#816）保持默认关闭，性能敏感产物显式 `--regc-direct-calls`。
+
 ## 日志
 
+- 2026-08-14：**issue 梳理**（#748 关闭标 PR #754/#768；#762 低风险档=PR #766 勾选；
+  #787 mj2x 段勾选 VMC4 可用版/性能线并标 PR；#783 记录现状评论）。文档系统梳理：
+  readme.md 补 VMC4/模块/构建/索引；doc_ai/README.md 索引新建；roadmap.md 同步 v2.2
+  现状（VMC4 主线完成、反侦测完成）；architecture.md 补 VMC4 后端；user_guide.md 补
+  后端专属参数表与 --generate-xmake、修正 vmc4 状态；capabilities.md 新增 §4 VMC4
+  章节（章节重编号）+ RegC 直调说明；mvp_release_scope.md 归档标注；regc_backend_readme.md
+  状态更新。**#816 直调默认关闭已合入**（性能影响 ~1%）
 - 2026-08-13：开分支 feat/mj2x-v2.2；依据 issue #787 §3 建立本计划（替换已完结的
   RegC 模板引擎旧计划）
 - 2026-08-13：VMC4 发射器迁移到 codegen 工具层（CSourceStream），消除源码 `+=` 拼接
@@ -350,3 +374,23 @@ xmake run mj2x_integration_test
   MSVC 编译链 → DLL 验证）；4.4 agent 参数收集（Windows 引号感知切分/Linux
   cmdline）；61+全量回归绿；真实样本转化率 TEST.jar 100% / snake(AquaShield) 73% /
   jvm-obf-tester 85%（fail-closed 均已知 MVP 边界，报告本地）
+
+### 主线七：mj2x 自建测试集（issue #820，2026-08-14 记录，待做）
+
+> 用户需求（2026-08-14）：mj2x 需要**自己的系统性测试集**，在 mtest_set 中新建测试，
+> 吸收开源测试经验并超越——做得更全、更好。参考：
+> huzpsb/JavaObfuscatorTest（13-probe，性能/语义，已吸收 os30 对比基线）、
+> bludnov/Obfuscation-Tester（混淆器语义保持统一测试面）、ttvar/jvm-obf-tester
+> （JVM 混淆器行为对比）。
+
+| 步骤 | 内容 | 状态 |
+|---|---|---|
+| 1 | 需求调研：三家测试集用例清单/断言方法/评分口径对比 | 待做 |
+| 2 | 设计：mtest_set 中 mj2x 测试集目录结构、用例模板、断言器、矩阵配置（后端 × JDK × 混淆形态） | 待做 |
+| 3 | 首批用例：语义保持核心面（算术/控制流/异常/对象/数组/调用/反射/动态代理/多线程/String/集合/时间/IO） | 待做 |
+| 4 | 三后端矩阵（StackC/RegC/VMC4 × drift/种子/粒度变体）同测试面 | 待做 |
+| 5 | 性能回归自动化（benchmark 13-probe 扩展并入测试集） | 待做 |
+| 6 | mjdbg 对抗闭环（每个用例 expected trace surface + weakness report） | 待做 |
+
+验收：测试集覆盖面和断言强度超过三家参考；三后端/多 JDK 一键矩阵；性能与语义
+同一入口回归。

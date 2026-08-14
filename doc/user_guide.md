@@ -128,16 +128,47 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
 | `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm`。**v2.1 发布关闭**：`with_mj2x_llvm` 默认 off，CLI 不暴露该选项 |
 | `--config <file>` | 从 JSON 配置读取默认参数,命令行显式参数覆盖配置 |
-| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码（**v2.1 关闭**）；`vmc4` 为测试性功能（窄面 fail-closed） |
+| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码（**v2.1 起关闭**）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
 | `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++` |
 | `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用（**v2.1 发布关闭**，与 `--backend llvm` 一并不可用） |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
+| `--generate-xmake <dir>` | 生成独立 xmake native 工程（推荐；CLI 内嵌 mj2x-crt 源，配合 `--compile` 一键出 DLL/SO） |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--quiet` | 日志只保留警告与错误（stderr） |
 | `--verbose` | 日志提升到 debug 级别（stderr） |
 | `--help` | 打印帮助 |
+
+### 4.0.1 后端专属参数
+
+RegC：
+
+| 参数 | 说明 |
+|---|---|
+| `--regc-trace-calls` | 生成运行时调用日志（`[CALL]`/`[DEEP]`，stderr，排查用） |
+| `--regc-direct-calls` | 启用 native-to-native 直接 C 调用（**默认关闭**：直调不产生 JVM 栈帧，`Throwable.getStackTrace` 等语义失真，issue #814/#816）。仅用于性能优先且确认无栈观察的产物 |
+| `--regc-safe-env` | 开启 safe-env：JNI 函数表快照 + 方法入口恢复，阻断 agent 的 JNI hook（issue #748） |
+| `--regc-safe-env-debug` | safe-env 调试观察模式（检出 hook 只告警不 fail，隐含开启 `--regc-safe-env`） |
+| `--regc-comment-level <none\|summary\|detailed>` | 生成注释级别（默认 summary） |
+
+VMC4：
+
+| 参数 | 说明 |
+|---|---|
+| `--vmc4-dispatcher <switch_table\|func_ptr\|if_nest\|state>` | 解释器分派形态（默认 switch_table） |
+| `--vmc4-seed <n>` | 编译期随机化种子 |
+| `--vmc4-granularity <class\|method>` | 随机化粒度（默认 class） |
+| `--vmc4-alias <n>` / `--vmc4-bogus <n>` | 别名/伪 handler 数量 |
+| `--vmc4-drift <0..4>` | 执行期 dispatch 变体数（默认 0 关闭；issue #762 低风险档） |
+| `--vmc4-drift-period <bytes>` | drift 变体切换周期（默认 16） |
+
+通用（RegC/VMC4）：
+
+| 参数 | 说明 |
+|---|---|
+| `--runtime-protection <none\|log\|delay\|fake\|terminate>` | 反侦测检查点注入（方法入口 `mj2x_rt_checkpoint_run`） |
+| `--runtime-protection-step <n>` / `--runtime-protection-delay <ms>` | 检查点步长/延迟参数 |
 
 ### 4.1 日志
 
@@ -312,12 +343,14 @@ java -Djava.library.path=. Hello
 |---|---|
 | 需要最大正确性覆盖、不关心抗分析 | StackC |
 | 保护导向,需要无栈输出抗 c2j | RegC |
+| 需要 VM 虚拟化 + 编译期/执行期随机化 | VMC4（保护导向，性能非关键） |
 | 需要除零 trap 符合 JVM 语义 | RegC + R3 runtime |
 | 代码大量使用 `Math.*` / `Integer.parseInt` / 包装类拆箱 / `Random.next*` | RegC + R3 runtime intrinsic |
 
 后端的详细支持矩阵和限制:
 - StackC:`doc/stackc_backend_readme.md`
 - RegC:`doc/regc_backend_readme.md`
+- VMC4:`doc_ai/vmc4_multi_vm_design.md`（能力边界见 `doc_ai/capabilities.md §4`）
 
 ### 7.1 RegC intrinsic 支持范围
 

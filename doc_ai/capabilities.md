@@ -162,13 +162,56 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。LLVM IR 由 clang 或 `llc -> clang` 编译，不使用 `--c-compiler`。
 - `--regc-trace-calls`、`--regc-safe-env`、`--regc-safe-env-debug` 均要求 `--backend regc`；safe-env 默认关闭，开启才产生运行时开销
+- **native-to-native 调用默认走 JNI（#814/#816）**：已转换目标间的 direct C 调用不产生 JVM 栈帧，`Throwable.getStackTrace` / `StackWalker` / 反射的栈观察语义会失真（regc 2.6 ReTrace 实证）。默认 `CodeOptions.directCalls=false`，所有调用经 JNI `Call*MethodA` 保帧；`--regc-direct-calls` 显式开启直调（性能优先且确认无栈观察的产物）。实测 obf.jar 总耗时影响约 1%
 - `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
 - `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-crt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 当前明确拒绝这两条工程生成路径。
 
 ---
 
-## 4. R3 Runtime 基础
+## 4. VMC4(VM 虚拟化后端)
+
+定位:VM 虚拟化后端(保护导向,性能非关键)。流水线:L1 stack MIR → SSA → RegIR →
+VMC4 VM 编码。RegIR 编码为 per-method VM 字节流(编译期 opcode 随机化,seed 驱动、
+per-class/method 粒度、ALT 别名、super-op、bogus handler),解释器 4 种 dispatcher
+形态(switch_table / func_ptr / if_nest / state),执行期 dispatch drift
+(`--vmc4-drift <0..4>` + `--vmc4-drift-period`,语义标签按字节偏移周期轮转,
+语义绝对安全——unmap 是纯函数,canonical handler 不变;issue #762 低风险档,PR #766)。
+
+**调用/字段/数组/分配**:per-callsite 独立 JNI helper(懒缓存 class/method/field ID +
+按 argKinds marshalling + Call[Static]<Type>MethodA),经 `mj2x_vm_call_table_<tag>[]`
+函数指针表分派;invokespecial → CallNonvirtual,invokevirtual/interface → JVM 虚分派;
+字段 accessor 按声明类型精确选择;null receiver/数组显式 NPE;越界交 JNI 抛 AIOOBE;
+MULTIANEWARRAY 共享递归 helper 按 JVM eager 语义逐层分配;String LDC 物化为常量槽
+(wrapper NewStringUTF 预加载)。
+
+**异常语义**:编码期把异常区域静态展开为 VmExceptionRegionEntry(handler/caughtType/
+exceptionReg + 边拷贝),dispatcher 循环底部 ExceptionCheck → ExceptionOccurred →
+按块线性扫描活跃条目 → IsInstanceOf 匹配 → 边拷贝 + 异常写 exceptionReg;未匹配
+重新 Throw 挂起 + status=1 传播。除零 ArithmeticException、athrow(null → NPE)。
+
+**intrinsic 子集**:array.length / cmp.nan_* / instanceof:<desc> / monitor.enter|exit
+按名称泛化分派(per-intrinsic helper);Math/wrapper 走普通 Call(JNI);与 RegC 双后端
+对拍(`MathIntrinsicDualBackendParity`)。
+
+**float 精度(JVM 语义)**:FADD/FSUB/FMUL/FDIV/FREM 与 SuperInc/SuperDec 的 float
+分支按 float 精度运算并正确舍入回 float 存槽(slot 是 double——不做 float 舍入会
+引入 double 中间精度,比较/再次运算差 1 ULP;issue #814/#816 修复)。
+
+**转化率(v2.2 可用版)**:真实 jar(jvm-obf-tester)业务方法 100% 转 VM;
+VMC4 单测 45 + e2e 56 全绿(4 dispatcher × drift 全开,`-Xverify:all` round-trip);
+转化率报告基建 `test/mj2x/vmc4_conversion_report.md`。
+
+**CLI**:`--backend vmc4` + `--vmc4-dispatcher` / `--vmc4-seed` / `--vmc4-granularity` /
+`--vmc4-alias` / `--vmc4-bogus` / `--vmc4-drift` / `--vmc4-drift-period` /
+`--vmc4-trace-surface`;`--runtime-protection` 检查点注入通用(RegC/VMC4)。
+
+**已知限制**:MULTIANEWARRAY 初始 fail-closed 已放开;仍 fail-closed:反射、动态类加载、
+invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标。
+
+---
+
+## 5. R3 Runtime 基础
 
 | 模块 | 状态 |
 |---|---|
@@ -191,7 +234,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 
 ---
 
-## 5. 项目结构 + codegen 工具层
+## 6. 项目结构 + codegen 工具层
 
 **模块化目录**(对齐 `libs/libjbytecode/<module>/` 子库模式):
 
@@ -222,7 +265,7 @@ mj2x/
 `c_helpers.hpp`（RegC 同源共用），浮点字面量走 `formatFloatLiteral`（`%.*g`，与
 `setprecision` 默认格式同规则，不依赖 ostringstream/iomanip）。
 
-## 6. 能力索引
+## 7. 能力索引
 
 | 能力域 | 当前权威来源 |
 |---|---|
@@ -234,7 +277,7 @@ mj2x/
 | 用户注解包 | `mj2x/mj2x-annotations/` |
 | protected samples | `mj2x/test_resource/protected_samples/` |
 
-## 7. mtest_set 集成（跨产品共享样本）
+## 8. mtest_set 集成（跨产品共享样本）
 
 mj2x 消费 `mtest_set`（全仓库中性 Java 样本库）的 baseline、Wave 1
 （G3 类型转换/G6 方法调用/G7 字段）和 Wave 2（G9 对象与类型/G10 异常与 monitor/
@@ -258,7 +301,7 @@ RegC exception handler local 未通过异常边传递的问题，`g10.monitor` �
 
 ---
 
-## 8. 验证入口
+## 9. 验证入口
 
 ```bash
 xmake build mj2x-core
@@ -279,7 +322,7 @@ Linux CI 安装 OpenJDK 17，并构建、执行 `mtest_set_unittest`、`mj2x_uni
 
 能力到测试的追溯见本文档各能力表的"验证"列与 `test_strategy.md`。
 
-## 9. Validation maturity
+## 10. Validation maturity
 
 - 首切片：`script/validate_release.ps1 -Layer mj2x -Mode release` 覆盖 build、unit、CLI smoke，并产出 `build/artifacts/windows/x64/<mode>/mj2x/mj2x-windows-x64-<mode>.zip` 与 `SHA256SUMS`。
 - Windows 原生工具链实测：MSVC、Clang/Clang++、Zig、xmake 和 CMake 的 class/JAR、file/pipe 与 C++17 编译由 `CliTest.*` 覆盖（见 test_strategy §1.1）；Linux/macOS/GCC 的覆盖由对应平台 CI 提供。
