@@ -33,6 +33,18 @@
 
 - ~~period 语义变义（#762 升级档）~~ **已完成**（case 标签周期轮换，见日志
   「主线四完成（#762）」；强度实测待 mjdbg 对抗侧）。
+- **红队前置已就绪（2026-08-15）**：mjdbg N-7 VMC4 ISA 恢复工具 v1 交付
+  （`mjdbg/mjdbg-isa-recovery/`，PR #845）——五 dispatcher 形态识别 +
+  字节集合枚举（canonical/别名/drift unmap）+ handler 语义标注（真实产物
+  20/20 对映）+ trace-surface 对账。实测：switch_table+drift2/16 与
+  if_nest+drift4/32 不同 seed 样本均静态全恢复、跨实例复用率 100%
+  （§4.1 复用率 = 100% 意味着低风险档的"跨实例可复用"归零基准已达成，
+  升级档 S2 的启动条件满足）。
+- **N-7 全闭环（2026-08-19）**：动态对拍（native/JNI trace 互证）与
+  weakness report 通路接入已完成；period 语义变义（#844）对抗（label 表
+  提取 + case 常量反查 + caseLabelPerms 对账）与 computed_goto 真实产物
+  闭环（含生成侧 `::` label 修复）均完成——五形态真实产物 + 动态对拍
+  全部就绪，可开 feat/mj2x-vmc4-mutation；红队契约扩展同批。
 
 ### C. mj2x 自建测试集（#820，步骤 5-6）
 
