@@ -54,6 +54,7 @@
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
 #include "mj2x/codegen/runtime_protection.hpp"
+#include "mj2x/mir/passes/reg_transform_passes.hpp"
 
 #include <memory>
 #include <string>
@@ -164,6 +165,12 @@ public:
     /// 必须在 compileMethod 之前调用。
     void setUserIntrinsics(const UserIntrinsicConfig& config) override;
 
+    /// @brief 设置 RegIR 变换选项（issue #829，Cloakwork 借鉴项）。
+    ///
+    /// @details 新增的 CFF 死块 / state 加密 / 深 MBA / opaque-零变体默认关闭；
+    /// 必须在 compileMethod 之前调用。同 seed 同产物（可复现构建不变量）。
+    void setTransformOptions(const RegTransformOptions& options) { transformOptions_ = options; }
+
     /// @brief Full generated C translation unit after finalize.
     ///
     /// @details
@@ -184,6 +191,7 @@ private:
     std::string splitOutputDir_;
     std::string sourceCode_;
     codegen::RuntimeProtectionOptions runtimeProtection_;
+    RegTransformOptions               transformOptions_;
 };
 
 }   // namespace mj2x

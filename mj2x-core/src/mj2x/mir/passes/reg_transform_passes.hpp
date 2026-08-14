@@ -19,6 +19,22 @@ struct RegTransformOptions
     bool enableMba                   = true;
     bool enableOpaquePredicates      = true;
     bool enableControlFlowFlattening = true;
+
+    // ---- #829 P0：Cloakwork 借鉴项（全部默认关闭，保 RegC 高性能定位）----
+    /// CFF 恒假死块密度：0 = 关闭；N > 0 = 每 N 个 dispatcher 跳转注入 1 个
+    /// 恒假死块（条件依赖运行时 state，编译器无法证明恒假 → 不可 DCE）。
+    ca::u32 cffDeadBlockDensity = 0;
+    /// CFF state 码派生随机映射（splitmix64(seed, index)）+ dispatcher 入口
+    /// 状态异或（case 常量与写入值不同）。
+    bool cffStateEncryption = false;
+    /// 深 MBA：Add 展开为 De Morgan/进位链（per-site 变体），链中夹
+    /// `mj2x_regc_barrier` 防编译器折叠。
+    bool mbaDeep = false;
+    /// opaque-零恒等变体扩展：consec_product / demorgan / gauss（恒真且
+    /// 溢出安全，位运算语义），按块序选变体。
+    bool opaqueZero = false;
+    /// 变换种子：派生 state 码 / 变体选择均从此确定性派生（同 seed 同产物）。
+    uint64_t transformSeed = 0;
 };
 
 /// @brief Per-function transform counters used by tests and diagnostics.
@@ -27,6 +43,9 @@ struct RegTransformStats
     ca::usize mbaRewrites          = 0;
     ca::usize opaquePredicates     = 0;
     ca::usize cffEdgeSetters       = 0;
+    ca::usize cffDeadBlocks        = 0;
+    ca::usize mbaDeepRewrites      = 0;
+    ca::usize opaqueZeroPredicates = 0;
     bool      controlFlowFlattened = false;
 };
 

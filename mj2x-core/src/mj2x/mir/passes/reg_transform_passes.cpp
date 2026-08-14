@@ -10,6 +10,11 @@
 namespace mj2x {
 namespace {
 
+// 前置声明（定义在文件后部；applyMbaDeep / applyControlFlowFlattening 先使用）。
+uint64_t splitmix64(uint64_t x);
+void applyCffDeadBlocks(RegFunction& function, const RegTransformOptions& options,
+                        RegValue state, ca::u32& nextRegister, RegTransformStats& stats);
+
 bool hasObservableEffect(const SSAEffect& effect)
 {
     return effect.mayThrow || effect.readsMemory || effect.writesMemory ||
@@ -52,6 +57,27 @@ RegInstruction makeCopy(RegValue dest, RegOperand source)
     instruction.dest    = dest;
     instruction.copy    = RegCopy{dest, std::move(source)};
     instruction.effect  = SSAEffect::pure();
+    return instruction;
+}
+
+RegInstruction makeUnary(RegValue dest, RegOperand value, SSAUnaryOp op)
+{
+    RegInstruction instruction;
+    instruction.kind    = RegInstructionKind::Unary;
+    instruction.hasDest = true;
+    instruction.dest    = dest;
+    instruction.value   = std::move(value);
+    instruction.unaryOp = op;
+    instruction.effect  = SSAEffect::pure();
+    return instruction;
+}
+
+RegInstruction makeBarrier(const char* reason)
+{
+    RegInstruction instruction;
+    instruction.kind          = RegInstructionKind::Barrier;
+    instruction.barrierReason = reason;
+    instruction.effect        = SSAEffect::barrier();
     return instruction;
 }
 
@@ -216,6 +242,97 @@ void applyMba(RegFunction& function, ca::u32& nextRegister, RegTransformStats& s
     }
 }
 
+/// 深 MBA（#829 P0-2，吸收 Cloakwork De Morgan/进位链 + volatile 防折叠思路）。
+///
+/// 用 `mj2x_regc_barrier`（RegIR Barrier，发射为运行时调用，副作用语义）夹住
+/// 恒等链，C 编译器无法折叠中间步骤。每调用点按 (blockId*7 + 指令序号) 选变体：
+/// - 变体 0（De Morgan）：a+b = ~(~a&~b) ^ ~(~a|~b) + 2*(~(~a&~b) & ~(~a|~b))
+/// - 变体 1（carry 两轮）：a+b = ((a^b) ^ ((a&b)<<1)) + (((a^b) & ((a&b)<<1)) << 1)
+/// 均为位运算恒等，溢出安全（模 2³² 语义）。默认关闭（mbaDeep=false 走基础 MBA）。
+void applyMbaDeep(RegFunction& function, ca::u32& nextRegister, uint64_t seed,
+                  RegTransformStats& stats)
+{
+    ca::u32 site = 0;
+    for (auto& block : function.blocks) {
+        std::vector<RegInstruction> transformed;
+        transformed.reserve(block->instructions.size() * 10);
+        for (const auto& instruction : block->instructions) {
+            if (!canRewriteMba(instruction)) {
+                transformed.push_back(instruction);
+                continue;
+            }
+            const SSAType type = instruction.dest.type;
+            const auto    lhs  = instruction.lhs;
+            const auto    rhs  = instruction.rhs;
+            const bool    variant = ((splitmix64(seed ^ (site++ * 0x9E3779B97F4A7C15ull)) & 1u) == 0);
+            RegValue      r{RegId{nextRegister++}, type};
+            if (variant) {
+                // De Morgan 展开：t1=~a, t2=~b, t3=~t1|~t2(=a&b), t4=~t1&~t2(=a|b),
+                // t5=t4^t3(=a^b), t6=t3<<1, r=t5+t6
+                const RegValue t1{RegId{nextRegister++}, type};
+                const RegValue t2{RegId{nextRegister++}, type};
+                const RegValue t3{RegId{nextRegister++}, type};
+                const RegValue t4{RegId{nextRegister++}, type};
+                const RegValue t5{RegId{nextRegister++}, type};
+                const RegValue t6{RegId{nextRegister++}, type};
+                transformed.push_back(makeUnary(t1, lhs, SSAUnaryOp::BitNot));
+                transformed.push_back(makeUnary(t2, rhs, SSAUnaryOp::BitNot));
+                transformed.push_back(makeBinary(
+                    t3, RegOperand::fromRegister(t1), RegOperand::fromRegister(t2),
+                    SSABinaryOp::Or));
+                transformed.push_back(makeBinary(
+                    t4, RegOperand::fromRegister(t1), RegOperand::fromRegister(t2),
+                    SSABinaryOp::And));
+                transformed.push_back(makeBarrier("mba_deep"));
+                transformed.push_back(makeBinary(
+                    t5, RegOperand::fromRegister(t3), RegOperand::fromRegister(t4),
+                    SSABinaryOp::Xor));
+                transformed.push_back(makeBinary(
+                    t6, RegOperand::fromRegister(t3), RegOperand::fromInt(1, type),
+                    SSABinaryOp::Shl));
+                transformed.push_back(makeBarrier("mba_deep"));
+                transformed.push_back(makeBinary(r, RegOperand::fromRegister(t5),
+                                                 RegOperand::fromRegister(t6), SSABinaryOp::Add));
+            }
+            else {
+                // carry 两轮：t1=a^b, t2=a&b, t3=t2<<1, t4=t1^t3, t5=t1&t3,
+                // t6=t5<<1, r=t4+t6
+                const RegValue t1{RegId{nextRegister++}, type};
+                const RegValue t2{RegId{nextRegister++}, type};
+                const RegValue t3{RegId{nextRegister++}, type};
+                const RegValue t4{RegId{nextRegister++}, type};
+                const RegValue t5{RegId{nextRegister++}, type};
+                const RegValue t6{RegId{nextRegister++}, type};
+                transformed.push_back(
+                    makeBinary(t1, lhs, rhs, SSABinaryOp::Xor));
+                transformed.push_back(
+                    makeBinary(t2, lhs, rhs, SSABinaryOp::And));
+                transformed.push_back(makeBinary(
+                    t3, RegOperand::fromRegister(t2), RegOperand::fromInt(1, type),
+                    SSABinaryOp::Shl));
+                transformed.push_back(makeBarrier("mba_deep"));
+                transformed.push_back(makeBinary(
+                    t4, RegOperand::fromRegister(t1), RegOperand::fromRegister(t3),
+                    SSABinaryOp::Xor));
+                transformed.push_back(makeBinary(
+                    t5, RegOperand::fromRegister(t1), RegOperand::fromRegister(t3),
+                    SSABinaryOp::And));
+                transformed.push_back(makeBinary(
+                    t6, RegOperand::fromRegister(t5), RegOperand::fromInt(1, type),
+                    SSABinaryOp::Shl));
+                transformed.push_back(makeBarrier("mba_deep"));
+                transformed.push_back(makeBinary(r, RegOperand::fromRegister(t4),
+                                                 RegOperand::fromRegister(t6), SSABinaryOp::Add));
+            }
+            RegInstruction rewritten = instruction;
+            rewritten.hasDest        = false;
+            transformed.push_back(makeCopy(instruction.dest, RegOperand::fromRegister(r)));
+            ++stats.mbaDeepRewrites;
+        }
+        block->instructions = std::move(transformed);
+    }
+}
+
 RegOperand opaqueSource(const RegFunction& function, const RegBlock& block)
 {
     for (const auto& parameter : function.parameters) {
@@ -236,8 +353,10 @@ bool normalizeBranchCondition(RegBlock& block, RegOperand& condition, ca::u32& n
     return true;
 }
 
-void applyOpaquePredicates(RegFunction& function, ca::u32& nextRegister, RegTransformStats& stats)
+void applyOpaquePredicates(RegFunction& function, ca::u32& nextRegister,
+                           const RegTransformOptions& options, RegTransformStats& stats)
 {
+    ca::u32 site = 0;
     for (auto& block : function.blocks) {
         auto* branch = std::get_if<RegBranchTerminator>(&block->terminator);
         if (branch == nullptr) continue;
@@ -247,20 +366,87 @@ void applyOpaquePredicates(RegFunction& function, ca::u32& nextRegister, RegTran
 
         const RegOperand source = opaqueSource(function, *block);
         const SSAType    type   = source.type;
-        const RegValue   orValue{RegId{nextRegister++}, type};
-        const RegValue   andValue{RegId{nextRegister++}, type};
         const RegValue   predicate{RegId{nextRegister++}, SSAType::BOOL};
         const RegValue   combined{RegId{nextRegister++}, SSAType::BOOL};
         const RegOperand one = RegOperand::fromInt(1, type);
-        block->instructions.push_back(makeBinary(orValue, source, one, SSABinaryOp::Or));
-        block->instructions.push_back(
-            makeBinary(andValue, RegOperand::fromRegister(orValue), one, SSABinaryOp::And));
-        block->instructions.push_back(makeCompare(
-            predicate, RegOperand::fromRegister(andValue), one, SSAComparePredicate::Eq));
+
+        if (!options.opaqueZero) {
+            // 基础形态：(x | 1) & 1 == 1 —— 恒真。
+            const RegValue orValue{RegId{nextRegister++}, type};
+            const RegValue andValue{RegId{nextRegister++}, type};
+            block->instructions.push_back(makeBinary(orValue, source, one, SSABinaryOp::Or));
+            block->instructions.push_back(
+                makeBinary(andValue, RegOperand::fromRegister(orValue), one, SSABinaryOp::And));
+            block->instructions.push_back(makeCompare(
+                predicate, RegOperand::fromRegister(andValue), one, SSAComparePredicate::Eq));
+            ++stats.opaquePredicates;
+        }
+        else {
+            // #829 P0-3：opaque-零恒等变体。全部恒真、零 UB（纯位运算/无
+            // 溢出乘法），折叠只会降强度、不破坏语义。按 (seed, site) 派生
+            // 选变体，同 seed 同产物（可复现构建不变量）。
+            const uint64_t sel = splitmix64(options.transformSeed ^ (site++ * 0x85EBCA77u)) & 3u;
+            if (sel == 0) {
+                // 基础形态保留为变体之一。
+                const RegValue orValue{RegId{nextRegister++}, type};
+                const RegValue andValue{RegId{nextRegister++}, type};
+                block->instructions.push_back(makeBinary(orValue, source, one, SSABinaryOp::Or));
+                block->instructions.push_back(
+                    makeBinary(andValue, RegOperand::fromRegister(orValue), one, SSABinaryOp::And));
+                block->instructions.push_back(makeCompare(
+                    predicate, RegOperand::fromRegister(andValue), one,
+                    SSAComparePredicate::Eq));
+            }
+            else if (sel == 1) {
+                // demorgan：~(~x) == x（双 BitNot 位恒等，零 UB）。
+                const RegValue t1{RegId{nextRegister++}, type};
+                const RegValue t2{RegId{nextRegister++}, type};
+                block->instructions.push_back(makeUnary(t1, source, SSAUnaryOp::BitNot));
+                block->instructions.push_back(
+                    makeUnary(t2, RegOperand::fromRegister(t1), SSAUnaryOp::BitNot));
+                block->instructions.push_back(makeCompare(
+                    predicate, RegOperand::fromRegister(t2), source, SSAComparePredicate::Eq));
+            }
+            else if (sel == 2) {
+                // shift-pair：(x >> 1) << 1 == x & ~1（算术右移再左移 = 清最低
+                // 位 = x & ~1；对负数也成立——>>1 后 <<1 只清最低位。零 UB）。
+                const RegValue notOne{RegId{nextRegister++}, type};
+                const RegValue half{RegId{nextRegister++}, type};
+                const RegValue twice{RegId{nextRegister++}, type};
+                const RegValue masked{RegId{nextRegister++}, type};
+                block->instructions.push_back(makeUnary(notOne, one, SSAUnaryOp::BitNot));
+                block->instructions.push_back(makeBinary(
+                    half, source, one, SSABinaryOp::Shr));
+                block->instructions.push_back(makeBinary(
+                    twice, RegOperand::fromRegister(half), one, SSABinaryOp::Shl));
+                block->instructions.push_back(makeBinary(
+                    masked, source, RegOperand::fromRegister(notOne), SSABinaryOp::And));
+                block->instructions.push_back(makeCompare(
+                    predicate, RegOperand::fromRegister(twice),
+                    RegOperand::fromRegister(masked), SSAComparePredicate::Eq));
+            }
+            else {
+                // or-dec：(x | 1) - 1 == x & ~1（两路径都清最低位；x|1 恒 >= 1，
+                // 减法不溢出。零 UB）。
+                const RegValue notOne{RegId{nextRegister++}, type};
+                const RegValue orOne{RegId{nextRegister++}, type};
+                const RegValue dec{RegId{nextRegister++}, type};
+                const RegValue masked{RegId{nextRegister++}, type};
+                block->instructions.push_back(makeUnary(notOne, one, SSAUnaryOp::BitNot));
+                block->instructions.push_back(makeBinary(orOne, source, one, SSABinaryOp::Or));
+                block->instructions.push_back(makeBinary(
+                    dec, RegOperand::fromRegister(orOne), one, SSABinaryOp::Sub));
+                block->instructions.push_back(makeBinary(
+                    masked, source, RegOperand::fromRegister(notOne), SSABinaryOp::And));
+                block->instructions.push_back(makeCompare(
+                    predicate, RegOperand::fromRegister(dec),
+                    RegOperand::fromRegister(masked), SSAComparePredicate::Eq));
+            }
+            ++stats.opaqueZeroPredicates;
+        }
         block->instructions.push_back(
             makeBinary(combined, condition, RegOperand::fromRegister(predicate), SSABinaryOp::And));
         branch->condition = RegOperand::fromRegister(combined);
-        ++stats.opaquePredicates;
     }
 }
 
@@ -353,8 +539,48 @@ RegSuccessor makeDispatcherRoute(RegSuccessor                              succe
     return successor;
 }
 
+/// splitmix64 派生：确定性、雪崩好，用于随机 state 码与变体选择。
+/// 同 seed 同 index → 同值（可复现构建不变量）。
+uint64_t splitmix64(uint64_t x)
+{
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+
+/// 派生非零 I32 state 码：splitmix64(seed, index) 低位；0 冲突时退 1。
+/// CFF 加密模式下 state 码不再是顺序 1,2,3..，而是伪随机分布。
+ca::u32 deriveStateCode(uint64_t seed, ca::u32 index)
+{
+    const uint64_t mixed = splitmix64(seed ^ (static_cast<uint64_t>(index) * 0x85EBCA77u));
+    ca::u32        code  = static_cast<ca::u32>(mixed);
+    return code == 0 ? 1u : code;
+}
+
+/// 状态异或 key：常量（非零），写入值 = code，dispatch 前 state ^= key，
+/// case 常量 = code ^ key（二进制中写入常量与比较常量不同）。
+ca::u32 deriveStateXorKey(uint64_t seed)
+{
+    const ca::u32 key = static_cast<ca::u32>(splitmix64(seed ^ 0x9E3779B97F4A7C15ull));
+    return key == 0 ? 0x9E3779B9u : key;
+}
+
+/// 在 dispatcher 块入口插入 `state ^= xorKey`（新增异或寄存器），
+/// 使 switch case 常量 = 写入值 ^ xorKey。仅 cffStateEncryption 时调用。
+void injectStateXor(RegBlock& dispatcher, RegValue state, ca::u32 xorKey, ca::u32& nextRegister)
+{
+    const RegValue mixed{RegId{nextRegister++}, SSAType::I32};
+    dispatcher.instructions.push_back(
+        makeBinary(mixed, RegOperand::fromRegister(state),
+                   RegOperand::fromInt(static_cast<int64_t>(xorKey), SSAType::I32),
+                   SSABinaryOp::Xor));
+    auto* dispatch = std::get_if<RegSwitchTerminator>(&dispatcher.terminator);
+    if (dispatch != nullptr) dispatch->value = RegOperand::fromRegister(mixed);
+}
+
 bool applyControlFlowFlattening(RegFunction& function, ca::u32& nextRegister,
-                                RegTransformStats& stats)
+                                const RegTransformOptions& options, RegTransformStats& stats)
 {
     if (!canFlattenControlFlow(function)) return false;
 
@@ -363,8 +589,15 @@ bool applyControlFlowFlattening(RegFunction& function, ca::u32& nextRegister,
     for (const auto& block : function.blocks) originals.push_back(block.get());
 
     std::map<const RegBlock*, ca::u32> stateCodes;
-    ca::u32                            stateCode = 1;
-    for (const auto* block : originals) stateCodes.emplace(block, stateCode++);
+    if (options.cffStateEncryption) {
+        // 派生随机 state 码：splitmix64(seed, index)，非顺序。
+        ca::u32 index = 0;
+        for (const auto* block : originals) stateCodes.emplace(block, deriveStateCode(options.transformSeed, index++));
+    }
+    else {
+        ca::u32 stateCode = 1;
+        for (const auto* block : originals) stateCodes.emplace(block, stateCode++);
+    }
 
     const RegBlock* originalEntry = function.entry;
     const RegValue  state{RegId{nextRegister++}, SSAType::I32};
@@ -376,13 +609,29 @@ bool applyControlFlowFlattening(RegFunction& function, ca::u32& nextRegister,
 
     RegSwitchTerminator dispatch;
     dispatch.value = RegOperand::fromRegister(state);
-    for (const auto* block : originals) {
-        const auto code = stateCodes.find(block);
-        dispatch.cases.push_back(RegSwitchCase{static_cast<int64_t>(code->second),
-                                               RegSuccessor{const_cast<RegBlock*>(block), {}}});
+    ca::u32         xorKey = 0;
+    if (options.cffStateEncryption) {
+        xorKey = deriveStateXorKey(options.transformSeed);
+        // case 常量 = 写入值 ^ xorKey（dispatcher 入口先异或再比较）。
+        for (const auto* block : originals) {
+            const auto code = stateCodes.find(block);
+            dispatch.cases.push_back(RegSwitchCase{
+                static_cast<int64_t>(static_cast<ca::u32>(code->second) ^ xorKey),
+                RegSuccessor{const_cast<RegBlock*>(block), {}}});
+        }
+        dispatch.defaultTarget = RegSuccessor{const_cast<RegBlock*>(originalEntry), {}};
+        dispatcher->terminator = std::move(dispatch);
+        injectStateXor(*dispatcher, state, xorKey, nextRegister);
     }
-    dispatch.defaultTarget = RegSuccessor{const_cast<RegBlock*>(originalEntry), {}};
-    dispatcher->terminator = std::move(dispatch);
+    else {
+        for (const auto* block : originals) {
+            const auto code = stateCodes.find(block);
+            dispatch.cases.push_back(RegSwitchCase{static_cast<int64_t>(code->second),
+                                                   RegSuccessor{const_cast<RegBlock*>(block), {}}});
+        }
+        dispatch.defaultTarget = RegSuccessor{const_cast<RegBlock*>(originalEntry), {}};
+        dispatcher->terminator = std::move(dispatch);
+    }
 
     const auto entryCode = stateCodes.find(originalEntry);
     bootstrap->instructions.push_back(makeCopy(
@@ -447,19 +696,120 @@ bool applyControlFlowFlattening(RegFunction& function, ca::u32& nextRegister,
     function.blocks.push_back(std::move(dispatcher));
     for (auto& block : created) function.blocks.push_back(std::move(block));
     stats.controlFlowFlattened = true;
+    if (options.cffDeadBlockDensity != 0)
+        applyCffDeadBlocks(function, options, state, nextRegister, stats);
     return true;
+}
+
+/// 在 CFF 平坦化之后注入恒假死块（#829 P0-1，吸收 Cloakwork 死块思路）。
+///
+/// 结构：每 `density` 个 setter 块，在其跳转 dispatcher 前插入恒假分支
+/// `if ((state*state + 1) == 0) goto deadN; else goto dispatcher`。
+/// 恒假性：x²+1 ≡ 0 (mod 2³²) 无解（平方模 4 只能为 0/1），而 state 是运行时
+/// 值，C 编译器不会做模算术证明 → 分支与死块不可 DCE。死块内容为依赖 state
+/// 的多步计算链 + barrier（`mj2x_regc_barrier`，副作用语义），跳回 dispatcher。
+/// 死块计算永不执行，不影响语义；指令数 = 1 个死块 ≈ 6-8 条。
+///
+/// 实现注意：遍历期间不得 push_back（vector realloc 会悬垂 block 指针）；
+/// 先收集 setter 索引，reserve 容量后插入死块，最后按索引改 terminator。
+void applyCffDeadBlocks(RegFunction& function, const RegTransformOptions& options,
+                        RegValue state, ca::u32& nextRegister, RegTransformStats& stats)
+{
+    if (options.cffDeadBlockDensity == 0 || function.blocks.empty()) return;
+
+    // 第一遍：定位 dispatcher（含 switch terminator 的块）。
+    ca::usize dispatcherIndex = static_cast<ca::usize>(-1);
+    for (ca::usize i = 0; i < function.blocks.size(); ++i) {
+        if (std::get_if<RegSwitchTerminator>(&function.blocks[i]->terminator) != nullptr) {
+            dispatcherIndex = i;
+            break;
+        }
+    }
+    if (dispatcherIndex == static_cast<ca::usize>(-1)) return;
+    RegBlock* dispatcher = function.blocks[dispatcherIndex].get();
+
+    // 第二遍：收集需要注入死块的 setter 块索引（Jump→dispatcher，每 density 个）。
+    std::vector<ca::usize> setterIndices;
+    ca::u32                counter = 0;
+    for (ca::usize i = 0; i < function.blocks.size(); ++i) {
+        if (i == dispatcherIndex) continue;
+        auto* jump = std::get_if<RegJumpTerminator>(&function.blocks[i]->terminator);
+        if (jump == nullptr || jump->target.block != dispatcher) continue;
+        if ((counter++ % options.cffDeadBlockDensity) != 0) continue;
+        setterIndices.push_back(i);
+    }
+    if (setterIndices.empty()) return;
+
+    // 第三遍：reserve 容量（防后续 push_back realloc 悬垂）后插入死块。
+    function.blocks.reserve(function.blocks.size() + setterIndices.size());
+    ca::u32 nextBlock = nextBlockId(function);
+    std::vector<RegBlock*> deadBlocks;
+    deadBlocks.reserve(setterIndices.size());
+    for (ca::usize n = 0; n < setterIndices.size(); ++n) {
+        auto dead = std::make_unique<RegBlock>(SSABlockId{nextBlock++});
+        const RegValue t1{RegId{nextRegister++}, SSAType::I32};
+        const RegValue t2{RegId{nextRegister++}, SSAType::I32};
+        const RegValue t3{RegId{nextRegister++}, SSAType::I32};
+        const RegValue t4{RegId{nextRegister++}, SSAType::I32};
+        dead->instructions.push_back(makeBinary(
+            t1, RegOperand::fromRegister(state), RegOperand::fromInt(0x45D9F3B, SSAType::I32),
+            SSABinaryOp::Mul));
+        dead->instructions.push_back(makeBinary(
+            t2, RegOperand::fromRegister(t1), RegOperand::fromInt(0x119DE1F3, SSAType::I32),
+            SSABinaryOp::Xor));
+        dead->instructions.push_back(makeBarrier("cff_dead"));
+        dead->instructions.push_back(makeBinary(
+            t3, RegOperand::fromRegister(t2), RegOperand::fromInt(0x85EBCA77, SSAType::I32),
+            SSABinaryOp::Add));
+        dead->instructions.push_back(makeBinary(
+            t4, RegOperand::fromRegister(t3), RegOperand::fromInt(0x27D4EB2D, SSAType::I32),
+            SSABinaryOp::Xor));
+        dead->instructions.push_back(makeBarrier("cff_dead"));
+        dead->terminator = RegJumpTerminator{RegSuccessor{dispatcher, {}}};
+        function.blocks.push_back(std::move(dead));
+        deadBlocks.push_back(function.blocks.back().get());
+        ++stats.cffDeadBlocks;
+    }
+
+    // 第四遍：按索引把 setter 改为恒假分支（此时 blocks 稳定，指针有效）。
+    for (ca::usize n = 0; n < setterIndices.size(); ++n) {
+        RegBlock* setter = function.blocks[setterIndices[n]].get();
+        // 恒假条件：(state*state + 1) == 0（模 2³² 无解；state 运行时值防折叠）。
+        const RegValue square{RegId{nextRegister++}, SSAType::I32};
+        const RegValue plusOne{RegId{nextRegister++}, SSAType::I32};
+        const RegValue cond{RegId{nextRegister++}, SSAType::BOOL};
+        setter->instructions.push_back(makeBinary(
+            square, RegOperand::fromRegister(state), RegOperand::fromRegister(state),
+            SSABinaryOp::Mul));
+        setter->instructions.push_back(makeBinary(
+            plusOne, RegOperand::fromRegister(square), RegOperand::fromInt(1, SSAType::I32),
+            SSABinaryOp::Add));
+        setter->instructions.push_back(makeCompare(
+            cond, RegOperand::fromRegister(plusOne), RegOperand::fromInt(0, SSAType::I32),
+            SSAComparePredicate::Eq));
+        setter->terminator = RegBranchTerminator{
+            RegOperand::fromRegister(cond), RegSuccessor{deadBlocks[n], {}},
+            RegSuccessor{dispatcher, {}}};
+    }
 }
 
 }   // namespace
 
-RegTransformStats applyRegTransformPasses(RegFunction& function, const RegTransformOptions& options)
+RegTransformStats applyRegTransformPasses(RegFunction&               function,
+                                          const RegTransformOptions& options)
 {
     RegTransformStats stats;
     ca::u32           nextRegister = nextRegisterId(function);
-    if (options.enableMba) applyMba(function, nextRegister, stats);
-    if (options.enableOpaquePredicates) applyOpaquePredicates(function, nextRegister, stats);
+    if (options.enableMba) {
+        if (options.mbaDeep)
+            applyMbaDeep(function, nextRegister, options.transformSeed, stats);
+        else
+            applyMba(function, nextRegister, stats);
+    }
+    if (options.enableOpaquePredicates)
+        applyOpaquePredicates(function, nextRegister, options, stats);
     if (options.enableControlFlowFlattening)
-        applyControlFlowFlattening(function, nextRegister, stats);
+        applyControlFlowFlattening(function, nextRegister, options, stats);
     return stats;
 }
 

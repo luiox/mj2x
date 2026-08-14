@@ -648,7 +648,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
-    applyRegTransformPasses(*reg);
+    applyRegTransformPasses(*reg, transformOptions_);
 
     // 提前登记函数名（供本方法内实例自递归/已转换目标的直接调用决策）；
     // emit 失败时回滚，避免调用方直接调用到不存在的函数体。

@@ -68,6 +68,16 @@ static void printUsage()
            "捕获时表已污染则 JNI_OnLoad fail closed）\n");
     printf("  --regc-safe-env-debug       RegC: safe-env 调试观察模式（检出 hook 只打告警不 fail，"
            "隐含开启 --regc-safe-env）\n");
+    printf("  --regc-cff-dead <n>         RegC: CFF 恒假死块密度（默认 0 关闭；N = 每 N 个跳转插 1 "
+           "死块；死块条件依赖运行时 state，编译器无法证明恒假不可 DCE，issue #829）\n");
+    printf("  --regc-cff-state-encrypt    RegC: CFF 派生随机 state 码 + dispatcher 状态异或"
+           "（默认关闭；同 seed 同产物）\n");
+    printf("  --regc-mba-deep             RegC: 深 MBA（De Morgan/进位链 + barrier 防折叠，"
+           "per-site 变体；默认关闭）\n");
+    printf("  --regc-opaque-zero          RegC: opaque-零恒等变体（demorgan/shift-pair/or-dec，"
+           "按种子选变体；默认关闭）\n");
+    printf("  --regc-transform-seed <n>   RegC: 变换种子（默认 0；决定 state 码/变体选择，"
+           "同 seed 同产物）\n");
     printf("  --stackc-exception-check <full|lite> StackC pending 异常检查密度（默认 full；"
            "lite 仅保留 handler 边界检查，对标 JNIC 稀疏检查）\n");
     printf("  --emit-native-dir <dir>     RegC: 多文件输出（mj2x_regc_api.h + runtime.c + 每类 "
@@ -210,6 +220,12 @@ struct CliOptions
     mj2x::RegCCommentLevel   regcCommentLevel = mj2x::RegCCommentLevel::Summary;
     bool                     regcSafeEnv      = false;
     bool                     regcSafeEnvDebug = false;
+    // issue #829：Cloakwork 借鉴项（默认关闭，RegC 高性能定位）。
+    int                      regcCffDead        = 0;
+    bool                     regcCffStateEncrypt = false;
+    bool                     regcMbaDeep         = false;
+    bool                     regcOpaqueZero      = false;
+    uint64_t                 regcTransformSeed   = 0;
     std::string              stackcExceptionCheck = "full";
     std::string              vmc4Dispatcher      = "switch_table";
     uint64_t                 vmc4Seed            = 0;
@@ -820,6 +836,19 @@ int main(int argc, char** argv)
             options.regcSafeEnv      = true;
             options.regcSafeEnvDebug = true;
         }
+        else if (arg == "--regc-cff-dead" && i + 1 < argc) {
+            const int parsed = std::atoi(argv[++i]);
+            options.regcCffDead = parsed < 0 ? 0 : parsed;
+        }
+        else if (arg == "--regc-cff-state-encrypt")
+            options.regcCffStateEncrypt = true;
+        else if (arg == "--regc-mba-deep")
+            options.regcMbaDeep = true;
+        else if (arg == "--regc-opaque-zero")
+            options.regcOpaqueZero = true;
+        else if (arg == "--regc-transform-seed" && i + 1 < argc) {
+            options.regcTransformSeed = std::strtoull(argv[++i], nullptr, 0);
+        }
         else if (arg == "--vmc4-dispatcher" && i + 1 < argc) {
             options.vmc4Dispatcher = argv[++i];
         }
@@ -1141,6 +1170,16 @@ int main(int argc, char** argv)
             regcBackend->setCommentLevel(options.regcCommentLevel);
             if (options.regcSafeEnv) regcBackend->setSafeEnv(true);
             if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);
+            if (options.regcCffDead != 0 || options.regcCffStateEncrypt || options.regcMbaDeep ||
+                options.regcOpaqueZero) {
+                mj2x::RegTransformOptions transform;
+                transform.cffDeadBlockDensity = static_cast<ca::u32>(options.regcCffDead);
+                transform.cffStateEncryption  = options.regcCffStateEncrypt;
+                transform.mbaDeep             = options.regcMbaDeep;
+                transform.opaqueZero          = options.regcOpaqueZero;
+                transform.transformSeed       = options.regcTransformSeed;
+                regcBackend->setTransformOptions(transform);
+            }
             if (!options.nativeDirOutput.empty())
                 regcBackend->setSplitOutputDir(options.nativeDirOutput);
             if (options.runtimeProtection != "none") {
