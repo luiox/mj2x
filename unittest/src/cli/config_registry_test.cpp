@@ -252,7 +252,7 @@ TEST(ConfigRegistryTest, SchemaAnnotationsMatchRegistrySemantics)
 
     // 枚举 + 默认值（backend / runtime_protection）。dump(2) 键按字母序输出，
     // default 在 description 之前。
-    EXPECT_NE(out.find("\"enum\": [\n        \"stackc\",\n        \"regc\",\n        \"vmc4\""),
+    EXPECT_NE(out.find("\"enum\": [\n        \"stackc\",\n        \"regc\",\n        \"llvm\""),
               std::string::npos)
         << out;
     EXPECT_NE(out.find("\"backend\": {\n      \"default\": \"stackc\","), std::string::npos)

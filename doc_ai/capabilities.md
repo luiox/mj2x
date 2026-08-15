@@ -14,7 +14,7 @@
 | 单 `.class` 输入 → 改写后 `.class` + emitted C | ✅ | StackC / RegC E2E |
 | `.jar` 输入 → 改写后 `.jar` + emitted C | ✅ | `mj2x_unittest` JAR pipeline 测试 |
 | RegC `.class` / `.jar` 输入 → emitted C++17 | ✅ | `CliTest.RealZigCompilesRegcCppClassAndRunsJvm` + CLI negative tests |
-| LLVM IR：静态标量纯计算 / 控制流 → textual `.ll` + native library | ✅ v2.2 转正默认开启 | 构建开关 `with_mj2x_llvm`（默认 on）；显式 `=n` 时 CLI 不暴露 `--backend llvm`/`--emit-llvm`/`--llvm-tool`（fail-closed）；后端单测 `LlvmIrBackendTest.*` + cli_test 3 例（含 clang 编译 → JVM 运行 E2E） |
+| LLVM IR：静态纯计算 / 对象 / 数组 / 调用 / 异常 / monitor 全 JNI 语义 → textual `.ll` + native library | ✅ v2.2 转正默认开启 | 构建开关 `with_mj2x_llvm`（默认 on）；显式 `=n` 时 CLI 不暴露 `--backend llvm`/`--emit-llvm`/`--llvm-tool`（fail-closed）；后端单测 `LlvmIrBackendTest.*` + `CliTest.Llvm*`（pipe/CMake/xmake 工程 + 综合 E2E：arraycopy/异常/monitor/ldc，clang 编译 → JVM 运行） |
 | StackC 单 `.class` 输出附带 `mj2x-cloader` sidecar class | ✅ | StackCBackend E2E |
 | StackC `.jar` 输出注入 `mj2x-cloader` dispatch loader class | ✅ | JAR pipeline / CLI 测试 |
 | JAR 输出保留 entry 顺序和非 class 资源 payload | ✅ | JAR fixture 测试 |
@@ -157,7 +157,15 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 **CLI**:
 
 - `--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
-- `--backend llvm --emit-llvm <file.ll>` 输出 textual LLVM IR；转换静态 `int` / `long` / `float` / `double` / `void` 的纯计算（含移位、整数除/取余——除零抛 `ArithmeticException`、`INT_MIN/-1` 语义正确）、比较、控制流、浮点→整数（`llvm.fptosi.sat`）与**编译索引内静态互调**（同类/跨类/递归；目标不可转换或为 library 类时整链 fail-closed），对象/JNI/实例调用/异常表/monitor/内存操作保持 fail closed。`--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；暂不支持 pipe、CMake 或 xmake 工程路径。**v2.2 转正**：构建开关 `with_mj2x_llvm` 默认 on（v2.1 曾按发布范围关闭）；显式 `=n` 时 CLI 不暴露相关选项（fail-closed）。
+- `--backend llvm --emit-llvm <file.ll>` 输出 textual LLVM IR（非 LLVM SDK 依赖，`clang -shared` 或 `llc -> clang` 生成 native 库）。支持：
+  - 标量运算与类型：`int`/`long`/`float`/`double`/`void` 全运算（移位、整数除/取余——除零抛 `ArithmeticException`、`INT_MIN/-1` 语义正确）、`boolean`/`byte`/`short`/`char` 窄类型（i8/i16 边界 sext/zext、返回值截断）、比较（REF 用 `IsSameObject`）、浮点→整数（`llvm.fptosi.sat`）、常量折叠；
+  - 对象模型（全走 JNI，零 JVM 内部依赖）：对象分配 `AllocObject`、`<init>` 经 `CallNonvirtualXxxMethodA`、实例/静态字段 Get/SetXxxField、`checkcast`/`instanceof`（`IsInstanceOf`）、`ldc String`（`NewStringUTF`）/`ldc Class`（`FindClass`）；
+  - 数组：分配 NewXxxArray/NewObjectArray/多维递归、length、读写 Get/SetXxxArrayRegion 与 Get/SetObjectArrayElement、`boolean[]` 经 `[Z` 判定走 jboolean 0/1 归一化、`System.arraycopy` 经 JNI 保异常语义；
+  - 调用：编译索引内已转换 invokestatic 目标 direct call（0 JNI）；实例/外部/未转换目标经 `CallXxxMethodA`/`CallNonvirtualXxxMethodA`/`CallStaticXxxMethodA`（jvalue 数组，null receiver 抛 NPE）；实例方法 this 为 SSA 参数 0，wrapper 透传 jobject this；
+  - 异常：`athrow`（JNI `Throw`，null → NPE）、try/catch/finally 异常表分发（`ExceptionCheck` → `ExceptionOccurred`+`ExceptionClear` → 按表序 `IsInstanceOf` 匹配 → handler；catch-all 重抛语义）；
+  - monitor：`monitorenter/monitorexit` → `MonitorEnter/Exit`（null → NPE）；
+  - fail-closed：未初始化局部（undef Opaque）、未知 intrinsic、`String` 之外的 Handle 常量等保持字节码，调用方对不可转换目标走 JNI fallback（不再整链拒绝）。
+  - `--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；`--compile-mode pipe` 经 clang stdin 编译；`--generate-cmake` / `--generate-xmake` 生成含 `native.ll` 的工程。**v2.2 转正**：构建开关 `with_mj2x_llvm` 默认 on（v2.1 曾按发布范围关闭）；显式 `=n` 时 CLI 不暴露相关选项（fail-closed）。
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。LLVM IR 由 clang 或 `llc -> clang` 编译，不使用 `--c-compiler`。
@@ -173,7 +181,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - **native-to-native 调用默认走 JNI（#814/#816）**：已转换目标间的 direct C 调用不产生 JVM 栈帧，`Throwable.getStackTrace` / `StackWalker` / 反射的栈观察语义会失真（regc 2.6 ReTrace 实证）。默认 `CodeOptions.directCalls=false`，所有调用经 JNI `Call*MethodA` 保帧；`--regc-direct-calls` 显式开启直调（性能优先且确认无栈观察的产物）。实测 obf.jar 总耗时影响约 1%
 - `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
-- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-crt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 当前明确拒绝这两条工程生成路径。
+- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-crt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 同样支持两条工程生成路径（生成含 `native.ll` 的 CMake/xmake 工程，clang 编译为 native 库）。
 
 ---
 

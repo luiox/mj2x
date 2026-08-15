@@ -2872,7 +2872,7 @@ TEST(CliTest, NegativeArgumentsFail)
         q(cli) + " --config " + q(badBackendJson),
     });
     EXPECT_NE(badBackendConfig.exitCode, 0);
-    EXPECT_NE(badBackendConfig.out.find("Unknown config backend value"), std::string::npos)
+    EXPECT_NE(badBackendConfig.out.find("invalid value for config key backend"), std::string::npos)
         << badBackendConfig.out;
 
     auto unknownBackend = runScript({
@@ -2975,7 +2975,7 @@ TEST(CliTest, NegativeArgumentsFail)
             " --runtime-protection nope",
     });
     EXPECT_NE(badRuntimeProtection.exitCode, 0);
-    EXPECT_NE(badRuntimeProtection.out.find("Unknown --runtime-protection value"),
+    EXPECT_NE(badRuntimeProtection.out.find("Unknown value for --runtime-protection"),
               std::string::npos)
         << badRuntimeProtection.out;
 
