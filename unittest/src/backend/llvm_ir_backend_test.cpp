@@ -620,6 +620,27 @@ TEST(LlvmIrBackendTest, EmitsThrowTerminator)
     EXPECT_NE(result.text.find("ret void"), std::string::npos) << result.text;
 }
 
+TEST(LlvmIrBackendTest, EmitsRefComparisonViaIsSameObject)
+{
+    // 对象同一性比较必须走 IsSameObject：JNI local ref 是句柄，同一对象经两次
+    // JNI 调用返回的句柄指针不一定相等（对齐 RegC regc_flow.cpp 语义）。
+    // a == b ? 1 : 0（IF_ACMPNE 反例）。
+    auto* target = new jbytecode::core::Label();
+    auto result =
+        compileScalar("same", "(Ljava/lang/Object;Ljava/lang/Object;)Z",
+                      {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ALOAD, 1),
+                       new JumpInsnNode(Opcodes::IF_ACMPNE, target), new InsnNode(Opcodes::ICONST_1),
+                       new InsnNode(Opcodes::IRETURN), new LabelNode(target),
+                       new InsnNode(Opcodes::ICONST_0), new InsnNode(Opcodes::IRETURN)},
+                      2, 2);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call i1 @mj2x_llvm_ref_eq(ptr %env, ptr %v0, ptr %v1)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("xor i1"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("icmp eq ptr"), std::string::npos) << result.text;
+}
+
 TEST(LlvmIrBackendTest, EmitsExceptionDispatchWithRegions)
 {
     // 异常表构造依赖 LabelNode + TryCatchBlockNode；DIV 后分发发射与 athrow
@@ -664,7 +685,7 @@ TEST(LlvmIrBackendTest, EmitsObjectAllocationAndTypeChecks)
                                new InsnNode(Opcodes::ARETURN)},
                               1, 1);
     ASSERT_EQ(cast.kind, BackendResult::Kind::C_SOURCE) << cast.text;
-    EXPECT_NE(cast.text.find("call ptr @mj2x_llvm_check_cast(ptr %env, %v0, ptr @_mj2x_llvm_str_0)"),
+    EXPECT_NE(cast.text.find("call ptr @mj2x_llvm_check_cast(ptr %env, ptr %v0, ptr @_mj2x_llvm_str_0)"),
               std::string::npos)
         << cast.text;
 
@@ -676,7 +697,7 @@ TEST(LlvmIrBackendTest, EmitsObjectAllocationAndTypeChecks)
                                    new InsnNode(Opcodes::IRETURN)},
                                   1, 1);
     ASSERT_EQ(instance.kind, BackendResult::Kind::C_SOURCE) << instance.text;
-    EXPECT_NE(instance.text.find("call i32 @mj2x_llvm_instance_of(ptr %env, %v0, ptr @_mj2x_llvm_str_0)"),
+    EXPECT_NE(instance.text.find("call i32 @mj2x_llvm_instance_of(ptr %env, ptr %v0, ptr @_mj2x_llvm_str_0)"),
               std::string::npos)
         << instance.text;
 }
@@ -736,4 +757,163 @@ TEST(LlvmIrBackendTest, EmitsArrayAccessAndLength)
     EXPECT_NE(byteLoad.text.find("call i32 @mj2x_llvm_array_load_byte(ptr %env, ptr %v0, i32 %v1)"),
               std::string::npos)
         << byteLoad.text;
+}
+
+/// @brief 用指定后端配置编译单个静态方法（transform/runtime-protection 场景）。
+BackendResult compileWithBackend(LlvmIrBackend& backend, const char* name, const char* desc,
+                                 std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                                 int maxLocals)
+{
+    auto          method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns,
+                                      maxStack, maxLocals);
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto blocks = converter.convert(*method);
+    return backend.compileMethod("Test", clazz.methods[0], blocks);
+}
+
+TEST(LlvmIrBackendTest, EmitsCmpNanIntrinsics)
+{
+    // fcmpg/fcmpl → cmp.nan_greater/cmp.nan_less → fcmp ogt/olt 三值 + NaN select。
+    auto g = compileScalar("cmpg", "(FF)I",
+                           {new VarInsnNode(Opcodes::FLOAD, 0), new VarInsnNode(Opcodes::FLOAD, 1),
+                            new InsnNode(Opcodes::FCMPG), new InsnNode(Opcodes::IRETURN)},
+                           2, 2);
+    ASSERT_EQ(g.kind, BackendResult::Kind::C_SOURCE) << g.text;
+    EXPECT_NE(g.text.find("fcmp ogt float"), std::string::npos) << g.text;
+    EXPECT_NE(g.text.find("fcmp olt float"), std::string::npos) << g.text;
+    EXPECT_NE(g.text.find("fcmp uno float"), std::string::npos) << g.text;
+    EXPECT_NE(g.text.find("select i1"), std::string::npos) << g.text;
+
+    // lcmp（整型三值）：icmp sgt/slt，无 NaN 分支。long 各占 2 个局部槽。
+    auto l = compileScalar("cmpl", "(JJ)I",
+                           {new VarInsnNode(Opcodes::LLOAD, 0), new VarInsnNode(Opcodes::LLOAD, 2),
+                            new InsnNode(Opcodes::LCMP), new InsnNode(Opcodes::IRETURN)},
+                           4, 4);
+    ASSERT_EQ(l.kind, BackendResult::Kind::C_SOURCE) << l.text;
+    EXPECT_NE(l.text.find("icmp sgt i64"), std::string::npos) << l.text;
+    EXPECT_EQ(l.text.find("fcmp uno"), std::string::npos) << l.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsIndyRuntimeResolution)
+{
+    // 自定义 bootstrap invokedynamic（pipeline 级 preprocessor 不展开）→
+    // Intrinsic("indy:0") → 调用侧 box → bsm_N helper → invokeWithArguments →
+    // unbox；finalize 生成 bsm helper + 全局缓存。
+    ca::str::Utf8StringArena         arena;
+    std::vector<ca::core::Any>       bsmArgs;
+    auto* indy = new InvokeDynamicInsnNode(
+        arena.intern("run"), arena.intern("(II)I"),
+        Handle(Opcodes::H_INVOKESTATIC, arena.intern("Test"), arena.intern("bsm"),
+               arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                             "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
+        bsmArgs);
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "indyRun", "(II)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                              indy, new InsnNode(Opcodes::IRETURN)},
+                             2, 2);
+    CompilerMethod compilerMethod;
+    compilerMethod.methodNode = method.get();
+    CompilerClass compilerClass;
+    compilerClass.methods.push_back(compilerMethod);
+
+    LlvmIrBackend backend;
+    CodeConverter converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call ptr @mj2x_llvm_indy_bsm_0(ptr %env, ptr"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call ptr @mj2x_llvm_box_int(ptr %env, i32"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_unbox_int(ptr %env"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("mj2x_llvm_call_object(ptr %env"), std::string::npos)
+        << result.text;
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& ll = backend.generatedSource();
+    EXPECT_NE(ll.find("@_mj2x_llvm_indy_cache_0 = internal global ptr null"), std::string::npos)
+        << ll;
+    EXPECT_NE(ll.find("define internal ptr @mj2x_llvm_indy_bsm_0("), std::string::npos) << ll;
+    EXPECT_NE(ll.find("privateLookupIn"), std::string::npos) << ll;
+    EXPECT_NE(ll.find("define internal ptr @mj2x_llvm_box_int("), std::string::npos) << ll;
+    EXPECT_NE(ll.find("define internal i32 @mj2x_llvm_unbox_int("), std::string::npos) << ll;
+    // 调用点 intern 的字符串（invokeWithArguments / MethodHandle）在模块定义区。
+    EXPECT_NE(ll.find("invokeWithArguments"), std::string::npos) << ll;
+    EXPECT_NE(ll.find("java/lang/invoke/MethodHandle"), std::string::npos) << ll;
+}
+
+TEST(LlvmIrBackendTest, EmitsRuntimeProtectionCheckpoint)
+{
+    LlvmIrBackend backend;
+    backend.setRuntimeProtection(codegen::RuntimeProtectionAction::Fake, 16, 500);
+    auto result = compileWithBackend(backend, "add", "(II)I",
+                                     {new VarInsnNode(Opcodes::ILOAD, 0),
+                                      new VarInsnNode(Opcodes::ILOAD, 1),
+                                      new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                                     2, 2);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // 函数体内：checkpoint 全局引用 + run 调用 + FAKE 默认返回标签。
+    EXPECT_NE(result.text.find("call i32 @mj2x_rt_checkpoint_run(ptr @mj2x_rt_cp_0, i32 3, i32 "
+                               "16, i32 500, i32 1)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("label %rt_fake_0"), std::string::npos) << result.text;
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& ll = backend.generatedSource();
+    // 模块级：checkpoint 全局定义（函数级收集、finalize 统一输出）。
+    EXPECT_NE(ll.find("@mj2x_rt_cp_0 = internal global %mj2x_rt_checkpoint zeroinitializer"),
+              std::string::npos)
+        << ll;
+    EXPECT_NE(ll.find("%mj2x_rt_checkpoint = type { i32, i32, i32 }"), std::string::npos) << ll;
+    EXPECT_NE(ll.find("declare i32 @mj2x_rt_checkpoint_run(ptr, i32, i32, i32, i32)"),
+              std::string::npos)
+        << ll;
+}
+
+TEST(LlvmIrBackendTest, EmitsMbaTransformedAddition)
+{
+    LlvmIrBackend backend;
+    mj2x::RegTransformOptions transform;
+    transform.enableMba      = true;
+    transform.transformSeed  = 42;
+    backend.setTransformOptions(transform);
+    auto result = compileWithBackend(backend, "add", "(II)I",
+                                     {new VarInsnNode(Opcodes::ILOAD, 0),
+                                      new VarInsnNode(Opcodes::ILOAD, 1),
+                                      new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                                     2, 2);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // MBA: a + b → (a|b) + (a&b)。
+    EXPECT_NE(result.text.find("or i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("and i32"), std::string::npos) << result.text;
+}
+
+TEST(LlvmIrBackendTest, FallsBackToUntransformedWhenTransformRejected)
+{
+    // mbaDeep 注入 RegIR Barrier（LLVM 子集不支持）→ 变换产物验证失败 →
+    // 回退未变换形态（方法仍转 native，不因混淆丢方法）。
+    LlvmIrBackend backend;
+    mj2x::RegTransformOptions transform;
+    transform.enableMba      = true;
+    transform.mbaDeep        = true;
+    transform.transformSeed  = 7;
+    backend.setTransformOptions(transform);
+    auto result = compileWithBackend(backend, "add", "(II)I",
+                                     {new VarInsnNode(Opcodes::ILOAD, 0),
+                                      new VarInsnNode(Opcodes::ILOAD, 1),
+                                      new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                                     2, 2);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // 未变换形态：纯 add，无 and/or 链。
+    EXPECT_NE(result.text.find("add i32"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("and i32"), std::string::npos) << result.text;
 }

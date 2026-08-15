@@ -2477,6 +2477,241 @@ TEST(CliTest, LlvmArraycopyAndExceptionE2E)
 #endif
 }
 
+/// @brief 程序化构造带自定义 bootstrap invokedynamic 的类（javac 无法产生该形态；
+/// pipeline 级 InvokeDynamicPreprocessor 不展开 → indy:<idx> 运行时解析）。
+///
+/// 方法面：
+/// - add(II)I：bootstrap 解析到的目标。
+/// - bsm(Lookup,String,MethodType)CallSite：无常量参数 bootstrap。
+/// - bsmArgs(Lookup,String,MethodType,String,I,MethodHandle)CallSite：带
+///   String/int/MethodHandle 常量参数（exercise 常量物化三形态）。
+/// - run(II)I：indy 站点（无 bsm 常量）。
+/// - runArgs(II)I：indy 站点（String/int/MethodHandle bsm 常量）。
+std::vector<ca::u8> buildCustomIndyClass(ca::str::Utf8StringArena& arena)
+{
+    using namespace jbytecode::core;
+    using namespace jbytecode::tree;
+
+    const auto invokestatic = [&arena](jbytecode::tree::MethodNode* m, const char* owner,
+                                       const char* name, const char* desc) {
+        m->visitMethodInsn(Opcodes::INVOKESTATIC, arena.intern(owner), arena.intern(name),
+                           arena.intern(desc), false);
+    };
+
+    auto* add = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, arena.intern("add"),
+                               arena.intern("(II)I"), ca::str::Utf8StringRef(), {});
+    add->visitCode();
+    add->visitVarInsn(Opcodes::ILOAD, 0);
+    add->visitVarInsn(Opcodes::ILOAD, 1);
+    add->visitInsn(Opcodes::IADD);
+    add->visitInsn(Opcodes::IRETURN);
+    add->visitMaxs(0, 0);
+    add->visitEnd();
+
+    const char* bsmDesc =
+        "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/"
+        "MethodType;)Ljava/lang/invoke/CallSite;";
+    auto* bsm = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, arena.intern("bsm"),
+                               arena.intern(bsmDesc), ca::str::Utf8StringRef(), {});
+    bsm->visitCode();
+    bsm->visitTypeInsn(Opcodes::NEW, arena.intern("java/lang/invoke/ConstantCallSite"));
+    bsm->visitInsn(Opcodes::DUP);
+    invokestatic(bsm, "java/lang/invoke/MethodHandles", "lookup",
+                 "()Ljava/lang/invoke/MethodHandles$Lookup;");
+    bsm->visitLdcInsn(Type::getObjectType(arena.intern("CliLlvmIndy")));
+    bsm->visitLdcInsn(std::string("add"));
+    bsm->visitVarInsn(Opcodes::ALOAD, 2);   // 站点 MethodType（indy 机制传入）
+    bsm->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                         arena.intern("java/lang/invoke/MethodHandles$Lookup"),
+                         arena.intern("findStatic"),
+                         arena.intern("(Ljava/lang/Class;Ljava/lang/String;"
+                                      "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/"
+                                      "MethodHandle;"),
+                         false);
+    bsm->visitMethodInsn(Opcodes::INVOKESPECIAL,
+                         arena.intern("java/lang/invoke/ConstantCallSite"),
+                         arena.intern("<init>"), arena.intern("(Ljava/lang/invoke/MethodHandle;)V"),
+                         false);
+    bsm->visitInsn(Opcodes::ARETURN);
+    bsm->visitMaxs(0, 0);
+    bsm->visitEnd();
+
+    const char* bsmArgsDesc =
+        "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/"
+        "MethodType;Ljava/lang/String;ILjava/lang/invoke/MethodHandle;)Ljava/lang/invoke/"
+        "CallSite;";
+    auto* bsmArgs = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                   arena.intern("bsmArgs"), arena.intern(bsmArgsDesc),
+                                   ca::str::Utf8StringRef(), {});
+    bsmArgs->visitCode();
+    bsmArgs->visitTypeInsn(Opcodes::NEW, arena.intern("java/lang/invoke/ConstantCallSite"));
+    bsmArgs->visitInsn(Opcodes::DUP);
+    invokestatic(bsmArgs, "java/lang/invoke/MethodHandles", "lookup",
+                 "()Ljava/lang/invoke/MethodHandles$Lookup;");
+    bsmArgs->visitLdcInsn(Type::getObjectType(arena.intern("CliLlvmIndy")));
+    bsmArgs->visitLdcInsn(std::string("add"));
+    bsmArgs->visitVarInsn(Opcodes::ALOAD, 2);   // 站点 MethodType
+    bsmArgs->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                             arena.intern("java/lang/invoke/MethodHandles$Lookup"),
+                             arena.intern("findStatic"),
+                             arena.intern("(Ljava/lang/Class;Ljava/lang/String;"
+                                          "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/"
+                                          "MethodHandle;"),
+                             false);
+    bsmArgs->visitMethodInsn(Opcodes::INVOKESPECIAL,
+                             arena.intern("java/lang/invoke/ConstantCallSite"),
+                             arena.intern("<init>"),
+                             arena.intern("(Ljava/lang/invoke/MethodHandle;)V"),
+                             false);
+    bsmArgs->visitInsn(Opcodes::ARETURN);
+    bsmArgs->visitMaxs(0, 0);
+    bsmArgs->visitEnd();
+
+    const auto makeIndyMethod = [&arena, &bsm, &bsmArgs](const char* methodName,
+                                                         const char* siteName,
+                                                         const std::vector<ca::core::Any>& args,
+                                                         const Handle& bootstrap) {
+        auto* run = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                   arena.intern(methodName), arena.intern("(II)I"),
+                                   ca::str::Utf8StringRef(), {});
+        run->visitCode();
+        run->visitVarInsn(Opcodes::ILOAD, 0);
+        run->visitVarInsn(Opcodes::ILOAD, 1);
+        run->visitInvokeDynamicInsn(arena.intern(siteName), arena.intern("(II)I"), bootstrap,
+                                    args);
+        run->visitInsn(Opcodes::IRETURN);
+        run->visitMaxs(0, 0);
+        run->visitEnd();
+        return run;
+    };
+    const Handle bsmHandle(
+        Opcodes::H_INVOKESTATIC, arena.intern("CliLlvmIndy"), arena.intern("bsm"),
+        arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                     "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;"));
+    const Handle bsmArgsHandle(
+        Opcodes::H_INVOKESTATIC, arena.intern("CliLlvmIndy"), arena.intern("bsmArgs"),
+        arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                     "Ljava/lang/invoke/MethodType;Ljava/lang/String;ILjava/lang/invoke/"
+                     "MethodHandle;)Ljava/lang/invoke/CallSite;"));
+    const Handle addHandle(Opcodes::H_INVOKESTATIC, arena.intern("CliLlvmIndy"),
+                           arena.intern("add"), arena.intern("(II)I"));
+    auto* run = makeIndyMethod("run", "run", {}, bsmHandle);
+    std::vector<ca::core::Any> argsWithConstants;
+    argsWithConstants.emplace_back(arena.intern("tag"));
+    argsWithConstants.emplace_back(7);
+    argsWithConstants.emplace_back(addHandle);
+    auto* runArgs = makeIndyMethod("runArgs", "runArgs", argsWithConstants, bsmArgsHandle);
+
+    ClassNode cn;
+    cn.version   = Opcodes::V1_8;
+    cn.access    = Opcodes::ACC_PUBLIC | Opcodes::ACC_SUPER;
+    cn.name      = arena.intern("CliLlvmIndy");
+    cn.superName = arena.intern("java/lang/Object");
+    cn.methods.push_back(add);
+    cn.methods.push_back(bsm);
+    cn.methods.push_back(bsmArgs);
+    cn.methods.push_back(run);
+    cn.methods.push_back(runArgs);
+    ClassWriter writer(arena, ClassWriter::COMPUTE_FRAMES);
+    cn.accept(&writer);
+    return writer.toByteArray();
+}
+
+TEST(CliTest, LlvmIndyCustomBootstrapE2E)
+{
+#if defined(MJ2X_DISABLE_LLVM_BACKEND)
+    GTEST_SKIP() << "LLVM backend is disabled";
+#else
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!commandAvailable("clang")) GTEST_SKIP() << "clang is not available on PATH";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+    const fs::path javac = findJavac();
+    if (javac.empty()) GTEST_SKIP() << "javac is not available";
+#ifdef _WIN32
+    const fs::path java = javac.parent_path() / "java.exe";
+#else
+    const fs::path java = javac.parent_path() / "java";
+#endif
+
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_llvm_indy.keep").parent_path() / "mj2x_cli_llvm_indy";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    // 1. 程序化构造 CliLlvmIndy.class（自定义 bootstrap invokedynamic）。
+    ca::str::Utf8StringArena arena;
+    const auto               classBytes = buildCustomIndyClass(arena);
+    {
+        std::ofstream out(workDir / "CliLlvmIndy.class", std::ios::binary);
+        ASSERT_TRUE(out) << (workDir / "CliLlvmIndy.class").string();
+        out.write(reinterpret_cast<const char*>(classBytes.data()),
+                  static_cast<std::streamsize>(classBytes.size()));
+    }
+    {
+        std::ofstream out(workDir / "Driver.java");
+        ASSERT_TRUE(out) << (workDir / "Driver.java").string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+               "    if (dll != null) System.load(dll);\n"
+               "    System.out.print(CliLlvmIndy.run(3, 4));\n"
+               "    System.out.print(\"-\" + CliLlvmIndy.runArgs(10, 32));\n"
+               "    System.out.print(\"-\" + CliLlvmIndy.add(5, 6));\n"
+               "  }\n"
+               "}\n";
+    }
+    auto result = runScript({q(javac) + " -cp " + q(workDir) + " -d " + q(workDir) + " " +
+                             q(workDir / "Driver.java")});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    // JVM 基线（未加载原生库）。
+    result = runScript({q(java) + " -Xverify:all -cp " + q(workDir) + " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "7-42-11");
+
+    // 2. LLVM 原生执行：indy 运行时解析（自定义 bootstrap）+ 原生 add 经
+    //    MethodHandle 调用。
+    const auto runNativeVariant = [&](const std::string& suffix,
+                                      const std::string& extraArgs) {
+        const fs::path outDir = workDir / suffix;
+        fs::create_directories(outDir, ec);
+        const fs::path outClass = outDir / "CliLlvmIndy.class";
+        const auto     rc = runScript({q(cli) + " -i " + q(workDir / "CliLlvmIndy.class") +
+                                       " -o " + q(outClass) + " --backend llvm --compile "
+                                       "--compile-mode pipe --llvm-tool clang " + extraArgs});
+        ASSERT_EQ(rc.exitCode, 0) << rc.out;
+        const fs::path library = nativeLibraryPathFor(outClass);
+        ASSERT_TRUE(fileExists(library)) << rc.out;
+        fs::copy_file(workDir / "Driver.class", outDir / "Driver.class",
+                      fs::copy_options::overwrite_existing, ec);
+        ASSERT_FALSE(ec) << ec.message();
+        std::vector<std::string> runLines;
+#ifdef _WIN32
+        runLines.push_back("set \"MORPHER_DLL=" + library.string() + "\"");
+#else
+        runLines.push_back("export MORPHER_DLL=" + q(library));
+#endif
+        runLines.push_back(q(java) + " -Xverify:all -cp " + q(outDir) + " Driver");
+        const auto runResult = runScript(runLines);
+        ASSERT_EQ(runResult.exitCode, 0) << runResult.out;
+        EXPECT_EQ(runResult.out, "7-42-11");
+    };
+
+    runNativeVariant("plain", "");
+    // --runtime-protection：检查点注入 + mj2x-crt rt_protect 源随 .ll 一起编译；
+    // step 放大避免概率触发（无调试器信号时 ~1/step 触发率）。
+    runNativeVariant("protected",
+                     "--runtime-protection fake --runtime-protection-step 1000000");
+    // --regc-obfuscate：R4 变换（MBA 等）作用于 RegIR 后发射。
+    runNativeVariant("obfuscated", "--regc-obfuscate");
+#endif
+}
+
 TEST(CliTest, ClangCompilesRegcCppSource)
 {
     const fs::path cli = findCli();
@@ -2985,7 +3220,7 @@ TEST(CliTest, NegativeArgumentsFail)
             " --runtime-protection fake",
     });
     EXPECT_NE(rtProtectionWrongBackend.exitCode, 0);
-    EXPECT_NE(rtProtectionWrongBackend.out.find("requires --backend regc or vmc4"),
+    EXPECT_NE(rtProtectionWrongBackend.out.find("requires --backend regc, vmc4, or llvm"),
               std::string::npos)
         << rtProtectionWrongBackend.out;
 

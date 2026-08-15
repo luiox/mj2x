@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -22,6 +23,7 @@ enum class MatrixBackend
 {
     StackC,
     RegC,
+    Llvm,
 };
 
 struct MatrixParam
@@ -32,7 +34,12 @@ struct MatrixParam
 
 const char* backendName(MatrixBackend backend)
 {
-    return backend == MatrixBackend::StackC ? "stackc" : "regc";
+    switch (backend) {
+    case MatrixBackend::StackC: return "stackc";
+    case MatrixBackend::RegC: return "regc";
+    case MatrixBackend::Llvm: return "llvm";
+    }
+    return "stackc";
 }
 
 void PrintTo(const MatrixParam& param, std::ostream* out)
@@ -53,12 +60,35 @@ fs::path mainClassPath(const fs::path& root, const char* mainClass)
     return root / (relative + ".class");
 }
 
+/// LLVM 列允许清单：LLVM 后端 fail-closed，仅覆盖其子集能力（算术/数组/字段/
+/// 调用/异常/监视器/对象/反射/字符串/集合）。新增语义 fixture 若 LLVM 支持应
+/// 显式加入（不支持的在清单外自动跳过）。
+bool llvmSupports(const char* fixtureId)
+{
+    static const std::vector<const char*> supported = {
+        "g1.const_ints",    "g1.ldc_string",     "g2.add",     "g5.abs",
+        "g8.sum_array",     "g3.integral_narrowing", "g3.numeric_widening",
+        "g3.numeric_narrowing", "g6.static_special", "g6.virtual_interface",
+        "g6.recursion",     "g7.static_fields",  "g7.instance_fields",
+        "g9.object_lifecycle", "g9.type_checks", "g10.throw_catch",
+        "g10.monitor",      "g11.reflection_access", "g12.string_ops",
+        "g13.bit_ops",      "g14.deep_recursion", "g15.collection_ops",
+    };
+    for (const char* id : supported) {
+        if (std::strcmp(id, fixtureId) == 0) return true;
+    }
+    return false;
+}
+
 std::vector<MatrixParam> matrixParams()
 {
     std::vector<MatrixParam> params;
     for (const auto& fixture : mtest_set::semanticFixtureManifest()) {
         params.push_back(MatrixParam{&fixture, MatrixBackend::StackC});
         params.push_back(MatrixParam{&fixture, MatrixBackend::RegC});
+        if (llvmSupports(fixture.id)) {
+            params.push_back(MatrixParam{&fixture, MatrixBackend::Llvm});
+        }
     }
     return params;
 }
@@ -69,6 +99,7 @@ struct Toolchain
     std::string  reason;
     JdkToolchain jdk;
     fs::path     cli;
+    bool         clangAvailable = false;   // LLVM 列需要 clang（非 cl/gcc）
 };
 
 Toolchain probeToolchain()
@@ -91,6 +122,8 @@ Toolchain probeToolchain()
         toolchain.reason = compiler.reason;
         return toolchain;
     }
+    const auto clangProbe = runBat({q("clang") + " --version"});
+    toolchain.clangAvailable = clangProbe.exitCode == 0;
     toolchain.available = true;
     return toolchain;
 }
@@ -106,6 +139,9 @@ protected:
     {
         if (!toolchain_.available) {
             GTEST_SKIP() << "native integration toolchain unavailable: " << toolchain_.reason;
+        }
+        if (GetParam().backend == MatrixBackend::Llvm && !toolchain_.clangAvailable) {
+            GTEST_SKIP() << "clang is not available on PATH (LLVM matrix column)";
         }
     }
 
@@ -164,15 +200,24 @@ protected:
         ASSERT_TRUE(fileExists(inputClass)) << inputClass.string();
         const fs::path outputClass =
             inputClass.parent_path() / (inputClass.stem().string() + "_protected.class");
-        const fs::path cFile = dir / (std::string(backendName(param.backend)) + ".c");
-        const auto transform = runBat({q(toolchain_.cli) + " -i " + q(inputClass) + " -o " +
-                                       q(outputClass) + " --backend " + backendName(param.backend) +
-                                       " --emit-c " + q(cFile) + " --compile"});
+        std::string transformCommand;
+        if (param.backend == MatrixBackend::Llvm) {
+            // LLVM：pipe 编译（.ll 内存态 → clang -x ir -）；无需 --emit-c。
+            transformCommand = q(toolchain_.cli) + " -i " + q(inputClass) + " -o " +
+                               q(outputClass) + " --backend llvm --compile --compile-mode pipe "
+                               "--llvm-tool clang";
+        }
+        else {
+            const fs::path cFile = dir / (std::string(backendName(param.backend)) + ".c");
+            transformCommand = q(toolchain_.cli) + " -i " + q(inputClass) + " -o " +
+                               q(outputClass) + " --backend " + backendName(param.backend) +
+                               " --emit-c " + q(cFile) + " --compile";
+        }
+        const auto transform = runBat({transformCommand});
         ASSERT_EQ(transform.exitCode, 0)
             << fixture.id << " " << backendName(param.backend) << " transform:\n"
             << transform.out;
         ASSERT_TRUE(fileExists(outputClass)) << outputClass.string();
-        ASSERT_TRUE(fileExists(cFile)) << cFile.string();
 
         const fs::path nativeLibrary = outputClass.parent_path() /
 #ifdef _WIN32
