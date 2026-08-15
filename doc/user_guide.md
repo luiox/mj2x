@@ -136,17 +136,17 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `-o, --output <.class/.jar>` | 输出文件(方法被标记为 native) |
 | `--emit-c <file>` | 输出的 C 源码路径 |
 | `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
-| `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm`。**v2.1 发布关闭**：`with_mj2x_llvm` 默认 off，CLI 不暴露该选项 |
+| `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm`（v2.2 起默认开启；`with_mj2x_llvm=n` 构建时不暴露） |
 | `--config <file>` | 从 JSON 配置读取默认参数，命令行显式参数覆盖配置。**全量 45+ 参数可配置**（参数注册表单源，见 [config_file.md](config_file.md) 键表；设计见 [doc_ai/config_system_design.md](../doc_ai/config_system_design.md)） |
 | `--dump-config-schema [<file>]` | 输出配置 JSON Schema（draft-07，stdout 或文件）——GUI 配置工具 / VS Code / ajv 直接消费 |
 | `--dump-config-template [<file>]` | 输出全量键 + 默认值 + 注释的配置模板（JSONC，删除注释即得合法配置） |
 | `--intrinsic-config <file>` | 用户自定义 intrinsic 配置（JSON，三后端通用；详见 [user_intrinsic.md](user_intrinsic.md)） |
 | `--intrinsic-src <file>` | 追加用户 intrinsic 实现源文件（可重复，与配置内 `sources` 叠加） |
-| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码（**v2.1 起关闭**）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
+| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
 | `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++` |
-| `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用（**v2.1 发布关闭**，与 `--backend llvm` 一并不可用） |
+| `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用 |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
 | `--generate-xmake <dir>` | 生成独立 xmake native 工程（推荐；CLI 内嵌 mj2x-crt 源，配合 `--compile` 一键出 DLL/SO） |
 | `--dump-mir` | 打印中间表示(调试用) |
@@ -308,16 +308,17 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
 `--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并随 RegC 工程复制
 `mj2x-crt` source pack。
 
-### 5.4 LLVM IR（v2.1 发布关闭）
+### 5.4 LLVM IR（v2.2 转正，基础款）
 
-> **v2.1 关闭**：构建开关 `with_mj2x_llvm` 默认 off，`--backend llvm` / `--emit-llvm` /
-> `--llvm-tool` 在 CLI 中不可用（传入即报错 fail-closed）。以下描述仅作为开启开关
-> （`xmake f --with_mj2x_llvm=y`）后的行为参考，v2.2 可能重新开放。
+> v2.1 曾按发布范围默认关闭（`with_mj2x_llvm=n`，CLI fail-closed）；**v2.2 起默认
+> 开启**。显式关闭时 `--backend llvm` / `--emit-llvm` / `--llvm-tool` 不可用。
 
 `--backend llvm --emit-llvm` 直接输出 textual LLVM IR，不链接 LLVM SDK。当前只接受静态
-`int` / `long` / `float` / `double` / `void` 方法中的纯数值计算、比较、分支、循环和 switch；
-对象、JNI 调用、字段/数组访问、异常、monitor、整数除法/取余和引用类型会 fail closed，保留原
-Java 字节码。
+`int` / `long` / `float` / `double` / `void` 方法中的纯数值计算（含移位，移位量按
+Java 语义取低 5/6 位）、比较、分支、循环、switch，以及**同类内静态方法互调**
+（被调方法必须同样可转换，否则整链保持原字节码）；
+对象、JNI 调用、跨类/实例/递归调用、字段/数组访问、异常、monitor、整数除法/取余
+和引用类型会 fail closed，保留原 Java 字节码。
 
 ```bash
 mj2x-cli -i Hello.class -o Hello_native.class --backend llvm \

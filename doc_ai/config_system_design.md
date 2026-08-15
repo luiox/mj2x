@@ -146,8 +146,8 @@ struct ParamDef {
 | `log_quiet` | log.quiet | `--quiet` | Bool | false |
 | `log_verbose` | log.verbose | `--verbose` | Bool | false |
 
-> 注：`emit_llvm` / `llvm_tool` 在 `MJ2X_DISABLE_LLVM_BACKEND` 构建下不存在——
-> 注册表按编译宏裁剪（与 help 行为一致）。
+> 注：`emit_llvm` / `llvm_tool` 在显式关闭 LLVM 的构建（`with_mj2x_llvm=n`）下
+> 不存在——注册表按编译宏裁剪（与 help 行为一致）；默认构建（v2.2 起）包含。
 
 ### 4.3 生成物
 

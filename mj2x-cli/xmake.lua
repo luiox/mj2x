@@ -79,8 +79,8 @@ target("mj2x-cli")
     add_deps("mj2x-core", "libjdk_finder", "libca_process")
     add_packages("nlohmann_json")
 
-    -- v2.1 发布决策：LLVM IR 后端默认关闭（with_mj2x_llvm=n，见 xmake/options.lua）。
-    -- 关闭时 CLI 不暴露 --backend llvm / --emit-llvm / --llvm-tool（fail-closed）。
+    -- v2.2 起 LLVM IR 后端默认开启（with_mj2x_llvm=y，见 xmake/options.lua）。
+    -- 显式关闭时 CLI 不暴露 --backend llvm / --emit-llvm / --llvm-tool（fail-closed）。
     if not has_config("with_mj2x_llvm") then
         add_defines("MJ2X_DISABLE_LLVM_BACKEND")
     end

@@ -11,6 +11,7 @@
 | 六（剩余 issue） | VMC4 升级档：period 语义变义（#762/#844）已实现，N-7 对抗全闭环 | 🟡 S2 对抗验证 + 红队契约扩展待做（见待做 A） |
 | 七（#820 测试集） | 步骤 1-5 完成（调研/设计/Wave3/三后端矩阵/性能回归自动化） | 🟡 步骤 6 对抗闭环待做（见待做 B） |
 | 十二（配置系统） | P0+P1 完成：参数注册表 + 全量配置化 + `--dump-config-schema`/`--dump-config-template` | 🟡 GUI 配置工具（P2）待做（见待做 D） |
+| 十三（LLVM IR 后端） | 受限标量子集（静态纯计算/控制流）转正默认开启（v2.2；对象/JNI/异常/intrinsic 面 fail-closed） | ✅ 基础款完成（见归档索引） |
 
 ## 待做项
 
@@ -54,6 +55,13 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-19：LLVM IR 后端基础款转正并扩面（v2.2 默认开启，`with_mj2x_llvm` 默认
+  on）——受限标量子集：静态 int/long/float/double/void 纯计算（含移位，Java 掩码
+  语义）+ 比较/分支/循环/switch + **同类内静态互调**（三态 resolve：已编译成功
+  按描述解析 / 编译失败整链 fail-closed / 未编译递归预检含环检测）；对象/JNI/异常/
+  monitor/内存/整数 div-rem/跨类·实例·递归调用保持 fail-closed。验证：
+  LlvmIrBackendTest 7 例 + cli_test 3 例（clang/llc 双路径编译 → JVM 运行 E2E，
+  互调+移位输出 17-83）全绿。
 - 2026-08-19：mjdbg N-7 VMC4 ISA 恢复工具 v1 全闭环（PR #845）——五形态识别 +
   静态全恢复（跨实例复用率 100%），VMC4 低风险档强度归零、S2 启动条件满足；
   红队验证发现并修复 computed_goto label 定义（`::` → `:`）。
@@ -69,4 +77,5 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 | 六/七（#819 arraycopy、#820 步骤 1-5、#762/#844 变义、#843 trace surface 自验） | git log `feat/mj2x-arraycopy-intrinsic`、`feat/mj2x-vmc4-label-mutation`（PR #844）；`mj2x_integration_test` + `benchmark/baseline/regc-perf-baseline.json`；`vmc4_trace_surface_consistency_test.cpp` |
 | 八~十一（#818 intrinsic、#827 program 粒度、#829 混淆） | git log PR #826；`vmc4_backend.cpp` 实例缓存 + 粒度矩阵测试；`reg_transform_passes.{hpp,cpp}` + `register_ir_test.cpp` |
 | 十二（配置系统） | `mj2x-cli/src/param_registry.{hpp,cpp}`；`doc/config_file.md`；`doc_ai/config_system_design.md`（PR #846） |
+| 十三（LLVM IR 后端） | `mj2x-core/src/mj2x/backend/llvmir/`（ed9a13881 实现，v2.2 转正 + 移位/互调扩面）；`unittest/src/backend/llvm_ir_backend_test.cpp`（7 例）+ cli_test LLVM 3 例（含 clang/llc 编译 → JVM 运行 E2E）；`doc/user_guide.md` §5.4 |
 | VMC4 红队对抗（N-7 / S2 前置） | `mjdbg/mjdbg-isa-recovery/`（PR #845）；`doc_ai/vmc4_red_team_contract.md` §6 |

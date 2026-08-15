@@ -25,7 +25,7 @@ native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <
 - `mj2x-core/src/mj2x/core/` — Pipeline / CompilerIndex
 - `mj2x-core/src/mj2x/io/` — InputLoader / OutputWriter(`.class` / `.jar`)
 - `mj2x-core/src/mj2x/frontend/` — MIR / Block / CodeConverter / MethodStack
-- `mj2x-core/src/mj2x/backend/` — StackCBackend / RegCBackend / Vmc4Backend(及 LLVM IR 后端,默认关闭)
+- `mj2x-core/src/mj2x/backend/` — StackCBackend / RegCBackend / Vmc4Backend / LlvmIrBackend(标量子集,默认开启;`with_mj2x_llvm=n` 可关闭)
 - `mj2x-core/src/mj2x/preprocessor/` — 可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll / NativeAnnotation)
 - `mj2x-annotations/` — 用户可引入的 `@mj2x.Native` 注解源码
 - `mj2x-runtime/` — RegC R3 runtime(crypto / kernel / stringpool / antidebug / antijvmti)

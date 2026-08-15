@@ -26,7 +26,7 @@
 | 域 | 键 | 类型/枚举 | 默认 |
 |---|---|---|---|
 | global | `input` / `output` | string | — |
-| global | `backend` | `stackc` \| `regc` \| `vmc4`（LLVM 构建含 `llvm`） | `stackc` |
+| global | `backend` | `stackc` \| `regc` \| `llvm` \| `vmc4`（`with_mj2x_llvm=n` 构建无 `llvm`） | `stackc` |
 | global | `emit_c` / `emit_cpp` / `emit_llvm` / `emit_native_dir` | string | — |
 | global | `dump_mir` | boolean | `false` |
 | selection | `native_annotation` | string（JVM desc） | — |

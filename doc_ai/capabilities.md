@@ -14,7 +14,7 @@
 | 单 `.class` 输入 → 改写后 `.class` + emitted C | ✅ | StackC / RegC E2E |
 | `.jar` 输入 → 改写后 `.jar` + emitted C | ✅ | `mj2x_unittest` JAR pipeline 测试 |
 | RegC `.class` / `.jar` 输入 → emitted C++17 | ✅ | `CliTest.RealZigCompilesRegcCppClassAndRunsJvm` + CLI negative tests |
-| LLVM IR：静态标量纯计算 / 控制流 → textual `.ll` + native library | ⛔ v2.1 关闭 | 构建开关 `with_mj2x_llvm`（默认 off）；关闭时 CLI 不暴露 `--backend llvm`/`--emit-llvm`/`--llvm-tool`（fail-closed）；后端单测保留（`LlvmIrBackendTest.*`），开启开关后可回归 |
+| LLVM IR：静态标量纯计算 / 控制流 → textual `.ll` + native library | ✅ v2.2 转正默认开启 | 构建开关 `with_mj2x_llvm`（默认 on）；显式 `=n` 时 CLI 不暴露 `--backend llvm`/`--emit-llvm`/`--llvm-tool`（fail-closed）；后端单测 `LlvmIrBackendTest.*` + cli_test 3 例（含 clang 编译 → JVM 运行 E2E） |
 | StackC 单 `.class` 输出附带 `mj2x-cloader` sidecar class | ✅ | StackCBackend E2E |
 | StackC `.jar` 输出注入 `mj2x-cloader` dispatch loader class | ✅ | JAR pipeline / CLI 测试 |
 | JAR 输出保留 entry 顺序和非 class 资源 payload | ✅ | JAR fixture 测试 |
@@ -157,7 +157,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 **CLI**:
 
 - `--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
-- `--backend llvm --emit-llvm <file.ll>` 输出 textual LLVM IR；仅转换静态 `int` / `long` / `float` / `double` / `void` 的纯计算、比较和控制流，所有对象/JNI/异常/monitor/内存操作与整数 div/rem 均 fail closed。`--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；暂不支持 pipe、CMake 或 xmake 工程路径。**v2.1 发布关闭**：构建开关 `with_mj2x_llvm` 默认 off，CLI 不暴露相关选项（fail-closed），后端代码与单测保留，v2.2 可重新开启。
+- `--backend llvm --emit-llvm <file.ll>` 输出 textual LLVM IR；仅转换静态 `int` / `long` / `float` / `double` / `void` 的纯计算（含移位，Java 掩码语义）、比较、控制流与**同类内静态互调**（目标不可转换时整链 fail-closed），所有对象/JNI/异常/monitor/内存操作、跨类/实例/递归调用与整数 div/rem 均 fail closed。`--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；暂不支持 pipe、CMake 或 xmake 工程路径。**v2.2 转正**：构建开关 `with_mj2x_llvm` 默认 on（v2.1 曾按发布范围关闭）；显式 `=n` 时 CLI 不暴露相关选项（fail-closed）。
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。LLVM IR 由 clang 或 `llc -> clang` 编译，不使用 `--c-compiler`。

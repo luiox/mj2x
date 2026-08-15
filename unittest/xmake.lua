@@ -29,7 +29,7 @@ target("mj2x_unittest")
     add_files("src/**/*_test.cpp")
     remove_files("src/integration/**.cpp")
     add_includedirs("src")
-    -- 与 mj2x-cli 对齐：LLVM 后端关闭时（with_mj2x_llvm=n），cli_test 的 LLVM 用例跳过。
+    -- 与 mj2x-cli 对齐：LLVM 后端显式关闭时（with_mj2x_llvm=n），LLVM 用例跳过。
     if not has_config("with_mj2x_llvm") then
         add_defines("MJ2X_DISABLE_LLVM_BACKEND")
     end
