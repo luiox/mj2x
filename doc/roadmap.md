@@ -42,7 +42,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 | Codegen 工具层 | CSourceStream、IncludeSet、mangle、literal helper、CodeTemplate 五层模型 | 已落地（PR #781/#784） |
 | Runtime ABI | div/rem/barrier、helper、异常/错误桥接 | 保持 ABI 可测试、可版本化 |
 | Runtime core | crypto、kernel、stringpool、antidebug、antijvmti | 反侦测体系已落地（PR #797：Linux antidebug + enforcement + 检查点注入 + agent 检测） |
-| JDK intrinsic | 包装类、Math/Random、String/StringBuilder、位操作、System.arraycopy | 位操作 intrinsic 补全（PR #793）；System.arraycopy intrinsic 已完成（#819）；LLVM 侧 intrinsic 扩面对齐 RegC 面（#864 后） |
+| JDK intrinsic | 包装类、Math/Random、String/StringBuilder、位操作、System.arraycopy | 位操作 intrinsic 补全（PR #793）；System.arraycopy intrinsic 已完成（#819）；LLVM 侧 intrinsic 扩面对齐 RegC 面 **已完成**（PR #870：Math 纯函数 / 包装类 valueOf·xxxValue / Random / StringBuilder·StringBuffer 切片直调 mj2x-crt，toString 映射 to_jstring；String 类方法面保持 JNI 留待整类下沉） |
 | String/UTF-16 | Java String 语义、StringBuilder/StringBuffer | 依赖 libca UTF-16 或 mj2x 最小垫片 |
 | L4 变换 pass | DCE、常量传播、MBA、CFF、opaque predicate | 只有 RegC/R3 live 验证稳定后再扩 |
 | 整类下沉 | 算法密集类内部方法全 native，边界保留 JNI | 先做无反射、无动态类加载、intrinsic 覆盖充分的类 |
@@ -79,7 +79,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 - 不把 StackC 宣称为强保护；它是正确性和覆盖率基线。
 - 不在 mjdbg 还没有报告前自称保护强度已经提升。
 - VMC4 性能优化（v2.3+，可用版已交付但性能非目标）。
-- LLVM 后端已转正并二次扩面（v2.2 起默认开启；PR #864 已支持对象/字段/数组/实例调用/异常/monitor/ldc 字符串与类常量；invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入 v2.3+ 视需求）。
+- LLVM 后端已转正并二次扩面（v2.2 起默认开启；PR #864 已支持对象/字段/数组/实例调用/异常/monitor/ldc 字符串与类常量；PR #870 完成 invokedynamic 运行时解析、intrinsic 扩面对齐 RegC（Math/包装类/Random/StringBuilder）与保护特性接入（runtime-protection / MBA / opaque / CFF）；String 类方法面与整类下沉留待 v2.3+ 视需求）。
 
 ---
 

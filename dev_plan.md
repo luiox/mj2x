@@ -99,6 +99,28 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-21（round-2 收尾·toString 修正）：**`StringBuilder.toString()` 映射修正为
+  to_jstring**——实时隔离定位（非猜测）：独立 hex Driver 反调 `concat()`，返回
+  `java.lang.StringBuilder` 对象（`CLASS=java.lang.StringBuilder`）而非 String；
+  `concat("k",7)` 单独调用即 len=16、'k'=7 + 11 个 NUL。根因：LLVM intrinsic
+  registry 把 `StringBuilder.toString` 误映射到 `mj2x_string_builder_materialize`
+  （转义桥，返回真 Java StringBuilder 对象，头注释明示），而 Java 语义要求
+  toString 返回真 String。修复：toString → `mj2x_string_builder_to_jstring`
+  （真 jstring），StringBuffer 同步 `mj2x_string_buffer_to_jstring`，单测断言跟随。
+  证据链：修复前 `.ll` 与正确样本 hash 相同（emitter 无错、缺陷在 crt 调用选择）；
+  修复后 `LlvmIndySurfaceSample/native.ll` 已 `call i32 @mj2x_string_builder_to_jstring`；
+  `LlvmSamples.GenerateMjdbgFixtures` PASSED（`[k]=7 slice=5 types=true`）。提交 1b6f4f721。
+- 2026-08-21（round-2 收尾·全量验证与文档）：`mj2x_unittest` 全量 **600 过 / 3 skip /
+  0 fail**（58 suites、707s；3 skip = EmitsExceptionDispatchWithRegions 由 CliExc E2E
+  覆盖 + RealZig* 本机无 zig）；`mtest_set_unittest` **25/25 过**；`mj2x_integration_test`
+  **66 过 / 1 skip**（67 例：MatrixBaseline 语义矩阵含 LLVM 列全绿；skip = 性能回归门控
+  `MJ2X_PERF_REGRESSION` 未设）。分组回归全绿：LLVM 32 过 1 skip、RegC 108、StackC 83、
+  VMC4 145。`CliTest.GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo` 本机为环境性偶发
+  （spawn 的真实 xmake 退出 0xC0000374 堆损坏；该测试早于本 PR，手工独立工程 xmake
+  f+build 均 exit 0，全量跑中亦通过），判定非回归。文档同步：roadmap §2 Intrinsic 行 +
+  §4 LLVM 状态行（PR #870 完成态）、user_guide §5.4（invokedynamic 运行时解析 / intrinsic
+  扩面对齐 RegC / 保护特性 / to_jstring，fail-closed 列表剔除 invokedynamic）；capabilities
+  无回退。
 - 2026-08-21（round-2 收尾·补 intrinsic 4）：**StringBuilder/StringBuffer 状态机
   切片**——非逃逸 builder 全链直调 crt（init 四面 + append 十三面 +
   toString/length/capacity/charAt/ensureCapacity/setLength/setCharAt/

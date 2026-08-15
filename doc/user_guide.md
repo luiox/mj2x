@@ -142,7 +142,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--dump-config-template [<file>]` | 输出全量键 + 默认值 + 注释的配置模板（JSONC，删除注释即得合法配置） |
 | `--intrinsic-config <file>` | 用户自定义 intrinsic 配置（JSON，三后端通用；详见 [user_intrinsic.md](user_intrinsic.md)） |
 | `--intrinsic-src <file>` | 追加用户 intrinsic 实现源文件（可重复，与配置内 `sources` 叠加） |
-| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 转换标量计算/控制流 + 对象/数组/实例与外部调用/异常表/monitor/ldc（窄类型签名、引用类型与 JNI 边界均已支持；`invokedynamic` 等剩余面 fail-closed 保持原字节码，见 §5.4）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
+| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 转换标量计算/控制流 + 对象/数组/实例与外部调用/异常表/monitor/ldc（窄类型签名、引用类型与 JNI 边界均已支持；round-2 起 invokedynamic 运行时解析 / intrinsic 扩面 / 保护特性接入，剩余面 fail-closed，见 §5.4）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
 | `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++` |
@@ -308,7 +308,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
 `--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并随 RegC 工程复制
 `mj2x-crt` source pack。
 
-### 5.4 LLVM IR（v2.2 转正，基础款；二次扩面补齐对象/调用/异常面）
+### 5.4 LLVM IR（v2.2 转正；二次扩面补齐对象/数组/调用/异常/monitor/ldc，round-2 补齐 invokedynamic 运行时解析 / intrinsic 扩面对齐 RegC / 保护特性接入）
 
 > v2.1 曾按发布范围默认关闭（`with_mj2x_llvm=n`，CLI fail-closed）；**v2.2 起默认
 > 开启**。显式关闭时 `--backend llvm` / `--emit-llvm` / `--llvm-tool` 不可用。
@@ -332,11 +332,27 @@ switch、浮点→整数转换（`llvm.fptosi.sat`，NaN→0 / 溢出饱和）�
   在 try 块内按异常表处理）；
 - **monitor**：`monitorenter` / `monitorexit`（synchronized 方法/块）；
 - **常量**：`ldc` String（`NewStringUTF`）/ Class（`FindClass`）；
-- **intrinsic**：`array.length` / `instanceof:<desc>` / `monitor.enter` /
-  `monitor.exit`（与 RegC intrinsic 面对齐，invokedynamic 除外）。
+- **intrinsic（round-2 扩面对齐 RegC）**：`array.length` / `instanceof:<desc>` /
+  `monitor.enter` / `monitor.exit`；`java.lang.Math` 纯函数面（abs/min/max
+  I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random）直调 mj2x-crt runtime
+  符号；包装类 `valueOf`/`xxxValue` 非逃逸切片（`%mj2x_int` 等单字段 shadow
+  结构）；`java.util.Random` 状态机切片（非逃逸 `new Random(seed)` + nextXxx）；
+  `StringBuilder` / `StringBuffer` 状态机切片（init/append/range·capacity/toString
+  直调 crt，toString 经 `mj2x_string_builder_to_jstring` 返回真 jstring）。String
+  类方法面保持 JNI 分派，留待整类下沉。
+- **invokedynamic（round-2 运行时解析）**：StringConcatFactory / LambdaMetafactory
+  站点由 pipeline 级预处理静态展开；残留自定义 bootstrap 站点以 `indy:<idx>`
+  发射为模块级全局 cache + 运行时 bootstrap 解析（`MethodHandles.lookup` /
+  `MethodType` / `privateLookupIn` → bsm 调用 → `CallSite.getTarget` →
+  `invokeWithArguments`，参数装箱/返回拆箱）。超出 RegC（RegC 对自定义 bootstrap
+  站点 fail-closed 保字节码）。
+- **保护特性（round-2）**：`--runtime-protection` 每方法入口注入
+  `mj2x_rt_checkpoint` 检查点（crt `mj2x_rt_protect.c`）；`--regc-obfuscate` 及
+  MBA / opaque / CFF 变换选项支持 llvm（RegIR 级同源变换，mbaDeep Barrier 指令
+  LLVM 子集不支持时回退未变换形态并告警）。
 
-不支持（fail closed，保留原字节码）：`invokedynamic`、`ldc` MethodHandle（与
-RegC/StackC 一致落 null）、`MethodType` 之外的引用常量、`jsr/ret` 等遗留指令。
+仍不支持（fail closed，保留原字节码）：`ldc` MethodHandle（引用常量，行为与
+RegC/StackC 一致）、`MethodType` 之外的引用常量、`jsr/ret` 等遗留指令。
 
 ```bash
 mj2x-cli -i Hello.class -o Hello_native.class --backend llvm \
