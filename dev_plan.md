@@ -88,6 +88,13 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-21（round-2 收尾·补 intrinsic）：**Math 纯函数切片**直调 mj2x-crt
+  runtime（abs/min/max I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random；
+  0 JNI、无 ExceptionCheck，`.ll` 模块级 declare）；LLVM `--compile`（pipe/文件）
+  并入 mj2x-crt 源（rt_protect 专用路径单一提供，修 LNK2005 重复符号）；
+  `--generate-cmake/--generate-xmake` 工程整树分发 crt。验证：mj2x_unittest
+  594 过 / 3 skip；矩阵 66 例全绿（g5.abs 走 intrinsic）；Math E2E
+  `abs=10 sqrt=5.0`（pipe/文件双模式）。
 - 2026-08-21（round-2 收尾）：四主线落地——**indy 运行时解析**（自定义 bootstrap
   `indy:<idx>` → 全局 cache + bsm resolver，超出 RegC）、**intrinsic**（cmp.nan_*）、
   **保护特性**（runtime-protection 检查点 + MBA/opaque/CFF 变换接入 llvm）、
