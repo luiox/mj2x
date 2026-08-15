@@ -112,15 +112,17 @@ TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
     EXPECT_FALSE(compilerClass.modified);
 }
 
-TEST(LlvmIrBackendTest, KeepsEffectfulAndThrowingMethodsBytecode)
+TEST(LlvmIrBackendTest, EmitsMonitorIntrinsics)
 {
-    // monitorenter（Barrier）在 monitor 实现前保持 fail-closed。
+    // monitorenter/monitorexit → MonitorEnter/Exit helper（null → NPE 由 helper 处理）。
     auto monitorMethod = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                                     "locked",
                                     "(Ljava/lang/Object;)I",
                                     {
                                         new VarInsnNode(Opcodes::ALOAD, 0),
                                         new InsnNode(Opcodes::MONITORENTER),
+                                        new VarInsnNode(Opcodes::ALOAD, 0),
+                                        new InsnNode(Opcodes::MONITOREXIT),
                                         new InsnNode(Opcodes::ICONST_1),
                                         new InsnNode(Opcodes::IRETURN),
                                     },
@@ -138,13 +140,13 @@ TEST(LlvmIrBackendTest, KeepsEffectfulAndThrowingMethodsBytecode)
     auto monitorResult = backend.compileMethod(
         "Test", compilerClass.methods[0], converter.convert(*monitorMethod));
 
-    ASSERT_EQ(monitorResult.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(monitorResult.text.find("rejects"), std::string::npos) << monitorResult.text;
-
-    backend.injectIntoClass(compilerClass, compilerClass.methods[0], monitorResult);
-    EXPECT_FALSE(monitorMethod->access & Opcodes::ACC_NATIVE);
-    EXPECT_GT(monitorMethod->instructions.size(), 0);
-    EXPECT_FALSE(compilerClass.modified);
+    ASSERT_EQ(monitorResult.kind, BackendResult::Kind::C_SOURCE) << monitorResult.text;
+    EXPECT_NE(monitorResult.text.find("call void @mj2x_llvm_monitor_enter(ptr %env, ptr %v0)"),
+              std::string::npos)
+        << monitorResult.text;
+    EXPECT_NE(monitorResult.text.find("call void @mj2x_llvm_monitor_exit(ptr %env, ptr %v"),
+              std::string::npos)
+        << monitorResult.text;
 }
 
 /// @brief 编译单个静态方法并返回 BackendResult（字节码 → LLVM IR 切片）。
@@ -267,23 +269,21 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
 
 TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
 {
-    // caller 调 target，target 含 monitorenter（Barrier）→ target 不可转换 →
-    // caller fail-closed（调用方保持字节码）。
+    // caller 调 target，target 含未初始化局部读取（undef Opaque）→ target 不
+    // 可转换 → caller 走 JNI call_static_* fallback。
     std::unique_ptr<MethodNode> target;
     std::unique_ptr<MethodNode> caller;
-    target = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "target", "(Ljava/lang/Object;)I",
-                        {new VarInsnNode(Opcodes::ALOAD, 0), new InsnNode(Opcodes::MONITORENTER),
-                         new InsnNode(Opcodes::ICONST_1), new InsnNode(Opcodes::IRETURN)},
-                        2, 1);
-    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(Ljava/lang/Object;)I",
-                        {new VarInsnNode(Opcodes::ALOAD, 0),
-                         new MethodInsnNode(Opcodes::INVOKESTATIC,
+    target = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "target", "()I",
+                        {new VarInsnNode(Opcodes::ILOAD, 0), new InsnNode(Opcodes::IRETURN)},
+                        1, 1);
+    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "()I",
+                        {new MethodInsnNode(Opcodes::INVOKESTATIC,
                                             ca::str::ZUtf8StringRef::from_static("Test"),
                                             ca::str::ZUtf8StringRef::from_static("target"),
-                                            ca::str::ZUtf8StringRef::from_static("(Ljava/lang/Object;)I"),
+                                            ca::str::ZUtf8StringRef::from_static("()I"),
                                             false),
                          new InsnNode(Opcodes::IRETURN)},
-                        2, 1);
+                        1, 0);
     CompilerIndex index;
     CompilerClass clazz;
     clazz.methods.push_back(CompilerMethod{target.get(), true, false, {}});
