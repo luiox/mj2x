@@ -54,10 +54,13 @@
   参数装箱、返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点保字节码）。
   验证：`CliTest.LlvmIndyCustomBootstrapE2E`（plain / runtime-protection fake /
   regc-obfuscate 三变体，输出 7-42-11）+ `LlvmIrBackendTest.EmitsIndyRuntimeResolution`。
-- **intrinsic 扩面对齐 RegC** 🟡（Math 纯函数切片完成）：`java.lang.Math` 全纯函数
-  面直调 mj2x-crt runtime 符号（abs/min/max I/J/F/D、sin/cos/tan/sqrt/floor/ceil/
-  pow、round、random；0 JNI、无 ExceptionCheck，declare 模块级输出，链接侧并入
-  mj2x-crt 源）。包装类/String/StringBuilder/Random 等 RegC-only intrinsic 面
+- **intrinsic 扩面对齐 RegC** 🟡（Math 纯函数 + 包装类 shadow 完成）：`java.lang.Math`
+  全纯函数面直调 mj2x-crt runtime 符号（abs/min/max I/J/F/D、sin/cos/tan/sqrt/
+  floor/ceil/pow、round、random；0 JNI、无 ExceptionCheck，declare 模块级输出，
+  链接侧并入 mj2x-crt 源）；**包装类 valueOf/xxxValue 非逃逸切片**（Integer/Long/
+  Short/Byte/Float/Double/Boolean/Character——shadow 结构 `%mj2x_int` 等 + 窄装箱
+  trunc / 窄拆箱 sext/zext，逃逸根经 copy 联通分析回退 JNI，对齐 RegC
+  regc_intrinsics.cpp）。String/StringBuilder/Random 等 RegC-only intrinsic 面
   LLVM 保持 JNI 分派（native 对象/escape 机制留待整类下沉 F）。
 - **保护特性接入** ✅：`--runtime-protection` 支持 llvm——每方法入口注入
   `%mj2x_rt_checkpoint`（模块级全局 + `mj2x_rt_checkpoint_run` 调用，crt
@@ -88,6 +91,13 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-21（round-2 收尾·补 intrinsic 2）：**包装类 shadow 切片**——Integer/
+  Long/Short/Byte/Float/Double/Boolean/Character 的 valueOf/xxxValue 非逃逸用法
+  直调 mj2x-crt 值结构（`%mj2x_int` 等单字段 struct；窄装箱 trunc、窄拆箱
+  sext/zext；valueOf 结果寄存器经 Copy 联通逃逸分析，任何非匹配拆箱使用整根
+  回退 JNI；Short/Byte 的 valueOf 用 JVM 实际窄描述符 (S)/(B)）。验证：单测
+  EmitsWrapperBoxUnboxDirectCalls + E2E `sum=23 esc=7`（六种 wrapper 直调 +
+  逃逸回退）。
 - 2026-08-21（round-2 收尾·补 intrinsic）：**Math 纯函数切片**直调 mj2x-crt
   runtime（abs/min/max I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random；
   0 JNI、无 ExceptionCheck，`.ll` 模块级 declare）；LLVM `--compile`（pipe/文件）

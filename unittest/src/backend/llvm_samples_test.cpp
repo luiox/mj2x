@@ -320,6 +320,11 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 // Math intrinsic 直调（mj2x-crt runtime 符号 + 模块级 declare）。
                 "call i32 @mj2x_math_abs_i32",
                 "declare i32 @mj2x_math_abs_i32(i32)",
+                // 包装类 shadow 直调（valueOf 装箱 + shortValue 拆箱 + 结构类型）。
+                "call %mj2x_int @mj2x_int_value_of",
+                "call i16 @mj2x_short_short_value",
+                "%mj2x_short = type { i16 }",
+                "declare %mj2x_short @mj2x_short_value_of(i16)",
             },
         },
         {
@@ -351,7 +356,7 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
     for (const auto& sample : samples) {
         generateAndRunSample(sample,
                              sample.className == "LlvmTinySample"
-                                 ? "addMul=21 loopSum=45 maxOf=9 pick=4 absDiff=8"
+                                 ? "addMul=21 loopSum=45 maxOf=9 pick=4 absDiff=8 wrapSum=7"
                                  : sample.className == "LlvmIndySurfaceSample"
                                        ? "[k]=7 slice=5 types=true"
                                        : "catch0=7 catch10=10 caught locked=10");

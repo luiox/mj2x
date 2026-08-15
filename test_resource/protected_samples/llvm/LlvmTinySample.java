@@ -34,8 +34,12 @@ public class LlvmTinySample {
         return Math.abs(a - b);
     }
 
+    public static int wrapSum(int a, int b) {
+        return Integer.valueOf(a).intValue() + Short.valueOf((short) b).shortValue();
+    }
+
     public static String check() {
         return "addMul=" + addMul(2, 5) + " loopSum=" + loopSum(10) + " maxOf=" + maxOf(3, 9)
-            + " pick=" + pick(-4) + " absDiff=" + absDiff(3, 11);
+            + " pick=" + pick(-4) + " absDiff=" + absDiff(3, 11) + " wrapSum=" + wrapSum(5, 2);
     }
 }

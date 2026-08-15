@@ -27,4 +27,43 @@ const LlvmIntrinsicEntry* matchLlvmIntrinsic(ca::str::Utf8StringRef owner,
                                              ca::str::Utf8StringRef name,
                                              ca::str::Utf8StringRef desc);
 
+/// @brief 包装类装箱条目（如 Integer.valueOf(I)）。
+struct LlvmWrapperBoxEntry
+{
+    const char* owner;       // "java/lang/Integer"
+    const char* name;        // "valueOf"
+    const char* desc;        // "(I)Ljava/lang/Integer;"
+    const char* kind;        // "int"（shadow 结构名后缀）
+    const char* shadowType;  // "%mj2x_int"
+    const char* shadowDecl;  // "%mj2x_int = type { i32 }"（模块级，去重输出）
+    const char* symbol;      // "mj2x_int_value_of"
+    const char* argLlvm;     // "i32"（crt 形参类型；窄类型先 trunc）
+    const char* declareText; // "declare %mj2x_int @mj2x_int_value_of(i32)"
+};
+
+/// @brief 包装类拆箱条目（如 Integer.intValue()）。
+struct LlvmWrapperUnboxEntry
+{
+    const char* owner;       // "java/lang/Integer"
+    const char* name;        // "intValue"
+    const char* desc;        // "()I"
+    const char* kind;        // "int"
+    const char* shadowType;  // "%mj2x_int"
+    const char* shadowDecl;  // "%mj2x_int = type { i32 }"（模块级，去重输出）
+    const char* symbol;      // "mj2x_int_int_value"
+    const char* retLlvm;     // "i32"（crt 返回类型；窄类型再 sext/zext）
+    const char* retExt;      // "" / "sext" / "zext"（窄结果扩展到 i32）
+    const char* declareText; // "declare i32 @mj2x_int_int_value(%mj2x_int)"
+};
+
+/// @brief 查找包装类 valueOf 装箱条目（仅非逃逸用法可直调；逃逸走 JNI）。
+const LlvmWrapperBoxEntry* matchLlvmWrapperBox(ca::str::Utf8StringRef owner,
+                                               ca::str::Utf8StringRef name,
+                                               ca::str::Utf8StringRef desc);
+
+/// @brief 查找包装类 xxxValue 拆箱条目。
+const LlvmWrapperUnboxEntry* matchLlvmWrapperUnbox(ca::str::Utf8StringRef owner,
+                                                   ca::str::Utf8StringRef name,
+                                                   ca::str::Utf8StringRef desc);
+
 }   // namespace mj2x

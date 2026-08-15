@@ -944,6 +944,77 @@ TEST(LlvmIrBackendTest, EmitsMathIntrinsicDirectCall)
     EXPECT_NE(ll.find("declare double @mj2x_math_random()"), std::string::npos) << ll;
 }
 
+TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
+{
+    // 包装类 shadow 切片：非逃逸 valueOf/xxxValue 直调 mj2x-crt 值结构
+    // （0 JNI）。Short 链含 I2S（窄装箱 trunc + 窄拆箱 sext），Boolean 链
+    // 含布尔参数（trunc i32→i8）与 zext 拆箱。
+    LlvmIrBackend backend;
+    auto box = [&](const char* owner, const char* boxName, const char* boxDesc,
+                   const char* unboxName, const char* unboxDesc, const char* symbol,
+                   const char* unboxSymbol, const char* shadow) {
+        return compileWithBackend(
+            backend, "wrap", "(I)I",
+            {new VarInsnNode(Opcodes::ILOAD, 0),
+             new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                ca::str::ZUtf8StringRef::from_static(owner),
+                                ca::str::ZUtf8StringRef::from_static(boxName),
+                                ca::str::ZUtf8StringRef::from_static(boxDesc), false),
+             new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                ca::str::ZUtf8StringRef::from_static(owner),
+                                ca::str::ZUtf8StringRef::from_static(unboxName),
+                                ca::str::ZUtf8StringRef::from_static(unboxDesc), false),
+             new InsnNode(Opcodes::IRETURN)},
+            2, 2);
+    };
+
+    auto intResult = box("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", "intValue",
+                         "()I", "mj2x_int_value_of", "mj2x_int_int_value", "%mj2x_int");
+    ASSERT_EQ(intResult.kind, BackendResult::Kind::C_SOURCE) << intResult.text;
+    EXPECT_NE(intResult.text.find("call %mj2x_int @mj2x_int_value_of(i32 %v0)"),
+              std::string::npos)
+        << intResult.text;
+    // 装箱结果占一个临时号：拆箱 receiver 的 load 是 %v2。
+    EXPECT_NE(intResult.text.find("call i32 @mj2x_int_int_value(%mj2x_int %v2)"),
+              std::string::npos)
+        << intResult.text;
+    EXPECT_NE(intResult.text.find("alloca %mj2x_int"), std::string::npos) << intResult.text;
+    EXPECT_EQ(intResult.text.find("mj2x_llvm_call_static_object"), std::string::npos)
+        << intResult.text;
+    EXPECT_EQ(intResult.text.find("mj2x_llvm_call_int"), std::string::npos) << intResult.text;
+
+    auto shortResult = box("java/lang/Short", "valueOf", "(S)Ljava/lang/Short;", "shortValue",
+                           "()S", "mj2x_short_value_of", "mj2x_short_short_value",
+                           "%mj2x_short");
+    ASSERT_EQ(shortResult.kind, BackendResult::Kind::C_SOURCE) << shortResult.text;
+    EXPECT_NE(shortResult.text.find("call %mj2x_short @mj2x_short_value_of(i16"),
+              std::string::npos)
+        << shortResult.text;
+    EXPECT_NE(shortResult.text.find("call i16 @mj2x_short_short_value(%mj2x_short"),
+              std::string::npos)
+        << shortResult.text;
+    EXPECT_EQ(shortResult.text.find("mj2x_llvm_call_static_object"), std::string::npos)
+        << shortResult.text;
+
+    // 逃逸根（valueOf 结果经 copy 后返回）→ 整根回退 JNI：shadow 槽不存在，
+    // 走 call_static_object + call_int。
+    LlvmIrBackend escapeBackend;
+    auto escape = compileWithBackend(
+        escapeBackend, "escape", "(I)Ljava/lang/Integer;",
+        {new VarInsnNode(Opcodes::ILOAD, 0),
+         new MethodInsnNode(Opcodes::INVOKESTATIC,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/Integer"),
+                            ca::str::ZUtf8StringRef::from_static("valueOf"),
+                            ca::str::ZUtf8StringRef::from_static("(I)Ljava/lang/Integer;"),
+                            false),
+         new InsnNode(Opcodes::ARETURN)},
+        2, 1);
+    ASSERT_EQ(escape.kind, BackendResult::Kind::C_SOURCE) << escape.text;
+    EXPECT_NE(escape.text.find("mj2x_llvm_call_static_object"), std::string::npos)
+        << escape.text;
+    EXPECT_EQ(escape.text.find("alloca %mj2x_int"), std::string::npos) << escape.text;
+}
+
 TEST(LlvmIrBackendTest, EmitsMbaTransformedAddition)
 {
     LlvmIrBackend backend;

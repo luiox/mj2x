@@ -46,8 +46,11 @@ public:
             out_ << ", " << llvmTypeWide(function_.parameters[index].type) << " %p" << index;
         }
         out_ << ") {\nentry:\n";
+        // 包装类 shadow 逃逸分析（valueOf 结果仅被匹配拆箱使用时才直调 mj2x-crt
+        // 值结构；任何逃逸 → 整根回退 JNI，语义对齐 RegC regc_intrinsics.cpp）。
+        analyzeWrapperShadows();
         for (const auto& [id, type] : registerTypes_) {
-            out_ << "  %slot_r" << id << " = alloca " << llvmType(type) << "\n";
+            out_ << "  %slot_r" << id << " = alloca " << slotLlvmType(id) << "\n";
         }
         for (size_t index = 0; index < function_.parameters.size(); ++index) {
             const auto& parameter = function_.parameters[index];
@@ -103,12 +106,192 @@ private:
 
     std::string slotName(RegId id) const { return "%slot_r" + std::to_string(id.value); }
 
+    /// @brief 槽类型：包装类 shadow 寄存器用结构类型（"%mj2x_int"），其余按
+    /// registerTypes_（窄类型已宽化为 i32）。
+    const char* slotLlvmType(uint32_t id) const
+    {
+        const auto native = nativeSlots_.find(id);
+        if (native != nativeSlots_.end()) return native->second.c_str();
+        const auto it = registerTypes_.find(id);
+        return it == registerTypes_.end() ? nullptr : llvmType(it->second);
+    }
+
+    /// @brief 包装类 shadow 逃逸分析（对齐 RegC regc_intrinsics.cpp）：
+    /// valueOf 结果寄存器经 Copy（指令内 + 后继边 + 异常边）联通为根；任何
+    /// 非匹配拆箱的使用（运算/比较/字段/数组/调用实参/返回/抛出/分支）→
+    /// 整根回退 JNI。回退根的所有寄存器保持普通 REF 槽。
+    void analyzeWrapperShadows()
+    {
+        // 1) union-find：REF 寄存器经 copy 联通。
+        std::map<uint32_t, uint32_t> parent;
+        auto find = [&](uint32_t id) {
+            uint32_t root = id;
+            while (parent.count(root) != 0 && parent[root] != root) root = parent[root];
+            while (parent.count(id) != 0 && parent[id] != id) {
+                const uint32_t next = parent[id];
+                parent[id]           = root;
+                id                   = next;
+            }
+            return root;
+        };
+        auto unite = [&](uint32_t a, uint32_t b) {
+            a = find(a);
+            b = find(b);
+            if (a != b) parent[a] = b;
+        };
+        auto uniteCopy = [&](const RegCopy& copy) {
+            if (copy.source.kind == RegOperandKind::Register) {
+                unite(copy.dest.id.value, copy.source.reg.value);
+            }
+        };
+        auto uniteSuccessor = [&](const RegSuccessor& successor) {
+            for (const auto& copy : successor.copies) uniteCopy(copy);
+        };
+        for (const auto& block : function_.blocks) {
+            for (const auto& ins : block->instructions) {
+                if (ins.kind == RegInstructionKind::Copy) uniteCopy(ins.copy);
+            }
+            std::visit(
+                [&](const auto& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                        uniteSuccessor(t.target);
+                    }
+                    else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                        uniteSuccessor(t.trueTarget);
+                        uniteSuccessor(t.falseTarget);
+                    }
+                    else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                        uniteSuccessor(t.defaultTarget);
+                        for (const auto& entry : t.cases) uniteSuccessor(entry.target);
+                    }
+                },
+                block->terminator);
+        }
+        for (const auto& region : function_.exceptionRegions) {
+            for (const auto& edge : region.edges) {
+                for (const auto& copy : edge.copies) uniteCopy(copy);
+            }
+        }
+
+        // 2) valueOf 站点 → 根 kind（同根两种 kind 冲突 → 回退）。
+        std::map<uint32_t, const LlvmWrapperBoxEntry*> boxRoots;
+        std::set<uint32_t>                             fallbackRoots;
+        for (const auto& block : function_.blocks) {
+            for (const auto& ins : block->instructions) {
+                if (ins.kind != RegInstructionKind::Call || !ins.hasDest ||
+                    ins.dest.type != SSAType::REF ||
+                    ins.method.invokeOpcode != Opcodes::INVOKESTATIC) {
+                    continue;
+                }
+                const LlvmWrapperBoxEntry* box = matchLlvmWrapperBox(
+                    ins.method.owner, ins.method.name, ins.method.desc);
+                if (box == nullptr) continue;
+                const uint32_t root = find(ins.dest.id.value);
+                const auto [it, inserted] = boxRoots.emplace(root, box);
+                if (!inserted && it->second != box) fallbackRoots.insert(root);
+            }
+        }
+
+        // 3) 使用扫描：非匹配拆箱/任何其他使用 → 根回退。
+        auto isBoxRoot = [&](const RegOperand& operand, uint32_t& root) {
+            if (operand.kind != RegOperandKind::Register) return false;
+            root = find(operand.reg.value);
+            return boxRoots.count(root) != 0;
+        };
+        auto fallback = [&](const RegOperand& operand) {
+            uint32_t root = 0;
+            if (isBoxRoot(operand, root)) fallbackRoots.insert(root);
+        };
+        auto fallbackAll = [&](const std::vector<RegOperand>& operands, size_t first) {
+            for (size_t index = first; index < operands.size(); ++index) {
+                fallback(operands[index]);
+            }
+        };
+        for (const auto& block : function_.blocks) {
+            for (const auto& ins : block->instructions) {
+                switch (ins.kind) {
+                case RegInstructionKind::Copy:
+                case RegInstructionKind::Allocate:
+                case RegInstructionKind::Barrier: break;
+                case RegInstructionKind::Unary: fallback(ins.value); break;
+                case RegInstructionKind::Binary:
+                case RegInstructionKind::Compare:
+                    fallback(ins.lhs);
+                    fallback(ins.rhs);
+                    break;
+                case RegInstructionKind::Convert: fallback(ins.value); break;
+                case RegInstructionKind::LoadField: fallback(ins.receiver); break;
+                case RegInstructionKind::StoreField:
+                    fallback(ins.receiver);
+                    fallback(ins.value);
+                    break;
+                case RegInstructionKind::ArrayLoad:
+                    fallback(ins.receiver);
+                    fallback(ins.index);
+                    break;
+                case RegInstructionKind::ArrayStore:
+                    fallback(ins.receiver);
+                    fallback(ins.index);
+                    fallback(ins.value);
+                    break;
+                case RegInstructionKind::Intrinsic: fallbackAll(ins.args, 0); break;
+                case RegInstructionKind::Call:
+                {
+                    const LlvmWrapperUnboxEntry* unbox = matchLlvmWrapperUnbox(
+                        ins.method.owner, ins.method.name, ins.method.desc);
+                    if (unbox != nullptr && !ins.args.empty()) {
+                        uint32_t root = 0;
+                        if (isBoxRoot(ins.args[0], root) &&
+                            std::string_view(boxRoots[root]->kind) !=
+                                std::string_view(unbox->kind)) {
+                            fallbackRoots.insert(root);
+                        }
+                        fallbackAll(ins.args, 1);
+                    }
+                    else {
+                        fallbackAll(ins.args, 0);
+                    }
+                    break;
+                }
+                }
+            }
+            std::visit(
+                [&](const auto& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                        fallback(t.condition);
+                    }
+                    else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                        fallback(t.value);
+                    }
+                    else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
+                        fallback(t.value);
+                    }
+                    else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
+                        if (t.hasValue) fallback(t.value);
+                    }
+                },
+                block->terminator);
+        }
+
+        // 4) native 寄存器：根在 boxRoots 且未回退 → shadow 结构槽。
+        for (const auto& [id, type] : registerTypes_) {
+            if (type != SSAType::REF) continue;
+            const uint32_t root = find(id);
+            const auto     it   = boxRoots.find(root);
+            if (it != boxRoots.end() && fallbackRoots.count(root) == 0) {
+                nativeSlots_[id] = it->second->shadowType;
+            }
+        }
+    }
+
     bool emitOperand(const RegOperand& operand, std::string& expression, std::string& reason)
     {
         if (operand.kind == RegOperandKind::Register) {
-            // 槽类型是权威（窄参数宽化为 i32；Compare 结果为 i1 谓词）。
-            const auto it = registerTypes_.find(operand.reg.value);
-            const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
+            // 槽类型是权威（窄参数宽化为 i32；Compare 结果为 i1 谓词；
+            // 包装类 shadow 为结构类型）。
+            const char* type = slotLlvmType(operand.reg.value);
             if (type == nullptr) {
                 reason = "LLVM IR encountered an unsupported operand type";
                 return false;
@@ -192,9 +375,8 @@ private:
     }
 
     bool emitStore(RegValue destination, const std::string& expression, std::string& reason)    {
-        // 槽类型是权威（窄结果 i32；Compare 结果 i1 谓词）。
-        const auto it = registerTypes_.find(destination.id.value);
-        const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
+        // 槽类型是权威（窄结果 i32；Compare 结果 i1 谓词；包装类 shadow 结构）。
+        const char* type = slotLlvmType(destination.id.value);
         if (type == nullptr) {
             reason = "LLVM IR destination has an unsupported type";
             return false;
@@ -324,6 +506,56 @@ private:
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Call) {
+            // 包装类 shadow 切片：valueOf 装箱（结果非逃逸）与 xxxValue 拆箱
+            // （receiver 为 shadow）直调 mj2x-crt 值结构（0 JNI；逃逸根已在
+            // analyzeWrapperShadows 回退，此处走 JNI 分派）。
+            if (instruction.hasDest && instruction.dest.type == SSAType::REF &&
+                instruction.method.invokeOpcode == Opcodes::INVOKESTATIC) {
+                const LlvmWrapperBoxEntry* box = matchLlvmWrapperBox(
+                    instruction.method.owner, instruction.method.name, instruction.method.desc);
+                if (box != nullptr && nativeSlots_.count(instruction.dest.id.value) != 0) {
+                    std::string argument;
+                    if (!emitOperand(instruction.args[0], argument, reason)) return false;
+                    const std::string argType = llvmTypeWide(instruction.args[0].type);
+                    std::string        callArg = std::string(box->argLlvm) + " " + argument;
+                    if (std::string_view(box->argLlvm) != std::string_view(argType)) {
+                        // 窄装箱：crt 形参是 i16/i8，栈值 i32 → trunc。
+                        const std::string narrowed = nextTemporary();
+                        out_ << "  " << narrowed << " = trunc " << argType << " " << argument
+                             << " to " << box->argLlvm << "\n";
+                        callArg = std::string(box->argLlvm) + " " + narrowed;
+                    }
+                    runtimeDeclares_.push_back(box->shadowDecl);
+                    runtimeDeclares_.push_back(box->declareText);
+                    const std::string result = nextTemporary();
+                    out_ << "  " << result << " = call " << box->shadowType << " @" << box->symbol
+                         << "(" << callArg << ")\n";
+                    return emitStore(instruction.dest, result, reason);
+                }
+            }
+            if (!instruction.args.empty() &&
+                instruction.args[0].kind == RegOperandKind::Register &&
+                nativeSlots_.count(instruction.args[0].reg.value) != 0) {
+                const LlvmWrapperUnboxEntry* unbox = matchLlvmWrapperUnbox(
+                    instruction.method.owner, instruction.method.name, instruction.method.desc);
+                if (unbox != nullptr) {
+                    std::string receiver;
+                    if (!emitOperand(instruction.args[0], receiver, reason)) return false;
+                    runtimeDeclares_.push_back(unbox->shadowDecl);
+                    runtimeDeclares_.push_back(unbox->declareText);
+                    const std::string result = nextTemporary();
+                    out_ << "  " << result << " = call " << unbox->retLlvm << " @" << unbox->symbol
+                         << "(" << unbox->shadowType << " " << receiver << ")\n";
+                    if (unbox->retExt[0] != '\0') {
+                        // 窄拆箱：crt 返回 i16/i8，JVM 栈语义 i32 → sext/zext。
+                        const std::string widened = nextTemporary();
+                        out_ << "  " << widened << " = " << unbox->retExt << " " << unbox->retLlvm
+                             << " " << result << " to i32\n";
+                        return emitStore(instruction.dest, widened, reason);
+                    }
+                    return emitStore(instruction.dest, result, reason);
+                }
+            }
             // JDK 纯函数 intrinsic（Math 切片）：直调 mj2x-crt 符号（0 JNI、
             // 不抛异常无 ExceptionCheck；对齐 RegC RuntimeFunction 语义）。
             if (instruction.method.invokeOpcode == Opcodes::INVOKESTATIC) {
@@ -1055,6 +1287,8 @@ private:
     std::vector<PendingEdge> pendingEdges_;
     std::vector<std::string> checkpointGlobals_;   // 模块级检查点全局（finalize 统一输出）
     std::vector<std::string> runtimeDeclares_;     // 本函数用到的 intrinsic 直调 declare
+    /// 包装类 shadow 寄存器 → 结构槽类型（"%mj2x_int" 等；仅非逃逸根）。
+    std::map<uint32_t, std::string> nativeSlots_;
 
 public:
     /// @brief 本函数注入的检查点状态全局（模块级输出用）。
