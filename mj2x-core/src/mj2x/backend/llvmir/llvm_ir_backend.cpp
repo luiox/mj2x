@@ -359,10 +359,12 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
         }
         return true;
     case RegInstructionKind::Intrinsic:
-        // 与发射端一致的按名过滤：array.length / instanceof:<desc> 放行；
-        // monitor.enter/exit 等在实现前保持 fail-closed。
+        // 与发射端一致的按名过滤：array.length / instanceof:<desc> /
+        // monitor.enter / monitor.exit 放行；其余保持 fail-closed。
         if (instruction.intrinsicName != "array.length" &&
-            instruction.intrinsicName.rfind("instanceof:", 0) != 0) {
+            instruction.intrinsicName.rfind("instanceof:", 0) != 0 &&
+            instruction.intrinsicName != "monitor.enter" &&
+            instruction.intrinsicName != "monitor.exit") {
             reason = "LLVM IR first slice rejects this intrinsic";
             return false;
         }
@@ -1172,6 +1174,17 @@ private:
                 out_ << "  " << result << " = call i32 @mj2x_llvm_instance_of(ptr %env, " << value
                      << ", ptr " << strings_.intern(name.substr(11)) << ")\n";
                 return emitStore(instruction.dest, result, reason);
+            }
+            if (name == "monitor.enter" || name == "monitor.exit") {
+                std::string value;
+                if (instruction.args.empty() || !emitOperand(instruction.args[0], value, reason)) {
+                    reason = "LLVM IR monitor requires an object operand";
+                    return false;
+                }
+                out_ << "  call void @mj2x_llvm_monitor_"
+                     << (name == "monitor.enter" ? "enter" : "exit") << "(ptr %env, ptr " << value
+                     << ")\n";
+                return true;
             }
             reason = "LLVM IR first slice rejects this intrinsic";
             return false;
@@ -2480,6 +2493,49 @@ std::string emitObjectHelpers()
            "  %c = call ptr %find(ptr %env, ptr %name)\n"
            "  ret ptr %c\n"
            "}\n\n";
+    // MonitorEnter/Exit（null → NPE ThrowNew）。
+    out << "define internal void @mj2x_llvm_monitor_enter(ptr %env, ptr %obj) {\n"
+           "entry:\n"
+           "  %isnull = icmp eq ptr %obj, null\n"
+           "  br i1 %isnull, label %npe, label %ok\n"
+           "ok:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %me0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::MonitorEnter << "\n"
+        << "  %me = load ptr, ptr %me0\n"
+           "  %rc = call i32 %me(ptr %env, ptr %obj)\n"
+           "  ret void\n"
+           "npe:\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::FindClass << "\n"
+        << "  %find = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %find(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
+           "  %ft2 = load ptr, ptr %env\n"
+           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
+        << "  %thrownew = load ptr, ptr %tn0\n"
+           "  %rc2 = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
+           "  ret void\n"
+           "}\n\n";
+    out << "define internal void @mj2x_llvm_monitor_exit(ptr %env, ptr %obj) {\n"
+           "entry:\n"
+           "  %isnull = icmp eq ptr %obj, null\n"
+           "  br i1 %isnull, label %npe, label %ok\n"
+           "ok:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %mx0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::MonitorExit << "\n"
+        << "  %mx = load ptr, ptr %mx0\n"
+           "  %rc = call i32 %mx(ptr %env, ptr %obj)\n"
+           "  ret void\n"
+           "npe:\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::FindClass << "\n"
+        << "  %find = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %find(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
+           "  %ft2 = load ptr, ptr %env\n"
+           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
+        << "  %thrownew = load ptr, ptr %tn0\n"
+           "  %rc2 = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
+           "  ret void\n"
+           "}\n\n";
 
     return out.str();
 }
@@ -2511,7 +2567,8 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
         bodies.find("mj2x_llvm_exception_") != std::string::npos ||
         bodies.find("mj2x_llvm_throw(") != std::string::npos ||
         bodies.find("mj2x_llvm_string_const") != std::string::npos ||
-        bodies.find("mj2x_llvm_class_const") != std::string::npos) {
+        bodies.find("mj2x_llvm_class_const") != std::string::npos ||
+        bodies.find("mj2x_llvm_monitor_") != std::string::npos) {
         full << emitObjectHelpers();
     }
     sourceCode_ = full.str();
