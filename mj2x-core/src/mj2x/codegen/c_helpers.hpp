@@ -1,4 +1,4 @@
-﻿/// @file c_helpers.hpp
+/// @file c_helpers.hpp
 /// @brief Stateless helpers shared by the C/C++ emitting backends.
 ///
 /// @details
@@ -149,9 +149,10 @@ inline std::string mangleName(std::string_view name, bool descriptorMode)
             result += "_3";
         }
         else if (c == '$') {
-            // JNI 规范：'$'(U+0024) 转义为 "_24"。内部类名（Outer$Inner）必须转义，
-            // 否则按 Java_* 符号查找时会失败。此转义对基于符号绑定的消费者是规范正确修复。
-            result += "_24";
+            // JNI 规范（JDK 1.2+ 起）：'$'(U+0024) 转义为 "_00024"。
+            // 旧约定 "_24" 会导致 HotSpot 原生符号查找失败
+            // （UnsatisfiedLinkError: 内类/带 $ 描述符的 JNI wrapper 无法绑定）。
+            result += "_00024";
         }
         else {
             result += c;

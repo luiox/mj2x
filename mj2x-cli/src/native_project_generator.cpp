@@ -255,7 +255,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
 }
 
 int generateLlvmXmakeProject(const std::string& projectDirValue,
-                             const std::string& llvmOutputPath)
+                             const std::string& llvmOutputPath, bool withRuntimeProtection)
 {
     std::error_code ec;
     const fs::path projectDir(projectDirValue);
@@ -287,6 +287,12 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
         }
     }
 
+    // --runtime-protection：内嵌 mj2x-crt rt_protect 源随工程分发并参与编译。
+    if (withRuntimeProtection && !writeEmbeddedCrtTree(projectDir)) {
+        CA_LOGT_ERROR("compile", "embedded mj2x-crt resources are unavailable.\n");
+        return 1;
+    }
+
     if (!writeText(projectDir / "xmake.lua",
                    "target(\"mj2x_native\")\n"
                    "    set_kind(\"shared\")\n"
@@ -300,8 +306,16 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
                    "(is_host(\"macosx\") and \".dylib\" or \".so\")\n"
                    "        local out = path.join(target:targetdir(), \"mj2x_native\" .. suffix)\n"
                    "        os.mkdir(target:targetdir())\n"
-                   "        os.execv(\"clang\", {\"-shared\", path.join(os.scriptdir(), "
-                   "\"native.ll\"), \"-o\", out})\n"
+                   "        local args = {\"-shared\", path.join(os.scriptdir(), "
+                   "\"native.ll\")}\n"
+                   "        if os.exists(path.join(os.scriptdir(), "
+                   "\"src/mj2x-crt/rt_protect/mj2x_rt_protect.c\")) then\n"
+                   "            table.insert(args, path.join(os.scriptdir(), "
+                   "\"src/mj2x-crt/rt_protect/mj2x_rt_protect.c\"))\n"
+                   "        end\n"
+                   "        table.insert(args, \"-o\")\n"
+                   "        table.insert(args, out)\n"
+                   "        os.execv(\"clang\", args)\n"
                    "    end)\n"
                    "target_end()\n")) {
         return 1;

@@ -24,6 +24,7 @@
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "config_file.hpp"
 #include "cpp_source_dialect.hpp"
+#include "embedded_resources.hpp"
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
 #include "param_registry.hpp"
@@ -382,8 +383,11 @@ static bool copyCrtForCMakeProject(const std::filesystem::path& projectDir,
 }
 
 /// @brief LLVM IR 版 CMake 工程：native.ll + CMakeLists.txt（clang 编译 .ll）。
+/// @param withRuntimeProtection 为 true 时内嵌 mj2x-crt rt_protect 源并一起编译
+///        （--runtime-protection 检查点的实现侧）。
 static int generateLlvmCMakeProject(const std::string& projectDirValue,
-                                    const std::string& nativeOutputPath)
+                                    const std::string& nativeOutputPath,
+                                    bool withRuntimeProtection)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -409,6 +413,11 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         }
     }
 
+    if (withRuntimeProtection && !mj2x::cli::writeEmbeddedCrtTree(projectDir)) {
+        CA_LOGT_ERROR("cli", "embedded mj2x-crt resources are unavailable.\n");
+        return 1;
+    }
+
     {
         std::ofstream out(projectDir / "CMakeLists.txt", std::ios::binary);
         if (!out) {
@@ -419,12 +428,21 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "project(mj2x_native NONE)\n\n";
         out << "find_program(CLANG_EXECUTABLE clang REQUIRED)\n\n";
         out << "set(LLVM_IR_FILE ${CMAKE_CURRENT_SOURCE_DIR}/native.ll)\n";
+        if (withRuntimeProtection) {
+            out << "set(RT_PROTECT_SRC "
+                   "${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/rt_protect/"
+                   "mj2x_rt_protect.c)\n";
+        }
         out << "set(NATIVE_LIB ${CMAKE_CURRENT_BINARY_DIR}/mj2x_native"
                "${CMAKE_SHARED_LIBRARY_SUFFIX})\n";
         out << "add_custom_command(\n";
         out << "  OUTPUT ${NATIVE_LIB}\n";
-        out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${LLVM_IR_FILE} -o ${NATIVE_LIB}\n";
-        out << "  DEPENDS ${LLVM_IR_FILE}\n";
+        out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${LLVM_IR_FILE}";
+        if (withRuntimeProtection) out << " ${RT_PROTECT_SRC}";
+        out << " -o ${NATIVE_LIB}\n";
+        out << "  DEPENDS ${LLVM_IR_FILE}";
+        if (withRuntimeProtection) out << " ${RT_PROTECT_SRC}";
+        out << "\n";
         out << "  COMMENT \"Compiling LLVM IR with clang\")\n";
         out << "add_custom_target(mj2x_native ALL DEPENDS ${NATIVE_LIB})\n";
     }
@@ -760,8 +778,9 @@ int main(int argc, char** argv)
         return 1;
     }
     if (options.runtimeProtection != "none" && options.cBackendKind != CEmitterBackend::RegC &&
-        options.cBackendKind != CEmitterBackend::Vmc4) {
-        CA_LOGT_ERROR("cli", "--runtime-protection requires --backend regc or vmc4.\n");
+        options.cBackendKind != CEmitterBackend::Vmc4 &&
+        options.cBackendKind != CEmitterBackend::LlvmIr) {
+        CA_LOGT_ERROR("cli", "--runtime-protection requires --backend regc, vmc4, or llvm.\n");
         return 1;
     }
     if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
@@ -954,6 +973,28 @@ int main(int argc, char** argv)
     const std::string nativeResourcePath = nativeResourceEntry;
     const std::string nativeTempSuffix   = nativeLibraryPath.extension().string();
 
+    // R4 保护变换选项（RegIR 级，RegC/LLVM 共用；基础混淆默认关闭，
+    // --regc-obfuscate 显式开启基础三项，#829 增强开关各自联动对应基础项）。
+    auto buildTransformOptions = [&]() -> std::optional<mj2x::RegTransformOptions> {
+        if (!options.regcObfuscate && options.regcCffDead == 0 && !options.regcCffStateEncrypt &&
+            !options.regcMbaDeep && !options.regcOpaqueZero) {
+            return std::nullopt;
+        }
+        mj2x::RegTransformOptions transform;
+        transform.enableMba                   = options.regcObfuscate || options.regcMbaDeep;
+        transform.enableOpaquePredicates      = options.regcObfuscate || options.regcOpaqueZero;
+        transform.enableControlFlowFlattening = options.regcObfuscate ||
+                                                options.regcCffDead != 0 ||
+                                                options.regcCffStateEncrypt;
+        transform.cffDeadBlockDensity = static_cast<ca::u32>(options.regcCffDead);
+        transform.cffStateEncryption  = options.regcCffStateEncrypt;
+        transform.mbaDeep             = options.regcMbaDeep;
+        transform.opaqueZero          = options.regcOpaqueZero;
+        transform.transformSeed =
+            mj2x::deriveClientSeed(options.regcTransformSeed, options.clientId);
+        return transform;
+    };
+
     mj2x::Pipeline pipeline(std::move(config));
 
     const bool needsNativeSource = !nativeOutputPath.empty() || pipeCompile || nativeDirMode;
@@ -963,6 +1004,15 @@ int main(int argc, char** argv)
         if (options.cBackendKind == CEmitterBackend::LlvmIr) {
             auto llvmBackend = std::make_unique<mj2x::LlvmIrBackend>();
             if (!options.llvmOutputPath.empty()) llvmBackend->setOutputPath(options.llvmOutputPath);
+            if (auto transform = buildTransformOptions()) {
+                llvmBackend->setTransformOptions(*transform);
+            }
+            if (options.runtimeProtection != "none") {
+                llvmBackend->setRuntimeProtection(
+                    parseRuntimeProtectionAction(options.runtimeProtection),
+                    static_cast<uint32_t>(options.runtimeProtectionStep),
+                    static_cast<uint32_t>(options.runtimeProtectionDelayMs));
+            }
             nativeSourceBackend = llvmBackend.get();
             pipeline.registerBackend(std::move(llvmBackend));
         }
@@ -978,23 +1028,9 @@ int main(int argc, char** argv)
             if (options.regcNoInline) regcBackend->setInlineEnabled(false);
             // 基础混淆默认关闭；--regc-obfuscate 显式开启基础三项，
             // #829 增强开关各自联动对应基础项（mbaDeep→MBA、opaqueZero→opaque、
-            // cffDead/stateEncrypt→CFF）。
-            if (options.regcObfuscate || options.regcCffDead != 0 ||
-                options.regcCffStateEncrypt || options.regcMbaDeep ||
-                options.regcOpaqueZero) {
-                mj2x::RegTransformOptions transform;
-                transform.enableMba                   = options.regcObfuscate || options.regcMbaDeep;
-                transform.enableOpaquePredicates      = options.regcObfuscate || options.regcOpaqueZero;
-                transform.enableControlFlowFlattening = options.regcObfuscate ||
-                                                        options.regcCffDead != 0 ||
-                                                        options.regcCffStateEncrypt;
-                transform.cffDeadBlockDensity = static_cast<ca::u32>(options.regcCffDead);
-                transform.cffStateEncryption  = options.regcCffStateEncrypt;
-                transform.mbaDeep             = options.regcMbaDeep;
-                transform.opaqueZero          = options.regcOpaqueZero;
-                transform.transformSeed =
-                    mj2x::deriveClientSeed(options.regcTransformSeed, options.clientId);
-                regcBackend->setTransformOptions(transform);
+            // cffDead/stateEncrypt→CFF）。RegIR 级变换与 LLVM 后端共用。
+            if (auto transform = buildTransformOptions()) {
+                regcBackend->setTransformOptions(*transform);
             }
             if (!options.nativeDirOutput.empty())
                 regcBackend->setSplitOutputDir(options.nativeDirOutput);
@@ -1156,9 +1192,12 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    const bool withRuntimeProtection = options.runtimeProtection != "none";
+
     if (!options.cmakeProjectDir.empty()) {
         if (options.cBackendKind == CEmitterBackend::LlvmIr) {
-            int projectRc = generateLlvmCMakeProject(options.cmakeProjectDir, nativeOutputPath);
+            int projectRc = generateLlvmCMakeProject(options.cmakeProjectDir, nativeOutputPath,
+                                                     withRuntimeProtection);
             if (projectRc != 0) return projectRc;
         }
         else {
@@ -1181,7 +1220,8 @@ int main(int argc, char** argv)
     if (!options.xmakeProjectDir.empty()) {
         if (options.cBackendKind == CEmitterBackend::LlvmIr) {
             int projectRc = mj2x::cli::generateLlvmXmakeProject(options.xmakeProjectDir,
-                                                                nativeOutputPath);
+                                                                nativeOutputPath,
+                                                                withRuntimeProtection);
             if (projectRc != 0) return projectRc;
         }
         else {
@@ -1227,11 +1267,13 @@ int main(int argc, char** argv)
             if (options.cBackendKind == CEmitterBackend::LlvmIr) {
                 if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
                     compileRc = mj2x::cli::compileLlvmIrFromPipe(
-                        nativeArtifact.content, options.outputPath, options.llvmTool);
+                        nativeArtifact.content, options.outputPath, options.llvmTool,
+                        withRuntimeProtection);
                 }
                 else {
                     compileRc = mj2x::cli::compileLlvmIrSource(
-                        nativeOutputPath, options.outputPath, options.llvmTool);
+                        nativeOutputPath, options.outputPath, options.llvmTool,
+                        withRuntimeProtection);
                 }
             }
             else if (options.compileMode == mj2x::cli::CompileMode::Pipe) {

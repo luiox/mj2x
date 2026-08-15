@@ -6,6 +6,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
+#include "mj2x/codegen/runtime_protection.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/mir/register_ir/reg_block.hpp"
 #include "mj2x/mir/register_ir/reg_function.hpp"
@@ -173,6 +174,35 @@ inline const char* arrayKindFor(SSAType elementType)
     }
 }
 
+/// @brief 值 SSAType → 装箱/拆箱 helper 后缀（indy 参数/结果；REF 不装箱）。
+inline const char* boxKindFor(SSAType type)
+{
+    switch (type) {
+    case SSAType::BOOL: return "boolean";
+    case SSAType::I8: return "byte";
+    case SSAType::I16: return "short";
+    case SSAType::CHAR: return "char";
+    case SSAType::I32: return "int";
+    case SSAType::I64: return "long";
+    case SSAType::F32: return "float";
+    case SSAType::F64: return "double";
+    default: return nullptr;
+    }
+}
+
+/// @brief 拆箱 helper 返回类型（JVM 窄类型统一为 i32 计算位宽，与槽类型一致）。
+inline const char* unboxReturnType(SSAType type)
+{
+    switch (widenNarrowType(type)) {
+    case SSAType::I32: return "i32";
+    case SSAType::I64: return "i64";
+    case SSAType::F32: return "float";
+    case SSAType::F64: return "double";
+    case SSAType::REF: return "ptr";
+    default: return nullptr;
+    }
+}
+
 /// @brief 方法返回类型 → JNI 调用 helper 后缀（CallXxxMethodA 分派）。
 inline const char* callKindFor(PrimitiveKind kind)
 {
@@ -270,6 +300,8 @@ constexpr int64_t SetStaticLongField   = 160;
 constexpr int64_t SetStaticFloatField  = 161;
 constexpr int64_t SetStaticDoubleField = 162;
 constexpr int64_t NewStringUTF         = 167;
+constexpr int64_t IsSameObject         = 24;
+constexpr int64_t NewLocalRef          = 25;
 constexpr int64_t GetArrayLength       = 171;
 constexpr int64_t NewObjectArray       = 172;
 constexpr int64_t GetObjectArrayElement = 173;
@@ -398,7 +430,7 @@ bool recordCopies(RegisterTypes& types, const std::vector<RegCopy>& copies, std:
 bool recordSuccessor(RegisterTypes& types, const RegSuccessor& successor, std::string& reason);
 bool isSupportedBinary(const RegInstruction& instruction, std::string& reason);
 bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
-                       InternalCallResolver* resolver, std::string& reason);
+                       InternalCallResolver* resolver, size_t indySiteCount, std::string& reason);
 bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types,
                           InternalCallResolver* resolver, std::string& reason);
 
@@ -407,15 +439,34 @@ bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types,
 class LlvmFunctionEmitter;
 
 /// @brief 发射一个 RegIR 函数为 textual LLVM IR（类定义在 emitter.cpp）。
+/// @param indySiteBase 文件级 invokedynamic 站点表偏移（本方法首个站点的全局
+///                     索引；方法内局部索引 = 全局索引 - indySiteBase）。
+/// @param runtimeProtection 非空时在方法入口注入反侦测检查点（mj2x-crt
+///                          rt_protect，编译侧链接 mj2x_rt_protect.c）。
 bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& registerTypes,
                       const std::string& functionName, SSAType returnType,
                       InternalCallResolver* resolver, GlobalStringTable& strings,
+                      size_t indySiteBase,
+                      const codegen::RuntimeProtectionOptions* runtimeProtection,
+                      uint32_t* checkpointCounter, std::vector<std::string>* checkpointGlobals,
                       std::string& source, std::string& reason);
 
 // ---- 共享 helper 发射（llvm_ir_helpers.cpp） ----
 
 std::string emitThrowArithmeticHelper();
 std::string emitObjectHelpers();
+
+/// @brief invokedynamic 运行时解析 helper 集合（box/unbox、MethodType、Class 对象、
+/// MethodHandle 解析、JNI mid 直调），仅含 indy 站点时生成。
+std::string emitIndyHelpers();
+
+/// @brief 单个 invokedynamic 站点的 bootstrap 函数（对齐 RegC emitIndyBootstrapFunction：
+/// Lookup + privateLookupIn + MethodType + bsm 调用 + CallSite.getTarget + 全局缓存）。
+std::string emitIndyBootstrapFunction(size_t index, const RegFunction::InvokeDynamicSite& site);
+
+/// @brief 反侦测检查点模块级声明（%mj2x_rt_checkpoint + extern 调用；链接侧由
+///        编译管线附加 mj2x-crt rt_protect 源）。
+std::string emitRuntimeProtectionDeclarations();
 
 }   // namespace llvmir
 }   // namespace mj2x

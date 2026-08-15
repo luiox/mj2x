@@ -1,5 +1,7 @@
 #include "native_compiler.hpp"
 
+#include "embedded_resources.hpp"
+
 #include "libca/log/log_macros.hpp"
 
 #include <algorithm>
@@ -558,8 +560,32 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath)
     return nativeLibraryPath(outputPath);
 }
 
+/// @brief 把内嵌 mj2x-crt rt_protect 源写入临时目录；返回 .c 路径（空 = 失败）。
+/// @details rt_protect 的 .h/.c 必须同目录（.c 相对 include）；临时目录生命周期
+/// 由调用方（ScopedTemporaryDirectory）保证覆盖整个编译过程。
+std::filesystem::path writeRtProtectSource(ScopedTemporaryDirectory& directory)
+{
+    const auto* header = findEmbeddedResource("src/rt_protect/mj2x_rt_protect.h");
+    const auto* source = findEmbeddedResource("src/rt_protect/mj2x_rt_protect.c");
+    if (header == nullptr || source == nullptr) return {};
+    const auto headerPath = directory.path() / "mj2x_rt_protect.h";
+    const auto sourcePath = directory.path() / "mj2x_rt_protect.c";
+    {
+        std::ofstream out(headerPath, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(header->data),
+                  static_cast<std::streamsize>(header->size));
+    }
+    {
+        std::ofstream out(sourcePath, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(source->data),
+                  static_cast<std::streamsize>(source->size));
+    }
+    if (!std::filesystem::is_regular_file(sourcePath)) return {};
+    return sourcePath;
+}
+
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
-                        LlvmTool tool)
+                        LlvmTool tool, bool withRuntimeProtection)
 {
     std::error_code ec;
     const std::filesystem::path sourcePath(llvmOutputPath);
@@ -586,12 +612,32 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
     const char* sharedFlag = "-shared";
 #endif
 
+    // --runtime-protection：检查点实现（mj2x_rt_protect.c）随 .ll 一起编译。
+    ScopedTemporaryDirectory rtProtectDirectory;
+    std::filesystem::path    rtProtectSource;
+    if (withRuntimeProtection) {
+        std::filesystem::path parent = libraryPath.parent_path();
+        if (parent.empty()) parent = ".";
+        if (!rtProtectDirectory.create(parent, ".mj2x-rt-protect-")) {
+            CA_LOGT_ERROR("compile", "cannot create temporary rt_protect directory.\n");
+            return 1;
+        }
+        rtProtectSource = writeRtProtectSource(rtProtectDirectory);
+        if (rtProtectSource.empty()) {
+            CA_LOGT_ERROR("compile",
+                          "embedded mj2x-crt rt_protect sources are unavailable.\n");
+            return 1;
+        }
+    }
+
     int result = 1;
     if (tool == LlvmTool::Clang) {
         printf("Compiling LLVM IR native library with clang: %s\n",
                libraryPath.string().c_str());
         ca::process::Command command("clang");
-        command.arg(sharedFlag).arg(sourcePath.string()).arg("-o").arg(libraryPath.string());
+        command.arg(sharedFlag).arg(sourcePath.string());
+        if (!rtProtectSource.empty()) command.arg(rtProtectSource.string());
+        command.arg("-o").arg(libraryPath.string());
         result = runCompilerCommand(command, "clang");
     }
     else {
@@ -613,11 +659,22 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
             objectPath.string());
         if (runCompilerCommand(llcCommand, "llc") != 0) return 1;
 
+        std::vector<std::filesystem::path> linkInputs{objectPath};
+        if (!rtProtectSource.empty()) {
+            const std::filesystem::path rtObject =
+                rtProtectDirectory.path() / "mj2x_rt_protect.obj";
+            ca::process::Command rtCompile("clang");
+            rtCompile.arg("-c").arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
+            if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
+            linkInputs.push_back(rtObject);
+        }
+
         printf("Linking LLVM IR native library with clang: %s\n",
                libraryPath.string().c_str());
         ca::process::Command clangCommand("clang");
-        clangCommand.arg(sharedFlag).arg(objectPath.string()).arg("-o").arg(
-            libraryPath.string());
+        clangCommand.arg(sharedFlag);
+        for (const auto& input : linkInputs) clangCommand.arg(input.string());
+        clangCommand.arg("-o").arg(libraryPath.string());
         result = runCompilerCommand(clangCommand, "clang");
     }
 
@@ -896,7 +953,7 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 }
 
 int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
-                          LlvmTool tool)
+                          LlvmTool tool, bool withRuntimeProtection)
 {
     if (!jdk_finder::commandExists("clang")) {
         CA_LOGT_ERROR("compile", "LLVM IR compilation requires clang on PATH.\n");
@@ -918,13 +975,34 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
     const char* sharedFlag = "-shared";
 #endif
 
+    // --runtime-protection：检查点实现（mj2x_rt_protect.c）随 .ll 一起编译。
+    ScopedTemporaryDirectory rtProtectDirectory;
+    std::filesystem::path    rtProtectSource;
+    if (withRuntimeProtection) {
+        std::filesystem::path parent = libraryPath.parent_path();
+        if (parent.empty()) parent = ".";
+        if (!rtProtectDirectory.create(parent, ".mj2x-rt-protect-")) {
+            CA_LOGT_ERROR("compile", "cannot create temporary rt_protect directory.\n");
+            return 1;
+        }
+        rtProtectSource = writeRtProtectSource(rtProtectDirectory);
+        if (rtProtectSource.empty()) {
+            CA_LOGT_ERROR("compile",
+                          "embedded mj2x-crt rt_protect sources are unavailable.\n");
+            return 1;
+        }
+    }
+
     if (tool == LlvmTool::Clang) {
-        // clang -shared -x ir - -o <lib>，LLVM IR 经 stdin。
+        // clang -shared -x ir - [-x c rt_protect.c] -o <lib>，LLVM IR 经 stdin。
         printf("Compiling LLVM IR native library from stdin with clang: %s\n",
                libraryPath.string().c_str());
         ca::process::Command command("clang");
-        command.arg(sharedFlag).arg("-x").arg("ir").arg("-").arg("-o").arg(
-            libraryPath.string());
+        command.arg(sharedFlag).arg("-x").arg("ir").arg("-");
+        if (!rtProtectSource.empty()) {
+            command.arg("-x").arg("c").arg(rtProtectSource.string());
+        }
+        command.arg("-o").arg(libraryPath.string());
         command.stdin(ca::process::Stdio::piped())
             .stdout(ca::process::Stdio::piped())
             .stderr(ca::process::Stdio::piped());
@@ -1025,11 +1103,22 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             return 1;
         }
 
+        std::vector<std::filesystem::path> linkInputs{objectPath};
+        if (!rtProtectSource.empty()) {
+            const std::filesystem::path rtObject =
+                rtProtectDirectory.path() / "mj2x_rt_protect.obj";
+            ca::process::Command rtCompile("clang");
+            rtCompile.arg("-c").arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
+            if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
+            linkInputs.push_back(rtObject);
+        }
+
         printf("Linking LLVM IR native library with clang: %s\n",
                libraryPath.string().c_str());
         ca::process::Command clangCommand("clang");
-        clangCommand.arg(sharedFlag).arg(objectPath.string()).arg("-o").arg(
-            libraryPath.string());
+        clangCommand.arg(sharedFlag);
+        for (const auto& input : linkInputs) clangCommand.arg(input.string());
+        clangCommand.arg("-o").arg(libraryPath.string());
         if (runCompilerCommand(clangCommand, "clang") != 0) {
             std::filesystem::remove(libraryPath, ec);
             return 1;

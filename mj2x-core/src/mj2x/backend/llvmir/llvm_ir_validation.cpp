@@ -118,7 +118,7 @@ bool isSupportedBinary(const RegInstruction& instruction, std::string& reason)
 }
 
 bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
-                       InternalCallResolver* resolver, std::string& reason)
+                       InternalCallResolver* resolver, size_t indySiteCount, std::string& reason)
 {
     // 内部静态调用经 resolver 单独验证；整数 div/rem 的 mayThrow 由发射端的
     // 除零检查（throw-arithmetic helper）处理；字段/数组/分配/类型检查/监控
@@ -212,7 +212,52 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
         return true;
     case RegInstructionKind::Intrinsic:
         // 与发射端一致的按名过滤：array.length / instanceof:<desc> /
-        // monitor.enter / monitor.exit 放行；其余保持 fail-closed。
+        // monitor.enter / monitor.exit / cmp.nan_greater|cmp.nan_less /
+        // indy:<index>（运行时 bootstrap 解析，见 emitIndyHelpers）放行；
+        // 其余保持 fail-closed。
+        if (instruction.intrinsicName == "cmp.nan_greater" ||
+            instruction.intrinsicName == "cmp.nan_less") {
+            if (instruction.args.size() != 2) {
+                reason = "cmp.nan_* intrinsic requires two operands";
+                return false;
+            }
+            const SSAType type = widenNarrowType(instruction.args[0].type);
+            if (type != SSAType::I64 && type != SSAType::F32 && type != SSAType::F64) {
+                reason = "cmp.nan_* intrinsic requires i64/f32/f64 operands";
+                return false;
+            }
+            if (instruction.dest.type != SSAType::I32) {
+                reason = "cmp.nan_* intrinsic result must be i32";
+                return false;
+            }
+            return recordValue(types, instruction.dest, reason) &&
+                   recordOperand(types, instruction.args[0], reason) &&
+                   recordOperand(types, instruction.args[1], reason);
+        }
+        if (instruction.intrinsicName.rfind("indy:", 0) == 0) {
+            // invokedynamic 运行时解析站点：索引须落在 RegFunction::indySites 内
+            // （调用侧 box 参数 → bsm helper → invokeWithArguments → unbox）。
+            size_t localIndex = 0;
+            try {
+                localIndex = static_cast<size_t>(
+                    std::stoull(instruction.intrinsicName.substr(5)));
+            }
+            catch (const std::exception&) {
+                reason = "invalid indy site index in intrinsic name";
+                return false;
+            }
+            if (localIndex >= indySiteCount) {
+                reason = "indy site index out of range";
+                return false;
+            }
+            if (instruction.hasDest && !recordValue(types, instruction.dest, reason)) {
+                return false;
+            }
+            for (const auto& arg : instruction.args) {
+                if (!recordOperand(types, arg, reason)) return false;
+            }
+            return true;
+        }
         if (instruction.intrinsicName != "array.length" &&
             instruction.intrinsicName.rfind("instanceof:", 0) != 0 &&
             instruction.intrinsicName != "monitor.enter" &&
@@ -289,7 +334,10 @@ bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types,
     }
     for (const auto& block : function.blocks) {
         for (const auto& instruction : block->instructions) {
-            if (!recordInstruction(types, instruction, resolver, reason)) return false;
+            if (!recordInstruction(types, instruction, resolver, function.indySites.size(),
+                                   reason)) {
+                return false;
+            }
         }
         const bool terminatorOk = std::visit(
             [&](const auto& terminator) -> bool {

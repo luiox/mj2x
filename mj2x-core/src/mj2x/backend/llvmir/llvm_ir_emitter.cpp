@@ -17,13 +17,19 @@ class LlvmFunctionEmitter
 public:
     LlvmFunctionEmitter(const RegFunction& function, const RegisterTypes& registerTypes,
                         const std::string& functionName, SSAType returnType,
-                        InternalCallResolver* resolver, GlobalStringTable& strings)
+                        InternalCallResolver* resolver, GlobalStringTable& strings,
+                        size_t indySiteBase,
+                        const codegen::RuntimeProtectionOptions* runtimeProtection,
+                        uint32_t* checkpointCounter)
         : function_(function)
         , registerTypes_(registerTypes)
         , functionName_(functionName)
         , returnType_(returnType)
         , resolver_(resolver)
         , strings_(strings)
+        , indySiteBase_(indySiteBase)
+        , runtimeProtection_(runtimeProtection)
+        , checkpointCounter_(checkpointCounter)
     {}
 
     bool emit(std::string& source, std::string& reason)
@@ -47,7 +53,33 @@ public:
             out_ << "  store " << llvmTypeWide(parameter.type) << " %p" << index << ", ptr %slot_r"
                  << parameter.id.value << "\n";
         }
-        out_ << "  br label %b" << function_.entry->id.value << "\n\n";
+        if (runtimeProtection_ != nullptr && runtimeProtection_->enabled()) {
+            // 反侦测检查点（--runtime-protection）：mj2x_rt_checkpoint_run 命中时
+            // 返回非零 → FAKE 语义直接返回默认值；检查点状态为函数级全局变量。
+            // 实现由编译管线附加的 mj2x-crt rt_protect 源提供（见
+            // emitRuntimeProtectionDeclarations / native_compiler 编译链）。
+            const uint32_t cpIndex = (*checkpointCounter_)++;
+            const std::string cpVar = "@mj2x_rt_cp_" + std::to_string(cpIndex);
+            // 检查点状态变量是模块级全局（函数体内不允许全局定义）。
+            checkpointGlobals_.push_back(cpVar +
+                                         " = internal global %mj2x_rt_checkpoint "
+                                         "zeroinitializer");
+            const std::string cpResult = nextTemporary();
+            out_ << "  " << cpResult << " = call i32 @mj2x_rt_checkpoint_run(ptr " << cpVar
+                 << ", i32 " << static_cast<int>(runtimeProtection_->action) << ", i32 "
+                 << runtimeProtection_->step << ", i32 " << runtimeProtection_->delayMs
+                 << ", i32 1)\n";
+            const std::string hit = nextTemporary();
+            out_ << "  " << hit << " = icmp ne i32 " << cpResult << ", 0\n";
+            out_ << "  br i1 " << hit << ", label %rt_fake_" << cpIndex << ", label %b"
+                 << function_.entry->id.value << "\n";
+            out_ << "rt_fake_" << cpIndex << ":\n";
+            emitDefaultReturn();
+            out_ << "\n";
+        }
+        else {
+            out_ << "  br label %b" << function_.entry->id.value << "\n\n";
+        }
 
         for (const auto& block : function_.blocks) {
             if (!emitBlock(*block, reason)) return false;
@@ -379,6 +411,21 @@ private:
             }
             const bool floating = instruction.lhs.type == SSAType::F32 ||
                                   instruction.lhs.type == SSAType::F64;
+            // REF：对象同一性必须走 IsSameObject（JNI local ref 是句柄，裸指针
+            // 比较会把同一对象的两个句柄判为不等；对齐 RegC/VMC4 语义）。
+            if (instruction.lhs.type == SSAType::REF) {
+                const std::string eq   = nextTemporary();
+                const std::string eqIn = nextTemporary();
+                out_ << "  " << eqIn << " = call i1 @mj2x_llvm_ref_eq(ptr %env, ptr " << lhs
+                     << ", ptr " << rhs << ")\n";
+                if (instruction.comparePredicate == SSAComparePredicate::Ne) {
+                    out_ << "  " << eq << " = xor i1 " << eqIn << ", true\n";
+                }
+                else {
+                    out_ << "  " << eq << " = " << eqIn << "\n";
+                }
+                return emitStore(instruction.dest, eq, reason);
+            }
             const char* predicate = nullptr;
             switch (instruction.comparePredicate) {
             case SSAComparePredicate::Eq: predicate = floating ? "oeq" : "eq"; break;
@@ -400,8 +447,8 @@ private:
                 if (!emitOperand(instruction.value, value, reason)) return false;
                 const std::string desc = instruction.referenceTypeDesc.to_std_string();
                 const std::string result = nextTemporary();
-                out_ << "  " << result << " = call ptr @mj2x_llvm_check_cast(ptr %env, " << value
-                     << ", ptr " << strings_.intern(desc) << ")\n";
+                out_ << "  " << result << " = call ptr @mj2x_llvm_check_cast(ptr %env, ptr "
+                     << value << ", ptr " << strings_.intern(desc) << ")\n";
                 return emitStore(instruction.dest, result, reason);
             }
             if (!emitOperand(instruction.value, value, reason)) return false;
@@ -414,7 +461,9 @@ private:
                     reason = "LLVM IR narrowing conversion requires an i32 source";
                     return false;
                 }
-                const char*       narrow = targetType == SSAType::CHAR ? "i16" : "i8";
+                const char* narrow = (targetType == SSAType::CHAR || targetType == SSAType::I16)
+                                         ? "i16"
+                                         : "i8";
                 const std::string trunc  = nextTemporary();
                 const std::string ext    = nextTemporary();
                 const bool        signed_ = targetType != SSAType::CHAR;
@@ -604,8 +653,8 @@ private:
                     return false;
                 }
                 const std::string result = nextTemporary();
-                out_ << "  " << result << " = call i32 @mj2x_llvm_instance_of(ptr %env, " << value
-                     << ", ptr " << strings_.intern(name.substr(11)) << ")\n";
+                out_ << "  " << result << " = call i32 @mj2x_llvm_instance_of(ptr %env, ptr "
+                     << value << ", ptr " << strings_.intern(name.substr(11)) << ")\n";
                 return emitStore(instruction.dest, result, reason);
             }
             if (name == "monitor.enter" || name == "monitor.exit") {
@@ -618,6 +667,133 @@ private:
                      << (name == "monitor.enter" ? "enter" : "exit") << "(ptr %env, ptr " << value
                      << ")\n";
                 return true;
+            }
+            if (name == "cmp.nan_greater" || name == "cmp.nan_less") {
+                // LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较（-1/0/1）：
+                // (lhs > rhs) - (lhs < rhs)；浮点任一 NaN 时按 nanGreater 取 1/-1
+                // （对齐 RegC regc_flow.cpp 的 cmp.nan_* 发射）。
+                if (instruction.args.size() != 2) {
+                    reason = "cmp.nan_* intrinsic requires two operands";
+                    return false;
+                }
+                std::string lhs;
+                std::string rhs;
+                if (!emitOperand(instruction.args[0], lhs, reason) ||
+                    !emitOperand(instruction.args[1], rhs, reason)) {
+                    return false;
+                }
+                const SSAType type = widenNarrowType(instruction.args[0].type);
+                const char*   t    = llvmType(type);
+                if (t == nullptr) {
+                    reason = "cmp.nan_* intrinsic has an unsupported operand type";
+                    return false;
+                }
+                const bool floating = type == SSAType::F32 || type == SSAType::F64;
+                const std::string gtCmp = nextTemporary();
+                const std::string ltCmp = nextTemporary();
+                out_ << "  " << gtCmp << " = " << (floating ? "fcmp ogt" : "icmp sgt") << " "
+                     << t << " " << lhs << ", " << rhs << "\n";
+                out_ << "  " << ltCmp << " = " << (floating ? "fcmp olt" : "icmp slt") << " "
+                     << t << " " << lhs << ", " << rhs << "\n";
+                const std::string gt = nextTemporary();
+                const std::string lt = nextTemporary();
+                out_ << "  " << gt << " = zext i1 " << gtCmp << " to i32\n";
+                out_ << "  " << lt << " = zext i1 " << ltCmp << " to i32\n";
+                const std::string threeWay = nextTemporary();
+                out_ << "  " << threeWay << " = sub i32 " << gt << ", " << lt << "\n";
+                if (floating) {
+                    const bool        nanGreater = name == "cmp.nan_greater";
+                    const std::string uno        = nextTemporary();
+                    const std::string selected   = nextTemporary();
+                    out_ << "  " << uno << " = fcmp uno " << t << " " << lhs << ", " << rhs
+                         << "\n";
+                    out_ << "  " << selected << " = select i1 " << uno << ", i32 "
+                         << (nanGreater ? 1 : -1) << ", i32 " << threeWay << "\n";
+                    return emitStore(instruction.dest, selected, reason);
+                }
+                return emitStore(instruction.dest, threeWay, reason);
+            }
+            if (name.rfind("indy:", 0) == 0) {
+                // invokedynamic 运行时解析（自定义 bootstrap 残留站点，pipeline 级
+                // InvokeDynamicPreprocessor 静态展开后的兜底）：参数装箱成
+                // Object[] → bsm_N helper 返回目标 MethodHandle（含缓存）→
+                // invokeWithArguments(Object[]) → 结果按站点返回类型拆箱。
+                size_t localIndex = 0;
+                try {
+                    localIndex = static_cast<size_t>(std::stoull(name.substr(5)));
+                }
+                catch (const std::exception&) {
+                    reason = "invalid indy site index in intrinsic name";
+                    return false;
+                }
+                if (localIndex >= function_.indySites.size()) {
+                    reason = "indy site index out of range";
+                    return false;
+                }
+                const std::string siteDesc = function_.indySites[localIndex].desc;
+                const auto        argKinds = argumentKinds(siteDesc);
+                if (instruction.args.size() != argKinds.size()) {
+                    reason = "indy arg count mismatch";
+                    return false;
+                }
+                // Object[] args：NewObjectArray(Object.class, n) + 逐个装箱。
+                const std::string objCls = nextTemporary();
+                out_ << "  " << objCls << " = call ptr @mj2x_llvm_class_const(ptr %env, ptr "
+                     << strings_.intern("java/lang/Object") << ")\n";
+                const std::string objArray = nextTemporary();
+                out_ << "  " << objArray << " = call ptr @mj2x_llvm_new_object_array(ptr %env, "
+                        "i32 "
+                     << argKinds.size() << ", ptr " << objCls << ")\n";
+                for (size_t index = 0; index < instruction.args.size(); ++index) {
+                    std::string expression;
+                    if (!emitOperand(instruction.args[index], expression, reason)) return false;
+                    const char* boxKind = boxKindFor(instruction.args[index].type);
+                    std::string boxed;
+                    if (boxKind != nullptr) {
+                        boxed = nextTemporary();
+                        out_ << "  " << boxed << " = call ptr @mj2x_llvm_box_" << boxKind
+                             << "(ptr %env, " << llvmTypeWide(instruction.args[index].type) << " "
+                             << expression << ")\n";
+                    }
+                    else {
+                        // REF 参数无需装箱（Object[] 直接承载）。
+                        boxed = expression;
+                    }
+                    out_ << "  call void @mj2x_llvm_set_object_array_element(ptr %env, ptr "
+                         << objArray << ", i32 " << index << ", ptr " << boxed << ")\n";
+                }
+                // 目标 MethodHandle：bsm_N(env, owner_name)。owner 名由本方法
+                // 所属类的名字给出，helper 内部 FindClass（与 RegC 的
+                // _mj2x_regc_owner_class 等价）。
+                const std::string target = nextTemporary();
+                out_ << "  " << target << " = call ptr @mj2x_llvm_indy_bsm_"
+                     << (indySiteBase_ + localIndex) << "(ptr %env, ptr "
+                     << strings_.intern(function_.symbol.owner) << ")\n";
+                // MethodHandle.invokeWithArguments(Object[]) → Object。
+                // 参数数组指针需包进 1 槽 jvalue 数组（否则 JNI 收到 null 参数）。
+                const std::string jv = nextTemporary();
+                out_ << "  " << jv << " = alloca [1 x { i64 }]\n";
+                const std::string jvSlot = nextTemporary();
+                out_ << "  " << jvSlot << " = getelementptr [1 x { i64 }], ptr " << jv
+                     << ", i64 0, i64 0\n";
+                out_ << "  store ptr " << objArray << ", ptr " << jvSlot << "\n";
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call ptr @mj2x_llvm_call_object(ptr %env, ptr "
+                     << target << ", ptr " << strings_.intern("java/lang/invoke/MethodHandle")
+                     << ", ptr " << strings_.intern("invokeWithArguments") << ", ptr "
+                     << strings_.intern("([Ljava/lang/Object;)Ljava/lang/Object;") << ", ptr "
+                     << jv << ")\n";
+                if (!instruction.hasDest) return true;
+                // 结果按站点返回类型拆箱（REF 直接透传）。
+                const char* unboxKind = boxKindFor(instruction.dest.type);
+                if (unboxKind == nullptr) {
+                    reason = "indy result has an unsupported type";
+                    return false;
+                }
+                const std::string unboxed = nextTemporary();
+                out_ << "  " << unboxed << " = call " << unboxReturnType(instruction.dest.type)
+                     << " @mj2x_llvm_unbox_" << unboxKind << "(ptr %env, ptr " << result << ")\n";
+                return emitStore(instruction.dest, unboxed, reason);
             }
             reason = "LLVM IR first slice rejects this intrinsic";
             return false;
@@ -844,21 +1020,35 @@ private:
     SSAType                  returnType_;
     InternalCallResolver*    resolver_;
     GlobalStringTable&       strings_;
+    size_t                   indySiteBase_ = 0;
+    const codegen::RuntimeProtectionOptions* runtimeProtection_ = nullptr;
+    uint32_t*                checkpointCounter_ = nullptr;   // 文件级检查点计数（跨函数唯一）
     std::ostringstream       out_;
     uint32_t                 temporaryIndex_ = 0;
     uint32_t                 edgeIndex_ = 0;
     uint32_t                 divIndex_ = 0;
     uint32_t                 dispatchIndex_ = 0;   // 函数级：异常分发 label 唯一
     std::vector<PendingEdge> pendingEdges_;
+    std::vector<std::string> checkpointGlobals_;   // 模块级检查点全局（finalize 统一输出）
+
+public:
+    /// @brief 本函数注入的检查点状态全局（模块级输出用）。
+    const std::vector<std::string>& checkpointGlobals() const { return checkpointGlobals_; }
 };
 
 bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& registerTypes,
                       const std::string& functionName, SSAType returnType,
                       InternalCallResolver* resolver, GlobalStringTable& strings,
+                      size_t indySiteBase,
+                      const codegen::RuntimeProtectionOptions* runtimeProtection,
+                      uint32_t* checkpointCounter, std::vector<std::string>* checkpointGlobals,
                       std::string& source, std::string& reason)
 {
-    LlvmFunctionEmitter emitter(function, registerTypes, functionName, returnType, resolver, strings);
-    return emitter.emit(source, reason);
+    LlvmFunctionEmitter emitter(function, registerTypes, functionName, returnType, resolver,
+                                strings, indySiteBase, runtimeProtection, checkpointCounter);
+    if (!emitter.emit(source, reason)) return false;
+    if (checkpointGlobals != nullptr) *checkpointGlobals = emitter.checkpointGlobals();
+    return true;
 }
 
 }   // namespace llvmir

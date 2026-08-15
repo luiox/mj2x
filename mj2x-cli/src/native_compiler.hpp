@@ -72,14 +72,17 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 ///
 /// LLVM IR 由后端直接产生 JNI ABI wrapper，不需要 C/JNI include 或 mj2x-crt source pack。
 /// `clang` 直接读取 `.ll`；`llc` 先生成临时 object，再由 clang 链接。失败时返回非 0。
+/// @param withRuntimeProtection 为 true 时把内嵌 mj2x-crt rt_protect 源写到临时
+///        目录并一起编译（--runtime-protection 检查点的实现侧）。
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
-                        LlvmTool tool);
+                        LlvmTool tool, bool withRuntimeProtection);
 
 /// @brief 编译内存中的 LLVM IR 源码（--compile-mode pipe）。
 ///
 /// `clang` 经 stdin（`-x ir -`）直接链接；`llc` 经 stdin 生成临时 object 再由
 /// clang 链接。失败时返回非 0。
+/// @param withRuntimeProtection 同 compileLlvmIrSource。
 int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
-                          LlvmTool tool);
+                          LlvmTool tool, bool withRuntimeProtection);
 
 }   // namespace mj2x::cli

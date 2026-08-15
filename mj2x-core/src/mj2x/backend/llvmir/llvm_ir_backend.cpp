@@ -251,6 +251,12 @@ struct LlvmIrBackend::Impl
 {
     std::ostringstream bodies;
     GlobalStringTable  strings;
+    // 文件级 invokedynamic 站点表（跨方法累积；发射端按 base+local 索引）。
+    std::vector<RegFunction::InvokeDynamicSite> indySites;
+    // 模块级检查点状态全局（--runtime-protection；函数级累积，finalize 统一输出）。
+    std::string checkpointGlobals;
+    // 检查点全局命名计数器（跨函数唯一）。
+    uint32_t checkpointCounter = 0;
 };
 
 LlvmIrBackend::LlvmIrBackend()
@@ -276,43 +282,86 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
         return result;
     }
 
-    SSABuilder             builder;
-    ca::str::Utf8StringArena ssaArena;   // SSA 派生串入池，活到 ssa 消费完（本函数内同步）
-    auto ssa = builder.build(blocks,
-                             className,
-                             method.methodNode->name.to_std_string(),
-                             method.methodNode->desc.to_std_string(),
-                             (method.methodNode->access & Opcodes::ACC_STATIC) != 0,
-                             method.methodNode->maxLocals,
-                             ssaArena,
-                             reason);
-    if (!ssa) {
-        result.text = "LLVM IR lowering failed: " + reason;
-        return result;
-    }
-
-    RegLowering lowering;
-    auto        reg = lowering.lower(*ssa, reason);
-    if (!reg) {
-        result.text = "LLVM IR lowering failed: " + reason;
-        return result;
-    }
-
-    RegisterTypes registerTypes;
+    const bool isStatic = (method.methodNode->access & Opcodes::ACC_STATIC) != 0;
     // 互调需要编译器索引（单元测试不传 index 时行为与以前一致：静态调用走 JNI）。
     std::unique_ptr<InternalCallResolver> callResolver;
     if (index != nullptr) {
         callResolver = std::make_unique<InternalCallResolver>(*index, className);
     }
-    if (!collectRegisterTypes(*reg, registerTypes, callResolver.get(), reason)) {
+
+    // SSA → RegIR → 验证（每轮 fresh builder/lowering：变换失败需回退未变换形态，
+    // RegIR 变换是就地修改，不能复用同一份）。
+    // SSA 派生串（如 ANEWARRAY 的 "[L...;" 数组描述符）入池后由 RegFunction 的
+    // Utf8StringRef 视图引用，arena 必须活到本方法发射完成（曾因 arena 是 lambda
+    // 局部、返回即析构，导致发射期读到被复用内存的垃圾描述符）。
+    ca::str::Utf8StringArena ssaArena;
+    auto lowerAndValidate = [&](std::unique_ptr<RegFunction>& out, RegisterTypes& typesOut,
+                                std::string& r) -> bool {
+        SSABuilder     freshBuilder;
+        auto           freshSsa = freshBuilder.build(blocks,
+                                                     className,
+                                                     method.methodNode->name.to_std_string(),
+                                                     method.methodNode->desc.to_std_string(),
+                                                     isStatic,
+                                                     method.methodNode->maxLocals,
+                                                     ssaArena,
+                                                     r);
+        if (!freshSsa) return false;
+        RegLowering freshLowering;
+        auto        freshReg = freshLowering.lower(*freshSsa, r);
+        if (!freshReg) return false;
+        RegisterTypes types;
+        if (!collectRegisterTypes(*freshReg, types, callResolver.get(), r)) return false;
+        out      = std::move(freshReg);
+        typesOut = std::move(types);
+        return true;
+    };
+
+    std::unique_ptr<RegFunction> reg;
+    RegisterTypes                registerTypes;
+    if (!lowerAndValidate(reg, registerTypes, reason)) {
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
 
+    // R4 保护变换（--regc-obfuscate 等；RegIR 级，与 RegC 同源）：变换后重新
+    // 验证；被拒则回退未变换形态（LLVM 子集窄于 RegC，变换不应丢方法）。
+    if (transformOptions_.enableMba || transformOptions_.enableOpaquePredicates ||
+        transformOptions_.enableControlFlowFlattening) {
+        std::unique_ptr<RegFunction> transformedReg;
+        RegisterTypes                transformedTypes;
+        if (!lowerAndValidate(transformedReg, transformedTypes, reason)) {
+            result.text = "LLVM IR lowering failed: " + reason;
+            return result;
+        }
+        applyRegTransformPasses(*transformedReg, transformOptions_);
+        RegisterTypes validatedTypes;
+        if (collectRegisterTypes(*transformedReg, validatedTypes, callResolver.get(), reason)) {
+            reg            = std::move(transformedReg);
+            registerTypes  = std::move(validatedTypes);
+        }
+        else {
+            CA_LOGT_WARN("llvm",
+                         "{}.{}{}: transform output rejected ({}); using untransformed "
+                         "IR\n",
+                         className.c_str(),
+                         method.methodNode->name.to_std_string().c_str(),
+                         method.methodNode->desc.to_std_string().c_str(),
+                         reason.c_str());
+        }
+    }
+
+    // invokedynamic 站点：方法局部索引 → 文件级全局索引（bsm helper 名）。
+    const size_t indySiteBase = impl_->indySites.size();
+    impl_->indySites.insert(impl_->indySites.end(), reg->indySites.begin(), reg->indySites.end());
+
     const std::string helper = helperName(className, *method.methodNode);
     std::string       helperSource;
+    std::vector<std::string> checkpointGlobals;
     if (!emitLlvmFunction(*reg, registerTypes, helper, resultType, callResolver.get(),
-                          impl_->strings, helperSource, reason)) {
+                          impl_->strings, indySiteBase,
+                          runtimeProtection_.enabled() ? &runtimeProtection_ : nullptr,
+                          &impl_->checkpointCounter, &checkpointGlobals, helperSource, reason)) {
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
@@ -320,9 +369,12 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     result.kind = BackendResult::Kind::C_SOURCE;
     result.text = helperSource +
                   emitJniWrapper(className, *method.methodNode, helper, resultType,
-                                 (method.methodNode->access & jbytecode::core::Opcodes::ACC_STATIC) !=
-                                     0);
+                                 isStatic);
     impl_->bodies << result.text;
+    if (!impl_->checkpointGlobals.empty()) impl_->checkpointGlobals += "\n";
+    for (const auto& global : checkpointGlobals) {
+        impl_->checkpointGlobals += global + "\n";
+    }
     return result;
 }
 
@@ -340,9 +392,13 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
     std::ostringstream full;
     full << "; ModuleID = 'mj2x_llvm'\n";
     full << "source_filename = \"mj2x_llvm\"\n\n";
+    if (runtimeProtection_.enabled()) {
+        full << emitRuntimeProtectionDeclarations() << "\n";
+    }
     const std::string strings = impl_->strings.emitDefinitions();
     full << strings;
     if (!strings.empty()) full << "\n";
+    full << impl_->checkpointGlobals;
     full << impl_->bodies.str();
     const std::string bodies = impl_->bodies.str();
     if (bodies.find("mj2x_llvm_throw_arith") != std::string::npos) {
@@ -363,8 +419,16 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
         bodies.find("mj2x_llvm_throw(") != std::string::npos ||
         bodies.find("mj2x_llvm_string_const") != std::string::npos ||
         bodies.find("mj2x_llvm_class_const") != std::string::npos ||
-        bodies.find("mj2x_llvm_monitor_") != std::string::npos) {
+        bodies.find("mj2x_llvm_ref_eq") != std::string::npos ||
+        bodies.find("mj2x_llvm_monitor_") != std::string::npos ||
+        bodies.find("mj2x_llvm_indy_bsm_") != std::string::npos) {
         full << emitObjectHelpers();
+    }
+    if (!impl_->indySites.empty()) {
+        full << emitIndyHelpers();
+        for (size_t index = 0; index < impl_->indySites.size(); ++index) {
+            full << emitIndyBootstrapFunction(index, impl_->indySites[index]);
+        }
     }
     sourceCode_ = full.str();
     if (llvmOutputPath_.empty()) return;
