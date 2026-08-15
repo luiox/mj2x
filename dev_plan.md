@@ -12,7 +12,7 @@
 | 七（#820 测试集） | 步骤 1-5 完成（调研/设计/Wave3/三后端矩阵/性能回归自动化） | 🟡 步骤 6 对抗闭环待做（见待做 B） |
 | 十二（配置系统） | P0+P1 完成：参数注册表 + 全量配置化 + `--dump-config-schema`/`--dump-config-template` | 🟡 GUI 配置工具（P2）待做（见待做 D） |
 | 十三（LLVM IR 后端） | 基础款转正默认开启（v2.2）+ 二次扩面 11 项（对象/数组/实例调用/异常/monitor/ldc/窄类型等，PR #864） | ✅ 完成（见归档索引） |
-| 十四（LLVM 第二轮扩面） | invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入、mtest_set 矩阵 + protected_samples llvm 样本 | 🟡 进行中（见待做 E） |
+| 十四（LLVM 第二轮扩面） | invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入、mtest_set 矩阵 + protected_samples llvm 样本 | 🟢 完成（Math/包装类等 RegC-only intrinsic 下沉除外，见待做 E） |
 
 ## 待做项
 
@@ -45,21 +45,29 @@
   （`doc_ai/gui_config_tool_design.md`：vite+vue 方案、schema 驱动渲染、
   联动/校验/导出/可选 sidecar 执行）。剩余：P1 实现（表单渲染 + 校验 + 导出）。
 
-### E. LLVM 第二轮扩面（本 PR）
+### E. LLVM 第二轮扩面（已完成，PR #866）
 
-- **invokedynamic 运行时解析**：pipeline 级 InvokeDynamicPreprocessor 六阶段静态
-  展开已覆盖 LLVM（main.cpp 注册，与 RegC 同源）；残留 `indy:<idx>` 站点（自定义
-  bootstrap / 收窄 / 装箱+加宽复合）目前验证层 fail-closed → 方法保字节码。目标：
-  LLVM 侧对齐 RegC 的运行时 bootstrap 解析（.ll 内 JNI 分派 resolver）。
-- **intrinsic 扩面对齐 RegC**：现仅 array.length / instanceof:<desc> /
-  monitor.enter/exit 四个；对齐 RegC 面（Math/包装类/String/StringBuilder/
-  Random，capabilities §3 CLI 部分）。
-- **保护特性接入**：`--runtime-protection` 检查点注入现拒绝 llvm（main.cpp:762）；
-  需 LLVM 等价路径或解除拒绝。`--regc-safe-env` 明确不适用（JNI 表快照恢复是
-  RegC 运行时面）。混淆五件套（MBA/opaque/CFF）属 RegC 发射变换，LLVM 面记录
-  不实施（.ll 语义等价，混淆价值在 C 面）。
-- **测试矩阵接入**：`mtest_set_native_matrix_test.cpp` 加 LLVM 列（现 StackC/RegC
-  × 18 fixtures）；`protected_samples/` 增加 llvm 样本目录（喂 mjdbg）。
+- **invokedynamic 运行时解析** ✅：残留 `indy:<idx>` 站点（自定义 bootstrap）不再
+  fail-closed——LLVM 发射模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef`
+  稳定化）+ 运行时 bootstrap 解析（`MethodHandles.lookup` / `MethodType` /
+  `privateLookupIn` / bsm 调用 / `CallSite.getTarget` / `invokeWithArguments`，
+  参数装箱、返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点保字节码）。
+  验证：`CliTest.LlvmIndyCustomBootstrapE2E`（plain / runtime-protection fake /
+  regc-obfuscate 三变体，输出 7-42-11）+ `LlvmIrBackendTest.EmitsIndyRuntimeResolution`。
+- **intrinsic 扩面对齐 RegC** 🟡（部分完成）：新增 `cmp.nan_greater/nan_less`
+  （LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较，NaN 按指令语义取 ±1）；array.length /
+  instanceof / monitor 保持。Math/包装类/StringBuilder/Random 等 RegC-only
+  intrinsic 面 LLVM 保持 JNI 分派（下沉留待整类下沉 F）。
+- **保护特性接入** ✅：`--runtime-protection` 支持 llvm——每方法入口注入
+  `%mj2x_rt_checkpoint`（模块级全局 + `mj2x_rt_checkpoint_run` 调用，crt
+  `mj2x_rt_protect.c` 在 link/工程层追加；FAKE 动作走默认返回路径）。
+  `--regc-obfuscate` 及 MBA/opaque/CFF 变换选项支持 llvm（RegIR 级同源变换；
+  mbaDeep 的 Barrier 指令 LLVM 子集不支持时回退未变换形态并告警）。
+  `--regc-safe-env` 明确不适用（JNI 表快照恢复是 RegC 运行时面）。
+- **测试矩阵接入** ✅：`mtest_set_native_matrix_test.cpp` 加 LLVM 列（22 fixtures
+  允许清单，fail-closed 自动排除未列入者；clang 探测缺失时整列跳过）；
+  `protected_samples/` 增加 llvm 样本目录（Tiny/IndySurface/ExceptionMonitor 三样本，
+  `LlvmSamples.GenerateMjdbgFixtures` 生成 native.ll + clang 编译 + Driver 真跑）。
 
 ### F. 整类下沉（P3，记录不阻塞）
 
@@ -79,6 +87,13 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-21（round-2 收尾）：四主线落地——**indy 运行时解析**（自定义 bootstrap
+  `indy:<idx>` → 全局 cache + bsm resolver，超出 RegC）、**intrinsic**（cmp.nan_*）、
+  **保护特性**（runtime-protection 检查点 + MBA/opaque/CFF 变换接入 llvm）、
+  **测试矩阵**（LLVM 列 22 fixtures + protected_samples/llvm 三样本）。修复：
+  ANEWARRAY 数组描述符悬垂（SSA arena 生命周期）、I2S 误按 i8 截断、check_cast/
+  instance_of 参数缺 ptr 类型、mangle `$`→`_00024`。验证：mj2x_unittest 全绿 +
+  mtest_set 25 过 + 矩阵 66 例全绿 + 样本 E2E（见 PR #866）。
 - 2026-08-21（round-2 开工）：同步 roadmap 两处 stale（arraycopy intrinsic 已完成
   #819、方法内联矛盾）+ §4 LLVM 状态行（#864 扩面后）；GUI 配置工具设计完成
   （vite+vue，`doc_ai/gui_config_tool_design.md`）；记录整类下沉为 P3 待办（待做 F）。

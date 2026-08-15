@@ -164,6 +164,9 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
   - 调用：编译索引内已转换 invokestatic 目标 direct call（0 JNI）；实例/外部/未转换目标经 `CallXxxMethodA`/`CallNonvirtualXxxMethodA`/`CallStaticXxxMethodA`（jvalue 数组，null receiver 抛 NPE）；实例方法 this 为 SSA 参数 0，wrapper 透传 jobject this；
   - 异常：`athrow`（JNI `Throw`，null → NPE）、try/catch/finally 异常表分发（`ExceptionCheck` → `ExceptionOccurred`+`ExceptionClear` → 按表序 `IsInstanceOf` 匹配 → handler；catch-all 重抛语义）；
   - monitor：`monitorenter/monitorexit` → `MonitorEnter/Exit`（null → NPE）；
+  - intrinsic：`array.length`、`instanceof:<desc>`、`monitor.enter/exit`、`cmp.nan_greater/nan_less`（LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较，NaN 按指令语义取 ±1）；
+  - **invokedynamic 运行时解析（round-2）**：StringConcatFactory/LambdaMetafactory 站点由 pipeline 级 InvokeDynamicPreprocessor 静态展开；残留自定义 bootstrap 站点以 `indy:<idx>` 发射为模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef` 稳定化）+ 运行时 bootstrap 解析（`FindClass` → `MethodHandles.lookup` → `MethodType.fromMethodDescriptorString` → `privateLookupIn` → bsm 调用 → `CallSite.getTarget` → `invokeWithArguments`，参数装箱/返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点 fail-closed 保字节码）；
+  - **保护特性（round-2）**：`--runtime-protection` 支持 llvm——每方法入口注入 `%mj2x_rt_checkpoint` 检查点（crt `mj2x_rt_protect.c`，模块级全局 + `mj2x_rt_checkpoint_run` 调用；FAKE 动作走默认返回路径）；`--regc-obfuscate` 及 MBA/opaque/CFF 变换选项支持 llvm（RegIR 级同源变换；mbaDeep 的 Barrier 指令 LLVM 子集不支持时回退未变换形态并告警）；
   - fail-closed：未初始化局部（undef Opaque）、未知 intrinsic、`String` 之外的 Handle 常量等保持字节码，调用方对不可转换目标走 JNI fallback（不再整链拒绝）。
   - `--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；`--compile-mode pipe` 经 clang stdin 编译；`--generate-cmake` / `--generate-xmake` 生成含 `native.ll` 的工程。**v2.2 转正**：构建开关 `with_mj2x_llvm` 默认 on（v2.1 曾按发布范围关闭）；显式 `=n` 时 CLI 不暴露相关选项（fail-closed）。
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
@@ -220,7 +223,7 @@ VMC4 单测 45 + e2e 56 全绿(4 dispatcher × drift 全开,`-Xverify:all` round
 
 **CLI**:`--backend vmc4` + `--vmc4-dispatcher` / `--vmc4-seed` / `--vmc4-granularity` /
 `--vmc4-alias` / `--vmc4-bogus` / `--vmc4-drift` / `--vmc4-drift-period` /
-`--vmc4-trace-surface`;`--runtime-protection` 检查点注入通用(RegC/VMC4)。
+`--vmc4-trace-surface`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
 
 **已知限制**:MULTIANEWARRAY 初始 fail-closed 已放开;仍 fail-closed:反射、动态类加载、
 invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标。
@@ -246,7 +249,7 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 | antijvmti live probe | ✅ Windows Toolhelp/Linux proc maps 模块枚举 + JavaVM/JVMTI capability query + agent/JDWP/dump 信号聚合；**参数自动收集**（v2.2）：Windows GetCommandLineW 引号感知切分 / Linux /proc/self/cmdline |
 | runtime detection policy | ✅ 聚合 debug/agent/probe-failure 报告并显式返回 fail-closed 判定,不在探针内主动退出 |
 | **enforcement 反制响应层**（v2.2） | ✅ LogOnly/Delay/FakeData/Terminate 可配置 action + 多阶段检查点（step 确定性下限 + xorshift 随机提前命中 + force 语义）；Terminate 返回 outcome 由集成层执行 |
-| **rt_protect 生成代码检查点**（v2.2） | ✅ mj2x-crt C99 自包含检查点（随 resources.manifest 分发）；RegC/VMC4 方法入口注入（CLI `--runtime-protection none\|log\|delay\|fake\|terminate` + step/delay，默认不注入零产物变化）；真实 MSVC 编译链验证 |
+| **rt_protect 生成代码检查点**（v2.2+） | ✅ mj2x-crt C99 自包含检查点（随 resources.manifest 分发）；RegC/VMC4/LLVM 方法入口注入（CLI `--runtime-protection none\|log\|delay\|fake\|terminate` + step/delay，默认不注入零产物变化）；真实 MSVC 编译链验证 |
 
 ---
 
