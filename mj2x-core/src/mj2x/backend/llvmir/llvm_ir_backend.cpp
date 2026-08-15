@@ -40,6 +40,7 @@ const char* llvmType(SSAType type)
     case SSAType::I64: return "i64";
     case SSAType::F32: return "float";
     case SSAType::F64: return "double";
+    case SSAType::REF: return "ptr";   // JNI 引用（jobject/jclass/jstring/数组）
     case SSAType::VOID: return "void";
     default: return nullptr;
     }
@@ -99,6 +100,7 @@ SSAType primitiveToSsaType(PrimitiveKind kind)
     case PrimitiveKind::FLOAT: return SSAType::F32;
     case PrimitiveKind::DOUBLE: return SSAType::F64;
     case PrimitiveKind::VOID: return SSAType::VOID;
+    case PrimitiveKind::OBJECT: return SSAType::REF;
     default: return SSAType::UNKNOWN;
     }
 }
@@ -116,6 +118,7 @@ const char* jniBoundaryType(PrimitiveKind kind)
     case PrimitiveKind::FLOAT: return "float";
     case PrimitiveKind::DOUBLE: return "double";
     case PrimitiveKind::VOID: return "void";
+    case PrimitiveKind::OBJECT: return "ptr";
     default: return nullptr;
     }
 }
@@ -148,7 +151,11 @@ bool recordOperand(RegisterTypes& types, const RegOperand& operand, std::string&
         }
         return true;
     case RegOperandKind::NullLiteral:
+        return isSupportedValueType(operand.type);   // ptr null（引用类型）
     case RegOperandKind::Opaque:
+        // 空操作数（static 字段无 receiver 等）跳过；带 tag 的 Opaque（如
+        // String LDC）由对应指令分支拒绝。
+        if (operand.type == SSAType::UNKNOWN) return true;
         reason = "LLVM IR first slice rejects reference and opaque operands";
         return false;
     }
@@ -258,9 +265,19 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
                        InternalCallResolver* resolver, std::string& reason)
 {
     // 内部静态调用经 resolver 单独验证；整数 div/rem 的 mayThrow 由发射端的
-    // 除零检查（throw-arithmetic helper）处理。其余指令保持 fail-closed 检查。
+    // 除零检查（throw-arithmetic helper）处理；字段/数组/分配/类型检查/监控
+    // 的 mayThrow 与内存效应由对应 JNI helper 处理（发射端）。其余指令保持
+    // fail-closed 检查。
     const bool throwHandledByEmitter =
         instruction.kind == RegInstructionKind::Call ||
+        instruction.kind == RegInstructionKind::LoadField ||
+        instruction.kind == RegInstructionKind::StoreField ||
+        instruction.kind == RegInstructionKind::ArrayLoad ||
+        instruction.kind == RegInstructionKind::ArrayStore ||
+        instruction.kind == RegInstructionKind::Allocate ||
+        instruction.kind == RegInstructionKind::Intrinsic ||
+        (instruction.kind == RegInstructionKind::Convert &&
+         instruction.convertKind == SSAConvertKind::ReferenceCast) ||
         (instruction.kind == RegInstructionKind::Binary &&
          (instruction.binaryOp == SSABinaryOp::Div || instruction.binaryOp == SSABinaryOp::Rem));
     if (!throwHandledByEmitter && hasObservableEffect(instruction.effect)) {
@@ -271,7 +288,8 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
     case RegInstructionKind::Copy:
         return recordValue(types, instruction.copy.dest, reason) &&
                recordOperand(types, instruction.copy.source, reason) &&
-               instruction.copy.dest.type == instruction.copy.source.type;
+               widenNarrowType(instruction.copy.dest.type) ==
+                   widenNarrowType(instruction.copy.source.type);
     case RegInstructionKind::Unary:
         if (instruction.unaryOp == SSAUnaryOp::BitNot) {
             if (instruction.dest.type != SSAType::I32 && instruction.dest.type != SSAType::I64) {
@@ -302,18 +320,46 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
         return recordOperand(types, instruction.lhs, reason) &&
                recordOperand(types, instruction.rhs, reason);
     case RegInstructionKind::Convert:
-        if (instruction.convertKind != SSAConvertKind::Numeric) {
+        if (instruction.convertKind != SSAConvertKind::Numeric &&
+            instruction.convertKind != SSAConvertKind::ReferenceCast) {
             reason = "LLVM IR first slice rejects reference casts";
             return false;
         }
         return recordValue(types, instruction.dest, reason) &&
                recordOperand(types, instruction.value, reason);
     case RegInstructionKind::LoadField:
+        if (!recordValue(types, instruction.dest, reason)) return false;
+        if (instruction.receiver.kind != RegOperandKind::Opaque ||
+            instruction.receiver.type != SSAType::UNKNOWN) {
+            return recordOperand(types, instruction.receiver, reason);
+        }
+        return true;
     case RegInstructionKind::StoreField:
+        if (instruction.receiver.kind != RegOperandKind::Opaque ||
+            instruction.receiver.type != SSAType::UNKNOWN) {
+            if (!recordOperand(types, instruction.receiver, reason)) return false;
+        }
+        return recordOperand(types, instruction.value, reason);
     case RegInstructionKind::ArrayLoad:
+        return recordValue(types, instruction.dest, reason) &&
+               recordOperand(types, instruction.receiver, reason) &&
+               recordOperand(types, instruction.index, reason);
     case RegInstructionKind::ArrayStore:
+        return recordOperand(types, instruction.receiver, reason) &&
+               recordOperand(types, instruction.index, reason) &&
+               recordOperand(types, instruction.value, reason);
     case RegInstructionKind::Allocate:
+        if (!recordValue(types, instruction.dest, reason)) return false;
+        for (const auto& arg : instruction.args) {
+            if (!recordOperand(types, arg, reason)) return false;
+        }
+        return true;
     case RegInstructionKind::Intrinsic:
+        if (instruction.hasDest && !recordValue(types, instruction.dest, reason)) return false;
+        for (const auto& arg : instruction.args) {
+            if (!recordOperand(types, arg, reason)) return false;
+        }
+        return true;
     case RegInstructionKind::Barrier:
         reason = "LLVM IR first slice rejects object, JNI, memory and monitor operations";
         return false;
@@ -407,10 +453,84 @@ bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types,
     return true;
 }
 
+/// @brief 字段描述符 → JNI 访问种类（field_load_*/field_store_* helper 后缀）。
+const char* fieldKindFor(const std::string& desc)
+{
+    if (desc.empty()) return nullptr;
+    switch (desc[0]) {
+    case 'Z': return "bool";
+    case 'B': return "byte";
+    case 'C': return "char";
+    case 'S': return "short";
+    case 'I': return "int";
+    case 'J': return "long";
+    case 'F': return "float";
+    case 'D': return "double";
+    case 'L':
+    case '[': return "ref";
+    default: return nullptr;
+    }
+}
+
+/// @brief 字段 helper 的返回值 LLVM 类型（窄字段在 helper 内提升到 i32）。
+const char* fieldHelperReturnType(const char* kind)
+{
+    if (kind == nullptr) return nullptr;
+    const std::string k(kind);
+    if (k == "long") return "i64";
+    if (k == "float") return "float";
+    if (k == "double") return "double";
+    if (k == "ref") return "ptr";
+    return "i32";   // bool/byte/char/short/int
+}
+
 struct PendingEdge
 {
     std::string           label;
     const RegSuccessor*   target = nullptr;
+};
+
+/// @brief 共享全局字符串表：发射端 intern 得到 @_mj2x_llvm_str_<N>，
+/// finalize 时统一输出常量定义。
+class GlobalStringTable
+{
+public:
+    std::string intern(const std::string& text)
+    {
+        for (size_t index = 0; index < strings_.size(); ++index) {
+            if (strings_[index] == text) return "@_mj2x_llvm_str_" + std::to_string(index);
+        }
+        const size_t index = strings_.size();
+        strings_.push_back(text);
+        return "@_mj2x_llvm_str_" + std::to_string(index);
+    }
+
+    std::string emitDefinitions() const
+    {
+        std::ostringstream out;
+        for (size_t index = 0; index < strings_.size(); ++index) {
+            out << "@_mj2x_llvm_str_" << index << " = private unnamed_addr constant ["
+                << (strings_[index].size() + 1) << " x i8] c\"";
+            for (const unsigned char ch : strings_[index]) {
+                if (ch == '\\' || ch == '"') {
+                    out << '\\' << static_cast<char>(ch);
+                }
+                else if (ch < 32 || ch > 126) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\%02X", ch);
+                    out << buf;
+                }
+                else {
+                    out << static_cast<char>(ch);
+                }
+            }
+            out << "\\00\"\n";
+        }
+        return out.str();
+    }
+
+private:
+    std::vector<std::string> strings_;
 };
 
 class LlvmFunctionEmitter
@@ -418,12 +538,13 @@ class LlvmFunctionEmitter
 public:
     LlvmFunctionEmitter(const RegFunction& function, const RegisterTypes& registerTypes,
                         const std::string& functionName, SSAType returnType,
-                        InternalCallResolver* resolver)
+                        InternalCallResolver* resolver, GlobalStringTable& strings)
         : function_(function)
         , registerTypes_(registerTypes)
         , functionName_(functionName)
         , returnType_(returnType)
         , resolver_(resolver)
+        , strings_(strings)
     {}
 
     bool emit(std::string& source, std::string& reason)
@@ -530,6 +651,10 @@ private:
                 literal << std::setprecision(17) << operand.floatValue;
             }
             expression = literal.str();
+            return true;
+        }
+        if (operand.kind == RegOperandKind::NullLiteral) {
+            expression = "null";
             return true;
         }
         reason = "LLVM IR first slice rejects reference and opaque operands";
@@ -702,6 +827,16 @@ private:
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Convert) {
+            if (instruction.convertKind == SSAConvertKind::ReferenceCast) {
+                // checkcast：IsInstanceOf 失败挂起 ClassCastException，返回原引用。
+                std::string value;
+                if (!emitOperand(instruction.value, value, reason)) return false;
+                const std::string desc = instruction.referenceTypeDesc.to_std_string();
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call ptr @mj2x_llvm_check_cast(ptr %env, " << value
+                     << ", ptr " << strings_.intern(desc) << ")\n";
+                return emitStore(instruction.dest, result, reason);
+            }
             if (!emitOperand(instruction.value, value, reason)) return false;
             const SSAType sourceType = widenNarrowType(instruction.value.type);
             const SSAType targetType = instruction.targetType;
@@ -756,6 +891,110 @@ private:
             out_ << "  " << result << " = " << opcode << " " << llvmType(sourceType) << " "
                  << value << " to " << llvmType(targetType) << "\n";
             return emitStore(instruction.dest, result, reason);
+        }
+        if (instruction.kind == RegInstructionKind::LoadField) {
+            const std::string fieldDesc = instruction.field.desc.to_std_string();
+            const char*       kind      = fieldKindFor(fieldDesc);
+            if (kind == nullptr) {
+                reason = "LLVM IR field access has an unsupported descriptor";
+                return false;
+            }
+            std::string receiver;
+            if (instruction.receiver.kind == RegOperandKind::Opaque &&
+                instruction.receiver.type == SSAType::UNKNOWN) {
+                receiver = "null";
+            }
+            else if (!emitOperand(instruction.receiver, receiver, reason)) {
+                return false;
+            }
+            const std::string result = nextTemporary();
+            out_ << "  " << result << " = call " << fieldHelperReturnType(kind)
+                 << " @mj2x_llvm_field_load_" << kind << "(ptr %env, " << receiver << ", ptr "
+                 << strings_.intern(instruction.field.owner.to_std_string()) << ", ptr "
+                 << strings_.intern(instruction.field.name.to_std_string()) << ", ptr "
+                 << strings_.intern(fieldDesc) << ", i32 "
+                 << (instruction.field.isStatic ? 1 : 0) << ")\n";
+            return emitStore(instruction.dest, result, reason);
+        }
+        if (instruction.kind == RegInstructionKind::StoreField) {
+            const std::string fieldDesc = instruction.field.desc.to_std_string();
+            const char*       kind      = fieldKindFor(fieldDesc);
+            if (kind == nullptr) {
+                reason = "LLVM IR field access has an unsupported descriptor";
+                return false;
+            }
+            std::string receiver;
+            if (instruction.receiver.kind == RegOperandKind::Opaque &&
+                instruction.receiver.type == SSAType::UNKNOWN) {
+                receiver = "null";
+            }
+            else if (!emitOperand(instruction.receiver, receiver, reason)) {
+                return false;
+            }
+            std::string value;
+            if (!emitOperand(instruction.value, value, reason)) return false;
+            out_ << "  call void @mj2x_llvm_field_store_" << kind << "(ptr %env, " << receiver
+                 << ", ptr " << strings_.intern(instruction.field.owner.to_std_string()) << ", ptr "
+                 << strings_.intern(instruction.field.name.to_std_string()) << ", ptr "
+                 << strings_.intern(fieldDesc) << ", i32 "
+                 << (instruction.field.isStatic ? 1 : 0) << ", " << fieldHelperReturnType(kind)
+                 << " " << value << ")\n";
+            return true;
+        }
+        if (instruction.kind == RegInstructionKind::Allocate) {
+            const std::string typeDesc = instruction.typeDesc.to_std_string();
+            if (instruction.allocationKind == SSAAllocationKind::Object) {
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call ptr @mj2x_llvm_new_object(ptr %env, ptr "
+                     << strings_.intern(typeDesc) << ")\n";
+                return emitStore(instruction.dest, result, reason);
+            }
+            if (instruction.allocationKind == SSAAllocationKind::Array) {
+                if (instruction.args.size() != 1) {
+                    reason = "LLVM IR array allocation requires exactly one dimension";
+                    return false;
+                }
+                std::string count;
+                if (!emitOperand(instruction.args[0], count, reason)) return false;
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call ptr @mj2x_llvm_new_array(ptr %env, ptr "
+                     << strings_.intern(typeDesc) << ", i32 " << count << ")\n";
+                return emitStore(instruction.dest, result, reason);
+            }
+            // MULTIANEWARRAY：调用点构建维度数组（alloca [N x i32]）。
+            const std::string dims = nextTemporary();
+            out_ << "  " << dims << " = alloca [" << instruction.args.size() << " x i32]\n";
+            for (size_t index = 0; index < instruction.args.size(); ++index) {
+                std::string dim;
+                if (!emitOperand(instruction.args[index], dim, reason)) return false;
+                const std::string slot = nextTemporary();
+                out_ << "  " << slot << " = getelementptr ["
+                     << instruction.args.size() << " x i32], ptr " << dims << ", i64 0, i64 "
+                     << index << "\n";
+                out_ << "  store i32 " << dim << ", ptr " << slot << "\n";
+            }
+            const std::string result = nextTemporary();
+            out_ << "  " << result << " = call ptr @mj2x_llvm_new_multi_array(ptr %env, ptr "
+                 << strings_.intern(typeDesc) << ", ptr " << dims << ", i32 "
+                 << instruction.args.size() << ")\n";
+            return emitStore(instruction.dest, result, reason);
+        }
+        if (instruction.kind == RegInstructionKind::Intrinsic) {
+            const std::string& name = instruction.intrinsicName;
+            if (name.rfind("instanceof:", 0) == 0) {
+                std::string value;
+                if (instruction.args.empty() ||
+                    !emitOperand(instruction.args[0], value, reason)) {
+                    reason = "LLVM IR instanceof requires an object operand";
+                    return false;
+                }
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call i32 @mj2x_llvm_instance_of(ptr %env, " << value
+                     << ", ptr " << strings_.intern(name.substr(11)) << ")\n";
+                return emitStore(instruction.dest, result, reason);
+            }
+            reason = "LLVM IR first slice rejects this intrinsic";
+            return false;
         }
         reason = "LLVM IR encountered an unsupported instruction after validation";
         return false;
@@ -840,6 +1079,7 @@ private:
     const std::string&       functionName_;
     SSAType                  returnType_;
     InternalCallResolver*    resolver_;
+    GlobalStringTable&       strings_;
     std::ostringstream       out_;
     uint32_t                 temporaryIndex_ = 0;
     uint32_t                 edgeIndex_ = 0;
@@ -1067,6 +1307,7 @@ std::string emitJniWrapper(const std::string& className, const MethodNode& metho
 struct LlvmIrBackend::Impl
 {
     std::ostringstream bodies;
+    GlobalStringTable  strings;
 };
 
 LlvmIrBackend::LlvmIrBackend()
@@ -1127,7 +1368,8 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
 
     const std::string helper = helperName(className, *method.methodNode);
     std::string       helperSource;
-    LlvmFunctionEmitter emitter(*reg, registerTypes, helper, resultType, callResolver.get());
+    LlvmFunctionEmitter emitter(*reg, registerTypes, helper, resultType, callResolver.get(),
+                                impl_->strings);
     if (!emitter.emit(helperSource, reason)) {
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
@@ -1172,14 +1414,390 @@ std::string emitThrowArithmeticHelper()
            "}\n\n";
 }
 
+/// @brief JNIEnv 函数表槽位（本机 jni.h 精确提取 + reserved0-3 偏移）。
+namespace jni_slot {
+constexpr int64_t FindClass           = 6;
+constexpr int64_t ThrowNew            = 14;
+constexpr int64_t AllocObject         = 27;
+constexpr int64_t IsInstanceOf        = 32;
+constexpr int64_t GetFieldID          = 94;
+constexpr int64_t GetStaticFieldID    = 144;
+constexpr int64_t GetBooleanField     = 96;
+constexpr int64_t GetByteField        = 97;
+constexpr int64_t GetCharField        = 98;
+constexpr int64_t GetShortField       = 99;
+constexpr int64_t GetIntField         = 100;
+constexpr int64_t GetLongField        = 101;
+constexpr int64_t GetFloatField       = 102;
+constexpr int64_t GetDoubleField      = 103;
+constexpr int64_t GetObjectField      = 95;
+constexpr int64_t SetBooleanField     = 105;
+constexpr int64_t SetByteField        = 106;
+constexpr int64_t SetCharField        = 107;
+constexpr int64_t SetShortField       = 108;
+constexpr int64_t SetIntField         = 109;
+constexpr int64_t SetLongField        = 110;
+constexpr int64_t SetFloatField       = 111;
+constexpr int64_t SetDoubleField      = 112;
+constexpr int64_t SetObjectField      = 104;
+constexpr int64_t GetStaticBooleanField  = 146;
+constexpr int64_t GetStaticByteField     = 147;
+constexpr int64_t GetStaticCharField     = 148;
+constexpr int64_t GetStaticShortField    = 149;
+constexpr int64_t GetStaticIntField      = 150;
+constexpr int64_t GetStaticLongField     = 151;
+constexpr int64_t GetStaticFloatField    = 152;
+constexpr int64_t GetStaticDoubleField   = 153;
+constexpr int64_t GetStaticObjectField   = 145;
+constexpr int64_t SetStaticBooleanField  = 155;
+constexpr int64_t SetStaticByteField     = 156;
+constexpr int64_t SetStaticCharField     = 157;
+constexpr int64_t SetStaticShortField    = 158;
+constexpr int64_t SetStaticIntField      = 159;
+constexpr int64_t SetStaticLongField     = 160;
+constexpr int64_t SetStaticFloatField    = 161;
+constexpr int64_t SetStaticDoubleField   = 162;
+constexpr int64_t SetStaticObjectField   = 154;
+constexpr int64_t GetArrayLength         = 171;
+constexpr int64_t NewObjectArray         = 172;
+constexpr int64_t GetObjectArrayElement  = 173;
+constexpr int64_t SetObjectArrayElement  = 174;
+constexpr int64_t NewBooleanArray        = 175;
+constexpr int64_t NewByteArray           = 176;
+constexpr int64_t NewCharArray           = 177;
+constexpr int64_t NewShortArray          = 178;
+constexpr int64_t NewIntArray            = 179;
+constexpr int64_t NewLongArray           = 180;
+constexpr int64_t NewFloatArray          = 181;
+constexpr int64_t NewDoubleArray         = 182;
+constexpr int64_t MonitorEnter           = 217;
+constexpr int64_t MonitorExit            = 218;
+}   // namespace jni_slot
+
+/// @brief 对象/字段/类型检查共享 helper 集合（finalize 统一生成）。
+///
+/// @details 字段 kind 表：JNI Get/Set 函数槽、返回/参数类型、窄类型扩展方向。
+/// helper 首参统一 JNIEnv*；字段访问带 null 检查（实例 receiver 为 null 抛 NPE）。
+std::string emitObjectHelpers()
+{
+    struct FieldKindInfo
+    {
+        const char* kind;       // helper 后缀
+        int64_t     getSlot;    // Get*Field
+        int64_t     getStaticSlot;
+        int64_t     setSlot;    // Set*Field
+        int64_t     setStaticSlot;
+        const char* jniType;    // JNI 函数声明类型
+        const char* retType;    // helper 返回类型（窄提升后）
+        const char* ext;        // 窄扩展（sext/zext/空）
+    };
+    static const FieldKindInfo kinds[] = {
+        {"bool", jni_slot::GetBooleanField, jni_slot::GetStaticBooleanField,
+         jni_slot::SetBooleanField, jni_slot::SetStaticBooleanField, "i8", "i32", "zext"},
+        {"byte", jni_slot::GetByteField, jni_slot::GetStaticByteField, jni_slot::SetByteField,
+         jni_slot::SetStaticByteField, "i8", "i32", "sext"},
+        {"char", jni_slot::GetCharField, jni_slot::GetStaticCharField, jni_slot::SetCharField,
+         jni_slot::SetStaticCharField, "i16", "i32", "zext"},
+        {"short", jni_slot::GetShortField, jni_slot::GetStaticShortField,
+         jni_slot::SetShortField, jni_slot::SetStaticShortField, "i16", "i32", "sext"},
+        {"int", jni_slot::GetIntField, jni_slot::GetStaticIntField, jni_slot::SetIntField,
+         jni_slot::SetStaticIntField, "i32", "i32", ""},
+        {"long", jni_slot::GetLongField, jni_slot::GetStaticLongField, jni_slot::SetLongField,
+         jni_slot::SetStaticLongField, "i64", "i64", ""},
+        {"float", jni_slot::GetFloatField, jni_slot::GetStaticFloatField,
+         jni_slot::SetFloatField, jni_slot::SetStaticFloatField, "float", "float", ""},
+        {"double", jni_slot::GetDoubleField, jni_slot::GetStaticDoubleField,
+         jni_slot::SetDoubleField, jni_slot::SetStaticDoubleField, "double", "double", ""},
+        {"ref", jni_slot::GetObjectField, jni_slot::GetStaticObjectField,
+         jni_slot::SetObjectField, jni_slot::SetStaticObjectField, "ptr", "ptr", ""},
+    };
+
+    std::ostringstream out;
+    const char* npeName = "java/lang/NullPointerException";
+    const char* cceName = "java/lang/ClassCastException";
+    const char* nullMsg = "null";
+    // NPE / CCE 类名与消息（固定名，避开调用点字符串表）。
+    out << "@_mj2x_llvm_obj_npe = private unnamed_addr constant ["
+        << (std::strlen(npeName) + 1) << " x i8] c\"" << npeName << "\\00\"\n";
+    out << "@_mj2x_llvm_obj_cce = private unnamed_addr constant ["
+        << (std::strlen(cceName) + 1) << " x i8] c\"" << cceName << "\\00\"\n";
+    out << "@_mj2x_llvm_obj_null = private unnamed_addr constant ["
+        << (std::strlen(nullMsg) + 1) << " x i8] c\"" << nullMsg << "\\00\"\n\n";
+
+    // throw_null：NPE。
+    out << "define internal void @mj2x_llvm_throw_null(ptr %env) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+        << "  %findclass = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %findclass(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %tn0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::ThrowNew << "\n"
+        << "  %thrownew = load ptr, ptr %tn0\n"
+           "  %rc = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
+           "  ret void\n"
+           "}\n\n";
+
+    // new_object：FindClass + AllocObject（不调用 <init>；构造器由 invokespecial 处理）。
+    out << "define internal ptr @mj2x_llvm_new_object(ptr %env, ptr %name) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+        << "  %findclass = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %findclass(ptr %env, ptr %name)\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %ao0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::AllocObject << "\n"
+        << "  %allocobject = load ptr, ptr %ao0\n"
+           "  %obj = call ptr %allocobject(ptr %env, ptr %cls)\n"
+           "  ret ptr %obj\n"
+           "}\n\n";
+
+    // new_array：按元素描述符首字符分发 JNI NewXxxArray / NewObjectArray。
+    out << "define internal ptr @mj2x_llvm_new_array(ptr %env, ptr %desc, i32 %count) {\n"
+           "entry:\n"
+           "  %c1 = getelementptr i8, ptr %desc, i64 1\n"
+           "  %t = load i8, ptr %c1\n"
+           "  switch i8 %t, label %obj [\n"
+           "    i8 90, label %bool_\n"
+           "    i8 66, label %byte_\n"
+           "    i8 67, label %char_\n"
+           "    i8 83, label %short_\n"
+           "    i8 73, label %int_\n"
+           "    i8 74, label %long_\n"
+           "    i8 70, label %float_\n"
+           "    i8 68, label %double_\n"
+           "  ]\n";
+    const struct { const char* label; int64_t slot; } primArrays[] = {
+        {"bool_", jni_slot::NewBooleanArray}, {"byte_", jni_slot::NewByteArray},
+        {"char_", jni_slot::NewCharArray},   {"short_", jni_slot::NewShortArray},
+        {"int_", jni_slot::NewIntArray},      {"long_", jni_slot::NewLongArray},
+        {"float_", jni_slot::NewFloatArray},  {"double_", jni_slot::NewDoubleArray},
+    };
+    for (const auto& entry : primArrays) {
+        out << entry.label << ":\n"
+            << "  %ft = load ptr, ptr %env\n"
+            << "  %fn = getelementptr ptr, ptr %ft, i64 " << entry.slot << "\n"
+            << "  %f = load ptr, ptr %fn\n"
+            << "  %a = call ptr %f(ptr %env, i32 %count)\n"
+            << "  ret ptr %a\n";
+    }
+    out << "obj:\n"
+           "  %ft2 = load ptr, ptr %env\n"
+           "  %fc2 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::FindClass << "\n"
+        << "  %find = load ptr, ptr %fc2\n"
+           "  %cls = call ptr %find(ptr %env, ptr %c1)\n"
+           "  %ft3 = load ptr, ptr %env\n"
+           "  %na0 = getelementptr ptr, ptr %ft3, i64 " << jni_slot::NewObjectArray << "\n"
+        << "  %naf = load ptr, ptr %na0\n"
+           "  %arr = call ptr %naf(ptr %env, i32 %count, ptr %cls, ptr null)\n"
+           "  ret ptr %arr\n"
+           "}\n\n";
+
+    // new_multi_array：NewObjectArray 递归（JVM EagerAlloc 语义）。
+    out << "define internal ptr @mj2x_llvm_new_multi_array(ptr %env, ptr %desc, ptr %dims, "
+           "i32 %ndims) {\n"
+           "entry:\n"
+           "  %d0p = getelementptr i32, ptr %dims, i64 0\n"
+           "  %d0 = load i32, ptr %d0p\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+        << "  %find = load ptr, ptr %fc0\n"
+           "  %edesc = getelementptr i8, ptr %desc, i64 1\n"
+           "  %cls = call ptr %find(ptr %env, ptr %edesc)\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %na0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::NewObjectArray << "\n"
+        << "  %naf = load ptr, ptr %na0\n"
+           "  %arr = call ptr %naf(ptr %env, i32 %d0, ptr %cls, ptr null)\n"
+           "  %is1 = icmp eq i32 %ndims, 1\n"
+           "  br i1 %is1, label %done, label %fill\n"
+           "fill:\n"
+           "  %dims1 = getelementptr i32, ptr %dims, i64 1\n"
+           "  %nd1 = sub i32 %ndims, 1\n"
+           "  br label %loop\n"
+           "loop:\n"
+           "  %i = phi i32 [ 0, %fill ], [ %inext, %loopnext ]\n"
+           "  %c = icmp slt i32 %i, %d0\n"
+           "  br i1 %c, label %body, label %done\n"
+           "body:\n"
+           "  %elem = call ptr @mj2x_llvm_new_multi_array(ptr %env, ptr %edesc, ptr %dims1, "
+           "i32 %nd1)\n"
+           "  %ft2 = load ptr, ptr %env\n"
+           "  %se0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::SetObjectArrayElement << "\n"
+        << "  %sef = load ptr, ptr %se0\n"
+           "  call void %sef(ptr %env, ptr %arr, i32 %i, ptr %elem)\n"
+           "  %inext = add i32 %i, 1\n"
+           "  br label %loopnext\n"
+           "loopnext:\n"
+           "  br label %loop\n"
+           "done:\n"
+           "  ret ptr %arr\n"
+           "}\n\n";
+
+    // 字段 load/store helpers（static/instance 合一 + null 检查）。
+    for (const auto& k : kinds) {
+        const std::string getFn = "get" + std::string(k.kind) + "field";
+        const std::string getStaticFn = "getstatic" + std::string(k.kind) + "field";
+        out << "define internal " << k.retType << " @mj2x_llvm_field_load_" << k.kind
+            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, i32 %is_static) {\n"
+            << "entry:\n"
+            << "  %ft0 = load ptr, ptr %env\n"
+            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+            << "  %findclass = load ptr, ptr %fc0\n"
+            << "  %cls = call ptr %findclass(ptr %env, ptr %owner)\n"
+            << "  %isst = icmp eq i32 %is_static, 0\n"
+            << "  br i1 %isst, label %inst, label %stat\n"
+            << "inst:\n"
+            << "  %isnull = icmp eq ptr %rcv, null\n"
+            << "  br i1 %isnull, label %npe, label %inst_ok\n"
+            << "inst_ok:\n"
+            << "  %ft1 = load ptr, ptr %env\n"
+            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << k.getSlot << "\n"
+            << "  %getfid = load ptr, ptr %gf1\n"
+            << "  %fid = call ptr %getfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
+            << "  %ft2 = load ptr, ptr %env\n"
+            << "  %gi1 = getelementptr ptr, ptr %ft2, i64 " << k.getSlot << "\n"
+            << "  %gv = load ptr, ptr %gi1\n"
+            << "  %v = call " << k.jniType << " %gv(ptr %env, ptr %rcv, ptr %fid)\n";
+        if (std::strlen(k.ext) > 0) {
+            out << "  %w = " << k.ext << " " << k.jniType << " %v to " << k.retType << "\n"
+                << "  ret " << k.retType << " %w\n";
+        }
+        else {
+            out << "  ret " << k.retType << " %v\n";
+        }
+        out << "stat:\n"
+            << "  %ft3 = load ptr, ptr %env\n"
+            << "  %gs1 = getelementptr ptr, ptr %ft3, i64 " << jni_slot::GetStaticFieldID << "\n"
+            << "  %getstatfid = load ptr, ptr %gs1\n"
+            << "  %fid2 = call ptr %getstatfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
+            << "  %ft4 = load ptr, ptr %env\n"
+            << "  %gsi1 = getelementptr ptr, ptr %ft4, i64 " << k.getStaticSlot << "\n"
+            << "  %gsv = load ptr, ptr %gsi1\n"
+            << "  %v2 = call " << k.jniType << " %gsv(ptr %env, ptr %cls, ptr %fid2)\n";
+        if (std::strlen(k.ext) > 0) {
+            out << "  %w2 = " << k.ext << " " << k.jniType << " %v2 to " << k.retType << "\n"
+                << "  ret " << k.retType << " %w2\n";
+        }
+        else {
+            out << "  ret " << k.retType << " %v2\n";
+        }
+        out << "npe:\n"
+            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
+            << "  ret " << k.retType << " 0\n"
+            << "}\n\n";
+        // store。
+        out << "define internal void @mj2x_llvm_field_store_" << k.kind
+            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, i32 %is_static, "
+            << k.retType << " %val) {\n"
+            << "entry:\n"
+            << "  %ft0 = load ptr, ptr %env\n"
+            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+            << "  %findclass = load ptr, ptr %fc0\n"
+            << "  %cls = call ptr %findclass(ptr %env, ptr %owner)\n"
+            << "  %isst = icmp eq i32 %is_static, 0\n"
+            << "  br i1 %isst, label %inst, label %stat\n"
+            << "inst:\n"
+            << "  %isnull = icmp eq ptr %rcv, null\n"
+            << "  br i1 %isnull, label %npe, label %inst_ok\n"
+            << "inst_ok:\n"
+            << "  %ft1 = load ptr, ptr %env\n"
+            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << k.getSlot << "\n"
+            << "  %getfid = load ptr, ptr %gf1\n"
+            << "  %fid = call ptr %getfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
+            << "  %ft2 = load ptr, ptr %env\n"
+            << "  %si1 = getelementptr ptr, ptr %ft2, i64 " << k.setSlot << "\n"
+            << "  %sv = load ptr, ptr %si1\n";
+        if (std::strlen(k.ext) > 0) {
+            out << "  %tv = trunc " << k.retType << " %val to " << k.jniType << "\n"
+                << "  call void %sv(ptr %env, ptr %rcv, ptr %fid, " << k.jniType << " %tv)\n";
+        }
+        else {
+            out << "  call void %sv(ptr %env, ptr %rcv, ptr %fid, " << k.jniType << " %val)\n";
+        }
+        out << "  ret void\n"
+            << "stat:\n"
+            << "  %ft3 = load ptr, ptr %env\n"
+            << "  %gs1 = getelementptr ptr, ptr %ft3, i64 " << jni_slot::GetStaticFieldID << "\n"
+            << "  %getstatfid = load ptr, ptr %gs1\n"
+            << "  %fid2 = call ptr %getstatfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
+            << "  %ft4 = load ptr, ptr %env\n"
+            << "  %ssi1 = getelementptr ptr, ptr %ft4, i64 " << k.setStaticSlot << "\n"
+            << "  %ssv = load ptr, ptr %ssi1\n";
+        if (std::strlen(k.ext) > 0) {
+            out << "  %tv2 = trunc " << k.retType << " %val to " << k.jniType << "\n"
+                << "  call void %ssv(ptr %env, ptr %cls, ptr %fid2, " << k.jniType << " %tv2)\n";
+        }
+        else {
+            out << "  call void %ssv(ptr %env, ptr %cls, ptr %fid2, " << k.jniType << " %val)\n";
+        }
+        out << "  ret void\n"
+            << "npe:\n"
+            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
+            << "  ret void\n"
+            << "}\n\n";
+    }
+
+    // check_cast：IsInstanceOf == 0 → 挂起 ClassCastException；返回原引用。
+    out << "define internal ptr @mj2x_llvm_check_cast(ptr %env, ptr %obj, ptr %desc) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+        << "  %findclass = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %findclass(ptr %env, ptr %desc)\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
+        << "  %isinstanceof = load ptr, ptr %ii0\n"
+           "  %ok = call i32 %isinstanceof(ptr %env, ptr %obj, ptr %cls)\n"
+           "  %bad = icmp eq i32 %ok, 0\n"
+           "  br i1 %bad, label %fail, label %done\n"
+           "fail:\n"
+           "  %ft2 = load ptr, ptr %env\n"
+           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
+        << "  %thrownew = load ptr, ptr %tn0\n"
+           "  %rc = call i32 %thrownew(ptr %env, ptr @_mj2x_llvm_obj_cce, ptr @_mj2x_llvm_obj_null)\n"
+           "  br label %done\n"
+           "done:\n"
+           "  ret ptr %obj\n"
+           "}\n\n";
+
+    // instance_of：IsInstanceOf → i32 0/1（intrinsic "instanceof:<desc>"）。
+    out << "define internal i32 @mj2x_llvm_instance_of(ptr %env, ptr %obj, ptr %desc) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+        << "  %findclass = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %findclass(ptr %env, ptr %desc)\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
+        << "  %isinstanceof = load ptr, ptr %ii0\n"
+           "  %ok = call i32 %isinstanceof(ptr %env, ptr %obj, ptr %cls)\n"
+           "  ret i32 %ok\n"
+           "}\n\n";
+
+    return out.str();
+}
+
 void LlvmIrBackend::finalize(const CompilerIndex&)
 {
     std::ostringstream full;
     full << "; ModuleID = 'mj2x_llvm'\n";
     full << "source_filename = \"mj2x_llvm\"\n\n";
+    const std::string strings = impl_->strings.emitDefinitions();
+    full << strings;
+    if (!strings.empty()) full << "\n";
     full << impl_->bodies.str();
-    if (impl_->bodies.str().find("mj2x_llvm_throw_arith") != std::string::npos) {
+    const std::string bodies = impl_->bodies.str();
+    if (bodies.find("mj2x_llvm_throw_arith") != std::string::npos) {
         full << emitThrowArithmeticHelper();
+    }
+    if (bodies.find("mj2x_llvm_field_load_") != std::string::npos ||
+        bodies.find("mj2x_llvm_field_store_") != std::string::npos ||
+        bodies.find("mj2x_llvm_new_object") != std::string::npos ||
+        bodies.find("mj2x_llvm_new_array") != std::string::npos ||
+        bodies.find("mj2x_llvm_new_multi_array") != std::string::npos ||
+        bodies.find("mj2x_llvm_check_cast") != std::string::npos ||
+        bodies.find("mj2x_llvm_instance_of") != std::string::npos) {
+        full << emitObjectHelpers();
     }
     sourceCode_ = full.str();
     if (llvmOutputPath_.empty()) return;
