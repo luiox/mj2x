@@ -329,11 +329,11 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 "%mj2x_random = type { i64 }",
                 "call void @mj2x_random_init(ptr %slot_r",
                 "call i32 @mj2x_random_next_int_bound(ptr %slot_r",
-                // StringBuilder 状态机直调（上下文 + init/append/materialize）。
+                // StringBuilder 状态机直调（上下文 + init/append/to_jstring）。
                 "%mj2x_regc_context = type { ptr, ptr }",
                 "call void @mj2x_regc_init_context(ptr %mj2x_llvm_ctx",
                 "call i32 @mj2x_string_builder_init(ptr %mj2x_llvm_ctx",
-                "call i32 @mj2x_string_builder_materialize(ptr %mj2x_llvm_ctx",
+                "call i32 @mj2x_string_builder_to_jstring(ptr %mj2x_llvm_ctx",
             },
         },
         {

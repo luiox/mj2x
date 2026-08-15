@@ -223,7 +223,7 @@ constexpr LlvmBuilderEntry kBuilderEntries[] = {
      "mj2x_string_buffer_append_code_point", 1, "", {"i32", "", ""}},
     // method（toString 物化为真 jstring；length/capacity/charAt 经 out 回写）
     {"java/lang/StringBuilder", "toString", "()Ljava/lang/String;",
-     "mj2x_string_builder_materialize", 2, "ptr", {"", "", ""}},
+     "mj2x_string_builder_to_jstring", 2, "ptr", {"", "", ""}},
     {"java/lang/StringBuilder", "length", "()I", "mj2x_string_builder_length", 2, "i32",
      {"", "", ""}},
     {"java/lang/StringBuilder", "capacity", "()I", "mj2x_string_builder_capacity", 2, "i32",
@@ -237,7 +237,7 @@ constexpr LlvmBuilderEntry kBuilderEntries[] = {
     {"java/lang/StringBuilder", "setCharAt", "(IC)V", "mj2x_string_builder_set_char_at", 2, "",
      {"i32", "i16", ""}},
     {"java/lang/StringBuffer", "toString", "()Ljava/lang/String;",
-     "mj2x_string_buffer_materialize", 2, "ptr", {"", "", ""}},
+     "mj2x_string_buffer_to_jstring", 2, "ptr", {"", "", ""}},
     {"java/lang/StringBuffer", "length", "()I", "mj2x_string_buffer_length", 2, "i32",
      {"", "", ""}},
     {"java/lang/StringBuffer", "capacity", "()I", "mj2x_string_buffer_capacity", 2, "i32",

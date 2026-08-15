@@ -1131,7 +1131,7 @@ TEST(LlvmIrBackendTest, EmitsStringBuilderStateMachineDirectCalls)
         << result.text;
     EXPECT_NE(result.text.find("call i32 @mj2x_string_builder_append_i32"), std::string::npos)
         << result.text;
-    EXPECT_NE(result.text.find("call i32 @mj2x_string_builder_materialize"),
+    EXPECT_NE(result.text.find("call i32 @mj2x_string_builder_to_jstring"),
               std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("icmp eq i32"), std::string::npos) << result.text;
