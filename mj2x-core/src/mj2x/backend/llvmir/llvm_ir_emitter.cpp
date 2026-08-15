@@ -56,6 +56,18 @@ public:
                 break;
             }
         }
+        // Builder 上下文（模块级类型 + crt 上下文初始化；调用方为 %env）。
+        if (!nativeBuilders_.empty()) {
+            usesBuilder_ = true;
+            runtimeDeclares_.push_back("%mj2x_regc_context = type { ptr, ptr }");
+            runtimeDeclares_.push_back(
+                "declare void @mj2x_regc_init_context(ptr, ptr, ptr)");
+            runtimeDeclares_.push_back(
+                "declare void @mj2x_regc_throw_exception(ptr, ptr, ptr)");
+            out_ << "  " << builderContext_ << " = alloca %mj2x_regc_context\n";
+            out_ << "  call void @mj2x_regc_init_context(ptr " << builderContext_
+                 << ", ptr %env, ptr @mj2x_regc_throw_exception)\n";
+        }
         for (const auto& [id, type] : registerTypes_) {
             out_ << "  %slot_r" << id << " = alloca " << slotLlvmType(id) << "\n";
         }
@@ -213,6 +225,33 @@ private:
             }
         }
 
+        // 2c) StringBuilder/StringBuffer：Allocate → 根；append 结果与 receiver
+        // 联通（append 返回同一 state 指针，对齐 RegC regc_intrinsics.cpp
+        // ids.unite(dest, receiver)）。
+        std::set<uint32_t> builderRoots;
+        for (const auto& block : function_.blocks) {
+            for (const auto& ins : block->instructions) {
+                if (ins.kind != RegInstructionKind::Allocate ||
+                    ins.allocationKind != SSAAllocationKind::Object ||
+                    !isLlvmBuilderAllocation(ins.typeDesc)) {
+                    continue;
+                }
+                builderRoots.insert(find(ins.dest.id.value));
+            }
+            for (const auto& ins : block->instructions) {
+                if (ins.kind != RegInstructionKind::Call || !ins.hasDest ||
+                    ins.dest.type != SSAType::REF || ins.args.empty() ||
+                    ins.args[0].kind != RegOperandKind::Register) {
+                    continue;
+                }
+                const LlvmBuilderEntry* builder = matchLlvmBuilder(
+                    ins.method.owner, ins.method.name, ins.method.desc);
+                if (builder != nullptr && builder->kind == 1) {
+                    unite(ins.dest.id.value, ins.args[0].reg.value);
+                }
+            }
+        }
+
         // 3) 使用扫描：非匹配拆箱/任何其他使用 → 根回退。
         auto isBoxRoot = [&](const RegOperand& operand, uint32_t& root) {
             if (operand.kind != RegOperandKind::Register) return false;
@@ -224,9 +263,15 @@ private:
             root = find(operand.reg.value);
             return randomRoots.count(root) != 0;
         };
+        auto isBuilderRoot = [&](const RegOperand& operand, uint32_t& root) {
+            if (operand.kind != RegOperandKind::Register) return false;
+            root = find(operand.reg.value);
+            return builderRoots.count(root) != 0;
+        };
         auto fallback = [&](const RegOperand& operand) {
             uint32_t root = 0;
-            if (isBoxRoot(operand, root) || isRandomRoot(operand, root)) {
+            if (isBoxRoot(operand, root) || isRandomRoot(operand, root) ||
+                isBuilderRoot(operand, root)) {
                 fallbackRoots.insert(root);
             }
         };
@@ -276,6 +321,11 @@ private:
                                                          ins.method.desc)
                                    : matchLlvmRandomMethod(ins.method.owner, ins.method.name,
                                                            ins.method.desc));
+                    const LlvmBuilderEntry* builder = ins.args.empty()
+                                                          ? nullptr
+                                                          : matchLlvmBuilder(ins.method.owner,
+                                                                             ins.method.name,
+                                                                             ins.method.desc);
                     if (unbox != nullptr && !ins.args.empty()) {
                         uint32_t root = 0;
                         if (isBoxRoot(ins.args[0], root) &&
@@ -291,6 +341,17 @@ private:
                         // → fallbackAll(0) 回退 receiver 根。
                         uint32_t root = 0;
                         if (isRandomRoot(ins.args[0], root)) {
+                            fallbackAll(ins.args, 1);
+                        }
+                        else {
+                            fallbackAll(ins.args, 0);
+                        }
+                    }
+                    else if (builder != nullptr && !ins.args.empty()) {
+                        // Builder init/append/method：receiver 为原生根即安全
+                        // （String/Object 等参数若是原生根 → 回退该根）。
+                        uint32_t root = 0;
+                        if (isBuilderRoot(ins.args[0], root)) {
                             fallbackAll(ins.args, 1);
                         }
                         else {
@@ -323,18 +384,23 @@ private:
                 block->terminator);
         }
 
-        // 4) native 寄存器：根在 boxRoots/randomRoots 且未回退 → shadow 结构槽。
+        // 4) native 寄存器：根在 boxRoots/randomRoots/builderRoots 且未回退 →
+        // shadow 结构槽（builder 槽保持 ptr，仅标记 dispatch）。
         for (const auto& [id, type] : registerTypes_) {
             if (type != SSAType::REF) continue;
             const uint32_t root = find(id);
             if (fallbackRoots.count(root) != 0) continue;
-            const auto boxIt  = boxRoots.find(root);
-            const auto randIt = randomRoots.find(root);
+            const auto boxIt   = boxRoots.find(root);
+            const auto randIt  = randomRoots.find(root);
+            const auto buildIt = builderRoots.find(root);
             if (boxIt != boxRoots.end()) {
                 nativeSlots_[id] = boxIt->second->shadowType;
             }
             else if (randIt != randomRoots.end()) {
                 nativeSlots_[id] = "%mj2x_random";
+            }
+            else if (buildIt != builderRoots.end()) {
+                nativeBuilders_.insert(id);
             }
         }
     }
@@ -645,6 +711,129 @@ private:
                     return emitStore(instruction.dest, result, reason);
                 }
             }
+            // StringBuilder/StringBuffer 状态机：init/append/method 直调 crt
+            // （状态为堆分配 mj2x_string_builder*，寄存器槽即 out_state 指针；
+            // 调用返回 mj2x_regc_status，非 0 = pending exception → 分发/默认返回）。
+            if (!instruction.args.empty() &&
+                instruction.args[0].kind == RegOperandKind::Register &&
+                nativeBuilders_.count(instruction.args[0].reg.value) != 0) {
+                const LlvmBuilderEntry* builder = matchLlvmBuilder(
+                    instruction.method.owner, instruction.method.name, instruction.method.desc);
+                if (builder != nullptr) {
+                    // 模块级 declare：declare i32 @sym(ptr, ptr[, args...][, ptr out])
+                    //（发射端按 argLlvm/outLlvm 构造；窄形参 i8/i16 直用）。
+                    {
+                        std::string declare = std::string("declare i32 @") + builder->symbol +
+                                              "(ptr, ptr";
+                        for (int argIndex = 0; argIndex < 3; ++argIndex) {
+                            if (builder->argLlvm[argIndex][0] == '\0') break;
+                            declare += ", " + std::string(builder->argLlvm[argIndex]);
+                        }
+                        if (builder->outLlvm[0] != '\0') declare += ", ptr";
+                        declare += ")";
+                        runtimeDeclares_.push_back(declare);
+                    }
+                    const uint32_t index = builderIndex_++;
+                    std::string    callArgs = "ptr " + builderContext_;
+                    std::string    stateSlot = "ptr " + slotName(instruction.args[0].reg);
+                    // 参数（context 之后；init 的参数在 out_state 之前，其余在
+                    // state 之后——crt 签名：init (context, args..., out_state**)，
+                    // append/method (context, state, args...[, out])）。
+                    std::string pendingArgs;
+                    if (builder->kind == 0) {
+                        for (size_t argIndex = 1; argIndex < instruction.args.size(); ++argIndex) {
+                            std::string argument;
+                            if (!emitOperand(instruction.args[argIndex], argument, reason)) {
+                                return false;
+                            }
+                            const char* want = builder->argLlvm[argIndex - 1];
+                            if (std::string_view(want) == "i8" ||
+                                std::string_view(want) == "i16") {
+                                const std::string narrowed = nextTemporary();
+                                out_ << "  " << narrowed << " = trunc i32 " << argument
+                                     << " to " << want << "\n";
+                                argument = narrowed;
+                            }
+                            const char* argType = (want[0] == '\0')
+                                                      ? llvmTypeWide(
+                                                            instruction.args[argIndex].type)
+                                                      : want;
+                            pendingArgs += ", " + std::string(argType) + " " + argument;
+                        }
+                        callArgs += pendingArgs + ", " + stateSlot;
+                    }
+                    else {
+                        const std::string stateTemp = nextTemporary();
+                        out_ << "  " << stateTemp << " = load ptr, ptr "
+                             << slotName(instruction.args[0].reg) << "\n";
+                        callArgs += ", ptr " + stateTemp;
+                        for (size_t argIndex = 1; argIndex < instruction.args.size(); ++argIndex) {
+                            std::string argument;
+                            if (!emitOperand(instruction.args[argIndex], argument, reason)) {
+                                return false;
+                            }
+                            const char* want = builder->argLlvm[argIndex - 1];
+                            if (std::string_view(want) == "i8" ||
+                                std::string_view(want) == "i16") {
+                                // 窄实参：crt 形参 int8_t/uint16_t，栈值 i32 → trunc。
+                                const std::string narrowed = nextTemporary();
+                                out_ << "  " << narrowed << " = trunc i32 " << argument
+                                     << " to " << want << "\n";
+                                argument = narrowed;
+                            }
+                            const char* argType = (want[0] == '\0')
+                                                      ? llvmTypeWide(
+                                                            instruction.args[argIndex].type)
+                                                      : want;
+                            callArgs += ", " + std::string(argType) + " " + argument;
+                        }
+                    }
+                    std::string outName;
+                    if (builder->outLlvm[0] != '\0') {
+                        outName = nextTemporary();
+                        out_ << "  " << outName << " = alloca " << builder->outLlvm << "\n";
+                        callArgs += ", ptr " + outName;
+                    }
+                    const std::string status = nextTemporary();
+                    out_ << "  " << status << " = call i32 @" << builder->symbol << "("
+                         << callArgs << ")\n";
+                    const std::string statusOk = nextTemporary();
+                    out_ << "  " << statusOk << " = icmp eq i32 " << status << ", 0\n";
+                    out_ << "  br i1 " << statusOk << ", label %b_sbok_" << index
+                         << ", label %b_sberr_" << index << "\n";
+                    out_ << "b_sberr_" << index << ":\n";
+                    if (!regions.empty()) {
+                        if (!emitExceptionDispatch(block, regions, dispatchIndex_, false,
+                                                   reason)) {
+                            return false;
+                        }
+                    }
+                    else {
+                        emitDefaultReturn();
+                    }
+                    out_ << "b_sbok_" << index << ":\n";
+                    if (builder->kind == 1) {
+                        // append：dest 槽回存同一 state 指针。
+                        const std::string stateTemp = nextTemporary();
+                        out_ << "  " << stateTemp << " = load ptr, ptr "
+                             << slotName(instruction.args[0].reg) << "\n";
+                        return emitStore(instruction.dest, stateTemp, reason);
+                    }
+                    if (builder->kind == 2 && builder->outLlvm[0] != '\0') {
+                        const std::string result = nextTemporary();
+                        out_ << "  " << result << " = load " << builder->outLlvm << ", ptr "
+                             << outName << "\n";
+                        if (std::string_view(builder->outLlvm) == "i16") {
+                            // charAt：uint16_t → zext i32。
+                            const std::string widened = nextTemporary();
+                            out_ << "  " << widened << " = zext i16 " << result << " to i32\n";
+                            return emitStore(instruction.dest, widened, reason);
+                        }
+                        return emitStore(instruction.dest, result, reason);
+                    }
+                    return true;
+                }
+            }
             // JDK 纯函数 intrinsic（Math 切片）：直调 mj2x-crt 符号（0 JNI、
             // 不抛异常无 ExceptionCheck；对齐 RegC RuntimeFunction 语义）。
             if (instruction.method.invokeOpcode == Opcodes::INVOKESTATIC) {
@@ -908,6 +1097,11 @@ private:
                 // Random 原生切片：非逃逸 new Random 的对象槽即 %mj2x_random
                 // 状态（Allocate 无操作；<init>(J)V 处 mj2x_random_init）。
                 if (nativeSlots_.count(instruction.dest.id.value) != 0) {
+                    return true;
+                }
+                // Builder 原生切片：非逃逸 new StringBuilder 的槽即 out_state
+                // 指针（Allocate 无操作；<init> 处 mj2x_string_builder_init）。
+                if (nativeBuilders_.count(instruction.dest.id.value) != 0) {
                     return true;
                 }
                 const std::string result = nextTemporary();
@@ -1383,6 +1577,12 @@ private:
     std::vector<std::string> runtimeDeclares_;     // 本函数用到的 intrinsic 直调 declare
     /// 包装类 shadow 寄存器 → 结构槽类型（"%mj2x_int" 等；仅非逃逸根）。
     std::map<uint32_t, std::string> nativeSlots_;
+    /// Builder 原生寄存器（槽为 ptr 状态指针，仅驱动 dispatch）。
+    std::set<uint32_t> nativeBuilders_;
+    /// 本函数是否使用 builder intrinsic（决定 %mj2x_regc_context 前导）。
+    bool        usesBuilder_ = false;
+    uint32_t    builderIndex_ = 0;   // builder 状态检查 label 唯一号
+    std::string builderContext_ = "%mj2x_llvm_ctx";
 
 public:
     /// @brief 本函数注入的检查点状态全局（模块级输出用）。

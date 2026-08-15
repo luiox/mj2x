@@ -92,4 +92,30 @@ const LlvmRandomEntry* matchLlvmRandomMethod(ca::str::Utf8StringRef owner,
                                              ca::str::Utf8StringRef name,
                                              ca::str::Utf8StringRef desc);
 
+/// @brief StringBuilder/StringBuffer 状态机条目。
+///
+/// @details 状态为 crt 堆分配 `mj2x_string_builder*`（寄存器槽即 out_state
+/// 指针）；全部调用返回 mj2x_regc_status（i32，非 0 = pending exception，
+/// 发射端检查后分发/默认返回）。kind：0=init（out_state**），1=append
+/// （返回同一 state 指针存回 dest 槽），2=method（out 参数承载结果）。
+struct LlvmBuilderEntry
+{
+    const char* owner;       // "java/lang/StringBuilder" / "java/lang/StringBuffer"
+    const char* name;        // "<init>" / "append" / "toString" / ...
+    const char* desc;        // "(I)V" / "(I)Ljava/lang/StringBuilder;" / ...
+    const char* symbol;      // "mj2x_string_builder_append_i32"
+    int         kind;        // 0=init 1=append 2=method
+    const char* outLlvm;     // method 的 out 参数类型："" / "ptr" / "i32" / "i16"
+    const char* argLlvm[3];  // context/state 之后的参数（i32/i64/float/double/ptr；
+                             // i8/i16 表示需 trunc——crt 形参为 int8_t/uint16_t）
+};
+
+/// @brief 查找 StringBuilder/StringBuffer 状态机条目（init/append/method）。
+const LlvmBuilderEntry* matchLlvmBuilder(ca::str::Utf8StringRef owner,
+                                         ca::str::Utf8StringRef name,
+                                         ca::str::Utf8StringRef desc);
+
+/// @brief 判断 Allocate 的 typeDesc 是否 StringBuilder/StringBuffer。
+bool isLlvmBuilderAllocation(ca::str::Utf8StringRef typeDesc);
+
 }   // namespace mj2x

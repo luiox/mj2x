@@ -141,6 +141,117 @@ constexpr LlvmRandomEntry kRandomEntries[] = {
      "declare double @mj2x_random_next_double(ptr)"},
 };
 
+/// @brief StringBuilder/StringBuffer 状态机切片：crt 堆分配状态
+/// `mj2x_string_builder*`（init 的 out_state 即寄存器槽），append 返回同一
+/// state，method 经 out 参数回写结果。全部调用返回 mj2x_regc_status。
+///
+/// @details kind：0=init（参数 + out_state**），1=append（参数 + state，
+/// dest 槽回存 state 指针），2=method（参数 + out）。argLlvm 的 i8/i16 表示
+/// crt 形参为 int8_t/uint16_t，发射端先 trunc。
+constexpr LlvmBuilderEntry kBuilderEntries[] = {
+    // init
+    {"java/lang/StringBuilder", "<init>", "()V", "mj2x_string_builder_init", 0, "",
+     {"", "", ""}},
+    {"java/lang/StringBuilder", "<init>", "(I)V", "mj2x_string_builder_init_capacity", 0, "",
+     {"i32", "", ""}},
+    {"java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V",
+     "mj2x_string_builder_init_jstring", 0, "", {"ptr", "", ""}},
+    {"java/lang/StringBuilder", "<init>", "(Ljava/lang/CharSequence;)V",
+     "mj2x_string_builder_init_char_sequence", 0, "", {"ptr", "", ""}},
+    {"java/lang/StringBuffer", "<init>", "()V", "mj2x_string_buffer_init", 0, "",
+     {"", "", ""}},
+    {"java/lang/StringBuffer", "<init>", "(I)V", "mj2x_string_buffer_init_capacity", 0, "",
+     {"i32", "", ""}},
+    {"java/lang/StringBuffer", "<init>", "(Ljava/lang/String;)V",
+     "mj2x_string_buffer_init_jstring", 0, "", {"ptr", "", ""}},
+    {"java/lang/StringBuffer", "<init>", "(Ljava/lang/CharSequence;)V",
+     "mj2x_string_buffer_init_char_sequence", 0, "", {"ptr", "", ""}},
+    // append（全部返回同一 state 指针）
+    {"java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_jstring", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_object", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuilder", "append", "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_char_sequence", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuilder", "append",
+     "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_char_sequence_range", 1, "", {"ptr", "i32", "i32"}},
+    {"java/lang/StringBuilder", "append", "(I)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_i32", 1, "", {"i32", "", ""}},
+    {"java/lang/StringBuilder", "append", "(J)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_i64", 1, "", {"i64", "", ""}},
+    {"java/lang/StringBuilder", "append", "(Z)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_bool", 1, "", {"i8", "", ""}},
+    {"java/lang/StringBuilder", "append", "(C)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_char", 1, "", {"i16", "", ""}},
+    {"java/lang/StringBuilder", "append", "(F)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_f32", 1, "", {"float", "", ""}},
+    {"java/lang/StringBuilder", "append", "(D)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_f64", 1, "", {"double", "", ""}},
+    {"java/lang/StringBuilder", "append", "([C)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_char_array", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuilder", "append", "([CII)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_char_array_range", 1, "", {"ptr", "i32", "i32"}},
+    {"java/lang/StringBuilder", "appendCodePoint", "(I)Ljava/lang/StringBuilder;",
+     "mj2x_string_builder_append_code_point", 1, "", {"i32", "", ""}},
+    {"java/lang/StringBuffer", "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_jstring", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuffer", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_object", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuffer", "append", "(Ljava/lang/CharSequence;)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_char_sequence", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuffer", "append",
+     "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_char_sequence_range", 1, "", {"ptr", "i32", "i32"}},
+    {"java/lang/StringBuffer", "append", "(I)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_i32", 1, "", {"i32", "", ""}},
+    {"java/lang/StringBuffer", "append", "(J)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_i64", 1, "", {"i64", "", ""}},
+    {"java/lang/StringBuffer", "append", "(Z)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_bool", 1, "", {"i8", "", ""}},
+    {"java/lang/StringBuffer", "append", "(C)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_char", 1, "", {"i16", "", ""}},
+    {"java/lang/StringBuffer", "append", "(F)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_f32", 1, "", {"float", "", ""}},
+    {"java/lang/StringBuffer", "append", "(D)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_f64", 1, "", {"double", "", ""}},
+    {"java/lang/StringBuffer", "append", "([C)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_char_array", 1, "", {"ptr", "", ""}},
+    {"java/lang/StringBuffer", "append", "([CII)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_char_array_range", 1, "", {"ptr", "i32", "i32"}},
+    {"java/lang/StringBuffer", "appendCodePoint", "(I)Ljava/lang/StringBuffer;",
+     "mj2x_string_buffer_append_code_point", 1, "", {"i32", "", ""}},
+    // method（toString 物化为真 jstring；length/capacity/charAt 经 out 回写）
+    {"java/lang/StringBuilder", "toString", "()Ljava/lang/String;",
+     "mj2x_string_builder_materialize", 2, "ptr", {"", "", ""}},
+    {"java/lang/StringBuilder", "length", "()I", "mj2x_string_builder_length", 2, "i32",
+     {"", "", ""}},
+    {"java/lang/StringBuilder", "capacity", "()I", "mj2x_string_builder_capacity", 2, "i32",
+     {"", "", ""}},
+    {"java/lang/StringBuilder", "charAt", "(I)C", "mj2x_string_builder_char_at", 2, "i16",
+     {"i32", "", ""}},
+    {"java/lang/StringBuilder", "ensureCapacity", "(I)V",
+     "mj2x_string_builder_ensure_capacity", 2, "", {"i32", "", ""}},
+    {"java/lang/StringBuilder", "setLength", "(I)V", "mj2x_string_builder_set_length", 2, "",
+     {"i32", "", ""}},
+    {"java/lang/StringBuilder", "setCharAt", "(IC)V", "mj2x_string_builder_set_char_at", 2, "",
+     {"i32", "i16", ""}},
+    {"java/lang/StringBuffer", "toString", "()Ljava/lang/String;",
+     "mj2x_string_buffer_materialize", 2, "ptr", {"", "", ""}},
+    {"java/lang/StringBuffer", "length", "()I", "mj2x_string_buffer_length", 2, "i32",
+     {"", "", ""}},
+    {"java/lang/StringBuffer", "capacity", "()I", "mj2x_string_buffer_capacity", 2, "i32",
+     {"", "", ""}},
+    {"java/lang/StringBuffer", "charAt", "(I)C", "mj2x_string_buffer_char_at", 2, "i16",
+     {"i32", "", ""}},
+    {"java/lang/StringBuffer", "ensureCapacity", "(I)V",
+     "mj2x_string_buffer_ensure_capacity", 2, "", {"i32", "", ""}},
+    {"java/lang/StringBuffer", "setLength", "(I)V", "mj2x_string_buffer_set_length", 2, "",
+     {"i32", "", ""}},
+    {"java/lang/StringBuffer", "setCharAt", "(IC)V", "mj2x_string_buffer_set_char_at", 2, "",
+     {"i32", "i16", ""}},
+};
+
 }   // namespace
 
 const LlvmIntrinsicEntry* matchLlvmIntrinsic(ca::str::Utf8StringRef owner,
@@ -205,6 +316,25 @@ const LlvmRandomEntry* matchLlvmRandomMethod(ca::str::Utf8StringRef owner,
         }
     }
     return nullptr;
+}
+
+const LlvmBuilderEntry* matchLlvmBuilder(ca::str::Utf8StringRef owner,
+                                         ca::str::Utf8StringRef name,
+                                         ca::str::Utf8StringRef desc)
+{
+    for (const auto& entry : kBuilderEntries) {
+        if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
+            sameText(desc, entry.desc)) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+bool isLlvmBuilderAllocation(ca::str::Utf8StringRef typeDesc)
+{
+    return sameText(typeDesc, "java/lang/StringBuilder") ||
+           sameText(typeDesc, "java/lang/StringBuffer");
 }
 
 }   // namespace mj2x
