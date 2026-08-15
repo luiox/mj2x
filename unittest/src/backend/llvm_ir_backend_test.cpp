@@ -543,10 +543,10 @@ TEST(LlvmIrBackendTest, EmitsStaticFieldAccess)
                                  new InsnNode(Opcodes::IRETURN)},
                                 1, 0);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
-    EXPECT_NE(result.text.find("call void @mj2x_llvm_field_store_int(ptr %env, null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1, i32"),
+    EXPECT_NE(result.text.find("call void @mj2x_llvm_field_store_int(ptr %env, ptr null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1, i32"),
               std::string::npos)
         << result.text;
-    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_field_load_int(ptr %env, null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1)"),
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_field_load_int(ptr %env, ptr null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1)"),
               std::string::npos)
         << result.text;
 }
@@ -603,4 +603,61 @@ TEST(LlvmIrBackendTest, EmitsObjectAllocationAndTypeChecks)
     EXPECT_NE(instance.text.find("call i32 @mj2x_llvm_instance_of(ptr %env, %v0, ptr @_mj2x_llvm_str_0)"),
               std::string::npos)
         << instance.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsArrayAccessAndLength)
+{
+    // IALOAD：数组 + 索引 → array_load_int helper。
+    auto load = compileScalar("at", "([II)I",
+                              {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::IALOAD), new InsnNode(Opcodes::IRETURN)},
+                              2, 2);
+    ASSERT_EQ(load.kind, BackendResult::Kind::C_SOURCE) << load.text;
+    EXPECT_NE(load.text.find("call i32 @mj2x_llvm_array_load_int(ptr %env, ptr %v0, i32 %v1)"),
+              std::string::npos)
+        << load.text;
+
+    // IASTORE：数组 + 索引 + 值 → array_store_int helper。
+    auto store = compileScalar("put", "([III)V",
+                               {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                                new VarInsnNode(Opcodes::ILOAD, 2), new InsnNode(Opcodes::IASTORE),
+                                new InsnNode(Opcodes::RETURN)},
+                               3, 3);
+    ASSERT_EQ(store.kind, BackendResult::Kind::C_SOURCE) << store.text;
+    EXPECT_NE(store.text.find("call void @mj2x_llvm_array_store_int(ptr %env, ptr %v0, i32 %v1, i32 %v2)"),
+              std::string::npos)
+        << store.text;
+
+    // ARRAYLENGTH → array_length helper。
+    auto len = compileScalar("n", "([I)I",
+                             {new VarInsnNode(Opcodes::ALOAD, 0), new InsnNode(Opcodes::ARRAYLENGTH),
+                              new InsnNode(Opcodes::IRETURN)},
+                             1, 1);
+    ASSERT_EQ(len.kind, BackendResult::Kind::C_SOURCE) << len.text;
+    EXPECT_NE(len.text.find("call i32 @mj2x_llvm_array_length(ptr %env, ptr %v0)"),
+              std::string::npos)
+        << len.text;
+
+    // AASTORE（引用数组）：element type REF → array_store_ref helper。
+    auto refStore = compileScalar("putRef", "([Ljava/lang/String;ILjava/lang/String;)V",
+                                  {new VarInsnNode(Opcodes::ALOAD, 0),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new VarInsnNode(Opcodes::ALOAD, 2),
+                                   new InsnNode(Opcodes::AASTORE), new InsnNode(Opcodes::RETURN)},
+                                  3, 3);
+    ASSERT_EQ(refStore.kind, BackendResult::Kind::C_SOURCE) << refStore.text;
+    EXPECT_NE(refStore.text.find("call void @mj2x_llvm_array_store_ref(ptr %env, ptr %v0, i32 %v1, ptr %v2)"),
+              std::string::npos)
+        << refStore.text;
+
+    // BALOAD（byte 组件）：array_load_byte helper（boolean[] 特判在内）。
+    auto byteLoad = compileScalar("b", "([BI)B",
+                                  {new VarInsnNode(Opcodes::ALOAD, 0),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new InsnNode(Opcodes::BALOAD), new InsnNode(Opcodes::IRETURN)},
+                                  2, 2);
+    ASSERT_EQ(byteLoad.kind, BackendResult::Kind::C_SOURCE) << byteLoad.text;
+    EXPECT_NE(byteLoad.text.find("call i32 @mj2x_llvm_array_load_byte(ptr %env, ptr %v0, i32 %v1)"),
+              std::string::npos)
+        << byteLoad.text;
 }
