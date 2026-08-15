@@ -30,8 +30,12 @@ public class LlvmTinySample {
         return x * 2;
     }
 
+    public static int absDiff(int a, int b) {
+        return Math.abs(a - b);
+    }
+
     public static String check() {
         return "addMul=" + addMul(2, 5) + " loopSum=" + loopSum(10) + " maxOf=" + maxOf(3, 9)
-            + " pick=" + pick(-4);
+            + " pick=" + pick(-4) + " absDiff=" + absDiff(3, 11);
     }
 }

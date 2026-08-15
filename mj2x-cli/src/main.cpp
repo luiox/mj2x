@@ -413,7 +413,9 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         }
     }
 
-    if (withRuntimeProtection && !mj2x::cli::writeEmbeddedCrtTree(projectDir)) {
+    // JDK intrinsic 直调（mj2x_math_* 等）与 --runtime-protection 检查点都来自
+    // mj2x-crt：整树随工程分发（模板按需 glob 编译）。
+    if (!mj2x::cli::writeEmbeddedCrtTree(projectDir)) {
         CA_LOGT_ERROR("cli", "embedded mj2x-crt resources are unavailable.\n");
         return 1;
     }
@@ -426,23 +428,25 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         }
         out << "cmake_minimum_required(VERSION 3.16)\n";
         out << "project(mj2x_native NONE)\n\n";
-        out << "find_program(CLANG_EXECUTABLE clang REQUIRED)\n\n";
+        out << "find_program(CLANG_EXECUTABLE clang REQUIRED)\n";
+        out << "find_package(JNI REQUIRED)\n\n";
         out << "set(LLVM_IR_FILE ${CMAKE_CURRENT_SOURCE_DIR}/native.ll)\n";
-        if (withRuntimeProtection) {
-            out << "set(RT_PROTECT_SRC "
-                   "${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/rt_protect/"
-                   "mj2x_rt_protect.c)\n";
-        }
+        // mj2x-crt：JDK intrinsic runtime（src/regc/*.c）+ rt_protect 检查点。
+        out << "file(GLOB CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/src/regc/*.c)\n";
+        out << "list(APPEND CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/rt_protect/"
+               "mj2x_rt_protect.c)\n";
         out << "set(NATIVE_LIB ${CMAKE_CURRENT_BINARY_DIR}/mj2x_native"
                "${CMAKE_SHARED_LIBRARY_SUFFIX})\n";
+        out << "set(CRT_ARGS \"\")\n";
+        out << "foreach(INC ${JNI_INCLUDE_DIRS})\n";
+        out << "  string(APPEND CRT_ARGS \" -I${INC}\")\n";
+        out << "endforeach()\n";
+        out << "string(APPEND CRT_ARGS \" -I${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/src\")\n";
         out << "add_custom_command(\n";
         out << "  OUTPUT ${NATIVE_LIB}\n";
-        out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${LLVM_IR_FILE}";
-        if (withRuntimeProtection) out << " ${RT_PROTECT_SRC}";
-        out << " -o ${NATIVE_LIB}\n";
-        out << "  DEPENDS ${LLVM_IR_FILE}";
-        if (withRuntimeProtection) out << " ${RT_PROTECT_SRC}";
-        out << "\n";
+        out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${CRT_ARGS} ${LLVM_IR_FILE} "
+               "${CRT_SOURCES} -o ${NATIVE_LIB}\n";
+        out << "  DEPENDS ${LLVM_IR_FILE} ${CRT_SOURCES}\n";
         out << "  COMMENT \"Compiling LLVM IR with clang\")\n";
         out << "add_custom_target(mj2x_native ALL DEPENDS ${NATIVE_LIB})\n";
     }
@@ -1255,12 +1259,16 @@ int main(int argc, char** argv)
         }
         else {
             std::filesystem::path crtRoot;
-            if (options.cBackendKind == CEmitterBackend::RegC) {
+            if (options.cBackendKind == CEmitterBackend::RegC ||
+                options.cBackendKind == CEmitterBackend::LlvmIr) {
+                // LLVM：JDK intrinsic 直调（mj2x_math_* 等）的 runtime 符号在
+                // mj2x-crt，链接侧一并编译（与 RegC --compile 的 crt 契约一致）。
                 crtRoot = mj2x::cli::findCrtRoot(argv[0]);
                 if (crtRoot.empty()) {
                     CA_LOGT_ERROR("cli",
-                                  "RegC --compile requires an mj2x-crt source pack; set "
-                                  "MJ2X_CRT_DIR or use --generate-xmake.\n");
+                                  "{} --compile requires an mj2x-crt source pack; set "
+                                  "MJ2X_CRT_DIR or use --generate-xmake.\n",
+                                  options.cBackendKind == CEmitterBackend::RegC ? "RegC" : "LLVM");
                     return 1;
                 }
             }
@@ -1268,12 +1276,12 @@ int main(int argc, char** argv)
                 if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
                     compileRc = mj2x::cli::compileLlvmIrFromPipe(
                         nativeArtifact.content, options.outputPath, options.llvmTool,
-                        withRuntimeProtection);
+                        withRuntimeProtection, crtRoot);
                 }
                 else {
                     compileRc = mj2x::cli::compileLlvmIrSource(
                         nativeOutputPath, options.outputPath, options.llvmTool,
-                        withRuntimeProtection);
+                        withRuntimeProtection, crtRoot);
                 }
             }
             else if (options.compileMode == mj2x::cli::CompileMode::Pipe) {

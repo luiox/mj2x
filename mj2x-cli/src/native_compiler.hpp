@@ -74,15 +74,20 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 /// `clang` 直接读取 `.ll`；`llc` 先生成临时 object，再由 clang 链接。失败时返回非 0。
 /// @param withRuntimeProtection 为 true 时把内嵌 mj2x-crt rt_protect 源写到临时
 ///        目录并一起编译（--runtime-protection 检查点的实现侧）。
+/// @param crtRoot 非空时把 mj2x-crt 源一并编译（JDK intrinsic 直调的 runtime
+///        符号，如 mj2x_math_*；与 RegC --compile 的 crt 契约一致）。
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
-                        LlvmTool tool, bool withRuntimeProtection);
+                        LlvmTool tool, bool withRuntimeProtection,
+                        const std::filesystem::path& crtRoot = {});
 
 /// @brief 编译内存中的 LLVM IR 源码（--compile-mode pipe）。
 ///
 /// `clang` 经 stdin（`-x ir -`）直接链接；`llc` 经 stdin 生成临时 object 再由
 /// clang 链接。失败时返回非 0。
 /// @param withRuntimeProtection 同 compileLlvmIrSource。
+/// @param crtRoot 同 compileLlvmIrSource。
 int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
-                          LlvmTool tool, bool withRuntimeProtection);
+                          LlvmTool tool, bool withRuntimeProtection,
+                          const std::filesystem::path& crtRoot = {});
 
 }   // namespace mj2x::cli

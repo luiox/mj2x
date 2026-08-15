@@ -584,8 +584,31 @@ std::filesystem::path writeRtProtectSource(ScopedTemporaryDirectory& directory)
     return sourcePath;
 }
 
+/// @brief 准备 LLVM 编译侧的 mj2x-crt 附加源（JDK intrinsic 直调符号如
+/// mj2x_math_*，实现见 src/regc/mj2x_regc_intrinsic.c）。
+/// @return false 表示 crtRoot 非空但源包/JNI include 无效（调用方应报错）。
+bool prepareLlvmCrtSources(const std::filesystem::path&        crtRoot,
+                           std::vector<std::filesystem::path>& includes,
+                           std::vector<std::filesystem::path>& sources)
+{
+    if (crtRoot.empty()) return true;
+    std::vector<std::filesystem::path> manifestSources;
+    if (!addCrtSources(crtRoot, includes, manifestSources)) return false;
+    // rt_protect 由 --runtime-protection 的专用提取路径提供（.h/.c 同目录成对），
+    // manifest 里也列了它——跳过以免链接期重复符号（LNK2005）。
+    for (const auto& source : manifestSources) {
+        if (source.filename() == "mj2x_rt_protect.c") continue;
+        sources.push_back(source);
+    }
+    std::vector<std::filesystem::path> jni;
+    if (!jniIncludePaths(jni)) return false;
+    includes.insert(includes.end(), jni.begin(), jni.end());
+    return true;
+}
+
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
-                        LlvmTool tool, bool withRuntimeProtection)
+                        LlvmTool tool, bool withRuntimeProtection,
+                        const std::filesystem::path& crtRoot)
 {
     std::error_code ec;
     const std::filesystem::path sourcePath(llvmOutputPath);
@@ -605,6 +628,10 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
     const std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::filesystem::remove(libraryPath, ec);
     ec.clear();
+
+    std::vector<std::filesystem::path> crtIncludes;
+    std::vector<std::filesystem::path> crtSources;
+    if (!prepareLlvmCrtSources(crtRoot, crtIncludes, crtSources)) return 1;
 
 #ifdef __APPLE__
     const char* sharedFlag = "-dynamiclib";
@@ -636,7 +663,9 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
                libraryPath.string().c_str());
         ca::process::Command command("clang");
         command.arg(sharedFlag).arg(sourcePath.string());
+        for (const auto& include : crtIncludes) command.arg("-I").arg(include.string());
         if (!rtProtectSource.empty()) command.arg(rtProtectSource.string());
+        for (const auto& source : crtSources) command.arg(source.string());
         command.arg("-o").arg(libraryPath.string());
         result = runCompilerCommand(command, "clang");
     }
@@ -667,6 +696,16 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
             rtCompile.arg("-c").arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
             if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
             linkInputs.push_back(rtObject);
+        }
+        for (size_t index = 0; index < crtSources.size(); ++index) {
+            const std::filesystem::path crtObject =
+                objectDirectory.path() / ("crt_" + std::to_string(index) + ".obj");
+            ca::process::Command crtCompile("clang");
+            crtCompile.arg("-c");
+            for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
+            crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
+            if (runCompilerCommand(crtCompile, "clang") != 0) return 1;
+            linkInputs.push_back(crtObject);
         }
 
         printf("Linking LLVM IR native library with clang: %s\n",
@@ -953,7 +992,8 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 }
 
 int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
-                          LlvmTool tool, bool withRuntimeProtection)
+                          LlvmTool tool, bool withRuntimeProtection,
+                          const std::filesystem::path& crtRoot)
 {
     if (!jdk_finder::commandExists("clang")) {
         CA_LOGT_ERROR("compile", "LLVM IR compilation requires clang on PATH.\n");
@@ -968,6 +1008,10 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
     const std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::filesystem::remove(libraryPath, ec);
     ec.clear();
+
+    std::vector<std::filesystem::path> crtIncludes;
+    std::vector<std::filesystem::path> crtSources;
+    if (!prepareLlvmCrtSources(crtRoot, crtIncludes, crtSources)) return 1;
 
 #ifdef __APPLE__
     const char* sharedFlag = "-dynamiclib";
@@ -994,13 +1038,17 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
     }
 
     if (tool == LlvmTool::Clang) {
-        // clang -shared -x ir - [-x c rt_protect.c] -o <lib>，LLVM IR 经 stdin。
+        // clang -shared -x ir - [-I ...] [-x c rt_protect.c] [-x c crt...] -o <lib>。
         printf("Compiling LLVM IR native library from stdin with clang: %s\n",
                libraryPath.string().c_str());
         ca::process::Command command("clang");
         command.arg(sharedFlag).arg("-x").arg("ir").arg("-");
+        for (const auto& include : crtIncludes) command.arg("-I").arg(include.string());
         if (!rtProtectSource.empty()) {
             command.arg("-x").arg("c").arg(rtProtectSource.string());
+        }
+        for (const auto& source : crtSources) {
+            command.arg("-x").arg("c").arg(source.string());
         }
         command.arg("-o").arg(libraryPath.string());
         command.stdin(ca::process::Stdio::piped())
@@ -1111,6 +1159,16 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             rtCompile.arg("-c").arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
             if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
             linkInputs.push_back(rtObject);
+        }
+        for (size_t index = 0; index < crtSources.size(); ++index) {
+            const std::filesystem::path crtObject =
+                objectDirectory.path() / ("crt_" + std::to_string(index) + ".obj");
+            ca::process::Command crtCompile("clang");
+            crtCompile.arg("-c");
+            for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
+            crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
+            if (runCompilerCommand(crtCompile, "clang") != 0) return 1;
+            linkInputs.push_back(crtObject);
         }
 
         printf("Linking LLVM IR native library with clang: %s\n",

@@ -257,6 +257,8 @@ struct LlvmIrBackend::Impl
     std::string checkpointGlobals;
     // 检查点全局命名计数器（跨函数唯一）。
     uint32_t checkpointCounter = 0;
+    // JDK intrinsic 直调 declare（模块级输出，跨函数去重累积）。
+    std::string runtimeDeclares;
 };
 
 LlvmIrBackend::LlvmIrBackend()
@@ -358,10 +360,12 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     const std::string helper = helperName(className, *method.methodNode);
     std::string       helperSource;
     std::vector<std::string> checkpointGlobals;
+    std::vector<std::string> runtimeDeclares;
     if (!emitLlvmFunction(*reg, registerTypes, helper, resultType, callResolver.get(),
                           impl_->strings, indySiteBase,
                           runtimeProtection_.enabled() ? &runtimeProtection_ : nullptr,
-                          &impl_->checkpointCounter, &checkpointGlobals, helperSource, reason)) {
+                          &impl_->checkpointCounter, &checkpointGlobals, &runtimeDeclares,
+                          helperSource, reason)) {
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
@@ -374,6 +378,12 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     if (!impl_->checkpointGlobals.empty()) impl_->checkpointGlobals += "\n";
     for (const auto& global : checkpointGlobals) {
         impl_->checkpointGlobals += global + "\n";
+    }
+    // intrinsic 直调声明：模块级去重累积（finalize 统一输出）。
+    for (const auto& declare : runtimeDeclares) {
+        if (impl_->runtimeDeclares.find(declare) == std::string::npos) {
+            impl_->runtimeDeclares += declare + "\n";
+        }
     }
     return result;
 }
@@ -398,6 +408,8 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
     const std::string strings = impl_->strings.emitDefinitions();
     full << strings;
     if (!strings.empty()) full << "\n";
+    full << impl_->runtimeDeclares;
+    if (!impl_->runtimeDeclares.empty()) full << "\n";
     full << impl_->checkpointGlobals;
     full << impl_->bodies.str();
     const std::string bodies = impl_->bodies.str();

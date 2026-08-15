@@ -1,6 +1,7 @@
 /// @file llvm_ir_emitter.cpp
 /// @brief LLVM IR 后端发射器：RegIR 函数 → textual LLVM IR（含异常分发）。
 #include "llvm_ir_internal.hpp"
+#include "llvm_intrinsic_registry.hpp"
 
 #include <iomanip>
 #include <type_traits>
@@ -323,6 +324,29 @@ private:
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Call) {
+            // JDK 纯函数 intrinsic（Math 切片）：直调 mj2x-crt 符号（0 JNI、
+            // 不抛异常无 ExceptionCheck；对齐 RegC RuntimeFunction 语义）。
+            if (instruction.method.invokeOpcode == Opcodes::INVOKESTATIC) {
+                const LlvmIntrinsicEntry* intrinsic =
+                    matchLlvmIntrinsic(instruction.method.owner, instruction.method.name,
+                                       instruction.method.desc);
+                if (intrinsic != nullptr) {
+                    std::string args;
+                    for (size_t index = 0; index < instruction.args.size(); ++index) {
+                        std::string expression;
+                        if (!emitOperand(instruction.args[index], expression, reason)) {
+                            return false;
+                        }
+                        if (!args.empty()) args += ", ";
+                        args += std::string(intrinsic->argLlvm[index]) + " " + expression;
+                    }
+                    runtimeDeclares_.push_back(intrinsic->declareText);
+                    const std::string result = nextTemporary();
+                    out_ << "  " << result << " = call " << intrinsic->returnLlvm << " @"
+                         << intrinsic->symbol << "(" << args << ")\n";
+                    return emitStore(instruction.dest, result, reason);
+                }
+            }
             // 同模块内已转换的 invokestatic → 直接调用（0 JNI，保持确定性）；
             // 其余（实例调用、外部类、未转换目标）→ JNI CallXxxMethodA 分派。
             CallTarget target;
@@ -1030,10 +1054,14 @@ private:
     uint32_t                 dispatchIndex_ = 0;   // 函数级：异常分发 label 唯一
     std::vector<PendingEdge> pendingEdges_;
     std::vector<std::string> checkpointGlobals_;   // 模块级检查点全局（finalize 统一输出）
+    std::vector<std::string> runtimeDeclares_;     // 本函数用到的 intrinsic 直调 declare
 
 public:
     /// @brief 本函数注入的检查点状态全局（模块级输出用）。
     const std::vector<std::string>& checkpointGlobals() const { return checkpointGlobals_; }
+
+    /// @brief 本函数用到的 JDK intrinsic 直调声明（模块级输出用）。
+    const std::vector<std::string>& runtimeDeclares() const { return runtimeDeclares_; }
 };
 
 bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& registerTypes,
@@ -1042,12 +1070,14 @@ bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& register
                       size_t indySiteBase,
                       const codegen::RuntimeProtectionOptions* runtimeProtection,
                       uint32_t* checkpointCounter, std::vector<std::string>* checkpointGlobals,
-                      std::string& source, std::string& reason)
+                      std::vector<std::string>* runtimeDeclares, std::string& source,
+                      std::string& reason)
 {
     LlvmFunctionEmitter emitter(function, registerTypes, functionName, returnType, resolver,
                                 strings, indySiteBase, runtimeProtection, checkpointCounter);
     if (!emitter.emit(source, reason)) return false;
     if (checkpointGlobals != nullptr) *checkpointGlobals = emitter.checkpointGlobals();
+    if (runtimeDeclares != nullptr) *runtimeDeclares = emitter.runtimeDeclares();
     return true;
 }
 

@@ -443,13 +443,16 @@ class LlvmFunctionEmitter;
 ///                     索引；方法内局部索引 = 全局索引 - indySiteBase）。
 /// @param runtimeProtection 非空时在方法入口注入反侦测检查点（mj2x-crt
 ///                          rt_protect，编译侧链接 mj2x_rt_protect.c）。
+/// @param checkpointGlobals 出参：本函数注入的检查点状态全局（模块级输出用）。
+/// @param runtimeDeclares 出参：本函数用到的 JDK intrinsic 直调声明。
 bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& registerTypes,
                       const std::string& functionName, SSAType returnType,
                       InternalCallResolver* resolver, GlobalStringTable& strings,
                       size_t indySiteBase,
                       const codegen::RuntimeProtectionOptions* runtimeProtection,
                       uint32_t* checkpointCounter, std::vector<std::string>* checkpointGlobals,
-                      std::string& source, std::string& reason);
+                      std::vector<std::string>* runtimeDeclares, std::string& source,
+                      std::string& reason);
 
 // ---- 共享 helper 发射（llvm_ir_helpers.cpp） ----
 

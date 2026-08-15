@@ -287,8 +287,9 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
         }
     }
 
-    // --runtime-protection：内嵌 mj2x-crt rt_protect 源随工程分发并参与编译。
-    if (withRuntimeProtection && !writeEmbeddedCrtTree(projectDir)) {
+    // JDK intrinsic 直调（mj2x_math_* 等）与 --runtime-protection 检查点都来自
+    // mj2x-crt：整树随工程分发（模板按需 glob 编译）。
+    if (!writeEmbeddedCrtTree(projectDir)) {
         CA_LOGT_ERROR("compile", "embedded mj2x-crt resources are unavailable.\n");
         return 1;
     }
@@ -306,12 +307,28 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
                    "(is_host(\"macosx\") and \".dylib\" or \".so\")\n"
                    "        local out = path.join(target:targetdir(), \"mj2x_native\" .. suffix)\n"
                    "        os.mkdir(target:targetdir())\n"
-                   "        local args = {\"-shared\", path.join(os.scriptdir(), "
-                   "\"native.ll\")}\n"
-                   "        if os.exists(path.join(os.scriptdir(), "
-                   "\"src/mj2x-crt/rt_protect/mj2x_rt_protect.c\")) then\n"
-                   "            table.insert(args, path.join(os.scriptdir(), "
-                   "\"src/mj2x-crt/rt_protect/mj2x_rt_protect.c\"))\n"
+                   "        local args = {\"-shared\", path.join(os.scriptdir(), \"native.ll\")}\n"
+                   "        local crtSrc = path.join(os.scriptdir(), \"src/mj2x-crt/src\")\n"
+                   "        if os.isdir(crtSrc) then\n"
+                   "            table.insert(args, \"-I\" .. crtSrc)\n"
+                   "            local jh = os.getenv(\"JAVA_HOME\")\n"
+                   "            if jh and os.isdir(path.join(jh, \"include\")) then\n"
+                   "                table.insert(args, \"-I\" .. path.join(jh, \"include\"))\n"
+                   "                if os.isdir(path.join(jh, \"include\", \"win32\")) then\n"
+                   "                    table.insert(args, \"-I\" .. path.join(jh, \"include\", \"win32\"))\n"
+                   "                elseif os.isdir(path.join(jh, \"include\", \"linux\")) then\n"
+                   "                    table.insert(args, \"-I\" .. path.join(jh, \"include\", \"linux\"))\n"
+                   "                elseif os.isdir(path.join(jh, \"include\", \"darwin\")) then\n"
+                   "                    table.insert(args, \"-I\" .. path.join(jh, \"include\", \"darwin\"))\n"
+                   "                end\n"
+                   "            end\n"
+                   "            for _, c in ipairs(os.glob(path.join(crtSrc, \"regc/*.c\"))) do\n"
+                   "                table.insert(args, c)\n"
+                   "            end\n"
+                   "            for _, c in ipairs(os.glob(path.join(os.scriptdir(), "
+                   "\"src/mj2x-crt/rt_protect/*.c\"))) do\n"
+                   "                table.insert(args, c)\n"
+                   "            end\n"
                    "        end\n"
                    "        table.insert(args, \"-o\")\n"
                    "        table.insert(args, out)\n"

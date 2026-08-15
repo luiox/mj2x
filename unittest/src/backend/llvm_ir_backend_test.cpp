@@ -434,8 +434,8 @@ TEST(LlvmIrBackendTest, EmitsJniInstanceAndExternalCalls)
     auto ext = compileScalar("abs", "(I)I",
                              {new VarInsnNode(Opcodes::ILOAD, 0),
                               new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                                 ca::str::Utf8StringRef::from_cstr("java/lang/Math"),
-                                                 ca::str::Utf8StringRef::from_cstr("abs"),
+                                                 ca::str::Utf8StringRef::from_cstr("ext/External"),
+                                                 ca::str::Utf8StringRef::from_cstr("compute"),
                                                  ca::str::Utf8StringRef::from_cstr("(I)I"), false),
                               new InsnNode(Opcodes::IRETURN)},
                              1, 1);
@@ -877,6 +877,71 @@ TEST(LlvmIrBackendTest, EmitsRuntimeProtectionCheckpoint)
     EXPECT_NE(ll.find("declare i32 @mj2x_rt_checkpoint_run(ptr, i32, i32, i32, i32)"),
               std::string::npos)
         << ll;
+}
+
+TEST(LlvmIrBackendTest, EmitsMathIntrinsicDirectCall)
+{
+    // java.lang.Math 纯函数切片：直调 mj2x-crt 符号（0 JNI、无 ExceptionCheck；
+    // 与 RegC RuntimeFunction 语义一致），declare 由 finalize 模块级输出。
+    // Math.abs(a) + Math.abs(b)。
+    LlvmIrBackend backend;
+    auto result = compileWithBackend(backend, "absSum", "(II)I",
+                                     {new VarInsnNode(Opcodes::ILOAD, 0),
+                                      new MethodInsnNode(
+                                          Opcodes::INVOKESTATIC,
+                                          ca::str::ZUtf8StringRef::from_static("java/lang/Math"),
+                                          ca::str::ZUtf8StringRef::from_static("abs"),
+                                          ca::str::ZUtf8StringRef::from_static("(I)I"), false),
+                                      new VarInsnNode(Opcodes::ILOAD, 1),
+                                      new MethodInsnNode(
+                                          Opcodes::INVOKESTATIC,
+                                          ca::str::ZUtf8StringRef::from_static("java/lang/Math"),
+                                          ca::str::ZUtf8StringRef::from_static("abs"),
+                                          ca::str::ZUtf8StringRef::from_static("(I)I"), false),
+                                      new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                                     2, 2);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_math_abs_i32(i32 %v0)"), std::string::npos)
+        << result.text;
+    // 两个 Math.abs 调用点都直调（第二个操作数临时号前移一个）。
+    size_t absCalls = 0;
+    for (size_t pos = result.text.find("call i32 @mj2x_math_abs_i32("); pos != std::string::npos;
+         pos = result.text.find("call i32 @mj2x_math_abs_i32(", pos + 1)) {
+        ++absCalls;
+    }
+    EXPECT_GE(absCalls, 2u) << result.text;
+    // 不再走 JNI 分派。
+    EXPECT_EQ(result.text.find("mj2x_llvm_call_static"), std::string::npos) << result.text;
+
+    // 双参浮点（min (DD)D）与随机数（random()D）：Math.min(x, 2.0) + Math.random()。
+    auto minResult = compileWithBackend(
+        backend, "minRand", "(D)D",
+        {new VarInsnNode(Opcodes::DLOAD, 0), new LdcInsnNode(2.0),
+         new MethodInsnNode(Opcodes::INVOKESTATIC,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/Math"),
+                            ca::str::ZUtf8StringRef::from_static("min"),
+                            ca::str::ZUtf8StringRef::from_static("(DD)D"), false),
+         new MethodInsnNode(Opcodes::INVOKESTATIC,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/Math"),
+                            ca::str::ZUtf8StringRef::from_static("random"),
+                            ca::str::ZUtf8StringRef::from_static("()D"), false),
+         new InsnNode(Opcodes::DADD), new InsnNode(Opcodes::DRETURN)},
+        2, 2);
+    ASSERT_EQ(minResult.kind, BackendResult::Kind::C_SOURCE) << minResult.text;
+    EXPECT_NE(minResult.text.find("call double @mj2x_math_min_f64(double %v0, double"),
+              std::string::npos)
+        << minResult.text;
+    EXPECT_NE(minResult.text.find("call double @mj2x_math_random()"), std::string::npos)
+        << minResult.text;
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& ll = backend.generatedSource();
+    EXPECT_NE(ll.find("declare i32 @mj2x_math_abs_i32(i32)"), std::string::npos) << ll;
+    EXPECT_NE(ll.find("declare double @mj2x_math_min_f64(double, double)"),
+              std::string::npos)
+        << ll;
+    EXPECT_NE(ll.find("declare double @mj2x_math_random()"), std::string::npos) << ll;
 }
 
 TEST(LlvmIrBackendTest, EmitsMbaTransformedAddition)

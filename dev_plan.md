@@ -54,10 +54,11 @@
   参数装箱、返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点保字节码）。
   验证：`CliTest.LlvmIndyCustomBootstrapE2E`（plain / runtime-protection fake /
   regc-obfuscate 三变体，输出 7-42-11）+ `LlvmIrBackendTest.EmitsIndyRuntimeResolution`。
-- **intrinsic 扩面对齐 RegC** 🟡（部分完成）：新增 `cmp.nan_greater/nan_less`
-  （LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较，NaN 按指令语义取 ±1）；array.length /
-  instanceof / monitor 保持。Math/包装类/StringBuilder/Random 等 RegC-only
-  intrinsic 面 LLVM 保持 JNI 分派（下沉留待整类下沉 F）。
+- **intrinsic 扩面对齐 RegC** 🟡（Math 纯函数切片完成）：`java.lang.Math` 全纯函数
+  面直调 mj2x-crt runtime 符号（abs/min/max I/J/F/D、sin/cos/tan/sqrt/floor/ceil/
+  pow、round、random；0 JNI、无 ExceptionCheck，declare 模块级输出，链接侧并入
+  mj2x-crt 源）。包装类/String/StringBuilder/Random 等 RegC-only intrinsic 面
+  LLVM 保持 JNI 分派（native 对象/escape 机制留待整类下沉 F）。
 - **保护特性接入** ✅：`--runtime-protection` 支持 llvm——每方法入口注入
   `%mj2x_rt_checkpoint`（模块级全局 + `mj2x_rt_checkpoint_run` 调用，crt
   `mj2x_rt_protect.c` 在 link/工程层追加；FAKE 动作走默认返回路径）。
