@@ -172,8 +172,9 @@ bool isSupportedBinary(const RegInstruction& instruction, std::string& reason)
             return true;
         case SSABinaryOp::Div:
         case SSABinaryOp::Rem:
-            reason = "LLVM IR first slice rejects integer div/rem because they may throw";
-            return false;
+            // 发射端生成除零检查（抛 ArithmeticException）+ udiv/urem 位模式
+            // 等价（规避 sdiv INT_MIN / -1 的溢出 poison）。
+            return true;
         }
     }
     reason = "LLVM IR binary operation has an unsupported value type";
@@ -188,11 +189,11 @@ struct CallTarget
     std::vector<SSAType> argTypes;
 };
 
-/// @brief 解析并预检 LLVM IR 切片内的类内静态互调目标（成员定义见文件尾部）。
+/// @brief 解析并预检 LLVM IR 切片内的静态互调目标（成员定义见文件尾部）。
 ///
-/// @details 目标必须满足：INVOKESTATIC、owner == 当前类、签名纯标量、方法体
-/// 本身可转换（递归预检，含嵌套调用）；结果按 MethodID 缓存。环（递归/互递归）
-/// 与跨类调用 fail-closed，避免发射悬空内部符号。
+/// @details 目标必须满足：INVOKESTATIC、目标类在编译索引内（非 library）、
+/// 签名纯标量、方法体可转换（递归预检，含嵌套调用）；结果按 MethodID 缓存。
+/// 跨类与递归/互递归均允许（符号确定性生成，不悬空）。
 class InternalCallResolver
 {
 public:
@@ -205,9 +206,10 @@ public:
 
 private:
     CompilerMethod* findTarget(const MethodID& id, std::string& reason);
-    bool            fillTargetFromDescriptor(MethodNode& node, CallTarget& target,
-                                             std::string& reason);
-    bool            analyze(MethodNode& node, CallTarget& target, std::string& reason);
+    bool            fillTargetFromDescriptor(const std::string& owner, MethodNode& node,
+                                             CallTarget& target, std::string& reason);
+    bool            analyze(const std::string& owner, MethodNode& node, CallTarget& target,
+                            std::string& reason);
 
     CompilerIndex&                     index_;
     const std::string&                 className_;
@@ -218,9 +220,13 @@ private:
 bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
                        InternalCallResolver* resolver, std::string& reason)
 {
-    // 内部静态调用经 resolver 单独验证（effect 的 callsExternal 位由 resolver
-    // 确认目标在转换集合内后放行）；其余指令保持 fail-closed 检查。
-    if (instruction.kind != RegInstructionKind::Call && hasObservableEffect(instruction.effect)) {
+    // 内部静态调用经 resolver 单独验证；整数 div/rem 的 mayThrow 由发射端的
+    // 除零检查（throw-arithmetic helper）处理。其余指令保持 fail-closed 检查。
+    const bool throwHandledByEmitter =
+        instruction.kind == RegInstructionKind::Call ||
+        (instruction.kind == RegInstructionKind::Binary &&
+         (instruction.binaryOp == SSABinaryOp::Div || instruction.binaryOp == SSABinaryOp::Rem));
+    if (!throwHandledByEmitter && hasObservableEffect(instruction.effect)) {
         reason = "LLVM IR first slice rejects instructions with observable effects";
         return false;
     }
@@ -389,10 +395,9 @@ public:
             return false;
         }
 
-        out_ << "define internal " << returnLlvmType << " @" << functionName_ << "(";
+        out_ << "define internal " << returnLlvmType << " @" << functionName_ << "(ptr %env";
         for (size_t index = 0; index < function_.parameters.size(); ++index) {
-            if (index != 0) out_ << ", ";
-            out_ << llvmType(function_.parameters[index].type) << " %p" << index;
+            out_ << ", " << llvmType(function_.parameters[index].type) << " %p" << index;
         }
         out_ << ") {\nentry:\n";
         for (const auto& [id, type] : registerTypes_) {
@@ -542,6 +547,31 @@ private:
             }
             const bool floating = instruction.dest.type == SSAType::F32 ||
                                   instruction.dest.type == SSAType::F64;
+            if (!floating &&
+                (instruction.binaryOp == SSABinaryOp::Div ||
+                 instruction.binaryOp == SSABinaryOp::Rem)) {
+                // 整数 div/rem：udiv/urem（位模式等价于有符号除法，且无
+                // INT_MIN/-1 溢出 poison）；除零走共享 throw-arithmetic helper
+                // 抛 ArithmeticException 后返回 0（JVM 检查 pending exception）。
+                const std::string divIndex = std::to_string(divIndex_++);
+                const std::string isZero   = nextTemporary();
+                const std::string result   = nextTemporary();
+                const char*       type     = llvmType(instruction.dest.type);
+                out_ << "  " << isZero << " = icmp eq " << type << " " << rhs << ", 0\n";
+                out_ << "  br i1 " << isZero << ", label %b_divz_" << divIndex
+                     << ", label %b_divok_" << divIndex << "\n";
+                out_ << "b_divok_" << divIndex << ":\n";
+                out_ << "  " << result << " = "
+                     << (instruction.binaryOp == SSABinaryOp::Div ? "udiv" : "urem") << " "
+                     << type << " " << lhs << ", " << rhs << "\n";
+                if (!emitStore(instruction.dest, result, reason)) return false;
+                out_ << "  br label %b_divafter_" << divIndex << "\n";
+                out_ << "b_divz_" << divIndex << ":\n";
+                out_ << "  call void @mj2x_llvm_throw_arith(ptr %env)\n";
+                out_ << "  ret " << type << " 0\n";
+                out_ << "b_divafter_" << divIndex << ":\n";
+                return true;
+            }
             const char* opcode = nullptr;
             switch (instruction.binaryOp) {
             case SSABinaryOp::Add: opcode = floating ? "fadd" : "add"; break;
@@ -571,12 +601,12 @@ private:
                 reason = "LLVM IR call target was not validated before emission";
                 return false;
             }
-            std::string args;
+            // helper 首参为 JNIEnv*（%env），后续为 Java 参数。
+            std::string args = "ptr %env";
             for (size_t index = 0; index < instruction.args.size(); ++index) {
                 std::string expression;
                 if (!emitOperand(instruction.args[index], expression, reason)) return false;
-                if (index != 0) args += ", ";
-                args += std::string(llvmType(target.argTypes[index])) + " " + expression;
+                args += ", " + std::string(llvmType(target.argTypes[index])) + " " + expression;
             }
             if (target.returnType == SSAType::VOID) {
                 out_ << "  call void @" << target.symbol << "(" << args << ")\n";
@@ -632,8 +662,16 @@ private:
                 opcode = sourceType == SSAType::F32 ? "fpext" : "fptrunc";
             }
             else {
-                reason = "LLVM IR first slice rejects floating-to-integer conversion semantics";
-                return false;
+                // 浮点 → 整数：llvm.fptosi.sat（NaN→0、溢出饱和，匹配 Java f2i/f2l
+                // 语义；LLVM fptosi 对 NaN/溢出是 poison，不可直接用）。
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call "
+                     << (targetType == SSAType::I32 ? "i32" : "i64")
+                     << " @llvm.fptosi.sat."
+                     << (targetType == SSAType::I32 ? "i32" : "i64") << "."
+                     << (sourceType == SSAType::F32 ? "f32" : "f64") << "("
+                     << llvmType(sourceType) << " " << value << ")\n";
+                return emitStore(instruction.dest, result, reason);
             }
             const std::string result = nextTemporary();
             out_ << "  " << result << " = " << opcode << " " << llvmType(sourceType) << " "
@@ -725,6 +763,7 @@ private:
     std::ostringstream       out_;
     uint32_t                 temporaryIndex_ = 0;
     uint32_t                 edgeIndex_ = 0;
+    uint32_t                 divIndex_ = 0;
     std::vector<PendingEdge> pendingEdges_;
 };
 
@@ -756,7 +795,11 @@ std::string helperName(const std::string& className, const MethodNode& method)
                                         method.desc.to_std_string());
 }
 
-/// @brief 解析并预检 LLVM IR 切片内的类内静态互调目标（类声明见前部）。
+/// @brief 解析并预检 LLVM IR 切片内的静态互调目标（类声明见前部）。
+///
+/// @details 目标须 INVOKESTATIC + 目标类在编译索引内（非 library）+ markedForCompile
+/// + 纯标量签名 + 方法体可转换。跨类与递归（互递归）均允许：符号由 owner/name/desc
+/// 确定性生成，环上各方法的非递归部分仍各自验证。
 bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& target,
                                    std::string& reason)
 {
@@ -765,10 +808,6 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
         return false;
     }
     const std::string owner = method.owner.to_std_string();
-    if (owner != className_) {
-        reason = "LLVM IR first slice only supports intra-class static calls";
-        return false;
-    }
     const MethodID id{owner, method.name.to_std_string(), method.desc.to_std_string()};
     const auto     cached = cache_.find(id);
     if (cached != cache_.end()) {
@@ -782,7 +821,8 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
         // 已编译成功：方法体已被 injectIntoClass 清空，不能再预检；成功即已通过
         // 完整验证，签名直接从描述解析。
         CallTarget parsed;
-        if (!fillTargetFromDescriptor(*targetMethod->methodNode, parsed, reason)) return false;
+        if (!fillTargetFromDescriptor(owner, *targetMethod->methodNode, parsed, reason))
+            return false;
         cache_.emplace(id, parsed);
         target = parsed;
         return true;
@@ -793,12 +833,19 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
         return false;
     }
 
-    // 未编译：字节码完好，完整预检（含嵌套调用与环检测）。
+    // 递归/互递归：目标仍在预检中（visiting）。符号确定性生成不会悬空，按描述
+    // 接受即可；环上各方法的非递归部分由各自的 analyze 负责验证。
     if (!visiting_.insert(id).second) {
-        reason = "LLVM IR first slice rejects recursive static calls";
-        return false;
+        CallTarget parsed;
+        if (!fillTargetFromDescriptor(owner, *targetMethod->methodNode, parsed, reason))
+            return false;
+        cache_.emplace(id, parsed);
+        target = parsed;
+        return true;
     }
-    if (!analyze(*targetMethod->methodNode, target, reason)) {
+
+    // 未编译且非递归：字节码完好，完整预检（含嵌套调用）。
+    if (!analyze(owner, *targetMethod->methodNode, target, reason)) {
         visiting_.erase(id);
         return false;
     }
@@ -814,6 +861,10 @@ CompilerMethod* InternalCallResolver::findTarget(const MethodID& id, std::string
         reason = "LLVM IR call target class is not in the compilation index";
         return nullptr;
     }
+    if (clazz->isLibrary) {
+        reason = "LLVM IR call target class is a library class and is not compiled";
+        return nullptr;
+    }
     for (auto& candidate : clazz->methods) {
         if (!candidate.markedForCompile || candidate.methodNode == nullptr) continue;
         if (candidate.methodNode->name.to_std_string() == id.name &&
@@ -825,12 +876,12 @@ CompilerMethod* InternalCallResolver::findTarget(const MethodID& id, std::string
     return nullptr;
 }
 
-bool InternalCallResolver::fillTargetFromDescriptor(MethodNode& node, CallTarget& target,
-                                                    std::string& reason)
+bool InternalCallResolver::fillTargetFromDescriptor(const std::string& owner, MethodNode& node,
+                                                    CallTarget& target, std::string& reason)
 {
     SSAType resultType = SSAType::UNKNOWN;
     if (!supportsMethodDescriptor(node, resultType, reason)) return false;
-    target.symbol     = helperName(className_, node);
+    target.symbol     = helperName(owner, node);
     target.returnType = resultType;
     for (const PrimitiveKind kind : argumentKinds(node.desc.to_std_string())) {
         target.argTypes.push_back(primitiveToSsaType(kind));
@@ -839,7 +890,9 @@ bool InternalCallResolver::fillTargetFromDescriptor(MethodNode& node, CallTarget
 }
 
 /// @brief 目标方法体级预检（不发射）：复用主编译链的 SSA/RegIR 验证。
-bool InternalCallResolver::analyze(MethodNode& node, CallTarget& target, std::string& reason)
+/// @param owner 目标方法所属类（跨类调用时符号与 SSA 上下文使用目标类名）。
+bool InternalCallResolver::analyze(const std::string& owner, MethodNode& node, CallTarget& target,
+                                   std::string& reason)
 {
     SSAType resultType = SSAType::UNKNOWN;
     if (!supportsMethodDescriptor(node, resultType, reason)) return false;
@@ -848,7 +901,7 @@ bool InternalCallResolver::analyze(MethodNode& node, CallTarget& target, std::st
     SSABuilder    builder;
     ca::str::Utf8StringArena ssaArena;   // SSA 派生串入池，活到 ssa 消费完（本函数内同步）
     auto ssa = builder.build(blocks,
-                             className_,
+                             owner,
                              node.name.to_std_string(),
                              node.desc.to_std_string(),
                              true,
@@ -861,7 +914,7 @@ bool InternalCallResolver::analyze(MethodNode& node, CallTarget& target, std::st
     if (!reg) return false;
     RegisterTypes types;
     if (!collectRegisterTypes(*reg, types, this, reason)) return false;
-    target.symbol     = helperName(className_, node);
+    target.symbol     = helperName(owner, node);
     target.returnType = resultType;
     for (const PrimitiveKind kind : argumentKinds(node.desc.to_std_string())) {
         target.argTypes.push_back(primitiveToSsaType(kind));
@@ -882,14 +935,13 @@ std::string emitJniWrapper(const std::string& className, const MethodNode& metho
     }
     out << ") {\nentry:\n";
     if (returnType == SSAType::VOID) {
-        out << "  call void @" << helper << "(";
+        out << "  call void @" << helper << "(ptr %env";
     }
     else {
-        out << "  %result = call " << llvmType(returnType) << " @" << helper << "(";
+        out << "  %result = call " << llvmType(returnType) << " @" << helper << "(ptr %env";
     }
     for (size_t index = 0; index < arguments.size(); ++index) {
-        if (index != 0) out << ", ";
-        out << llvmType(primitiveToSsaType(arguments[index])) << " %p" << index;
+        out << ", " << llvmType(primitiveToSsaType(arguments[index])) << " %p" << index;
     }
     out << ")\n";
     if (returnType == SSAType::VOID) {
@@ -988,12 +1040,39 @@ void LlvmIrBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
     clazz.modified = true;
 }
 
+/// @brief 共享整数除零异常 helper：JNI FindClass + ThrowNew(ArithmeticException)。
+///
+/// @details JNIEnv 函数表槽位（jni.h 布局，0 基）：FindClass=6、ThrowNew=14。
+/// 除零路径调用后返回 0，JVM 侧检查 pending exception 抛给调用者。
+std::string emitThrowArithmeticHelper()
+{
+    return "@_mj2x_llvm_str_arith_ex = private unnamed_addr constant [30 x i8] "
+           "c\"java/lang/ArithmeticException\\00\"\n"
+           "@_mj2x_llvm_str_div_by_zero = private unnamed_addr constant [10 x i8] "
+           "c\"/ by zero\\00\"\n\n"
+           "define internal void @mj2x_llvm_throw_arith(ptr %env) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 6\n"
+           "  %findclass = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %findclass(ptr %env, ptr @_mj2x_llvm_str_arith_ex)\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %tn0 = getelementptr ptr, ptr %ft1, i64 14\n"
+           "  %thrownew = load ptr, ptr %tn0\n"
+           "  %rc = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_str_div_by_zero)\n"
+           "  ret void\n"
+           "}\n\n";
+}
+
 void LlvmIrBackend::finalize(const CompilerIndex&)
 {
     std::ostringstream full;
     full << "; ModuleID = 'mj2x_llvm'\n";
     full << "source_filename = \"mj2x_llvm\"\n\n";
     full << impl_->bodies.str();
+    if (impl_->bodies.str().find("mj2x_llvm_throw_arith") != std::string::npos) {
+        full << emitThrowArithmeticHelper();
+    }
     sourceCode_ = full.str();
     if (llvmOutputPath_.empty()) return;
 
