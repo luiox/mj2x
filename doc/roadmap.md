@@ -42,7 +42,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 | Codegen 工具层 | CSourceStream、IncludeSet、mangle、literal helper、CodeTemplate 五层模型 | 已落地（PR #781/#784） |
 | Runtime ABI | div/rem/barrier、helper、异常/错误桥接 | 保持 ABI 可测试、可版本化 |
 | Runtime core | crypto、kernel、stringpool、antidebug、antijvmti | 反侦测体系已落地（PR #797：Linux antidebug + enforcement + 检查点注入 + agent 检测） |
-| JDK intrinsic | 包装类、Math/Random、String/StringBuilder、位操作、System.arraycopy | 位操作 intrinsic 补全（PR #793）；arraycopy 等更宽 intrinsic 待办 |
+| JDK intrinsic | 包装类、Math/Random、String/StringBuilder、位操作、System.arraycopy | 位操作 intrinsic 补全（PR #793）；System.arraycopy intrinsic 已完成（#819）；LLVM 侧 intrinsic 扩面对齐 RegC 面（#864 后） |
 | String/UTF-16 | Java String 语义、StringBuilder/StringBuffer | 依赖 libca UTF-16 或 mj2x 最小垫片 |
 | L4 变换 pass | DCE、常量传播、MBA、CFF、opaque predicate | 只有 RegC/R3 live 验证稳定后再扩 |
 | 整类下沉 | 算法密集类内部方法全 native，边界保留 JNI | 先做无反射、无动态类加载、intrinsic 覆盖充分的类 |
@@ -52,7 +52,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 | VMC4 实例粒度 | class / method / program 三档（program = 全程序共享一个 VM，opcode 空间全局统一） | **program 粒度已落地**（#827）；三粒度测试锚定（class/method/program 实例共享/独立语义） |
 | 用户 intrinsic | 任意 Java 静态调用点降级为用户 native symbol 直调 | **已完成**（#818，PR #826，三后端统一 ABI + CLI JSON 配置；文档 `doc/user_intrinsic.md`） |
 | 自建测试集 | mtest_set 语义样本 + 三后端矩阵 + jar 整体 E2E | **第一批已完成**（#820：Wave1-3 G1-G15 样本；用户 intrinsic 三后端 E2E；多类 jar 整体程序三后端 E2E）；**性能回归已并入测试集**（#820 步骤 5：benchmark `-Regression` 断言 + `mj2x_integration_test` 门控用例）；mjdbg 对抗闭环待做 |
-| RegC 性能 | 追平/反超 JNIC（os30）基线 | **已完成第一轮**（PR #793/#803：JDK17/21 双矩阵，0.88x-1.16x）；方法内联已完成（SSA 内联默认开启，消除 native 方法间 JNI 往返）；余项：arraycopy 等更宽 intrinsic |
+| RegC 性能 | 追平/反超 JNIC（os30）基线 | **已完成第一轮**（PR #793/#803：JDK17/21 双矩阵，0.88x-1.16x）；方法内联已完成（SSA 内联默认开启，消除 native 方法间 JNI 往返）；System.arraycopy intrinsic 已完成（#819）；剩余待办见 §3 第 1 条 |
 | 配置系统 | 参数注册表单源 + 全量参数配置化 + JSON Schema 导出 | 📋 **设计完成**（doc_ai/config_system_design.md v1：单源 ParamDef 表驱动 CLI/config/help/schema；GUI 工具路径 = 消费 schema 渲染表单）；P1 实现待做 |
 | Release packaging | CLI、runtime、注解包、样本和验证脚本 | v2.1 已纳入发布矩阵；v2.2 持续 |
 
@@ -62,7 +62,8 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 
 1. **RegC 性能**（P1，贯穿）：基线已建（benchmark/results 2026-08-13/14），
    第一轮优化完成（intrinsic 补全 / 异常检查稀疏化 / resolved dispatch 双槽缓存 /
-   发射器模板化）；余项：方法内联 pass、System.arraycopy 等更宽 intrinsic。
+   发射器模板化）；方法内联已完成（SSA 内联默认开启）、System.arraycopy intrinsic
+   已完成（#819）；后续按 v2.3+ 视需求推进。
 2. **VMC4 可用版**（P2）：✅ 已完成（转化率 100%，见上表）。
 3. **反侦测体系**：✅ 已完成（PR #797）。
 4. **异常语义精确化**：✅ 已完成（PR #796，指令序号区间判定）。
@@ -78,7 +79,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 - 不把 StackC 宣称为强保护；它是正确性和覆盖率基线。
 - 不在 mjdbg 还没有报告前自称保护强度已经提升。
 - VMC4 性能优化（v2.3+，可用版已交付但性能非目标）。
-- LLVM 后端基础款已转正（v2.2 起默认开启，静态标量纯计算/控制流；intrinsic、对象/JNI/异常等 fail-closed 面的扩展 v2.3+ 视需求）。
+- LLVM 后端已转正并二次扩面（v2.2 起默认开启；PR #864 已支持对象/字段/数组/实例调用/异常/monitor/ldc 字符串与类常量；invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入 v2.3+ 视需求）。
 
 ---
 

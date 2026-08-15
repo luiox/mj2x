@@ -11,7 +11,8 @@
 | 六（剩余 issue） | VMC4 升级档：period 语义变义（#762/#844）已实现，N-7 对抗全闭环 | 🟡 S2 对抗验证 + 红队契约扩展待做（见待做 A） |
 | 七（#820 测试集） | 步骤 1-5 完成（调研/设计/Wave3/三后端矩阵/性能回归自动化） | 🟡 步骤 6 对抗闭环待做（见待做 B） |
 | 十二（配置系统） | P0+P1 完成：参数注册表 + 全量配置化 + `--dump-config-schema`/`--dump-config-template` | 🟡 GUI 配置工具（P2）待做（见待做 D） |
-| 十三（LLVM IR 后端） | 受限标量子集（静态纯计算/控制流）转正默认开启（v2.2；对象/JNI/异常/intrinsic 面 fail-closed） | ✅ 基础款完成（见归档索引） |
+| 十三（LLVM IR 后端） | 基础款转正默认开启（v2.2）+ 二次扩面 11 项（对象/数组/实例调用/异常/monitor/ldc/窄类型等，PR #864） | ✅ 完成（见归档索引） |
+| 十四（LLVM 第二轮扩面） | invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入、mtest_set 矩阵 + protected_samples llvm 样本 | 🟡 进行中（见待做 E） |
 
 ## 待做项
 
@@ -40,8 +41,31 @@
 
 ### D. 配置系统 GUI 工具（P2）
 
-- 配置系统 P0+P1 已完成（见归档索引）。剩余：GUI 配置工具（消费
-  `--dump-config-schema` 渲染表单、输出配置文件，独立项目；协议即 schema）。
+- 配置系统 P0+P1 已完成（见归档索引）。设计已完成
+  （`doc_ai/gui_config_tool_design.md`：vite+vue 方案、schema 驱动渲染、
+  联动/校验/导出/可选 sidecar 执行）。剩余：P1 实现（表单渲染 + 校验 + 导出）。
+
+### E. LLVM 第二轮扩面（本 PR）
+
+- **invokedynamic 运行时解析**：pipeline 级 InvokeDynamicPreprocessor 六阶段静态
+  展开已覆盖 LLVM（main.cpp 注册，与 RegC 同源）；残留 `indy:<idx>` 站点（自定义
+  bootstrap / 收窄 / 装箱+加宽复合）目前验证层 fail-closed → 方法保字节码。目标：
+  LLVM 侧对齐 RegC 的运行时 bootstrap 解析（.ll 内 JNI 分派 resolver）。
+- **intrinsic 扩面对齐 RegC**：现仅 array.length / instanceof:<desc> /
+  monitor.enter/exit 四个；对齐 RegC 面（Math/包装类/String/StringBuilder/
+  Random，capabilities §3 CLI 部分）。
+- **保护特性接入**：`--runtime-protection` 检查点注入现拒绝 llvm（main.cpp:762）；
+  需 LLVM 等价路径或解除拒绝。`--regc-safe-env` 明确不适用（JNI 表快照恢复是
+  RegC 运行时面）。混淆五件套（MBA/opaque/CFF）属 RegC 发射变换，LLVM 面记录
+  不实施（.ll 语义等价，混淆价值在 C 面）。
+- **测试矩阵接入**：`mtest_set_native_matrix_test.cpp` 加 LLVM 列（现 StackC/RegC
+  × 18 fixtures）；`protected_samples/` 增加 llvm 样本目录（喂 mjdbg）。
+
+### F. 整类下沉（P3，记录不阻塞）
+
+- roadmap §2 表格行已列（算法密集类整体 native 化，边界保留 JNI）；GUI 设计已
+  预留"方法/类选择"扩展点（`gui_config_tool_design.md` §6）。条件：无反射、无
+  动态类加载、intrinsic 覆盖充分；先做单类试点再铺开。
 
 ## 验证命令
 
@@ -55,6 +79,9 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-21（round-2 开工）：同步 roadmap 两处 stale（arraycopy intrinsic 已完成
+  #819、方法内联矛盾）+ §4 LLVM 状态行（#864 扩面后）；GUI 配置工具设计完成
+  （vite+vue，`doc_ai/gui_config_tool_design.md`）；记录整类下沉为 P3 待办（待做 F）。
 - 2026-08-21：LLVM IR 后端二次扩面 11 项全部落地（PR #864）——**对象**（REF/字段
   读写/分配/类型检查）、**数组**（全 XALOAD/XASTORE/arraylength/多维）、**调用**
   （实例/外部 JNI CallXxxMethodA 分派）、**异常真实现**（放行异常区域 + 函数级
