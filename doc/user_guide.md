@@ -142,7 +142,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--dump-config-template [<file>]` | 输出全量键 + 默认值 + 注释的配置模板（JSONC，删除注释即得合法配置） |
 | `--intrinsic-config <file>` | 用户自定义 intrinsic 配置（JSON，三后端通用；详见 [user_intrinsic.md](user_intrinsic.md)） |
 | `--intrinsic-src <file>` | 追加用户 intrinsic 实现源文件（可重复，与配置内 `sources` 叠加） |
-| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 仅转换静态的 `int` / `long` / `float` / `double` / `void` 纯计算与控制流方法，其他方法保持原字节码；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
+| `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 转换标量计算/控制流 + 对象/数组/实例与外部调用/异常表/monitor/ldc（窄类型签名、引用类型与 JNI 边界均已支持；`invokedynamic` 等剩余面 fail-closed 保持原字节码，见 §5.4）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
 | `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++` |
@@ -308,20 +308,35 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
 `--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并随 RegC 工程复制
 `mj2x-crt` source pack。
 
-### 5.4 LLVM IR（v2.2 转正，基础款）
+### 5.4 LLVM IR（v2.2 转正，基础款；二次扩面补齐对象/调用/异常面）
 
 > v2.1 曾按发布范围默认关闭（`with_mj2x_llvm=n`，CLI fail-closed）；**v2.2 起默认
 > 开启**。显式关闭时 `--backend llvm` / `--emit-llvm` / `--llvm-tool` 不可用。
 
-`--backend llvm --emit-llvm` 直接输出 textual LLVM IR，不链接 LLVM SDK。当前接受静态
-`int` / `long` / `float` / `double` / `void` 方法中的纯数值计算（含移位，移位量按
-Java 语义取低 5/6 位；含整数除/取余，除零经 JNI ThrowNew 抛
-`ArithmeticException`，`INT_MIN / -1` 按 Java 语义不溢出）、比较、分支、循环、switch、
-浮点→整数转换（`llvm.fptosi.sat`，NaN→0 / 溢出饱和），以及**编译索引内的静态方法
-互调**（同类/跨类、直接递归/互递归均可；目标必须可转换且非 library 类，否则整链
-保持原字节码）；
-对象、JNI 调用、实例调用、字段/数组访问、异常表、monitor 和引用类型会 fail closed，
-保留原 Java 字节码。
+`--backend llvm --emit-llvm` 直接输出 textual LLVM IR，不链接 LLVM SDK。除基础款的
+纯数值计算（含移位，移位量按 Java 语义取低 5/6 位；整数除/取余，除零经 JNI ThrowNew
+抛 `ArithmeticException`，`INT_MIN / -1` 按 Java 语义不溢出）、比较、分支、循环、
+switch、浮点→整数转换（`llvm.fptosi.sat`，NaN→0 / 溢出饱和）与**编译索引内的静态
+方法互调**（同类/跨类、直接递归/互递归均可；目标必须可转换且非 library 类，否则整链
+保持原字节码）外，二次扩面新增：
+
+- **窄类型签名**：`Z/B/S/C` 参数/返回（JNI 边界 i8/i16 与 i32 栈位宽互转）；
+- **对象**：`NEW` / `CHECKCAST` / `INSTANCEOF` / 静态与实例字段读写（JNI
+  Get/SetField），引用类型 `REF` 全程以 opaque `ptr` 传递；
+- **数组**：`newarray`/`anewarray`/`multianewarray`、`arraylength`、全部
+  `XALOAD`/`XASTORE`（`boolean[]` 组件按 `byte` 处理）；
+- **调用**：实例方法（`this` 经 JNI 包装器透传）、`invokevirtual` /
+  `invokespecial` / `invokeinterface` 经 `CallXxxMethodA` 分派，外部方法
+  （编译索引外，如 Java API）同路径；
+- **异常**：`athrow` + 异常表 `try/catch/finally` 分发（含 finally 重抛、整数除零
+  在 try 块内按异常表处理）；
+- **monitor**：`monitorenter` / `monitorexit`（synchronized 方法/块）；
+- **常量**：`ldc` String（`NewStringUTF`）/ Class（`FindClass`）；
+- **intrinsic**：`array.length` / `instanceof:<desc>` / `monitor.enter` /
+  `monitor.exit`（与 RegC intrinsic 面对齐，invokedynamic 除外）。
+
+不支持（fail closed，保留原字节码）：`invokedynamic`、`ldc` MethodHandle（与
+RegC/StackC 一致落 null）、`MethodType` 之外的引用常量、`jsr/ret` 等遗留指令。
 
 ```bash
 mj2x-cli -i Hello.class -o Hello_native.class --backend llvm \
@@ -329,8 +344,8 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend llvm \
 ```
 
 `--llvm-tool llc` 先调用 `llc -filetype=obj`，再由 clang 链接。两种路径都要求相应工具在
-`PATH` 中。LLVM IR 当前不支持 `--compile-mode pipe`、`--generate-cmake` 或
-`--generate-xmake`。
+`PATH` 中。`--compile-mode pipe`（对象/数组/调用/异常/monitor/ldc 综合 E2E）与
+`--generate-cmake` / `--generate-xmake`（LLVM 路径）均已支持。
 
 ### 5.5 生成 CMake 工程
 

@@ -55,6 +55,16 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-21：LLVM IR 后端二次扩面 11 项全部落地（PR #864）——**对象**（REF/字段
+  读写/分配/类型检查）、**数组**（全 XALOAD/XASTORE/arraylength/多维）、**调用**
+  （实例/外部 JNI CallXxxMethodA 分派）、**异常真实现**（放行异常区域 + 函数级
+  dispatch label + 除零分发；修复此前异常方法静默回退字节码的假阳性）、**monitor**、
+  **ldc String/Class**、**intrinsic 面对齐**（array.length/instanceof/monitor，
+  invokedynamic 除外）、**窄类型 Z/B/C/S**、**浮点特殊字面量**、**工具链**
+  （pipe/cmake/xmake）。NewStringUTF 槽位按 jni.h 成员数核对 163→167。单文件后端
+  拆分五模块（llvm_ir_internal.hpp/validation/emitter/helpers/backend）。验证：
+  mj2x_unittest 585 过 3 skip；mtest_set_unittest 25 过；真 native E2E
+  `234-7-9-42-hi` 与 `9-20-5-18-15-wrapped`（多 catch/显式 throw/finally/除零重抛）。
 - 2026-08-19：LLVM IR 后端基础款二次扩面——**整数除/取余**（udiv/urem 位模式
   等价规避 INT_MIN/-1 溢出 poison；除零经共享 throw-arithmetic helper 抛
   ArithmeticException：JNIEnv 表槽 FindClass=6/ThrowNew=14，helper 签名统一
