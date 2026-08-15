@@ -146,7 +146,10 @@ TEST(LlvmIrBackendTest, KeepsEffectfulAndThrowingMethodsBytecode)
         "Test", compilerClass.methods[0], objectConverter.convert(*objectMethod));
 
     ASSERT_EQ(objectResult.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(objectResult.text.find("rejects"), std::string::npos) << objectResult.text;
+    // NEW 已放行；invokespecial <init> 在实例调用实现前 fail-closed。
+    EXPECT_NE(objectResult.text.find("static calls require a compiler index"),
+              std::string::npos)
+        << objectResult.text;
 
     backend.injectIntoClass(compilerClass, compilerClass.methods[0], objectResult);
     EXPECT_FALSE(objectMethod->access & Opcodes::ACC_NATIVE);
@@ -310,7 +313,10 @@ TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(result.text.find("rejects"), std::string::npos) << result.text;
+    // target 含 NEW/DUP/INVOKESPECIAL：NEW 已放行，invokespecial 在实例调用
+    // 实现前 fail-closed，调用方保持字节码。
+    EXPECT_NE(result.text.find("only supports static method calls"), std::string::npos)
+        << result.text;
 }
 
 TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
@@ -519,4 +525,82 @@ TEST(LlvmIrBackendTest, EmitsSpecialFloatLiterals)
                                {new LdcInsnNode(-0.0), new InsnNode(Opcodes::DRETURN)}, 2, 0);
     ASSERT_EQ(nzero.kind, BackendResult::Kind::C_SOURCE) << nzero.text;
     EXPECT_NE(nzero.text.find("0x8000000000000000"), std::string::npos) << nzero.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsStaticFieldAccess)
+{
+    // putstatic + getstatic（i32）：JNI 字段 helper 发射 + 全局字符串。
+    auto result = compileScalar("field", "()I",
+                                {new InsnNode(Opcodes::ICONST_5),
+                                 new FieldInsnNode(Opcodes::PUTSTATIC,
+                                                   ca::str::Utf8StringRef::from_cstr("Test"),
+                                                   ca::str::Utf8StringRef::from_cstr("sink"),
+                                                   ca::str::Utf8StringRef::from_cstr("I")),
+                                 new FieldInsnNode(Opcodes::GETSTATIC,
+                                                   ca::str::Utf8StringRef::from_cstr("Test"),
+                                                   ca::str::Utf8StringRef::from_cstr("sink"),
+                                                   ca::str::Utf8StringRef::from_cstr("I")),
+                                 new InsnNode(Opcodes::IRETURN)},
+                                1, 0);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call void @mj2x_llvm_field_store_int(ptr %env, null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1, i32"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_field_load_int(ptr %env, null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1)"),
+              std::string::npos)
+        << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsReferenceBoundary)
+{
+    // 引用参数/返回（wrapper ptr 边界）。
+    auto result = compileScalar("id", "(Ljava/lang/String;)Ljava/lang/String;",
+                                {new VarInsnNode(Opcodes::ALOAD, 0), new InsnNode(Opcodes::ARETURN)},
+                                1, 1);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("define internal ptr @mj2x_llvm_Java_Test_id__Ljava_lang_String_2(ptr %env, ptr %p0)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("define dllexport ptr @Java_Test_id__Ljava_lang_String_2(ptr %env, ptr %clazz, ptr %p0)"),
+              std::string::npos)
+        << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsObjectAllocationAndTypeChecks)
+{
+    // NEW（不调 <init> 的畸形形态，仅验证分配发射）+ checkcast + instanceof。
+    auto alloc = compileScalar("make", "()Ljava/lang/Object;",
+                               {new TypeInsnNode(Opcodes::NEW,
+                                                 ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
+                                new InsnNode(Opcodes::ARETURN)},
+                               1, 0);
+    ASSERT_EQ(alloc.kind, BackendResult::Kind::C_SOURCE) << alloc.text;
+    EXPECT_NE(alloc.text.find("call ptr @mj2x_llvm_new_object(ptr %env, ptr @_mj2x_llvm_str_0)"),
+              std::string::npos)
+        << alloc.text;
+    EXPECT_NE(alloc.text.find("ret ptr"), std::string::npos) << alloc.text;
+
+    // checkcast：(Object) → (String)。
+    auto cast = compileScalar("cast", "(Ljava/lang/Object;)Ljava/lang/String;",
+                              {new VarInsnNode(Opcodes::ALOAD, 0),
+                               new TypeInsnNode(Opcodes::CHECKCAST,
+                                                ca::str::Utf8StringRef::from_cstr("java/lang/String")),
+                               new InsnNode(Opcodes::ARETURN)},
+                              1, 1);
+    ASSERT_EQ(cast.kind, BackendResult::Kind::C_SOURCE) << cast.text;
+    EXPECT_NE(cast.text.find("call ptr @mj2x_llvm_check_cast(ptr %env, %v0, ptr @_mj2x_llvm_str_0)"),
+              std::string::npos)
+        << cast.text;
+
+    // instanceof：obj instanceof String。
+    auto instance = compileScalar("is", "(Ljava/lang/Object;)Z",
+                                  {new VarInsnNode(Opcodes::ALOAD, 0),
+                                   new TypeInsnNode(Opcodes::INSTANCEOF,
+                                                    ca::str::Utf8StringRef::from_cstr("java/lang/String")),
+                                   new InsnNode(Opcodes::IRETURN)},
+                                  1, 1);
+    ASSERT_EQ(instance.kind, BackendResult::Kind::C_SOURCE) << instance.text;
+    EXPECT_NE(instance.text.find("call i32 @mj2x_llvm_instance_of(ptr %env, %v0, ptr @_mj2x_llvm_str_0)"),
+              std::string::npos)
+        << instance.text;
 }
