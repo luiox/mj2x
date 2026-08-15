@@ -2133,6 +2133,12 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
                "      default: return sum - 1;\n"
                "    }\n"
                "  }\n"
+               "  public static int helper(int a, int b) {\n"
+               "    return (a << 3) + (b >>> 1);\n"
+               "  }\n"
+               "  public static int compute(int x) {\n"
+               "    return helper(x, 2) ^ (x >> 2);\n"
+               "  }\n"
                "}\n";
     }
     {
@@ -2142,7 +2148,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
                "  public static void main(String[] args) {\n"
                "    String dll = System.getenv(\"MORPHER_DLL\");\n"
                "    if (dll != null) System.load(dll);\n"
-               "    System.out.print(CliLlvm.score(5));\n"
+               "    System.out.print(CliLlvm.score(5) + \"-\" + CliLlvm.compute(10));\n"
                "  }\n"
                "}\n";
     }
@@ -2152,7 +2158,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
     ASSERT_EQ(result.exitCode, 0) << result.out;
     result = runScript({q(java) + " -Xverify:all -cp " + q(inputDir) + " Driver"});
     ASSERT_EQ(result.exitCode, 0) << result.out;
-    EXPECT_EQ(result.out, "17");
+    EXPECT_EQ(result.out, "17-83");
 
     for (const char* llvmTool : {"clang", "llc"}) {
         const fs::path outputDir = workDir / llvmTool;
@@ -2171,6 +2177,10 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
         const std::string llvm = readText(llvmSource);
         EXPECT_NE(llvm.find("br i1"), std::string::npos) << llvm;
         EXPECT_NE(llvm.find("switch i32"), std::string::npos) << llvm;
+        EXPECT_NE(llvm.find("call i32 @mj2x_llvm_Java_CliLlvm_helper__II"),
+                  std::string::npos)
+            << llvm;
+        EXPECT_NE(llvm.find("shl i32"), std::string::npos) << llvm;
 
         fs::copy_file(inputDir / "Driver.class", outputDir / "Driver.class",
                       fs::copy_options::overwrite_existing, ec);
@@ -2184,7 +2194,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
         nativeRun.push_back(q(java) + " -Xverify:all -cp " + q(outputDir) + " Driver");
         result = runScript(nativeRun);
         ASSERT_EQ(result.exitCode, 0) << result.out;
-        EXPECT_EQ(result.out, "17");
+        EXPECT_EQ(result.out, "17-83");
     }
 }
 

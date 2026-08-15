@@ -176,3 +176,227 @@ TEST(LlvmIrBackendTest, KeepsEffectfulAndThrowingMethodsBytecode)
     EXPECT_GT(divideMethod->instructions.size(), 0);
     EXPECT_FALSE(compilerClass.modified);
 }
+
+/// @brief 编译单个静态方法并返回 BackendResult（字节码 → LLVM IR 切片）。
+BackendResult compileSingle(const char* name, const char* desc,
+                            std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                            int maxLocals)
+{
+    auto        method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns,
+                                    maxStack, maxLocals);
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*method);
+    return backend.compileMethod("Test", clazz.methods[0], blocks);
+}
+
+TEST(LlvmIrBackendTest, EmitsShiftOperationsWithJavaModuloSemantics)
+{
+    // Java 移位量取低 5/6 位；LLVM shl/ashr/lshr 对移位量自动取模，语义一致。
+    auto compile = [](int opcode, const char* expect) {
+        auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                 "shift",
+                                 "(II)I",
+                                 {
+                                     new VarInsnNode(Opcodes::ILOAD, 0),
+                                     new VarInsnNode(Opcodes::ILOAD, 1),
+                                     new InsnNode(opcode),
+                                     new InsnNode(Opcodes::IRETURN),
+                                 },
+                                 2,
+                                 2);
+        CompilerClass clazz;
+        clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+        LlvmIrBackend backend;
+        ca::str::Utf8StringArena arena;
+        CodeConverter            converter(arena);
+        auto                     blocks = converter.convert(*method);
+        auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
+        ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+        EXPECT_NE(result.text.find(expect), std::string::npos) << result.text;
+    };
+    compile(Opcodes::ISHL, "shl i32");
+    compile(Opcodes::ISHR, "ashr i32");
+    compile(Opcodes::IUSHR, "lshr i32");
+
+    // long 移位（i64）。
+    auto lmethod = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                              "lshift",
+                              "(JJ)J",
+                              {
+                                  new VarInsnNode(Opcodes::LLOAD, 0),
+                                  new VarInsnNode(Opcodes::LLOAD, 2),
+                                  new InsnNode(Opcodes::LSHL),
+                                  new InsnNode(Opcodes::LRETURN),
+                              },
+                              4,
+                              4);
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{lmethod.get(), true, false, {}});
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*lmethod);
+    auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("shl i64"), std::string::npos) << result.text;
+}
+
+namespace {
+
+/// @brief 构造带两个静态方法（add / caller 调 add）的 CompilerIndex。
+CompilerIndex makeCallerIndex(std::unique_ptr<MethodNode>& add,
+                              std::unique_ptr<MethodNode>& caller)
+{
+    add    = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
+                        {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                         new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                        2, 2);
+    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(II)I",
+                        {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                         new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                            ca::str::ZUtf8StringRef::from_static("Test"),
+                                            ca::str::ZUtf8StringRef::from_static("add"),
+                                            ca::str::ZUtf8StringRef::from_static("(II)I"),
+                                            false),
+                         new InsnNode(Opcodes::IRETURN)},
+                        2, 2);
+    CompilerIndex index;
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{add.get(), true, false, {}});
+    clazz.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
+    index.addClass("Test", std::move(clazz));
+    return index;
+}
+
+}   // namespace
+
+TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
+{
+    std::unique_ptr<MethodNode> add;
+    std::unique_ptr<MethodNode> caller;
+    CompilerIndex               index = makeCallerIndex(add, caller);
+
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*caller);
+    auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_caller__II(i32 %p0, i32 %p1)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_add__II(i32 %v0, i32 %v1)"),
+              std::string::npos)
+        << result.text;
+}
+
+TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
+{
+    // caller 调 target，target 含对象分配 → target 不可转换 → caller fail-closed。
+    std::unique_ptr<MethodNode> target;
+    std::unique_ptr<MethodNode> caller;
+    target = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "target", "()I",
+                        {new TypeInsnNode(Opcodes::NEW,
+                                          ca::str::ZUtf8StringRef::from_static("java/lang/Object")),
+                         new InsnNode(Opcodes::DUP),
+                         new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                            ca::str::ZUtf8StringRef::from_static("java/lang/Object"),
+                                            ca::str::ZUtf8StringRef::from_static("<init>"),
+                                            ca::str::ZUtf8StringRef::from_static("()V"),
+                                            false),
+                         new InsnNode(Opcodes::POP), new InsnNode(Opcodes::ICONST_1),
+                         new InsnNode(Opcodes::IRETURN)},
+                        2, 0);
+    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "()I",
+                        {new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                            ca::str::ZUtf8StringRef::from_static("Test"),
+                                            ca::str::ZUtf8StringRef::from_static("target"),
+                                            ca::str::ZUtf8StringRef::from_static("()I"),
+                                            false),
+                         new InsnNode(Opcodes::IRETURN)},
+                        1, 0);
+    CompilerIndex index;
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{target.get(), true, false, {}});
+    clazz.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
+    index.addClass("Test", std::move(clazz));
+
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*caller);
+    auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
+    EXPECT_NE(result.text.find("rejects"), std::string::npos) << result.text;
+}
+
+TEST(LlvmIrBackendTest, KeepsBytecodeForCrossClassRecursiveAndIndexlessCalls)
+{
+    // 跨类调用。
+    auto crossClass = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "cross", "()I",
+        {new MethodInsnNode(Opcodes::INVOKESTATIC,
+                            ca::str::ZUtf8StringRef::from_static("Other"),
+                            ca::str::ZUtf8StringRef::from_static("add"),
+                            ca::str::ZUtf8StringRef::from_static("()I"),
+                            false),
+         new InsnNode(Opcodes::IRETURN)},
+        1, 0);
+    // 自递归调用。
+    auto recursive = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "recursive", "()I",
+        {new MethodInsnNode(Opcodes::INVOKESTATIC,
+                            ca::str::ZUtf8StringRef::from_static("Test"),
+                            ca::str::ZUtf8StringRef::from_static("recursive"),
+                            ca::str::ZUtf8StringRef::from_static("()I"),
+                            false),
+         new InsnNode(Opcodes::IRETURN)},
+        1, 0);
+
+    CompilerIndex index;
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{crossClass.get(), true, false, {}});
+    clazz.methods.push_back(CompilerMethod{recursive.get(), true, false, {}});
+    index.addClass("Test", std::move(clazz));
+
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+
+    // 无 index（单元测试直连路径）时的静态调用 → fail-closed。
+    auto indexless = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "indexless", "()I",
+        {new MethodInsnNode(Opcodes::INVOKESTATIC,
+                            ca::str::ZUtf8StringRef::from_static("Test"),
+                            ca::str::ZUtf8StringRef::from_static("add"),
+                            ca::str::ZUtf8StringRef::from_static("()I"),
+                            false),
+         new InsnNode(Opcodes::IRETURN)},
+        1, 0);
+    CompilerClass indexlessClazz;
+    indexlessClazz.methods.push_back(CompilerMethod{indexless.get(), true, false, {}});
+    LlvmIrBackend indexlessBackend;
+    auto          indexlessBlocks = converter.convert(*indexless);
+    auto          indexlessResult =
+        indexlessBackend.compileMethod("Test", indexlessClazz.methods[0], indexlessBlocks, nullptr);
+    ASSERT_EQ(indexlessResult.kind, BackendResult::Kind::NONE);
+    EXPECT_NE(indexlessResult.text.find("compiler index"), std::string::npos)
+        << indexlessResult.text;
+
+    // 跨类 / 递归 / 实例调用（带 index）→ fail-closed。
+    auto crossResult = backend.compileMethod("Test", index.getClass("Test")->methods[0],
+                                             converter.convert(*crossClass), &index);
+    EXPECT_EQ(crossResult.kind, BackendResult::Kind::NONE);
+    EXPECT_NE(crossResult.text.find("intra-class"), std::string::npos) << crossResult.text;
+
+    auto recursiveResult = backend.compileMethod("Test", index.getClass("Test")->methods[1],
+                                                 converter.convert(*recursive), &index);
+    EXPECT_EQ(recursiveResult.kind, BackendResult::Kind::NONE);
+    EXPECT_NE(recursiveResult.text.find("recursive"), std::string::npos) << recursiveResult.text;
+}

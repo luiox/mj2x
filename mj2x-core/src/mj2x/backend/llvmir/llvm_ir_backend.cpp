@@ -2,6 +2,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
+#include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
@@ -15,6 +16,8 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 #include "libca/log/log_macros.hpp"
@@ -161,14 +164,15 @@ bool isSupportedBinary(const RegInstruction& instruction, std::string& reason)
         case SSABinaryOp::And:
         case SSABinaryOp::Or:
         case SSABinaryOp::Xor: return true;
-        case SSABinaryOp::Div:
-        case SSABinaryOp::Rem:
-            reason = "LLVM IR first slice rejects integer div/rem because they may throw";
-            return false;
         case SSABinaryOp::Shl:
         case SSABinaryOp::Shr:
         case SSABinaryOp::UShr:
-            reason = "LLVM IR first slice rejects Java shift masking semantics";
+            // LLVM shl/ashr/lshr treat the shift amount as unsigned modulo the
+            // type width, which matches Java's mask-to-5/6-bits semantics.
+            return true;
+        case SSABinaryOp::Div:
+        case SSABinaryOp::Rem:
+            reason = "LLVM IR first slice rejects integer div/rem because they may throw";
             return false;
         }
     }
@@ -176,9 +180,47 @@ bool isSupportedBinary(const RegInstruction& instruction, std::string& reason)
     return false;
 }
 
-bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction, std::string& reason)
+/// @brief Resolved intra-class static call target for the LLVM IR slice.
+struct CallTarget
 {
-    if (hasObservableEffect(instruction.effect)) {
+    std::string          symbol;   ///< internal helper symbol（@mj2x_llvm_Java_...）
+    SSAType              returnType = SSAType::UNKNOWN;
+    std::vector<SSAType> argTypes;
+};
+
+/// @brief 解析并预检 LLVM IR 切片内的类内静态互调目标（成员定义见文件尾部）。
+///
+/// @details 目标必须满足：INVOKESTATIC、owner == 当前类、签名纯标量、方法体
+/// 本身可转换（递归预检，含嵌套调用）；结果按 MethodID 缓存。环（递归/互递归）
+/// 与跨类调用 fail-closed，避免发射悬空内部符号。
+class InternalCallResolver
+{
+public:
+    InternalCallResolver(CompilerIndex& index, const std::string& className)
+        : index_(index)
+        , className_(className)
+    {}
+
+    bool resolve(const SSAMethodRef& method, CallTarget& target, std::string& reason);
+
+private:
+    CompilerMethod* findTarget(const MethodID& id, std::string& reason);
+    bool            fillTargetFromDescriptor(MethodNode& node, CallTarget& target,
+                                             std::string& reason);
+    bool            analyze(MethodNode& node, CallTarget& target, std::string& reason);
+
+    CompilerIndex&                     index_;
+    const std::string&                 className_;
+    std::unordered_map<MethodID, CallTarget> cache_;
+    std::unordered_set<MethodID>       visiting_;
+};
+
+bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
+                       InternalCallResolver* resolver, std::string& reason)
+{
+    // 内部静态调用经 resolver 单独验证（effect 的 callsExternal 位由 resolver
+    // 确认目标在转换集合内后放行）；其余指令保持 fail-closed 检查。
+    if (instruction.kind != RegInstructionKind::Call && hasObservableEffect(instruction.effect)) {
         reason = "LLVM IR first slice rejects instructions with observable effects";
         return false;
     }
@@ -188,8 +230,16 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction, 
                recordOperand(types, instruction.copy.source, reason) &&
                instruction.copy.dest.type == instruction.copy.source.type;
     case RegInstructionKind::Unary:
+        if (instruction.unaryOp == SSAUnaryOp::BitNot) {
+            if (instruction.dest.type != SSAType::I32 && instruction.dest.type != SSAType::I64) {
+                reason = "LLVM IR bitwise negation requires an integer type";
+                return false;
+            }
+            return recordValue(types, instruction.dest, reason) &&
+                   recordOperand(types, instruction.value, reason);
+        }
         if (instruction.unaryOp != SSAUnaryOp::Neg) {
-            reason = "LLVM IR first slice only supports arithmetic negation";
+            reason = "LLVM IR first slice only supports arithmetic negation and bitwise not";
             return false;
         }
         return recordValue(types, instruction.dest, reason) &&
@@ -217,18 +267,50 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction, 
     case RegInstructionKind::StoreField:
     case RegInstructionKind::ArrayLoad:
     case RegInstructionKind::ArrayStore:
-    case RegInstructionKind::Call:
     case RegInstructionKind::Allocate:
     case RegInstructionKind::Intrinsic:
     case RegInstructionKind::Barrier:
         reason = "LLVM IR first slice rejects object, JNI, memory and monitor operations";
         return false;
+    case RegInstructionKind::Call:
+        if (resolver == nullptr) {
+            reason = "LLVM IR static calls require a compiler index";
+            return false;
+        }
+        {
+            CallTarget target;
+            if (!resolver->resolve(instruction.method, target, reason)) return false;
+            if (instruction.hasDest) {
+                if (!recordValue(types, instruction.dest, reason)) return false;
+                if (instruction.dest.type != target.returnType) {
+                    reason = "LLVM IR call result type does not match the target descriptor";
+                    return false;
+                }
+            }
+            else if (target.returnType != SSAType::VOID) {
+                reason = "LLVM IR call discards a non-void result";
+                return false;
+            }
+            if (instruction.args.size() != target.argTypes.size()) {
+                reason = "LLVM IR call argument count does not match the target descriptor";
+                return false;
+            }
+            for (size_t index = 0; index < instruction.args.size(); ++index) {
+                if (!recordOperand(types, instruction.args[index], reason)) return false;
+                if (instruction.args[index].type != target.argTypes[index]) {
+                    reason = "LLVM IR call argument type does not match the target descriptor";
+                    return false;
+                }
+            }
+        }
+        return true;
     }
     reason = "LLVM IR encountered an unknown RegIR instruction";
     return false;
 }
 
-bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types, std::string& reason)
+bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types,
+                          InternalCallResolver* resolver, std::string& reason)
 {
     if (!function.exceptionRegions.empty()) {
         reason = "LLVM IR first slice rejects exception regions";
@@ -239,7 +321,7 @@ bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types, std
     }
     for (const auto& block : function.blocks) {
         for (const auto& instruction : block->instructions) {
-            if (!recordInstruction(types, instruction, reason)) return false;
+            if (!recordInstruction(types, instruction, resolver, reason)) return false;
         }
         const bool terminatorOk = std::visit(
             [&](const auto& terminator) -> bool {
@@ -290,11 +372,13 @@ class LlvmFunctionEmitter
 {
 public:
     LlvmFunctionEmitter(const RegFunction& function, const RegisterTypes& registerTypes,
-                        const std::string& functionName, SSAType returnType)
+                        const std::string& functionName, SSAType returnType,
+                        InternalCallResolver* resolver)
         : function_(function)
         , registerTypes_(registerTypes)
         , functionName_(functionName)
         , returnType_(returnType)
+        , resolver_(resolver)
     {}
 
     bool emit(std::string& source, std::string& reason)
@@ -436,7 +520,10 @@ private:
             if (!emitOperand(instruction.value, value, reason)) return false;
             const char* type = llvmType(instruction.dest.type);
             const std::string result = nextTemporary();
-            if (instruction.dest.type == SSAType::F32 || instruction.dest.type == SSAType::F64) {
+            if (instruction.unaryOp == SSAUnaryOp::BitNot) {
+                out_ << "  " << result << " = xor " << type << " " << value << ", -1\n";
+            }
+            else if (instruction.dest.type == SSAType::F32 || instruction.dest.type == SSAType::F64) {
                 out_ << "  " << result << " = fneg " << type << " " << value << "\n";
             }
             else if (instruction.dest.type == SSAType::I32 || instruction.dest.type == SSAType::I64) {
@@ -465,9 +552,9 @@ private:
             case SSABinaryOp::And: opcode = floating ? nullptr : "and"; break;
             case SSABinaryOp::Or: opcode = floating ? nullptr : "or"; break;
             case SSABinaryOp::Xor: opcode = floating ? nullptr : "xor"; break;
-            case SSABinaryOp::Shl:
-            case SSABinaryOp::Shr:
-            case SSABinaryOp::UShr: break;
+            case SSABinaryOp::Shl: opcode = floating ? nullptr : "shl"; break;
+            case SSABinaryOp::Shr: opcode = floating ? nullptr : "ashr"; break;
+            case SSABinaryOp::UShr: opcode = floating ? nullptr : "lshr"; break;
             }
             if (opcode == nullptr) {
                 reason = "LLVM IR binary operation is outside the pure scalar subset";
@@ -476,6 +563,28 @@ private:
             const std::string result = nextTemporary();
             out_ << "  " << result << " = " << opcode << " " << llvmType(instruction.dest.type)
                  << " " << lhs << ", " << rhs << "\n";
+            return emitStore(instruction.dest, result, reason);
+        }
+        if (instruction.kind == RegInstructionKind::Call) {
+            CallTarget target;
+            if (resolver_ == nullptr || !resolver_->resolve(instruction.method, target, reason)) {
+                reason = "LLVM IR call target was not validated before emission";
+                return false;
+            }
+            std::string args;
+            for (size_t index = 0; index < instruction.args.size(); ++index) {
+                std::string expression;
+                if (!emitOperand(instruction.args[index], expression, reason)) return false;
+                if (index != 0) args += ", ";
+                args += std::string(llvmType(target.argTypes[index])) + " " + expression;
+            }
+            if (target.returnType == SSAType::VOID) {
+                out_ << "  call void @" << target.symbol << "(" << args << ")\n";
+                return true;
+            }
+            const std::string result = nextTemporary();
+            out_ << "  " << result << " = call " << llvmType(target.returnType) << " @"
+                 << target.symbol << "(" << args << ")\n";
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Compare) {
@@ -612,6 +721,7 @@ private:
     const RegisterTypes&     registerTypes_;
     const std::string&       functionName_;
     SSAType                  returnType_;
+    InternalCallResolver*    resolver_;
     std::ostringstream       out_;
     uint32_t                 temporaryIndex_ = 0;
     uint32_t                 edgeIndex_ = 0;
@@ -644,6 +754,119 @@ std::string helperName(const std::string& className, const MethodNode& method)
     return "mj2x_llvm_" + mangleMethod(className,
                                         method.name.to_std_string(),
                                         method.desc.to_std_string());
+}
+
+/// @brief 解析并预检 LLVM IR 切片内的类内静态互调目标（类声明见前部）。
+bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& target,
+                                   std::string& reason)
+{
+    if (method.invokeOpcode != Opcodes::INVOKESTATIC) {
+        reason = "LLVM IR first slice only supports static method calls";
+        return false;
+    }
+    const std::string owner = method.owner.to_std_string();
+    if (owner != className_) {
+        reason = "LLVM IR first slice only supports intra-class static calls";
+        return false;
+    }
+    const MethodID id{owner, method.name.to_std_string(), method.desc.to_std_string()};
+    const auto     cached = cache_.find(id);
+    if (cached != cache_.end()) {
+        target = cached->second;
+        return true;
+    }
+    CompilerMethod* targetMethod = findTarget(id, reason);
+    if (targetMethod == nullptr || targetMethod->methodNode == nullptr) return false;
+
+    if (targetMethod->backendResult.kind == BackendResult::Kind::C_SOURCE) {
+        // 已编译成功：方法体已被 injectIntoClass 清空，不能再预检；成功即已通过
+        // 完整验证，签名直接从描述解析。
+        CallTarget parsed;
+        if (!fillTargetFromDescriptor(*targetMethod->methodNode, parsed, reason)) return false;
+        cache_.emplace(id, parsed);
+        target = parsed;
+        return true;
+    }
+    if (!targetMethod->backendResult.text.empty()) {
+        // 已尝试编译且 fail-closed：调用方必须保持字节码。
+        reason = "LLVM IR call target failed to compile";
+        return false;
+    }
+
+    // 未编译：字节码完好，完整预检（含嵌套调用与环检测）。
+    if (!visiting_.insert(id).second) {
+        reason = "LLVM IR first slice rejects recursive static calls";
+        return false;
+    }
+    if (!analyze(*targetMethod->methodNode, target, reason)) {
+        visiting_.erase(id);
+        return false;
+    }
+    visiting_.erase(id);
+    cache_.emplace(id, target);
+    return true;
+}
+
+CompilerMethod* InternalCallResolver::findTarget(const MethodID& id, std::string& reason)
+{
+    CompilerClass* clazz = index_.getClass(id.owner);
+    if (clazz == nullptr) {
+        reason = "LLVM IR call target class is not in the compilation index";
+        return nullptr;
+    }
+    for (auto& candidate : clazz->methods) {
+        if (!candidate.markedForCompile || candidate.methodNode == nullptr) continue;
+        if (candidate.methodNode->name.to_std_string() == id.name &&
+            candidate.methodNode->desc.to_std_string() == id.desc) {
+            return &candidate;
+        }
+    }
+    reason = "LLVM IR call target is not a marked-for-compile method in this class";
+    return nullptr;
+}
+
+bool InternalCallResolver::fillTargetFromDescriptor(MethodNode& node, CallTarget& target,
+                                                    std::string& reason)
+{
+    SSAType resultType = SSAType::UNKNOWN;
+    if (!supportsMethodDescriptor(node, resultType, reason)) return false;
+    target.symbol     = helperName(className_, node);
+    target.returnType = resultType;
+    for (const PrimitiveKind kind : argumentKinds(node.desc.to_std_string())) {
+        target.argTypes.push_back(primitiveToSsaType(kind));
+    }
+    return true;
+}
+
+/// @brief 目标方法体级预检（不发射）：复用主编译链的 SSA/RegIR 验证。
+bool InternalCallResolver::analyze(MethodNode& node, CallTarget& target, std::string& reason)
+{
+    SSAType resultType = SSAType::UNKNOWN;
+    if (!supportsMethodDescriptor(node, resultType, reason)) return false;
+    CodeConverter converter(index_.arena());
+    auto          blocks = converter.convert(node);
+    SSABuilder    builder;
+    ca::str::Utf8StringArena ssaArena;   // SSA 派生串入池，活到 ssa 消费完（本函数内同步）
+    auto ssa = builder.build(blocks,
+                             className_,
+                             node.name.to_std_string(),
+                             node.desc.to_std_string(),
+                             true,
+                             node.maxLocals,
+                             ssaArena,
+                             reason);
+    if (!ssa) return false;
+    RegLowering lowering;
+    auto        reg = lowering.lower(*ssa, reason);
+    if (!reg) return false;
+    RegisterTypes types;
+    if (!collectRegisterTypes(*reg, types, this, reason)) return false;
+    target.symbol     = helperName(className_, node);
+    target.returnType = resultType;
+    for (const PrimitiveKind kind : argumentKinds(node.desc.to_std_string())) {
+        target.argTypes.push_back(primitiveToSsaType(kind));
+    }
+    return true;
 }
 
 std::string emitJniWrapper(const std::string& className, const MethodNode& method,
@@ -696,7 +919,6 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
                                            const std::vector<Block*>& blocks,
                                            CompilerIndex* index)
 {
-    (void)index;
     BackendResult result;
     if (method.methodNode == nullptr) {
         result.text = "LLVM IR lowering failed: missing method node";
@@ -733,14 +955,19 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     }
 
     RegisterTypes registerTypes;
-    if (!collectRegisterTypes(*reg, registerTypes, reason)) {
+    // 互调需要编译器索引（单元测试不传 index 时行为与以前一致：静态调用 fail-closed）。
+    std::unique_ptr<InternalCallResolver> callResolver;
+    if (index != nullptr) {
+        callResolver = std::make_unique<InternalCallResolver>(*index, className);
+    }
+    if (!collectRegisterTypes(*reg, registerTypes, callResolver.get(), reason)) {
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
 
     const std::string helper = helperName(className, *method.methodNode);
     std::string       helperSource;
-    LlvmFunctionEmitter emitter(*reg, registerTypes, helper, resultType);
+    LlvmFunctionEmitter emitter(*reg, registerTypes, helper, resultType, callResolver.get());
     if (!emitter.emit(helperSource, reason)) {
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
