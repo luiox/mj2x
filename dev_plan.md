@@ -68,6 +68,18 @@
 - agent 特征深度检测（javaagent MANIFEST 扫描 / JDWP 探测）
 - 异常表多 region 覆盖同一块的匹配顺序测试扩展
 - mj2x-runtime C++ 版与 crt C 版检测面统一
+- **JVMRTDP 调研结论（issue #847，2026-08-19）**：纯 Java 面 JVMTI 调试/诊断
+  工具（Windows x64），无 native/JNI 追踪与 VM 对抗能力——对 mj2x 保护产物
+  （native 化方法 / VMC4 虚拟化）**无实质威胁**：字节码面工具（BCI 编辑/
+  反编译/redefine/dumpclass）对 native 方法无效（RedefineClasses 不可改变
+  native 状态），字符串钩子只捕获 JVM 层运行期常量。两个观察项：
+  a. 其 agent 以 **manual mapping（自实现 PE 映射）代替 LoadLibrary** 加载，
+     可绕过「已加载模块枚举」检测面（Windows 侧）——capability 快照 +
+     启动参数扫描仍覆盖（JVMRTDP 断点/字符串钩子必须申请 JVMTI capability）；
+     记录不实施
+  b. RegC 无字符串加密变换（对比 jvmtp `obfuscation.strings`）——运行期
+     字符串钩子可捕获明文常量；若保护目标含敏感字符串需加密模块（竞品
+     借鉴观察项，P3）
 
 ### E. 配置系统（P1，主线十二）
 
