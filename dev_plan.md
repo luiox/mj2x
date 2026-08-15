@@ -45,7 +45,7 @@
   （`doc_ai/gui_config_tool_design.md`：vite+vue 方案、schema 驱动渲染、
   联动/校验/导出/可选 sidecar 执行）。剩余：P1 实现（表单渲染 + 校验 + 导出）。
 
-### E. LLVM 第二轮扩面（已完成，PR #866）
+### E. LLVM 第二轮扩面（已完成，PR #870）
 
 - **invokedynamic 运行时解析** ✅：残留 `indy:<idx>` 站点（自定义 bootstrap）不再
   fail-closed——LLVM 发射模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef`
@@ -93,7 +93,7 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   **测试矩阵**（LLVM 列 22 fixtures + protected_samples/llvm 三样本）。修复：
   ANEWARRAY 数组描述符悬垂（SSA arena 生命周期）、I2S 误按 i8 截断、check_cast/
   instance_of 参数缺 ptr 类型、mangle `$`→`_00024`。验证：mj2x_unittest 全绿 +
-  mtest_set 25 过 + 矩阵 66 例全绿 + 样本 E2E（见 PR #866）。
+  mtest_set 25 过 + 矩阵 66 例全绿 + 样本 E2E（见 PR #870）。
 - 2026-08-21（round-2 开工）：同步 roadmap 两处 stale（arraycopy intrinsic 已完成
   #819、方法内联矛盾）+ §4 LLVM 状态行（#864 扩面后）；GUI 配置工具设计完成
   （vite+vue，`doc_ai/gui_config_tool_design.md`）；记录整类下沉为 P3 待办（待做 F）。
