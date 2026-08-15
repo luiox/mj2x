@@ -460,3 +460,63 @@ TEST(LlvmIrBackendTest, EmitsSaturatingFloatToIntConversion)
     EXPECT_NE(d2l.text.find("call i64 @llvm.fptosi.sat.i64.f64(double"), std::string::npos)
         << d2l.text;
 }
+
+TEST(LlvmIrBackendTest, EmitsNarrowSignatureBoundaryConversions)
+{
+    // (byte, short, char, boolean) -> short：
+    // wrapper 收 jbyte/jshort/jchar/jboolean（i8/i16），提升到 i32 计算位宽
+    // （byte/short 符号扩展、char/boolean 零扩展），返回 trunc 到 i16。
+    auto result = compileScalar("narrow",
+                                "(BSZC)S",
+                                {new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new VarInsnNode(Opcodes::ILOAD, 3),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN)},
+                                4, 4);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // wrapper 边界：窄参数类型 + 提升 + trunc 返回。
+    EXPECT_NE(result.text.find("define dllexport i16 @Java_Test_narrow__BSZC(ptr %env, ptr %clazz, i8 %p0, i16 %p1, i8 %p2, i16 %p3)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("%w0 = sext i8 %p0 to i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("%w1 = sext i16 %p1 to i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("%w2 = zext i8 %p2 to i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("%w3 = zext i16 %p3 to i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_narrow__BSZC(ptr %env, i32 %w0, i32 %w1, i32 %w2, i32 %w3)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("%t = trunc i32 %result to i16"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("ret i16 %t"), std::string::npos) << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsSpecialFloatLiterals)
+{
+    // NaN / ±Inf / -0.0 常量以 LLVM hex 字面量发射（十进制无法表示）。
+    auto nan = compileScalar("nanf", "()F",
+                             {new LdcInsnNode(std::numeric_limits<float>::quiet_NaN()),
+                              new InsnNode(Opcodes::FRETURN)},
+                             1, 0);
+    ASSERT_EQ(nan.kind, BackendResult::Kind::C_SOURCE) << nan.text;
+    EXPECT_NE(nan.text.find("0x7FC00000"), std::string::npos) << nan.text;
+
+    auto pinf = compileScalar("pinf", "()D",
+                              {new LdcInsnNode(std::numeric_limits<double>::infinity()),
+                               new InsnNode(Opcodes::DRETURN)},
+                              2, 0);
+    ASSERT_EQ(pinf.kind, BackendResult::Kind::C_SOURCE) << pinf.text;
+    EXPECT_NE(pinf.text.find("0x7FF0000000000000"), std::string::npos) << pinf.text;
+
+    auto ninf = compileScalar("ninf", "()D",
+                              {new LdcInsnNode(-std::numeric_limits<double>::infinity()),
+                               new InsnNode(Opcodes::DRETURN)},
+                              2, 0);
+    ASSERT_EQ(ninf.kind, BackendResult::Kind::C_SOURCE) << ninf.text;
+    EXPECT_NE(ninf.text.find("0xFFF0000000000000"), std::string::npos) << ninf.text;
+
+    auto nzero = compileScalar("nzero", "()D",
+                               {new LdcInsnNode(-0.0), new InsnNode(Opcodes::DRETURN)}, 2, 0);
+    ASSERT_EQ(nzero.kind, BackendResult::Kind::C_SOURCE) << nzero.text;
+    EXPECT_NE(nzero.text.find("0x8000000000000000"), std::string::npos) << nzero.text;
+}

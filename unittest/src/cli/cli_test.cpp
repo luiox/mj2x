@@ -2257,6 +2257,124 @@ TEST(CliTest, MsvcCompilesRegcCppSource)
 #endif
 }
 
+TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
+{
+#if defined(MJ2X_DISABLE_LLVM_BACKEND)
+    GTEST_SKIP() << "LLVM backend is disabled";
+#else
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!commandAvailable("clang")) GTEST_SKIP() << "clang is not available on PATH";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+    const fs::path javac = findJavac();
+    if (javac.empty()) GTEST_SKIP() << "javac is not available";
+#ifdef _WIN32
+    const fs::path java = javac.parent_path() / "java.exe";
+#else
+    const fs::path java = javac.parent_path() / "java";
+#endif
+
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_llvm_pipe.keep").parent_path() / "mj2x_cli_llvm_pipe";
+    const fs::path source = workDir / "CliLlvmPipe.java";
+    const fs::path driver = workDir / "Driver.java";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    {
+        std::ofstream out(source);
+        ASSERT_TRUE(out) << source.string();
+        out << "public class CliLlvmPipe {\n"
+               "  public static int add(int a, int b) { return a + b; }\n"
+               "}\n";
+    }
+    {
+        std::ofstream out(driver);
+        ASSERT_TRUE(out) << driver.string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+               "    if (dll != null) System.load(dll);\n"
+               "    System.out.print(CliLlvmPipe.add(40, 2));\n"
+               "  }\n"
+               "}\n";
+    }
+    auto result = runScript({q(javac) + " -d " + q(workDir) + " " + q(source) + " " + q(driver)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    result = runScript({q(java) + " -Xverify:all -cp " + q(workDir) + " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    // 1) --compile-mode pipe：无 --emit-llvm，LLVM IR 经 clang stdin 编译。
+    const fs::path pipeDir = workDir / "pipe";
+    fs::create_directories(pipeDir, ec);
+    const fs::path pipeClass = pipeDir / "CliLlvmPipe.class";
+    result = runScript({q(cli) + " -i " + q(workDir / "CliLlvmPipe.class") + " -o " +
+                        q(pipeClass) + " --backend llvm --compile --compile-mode pipe "
+                        "--llvm-tool clang"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    const fs::path pipeLibrary = nativeLibraryPathFor(pipeClass);
+    ASSERT_TRUE(fileExists(pipeLibrary)) << result.out;
+    fs::copy_file(workDir / "Driver.class", pipeDir / "Driver.class",
+                  fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    std::vector<std::string> pipeRun;
+#ifdef _WIN32
+    pipeRun.push_back("set \"MORPHER_DLL=" + pipeLibrary.string() + "\"");
+#else
+    pipeRun.push_back("export MORPHER_DLL=" + q(pipeLibrary));
+#endif
+    pipeRun.push_back(q(java) + " -Xverify:all -cp " + q(pipeDir) + " Driver");
+    result = runScript(pipeRun);
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    // 2) --generate-cmake：工程含 native.ll + CMakeLists.txt；clang 直接编译运行。
+    const fs::path cmakeDir = workDir / "cmake_proj";
+    fs::create_directories(cmakeDir, ec);
+    const fs::path cmakeClass = cmakeDir / "CliLlvmPipe.class";
+    result = runScript({q(cli) + " -i " + q(workDir / "CliLlvmPipe.class") + " -o " +
+                        q(cmakeClass) + " --backend llvm --emit-llvm " +
+                        q(cmakeDir / "native.ll") + " --generate-cmake " + q(cmakeDir)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    ASSERT_TRUE(fileExists(cmakeDir / "native.ll")) << result.out;
+    ASSERT_TRUE(fileExists(cmakeDir / "CMakeLists.txt")) << result.out;
+    {
+        const fs::path cmakeLibrary = nativeLibraryPathFor(cmakeClass);
+        result = runScript({q("clang") + " -shared " + q(cmakeDir / "native.ll") + " -o " +
+                            q(cmakeLibrary)});
+        ASSERT_EQ(result.exitCode, 0) << result.out;
+        fs::copy_file(workDir / "Driver.class", cmakeDir / "Driver.class",
+                      fs::copy_options::overwrite_existing, ec);
+        ASSERT_FALSE(ec) << ec.message();
+        std::vector<std::string> cmakeRun;
+#ifdef _WIN32
+        cmakeRun.push_back("set \"MORPHER_DLL=" + cmakeLibrary.string() + "\"");
+#else
+        cmakeRun.push_back("export MORPHER_DLL=" + q(cmakeLibrary));
+#endif
+        cmakeRun.push_back(q(java) + " -Xverify:all -cp " + q(cmakeDir) + " Driver");
+        result = runScript(cmakeRun);
+        ASSERT_EQ(result.exitCode, 0) << result.out;
+        EXPECT_EQ(result.out, "42");
+    }
+
+    // 3) --generate-xmake：工程含 native.ll + xmake.lua。
+    const fs::path xmakeDir = workDir / "xmake_proj";
+    fs::create_directories(xmakeDir, ec);
+    result = runScript({q(cli) + " -i " + q(workDir / "CliLlvmPipe.class") + " -o " +
+                        q(xmakeDir / "CliLlvmPipe.class") + " --backend llvm --emit-llvm " +
+                        q(xmakeDir / "native.ll") + " --generate-xmake " + q(xmakeDir)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(xmakeDir / "native.ll")) << result.out;
+    EXPECT_TRUE(fileExists(xmakeDir / "xmake.lua")) << result.out;
+#endif
+}
+
 TEST(CliTest, ClangCompilesRegcCppSource)
 {
     const fs::path cli = findCli();
@@ -2792,13 +2910,13 @@ TEST(CliTest, NegativeArgumentsFail)
     EXPECT_NE(llvmWrongExtension.out.find("requires a .ll output path"), std::string::npos)
         << llvmWrongExtension.out;
 
-    auto llvmPipe = runScript({
+    auto llvmPipeWithEmit = runScript({
         q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
-            " --backend llvm --compile --compile-mode pipe",
+            " --backend llvm --compile --compile-mode pipe --emit-llvm " + q(llvmFile),
     });
-    EXPECT_NE(llvmPipe.exitCode, 0);
-    EXPECT_NE(llvmPipe.out.find("does not support --compile-mode pipe"), std::string::npos)
-        << llvmPipe.out;
+    EXPECT_NE(llvmPipeWithEmit.exitCode, 0);
+    EXPECT_NE(llvmPipeWithEmit.out.find("cannot be combined with --emit-c"), std::string::npos)
+        << llvmPipeWithEmit.out;
 
     auto llvmCCompiler = runScript({
         q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
@@ -2818,11 +2936,11 @@ TEST(CliTest, NegativeArgumentsFail)
     auto llvmProject = runScript({
         q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
             " --backend llvm --emit-llvm " + q(llvmFile) + " --generate-cmake " +
-            q(test::getTempOutPath("mj2x_cli_negative_llvm_project")),
+            q(test::getTempOutPath("mj2x_cli_negative_llvm_project")) + " --generate-xmake " +
+            q(test::getTempOutPath("mj2x_cli_negative_llvm_project_x")),
     });
     EXPECT_NE(llvmProject.exitCode, 0);
-    EXPECT_NE(llvmProject.out.find("does not support --generate-cmake"), std::string::npos)
-        << llvmProject.out;
+    EXPECT_NE(llvmProject.out.find("mutually exclusive"), std::string::npos) << llvmProject.out;
 #else
     // v2.1 LLVM 后端关闭：--backend llvm / --emit-llvm / --llvm-tool 均被 CLI 拒绝。
     auto llvmDisabled = runScript({
