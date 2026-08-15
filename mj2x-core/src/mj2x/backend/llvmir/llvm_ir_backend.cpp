@@ -153,9 +153,13 @@ bool recordOperand(RegisterTypes& types, const RegOperand& operand, std::string&
     case RegOperandKind::NullLiteral:
         return isSupportedValueType(operand.type);   // ptr null（引用类型）
     case RegOperandKind::Opaque:
-        // 空操作数（static 字段无 receiver 等）跳过；带 tag 的 Opaque（如
-        // String LDC）由对应指令分支拒绝。
+        // 空操作数（static 字段无 receiver 等）跳过；ldc_string:/ldc_class:
+        // 前缀的 Opaque（String/Class 常量）由发射端构造；其余拒绝。
         if (operand.type == SSAType::UNKNOWN) return true;
+        if (operand.tag.rfind("ldc_string:", 0) == 0 ||
+            operand.tag.rfind("ldc_class:", 0) == 0) {
+            return isSupportedValueType(operand.type);
+        }
         reason = "LLVM IR first slice rejects reference and opaque operands";
         return false;
     }
@@ -456,8 +460,7 @@ bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types,
                     return !terminator.hasValue || recordOperand(types, terminator.value, reason);
                 }
                 else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
-                    reason = "LLVM IR first slice rejects throw terminators";
-                    return false;
+                    return recordOperand(types, terminator.value, reason);
                 }
                 else {
                     reason = "LLVM IR first slice rejects unreachable terminators";
@@ -709,12 +712,29 @@ private:
             expression = "null";
             return true;
         }
+        if (operand.kind == RegOperandKind::Opaque) {
+            // String/Class 常量：JNI NewStringUTF / FindClass 构造（物化为临时）。
+            if (operand.tag.rfind("ldc_string:", 0) == 0) {
+                const std::string temporary = nextTemporary();
+                out_ << "  " << temporary
+                     << " = call ptr @mj2x_llvm_string_const(ptr %env, ptr "
+                     << strings_.intern(operand.tag.substr(11)) << ")\n";
+                expression = temporary;
+                return true;
+            }
+            if (operand.tag.rfind("ldc_class:", 0) == 0) {
+                const std::string temporary = nextTemporary();
+                out_ << "  " << temporary << " = call ptr @mj2x_llvm_class_const(ptr %env, ptr "
+                     << strings_.intern(operand.tag.substr(10)) << ")\n";
+                expression = temporary;
+                return true;
+            }
+        }
         reason = "LLVM IR first slice rejects reference and opaque operands";
         return false;
     }
 
-    bool emitStore(RegValue destination, const std::string& expression, std::string& reason)
-    {
+    bool emitStore(RegValue destination, const std::string& expression, std::string& reason)    {
         // 槽类型是权威（窄结果 i32；Compare 结果 i1 谓词）。
         const auto it = registerTypes_.find(destination.id.value);
         const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
@@ -1160,11 +1180,115 @@ private:
         return false;
     }
 
+    /// @brief block 的活跃异常区域（异常表顺序；无 protected 匹配则空）。
+    std::vector<const RegExceptionRegion*> activeRegionsFor(const RegBlock* block) const
+    {
+        std::vector<const RegExceptionRegion*> result;
+        for (const auto& region : function_.exceptionRegions) {
+            for (const auto* protectedBlock : region.protectedBlocks) {
+                if (protectedBlock == block) {
+                    result.push_back(&region);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    /// @brief 默认返回（异常泄漏/无 handler 时保持 JVM 传播语义的兜底路径）。
+    void emitDefaultReturn()
+    {
+        if (returnType_ == SSAType::VOID) {
+            out_ << "  ret void\n";
+            return;
+        }
+        const char* type = llvmType(returnType_);
+        const char* zero = (type == nullptr) ? "0"
+                           : (std::string(type) == "float" || std::string(type) == "double")
+                               ? "0.0"
+                               : (std::string(type) == "ptr" ? "null" : "0");
+        out_ << "  ret " << (type == nullptr ? "i32" : type) << " " << zero << "\n";
+    }
+
+    /// @brief 异常分发：ExceptionCheck 后按异常表匹配 handler；无 handler/无匹配
+    /// 重抛并默认返回。匹配成功时执行异常边拷贝 + exceptionValue 赋值后跳 handler。
+    bool emitExceptionDispatch(const RegBlock* block,
+                               const std::vector<const RegExceptionRegion*>& regions,
+                               uint32_t& dispatchIndex, std::string& reason)
+    {
+        const uint32_t   index = dispatchIndex++;
+        const std::string chk  = nextTemporary();
+        out_ << "  " << chk << " = call i1 @mj2x_llvm_exception_check(ptr %env)\n";
+        const std::string exLabel   = "ex_" + std::to_string(index);
+        const std::string contLabel = "cont_" + std::to_string(index);
+        out_ << "  br i1 " << chk << ", label %" << exLabel << ", label %" << contLabel << "\n";
+        out_ << exLabel << ":\n";
+        const std::string ex = nextTemporary();
+        out_ << "  " << ex << " = call ptr @mj2x_llvm_exception_occurred(ptr %env)\n";
+        out_ << "  call void @mj2x_llvm_exception_clear(ptr %env)\n";
+        if (regions.empty()) {
+            out_ << "  call void @mj2x_llvm_throw(ptr %env, ptr " << ex << ")\n";
+            emitDefaultReturn();
+            out_ << contLabel << ":\n";
+            return true;
+        }
+        for (size_t r = 0; r < regions.size(); ++r) {
+            const auto& region     = *regions[r];
+            const std::string match = nextTemporary();
+            const bool   last       = r + 1 == regions.size();
+            out_ << "  " << match << " = call i1 @mj2x_llvm_exception_matches(ptr %env, ptr "
+                 << ex << ", ptr " << strings_.intern(region.caughtType) << ")\n";
+            out_ << "  br i1 " << match << ", label %hx_" << index << "_" << r << ", label %"
+                 << (last ? ("rx_" + std::to_string(index)) : ("exn_" + std::to_string(index) + "_" + std::to_string(r)))
+                 << "\n";
+            out_ << "hx_" << index << "_" << r << ":\n";
+            const RegExceptionRegion::Edge* edge = nullptr;
+            for (const auto& e : region.edges) {
+                if (e.protectedBlock == block) {
+                    edge = &e;
+                    break;
+                }
+            }
+            if (edge != nullptr) {
+                for (const auto& copy : edge->copies) {
+                    std::string expression;
+                    if (!emitOperand(copy.source, expression, reason)) return false;
+                    const auto it = registerTypes_.find(copy.dest.id.value);
+                    const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
+                    if (type == nullptr) {
+                        reason = "LLVM IR exception edge copy has an unsupported type";
+                        return false;
+                    }
+                    out_ << "  store " << type << " " << expression << ", ptr %slot_r"
+                         << copy.dest.id.value << "\n";
+                }
+            }
+            out_ << "  store ptr " << ex << ", ptr %slot_r" << region.exceptionValue.id.value
+                 << "\n";
+            out_ << "  br label %b" << region.handler->id.value << "\n";
+            if (!last) {
+                out_ << "exn_" << index << "_" << r << ":\n";
+            }
+        }
+        out_ << "rx_" << index << ":\n";
+        out_ << "  call void @mj2x_llvm_throw(ptr %env, ptr " << ex << ")\n";
+        emitDefaultReturn();
+        out_ << contLabel << ":\n";
+        return true;
+    }
+
     bool emitBlock(const RegBlock& block, std::string& reason)
     {
+        const auto regions = activeRegionsFor(&block);
+        uint32_t   dispatchIndex = 0;
         out_ << "b" << block.id.value << ":\n";
         for (const auto& instruction : block.instructions) {
             if (!emitInstruction(instruction, reason)) return false;
+            // 方法含 try/catch 时，可能抛异常的指令后插入异常分发
+            // （无异常区域时 pending 异常泄漏到 JNI 边界由 JVM 处理）。
+            if (instruction.effect.mayThrow && !regions.empty()) {
+                if (!emitExceptionDispatch(&block, regions, dispatchIndex, reason)) return false;
+            }
         }
         return std::visit(
             [&](const auto& terminator) -> bool {
@@ -1224,6 +1348,23 @@ private:
                     std::string value;
                     if (!emitOperand(terminator.value, value, reason)) return false;
                     out_ << "  ret " << llvmType(returnType_) << " " << value << "\n\n";
+                    return true;
+                }
+                else if constexpr (std::is_same_v<T, RegThrowTerminator>) {
+                    // athrow：JNI Throw（null → NPE）；有异常区域时按表分发，
+                    // 否则 pending 异常泄漏到 JVM 边界。
+                    std::string value;
+                    if (!emitOperand(terminator.value, value, reason)) return false;
+                    out_ << "  call void @mj2x_llvm_throw(ptr %env, ptr " << value << ")\n";
+                    if (!regions.empty()) {
+                        if (!emitExceptionDispatch(&block, regions, dispatchIndex, reason)) {
+                            return false;
+                        }
+                    }
+                    else {
+                        emitDefaultReturn();
+                    }
+                    out_ << "\n";
                     return true;
                 }
                 else {
@@ -1658,6 +1799,11 @@ constexpr int64_t SetFloatArrayRegion    = 213;
 constexpr int64_t SetDoubleArrayRegion   = 214;
 constexpr int64_t MonitorEnter           = 217;
 constexpr int64_t MonitorExit            = 218;
+constexpr int64_t Throw                 = 13;
+constexpr int64_t ExceptionOccurred     = 15;
+constexpr int64_t ExceptionClear        = 17;
+constexpr int64_t NewStringUTF          = 163;
+constexpr int64_t ExceptionCheck        = 228;
 }   // namespace jni_slot
 
 /// @brief 对象/字段/类型检查共享 helper 集合（finalize 统一生成）。
@@ -2250,6 +2396,91 @@ std::string emitObjectHelpers()
            "  ret i32 %ok\n"
            "}\n\n";
 
+    // 异常基础设施：ExceptionCheck/Occurred/Clear/Matches（catch 类型匹配，
+    // 空串 = catch-all/finally）/Throw（athrow；null → NPE）。
+    out << "define internal i1 @mj2x_llvm_exception_check(ptr %env) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %ec0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ExceptionCheck << "\n"
+        << "  %check = load ptr, ptr %ec0\n"
+           "  %c = call i32 %check(ptr %env)\n"
+           "  %r = icmp ne i32 %c, 0\n"
+           "  ret i1 %r\n"
+           "}\n\n";
+    out << "define internal ptr @mj2x_llvm_exception_occurred(ptr %env) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %eo0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ExceptionOccurred << "\n"
+        << "  %occ = load ptr, ptr %eo0\n"
+           "  %ex = call ptr %occ(ptr %env)\n"
+           "  ret ptr %ex\n"
+           "}\n\n";
+    out << "define internal void @mj2x_llvm_exception_clear(ptr %env) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %cl0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ExceptionClear << "\n"
+        << "  %clear = load ptr, ptr %cl0\n"
+           "  call void %clear(ptr %env)\n"
+           "  ret void\n"
+           "}\n\n";
+    out << "define internal i1 @mj2x_llvm_exception_matches(ptr %env, ptr %ex, ptr %catch) {\n"
+           "entry:\n"
+           "  %c0 = load i8, ptr %catch\n"
+           "  %isempty = icmp eq i8 %c0, 0\n"
+           "  br i1 %isempty, label %yes, label %cls\n"
+           "cls:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+        << "  %find = load ptr, ptr %fc0\n"
+           "  %c = call ptr %find(ptr %env, ptr %catch)\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
+        << "  %isinst = load ptr, ptr %ii0\n"
+           "  %m = call i32 %isinst(ptr %env, ptr %ex, ptr %c)\n"
+           "  %r = icmp ne i32 %m, 0\n"
+           "  ret i1 %r\n"
+           "yes:\n"
+           "  ret i1 true\n"
+           "}\n\n";
+    out << "define internal void @mj2x_llvm_throw(ptr %env, ptr %obj) {\n"
+           "entry:\n"
+           "  %isnull = icmp eq ptr %obj, null\n"
+           "  br i1 %isnull, label %npe, label %ok\n"
+           "ok:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %th0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::Throw << "\n"
+        << "  %throw = load ptr, ptr %th0\n"
+           "  %rc = call i32 %throw(ptr %env, ptr %obj)\n"
+           "  ret void\n"
+           "npe:\n"
+           "  %ft1 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::FindClass << "\n"
+        << "  %find = load ptr, ptr %fc0\n"
+           "  %cls = call ptr %find(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
+           "  %ft2 = load ptr, ptr %env\n"
+           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
+        << "  %thrownew = load ptr, ptr %tn0\n"
+           "  %rc2 = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
+           "  ret void\n"
+           "}\n\n";
+    // String/Class 常量：NewStringUTF（modified UTF-8 字节）/ FindClass。
+    out << "define internal ptr @mj2x_llvm_string_const(ptr %env, ptr %utf8) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %ns0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::NewStringUTF << "\n"
+        << "  %newstr = load ptr, ptr %ns0\n"
+           "  %s = call ptr %newstr(ptr %env, ptr %utf8)\n"
+           "  ret ptr %s\n"
+           "}\n\n";
+    out << "define internal ptr @mj2x_llvm_class_const(ptr %env, ptr %name) {\n"
+           "entry:\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+        << "  %find = load ptr, ptr %fc0\n"
+           "  %c = call ptr %find(ptr %env, ptr %name)\n"
+           "  ret ptr %c\n"
+           "}\n\n";
+
     return out.str();
 }
 
@@ -2276,7 +2507,11 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
         bodies.find("mj2x_llvm_new_array") != std::string::npos ||
         bodies.find("mj2x_llvm_new_multi_array") != std::string::npos ||
         bodies.find("mj2x_llvm_check_cast") != std::string::npos ||
-        bodies.find("mj2x_llvm_instance_of") != std::string::npos) {
+        bodies.find("mj2x_llvm_instance_of") != std::string::npos ||
+        bodies.find("mj2x_llvm_exception_") != std::string::npos ||
+        bodies.find("mj2x_llvm_throw(") != std::string::npos ||
+        bodies.find("mj2x_llvm_string_const") != std::string::npos ||
+        bodies.find("mj2x_llvm_class_const") != std::string::npos) {
         full << emitObjectHelpers();
     }
     sourceCode_ = full.str();
