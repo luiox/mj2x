@@ -1815,7 +1815,7 @@ constexpr int64_t MonitorExit            = 218;
 constexpr int64_t Throw                 = 13;
 constexpr int64_t ExceptionOccurred     = 15;
 constexpr int64_t ExceptionClear        = 17;
-constexpr int64_t NewStringUTF          = 163;
+constexpr int64_t NewStringUTF          = 167;
 constexpr int64_t ExceptionCheck        = 228;
 }   // namespace jni_slot
 
