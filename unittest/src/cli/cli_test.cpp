@@ -2139,6 +2139,12 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
                "  public static int compute(int x) {\n"
                "    return helper(x, 2) ^ (x >> 2);\n"
                "  }\n"
+               "  public static int divide(int a, int b) { return a / b; }\n"
+               "  public static int remainder(int a, int b) { return a % b; }\n"
+               "  public static long factorial(int n) {\n"
+               "    return n <= 1 ? 1 : n * factorial(n - 1);\n"
+               "  }\n"
+               "  public static int f2i(float f) { return (int) f; }\n"
                "}\n";
     }
     {
@@ -2148,7 +2154,16 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
                "  public static void main(String[] args) {\n"
                "    String dll = System.getenv(\"MORPHER_DLL\");\n"
                "    if (dll != null) System.load(dll);\n"
-               "    System.out.print(CliLlvm.score(5) + \"-\" + CliLlvm.compute(10));\n"
+               "    System.out.print(CliLlvm.score(5) + \"-\" + CliLlvm.compute(10) + \"-\"\n"
+               "        + CliLlvm.divide(100, 7) + \"-\" + CliLlvm.remainder(100, 7) + \"-\"\n"
+               "        + CliLlvm.factorial(10) + \"-\" + CliLlvm.f2i(1.5e10f) + \"-\"\n"
+               "        + CliLlvm.f2i(Float.NaN) + \"-\");\n"
+               "    try {\n"
+               "      CliLlvm.divide(1, 0);\n"
+               "      System.out.print(\"no-ex\");\n"
+               "    } catch (ArithmeticException e) {\n"
+               "      System.out.print(\"ae\");\n"
+               "    }\n"
                "  }\n"
                "}\n";
     }
@@ -2158,7 +2173,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
     ASSERT_EQ(result.exitCode, 0) << result.out;
     result = runScript({q(java) + " -Xverify:all -cp " + q(inputDir) + " Driver"});
     ASSERT_EQ(result.exitCode, 0) << result.out;
-    EXPECT_EQ(result.out, "17-83");
+    EXPECT_EQ(result.out, "17-83-14-2-3628800-2147483647-0-ae");
 
     for (const char* llvmTool : {"clang", "llc"}) {
         const fs::path outputDir = workDir / llvmTool;
@@ -2181,6 +2196,13 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
                   std::string::npos)
             << llvm;
         EXPECT_NE(llvm.find("shl i32"), std::string::npos) << llvm;
+        EXPECT_NE(llvm.find("udiv i32"), std::string::npos) << llvm;
+        EXPECT_NE(llvm.find("call void @mj2x_llvm_throw_arith(ptr %env)"), std::string::npos)
+            << llvm;
+        EXPECT_NE(llvm.find("call i32 @llvm.fptosi.sat.i32.f32"), std::string::npos) << llvm;
+        EXPECT_NE(llvm.find("call i64 @mj2x_llvm_Java_CliLlvm_factorial__I"),
+                  std::string::npos)
+            << llvm;
 
         fs::copy_file(inputDir / "Driver.class", outputDir / "Driver.class",
                       fs::copy_options::overwrite_existing, ec);
@@ -2194,7 +2216,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
         nativeRun.push_back(q(java) + " -Xverify:all -cp " + q(outputDir) + " Driver");
         result = runScript(nativeRun);
         ASSERT_EQ(result.exitCode, 0) << result.out;
-        EXPECT_EQ(result.out, "17-83");
+        EXPECT_EQ(result.out, "17-83-14-2-3628800-2147483647-0-ae");
     }
 }
 

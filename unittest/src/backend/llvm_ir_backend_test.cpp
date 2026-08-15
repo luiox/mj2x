@@ -58,7 +58,7 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
-    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_add__II(i32 %p0, i32 %p1)"),
+    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_add__II(ptr %env, i32 %p0, i32 %p1)"),
               std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("define dllexport i32 @Java_Test_add__II(ptr %env, ptr %clazz, i32 %p0, i32 %p1)"),
@@ -133,47 +133,24 @@ TEST(LlvmIrBackendTest, KeepsEffectfulAndThrowingMethodsBytecode)
                                    },
                                    2,
                                    0);
-    auto divideMethod = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                                   "divides",
-                                   "(II)I",
-                                   {
-                                       new VarInsnNode(Opcodes::ILOAD, 0),
-                                       new VarInsnNode(Opcodes::ILOAD, 1),
-                                       new InsnNode(Opcodes::IDIV),
-                                       new InsnNode(Opcodes::IRETURN),
-                                   },
-                                   2,
-                                   2);
 
     CompilerMethod objectCompilerMethod;
     objectCompilerMethod.methodNode = objectMethod.get();
-    CompilerMethod divideCompilerMethod;
-    divideCompilerMethod.methodNode = divideMethod.get();
     CompilerClass compilerClass;
     compilerClass.methods.push_back(objectCompilerMethod);
-    compilerClass.methods.push_back(divideCompilerMethod);
 
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            objectConverter(arena);
-    CodeConverter            divideConverter(arena);
     auto objectResult = backend.compileMethod(
         "Test", compilerClass.methods[0], objectConverter.convert(*objectMethod));
-    auto divideResult = backend.compileMethod(
-        "Test", compilerClass.methods[1], divideConverter.convert(*divideMethod));
 
     ASSERT_EQ(objectResult.kind, BackendResult::Kind::NONE);
     EXPECT_NE(objectResult.text.find("rejects"), std::string::npos) << objectResult.text;
-    ASSERT_EQ(divideResult.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(divideResult.text.find("observable effects"), std::string::npos)
-        << divideResult.text;
 
     backend.injectIntoClass(compilerClass, compilerClass.methods[0], objectResult);
-    backend.injectIntoClass(compilerClass, compilerClass.methods[1], divideResult);
     EXPECT_FALSE(objectMethod->access & Opcodes::ACC_NATIVE);
-    EXPECT_FALSE(divideMethod->access & Opcodes::ACC_NATIVE);
     EXPECT_GT(objectMethod->instructions.size(), 0);
-    EXPECT_GT(divideMethod->instructions.size(), 0);
     EXPECT_FALSE(compilerClass.modified);
 }
 
@@ -287,10 +264,10 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
-    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_caller__II(i32 %p0, i32 %p1)"),
+    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_caller__II(ptr %env, i32 %p0, i32 %p1)"),
               std::string::npos)
         << result.text;
-    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_add__II(i32 %v0, i32 %v1)"),
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_add__II(ptr %env, i32 %v0, i32 %v1)"),
               std::string::npos)
         << result.text;
 }
@@ -336,9 +313,9 @@ TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
     EXPECT_NE(result.text.find("rejects"), std::string::npos) << result.text;
 }
 
-TEST(LlvmIrBackendTest, KeepsBytecodeForCrossClassRecursiveAndIndexlessCalls)
+TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
 {
-    // 跨类调用。
+    // 跨类调用：目标类不在编译索引 → fail-closed。
     auto crossClass = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "cross", "()I",
         {new MethodInsnNode(Opcodes::INVOKESTATIC,
@@ -348,21 +325,10 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForCrossClassRecursiveAndIndexlessCalls)
                             false),
          new InsnNode(Opcodes::IRETURN)},
         1, 0);
-    // 自递归调用。
-    auto recursive = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "recursive", "()I",
-        {new MethodInsnNode(Opcodes::INVOKESTATIC,
-                            ca::str::ZUtf8StringRef::from_static("Test"),
-                            ca::str::ZUtf8StringRef::from_static("recursive"),
-                            ca::str::ZUtf8StringRef::from_static("()I"),
-                            false),
-         new InsnNode(Opcodes::IRETURN)},
-        1, 0);
 
     CompilerIndex index;
     CompilerClass clazz;
     clazz.methods.push_back(CompilerMethod{crossClass.get(), true, false, {}});
-    clazz.methods.push_back(CompilerMethod{recursive.get(), true, false, {}});
     index.addClass("Test", std::move(clazz));
 
     LlvmIrBackend backend;
@@ -389,14 +355,108 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForCrossClassRecursiveAndIndexlessCalls)
     EXPECT_NE(indexlessResult.text.find("compiler index"), std::string::npos)
         << indexlessResult.text;
 
-    // 跨类 / 递归 / 实例调用（带 index）→ fail-closed。
+    // 跨类（带 index，目标类缺失）→ fail-closed。
     auto crossResult = backend.compileMethod("Test", index.getClass("Test")->methods[0],
                                              converter.convert(*crossClass), &index);
     EXPECT_EQ(crossResult.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(crossResult.text.find("intra-class"), std::string::npos) << crossResult.text;
+    EXPECT_NE(crossResult.text.find("not in the compilation index"), std::string::npos)
+        << crossResult.text;
+}
 
-    auto recursiveResult = backend.compileMethod("Test", index.getClass("Test")->methods[1],
-                                                 converter.convert(*recursive), &index);
-    EXPECT_EQ(recursiveResult.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(recursiveResult.text.find("recursive"), std::string::npos) << recursiveResult.text;
+TEST(LlvmIrBackendTest, EmitsRecursiveStaticCall)
+{
+    // 自递归调用：符号确定性生成，直接递归可转换（发射形态验证）。
+    auto recursive = makeMethod(
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "recursive", "()I",
+        {new MethodInsnNode(Opcodes::INVOKESTATIC,
+                            ca::str::ZUtf8StringRef::from_static("Test"),
+                            ca::str::ZUtf8StringRef::from_static("recursive"),
+                            ca::str::ZUtf8StringRef::from_static("()I"),
+                            false),
+         new InsnNode(Opcodes::IRETURN)},
+        1, 0);
+
+    CompilerIndex index;
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{recursive.get(), true, false, {}});
+    index.addClass("Test", std::move(clazz));
+
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto blocks = converter.convert(*recursive);
+    auto result = backend.compileMethod("Test", index.getClass("Test")->methods[0], blocks, &index);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_recursive(ptr %env)"),
+              std::string::npos)
+        << result.text;
+}
+
+/// @brief 编译单个静态方法（无 index；不涉及调用时可用）。
+BackendResult compileScalar(const char* name, const char* desc,
+                            std::initializer_list<AbstractInsnNode*> insns, int maxStack,
+                            int maxLocals)
+{
+    auto          method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns,
+                                      maxStack, maxLocals);
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto blocks = converter.convert(*method);
+    return backend.compileMethod("Test", clazz.methods[0], blocks);
+}
+
+TEST(LlvmIrBackendTest, EmitsIntegerDivisionWithZeroCheck)
+{
+    // (int a, int b) -> a / b：udiv（位模式等价、无 INT_MIN/-1 溢出 poison）
+    // + 除零检查 → 共享 throw-arithmetic helper。
+    auto result = compileScalar("divide", "(II)I",
+                                {new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1), new InsnNode(Opcodes::IDIV),
+                                 new InsnNode(Opcodes::IRETURN)},
+                                2, 2);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("icmp eq i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("udiv i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("call void @mj2x_llvm_throw_arith(ptr %env)"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("ret i32 0"), std::string::npos) << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsIntegerRemainderWithZeroCheck)
+{
+    // (long a, long b) -> a % b：urem + 除零检查。
+    auto result = compileScalar("remainder", "(JJ)J",
+                                {new VarInsnNode(Opcodes::LLOAD, 0),
+                                 new VarInsnNode(Opcodes::LLOAD, 2), new InsnNode(Opcodes::LREM),
+                                 new InsnNode(Opcodes::LRETURN)},
+                                4, 4);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("icmp eq i64"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("urem i64"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("ret i64 0"), std::string::npos) << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsSaturatingFloatToIntConversion)
+{
+    // f2i：llvm.fptosi.sat（NaN→0、溢出饱和 = Java 语义）。
+    auto f2i = compileScalar("f2i", "(F)I",
+                             {new VarInsnNode(Opcodes::FLOAD, 0), new InsnNode(Opcodes::F2I),
+                              new InsnNode(Opcodes::IRETURN)},
+                             1, 1);
+    ASSERT_EQ(f2i.kind, BackendResult::Kind::C_SOURCE) << f2i.text;
+    EXPECT_NE(f2i.text.find("call i32 @llvm.fptosi.sat.i32.f32(float"), std::string::npos)
+        << f2i.text;
+
+    // d2l：llvm.fptosi.sat.i64.f64。
+    auto d2l = compileScalar("d2l", "(D)J",
+                             {new VarInsnNode(Opcodes::DLOAD, 0), new InsnNode(Opcodes::D2L),
+                              new InsnNode(Opcodes::LRETURN)},
+                             2, 2);
+    ASSERT_EQ(d2l.kind, BackendResult::Kind::C_SOURCE) << d2l.text;
+    EXPECT_NE(d2l.text.find("call i64 @llvm.fptosi.sat.i64.f64(double"), std::string::npos)
+        << d2l.text;
 }
