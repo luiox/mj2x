@@ -121,6 +121,26 @@ constexpr LlvmWrapperUnboxEntry kUnboxEntries[] = {
      "declare i16 @mj2x_char_char_value(%mj2x_char)"},
 };
 
+/// @brief Random 状态机切片：%mj2x_random = { i64 }（crt mj2x_random 为
+/// uint64_t seed；标准 Java LCG：seed = (seed ^ 0x5DEECE66D) & ((1<<48)-1)，
+/// next(bits) 返回 seed >> (48-bits)，与 java.util.Random 逐位一致）。
+constexpr LlvmRandomEntry kRandomEntries[] = {
+    {"java/util/Random", "<init>", "(J)V", "mj2x_random_init", "void",
+     "declare void @mj2x_random_init(ptr, i64)"},
+    {"java/util/Random", "nextInt", "()I", "mj2x_random_next_int", "i32",
+     "declare i32 @mj2x_random_next_int(ptr)"},
+    {"java/util/Random", "nextInt", "(I)I", "mj2x_random_next_int_bound", "i32",
+     "declare i32 @mj2x_random_next_int_bound(ptr, i32)"},
+    {"java/util/Random", "nextLong", "()J", "mj2x_random_next_long", "i64",
+     "declare i64 @mj2x_random_next_long(ptr)"},
+    {"java/util/Random", "nextBoolean", "()Z", "mj2x_random_next_boolean", "i8",
+     "declare i8 @mj2x_random_next_boolean(ptr)"},
+    {"java/util/Random", "nextFloat", "()F", "mj2x_random_next_float", "float",
+     "declare float @mj2x_random_next_float(ptr)"},
+    {"java/util/Random", "nextDouble", "()D", "mj2x_random_next_double", "double",
+     "declare double @mj2x_random_next_double(ptr)"},
+};
+
 }   // namespace
 
 const LlvmIntrinsicEntry* matchLlvmIntrinsic(ca::str::Utf8StringRef owner,
@@ -154,6 +174,31 @@ const LlvmWrapperUnboxEntry* matchLlvmWrapperUnbox(ca::str::Utf8StringRef owner,
                                                    ca::str::Utf8StringRef desc)
 {
     for (const auto& entry : kUnboxEntries) {
+        if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
+            sameText(desc, entry.desc)) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+const LlvmRandomEntry* matchLlvmRandomInit(ca::str::Utf8StringRef owner,
+                                           ca::str::Utf8StringRef name,
+                                           ca::str::Utf8StringRef desc)
+{
+    if (sameText(owner, "java/util/Random") && sameText(name, "<init>") &&
+        sameText(desc, "(J)V")) {
+        return &kRandomEntries[0];
+    }
+    return nullptr;
+}
+
+const LlvmRandomEntry* matchLlvmRandomMethod(ca::str::Utf8StringRef owner,
+                                             ca::str::Utf8StringRef name,
+                                             ca::str::Utf8StringRef desc)
+{
+    for (size_t index = 1; index < sizeof(kRandomEntries) / sizeof(kRandomEntries[0]); ++index) {
+        const auto& entry = kRandomEntries[index];
         if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
             sameText(desc, entry.desc)) {
             return &entry;

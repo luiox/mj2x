@@ -2,6 +2,8 @@
 /// @brief LLVM IR 后端验证层：RegIR → 寄存器类型表（fail-closed 检查）。
 #include "llvm_ir_internal.hpp"
 
+#include "libca/log/log_macros.hpp"
+
 #include <type_traits>
 #include <variant>
 

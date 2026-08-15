@@ -1015,6 +1015,75 @@ TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
     EXPECT_EQ(escape.text.find("alloca %mj2x_int"), std::string::npos) << escape.text;
 }
 
+TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
+{
+    // Random 状态机切片：非逃逸 new Random(seed).nextInt(bound) 全链直调
+    // mj2x-crt（0 JNI；RegC 同 face 为 inert——Allocate+<init> 融合 NewObjectA
+    // 绕过 registry）。无参 <init> 与逃逸根回退 JNI。
+    LlvmIrBackend backend;
+    auto initOnly = compileWithBackend(
+        backend, "make", "()V",
+        {new TypeInsnNode(Opcodes::NEW,
+                          ca::str::Utf8StringRef::from_cstr("java/util/Random")),
+         new InsnNode(Opcodes::DUP),
+         new LdcInsnNode(static_cast<int64_t>(42)),
+         new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                            ca::str::ZUtf8StringRef::from_static("java/util/Random"),
+                            ca::str::ZUtf8StringRef::from_static("<init>"),
+                            ca::str::ZUtf8StringRef::from_static("(J)V"), false),
+         new InsnNode(Opcodes::POP), new InsnNode(Opcodes::RETURN)},
+        2, 0);
+    ASSERT_EQ(initOnly.kind, BackendResult::Kind::C_SOURCE) << initOnly.text;
+    EXPECT_NE(initOnly.text.find("alloca %mj2x_random"), std::string::npos) << initOnly.text;
+    EXPECT_NE(initOnly.text.find("call void @mj2x_random_init(ptr %slot_r"),
+              std::string::npos)
+        << initOnly.text;
+
+    LlvmIrBackend backend2;
+    auto result = compileWithBackend(
+        backend2, "rand", "(I)I",
+        {new TypeInsnNode(Opcodes::NEW,
+                          ca::str::Utf8StringRef::from_cstr("java/util/Random")),
+         new InsnNode(Opcodes::DUP),
+         new LdcInsnNode(static_cast<int64_t>(42)),
+         new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                            ca::str::ZUtf8StringRef::from_static("java/util/Random"),
+                            ca::str::ZUtf8StringRef::from_static("<init>"),
+                            ca::str::ZUtf8StringRef::from_static("(J)V"), false),
+         new VarInsnNode(Opcodes::ILOAD, 0),
+         new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                            ca::str::ZUtf8StringRef::from_static("java/util/Random"),
+                            ca::str::ZUtf8StringRef::from_static("nextInt"),
+                            ca::str::ZUtf8StringRef::from_static("(I)I"), false),
+         new InsnNode(Opcodes::IRETURN)},
+        2, 1);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_random_next_int_bound(ptr %slot_r"),
+              std::string::npos)
+        << result.text;
+    // 0 JNI：无 NewObject、无 CallIntMethodA。
+    EXPECT_EQ(result.text.find("mj2x_llvm_new_object"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("mj2x_llvm_call_int"), std::string::npos) << result.text;
+
+    // 逃逸根（Random 作为返回值）→ 整根回退 JNI（NewObject 物化真对象）。
+    LlvmIrBackend escapeBackend;
+    auto escape = compileWithBackend(
+        escapeBackend, "make", "()Ljava/util/Random;",
+        {new TypeInsnNode(Opcodes::NEW,
+                          ca::str::Utf8StringRef::from_cstr("java/util/Random")),
+         new InsnNode(Opcodes::DUP),
+         new LdcInsnNode(static_cast<int64_t>(1)),
+         new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                            ca::str::ZUtf8StringRef::from_static("java/util/Random"),
+                            ca::str::ZUtf8StringRef::from_static("<init>"),
+                            ca::str::ZUtf8StringRef::from_static("(J)V"), false),
+         new InsnNode(Opcodes::ARETURN)},
+        2, 0);
+    ASSERT_EQ(escape.kind, BackendResult::Kind::C_SOURCE) << escape.text;
+    EXPECT_NE(escape.text.find("mj2x_llvm_new_object"), std::string::npos) << escape.text;
+    EXPECT_EQ(escape.text.find("alloca %mj2x_random"), std::string::npos) << escape.text;
+}
+
 TEST(LlvmIrBackendTest, EmitsMbaTransformedAddition)
 {
     LlvmIrBackend backend;

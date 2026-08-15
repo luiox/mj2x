@@ -49,6 +49,13 @@ public:
         // 包装类 shadow 逃逸分析（valueOf 结果仅被匹配拆箱使用时才直调 mj2x-crt
         // 值结构；任何逃逸 → 整根回退 JNI，语义对齐 RegC regc_intrinsics.cpp）。
         analyzeWrapperShadows();
+        // Random 状态机结构定义（模块级；槽分配在其后）。
+        for (const auto& [id, type] : nativeSlots_) {
+            if (type == "%mj2x_random") {
+                runtimeDeclares_.push_back("%mj2x_random = type { i64 }");
+                break;
+            }
+        }
         for (const auto& [id, type] : registerTypes_) {
             out_ << "  %slot_r" << id << " = alloca " << slotLlvmType(id) << "\n";
         }
@@ -116,9 +123,9 @@ private:
         return it == registerTypes_.end() ? nullptr : llvmType(it->second);
     }
 
-    /// @brief 包装类 shadow 逃逸分析（对齐 RegC regc_intrinsics.cpp）：
-    /// valueOf 结果寄存器经 Copy（指令内 + 后继边 + 异常边）联通为根；任何
-    /// 非匹配拆箱的使用（运算/比较/字段/数组/调用实参/返回/抛出/分支）→
+    /// @brief native 对象逃逸分析（对齐 RegC regc_intrinsics.cpp）：包装类
+    /// valueOf 结果与 Random 分配寄存器经 Copy（指令内 + 后继边 + 异常边）联通
+    /// 为根；任何非匹配使用（运算/比较/字段/数组/调用实参/返回/抛出/分支）→
     /// 整根回退 JNI。回退根的所有寄存器保持普通 REF 槽。
     void analyzeWrapperShadows()
     {
@@ -193,15 +200,35 @@ private:
             }
         }
 
+        // 2b) Random 状态机：new java/util/Random（Allocate）→ 根；无参
+        // <init> 不匹配（时钟/seedUniquifier 不确定）→ 回退 JNI。
+        std::set<uint32_t> randomRoots;
+        for (const auto& block : function_.blocks) {
+            for (const auto& ins : block->instructions) {
+                if (ins.kind == RegInstructionKind::Allocate &&
+                    ins.allocationKind == SSAAllocationKind::Object &&
+                    ins.typeDesc == "java/util/Random") {
+                    randomRoots.insert(find(ins.dest.id.value));
+                }
+            }
+        }
+
         // 3) 使用扫描：非匹配拆箱/任何其他使用 → 根回退。
         auto isBoxRoot = [&](const RegOperand& operand, uint32_t& root) {
             if (operand.kind != RegOperandKind::Register) return false;
             root = find(operand.reg.value);
             return boxRoots.count(root) != 0;
         };
+        auto isRandomRoot = [&](const RegOperand& operand, uint32_t& root) {
+            if (operand.kind != RegOperandKind::Register) return false;
+            root = find(operand.reg.value);
+            return randomRoots.count(root) != 0;
+        };
         auto fallback = [&](const RegOperand& operand) {
             uint32_t root = 0;
-            if (isBoxRoot(operand, root)) fallbackRoots.insert(root);
+            if (isBoxRoot(operand, root) || isRandomRoot(operand, root)) {
+                fallbackRoots.insert(root);
+            }
         };
         auto fallbackAll = [&](const std::vector<RegOperand>& operands, size_t first) {
             for (size_t index = first; index < operands.size(); ++index) {
@@ -240,6 +267,15 @@ private:
                 {
                     const LlvmWrapperUnboxEntry* unbox = matchLlvmWrapperUnbox(
                         ins.method.owner, ins.method.name, ins.method.desc);
+                    const LlvmRandomEntry* random =
+                        ins.args.empty()
+                            ? nullptr
+                            : (matchLlvmRandomInit(ins.method.owner, ins.method.name,
+                                                   ins.method.desc) != nullptr
+                                   ? matchLlvmRandomInit(ins.method.owner, ins.method.name,
+                                                         ins.method.desc)
+                                   : matchLlvmRandomMethod(ins.method.owner, ins.method.name,
+                                                           ins.method.desc));
                     if (unbox != nullptr && !ins.args.empty()) {
                         uint32_t root = 0;
                         if (isBoxRoot(ins.args[0], root) &&
@@ -248,6 +284,18 @@ private:
                             fallbackRoots.insert(root);
                         }
                         fallbackAll(ins.args, 1);
+                    }
+                    else if (random != nullptr && !ins.args.empty()) {
+                        // Random <init>(J)V / nextXxx：receiver 为原生根即安全
+                        // （种子/参数若是原生根 → 回退该根）；无参 <init> 不匹配
+                        // → fallbackAll(0) 回退 receiver 根。
+                        uint32_t root = 0;
+                        if (isRandomRoot(ins.args[0], root)) {
+                            fallbackAll(ins.args, 1);
+                        }
+                        else {
+                            fallbackAll(ins.args, 0);
+                        }
                     }
                     else {
                         fallbackAll(ins.args, 0);
@@ -275,13 +323,18 @@ private:
                 block->terminator);
         }
 
-        // 4) native 寄存器：根在 boxRoots 且未回退 → shadow 结构槽。
+        // 4) native 寄存器：根在 boxRoots/randomRoots 且未回退 → shadow 结构槽。
         for (const auto& [id, type] : registerTypes_) {
             if (type != SSAType::REF) continue;
             const uint32_t root = find(id);
-            const auto     it   = boxRoots.find(root);
-            if (it != boxRoots.end() && fallbackRoots.count(root) == 0) {
-                nativeSlots_[id] = it->second->shadowType;
+            if (fallbackRoots.count(root) != 0) continue;
+            const auto boxIt  = boxRoots.find(root);
+            const auto randIt = randomRoots.find(root);
+            if (boxIt != boxRoots.end()) {
+                nativeSlots_[id] = boxIt->second->shadowType;
+            }
+            else if (randIt != randomRoots.end()) {
+                nativeSlots_[id] = "%mj2x_random";
             }
         }
     }
@@ -555,6 +608,42 @@ private:
                     }
                     return emitStore(instruction.dest, result, reason);
                 }
+                // Random 状态机：<init>(J)V 种子初始化 / nextXxx 直调（receiver
+                // 即 %mj2x_random 槽指针；nextBoolean 的 i8 结果 zext 到 i32）。
+                const LlvmRandomEntry* random =
+                    matchLlvmRandomInit(instruction.method.owner, instruction.method.name,
+                                        instruction.method.desc) != nullptr
+                        ? matchLlvmRandomInit(instruction.method.owner,
+                                              instruction.method.name,
+                                              instruction.method.desc)
+                        : matchLlvmRandomMethod(instruction.method.owner,
+                                                instruction.method.name,
+                                                instruction.method.desc);
+                if (random != nullptr) {
+                    runtimeDeclares_.push_back(random->declareText);
+                    std::string callArgs = "ptr " + slotName(instruction.args[0].reg);
+                    for (size_t index = 1; index < instruction.args.size(); ++index) {
+                        std::string argument;
+                        if (!emitOperand(instruction.args[index], argument, reason)) {
+                            return false;
+                        }
+                        callArgs += ", " + std::string(llvmTypeWide(instruction.args[index].type)) +
+                                    " " + argument;
+                    }
+                    if (random->retLlvm[0] == 'v') {   // "void"
+                        out_ << "  call void @" << random->symbol << "(" << callArgs << ")\n";
+                        return true;
+                    }
+                    const std::string result = nextTemporary();
+                    out_ << "  " << result << " = call " << random->retLlvm << " @"
+                         << random->symbol << "(" << callArgs << ")\n";
+                    if (std::string_view(random->retLlvm) == "i8") {
+                        const std::string widened = nextTemporary();
+                        out_ << "  " << widened << " = zext i8 " << result << " to i32\n";
+                        return emitStore(instruction.dest, widened, reason);
+                    }
+                    return emitStore(instruction.dest, result, reason);
+                }
             }
             // JDK 纯函数 intrinsic（Math 切片）：直调 mj2x-crt 符号（0 JNI、
             // 不抛异常无 ExceptionCheck；对齐 RegC RuntimeFunction 语义）。
@@ -816,6 +905,11 @@ private:
         if (instruction.kind == RegInstructionKind::Allocate) {
             const std::string typeDesc = instruction.typeDesc.to_std_string();
             if (instruction.allocationKind == SSAAllocationKind::Object) {
+                // Random 原生切片：非逃逸 new Random 的对象槽即 %mj2x_random
+                // 状态（Allocate 无操作；<init>(J)V 处 mj2x_random_init）。
+                if (nativeSlots_.count(instruction.dest.id.value) != 0) {
+                    return true;
+                }
                 const std::string result = nextTemporary();
                 out_ << "  " << result << " = call ptr @mj2x_llvm_new_object(ptr %env, ptr "
                      << strings_.intern(typeDesc) << ")\n";

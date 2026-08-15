@@ -38,8 +38,13 @@ public class LlvmTinySample {
         return Integer.valueOf(a).intValue() + Short.valueOf((short) b).shortValue();
     }
 
+    public static int randInt(int seed, int bound) {
+        return new java.util.Random(seed).nextInt(bound);
+    }
+
     public static String check() {
         return "addMul=" + addMul(2, 5) + " loopSum=" + loopSum(10) + " maxOf=" + maxOf(3, 9)
-            + " pick=" + pick(-4) + " absDiff=" + absDiff(3, 11) + " wrapSum=" + wrapSum(5, 2);
+            + " pick=" + pick(-4) + " absDiff=" + absDiff(3, 11) + " wrapSum=" + wrapSum(5, 2)
+            + " randInt=" + randInt(13, 50);
     }
 }

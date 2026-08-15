@@ -325,6 +325,10 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 "call i16 @mj2x_short_short_value",
                 "%mj2x_short = type { i16 }",
                 "declare %mj2x_short @mj2x_short_value_of(i16)",
+                // Random 状态机直调（结构类型 + nextInt(bound)）。
+                "%mj2x_random = type { i64 }",
+                "call void @mj2x_random_init(ptr %slot_r",
+                "call i32 @mj2x_random_next_int_bound(ptr %slot_r",
             },
         },
         {
@@ -356,7 +360,8 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
     for (const auto& sample : samples) {
         generateAndRunSample(sample,
                              sample.className == "LlvmTinySample"
-                                 ? "addMul=21 loopSum=45 maxOf=9 pick=4 absDiff=8 wrapSum=7"
+                                 ? "addMul=21 loopSum=45 maxOf=9 pick=4 absDiff=8 wrapSum=7 "
+                                   "randInt=42"
                                  : sample.className == "LlvmIndySurfaceSample"
                                        ? "[k]=7 slice=5 types=true"
                                        : "catch0=7 catch10=10 caught locked=10");

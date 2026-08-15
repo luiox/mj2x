@@ -66,4 +66,30 @@ const LlvmWrapperUnboxEntry* matchLlvmWrapperUnbox(ca::str::Utf8StringRef owner,
                                                    ca::str::Utf8StringRef name,
                                                    ca::str::Utf8StringRef desc);
 
+/// @brief Random 状态机条目（shadow 结构 %mj2x_random，指针状态直调）。
+///
+/// @details RegC 同 face 为 inert（Allocate+<init> 融合成 NewObjectA 绕过
+/// registry，方法体从不直调）；LLVM 实现真切片（对齐先例：indy 运行时解析）。
+struct LlvmRandomEntry
+{
+    const char* owner;       // "java/util/Random"
+    const char* name;        // "nextInt" / "<init>"
+    const char* desc;        // "(I)I" / "(J)V"
+    const char* symbol;      // "mj2x_random_next_int_bound" / "mj2x_random_init"
+    const char* retLlvm;     // "i32"（void 为 "void"）
+    const char* declareText; // "declare i32 @mj2x_random_next_int_bound(ptr, i32)"
+};
+
+/// @brief 查找 Random <init>(J)V（带种子构造；无参构造保持 JNI——JVM 语义
+/// 依赖时钟/seedUniquifier，不确定）。
+const LlvmRandomEntry* matchLlvmRandomInit(ca::str::Utf8StringRef owner,
+                                           ca::str::Utf8StringRef name,
+                                           ca::str::Utf8StringRef desc);
+
+/// @brief 查找 Random 方法（nextInt/nextInt(I)/nextLong/nextBoolean/nextFloat/
+/// nextDouble）。
+const LlvmRandomEntry* matchLlvmRandomMethod(ca::str::Utf8StringRef owner,
+                                             ca::str::Utf8StringRef name,
+                                             ca::str::Utf8StringRef desc);
+
 }   // namespace mj2x
