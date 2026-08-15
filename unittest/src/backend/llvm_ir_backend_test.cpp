@@ -1084,6 +1084,95 @@ TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
     EXPECT_EQ(escape.text.find("alloca %mj2x_random"), std::string::npos) << escape.text;
 }
 
+TEST(LlvmIrBackendTest, EmitsStringBuilderStateMachineDirectCalls)
+{
+    // StringBuilder 状态机切片：非逃逸 new StringBuilder + append(String/I) +
+    // toString 全链直调 crt（状态 = 堆分配 mj2x_string_builder*；每次调用
+    // 检查 mj2x_regc_status，非 0 → pending exception 默认返回）。
+    LlvmIrBackend backend;
+    auto result = compileWithBackend(
+        backend, "build", "(I)Ljava/lang/String;",
+        {new TypeInsnNode(Opcodes::NEW,
+                          ca::str::Utf8StringRef::from_cstr("java/lang/StringBuilder")),
+         new InsnNode(Opcodes::DUP),
+         new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/StringBuilder"),
+                            ca::str::ZUtf8StringRef::from_static("<init>"),
+                            ca::str::ZUtf8StringRef::from_static("()V"), false),
+         new LdcInsnNode(std::string("a=")),
+         new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/StringBuilder"),
+                            ca::str::ZUtf8StringRef::from_static("append"),
+                            ca::str::ZUtf8StringRef::from_static(
+                                "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
+                            false),
+         new VarInsnNode(Opcodes::ILOAD, 0),
+         new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/StringBuilder"),
+                            ca::str::ZUtf8StringRef::from_static("append"),
+                            ca::str::ZUtf8StringRef::from_static("(I)Ljava/lang/StringBuilder;"),
+                            false),
+         new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/StringBuilder"),
+                            ca::str::ZUtf8StringRef::from_static("toString"),
+                            ca::str::ZUtf8StringRef::from_static("()Ljava/lang/String;"), false),
+         new InsnNode(Opcodes::ARETURN)},
+        3, 1);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // 上下文前导 + 全链直调 + 状态检查。
+    EXPECT_NE(result.text.find("call void @mj2x_regc_init_context(ptr %mj2x_llvm_ctx"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_string_builder_init(ptr %mj2x_llvm_ctx, ptr %slot_r"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_string_builder_append_jstring"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_string_builder_append_i32"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_string_builder_materialize"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("icmp eq i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("b_sbok_"), std::string::npos) << result.text;
+    // 0 JNI：无 NewObject、无 CallObjectMethodA。
+    EXPECT_EQ(result.text.find("mj2x_llvm_new_object"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("mj2x_llvm_call_object"), std::string::npos) << result.text;
+
+    // 模块级：上下文类型 + crt 函数声明（finalize 输出）。
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& ll = backend.generatedSource();
+    EXPECT_NE(ll.find("%mj2x_regc_context = type { ptr, ptr }"), std::string::npos) << ll;
+    EXPECT_NE(ll.find("declare void @mj2x_regc_init_context(ptr, ptr, ptr)"),
+              std::string::npos)
+        << ll;
+    EXPECT_NE(ll.find("declare void @mj2x_regc_throw_exception(ptr, ptr, ptr)"),
+              std::string::npos)
+        << ll;
+    EXPECT_NE(ll.find("declare i32 @mj2x_string_builder_append_i32(ptr, ptr, i32)"),
+              std::string::npos)
+        << ll;
+
+    // 逃逸根（builder 作为返回值）→ 整根回退 JNI（NewObject 物化真对象）。
+    LlvmIrBackend escapeBackend;
+    auto escape = compileWithBackend(
+        escapeBackend, "make", "()Ljava/lang/StringBuilder;",
+        {new TypeInsnNode(Opcodes::NEW,
+                          ca::str::Utf8StringRef::from_cstr("java/lang/StringBuilder")),
+         new InsnNode(Opcodes::DUP),
+         new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                            ca::str::ZUtf8StringRef::from_static("java/lang/StringBuilder"),
+                            ca::str::ZUtf8StringRef::from_static("<init>"),
+                            ca::str::ZUtf8StringRef::from_static("()V"), false),
+         new InsnNode(Opcodes::ARETURN)},
+        2, 0);
+    ASSERT_EQ(escape.kind, BackendResult::Kind::C_SOURCE) << escape.text;
+    EXPECT_NE(escape.text.find("mj2x_llvm_new_object"), std::string::npos) << escape.text;
+    EXPECT_EQ(escape.text.find("mj2x_string_builder_init"), std::string::npos) << escape.text;
+}
+
 TEST(LlvmIrBackendTest, EmitsMbaTransformedAddition)
 {
     LlvmIrBackend backend;

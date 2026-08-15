@@ -54,17 +54,22 @@
   参数装箱、返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点保字节码）。
   验证：`CliTest.LlvmIndyCustomBootstrapE2E`（plain / runtime-protection fake /
   regc-obfuscate 三变体，输出 7-42-11）+ `LlvmIrBackendTest.EmitsIndyRuntimeResolution`。
-- **intrinsic 扩面对齐 RegC** 🟡（Math 纯函数 + 包装类 + Random 完成）：`java.lang.Math`
-  全纯函数面直调 mj2x-crt runtime 符号（abs/min/max I/J/F/D、sin/cos/tan/sqrt/
-  floor/ceil/pow、round、random；0 JNI、无 ExceptionCheck，declare 模块级输出，
-  链接侧并入 mj2x-crt 源）；**包装类 valueOf/xxxValue 非逃逸切片**（Integer/Long/
-  Short/Byte/Float/Double/Boolean/Character——shadow 结构 `%mj2x_int` 等 + 窄装箱
-  trunc / 窄拆箱 sext/zext，逃逸根经 copy 联通分析回退 JNI，对齐 RegC
-  regc_intrinsics.cpp）；**Random 状态机切片**（非逃逸 new Random(seed) + nextInt/
-  nextLong/nextBoolean/nextFloat/nextDouble 直调——RegC 同 face 为 inert，Allocate+
-  <init> 融合 NewObjectA 绕过 registry；无参构造保持 JNI）。String/StringBuilder
-  等 RegC-only intrinsic 面 LLVM 保持 JNI 分派（native 对象/escape 机制留待整类
-  下沉 F）。
+- **intrinsic 扩面对齐 RegC** 🟡（Math 纯函数 + 包装类 + Random + StringBuilder
+  完成）：`java.lang.Math` 全纯函数面直调 mj2x-crt runtime 符号（abs/min/max
+  I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random；0 JNI、无
+  ExceptionCheck，declare 模块级输出，链接侧并入 mj2x-crt 源）；**包装类
+  valueOf/xxxValue 非逃逸切片**（Integer/Long/Short/Byte/Float/Double/Boolean/
+  Character——shadow 结构 `%mj2x_int` 等 + 窄装箱 trunc / 窄拆箱 sext/zext，
+  逃逸根经 copy 联通分析回退 JNI，对齐 RegC regc_intrinsics.cpp）；**Random
+  状态机切片**（非逃逸 new Random(seed) + nextXxx 直调——RegC 同 face 为 inert；
+  无参构造保持 JNI）；**StringBuilder/StringBuffer 状态机切片**（非逃逸
+  new Builder + init()V/(I)V/(String)V/(CharSequence)V + append 全 13 面 +
+  toString/length/capacity/charAt/ensureCapacity/setLength/setCharAt/
+  appendCodePoint——函数级 `%mj2x_regc_context` 前导（init_context +
+  throw_exception 回调）+ 每次调用 mj2x_regc_status 检查（非 0 → 异常分发/
+  默认返回），状态为 crt 堆分配 `mj2x_string_builder*`）。String 类面
+  （length/charAt/substring/equals 等 RegC-only）保持 JNI 分派，留待整类
+  下沉 F。
 - **保护特性接入** ✅：`--runtime-protection` 支持 llvm——每方法入口注入
   `%mj2x_rt_checkpoint`（模块级全局 + `mj2x_rt_checkpoint_run` 调用，crt
   `mj2x_rt_protect.c` 在 link/工程层追加；FAKE 动作走默认返回路径）。
@@ -94,6 +99,13 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-21（round-2 收尾·补 intrinsic 4）：**StringBuilder/StringBuffer 状态机
+  切片**——非逃逸 builder 全链直调 crt（init 四面 + append 十三面 +
+  toString/length/capacity/charAt/ensureCapacity/setLength/setCharAt/
+  appendCodePoint；函数级 `%mj2x_regc_context` 前导 + 每次调用 mj2x_regc_status
+  检查；append 结果与 receiver 联通；修复 init 的 out_state 参数顺序
+  （crt 签名 (context, args..., out_state**)，曾把槽放参数前导致写穿 jstring））。
+  验证：E2E 与 JVM 逐位一致 `b=7,...,d=3.2` + `len=7`。
 - 2026-08-21（round-2 收尾·补 intrinsic 3）：**Random 状态机切片**——非逃逸
   `new Random(seed)` + nextInt/nextInt(bound)/nextLong/nextBoolean/nextFloat/
   nextDouble 直调 mj2x-crt（`%mj2x_random = { i64 }` 指针状态；标准 Java LCG，
