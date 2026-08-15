@@ -355,6 +355,13 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
         }
         return true;
     case RegInstructionKind::Intrinsic:
+        // 与发射端一致的按名过滤：array.length / instanceof:<desc> 放行；
+        // monitor.enter/exit 等在实现前保持 fail-closed。
+        if (instruction.intrinsicName != "array.length" &&
+            instruction.intrinsicName.rfind("instanceof:", 0) != 0) {
+            reason = "LLVM IR first slice rejects this intrinsic";
+            return false;
+        }
         if (instruction.hasDest && !recordValue(types, instruction.dest, reason)) return false;
         for (const auto& arg : instruction.args) {
             if (!recordOperand(types, arg, reason)) return false;
@@ -364,31 +371,41 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
         reason = "LLVM IR first slice rejects object, JNI, memory and monitor operations";
         return false;
     case RegInstructionKind::Call:
-        if (resolver == nullptr) {
-            reason = "LLVM IR static calls require a compiler index";
-            return false;
-        }
         {
-            CallTarget target;
-            if (!resolver->resolve(instruction.method, target, reason)) return false;
+            // 参数/返回类型按方法描述符解析；实例调用 args[0] 为 receiver。
+            // 同模块 direct call 判定仅在 resolver 可用时进行（JNI 路径不依赖）。
+            const std::string              desc = instruction.method.desc.to_std_string();
+            const std::vector<PrimitiveKind> argKinds = argumentKinds(desc);
+            const size_t receiverOffset =
+                instruction.method.invokeOpcode == Opcodes::INVOKESTATIC ? 0 : 1;
+            if (instruction.args.size() != argKinds.size() + receiverOffset) {
+                reason = "LLVM IR call argument count does not match the target descriptor";
+                return false;
+            }
             if (instruction.hasDest) {
                 if (!recordValue(types, instruction.dest, reason)) return false;
-                if (instruction.dest.type != target.returnType) {
+                const SSAType expected = widenNarrowType(primitiveToSsaType(returnKind(desc)));
+                if (widenNarrowType(instruction.dest.type) != expected) {
                     reason = "LLVM IR call result type does not match the target descriptor";
                     return false;
                 }
             }
-            else if (target.returnType != SSAType::VOID) {
+            else if (returnKind(desc) != PrimitiveKind::VOID) {
                 reason = "LLVM IR call discards a non-void result";
                 return false;
             }
-            if (instruction.args.size() != target.argTypes.size()) {
-                reason = "LLVM IR call argument count does not match the target descriptor";
-                return false;
+            if (receiverOffset == 1) {
+                if (!recordOperand(types, instruction.args[0], reason)) return false;
+                if (instruction.args[0].type != SSAType::REF) {
+                    reason = "LLVM IR instance call receiver must be a reference";
+                    return false;
+                }
             }
-            for (size_t index = 0; index < instruction.args.size(); ++index) {
-                if (!recordOperand(types, instruction.args[index], reason)) return false;
-                if (instruction.args[index].type != target.argTypes[index]) {
+            for (size_t index = 0; index < argKinds.size(); ++index) {
+                const auto& arg = instruction.args[index + receiverOffset];
+                if (!recordOperand(types, arg, reason)) return false;
+                if (widenNarrowType(arg.type) !=
+                    widenNarrowType(primitiveToSsaType(argKinds[index]))) {
                     reason = "LLVM IR call argument type does not match the target descriptor";
                     return false;
                 }
@@ -497,6 +514,24 @@ const char* arrayKindFor(SSAType elementType)
     case SSAType::F32: return "float";
     case SSAType::F64: return "double";
     case SSAType::REF: return "ref";
+    default: return nullptr;
+    }
+}
+
+/// @brief 方法返回类型 → JNI 调用 helper 后缀（CallXxxMethodA 分派）。
+const char* callKindFor(PrimitiveKind kind)
+{
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN: return "bool";
+    case PrimitiveKind::BYTE: return "byte";
+    case PrimitiveKind::CHAR: return "char";
+    case PrimitiveKind::SHORT: return "short";
+    case PrimitiveKind::INT: return "int";
+    case PrimitiveKind::LONG: return "long";
+    case PrimitiveKind::FLOAT: return "float";
+    case PrimitiveKind::DOUBLE: return "double";
+    case PrimitiveKind::OBJECT: return "object";
+    case PrimitiveKind::VOID: return "void";
     default: return nullptr;
     }
 }
@@ -801,25 +836,85 @@ private:
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Call) {
+            // 同模块内已转换的 invokestatic → 直接调用（0 JNI，保持确定性）；
+            // 其余（实例调用、外部类、未转换目标）→ JNI CallXxxMethodA 分派。
             CallTarget target;
-            if (resolver_ == nullptr || !resolver_->resolve(instruction.method, target, reason)) {
-                reason = "LLVM IR call target was not validated before emission";
+            const bool direct =
+                instruction.method.invokeOpcode == Opcodes::INVOKESTATIC && resolver_ != nullptr &&
+                resolver_->resolve(instruction.method, target, reason);
+            if (direct) {
+                // helper 首参为 JNIEnv*（%env），后续为 Java 参数。
+                std::string args = "ptr %env";
+                for (size_t index = 0; index < instruction.args.size(); ++index) {
+                    std::string expression;
+                    if (!emitOperand(instruction.args[index], expression, reason)) return false;
+                    args += ", " + std::string(llvmType(target.argTypes[index])) + " " + expression;
+                }
+                if (target.returnType == SSAType::VOID) {
+                    out_ << "  call void @" << target.symbol << "(" << args << ")\n";
+                    return true;
+                }
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call " << llvmType(target.returnType) << " @"
+                     << target.symbol << "(" << args << ")\n";
+                return emitStore(instruction.dest, result, reason);
+            }
+            // JNI 分派：jvalue 数组（[N x { i64 }] union 槽）承载全部参数。
+            const std::string              desc       = instruction.method.desc.to_std_string();
+            const PrimitiveKind            retKind    = returnKind(desc);
+            const char*                    callKind   = callKindFor(retKind);
+            const char*                    mode       =
+                instruction.method.invokeOpcode == Opcodes::INVOKESTATIC
+                    ? "call_static_"
+                    : (instruction.method.invokeOpcode == Opcodes::INVOKESPECIAL
+                           ? "call_nonvirtual_"
+                           : "call_");
+            const size_t                   receiverOffset =
+                instruction.method.invokeOpcode == Opcodes::INVOKESTATIC ? 0 : 1;
+            if (callKind == nullptr) {
+                reason = "LLVM IR call has an unsupported return type";
                 return false;
             }
-            // helper 首参为 JNIEnv*（%env），后续为 Java 参数。
-            std::string args = "ptr %env";
-            for (size_t index = 0; index < instruction.args.size(); ++index) {
+            const std::string jv = nextTemporary();
+            out_ << "  " << jv << " = alloca [" << (instruction.args.size() - receiverOffset)
+                 << " x { i64 }]\n";
+            // jvalue 数组只承载方法描述符参数（实例调用的 receiver 单独传）。
+            for (size_t index = receiverOffset; index < instruction.args.size(); ++index) {
                 std::string expression;
                 if (!emitOperand(instruction.args[index], expression, reason)) return false;
-                args += ", " + std::string(llvmType(target.argTypes[index])) + " " + expression;
+                const std::string slot = nextTemporary();
+                out_ << "  " << slot << " = getelementptr ["
+                     << (instruction.args.size() - receiverOffset) << " x { i64 }], ptr " << jv
+                     << ", i64 0, i64 " << (index - receiverOffset) << "\n";
+                const SSAType argType = widenNarrowType(instruction.args[index].type);
+                out_ << "  store " << llvmType(argType) << " " << expression << ", ptr " << slot
+                     << "\n";
             }
-            if (target.returnType == SSAType::VOID) {
-                out_ << "  call void @" << target.symbol << "(" << args << ")\n";
+            std::string callArgs = "ptr %env";
+            if (receiverOffset == 1) {
+                std::string receiver;
+                if (!emitOperand(instruction.args[0], receiver, reason)) return false;
+                callArgs += ", ptr " + receiver;
+            }
+            callArgs += ", ptr " + strings_.intern(instruction.method.owner.to_std_string()) +
+                        ", ptr " + strings_.intern(instruction.method.name.to_std_string()) +
+                        ", ptr " + strings_.intern(desc) + ", ptr " + jv;
+            if (retKind == PrimitiveKind::VOID) {
+                out_ << "  call void @mj2x_llvm_" << mode << callKind << "(" << callArgs << ")\n";
                 return true;
             }
             const std::string result = nextTemporary();
-            out_ << "  " << result << " = call " << llvmType(target.returnType) << " @"
-                 << target.symbol << "(" << args << ")\n";
+            const char*       boundaryRet = jniBoundaryType(retKind);
+            out_ << "  " << result << " = call " << boundaryRet << " @mj2x_llvm_" << mode
+                 << callKind << "(" << callArgs << ")\n";
+            if (std::string(boundaryRet) == "i8" || std::string(boundaryRet) == "i16") {
+                const bool  signed_ = retKind == PrimitiveKind::BYTE ||
+                                     retKind == PrimitiveKind::SHORT;
+                const std::string ext = nextTemporary();
+                out_ << "  " << ext << " = " << (signed_ ? "sext" : "zext") << " "
+                     << boundaryRet << " " << result << " to i32\n";
+                return emitStore(instruction.dest, ext, reason);
+            }
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Compare) {
@@ -1154,10 +1249,8 @@ private:
 
 bool supportsMethodDescriptor(const MethodNode& method, SSAType& resultType, std::string& reason)
 {
-    if ((method.access & Opcodes::ACC_STATIC) == 0) {
-        reason = "LLVM IR first slice supports static methods only";
-        return false;
-    }
+    // 实例方法自 Phase 4 起支持：this 为 SSA 参数 0（REF），wrapper 第二参为
+    // jobject this；实例内调用经 JNI 分派（CallXxxMethodA）。
     const std::string descriptor = method.desc.to_std_string();
     resultType = primitiveToSsaType(returnKind(descriptor));
     if (resultType == SSAType::UNKNOWN) {
@@ -1314,7 +1407,7 @@ const char* calcArgType(PrimitiveKind kind)
 }
 
 std::string emitJniWrapper(const std::string& className, const MethodNode& method,
-                           const std::string& helper, SSAType /*returnType*/)
+                           const std::string& helper, SSAType /*returnType*/, bool isStatic)
 {
     const std::string             descriptor = method.desc.to_std_string();
     const std::vector<PrimitiveKind> arguments = argumentKinds(descriptor);
@@ -1322,8 +1415,10 @@ std::string emitJniWrapper(const std::string& className, const MethodNode& metho
     const char*                  boundaryRet = jniBoundaryType(retKind);
     const char*                  calcRet    = llvmType(primitiveToSsaType(retKind));
     std::ostringstream           out;
+    // JNI native 签名：静态方法第二参为 jclass；实例方法为 jobject this。
     out << "define dllexport " << boundaryRet << " @"
-        << mangleMethod(className, method.name.to_std_string(), descriptor) << "(ptr %env, ptr %clazz";
+        << mangleMethod(className, method.name.to_std_string(), descriptor) << "(ptr %env, ptr "
+        << (isStatic ? "%clazz" : "%this");
     for (size_t index = 0; index < arguments.size(); ++index) {
         out << ", " << jniBoundaryType(arguments[index]) << " %p" << index;
     }
@@ -1345,6 +1440,10 @@ std::string emitJniWrapper(const std::string& className, const MethodNode& metho
     }
     else {
         out << "  %result = call " << calcRet << " @" << helper << "(ptr %env";
+    }
+    if (!isStatic) {
+        // 实例方法：this 是 SSA 参数 0（REF），直接透传。
+        out << ", ptr %this";
     }
     for (size_t index = 0; index < arguments.size(); ++index) {
         const std::string btype = jniBoundaryType(arguments[index]);
@@ -1404,7 +1503,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
                              className,
                              method.methodNode->name.to_std_string(),
                              method.methodNode->desc.to_std_string(),
-                             true,
+                             (method.methodNode->access & Opcodes::ACC_STATIC) != 0,
                              method.methodNode->maxLocals,
                              ssaArena,
                              reason);
@@ -1441,7 +1540,10 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     }
 
     result.kind = BackendResult::Kind::C_SOURCE;
-    result.text = helperSource + emitJniWrapper(className, *method.methodNode, helper, resultType);
+    result.text = helperSource +
+                  emitJniWrapper(className, *method.methodNode, helper, resultType,
+                                 (method.methodNode->access & jbytecode::core::Opcodes::ACC_STATIC) !=
+                                     0);
     impl_->bodies << result.text;
     return result;
 }
@@ -1484,7 +1586,10 @@ namespace jni_slot {
 constexpr int64_t FindClass           = 6;
 constexpr int64_t ThrowNew            = 14;
 constexpr int64_t AllocObject         = 27;
+constexpr int64_t GetObjectClass      = 31;
 constexpr int64_t IsInstanceOf        = 32;
+constexpr int64_t GetMethodID         = 33;
+constexpr int64_t GetStaticMethodID   = 113;
 constexpr int64_t GetFieldID          = 94;
 constexpr int64_t GetStaticFieldID    = 144;
 constexpr int64_t GetBooleanField     = 96;
@@ -1740,7 +1845,7 @@ std::string emitObjectHelpers()
             << "  br i1 %isnull, label %npe, label %inst_ok\n"
             << "inst_ok:\n"
             << "  %ft1 = load ptr, ptr %env\n"
-            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << k.getSlot << "\n"
+            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetFieldID << "\n"
             << "  %getfid = load ptr, ptr %gf1\n"
             << "  %fid = call ptr %getfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
             << "  %ft2 = load ptr, ptr %env\n"
@@ -1790,7 +1895,7 @@ std::string emitObjectHelpers()
             << "  br i1 %isnull, label %npe, label %inst_ok\n"
             << "inst_ok:\n"
             << "  %ft1 = load ptr, ptr %env\n"
-            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << k.getSlot << "\n"
+            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetFieldID << "\n"
             << "  %getfid = load ptr, ptr %gf1\n"
             << "  %fid = call ptr %getfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
             << "  %ft2 = load ptr, ptr %env\n"
@@ -2002,6 +2107,112 @@ std::string emitObjectHelpers()
            "  ret i32 0\n"
            "}\n\n";
 
+    // JNI 方法调用 helper：CallXxxMethodA（jvalue 数组）。
+    // virtual/interface → Call<Type>MethodA；special → CallNonvirtual<Type>MethodA
+    // （GetObjectClass + 显式类，用于 <init>/private/super）；static 外部 →
+    // CallStatic<Type>MethodA。null receiver（实例）抛 NPE。
+    struct CallKindInfo
+    {
+        const char* kind;
+        int64_t     callSlot;       // Call*MethodA
+        int64_t     nonvirtualSlot; // CallNonvirtual*MethodA
+        int64_t     staticSlot;     // CallStatic*MethodA
+        const char* boundary;       // JNI 返回类型
+    };
+    static const CallKindInfo callKinds[] = {
+        {"object", 36, 66, 116, "ptr"},
+        {"bool", 39, 69, 119, "i8"},
+        {"byte", 42, 72, 122, "i8"},
+        {"char", 45, 75, 125, "i16"},
+        {"short", 48, 78, 128, "i16"},
+        {"int", 51, 81, 131, "i32"},
+        {"long", 54, 84, 134, "i64"},
+        {"float", 57, 87, 137, "float"},
+        {"double", 60, 90, 140, "double"},
+        {"void", 63, 93, 143, "void"},
+    };
+    for (const auto& k : callKinds) {
+        // virtual / interface。
+        out << "define internal " << k.boundary << " @mj2x_llvm_call_" << k.kind
+            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, ptr %jv) {\n"
+            << "entry:\n"
+            << "  %isnull = icmp eq ptr %rcv, null\n"
+            << "  br i1 %isnull, label %npe, label %ok\n"
+            << "ok:\n"
+            << "  %ft0 = load ptr, ptr %env\n"
+            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+            << "  %find = load ptr, ptr %fc0\n"
+            << "  %cls = call ptr %find(ptr %env, ptr %owner)\n"
+            << "  %ft1 = load ptr, ptr %env\n"
+            << "  %gm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetMethodID << "\n"
+            << "  %getmid = load ptr, ptr %gm0\n"
+            << "  %mid = call ptr %getmid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
+            << "  %ft2 = load ptr, ptr %env\n"
+            << "  %ca0 = getelementptr ptr, ptr %ft2, i64 " << k.callSlot << "\n"
+            << "  %call = load ptr, ptr %ca0\n"
+            << (std::string(k.boundary) == "void" ? "  " : "  %r = ")
+            << "call " << k.boundary << " (ptr, ptr, ptr, ptr) %call(ptr %env, ptr %rcv, "
+               "ptr %mid, ptr %jv)\n"
+            << (std::string(k.boundary) == "void" ? "  ret void\n"
+                                                  : "  ret " + std::string(k.boundary) + " %r\n")
+            << "npe:\n"
+            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
+            << (std::string(k.boundary) == "void"
+                    ? "  ret void\n"
+                    : "  ret " + std::string(k.boundary) + " " + zeroFor(k.boundary) + "\n")
+            << "}\n\n";
+        // special（invokespecial：<init>/private/super）。
+        out << "define internal " << k.boundary << " @mj2x_llvm_call_nonvirtual_" << k.kind
+            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, ptr %jv) {\n"
+            << "entry:\n"
+            << "  %isnull = icmp eq ptr %rcv, null\n"
+            << "  br i1 %isnull, label %npe, label %ok\n"
+            << "ok:\n"
+            << "  %ft0 = load ptr, ptr %env\n"
+            << "  %gc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::GetObjectClass << "\n"
+            << "  %getcls = load ptr, ptr %gc0\n"
+            << "  %rcls = call ptr %getcls(ptr %env, ptr %rcv)\n"
+            << "  %ft1 = load ptr, ptr %env\n"
+            << "  %gm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetMethodID << "\n"
+            << "  %getmid = load ptr, ptr %gm0\n"
+            << "  %mid = call ptr %getmid(ptr %env, ptr %rcls, ptr %name, ptr %desc)\n"
+            << "  %ft2 = load ptr, ptr %env\n"
+            << "  %ca0 = getelementptr ptr, ptr %ft2, i64 " << k.nonvirtualSlot << "\n"
+            << "  %call = load ptr, ptr %ca0\n"
+            << (std::string(k.boundary) == "void" ? "  " : "  %r = ")
+            << "call " << k.boundary
+            << " (ptr, ptr, ptr, ptr, ptr) %call(ptr %env, ptr %rcv, ptr %rcls, ptr %mid, ptr %jv)\n"
+            << (std::string(k.boundary) == "void" ? "  ret void\n"
+                                                  : "  ret " + std::string(k.boundary) + " %r\n")
+            << "npe:\n"
+            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
+            << (std::string(k.boundary) == "void"
+                    ? "  ret void\n"
+                    : "  ret " + std::string(k.boundary) + " " + zeroFor(k.boundary) + "\n")
+            << "}\n\n";
+        // static（外部类）。
+        out << "define internal " << k.boundary << " @mj2x_llvm_call_static_" << k.kind
+            << "(ptr %env, ptr %owner, ptr %name, ptr %desc, ptr %jv) {\n"
+            << "entry:\n"
+            << "  %ft0 = load ptr, ptr %env\n"
+            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
+            << "  %find = load ptr, ptr %fc0\n"
+            << "  %cls = call ptr %find(ptr %env, ptr %owner)\n"
+            << "  %ft1 = load ptr, ptr %env\n"
+            << "  %gm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetStaticMethodID << "\n"
+            << "  %getmid = load ptr, ptr %gm0\n"
+            << "  %mid = call ptr %getmid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
+            << "  %ft2 = load ptr, ptr %env\n"
+            << "  %ca0 = getelementptr ptr, ptr %ft2, i64 " << k.staticSlot << "\n"
+            << "  %call = load ptr, ptr %ca0\n"
+            << (std::string(k.boundary) == "void" ? "  " : "  %r = ")
+            << "call " << k.boundary
+            << " (ptr, ptr, ptr, ptr) %call(ptr %env, ptr %cls, ptr %mid, ptr %jv)\n"
+            << (std::string(k.boundary) == "void" ? "  ret void\n"
+                                                  : "  ret " + std::string(k.boundary) + " %r\n")
+            << "}\n\n";
+    }
+
     // check_cast：IsInstanceOf == 0 → 挂起 ClassCastException；返回原引用。
     out << "define internal ptr @mj2x_llvm_check_cast(ptr %env, ptr %obj, ptr %desc) {\n"
            "entry:\n"
@@ -2060,6 +2271,7 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
         bodies.find("mj2x_llvm_array_load_") != std::string::npos ||
         bodies.find("mj2x_llvm_array_store_") != std::string::npos ||
         bodies.find("mj2x_llvm_array_length") != std::string::npos ||
+        bodies.find("mj2x_llvm_call_") != std::string::npos ||
         bodies.find("mj2x_llvm_new_object") != std::string::npos ||
         bodies.find("mj2x_llvm_new_array") != std::string::npos ||
         bodies.find("mj2x_llvm_new_multi_array") != std::string::npos ||
