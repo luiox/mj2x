@@ -50,6 +50,20 @@ bool isSupportedValueType(SSAType type)
     return llvmType(type) != nullptr && type != SSAType::VOID;
 }
 
+/// @brief JVM 窄类型统一为 i32 计算位宽（boolean/byte/short/char 栈语义）。
+SSAType widenNarrowType(SSAType type)
+{
+    return (type == SSAType::BOOL || type == SSAType::I8 || type == SSAType::I16 ||
+            type == SSAType::CHAR)
+               ? SSAType::I32
+               : type;
+}
+
+const char* llvmTypeWide(SSAType type)
+{
+    return llvmType(widenNarrowType(type));
+}
+
 bool hasObservableEffect(const SSAEffect& effect)
 {
     return effect.mayThrow || effect.readsMemory || effect.writesMemory ||
@@ -76,7 +90,11 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
 SSAType primitiveToSsaType(PrimitiveKind kind)
 {
     switch (kind) {
-    case PrimitiveKind::INT: return SSAType::I32;
+    case PrimitiveKind::BOOLEAN:
+    case PrimitiveKind::BYTE:
+    case PrimitiveKind::SHORT:
+    case PrimitiveKind::CHAR:
+    case PrimitiveKind::INT: return SSAType::I32;   // JVM 窄类型栈位宽 = int
     case PrimitiveKind::LONG: return SSAType::I64;
     case PrimitiveKind::FLOAT: return SSAType::F32;
     case PrimitiveKind::DOUBLE: return SSAType::F64;
@@ -85,14 +103,33 @@ SSAType primitiveToSsaType(PrimitiveKind kind)
     }
 }
 
+/// @brief JNI 边界类型（native 方法签名；窄类型为 jboolean/jbyte/jchar/jshort）。
+const char* jniBoundaryType(PrimitiveKind kind)
+{
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN:
+    case PrimitiveKind::BYTE: return "i8";
+    case PrimitiveKind::CHAR:
+    case PrimitiveKind::SHORT: return "i16";
+    case PrimitiveKind::INT: return "i32";
+    case PrimitiveKind::LONG: return "i64";
+    case PrimitiveKind::FLOAT: return "float";
+    case PrimitiveKind::DOUBLE: return "double";
+    case PrimitiveKind::VOID: return "void";
+    default: return nullptr;
+    }
+}
+
 bool recordValue(RegisterTypes& types, RegValue value, std::string& reason)
 {
+    value.type = widenNarrowType(value.type);
     if (!isSupportedValueType(value.type)) {
         reason = "LLVM IR only supports scalar i32/i64/f32/f64 values";
         return false;
     }
     const auto [it, inserted] = types.emplace(value.id.value, value.type);
-    if (!inserted && it->second != value.type) {
+    // 冲突检测按计算位宽：BOOL（i1 谓词槽）与 I32 视为同一计算类型。
+    if (!inserted && widenNarrowType(it->second) != value.type) {
         reason = "LLVM IR encountered a register with conflicting types";
         return false;
     }
@@ -105,7 +142,7 @@ bool recordOperand(RegisterTypes& types, const RegOperand& operand, std::string&
     case RegOperandKind::Register: return recordValue(types, RegValue{operand.reg, operand.type}, reason);
     case RegOperandKind::IntLiteral:
     case RegOperandKind::FloatLiteral:
-        if (!isSupportedValueType(operand.type)) {
+        if (!isSupportedValueType(widenNarrowType(operand.type))) {
             reason = "LLVM IR literal has an unsupported scalar type";
             return false;
         }
@@ -259,8 +296,10 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
             reason = "LLVM IR comparison result must be boolean";
             return false;
         }
-        return recordValue(types, instruction.dest, reason) &&
-               recordOperand(types, instruction.lhs, reason) &&
+        if (!recordValue(types, instruction.dest, reason)) return false;
+        // Compare 结果是 i1 谓词（分支条件），覆盖宽化后的 i32 槽类型。
+        types[instruction.dest.id.value] = SSAType::BOOL;
+        return recordOperand(types, instruction.lhs, reason) &&
                recordOperand(types, instruction.rhs, reason);
     case RegInstructionKind::Convert:
         if (instruction.convertKind != SSAConvertKind::Numeric) {
@@ -397,7 +436,7 @@ public:
 
         out_ << "define internal " << returnLlvmType << " @" << functionName_ << "(ptr %env";
         for (size_t index = 0; index < function_.parameters.size(); ++index) {
-            out_ << ", " << llvmType(function_.parameters[index].type) << " %p" << index;
+            out_ << ", " << llvmTypeWide(function_.parameters[index].type) << " %p" << index;
         }
         out_ << ") {\nentry:\n";
         for (const auto& [id, type] : registerTypes_) {
@@ -405,7 +444,7 @@ public:
         }
         for (size_t index = 0; index < function_.parameters.size(); ++index) {
             const auto& parameter = function_.parameters[index];
-            out_ << "  store " << llvmType(parameter.type) << " %p" << index << ", ptr %slot_r"
+            out_ << "  store " << llvmTypeWide(parameter.type) << " %p" << index << ", ptr %slot_r"
                  << parameter.id.value << "\n";
         }
         out_ << "  br label %b" << function_.entry->id.value << "\n\n";
@@ -433,17 +472,24 @@ private:
 
     bool emitOperand(const RegOperand& operand, std::string& expression, std::string& reason)
     {
-        const char* type = llvmType(operand.type);
-        if (type == nullptr) {
-            reason = "LLVM IR encountered an unsupported operand type";
-            return false;
-        }
         if (operand.kind == RegOperandKind::Register) {
+            // 槽类型是权威（窄参数宽化为 i32；Compare 结果为 i1 谓词）。
+            const auto it = registerTypes_.find(operand.reg.value);
+            const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
+            if (type == nullptr) {
+                reason = "LLVM IR encountered an unsupported operand type";
+                return false;
+            }
             const std::string temporary = nextTemporary();
             out_ << "  " << temporary << " = load " << type << ", ptr " << slotName(operand.reg)
                  << "\n";
             expression = temporary;
             return true;
+        }
+        const char* type = llvmTypeWide(operand.type);
+        if (type == nullptr) {
+            reason = "LLVM IR encountered an unsupported operand type";
+            return false;
         }
         if (operand.kind == RegOperandKind::IntLiteral) {
             expression = std::to_string(operand.intValue);
@@ -451,22 +497,37 @@ private:
             return true;
         }
         if (operand.kind == RegOperandKind::FloatLiteral) {
-            if (!std::isfinite(operand.floatValue) ||
-                (operand.floatValue == 0.0 && std::signbit(operand.floatValue))) {
-                reason = "LLVM IR first slice rejects NaN, infinity and negative-zero literals";
+            // NaN / ±Inf / -0.0 用 LLVM hex 字面量（十进制形式无法表示）；
+            // 正常值保持十进制 scientific。
+            const double value = operand.floatValue;
+            std::string  bits;
+            if (operand.type == SSAType::F32) {
+                if (std::isnan(value)) bits = "0x7FC00000";
+                else if (std::isinf(value)) bits = std::signbit(value) ? "0xFF800000" : "0x7F800000";
+                else if (value == 0.0 && std::signbit(value)) bits = "0x80000000";
+            }
+            else if (operand.type == SSAType::F64) {
+                if (std::isnan(value)) bits = "0x7FF8000000000000";
+                else if (std::isinf(value))
+                    bits = std::signbit(value) ? "0xFFF0000000000000" : "0x7FF0000000000000";
+                else if (value == 0.0 && std::signbit(value)) bits = "0x8000000000000000";
+            }
+            else {
+                reason = "LLVM IR floating literal has a non-floating type";
                 return false;
+            }
+            if (!bits.empty()) {
+                // 操作数位置不带类型前缀（LLVM 按指令上下文推断 float 类型）。
+                expression = bits;
+                return true;
             }
             std::ostringstream literal;
             literal << std::scientific << std::showpoint;
             if (operand.type == SSAType::F32) {
                 literal << std::setprecision(9) << static_cast<float>(operand.floatValue);
             }
-            else if (operand.type == SSAType::F64) {
-                literal << std::setprecision(17) << operand.floatValue;
-            }
             else {
-                reason = "LLVM IR floating literal has a non-floating type";
-                return false;
+                literal << std::setprecision(17) << operand.floatValue;
             }
             expression = literal.str();
             return true;
@@ -477,7 +538,9 @@ private:
 
     bool emitStore(RegValue destination, const std::string& expression, std::string& reason)
     {
-        const char* type = llvmType(destination.type);
+        // 槽类型是权威（窄结果 i32；Compare 结果 i1 谓词）。
+        const auto it = registerTypes_.find(destination.id.value);
+        const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
         if (type == nullptr) {
             reason = "LLVM IR destination has an unsupported type";
             return false;
@@ -523,7 +586,7 @@ private:
         }
         if (instruction.kind == RegInstructionKind::Unary) {
             if (!emitOperand(instruction.value, value, reason)) return false;
-            const char* type = llvmType(instruction.dest.type);
+            const char* type = llvmTypeWide(instruction.dest.type);
             const std::string result = nextTemporary();
             if (instruction.unaryOp == SSAUnaryOp::BitNot) {
                 out_ << "  " << result << " = xor " << type << " " << value << ", -1\n";
@@ -556,7 +619,7 @@ private:
                 const std::string divIndex = std::to_string(divIndex_++);
                 const std::string isZero   = nextTemporary();
                 const std::string result   = nextTemporary();
-                const char*       type     = llvmType(instruction.dest.type);
+                const char*       type     = llvmTypeWide(instruction.dest.type);
                 out_ << "  " << isZero << " = icmp eq " << type << " " << rhs << ", 0\n";
                 out_ << "  br i1 " << isZero << ", label %b_divz_" << divIndex
                      << ", label %b_divok_" << divIndex << "\n";
@@ -591,7 +654,7 @@ private:
                 return false;
             }
             const std::string result = nextTemporary();
-            out_ << "  " << result << " = " << opcode << " " << llvmType(instruction.dest.type)
+            out_ << "  " << result << " = " << opcode << " " << llvmTypeWide(instruction.dest.type)
                  << " " << lhs << ", " << rhs << "\n";
             return emitStore(instruction.dest, result, reason);
         }
@@ -635,13 +698,29 @@ private:
             }
             const std::string result = nextTemporary();
             out_ << "  " << result << " = " << (floating ? "fcmp " : "icmp ") << predicate
-                 << " " << llvmType(instruction.lhs.type) << " " << lhs << ", " << rhs << "\n";
+                 << " " << llvmTypeWide(instruction.lhs.type) << " " << lhs << ", " << rhs << "\n";
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Convert) {
             if (!emitOperand(instruction.value, value, reason)) return false;
-            const SSAType sourceType = instruction.value.type;
+            const SSAType sourceType = widenNarrowType(instruction.value.type);
             const SSAType targetType = instruction.targetType;
+            // i2b/i2s/i2c：目标为窄类型，trunc 后按符号/零扩展回 i32。
+            if (targetType == SSAType::I8 || targetType == SSAType::I16 ||
+                targetType == SSAType::CHAR) {
+                if (sourceType != SSAType::I32) {
+                    reason = "LLVM IR narrowing conversion requires an i32 source";
+                    return false;
+                }
+                const char*       narrow = targetType == SSAType::CHAR ? "i16" : "i8";
+                const std::string trunc  = nextTemporary();
+                const std::string ext    = nextTemporary();
+                const bool        signed_ = targetType != SSAType::CHAR;
+                out_ << "  " << trunc << " = trunc i32 " << value << " to " << narrow << "\n";
+                out_ << "  " << ext << " = " << (signed_ ? "sext" : "zext") << " " << narrow
+                     << " " << trunc << " to i32\n";
+                return emitStore(instruction.dest, ext, reason);
+            }
             if (!isSupportedValueType(targetType)) {
                 reason = "LLVM IR numeric conversion has an unsupported target type";
                 return false;
@@ -705,7 +784,7 @@ private:
                             return false;
                         }
                         const std::string normalized = nextTemporary();
-                        out_ << "  " << normalized << " = icmp ne " << llvmType(terminator.condition.type)
+                        out_ << "  " << normalized << " = icmp ne " << llvmTypeWide(terminator.condition.type)
                              << " " << condition << ", 0\n";
                         condition = normalized;
                     }
@@ -738,7 +817,8 @@ private:
                         out_ << "  ret void\n\n";
                         return true;
                     }
-                    if (!terminator.hasValue || terminator.value.type != returnType_) {
+                    if (!terminator.hasValue ||
+                        widenNarrowType(terminator.value.type) != returnType_) {
                         reason = "LLVM IR return type does not match method descriptor";
                         return false;
                     }
@@ -922,33 +1002,61 @@ bool InternalCallResolver::analyze(const std::string& owner, MethodNode& node, C
     return true;
 }
 
-std::string emitJniWrapper(const std::string& className, const MethodNode& method,
-                           const std::string& helper, SSAType returnType)
+/// @brief helper 参数类型：JVM 栈位宽（窄类型提升为 i32）。
+const char* calcArgType(PrimitiveKind kind)
 {
-    const std::string descriptor = method.desc.to_std_string();
-    const auto        arguments  = argumentKinds(descriptor);
-    std::ostringstream out;
-    out << "define dllexport " << llvmType(returnType) << " @"
+    return llvmType(primitiveToSsaType(kind));
+}
+
+std::string emitJniWrapper(const std::string& className, const MethodNode& method,
+                           const std::string& helper, SSAType /*returnType*/)
+{
+    const std::string             descriptor = method.desc.to_std_string();
+    const std::vector<PrimitiveKind> arguments = argumentKinds(descriptor);
+    const PrimitiveKind          retKind   = returnKind(descriptor);
+    const char*                  boundaryRet = jniBoundaryType(retKind);
+    const char*                  calcRet    = llvmType(primitiveToSsaType(retKind));
+    std::ostringstream           out;
+    out << "define dllexport " << boundaryRet << " @"
         << mangleMethod(className, method.name.to_std_string(), descriptor) << "(ptr %env, ptr %clazz";
     for (size_t index = 0; index < arguments.size(); ++index) {
-        out << ", " << llvmType(primitiveToSsaType(arguments[index])) << " %p" << index;
+        out << ", " << jniBoundaryType(arguments[index]) << " %p" << index;
     }
     out << ") {\nentry:\n";
-    if (returnType == SSAType::VOID) {
+    // 窄参数提升到 i32 计算位宽（byte/short 符号扩展，boolean/char 零扩展）。
+    for (size_t index = 0; index < arguments.size(); ++index) {
+        const PrimitiveKind kind  = arguments[index];
+        const std::string   btype = jniBoundaryType(kind);
+        if (btype == "i8" || btype == "i16") {
+            const std::string ext = (kind == PrimitiveKind::BYTE || kind == PrimitiveKind::SHORT)
+                                        ? "sext"
+                                        : "zext";
+            out << "  %w" << index << " = " << ext << " " << btype << " %p" << index
+                << " to i32\n";
+        }
+    }
+    if (retKind == PrimitiveKind::VOID) {
         out << "  call void @" << helper << "(ptr %env";
     }
     else {
-        out << "  %result = call " << llvmType(returnType) << " @" << helper << "(ptr %env";
+        out << "  %result = call " << calcRet << " @" << helper << "(ptr %env";
     }
     for (size_t index = 0; index < arguments.size(); ++index) {
-        out << ", " << llvmType(primitiveToSsaType(arguments[index])) << " %p" << index;
+        const std::string btype = jniBoundaryType(arguments[index]);
+        const bool        narrow = btype == "i8" || btype == "i16";
+        out << ", " << calcArgType(arguments[index]) << " "
+            << (narrow ? ("%w" + std::to_string(index)) : ("%p" + std::to_string(index)));
     }
     out << ")\n";
-    if (returnType == SSAType::VOID) {
+    if (retKind == PrimitiveKind::VOID) {
         out << "  ret void\n";
     }
+    else if (std::string(boundaryRet) == "i8" || std::string(boundaryRet) == "i16") {
+        out << "  %t = trunc i32 %result to " << boundaryRet << "\n";
+        out << "  ret " << boundaryRet << " %t\n";
+    }
     else {
-        out << "  ret " << llvmType(returnType) << " %result\n";
+        out << "  ret " << boundaryRet << " %result\n";
     }
     out << "}\n\n";
     return out.str();
