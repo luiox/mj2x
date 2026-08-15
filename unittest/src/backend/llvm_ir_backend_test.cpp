@@ -81,12 +81,13 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
 
 TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC,
-                             "instanceMethod",
-                             "()I",
+    // athrow（异常抛出）在异常实现前保持 fail-closed。
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "throws_",
+                             "(Ljava/lang/Throwable;)V",
                              {
-                                 new InsnNode(Opcodes::ICONST_1),
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new InsnNode(Opcodes::ATHROW),
                              },
                              1,
                              1);
@@ -103,7 +104,7 @@ TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(result.text.find("static methods only"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("rejects"), std::string::npos) << result.text;
 
     backend.injectIntoClass(compilerClass, compilerClass.methods[0], result);
     EXPECT_FALSE(method->access & Opcodes::ACC_NATIVE);
@@ -113,47 +114,36 @@ TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
 
 TEST(LlvmIrBackendTest, KeepsEffectfulAndThrowingMethodsBytecode)
 {
-    auto objectMethod = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                                   "allocates",
-                                   "()I",
-                                   {
-                                       new TypeInsnNode(
-                                           Opcodes::NEW,
-                                           ca::str::ZUtf8StringRef::from_static("java/lang/Object")),
-                                       new InsnNode(Opcodes::DUP),
-                                       new MethodInsnNode(
-                                           Opcodes::INVOKESPECIAL,
-                                           ca::str::ZUtf8StringRef::from_static("java/lang/Object"),
-                                           ca::str::ZUtf8StringRef::from_static("<init>"),
-                                           ca::str::ZUtf8StringRef::from_static("()V"),
-                                           false),
-                                       new InsnNode(Opcodes::POP),
-                                       new InsnNode(Opcodes::ICONST_1),
-                                       new InsnNode(Opcodes::IRETURN),
-                                   },
-                                   2,
-                                   0);
+    // monitorenter（Barrier）在 monitor 实现前保持 fail-closed。
+    auto monitorMethod = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                    "locked",
+                                    "(Ljava/lang/Object;)I",
+                                    {
+                                        new VarInsnNode(Opcodes::ALOAD, 0),
+                                        new InsnNode(Opcodes::MONITORENTER),
+                                        new InsnNode(Opcodes::ICONST_1),
+                                        new InsnNode(Opcodes::IRETURN),
+                                    },
+                                    2,
+                                    1);
 
-    CompilerMethod objectCompilerMethod;
-    objectCompilerMethod.methodNode = objectMethod.get();
+    CompilerMethod monitorCompilerMethod;
+    monitorCompilerMethod.methodNode = monitorMethod.get();
     CompilerClass compilerClass;
-    compilerClass.methods.push_back(objectCompilerMethod);
+    compilerClass.methods.push_back(monitorCompilerMethod);
 
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
-    CodeConverter            objectConverter(arena);
-    auto objectResult = backend.compileMethod(
-        "Test", compilerClass.methods[0], objectConverter.convert(*objectMethod));
+    CodeConverter            converter(arena);
+    auto monitorResult = backend.compileMethod(
+        "Test", compilerClass.methods[0], converter.convert(*monitorMethod));
 
-    ASSERT_EQ(objectResult.kind, BackendResult::Kind::NONE);
-    // NEW 已放行；invokespecial <init> 在实例调用实现前 fail-closed。
-    EXPECT_NE(objectResult.text.find("static calls require a compiler index"),
-              std::string::npos)
-        << objectResult.text;
+    ASSERT_EQ(monitorResult.kind, BackendResult::Kind::NONE);
+    EXPECT_NE(monitorResult.text.find("rejects"), std::string::npos) << monitorResult.text;
 
-    backend.injectIntoClass(compilerClass, compilerClass.methods[0], objectResult);
-    EXPECT_FALSE(objectMethod->access & Opcodes::ACC_NATIVE);
-    EXPECT_GT(objectMethod->instructions.size(), 0);
+    backend.injectIntoClass(compilerClass, compilerClass.methods[0], monitorResult);
+    EXPECT_FALSE(monitorMethod->access & Opcodes::ACC_NATIVE);
+    EXPECT_GT(monitorMethod->instructions.size(), 0);
     EXPECT_FALSE(compilerClass.modified);
 }
 
@@ -277,29 +267,23 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
 
 TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
 {
-    // caller 调 target，target 含对象分配 → target 不可转换 → caller fail-closed。
+    // caller 调 target，target 含 monitorenter（Barrier）→ target 不可转换 →
+    // caller fail-closed（调用方保持字节码）。
     std::unique_ptr<MethodNode> target;
     std::unique_ptr<MethodNode> caller;
-    target = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "target", "()I",
-                        {new TypeInsnNode(Opcodes::NEW,
-                                          ca::str::ZUtf8StringRef::from_static("java/lang/Object")),
-                         new InsnNode(Opcodes::DUP),
-                         new MethodInsnNode(Opcodes::INVOKESPECIAL,
-                                            ca::str::ZUtf8StringRef::from_static("java/lang/Object"),
-                                            ca::str::ZUtf8StringRef::from_static("<init>"),
-                                            ca::str::ZUtf8StringRef::from_static("()V"),
-                                            false),
-                         new InsnNode(Opcodes::POP), new InsnNode(Opcodes::ICONST_1),
-                         new InsnNode(Opcodes::IRETURN)},
-                        2, 0);
-    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "()I",
-                        {new MethodInsnNode(Opcodes::INVOKESTATIC,
+    target = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "target", "(Ljava/lang/Object;)I",
+                        {new VarInsnNode(Opcodes::ALOAD, 0), new InsnNode(Opcodes::MONITORENTER),
+                         new InsnNode(Opcodes::ICONST_1), new InsnNode(Opcodes::IRETURN)},
+                        2, 1);
+    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(Ljava/lang/Object;)I",
+                        {new VarInsnNode(Opcodes::ALOAD, 0),
+                         new MethodInsnNode(Opcodes::INVOKESTATIC,
                                             ca::str::ZUtf8StringRef::from_static("Test"),
                                             ca::str::ZUtf8StringRef::from_static("target"),
-                                            ca::str::ZUtf8StringRef::from_static("()I"),
+                                            ca::str::ZUtf8StringRef::from_static("(Ljava/lang/Object;)I"),
                                             false),
                          new InsnNode(Opcodes::IRETURN)},
-                        1, 0);
+                        2, 1);
     CompilerIndex index;
     CompilerClass clazz;
     clazz.methods.push_back(CompilerMethod{target.get(), true, false, {}});
@@ -312,10 +296,10 @@ TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
     auto                     blocks = converter.convert(*caller);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
-    // target 含 NEW/DUP/INVOKESPECIAL：NEW 已放行，invokespecial 在实例调用
-    // 实现前 fail-closed，调用方保持字节码。
-    EXPECT_NE(result.text.find("only supports static method calls"), std::string::npos)
+    // target 不可转换 → 调用方走 JNI call_static_* fallback（不再 fail-closed）。
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @"),
+              std::string::npos)
         << result.text;
 }
 
@@ -341,7 +325,8 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
 
-    // 无 index（单元测试直连路径）时的静态调用 → fail-closed。
+    // 无 index（单元测试直连路径）时的静态调用 → JNI call_static_* helper
+    // （自 Phase 4 起不需要编译索引）。
     auto indexless = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "indexless", "()I",
         {new MethodInsnNode(Opcodes::INVOKESTATIC,
@@ -357,15 +342,17 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
     auto          indexlessBlocks = converter.convert(*indexless);
     auto          indexlessResult =
         indexlessBackend.compileMethod("Test", indexlessClazz.methods[0], indexlessBlocks, nullptr);
-    ASSERT_EQ(indexlessResult.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(indexlessResult.text.find("compiler index"), std::string::npos)
+    ASSERT_EQ(indexlessResult.kind, BackendResult::Kind::C_SOURCE) << indexlessResult.text;
+    EXPECT_NE(indexlessResult.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @_mj2x_llvm_str_"),
+              std::string::npos)
         << indexlessResult.text;
 
-    // 跨类（带 index，目标类缺失）→ fail-closed。
+    // 跨类（带 index，目标类缺失）→ JNI call_static_* helper。
     auto crossResult = backend.compileMethod("Test", index.getClass("Test")->methods[0],
                                              converter.convert(*crossClass), &index);
-    EXPECT_EQ(crossResult.kind, BackendResult::Kind::NONE);
-    EXPECT_NE(crossResult.text.find("not in the compilation index"), std::string::npos)
+    ASSERT_EQ(crossResult.kind, BackendResult::Kind::C_SOURCE) << crossResult.text;
+    EXPECT_NE(crossResult.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @_mj2x_llvm_str_"),
+              std::string::npos)
         << crossResult.text;
 }
 
@@ -413,6 +400,62 @@ BackendResult compileScalar(const char* name, const char* desc,
     CodeConverter            converter(arena);
     auto blocks = converter.convert(*method);
     return backend.compileMethod("Test", clazz.methods[0], blocks);
+}
+
+TEST(LlvmIrBackendTest, EmitsJniInstanceAndExternalCalls)
+{
+    // 实例调用（invokevirtual String.length）→ jvalue 数组 + call_int helper；
+    // receiver 不进 jvalue；外部静态（Math.abs）→ call_static_int。
+    auto result = compileScalar("n", "(Ljava/lang/String;)I",
+                                {new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                    ca::str::Utf8StringRef::from_cstr("java/lang/String"),
+                                                    ca::str::Utf8StringRef::from_cstr("length"),
+                                                    ca::str::Utf8StringRef::from_cstr("()I"), false),
+                                 new InsnNode(Opcodes::IRETURN)},
+                                1, 1);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_call_int(ptr %env, ptr %"),
+              std::string::npos)
+        << result.text;
+
+    auto ext = compileScalar("abs", "(I)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("java/lang/Math"),
+                                                 ca::str::Utf8StringRef::from_cstr("abs"),
+                                                 ca::str::Utf8StringRef::from_cstr("(I)I"), false),
+                              new InsnNode(Opcodes::IRETURN)},
+                             1, 1);
+    ASSERT_EQ(ext.kind, BackendResult::Kind::C_SOURCE) << ext.text;
+    EXPECT_NE(ext.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @_mj2x_llvm_str_"),
+              std::string::npos)
+        << ext.text;
+    // 外部调用解析失败（无 index）不再 fail-closed：desc 类型检查放行。
+}
+
+TEST(LlvmIrBackendTest, EmitsInstanceWrapperThis)
+{
+    // 实例方法 wrapper 第二参为 %this（jobject），helper 透传 this 作为参数 0。
+    auto method = makeMethod(Opcodes::ACC_PUBLIC, "getX", "()I",
+                             {new InsnNode(Opcodes::ICONST_1), new InsnNode(Opcodes::IRETURN)}, 1, 1);
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    LlvmIrBackend backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto blocks = converter.convert(*method);
+    auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_getX(ptr %env, ptr %p0)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("define dllexport i32 @Java_Test_getX(ptr %env, ptr %this)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_getX(ptr %env, ptr %this)"),
+              std::string::npos)
+        << result.text;
 }
 
 TEST(LlvmIrBackendTest, EmitsIntegerDivisionWithZeroCheck)
