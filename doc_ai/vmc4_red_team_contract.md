@@ -92,7 +92,7 @@
 > strength_reconciliation 三条目，verdict 随实测联动）均完成。强度归零
 > 实测：不同 seed/参数样本静态全恢复、跨实例复用率 100%——按 §3 归零
 > 基准，VMC4 低风险档「跨实例可复用」已达，升级档 S2（period 语义变义）
-> 启动条件满足（mj2x dev_plan B 项已同步）。
+> 启动条件满足（mj2x dev_plan 待做 A 已同步）。
 
 - 对 VMC4 样本的自动化 ISA 还原工具（dispatcher 识别 + 字节集合枚举 + handler 语义标注）。
 - weakness report 按 §2 表逐维度产出，并带 §4.1 复用率数值。
