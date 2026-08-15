@@ -254,4 +254,74 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     return 0;
 }
 
+int generateLlvmXmakeProject(const std::string& projectDirValue,
+                             const std::string& llvmOutputPath)
+{
+    std::error_code ec;
+    const fs::path projectDir(projectDirValue);
+    if (projectDir.empty()) {
+        CA_LOGT_ERROR("compile", "xmake project directory is empty.\n");
+        return 1;
+    }
+    if (!fs::exists(llvmOutputPath, ec)) {
+        CA_LOGT_ERROR("compile", "emitted LLVM IR source does not exist: {}\n",
+                      llvmOutputPath.c_str());
+        return 1;
+    }
+
+    fs::create_directories(projectDir, ec);
+    if (ec) {
+        CA_LOGT_ERROR("compile", "cannot create xmake project: {}\n", ec.message().c_str());
+        return 1;
+    }
+
+    const fs::path nativeDest = projectDir / "native.ll";
+    auto           sourceAbs  = fs::absolute(llvmOutputPath, ec);
+    auto           nativeAbs  = fs::absolute(nativeDest, ec);
+    if (sourceAbs != nativeAbs) {
+        fs::copy_file(llvmOutputPath, nativeDest, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            CA_LOGT_ERROR("compile", "cannot copy emitted LLVM IR source: {}\n",
+                          ec.message().c_str());
+            return 1;
+        }
+    }
+
+    if (!writeText(projectDir / "xmake.lua",
+                   "target(\"mj2x_native\")\n"
+                   "    set_kind(\"shared\")\n"
+                   "    on_load(function (target)\n"
+                   "        target:set(\"kind\", \"phony\")\n"
+                   "    end)\n"
+                   "    after_build(function (target)\n"
+                   "        import(\"core.base.option\")\n"
+                   "        import(\"core.tool.compiler\")\n"
+                   "        local suffix = is_host(\"windows\") and \".dll\" or "
+                   "(is_host(\"macosx\") and \".dylib\" or \".so\")\n"
+                   "        local out = path.join(target:targetdir(), \"mj2x_native\" .. suffix)\n"
+                   "        os.mkdir(target:targetdir())\n"
+                   "        os.execv(\"clang\", {\"-shared\", path.join(os.scriptdir(), "
+                   "\"native.ll\"), \"-o\", out})\n"
+                   "    end)\n"
+                   "target_end()\n")) {
+        return 1;
+    }
+    if (!writeText(projectDir / "README.md",
+                   "# mj2x native xmake project (LLVM IR)\n\n"
+                   "Build:\n\n"
+                   "```sh\n"
+                   "xmake\n"
+                   "```\n\n"
+                   "Requires clang on PATH.\n")) {
+        return 1;
+    }
+    if (!writeText(projectDir / ".gitignore",
+                   "build/\n.xmake/\n*.obj\n*.o\n*.dll\n*.so\n*.dylib\n")) {
+        return 1;
+    }
+
+    CA_LOGT_INFO("compile", "xmake project written: {}\n", projectDir.string().c_str());
+    return 0;
+}
+
 }   // namespace mj2x::cli

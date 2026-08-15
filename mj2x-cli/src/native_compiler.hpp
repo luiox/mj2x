@@ -75,4 +75,11 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
                         LlvmTool tool);
 
+/// @brief 编译内存中的 LLVM IR 源码（--compile-mode pipe）。
+///
+/// `clang` 经 stdin（`-x ir -`）直接链接；`llc` 经 stdin 生成临时 object 再由
+/// clang 链接。失败时返回非 0。
+int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
+                          LlvmTool tool);
+
 }   // namespace mj2x::cli

@@ -895,4 +895,156 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
     return 0;
 }
 
+int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
+                          LlvmTool tool)
+{
+    if (!jdk_finder::commandExists("clang")) {
+        CA_LOGT_ERROR("compile", "LLVM IR compilation requires clang on PATH.\n");
+        return 1;
+    }
+    if (tool == LlvmTool::Llc && !jdk_finder::commandExists("llc")) {
+        CA_LOGT_ERROR("compile", "--llvm-tool llc requires llc on PATH.\n");
+        return 1;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
+    std::filesystem::remove(libraryPath, ec);
+    ec.clear();
+
+#ifdef __APPLE__
+    const char* sharedFlag = "-dynamiclib";
+#else
+    const char* sharedFlag = "-shared";
+#endif
+
+    if (tool == LlvmTool::Clang) {
+        // clang -shared -x ir - -o <lib>，LLVM IR 经 stdin。
+        printf("Compiling LLVM IR native library from stdin with clang: %s\n",
+               libraryPath.string().c_str());
+        ca::process::Command command("clang");
+        command.arg(sharedFlag).arg("-x").arg("ir").arg("-").arg("-o").arg(
+            libraryPath.string());
+        command.stdin(ca::process::Stdio::piped())
+            .stdout(ca::process::Stdio::piped())
+            .stderr(ca::process::Stdio::piped());
+        auto spawned = command.spawn();
+        if (spawned.is_err()) {
+            CA_LOGT_ERROR("compile", "cannot start clang: {}\n",
+                          spawned.unwrap_err().to_string().c_str());
+            return 1;
+        }
+        auto child = std::move(spawned).unwrap();
+        auto input = child.take_stdin();
+        if (!input.has_value()) {
+            child.kill();
+            child.wait();
+            CA_LOGT_ERROR("compile", "clang stdin pipe is unavailable.\n");
+            return 1;
+        }
+        auto written = input->write_all(llvmSource.data(), llvmSource.size());
+        input->close();
+        if (written.is_err()) {
+            auto completed = child.wait_with_output();
+            if (completed.is_ok()) {
+                auto output = std::move(completed).unwrap();
+                writeProcessOutput(output);
+            }
+            CA_LOGT_ERROR("compile", "cannot write LLVM IR to clang stdin: {}\n",
+                          written.to_string().c_str());
+            return 1;
+        }
+        auto completed = child.wait_with_output();
+        if (completed.is_err()) {
+            CA_LOGT_ERROR("compile", "cannot wait for clang: {}\n",
+                          completed.unwrap_err().to_string().c_str());
+            return 1;
+        }
+        auto output = std::move(completed).unwrap();
+        writeProcessOutput(output);
+        if (!output.status.success()) {
+            std::filesystem::remove(libraryPath, ec);
+            CA_LOGT_ERROR("compile", "clang failed with exit code {}.\n", output.status.code);
+            return 1;
+        }
+    }
+    else {
+        // llc -filetype=obj - -o <obj>（stdin），再由 clang 链接。
+        std::filesystem::path parent = libraryPath.parent_path();
+        if (parent.empty()) parent = ".";
+        ScopedTemporaryDirectory objectDirectory;
+        if (!objectDirectory.create(parent, ".mj2x-llvm-")) {
+            CA_LOGT_ERROR("compile", "cannot create temporary LLVM object directory.\n");
+            return 1;
+        }
+#ifdef _WIN32
+        const std::filesystem::path objectPath = objectDirectory.path() / "native.obj";
+#else
+        const std::filesystem::path objectPath = objectDirectory.path() / "native.o";
+#endif
+        printf("Compiling LLVM IR object from stdin with llc: %s\n",
+               objectPath.string().c_str());
+        ca::process::Command llcCommand("llc");
+        llcCommand.arg("-filetype=obj").arg("-").arg("-o").arg(objectPath.string());
+        llcCommand.stdin(ca::process::Stdio::piped())
+            .stdout(ca::process::Stdio::piped())
+            .stderr(ca::process::Stdio::piped());
+        auto llcSpawned = llcCommand.spawn();
+        if (llcSpawned.is_err()) {
+            CA_LOGT_ERROR("compile", "cannot start llc: {}\n",
+                          llcSpawned.unwrap_err().to_string().c_str());
+            return 1;
+        }
+        auto llcChild = std::move(llcSpawned).unwrap();
+        auto llcInput = llcChild.take_stdin();
+        if (!llcInput.has_value()) {
+            llcChild.kill();
+            llcChild.wait();
+            CA_LOGT_ERROR("compile", "llc stdin pipe is unavailable.\n");
+            return 1;
+        }
+        auto llcWritten = llcInput->write_all(llvmSource.data(), llvmSource.size());
+        llcInput->close();
+        if (llcWritten.is_err()) {
+            llcChild.kill();
+            llcChild.wait();
+            CA_LOGT_ERROR("compile", "cannot write LLVM IR to llc stdin: {}\n",
+                          llcWritten.to_string().c_str());
+            return 1;
+        }
+        auto llcCompleted = llcChild.wait_with_output();
+        if (llcCompleted.is_err()) {
+            CA_LOGT_ERROR("compile", "cannot wait for llc: {}\n",
+                          llcCompleted.unwrap_err().to_string().c_str());
+            return 1;
+        }
+        auto llcOutput = std::move(llcCompleted).unwrap();
+        writeProcessOutput(llcOutput);
+        if (!llcOutput.status.success()) {
+            CA_LOGT_ERROR("compile", "llc failed with exit code {}.\n", llcOutput.status.code);
+            return 1;
+        }
+
+        printf("Linking LLVM IR native library with clang: %s\n",
+               libraryPath.string().c_str());
+        ca::process::Command clangCommand("clang");
+        clangCommand.arg(sharedFlag).arg(objectPath.string()).arg("-o").arg(
+            libraryPath.string());
+        if (runCompilerCommand(clangCommand, "clang") != 0) {
+            std::filesystem::remove(libraryPath, ec);
+            return 1;
+        }
+    }
+
+    if (!std::filesystem::is_regular_file(libraryPath, ec) ||
+        std::filesystem::file_size(libraryPath, ec) == 0) {
+        std::filesystem::remove(libraryPath, ec);
+        CA_LOGT_ERROR("compile", "LLVM compiler succeeded without a native library: {}\n",
+                      libraryPath.string().c_str());
+        return 1;
+    }
+    printf("Native library written: %s\n", libraryPath.string().c_str());
+    return 0;
+}
+
 }   // namespace mj2x::cli

@@ -381,6 +381,84 @@ static bool copyCrtForCMakeProject(const std::filesystem::path& projectDir,
     return true;
 }
 
+/// @brief LLVM IR 版 CMake 工程：native.ll + CMakeLists.txt（clang 编译 .ll）。
+static int generateLlvmCMakeProject(const std::string& projectDirValue,
+                                    const std::string& nativeOutputPath)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path        projectDir(projectDirValue);
+    fs::create_directories(projectDir, ec);
+    if (ec) {
+        CA_LOGT_ERROR("cli", "cannot create CMake project directory: {}\n", projectDir.string().c_str());
+        return 1;
+    }
+
+    fs::path sourcePath(nativeOutputPath);
+    if (!fs::exists(sourcePath, ec)) {
+        CA_LOGT_ERROR("cli", "emitted LLVM IR source does not exist: {}\n", sourcePath.string().c_str());
+        return 1;
+    }
+
+    fs::path expectedSource = projectDir / sourcePath.filename();
+    if (fs::absolute(sourcePath, ec) != fs::absolute(expectedSource, ec)) {
+        fs::copy_file(sourcePath, expectedSource, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            CA_LOGT_ERROR("cli", "cannot copy emitted LLVM IR into CMake project: {}\n", ec.message().c_str());
+            return 1;
+        }
+    }
+
+    {
+        std::ofstream out(projectDir / "CMakeLists.txt", std::ios::binary);
+        if (!out) {
+            CA_LOGT_ERROR("cli", "cannot write CMakeLists.txt\n");
+            return 1;
+        }
+        out << "cmake_minimum_required(VERSION 3.16)\n";
+        out << "project(mj2x_native NONE)\n\n";
+        out << "find_program(CLANG_EXECUTABLE clang REQUIRED)\n\n";
+        out << "set(LLVM_IR_FILE ${CMAKE_CURRENT_SOURCE_DIR}/native.ll)\n";
+        out << "set(NATIVE_LIB ${CMAKE_CURRENT_BINARY_DIR}/mj2x_native"
+               "${CMAKE_SHARED_LIBRARY_SUFFIX})\n";
+        out << "add_custom_command(\n";
+        out << "  OUTPUT ${NATIVE_LIB}\n";
+        out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${LLVM_IR_FILE} -o ${NATIVE_LIB}\n";
+        out << "  DEPENDS ${LLVM_IR_FILE}\n";
+        out << "  COMMENT \"Compiling LLVM IR with clang\")\n";
+        out << "add_custom_target(mj2x_native ALL DEPENDS ${NATIVE_LIB})\n";
+    }
+
+    {
+        std::ofstream out(projectDir / ".gitignore", std::ios::binary);
+        if (!out) {
+            CA_LOGT_ERROR("cli", "cannot write .gitignore\n");
+            return 1;
+        }
+        out << "build/\n";
+        out << "cmake-build-*/\n";
+        out << "*.obj\n*.o\n*.dll\n*.so\n*.dylib\n";
+    }
+
+    {
+        std::ofstream out(projectDir / "README.md", std::ios::binary);
+        if (!out) {
+            CA_LOGT_ERROR("cli", "cannot write README.md\n");
+            return 1;
+        }
+        out << "# mj2x native CMake project (LLVM IR)\n\n";
+        out << "Build:\n\n";
+        out << "```sh\n";
+        out << "cmake -S . -B build\n";
+        out << "cmake --build build --config Release\n";
+        out << "```\n\n";
+        out << "Requires clang on PATH.\n";
+    }
+
+    printf("CMake project written: %s\n", projectDir.string().c_str());
+    return 0;
+}
+
 static int generateCMakeProject(const std::string& projectDirValue,
                                 const std::string& nativeOutputPath,
                                 const std::filesystem::path& crtRoot)
@@ -660,11 +738,6 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "--backend llvm requires --emit-llvm.\n");
         return 1;
     }
-    if (options.cBackendKind == CEmitterBackend::LlvmIr &&
-        options.compileMode == mj2x::cli::CompileMode::Pipe) {
-        CA_LOGT_ERROR("cli", "--backend llvm does not support --compile-mode pipe.\n");
-        return 1;
-    }
     if (options.llvmToolSelected && options.cBackendKind != CEmitterBackend::LlvmIr) {
         CA_LOGT_ERROR("cli", "--llvm-tool requires --backend llvm.\n");
         return 1;
@@ -705,11 +778,6 @@ int main(int argc, char** argv)
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr && options.compilerSelected) {
         CA_LOGT_ERROR("cli", "--backend llvm cannot be combined with --c-compiler.\n");
-        return 1;
-    }
-    if (options.cBackendKind == CEmitterBackend::LlvmIr &&
-        (!options.cmakeProjectDir.empty() || !options.xmakeProjectDir.empty())) {
-        CA_LOGT_ERROR("cli", "--backend llvm does not support --generate-cmake or --generate-xmake.\n");
         return 1;
     }
 
@@ -777,6 +845,11 @@ int main(int argc, char** argv)
         options.cppOutputPath.empty() && options.llvmOutputPath.empty()) {
         options.cOutputPath =
             (std::filesystem::path(options.cmakeProjectDir) / "native.c").string();
+        if (options.cBackendKind == CEmitterBackend::LlvmIr) {
+            options.llvmOutputPath =
+                (std::filesystem::path(options.cmakeProjectDir) / "native.ll").string();
+            options.cOutputPath.clear();
+        }
     }
 
     if (!options.xmakeProjectDir.empty() && options.cOutputPath.empty() &&
@@ -784,6 +857,11 @@ int main(int argc, char** argv)
         options.cOutputPath =
             (std::filesystem::path(options.xmakeProjectDir) / "src" / "generated" / "native.c")
                 .string();
+        if (options.cBackendKind == CEmitterBackend::LlvmIr) {
+            options.llvmOutputPath =
+                (std::filesystem::path(options.xmakeProjectDir) / "native.ll").string();
+            options.cOutputPath.clear();
+        }
     }
 
     const bool pipeCompile =
@@ -1079,37 +1157,50 @@ int main(int argc, char** argv)
     }
 
     if (!options.cmakeProjectDir.empty()) {
-        std::filesystem::path cmakeCrtRoot;
-        if (options.cBackendKind == CEmitterBackend::RegC) {
-            cmakeCrtRoot = mj2x::cli::findCrtRoot(argv[0]);
-            if (cmakeCrtRoot.empty()) {
-                CA_LOGT_ERROR("cli",
-                              "RegC CMake project requires an mj2x-crt source pack; set "
-                              "MJ2X_CRT_DIR.\n");
-                return 1;
-            }
+        if (options.cBackendKind == CEmitterBackend::LlvmIr) {
+            int projectRc = generateLlvmCMakeProject(options.cmakeProjectDir, nativeOutputPath);
+            if (projectRc != 0) return projectRc;
         }
-        int projectRc =
-            generateCMakeProject(options.cmakeProjectDir, nativeOutputPath, cmakeCrtRoot);
-        if (projectRc != 0) return projectRc;
+        else {
+            std::filesystem::path cmakeCrtRoot;
+            if (options.cBackendKind == CEmitterBackend::RegC) {
+                cmakeCrtRoot = mj2x::cli::findCrtRoot(argv[0]);
+                if (cmakeCrtRoot.empty()) {
+                    CA_LOGT_ERROR("cli",
+                                  "RegC CMake project requires an mj2x-crt source pack; set "
+                                  "MJ2X_CRT_DIR.\n");
+                    return 1;
+                }
+            }
+            int projectRc =
+                generateCMakeProject(options.cmakeProjectDir, nativeOutputPath, cmakeCrtRoot);
+            if (projectRc != 0) return projectRc;
+        }
     }
 
     if (!options.xmakeProjectDir.empty()) {
-        mj2x::cli::XmakeProjectConfig projectConfig;
-        projectConfig.projectDir          = options.xmakeProjectDir;
-        projectConfig.generatedSourcePath = nativeOutputPath;
-        projectConfig.crtRoot             = mj2x::cli::findCrtRoot(argv[0]);
-        projectConfig.projectName         = "mj2x_native_project";
-        int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
-        if (projectRc != 0) return projectRc;
-        // 用户 intrinsic 实现文件（issue #818）：复制进工程 src/mj2x-crt/ 下，
-        // xmake 模板的 glob（src/mj2x-crt/**.c）自动并入编译。
-        if (!userIntrinsicConfig.sources.empty()) {
-            std::string error;
-            if (!copyUserIntrinsicSources(userIntrinsicConfig.sources,
-                                          std::filesystem::path(options.xmakeProjectDir), error)) {
-                CA_LOGT_ERROR("cli", "{}\n", error.c_str());
-                return 1;
+        if (options.cBackendKind == CEmitterBackend::LlvmIr) {
+            int projectRc = mj2x::cli::generateLlvmXmakeProject(options.xmakeProjectDir,
+                                                                nativeOutputPath);
+            if (projectRc != 0) return projectRc;
+        }
+        else {
+            mj2x::cli::XmakeProjectConfig projectConfig;
+            projectConfig.projectDir          = options.xmakeProjectDir;
+            projectConfig.generatedSourcePath = nativeOutputPath;
+            projectConfig.crtRoot             = mj2x::cli::findCrtRoot(argv[0]);
+            projectConfig.projectName         = "mj2x_native_project";
+            int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
+            if (projectRc != 0) return projectRc;
+            // 用户 intrinsic 实现文件（issue #818）：复制进工程 src/mj2x-crt/ 下，
+            // xmake 模板的 glob（src/mj2x-crt/**.c）自动并入编译。
+            if (!userIntrinsicConfig.sources.empty()) {
+                std::string error;
+                if (!copyUserIntrinsicSources(userIntrinsicConfig.sources,
+                                              std::filesystem::path(options.xmakeProjectDir), error)) {
+                    CA_LOGT_ERROR("cli", "{}\n", error.c_str());
+                    return 1;
+                }
             }
         }
     }
@@ -1134,8 +1225,14 @@ int main(int argc, char** argv)
                 }
             }
             if (options.cBackendKind == CEmitterBackend::LlvmIr) {
-                compileRc = mj2x::cli::compileLlvmIrSource(
-                    nativeOutputPath, options.outputPath, options.llvmTool);
+                if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
+                    compileRc = mj2x::cli::compileLlvmIrFromPipe(
+                        nativeArtifact.content, options.outputPath, options.llvmTool);
+                }
+                else {
+                    compileRc = mj2x::cli::compileLlvmIrSource(
+                        nativeOutputPath, options.outputPath, options.llvmTool);
+                }
             }
             else if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
                 if (nativeSourceBackend == nullptr) {
