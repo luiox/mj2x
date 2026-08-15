@@ -313,12 +313,15 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
 > v2.1 曾按发布范围默认关闭（`with_mj2x_llvm=n`，CLI fail-closed）；**v2.2 起默认
 > 开启**。显式关闭时 `--backend llvm` / `--emit-llvm` / `--llvm-tool` 不可用。
 
-`--backend llvm --emit-llvm` 直接输出 textual LLVM IR，不链接 LLVM SDK。当前只接受静态
+`--backend llvm --emit-llvm` 直接输出 textual LLVM IR，不链接 LLVM SDK。当前接受静态
 `int` / `long` / `float` / `double` / `void` 方法中的纯数值计算（含移位，移位量按
-Java 语义取低 5/6 位）、比较、分支、循环、switch，以及**同类内静态方法互调**
-（被调方法必须同样可转换，否则整链保持原字节码）；
-对象、JNI 调用、跨类/实例/递归调用、字段/数组访问、异常、monitor、整数除法/取余
-和引用类型会 fail closed，保留原 Java 字节码。
+Java 语义取低 5/6 位；含整数除/取余，除零经 JNI ThrowNew 抛
+`ArithmeticException`，`INT_MIN / -1` 按 Java 语义不溢出）、比较、分支、循环、switch、
+浮点→整数转换（`llvm.fptosi.sat`，NaN→0 / 溢出饱和），以及**编译索引内的静态方法
+互调**（同类/跨类、直接递归/互递归均可；目标必须可转换且非 library 类，否则整链
+保持原字节码）；
+对象、JNI 调用、实例调用、字段/数组访问、异常表、monitor 和引用类型会 fail closed，
+保留原 Java 字节码。
 
 ```bash
 mj2x-cli -i Hello.class -o Hello_native.class --backend llvm \

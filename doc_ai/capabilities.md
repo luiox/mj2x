@@ -157,7 +157,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 **CLI**:
 
 - `--backend regc`,支持 `.class` 与 `.jar` 输入输出路径。
-- `--backend llvm --emit-llvm <file.ll>` 输出 textual LLVM IR；仅转换静态 `int` / `long` / `float` / `double` / `void` 的纯计算（含移位，Java 掩码语义）、比较、控制流与**同类内静态互调**（目标不可转换时整链 fail-closed），所有对象/JNI/异常/monitor/内存操作、跨类/实例/递归调用与整数 div/rem 均 fail closed。`--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；暂不支持 pipe、CMake 或 xmake 工程路径。**v2.2 转正**：构建开关 `with_mj2x_llvm` 默认 on（v2.1 曾按发布范围关闭）；显式 `=n` 时 CLI 不暴露相关选项（fail-closed）。
+- `--backend llvm --emit-llvm <file.ll>` 输出 textual LLVM IR；转换静态 `int` / `long` / `float` / `double` / `void` 的纯计算（含移位、整数除/取余——除零抛 `ArithmeticException`、`INT_MIN/-1` 语义正确）、比较、控制流、浮点→整数（`llvm.fptosi.sat`）与**编译索引内静态互调**（同类/跨类/递归；目标不可转换或为 library 类时整链 fail-closed），对象/JNI/实例调用/异常表/monitor/内存操作保持 fail closed。`--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；暂不支持 pipe、CMake 或 xmake 工程路径。**v2.2 转正**：构建开关 `with_mj2x_llvm` 默认 on（v2.1 曾按发布范围关闭）；显式 `=n` 时 CLI 不暴露相关选项（fail-closed）。
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
 - `--compile` 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 之后自动调用 native 编译器生成 `.dll` / `.so` / `.dylib`,输出到 `--output` 同目录;C++17 分别使用 `cl`、`g++`、`clang++` 或 `zig c++`，并将 RegC CRT 保持为 C ABI。LLVM IR 由 clang 或 `llc -> clang` 编译，不使用 `--c-compiler`。

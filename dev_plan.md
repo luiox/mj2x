@@ -55,6 +55,15 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-19：LLVM IR 后端基础款二次扩面——**整数除/取余**（udiv/urem 位模式
+  等价规避 INT_MIN/-1 溢出 poison；除零经共享 throw-arithmetic helper 抛
+  ArithmeticException：JNIEnv 表槽 FindClass=6/ThrowNew=14，helper 签名统一
+  加 JNIEnv* 首参透传）、**递归/互递归**（预检 visiting 命中按描述接受，符号
+  确定性生成不悬空）、**跨类静态调用**（目标须非 library + markedForCompile +
+  可转换；符号用目标 owner）、**浮点→整数**（llvm.fptosi.sat，NaN→0/溢出饱和）。
+  验证：LlvmIrBackendTest 11 例 + cli_test 3 例全绿；E2E 输出
+  `17-83-14-2-3628800-2147483647-0-ae`（除法/余数/递归阶乘/f2i 饱和/NaN/除零
+  异常捕获，clang/llc 双路径）。
 - 2026-08-19：LLVM IR 后端基础款转正并扩面（v2.2 默认开启，`with_mj2x_llvm` 默认
   on）——受限标量子集：静态 int/long/float/double/void 纯计算（含移位，Java 掩码
   语义）+ 比较/分支/循环/switch + **同类内静态互调**（三态 resolve：已编译成功
@@ -77,5 +86,5 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 | 六/七（#819 arraycopy、#820 步骤 1-5、#762/#844 变义、#843 trace surface 自验） | git log `feat/mj2x-arraycopy-intrinsic`、`feat/mj2x-vmc4-label-mutation`（PR #844）；`mj2x_integration_test` + `benchmark/baseline/regc-perf-baseline.json`；`vmc4_trace_surface_consistency_test.cpp` |
 | 八~十一（#818 intrinsic、#827 program 粒度、#829 混淆） | git log PR #826；`vmc4_backend.cpp` 实例缓存 + 粒度矩阵测试；`reg_transform_passes.{hpp,cpp}` + `register_ir_test.cpp` |
 | 十二（配置系统） | `mj2x-cli/src/param_registry.{hpp,cpp}`；`doc/config_file.md`；`doc_ai/config_system_design.md`（PR #846） |
-| 十三（LLVM IR 后端） | `mj2x-core/src/mj2x/backend/llvmir/`（ed9a13881 实现，v2.2 转正 + 移位/互调扩面）；`unittest/src/backend/llvm_ir_backend_test.cpp`（7 例）+ cli_test LLVM 3 例（含 clang/llc 编译 → JVM 运行 E2E）；`doc/user_guide.md` §5.4 |
+| 十三（LLVM IR 后端） | `mj2x-core/src/mj2x/backend/llvmir/`（ed9a13881 实现，v2.2 转正 + 移位/互调/除零异常/递归/跨类/fptosi.sat 扩面）；`unittest/src/backend/llvm_ir_backend_test.cpp`（11 例）+ cli_test LLVM 3 例（含 clang/llc 编译 → JVM 运行 E2E）；`doc/user_guide.md` §5.4 |
 | VMC4 红队对抗（N-7 / S2 前置） | `mjdbg/mjdbg-isa-recovery/`（PR #845）；`doc_ai/vmc4_red_team_contract.md` §6 |
