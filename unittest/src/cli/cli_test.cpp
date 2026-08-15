@@ -2375,6 +2375,108 @@ TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
 #endif
 }
 
+TEST(CliTest, LlvmArraycopyAndExceptionE2E)
+{
+#if defined(MJ2X_DISABLE_LLVM_BACKEND)
+    GTEST_SKIP() << "LLVM backend is disabled";
+#else
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!commandAvailable("clang")) GTEST_SKIP() << "clang is not available on PATH";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+    const fs::path javac = findJavac();
+    if (javac.empty()) GTEST_SKIP() << "javac is not available";
+#ifdef _WIN32
+    const fs::path java = javac.parent_path() / "java.exe";
+#else
+    const fs::path java = javac.parent_path() / "java";
+#endif
+
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_llvm_e2e.keep").parent_path() / "mj2x_cli_llvm_e2e";
+    const fs::path source = workDir / "CliLlvmE2E.java";
+    const fs::path driver = workDir / "Driver.java";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    {
+        std::ofstream out(source);
+        ASSERT_TRUE(out) << source.string();
+        out << "public class CliLlvmE2E {\n"
+               "  public static int copy() {\n"
+               "    int[] src = {1, 2, 3, 4, 5};\n"
+               "    int[] dst = new int[5];\n"
+               "    System.arraycopy(src, 1, dst, 0, 3);\n"
+               "    return dst[0] * 100 + dst[1] * 10 + dst[2];\n"
+               "  }\n"
+               "  public static int copyBad() {\n"
+               "    int[] src = {1};\n"
+               "    int[] dst = new int[1];\n"
+               "    try { System.arraycopy(src, 5, dst, 0, 1); return -1; }\n"
+               "    catch (ArrayIndexOutOfBoundsException e) { return 7; }\n"
+               "  }\n"
+               "  public static int tryCatch() {\n"
+               "    try { return 100 / 0; }\n"
+               "    catch (ArithmeticException e) { return 9; }\n"
+               "  }\n"
+               "  public static int locked(int n) {\n"
+               "    synchronized (CliLlvmE2E.class) { return n * 2; }\n"
+               "  }\n"
+               "  public static String greet() { return \"hi\"; }\n"
+               "}\n";
+    }
+    {
+        std::ofstream out(driver);
+        ASSERT_TRUE(out) << driver.string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+               "    if (dll != null) System.load(dll);\n"
+               "    System.out.print(CliLlvmE2E.copy());\n"
+               "    System.out.print(\"-\" + CliLlvmE2E.copyBad());\n"
+               "    System.out.print(\"-\" + CliLlvmE2E.tryCatch());\n"
+               "    System.out.print(\"-\" + CliLlvmE2E.locked(21));\n"
+               "    System.out.print(\"-\" + CliLlvmE2E.greet());\n"
+               "  }\n"
+               "}\n";
+    }
+    auto result = runScript({q(javac) + " -d " + q(workDir) + " " + q(source) + " " + q(driver)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    // 未加载原生库时走 JVM 解释执行，先建立基线。
+    result = runScript({q(java) + " -Xverify:all -cp " + q(workDir) + " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "234-7-9-42-hi");
+
+    // LLVM pipe 编译 + 原生执行。
+    const fs::path pipeDir = workDir / "out";
+    fs::create_directories(pipeDir, ec);
+    const fs::path pipeClass = pipeDir / "CliLlvmE2E.class";
+    result = runScript({q(cli) + " -i " + q(workDir / "CliLlvmE2E.class") + " -o " +
+                        q(pipeClass) + " --backend llvm --compile --compile-mode pipe "
+                        "--llvm-tool clang"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    const fs::path pipeLibrary = nativeLibraryPathFor(pipeClass);
+    ASSERT_TRUE(fileExists(pipeLibrary)) << result.out;
+    fs::copy_file(workDir / "Driver.class", pipeDir / "Driver.class",
+                  fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    std::vector<std::string> pipeRun;
+#ifdef _WIN32
+    pipeRun.push_back("set \"MORPHER_DLL=" + pipeLibrary.string() + "\"");
+#else
+    pipeRun.push_back("export MORPHER_DLL=" + q(pipeLibrary));
+#endif
+    pipeRun.push_back(q(java) + " -Xverify:all -cp " + q(pipeDir) + " Driver");
+    result = runScript(pipeRun);
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "234-7-9-42-hi");
+#endif
+}
+
 TEST(CliTest, ClangCompilesRegcCppSource)
 {
     const fs::path cli = findCli();
