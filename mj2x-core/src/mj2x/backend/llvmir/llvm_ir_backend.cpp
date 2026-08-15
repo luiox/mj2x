@@ -426,12 +426,14 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
 bool collectRegisterTypes(const RegFunction& function, RegisterTypes& types,
                           InternalCallResolver* resolver, std::string& reason)
 {
-    if (!function.exceptionRegions.empty()) {
-        reason = "LLVM IR first slice rejects exception regions";
-        return false;
-    }
+    // 异常区域自 Phase 5 起支持：异常边拷贝/exceptionValue 由发射端处理；
+    // handler 的块参数照常经 copies 校验。
     for (const auto& parameter : function.parameters) {
         if (!recordValue(types, parameter, reason)) return false;
+    }
+    // 异常区域的 exceptionValue（handler 的合成异常寄存器）需占槽（REF）。
+    for (const auto& region : function.exceptionRegions) {
+        if (!recordValue(types, region.exceptionValue, reason)) return false;
     }
     for (const auto& block : function.blocks) {
         for (const auto& instruction : block->instructions) {
@@ -774,7 +776,9 @@ private:
         return "%" + edge.label;
     }
 
-    bool emitInstruction(const RegInstruction& instruction, std::string& reason)
+    bool emitInstruction(const RegBlock* block, const RegInstruction& instruction,
+                         const std::vector<const RegExceptionRegion*>& regions,
+                         std::string& reason)
     {
         std::string lhs;
         std::string rhs;
@@ -830,7 +834,16 @@ private:
                 out_ << "  br label %b_divafter_" << divIndex << "\n";
                 out_ << "b_divz_" << divIndex << ":\n";
                 out_ << "  call void @mj2x_llvm_throw_arith(ptr %env)\n";
-                out_ << "  ret " << type << " 0\n";
+                // 除零在 try 块内时：抛出的 ArithmeticException 按异常表分发
+                // （无匹配/无异常区域则直接返回，pending 异常由 JVM 处理）。
+                if (!regions.empty()) {
+                    if (!emitExceptionDispatch(block, regions, dispatchIndex_, false, reason)) {
+                        return false;
+                    }
+                }
+                else {
+                    out_ << "  ret " << type << " 0\n";
+                }
                 out_ << "b_divafter_" << divIndex << ":\n";
                 return true;
             }
@@ -1225,16 +1238,20 @@ private:
 
     /// @brief 异常分发：ExceptionCheck 后按异常表匹配 handler；无 handler/无匹配
     /// 重抛并默认返回。匹配成功时执行异常边拷贝 + exceptionValue 赋值后跳 handler。
+    /// @param continueAfter 为 true 时 false 分支落到 cont_N 标签（调用方继续
+    /// 发射指令/终止符）；为 false（athrow 终止符）时 false 分支走默认返回。
     bool emitExceptionDispatch(const RegBlock* block,
                                const std::vector<const RegExceptionRegion*>& regions,
-                               uint32_t& dispatchIndex, std::string& reason)
+                               uint32_t& dispatchIndex, bool continueAfter, std::string& reason)
     {
         const uint32_t   index = dispatchIndex++;
         const std::string chk  = nextTemporary();
         out_ << "  " << chk << " = call i1 @mj2x_llvm_exception_check(ptr %env)\n";
         const std::string exLabel   = "ex_" + std::to_string(index);
         const std::string contLabel = "cont_" + std::to_string(index);
-        out_ << "  br i1 " << chk << ", label %" << exLabel << ", label %" << contLabel << "\n";
+        const std::string noExLabel = "nex_" + std::to_string(index);
+        out_ << "  br i1 " << chk << ", label %" << exLabel << ", label %"
+             << (continueAfter ? contLabel : noExLabel) << "\n";
         out_ << exLabel << ":\n";
         const std::string ex = nextTemporary();
         out_ << "  " << ex << " = call ptr @mj2x_llvm_exception_occurred(ptr %env)\n";
@@ -1242,7 +1259,13 @@ private:
         if (regions.empty()) {
             out_ << "  call void @mj2x_llvm_throw(ptr %env, ptr " << ex << ")\n";
             emitDefaultReturn();
-            out_ << contLabel << ":\n";
+            if (continueAfter) {
+                out_ << contLabel << ":\n";
+            }
+            else {
+                out_ << noExLabel << ":\n";
+                emitDefaultReturn();
+            }
             return true;
         }
         for (size_t r = 0; r < regions.size(); ++r) {
@@ -1286,21 +1309,28 @@ private:
         out_ << "rx_" << index << ":\n";
         out_ << "  call void @mj2x_llvm_throw(ptr %env, ptr " << ex << ")\n";
         emitDefaultReturn();
-        out_ << contLabel << ":\n";
+        if (continueAfter) {
+            out_ << contLabel << ":\n";
+        }
+        else {
+            out_ << noExLabel << ":\n";
+            emitDefaultReturn();
+        }
         return true;
     }
 
     bool emitBlock(const RegBlock& block, std::string& reason)
     {
         const auto regions = activeRegionsFor(&block);
-        uint32_t   dispatchIndex = 0;
         out_ << "b" << block.id.value << ":\n";
         for (const auto& instruction : block.instructions) {
-            if (!emitInstruction(instruction, reason)) return false;
+            if (!emitInstruction(&block, instruction, regions, reason)) return false;
             // 方法含 try/catch 时，可能抛异常的指令后插入异常分发
             // （无异常区域时 pending 异常泄漏到 JNI 边界由 JVM 处理）。
             if (instruction.effect.mayThrow && !regions.empty()) {
-                if (!emitExceptionDispatch(&block, regions, dispatchIndex, reason)) return false;
+                if (!emitExceptionDispatch(&block, regions, dispatchIndex_, true, reason)) {
+                    return false;
+                }
             }
         }
         return std::visit(
@@ -1370,7 +1400,7 @@ private:
                     if (!emitOperand(terminator.value, value, reason)) return false;
                     out_ << "  call void @mj2x_llvm_throw(ptr %env, ptr " << value << ")\n";
                     if (!regions.empty()) {
-                        if (!emitExceptionDispatch(&block, regions, dispatchIndex, reason)) {
+                        if (!emitExceptionDispatch(&block, regions, dispatchIndex_, false, reason)) {
                             return false;
                         }
                     }
@@ -1398,6 +1428,7 @@ private:
     uint32_t                 temporaryIndex_ = 0;
     uint32_t                 edgeIndex_ = 0;
     uint32_t                 divIndex_ = 0;
+    uint32_t                 dispatchIndex_ = 0;   // 函数级：异常分发 label 唯一
     std::vector<PendingEdge> pendingEdges_;
 };
 
