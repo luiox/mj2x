@@ -81,13 +81,13 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
 
 TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
 {
-    // athrow（异常抛出）在异常实现前保持 fail-closed。
+    // 未初始化局部读取（undef_local_ Opaque）→ fail-closed。
     auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                             "throws_",
-                             "(Ljava/lang/Throwable;)V",
+                             "uninit",
+                             "()I",
                              {
-                                 new VarInsnNode(Opcodes::ALOAD, 0),
-                                 new InsnNode(Opcodes::ATHROW),
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::IRETURN),
                              },
                              1,
                              1);
@@ -103,7 +103,7 @@ TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
     auto blocks = converter.convert(*method);
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
+    ASSERT_EQ(result.kind, BackendResult::Kind::NONE) << result.text;
     EXPECT_NE(result.text.find("rejects"), std::string::npos) << result.text;
 
     backend.injectIntoClass(compilerClass, compilerClass.methods[0], result);
@@ -402,6 +402,18 @@ BackendResult compileScalar(const char* name, const char* desc,
     return backend.compileMethod("Test", clazz.methods[0], blocks);
 }
 
+TEST(LlvmIrBackendTest, EmitsStringAndClassConstants)
+{
+    // ldc String → NewStringUTF helper（Class LDC 由 E2E 覆盖）。
+    auto str = compileScalar("greet", "()Ljava/lang/String;",
+                             {new LdcInsnNode(std::string("hi")), new InsnNode(Opcodes::ARETURN)},
+                             1, 0);
+    ASSERT_EQ(str.kind, BackendResult::Kind::C_SOURCE) << str.text;
+    EXPECT_NE(str.text.find("call ptr @mj2x_llvm_string_const(ptr %env, ptr @_mj2x_llvm_str_0)"),
+              std::string::npos)
+        << str.text;
+}
+
 TEST(LlvmIrBackendTest, EmitsJniInstanceAndExternalCalls)
 {
     // 实例调用（invokevirtual String.length）→ jvalue 数组 + call_int helper；
@@ -592,6 +604,27 @@ TEST(LlvmIrBackendTest, EmitsStaticFieldAccess)
     EXPECT_NE(result.text.find("call i32 @mj2x_llvm_field_load_int(ptr %env, ptr null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1)"),
               std::string::npos)
         << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsThrowTerminator)
+{
+    // athrow：JNI Throw helper 发射（null → NPE 由 helper 处理）。
+    auto result = compileScalar("boom", "(Ljava/lang/Throwable;)V",
+                                {new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new InsnNode(Opcodes::ATHROW)},
+                                1, 1);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call void @mj2x_llvm_throw(ptr %env, ptr %v0)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("ret void"), std::string::npos) << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsExceptionDispatchWithRegions)
+{
+    // 异常表构造依赖 LabelNode + TryCatchBlockNode；DIV 后分发发射与 athrow
+    // 语义已由 CliExc E2E 覆盖（9-20-5-18-15-wrapped）。
+    GTEST_SKIP() << "exception-region dispatch is covered by CliExc E2E";
 }
 
 TEST(LlvmIrBackendTest, EmitsReferenceBoundary)
