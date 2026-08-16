@@ -54,7 +54,8 @@ const char* primitiveBoxClass(int sort)
 /// MethodType 一律经 MethodType.fromMethodDescriptorString(desc, loader) 构造，
 /// loader 取调用者类的 getClassLoader()（保护态 jar 走自定义 cloader，系统
 /// ClassLoader 解析不了应用类引用）。
-void expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef callerClass,
+/// @return 本方法是否实际发生 ldc 展开（供调用方置 cls.modified）。
+bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef callerClass,
                        MethodNode* m)
 {
     // 收集要改写的 ldc 节点（边遍历边改 list 会迭代器失效，故先收集）
@@ -67,7 +68,7 @@ void expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
             }
         }
     }
-    if (targets.empty()) return;
+    if (targets.empty()) return false;
 
     // LDC String 常量（desc / name）。
     auto newStringLdc = [&](ca::str::Utf8StringRef value) {
@@ -189,6 +190,7 @@ void expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
         }
         m->instructions.remove(ldc);
     }
+    return true;
 }
 
 }   // namespace
@@ -199,7 +201,10 @@ void LdcPreprocessor::process(CompilerIndex& index)
     for (auto& [name, cls] : index.getClasses()) {
         if (cls.isLibrary) continue;
         for (auto* m : cls.classNode->methods) {
-            expandLdcInMethod(arena, cls.classNode->name, m);
+            // 展开改写了指令流：类必须标记 modified，否则未翻译类以
+            // COMPUTE_MAXS 写出，旧 StackMapTable 配新指令流必 VerifyError
+            //（对齐 init_clinit_mover 的先例）。
+            if (expandLdcInMethod(arena, cls.classNode->name, m)) cls.modified = true;
         }
     }
 }
