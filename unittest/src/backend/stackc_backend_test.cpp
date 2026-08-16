@@ -247,6 +247,52 @@ TEST(StackCBackendTest, BooleanInvokeResultUsesFullStackSlot)
         << result.text;
 }
 
+// 静态化替换必须跳过字符串字面量与 // 注释（X4）：indy 的 bsm 元数据字符串
+//（name/recipe 等，来自 class 文件）经 NewStringUTF 内联进方法体，若字面量含
+// `stack[sp ± N]`/`sp -= N` 等模式而被裸替换，轻则字面量被静默改写，重则
+// `sp -= N` 被当作栈维护吞掉 off，后续槽位全部静态化错位。锁住两点：字面量
+// 原样存活；栈深记账不受字面量影响（返回槽 s[k] 正常发射）。
+//（普通 LDC 字符串走字符串池不内联，不构成碰撞面。）
+TEST(StackCBackendTest, StaticizeSkipsStringLiteralsAndComments)
+{
+    auto bsm = Handle(Opcodes::H_INVOKESTATIC,
+                      testArena.intern("java/lang/invoke/StringConcatFactory"),
+                      testArena.intern("makeConcatWithConstants"),
+                      testArena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                                                 "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
+                                                 "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
+                      false);
+    StackCBackend  backend;
+    const std::string poison = "sp -= 2; stack[++sp]; stack[sp + 1]; sp++; // stack[sp]";
+    auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "poisonConcat",
+                         "(I)Ljava/lang/String;",
+                                   {
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
+                                                       testArena.intern("(I)Ljava/lang/String;"),
+                                                       bsm,
+                                                                 {std::string("v=") + poison + "\x01"}),
+                             new InsnNode(Opcodes::ARETURN),
+                         });
+    CompilerMethod cm;
+    cm.methodNode       = mn.get();
+    cm.markedForCompile = true;
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
+    auto          blocks = cc.convert(*mn);
+    auto          result = backend.compileMethod("Test", cm, blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find(poison), std::string::npos)
+        << "inlined literal must survive staticize verbatim:\n"
+        << result.text;
+    EXPECT_NE(result.text.find("s[0].l"), std::string::npos)
+        << "stack depth bookkeeping must be unaffected:\n"
+        << result.text;
+}
+
 TEST(StackCBackendTest, CastEmission)
 {
     StackCBackend  backend;
