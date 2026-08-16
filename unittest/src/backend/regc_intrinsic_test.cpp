@@ -583,9 +583,10 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
     charAt.args.push_back(RegOperand::fromInt(1, SSAType::I32));
 
     auto charAtDecision = RegCIntrinsicRegistry::builtins().matchCall(charAt);
-    EXPECT_EQ(charAtDecision.kind, RegCIntrinsicDecisionKind::Emit);
-    EXPECT_EQ(charAtDecision.emitKind, RegCIntrinsicEmitKind::StringMethod);
-    EXPECT_EQ(charAtDecision.symbol, "_mj2x_intrinsic_string_char_at");
+    // charAt/hashCode/equals 不再走 StringMethod intrinsic：多 JNI 数据管道
+    // 比回退缓存 methodID 的 1-JNI CallXxxMethodA 更慢（HotSpot 对这三个方法
+    // 有 VM intrinsic + memoization），保留 length/isEmpty 等 1-JNI 平价项。
+    EXPECT_EQ(charAtDecision.kind, RegCIntrinsicDecisionKind::Fallback);
 
     RegInstruction isEmpty;
     isEmpty.kind                = RegInstructionKind::Call;
@@ -866,19 +867,21 @@ TEST(RegCIntrinsicTest, StringMethodsLoweredToIntrinsicsNotJni)
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_length("), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
+    // charAt/hashCode/equals 回退缓存 methodID 调用（1 JNI），不再发射
+    // StringMethod intrinsic（多 JNI 数据管道实测更慢）。
+    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
+    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_equals("), std::string::npos)
+    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_equals("), std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("java/lang/String\", \"length\""), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
+    EXPECT_NE(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
+    EXPECT_NE(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"equals\""), std::string::npos)
+    EXPECT_NE(result.source.find("java/lang/String\", \"equals\""), std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
 }

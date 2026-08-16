@@ -1656,10 +1656,14 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
     EXPECT_NE(generatedC.find("mj2x_random_next_int_bound(&native_r"), std::string::npos)
         << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_length("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_char_at("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
+    // charAt/hashCode/equals 回退缓存 methodID 调用（1 JNI），不再发射
+    // StringMethod intrinsic 调用点（多 JNI 数据管道实测更慢）。helper 定义
+    // 仍在 prelude 无条件发射，无法用 find 区分定义与调用——用下面三个缓存
+    // 声明的存在性证明调用点已回退。
+    EXPECT_NE(generatedC.find("java/lang/String\", \"charAt\""), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("java/lang/String\", \"hashCode\""), std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_equals("), std::string::npos) << generatedC;
+    EXPECT_NE(generatedC.find("java/lang/String\", \"equals\""), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_contains("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_concat("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_substring_from("), std::string::npos) << generatedC;

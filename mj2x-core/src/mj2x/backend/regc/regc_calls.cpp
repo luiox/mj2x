@@ -117,11 +117,12 @@ ca::str::Utf8String addInstanceMethodCache(RegCFunctionEmitState& state, const R
     return state.cachePool->instanceMethodCache(ins.method.owner, ins.method.name, ins.method.desc);
 }
 
-/// 判定调用是否确定性分派：静态/特殊调用总是确定；虚调用仅当目标方法 final
-/// 或 owner 类 final（无子类可覆盖）时确定；虚调用在 owner 的所有编译输入
-/// 子类中无同名同描述方法覆写时也确定（protected/package 方法常见场景，如
-/// AbstractWorker.bias——子类只覆写 apply）。接口调用保持动态分派。类层级
-/// 闭包只含编译输入：owner 是编译类时不可能存在库（JDK）子类，分析安全。
+/// 判定调用是否确定性分派：静态/特殊调用总是确定；虚调用在目标方法 final、
+/// owner 类 final（无子类可覆盖）、或 owner 的所有编译输入子类（含递归）中
+/// 无同名同描述方法覆写时确定（owner 自身声明的非 final 方法也走覆写分析
+/// ——新版 javac 不给匿名类/其方法设 ACC_FINAL，靠 final 标志会漏判）。
+/// 接口调用保持动态分派。类层级闭包只含编译输入：owner 是编译类时不可能
+/// 存在库（JDK）子类，分析安全。
 bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classIndex)
 {
     switch (ins.method.invokeOpcode) {
@@ -142,7 +143,10 @@ bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classInde
         if (member.methodNode == nullptr) continue;
         if (member.methodNode->name != ins.method.name) continue;
         if (member.methodNode->desc != ins.method.desc) continue;
-        return (member.methodNode->access & Opcodes::ACC_FINAL) != 0;
+        // 声明为 final → 确定；声明非 final（如新版 javac 不给匿名类/方法设
+        // ACC_FINAL）→ 继续做子类覆写分析，而不是直接判动态。
+        if ((member.methodNode->access & Opcodes::ACC_FINAL) != 0) return true;
+        break;
     }
     // 无覆写分析：owner 的每个编译输入子类（含递归）都不声明该方法 → 确定。
     for (const auto& [clsName, cls] : classIndex->getClasses()) {
@@ -181,7 +185,16 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     // 直调默认关闭（CodeOptions.directCalls）：C 直调不产生 JVM 栈帧，
     // getStackTrace/StackWalker/反射等栈观察语义失真（issue #814）。开启仅
     // 用于性能优先且确认无栈观察的产物。
-    if (!state.directCalls) return false;
+    //
+    // 例外——确定性分派的虚调用：final 方法 / final owner / 编译输入无覆写
+    // 时，resolved 路径命中 implClass 后本来就直调 fn（无 JVM 帧，栈观察
+    // 语义与直调完全一致），运行时 IsInstanceOf 检查是纯冗余（任意 receiver
+    // 子类都分派到同一实现）。这类调用点免门控直调，省每调用点 1 个 JNI。
+    // 静态/INVOKESPECIAL 调用仍要求显式 --regc-direct-calls。
+    const bool deterministicVirtual =
+        ins.method.invokeOpcode == Opcodes::INVOKEVIRTUAL &&
+        isDeterministicDispatch(ins, classIndex);
+    if (!state.directCalls && !deterministicVirtual) return false;
     if (convertedFunctions == nullptr) return false;
     if (isSelfStaticCall(state, ins)) return false;
     const std::string name = ins.method.name.to_std_string();
@@ -190,9 +203,40 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     // 分派 + 已转换目标（构造器函数体），receiver 是分配对象（已知类），
     // 直调与 JNI 调用语义一致，省 resolved 的 GetObjectClass+IsSameObject。
     if (name[0] == '<' && name != "<init>") return false;
-    const std::string key = ins.method.owner.to_std_string() + "\n" + name + "\n" +
+    std::string       key = ins.method.owner.to_std_string() + "\n" + name + "\n" +
                             ins.method.desc.to_std_string();
-    const auto it = convertedFunctions->find(key);
+    auto              it  = convertedFunctions->find(key);
+    if ((it == convertedFunctions->end() || it->second.empty()) && classIndex != nullptr) {
+        // 继承方法：调用点 owner 是 receiver 静态类型，convertedFunctions 键
+        // 是声明类——沿超类链（限编译输入）找声明类后重查。
+        std::string cur        = ins.method.owner.to_std_string();
+        bool        reResolved = false;
+        for (int depth = 0; depth < 32 && !reResolved; ++depth) {
+            CompilerClass* cls = classIndex->getClass(cur);
+            if (cls == nullptr || cls->classNode == nullptr) break;
+            const std::string super = cls->classNode->superName.to_std_string();
+            if (super.empty()) break;
+            CompilerClass* superCls = classIndex->getClass(super);
+            if (superCls != nullptr && superCls->classNode != nullptr) {
+                for (const auto& member : superCls->methods) {
+                    if (member.methodNode == nullptr) continue;
+                    if (member.methodNode->name.to_std_string() != name) continue;
+                    if (member.methodNode->desc.to_std_string() !=
+                        ins.method.desc.to_std_string()) {
+                        continue;
+                    }
+                    cur        = super;
+                    reResolved = true;
+                    break;
+                }
+            }
+            if (!reResolved) cur = super;
+        }
+        if (reResolved) {
+            key = cur + "\n" + name + "\n" + ins.method.desc.to_std_string();
+            it  = convertedFunctions->find(key);
+        }
+    }
     if (it == convertedFunctions->end() || it->second.empty()) return false;
     if (!isDeterministicDispatch(ins, classIndex)) return false;
     if (indyFunctions != nullptr && indyFunctions->count(key) != 0) return false;
@@ -215,6 +259,31 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
         out.append(cType(ins.args[i].type)).append(" r").append(ca::str::format_std("{}", i));
     }
     out.append(");").newLine();
+    if (deterministicVirtual && !ins.args.empty()) {
+        // 免门控路径带 NULL receiver 守卫：JNI 调用点在 receiver 为 NULL 时
+        // 抛 NPE（emitCachedCall 语义），直调必须显式复现。
+        const std::string receiver = operandExpr(ins.args[0]).to_std_string();
+        out.iff("((" + receiver + ") == NULL)",
+                [&](CSourceStream& u) {
+                    u.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
+                    if (ins.hasDest) {
+                        u.emitLine(destName + " = " + std::string(defaultValue(ins.dest.type)) +
+                                   ";");
+                    }
+                },
+                [&](CSourceStream& u) {
+                    u.appendLineStart();
+                    if (ins.hasDest) {
+                        u.append(destName).append(" = ");
+                    }
+                    u.append(it->second)
+                        .append("(")
+                        .append(directCallArgs(ins.args))
+                        .append(");")
+                        .newLine();
+                });
+        return true;
+    }
     out.appendLineStart();
     if (ins.hasDest) {
         out.append(destName).append(" = ");
