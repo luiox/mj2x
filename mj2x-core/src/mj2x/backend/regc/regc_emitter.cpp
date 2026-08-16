@@ -221,6 +221,9 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             ca::str::Utf8String     allocCacheName;
             std::vector<ca::str::Utf8String> fusedArgs;
         } pendingFuse;
+        /// getClass().getName().hashCode() 融合终点：跳过链上 getName/hashCode
+        /// 两条指令的发射（融合结果在 getClass 位置一次产出）。
+        const RegInstruction* fusedNameHashEnd = nullptr;
         const auto operandUsesReg = [](const RegOperand& op, RegId id) {
             return op.kind == RegOperandKind::Register && op.reg.value == id.value;
         };
@@ -234,6 +237,48 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             if (ins.hasDest && ins.dest.id.value == id.value) return true;
             for (const auto& a : ins.args) {
                 if (operandUsesReg(a, id)) return true;
+            }
+            return false;
+        };
+        /// 值是否被 terminator（返回值/条件/switch 值/边拷贝）使用。
+        const auto terminatorUsesReg = [&](const RegTerminator& term, RegId id) {
+            const auto successorUses = [&](const RegSuccessor& succ) {
+                for (const auto& copy : succ.copies) {
+                    if (operandUsesReg(copy.source, id)) return true;
+                }
+                return false;
+            };
+            if (auto* jump = std::get_if<RegJumpTerminator>(&term)) {
+                return successorUses(jump->target);
+            }
+            if (auto* branch = std::get_if<RegBranchTerminator>(&term)) {
+                return operandUsesReg(branch->condition, id) ||
+                       successorUses(branch->trueTarget) || successorUses(branch->falseTarget);
+            }
+            if (auto* sw = std::get_if<RegSwitchTerminator>(&term)) {
+                if (operandUsesReg(sw->value, id)) return true;
+                for (const auto& c : sw->cases) {
+                    if (successorUses(c.target)) return true;
+                }
+                return successorUses(sw->defaultTarget);
+            }
+            if (auto* ret = std::get_if<RegReturnTerminator>(&term)) {
+                return ret->hasValue && operandUsesReg(ret->value, id);
+            }
+            if (auto* thr = std::get_if<RegThrowTerminator>(&term)) {
+                return operandUsesReg(thr->value, id);
+            }
+            return false;
+        };
+        /// 值是否被本块异常边拷贝使用（live-out 到 handler）。
+        const auto exceptionEdgesUseReg = [&](RegId id) {
+            for (const auto& region : fn.exceptionRegions) {
+                for (const auto& edge : region.edges) {
+                    if (edge.protectedBlock != block.get()) continue;
+                    for (const auto& copy : edge.copies) {
+                        if (operandUsesReg(copy.source, id)) return true;
+                    }
+                }
             }
             return false;
         };
@@ -285,6 +330,11 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         };
         for (size_t insIdx = 0; insIdx < block->instructions.size(); ++insIdx) {
             const RegInstruction& ins = block->instructions[insIdx];
+            if (fusedNameHashEnd != nullptr) {
+                // 融合跳过窗口：getName/hashCode 两指令已被融合结果取代。
+                if (&ins == fusedNameHashEnd) fusedNameHashEnd = nullptr;
+                continue;
+            }
             if (pendingFuse.active) {
                 if (&ins == pendingFuse.initCall) {
                     // 到达 <init>：发射融合 NewObjectA（分配结果延迟赋值）。
@@ -299,6 +349,97 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     pendingFuse.active = false;
                     if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins) &&
                         !activeRegions.empty()) {
+                        if (!emitExceptionDispatch(body,
+                                                   activeRegions,
+                                                   block.get(),
+                                                   fn.symbol.returnType,
+                                                   emitState,
+                                                   dispatchIndex,
+                                                   edgeTempIndex,
+                                                   result.reason))
+                            return result;
+                    }
+                    continue;
+                }
+                if (!emitInstructionWithCheck(ins)) return result;
+                continue;
+            }
+            // getClass().getName().hashCode() 融合：receiver 身份键控双槽缓存
+            // （IsSameObject 命中），1 个 JNI 替代 GetObjectClass + getName +
+            // hashCode 的 3 个。链上中间值不得有其它使用（含 terminator 边拷贝
+            // 与异常边），否则回退逐跳发射。
+            if (ins.kind == RegInstructionKind::Call &&
+                ins.method.invokeOpcode == Opcodes::INVOKEVIRTUAL &&
+                ins.method.owner == "java/lang/Object" &&
+                ins.method.name == "getClass" && ins.method.desc == "()Ljava/lang/Class;" &&
+                ins.hasDest && emitState.cachePool != nullptr) {
+                const RegInstruction* getNameIns = nullptr;
+                const RegInstruction* hashIns    = nullptr;
+                size_t                scan       = insIdx + 1;
+                while (scan < block->instructions.size()) {
+                    const RegInstruction& cand = block->instructions[scan];
+                    if (cand.kind == RegInstructionKind::Call) {
+                        if (getNameIns == nullptr &&
+                            cand.method.invokeOpcode == Opcodes::INVOKEVIRTUAL &&
+                            cand.method.owner == "java/lang/Class" &&
+                            cand.method.name == "getName" &&
+                            cand.method.desc == "()Ljava/lang/String;" && cand.hasDest &&
+                            !cand.args.empty() && operandUsesReg(cand.args[0], ins.dest.id)) {
+                            getNameIns = &cand;
+                            scan++;
+                            continue;
+                        }
+                        if (getNameIns != nullptr && hashIns == nullptr &&
+                            cand.method.invokeOpcode == Opcodes::INVOKEVIRTUAL &&
+                            cand.method.owner == "java/lang/String" &&
+                            cand.method.name == "hashCode" && cand.method.desc == "()I" &&
+                            cand.hasDest && !cand.args.empty() &&
+                            operandUsesReg(cand.args[0], getNameIns->dest.id)) {
+                            hashIns = &cand;
+                            scan++;
+                            continue;
+                        }
+                        break;
+                    }
+                    if (instructionUsesReg(cand, ins.dest.id)) break;
+                    if (getNameIns != nullptr &&
+                        instructionUsesReg(cand, getNameIns->dest.id)) {
+                        break;
+                    }
+                    if (!isFuseTransparent(cand)) break;
+                    scan++;
+                }
+                bool chainEscapes = false;
+                if (hashIns != nullptr) {
+                    for (size_t k = scan; k < block->instructions.size(); ++k) {
+                        if (instructionUsesReg(block->instructions[k], ins.dest.id) ||
+                            instructionUsesReg(block->instructions[k], getNameIns->dest.id)) {
+                            chainEscapes = true;
+                            break;
+                        }
+                    }
+                    if (!chainEscapes) {
+                        chainEscapes = terminatorUsesReg(block->terminator, ins.dest.id) ||
+                                       terminatorUsesReg(block->terminator, getNameIns->dest.id) ||
+                                       exceptionEdgesUseReg(ins.dest.id) ||
+                                       exceptionEdgesUseReg(getNameIns->dest.id);
+                    }
+                }
+                if (hashIns != nullptr && !chainEscapes) {
+                    const ca::str::Utf8String site =
+                        emitState.cachePool->classNameHashSite();
+                    body.appendLineStart(regName(hashIns->dest.id))
+                        .append(" = ")
+                        .append(codegen::exprCall("mj2x_intrinsic_class_name_hash",
+                                                  {"_mj2x_regc_current_context()",
+                                                   operandExpr(ins.args[0]).to_std_string(),
+                                                   "&" + site.to_std_string()}))
+                        .append(";")
+                        .newLine();
+                    fusedNameHashEnd = hashIns;
+                    // 融合调用的 miss 路径经 JDK getName/hashCode，保留与被取代
+                    // 调用一致的异常分发。
+                    if (hashIns->effect.mayThrow && !activeRegions.empty()) {
                         if (!emitExceptionDispatch(body,
                                                    activeRegions,
                                                    block.get(),

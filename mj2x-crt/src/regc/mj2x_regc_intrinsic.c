@@ -629,6 +629,100 @@ int32_t mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receive
     return (*env)->GetIntField(env, (jobject)receiver, field);
 }
 
+// ---- getClass().getName().hashCode() 融合（双槽 receiver 身份缓存） ----
+
+#if defined(_WIN32)
+#include <intrin.h>
+static volatile long g_mj2x_cnh_lock = 0;
+static void mj2x_cnh_lock_acquire(void)
+{
+    while (_InterlockedCompareExchange((volatile long*)&g_mj2x_cnh_lock, 1, 0) != 0) {
+    }
+}
+static void mj2x_cnh_lock_release(void)
+{
+    _InterlockedExchange((volatile long*)&g_mj2x_cnh_lock, 0);
+}
+#else
+static volatile int g_mj2x_cnh_lock = 0;
+static void mj2x_cnh_lock_acquire(void)
+{
+    while (__sync_val_compare_and_swap(&g_mj2x_cnh_lock, 0, 1) != 0) {
+    }
+}
+static void mj2x_cnh_lock_release(void)
+{
+    __sync_lock_release(&g_mj2x_cnh_lock);
+}
+#endif
+
+/// 读写都持锁：无锁读会撞上槽位 {key, hash} 的撕裂更新（key 已换、hash 未换）。
+int32_t mj2x_intrinsic_class_name_hash(mj2x_regc_context*             context,
+                                       mj2x_ref                        receiver,
+                                       mj2x_regc_class_name_hash_site* site)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL || site == NULL) return 0;
+    if (receiver == NULL) {
+        mj2x_regc_throw_exception(context, "java/lang/NullPointerException", "getClass");
+        return 0;
+    }
+    mj2x_cnh_lock_acquire();
+    for (int i = 0; i < 2; ++i) {
+        if (site->slots[i].key != NULL &&
+            (*env)->IsSameObject(env, site->slots[i].key, (jobject)receiver)) {
+            const int32_t hit = site->slots[i].hash;
+            mj2x_cnh_lock_release();
+            return hit;
+        }
+    }
+    mj2x_cnh_lock_release();
+
+    // miss：经 JDK 计算（getName/hashCode 语义与消息由 JDK 保证），锁内回填。
+    static jclass    classClass  = NULL;
+    static jclass    stringClass = NULL;
+    static jmethodID getName     = NULL;
+    static jmethodID hashCode    = NULL;
+    if (getName == NULL || hashCode == NULL) {
+        jclass clsLocal = (*env)->FindClass(env, "java/lang/Class");
+        if (clsLocal == NULL) return 0;
+        if (classClass == NULL) classClass = (jclass)(*env)->NewGlobalRef(env, clsLocal);
+        getName = (*env)->GetMethodID(env, clsLocal, "getName", "()Ljava/lang/String;");
+        (*env)->DeleteLocalRef(env, clsLocal);
+        jclass strLocal = (*env)->FindClass(env, "java/lang/String");
+        if (strLocal == NULL) return 0;
+        if (stringClass == NULL) stringClass = (jclass)(*env)->NewGlobalRef(env, strLocal);
+        hashCode = (*env)->GetMethodID(env, strLocal, "hashCode", "()I");
+        (*env)->DeleteLocalRef(env, strLocal);
+        if (getName == NULL || hashCode == NULL) return 0;
+    }
+    jclass   cls = (*env)->GetObjectClass(env, (jobject)receiver);
+    if (cls == NULL) return 0;
+    jstring name = (jstring)(*env)->CallObjectMethodA(env, cls, getName, NULL);
+    if (name == NULL) {
+        (*env)->DeleteLocalRef(env, cls);
+        return 0;   // pending exception 保持
+    }
+    jint hash = (*env)->CallIntMethodA(env, name, hashCode, NULL);
+    (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, name);
+
+    jobject keyGlobal = (*env)->NewGlobalRef(env, (jobject)receiver);
+    if (keyGlobal == NULL) return hash;   // OOM：不缓存，直接返回
+    mj2x_cnh_lock_acquire();
+    const jobject oldKey1 = site->slots[1].key;
+    if (site->slots[0].key != NULL) {
+        site->slots[1]       = site->slots[0];
+    }
+    site->slots[0].key  = keyGlobal;
+    site->slots[0].hash = (int32_t)hash;
+    if (oldKey1 != NULL && oldKey1 != site->slots[1].key) {
+        (*env)->DeleteGlobalRef(env, oldKey1);
+    }
+    mj2x_cnh_lock_release();
+    return (int32_t)hash;
+}
+
 // ---- javac 合成 values() / valueOf(String) ----
 
 mj2x_ref mj2x_intrinsic_enum_values(mj2x_regc_context* context, mj2x_ref values,

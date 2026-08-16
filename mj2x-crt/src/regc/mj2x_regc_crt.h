@@ -157,6 +157,24 @@ typedef struct mj2x_regc_enum_valueof_site
     jmethodID   enumValueOf;
 } mj2x_regc_enum_valueof_site;
 
+/// @brief `getClass().getName().hashCode()` 融合调用的站点缓存（双槽）。
+///
+/// @details
+/// 键为 receiver 对象身份（IsSameObject）：类名与其 hash 对同一对象恒定，
+/// 命中时 1 个 JNI 替代 GetObjectClass + getName + hashCode 的 3 个 JNI。
+/// 双槽覆盖 A/B 交替 receiver（如 workers[i&1]）；miss 在自旋锁内回填，
+/// 读写都持锁避免槽位 {key,hash} 撕裂。
+typedef struct mj2x_regc_class_name_hash_slot
+{
+    jobject key;    ///< global ref（receiver 身份键；NULL = 空槽）
+    int32_t hash;
+} mj2x_regc_class_name_hash_slot;
+
+typedef struct mj2x_regc_class_name_hash_site
+{
+    mj2x_regc_class_name_hash_slot slots[2];
+} mj2x_regc_class_name_hash_site;
+
 /// @brief Opaque UTF-16 StringBuilder state owned by mj2x-crt.
 ///
 /// The allocation and representation stay private so a later C++ source pack

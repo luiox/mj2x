@@ -79,6 +79,8 @@ public:
     /// 方法体为 javac 合成形态）。
     ca::str::Utf8String enumValuesSite(const ca::str::Utf8StringRef& owner);
     ca::str::Utf8String enumValueOfSite(const ca::str::Utf8StringRef& owner);
+    /// getClass().getName().hashCode() 融合调用点站点缓存（每调用点一个）。
+    ca::str::Utf8String classNameHashSite();
 
     std::string renderDeclarations() const;
     bool        empty() const;
@@ -98,6 +100,7 @@ private:
     std::map<std::string, ca::str::Utf8String> resolvedCallSiteNames_;
     std::map<std::string, ca::str::Utf8String> enumValuesSiteNames_;
     std::map<std::string, ca::str::Utf8String> enumValueOfSiteNames_;
+    int                                classNameHashSiteIndex_ = 0;
     int                                staticMethodCacheIndex_   = 0;
     int                                instanceMethodCacheIndex_ = 0;
     int                                staticFieldCacheIndex_    = 0;

@@ -285,6 +285,24 @@ ca::str::Utf8String RegCCachePool::enumValueOfSite(const ca::str::Utf8StringRef&
     return cacheName;
 }
 
+ca::str::Utf8String RegCCachePool::classNameHashSite()
+{
+    CSourceStream cacheNameBuilder;
+    cacheNameBuilder.append("_mj2x_regc_cnh_site_tu_");
+    cacheNameBuilder.append(ca::str::format_std("{}", classNameHashSiteIndex_++));
+    ca::str::Utf8String cacheName = cacheNameBuilder.build();
+
+    CSourceStream decl;
+    if (commentLevel_ >= RegCCommentLevel::Summary) {
+        decl.append("// cache: getClass().getName().hashCode() fused\n");
+    }
+    decl.append("static mj2x_regc_class_name_hash_site ");
+    decl.append(cacheName);
+    decl.append(" = {{{NULL, 0}, {NULL, 0}}};\n");
+    declarations_.push_back(decl.build());
+    return cacheName;
+}
+
 std::string RegCCachePool::renderDeclarations() const
 {
     CSourceStream out;
