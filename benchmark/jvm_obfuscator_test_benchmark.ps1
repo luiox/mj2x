@@ -1,4 +1,4 @@
-# jvm_obfuscator_test_benchmark.ps1 — RegC vs os30(JNIC) 13-probe 性能对比基准
+﻿# jvm_obfuscator_test_benchmark.ps1 — RegC vs os30(JNIC) 13-probe 性能对比基准
 #
 # 用途：把 jvm-obf-tester（13 个探针 jar）用 mj2x-cli --backend regc 全量 native 化，
 # 与竞品 os30（JNIC 混淆产物）在同一 JDK 下对比各探针耗时，产出 markdown 报告。
@@ -86,7 +86,7 @@ if (-not $SkipBuild) {
     # 破坏 root 配置，见 issue #782 与交接备忘；缺 -c 时 build 报 invalid argument）。
     & xmake f -c -P $repo -p windows -m release --with_mj2x=y --with_tests=y 2>&1 | Out-Null
     $buildLog = Join-Path $outDir "cli-build.log"
-    $out = & xmake -P $repo build mj2x-cli 2>&1 | ForEach-Object { $_.ToString() }
+    $out = & xmake build -P $repo mj2x-cli 2>&1 | ForEach-Object { $_.ToString() }
     Set-Content -Path $buildLog -Value ($out -join [Environment]::NewLine) -Encoding UTF8
     if (($out -join "`n") -match "error") { throw "mj2x-cli 构建失败，见 $buildLog" }
     if (-not (Test-Path $Cli)) { throw "构建后仍未找到 $Cli" }
@@ -98,10 +98,12 @@ Remove-Item -Recurse -Force $projDir -ErrorAction SilentlyContinue
 Remove-Item -Force $outJar -ErrorAction SilentlyContinue
 Run-ProcessChecked $Cli @("-i", $InputJar, "-o", $outJar, "--backend", "regc", "--generate-xmake", $projDir) `
     $outDir (Join-Path $outDir "regc-convert.log") | Out-Null
-Run-ProcessChecked "xmake" @("f", "-P", $projDir, "-m", "release") `
+# -p windows -a x64 显式指定：shell 环境的 PATH/MSYSTEM 污染会让 xmake
+# 平台自检误判为 mingw（Git 自带 mingw64），基准口径漂移 + toolchain not found。
+Run-ProcessChecked "xmake" @("f", "-P", $projDir, "-p", "windows", "-a", "x64", "-m", "release") `
     $projDir (Join-Path $outDir "native-config.log") | Out-Null
 $nativeLog = Join-Path $outDir "native-build.log"
-$out = & xmake -P $projDir mj2x_native 2>&1 | ForEach-Object { $_.ToString() }
+$out = & xmake build -P $projDir mj2x_native 2>&1 | ForEach-Object { $_.ToString() }
 Set-Content -Path $nativeLog -Value ($out -join [Environment]::NewLine) -Encoding UTF8
 if (($out -join "`n") -match "error") { throw "native 编译失败，见 $nativeLog" }
 
@@ -211,7 +213,9 @@ $os30TotalAvg = if (-not $Regression -and $os30Totals.Count -gt 0) {
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("# jvm-obf-tester 13-probe 对比（$stamp）")
 $lines.Add("")
-$lines.Add("- 环境：JDK $((& $java -version 2>&1 | Select-Object -First 1))")
+# java -version 走 stderr；PS5.1 会把 NativeCommandError 记录混入管道，经
+# cmd /c 合并后取纯文本。
+$lines.Add("- 环境：JDK $((cmd /c "`"$java`" -version 2>&1" | Select-Object -First 1))")
 $lines.Add("- 取样：预热 1 轮 + $Runs 轮取平均")
 $lines.Add("- RegC 产物：$outJar（mj2x-cli --backend regc 全量转换 + xmake 编译嵌入）")
 if ($Regression) {

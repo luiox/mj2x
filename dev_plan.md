@@ -100,6 +100,18 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-17（regc 13-probe 性能第二轮：整体反超 os30）：**Total ratio
+  1.07→0.95（116ms vs os30 122.3ms，MSVC -p windows 口径），首次整体反超**。
+  两项优化：`getClass().getName().hashCode()` 链融合 intrinsic（emitter 前瞻
+  匹配 + CRT 双槽 receiver 身份缓存 + 自旋锁，3 JNI→1，Inheritance
+  1.72→1.55、Reflection 1.38→1.26）；`substring(I|II)` intrinsic 回退
+  （CRT 版本 4 JNI + 全串拷贝劣于 1-JNI JDK 调用，String 1.54→1.12）。
+  基准脚本修复：UTF-8 BOM（PS5.1 ANSI 解析炸中文）、`-P` 移到 `build`
+  子命令后（本机 xmake 全局选项前置报 invalid argument）、`java -version`
+  经 cmd /c 合并 stderr（PS5.1 NativeCommandError）。验证：mj2x_unittest
+  613 过/3 skip、mtest_set 25/25、E2E 套件绿、覆盖审计 RegC 74.7% vs
+  os30 61.6%。遗留：Inheritance 1.55（bias 字段/checkcast/接口分派）、
+  Exception 1.37、ControlFlow 1.34、Crypto 1.04（JDK 侧主导）。
 - 2026-08-17（regc 13-probe 性能追平 os30）：**Total ratio 1.14→0.98（118.8ms
   vs os30 121.6ms），7/13 探针反超**（Enums 0.53x / Visitor 0.77x / Reflection
   0.91x / Resource 0.15x / ClassLoading 0.67x / Collections 0.98x / Inner 1.00x）。
