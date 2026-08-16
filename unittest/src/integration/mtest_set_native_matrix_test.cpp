@@ -72,7 +72,8 @@ bool llvmSupports(const char* fixtureId)
         "g6.recursion",     "g7.static_fields",  "g7.instance_fields",
         "g9.object_lifecycle", "g9.type_checks", "g10.throw_catch",
         "g10.monitor",      "g11.reflection_access", "g12.string_ops",
-        "g13.bit_ops",      "g14.deep_recursion", "g15.collection_ops",
+        "g12.string_compare", "g13.bit_ops",     "g13.shift_out_of_range",
+        "g14.deep_recursion", "g15.collection_ops",
     };
     for (const char* id : supported) {
         if (std::strcmp(id, fixtureId) == 0) return true;
