@@ -13,6 +13,7 @@
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
+#include "mj2x/codegen/jvm_semantics.hpp"
 
 #include <algorithm>
 #include <set>
@@ -104,18 +105,56 @@ ca::str::Utf8String binaryExpr(const RegInstruction& ins)
         os.append(")");
         return os.build();
     }
-    if (ins.binaryOp == SSABinaryOp::UShr) {
-        CSourceStream os;
-        os.append("(");
-        os.append(cType(type));
-        os.append(")((");
-        os.append(unsignedCType(type));
-        os.append(")");
-        os.append(lhs);
-        os.append(" >> ");
-        os.append(rhs);
-        os.append(")");
-        return os.build();
+    if (isIntegerLike(type)) {
+        // JVM 移位计数按位宽掩码（int &31 / long &63，JLS 15.19）：超界计数是
+        // 定义行为，C 裸移位是 UB。掩码值来自 codegen/jvm_semantics.hpp 共享
+        // 决策（g13.shift_out_of_range 回归守门）。
+        const bool isShift = ins.binaryOp == SSABinaryOp::Shl ||
+                             ins.binaryOp == SSABinaryOp::Shr ||
+                             ins.binaryOp == SSABinaryOp::UShr;
+        if (isShift) {
+            const int mask = codegen::jvmShiftMask(type);
+            if (ins.binaryOp == SSABinaryOp::UShr) {
+                CSourceStream os;
+                os.append("(");
+                os.append(cType(type));
+                os.append(")((");
+                os.append(unsignedCType(type));
+                os.append(")");
+                os.append(lhs);
+                os.append(" >> (");
+                os.append(rhs);
+                os.append(" & ");
+                os.append(ca::str::format_std("{}", mask));
+                os.append("))");
+                return os.build();
+            }
+            CSourceStream os;
+            os.append("(");
+            os.append(cType(type));
+            os.append(")(");
+            if (ins.binaryOp == SSABinaryOp::Shl) {
+                os.append("(");
+                os.append(unsignedCType(type));
+                os.append(")");
+                os.append(lhs);
+                os.append(" << (");
+                os.append(rhs);
+                os.append(" & ");
+                os.append(ca::str::format_std("{}", mask));
+                os.append(")");
+            }
+            else {
+                os.append(lhs);
+                os.append(" >> (");
+                os.append(rhs);
+                os.append(" & ");
+                os.append(ca::str::format_std("{}", mask));
+                os.append(")");
+            }
+            os.append(")");
+            return os.build();
+        }
     }
     if (isIntegerLike(type) &&
         (ins.binaryOp == SSABinaryOp::Add || ins.binaryOp == SSABinaryOp::Sub ||

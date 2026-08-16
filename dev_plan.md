@@ -51,7 +51,8 @@
   fail-closed——LLVM 发射模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef`
   稳定化）+ 运行时 bootstrap 解析（`MethodHandles.lookup` / `MethodType` /
   `privateLookupIn` / bsm 调用 / `CallSite.getTarget` / `invokeWithArguments`，
-  参数装箱、返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点保字节码）。
+  参数装箱、返回拆箱）。与 RegC 对齐（regc_backend 的 emitIndyBootstrapFunction
+  同功能——原文"超出 RegC"失实，2026-08-16 审查订正）。
   验证：`CliTest.LlvmIndyCustomBootstrapE2E`（plain / runtime-protection fake /
   regc-obfuscate 三变体，输出 7-42-11）+ `LlvmIrBackendTest.EmitsIndyRuntimeResolution`。
 - **intrinsic 扩面对齐 RegC** 🟡（Math 纯函数 + 包装类 + Random + StringBuilder
@@ -150,7 +151,7 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   594 过 / 3 skip；矩阵 66 例全绿（g5.abs 走 intrinsic）；Math E2E
   `abs=10 sqrt=5.0`（pipe/文件双模式）。
 - 2026-08-21（round-2 收尾）：四主线落地——**indy 运行时解析**（自定义 bootstrap
-  `indy:<idx>` → 全局 cache + bsm resolver，超出 RegC）、**intrinsic**（cmp.nan_*）、
+  `indy:<idx>` → 全局 cache + bsm resolver，与 RegC 对齐——原文"超出 RegC"失实，订正）、**intrinsic**（cmp.nan_*）、
   **保护特性**（runtime-protection 检查点 + MBA/opaque/CFF 变换接入 llvm）、
   **测试矩阵**（LLVM 列 22 fixtures + protected_samples/llvm 三样本）。修复：
   ANEWARRAY 数组描述符悬垂（SSA arena 生命周期）、I2S 误按 i8 截断、check_cast/
@@ -188,6 +189,58 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 - 2026-08-19：mjdbg N-7 VMC4 ISA 恢复工具 v1 全闭环（PR #845）——五形态识别 +
   静态全恢复（跨实例复用率 100%），VMC4 低风险档强度归零、S2 启动条件满足；
   红队验证发现并修复 computed_goto label 定义（`::` → `:`）。
+- 2026-08-16（语义审计修复 X1-X4,分支 `mj2x/semantics-hardening`）：
+  - **X1（最严重）**：`LdcPreprocessor` 展开栈序缺陷——压栈 `Class,
+    String(desc), MethodType, String(name)` 与 `findVirtual/findStatic` 的
+    `(Class, String, MethodType)` 不符（多一参且 name/MethodType 颠倒）；
+    field tag 沿用 3 参 MethodType 形态 desc、`findSpecial` 4 参只压 3 参、
+    `findConstructor` 2 参多压 String——默认注册 + 遍历所有非库类，任何含
+    ldc Handle 的类经 CLI 处理即 VerifyError。修复：按 tag 分派重写展开
+    （含 field 类型的 Class 发射,primitive 走 `GETSTATIC <Box>.TYPE`）、
+    MethodType 构造改用调用者 ClassLoader（保护态 jar 语义）、code_converter
+    Handle ldc 由静默 null 改显式 unsupported marker。守门：迷你栈校验器单测
+    （11 例,直接抓住压栈顺序/数量错误）+ 手构字节码 exec E2E（javac 不产
+    ldc Handle,保护器产物才是真实来源）。
+  - **X2**：RegC/LLVM 移位缺 JVM `&31/&63` 掩码（C UB / LLVM poison）,且
+    `llvm_ir_validation.cpp` 注释错误声称等价；新增暴露 LLVM long 移位
+    i32 计数未 zext 的非法定 IR。修复：掩码决策收敛到
+    `codegen/jvm_semantics.hpp` 单源,RegC/LLVM 消费；新增四后端语义回归集
+    （`g13.shift_out_of_range` 计数走参数防常量折叠 + `g12.string_compare`）,
+    矩阵/LLVM 白名单/VMC4 E2E 全接入。
+  - **X3（复核为误报）**：indy 单对象快路径 `stack[sp+1]`/`++sp` 净效应恰好
+    正确（通用路径先 `sp -= argCount` 补偿）——但快路径白建 varargs 数组
+    （热路径每调用多 2 次 JNI）且依赖 stale 槽。清理为参数 pop 前原槽捕获 +
+    结果原位覆写,emit-shape 单测锁形态。
+  - **X4（结构性）**：`staticizeStackText` 加字符串字面量/`//` 注释感知
+    （indy bsm 元数据字符串内联进方法体,含 `sp -= N` 等模式会被静默改写并
+    错位后续槽）；跨后端语义决策笔记沉淀 `doc_ai/cross_backend_semantics.md`
+    （含 RegIR 语义显式化的后续路径）。
+  - 次要：vmc4 过时"MVP 纯计算"注释与恒真死分支（误导日志）清理、新增
+    `Vmc4JniSurfaceSample` protected sample（JNI helper 攻防面 + CLI round-trip
+    测试）、删空 `platform.h`。
+  - 验证：mj2x_unittest 全量 / mj2x_integration_test 全量（矩阵含新 fixture
+    三列）/ mtest_set_unittest + mtest_set_integration_test 全绿。
+- 2026-08-16（LLVM round-2 补充审查 Y1-Y4,同分支追加）：
+  - **Y1**：indy 结果 REF dest 被 `unsupported type` 整方法拒绝（与注释
+    "REF 直接透传"/validation 层矛盾,unboxReturnType REF 分支不可达）→ REF
+    直接透传存槽;E2E 补 REF 返回站点（此前全是 (II)I 原语,零覆盖）。
+  - **Y2**：bsm 失败（返回 null + pending）被送进 mj2x_llvm_call_object 的
+    ThrowNew NPE 掩盖（StackC 对应路径是异常分发,移植降级）→ null 分支走
+    emitExceptionDispatch;invokeWithArguments 之后统一 ExceptionCheck 再
+    拆箱/透传。E2E 补恒抛 ISE 的 bsmFail 站点（BootstrapMethodError 解包
+    归一化后基线/native 一致）。
+  - **Y3**：indy 缓存失效路径 `br %cached_ok; ret null` → `br %resolve`
+    重走解析（≈OOM 触发,意图写错）。
+  - **Y4**：`Random.nextInt(bound)` 切片唯一 fail-open 角落——crt 对
+    bound<=0 返回 INT32_MIN（无异常通道）而 JVM 应抛 IAE → RegC/LLVM 发射端
+    预检（RegC 走 context throw + mayThrow 分发;LLVM 新增 throw_new prelude
+    helper + 异常分发）,保留切片优化;RegC E2E 新用例 + LLVM 样本/E2E 覆盖。
+  - 文档订正：capabilities/user_guide/dev_plan 三处"indy 运行时解析超出
+    RegC"失实（regc_backend.cpp:1034 早有同功能 emitIndyBootstrapFunction）;
+    native_compiler.hpp 过时"不需要 crt source pack"注释;param_registry 五个
+    regc|llvm 共享参数 help 分组 RegC→RegC/LLVM;`$`→`_00024` JNI 符号
+    mangling 变更与 alloca 已知限制记录入 capabilities;匹配表/逃逸分析/
+    indy 解析三个共享层抽取候选补入 cross_backend_semantics.md §3.1。
 - 2026-08-15：配置系统 P0+P1 完成（参数注册表 + schema/模板导出 + ConfigRegistryTest
   10 项，PR #846）。
 - 更早记录已归档到 git log（见"已完成归档"索引）。

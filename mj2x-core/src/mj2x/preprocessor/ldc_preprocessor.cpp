@@ -29,9 +29,34 @@ bool isMethodTypeCst(const ca::core::Any& cst)
     return p && p->getSort() == Type::METHOD;
 }
 
-// 给一个方法的指令列表，在 ldc 节点处插入展开序列，并移除原 ldc。
-// 返回是否改写过（用于跳过未改写的方法）。
-void expandLdcInMethod(ca::str::Utf8StringArena& arena, MethodNode* m)
+/// 字段描述符为 primitive sort 时，承载其 Class 对象的包装类（Integer.TYPE 等）。
+const char* primitiveBoxClass(int sort)
+{
+    switch (sort) {
+    case Type::BOOLEAN: return "java/lang/Boolean";
+    case Type::CHAR: return "java/lang/Character";
+    case Type::BYTE: return "java/lang/Byte";
+    case Type::SHORT: return "java/lang/Short";
+    case Type::INT: return "java/lang/Integer";
+    case Type::LONG: return "java/lang/Long";
+    case Type::FLOAT: return "java/lang/Float";
+    case Type::DOUBLE: return "java/lang/Double";
+    default: return nullptr;
+    }
+}
+
+/// 给一个方法的指令列表，在 ldc 节点处插入展开序列，并移除原 ldc。
+/// 展开严格按 Lookup.findXxx 描述符的参数顺序压栈（栈校验见 ldc_preprocessor_test）：
+///   findVirtual/findStatic:  (Class, String, MethodType)
+///   findSpecial:             (Class, String, MethodType, Class caller)
+///   findConstructor:         (Class, MethodType)
+///   findGetter/findSetter 系: (Class, String, Class fieldType)
+/// MethodType 一律经 MethodType.fromMethodDescriptorString(desc, loader) 构造，
+/// loader 取调用者类的 getClassLoader()（保护态 jar 走自定义 cloader，系统
+/// ClassLoader 解析不了应用类引用）。
+/// @return 本方法是否实际发生 ldc 展开（供调用方置 cls.modified）。
+bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef callerClass,
+                       MethodNode* m)
 {
     // 收集要改写的 ldc 节点（边遍历边改 list 会迭代器失效，故先收集）
     std::vector<LdcInsnNode*> targets;
@@ -43,143 +68,129 @@ void expandLdcInMethod(ca::str::Utf8StringArena& arena, MethodNode* m)
             }
         }
     }
-    if (targets.empty()) return;
+    if (targets.empty()) return false;
+
+    // LDC String 常量（desc / name）。
+    auto newStringLdc = [&](ca::str::Utf8StringRef value) {
+        return new LdcInsnNode(
+            std::string(reinterpret_cast<const char*>(value.data()), value.byte_length()));
+    };
+
+    // 压入 MethodType：LDC String(desc), LDC Class(caller), getClassLoader(),
+    // MethodType.fromMethodDescriptorString(String, ClassLoader)。
+    auto pushMethodTypeSeq = [&](std::vector<AbstractInsnNode*>& seq,
+                                 ca::str::Utf8StringRef desc) {
+        seq.push_back(newStringLdc(desc));
+        seq.push_back(new LdcInsnNode(Type::getObjectType(callerClass)));
+        seq.push_back(new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                         intern(arena, "java/lang/Class"),
+                                         intern(arena, "getClassLoader"),
+                                         intern(arena, "()Ljava/lang/ClassLoader;"),
+                                         false));
+        seq.push_back(new MethodInsnNode(
+            Opcodes::INVOKESTATIC,
+            intern(arena, "java/lang/invoke/MethodType"),
+            intern(arena, "fromMethodDescriptorString"),
+            intern(arena,
+                   "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;"),
+            false));
+    };
 
     for (auto* ldc : targets) {
+        std::vector<AbstractInsnNode*> seq;
         if (isHandleCst(ldc->cst)) {
-            Handle h = ldc->cst.cast<Handle>();
-            // 展开序列（插入到 ldc 之前，然后删 ldc）：
-            //   INVOKESTATIC MethodHandles.lookup()           ; → Lookup
-            //   LDC <owner class>                              ; → Class
-            //   per tag → findVirtual/findStatic/...(Class, name, MethodType)
-            auto* callLookup =
-                new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                   intern(arena, "java/lang/invoke/MethodHandles"),
-                                   intern(arena, "lookup"),
-                                   intern(arena, "()Ljava/lang/invoke/MethodHandles$Lookup;"),
-                                   false);
-            // owner class：用 LDC Type OBJECT（Class 常量）
-            auto* ldcOwner = new LdcInsnNode(Type::getObjectType(h.getOwner()));
-            // 方法名
+            Handle                 h     = ldc->cst.cast<Handle>();
             ca::str::Utf8StringRef mname = h.getName();
             ca::str::Utf8StringRef mdesc = h.getDesc();
-            // 按 tag 选 Lookup 方法 + descriptor
+            const int              tag   = h.getTag();
+
+            // Lookup receiver + declaring Class。
+            seq.push_back(new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                             intern(arena, "java/lang/invoke/MethodHandles"),
+                                             intern(arena, "lookup"),
+                                             intern(arena, "()Ljava/lang/invoke/MethodHandles$Lookup;"),
+                                             false));
+            seq.push_back(new LdcInsnNode(Type::getObjectType(h.getOwner())));
+
+            // findXxx 选择（按 tag），name/MethodType/fieldType/caller 按其描述符顺序入栈。
             const char* lookupMethodName = "findVirtual";
             const char* lookupMethodDesc =
                 "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
                 "Ljava/lang/invoke/MethodHandle;";
-            int tag = h.getTag();
             switch (tag) {
             case Opcodes::H_GETFIELD:
-                lookupMethodName = "findGetter";
-                lookupMethodDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                                   "Ljava/lang/invoke/MethodHandle;";
-                break;
             case Opcodes::H_GETSTATIC:
-                lookupMethodName = "findStaticGetter";
-                lookupMethodDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                                   "Ljava/lang/invoke/MethodHandle;";
-                break;
             case Opcodes::H_PUTFIELD:
-                lookupMethodName = "findSetter";
-                lookupMethodDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                                   "Ljava/lang/invoke/MethodHandle;";
-                break;
             case Opcodes::H_PUTSTATIC:
-                lookupMethodName = "findStaticSetter";
-                lookupMethodDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                                   "Ljava/lang/invoke/MethodHandle;";
+            {
+                // findGetter/findSetter 系：第三个参数是字段类型 Class，不是 MethodType。
+                // primitive 字段类型没有 ldc 形态的 Class 常量，用 GETSTATIC <Box>.TYPE。
+                lookupMethodName = tag == Opcodes::H_GETFIELD    ? "findGetter"
+                                   : tag == Opcodes::H_GETSTATIC ? "findStaticGetter"
+                                   : tag == Opcodes::H_PUTFIELD   ? "findSetter"
+                                                                  : "findStaticSetter";
+                lookupMethodDesc =
+                    "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+                    "Ljava/lang/invoke/MethodHandle;";
+                seq.push_back(newStringLdc(mname));
+                const Type fieldType = Type::getType(h.getDesc());
+                if (const char* box = primitiveBoxClass(fieldType.getSort())) {
+                    seq.push_back(new FieldInsnNode(Opcodes::GETSTATIC,
+                                                    intern(arena, box),
+                                                    intern(arena, "TYPE"),
+                                                    intern(arena, "Ljava/lang/Class;")));
+                }
+                else {
+                    seq.push_back(new LdcInsnNode(Type::getType(h.getDesc())));
+                }
                 break;
-            case Opcodes::H_INVOKEVIRTUAL:
-            case Opcodes::H_INVOKEINTERFACE: lookupMethodName = "findVirtual"; break;
-            case Opcodes::H_INVOKESTATIC: lookupMethodName = "findStatic"; break;
+            }
             case Opcodes::H_INVOKESPECIAL:
+                // findSpecial(Class, String, MethodType, Class specialCaller)。
                 lookupMethodName = "findSpecial";
                 lookupMethodDesc =
                     "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;"
                     "Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
+                seq.push_back(newStringLdc(mname));
+                pushMethodTypeSeq(seq, mdesc);
+                seq.push_back(new LdcInsnNode(Type::getObjectType(callerClass)));
                 break;
             case Opcodes::H_NEWINVOKESPECIAL:
+                // findConstructor(Class, MethodType)：无 name 参数。
                 lookupMethodName = "findConstructor";
-                lookupMethodDesc = "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
-                                   "Ljava/lang/invoke/MethodHandle;";
+                lookupMethodDesc =
+                    "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
+                    "Ljava/lang/invoke/MethodHandle;";
+                pushMethodTypeSeq(seq, mdesc);
                 break;
-            default: break;
+            case Opcodes::H_INVOKESTATIC: lookupMethodName = "findStatic"; [[fallthrough]];
+            case Opcodes::H_INVOKEVIRTUAL:
+            case Opcodes::H_INVOKEINTERFACE:
+            default:
+                // findVirtual/findStatic(Class, String, MethodType)。
+                seq.push_back(newStringLdc(mname));
+                pushMethodTypeSeq(seq, mdesc);
+                break;
             }
-            // 对 field tag（getter/setter），descriptor 参数是字段类型 Class，不是 MethodType。
-            // R1b 简化：field tag 也用 findGetter(Class, name, Class) 的形式，
-            //   需要把字段 desc（如 "I"）转成 Class。这里用 LDC Type OBJECT(descriptor)。
-            // 为控制复杂度，R1b 先完整实现 method handle（findVirtual/findStatic/findSpecial/
-            //   findConstructor），field handle 留个 TODO（遇到再补，SnakeGame 没有 field handle
-            //   ldc）。
-            (void)lookupMethodDesc;
-            // 构造 MethodType（descriptor → MethodType.fromMethodDescriptorString）：
-            //   LDC <mdesc string>
-            //   INVOKESTATIC getClass().getClassLoader()  —— 复用 MethodType 展开逻辑（见下）
-            // R1b 简化：method handle 用 findVirtual/findStatic/findConstructor 的通用形式。
-            auto* ldcMdesc = new LdcInsnNode(
-                std::string(reinterpret_cast<const char*>(mdesc.data()), mdesc.byte_length()));
-            // MethodType.fromMethodDescriptorString(desc, classloader)
-            // 先取 classloader：INVOKESTATIC java/lang/Class... 不行，要先有 class。
-            // 用调用者的 getClass()：但这里在 ldc 处没有 this。
-            // 简化：用系统 ClassLoader：INVOKESTATIC ClassLoader.getSystemClassLoader()
-            auto* callSysCl    = new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                                 intern(arena, "java/lang/ClassLoader"),
-                                                 intern(arena, "getSystemClassLoader"),
-                                                 intern(arena, "()Ljava/lang/ClassLoader;"),
-                                                 false);
-            auto* callFromDesc = new MethodInsnNode(
-                Opcodes::INVOKESTATIC,
-                intern(arena, "java/lang/invoke/MethodType"),
-                intern(arena, "fromMethodDescriptorString"),
-                intern(arena,
-                       "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;"),
-                false);
-            // LDC method name string
-            auto* ldcName = new LdcInsnNode(
-                std::string(reinterpret_cast<const char*>(mname.data()), mname.byte_length()));
-            // findXxx(Class, String, MethodType)
-            auto* callFind =
-                new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                                   intern(arena, "java/lang/invoke/MethodHandles$Lookup"),
-                                   intern(arena, lookupMethodName),
-                                   intern(arena, lookupMethodDesc),
-                                   false);
+            seq.push_back(new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                             intern(arena, "java/lang/invoke/MethodHandles$Lookup"),
+                                             intern(arena, lookupMethodName),
+                                             intern(arena, lookupMethodDesc),
+                                             false));
+        }
+        else {
+            // ldc MethodType → fromMethodDescriptorString(desc, callerClassLoader)
+            Type t = ldc->cst.cast<Type>();
+            pushMethodTypeSeq(seq, t.getDescriptor());
+        }
 
-            // 插入序列到 ldc 之前，删 ldc
-            m->instructions.insertBefore(ldc, callFind);
-            m->instructions.insertBefore(callFind, ldcName);
-            m->instructions.insertBefore(ldcName, callFromDesc);
-            m->instructions.insertBefore(callFromDesc, callSysCl);
-            m->instructions.insertBefore(callSysCl, ldcMdesc);
-            m->instructions.insertBefore(ldcMdesc, ldcOwner);
-            m->instructions.insertBefore(ldcOwner, callLookup);
-            m->instructions.remove(ldc);
+        // 按程序序插到 ldc 之前，然后删 ldc。
+        for (auto* node : seq) {
+            m->instructions.insertBefore(ldc, node);
         }
-        else if (isMethodTypeCst(ldc->cst)) {
-            // ldc MethodType → fromMethodDescriptorString(desc, systemClassLoader)
-            Type  t       = ldc->cst.cast<Type>();
-            auto  desc    = t.getDescriptor();
-            auto* ldcDesc = new LdcInsnNode(
-                std::string(reinterpret_cast<const char*>(desc.data()), desc.byte_length()));
-            auto* callSysCl    = new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                                 intern(arena, "java/lang/ClassLoader"),
-                                                 intern(arena, "getSystemClassLoader"),
-                                                 intern(arena, "()Ljava/lang/ClassLoader;"),
-                                                 false);
-            auto* callFromDesc = new MethodInsnNode(
-                Opcodes::INVOKESTATIC,
-                intern(arena, "java/lang/invoke/MethodType"),
-                intern(arena, "fromMethodDescriptorString"),
-                intern(arena,
-                       "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;"),
-                false);
-            m->instructions.insertBefore(ldc, callFromDesc);
-            m->instructions.insertBefore(callFromDesc, callSysCl);
-            m->instructions.insertBefore(callSysCl, ldcDesc);
-            m->instructions.remove(ldc);
-        }
+        m->instructions.remove(ldc);
     }
+    return true;
 }
 
 }   // namespace
@@ -190,7 +201,10 @@ void LdcPreprocessor::process(CompilerIndex& index)
     for (auto& [name, cls] : index.getClasses()) {
         if (cls.isLibrary) continue;
         for (auto* m : cls.classNode->methods) {
-            expandLdcInMethod(arena, m);
+            // 展开改写了指令流：类必须标记 modified，否则未翻译类以
+            // COMPUTE_MAXS 写出，旧 StackMapTable 配新指令流必 VerifyError
+            //（对齐 init_clinit_mover 的先例）。
+            if (expandLdcInMethod(arena, cls.classNode->name, m)) cls.modified = true;
         }
     }
 }

@@ -1061,6 +1061,11 @@ TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
     EXPECT_NE(result.text.find("call i32 @mj2x_random_next_int_bound(ptr %slot_r"),
               std::string::npos)
         << result.text;
+    // Y4 fail-closed 预检：bound<=0 → ThrowNew IllegalArgumentException + 异常
+    // 分发（crt 直调无异常通道；类名经 strings_ 常量表引用，不内联文本）。
+    EXPECT_NE(result.text.find("icmp sle i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("call void @mj2x_llvm_throw_new"), std::string::npos)
+        << result.text;
     // 0 JNI：无 NewObject、无 CallIntMethodA。
     EXPECT_EQ(result.text.find("mj2x_llvm_new_object"), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("mj2x_llvm_call_int"), std::string::npos) << result.text;

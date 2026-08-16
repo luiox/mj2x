@@ -356,6 +356,45 @@ TEST_F(RegCBackendE2E, PureArithmeticLoopAndArrayRoundTrip)
             });
 }
 
+TEST_F(RegCBackendE2E, RandomNextIntBoundTrapRoundTrip)
+{
+    // Random.nextInt(bound) 切片的 fail-closed 预检（Y4）：JVM 对 bound<=0 抛
+    // IllegalArgumentException；crt 直调（mj2x_random_next_int_bound）无异常
+    // 通道（旧实现 bound<=0 返回 INT32_MIN 哨兵 = fail-open），发射端预检把
+    // 异常挂到 context，由调用后异常分发/JNI 边界统一处理。正常 bound 的
+    // 结果与 JVM 逐位一致（标准 Java LCG）。
+    runCase("RegCRandomBound",
+            "public class RegCRandomBound {\n"
+            "  public static int okBound(long seed, int bound) {\n"
+            "    return new java.util.Random(seed).nextInt(bound);\n"
+            "  }\n"
+            "  public static int trap(long seed, int bound) {\n"
+            "    try {\n"
+            "      return new java.util.Random(seed).nextInt(bound);\n"
+            "    } catch (IllegalArgumentException e) {\n"
+            "      return -1;\n"
+            "    }\n"
+            "  }\n"
+            "  public static int trapInTry(long seed, int bound) {\n"
+            "    int sink = 0;\n"
+            "    try {\n"
+            "      sink = new java.util.Random(seed).nextInt(bound);\n"
+            "    } catch (IllegalArgumentException e) {\n"
+            "      sink = -2;\n"
+            "    }\n"
+            "    return sink;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"okBound(42, 100)", "RegCRandomBound.okBound(42L, 100)"},
+                {"okBound(7, 16)", "RegCRandomBound.okBound(7L, 16)"},
+                {"trap(42, 0)", "RegCRandomBound.trap(42L, 0)"},
+                {"trap(42, -3)", "RegCRandomBound.trap(42L, -3)"},
+                {"trapInTry(42, 0)", "RegCRandomBound.trapInTry(42L, 0)"},
+                {"trapInTry(42, 10)", "RegCRandomBound.trapInTry(42L, 10)"},
+            });
+}
+
 TEST_F(RegCBackendE2E, FieldAndReferenceHelpersRoundTrip)
 {
     runCase("RegCNativeHelpers",

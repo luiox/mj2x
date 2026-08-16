@@ -118,7 +118,41 @@ int staticizeStackText(std::string& text, int baseDepth)
         //   1) `stack[++sp]` / `stack[sp--]` / `stack[sp ± N]`（N 可为 0，指栈顶）/
         //      `stack[sp]`
         //   2) `sp -= N` / `sp += N` / `sp--` / `sp++`（只改偏移）
+        // 字符串字面量与 // 行注释内的文本逐字保留——字面量（NewStringUTF 内联
+        // 进方法体）一旦含 `stack[sp`/`sp -= N` 等模式会被静默改写（X4 防碰撞）。
+        bool inString = false;
+        bool escaped  = false;
+        bool inComment = false;
         while (cursor < line.size()) {
+            if (inComment) {
+                replaced += line[cursor];
+                ++cursor;
+                continue;
+            }
+            if (inString) {
+                replaced += line[cursor];
+                if (escaped) {
+                    escaped = false;
+                }
+                else if (line[cursor] == '\\') {
+                    escaped = true;
+                }
+                else if (line[cursor] == '"') {
+                    inString = false;
+                }
+                ++cursor;
+                continue;
+            }
+            if (line[cursor] == '"') {
+                inString = true;
+                replaced += line[cursor];
+                ++cursor;
+                continue;
+            }
+            if (line[cursor] == '/' && cursor + 1 < line.size() && line[cursor + 1] == '/') {
+                inComment = true;
+                continue;
+            }
             if (line.compare(cursor, 11, "stack[++sp]") == 0) {
                 // push 写：sp 原顶下标 = baseDepth-1，新元素下标 = baseDepth。
                 replaced += "s[";

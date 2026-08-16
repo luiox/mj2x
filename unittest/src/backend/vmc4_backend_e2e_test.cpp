@@ -508,6 +508,41 @@ TEST_P(Vmc4BackendE2E, PureArithmeticAndControlFlowRoundTrip)
             9, GetParam().kind);
 }
 
+// 四后端语义回归集成员（X2）：超界/负数移位计数与字符串比较是跨后端
+// 易漂移点——历史缺陷是 RegC/LLVM 缺 JVM &31/&63 掩码（StackC/VMC4 一直
+// 正确）。矩阵三后端由 mtest_set g13.shift_out_of_range / g12.string_compare
+// 覆盖，这里补 VMC4 列；移位计数走参数防常量折叠。
+TEST_P(Vmc4BackendE2E, ShiftMaskAndStringCompareRoundTrip)
+{
+    runCase("Vmc4SemanticDrift",
+            "public class Vmc4SemanticDrift {\n"
+            "  public static int iShl(int a, int b) { return (1 << a) ^ (-1 << b) ^ (5 << 3); }\n"
+            "  public static int iShr(int a, int b) { return (-1 >> a) ^ (-256 >> b) ^ (96 >> 2); }\n"
+            "  public static int iUShr(int a, int b) { return (-1 >>> a) ^ (-1 >>> b) ^ (-1 >>> 31); }\n"
+            "  public static long lShl(int a, int b) { return (1L << a) ^ (1L << b) ^ (1L << 63); }\n"
+            "  public static long lUShr(int a, int b) { return (-1L >>> a) ^ (-1L >>> b) ^ (-1L >>> 63); }\n"
+            "  public static boolean strEq(String a, String b) { return a.equals(b); }\n"
+            "  public static int strCmp(String a, String b) { return a.compareTo(b); }\n"
+            "  public static boolean strEqIC(String a, String b) { return a.equalsIgnoreCase(b); }\n"
+            "}\n",
+            {
+                {"iShl(33, -1)", "Vmc4SemanticDrift.iShl(33, -1)"},
+                {"iShr(32, 33)", "Vmc4SemanticDrift.iShr(32, 33)"},
+                {"iUShr(32, 33)", "Vmc4SemanticDrift.iUShr(32, 33)"},
+                {"lShl(64, 65)", "Vmc4SemanticDrift.lShl(64, 65)"},
+                {"lUShr(64, 65)", "Vmc4SemanticDrift.lUShr(64, 65)"},
+                {"iShl(3, 4)", "Vmc4SemanticDrift.iShl(3, 4)"},
+                {"iShr(-256, 1)", "Vmc4SemanticDrift.iShr(-256, 1)"},
+                {"lUShr(-8, 1)", "Vmc4SemanticDrift.lUShr(-8, 1)"},
+                {"strEq(abc, abc)", "Vmc4SemanticDrift.strEq(\"abc\", \"abc\")"},
+                {"strEq(abc, abd)", "Vmc4SemanticDrift.strEq(\"abc\", \"abd\")"},
+                {"strCmp(abc, abd)", "Vmc4SemanticDrift.strCmp(\"abc\", \"abd\")"},
+                {"strCmp(b, a)", "Vmc4SemanticDrift.strCmp(\"b\", \"a\")"},
+                {"strEqIC(ABC, abc)", "Vmc4SemanticDrift.strEqIC(\"ABC\", \"abc\")"},
+            },
+            8, GetParam().kind);
+}
+
 // 浮点路径：double 全精度一致；float 只用可精确表示的值（MVP 的 F32 handler
 // 内部用 double 计算、仅在 JNI 边界转回 float，多步 float 链会与 Java 的
 // 每步 binary32 舍入不同——已知偏差，见 vmc4_multi_vm_design.md §11）。

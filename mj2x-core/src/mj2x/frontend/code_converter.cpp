@@ -915,7 +915,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         //   int → i32, float → float, long → i64, double → double,
         //   String → Utf8StringRef, Class/MethodType → Type, MethodHandle → Handle。
         // Wave 4：String LDC 保留字面量，由 StackC 生成 NewStringUTF。
-        // Class/MethodType 以 Type 传递；Handle 仍暂落 null OBJECT。
+        // Class/MethodType 以 Type 传递；Handle 走下方 fail-closed marker。
         auto* ld   = typed::cast<LdcInsnNode>(insn);
         auto  node = std::make_unique<MIRConstant>();
         if (auto* p = ld->cst.template as<ca::i32>()) {
@@ -947,9 +947,15 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
             node->value = *p;
         }
         else {
-            // Handle：暂落 null 对象常量。
-            node->type  = PrimitiveKind::OBJECT;
-            node->value = nullptr;
+            // LDC Handle / 未经 LdcPreprocessor 展开的常量：不能静默翻成 null
+            //（行为悄悄漂移），按 JSR/RET 先例落显式 unsupported 节点，后端
+            // fail-closed（StackC 运行期抛 UnsupportedOperationException）。
+            auto marker  = std::make_unique<MIRInvokeDynamic>();
+            marker->name = impl_->arena->intern("ldc-constant");
+            marker->desc = impl_->arena->intern("()Ljava/lang/Object;");
+            cur->nodes.push_back(std::move(marker));
+            impl_->push(PrimitiveKind::OBJECT);
+            break;
         }
         impl_->push(node->type);
         cur->nodes.push_back(std::move(node));

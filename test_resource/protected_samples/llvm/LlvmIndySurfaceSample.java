@@ -38,9 +38,27 @@ public class LlvmIndySurfaceSample {
         return String.class;
     }
 
+    /**
+     * Random.nextInt(bound) slice precheck: JVM throws IllegalArgumentException for
+     * bound &lt;= 0; the direct crt call has no exception channel, so the emitter must
+     * precheck and route through ThrowNew + exception dispatch (fail-closed).
+     */
+    public static String randomBoundTrap() {
+        try {
+            new java.util.Random(42).nextInt(0);
+            return "none";
+        }
+        catch (IllegalArgumentException e) {
+            return "iae";
+        }
+        catch (Throwable t) {
+            return "other:" + t.getClass().getName();
+        }
+    }
+
     public static String check() {
         boolean types = intType() == Integer.TYPE && stringType() == String.class;
         return concat("k", 7) + " slice=" + copySlice(new int[] {1, 2, 3, 4}, 1, 2)
-            + " types=" + types;
+            + " types=" + types + " rand=" + randomBoundTrap();
     }
 }

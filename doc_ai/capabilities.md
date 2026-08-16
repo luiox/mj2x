@@ -79,6 +79,15 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring
 - StackC `invokedynamic`:native 侧调用 bootstrap,经 `CallSite.getTarget()` +
   `MethodHandle.invokeWithArguments` 执行;已覆盖 javac string concat、方法引用和捕获 lambda
+- **ldc Handle/MethodType 常量展开（pipeline 级 `LdcPreprocessor`,默认注册）**:按 tag
+  分派展开为 `MethodHandles.lookup()` 反射链——`findVirtual`/`findStatic`/
+  `findSpecial`（含 specialCaller Class）/`findConstructor`（无 name 参）/
+  `findGetter`/`findSetter` 系（第 3 参发射字段类型 Class,primitive 走
+  `GETSTATIC <Box>.TYPE`）;压栈顺序严格对齐 `findXxx` 描述符（栈形校验器单测 +
+  手构字节码 exec E2E 守门,2026-08 修正历史栈序缺陷——旧展开必 VerifyError）;
+  MethodType 构造的 ClassLoader 取调用者类 `getClassLoader()`（保护态 jar 走
+  自定义 cloader）。未经展开的 Handle ldc 在 code_converter 落显式 unsupported
+  marker（fail-closed,不静默翻 null）
 
 **验证**:28 个 StackCBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 StackCBackend
 发射单测。
@@ -165,9 +174,10 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
   - 异常：`athrow`（JNI `Throw`，null → NPE）、try/catch/finally 异常表分发（`ExceptionCheck` → `ExceptionOccurred`+`ExceptionClear` → 按表序 `IsInstanceOf` 匹配 → handler；catch-all 重抛语义）；
   - monitor：`monitorenter/monitorexit` → `MonitorEnter/Exit`（null → NPE）；
   - intrinsic：`array.length`、`instanceof:<desc>`、`monitor.enter/exit`、`cmp.nan_greater/nan_less`（LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较，NaN 按指令语义取 ±1）；**`java.lang.Math` 纯函数面直调 mj2x-crt runtime 符号**（abs/min/max I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random——0 JNI、无 ExceptionCheck，`.ll` 模块级 `declare` + 编译侧并入 mj2x-crt 源）；**包装类 valueOf/xxxValue 非逃逸切片**（Integer/Long/Short/Byte/Float/Double/Boolean/Character——shadow 结构 `%mj2x_int` 等单字段 struct、窄装箱 trunc、窄拆箱 sext/zext，valueOf 结果经 copy 联通逃逸分析，任何非匹配拆箱使用整根回退 JNI，语义对齐 RegC）；**`java.util.Random` 状态机切片**（非逃逸 `new Random(seed)` + nextInt/nextInt(bound)/nextLong/nextBoolean/nextFloat/nextDouble 直调 `%mj2x_random` 指针状态，标准 Java LCG 与 JVM 逐位一致；无参构造保持 JNI——时钟/seedUniquifier 不确定；RegC 同 face 为 inert）；**`StringBuilder`/`StringBuffer` 状态机切片**（非逃逸 builder：init 四面 + append 十三面 + toString/length/capacity/charAt/ensureCapacity/setLength/setCharAt/appendCodePoint 直调 crt——函数级 `%mj2x_regc_context` 前导（`mj2x_regc_init_context` + throw 回调）、每次调用检查 `mj2x_regc_status`（非 0 = pending exception → 异常分发或默认返回）、状态为 crt 堆分配 `mj2x_string_builder*`（init 的 out_state 即寄存器槽）、append 结果与 receiver 联通；String 类面保持 JNI 分派，待整类下沉）；
-  - **invokedynamic 运行时解析（round-2）**：StringConcatFactory/LambdaMetafactory 站点由 pipeline 级 InvokeDynamicPreprocessor 静态展开；残留自定义 bootstrap 站点以 `indy:<idx>` 发射为模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef` 稳定化）+ 运行时 bootstrap 解析（`FindClass` → `MethodHandles.lookup` → `MethodType.fromMethodDescriptorString` → `privateLookupIn` → bsm 调用 → `CallSite.getTarget` → `invokeWithArguments`，参数装箱/返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点 fail-closed 保字节码）；
+  - **invokedynamic 运行时解析（round-2）**：StringConcatFactory/LambdaMetafactory 站点由 pipeline 级 InvokeDynamicPreprocessor 静态展开；残留自定义 bootstrap 站点以 `indy:<idx>` 发射为模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef` 稳定化）+ 运行时 bootstrap 解析（`FindClass` → `MethodHandles.lookup` → `MethodType.fromMethodDescriptorString` → `privateLookupIn` → bsm 调用 → `CallSite.getTarget` → `invokeWithArguments`，参数装箱/返回拆箱，REF 结果直接透传，bsm/invoke 失败路径走异常分发不被 NPE 掩盖，缓存失效重走解析）。与 RegC 对齐（regc_backend 的 emitIndyBootstrapFunction 同功能；原文“超出 RegC”失实，2026-08-16 审查订正）；
   - **保护特性（round-2）**：`--runtime-protection` 支持 llvm——每方法入口注入 `%mj2x_rt_checkpoint` 检查点（crt `mj2x_rt_protect.c`，模块级全局 + `mj2x_rt_checkpoint_run` 调用；FAKE 动作走默认返回路径）；`--regc-obfuscate` 及 MBA/opaque/CFF 变换选项支持 llvm（RegIR 级同源变换；mbaDeep 的 Barrier 指令 LLVM 子集不支持时回退未变换形态并告警）；
   - fail-closed：未初始化局部（undef Opaque）、未知 intrinsic、`String` 之外的 Handle 常量等保持字节码，调用方对不可转换目标走 JNI fallback（不再整链拒绝）。
+  - **已知限制**：builder out 参数与 indy jvalue 数组在调用点基本块内 `alloca`（调用位于深循环体时可栈溢出；既有模式的延续扩面，待 alloca 提升到 entry 块）；**JNI 符号 mangling 变更**：`$` 转义 `_24` → `_00024`（JNI 规范；旧约定致 HotSpot 找不到内类/带 `$` 描述符的 wrapper 符号，修复三类 native 绑定）为全后端共享的符号名变更——依赖旧符号名的外部脚本需要同步（2026-08-16 审查记录）。
   - `--llvm-tool clang|llc` 选择直接 clang 编译或 `llc -> clang` 链接；`--compile-mode pipe` 经 clang stdin 编译；`--generate-cmake` / `--generate-xmake` 生成含 `native.ll` 的工程。**v2.2 转正**：构建开关 `with_mj2x_llvm` 默认 on（v2.1 曾按发布范围关闭）；显式 `=n` 时 CLI 不暴露相关选项（fail-closed）。
 - `--native-annotation <desc>` 启用方法级筛选,descriptor 使用 JVM 内部注解格式(如 `Lmj2x/Native;`)。未指定时仍使用 `MarkAllMethodsPreprocessor` 默认标记所有可翻译方法。
 - `mj2x/mj2x-annotations/src/main/java/mj2x/Native.java` 提供用户可直接引入的 `@mj2x.Native` 注解源码。
@@ -220,6 +230,12 @@ exceptionReg + 边拷贝),dispatcher 循环底部 ExceptionCheck → ExceptionOc
 **转化率(v2.2 可用版)**:真实 jar(jvm-obf-tester)业务方法 100% 转 VM;
 VMC4 单测 45 + e2e 56 全绿(4 dispatcher × drift 全开,`-Xverify:all` round-trip);
 转化率报告基建 `test/mj2x/vmc4_conversion_report.md`。
+
+**protected samples(红队攻防面)**:`Vmc4IsaSurfaceSample`(纯计算 ISA 面)+
+`Vmc4JniSurfaceSample`(JNI helper 面:字段/数组/分配/接口分派/异常,2026-08 新增
+——补齐此前只有 1 个纯计算样本不足以覆盖 per-callsite helper 攻防验证的缺口;
+CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契约见
+各样本 `TRACE_SURFACE.md`)。
 
 **CLI**:`--backend vmc4` + `--vmc4-dispatcher` / `--vmc4-seed` / `--vmc4-granularity` /
 `--vmc4-alias` / `--vmc4-bogus` / `--vmc4-drift` / `--vmc4-drift-period` /
@@ -326,8 +342,14 @@ G11 反射）生成样本做 native 转换 E2E，建立双后端的 opcode/语�
 - 中性事实源：`mtest_set/src/manifest/semantic_fixture_manifest.hpp`
 - 消费：`mj2x/unittest/src/integration/mtest_set_native_matrix_test.cpp`
 - 独立目标：`mj2x_integration_test`，不与 emitter/IR unit 混跑
-- 当前矩阵：18 条 fixture x StackC/RegC = 36 条真实 E2E；每条均走
+- 当前矩阵：20 条 fixture x StackC/RegC（LLVM 列白名单子集）真实 E2E；每条均走
   `mj2x-cli --compile`、native library、`java -Xverify:all` 和 stdout 精确比较
+- **四后端语义回归集**（`doc_ai/cross_backend_semantics.md`）:`g13.shift_out_of_range`
+  （int/long × shl/shr/ushr × 超界/负数移位计数,计数走参数防常量折叠）+
+  `g12.string_compare`（equals/compareTo/equalsIgnoreCase）——StackC/RegC 列矩阵
+  自动覆盖,LLVM 列白名单,VMC4 列 `ShiftMaskAndStringCompareRoundTrip` E2E;
+  移位掩码决策单源 `codegen/jvm_semantics.hpp`（RegC/LLVM 共用,2026-08 修正
+  RegC/LLVM 缺 &31/&63 的漂移,并暴露 LLVM long 移位计数未 zext 的非法定 IR）
 - 跨项目样本访问：`test_helper` 的 `getProjectResource` / `getProjectResourcePath` 系列（按项目名定位）
 - JDK/MSVC 探测：统一走 `libs/libjdk_finder`（与 `mj2x-cli --compile` 共用，不再各自硬编码路径）
 - 覆盖映射：`../../doc_ai/jbc_sample_coverage.md`（global 文档）

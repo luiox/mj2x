@@ -368,7 +368,7 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                                  ? "addMul=21 loopSum=45 maxOf=9 pick=4 absDiff=8 wrapSum=7 "
                                    "randInt=42"
                                  : sample.className == "LlvmIndySurfaceSample"
-                                       ? "[k]=7 slice=5 types=true"
+                                       ? "[k]=7 slice=5 types=true rand=iae"
                                        : "catch0=7 catch10=10 caught locked=10");
     }
 }

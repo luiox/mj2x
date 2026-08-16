@@ -105,26 +105,6 @@ const char* slotField(PrimitiveKind k)
     }
 }
 
-/// 返回/参数是 VM 支持类型（标量或对象引用）时，VMC4 JNI wrapper 能正确转接。
-/// OBJECT 自 Phase 2.0 起支持（slot.ref 承载 jobject）；具体对象操作（field/call）
-/// 由 encoder 决定能否编码，不能则 fail-closed。
-bool isVmCompatibleKind(PrimitiveKind k)
-{
-    switch (k) {
-    case PrimitiveKind::BOOLEAN:
-    case PrimitiveKind::BYTE:
-    case PrimitiveKind::CHAR:
-    case PrimitiveKind::SHORT:
-    case PrimitiveKind::INT:
-    case PrimitiveKind::LONG:
-    case PrimitiveKind::FLOAT:
-    case PrimitiveKind::DOUBLE:
-    case PrimitiveKind::VOID:
-    case PrimitiveKind::OBJECT: return true;
-    default: return false;
-    }
-}
-
 MethodNode* findMethod(CompilerClass& clazz, const char* name, const char* desc)
 {
     for (auto* method : clazz.classNode->methods) {
@@ -255,21 +235,11 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // 实例方法自 Phase 2.B 起支持：SSA 把 this 作为 id0 参数进 RegIR（REF），
     // JNI wrapper 把 thisObject 填进 regs[0]，显式参数从 regs[1] 开始，两者对齐。
     // <init> 仍跳过（JVM 拒收 native 构造器）。
-
-    // 参数/返回类型二次防御：含对象引用的方法在编码阶段已 fail-closed，这里提前拒绝
-    // 避免无谓的 SSA 构建。
+    // 注：OBJECT 自 Phase 2.0 起被 wrapper 的 slot.ref 直通支持，历史上的
+    // 「类型二次防御」检查（isVmCompatibleKind）因此恒真，已删除；真正的不支持
+    // 形态由 encoder 按指令族 fail-closed。kinds 仍供 wrapper 签名/槽位编组。
     const auto retKind = returnKind(methodDesc);
     const auto args    = argumentKinds(methodDesc);
-    if (!isVmCompatibleKind(retKind)) {
-        CA_LOGT_WARN("vmc4", "Skipping {}.{}{}: object return type not supported in MVP\n", className.c_str(), methodName.c_str(), methodDesc.c_str());
-        return backendResult;
-    }
-    for (auto ak : args) {
-        if (!isVmCompatibleKind(ak)) {
-            CA_LOGT_WARN("vmc4", "Skipping {}.{}{}: object parameter not supported in MVP\n", className.c_str(), methodName.c_str(), methodDesc.c_str());
-            return backendResult;
-        }
-    }
 
     // --- 阶段 2：SSA 构建（与 RegC 共享前端）---
     SSABuilder             ssaBuilder;
