@@ -2482,11 +2482,16 @@ TEST(CliTest, LlvmArraycopyAndExceptionE2E)
 ///
 /// 方法面：
 /// - add(II)I：bootstrap 解析到的目标。
+/// - greet(String)String：REF 返回目标（Y1：REF 结果透传）。
 /// - bsm(Lookup,String,MethodType)CallSite：无常量参数 bootstrap。
 /// - bsmArgs(Lookup,String,MethodType,String,I,MethodHandle)CallSite：带
 ///   String/int/MethodHandle 常量参数（exercise 常量物化三形态）。
-/// - run(II)I：indy 站点（无 bsm 常量）。
-/// - runArgs(II)I：indy 站点（String/int/MethodHandle bsm 常量）。
+/// - bsmRef(Lookup,String,MethodType)CallSite：解析 greet（REF 站点）。
+/// - bsmFail(Lookup,String,MethodType)CallSite：恒抛 IllegalStateException
+///   （Y2：bootstrap 失败异常不得被 NPE 掩盖）。
+/// - run(II)I / runArgs(II)I：indy 站点（无 bsm 常量 / String·int·MethodHandle 常量）。
+/// - runRef(String)String：REF 返回 indy 站点。
+/// - runFail(II)I：失败 bootstrap indy 站点。
 std::vector<ca::u8> buildCustomIndyClass(ca::str::Utf8StringArena& arena)
 {
     using namespace jbytecode::core;
@@ -2584,6 +2589,99 @@ std::vector<ca::u8> buildCustomIndyClass(ca::str::Utf8StringArena& arena)
         run->visitEnd();
         return run;
     };
+
+    // greet(String)String：REF 返回目标（"hi " + s）。
+    auto* greet = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                 arena.intern("greet"),
+                                 arena.intern("(Ljava/lang/String;)Ljava/lang/String;"),
+                                 ca::str::Utf8StringRef(), {});
+    greet->visitCode();
+    greet->visitLdcInsn(std::string("hi "));
+    greet->visitVarInsn(Opcodes::ALOAD, 0);
+    greet->visitMethodInsn(Opcodes::INVOKEVIRTUAL, arena.intern("java/lang/String"),
+                           arena.intern("concat"),
+                           arena.intern("(Ljava/lang/String;)Ljava/lang/String;"), false);
+    greet->visitInsn(Opcodes::ARETURN);
+    greet->visitMaxs(0, 0);
+    greet->visitEnd();
+
+    // bsmRef：解析 greet（站点 MethodType 即 (String)String）。结构与 bsm 同构。
+    auto* bsmRef = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                  arena.intern("bsmRef"), arena.intern(bsmDesc),
+                                  ca::str::Utf8StringRef(), {});
+    bsmRef->visitCode();
+    bsmRef->visitTypeInsn(Opcodes::NEW, arena.intern("java/lang/invoke/ConstantCallSite"));
+    bsmRef->visitInsn(Opcodes::DUP);
+    invokestatic(bsmRef, "java/lang/invoke/MethodHandles", "lookup",
+                 "()Ljava/lang/invoke/MethodHandles$Lookup;");
+    bsmRef->visitLdcInsn(Type::getObjectType(arena.intern("CliLlvmIndy")));
+    bsmRef->visitLdcInsn(std::string("greet"));
+    bsmRef->visitVarInsn(Opcodes::ALOAD, 2);
+    bsmRef->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                            arena.intern("java/lang/invoke/MethodHandles$Lookup"),
+                            arena.intern("findStatic"),
+                            arena.intern("(Ljava/lang/Class;Ljava/lang/String;"
+                                         "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/"
+                                         "MethodHandle;"),
+                            false);
+    bsmRef->visitMethodInsn(Opcodes::INVOKESPECIAL,
+                            arena.intern("java/lang/invoke/ConstantCallSite"),
+                            arena.intern("<init>"),
+                            arena.intern("(Ljava/lang/invoke/MethodHandle;)V"), false);
+    bsmRef->visitInsn(Opcodes::ARETURN);
+    bsmRef->visitMaxs(0, 0);
+    bsmRef->visitEnd();
+
+    // bsmFail：恒抛 IllegalStateException（bootstrap 失败路径）。
+    auto* bsmFail = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                   arena.intern("bsmFail"), arena.intern(bsmDesc),
+                                   ca::str::Utf8StringRef(), {});
+    bsmFail->visitCode();
+    bsmFail->visitTypeInsn(Opcodes::NEW, arena.intern("java/lang/IllegalStateException"));
+    bsmFail->visitInsn(Opcodes::DUP);
+    bsmFail->visitLdcInsn(std::string("boom"));
+    bsmFail->visitMethodInsn(Opcodes::INVOKESPECIAL,
+                             arena.intern("java/lang/IllegalStateException"),
+                             arena.intern("<init>"), arena.intern("(Ljava/lang/String;)V"),
+                             false);
+    bsmFail->visitInsn(Opcodes::ATHROW);
+    bsmFail->visitMaxs(0, 0);
+    bsmFail->visitEnd();
+
+    // runRef(String)String：REF 返回 indy 站点。
+    auto* runRef = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                  arena.intern("runRef"),
+                                  arena.intern("(Ljava/lang/String;)Ljava/lang/String;"),
+                                  ca::str::Utf8StringRef(), {});
+    runRef->visitCode();
+    runRef->visitVarInsn(Opcodes::ALOAD, 0);
+    runRef->visitInvokeDynamicInsn(
+        arena.intern("runRef"),
+        arena.intern("(Ljava/lang/String;)Ljava/lang/String;"),
+        Handle(Opcodes::H_INVOKESTATIC, arena.intern("CliLlvmIndy"), arena.intern("bsmRef"),
+               arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                            "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
+        {});
+    runRef->visitInsn(Opcodes::ARETURN);
+    runRef->visitMaxs(0, 0);
+    runRef->visitEnd();
+
+    // runFail(II)I：失败 bootstrap indy 站点。
+    auto* runFail = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                   arena.intern("runFail"), arena.intern("(II)I"),
+                                   ca::str::Utf8StringRef(), {});
+    runFail->visitCode();
+    runFail->visitVarInsn(Opcodes::ILOAD, 0);
+    runFail->visitVarInsn(Opcodes::ILOAD, 1);
+    runFail->visitInvokeDynamicInsn(
+        arena.intern("runFail"), arena.intern("(II)I"),
+        Handle(Opcodes::H_INVOKESTATIC, arena.intern("CliLlvmIndy"), arena.intern("bsmFail"),
+               arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                            "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
+        {});
+    runFail->visitInsn(Opcodes::IRETURN);
+    runFail->visitMaxs(0, 0);
+    runFail->visitEnd();
     const Handle bsmHandle(
         Opcodes::H_INVOKESTATIC, arena.intern("CliLlvmIndy"), arena.intern("bsm"),
         arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
@@ -2608,10 +2706,15 @@ std::vector<ca::u8> buildCustomIndyClass(ca::str::Utf8StringArena& arena)
     cn.name      = arena.intern("CliLlvmIndy");
     cn.superName = arena.intern("java/lang/Object");
     cn.methods.push_back(add);
+    cn.methods.push_back(greet);
     cn.methods.push_back(bsm);
     cn.methods.push_back(bsmArgs);
+    cn.methods.push_back(bsmRef);
+    cn.methods.push_back(bsmFail);
     cn.methods.push_back(run);
     cn.methods.push_back(runArgs);
+    cn.methods.push_back(runRef);
+    cn.methods.push_back(runFail);
     ClassWriter writer(arena, ClassWriter::COMPUTE_FRAMES);
     cn.accept(&writer);
     return writer.toByteArray();
@@ -2656,6 +2759,10 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
     {
         std::ofstream out(workDir / "Driver.java");
         ASSERT_TRUE(out) << (workDir / "Driver.java").string();
+        // runRef：REF 返回 indy 站点（Y1）。runFail：失败 bootstrap（Y2）——
+        // JVM 基线把 bsm 异常包成 BootstrapMethodError(cause)，native 侧重抛
+        // 原始异常；解包归一化后两边都应看到 IllegalStateException（而非被
+        // call_object(null) 的 NPE 掩盖）。
         out << "public class Driver {\n"
                "  public static void main(String[] args) {\n"
                "    String dll = System.getenv(\"MORPHER_DLL\");\n"
@@ -2663,6 +2770,20 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
                "    System.out.print(CliLlvmIndy.run(3, 4));\n"
                "    System.out.print(\"-\" + CliLlvmIndy.runArgs(10, 32));\n"
                "    System.out.print(\"-\" + CliLlvmIndy.add(5, 6));\n"
+               "    System.out.print(\"-\" + CliLlvmIndy.runRef(\"vm\"));\n"
+               "    System.out.print(\"-\" + failKind());\n"
+               "  }\n"
+               "  static String failKind() {\n"
+               "    try {\n"
+               "      CliLlvmIndy.runFail(1, 2);\n"
+               "      return \"none\";\n"
+               "    } catch (Throwable t) {\n"
+               "      while (t instanceof java.lang.BootstrapMethodError && t.getCause() != "
+               "null) {\n"
+               "        t = t.getCause();\n"
+               "      }\n"
+               "      return t.getClass().getName();\n"
+               "    }\n"
                "  }\n"
                "}\n";
     }
@@ -2672,7 +2793,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
     // JVM 基线（未加载原生库）。
     result = runScript({q(java) + " -Xverify:all -cp " + q(workDir) + " Driver"});
     ASSERT_EQ(result.exitCode, 0) << result.out;
-    EXPECT_EQ(result.out, "7-42-11");
+    EXPECT_EQ(result.out, "7-42-11-hi vm-java.lang.IllegalStateException");
 
     // 2. LLVM 原生执行：indy 运行时解析（自定义 bootstrap）+ 原生 add 经
     //    MethodHandle 调用。
@@ -2699,7 +2820,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
         runLines.push_back(q(java) + " -Xverify:all -cp " + q(outDir) + " Driver");
         const auto runResult = runScript(runLines);
         ASSERT_EQ(runResult.exitCode, 0) << runResult.out;
-        EXPECT_EQ(runResult.out, "7-42-11");
+        EXPECT_EQ(runResult.out, "7-42-11-hi vm-java.lang.IllegalStateException");
     };
 
     runNativeVariant("plain", "");

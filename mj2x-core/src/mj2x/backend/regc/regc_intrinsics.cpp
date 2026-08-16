@@ -641,6 +641,24 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             decision.reason = "receiver is not native object state";
             return decision;
         }
+        // Random.nextInt(bound)：JVM 对 bound<=0 抛 IllegalArgumentException；
+        // crt 直调无异常通道（bound<=0 返回哨兵值），发射端预检并把异常挂到
+        // context——pending 由 mayThrow 的调用后异常分发（有 try 区域）或 JNI
+        // 边界（无区域）统一处理（fail-closed，Y4）。
+        const bool isRandomNextIntBound =
+            std::string_view(decision.symbol) == "mj2x_random_next_int_bound" &&
+            ins.args.size() == 2;
+        if (isRandomNextIntBound) {
+            out.emitLine("if (" + operandExpr(ins.args[1]).to_std_string() + " <= 0) {");
+            out.indent();
+            out.emitLine("mj2x_regc_throw_exception(_mj2x_regc_current_context(), "
+                         "\"java/lang/IllegalArgumentException\", \"bound must be positive\");");
+            if (ins.hasDest) {
+                out.emitLine(regName(ins.dest.id) + " = 0;");
+            }
+            out.emitLine("} else {");
+            out.indent();
+        }
         out.appendLineStart();
         if (ins.hasDest) {
             out.append(regName(ins.dest.id)).append(" = ");
@@ -651,7 +669,15 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             nativeArgs.push_back(operandExpr(ins.args[i]).to_std_string());
         }
         out.append(codegen::exprCallArgs(decision.symbol, nativeArgs));
-        out.append(";").newLine();
+        out.append(";");
+        if (isRandomNextIntBound) {
+            out.newLine();
+            out.dedent();
+            out.emitLine("}");
+        }
+        else {
+            out.newLine();
+        }
         return decision;
     }
 
