@@ -51,7 +51,8 @@
   fail-closed——LLVM 发射模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef`
   稳定化）+ 运行时 bootstrap 解析（`MethodHandles.lookup` / `MethodType` /
   `privateLookupIn` / bsm 调用 / `CallSite.getTarget` / `invokeWithArguments`，
-  参数装箱、返回拆箱）。**超出 RegC**（RegC 对自定义 bootstrap 站点保字节码）。
+  参数装箱、返回拆箱）。与 RegC 对齐（regc_backend 的 emitIndyBootstrapFunction
+  同功能——原文"超出 RegC"失实，2026-08-16 审查订正）。
   验证：`CliTest.LlvmIndyCustomBootstrapE2E`（plain / runtime-protection fake /
   regc-obfuscate 三变体，输出 7-42-11）+ `LlvmIrBackendTest.EmitsIndyRuntimeResolution`。
 - **intrinsic 扩面对齐 RegC** 🟡（Math 纯函数 + 包装类 + Random + StringBuilder
@@ -150,7 +151,7 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   594 过 / 3 skip；矩阵 66 例全绿（g5.abs 走 intrinsic）；Math E2E
   `abs=10 sqrt=5.0`（pipe/文件双模式）。
 - 2026-08-21（round-2 收尾）：四主线落地——**indy 运行时解析**（自定义 bootstrap
-  `indy:<idx>` → 全局 cache + bsm resolver，超出 RegC）、**intrinsic**（cmp.nan_*）、
+  `indy:<idx>` → 全局 cache + bsm resolver，与 RegC 对齐——原文"超出 RegC"失实，订正）、**intrinsic**（cmp.nan_*）、
   **保护特性**（runtime-protection 检查点 + MBA/opaque/CFF 变换接入 llvm）、
   **测试矩阵**（LLVM 列 22 fixtures + protected_samples/llvm 三样本）。修复：
   ANEWARRAY 数组描述符悬垂（SSA arena 生命周期）、I2S 误按 i8 截断、check_cast/
@@ -219,6 +220,27 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
     测试）、删空 `platform.h`。
   - 验证：mj2x_unittest 全量 / mj2x_integration_test 全量（矩阵含新 fixture
     三列）/ mtest_set_unittest + mtest_set_integration_test 全绿。
+- 2026-08-16（LLVM round-2 补充审查 Y1-Y4,同分支追加）：
+  - **Y1**：indy 结果 REF dest 被 `unsupported type` 整方法拒绝（与注释
+    "REF 直接透传"/validation 层矛盾,unboxReturnType REF 分支不可达）→ REF
+    直接透传存槽;E2E 补 REF 返回站点（此前全是 (II)I 原语,零覆盖）。
+  - **Y2**：bsm 失败（返回 null + pending）被送进 mj2x_llvm_call_object 的
+    ThrowNew NPE 掩盖（StackC 对应路径是异常分发,移植降级）→ null 分支走
+    emitExceptionDispatch;invokeWithArguments 之后统一 ExceptionCheck 再
+    拆箱/透传。E2E 补恒抛 ISE 的 bsmFail 站点（BootstrapMethodError 解包
+    归一化后基线/native 一致）。
+  - **Y3**：indy 缓存失效路径 `br %cached_ok; ret null` → `br %resolve`
+    重走解析（≈OOM 触发,意图写错）。
+  - **Y4**：`Random.nextInt(bound)` 切片唯一 fail-open 角落——crt 对
+    bound<=0 返回 INT32_MIN（无异常通道）而 JVM 应抛 IAE → RegC/LLVM 发射端
+    预检（RegC 走 context throw + mayThrow 分发;LLVM 新增 throw_new prelude
+    helper + 异常分发）,保留切片优化;RegC E2E 新用例 + LLVM 样本/E2E 覆盖。
+  - 文档订正：capabilities/user_guide/dev_plan 三处"indy 运行时解析超出
+    RegC"失实（regc_backend.cpp:1034 早有同功能 emitIndyBootstrapFunction）;
+    native_compiler.hpp 过时"不需要 crt source pack"注释;param_registry 五个
+    regc|llvm 共享参数 help 分组 RegC→RegC/LLVM;`$`→`_00024` JNI 符号
+    mangling 变更与 alloca 已知限制记录入 capabilities;匹配表/逃逸分析/
+    indy 解析三个共享层抽取候选补入 cross_backend_semantics.md §3.1。
 - 2026-08-15：配置系统 P0+P1 完成（参数注册表 + schema/模板导出 + ConfigRegistryTest
   10 项，PR #846）。
 - 更早记录已归档到 git log（见"已完成归档"索引）。

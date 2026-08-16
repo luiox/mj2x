@@ -344,8 +344,8 @@ switch、浮点→整数转换（`llvm.fptosi.sat`，NaN→0 / 溢出饱和）�
   站点由 pipeline 级预处理静态展开；残留自定义 bootstrap 站点以 `indy:<idx>`
   发射为模块级全局 cache + 运行时 bootstrap 解析（`MethodHandles.lookup` /
   `MethodType` / `privateLookupIn` → bsm 调用 → `CallSite.getTarget` →
-  `invokeWithArguments`，参数装箱/返回拆箱）。超出 RegC（RegC 对自定义 bootstrap
-  站点 fail-closed 保字节码）。
+  `invokeWithArguments`，参数装箱/返回拆箱，REF 结果直接透传）。与 RegC 对齐
+  （RegC 的 emitIndyBootstrapFunction 提供同功能；原文"超出 RegC"失实，订正）。
 - **保护特性（round-2）**：`--runtime-protection` 每方法入口注入
   `mj2x_rt_checkpoint` 检查点（crt `mj2x_rt_protect.c`）；`--regc-obfuscate` 及
   MBA / opaque / CFF 变换选项支持 llvm（RegIR 级同源变换，mbaDeep Barrier 指令

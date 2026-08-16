@@ -56,6 +56,23 @@ marshalling 形态）在共享 RegIR 层**显式化为可断言的中间表示**
 当前状态：仅移位掩码完成第 1 步的常量化形态（`jvm_semantics.hpp`）；
 完整 IR 化留待后续 PR，本笔记记录决策路径与判据。
 
+### 3.1 匹配轴的三个现成抽取候选（LLVM round-2 审查结论）
+
+marshalling 轴已收敛（intrinsic 符号实现单点 mj2x-crt），但「匹配轴」仍是
+每后端一份的平行实现——同一判定逻辑写三/四遍，漂移面持续扩大：
+
+| 候选 | 现状（平行份数） | 说明 |
+|---|---|---|
+| intrinsic/JNI 匹配表 | `llvm_intrinsic_registry.cpp` ↔ `regc_intrinsic_registry.cpp`（第二份匹配表，与 RegC 的 928-980 段同构） | 新增 intrinsic 面要改两处表 + 两处发射；Y4 的 nextInt(bound) 预检就是两后端各写一遍 |
+| 逃逸/切片分析 | `analyzeWrapperShadows()`（llvm_ir_emitter.cpp:143-386）是 RegC 逃逸分析的 LLVM 重写 | 判定语义相同（全指令扫描 + 逃逸即整根回退 JNI），实现各自演化 |
+| indy bootstrap 解析 | StackC / RegC（`emitIndyBootstrapFunction`）/ LLVM（`emitIndyBootstrapFunction` helpers 文本 IR）各一份，同语义第三/四份 | lookup/privateLookupIn/MethodType/bsm 常量物化/CallSite.getTarget/全局缓存链路三处维护；Y2/Y3 的移植降级正是第三份拷贝的产物 |
+
+抽取方向：匹配表 → 共享「(owner,name,desc) → 语义标签」单源（各后端只留
+标签→发射形态的映射）；逃逸分析 → 共享切片判定 pass（RegIR 层，输出切片
+根集合）；indy 解析 → 共享「站点解析步骤序列」描述（各后端按描述发射
+C/IR）。均为 v2.3+ 候选，优先级：匹配表（纯数据，最低风险）> indy 解析
+（三份中最易漂移）> 逃逸分析（与 RegIR pass 化天然同路）。
+
 ## 4. 关联
 
 - ldc Handle/MethodType 展开的栈序修正与单测/E2E 见
