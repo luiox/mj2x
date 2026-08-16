@@ -188,6 +188,37 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 - 2026-08-19：mjdbg N-7 VMC4 ISA 恢复工具 v1 全闭环（PR #845）——五形态识别 +
   静态全恢复（跨实例复用率 100%），VMC4 低风险档强度归零、S2 启动条件满足；
   红队验证发现并修复 computed_goto label 定义（`::` → `:`）。
+- 2026-08-16（语义审计修复 X1-X4,分支 `mj2x/semantics-hardening`）：
+  - **X1（最严重）**：`LdcPreprocessor` 展开栈序缺陷——压栈 `Class,
+    String(desc), MethodType, String(name)` 与 `findVirtual/findStatic` 的
+    `(Class, String, MethodType)` 不符（多一参且 name/MethodType 颠倒）；
+    field tag 沿用 3 参 MethodType 形态 desc、`findSpecial` 4 参只压 3 参、
+    `findConstructor` 2 参多压 String——默认注册 + 遍历所有非库类，任何含
+    ldc Handle 的类经 CLI 处理即 VerifyError。修复：按 tag 分派重写展开
+    （含 field 类型的 Class 发射,primitive 走 `GETSTATIC <Box>.TYPE`）、
+    MethodType 构造改用调用者 ClassLoader（保护态 jar 语义）、code_converter
+    Handle ldc 由静默 null 改显式 unsupported marker。守门：迷你栈校验器单测
+    （11 例,直接抓住压栈顺序/数量错误）+ 手构字节码 exec E2E（javac 不产
+    ldc Handle,保护器产物才是真实来源）。
+  - **X2**：RegC/LLVM 移位缺 JVM `&31/&63` 掩码（C UB / LLVM poison）,且
+    `llvm_ir_validation.cpp` 注释错误声称等价；新增暴露 LLVM long 移位
+    i32 计数未 zext 的非法定 IR。修复：掩码决策收敛到
+    `codegen/jvm_semantics.hpp` 单源,RegC/LLVM 消费；新增四后端语义回归集
+    （`g13.shift_out_of_range` 计数走参数防常量折叠 + `g12.string_compare`）,
+    矩阵/LLVM 白名单/VMC4 E2E 全接入。
+  - **X3（复核为误报）**：indy 单对象快路径 `stack[sp+1]`/`++sp` 净效应恰好
+    正确（通用路径先 `sp -= argCount` 补偿）——但快路径白建 varargs 数组
+    （热路径每调用多 2 次 JNI）且依赖 stale 槽。清理为参数 pop 前原槽捕获 +
+    结果原位覆写,emit-shape 单测锁形态。
+  - **X4（结构性）**：`staticizeStackText` 加字符串字面量/`//` 注释感知
+    （indy bsm 元数据字符串内联进方法体,含 `sp -= N` 等模式会被静默改写并
+    错位后续槽）；跨后端语义决策笔记沉淀 `doc_ai/cross_backend_semantics.md`
+    （含 RegIR 语义显式化的后续路径）。
+  - 次要：vmc4 过时"MVP 纯计算"注释与恒真死分支（误导日志）清理、新增
+    `Vmc4JniSurfaceSample` protected sample（JNI helper 攻防面 + CLI round-trip
+    测试）、删空 `platform.h`。
+  - 验证：mj2x_unittest 全量 / mj2x_integration_test 全量（矩阵含新 fixture
+    三列）/ mtest_set_unittest + mtest_set_integration_test 全绿。
 - 2026-08-15：配置系统 P0+P1 完成（参数注册表 + schema/模板导出 + ConfigRegistryTest
   10 项，PR #846）。
 - 更早记录已归档到 git log（见"已完成归档"索引）。

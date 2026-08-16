@@ -79,6 +79,15 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring
 - StackC `invokedynamic`:native 侧调用 bootstrap,经 `CallSite.getTarget()` +
   `MethodHandle.invokeWithArguments` 执行;已覆盖 javac string concat、方法引用和捕获 lambda
+- **ldc Handle/MethodType 常量展开（pipeline 级 `LdcPreprocessor`,默认注册）**:按 tag
+  分派展开为 `MethodHandles.lookup()` 反射链——`findVirtual`/`findStatic`/
+  `findSpecial`（含 specialCaller Class）/`findConstructor`（无 name 参）/
+  `findGetter`/`findSetter` 系（第 3 参发射字段类型 Class,primitive 走
+  `GETSTATIC <Box>.TYPE`）;压栈顺序严格对齐 `findXxx` 描述符（栈形校验器单测 +
+  手构字节码 exec E2E 守门,2026-08 修正历史栈序缺陷——旧展开必 VerifyError）;
+  MethodType 构造的 ClassLoader 取调用者类 `getClassLoader()`（保护态 jar 走
+  自定义 cloader）。未经展开的 Handle ldc 在 code_converter 落显式 unsupported
+  marker（fail-closed,不静默翻 null）
 
 **验证**:28 个 StackCBackend 真 E2E(Java → mj2x → C → DLL → Java 行为对比)和 StackCBackend
 发射单测。
@@ -221,6 +230,12 @@ exceptionReg + 边拷贝),dispatcher 循环底部 ExceptionCheck → ExceptionOc
 VMC4 单测 45 + e2e 56 全绿(4 dispatcher × drift 全开,`-Xverify:all` round-trip);
 转化率报告基建 `test/mj2x/vmc4_conversion_report.md`。
 
+**protected samples(红队攻防面)**:`Vmc4IsaSurfaceSample`(纯计算 ISA 面)+
+`Vmc4JniSurfaceSample`(JNI helper 面:字段/数组/分配/接口分派/异常,2026-08 新增
+——补齐此前只有 1 个纯计算样本不足以覆盖 per-callsite helper 攻防验证的缺口;
+CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契约见
+各样本 `TRACE_SURFACE.md`)。
+
 **CLI**:`--backend vmc4` + `--vmc4-dispatcher` / `--vmc4-seed` / `--vmc4-granularity` /
 `--vmc4-alias` / `--vmc4-bogus` / `--vmc4-drift` / `--vmc4-drift-period` /
 `--vmc4-trace-surface`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
@@ -326,8 +341,14 @@ G11 反射）生成样本做 native 转换 E2E，建立双后端的 opcode/语�
 - 中性事实源：`mtest_set/src/manifest/semantic_fixture_manifest.hpp`
 - 消费：`mj2x/unittest/src/integration/mtest_set_native_matrix_test.cpp`
 - 独立目标：`mj2x_integration_test`，不与 emitter/IR unit 混跑
-- 当前矩阵：18 条 fixture x StackC/RegC = 36 条真实 E2E；每条均走
+- 当前矩阵：20 条 fixture x StackC/RegC（LLVM 列白名单子集）真实 E2E；每条均走
   `mj2x-cli --compile`、native library、`java -Xverify:all` 和 stdout 精确比较
+- **四后端语义回归集**（`doc_ai/cross_backend_semantics.md`）:`g13.shift_out_of_range`
+  （int/long × shl/shr/ushr × 超界/负数移位计数,计数走参数防常量折叠）+
+  `g12.string_compare`（equals/compareTo/equalsIgnoreCase）——StackC/RegC 列矩阵
+  自动覆盖,LLVM 列白名单,VMC4 列 `ShiftMaskAndStringCompareRoundTrip` E2E;
+  移位掩码决策单源 `codegen/jvm_semantics.hpp`（RegC/LLVM 共用,2026-08 修正
+  RegC/LLVM 缺 &31/&63 的漂移,并暴露 LLVM long 移位计数未 zext 的非法定 IR）
 - 跨项目样本访问：`test_helper` 的 `getProjectResource` / `getProjectResourcePath` 系列（按项目名定位）
 - JDK/MSVC 探测：统一走 `libs/libjdk_finder`（与 `mj2x-cli --compile` 共用，不再各自硬编码路径）
 - 覆盖映射：`../../doc_ai/jbc_sample_coverage.md`（global 文档）
