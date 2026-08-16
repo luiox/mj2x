@@ -22,8 +22,8 @@ namespace mj2x::codegen {
 inline constexpr int kJvmShiftMaskI32 = 31;
 inline constexpr int kJvmShiftMaskI64 = 63;
 
-/// 移位指令（Shl/Shr/UShr）按 dest 位宽取掩码值。非整型调用是发射端 bug，
-/// 断言挡住。
+/// 移位指令（Shl/Shr/UShr）按 dest 位宽取掩码值。SSA 的移位 dest 只有
+/// I32/I64 两种整型（类型系统保证），其余取值属发射端构造错误，按 I32 掩。
 inline constexpr int jvmShiftMask(SSAType type)
 {
     return type == SSAType::I64 ? kJvmShiftMaskI64 : kJvmShiftMaskI32;

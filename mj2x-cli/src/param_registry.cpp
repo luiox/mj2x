@@ -828,7 +828,7 @@ const ParamDef kParamTable[] = {
           "RegC/LLVM", "regc|llvm", cli_regcOpaqueZero, json_regcOpaqueZero),
     PARAM("regc.transform_seed", "--regc-transform-seed", "regc_transform_seed",
           ParamType::UInt64, nullptr, 0, 0, "0",
-          "RegC/LLVM: 变换种子（默认 0；决定 state 码/变体选择，同 seed 同产物）", "RegC",
+          "RegC/LLVM: 变换种子（默认 0；决定 state 码/变体选择，同 seed 同产物）", "RegC/LLVM",
           "regc|llvm", cli_regcTransformSeed, json_regcTransformSeed),
     // vmc4
     PARAM("vmc4.dispatcher", "--vmc4-dispatcher", "vmc4_dispatcher", ParamType::Enum,

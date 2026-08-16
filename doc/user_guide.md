@@ -69,6 +69,7 @@ java -cp myapp_native.jar app.Main   # 运行改写后的完整程序
 ```
 
 生成的 DLL 内嵌在 `META-INF/mj2x/native/`，类加载时自动释放加载，无需改运行命令。
+**JNI 符号转义说明**：生成代码里 native 方法 JNI 符号的 `$` 按 JNI 规范转义为 `_00024`（JDK 1.2+ 约定；早于该约定的 `_24` 写法会让 HotSpot 找不到内类/带 `$` 描述符的 wrapper）。外部脚本若按旧符号名定位导出函数，需要同步该约定（详见 doc_ai/capabilities.md 已知限制）。
 整程序语义对比（多类 jar 三后端一致）由 `jar_whole_program_e2e_test` 锁定。
 
 ### 3.3 选择后端
