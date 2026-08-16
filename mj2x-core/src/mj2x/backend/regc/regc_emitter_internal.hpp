@@ -57,6 +57,10 @@ struct RegCFunctionEmitState
     /// intrinsic 匹配 registry（issue #818）：nullptr 时用 builtins()。
     /// RegCBackend::setUserIntrinsics 构造带用户条目的 registry 实例后设置。
     const RegCIntrinsicRegistry*              intrinsicRegistry   = nullptr;
+    /// 后端预扫描验证过的 javac 合成枚举 values()/valueOf() 方法键集合
+    /// （owner\nname\ndesc）。方法注入 native 后指令被清空，发射期无法再
+    /// 现场验证方法体；nullptr（单测直调发射器）时回退现场验证。
+    const std::set<std::string>*              enumSyntheticMethods = nullptr;
     /// 动态实例调用是否启用 resolved native dispatch（多文件模式关闭：
     /// 函数表只在单文件 TU 内可见）。
     bool                                      resolvedDispatch    = false;
@@ -229,6 +233,15 @@ RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
 /// 尝试发射 intrinsic 调用（StringBuilder/StringBuffer/字符串运行时方法）。
 RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out, const RegInstruction& ins,
                                         RegCFunctionEmitState& state);
+/// 编译输入内 owner 的超类链抵达 java/lang/Enum（枚举子类判定）。
+bool isEnumSubtypeOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& owner);
+/// javac 合成 values() 形态验证（getstatic $VALUES + Object.clone + checkcast + areturn）。
+bool isJavacEnumValuesBody(const jbytecode::tree::MethodNode* method,
+                           const ca::str::Utf8StringRef& owner,
+                           const ca::str::Utf8StringRef& arrayDesc);
+/// javac 合成 valueOf(String) 形态验证（ldc class + Enum.valueOf + checkcast + areturn）。
+bool isJavacEnumValueOfBody(const jbytecode::tree::MethodNode* method,
+                            const ca::str::Utf8StringRef& owner);
 /// @}
 
 /// @name regc_flow.cpp：指令流发射与寄存器收集

@@ -129,6 +129,34 @@ typedef struct mj2x_regc_instance_field_cache
     jfieldID    field;
 } mj2x_regc_instance_field_cache;
 
+/// @brief javac 合成 `values()` 调用点的站点缓存（数组类 clone 方法解析结果）。
+///
+/// @details
+/// `$VALUES` 静态字段走 `mj2x_regc_static_field_cache`；本结构只缓存 clone 的
+/// jmethodID 与其解析所用的数组类 global ref（jmethodID 在类存活期间有效，
+/// global ref 保活）。发射端已验证 values() 为 javac 合成形态
+/// （getstatic $VALUES + Object.clone + checkcast + areturn）。
+typedef struct mj2x_regc_enum_values_site
+{
+    jclass    arrayClass;
+    jmethodID clone;
+} mj2x_regc_enum_values_site;
+
+/// @brief javac 合成 `valueOf(String)` 调用点的站点缓存。
+///
+/// @details
+/// 快路径直接调 `java/lang/Enum.valueOf(Class, String)`（JDK 侧
+/// enumConstantDirectory 映射查找），比原路径省 JNI 静态调用进 trampoline、
+/// Push/PopLocalFrame 与 checkcast。NPE/IllegalArgumentException 的语义与
+/// 消息由 JDK 实现保证（与合成 valueOf 完全一致）。
+typedef struct mj2x_regc_enum_valueof_site
+{
+    const char* ownerDesc;
+    jclass      ownerClass;
+    jclass      enumClass;
+    jmethodID   enumValueOf;
+} mj2x_regc_enum_valueof_site;
+
 /// @brief Opaque UTF-16 StringBuilder state owned by mj2x-crt.
 ///
 /// The allocation and representation stay private so a later C++ source pack
@@ -159,6 +187,24 @@ void    mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
 jclass    mj2x_regc_cached_class(JNIEnv* env, mj2x_regc_class_cache* cache);
 jmethodID mj2x_regc_cached_static_method(JNIEnv* env, mj2x_regc_static_method_cache* cache);
 jfieldID  mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache* cache);
+
+/// @brief javac 合成 `values()` 语义：返回 `$VALUES` 数组的 clone。
+///
+/// @details
+/// values 数组由调用方经 `mj2x_regc_static_field_cache` 读取（cached
+/// GetStaticObjectField）；本 helper 用站点缓存的 clone jmethodID 复制数组
+/// （1 个 JNI）。clone 失败（OOM）时保持 pending exception 并返回 NULL。
+mj2x_ref  mj2x_intrinsic_enum_values(mj2x_regc_context* context, mj2x_ref values,
+                                     mj2x_regc_enum_values_site* site);
+
+/// @brief javac 合成 `valueOf(String)` 语义：Enum.valueOf(owner, name) 直调。
+///
+/// @details
+/// 命中/未命中统一走 JDK `Enum.valueOf`（enumConstantDirectory 映射），
+/// NPE/IllegalArgumentException 语义与消息由 JDK 保证。返回 NULL 表示
+/// pending exception（初始化失败或查找未命中）。
+mj2x_ref  mj2x_intrinsic_enum_valueof(mj2x_regc_context* context, mj2x_ref name,
+                                      mj2x_regc_enum_valueof_site* site);
 
 int32_t _mj2x_intrinsic_int_compare(int32_t lhs, int32_t rhs);
 int32_t _mj2x_intrinsic_long_compare(int64_t lhs, int64_t rhs);

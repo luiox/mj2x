@@ -17,6 +17,7 @@
 #include "mj2x/codegen/c_source.hpp"
 
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -74,6 +75,10 @@ public:
     ca::str::Utf8String resolvedCallSite(const ca::str::Utf8StringRef& owner,
                                          const ca::str::Utf8StringRef& name,
                                          const ca::str::Utf8StringRef& desc);
+    /// javac 合成 values()/valueOf 调用点站点缓存（owner 去重；发射端已验证
+    /// 方法体为 javac 合成形态）。
+    ca::str::Utf8String enumValuesSite(const ca::str::Utf8StringRef& owner);
+    ca::str::Utf8String enumValueOfSite(const ca::str::Utf8StringRef& owner);
 
     std::string renderDeclarations() const;
     bool        empty() const;
@@ -91,12 +96,16 @@ private:
     std::map<std::string, ca::str::Utf8String> instanceFieldCacheNames_;
     std::map<std::string, ca::str::Utf8String> classCacheNames_;
     std::map<std::string, ca::str::Utf8String> resolvedCallSiteNames_;
+    std::map<std::string, ca::str::Utf8String> enumValuesSiteNames_;
+    std::map<std::string, ca::str::Utf8String> enumValueOfSiteNames_;
     int                                staticMethodCacheIndex_   = 0;
     int                                instanceMethodCacheIndex_ = 0;
     int                                staticFieldCacheIndex_    = 0;
     int                                instanceFieldCacheIndex_  = 0;
     int                                classCacheIndex_          = 0;
     int                                resolvedCallSiteIndex_    = 0;
+    int                                enumValuesSiteIndex_      = 0;
+    int                                enumValueOfSiteIndex_     = 0;
     RegCCommentLevel                   commentLevel_              = RegCCommentLevel::Summary;
 };
 
@@ -121,6 +130,9 @@ public:
     /// @param indyFunctions      可选：含 invokedynamic 站点的方法键集合（直接调用排除）。
     /// @param intrinsicRegistry  可选：用户自定义 intrinsic registry（issue #818）；
     ///                           nullptr 时用 builtins()。
+    /// @param enumSyntheticMethods 可选：后端预扫描验证过的 javac 合成枚举
+    ///                             values()/valueOf() 方法键集合；nullptr 时
+    ///                             发射器对这类调用点回退现场验证（单测路径）。
     explicit RegCEmitter(RegCCachePool* cachePool = nullptr,
                          const codegen::CodeOptions& options = {},
                          std::vector<RegFunction::InvokeDynamicSite>* fileIndySites = nullptr,
@@ -129,7 +141,8 @@ public:
                          const std::unordered_map<std::string, std::string>* convertedFunctions =
                              nullptr,
                          const std::unordered_set<std::string>* indyFunctions = nullptr,
-                         const RegCIntrinsicRegistry* intrinsicRegistry = nullptr);
+                         const RegCIntrinsicRegistry* intrinsicRegistry = nullptr,
+                         const std::set<std::string>* enumSyntheticMethods = nullptr);
 
     /// @brief Emit a C helper function for one RegFunction.
     ///
@@ -156,6 +169,7 @@ private:
     const std::unordered_map<std::string, std::string>* convertedFunctions_ = nullptr;
     const std::unordered_set<std::string>* indyFunctions_ = nullptr;
     const RegCIntrinsicRegistry* intrinsicRegistry_ = nullptr;
+    const std::set<std::string>* enumSyntheticMethods_ = nullptr;
 };
 
 /// @brief Emit declarations shared by all RegC function bodies in one C file.

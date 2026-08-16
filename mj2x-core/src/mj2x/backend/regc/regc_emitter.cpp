@@ -110,7 +110,8 @@ RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& o
                          size_t indySiteBase, CompilerIndex* classIndex,
                          const std::unordered_map<std::string, std::string>* convertedFunctions,
                          const std::unordered_set<std::string>* indyFunctions,
-                         const RegCIntrinsicRegistry* intrinsicRegistry)
+                         const RegCIntrinsicRegistry* intrinsicRegistry,
+                         const std::set<std::string>* enumSyntheticMethods)
     : cachePool_(cachePool)
     , options_(options)
     , fileIndySites_(fileIndySites)
@@ -119,6 +120,7 @@ RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& o
     , convertedFunctions_(convertedFunctions)
     , indyFunctions_(indyFunctions)
     , intrinsicRegistry_(intrinsicRegistry)
+    , enumSyntheticMethods_(enumSyntheticMethods)
 {}
 
 std::string RegCEmitter::functionNameFor(const SSAFunctionSymbol& symbol)
@@ -160,6 +162,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.convertedFunctions                 = convertedFunctions_;
     emitState.indyFunctions                      = indyFunctions_;
     emitState.intrinsicRegistry                  = intrinsicRegistry_;
+    emitState.enumSyntheticMethods               = enumSyntheticMethods_;
     emitState.resolvedDispatch                   = options_.resolvedDispatch;
     emitState.hasLocalFrame                      = fnProducesLocalRefsIR(fn);
     emitState.nativeStringBuilderRegisters       = stringBuilderPlan.nativeRegisters;

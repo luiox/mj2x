@@ -3,6 +3,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
+#include "mj2x/backend/regc/regc_emitter_internal.hpp"
 #include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
 #include "mj2x/backend/regc/regc_runtime_template.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
@@ -510,6 +511,11 @@ struct RegCBackend::Impl
     /// 已成功转换的方法 -> regc_* 函数体名（owner\nname\ndesc 键）。
     /// 供 native-to-native 直接调用（deterministic dispatch 目标）使用。
     std::unordered_map<std::string, std::string> convertedFunctions;
+    /// 预扫描验证过的 javac 合成枚举 values()/valueOf() 方法键集合
+    /// （owner\nname\ndesc）。首个 compileMethod 前填充一次——方法注入
+    /// native 后指令被清空，发射期无法再现场验证方法体。
+    std::set<std::string> enumSyntheticMethods;
+    bool                  enumSyntheticScanned = false;
     /// 含 invokedynamic 站点的方法键集合：直接调用会跳过这些目标
     /// （indy bootstrap 依赖 per-frame _mj2x_regc_owner_class）。
     std::unordered_set<std::string> indyFunctions;
@@ -587,6 +593,33 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
 {
     BackendResult     backendResult;
     impl_->currentIndex = index;
+    // 枚举合成方法预扫描（一次）：验证 javac 合成形态的 values()/valueOf()。
+    // 必须在任何方法注入 native（指令清空）之前完成，否则方法体不可见。
+    if (index != nullptr && !impl_->enumSyntheticScanned) {
+        impl_->enumSyntheticScanned = true;
+        for (auto& [clsName, cls] : index->getClasses()) {
+            if (cls.classNode == nullptr || cls.isLibrary) continue;
+            const ca::str::Utf8StringRef clsRef = cls.classNode->name;
+            if (!isEnumSubtypeOwner(index, clsRef)) continue;
+            for (const auto& m : cls.methods) {
+                auto* em = m.methodNode;
+                if (em == nullptr || em->instructions.isEmpty()) continue;
+                const std::string emName = em->name.to_std_string();
+                const std::string emDesc = em->desc.to_std_string();
+                if (emName == "values" && emDesc.rfind("()[L", 0) == 0 &&
+                    isJavacEnumValuesBody(
+                        em, clsRef,
+                        ca::str::Utf8StringRef::from_string_view(emDesc.substr(2)))) {
+                    impl_->enumSyntheticMethods.insert(methodKey(clsName, emName, emDesc));
+                }
+                else if (emName == "valueOf" &&
+                         emDesc.rfind("(Ljava/lang/String;)L", 0) == 0 &&
+                         isJavacEnumValueOfBody(em, clsRef)) {
+                    impl_->enumSyntheticMethods.insert(methodKey(clsName, emName, emDesc));
+                }
+            }
+        }
+    }
     auto*             mn         = method.methodNode;
     const std::string methodName = mn->name.to_std_string();
     const std::string methodDesc = mn->desc.to_std_string();
@@ -708,7 +741,8 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                         impl_->currentIndex,
                         &impl_->convertedFunctions,
                         &impl_->indyFunctions,
-                        impl_->userIntrinsicRegistry.get());
+                        impl_->userIntrinsicRegistry.get(),
+                        &impl_->enumSyntheticMethods);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。

@@ -551,6 +551,270 @@ std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn)
     return nativeRegisters;
 }
 
+/// 枚举子类 owner 判定：编译输入内的超类链抵达 java/lang/Enum。
+///
+/// @details
+/// 只信任编译输入的 classNode 层级：JDK/第三方枚举不在索引（getClass 返回
+/// nullptr）时无法验证，保守返回 false（调用点保持原 resolved/cached 路径）。
+/// java/lang/Enum 自身由 registry 精确匹配，不经此判定。
+bool isEnumSubtypeOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& owner)
+{
+    if (classIndex == nullptr) return false;
+    std::string cur = owner.to_std_string();
+    for (int depth = 0; !cur.empty() && depth < 64; ++depth) {
+        CompilerClass* cls = classIndex->getClass(cur);
+        if (cls == nullptr || cls->classNode == nullptr) return false;
+        const ca::str::Utf8StringRef super = cls->classNode->superName;
+        if (super == "java/lang/Enum") return true;
+        cur = super.to_std_string();
+    }
+    return false;
+}
+
+/// 跳过 LABEL/LINE/FRAME 元节点，返回下一条真实指令（可能为 nullptr）。
+const jbytecode::tree::AbstractInsnNode* nextRealInsn(
+    const jbytecode::tree::AbstractInsnNode* node)
+{
+    while (node != nullptr) {
+        const int type = node->getType();
+        if (type != jbytecode::tree::AbstractInsnNode::LABEL &&
+            type != jbytecode::tree::AbstractInsnNode::LINE &&
+            type != jbytecode::tree::AbstractInsnNode::FRAME) {
+            break;
+        }
+        node = node->getNext();
+    }
+    return node;
+}
+
+/// 在编译类里找 name/desc 精确匹配的方法节点（仅编译输入自有方法）。
+const jbytecode::tree::MethodNode* findOwnMethodNode(CompilerIndex* classIndex,
+                                                     const ca::str::Utf8StringRef& owner,
+                                                     const ca::str::Utf8StringRef& name,
+                                                     const ca::str::Utf8StringRef& desc)
+{
+    if (classIndex == nullptr) return nullptr;
+    CompilerClass* cls = classIndex->getClass(owner.to_std_string());
+    if (cls == nullptr || cls->classNode == nullptr) return nullptr;
+    for (const auto& member : cls->methods) {
+        if (member.methodNode == nullptr) continue;
+        if (member.methodNode->name == name && member.methodNode->desc == desc) {
+            return member.methodNode;
+        }
+    }
+    return nullptr;
+}
+
+/// javac 合成 values() 形态验证：getstatic owner.$VALUES:[LX; →
+/// invokevirtual java/lang/Object.clone → checkcast [LX; → areturn。
+/// 非该形态（手工字节码自定义 values()）时不允许 intrinsic 化。
+bool isJavacEnumValuesBody(const jbytecode::tree::MethodNode* method,
+                           const ca::str::Utf8StringRef& owner,
+                           const ca::str::Utf8StringRef& arrayDesc)
+{
+    if (method == nullptr) return false;
+    const auto* n = nextRealInsn(method->instructions.getFirst());
+    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::FIELD_INSN ||
+        n->getOpcode() != Opcodes::GETSTATIC) {
+        return false;
+    }
+    const auto* field = static_cast<const jbytecode::tree::FieldInsnNode*>(n);
+    if (!(field->owner == owner && field->name == "$VALUES" && field->desc == arrayDesc)) {
+        return false;
+    }
+    n = nextRealInsn(n->getNext());
+    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::METHOD_INSN ||
+        n->getOpcode() != Opcodes::INVOKEVIRTUAL) {
+        return false;
+    }
+    const auto* clone = static_cast<const jbytecode::tree::MethodInsnNode*>(n);
+    // clone owner：javac 对数组 clone 发射数组类型描述符（"[LX;"）；
+    // 同时接受 java/lang/Object（手工/旧编译器形态），desc 恒为
+    // ()Ljava/lang/Object;。
+    if (!(clone->name == "clone" && clone->desc == "()Ljava/lang/Object;" &&
+          (clone->owner == arrayDesc || clone->owner == "java/lang/Object"))) {
+        return false;
+    }
+    n = nextRealInsn(n->getNext());
+    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::TYPE_INSN ||
+        n->getOpcode() != Opcodes::CHECKCAST) {
+        return false;
+    }
+    if (static_cast<const jbytecode::tree::TypeInsnNode*>(n)->desc != arrayDesc) return false;
+    n = nextRealInsn(n->getNext());
+    return n != nullptr && n->getType() == jbytecode::tree::AbstractInsnNode::INSN &&
+           n->getOpcode() == Opcodes::ARETURN;
+}
+
+/// javac 合成 valueOf(String) 形态验证：ldc Lowner; → aload 0 →
+/// invokestatic java/lang/Enum.valueOf(Ljava/lang/Class;Ljava/lang/String;)
+/// → checkcast owner → areturn。
+bool isJavacEnumValueOfBody(const jbytecode::tree::MethodNode* method,
+                            const ca::str::Utf8StringRef& owner)
+{
+    if (method == nullptr) return false;
+    const auto* n = nextRealInsn(method->instructions.getFirst());
+    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::LDC_INSN ||
+        n->getOpcode() != Opcodes::LDC) {
+        return false;
+    }
+    const auto* ldc = static_cast<const jbytecode::tree::LdcInsnNode*>(n);
+    const auto* ldcType = ldc->cst.as<jbytecode::core::Type>();
+    if (ldcType == nullptr ||
+        ldcType->getDescriptor().to_std_string() != "L" + owner.to_std_string() + ";") {
+        return false;
+    }
+    n = nextRealInsn(n->getNext());
+    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::VAR_INSN ||
+        n->getOpcode() != Opcodes::ALOAD ||
+        static_cast<const jbytecode::tree::VarInsnNode*>(n)->var != 0) {
+        return false;
+    }
+    n = nextRealInsn(n->getNext());
+    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::METHOD_INSN ||
+        n->getOpcode() != Opcodes::INVOKESTATIC) {
+        return false;
+    }
+    const auto* valueOf = static_cast<const jbytecode::tree::MethodInsnNode*>(n);
+    if (!(valueOf->owner == "java/lang/Enum" && valueOf->name == "valueOf" &&
+          valueOf->desc == "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;")) {
+        return false;
+    }
+    n = nextRealInsn(n->getNext());
+    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::TYPE_INSN ||
+        n->getOpcode() != Opcodes::CHECKCAST ||
+        static_cast<const jbytecode::tree::TypeInsnNode*>(n)->desc != owner) {
+        return false;
+    }
+    n = nextRealInsn(n->getNext());
+    return n != nullptr && n->getType() == jbytecode::tree::AbstractInsnNode::INSN &&
+           n->getOpcode() == Opcodes::ARETURN;
+}
+
+/// javac 合成 values() 调用点 intrinsic：getstatic $VALUES（cached field）+
+/// 站点缓存 clone。替代 JNI 静态调用进 trampoline（其内部为 PushLocalFrame +
+/// getstatic + owner-method clone + checkcast + PopLocalFrame）——每次调用
+/// 约 5 个 JNI 降为 2 个。
+bool tryEmitEnumValuesCall(CSourceStream& out, const RegInstruction& ins,
+                           RegCFunctionEmitState& state)
+{
+    if (ins.method.invokeOpcode != Opcodes::INVOKESTATIC) return false;
+    if (ins.method.name.to_std_string() != "values") return false;
+    const std::string desc = ins.method.desc.to_std_string();
+    if (desc.rfind("()[L", 0) != 0 || desc.back() != ';') return false;
+    // 无缓存池（单测环境）没有 TU 级站点声明，走旧路径。
+    if (state.cachePool == nullptr) return false;
+    if (!isEnumSubtypeOwner(state.classIndex, ins.method.owner)) return false;
+    const std::string arrayDesc = desc.substr(2);   // desc 去掉 "()" 前缀
+    const auto arrayDescRef     = ca::str::Utf8StringRef::from_string_view(arrayDesc);
+    // 预扫描集合优先（方法注入 native 后指令已清空）；单测直调发射器时回退
+    // 现场验证。
+    const std::string key = ins.method.owner.to_std_string() + "\n" + "values" + "\n" + desc;
+    const bool verified =
+        state.enumSyntheticMethods != nullptr
+            ? state.enumSyntheticMethods->count(key) != 0
+            : isJavacEnumValuesBody(
+                  findOwnMethodNode(state.classIndex, ins.method.owner, ins.method.name,
+                                    ins.method.desc),
+                  ins.method.owner, arrayDescRef);
+    if (!verified) return false;
+    const ca::str::Utf8String fieldCache = state.cachePool->staticFieldCache(
+        ins.method.owner, ca::str::Utf8StringRef::from_cstr("$VALUES"), arrayDescRef);
+    const ca::str::Utf8String site = state.cachePool->enumValuesSite(ins.method.owner);
+    if (!ins.hasDest) return false;   // values() 必有返回值；防御畸形 IR
+    const std::string loadValues =
+        codegen::exprCall("_mj2x_regc_load_cached_ref_field", {"&" + fieldCache.to_std_string()});
+    out.appendLineStart(regName(ins.dest.id))
+        .append(" = ")
+        .append(codegen::exprCall("mj2x_intrinsic_enum_values",
+                                  {"_mj2x_regc_current_context()", loadValues,
+                                   "&" + site.to_std_string()}))
+        .append(";")
+        .newLine();
+    return true;
+}
+
+/// javac 合成 valueOf(String) 调用点 intrinsic：Enum.valueOf(owner, name)
+/// 直调（JDK enumConstantDirectory 映射）。替代 JNI 静态调用进合成 valueOf
+/// trampoline（内部为 PushLocalFrame + 类字面量 + Enum.valueOf + checkcast +
+/// PopLocalFrame）——约 5 个 JNI 降为 1 个。
+bool tryEmitEnumValueOfCall(CSourceStream& out, const RegInstruction& ins,
+                            RegCFunctionEmitState& state)
+{
+    if (ins.method.invokeOpcode != Opcodes::INVOKESTATIC) return false;
+    if (ins.method.name.to_std_string() != "valueOf") return false;
+    if (ins.method.desc.to_std_string().rfind("(Ljava/lang/String;)L", 0) != 0) return false;
+    if (ins.args.empty()) return false;
+    // 无缓存池（单测环境）没有 TU 级站点声明，走旧路径。
+    if (state.cachePool == nullptr) return false;
+    if (!isEnumSubtypeOwner(state.classIndex, ins.method.owner)) return false;
+    const std::string descStr = ins.method.desc.to_std_string();
+    // 预扫描集合优先（方法注入 native 后指令已清空）；单测直调发射器时回退
+    // 现场验证。
+    const std::string key =
+        ins.method.owner.to_std_string() + "\n" + "valueOf" + "\n" + descStr;
+    const bool verified =
+        state.enumSyntheticMethods != nullptr
+            ? state.enumSyntheticMethods->count(key) != 0
+            : isJavacEnumValueOfBody(
+                  findOwnMethodNode(state.classIndex, ins.method.owner, ins.method.name,
+                                    ins.method.desc),
+                  ins.method.owner);
+    if (!verified) return false;
+    const ca::str::Utf8String site = state.cachePool->enumValueOfSite(ins.method.owner);
+    if (!ins.hasDest) return false;
+    out.appendLineStart(regName(ins.dest.id))
+        .append(" = ")
+        .append(codegen::exprCall("mj2x_intrinsic_enum_valueof",
+                                  {"_mj2x_regc_current_context()",
+                                   operandExpr(ins.args[0]).to_std_string(),
+                                   "&" + site.to_std_string()}))
+        .append(";")
+        .newLine();
+    return true;
+}
+
+/// 枚举子类调用点的 name()/ordinal() 直连发射。
+///
+/// @details
+/// Enum.name()/ordinal() 是 final，任何枚举子类的同名调用点与
+/// java/lang/Enum 精确等价；registry 按 owner 精确匹配（owner 是枚举子类
+/// 二进制名）匹配不到，这里按类层级补匹配。发射为 NULL 检查 + 字段读取
+/// intrinsic（GetObjectField/GetIntField，缓存 jfieldID），替代 resolved
+/// dispatch 的 IsInstanceOf + CallXxxMethodA——每调用点 2 个 JNI 降为 1 个。
+/// 不匹配时返回 false，调用方继续走 registry/通用路径。
+bool tryEmitEnumMemberAccess(CSourceStream& out, const RegInstruction& ins,
+                             RegCFunctionEmitState& state)
+{
+    if (ins.method.invokeOpcode != Opcodes::INVOKEVIRTUAL) return false;
+    if (ins.args.empty()) return false;
+    const std::string name = ins.method.name.to_std_string();
+    const bool        isName =
+        name == "name" && ins.method.desc.to_std_string() == "()Ljava/lang/String;";
+    const bool isOrdinal = name == "ordinal" && ins.method.desc.to_std_string() == "()I";
+    if (!isName && !isOrdinal) return false;
+    if (!isEnumSubtypeOwner(state.classIndex, ins.method.owner)) return false;
+    const std::string receiverExpr = operandExpr(ins.args[0]).to_std_string();
+    const std::string destName     = ins.hasDest ? regName(ins.dest.id) : std::string();
+    const char*       symbol       = isName ? "mj2x_intrinsic_enum_name"
+                                            : "mj2x_intrinsic_enum_ordinal";
+    out.iff(receiverExpr + " == NULL",
+            [&](CSourceStream& u) {
+                u.emitLine(std::string("_mj2x_regc_throw_null(\"") +
+                           (isName ? "Enum.name" : "Enum.ordinal") + "\");");
+                if (ins.hasDest) {
+                    u.emitLine(destName + " = " + std::string(defaultValue(ins.dest.type)) + ";");
+                }
+            },
+            [&](CSourceStream& u) {
+                if (ins.hasDest) u.appendLineStart(destName).append(" = ");
+                u.append(codegen::exprCall(symbol,
+                                           {"_mj2x_regc_current_context()", receiverExpr}));
+                u.append(";").newLine();
+            });
+    return true;
+}
+
 RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                                         const RegInstruction& ins, RegCFunctionEmitState& state)
 {
@@ -558,6 +822,14 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         state.intrinsicRegistry == nullptr ? RegCIntrinsicRegistry::builtins()
                                            : *state.intrinsicRegistry;
     RegCIntrinsicDecision decision = intrinsicRegistry.matchCall(ins);
+    if (decision.kind == RegCIntrinsicDecisionKind::Fallback &&
+        (tryEmitEnumMemberAccess(out, ins, state) ||
+         tryEmitEnumValuesCall(out, ins, state) ||
+         tryEmitEnumValueOfCall(out, ins, state))) {
+        decision.kind = RegCIntrinsicDecisionKind::Emit;
+        decision.reason.clear();
+        return decision;
+    }
     if (decision.kind != RegCIntrinsicDecisionKind::Emit) return decision;
 
     if (decision.emitKind == RegCIntrinsicEmitKind::WrapperValueOf) {

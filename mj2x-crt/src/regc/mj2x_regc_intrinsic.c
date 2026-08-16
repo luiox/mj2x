@@ -629,6 +629,61 @@ int32_t mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receive
     return (*env)->GetIntField(env, (jobject)receiver, field);
 }
 
+// ---- javac 合成 values() / valueOf(String) ----
+
+mj2x_ref mj2x_intrinsic_enum_values(mj2x_regc_context* context, mj2x_ref values,
+                                    mj2x_regc_enum_values_site* site)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL || values == NULL || site == NULL) return NULL;
+    if (site->clone == NULL) {
+        jclass        local = (*env)->GetObjectClass(env, (jobject)values);
+        if (local == NULL) return NULL;
+        jmethodID clone = (*env)->GetMethodID(env, local, "clone", "()Ljava/lang/Object;");
+        if (clone == NULL) {
+            (*env)->DeleteLocalRef(env, local);
+            return NULL;   // pending exception 保持
+        }
+        jclass global = (jclass)(*env)->NewGlobalRef(env, local);
+        (*env)->DeleteLocalRef(env, local);
+        if (global == NULL) return NULL;
+        site->arrayClass = global;
+        site->clone      = clone;
+    }
+    return (mj2x_ref)(*env)->CallObjectMethodA(env, (jobject)values, site->clone, NULL);
+}
+
+mj2x_ref mj2x_intrinsic_enum_valueof(mj2x_regc_context* context, mj2x_ref name,
+                                     mj2x_regc_enum_valueof_site* site)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL || site == NULL) return NULL;
+    if (site->enumValueOf == NULL) {
+        jclass local = (*env)->FindClass(env, site->ownerDesc);
+        if (local == NULL) return NULL;
+        jclass ownerGlobal = (jclass)(*env)->NewGlobalRef(env, local);
+        (*env)->DeleteLocalRef(env, local);
+        if (ownerGlobal == NULL) return NULL;
+        jclass enumLocal = (*env)->FindClass(env, "java/lang/Enum");
+        if (enumLocal == NULL) return NULL;
+        jclass enumGlobal = (jclass)(*env)->NewGlobalRef(env, enumLocal);
+        (*env)->DeleteLocalRef(env, enumLocal);
+        if (enumGlobal == NULL) return NULL;
+        jmethodID valueOf =
+            (*env)->GetStaticMethodID(env, enumGlobal, "valueOf",
+                                      "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;");
+        if (valueOf == NULL) return NULL;
+        site->ownerClass = ownerGlobal;
+        site->enumClass  = enumGlobal;
+        site->enumValueOf = valueOf;
+    }
+    jvalue args[2];
+    args[0].l = (jobject)site->ownerClass;
+    args[1].l = (jobject)name;
+    return (mj2x_ref)(*env)->CallStaticObjectMethodA(env, site->enumClass, site->enumValueOf,
+                                                     args);
+}
+
 // ---- java.lang.System.arraycopy 安全子集 ----
 
 /// @brief 回退 JNI System.arraycopy（对象数组 / 类型不兼容 / 不支持情形）。

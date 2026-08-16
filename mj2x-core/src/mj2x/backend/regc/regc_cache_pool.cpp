@@ -233,6 +233,58 @@ ca::str::Utf8String RegCCachePool::classCache(const ca::str::Utf8StringRef& desc
     return cacheName;
 }
 
+ca::str::Utf8String RegCCachePool::enumValuesSite(const ca::str::Utf8StringRef& owner)
+{
+    const std::string key = owner.to_std_string();
+    auto              it  = enumValuesSiteNames_.find(key);
+    if (it != enumValuesSiteNames_.end()) return it->second.clone();
+
+    CSourceStream cacheNameBuilder;
+    cacheNameBuilder.append("_mj2x_regc_enum_values_site_tu_");
+    cacheNameBuilder.append(ca::str::format_std("{}", enumValuesSiteIndex_++));
+    ca::str::Utf8String cacheName = cacheNameBuilder.build();
+
+    CSourceStream decl;
+    if (commentLevel_ >= RegCCommentLevel::Summary) {
+        decl.append("// cache: enum values() clone ");
+        decl.append(codegen::escapeCommentIdent(owner));
+        decl.append("\n");
+    }
+    decl.append("static mj2x_regc_enum_values_site ");
+    decl.append(cacheName);
+    decl.append(" = {NULL, NULL};\n");
+    declarations_.push_back(decl.build());
+    enumValuesSiteNames_.emplace(key, cacheName.clone());
+    return cacheName;
+}
+
+ca::str::Utf8String RegCCachePool::enumValueOfSite(const ca::str::Utf8StringRef& owner)
+{
+    const std::string key = owner.to_std_string();
+    auto              it  = enumValueOfSiteNames_.find(key);
+    if (it != enumValueOfSiteNames_.end()) return it->second.clone();
+
+    CSourceStream cacheNameBuilder;
+    cacheNameBuilder.append("_mj2x_regc_enum_valueof_site_tu_");
+    cacheNameBuilder.append(ca::str::format_std("{}", enumValueOfSiteIndex_++));
+    ca::str::Utf8String cacheName = cacheNameBuilder.build();
+
+    CSourceStream decl;
+    if (commentLevel_ >= RegCCommentLevel::Summary) {
+        decl.append("// cache: enum valueOf ");
+        decl.append(codegen::escapeCommentIdent(owner));
+        decl.append("\n");
+    }
+    decl.append("static mj2x_regc_enum_valueof_site ");
+    decl.append(cacheName);
+    decl.append(" = {");
+    decl.append(codegen::cStringLiteral(owner));
+    decl.append(", NULL, NULL, NULL};\n");
+    declarations_.push_back(decl.build());
+    enumValueOfSiteNames_.emplace(key, cacheName.clone());
+    return cacheName;
+}
+
 std::string RegCCachePool::renderDeclarations() const
 {
     CSourceStream out;
