@@ -647,16 +647,6 @@ TEST(RegCIntrinsicRegistryTest, MatchesUtf16StringRuntimeIntrinsics)
     const std::vector<std::pair<RegInstruction, std::string>> cases = {
         {makeCall("concat", "(Ljava/lang/String;)Ljava/lang/String;", {receiver, stringArg}),
          "mj2x_string_concat"},
-        {makeCall("substring",
-                  "(I)Ljava/lang/String;",
-                  {receiver, RegOperand::fromInt(1, SSAType::I32)}),
-         "mj2x_string_substring_from"},
-        {makeCall("substring",
-                  "(II)Ljava/lang/String;",
-                  {receiver,
-                   RegOperand::fromInt(1, SSAType::I32),
-                   RegOperand::fromInt(2, SSAType::I32)}),
-         "mj2x_string_substring_range"},
         {makeCall("compareTo", "(Ljava/lang/String;)I", {receiver, stringArg}),
          "mj2x_string_compare_to"},
         {makeCall("indexOf", "(I)I", {receiver, RegOperand::fromInt(65, SSAType::I32)}),
@@ -688,6 +678,19 @@ TEST(RegCIntrinsicRegistryTest, MatchesUtf16StringRuntimeIntrinsics)
         EXPECT_EQ(decision.emitKind, RegCIntrinsicEmitKind::StringRuntimeMethod) << symbol;
         EXPECT_EQ(decision.symbol, symbol);
     }
+    // substring(I)/(II) 已回退：CRT 版本 4 JNI + 全串拷贝，劣于 1-JNI 缓存
+    // methodID 的 JDK 调用（String 底层是拷贝共享数组，JDK substring 本就 O(1)）。
+    auto subFrom = makeCall(
+        "substring", "(I)Ljava/lang/String;", {receiver, RegOperand::fromInt(1, SSAType::I32)});
+    EXPECT_EQ(RegCIntrinsicRegistry::builtins().matchCall(subFrom).kind,
+              RegCIntrinsicDecisionKind::Fallback);
+    auto subRange = makeCall("substring",
+                             "(II)Ljava/lang/String;",
+                             {receiver,
+                              RegOperand::fromInt(1, SSAType::I32),
+                              RegOperand::fromInt(2, SSAType::I32)});
+    EXPECT_EQ(RegCIntrinsicRegistry::builtins().matchCall(subRange).kind,
+              RegCIntrinsicDecisionKind::Fallback);
 }
 
 TEST(RegCIntrinsicTest, MathSinLoweredToRuntimeCallNotJni)
@@ -1078,8 +1081,6 @@ TEST(RegCIntrinsicTest, Utf16StringOperationsLowerToCrtAbi)
     ASSERT_TRUE(result.ok) << result.reason;
     const char* symbols[] = {
         "mj2x_string_concat(",
-        "mj2x_string_substring_from(",
-        "mj2x_string_substring_range(",
         "mj2x_string_compare_to(",
         "mj2x_string_index_of_char(",
         "mj2x_string_index_of_char_from(",
@@ -1091,7 +1092,13 @@ TEST(RegCIntrinsicTest, Utf16StringOperationsLowerToCrtAbi)
     for (const char* symbol : symbols) {
         EXPECT_NE(result.source.find(symbol), std::string::npos) << symbol << "\n" << result.source;
     }
-    EXPECT_EQ(result.source.find("_mj2x_regc_call_"), std::string::npos) << result.source;
+    // substring(I)/(II) 回退为缓存 methodID 的 1-JNI JDK 调用（CRT 版本 4 JNI +
+    // 全串拷贝更慢），因此允许 substring 出现 JNI helper，其余方法不允许。
+    EXPECT_NE(result.source.find("java/lang/String\", \"substring\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("\"concat\""), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("\"compareTo\""), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("\"indexOf\""), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
 }
 

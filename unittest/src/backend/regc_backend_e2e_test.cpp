@@ -1666,8 +1666,10 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
     EXPECT_NE(generatedC.find("java/lang/String\", \"equals\""), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_contains("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_concat("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_substring_from("), std::string::npos) << generatedC;
-    EXPECT_NE(generatedC.find("mj2x_string_substring_range("), std::string::npos) << generatedC;
+    // substring(I)/(II) 同理回退：CRT 版本 4 JNI + 全串拷贝，劣于 1-JNI
+    // 缓存 methodID 的 JDK 调用。crt.h 声明也含函数名+括号，改验缓存声明。
+    EXPECT_NE(generatedC.find("java/lang/String\", \"substring\""), std::string::npos)
+        << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_compare_to("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_index_of_char("), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("mj2x_string_index_of_string_from("), std::string::npos)
