@@ -6,6 +6,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
+#include "mj2x/codegen/jvm_semantics.hpp"
 #include "mj2x/codegen/runtime_protection.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/mir/register_ir/reg_block.hpp"

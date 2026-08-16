@@ -619,6 +619,31 @@ private:
                 reason = "LLVM IR binary operation is outside the pure scalar subset";
                 return false;
             }
+            // JVM 移位计数按位宽掩码（int &31 / long &63，JLS 15.19）。LLVM
+            // shl/ashr/lshr 的 shift >= 位宽产生 poison（并非“天然等价 Java
+            // 掩码”），必须显式 and。掩码值来自 codegen/jvm_semantics.hpp 共享
+            // 决策（g13.shift_out_of_range 回归守门）。long 移位的 JVM 计数是
+            // int（RegIR rhs 为 I32），先 zext 到目标位宽再掩码。
+            if (!floating && (instruction.binaryOp == SSABinaryOp::Shl ||
+                              instruction.binaryOp == SSABinaryOp::Shr ||
+                              instruction.binaryOp == SSABinaryOp::UShr)) {
+                const int         shiftMask  = codegen::jvmShiftMask(instruction.dest.type);
+                const std::string destLlvm   = llvmTypeWide(instruction.dest.type);
+                std::string       countValue = rhs;
+                if (llvmTypeWide(instruction.rhs.type) != destLlvm) {
+                    const std::string widened = nextTemporary();
+                    out_ << "  " << widened << " = zext " << llvmTypeWide(instruction.rhs.type)
+                         << " " << rhs << " to " << destLlvm << "\n";
+                    countValue = widened;
+                }
+                const std::string maskedRhs = nextTemporary();
+                out_ << "  " << maskedRhs << " = and " << destLlvm << " " << countValue << ", "
+                     << shiftMask << "\n";
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = " << opcode << " " << destLlvm << " " << lhs << ", "
+                     << maskedRhs << "\n";
+                return emitStore(instruction.dest, result, reason);
+            }
             const std::string result = nextTemporary();
             out_ << "  " << result << " = " << opcode << " " << llvmTypeWide(instruction.dest.type)
                  << " " << lhs << ", " << rhs << "\n";

@@ -103,8 +103,9 @@ bool isSupportedBinary(const RegInstruction& instruction, std::string& reason)
         case SSABinaryOp::Shl:
         case SSABinaryOp::Shr:
         case SSABinaryOp::UShr:
-            // LLVM shl/ashr/lshr treat the shift amount as unsigned modulo the
-            // type width, which matches Java's mask-to-5/6-bits semantics.
+            // LLVM shift 并不天然等价 Java 掩码语义（shift >= 位宽产生 poison）；
+            // 发射端先对计数做 and <31/63>（掩码值来自 codegen/jvm_semantics.hpp
+            // 共享决策），这里仅做支持性放行。
             return true;
         case SSABinaryOp::Div:
         case SSABinaryOp::Rem:
