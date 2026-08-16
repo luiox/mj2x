@@ -37,7 +37,14 @@ namespace mj2x::cli {
 // kStdoutStream/kStderrStream，其在 subprocess.hpp 之前已固化）。
 using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
 
-bool environmentKeyEquals(const std::string& left, const char* right);
+bool environmentKeyEquals(const std::string& left, const char* right)
+{
+#ifdef _WIN32
+    return _stricmp(left.c_str(), right) == 0;
+#else
+    return strcasecmp(left.c_str(), right) == 0;
+#endif
+}
 
 bool loadMsvcEnvironment(ProcessEnvironment& environment,
                          std::filesystem::path& compilerPath)
