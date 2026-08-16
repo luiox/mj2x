@@ -713,13 +713,36 @@ private:
                 if (random != nullptr) {
                     runtimeDeclares_.push_back(random->declareText);
                     std::string callArgs = "ptr " + slotName(instruction.args[0].reg);
+                    std::string boundArg;
                     for (size_t index = 1; index < instruction.args.size(); ++index) {
                         std::string argument;
                         if (!emitOperand(instruction.args[index], argument, reason)) {
                             return false;
                         }
+                        if (index == 1) boundArg = argument;
                         callArgs += ", " + std::string(llvmTypeWide(instruction.args[index].type)) +
                                     " " + argument;
+                    }
+                    // Random.nextInt(bound)：JVM 对 bound<=0 抛
+                    // IllegalArgumentException；crt 直调无异常通道（bound<=0 返回
+                    // 哨兵值），发射端预检（fail-closed，Y4）。
+                    if (instruction.method.desc == "(I)I" &&
+                        instruction.method.name == "nextInt" && instruction.args.size() == 2) {
+                        const uint32_t    idx  = dispatchIndex_++;
+                        const std::string bad  = nextTemporary();
+                        const std::string tag  = std::to_string(idx);
+                        out_ << "  " << bad << " = icmp sle i32 " << boundArg << ", 0\n";
+                        out_ << "  br i1 " << bad << ", label %b_riae_" << tag
+                             << ", label %b_riok_" << tag << "\n";
+                        out_ << "b_riae_" << tag << ":\n";
+                        out_ << "  call void @mj2x_llvm_throw_new(ptr %env, ptr "
+                             << strings_.intern("java/lang/IllegalArgumentException")
+                             << ", ptr " << strings_.intern("bound must be positive") << ")\n";
+                        if (!emitExceptionDispatch(block, regions, dispatchIndex_, false,
+                                                   reason)) {
+                            return false;
+                        }
+                        out_ << "b_riok_" << tag << ":\n";
                     }
                     if (random->retLlvm[0] == 'v') {   // "void"
                         out_ << "  call void @" << random->symbol << "(" << callArgs << ")\n";
@@ -1338,6 +1361,21 @@ private:
                 out_ << "  " << target << " = call ptr @mj2x_llvm_indy_bsm_"
                      << (indySiteBase_ + localIndex) << "(ptr %env, ptr "
                      << strings_.intern(function_.symbol.owner) << ")\n";
+                // bsm 失败时 pending 异常已挂且返回 null：必须走异常分发/重抛，
+                // 不得把 null 送进 call_object（其 ThrowNew NPE 会掩盖真实
+                // 异常——StackC 对应路径是异常分发，对齐之）。
+                {
+                    const std::string siteTag = std::to_string(indySiteBase_ + localIndex);
+                    const std::string tgtNull = nextTemporary();
+                    out_ << "  " << tgtNull << " = icmp eq ptr " << target << ", null\n";
+                    out_ << "  br i1 " << tgtNull << ", label %b_ibsmerr_" << siteTag
+                         << ", label %b_ibsmok_" << siteTag << "\n";
+                    out_ << "b_ibsmerr_" << siteTag << ":\n";
+                    if (!emitExceptionDispatch(block, regions, dispatchIndex_, false, reason)) {
+                        return false;
+                    }
+                    out_ << "b_ibsmok_" << siteTag << ":\n";
+                }
                 // MethodHandle.invokeWithArguments(Object[]) → Object。
                 // 参数数组指针需包进 1 槽 jvalue 数组（否则 JNI 收到 null 参数）。
                 const std::string jv = nextTemporary();
@@ -1352,8 +1390,18 @@ private:
                      << ", ptr " << strings_.intern("invokeWithArguments") << ", ptr "
                      << strings_.intern("([Ljava/lang/Object;)Ljava/lang/Object;") << ", ptr "
                      << jv << ")\n";
+                // invokeWithArguments 抛异常时 pending 挂着而 result 可为 null
+                //（REF 站点合法返回 null）——调用后统一 ExceptionCheck 分发，
+                // 再进拆箱/透传（否则异常会被后续 helper 的 NPE 掩盖）。
+                if (!emitExceptionDispatch(block, regions, dispatchIndex_, true, reason)) {
+                    return false;
+                }
                 if (!instruction.hasDest) return true;
-                // 结果按站点返回类型拆箱（REF 直接透传）。
+                // REF 结果直接透传（invokeWithArguments 返回 jobject）；原语按
+                // 站点返回类型拆箱。
+                if (instruction.dest.type == SSAType::REF) {
+                    return emitStore(instruction.dest, result, reason);
+                }
                 const char* unboxKind = boxKindFor(instruction.dest.type);
                 if (unboxKind == nullptr) {
                     reason = "indy result has an unsupported type";

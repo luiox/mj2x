@@ -691,6 +691,17 @@ std::string emitObjectHelpers()
            "  %rc2 = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
            "  ret void\n"
            "}\n\n";
+    // 按类名抛新异常（FindClass + ThrowNew）：发射端预检类语义陷阱用
+    //（如 Random.nextInt(bound<=0) 的 IllegalArgumentException）。
+    out << "define internal void @mj2x_llvm_throw_new(ptr %env, ptr %cls_name, ptr %msg) {\n"
+           "entry:\n"
+           "  %cls = call ptr @mj2x_llvm_class_const(ptr %env, ptr %cls_name)\n"
+           "  %ft0 = load ptr, ptr %env\n"
+           "  %tn0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ThrowNew << "\n"
+        << "  %thrownew = load ptr, ptr %tn0\n"
+           "  call i32 %thrownew(ptr %env, ptr %cls, ptr %msg)\n"
+           "  ret void\n"
+           "}\n\n";
     // String/Class 常量：NewStringUTF（modified UTF-8 字节）/ FindClass。
     out << "define internal ptr @mj2x_llvm_string_const(ptr %env, ptr %utf8) {\n"
            "entry:\n"
@@ -1434,7 +1445,7 @@ std::string emitIndyBootstrapFunction(size_t index, const RegFunction::InvokeDyn
            "  br i1 %isnullc, label %invalidate, label %cached_ok\n"
            "invalidate:\n"
            "  store ptr null, ptr @_mj2x_llvm_indy_cache_" << siteTag << "\n"
-        << "  br label %cached_ok\n"
+        << "  br label %resolve\n"   // 缓存失效（≈OOM）：重走解析，而非返回已知 null 的 %local
            "cached_ok:\n"
            "  ret ptr %local\n"
            "resolve:\n"
