@@ -28,8 +28,11 @@
 ///
 /// ## 运行时边界
 ///
-/// MVP 只支持纯计算 + 控制流（Copy/Unary/Binary/Compare/Convert/Jump/Branch/Return）。
-/// 涉及对象/数组/字段/方法调用/intrinsic 的方法整体 fail-closed，保留字节码。
+/// 自 Phase 2.0 起对象引用经 slot.ref 直通（参数/返回/局部）；调用/字段/数组/
+/// 分配/intrinsic（array.length / cmp.nan_* / instanceof / monitor）由 encoder
+/// 编码为 per-site JNI helper，经 vm_call_table 分派；异常区域静态展开为
+/// VmExceptionRegionEntry。能力面与边界详见 doc_ai/capabilities.md §4（对齐
+/// encoder 的实际支持集）；不支持形态仍整体 fail-closed、保留字节码。
 #pragma once
 
 #include "mj2x/backend/backend.hpp"
