@@ -100,6 +100,21 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-17（regc 13-probe 性能追平 os30）：**Total ratio 1.14→0.98（118.8ms
+  vs os30 121.6ms），7/13 探针反超**（Enums 0.53x / Visitor 0.77x / Reflection
+  0.91x / Resource 0.15x / ClassLoading 0.67x / Collections 0.98x / Inner 1.00x）。
+  分支 `perf/regc-probe-optimization`，三项优化（详见
+  `benchmark/results/2026-08-17-jvm-obf-tester-os30.md`）：枚举 intrinsic
+  （子类 name/ordinal 直连 + values/valueOf javac 合成形态内联，后端预扫描
+  在 injectIntoClass 清空指令前验证方法体）；StringMethod 亏损 intrinsic 回退
+  （hashCode/charAt/equals 的 3-6 JNI 数据管道不如 1-JNI 缓存调用 + HotSpot
+  VM intrinsic；反直觉教训：GetStringUTFChars ASCII 快路径实测也比 3 个 UTF16
+  调用贵，已试并回退）；确定性虚调用免检直调（final/无覆写时跳过 IsInstanceOf，
+  含匿名类 ACC_FINAL 缺失修正与 convertedFunctions 声明类回查）。验证：
+  mj2x_unittest 全量绿（CliTest 3 例为 shell 环境 MSYSTEM/PATH 污染 xmake
+  平台检测所致，`env -u MSYSTEM` 后全过）；E2E 13/13。遗留：Inheritance
+  1.41x（checkcast 复用/类名 hash 缓存）、Crypto 1.21x（JDK 侧主导）。
+  另修复 main 上 native_compiler.cpp environmentKeyEquals 链接错误。
 - 2026-08-21（round-2 收尾·toString 修正）：**`StringBuilder.toString()` 映射修正为
   to_jstring**——实时隔离定位（非猜测）：独立 hex Driver 反调 `concat()`，返回
   `java.lang.StringBuilder` 对象（`CLASS=java.lang.StringBuilder`）而非 String；
