@@ -3,8 +3,8 @@
 #include "llvm_ir_internal.hpp"
 #include "llvm_intrinsic_registry.hpp"
 
-#include <iomanip>
-#include <type_traits>
+#include <cmath>
+#include <iomanip>#include <type_traits>
 #include <variant>
 
 namespace mj2x {

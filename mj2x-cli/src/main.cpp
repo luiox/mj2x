@@ -12,6 +12,7 @@
 #include "mj2x/core/user_intrinsics.hpp"
 
 #include <fstream>
+#include <optional>
 #include <nlohmann/json.hpp>
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"

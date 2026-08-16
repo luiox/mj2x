@@ -1,5 +1,11 @@
 /// @file mj2x_rt_protect.c
 /// @brief mj2x_rt_protect 实现（C99，Windows/Linux）。
+// nanosleep 与 struct timespec 需要 _GNU_SOURCE（严格 c99 下 glibc 默认隐藏），
+// 必须在任何系统头（含 mj2x_rt_protect.h 引入的 <stdint.h>）之前定义。
+#ifdef __linux__
+#    define _GNU_SOURCE
+#endif
+
 #include "mj2x_rt_protect.h"
 
 #include <string.h>

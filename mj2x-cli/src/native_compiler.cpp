@@ -15,6 +15,9 @@
 #include <sstream>
 #include <vector>
 
+#ifndef _WIN32
+#    include <strings.h>
+#endif
 // libca/process/subprocess.hpp 会 #undef 全局 stdout/stderr 宏（Command 成员
 // 同名防污染），这里在 include 之前固化宏值，供文件尾部导出的 MSVC 环境
 // 加载函数（loadMsvcEnvironment）使用。
@@ -33,6 +36,8 @@ namespace mj2x::cli {
 // 内的同名函数是 internal linkage 无法跨 TU 链接，这里独立实现（宏值取自
 // kStdoutStream/kStderrStream，其在 subprocess.hpp 之前已固化）。
 using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
+
+bool environmentKeyEquals(const std::string& left, const char* right);
 
 bool loadMsvcEnvironment(ProcessEnvironment& environment,
                          std::filesystem::path& compilerPath)
@@ -82,7 +87,7 @@ bool loadMsvcEnvironment(ProcessEnvironment& environment,
     std::filesystem::path found;
     std::string           pathValue;
     for (const auto& [key, value] : environment) {
-        if (_stricmp(key.c_str(), "PATH") == 0) {
+        if (environmentKeyEquals(key, "PATH")) {
             pathValue = value;
             break;
         }
@@ -404,7 +409,11 @@ using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
 
 bool environmentKeyEquals(const std::string& left, const char* right)
 {
+#ifdef _WIN32
     return _stricmp(left.c_str(), right) == 0;
+#else
+    return strcasecmp(left.c_str(), right) == 0;
+#endif
 }
 
 std::string environmentValue(const ProcessEnvironment& environment, const char* key)
