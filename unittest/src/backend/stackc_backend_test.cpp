@@ -167,6 +167,54 @@ TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge)
     EXPECT_NE(result.text.find("invokeWithArguments"), std::string::npos);
 }
 
+// 单对象参数 + OBJECT 返回的 indy 快路径（invokeMethodHandle1）栈形态：
+// 参数在 pop 之前于原栈槽捕获（stack[sp]），结果原位覆写同一槽——sp 净效应 0，
+// 不建 varargs 数组。锁住该形态，防止回退到「pop 后回读 stale 槽 + ++sp 压回」
+// 的脆弱写法（X3 复核结论：旧写法净效应恰好正确，但依赖已弹栈槽的陈旧值）。
+TEST(StackCBackendTest, InvokeDynamicOneObjectFastPathStackShape)
+{
+    auto           bsm = Handle(Opcodes::H_INVOKESTATIC,
+                      testArena.intern("java/lang/invoke/StringConcatFactory"),
+                      testArena.intern("makeConcatWithConstants"),
+                      testArena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                                                 "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
+                                                 "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
+                      false);
+    StackCBackend  backend;
+    auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                         "concat1",
+                         "(Ljava/lang/Object;)Ljava/lang/Object;",
+                                   {
+                             new VarInsnNode(Opcodes::ALOAD, 0),
+                             new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
+                                                       testArena.intern(
+                                                           "(Ljava/lang/Object;)Ljava/lang/Object;"),
+                                                       bsm,
+                                                                 {std::string("\x01")}),
+                             new InsnNode(Opcodes::ARETURN),
+                         });
+    CompilerMethod cm;
+    cm.methodNode       = mn.get();
+    cm.markedForCompile = true;
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            cc(arena);
+    auto          blocks = cc.convert(*mn);
+    auto          result = backend.compileMethod("Test", cm, blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("invokeMethodHandle1"), std::string::npos) << result.text;
+    // 静态化后（stack[sp] → s[k]）：参数捕获与结果覆写是同一个槽 s[0]
+    //（入口深度 1，无 pop、无 push）。
+    EXPECT_NE(result.text.find("jobject _mj2x_indy_capture0 = s[0].l;"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("s[0].l = "), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("stack[sp"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("_mj2x_indy_arg_0"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("NewObjectArray(env, 1"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("invokeWithArguments"), std::string::npos) << result.text;
+}
+
 TEST(StackCBackendTest, BooleanInvokeResultUsesFullStackSlot)
 {
     StackCBackend  backend;

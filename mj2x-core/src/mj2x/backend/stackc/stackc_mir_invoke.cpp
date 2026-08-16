@@ -448,28 +448,41 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
         return "0";
     };
 
+    const bool useOneObjectInvokeHelper =
+        retType == PrimitiveKind::OBJECT && argCount == 1 &&
+        (argTypes[0].getSort() == Type::OBJECT || argTypes[0].getSort() == Type::ARRAY);
+
     out.emitLine("{");
     out.indent();
     out.appendLineStart("jclass _mj2x_indy_object_cls = (jclass)").append(trackLocalRefExpr(
         "(*env)->FindClass(env, \"java/lang/Object\")")).append(";");
     out.newLine();
-    out.appendLineStart("jobjectArray _mj2x_indy_args = (jobjectArray)").append(
-        trackLocalRefExpr("(*env)->NewObjectArray(env, " + std::to_string(argCount) +
-                          ", _mj2x_indy_object_cls, NULL)")).append(";");
-    out.newLine();
-    for (int i = 0; i < argCount; ++i) {
-        const auto        kind = jvmSortToPrimitive(argTypes[static_cast<size_t>(i)].getSort());
-        const int         distFromSp = argCount - 1 - i;
-        const std::string stackIndexExpr =
-            distFromSp == 0 ? "sp" : "sp - " + std::to_string(distFromSp);
-        emitBoxStackValue("_mj2x_indy_arg_" + std::to_string(i), kind, stackIndexExpr);
-        out.appendLineStart("(*env)->SetObjectArrayElement(env, _mj2x_indy_args, ")
-            .appendInt(i).append(", _mj2x_indy_arg_").appendInt(i).append(");");
-        out.newLine();
+    // 快路径（OBJECT 返回 + 单对象参数）：参数在原栈槽捕获、原位覆写结果，
+    // 不建 varargs 数组（省每次调用一次 NewObjectArray + SetObjectArrayElement）。
+    // 一般路径：参数装箱进 Object[] 再弹栈。
+    out.appendLineStart("jobjectArray _mj2x_indy_args = NULL;").newLine();
+    if (useOneObjectInvokeHelper) {
+        out.emitLine("jobject _mj2x_indy_capture0 = stack[sp].l;");
     }
-    if (argCount > 0) {
-        out.appendLineStart("sp -= ").appendInt(argCount).append(";");
+    else {
+        out.appendLineStart("_mj2x_indy_args = (jobjectArray)").append(
+            trackLocalRefExpr("(*env)->NewObjectArray(env, " + std::to_string(argCount) +
+                              ", _mj2x_indy_object_cls, NULL)")).append(";");
         out.newLine();
+        for (int i = 0; i < argCount; ++i) {
+            const auto        kind = jvmSortToPrimitive(argTypes[static_cast<size_t>(i)].getSort());
+            const int         distFromSp = argCount - 1 - i;
+            const std::string stackIndexExpr =
+                distFromSp == 0 ? "sp" : "sp - " + std::to_string(distFromSp);
+            emitBoxStackValue("_mj2x_indy_arg_" + std::to_string(i), kind, stackIndexExpr);
+            out.appendLineStart("(*env)->SetObjectArrayElement(env, _mj2x_indy_args, ")
+                .appendInt(i).append(", _mj2x_indy_arg_").appendInt(i).append(");");
+            out.newLine();
+        }
+        if (argCount > 0) {
+            out.appendLineStart("sp -= ").appendInt(argCount).append(";");
+            out.newLine();
+        }
     }
 
     out.appendLineStart("jclass _mj2x_indy_mh_cls = (jclass)").append(trackLocalRefExpr(
@@ -631,9 +644,6 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
     out.appendLineStart("jclass _mj2x_indy_method_handle_cls = (jclass)").append(
         trackLocalRefExpr("(*env)->FindClass(env, \"java/lang/invoke/MethodHandle\")")).append(";");
     out.newLine();
-    const bool useOneObjectInvokeHelper =
-        retType == PrimitiveKind::OBJECT && argCount == 1 &&
-        (argTypes[0].getSort() == Type::OBJECT || argTypes[0].getSort() == Type::ARRAY);
     if (useOneObjectInvokeHelper) {
         out.appendLineStart("jclass _mj2x_indy_cloader_cls = (jclass)").append(trackLocalRefExpr(
             "(*env)->FindClass(env, \"mj2x/cloader/Loader\")")).append(";");
@@ -643,8 +653,8 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
                   "jmethodID _mj2x_indy_helper_mid = (*env)->GetStaticMethodID(env, "
                   "_mj2x_indy_cloader_cls, \"invokeMethodHandle1\", "
                   "\"(Ljava/lang/invoke/MethodHandle;Ljava/lang/Object;)Ljava/lang/Object;\");");
-        out.emitLine("jobject _mj2x_indy_capture0 = stack[sp + 1].l;");
-        out.appendLineStart("stack[++sp].l = ").append(trackLocalRefExpr(
+        // 参数在块首已捕获（pop 之前），结果原位覆写参数槽——sp 净效应 0。
+        out.appendLineStart("stack[sp].l = ").append(trackLocalRefExpr(
             "(*env)->CallStaticObjectMethod(env, _mj2x_indy_cloader_cls, "
             "_mj2x_indy_helper_mid, _mj2x_indy_target, _mj2x_indy_capture0)")).append(";");
         out.newLine();
