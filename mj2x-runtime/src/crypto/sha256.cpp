@@ -353,10 +353,25 @@ AesBlock aes128EncryptBlock(const Aes128Key& key, const AesBlock& block)
 void aes128CtrXor(const Aes128Key& key, AesBlock counter, const std::uint8_t* input,
                   std::uint8_t* output, std::size_t size)
 {
-    std::size_t offset = 0;
+    // key schedule 外提：逐块调用 aes128EncryptBlock 会每 16 字节重跑一次
+    // aesExpandKey（string_pool 每条字符串解密的热路径）。
+    const auto roundKeys = aesExpandKey(key);
+    std::size_t offset   = 0;
     while (offset < size) {
-        const auto        stream = aes128EncryptBlock(key, counter);
-        const std::size_t take   = std::min<std::size_t>(stream.size(), size - offset);
+        AesBlock out = counter;
+        aesAddRoundKey(out.data(), roundKeys, 0);
+        for (int round = 1; round <= 9; ++round) {
+            aesSubBytes(out.data());
+            aesShiftRows(out.data());
+            aesMixColumns(out.data());
+            aesAddRoundKey(out.data(), roundKeys, round);
+        }
+        aesSubBytes(out.data());
+        aesShiftRows(out.data());
+        aesAddRoundKey(out.data(), roundKeys, 10);
+
+        const AesBlock&    stream = out;
+        const std::size_t  take   = std::min<std::size_t>(stream.size(), size - offset);
         for (std::size_t i = 0; i < take; ++i) {
             output[offset + i] = static_cast<std::uint8_t>(input[offset + i] ^ stream[i]);
         }
