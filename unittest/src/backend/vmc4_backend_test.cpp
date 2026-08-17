@@ -404,6 +404,71 @@ TEST(Vmc4BackendTest, ConstantSlotsIsolatedFromComputeRegisters)
     EXPECT_GE(prog->numRegs, maxCompute + 1 + static_cast<uint32_t>(prog->constantPool.size()));
 }
 
+// 审查 G-1 修复回归：scanComputeRegisters 曾漏 Switch 终结者边拷贝——仅经
+// switch 边定义的寄存器不抬 maxReg，常量槽从低水位分配会落在边拷贝 dest 之上
+// 被覆写（取值错），且 numRegs 偏小致解释器 regs[] 越界。手构 RegIR：r7 只在
+// switch 各边 copies 中定义（case/default 分别汇入两个 return 块，default 与
+// case 2 同目标形成 slot 区分场景），常量 111/222/333 经 resolveOperand 进常量池。
+TEST(Vmc4BackendTest, SwitchEdgeCopiesRaiseMaxReg)
+{
+    RegFunction fn;
+    auto entry  = std::make_unique<RegBlock>(SSABlockId{0});
+    auto blockA = std::make_unique<RegBlock>(SSABlockId{1});
+    auto blockB = std::make_unique<RegBlock>(SSABlockId{2});
+
+    const RegValue selector{RegId{0}, SSAType::I32};
+    fn.parameters.push_back(selector);
+
+    // 碰撞机制（旧代码）：真实块先于合成边块编码，Return(IntLiteral) 在不经过
+    // 任何 dest 观察的情况下 intern 常量——若此时 r1（仅经 switch 边定义）尚未
+    // 被观察（其使用块编码在后），首个常量槽从参数数水位 1 起分配即落在 r1 上：
+    // blockA 的 77@slot1 与边拷贝 dest 互相覆写。
+    const RegValue merged{RegId{1}, SSAType::I32};
+    RegSwitchTerminator sw;
+    sw.value = RegOperand::fromRegister(selector);
+    {
+        RegSuccessor succ;
+        succ.block = blockA.get();
+        succ.copies.push_back(RegCopy{merged, RegOperand::fromInt(111, SSAType::I32)});
+        sw.cases.push_back(RegSwitchCase{1, std::move(succ)});
+    }
+    {
+        RegSuccessor succ;
+        succ.block = blockB.get();
+        succ.copies.push_back(RegCopy{merged, RegOperand::fromInt(222, SSAType::I32)});
+        sw.cases.push_back(RegSwitchCase{2, std::move(succ)});
+    }
+    {
+        RegSuccessor succ;
+        succ.block = blockB.get();
+        succ.copies.push_back(RegCopy{merged, RegOperand::fromInt(333, SSAType::I32)});
+        sw.defaultTarget = std::move(succ);
+    }
+    entry->terminator  = std::move(sw);
+    // blockA 在 blockB 之前编码：其 Return(77) 在 r1 首次被观察（blockB 的
+    // Return(r1)）之前 intern 常量，构造旧代码的碰撞窗口。
+    blockA->terminator = RegReturnTerminator{true, RegOperand::fromInt(77, SSAType::I32)};
+    blockB->terminator = RegReturnTerminator{true, RegOperand::fromRegister(merged)};
+    fn.entry           = entry.get();
+    fn.blocks.push_back(std::move(entry));
+    fn.blocks.push_back(std::move(blockA));
+    fn.blocks.push_back(std::move(blockB));
+
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    auto prog = VmEncoder::encode(fn, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    // 常量槽必须避开全部计算寄存器（含仅经 switch 边定义的 r1）。
+    for (const auto& e : prog->constantPool) {
+        EXPECT_GT(e.destSlot, 1u)
+            << "constant slot " << e.destSlot << " overlaps switch-edge register r1";
+    }
+    EXPECT_GE(prog->numRegs, 2u) << "numRegs must cover switch-edge dest r1";
+    EXPECT_GE(prog->constantPool.size(), 3u);
+}
+
 // ===========================================================================
 // 回归 2（P0-2）：FuncPtrTable 的 dispatch body 末尾必须有 mj2x_vm_done label
 // 并写回 ctx->pc/status——缺失则 RETURN/BINARY 除零分支引用未定义 label。

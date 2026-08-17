@@ -357,6 +357,21 @@ struct EncoderState
                         observeReg(static_cast<uint16_t>(copy.dest.id.value));
                         observeReg(static_cast<uint16_t>(copy.source.reg.value));
                     }
+                } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                    // Switch 边拷贝与 Jump/Branch 同源（planSyntheticEdges 对三者
+                    // 一视同仁）；漏扫会使常量槽落在 switch 边拷贝 dest 之上被
+                    // 覆写，或 numRegs 偏小致解释器 regs[] 越界。
+                    observeReg(static_cast<uint16_t>(t.value.reg.value));
+                    for (const auto& c : t.cases) {
+                        for (const auto& copy : c.target.copies) {
+                            observeReg(static_cast<uint16_t>(copy.dest.id.value));
+                            observeReg(static_cast<uint16_t>(copy.source.reg.value));
+                        }
+                    }
+                    for (const auto& copy : t.defaultTarget.copies) {
+                        observeReg(static_cast<uint16_t>(copy.dest.id.value));
+                        observeReg(static_cast<uint16_t>(copy.source.reg.value));
+                    }
                 }
             },
                        term);
@@ -1197,6 +1212,12 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
 
     // 维度寄存器（MultiArray：每维一个 int；Array：length；Object：无 args）。
     // MultiArray 的 dimCount 编码在 argc，解释器据此递归分配（Phase 2.E）。
+    // 解释器 object-op handler 固定 argBuf[32]、多维路径 _dims[32]——JVM 合法
+    // 上限 255 维，超 32 必须 fail-closed（对齐 encodeCall/encodeIntrinsic）。
+    if (ins.args.size() > 32) {
+        reason = "Allocate: too many dimensions (>32)";
+        return false;
+    }
     std::vector<uint16_t> dimIdxs;
     for (const auto& a : ins.args) {
         uint16_t di;
