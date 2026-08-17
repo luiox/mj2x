@@ -93,7 +93,8 @@
 四方向并行审查（前端/core、RegC、StackC/VMC4/LLVM、CLI/CRT/构建/文档），
 高危项已逐行复核确认。分两批处理：
 
-**G-1 本批修复**（简单、独立可回退，逐项独立 commit）：
+**G-1 本批修复**（简单、独立可回退，逐项独立 commit，✅ 2026-08-17 已完成，
+见日志与分支 `review/mj2x-audit-fixes`）：
 
 - [正确性-高] mbaDeep De Morgan 变体恒等式错误：`reg_transform_passes.cpp`
   t6 移位的是 `~(a&b)` 应为 `(a&b)`（`a=0,b=0` 得 -2）；零测试覆盖，需连补
@@ -174,6 +175,29 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-17（round-3 全线审查修复，分支 `review/mj2x-audit-fixes`）：四方向
+  并行审查（前端/core、RegC、StackC/VMC4/LLVM、CLI/CRT/文档，发现记录见
+  待做 G）。**G-1 本批修复全部落地**（11 commits）：高危正确性 5 项——
+  mbaDeep De Morgan 恒等式（(0,0) 得 -2，改 (a&b)+(a|b) 形态 + 直线求值器
+  语义测试）、LLVM 整数 div/rem 负数结果错（udiv→sdiv/srem + INT_MIN/-1
+  防护分支 + E2E 四站点）、RegC getClass 融合窗口吞中间指令（双指针仅跳
+  getName/hashCode，其余原位发射 + E2E 三变体回归）、VMC4 寄存器预扫描漏
+  Switch 边 copies（常量槽撞车窗口，手构 RegIR 回归）+ allocate 维数上限、
+  OutputWriter 写失败静默（上抛 + pipeline 中段兜异常）；中危——indy/ldc
+  预处理器 modified 标志 + InsnList::remove 泄漏（连带 native_loader 注入
+  条件解耦为 modified∧ACC_NATIVE）、CFF state 码查重；杂项批——regc
+  （privateThis 判空/INT64_MIN/varargs>32 fail-loud/MultiArray 空维/词边界/
+  门禁自然语言锚点误伤/dbg_depth thread_local/box-unbox local ref）、
+  llvm（include 挤行/maxStack 清零/jni_slot 裸 25/21）、stackc/vmc4/ssa
+  小修、cli（fmt bug/c_compiler 显式 auto）、io（JAR 全量拷贝消除）、
+  runtime（取负 UB/Math.round 2^63 边界/Math.random 原子化/AES 密钥外提/
+  删死代码 rt_str_obf）、文档订正（dispatcher 枚举值/参数表缺项/失效引用）。
+  回归守门测试均反向验证（旧代码失败、修复后通过）。验证：mj2x_unittest
+  全量 **602 过 / 17 skip / 0 fail**（修复中段一次全量 603 过，无失败）；
+  mtest_set_unittest 25/25；
+  mj2x_integration_test 49 过 / 25 skip（本机无 clang 的 LLVM E2E 列与
+  性能门控 skip）；mj2x_runtime_test 63/63。构建配置恢复 with_mj2x_llvm
+  默认开。G-2 待评估项（rt_protect Linux、RegC 并发、三后端共享层等）不动。
 - 2026-08-17（regc 13-probe 性能第三轮：JNI 局部帧按需发射）：**Total
   ratio 0.95→0.90**（同轮对比；本轮机器整体降频，绝对值偏高但 ratio
   稳定）。无环 CFG 且产 local ref 指令 ≤6 的函数豁免
