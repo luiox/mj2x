@@ -33,7 +33,7 @@
 | selection | `native_method_prefixes` | string[] | — |
 | compile | `compile` | boolean | `false` |
 | compile | `compile_mode` | `file` \| `pipe` | `file` |
-| compile | `c_compiler` | `msvc` \| `gcc` \| `clang` \| `zig` \| `xmake` | `auto` |
+| compile | `c_compiler` | `auto` \| `msvc` \| `gcc` \| `clang` \| `zig` \| `xmake` | `auto` |
 | compile | `llvm_tool` | `clang` \| `llc` | `clang` |
 | compile | `generate_cmake` / `generate_xmake` | string | — |
 | stackc | `stackc_exception_check` | `full` \| `lite` | `full` |

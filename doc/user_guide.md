@@ -146,7 +146,10 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 转换标量计算/控制流 + 对象/数组/实例与外部调用/异常表/monitor/ldc（窄类型签名、引用类型与 JNI 边界均已支持；round-2 起 invokedynamic 运行时解析 / intrinsic 扩面 / 保护特性接入，剩余面 fail-closed，见 §5.4）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
 | `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
-| `--c-compiler <msvc\|gcc\|clang\|zig>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++` |
+| `--c-compiler <auto\|msvc\|gcc\|clang\|zig\|xmake>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++`；`xmake` 走构建驱动（工程式编译）；`auto` 回到自动探测（默认） |
+| `--compile-mode <file\|pipe>` | native 编译输入模式（默认 file；pipe 经 stdin 直传不落源文件） |
+| `--emit-native-dir <dir>` | RegC 多文件输出目录（mj2x_regc_api.h + runtime.c + 每类 m_<Class>.c + entry.c） |
+| `--stackc-exception-check <full\|lite>` | StackC pending 异常检查密度（默认 full；lite 仅保留 handler 边界检查） |
 | `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用 |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
 | `--generate-xmake <dir>` | 生成独立 xmake native 工程（推荐；CLI 内嵌 mj2x-crt 源，配合 `--compile` 一键出 DLL/SO） |
@@ -178,7 +181,7 @@ VMC4：
 
 | 参数 | 说明 |
 |---|---|
-| `--vmc4-dispatcher <switch_table\|func_ptr\|if_nest\|state>` | 解释器分派形态（默认 switch_table） |
+| `--vmc4-dispatcher <switch_table\|funcptr_table\|computed_goto\|if_nest\|state_dispatcher>` | 解释器分派形态（默认 switch_table） |
 | `--vmc4-seed <n>` | 编译期随机化种子 |
 | `--vmc4-granularity <class\|method\|program>` | 实例粒度（默认 class；method 每方法独立 VM；program 全程序共享一个 VM，opcode 空间全局统一、体积最优） |
 | `--vmc4-alias <n>` / `--vmc4-bogus <n>` | 别名/伪 handler 数量 |

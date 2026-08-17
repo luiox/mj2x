@@ -206,7 +206,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 定位:VM 虚拟化后端(保护导向,性能非关键)。流水线:L1 stack MIR → SSA → RegIR →
 VMC4 VM 编码。RegIR 编码为 per-method VM 字节流(编译期 opcode 随机化,seed 驱动、
 per-class/method 粒度、ALT 别名、super-op、bogus handler),解释器 4 种 dispatcher
-形态(switch_table / func_ptr / if_nest / state),执行期 dispatch drift
+形态(switch_table / funcptr_table / computed_goto / if_nest / state_dispatcher),执行期 dispatch drift
 (`--vmc4-drift <0..4>` + `--vmc4-drift-period`,语义标签按字节偏移周期轮转,
 语义绝对安全——unmap 是纯函数,canonical handler 不变;issue #762 低风险档,PR #766)。
 

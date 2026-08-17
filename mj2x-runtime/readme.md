@@ -15,7 +15,9 @@ samples.
   decision.
 - `src/stringpool/`: HKDF-derived string-pool decode.
 
-Design notes live in `mj2x/doc_ai/RUNTIME_*.md`.
+Design notes live in `mj2x/doc_ai/capabilities.md` (runtime capability surface),
+`mj2x/doc_ai/regc_safe_env.md` (JNI function-table recovery) and
+`mj2x/doc/techniques/` (protection techniques).
 
 ## Build
 
