@@ -141,7 +141,6 @@ std::unique_ptr<CompilerIndex> InputLoader::load(const std::string& path)
 
             JarEntryRecord entry;
             entry.name    = entryName;
-            entry.data    = data;
             entry.isClass = isClassEntry(entryName);
 
             if (entry.isClass) {
@@ -155,7 +154,8 @@ std::unique_ptr<CompilerIndex> InputLoader::load(const std::string& path)
             else {
                 ++resourceCount;
             }
-
+            // 解压缓冲在解析后移入记录，避免整条目拷贝。
+            entry.data = std::move(data);
             index->addJarEntry(std::move(entry));
         }
 

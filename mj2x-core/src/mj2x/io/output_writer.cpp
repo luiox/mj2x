@@ -79,14 +79,18 @@ static void writeJar(const std::string& path, CompilerIndex& index)
     size_t           resourceCount = 0;
 
     for (const auto& entry : index.jarEntries()) {
-        std::vector<ca::u8> data = entry.data;
+        // 仅 modified 类需要新字节；其余条目引用原数据，避免大 JAR 每条目
+        // 全量拷贝（内存峰值约翻倍）。
+        const std::vector<ca::u8>* data      = &entry.data;
+        std::vector<ca::u8>        rewritten;
         if (entry.isClass) {
             // Preserve untouched class bytes. Some real-world classes carry
             // verifier-sensitive StackMapTable/debug metadata that the tree
             // writer cannot yet reproduce byte-for-byte.
             if (auto* cls = index.getClass(entry.className)) {
                 if (cls->modified) {
-                    data = writeClassBytes(index, *cls);
+                    rewritten = writeClassBytes(index, *cls);
+                    data      = &rewritten;
                 }
                 ++classCount;
             }
@@ -94,7 +98,7 @@ static void writeJar(const std::string& path, CompilerIndex& index)
         else {
             ++resourceCount;
         }
-        archive.addPart(makeStoredEntry(entry.name, data));
+        archive.addPart(makeStoredEntry(entry.name, *data));
     }
 
     // MVP JAR output writes STORED entries.  That keeps the implementation
