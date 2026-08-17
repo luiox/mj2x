@@ -378,18 +378,35 @@ TEST(IOTest, NativeLoaderPostprocessorAddsLoaderClassResource)
 
 TEST(IOTest, NativeLoaderPostprocessorInjectsClinitLoadCallForModifiedClasses)
 {
-    // 验证 RegC 路径的 clinit 注入：modified 且非 library 的类应在 <clinit>
-    // 头部前插 NativeLoader.load(resourcePath, tempSuffix) 调用。
+    // 验证 RegC 路径的 clinit 注入：modified 且非 library 且含 ACC_NATIVE 方法的类
+    // 应在 <clinit> 头部前插 NativeLoader.load(resourcePath, tempSuffix) 调用。
+    // modified 现在也被 indy/ldc 展开置位（纯字节码改写、无 native 方法），
+    // 那些类不得注入。
     CompilerIndex index;
     index.setJarInput(true);
 
-    // 构造一个 modified 类（模拟 RegC injectIntoClass 后的状态）。
+    // 构造一个 modified + native 类（模拟 RegC injectIntoClass 后的状态）。
     CompilerClass cls;
     cls.classNode  = std::make_unique<ClassNode>();
     cls.modified   = true;
     cls.isLibrary  = false;
     cls.classNode->name = index.arena().intern("test/Sample");
+    {
+        std::vector<ca::str::Utf8StringRef> noExcepts;
+        cls.classNode->methods.push_back(new MethodNode(
+            Opcodes::ACC_PUBLIC | Opcodes::ACC_NATIVE,
+            index.arena().intern("nativeOp"), index.arena().intern("()V"),
+            index.arena().intern(""), noExcepts));
+    }
     index.addClass("test/Sample", std::move(cls));
+
+    // 构造一个仅因 indy/ldc 展开而 modified 的纯字节码类：不得注入 clinit。
+    CompilerClass expandedOnly;
+    expandedOnly.classNode  = std::make_unique<ClassNode>();
+    expandedOnly.modified   = true;
+    expandedOnly.isLibrary  = false;
+    expandedOnly.classNode->name = index.arena().intern("test/IndyOnly");
+    index.addClass("test/IndyOnly", std::move(expandedOnly));
 
     NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll", ".dll", true);
     postprocessor.process(index);
@@ -410,7 +427,12 @@ TEST(IOTest, NativeLoaderPostprocessorInjectsClinitLoadCallForModifiedClasses)
             }
         }
     }
-    EXPECT_TRUE(foundLoadCall) << "modified class clinit missing NativeLoader.load call";
+    EXPECT_TRUE(foundLoadCall) << "modified native class clinit missing NativeLoader.load call";
+
+    CompilerClass* indyOnly = index.getClass("test/IndyOnly");
+    ASSERT_NE(indyOnly, nullptr);
+    EXPECT_EQ(findMethod(*indyOnly->classNode, "<clinit>"), nullptr)
+        << "indy/ldc-expanded class without native methods must not get a clinit load call";
 }
 
 TEST(IOTest, CLoaderPostprocessorAddsDispatchLoaderClassResource)

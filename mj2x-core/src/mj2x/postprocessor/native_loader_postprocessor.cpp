@@ -299,11 +299,20 @@ void NativeLoaderPostprocessor::process(CompilerIndex& index)
 
     if (!needClinit) return;
 
-    // 对每个被后端改写过的非库类前插 NativeLoader.load 调用。
-    // 对齐原 RegC 行为：只有 clazz.modified 的类（至少一个方法成功编译成 native）
-    // 才需要运行时加载 native 库。
+    // 对每个被后端改写过的非库类前插 NativeLoader.load 调用。判定条件是
+    // 「modified 且含 ACC_NATIVE 方法」：modified 现在也被 indy/ldc 展开置位
+    //（那些类改写了指令流但不含 native 方法），仅凭 modified 会给纯字节码类
+    // 误注入 clinit 加载调用。
     for (auto& [name, cls] : index.getClasses()) {
         if (!cls.modified || cls.isLibrary || !cls.classNode) continue;
+        bool hasNative = false;
+        for (const auto* m : cls.classNode->methods) {
+            if ((m->access & Opcodes::ACC_NATIVE) != 0) {
+                hasNative = true;
+                break;
+            }
+        }
+        if (!hasNative) continue;
         MethodNode* clinit = ensureClinit(cls);
         native_loader::emitLoadCall(clinit, resourcePath_, tempSuffix_);
     }

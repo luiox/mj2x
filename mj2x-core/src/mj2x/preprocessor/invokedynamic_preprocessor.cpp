@@ -207,9 +207,11 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
                                intern(arena, "toString"),
                                intern(arena, "()Ljava/lang/String;"), false));
 
-    // 插入到 indy 之前并删除 indy。
+    // 插入到 indy 之前并删除 indy。InsnList::remove 只摘链不释放，节点须手动
+    // delete（对齐 init_clinit_mover 先例）。
     m->instructions.insert(indy, seq);
     m->instructions.remove(indy);
+    delete indy;
 
     // maxLocals 增大以容纳新槽；maxStack 需容纳 StringBuilder+dup+参数，保守 +3。
     if (slot > m->maxLocals) m->maxLocals = slot;
@@ -879,6 +881,8 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
         // 栈峰值：new+dup(2) + 全部捕获实参。
         m->maxStack += 2 + loadStack;
     }
+    // InsnList::remove 只摘链不释放；节点在末尾统一 delete（下方
+    // buildLambdaClassNode 还要读 indy->name）。
     m->instructions.insert(indy, seq);
     m->instructions.remove(indy);
 
@@ -887,6 +891,7 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     pc.node = buildLambdaClassNode(arena, synthName, ifaceInternal, toStd(indy->name), samDesc,
                                    capturedTypes, *implPtr, alt);
     pending.push_back(std::move(pc));
+    delete indy;
     return true;
 }
 
@@ -913,6 +918,7 @@ void processImpl(CompilerIndex& index)
                 if (isStringConcatSite(indy, wc)) concatSites.push_back(indy);
                 else if (isLambdaMetafactorySite(indy)) lambdaSites.push_back(indy);
             }
+            const int expandedBefore = expanded + lambdaExpanded;
             for (auto* indy : concatSites) {
                 bool wc = false;
                 isStringConcatSite(indy, wc);
@@ -924,6 +930,12 @@ void processImpl(CompilerIndex& index)
                     ++synthCounter;
                 }
             }
+            // 展开改写了指令流：类必须标记 modified，否则 JAR 输出写回原始字节
+            //（OutputWriter 只重写 modified 类，展开静默作废），单类输出走
+            // COMPUTE_MAXS 配新指令流有 VerifyError 风险（对齐 ldc_preprocessor
+            // 同约束）。native_loader 的 clinit 注入按「modified 且含 ACC_NATIVE
+            // 方法」判定，不受本处影响。
+            if (expanded + lambdaExpanded > expandedBefore) cls.modified = true;
             // 统计仍残留的 indy（展开失败或非 concat/lambda 形态）。
             for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
                 if (insn->getType() == AbstractInsnNode::INVOKE_DYNAMIC_INSN) ++remainingIndy;
