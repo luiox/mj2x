@@ -16,22 +16,22 @@
 
 | 项 | RegC | os30 | ratio (RegC/os30) |
 |---|---|---|---|
-| Total | 116 | 122.3 | 0.95 |
+| Total | 175.3 | 194 | 0.9 |
 
 ## 各探针耗时（ms，平均）
 
 | Probe | RegC | os30 | ratio |
 |---|---|---|---|
-| Arithmetic operations | 1.563 | 1.435 | 1.09 |
-| Class loading | 0.17 | 0.2 | 0.85 |
-| Collections and generics | 8.368 | 9.216 | 0.91 |
-| Control flow | 0.196 | 0.146 | 1.34 |
-| Crypto APIs | 38.902 | 37.246 | 1.04 |
-| Enums | 9.289 | 20.56 | 0.45 |
-| Exception handling | 0.997 | 0.729 | 1.37 |
-| Inheritance and interfaces | 13.13 | 8.483 | 1.55 |
-| Inner classes | 5.187 | 6.098 | 0.85 |
-| Reflection and annotations | 21.818 | 17.347 | 1.26 |
-| Resource loading | 0.653 | 4.495 | 0.15 |
-| String and Unicode handling | 6.478 | 5.782 | 1.12 |
-| Visitor pattern | 8.722 | 10.157 | 0.86 |
+| Arithmetic operations | 2.118 | 1.817 | 1.17 |
+| Class loading | 0.292 | 0.349 | 0.84 |
+| Collections and generics | 11.361 | 13.967 | 0.81 |
+| Control flow | 0.267 | 0.224 | 1.19 |
+| Crypto APIs | 72.339 | 62.085 | 1.17 |
+| Enums | 11.548 | 24.458 | 0.47 |
+| Exception handling | 1.182 | 1.357 | 0.87 |
+| Inheritance and interfaces | 16.419 | 16.441 | 1 |
+| Inner classes | 8.126 | 7.123 | 1.14 |
+| Reflection and annotations | 31.009 | 34.487 | 0.9 |
+| Resource loading | 1.436 | 8.665 | 0.17 |
+| String and Unicode handling | 7.781 | 8.147 | 0.95 |
+| Visitor pattern | 9.88 | 13.781 | 0.72 |

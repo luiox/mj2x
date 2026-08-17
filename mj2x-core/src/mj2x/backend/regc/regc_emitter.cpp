@@ -15,10 +15,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -96,6 +98,70 @@ bool fnProducesLocalRefsIR(const RegFunction& fn)
         }
     }
     return false;
+}
+
+/// 统计方法体产 JNI local ref 的指令数（与 fnProducesLocalRefsIR 同一分类，
+/// 计数而非布尔）。无环 CFG 中每条指令至多执行一次，计数即单次调用的 local
+/// ref 消耗上界（保守：Call 一律计 1，含稳态零 ref 的 resolved/intrinsic 调用）。
+size_t fnLocalRefCountIR(const RegFunction& fn)
+{
+    size_t count = 0;
+    for (const auto& block : fn.blocks) {
+        for (const auto& ins : block->instructions) {
+            switch (ins.kind) {
+                case RegInstructionKind::Call:
+                    if (!isPureRuntimeIntrinsic(ins)) ++count;
+                    break;
+                case RegInstructionKind::Allocate: ++count; break;
+                case RegInstructionKind::LoadField:
+                case RegInstructionKind::StoreField: {
+                    const char first =
+                        ins.field.desc.is_empty() ? '\0' : (char)ins.field.desc.data()[0];
+                    if (first == 'L' || first == '[') ++count;
+                    break;
+                }
+                case RegInstructionKind::ArrayLoad:
+                case RegInstructionKind::ArrayStore:
+                    if (ins.elementType == SSAType::REF) ++count;
+                    break;
+                default: break;
+            }
+        }
+    }
+    return count;
+}
+
+/// CFG 是否含环（回边）。循环体内的产 ref 点随迭代累积，帧豁免只对无环函数
+/// 安全。successor 从 terminator 提取，DFS 三色找回边。
+bool fnCfgHasLoop(const RegFunction& fn)
+{
+    std::unordered_map<const RegBlock*, int> color;
+    bool foundLoop = false;
+    std::function<void(const RegBlock*)> visit = [&](const RegBlock* node) {
+        if (node == nullptr || foundLoop) return;
+        const int c = color.count(node) ? color[node] : 0;
+        if (c == 1) {
+            foundLoop = true;
+            return;
+        }
+        if (c == 2) return;
+        color[node] = 1;
+        const auto visitSuccessor = [&](const RegSuccessor& succ) { visit(succ.block); };
+        if (auto* jump = std::get_if<RegJumpTerminator>(&node->terminator)) {
+            visitSuccessor(jump->target);
+        }
+        else if (auto* branch = std::get_if<RegBranchTerminator>(&node->terminator)) {
+            visitSuccessor(branch->trueTarget);
+            visitSuccessor(branch->falseTarget);
+        }
+        else if (auto* sw = std::get_if<RegSwitchTerminator>(&node->terminator)) {
+            for (const auto& c2 : sw->cases) visitSuccessor(c2.target);
+            visitSuccessor(sw->defaultTarget);
+        }
+        color[node] = 2;
+    };
+    if (fn.entry != nullptr) visit(fn.entry);
+    return foundLoop;
 }
 
 }   // namespace
@@ -617,8 +683,15 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     // StackC 的 trackLocalRef/clear，但零 C 数组、无 c2j stack anchor。缓存 class/method
     // 走 NewGlobalRef，不受帧影响。纯标量方法（无产 ref 操作）不发射，保留「零 JNI」形态。
     const ca::str::Utf8String bodySource = body.build();
-    const bool                needsLocalFrame =
-        bodyProducesLocalRefs(bodySource) || emitState.hasLocalFrame;
+    const bool producesRefs = bodyProducesLocalRefs(bodySource) || emitState.hasLocalFrame;
+    // 帧豁免：无环 CFG 且产 ref 指令 ≤ 6 的函数，单次调用至多 6 个 local ref
+    // 落入调用者/trampoline 帧（HotSpot 局部 handle 按需扩展，出口统一释放），
+    // 省去每次调用 PushLocalFrame + PopLocalFrame 两个 JNI。稳态（resolved/
+    // intrinsic 缓存命中）下这类叶子函数产 ref 为 0，被热循环直调时每迭代
+    // 省 2 JNI。循环内产 ref 点随迭代累积，不豁免。
+    const bool frameEligible =
+        producesRefs && !fnCfgHasLoop(fn) && fnLocalRefCountIR(fn) <= 6;
+    const bool needsLocalFrame = producesRefs && !frameEligible;
     if (needsLocalFrame) {
         out.iff("(*_mj2x_regc_env)->PushLocalFrame(_mj2x_regc_env, 16) != 0",
                 [&](CSourceStream& u) {

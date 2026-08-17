@@ -100,6 +100,15 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-17（regc 13-probe 性能第三轮：JNI 局部帧按需发射）：**Total
+  ratio 0.95→0.90**（同轮对比；本轮机器整体降频，绝对值偏高但 ratio
+  稳定）。无环 CFG 且产 local ref 指令 ≤6 的函数豁免
+  PushLocalFrame/PopLocalFrame（每次调用省 2 JNI，稳态零 ref 的叶子
+  函数被热循环直调时收益最大；全量帧数 95→45）。受益：Inheritance
+  1.55→1.0、Exception 1.37→0.87、Reflection 1.26→0.90、String
+  1.12→0.95、Crypto 1.04→0.97。基准脚本再修：native 编译必须在
+  cwd=projDir + `xmake -P .` 形式调用（从 benchmark 目录裸调用时
+  xmake 向上加载 root/mj2x 缓存配置，平台漂移 mingw）。
 - 2026-08-17（regc 13-probe 性能第二轮：整体反超 os30）：**Total ratio
   1.07→0.95（116ms vs os30 122.3ms，MSVC -p windows 口径），首次整体反超**。
   两项优化：`getClass().getName().hashCode()` 链融合 intrinsic（emitter 前瞻
