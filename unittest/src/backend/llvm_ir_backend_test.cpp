@@ -472,8 +472,8 @@ TEST(LlvmIrBackendTest, EmitsInstanceWrapperThis)
 
 TEST(LlvmIrBackendTest, EmitsIntegerDivisionWithZeroCheck)
 {
-    // (int a, int b) -> a / b：udiv（位模式等价、无 INT_MIN/-1 溢出 poison）
-    // + 除零检查 → 共享 throw-arithmetic helper。
+    // (int a, int b) -> a / b：sdiv（JVM 有符号语义）+ 除零检查 → 共享
+    // throw-arithmetic helper + INT_MIN/-1 溢出防护分支（JVM 回绕语义）。
     auto result = compileScalar("divide", "(II)I",
                                 {new VarInsnNode(Opcodes::ILOAD, 0),
                                  new VarInsnNode(Opcodes::ILOAD, 1), new InsnNode(Opcodes::IDIV),
@@ -481,15 +481,20 @@ TEST(LlvmIrBackendTest, EmitsIntegerDivisionWithZeroCheck)
                                 2, 2);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
     EXPECT_NE(result.text.find("icmp eq i32"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("udiv i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("sdiv i32"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("icmp eq i32") , std::string::npos) << result.text;
+    EXPECT_NE(result.text.find(", -1\n"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find(", -2147483648\n"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("call void @mj2x_llvm_throw_arith(ptr %env)"), std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("ret i32 0"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("udiv"), std::string::npos) << result.text;
 }
 
 TEST(LlvmIrBackendTest, EmitsIntegerRemainderWithZeroCheck)
 {
-    // (long a, long b) -> a % b：urem + 除零检查。
+    // (long a, long b) -> a % b：srem + 除零检查 + INT64_MIN/-1 防护
+    // （JVM 语义：Long.MIN_VALUE % -1 == 0）。
     auto result = compileScalar("remainder", "(JJ)J",
                                 {new VarInsnNode(Opcodes::LLOAD, 0),
                                  new VarInsnNode(Opcodes::LLOAD, 2), new InsnNode(Opcodes::LREM),
@@ -497,7 +502,8 @@ TEST(LlvmIrBackendTest, EmitsIntegerRemainderWithZeroCheck)
                                 4, 4);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
     EXPECT_NE(result.text.find("icmp eq i64"), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("urem i64"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("srem i64"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find(", -9223372036854775808\n"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("ret i64 0"), std::string::npos) << result.text;
 }
 

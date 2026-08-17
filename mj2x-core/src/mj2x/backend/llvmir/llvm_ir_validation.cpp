@@ -109,8 +109,8 @@ bool isSupportedBinary(const RegInstruction& instruction, std::string& reason)
             return true;
         case SSABinaryOp::Div:
         case SSABinaryOp::Rem:
-            // 发射端生成除零检查（抛 ArithmeticException）+ udiv/urem 位模式
-            // 等价（规避 sdiv INT_MIN / -1 的溢出 poison）。
+            // 发射端生成除零检查（抛 ArithmeticException）+ sdiv/srem 有符号
+            // 除法 + INT_MIN/-1 溢出防护分支（div 回绕 INT_MIN / rem 得 0）。
             return true;
         }
     }

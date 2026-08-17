@@ -570,19 +570,39 @@ private:
             if (!floating &&
                 (instruction.binaryOp == SSABinaryOp::Div ||
                  instruction.binaryOp == SSABinaryOp::Rem)) {
-                // 整数 div/rem：udiv/urem（位模式等价于有符号除法，且无
-                // INT_MIN/-1 溢出 poison）；除零走共享 throw-arithmetic helper
-                // 抛 ArithmeticException 后返回 0（JVM 检查 pending exception）。
+                // 整数 div/rem：sdiv/srem——JVM 是有符号除法，udiv/urem 对负
+                // 操作数结果错误（JVM -7/2=-3，udiv 位模式得 2147483644）。
+                // INT_MIN/-1 组合是 sdiv/srem 的溢出 poison，JVM 语义为 div 回绕
+                // INT_MIN、rem 得 0，显式分支防护（对齐 StackC/VMC4）；除零走
+                // 共享 throw-arithmetic helper 抛 ArithmeticException 后返回 0
+                // （JVM 检查 pending exception）。
+                const bool        isDiv    = instruction.binaryOp == SSABinaryOp::Div;
                 const std::string divIndex = std::to_string(divIndex_++);
                 const std::string isZero   = nextTemporary();
                 const std::string result   = nextTemporary();
                 const char*       type     = llvmTypeWide(instruction.dest.type);
+                const char*       minLiteral =
+                    instruction.dest.type == SSAType::I64 ? "-9223372036854775808"
+                                                          : "-2147483648";
                 out_ << "  " << isZero << " = icmp eq " << type << " " << rhs << ", 0\n";
                 out_ << "  br i1 " << isZero << ", label %b_divz_" << divIndex
                      << ", label %b_divok_" << divIndex << "\n";
                 out_ << "b_divok_" << divIndex << ":\n";
-                out_ << "  " << result << " = "
-                     << (instruction.binaryOp == SSABinaryOp::Div ? "udiv" : "urem") << " "
+                const std::string isNegOne = nextTemporary();
+                out_ << "  " << isNegOne << " = icmp eq " << type << " " << rhs << ", -1\n";
+                out_ << "  br i1 " << isNegOne << ", label %b_divn1_" << divIndex
+                     << ", label %b_divgo_" << divIndex << "\n";
+                out_ << "b_divn1_" << divIndex << ":\n";
+                const std::string isMin = nextTemporary();
+                out_ << "  " << isMin << " = icmp eq " << type << " " << lhs << ", "
+                     << minLiteral << "\n";
+                out_ << "  br i1 " << isMin << ", label %b_divovf_" << divIndex
+                     << ", label %b_divgo_" << divIndex << "\n";
+                out_ << "b_divovf_" << divIndex << ":\n";
+                if (!emitStore(instruction.dest, isDiv ? minLiteral : "0", reason)) return false;
+                out_ << "  br label %b_divafter_" << divIndex << "\n";
+                out_ << "b_divgo_" << divIndex << ":\n";
+                out_ << "  " << result << " = " << (isDiv ? "sdiv" : "srem") << " "
                      << type << " " << lhs << ", " << rhs << "\n";
                 if (!emitStore(instruction.dest, result, reason)) return false;
                 out_ << "  br label %b_divafter_" << divIndex << "\n";

@@ -2158,6 +2158,9 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
                "        + CliLlvm.divide(100, 7) + \"-\" + CliLlvm.remainder(100, 7) + \"-\"\n"
                "        + CliLlvm.factorial(10) + \"-\" + CliLlvm.f2i(1.5e10f) + \"-\"\n"
                "        + CliLlvm.f2i(Float.NaN) + \"-\");\n"
+               "    System.out.print(CliLlvm.divide(-7, 2) + \"-\" + CliLlvm.remainder(-7, 2)\n"
+               "        + \"-\" + CliLlvm.divide(Integer.MIN_VALUE, -1) + \"-\"\n"
+               "        + CliLlvm.remainder(Integer.MIN_VALUE, -1) + \"-\");\n"
                "    try {\n"
                "      CliLlvm.divide(1, 0);\n"
                "      System.out.print(\"no-ex\");\n"
@@ -2173,7 +2176,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
     ASSERT_EQ(result.exitCode, 0) << result.out;
     result = runScript({q(java) + " -Xverify:all -cp " + q(inputDir) + " Driver"});
     ASSERT_EQ(result.exitCode, 0) << result.out;
-    EXPECT_EQ(result.out, "17-83-14-2-3628800-2147483647-0-ae");
+    EXPECT_EQ(result.out, "17-83-14-2-3628800-2147483647-0--3--1--2147483648-0-ae");
 
     for (const char* llvmTool : {"clang", "llc"}) {
         const fs::path outputDir = workDir / llvmTool;
@@ -2196,7 +2199,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
                   std::string::npos)
             << llvm;
         EXPECT_NE(llvm.find("shl i32"), std::string::npos) << llvm;
-        EXPECT_NE(llvm.find("udiv i32"), std::string::npos) << llvm;
+        EXPECT_NE(llvm.find("sdiv i32"), std::string::npos) << llvm;
         EXPECT_NE(llvm.find("call void @mj2x_llvm_throw_arith(ptr %env)"), std::string::npos)
             << llvm;
         EXPECT_NE(llvm.find("call i32 @llvm.fptosi.sat.i32.f32"), std::string::npos) << llvm;
@@ -2216,7 +2219,7 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
         nativeRun.push_back(q(java) + " -Xverify:all -cp " + q(outputDir) + " Driver");
         result = runScript(nativeRun);
         ASSERT_EQ(result.exitCode, 0) << result.out;
-        EXPECT_EQ(result.out, "17-83-14-2-3628800-2147483647-0-ae");
+        EXPECT_EQ(result.out, "17-83-14-2-3628800-2147483647-0--3--1--2147483648-0-ae");
     }
 }
 
