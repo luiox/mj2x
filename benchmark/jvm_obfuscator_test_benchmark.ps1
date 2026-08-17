@@ -103,9 +103,10 @@ Run-ProcessChecked $Cli @("-i", $InputJar, "-o", $outJar, "--backend", "regc", "
 Run-ProcessChecked "xmake" @("f", "-P", $projDir, "-p", "windows", "-a", "x64", "-m", "release") `
     $projDir (Join-Path $outDir "native-config.log") | Out-Null
 $nativeLog = Join-Path $outDir "native-build.log"
-$out = & xmake build -P $projDir mj2x_native 2>&1 | ForEach-Object { $_.ToString() }
-Set-Content -Path $nativeLog -Value ($out -join [Environment]::NewLine) -Encoding UTF8
-if (($out -join "`n") -match "error") { throw "native 编译失败，见 $nativeLog" }
+# 必须 cwd=$projDir 调用（同 config 阶段）：从 benchmark 目录裸调用时 xmake
+# 会向上找到 mj2x/xmake.lua 的缓存配置，平台漂移成 mingw（toolchain not found）。
+Run-ProcessChecked "xmake" @("-P", ".", "mj2x_native") $projDir $nativeLog | Out-Null
+if ((Get-Content $nativeLog -Raw) -match "error") { throw "native 编译失败，见 $nativeLog" }
 
 # ---- 2. 嵌入 native DLL ----
 $dll = Join-Path $projDir "build\windows\x64\release\mj2x_native.dll"
