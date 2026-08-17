@@ -1,5 +1,7 @@
 #include "reaching_def.hpp"
 
+#include "libca/log/log_macros.hpp"
+
 #include <queue>
 #include <unordered_set>
 
@@ -121,6 +123,12 @@ ReachingDefResult computeReachingDef(const std::vector<ReachingDefBlock>& blocks
                 }
             }
         }
+    }
+    // 迭代上限耗尽意味着数据流未收敛（理论不应发生）：下游 phi 决策会基于
+    // 不完整结果静默出错，至少留下诊断线索。
+    if (guard >= GUARD_LIMIT) {
+        CA_LOGT_WARN("ssa", "reaching-def worklist hit GUARD_LIMIT ({}) - results may be incomplete\n",
+                     GUARD_LIMIT);
     }
 
     return result;

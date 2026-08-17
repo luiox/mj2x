@@ -394,6 +394,9 @@ void LlvmIrBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
     if (result.kind != BackendResult::Kind::C_SOURCE || method.methodNode == nullptr) return;
     method.methodNode->access |= Opcodes::ACC_NATIVE;
     method.methodNode->instructions.clear();
+    // native 方法无字节码：maxStack/maxLocals 清零，对齐 StackC/VMC4。
+    method.methodNode->maxStack  = 0;
+    method.methodNode->maxLocals = 0;
     clazz.modified = true;
 }
 

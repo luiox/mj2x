@@ -515,7 +515,8 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
         }
         // 异常传播（Phase 2.C）：status==1（PendingException）时 pending exception
         // 已在 env 上，直接返回默认值让 JVM 抛（void 方法直接 return）。
-        out.emitLine("if (status == 1) {");
+        // 生成 C 无枚举符号（解释器源以裸 int 发射 status），保持字面量。
+        out.emitLine("if (status == 1 /* VmExecStatus::PendingException */) {");
         {
             CSourceStream::IndentGuard g2(out);
             if (retKind != PrimitiveKind::VOID) {

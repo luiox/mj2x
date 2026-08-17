@@ -4,7 +4,8 @@
 #include "llvm_intrinsic_registry.hpp"
 
 #include <cmath>
-#include <iomanip>#include <type_traits>
+#include <iomanip>
+#include <type_traits>
 #include <variant>
 
 namespace mj2x {

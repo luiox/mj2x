@@ -265,10 +265,6 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
             }
         }
     }
-    for (auto& [lbl, bi] : labelToIndex) {
-        (void)lbl;
-        (void)bi;
-    }
     // handler 入口深度恒为 1（异常对象在 s[0]）。
     std::unordered_set<size_t> handlerBlocks;
     for (auto* lbl : handlerLabels) {

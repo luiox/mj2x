@@ -24,6 +24,8 @@ const char* vmOpcodeName(VmOpcode op)
     case VmOpcode::Barrier: return "BARRIER";
     case VmOpcode::Throw: return "THROW";
     case VmOpcode::Switch: return "SWITCH";
+    case VmOpcode::SuperInc: return "SUPER_INC";
+    case VmOpcode::SuperDec: return "SUPER_DEC";
     }
     return "?";
 }

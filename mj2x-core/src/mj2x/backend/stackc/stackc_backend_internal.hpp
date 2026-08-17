@@ -546,7 +546,8 @@ struct StackCBackend::Impl
     void   emitNode(const MIRNode* node, codegen::CSourceStream& out);
     void   emitNodeWithExceptionDispatch(const MIRNode* node, codegen::CSourceStream& out,
                                          const std::string& dispatchTarget);
-    void   emitConstant(const MIRConstant* node, codegen::CSourceStream& out);    void   emitLocalLoad(const MIRLocalLoad* node, codegen::CSourceStream& out);
+    void   emitConstant(const MIRConstant* node, codegen::CSourceStream& out);
+    void   emitLocalLoad(const MIRLocalLoad* node, codegen::CSourceStream& out);
     void   emitLocalStore(const MIRLocalStore* node, codegen::CSourceStream& out);
     void   emitIinc(const MIRIinc* node, codegen::CSourceStream& out);
     void   emitBinaryOp(const MIRBinaryOp* node, codegen::CSourceStream& out);
