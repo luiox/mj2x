@@ -60,10 +60,16 @@ static void writeBytes(const std::string& path, const std::vector<ca::u8>& bytes
     std::ofstream ofs(path, std::ios::binary);
     if (!ofs) {
         CA_LOGT_ERROR("io", "cannot write {}\n", path.c_str());
-        return;
+        throw std::runtime_error("cannot open output file: " + path);
     }
     ofs.write(reinterpret_cast<const char*>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
+    // 磁盘满/配额/早关句柄等写失败必须上抛：Pipeline::run 据此返回非 0，
+    // 否则产物缺失或截断仍报成功（静默失败）。
+    if (!ofs.good()) {
+        CA_LOGT_ERROR("io", "write failed ({} bytes to {})\n", bytes.size(), path.c_str());
+        throw std::runtime_error("short write to output file: " + path);
+    }
 }
 
 static void writeJar(const std::string& path, CompilerIndex& index)

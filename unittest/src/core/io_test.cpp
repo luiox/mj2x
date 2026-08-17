@@ -495,6 +495,22 @@ TEST(PipelineTest, BadInputPathReturnsError)
     EXPECT_NE(pipeline.run(), 0);
 }
 
+// 审查 G-1 修复回归：writeBytes 曾对打不开/写失败只记日志即返回，磁盘满或
+// 路径不可写时 pipeline 返回 0（成功）而产物缺失。输出路径位于不存在的目录
+// 必须以非 0 退出。
+TEST(PipelineTest, BadOutputPathReturnsError)
+{
+    auto inPath = writeTempClass("pipeline_badout_in.class");
+
+    PipelineConfig cfg;
+    cfg.inputPath  = inPath;
+    cfg.outputPath =
+        test::getTempOutPath("mj2x_badout_dir/.keep").parent_path().string() +
+        "/no_such_dir/pipeline_out.class";
+    Pipeline pipeline(std::move(cfg));
+    EXPECT_NE(pipeline.run(), 0);
+}
+
 TEST(PipelineTest, FullPipelineRoundtrip)
 {
     auto inPath  = writeTempClass("pipeline_in.class");

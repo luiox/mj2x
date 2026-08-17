@@ -45,9 +45,17 @@ int Pipeline::run()
         return 1;
     }
 
-    runPreprocessors();
-    compileMethods();
-    runPostprocessors();
+    // 中段（预处理器/编译/后处理器）与 IO 同级防护：CLI main 不兜异常，
+    // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
+    try {
+        runPreprocessors();
+        compileMethods();
+        runPostprocessors();
+    }
+    catch (const std::exception& e) {
+        CA_LOGT_ERROR("pipeline", "compile stage failed - {}\n", e.what());
+        return 1;
+    }
 
     try {
         writeOutput();

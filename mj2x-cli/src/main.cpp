@@ -9,7 +9,6 @@
 #include "mj2x/core/native_lib_crypto.hpp"
 #include "mj2x/core/seed_derivation.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
-#include "mj2x/core/user_intrinsics.hpp"
 
 #include <fstream>
 #include <optional>
@@ -242,10 +241,16 @@ static std::vector<ca::u8> readFileBytes(const std::filesystem::path& path)
 {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs) return {};
-    auto                size = ifs.tellg();
+    const auto tellg = ifs.tellg();
+    // tellg 失败返回 -1：转 size_t 会构造巨大 vector（bad_alloc/崩溃）。
+    if (tellg < 0) return {};
+    const auto          size = static_cast<std::streamsize>(tellg);
     std::vector<ca::u8> bytes(static_cast<size_t>(size));
     ifs.seekg(0, std::ios::beg);
-    ifs.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+    ifs.read(reinterpret_cast<char*>(bytes.data()), size);
+    // 短读（磁盘满/并发截断）静默返回零填充会嵌入截断的 DLL，必须清空并让
+    // 调用方的空结果检查报错。
+    if (ifs.gcount() != size) return {};
     return bytes;
 }
 
