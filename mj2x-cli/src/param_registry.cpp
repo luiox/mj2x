@@ -465,7 +465,7 @@ bool cli_c_compiler(CliOptions& o, const char* v, std::string& e)
         return true;
     }
     if (!parseCompilerName(v, o.cCompilerKind)) {
-        e = "Unknown --c-compiler value. Expected msvc, gcc, clang, zig, or xmake.";
+        e = "Unknown --c-compiler value. Expected auto, msvc, gcc, clang, zig, or xmake.";
         return false;
     }
     return true;
@@ -481,7 +481,7 @@ bool json_c_compiler(CliOptions& o, const json& j, std::string& e)
     }
     if (!parseCompilerName(v, o.cCompilerKind)) {
         e = "invalid value for config key c_compiler: " + v +
-            " (expected: msvc, gcc, clang, zig, xmake)";
+            " (expected: auto, msvc, gcc, clang, zig, xmake)";
         return false;
     }
     return true;
@@ -766,7 +766,7 @@ const ParamDef kParamTable[] = {
     PARAM("compile.mode", "--compile-mode", "compile_mode", ParamType::Enum, "file,pipe", 0, 0,
           "file", "native 编译输入模式", "编译", "", cli_compile_mode, json_compile_mode),
     PARAM("compile.c_compiler", "--c-compiler", "c_compiler", ParamType::Enum,
-          "msvc,gcc,clang,zig,xmake", 0, 0, "auto",
+          "auto,msvc,gcc,clang,zig,xmake", 0, 0, "auto",
           "C 编译器或构建驱动（xmake 为构建驱动）", "编译", "", cli_c_compiler, json_c_compiler),
 #ifndef MJ2X_DISABLE_LLVM_BACKEND
     PARAM("compile.llvm_tool", "--llvm-tool", "llvm_tool", ParamType::Enum, "clang,llc", 0, 0,

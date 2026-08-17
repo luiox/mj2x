@@ -49,8 +49,8 @@ bool writeProjectTemplate(const fs::path& path, std::string_view source,
 {
     constexpr std::string_view projectNameToken = "@PROJECT_NAME@";
     if (source.find(projectNameToken) == std::string_view::npos) {
-        CA_LOGT_ERROR("compile", "project template is missing %.*s: {}\n", static_cast<int>(projectNameToken.size()),
-                projectNameToken.data(),
+        CA_LOGT_ERROR("compile", "project template is missing {}: {}\n",
+                std::string(projectNameToken),
                 path.string().c_str());
         return false;
     }
