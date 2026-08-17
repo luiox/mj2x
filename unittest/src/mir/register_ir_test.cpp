@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <regex>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -558,7 +559,7 @@ TEST(RegTransformPassTest, FlattensPureControlFlowAndRetainsEdgeCopies)
     options.enableMba                   = false;
     options.enableOpaquePredicates      = false;
     options.enableControlFlowFlattening = true;
-    const auto stats                    = applyRegTransformPasses(function, options);
+    const auto stats = applyRegTransformPasses(function, options);
 
     EXPECT_TRUE(stats.controlFlowFlattened);
     EXPECT_EQ(stats.cffEdgeSetters, 2U);
@@ -579,6 +580,63 @@ TEST(RegTransformPassTest, FlattensPureControlFlowAndRetainsEdgeCopies)
 
     std::string validationReason;
     EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+// 审查 G-1 修复回归：CFF 随机 state 码查重——同码会让 dispatcher switch 首个
+// case 命中而静默路由错误（加密模式 case 键 = code ^ xorKey，同 code 同键）。
+// 20 块直线链 + cffStateEncryption，断言 dispatcher 全部 case 键互异。
+TEST(RegTransformPassTest, CffStateCodesAreUnique)
+{
+    constexpr size_t kChainLength = 20;
+    RegFunction      function;
+    std::vector<RegBlock*> chain;
+    for (size_t i = 0; i < kChainLength; ++i) {
+        auto block  = std::make_unique<RegBlock>(SSABlockId{static_cast<ca::u32>(i)});
+        RegBlock* p = block.get();
+        chain.push_back(p);
+        if (i + 1 < kChainLength) {
+            RegSuccessor succ;
+            succ.block = nullptr;   // 下一块按序补链
+            block->terminator = RegJumpTerminator{std::move(succ)};
+        }
+        else {
+            block->terminator = RegReturnTerminator{
+                true, RegOperand::fromInt(static_cast<int64_t>(i), SSAType::I32)};
+        }
+        function.blocks.push_back(std::move(block));
+    }
+    for (size_t i = 0; i + 1 < kChainLength; ++i) {
+        auto& term = std::get<RegJumpTerminator>(chain[i]->terminator);
+        term.target.block = chain[i + 1];
+    }
+    function.entry = chain.front();
+
+    RegTransformOptions options;
+    options.enableMba                   = false;
+    options.enableOpaquePredicates      = false;
+    options.enableControlFlowFlattening = true;
+    options.cffStateEncryption          = true;
+    options.transformSeed               = 12345;
+    const auto stats = applyRegTransformPasses(function, options);
+    ASSERT_TRUE(stats.controlFlowFlattened);
+
+    const RegSwitchTerminator* dispatcher = nullptr;
+    for (const auto& block : function.blocks) {
+        const auto* candidate = std::get_if<RegSwitchTerminator>(&block->terminator);
+        if (candidate != nullptr && candidate->cases.size() == kChainLength) {
+            dispatcher = candidate;
+            break;
+        }
+    }
+    ASSERT_NE(dispatcher, nullptr) << "dispatcher switch with " << kChainLength
+                                   << " cases not found";
+
+    std::set<int64_t> keys;
+    for (const auto& c : dispatcher->cases) {
+        EXPECT_TRUE(keys.insert(c.key).second)
+            << "duplicate dispatcher case key " << c.key << " (two blocks share a state code)";
+    }
+    EXPECT_EQ(keys.size(), kChainLength);
 }
 
 TEST(RegTransformPassTest, SkipsEffectfulAndExceptionalFunctions)

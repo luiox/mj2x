@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -589,9 +590,20 @@ bool applyControlFlowFlattening(RegFunction& function, ca::u32& nextRegister,
 
     std::map<const RegBlock*, ca::u32> stateCodes;
     if (options.cffStateEncryption) {
-        // 派生随机 state 码：splitmix64(seed, index)，非顺序。
-        ca::u32 index = 0;
-        for (const auto* block : originals) stateCodes.emplace(block, deriveStateCode(options.transformSeed, index++));
+        // 派生随机 state 码：splitmix64(seed, index)，非顺序。码空间碰撞
+        //（生日效应，数千块的函数概率非平凡）会使 dispatcher switch 首个
+        // case 命中而静默路由错误——查重，冲突时线性探测下一个值
+        //（0 为非法码，绕开）。
+        ca::u32           index = 0;
+        std::set<ca::u32> usedCodes;
+        for (const auto* block : originals) {
+            ca::u32 code = deriveStateCode(options.transformSeed, index++);
+            while (usedCodes.count(code) != 0) {
+                code = code == 0xFFFFFFFFu ? 1u : code + 1u;
+            }
+            usedCodes.insert(code);
+            stateCodes.emplace(block, code);
+        }
     }
     else {
         ca::u32 stateCode = 1;
