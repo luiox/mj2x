@@ -88,6 +88,80 @@
   预留"方法/类选择"扩展点（`gui_config_tool_design.md` §6）。条件：无反射、无
   动态类加载、intrinsic 覆盖充分；先做单类试点再铺开。
 
+### G. 全线审查 round-3（2026-08-17，分支 `review/mj2x-audit-fixes`）
+
+四方向并行审查（前端/core、RegC、StackC/VMC4/LLVM、CLI/CRT/构建/文档），
+高危项已逐行复核确认。分两批处理：
+
+**G-1 本批修复**（简单、独立可回退，逐项独立 commit）：
+
+- [正确性-高] mbaDeep De Morgan 变体恒等式错误：`reg_transform_passes.cpp`
+  t6 移位的是 `~(a&b)` 应为 `(a&b)`（`a=0,b=0` 得 -2）；零测试覆盖，需连补
+  位运算穷举样本。
+- [正确性-高] LLVM 整数 div/rem 用 udiv/urem，负操作数结果错（JVM `-7/2=-3`
+  vs udiv 2147483644）；改 sdiv/srem + INT_MIN/-1 特判，对齐 StackC/VMC4。
+- [正确性-高] RegC `getClass().getName().hashCode()` 融合跳过窗口无条件
+  `continue`，吞掉窗口内 StoreField/ArrayStore 副作用与中间 dest（后续读
+  0/NULL 静默错码）；改为窗口内仅跳过 getName/hashCode 两条，其余原位发射。
+- [正确性-高] VMC4 `scanComputeRegisters` 漏 Switch 终结者边 copies（常量槽
+  可能分配到边拷贝 dest 上被覆写 / numRegs 偏小致 regs[] 越界）；
+  `encodeAllocate` 缺维度 >32 fail-closed（解释器 argBuf[32]）。
+- [正确性-高] `OutputWriter::writeBytes` 静默吞写失败（打不开/写错误只记
+  日志），磁盘满时 pipeline 返回成功。
+- [正确性-中] indy preprocessor 改写后不置 `cls.modified`（JAR 模式写回原始
+  字节，展开静默作废）；3 处 `InsnList::remove` 节点泄漏（remove 只摘链）。
+- [正确性-中] CFF 随机 state code 无去重，同码 dispatcher 静默路由错误。
+- [杂项] RegC：privateThis 分支缺 convertedFunctions 判空、INT64_MIN 字面量
+  发射（`(-9223372036854775807LL - 1)`）、varargs >32 参数 fail-closed、
+  MultiArray 空维防御、splitRewriteStatic 词边界、no-stack-anchor 门禁
+  `Cannot invoke` 自然语言锚点误伤。LLVM：include 挤行、jni_slot 裸字面量
+  25/21、finalize 不清 maxStack/maxLocals（对齐另两后端）。VMC4：
+  vmOpcodeName 缺 SuperInc/SuperDec。StackC：死循环遍历删除。CLI：
+  readFileBytes 短读/tellg 检查、main.cpp 重复 include、工程模板 `%.*s`
+  fmt bug、pipeline 中段异常无 catch。SSA：GUARD_LIMIT 截断加告警。
+- [runtime] rt_str_obf.cpp 无效 memcpy 往返删除；intrinsic_math 取负有符号
+  溢出 UB（改无符号取负）、Math.round 上界 DBL_MAX/2 → 2^63、Math.random
+  共享 LCG 原子化；box/unbox FindClass local ref 释放；dbg_depth
+  thread_local；sha256 aesExpandKey 块级重复调度外提。
+- [文档] `--vmc4-dispatcher` 两处文档记载的 `func_ptr`/`state` 等非法值；
+  `c_compiler` 文档默认值 `auto` 不可显式书写（改为合法别名）；user_guide
+  参数表补 `--emit-native-dir`/`--compile-mode`/`--stackc-exception-check`；
+  mj2x-runtime readme 失效 `RUNTIME_*.md` 引用。
+
+**G-2 待评估**（大改 / 需实测 / 需设计决策，本批不动）：
+
+- rt_protect Linux rwx 检测大概率对宿主 JVM CodeCache（rwxp）误报，force=1 +
+  terminate/fake/delay 下自毁；需 Linux 真机验证后按 safe_env 模式排除
+  libjvm 自身映射。现有 exec 级测试全在 Windows，掩盖此问题。
+- RegC 进程级缓存并发安全：实例方法缓存 lastReceiverClass、resolved call
+  site、字符串字面量缓存的 global ref 更新链均无同步（Delete→New 竞争下对
+  已释放句柄调 JNI）。需定并发契约（原子交换/只增不删/per-site 锁）。
+- 三后端共享层抽取（结构性最大项）：RegisterNatives 基础设施、JVM 类型格点
+  映射表（10+ 张平行）、indy bootstrap 运行时解析（3 份）、多维数组分配
+  （3 份）。LLVM udiv bug 即三份手工同步"修一漏二"的实例；jvm_semantics.hpp
+  已有共享先例。
+- backend.hpp 收拾：Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位、
+  finalize 无错误通道（三后端失败行为不一致）、接口默认方法能力边界
+  （VMC4/LLVM 无 StackC 的代理机制，MarkAll 下产出带 ACC_NATIVE 的接口方法
+  → ClassFormatError）。
+- RegC intrinsic 判定热点：每条 Call 重复 match 6-10 次（每次 3 个
+  std::string + ~150 条表线性扫），应函数级一次算好 decision；registry 视图
+  不统一（analyze 走 builtins、emit 走用户 registry，覆盖场景判定漂移）。
+- 用户 intrinsic 实例方法 argCount 含 receiver 对比不含 receiver 的形参数，
+  恒 Unsupported；缺 isStatic 校验。
+- indy 装箱/拆箱缺 Boolean/Character 通道（捕获 boolean/char 的 lambda 运行
+  期 WrongMethodTypeException / NoSuchMethodError）。
+- 性能：SSA 构建 O(n²)（fallthroughBlock 线性扫 / findBlockByLabel /
+  reaching_def 无邻接表）；JAR 输出每条目全量拷贝；llvmir
+  GlobalStringTable::intern 线性查。
+- CLI：外部进程调用（编译器/xmake/pack hook）无超时（libca `wait_for` 未
+  用）；pipe 模式先写 stdin 后排空输出有死锁窗口；无下界整数参数负值回绕。
+- 死代码清理批次：MethodStack 整类、FieldID、emitNativeMethod 失败分支、
+  shouldKeepBytecodeForCompatibility 恒 false、_mj2x_intrinsic_string_* 无引
+  用 helper、MONITOR_EXIT 死枚举、cli dispatcher 别名死分支。
+- 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层
+  各自为政，需在 capabilities/AGENTS 层面定一次豁免边界。
+
 ## 验证命令
 
 ```bash
