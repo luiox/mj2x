@@ -600,6 +600,44 @@ TEST_F(RegCBackendE2E, ReflectionRoundTrip)
             });
 }
 
+// 审查 G-1 修复回归：getClass().getName().hashCode() 链融合的跳过窗口曾无条件
+// continue，吞掉窗口内 isFuseTransparent 放行的 StoreField/ArrayStore 副作用与
+// 中间 dest（后续使用读到声明初值 0）。窗口内其余指令必须原位发射：数组写、
+// 静态字段写位于 getClass 与 getName 之间，且中间值（数组长度）在 hashCode 之后
+// 被使用——三处任一被吞，native 输出即与基线不同。
+TEST_F(RegCBackendE2E, FusedNameHashKeepsIntermediateEffects)
+{
+    runCase("RegCFusedNameHash",
+            "public class RegCFusedNameHash {\n"
+            "  static int sink;\n"
+            "  public static int arrayStoreBetween(Object o, int[] arr, int v) {\n"
+            "    Class<?> c = o.getClass();\n"
+            "    arr[0] = v;\n"
+            "    int h = c.getName().hashCode();\n"
+            "    return h + arr[0];\n"
+            "  }\n"
+            "  public static int staticStoreBetween(Object o, int v) {\n"
+            "    Class<?> c = o.getClass();\n"
+            "    sink = v;\n"
+            "    int h = c.getName().hashCode();\n"
+            "    return h + sink;\n"
+            "  }\n"
+            "  public static int arrayLoadBetween(Object o, int[] arr) {\n"
+            "    Class<?> c = o.getClass();\n"
+            "    int len = arr.length;\n"
+            "    int h = c.getName().hashCode();\n"
+            "    return h + len;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"arrayStoreBetween(\"x\", new int[]{7}, 42)",
+                 "RegCFusedNameHash.arrayStoreBetween(\"x\", new int[]{7}, 42)"},
+                {"staticStoreBetween(\"x\", 11)", "RegCFusedNameHash.staticStoreBetween(\"x\", 11)"},
+                {"arrayLoadBetween(\"x\", new int[]{5, 6, 7})",
+                 "RegCFusedNameHash.arrayLoadBetween(\"x\", new int[]{5, 6, 7})"},
+            });
+}
+
 // R6.1 阶段1：StringConcatFactory invokedynamic 展开验证。javac 把 "a"+x+"b"+... 编译成
 // invokedynamic makeConcatWithConstants —— InvokeDynamicPreprocessor 把它改写成
 // new StringBuilder + append 链 + toString 字节码，RegC 已有 StringBuilder intrinsic

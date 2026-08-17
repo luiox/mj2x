@@ -287,9 +287,12 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             ca::str::Utf8String     allocCacheName;
             std::vector<ca::str::Utf8String> fusedArgs;
         } pendingFuse;
-        /// getClass().getName().hashCode() 融合终点：跳过链上 getName/hashCode
-        /// 两条指令的发射（融合结果在 getClass 位置一次产出）。
-        const RegInstruction* fusedNameHashEnd = nullptr;
+        /// getClass().getName().hashCode() 融合窗口：仅 getName/hashCode 两条
+        /// 指令被融合结果取代（融合值在 getClass 位置一次产出），窗口内其余
+        /// 指令（isFuseTransparent 放行的字段/数组读写等）必须原位发射——
+        /// 副作用与中间 dest 的后续使用不可丢。
+        const RegInstruction* fusedNameHashSkip1 = nullptr;
+        const RegInstruction* fusedNameHashEnd   = nullptr;
         const auto operandUsesReg = [](const RegOperand& op, RegId id) {
             return op.kind == RegOperandKind::Register && op.reg.value == id.value;
         };
@@ -397,8 +400,19 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         for (size_t insIdx = 0; insIdx < block->instructions.size(); ++insIdx) {
             const RegInstruction& ins = block->instructions[insIdx];
             if (fusedNameHashEnd != nullptr) {
-                // 融合跳过窗口：getName/hashCode 两指令已被融合结果取代。
-                if (&ins == fusedNameHashEnd) fusedNameHashEnd = nullptr;
+                // 融合跳过窗口：仅 getName/hashCode 被融合结果取代；窗口内
+                // 其余指令原位发射（副作用与中间 dest 后续使用保留；getName/
+                // hashCode 提前到 getClass 位置求值——Class 对象身份不可变，
+                // 中间指令不触碰 getClass/getName dest，语义等价）。
+                if (fusedNameHashSkip1 != nullptr && &ins == fusedNameHashSkip1) {
+                    fusedNameHashSkip1 = nullptr;
+                    continue;
+                }
+                if (&ins == fusedNameHashEnd) {
+                    fusedNameHashEnd = nullptr;
+                    continue;
+                }
+                if (!emitInstructionWithCheck(ins)) return result;
                 continue;
             }
             if (pendingFuse.active) {
@@ -502,7 +516,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                                                    "&" + site.to_std_string()}))
                         .append(";")
                         .newLine();
-                    fusedNameHashEnd = hashIns;
+                    fusedNameHashEnd   = hashIns;
+                    fusedNameHashSkip1 = getNameIns;
                     // 融合调用的 miss 路径经 JDK getName/hashCode，保留与被取代
                     // 调用一致的异常分发。
                     if (hashIns->effect.mayThrow && !activeRegions.empty()) {
