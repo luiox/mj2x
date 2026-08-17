@@ -885,15 +885,17 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
 
 bool validateRegCNoStackAnchors(const std::string& source, std::string& reason)
 {
+    // 锚点必须是 RegC 不会产出的标识符形态。自然语言片段（如早期的
+    // "Cannot invoke"）会误伤含异常文案字符串常量的合法方法——受保护代码
+    // 里 "Cannot invoke method ..." 之类的消息极常见，门禁会静默拒绝整个
+    // 方法的 native 化。
     const char* anchors[] = {
-        "cstack[",
         "cstack",
         "stack[",
         "union jvalue",
         " sp ",
         "sp--",
         "sp++",
-        "Cannot invoke",
         "cclasses[",
         "cmethods[",
     };

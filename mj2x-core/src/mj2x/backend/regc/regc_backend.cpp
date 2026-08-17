@@ -1240,7 +1240,10 @@ std::string splitRewriteStatic(std::string_view text, std::vector<std::string>& 
         }
         if (c == '{') ++braceDepth;
         else if (c == '}') { if (braceDepth > 0) --braceDepth; }
-        if (braceDepth == 0 && text.compare(i, 7, "static ") == 0) {
+        // 词边界：前一个字符必须是标识符外字符，否则形如 `xstatic ` 的
+        // 文件级标识符（理论命中）会被误改写。
+        const bool atWordStart = i == 0 || !(text[i - 1] == '_' || isalnum(static_cast<unsigned char>(text[i - 1])));
+        if (braceDepth == 0 && atWordStart && text.compare(i, 7, "static ") == 0) {
             size_t j = i + 7;
             // thread_local 族：static thread_local / static __declspec(thread) /
             // static _Thread_local。

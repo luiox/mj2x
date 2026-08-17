@@ -869,11 +869,21 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 // 私有方法 + this：无覆写、精确分派。已转换实现 → 直接调用
                 // regc 函数（0 JNI，参数 = this + 实参）；未转换 → cached
                 // instance 调用（省 resolved 的 GetObjectClass + IsSameObject）。
+                // convertedFunctions 可为空（tryEmitDirectCall /
+                // tryEmitStaticBoundCall 同样判空），空时走 cached 调用。
                 const std::string methodKey = ins.method.owner.to_std_string() + "\n" +
                                               ins.method.name.to_std_string() + "\n" +
                                               ins.method.desc.to_std_string();
-                const auto direct = state.convertedFunctions->find(methodKey);
-                bool        safeDirect = state.directCalls;   // 直调默认关闭（JVM 栈帧语义）
+                bool        directAvailable = false;
+                std::string directName;
+                if (state.convertedFunctions != nullptr) {
+                    const auto direct = state.convertedFunctions->find(methodKey);
+                    if (direct != state.convertedFunctions->end()) {
+                        directAvailable = true;
+                        directName      = direct->second;
+                    }
+                }
+                bool safeDirect = state.directCalls;   // 直调默认关闭（JVM 栈帧语义）
                 if (state.indyFunctions != nullptr &&
                     state.indyFunctions->count(methodKey) != 0) {
                     safeDirect = false;
@@ -884,7 +894,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         break;
                     }
                 }
-                if (safeDirect && direct != state.convertedFunctions->end()) {
+                if (safeDirect && directAvailable) {
                     // 前向声明：目标函数定义可能在本调用点之后（同类方法转换
                     // 顺序不保证），无声明时 C 隐式 int() 声明与 REF 返回值冲突
                     // （C2040）。参数类型与 emitFunction 的参数发射一致
@@ -892,7 +902,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                     u.appendLineStart("static ")
                         .append(ins.hasDest ? cType(ins.dest.type) : "void")
                         .append(" ")
-                        .append(direct->second)
+                        .append(directName)
                         .append("(");
                     for (size_t i = 0; i < ins.args.size(); ++i) {
                         if (i) u.append(", ");
@@ -902,7 +912,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                     }
                     u.append(");").newLine();
                     if (ins.hasDest) u.appendLineStart(destName).append(" = ");
-                    u.append(direct->second)
+                    u.append(directName)
                         .append("(")
                         .append(directCallArgs(ins.args, argumentExpressions))
                         .append(");")
@@ -1081,6 +1091,12 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             }
         }
         else {
+            // MULTIANEWARRAY 至少一维；空维会发射 `int32_t dims[0]`（C 禁止
+            // 零长数组）。上游 IR 应保证，发射端防御。
+            if (ins.args.empty()) {
+                reason = "multi-array allocation requires at least one dimension";
+                return false;
+            }
             out.block([&](CSourceStream& u) {
                 u.appendLineStart("int32_t dims[")
                     .append(ca::str::format_std("{}", ins.args.size()))

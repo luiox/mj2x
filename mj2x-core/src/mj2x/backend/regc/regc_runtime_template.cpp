@@ -646,6 +646,8 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("static jobject _mj2x_regc_collect_args(const char* desc, int32_t arg_count, va_list "
            "ap, jvalue* values) {\n");
     out.append("    int32_t param_count = _mj2x_regc_count_params(desc);\n");
+    out.append("    if (param_count > 32) { _mj2x_regc_throw_unsupported(\"method call exceeds 32 "
+           "parameters (jvalue values[32])\"); return NULL; }\n");
     out.append("    jobject receiver = NULL;\n");
     out.append("    if (arg_count == param_count + 1) receiver = (jobject)va_arg(ap, mj2x_ref);\n");
     out.append("    const char* p = desc + 1;\n");
@@ -681,7 +683,8 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     out.append("}\n\n");
     emitRegCMethodCallHelpers(out);
     if (traceCallLog) {
-        out.append("static int _mj2x_regc_dbg_depth = 0;\n");
+        // 多线程下深度计数按线程独立（仅调试面，_Thread_local C11 起可用）。
+        out.append("static _Thread_local int _mj2x_regc_dbg_depth = 0;\n");
         out.append("static void _mj2x_regc_dbg_enter(const char* owner, const char* name, const char* "
                    "desc) {\n");
         out.append("    _mj2x_regc_dbg_depth++;\n");
@@ -1156,49 +1159,49 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
         "static jobject _mj2x_regc_box_i32(int32_t value) { static jclass c = NULL; static "
         "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
         "\"java/lang/Integer\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
-        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
         "_mj2x_regc_env, c, \"valueOf\", \"(I)Ljava/lang/Integer;\"); if (c == NULL || m == NULL) "
         "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
         "static jobject _mj2x_regc_box_i64(int64_t value) { static jclass c = NULL; static "
         "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
         "\"java/lang/Long\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
-        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
         "_mj2x_regc_env, c, \"valueOf\", \"(J)Ljava/lang/Long;\"); if (c == NULL || m == NULL) "
         "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
         "static jobject _mj2x_regc_box_f32(float value) { static jclass c = NULL; static "
         "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
         "\"java/lang/Float\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
-        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
         "_mj2x_regc_env, c, \"valueOf\", \"(F)Ljava/lang/Float;\"); if (c == NULL || m == NULL) "
         "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
         "static jobject _mj2x_regc_box_f64(double value) { static jclass c = NULL; static "
         "jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "
         "\"java/lang/Double\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef("
-        "_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
+        "_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID("
         "_mj2x_regc_env, c, \"valueOf\", \"(D)Ljava/lang/Double;\"); if (c == NULL || m == NULL) "
         "return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }",
         "static int32_t _mj2x_regc_unbox_i32(jobject value) { if (value == NULL) return 0; static "
         "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
         "->FindClass(_mj2x_regc_env, \"java/lang/Integer\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
-        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
         "->GetMethodID(_mj2x_regc_env, c, \"intValue\", \"()I\"); if (c == NULL || m == NULL) return 0; "
         "return (*_mj2x_regc_env)->CallIntMethod(_mj2x_regc_env, value, m); }",
         "static int64_t _mj2x_regc_unbox_i64(jobject value) { if (value == NULL) return 0; static "
         "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
         "->FindClass(_mj2x_regc_env, \"java/lang/Long\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
-        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
         "->GetMethodID(_mj2x_regc_env, c, \"longValue\", \"()J\"); if (c == NULL || m == NULL) return 0; "
         "return (*_mj2x_regc_env)->CallLongMethod(_mj2x_regc_env, value, m); }",
         "static float _mj2x_regc_unbox_f32(jobject value) { if (value == NULL) return 0.0f; static "
         "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
         "->FindClass(_mj2x_regc_env, \"java/lang/Float\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
-        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
         "->GetMethodID(_mj2x_regc_env, c, \"floatValue\", \"()F\"); if (c == NULL || m == NULL) "
         "return 0.0f; return (*_mj2x_regc_env)->CallFloatMethod(_mj2x_regc_env, value, m); }",
         "static double _mj2x_regc_unbox_f64(jobject value) { if (value == NULL) return 0.0; static "
         "jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)"
         "->FindClass(_mj2x_regc_env, \"java/lang/Double\"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)"
-        "->NewGlobalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
+        "->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)"
         "->GetMethodID(_mj2x_regc_env, c, \"doubleValue\", \"()D\"); if (c == NULL || m == NULL) "
         "return 0.0; return (*_mj2x_regc_env)->CallDoubleMethod(_mj2x_regc_env, value, m); }",
     };

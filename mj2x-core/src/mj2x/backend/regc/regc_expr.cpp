@@ -241,9 +241,17 @@ ca::str::Utf8String operandExpr(const RegOperand& operand)
     {
         CSourceStream os;
         if (operand.type == SSAType::I64) {
-            os.append("(int64_t)");
-            os.append(ca::str::format_std("{}", operand.intValue));
-            os.append("LL");
+            // INT64_MIN 的十进制字面量 -9223372036854775808LL 超出 long long
+            // 可表示域（标准 C ill-formed，MSVC/GCC 宽限为告警），改发射等价
+            // 减法表达式。
+            if (operand.intValue == INT64_MIN) {
+                os.append("(int64_t)(-9223372036854775807LL - 1)");
+            }
+            else {
+                os.append("(int64_t)");
+                os.append(ca::str::format_std("{}", operand.intValue));
+                os.append("LL");
+            }
         }
         else {
             os.append(ca::str::format_std("{}", operand.intValue));
