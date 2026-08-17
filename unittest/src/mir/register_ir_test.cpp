@@ -1,8 +1,11 @@
 #include <gmock/gmock.h>
 
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <regex>
 #include <string>
+#include <utility>
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
@@ -195,6 +198,87 @@ RegFunction makePureAddFunction()
     function.entry    = block.get();
     function.blocks.push_back(std::move(block));
     return function;
+}
+
+/// 双参数纯 Add 函数：int f(int a, int b) { return a + b; }
+/// （mbaDeep 变体语义求值用——恒等式对具体 (a,b) 代入执行验证）
+RegFunction makeParamAddFunction()
+{
+    RegFunction    function;
+    auto           block = std::make_unique<RegBlock>(SSABlockId{0});
+    const RegValue lhs{RegId{0}, SSAType::I32};
+    const RegValue rhs{RegId{1}, SSAType::I32};
+    const RegValue result{RegId{2}, SSAType::I32};
+
+    RegInstruction add;
+    add.kind     = RegInstructionKind::Binary;
+    add.hasDest  = true;
+    add.dest     = result;
+    add.lhs      = RegOperand::fromRegister(lhs);
+    add.rhs      = RegOperand::fromRegister(rhs);
+    add.binaryOp = SSABinaryOp::Add;
+    add.effect   = SSAEffect::pure();
+    block->instructions.push_back(add);
+    block->terminator = RegReturnTerminator{true, RegOperand::fromRegister(result)};
+    function.entry    = block.get();
+    function.parameters.push_back(lhs);
+    function.parameters.push_back(rhs);
+    function.blocks.push_back(std::move(block));
+    return function;
+}
+
+/// 直线求值 mbaDeep 变换后的单块指令链：参数寄存器代入具体值，按序执行
+/// Unary/Binary/Copy（Barrier 跳过），返回 return 操作数的求值结果（按类型
+/// 宽度截断）。用于逐 (a,b) 样本断言 r == a+b（模 2^N）。
+int64_t evaluateStraightLineRegIR(const RegFunction& fn, int64_t a, int64_t b)
+{
+    std::map<uint32_t, int64_t> regs;
+    regs[fn.parameters.at(0).id.value] = a;
+    regs[fn.parameters.at(1).id.value] = b;
+    const uint64_t mask =
+        fn.parameters.at(0).type == SSAType::I32 ? 0xFFFFFFFFull : ~0ull;
+    auto operandValue = [&](const RegOperand& op) -> int64_t {
+        if (op.kind == RegOperandKind::IntLiteral) return op.intValue;
+        const auto it = regs.find(op.reg.value);
+        EXPECT_NE(it, regs.end());
+        return it->second;
+    };
+    const auto wrap = [&](uint64_t v) -> int64_t {
+        if (mask == 0xFFFFFFFFull) return static_cast<int64_t>(static_cast<int32_t>(v));
+        return static_cast<int64_t>(v);
+    };
+    for (const auto& ins : fn.blocks.front()->instructions) {
+        int64_t result = 0;
+        switch (ins.kind) {
+        case RegInstructionKind::Unary: {
+            result = ins.unaryOp == SSAUnaryOp::BitNot ? ~operandValue(ins.value)
+                                                       : -operandValue(ins.value);
+            break;
+        }
+        case RegInstructionKind::Binary: {
+            const uint64_t l = static_cast<uint64_t>(operandValue(ins.lhs));
+            const uint64_t r = static_cast<uint64_t>(operandValue(ins.rhs));
+            uint64_t    v = 0;
+            switch (ins.binaryOp) {
+            case SSABinaryOp::Add: v = l + r; break;
+            case SSABinaryOp::And: v = l & r; break;
+            case SSABinaryOp::Or: v = l | r; break;
+            case SSABinaryOp::Xor: v = l ^ r; break;
+            case SSABinaryOp::Shl: v = l << (r & 63u); break;
+            default: ADD_FAILURE() << "unexpected binary op in mba chain"; return 0;
+            }
+            result = static_cast<int64_t>(v);
+            break;
+        }
+        case RegInstructionKind::Copy: result = operandValue(ins.copy.source); break;
+        case RegInstructionKind::Barrier: continue;
+        default: ADD_FAILURE() << "unexpected instruction kind in mba chain"; return 0;
+        }
+        regs[ins.dest.id.value] = wrap(static_cast<uint64_t>(result));
+    }
+    const auto* ret = std::get_if<RegReturnTerminator>(&fn.blocks.front()->terminator);
+    EXPECT_NE(ret, nullptr);
+    return wrap(static_cast<uint64_t>(operandValue(ret->value)));
 }
 
 }   // namespace
@@ -567,6 +651,50 @@ TEST(RegTransformPassTest, MbaDeepOffKeepsLegacySingleForm)
     EXPECT_EQ(stats.mbaDeepRewrites, 0U);
     ASSERT_EQ(function.blocks.front()->instructions.size(), 3U);
     EXPECT_EQ(function.blocks.front()->instructions[0].binaryOp, SSABinaryOp::Or);
+}
+
+// round-3 审查修复：mbaDe Morgan 变体曾把 t6 写成 ~(a&b)<<1（正确为 (a&b)<<1），
+// (0,0) 代入即得 -2 且零测试覆盖。两变体都按具体 (a,b) 求值断言 a+b 语义
+// （含 INT32_MIN/INT32_MAX 溢出边界；模 2^32 环绕）。
+TEST(RegTransformPassTest, MbaDeepVariantsPreserveAddSemantics)
+{
+    const std::pair<int64_t, int64_t> samples[] = {
+        {0, 0},           {1, 2},                          {9, 4},
+        {-7, 3},          {INT32_MIN, -1},                 {INT32_MIN, INT32_MAX},
+        {INT32_MAX, 1},   {INT32_MAX, INT32_MAX},          {123456789, -987654321},
+        {0x55555555, (int64_t)0xAAAAAAAA},
+    };
+    bool sawDeMorgan = false;
+    bool sawCarry    = false;
+    for (uint64_t seed = 0; seed < 64u; ++seed) {
+        RegFunction function = makeParamAddFunction();
+
+        RegTransformOptions options;
+        options.enableMba                   = true;
+        options.enableOpaquePredicates      = false;
+        options.enableControlFlowFlattening = false;
+        options.mbaDeep                     = true;
+        options.transformSeed               = seed;
+        const auto stats = applyRegTransformPasses(function, options);
+        ASSERT_EQ(stats.mbaDeepRewrites, 1U);
+
+        // 变体识别：De Morgan 展开不含 Shl，carry 两轮含 (a&b)<<1 的 Shl。
+        bool hasShift = false;
+        for (const auto& ins : function.blocks.front()->instructions) {
+            if (ins.kind == RegInstructionKind::Binary && ins.binaryOp == SSABinaryOp::Shl)
+                hasShift = true;
+        }
+        hasShift ? sawCarry = true : sawDeMorgan = true;
+
+        for (const auto& [a, b] : samples) {
+            const int64_t expected = static_cast<int64_t>(static_cast<int32_t>(
+                static_cast<uint32_t>(a) + static_cast<uint32_t>(b)));
+            EXPECT_EQ(evaluateStraightLineRegIR(function, a, b), expected)
+                << "seed=" << seed << " a=" << a << " b=" << b;
+        }
+    }
+    EXPECT_TRUE(sawDeMorgan) << "64 个 seed 未覆盖 De Morgan 变体";
+    EXPECT_TRUE(sawCarry) << "64 个 seed 未覆盖 carry 两轮变体";
 }
 
 TEST(RegTransformPassTest, OpaqueZeroSelectsVariantsBySeed)

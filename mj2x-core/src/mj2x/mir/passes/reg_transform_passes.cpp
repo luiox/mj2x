@@ -246,7 +246,7 @@ void applyMba(RegFunction& function, ca::u32& nextRegister, RegTransformStats& s
 ///
 /// 用 `mj2x_regc_barrier`（RegIR Barrier，发射为运行时调用，副作用语义）夹住
 /// 恒等链，C 编译器无法折叠中间步骤。每调用点按 (blockId*7 + 指令序号) 选变体：
-/// - 变体 0（De Morgan）：a+b = ~(~a&~b) ^ ~(~a|~b) + 2*(~(~a&~b) & ~(~a|~b))
+/// - 变体 0（De Morgan）：a+b = ~(~a|~b) + ~(~a&~b)（即 (a&b)+(a|b)）
 /// - 变体 1（carry 两轮）：a+b = ((a^b) ^ ((a&b)<<1)) + (((a^b) & ((a&b)<<1)) << 1)
 /// 均为位运算恒等，溢出安全（模 2³² 语义）。默认关闭（mbaDeep=false 走基础 MBA）。
 void applyMbaDeep(RegFunction& function, ca::u32& nextRegister, uint64_t seed,
@@ -267,8 +267,9 @@ void applyMbaDeep(RegFunction& function, ca::u32& nextRegister, uint64_t seed,
             const bool    variant = ((splitmix64(seed ^ (site++ * 0x9E3779B97F4A7C15ull)) & 1u) == 0);
             RegValue      r{RegId{nextRegister++}, type};
             if (variant) {
-                // De Morgan 展开：t1=~a, t2=~b, t3=~t1|~t2(=a&b), t4=~t1&~t2(=a|b),
-                // t5=t4^t3(=a^b), t6=t3<<1, r=t5+t6
+                // De Morgan 展开：t1=~a, t2=~b, t3=t1|t2(=~(a&b)), t4=t1&t2(=~(a|b)),
+                // t5=~t3(=a&b), t6=~t4(=a|b), r=t5+t6（恒等式 (a&b)+(a|b)=a+b，
+                // 模 2^N 下成立）
                 const RegValue t1{RegId{nextRegister++}, type};
                 const RegValue t2{RegId{nextRegister++}, type};
                 const RegValue t3{RegId{nextRegister++}, type};
@@ -284,12 +285,10 @@ void applyMbaDeep(RegFunction& function, ca::u32& nextRegister, uint64_t seed,
                     t4, RegOperand::fromRegister(t1), RegOperand::fromRegister(t2),
                     SSABinaryOp::And));
                 transformed.push_back(makeBarrier("mba_deep"));
-                transformed.push_back(makeBinary(
-                    t5, RegOperand::fromRegister(t3), RegOperand::fromRegister(t4),
-                    SSABinaryOp::Xor));
-                transformed.push_back(makeBinary(
-                    t6, RegOperand::fromRegister(t3), RegOperand::fromInt(1, type),
-                    SSABinaryOp::Shl));
+                transformed.push_back(makeUnary(t5, RegOperand::fromRegister(t3),
+                                                SSAUnaryOp::BitNot));
+                transformed.push_back(makeUnary(t6, RegOperand::fromRegister(t4),
+                                                SSAUnaryOp::BitNot));
                 transformed.push_back(makeBarrier("mba_deep"));
                 transformed.push_back(makeBinary(r, RegOperand::fromRegister(t5),
                                                  RegOperand::fromRegister(t6), SSABinaryOp::Add));
