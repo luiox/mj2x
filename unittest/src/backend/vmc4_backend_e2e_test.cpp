@@ -375,8 +375,10 @@ private:
                 fs::path src = runtimeSrc / rel;
                 fs::path obj = objDir / objName;
                 objs.push_back(obj);
-                compileLines.push_back("cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) + " /I" +
-                                       q(runtimeSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                // /utf-8:runtime intrinsic 源含中文注释,GBK 误读会破坏语法
+                // (与上方 compileCrt/generatedObj 行一致)。
+                compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(obj) + " " + q(src) +
+                                       " /I" + q(runtimeSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
                                        q(tc_.jdkIncludeWin));
             };
             compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
