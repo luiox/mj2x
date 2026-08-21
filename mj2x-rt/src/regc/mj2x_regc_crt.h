@@ -1,7 +1,7 @@
-﻿/// @defgroup regc_r3_abi RegC R3 运行时 ABI 与 Helper
+/// @defgroup regc_r3_abi RegC R3 运行时 ABI 与 Helper
 ///
 /// RegC 是无栈后端（register-style），其生成的 C 不应在每处翻译单元中保持大型
-/// inline helper body。R3 运行时 ABI 是将选定 helper 语义移入可分发 `mj2x-crt`
+/// inline helper body。R3 运行时 ABI 是将选定 helper 语义移入可分发 `mj2x-rt`
 /// 源码包的边界。
 ///
 /// ## R3 ABI 切片
@@ -24,9 +24,9 @@
 ///
 /// ## 可分发 ABI 边界
 ///
-/// 公共权威是 `mj2x-crt/src/regc/mj2x_regc_crt.h`。公共契约属于该 header 的
+/// 公共权威是 `mj2x-rt/src/regc/mj2x_regc_crt.h`。公共契约属于该 header 的
 /// Doxygen 注释。生成的 RegC C 包含 `regc/mj2x_regc_crt.h` 并调用其 C99/JNI ABI。
-/// CLI 将 `mj2x-crt/resources.manifest` 中的每个条目复制到生成的 native 项目中，
+/// CLI 将 `mj2x-rt/rt.resources` 中的每个条目复制到生成的 native 项目中，
 /// 其构建模板编译 CRT 源码。这是唯一支持的可分发运行时入口。
 ///
 /// ## RegC Helper 层
@@ -175,7 +175,7 @@ typedef struct mj2x_regc_class_name_hash_site
     mj2x_regc_class_name_hash_slot slots[2];
 } mj2x_regc_class_name_hash_site;
 
-/// @brief Opaque UTF-16 StringBuilder state owned by mj2x-crt.
+/// @brief Opaque UTF-16 StringBuilder state owned by mj2x-rt.
 ///
 /// The allocation and representation stay private so a later C++ source pack
 /// can replace the implementation without changing generated-C call sites.

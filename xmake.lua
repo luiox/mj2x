@@ -3,6 +3,6 @@
 -- libs/libjbytecode/<module>/ 的子库模式。每个子模块自带 xmake.lua。
 includes("mj2x-core")
 includes("mj2x-cli")
-includes("mj2x-crt")
+includes("mj2x-rt")
 includes("mj2x-runtime")
 includes("unittest")

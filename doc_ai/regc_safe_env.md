@@ -1,7 +1,7 @@
 # RegC safe-env：JNI 函数表快照 + 方法入口恢复
 
 > 状态：已实现（2026-08-10）。对应 issue #748。
-> 相关代码：`mj2x-crt/src/regc/mj2x_regc_safe_env.{h,c}`、`regc_backend.cpp`
+> 相关代码：`mj2x-rt/src/regc/mj2x_regc_safe_env.{h,c}`、`regc_backend.cpp`
 > （`emitNativeMethod` / `emitRegistrationCode`）、CLI `--regc-safe-env`。
 
 ## 1. 问题与威胁模型
@@ -88,7 +88,7 @@ JNI trampoline 的首行**（`_mj2x_regc_env = env` 之前，直接用形参 `en
 | JNI_OnLoad（`GetEnv` 后） | `mj2x_regc_safeenv_capture(env, MODE)`；失败 `return JNI_ERR` | `regc_backend.cpp` `emitRegistrationCode` |
 | 每个 JNI trampoline 首行 | `mj2x_regc_safeenv_restore(env, MODE)` | `regc_backend.cpp` `emitNativeMethod` |
 | 生成工程 include | `regc/mj2x_regc_safe_env.h`（单文件 + 多文件 api.h） | `regc_backend.cpp` finalize |
-| 分发清单 | `mj2x-crt/resources.manifest` 追加 2 文件 | — |
+| 分发清单 | `mj2x-rt/rt.resources` 追加 2 文件 | — |
 
 开关（默认关闭）：
 - `--regc-safe-env`：开启，RESTORE 模式（污染 fail closed）。

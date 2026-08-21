@@ -444,7 +444,7 @@ class LlvmFunctionEmitter;
 /// @brief 发射一个 RegIR 函数为 textual LLVM IR（类定义在 emitter.cpp）。
 /// @param indySiteBase 文件级 invokedynamic 站点表偏移（本方法首个站点的全局
 ///                     索引；方法内局部索引 = 全局索引 - indySiteBase）。
-/// @param runtimeProtection 非空时在方法入口注入反侦测检查点（mj2x-crt
+/// @param runtimeProtection 非空时在方法入口注入反侦测检查点（mj2x-rt
 ///                          rt_protect，编译侧链接 mj2x_rt_protect.c）。
 /// @param checkpointGlobals 出参：本函数注入的检查点状态全局（模块级输出用）。
 /// @param runtimeDeclares 出参：本函数用到的 JDK intrinsic 直调声明。
@@ -471,7 +471,7 @@ std::string emitIndyHelpers();
 std::string emitIndyBootstrapFunction(size_t index, const RegFunction::InvokeDynamicSite& site);
 
 /// @brief 反侦测检查点模块级声明（%mj2x_rt_checkpoint + extern 调用；链接侧由
-///        编译管线附加 mj2x-crt rt_protect 源）。
+///        编译管线附加 mj2x-rt rt_protect 源）。
 std::string emitRuntimeProtectionDeclarations();
 
 }   // namespace llvmir

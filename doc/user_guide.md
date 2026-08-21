@@ -152,7 +152,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--stackc-exception-check <full\|lite>` | StackC pending 异常检查密度（默认 full；lite 仅保留 handler 边界检查） |
 | `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用 |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
-| `--generate-xmake <dir>` | 生成独立 xmake native 工程（推荐；CLI 内嵌 mj2x-crt 源，配合 `--compile` 一键出 DLL/SO） |
+| `--generate-xmake <dir>` | 生成独立 xmake native 工程（推荐；CLI 内嵌 mj2x-rt 源，配合 `--compile` 一键出 DLL/SO） |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--quiet` | 日志只保留警告与错误（stderr） |
 | `--verbose` | 日志提升到 debug 级别（stderr） |
@@ -310,7 +310,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
 ```
 
 `--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并随 RegC 工程复制
-`mj2x-crt` source pack。
+`mj2x-rt` source pack。
 
 ### 5.4 LLVM IR（v2.2 转正；二次扩面补齐对象/数组/调用/异常/monitor/ldc，round-2 补齐 invokedynamic 运行时解析 / intrinsic 扩面对齐 RegC / 保护特性接入）
 
@@ -338,7 +338,7 @@ switch、浮点→整数转换（`llvm.fptosi.sat`，NaN→0 / 溢出饱和）�
 - **常量**：`ldc` String（`NewStringUTF`）/ Class（`FindClass`）；
 - **intrinsic（round-2 扩面对齐 RegC）**：`array.length` / `instanceof:<desc>` /
   `monitor.enter` / `monitor.exit`；`java.lang.Math` 纯函数面（abs/min/max
-  I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random）直调 mj2x-crt runtime
+  I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random）直调 mj2x-rt runtime
   符号；包装类 `valueOf`/`xxxValue` 非逃逸切片（`%mj2x_int` 等单字段 shadow
   结构）；`java.util.Random` 状态机切片（非逃逸 `new Random(seed)` + nextXxx）；
   `StringBuilder` / `StringBuffer` 状态机切片（init/append/range·capacity/toString

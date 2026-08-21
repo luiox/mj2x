@@ -8,7 +8,7 @@
 /// exceptions, monitors, ldc String/Class constants, narrow Z/B/S/C types and
 /// float special literals; invokedynamic sites use JNI runtime bootstrap
 /// resolution (`indy:<index>`, round 2); `--runtime-protection` checkpoints are
-/// injected at method entries (compiled against the embedded mj2x-crt
+/// injected at method entries (compiled against the embedded mj2x-rt
 /// rt_protect source).  Unsupported shapes fail closed so the original Java
 /// bytecode remains intact.
 #pragma once
@@ -44,7 +44,7 @@ public:
     void setOutputPath(const std::string& llvmOutputPath) { llvmOutputPath_ = llvmOutputPath; }
 
     /// @brief 反侦测检查点（--runtime-protection）：方法入口注入
-    ///        mj2x_rt_checkpoint_run 调用（编译侧附加 mj2x-crt rt_protect 源）。
+    ///        mj2x_rt_checkpoint_run 调用（编译侧附加 mj2x-rt rt_protect 源）。
     void setRuntimeProtection(codegen::RuntimeProtectionAction action, uint32_t step,
                               uint32_t delayMs)
     {

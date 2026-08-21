@@ -1,6 +1,6 @@
-# mj2x-crt
+# mj2x-rt
 
-`mj2x-crt` is the native-side runtime source pack copied into projects generated
+`mj2x-rt` is the native-side runtime source pack copied into projects generated
 by `mj2x-cli --generate-xmake`. Its public ABI is C99/JNI; source packs may add
 C++ implementation files behind that ABI without changing generated C.
 

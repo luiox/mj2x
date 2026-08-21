@@ -22,7 +22,7 @@
 | `--native-annotation Lpkg/Anno;` 只翻译带目标方法注解的方法 | ✅ | CLI 注解筛选测试 |
 | 提供 `mj2x.Native` Java 注解源码包 | ✅ | javac + CLI 注解筛选测试 |
 | `--compile` 将 `--emit-c` 结果编译为同目录 native library | ✅ | CLI 编译错误/可用工具链 smoke 测试 |
-| `--emit-cpp <file>` 输出 RegC C++17 JNI dialect，并通过 C ABI 链接 `mj2x-crt` | ✅ | Zig JVM E2E、MSVC direct compile、xmake/CMake project compile |
+| `--emit-cpp <file>` 输出 RegC C++17 JNI dialect，并通过 C ABI 链接 `mj2x-rt` | ✅ | Zig JVM E2E、MSVC direct compile、xmake/CMake project compile |
 | Native source artifact contract（C99 / C++17 / LLVM IR language、content、建议文件名） | ✅ | StackC/RegC/LLVM artifact metadata 单测 + native E2E |
 | `--compile-mode pipe` 直接编译 backend 内存源码；GCC/Clang/Zig 走 stdin，MSVC 使用自动清理的 temporary-file fallback | ✅ | `CliTest.PipeCompile*`、`CliTest.FakeZigUsesCcForFileAndPipeModes`、Windows `CliTest.RealZigCompilesClassAndJarAndRunsJvm` |
 | `--generate-cmake <dir>` 输出独立 CMake native 工程 | ✅ | `CliTest.GenerateCMakeProjectEmitsStandaloneFiles` |
@@ -139,10 +139,10 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 **JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
 
 - `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
-- `java.lang.Integer/Long` 位操作:rotateLeft/rotateRight、reverse/reverseBytes、bitCount、numberOfLeadingZeros/numberOfTrailingZeros、highestOneBit/lowestOneBit、signum——纯 C 计算(`mj2x_intrinsic_{int,long}_*`),语义与 OpenJDK 一致(distance 按 32/64 取模、无符号旋转/反转、符号位仅扩展在返回值),CRT 实现与 JDK 交叉验证(`mj2x-crt/test/mj2x_regc_intrinsic_test.c`);`RuntimeFunction` emitKind 纯计算 intrinsic 发射为纯 C 表达式并省略 ExceptionCheck(异常检查稀疏化,见 `regc_codegen.md` §4)
+- `java.lang.Integer/Long` 位操作:rotateLeft/rotateRight、reverse/reverseBytes、bitCount、numberOfLeadingZeros/numberOfTrailingZeros、highestOneBit/lowestOneBit、signum——纯 C 计算(`mj2x_intrinsic_{int,long}_*`),语义与 OpenJDK 一致(distance 按 32/64 取模、无符号旋转/反转、符号位仅扩展在返回值),CRT 实现与 JDK 交叉验证(`mj2x-rt/test/mj2x_regc_intrinsic_test.c`);`RuntimeFunction` emitKind 纯计算 intrinsic 发射为纯 C 表达式并省略 ExceptionCheck(异常检查稀疏化,见 `regc_codegen.md` §4)
 - `java.lang.Integer.parseInt(String[,radix])`、`Long.parseLong(String[,radix])`、`Short.parseShort(String[,radix])`、`Byte.parseByte(String[,radix])`:native digit parser 解析并检查目标类型范围,NumberFormatException 经 context 回调路由
 - `java.lang.Boolean.parseBoolean(String)`:按 UTF-16 ASCII 大小写不敏感匹配 `true`;`Float.parseFloat(String)` / `Double.parseDouble(String)` 通过专用 TU 级缓存调用 JDK parser,保留 NaN、Infinity、hex float 与异常语义
-- `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.compare`:无状态 compare 与基础整型/布尔/字符 `toString` 走 `mj2x-crt` C ABI;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式,`Float/Double.compare` 显式处理 NaN 与 signed zero 语义
+- `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.compare`:无状态 compare 与基础整型/布尔/字符 `toString` 走 `mj2x-rt` C ABI;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式,`Float/Double.compare` 显式处理 NaN 与 signed zero 语义
 - `java.lang.String.valueOf(int|long|boolean|char|float|double|Object)`:RegC local helper 覆盖常见值转字符串;`float|double` 和 `Object` 通过缓存的 JDK methodID 保持浮点格式和虚分派语义
 - String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
 - `java.lang.String`:length/isEmpty/startsWith(String)/endsWith(String)/contains(CharSequence),以及 `concat`、`compareTo`、`indexOf(int|String[,fromIndex])`、`replace(char,char)`、`trim`、`split(String[,limit])`。`split` 仅对非空且无正则元字符的 delimiter 走 native UTF-16 fast path,完整正则、空模式与转义模式回退 JDK;`contains` 对非 String `CharSequence` 同样回退缓存的 Java methodID。`equals`/`charAt`/`hashCode`/`substring(I|II)` 不走 StringMethod intrinsic:多 JNI 数据管道(3-6 个 JNI)实测劣于缓存 methodID 的 1-JNI `CallXxxMethodA`(HotSpot 对前三者有 VM intrinsic + hashCode memoization;substring 的 JDK 实现本就共享底层数组 O(1)),回退通用 cached 调用路径
@@ -176,7 +176,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
   - 调用：编译索引内已转换 invokestatic 目标 direct call（0 JNI）；实例/外部/未转换目标经 `CallXxxMethodA`/`CallNonvirtualXxxMethodA`/`CallStaticXxxMethodA`（jvalue 数组，null receiver 抛 NPE）；实例方法 this 为 SSA 参数 0，wrapper 透传 jobject this；
   - 异常：`athrow`（JNI `Throw`，null → NPE）、try/catch/finally 异常表分发（`ExceptionCheck` → `ExceptionOccurred`+`ExceptionClear` → 按表序 `IsInstanceOf` 匹配 → handler；catch-all 重抛语义）；
   - monitor：`monitorenter/monitorexit` → `MonitorEnter/Exit`（null → NPE）；
-  - intrinsic：`array.length`、`instanceof:<desc>`、`monitor.enter/exit`、`cmp.nan_greater/nan_less`（LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较，NaN 按指令语义取 ±1）；**`java.lang.Math` 纯函数面直调 mj2x-crt runtime 符号**（abs/min/max I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random——0 JNI、无 ExceptionCheck，`.ll` 模块级 `declare` + 编译侧并入 mj2x-crt 源）；**包装类 valueOf/xxxValue 非逃逸切片**（Integer/Long/Short/Byte/Float/Double/Boolean/Character——shadow 结构 `%mj2x_int` 等单字段 struct、窄装箱 trunc、窄拆箱 sext/zext，valueOf 结果经 copy 联通逃逸分析，任何非匹配拆箱使用整根回退 JNI，语义对齐 RegC）；**`java.util.Random` 状态机切片**（非逃逸 `new Random(seed)` + nextInt/nextInt(bound)/nextLong/nextBoolean/nextFloat/nextDouble 直调 `%mj2x_random` 指针状态，标准 Java LCG 与 JVM 逐位一致；无参构造保持 JNI——时钟/seedUniquifier 不确定；RegC 同 face 为 inert）；**`StringBuilder`/`StringBuffer` 状态机切片**（非逃逸 builder：init 四面 + append 十三面 + toString/length/capacity/charAt/ensureCapacity/setLength/setCharAt/appendCodePoint 直调 crt——函数级 `%mj2x_regc_context` 前导（`mj2x_regc_init_context` + throw 回调）、每次调用检查 `mj2x_regc_status`（非 0 = pending exception → 异常分发或默认返回）、状态为 crt 堆分配 `mj2x_string_builder*`（init 的 out_state 即寄存器槽）、append 结果与 receiver 联通；String 类面保持 JNI 分派，待整类下沉）；
+  - intrinsic：`array.length`、`instanceof:<desc>`、`monitor.enter/exit`、`cmp.nan_greater/nan_less`（LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较，NaN 按指令语义取 ±1）；**`java.lang.Math` 纯函数面直调 mj2x-rt runtime 符号**（abs/min/max I/J/F/D、sin/cos/tan/sqrt/floor/ceil/pow、round、random——0 JNI、无 ExceptionCheck，`.ll` 模块级 `declare` + 编译侧并入 mj2x-rt 源）；**包装类 valueOf/xxxValue 非逃逸切片**（Integer/Long/Short/Byte/Float/Double/Boolean/Character——shadow 结构 `%mj2x_int` 等单字段 struct、窄装箱 trunc、窄拆箱 sext/zext，valueOf 结果经 copy 联通逃逸分析，任何非匹配拆箱使用整根回退 JNI，语义对齐 RegC）；**`java.util.Random` 状态机切片**（非逃逸 `new Random(seed)` + nextInt/nextInt(bound)/nextLong/nextBoolean/nextFloat/nextDouble 直调 `%mj2x_random` 指针状态，标准 Java LCG 与 JVM 逐位一致；无参构造保持 JNI——时钟/seedUniquifier 不确定；RegC 同 face 为 inert）；**`StringBuilder`/`StringBuffer` 状态机切片**（非逃逸 builder：init 四面 + append 十三面 + toString/length/capacity/charAt/ensureCapacity/setLength/setCharAt/appendCodePoint 直调 crt——函数级 `%mj2x_regc_context` 前导（`mj2x_regc_init_context` + throw 回调）、每次调用检查 `mj2x_regc_status`（非 0 = pending exception → 异常分发或默认返回）、状态为 crt 堆分配 `mj2x_string_builder*`（init 的 out_state 即寄存器槽）、append 结果与 receiver 联通；String 类面保持 JNI 分派，待整类下沉）；
   - **invokedynamic 运行时解析（round-2）**：StringConcatFactory/LambdaMetafactory 站点由 pipeline 级 InvokeDynamicPreprocessor 静态展开；残留自定义 bootstrap 站点以 `indy:<idx>` 发射为模块级全局 cache（`NewLocalRef` 缓存 + `NewGlobalRef` 稳定化）+ 运行时 bootstrap 解析（`FindClass` → `MethodHandles.lookup` → `MethodType.fromMethodDescriptorString` → `privateLookupIn` → bsm 调用 → `CallSite.getTarget` → `invokeWithArguments`，参数装箱/返回拆箱，REF 结果直接透传，bsm/invoke 失败路径走异常分发不被 NPE 掩盖，缓存失效重走解析）。与 RegC 对齐（regc_backend 的 emitIndyBootstrapFunction 同功能；原文“超出 RegC”失实，2026-08-16 审查订正）；
   - **保护特性（round-2）**：`--runtime-protection` 支持 llvm——每方法入口注入 `%mj2x_rt_checkpoint` 检查点（crt `mj2x_rt_protect.c`，模块级全局 + `mj2x_rt_checkpoint_run` 调用；FAKE 动作走默认返回路径）；`--regc-obfuscate` 及 MBA/opaque/CFF 变换选项支持 llvm（RegIR 级同源变换；mbaDeep 的 Barrier 指令 LLVM 子集不支持时回退未变换形态并告警）；
   - fail-closed：未初始化局部（undef Opaque）、未知 intrinsic、`String` 之外的 Handle 常量等保持字节码，调用方对不可转换目标走 JNI fallback（不再整链拒绝）。
@@ -197,7 +197,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - **native-to-native 调用默认走 JNI（#814/#816）**：已转换目标间的 direct C 调用不产生 JVM 栈帧，`Throwable.getStackTrace` / `StackWalker` / 反射的栈观察语义会失真（regc 2.6 ReTrace 实证）。默认 `CodeOptions.directCalls=false`，静态/INVOKESPECIAL 调用经 JNI `Call*MethodA` 保帧；`--regc-direct-calls` 显式开启直调（性能优先且确认无栈观察的产物）。**确定性虚调用例外**：final 方法/final owner/编译输入无覆写的 invokevirtual 免门控直调（带 NULL receiver 守卫）——resolved 路径命中 implClass 后本就直调 fn（无 JVM 帧、栈语义一致），运行时 IsInstanceOf 检查纯冗余，跳过省每调用点 1 个 JNI。convertedFunctions 键为声明类，调用点 owner 是 receiver 静态类型时沿超类链回查（继承方法）。
 - `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
-- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-crt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 同样支持两条工程生成路径（生成含 `native.ll` 的 CMake/xmake 工程，clang 编译为 native 库）。
+- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-rt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 同样支持两条工程生成路径（生成含 `native.ll` 的 CMake/xmake 工程，clang 编译为 native 库）。
 
 ---
 
@@ -254,7 +254,7 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 | 模块 | 状态 |
 |---|---|
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
-| `mj2x-crt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;包含 Math、Random 和非逃逸 primitive wrapper intrinsic；无 `libca` 分发依赖 |
+| `mj2x-rt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;包含 Math、Random 和非逃逸 primitive wrapper intrinsic；无 `libca` 分发依赖 |
 | RegC / R3 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String/split 与 opaque StringBuilder/StringBuffer helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
@@ -268,7 +268,7 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 | antijvmti live probe | ✅ Windows Toolhelp/Linux proc maps 模块枚举 + JavaVM/JVMTI capability query + agent/JDWP/dump 信号聚合；**参数自动收集**（v2.2）：Windows GetCommandLineW 引号感知切分 / Linux /proc/self/cmdline |
 | runtime detection policy | ✅ 聚合 debug/agent/probe-failure 报告并显式返回 fail-closed 判定,不在探针内主动退出 |
 | **enforcement 反制响应层**（v2.2） | ✅ LogOnly/Delay/FakeData/Terminate 可配置 action + 多阶段检查点（step 确定性下限 + xorshift 随机提前命中 + force 语义）；Terminate 返回 outcome 由集成层执行 |
-| **rt_protect 生成代码检查点**（v2.2+） | ✅ mj2x-crt C99 自包含检查点（随 resources.manifest 分发）；RegC/VMC4/LLVM 方法入口注入（CLI `--runtime-protection none\|log\|delay\|fake\|terminate` + step/delay，默认不注入零产物变化）；真实 MSVC 编译链验证 |
+| **rt_protect 生成代码检查点**（v2.2+） | ✅ mj2x-rt C99 自包含检查点（随 rt.resources 分发）；RegC/VMC4/LLVM 方法入口注入（CLI `--runtime-protection none\|log\|delay\|fake\|terminate` + step/delay，默认不注入零产物变化）；真实 MSVC 编译链验证 |
 
 ---
 
@@ -280,7 +280,7 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 mj2x/
 ├── mj2x-core/src/mj2x/      核心库(include 根 = src,内层 mj2x/ 保留 → 98 处 include 零改动)
 ├── mj2x-cli/src/             CLI 入口
-├── mj2x-crt/src/             可分发 C99/JNI RegC ABI source pack
+├── mj2x-rt/src/             可分发 C99/JNI RegC ABI source pack
 ├── mj2x-runtime/src/         in-tree native runtime(crypto/kernel/intrinsic/...)
 ├── unittest/src/             单测
 ```
@@ -308,9 +308,9 @@ mj2x/
 | 能力域 | 当前权威来源 |
 |---|---|
 | 字节码转 native | `mj2x/mj2x-core/src/mj2x/backend/{stackc,regc}/` |
-| 可分发 RegC 运行时 ABI | `mj2x/mj2x-crt/src/regc/` + `mj2x/mj2x-crt/resources.manifest` |
+| 可分发 RegC 运行时 ABI | `mj2x/mj2x-rt/src/regc/` + `mj2x/mj2x-rt/rt.resources` |
 | native 运行时 | `mj2x/mj2x-runtime/src/` |
-| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` + `mj2x/mj2x-crt/src/regc/` |
+| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` + `mj2x/mj2x-rt/src/regc/` |
 | 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` |
 | 用户注解包 | `mj2x/mj2x-annotations/` |
 | 配置系统（参数注册表） | `mj2x/mj2x-cli/src/param_registry.{hpp,cpp}` + `mj2x/doc/config_file.md` |
@@ -395,7 +395,7 @@ G14 DeepRecursion / G15 CollectionOps（吸收 bludnov/ttvar 语义覆盖面）�
   `mayThrow:true` 保留调用后 ExceptionCheck
 - VMC4：`VmMethodRef.userSymbol` 参与去重，helper 解包 `regs[argIdx[]]` 直调
 - sources 并入：`--compile` 直接模式追加进编译命令；`--generate-xmake` 复制到
-  工程 `src/mj2x-crt/user_intrinsics/`（模板 glob 自动编译）
+  工程 `src/mj2x-rt/user_intrinsics/`（模板 glob 自动编译）
 - 测试：`user_intrinsic_test`（发射形态 9 例）+ `user_intrinsic_e2e_test`
   （三后端执行矩阵，`my_m` 接管 `F.m` 验证 2003）
 
@@ -406,7 +406,7 @@ G14 DeepRecursion / G15 CollectionOps（吸收 bludnov/ttvar 语义覆盖面）�
 ```bash
 xmake build mj2x-core
 xmake build mj2x-cli
-xmake build mj2x-crt
+xmake build mj2x-rt
 xmake build mj2x_unittest
 xmake build mj2x_integration_test
 xmake build mj2x_runtime_test

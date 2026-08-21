@@ -79,7 +79,7 @@ struct Vmc4Options
     int driftPeriod = 16;
 
     /// 反侦测检查点注入（wrapper 入口 mj2x_rt_checkpoint_run；默认关闭）。
-    /// 依赖 mj2x-crt 的 rt_protect 模块（resources.manifest 内嵌）。
+    /// 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     codegen::RuntimeProtectionOptions runtimeProtection;
 };
 

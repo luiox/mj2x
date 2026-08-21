@@ -58,7 +58,7 @@ marshalling 形态）在共享 RegIR 层**显式化为可断言的中间表示**
 
 ### 3.1 匹配轴的三个现成抽取候选（LLVM round-2 审查结论）
 
-marshalling 轴已收敛（intrinsic 符号实现单点 mj2x-crt），但「匹配轴」仍是
+marshalling 轴已收敛（intrinsic 符号实现单点 mj2x-rt），但「匹配轴」仍是
 每后端一份的平行实现——同一判定逻辑写三/四遍，漂移面持续扩大：
 
 | 候选 | 现状（平行份数） | 说明 |

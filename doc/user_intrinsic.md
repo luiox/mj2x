@@ -81,8 +81,8 @@ JNIEXPORT int32_t JNICALL my_m(JNIEnv* env, int32_t a, int32_t b) {
 ## sources 并入
 
 - `--compile` 直接编译：实现文件自动追加进 cl 编译命令。
-- `--generate-xmake`：实现文件复制到工程 `src/mj2x-crt/user_intrinsics/`，
-  模板的 glob（`src/mj2x-crt/**.c`）自动并入编译。
+- `--generate-xmake`：实现文件复制到工程 `src/mj2x-rt/user_intrinsics/`，
+  模板的 glob（`src/mj2x-rt/**.c`）自动并入编译。
 
 ## 测试
 

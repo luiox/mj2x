@@ -1,6 +1,6 @@
 # RegC JDK Intrinsic
 
-> 设计文档:RegC 在码生成阶段把 JDK 常用方法调用识别为 intrinsic,直接调用 runtime ABI 或 TU-local helper 而非走通用 JNI 派发。可分发 C ABI 权威头为 `mj2x-crt/src/regc/mj2x_regc_crt.h`;in-tree intrinsic ABI 在 `mj2x-runtime/src/intrinsic/*.hpp`。
+> 设计文档:RegC 在码生成阶段把 JDK 常用方法调用识别为 intrinsic,直接调用 runtime ABI 或 TU-local helper 而非走通用 JNI 派发。可分发 C ABI 权威头为 `mj2x-rt/src/regc/mj2x_regc_crt.h`;in-tree intrinsic ABI 在 `mj2x-runtime/src/intrinsic/*.hpp`。
 
 ## 1. 目标
 
@@ -22,7 +22,7 @@ RegC emitter (src/mj2x/backend/regc/regc_emitter.cpp)
        ├─ parseInt    → _mj2x_intrinsic_parse_int (emitter TU 内联,需 JNI 取 String)
        ├─ Wrapper     → mj2x_* value struct shadow state(仅非逃逸 value/unbox)
        ├─ Random      → mj2x_random shadow state(仅非逃逸 new/init/next*)
-       └─ String      → mj2x-crt UTF-16 ABI / mutable opaque state
+       └─ String      → mj2x-rt UTF-16 ABI / mutable opaque state
   未命中 → _mj2x_regc_call_* (原 JNI 路径)
 
 runtime (mj2x/runtime/src/intrinsic/)
@@ -31,7 +31,7 @@ runtime (mj2x/runtime/src/intrinsic/)
   ├─ intrinsic_random.{hpp,cpp}   Java 兼容 LCG
   └─ intrinsic_string.{hpp,cpp}   最小 UTF-16 view + fail-closed status
 
-distributable CRT (mj2x/mj2x-crt/src/regc/)
+distributable CRT (mj2x/mj2x-rt/src/regc/)
   ├─ mj2x_regc_string.c           String UTF-16 operations + split fast path
   └─ mj2x_regc_string_builder.c   StringBuilder/StringBuffer opaque state
 
@@ -60,7 +60,7 @@ emitter TU (regc_backend.cpp::emitRuntimeHelpers)
 - `Integer.parseInt(Ljava/lang/String;)I` → `_mj2x_intrinsic_parse_int`
 - String LDC → `_mj2x_intrinsic_string_literal`
 - String read hot paths、concat/substring/compareTo/indexOf/replace/trim 通过
-  TU-local helper 或 `mj2x-crt` UTF-16 ABI 实现。
+  TU-local helper 或 `mj2x-rt` UTF-16 ABI 实现。
 - `String.split(String[,limit])` 对简单字面量走 CRT fast path;空模式、转义和完整
   正则回退 JDK `String.split`,不在 CRT 自造正则引擎。
 - StringBuilder/StringBuffer 使用 escape-aware opaque UTF-16 state;range/capacity 常用
@@ -72,7 +72,7 @@ emitter TU (regc_backend.cpp::emitRuntimeHelpers)
 - `Integer/Long.bitCount`、`numberOfLeadingZeros`、`numberOfTrailingZeros`、
   `highestOneBit`、`lowestOneBit`、`signum` → `mj2x_intrinsic_{int,long}_*`
 - 语义与 OpenJDK 一致(distance 按 32/64 取模、无符号旋转/反转、符号位仅扩展在
-  返回值),CRT 实现与 JDK 交叉验证(`mj2x-crt/test/mj2x_regc_intrinsic_test.c`)。
+  返回值),CRT 实现与 JDK 交叉验证(`mj2x-rt/test/mj2x_regc_intrinsic_test.c`)。
 - RuntimeFunction emitKind 是**纯 C 计算**——emitter 对其省略 exception dispatch
   (见 `regc_codegen.md` 异常检查稀疏化),热循环每轮省一次 `ExceptionCheck` JNI。
 

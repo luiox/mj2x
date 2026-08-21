@@ -1,6 +1,6 @@
-target("mj2x-crt")
+target("mj2x-rt")
     set_kind("static")
-    set_group("mj2x/mj2x-crt")
+    set_group("mj2x/mj2x-rt")
     set_default(false)
     set_languages("c99", "cxx17")
 
@@ -31,13 +31,13 @@ target("mj2x-crt")
         add_syslinks("pthread", "m")
     end
 
-target("mj2x_crt_test")
+target("mj2x_rt_test")
     set_kind("binary")
-    set_group("mj2x/mj2x-crt/test")
+    set_group("mj2x/mj2x-rt/test")
     set_default(false)
     set_languages("c99", "cxx17")
 
-    add_deps("mj2x-crt")
+    add_deps("mj2x-rt")
     add_files("test/*.c")
     add_files("test/*.cpp")
     add_includedirs("src")

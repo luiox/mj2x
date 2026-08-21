@@ -1,7 +1,7 @@
-﻿/// @defgroup string_intrinsic String/MutableString intrinsic 契约
+/// @defgroup string_intrinsic String/MutableString intrinsic 契约
 ///
 /// 建立 RegC 运行时边界的 String/StringBuilder/StringBuffer intrinsic 集。
-/// 实现在 `mj2x-crt` 中拥有 UTF-16 状态，在逃逸点物化为真实 Java 对象，
+/// 实现在 `mj2x-rt` 中拥有 UTF-16 状态，在逃逸点物化为真实 Java 对象，
 /// 当可变链无法在不发散的情况下保持在 native 中时回退到 Java。
 ///
 /// ## 现有运行时切片
@@ -19,7 +19,7 @@
 ///
 /// ## 可分发可变 String C ABI
 ///
-/// `mj2x-crt/src/regc/mj2x_regc_crt.h` 是公共 ABI，保持 `mj2x_string_builder`
+/// `mj2x-rt/src/regc/mj2x_regc_crt.h` 是公共 ABI，保持 `mj2x_string_builder`
 /// 和兼容的 `mj2x_string_buffer` 存储不透明，仅暴露 C99/JNI 操作：
 /// 显式默认/String/CharSequence/capacity 初始化 + destroy 生命周期、
 /// UTF-16 code-unit append + jstring/对象/基本类型/char[]/范围/code-point append、

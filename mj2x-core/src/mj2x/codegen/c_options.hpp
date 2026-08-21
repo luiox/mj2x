@@ -62,7 +62,7 @@ struct CodeOptions
     bool emitTypeAsserts = true;
 
     /// @brief 反侦测检查点注入（方法入口 mj2x_rt_checkpoint_run；默认关闭）。
-    /// @details 依赖 mj2x-crt 的 rt_protect 模块（resources.manifest 内嵌）。
+    /// @details 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     RuntimeProtectionOptions runtimeProtection;
 
     /// @brief RAII 作用域覆盖：构造保存旧值，析构恢复。

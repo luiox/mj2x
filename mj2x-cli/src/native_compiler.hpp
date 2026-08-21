@@ -72,12 +72,12 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 /// @brief 把 textual LLVM IR 编译为与输出 class/JAR 同目录的 native library。
 ///
 /// LLVM IR 由后端直接产生 JNI ABI wrapper，不需要 C/JNI include；round-2 起
-/// intrinsic 直调（Math/包装类/Random/StringBuilder）需要 mj2x-crt 源码包
+/// intrinsic 直调（Math/包装类/Random/StringBuilder）需要 mj2x-rt 源码包
 /// （crtRoot，--compile 无条件解析），与 RegC --compile 的 crt 契约一致。
 /// `clang` 直接读取 `.ll`；`llc` 先生成临时 object，再由 clang 链接。失败时返回非 0。
-/// @param withRuntimeProtection 为 true 时把内嵌 mj2x-crt rt_protect 源写到临时
+/// @param withRuntimeProtection 为 true 时把内嵌 mj2x-rt rt_protect 源写到临时
 ///        目录并一起编译（--runtime-protection 检查点的实现侧）。
-/// @param crtRoot 把 mj2x-crt 源一并编译（JDK intrinsic 直调的 runtime
+/// @param crtRoot 把 mj2x-rt 源一并编译（JDK intrinsic 直调的 runtime
 ///        符号，如 mj2x_math_*）。
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
                         LlvmTool tool, bool withRuntimeProtection,

@@ -10,7 +10,7 @@ target("mj2x-runtime-core")
     add_files("src/stringpool/*.cpp")
     add_files("src/intrinsic/*.cpp")
     add_includedirs("src", {public = true})
-    add_deps("mj2x-crt", {public = true})
+    add_deps("mj2x-rt", {public = true})
 
     local jdk_path = os.getenv("JAVA_HOME")
     if jdk_path then

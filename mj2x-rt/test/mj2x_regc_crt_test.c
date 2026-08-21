@@ -1,5 +1,5 @@
 #include "regc/mj2x_regc_crt.h"
-#include "rt_protect/mj2x_rt_protect.h"
+#include "common/mj2x_rt_protect.h"
 
 #include <assert.h>
 #include <stdint.h>

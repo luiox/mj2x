@@ -4,7 +4,7 @@
 // 与 regc_backend_e2e_test.cpp 的差别：
 //   - 后端是 Vmc4Backend（RegIR 之后分叉到 VmEncoder + 解释器发射）。
 //   - 生成的 C 完全自包含（runtime prelude 内联），编译只需 jni.h，
-//     不需要 mj2x-runtime / mj2x-crt 目标文件。
+//     不需要 mj2x-runtime / mj2x-rt 目标文件。
 //   - 在 4 种 MSVC 可编译的 dispatcher 形态下各跑一轮 round-trip
 //     （ComputedGoto 依赖 GCC Labels-as-Values，MSVC 编译失败，e2e 排除）。
 //
@@ -355,7 +355,7 @@ private:
         fs::create_directories(objDir, ec);
         std::vector<std::string> compileLines;
         compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
-        fs::path crtSrc     = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
+        fs::path crtSrc     = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
         fs::path runtimeSrc = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
         if (backendName == "regc") {
             fs::path generatedObj = objDir / "generated.obj";

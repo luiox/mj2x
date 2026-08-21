@@ -156,7 +156,7 @@ RegC **放弃 `Java_<mangled>` 符号导出**。原因：JNI 符号查找链路�
 生成的 C `#include` 权威 ABI 头 `regc/mj2x_regc_crt.h`，与外部 runtime/crt 的分工：
 
 - **TU 内联**（`_mj2x_regc_*`，每个生成 C 文件一份 `static` 定义）：字段/数组/分配/方法调用/异常分发 helper、parse/string 比较 helper、全局上下文（`_mj2x_regc_env`/`_mj2x_regc_ctx`）。这些是需要直接访问 JNI 的部分。
-- **外部链接**（`mj2x_regc_*`/`mj2x_math_*` 等，由 mj2x-crt 源包提供）：context 管理、整数除余（含异常路由）、barrier、String/StringBuilder/StringBuffer ABI、标量 intrinsic（Math/Random/包装类）。这些是纯计算或可独立测试的部分。
+- **外部链接**（`mj2x_regc_*`/`mj2x_math_*` 等，由 mj2x-rt 源包提供）：context 管理、整数除余（含异常路由）、barrier、String/StringBuilder/StringBuffer ABI、标量 intrinsic（Math/Random/包装类）。这些是纯计算或可独立测试的部分。
 
 边界演进方向：当前 TU 内联的部分（字段/数组/调用/异常）后期会迁入可分发的 CRT，让生成 C 更小、ABI 更稳定。`mj2x_regc_crt.h` 的注释标记了这一演进意图。
 

@@ -1,6 +1,6 @@
 #include "native_project_generator.hpp"
 
-#include "embedded_resources.hpp"
+#include "embedded_rt.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -24,13 +24,6 @@ std::string readText(const fs::path& path)
     std::ostringstream out;
     out << in.rdbuf();
     return out.str();
-}
-
-std::string readEmbeddedText(const char* path)
-{
-    const auto* resource = findEmbeddedResource(path);
-    if (resource == nullptr) return {};
-    return std::string(reinterpret_cast<const char*>(resource->data), resource->size);
 }
 
 bool writeText(const fs::path& path, const std::string& text)
@@ -83,43 +76,45 @@ std::string trim(std::string value)
     return value.substr(first, last - first + 1);
 }
 
-bool copyManifestSources(const fs::path& root, const fs::path& to)
+bool copyRtTree(const fs::path& root, const fs::path& to)
 {
+    // 外部磁盘源包(mj2x-rt 布局):复制 src/<挂载>/ 树到目标目录。
     std::error_code ec;
-    const auto      manifest = root / "resources.manifest";
-    if (!fs::exists(manifest, ec)) {
-        CA_LOGT_ERROR("compile", "CRT resource manifest not found: {}\n", manifest.string().c_str());
+    if (!fs::exists(root / "src" / "regc", ec) || !fs::exists(root / "src" / "common", ec)) {
+        CA_LOGT_ERROR("compile", "RT source pack incomplete: {}\n", root.string().c_str());
         return false;
     }
 
     fs::create_directories(to, ec);
     if (ec) {
-        CA_LOGT_ERROR("compile", "cannot create CRT destination: {}\n", ec.message().c_str());
+        CA_LOGT_ERROR("compile", "cannot create RT destination: {}\n", ec.message().c_str());
         return false;
     }
 
-    std::ifstream in(manifest);
-    std::string   line;
-    while (std::getline(in, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#') continue;
-        if (line.rfind("src/", 0) != 0) continue;
-        if (line.find("../") != std::string::npos) {
-            CA_LOGT_ERROR("compile", "invalid CRT manifest path: {}\n", line.c_str());
-            return false;
-        }
-
-        const fs::path source = root / line;
-        const fs::path dest   = to / fs::path(line).lexically_relative("src");
-        if (!fs::exists(source, ec) || !fs::is_regular_file(source, ec)) {
-            CA_LOGT_ERROR("compile", "CRT manifest source not found: {}\n", source.string().c_str());
-            return false;
-        }
-        fs::create_directories(dest.parent_path(), ec);
-        if (!ec) fs::copy_file(source, dest, fs::copy_options::overwrite_existing, ec);
+    for (const std::string_view mount : mj2x::cli::kRtSourceMounts) {
+        const fs::path mountSource = root / "src" / mount;
+        const fs::path mountDest   = to / mount;
+        fs::create_directories(mountDest, ec);
         if (ec) {
-            CA_LOGT_ERROR("compile", "cannot copy CRT file: {}\n", ec.message().c_str());
+            CA_LOGT_ERROR("compile", "cannot create RT mount dir: {}\n", mountDest.string().c_str());
             return false;
+        }
+        for (const auto& entry : fs::recursive_directory_iterator(mountSource, ec)) {
+            if (ec) break;
+            const fs::path dest = mountDest / entry.path().lexically_relative(mountSource);
+            if (entry.is_directory()) {
+                fs::create_directories(dest, ec);
+            }
+            else if (entry.is_regular_file()) {
+                fs::create_directories(dest.parent_path(), ec);
+                if (!ec) {
+                    fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing, ec);
+                }
+            }
+            if (ec) {
+                CA_LOGT_ERROR("compile", "cannot copy RT file: {}\n", entry.path().string().c_str());
+                return false;
+            }
         }
     }
     return true;
@@ -144,7 +139,7 @@ bool isCrtRoot(const fs::path& root)
 {
     std::error_code ec;
     return fs::exists(root / "src" / "regc" / "mj2x_regc_crt.h", ec) &&
-           fs::exists(root / "resources.manifest", ec) &&
+           fs::exists(root / "rt.resources", ec) &&
            fs::exists(root / "templates" / "xmake.lua.in", ec);
 }
 
@@ -163,18 +158,18 @@ std::filesystem::path findCrtRoot(const char* argv0)
     std::error_code ec;
     auto            cwd = fs::current_path(ec);
     if (!ec) {
-        addCandidate(candidates, cwd / "mj2x" / "mj2x-crt");
-        addCandidate(candidates, cwd / "mj2x-crt");
+        addCandidate(candidates, cwd / "mj2x" / "mj2x-rt");
+        addCandidate(candidates, cwd / "mj2x-rt");
     }
 
     if (argv0 != nullptr && argv0[0] != '\0') {
         fs::path exe = fs::absolute(argv0, ec);
         if (!ec) {
             auto dir = exe.parent_path();
-            addCandidate(candidates, dir / "mj2x-crt");
-            addCandidate(candidates, dir / ".." / "mj2x-crt");
-            addCandidate(candidates, dir / ".." / "share" / "mj2x-crt");
-            addCandidate(candidates, dir / ".." / ".." / "mj2x" / "mj2x-crt");
+            addCandidate(candidates, dir / "mj2x-rt");
+            addCandidate(candidates, dir / ".." / "mj2x-rt");
+            addCandidate(candidates, dir / ".." / "share" / "mj2x-rt");
+            addCandidate(candidates, dir / ".." / ".." / "mj2x" / "mj2x-rt");
         }
     }
 
@@ -203,7 +198,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     const bool useExternalCrt = isCrtRoot(config.crtRoot);
 
     const fs::path generatedDir = config.projectDir / "src" / "generated";
-    const fs::path crtDest      = config.projectDir / "src" / "mj2x-crt";
+    const fs::path crtDest      = config.projectDir / "src" / "mj2x-rt";
     fs::create_directories(generatedDir, ec);
     if (ec) {
         CA_LOGT_ERROR("compile", "cannot create xmake project: {}\n", ec.message().c_str());
@@ -223,19 +218,19 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     }
 
     if (useExternalCrt) {
-        if (!copyManifestSources(config.crtRoot, crtDest)) return 1;
+        if (!copyRtTree(config.crtRoot, crtDest)) return 1;
     }
-    else if (!writeEmbeddedCrtTree(config.projectDir)) {
-        CA_LOGT_ERROR("compile", "embedded mj2x-crt resources are unavailable.\n");
+    else if (!mj2x::cli::writeRtTree(config.projectDir)) {
+        CA_LOGT_ERROR("compile", "embedded mj2x-rt resources are unavailable.\n");
         return 1;
     }
 
     auto xmakeTemplate  = useExternalCrt ? readText(config.crtRoot / "templates" / "xmake.lua.in")
-                                         : readEmbeddedText("templates/xmake.lua.in");
+                                         : mj2x::cli::readEmbeddedText("templates", "/xmake.lua.in");
     auto readmeTemplate = useExternalCrt ? readText(config.crtRoot / "templates" / "README.md.in")
-                                         : readEmbeddedText("templates/README.md.in");
+                                         : mj2x::cli::readEmbeddedText("templates", "/README.md.in");
     if (xmakeTemplate.empty() || readmeTemplate.empty()) {
-        CA_LOGT_ERROR("compile", "mj2x-crt templates are missing.\n");
+        CA_LOGT_ERROR("compile", "mj2x-rt templates are missing.\n");
         return 1;
     }
     if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate, config.projectName)) {
@@ -288,9 +283,9 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
     }
 
     // JDK intrinsic 直调（mj2x_math_* 等）与 --runtime-protection 检查点都来自
-    // mj2x-crt：整树随工程分发（模板按需 glob 编译）。
-    if (!writeEmbeddedCrtTree(projectDir)) {
-        CA_LOGT_ERROR("compile", "embedded mj2x-crt resources are unavailable.\n");
+    // mj2x-rt：整树随工程分发（模板按需 glob 编译）。
+    if (!mj2x::cli::writeRtTree(projectDir)) {
+        CA_LOGT_ERROR("compile", "embedded mj2x-rt resources are unavailable.\n");
         return 1;
     }
 
@@ -308,7 +303,7 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
                    "        local out = path.join(target:targetdir(), \"mj2x_native\" .. suffix)\n"
                    "        os.mkdir(target:targetdir())\n"
                    "        local args = {\"-shared\", path.join(os.scriptdir(), \"native.ll\")}\n"
-                   "        local crtSrc = path.join(os.scriptdir(), \"src/mj2x-crt/src\")\n"
+                   "        local crtSrc = path.join(os.scriptdir(), \"src/mj2x-rt\")\n"
                    "        if os.isdir(crtSrc) then\n"
                    "            table.insert(args, \"-I\" .. crtSrc)\n"
                    "            local jh = os.getenv(\"JAVA_HOME\")\n"
@@ -326,7 +321,7 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
                    "                table.insert(args, c)\n"
                    "            end\n"
                    "            for _, c in ipairs(os.glob(path.join(os.scriptdir(), "
-                   "\"src/mj2x-crt/rt_protect/*.c\"))) do\n"
+                   "\"src/mj2x-rt/common/*.c\"))) do\n"
                    "                table.insert(args, c)\n"
                    "            end\n"
                    "        end\n"

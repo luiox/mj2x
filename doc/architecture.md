@@ -70,7 +70,7 @@ arrays/allocation.
 | `mj2x-core/src/mj2x/backend/vmc4/` | VMC4 backend (vm_encoder / vm_interpreter_emit / vm_opcode) |
 | `mj2x-core/src/mj2x/codegen/` | C source helpers shared by emitters |
 | `mj2x-core/src/mj2x/preprocessor/` | method marking and bytecode shape preprocessing |
-| `mj2x-crt/src/` | distributable C99/JNI RegC ABI and source pack for generated projects |
+| `mj2x-rt/src/` | distributable C99/JNI RegC ABI and source pack for generated projects |
 | `mj2x-runtime/src/` | in-tree higher-level runtime: crypto, antidebug, antijvmti, intrinsic helpers |
 | `mj2x-annotations/` | user-facing `@mj2x.Native` annotation |
 | `unittest/` | unit + e2e tests (backends, cli, codegen, core) |
@@ -132,7 +132,7 @@ Use VMC4 for:
 
 ## 5. Runtime
 
-The runtime is split by distribution boundary. `mj2x-crt` is the sole
+The runtime is split by distribution boundary. `mj2x-rt` is the sole
 distributable C99/JNI source pack for generated RegC projects; it owns the
 public helper ABI and must not depend on `libca`. `mj2x-runtime` remains the
 in-tree higher-level native support library for RegC development and protected
@@ -183,7 +183,7 @@ Core validation:
 ```powershell
 xmake build mj2x-core
 xmake build mj2x-cli
-xmake build mj2x-crt
+xmake build mj2x-rt
 xmake build mj2x_unittest
 xmake build mj2x_runtime_test
 xmake run mj2x_crt_test

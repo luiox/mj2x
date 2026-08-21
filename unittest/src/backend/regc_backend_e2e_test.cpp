@@ -202,7 +202,7 @@ protected:
         ASSERT_FALSE(ec) << ec.message();
         fs::path generatedObj = objDir / "generated.obj";
         fs::path runtimeSrc   = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
-        fs::path crtSrc       = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
+        fs::path crtSrc       = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
 
         // Generated RegC includes the distributable CRT ABI directly. The
         // remaining runtime sources only back non-CRT Math/Random/shadow
@@ -2166,7 +2166,7 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
     fs::path dll    = dir / "protected.dll";
     fs::path objDir = dir / "obj";
     fs::create_directories(objDir, ec);
-    fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-crt" / "src";
+    fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
 
     std::string vcvarsError;
     auto        env = loadVcvarsEnv(tc, vcvarsError);

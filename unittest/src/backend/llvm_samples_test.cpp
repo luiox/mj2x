@@ -323,7 +323,7 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 "define internal i32 @mj2x_llvm_Java_protected_1samples_llvm_LlvmTinySample_loopSum__I",
                 "define internal i32 @mj2x_llvm_Java_protected_1samples_llvm_LlvmTinySample_maxOf__II",
                 "define internal i32 @mj2x_llvm_Java_protected_1samples_llvm_LlvmTinySample_pick__I",
-                // Math intrinsic 直调（mj2x-crt runtime 符号 + 模块级 declare）。
+                // Math intrinsic 直调（mj2x-rt runtime 符号 + 模块级 declare）。
                 "call i32 @mj2x_math_abs_i32",
                 "declare i32 @mj2x_math_abs_i32(i32)",
                 // 包装类 shadow 直调（valueOf 装箱 + shortValue 拆箱 + 结构类型）。

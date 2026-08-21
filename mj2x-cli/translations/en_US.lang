@@ -65,8 +65,8 @@ mj2x.cli.err.backend_unavailable=native source backend is unavailable.
 mj2x.cli.err.emit_cpp_needs_c99=--emit-cpp requires a C99 backend source artifact.
 mj2x.cli.err.emit_cpp_write_failed=cannot write emitted C++ source: {0}
 mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm requires an LLVM IR backend source artifact.
-mj2x.cli.err.crt_pack_required=RegC CMake project requires an mj2x-crt source pack; set MJ2X_CRT_DIR.
-mj2x.cli.err.compile_crt_required={0} --compile requires an mj2x-crt source pack; set MJ2X_CRT_DIR or use --generate-xmake.
+mj2x.cli.err.crt_pack_required=RegC CMake project requires an mj2x-rt source pack; set MJ2X_CRT_DIR.
+mj2x.cli.err.compile_crt_required={0} --compile requires an mj2x-rt source pack; set MJ2X_CRT_DIR or use --generate-xmake.
 mj2x.cli.err.pipe_c99_only=--compile-mode pipe only supports C99 native source artifacts.
 mj2x.cli.err.jar_rewrite_failed=cannot rewrite output JAR: {0}
 
@@ -160,7 +160,7 @@ mj2x.param.vmc4.bogus.desc=VMC4: number of injected unreachable fake handlers, 0
 mj2x.param.vmc4.drift.desc=VMC4: runtime dispatch variants, 0..4 (0 = off; when on, semantic labels rotate by byte-offset period, decoded via the unmap table)
 mj2x.param.vmc4.drift_period.desc=VMC4: drift variant switch period (in byte offsets)
 mj2x.param.vmc4.trace_surface.desc=VMC4: write the expected trace surface file (mjdbg red-team contract; same seed + same input = same content)
-mj2x.param.runtime.protection.desc=RegC/VMC4/LLVM: method-entry anti-tamper checkpoints (default none = not injected; depends on the mj2x-crt rt_protect module; the LLVM side compiles with rt_protect sources)
+mj2x.param.runtime.protection.desc=RegC/VMC4/LLVM: method-entry anti-tamper checkpoints (default none = not injected; depends on the mj2x-rt rt_protect module; the LLVM side compiles with rt_protect sources)
 mj2x.param.runtime.protection_step.desc=Checkpoint probabilistic trigger step
 mj2x.param.runtime.protection_delay_ms.desc=Delay action sleep in milliseconds
 mj2x.param.native_lib.key.desc=Encrypted native lib storage: XOR-encrypt before embedding (xorshift32 keystream), .enc suffix on the resource entry, decrypted at load time by NativeLoader; a static extraction cannot be loaded directly (off by default = plaintext embedding)

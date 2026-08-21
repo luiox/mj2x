@@ -17,14 +17,14 @@ target("mj2x_native")
         add_files("src/generated/native.cpp")
     end
     if is_plat("windows") then
-        add_files("src/mj2x-crt/**.c", {cxflags = "/TC"})
+        add_files("src/mj2x-rt/**.c", {cxflags = "/TC"})
     else
-        add_files("src/mj2x-crt/**.c")
+        add_files("src/mj2x-rt/**.c")
     end
-    if #os.files("src/mj2x-crt/**.cpp") > 0 then
-        add_files("src/mj2x-crt/**.cpp")
+    if #os.files("src/mj2x-rt/**.cpp") > 0 then
+        add_files("src/mj2x-rt/**.cpp")
     end
-    add_includedirs("src/mj2x-crt")
+    add_includedirs("src/mj2x-rt")
 
     local jdk_path = os.getenv("JAVA_HOME")
     if jdk_path then

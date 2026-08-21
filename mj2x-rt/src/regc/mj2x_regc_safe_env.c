@@ -1,5 +1,5 @@
 /// @file mj2x_regc_safe_env.c
-/// @brief safe-env JNI 函数表快照/校验/恢复实现（C99，随 mj2x-crt 分发）。
+/// @brief safe-env JNI 函数表快照/校验/恢复实现（C99，随 mj2x-rt 分发）。
 #include "regc/mj2x_regc_safe_env.h"
 
 #include <stdio.h>

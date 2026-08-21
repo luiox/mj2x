@@ -887,7 +887,7 @@ TEST(LlvmIrBackendTest, EmitsRuntimeProtectionCheckpoint)
 
 TEST(LlvmIrBackendTest, EmitsMathIntrinsicDirectCall)
 {
-    // java.lang.Math 纯函数切片：直调 mj2x-crt 符号（0 JNI、无 ExceptionCheck；
+    // java.lang.Math 纯函数切片：直调 mj2x-rt 符号（0 JNI、无 ExceptionCheck；
     // 与 RegC RuntimeFunction 语义一致），declare 由 finalize 模块级输出。
     // Math.abs(a) + Math.abs(b)。
     LlvmIrBackend backend;
@@ -952,7 +952,7 @@ TEST(LlvmIrBackendTest, EmitsMathIntrinsicDirectCall)
 
 TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
 {
-    // 包装类 shadow 切片：非逃逸 valueOf/xxxValue 直调 mj2x-crt 值结构
+    // 包装类 shadow 切片：非逃逸 valueOf/xxxValue 直调 mj2x-rt 值结构
     // （0 JNI）。Short 链含 I2S（窄装箱 trunc + 窄拆箱 sext），Boolean 链
     // 含布尔参数（trunc i32→i8）与 zext 拆箱。
     LlvmIrBackend backend;
@@ -1024,7 +1024,7 @@ TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
 TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
 {
     // Random 状态机切片：非逃逸 new Random(seed).nextInt(bound) 全链直调
-    // mj2x-crt（0 JNI；RegC 同 face 为 inert——Allocate+<init> 融合 NewObjectA
+    // mj2x-rt（0 JNI；RegC 同 face 为 inert——Allocate+<init> 融合 NewObjectA
     // 绕过 registry）。无参 <init> 与逃逸根回退 JNI。
     LlvmIrBackend backend;
     auto initOnly = compileWithBackend(

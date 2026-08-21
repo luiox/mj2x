@@ -8,7 +8,7 @@ namespace mj2x {
 namespace {
 
 /// @brief Math 纯函数 intrinsic 切片（对齐 RegC regc_intrinsic_registry.cpp 的
-/// RuntimeFunction 条目；符号实现见 mj2x-crt src/regc/mj2x_regc_intrinsic.c）。
+/// RuntimeFunction 条目；符号实现见 mj2x-rt src/regc/mj2x_regc_intrinsic.c）。
 ///
 /// @details 只收录 JNIEnv 无关的纯标量函数（直调 0 JNI；函数不抛异常，无需
 /// ExceptionCheck——与 RegC isPureRuntimeIntrinsic 语义一致）。包装类/String/
@@ -64,7 +64,7 @@ bool sameText(ca::str::Utf8StringRef ref, const char* text)
            std::string_view(text);
 }
 
-/// @brief 包装类装箱条目（valueOf）：shadow 结构在 mj2x-crt（mj2x_int 等单字段
+/// @brief 包装类装箱条目（valueOf）：shadow 结构在 mj2x-rt（mj2x_int 等单字段
 /// 值结构），LLVM 侧以命名 struct 传值。窄类型装箱参数先在发射端 trunc。
 ///
 /// @details 与 RegC regc_intrinsics.cpp WrapperValueOf 条目一一对应；仅非逃逸

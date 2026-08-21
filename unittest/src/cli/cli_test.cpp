@@ -1086,7 +1086,7 @@ TEST(CliTest, GenerateCMakeProjectForRegcCppCopiesCrt)
                              " --generate-cmake " + q(projectDir)});
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "mj2x_cli_cmake_cpp_native.cpp")) << result.out;
-    EXPECT_TRUE(fileExists(projectDir / "mj2x-crt" / "regc" / "mj2x_regc_crt.h"))
+    EXPECT_TRUE(fileExists(projectDir / "mj2x-rt" / "regc" / "mj2x_regc_crt.h"))
         << result.out;
     const std::string cmake = readText(projectDir / "CMakeLists.txt");
     EXPECT_NE(cmake.find("project(mj2x_native C CXX)"), std::string::npos) << cmake;
@@ -1124,15 +1124,15 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
     EXPECT_TRUE(fileExists(projectDir / ".gitignore")) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "README.md")) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "src" / "generated" / "native.c")) << result.out;
-    EXPECT_TRUE(fileExists(projectDir / "src" / "mj2x-crt" / "regc" / "mj2x_regc_string_builder.c"))
+    EXPECT_TRUE(fileExists(projectDir / "src" / "mj2x-rt" / "regc" / "mj2x_regc_string_builder.c"))
         << result.out;
 
     std::string xmake = readText(projectDir / "xmake.lua");
     EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
     EXPECT_NE(xmake.find("src/generated/native.c"), std::string::npos) << xmake;
     EXPECT_NE(xmake.find("src/generated/native.cpp"), std::string::npos) << xmake;
-    EXPECT_NE(xmake.find("src/mj2x-crt/**.c"), std::string::npos) << xmake;
-    EXPECT_NE(xmake.find("src/mj2x-crt/**.cpp"), std::string::npos) << xmake;
+    EXPECT_NE(xmake.find("src/mj2x-rt/**.c"), std::string::npos) << xmake;
+    EXPECT_NE(xmake.find("src/mj2x-rt/**.cpp"), std::string::npos) << xmake;
     EXPECT_EQ(xmake, readText(test::getResourcePath("native_project/xmake.lua.golden")));
     EXPECT_EQ(readText(projectDir / "README.md"),
               readText(test::getResourcePath("native_project/README.md.golden")));
@@ -1181,16 +1181,24 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
     EXPECT_TRUE(fileExists(projectDir / "xmake.lua")) << result.out;
 
     fs::path   repoRoot = test::getTopProjectPath();
-    fs::path   crtRoot  = repoRoot / "mj2x" / "mj2x-crt";
-    const auto manifest = readCrtManifest(crtRoot / "resources.manifest");
+    fs::path   crtRoot  = repoRoot / "mj2x" / "mj2x-rt";
+    // rt.resources 挂载清单(name=dir):逐挂载比对生成工程内的源树。
+    const auto manifest = readCrtManifest(crtRoot / "rt.resources");
     ASSERT_FALSE(manifest.empty());
-    for (const auto& resource : manifest) {
-        if (resource.rfind("src/", 0) != 0) continue;
-        const fs::path sourcePath(resource);
-        const fs::path copiedPath =
-            projectDir / "src" / "mj2x-crt" / sourcePath.lexically_relative("src");
-        ASSERT_TRUE(fileExists(copiedPath)) << resource;
-        EXPECT_EQ(readText(copiedPath), readText(crtRoot / sourcePath)) << resource;
+    for (const auto& entry : manifest) {
+        const auto eq = entry.find('=');
+        ASSERT_NE(eq, std::string::npos) << entry;
+        const std::string mount = entry.substr(0, eq);
+        if (mount == "templates") continue;  // 模板单独断言(见下方 golden 对比)
+        const fs::path mountDir = crtRoot / entry.substr(eq + 1);
+        for (const auto& item : fs::recursive_directory_iterator(mountDir)) {
+            if (!item.is_regular_file()) continue;
+            const fs::path relative = item.path().lexically_relative(mountDir);
+            const fs::path copiedPath =
+                projectDir / "src" / "mj2x-rt" / mount / relative;
+            ASSERT_TRUE(fileExists(copiedPath)) << relative.string();
+            EXPECT_EQ(readText(copiedPath), readText(item.path())) << relative.string();
+        }
     }
 
     std::string xmake = readText(projectDir / "xmake.lua");
@@ -2827,7 +2835,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
     };
 
     runNativeVariant("plain", "");
-    // --runtime-protection：检查点注入 + mj2x-crt rt_protect 源随 .ll 一起编译；
+    // --runtime-protection：检查点注入 + mj2x-rt rt_protect 源随 .ll 一起编译；
     // step 放大避免概率触发（无调试器信号时 ~1/step 触发率）。
     runNativeVariant("protected",
                      "--runtime-protection fake --runtime-protection-step 1000000");

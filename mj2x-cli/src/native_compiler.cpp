@@ -1,6 +1,6 @@
 #include "native_compiler.hpp"
 
-#include "embedded_resources.hpp"
+#include "embedded_rt.hpp"
 
 #include "libca/log/log_macros.hpp"
 
@@ -207,61 +207,39 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
                    std::vector<std::filesystem::path>& includes,
                    std::vector<std::filesystem::path>& sources)
 {
-    const auto      sourceRoot = crtRoot / "src";
-    const auto      manifest   = crtRoot / "resources.manifest";
+    // 磁盘源包(mj2x-rt 布局):直接递归收集 src/**/*.c,不再依赖清单格式。
+    const auto sourceRoot = crtRoot / "src";
     std::error_code ec;
-    if (!std::filesystem::exists(sourceRoot / "regc" / "mj2x_regc_crt.h", ec) ||
-        !std::filesystem::exists(manifest, ec)) {
-        CA_LOGT_ERROR("compile", "invalid mj2x-crt source pack: {}\n", crtRoot.string().c_str());
-        return false;
-    }
-
-    std::ifstream in(manifest);
-    if (!in) {
-        CA_LOGT_ERROR("compile", "cannot read mj2x-crt manifest: {}\n", manifest.string().c_str());
+    if (!std::filesystem::exists(sourceRoot / "regc" / "mj2x_regc_crt.h", ec)) {
+        CA_LOGT_ERROR("compile", "invalid mj2x-rt source pack: {}\n", crtRoot.string().c_str());
         return false;
     }
 
     includes.push_back(sourceRoot);
-    bool        foundSource = false;
-    std::string line;
-    while (std::getline(in, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#') continue;
-        if (line.rfind("src/", 0) != 0) continue;
-
-        const std::filesystem::path relative(line);
-        bool                        escapesRoot = relative.is_absolute();
-        for (const auto& component : relative) {
-            if (component == "..") {
-                escapesRoot = true;
-                break;
-            }
-        }
-        if (escapesRoot) {
-            CA_LOGT_ERROR("compile", "invalid mj2x-crt manifest source path: {}\n", line.c_str());
-            return false;
-        }
-
-        const auto source    = crtRoot / relative;
-        const auto extension = source.extension().string();
+    bool foundSource = false;
+    for (const auto& entry :
+         std::filesystem::recursive_directory_iterator(sourceRoot, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file(ec) || ec) continue;
+        const auto extension = entry.path().extension().string();
         if (extension == ".cpp") {
             CA_LOGT_ERROR("compile",
-                          "--compile does not yet support C++ mj2x-crt sources; use "
+                          "--compile does not yet support C++ mj2x-rt sources; use "
                           "--generate-xmake.\n");
             return false;
         }
         if (extension != ".c") continue;
-        if (!std::filesystem::exists(source, ec)) {
-            CA_LOGT_ERROR("compile", "mj2x-crt manifest source is missing: {}\n", source.string().c_str());
-            return false;
-        }
-        sources.push_back(source);
+        sources.push_back(entry.path());
         foundSource = true;
+    }
+    if (ec) {
+        CA_LOGT_ERROR("compile", "cannot iterate mj2x-rt source pack: {}\n",
+                      ec.message().c_str());
+        return false;
     }
 
     if (!foundSource) {
-        CA_LOGT_ERROR("compile", "mj2x-crt manifest has no C sources.\n");
+        CA_LOGT_ERROR("compile", "mj2x-rt source pack has no C sources.\n");
         return false;
     }
     return true;
@@ -581,31 +559,33 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath)
     return nativeLibraryPath(outputPath);
 }
 
-/// @brief 把内嵌 mj2x-crt rt_protect 源写入临时目录；返回 .c 路径（空 = 失败）。
+/// @brief 把内嵌 mj2x-rt common(rt_protect)源写入临时目录；返回 .c 路径（空 = 失败）。
 /// @details rt_protect 的 .h/.c 必须同目录（.c 相对 include）；临时目录生命周期
 /// 由调用方（ScopedTemporaryDirectory）保证覆盖整个编译过程。
 std::filesystem::path writeRtProtectSource(ScopedTemporaryDirectory& directory)
 {
-    const auto* header = findEmbeddedResource("src/rt_protect/mj2x_rt_protect.h");
-    const auto* source = findEmbeddedResource("src/rt_protect/mj2x_rt_protect.c");
-    if (header == nullptr || source == nullptr) return {};
+    const auto* bundle = mj2x::cli::rtBundle("common");
+    if (bundle == nullptr) return {};
+    const auto header = bundle->get("/mj2x_rt_protect.h");
+    const auto source = bundle->get("/mj2x_rt_protect.c");
+    if (header.is_err() || source.is_err()) return {};
     const auto headerPath = directory.path() / "mj2x_rt_protect.h";
     const auto sourcePath = directory.path() / "mj2x_rt_protect.c";
     {
         std::ofstream out(headerPath, std::ios::binary);
-        out.write(reinterpret_cast<const char*>(header->data),
-                  static_cast<std::streamsize>(header->size));
+        out.write(reinterpret_cast<const char*>(header.unwrap().data()),
+                  static_cast<std::streamsize>(header.unwrap().size()));
     }
     {
         std::ofstream out(sourcePath, std::ios::binary);
-        out.write(reinterpret_cast<const char*>(source->data),
-                  static_cast<std::streamsize>(source->size));
+        out.write(reinterpret_cast<const char*>(source.unwrap().data()),
+                  static_cast<std::streamsize>(source.unwrap().size()));
     }
     if (!std::filesystem::is_regular_file(sourcePath)) return {};
     return sourcePath;
 }
 
-/// @brief 准备 LLVM 编译侧的 mj2x-crt 附加源（JDK intrinsic 直调符号如
+/// @brief 准备 LLVM 编译侧的 mj2x-rt 附加源（JDK intrinsic 直调符号如
 /// mj2x_math_*，实现见 src/regc/mj2x_regc_intrinsic.c）。
 /// @return false 表示 crtRoot 非空但源包/JNI include 无效（调用方应报错）。
 bool prepareLlvmCrtSources(const std::filesystem::path&        crtRoot,
@@ -673,7 +653,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
         rtProtectSource = writeRtProtectSource(rtProtectDirectory);
         if (rtProtectSource.empty()) {
             CA_LOGT_ERROR("compile",
-                          "embedded mj2x-crt rt_protect sources are unavailable.\n");
+                          "embedded mj2x-rt rt_protect sources are unavailable.\n");
             return 1;
         }
     }
@@ -1053,7 +1033,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
         rtProtectSource = writeRtProtectSource(rtProtectDirectory);
         if (rtProtectSource.empty()) {
             CA_LOGT_ERROR("compile",
-                          "embedded mj2x-crt rt_protect sources are unavailable.\n");
+                          "embedded mj2x-rt rt_protect sources are unavailable.\n");
             return 1;
         }
     }

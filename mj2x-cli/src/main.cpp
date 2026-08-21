@@ -24,7 +24,7 @@
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "config_file.hpp"
 #include "cpp_source_dialect.hpp"
-#include "embedded_resources.hpp"
+#include "embedded_rt.hpp"
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
 #include "param_registry.hpp"
@@ -217,12 +217,12 @@ static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsic
 }
 
 /// @brief 把用户 intrinsic 实现源文件复制进生成工程（xmake 模板用 glob 编译
-/// `src/mj2x-crt/**.c`，故复制到 `src/mj2x-crt/user_intrinsics/` 即自动并入）。
+/// `src/mj2x-rt/**.c`，故复制到 `src/mj2x-rt/user_intrinsics/` 即自动并入）。
 static bool copyUserIntrinsicSources(const std::vector<std::string>& sources,
                                      const std::filesystem::path& projectDir, std::string& error)
 {
     if (sources.empty()) return true;
-    const std::filesystem::path destDir = projectDir / "src" / "mj2x-crt" / "user_intrinsics";
+    const std::filesystem::path destDir = projectDir / "src" / "mj2x-rt" / "user_intrinsics";
     std::error_code             ec;
     std::filesystem::create_directories(destDir, ec);
     if (ec) {
@@ -374,7 +374,7 @@ static bool copyCrtForCMakeProject(const std::filesystem::path& projectDir,
 {
     namespace fs = std::filesystem;
     const fs::path sourceRoot = crtRoot / "src";
-    const fs::path destinationRoot = projectDir / "mj2x-crt";
+    const fs::path destinationRoot = projectDir / "mj2x-rt";
     std::error_code ec;
     if (!fs::is_regular_file(sourceRoot / "regc" / "mj2x_regc_crt.h", ec)) return false;
     for (const auto& entry : fs::recursive_directory_iterator(sourceRoot, ec)) {
@@ -393,7 +393,7 @@ static bool copyCrtForCMakeProject(const std::filesystem::path& projectDir,
 }
 
 /// @brief LLVM IR 版 CMake 工程：native.ll + CMakeLists.txt（clang 编译 .ll）。
-/// @param withRuntimeProtection 为 true 时内嵌 mj2x-crt rt_protect 源并一起编译
+/// @param withRuntimeProtection 为 true 时内嵌 mj2x-rt rt_protect 源并一起编译
 ///        （--runtime-protection 检查点的实现侧）。
 static int generateLlvmCMakeProject(const std::string& projectDirValue,
                                     const std::string& nativeOutputPath,
@@ -424,9 +424,9 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
     }
 
     // JDK intrinsic 直调（mj2x_math_* 等）与 --runtime-protection 检查点都来自
-    // mj2x-crt：整树随工程分发（模板按需 glob 编译）。
-    if (!mj2x::cli::writeEmbeddedCrtTree(projectDir)) {
-        CA_LOGT_ERROR("cli", "embedded mj2x-crt resources are unavailable.\n");
+    // mj2x-rt：整树随工程分发（模板按需 glob 编译）。
+    if (!mj2x::cli::writeRtTree(projectDir)) {
+        CA_LOGT_ERROR("cli", "embedded mj2x-rt resources are unavailable.\n");
         return 1;
     }
 
@@ -441,9 +441,9 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "find_program(CLANG_EXECUTABLE clang REQUIRED)\n";
         out << "find_package(JNI REQUIRED)\n\n";
         out << "set(LLVM_IR_FILE ${CMAKE_CURRENT_SOURCE_DIR}/native.ll)\n";
-        // mj2x-crt：JDK intrinsic runtime（src/regc/*.c）+ rt_protect 检查点。
-        out << "file(GLOB CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/src/regc/*.c)\n";
-        out << "list(APPEND CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/rt_protect/"
+        // mj2x-rt：JDK intrinsic runtime（regc/*.c）+ rt_protect 检查点（common/）。
+        out << "file(GLOB CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/regc/*.c)\n";
+        out << "list(APPEND CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/common/"
                "mj2x_rt_protect.c)\n";
         out << "set(NATIVE_LIB ${CMAKE_CURRENT_BINARY_DIR}/mj2x_native"
                "${CMAKE_SHARED_LIBRARY_SUFFIX})\n";
@@ -451,7 +451,7 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "foreach(INC ${JNI_INCLUDE_DIRS})\n";
         out << "  string(APPEND CRT_ARGS \" -I${INC}\")\n";
         out << "endforeach()\n";
-        out << "string(APPEND CRT_ARGS \" -I${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-crt/src\")\n";
+        out << "string(APPEND CRT_ARGS \" -I${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt\")\n";
         out << "add_custom_command(\n";
         out << "  OUTPUT ${NATIVE_LIB}\n";
         out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${CRT_ARGS} ${LLVM_IR_FILE} "
@@ -522,7 +522,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
 
     const bool needsCrt = !crtRoot.empty();
     if (needsCrt && !copyCrtForCMakeProject(projectDir, crtRoot)) {
-        CA_LOGT_ERROR("cli", "cannot copy mj2x-crt into CMake project.\n");
+        CA_LOGT_ERROR("cli", "cannot copy mj2x-rt into CMake project.\n");
         return 1;
     }
 
@@ -544,7 +544,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
         out << "endif()\n\n";
         if (needsCrt) {
             out << "file(GLOB_RECURSE MJ2X_CRT_SOURCES CONFIGURE_DEPENDS "
-                   "\"${CMAKE_CURRENT_SOURCE_DIR}/mj2x-crt/*.c\")\n";
+                   "\"${CMAKE_CURRENT_SOURCE_DIR}/mj2x-rt/*.c\")\n";
         }
         out << "add_library(mj2x_native SHARED " << sourcePath.filename().string();
         if (needsCrt) out << " ${MJ2X_CRT_SOURCES}";
@@ -552,7 +552,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
         out << "target_include_directories(mj2x_native PRIVATE ${JNI_INCLUDE_DIRS})\n";
         if (needsCrt) {
             out << "target_include_directories(mj2x_native PRIVATE "
-                   "${CMAKE_CURRENT_SOURCE_DIR}/mj2x-crt)\n";
+                   "${CMAKE_CURRENT_SOURCE_DIR}/mj2x-rt)\n";
         }
         out << "if(UNIX AND NOT APPLE)\n";
         out << "  target_link_libraries(mj2x_native PRIVATE pthread)\n";
@@ -1246,8 +1246,8 @@ int main(int argc, char** argv)
             projectConfig.projectName         = "mj2x_native_project";
             int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
             if (projectRc != 0) return projectRc;
-            // 用户 intrinsic 实现文件（issue #818）：复制进工程 src/mj2x-crt/ 下，
-            // xmake 模板的 glob（src/mj2x-crt/**.c）自动并入编译。
+            // 用户 intrinsic 实现文件（issue #818）：复制进工程 src/mj2x-rt/ 下，
+            // xmake 模板的 glob（src/mj2x-rt/**.c）自动并入编译。
             if (!userIntrinsicConfig.sources.empty()) {
                 std::string error;
                 if (!copyUserIntrinsicSources(userIntrinsicConfig.sources,
@@ -1272,7 +1272,7 @@ int main(int argc, char** argv)
             if (options.cBackendKind == CEmitterBackend::RegC ||
                 options.cBackendKind == CEmitterBackend::LlvmIr) {
                 // LLVM：JDK intrinsic 直调（mj2x_math_* 等）的 runtime 符号在
-                // mj2x-crt，链接侧一并编译（与 RegC --compile 的 crt 契约一致）。
+                // mj2x-rt，链接侧一并编译（与 RegC --compile 的 crt 契约一致）。
                 crtRoot = mj2x::cli::findCrtRoot(argv[0]);
                 if (crtRoot.empty()) {
                     CA_LOGT_ERROR("cli", "{}\n",

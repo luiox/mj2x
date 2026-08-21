@@ -47,7 +47,7 @@ public:
             out_ << ", " << llvmTypeWide(function_.parameters[index].type) << " %p" << index;
         }
         out_ << ") {\nentry:\n";
-        // 包装类 shadow 逃逸分析（valueOf 结果仅被匹配拆箱使用时才直调 mj2x-crt
+        // 包装类 shadow 逃逸分析（valueOf 结果仅被匹配拆箱使用时才直调 mj2x-rt
         // 值结构；任何逃逸 → 整根回退 JNI，语义对齐 RegC regc_intrinsics.cpp）。
         analyzeWrapperShadows();
         // Random 状态机结构定义（模块级；槽分配在其后）。
@@ -80,7 +80,7 @@ public:
         if (runtimeProtection_ != nullptr && runtimeProtection_->enabled()) {
             // 反侦测检查点（--runtime-protection）：mj2x_rt_checkpoint_run 命中时
             // 返回非零 → FAKE 语义直接返回默认值；检查点状态为函数级全局变量。
-            // 实现由编译管线附加的 mj2x-crt rt_protect 源提供（见
+            // 实现由编译管线附加的 mj2x-rt rt_protect 源提供（见
             // emitRuntimeProtectionDeclarations / native_compiler 编译链）。
             const uint32_t cpIndex = (*checkpointCounter_)++;
             const std::string cpVar = "@mj2x_rt_cp_" + std::to_string(cpIndex);
@@ -672,7 +672,7 @@ private:
         }
         if (instruction.kind == RegInstructionKind::Call) {
             // 包装类 shadow 切片：valueOf 装箱（结果非逃逸）与 xxxValue 拆箱
-            // （receiver 为 shadow）直调 mj2x-crt 值结构（0 JNI；逃逸根已在
+            // （receiver 为 shadow）直调 mj2x-rt 值结构（0 JNI；逃逸根已在
             // analyzeWrapperShadows 回退，此处走 JNI 分派）。
             if (instruction.hasDest && instruction.dest.type == SSAType::REF &&
                 instruction.method.invokeOpcode == Opcodes::INVOKESTATIC) {
@@ -903,7 +903,7 @@ private:
                     return true;
                 }
             }
-            // JDK 纯函数 intrinsic（Math 切片）：直调 mj2x-crt 符号（0 JNI、
+            // JDK 纯函数 intrinsic（Math 切片）：直调 mj2x-rt 符号（0 JNI、
             // 不抛异常无 ExceptionCheck；对齐 RegC RuntimeFunction 语义）。
             if (instruction.method.invokeOpcode == Opcodes::INVOKESTATIC) {
                 const LlvmIntrinsicEntry* intrinsic =

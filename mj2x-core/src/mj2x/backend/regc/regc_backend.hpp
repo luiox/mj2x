@@ -133,7 +133,7 @@ public:
     ///
     /// @details
     /// 开启后在每个生成方法入口注入 `mj2x_rt_checkpoint_run` 调用（依赖
-    /// mj2x-crt 的 rt_protect 模块，随生成工程分发）；action 见
+    /// mj2x-rt 的 rt_protect 模块，随生成工程分发）；action 见
     /// codegen::RuntimeProtectionAction。默认关闭（零产物变化）。
     void setRuntimeProtection(codegen::RuntimeProtectionAction action, std::uint32_t step,
                               std::uint32_t delayMs)

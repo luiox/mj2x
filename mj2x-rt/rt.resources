@@ -1,0 +1,6 @@
+# libresources 挂载声明:名字=目录(目录相对本文件;UTF-8;'\' 等价 '/')
+# mj2x-rt 源包:common 为跨后端运行时源,regc 为 RegC 后端运行时源,
+# templates 为生成期模板(xmake.lua.in / README.md.in)。
+common=src/common
+regc=src/regc
+templates=templates
