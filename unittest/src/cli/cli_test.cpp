@@ -3191,86 +3191,123 @@ TEST(CliTest, CompileRegCWithMsvcSupportsOutputDirectoryContainingSpaces)
 #endif
 }
 
-TEST(CliTest, NegativeArgumentsFail)
+/// 每语言一组 CLI 负路径期望文案(issue #888:文案断言参数化语言)。
+struct CliLangCase
 {
+    std::string langArgs;   // 附加到每条命令;空 = 默认 zh_CN
+    std::string usage;
+    std::string invalidJsonCfg;
+    std::string unknownCfgKey;
+    std::string invalidCfgBackend;
+    std::string unknownBackend;
+    std::string backendNeedsOutput;
+    std::string compileNeedsOutput;
+    std::string annotationMust;
+    std::string mutex;
+    std::string unknownCompiler;
+    std::string unknownCompileMode;
+    std::string cppNeedsRegc;
+    std::string cppNeedsCppExt;
+    std::string unknownRtProtection;
+    std::string rtProtectionNeedsNative;
+    std::string llvmNeedsBackend;
+    std::string backendLlvmNeedsEmit;
+    std::string llExtRequired;
+    std::string pipeNoEmit;
+    std::string llvmNoCCompiler;
+    std::string unknownLlvmTool;
+    std::string compileModeNeedsCompile;
+    std::string xmakeNoPipe;
+    std::string directCompiler;
+};
+
+class CliLangTest : public ::testing::TestWithParam<CliLangCase>
+{
+};
+
+TEST_P(CliLangTest, NegativeArgumentsFail)
+{
+    const CliLangCase tc = GetParam();
     fs::path cli = findCli();
     if (cli.empty()) {
         GTEST_SKIP() << "mj2x-cli is not built";
     }
+    // 每条命令附加语言参数(空串 = 默认 zh_CN)。
+    const std::string cliCmd = q(cli) + (tc.langArgs.empty() ? "" : " " + tc.langArgs);
 
     fs::path inClass  = writeTinyClass();
     fs::path outClass = test::getTempOutPath("mj2x_cli_negative_output.class");
     fs::path cFile    = test::getTempOutPath("mj2x_cli_negative_output.c");
     fs::path llvmFile = test::getTempOutPath("mj2x_cli_negative_output.ll");
 
-    auto noArgs = runScript({q(cli)});
+    auto noArgs = runScript({cliCmd});
     EXPECT_NE(noArgs.exitCode, 0);
-    EXPECT_NE(noArgs.out.find("Usage:"), std::string::npos) << noArgs.out;
+    EXPECT_NE(noArgs.out.find(tc.usage), std::string::npos) << noArgs.out;
 
     fs::path invalidJson = test::getTempOutPath("mj2x_cli_invalid_config.json");
     writeText(invalidJson, "{ nope");
     auto badJsonConfig = runScript({
-        q(cli) + " --config " + q(invalidJson),
+        cliCmd + " --config " + q(invalidJson),
     });
     EXPECT_NE(badJsonConfig.exitCode, 0);
-    EXPECT_NE(badJsonConfig.out.find("invalid JSON config"), std::string::npos)
+    EXPECT_NE(badJsonConfig.out.find(tc.invalidJsonCfg), std::string::npos)
         << badJsonConfig.out;
 
     fs::path unknownKeyJson = test::getTempOutPath("mj2x_cli_unknown_key_config.json");
     writeText(unknownKeyJson, "{\"input\":\"x.class\",\"unknown\":true}");
     auto unknownConfigKey = runScript({
-        q(cli) + " --config " + q(unknownKeyJson),
+        cliCmd + " --config " + q(unknownKeyJson),
     });
     EXPECT_NE(unknownConfigKey.exitCode, 0);
-    EXPECT_NE(unknownConfigKey.out.find("unknown config key"), std::string::npos)
+    EXPECT_NE(unknownConfigKey.out.find(tc.unknownCfgKey), std::string::npos)
         << unknownConfigKey.out;
 
     fs::path badBackendJson = test::getTempOutPath("mj2x_cli_bad_backend_config.json");
     writeText(badBackendJson, "{\"backend\":\"nope\"}");
     auto badBackendConfig = runScript({
-        q(cli) + " --config " + q(badBackendJson),
+        cliCmd + " --config " + q(badBackendJson),
     });
     EXPECT_NE(badBackendConfig.exitCode, 0);
-    EXPECT_NE(badBackendConfig.out.find("invalid value for config key backend"), std::string::npos)
+    EXPECT_NE(badBackendConfig.out.find(tc.invalidCfgBackend), std::string::npos)
         << badBackendConfig.out;
 
     auto unknownBackend = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
             " --backend nope",
     });
     EXPECT_NE(unknownBackend.exitCode, 0);
-    EXPECT_NE(unknownBackend.out.find("Unknown --backend value"), std::string::npos)
+    EXPECT_NE(unknownBackend.out.find(tc.unknownBackend), std::string::npos)
         << unknownBackend.out;
 
     auto backendWithoutEmit = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --backend regc",
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --backend regc",
     });
     EXPECT_NE(backendWithoutEmit.exitCode, 0);
-    EXPECT_NE(backendWithoutEmit.out.find("--backend requires --emit-c"), std::string::npos)
+    EXPECT_NE(backendWithoutEmit.out.find(tc.backendNeedsOutput), std::string::npos)
         << backendWithoutEmit.out;
 
     auto compileWithoutEmit = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --compile",
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --compile",
     });
     EXPECT_NE(compileWithoutEmit.exitCode, 0);
-    EXPECT_NE(compileWithoutEmit.out.find("--compile requires --emit-c"), std::string::npos)
+    EXPECT_NE(compileWithoutEmit.out.find(tc.compileNeedsOutput), std::string::npos)
         << compileWithoutEmit.out;
 
     auto badAnnotationDescriptor = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
             " --native-annotation " + quoteArg("mj2x.Native"),
     });
     EXPECT_NE(badAnnotationDescriptor.exitCode, 0);
-    EXPECT_NE(badAnnotationDescriptor.out.find("--native-annotation must be"), std::string::npos)
+    EXPECT_NE(badAnnotationDescriptor.out.find(tc.annotationMust), std::string::npos)
         << badAnnotationDescriptor.out;
 
     auto mutuallyExclusiveSelectors = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
             " --native-annotation " + quoteArg("Lmj2x/Native;") + " --native-method-prefix " +
             quoteArg("CliRegCTest.add"),
     });
     EXPECT_NE(mutuallyExclusiveSelectors.exitCode, 0);
-    EXPECT_NE(mutuallyExclusiveSelectors.out.find("mutually exclusive"), std::string::npos)
+    EXPECT_NE(mutuallyExclusiveSelectors.out.find(tc.mutex), std::string::npos)
         << mutuallyExclusiveSelectors.out;
 
     fs::path mutuallyExclusiveJson =
@@ -3290,170 +3327,228 @@ TEST(CliTest, NegativeArgumentsFail)
                   "\"native_method_prefixes\":[\"CliRegCTest.add\"]"
                   "}");
     auto mutuallyExclusiveConfig = runScript({
-        q(cli) + " --config " + q(mutuallyExclusiveJson),
+        cliCmd + " --config " + q(mutuallyExclusiveJson),
     });
     EXPECT_NE(mutuallyExclusiveConfig.exitCode, 0);
-    EXPECT_NE(mutuallyExclusiveConfig.out.find("mutually exclusive"), std::string::npos)
+    EXPECT_NE(mutuallyExclusiveConfig.out.find(tc.mutex), std::string::npos)
         << mutuallyExclusiveConfig.out;
 
     auto badCompiler = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
             " --compile --c-compiler nope",
     });
     EXPECT_NE(badCompiler.exitCode, 0);
-    EXPECT_NE(badCompiler.out.find("Unknown --c-compiler value"), std::string::npos)
+    EXPECT_NE(badCompiler.out.find(tc.unknownCompiler), std::string::npos)
         << badCompiler.out;
 
     auto badCompileMode = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) +
             " --compile --compile-mode nope",
     });
     EXPECT_NE(badCompileMode.exitCode, 0);
-    EXPECT_NE(badCompileMode.out.find("Unknown --compile-mode value"), std::string::npos)
+    EXPECT_NE(badCompileMode.out.find(tc.unknownCompileMode), std::string::npos)
         << badCompileMode.out;
 
     auto cppWithoutRegc = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-cpp " +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-cpp " +
             q(test::getTempOutPath("mj2x_cli_negative_output.cpp")),
     });
     EXPECT_NE(cppWithoutRegc.exitCode, 0);
-    EXPECT_NE(cppWithoutRegc.out.find("requires --backend regc"), std::string::npos)
+    EXPECT_NE(cppWithoutRegc.out.find(tc.cppNeedsRegc), std::string::npos)
         << cppWithoutRegc.out;
 
     auto cppWithWrongExtension = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --backend regc --emit-cpp " +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --backend regc --emit-cpp " +
             q(test::getTempOutPath("mj2x_cli_negative_output.c")),
     });
     EXPECT_NE(cppWithWrongExtension.exitCode, 0);
-    EXPECT_NE(cppWithWrongExtension.out.find("requires a .cpp output path"), std::string::npos)
+    EXPECT_NE(cppWithWrongExtension.out.find(tc.cppNeedsCppExt), std::string::npos)
         << cppWithWrongExtension.out;
 
     auto badRuntimeProtection = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --backend regc --emit-c " +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --backend regc --emit-c " +
             q(test::getTempOutPath("mj2x_cli_negative_output.c")) +
             " --runtime-protection nope",
     });
     EXPECT_NE(badRuntimeProtection.exitCode, 0);
-    EXPECT_NE(badRuntimeProtection.out.find("Unknown value for --runtime-protection"),
+    EXPECT_NE(badRuntimeProtection.out.find(tc.unknownRtProtection),
               std::string::npos)
         << badRuntimeProtection.out;
 
     auto rtProtectionWrongBackend = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " +
             q(test::getTempOutPath("mj2x_cli_negative_output.c")) +
             " --runtime-protection fake",
     });
     EXPECT_NE(rtProtectionWrongBackend.exitCode, 0);
-    EXPECT_NE(rtProtectionWrongBackend.out.find("requires --backend regc, vmc4, or llvm"),
+    EXPECT_NE(rtProtectionWrongBackend.out.find(tc.rtProtectionNeedsNative),
               std::string::npos)
         << rtProtectionWrongBackend.out;
 
 #ifndef MJ2X_DISABLE_LLVM_BACKEND
     auto llvmWithoutBackend = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-llvm " + q(llvmFile),
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-llvm " + q(llvmFile),
     });
     EXPECT_NE(llvmWithoutBackend.exitCode, 0);
-    EXPECT_NE(llvmWithoutBackend.out.find("requires --backend llvm"), std::string::npos)
+    EXPECT_NE(llvmWithoutBackend.out.find(tc.llvmNeedsBackend), std::string::npos)
         << llvmWithoutBackend.out;
 
     auto llvmWithoutEmit = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --backend llvm",
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --backend llvm",
     });
     EXPECT_NE(llvmWithoutEmit.exitCode, 0);
-    EXPECT_NE(llvmWithoutEmit.out.find("--backend llvm requires --emit-llvm"), std::string::npos)
+    EXPECT_NE(llvmWithoutEmit.out.find(tc.backendLlvmNeedsEmit), std::string::npos)
         << llvmWithoutEmit.out;
 
     auto llvmWrongExtension = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) +
             " --backend llvm --emit-llvm " + q(cFile),
     });
     EXPECT_NE(llvmWrongExtension.exitCode, 0);
-    EXPECT_NE(llvmWrongExtension.out.find("requires a .ll output path"), std::string::npos)
+    EXPECT_NE(llvmWrongExtension.out.find(tc.llExtRequired), std::string::npos)
         << llvmWrongExtension.out;
 
     auto llvmPipeWithEmit = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) +
             " --backend llvm --compile --compile-mode pipe --emit-llvm " + q(llvmFile),
     });
     EXPECT_NE(llvmPipeWithEmit.exitCode, 0);
-    EXPECT_NE(llvmPipeWithEmit.out.find("cannot be combined with --emit-c"), std::string::npos)
+    EXPECT_NE(llvmPipeWithEmit.out.find(tc.pipeNoEmit), std::string::npos)
         << llvmPipeWithEmit.out;
 
     auto llvmCCompiler = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) +
             " --backend llvm --emit-llvm " + q(llvmFile) + " --compile --c-compiler clang",
     });
     EXPECT_NE(llvmCCompiler.exitCode, 0);
-    EXPECT_NE(llvmCCompiler.out.find("cannot be combined with --c-compiler"), std::string::npos)
+    EXPECT_NE(llvmCCompiler.out.find(tc.llvmNoCCompiler), std::string::npos)
         << llvmCCompiler.out;
 
     auto badLlvmTool = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --llvm-tool nope",
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --llvm-tool nope",
     });
     EXPECT_NE(badLlvmTool.exitCode, 0);
-    EXPECT_NE(badLlvmTool.out.find("Unknown --llvm-tool value"), std::string::npos)
+    EXPECT_NE(badLlvmTool.out.find(tc.unknownLlvmTool), std::string::npos)
         << badLlvmTool.out;
 
     auto llvmProject = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) +
             " --backend llvm --emit-llvm " + q(llvmFile) + " --generate-cmake " +
             q(test::getTempOutPath("mj2x_cli_negative_llvm_project")) + " --generate-xmake " +
             q(test::getTempOutPath("mj2x_cli_negative_llvm_project_x")),
     });
     EXPECT_NE(llvmProject.exitCode, 0);
-    EXPECT_NE(llvmProject.out.find("mutually exclusive"), std::string::npos) << llvmProject.out;
+    EXPECT_NE(llvmProject.out.find(tc.mutex), std::string::npos) << llvmProject.out;
 #else
     // v2.1 LLVM 后端关闭：--backend llvm / --emit-llvm / --llvm-tool 均被 CLI 拒绝。
     auto llvmDisabled = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --backend llvm",
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --backend llvm",
     });
     EXPECT_NE(llvmDisabled.exitCode, 0);
-    EXPECT_NE(llvmDisabled.out.find("Unknown --backend value"), std::string::npos)
+    EXPECT_NE(llvmDisabled.out.find(tc.unknownBackend), std::string::npos)
         << llvmDisabled.out;
 #endif
 
     auto compileModeWithoutCompile = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --compile-mode pipe",
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --compile-mode pipe",
     });
     EXPECT_NE(compileModeWithoutCompile.exitCode, 0);
-    EXPECT_NE(compileModeWithoutCompile.out.find("--compile-mode requires --compile"),
+    EXPECT_NE(compileModeWithoutCompile.out.find(tc.compileModeNeedsCompile),
               std::string::npos)
         << compileModeWithoutCompile.out;
 
     auto pipeWithEmit = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --emit-c " + q(cFile) +
             " --compile --compile-mode pipe",
     });
     EXPECT_NE(pipeWithEmit.exitCode, 0);
-    EXPECT_NE(pipeWithEmit.out.find("cannot be combined with --emit-c"), std::string::npos)
+    EXPECT_NE(pipeWithEmit.out.find(tc.pipeNoEmit), std::string::npos)
         << pipeWithEmit.out;
 
     auto xmakeWithPipe = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) +
             " --compile --compile-mode pipe --c-compiler xmake",
     });
     EXPECT_NE(xmakeWithPipe.exitCode, 0);
-    EXPECT_NE(xmakeWithPipe.out.find("does not support --compile-mode pipe"),
+    EXPECT_NE(xmakeWithPipe.out.find(tc.xmakeNoPipe),
               std::string::npos)
         << xmakeWithPipe.out;
 
     const fs::path conflictingXmakeProject =
         test::getTempOutPath("mj2x_cli_conflicting_xmake_project");
     auto directCompilerWithXmake = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+        cliCmd + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
             q(conflictingXmakeProject) + " --compile --c-compiler clang",
     });
     EXPECT_NE(directCompilerWithXmake.exitCode, 0);
-    EXPECT_NE(directCompilerWithXmake.out.find("direct --c-compiler"), std::string::npos)
+    EXPECT_NE(directCompilerWithXmake.out.find(tc.directCompiler), std::string::npos)
         << directCompilerWithXmake.out;
 
     auto missingInput = runScript({
-        q(cli) + " -i " + q(test::getTempOutPath("mj2x_cli_missing_input.class")) + " -o " +
+        cliCmd + " -i " + q(test::getTempOutPath("mj2x_cli_missing_input.class")) + " -o " +
             q(outClass) + " --emit-c " + q(cFile),
     });
     EXPECT_NE(missingInput.exitCode, 0);
     EXPECT_NE(missingInput.out.find("load failed"), std::string::npos) << missingInput.out;
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    CliLangs, CliLangTest,
+    ::testing::Values(
+        CliLangCase{
+            "",
+            "用法:",
+            "无效 JSON 配置",
+            "未知配置键",
+            "配置键 backend 的取值无效",
+            "--backend 的取值未知",
+            "--backend 需要 --emit-c",
+            "--compile 需要 --emit-c",
+            "--native-annotation 必须是",
+            "互斥",
+            "--c-compiler 的取值未知",
+            "--compile-mode 的取值未知",
+            "需要 --backend regc",
+            "需要 .cpp 输出路径",
+            "--runtime-protection 的取值未知",
+            "需要 --backend regc、vmc4 或 llvm",
+            "需要 --backend llvm",
+            "--backend llvm 需要 --emit-llvm",
+            "需要 .ll 输出路径",
+            "不能与 --emit-c",
+            "不能与 --c-compiler 组合",
+            "--llvm-tool 的取值未知",
+            "--compile-mode 需要 --compile",
+            "不支持 --compile-mode pipe",
+            "直接 --c-compiler",
+        },
+        CliLangCase{
+            "--lang en_US",
+            "Usage:",
+            "invalid JSON config",
+            "unknown config key",
+            "invalid value for config key backend",
+            "Unknown --backend value",
+            "--backend requires --emit-c",
+            "--compile requires --emit-c",
+            "--native-annotation must be",
+            "mutually exclusive",
+            "Unknown --c-compiler value",
+            "Unknown --compile-mode value",
+            "requires --backend regc",
+            "requires a .cpp output path",
+            "Unknown value for --runtime-protection",
+            "requires --backend regc, vmc4, or llvm",
+            "requires --backend llvm",
+            "--backend llvm requires --emit-llvm",
+            "requires a .ll output path",
+            "cannot be combined with --emit-c",
+            "cannot be combined with --c-compiler",
+            "Unknown --llvm-tool value",
+            "--compile-mode requires --compile",
+            "does not support --compile-mode pipe",
+            "direct --c-compiler",
+        }));
 
 TEST(CliTest, BadJarInputsFailClosed)
 {

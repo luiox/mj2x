@@ -251,10 +251,14 @@ TEST(ConfigRegistryTest, SchemaAnnotationsMatchRegistrySemantics)
     const std::string& out = result.out;
 
     // 枚举 + 默认值（backend / runtime_protection）。dump(2) 键按字母序输出，
-    // default 在 description 之前。
+    // default 在 description 之前。llvm 后端按构建配置条件存在。
+    EXPECT_NE(out.find("\"enum\": [\n        \"stackc\",\n        \"regc\""), std::string::npos)
+        << out;
+#ifndef MJ2X_DISABLE_LLVM_BACKEND
     EXPECT_NE(out.find("\"enum\": [\n        \"stackc\",\n        \"regc\",\n        \"llvm\""),
               std::string::npos)
         << out;
+#endif
     EXPECT_NE(out.find("\"backend\": {\n      \"default\": \"stackc\","), std::string::npos)
         << out;
     EXPECT_NE(out.find("\"runtime_protection\": {\n      \"default\": \"none\","),
@@ -327,7 +331,8 @@ TEST(ConfigRegistryTest, UnknownKeyRejectedWithKeyName)
     const std::string cfg = writeConfig("{\"foo_bar\": 1}", "mj2x_cfg_unknown_key.json");
     const auto        result = runCli({"--config", cfg, "-i", "in.class", "-o", "out.class"});
     EXPECT_NE(result.exitCode, 0);
-    EXPECT_NE(result.out.find("unknown config key: foo_bar"), std::string::npos) << result.out;
+    // 消息文案随语言本地化(见 cli_i18n_test);此处只断言键名定位。
+    EXPECT_NE(result.out.find("foo_bar"), std::string::npos) << result.out;
 }
 
 TEST(ConfigRegistryTest, TypeMismatchReportedWithKeyName)
@@ -369,8 +374,8 @@ TEST(ConfigRegistryTest, BackendFromConfigDrivesValidation)
     const auto        result =
         runCli({"--config", cfg, "-i", "in.class", "-o", "out.class", "--emit-cpp", "x.cpp"});
     EXPECT_NE(result.exitCode, 0);
-    EXPECT_NE(result.out.find("--emit-cpp currently requires --backend regc"),
-              std::string::npos)
+    // CLI 默认 zh_CN 输出（i18n 后文案经 MJ2X_LANG/--lang 选择，此处默认语言）。
+    EXPECT_NE(result.out.find("--emit-cpp 当前需要 --backend regc"), std::string::npos)
         << result.out;
 }
 
@@ -407,6 +412,8 @@ TEST(ConfigRegistryTest, ConfigSupportsAllBackendFamilies)
     EXPECT_EQ(result.out.find("unknown config key"), std::string::npos) << result.out;
     EXPECT_EQ(result.out.find("invalid value"), std::string::npos) << result.out;
     EXPECT_EQ(result.out.find("config key"), std::string::npos) << result.out;
-    // 解析成功 → 失败原因是缺 -i/-o 的 usage。
-    EXPECT_NE(result.out.find("Usage: mj2x-cli"), std::string::npos) << result.out;
+    // 解析成功 → 失败原因是缺 -i/-o 的 usage(默认 zh_CN,文案随语言本地化)。
+    EXPECT_TRUE(result.out.find("Usage: mj2x-cli") != std::string::npos ||
+                result.out.find("\xE7\x94\xA8\xE6\xB3\x95: mj2x-cli") != std::string::npos)
+        << result.out;
 }

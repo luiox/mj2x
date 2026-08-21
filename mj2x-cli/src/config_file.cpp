@@ -9,6 +9,8 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "libi18n/i18n.hpp"
+
 namespace mj2x::cli {
 namespace {
 
@@ -18,18 +20,18 @@ bool readJsonFile(const std::string& path, json& out, std::string& error)
 {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
-        error = "cannot open config file: " + path;
+        error = std::string(i18n::trf("mj2x.cli.err.cfg_open_failed", {path}));
         return false;
     }
     try {
         input >> out;
     }
     catch (const json::exception& ex) {
-        error = std::string("invalid JSON config: ") + ex.what();
+        error = std::string(i18n::trf("mj2x.cli.err.cfg_invalid_json", {ex.what()}));
         return false;
     }
     if (!out.is_object()) {
-        error = "config root must be a JSON object";
+        error = i18n::tr("mj2x.cli.err.cfg_root_object");
         return false;
     }
     return true;
@@ -45,8 +47,7 @@ bool loadConfigFile(const std::string& path, CliOptions& options, std::string& e
     for (auto it = root.begin(); it != root.end(); ++it) {
         const ParamDef* param = findParamByJsonPath(it.key());
         if (!param) {
-            error = "unknown config key: " + it.key() +
-                    " (legal keys: see --dump-config-template)";
+            error = std::string(i18n::trf("mj2x.cli.err.cfg_unknown_key", {it.key()}));
             return false;
         }
         if (!param->parseJson(options, it.value(), error)) {

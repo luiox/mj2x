@@ -118,20 +118,23 @@ enum class ParamType
     StringList, ///< 字符串数组（JSON array / CLI 可重复）
 };
 
-/// @brief 单参数声明。parseCli/parseJson 由注册表提供，读写 CliOptions。
+/// @brief 单参数声明。parseCli/parseJson 由注册表提供,读写 CliOptions。
+///
+/// 用户可见文案(描述/分组标题)不入本表:描述经 mj2x.param.<id>.desc、分组经
+/// mj2x.param.group.<group> 查 i18n 单源表(translations/*.lang),help/schema/
+/// template 三表面同源本地化。
 struct ParamDef
 {
-    const char* id;          ///< 规范 ID："regc.cff_dead"
-    const char* cliFlag;     ///< CLI 参数名："--regc-cff-dead"
-    const char* jsonPath;    ///< 配置文件 JSON 键："regc_cff_dead"（snake_case 平铺）
+    const char* id;          ///< 规范 ID:"regc.cff_dead"
+    const char* cliFlag;     ///< CLI 参数名:"--regc-cff-dead"
+    const char* jsonPath;    ///< 配置文件 JSON 键:"regc_cff_dead"(snake_case 平铺)
     ParamType   type;
-    const char* enumValues;  ///< Enum 用：逗号分隔合法值
-    ca::i64     minValue;    ///< Int 用：最小值（0 = 无约束）
-    ca::i64     maxValue;    ///< Int 用：最大值（0 = 无约束）
-    const char* defaultStr;  ///< 默认值文本（help/schema 展示用）
-    const char* description; ///< 描述（help 与 schema description 同源）
-    const char* group;       ///< 分组（help 分组标题 / schema 文档）
-    const char* requires;    ///< 依赖说明（文档用；运行时校验沿用 main.cpp 交叉校验）
+    const char* enumValues;  ///< Enum 用:逗号分隔合法值
+    ca::i64     minValue;    ///< Int 用:最小值(0 = 无约束)
+    ca::i64     maxValue;    ///< Int 用:最大值(0 = 无约束)
+    const char* defaultStr;  ///< 默认值文本(help/schema 展示用)
+    const char* group;       ///< 分组 slug(help 标题经 mj2x.param.group.<slug> 查表)
+    const char* requires;    ///< 依赖的 CLI flag 名(文档用;运行时校验沿用 main.cpp 交叉校验)
     bool (*parseCli)(CliOptions&, const char* value, std::string& error);
     bool (*parseJson)(CliOptions&, const nlohmann::json& value, std::string& error);
 };

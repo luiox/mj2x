@@ -35,6 +35,10 @@
 
 #include "libca/log/log_macros.hpp"
 #include "libca/process/subprocess.hpp"
+#include "libi18n/i18n.hpp"
+
+// i18n.embed-lang rule 生成的嵌入翻译表(mj2x-cli 单源文案表)。
+#include "i18n_mj2x_cli_translations.generated.hpp"
 
 #ifdef _WIN32
 // subprocess.hpp 为保护 Command 同名成员标识符 #undef 了全局 stdout/stderr
@@ -153,28 +157,28 @@ static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsic
     try {
         std::ifstream file(path);
         if (!file) {
-            error = "cannot open intrinsic config: " + path;
+            error = std::string(i18n::trf("mj2x.cli.err.intrinsic_open_failed", {path}));
             return false;
         }
         file >> root;
     }
     catch (const json::exception& ex) {
-        error = std::string("invalid JSON intrinsic config: ") + ex.what();
+        error = std::string(i18n::trf("mj2x.cli.err.intrinsic_invalid_json", {ex.what()}));
         return false;
     }
     if (!root.is_object()) {
-        error = "intrinsic config root must be a JSON object";
+        error = i18n::tr("mj2x.cli.err.intrinsic_root_object");
         return false;
     }
     if (root.contains("intrinsics")) {
         const auto& arr = root["intrinsics"];
         if (!arr.is_array()) {
-            error = "intrinsics must be a JSON array";
+            error = i18n::tr("mj2x.cli.err.intrinsic_needs_array");
             return false;
         }
         for (const auto& item : arr) {
             if (!item.is_object()) {
-                error = "intrinsic entry must be a JSON object";
+                error = i18n::tr("mj2x.cli.err.intrinsic_entry_object");
                 return false;
             }
             mj2x::UserIntrinsic u;
@@ -185,7 +189,7 @@ static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsic
             };
             if (!getStr("owner", u.owner) || !getStr("name", u.name) ||
                 !getStr("desc", u.desc) || !getStr("symbol", u.symbol)) {
-                error = "intrinsic entry requires owner/name/desc/symbol strings";
+                error = i18n::tr("mj2x.cli.err.intrinsic_entry_fields");
                 return false;
             }
             if (item.contains("passContext") && item["passContext"].is_boolean())
@@ -198,12 +202,12 @@ static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsic
     if (root.contains("sources")) {
         const auto& arr = root["sources"];
         if (!arr.is_array()) {
-            error = "sources must be a JSON array";
+            error = i18n::tr("mj2x.cli.err.intrinsic_sources_array");
             return false;
         }
         for (const auto& s : arr) {
             if (!s.is_string()) {
-                error = "source entry must be a string";
+                error = i18n::tr("mj2x.cli.err.intrinsic_source_string");
                 return false;
             }
             out.sources.push_back(s.get<std::string>());
@@ -222,7 +226,7 @@ static bool copyUserIntrinsicSources(const std::vector<std::string>& sources,
     std::error_code             ec;
     std::filesystem::create_directories(destDir, ec);
     if (ec) {
-        error = "cannot create user intrinsic dir: " + destDir.string();
+        error = std::string(i18n::trf("mj2x.cli.err.intrinsic_dir_failed", {destDir.string()}));
         return false;
     }
     for (const auto& src : sources) {
@@ -230,7 +234,7 @@ static bool copyUserIntrinsicSources(const std::vector<std::string>& sources,
         const std::filesystem::path to = destDir / from.filename();
         std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
         if (ec) {
-            error = "cannot copy user intrinsic source: " + from.string();
+            error = std::string(i18n::trf("mj2x.cli.err.intrinsic_copy_failed", {from.string()}));
             return false;
         }
     }
@@ -350,12 +354,12 @@ static int embedNativeLibraryInJar(const std::string& jarPath, const std::string
     auto          outBytes = jzip::ZipIO::writeDirect(rewritten);
     std::ofstream ofs(jarPath, std::ios::binary);
     if (!ofs) {
-        CA_LOGT_ERROR("cli", "cannot rewrite output JAR: {}\n", jarPath.c_str());
+        CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.jar_rewrite_failed", {std::string(jarPath)}).c_str());
         return 1;
     }
     ofs.write(reinterpret_cast<const char*>(outBytes.data()),
               static_cast<std::streamsize>(outBytes.size()));
-    printf("Embedded native library in JAR: %s\n", entryName.c_str());
+    printf("%s\n", i18n::trf("mj2x.cli.info.embedded_lib", {entryName}).c_str());
     return 0;
 }
 
@@ -483,7 +487,7 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "Requires clang on PATH.\n";
     }
 
-    printf("CMake project written: %s\n", projectDir.string().c_str());
+    printf("%s\n", i18n::trf("mj2x.cli.info.cmake_written", {projectDir.string()}).c_str());
     return 0;
 }
 
@@ -582,7 +586,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
         out << "`JAVA_HOME` or CMake's JNI discovery must point at a JDK with JNI headers.\n";
     }
 
-    printf("CMake project written: %s\n", projectDir.string().c_str());
+    printf("%s\n", i18n::trf("mj2x.cli.info.cmake_written", {projectDir.string()}).c_str());
     return 0;
 }
 
@@ -619,6 +623,11 @@ int main(int argc, char** argv)
     // 在第一遍选项扫描后调整级别（init 前的参数校验错误用 fprintf 兜底）。
     mj2x::initLogging();
 
+    // i18n:嵌入翻译表注册 + 语言解析。--lang 预扫描优先于 MJ2X_LANG 环境变量,
+    // 默认 zh_CN;须在任何错误输出/参数解析之前完成。
+    i18n::init({kI18nTableSet_mj2x_cli}, {"MJ2X_LANG"});
+    i18n::applyLangFromArgv(argc, argv);
+
     CliOptions               options;
     std::string              configPath;
     TemporaryProjectCleanup temporaryProjectCleanup;
@@ -630,12 +639,12 @@ int main(int argc, char** argv)
         std::string arg = argv[i];
         if (arg == "--config") {
             if (i + 1 >= argc) {
-                CA_LOGT_ERROR("cli", "--config requires a JSON file path.\n");
+                CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.config_requires_path"));
                 printUsage();
                 return 1;
             }
             if (!configPath.empty()) {
-                CA_LOGT_ERROR("cli", "--config may only be specified once.\n");
+                CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.config_once"));
                 printUsage();
                 return 1;
             }
@@ -673,15 +682,19 @@ int main(int argc, char** argv)
             ++i;   // 第一遍已记录路径；这里跳过其值。
             continue;
         }
+        // --lang 已在预扫描消费(语言未注册时静默回退,合法值见 --help)。
+        if (arg == "--lang") {
+            if (i + 1 < argc && argv[i + 1][0] != '-') ++i;
+            continue;
+        }
+        if (arg.rfind("--lang=", 0) == 0) continue;
         if (arg == "-h" || arg == "--help") {
             printUsage();
             return 0;
         }
         if (arg == "--dump-config-schema" || arg == "--dump-config-template") {
             if (dumpSchema || dumpTemplate) {
-                CA_LOGT_ERROR("cli",
-                              "--dump-config-schema/--dump-config-template may only be "
-                              "specified once.\n");
+                CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.dump_once"));
                 return 1;
             }
             dumpSchema   = (arg == "--dump-config-schema");
@@ -691,14 +704,14 @@ int main(int argc, char** argv)
         }
         const mj2x::cli::ParamDef* param = mj2x::cli::findParamByCli(arg);
         if (!param) {
-            CA_LOGT_ERROR("cli", "unknown option: {}\n", arg.c_str());
+            CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.unknown_option", {arg}).c_str());
             printUsage();
             return 1;
         }
         const char* value = nullptr;
         if (param->type != mj2x::cli::ParamType::Bool) {
             if (i + 1 >= argc) {
-                CA_LOGT_ERROR("cli", "{} requires a value.\n", arg.c_str());
+                CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.flag_requires_value", {arg}).c_str());
                 printUsage();
                 return 1;
             }
@@ -723,9 +736,12 @@ int main(int argc, char** argv)
         else {
             std::ofstream out(dumpFile, std::ios::binary);
             if (!out) {
-                CA_LOGT_ERROR("cli", "cannot write {}: {}\n",
-                              dumpSchema ? "config schema" : "config template",
-                              dumpFile.c_str());
+                CA_LOGT_ERROR("cli", "{}\n",
+                      i18n::trf("mj2x.cli.err.dump_write_failed",
+                                 {dumpSchema ? i18n::tr("mj2x.cli.term.config_schema")
+                                             : i18n::tr("mj2x.cli.term.config_template"),
+                                  dumpFile})
+                                      .c_str());
                 return 1;
             }
             out << text << "\n";
@@ -742,117 +758,113 @@ int main(int argc, char** argv)
                                   static_cast<int>(!options.cppOutputPath.empty()) +
                                   static_cast<int>(!options.llvmOutputPath.empty());
     if (nativeOutputCount > 1) {
-        CA_LOGT_ERROR("cli", "--emit-c, --emit-cpp, and --emit-llvm are mutually exclusive.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_mutually_exclusive"));
         return 1;
     }
     if (!options.cppOutputPath.empty() && !hasExtension(options.cppOutputPath, ".cpp")) {
-        CA_LOGT_ERROR("cli", "--emit-cpp requires a .cpp output path.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_cpp_needs_cpp_ext"));
         return 1;
     }
     if (!options.cppOutputPath.empty() && options.cBackendKind != CEmitterBackend::RegC) {
-        CA_LOGT_ERROR("cli", "--emit-cpp currently requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_cpp_needs_regc"));
         return 1;
     }
     if (!options.llvmOutputPath.empty() && !hasExtension(options.llvmOutputPath, ".ll")) {
-        CA_LOGT_ERROR("cli", "--emit-llvm requires a .ll output path.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_llvm_needs_ll_ext"));
         return 1;
     }
     if (!options.llvmOutputPath.empty() && options.cBackendKind != CEmitterBackend::LlvmIr) {
-        CA_LOGT_ERROR("cli", "--emit-llvm requires --backend llvm.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_llvm_needs_llvm"));
         return 1;
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr && options.llvmOutputPath.empty() &&
         options.compileMode != mj2x::cli::CompileMode::Pipe) {
-        CA_LOGT_ERROR("cli", "--backend llvm requires --emit-llvm.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.backend_llvm_needs_emit_llvm"));
         return 1;
     }
     if (options.llvmToolSelected && options.cBackendKind != CEmitterBackend::LlvmIr) {
-        CA_LOGT_ERROR("cli", "--llvm-tool requires --backend llvm.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.llvm_tool_needs_llvm"));
         return 1;
     }
     if (options.regcTraceCalls && options.cBackendKind != CEmitterBackend::RegC) {
-        CA_LOGT_ERROR("cli", "--regc-trace-calls requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.regc_trace_calls_needs_regc"));
         return 1;
     }
     if ((options.regcSafeEnv || options.regcSafeEnvDebug) &&
         options.cBackendKind != CEmitterBackend::RegC) {
-        CA_LOGT_ERROR("cli", "--regc-safe-env requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.regc_safe_env_needs_regc"));
         return 1;
     }
     if (options.runtimeProtection != "none" && options.runtimeProtection != "log" &&
         options.runtimeProtection != "delay" && options.runtimeProtection != "fake" &&
         options.runtimeProtection != "terminate") {
-        CA_LOGT_ERROR("cli",
-                      "Unknown --runtime-protection value. Expected none, log, delay, fake, or "
-                      "terminate.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.runtime_protection_unknown"));
         return 1;
     }
     if (options.runtimeProtection != "none" && options.cBackendKind != CEmitterBackend::RegC &&
         options.cBackendKind != CEmitterBackend::Vmc4 &&
         options.cBackendKind != CEmitterBackend::LlvmIr) {
-        CA_LOGT_ERROR("cli", "--runtime-protection requires --backend regc, vmc4, or llvm.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.runtime_protection_needs_native"));
         return 1;
     }
     if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
-        CA_LOGT_ERROR("cli", "--stackc-exception-check must be full or lite.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.stackc_exception_check_invalid"));
         return 1;
     }
     if (!options.nativeDirOutput.empty() && options.cBackendKind != CEmitterBackend::RegC) {
-        CA_LOGT_ERROR("cli", "--emit-native-dir requires --backend regc.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_native_dir_needs_regc"));
         return 1;
     }
     if (options.llvmToolSelected && !options.compileNative) {
-        CA_LOGT_ERROR("cli", "--llvm-tool requires --compile.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.llvm_tool_needs_compile"));
         return 1;
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr && options.compilerSelected) {
-        CA_LOGT_ERROR("cli", "--backend llvm cannot be combined with --c-compiler.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.llvm_backend_no_c_compiler"));
         return 1;
     }
 
     if (!options.nativeAnnotation.empty() &&
         !isNativeAnnotationDescriptor(options.nativeAnnotation)) {
-        CA_LOGT_ERROR("cli", "--native-annotation must be a JVM annotation descriptor like Lcom/example/Native;.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.native_annotation_invalid"));
         printUsage();
         return 1;
     }
 
     if (!options.nativeAnnotation.empty() && !options.nativeMethodPrefixes.empty()) {
-        CA_LOGT_ERROR("cli", "--native-annotation and --native-method-prefix are mutually exclusive.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.selection_mutually_exclusive"));
         printUsage();
         return 1;
     }
 
     if (!options.cmakeProjectDir.empty() && !options.xmakeProjectDir.empty()) {
-        CA_LOGT_ERROR("cli", "--generate-cmake and --generate-xmake are mutually exclusive.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.generate_mutually_exclusive"));
         printUsage();
         return 1;
     }
 
     if (options.compileNative && !options.xmakeProjectDir.empty()) {
         if (options.compilerSelected && options.buildDriver == NativeBuildDriver::Direct) {
-            CA_LOGT_ERROR("cli",
-                          "A direct --c-compiler cannot be combined with --generate-xmake and "
-                          "--compile.\n");
+            CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.direct_compiler_no_xmake"));
             return 1;
         }
         options.buildDriver = NativeBuildDriver::Xmake;
     }
     if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
         !options.cmakeProjectDir.empty()) {
-        CA_LOGT_ERROR("cli", "--c-compiler xmake cannot be combined with --generate-cmake.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.xmake_driver_no_cmake"));
         return 1;
     }
     if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
         options.compileMode == mj2x::cli::CompileMode::Pipe) {
-        CA_LOGT_ERROR("cli", "xmake compilation does not support --compile-mode pipe.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.xmake_no_pipe"));
         return 1;
     }
     if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
         options.xmakeProjectDir.empty()) {
         std::filesystem::path temporaryProject;
         if (!createTemporaryXmakeProject(options.outputPath, temporaryProject)) {
-            CA_LOGT_ERROR("cli", "cannot create temporary xmake project.\n");
+            CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.temp_xmake_create_failed"));
             return 1;
         }
         temporaryProjectCleanup.set(temporaryProject);
@@ -864,9 +876,7 @@ int main(int argc, char** argv)
          !options.llvmOutputPath.empty() ||
          !options.cmakeProjectDir.empty() ||
          !options.xmakeProjectDir.empty())) {
-        CA_LOGT_ERROR("cli",
-                      "--compile-mode pipe cannot be combined with --emit-c or generated native "
-                      "projects.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.pipe_no_emit"));
         return 1;
     }
 
@@ -903,23 +913,19 @@ int main(int argc, char** argv)
                                                     : options.cppOutputPath);
 
     if (options.backendSelected && nativeOutputPath.empty() && !nativeDirMode && !pipeCompile) {
-        CA_LOGT_ERROR("cli",
-                      "--backend requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, "
-                      "or a generated native project.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.backend_needs_output"));
         printUsage();
         return 1;
     }
 
     if (options.compileNative && nativeOutputPath.empty() && !nativeDirMode && !pipeCompile) {
-        CA_LOGT_ERROR("cli",
-                      "--compile requires --emit-c, --emit-cpp, --emit-llvm, --emit-native-dir, "
-                      "or a generated native project.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.compile_needs_output"));
         printUsage();
         return 1;
     }
 
     if (options.compileModeSelected && !options.compileNative) {
-        CA_LOGT_ERROR("cli", "--compile-mode requires --compile.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.compile_mode_needs_compile"));
         printUsage();
         return 1;
     }
@@ -928,7 +934,7 @@ int main(int argc, char** argv)
         std::error_code ec;
         std::filesystem::create_directories(options.cmakeProjectDir, ec);
         if (ec) {
-            CA_LOGT_ERROR("cli", "cannot create CMake project directory: {}\n", options.cmakeProjectDir.c_str());
+            CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.cmake_dir_create_failed", {options.cmakeProjectDir}).c_str());
             return 1;
         }
     }
@@ -938,13 +944,13 @@ int main(int argc, char** argv)
         std::filesystem::create_directories(
             std::filesystem::path(options.xmakeProjectDir) / "src" / "generated", ec);
         if (ec) {
-            CA_LOGT_ERROR("cli", "cannot create xmake project directory: {}\n", options.xmakeProjectDir.c_str());
+            CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.xmake_dir_create_failed", {options.xmakeProjectDir}).c_str());
             return 1;
         }
     }
 
     if (options.compilerSelected && !options.compileNative) {
-        CA_LOGT_ERROR("cli", "--c-compiler requires --compile.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.c_compiler_needs_compile"));
         printUsage();
         return 1;
     }
@@ -1173,32 +1179,32 @@ int main(int argc, char** argv)
     mj2x::NativeSourceArtifact nativeArtifact{mj2x::NativeSourceLanguage::C99, {}, {}};
     if (needsNativeSource) {
         if (nativeSourceBackend == nullptr) {
-            CA_LOGT_ERROR("cli", "native source backend is unavailable.\n");
+            CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.backend_unavailable"));
             return 1;
         }
         nativeArtifact = nativeSourceBackend->generatedSourceArtifact();
     }
     if (!options.cppOutputPath.empty()) {
         if (nativeArtifact.language != mj2x::NativeSourceLanguage::C99) {
-            CA_LOGT_ERROR("cli", "--emit-cpp requires a C99 backend source artifact.\n");
+            CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_cpp_needs_c99"));
             return 1;
         }
         cppSource = mj2x::cli::emitCpp17Dialect(nativeArtifact.content);
         std::ofstream output(options.cppOutputPath, std::ios::binary | std::ios::trunc);
         if (!output) {
-            CA_LOGT_ERROR("cli", "cannot write emitted C++ source: {}\n", options.cppOutputPath.c_str());
+            CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.emit_cpp_write_failed", {options.cppOutputPath}).c_str());
             return 1;
         }
         output.write(cppSource.data(), static_cast<std::streamsize>(cppSource.size()));
         if (!output) {
-            CA_LOGT_ERROR("cli", "cannot write emitted C++ source: {}\n", options.cppOutputPath.c_str());
+            CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.emit_cpp_write_failed", {options.cppOutputPath}).c_str());
             return 1;
         }
         nativeArtifact = {mj2x::NativeSourceLanguage::Cpp17, cppSource, "native.cpp"};
     }
     if (!options.llvmOutputPath.empty() &&
         nativeArtifact.language != mj2x::NativeSourceLanguage::LlvmIr) {
-        CA_LOGT_ERROR("cli", "--emit-llvm requires an LLVM IR backend source artifact.\n");
+        CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.emit_llvm_needs_artifact"));
         return 1;
     }
 
@@ -1215,9 +1221,7 @@ int main(int argc, char** argv)
             if (options.cBackendKind == CEmitterBackend::RegC) {
                 cmakeCrtRoot = mj2x::cli::findCrtRoot(argv[0]);
                 if (cmakeCrtRoot.empty()) {
-                    CA_LOGT_ERROR("cli",
-                                  "RegC CMake project requires an mj2x-crt source pack; set "
-                                  "MJ2X_CRT_DIR.\n");
+                    CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.crt_pack_required"));
                     return 1;
                 }
             }
@@ -1271,10 +1275,12 @@ int main(int argc, char** argv)
                 // mj2x-crt，链接侧一并编译（与 RegC --compile 的 crt 契约一致）。
                 crtRoot = mj2x::cli::findCrtRoot(argv[0]);
                 if (crtRoot.empty()) {
-                    CA_LOGT_ERROR("cli",
-                                  "{} --compile requires an mj2x-crt source pack; set "
-                                  "MJ2X_CRT_DIR or use --generate-xmake.\n",
-                                  options.cBackendKind == CEmitterBackend::RegC ? "RegC" : "LLVM");
+                    CA_LOGT_ERROR("cli", "{}\n",
+                                      i18n::trf("mj2x.cli.err.compile_crt_required",
+                                                 {options.cBackendKind == CEmitterBackend::RegC
+                                                      ? "RegC"
+                                                      : "LLVM"})
+                                          .c_str());
                     return 1;
                 }
             }
@@ -1292,13 +1298,11 @@ int main(int argc, char** argv)
             }
             else if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
                 if (nativeSourceBackend == nullptr) {
-                    CA_LOGT_ERROR("cli", "native source backend is unavailable.\n");
+                    CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.backend_unavailable"));
                     return 1;
                 }
                 if (nativeArtifact.language != mj2x::NativeSourceLanguage::C99) {
-                    CA_LOGT_ERROR("cli",
-                                  "--compile-mode pipe only supports C99 native source "
-                                  "artifacts.\n");
+                    CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.pipe_c99_only"));
                     return 1;
                 }
                 compileRc = mj2x::cli::compileCSourceFromPipe(

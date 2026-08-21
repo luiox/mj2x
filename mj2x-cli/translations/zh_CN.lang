@@ -1,0 +1,170 @@
+# mj2x-cli 简体中文(zh_CN)。rule i18n.embed-lang 消费;en_US 的 key 须为本文件子集。
+# key 分区:mj2x.param.<id>.desc / mj2x.param.group.<slug> / mj2x.cli.help.* /
+# mj2x.cli.err.* / mj2x.cli.info.* / mj2x.cli.term.* / mj2x.cli.template.* / mj2x.schema.*
+
+# ---- help 头部与固定选项行 ----
+mj2x.cli.help.usage=用法: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]
+mj2x.cli.help.options_header=选项:
+mj2x.cli.help.config_flag=--config <file>              加载 JSON 配置;命令行值覆盖配置
+mj2x.cli.help.dump_schema_flag=--dump-config-schema [<file>]  输出配置 JSON Schema(draft-07)到文件或 stdout
+mj2x.cli.help.dump_template_flag=--dump-config-template [<file>] 输出带注释的配置模板到文件或 stdout
+mj2x.cli.help.lang_flag=--lang <lang>                  界面语言(zh_CN / en_US;亦可用 MJ2X_LANG 环境变量)
+mj2x.cli.help.help_flag=--help                       打印帮助
+
+# ---- schema 顶层 ----
+mj2x.schema.description=mj2x native 保护配置
+
+# ---- 配置模板头部 ----
+mj2x.cli.template.header1=mj2x 配置模板(--dump-config-template 生成;键说明见 --dump-config-schema)
+mj2x.cli.template.header2=删除注释即得合法配置;未列出的键保持默认值;未知键会被拒绝。
+mj2x.cli.template.requires=依赖
+
+# ---- 术语(dump_write_failed 内嵌) ----
+mj2x.cli.term.config_schema=配置 schema
+mj2x.cli.term.config_template=配置模板
+
+# ---- 信息性输出 ----
+mj2x.cli.info.embedded_lib=已嵌入 native library 到 JAR: {0}
+mj2x.cli.info.cmake_written=CMake 工程已生成: {0}
+
+# ---- 参数解析/校验错误(main.cpp) ----
+mj2x.cli.err.config_requires_path=--config 需要一个 JSON 文件路径。
+mj2x.cli.err.config_once=--config 只能指定一次。
+mj2x.cli.err.dump_once=--dump-config-schema/--dump-config-template 只能指定一次。
+mj2x.cli.err.unknown_option=未知选项: {0}
+mj2x.cli.err.flag_requires_value={0} 需要提供值
+mj2x.cli.err.dump_write_failed=无法写入{0}: {1}
+mj2x.cli.err.emit_mutually_exclusive=--emit-c、--emit-cpp 与 --emit-llvm 互斥。
+mj2x.cli.err.emit_cpp_needs_cpp_ext=--emit-cpp 需要 .cpp 输出路径。
+mj2x.cli.err.emit_cpp_needs_regc=--emit-cpp 当前需要 --backend regc。
+mj2x.cli.err.emit_llvm_needs_ll_ext=--emit-llvm 需要 .ll 输出路径。
+mj2x.cli.err.emit_llvm_needs_llvm=--emit-llvm 需要 --backend llvm。
+mj2x.cli.err.backend_llvm_needs_emit_llvm=--backend llvm 需要 --emit-llvm。
+mj2x.cli.err.llvm_tool_needs_llvm=--llvm-tool 需要 --backend llvm。
+mj2x.cli.err.regc_trace_calls_needs_regc=--regc-trace-calls 需要 --backend regc。
+mj2x.cli.err.regc_safe_env_needs_regc=--regc-safe-env 需要 --backend regc。
+mj2x.cli.err.runtime_protection_unknown=未知 --runtime-protection 取值。合法值: none、log、delay、fake、terminate。
+mj2x.cli.err.runtime_protection_needs_native=--runtime-protection 需要 --backend regc、vmc4 或 llvm。
+mj2x.cli.err.stackc_exception_check_invalid=--stackc-exception-check 取值必须为 full 或 lite。
+mj2x.cli.err.emit_native_dir_needs_regc=--emit-native-dir 需要 --backend regc。
+mj2x.cli.err.llvm_tool_needs_compile=--llvm-tool 需要 --compile。
+mj2x.cli.err.llvm_backend_no_c_compiler=--backend llvm 不能与 --c-compiler 组合。
+mj2x.cli.err.native_annotation_invalid=--native-annotation 必须是 JVM 注解 descriptor,如 Lcom/example/Native;。
+mj2x.cli.err.selection_mutually_exclusive=--native-annotation 与 --native-method-prefix 互斥。
+mj2x.cli.err.generate_mutually_exclusive=--generate-cmake 与 --generate-xmake 互斥。
+mj2x.cli.err.direct_compiler_no_xmake=直接 --c-compiler 不能与 --generate-xmake 和 --compile 组合。
+mj2x.cli.err.xmake_driver_no_cmake=--c-compiler xmake 不能与 --generate-cmake 组合。
+mj2x.cli.err.xmake_no_pipe=xmake 编译不支持 --compile-mode pipe。
+mj2x.cli.err.temp_xmake_create_failed=无法创建临时 xmake 工程。
+mj2x.cli.err.pipe_no_emit=--compile-mode pipe 不能与 --emit-c 或生成的 native 工程组合。
+mj2x.cli.err.backend_needs_output=--backend 需要 --emit-c、--emit-cpp、--emit-llvm、--emit-native-dir 或生成的 native 工程。
+mj2x.cli.err.compile_needs_output=--compile 需要 --emit-c、--emit-cpp、--emit-llvm、--emit-native-dir 或生成的 native 工程。
+mj2x.cli.err.compile_mode_needs_compile=--compile-mode 需要 --compile。
+mj2x.cli.err.cmake_dir_create_failed=无法创建 CMake 工程目录: {0}
+mj2x.cli.err.xmake_dir_create_failed=无法创建 xmake 工程目录: {0}
+mj2x.cli.err.c_compiler_needs_compile=--c-compiler 需要 --compile。
+mj2x.cli.err.backend_unavailable=native 源码后端不可用。
+mj2x.cli.err.emit_cpp_needs_c99=--emit-cpp 需要 C99 后端源码产物。
+mj2x.cli.err.emit_cpp_write_failed=无法写入生成的 C++ 源码: {0}
+mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm 需要 LLVM IR 后端源码产物。
+mj2x.cli.err.crt_pack_required=RegC CMake 工程需要 mj2x-crt 源码包;请设置 MJ2X_CRT_DIR。
+mj2x.cli.err.compile_crt_required={0} --compile 需要 mj2x-crt 源码包;请设置 MJ2X_CRT_DIR 或使用 --generate-xmake。
+mj2x.cli.err.pipe_c99_only=--compile-mode pipe 仅支持 C99 native 源码产物。
+mj2x.cli.err.jar_rewrite_failed=无法重写输出 JAR: {0}
+
+# ---- 配置文件加载(config_file.cpp) ----
+mj2x.cli.err.cfg_open_failed=无法打开配置文件: {0}
+mj2x.cli.err.cfg_invalid_json=无效 JSON 配置: {0}
+mj2x.cli.err.cfg_root_object=配置根必须是 JSON 对象
+mj2x.cli.err.cfg_unknown_key=未知配置键: {0}(合法键见 --dump-config-template)
+
+# ---- intrinsic 配置加载(main.cpp) ----
+mj2x.cli.err.intrinsic_open_failed=无法打开 intrinsic 配置: {0}
+mj2x.cli.err.intrinsic_invalid_json=无效 intrinsic JSON 配置: {0}
+mj2x.cli.err.intrinsic_root_object=intrinsic 配置根必须是 JSON 对象
+mj2x.cli.err.intrinsic_needs_array=intrinsics 必须是 JSON 数组
+mj2x.cli.err.intrinsic_entry_object=intrinsic 条目必须是 JSON 对象
+mj2x.cli.err.intrinsic_entry_fields=intrinsic 条目需要 owner/name/desc/symbol 字符串字段
+mj2x.cli.err.intrinsic_sources_array=sources 必须是 JSON 数组
+mj2x.cli.err.intrinsic_source_string=source 条目必须是字符串
+mj2x.cli.err.intrinsic_dir_failed=无法创建用户 intrinsic 目录: {0}
+mj2x.cli.err.intrinsic_copy_failed=无法复制用户 intrinsic 源文件: {0}
+
+# ---- 参数回调错误(param_registry.cpp) ----
+mj2x.cli.err.flag_requires_value_enum={0} 需要提供值: {1}
+mj2x.cli.err.invalid_int={0} 的取值无效: {1}(需要整数{2})
+mj2x.cli.err.invalid_value={0} 的取值无效: {1}
+mj2x.cli.err.invalid_hex={0} 的十六进制取值无效: {1}
+mj2x.cli.err.unknown_enum={0} 的取值未知: {1}(合法值: {2})
+mj2x.cli.err.unknown_flag_value={0} 的取值未知。合法值: {1}。
+mj2x.cli.err.cfg_type_bool=配置键必须为布尔值: {0}
+mj2x.cli.err.cfg_type_str=配置键必须为字符串: {0}
+mj2x.cli.err.cfg_type_int=配置键必须为整数: {0}
+mj2x.cli.err.cfg_type_uint=配置键必须为非负整数: {0}
+mj2x.cli.err.cfg_type_strarr=配置键必须为字符串数组: {0}
+mj2x.cli.err.cfg_arr_nonstr=配置数组含非字符串项: {0}
+mj2x.cli.err.cfg_type_hex=配置键必须为十六进制字符串或数字: {0}
+mj2x.cli.err.cfg_type_num_hex=配置键必须为数字或十六进制字符串: {0}
+mj2x.cli.err.cfg_int_range=配置键取值越界: {0}(需在 {1} 内)
+mj2x.cli.err.cfg_invalid_enum=配置键 {0} 的取值无效: {1}(合法值: {2})
+mj2x.cli.err.cfg_invalid_hex=配置键 {0} 的十六进制取值无效: {1}
+mj2x.cli.err.cfg_invalid_value=配置键 {0} 的取值无效: {1}
+mj2x.param.client.id.desc=per-client 唯一派生（默认 0 = 不变：产物与历史逐字节一致；非 0 时所有后端 seed 经 splitmix64(baseSeed ^ clientId) 派生，每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物）
+mj2x.param.compile.c_compiler.desc=C 编译器或构建驱动（xmake 为构建驱动）
+mj2x.param.compile.enabled.desc=把生成的 C/C++ 源码编译为 native library（位于 --output 旁）
+mj2x.param.compile.generate_cmake.desc=生成独立 CMake native 工程目录
+mj2x.param.compile.generate_xmake.desc=生成独立 xmake native 工程目录（推荐；配合 --compile 一键出 DLL/SO）
+mj2x.param.compile.llvm_tool.desc=LLVM IR 编译路径
+mj2x.param.compile.mode.desc=native 编译输入模式
+mj2x.param.global.backend.desc=选择 native 发射后端（stackc 默认；cbackend/c 为兼容别名）
+mj2x.param.global.dump_mir.desc=打印中间表示（调试用）
+mj2x.param.global.emit_c.desc=输出的 C 源码路径
+mj2x.param.global.emit_cpp.desc=输出 RegC C++17 源码路径（需 .cpp 后缀 + --backend regc）
+mj2x.param.global.emit_llvm.desc=输出 LLVM textual IR 路径（需 .ll 后缀 + --backend llvm）
+mj2x.param.global.emit_native_dir.desc=RegC: 多文件输出（mj2x_regc_api.h + runtime.c + 每类 m_<Class>.c + entry.c）
+mj2x.param.global.input.desc=输入文件（.class / .jar）
+mj2x.param.global.output.desc=输出文件（.class / .jar，方法被标记为 native）
+mj2x.param.group.client=client
+mj2x.param.group.compile=编译
+mj2x.param.group.global=global
+mj2x.param.group.intrinsic=intrinsic
+mj2x.param.group.logging=日志
+mj2x.param.group.native_lib=native lib
+mj2x.param.group.regc=RegC
+mj2x.param.group.regc_llvm=RegC/LLVM
+mj2x.param.group.runtime_protection=运行时保护
+mj2x.param.group.selection=方法选择
+mj2x.param.group.stackc=StackC
+mj2x.param.group.vmc4=VMC4
+mj2x.param.intrinsic.config.desc=用户自定义 intrinsic JSON（issue #818）：{"intrinsics":[{owner,name,desc,symbol,...}],"sources":[...]}
+mj2x.param.intrinsic.sources.desc=追加用户 intrinsic 实现源文件（可重复；并入生成工程编译）
+mj2x.param.log.quiet.desc=日志只保留警告与错误（stderr）
+mj2x.param.log.verbose.desc=日志提升到 debug 级别（stderr）
+mj2x.param.native_lib.key.desc=native lib 加密存储：嵌入前 XOR 加密（xorshift32 密钥流），资源入口加 .enc 后缀，运行时 NativeLoader 解密加载；静态提取不可直接加载（默认关闭 = 明文嵌入）
+mj2x.param.native_lib.pack_hook.desc=嵌入前外部处理钩子（sepacker DLL 加壳等）：{in} 占位符替换为编译产物路径，hook 应就地改写该文件；非零退出码视为失败；顺序：hook → 可选加密 → 嵌入（默认关闭）
+mj2x.param.regc.cff_dead.desc=RegC/LLVM: CFF 恒假死块密度（默认 0 关闭；N = 每 N 个跳转插 1 死块；死块条件依赖运行时 state，编译器无法证明恒假不可 DCE；注入 barrier 的方法在 LLVM 侧回退未变换）
+mj2x.param.regc.cff_state_encrypt.desc=RegC/LLVM: CFF 派生随机 state 码 + dispatcher 状态异或（默认关闭；同 seed 同产物）
+mj2x.param.regc.comment_level.desc=RegC: 生成注释级别
+mj2x.param.regc.direct_calls.desc=RegC: 启用 native-to-native 直接 C 调用（默认关闭：直调不产生 JVM 栈帧，getStackTrace 等语义失真）
+mj2x.param.regc.mba_deep.desc=RegC: 深 MBA（De Morgan/进位链 + barrier 防折叠，per-site 变体；默认关闭；LLVM 侧 barrier 超出子集，变换回退未变换）
+mj2x.param.regc.no_inline.desc=RegC: 关闭 SSA 方法内联（默认开启：静态调用 + 无异常区 + 大小/递归门控的语义等价内联，消除 native 方法间 JNI 往返）
+mj2x.param.regc.obfuscate.desc=RegC/LLVM: 开启基础混淆变换（MBA + opaque 谓词 + CFF 平坦化；RegIR 级与 RegC 同源；默认全部关闭保持语义直译最快路径；LLVM 侧变换产物超子集时回退未变换）
+mj2x.param.regc.opaque_zero.desc=RegC/LLVM: opaque-零恒等变体（demorgan/shift-pair/or-dec，按种子选变体；默认关闭）
+mj2x.param.regc.safe_env.desc=RegC: 开启 safe-env（JNI 函数表快照 + 方法入口恢复；捕获时表已污染则 JNI_OnLoad fail closed）
+mj2x.param.regc.safe_env_debug.desc=RegC: safe-env 调试观察模式（检出 hook 只打告警不 fail，隐含开启 --regc-safe-env）
+mj2x.param.regc.trace_calls.desc=RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）
+mj2x.param.regc.transform_seed.desc=RegC/LLVM: 变换种子（默认 0；决定 state 码/变体选择，同 seed 同产物）
+mj2x.param.runtime.protection.desc=RegC/VMC4/LLVM: 方法入口反侦测检查点（默认 none 不注入；依赖 mj2x-crt rt_protect 模块；LLVM 侧编译时附带 rt_protect 源）
+mj2x.param.runtime.protection_delay_ms.desc=Delay 动作睡眠毫秒数
+mj2x.param.runtime.protection_step.desc=检查点概率触发步长
+mj2x.param.selection.native_annotation.desc=只翻译带目标方法注解的方法（JVM descriptor，如 Lmj2x/Native;）
+mj2x.param.selection.native_method_prefixes.desc=只翻译 owner.name 以指定前缀开头的方法（可重复）
+mj2x.param.stackc.exception_check.desc=StackC pending 异常检查密度（lite 仅保留 handler 边界检查）
+mj2x.param.vmc4.alias.desc=VMC4: 每语义 ALT 别名字节数 0..3（0 关闭别名）
+mj2x.param.vmc4.bogus.desc=VMC4: 注入的不可达假 handler 数 0..4（0 关闭；只污染静态分析不参与执行）
+mj2x.param.vmc4.dispatcher.desc=VMC4(测试性): dispatcher 形态（默认 switch_table；computed_goto 需 GCC/clang 编译）
+mj2x.param.vmc4.drift.desc=VMC4: 执行期 dispatch 变体数 0..4（0 关闭；开启后语义标签按字节偏移周期轮转，unmap 表解码）
+mj2x.param.vmc4.drift_period.desc=VMC4: drift 变体切换周期（字节偏移单位）
+mj2x.param.vmc4.granularity.desc=VMC4: 实例粒度（class 默认；method 每方法独立 VM 实例最强可变性；program 全程序共享一个 VM 实例体积最优）
+mj2x.param.vmc4.seed.desc=VMC4: 主 seed，驱动每实例 opcode 映射/handler 顺序（同 seed 同输入 → 同产物）
+mj2x.param.vmc4.trace_surface.desc=VMC4: 写 expected trace surface 文件（mjdbg 红队契约，同 seed+同输入 → 同内容）

@@ -190,9 +190,15 @@ protected:
 
     void SetUp() override
     {
+#ifdef MJ2X_DISABLE_LLVM_BACKEND
+        // 本构建编译掉了 llvm 后端（--with_mj2x_llvm=n），CLI 会拒绝
+        // --backend llvm，整个 fixture 生成无从进行。
+        GTEST_SKIP() << "LLVM backend is disabled in this build (with_mj2x_llvm=n)";
+#else
         if (!tc_.available) {
             GTEST_SKIP() << "LLVM sample toolchain unavailable: " << tc_.reason;
         }
+#endif
     }
 
     fs::path sampleDir(const std::string& className) const

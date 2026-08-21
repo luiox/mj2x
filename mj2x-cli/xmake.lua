@@ -76,7 +76,7 @@ target("mj2x-cli")
     set_kind("binary")
     set_group("mj2x")
 
-    add_deps("mj2x-core", "libjdk_finder", "libca_process")
+    add_deps("mj2x-core", "libjdk_finder", "libca_process", "libi18n")
     add_packages("nlohmann_json")
 
     -- v2.2 起 LLVM IR 后端默认开启（with_mj2x_llvm=y，见 xmake/options.lua）。
@@ -87,6 +87,8 @@ target("mj2x-cli")
 
     add_files("src/*.cpp")
     add_files("resources/mj2x_crt_sources.mj2xres", {rules = "mj2x.embed-crt-resources"})
+    -- CLI 文案单源表(issue #888):zh_CN 唯一事实源,--lang/MJ2X_LANG 切换。
+    add_files("translations/*.lang", {rules = "i18n.embed-lang"})
     add_includedirs("src")
 
     if is_plat("windows") then

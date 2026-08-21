@@ -336,6 +336,24 @@ schema 导出四处，消灭 help 与 config 文档漂移：
   config、多族参数一次配置）。
 - 文档：`doc/config_file.md`（键表）+ `doc_ai/config_system_design.md`（设计）。
 
+### 7.2 CLI 消息国际化（issue #888）
+
+全部 CLI 用户可见文案（help 头部/参数描述/分组标题/校验错误/配置文件错误/
+schema 与模板文本）走单源翻译表 `mj2x-cli/translations/{zh_CN,en_US}.lang`
+（UTF-8 properties 风格），经 `i18n.embed-lang` rule 生成 constexpr 表嵌入
+二进制（详见 `libs/libi18n/readme.md`）：
+
+- **key 规则**：`mj2x.param.<id>.desc`（由 ParamDef.id 推导）、
+  `mj2x.param.group.<slug>`、`mj2x.cli.err.*` / `mj2x.cli.help.*` 等；
+  `ParamDef` 不再持有 description 字段。
+- **语言解析**：`--lang <code>`（argv 预扫描，先于参数解析生效）>
+  `MJ2X_LANG` 环境变量 > 默认 `zh_CN`；未注册语言回退 `zh_CN`，缺 key 回退
+  `zh_CN` 再回退 key 原样。
+- **三表面同源**：`--help`、`--dump-config-schema` 的 description、
+  `--dump-config-template` 注释同一张表，GUI 消费方随语言切换。
+- 测试：`cli_i18n_test.cpp`（语言解析/回退/错误与 schema 双语）+
+  `cli_test.cpp` `NegativeArgumentsFail` 按语言参数化（zh_CN/en_US 两套期望）。
+
 ## 8. mtest_set 集成（跨产品共享样本）
 
 mj2x 消费 `mtest_set`（全仓库中性 Java 样本库）的 baseline、Wave 1
