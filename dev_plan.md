@@ -234,6 +234,19 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   平台检测所致，`env -u MSYSTEM` 后全过）；E2E 13/13。遗留：Inheritance
   1.41x（checkcast 复用/类名 hash 缓存）、Crypto 1.21x（JDK 侧主导）。
   另修复 main 上 native_compiler.cpp environmentKeyEquals 链接错误。
+- 2026-08-22（#894 LLVM 片段盘点收口 + mj2x-llvmrt 设计定稿,同分支追加）:
+  四后端内嵌代码盘点至此全部完成并定性——**LLVM**(`llvm_ir_helpers.cpp` 1640 行)
+  向每模块发射 ~90 个 `define internal` IR 函数(throw/new/field_load 9kind/
+  array 8kind/box/unbox/monitor/exception/string_const/class_const)。定性:固定体
+  =运行时(IR 手搓 JNI 槽位分发 `getelementptr i64 <slot>`,转 C 反而简化为
+  `(*env)->FindClass` 一行;多数与 vmc4/stackc 运行时语义相同可复用);真模板留
+  发射器:emitIndyBootstrapFunction(per-site)、GlobalStringTable(per-program)、
+  内部互调 @mj2x_llvm_Java_*。**转换设计**:新建 mj2x-rt/src/llvmir/
+  mj2x_llvmir_runtime.{h,c},保持现有符号名与 ABI(i8=jboolean/i16=jchar/jshort),
+  .ll 从 define internal 改 declare-only;addCrtSources 递归收集自动接线。
+  **分阶段原因**:前两轮为零语义风险原样搬运,本轮是 IR→C 重写且 internal→extern
+  失去模块内联(LLVM 直调粒度比解释器分发更敏感),按仓库规约性能变化需先做
+  benchmark+覆盖率审计——物理下沉独立成支,设计已定稿可直接开工。
 - 2026-08-22（#894 运行时/模板分类下沉 round-2，分支 `refactor/mj2x-embed-runtime-split`）：
   按「运行时=固定代码→mj2x-rt 链接消费;模板=生成期动态拼接→发射器」口径完成剩余两类——
   **VMC4 prelude**（slot/call_fn 类型 + div/rem/f2i/throw/exception_matches,原
