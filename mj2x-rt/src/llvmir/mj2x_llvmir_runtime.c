@@ -93,3 +93,59 @@ int mj2x_llvm_ref_eq(JNIEnv* env, void* a, void* b)
 {
     return (*env)->IsSameObject(env, a, b) ? 1 : 0;
 }
+
+// ---- 阶段三:数组族 ----
+
+// 按元素描述符首字符分发:基本类型 → NewXxxArray;否则 FindClass + NewObjectArray。
+void* mj2x_llvm_new_array(JNIEnv* env, const char* desc, int32_t count)
+{
+    switch (desc[1]) {
+    case 'Z': return (*env)->NewBooleanArray(env, count);
+    case 'B': return (*env)->NewByteArray(env, count);
+    case 'C': return (*env)->NewCharArray(env, count);
+    case 'S': return (*env)->NewShortArray(env, count);
+    case 'I': return (*env)->NewIntArray(env, count);
+    case 'J': return (*env)->NewLongArray(env, count);
+    case 'F': return (*env)->NewFloatArray(env, count);
+    case 'D': return (*env)->NewDoubleArray(env, count);
+    default: break;
+    }
+    jclass cls = (*env)->FindClass(env, desc + 1);
+    if (cls == NULL) return NULL;
+    void* arr = (*env)->NewObjectArray(env, count, cls, NULL);
+    (*env)->DeleteLocalRef(env, cls);
+    return arr;
+}
+
+// NewObjectArray 递归(JVM multianewarray 语义):外层一维建好后逐元素递归
+// 填充剩余维度。
+void* mj2x_llvm_new_multi_array(JNIEnv* env, const char* desc, const int32_t* dims, int32_t ndims)
+{
+    const char* edesc = desc + 1;
+    jclass cls = (*env)->FindClass(env, edesc);
+    if (cls == NULL) return NULL;
+    void* arr = (*env)->NewObjectArray(env, dims[0], cls, NULL);
+    if (arr != NULL && ndims > 1) {
+        for (int32_t i = 0; i < dims[0]; i++) {
+            void* elem = mj2x_llvm_new_multi_array(env, edesc, dims + 1, ndims - 1);
+            (*env)->SetObjectArrayElement(env, arr, i, elem);
+        }
+    }
+    (*env)->DeleteLocalRef(env, cls);
+    return arr;
+}
+
+void* mj2x_llvm_new_object_array(JNIEnv* env, int32_t count, void* cls)
+{
+    return (*env)->NewObjectArray(env, count, (jclass)cls, NULL);
+}
+
+void mj2x_llvm_set_object_array_element(JNIEnv* env, void* arr, int32_t idx, void* val)
+{
+    (*env)->SetObjectArrayElement(env, arr, idx, val);
+}
+
+int32_t mj2x_llvm_array_length(JNIEnv* env, void* arr)
+{
+    return (*env)->GetArrayLength(env, arr);
+}

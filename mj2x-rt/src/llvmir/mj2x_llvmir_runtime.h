@@ -34,6 +34,13 @@ MJ2X_LLVMIR_API void mj2x_llvm_throw(JNIEnv* env, void* obj);
 MJ2X_LLVMIR_API void* mj2x_llvm_string_const(JNIEnv* env, const char* utf8);
 MJ2X_LLVMIR_API int mj2x_llvm_ref_eq(JNIEnv* env, void* a, void* b);
 
+// ---- 阶段三:数组族 ----
+MJ2X_LLVMIR_API void* mj2x_llvm_new_array(JNIEnv* env, const char* desc, int32_t count);
+MJ2X_LLVMIR_API void* mj2x_llvm_new_multi_array(JNIEnv* env, const char* desc, const int32_t* dims, int32_t ndims);
+MJ2X_LLVMIR_API void* mj2x_llvm_new_object_array(JNIEnv* env, int32_t count, void* cls);
+MJ2X_LLVMIR_API void mj2x_llvm_set_object_array_element(JNIEnv* env, void* arr, int32_t idx, void* val);
+MJ2X_LLVMIR_API int32_t mj2x_llvm_array_length(JNIEnv* env, void* arr);
+
 #ifdef __cplusplus
 }
 #endif

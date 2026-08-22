@@ -87,87 +87,11 @@ std::string emitObjectHelpers()
     out << "declare ptr @mj2x_llvm_new_object(ptr %env, ptr %name)\n\n";
 
     // new_array：按元素描述符首字符分发 JNI NewXxxArray / NewObjectArray。
-    out << "define internal ptr @mj2x_llvm_new_array(ptr %env, ptr %desc, i32 %count) {\n"
-           "entry:\n"
-           "  %c1 = getelementptr i8, ptr %desc, i64 1\n"
-           "  %t = load i8, ptr %c1\n"
-           "  switch i8 %t, label %obj [\n"
-           "    i8 90, label %bool_\n"
-           "    i8 66, label %byte_\n"
-           "    i8 67, label %char_\n"
-           "    i8 83, label %short_\n"
-           "    i8 73, label %int_\n"
-           "    i8 74, label %long_\n"
-           "    i8 70, label %float_\n"
-           "    i8 68, label %double_\n"
-           "  ]\n";
-    const struct { const char* label; int64_t slot; } primArrays[] = {
-        {"bool_", jni_slot::NewBooleanArray}, {"byte_", jni_slot::NewByteArray},
-        {"char_", jni_slot::NewCharArray},   {"short_", jni_slot::NewShortArray},
-        {"int_", jni_slot::NewIntArray},      {"long_", jni_slot::NewLongArray},
-        {"float_", jni_slot::NewFloatArray},  {"double_", jni_slot::NewDoubleArray},
-    };
-    for (const auto& entry : primArrays) {
-        out << entry.label << ":\n"
-            << "  %ft" << entry.label << " = load ptr, ptr %env\n"
-            << "  %fn" << entry.label << " = getelementptr ptr, ptr %ft" << entry.label
-            << ", i64 " << entry.slot << "\n"
-            << "  %f" << entry.label << " = load ptr, ptr %fn" << entry.label << "\n"
-            << "  %a" << entry.label << " = call ptr %f" << entry.label
-            << "(ptr %env, i32 %count)\n"
-            << "  ret ptr %a" << entry.label << "\n";
-    }
-    out << "obj:\n"
-           "  %ft2 = load ptr, ptr %env\n"
-           "  %fc2 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc2\n"
-           "  %cls = call ptr %find(ptr %env, ptr %c1)\n"
-           "  %ft3 = load ptr, ptr %env\n"
-           "  %na0 = getelementptr ptr, ptr %ft3, i64 " << jni_slot::NewObjectArray << "\n"
-        << "  %naf = load ptr, ptr %na0\n"
-           "  %arr = call ptr %naf(ptr %env, i32 %count, ptr %cls, ptr null)\n"
-           "  ret ptr %arr\n"
-           "}\n\n";
+    // new_array:#894 mj2x-llvmrt 阶段三下沉。
+    out << "declare ptr @mj2x_llvm_new_array(ptr %env, ptr %desc, i32 %count)\n\n";
 
     // new_multi_array：NewObjectArray 递归（JVM EagerAlloc 语义）。
-    out << "define internal ptr @mj2x_llvm_new_multi_array(ptr %env, ptr %desc, ptr %dims, "
-           "i32 %ndims) {\n"
-           "entry:\n"
-           "  %d0p = getelementptr i32, ptr %dims, i64 0\n"
-           "  %d0 = load i32, ptr %d0p\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %edesc = getelementptr i8, ptr %desc, i64 1\n"
-           "  %cls = call ptr %find(ptr %env, ptr %edesc)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %na0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::NewObjectArray << "\n"
-        << "  %naf = load ptr, ptr %na0\n"
-           "  %arr = call ptr %naf(ptr %env, i32 %d0, ptr %cls, ptr null)\n"
-           "  %is1 = icmp eq i32 %ndims, 1\n"
-           "  br i1 %is1, label %done, label %fill\n"
-           "fill:\n"
-           "  %dims1 = getelementptr i32, ptr %dims, i64 1\n"
-           "  %nd1 = sub i32 %ndims, 1\n"
-           "  br label %loop\n"
-           "loop:\n"
-           "  %i = phi i32 [ 0, %fill ], [ %inext, %loopnext ]\n"
-           "  %c = icmp slt i32 %i, %d0\n"
-           "  br i1 %c, label %body, label %done\n"
-           "body:\n"
-           "  %elem = call ptr @mj2x_llvm_new_multi_array(ptr %env, ptr %edesc, ptr %dims1, "
-           "i32 %nd1)\n"
-           "  %ft2 = load ptr, ptr %env\n"
-           "  %se0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::SetObjectArrayElement << "\n"
-        << "  %sef = load ptr, ptr %se0\n"
-           "  call void %sef(ptr %env, ptr %arr, i32 %i, ptr %elem)\n"
-           "  %inext = add i32 %i, 1\n"
-           "  br label %loopnext\n"
-           "loopnext:\n"
-           "  br label %loop\n"
-           "done:\n"
-           "  ret ptr %arr\n"
-           "}\n\n";
+    out << "declare ptr @mj2x_llvm_new_multi_array(ptr %env, ptr %desc, ptr %dims, i32 %ndims)\n\n";
 
     // 字段 load/store helpers（static/instance 合一 + null 检查）。
     for (const auto& k : kinds) {
@@ -434,20 +358,7 @@ std::string emitObjectHelpers()
             << "}\n\n";
     }
     // array_length：null → NPE；GetArrayLength。
-    out << "define internal i32 @mj2x_llvm_array_length(ptr %env, ptr %arr) {\n"
-           "entry:\n"
-           "  %isnull = icmp eq ptr %arr, null\n"
-           "  br i1 %isnull, label %npe, label %ok\n"
-           "ok:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %al0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::GetArrayLength << "\n"
-        << "  %getlen = load ptr, ptr %al0\n"
-           "  %len = call i32 %getlen(ptr %env, ptr %arr)\n"
-           "  ret i32 %len\n"
-           "npe:\n"
-           "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-           "  ret i32 0\n"
-           "}\n\n";
+    out << "declare i32 @mj2x_llvm_array_length(ptr %env, ptr %arr)\n\n";
 
     // JNI 方法调用 helper：CallXxxMethodA（jvalue 数组）。
     // virtual/interface → Call<Type>MethodA；special → CallNonvirtual<Type>MethodA
@@ -865,23 +776,8 @@ std::string emitIndyHelpers()
     out << llvmConstantString("_mj2x_llvm_indy_Lookup", "java/lang/invoke/MethodHandles$Lookup");
 
     // new_object_array / set_object_array_element：Object[] 参数数组承载。
-    out << "define internal ptr @mj2x_llvm_new_object_array(ptr %env, i32 %count, ptr %cls) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %na0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::NewObjectArray << "\n"
-        << "  %na = load ptr, ptr %na0\n"
-           "  %arr = call ptr %na(ptr %env, i32 %count, ptr %cls, ptr null)\n"
-           "  ret ptr %arr\n"
-           "}\n\n";
-    out << "define internal void @mj2x_llvm_set_object_array_element(ptr %env, ptr %arr, "
-           "i32 %idx, ptr %val) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %se0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::SetObjectArrayElement << "\n"
-        << "  %se = load ptr, ptr %se0\n"
-           "  call void %se(ptr %env, ptr %arr, i32 %idx, ptr %val)\n"
-           "  ret void\n"
-           "}\n\n";
+    out << "declare ptr @mj2x_llvm_new_object_array(ptr %env, i32 %count, ptr %cls)\n\n";
+    out << "declare void @mj2x_llvm_set_object_array_element(ptr %env, ptr %arr, i32 %idx, ptr %val)\n\n";
 
     // MethodType.fromMethodDescriptorString(desc, owner.getClassLoader())。
     out << "define internal ptr @mj2x_llvm_indy_method_type(ptr %env, ptr %owner, ptr %desc) {\n"
