@@ -471,6 +471,30 @@ TEST(IOTest, CLoaderPostprocessorAddsSidecarClassForClassOutput)
     EXPECT_TRUE((registerMethod->access & Opcodes::ACC_NATIVE) != 0);
 }
 
+// 可读源码版(mj2x/cloader/Loader.java)与生成器防漂移守卫:关键结构面
+// (方法名/描述符/NativeLoader 调用形态)必须两侧一致;改任一侧需同步另一侧。
+TEST(IOTest, CLoaderJavaReferenceStaysInSyncWithGenerator)
+{
+    namespace fs = std::filesystem;
+    const fs::path source = fs::current_path() / "mj2x" / "cloader" / "Loader.java";
+    ASSERT_TRUE(fs::exists(source)) << source;
+    std::ifstream in(source, std::ios::binary);
+    ASSERT_TRUE(in.is_open());
+    const std::string text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+
+    // 生成器固定发射的方法面(Java 侧签名;JNI 描述符由生成器单测覆盖)。
+    EXPECT_NE(text.find("registerNativesForClass"), std::string::npos) << text;
+    EXPECT_NE(text.find("invokeMethodHandle1"), std::string::npos) << text;
+    EXPECT_NE(text.find("static native void registerNativesForClass(int slot, Class<?> clazz)"),
+              std::string::npos)
+        << text;
+    EXPECT_NE(text.find("invokeMethodHandle1(MethodHandle handle, Object receiver)"),
+              std::string::npos)
+        << text;
+    // clinit 注入的调用形态(资源路径配置时)。
+    EXPECT_NE(text.find("mj2x.runtime.NativeLoader.load"), std::string::npos) << text;
+}
+
 TEST(PipelineTest, PackagedClassSidecarUsesClasspathRoot)
 {
     namespace fs = std::filesystem;
