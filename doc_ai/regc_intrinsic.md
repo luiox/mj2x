@@ -19,7 +19,7 @@ JNI 派发点是 c2j 的攻击锚点之一。intrinsic 把 JDK 常用方法从 J
 RegC emitter (src/mj2x/backend/regc/regc_emitter.cpp)
   └─ Call 分支 → RegCIntrinsicRegistry(owner/name/desc/opcode)
        ├─ Math.*      → mj2x_math_*      (runtime lib,纯计算)
-       ├─ parseInt    → _mj2x_intrinsic_parse_int (emitter TU 内联,需 JNI 取 String)
+        ├─ parseInt    → _mj2x_intrinsic_parse_int (runtime,需 JNI 取 String)
        ├─ Wrapper     → mj2x_* value struct shadow state(仅非逃逸 value/unbox)
        ├─ Random      → mj2x_random shadow state(仅非逃逸 new/init/next*)
        └─ String      → mj2x-rt UTF-16 ABI / mutable opaque state
@@ -32,18 +32,18 @@ runtime (mj2x/runtime/src/intrinsic/)
   └─ intrinsic_string.{hpp,cpp}   最小 UTF-16 view + fail-closed status
 
 distributable CRT (mj2x/mj2x-rt/src/regc/)
+  ├─ mj2x_regc_runtime.{h,c}      RegC 运行时主体(#894 下沉):call/load/store
+  │                               helper、角色单例缓存、TLS env/ctx/owner_class、
+  │                               trace 状态与 intrinsic 实现(string_literal/
+  │                               parse_* 等);生成代码 extern 直访
   ├─ mj2x_regc_string.c           String UTF-16 operations + split fast path
   └─ mj2x_regc_string_builder.c   StringBuilder/StringBuffer opaque state
-
-emitter TU (regc_backend.cpp::emitRuntimeHelpers)
-  ├─ _mj2x_intrinsic_string_literal  NewStringUTF 物化 String LDC
-  └─ _mj2x_intrinsic_parse_int       GetStringUTFChars + strtol + throw 回调
 ```
 
-**为什么 Math 在 runtime、String 相关在 emitter TU**:runtime lib(`mj2x-runtime-core`)
-不依赖 JDK include(Math 是纯 C math.h,String intrinsic 需要 `JNIEnv*` 的
-`NewStringUTF`/`GetStringUTFChars`)。这与现有 `_mj2x_regc_call_*`(也在 emitter TU,
-因需 JNI)一致。
+**为什么 Math 在 runtime lib、JNI 类在 mj2x-rt**:runtime lib(`mj2x-runtime-core`)
+不依赖 JDK include(Math 是纯 C math.h);String intrinsic 与 `_mj2x_regc_call_*`
+需要 `JNIEnv*`,物理下沉在 `mj2x_regc_runtime.c`(#894),随分发 CRT 一起编译,
+不再由 emitter 按 TU 内联。
 
 ## 3. 已覆盖的 JDK 方法(初版)
 

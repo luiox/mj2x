@@ -234,6 +234,19 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   平台检测所致，`env -u MSYSTEM` 后全过）；E2E 13/13。遗留：Inheritance
   1.41x（checkcast 复用/类名 hash 缓存）、Crypto 1.21x（JDK 侧主导）。
   另修复 main 上 native_compiler.cpp environmentKeyEquals 链接错误。
+- 2026-08-22（#894 模板资源化 + B 类真下沉收尾，分支 `refactor/mj2x-embedded-code`）：
+  四批落地——**第一批** stackc runtime prelude 模板资源化 + `c_render` 文本模板渲染器
+  （bfaf462b7）；**第二批** regc `emitRuntimeHelpers` 迁移
+  `resources/codegen/regc_runtime_helpers.c.in`（933a333fb）；**第三批** field/method
+  helper 并入运行时模板、`emitRuntimeHelpers(out, cacheDeclarations, fwd)` 签名收敛
+  （60cad5f0e）；**B 类真下沉** RegC 运行时主体物理下沉 `mj2x-rt/src/regc/
+  mj2x_regc_runtime.{h,c}`——helper/角色单例缓存/TLS env-ctx-owner_class/trace 状态/
+  intrinsic 静态全部去 static 化，头文件 extern 声明，残量模板仅剩
+  `@FORWARD_DECLARATIONS@`/`@CACHE_DECLARATIONS@`，backend 停发 11 个运行时符号、
+  prologue 经 `mj2x_regc_set_trace_call_log` 注入 trace 开关（74f040ebf）。
+  连锁修复：header 变量声明补 `extern`（C++ TU 误定义致 LNK2005）、regc/vmc4 两处
+  e2e 的 cl 链接清单补 `mj2x_regc_runtime.c`（LNK2019）、samples fixture requiredText
+  改为实际调用的 helper。验证：`mj2x_unittest` 全量 **630 过 / 0 fail**。
 - 2026-08-21（round-2 收尾·toString 修正）：**`StringBuilder.toString()` 映射修正为
   to_jstring**——实时隔离定位（非猜测）：独立 hex Driver 反调 `concat()`，返回
   `java.lang.StringBuilder` 对象（`CLASS=java.lang.StringBuilder`）而非 String；

@@ -254,7 +254,7 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 | 模块 | 状态 |
 |---|---|
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
-| `mj2x-rt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;包含 Math、Random 和非逃逸 primitive wrapper intrinsic；无 `libca` 分发依赖 |
+| `mj2x-rt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;包含 Math、Random 和非逃逸 primitive wrapper intrinsic；#894 起 RegC 运行时主体（call/field helper、单例缓存、TLS env、trace）并入 `regc/mj2x_regc_runtime.{h,c}`，生成代码 extern 直访；无 `libca` 分发依赖 |
 | RegC / R3 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String/split 与 opaque StringBuilder/StringBuffer helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
