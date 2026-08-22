@@ -71,7 +71,6 @@ arrays/allocation.
 | `mj2x-core/src/mj2x/codegen/` | C source helpers shared by emitters |
 | `mj2x-core/src/mj2x/preprocessor/` | method marking and bytecode shape preprocessing |
 | `mj2x-rt/src/` | distributable C99/JNI RegC ABI and source pack for generated projects |
-| `mj2x-runtime/src/` | in-tree higher-level runtime: crypto, antidebug, antijvmti, intrinsic helpers |
 | `mj2x-annotations/` | user-facing `@mj2x.Native` annotation |
 | `unittest/` | unit + e2e tests (backends, cli, codegen, core) |
 | `benchmark/` | perf harness (jvm-obf-tester probes vs os30/JNIC) |
@@ -134,9 +133,11 @@ Use VMC4 for:
 
 The runtime is split by distribution boundary. `mj2x-rt` is the sole
 distributable C99/JNI source pack for generated RegC projects; it owns the
-public helper ABI and must not depend on `libca`. `mj2x-runtime` remains the
-in-tree higher-level native support library for RegC development and protected
-samples.
+public helper ABI and must not depend on `libca`. The former in-tree
+`mj2x-runtime` library was retired: its intrinsic surface lives on as
+`mj2x-rt/src/regc/mj2x_regc_intrinsic.c`, and its protection probes were
+ported into `mj2x-rt/src/common/mj2x_rt_protect.c` (see
+`doc_ai/r3_protect_integration.md`).
 
 Current/runtime domains:
 

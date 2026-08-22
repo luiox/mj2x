@@ -1,6 +1,6 @@
 # RegC JDK Intrinsic
 
-> 设计文档:RegC 在码生成阶段把 JDK 常用方法调用识别为 intrinsic,直接调用 runtime ABI 或 TU-local helper 而非走通用 JNI 派发。可分发 C ABI 权威头为 `mj2x-rt/src/regc/mj2x_regc_crt.h`;in-tree intrinsic ABI 在 `mj2x-runtime/src/intrinsic/*.hpp`。
+> 设计文档:RegC 在码生成阶段把 JDK 常用方法调用识别为 intrinsic,直接调用 runtime ABI 或 TU-local helper 而非走通用 JNI 派发。可分发 C ABI 权威头为 `mj2x-rt/src/regc/mj2x_regc_crt.h`;intrinsic 实现统一在 `mj2x-rt/src/regc/mj2x_regc_intrinsic.c`(原 mj2x-runtime in-tree 版已退役)。
 
 ## 1. 目标
 
@@ -18,32 +18,27 @@ JNI 派发点是 c2j 的攻击锚点之一。intrinsic 把 JDK 常用方法从 J
 ```
 RegC emitter (src/mj2x/backend/regc/regc_emitter.cpp)
   └─ Call 分支 → RegCIntrinsicRegistry(owner/name/desc/opcode)
-       ├─ Math.*      → mj2x_math_*      (runtime lib,纯计算)
+       ├─ Math.*      → mj2x_math_*      (纯计算)
         ├─ parseInt    → _mj2x_intrinsic_parse_int (runtime,需 JNI 取 String)
        ├─ Wrapper     → mj2x_* value struct shadow state(仅非逃逸 value/unbox)
        ├─ Random      → mj2x_random shadow state(仅非逃逸 new/init/next*)
        └─ String      → mj2x-rt UTF-16 ABI / mutable opaque state
   未命中 → _mj2x_regc_call_* (原 JNI 路径)
 
-runtime (mj2x/runtime/src/intrinsic/)
-  ├─ intrinsic_wrapper.{hpp,cpp}  包装类 struct + valueOf/xxxValue
-  ├─ intrinsic_math.{hpp,cpp}     Math 纯计算,转发 C math.h
-  ├─ intrinsic_random.{hpp,cpp}   Java 兼容 LCG
-  └─ intrinsic_string.{hpp,cpp}   最小 UTF-16 view + fail-closed status
-
 distributable CRT (mj2x/mj2x-rt/src/regc/)
   ├─ mj2x_regc_runtime.{h,c}      RegC 运行时主体(#894 下沉):call/load/store
   │                               helper、角色单例缓存、TLS env/ctx/owner_class、
   │                               trace 状态与 intrinsic 实现(string_literal/
   │                               parse_* 等);生成代码 extern 直访
+  ├─ mj2x_regc_intrinsic.c        wrapper/Math/Random/位操作 intrinsic 权威实现
+  │                               (原 mj2x-runtime in-tree C++ 版已删除,R3 整合)
   ├─ mj2x_regc_string.c           String UTF-16 operations + split fast path
   └─ mj2x_regc_string_builder.c   StringBuilder/StringBuffer opaque state
 ```
 
-**为什么 Math 在 runtime lib、JNI 类在 mj2x-rt**:runtime lib(`mj2x-runtime-core`)
-不依赖 JDK include(Math 是纯 C math.h);String intrinsic 与 `_mj2x_regc_call_*`
-需要 `JNIEnv*`,物理下沉在 `mj2x_regc_runtime.c`(#894),随分发 CRT 一起编译,
-不再由 emitter 按 TU 内联。
+**为什么全部在 mj2x-rt**:Math 是纯 C math.h;String intrinsic 与
+`_mj2x_regc_call_*` 需要 `JNIEnv*`,物理下沉在 `mj2x_regc_runtime.c`(#894)。
+单一可分发源(mj2x-rt)同时服务生成工程与 e2e 编译链,无双轨实现。
 
 ## 3. 已覆盖的 JDK 方法(初版)
 

@@ -201,12 +201,11 @@ protected:
         fs::create_directories(objDir, ec);
         ASSERT_FALSE(ec) << ec.message();
         fs::path generatedObj = objDir / "generated.obj";
-        fs::path runtimeSrc   = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
         fs::path crtSrc       = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
 
-        // Generated RegC includes the distributable CRT ABI directly. The
-        // remaining runtime sources only back non-CRT Math/Random/shadow
-        // intrinsic surfaces.
+        // Generated RegC includes the distributable CRT ABI directly.
+        // wrapper/Math/Random/位操作 intrinsic 全部在 crt 的
+        // mj2x_regc_intrinsic.c（可分发 C99 版，生成工程同源）。
         std::vector<std::string> compileLines;
         // vcvarsall.bat 需带 x64 参数（libjdk_finder 返回 vcvarsall.bat）。
         compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
@@ -215,18 +214,6 @@ protected:
                                q(tc_.jdkIncludeWin));
 
         std::vector<fs::path> runtimeObjs;
-        auto                  compileRuntime = [&](const std::string& relPath,
-                                  const std::string& objName,
-                                  const std::string& extraFlags = "") {
-            fs::path src = runtimeSrc / relPath;
-            ASSERT_TRUE(fileExists(src)) << src;
-            fs::path obj = objDir / objName;
-            runtimeObjs.push_back(obj);
-            compileLines.push_back("cl /nologo /O2 /c /Fo" + q(obj) + " " + q(src) +
-                                   (extraFlags.empty() ? "" : " " + extraFlags) + " /I" +
-                                   q(runtimeSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
-                                   q(tc_.jdkIncludeWin));
-        };
         auto compileCrt = [&](const std::string& relPath, const std::string& objName) {
             fs::path src = crtSrc / relPath;
             ASSERT_TRUE(fileExists(src)) << src;

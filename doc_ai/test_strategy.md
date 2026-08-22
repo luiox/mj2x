@@ -162,9 +162,9 @@ src/unittest/
         └── stackc_backend_legacy_test.cpp  — legacy StackC（仅历史计划；当前未使用）
 ```
 
-runtime 测试（R3）单独组织在 `runtime/test/`，由 `mj2x_runtime_test`
-运行。`mj2x-runtime-core` 不依赖 JDK，便于 crypto/kernel/anti/stringpool
-快速单测；`jni_lib` 是后续 JNI 集成用共享库包装。
+runtime 纯逻辑单测（R3）随 `mj2x_rt_test` 运行（如
+`mj2x_rt_protect_probe_test.c` 的探测解码器用例）；原 `mj2x-runtime`
+独立测试树已随该库退役。
 
 ---
 

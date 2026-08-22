@@ -4,5 +4,4 @@
 includes("mj2x-core")
 includes("mj2x-cli")
 includes("mj2x-rt")
-includes("mj2x-runtime")
 includes("unittest")

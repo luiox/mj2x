@@ -28,7 +28,7 @@ native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <
 - `mj2x-core/src/mj2x/backend/` — StackCBackend / RegCBackend / Vmc4Backend / LlvmIrBackend(标量子集,默认开启;`with_mj2x_llvm=n` 可关闭)
 - `mj2x-core/src/mj2x/preprocessor/` — 可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll / NativeAnnotation)
 - `mj2x-annotations/` — 用户可引入的 `@mj2x.Native` 注解源码
-- `mj2x-runtime/` — RegC R3 runtime(crypto / kernel / stringpool / antidebug / antijvmti)
+
 - `mj2x-rt/` — C 运行时(regc/vmc4 生成工程内嵌源,含 safe-env、rt_protect 反侦测)
 - `unittest/` — 单元测试 + E2E(backend / cli / codegen / core)
 - `benchmark/` — 性能基准(jvm-obf-tester 13-probe vs os30,JNIC 对比)

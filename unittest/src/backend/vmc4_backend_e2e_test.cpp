@@ -365,8 +365,7 @@ private:
         fs::create_directories(objDir, ec);
         std::vector<std::string> compileLines;
         compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
-        fs::path crtSrc     = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
-        fs::path runtimeSrc = fs::current_path() / "mj2x" / "mj2x-runtime" / "src";
+        fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
         if (backendName == "regc") {
             fs::path generatedObj = objDir / "generated.obj";
             compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(generatedObj) + " " +
@@ -381,24 +380,14 @@ private:
                                        " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
                                        q(tc_.jdkIncludeWin));
             };
-            auto compileRuntime = [&](const std::string& rel, const std::string& objName) {
-                fs::path src = runtimeSrc / rel;
-                fs::path obj = objDir / objName;
-                objs.push_back(obj);
-                // /utf-8:runtime intrinsic 源含中文注释,GBK 误读会破坏语法
-                // (与上方 compileCrt/generatedObj 行一致)。
-                compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(obj) + " " + q(src) +
-                                       " /I" + q(runtimeSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
-                                       q(tc_.jdkIncludeWin));
-            };
             compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
             compileCrt("regc/mj2x_regc_runtime.c", "mj2x_regc_runtime.obj");
             compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
             compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
             compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
-            compileRuntime("intrinsic/intrinsic_wrapper.cpp", "intrinsic_wrapper.obj");
-            compileRuntime("intrinsic/intrinsic_math.cpp", "intrinsic_math.obj");
-            compileRuntime("intrinsic/intrinsic_random.cpp", "intrinsic_random.obj");
+            // wrapper/Math/Random intrinsic 与 RegC 同源:可分发 C99 版
+            // mj2x_regc_intrinsic.c(mj2x-runtime 历史 in-tree 版已删除)。
+            compileCrt("regc/mj2x_regc_intrinsic.c", "mj2x_regc_intrinsic.obj");
             std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
             for (const auto& obj : objs) linkLine += " " + q(obj);
             compileLines.push_back(linkLine);

@@ -234,6 +234,12 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   平台检测所致，`env -u MSYSTEM` 后全过）；E2E 13/13。遗留：Inheritance
   1.41x（checkcast 复用/类名 hash 缓存）、Crypto 1.21x（JDK 侧主导）。
   另修复 main 上 native_compiler.cpp environmentKeyEquals 链接错误。
+- 2026-08-22（mj2x-runtime 整树退役,R3 整合收尾,同支追加）:删除
+  `mj2x/mj2x-runtime/`(intrinsic C++ 四件套由 `mj2x_regc_intrinsic.c` 接管,
+  余 4 符号核实零消费弃用;保护模块探测已移植 rt_protect;jni_lib/runtime_entry
+  为 aspirational 死代码);`mj2x/xmake.lua` 移除 includes;regc e2e 清死代码
+  lambda,vmc4 parity 改链 crt intrinsic(与生成工程同源);capabilities/readme/
+  architecture/test_strategy/regc_intrinsic/样例 README 收敛。
 - 2026-08-22（mj2x-runtime 处置定案 + R3 保护探测移植实施,分支
   `feat/mj2x-rt-protect-probes`）:intrinsic C++ 四件套 49 符号中 45 个与
   `mj2x_regc_intrinsic.c` 重复;crypto/kernel/antidebug/antijvmti/detection/

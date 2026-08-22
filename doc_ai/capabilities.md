@@ -281,7 +281,6 @@ mj2x/
 ├── mj2x-core/src/mj2x/      核心库(include 根 = src,内层 mj2x/ 保留 → 98 处 include 零改动)
 ├── mj2x-cli/src/             CLI 入口
 ├── mj2x-rt/src/             可分发 C99/JNI RegC ABI source pack
-├── mj2x-runtime/src/         in-tree native runtime(crypto/kernel/intrinsic/...)
 ├── unittest/src/             单测
 ```
 
@@ -309,8 +308,7 @@ mj2x/
 |---|---|
 | 字节码转 native | `mj2x/mj2x-core/src/mj2x/backend/{stackc,regc}/` |
 | 可分发 RegC 运行时 ABI | `mj2x/mj2x-rt/src/regc/` + `mj2x/mj2x-rt/rt.resources` |
-| native 运行时 | `mj2x/mj2x-runtime/src/` |
-| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-runtime/src/intrinsic/` + `mj2x/mj2x-rt/src/regc/` |
+| RegC JDK intrinsic | `mj2x/mj2x-core/src/mj2x/backend/regc/` + `mj2x/mj2x-rt/src/regc/` |
 | 方法选择与 CLI native 编译 | `mj2x/mj2x-cli/` |
 | 用户注解包 | `mj2x/mj2x-annotations/` |
 | 配置系统（参数注册表） | `mj2x/mj2x-cli/src/param_registry.{hpp,cpp}` + `mj2x/doc/config_file.md` |

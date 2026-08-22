@@ -35,7 +35,7 @@ intrinsics.  For these call sites the generated C must NOT emit
 `_mj2x_regc_call_*` JNI dispatch; instead mjdbg should observe:
 
 - `java.lang.Math.*` -> `mj2x_math_*` runtime symbols (abs/min/max/sin/cos/
-  sqrt/pow/floor/ceil/round/random), resolved against `mj2x-runtime-core`
+  sqrt/pow/floor/ceil/round/random), resolved against `mj2x-rt` (`regc/mj2x_regc_intrinsic.c`)
 - `Integer.parseInt(String)` -> `_mj2x_intrinsic_parse_int` (the only JNI
   touchpoint of the parseInt path is `GetStringUTFChars` inside that helper)
 - String LDC -> `_mj2x_intrinsic_string_literal` (calls `NewStringUTF`)

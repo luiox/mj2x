@@ -1,7 +1,8 @@
 # R3 保护模块整合设计(mj2x-runtime → mj2x-rt)
 
-> 状态:**探测移植已实施**(分支 `feat/mj2x-rt-protect-probes`);mj2x-runtime 整树
-> 删除待后续 commit。背景见 dev_plan 2026-08-22 条目与 #894 运行时/模板分离。
+> 状态:**已完成**——探测移植与 mj2x-runtime 整树删除同支实施
+> (`feat/mj2x-rt-protect-probes`)。背景见 dev_plan 2026-08-22 条目与
+> #894 运行时/模板分离。
 
 ## 现状
 
@@ -58,11 +59,11 @@ sha256/HKDF + stringpool 解码支撑"常量池加密"发射器特性(stackc `_m
 
 ## 实施步骤
 
-1. 新建分支,按清单 1-4 逐项移植,每项独立 commit + 单测
-   (探测逻辑注入测试:伪造 PEB/maps 文本/上下文,沿用 anti_test.cpp 的用例骨架)。
-2. 删除 `mj2x/mj2x-runtime/` 整树与 `mj2x_runtime_test` 目标;
-   intrinsic 四件套由 `mj2x-rt/src/regc/mj2x_regc_intrinsic.c` 接管(45/49 符号
-   已覆盖,余 4 个符号核实无消费后弃)。
-3. regc/vmc4 e2e 的 `compileRuntime("intrinsic/*.cpp")` 清单移除。
-4. capabilities.md 删 runtime core 行、readme/regc_intrinsic.md 结构收敛;
+1. ✅ 新建分支,按清单逐项移植,纯解码器单测(`mj2x_rt_protect_probe_test.c`)。
+2. ✅ 删除 `mj2x/mj2x-runtime/` 整树与 `mj2x_runtime_test` 目标;
+   intrinsic 由 `mj2x-rt/src/regc/mj2x_regc_intrinsic.c` 接管(49 符号中 45 个
+   已覆盖,余 4 个符号核实零消费弃用)。
+3. ✅ regc/vmc4 e2e 的 `compileRuntime("intrinsic/*.cpp")` 清单移除,
+   vmc4 parity 改链 `mj2x_regc_intrinsic.c`(与生成工程同源)。
+4. ✅ capabilities/readme/architecture/test_strategy/样例 README 收敛;
    dev_plan 记录验证数据。
