@@ -24,6 +24,16 @@ MJ2X_LLVMIR_API void mj2x_llvm_throw_arith(JNIEnv* env);
 MJ2X_LLVMIR_API jobject mj2x_llvm_exception_occurred(JNIEnv* env);
 MJ2X_LLVMIR_API void mj2x_llvm_exception_clear(JNIEnv* env);
 
+// ---- 阶段二 ----
+MJ2X_LLVMIR_API void* mj2x_llvm_new_object(JNIEnv* env, const char* name);
+MJ2X_LLVMIR_API void* mj2x_llvm_check_cast(JNIEnv* env, void* obj, const char* desc);
+MJ2X_LLVMIR_API int32_t mj2x_llvm_instance_of(JNIEnv* env, void* obj, const char* desc);
+MJ2X_LLVMIR_API int mj2x_llvm_exception_check(JNIEnv* env);
+MJ2X_LLVMIR_API int mj2x_llvm_exception_matches(JNIEnv* env, void* ex, const char* catch_type);
+MJ2X_LLVMIR_API void mj2x_llvm_throw(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API void* mj2x_llvm_string_const(JNIEnv* env, const char* utf8);
+MJ2X_LLVMIR_API int mj2x_llvm_ref_eq(JNIEnv* env, void* a, void* b);
+
 #ifdef __cplusplus
 }
 #endif

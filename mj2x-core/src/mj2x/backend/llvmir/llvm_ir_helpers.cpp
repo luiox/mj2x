@@ -83,18 +83,8 @@ std::string emitObjectHelpers()
     out << "declare void @mj2x_llvm_throw_null(ptr %env)\n\n";
 
     // new_object：FindClass + AllocObject（不调用 <init>；构造器由 invokespecial 处理）。
-    out << "define internal ptr @mj2x_llvm_new_object(ptr %env, ptr %name) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %findclass = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %findclass(ptr %env, ptr %name)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %ao0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::AllocObject << "\n"
-        << "  %allocobject = load ptr, ptr %ao0\n"
-           "  %obj = call ptr %allocobject(ptr %env, ptr %cls)\n"
-           "  ret ptr %obj\n"
-           "}\n\n";
+    // new_object:#894 mj2x-llvmrt 阶段二下沉 mj2x-rt,模块携带 declare。
+    out << "declare ptr @mj2x_llvm_new_object(ptr %env, ptr %name)\n\n";
 
     // new_array：按元素描述符首字符分发 JNI NewXxxArray / NewObjectArray。
     out << "define internal ptr @mj2x_llvm_new_array(ptr %env, ptr %desc, i32 %count) {\n"
@@ -566,97 +556,25 @@ std::string emitObjectHelpers()
     }
 
     // check_cast：IsInstanceOf == 0 → 挂起 ClassCastException；返回原引用。
-    out << "define internal ptr @mj2x_llvm_check_cast(ptr %env, ptr %obj, ptr %desc) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %findclass = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %findclass(ptr %env, ptr %desc)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
-        << "  %isinstanceof = load ptr, ptr %ii0\n"
-           "  %ok = call i32 %isinstanceof(ptr %env, ptr %obj, ptr %cls)\n"
-           "  %bad = icmp eq i32 %ok, 0\n"
-           "  br i1 %bad, label %fail, label %done\n"
-           "fail:\n"
-           "  %ft2 = load ptr, ptr %env\n"
-           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
-        << "  %thrownew = load ptr, ptr %tn0\n"
-           "  %rc = call i32 %thrownew(ptr %env, ptr @_mj2x_llvm_obj_cce, ptr @_mj2x_llvm_obj_null)\n"
-           "  br label %done\n"
-           "done:\n"
-           "  ret ptr %obj\n"
-           "}\n\n";
+    // check_cast:#894 mj2x-llvmrt 阶段二下沉(失败路径按 JVM 语义抛 CCE)。
+    out << "declare ptr @mj2x_llvm_check_cast(ptr %env, ptr %obj, ptr %desc)\n\n";
 
     // instance_of：IsInstanceOf → i32 0/1（intrinsic "instanceof:<desc>"）。
-    out << "define internal i32 @mj2x_llvm_instance_of(ptr %env, ptr %obj, ptr %desc) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %findclass = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %findclass(ptr %env, ptr %desc)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
-        << "  %isinstanceof = load ptr, ptr %ii0\n"
-           "  %ok = call i32 %isinstanceof(ptr %env, ptr %obj, ptr %cls)\n"
-           "  ret i32 %ok\n"
-           "}\n\n";
+    // instance_of:#894 mj2x-llvmrt 阶段二下沉。
+    out << "declare i32 @mj2x_llvm_instance_of(ptr %env, ptr %obj, ptr %desc)\n\n";
 
     // 异常基础设施：ExceptionCheck/Occurred/Clear/Matches（catch 类型匹配，
     // 空串 = catch-all/finally）/Throw（athrow；null → NPE）。
-    out << "define internal i1 @mj2x_llvm_exception_check(ptr %env) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %ec0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ExceptionCheck << "\n"
-        << "  %check = load ptr, ptr %ec0\n"
-           "  %c = call i32 %check(ptr %env)\n"
-           "  %r = icmp ne i32 %c, 0\n"
-           "  ret i1 %r\n"
-           "}\n\n";
+    // exception_check:#894 mj2x-llvmrt 阶段二下沉。
+    out << "declare i1 @mj2x_llvm_exception_check(ptr %env)\n\n";
     // exception_occurred/clear:#894 mj2x-llvmrt 阶段一下沉 mj2x-rt
     // (src/llvmir/mj2x_llvmir_runtime.c),模块只携带 declare。
     out << "declare ptr @mj2x_llvm_exception_occurred(ptr %env)\n\n";
     out << "declare void @mj2x_llvm_exception_clear(ptr %env)\n\n";
-    out << "define internal i1 @mj2x_llvm_exception_matches(ptr %env, ptr %ex, ptr %catch) {\n"
-           "entry:\n"
-           "  %c0 = load i8, ptr %catch\n"
-           "  %isempty = icmp eq i8 %c0, 0\n"
-           "  br i1 %isempty, label %yes, label %cls\n"
-           "cls:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %c = call ptr %find(ptr %env, ptr %catch)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
-        << "  %isinst = load ptr, ptr %ii0\n"
-           "  %m = call i32 %isinst(ptr %env, ptr %ex, ptr %c)\n"
-           "  %r = icmp ne i32 %m, 0\n"
-           "  ret i1 %r\n"
-           "yes:\n"
-           "  ret i1 true\n"
-           "}\n\n";
-    out << "define internal void @mj2x_llvm_throw(ptr %env, ptr %obj) {\n"
-           "entry:\n"
-           "  %isnull = icmp eq ptr %obj, null\n"
-           "  br i1 %isnull, label %npe, label %ok\n"
-           "ok:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %th0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::Throw << "\n"
-        << "  %throw = load ptr, ptr %th0\n"
-           "  %rc = call i32 %throw(ptr %env, ptr %obj)\n"
-           "  ret void\n"
-           "npe:\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %find(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
-           "  %ft2 = load ptr, ptr %env\n"
-           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
-        << "  %thrownew = load ptr, ptr %tn0\n"
-           "  %rc2 = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
-           "  ret void\n"
-           "}\n\n";
+    // exception_matches:#894 mj2x-llvmrt 阶段二下沉。
+    out << "declare i1 @mj2x_llvm_exception_matches(ptr %env, ptr %ex, ptr %catch)\n\n";
+    // throw(athrow):#894 mj2x-llvmrt 阶段二下沉。
+    out << "declare void @mj2x_llvm_throw(ptr %env, ptr %obj)\n\n";
     // 按类名抛新异常（FindClass + ThrowNew）：发射端预检类语义陷阱用
     //（如 Random.nextInt(bound<=0) 的 IllegalArgumentException）。
     out << "define internal void @mj2x_llvm_throw_new(ptr %env, ptr %cls_name, ptr %msg) {\n"
@@ -669,25 +587,12 @@ std::string emitObjectHelpers()
            "  ret void\n"
            "}\n\n";
     // String/Class 常量：NewStringUTF（modified UTF-8 字节）/ FindClass。
-    out << "define internal ptr @mj2x_llvm_string_const(ptr %env, ptr %utf8) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %ns0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::NewStringUTF << "\n"
-        << "  %newstr = load ptr, ptr %ns0\n"
-           "  %s = call ptr %newstr(ptr %env, ptr %utf8)\n"
-           "  ret ptr %s\n"
-           "}\n\n";
+    // string_const:#894 mj2x-llvmrt 阶段二下沉。
+    out << "declare ptr @mj2x_llvm_string_const(ptr %env, ptr %utf8)\n\n";
     // 引用同一性比较：JNI local ref 是句柄，同一对象经两次 JNI 调用返回的句柄
     // 指针不一定相等（对齐 RegC regc_flow.cpp 的 IsSameObject 语义）。
-    out << "define internal i1 @mj2x_llvm_ref_eq(ptr %env, ptr %a, ptr %b) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %so0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::IsSameObject << "\n"
-        << "  %same = load ptr, ptr %so0\n"
-           "  %r = call i32 %same(ptr %env, ptr %a, ptr %b)\n"
-           "  %c = icmp ne i32 %r, 0\n"
-           "  ret i1 %c\n"
-           "}\n\n";
+    // ref_eq:#894 mj2x-llvmrt 阶段二下沉。
+    out << "declare i1 @mj2x_llvm_ref_eq(ptr %env, ptr %a, ptr %b)\n\n";
     // 类常量：普通名 FindClass；基本类型描述符（V/Z/B/C/S/I/J/F/D）→
     // Void.class / 包装类 TYPE 字段（ldc class I 等 javac 形态，FindClass("I")
     // 会抛 ClassNotFoundException）。
