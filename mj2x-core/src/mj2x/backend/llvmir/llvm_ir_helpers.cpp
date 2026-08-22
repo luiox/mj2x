@@ -14,22 +14,10 @@ using namespace jbytecode::tree;
 
 std::string emitThrowArithmeticHelper()
 {
-    return "@_mj2x_llvm_str_arith_ex = private unnamed_addr constant [30 x i8] "
-           "c\"java/lang/ArithmeticException\\00\"\n"
-           "@_mj2x_llvm_str_div_by_zero = private unnamed_addr constant [10 x i8] "
-           "c\"/ by zero\\00\"\n\n"
-           "define internal void @mj2x_llvm_throw_arith(ptr %env) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 6\n"
-           "  %findclass = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %findclass(ptr %env, ptr @_mj2x_llvm_str_arith_ex)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %tn0 = getelementptr ptr, ptr %ft1, i64 14\n"
-           "  %thrownew = load ptr, ptr %tn0\n"
-           "  %rc = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_str_div_by_zero)\n"
-           "  ret void\n"
-           "}\n\n";
+    // throw_arith:#894 mj2x-llvmrt 阶段一下沉 mj2x-rt
+    // (src/llvmir/mj2x_llvmir_runtime.c);私有字符串常量随实现走,模块只
+    // 携带 declare。
+    return "declare void @mj2x_llvm_throw_arith(ptr %env)\n\n";
 }
 
 /// @brief JNIEnv 函数表槽位（本机 jni.h 精确提取 + reserved0-3 偏移）。
@@ -90,19 +78,9 @@ std::string emitObjectHelpers()
     out << "@_mj2x_llvm_obj_null = private unnamed_addr constant ["
         << (std::strlen(nullMsg) + 1) << " x i8] c\"" << nullMsg << "\\00\"\n\n";
 
-    // throw_null：NPE。
-    out << "define internal void @mj2x_llvm_throw_null(ptr %env) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %findclass = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %findclass(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %tn0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::ThrowNew << "\n"
-        << "  %thrownew = load ptr, ptr %tn0\n"
-           "  %rc = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
-           "  ret void\n"
-           "}\n\n";
+    // throw_null:#894 mj2x-llvmrt 阶段一下沉 mj2x-rt;后续 helper 体仍以
+    // 调用点引用它,模块携带 declare。
+    out << "declare void @mj2x_llvm_throw_null(ptr %env)\n\n";
 
     // new_object：FindClass + AllocObject（不调用 <init>；构造器由 invokespecial 处理）。
     out << "define internal ptr @mj2x_llvm_new_object(ptr %env, ptr %name) {\n"
@@ -635,22 +613,10 @@ std::string emitObjectHelpers()
            "  %r = icmp ne i32 %c, 0\n"
            "  ret i1 %r\n"
            "}\n\n";
-    out << "define internal ptr @mj2x_llvm_exception_occurred(ptr %env) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %eo0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ExceptionOccurred << "\n"
-        << "  %occ = load ptr, ptr %eo0\n"
-           "  %ex = call ptr %occ(ptr %env)\n"
-           "  ret ptr %ex\n"
-           "}\n\n";
-    out << "define internal void @mj2x_llvm_exception_clear(ptr %env) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %cl0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ExceptionClear << "\n"
-        << "  %clear = load ptr, ptr %cl0\n"
-           "  call void %clear(ptr %env)\n"
-           "  ret void\n"
-           "}\n\n";
+    // exception_occurred/clear:#894 mj2x-llvmrt 阶段一下沉 mj2x-rt
+    // (src/llvmir/mj2x_llvmir_runtime.c),模块只携带 declare。
+    out << "declare ptr @mj2x_llvm_exception_occurred(ptr %env)\n\n";
+    out << "declare void @mj2x_llvm_exception_clear(ptr %env)\n\n";
     out << "define internal i1 @mj2x_llvm_exception_matches(ptr %env, ptr %ex, ptr %catch) {\n"
            "entry:\n"
            "  %c0 = load i8, ptr %catch\n"
