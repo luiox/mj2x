@@ -21,20 +21,10 @@
 namespace mj2x {
 
 void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cacheDeclarations,
-                        const std::string& stringClassCacheName,
-                        const std::string& objectToStringMethodCacheName,
-                        const std::string& stringValueOfFloatMethodCacheName,
-                        const std::string& stringValueOfDoubleMethodCacheName,
-                        const std::string& floatParseFloatMethodCacheName,
-                        const std::string& doubleParseDoubleMethodCacheName,
-                        const std::string& nullPointerExceptionClassCacheName,
-                        const std::string& classCastExceptionClassCacheName,
-                        const std::string& outOfMemoryErrorClassCacheName,
-                        const std::string& stringIndexOutOfBoundsClassCacheName,
-                        const std::string& unsupportedOperationExceptionClassCacheName,
-                        bool traceCallLog, codegen::CForwardDeclarations* fwd)
+                        codegen::CForwardDeclarations* fwd)
 {
-    // 模板主体见 resources/codegen/regc_runtime_helpers.c.in(#894)。
+    // 残量模板见 resources/codegen/regc_runtime_helpers.c.in(#894 B 类真下沉):
+    // 主体已物理下沉 mj2x-rt,此处仅注入 fwd 前向声明与 per-callsite 缓存声明。
     const auto* bundle = resources::bundle("codegen");
     if (bundle == nullptr) {
         CA_LOGT_ERROR("codegen", "codegen template mount is unavailable\n");
@@ -49,34 +39,7 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
     std::unordered_map<std::string, std::string> values;
     values["FORWARD_DECLARATIONS"] =
         (fwd != nullptr && !fwd->empty()) ? fwd->render() + "\n" : "";
-    values["CACHE_DECLARATIONS"]                     = cacheDeclarations;
-    values["STRING_CLASS_CACHE"]                     = stringClassCacheName;
-    values["OBJECT_TO_STRING_METHOD_CACHE"]          = objectToStringMethodCacheName;
-    values["STRING_VALUE_OF_FLOAT_METHOD_CACHE"]     = stringValueOfFloatMethodCacheName;
-    values["STRING_VALUE_OF_DOUBLE_METHOD_CACHE"]    = stringValueOfDoubleMethodCacheName;
-    values["FLOAT_PARSE_FLOAT_METHOD_CACHE"]         = floatParseFloatMethodCacheName;
-    values["DOUBLE_PARSE_DOUBLE_METHOD_CACHE"]       = doubleParseDoubleMethodCacheName;
-    values["NULL_POINTER_EXCEPTION_CLASS_CACHE"]     = nullPointerExceptionClassCacheName;
-    values["CLASS_CAST_EXCEPTION_CLASS_CACHE"]       = classCastExceptionClassCacheName;
-    values["OUT_OF_MEMORY_ERROR_CLASS_CACHE"]        = outOfMemoryErrorClassCacheName;
-    values["STRING_INDEX_OUT_OF_BOUNDS_CLASS_CACHE"] = stringIndexOutOfBoundsClassCacheName;
-    values["UNSUPPORTED_OPERATION_CLASS_CACHE"]      = unsupportedOperationExceptionClassCacheName;
-    // traceCallLog 条件块(#894):trace 变体注入 dbg 深度追踪 + 带日志的
-    // call_cached_instance_void;否则发射无日志变体。文本与原实现逐字节一致。
-    values["TRACE_VOID_BLOCK"] =
-        traceCallLog
-            ? R"mj2x(static _Thread_local int _mj2x_regc_dbg_depth = 0;
-static void _mj2x_regc_dbg_enter(const char* owner, const char* name, const char* desc) {
-    _mj2x_regc_dbg_depth++;
-    if (_mj2x_regc_dbg_depth > 64) {
-        fprintf(stderr, "DEEP[%d] %s.%s%s\n", _mj2x_regc_dbg_depth, owner, name, desc);
-    }
-}
-static void _mj2x_regc_dbg_leave() { _mj2x_regc_dbg_depth--; }
-static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return; fprintf(stderr, "[CALL:%p] %s.%s%s\n", (void*)_mj2x_regc_env, cache->owner, cache->name, cache->desc); _mj2x_regc_dbg_enter(cache->owner, cache->name, cache->desc); (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); _mj2x_regc_dbg_leave(); }
-)mj2x"
-            : R"mj2x(static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return; } jmethodID m = _mj2x_regc_cached_instance_method(cache, receiver); if (m == NULL) return; (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }
-)mj2x";
+    values["CACHE_DECLARATIONS"] = cacheDeclarations;
 
     std::string rendered;
     std::string err;
@@ -84,7 +47,7 @@ static void _mj2x_regc_call_cached_instance_void(mj2x_regc_instance_method_cache
             std::string_view{reinterpret_cast<const char*>(tpl.unwrap().data()),
                              tpl.unwrap().size()},
             values, {}, rendered, err)) {
-        CA_LOGT_ERROR("codegen", "cannot render regc runtime helpers: {}\n", err.c_str());
+        CA_LOGT_ERROR("codegen", "cannot render regc runtime residual: {}\n", err.c_str());
         return;
     }
     out.append(rendered.data(), rendered.size());

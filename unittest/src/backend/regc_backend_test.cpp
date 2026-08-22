@@ -305,28 +305,30 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
         countSubstring(
             source, "{\"java/lang/Object\", \"toString\", \"()Ljava/lang/String;\", NULL, NULL, "
                     "NULL, NULL}"),
-        1u)
+        0u)
         << source;
     EXPECT_EQ(
         countSubstring(
             source, "{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
-        1u)
+        0u)
         << source;
     EXPECT_EQ(
         countSubstring(
             source, "{\"java/lang/String\", \"valueOf\", \"(D)Ljava/lang/String;\", NULL, NULL}"),
-        1u)
+        0u)
         << source;
     EXPECT_EQ(countSubstring(source, "{\"Foo\", NULL}"), 1u) << source;
     EXPECT_EQ(countSubstring(source, "{\"java/lang/CharSequence\", NULL}"), 1u) << source;
     EXPECT_EQ(countSubstring(source, "{\"java/lang/String\", NULL}"), 1u) << source;
     EXPECT_EQ(countSubstring(source, "{\"[Ljava/lang/String;\", NULL}"), 1u) << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/NullPointerException\", NULL}"), 1u) << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/ClassCastException\", NULL}"), 1u) << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/OutOfMemoryError\", NULL}"), 1u) << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/StringIndexOutOfBoundsException\", NULL}"), 1u)
+    // #894 B 类真下沉:角色单例缓存(toString/valueOf/异常类等)收敛进
+    // mj2x_regc_runtime.c 的固定实例,生成 TU 计数归零。
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/NullPointerException\", NULL}"), 0u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/ClassCastException\", NULL}"), 0u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/OutOfMemoryError\", NULL}"), 0u) << source;
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/StringIndexOutOfBoundsException\", NULL}"), 0u)
         << source;
-    EXPECT_EQ(countSubstring(source, "{\"java/lang/UnsupportedOperationException\", NULL}"), 1u)
+    EXPECT_EQ(countSubstring(source, "{\"java/lang/UnsupportedOperationException\", NULL}"), 0u)
         << source;
     EXPECT_EQ(source.find("FindClass(_mj2x_regc_env, \"java/lang/NullPointerException\")"),
               std::string::npos)

@@ -346,7 +346,7 @@ std::string emitFailureBody(const std::string& reason, PrimitiveKind retKind)
 /// @param safeEnvDebug   safe-env 调试观察模式（检出只记录不 fail）。
 std::string emitNativeMethod(const std::string& className, const MethodNode& method,
                              const RegCEmitResult& emitted, std::string& cFuncName,
-                             bool safeEnvEnabled, bool safeEnvDebug)
+                             bool safeEnvEnabled, bool safeEnvDebug, bool traceCallLog)
 {
     const std::string methodName = method.name.to_std_string();
     const std::string methodDesc = method.desc.to_std_string();
@@ -420,6 +420,10 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
             out.emitLine(line.build());
         }
         out.emitLine("mj2x_regc_init_context(&_mj2x_regc_ctx, env, _mj2x_regc_throw_runtime);");
+        if (traceCallLog) {
+            // --trace-call-log:运行时开关(#894 B 类下沉后由 mj2x-rt 实现)
+            out.emitLine("mj2x_regc_set_trace_call_log(1);");
+        }
 
         if (!emitted.ok) {
             const std::string failure = emitFailureBody(emitted.reason, retKind);
@@ -767,7 +771,8 @@ ca::str::Utf8StringBuilder methodSource;
     methodSource.append("\n");
     {
         const std::string wrapper = emitNativeMethod(className, *mn, emitted, cFuncName,
-                                                     impl_->safeEnvEnabled, impl_->safeEnvDebug);
+                                                     impl_->safeEnvEnabled, impl_->safeEnvDebug,
+                                                     impl_->traceCallLog);
         methodSource.append(wrapper.data(), wrapper.size());
     }
 
@@ -1363,6 +1368,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
     includes.addSystem("string.h");
     includes.addSystem("errno.h");
     includes.addProject("regc/mj2x_regc_crt.h");
+    includes.addProject("regc/mj2x_regc_runtime.h");
     includes.addProject("regc/mj2x_regc_safe_env.h");
     if (runtimeProtection_.enabled()) {
         includes.addProject("rt_protect/mj2x_rt_protect.h");
@@ -1376,33 +1382,6 @@ void RegCBackend::finalize(const CompilerIndex& index)
     }
     full.append("\n");
     using ca::str::ZUtf8StringRef;
-    const std::string stringClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/String")).to_std_string();
-    const std::string objectToStringMethodCacheName = impl_->cachePool.instanceMethodCache(
-        ZUtf8StringRef::from_static("java/lang/Object"), ZUtf8StringRef::from_static("toString"),
-        ZUtf8StringRef::from_static("()Ljava/lang/String;")).to_std_string();
-    const std::string stringValueOfFloatMethodCacheName = impl_->cachePool.staticMethodCache(
-        ZUtf8StringRef::from_static("java/lang/String"), ZUtf8StringRef::from_static("valueOf"),
-        ZUtf8StringRef::from_static("(F)Ljava/lang/String;")).to_std_string();
-    const std::string stringValueOfDoubleMethodCacheName = impl_->cachePool.staticMethodCache(
-        ZUtf8StringRef::from_static("java/lang/String"), ZUtf8StringRef::from_static("valueOf"),
-        ZUtf8StringRef::from_static("(D)Ljava/lang/String;")).to_std_string();
-    const std::string floatParseFloatMethodCacheName = impl_->cachePool.staticMethodCache(
-        ZUtf8StringRef::from_static("java/lang/Float"), ZUtf8StringRef::from_static("parseFloat"),
-        ZUtf8StringRef::from_static("(Ljava/lang/String;)F")).to_std_string();
-    const std::string doubleParseDoubleMethodCacheName = impl_->cachePool.staticMethodCache(
-        ZUtf8StringRef::from_static("java/lang/Double"), ZUtf8StringRef::from_static("parseDouble"),
-        ZUtf8StringRef::from_static("(Ljava/lang/String;)D")).to_std_string();
-    const std::string nullPointerExceptionClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/NullPointerException")).to_std_string();
-    const std::string classCastExceptionClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/ClassCastException")).to_std_string();
-    const std::string outOfMemoryErrorClassCacheName =
-        impl_->cachePool.classCache(ZUtf8StringRef::from_static("java/lang/OutOfMemoryError")).to_std_string();
-    const std::string stringIndexOutOfBoundsClassCacheName = impl_->cachePool.classCache(
-        ZUtf8StringRef::from_static("java/lang/StringIndexOutOfBoundsException")).to_std_string();
-    const std::string unsupportedOperationExceptionClassCacheName = impl_->cachePool.classCache(
-        ZUtf8StringRef::from_static("java/lang/UnsupportedOperationException")).to_std_string();
     const std::string cacheDeclarations = impl_->cachePool.renderDeclarations();
     const std::string emittedSource     = impl_->source.build().to_std_string();
     // 前向声明注册表：add_func_declared 定义的帮手在此登记。resolved dispatch 的
@@ -1418,18 +1397,6 @@ void RegCBackend::finalize(const CompilerIndex& index)
     }
     emitRuntimeHelpers(full,
                        cacheDeclarations,
-                       stringClassCacheName,
-                       objectToStringMethodCacheName,
-                       stringValueOfFloatMethodCacheName,
-                       stringValueOfDoubleMethodCacheName,
-                       floatParseFloatMethodCacheName,
-                       doubleParseDoubleMethodCacheName,
-                       nullPointerExceptionClassCacheName,
-                       classCastExceptionClassCacheName,
-                       outOfMemoryErrorClassCacheName,
-                       stringIndexOutOfBoundsClassCacheName,
-                       unsupportedOperationExceptionClassCacheName,
-                       impl_->traceCallLog,
                        &fwd);
     emitRegCHelperPrelude(full);
     for (size_t i = 0; i < impl_->indySites.size(); ++i) {
@@ -1498,6 +1465,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
         apiIncludes.addSystem("string.h");
         apiIncludes.addSystem("errno.h");
         apiIncludes.addProject("regc/mj2x_regc_crt.h");
+        apiIncludes.addProject("regc/mj2x_regc_runtime.h");
         apiIncludes.addProject("regc/mj2x_regc_safe_env.h");
         const std::string rendered = apiIncludes.render();
         api.append(rendered.data(), rendered.size());

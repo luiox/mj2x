@@ -376,7 +376,7 @@ TEST_F(RegCTraceSamples, GenerateMjdbgFixtures)
             "protected_samples/regc/RegCHelperSurfaceSample.java",
             "object allocation, fields, arrays, calls, and reference checks through RegC helpers",
             {
-                {"fieldAndCall", "(I)I", "_mj2x_regc_call_i32"},
+                {"fieldAndCall", "(I)I", "_mj2x_regc_load_cached_instance_i32_field"},
                 {"arrays", "(I)I", "_mj2x_regc_store_i32_array"},
                 {"referenceOps", "(Ljava/lang/Object;)I", "_mj2x_regc_instanceof"},
             },

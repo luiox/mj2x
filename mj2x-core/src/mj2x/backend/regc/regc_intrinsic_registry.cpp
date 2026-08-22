@@ -1699,43 +1699,6 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
 {
     out.append("#ifndef MJ2X_REGC_INTRINSIC_ABI_DECLARED\n");
     out.append("#define MJ2X_REGC_INTRINSIC_ABI_DECLARED\n");
-    out.append("static mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* "
-               "utf8);\n");
-    out.append("static int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr);\n");
-    out.append("static int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref "
-               "jstr, int32_t radix);\n");
-    out.append("static int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref "
-               "jstr);\n");
-    out.append("static int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref "
-               "jstr, int32_t radix);\n");
-    out.append("static int32_t _mj2x_intrinsic_parse_short(mj2x_regc_context* context, mj2x_ref "
-               "jstr);\n");
-    out.append("static int32_t _mj2x_intrinsic_parse_short_radix(mj2x_regc_context* context, mj2x_ref "
-               "jstr, int32_t radix);\n");
-    out.append("static int32_t _mj2x_intrinsic_parse_byte(mj2x_regc_context* context, mj2x_ref "
-               "jstr);\n");
-    out.append("static int32_t _mj2x_intrinsic_parse_byte_radix(mj2x_regc_context* context, mj2x_ref "
-               "jstr, int32_t radix);\n");
-    out.append("static int32_t _mj2x_intrinsic_parse_boolean(mj2x_regc_context* context, mj2x_ref "
-               "jstr);\n");
-    out.append("static float _mj2x_intrinsic_parse_float(mj2x_regc_context* context, mj2x_ref jstr);\n");
-    out.append("static double _mj2x_intrinsic_parse_double(mj2x_regc_context* context, mj2x_ref "
-               "jstr);\n");
-    out.append("static mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* context, float "
-               "value);\n");
-    out.append("static mj2x_ref _mj2x_intrinsic_double_to_string(mj2x_regc_context* context, double "
-               "value);\n");
-    out.append("static mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, mj2x_ref "
-               "value);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_length(mj2x_ref value);\n");
-    out.append("static uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_is_empty(mj2x_ref value);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle);\n");
-    out.append("static int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq);\n");
     out.append("typedef struct mj2x_int { int32_t value; } mj2x_int;\n");
     out.append("typedef struct mj2x_long { int64_t value; } mj2x_long;\n");
     out.append("typedef struct mj2x_short { int16_t value; } mj2x_short;\n");

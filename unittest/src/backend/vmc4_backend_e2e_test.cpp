@@ -382,6 +382,7 @@ private:
                                        q(tc_.jdkIncludeWin));
             };
             compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+            compileCrt("regc/mj2x_regc_runtime.c", "mj2x_regc_runtime.obj");
             compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
             compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
             compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");

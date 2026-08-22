@@ -237,6 +237,7 @@ protected:
                                    q(tc_.jdkIncludeWin));
         };
         compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+        compileCrt("regc/mj2x_regc_runtime.c", "mj2x_regc_runtime.obj");
         compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
         compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
         compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
@@ -1754,11 +1755,13 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
                   "NULL, NULL}"),
               std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find(
+    // #894 B 类真下沉:角色单例缓存(valueOf/parseFloat/异常类等 11 个)收敛为
+    // mj2x_regc_runtime.c 的固定实例,生成 TU 不再逐程序声明——反断言钉住。
+    EXPECT_EQ(generatedC.find(
                   "{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
               std::string::npos)
         << generatedC;
-    EXPECT_NE(generatedC.find(
+    EXPECT_EQ(generatedC.find(
                   "{\"java/lang/String\", \"valueOf\", \"(D)Ljava/lang/String;\", NULL, NULL}"),
               std::string::npos)
         << generatedC;
@@ -2198,6 +2201,7 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
         ASSERT_EQ(rc.exitCode, 0) << rc.out;
     };
     compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+    compileCrt("regc/mj2x_regc_runtime.c", "mj2x_regc_runtime.obj");
     compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
     compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
     compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
