@@ -20,12 +20,6 @@
 
 namespace mj2x {
 
-/// 发射 _mj2x_regc_*_field（static/instance × load/store 四象限）helper 定义。
-void emitRegCFieldAccessHelpers(ca::str::Utf8StringBuilder& out);
-
-/// 发射 _mj2x_regc_call_* / _mj2x_regc_method_id helper 定义。
-void emitRegCMethodCallHelpers(ca::str::Utf8StringBuilder& out);
-
 /// @brief 发射 RegC 运行时主体（除上面两组 helper 外的全部 ABI 定义）。
 ///
 /// @details 12 个 cacheName 参数是 finalize() 从 RegCCachePool 预解析出的符号名，
