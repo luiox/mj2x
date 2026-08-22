@@ -234,6 +234,18 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   平台检测所致，`env -u MSYSTEM` 后全过）；E2E 13/13。遗留：Inheritance
   1.41x（checkcast 复用/类名 hash 缓存）、Crypto 1.21x（JDK 侧主导）。
   另修复 main 上 native_compiler.cpp environmentKeyEquals 链接错误。
+- 2026-08-22（mj2x-runtime 处置定案 + R3 保护探测移植实施,分支
+  `feat/mj2x-rt-protect-probes`）:intrinsic C++ 四件套 49 符号中 45 个与
+  `mj2x_regc_intrinsic.c` 重复;crypto/kernel/antidebug/antijvmti/detection/
+  stringpool 六件套零消费但非弃件(R3 预研)。按
+  [doc_ai/r3_protect_integration.md](doc_ai/r3_protect_integration.md) 将 C++ 独有
+  探测 C99 化并入 `mj2x_rt_protect.c`:**PEB BeingDebugged/NtGlobalFlag**、
+  **NtQueryInformationProcess 三元组**(动态加载,容忍 STATUS_PORT_NOT_SET)、
+  **硬件断点 Dr0-3/Dr7**(地址+使能双条件防误报)、**Linux agent 库映射扫描**
+  (maps 含 "agent" 的 .so,补 attach 面);软断点自检有意缓议(0xCC 误判代价
+  与 TERMINATE 不对称)。接口零变化;纯解码器导出供单测
+  (`mj2x_rt_protect_probe_test.c` 挂 runner 惯例)。验证:mj2x_rt_test 全过;
+  CliTest 保护链路 14 项 e2e(真实 JVM 注入检查点)全过零误报。
 - 2026-08-22（#894 LLVM 片段盘点收口 + mj2x-llvmrt 设计定稿,同分支追加）:
   四后端内嵌代码盘点至此全部完成并定性——**LLVM**(`llvm_ir_helpers.cpp` 1640 行)
   向每模块发射 ~90 个 `define internal` IR 函数(throw/new/field_load 9kind/

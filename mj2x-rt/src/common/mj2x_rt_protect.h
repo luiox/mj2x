@@ -5,12 +5,17 @@
 /// 保持 C 可分发（随 mj2x-rt 进入生成工程，无外部依赖）。默认不注入；
 /// 由生成器 --runtime-protection 开关注入调用（RegC/VMC4 通用）。
 ///
-/// ## 检测面（第一版）
+/// ## 检测面（R3 整合后）
 ///
-/// - Windows：IsDebuggerPresent / CheckRemoteDebuggerPresent + 命令行扫描
-///   （-javaagent: / -agentpath: / -agentlib: / jdwp）
-/// - Linux：/proc/self/status TracerPid + /proc/self/maps 可写可执行段 +
-///   /proc/self/cmdline 扫描
+/// - Windows：IsDebuggerPresent / CheckRemoteDebuggerPresent + PEB
+///   BeingDebugged/NtGlobalFlag 调试堆位 + NtQueryInformationProcess
+///   (DebugPort/DebugObjectHandle/DebugFlags) + 硬件断点调试寄存器
+///   (Dr0-3/Dr7) + 命令行扫描（-javaagent: / -agentpath: / -agentlib: / jdwp）
+/// - Linux：/proc/self/status TracerPid + /proc/self/maps 可写可执行段与
+///   agent 库映射 + /proc/self/cmdline 扫描
+///
+/// 探测逻辑移植自 mj2x-runtime C++ antidebug 层（R3 整合，见
+/// doc_ai/r3_protect_integration.md）；全部 fail-open。
 ///
 /// ## 触发模型
 ///
@@ -55,6 +60,15 @@ typedef struct mj2x_rt_checkpoint
 /// 命中时不返回。
 int mj2x_rt_checkpoint_run(mj2x_rt_checkpoint* cp, mj2x_rt_protect_action action,
                            uint32_t step, uint32_t delay_ms, int force);
+
+/// @brief NtGlobalFlag 调试堆标志判定（移植自 antidebug::hasSuspiciousNtGlobalFlag）。
+/// 导出仅供单测。
+int mj2x_rt_nt_global_flag_suspicious(uint32_t nt_global_flag);
+
+/// @brief 硬件断点使能判定：Dr0-3 任一地址非零且 Dr7 低 8 位有使能位
+/// （移植自 antidebug::hasEnabledHardwareBreakpoint）。导出仅供单测。
+int mj2x_rt_hardware_breakpoint_enabled(uintptr_t dr0, uintptr_t dr1, uintptr_t dr2,
+                                        uintptr_t dr3, uintptr_t dr7);
 
 #ifdef __cplusplus
 }
