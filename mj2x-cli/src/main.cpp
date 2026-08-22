@@ -1269,17 +1269,19 @@ int main(int argc, char** argv)
         }
         else {
             std::filesystem::path crtRoot;
-            if (options.cBackendKind == CEmitterBackend::RegC ||
-                options.cBackendKind == CEmitterBackend::LlvmIr) {
-                // LLVM：JDK intrinsic 直调（mj2x_math_* 等）的 runtime 符号在
-                // mj2x-rt，链接侧一并编译（与 RegC --compile 的 crt 契约一致）。
+            {
+                // #894 运行时/模板分离后,四个后端的运行时 ABI 全部在 mj2x-rt
+                // (regc/vmc4/stackc 源 + LLVM 的 JDK intrinsic 直调符号),
+                // --compile 一律要求源包并链接消费,不再有自包含生成 TU。
                 crtRoot = mj2x::cli::findCrtRoot(argv[0]);
                 if (crtRoot.empty()) {
+                    const char* backendName = "RegC";
+                    if (options.cBackendKind == CEmitterBackend::StackC) backendName = "StackC";
+                    else if (options.cBackendKind == CEmitterBackend::Vmc4) backendName = "VMC4";
+                    else if (options.cBackendKind == CEmitterBackend::LlvmIr) backendName = "LLVM";
                     CA_LOGT_ERROR("cli", "{}\n",
                                       i18n::trf("mj2x.cli.err.compile_crt_required",
-                                                 {options.cBackendKind == CEmitterBackend::RegC
-                                                      ? "RegC"
-                                                      : "LLVM"})
+                                                {std::string{backendName}})
                                           .c_str());
                     return 1;
                 }

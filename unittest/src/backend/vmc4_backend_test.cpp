@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <set>
 #include <string>
@@ -33,6 +35,16 @@ using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
 namespace {
+
+/// @brief 读下沉后的 VMC4 运行时源(#894:运行时/模板分离,实现 mj2x-rt/src/vmc4)。
+std::string readVmc4RuntimeSource()
+{
+    const std::filesystem::path path =
+        std::filesystem::current_path() / "mj2x" / "mj2x-rt" / "src" / "vmc4" / "mj2x_vmc4_runtime.c";
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return {};
+    return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+}
 
 /// @brief 构造 MethodNode。
 ///
@@ -290,7 +302,9 @@ TEST(Vmc4BackendTest, EmitsValidInterpreterSource)
 // ===========================================================================
 TEST(Vmc4BackendTest, RuntimePreludeHasJvmDivRemSemantics)
 {
-    const std::string prelude = VmInterpreterEmitter::emitRuntimePrelude();
+    // #894 运行时/模板分离:prelude 已下沉 mj2x-rt,断言针对运行时源文件。
+    const std::string prelude = readVmc4RuntimeSource();
+    ASSERT_FALSE(prelude.empty()) << "mj2x_vmc4_runtime.c missing";
     // INT_MIN / -1 = INT_MIN 不抛。
     EXPECT_NE(prelude.find("INT32_MIN && b == -1"), std::string::npos) << prelude;
     EXPECT_NE(prelude.find("INT64_MIN && b == -1"), std::string::npos) << prelude;
@@ -590,7 +604,9 @@ TEST(Vmc4BackendTest, InstanceMethodArgsStartAtReg1)
 // ===========================================================================
 TEST(Vmc4BackendTest, PreludeHasSaturatingFloatConversionsAndNoStatusMagic)
 {
-    const std::string prelude = VmInterpreterEmitter::emitRuntimePrelude();
+    // #894 运行时/模板分离:prelude 已下沉 mj2x-rt,断言针对运行时源文件。
+    const std::string prelude = readVmc4RuntimeSource();
+    ASSERT_FALSE(prelude.empty()) << "mj2x_vmc4_runtime.c missing";
     EXPECT_NE(prelude.find("mj2x_vm_f2i32"), std::string::npos) << prelude;
     EXPECT_NE(prelude.find("mj2x_vm_f2i64"), std::string::npos) << prelude;
     EXPECT_NE(prelude.find("(double)INT32_MAX + 1.0"), std::string::npos)

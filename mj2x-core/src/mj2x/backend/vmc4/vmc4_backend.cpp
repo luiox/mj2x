@@ -592,6 +592,8 @@ void Vmc4Backend::finalize(const CompilerIndex& index)
     includes.addSystem("stdio.h");
     includes.addSystem("stdlib.h");
     includes.addSystem("string.h");
+    // VMC4 运行时 ABI(mj2x-rt/src/vmc4,链接消费;#894 运行时/模板分离)。
+    includes.addProject("vmc4/mj2x_vmc4_runtime.h");
     if (options_.runtimeProtection.enabled()) {
         includes.addProject("rt_protect/mj2x_rt_protect.h");
     }
@@ -603,10 +605,6 @@ void Vmc4Backend::finalize(const CompilerIndex& index)
         full.append(renderedIncludes.data(), renderedIncludes.size());
     }
     full.append("\n");
-
-    // VMC4 runtime prelude（mj2x_vm_slot 联合体 + div/rem helper）。
-    const std::string prelude = VmInterpreterEmitter::emitRuntimePrelude();
-    full.append(prelude.data(), prelude.size());
 
     // 所有方法的解释器源码（compileMethod 已累积进 impl_->source）。
     const std::string emittedSource = impl_->source.build().to_std_string();

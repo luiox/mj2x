@@ -37,6 +37,11 @@ void PrintTo(const mtest_set::NativeFixtureCase& fixture, std::ostream* os)
 
 namespace {
 
+// mj2x-rt 源包容器根(#894 起 StackC 运行时 ABI 在 src/stackc,链接消费)。
+fs::path rtSrcDir() { return fs::current_path() / "mj2x" / "mj2x-rt" / "src"; }
+
+
+
 /// StackC E2E 工具链：JdkToolchain + mj2x-cli + vcvars64（同 stackc_backend_e2e）。
 struct Toolchain
 {
@@ -171,13 +176,17 @@ TEST_P(StackCMtestSetE2E, StackCNativeTransformMatchesJvm)
     // 用改写后的类替换原类（Driver 按 <className> 加载）。
     fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing);
 
-    // 6. cl 编译 .c → DLL。
+    // 6. cl 编译 .c → DLL(运行时源单独编译再链接,避开多源 /Fo 引号坑)。
     fs::path dll = dir / (className + ".dll");
     {
         auto r = runBat({
             "call " + q(tc_.vcvars64) + " x64 >nul",
-            "cl /nologo /LD /O2 /EHsc /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " + q(cFile) +
-                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+            "cl /nologo /O2 /EHsc /utf-8 /c /Fo" + q(dir / "_rt.obj") + " " +
+                q(rtSrcDir() / "stackc" / "mj2x_stackc_runtime.c") + " /I" + q(rtSrcDir()) + " /I" +
+                q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+            "cl /nologo /LD /O2 /EHsc /utf-8 /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " +
+                q(cFile) + " " + q(dir / "_rt.obj") + " /I" + q(rtSrcDir()) + " /I" +
+                q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
         });
         ASSERT_EQ(r.exitCode, 0) << "cl 编译失败:\n" << r.out;
         ASSERT_TRUE(fileExists(dll)) << "cl 未生成 .dll";

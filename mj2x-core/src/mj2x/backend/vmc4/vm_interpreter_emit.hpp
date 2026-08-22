@@ -39,14 +39,6 @@ public:
     /// @return 生成的 C 源码（解释器函数定义 + 该方法的常量/bytecode/blockTargets 数组）。
     static std::string emit(const VmProgram& program, const VmInstance& instance,
                             const std::string& methodTag);
-
-    /// @brief 发射 VMC4 运行时公共定义（每个 TU 只需一份，放文件头）。
-    ///
-    /// @details
-    /// 包含 mj2x_vm_slot 联合体、VmExecStatus 别名、除零/移位 helper 的 static inline
-    /// 定义。VmInterpreterEmitter::emit 依赖这些类型，故 finalize 须先 emitRuntimePrelude
-    /// 再 emit 各方法的解释器。
-    static std::string emitRuntimePrelude();
 };
 
 }   // namespace mj2x

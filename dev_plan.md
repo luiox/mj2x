@@ -234,6 +234,17 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   平台检测所致，`env -u MSYSTEM` 后全过）；E2E 13/13。遗留：Inheritance
   1.41x（checkcast 复用/类名 hash 缓存）、Crypto 1.21x（JDK 侧主导）。
   另修复 main 上 native_compiler.cpp environmentKeyEquals 链接错误。
+- 2026-08-22（#894 运行时/模板分类下沉 round-2，分支 `refactor/mj2x-embed-runtime-split`）：
+  按「运行时=固定代码→mj2x-rt 链接消费;模板=生成期动态拼接→发射器」口径完成剩余两类——
+  **VMC4 prelude**（slot/call_fn 类型 + div/rem/f2i/throw/exception_matches,原
+  `emitRuntimePrelude` 逐 TU 内联）→ `mj2x-rt/src/vmc4/mj2x_vmc4_runtime.{h,c}`；
+  **StackC prelude**（126 行零占位符"模板"实为运行时:cache 宏/inline 热路径留头内,
+  find_class/component_class/new_multi_array/mid_slow/fid_slow/class_slow 六个 slow
+  path → `mj2x-rt/src/stackc/mj2x_stackc_runtime.{h,c}`,删除 stackc_runtime_prelude
+  三件套）。rt_protect 判定已正确（调用片段=模板,实现在 rt）不动。接线：rt.resources/
+  kRtSourceMounts 增 stackc/vmc4 挂载；`--compile` 四后端统一要求源包；e2e 编译清单
+  补 runtime 源与 /utf-8（header 中文注释 cp936 必错）；vmc4 e2e 结构断言改 include 标记。
+  验证：`mj2x_unittest` 全量 **630 过 / 0 fail**。
 - 2026-08-22（#894 模板资源化 + B 类真下沉收尾，分支 `refactor/mj2x-embedded-code`）：
   四批落地——**第一批** stackc runtime prelude 模板资源化 + `c_render` 文本模板渲染器
   （bfaf462b7）；**第二批** regc `emitRuntimeHelpers` 迁移

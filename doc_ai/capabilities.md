@@ -288,7 +288,7 @@ mj2x/
 | 能力 | 状态 |
 |---|---|
 | codegen 工具层(`mj2x-core/src/mj2x/codegen/`) | ✅ CSourceStream(缩进管理 + `appendLineStart` 链式)、IncludeSet(include 去重)、cStringLiteral/mangle 收口 |
-| StackC 拆到 `backend/stackc/` 文件夹 | ✅ stackc_backend + stackc_runtime_prelude 分离 |
+| StackC 拆到 `backend/stackc/` 文件夹 | ✅ stackc_backend + 运行时分离（#894 起 prelude 下沉 `mj2x-rt/src/stackc/mj2x_stackc_runtime.{h,c}` 链接消费） |
 | 重复 helper 收口(cStringLiteral/mangle 跨 StackC/RegC) | ✅ 单一来源在 codegen |
 | 日志门面（libca log + SimpleLogBackend） | ✅ 全部模块日志走 `CA_LOGT_*`（stderr 彩色、级别/模块/位置）；CLI `--quiet`/`--verbose` 控制级别；`mj2x::initLogging` 供库使用者 |
 

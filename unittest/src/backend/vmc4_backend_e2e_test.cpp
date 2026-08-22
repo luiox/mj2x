@@ -212,10 +212,12 @@ protected:
         ASSERT_EQ(pipeline.run(), 0);
         ASSERT_TRUE(fileExists(cFile));
         std::string generatedC = readText(cFile);
-        // 结构断言：prelude + 解释器 + RegisterNatives 都存在。
+        // 结构断言：include + 解释器 + RegisterNatives 都存在。
         EXPECT_NE(generatedC.find("#include <jni.h>"), std::string::npos) << generatedC;
+        EXPECT_NE(generatedC.find("vmc4/mj2x_vmc4_runtime.h"), std::string::npos)
+            << "runtime ABI include missing (#894 运行时/模板分离)\n"
+            << generatedC;
         EXPECT_NE(generatedC.find("mj2x_vm_slot"), std::string::npos) << generatedC;
-        EXPECT_NE(generatedC.find("mj2x_vm_div_i32"), std::string::npos) << generatedC;
         EXPECT_NE(generatedC.find("JNI_OnLoad"), std::string::npos) << generatedC;
         // VMC4 不依赖 RegC CRT helper。
         EXPECT_EQ(generatedC.find("_mj2x_regc_"), std::string::npos)
@@ -230,14 +232,22 @@ protected:
         fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
         ASSERT_FALSE(ec) << ec.message();
 
-        // 编译生成的 C：自包含，只需 jni.h（/TC 显式 C 模式）。
+        // 编译生成的 C：运行时 ABI 已下沉 mj2x-rt(#894),链接
+        // mj2x_vmc4_runtime.c;/I 加 rt src 与 jni.h 路径(/TC 显式 C 模式)。
         fs::path dll = dir / (className + ".dll");
         fs::path obj = dir / (className + ".obj");
+        fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+        fs::path runtimeObj = dir / "mj2x_vmc4_runtime.obj";
         std::vector<std::string> compileLines;
         compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
         compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(cFile) +
+                               " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                               q(tc_.jdkIncludeWin));
+        compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(runtimeObj) + " " +
+                               q(crtSrc / "vmc4" / "mj2x_vmc4_runtime.c") + " /I" + q(crtSrc) +
                                " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
-        compileLines.push_back("link /nologo /DLL /OUT:" + q(dll) + " " + q(obj));
+        compileLines.push_back(
+            "link /nologo /DLL /OUT:" + q(dll) + " " + q(obj) + " " + q(runtimeObj));
         auto cl = runBat(compileLines);
         ASSERT_EQ(cl.exitCode, 0) << cl.out;
         ASSERT_TRUE(fileExists(dll));
@@ -393,10 +403,19 @@ private:
             for (const auto& obj : objs) linkLine += " " + q(obj);
             compileLines.push_back(linkLine);
         } else {
-            fs::path obj = objDir / (className + ".obj");
-            compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(cFile) +
-                                   " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
-            compileLines.push_back("link /nologo /DLL /OUT:" + q(dll) + " " + q(obj));
+            fs::path generatedObj = objDir / "generated.obj";
+            compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(generatedObj) + " " +
+                                   q(cFile) + " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) +
+                                   " /I" + q(tc_.jdkIncludeWin));
+            // VMC4 运行时 ABI(#894 下沉):解释器 helper 链接消费。
+            fs::path vmc4RuntimeObj = objDir / "mj2x_vmc4_runtime.obj";
+            compileLines.push_back(
+                "cl /nologo /O2 /TC /utf-8 /c /Fo" + q(vmc4RuntimeObj) + " " +
+                q(crtSrc / "vmc4" / "mj2x_vmc4_runtime.c") + " /I" + q(crtSrc) + " /I" +
+                q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin));
+            std::string linkLine =
+                "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj) + " " + q(vmc4RuntimeObj);
+            compileLines.push_back(linkLine);
         }
         auto cl = runBat(compileLines);
         ASSERT_EQ(cl.exitCode, 0) << backendName << " compile:\n" << cl.out;

@@ -17,7 +17,7 @@ namespace mj2x::cli {
 
 /// 源包挂载名(与 mj2x-rt/rt.resources 一致);生成工程内对应
 /// src/mj2x-rt/<挂载名>/。templates 仅生成期模板读取用,不随树展开。
-constexpr std::string_view kRtSourceMounts[] = {"common", "regc"};
+constexpr std::string_view kRtSourceMounts[] = {"common", "regc", "stackc", "vmc4"};
 
 /// 取挂载包;未注册返回 nullptr(嵌入缺失时调用方 fail-closed)。
 inline const resources::Bundle* rtBundle(std::string_view name)

@@ -8,7 +8,7 @@
 /// stackc_exception.cpp）include 后共享同一套状态与工具，避免重复实现。
 ///
 /// 纯无状态字符串/类型映射 helper 遵循 c_helpers.hpp 的 header-inline 惯例；
-/// 大块运行时模板留在 stackc_runtime_prelude.cpp，发射器留在各 cpp。
+/// 运行时 ABI 已下沉 mj2x-rt/src/stackc（#894），发射器留在各 cpp。
 #pragma once
 
 #include "mj2x/backend/stackc/stackc_backend.hpp"

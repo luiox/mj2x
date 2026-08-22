@@ -29,6 +29,11 @@ using namespace test::jdk;   // runBat / q / fileExists / ExecResult / JdkToolch
 
 namespace {
 
+// mj2x-rt 源包容器根(#894 起 StackC 运行时 ABI 在 src/stackc,链接消费)。
+fs::path rtSrcDir() { return fs::current_path() / "mj2x" / "mj2x-rt" / "src"; }
+
+
+
 // ---- 工具链探测 ----
 // runBat / q / fileExists / ExecResult / probeJdk 复用 test::jdk（见上方 using namespace）。
 // 这里只保留 mj2x 特有的 Toolchain（在 JdkToolchain 之上加 mj2x-cli 和 vcvars64）。
@@ -173,10 +178,16 @@ protected:
             // vcvarsall.bat，需带 x64 参数；产品侧 native_compiler.cpp 同样如此）。
             // cl /LD 生成 DLL；/Fe 指定输出名；/Fo 指定 .obj 输出目录（避免污染 cwd）；
             // /I 加 jni.h 头路径。
+            // 运行时源单独编译(#894 下沉后生成 TU 不再自包含),与生成 .c 分开
+            // 编译再链接——避免多源文件时 /Fo 目录形态的 cmd 引号坑。
             auto r = runBat({
                 "call " + q(tc_.vcvars64) + " x64 >nul",
-                "cl /nologo /LD /O2 /EHsc /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " + q(cFile) +
+                "cl /nologo /O2 /EHsc /utf-8 /c /Fo" + q(dir / "_rt.obj") + " " +
+                    q(rtSrcDir() / "stackc" / "mj2x_stackc_runtime.c") + " /I" + q(rtSrcDir()) +
                     " /I" + q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+                "cl /nologo /LD /O2 /EHsc /utf-8 /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " +
+                    q(cFile) + " " + q(dir / "_rt.obj") + " /I" + q(rtSrcDir()) + " /I" +
+                    q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
             });
             ASSERT_EQ(r.exitCode, 0) << "cl 编译失败:\n" << r.out;
             ASSERT_TRUE(fileExists(dll)) << "cl 未生成 .dll";
@@ -680,8 +691,13 @@ TEST_F(StackCBackendE2E, InterfaceDefaultMethodProxy)
     fs::path dll = dir / "DefaultIface.dll";
     auto     cl  = runBat({
         "call " + q(tc_.vcvars64) + " x64 >nul",
-        "cl /nologo /LD /O2 /EHsc /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " + q(cFile) + " /I" +
+        // 运行时源单独编译再链接(同上,避开多源 /Fo 目录形态的引号坑)。
+        "cl /nologo /O2 /EHsc /utf-8 /c /Fo" + q(dir / "_rt.obj") + " " +
+            q(rtSrcDir() / "stackc" / "mj2x_stackc_runtime.c") + " /I" + q(rtSrcDir()) + " /I" +
             q(tc_.jdkInclude) + " /I" + q(tc_.jdkIncludeWin),
+        "cl /nologo /LD /O2 /EHsc /utf-8 /Fe" + q(dll) + " /Fo" + q(dir / "_") + " " + q(cFile) +
+            " " + q(dir / "_rt.obj") + " /I" + q(rtSrcDir()) + " /I" + q(tc_.jdkInclude) + " /I" +
+            q(tc_.jdkIncludeWin),
     });
     ASSERT_EQ(cl.exitCode, 0) << "cl 编译失败:\n" << cl.out;
     ASSERT_TRUE(fileExists(dll));

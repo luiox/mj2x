@@ -5,7 +5,7 @@
 /// ID 缓存从「owner monitor 双检锁」改为 jnic370 形态的「无锁 CAS + 快路径」：
 /// 快路径 `_mj2x_cache_load` 是无锁读，慢路径 Get*ID 成功后用
 /// `_mj2x_cache_cas` 发布，CAS 输家复用赢家结果。MSVC 走 Interlocked，
-/// GCC/Clang/Zig 走 __atomic（平台宏定义在 stackc_runtime_prelude.cpp）。
+/// GCC/Clang/Zig 走 __atomic（平台宏定义在 mj2x-rt/src/stackc/mj2x_stackc_runtime.h）。
 ///
 /// 缩进约定：调用方保证 out 处于 2 层（8 空格），内部块用 indent()/dedent()。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
