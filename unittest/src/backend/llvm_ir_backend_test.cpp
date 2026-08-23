@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 
 #include <memory>
+#include <regex>
 #include <string>
 
 #include "jbytecode/jbytecode.hpp"
@@ -645,6 +646,42 @@ TEST(LlvmIrBackendTest, EmitsRefComparisonViaIsSameObject)
         << result.text;
     EXPECT_NE(result.text.find("xor i1"), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("icmp eq ptr"), std::string::npos) << result.text;
+}
+
+TEST(LlvmIrBackendTest, EmitsRefEqWithoutBareCopyPseudo)
+{
+    // Eq 侧与 ifnull/ifnonnull 路径：ref_eq 结果直接作为分支条件，不得发射
+    // "%vN = %vM" 裸拷贝伪指令（LLVM IR 无寄存器拷贝语法，clang 拒绝；
+    // #894 benchmark 的 NullCmpProbe 最小复现）。
+    auto* eqTarget  = new jbytecode::core::Label();
+    auto eqResult =
+        compileScalar("sameEq", "(Ljava/lang/Object;Ljava/lang/Object;)Z",
+                      {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ALOAD, 1),
+                       new JumpInsnNode(Opcodes::IF_ACMPEQ, eqTarget), new InsnNode(Opcodes::ICONST_1),
+                       new InsnNode(Opcodes::IRETURN), new LabelNode(eqTarget),
+                       new InsnNode(Opcodes::ICONST_0), new InsnNode(Opcodes::IRETURN)},
+                      2, 2);
+    ASSERT_EQ(eqResult.kind, BackendResult::Kind::C_SOURCE) << eqResult.text;
+    EXPECT_NE(eqResult.text.find("call i1 @mj2x_llvm_ref_eq(ptr %env, ptr %v0, ptr %v1)"),
+              std::string::npos)
+        << eqResult.text;
+
+    auto* nullTarget = new jbytecode::core::Label();
+    auto nullResult =
+        compileScalar("nullChk", "(Ljava/lang/String;)Z",
+                      {new VarInsnNode(Opcodes::ALOAD, 0),
+                       new JumpInsnNode(Opcodes::IFNULL, nullTarget), new InsnNode(Opcodes::ICONST_1),
+                       new InsnNode(Opcodes::IRETURN), new LabelNode(nullTarget),
+                       new InsnNode(Opcodes::ICONST_0), new InsnNode(Opcodes::IRETURN)},
+                      1, 1);
+    ASSERT_EQ(nullResult.kind, BackendResult::Kind::C_SOURCE) << nullResult.text;
+    EXPECT_NE(nullResult.text.find("call i1 @mj2x_llvm_ref_eq(ptr %env, ptr %v0, ptr null)"),
+              std::string::npos)
+        << nullResult.text;
+
+    const std::regex bareCopy(R"(^\s*%v\d+ = %v\d+\s*$)");
+    EXPECT_EQ(std::regex_search(eqResult.text, bareCopy), false) << eqResult.text;
+    EXPECT_EQ(std::regex_search(nullResult.text, bareCopy), false) << nullResult.text;
 }
 
 TEST(LlvmIrBackendTest, EmitsExceptionDispatchWithRegions)

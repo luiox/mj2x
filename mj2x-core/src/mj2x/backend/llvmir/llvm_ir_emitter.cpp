@@ -1023,11 +1023,11 @@ private:
                      << ", ptr " << rhs << ")\n";
                 if (instruction.comparePredicate == SSAComparePredicate::Ne) {
                     out_ << "  " << eq << " = xor i1 " << eqIn << ", true\n";
+                    return emitStore(instruction.dest, eq, reason);
                 }
-                else {
-                    out_ << "  " << eq << " = " << eqIn << "\n";
-                }
-                return emitStore(instruction.dest, eq, reason);
+                // Eq 直接采用 IsSameObject 结果；LLVM IR 无寄存器拷贝语法，
+                // 不能发 "%dst = %src" 形态的伪指令。
+                return emitStore(instruction.dest, eqIn, reason);
             }
             const char* predicate = nullptr;
             switch (instruction.comparePredicate) {
