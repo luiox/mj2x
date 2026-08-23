@@ -106,6 +106,10 @@ MJ2X_LLVMIR_API void* mj2x_llvm_class_const(JNIEnv* env, const char* name);
 MJ2X_LLVMIR_API void mj2x_llvm_throw_new(JNIEnv* env, const char* cls_name,
     const char* msg);
 
+// ---- 阶段四b:monitor(null → NPE) ----
+MJ2X_LLVMIR_API void mj2x_llvm_monitor_enter(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API void mj2x_llvm_monitor_exit(JNIEnv* env, void* obj);
+
 #ifdef __cplusplus
 }
 #endif

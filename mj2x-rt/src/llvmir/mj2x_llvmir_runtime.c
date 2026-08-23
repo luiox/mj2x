@@ -485,3 +485,27 @@ void mj2x_llvm_throw_new(JNIEnv* env, const char* cls_name, const char* msg)
     (*env)->ThrowNew(env, cls, msg);
     (*env)->DeleteLocalRef(env, cls);
 }
+
+
+// ---- 阶段四b:monitor ----
+
+// monitorenter/monitorexit:null → NPE(经 mj2x_llvm_throw_null,与原 IR
+// 的 FindClass+ThrowNew("null") 同语义);MonitorExit 失败(非持有者
+// IMSE 等)由 JNI 挂异常,生成代码的 ExceptionCheck 面感知。
+void mj2x_llvm_monitor_enter(JNIEnv* env, void* obj)
+{
+    if (obj == NULL) {
+        mj2x_llvm_throw_null(env);
+        return;
+    }
+    (*env)->MonitorEnter(env, obj);
+}
+
+void mj2x_llvm_monitor_exit(JNIEnv* env, void* obj)
+{
+    if (obj == NULL) {
+        mj2x_llvm_throw_null(env);
+        return;
+    }
+    (*env)->MonitorExit(env, obj);
+}

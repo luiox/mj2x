@@ -40,16 +40,6 @@ std::string emitObjectHelpers()
     };
 
     std::ostringstream out;
-    const char* npeName = "java/lang/NullPointerException";
-    const char* cceName = "java/lang/ClassCastException";
-    const char* nullMsg = "null";
-    // NPE / CCE 类名与消息（固定名，避开调用点字符串表）。
-    out << "@_mj2x_llvm_obj_npe = private unnamed_addr constant ["
-        << (std::strlen(npeName) + 1) << " x i8] c\"" << npeName << "\\00\"\n";
-    out << "@_mj2x_llvm_obj_cce = private unnamed_addr constant ["
-        << (std::strlen(cceName) + 1) << " x i8] c\"" << cceName << "\\00\"\n";
-    out << "@_mj2x_llvm_obj_null = private unnamed_addr constant ["
-        << (std::strlen(nullMsg) + 1) << " x i8] c\"" << nullMsg << "\\00\"\n\n";
 
     // throw_null:#894 mj2x-llvmrt 阶段一下沉 mj2x-rt;后续 helper 体仍以
     // 调用点引用它,模块携带 declare。
@@ -166,49 +156,10 @@ std::string emitObjectHelpers()
     // 会抛 ClassNotFoundException）。class_const:#894 mj2x-llvmrt 阶段四a
     // 下沉 mj2x-rt,包装类名/TYPE 常量随实现走,模块只携带 declare。
     out << "declare ptr @mj2x_llvm_class_const(ptr %env, ptr %name)\n\n";
-    // MonitorEnter/Exit（null → NPE ThrowNew）。
-    out << "define internal void @mj2x_llvm_monitor_enter(ptr %env, ptr %obj) {\n"
-           "entry:\n"
-           "  %isnull = icmp eq ptr %obj, null\n"
-           "  br i1 %isnull, label %npe, label %ok\n"
-           "ok:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %me0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::MonitorEnter << "\n"
-        << "  %me = load ptr, ptr %me0\n"
-           "  %rc = call i32 %me(ptr %env, ptr %obj)\n"
-           "  ret void\n"
-           "npe:\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %find(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
-           "  %ft2 = load ptr, ptr %env\n"
-           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
-        << "  %thrownew = load ptr, ptr %tn0\n"
-           "  %rc2 = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
-           "  ret void\n"
-           "}\n\n";
-    out << "define internal void @mj2x_llvm_monitor_exit(ptr %env, ptr %obj) {\n"
-           "entry:\n"
-           "  %isnull = icmp eq ptr %obj, null\n"
-           "  br i1 %isnull, label %npe, label %ok\n"
-           "ok:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %mx0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::MonitorExit << "\n"
-        << "  %mx = load ptr, ptr %mx0\n"
-           "  %rc = call i32 %mx(ptr %env, ptr %obj)\n"
-           "  ret void\n"
-           "npe:\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %find(ptr %env, ptr @_mj2x_llvm_obj_npe)\n"
-           "  %ft2 = load ptr, ptr %env\n"
-           "  %tn0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::ThrowNew << "\n"
-        << "  %thrownew = load ptr, ptr %tn0\n"
-           "  %rc2 = call i32 %thrownew(ptr %env, ptr %cls, ptr @_mj2x_llvm_obj_null)\n"
-           "  ret void\n"
-           "}\n\n";
+    // MonitorEnter/Exit（null → NPE ThrowNew）。monitor:#894 mj2x-llvmrt
+    // 阶段四b 下沉 mj2x-rt,模块只携带 declare。
+    out << "declare void @mj2x_llvm_monitor_enter(ptr %env, ptr %obj)\n\n";
+    out << "declare void @mj2x_llvm_monitor_exit(ptr %env, ptr %obj)\n\n";
 
     return out.str();
 }
