@@ -79,6 +79,28 @@ MJ2X_ARRAY_PROTOS(float, float)
 MJ2X_ARRAY_PROTOS(double, double)
 MJ2X_ARRAY_PROTOS(ref, void*)
 
+// ---- 阶段三d:方法调用族(×10 kind × virtual/nonvirtual/static;MethodA
+// 形态,jvalue* 为参数数组;实例 receiver 为 null 抛 NPE 返零值;
+// nonvirtual 的解析类取自 receiver 实际类而非 owner) ----
+#define MJ2X_CALL_PROTOS(kind, RetT)                                                    \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_call_##kind(JNIEnv* env, void* rcv,                 \
+        const char* owner, const char* name, const char* desc, jvalue* jv);             \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_call_nonvirtual_##kind(JNIEnv* env, void* rcv,      \
+        const char* owner, const char* name, const char* desc, jvalue* jv);             \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_call_static_##kind(JNIEnv* env, const char* owner,  \
+        const char* name, const char* desc, jvalue* jv);
+
+MJ2X_CALL_PROTOS(object, void*)
+MJ2X_CALL_PROTOS(bool, int8_t)
+MJ2X_CALL_PROTOS(byte, int8_t)
+MJ2X_CALL_PROTOS(char, int16_t)
+MJ2X_CALL_PROTOS(short, int16_t)
+MJ2X_CALL_PROTOS(int, int32_t)
+MJ2X_CALL_PROTOS(long, int64_t)
+MJ2X_CALL_PROTOS(float, float)
+MJ2X_CALL_PROTOS(double, double)
+MJ2X_CALL_PROTOS(void, void)
+
 #ifdef __cplusplus
 }
 #endif

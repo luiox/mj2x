@@ -31,45 +31,18 @@ std::string emitObjectHelpers()
     struct FieldKindInfo
     {
         const char* kind;       // helper 后缀
-        int64_t     getSlot;    // Get*Field
-        int64_t     getStaticSlot;
-        int64_t     setSlot;    // Set*Field
-        int64_t     setStaticSlot;
-        const char* jniType;    // JNI 函数声明类型
         const char* retType;    // helper 返回类型（窄提升后）
-        const char* ext;        // 窄扩展（sext/zext/空）
     };
     static const FieldKindInfo kinds[] = {
-        {"bool", jni_slot::GetBooleanField, jni_slot::GetStaticBooleanField,
-         jni_slot::SetBooleanField, jni_slot::SetStaticBooleanField, "i8", "i32", "zext"},
-        {"byte", jni_slot::GetByteField, jni_slot::GetStaticByteField, jni_slot::SetByteField,
-         jni_slot::SetStaticByteField, "i8", "i32", "sext"},
-        {"char", jni_slot::GetCharField, jni_slot::GetStaticCharField, jni_slot::SetCharField,
-         jni_slot::SetStaticCharField, "i16", "i32", "zext"},
-        {"short", jni_slot::GetShortField, jni_slot::GetStaticShortField,
-         jni_slot::SetShortField, jni_slot::SetStaticShortField, "i16", "i32", "sext"},
-        {"int", jni_slot::GetIntField, jni_slot::GetStaticIntField, jni_slot::SetIntField,
-         jni_slot::SetStaticIntField, "i32", "i32", ""},
-        {"long", jni_slot::GetLongField, jni_slot::GetStaticLongField, jni_slot::SetLongField,
-         jni_slot::SetStaticLongField, "i64", "i64", ""},
-        {"float", jni_slot::GetFloatField, jni_slot::GetStaticFloatField,
-         jni_slot::SetFloatField, jni_slot::SetStaticFloatField, "float", "float", ""},
-        {"double", jni_slot::GetDoubleField, jni_slot::GetStaticDoubleField,
-         jni_slot::SetDoubleField, jni_slot::SetStaticDoubleField, "double", "double", ""},
-        {"ref", jni_slot::GetObjectField, jni_slot::GetStaticObjectField,
-         jni_slot::SetObjectField, jni_slot::SetStaticObjectField, "ptr", "ptr", ""},
+        {"bool", "i32"},   {"byte", "i32"},   {"char", "i32"},  {"short", "i32"},
+        {"int", "i32"},    {"long", "i64"},   {"float", "float"}, {"double", "double"},
+        {"ref", "ptr"},
     };
 
     std::ostringstream out;
     const char* npeName = "java/lang/NullPointerException";
     const char* cceName = "java/lang/ClassCastException";
     const char* nullMsg = "null";
-    const auto zeroFor = [](const char* retType) -> const char* {
-        const std::string t(retType);
-        if (t == "float" || t == "double") return "0.0";
-        if (t == "ptr") return "null";
-        return "0";
-    };
     // NPE / CCE 类名与消息（固定名，避开调用点字符串表）。
     out << "@_mj2x_llvm_obj_npe = private unnamed_addr constant ["
         << (std::strlen(npeName) + 1) << " x i8] c\"" << npeName << "\\00\"\n";
@@ -136,106 +109,24 @@ std::string emitObjectHelpers()
     // virtual/interface → Call<Type>MethodA；special → CallNonvirtual<Type>MethodA
     // （GetObjectClass + 显式类，用于 <init>/private/super）；static 外部 →
     // CallStatic<Type>MethodA。null receiver（实例）抛 NPE。
+    // 调用族:#894 mj2x-llvmrt 阶段三d 下沉 mj2x-rt,模块只携带 declare。
     struct CallKindInfo
     {
         const char* kind;
-        int64_t     callSlot;       // Call*MethodA
-        int64_t     nonvirtualSlot; // CallNonvirtual*MethodA
-        int64_t     staticSlot;     // CallStatic*MethodA
         const char* boundary;       // JNI 返回类型
     };
     static const CallKindInfo callKinds[] = {
-        {"object", 36, 66, 116, "ptr"},
-        {"bool", 39, 69, 119, "i8"},
-        {"byte", 42, 72, 122, "i8"},
-        {"char", 45, 75, 125, "i16"},
-        {"short", 48, 78, 128, "i16"},
-        {"int", 51, 81, 131, "i32"},
-        {"long", 54, 84, 134, "i64"},
-        {"float", 57, 87, 137, "float"},
-        {"double", 60, 90, 140, "double"},
-        {"void", 63, 93, 143, "void"},
+        {"object", "ptr"},  {"bool", "i8"},    {"byte", "i8"},   {"char", "i16"},
+        {"short", "i16"},   {"int", "i32"},    {"long", "i64"},  {"float", "float"},
+        {"double", "double"}, {"void", "void"},
     };
     for (const auto& k : callKinds) {
-        // virtual / interface。
-        out << "define internal " << k.boundary << " @mj2x_llvm_call_" << k.kind
-            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, ptr %jv) {\n"
-            << "entry:\n"
-            << "  %isnull = icmp eq ptr %rcv, null\n"
-            << "  br i1 %isnull, label %npe, label %ok\n"
-            << "ok:\n"
-            << "  %ft0 = load ptr, ptr %env\n"
-            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-            << "  %find = load ptr, ptr %fc0\n"
-            << "  %cls = call ptr %find(ptr %env, ptr %owner)\n"
-            << "  %ft1 = load ptr, ptr %env\n"
-            << "  %gm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetMethodID << "\n"
-            << "  %getmid = load ptr, ptr %gm0\n"
-            << "  %mid = call ptr %getmid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
-            << "  %ft2 = load ptr, ptr %env\n"
-            << "  %ca0 = getelementptr ptr, ptr %ft2, i64 " << k.callSlot << "\n"
-            << "  %call = load ptr, ptr %ca0\n"
-            << (std::string(k.boundary) == "void" ? "  " : "  %r = ")
-            << "call " << k.boundary << " (ptr, ptr, ptr, ptr) %call(ptr %env, ptr %rcv, "
-               "ptr %mid, ptr %jv)\n"
-            << (std::string(k.boundary) == "void" ? "  ret void\n"
-                                                  : "  ret " + std::string(k.boundary) + " %r\n")
-            << "npe:\n"
-            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-            << (std::string(k.boundary) == "void"
-                    ? "  ret void\n"
-                    : "  ret " + std::string(k.boundary) + " " + zeroFor(k.boundary) + "\n")
-            << "}\n\n";
-        // special（invokespecial：<init>/private/super）。
-        out << "define internal " << k.boundary << " @mj2x_llvm_call_nonvirtual_" << k.kind
-            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, ptr %jv) {\n"
-            << "entry:\n"
-            << "  %isnull = icmp eq ptr %rcv, null\n"
-            << "  br i1 %isnull, label %npe, label %ok\n"
-            << "ok:\n"
-            << "  %ft0 = load ptr, ptr %env\n"
-            << "  %gc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::GetObjectClass << "\n"
-            << "  %getcls = load ptr, ptr %gc0\n"
-            << "  %rcls = call ptr %getcls(ptr %env, ptr %rcv)\n"
-            << "  %ft1 = load ptr, ptr %env\n"
-            << "  %gm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetMethodID << "\n"
-            << "  %getmid = load ptr, ptr %gm0\n"
-            << "  %mid = call ptr %getmid(ptr %env, ptr %rcls, ptr %name, ptr %desc)\n"
-            << "  %ft2 = load ptr, ptr %env\n"
-            << "  %ca0 = getelementptr ptr, ptr %ft2, i64 " << k.nonvirtualSlot << "\n"
-            << "  %call = load ptr, ptr %ca0\n"
-            << (std::string(k.boundary) == "void" ? "  " : "  %r = ")
-            << "call " << k.boundary
-            << " (ptr, ptr, ptr, ptr, ptr) %call(ptr %env, ptr %rcv, ptr %rcls, ptr %mid, ptr %jv)\n"
-            << (std::string(k.boundary) == "void" ? "  ret void\n"
-                                                  : "  ret " + std::string(k.boundary) + " %r\n")
-            << "npe:\n"
-            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-            << (std::string(k.boundary) == "void"
-                    ? "  ret void\n"
-                    : "  ret " + std::string(k.boundary) + " " + zeroFor(k.boundary) + "\n")
-            << "}\n\n";
-        // static（外部类）。
-        out << "define internal " << k.boundary << " @mj2x_llvm_call_static_" << k.kind
-            << "(ptr %env, ptr %owner, ptr %name, ptr %desc, ptr %jv) {\n"
-            << "entry:\n"
-            << "  %ft0 = load ptr, ptr %env\n"
-            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-            << "  %find = load ptr, ptr %fc0\n"
-            << "  %cls = call ptr %find(ptr %env, ptr %owner)\n"
-            << "  %ft1 = load ptr, ptr %env\n"
-            << "  %gm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetStaticMethodID << "\n"
-            << "  %getmid = load ptr, ptr %gm0\n"
-            << "  %mid = call ptr %getmid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
-            << "  %ft2 = load ptr, ptr %env\n"
-            << "  %ca0 = getelementptr ptr, ptr %ft2, i64 " << k.staticSlot << "\n"
-            << "  %call = load ptr, ptr %ca0\n"
-            << (std::string(k.boundary) == "void" ? "  " : "  %r = ")
-            << "call " << k.boundary
-            << " (ptr, ptr, ptr, ptr) %call(ptr %env, ptr %cls, ptr %mid, ptr %jv)\n"
-            << (std::string(k.boundary) == "void" ? "  ret void\n"
-                                                  : "  ret " + std::string(k.boundary) + " %r\n")
-            << "}\n\n";
+        out << "declare " << k.boundary << " @mj2x_llvm_call_" << k.kind
+            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, ptr %jv)\n\n";
+        out << "declare " << k.boundary << " @mj2x_llvm_call_nonvirtual_" << k.kind
+            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, ptr %jv)\n\n";
+        out << "declare " << k.boundary << " @mj2x_llvm_call_static_" << k.kind
+            << "(ptr %env, ptr %owner, ptr %name, ptr %desc, ptr %jv)\n\n";
     }
 
     // check_cast：IsInstanceOf == 0 → 挂起 ClassCastException；返回原引用。

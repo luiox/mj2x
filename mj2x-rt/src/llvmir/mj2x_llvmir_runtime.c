@@ -334,3 +334,105 @@ MJ2X_ARRAY_STORE(int, int32_t, jint, Int, val)
 MJ2X_ARRAY_STORE(long, int64_t, jlong, Long, val)
 MJ2X_ARRAY_STORE(float, float, jfloat, Float, val)
 MJ2X_ARRAY_STORE(double, double, jdouble, Double, val)
+
+
+// ---- 阶段三d:方法调用族(virtual/nonvirtual/static ×10 kind) ----
+
+// virtual/interface:receiver 为 null 先抛 NPE 返零值;FindClass(owner)+
+// GetMethodID+Call<JNI>MethodA。nonvirtual(invokespecial:<init>/private/
+// super):解析类取 receiver 实际类(GetObjectClass(rcv))而非 owner,
+// CallNonvirtual<JNI>MethodA。static 外部:FindClass+GetStaticMethodID+
+// CallStatic<JNI>MethodA(无 receiver 面)。cls/rcls 局部引用用毕释放;
+// 方法抛出的异常由生成代码的 ExceptionCheck 面感知。
+#define MJ2X_CALL(kind, RetT, JRetT, JN)                                                \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_call_##kind(JNIEnv* env, void* rcv,                 \
+        const char* owner, const char* name, const char* desc, jvalue* jv)              \
+    {                                                                                   \
+        if (rcv == NULL)                                                                \
+        {                                                                               \
+            mj2x_llvm_throw_null(env);                                                  \
+            return (RetT)0;                                                             \
+        }                                                                               \
+        jclass cls = (*env)->FindClass(env, owner);                                     \
+        if (cls == NULL) return (RetT)0;                                                \
+        jmethodID mid = (*env)->GetMethodID(env, cls, name, desc);                      \
+        const JRetT r = (*env)->Call##JN##MethodA(env, rcv, mid, jv);                   \
+        (*env)->DeleteLocalRef(env, cls);                                               \
+        return (RetT)r;                                                                 \
+    }                                                                                   \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_call_nonvirtual_##kind(JNIEnv* env, void* rcv,      \
+        const char* owner, const char* name, const char* desc, jvalue* jv)              \
+    {                                                                                   \
+        (void)owner;                                                                    \
+        if (rcv == NULL)                                                                \
+        {                                                                               \
+            mj2x_llvm_throw_null(env);                                                  \
+            return (RetT)0;                                                             \
+        }                                                                               \
+        jclass rcls = (*env)->GetObjectClass(env, rcv);                                 \
+        jmethodID mid = (*env)->GetMethodID(env, rcls, name, desc);                     \
+        const JRetT r = (*env)->CallNonvirtual##JN##MethodA(env, rcv, rcls, mid, jv);   \
+        (*env)->DeleteLocalRef(env, rcls);                                              \
+        return (RetT)r;                                                                 \
+    }                                                                                   \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_call_static_##kind(JNIEnv* env, const char* owner,  \
+        const char* name, const char* desc, jvalue* jv)                                 \
+    {                                                                                   \
+        jclass cls = (*env)->FindClass(env, owner);                                     \
+        if (cls == NULL) return (RetT)0;                                                \
+        jmethodID mid = (*env)->GetStaticMethodID(env, cls, name, desc);                \
+        const JRetT r = (*env)->CallStatic##JN##MethodA(env, cls, mid, jv);             \
+        (*env)->DeleteLocalRef(env, cls);                                               \
+        return (RetT)r;                                                                 \
+    }
+
+// void 返回形态(零值返回路径改为直接返回)。
+#define MJ2X_CALL_VOID(kind, JN)                                                        \
+    MJ2X_LLVMIR_API void mj2x_llvm_call_##kind(JNIEnv* env, void* rcv,                 \
+        const char* owner, const char* name, const char* desc, jvalue* jv)              \
+    {                                                                                   \
+        if (rcv == NULL)                                                                \
+        {                                                                               \
+            mj2x_llvm_throw_null(env);                                                  \
+            return;                                                                     \
+        }                                                                               \
+        jclass cls = (*env)->FindClass(env, owner);                                     \
+        if (cls == NULL) return;                                                        \
+        jmethodID mid = (*env)->GetMethodID(env, cls, name, desc);                      \
+        (*env)->Call##JN##MethodA(env, rcv, mid, jv);                                   \
+        (*env)->DeleteLocalRef(env, cls);                                               \
+    }                                                                                   \
+    MJ2X_LLVMIR_API void mj2x_llvm_call_nonvirtual_##kind(JNIEnv* env, void* rcv,      \
+        const char* owner, const char* name, const char* desc, jvalue* jv)              \
+    {                                                                                   \
+        (void)owner;                                                                    \
+        if (rcv == NULL)                                                                \
+        {                                                                               \
+            mj2x_llvm_throw_null(env);                                                  \
+            return;                                                                     \
+        }                                                                               \
+        jclass rcls = (*env)->GetObjectClass(env, rcv);                                 \
+        jmethodID mid = (*env)->GetMethodID(env, rcls, name, desc);                     \
+        (*env)->CallNonvirtual##JN##MethodA(env, rcv, rcls, mid, jv);                   \
+        (*env)->DeleteLocalRef(env, rcls);                                              \
+    }                                                                                   \
+    MJ2X_LLVMIR_API void mj2x_llvm_call_static_##kind(JNIEnv* env, const char* owner,  \
+        const char* name, const char* desc, jvalue* jv)                                 \
+    {                                                                                   \
+        jclass cls = (*env)->FindClass(env, owner);                                     \
+        if (cls == NULL) return;                                                        \
+        jmethodID mid = (*env)->GetStaticMethodID(env, cls, name, desc);                \
+        (*env)->CallStatic##JN##MethodA(env, cls, mid, jv);                             \
+        (*env)->DeleteLocalRef(env, cls);                                               \
+    }
+
+MJ2X_CALL(object, void*, jobject, Object)
+MJ2X_CALL(bool, int8_t, jboolean, Boolean)
+MJ2X_CALL(byte, int8_t, jbyte, Byte)
+MJ2X_CALL(char, int16_t, jchar, Char)
+MJ2X_CALL(short, int16_t, jshort, Short)
+MJ2X_CALL(int, int32_t, jint, Int)
+MJ2X_CALL(long, int64_t, jlong, Long)
+MJ2X_CALL(float, float, jfloat, Float)
+MJ2X_CALL(double, double, jdouble, Double)
+MJ2X_CALL_VOID(void, Void)
