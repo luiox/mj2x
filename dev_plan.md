@@ -13,7 +13,7 @@
 | 十二（配置系统） | P0+P1 完成：参数注册表 + 全量配置化 + `--dump-config-schema`/`--dump-config-template` | 🟡 GUI 配置工具（P2）待做（见待做 D） |
 | 十三（LLVM IR 后端） | 基础款转正默认开启（v2.2）+ 二次扩面 11 项（对象/数组/实例调用/异常/monitor/ldc/窄类型等，PR #864） | ✅ 完成（见归档索引） |
 | 十四（LLVM 第二轮扩面） | invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入、mtest_set 矩阵 + protected_samples llvm 样本 | 🟢 完成（Math/包装类等 RegC-only intrinsic 下沉除外，见待做 E） |
-| 十五（mj2x-llvmrt 运行时下沉） | #894：llvm_ir_helpers.cpp 固定 IR helper 逐批下沉 mj2x-rt/src/llvmir（declare 化） | 🟡 阶段一二+三a 完成（41→24），剩字段/数组/调用族 + indy/box/unbox + 收尾，见待做 H |
+| 十五（mj2x-llvmrt 运行时下沉） | #894：llvm_ir_helpers.cpp 固定 IR helper 逐批下沉 mj2x-rt/src/llvmir（declare 化）；源内 define internal 41→1（仅剩 bsm 站点模板）；benchmark 中性（`benchmark/results/2026-08-23-llvmrt-sink.md`） | ✅ 完成（见归档索引；顺带修复 Compare-REF Eq 裸拷贝发射缺陷 c1ce74d79） |
 
 ## 待做项
 
@@ -164,63 +164,6 @@
 - 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层
   各自为政，需在 capabilities/AGENTS 层面定一次豁免边界。
 
-### H. mj2x-llvmrt 运行时下沉（#894，进行中，分支 `refactor/mj2x-llvm-runtime-sink`）
-
-按"运行时=固定代码→mj2x-rt 链接；模板=发射期动态拼装→留在 emitter"的准则，
-把 `llvm_ir_helpers.cpp` 里 `define internal` 的固定 IR helper 逐批改为
-`mj2x-rt/src/llvmir/mj2x_llvmir_runtime.{h,c}` 的 C99 实现，`.ll` 模块改携带
-`declare`（符号名/ABI 严格一致：IR 手搓 JNIEnv 槽位分发 ≙ `(*env)->调用`；
-i8=jboolean、i16=jchar/jshort、ptr=引用）。链接侧 `addCrtSources` 递归收集
-src/**/*.c 自动接线。
-
-**已完成（4 commit 已推）**：
-- `99f79487b` 阶段一（异常面）：throw_null / throw_arith /
-  exception_occurred / exception_clear。
-- `44f60f5e3` 阶段二：new_object、check_cast、instance_of、exception_check、
-  exception_matches、throw(athrow)、string_const、ref_eq。行为修正一处：
-  原 IR check_cast 失败路径把类名字符串常量当 jclass 传 ThrowNew（未执行到
-  的潜在缺陷），C 版按 JVM 语义抛 ClassCastException。
-- `5e9fa45be` 阶段三a（数组单件）：new_array、new_multi_array（递归）、
-  new_object_array、set_object_array_element、array_length。
-- define internal 总量 41 → 24。每批全量 mj2x_unittest 631 过/0 失败。
-
-**下一步施工手册（IR 体都在 llvm_ir_helpers.cpp 固定行区，翻译模式同前）**：
-
-1. **阶段三b 字段族**（field_load/store ×9 kind，行 ~96-198）：FindClass(owner)
-   → is_static ? GetStaticFieldID+GetStaticXxxField : (rcv null→throw_null 返零值)
-   GetFieldID+GetXxxField；窄类型 load 后宽化（bool/char zext，byte/short sext）、
-   store 前窄化（bool 归一 0/1）。C 侧用宏展开 9 kind（JNI 名大小写需显式传参，
-   如 Boolean/Byte/…）。
-2. **阶段三c 数组元素族**（array_load/store ×8 kind，行 ~200-359）：null→NPE；
-   region 读 1 元素后宽化/写前窄化；byte kind 特判 boolean[]（IsInstanceOf
-   FindClass("[Z") → Get/SetBooleanArrayRegion）；ref kind 直用
-   Get/SetObjectArrayElement。
-3. **阶段三d 调用族**（call/nonvirtual/static ×10 kind，行 ~363-467，
-   MethodA 形态）：virtual: rcv null→NPE + FindClass+GetMethodID+
-   CallXxxMethodA；nonvirtual: GetObjectClass(rcv)+GetMethodID(rcls)+
-   CallNonvirtualXxxMethodA（注意 rcls 取自 receiver 非 owner！）；static:
-   FindClass+GetStaticMethodID+CallStaticXxxMethodA。void kind 单列。
-4. **阶段四**（行 ~491-1175）：class_const（单字符名 V/Z/B/C/S/I/J/F/D →
-   Void.class / 包装类 TYPE 静态字段，其余 FindClass）、throw_new（依赖
-   class_const，一起沉）、monitor_enter/exit（null→NPE）、indy 固定 helper 组
-   10 个（method_type/wrapper_type/class_object/call_static_mid/call_obj_mid/
-   field_handle/method_handle3/4/2/handle——互相调用+依赖 call 族与 box，
-   最后沉）、box/unbox ×8（valueOf/XxxValue，boolean 窄化 i32→i1→i8 归一）。
-   ⚠️ `mj2x_llvm_indy_bsm_<tag>` 与站点级常量是**模板**（发射期动态生成），
-   按准则保留在 emitter 不沉。
-5. **收尾清理**：emitObjectHelpers 里 `_mj2x_llvm_obj_npe/cce/null/zarr`
-   私有常量随最后引用消失而删除；indy 组的模块级常量串同理核对。
-6. **benchmark**：AGENTS 规约性能变化要数据——对比 main vs 分支在代表性
-   样本集上的 CLI 编译耗时 + 产物运行耗时（internal→extern 对 LTO 无关，
-   预期中性，需实测佐证）。
-7. **开 PR**：更新本文件状态 + capabilities（若提法变化），PR 正文附验证数据。
-
-**施工技巧**：emitter 改写用结构化 PowerShell 脚本（定位
-`define internal .* @<sym>\(` 行 → 向下找 `}\n\n";` 结束行整段替换为 declare
-行，见阶段三a 用过的 swap 脚本模式）；表驱动循环体（for kinds）则按循环
-整体替换为 emit-declare 循环。C 宏展开放 .c 内（头文件只留原型，避免多 TU
-重复定义）。验证命令见下节；每族一批小步提交。
-
 ## 验证命令
 
 ```bash
@@ -230,8 +173,26 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 ```
 
 > 性能数据必须先做覆盖率审计（见 `performance_evaluation_spec.md`）。
+> 注意：llvm sample E2E 外呼 `mj2x-cli.exe`，验证前须确认 CLI 已重建
+> （`xmake build mj2x-cli`），否则跑的是旧发射器（#894 收尾时踩过）。
 
 ## 日志
+
+- 2026-08-23（#894 llvmrt 运行时下沉收尾，分支 `refactor/mj2x-llvm-runtime-sink`）：
+  阶段三b 字段族 ×9（`b0b21af75`）、三c 数组元素族 ×8（`6ca864156`，byte 特判
+  boolean[]）、三d 调用族 ×10（`8c45b207a`）、四a class_const/throw_new
+  （`7bdab6f5f`）、四b monitor + 死常量清理（`412677393`）、四c indy 直调面 +
+  box/unbox ×8（`49f85f160`）、四d indy 固定 helper 组 ×8（`67dd8b6cc`）。
+  源内 define internal **41→1**（仅剩 `mj2x_llvm_indy_bsm_<tag>` 站点模板，
+  按运行时/模板准则留 emitter）；发射端固定常量仅保留 bsm 引用的
+  `java_lang_Object`。每批全量 mj2x_unittest 绿。收尾 benchmark：CLI 编译耗时
+  中性（±5% 噪声带内）、.ll 体积 -56%~-80%、dll +4~5%、产物运行 48 样本交错
+  中位数无回归证据——报告 `benchmark/results/2026-08-23-llvmrt-sink.md`
+  （含 javap 覆盖率审计表，两侧 native 状态完全对称）。顺带修复 benchmark
+  暴露的既有缺陷：Compare-REF Eq/ifnull 路径发射 `%vN = %vM` 裸拷贝伪指令，
+  clang 拒绝任何含 null 检查的方法（main 同样命中；`c1ce74d79` +
+  EmitsRefEqWithoutBareCopyPseudo 回归）。过程教训入验证命令节：sample E2E
+  外呼的 mj2x-cli.exe 必须先重建，否则验证的是旧发射器。
 
 - 2026-08-17（round-3 全线审查修复，分支 `review/mj2x-audit-fixes`）：四方向
   并行审查（前端/core、RegC、StackC/VMC4/LLVM、CLI/CRT/文档，发现记录见
@@ -501,4 +462,5 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 | 八~十一（#818 intrinsic、#827 program 粒度、#829 混淆） | git log PR #826；`vmc4_backend.cpp` 实例缓存 + 粒度矩阵测试；`reg_transform_passes.{hpp,cpp}` + `register_ir_test.cpp` |
 | 十二（配置系统） | `mj2x-cli/src/param_registry.{hpp,cpp}`；`doc/config_file.md`；`doc_ai/config_system_design.md`（PR #846） |
 | 十三（LLVM IR 后端） | `mj2x-core/src/mj2x/backend/llvmir/`（ed9a13881 实现，v2.2 转正 + 移位/互调/除零异常/递归/跨类/fptosi.sat 扩面）；`unittest/src/backend/llvm_ir_backend_test.cpp`（11 例）+ cli_test LLVM 3 例（含 clang/llc 编译 → JVM 运行 E2E）；`doc/user_guide.md` §5.4 |
+| 十五（mj2x-llvmrt 运行时下沉，#894） | 分支 `refactor/mj2x-llvm-runtime-sink`（99f79487b…67dd8b6cc 十一批 + refeq 修复 c1ce74d79）；`mj2x-rt/src/llvmir/mj2x_llvmir_runtime.{h,c}`；`benchmark/results/2026-08-23-llvmrt-sink.md`；守卫测试 llvm_ir_backend_test.cpp（declare 形态锁） |
 | VMC4 红队对抗（N-7 / S2 前置） | `mjdbg/mjdbg-isa-recovery/`（PR #845）；`doc_ai/vmc4_red_team_contract.md` §6 |
