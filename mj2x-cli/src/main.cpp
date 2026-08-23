@@ -658,7 +658,8 @@ int main(int argc, char** argv)
     if (cliQuiet) mj2x::setLogLevel(ca::log::Level::Warn);
     else if (cliVerbose) mj2x::setLogLevel(ca::log::Level::Debug);
 
-    // 配置文件：注册表驱动加载（默认值 < 配置 < CLI 由解析顺序保证）。
+    // 配置文件：注册表驱动加载，直接写入 options（默认值 < 配置；CLI 显式
+    // 参数随后经 parseCli 覆盖同名字段，构成三级优先级）。
     if (!configPath.empty()) {
         std::string error;
         if (!mj2x::cli::loadConfigFile(configPath, options, error)) {
@@ -671,59 +672,86 @@ int main(int argc, char** argv)
         }
     }
 
-    // 第二遍：注册表驱动参数解析（--config 第一遍已消费；--quiet/--verbose
-    // 走注册表 log_quiet/log_verbose，最终日志级别按 CLI 优先）。
-    bool         dumpSchema   = false;
-    bool         dumpTemplate = false;
-    std::string  dumpFile;
-    for (int i = 1; i < argc; i++) {
-        const std::string arg = argv[i];
-        if (arg == "--config") {
-            ++i;   // 第一遍已记录路径；这里跳过其值。
-            continue;
-        }
-        // --lang 已在预扫描消费(语言未注册时静默回退,合法值见 --help)。
-        if (arg == "--lang") {
-            if (i + 1 < argc && argv[i + 1][0] != '-') ++i;
-            continue;
-        }
-        if (arg.rfind("--lang=", 0) == 0) continue;
-        if (arg == "-h" || arg == "--help") {
+    // 第二遍：ca::opt 单次解析归一（别名/互斥/未知 token 报错），值语义
+    // 校验（Int base0、UInt64/Hex/Enum）仍由注册表 parseCli 单源承担。
+    // --lang 已由 i18n 预扫描消费，opt 侧注册 String 仅为通过未知选项校验；
+    // --quiet/--verbose 同时给出时 quiet 赢（上方 if/else 顺序），与迁移前一致。
+    ca::opt::Parser parser(mj2x::cli::buildOptCommand());
+    auto            parsed = parser.parse(argc, argv);
+    if (!parsed.is_ok()) {
+        const ca::opt::ParseError& err = parsed.unwrap_err();
+        if (err.category == ca::opt::ParseErrorCategory::HelpRequested) {
             printUsage();
             return 0;
         }
-        if (arg == "--dump-config-schema" || arg == "--dump-config-template") {
-            if (dumpSchema || dumpTemplate) {
-                CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.dump_once"));
-                return 1;
-            }
-            dumpSchema   = (arg == "--dump-config-schema");
-            dumpTemplate = !dumpSchema;
-            if (i + 1 < argc && argv[i + 1][0] != '-') dumpFile = argv[++i];
-            continue;
+        std::string message;
+        switch (err.category) {
+        case ca::opt::ParseErrorCategory::UnknownOption:
+        case ca::opt::ParseErrorCategory::UnexpectedArgument:
+            message = std::string(
+                i18n::trf("mj2x.cli.err.unknown_option", {err.option.empty() ? err.message : err.option}));
+            break;
+        case ca::opt::ParseErrorCategory::MissingValue:
+        case ca::opt::ParseErrorCategory::EmptyValue:
+            message = std::string(
+                i18n::trf("mj2x.cli.err.flag_requires_value", {"--" + err.option}));
+            break;
+        case ca::opt::ParseErrorCategory::MutexConflict:
+            // ⚠️ 前瞻耦合：ParseError 目前不携带互斥组标识，此处按"唯一
+            // 互斥组 = dump-config-schema/template"硬编码映射 dump_once。
+            // 新增第二组互斥前，须推动 libca ParseError 携带 group 标识并
+            // 在此按组分发文案，否则会静默用错（已提 libca 待办）。
+            message = std::string(i18n::tr("mj2x.cli.err.dump_once"));
+            break;
+        default:
+            message = err.message;
+            break;
         }
-        const mj2x::cli::ParamDef* param = mj2x::cli::findParamByCli(arg);
-        if (!param) {
-            CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.unknown_option", {arg}).c_str());
-            printUsage();
-            return 1;
-        }
-        const char* value = nullptr;
-        if (param->type != mj2x::cli::ParamType::Bool) {
-            if (i + 1 >= argc) {
-                CA_LOGT_ERROR("cli", "{}\n", i18n::trf("mj2x.cli.err.flag_requires_value", {arg}).c_str());
-                printUsage();
-                return 1;
-            }
-            value = argv[++i];
-        }
+        CA_LOGT_ERROR("cli", "{}\n", message.c_str());
+        printUsage();
+        return 1;
+    }
+    const ca::opt::ParseResult& input = parsed.unwrap();
+
+    // 注册表校验环：仅处理命令行显式来源（source_of == CommandLine）——配置
+    // 文件值已由 loadConfigFile 直写 options，重复应用会破坏 emit 输出组
+    // "首个 CLI 输出清空其他"的替换语义（回归测试
+    // JsonConfigSupportsCppOutputAndCommandLineCanReplaceIt 锁定）。Bool Flag
+    // 出现即置位；StringList 逐项追加。
+    for (std::size_t i = 0; i < mj2x::cli::kParamCount; ++i) {
+        const mj2x::cli::ParamDef& param = mj2x::cli::kParams[i];
+        const std::string          name  = mj2x::cli::optCanonicalName(param.cliFlag);
+        if (input.source_of(name) != ca::opt::ValueSource::CommandLine) continue;
         std::string error;
-        if (!param->parseCli(options, value, error)) {
+        bool        ok = true;
+        if (param.type == mj2x::cli::ParamType::Bool) {
+            ok = param.parseCli(options, nullptr, error);
+        }
+        else if (param.type == mj2x::cli::ParamType::StringList) {
+            for (const std::string& item : input.get_list(name)) {
+                ok = param.parseCli(options, item.c_str(), error);
+                if (!ok) break;
+            }
+        }
+        else {
+            const std::string value = input.get(name);
+            ok                      = param.parseCli(options, value.c_str(), error);
+        }
+        if (!ok) {
             CA_LOGT_ERROR("cli", "{}\n", error.c_str());
             printUsage();
             return 1;
         }
     }
+
+    bool         dumpSchema   = false;
+    bool         dumpTemplate = false;
+    std::string  dumpFile;
+    dumpSchema   = input.source_of("dump-config-schema") != ca::opt::ValueSource::None;
+    dumpTemplate = input.source_of("dump-config-template") != ca::opt::ValueSource::None;
+    dumpFile     = dumpSchema   ? input.get("dump-config-schema")
+                   : dumpTemplate ? input.get("dump-config-template")
+                                  : std::string{};
 
     // --dump-config-schema / --dump-config-template：不要求 -i/-o，输出后退出。
     if (dumpSchema || dumpTemplate) {

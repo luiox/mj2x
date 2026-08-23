@@ -5,7 +5,7 @@ target("mj2x-cli")
     set_kind("binary")
     set_group("mj2x")
 
-    add_deps("mj2x-core", "libjdk_finder", "libca_process", "libi18n", "libresources")
+    add_deps("mj2x-core", "libjdk_finder", "libca_process", "libca_opt", "libi18n", "libresources")
     add_packages("nlohmann_json")
 
     -- v2.2 起 LLVM IR 后端默认开启（with_mj2x_llvm=y，见 xmake/options.lua）。

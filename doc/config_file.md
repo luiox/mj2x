@@ -58,9 +58,12 @@
 ## Schema 与模板
 
 ```sh
-mj2x-cli --dump-config-schema [<file>]      # JSON Schema draft-07（stdout 或文件）
-mj2x-cli --dump-config-template [<file>]    # 全量键 + 默认值 + 注释模板（JSONC）
+mj2x-cli --dump-config-schema[=<file>]      # JSON Schema draft-07（裸=stdout，内联 =file 写文件）
+mj2x-cli --dump-config-template[=<file>]    # 全量键 + 默认值 + 注释模板（JSONC）
 ```
+
+> 文件目标仅支持内联 `=` 形态（`--dump-config-schema=out.json`）；空格形态
+> 不再消费后继 token，避免与位置参数的歧义。二者互斥，同给报错。
 
 - **schema** 供 GUI 配置工具 / VS Code（`json.schemas`）/ ajv 校验直接消费；
   键含 `description`/`default`/`enum`/`minimum`/`maximum`/`x-requires`。

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "libca/core/datatype.hpp"
+#include "libca/opt/opt.hpp"
 #include "mj2x/codegen/c_options.hpp"
 #include "mj2x/mj2x.hpp"
 #include "native_compiler.hpp"
@@ -149,8 +150,22 @@ const ParamDef* findParamByCli(const std::string& cliFlag);
 /// @brief 按 JSON 键查找（无匹配返回 nullptr）。
 const ParamDef* findParamByJsonPath(const std::string& jsonPath);
 
+/// @brief CLI flag → ca::opt canonical 名（剥除前导 '-'，如 "--regc-seed"→
+///        "regc-seed"、"-i"→"i"）。注册表驱动构建 opt Command 与解析后
+///        按来源回查注册表共用。
+std::string optCanonicalName(const char* cliFlag);
+
 /// @brief 解析后端名（stackc/regc/llvm/vmc4 + 兼容别名 cbackend/c）。
 bool parseBackendName(const std::string& name, CEmitterBackend& backend);
+
+/// @brief 注册表 + CLI 特殊参数 → ca::opt 根命令定义（CLI 解析单源）。
+///
+/// 参数类型映射：Bool→Flag、StringList→StringList、其余→String——值语义
+/// 校验（Int 的 base0/范围、UInt64/Hex/Enum）统一留在 parseCli 单一校验源，
+/// opt 只做 argv 结构归一。特殊参数：config/lang（String）、
+/// dump-config-schema/template（OptionalString：裸=stdout，=file 写文件，
+/// 二者互斥）。--help/-h 为 opt 内建，HelpRequested 由调用方接自研帮助。
+ca::opt::Command buildOptCommand();
 
 /// @brief 构建配置 JSON Schema（draft-07，平铺 properties，additionalProperties=false）。
 nlohmann::json buildConfigSchemaJson();

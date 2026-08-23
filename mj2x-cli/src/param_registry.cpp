@@ -756,9 +756,75 @@ const ParamDef* findParamByJsonPath(const std::string& jsonPath)
     return nullptr;
 }
 
+std::string optCanonicalName(const char* cliFlag)
+{
+    std::string name = cliFlag;
+    while (!name.empty() && name[0] == '-') name.erase(name.begin());
+    return name;
+}
+
 bool parseBackendName(const std::string& name, CEmitterBackend& backend)
 {
     return parseBackendNameImpl(name, backend);
+}
+
+// ---------- ca::opt Command 构建（CLI 解析单源，见头注） ----------
+
+namespace {
+
+/// 特殊参数（注册表之外）登记。
+void addSpecialArg(ca::opt::Command& cmd, const char* name, ca::opt::OptKind kind)
+{
+    ca::opt::Arg arg;
+    arg.name = name;
+    arg.kind = kind;
+    cmd.args.push_back(arg);
+}
+
+}   // namespace
+
+ca::opt::Command buildOptCommand()
+{
+    ca::opt::Command cmd;
+    cmd.name = "mj2x-cli";
+    // config：预扫描已消费路径，此处登记仅为通过未知选项校验。
+    addSpecialArg(cmd, "config", ca::opt::OptKind::String);
+    // lang：i18n 预扫描已消费；String 形态下空格传值会消费后继 token（即使
+    // 以 '-' 开头）、悬空报 MissingValue——较迁移前的容忍式扫描 fail-closed，
+    // 行为变更由 DanglingLangFlagFailsClosed / LangFlagFollowedByFlagFailsClosed
+    // 锁定；合法用法为 --lang=<lang> 或 --lang <lang> <args...>。
+    addSpecialArg(cmd, "lang", ca::opt::OptKind::String);
+    addSpecialArg(cmd, "dump-config-schema", ca::opt::OptKind::OptionalString);
+    addSpecialArg(cmd, "dump-config-template", ca::opt::OptKind::OptionalString);
+    ca::opt::MutexGroup dumpOnce;
+    dumpOnce.names = {"dump-config-schema", "dump-config-template"};
+    cmd.mutex_groups.push_back(dumpOnce);
+
+    for (std::size_t i = 0; i < kParamCount; ++i) {
+        const ParamDef& p = kParams[i];
+        ca::opt::Arg arg;
+        arg.name = optCanonicalName(p.cliFlag);
+        switch (p.type) {
+        case ParamType::Bool:
+            arg.kind = ca::opt::OptKind::Flag;
+            break;
+        case ParamType::StringList:
+            // ⚠️ 前提：StringList 的合法项本身不得含逗号——opt 侧按逗号
+            // 拆分 + 跨次追加后逐项喂 parseCli（迁移前整串直达 parseCli，
+            // 无拆分）。当前 67 参数均满足；新增含逗号项的列表参数时须
+            // 改走 String kind 自行收集。
+            arg.kind = ca::opt::OptKind::StringList;
+            break;
+        default:
+            // 值语义校验（Int base0/范围、UInt64/Hex/Enum）统一在 parseCli。
+            arg.kind = ca::opt::OptKind::String;
+            break;
+        }
+        // 单 '-' 短形态(-i/-o)需显式别名;长形态由 --<canonical> 自动匹配。
+        if (p.cliFlag[0] == '-' && p.cliFlag[1] != '-') arg.aliases.push_back(p.cliFlag);
+        cmd.args.push_back(arg);
+    }
+    return cmd;
 }
 
 // ---------- JSON Schema 构建（--dump-config-schema） ----------

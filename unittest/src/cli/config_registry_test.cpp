@@ -297,7 +297,9 @@ TEST(ConfigRegistryTest, SchemaWrittenToFileMatchesStdout)
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
 
     const fs::path schemaFile = test::getTempOutPath("mj2x_config_schema.json");
-    const auto     toFile     = runCli({"--dump-config-schema", q(schemaFile)});
+    // OptionalString 形态:文件目标仅支持内联 =（裸出现=stdout;空格形态不再
+    // 消费后继,杜绝与位置参数的歧义）。
+    const auto     toFile     = runCli({"--dump-config-schema=" + q(schemaFile)});
     ASSERT_EQ(toFile.exitCode, 0) << toFile.out;
     ASSERT_TRUE(fileExists(schemaFile));
 

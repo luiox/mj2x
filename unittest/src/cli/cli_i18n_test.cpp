@@ -207,6 +207,25 @@ TEST_F(CliI18nTest, UnknownLangFallsBackToZhCn)
     EXPECT_NE(result.out.find(kZhUsage), std::string::npos) << result.out;
 }
 
+// 迁移后 --lang 由 opt 按 String 选项解析（迁移前为容忍式手写扫描）：
+// 悬空无值报 MissingValue，fail-closed。锁定该行为变更。
+TEST_F(CliI18nTest, DanglingLangFlagFailsClosed)
+{
+    const auto result = runCliEnv({"--lang"});
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("需要提供值"), std::string::npos) << result.out;
+}
+
+// 空格形态的 --lang 会消费后继 token 作值（即使以 '-' 开头），剩余裸 token
+// 报 UnexpectedArgument——与迁移前"静默忽略 lang、其余正常解析"不同，
+// fail-closed。合法用法为 --lang=en_US 内联形态或 --lang <lang> <args...>。
+TEST_F(CliI18nTest, LangFlagFollowedByFlagFailsClosed)
+{
+    const auto result = runCliEnv({"--lang", "-o", "out.class"});
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("未知选项"), std::string::npos) << result.out;
+}
+
 TEST_F(CliI18nTest, ErrorMessageLocalizesPerLanguage)
 {
     const fs::path cfg = test::getTempOutPath("mj2x_i18n_unknown_key.json");

@@ -178,6 +178,25 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-08-23（mj2x-cli 解析迁移 ca::opt v2，分支 `feat/mj2x-cli-opt-v2`）：
+  libca PR #198（opt v2：类型化 Arg/十类错误/互斥组/ValueSource 来源查询/
+  OptionalString）评审后合入，third_party/libca 同步至 `9ea6b4d`。main.cpp
+  手写 argv 双循环迁移为 Parser::parse + 注册表校验环：`buildOptCommand()`
+  按注册表 ParamType→OptKind 映射登记 67 参数（值语义校验统一留 parseCli
+  单源），错误按 ParseErrorCategory 映射既有 i18n 键，HelpRequested 接自研
+  printUsage；校验环仅处理 CommandLine 来源——配置文件值已由
+  loadConfigFile 直写 options，注入式三级优先级对本项目冗余且会破坏 emit
+  输出组"首个 CLI 输出清空其他"替换语义（回归锁定）。行为变更共三处
+  （均 fail-closed，各由 E2E 锁定）：① --dump-config-schema/template 文件
+  目标改内联 `=` 形态；② --lang 悬空无值由静默容忍改为 MissingValue 报错；
+  ③ --lang 空格形态会消费后继 '-' 开头 token（迁移前静默忽略 lang），
+  合法用法为内联 --lang=<lang>。--quiet/--verbose 维持 quiet 赢。已知
+  前瞻耦合：ParseError 不携带互斥组标识，多组互斥前须推动 libca 补充
+  （已提 libca 待办）；StringList 参数合法项不得含逗号（opt 拆分前提，
+  已注记 buildOptCommand）。验证：全量 mj2x_unittest 632 过/3 skip +
+  mtest_set 25/25；CLI 面冒烟逐项对齐（help/未知选项/缺值/dump 形态/
+  config 三级优先级）。
+
 - 2026-08-23（#894 llvmrt 运行时下沉收尾，分支 `refactor/mj2x-llvm-runtime-sink`）：
   阶段三b 字段族 ×9（`b0b21af75`）、三c 数组元素族 ×8（`6ca864156`，byte 特判
   boolean[]）、三d 调用族 ×10（`8c45b207a`）、四a class_const/throw_new
