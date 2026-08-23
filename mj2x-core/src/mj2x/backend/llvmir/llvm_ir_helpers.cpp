@@ -93,108 +93,14 @@ std::string emitObjectHelpers()
     // new_multi_array：NewObjectArray 递归（JVM EagerAlloc 语义）。
     out << "declare ptr @mj2x_llvm_new_multi_array(ptr %env, ptr %desc, ptr %dims, i32 %ndims)\n\n";
 
-    // 字段 load/store helpers（static/instance 合一 + null 检查）。
+    // 字段 load/store helpers(static/instance 合一 + null 检查)。
+    // 字段族:#894 mj2x-llvmrt 阶段三b 下沉 mj2x-rt,模块只携带 declare。
     for (const auto& k : kinds) {
-        const std::string getFn = "get" + std::string(k.kind) + "field";
-        const std::string getStaticFn = "getstatic" + std::string(k.kind) + "field";
-        out << "define internal " << k.retType << " @mj2x_llvm_field_load_" << k.kind
-            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, i32 %is_static) {\n"
-            << "entry:\n"
-            << "  %ft0 = load ptr, ptr %env\n"
-            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-            << "  %findclass = load ptr, ptr %fc0\n"
-            << "  %cls = call ptr %findclass(ptr %env, ptr %owner)\n"
-            << "  %isst = icmp eq i32 %is_static, 0\n"
-            << "  br i1 %isst, label %inst, label %stat\n"
-            << "inst:\n"
-            << "  %isnull = icmp eq ptr %rcv, null\n"
-            << "  br i1 %isnull, label %npe, label %inst_ok\n"
-            << "inst_ok:\n"
-            << "  %ft1 = load ptr, ptr %env\n"
-            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetFieldID << "\n"
-            << "  %getfid = load ptr, ptr %gf1\n"
-            << "  %fid = call ptr %getfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
-            << "  %ft2 = load ptr, ptr %env\n"
-            << "  %gi1 = getelementptr ptr, ptr %ft2, i64 " << k.getSlot << "\n"
-            << "  %gv = load ptr, ptr %gi1\n"
-            << "  %v = call " << k.jniType << " %gv(ptr %env, ptr %rcv, ptr %fid)\n";
-        if (std::strlen(k.ext) > 0) {
-            out << "  %w = " << k.ext << " " << k.jniType << " %v to " << k.retType << "\n"
-                << "  ret " << k.retType << " %w\n";
-        }
-        else {
-            out << "  ret " << k.retType << " %v\n";
-        }
-        out << "stat:\n"
-            << "  %ft3 = load ptr, ptr %env\n"
-            << "  %gs1 = getelementptr ptr, ptr %ft3, i64 " << jni_slot::GetStaticFieldID << "\n"
-            << "  %getstatfid = load ptr, ptr %gs1\n"
-            << "  %fid2 = call ptr %getstatfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
-            << "  %ft4 = load ptr, ptr %env\n"
-            << "  %gsi1 = getelementptr ptr, ptr %ft4, i64 " << k.getStaticSlot << "\n"
-            << "  %gsv = load ptr, ptr %gsi1\n"
-            << "  %v2 = call " << k.jniType << " %gsv(ptr %env, ptr %cls, ptr %fid2)\n";
-        if (std::strlen(k.ext) > 0) {
-            out << "  %w2 = " << k.ext << " " << k.jniType << " %v2 to " << k.retType << "\n"
-                << "  ret " << k.retType << " %w2\n";
-        }
-        else {
-            out << "  ret " << k.retType << " %v2\n";
-        }
-        out << "npe:\n"
-            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-            << "  ret " << k.retType << " " << zeroFor(k.retType) << "\n"
-            << "}\n\n";
-        // store。
-        out << "define internal void @mj2x_llvm_field_store_" << k.kind
+        out << "declare " << k.retType << " @mj2x_llvm_field_load_" << k.kind
+            << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, i32 %is_static)\n\n";
+        out << "declare void @mj2x_llvm_field_store_" << k.kind
             << "(ptr %env, ptr %rcv, ptr %owner, ptr %name, ptr %desc, i32 %is_static, "
-            << k.retType << " %val) {\n"
-            << "entry:\n"
-            << "  %ft0 = load ptr, ptr %env\n"
-            << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-            << "  %findclass = load ptr, ptr %fc0\n"
-            << "  %cls = call ptr %findclass(ptr %env, ptr %owner)\n"
-            << "  %isst = icmp eq i32 %is_static, 0\n"
-            << "  br i1 %isst, label %inst, label %stat\n"
-            << "inst:\n"
-            << "  %isnull = icmp eq ptr %rcv, null\n"
-            << "  br i1 %isnull, label %npe, label %inst_ok\n"
-            << "inst_ok:\n"
-            << "  %ft1 = load ptr, ptr %env\n"
-            << "  %gf1 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetFieldID << "\n"
-            << "  %getfid = load ptr, ptr %gf1\n"
-            << "  %fid = call ptr %getfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
-            << "  %ft2 = load ptr, ptr %env\n"
-            << "  %si1 = getelementptr ptr, ptr %ft2, i64 " << k.setSlot << "\n"
-            << "  %sv = load ptr, ptr %si1\n";
-        if (std::strlen(k.ext) > 0) {
-            out << "  %tv = trunc " << k.retType << " %val to " << k.jniType << "\n"
-                << "  call void %sv(ptr %env, ptr %rcv, ptr %fid, " << k.jniType << " %tv)\n";
-        }
-        else {
-            out << "  call void %sv(ptr %env, ptr %rcv, ptr %fid, " << k.jniType << " %val)\n";
-        }
-        out << "  ret void\n"
-            << "stat:\n"
-            << "  %ft3 = load ptr, ptr %env\n"
-            << "  %gs1 = getelementptr ptr, ptr %ft3, i64 " << jni_slot::GetStaticFieldID << "\n"
-            << "  %getstatfid = load ptr, ptr %gs1\n"
-            << "  %fid2 = call ptr %getstatfid(ptr %env, ptr %cls, ptr %name, ptr %desc)\n"
-            << "  %ft4 = load ptr, ptr %env\n"
-            << "  %ssi1 = getelementptr ptr, ptr %ft4, i64 " << k.setStaticSlot << "\n"
-            << "  %ssv = load ptr, ptr %ssi1\n";
-        if (std::strlen(k.ext) > 0) {
-            out << "  %tv2 = trunc " << k.retType << " %val to " << k.jniType << "\n"
-                << "  call void %ssv(ptr %env, ptr %cls, ptr %fid2, " << k.jniType << " %tv2)\n";
-        }
-        else {
-            out << "  call void %ssv(ptr %env, ptr %cls, ptr %fid2, " << k.jniType << " %val)\n";
-        }
-        out << "  ret void\n"
-            << "npe:\n"
-            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-            << "  ret void\n"
-            << "}\n\n";
+            << k.retType << " %val)\n\n";
     }
 
     // 数组元素读写 helper：null → NPE；越界由 JNI Get/Set*ArrayRegion /

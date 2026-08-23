@@ -41,6 +41,26 @@ MJ2X_LLVMIR_API void* mj2x_llvm_new_object_array(JNIEnv* env, int32_t count, voi
 MJ2X_LLVMIR_API void mj2x_llvm_set_object_array_element(JNIEnv* env, void* arr, int32_t idx, void* val);
 MJ2X_LLVMIR_API int32_t mj2x_llvm_array_length(JNIEnv* env, void* arr);
 
+// ---- 阶段三b:字段族(load/store ×9 kind;static/instance 合一,is_static
+// 非 0 走静态路径;实例 receiver 为 null 抛 NPE 返零值;窄类型 load 宽化,
+// store 前窄化,bool 归一 0/1) ----
+#define MJ2X_FIELD_PROTOS(kind, RetT)                                                   \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_field_load_##kind(JNIEnv* env, void* rcv,           \
+        const char* owner, const char* name, const char* desc, int32_t is_static);      \
+    MJ2X_LLVMIR_API void mj2x_llvm_field_store_##kind(JNIEnv* env, void* rcv,          \
+        const char* owner, const char* name, const char* desc, int32_t is_static,       \
+        RetT val);
+
+MJ2X_FIELD_PROTOS(bool, int32_t)
+MJ2X_FIELD_PROTOS(byte, int32_t)
+MJ2X_FIELD_PROTOS(char, int32_t)
+MJ2X_FIELD_PROTOS(short, int32_t)
+MJ2X_FIELD_PROTOS(int, int32_t)
+MJ2X_FIELD_PROTOS(long, int64_t)
+MJ2X_FIELD_PROTOS(float, float)
+MJ2X_FIELD_PROTOS(double, double)
+MJ2X_FIELD_PROTOS(ref, void*)
+
 #ifdef __cplusplus
 }
 #endif
