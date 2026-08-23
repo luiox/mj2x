@@ -233,14 +233,6 @@ std::string indyTypeText(const jbytecode::core::Type& type)
     return desc.to_std_string();
 }
 
-/// @brief 包装类名 → 合法 LLVM 全局标识符（/ → _）。
-std::string llvmGlobalTag(const char* text)
-{
-    std::string result = "_mj2x_llvm_indy_";
-    for (const char ch : std::string(text)) result += ch == '/' ? '_' : ch;
-    return result;
-}
-
 /// @brief bsm 静态参数 → jobject 物化 RHS（空串 = null 常量；常量串进 consts）。
 ///
 /// @param consts 收集本 site 需要的常量串全局定义（函数文本之后统一输出）。
@@ -296,110 +288,24 @@ std::string emitIndyHelpers()
 {
     std::ostringstream out;
     out << "; ---- invokedynamic runtime helpers ----\n";
+    // bsm 模板仍引用的固定常量仅剩 Object[](varargs 承载);其余方法名/
+    // 描述符/包装类名常量已随阶段四d 实现移入 mj2x-rt。
     out << llvmConstantString("_mj2x_llvm_indy_java_lang_Object", "java/lang/Object");
-    out << llvmConstantString("_mj2x_llvm_indy_java_lang_Class", "java/lang/Class");
-    out << llvmConstantString("_mj2x_llvm_indy_getClassLoader", "getClassLoader");
-    out << llvmConstantString("_mj2x_llvm_indy_getClassLoader_desc",
-                              "()Ljava/lang/ClassLoader;");
-    out << llvmConstantString("_mj2x_llvm_indy_MethodType", "java/lang/invoke/MethodType");
-    out << llvmConstantString("_mj2x_llvm_indy_fromMethodDescriptorString",
-                              "fromMethodDescriptorString");
-    out << llvmConstantString("_mj2x_llvm_indy_fds_desc",
-                              "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/"
-                              "MethodType;");
-    out << llvmConstantString("_mj2x_llvm_indy_TYPE", "TYPE");
-    out << llvmConstantString("_mj2x_llvm_indy_TYPE_desc", "Ljava/lang/Class;");
-    out << llvmConstantString("_mj2x_llvm_indy_Lookup", "java/lang/invoke/MethodHandles$Lookup");
 
     // new_object_array / set_object_array_element：Object[] 参数数组承载。
     out << "declare ptr @mj2x_llvm_new_object_array(ptr %env, i32 %count, ptr %cls)\n\n";
     out << "declare void @mj2x_llvm_set_object_array_element(ptr %env, ptr %arr, i32 %idx, ptr %val)\n\n";
 
-    // MethodType.fromMethodDescriptorString(desc, owner.getClassLoader())。
-    out << "define internal ptr @mj2x_llvm_indy_method_type(ptr %env, ptr %owner, ptr %desc) {\n"
-           "entry:\n"
-           "  %loader = call ptr @mj2x_llvm_call_object(ptr %env, ptr %owner, ptr "
-           "@_mj2x_llvm_indy_java_lang_Class, ptr @_mj2x_llvm_indy_getClassLoader, ptr "
-           "@_mj2x_llvm_indy_getClassLoader_desc, ptr null)\n"
-           "  %descstr = call ptr @mj2x_llvm_string_const(ptr %env, ptr %desc)\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %mtcls = call ptr %find(ptr %env, ptr @_mj2x_llvm_indy_MethodType)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %gsm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetStaticMethodID << "\n"
-        << "  %getsm = load ptr, ptr %gsm0\n"
-           "  %mid = call ptr %getsm(ptr %env, ptr %mtcls, ptr "
-           "@_mj2x_llvm_indy_fromMethodDescriptorString, ptr @_mj2x_llvm_indy_fds_desc)\n"
-           "  %jv = alloca [2 x { i64 }]\n"
-           "  %s0 = getelementptr [2 x { i64 }], ptr %jv, i64 0, i64 0\n"
-           "  store ptr %descstr, ptr %s0\n"
-           "  %s1 = getelementptr [2 x { i64 }], ptr %jv, i64 0, i64 1\n"
-           "  store ptr %loader, ptr %s1\n"
-           "  %mt = call ptr @mj2x_llvm_indy_call_static_mid(ptr %env, ptr %mtcls, ptr %mid, "
-           "ptr %jv)\n"
-           "  ret ptr %mt\n"
-           "}\n\n";
+    // MethodType.fromMethodDescriptorString(desc, owner.getClassLoader())。 method_type:阶段四d 下沉。
+    out << "declare ptr @mj2x_llvm_indy_method_type(ptr %env, ptr %owner, ptr %desc)\n\n";
 
-    // 包装类 TYPE 静态字段 → 基本类型 Class 对象。
-    out << "define internal ptr @mj2x_llvm_indy_wrapper_type(ptr %env, ptr %name) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %cls = call ptr %find(ptr %env, ptr %name)\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %gsf0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetStaticFieldID << "\n"
-        << "  %getsf = load ptr, ptr %gsf0\n"
-           "  %fid = call ptr %getsf(ptr %env, ptr %cls, ptr @_mj2x_llvm_indy_TYPE, ptr "
-           "@_mj2x_llvm_indy_TYPE_desc)\n"
-           "  %ft2 = load ptr, ptr %env\n"
-           "  %gso0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::GetStaticObjectField
-        << "\n"
-           "  %gsof = load ptr, ptr %gso0\n"
-           "  %t = call ptr %gsof(ptr %env, ptr %cls, ptr %fid)\n"
-           "  ret ptr %t\n"
-           "}\n\n";
+    // 包装类 TYPE 静态字段 → 基本类型 Class 对象。 wrapper_type:阶段四d 下沉。
+    out << "declare ptr @mj2x_llvm_indy_wrapper_type(ptr %env, ptr %name)\n\n";
 
     // Class 对象：V → Void；基本类型 → 包装类 TYPE；其余 → FindClass。
-    const struct { const char* label; const char* wrapper; } wrappers[] = {
-        {"void_", "java/lang/Void"},  {"bool_", "java/lang/Boolean"},
-        {"byte_", "java/lang/Byte"},  {"char_", "java/lang/Character"},
-        {"short_", "java/lang/Short"}, {"int_", "java/lang/Integer"},
-        {"long_", "java/lang/Long"},  {"float_", "java/lang/Float"},
-        {"double_", "java/lang/Double"},
-    };
-    for (const auto& entry : wrappers) {
-        std::string gname = "_mj2x_llvm_indy_";
-        for (const char ch : std::string(entry.wrapper)) gname += ch == '/' ? '_' : ch;
-        out << llvmConstantString(gname, entry.wrapper);
-    }
-    out << "define internal ptr @mj2x_llvm_indy_class_object(ptr %env, ptr %desc) {\n"
-           "entry:\n"
-           "  %head = load i8, ptr %desc\n"
-           "  switch i8 %head, label %ref [\n"
-           "    i8 86, label %void_\n"
-           "    i8 90, label %bool_\n"
-           "    i8 66, label %byte_\n"
-           "    i8 67, label %char_\n"
-           "    i8 83, label %short_\n"
-           "    i8 73, label %int_\n"
-           "    i8 74, label %long_\n"
-           "    i8 70, label %float_\n"
-           "    i8 68, label %double_\n"
-           "  ]\n";
-    for (const auto& entry : wrappers) {
-        std::string gname = "_mj2x_llvm_indy_";
-        for (const char ch : std::string(entry.wrapper)) gname += ch == '/' ? '_' : ch;
-        out << entry.label << ":\n"
-            << "  %" << entry.label << "c = call ptr @mj2x_llvm_indy_wrapper_type(ptr %env, ptr @"
-            << gname << ")\n"
-            << "  ret ptr %" << entry.label << "c\n";
-    }
-    out << "ref:\n"
-           "  %r = call ptr @mj2x_llvm_class_const(ptr %env, ptr %desc)\n"
-           "  ret ptr %r\n"
-           "}\n\n";
+    // class_object:#894 mj2x-llvmrt 阶段四d 下沉 mj2x-rt(首字符 switch
+    // 与包装类名常量随实现走),模块只携带 declare。
+    out << "declare ptr @mj2x_llvm_indy_class_object(ptr %env, ptr %desc)\n\n";
 
     // Lookup.find* 专用直调（cls+mid 已解析）：静态/实例 MethodA。
     // call_static_mid/call_obj_mid:#894 mj2x-llvmrt 阶段四c 下沉 mj2x-rt。
@@ -409,183 +315,25 @@ std::string emitIndyHelpers()
            "ptr %mid, ptr %jv)\n\n";
 
     // 字段型 Handle（H_GETFIELD/H_GETSTATIC/H_PUTFIELD/H_PUTSTATIC）：
-    // lookup.find[Static][Getter|Setter](owner_cls, name, Class)。
-    out << "define internal ptr @mj2x_llvm_indy_field_handle(ptr %env, ptr %lkcls, ptr %lookup, "
-           "ptr %ocls, ptr %name, ptr %desc, ptr %findName, ptr %findDesc) {\n"
-           "entry:\n"
-           "  %ftype = call ptr @mj2x_llvm_indy_class_object(ptr %env, ptr %desc)\n"
-           "  %namestr = call ptr @mj2x_llvm_string_const(ptr %env, ptr %name)\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %gm0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::GetMethodID << "\n"
-        << "  %getmid = load ptr, ptr %gm0\n"
-           "  %mid = call ptr %getmid(ptr %env, ptr %lkcls, ptr %findName, ptr %findDesc)\n"
-           "  %jv = alloca [3 x { i64 }]\n"
-           "  %s0 = getelementptr [3 x { i64 }], ptr %jv, i64 0, i64 0\n"
-           "  store ptr %ocls, ptr %s0\n"
-           "  %s1 = getelementptr [3 x { i64 }], ptr %jv, i64 0, i64 1\n"
-           "  store ptr %namestr, ptr %s1\n"
-           "  %s2 = getelementptr [3 x { i64 }], ptr %jv, i64 0, i64 2\n"
-           "  store ptr %ftype, ptr %s2\n"
-           "  %r = call ptr @mj2x_llvm_indy_call_obj_mid(ptr %env, ptr %lookup, ptr %lkcls, "
-           "ptr %mid, ptr %jv)\n"
-           "  ret ptr %r\n"
-           "}\n\n";
+    // lookup.find[Static][Getter|Setter](owner_cls, name, Class)。 field_handle:阶段四d 下沉。
+    out << "declare ptr @mj2x_llvm_indy_field_handle(ptr %env, ptr %lkcls, ptr %lookup, "
+           "ptr %ocls, ptr %name, ptr %desc, ptr %findName, ptr %findDesc)\n\n";
 
-    // 方法型 Handle 三/四/二参形态（findVirtual/findStatic/findSpecial/findConstructor）。
-    out << "define internal ptr @mj2x_llvm_indy_method_handle3(ptr %env, ptr %lkcls, ptr "
-           "%lookup, ptr %ocls, ptr %name, ptr %type, ptr %findName, ptr %findDesc) {\n"
-           "entry:\n"
-           "  %namestr = call ptr @mj2x_llvm_string_const(ptr %env, ptr %name)\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %gm0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::GetMethodID << "\n"
-        << "  %getmid = load ptr, ptr %gm0\n"
-           "  %mid = call ptr %getmid(ptr %env, ptr %lkcls, ptr %findName, ptr %findDesc)\n"
-           "  %jv = alloca [3 x { i64 }]\n"
-           "  %s0 = getelementptr [3 x { i64 }], ptr %jv, i64 0, i64 0\n"
-           "  store ptr %ocls, ptr %s0\n"
-           "  %s1 = getelementptr [3 x { i64 }], ptr %jv, i64 0, i64 1\n"
-           "  store ptr %namestr, ptr %s1\n"
-           "  %s2 = getelementptr [3 x { i64 }], ptr %jv, i64 0, i64 2\n"
-           "  store ptr %type, ptr %s2\n"
-           "  %r = call ptr @mj2x_llvm_indy_call_obj_mid(ptr %env, ptr %lookup, ptr %lkcls, "
-           "ptr %mid, ptr %jv)\n"
-           "  ret ptr %r\n"
-           "}\n\n";
-    out << "define internal ptr @mj2x_llvm_indy_method_handle4(ptr %env, ptr %lkcls, ptr "
-           "%lookup, ptr %ocls, ptr %name, ptr %type, ptr %special_cls, ptr %findName, ptr "
-           "%findDesc) {\n"
-           "entry:\n"
-           "  %namestr = call ptr @mj2x_llvm_string_const(ptr %env, ptr %name)\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %gm0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::GetMethodID << "\n"
-        << "  %getmid = load ptr, ptr %gm0\n"
-           "  %mid = call ptr %getmid(ptr %env, ptr %lkcls, ptr %findName, ptr %findDesc)\n"
-           "  %jv = alloca [4 x { i64 }]\n"
-           "  %s0 = getelementptr [4 x { i64 }], ptr %jv, i64 0, i64 0\n"
-           "  store ptr %ocls, ptr %s0\n"
-           "  %s1 = getelementptr [4 x { i64 }], ptr %jv, i64 0, i64 1\n"
-           "  store ptr %namestr, ptr %s1\n"
-           "  %s2 = getelementptr [4 x { i64 }], ptr %jv, i64 0, i64 2\n"
-           "  store ptr %type, ptr %s2\n"
-           "  %s3 = getelementptr [4 x { i64 }], ptr %jv, i64 0, i64 3\n"
-           "  store ptr %special_cls, ptr %s3\n"
-           "  %r = call ptr @mj2x_llvm_indy_call_obj_mid(ptr %env, ptr %lookup, ptr %lkcls, "
-           "ptr %mid, ptr %jv)\n"
-           "  ret ptr %r\n"
-           "}\n\n";
-    out << "define internal ptr @mj2x_llvm_indy_method_handle2(ptr %env, ptr %lkcls, ptr "
-           "%lookup, ptr %ocls, ptr %type, ptr %findName, ptr %findDesc) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %gm0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::GetMethodID << "\n"
-        << "  %getmid = load ptr, ptr %gm0\n"
-           "  %mid = call ptr %getmid(ptr %env, ptr %lkcls, ptr %findName, ptr %findDesc)\n"
-           "  %jv = alloca [2 x { i64 }]\n"
-           "  %s0 = getelementptr [2 x { i64 }], ptr %jv, i64 0, i64 0\n"
-           "  store ptr %ocls, ptr %s0\n"
-           "  %s1 = getelementptr [2 x { i64 }], ptr %jv, i64 0, i64 1\n"
-           "  store ptr %type, ptr %s1\n"
-           "  %r = call ptr @mj2x_llvm_indy_call_obj_mid(ptr %env, ptr %lookup, ptr %lkcls, "
-           "ptr %mid, ptr %jv)\n"
-           "  ret ptr %r\n"
-           "}\n\n";
+    // 方法型 Handle 三/四/二参形态（findVirtual/findStatic/findSpecial/findConstructor）:阶段四d 下沉。
+    out << "declare ptr @mj2x_llvm_indy_method_handle3(ptr %env, ptr %lkcls, ptr "
+           "%lookup, ptr %ocls, ptr %name, ptr %type, ptr %findName, ptr %findDesc)\n\n";
+    out << "declare ptr @mj2x_llvm_indy_method_handle4(ptr %env, ptr %lkcls, ptr "
+           "%lookup, ptr %ocls, ptr %name, ptr %type, ptr %special_cls, ptr %findName, "
+           "ptr %findDesc)\n\n";
+    out << "declare ptr @mj2x_llvm_indy_method_handle2(ptr %env, ptr %lkcls, ptr "
+           "%lookup, ptr %ocls, ptr %type, ptr %findName, ptr %findDesc)\n\n";
 
     // MethodHandle 常量（bsm Handle 参数）按 tag 分派到 Lookup.find*。
     // find* 方法名/描述符常量先于函数体提升为模块级全局（LLVM 禁止函数内
-    // 常量定义）。
-    const char* const handleFindNames[] = {
-        "findGetter",   "findStaticGetter", "findSetter",     "findStaticSetter",
-        "findVirtual",  "findStatic",       "findSpecial",    "findConstructor",
-        "findVirtual",
-    };
-    const char* const handleFindDescs[] = {
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/"
-        "MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/"
-        "MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/"
-        "MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/"
-        "MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/"
-        "invoke/MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/"
-        "invoke/MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)"
-        "Ljava/lang/invoke/MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
-        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/"
-        "invoke/MethodHandle;",
-    };
-    static const char* const handleLabels[] = {"getfield", "getstatic", "putfield",
-                                               "putstatic", "invokevirtual", "invokestatic",
-                                               "invokespecial", "newinvokespecial",
-                                               "invokeinterface"};
-    for (int i = 0; i < 9; ++i) {
-        out << llvmConstantString(std::string("_mj2x_llvm_indy_") + handleLabels[i] + "_fn",
-                                  handleFindNames[i]);
-        out << llvmConstantString(std::string("_mj2x_llvm_indy_") + handleLabels[i] + "_fd",
-                                  handleFindDescs[i]);
-    }
-    out << "define internal ptr @mj2x_llvm_indy_handle(ptr %env, ptr %lookup, ptr "
-           "%owner_class, i32 %tag, ptr %owner, ptr %name, ptr %desc) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %lkcls = call ptr %find(ptr %env, ptr @_mj2x_llvm_indy_Lookup)\n"
-           "  %ocls = call ptr %find(ptr %env, ptr %owner)\n"
-           "  switch i32 %tag, label %fail [\n"
-           "    i32 1, label %getfield\n"
-           "    i32 2, label %getstatic\n"
-           "    i32 3, label %putfield\n"
-           "    i32 4, label %putstatic\n"
-           "    i32 5, label %invokevirtual\n"
-           "    i32 6, label %invokestatic\n"
-           "    i32 7, label %invokespecial\n"
-           "    i32 8, label %newinvokespecial\n"
-           "    i32 9, label %invokeinterface\n"
-           "  ]\n"
-           "fail:\n"
-           "  ret ptr null\n";
-    static const int fieldCaseIdx[] = {0, 1, 2, 3};   // getfield/getstatic/putfield/putstatic
-    for (const int idx : fieldCaseIdx) {
-        out << handleLabels[idx] << ":\n"
-            << "  %" << handleLabels[idx] << "r = call ptr @mj2x_llvm_indy_field_handle(ptr "
-               "%env, ptr %lkcls, ptr %lookup, ptr %ocls, ptr %name, ptr %desc, ptr @_mj2x_llvm_"
-            << "indy_" << handleLabels[idx] << "_fn, ptr @_mj2x_llvm_indy_" << handleLabels[idx]
-            << "_fd)\n"
-            << "  ret ptr %" << handleLabels[idx] << "r\n";
-    }
-    static const int method3CaseIdx[] = {4, 5, 8};   // invokevirtual/invokestatic/invokeinterface
-    for (const int idx : method3CaseIdx) {
-        out << handleLabels[idx] << ":\n"
-            << "  %" << handleLabels[idx] << "_t = call ptr @mj2x_llvm_indy_method_type(ptr "
-               "%env, ptr %owner_class, ptr %desc)\n"
-            << "  %" << handleLabels[idx] << "r = call ptr @mj2x_llvm_indy_method_handle3(ptr "
-               "%env, ptr %lkcls, ptr %lookup, ptr %ocls, ptr %name, ptr %" << handleLabels[idx]
-            << "_t, ptr @_mj2x_llvm_indy_" << handleLabels[idx] << "_fn, ptr @_mj2x_llvm_indy_"
-            << handleLabels[idx] << "_fd)\n"
-            << "  ret ptr %" << handleLabels[idx] << "r\n";
-    }
-    // invokespecial：findSpecial(Class, String, MethodType, Class)。
-    out << "invokespecial:\n"
-           "  %invokespecial_t = call ptr @mj2x_llvm_indy_method_type(ptr %env, ptr "
-           "%owner_class, ptr %desc)\n"
-           "  %invokespecial_r = call ptr @mj2x_llvm_indy_method_handle4(ptr %env, ptr "
-           "%lkcls, ptr %lookup, ptr %ocls, ptr %name, ptr %invokespecial_t, ptr "
-           "%owner_class, ptr @_mj2x_llvm_indy_invokespecial_fn, ptr "
-           "@_mj2x_llvm_indy_invokespecial_fd)\n"
-           "  ret ptr %invokespecial_r\n";
-    // newinvokespecial：findConstructor(Class, MethodType)。
-    out << "newinvokespecial:\n"
-           "  %newinvokespecial_t = call ptr @mj2x_llvm_indy_method_type(ptr %env, ptr "
-           "%owner_class, ptr %desc)\n"
-           "  %newinvokespecial_r = call ptr @mj2x_llvm_indy_method_handle2(ptr %env, ptr "
-           "%lkcls, ptr %lookup, ptr %ocls, ptr %newinvokespecial_t, ptr "
-           "@_mj2x_llvm_indy_newinvokespecial_fn, ptr @_mj2x_llvm_indy_newinvokespecial_fd)\n"
-           "  ret ptr %newinvokespecial_r\n"
-           "}\n\n";
+    // 常量定义）。handle:#894 mj2x-llvmrt 阶段四d 下沉 mj2x-rt(方法名/
+    // 描述符随实现走),模块只携带 declare。
+    out << "declare ptr @mj2x_llvm_indy_handle(ptr %env, ptr %lookup, ptr "
+           "%owner_class, i32 %tag, ptr %owner, ptr %name, ptr %desc)\n\n";
 
     // 装箱/拆箱 helper（indy 参数/Object[] 承载；窄类型按包装类 valueOf
     // 语义）。box/unbox:#894 mj2x-llvmrt 阶段四c 下沉 mj2x-rt(valueOf/

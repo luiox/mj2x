@@ -585,3 +585,185 @@ MJ2X_UNBOX(int, int32_t, jint, Int, "java/lang/Integer", "intValue", "()I", v)
 MJ2X_UNBOX(long, int64_t, jlong, Long, "java/lang/Long", "longValue", "()J", v)
 MJ2X_UNBOX(float, float, jfloat, Float, "java/lang/Float", "floatValue", "()F", v)
 MJ2X_UNBOX(double, double, jdouble, Double, "java/lang/Double", "doubleValue", "()D", v)
+
+
+// ---- 阶段四d:indy 固定解析 helper 组 ----
+
+// MethodType.fromMethodDescriptorString(desc, owner.getClassLoader()):
+// loader 经 call_object 直调取得;desc 物化为 String 后两参静态调用。
+void* mj2x_llvm_indy_method_type(JNIEnv* env, void* owner, const char* desc)
+{
+    void* loader = mj2x_llvm_call_object(env, owner, "java/lang/Class", "getClassLoader",
+                                         "()Ljava/lang/ClassLoader;", NULL);
+    void* descstr = mj2x_llvm_string_const(env, desc);
+    jclass mtcls = (*env)->FindClass(env, "java/lang/invoke/MethodType");
+    if (mtcls == NULL) return NULL;
+    jmethodID mid = (*env)->GetStaticMethodID(env, mtcls, "fromMethodDescriptorString",
+        "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;");
+    void* mt = NULL;
+    if (mid != NULL)
+    {
+        jvalue jv[2];
+        jv[0].l = (jobject)descstr;
+        jv[1].l = (jobject)loader;
+        mt = mj2x_llvm_indy_call_static_mid(env, mtcls, mid, jv);
+    }
+    (*env)->DeleteLocalRef(env, mtcls);
+    return mt;
+}
+
+// 包装类 TYPE 静态字段 → 基本类型 Class(与阶段四a prim 形态同体)。
+void* mj2x_llvm_indy_wrapper_type(JNIEnv* env, const char* name)
+{
+    return mj2x_prim_class_type(env, name);
+}
+
+// Class 对象:首字符 V/Z/B/C/S/I/J/F/D → Void.TYPE / 包装类 TYPE(原 IR
+// 仅按首字符 switch),其余 FindClass。
+void* mj2x_llvm_indy_class_object(JNIEnv* env, const char* desc)
+{
+    switch (desc[0]) {
+    case 'V': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Void");
+    case 'Z': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Boolean");
+    case 'B': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Byte");
+    case 'C': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Character");
+    case 'S': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Short");
+    case 'I': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Integer");
+    case 'J': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Long");
+    case 'F': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Float");
+    case 'D': return mj2x_llvm_indy_wrapper_type(env, "java/lang/Double");
+    default: return mj2x_llvm_class_const(env, desc);
+    }
+}
+
+// 字段型 Handle:find[Static][Getter|Setter](owner_cls, String(name),
+// ftype);ftype 经 class_object(desc),find* 方法在 Lookup 类上解析。
+#define MJ2X_HANDLE_JV(n)                                                               \
+    jmethodID mid = (*env)->GetMethodID(env, (jclass)lkcls, findName, findDesc);        \
+    if (mid == NULL) return NULL;                                                       \
+    jvalue jv[n]
+
+void* mj2x_llvm_indy_field_handle(JNIEnv* env, void* lkcls, void* lookup, void* ocls,
+                                  const char* name, const char* desc,
+                                  const char* findName, const char* findDesc)
+{
+    void* ftype = mj2x_llvm_indy_class_object(env, desc);
+    void* namestr = mj2x_llvm_string_const(env, name);
+    MJ2X_HANDLE_JV(3);
+    jv[0].l = (jobject)ocls;
+    jv[1].l = (jobject)namestr;
+    jv[2].l = (jobject)ftype;
+    return mj2x_llvm_indy_call_obj_mid(env, lookup, lkcls, mid, jv);
+}
+
+// 方法型三参:findVirtual/findStatic(Class, String, MethodType)。
+void* mj2x_llvm_indy_method_handle3(JNIEnv* env, void* lkcls, void* lookup, void* ocls,
+                                    const char* name, void* type,
+                                    const char* findName, const char* findDesc)
+{
+    void* namestr = mj2x_llvm_string_const(env, name);
+    MJ2X_HANDLE_JV(3);
+    jv[0].l = (jobject)ocls;
+    jv[1].l = (jobject)namestr;
+    jv[2].l = (jobject)type;
+    return mj2x_llvm_indy_call_obj_mid(env, lookup, lkcls, mid, jv);
+}
+
+// 方法型四参:findSpecial(Class, String, MethodType, Class);special_cls
+// 为运行时 owner 类(非 receiver 类)。
+void* mj2x_llvm_indy_method_handle4(JNIEnv* env, void* lkcls, void* lookup, void* ocls,
+                                    const char* name, void* type, void* special_cls,
+                                    const char* findName, const char* findDesc)
+{
+    void* namestr = mj2x_llvm_string_const(env, name);
+    MJ2X_HANDLE_JV(4);
+    jv[0].l = (jobject)ocls;
+    jv[1].l = (jobject)namestr;
+    jv[2].l = (jobject)type;
+    jv[3].l = (jobject)special_cls;
+    return mj2x_llvm_indy_call_obj_mid(env, lookup, lkcls, mid, jv);
+}
+
+// 方法型二参:findConstructor(Class, MethodType)(无 name 形态)。
+void* mj2x_llvm_indy_method_handle2(JNIEnv* env, void* lkcls, void* lookup, void* ocls,
+                                    void* type, const char* findName, const char* findDesc)
+{
+    MJ2X_HANDLE_JV(2);
+    jv[0].l = (jobject)ocls;
+    jv[1].l = (jobject)type;
+    return mj2x_llvm_indy_call_obj_mid(env, lookup, lkcls, mid, jv);
+}
+
+#undef MJ2X_HANDLE_JV
+
+// MethodHandle 常量按 tag 分派到 Lookup.find*(JVM H_* 常量:1-4 字段型,
+// 5/6/9 findVirtual/findStatic/findVirtual 三参,7 findSpecial 四参,
+// 8 findConstructor 二参);未知 tag 返 null(对齐原 IR fail 块)。
+// lkcls/ocls 局部引用用毕释放。
+void* mj2x_llvm_indy_handle(JNIEnv* env, void* lookup, void* owner_class, int32_t tag,
+                            const char* owner, const char* name, const char* desc)
+{
+    static const char* const kFieldFind =
+        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+        "Ljava/lang/invoke/MethodHandle;";
+    static const char* const kMethod3Find =
+        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
+        "Ljava/lang/invoke/MethodHandle;";
+    static const char* const kSpecialFind =
+        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;"
+        "Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
+    static const char* const kCtorFind =
+        "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
+        "Ljava/lang/invoke/MethodHandle;";
+    jclass lkcls = (*env)->FindClass(env, "java/lang/invoke/MethodHandles$Lookup");
+    if (lkcls == NULL) return NULL;
+    jclass ocls = (*env)->FindClass(env, owner);
+    void* result = NULL;
+    switch (tag) {
+    case 1:
+        result = mj2x_llvm_indy_field_handle(env, lkcls, lookup, ocls, name, desc,
+                                             "findGetter", kFieldFind);
+        break;
+    case 2:
+        result = mj2x_llvm_indy_field_handle(env, lkcls, lookup, ocls, name, desc,
+                                             "findStaticGetter", kFieldFind);
+        break;
+    case 3:
+        result = mj2x_llvm_indy_field_handle(env, lkcls, lookup, ocls, name, desc,
+                                             "findSetter", kFieldFind);
+        break;
+    case 4:
+        result = mj2x_llvm_indy_field_handle(env, lkcls, lookup, ocls, name, desc,
+                                             "findStaticSetter", kFieldFind);
+        break;
+    case 5:
+    case 6:
+    case 9:
+    {
+        const char* fn = (tag == 6) ? "findStatic" : "findVirtual";
+        void* type = mj2x_llvm_indy_method_type(env, owner_class, desc);
+        result = mj2x_llvm_indy_method_handle3(env, lkcls, lookup, ocls, name, type, fn,
+                                               kMethod3Find);
+        break;
+    }
+    case 7:
+    {
+        void* type = mj2x_llvm_indy_method_type(env, owner_class, desc);
+        result = mj2x_llvm_indy_method_handle4(env, lkcls, lookup, ocls, name, type,
+                                               owner_class, "findSpecial", kSpecialFind);
+        break;
+    }
+    case 8:
+    {
+        void* type = mj2x_llvm_indy_method_type(env, owner_class, desc);
+        result = mj2x_llvm_indy_method_handle2(env, lkcls, lookup, ocls, type,
+                                               "findConstructor", kCtorFind);
+        break;
+    }
+    default:
+        break;
+    }
+    (*env)->DeleteLocalRef(env, lkcls);
+    if (ocls != NULL) (*env)->DeleteLocalRef(env, ocls);
+    return result;
+}

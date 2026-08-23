@@ -135,6 +135,26 @@ MJ2X_LLVMIR_API int64_t mj2x_llvm_unbox_long(JNIEnv* env, void* obj);
 MJ2X_LLVMIR_API float mj2x_llvm_unbox_float(JNIEnv* env, void* obj);
 MJ2X_LLVMIR_API double mj2x_llvm_unbox_double(JNIEnv* env, void* obj);
 
+// ---- 阶段四d:indy 固定解析 helper 组(MethodType/包装 TYPE/Class 对象/
+// Lookup.find* Handle;bsm_<tag> 与站点级常量为发射期模板,不在本层) ----
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_method_type(JNIEnv* env, void* owner,
+    const char* desc);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_wrapper_type(JNIEnv* env, const char* name);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_class_object(JNIEnv* env, const char* desc);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_field_handle(JNIEnv* env, void* lkcls, void* lookup,
+    void* ocls, const char* name, const char* desc, const char* find_name,
+    const char* find_desc);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_method_handle3(JNIEnv* env, void* lkcls, void* lookup,
+    void* ocls, const char* name, void* type, const char* find_name,
+    const char* find_desc);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_method_handle4(JNIEnv* env, void* lkcls, void* lookup,
+    void* ocls, const char* name, void* type, void* special_cls, const char* find_name,
+    const char* find_desc);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_method_handle2(JNIEnv* env, void* lkcls, void* lookup,
+    void* ocls, void* type, const char* find_name, const char* find_desc);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_handle(JNIEnv* env, void* lookup, void* owner_class,
+    int32_t tag, const char* owner, const char* name, const char* desc);
+
 #ifdef __cplusplus
 }
 #endif
