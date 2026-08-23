@@ -697,11 +697,13 @@ int main(int argc, char** argv)
                 i18n::trf("mj2x.cli.err.flag_requires_value", {"--" + err.option}));
             break;
         case ca::opt::ParseErrorCategory::MutexConflict:
-            // ⚠️ 前瞻耦合：ParseError 目前不携带互斥组标识，此处按"唯一
-            // 互斥组 = dump-config-schema/template"硬编码映射 dump_once。
-            // 新增第二组互斥前，须推动 libca ParseError 携带 group 标识并
-            // 在此按组分发文案，否则会静默用错（已提 libca 待办）。
-            message = std::string(i18n::tr("mj2x.cli.err.dump_once"));
+        case ca::opt::ParseErrorCategory::MutexRequired:
+            // 按组标识分派文案（libca ParseError.group 回填 MutexGroup::label;
+            // 无 label 组为成员名拼接,落入 default 的现成描述）。
+            if (err.group == "dump_once")
+                message = std::string(i18n::tr("mj2x.cli.err.dump_once"));
+            else
+                message = err.message;
             break;
         default:
             message = err.message;

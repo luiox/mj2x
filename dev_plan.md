@@ -190,10 +190,12 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   （均 fail-closed，各由 E2E 锁定）：① --dump-config-schema/template 文件
   目标改内联 `=` 形态；② --lang 悬空无值由静默容忍改为 MissingValue 报错；
   ③ --lang 空格形态会消费后继 '-' 开头 token（迁移前静默忽略 lang），
-  合法用法为内联 --lang=<lang>。--quiet/--verbose 维持 quiet 赢。已知
-  前瞻耦合：ParseError 不携带互斥组标识，多组互斥前须推动 libca 补充
-  （已提 libca 待办）；StringList 参数合法项不得含逗号（opt 拆分前提，
-  已注记 buildOptCommand）。验证：全量 mj2x_unittest 632 过/3 skip +
+  合法用法为内联 --lang=<lang>。--quiet/--verbose 维持 quiet 赢。前瞻
+  耦合（ParseError 不携带互斥组标识）已由 libca PR #201 落地解决：
+  MutexGroup::label → ParseError.group，mj2x 按 "dump_once" 组标识分派
+  文案并补双 dump 互斥 E2E（BothDumpFlagsRejectedViaGroupLabel）；
+  StringList 参数合法项不得含逗号（opt 拆分前提，已注记
+  buildOptCommand）。验证：全量 mj2x_unittest 632 过/3 skip +
   mtest_set 25/25；CLI 面冒烟逐项对齐（help/未知选项/缺值/dump 形态/
   config 三级优先级）。
 

@@ -323,6 +323,18 @@ TEST(ConfigRegistryTest, TemplateContainsAllKeys)
     }
 }
 
+// 双 dump 互斥：MutexConflict 经 ParseError.group（MutexGroup::label =
+// "dump_once"）分派到专用文案，锁定组标识分派链路。
+TEST(ConfigRegistryTest, BothDumpFlagsRejectedViaGroupLabel)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    const auto result = runCli({"--dump-config-schema", "--dump-config-template"});
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("只能指定一次"), std::string::npos) << result.out;
+}
+
 // ---------- 配置文件解析 ----------
 
 TEST(ConfigRegistryTest, UnknownKeyRejectedWithKeyName)

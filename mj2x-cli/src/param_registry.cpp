@@ -798,6 +798,8 @@ ca::opt::Command buildOptCommand()
     addSpecialArg(cmd, "dump-config-template", ca::opt::OptKind::OptionalString);
     ca::opt::MutexGroup dumpOnce;
     dumpOnce.names = {"dump-config-schema", "dump-config-template"};
+    // 组标识回填 ParseError.group,main.cpp 按其分派错误文案。
+    dumpOnce.label = "dump_once";
     cmd.mutex_groups.push_back(dumpOnce);
 
     for (std::size_t i = 0; i < kParamCount; ++i) {
