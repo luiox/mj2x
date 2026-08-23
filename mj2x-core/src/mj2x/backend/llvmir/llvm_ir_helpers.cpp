@@ -309,7 +309,6 @@ std::string emitIndyHelpers()
                               "MethodType;");
     out << llvmConstantString("_mj2x_llvm_indy_TYPE", "TYPE");
     out << llvmConstantString("_mj2x_llvm_indy_TYPE_desc", "Ljava/lang/Class;");
-    out << llvmConstantString("_mj2x_llvm_indy_valueOf", "valueOf");
     out << llvmConstantString("_mj2x_llvm_indy_Lookup", "java/lang/invoke/MethodHandles$Lookup");
 
     // new_object_array / set_object_array_element：Object[] 参数数组承载。
@@ -403,25 +402,11 @@ std::string emitIndyHelpers()
            "}\n\n";
 
     // Lookup.find* 专用直调（cls+mid 已解析）：静态/实例 MethodA。
-    out << "define internal ptr @mj2x_llvm_indy_call_static_mid(ptr %env, ptr %cls, ptr %mid, "
-           "ptr %jv) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %cso0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::CallStaticObjectMethodA
-        << "\n"
-           "  %csom = load ptr, ptr %cso0\n"
-           "  %r = call ptr %csom(ptr %env, ptr %cls, ptr %mid, ptr %jv)\n"
-           "  ret ptr %r\n"
-           "}\n\n";
-    out << "define internal ptr @mj2x_llvm_indy_call_obj_mid(ptr %env, ptr %obj, ptr %cls, "
-           "ptr %mid, ptr %jv) {\n"
-           "entry:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %co0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::CallObjectMethodA << "\n"
-        << "  %com = load ptr, ptr %co0\n"
-           "  %r = call ptr %com(ptr %env, ptr %obj, ptr %mid, ptr %jv)\n"
-           "  ret ptr %r\n"
-           "}\n\n";
+    // call_static_mid/call_obj_mid:#894 mj2x-llvmrt 阶段四c 下沉 mj2x-rt。
+    out << "declare ptr @mj2x_llvm_indy_call_static_mid(ptr %env, ptr %cls, ptr %mid, "
+           "ptr %jv)\n\n";
+    out << "declare ptr @mj2x_llvm_indy_call_obj_mid(ptr %env, ptr %obj, ptr %cls, "
+           "ptr %mid, ptr %jv)\n\n";
 
     // 字段型 Handle（H_GETFIELD/H_GETSTATIC/H_PUTFIELD/H_PUTSTATIC）：
     // lookup.find[Static][Getter|Setter](owner_cls, name, Class)。
@@ -602,112 +587,29 @@ std::string emitIndyHelpers()
            "  ret ptr %newinvokespecial_r\n"
            "}\n\n";
 
-    // 装箱 helper（indy 参数/Object[] 承载；窄类型按包装类 valueOf 语义）。
+    // 装箱/拆箱 helper（indy 参数/Object[] 承载；窄类型按包装类 valueOf
+    // 语义）。box/unbox:#894 mj2x-llvmrt 阶段四c 下沉 mj2x-rt(valueOf/
+    // XxxValue 方法名与描述符常量随实现走),模块只携带 declare。
     struct BoxKindInfo
     {
-        const char* kind;        // helper 后缀
-        const char* wrapper;     // 包装类
-        const char* valueOfDesc; // valueOf 方法描述符
-        const char* unboxMethod; // 拆箱方法名
-        const char* unboxDesc;   // 拆箱方法描述符
-        int64_t     unboxSlot;   // CallXxxMethodA
-        const char* jniType;     // JNI 参数/返回类型
-        const char* inType;      // helper 输入类型（计算位宽）
-        const char* narrow;      // 窄转换（空 = 无）
+        const char* kind;     // helper 后缀
+        const char* inType;   // 输入类型（计算位宽）
+        const char* retType;  // 返回类型（窄提升后）
     };
     static const BoxKindInfo boxKinds[] = {
-        {"boolean", "java/lang/Boolean", "(Z)Ljava/lang/Boolean;", "booleanValue", "()Z",
-         jni_slot::CallBooleanMethodA, "i8", "i32",
-         "  %t = trunc i32 %v to i1\n  %v2 = zext i1 %t to i8\n"},
-        {"byte", "java/lang/Byte", "(B)Ljava/lang/Byte;", "byteValue", "()B",
-         jni_slot::CallByteMethodA, "i8", "i32", "  %v2 = trunc i32 %v to i8\n"},
-        {"char", "java/lang/Character", "(C)Ljava/lang/Character;", "charValue", "()C",
-         jni_slot::CallCharMethodA, "i16", "i32", "  %v2 = trunc i32 %v to i16\n"},
-        {"short", "java/lang/Short", "(S)Ljava/lang/Short;", "shortValue", "()S",
-         jni_slot::CallShortMethodA, "i16", "i32", "  %v2 = trunc i32 %v to i16\n"},
-        {"int", "java/lang/Integer", "(I)Ljava/lang/Integer;", "intValue", "()I",
-         jni_slot::CallIntMethodA, "i32", "i32", ""},
-        {"long", "java/lang/Long", "(J)Ljava/lang/Long;", "longValue", "()J",
-         jni_slot::CallLongMethodA, "i64", "i64", ""},
-        {"float", "java/lang/Float", "(F)Ljava/lang/Float;", "floatValue", "()F",
-         jni_slot::CallFloatMethodA, "float", "float", ""},
-        {"double", "java/lang/Double", "(D)Ljava/lang/Double;", "doubleValue", "()D",
-         jni_slot::CallDoubleMethodA, "double", "double", ""},
+        {"boolean", "i32", "i32"},
+        {"byte", "i32", "i32"},
+        {"char", "i32", "i32"},
+        {"short", "i32", "i32"},
+        {"int", "i32", "i32"},
+        {"long", "i64", "i64"},
+        {"float", "float", "float"},
+        {"double", "double", "double"},
     };
     for (const auto& k : boxKinds) {
-        std::string wrapperName = "_mj2x_llvm_indy_";
-        for (const char ch : std::string(k.wrapper)) wrapperName += ch == '/' ? '_' : ch;
-        const std::string voDescName = std::string("_mj2x_llvm_indy_") + k.kind + "_valueOf_desc";
-        const std::string unboxName = std::string("_mj2x_llvm_indy_") + k.kind + "_" +
-                                      k.unboxMethod;
-        const std::string unboxDesc = std::string("_mj2x_llvm_indy_") + k.kind + "_" +
-                                      k.unboxMethod + "_desc";
-        // 包装类名常量由上面 wrappers 循环统一发射（避免重名全局）。
-        out << llvmConstantString(voDescName, k.valueOfDesc);
-        out << llvmConstantString(unboxName, k.unboxMethod);
-        out << llvmConstantString(unboxDesc, k.unboxDesc);
-        // box：包装类.valueOf(primitive)。窄类型先转（%v2）；宽类型直接用 %v。
-        const bool narrows = std::string(k.narrow).empty() == false;
-        out << "define internal ptr @mj2x_llvm_box_" << k.kind << "(ptr %env, " << k.inType
-            << " %v) {\n"
-               "entry:\n"
-            << k.narrow
-            << "  %ft0 = load ptr, ptr %env\n"
-               "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-            << "  %find = load ptr, ptr %fc0\n"
-               "  %cls = call ptr %find(ptr %env, ptr @" << wrapperName << ")\n"
-               "  %ft1 = load ptr, ptr %env\n"
-               "  %gsm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetStaticMethodID
-            << "\n"
-               "  %getsm = load ptr, ptr %gsm0\n"
-               "  %mid = call ptr %getsm(ptr %env, ptr %cls, ptr @_mj2x_llvm_indy_valueOf, ptr @"
-            << voDescName << ")\n"
-               "  %jv = alloca [1 x { i64 }]\n"
-               "  %s0 = getelementptr [1 x { i64 }], ptr %jv, i64 0, i64 0\n"
-               "  store " << k.jniType << " " << (narrows ? "%v2" : "%v")
-            << ", ptr %s0\n"
-               "  %r = call ptr @mj2x_llvm_indy_call_static_mid(ptr %env, ptr %cls, ptr %mid, "
-               "ptr %jv)\n"
-               "  ret ptr %r\n"
-               "}\n\n";
-        // unbox：包装类.<unboxMethod>()（CallXxxMethodA；窄类型扩展回计算位宽）。
-        std::string ext;
-        if (std::string(k.kind) == "boolean") ext = "  %r = zext i8 %v to i32\n";
-        else if (std::string(k.kind) == "byte") ext = "  %r = sext i8 %v to i32\n";
-        else if (std::string(k.kind) == "char") ext = "  %r = zext i16 %v to i32\n";
-        else if (std::string(k.kind) == "short") ext = "  %r = sext i16 %v to i32\n";
-        const bool widens = ext.empty() == false;
-        const char* retType = std::string(k.kind) == "long"
-                                  ? "i64"
-                                  : (std::string(k.kind) == "float"
-                                         ? "float"
-                                         : (std::string(k.kind) == "double"
-                                                ? "double"
-                                                : (std::string(k.kind) == "boolean" ||
-                                                           std::string(k.kind) == "byte" ||
-                                                           std::string(k.kind) == "char" ||
-                                                           std::string(k.kind) == "short" ||
-                                                           std::string(k.kind) == "int"
-                                                       ? "i32"
-                                                       : "i32")));
-        out << "define internal " << retType << " @mj2x_llvm_unbox_" << k.kind
-            << "(ptr %env, ptr %obj) {\n"
-               "entry:\n"
-               "  %ft0 = load ptr, ptr %env\n"
-               "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-            << "  %find = load ptr, ptr %fc0\n"
-               "  %cls = call ptr %find(ptr %env, ptr @" << wrapperName << ")\n"
-               "  %ft1 = load ptr, ptr %env\n"
-               "  %gm0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::GetMethodID << "\n"
-            << "  %getmid = load ptr, ptr %gm0\n"
-               "  %mid = call ptr %getmid(ptr %env, ptr %cls, ptr @" << unboxName << ", ptr @"
-            << unboxDesc << ")\n"
-               "  %ft2 = load ptr, ptr %env\n"
-               "  %cu0 = getelementptr ptr, ptr %ft2, i64 " << k.unboxSlot << "\n"
-            << "  %cum = load ptr, ptr %cu0\n"
-               "  %v = call " << k.jniType << " %cum(ptr %env, ptr %obj, ptr %mid, ptr null)\n"
-            << ext << "  ret " << retType << " " << (widens ? "%r" : "%v") << "\n"
-               "}\n\n";
+        out << "declare ptr @mj2x_llvm_box_" << k.kind << "(ptr %env, " << k.inType << " %v)\n\n";
+        out << "declare " << k.retType << " @mj2x_llvm_unbox_" << k.kind
+            << "(ptr %env, ptr %obj)\n\n";
     }
     return out.str();
 }

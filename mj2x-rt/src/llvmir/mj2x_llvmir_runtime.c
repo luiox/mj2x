@@ -509,3 +509,79 @@ void mj2x_llvm_monitor_exit(JNIEnv* env, void* obj)
     }
     (*env)->MonitorExit(env, obj);
 }
+
+
+// ---- 阶段四c:indy 直调面 + 装箱/拆箱 ----
+
+// cls+mid 已解析的直调(CallStaticObjectMethodA / CallObjectMethodA):
+// indy 解析链与装箱共用的最小调用面。
+void* mj2x_llvm_indy_call_static_mid(JNIEnv* env, void* cls, void* mid, jvalue* jv)
+{
+    return (*env)->CallStaticObjectMethodA(env, (jclass)cls, (jmethodID)mid, jv);
+}
+
+void* mj2x_llvm_indy_call_obj_mid(JNIEnv* env, void* obj, void* cls, void* mid, jvalue* jv)
+{
+    return (*env)->CallObjectMethodA(env, obj, (jmethodID)mid, jv);
+}
+
+// valueOf 公共体:FindClass + GetStaticMethodID + 单元素 jvalue 经
+// call_static_mid;类/方法解析失败返 NULL(挂起异常由调用侧感知),
+// 包装类局部引用用毕释放。
+static void* mj2x_box_valueof(JNIEnv* env, const char* wrapper,
+                              const char* valueOfDesc, jvalue* jv)
+{
+    jclass cls = (*env)->FindClass(env, wrapper);
+    if (cls == NULL) return NULL;
+    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "valueOf", valueOfDesc);
+    void* boxed = (mid != NULL) ? mj2x_llvm_indy_call_static_mid(env, cls, mid, jv) : NULL;
+    (*env)->DeleteLocalRef(env, cls);
+    return boxed;
+}
+
+// 装箱:窄类型按包装类 valueOf 形参窄化入槽(boolean 归一 0/1,对齐原
+// IR trunc-to-i1 再 zext),宽类型原样。
+#define MJ2X_BOX(kind, InT, JField, wrapper, voDesc, NARROW)                            \
+    MJ2X_LLVMIR_API void* mj2x_llvm_box_##kind(JNIEnv* env, InT v)                     \
+    {                                                                                   \
+        jvalue jv[1];                                                                   \
+        jv[0].JField = (NARROW);                                                        \
+        return mj2x_box_valueof(env, wrapper, voDesc, jv);                              \
+    }
+
+MJ2X_BOX(boolean, int32_t, z, "java/lang/Boolean", "(Z)Ljava/lang/Boolean;", (v ? 1 : 0))
+MJ2X_BOX(byte, int32_t, b, "java/lang/Byte", "(B)Ljava/lang/Byte;", (jbyte)v)
+MJ2X_BOX(char, int32_t, c, "java/lang/Character", "(C)Ljava/lang/Character;", (jchar)v)
+MJ2X_BOX(short, int32_t, s, "java/lang/Short", "(S)Ljava/lang/Short;", (jshort)v)
+MJ2X_BOX(int, int32_t, i, "java/lang/Integer", "(I)Ljava/lang/Integer;", v)
+MJ2X_BOX(long, int64_t, j, "java/lang/Long", "(J)Ljava/lang/Long;", v)
+MJ2X_BOX(float, float, f, "java/lang/Float", "(F)Ljava/lang/Float;", v)
+MJ2X_BOX(double, double, d, "java/lang/Double", "(D)Ljava/lang/Double;", v)
+
+// 拆箱:XxxValue() 无参 Call<JNI>MethodA;boolean/char 零扩展回计算位
+// 宽,byte/short 符号扩展,int 原位,long/float/double 按位宽返回。
+#define MJ2X_UNBOX(kind, RetT, JRetT, JN, wrapper, method, desc, WIDEN)                 \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_unbox_##kind(JNIEnv* env, void* obj)                \
+    {                                                                                   \
+        jclass cls = (*env)->FindClass(env, wrapper);                                   \
+        if (cls == NULL) return (RetT)0;                                                \
+        jmethodID mid = (*env)->GetMethodID(env, cls, method, desc);                    \
+        if (mid == NULL)                                                                \
+        {                                                                               \
+            (*env)->DeleteLocalRef(env, cls);                                           \
+            return (RetT)0;                                                             \
+        }                                                                               \
+        const JRetT v = (*env)->Call##JN##MethodA(env, obj, mid, NULL);                 \
+        (*env)->DeleteLocalRef(env, cls);                                               \
+        return (RetT)(WIDEN);                                                           \
+    }
+
+MJ2X_UNBOX(boolean, int32_t, jboolean, Boolean, "java/lang/Boolean", "booleanValue", "()Z",
+           (uint32_t)v)
+MJ2X_UNBOX(byte, int32_t, jbyte, Byte, "java/lang/Byte", "byteValue", "()B", (int32_t)v)
+MJ2X_UNBOX(char, int32_t, jchar, Char, "java/lang/Character", "charValue", "()C", (uint32_t)v)
+MJ2X_UNBOX(short, int32_t, jshort, Short, "java/lang/Short", "shortValue", "()S", (int32_t)v)
+MJ2X_UNBOX(int, int32_t, jint, Int, "java/lang/Integer", "intValue", "()I", v)
+MJ2X_UNBOX(long, int64_t, jlong, Long, "java/lang/Long", "longValue", "()J", v)
+MJ2X_UNBOX(float, float, jfloat, Float, "java/lang/Float", "floatValue", "()F", v)
+MJ2X_UNBOX(double, double, jdouble, Double, "java/lang/Double", "doubleValue", "()D", v)

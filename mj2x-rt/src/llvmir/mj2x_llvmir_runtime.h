@@ -110,6 +110,31 @@ MJ2X_LLVMIR_API void mj2x_llvm_throw_new(JNIEnv* env, const char* cls_name,
 MJ2X_LLVMIR_API void mj2x_llvm_monitor_enter(JNIEnv* env, void* obj);
 MJ2X_LLVMIR_API void mj2x_llvm_monitor_exit(JNIEnv* env, void* obj);
 
+// ---- 阶段四c:indy 直调面 + 装箱/拆箱(cls+mid 已解析的 MethodA 直调;
+// box=包装类.valueOf,unbox=XxxValue) ----
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_call_static_mid(JNIEnv* env, void* cls, void* mid,
+    jvalue* jv);
+MJ2X_LLVMIR_API void* mj2x_llvm_indy_call_obj_mid(JNIEnv* env, void* obj, void* cls,
+    void* mid, jvalue* jv);
+
+MJ2X_LLVMIR_API void* mj2x_llvm_box_boolean(JNIEnv* env, int32_t v);
+MJ2X_LLVMIR_API void* mj2x_llvm_box_byte(JNIEnv* env, int32_t v);
+MJ2X_LLVMIR_API void* mj2x_llvm_box_char(JNIEnv* env, int32_t v);
+MJ2X_LLVMIR_API void* mj2x_llvm_box_short(JNIEnv* env, int32_t v);
+MJ2X_LLVMIR_API void* mj2x_llvm_box_int(JNIEnv* env, int32_t v);
+MJ2X_LLVMIR_API void* mj2x_llvm_box_long(JNIEnv* env, int64_t v);
+MJ2X_LLVMIR_API void* mj2x_llvm_box_float(JNIEnv* env, float v);
+MJ2X_LLVMIR_API void* mj2x_llvm_box_double(JNIEnv* env, double v);
+
+MJ2X_LLVMIR_API int32_t mj2x_llvm_unbox_boolean(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API int32_t mj2x_llvm_unbox_byte(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API int32_t mj2x_llvm_unbox_char(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API int32_t mj2x_llvm_unbox_short(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API int32_t mj2x_llvm_unbox_int(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API int64_t mj2x_llvm_unbox_long(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API float mj2x_llvm_unbox_float(JNIEnv* env, void* obj);
+MJ2X_LLVMIR_API double mj2x_llvm_unbox_double(JNIEnv* env, void* obj);
+
 #ifdef __cplusplus
 }
 #endif

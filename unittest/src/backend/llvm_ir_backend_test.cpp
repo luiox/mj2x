@@ -848,8 +848,9 @@ TEST(LlvmIrBackendTest, EmitsIndyRuntimeResolution)
         << ll;
     EXPECT_NE(ll.find("define internal ptr @mj2x_llvm_indy_bsm_0("), std::string::npos) << ll;
     EXPECT_NE(ll.find("privateLookupIn"), std::string::npos) << ll;
-    EXPECT_NE(ll.find("define internal ptr @mj2x_llvm_box_int("), std::string::npos) << ll;
-    EXPECT_NE(ll.find("define internal i32 @mj2x_llvm_unbox_int("), std::string::npos) << ll;
+    EXPECT_NE(ll.find("declare ptr @mj2x_llvm_box_int(ptr %env, i32"), std::string::npos)
+        << ll;
+    EXPECT_NE(ll.find("declare i32 @mj2x_llvm_unbox_int(ptr %env"), std::string::npos) << ll;
     // 调用点 intern 的字符串（invokeWithArguments / MethodHandle）在模块定义区。
     EXPECT_NE(ll.find("invokeWithArguments"), std::string::npos) << ll;
     EXPECT_NE(ll.find("java/lang/invoke/MethodHandle"), std::string::npos) << ll;
