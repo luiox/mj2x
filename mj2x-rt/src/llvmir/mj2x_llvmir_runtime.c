@@ -436,3 +436,52 @@ MJ2X_CALL(long, int64_t, jlong, Long)
 MJ2X_CALL(float, float, jfloat, Float)
 MJ2X_CALL(double, double, jdouble, Double)
 MJ2X_CALL_VOID(void, Void)
+
+
+// ---- 阶段四a:class_const + throw_new ----
+
+// 基本类型经包装类 TYPE 静态字段取 primitive Class 对象(FindClass("I")
+// 会抛 ClassNotFoundException,必须走 Integer.TYPE 形态)。
+static void* mj2x_prim_class_type(JNIEnv* env, const char* wrapper)
+{
+    jclass cls = (*env)->FindClass(env, wrapper);
+    if (cls == NULL) return NULL;
+    jfieldID fid = (*env)->GetStaticFieldID(env, cls, "TYPE", "Ljava/lang/Class;");
+    void* type = (fid != NULL) ? (*env)->GetStaticObjectField(env, cls, fid) : NULL;
+    (*env)->DeleteLocalRef(env, cls);
+    return type;
+}
+
+// 类常量:单字符名 V/Z/B/C/S/I/J/F/D → Void.class / 包装类 TYPE(ldc
+// class I 等 javac 形态);其余按名 FindClass。与原 IR switch 语义一致
+//(switch default 也落 plain 路径)。
+void* mj2x_llvm_class_const(JNIEnv* env, const char* name)
+{
+    if (name[0] != '\0' && name[1] == '\0')
+    {
+        switch (name[0]) {
+        case 'V': return (*env)->FindClass(env, "java/lang/Void");
+        case 'Z': return mj2x_prim_class_type(env, "java/lang/Boolean");
+        case 'B': return mj2x_prim_class_type(env, "java/lang/Byte");
+        case 'C': return mj2x_prim_class_type(env, "java/lang/Character");
+        case 'S': return mj2x_prim_class_type(env, "java/lang/Short");
+        case 'I': return mj2x_prim_class_type(env, "java/lang/Integer");
+        case 'J': return mj2x_prim_class_type(env, "java/lang/Long");
+        case 'F': return mj2x_prim_class_type(env, "java/lang/Float");
+        case 'D': return mj2x_prim_class_type(env, "java/lang/Double");
+        default: break;
+        }
+    }
+    return (*env)->FindClass(env, name);
+}
+
+// 按类名抛新异常(class_const + ThrowNew):发射端预检类语义陷阱用
+//(如 Random.nextInt(bound<=0) 的 IllegalArgumentException)。类解析
+// 失败时保留挂起异常直接返回。
+void mj2x_llvm_throw_new(JNIEnv* env, const char* cls_name, const char* msg)
+{
+    jclass cls = (jclass)mj2x_llvm_class_const(env, cls_name);
+    if (cls == NULL) return;
+    (*env)->ThrowNew(env, cls, msg);
+    (*env)->DeleteLocalRef(env, cls);
+}

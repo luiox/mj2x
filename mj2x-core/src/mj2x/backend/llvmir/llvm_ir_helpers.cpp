@@ -151,15 +151,9 @@ std::string emitObjectHelpers()
     out << "declare void @mj2x_llvm_throw(ptr %env, ptr %obj)\n\n";
     // 按类名抛新异常（FindClass + ThrowNew）：发射端预检类语义陷阱用
     //（如 Random.nextInt(bound<=0) 的 IllegalArgumentException）。
-    out << "define internal void @mj2x_llvm_throw_new(ptr %env, ptr %cls_name, ptr %msg) {\n"
-           "entry:\n"
-           "  %cls = call ptr @mj2x_llvm_class_const(ptr %env, ptr %cls_name)\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %tn0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::ThrowNew << "\n"
-        << "  %thrownew = load ptr, ptr %tn0\n"
-           "  call i32 %thrownew(ptr %env, ptr %cls, ptr %msg)\n"
-           "  ret void\n"
-           "}\n\n";
+    // throw_new:#894 mj2x-llvmrt 阶段四a 下沉 mj2x-rt(内部转调
+    // mj2x_llvm_class_const),模块只携带 declare。
+    out << "declare void @mj2x_llvm_throw_new(ptr %env, ptr %cls_name, ptr %msg)\n\n";
     // String/Class 常量：NewStringUTF（modified UTF-8 字节）/ FindClass。
     // string_const:#894 mj2x-llvmrt 阶段二下沉。
     out << "declare ptr @mj2x_llvm_string_const(ptr %env, ptr %utf8)\n\n";
@@ -169,80 +163,9 @@ std::string emitObjectHelpers()
     out << "declare i1 @mj2x_llvm_ref_eq(ptr %env, ptr %a, ptr %b)\n\n";
     // 类常量：普通名 FindClass；基本类型描述符（V/Z/B/C/S/I/J/F/D）→
     // Void.class / 包装类 TYPE 字段（ldc class I 等 javac 形态，FindClass("I")
-    // 会抛 ClassNotFoundException）。
-    const struct { const char* tag; const char* wrapper; } wrapperClasses[] = {
-        {"Z", "java/lang/Boolean"}, {"B", "java/lang/Byte"}, {"C", "java/lang/Character"},
-        {"S", "java/lang/Short"},   {"I", "java/lang/Integer"}, {"J", "java/lang/Long"},
-        {"F", "java/lang/Float"},   {"D", "java/lang/Double"},
-    };
-    for (const auto& entry : wrapperClasses) {
-        std::string gname = "_mj2x_llvm_wrap_";
-        for (const char ch : std::string(entry.wrapper)) gname += ch == '/' ? '_' : ch;
-        out << "@" << gname << " = private unnamed_addr constant ["
-            << (std::strlen(entry.wrapper) + 1) << " x i8] c\"" << entry.wrapper << "\\00\"\n";
-    }
-    out << "@_mj2x_llvm_obj_void = private unnamed_addr constant [15 x i8] "
-           "c\"java/lang/Void\\00\"\n"
-           "@_mj2x_llvm_obj_type = private unnamed_addr constant [5 x i8] c\"TYPE\\00\"\n"
-           "@_mj2x_llvm_obj_type_desc = private unnamed_addr constant [18 x i8] "
-           "c\"Ljava/lang/Class;\\00\"\n";
-    out << "define internal ptr @mj2x_llvm_class_const(ptr %env, ptr %name) {\n"
-           "entry:\n"
-           "  %head = load i8, ptr %name\n"
-           "  %p1 = getelementptr i8, ptr %name, i64 1\n"
-           "  %second = load i8, ptr %p1\n"
-           "  %single = icmp eq i8 %second, 0\n"
-           "  br i1 %single, label %prim, label %plain\n"
-           "prim:\n"
-           "  switch i8 %head, label %plain [\n"
-           "    i8 86, label %void_\n"
-           "    i8 90, label %wrap0\n"
-           "    i8 66, label %wrap1\n"
-           "    i8 67, label %wrap2\n"
-           "    i8 83, label %wrap3\n"
-           "    i8 73, label %wrap4\n"
-           "    i8 74, label %wrap5\n"
-           "    i8 70, label %wrap6\n"
-           "    i8 68, label %wrap7\n"
-           "  ]\n"
-           "plain:\n"
-           "  %ft0 = load ptr, ptr %env\n"
-           "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-        << "  %find = load ptr, ptr %fc0\n"
-           "  %c = call ptr %find(ptr %env, ptr %name)\n"
-           "  ret ptr %c\n"
-           "void_:\n"
-           "  %ft1 = load ptr, ptr %env\n"
-           "  %fc1 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::FindClass << "\n"
-        << "  %find1 = load ptr, ptr %fc1\n"
-           "  %v = call ptr %find1(ptr %env, ptr @_mj2x_llvm_obj_void)\n"
-           "  ret ptr %v\n";
-    for (int i = 0; i < 8; ++i) {
-        std::string gname = "_mj2x_llvm_wrap_";
-        for (const char ch : std::string(wrapperClasses[i].wrapper))
-            gname += ch == '/' ? '_' : ch;
-        out << "wrap" << i << ":\n"
-            << "  %ft" << (i + 2) << " = load ptr, ptr %env\n"
-            << "  %fc" << (i + 2) << " = getelementptr ptr, ptr %ft" << (i + 2) << ", i64 "
-            << jni_slot::FindClass << "\n"
-            << "  %find" << (i + 2) << " = load ptr, ptr %fc" << (i + 2) << "\n"
-            << "  %w" << i << " = call ptr %find" << (i + 2) << "(ptr %env, ptr @" << gname
-            << ")\n"
-            << "  %ft" << (i + 11) << " = load ptr, ptr %env\n"
-            << "  %gsf" << i << " = getelementptr ptr, ptr %ft" << (i + 11) << ", i64 "
-            << jni_slot::GetStaticFieldID << "\n"
-            << "  %getsf" << i << " = load ptr, ptr %gsf" << i << "\n"
-            << "  %fid" << i << " = call ptr %getsf" << i << "(ptr %env, ptr %w" << i
-            << ", ptr @_mj2x_llvm_obj_type, ptr @_mj2x_llvm_obj_type_desc)\n"
-            << "  %ft" << (i + 20) << " = load ptr, ptr %env\n"
-            << "  %gso" << i << " = getelementptr ptr, ptr %ft" << (i + 20) << ", i64 "
-            << jni_slot::GetStaticObjectField << "\n"
-            << "  %gsof" << i << " = load ptr, ptr %gso" << i << "\n"
-            << "  %t" << i << " = call ptr %gsof" << i << "(ptr %env, ptr %w" << i << ", ptr %fid"
-            << i << ")\n"
-            << "  ret ptr %t" << i << "\n";
-    }
-    out << "}\n\n";
+    // 会抛 ClassNotFoundException）。class_const:#894 mj2x-llvmrt 阶段四a
+    // 下沉 mj2x-rt,包装类名/TYPE 常量随实现走,模块只携带 declare。
+    out << "declare ptr @mj2x_llvm_class_const(ptr %env, ptr %name)\n\n";
     // MonitorEnter/Exit（null → NPE ThrowNew）。
     out << "define internal void @mj2x_llvm_monitor_enter(ptr %env, ptr %obj) {\n"
            "entry:\n"

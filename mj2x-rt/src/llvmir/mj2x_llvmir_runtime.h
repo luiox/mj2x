@@ -101,6 +101,11 @@ MJ2X_CALL_PROTOS(float, float)
 MJ2X_CALL_PROTOS(double, double)
 MJ2X_CALL_PROTOS(void, void)
 
+// ---- 阶段四a:类常量与按名抛异常 ----
+MJ2X_LLVMIR_API void* mj2x_llvm_class_const(JNIEnv* env, const char* name);
+MJ2X_LLVMIR_API void mj2x_llvm_throw_new(JNIEnv* env, const char* cls_name,
+    const char* msg);
+
 #ifdef __cplusplus
 }
 #endif
