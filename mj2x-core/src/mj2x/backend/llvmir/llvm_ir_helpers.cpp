@@ -106,162 +106,28 @@ std::string emitObjectHelpers()
     // 数组元素读写 helper：null → NPE；越界由 JNI Get/Set*ArrayRegion /
     // Get/SetObjectArrayElement 抛 ArrayIndexOutOfBoundsException / 存储违例抛
     // ArrayStoreException。byte 形态特判 boolean[]（JNI 要求 GetBooleanArrayRegion）。
-    out << "@_mj2x_llvm_obj_zarr = private unnamed_addr constant [3 x i8] c\"[Z\\00\"\n\n";
+    // 数组元素族:#894 mj2x-llvmrt 阶段三c 下沉 mj2x-rt,模块只携带 declare。
     struct ArrayKindInfo
     {
         const char* kind;      // helper 后缀
         SSAType     ssaType;   // 元素 SSA 类型
-        int64_t     getSlot;
-        int64_t     setSlot;
-        const char* jniType;   // region 元素类型
         const char* retType;   // helper 返回类型（窄提升后）
-        const char* ext;       // 窄扩展（sext/zext/空）
     };
     static const ArrayKindInfo arrayKinds[] = {
-        {"byte", SSAType::I8, jni_slot::GetByteArrayRegion, jni_slot::SetByteArrayRegion, "i8",
-         "i32", "sext"},
-        {"short", SSAType::I16, jni_slot::GetShortArrayRegion, jni_slot::SetShortArrayRegion,
-         "i16", "i32", "sext"},
-        {"char", SSAType::CHAR, jni_slot::GetCharArrayRegion, jni_slot::SetCharArrayRegion,
-         "i16", "i32", "zext"},
-        {"int", SSAType::I32, jni_slot::GetIntArrayRegion, jni_slot::SetIntArrayRegion, "i32",
-         "i32", ""},
-        {"long", SSAType::I64, jni_slot::GetLongArrayRegion, jni_slot::SetLongArrayRegion,
-         "i64", "i64", ""},
-        {"float", SSAType::F32, jni_slot::GetFloatArrayRegion, jni_slot::SetFloatArrayRegion,
-         "float", "float", ""},
-        {"double", SSAType::F64, jni_slot::GetDoubleArrayRegion, jni_slot::SetDoubleArrayRegion,
-         "double", "double", ""},
-        {"ref", SSAType::REF, jni_slot::GetObjectArrayElement, jni_slot::SetObjectArrayElement,
-         "ptr", "ptr", ""},
+        {"byte", SSAType::I8, "i32"},
+        {"short", SSAType::I16, "i32"},
+        {"char", SSAType::CHAR, "i32"},
+        {"int", SSAType::I32, "i32"},
+        {"long", SSAType::I64, "i64"},
+        {"float", SSAType::F32, "float"},
+        {"double", SSAType::F64, "double"},
+        {"ref", SSAType::REF, "ptr"},
     };
     for (const auto& k : arrayKinds) {
-        const bool isByte = std::string(k.kind) == "byte";
-        const bool isRef  = std::string(k.kind) == "ref";
-        out << "define internal " << k.retType << " @mj2x_llvm_array_load_" << k.kind
-            << "(ptr %env, ptr %arr, i32 %idx) {\n"
-            << "entry:\n"
-            << "  %isnull = icmp eq ptr %arr, null\n"
-            << "  br i1 %isnull, label %npe, label %ok\n"
-            << "ok:\n";
-        if (isByte) {
-            // boolean[] 特判：GetBooleanArrayRegion（jboolean i8 0/1 → zext）。
-            out << "  %ft0 = load ptr, ptr %env\n"
-                << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-                << "  %find0 = load ptr, ptr %fc0\n"
-                << "  %zcls = call ptr %find0(ptr %env, ptr @_mj2x_llvm_obj_zarr)\n"
-                << "  %ft1 = load ptr, ptr %env\n"
-                << "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
-                << "  %isinst0 = load ptr, ptr %ii0\n"
-                << "  %isbool = call i32 %isinst0(ptr %env, ptr %arr, ptr %zcls)\n"
-                << "  %b = icmp ne i32 %isbool, 0\n"
-                << "  br i1 %b, label %boolarr, label %bytearr\n"
-                << "boolarr:\n"
-                << "  %tmpb = alloca i8\n"
-                << "  %ft2 = load ptr, ptr %env\n"
-                << "  %gb0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::GetBooleanArrayRegion
-                << "\n"
-                << "  %gb = load ptr, ptr %gb0\n"
-                << "  call void %gb(ptr %env, ptr %arr, i32 %idx, i32 1, ptr %tmpb)\n"
-                << "  %vb = load i8, ptr %tmpb\n"
-                << "  %wb = zext i8 %vb to i32\n"
-                << "  ret i32 %wb\n"
-                << "bytearr:\n";
-        }
-        if (isRef) {
-            // 引用数组：GetObjectArrayElement 直接返回元素。
-            out << "  %ft3 = load ptr, ptr %env\n"
-                << "  %gr0 = getelementptr ptr, ptr %ft3, i64 " << k.getSlot << "\n"
-                << "  %gr = load ptr, ptr %gr0\n"
-                << "  %v = call ptr %gr(ptr %env, ptr %arr, i32 %idx)\n"
-                << "  ret ptr %v\n"
-                << "npe:\n"
-                << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-                << "  ret ptr null\n"
-                << "}\n\n";
-            // store 分支在下方循环体内（isRef 特判）。
-        }
-        else {
-            out << "  %tmp = alloca " << k.jniType << "\n"
-            << "  %ft3 = load ptr, ptr %env\n"
-            << "  %gr0 = getelementptr ptr, ptr %ft3, i64 " << k.getSlot << "\n"
-            << "  %gr = load ptr, ptr %gr0\n"
-            << "  call void %gr(ptr %env, ptr %arr, i32 %idx, i32 1, ptr %tmp)\n"
-            << "  %v = load " << k.jniType << ", ptr %tmp\n";
-        if (std::strlen(k.ext) > 0) {
-            out << "  %w = " << k.ext << " " << k.jniType << " %v to " << k.retType << "\n"
-                << "  ret " << k.retType << " %w\n";
-        }
-        else {
-            out << "  ret " << k.retType << " %v\n";
-        }
-        out << "npe:\n"
-            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-            << "  ret " << k.retType << " " << zeroFor(k.retType) << "\n"
-            << "}\n\n";
-        }
-        // store。
-        out << "define internal void @mj2x_llvm_array_store_" << k.kind
-            << "(ptr %env, ptr %arr, i32 %idx, " << k.retType << " %val) {\n"
-            << "entry:\n"
-            << "  %isnull = icmp eq ptr %arr, null\n"
-            << "  br i1 %isnull, label %npe, label %ok\n"
-            << "ok:\n";
-        if (isByte) {
-            out << "  %ft0 = load ptr, ptr %env\n"
-                << "  %fc0 = getelementptr ptr, ptr %ft0, i64 " << jni_slot::FindClass << "\n"
-                << "  %find0 = load ptr, ptr %fc0\n"
-                << "  %zcls = call ptr %find0(ptr %env, ptr @_mj2x_llvm_obj_zarr)\n"
-                << "  %ft1 = load ptr, ptr %env\n"
-                << "  %ii0 = getelementptr ptr, ptr %ft1, i64 " << jni_slot::IsInstanceOf << "\n"
-                << "  %isinst0 = load ptr, ptr %ii0\n"
-                << "  %isbool = call i32 %isinst0(ptr %env, ptr %arr, ptr %zcls)\n"
-                << "  %b = icmp ne i32 %isbool, 0\n"
-                << "  br i1 %b, label %boolarr, label %bytearr\n"
-                << "boolarr:\n"
-                << "  %tvb = trunc i32 %val to i8\n"
-                << "  %nzb = icmp ne i8 %tvb, 0\n"
-                << "  %oneb = zext i1 %nzb to i8\n"
-                << "  %tmpb = alloca i8\n"
-                << "  store i8 %oneb, ptr %tmpb\n"
-                << "  %ft2 = load ptr, ptr %env\n"
-                << "  %sb0 = getelementptr ptr, ptr %ft2, i64 " << jni_slot::SetBooleanArrayRegion
-                << "\n"
-                << "  %sb = load ptr, ptr %sb0\n"
-                << "  call void %sb(ptr %env, ptr %arr, i32 %idx, i32 1, ptr %tmpb)\n"
-                << "  ret void\n"
-                << "bytearr:\n";
-        }
-        if (isRef) {
-            // 引用数组：Get/SetObjectArrayElement 直接传元素（无 region 缓冲）。
-            out << "  %ft3 = load ptr, ptr %env\n"
-                << "  %sr0 = getelementptr ptr, ptr %ft3, i64 " << k.setSlot << "\n"
-                << "  %sr = load ptr, ptr %sr0\n"
-                << "  call void %sr(ptr %env, ptr %arr, i32 %idx, ptr %val)\n"
-                << "  ret void\n"
-                << "npe:\n"
-                << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-                << "  ret void\n"
-                << "}\n\n";
-            continue;
-        }
-        out << "  %tmp = alloca " << k.jniType << "\n";
-        if (std::strlen(k.ext) > 0) {
-            out << "  %tv = trunc " << k.retType << " %val to " << k.jniType << "\n"
-                << "  store " << k.jniType << " %tv, ptr %tmp\n";
-        }
-        else {
-            out << "  store " << k.jniType << " %val, ptr %tmp\n";
-        }
-        out << "  %ft3 = load ptr, ptr %env\n"
-            << "  %sr0 = getelementptr ptr, ptr %ft3, i64 " << k.setSlot << "\n"
-            << "  %sr = load ptr, ptr %sr0\n"
-            << "  call void %sr(ptr %env, ptr %arr, i32 %idx, i32 1, ptr %tmp)\n"
-            << "  ret void\n"
-            << "npe:\n"
-            << "  call void @mj2x_llvm_throw_null(ptr %env)\n"
-            << "  ret void\n"
-            << "}\n\n";
+        out << "declare " << k.retType << " @mj2x_llvm_array_load_" << k.kind
+            << "(ptr %env, ptr %arr, i32 %idx)\n\n";
+        out << "declare void @mj2x_llvm_array_store_" << k.kind
+            << "(ptr %env, ptr %arr, i32 %idx, " << k.retType << " %val)\n\n";
     }
     // array_length：null → NPE；GetArrayLength。
     out << "declare i32 @mj2x_llvm_array_length(ptr %env, ptr %arr)\n\n";

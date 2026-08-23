@@ -61,6 +61,24 @@ MJ2X_FIELD_PROTOS(float, float)
 MJ2X_FIELD_PROTOS(double, double)
 MJ2X_FIELD_PROTOS(ref, void*)
 
+// ---- 阶段三c:数组元素族(load/store ×8 kind;数组为 null 抛 NPE 返零值;
+// byte kind 按实际类型分派 byte[]/boolean[],ref 直用
+// Get/SetObjectArrayElement) ----
+#define MJ2X_ARRAY_PROTOS(kind, RetT)                                                   \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_array_load_##kind(JNIEnv* env, void* arr,           \
+        int32_t idx);                                                                   \
+    MJ2X_LLVMIR_API void mj2x_llvm_array_store_##kind(JNIEnv* env, void* arr,          \
+        int32_t idx, RetT val);
+
+MJ2X_ARRAY_PROTOS(byte, int32_t)
+MJ2X_ARRAY_PROTOS(short, int32_t)
+MJ2X_ARRAY_PROTOS(char, int32_t)
+MJ2X_ARRAY_PROTOS(int, int32_t)
+MJ2X_ARRAY_PROTOS(long, int64_t)
+MJ2X_ARRAY_PROTOS(float, float)
+MJ2X_ARRAY_PROTOS(double, double)
+MJ2X_ARRAY_PROTOS(ref, void*)
+
 #ifdef __cplusplus
 }
 #endif

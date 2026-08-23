@@ -225,3 +225,112 @@ MJ2X_FIELD_STORE(long, int64_t, jlong, Long, val)
 MJ2X_FIELD_STORE(float, float, jfloat, Float, val)
 MJ2X_FIELD_STORE(double, double, jdouble, Double, val)
 MJ2X_FIELD_STORE(ref, void*, jobject, Object, val)
+
+// ---- 阶段三c:数组元素族(load/store ×8 kind) ----
+
+// 通用原语形态:region 读/写 1 元素;窄类型读后宽化(WIDEN)/写前窄化
+//(NARROW);数组为 null 先抛 NPE。越界由 JNI region 调用抛
+// ArrayIndexOutOfBoundsException,存储违例抛 ArrayStoreException。
+#define MJ2X_ARRAY_LOAD(kind, RetT, JRetT, JN, WIDEN)                                   \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_array_load_##kind(JNIEnv* env, void* arr,           \
+        int32_t idx)                                                                    \
+    {                                                                                   \
+        if (arr == NULL)                                                                \
+        {                                                                               \
+            mj2x_llvm_throw_null(env);                                                  \
+            return (RetT)0;                                                             \
+        }                                                                               \
+        JRetT v = (JRetT)0;                                                             \
+        (*env)->Get##JN##ArrayRegion(env, arr, idx, 1, &v);                             \
+        return (RetT)(WIDEN);                                                           \
+    }
+#define MJ2X_ARRAY_STORE(kind, RetT, JRetT, JN, NARROW)                                 \
+    MJ2X_LLVMIR_API void mj2x_llvm_array_store_##kind(JNIEnv* env, void* arr,          \
+        int32_t idx, RetT val)                                                          \
+    {                                                                                   \
+        if (arr == NULL)                                                                \
+        {                                                                               \
+            mj2x_llvm_throw_null(env);                                                  \
+            return;                                                                     \
+        }                                                                               \
+        const JRetT v = (JRetT)(NARROW);                                                \
+        (*env)->Set##JN##ArrayRegion(env, arr, idx, 1, &v);                             \
+    }
+
+// byte:同一 baload/bastore 站点可能落在 byte[] 或 boolean[](描述符同为
+// [B),按实际数组类型 IsInstanceOf "[Z" 分派;jboolean 读后零扩展、写前
+// 归一 0/1。
+MJ2X_LLVMIR_API int32_t mj2x_llvm_array_load_byte(JNIEnv* env, void* arr, int32_t idx)
+{
+    if (arr == NULL) {
+        mj2x_llvm_throw_null(env);
+        return 0;
+    }
+    jclass zcls = (*env)->FindClass(env, "[Z");
+    if (zcls != NULL) {
+        const jboolean isBool = (*env)->IsInstanceOf(env, arr, zcls);
+        (*env)->DeleteLocalRef(env, zcls);
+        if (isBool) {
+            jboolean v = JNI_FALSE;
+            (*env)->GetBooleanArrayRegion(env, arr, idx, 1, &v);
+            return (int32_t)(uint32_t)v;
+        }
+    }
+    jbyte v = 0;
+    (*env)->GetByteArrayRegion(env, arr, idx, 1, &v);
+    return (int32_t)v;
+}
+
+MJ2X_LLVMIR_API void mj2x_llvm_array_store_byte(JNIEnv* env, void* arr, int32_t idx, int32_t val)
+{
+    if (arr == NULL) {
+        mj2x_llvm_throw_null(env);
+        return;
+    }
+    jclass zcls = (*env)->FindClass(env, "[Z");
+    if (zcls != NULL) {
+        const jboolean isBool = (*env)->IsInstanceOf(env, arr, zcls);
+        (*env)->DeleteLocalRef(env, zcls);
+        if (isBool) {
+            const jboolean b = (jboolean)(val ? 1 : 0);
+            (*env)->SetBooleanArrayRegion(env, arr, idx, 1, &b);
+            return;
+        }
+    }
+    const jbyte v = (jbyte)val;
+    (*env)->SetByteArrayRegion(env, arr, idx, 1, &v);
+}
+
+// ref:Get/SetObjectArrayElement 直传元素(无 region 缓冲;类型不符由 JVM
+// 抛 ArrayStoreException)。
+MJ2X_LLVMIR_API void* mj2x_llvm_array_load_ref(JNIEnv* env, void* arr, int32_t idx)
+{
+    if (arr == NULL) {
+        mj2x_llvm_throw_null(env);
+        return NULL;
+    }
+    return (*env)->GetObjectArrayElement(env, arr, idx);
+}
+
+MJ2X_LLVMIR_API void mj2x_llvm_array_store_ref(JNIEnv* env, void* arr, int32_t idx, void* val)
+{
+    if (arr == NULL) {
+        mj2x_llvm_throw_null(env);
+        return;
+    }
+    (*env)->SetObjectArrayElement(env, arr, idx, val);
+}
+
+MJ2X_ARRAY_LOAD(short, int32_t, jshort, Short, (int32_t)v)
+MJ2X_ARRAY_LOAD(char, int32_t, jchar, Char, (uint32_t)v)
+MJ2X_ARRAY_LOAD(int, int32_t, jint, Int, v)
+MJ2X_ARRAY_LOAD(long, int64_t, jlong, Long, v)
+MJ2X_ARRAY_LOAD(float, float, jfloat, Float, v)
+MJ2X_ARRAY_LOAD(double, double, jdouble, Double, v)
+
+MJ2X_ARRAY_STORE(short, int32_t, jshort, Short, val)
+MJ2X_ARRAY_STORE(char, int32_t, jchar, Char, val)
+MJ2X_ARRAY_STORE(int, int32_t, jint, Int, val)
+MJ2X_ARRAY_STORE(long, int64_t, jlong, Long, val)
+MJ2X_ARRAY_STORE(float, float, jfloat, Float, val)
+MJ2X_ARRAY_STORE(double, double, jdouble, Double, val)
