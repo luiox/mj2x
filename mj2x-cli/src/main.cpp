@@ -423,9 +423,10 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         }
     }
 
-    // JDK intrinsic 直调（mj2x_math_* 等）与 --runtime-protection 检查点都来自
-    // mj2x-rt：整树随工程分发（模板按需 glob 编译）。
-    if (!mj2x::cli::writeRtTree(projectDir)) {
+    // JDK intrinsic 直调（mj2x_math_* 等，符号实现在 regc）、mj2x_llvm_* 运行时
+    // （llvmir）与 --runtime-protection 检查点（common）都来自 mj2x-rt：按 LLVM
+    // 分发面（common+regc+llvmir）随工程分发，CMake glob 编译。
+    if (!mj2x::cli::writeRtTree(projectDir, CEmitterBackend::LlvmIr)) {
         CA_LOGT_ERROR("cli", "embedded mj2x-rt resources are unavailable.\n");
         return 1;
     }
@@ -441,10 +442,13 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "find_program(CLANG_EXECUTABLE clang REQUIRED)\n";
         out << "find_package(JNI REQUIRED)\n\n";
         out << "set(LLVM_IR_FILE ${CMAKE_CURRENT_SOURCE_DIR}/native.ll)\n";
-        // mj2x-rt：JDK intrinsic runtime（regc/*.c）+ rt_protect 检查点（common/）。
+        // mj2x-rt：JDK intrinsic runtime（regc/*.c）+ rt_protect 检查点（common/）
+        // + mj2x_llvm_* 运行时（llvmir/）——LLVM 分发面三挂载全参与编译。
         out << "file(GLOB CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/regc/*.c)\n";
         out << "list(APPEND CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/common/"
                "mj2x_rt_protect.c)\n";
+        out << "file(GLOB LLVMIR_RT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/llvmir/*.c)\n";
+        out << "list(APPEND CRT_SOURCES ${LLVMIR_RT_SOURCES})\n";
         out << "set(NATIVE_LIB ${CMAKE_CURRENT_BINARY_DIR}/mj2x_native"
                "${CMAKE_SHARED_LIBRARY_SUFFIX})\n";
         out << "set(CRT_ARGS \"\")\n";
@@ -1274,6 +1278,7 @@ int main(int argc, char** argv)
             projectConfig.generatedSourcePath = nativeOutputPath;
             projectConfig.crtRoot             = mj2x::cli::findCrtRoot(argv[0]);
             projectConfig.projectName         = "mj2x_native_project";
+            projectConfig.backend             = options.cBackendKind;
             int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
             if (projectRc != 0) return projectRc;
             // 用户 intrinsic 实现文件（issue #818）：复制进工程 src/mj2x-rt/ 下，

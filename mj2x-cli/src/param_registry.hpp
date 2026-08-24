@@ -26,15 +26,6 @@
 
 namespace mj2x::cli {
 
-/// @brief 选择 native 发射后端。
-enum class CEmitterBackend
-{
-    StackC,
-    RegC,
-    LlvmIr,
-    Vmc4,
-};
-
 /// @brief native 编译驱动方式（直接驱动编译器 vs xmake 工程）。
 enum class NativeBuildDriver
 {

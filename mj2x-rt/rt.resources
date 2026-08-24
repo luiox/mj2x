@@ -1,8 +1,10 @@
 # libresources 挂载声明:名字=目录(目录相对本文件;UTF-8;'\' 等价 '/')
-# mj2x-rt 源包:common 为跨后端运行时源,regc/stackc/vmc4 为各后端运行时源,
-# templates 为生成期模板(xmake.lua.in / README.md.in)。
+# mj2x-rt 源包:common 为跨后端运行时源,regc/stackc/vmc4/llvmir 为各后端
+# 运行时源,templates 为生成期模板(xmake.lua.in / README.md.in)。
+# 各后端实际分发的挂载子集见 mj2x-cli embedded_rt.hpp rtFoldersForBackend。
 common=src/common
 regc=src/regc
 stackc=src/stackc
 vmc4=src/vmc4
+llvmir=src/llvmir
 templates=templates

@@ -488,6 +488,54 @@ std::vector<std::string> readCrtManifest(const fs::path& manifest)
     return paths;
 }
 
+/// 后端 → 期望分发的 mj2x-rt 挂载集(embedded_rt.hpp rtFoldersForBackend 的
+/// 独立复述,分发契约变化时两侧同步)。
+const std::vector<std::string>& expectedRtMounts(const std::string& backend)
+{
+    static const std::vector<std::string> kStackC{"stackc"};
+    static const std::vector<std::string> kRegC{"common", "regc"};
+    static const std::vector<std::string> kVmc4{"common", "vmc4"};
+    static const std::vector<std::string> kLlvm{"common", "regc", "llvmir"};
+    static const std::vector<std::string> kNone;
+    if (backend == "stackc") return kStackC;
+    if (backend == "regc") return kRegC;
+    if (backend == "vmc4") return kVmc4;
+    if (backend == "llvm") return kLlvm;
+    return kNone;
+}
+
+/// 按 rt.resources 清单逐挂载核对生成工程:分发面内逐文件字节比对,
+/// 分发面外逐文件断言缺席。
+void compareRtTreePerBackend(const fs::path& projectDir, const fs::path& crtRoot,
+                             const std::string& backend)
+{
+    const auto                     expected = expectedRtMounts(backend);
+    std::vector<std::pair<std::string, fs::path>> mounts;
+    for (const auto& entry : readCrtManifest(crtRoot / "rt.resources")) {
+        const auto eq = entry.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string mount = entry.substr(0, eq);
+        if (mount == "templates") continue;  // 模板不随树展开
+        mounts.emplace_back(mount, crtRoot / entry.substr(eq + 1));
+    }
+    ASSERT_FALSE(mounts.empty());
+    for (const auto& [mount, mountDir] : mounts) {
+        const bool distributed =
+            std::find(expected.begin(), expected.end(), mount) != expected.end();
+        for (const auto& item : fs::recursive_directory_iterator(mountDir)) {
+            if (!item.is_regular_file()) continue;
+            const fs::path relative   = item.path().lexically_relative(mountDir);
+            const fs::path copiedPath = projectDir / "src" / "mj2x-rt" / mount / relative;
+            if (!distributed) {
+                EXPECT_FALSE(fileExists(copiedPath)) << mount << "/" << relative.string();
+                continue;
+            }
+            ASSERT_TRUE(fileExists(copiedPath)) << relative.string();
+            EXPECT_EQ(readText(copiedPath), readText(item.path())) << relative.string();
+        }
+    }
+}
+
 void writeText(const fs::path& path, const std::string& text)
 {
     std::ofstream out(path, std::ios::binary);
@@ -1124,8 +1172,11 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
     EXPECT_TRUE(fileExists(projectDir / ".gitignore")) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "README.md")) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "src" / "generated" / "native.c")) << result.out;
-    EXPECT_TRUE(fileExists(projectDir / "src" / "mj2x-rt" / "regc" / "mj2x_regc_string_builder.c"))
+    // StackC 分发面:仅 stackc 挂载(rtFoldersForBackend),regc/common 不随工程分发。
+    EXPECT_TRUE(fileExists(projectDir / "src" / "mj2x-rt" / "stackc" / "mj2x_stackc_runtime.c"))
         << result.out;
+    EXPECT_FALSE(fileExists(projectDir / "src" / "mj2x-rt" / "regc")) << result.out;
+    EXPECT_FALSE(fileExists(projectDir / "src" / "mj2x-rt" / "common")) << result.out;
 
     std::string xmake = readText(projectDir / "xmake.lua");
     EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
@@ -1180,26 +1231,23 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(projectDir / "xmake.lua")) << result.out;
 
-    fs::path   repoRoot = test::getTopProjectPath();
-    fs::path   crtRoot  = repoRoot / "mj2x" / "mj2x-rt";
-    // rt.resources 挂载清单(name=dir):逐挂载比对生成工程内的源树。
-    const auto manifest = readCrtManifest(crtRoot / "rt.resources");
-    ASSERT_FALSE(manifest.empty());
-    for (const auto& entry : manifest) {
-        const auto eq = entry.find('=');
-        ASSERT_NE(eq, std::string::npos) << entry;
-        const std::string mount = entry.substr(0, eq);
-        if (mount == "templates") continue;  // 模板单独断言(见下方 golden 对比)
-        const fs::path mountDir = crtRoot / entry.substr(eq + 1);
-        for (const auto& item : fs::recursive_directory_iterator(mountDir)) {
-            if (!item.is_regular_file()) continue;
-            const fs::path relative = item.path().lexically_relative(mountDir);
-            const fs::path copiedPath =
-                projectDir / "src" / "mj2x-rt" / mount / relative;
-            ASSERT_TRUE(fileExists(copiedPath)) << relative.string();
-            EXPECT_EQ(readText(copiedPath), readText(item.path())) << relative.string();
-        }
-    }
+    fs::path repoRoot = test::getTopProjectPath();
+    fs::path crtRoot  = repoRoot / "mj2x" / "mj2x-rt";
+    // StackC 分发面:仅 stackc 挂载逐文件字节比对,其余挂载断言缺席。
+    compareRtTreePerBackend(projectDir, crtRoot, "stackc");
+
+    // RegC 分发面:common+regc 比对,stackc/vmc4/llvmir 缺席(同一隔离 exe,
+    // 嵌入 bundle 全量在而分发按后端裁剪)。
+    fs::path regcProjectDir = outDir / "project_regc";
+    fs::path regcOutClass   = outDir / "output_regc.class";
+    auto     regcResult     = runScript({
+        poisonCrt,
+        cdOutDir,
+        q(isolatedCli) + " -i " + q(inClass) + " -o " + q(regcOutClass) +
+            " --backend regc --generate-xmake " + q(regcProjectDir),
+    });
+    ASSERT_EQ(regcResult.exitCode, 0) << regcResult.out;
+    compareRtTreePerBackend(regcProjectDir, crtRoot, "regc");
 
     std::string xmake = readText(projectDir / "xmake.lua");
     EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
@@ -2383,6 +2431,17 @@ TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(xmakeDir / "native.ll")) << result.out;
     EXPECT_TRUE(fileExists(xmakeDir / "xmake.lua")) << result.out;
+    // LLVM 分发面:common+regc+llvmir 三挂载,llvmir 提供 mj2x_llvm_* 符号实现
+    // (此前 llvmir 不随工程分发,生成的工程 mj2x_llvm_* 全部未解析)。
+    EXPECT_TRUE(fileExists(xmakeDir / "src" / "mj2x-rt" / "llvmir" / "mj2x_llvmir_runtime.c"))
+        << result.out;
+    EXPECT_TRUE(fileExists(xmakeDir / "src" / "mj2x-rt" / "regc" / "mj2x_regc_intrinsic.c"))
+        << result.out;
+    EXPECT_FALSE(fileExists(xmakeDir / "src" / "mj2x-rt" / "stackc")) << result.out;
+    {
+        const std::string script = readText(xmakeDir / "xmake.lua");
+        EXPECT_NE(script.find("\"llvmir\""), std::string::npos) << script;
+    }
 #endif
 }
 

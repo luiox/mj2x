@@ -76,13 +76,16 @@ std::string trim(std::string value)
     return value.substr(first, last - first + 1);
 }
 
-bool copyRtTree(const fs::path& root, const fs::path& to)
+bool copyRtTree(const fs::path& root, const fs::path& to, CEmitterBackend backend)
 {
-    // 外部磁盘源包(mj2x-rt 布局):复制 src/<挂载>/ 树到目标目录。
+    // 外部磁盘源包(mj2x-rt 布局):按后端复制 src/<挂载>/ 子集到目标目录。
     std::error_code ec;
-    if (!fs::exists(root / "src" / "regc", ec) || !fs::exists(root / "src" / "common", ec)) {
-        CA_LOGT_ERROR("compile", "RT source pack incomplete: {}\n", root.string().c_str());
-        return false;
+    for (const std::string_view mount : mj2x::cli::rtFoldersForBackend(backend)) {
+        if (!fs::exists(root / "src" / mount, ec)) {
+            CA_LOGT_ERROR("compile", "RT source pack incomplete (mount {}): {}\n",
+                          std::string{mount}, root.string().c_str());
+            return false;
+        }
     }
 
     fs::create_directories(to, ec);
@@ -91,7 +94,7 @@ bool copyRtTree(const fs::path& root, const fs::path& to)
         return false;
     }
 
-    for (const std::string_view mount : mj2x::cli::kRtSourceMounts) {
+    for (const std::string_view mount : mj2x::cli::rtFoldersForBackend(backend)) {
         const fs::path mountSource = root / "src" / mount;
         const fs::path mountDest   = to / mount;
         fs::create_directories(mountDest, ec);
@@ -218,9 +221,9 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     }
 
     if (useExternalCrt) {
-        if (!copyRtTree(config.crtRoot, crtDest)) return 1;
+        if (!copyRtTree(config.crtRoot, crtDest, config.backend)) return 1;
     }
-    else if (!mj2x::cli::writeRtTree(config.projectDir)) {
+    else if (!mj2x::cli::writeRtTree(config.projectDir, config.backend)) {
         CA_LOGT_ERROR("compile", "embedded mj2x-rt resources are unavailable.\n");
         return 1;
     }
@@ -282,9 +285,10 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
         }
     }
 
-    // JDK intrinsic 直调（mj2x_math_* 等）与 --runtime-protection 检查点都来自
-    // mj2x-rt：整树随工程分发（模板按需 glob 编译）。
-    if (!mj2x::cli::writeRtTree(projectDir)) {
+    // JDK intrinsic 直调（mj2x_math_* 等，符号实现在 regc）、mj2x_llvm_* 运行时
+    // （llvmir）与 --runtime-protection 检查点（common）都来自 mj2x-rt：按 LLVM
+    // 分发面（common+regc+llvmir）随工程分发，脚本逐挂载 glob 编译。
+    if (!mj2x::cli::writeRtTree(projectDir, CEmitterBackend::LlvmIr)) {
         CA_LOGT_ERROR("compile", "embedded mj2x-rt resources are unavailable.\n");
         return 1;
     }
@@ -317,12 +321,10 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
                    "                    table.insert(args, \"-I\" .. path.join(jh, \"include\", \"darwin\"))\n"
                    "                end\n"
                    "            end\n"
-                   "            for _, c in ipairs(os.glob(path.join(crtSrc, \"regc/*.c\"))) do\n"
-                   "                table.insert(args, c)\n"
-                   "            end\n"
-                   "            for _, c in ipairs(os.glob(path.join(os.scriptdir(), "
-                   "\"src/mj2x-rt/common/*.c\"))) do\n"
-                   "                table.insert(args, c)\n"
+                   "            for _, dir in ipairs({\"common\", \"regc\", \"llvmir\"}) do\n"
+                   "                for _, c in ipairs(os.glob(path.join(crtSrc, dir .. \"/*.c\"))) do\n"
+                   "                    table.insert(args, c)\n"
+                   "                end\n"
                    "            end\n"
                    "        end\n"
                    "        table.insert(args, \"-o\")\n"

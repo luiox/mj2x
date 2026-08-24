@@ -7,6 +7,15 @@
 
 namespace mj2x::cli {
 
+/// @brief 选择 native 发射后端。
+enum class CEmitterBackend
+{
+    StackC,
+    RegC,
+    LlvmIr,
+    Vmc4,
+};
+
 enum class CCompilerKind
 {
     Auto,
