@@ -309,8 +309,9 @@ mj2x-cli -i Hello.class -o Hello_native.class --backend regc \
   --emit-cpp Hello.cpp --compile --c-compiler zig
 ```
 
-`--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并随 RegC 工程复制
-`mj2x-rt` source pack。
+`--generate-cmake` 和 `--generate-xmake` 会保留 `.cpp` 文件，并按 RegC 分发面
+（common+regc）复制 `mj2x-rt` source pack 到工程 `src/mj2x-rt/`，同时注入
+后端宏 `MJ2X_RT_BACKEND_REGC=1`。
 
 ### 5.4 LLVM IR（v2.2 转正；二次扩面补齐对象/数组/调用/异常/monitor/ldc，round-2 补齐 invokedynamic 运行时解析 / intrinsic 扩面对齐 RegC / 保护特性接入）
 

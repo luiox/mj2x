@@ -197,7 +197,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - **native-to-native 调用默认走 JNI（#814/#816）**：已转换目标间的 direct C 调用不产生 JVM 栈帧，`Throwable.getStackTrace` / `StackWalker` / 反射的栈观察语义会失真（regc 2.6 ReTrace 实证）。默认 `CodeOptions.directCalls=false`，静态/INVOKESPECIAL 调用经 JNI `Call*MethodA` 保帧；`--regc-direct-calls` 显式开启直调（性能优先且确认无栈观察的产物）。**确定性虚调用例外**：final 方法/final owner/编译输入无覆写的 invokevirtual 免门控直调（带 NULL receiver 守卫）——resolved 路径命中 implClass 后本就直调 fn（无 JVM 帧、栈语义一致），运行时 IsInstanceOf 检查纯冗余，跳过省每调用点 1 个 JNI。convertedFunctions 键为声明类，调用点 owner 是 receiver 静态类型时沿超类链回查（继承方法）。
 - `--compile --compile-mode pipe` 不要求 `--emit-c`。GCC/Clang/Zig (`zig cc`) 严格走 stdin；MSVC 因 `cl`/`c1` 不接受 stdin 或命名管道源路径，使用正常返回路径必清理的临时 `.c` fallback，不承诺严格 no-write。
 - 编译阶段从 `JAVA_HOME` 推导 JNI include 路径;Windows/MSVC 环境未初始化时会尝试调用 Visual Studio 2022 `vcvarsall.bat`;`JAVA_HOME` 缺失、JNI include 缺失、`vcvarsall.bat` 缺失或编译器退出失败时返回非零并打印明确错误。
-- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；RegC 项目同时复制 `mj2x-rt`，CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 同样支持两条工程生成路径（生成含 `native.ll` 的 CMake/xmake 工程，clang 编译为 native 库）。
+- `--generate-cmake <dir>` / `--generate-xmake <dir>` 保留 `native.c` 或 `native.cpp`；四后端均按分发面把 `mj2x-rt` 挂载子集复制进工程 `src/mj2x-rt/` 并注入唯一后端宏 `MJ2X_RT_BACKEND_*`（StackC=stackc、RegC=common+regc、VMC4=common+vmc4、LLVM=common+regc+llvmir；单一事实源 `embedded_rt.hpp`），CMake 通过 `find_package(JNI REQUIRED)` 发现 JNI headers。LLVM IR 同样支持两条工程生成路径（生成含 `native.ll` 的 CMake/xmake 工程，clang 编译为 native 库）。
 
 ---
 
@@ -255,6 +255,7 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 |---|---|
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
 | `mj2x-rt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;包含 Math、Random 和非逃逸 primitive wrapper intrinsic；#894 起 RegC 运行时主体（call/field helper、单例缓存、TLS env、trace）并入 `regc/mj2x_regc_runtime.{h,c}`，生成代码 extern 直访；无 `libca` 分发依赖 |
+| mj2x-rt 按后端分发 + 后端宏 | ✅ 分发面单一事实源 `rtFoldersForBackend`（StackC=stackc；RegC=common+regc；VMC4=common+vmc4；LLVM=common+regc+llvmir，含 `mj2x_llvmir_runtime`）；生成工程与 `--compile` 全链路注入唯一 `MJ2X_RT_BACKEND_*` 宏（xmake 模板 token / CMake `target_compile_definitions` / LLVM 内联脚本 / 直驱编译命令 MSVC `/D` 其余 `-D`），运行时源与用户 intrinsic 同一定义面 |
 | RegC / R3 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String/split 与 opaque StringBuilder/StringBuffer helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |

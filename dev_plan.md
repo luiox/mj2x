@@ -470,6 +470,19 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
     regc|llvm 共享参数 help 分组 RegC→RegC/LLVM;`$`→`_00024` JNI 符号
     mangling 变更与 alloca 已知限制记录入 capabilities;匹配表/逃逸分析/
     indy 解析三个共享层抽取候选补入 cross_backend_semantics.md §3.1。
+- 2026-08-24（mj2x-rt 按后端分发 + `MJ2X_RT_BACKEND_*` 宏，#891 收尾，
+  分支 `feat/mj2x-rt-backend-dispatch`）：生成工程从"整树全量分发"改为按
+  后端分发挂载子集，分发面单一事实源 `embedded_rt.hpp rtFoldersForBackend`
+  （StackC=stackc；RegC=common+regc；VMC4=common+vmc4；LLVM=common+regc+
+  llvmir）。`rtBackendDefine` 唯一后端宏全链路注入（xmake 模板
+  `@RT_BACKEND_DEFINES@` token / CMake `target_compile_definitions` / LLVM
+  内联脚本 `-D` / `--compile` 直驱命令 MSVC `/D` 其余 `-D`）；
+  `addCrtSources` 收集按后端过滤；C 后端 CMake 布局统一 `src/mj2x-rt/`。
+  顺带修复三缺陷：llvmir 挂载未注册（生成 LLVM 工程 `mj2x_llvm_*` 未解析）、
+  StackC/VMC4 `--generate-cmake` 不分发 rt（#894 后必然缺符号）、RegC/VMC4
+  保护产物 `rt_protect/` 旧 include 路径（改名 common 后必坏路径，实编验证
+  修复）。测试：四态分发+宏断言用例、1147 嵌入树外按后端字节比对、1037/1070
+  CMake 断言更新、golden 同步。
 - 2026-08-15：配置系统 P0+P1 完成（参数注册表 + schema/模板导出 + ConfigRegistryTest
   10 项，PR #846）。
 - 更早记录已归档到 git log（见"已完成归档"索引）。
