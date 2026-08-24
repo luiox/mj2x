@@ -2,9 +2,9 @@
 /// @brief 反侦测检查点注入的生成开关与 C 片段（RegC/VMC4 共用）。
 ///
 /// @details
-/// 对应 mj2x-rt 的 `rt_protect/mj2x_rt_protect.h`（C99 自包含检查点）。
+/// 对应 mj2x-rt 的 `common/mj2x_rt_protect.h`（C99 自包含检查点）。
 /// 生成器在方法入口注入 `mj2x_rt_checkpoint_run` 调用；默认关闭（action=None），
-/// 开启后产物依赖 mj2x-rt 的 rt_protect 模块（已在 rt.resources 内嵌）。
+/// 开启后产物依赖 mj2x-rt 的 common 挂载(rt_protect)（已在 rt.resources 内嵌）。
 #pragma once
 
 #include <cstdint>

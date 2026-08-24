@@ -595,7 +595,7 @@ void Vmc4Backend::finalize(const CompilerIndex& index)
     // VMC4 运行时 ABI(mj2x-rt/src/vmc4,链接消费;#894 运行时/模板分离)。
     includes.addProject("vmc4/mj2x_vmc4_runtime.h");
     if (options_.runtimeProtection.enabled()) {
-        includes.addProject("rt_protect/mj2x_rt_protect.h");
+        includes.addProject("common/mj2x_rt_protect.h");
     }
 
     ca::str::Utf8StringBuilder full;

@@ -1371,7 +1371,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
     includes.addProject("regc/mj2x_regc_runtime.h");
     includes.addProject("regc/mj2x_regc_safe_env.h");
     if (runtimeProtection_.enabled()) {
-        includes.addProject("rt_protect/mj2x_rt_protect.h");
+        includes.addProject("common/mj2x_rt_protect.h");
     }
 
     ca::str::Utf8StringBuilder full;
