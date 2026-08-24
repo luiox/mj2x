@@ -205,9 +205,11 @@ std::string trim(std::string value)
 
 bool addCrtSources(const std::filesystem::path&        crtRoot,
                    std::vector<std::filesystem::path>& includes,
-                   std::vector<std::filesystem::path>& sources)
+                   std::vector<std::filesystem::path>& sources,
+                   CEmitterBackend                     backend)
 {
-    // 磁盘源包(mj2x-rt 布局):直接递归收集 src/**/*.c,不再依赖清单格式。
+    // 磁盘源包(mj2x-rt 布局):递归收集 src/**/*.c 中属于该后端分发面的
+    // 挂载子集(rtFoldersForBackend),不再依赖清单格式。
     const auto sourceRoot = crtRoot / "src";
     std::error_code ec;
     if (!std::filesystem::exists(sourceRoot / "regc" / "mj2x_regc_crt.h", ec)) {
@@ -215,12 +217,20 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
         return false;
     }
 
+    const auto mounts = mj2x::cli::rtFoldersForBackend(backend);
     includes.push_back(sourceRoot);
     bool foundSource = false;
     for (const auto& entry :
          std::filesystem::recursive_directory_iterator(sourceRoot, ec)) {
         if (ec) break;
         if (!entry.is_regular_file(ec) || ec) continue;
+        const auto relative = entry.path().lexically_relative(sourceRoot);
+        std::string mount    = relative.string();
+        const auto separator = mount.find_first_of("/\\");
+        if (separator != std::string::npos) mount = mount.substr(0, separator);
+        if (std::find(mounts.begin(), mounts.end(), std::string_view{mount}) == mounts.end()) {
+            continue;
+        }
         const auto extension = entry.path().extension().string();
         if (extension == ".cpp") {
             CA_LOGT_ERROR("compile",
@@ -348,9 +358,20 @@ private:
     std::filesystem::path path_;
 };
 
+/// 运行时源后端宏注入(embedded_rt.hpp rtBackendDefine 契约):MSVC 用 /D,
+/// 其余用 -D;define 体为空时为空操作。作用于整个编译命令——生成源、
+/// mj2x-rt 运行时源与用户 intrinsic 同一定义面。
+void appendRtBackendDefine(ca::process::Command& command, bool msvcStyle,
+                           CEmitterBackend backend)
+{
+    const std::string_view define = mj2x::cli::rtBackendDefine(backend);
+    if (define.empty()) return;
+    command.arg(std::string{msvcStyle ? "/D" : "-D"} + std::string{define});
+}
+
 bool compileCrtSourcesToObjects(const std::vector<std::filesystem::path>& sources,
                                 const std::vector<std::filesystem::path>& includes,
-                                CCompilerKind compiler,
+                                CCompilerKind compiler, CEmitterBackend backend,
                                 const std::filesystem::path& objectDirectory,
                                 std::vector<std::filesystem::path>& objects)
 {
@@ -363,12 +384,14 @@ bool compileCrtSourcesToObjects(const std::vector<std::filesystem::path>& source
         // 注释字节被误读为续行符吞掉 #if 导致 C1018）。
         if (compiler == CCompilerKind::Msvc) {
             command.arg("/c").arg("/utf-8");
+            appendRtBackendDefine(command, true, backend);
             for (const auto& include : includes) command.arg("/I" + include.string());
             command.arg("/Fo" + object.string());
             command.arg(sources[index].string());
         }
         else {
             command.arg("-c");
+            appendRtBackendDefine(command, false, backend);
 #ifndef _WIN32
             command.arg("-fPIC");
 #endif
@@ -445,11 +468,11 @@ private:
     std::filesystem::path path_;
 };
 
-int compileMsvcSourceFromTemporaryFile(
-    std::string_view                           cSource,
-    const std::filesystem::path&               libraryPath,
-    const std::vector<std::filesystem::path>& includes,
-    const std::vector<std::filesystem::path>& sources)
+int compileMsvcSourceFromTemporaryFile(std::string_view                           cSource,
+                                       const std::filesystem::path&               libraryPath,
+                                       const std::vector<std::filesystem::path>& includes,
+                                       const std::vector<std::filesystem::path>& sources,
+                                       CEmitterBackend backend)
 {
     ProcessEnvironment    environment;
     std::filesystem::path compilerPath;
@@ -474,6 +497,7 @@ int compileMsvcSourceFromTemporaryFile(
 
     ca::process::Command command(compilerPath.string());
     command.arg("/nologo").arg("/LD").arg("/TC").arg("/utf-8");
+    appendRtBackendDefine(command, true, backend);
     for (const auto& include : includes) command.arg("/I" + include.string());
     std::filesystem::path objectDir = libraryPath.parent_path();
     if (objectDir.empty()) objectDir = ".";
@@ -594,7 +618,7 @@ bool prepareLlvmCrtSources(const std::filesystem::path&        crtRoot,
 {
     if (crtRoot.empty()) return true;
     std::vector<std::filesystem::path> manifestSources;
-    if (!addCrtSources(crtRoot, includes, manifestSources)) return false;
+    if (!addCrtSources(crtRoot, includes, manifestSources, CEmitterBackend::LlvmIr)) return false;
     // rt_protect 由 --runtime-protection 的专用提取路径提供（.h/.c 同目录成对），
     // manifest 里也列了它——跳过以免链接期重复符号（LNK2005）。
     for (const auto& source : manifestSources) {
@@ -664,6 +688,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
                libraryPath.string().c_str());
         ca::process::Command command("clang");
         command.arg(sharedFlag).arg(sourcePath.string());
+        appendRtBackendDefine(command, false, CEmitterBackend::LlvmIr);
         for (const auto& include : crtIncludes) command.arg("-I").arg(include.string());
         if (!rtProtectSource.empty()) command.arg(rtProtectSource.string());
         for (const auto& source : crtSources) command.arg(source.string());
@@ -694,7 +719,9 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
             const std::filesystem::path rtObject =
                 rtProtectDirectory.path() / "mj2x_rt_protect.obj";
             ca::process::Command rtCompile("clang");
-            rtCompile.arg("-c").arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
+            rtCompile.arg("-c");
+            appendRtBackendDefine(rtCompile, false, CEmitterBackend::LlvmIr);
+            rtCompile.arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
             if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
             linkInputs.push_back(rtObject);
         }
@@ -703,6 +730,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
                 objectDirectory.path() / ("crt_" + std::to_string(index) + ".obj");
             ca::process::Command crtCompile("clang");
             crtCompile.arg("-c");
+            appendRtBackendDefine(crtCompile, false, CEmitterBackend::LlvmIr);
             for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
             crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
             if (runCompilerCommand(crtCompile, "clang") != 0) return 1;
@@ -733,8 +761,9 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
 }
 
 int compileNativeSource(const std::string& sourcePath, const std::string& outputPath,
-                        CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
-                        bool useCpp17, const std::vector<std::string>& extraSources)
+                        CEmitterBackend backend, CCompilerKind requestedCompiler,
+                        const std::filesystem::path& crtRoot, bool useCpp17,
+                        const std::vector<std::string>& extraSources)
 {
     std::error_code ec;
     if (!std::filesystem::exists(sourcePath, ec)) {
@@ -774,7 +803,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
     }
     for (const auto& s : extraSources) sources.push_back(std::filesystem::path(s));
     std::vector<std::filesystem::path> crtSources;
-    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, crtSources)) return 1;
+    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, crtSources, backend)) return 1;
 
     std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
     std::filesystem::remove(libraryPath, ec);
@@ -791,7 +820,8 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
             return 1;
         }
         if (!compileCrtSourcesToObjects(
-                crtSources, includes, compiler, cppObjectDirectory.path(), cppCrtObjects)) {
+                crtSources, includes, compiler, backend, cppObjectDirectory.path(),
+                cppCrtObjects)) {
             return 1;
         }
     }
@@ -806,6 +836,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         ca::process::Command command(compilerPath.string());
         command.arg("/nologo").arg("/LD").arg("/utf-8");
         if (useCpp17) command.arg("/std:c++17");
+        appendRtBackendDefine(command, true, backend);
         for (const auto& include : includes) command.arg("/I" + include.string());
         std::filesystem::path objectDir = libraryPath.parent_path();
         if (objectDir.empty()) objectDir = ".";
@@ -831,6 +862,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         if (compiler == CCompilerKind::Zig) command.arg(useCpp17 ? "c++" : "cc");
         command.arg(sharedFlag);
         if (useCpp17) command.arg("-std=c++17");
+        appendRtBackendDefine(command, false, backend);
 #ifndef _WIN32
         command.arg("-fPIC").arg("-pthread");
 #endif
@@ -859,23 +891,26 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
 }
 
 int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
-                   CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                   CEmitterBackend backend, CCompilerKind requestedCompiler,
+                   const std::filesystem::path& crtRoot,
                    const std::vector<std::string>& extraSources)
 {
-    return compileNativeSource(cOutputPath, outputPath, requestedCompiler, crtRoot, false,
-                               extraSources);
+    return compileNativeSource(cOutputPath, outputPath, backend, requestedCompiler, crtRoot,
+                               false, extraSources);
 }
 
 int compileCppSource(const std::string& cppOutputPath, const std::string& outputPath,
-                     CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                     CEmitterBackend backend, CCompilerKind requestedCompiler,
+                     const std::filesystem::path& crtRoot,
                      const std::vector<std::string>& extraSources)
 {
-    return compileNativeSource(cppOutputPath, outputPath, requestedCompiler, crtRoot, true,
-                               extraSources);
+    return compileNativeSource(cppOutputPath, outputPath, backend, requestedCompiler, crtRoot,
+                               true, extraSources);
 }
 
 int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
-                           CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                           CEmitterBackend backend, CCompilerKind requestedCompiler,
+                           const std::filesystem::path& crtRoot,
                            const std::vector<std::string>& extraSources)
 {
     if (cSource.empty()) {
@@ -897,7 +932,7 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
     if (!jniIncludePaths(includes)) return 1;
 
     std::vector<std::filesystem::path> sources;
-    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources)) return 1;
+    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, sources, backend)) return 1;
     for (const auto& s : extraSources) sources.push_back(std::filesystem::path(s));
 
     const std::filesystem::path libraryPath = nativeLibraryPath(outputPath);
@@ -909,7 +944,7 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
         printf("Compiling native library with MSVC temporary source fallback: %s\n",
                libraryPath.string().c_str());
         const int rc =
-            compileMsvcSourceFromTemporaryFile(cSource, libraryPath, includes, sources);
+            compileMsvcSourceFromTemporaryFile(cSource, libraryPath, includes, sources, backend);
         if (rc != 0) return rc;
         std::error_code ec;
         if (!std::filesystem::is_regular_file(libraryPath, ec) ||
@@ -930,6 +965,7 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
     ca::process::Command command(compilerExecutable(compiler));
     if (compiler == CCompilerKind::Zig) command.arg("cc");
     command.arg(sharedFlag);
+    appendRtBackendDefine(command, false, backend);
 #ifndef _WIN32
     command.arg("-fPIC").arg("-pthread");
 #endif
@@ -1044,6 +1080,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
                libraryPath.string().c_str());
         ca::process::Command command("clang");
         command.arg(sharedFlag).arg("-x").arg("ir").arg("-");
+        appendRtBackendDefine(command, false, CEmitterBackend::LlvmIr);
         for (const auto& include : crtIncludes) command.arg("-I").arg(include.string());
         if (!rtProtectSource.empty()) {
             command.arg("-x").arg("c").arg(rtProtectSource.string());
@@ -1157,7 +1194,9 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             const std::filesystem::path rtObject =
                 rtProtectDirectory.path() / "mj2x_rt_protect.obj";
             ca::process::Command rtCompile("clang");
-            rtCompile.arg("-c").arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
+            rtCompile.arg("-c");
+            appendRtBackendDefine(rtCompile, false, CEmitterBackend::LlvmIr);
+            rtCompile.arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
             if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
             linkInputs.push_back(rtObject);
         }
@@ -1166,6 +1205,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
                 objectDirectory.path() / ("crt_" + std::to_string(index) + ".obj");
             ca::process::Command crtCompile("clang");
             crtCompile.arg("-c");
+            appendRtBackendDefine(crtCompile, false, CEmitterBackend::LlvmIr);
             for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
             crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
             if (runCompilerCommand(crtCompile, "clang") != 0) return 1;

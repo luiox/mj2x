@@ -67,7 +67,6 @@ mj2x.cli.err.backend_unavailable=native 源码后端不可用。
 mj2x.cli.err.emit_cpp_needs_c99=--emit-cpp 需要 C99 后端源码产物。
 mj2x.cli.err.emit_cpp_write_failed=无法写入生成的 C++ 源码: {0}
 mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm 需要 LLVM IR 后端源码产物。
-mj2x.cli.err.crt_pack_required=RegC CMake 工程需要 mj2x-rt 源码包;请设置 MJ2X_CRT_DIR。
 mj2x.cli.err.compile_crt_required={0} --compile 需要 mj2x-rt 源码包;请设置 MJ2X_CRT_DIR 或使用 --generate-xmake。
 mj2x.cli.err.pipe_c99_only=--compile-mode pipe 仅支持 C99 native 源码产物。
 mj2x.cli.err.jar_rewrite_failed=无法重写输出 JAR: {0}

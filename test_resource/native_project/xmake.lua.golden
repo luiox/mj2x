@@ -25,7 +25,7 @@ target("mj2x_native")
         add_files("src/mj2x-rt/**.cpp")
     end
     add_includedirs("src/mj2x-rt")
-
+    add_defines("MJ2X_RT_BACKEND_STACKC=1")
     local jdk_path = os.getenv("JAVA_HOME")
     if jdk_path then
         add_includedirs(jdk_path .. "/include")

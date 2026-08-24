@@ -369,29 +369,6 @@ static bool isNativeAnnotationDescriptor(const std::string& descriptor)
            descriptor.find('.') == std::string::npos;
 }
 
-static bool copyCrtForCMakeProject(const std::filesystem::path& projectDir,
-                                   const std::filesystem::path& crtRoot)
-{
-    namespace fs = std::filesystem;
-    const fs::path sourceRoot = crtRoot / "src";
-    const fs::path destinationRoot = projectDir / "mj2x-rt";
-    std::error_code ec;
-    if (!fs::is_regular_file(sourceRoot / "regc" / "mj2x_regc_crt.h", ec)) return false;
-    for (const auto& entry : fs::recursive_directory_iterator(sourceRoot, ec)) {
-        if (ec) return false;
-        const fs::path destination = destinationRoot / entry.path().lexically_relative(sourceRoot);
-        if (entry.is_directory()) {
-            fs::create_directories(destination, ec);
-        }
-        else if (entry.is_regular_file()) {
-            fs::create_directories(destination.parent_path(), ec);
-            if (!ec) fs::copy_file(entry.path(), destination, fs::copy_options::overwrite_existing, ec);
-        }
-        if (ec) return false;
-    }
-    return true;
-}
-
 /// @brief LLVM IR 版 CMake 工程：native.ll + CMakeLists.txt（clang 编译 .ll）。
 /// @param withRuntimeProtection 为 true 时内嵌 mj2x-rt rt_protect 源并一起编译
 ///        （--runtime-protection 检查点的实现侧）。
@@ -456,6 +433,8 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "  string(APPEND CRT_ARGS \" -I${INC}\")\n";
         out << "endforeach()\n";
         out << "string(APPEND CRT_ARGS \" -I${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt\")\n";
+        out << "string(APPEND CRT_ARGS \" -D"
+            << std::string{mj2x::cli::rtBackendDefine(CEmitterBackend::LlvmIr)} << "\")\n";
         out << "add_custom_command(\n";
         out << "  OUTPUT ${NATIVE_LIB}\n";
         out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${CRT_ARGS} ${LLVM_IR_FILE} "
@@ -497,7 +476,8 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
 
 static int generateCMakeProject(const std::string& projectDirValue,
                                 const std::string& nativeOutputPath,
-                                const std::filesystem::path& crtRoot)
+                                const std::filesystem::path& crtRoot,
+                                CEmitterBackend backend)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -524,9 +504,13 @@ static int generateCMakeProject(const std::string& projectDirValue,
         }
     }
 
-    const bool needsCrt = !crtRoot.empty();
-    if (needsCrt && !copyCrtForCMakeProject(projectDir, crtRoot)) {
-        CA_LOGT_ERROR("cli", "cannot copy mj2x-rt into CMake project.\n");
+    // mj2x-rt 按后端分发面进入工程 src/mj2x-rt/(与 xmake 工程同布局):
+    // 外部源包可用时走拷贝,否则落回内嵌 bundle。
+    if (mj2x::cli::isCrtRoot(crtRoot)) {
+        if (!mj2x::cli::copyRtTree(crtRoot, projectDir / "src" / "mj2x-rt", backend)) return 1;
+    }
+    else if (!mj2x::cli::writeRtTree(projectDir, backend)) {
+        CA_LOGT_ERROR("cli", "embedded mj2x-rt resources are unavailable.\n");
         return 1;
     }
 
@@ -546,18 +530,15 @@ static int generateCMakeProject(const std::string& projectDirValue,
         out << "if(MSVC)\n";
         out << "  add_compile_options(/utf-8)\n";
         out << "endif()\n\n";
-        if (needsCrt) {
-            out << "file(GLOB_RECURSE MJ2X_CRT_SOURCES CONFIGURE_DEPENDS "
-                   "\"${CMAKE_CURRENT_SOURCE_DIR}/mj2x-rt/*.c\")\n";
-        }
-        out << "add_library(mj2x_native SHARED " << sourcePath.filename().string();
-        if (needsCrt) out << " ${MJ2X_CRT_SOURCES}";
-        out << ")\n";
+        out << "file(GLOB_RECURSE MJ2X_CRT_SOURCES CONFIGURE_DEPENDS "
+               "\"${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/*.c\")\n";
+        out << "add_library(mj2x_native SHARED " << sourcePath.filename().string()
+            << " ${MJ2X_CRT_SOURCES})\n";
         out << "target_include_directories(mj2x_native PRIVATE ${JNI_INCLUDE_DIRS})\n";
-        if (needsCrt) {
-            out << "target_include_directories(mj2x_native PRIVATE "
-                   "${CMAKE_CURRENT_SOURCE_DIR}/mj2x-rt)\n";
-        }
+        out << "target_include_directories(mj2x_native PRIVATE "
+               "${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt)\n";
+        out << "target_compile_definitions(mj2x_native PRIVATE "
+            << std::string{mj2x::cli::rtBackendDefine(backend)} << ")\n";
         out << "if(UNIX AND NOT APPLE)\n";
         out << "  target_link_libraries(mj2x_native PRIVATE pthread)\n";
         out << "endif()\n";
@@ -1251,16 +1232,11 @@ int main(int argc, char** argv)
             if (projectRc != 0) return projectRc;
         }
         else {
-            std::filesystem::path cmakeCrtRoot;
-            if (options.cBackendKind == CEmitterBackend::RegC) {
-                cmakeCrtRoot = mj2x::cli::findCrtRoot(argv[0]);
-                if (cmakeCrtRoot.empty()) {
-                    CA_LOGT_ERROR("cli", "{}\n", i18n::tr("mj2x.cli.err.crt_pack_required"));
-                    return 1;
-                }
-            }
-            int projectRc =
-                generateCMakeProject(options.cmakeProjectDir, nativeOutputPath, cmakeCrtRoot);
+            // StackC/RegC/VMC4 的 CMake 工程同样按后端分发 mj2x-rt(#894 后
+            // 四后端运行时 ABI 全在 mj2x-rt);外部源包缺失时嵌入兜底。
+            int projectRc = generateCMakeProject(options.cmakeProjectDir, nativeOutputPath,
+                                                 mj2x::cli::findCrtRoot(argv[0]),
+                                                 options.cBackendKind);
             if (projectRc != 0) return projectRc;
         }
     }
@@ -1343,8 +1319,8 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 compileRc = mj2x::cli::compileCSourceFromPipe(
-                    nativeArtifact.content, options.outputPath, options.cCompilerKind, crtRoot,
-                    userIntrinsicConfig.sources);
+                    nativeArtifact.content, options.outputPath, options.cBackendKind,
+                    options.cCompilerKind, crtRoot, userIntrinsicConfig.sources);
             }
             else {
                 // 多文件模式（--emit-native-dir）：编译目录内全部 .c。
@@ -1354,12 +1330,14 @@ int main(int argc, char** argv)
                                 ? mj2x::cli::compileCppSource(
                                       compileSource,
                                       options.outputPath,
+                                      options.cBackendKind,
                                       options.cCompilerKind,
                                       crtRoot,
                                       userIntrinsicConfig.sources)
                                 : mj2x::cli::compileCSource(
                                       compileSource,
                                       options.outputPath,
+                                      options.cBackendKind,
                                       options.cCompilerKind,
                                       crtRoot,
                                       userIntrinsicConfig.sources);

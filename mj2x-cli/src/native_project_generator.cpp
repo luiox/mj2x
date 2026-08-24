@@ -37,15 +37,27 @@ bool writeText(const fs::path& path, const std::string& text)
     return true;
 }
 
-bool writeProjectTemplate(const fs::path& path, std::string_view source,
-                          std::string_view projectName)
+struct TemplateToken
 {
-    constexpr std::string_view projectNameToken = "@PROJECT_NAME@";
-    if (source.find(projectNameToken) == std::string_view::npos) {
-        CA_LOGT_ERROR("compile", "project template is missing {}: {}\n",
-                std::string(projectNameToken),
-                path.string().c_str());
-        return false;
+    std::string_view token;
+    std::string      replacement;
+};
+
+bool writeProjectTemplate(const fs::path& path, std::string_view source,
+                          std::initializer_list<TemplateToken> tokens)
+{
+    std::string content{source};
+    for (const auto& [token, replacement] : tokens) {
+        if (content.find(token) == std::string::npos) {
+            CA_LOGT_ERROR("compile", "project template is missing {}: {}\n",
+                    std::string(token),
+                    path.string().c_str());
+            return false;
+        }
+        for (auto pos = content.find(token); pos != std::string::npos;
+             pos      = content.find(token, pos + replacement.size())) {
+            content.replace(pos, token.size(), replacement);
+        }
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -53,18 +65,7 @@ bool writeProjectTemplate(const fs::path& path, std::string_view source,
         CA_LOGT_ERROR("compile", "cannot write {}\n", path.string().c_str());
         return false;
     }
-
-    std::size_t cursor = 0;
-    while (cursor < source.size()) {
-        const std::size_t token = source.find(projectNameToken, cursor);
-        if (token == std::string_view::npos) {
-            out.write(source.data() + cursor, static_cast<std::streamsize>(source.size() - cursor));
-            break;
-        }
-        out.write(source.data() + cursor, static_cast<std::streamsize>(token - cursor));
-        out.write(projectName.data(), static_cast<std::streamsize>(projectName.size()));
-        cursor = token + projectNameToken.size();
-    }
+    out.write(content.data(), static_cast<std::streamsize>(content.size()));
     return static_cast<bool>(out);
 }
 
@@ -74,6 +75,36 @@ std::string trim(std::string value)
     if (first == std::string::npos) return {};
     const auto last = value.find_last_not_of(" \t\r\n");
     return value.substr(first, last - first + 1);
+}
+
+fs::path envPath(const char* name)
+{
+#ifdef _WIN32
+    char*  value = nullptr;
+    size_t size  = 0;
+    if (_dupenv_s(&value, &size, name) != 0 || value == nullptr) return {};
+    fs::path result(value);
+    std::free(value);
+    return result;
+#else
+    const char* value = std::getenv(name);
+    return value == nullptr || value[0] == '\0' ? fs::path{} : fs::path(value);
+#endif
+}
+
+void addCandidate(std::vector<fs::path>& candidates, const fs::path& path)
+{
+    if (!path.empty()) candidates.push_back(path);
+}
+
+}   // namespace
+
+bool isCrtRoot(const fs::path& root)
+{
+    std::error_code ec;
+    return fs::exists(root / "src" / "regc" / "mj2x_regc_crt.h", ec) &&
+           fs::exists(root / "rt.resources", ec) &&
+           fs::exists(root / "templates" / "xmake.lua.in", ec);
 }
 
 bool copyRtTree(const fs::path& root, const fs::path& to, CEmitterBackend backend)
@@ -122,36 +153,6 @@ bool copyRtTree(const fs::path& root, const fs::path& to, CEmitterBackend backen
     }
     return true;
 }
-
-fs::path envPath(const char* name)
-{
-#ifdef _WIN32
-    char*  value = nullptr;
-    size_t size  = 0;
-    if (_dupenv_s(&value, &size, name) != 0 || value == nullptr) return {};
-    fs::path result(value);
-    std::free(value);
-    return result;
-#else
-    const char* value = std::getenv(name);
-    return value == nullptr || value[0] == '\0' ? fs::path{} : fs::path(value);
-#endif
-}
-
-bool isCrtRoot(const fs::path& root)
-{
-    std::error_code ec;
-    return fs::exists(root / "src" / "regc" / "mj2x_regc_crt.h", ec) &&
-           fs::exists(root / "rt.resources", ec) &&
-           fs::exists(root / "templates" / "xmake.lua.in", ec);
-}
-
-void addCandidate(std::vector<fs::path>& candidates, const fs::path& path)
-{
-    if (!path.empty()) candidates.push_back(path);
-}
-
-}   // namespace
 
 std::filesystem::path findCrtRoot(const char* argv0)
 {
@@ -236,11 +237,16 @@ int generateXmakeProject(const XmakeProjectConfig& config)
         CA_LOGT_ERROR("compile", "mj2x-rt templates are missing.\n");
         return 1;
     }
-    if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate, config.projectName)) {
+    // 后端宏行(模板 @RT_BACKEND_DEFINES@):恰好一个 MJ2X_RT_BACKEND_*。
+    const std::string definesLine =
+        "    add_defines(\"" + std::string{mj2x::cli::rtBackendDefine(config.backend)} + "\")";
+    if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate,
+                              {{"@PROJECT_NAME@", config.projectName},
+                               {"@RT_BACKEND_DEFINES@", definesLine}})) {
         return 1;
     }
-    if (!writeProjectTemplate(
-            config.projectDir / "README.md", readmeTemplate, config.projectName)) {
+    if (!writeProjectTemplate(config.projectDir / "README.md", readmeTemplate,
+                              {{"@PROJECT_NAME@", config.projectName}})) {
         return 1;
     }
     if (!writeText(config.projectDir / ".gitignore",
@@ -293,6 +299,10 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
         return 1;
     }
 
+    // clang 命令固定携带 LLVM 后端宏(-DMJ2X_RT_BACKEND_LLVM=1,与 crt 源
+    // glob 的三挂载一起构成 LLVM 工程的运行时消费面)。
+    const std::string llvmDefineArg =
+        "-D" + std::string{mj2x::cli::rtBackendDefine(CEmitterBackend::LlvmIr)};
     if (!writeText(projectDir / "xmake.lua",
                    "target(\"mj2x_native\")\n"
                    "    set_kind(\"shared\")\n"
@@ -307,6 +317,9 @@ int generateLlvmXmakeProject(const std::string& projectDirValue,
                    "        local out = path.join(target:targetdir(), \"mj2x_native\" .. suffix)\n"
                    "        os.mkdir(target:targetdir())\n"
                    "        local args = {\"-shared\", path.join(os.scriptdir(), \"native.ll\")}\n"
+                   "        table.insert(args, \"" +
+                       llvmDefineArg +
+                       "\")\n"
                    "        local crtSrc = path.join(os.scriptdir(), \"src/mj2x-rt\")\n"
                    "        if os.isdir(crtSrc) then\n"
                    "            table.insert(args, \"-I\" .. crtSrc)\n"

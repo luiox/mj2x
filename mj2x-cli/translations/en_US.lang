@@ -65,7 +65,6 @@ mj2x.cli.err.backend_unavailable=native source backend is unavailable.
 mj2x.cli.err.emit_cpp_needs_c99=--emit-cpp requires a C99 backend source artifact.
 mj2x.cli.err.emit_cpp_write_failed=cannot write emitted C++ source: {0}
 mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm requires an LLVM IR backend source artifact.
-mj2x.cli.err.crt_pack_required=RegC CMake project requires an mj2x-rt source pack; set MJ2X_CRT_DIR.
 mj2x.cli.err.compile_crt_required={0} --compile requires an mj2x-rt source pack; set MJ2X_CRT_DIR or use --generate-xmake.
 mj2x.cli.err.pipe_c99_only=--compile-mode pipe only supports C99 native source artifacts.
 mj2x.cli.err.jar_rewrite_failed=cannot rewrite output JAR: {0}
