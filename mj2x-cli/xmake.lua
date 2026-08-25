@@ -24,4 +24,6 @@ target("mj2x-cli")
 
     if is_plat("windows") then
         add_cxflags("/utf-8", {tools = "cl"})
+        -- ComSpec 等 env 读取走 std::getenv（与 unittest 目标同豁免）
+        add_defines("_CRT_SECURE_NO_WARNINGS")
     end

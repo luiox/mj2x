@@ -600,6 +600,13 @@ static bool createTemporaryXmakeProject(const std::string& outputPath,
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // CLI 全部文案/help/日志输出为 UTF-8（翻译表与源码字面量口径）。传统
+    // Windows 控制台默认 OEM 代码页（中文 cp936）下 UTF-8 中文会显示为乱码，
+    // 这里切到 UTF-8（65001）；重定向/管道输出不受影响。
+    SetConsoleOutputCP(65001);
+#endif
+
     // 无缓冲 stdout/stderr：崩溃/异常退出时日志不丢（定位 pipeline 崩溃点）。
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
