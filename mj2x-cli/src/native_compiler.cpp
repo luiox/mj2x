@@ -13,6 +13,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -126,6 +127,19 @@ bool loadMsvcEnvironment(ProcessEnvironment& environment,
 }
 
 namespace {
+
+/// 把 stdin 写入放独立线程并立即返回：wait_with_output 才会并发排空
+/// stdout/stderr。若在排空开始前同步 write_all，子进程消费 stdin 期间写满
+/// 输出管道即双向死锁（大源码 + 多警告输出时必现窗口）。写失败（管道提前
+/// 关闭等）不在此处上报——子进程的真实错误会经输出面暴露。
+void spawnStdinWriter(ca::process::ChildStdin&& stdinWriter, std::string data)
+{
+    std::thread writer(
+        [handle = std::move(stdinWriter), payload = std::move(data)]() mutable {
+            handle.write_all(payload.data(), payload.size());
+        });
+    writer.detach();
+}
 
 /// 跨平台读环境变量（编译流程用：判断 INCLUDE 是否配置等）。JDK/工具链探测
 /// 已统一到 libjdk_finder，这里只保留编译命令构造需要的少量 env 读取。
@@ -995,17 +1009,10 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
         CA_LOGT_ERROR("compile", "C compiler stdin pipe is unavailable.\n");
         return 1;
     }
-    auto written = input->write_all(cSource.data(), cSource.size());
-    input->close();
-    if (written.is_err()) {
-        auto completed = child.wait_with_output();
-        if (completed.is_ok()) {
-            auto output = std::move(completed).unwrap();
-            writeProcessOutput(output);
-        }
-        CA_LOGT_ERROR("compile", "cannot write generated C source to compiler stdin: {}\n", written.to_string().c_str());
-        return 1;
-    }
+    // stdin 写入放独立线程：wait_with_output 会并发排空 stdout/stderr，若在
+    // 排空开始前同步 write_all，编译器在消费 stdin 期间写满输出管道即双向
+    // 死锁（大源码 + 多警告输出时必现窗口）。
+    spawnStdinWriter(std::move(*input), std::string(cSource));
 
     auto completed = child.wait_with_output();
     if (completed.is_err()) {
@@ -1106,18 +1113,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             CA_LOGT_ERROR("compile", "clang stdin pipe is unavailable.\n");
             return 1;
         }
-        auto written = input->write_all(llvmSource.data(), llvmSource.size());
-        input->close();
-        if (written.is_err()) {
-            auto completed = child.wait_with_output();
-            if (completed.is_ok()) {
-                auto output = std::move(completed).unwrap();
-                writeProcessOutput(output);
-            }
-            CA_LOGT_ERROR("compile", "cannot write LLVM IR to clang stdin: {}\n",
-                          written.to_string().c_str());
-            return 1;
-        }
+        spawnStdinWriter(std::move(*input), std::string(llvmSource));
         auto completed = child.wait_with_output();
         if (completed.is_err()) {
             CA_LOGT_ERROR("compile", "cannot wait for clang: {}\n",
@@ -1167,15 +1163,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             CA_LOGT_ERROR("compile", "llc stdin pipe is unavailable.\n");
             return 1;
         }
-        auto llcWritten = llcInput->write_all(llvmSource.data(), llvmSource.size());
-        llcInput->close();
-        if (llcWritten.is_err()) {
-            llcChild.kill();
-            llcChild.wait();
-            CA_LOGT_ERROR("compile", "cannot write LLVM IR to llc stdin: {}\n",
-                          llcWritten.to_string().c_str());
-            return 1;
-        }
+        spawnStdinWriter(std::move(*llcInput), std::string(llvmSource));
         auto llcCompleted = llcChild.wait_with_output();
         if (llcCompleted.is_err()) {
             CA_LOGT_ERROR("compile", "cannot wait for llc: {}\n",
