@@ -135,9 +135,18 @@
 - rt_protect Linux rwx 检测大概率对宿主 JVM CodeCache（rwxp）误报，force=1 +
   terminate/fake/delay 下自毁；需 Linux 真机验证后按 safe_env 模式排除
   libjvm 自身映射。现有 exec 级测试全在 Windows，掩盖此问题。
-- RegC 进程级缓存并发安全：实例方法缓存 lastReceiverClass、resolved call
-  site、字符串字面量缓存的 global ref 更新链均无同步（Delete→New 竞争下对
-  已释放句柄调 JNI）。需定并发契约（原子交换/只增不删/per-site 锁）。
+- RegC 进程级缓存并发安全：**2026-08-25 已定契约并落地**（`mj2x_regc_runtime.c`
+  文件头契约注释）——jclass 全局槽 CAS 发布（输家自删复用赢家，消除双建
+  泄漏）；lastReceiverClass 只增不删（CAS 换占，旧 ref 不 Delete，消除
+  Delete→New 窗口下 IsSameObject use-after-free；泄漏上界 = 每调用点 distinct
+  receiver 类数）；jmethodID/jfieldID 槽解析幂等保留 check-then-write。残留：
+  class→method 两写间的短暂错配窗（与旧代码同窗，需原子对/seqlock 才能闭）；
+  字符串字面量 32 槽缓存的瞬时覆盖竞态（越界安全，维持既有注记）。
+- CLI：外部进程调用（编译器/xmake/pack hook）无超时（libca `wait_for` 未
+  用；`wait_with_output` 无超时参数，需 libca 扩展或手写并发排空框架，
+  保留待办）；pipe 模式先写 stdin 后排空输出的死锁窗口 **2026-08-25 已修**
+  （stdin 写入挪独立线程 `spawnStdinWriter`，三处 pipe 站点收敛，C 管道 /
+  clang 直连 / llc 链）。
 - 三后端共享层抽取（结构性最大项）：RegisterNatives 基础设施、JVM 类型格点
   映射表（10+ 张平行）、indy bootstrap 运行时解析（3 份）、多维数组分配
   （3 份）。LLVM udiv bug 即三份手工同步"修一漏二"的实例；jvm_semantics.hpp
@@ -149,15 +158,17 @@
 - RegC intrinsic 判定热点：每条 Call 重复 match 6-10 次（每次 3 个
   std::string + ~150 条表线性扫），应函数级一次算好 decision；registry 视图
   不统一（analyze 走 builtins、emit 走用户 registry，覆盖场景判定漂移）。
-- 用户 intrinsic 实例方法 argCount 含 receiver 对比不含 receiver 的形参数，
-  恒 Unsupported；缺 isStatic 校验。
-- indy 装箱/拆箱缺 Boolean/Character 通道（捕获 boolean/char 的 lambda 运行
-  期 WrongMethodTypeException / NoSuchMethodError）。
+- 用户 intrinsic 实例方法：**2026-08-25 已修**——`matchUserCall` 补 isStatic
+  门控，instance 调用点按契约（doc/user_intrinsic.md「只匹配静态调用」）直接
+  回退通用 JNI 派发；修复前同 owner/name/desc 的 instance 调用走 argCount
+  错位（含 receiver）的 Unsupported 路径，整方法 fail-closed。回归锁
+  `RegCUserIntrinsicTest.InstanceCallSiteNeverEntersUserIntrinsicPath`。
+- indy 装箱/拆箱缺 Boolean/Character 通道：**已修**（预处理器/emitter/运行时
+  三层均已补 boolean/char 分支，2026-08 复核确认）。
 - 性能：SSA 构建 O(n²)（fallthroughBlock 线性扫 / findBlockByLabel /
   reaching_def 无邻接表）；JAR 输出每条目全量拷贝；llvmir
   GlobalStringTable::intern 线性查。
-- CLI：外部进程调用（编译器/xmake/pack hook）无超时（libca `wait_for` 未
-  用）；pipe 模式先写 stdin 后排空输出有死锁窗口；无下界整数参数负值回绕。
+- CLI：无下界整数参数负值回绕。
 - 死代码清理批次：MethodStack 整类、FieldID、emitNativeMethod 失败分支、
   shouldKeepBytecodeForCompatibility 恒 false、_mj2x_intrinsic_string_* 无引
   用 helper、MONITOR_EXIT 死枚举、cli dispatcher 别名死分支。
