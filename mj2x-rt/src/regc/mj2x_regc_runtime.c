@@ -7,6 +7,29 @@
 /// 角色单例缓存收敛为运行时固定实例。
 #include "regc/mj2x_regc_runtime.h"
 
+/* 进程级缓存并发契约（2026-08 定案）：
+ * - jclass 全局槽（class_cache/ownerClass）：CAS 发布，输家删除自己新建的
+ *   global ref 并改用赢家值（消除 check-then-write 双建泄漏与撕裂读）。
+ * - jmethodID/jfieldID 槽：解析结果幂等（同站点必然解析出同一 id），指针宽
+ *   写入在实际平台上原子；保留 check-then-write，不做同步。
+ * - lastReceiverClass：只增不删——CAS 换入新类后旧 global ref 不 Delete。
+ *   旧方案 Delete→New 窗口下其他线程可能对已释放句柄调 IsSameObject
+ *   （use-after-free）；泄漏上界 = 每调用点出现过的 distinct receiver 类数，
+ *   可接受。实现对齐 StackC 的 _mj2x_cache_cas（JNIC 3.7.0 同构）。 */
+#if defined(_MSC_VER)
+#include <intrin.h>
+static __inline void* _mj2x_regc_ptr_cas(void* volatile* slot, void* expected, void* desired)
+{
+    return _InterlockedCompareExchangePointer(slot, desired, expected);
+}
+#else
+static __inline void* _mj2x_regc_ptr_cas(void* volatile* slot, void* expected, void* desired)
+{
+    void* previous = expected;
+    __atomic_compare_exchange_n(slot, &previous, desired, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    return previous;
+}
+#endif
 
 jclass _mj2x_regc_cached_class(mj2x_regc_class_cache* cache);
 
@@ -96,7 +119,12 @@ jclass _mj2x_regc_global_class(const char* desc, jclass* slot) {
     jclass global = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, local);
     (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, local);
     if (global == NULL) return NULL;
-    *slot = global;
+    /* CAS 发布：并发赢家先落槽，输家删自己的新 ref 改用赢家值（无双建泄漏）。 */
+    jclass winner = (jclass)_mj2x_regc_ptr_cas((void* volatile*)slot, NULL, global);
+    if (winner != NULL) {
+        (*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, global);
+        return winner;
+    }
     return global;
 }
 
@@ -150,13 +178,28 @@ jmethodID _mj2x_regc_cached_instance_method(mj2x_regc_instance_method_cache* cac
         cache->method = method;
     }
     else {
-        /* Pin the receiver class and its resolved id for the next same-class call. */
-        if (cache->lastReceiverClass != NULL) {
-            (*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, cache->lastReceiverClass);
-            cache->lastReceiverClass = NULL;
+        /* Pin the receiver class and its resolved id for the next same-class call.
+         * 只增不删：CAS 把旧类换出后不 Delete 旧 global ref——旧方案
+         * Delete→NULL→New 窗口下其他线程可能正对旧句柄做 IsSameObject
+         * （use-after-free，含双重 Delete）。泄漏上界 = 本调用点出现过的
+         * distinct receiver 类数（仅接口/抽象分派的子类交替场景触发）。
+         * method 仅在换占成功后写入；class→method 两写之间读者可能短暂
+         * 见到「新类 + 旧类 method」的错配（与旧代码同窗，受 IsSameObject
+         * 精确类匹配约束，仅同名 desc 解析到不同覆写时才可观察）。 */
+        jclass observed = cache->lastReceiverClass;
+        jclass pinned   = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, receiver_class);
+        if (pinned != NULL) {
+            jclass previous =
+                (jclass)_mj2x_regc_ptr_cas((void* volatile*)&cache->lastReceiverClass,
+                                           observed, pinned);
+            if (previous == observed) {
+                cache->lastReceiverMethod = method;
+            }
+            else {
+                /* 槽被并发线程换占：撤自己的新 ref，本次调用仍用现场解析值。 */
+                (*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, pinned);
+            }
         }
-        cache->lastReceiverClass = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, receiver_class);
-        cache->lastReceiverMethod = method;
     }
     (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, receiver_class);
     return method;
