@@ -280,8 +280,12 @@ ca::str::Utf8String operandExpr(const RegOperand& operand)
             os.append(")");
             return os.build();
         }
+        // 其余 opaque：REF 槽位发 NULL（指针零值），标量/UNKNOWN 槽位发 0。
+        // 标量槽位若发 NULL，边拷贝形态 `(int32_t)(NULL)` 会触发 MSVC C4311
+        // 指针截断警告；undef 值仅用于满足 SSA 边拷贝，标量 0 语义等价。
         CSourceStream os;
-        os.append("NULL /* opaque:");
+        os.append(operand.type == SSAType::REF ? "NULL" : "0");
+        os.append(" /* opaque:");
         os.append(operand.tag.data(), operand.tag.size());
         os.append(" */");
         return os.build();
