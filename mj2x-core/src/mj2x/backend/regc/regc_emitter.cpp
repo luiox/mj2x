@@ -646,19 +646,6 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                         defaultValue(fn.symbol.returnType));
     }
 
-    // 反侦测检查点注入（--runtime-protection）：FAKE 命中时返回默认值走收尾。
-    // 必须放在 _mj2x_regc_result 声明之后（fakeReturn 引用它）。
-    if (options_.runtimeProtection.enabled()) {
-        std::string fakeReturn = "goto _mj2x_regc_cleanup;";
-        if (fn.symbol.returnType != SSAType::VOID) {
-            fakeReturn = std::string("_mj2x_regc_result = ") + defaultValue(fn.symbol.returnType) +
-                         "; goto _mj2x_regc_cleanup;";
-        }
-        codegen::emitRuntimeProtectionCheckpoint(out, options_.runtimeProtection,
-                                                 std::string("mj2x_rt_cp_") + result.functionName,
-                                                 fakeReturn);
-    }
-
     for (const auto& [id, type] : regs) {
         bool isParameter = false;
         for (const auto& param : fn.parameters) {
@@ -713,6 +700,21 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     if (fn.symbol.returnType == SSAType::VOID) u.ret();
                     else u.ret("_mj2x_regc_result");
                 });
+    }
+
+    // 反侦测检查点注入（--runtime-protection）：FAKE 命中时返回默认值走收尾。
+    // 必须放在 PushLocalFrame 之后（fakeReturn 的 goto _mj2x_regc_cleanup 会
+    // PopLocalFrame，前置会破坏帧平衡触发 JVM fail-fast）与 _mj2x_regc_result
+    // 声明之后（fakeReturn 引用它）。
+    if (options_.runtimeProtection.enabled()) {
+        std::string fakeReturn = "goto _mj2x_regc_cleanup;";
+        if (fn.symbol.returnType != SSAType::VOID) {
+            fakeReturn = std::string("_mj2x_regc_result = ") + defaultValue(fn.symbol.returnType) +
+                         "; goto _mj2x_regc_cleanup;";
+        }
+        codegen::emitRuntimeProtectionCheckpoint(out, options_.runtimeProtection,
+                                                 std::string("mj2x_rt_cp_") + result.functionName,
+                                                 fakeReturn);
     }
     out.goto_(ca::str::format_std("block_b{}", fn.entry->id.value));
     out.emitBlankLine();
