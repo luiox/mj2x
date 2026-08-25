@@ -140,6 +140,55 @@ TEST(RegCUserIntrinsicTest, UnmatchedCallSiteStillUsesGenericDispatch)
     EXPECT_NE(result.source.find("CallStaticIntMethodA"), std::string::npos) << result.source;
 }
 
+/// com/x/F.m(II)I 实例调用（int call(F f, int a, int b) { return f.m(a, b); }）——
+/// owner/name/desc 与用户条目同键，用于锁定 instance 调用不进用户 intrinsic 路径。
+std::unique_ptr<MethodNode> makeInstanceCallMethod()
+{
+    return makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "instanceCall", "(Lcom/x/F;II)I",
+                      {
+                          new VarInsnNode(Opcodes::ALOAD, 1),
+                          new VarInsnNode(Opcodes::ILOAD, 2),
+                          new VarInsnNode(Opcodes::ILOAD, 3),
+                          new MethodInsnNode(
+                              Opcodes::INVOKEVIRTUAL, U("com/x/F"), U("m"), U("(II)I"), false),
+                          new InsnNode(Opcodes::IRETURN),
+                          },
+                      3, 4);
+}
+
+RegCEmitResult emitRegCInstanceCallWithUsers(const std::vector<UserIntrinsic>& users,
+                                             std::string&                     reason)
+{
+    auto mn = makeInstanceCallMethod();
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*mn);
+    SSABuilder               builder;
+    auto ssa = builder.build(blocks, "UserIntrinsicRegC", mn->name.to_std_string(),
+                             mn->desc.to_std_string(), false, mn->maxLocals, arena, reason);
+    if (!ssa) return {};
+    RegLowering lowering;
+    auto        reg = lowering.lower(*ssa, reason);
+    if (!reg) return {};
+    RegCIntrinsicRegistry registry(users);
+    RegCEmitter           emitter(nullptr, {}, nullptr, 0, nullptr, nullptr, nullptr, &registry);
+    return emitter.emitFunction(*reg);
+}
+
+TEST(RegCUserIntrinsicTest, InstanceCallSiteNeverEntersUserIntrinsicPath)
+{
+    std::string reason;
+    // 注册同 owner/name/desc 的条目；instance 调用点按契约不降级。回归锁：
+    // 修复前 matchUserCall 缺 isStatic 门控，argCount（含 receiver=3） !=
+    // 形参数（2）被判 Unsupported，整方法 fail-closed（result.ok == false）。
+    auto result = emitRegCInstanceCallWithUsers({makeUserEntry()}, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    // 不调用用户 symbol。
+    EXPECT_EQ(result.source.find("my_m("), std::string::npos) << result.source;
+    // 走通用 JNI 派发 helper（虚分派 receiver 经 varargs 传入）。
+    EXPECT_NE(result.source.find("_mj2x_regc_call_i32("), std::string::npos) << result.source;
+}
+
 // ===========================================================================
 // StackC
 // ===========================================================================

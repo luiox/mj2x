@@ -1643,6 +1643,10 @@ RegCIntrinsicDecision RegCIntrinsicRegistry::matchCall(const RegInstruction& ins
 
 RegCIntrinsicDecision RegCIntrinsicRegistry::matchUserCall(const RegCIntrinsicCall& call) const
 {
+    // 用户 intrinsic 契约只覆盖静态调用点（doc/user_intrinsic.md：instance 调用不
+    // 降级）。instance 调用的 args 含 receiver，继续匹配会走 argCount 错位的
+    // Unsupported 路径并整方法 fail-closed；这里按契约直接回通用 JNI 派发。
+    if (!call.isStatic()) return RegCIntrinsicDecision{};
     for (const auto& entry : userEntries_) {
         if (call.owner != entry.owner || call.name != entry.name || call.desc != entry.desc) {
             continue;
