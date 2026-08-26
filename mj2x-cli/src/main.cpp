@@ -31,7 +31,7 @@
 #include "jzip/memory_segment.hpp"
 #include "typed/cast.hpp"
 #include "jzip/zip_io.hpp"
-#include "zip/checksum.hpp"
+#include "libca/zip/checksum.hpp"
 
 #include "libca/log/log_macros.hpp"
 #include "libca/process/subprocess.hpp"
@@ -262,7 +262,7 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&
                                                               const std::vector<ca::u8>& data)
 {
     auto       local = std::make_unique<jzip::LocalFileHeader>();
-    zip::Crc32 crc;
+    ca::zip::Crc32 crc;
     crc.update(data.data(), data.size());
     local->setFileName(name);
     local->setGeneralPurposeBitFlag(0x0800);

@@ -16,7 +16,7 @@
 #include "jzip/zip_io.hpp"
 #include "libca/str/utf8_string_arena.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
-#include "zip/checksum.hpp"
+#include "libca/zip/checksum.hpp"
 #include "test_helper.hpp"
 
 namespace fs = std::filesystem;
@@ -352,7 +352,7 @@ std::unique_ptr<jzip::LocalFileHeader> makeJarEntry(const std::string&         n
                                                     const std::vector<ca::u8>& data)
 {
     auto       local = std::make_unique<jzip::LocalFileHeader>();
-    zip::Crc32 crc;
+    ca::zip::Crc32 crc;
     crc.update(data.data(), data.size());
     local->setFileName(name);
     local->setGeneralPurposeBitFlag(0x0800);
@@ -2903,7 +2903,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
                "null) {\n"
                "        t = t.getCause();\n"
                "      }\n"
-               "      return t.getClass().getName();\n"
+               "      return t.getClass().name();\n"
                "    }\n"
                "  }\n"
                "}\n";

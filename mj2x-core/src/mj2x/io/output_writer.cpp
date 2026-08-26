@@ -1,7 +1,7 @@
 #include "output_writer.hpp"
 
 #include "jzip/zip_io.hpp"
-#include "zip/checksum.hpp"
+#include "libca/zip/checksum.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -41,7 +41,7 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&
                                                               const std::vector<ca::u8>& data)
 {
     auto       local = std::make_unique<jzip::LocalFileHeader>();
-    zip::Crc32 crc;
+    ca::zip::Crc32 crc;
     crc.update(data.data(), data.size());
 
     local->setFileName(name);

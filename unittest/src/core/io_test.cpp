@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "jzip/zip_io.hpp"
-#include "zip/checksum.hpp"
+#include "libca/zip/checksum.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "test_helper.hpp"
 #include "mj2x/backend/stackc/stackc_backend.hpp"
@@ -116,7 +116,7 @@ static std::unique_ptr<jzip::LocalFileHeader> makeJarEntry(const std::string&   
                                                            const std::vector<ca::u8>& data)
 {
     auto       local = std::make_unique<jzip::LocalFileHeader>();
-    zip::Crc32 crc;
+    ca::zip::Crc32 crc;
     crc.update(data.data(), data.size());
     local->setFileName(name);
     local->setGeneralPurposeBitFlag(0x0800);
