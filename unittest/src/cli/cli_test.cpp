@@ -2903,7 +2903,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
                "null) {\n"
                "        t = t.getCause();\n"
                "      }\n"
-               "      return t.getClass().name();\n"
+               "      return t.getClass().getName();\n"
                "    }\n"
                "  }\n"
                "}\n";
