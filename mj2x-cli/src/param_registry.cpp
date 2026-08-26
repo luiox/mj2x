@@ -13,7 +13,7 @@
 #include <cstring>
 #include <sstream>
 
-#include "libi18n/i18n.hpp"
+#include "libca/i18n/i18n.hpp"
 
 namespace mj2x::cli {
 namespace {
@@ -23,7 +23,7 @@ using json = nlohmann::json;
 /// trf 的 std::string 便捷包装:错误回调填 std::string& e 的场景。
 std::string trfs(const char* key, std::initializer_list<std::string_view> args)
 {
-    return std::string(i18n::trf(key, args));
+    return std::string(ca::i18n::trf(key, args));
 }
 
 // ---------- 简单类型参数回调宏 ----------
@@ -841,7 +841,7 @@ std::string trParamDesc(const char* id)
     std::string key = "mj2x.param.";
     key += id;
     key += ".desc";
-    return i18n::tr(key.c_str());
+    return ca::i18n::tr(key.c_str());
 }
 
 /// 分组标题 key:mj2x.param.group.<slug>。
@@ -849,7 +849,7 @@ std::string trParamGroup(const char* slug)
 {
     std::string key = "mj2x.param.group.";
     key += slug;
-    return i18n::tr(key.c_str());
+    return ca::i18n::tr(key.c_str());
 }
 }   // namespace
 
@@ -910,7 +910,7 @@ nlohmann::json buildConfigSchemaJson()
         {"$schema", "http://json-schema.org/draft-07/schema#"},
         {"$id", "https://morpher.dev/schema/mj2x-config.schema.json"},
         {"title", "mj2x config"},
-        {"description", i18n::tr("mj2x.schema.description")},
+        {"description", ca::i18n::tr("mj2x.schema.description")},
         {"type", "object"},
         {"properties", std::move(props)},
         {"additionalProperties", false},
@@ -921,12 +921,12 @@ nlohmann::json buildConfigSchemaJson()
 
 void printHelp()
 {
-    printf("%s\n", i18n::tr("mj2x.cli.help.usage"));
-    printf("%s\n", i18n::tr("mj2x.cli.help.options_header"));
-    printf("  %s\n", i18n::tr("mj2x.cli.help.config_flag"));
-    printf("  %s\n", i18n::tr("mj2x.cli.help.dump_schema_flag"));
-    printf("  %s\n", i18n::tr("mj2x.cli.help.dump_template_flag"));
-    printf("  %s\n", i18n::tr("mj2x.cli.help.lang_flag"));
+    printf("%s\n", ca::i18n::tr("mj2x.cli.help.usage"));
+    printf("%s\n", ca::i18n::tr("mj2x.cli.help.options_header"));
+    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.config_flag"));
+    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.dump_schema_flag"));
+    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.dump_template_flag"));
+    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.lang_flag"));
 
     std::size_t width = 2;
     for (std::size_t i = 0; i < kParamCount; ++i) {
@@ -941,7 +941,7 @@ void printHelp()
         }
         printf("  %-*s  %s\n", static_cast<int>(width), p.cliFlag, trParamDesc(p.id).c_str());
     }
-    printf("  %s\n", i18n::tr("mj2x.cli.help.help_flag"));
+    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.help_flag"));
 }
 
 // ---------- 配置模板生成（--dump-config-template，JSONC） ----------
@@ -949,8 +949,8 @@ void printHelp()
 std::string buildConfigTemplateText()
 {
     std::ostringstream out;
-    out << "// " << i18n::tr("mj2x.cli.template.header1") << "\n"
-        << "// " << i18n::tr("mj2x.cli.template.header2") << "\n"
+    out << "// " << ca::i18n::tr("mj2x.cli.template.header1") << "\n"
+        << "// " << ca::i18n::tr("mj2x.cli.template.header2") << "\n"
         << "{\n";
     for (std::size_t i = 0; i < kParamCount; ++i) {
         const ParamDef& p = kParams[i];
@@ -976,7 +976,7 @@ std::string buildConfigTemplateText()
         if (i + 1 < kParamCount) out << ",";
         out << "  // " << p.id;
         if (p.requires && p.requires[0]) {
-            out << "(" << i18n::tr("mj2x.cli.template.requires") << ": " << p.requires << ")";
+            out << "(" << ca::i18n::tr("mj2x.cli.template.requires") << ": " << p.requires << ")";
         }
         out << "\n";
     }

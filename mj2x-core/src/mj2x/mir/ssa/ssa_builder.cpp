@@ -149,7 +149,7 @@ SSAType localDefType(const std::vector<Block*>& blocks, int blockLabel, int node
         if (nodeIndex < 0 || nodeIndex >= static_cast<int>(block->nodes.size())) break;
         const auto& node = block->nodes[static_cast<size_t>(nodeIndex)];
         if (node->kind == MIRKind::LOCAL_STORE) {
-            return mirKindToSSA(typed::cast<MIRLocalStore>(node.get())->type);
+            return mirKindToSSA(ca::core::tag_cast::cast<MIRLocalStore>(node.get())->type);
         }
         if (node->kind == MIRKind::IINC) {
             return SSAType::I32;
@@ -1347,17 +1347,17 @@ void SSABuilder::collectOutEdges(Block* b, std::vector<int>& targets)
     for (auto& node : b->nodes) {
         switch (node->kind) {
         case MIRKind::UNCOND_BRANCH:
-            targets.push_back(mirLabelKey(typed::cast<MIRUncondBranch>(node.get())->targetLabel));
+            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRUncondBranch>(node.get())->targetLabel));
             break;
         case MIRKind::BRANCH:
-            targets.push_back(mirLabelKey(typed::cast<MIRBranch>(node.get())->targetLabel));
+            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRBranch>(node.get())->targetLabel));
             break;
         case MIRKind::BRANCH_ZERO:
-            targets.push_back(mirLabelKey(typed::cast<MIRBranchZero>(node.get())->targetLabel));
+            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRBranchZero>(node.get())->targetLabel));
             break;
         case MIRKind::SWITCH:
         {
-            auto* sw = typed::cast<MIRSwitch>(node.get());
+            auto* sw = ca::core::tag_cast::cast<MIRSwitch>(node.get());
             targets.push_back(mirLabelKey(sw->defaultLabel));
             for (auto& c : sw->cases) targets.push_back(mirLabelKey(c.targetLabel));
             break;
@@ -1419,10 +1419,10 @@ std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector
         int idx = 0;
         for (auto& node : b->nodes) {
             if (node->kind == MIRKind::LOCAL_STORE) {
-                rdb.localDefs.push_back({idx, typed::cast<MIRLocalStore>(node.get())->varIndex});
+                rdb.localDefs.push_back({idx, ca::core::tag_cast::cast<MIRLocalStore>(node.get())->varIndex});
             }
             else if (node->kind == MIRKind::IINC) {
-                rdb.localDefs.push_back({idx, typed::cast<MIRIinc>(node.get())->varIndex});
+                rdb.localDefs.push_back({idx, ca::core::tag_cast::cast<MIRIinc>(node.get())->varIndex});
             }
             ++idx;
         }
@@ -1540,28 +1540,28 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
             LowerCtx d{fn, sb, fs, ssaByLabel, l1blocks, lb, *arena_};
             switch (node->kind) {
             case MIRKind::CONSTANT:
-                if (!lowerConstant(typed::cast<MIRConstant>(node.get()), d, reason)) return false;
+                if (!lowerConstant(ca::core::tag_cast::cast<MIRConstant>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::LOCAL_LOAD:
-                if (!lowerLocalLoad(typed::cast<MIRLocalLoad>(node.get()), d, reason)) return false;
+                if (!lowerLocalLoad(ca::core::tag_cast::cast<MIRLocalLoad>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::LOCAL_STORE:
-                if (!lowerLocalStore(typed::cast<MIRLocalStore>(node.get()), d, reason)) return false;
+                if (!lowerLocalStore(ca::core::tag_cast::cast<MIRLocalStore>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::IINC:
-                if (!lowerIinc(typed::cast<MIRIinc>(node.get()), d, reason)) return false;
+                if (!lowerIinc(ca::core::tag_cast::cast<MIRIinc>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::BINARY_OP:
-                if (!lowerBinaryOp(typed::cast<MIRBinaryOp>(node.get()), d, reason)) return false;
+                if (!lowerBinaryOp(ca::core::tag_cast::cast<MIRBinaryOp>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::UNARY_OP:
-                if (!lowerUnaryOp(typed::cast<MIRUnaryOp>(node.get()), d, reason)) return false;
+                if (!lowerUnaryOp(ca::core::tag_cast::cast<MIRUnaryOp>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::CAST:
-                if (!lowerCast(typed::cast<MIRCast>(node.get()), d, reason)) return false;
+                if (!lowerCast(ca::core::tag_cast::cast<MIRCast>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::CMP:
-                if (!lowerCmp(typed::cast<MIRCmp>(node.get()), d, reason)) return false;
+                if (!lowerCmp(ca::core::tag_cast::cast<MIRCmp>(node.get()), d, reason)) return false;
                 break;
             // 栈操作：只动 FrameState，不产 IR（消除 cstack 锚点的核心）
             case MIRKind::STACK_POP:
@@ -1595,65 +1595,65 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
                 if (!lowerReturn(d, reason)) return false;
                 break;
             case MIRKind::RETURN_VALUE:
-                if (!lowerReturnValue(typed::cast<MIRReturnValue>(node.get()), d, reason)) return false;
+                if (!lowerReturnValue(ca::core::tag_cast::cast<MIRReturnValue>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::UNCOND_BRANCH:
-                if (!lowerUncondBranch(typed::cast<MIRUncondBranch>(node.get()), d, reason)) return false;
+                if (!lowerUncondBranch(ca::core::tag_cast::cast<MIRUncondBranch>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::BRANCH_ZERO:
-                if (!lowerBranchZero(typed::cast<MIRBranchZero>(node.get()), d, reason)) return false;
+                if (!lowerBranchZero(ca::core::tag_cast::cast<MIRBranchZero>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::BRANCH:
-                if (!lowerBranch(typed::cast<MIRBranch>(node.get()), d, reason)) return false;
+                if (!lowerBranch(ca::core::tag_cast::cast<MIRBranch>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::SWITCH:
-                if (!lowerSwitch(typed::cast<MIRSwitch>(node.get()), d, reason)) return false;
+                if (!lowerSwitch(ca::core::tag_cast::cast<MIRSwitch>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::THROW:
                 if (!lowerThrow(d, reason)) return false;
                 break;
             case MIRKind::FIELD_GET:
-                if (!lowerFieldGet(typed::cast<MIRFieldGet>(node.get()), d, reason)) return false;
+                if (!lowerFieldGet(ca::core::tag_cast::cast<MIRFieldGet>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::FIELD_PUT:
-                if (!lowerFieldPut(typed::cast<MIRFieldPut>(node.get()), d, reason)) return false;
+                if (!lowerFieldPut(ca::core::tag_cast::cast<MIRFieldPut>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::STATIC_GET:
-                if (!lowerStaticGet(typed::cast<MIRStaticGet>(node.get()), d, reason)) return false;
+                if (!lowerStaticGet(ca::core::tag_cast::cast<MIRStaticGet>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::STATIC_PUT:
-                if (!lowerStaticPut(typed::cast<MIRStaticPut>(node.get()), d, reason)) return false;
+                if (!lowerStaticPut(ca::core::tag_cast::cast<MIRStaticPut>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::INVOKE:
-                if (!lowerInvoke(typed::cast<MIRInvoke>(node.get()), d, reason)) return false;
+                if (!lowerInvoke(ca::core::tag_cast::cast<MIRInvoke>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::NEW_OBJECT:
-                if (!lowerNewObject(typed::cast<MIRNewObject>(node.get()), d, reason)) return false;
+                if (!lowerNewObject(ca::core::tag_cast::cast<MIRNewObject>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::NEW_ARRAY:
-                if (!lowerNewArray(typed::cast<MIRNewArray>(node.get()), d, reason)) return false;
+                if (!lowerNewArray(ca::core::tag_cast::cast<MIRNewArray>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::MULTI_NEW_ARRAY:
-                if (!lowerMultiNewArray(typed::cast<MIRMultiNewArray>(node.get()), d, reason)) return false;
+                if (!lowerMultiNewArray(ca::core::tag_cast::cast<MIRMultiNewArray>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::ARRAY_LENGTH:
                 if (!lowerArrayLength(d, reason)) return false;
                 break;
             case MIRKind::ARRAY_LOAD:
-                if (!lowerArrayLoad(typed::cast<MIRArrayLoad>(node.get()), d, reason)) return false;
+                if (!lowerArrayLoad(ca::core::tag_cast::cast<MIRArrayLoad>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::ARRAY_STORE:
-                if (!lowerArrayStore(typed::cast<MIRArrayStore>(node.get()), d, reason)) return false;
+                if (!lowerArrayStore(ca::core::tag_cast::cast<MIRArrayStore>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::CHECK_CAST:
-                if (!lowerCheckCast(typed::cast<MIRCheckCast>(node.get()), d, reason)) return false;
+                if (!lowerCheckCast(ca::core::tag_cast::cast<MIRCheckCast>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::INSTANCE_OF:
-                if (!lowerInstanceOf(typed::cast<MIRInstanceOf>(node.get()), d, reason)) return false;
+                if (!lowerInstanceOf(ca::core::tag_cast::cast<MIRInstanceOf>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::MONITOR_ENTER:
             case MIRKind::MONITOR_EXIT:
-                if (!lowerMonitor(typed::cast<MIRMonitor>(node.get()), d, reason)) return false;
+                if (!lowerMonitor(ca::core::tag_cast::cast<MIRMonitor>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::NOP:
             case MIRKind::LABEL:
@@ -1662,7 +1662,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
                 // NOP/元数据：忽略。
                 break;
             case MIRKind::INVOKE_DYNAMIC:
-                if (!lowerInvokeDynamic(typed::cast<MIRInvokeDynamic>(node.get()), d, reason))
+                if (!lowerInvokeDynamic(ca::core::tag_cast::cast<MIRInvokeDynamic>(node.get()), d, reason))
                     return false;
                 break;
             }

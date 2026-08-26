@@ -1390,7 +1390,7 @@ TEST(CliTest, GenerateXmakeProjectForRegCJarInjectsNativeLoader)
     ASSERT_NE(clinit, nullptr);
     bool callsLoader = false;
     for (auto* insn : clinit->instructions) {
-        auto* call = typed::dyn_cast<jbytecode::tree::MethodInsnNode>(insn);
+        auto* call = ca::core::tag_cast::dyn_cast<jbytecode::tree::MethodInsnNode>(insn);
         if (call == nullptr) continue;
         callsLoader = callsLoader || (call->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
                                       call->name.to_std_string() == "load");

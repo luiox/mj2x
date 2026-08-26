@@ -1,8 +1,8 @@
-﻿#pragma once
+#pragma once
 
 #include <jbytecode/jbytecode.hpp>
 #include <libca/str/utf8_string.hpp>
-#include <typed/cast.hpp>
+#include "libca/core/tag_cast.hpp"
 
 #include <cstdint>
 #include <string>
@@ -113,9 +113,9 @@ enum class PrimitiveKind : uint8_t
 };
 
 // -- MIRNode base --
-// 接入 typed::cast/isa/dyn_cast 体系：每个子类构造时绑定固定 MIRKind，
-// getType() 暴露该 tag 供 typed::isa 做运行期校验。downcast 应优先用
-// typed::cast<T>（switch case 内、kind 已确定）或 typed::dyn_cast<T>
+// 接入 ca::core::tag_cast::cast/isa/dyn_cast 体系：每个子类构造时绑定固定 MIRKind，
+// getType() 暴露该 tag 供 ca::core::tag_cast::isa 做运行期校验。downcast 应优先用
+// ca::core::tag_cast::cast<T>（switch case 内、kind 已确定）或 ca::core::tag_cast::dyn_cast<T>
 // （运行期类型不确定时），避免裸 static_cast 越过类型契约。
 struct MIRNode
 {
@@ -125,7 +125,7 @@ struct MIRNode
     {}
     virtual ~MIRNode() = default;
 
-    /// typed::isa/dyn_cast 读取的 type tag。
+    /// ca::core::tag_cast::isa/dyn_cast 读取的 type tag。
     MIRKind getType() const { return kind; }
 };
 
@@ -443,10 +443,10 @@ struct MIRFrame : MIRNode
 
 }   // namespace mj2x
 
-// typed::TypeOf 特化：把每个 MIR 子类映射到它构造时绑定的 MIRKind tag。
-// 这样 typed::isa<MIRFoo>(node) / typed::dyn_cast<MIRFoo>(node) 可在运行期
-// 校验 node->getType() 是否匹配，typed::cast<MIRFoo> 才能在已确定上下文安全使用。
-namespace typed {
+// ca::core::tag_cast::TypeOf 特化：把每个 MIR 子类映射到它构造时绑定的 MIRKind tag。
+// 这样 ca::core::tag_cast::isa<MIRFoo>(node) / ca::core::tag_cast::dyn_cast<MIRFoo>(node) 可在运行期
+// 校验 node->getType() 是否匹配，ca::core::tag_cast::cast<MIRFoo> 才能在已确定上下文安全使用。
+namespace ca::core::tag_cast {
 #define MJ2X_MIR_TYPEOF(MIR_TYPE, KIND)                          \
     template<>                                                    \
     struct TypeOf<::mj2x::MIR_TYPE>                               \
@@ -487,4 +487,4 @@ MJ2X_MIR_TYPEOF(MIRMonitor, MONITOR_ENTER);
 MJ2X_MIR_TYPEOF(MIRThrow, THROW);
 MJ2X_MIR_TYPEOF(MIRFrame, FRAME);
 #undef MJ2X_MIR_TYPEOF
-}   // namespace typed
+}   // namespace ca::core::tag_cast

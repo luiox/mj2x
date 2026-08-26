@@ -24,15 +24,15 @@
 namespace mj2x::cli {
 
 /// 取挂载包;未注册返回 nullptr(嵌入缺失时调用方 fail-closed)。
-inline const resources::Bundle* rtBundle(std::string_view name)
+inline const ca::resources::Bundle* rtBundle(std::string_view name)
 {
-    return resources::bundle(name);
+    return ca::resources::bundle(name);
 }
 
 /// 读文本资源(模板等);mount 或 path 未命中返回空串。
 inline std::string readEmbeddedText(std::string_view mount, std::string_view path)
 {
-    const auto* bundle = resources::bundle(mount);
+    const auto* bundle = ca::resources::bundle(mount);
     if (bundle == nullptr) return {};
     const auto result = bundle->get(path);
     if (result.is_err()) return {};
@@ -79,7 +79,7 @@ inline bool writeRtTree(const std::filesystem::path& projectDir, CEmitterBackend
 {
     namespace fs = std::filesystem;
     for (const std::string_view mount : rtFoldersForBackend(backend)) {
-        const auto* bundle = resources::bundle(mount);
+        const auto* bundle = ca::resources::bundle(mount);
         if (bundle == nullptr) {
             CA_LOGT_ERROR("compile", "embedded mj2x-rt mount is unavailable: {}\n",
                           std::string{mount}.c_str());

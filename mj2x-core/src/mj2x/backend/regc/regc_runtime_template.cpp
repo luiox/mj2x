@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 #include "libca/log/log_macros.hpp"
-#include "libresources/resources.hpp"
+#include "libca/resources/resources.hpp"
 
 // 模板经 resources.embed 嵌入 mj2x-core(挂载 codegen),include 即自注册。
 #include "resources_mj2x_core.generated.hpp"
@@ -25,7 +25,7 @@ void emitRuntimeHelpers(ca::str::Utf8StringBuilder& out, const std::string& cach
 {
     // 残量模板见 resources/codegen/regc_runtime_helpers.c.in(#894 B 类真下沉):
     // 主体已物理下沉 mj2x-rt,此处仅注入 fwd 前向声明与 per-callsite 缓存声明。
-    const auto* bundle = resources::bundle("codegen");
+    const auto* bundle = ca::resources::bundle("codegen");
     if (bundle == nullptr) {
         CA_LOGT_ERROR("codegen", "codegen template mount is unavailable\n");
         return;

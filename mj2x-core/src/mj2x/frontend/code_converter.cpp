@@ -262,20 +262,20 @@ void CodeConverter::analyzeControlFlow(MethodNode& mn)
         switch (insn->getType()) {
         case AbstractInsnNode::JUMP_INSN:
         {
-            auto* jump = typed::cast<JumpInsnNode>(insn);
+            auto* jump = ca::core::tag_cast::cast<JumpInsnNode>(insn);
             impl_->labelTargets.insert(labelKey(jump->label));
             break;
         }
         case AbstractInsnNode::TABLESWITCH_INSN:
         {
-            auto* ts = typed::cast<TableSwitchInsnNode>(insn);
+            auto* ts = ca::core::tag_cast::cast<TableSwitchInsnNode>(insn);
             impl_->labelTargets.insert(labelKey(ts->dflt));
             for (auto* l : ts->labels) impl_->labelTargets.insert(labelKey(l));
             break;
         }
         case AbstractInsnNode::LOOKUPSWITCH_INSN:
         {
-            auto* ls = typed::cast<LookupSwitchInsnNode>(insn);
+            auto* ls = ca::core::tag_cast::cast<LookupSwitchInsnNode>(insn);
             impl_->labelTargets.insert(labelKey(ls->dflt));
             for (auto* l : ls->labels) impl_->labelTargets.insert(labelKey(l));
             break;
@@ -313,7 +313,7 @@ void CodeConverter::analyzeControlFlow(MethodNode& mn)
 
         if (isPseudo) {
             if (type == AbstractInsnNode::LABEL) {
-                auto* lb = typed::cast<LabelNode>(insn);
+                auto* lb = ca::core::tag_cast::cast<LabelNode>(insn);
                 if (impl_->labelTargets.count(labelKey(lb->label))) {
                     impl_->blockStartIndices.insert(idx);
                     // The label itself starts the block; keep the following
@@ -490,7 +490,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
     switch (insn->getType()) {
     case AbstractInsnNode::LABEL:
     {
-        auto* lb  = typed::cast<LabelNode>(insn);
+        auto* lb  = ca::core::tag_cast::cast<LabelNode>(insn);
         int   lid = labelKey(lb->label);
         auto  it  = impl_->blocks.find(lid);
         if (it != impl_->blocks.end()) impl_->currentBlock = it->second.get();
@@ -664,7 +664,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::INT_INSN:
     {
-        auto* ii = typed::cast<IntInsnNode>(insn);
+        auto* ii = ca::core::tag_cast::cast<IntInsnNode>(insn);
         if (ii->opcode == Opcodes::BIPUSH || ii->opcode == Opcodes::SIPUSH) {
             auto node   = std::make_unique<MIRConstant>();
             node->type  = PrimitiveKind::INT;
@@ -684,7 +684,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::VAR_INSN:
     {
-        auto* vi  = typed::cast<VarInsnNode>(insn);
+        auto* vi  = ca::core::tag_cast::cast<VarInsnNode>(insn);
         int   opc = vi->opcode;
         // 局部变量类型直接由 opcode 推导（比 MethodStack 更精确：MethodStack 只跟踪参数 slot）。
         // ILOAD/LLOAD/FLOAD/DLOAD/ALOAD 与对应 STORE 是连续 opcode（21..25 / 54..58）。
@@ -732,7 +732,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::TYPE_INSN:
     {
-        auto* ti = typed::cast<TypeInsnNode>(insn);
+        auto* ti = ca::core::tag_cast::cast<TypeInsnNode>(insn);
         switch (ti->opcode) {
         case Opcodes::NEW:
         {
@@ -777,7 +777,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::FIELD_INSN:
     {
-        auto* fi = typed::cast<FieldInsnNode>(insn);
+        auto* fi = ca::core::tag_cast::cast<FieldInsnNode>(insn);
         switch (fi->opcode) {
         case Opcodes::GETSTATIC:
         {
@@ -828,7 +828,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::METHOD_INSN:
     {
-        auto* mi           = typed::cast<MethodInsnNode>(insn);
+        auto* mi           = ca::core::tag_cast::cast<MethodInsnNode>(insn);
         auto  node         = std::make_unique<MIRInvoke>();
         node->owner        = impl_->arena->intern(mi->owner);
         node->name         = impl_->arena->intern(mi->name);
@@ -845,7 +845,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::INVOKE_DYNAMIC_INSN:
     {
-        auto* id      = typed::cast<InvokeDynamicInsnNode>(insn);
+        auto* id      = ca::core::tag_cast::cast<InvokeDynamicInsnNode>(insn);
         auto  node    = std::make_unique<MIRInvokeDynamic>();
         node->name    = impl_->arena->intern(id->name);
         node->desc    = impl_->arena->intern(id->desc);
@@ -860,7 +860,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::JUMP_INSN:
     {
-        auto*                   ji     = typed::cast<JumpInsnNode>(insn);
+        auto*                   ji     = ca::core::tag_cast::cast<JumpInsnNode>(insn);
         int                     opc    = ji->opcode;
         jbytecode::core::Label* target = ji->label;   // 用 Label* 身份，不用 bytecodeOffset
 
@@ -916,7 +916,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
         //   String → Utf8StringRef, Class/MethodType → Type, MethodHandle → Handle。
         // Wave 4：String LDC 保留字面量，由 StackC 生成 NewStringUTF。
         // Class/MethodType 以 Type 传递；Handle 走下方 fail-closed marker。
-        auto* ld   = typed::cast<LdcInsnNode>(insn);
+        auto* ld   = ca::core::tag_cast::cast<LdcInsnNode>(insn);
         auto  node = std::make_unique<MIRConstant>();
         if (auto* p = ld->cst.template as<ca::i32>()) {
             node->type  = PrimitiveKind::INT;
@@ -964,7 +964,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::IINC_INSN:
     {
-        auto* ii        = typed::cast<IincInsnNode>(insn);
+        auto* ii        = ca::core::tag_cast::cast<IincInsnNode>(insn);
         auto  node      = std::make_unique<MIRIinc>();
         node->varIndex  = ii->var;
         node->increment = ii->incr;
@@ -974,7 +974,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::TABLESWITCH_INSN:
     {
-        auto* ts           = typed::cast<TableSwitchInsnNode>(insn);
+        auto* ts           = ca::core::tag_cast::cast<TableSwitchInsnNode>(insn);
         auto  node         = std::make_unique<MIRSwitch>();
         node->defaultLabel = ts->dflt;
         int key            = ts->min;
@@ -988,7 +988,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::LOOKUPSWITCH_INSN:
     {
-        auto* ls           = typed::cast<LookupSwitchInsnNode>(insn);
+        auto* ls           = ca::core::tag_cast::cast<LookupSwitchInsnNode>(insn);
         auto  node         = std::make_unique<MIRSwitch>();
         node->defaultLabel = ls->dflt;
         for (size_t i = 0; i < ls->keys.size(); i++) {
@@ -1003,7 +1003,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
     {
         // Keep the bytecode compact: downstream SSA/RegC lowers this to the
         // multi-array runtime helper instead of expanding nested loops here.
-        auto* ma       = typed::cast<MultiANewArrayInsnNode>(insn);
+        auto* ma       = ca::core::tag_cast::cast<MultiANewArrayInsnNode>(insn);
         auto  node     = std::make_unique<MIRMultiNewArray>();
         node->typeDesc = impl_->arena->intern(ma->desc);
         node->dims     = ma->dims;
@@ -1015,7 +1015,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
 
     case AbstractInsnNode::FRAME:
     {
-        auto* frame     = typed::cast<FrameNode>(insn);
+        auto* frame     = ca::core::tag_cast::cast<FrameNode>(insn);
         auto  node      = std::make_unique<MIRFrame>();
         node->frameType = frame->frameType;
         if (frameHasEntryStack(frame->frameType)) {
@@ -1059,7 +1059,7 @@ void CodeConverter::translateInstructions(MethodNode& mn)
                 firstBlock = false;
             }
             else if (insn->getType() == AbstractInsnNode::LABEL) {
-                auto* lb = typed::cast<LabelNode>(insn);
+                auto* lb = ca::core::tag_cast::cast<LabelNode>(insn);
                 blockId  = labelKey(lb->label);
             }
             else {
@@ -1078,7 +1078,7 @@ void CodeConverter::translateInstructions(MethodNode& mn)
 
         // 记录 label 的指令序号（异常表保护区用；伪指令也占 idx，与块范围一致）。
         if (insn->getType() == AbstractInsnNode::LABEL) {
-            auto* lb  = typed::cast<LabelNode>(insn);
+            auto* lb  = ca::core::tag_cast::cast<LabelNode>(insn);
             impl_->labelToInsnIdx[labelKey(lb->label)] = idx;
         }
     }
