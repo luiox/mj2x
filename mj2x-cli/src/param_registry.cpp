@@ -23,7 +23,7 @@ using json = nlohmann::json;
 /// trf 的 std::string 便捷包装:错误回调填 std::string& e 的场景。
 std::string trfs(const char* key, std::initializer_list<std::string_view> args)
 {
-    return std::string(ca::i18n::trf(key, args));
+    return ca::i18n::trf(key, args).to_std_string();
 }
 
 // ---------- 简单类型参数回调宏 ----------

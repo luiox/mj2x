@@ -345,7 +345,7 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
                   [&](CSourceStream& u) {
                       if (hasDest) {
                           u.assign(destName,
-                                   std::string(jniResultCast(returnTag, ins.dest.type)) + callExpr);
+                                   jniResultCast(returnTag, ins.dest.type).to_std_string() + callExpr);
                       }
                       else {
                           u.emitLine(callExpr + ";");
@@ -388,7 +388,7 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
                             [&](CSourceStream& v) {
                                 if (hasDest) {
                                     v.assign(destName,
-                                             std::string(jniResultCast(returnTag, ins.dest.type)) +
+                                             jniResultCast(returnTag, ins.dest.type).to_std_string() +
                                                  callExpr);
                                 }
                                 else {
@@ -446,8 +446,8 @@ void emitAllocateWithInit(CSourceStream& out, RegCFunctionEmitState& state,
                   codegen::exprBinop("!=", "_mj2x_regc_m", "NULL")),
               [&](CSourceStream& u) {
                   u.assign(destName,
-                           std::string(jniResultCast(descriptorReturnTag(initCall.method.desc),
-                                                      alloc.dest.type)) +
+                           jniResultCast(descriptorReturnTag(initCall.method.desc),
+                                                      alloc.dest.type).to_std_string() +
                                newExpr);
               },
               [&](CSourceStream& u) { u.assign(destName, "NULL"); });

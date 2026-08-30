@@ -20,14 +20,14 @@ bool readJsonFile(const std::string& path, json& out, std::string& error)
 {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
-        error = std::string(ca::i18n::trf("mj2x.cli.err.cfg_open_failed", {path}));
+        error = ca::i18n::trf("mj2x.cli.err.cfg_open_failed", {path}).to_std_string();
         return false;
     }
     try {
         input >> out;
     }
     catch (const json::exception& ex) {
-        error = std::string(ca::i18n::trf("mj2x.cli.err.cfg_invalid_json", {ex.what()}));
+        error = ca::i18n::trf("mj2x.cli.err.cfg_invalid_json", {ex.what()}).to_std_string();
         return false;
     }
     if (!out.is_object()) {
@@ -47,7 +47,7 @@ bool loadConfigFile(const std::string& path, CliOptions& options, std::string& e
     for (auto it = root.begin(); it != root.end(); ++it) {
         const ParamDef* param = findParamByJsonPath(it.key());
         if (!param) {
-            error = std::string(ca::i18n::trf("mj2x.cli.err.cfg_unknown_key", {it.key()}));
+            error = ca::i18n::trf("mj2x.cli.err.cfg_unknown_key", {it.key()}).to_std_string();
             return false;
         }
         if (!param->parseJson(options, it.value(), error)) {

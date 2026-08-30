@@ -316,7 +316,7 @@ std::string emitFailureBody(const std::string& reason, PrimitiveKind retKind)
         line.append("/* RegC lowering failed: ");
         line.append(reason);
         line.append(" */");
-        out.emitLine(line.build());
+        out.emitLine(line.build().ref());
     }
     if (retKind == PrimitiveKind::VOID) {
         out.emitLine("return;");
@@ -326,7 +326,7 @@ std::string emitFailureBody(const std::string& reason, PrimitiveKind retKind)
         line.append("return ");
         line.append(defaultReturnValue(retKind));
         line.append(";");
-        out.emitLine(line.build());
+        out.emitLine(line.build().ref());
     }
     return out.str();
 }
@@ -365,7 +365,7 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
         note.append(".");
         note.append(methodName);
         note.append(methodDesc);
-        out.emitLine(note.build());
+        out.emitLine(note.build().ref());
     }
     // 函数签名行（顶层，无缩进）：多片段拼一条再 emitLine。
     {
@@ -373,7 +373,7 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
         sig.append("static ");
         sig.append(jniType(retKind));
         sig.append(" JNICALL");
-        out.emitLine(sig.build());
+        out.emitLine(sig.build().ref());
     }
     {
         CSourceStream sig;
@@ -387,7 +387,7 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
             sig.appendInt(static_cast<ca::i64>(i));
         }
         sig.append(") {");
-        out.emitLine(sig.build());
+        out.emitLine(sig.build().ref());
     }
     {
         CSourceStream::IndentGuard g(out);
@@ -403,21 +403,21 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
                 line.append("MJ2X_SAFEENV_MODE_RESTORE");
             }
             line.append(");");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         {
             CSourceStream line;
             line.append("(void)");
             line.append(isStatic ? "clazz" : "thisObject");
             line.append(";");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         out.emitLine("_mj2x_regc_env = env;");
         {
             CSourceStream line;
             line.append(isStatic ? "_mj2x_regc_owner_class = clazz;"
                                  : "_mj2x_regc_owner_class = (jclass)(*env)->GetObjectClass(env, thisObject);");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         out.emitLine("mj2x_regc_init_context(&_mj2x_regc_ctx, env, _mj2x_regc_throw_runtime);");
         if (traceCallLog) {
@@ -457,7 +457,7 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
                 appendArg("p" + std::to_string(i), regcType(args[i]));
             }
             line.append(");");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         if (retKind == PrimitiveKind::VOID) out.emitLine("return;");
     }
@@ -1190,7 +1190,7 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
     }
     src.emitLine("}");
     src.emitBlankLine();
-    out.append(src.build().data(), src.build().size());
+    out.append(src.build());
 }
 
 }   // namespace
