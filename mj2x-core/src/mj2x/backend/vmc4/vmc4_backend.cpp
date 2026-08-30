@@ -338,7 +338,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
         CSourceStream note;
         note.append("// VMC4 JNI wrapper (RegisterNatives-bound): ");
         note.append(cFuncName);
-        out.emitLine(note.build());
+        out.emitLine(note.build().ref());
     }
     // 签名行。
     {
@@ -356,7 +356,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             sig.appendInt(static_cast<ca::i64>(i));
         }
         sig.append(") {");
-        out.emitLine(sig.build());
+        out.emitLine(sig.build().ref());
     }
     {
         CSourceStream::IndentGuard g(out);
@@ -402,7 +402,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append("p");
             line.appendInt(static_cast<ca::i64>(i));
             line.append(";");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         // 预加载常量槽。
         {
@@ -410,7 +410,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append("/* load ");
             line.appendInt(static_cast<ca::i64>(program.constantPool.size()));
             line.append(" constants */");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         // 预加载常量槽：整型直接写，浮点型经 memcpy 从位模式还原（C89 合法的类型双关）。
         for (size_t i = 0; i < program.constantPool.size(); ++i) {
@@ -436,7 +436,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                 line.append("regs[");
                 line.appendInt(static_cast<ca::i64>(c.destSlot));
                 line.append("].f = _v; }");
-                out.emitLine(line.build());
+                out.emitLine(line.build().ref());
             } else {
                 CSourceStream line;
                 line.append("regs[");
@@ -445,7 +445,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                 if (c.type == VmType::I32) line.append("(int32_t)");
                 line.appendInt(c.intBits);
                 line.append(";");
-                out.emitLine(line.build());
+                out.emitLine(line.build().ref());
             }
         }
         // 预加载 String LDC 常量槽（Phase 2.E）：NewStringUTF 把 UTF-8 内容物化为
@@ -459,7 +459,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append("].ref = (void*)(*env)->NewStringUTF(env, ");
             line.append(codegen::cStringLiteral(lit.value));
             line.append(");");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         // 预加载 `.class` 字面量常量槽：FindClass 物化 jclass（按内部名去重）。
         // JVM ldc 类常量语义：触发类加载不触发初始化；FindClass 失败置 pending
@@ -473,7 +473,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append("].ref = (void*)(*env)->FindClass(env, ");
             line.append(codegen::cStringLiteral(lit.typeDesc));
             line.append(");");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         // 调解释器。各 object-op 分派表：含该 family 的方法传对应表（backend finalize
         // 发射），不含的传 0（handler 不触发，解释器不读）。空表传 0 而非表名，避免
@@ -511,7 +511,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                             ? std::string("0")
                             : ("mj2x_vm_intrinsic_table_" + methodTag));
             line.append(");");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         }
         // 异常传播（Phase 2.C）：status==1（PendingException）时 pending exception
         // 已在 env 上，直接返回默认值让 JVM 抛（void 方法直接 return）。
@@ -526,7 +526,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
                 line.append(")");
                 line.append(defaultReturnValue(retKind));
                 line.append(";");
-                out.emitLine(line.build());
+                out.emitLine(line.build().ref());
             } else {
                 out.emitLine("return;");
             }
@@ -540,7 +540,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
             line.append(")ret");
             line.append(slotField(retKind));
             line.append(";");
-            out.emitLine(line.build());
+            out.emitLine(line.build().ref());
         } else {
             out.emitLine("return;");
         }

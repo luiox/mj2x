@@ -266,7 +266,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                 if (handlerRegion != nullptr) {
                     header += "exception handler of ";
                     header += codegen::escapeCommentIdent(
-                        ca::str::Utf8StringRef::from_string_view(handlerRegion->caughtType));
+                        ca::str::Utf8StringRef::from_string_view(handlerRegion->caughtType))
+                                  .to_std_string();
                 }
                 else {
                     header += "block";
@@ -673,8 +674,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             return result;
         }
         out.declare_var(std::string(nativeObjectType(objectIt->second.kind)) + "*",
-                        stringBuilderOwnerName(RegId{owner}), "NULL");
-        out.declare_var("mj2x_ref", stringBuilderMaterializedName(RegId{owner}), "NULL");
+                        stringBuilderOwnerName(RegId{owner}).ref(), "NULL");
+        out.declare_var("mj2x_ref", stringBuilderMaterializedName(RegId{owner}).ref(), "NULL");
     }
     if (!regs.empty()) out.emitBlankLine();
 
