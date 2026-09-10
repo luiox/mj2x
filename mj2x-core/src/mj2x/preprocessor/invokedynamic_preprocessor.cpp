@@ -207,11 +207,10 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
                                intern(arena, "toString"),
                                intern(arena, "()Ljava/lang/String;"), false));
 
-    // 插入到 indy 之前并删除 indy。InsnList::remove 只摘链不释放，节点须手动
-    // delete（对齐 init_clinit_mover 先例）。
+    // 插入到 indy 之前并用 removeAndDelete 摘链销毁 indy
+    //（对齐 init_clinit_mover 先例）。
     m->instructions.insert(indy, seq);
-    m->instructions.remove(indy);
-    delete indy;
+    m->instructions.removeAndDelete(indy);
 
     // maxLocals 增大以容纳新槽；maxStack 需容纳 StringBuilder+dup+参数，保守 +3。
     if (slot > m->maxLocals) m->maxLocals = slot;

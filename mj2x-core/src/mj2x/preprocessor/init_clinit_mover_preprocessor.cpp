@@ -251,7 +251,7 @@ std::string moveInit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
     for (auto* insn = cut->nextInsn; insn; insn = insn->nextInsn) {
         gen->instructions.add(insn->clone(clonedLabels));
     }
-    // 骨架：丢弃 [cut->next .. end] 的原节点（InsnList::remove 只摘链，需手动 delete）。
+    // 骨架：丢弃 [cut->next .. end] 的原节点（removeAndDelete 摘链并销毁）。
     std::vector<AbstractInsnNode*> tail;
     for (auto* insn = cut->nextInsn; insn;) {
         auto* next = insn->nextInsn;
@@ -259,8 +259,7 @@ std::string moveInit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
         insn = next;
     }
     for (auto* insn : tail) {
-        mn->instructions.remove(insn);
-        delete insn;
+        mn->instructions.removeAndDelete(insn);
     }
 
     // 骨架尾部：aload_0 + 参数 load + invokestatic + return。

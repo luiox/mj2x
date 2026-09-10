@@ -184,13 +184,12 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
             pushMethodTypeSeq(seq, t.getDescriptor());
         }
 
-        // 按程序序插到 ldc 之前，然后删 ldc。InsnList::remove 只摘链不释放，
-        // 节点须手动 delete（对齐 init_clinit_mover 先例）。
+        // 按程序序插到 ldc 之前，然后用 removeAndDelete 摘链销毁 ldc
+        //（对齐 init_clinit_mover 先例）。
         for (auto* node : seq) {
             m->instructions.insertBefore(ldc, node);
         }
-        m->instructions.remove(ldc);
-        delete ldc;
+        m->instructions.removeAndDelete(ldc);
     }
     return true;
 }
