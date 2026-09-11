@@ -21,9 +21,11 @@ using codegen::registerFunctionName;
 
 void clearMethodDebugAndHandlers(MethodNode* method)
 {
-    for (auto* tc : method->tryCatchBlocks) delete tc;
+    for (auto* tc : method->tryCatchBlocks)
+        if (!method->arena().owns(tc)) delete tc;   // 混合清除(B7)
     method->tryCatchBlocks.clear();
-    for (auto* lv : method->localVariables) delete lv;
+    for (auto* lv : method->localVariables)
+        if (!method->arena().owns(lv)) delete lv;   // 混合清除(B7)
     method->localVariables.clear();
 }
 

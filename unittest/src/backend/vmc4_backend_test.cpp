@@ -1183,7 +1183,7 @@ TEST(Vmc4BackendTest, EncodesExceptionRegion)
                          },
                          2, 3);
     mn->tryCatchBlocks.push_back(
-        new TryCatchBlockNode(start->label, end->label, handler->label,
+        mn->create<TryCatchBlockNode>(start->label, end->label, handler->label,
                               ca::str::Utf8StringRef::from_cstr("java/lang/ArithmeticException")));
 
     auto prog = encodeMethodNode(std::move(mn), instance, reason);

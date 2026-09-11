@@ -730,7 +730,7 @@ TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
         },
         2,
         3);
-    mn->tryCatchBlocks.push_back(new TryCatchBlockNode(
+    mn->tryCatchBlocks.push_back(mn->create<TryCatchBlockNode>(
         start->label, end->label, handler->label, ca::str::Utf8StringRef::from_cstr("")));
 
     ca::str::Utf8StringArena arena;

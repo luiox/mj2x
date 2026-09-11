@@ -282,7 +282,7 @@ TEST(InitClinitMoverTest, SkipsInitWithTryCatch)
     auto&         arena = index.arena();
 
     auto* mn = makeInit(index, "()V", {new InsnNode(Opcodes::RETURN)});
-    auto* tc = new TryCatchBlockNode(new Label(), new Label(), new Label(),
+    auto* tc = mn->create<TryCatchBlockNode>(new Label(), new Label(), new Label(),
                                      arena.intern("java/lang/Exception"));
     mn->tryCatchBlocks.push_back(tc);
     buildClass(index, "Foo", {mn});
