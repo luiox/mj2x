@@ -880,8 +880,9 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
         // 栈峰值：new+dup(2) + 全部捕获实参。
         m->maxStack += 2 + loadStack;
     }
-    // InsnList::remove 只摘链不释放；节点在末尾统一 delete（下方
-    // buildLambdaClassNode 还要读 indy->name）。
+    // InsnList::remove 只摘链不释放；buildLambdaClassNode 还要读 indy->name，
+    // 故先摘链、读完后按 B7 混合清除纪律释放：reader 建树后方法体节点由
+    // nodeArena_ 持有（owns 直接跳过），仅外来堆节点需要 delete。
     m->instructions.insert(indy, seq);
     m->instructions.remove(indy);
 
@@ -890,7 +891,7 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     pc.node = buildLambdaClassNode(arena, synthName, ifaceInternal, toStd(indy->name), samDesc,
                                    capturedTypes, *implPtr, alt);
     pending.push_back(std::move(pc));
-    delete indy;
+    if (!m->arena().owns(indy)) delete indy;
     return true;
 }
 

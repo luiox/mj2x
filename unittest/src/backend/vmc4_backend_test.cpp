@@ -69,7 +69,7 @@ std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char*
 /// 完整编码管线：MethodNode -> VmProgram（复用 regc_test 的 emitRegC 结构，末段换 VmEncoder）。
 std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
                                             const VmInstance& instance, std::string& reason,
-                                            const RegFunction** outReg = nullptr)
+                                            std::unique_ptr<RegFunction>* outReg = nullptr)
 {
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
@@ -82,15 +82,19 @@ std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
     auto        reg = lowering.lower(*ssa, reason);
     if (!reg) return nullptr;
     eliminateDeadRegInstructions(*reg);
-    if (outReg) *outReg = reg.get();
-    return VmEncoder::encode(*reg, instance, reason);
+    auto encoded = VmEncoder::encode(*reg, instance, reason);
+    // 出参移交所有权：RegFunction 由调用方持有（此前交裸指针、函数返回即悬垂，
+    // ASan heap-use-after-free 实证——DEV-8 测试合同 ①）。
+    if (outReg) *outReg = std::move(reg);
+    return encoded;
 }
 
 /// 便捷重载：从指令列表构造 MethodNode 再编码。
 std::unique_ptr<VmProgram> encodeMethod(const std::string& name, const std::string& desc,
                                         std::initializer_list<AbstractInsnNode*> insns,
                                         int maxStack, int maxLocals, const VmInstance& instance,
-                                        std::string& reason, const RegFunction** outReg = nullptr)
+                                        std::string&                 reason,
+                                        std::unique_ptr<RegFunction>* outReg = nullptr)
 {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name.c_str(), desc.c_str(),
                          insns, maxStack, maxLocals);
@@ -387,8 +391,8 @@ TEST(Vmc4BackendTest, ConstantSlotsIsolatedFromComputeRegisters)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
-    std::string reason;
-    const RegFunction* reg = nullptr;
+    std::string            reason;
+    std::unique_ptr<RegFunction> reg;
     // int addMul3(int a, int b) { return (a + b) * 3 + 3; }  —— 常量 3 出现两次应复用
     auto prog = encodeMethod("addMul3", "(II)I",
                              {
