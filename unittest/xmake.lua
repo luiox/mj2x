@@ -18,12 +18,26 @@ target("mj2x_fake_xmake")
         add_defines("_CRT_SECURE_NO_WARNINGS")
     end
 
+-- mj2x-cli-companion：纯构建依赖桩（phony 无产物、无链接副作用）。
+-- unittest 经 test_helper 的 getBuildTargetPath("mj2x-cli") 定位伴生 CLI，该定位
+-- 优先取测试 exe 自身所在的活动 buildir；若 mj2x-cli 不随 unittest 构建，自定义
+-- buildir（xmake f -o build_xxx）下会命中缺失或陈旧的默认 buildir 产物。用 phony
+-- 把 mj2x-cli 挂进依赖图，保证"构建 mj2x_unittest"必然在同一 buildir 内新建 CLI；
+-- 不直接 add_deps("mj2x-cli") 是避免二进制依赖的链接面耦合（CLI 与测试无符号关系）。
+target("mj2x-cli-companion")
+    set_kind("phony")
+    set_group("mj2x/test")
+    set_default(false)
+    add_deps("mj2x-cli")
+
 target("mj2x_unittest")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
 
-    add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake", "libca_process")
+    -- mj2x-cli-companion：伴生 CLI 必须在活动 buildir 内新建，防陈旧产物（见上）。
+    add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake", "libca_process",
+             "mj2x-cli-companion")
     add_packages("gtest")
     add_files("src/main.cpp")
     add_files("src/**/*_test.cpp")
