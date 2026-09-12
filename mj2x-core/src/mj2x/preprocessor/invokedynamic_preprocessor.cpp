@@ -103,13 +103,14 @@ const char* appendDesc(const Type& argType)
 // 在 seq 尾部追加「append 一个字符串字面量」的字节码：LDC <str> + INVOKEVIRTUAL
 // StringBuilder.append(String)。栈上此前须有 StringBuilder 引用，append 返回自身，
 // 栈保持 StringBuilder 顶（链式）。
-void emitAppendString(ca::str::Utf8StringArena& arena, InsnList& seq, const std::string& literal)
+void emitAppendString(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& seq,
+                      const std::string& literal)
 {
-    seq.add(new LdcInsnNode(literal));
-    seq.add(new MethodInsnNode(Opcodes::INVOKEVIRTUAL, intern(arena, "java/lang/StringBuilder"),
-                               intern(arena, "append"),
-                               intern(arena, "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
-                               false));
+    seq.add(m.create<LdcInsnNode>(literal));
+    seq.add(m.create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL, intern(arena, "java/lang/StringBuilder"),
+                                     intern(arena, "append"),
+                                     intern(arena, "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
+                                     false));
 }
 
 // 展开单个 makeConcat[WithConstants] indy 站点。返回是否改写成功；失败（不支持的形态）
@@ -151,18 +152,18 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
     }
 
     // 展开序列写进临时 list，再整段 insertBefore(indy) + remove(indy)。
-    InsnList seq;
+    InsnList seq(&m->arena());
 
     // 1. 逆序把栈上参数存进局部槽（栈顶是最后一个参数）。
     for (size_t r = argTypes.size(); r > 0; --r) {
         const size_t i = r - 1;
-        seq.add(new VarInsnNode(storeOpcode(argTypes[i].getSort()), argSlot[i]));
+        seq.add(m->create<VarInsnNode>(storeOpcode(argTypes[i].getSort()), argSlot[i]));
     }
 
     // 2. new StringBuilder / dup / <init>()V。
-    seq.add(new TypeInsnNode(Opcodes::NEW, intern(arena, "java/lang/StringBuilder")));
-    seq.add(new InsnNode(Opcodes::DUP));
-    seq.add(new MethodInsnNode(Opcodes::INVOKESPECIAL, intern(arena, "java/lang/StringBuilder"),
+    seq.add(m->create<TypeInsnNode>(Opcodes::NEW, intern(arena, "java/lang/StringBuilder")));
+    seq.add(m->create<InsnNode>(Opcodes::DUP));
+    seq.add(m->create<MethodInsnNode>(Opcodes::INVOKESPECIAL, intern(arena, "java/lang/StringBuilder"),
                                intern(arena, "<init>"), intern(arena, "()V"), false));
 
     // 3. 遍历 recipe。
@@ -170,7 +171,7 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
     std::string pending;   // 累积的字面量文本
     auto        flushPending = [&]() {
         if (!pending.empty()) {
-            emitAppendString(arena, seq, pending);
+            emitAppendString(*m, arena, seq, pending);
             pending.clear();
         }
     };
@@ -179,8 +180,8 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
             flushPending();
             if (nextArg >= argTypes.size()) return false;   // recipe 与描述符不一致
             const Type& t = argTypes[nextArg];
-            seq.add(new VarInsnNode(loadOpcode(t.getSort()), argSlot[nextArg]));
-            seq.add(new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+            seq.add(m->create<VarInsnNode>(loadOpcode(t.getSort()), argSlot[nextArg]));
+            seq.add(m->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL,
                                        intern(arena, "java/lang/StringBuilder"),
                                        intern(arena, "append"), intern(arena, appendDesc(t)),
                                        false));
@@ -193,7 +194,7 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
                 !anyAsString(indy->bsmArgs[nextConst], constStr)) {
                 return false;   // 非字符串常量占位 → 暂不支持
             }
-            emitAppendString(arena, seq, constStr);
+            emitAppendString(*m, arena, seq, constStr);
             ++nextConst;
         }
         else {
@@ -203,7 +204,7 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
     flushPending();
 
     // 4. toString()。
-    seq.add(new MethodInsnNode(Opcodes::INVOKEVIRTUAL, intern(arena, "java/lang/StringBuilder"),
+    seq.add(m->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL, intern(arena, "java/lang/StringBuilder"),
                                intern(arena, "toString"),
                                intern(arena, "()Ljava/lang/String;"), false));
 
@@ -381,7 +382,7 @@ bool canAdaptValue(const Type& from, const Type& to)
 }
 
 // 在 seq 尾部发射「栈顶值 from → to」的适配字节码。调用前须先 canAdaptValue 校验。
-void emitAdaptValue(ca::str::Utf8StringArena& arena, InsnList& seq, const Type& from,
+void emitAdaptValue(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& seq, const Type& from,
                     const Type& to)
 {
     const std::string fromDesc = toStd(from.getDescriptor());
@@ -391,7 +392,7 @@ void emitAdaptValue(ca::str::Utf8StringArena& arena, InsnList& seq, const Type& 
     if (fromRef && isReferenceSort(to.getSort())) {
         // 收窄到 Object 无需 cast（一切引用 <: Object）；其余发 CHECKCAST 保证验证器通过。
         if (toDesc != "Ljava/lang/Object;")
-            seq.add(new TypeInsnNode(Opcodes::CHECKCAST, intern(arena, checkcastName(to).c_str())));
+            seq.add(m.create<TypeInsnNode>(Opcodes::CHECKCAST, intern(arena, checkcastName(to).c_str())));
         return;
     }
     if (fromRef) {
@@ -399,20 +400,20 @@ void emitAdaptValue(ca::str::Utf8StringArena& arena, InsnList& seq, const Type& 
         const char*       w     = wrapperInternal(to.getSort());
         const std::string wDesc = std::string("L") + w + ";";
         if (fromDesc != wDesc)
-            seq.add(new TypeInsnNode(Opcodes::CHECKCAST, intern(arena, w)));
-        seq.add(new MethodInsnNode(Opcodes::INVOKEVIRTUAL, intern(arena, w),
+            seq.add(m.create<TypeInsnNode>(Opcodes::CHECKCAST, intern(arena, w)));
+        seq.add(m.create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL, intern(arena, w),
                                    intern(arena, unboxMethodName(to.getSort())),
                                    intern(arena, unboxMethodDesc(to.getSort())), false));
         return;
     }
     // 基本类型 → 基本类型：加宽（canAdaptValue 已保证是受支持加宽，阶段2f）。
     if (isPrimitiveSort(to.getSort())) {
-        seq.add(new InsnNode(wideningOpcode(from.getSort(), to.getSort())));
+        seq.add(m.create<InsnNode>(wideningOpcode(from.getSort(), to.getSort())));
         return;
     }
     // 基本类型 → 引用：包装类.valueOf 装箱（canAdaptValue 已限定目标为 Object/包装类）。
     const char* w = wrapperInternal(from.getSort());
-    seq.add(new MethodInsnNode(Opcodes::INVOKESTATIC, intern(arena, w), intern(arena, "valueOf"),
+    seq.add(m.create<MethodInsnNode>(Opcodes::INVOKESTATIC, intern(arena, w), intern(arena, "valueOf"),
                                intern(arena, boxValueOfDesc(from.getSort())), false));
 }
 
@@ -425,17 +426,17 @@ bool canAdaptReturn(const Type& implRet, const Type& samRet)
 }
 
 // 发射 SAM 返回序列：适配栈顶 impl 返回值（或丢弃）后按 samRet 发 xRETURN。
-void emitReturnAdapt(ca::str::Utf8StringArena& arena, InsnList& seq, const Type& implRet,
-                     const Type& samRet)
+void emitReturnAdapt(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& seq,
+                     const Type& implRet, const Type& samRet)
 {
     if (samRet.getSort() == Type::VOID) {
         if (implRet.getSort() != Type::VOID)
-            seq.add(new InsnNode(slotSize(implRet.getSort()) == 2 ? Opcodes::POP2 : Opcodes::POP));
-        seq.add(new InsnNode(Opcodes::RETURN));
+            seq.add(m.create<InsnNode>(slotSize(implRet.getSort()) == 2 ? Opcodes::POP2 : Opcodes::POP));
+        seq.add(m.create<InsnNode>(Opcodes::RETURN));
         return;
     }
-    emitAdaptValue(arena, seq, implRet, samRet);
-    seq.add(new InsnNode(returnOpcode(samRet.getSort())));
+    emitAdaptValue(m, arena, seq, implRet, samRet);
+    seq.add(m.create<InsnNode>(returnOpcode(samRet.getSort())));
 }
 
 // altMetafactory flags（见 JDK java.lang.invoke.LambdaMetafactory）。
@@ -626,24 +627,24 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
     // <init>(capturedDescs)V : super.<init>() 后逐个 aload_0 / xload param / putfield capI。
     auto* init = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern("<init>"),
                                 arena.intern(ctorDesc.c_str()), arena.intern(""), noExc);
-    init->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
-    init->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
+    init->instructions.add(init->create<VarInsnNode>(Opcodes::ALOAD, 0));
+    init->instructions.add(init->create<MethodInsnNode>(Opcodes::INVOKESPECIAL,
                                               arena.intern("java/lang/Object"),
                                               arena.intern("<init>"), arena.intern("()V"), false));
     int ctorSlot     = 1;   // slot 0 = this
     int ctorMaxStack = 1;
     for (size_t i = 0; i < capturedTypes.size(); ++i) {
         const int sort = capturedTypes[i].getSort();
-        init->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
-        init->instructions.add(new VarInsnNode(loadOpcode(sort), ctorSlot));
-        init->instructions.add(new FieldInsnNode(Opcodes::PUTFIELD, arena.intern(synthName.c_str()),
+        init->instructions.add(init->create<VarInsnNode>(Opcodes::ALOAD, 0));
+        init->instructions.add(init->create<VarInsnNode>(loadOpcode(sort), ctorSlot));
+        init->instructions.add(init->create<FieldInsnNode>(Opcodes::PUTFIELD, arena.intern(synthName.c_str()),
                                                  arena.intern(capName[i].c_str()),
                                                  arena.intern(capDesc[i].c_str())));
         ctorSlot += slotSize(sort);
         // putfield 峰值：this(1) + value(1或2)。
         ctorMaxStack = std::max(ctorMaxStack, 1 + slotSize(sort));
     }
-    init->instructions.add(new InsnNode(Opcodes::RETURN));
+    init->instructions.add(init->create<InsnNode>(Opcodes::RETURN));
     init->maxStack  = ctorMaxStack;
     init->maxLocals = ctorSlot;
     cn->methods.push_back(init);
@@ -678,19 +679,19 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
 
         // 构造器引用：先 NEW/DUP 目标类型（占 2 个栈位，位于 fullArgs 之下）。
         if (isCtorRef) {
-            sam->instructions.add(new TypeInsnNode(Opcodes::NEW, intern(arena, implOwner.c_str())));
-            sam->instructions.add(new InsnNode(Opcodes::DUP));
+            sam->instructions.add(sam->create<TypeInsnNode>(Opcodes::NEW, intern(arena, implOwner.c_str())));
+            sam->instructions.add(sam->create<InsnNode>(Opcodes::DUP));
             samStack += 2;
         }
 
         // fullArgs 第一段：捕获字段 cap0..capN-1（GETFIELD + 适配）。
         for (size_t i = 0; i < capturedTypes.size(); ++i, ++argPos) {
-            sam->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
-            sam->instructions.add(new FieldInsnNode(Opcodes::GETFIELD,
+            sam->instructions.add(sam->create<VarInsnNode>(Opcodes::ALOAD, 0));
+            sam->instructions.add(sam->create<FieldInsnNode>(Opcodes::GETFIELD,
                                                     arena.intern(synthName.c_str()),
                                                     arena.intern(capName[i].c_str()),
                                                     arena.intern(capDesc[i].c_str())));
-            emitAdaptValue(arena, sam->instructions, capturedTypes[i], toTypes[argPos]);
+            emitAdaptValue(*sam, arena, sam->instructions, capturedTypes[i], toTypes[argPos]);
             // 适配可能改变栈宽（如 Object→long 1→2），按两侧较大者计。
             samStack += std::max(slotSize(capturedTypes[i].getSort()),
                                  slotSize(toTypes[argPos].getSort()));
@@ -699,8 +700,8 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         std::vector<Type> samArgs = Type::getArgumentTypes(arena.intern(sDesc.c_str()));
         int               slot    = 1;
         for (const auto& t : samArgs) {
-            sam->instructions.add(new VarInsnNode(loadOpcode(t.getSort()), slot));
-            emitAdaptValue(arena, sam->instructions, t, toTypes[argPos]);
+            sam->instructions.add(sam->create<VarInsnNode>(loadOpcode(t.getSort()), slot));
+            emitAdaptValue(*sam, arena, sam->instructions, t, toTypes[argPos]);
             slot += slotSize(t.getSort());
             samStack += std::max(slotSize(t.getSort()), slotSize(toTypes[argPos].getSort()));
             ++argPos;
@@ -709,11 +710,11 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         const Type samRet = Type::getReturnType(arena.intern(sDesc.c_str()));
         if (isCtorRef) {
             // NEW/DUP/fullArgs/INVOKESPECIAL <init> → 栈顶留下新建对象，适配（一般免 cast）后 ARETURN。
-            sam->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
+            sam->instructions.add(sam->create<MethodInsnNode>(Opcodes::INVOKESPECIAL,
                                                      intern(arena, implOwner.c_str()),
                                                      intern(arena, "<init>"),
                                                      intern(arena, implDesc.c_str()), false));
-            emitReturnAdapt(arena, sam->instructions,
+            emitReturnAdapt(*sam, arena, sam->instructions,
                             Type::getObjectType(arena.intern(implOwner.c_str())), samRet);
         }
         else {
@@ -728,10 +729,10 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
             // H_INVOKEVIRTUAL 与已提权的 H_INVOKESPECIAL 均按虚调用发射。
             default: invokeOpcode = Opcodes::INVOKEVIRTUAL; break;
             }
-            sam->instructions.add(new MethodInsnNode(invokeOpcode, intern(arena, implOwner.c_str()),
+            sam->instructions.add(sam->create<MethodInsnNode>(invokeOpcode, intern(arena, implOwner.c_str()),
                                                      intern(arena, implName.c_str()),
                                                      intern(arena, implDesc.c_str()), invokeIface));
-            emitReturnAdapt(arena, sam->instructions,
+            emitReturnAdapt(*sam, arena, sam->instructions,
                             Type::getReturnType(arena.intern(implDesc.c_str())), samRet);
         }
         // 栈峰值另须容纳返回值（如零参 SAM 调 ()J impl：参数段 0 栈位、返回 2 栈位）。
@@ -844,11 +845,11 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     //   有捕获：捕获值已在栈上（栈底=cap0，栈顶=capN-1）。先逆序 xSTORE 到新局部槽腾空栈，
     //     再 new / dup / 逆序? —— 需按构造器形参顺序（cap0..capN-1）重新 xLOAD，
     //     故先全部存槽，再 new/dup，再顺序 load。
-    InsnList seq;
+    InsnList seq(&m->arena());
     if (capturedTypes.empty()) {
-        seq.add(new TypeInsnNode(Opcodes::NEW, intern(arena, synthName.c_str())));
-        seq.add(new InsnNode(Opcodes::DUP));
-        seq.add(new MethodInsnNode(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
+        seq.add(m->create<TypeInsnNode>(Opcodes::NEW, intern(arena, synthName.c_str())));
+        seq.add(m->create<InsnNode>(Opcodes::DUP));
+        seq.add(m->create<MethodInsnNode>(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
                                    intern(arena, "<init>"), intern(arena, "()V"), false));
         m->maxStack += 2;
     }
@@ -863,17 +864,17 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
         // 逆序 xSTORE（栈顶 capN-1 先存）。
         for (size_t r = capturedTypes.size(); r > 0; --r) {
             const size_t i = r - 1;
-            seq.add(new VarInsnNode(storeOpcode(capturedTypes[i].getSort()), capSlot[i]));
+            seq.add(m->create<VarInsnNode>(storeOpcode(capturedTypes[i].getSort()), capSlot[i]));
         }
         // new / dup / 顺序 xLOAD cap0..capN-1 / invokespecial <init>(capturedDescs)V。
-        seq.add(new TypeInsnNode(Opcodes::NEW, intern(arena, synthName.c_str())));
-        seq.add(new InsnNode(Opcodes::DUP));
+        seq.add(m->create<TypeInsnNode>(Opcodes::NEW, intern(arena, synthName.c_str())));
+        seq.add(m->create<InsnNode>(Opcodes::DUP));
         int loadStack = 0;
         for (size_t i = 0; i < capturedTypes.size(); ++i) {
-            seq.add(new VarInsnNode(loadOpcode(capturedTypes[i].getSort()), capSlot[i]));
+            seq.add(m->create<VarInsnNode>(loadOpcode(capturedTypes[i].getSort()), capSlot[i]));
             loadStack += slotSize(capturedTypes[i].getSort());
         }
-        seq.add(new MethodInsnNode(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
+        seq.add(m->create<MethodInsnNode>(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
                                    intern(arena, "<init>"), intern(arena, ctorDesc.c_str()),
                                    false));
         if (slot > m->maxLocals) m->maxLocals = slot;

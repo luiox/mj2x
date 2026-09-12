@@ -97,10 +97,10 @@ static void emitClassRegistrationCall(MethodNode* clinit, ca::str::Utf8StringRef
     // NativeLoader.load）：JVM 保证首次调用 Loader 的 static 方法前先执行其
     // <clinit>，故转换类 clinit 只需 registerNativesForClass，不再重复携带
     // 相同的资源路径字符串与调用。
-    clinit->instructions.add(new LdcInsnNode(classId));
-    clinit->instructions.add(new LdcInsnNode(Type::getObjectType(className)));
+    clinit->instructions.add(clinit->create<LdcInsnNode>(classId));
+    clinit->instructions.add(clinit->create<LdcInsnNode>(Type::getObjectType(className)));
     clinit->instructions.add(
-        new MethodInsnNode(Opcodes::INVOKESTATIC,
+        clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                            ca::str::ZUtf8StringRef::from_static(kRegisterBridgeClassName),
                            ca::str::ZUtf8StringRef::from_static(kRegisterBridgeMethodName),
                            ca::str::ZUtf8StringRef::from_static(kRegisterBridgeMethodDesc),
@@ -160,7 +160,7 @@ void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, Compil
     clinit->instructions.clear();
     clearMethodDebugAndHandlers(clinit);
     emitClassRegistrationCall(clinit, clazz.classNode->name, idIt->second);
-    clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+    clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
     clinit->maxStack  = 2;
     clinit->maxLocals = 0;
     clazz.modified    = true;
@@ -262,23 +262,23 @@ void StackCBackend::Impl::rewriteInterfaceDefaultMethodToProxy(
     method.instructions.clear();
     clearMethodDebugAndHandlers(&method);
 
-    method.instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+    method.instructions.add(method.create<VarInsnNode>(Opcodes::ALOAD, 0));
     int  slot     = 1;
     int  maxStack = 1;
     auto argTypes = Type::getArgumentTypes(method.desc);
     for (const auto& argType : argTypes) {
-        method.instructions.add(new VarInsnNode(loadOpcodeForSort(argType.getSort()), slot));
+        method.instructions.add(method.create<VarInsnNode>(loadOpcodeForSort(argType.getSort()), slot));
         auto      pk    = jvmSortToPrimitive(argType.getSort());
         const int width = primitiveStackSize(pk);
         slot += width;
         maxStack += width;
     }
-    method.instructions.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
+    method.instructions.add(method.create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                                                stableUtf8(proxy.hiddenClassName),
                                                stableUtf8(proxy.hiddenMethodName),
                                                stableUtf8(proxy.hiddenMethodDesc),
                                                false));
-    method.instructions.add(new InsnNode(returnOpcodeForKind(methodReturnKind(proxy.javaDesc))));
+    method.instructions.add(method.create<InsnNode>(returnOpcodeForKind(methodReturnKind(proxy.javaDesc))));
     method.maxStack  = maxStack;
     method.maxLocals = slot;
     clazz.modified   = true;

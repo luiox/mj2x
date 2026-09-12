@@ -255,19 +255,19 @@ std::string moveInit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
     }
 
     // 骨架尾部：aload_0 + 参数 load + invokestatic + return。
-    mn->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+    mn->instructions.add(mn->create<VarInsnNode>(Opcodes::ALOAD, 0));
     // 解析参数类型：Type::getArgumentTypes(desc 参数段)。
     const auto methodType = Type::getMethodType(arena.intern(desc.c_str()));
     int        slot       = 1;
     for (const auto& argType : methodType.getArgumentTypes()) {
-        mn->instructions.add(new VarInsnNode(loadOpcode(argType.getSort()), slot));
+        mn->instructions.add(mn->create<VarInsnNode>(loadOpcode(argType.getSort()), slot));
         slot += (argType.getSort() == Type::LONG || argType.getSort() == Type::DOUBLE) ? 2 : 1;
     }
-    mn->instructions.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                            arena.intern(className.c_str()),
-                                            arena.intern(genName.c_str()),
-                                            arena.intern(genDesc.c_str()), false));
-    mn->instructions.add(new InsnNode(Opcodes::RETURN));
+    mn->instructions.add(mn->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
+                                                    arena.intern(className.c_str()),
+                                                    arena.intern(genName.c_str()),
+                                                    arena.intern(genDesc.c_str()), false));
+    mn->instructions.add(mn->create<InsnNode>(Opcodes::RETURN));
 
     // 安装到类与 CompilerMethod 列表（MarkAll 将会标记生成方法）。
     cls.classNode->methods.push_back(gen);
@@ -316,11 +316,11 @@ std::string moveClinit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
 
     // 原 <clinit> 骨架只留 invokestatic + return。
     mn->instructions.clear();
-    mn->instructions.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                            arena.intern(className.c_str()),
-                                            arena.intern(genName.c_str()),
-                                            arena.intern(desc.c_str()), false));
-    mn->instructions.add(new InsnNode(Opcodes::RETURN));
+    mn->instructions.add(mn->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
+                                                    arena.intern(className.c_str()),
+                                                    arena.intern(genName.c_str()),
+                                                    arena.intern(desc.c_str()), false));
+    mn->instructions.add(mn->create<InsnNode>(Opcodes::RETURN));
     // 骨架 maxLocals 保持（invokestatic 不占 local）；maxStack 1 即够。
     mn->maxStack  = std::max(mn->maxStack, 1);
     mn->maxLocals = std::max(mn->maxLocals, 0);

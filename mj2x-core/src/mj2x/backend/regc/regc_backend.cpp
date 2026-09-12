@@ -811,7 +811,7 @@ void prependRegisterNativesCall(CompilerClass& clazz, int classId)
                                 ca::str::ZUtf8StringRef::from_static("()V"),
                                 ca::str::ZUtf8StringRef::from_static(""),
                                 noExceptions);
-        clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+        clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
         clinit->maxStack  = 0;
         clinit->maxLocals = 0;
         clazz.classNode->methods.push_back(clinit);
@@ -819,9 +819,9 @@ void prependRegisterNativesCall(CompilerClass& clazz, int classId)
 
     using namespace jbytecode::tree;
     InsnList prefix;
-    prefix.add(new LdcInsnNode(classId));
-    prefix.add(new LdcInsnNode(Type::getObjectType(clazz.classNode->name)));
-    prefix.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
+    prefix.add(clinit->create<LdcInsnNode>(classId));
+    prefix.add(clinit->create<LdcInsnNode>(Type::getObjectType(clazz.classNode->name)));
+    prefix.add(clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                                   ca::str::ZUtf8StringRef::from_static(cloader::kClassName),
                                   ca::str::ZUtf8StringRef::from_static(cloader::kRegisterName),
                                   ca::str::ZUtf8StringRef::from_static(cloader::kRegisterDesc),

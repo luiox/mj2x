@@ -281,7 +281,7 @@ MethodNode* ensureClinit(CompilerClass& clazz)
                                   ZUtf8StringRef::from_static("()V"),
                                   ZUtf8StringRef::from_static(""),
                                   noExceptions);
-    clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+    clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
     clazz.classNode->methods.push_back(clinit);
     return clinit;
 }
