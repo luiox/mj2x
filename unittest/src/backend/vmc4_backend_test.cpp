@@ -7,6 +7,7 @@
 //   3. 含对象操作的方法 fail-closed（编码返回 nullptr）。
 //   4. 5 种 dispatcher 形态都生成各自特征结构。
 
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <algorithm>
@@ -29,6 +30,15 @@
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -205,8 +215,8 @@ TEST(Vmc4BackendTest, EncodesLoopMethod)
     VmInstance  instance(opts);
     std::string reason;
     // int sum(int n) { int s=0; for(int i=0;i<n;i++){s+=i;} return s; }
-    auto* loop = new LabelNode();
-    auto* done = new LabelNode();
+    auto* loop = new LabelNode(labelScratchArena().create<Label>());
+    auto* done = new LabelNode(labelScratchArena().create<Label>());
     auto prog = encodeMethod("sum", "(I)I",
                              {
                                  new InsnNode(Opcodes::ICONST_0),
@@ -1128,9 +1138,9 @@ TEST(Vmc4BackendTest, EncodesSwitchTerminator)
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
-    auto* l1 = new LabelNode();
-    auto* l2 = new LabelNode();
-    auto* l3 = new LabelNode();
+    auto* l1 = new LabelNode(labelScratchArena().create<Label>());
+    auto* l2 = new LabelNode(labelScratchArena().create<Label>());
+    auto* l3 = new LabelNode(labelScratchArena().create<Label>());
     auto prog = encodeMethod("sw", "(I)I",
                              {
                                  new VarInsnNode(Opcodes::ILOAD, 0),
@@ -1167,9 +1177,9 @@ TEST(Vmc4BackendTest, EncodesExceptionRegion)
     VmInstance  instance(opts);
     std::string reason;
 
-    auto* start = new LabelNode();
-    auto* end   = new LabelNode();
-    auto* handler = new LabelNode();
+    auto* start = new LabelNode(labelScratchArena().create<Label>());
+    auto* end   = new LabelNode(labelScratchArena().create<Label>());
+    auto* handler = new LabelNode(labelScratchArena().create<Label>());
     // javac 真实 try/catch 形态：try 块正常流直接 IRETURN（无 GOTO 正常边进入
     // handler），handler 入口 ASTORE 收异常对象（SSA 作为 exceptionValue 参数）。
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "divCatch", "(II)I",
@@ -1301,8 +1311,8 @@ TEST(Vmc4BackendTest, EncoderUsesAliasBytesInStream)
     VmInstance instance(opts);
     std::string reason;
     // loopSum 有多条边拷贝（Copy 指令），nonce 不同 → 大概率覆盖 canonical+别名。
-    auto* loop = new LabelNode();
-    auto* done = new LabelNode();
+    auto* loop = new LabelNode(labelScratchArena().create<Label>());
+    auto* done = new LabelNode(labelScratchArena().create<Label>());
     auto prog = encodeMethod("sumAlias", "(I)I",
                              {
                                  new InsnNode(Opcodes::ICONST_0),
@@ -1826,8 +1836,8 @@ TEST(Vmc4BackendTest, DriftEncoderStreamDecodesCleanly)
     VmInstance instance(opts);
     std::string reason;
     // 循环方法：字节流足够长，能跨越多个变体周期。
-    auto* loop = new LabelNode();
-    auto* done = new LabelNode();
+    auto* loop = new LabelNode(labelScratchArena().create<Label>());
+    auto* done = new LabelNode(labelScratchArena().create<Label>());
     auto prog = encodeMethod("driftLoop", "(I)I",
                              {
                                  new InsnNode(Opcodes::ICONST_0),

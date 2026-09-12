@@ -1,3 +1,4 @@
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <type_traits>
@@ -7,6 +8,15 @@
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/frontend/opcode_utils.hpp"
 #include "jbytecode/jbytecode.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -515,7 +525,7 @@ TEST(CodeConverterTest, ArrayInstructionsCarryComponentType)
 
 TEST(CodeConverterTest, UnconditionalBranch)
 {
-    auto* label                  = new LabelNode();
+    auto* label                  = new LabelNode(labelScratchArena().create<Label>());
     label->label->bytecodeOffset = 10;
 
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
@@ -557,7 +567,7 @@ TEST(CodeConverterTest, UnconditionalBranch)
 
 TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes)
 {
-    auto* label                  = new LabelNode();
+    auto* label                  = new LabelNode(labelScratchArena().create<Label>());
     label->label->bytecodeOffset = 10;
 
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
@@ -635,7 +645,7 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
 
 TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
 {
-    auto* label                  = new LabelNode();
+    auto* label                  = new LabelNode(labelScratchArena().create<Label>());
     label->label->bytecodeOffset = 10;
 
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
@@ -840,9 +850,9 @@ TEST(CodeConverterTest, NewObjectAndInvokeSpecial)
 
 TEST(CodeConverterTest, SwitchInstructions)
 {
-    auto* defaultLabel                  = new LabelNode();
+    auto* defaultLabel                  = new LabelNode(labelScratchArena().create<Label>());
     defaultLabel->label->bytecodeOffset = 100;
-    auto* caseLabel                     = new LabelNode();
+    auto* caseLabel                     = new LabelNode(labelScratchArena().create<Label>());
     caseLabel->label->bytecodeOffset    = 50;
 
     auto mn =

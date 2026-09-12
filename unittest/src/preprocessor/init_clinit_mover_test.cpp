@@ -5,6 +5,7 @@
 //   骨架尾部补 aload_0 + 参数 load + invokestatic + return；
 // - <clinit>：整个体搬进 __regc_clinit_<hash>，原 <clinit> 只留 invokestatic + return；
 // - v1 保守边界：带异常表/切点前有 label 时保持原字节码不动。
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <string>
@@ -13,6 +14,15 @@
 #include "mj2x/core/compiler_index.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -196,7 +206,7 @@ TEST(InitClinitMoverTest, MovesInitWithBareLabelInPrefix)
                               std::vector<ca::str::Utf8StringRef>{});
     mn->maxStack  = 4;
     mn->maxLocals = 1;
-    mn->instructions.add(new LabelNode());
+    mn->instructions.add(new LabelNode(labelScratchArena().create<Label>()));
     mn->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
     mn->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
                                             arena.intern("java/lang/Object"),
@@ -250,8 +260,8 @@ TEST(InitClinitMoverTest, SkipsInitWithCrossSegmentLabelRef)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto* headLabel = new LabelNode();
-    auto* target = new LabelNode();
+    auto* headLabel = new LabelNode(labelScratchArena().create<Label>());
+    auto* target = new LabelNode(labelScratchArena().create<Label>());
     auto* mn = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern("<init>"),
                               arena.intern("()V"), arena.intern(""),
                               std::vector<ca::str::Utf8StringRef>{});
