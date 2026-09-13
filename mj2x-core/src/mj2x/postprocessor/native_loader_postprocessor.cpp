@@ -2,6 +2,7 @@
 #include "mj2x/core/native_lib_crypto.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
+#include "garena/arena.hpp"
 #include "jbytecode/jbytecode.hpp"
 
 #include <cstdint>
@@ -71,6 +72,15 @@ void emitXorDecryptLoop(MethodVisitor* m, Label* xorLoop, Label* write)
 std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
 {
     Utf8StringArena arena;
+    // Label 建点 scratch arena（B8 归属制，同 ClassReader labelArena_ 模式）：控制流
+    // Label 全部由此分配并盖章，MethodWriter 仅在 toByteArray() 前借用改写，原件随本
+    // 函数栈帧统一回收——不再堆泄漏（DEV-14 清账）。
+    garena::Arena   labelScratch;
+    auto            makeLabel = [&]() -> Label* {
+        auto* l = labelScratch.create<Label>();
+        l->setOwner(&labelScratch);
+        return l;
+    };
     ClassWriter     cw(arena, ClassWriter::COMPUTE_MAXS);
     cw.visit(49,
              Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SYNTHETIC,
@@ -107,13 +117,13 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
                        Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)V"),
                        Utf8StringRef(),
                        {});
-    auto* continueLabel = new Label();
-    auto* streamOk      = new Label();
-    auto* loop          = new Label();
-    auto* done          = new Label();
-    auto* streamLoop    = new Label();
-    auto* xorLoop       = new Label();
-    auto* writeBlock    = new Label();
+    auto* continueLabel = makeLabel();
+    auto* streamOk      = makeLabel();
+    auto* loop          = makeLabel();
+    auto* done          = makeLabel();
+    auto* streamLoop    = makeLabel();
+    auto* xorLoop       = makeLabel();
+    auto* writeBlock    = makeLabel();
 
     load->visitCode();
     load->visitFieldInsn(Opcodes::GETSTATIC,
