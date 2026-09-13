@@ -37,13 +37,13 @@ inline void emitLoadCall(jbytecode::tree::MethodNode* clinit, const std::string&
     using namespace jbytecode::core;
     using namespace jbytecode::tree;
     InsnList prefix;
-    prefix.add(new LdcInsnNode(resourcePath));
-    prefix.add(new LdcInsnNode(tempSuffix));
-    prefix.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                  ca::str::ZUtf8StringRef::from_static(kClassName),
-                                  ca::str::ZUtf8StringRef::from_static("load"),
-                                  ca::str::ZUtf8StringRef::from_static(kLoadDesc),
-                                  false));
+    prefix.add(clinit->create<LdcInsnNode>(resourcePath));
+    prefix.add(clinit->create<LdcInsnNode>(tempSuffix));
+    prefix.add(clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
+                                              ca::str::ZUtf8StringRef::from_static(kClassName),
+                                              ca::str::ZUtf8StringRef::from_static("load"),
+                                              ca::str::ZUtf8StringRef::from_static(kLoadDesc),
+                                              false));
     clinit->instructions.insert(clinit->instructions.getFirst(), prefix);
     clinit->maxStack = (std::max)(clinit->maxStack, 2);
 }

@@ -6,6 +6,7 @@
 //   3. dump 文本过 c2j CSTACK_RE（cstack(\d+)\.(\w)）→ 零匹配（消除锚点 2）。
 //
 // 样本：test_resource/ssa/ssa/SsaSamples.class（javac 编译）
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <cstdio>
@@ -28,6 +29,15 @@
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 #include "mj2x/mir/ssa/ssa_dump.hpp"
 #include "mj2x/mj2x.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -399,7 +409,7 @@ TEST(SSABuilderE2E, ParsesWideMethodDescriptorAndBindsEntryParameters)
 
 TEST(SSABuilderE2E, LowersCastAndCompareForRegCInput)
 {
-    auto*       elseLabel = new LabelNode();
+    auto*       elseLabel = new LabelNode(labelScratchArena().create<Label>());
     std::string reason;
     auto        fn = buildInlineSSA("castCmp",
                              "(D)I",
@@ -428,9 +438,9 @@ TEST(SSABuilderE2E, LowersCastAndCompareForRegCInput)
 
 TEST(SSABuilderE2E, LowersSwitchTerminatorForRegCInput)
 {
-    auto* case0        = new LabelNode();
-    auto* case1        = new LabelNode();
-    auto* defaultLabel = new LabelNode();
+    auto* case0        = new LabelNode(labelScratchArena().create<Label>());
+    auto* case1        = new LabelNode(labelScratchArena().create<Label>());
+    auto* defaultLabel = new LabelNode(labelScratchArena().create<Label>());
 
     std::string reason;
     auto        fn = buildInlineSSA(

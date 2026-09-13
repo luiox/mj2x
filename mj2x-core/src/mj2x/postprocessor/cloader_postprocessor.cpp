@@ -32,13 +32,13 @@ std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena
                                 arena.intern("()V"),
                                 arena.intern(""),
                                 noExceptions);
-    init->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
-    init->instructions.add(new MethodInsnNode(Opcodes::INVOKESPECIAL,
+    init->instructions.add(init->create<VarInsnNode>(Opcodes::ALOAD, 0));
+    init->instructions.add(init->create<MethodInsnNode>(Opcodes::INVOKESPECIAL,
                                               arena.intern("java/lang/Object"),
                                               arena.intern("<init>"),
                                               arena.intern("()V"),
                                               false));
-    init->instructions.add(new InsnNode(Opcodes::RETURN));
+    init->instructions.add(init->create<InsnNode>(Opcodes::RETURN));
     init->maxStack  = 1;
     init->maxLocals = 1;
     cn->methods.push_back(init);
@@ -52,15 +52,15 @@ std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena
                                       arena.intern("()V"),
                                       arena.intern(""),
                                       noExceptions);
-        clinit->instructions.add(new LdcInsnNode(resourcePath));
-        clinit->instructions.add(new LdcInsnNode(tempSuffix.empty() ? ".mj2x" : tempSuffix));
+        clinit->instructions.add(clinit->create<LdcInsnNode>(resourcePath));
+        clinit->instructions.add(clinit->create<LdcInsnNode>(tempSuffix.empty() ? ".mj2x" : tempSuffix));
         clinit->instructions.add(
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
+            clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                                arena.intern(native_loader::kClassName),
                                arena.intern("load"),
                                arena.intern(native_loader::kLoadDesc),
                                false));
-        clinit->instructions.add(new InsnNode(Opcodes::RETURN));
+        clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
         clinit->maxStack  = 2;
         clinit->maxLocals = 0;
         cn->methods.push_back(clinit);
@@ -82,15 +82,15 @@ std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena
         arena.intern("(Ljava/lang/invoke/MethodHandle;Ljava/lang/Object;)Ljava/lang/Object;"),
         arena.intern(""),
         noExceptions);
-    invokeOne->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
-    invokeOne->instructions.add(new VarInsnNode(Opcodes::ALOAD, 1));
+    invokeOne->instructions.add(invokeOne->create<VarInsnNode>(Opcodes::ALOAD, 0));
+    invokeOne->instructions.add(invokeOne->create<VarInsnNode>(Opcodes::ALOAD, 1));
     invokeOne->instructions.add(
-        new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+        invokeOne->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL,
                            arena.intern("java/lang/invoke/MethodHandle"),
                            arena.intern("invoke"),
                            arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;"),
                            false));
-    invokeOne->instructions.add(new InsnNode(Opcodes::ARETURN));
+    invokeOne->instructions.add(invokeOne->create<InsnNode>(Opcodes::ARETURN));
     invokeOne->maxStack  = 2;
     invokeOne->maxLocals = 2;
     cn->methods.push_back(invokeOne);

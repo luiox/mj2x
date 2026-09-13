@@ -72,7 +72,7 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
 
     // LDC String 常量（desc / name）。
     auto newStringLdc = [&](ca::str::Utf8StringRef value) {
-        return new LdcInsnNode(
+        return m->create<LdcInsnNode>(
             std::string(reinterpret_cast<const char*>(value.data()), value.byte_length()));
     };
 
@@ -81,13 +81,13 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
     auto pushMethodTypeSeq = [&](std::vector<AbstractInsnNode*>& seq,
                                  ca::str::Utf8StringRef desc) {
         seq.push_back(newStringLdc(desc));
-        seq.push_back(new LdcInsnNode(Type::getObjectType(callerClass)));
-        seq.push_back(new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+        seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(callerClass)));
+        seq.push_back(m->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL,
                                          intern(arena, "java/lang/Class"),
                                          intern(arena, "getClassLoader"),
                                          intern(arena, "()Ljava/lang/ClassLoader;"),
                                          false));
-        seq.push_back(new MethodInsnNode(
+        seq.push_back(m->create<MethodInsnNode>(
             Opcodes::INVOKESTATIC,
             intern(arena, "java/lang/invoke/MethodType"),
             intern(arena, "fromMethodDescriptorString"),
@@ -105,12 +105,12 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
             const int              tag   = h.getTag();
 
             // Lookup receiver + declaring Class。
-            seq.push_back(new MethodInsnNode(Opcodes::INVOKESTATIC,
+            seq.push_back(m->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                                              intern(arena, "java/lang/invoke/MethodHandles"),
                                              intern(arena, "lookup"),
                                              intern(arena, "()Ljava/lang/invoke/MethodHandles$Lookup;"),
                                              false));
-            seq.push_back(new LdcInsnNode(Type::getObjectType(h.getOwner())));
+            seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(h.getOwner())));
 
             // findXxx 选择（按 tag），name/MethodType/fieldType/caller 按其描述符顺序入栈。
             const char* lookupMethodName = "findVirtual";
@@ -135,13 +135,13 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                 seq.push_back(newStringLdc(mname));
                 const Type fieldType = Type::getType(h.getDesc());
                 if (const char* box = primitiveBoxClass(fieldType.getSort())) {
-                    seq.push_back(new FieldInsnNode(Opcodes::GETSTATIC,
+                    seq.push_back(m->create<FieldInsnNode>(Opcodes::GETSTATIC,
                                                     intern(arena, box),
                                                     intern(arena, "TYPE"),
                                                     intern(arena, "Ljava/lang/Class;")));
                 }
                 else {
-                    seq.push_back(new LdcInsnNode(Type::getType(h.getDesc())));
+                    seq.push_back(m->create<LdcInsnNode>(Type::getType(h.getDesc())));
                 }
                 break;
             }
@@ -153,7 +153,7 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                     "Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
                 seq.push_back(newStringLdc(mname));
                 pushMethodTypeSeq(seq, mdesc);
-                seq.push_back(new LdcInsnNode(Type::getObjectType(callerClass)));
+                seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(callerClass)));
                 break;
             case Opcodes::H_NEWINVOKESPECIAL:
                 // findConstructor(Class, MethodType)：无 name 参数。
@@ -172,7 +172,7 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                 pushMethodTypeSeq(seq, mdesc);
                 break;
             }
-            seq.push_back(new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+            seq.push_back(m->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL,
                                              intern(arena, "java/lang/invoke/MethodHandles$Lookup"),
                                              intern(arena, lookupMethodName),
                                              intern(arena, lookupMethodDesc),
@@ -184,13 +184,12 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
             pushMethodTypeSeq(seq, t.getDescriptor());
         }
 
-        // 按程序序插到 ldc 之前，然后删 ldc。InsnList::remove 只摘链不释放，
-        // 节点须手动 delete（对齐 init_clinit_mover 先例）。
+        // 按程序序插到 ldc 之前，然后用 removeAndDelete 摘链销毁 ldc
+        //（对齐 init_clinit_mover 先例）。
         for (auto* node : seq) {
             m->instructions.insertBefore(ldc, node);
         }
-        m->instructions.remove(ldc);
-        delete ldc;
+        m->instructions.removeAndDelete(ldc);
     }
     return true;
 }

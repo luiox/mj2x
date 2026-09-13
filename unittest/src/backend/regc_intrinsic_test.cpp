@@ -7,6 +7,7 @@
 // job.  Here we only verify the intrinsic is recognized and the JNI call
 // surface is absent from the generated source.
 
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <memory>
@@ -19,6 +20,15 @@
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -2001,7 +2011,7 @@ TEST(RegCIntrinsicTest, StringBuilderFieldAndArrayStoresMaterialize)
 
 TEST(RegCIntrinsicTest, StringBuilderCfgAliasKeepsOpaqueHandle)
 {
-    auto*       skipAppend = new LabelNode();
+    auto*       skipAppend = new LabelNode(labelScratchArena().create<Label>());
     std::string reason;
     auto        result = emitRegC(
         "cfgBuilder",

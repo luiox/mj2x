@@ -234,7 +234,7 @@ void addStaticIntMethod(jbytecode::tree::ClassNode& cn, const char* name, int op
                                            noExceptions);
     if (nativeAnnotated) {
         mn->visibleAnnotations.push_back(
-            new AnnotationNode(ZUtf8StringRef::from_static("Lmj2x/Native;")));
+            mn->create<AnnotationNode>(mn->arena(), ZUtf8StringRef::from_static("Lmj2x/Native;")));
     }
     mn->maxStack  = 2;
     mn->maxLocals = 2;

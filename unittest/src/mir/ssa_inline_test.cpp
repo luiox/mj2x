@@ -4,6 +4,7 @@
 // void、递归拒绝、异常区拒绝、大小拒绝、非静态拒绝、解析失败。
 // 每个内联成功用例额外跑 RegLowering + validateRegIRNoStackSlots 证明
 // 内联后的 SSA 仍然可降级（CFG/引用完整）。
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <map>
@@ -18,6 +19,15 @@
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 
 #include "mj2x/mir/ssa/ssa_builder.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -170,8 +180,8 @@ TEST(SsaInlineTest, MergesMultipleReturnPoints)
     Utf8StringArena arena;
 
     // callee: static int pick(int x) { if (x > 0) return 1; else return -1; }
-    auto* posLabel = new LabelNode();
-    auto* endLabel = new LabelNode();
+    auto* posLabel = new LabelNode(labelScratchArena().create<Label>());
+    auto* endLabel = new LabelNode(labelScratchArena().create<Label>());
     auto callee    = makeMethod(kStaticPublic, "pick", "(I)I",
                                 {new VarInsnNode(Opcodes::ILOAD, 0),
                                  new InsnNode(Opcodes::ICONST_0),

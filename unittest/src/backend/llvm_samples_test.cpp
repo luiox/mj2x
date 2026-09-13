@@ -40,10 +40,12 @@ struct Toolchain
 
 struct SampleSpec
 {
-    const char*             className;
-    const char*             sourceResource;
-    const char*             traceFocus;
+    const char*              className;
+    const char*              sourceResource;
+    const char*              traceFocus;
     std::vector<const char*> requiredMarkers;   // native.ll 内必须出现的片段
+    /// Driver 原样运行受保护类的期望 stdout。
+    const char*              expectedOutput;
 };
 
 std::string quotePath(const fs::path& path)
@@ -341,6 +343,7 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 "call i32 @mj2x_string_builder_init(ptr %mj2x_llvm_ctx",
                 "call i32 @mj2x_string_builder_to_jstring(ptr %mj2x_llvm_ctx",
             },
+            "addMul=21 loopSum=45 maxOf=9 pick=4 absDiff=8 wrapSum=7 randInt=42",
         },
         {
             "LlvmIndySurfaceSample",
@@ -352,6 +355,7 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 "mj2x_llvm_class_const",
                 "mj2x_llvm_string_const",
             },
+            "[k]=7 slice=5 types=true rand=iae",
         },
         {
             "LlvmExceptionMonitorSample",
@@ -363,18 +367,13 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 "mj2x_llvm_monitor_enter",
                 "mj2x_llvm_monitor_exit",
             },
+            "catch0=7 catch10=10 caught locked=10",
         },
     };
     ASSERT_EQ(countJavaSources(test::getResourcePath("protected_samples/llvm")), samples.size())
         << "protected_samples/llvm 样本数量与测试清单不一致";
 
     for (const auto& sample : samples) {
-        generateAndRunSample(sample,
-                             sample.className == "LlvmTinySample"
-                                 ? "addMul=21 loopSum=45 maxOf=9 pick=4 absDiff=8 wrapSum=7 "
-                                   "randInt=42"
-                                 : sample.className == "LlvmIndySurfaceSample"
-                                       ? "[k]=7 slice=5 types=true rand=iae"
-                                       : "catch0=7 catch10=10 caught locked=10");
+        generateAndRunSample(sample, sample.expectedOutput);
     }
 }
