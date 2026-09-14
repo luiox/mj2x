@@ -215,6 +215,8 @@ std::string moveInit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
     // javac 常态：骨架段的行号锚点 label 被克隆体段尾的 LineNumberNode 引用。
     // 克隆时为这些 pre label 建占位 label（挂在生成方法指令头部），把行号
     // 引用重定向到生成方法内的合法 label，避免悬空引用。
+    // B8：占位 label 经 resolveCloneLabel 落入 gen 的内容 arena；幂等——同一
+    // 原 label 重复解析命中映射直返，不会重复建档。
     {
         std::unordered_set<jbytecode::core::Label*> preLabels;
         for (auto* insn = mn->instructions.getFirst(); insn != cut->nextInsn;
@@ -224,34 +226,24 @@ std::string moveInit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
             }
         }
         for (auto* l : preLabels) {
-            if (!clonedLabels.count(l)) {
-                clonedLabels[l] = new jbytecode::core::Label();
-            }
+            resolveCloneLabel(gen->arena(), clonedLabels, l);
         }
         // 给占位 label 提供 LabelNode 挂点：克隆体的 LineNumberNode 引用它们，
         // writer 需要这些 label 出现在指令流中才能算出合法偏移。
         for (auto& [key, lbl] : clonedLabels) {
             (void)key;
-            gen->instructions.insert(new LabelNode(lbl));
+            gen->instructions.insert(gen->create<LabelNode>(lbl));
         }
     }
-    // 预登记克隆体段的全部 label（原 label -> 新 label）。必须赶在任何跳转指令
-    // 克隆之前完成：LabelNode::clone 会登记映射而 JumpInsnNode::clone 只查映射，
-    // 单遍顺序克隆时向前跳（跳转先于目标 LABEL 被克隆）会引用原 label，而目标
-    // LABEL 克隆时已是新 label，造成悬空引用。
-    for (auto* insn = cut->nextInsn; insn; insn = insn->nextInsn) {
-        if (insn->getType() == AbstractInsnNode::LABEL) {
-            auto* l = static_cast<LabelNode*>(insn)->label;
-            if (!clonedLabels.count(l)) {
-                clonedLabels[l] = new jbytecode::core::Label();
-            }
-        }
-    }
+    // 克隆体段的 label 无需预登记：B8 clone(arena, map) 的 Label 解析统一走
+    // resolveCloneLabel，未命中的原 label 就地建档并登记——向前跳（跳转先于
+    // 目标 LABEL 被克隆）与目标 LABEL 克隆收敛到同一新 label，旧协议
+    // 「LabelNode::clone 登记 / JumpInsnNode::clone 只查」的时序依赖消除。
     // [cut->next .. end] 克隆进生成方法。
     for (auto* insn = cut->nextInsn; insn; insn = insn->nextInsn) {
-        gen->instructions.add(insn->clone(clonedLabels));
+        gen->instructions.add(insn->clone(gen->arena(), clonedLabels));
     }
-    // 骨架：丢弃 [cut->next .. end] 的原节点（InsnList::remove 只摘链，需手动 delete）。
+    // 骨架：丢弃 [cut->next .. end] 的原节点（removeAndDelete 摘链并销毁）。
     std::vector<AbstractInsnNode*> tail;
     for (auto* insn = cut->nextInsn; insn;) {
         auto* next = insn->nextInsn;
@@ -259,24 +251,23 @@ std::string moveInit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
         insn = next;
     }
     for (auto* insn : tail) {
-        mn->instructions.remove(insn);
-        delete insn;
+        mn->instructions.removeAndDelete(insn);
     }
 
     // 骨架尾部：aload_0 + 参数 load + invokestatic + return。
-    mn->instructions.add(new VarInsnNode(Opcodes::ALOAD, 0));
+    mn->instructions.add(mn->create<VarInsnNode>(Opcodes::ALOAD, 0));
     // 解析参数类型：Type::getArgumentTypes(desc 参数段)。
     const auto methodType = Type::getMethodType(arena.intern(desc.c_str()));
     int        slot       = 1;
     for (const auto& argType : methodType.getArgumentTypes()) {
-        mn->instructions.add(new VarInsnNode(loadOpcode(argType.getSort()), slot));
+        mn->instructions.add(mn->create<VarInsnNode>(loadOpcode(argType.getSort()), slot));
         slot += (argType.getSort() == Type::LONG || argType.getSort() == Type::DOUBLE) ? 2 : 1;
     }
-    mn->instructions.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                            arena.intern(className.c_str()),
-                                            arena.intern(genName.c_str()),
-                                            arena.intern(genDesc.c_str()), false));
-    mn->instructions.add(new InsnNode(Opcodes::RETURN));
+    mn->instructions.add(mn->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
+                                                    arena.intern(className.c_str()),
+                                                    arena.intern(genName.c_str()),
+                                                    arena.intern(genDesc.c_str()), false));
+    mn->instructions.add(mn->create<InsnNode>(Opcodes::RETURN));
 
     // 安装到类与 CompilerMethod 列表（MarkAll 将会标记生成方法）。
     cls.classNode->methods.push_back(gen);
@@ -316,27 +307,20 @@ std::string moveClinit(CompilerIndex& index, CompilerClass& cls, MethodNode* mn)
     gen->maxLocals = mn->maxLocals;
 
     std::unordered_map<jbytecode::core::Label*, jbytecode::core::Label*> cloned;
-    // 预登记全部 label（原 label -> 新 label）：LabelNode::clone 登记映射而
-    // JumpInsnNode::clone 只查映射，须先登记避免向前跳引用旧 label 造成悬空。
-    for (auto* insn = mn->instructions.getFirst(); insn; insn = insn->nextInsn) {
-        if (insn->getType() == AbstractInsnNode::LABEL) {
-            auto* l = static_cast<LabelNode*>(insn)->label;
-            if (!cloned.count(l)) {
-                cloned[l] = new jbytecode::core::Label();
-            }
-        }
-    }
     // 搬走全量指令：克隆到生成方法，原方法清空重建骨架。
+    // B8：label 无需预登记——clone(gen.arena, map) 各节点统一走 resolveCloneLabel，
+    // 未命中的原 label 就地建档登记，向前跳与目标 LABEL 克隆收敛同一新 label
+    // （幂等），旧协议「LabelNode 登记 / Jump 只查」的时序依赖消除。
     for (auto* insn = mn->instructions.getFirst(); insn; insn = insn->nextInsn)
-        gen->instructions.add(insn->clone(cloned));
+        gen->instructions.add(insn->clone(gen->arena(), cloned));
 
     // 原 <clinit> 骨架只留 invokestatic + return。
     mn->instructions.clear();
-    mn->instructions.add(new MethodInsnNode(Opcodes::INVOKESTATIC,
-                                            arena.intern(className.c_str()),
-                                            arena.intern(genName.c_str()),
-                                            arena.intern(desc.c_str()), false));
-    mn->instructions.add(new InsnNode(Opcodes::RETURN));
+    mn->instructions.add(mn->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
+                                                    arena.intern(className.c_str()),
+                                                    arena.intern(genName.c_str()),
+                                                    arena.intern(desc.c_str()), false));
+    mn->instructions.add(mn->create<InsnNode>(Opcodes::RETURN));
     // 骨架 maxLocals 保持（invokestatic 不占 local）；maxStack 1 即够。
     mn->maxStack  = std::max(mn->maxStack, 1);
     mn->maxLocals = std::max(mn->maxLocals, 0);

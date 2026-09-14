@@ -1,3 +1,4 @@
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <cstring>
@@ -6,6 +7,15 @@
 #include "mj2x/frontend/code_converter.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string_arena.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -83,7 +93,7 @@ TEST(StackCBackendTest, SimpleReturn)
 
 TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement)
 {
-    auto* tailLabel                  = new LabelNode();
+    auto* tailLabel                  = new LabelNode(labelScratchArena().create<Label>());
     tailLabel->label->bytecodeOffset = 1;
     StackCBackend  backend;
     auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
@@ -968,7 +978,7 @@ TEST(StackCBackendTest, InterfaceDefaultMethodUsesHiddenProxy)
 TEST(StackCBackendTest, BranchAndComparison)
 {
     StackCBackend backend;
-    auto*         targetLabel          = new LabelNode();
+    auto*         targetLabel          = new LabelNode(labelScratchArena().create<Label>());
     targetLabel->label->bytecodeOffset = 10;
 
     auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
@@ -1006,7 +1016,7 @@ TEST(StackCBackendTest, CrossInstanceBranchOutputIsDeterministic)
     // (different heap addresses, mimicking two processes) and demands byte-identical C.
     auto buildAndCompile = [](std::string* outText) {
         // Fresh label objects each call -> different addresses, like two CLI processes.
-        auto* targetLabel = new LabelNode();
+        auto* targetLabel = new LabelNode(labelScratchArena().create<Label>());
         auto  mn          = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                                        "cmp",
                                        "(II)I",
@@ -1047,7 +1057,7 @@ TEST(StackCBackendTest, CrossInstanceBranchOutputIsDeterministic)
 TEST(StackCBackendTest, BranchZeroObjectUsesReferenceAccessor)
 {
     StackCBackend backend;
-    auto*         targetLabel          = new LabelNode();
+    auto*         targetLabel          = new LabelNode(labelScratchArena().create<Label>());
     targetLabel->label->bytecodeOffset = 10;
 
     auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,

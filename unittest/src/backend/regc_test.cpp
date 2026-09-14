@@ -1,3 +1,4 @@
+#include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
 #include <memory>
@@ -11,6 +12,15 @@
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
+
+// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 已随旧池制度退役，Label 一律 arena 分配。
+static garena::Arena& labelScratchArena()
+{
+    static garena::Arena arena;
+    return arena;
+}
+
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -166,8 +176,8 @@ TEST(RegCTest, EmitsBitExactNanLiteral)
 
 TEST(RegCTest, EmitsLoopControlFlowWithEdgeCopies)
 {
-    auto* loop = new LabelNode();
-    auto* done = new LabelNode();
+    auto* loop = new LabelNode(labelScratchArena().create<Label>());
+    auto* done = new LabelNode(labelScratchArena().create<Label>());
 
     std::string reason;
     auto        result = emitRegC("sum",
@@ -204,9 +214,9 @@ TEST(RegCTest, EmitsLoopControlFlowWithEdgeCopies)
 
 TEST(RegCTest, EmitsSwitchControlFlow)
 {
-    auto* case0 = new LabelNode();
-    auto* case1 = new LabelNode();
-    auto* def   = new LabelNode();
+    auto* case0 = new LabelNode(labelScratchArena().create<Label>());
+    auto* case1 = new LabelNode(labelScratchArena().create<Label>());
+    auto* def   = new LabelNode(labelScratchArena().create<Label>());
 
     std::string reason;
     auto        result =
@@ -701,9 +711,9 @@ TEST(RegCTest, EmitsTryCatchExceptionDispatch)
 
 TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
 {
-    auto start   = new LabelNode();
-    auto end     = new LabelNode();
-    auto handler = new LabelNode();
+    auto start   = new LabelNode(labelScratchArena().create<Label>());
+    auto end     = new LabelNode(labelScratchArena().create<Label>());
+    auto handler = new LabelNode(labelScratchArena().create<Label>());
     const std::string methodName = "monitorCatch";
     const std::string methodDesc = "(Ljava/lang/Object;)I";
     auto mn      = makeMethod(
@@ -730,7 +740,7 @@ TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
         },
         2,
         3);
-    mn->tryCatchBlocks.push_back(new TryCatchBlockNode(
+    mn->tryCatchBlocks.push_back(mn->create<TryCatchBlockNode>(
         start->label, end->label, handler->label, ca::str::Utf8StringRef::from_cstr("")));
 
     ca::str::Utf8StringArena arena;
