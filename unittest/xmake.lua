@@ -43,7 +43,7 @@ target("mj2x_unittest")
     -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
     -- mj2x-core → libjbytecode 聚合库（实现分散在子库），须逐个补齐；
     -- test_helper 自身依赖 libca_test/libjdk_finder，一并补入。
-    add_links("mj2x-core", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
+    morpher_binary_link_closure("mj2x-core", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
               "libjbytecode_tree", "libjbytecode_core", "libgarena",
               "libjstr", "libjzip", "libca_log", "libca_process",
               "test_helper", "libca_test", "libjdk_finder",
@@ -76,7 +76,7 @@ target("mj2x_integration_test")
     -- xmake 3.x 不把静态 target 依赖传进 binary 链接：显式给全闭包，按
     -- 「消费者在前、被依赖在后」排序（mj2x-cli 为 binary 依赖，只定构建顺序，
     -- 不参与链接，故此处闭包只覆盖 test_helper + libjbytecode 族）。
-    add_links("libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
+    morpher_binary_link_closure("libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
               "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr",
               "test_helper", "libca_test", "libjdk_finder",
               "libca_str", "libca_crypto", "libca_core")
