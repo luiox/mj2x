@@ -1087,6 +1087,12 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
                libraryPath.string().c_str());
         ca::process::Command command("clang");
         command.arg(sharedFlag).arg("-x").arg("ir").arg("-");
+#ifndef _WIN32
+        // Linux 下链接 .so 必须带 -fPIC：C 运行时的 TLS（_mj2x_regc_ctx 等）
+        // 非 PIC 编译走 initial-exec 模型，产生 R_X86_64_TPOFF32 重定位，
+        // 链接共享对象直接失败（recompile with -fPIC）。
+        command.arg("-fPIC");
+#endif
         appendRtBackendDefine(command, false, CEmitterBackend::LlvmIr);
         for (const auto& include : crtIncludes) command.arg("-I").arg(include.string());
         if (!rtProtectSource.empty()) {
