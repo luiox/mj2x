@@ -58,7 +58,7 @@ java -cp app_protected.jar app.Main
 xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
 
 # 界面语言:默认简体中文;--lang 或 MJ2X_LANG 切换(文案单源表
-# mj2x-cli/translations/*.lang,构建期嵌入二进制,见 libs/libi18n)
+# mj2x-cli/translations/*.lang,构建期嵌入二进制,见 libca i18n 模块 libca_i18n)
 mj2x-cli --lang en_US --help
 ```
 
