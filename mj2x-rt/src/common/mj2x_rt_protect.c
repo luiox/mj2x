@@ -26,6 +26,9 @@
 #else
 #    include <stdio.h>
 #    include <stdlib.h>
+// POSIX 下 _exit 声明在 <unistd.h>（Windows 侧走 <stdlib.h> 的 _exit）；
+// 缺声明时 clang 以 -Wimplicit-function-declaration 直接报错。
+#    include <unistd.h>
 #endif
 
 /// @brief xorshift32 伪随机（自包含、确定性；seed 由检查点状态持有）。
