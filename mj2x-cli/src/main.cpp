@@ -157,13 +157,13 @@ static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsic
     try {
         std::ifstream file(path);
         if (!file) {
-            error = std::string(ca::i18n::trf("mj2x.cli.err.intrinsic_open_failed", {path}));
+            error = ca::i18n::trf("mj2x.cli.err.intrinsic_open_failed", {path}).to_std_string();
             return false;
         }
         file >> root;
     }
     catch (const json::exception& ex) {
-        error = std::string(ca::i18n::trf("mj2x.cli.err.intrinsic_invalid_json", {ex.what()}));
+        error = ca::i18n::trf("mj2x.cli.err.intrinsic_invalid_json", {ex.what()}).to_std_string();
         return false;
     }
     if (!root.is_object()) {
@@ -226,7 +226,7 @@ static bool copyUserIntrinsicSources(const std::vector<std::string>& sources,
     std::error_code             ec;
     std::filesystem::create_directories(destDir, ec);
     if (ec) {
-        error = std::string(ca::i18n::trf("mj2x.cli.err.intrinsic_dir_failed", {destDir.string()}));
+        error = ca::i18n::trf("mj2x.cli.err.intrinsic_dir_failed", {destDir.string()}).to_std_string();
         return false;
     }
     for (const auto& src : sources) {
@@ -234,7 +234,7 @@ static bool copyUserIntrinsicSources(const std::vector<std::string>& sources,
         const std::filesystem::path to = destDir / from.filename();
         std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
         if (ec) {
-            error = std::string(ca::i18n::trf("mj2x.cli.err.intrinsic_copy_failed", {from.string()}));
+            error = ca::i18n::trf("mj2x.cli.err.intrinsic_copy_failed", {from.string()}).to_std_string();
             return false;
         }
     }
@@ -680,13 +680,14 @@ int main(int argc, char** argv)
         switch (err.category) {
         case ca::opt::ParseErrorCategory::UnknownOption:
         case ca::opt::ParseErrorCategory::UnexpectedArgument:
-            message = std::string(
-                ca::i18n::trf("mj2x.cli.err.unknown_option", {err.option.empty() ? err.message : err.option}));
+            message = ca::i18n::trf("mj2x.cli.err.unknown_option",
+                                    {err.option.empty() ? err.message : err.option})
+                          .to_std_string();
             break;
         case ca::opt::ParseErrorCategory::MissingValue:
         case ca::opt::ParseErrorCategory::EmptyValue:
-            message = std::string(
-                ca::i18n::trf("mj2x.cli.err.flag_requires_value", {"--" + err.option}));
+            message = ca::i18n::trf("mj2x.cli.err.flag_requires_value", {"--" + err.option})
+                          .to_std_string();
             break;
         case ca::opt::ParseErrorCategory::MutexConflict:
         case ca::opt::ParseErrorCategory::MutexRequired:

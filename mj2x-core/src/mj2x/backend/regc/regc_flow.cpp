@@ -660,7 +660,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             const ca::str::Utf8String cacheName = addInstanceFieldCache(state, ins);
             const std::string         destName = regName(ins.dest.id);
             out.appendLineStart(destName).append(" = _mj2x_regc_load_");
-            if (!cacheName.empty()) {
+            if (!cacheName.is_empty()) {
                 out.append("cached_instance_")
                     .append(fieldHelperSuffix(ins.field.desc, ins.dest.type))
                     .append("_field(&")
@@ -711,7 +711,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 else {
                     const ca::str::Utf8String cacheName = addInstanceFieldCache(state, ins);
                     u.appendLineStart("_mj2x_regc_store_");
-                    if (!cacheName.empty()) {
+                    if (!cacheName.is_empty()) {
                         u.append("cached_instance_")
                             .append(fieldHelperSuffix(ins.field.desc, ins.value.type))
                             .append("_field(&")
@@ -830,7 +830,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         const ca::str::Utf8String instanceCacheName =
             (!staticCall && !selfCall) ? addInstanceMethodCache(state, ins) : ca::str::Utf8String();
         const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
-        const bool dynamicInstance = !staticCall && !selfCall && !instanceCacheName.empty();
+        const bool dynamicInstance = !staticCall && !selfCall && !instanceCacheName.is_empty();
         const bool privateThis =
             dynamicInstance && isPrivateThisCall(state, ins, fn) && !state.traceCalls;
         // JDK/库类调用点：方法 owner 不在编译输入（isLibrary），receiver 不可能是
@@ -847,7 +847,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         const bool useResolved = dynamicInstance && state.resolvedDispatch && !state.traceCalls &&
                                  !privateThis && !libraryOwner;
         const bool inlineCached =
-            !selfCall && !useResolved && !privateThis && (staticCall || !instanceCacheName.empty()) &&
+            !selfCall && !useResolved && !privateThis && (staticCall || !instanceCacheName.is_empty()) &&
             !(state.traceCalls && !staticCall && !ins.hasDest);
         const auto emitCall = [&](CSourceStream& u) {
             if (useResolved) {
@@ -948,7 +948,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                             .append(");")
                             .newLine();
                     }
-                    else if (!instanceCacheName.empty()) {
+                    else if (!instanceCacheName.is_empty()) {
                         u.append("cached_instance_")
                             .append(helperSuffix(ins.dest.type))
                             .append("(&")
@@ -992,7 +992,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                             .append(");")
                             .newLine();
                     }
-                    else if (!instanceCacheName.empty()) {
+                    else if (!instanceCacheName.is_empty()) {
                         u.append("cached_instance_void(&")
                             .append(instanceCacheName)
                             .append(", ")
