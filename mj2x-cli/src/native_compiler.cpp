@@ -702,6 +702,12 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
                libraryPath.string().c_str());
         ca::process::Command command("clang");
         command.arg(sharedFlag).arg(sourcePath.string());
+#ifndef _WIN32
+        // Linux 下链接 .so 必须带 -fPIC：随 .ll 一起编的 C 运行时含 TLS
+        // （_mj2x_regc_ctx 等），非 PIC 编译走 initial-exec 模型，产生
+        // R_X86_64_TPOFF32 重定位，链接共享对象直接失败（recompile with -fPIC）。
+        command.arg("-fPIC");
+#endif
         appendRtBackendDefine(command, false, CEmitterBackend::LlvmIr);
         for (const auto& include : crtIncludes) command.arg("-I").arg(include.string());
         if (!rtProtectSource.empty()) command.arg(rtProtectSource.string());
@@ -724,6 +730,9 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
 #endif
         printf("Compiling LLVM IR object with llc: %s\n", objectPath.string().c_str());
         ca::process::Command llcCommand("llc");
+#ifndef _WIN32
+        llcCommand.arg("-relocation-model=pic");
+#endif
         llcCommand.arg("-filetype=obj").arg(sourcePath.string()).arg("-o").arg(
             objectPath.string());
         if (runCompilerCommand(llcCommand, "llc") != 0) return 1;
@@ -735,6 +744,9 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
             ca::process::Command rtCompile("clang");
             rtCompile.arg("-c");
             appendRtBackendDefine(rtCompile, false, CEmitterBackend::LlvmIr);
+#ifndef _WIN32
+            rtCompile.arg("-fPIC"); // 产物进 .so，见 compileLlvmIr 侧的 TPOFF32 说明。
+#endif
             rtCompile.arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
             if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
             linkInputs.push_back(rtObject);
@@ -745,6 +757,9 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
             ca::process::Command crtCompile("clang");
             crtCompile.arg("-c");
             appendRtBackendDefine(crtCompile, false, CEmitterBackend::LlvmIr);
+#ifndef _WIN32
+            crtCompile.arg("-fPIC"); // 产物进 .so，见 compileLlvmIr 侧的 TPOFF32 说明。
+#endif
             for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
             crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
             if (runCompilerCommand(crtCompile, "clang") != 0) return 1;
@@ -1151,6 +1166,9 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
         printf("Compiling LLVM IR object from stdin with llc: %s\n",
                objectPath.string().c_str());
         ca::process::Command llcCommand("llc");
+#ifndef _WIN32
+        llcCommand.arg("-relocation-model=pic");
+#endif
         llcCommand.arg("-filetype=obj").arg("-").arg("-o").arg(objectPath.string());
         llcCommand.stdin(ca::process::Stdio::piped())
             .stdout(ca::process::Stdio::piped())
@@ -1190,6 +1208,9 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             ca::process::Command rtCompile("clang");
             rtCompile.arg("-c");
             appendRtBackendDefine(rtCompile, false, CEmitterBackend::LlvmIr);
+#ifndef _WIN32
+            rtCompile.arg("-fPIC"); // 产物进 .so，见 compileLlvmIr 侧的 TPOFF32 说明。
+#endif
             rtCompile.arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
             if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
             linkInputs.push_back(rtObject);
@@ -1200,6 +1221,9 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             ca::process::Command crtCompile("clang");
             crtCompile.arg("-c");
             appendRtBackendDefine(crtCompile, false, CEmitterBackend::LlvmIr);
+#ifndef _WIN32
+            crtCompile.arg("-fPIC"); // 产物进 .so，见 compileLlvmIr 侧的 TPOFF32 说明。
+#endif
             for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
             crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
             if (runCompilerCommand(crtCompile, "clang") != 0) return 1;
