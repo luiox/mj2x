@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -564,7 +565,129 @@ std::vector<ca::u8> readFileBytes(const fs::path& path)
     return bytes;
 }
 
+/// 生成 before/after 的逐行差异摘要（最多 maxDiff 行），供 xmake 配置守卫的
+/// 失败信息使用。conf 行序由 xmake 写入时决定，逐位对齐足够定位被翻转的开关。
+std::string diffSummary(const std::string& before, const std::string& after, size_t maxDiff)
+{
+    const auto splitLines = [](const std::string& text) {
+        std::vector<std::string> lines;
+        size_t                   start = 0;
+        while (start <= text.size()) {
+            size_t end = text.find('\n', start);
+            if (end == std::string::npos) end = text.size();
+            std::string line = text.substr(start, end - start);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            lines.push_back(line);
+            if (end == text.size()) break;
+            start = end + 1;
+        }
+        return lines;
+    };
+    const auto beforeLines = splitLines(before);
+    const auto afterLines  = splitLines(after);
+    std::string out;
+    size_t      shown = 0;
+    size_t      i     = 0;
+    const auto  overflow = [&out, &shown, maxDiff]() {
+        if (shown >= maxDiff) {
+            out += "...（其余差异省略）\n";
+            return true;
+        }
+        return false;
+    };
+    for (; i < beforeLines.size() && i < afterLines.size(); ++i) {
+        if (beforeLines[i] == afterLines[i]) continue;
+        if (overflow()) return out;
+        out += "-" + beforeLines[i] + "\n+" + afterLines[i] + "\n";
+        ++shown;
+    }
+    for (; i < beforeLines.size(); ++i) {
+        if (overflow()) return out;
+        out += "-" + beforeLines[i] + "\n";
+        ++shown;
+    }
+    for (; i < afterLines.size(); ++i) {
+        if (overflow()) return out;
+        out += "+" + afterLines[i] + "\n";
+        ++shown;
+    }
+    return out;
+}
+
+/// 快照仓库根 xmake 状态目录下的全部平台配置：扫描 <top>/.xmake/<plat>/<arch>/
+/// xmake.conf，返回 {相对路径 → 文本内容}。状态目录不存在时返回空表（守卫据此
+/// 整体跳过比对，兼容从未在本机配置过根工程的 CI 环境）。
+std::map<std::string, std::string> snapshotRepoXmakeConfs()
+{
+    std::map<std::string, std::string> snapshot;
+    const fs::path                     stateRoot = test::getTopProjectPath() / ".xmake";
+    std::error_code                    ec;
+    if (!fs::is_directory(stateRoot, ec)) return snapshot;
+    for (const auto& plat : fs::directory_iterator(stateRoot, ec)) {
+        std::error_code platEc;
+        if (!plat.is_directory(platEc)) continue;
+        for (const auto& arch : fs::directory_iterator(plat.path(), ec)) {
+            std::error_code   archEc;
+            if (!arch.is_directory(archEc)) continue;
+            const fs::path conf = arch.path() / "xmake.conf";
+            std::error_code confEc;
+            if (!fs::is_regular_file(conf, confEc)) continue;
+            snapshot[conf.lexically_relative(test::getTopProjectPath()).generic_string()] =
+                readText(conf);
+        }
+    }
+    return snapshot;
+}
+
 }   // namespace
+
+/// CliTest 套件公共 fixture（issue #892 守卫）：套件内每个用例运行前后比对
+/// 仓库根 xmake 配置（<top>/.xmake/<plat>/<arch>/xmake.conf 全量快照），内容
+/// 被改写/删除/新增即在收尾阶段失败并输出差异摘要——把"跑一次全量测试静默
+/// 重置开发者 xmake 配置"从 mtime 人工对时变成显式测试失败。
+///
+/// 背景：xmake 3.x 传 -P 时只切换工程加载点，配置存储目录跟随 CWD（config.lua
+/// 的 _use_workingdir 语义）——任何在仓库根 CWD 下触发的 `xmake f` 都会把根
+/// 工程配置重置为默认开关。本套件驱动真实 xmake 的用例（独立编译 / CLI
+/// --generate-xmake --compile / --c-compiler xmake）全部纳入守卫覆盖；测试
+/// 自身在 test/ 下的临时工程配置不位于仓库根 .xmake，不受守卫干扰。
+class CliTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        std::error_code ec;
+        rootStateExists_ = fs::is_directory(test::getTopProjectPath() / ".xmake", ec);
+        if (rootStateExists_) confsBefore_ = snapshotRepoXmakeConfs();
+    }
+
+    void TearDown() override
+    {
+        if (!rootStateExists_) return;   // 根状态目录不存在：跳过比对
+        const auto after = snapshotRepoXmakeConfs();
+        for (const auto& entry : confsBefore_) {
+            const auto it = after.find(entry.first);
+            if (it == after.end()) {
+                ADD_FAILURE() << "仓库根 xmake 配置在测试运行期间被删除: " << entry.first;
+                continue;
+            }
+            if (it->second != entry.second) {
+                ADD_FAILURE() << "仓库根 xmake 配置在测试运行期间被改写（issue #892）: "
+                              << entry.first << "\n--- 期望（测试前）\n+++ 实际（测试后）\n"
+                              << diffSummary(entry.second, it->second, 20);
+            }
+        }
+        for (const auto& entry : after) {
+            if (confsBefore_.find(entry.first) == confsBefore_.end()) {
+                ADD_FAILURE() << "测试运行期间新增了仓库根 xmake 配置: " << entry.first;
+            }
+        }
+    }
+
+private:
+    std::map<std::string, std::string> confsBefore_;
+    bool                               rootStateExists_ = false;
+};
 
 TEST(CliTest, NativeAnnotationOnlyCompilesAnnotatedMethods)
 {
@@ -1281,15 +1404,24 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
         // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
         // program for cc"——Windows 分支显式锁定 windows + msvc 工具链
         // （与 native_project_builder 的子进程调用一致）。
+        //
+        // xmake 3.x 的 -P 只切换工程加载点，配置存储目录跟随 CWD（config.lua
+        // 的 _use_workingdir 语义，xmake issue #3342）：测试进程 CWD 是仓库根，
+        // 直接 `xmake f -P <绝对路径>` 会把仓库根工程的
+        // .xmake/<plat>/<arch>/xmake.conf 重置为默认开关（issue #892）。
+        // 因此先 cd 进生成的临时工程目录再用 -P .，把配置读写锁定在工程内，
+        // 与产品侧 native_project_builder 的 current_dir + -P . 契约一致。
 #ifdef _WIN32
         auto standaloneBuild = runScript({
-            "xmake f -P " + q(projectDir) + " -m release -p windows --toolchain=msvc",
-            "xmake build -P " + q(projectDir) + " mj2x_native",
+            "cd /d " + q(projectDir),
+            "xmake f -P . -m release -p windows --toolchain=msvc",
+            "xmake build -P . mj2x_native",
         });
 #else
         auto standaloneBuild = runScript({
-            "xmake f -P " + q(projectDir) + " -m release",
-            "xmake build -P " + q(projectDir) + " mj2x_native",
+            "cd " + q(projectDir),
+            "xmake f -P . -m release",
+            "xmake build -P . mj2x_native",
         });
 #endif
         ASSERT_EQ(standaloneBuild.exitCode, 0) << standaloneBuild.out;
