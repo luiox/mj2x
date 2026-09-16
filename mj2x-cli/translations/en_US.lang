@@ -117,6 +117,7 @@ mj2x.param.group.regc=RegC
 mj2x.param.group.regc_llvm=RegC/LLVM
 mj2x.param.group.stackc=StackC
 mj2x.param.group.vmc4=VMC4
+mj2x.param.group.strings=strings
 mj2x.param.group.client=client
 mj2x.param.group.intrinsic=intrinsic
 mj2x.param.group.native_lib=native lib
@@ -159,6 +160,8 @@ mj2x.param.vmc4.bogus.desc=VMC4: number of injected unreachable fake handlers, 0
 mj2x.param.vmc4.drift.desc=VMC4: runtime dispatch variants, 0..4 (0 = off; when on, semantic labels rotate by byte-offset period, decoded via the unmap table)
 mj2x.param.vmc4.drift_period.desc=VMC4: drift variant switch period (in byte offsets)
 mj2x.param.vmc4.trace_surface.desc=VMC4: write the expected trace surface file (mjdbg red-team contract; same seed + same input = same content)
+mj2x.param.vmc4.encrypt_program.desc=VMC4: encrypt the program blob at rest (opcode/handler data encrypted at emission, decrypted at interpreter load; no plaintext program stream in artifacts; key derived from seed; off by default)
+mj2x.param.strings.encrypt.desc=Encrypt string-pool contents at rest (encrypted at emission, decrypted on first access; no plaintext literals in emitted artifacts; off by default)
 mj2x.param.runtime.protection.desc=RegC/VMC4/LLVM: method-entry anti-tamper checkpoints (default none = not injected; depends on the mj2x-rt rt_protect module; the LLVM side compiles with rt_protect sources)
 mj2x.param.runtime.protection_step.desc=Checkpoint probabilistic trigger step
 mj2x.param.runtime.protection_delay_ms.desc=Delay action sleep in milliseconds

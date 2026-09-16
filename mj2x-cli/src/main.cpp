@@ -1114,6 +1114,7 @@ int main(int argc, char** argv)
             vmc4Opts.bogusHandlers = options.vmc4Bogus;
             vmc4Opts.driftVariants = options.vmc4Drift;
             vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
+            vmc4Opts.programBlobEncrypt = options.vmc4EncryptProgram;
             if (options.runtimeProtection != "none") {
                 vmc4Opts.runtimeProtection.action  =
                     parseRuntimeProtectionAction(options.runtimeProtection);

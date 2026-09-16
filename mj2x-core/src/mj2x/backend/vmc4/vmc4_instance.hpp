@@ -78,6 +78,14 @@ struct Vmc4Options
     /// drift 变体切换周期（字节流偏移单位）。默认 16：每 16 字节换一个变体。
     int driftPeriod = 16;
 
+    /// 程序 blob at-rest 加密（--vmc4-encrypt-program；默认关闭）。
+    ///
+    /// @details
+    /// 开启后编码器输出的 opcode/字节流数据段在发射期加密（密钥从主 seed 派生），
+    /// 解释器在初始化加载期解密；产物 C 源与编译后二进制中不再出现明文程序流
+    /// （issue #760 记录的前提缺口：jvmtp 1.6.2 起 at-rest 加密为默认形态）。
+    bool programBlobEncrypt = false;
+
     /// 反侦测检查点注入（wrapper 入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     codegen::RuntimeProtectionOptions runtimeProtection;
