@@ -143,8 +143,14 @@ TEST_F(Vmc4ConversionTest, FixtureConversionReport)
     // 打包 TEST-fixture.jar（jar 输入更贴近真实业务 jar 的加载路径）。
     const fs::path jarTool = tc_.javaHome / "bin" / "jar";
     const fs::path jarPath = outDir / "TEST-fixture.jar";
+    // cd /d 是 cmd 语法（跨盘）；POSIX 下普通 cd 即可，否则 sh 把 /d 当目标目录。
+#ifdef _WIN32
     auto jar = runBat({"cd /d " + q(outDir) + " && " + q(jarTool) + " cf " + q(jarPath) +
                        " pack"});
+#else
+    auto jar = runBat({"cd " + q(outDir) + " && " + q(jarTool) + " cf " + q(jarPath) +
+                       " pack"});
+#endif
     ASSERT_EQ(jar.exitCode, 0) << jar.out;
     ASSERT_TRUE(fileExists(jarPath));
 

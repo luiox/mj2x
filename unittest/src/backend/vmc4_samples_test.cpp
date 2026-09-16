@@ -151,14 +151,27 @@ TEST_F(Vmc4ProtectedSamples, JniSurfaceSampleRoundTrip)
     EXPECT_NE(generatedC.find("registerNativesForClass"), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("JNI_OnLoad"), std::string::npos) << generatedC;
 
+    // 与产品侧 nativeLibraryPath 同规则：--compile 的共享库扩展名按平台取。
+#ifdef _WIN32
+    const char* protectedLibExt  = ".dll";
+#elif defined(__APPLE__)
+    const char* protectedLibExt  = ".dylib";
+#else
+    const char* protectedLibExt  = ".so";
+#endif
     const fs::path dll = protectedClass.parent_path() /
-                         (protectedClass.stem().string() + ".dll");
+                         (protectedClass.stem().string() + protectedLibExt);
     ASSERT_TRUE(fileExists(dll)) << dll.string();
     fs::copy_file(protectedClass, mainClass, fs::copy_options::overwrite_existing, ec);
     ASSERT_FALSE(ec) << ec.message();
 
+#ifdef _WIN32
     const auto nativeRun = runBat({std::string("set \"MORPHER_DLL=") + dll.string() + "\"",
                                    q(tc_.jdk.java) + " -cp " + q(dir) + " Driver"});
+#else
+    const auto nativeRun = runBat({std::string("MORPHER_DLL=") + q(dll) + "; export MORPHER_DLL",
+                                   q(tc_.jdk.java) + " -cp " + q(dir) + " Driver"});
+#endif
     ASSERT_EQ(nativeRun.exitCode, 0) << nativeRun.out;
     EXPECT_EQ(normalizeOutput(nativeRun.out), expected) << nativeRun.out;
 }
