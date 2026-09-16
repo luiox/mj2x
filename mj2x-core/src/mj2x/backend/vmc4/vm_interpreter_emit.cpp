@@ -2,6 +2,7 @@
 
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
+#include "mj2x/core/native_lib_crypto.hpp"
 #include "libca/str/format.hpp"
 
 #include <algorithm>
@@ -2067,10 +2068,32 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
 
     // --- bytecode 数组 ---
     {
-        out.emitLine(format_std("static const unsigned char {}[] = {{", progName));
-        {
-            CSourceStream::IndentGuard g(out);
-            out.emitRaw(emitByteArray(program.bytecodes, "    "));
+        // programBlobEncrypt（issue #760 首切片）：开启时数据段以密文发射
+        // （xorshift32 密钥流，密钥从 instanceSeed 现场派生），产物 C 源与编译
+        // 产物二进制中不再出现明文程序流。解密在 JNI_OnLoad（库加载期，先于
+        // 任何 native 调用；backend.emitRegistrationCode 发射调用）经
+        // mj2x_vm_blob_decrypt 对本数组原地一次性完成——static 存储期使解密
+        // 缓冲区存活期覆盖全部执行期，且不产生第二份 blob 副本。
+        // 首切片边界：lazy 分块解密、解密后 key/keystream 擦除（jvmtp 1.6.4
+        // 完整形态）留待后续切片；blockTargets/常量池不属于指令流，仍为明文。
+        // 关闭路径保持原发射形态（产物字节级不变——既有测试与 trace surface
+        // 契约不受影响）。
+        if (instance.blobEncrypt()) {
+            std::vector<uint8_t> cipher = program.bytecodes;
+            xorStreamBytes(cipher.data(), cipher.size(),
+                           vmc4DeriveBlobKey(instance.instanceSeed()));
+            out.emitLine("/* program blob: encrypted at rest, decrypted once in JNI_OnLoad */");
+            out.emitLine(format_std("static unsigned char {}[] = {{", progName));
+            {
+                CSourceStream::IndentGuard g(out);
+                out.emitRaw(emitByteArray(cipher, "    "));
+            }
+        } else {
+            out.emitLine(format_std("static const unsigned char {}[] = {{", progName));
+            {
+                CSourceStream::IndentGuard g(out);
+                out.emitRaw(emitByteArray(program.bytecodes, "    "));
+            }
         }
         out.emitLine("");
         out.emitLine("};");

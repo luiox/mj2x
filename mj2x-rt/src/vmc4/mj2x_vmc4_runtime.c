@@ -97,3 +97,33 @@ int32_t mj2x_vm_exception_matches(JNIEnv* env, jobject ex, const char* caught_ty
     (*env)->DeleteLocalRef(env, _c);
     return _r;
 }
+
+// ---------------------------------------------------------------------------
+// 程序 blob at-rest 解密(issue #760 首切片)。
+//
+// 密钥流形态与 native lib 加密(mj2x-core native_lib_crypto.hpp / NativeLoader
+// 字节码内实现)保持一致:xorshift32 逐步推进,每字节取 state & 0xFF 异或。
+// 产物 C 源/二进制中只有密文 blob + 现场派生的 32 位 seed 常量,不出现
+// 明文程序流,也不出现整块 key/keystream 数组(密钥流由循环现场重算)。
+// ---------------------------------------------------------------------------
+
+// xorshift32 一步推进(x ^= x<<13; x ^= x>>17; x ^= x<<5)。
+static uint32_t mj2x_vm_blob_xorshift32(uint32_t state)
+{
+    uint32_t x = state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
+
+void mj2x_vm_blob_decrypt(unsigned char* data, unsigned int size, uint32_t key)
+{
+    // key == 0 回退固定种子:0 是 xorshift32 的死锁态(密钥流恒 0,等价未加密)。
+    uint32_t state = (key != 0u) ? key : 0x9E3779B9u;
+    unsigned int i;
+    for (i = 0; i < size; ++i) {
+        state = mj2x_vm_blob_xorshift32(state);
+        data[i] = (unsigned char)(data[i] ^ (unsigned char)(state & 0xFFu));
+    }
+}
