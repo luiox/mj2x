@@ -16,6 +16,7 @@
 #include "mj2x/codegen/c_options.hpp"
 #include "mj2x/codegen/c_source.hpp"
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -82,6 +83,38 @@ public:
     /// getClass().getName().hashCode() 融合调用点站点缓存（每调用点一个）。
     ca::str::Utf8String classNameHashSite();
 
+    /// @brief 开启字符串字面量 at-rest 加密（--strings-encrypt，对标 jvmtp
+    ///        obfuscation.strings / JavaShroud 字符串加密）。
+    /// @details 开启后 operandExpr 的 ldc_string 调用点不再内联明文
+    ///          cStringLiteral，改为引用密文缓冲变量（内容 + 结尾 NUL 一起
+    ///          经 xorshift32 密钥流逐字节加密）；缓冲定义经
+    ///          renderEncryptedLiterals() 统一渲染，解密调用经
+    ///          renderEncryptedLiteralDecryptCalls() 插入 JNI_OnLoad 批量
+    ///          执行（JVM 保证单线程且先于任何 native 方法，规避 XOR 双解密
+    ///          污染与就绪位图竞态）。首切片边界：仅覆盖 LDC 字面量面与
+    ///          indy bsm 参数字符串；JavaShroud 的 callsite 形状多样化（每
+    ///          解码点不同 push 形状/indy/payload 载体）是后续切片。
+    /// @param seedBase 密钥基 seed：非 0 时混入每字面量密钥（RegC 链路取
+    ///                 RegIR 变换 transformSeed——CLI 侧已做 clientId 派生）；
+    ///                 0 时仅由字面量内容派生（确定性、可复现构建）。
+    void setStringsEncrypt(bool enabled, std::uint64_t seedBase = 0);
+
+    /// @brief 字面量加密是否已启用。
+    bool stringsEncryptEnabled() const { return stringsEncrypt_; }
+
+    /// @brief 登记一个字面量密文缓冲并返回缓冲变量名（内容去重，多调用点共享）。
+    /// @details 仅在 stringsEncryptEnabled() 时由发射路径调用；密文按
+    ///          xorshift32 密钥流逐字节生成（与 mj2x_regc_runtime 的
+    ///          _mj2x_regc_decrypt_bytes 逐位互逆）。缓冲生命周期覆盖整个
+    ///          执行期（JNI_OnLoad 解密一次后常驻）。
+    std::string encryptedLiteralBuffer(const std::string& content);
+
+    /// @brief 渲染 TU 头部密文缓冲定义块（finalize 期调用一次；空返回 ""）。
+    std::string renderEncryptedLiterals() const;
+
+    /// @brief 渲染 JNI_OnLoad 内的逐缓冲批量解密调用行（finalize 期调用一次）。
+    std::string renderEncryptedLiteralDecryptCalls() const;
+
     std::string renderDeclarations() const;
     bool        empty() const;
 
@@ -110,6 +143,19 @@ private:
     int                                enumValuesSiteIndex_      = 0;
     int                                enumValueOfSiteIndex_     = 0;
     RegCCommentLevel                   commentLevel_              = RegCCommentLevel::Summary;
+
+    /// 字面量加密状态（--strings-encrypt）：登记序即渲染序；密文缓冲为
+    /// name + 密文字节（含结尾 NUL）+ 每字面量 seed（解密调用行内联发射）。
+    struct EncryptedLiteral
+    {
+        std::string               name;    ///< 缓冲变量名（_mj2x_str_<hex16>）
+        std::vector<std::uint8_t> cipher;  ///< 密文字节（含结尾 NUL）
+        std::uint32_t             seed = 0; ///< 该字面量的 xorshift32 种子
+    };
+    bool                               stringsEncrypt_         = false;
+    std::uint64_t                      stringsEncryptSeedBase_ = 0;
+    std::map<std::string, std::string> encryptedLiteralNames_;     ///< content -> 缓冲名
+    std::vector<EncryptedLiteral>      encryptedLiterals_;
 };
 
 /// @brief Emits stackless helper C from Register IR.

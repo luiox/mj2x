@@ -49,6 +49,14 @@ public:
     ///          热循环内省掉每轮 ExceptionCheck 的 JNI 边界开销。
     void setExceptionCheckLite(bool lite);
 
+    /// 开启字符串池 at-rest 加密（--strings-encrypt，对标 jvmtp obfuscation.strings）。
+    /// @details 开启后 finalize 发射的 UTF-16 池 _mj2x_string_pool 以密文写入 C 源
+    ///          （xorshift32 密钥流逐单位 XOR），生成代码在 JNI_OnLoad 内经
+    ///          mj2x_stackc_string_pool_decrypt 批量原地解密一次；indy 静态参数中的
+    ///          字符串常量同样改走加密池。默认关闭（产物字节级不变）。必须在
+    ///          compileMethod 之前调用。
+    void setStringsEncrypt(bool enabled);
+
     /// @brief 设置用户自定义 intrinsic（issue #818）。
     /// @details 匹配的调用点在 emitInvoke 中降级为对用户 symbol 的直接调用
     /// （参数从 operand stack 弹出）；必须在 compileMethod 之前调用。

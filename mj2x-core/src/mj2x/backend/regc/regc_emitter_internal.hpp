@@ -99,6 +99,31 @@ struct RegCStringBuilderPlan
     std::map<uint32_t, RegCIntrinsicNativeObjectKind> kindByRegister;
 };
 
+/// @name 字符串字面量 at-rest 加密上下文（--strings-encrypt，regc_expr.cpp 持有）
+///
+/// operandExpr 是无状态自由函数、调用点遍布各拆分文件；ldc_string 分支需要
+/// 登记密文缓冲的池。发射期间由 RegCEmitter::emitFunction 经 RAII 安装当前池
+/// （单线程发射，无并发），函数外为空——字面量保持明文发射（独立发射器/单测
+/// 路径默认不受影响）。
+/// @{
+
+/// 取当前加密登记池（nullptr = 未启用，ldc_string 走明文发射）。
+RegCCachePool* currentStringEncryptPool();
+/// 安装/清除当前加密登记池（emitFunction 入口/出口调用）。
+void setCurrentStringEncryptPool(RegCCachePool* pool);
+
+/// RAII 安装守卫：构造安装，析构恢复为空。
+class RegCStringEncryptScope
+{
+public:
+    explicit RegCStringEncryptScope(RegCCachePool* pool) { setCurrentStringEncryptPool(pool); }
+    ~RegCStringEncryptScope() { setCurrentStringEncryptPool(nullptr); }
+    RegCStringEncryptScope(const RegCStringEncryptScope&)            = delete;
+    RegCStringEncryptScope& operator=(const RegCStringEncryptScope&) = delete;
+};
+
+/// @}
+
 /// @name regc_expr.cpp：类型/表达式/命名 helper
 /// @{
 

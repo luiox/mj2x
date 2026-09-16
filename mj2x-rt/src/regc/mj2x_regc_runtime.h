@@ -237,6 +237,13 @@ MJ2X_REGC_API extern int _mj2x_rt_trace_depth;
 /// String 只读热路径（UTF-16 直读，越界置 pending）、装箱/拆箱。
 /// 这些是 RegC intrinsic（capabilities §3）的 CRT 侧实现。
 MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* utf8);
+/// 字符串字面量 at-rest 解密(--strings-encrypt):对生成 TU 内的密文缓冲
+/// (_mj2x_str_<hash>,内容含结尾 NUL)原地解密。xorshift32 密钥流逐字节 XOR
+/// (先推进 state 再取 state & 0xFF),与发射侧 RegCCachePool 加密及
+/// core/native_lib_crypto.hpp::xorStreamBytes 逐字节一致;key == 0 用固定种子。
+/// 调用时机:生成代码在 JNI_OnLoad 内逐缓冲批量调用——JVM 保证 JNI_OnLoad
+/// 单线程且先于任何 native 方法,解密后的缓冲生命周期覆盖整个执行期。
+MJ2X_REGC_API void _mj2x_regc_decrypt_bytes(uint8_t* data, uint32_t size, uint32_t key);
 MJ2X_REGC_API mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* internal_name);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_digit_value(unsigned char ch);
 MJ2X_REGC_API void _mj2x_intrinsic_throw_number_format(mj2x_regc_context* context);

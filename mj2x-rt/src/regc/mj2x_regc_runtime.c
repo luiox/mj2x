@@ -600,6 +600,27 @@ mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* intern
     return (mj2x_ref)(*_mj2x_regc_env)->FindClass(_mj2x_regc_env, internal_name);
 }
 
+/* xorshift32 一步推进:与 core/native_lib_crypto.hpp::xorshift32Step 同式。 */
+static uint32_t _mj2x_regc_xorshift32(uint32_t state)
+{
+    uint32_t x = state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
+
+void _mj2x_regc_decrypt_bytes(uint8_t* data, uint32_t size, uint32_t key)
+{
+    /* 逐字节推进密钥流再取 state & 0xFF XOR,与 xorStreamBytes 逐字节一致;
+     * key == 0 用固定种子。仅由 JNI_OnLoad 单线程调用,无并发要求。 */
+    uint32_t state = (key != 0u) ? key : 0x9E3779B9u;
+    for (uint32_t i = 0; i < size; ++i) {
+        state = _mj2x_regc_xorshift32(state);
+        data[i] = (uint8_t)(data[i] ^ (uint8_t)(state & 0xFFu));
+    }
+}
+
 int32_t _mj2x_intrinsic_digit_value(unsigned char ch) {
     if (ch >= '0' && ch <= '9') return (int32_t)(ch - '0');
     if (ch >= 'a' && ch <= 'z') return (int32_t)(ch - 'a') + 10;

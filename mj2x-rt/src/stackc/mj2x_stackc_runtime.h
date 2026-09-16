@@ -10,6 +10,7 @@
 #include <jni.h>
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifndef MJ2X_STACKC_API
 #define MJ2X_STACKC_API
@@ -60,6 +61,16 @@ MJ2X_STACKC_API jmethodID _mj2x_mid_slow(JNIEnv* env, jmethodID* slot, jclass cl
 MJ2X_STACKC_API jfieldID _mj2x_fid_slow(JNIEnv* env, jfieldID* slot, jclass cls,
                                         const char* name, const char* desc, int is_static);
 MJ2X_STACKC_API jclass _mj2x_class_slow(JNIEnv* env, jclass* slot, jclass owner, const char* name);
+
+// ---- 字符串池 at-rest 解密(--strings-encrypt) ----
+/// 对生成 TU 的 UTF-16 字符串池(_mj2x_string_pool)原地解密:xorshift32 密钥流
+/// 逐单位 XOR(先推进 state 再取低 16 位),与发射侧 StackCBackend::emitStringPool
+/// 的加密逐位一致(与 core/native_lib_crypto.hpp 的 xorshift32 同式)。
+/// key == 0 时使用固定种子(与 xorStreamBytes 同约定)。
+/// 调用时机:生成代码在 JNI_OnLoad 内批量调用一次——JVM 保证 JNI_OnLoad 单线程
+/// 且先于任何 RegisterNatives/native 方法,无需调用点同步(取舍见发射侧注释)。
+MJ2X_STACKC_API void mj2x_stackc_string_pool_decrypt(uint16_t* pool, size_t unit_count,
+                                                     uint32_t key);
 
 #ifdef __cplusplus
 }

@@ -160,6 +160,15 @@ public:
     /// 为空时保持单文件（--emit-cpp，全 static 自包含）。
     void setSplitOutputDir(const std::string& dir) { splitOutputDir_ = dir; }
 
+    /// @brief 开启字符串字面量 at-rest 加密（--strings-encrypt，默认关闭）。
+    ///
+    /// @details 开启后 LDC 字面量与 indy bsm 参数字符串以密文缓冲写入 C 源
+    ///          （xorshift32 密钥流逐字节 XOR，密钥基取 RegIR 变换
+    ///          transformSeed——CLI 侧已按 --client-id 派生），生成代码在
+    ///          JNI_OnLoad 内批量解密一次，缓冲生命周期覆盖整个执行期。默认
+    ///          关闭（产物字节级不变）。必须在 compileMethod 之前调用。
+    void setStringsEncrypt(bool enabled) { stringsEncrypt_ = enabled; }
+
     /// @brief 设置用户自定义 intrinsic（issue #818）。
     /// @details 用户条目并入 intrinsic registry（用户优先于 builtins 匹配）；
     /// 必须在 compileMethod 之前调用。
@@ -198,7 +207,8 @@ private:
     std::string sourceCode_;
     codegen::RuntimeProtectionOptions runtimeProtection_;
     RegTransformOptions               transformOptions_;
-    bool                              inlineEnabled_ = true;
+    bool                              inlineEnabled_  = true;
+    bool                              stringsEncrypt_ = false;
 };
 
 }   // namespace mj2x

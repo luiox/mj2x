@@ -487,6 +487,9 @@ struct RegCBackend::Impl
     bool                      traceCallLog = false;
     /// native-to-native 直接 C 调用（--regc-direct-calls；默认关闭保持 JVM 栈帧语义）。
     bool directCalls = false;
+    /// 字面量 at-rest 加密（--strings-encrypt）：cachePool.setStringsEncrypt 配置后
+    /// 由 emitRegistrationCode 据此发射 JNI_OnLoad 批量解密块。
+    bool stringsEncryptEnabled_ = false;
     /// safe-env：JNI 函数表快照 + 方法入口恢复（--regc-safe-env）。
     bool safeEnvEnabled = false;
     bool safeEnvDebug   = false;
@@ -738,6 +741,13 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     emitterOptions.directCalls     = impl_->directCalls;
     emitterOptions.resolvedDispatch = splitOutputDir_.empty();
     emitterOptions.runtimeProtection = runtimeProtection_;
+    if (stringsEncrypt_ && !impl_->cachePool.stringsEncryptEnabled()) {
+        // --strings-encrypt：登记池挂到 TU 级 cachePool；密钥基取 RegIR 变换
+        // transformSeed（CLI 侧 buildTransformOptions 已做 deriveClientSeed 的
+        // clientId 派生；未开混淆时为 0 = 仅字面量内容派生）。幂等，首方法配置。
+        impl_->cachePool.setStringsEncrypt(true, transformOptions_.transformSeed);
+        impl_->stringsEncryptEnabled_ = true;
+    }
     RegCEmitter emitter(&impl_->cachePool,
                         emitterOptions,
                         &impl_->indySites,
@@ -1019,20 +1029,36 @@ void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode:
 }
 
 /// 生成一个 bsm 静态参数表达式（String/MethodType/Class/Handle/装箱原语/varargs 数组）。
+/// stringEncryptPool 非空时（--strings-encrypt）字符串常量改走密文缓冲引用。
 void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::Any& value,
-                    const bool vararg)
+                    const bool vararg, RegCCachePool* stringEncryptPool)
 {
     if (vararg) {
         out.emitLine("jobject " + var + " = NULL;");
         return;
     }
     if (const auto* p = value.as<std::string>()) {
-        out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                     codegen::cStringLiteral(*p) + ");");
+        if (stringEncryptPool != nullptr) {
+            // --strings-encrypt：bsm 字符串常量走密文缓冲（JNI_OnLoad 批量解密，
+            // 解密后即合法 C 串，NewStringUTF 直接消费），不内联明文字面量。
+            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                         stringEncryptPool->encryptedLiteralBuffer(*p) + ");");
+        }
+        else {
+            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                         codegen::cStringLiteral(*p) + ");");
+        }
     }
     else if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
-        out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                     codegen::cStringLiteral(p->to_std_string()) + ");");
+        if (stringEncryptPool != nullptr) {
+            const auto text = p->to_std_string();
+            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                         stringEncryptPool->encryptedLiteralBuffer(text) + ");");
+        }
+        else {
+            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                         codegen::cStringLiteral(p->to_std_string()) + ");");
+        }
     }
     else if (const auto* p = value.as<Type>()) {
         if (p->getSort() == Type::METHOD) {
@@ -1071,7 +1097,8 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
 }
 
 void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
-                               const RegFunction::InvokeDynamicSite& site)
+                               const RegFunction::InvokeDynamicSite& site,
+                               RegCCachePool* stringEncryptPool = nullptr)
 {
     CSourceStream src;
     src.emitLine("// invokedynamic site " + std::to_string(index) + ": bootstrap " +
@@ -1149,7 +1176,7 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                                      std::to_string(remaining) + ", _mj2x_indy_obj_cls, NULL);");
                         for (size_t j = 0; j < remaining; ++j) {
                             const std::string argVar = "_mj2x_indy_bsm_vararg_" + std::to_string(j);
-                            emitIndyBsmArg(src, argVar, site.bsmArgs[bsmArgIndex + j], false);
+                            emitIndyBsmArg(src, argVar, site.bsmArgs[bsmArgIndex + j], false, stringEncryptPool);
                             src.emitLine("(*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, _mj2x_indy_bsm_varargs, " + std::to_string(j) + ", " +
                                          argVar + ");");
                         }
@@ -1162,7 +1189,7 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                         continue;
                     }
                     const std::string argVar = "_mj2x_indy_bsm_arg_" + std::to_string(bsmArgIndex);
-                    emitIndyBsmArg(src, argVar, site.bsmArgs[bsmArgIndex], false);
+                    emitIndyBsmArg(src, argVar, site.bsmArgs[bsmArgIndex], false, stringEncryptPool);
                     bsmExprs.push_back(argVar);
                     ++bsmArgIndex;
                 }
@@ -1400,7 +1427,19 @@ void RegCBackend::finalize(const CompilerIndex& index)
                        &fwd);
     emitRegCHelperPrelude(full);
     for (size_t i = 0; i < impl_->indySites.size(); ++i) {
-        emitIndyBootstrapFunction(full, i, impl_->indySites[i]);
+        emitIndyBootstrapFunction(full, i, impl_->indySites[i],
+                                  impl_->cachePool.stringsEncryptEnabled() ? &impl_->cachePool
+                                                                           : nullptr);
+    }
+    // --strings-encrypt：字面量密文缓冲定义统插在方法体之前（方法体与 indy
+    // bootstrap 对 _mj2x_str_<hash> 的引用先声明后使用；登记已在 compileMethod
+    // 与上方 indy 发射期完成）。解密调用见 emitRegistrationCode 的 JNI_OnLoad。
+    {
+        const std::string literalDefs = impl_->cachePool.renderEncryptedLiterals();
+        if (!literalDefs.empty()) {
+            full.append(literalDefs.data(), literalDefs.size());
+            full.append("\n");
+        }
     }
     full.append(emittedSource.data(), emittedSource.size());
 
@@ -1623,6 +1662,14 @@ void RegCBackend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
                                      ? "MJ2X_SAFEENV_MODE_RESTORE | MJ2X_SAFEENV_MODE_DEBUG"
                                      : "MJ2X_SAFEENV_MODE_RESTORE") +
                      ") != MJ2X_REGC_STATUS_OK) return JNI_ERR;");
+    }
+    if (stringsEncryptEnabled_) {
+        // --strings-encrypt：JNI_OnLoad 内一次性批量解密全部字面量密文缓冲
+        // （at-rest 密文）。JNI_OnLoad 由 JVM 保证单线程执行且先于任何
+        // RegisterNatives/native 方法，无需调用点同步；解密后缓冲生命周期
+        // 覆盖整个执行期（_mj2x_intrinsic_string_literal 的指针等值快路径
+        // 照常命中）。置于 safe-env 捕获之后，保持表校验尽可能早的语义。
+        src.append(cachePool.renderEncryptedLiteralDecryptCalls());
     }
     for (const auto& className : classOrder) {
         auto found = regsByClass.find(className);

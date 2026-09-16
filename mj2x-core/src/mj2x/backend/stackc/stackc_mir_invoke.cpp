@@ -5,6 +5,8 @@
 ///          主体块 indent 到 2 层，嵌套块用 indent()/dedent() 管理。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "libca/str/format.hpp"
+
 #include <iomanip>
 
 namespace mj2x {
@@ -206,6 +208,18 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
     };
 
     auto emitStringObject = [&](const std::string& varName, const std::string& value) {
+        if (stringsEncrypt) {
+            // --strings-encrypt：indy 参数中的字符串常量改走加密 UTF-16 池
+            // （JNI_OnLoad 批量解密），不内联明文 NewStringUTF 字面量。
+            const auto offset = stringPoolOffsetFor(value);
+            const auto length = stringPoolLengthFor(value);
+            out.appendLineStart("jstring ").append(varName).append(" = (jstring)").append(
+                trackLocalRefExpr(ca::str::format_std(
+                    "(*env)->NewString(env, (const jchar*)(_mj2x_string_pool + {}), {})",
+                    offset, length))).append(";");
+            out.newLine();
+            return;
+        }
         out.appendLineStart("jstring ").append(varName).append(" = (jstring)").append(
             trackLocalRefExpr("(*env)->NewStringUTF(env, " + cStringLiteral(value) + ")")).append(";");
         out.newLine();

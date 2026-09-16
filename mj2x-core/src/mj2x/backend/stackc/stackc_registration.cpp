@@ -7,6 +7,8 @@
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
+#include <cstdio>
+
 #include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
@@ -640,6 +642,20 @@ void StackCBackend::Impl::emitRegistrationCode(codegen::CSourceStream& out) cons
     src.emitLine("JNIEnv* env = NULL;");
     src.emitLine("(void)reserved;");
     src.emitLine("if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;");
+    if (stringsEncrypt && !stringPoolUnits.empty()) {
+        // --strings-encrypt：JNI_OnLoad 内一次性批量解密字符串池（at-rest 密文）。
+        // JNI_OnLoad 由 JVM 保证单线程执行且先于任何 RegisterNatives/native 方法，
+        // 无需调用点同步；池解密后生命周期覆盖整个执行期。
+        src.emitLine("/* mj2x strings-encrypt: batch string pool decrypt (ciphertext at-rest) */");
+        std::string decrypt = "mj2x_stackc_string_pool_decrypt(_mj2x_string_pool, ";
+        decrypt += std::to_string(stringPoolUnits.size());
+        decrypt += "u, 0x";
+        char seedText[16];
+        std::snprintf(seedText, sizeof(seedText), "%08x", stringPoolSeed());
+        decrypt += seedText;
+        decrypt += "u);";
+        src.emitLine(decrypt);
+    }
     for (const auto& className : registrationClassOrder) {
         auto       found = registrationsByClass.find(className);
         const bool hasRegularRegistrations =
