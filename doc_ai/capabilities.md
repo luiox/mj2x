@@ -52,6 +52,9 @@ cache 使用 `jweak` 弱全局引用,调用前通过 `NewLocalRef` 提升。字�
 TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方法体按
 `NewString(env, (const jchar*)(pool + offset), len)` 物化，防 strings 扫描明文命中；
 等价 JNIC 3.5.1/3.7.0 stringObf=false 形态），方法体只引用 pool offset。
+`--strings-encrypt` 开启时池以密文落盘（xorshift32 keystream，密钥由 stringPoolSeed 派生），
+`JNI_OnLoad` 内经 `mj2x_stackc_string_pool_decrypt` 一次性批量原地解密（JVM 保证
+`JNI_OnLoad` 单线程且先于任何 native 方法执行，调用点无需同步）。
 
 **已覆盖的 javac 输出形状**:
 
@@ -76,7 +79,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - JNI local-ref 追踪:临时 class/string/object/array refs 登记到方法级列表，返回前释放
 - JNI method/field ID 懒缓存:调用点首次解析,owner class monitor 保护缓存读写,后续复用缓存 ID
 - hidden proxy class cache:使用 WeakGlobalRef,不因 native cache 强持有阻止类卸载
-- String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring
+- String pool:重复 LDC 字符串只落一份 `_mj2x_string_pool[]` 数据，方法体按 offset 物化 jstring;`--strings-encrypt` 时 at-rest 密文 + `JNI_OnLoad` 批量解密（见上）
 - StackC `invokedynamic`:native 侧调用 bootstrap,经 `CallSite.getTarget()` +
   `MethodHandle.invokeWithArguments` 执行;已覆盖 javac string concat、方法引用和捕获 lambda
 - **ldc Handle/MethodType 常量展开（pipeline 级 `LdcPreprocessor`,默认注册）**:按 tag
@@ -118,6 +121,14 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 - **RegIR dead-code elimination**:在 RegIR→RegC 之间迭代删除未被终结器、CFG edge copy 或异常边消费的纯计算链；可能抛异常、内存访问、调用与 barrier 一律保留。`RegDceTest.*` 覆盖死链删除和 edge copy 活跃值保留，RegC native E2E 覆盖 JVM 语义。
 - **RegIR protection transforms**:RegC 在 DCE 后应用 i32/i64 加法 MBA 恒等式、分支 opaque predicate 与纯控制流 CFF。CFF 通过状态寄存器与 dispatcher switch 路由边，同时保留 edge copy；包含异常区域、内存访问、调用、barrier、throw 或 div/rem 的函数保持原 CFG。`RegTransformPassTest.*` 覆盖变换结构与保守跳过，`RegCBackendE2E.PureArithmeticLoopAndArrayRoundTrip` 覆盖 JVM 循环/数组语义。
 - **safe-env（JNI 函数表保护，#748）**：`--regc-safe-env` 开启后，JNI_OnLoad 首行捕获并做归属校验（表项必须位于 jvm.dll/libjvm.so 代码段，豁免 HotSpot `UseFastJNIAccessors` 的 8 个字段 getter JIT stub），每个 protected native 入口首行内容校验 + 原子恢复被 hook 的函数表。防 `SetJNIFunctionTable` 整表替换、原地改写（指针不变）与单 entry 改写；启动期 agent 污染快照时默认 fail closed（JNI_OnLoad 返回 JNI_ERR），`--regc-safe-env-debug` 改为告警观察。inline detour 与 JVMTI 事件层在射程外（见 `doc_ai/regc_safe_env.md`）。验证：CRT 单测 `test_safe_env` + `RegCSafeEnvE2E.*` 三个真 E2E（运行时原地改写恢复/对照组、启动期污染硬失败、debug 模式继续），E2E 全程走 `ca::process::Command` 无临时 bat。
+
+**strings at-rest 加密（`--strings-encrypt`，stackc/regc 专属，LLVM 不支持）**:RegC 侧
+LDC 字符串密文落盘为内容去重缓冲 `_mj2x_str_<hex64(fnv1a64)>`（同内容单份密文）；
+`JNI_OnLoad` 内 safe-env 捕获之后一次性批量解密全部密文缓冲（`renderEncryptedLiteralDecryptCalls`
+→ `_mj2x_regc_decrypt_bytes`），`ldc_string` 发射分支照常直取缓冲（intrinsic 指针等值
+快路径不受影响）。开关经 `RegCBackend::setStringsEncrypt` / `StackCBackend::setStringsEncrypt`
+注入,CLI PARAM `strings.encrypt`（组 strings,backends 限 stackc|regc）。
+验证:`StringsEncryptTest.*` 6 例（密文落盘无明文断言/解密 round-trip/关闭路径字节级不回退）。
 
 **已覆盖的 E2E 形状**:
 
@@ -242,7 +253,17 @@ CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契
 
 **CLI**:`--backend vmc4` + `--vmc4-dispatcher` / `--vmc4-seed` / `--vmc4-granularity` /
 `--vmc4-alias` / `--vmc4-bogus` / `--vmc4-drift` / `--vmc4-drift-period` /
-`--vmc4-trace-surface`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
+`--vmc4-trace-surface` / `--vmc4-encrypt-program`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
+
+**程序 blob at-rest 加密（`--vmc4-encrypt-program`，#760 首切片）**:开启后每个 VMC4
+实例的解释器字节码 blob 以 xorshift32 keystream 密文落盘，密钥由实例 seed 经
+`vmc4DeriveBlobKey`（splitmix64 混淆 + 折叠 u32，0 → 0x9E3779B9 兜底）确定性派生——
+同 seed 同密钥，发射侧与运行时同源。native 侧 `JNI_OnLoad` 按 BlobDecryptEntry
+批量调 `mj2x_vm_blob_decrypt` 一次性解密（先于任何 VM 方法执行，无需调用点同步）。
+密文形态消除 cso/IDA 对字节码数组的静态 pattern 命中；非 const 数组分支持独立加密
+分支。验证:`Vmc4EncryptProgramTest.*` 9 例（密文无明文/round-trip/错误 seed 不解/
+关闭路径不回退）+ `vmc4_backend_e2e` 加密开态 E2E + CRT 侧
+`mj2x_vmc4_blob_crypto_test`（rt 解密原语）。
 
 **已知限制**:MULTIANEWARRAY 初始 fail-closed 已放开;仍 fail-closed:反射、动态类加载、
 invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标。
