@@ -8,6 +8,17 @@ target("mj2x-cli")
     add_deps("mj2x-core", "libjdk_finder", "libca_process", "libca_opt", "libca_i18n", "libca_resources")
     add_packages("nlohmann_json")
 
+    -- xmake 3.x 不把静态 target 依赖传进 binary 链接：显式给全闭包，按
+    -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
+    -- mj2x-core → libjbytecode 聚合库（实现分散在子库），须逐个补齐到 libca_core。
+    morpher_binary_link_closure("mj2x-core", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
+              "libjbytecode_tree", "libjbytecode_core", "libgarena",
+              "libjstr", "libjzip", "libca_log", "libjdk_finder",
+              "libca_process", "libca_opt", "libca_zip",
+              "libca_str", "libca_crypto", "libca_core")
+    -- 注：libca_resources/libca_i18n 为 headeronly target（无 .lib 产物），
+    -- 只入 add_deps 不入 add_links。
+
     -- v2.2 起 LLVM IR 后端默认开启（with_mj2x_llvm=y，见 xmake/options.lua）。
     -- 显式关闭时 CLI 不暴露 --backend llvm / --emit-llvm / --llvm-tool（fail-closed）。
     if not has_config("with_mj2x_llvm") then

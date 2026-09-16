@@ -11,11 +11,26 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <io.h>
 #include <map>
 #include <sstream>
 #include <string>
 #include <vector>
+
+// fd 级 stderr 捕获：MSVC CRT 用下划线前缀，POSIX 无前缀
+// （与 mjt/unittest/commands_test.cpp 同一口径）。
+#ifdef _WIN32
+#include <io.h>
+#define TEST_DUP(fd) _dup(fd)
+#define TEST_DUP2(from, to) _dup2((from), (to))
+#define TEST_CLOSE(fd) _close(fd)
+#define TEST_FILENO(f) _fileno(f)
+#else
+#include <unistd.h>
+#define TEST_DUP(fd) dup(fd)
+#define TEST_DUP2(from, to) dup2((from), (to))
+#define TEST_CLOSE(fd) close(fd)
+#define TEST_FILENO(f) fileno(f)
+#endif
 
 #include "jdk_fixture.hpp"
 #include "jdk_finder/jdk_finder.hpp"
@@ -128,8 +143,14 @@ TEST_F(Vmc4ConversionTest, FixtureConversionReport)
     // 打包 TEST-fixture.jar（jar 输入更贴近真实业务 jar 的加载路径）。
     const fs::path jarTool = tc_.javaHome / "bin" / "jar";
     const fs::path jarPath = outDir / "TEST-fixture.jar";
+    // cd /d 是 cmd 语法（跨盘）；POSIX 下普通 cd 即可，否则 sh 把 /d 当目标目录。
+#ifdef _WIN32
     auto jar = runBat({"cd /d " + q(outDir) + " && " + q(jarTool) + " cf " + q(jarPath) +
                        " pack"});
+#else
+    auto jar = runBat({"cd " + q(outDir) + " && " + q(jarTool) + " cf " + q(jarPath) +
+                       " pack"});
+#endif
     ASSERT_EQ(jar.exitCode, 0) << jar.out;
     ASSERT_TRUE(fileExists(jarPath));
 
@@ -151,14 +172,14 @@ TEST_F(Vmc4ConversionTest, FixtureConversionReport)
     // 捕获 pipeline stderr（日志门面输出：Compiling/Skipping 行）。
     const fs::path logPath = outDir / "pipeline.log";
     fflush(stderr);
-    const int saved = _dup(_fileno(stderr));
+    const int saved = TEST_DUP(TEST_FILENO(stderr));
     ASSERT_GE(saved, 0);
     FILE* logFile = freopen(logPath.string().c_str(), "w", stderr);
     ASSERT_NE(logFile, nullptr);
     const int runResult = pipeline.run();
     fflush(stderr);
-    _dup2(saved, _fileno(stderr));
-    _close(saved);
+    TEST_DUP2(saved, TEST_FILENO(stderr));
+    TEST_CLOSE(saved);
 
     std::ifstream logIn(logPath);
     std::ostringstream logBuf;

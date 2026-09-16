@@ -286,7 +286,17 @@ protected:
         ASSERT_EQ(compileDriver.exitCode, 0) << sample.className << " Driver javac:\n"
                                              << compileDriver.out;
 
-        const fs::path nativeLibrary = outDir / (std::string(sample.className) + "_protected.dll");
+        // 与产品侧 nativeLibraryPath 同规则：共享库扩展名按平台取（CLI --compile
+        // 实际写出 _protected.so/.dylib/.dll，测试侧预言必须一致）。
+#ifdef _WIN32
+        const char* protectedLibExt = ".dll";
+#elif defined(__APPLE__)
+        const char* protectedLibExt = ".dylib";
+#else
+        const char* protectedLibExt = ".so";
+#endif
+        const fs::path nativeLibrary =
+            outDir / (std::string(sample.className) + "_protected" + protectedLibExt);
 #ifdef _WIN32
         const std::string setLibrary = "set \"MORPHER_DLL=" + nativeLibrary.string() + "\"";
 #else

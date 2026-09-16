@@ -52,16 +52,29 @@ bool fileExists(const fs::path& path)
 std::string q(const fs::path& path)
 {
     std::string s = path.string();
+#ifdef _WIN32
     for (auto& c : s) {
         if (c == '/') c = '\\';
     }
     return "\"" + s + "\"";
+#else
+    // POSIX：保留正斜杠，单引号包裹（sh 安全转义）。
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'')
+            out += "'\\''";
+        else
+            out += c;
+    }
+    return out + "'";
+#endif
 }
 
 ExecResult runBat(const std::vector<std::string>& lines)
 {
     ExecResult result;
     fs::path   tmpDir = test::getTempOutPath("mj2x_protected_sample.keep").parent_path();
+#ifdef _WIN32
     fs::path   bat =
         tmpDir / ("mj2x_protected_sample_" +
                   std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + "_" +
@@ -75,6 +88,22 @@ ExecResult runBat(const std::vector<std::string>& lines)
     }
 
     std::string command = q(bat) + " 2>&1";
+#else
+    // POSIX：等价 .sh 脚本（与 jdk_fixture::runBat 同语义），否则 Windows 专属
+    // 批处理在 Linux 上直接 not found。
+    fs::path   bat =
+        tmpDir / ("mj2x_protected_sample_" +
+                  std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + "_" +
+                  std::to_string(std::rand()) + ".sh");
+    {
+        std::ofstream out(bat);
+        out << "#!/bin/sh\n";
+        for (const auto& line : lines) out << line << "\n";
+        out << "exit 0\n";
+    }
+
+    std::string command = "sh " + q(bat) + " 2>&1";
+#endif
     FILE*       pipe =
 #ifdef _WIN32
         _popen(command.c_str(), "rb");
