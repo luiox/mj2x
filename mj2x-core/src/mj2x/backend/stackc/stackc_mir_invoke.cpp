@@ -468,9 +468,28 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
 
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("jclass _mj2x_indy_object_cls = (jclass)").append(trackLocalRefExpr(
+    // java/lang/Object 的 jclass 按 call-site 静态缓存（#879 X3）：稳态每次调用
+    // 原来都重发 FindClass + 局部引用跟踪，而该类是 boot 类、结果恒一。缓存为
+    // 全局引用后稳态只剩一次静态读；冷路径保持原形态并回填缓存。
+    // 缓存键与 indyTargetCache 同口径（含类/方法/站点定位），生命周期 = native
+    // library，泄漏上界 = indy 站点数。
+    const auto indyObjectClsCache =
+        cacheIdentifier("indy_object_cls",
+                        currentClassName + "." + currentMethodName + currentMethodDesc + ":" +
+                            node->name.to_std_string() + ":" + node->desc.to_std_string());
+    out.appendLineStart("static jclass ").append(indyObjectClsCache).append(" = NULL;");
+    out.newLine();
+    out.emitLine("jclass _mj2x_indy_object_cls = " + indyObjectClsCache + ";");
+    out.emitLine("if (_mj2x_indy_object_cls == NULL) {");
+    out.indent();
+    out.appendLineStart("_mj2x_indy_object_cls = (jclass)").append(trackLocalRefExpr(
         "(*env)->FindClass(env, \"java/lang/Object\")")).append(";");
     out.newLine();
+    out.appendLineStart("if (_mj2x_indy_object_cls != NULL) " + indyObjectClsCache +
+                        " = (*env)->NewGlobalRef(env, _mj2x_indy_object_cls);");
+    out.newLine();
+    out.dedent();
+    out.emitLine("}");
     // 快路径（OBJECT 返回 + 单对象参数）：参数在原栈槽捕获、原位覆写结果，
     // 不建 varargs 数组（省每次调用一次 NewObjectArray + SetObjectArrayElement）。
     // 一般路径：参数装箱进 Object[] 再弹栈。
