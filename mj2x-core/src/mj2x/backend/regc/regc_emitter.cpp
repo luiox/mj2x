@@ -771,9 +771,14 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     return result;
 }
 
-bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
-                       const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
-                       std::string& reason)
+namespace {
+
+/// 阶段3 helper 路径（现状 emitInvokeDynamic 主体，逐字保留）：站点取 target 后
+/// invokeWithArguments。RuntimeHelper 站点与直派桩的守卫回退分支共用本函数——
+/// 发射文本与波次二之前逐字节一致（零回归锚）。
+bool emitIndyHelperCall(CSourceStream& out, const RegInstruction& ins,
+                        const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                        std::string& reason)
 {
     const ca::str::Utf8StringRef descRef = ca::str::Utf8StringRef::from_cstr(site.desc.c_str());
     auto                         argTypes = Type::getArgumentTypes(descRef);
@@ -892,6 +897,211 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
         }
     });
     return ok;
+}
+
+/// 站点直派缓存的守卫条件（§4 单分支守卫）：state==READY 直达快路；未就绪时调
+/// finalize 发射的解析函数（首调用解析 cls/fid/mid 成功置 READY，失败置 HELPER 并
+/// ExceptionClear，单调回退既有 helper 路径，不存在第三态）。解析竞态良性：并发
+/// 首调用各自解析出相同句柄（与既有 indy target 缓存同一权衡）。
+std::string indyDirectGuardCondition(size_t globalSiteIndex)
+{
+    const std::string idx = ca::str::format_std("{}", globalSiteIndex);
+    return "_mj2x_indy_direct_state_" + idx + " == 1 || _mj2x_indy_direct_resolve_" + idx + "()";
+}
+
+/// F1（DirectFieldAccess）直派发射：站点调用直接发射为字段访问（设计文档 §6 P2）。
+/// NPE/异常语义：实例访问 receiver 为 NULL 时显式抛 NPE（复现 invokeWithArguments
+/// 的 null receiver 行为）；字段访问本身的异常经 ExceptionCheck 进既有 cleanup
+/// 异常分发（与 helper 路径一致）。字段 JNI 变体按字段描述符选择（判定已保证
+/// 站点描述符与字段形态精确一致，寄存器类型匹配）。
+bool emitIndyDirectFieldCall(CSourceStream& out, const RegInstruction& ins,
+                             const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                             std::string& reason)
+{
+    const IndyDirectField& field = *site.directField;
+
+    // 发射期载荷自洽复核（非判定）：参数个数与读/写形态一致。
+    const size_t expectedArgs = field.isStatic ? (field.isWrite ? 1u : 0u)
+                                               : (field.isWrite ? 2u : 1u);
+    if (ins.args.size() != expectedArgs) {
+        reason = "indy direct field arg count mismatch";
+        return false;
+    }
+    if (!field.isWrite && !ins.hasDest) {
+        reason = "indy direct field read requires dest";
+        return false;
+    }
+
+    const ca::str::Utf8StringRef descRef =
+        ca::str::Utf8StringRef::from_cstr(field.fieldDesc.c_str());
+    const char        fieldTag = descRef.data() != nullptr && descRef.byte_length() > 0
+                                     ? static_cast<char>(descRef.data()[0])
+                                     : 'L';
+    const char*       family   = jniCallFamily(fieldTag);
+    const std::string idx      = ca::str::format_std("{}", globalSiteIndex);
+    const std::string clsVar   = "_mj2x_indy_direct_cls_" + idx;
+    const std::string fidVar   = "_mj2x_indy_direct_fid_" + idx;
+    const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+
+    bool helperOk = true;
+    out.iff(indyDirectGuardCondition(globalSiteIndex),
+            [&](CSourceStream& o) {
+                std::string recvVar;
+                if (!field.isStatic) {
+                    recvVar = "_mj2x_indy_direct_recv_" + idx;
+                    o.declare_var("jobject", recvVar,
+                                  codegen::exprCast("jobject",
+                                                    codegen::exprParen(
+                                                        operandExpr(ins.args[0]).to_std_string())));
+                    o.iff(recvVar + " == NULL",
+                          [&](CSourceStream& u) {
+                              u.emitLine("_mj2x_regc_throw_null(\"indy direct field access\");");
+                              u.goto_("_mj2x_regc_cleanup");
+                          });
+                }
+                if (!field.isWrite) {
+                    const std::string access =
+                        field.isStatic
+                            ? std::string("(*_mj2x_regc_env)->GetStatic") + family +
+                                  "Field(_mj2x_regc_env, " + clsVar + ", " + fidVar + ")"
+                            : std::string("(*_mj2x_regc_env)->Get") + family +
+                                  "Field(_mj2x_regc_env, " + recvVar + ", " + fidVar + ")";
+                    o.assign(destName,
+                             jniResultCast(fieldTag, ins.dest.type).to_std_string() + access);
+                }
+                else {
+                    const RegOperand& valueOperand = field.isStatic ? ins.args[0] : ins.args[1];
+                    const std::string valueExpr =
+                        std::string(jniValueCast(fieldTag)) + "(" +
+                        operandExpr(valueOperand).to_std_string() + ")";
+                    const std::string access =
+                        field.isStatic
+                            ? std::string("(*_mj2x_regc_env)->SetStatic") + family +
+                                  "Field(_mj2x_regc_env, " + clsVar + ", " + fidVar + ", " +
+                                  valueExpr + ")"
+                            : std::string("(*_mj2x_regc_env)->Set") + family +
+                                  "Field(_mj2x_regc_env, " + recvVar + ", " + fidVar + ", " +
+                                  valueExpr + ")";
+                    o.emitLine(access + ";");
+                }
+                o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+            },
+            [&](CSourceStream& o) {
+                helperOk = emitIndyHelperCall(o, ins, site, globalSiteIndex, reason);
+            });
+    return helperOk;
+}
+
+/// F2（RecordObjectMethods）getter 直派发射：访问器 invokestatic/virtual 直调。
+/// receiver 形态与访问器 tag 由判定载荷给出；参数经 jvalue 数组 marshalling，返回
+/// 按访问器描述符的 JNI 变体取回（等价既有 cached call 面）。无可直派访问器时
+/// （javac equals/hashCode/toString 等 ObjectMethods 内建语义）整体落既有 helper
+/// 路径——与现状逐字节一致，零回归。
+bool emitIndyDirectRecordCall(CSourceStream& out, const RegInstruction& ins,
+                              const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                              std::string& reason)
+{
+    const IndyRecordMethods& record = *site.recordMethods;
+    if (!record.accessor.has_value()) {
+        return emitIndyHelperCall(out, ins, site, globalSiteIndex, reason);
+    }
+    const IndyRecordMethods::Accessor& accessor = *record.accessor;
+
+    const ca::str::Utf8StringRef descRef =
+        ca::str::Utf8StringRef::from_cstr(accessor.desc.c_str());
+    const std::vector<char> paramTags     = descriptorParamTags(descRef);
+    const char              returnTag     = descriptorReturnTag(descRef);
+    const bool              staticAccessor = accessor.tag == Opcodes::H_INVOKESTATIC;
+
+    // 发射期载荷自洽复核（非判定）：参数个数与访问器形态一致。
+    const size_t expectedArgs = paramTags.size() + (staticAccessor ? 0u : 1u);
+    if (ins.args.size() != expectedArgs) {
+        reason = "indy direct record accessor arg count mismatch";
+        return false;
+    }
+
+    const std::string idx    = ca::str::format_std("{}", globalSiteIndex);
+    const std::string clsVar = "_mj2x_indy_direct_cls_" + idx;
+    const std::string midVar = "_mj2x_indy_direct_mid_" + idx;
+    const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+
+    bool helperOk = true;
+    out.iff(indyDirectGuardCondition(globalSiteIndex),
+            [&](CSourceStream& o) {
+                size_t      firstArg = 0;
+                std::string recvVar;
+                if (!staticAccessor) {
+                    recvVar = "_mj2x_indy_direct_recv_" + idx;
+                    o.declare_var("jobject", recvVar,
+                                  codegen::exprCast("jobject",
+                                                    codegen::exprParen(
+                                                        operandExpr(ins.args[0]).to_std_string())));
+                    o.iff(recvVar + " == NULL",
+                          [&](CSourceStream& u) {
+                              u.emitLine("_mj2x_regc_throw_null(\"indy direct accessor call\");");
+                              u.goto_("_mj2x_regc_cleanup");
+                          });
+                    firstArg = 1;
+                }
+                const std::string vaVar = "_mj2x_indy_direct_va_" + idx;
+                if (paramTags.empty()) {
+                    // 无参形态：MethodA 传 NULL，不声明 jvalue 数组。
+                }
+                else {
+                    o.declare_var("jvalue",
+                                  ca::str::format_std("{}[{}]", vaVar, paramTags.size()));
+                    for (size_t i = 0; i < paramTags.size(); ++i) {
+                        o.assign(ca::str::format_std("{}[{}].{}", vaVar, i,
+                                                     jvalueSlotName(paramTags[i])),
+                                 std::string(jniValueCast(paramTags[i])) + "(" +
+                                     operandExpr(ins.args[firstArg + i]).to_std_string() + ")");
+                    }
+                }
+                const std::string call =
+                    std::string("(*_mj2x_regc_env)->Call") + (staticAccessor ? "Static" : "") +
+                    jniCallFamily(returnTag) + "MethodA(_mj2x_regc_env, " +
+                    (staticAccessor ? clsVar : recvVar) + ", " + midVar + ", " +
+                    (paramTags.empty() ? std::string("NULL") : vaVar) + ")";
+                if (ins.hasDest) {
+                    o.assign(destName,
+                             jniResultCast(returnTag, ins.dest.type).to_std_string() + call);
+                }
+                else {
+                    o.emitLine(call + ";");
+                }
+                o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+            },
+            [&](CSourceStream& o) {
+                helperOk = emitIndyHelperCall(o, ins, site, globalSiteIndex, reason);
+            });
+    return helperOk;
+}
+
+}   // namespace
+
+/// invokedynamic 站点直派发射（设计文档 §6 P2）：F1 字段读/写、F2 record 访问器。
+/// build-time 判定形态且载荷 engage 时发单分支守卫直派桩；其余（RuntimeHelper /
+/// StaticExpanded / 载荷未 engage）全部落回现状 helper 路径。
+bool emitIndyDirectCall(CSourceStream& out, const RegInstruction& ins,
+                        const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                        std::string& reason)
+{
+    if (site.form == IndyDispatchForm::DirectFieldAccess && site.directField.has_value()) {
+        return emitIndyDirectFieldCall(out, ins, site, globalSiteIndex, reason);
+    }
+    if (site.form == IndyDispatchForm::RecordObjectMethods && site.recordMethods.has_value()) {
+        return emitIndyDirectRecordCall(out, ins, site, globalSiteIndex, reason);
+    }
+    return emitIndyHelperCall(out, ins, site, globalSiteIndex, reason);
+}
+
+/// 发射一个 invokedynamic 站点调用：入口按站点派发形态分派（P2），直派形态走
+/// emitIndyDirectCall，其余走既有 helper 路径（发射文本与现状逐字节一致）。
+bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
+                       const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                       std::string& reason)
+{
+    return emitIndyDirectCall(out, ins, site, globalSiteIndex, reason);
 }
 
 bool validateRegCNoStackAnchors(const std::string& source, std::string& reason)

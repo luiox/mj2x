@@ -1225,6 +1225,107 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
     out.append(src.build());
 }
 
+/// 发射 indy 直派站点（F1/F2）的 TU 级缓存表 + 惰性解析函数（设计文档 §3.1/§6 P3）。
+///
+/// 只处理 build-time 判定成功且载荷 engage 的站点——判定失败的站点根本不发直派缓存。
+/// 「发射即 READY」指判定面（无 CRACK/bootstrap 重放态）；jclass/jfieldID/jmethodID 是
+/// 运行期句柄无法静态初始化，首调用经 resolve 函数解析一次：成功置 state=READY(1)，
+/// 失败 ExceptionClear 后置 state=HELPER(2)，之后每次调用守卫短路直达既有 helper
+/// 路径（§4 单调降级，无语义分叉）。owner/name/desc 字面量在 --strings-encrypt 开启时
+/// 走密文缓冲（与 emitIndyBsmArg 同一处理）。类经 NewGlobalRef 持有（阻止卸载——与
+/// 既有 indy target 缓存同一权衡，见设计文档 §3.1 失效语义）。
+void emitIndyDirectCache(ca::str::Utf8StringBuilder& out,
+                         const std::vector<RegFunction::InvokeDynamicSite>& sites,
+                         RegCCachePool* stringEncryptPool)
+{
+    // 字面量表达式：加密开启走密文缓冲引用（finalize 头部批量解密），否则明文字面量。
+    auto literalExpr = [stringEncryptPool](const std::string& text) -> std::string {
+        return stringEncryptPool != nullptr ? stringEncryptPool->encryptedLiteralBuffer(text)
+                                            : codegen::cStringLiteral(text);
+    };
+
+    for (size_t i = 0; i < sites.size(); ++i) {
+        const auto& site    = sites[i];
+        const bool  isField = site.form == IndyDispatchForm::DirectFieldAccess &&
+                             site.directField.has_value();
+        const bool isRecord = site.form == IndyDispatchForm::RecordObjectMethods &&
+                              site.recordMethods.has_value() &&
+                              site.recordMethods->accessor.has_value();
+        if (!isField && !isRecord) continue;
+
+        const std::string idx = std::to_string(i);
+        const std::string owner =
+            isField ? site.directField->owner : site.recordMethods->accessor->owner;
+
+        CSourceStream src;
+        if (isField) {
+            const IndyDirectField& field = *site.directField;
+            src.emitLine("// invokedynamic direct site " + idx + ": " +
+                         std::string(field.isWrite ? "put" : "get") +
+                         (field.isStatic ? "static " : "field ") + field.owner + "." + field.name +
+                         ":" + field.fieldDesc + " (build-time READY)");
+            src.emitLine("static jclass _mj2x_indy_direct_cls_" + idx + ";");
+            src.emitLine("static jfieldID _mj2x_indy_direct_fid_" + idx + ";");
+        }
+        else {
+            const IndyRecordMethods::Accessor& accessor = *site.recordMethods->accessor;
+            src.emitLine("// invokedynamic direct site " + idx + ": record accessor " +
+                         accessor.owner + "." + accessor.name + accessor.desc +
+                         " (build-time READY)");
+            src.emitLine("static jclass _mj2x_indy_direct_cls_" + idx + ";");
+            src.emitLine("static jmethodID _mj2x_indy_direct_mid_" + idx + ";");
+        }
+        src.emitLine("static uint8_t _mj2x_indy_direct_state_" + idx + ";");
+        src.emitLine("static int _mj2x_indy_direct_resolve_" + idx + "(void) {");
+        {
+            CSourceStream::IndentGuard g(src);
+            // state: 0=未解析（惰性首解析）1=READY 2=HELPER（永久回退，直接短路）。
+            src.emitLine("if (_mj2x_indy_direct_state_" + idx + " != 0u) {");
+            src.emitLine("    return _mj2x_indy_direct_state_" + idx + " == 1u;");
+            src.emitLine("}");
+            src.emitLine("jclass cls = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, "
+                         "(jclass)_mj2x_regc_find_class(" +
+                         literalExpr(owner) + "));");
+            src.emitLine("if (cls == NULL) {");
+            src.emitLine("    if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) "
+                         "(*_mj2x_regc_env)->ExceptionClear(_mj2x_regc_env);");
+            src.emitLine("    _mj2x_indy_direct_state_" + idx + " = 2u;");
+            src.emitLine("    return 0;");
+            src.emitLine("}");
+            if (isField) {
+                const IndyDirectField& field = *site.directField;
+                src.emitLine(std::string("jfieldID handle = (*_mj2x_regc_env)->") +
+                             (field.isStatic ? "GetStaticFieldID" : "GetFieldID") +
+                             "(_mj2x_regc_env, cls, " + literalExpr(field.name) + ", " +
+                             literalExpr(field.fieldDesc) + ");");
+            }
+            else {
+                const IndyRecordMethods::Accessor& accessor = *site.recordMethods->accessor;
+                src.emitLine(std::string("jmethodID handle = (*_mj2x_regc_env)->") +
+                             (accessor.tag == Opcodes::H_INVOKESTATIC ? "GetStaticMethodID"
+                                                                      : "GetMethodID") +
+                             "(_mj2x_regc_env, cls, " + literalExpr(accessor.name) + ", " +
+                             literalExpr(accessor.desc) + ");");
+            }
+            src.emitLine("if (handle == NULL) {");
+            src.emitLine("    if ((*_mj2x_regc_env)->ExceptionCheck(_mj2x_regc_env)) "
+                         "(*_mj2x_regc_env)->ExceptionClear(_mj2x_regc_env);");
+            src.emitLine("    (*_mj2x_regc_env)->DeleteGlobalRef(_mj2x_regc_env, cls);");
+            src.emitLine("    _mj2x_indy_direct_state_" + idx + " = 2u;");
+            src.emitLine("    return 0;");
+            src.emitLine("}");
+            src.emitLine("_mj2x_indy_direct_cls_" + idx + " = cls;");
+            src.emitLine(isField ? "_mj2x_indy_direct_fid_" + idx + " = handle;"
+                                 : "_mj2x_indy_direct_mid_" + idx + " = handle;");
+            src.emitLine("_mj2x_indy_direct_state_" + idx + " = 1u;");
+            src.emitLine("return 1;");
+        }
+        src.emitLine("}");
+        src.emitBlankLine();
+        out.append(src.build());
+    }
+}
+
 }   // namespace
 
 /// @brief 生成代码后处理器：拆分多文件模式（--emit-native-dir）用的文本改写。
@@ -1446,6 +1547,11 @@ void RegCBackend::finalize(const CompilerIndex& index)
             full.append("\n");
         }
     }
+    // indy 直派缓存表（F1/F2，P3）：TU 级 static + 惰性解析函数，插在方法体之前；
+    // 置于密文缓冲定义之后——解析函数在 --strings-encrypt 下引用 _mj2x_str_<hash>，
+    // 保证声明先于使用。方法体的直派守卫/快路引用此处定义的 state/cls/fid/mid。
+    emitIndyDirectCache(full, impl_->indySites,
+                        impl_->cachePool.stringsEncryptEnabled() ? &impl_->cachePool : nullptr);
     full.append(emittedSource.data(), emittedSource.size());
 
     // resolved native dispatch 定义（表 + 帮手）追加在所有方法体之后；前向声明

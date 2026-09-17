@@ -29,6 +29,10 @@ struct RegFunction
         std::string                            name, desc;
         std::optional<jbytecode::core::Handle> bsm;
         std::vector<ca::core::Any>             bsmArgs;
+        /// 静态派发形态与直派载荷（值拷贝自 SSAFunction::indySites，发射端只消费）。
+        IndyDispatchForm                       form = IndyDispatchForm::RuntimeHelper;
+        std::optional<IndyDirectField>         directField;
+        std::optional<IndyRecordMethods>       recordMethods;
     };
     std::vector<InvokeDynamicSite> indySites;
 

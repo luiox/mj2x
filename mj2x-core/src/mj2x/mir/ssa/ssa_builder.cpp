@@ -1,5 +1,6 @@
 #include "ssa_builder.hpp"
 #include "mj2x/frontend/type_utils.hpp"
+#include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 
 #include <cassert>
 #include <algorithm>
@@ -1121,6 +1122,14 @@ bool lowerInvokeDynamic(const MIRInvokeDynamic* indy, LowerCtx& d, std::string& 
     site.desc    = indy->desc.to_std_string();
     site.bsm     = indy->bsm;
     site.bsmArgs = indy->bsmArgs;
+    // indy native dispatch（设计文档 §6 P1）：站点级判定填充直派载荷（与
+    // classifyIndySite 同一判定主体，判定单源）。只填载荷不改写行为；
+    // RuntimeHelper / 载荷未 engage 的站点发射端走既有阶段3 helper 路径。
+    const IndyDispatchPayload payload =
+        classifyIndySiteForm(d.arena, site.name, site.desc, indy->bsm, indy->bsmArgs);
+    site.form          = payload.form;
+    site.directField   = payload.directField;
+    site.recordMethods = payload.recordMethods;
     const size_t siteIndex = d.fn.indySites.size();
     d.fn.indySites.push_back(std::move(site));
 

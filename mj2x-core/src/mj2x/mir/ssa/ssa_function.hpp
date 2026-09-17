@@ -8,6 +8,7 @@
 #include "ssa_value.hpp"
 
 #include "jbytecode/core/primitives.hpp"
+#include "mj2x/mir/indy_dispatch.hpp"
 
 #include <memory>
 #include <optional>
@@ -78,6 +79,11 @@ struct SSAFunction
         std::string                          name, desc;
         std::optional<jbytecode::core::Handle> bsm;
         std::vector<ca::core::Any>           bsmArgs;
+        /// 静态派发形态与直派载荷（classifyIndySiteForm 在 SSA 登记时判定填充，
+        /// 值拷贝透传到 RegIR；后端按 form 查表发射，零判定逻辑）。
+        IndyDispatchForm                     form = IndyDispatchForm::RuntimeHelper;
+        std::optional<IndyDirectField>       directField;
+        std::optional<IndyRecordMethods>     recordMethods;
     };
     std::vector<InvokeDynamicSite> indySites;
 

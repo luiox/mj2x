@@ -315,13 +315,17 @@ std::unique_ptr<RegFunction> RegLowering::lower(const SSAFunction& fn, std::stri
 {
     auto reg    = std::make_unique<RegFunction>();
     reg->symbol = fn.symbol;
-    // 值拷贝 indy 站点元数据（std::string/Any 值语义，不依赖 SSA arena）。
+    // 值拷贝 indy 站点元数据（std::string/Any 值语义，不依赖 SSA arena）；
+    // 派发形态与直派载荷一并透传（发射端只消费，零判定逻辑）。
     for (const auto& site : fn.indySites) {
         RegFunction::InvokeDynamicSite copied;
-        copied.name    = site.name;
-        copied.desc    = site.desc;
-        copied.bsm     = site.bsm;
-        copied.bsmArgs = site.bsmArgs;
+        copied.name          = site.name;
+        copied.desc          = site.desc;
+        copied.bsm           = site.bsm;
+        copied.bsmArgs       = site.bsmArgs;
+        copied.form          = site.form;
+        copied.directField   = site.directField;
+        copied.recordMethods = site.recordMethods;
         reg->indySites.push_back(std::move(copied));
     }
 

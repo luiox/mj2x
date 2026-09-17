@@ -379,7 +379,7 @@ TEST(StackCUserIntrinsicTest, InstanceCallSiteWithoutPassReceiverStillJniDispatc
     auto result = emitStackCInstance({makeUserEntry()});
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
     EXPECT_EQ(result.text.find("my_m("), std::string::npos) << result.text;
-    EXPECT_NE(result.text.find("CallIntMethod(env, lc, mid_local"), std::string::npos)
+    EXPECT_NE(result.text.find("CallIntMethod(env, s[0].l, mid_local"), std::string::npos)
         << result.text;
 }
 
@@ -496,8 +496,10 @@ std::unique_ptr<VmProgram> encodeInstanceWithUsers(const std::vector<UserIntrins
     CodeConverter            converter(arena);
     auto                     blocks = converter.convert(*mn);
     SSABuilder               builder;
+    // isStatic=false：实例布局 fixture（this@0 + 2 参），与 RegC 实例 helper
+    // 对齐——传 true 会少建 receiver 参数，locals[3] 落 undef 拒绝编码。
     auto ssa = builder.build(blocks, "UserIntrinsicVmc4", mn->name.to_std_string(),
-                             mn->desc.to_std_string(), true, mn->maxLocals, arena, reason);
+                             mn->desc.to_std_string(), false, mn->maxLocals, arena, reason);
     if (!ssa) return nullptr;
     RegLowering lowering;
     auto        reg = lowering.lower(*ssa, reason);

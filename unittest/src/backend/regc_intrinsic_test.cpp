@@ -1628,10 +1628,13 @@ TEST(RegCIntrinsicTest, IntegerValueOfIntValueLoweredToNativeWrapper)
         << result.source;
 }
 
-TEST(RegCIntrinsicTest, EscapingWrapperValueFallsBackToJavaObject)
+TEST(RegCIntrinsicTest, EscapingWrapperValueUsesCachedBoxHelper)
 {
     std::string reason;
     // static Object boxed(int x) { return Integer.valueOf(x); }
+    // #887 O3 装箱缓存（a0e0c021d）：逃逸装箱走 _mj2x_regc_box_i32 缓存 helper
+    // （JLS 5.1.7 恒一性），不再回落通用 valueOf JNI 派发；执行级语义由
+    // RegCSafeEnvE2E 数值断言覆盖。
     auto result = emitRegC("boxedObject",
                            "(I)Ljava/lang/Object;",
                            {
@@ -1647,8 +1650,9 @@ TEST(RegCIntrinsicTest, EscapingWrapperValueFallsBackToJavaObject)
                            1,
                            reason);
     ASSERT_TRUE(result.ok) << result.reason;
-    EXPECT_NE(result.source.find("java/lang/Integer"), std::string::npos) << result.source;
-    EXPECT_NE(result.source.find("valueOf"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_box_i32("), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("java/lang/Integer"), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("valueOf"), std::string::npos) << result.source;
     EXPECT_EQ(result.source.find("mj2x_int native_r"), std::string::npos) << result.source;
 }
 

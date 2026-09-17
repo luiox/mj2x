@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "mj2x/core/compiler_index.hpp"
+#include "mj2x/mir/indy_dispatch.hpp"
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
@@ -335,6 +336,135 @@ TEST(IndyDispatchClassifyTest, FieldGetterTypeMismatchFallsBack)
     EXPECT_EQ(d.form, IndyDispatchForm::RuntimeHelper);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field handle impl outside strict direct-access subset");
+}
+
+// ---- F1/F2 直派载荷 engagement（波次二 P1，发射端只消费载荷）----
+
+// F1 直派形态：indy 描述符本身即字段读（()I 对 GETSTATIC SV:I）→ form 不变、
+// 载荷 engage（isStatic/isWrite/owner/name/fieldDesc 供发射端直接发射字段访问）。
+TEST(IndyDispatchClassifyTest, DirectFieldGetterShapeEngagesPayload)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    auto impl = Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
+                       arena.intern("I"));
+    auto* indy = makeIndy(index, "get", "()I", lmfBsm(index, "metafactory"),
+                          lambdaBsmArgs(index, "()I", impl, "()I"));
+
+    auto d = classifyIndySite(index, indy);
+    EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
+    EXPECT_STREQ(d.reason,
+                 "lambda-metafactory field getter (GETSTATIC): direct field access site "
+                 "(descriptor-shaped)");
+    ASSERT_TRUE(d.directField.has_value());
+    EXPECT_TRUE(d.directField->isStatic);
+    EXPECT_FALSE(d.directField->isWrite);
+    EXPECT_EQ(d.directField->owner, "p/Rec");
+    EXPECT_EQ(d.directField->name, "SV");
+    EXPECT_EQ(d.directField->fieldDesc, "I");
+    EXPECT_FALSE(d.recordMethods.has_value());
+}
+
+// F1 直派形态（写）：indy 描述符 (Lp/Rec;I)V 对 PUTFIELD f:I → 载荷 engage（isWrite）。
+TEST(IndyDispatchClassifyTest, DirectFieldSetterShapeEngagesPayload)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    auto impl = Handle(Opcodes::H_PUTFIELD, arena.intern("p/Rec"), arena.intern("f"),
+                       arena.intern("I"));
+    auto* indy = makeIndy(index, "set", "(Lp/Rec;I)V", lmfBsm(index, "metafactory"),
+                          lambdaBsmArgs(index, "(I)V", impl, "(I)V"));
+
+    auto d = classifyIndySite(index, indy);
+    EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
+    EXPECT_STREQ(d.reason,
+                 "lambda-metafactory field setter (PUTFIELD): direct field access site "
+                 "(descriptor-shaped)");
+    ASSERT_TRUE(d.directField.has_value());
+    EXPECT_FALSE(d.directField->isStatic);
+    EXPECT_TRUE(d.directField->isWrite);
+    EXPECT_EQ(d.directField->owner, "p/Rec");
+    EXPECT_EQ(d.directField->name, "f");
+    EXPECT_EQ(d.directField->fieldDesc, "I");
+}
+
+// F1 lambda 捕获形态（站点=创建函数接口实例，indy 返回 Lp/Sup;）：form 保持
+// DirectFieldAccess（波次一候选标记，reason 逐字不变），载荷不 engage——发射端
+// 走既有 helper 路径（零回归边界）。
+TEST(IndyDispatchClassifyTest, LambdaCaptureFieldHandleKeepsCandidateWithoutPayload)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    auto impl = Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
+                       arena.intern("I"));
+    auto* indy = makeIndy(index, "get", "()Lp/Sup;", lmfBsm(index, "metafactory"),
+                          lambdaBsmArgs(index, "()I", impl, "()I"));
+
+    auto d = classifyIndySite(index, indy);
+    EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
+    EXPECT_STREQ(d.reason,
+                 "lambda-metafactory field getter (GETSTATIC): direct field access candidate");
+    EXPECT_FALSE(d.directField.has_value());
+    EXPECT_FALSE(d.recordMethods.has_value());
+}
+
+// F2 访问器直派载荷：indy 名/描述符与唯一访问器句柄逐位一致（x (Lp/Point;)I ←
+// H_INVOKEVIRTUAL p/Point.x()I）→ accessor engage（tag/owner/name/desc）。
+TEST(IndyDispatchClassifyTest, RecordAccessorMatchEngagesAccessorPayload)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(std::string("x"));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
+                                arena.intern("x"), arena.intern("()I")));
+    auto* indy =
+        makeIndy(index, "x", "(Lp/Point;)I", recordObjectMethodsBsm(index), std::move(bsmArgs));
+
+    auto d = classifyIndySite(index, indy);
+    EXPECT_EQ(d.form, IndyDispatchForm::RecordObjectMethods);
+    EXPECT_STREQ(d.reason, "record ObjectMethods.bootstrap: statically nameable accessor targets");
+    ASSERT_TRUE(d.recordMethods.has_value());
+    EXPECT_EQ(d.recordMethods->recordClass, "p/Point");
+    EXPECT_EQ(d.recordMethods->names, "x");
+    EXPECT_EQ(d.recordMethods->methodsDesc, "(Lp/Point;)I");
+    ASSERT_TRUE(d.recordMethods->accessor.has_value());
+    EXPECT_EQ(d.recordMethods->accessor->tag, Opcodes::H_INVOKEVIRTUAL);
+    EXPECT_EQ(d.recordMethods->accessor->owner, "p/Point");
+    EXPECT_EQ(d.recordMethods->accessor->name, "x");
+    EXPECT_EQ(d.recordMethods->accessor->name, indy->name.to_std_string());
+    EXPECT_EQ(d.recordMethods->accessor->desc, "()I");
+    EXPECT_FALSE(d.directField.has_value());
+}
+
+// F2 ObjectMethods 保留方法名（javac equals/hashCode/toString：target 是多组件
+// 聚合运算，非单一访问器调用）→ form 不变、accessor 不 engage（发射端走 helper）。
+TEST(IndyDispatchClassifyTest, ReservedObjectMethodsNameKeepsHelperFallbackPayload)
+{
+    CompilerIndex index;
+    auto&         arena = index.arena();
+
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(std::string("x;y"));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
+                                arena.intern("x"), arena.intern("()I")));
+    auto* indy = makeIndy(index, "hashCode", "(Lp/Point;)I", recordObjectMethodsBsm(index),
+                          std::move(bsmArgs));
+
+    auto d = classifyIndySite(index, indy);
+    EXPECT_EQ(d.form, IndyDispatchForm::RecordObjectMethods);
+    EXPECT_STREQ(d.reason, "record ObjectMethods.bootstrap: statically nameable accessor targets");
+    ASSERT_TRUE(d.recordMethods.has_value());
+    EXPECT_FALSE(d.recordMethods->accessor.has_value());
+    EXPECT_FALSE(d.directField.has_value());
 }
 
 // ---- B4/T2：LMF 展开子集外的 fallback（RuntimeHelper + 分类理由）----

@@ -219,12 +219,13 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
     return true;
 }
 
-// 判断 indy 是否为 StringConcatFactory 站点，并区分 makeConcat / makeConcatWithConstants。
+// 判断 bsm 是否为 StringConcatFactory 站点，并区分 makeConcat / makeConcatWithConstants。
 // 返回 true 时通过 outWithConstants 输出是否带常量。
-bool isStringConcatSite(const InvokeDynamicInsnNode* indy, bool& outWithConstants)
+bool isStringConcatSite(const Handle* bsm, bool& outWithConstants)
 {
-    const std::string bsmOwner = toStd(indy->bsm.getOwner());
-    const std::string bsmName  = toStd(indy->bsm.getName());
+    if (bsm == nullptr) return false;
+    const std::string bsmOwner = toStd(bsm->getOwner());
+    const std::string bsmName  = toStd(bsm->getName());
     if (bsmOwner != "java/lang/invoke/StringConcatFactory") return false;
     if (bsmName == "makeConcatWithConstants") {
         outWithConstants = true;
@@ -451,13 +452,14 @@ struct AltLambdaInfo
     std::vector<std::string> bridgeDescs;    // 额外发射的 SAM 桥接方法描述符
 };
 
-// 判断 indy 是否为 LambdaMetafactory 站点（阶段2 起认 metafactory；阶段2e 起也认
+// 判断 bsm 是否为 LambdaMetafactory 站点（阶段2 起认 metafactory；阶段2e 起也认
 // altMetafactory——后者带 serializable / marker interface / bridge 等额外标志，尾部由
 // parseAltMetafactoryTail 解析）。
-bool isLambdaMetafactorySite(const InvokeDynamicInsnNode* indy)
+bool isLambdaMetafactorySite(const Handle* bsm)
 {
-    if (toStd(indy->bsm.getOwner()) != "java/lang/invoke/LambdaMetafactory") return false;
-    const std::string name = toStd(indy->bsm.getName());
+    if (bsm == nullptr) return false;
+    if (toStd(bsm->getOwner()) != "java/lang/invoke/LambdaMetafactory") return false;
+    const std::string name = toStd(bsm->getName());
     return name == "metafactory" || name == "altMetafactory";
 }
 
@@ -465,11 +467,12 @@ bool isLambdaMetafactorySite(const InvokeDynamicInsnNode* indy)
 // [3]=flags:int，随后按 flag 位跟 markerCount+markers、bridgeCount+bridges）。metafactory
 // 站点无尾部，直接返回 true 且 out 为空。任何形态异常（未知 flag 位、缺计数、类型不符）
 // 返回 false → 交 SSA fail-closed，绝不静默降级。
-bool parseAltMetafactoryTail(const InvokeDynamicInsnNode* indy, AltLambdaInfo& out)
+bool parseAltMetafactoryTail(const Handle& bsm, const std::vector<ca::core::Any>& bsmArgs,
+                             AltLambdaInfo& out)
 {
-    if (toStd(indy->bsm.getName()) != "altMetafactory") return true;   // metafactory：无尾部
-    if (indy->bsmArgs.size() < 4) return false;
-    auto* flagsPtr = indy->bsmArgs[3].as<int>();
+    if (toStd(bsm.getName()) != "altMetafactory") return true;   // metafactory：无尾部
+    if (bsmArgs.size() < 4) return false;
+    auto* flagsPtr = bsmArgs[3].as<int>();
     if (!flagsPtr) return false;
     const int flags = *flagsPtr;
     // 只认已知 flag 位；出现未知位（如未来扩展）保守 fail-closed。
@@ -481,8 +484,8 @@ bool parseAltMetafactoryTail(const InvokeDynamicInsnNode* indy, AltLambdaInfo& o
 
     size_t pos      = 4;
     auto   readCount = [&](int& cnt) -> bool {
-        if (pos >= indy->bsmArgs.size()) return false;
-        auto* p = indy->bsmArgs[pos].as<int>();
+        if (pos >= bsmArgs.size()) return false;
+        auto* p = bsmArgs[pos].as<int>();
         if (!p || *p < 0) return false;
         cnt = *p;
         ++pos;
@@ -492,8 +495,8 @@ bool parseAltMetafactoryTail(const InvokeDynamicInsnNode* indy, AltLambdaInfo& o
         int cnt = 0;
         if (!readCount(cnt)) return false;
         for (int i = 0; i < cnt; ++i) {
-            if (pos >= indy->bsmArgs.size()) return false;
-            auto* mk = indy->bsmArgs[pos].as<Type>();   // CONSTANT_Class → Type(OBJECT)
+            if (pos >= bsmArgs.size()) return false;
+            auto* mk = bsmArgs[pos].as<Type>();   // CONSTANT_Class → Type(OBJECT)
             if (!mk || mk->getSort() != Type::OBJECT) return false;
             out.markerIfaces.push_back(toStd(mk->getInternalName()));
             ++pos;
@@ -503,8 +506,8 @@ bool parseAltMetafactoryTail(const InvokeDynamicInsnNode* indy, AltLambdaInfo& o
         int cnt = 0;
         if (!readCount(cnt)) return false;
         for (int i = 0; i < cnt; ++i) {
-            if (pos >= indy->bsmArgs.size()) return false;
-            auto* br = indy->bsmArgs[pos].as<Type>();   // CONSTANT_MethodType → Type(METHOD)
+            if (pos >= bsmArgs.size()) return false;
+            auto* br = bsmArgs[pos].as<Type>();   // CONSTANT_MethodType → Type(METHOD)
             if (!br || br->getSort() != Type::METHOD) return false;
             out.bridgeDescs.push_back(toStd(br->getDescriptor()));
             ++pos;
@@ -575,14 +578,12 @@ bool canEmitSam(ca::str::Utf8StringArena& arena, const std::string& samDesc,
 // ---- indy native dispatch 静态判定（设计见 doc_ai/indy_native_dispatch_design.md §2）----
 
 /// lambda 站点静态展开前置判定（阶段2a-2f 支持子集）。expandLambdaSite 与
-/// classifyIndySite 共用同一谓词，保证「判定结果 = 展开行为」零漂移。
-/// 失败时经 outReason 输出稳定理由字面量（可为 null）。
-bool lambdaExpansionPrecondition(CompilerIndex& index, const InvokeDynamicInsnNode* indy,
+/// classifyIndySite / classifyIndySiteForm 共用同一谓词，保证「判定结果 = 展开行为」
+/// 零漂移。失败时经 outReason 输出稳定理由字面量（可为 null）。
+bool lambdaExpansionPrecondition(ca::str::Utf8StringArena& arena, const std::string& indyDesc,
+                                 const Handle& bsm, const std::vector<ca::core::Any>& bsmArgs,
                                  const char** outReason = nullptr)
 {
-    auto& arena = index.arena();
-
-    const std::string indyDesc      = toStd(indy->desc);
     std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
 
     // functional interface = indy 返回类型（须是对象类型）。
@@ -593,12 +594,12 @@ bool lambdaExpansionPrecondition(CompilerIndex& index, const InvokeDynamicInsnNo
     }
 
     // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle)。
-    if (indy->bsmArgs.size() < 2) {
+    if (bsmArgs.size() < 2) {
         if (outReason) *outReason = "lambda-metafactory: bsmArgs missing sam/impl";
         return false;
     }
-    auto* samTypePtr = indy->bsmArgs[0].as<Type>();
-    auto* implPtr    = indy->bsmArgs[1].as<Handle>();
+    auto* samTypePtr = bsmArgs[0].as<Type>();
+    auto* implPtr    = bsmArgs[1].as<Handle>();
     if (!samTypePtr || !implPtr) {
         if (outReason) *outReason = "lambda-metafactory: bsmArgs[0]/[1] wrong constant type";
         return false;
@@ -625,7 +626,7 @@ bool lambdaExpansionPrecondition(CompilerIndex& index, const InvokeDynamicInsnNo
 
     // 阶段2e：解析 altMetafactory 尾部（flags/markers/bridges）。metafactory 站点 alt 为空。
     AltLambdaInfo alt;
-    if (!parseAltMetafactoryTail(indy, alt)) {
+    if (!parseAltMetafactoryTail(bsm, bsmArgs, alt)) {
         if (outReason)
             *outReason = "lambda-metafactory: altMetafactory tail parse failed (unknown flags / shape)";
         return false;
@@ -651,32 +652,138 @@ bool lambdaExpansionPrecondition(CompilerIndex& index, const InvokeDynamicInsnNo
 }
 
 /// record（java/lang/runtime/ObjectMethods.bootstrap）站点识别（判定树 C 分支）。
-bool isRecordObjectMethodsSite(const InvokeDynamicInsnNode* indy)
+bool isRecordObjectMethodsSite(const Handle* bsm)
 {
-    return toStd(indy->bsm.getOwner()) == "java/lang/runtime/ObjectMethods" &&
-           toStd(indy->bsm.getName()) == "bootstrap";
+    return bsm != nullptr && toStd(bsm->getOwner()) == "java/lang/runtime/ObjectMethods" &&
+           toStd(bsm->getName()) == "bootstrap";
 }
 
-/// record bootstrap bsmArgs 形态校验：[0]=Class（recordClass）、[1]=String（方法名集）、
-/// [2]=MethodType（方法描述符集）；其后是 0..n 个访问器句柄（数量不校验——判定只需证明
-/// target 可由 recordClass+names 静态命名，句柄清单是发射期载荷）。
-bool recordBsmArgsWellFormed(const InvokeDynamicInsnNode* indy)
+/// ObjectMethods.bootstrap 保留方法名：JDK 内建 equals/hashCode/toString 语义
+/// （target 是多组件聚合运算，非单一访问器调用），直派不可证明，保持 helper。
+bool isReservedObjectMethodsName(const std::string& name)
 {
-    if (indy->bsmArgs.size() < 3) return false;
-    auto* recordCls = indy->bsmArgs[0].as<Type>();
+    return name == "toString" || name == "hashCode" || name == "equals";
+}
+
+/// F2 直派访问器匹配：bsmArgs[3..] 中唯一名字等于 indy 名的句柄，且 tag 受支持、
+/// 调用布局与 indy 描述符逐位一致（含返回类型精确一致、实例访问器 receiver 描述符
+/// 精确等于声明类）。任一不满足 → nullopt（发射端走 helper，宁窄勿宽）。
+std::optional<IndyRecordMethods::Accessor> matchRecordAccessor(
+    ca::str::Utf8StringArena& arena, const std::string& indyName, const std::string& indyDesc,
+    const std::vector<ca::core::Any>& bsmArgs)
+{
+    if (isReservedObjectMethodsName(indyName)) return std::nullopt;
+
+    std::vector<const Handle*> matches;
+    for (size_t i = 3; i < bsmArgs.size(); ++i) {
+        auto* h = bsmArgs[i].as<Handle>();
+        if (h != nullptr && toStd(h->getName()) == indyName) matches.push_back(h);
+    }
+    if (matches.size() != 1) return std::nullopt;
+    const Handle& handle = *matches[0];
+
+    const int tag = handle.getTag();
+    if (tag != Opcodes::H_INVOKESTATIC && tag != Opcodes::H_INVOKEVIRTUAL &&
+        tag != Opcodes::H_INVOKEINTERFACE) {
+        return std::nullopt;
+    }
+
+    const std::string accDesc  = toStd(handle.getDesc());
+    const std::string ownerDesc = "L" + toStd(handle.getOwner()) + ";";
+    std::vector<Type> accArgs    = Type::getArgumentTypes(arena.intern(accDesc.c_str()));
+    std::vector<Type> indyArgs   = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
+    const Type        indyRet    = Type::getReturnType(arena.intern(indyDesc.c_str()));
+    const Type        accRet     = Type::getReturnType(arena.intern(accDesc.c_str()));
+    if (toStd(indyRet.getDescriptor()) != toStd(accRet.getDescriptor())) return std::nullopt;
+
+    const auto argDesc = [&arena](const Type& t) { return toStd(t.getDescriptor()); };
+    if (tag == Opcodes::H_INVOKESTATIC) {
+        if (indyArgs.size() != accArgs.size()) return std::nullopt;
+        for (size_t i = 0; i < accArgs.size(); ++i) {
+            if (argDesc(indyArgs[i]) != argDesc(accArgs[i])) return std::nullopt;
+        }
+    }
+    else {
+        // 实例访问器：indy 首参 = receiver（描述符精确等于声明类），其余逐位一致。
+        if (indyArgs.empty() || indyArgs.size() != accArgs.size() + 1) return std::nullopt;
+        if (!isReferenceSort(indyArgs[0].getSort())) return std::nullopt;
+        if (argDesc(indyArgs[0]) != ownerDesc) return std::nullopt;
+        for (size_t i = 0; i < accArgs.size(); ++i) {
+            if (argDesc(indyArgs[i + 1]) != argDesc(accArgs[i])) return std::nullopt;
+        }
+    }
+
+    IndyRecordMethods::Accessor accessor;
+    accessor.tag   = tag;
+    accessor.owner = toStd(handle.getOwner());
+    accessor.name  = toStd(handle.getName());
+    accessor.desc  = accDesc;
+    return accessor;
+}
+
+/// record bootstrap bsmArgs 形态校验 + F2 载荷提取：[0]=Class（recordClass）、
+/// [1]=String（方法名集）、[2]=MethodType（方法描述符集）；其后是 0..n 个访问器句柄。
+/// 校验语义与波次一 recordBsmArgsWellFormed 完全一致（reason 锁定不变），载荷中
+/// 附带访问器匹配结果（发射期消费）。
+bool recordMethodsPayload(ca::str::Utf8StringArena& arena, const std::string& indyName,
+                          const std::string& indyDesc, const std::vector<ca::core::Any>& bsmArgs,
+                          IndyRecordMethods& out)
+{
+    if (bsmArgs.size() < 3) return false;
+    auto* recordCls = bsmArgs[0].as<Type>();
     if (!recordCls || recordCls->getSort() != Type::OBJECT) return false;
     std::string names;
-    if (!anyAsString(indy->bsmArgs[1], names)) return false;
-    auto* methodsType = indy->bsmArgs[2].as<Type>();
-    return methodsType && methodsType->getSort() == Type::METHOD;
+    if (!anyAsString(bsmArgs[1], names)) return false;
+    auto* methodsType = bsmArgs[2].as<Type>();
+    if (!methodsType || methodsType->getSort() != Type::METHOD) return false;
+
+    out.recordClass = toStd(recordCls->getInternalName());
+    out.names       = names;
+    out.methodsDesc = toStd(methodsType->getDescriptor());
+    out.accessor    = matchRecordAccessor(arena, indyName, indyDesc, bsmArgs);
+    return true;
+}
+
+/// F1 直派形态检查：indy 调用描述符本身就是字段操作（读 = 参数空[静态]/仅 receiver
+/// [实例] 且返回==字段 desc；写 = 值/captured 布局且返回 void；receiver 描述符精确
+/// 等于声明类——宁窄勿宽，排除子类型 receiver 的分派差异）。满足即「站点调用 = 字段
+/// 访问」，发射端可把站点直接发射为 Get/PutField。
+bool lmfFieldHandleDirectShape(ca::str::Utf8StringArena& arena, const std::string& indyDesc,
+                               const Handle& impl, const std::vector<Type>& indyArgs)
+{
+    const std::string fieldDesc = toStd(impl.getDesc());
+    const std::string ownerDesc = "L" + toStd(impl.getOwner()) + ";";
+    const Type        indyRet   = Type::getReturnType(arena.intern(indyDesc.c_str()));
+    const auto        argDesc   = [&arena](const Type& t) { return toStd(t.getDescriptor()); };
+
+    switch (impl.getTag()) {
+    case Opcodes::H_GETSTATIC:
+        return indyArgs.empty() && toStd(indyRet.getDescriptor()) == fieldDesc;
+    case Opcodes::H_GETFIELD:
+        return indyArgs.size() == 1 && isReferenceSort(indyArgs[0].getSort()) &&
+               argDesc(indyArgs[0]) == ownerDesc && toStd(indyRet.getDescriptor()) == fieldDesc;
+    case Opcodes::H_PUTSTATIC:
+        return indyArgs.size() == 1 && argDesc(indyArgs[0]) == fieldDesc &&
+               indyRet.getSort() == Type::VOID;
+    default:   // H_PUTFIELD
+        return indyArgs.size() == 2 && isReferenceSort(indyArgs[0].getSort()) &&
+               argDesc(indyArgs[0]) == ownerDesc && argDesc(indyArgs[1]) == fieldDesc &&
+               indyRet.getSort() == Type::VOID;
+    }
 }
 
 /// LMF impl 句柄为字段句柄（H_GET/H_PUT × STATIC/FIELD）时的 F1 判定（设计文档 §2 B2/B3）。
-/// 返回 false = 非字段句柄（调用方继续 B1 判定）；返回 true 时 outForm/outReason 为最终结论
-///（精确一致子集内 → DirectFieldAccess，否则 RuntimeHelper 回退，不含任何适配）。
-bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const Type& samType, const Handle& impl,
+/// 返回 false = 非字段句柄（调用方继续 B1 判定）；返回 true 时 outForm/outReason 为最终结论。
+/// 两个 DirectFieldAccess 子路径：
+///   - 直派形态（indy 描述符即字段操作）→ 载荷 engage（P1），发射端把站点直接发射
+///     为字段访问（波次二直派桩的唯一 engaged 路径）；
+///   - 波次一精确一致子集（captured++sam lambda 布局，站点=创建 lambda 对象）→
+///     form 仍为 DirectFieldAccess（报告侧候选标记，reason 逐字不变），载荷不填，
+///     发射端走既有 helper 路径（零回归）。
+bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const std::string& indyDesc,
+                            const Type& samType, const Handle& impl,
                             const std::vector<Type>& capturedTypes, IndyDispatchForm& outForm,
-                            const char*& outReason)
+                            const char*& outReason, std::optional<IndyDirectField>* outPayload)
 {
     const int  tag      = impl.getTag();
     const bool isGetter = tag == Opcodes::H_GETSTATIC || tag == Opcodes::H_GETFIELD;
@@ -689,7 +796,36 @@ bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const Type& samType
     const std::string fieldDesc  = toStd(impl.getDesc());
     const std::string samRetDesc = toStd(samRet.getDescriptor());
 
-    // 精确一致子集（设计文档 §2 表）：无任何加宽/装箱适配——判定即承诺。
+    // 直派形态优先：indy 描述符即字段操作 → 判定即承诺，载荷 engage。
+    if (lmfFieldHandleDirectShape(arena, indyDesc, impl, capturedTypes)) {
+        outForm = IndyDispatchForm::DirectFieldAccess;
+        switch (tag) {
+        case Opcodes::H_GETSTATIC:
+            outReason = "lambda-metafactory field getter (GETSTATIC): direct field access site (descriptor-shaped)";
+            break;
+        case Opcodes::H_GETFIELD:
+            outReason = "lambda-metafactory field getter (GETFIELD): direct field access site (descriptor-shaped)";
+            break;
+        case Opcodes::H_PUTSTATIC:
+            outReason = "lambda-metafactory field setter (PUTSTATIC): direct field access site (descriptor-shaped)";
+            break;
+        default:
+            outReason = "lambda-metafactory field setter (PUTFIELD): direct field access site (descriptor-shaped)";
+            break;
+        }
+        if (outPayload != nullptr) {
+            IndyDirectField payload;
+            payload.isStatic  = tag == Opcodes::H_GETSTATIC || tag == Opcodes::H_PUTSTATIC;
+            payload.isWrite   = isSetter;
+            payload.owner     = toStd(impl.getOwner());
+            payload.name      = toStd(impl.getName());
+            payload.fieldDesc = fieldDesc;
+            *outPayload       = std::move(payload);
+        }
+        return true;
+    }
+
+    // 波次一精确一致子集（设计文档 §2 表）：无任何加宽/装箱适配——判定即承诺。
     const bool ok =
         isGetter
             ? (tag == Opcodes::H_GETSTATIC
@@ -728,17 +864,34 @@ bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const Type& samType
     return true;
 }
 
-/// 判定树主体（设计文档 §2）：A concat → B LMF → C record → D 自定义 bootstrap。
-/// 只读 indy 与 index，不改任何状态；结论由 expand 行为零漂移谓词支撑（B1 共用前置）。
-IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
+/// 判定树主体（设计文档 §2）的站点数据级核心：A concat → B LMF → C record → D 自定义
+/// bootstrap。只读站点自持数据（indy 名/描述符/bsm/bsmArgs），不改任何状态；结论由
+/// 展开行为零漂移谓词支撑（B1 共用前置）。classifyIndySite（报告）与
+/// classifyIndySiteForm（SSA 载荷填充）共用本核心——判定单源。
+/// customBootstrapReason：D 分支理由（D1/D2 细分需要 CompilerIndex，由调用方提供）。
+struct CoreDecision
 {
-    IndyDispatchDecision d;
-    d.indyName = toStd(indy->name);
-    d.indyDesc = toStd(indy->desc);
+    IndyDispatchForm form   = IndyDispatchForm::RuntimeHelper;
+    const char*      reason = "";
+    std::optional<IndyDirectField>   directField;
+    std::optional<IndyRecordMethods> recordMethods;
+};
+
+CoreDecision classifyCore(ca::str::Utf8StringArena& arena, const std::string& indyName,
+                          const std::string& indyDesc, const Handle* bsm,
+                          const std::vector<ca::core::Any>& bsmArgs,
+                          const char* customBootstrapReason)
+{
+    CoreDecision d;
+
+    if (bsm == nullptr) {
+        d.reason = "invokedynamic without bootstrap metadata";
+        return d;   // fail-closed
+    }
 
     // A：StringConcatFactory（阶段1 静态展开）。
     bool withConstants = false;
-    if (isStringConcatSite(indy, withConstants)) {
+    if (isStringConcatSite(bsm, withConstants)) {
         d.form   = IndyDispatchForm::StaticExpanded;
         d.reason = withConstants
                        ? "string-concat: makeConcatWithConstants expanded to StringBuilder bytecode by phase-1"
@@ -747,28 +900,28 @@ IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDyna
     }
 
     // B：LambdaMetafactory（B1 可展开子集 / B2-B3 字段直派 / B4 回退）。
-    if (isLambdaMetafactorySite(indy)) {
-        auto&             arena         = index.arena();
-        std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(d.indyDesc.c_str()));
+    if (isLambdaMetafactorySite(bsm)) {
+        std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
 
-        if (indy->bsmArgs.size() >= 2) {
-            auto* samTypePtr = indy->bsmArgs[0].as<Type>();
-            auto* implPtr    = indy->bsmArgs[1].as<Handle>();
+        if (bsmArgs.size() >= 2) {
+            auto* samTypePtr = bsmArgs[0].as<Type>();
+            auto* implPtr    = bsmArgs[1].as<Handle>();
             if (samTypePtr && samTypePtr->getSort() == Type::METHOD && implPtr) {
                 IndyDispatchForm fieldForm   = IndyDispatchForm::RuntimeHelper;
                 const char*      fieldReason = nullptr;
-                if (classifyLmfFieldHandle(arena, *samTypePtr, *implPtr, capturedTypes, fieldForm,
-                                           fieldReason)) {
+                if (classifyLmfFieldHandle(arena, indyDesc, *samTypePtr, *implPtr, capturedTypes,
+                                           fieldForm, fieldReason, &d.directField)) {
                     // 字段句柄 impl：无论是否精确子集都就此定论（展开子集不含字段句柄）。
                     d.form   = fieldForm;
                     d.reason = fieldReason;
                     return d;
                 }
+                d.directField.reset();   // 非字段句柄：继续 B1 判定，不携带部分载荷
             }
         }
 
         const char* failReason = nullptr;
-        if (lambdaExpansionPrecondition(index, indy, &failReason)) {
+        if (lambdaExpansionPrecondition(arena, indyDesc, *bsm, bsmArgs, &failReason)) {
             d.form   = IndyDispatchForm::StaticExpanded;
             d.reason = "lambda-metafactory: expandable by phase-2 (synthesized impl class)";
         }
@@ -780,10 +933,12 @@ IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDyna
     }
 
     // C：record ObjectMethods.bootstrap（F2 静态可命名 target）。
-    if (isRecordObjectMethodsSite(indy)) {
-        if (recordBsmArgsWellFormed(indy)) {
+    if (isRecordObjectMethodsSite(bsm)) {
+        IndyRecordMethods payload;
+        if (recordMethodsPayload(arena, indyName, indyDesc, bsmArgs, payload)) {
             d.form   = IndyDispatchForm::RecordObjectMethods;
             d.reason = "record ObjectMethods.bootstrap: statically nameable accessor targets";
+            d.recordMethods = std::move(payload);
         }
         else {
             d.form   = IndyDispatchForm::RuntimeHelper;
@@ -792,15 +947,32 @@ IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDyna
         return d;
     }
 
-    // D：自定义 bootstrap（T2；D1/D2 细分仅体现在 reason——波次一的发射面不消费）。
-    d.form = IndyDispatchForm::RuntimeHelper;
+    // D：自定义 bootstrap（T2；D1/D2 细分仅体现在 reason——由调用方按 index 提供）。
+    d.form   = IndyDispatchForm::RuntimeHelper;
+    d.reason = customBootstrapReason;
+    return d;
+}
+
+/// 判定树包装（报告面）：同一核心 + 站点定位由调用方补齐。
+IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
+{
+    IndyDispatchDecision d;
+    d.indyName = toStd(indy->name);
+    d.indyDesc = toStd(indy->desc);
+
+    // D1/D2 理由细分需要编译输入类集合（仅影响 reason，不影响 form）。
     auto*  bsmOwnerCls = index.getClass(toStd(indy->bsm.getOwner()));
-    if (bsmOwnerCls != nullptr && !bsmOwnerCls->isLibrary) {
-        d.reason = "custom bootstrap: bsm body in compilation input (static evaluation candidate, wave-2)";
-    }
-    else {
-        d.reason = "custom bootstrap: bsm owner external (runtime crack candidate only)";
-    }
+    const char* customReason =
+        bsmOwnerCls != nullptr && !bsmOwnerCls->isLibrary
+            ? "custom bootstrap: bsm body in compilation input (static evaluation candidate, wave-2)"
+            : "custom bootstrap: bsm owner external (runtime crack candidate only)";
+
+    const CoreDecision core =
+        classifyCore(index.arena(), d.indyName, d.indyDesc, &indy->bsm, indy->bsmArgs, customReason);
+    d.form          = core.form;
+    d.reason        = core.reason;
+    d.directField   = core.directField;
+    d.recordMethods = core.recordMethods;
     return d;
 }
 
@@ -1015,7 +1187,8 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
 {
     // 前置判定与 classifyIndySite 共用同一谓词（判定=展开零漂移，设计文档 §2/§5）。
     // 不支持的形态（收窄 / 装箱+加宽 / 未知 flags / 字段句柄等）保持 indy 原样、交 SSA fail-closed。
-    if (!lambdaExpansionPrecondition(index, indy)) return false;
+    if (!lambdaExpansionPrecondition(index.arena(), toStd(indy->desc), indy->bsm, indy->bsmArgs))
+        return false;
 
     auto& arena = index.arena();
 
@@ -1035,7 +1208,7 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
 
     // 阶段2e：重新解析 altMetafactory 尾部（谓词已保证解析通过；防御性保留检查）。
     AltLambdaInfo alt;
-    if (!parseAltMetafactoryTail(indy, alt)) return false;
+    if (!parseAltMetafactoryTail(indy->bsm, indy->bsmArgs, alt)) return false;
 
     // impl 目标若在本 index 的用户类且非 public，提权为 public：合成类位于 mj2x/lambda/
     // 包，跨类/跨包访问 private/protected/包私有目标（含私有实例方法、包私有构造器）都会
@@ -1143,13 +1316,13 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
                 }
                 ++siteOrdinal;
                 bool  wc   = false;
-                if (isStringConcatSite(indy, wc)) concatSites.push_back(indy);
-                else if (isLambdaMetafactorySite(indy)) lambdaSites.push_back(indy);
+                if (isStringConcatSite(&indy->bsm, wc)) concatSites.push_back(indy);
+                else if (isLambdaMetafactorySite(&indy->bsm)) lambdaSites.push_back(indy);
             }
             const int expandedBefore = expanded + lambdaExpanded;
             for (auto* indy : concatSites) {
                 bool wc = false;
-                isStringConcatSite(indy, wc);
+                isStringConcatSite(&indy->bsm, wc);
                 if (expandConcatSite(arena, m, indy, wc)) ++expanded;
             }
             for (auto* indy : lambdaSites) {
@@ -1214,6 +1387,22 @@ ca::usize IndyDispatchReport::count(IndyDispatchForm form) const
 IndyDispatchDecision classifyIndySite(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
 {
     return classifyIndySiteImpl(index, indy);
+}
+
+IndyDispatchPayload classifyIndySiteForm(ca::str::Utf8StringArena& arena,
+                                         const std::string&             indyName,
+                                         const std::string&             indyDesc,
+                                         const std::optional<jbytecode::core::Handle>& bsm,
+                                         const std::vector<ca::core::Any>&             bsmArgs)
+{
+    const CoreDecision core = classifyCore(
+        arena, indyName, indyDesc, bsm.has_value() ? &*bsm : nullptr, bsmArgs,
+        "custom bootstrap: bsm owner external (runtime crack candidate only)");
+    IndyDispatchPayload payload;
+    payload.form          = core.form;
+    payload.directField   = core.directField;
+    payload.recordMethods = core.recordMethods;
+    return payload;
 }
 
 void InvokeDynamicPreprocessor::process(CompilerIndex& index)

@@ -26,25 +26,21 @@
 
 #include "mj2x/preprocessor/preprocessor.hpp"
 
+#include "mj2x/mir/indy_dispatch.hpp"
+
 #include <jbytecode/jbytecode.hpp>
 
+#include <libca/core/any.hpp>
+
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace mj2x {
 
-/// invokedynamic 站点静态派发形态（判定树顶层结论，见设计文档 §2）。
-enum class IndyDispatchForm
-{
-    /// 回退阶段3 运行时 call-site helper（现状路径；reason 区分具体原因）。
-    RuntimeHelper,
-    /// 已被本 preprocessor 阶段1/2 静态展开为普通字节码（concat / LMF 合成类）。
-    StaticExpanded,
-    /// LMF 字段句柄 impl 的精确一致子集 → 直接字段访问直派（波次二发射）。
-    DirectFieldAccess,
-    /// java/lang/runtime/ObjectMethods.bootstrap（record）→ 静态可命名 target 直派（波次二发射）。
-    RecordObjectMethods,
-};
+// IndyDispatchForm 及直派载荷结构自波次二起提升到 MIR 可见位置
+// （mj2x/mir/indy_dispatch.hpp）：判定仍在管线层，载荷经 SSA/Reg 站点值拷贝
+// 透传到后端；本头文件经包含保持既有引用（mj2x::IndyDispatchForm）不变。
 
 /// 单个 indy 站点的判定结果（值语义，不持有节点指针——展开会销毁节点）。
 struct IndyDispatchDecision
@@ -59,6 +55,9 @@ struct IndyDispatchDecision
     /// indy name（SAM 方法名）与调用点描述符。
     std::string indyName;
     std::string indyDesc;
+    /// 直派载荷（与 InvokeDynamicSite 同源；载荷 engage 才非空——发射端据此直派）。
+    std::optional<IndyDirectField>   directField;
+    std::optional<IndyRecordMethods> recordMethods;
 };
 
 /// 一次 process 的判定报告（旁路产物，不影响字节码输出）。
@@ -87,5 +86,19 @@ public:
 /// 保证「判定结果 = 展开行为」零漂移。
 IndyDispatchDecision classifyIndySite(CompilerIndex& index,
                                       const jbytecode::tree::InvokeDynamicInsnNode* indy);
+
+/// 站点级判定（SSA 登记站点时填充直派载荷的入口；设计文档 §6 P1）。
+///
+/// @details
+/// 与 classifyIndySite 共用同一判定主体（判定单源）：输入是站点自持数据
+/// （indy 名/描述符/bsm/bsmArgs——MIRInvokeDynamic 透传到 SSA 站点的全部信息），
+/// 不需要 CompilerIndex。区别只有 D 分支理由细分（D1/D2 需要 index 查编译输入，
+/// 只影响报告 reason 不影响 form）。返回的载荷经 SSAFunction::indySites 值拷贝
+/// 透传到 RegFunction，发射端只消费不做判定。
+IndyDispatchPayload classifyIndySiteForm(ca::str::Utf8StringArena& arena,
+                                         const std::string&             indyName,
+                                         const std::string&             indyDesc,
+                                         const std::optional<jbytecode::core::Handle>& bsm,
+                                         const std::vector<ca::core::Any>&             bsmArgs);
 
 }   // namespace mj2x

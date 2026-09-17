@@ -312,4 +312,13 @@ bool emitInvokeDynamic(codegen::CSourceStream& out, const RegInstruction& ins,
                        const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
                        std::string& reason);
 
+/// 发射 invokedynamic 站点直派桩（设计文档 §6 P2）：按站点派发形态分派——
+/// F1（DirectFieldAccess+载荷）发字段访问直派、F2（RecordObjectMethods+访问器载荷）
+/// 发访问器直调，形态为单分支守卫（READY 才走快路，回退分支即既有 helper 路径）；
+/// 其余形态原样落现状 helper 路径（发射文本与现状逐字节一致）。定义在
+/// regc_emitter.cpp。
+bool emitIndyDirectCall(codegen::CSourceStream& out, const RegInstruction& ins,
+                        const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
+                        std::string& reason);
+
 }   // namespace mj2x
