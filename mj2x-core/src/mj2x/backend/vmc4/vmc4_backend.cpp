@@ -168,6 +168,17 @@ struct Vmc4Backend::Impl
     /// per-method 粒度按 className.method+desc 键。构造确定性（同 seed 同产物）。
     std::unordered_map<std::string, std::unique_ptr<VmInstance>> instances;
 
+    /// 程序 blob 解密条目（issue #760 首切片）：programBlobEncrypt 开启时每个
+    /// 转 VM 方法一条，finalize 的 JNI_OnLoad 期发射 mj2x_vm_blob_decrypt 原地
+    /// 解密调用。密钥从实例 seed 派生（vmc4DeriveBlobKey，与发射侧同一函数）。
+    struct BlobDecryptEntry
+    {
+        std::string tag;      ///< 方法级 tag（定位 mj2x_vm_code_<tag> 数组）
+        uint32_t    size = 0; ///< blob 字节数
+        uint32_t    key  = 0; ///< 加密密钥（发射期与解密期同源派生）
+    };
+    std::vector<BlobDecryptEntry> blobDecrypts;
+
     /// 用户自定义 intrinsic（issue #818）：编码期传入 VmEncoder 匹配调用点。
     std::vector<UserIntrinsic> userIntrinsics;
 
@@ -309,6 +320,16 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // --- 阶段 8：组装 BackendResult ---
     backendResult.kind = BackendResult::Kind::C_SOURCE;
     backendResult.text = interpreterSrc + wrapper;
+    // 程序 blob at-rest 加密（issue #760 首切片）：登记 JNI_OnLoad 期的原地解密
+    // 条目（emitRegistrationCode 发射）。密钥用与发射侧同一派生函数
+    // （vmc4DeriveBlobKey），同实例 seed → 同密钥，确定性一致。
+    if (options_.programBlobEncrypt) {
+        Impl::BlobDecryptEntry entry;
+        entry.tag  = methodTag;
+        entry.size = static_cast<uint32_t>(program->bytecodes.size());
+        entry.key  = vmc4DeriveBlobKey(instance.instanceSeed());
+        impl_->blobDecrypts.push_back(std::move(entry));
+    }
     impl_->source.append(backendResult.text.data(), backendResult.text.size());
     return backendResult;
 }
@@ -707,6 +728,23 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
     // JNI_OnLoad。
     src.emitLine("JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {");
     src.indent();
+    // 程序 blob at-rest 解密（issue #760 首切片）：库加载期对全部程序 blob 一次性
+    // 原地解密。时机安全性：JVM 在 System.load 的加载锁内单线程调用 JNI_OnLoad，
+    // 且先于任何 native 方法可达（RegisterNatives 桥在加载完成后才注册）——
+    // 无首执行竞态；解密缓冲区即 mj2x_vm_code_<tag> 数组本身（static 存储期，
+    // 存活期覆盖全部执行期，不产生第二份副本）。解密是纯字节变换不依赖 env，
+    // 置于 GetEnv 之前。密钥只以 seed 常量形式出现在调用参数里，keystream 由
+    // mj2x_vm_blob_decrypt 现场重算（产物无整块 key/keystream 数组）。
+    // 首切片边界：解密后 key 擦除与 lazy 分块留待后续切片。
+    if (!blobDecrypts.empty()) {
+        src.emitLine("/* VMC4 program blob at-rest decrypt (issue #760 slice 1) */");
+        for (const auto& entry : blobDecrypts) {
+            char keyBuf[16];
+            std::snprintf(keyBuf, sizeof(keyBuf), "0x%08xu", static_cast<unsigned>(entry.key));
+            src.emitLine("mj2x_vm_blob_decrypt(mj2x_vm_code_" + entry.tag + ", " +
+                         std::to_string(entry.size) + "u, " + keyBuf + ");");
+        }
+    }
     src.emitLine("JNIEnv* env = NULL;");
     src.emitLine("(void)reserved;");
     src.emitLine("if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;");

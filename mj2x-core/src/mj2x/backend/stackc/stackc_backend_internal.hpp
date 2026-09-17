@@ -520,6 +520,9 @@ struct StackCBackend::Impl
     std::unordered_map<std::string, size_t> stringPoolLengths;
     std::vector<ca::u16>                    stringPoolUnits;
     std::deque<std::string>                 stableUtf8Storage;
+    /// 字符串池 at-rest 加密（--strings-encrypt）：开启后池以密文发射，
+    /// JNI_OnLoad 内批量原地解密；indy 静态参数字符串常量同走加密池。
+    bool stringsEncrypt = false;
     /// pending 异常检查模式：true = lite（只保留 handler 边界检查）。
     bool exceptionCheckLite = false;
     /// 用户自定义 intrinsic（issue #818）：emitInvoke 匹配的调用点降级为
@@ -589,6 +592,9 @@ struct StackCBackend::Impl
     void   emitClassRefCache(const std::string& className, codegen::CSourceStream& out);
     size_t stringPoolOffsetFor(const std::string& value);
     size_t stringPoolLengthFor(const std::string& value);
+    /// 池加密密钥（stringsEncrypt 时使用）：对明文单位序列做 fnv1a64 折叠到
+    /// u32 再混固定常量；纯函数（同池同 seed，可复现构建），0 时回退固定种子。
+    std::uint32_t stringPoolSeed() const;
     void   emitStringPool(codegen::CSourceStream& out) const;
     void   emitRegistrationCode(codegen::CSourceStream& out) const;
     ca::str::Utf8StringRef stableUtf8(const std::string& value);

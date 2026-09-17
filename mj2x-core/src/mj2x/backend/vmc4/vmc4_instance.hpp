@@ -78,6 +78,14 @@ struct Vmc4Options
     /// drift 变体切换周期（字节流偏移单位）。默认 16：每 16 字节换一个变体。
     int driftPeriod = 16;
 
+    /// 程序 blob at-rest 加密（--vmc4-encrypt-program；默认关闭）。
+    ///
+    /// @details
+    /// 开启后编码器输出的 opcode/字节流数据段在发射期加密（密钥从主 seed 派生），
+    /// 解释器在初始化加载期解密；产物 C 源与编译后二进制中不再出现明文程序流
+    /// （issue #760 记录的前提缺口：jvmtp 1.6.2 起 at-rest 加密为默认形态）。
+    bool programBlobEncrypt = false;
+
     /// 反侦测检查点注入（wrapper 入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     codegen::RuntimeProtectionOptions runtimeProtection;
@@ -122,6 +130,16 @@ public:
 
     /// drift 是否开启（driftVariants > 0）。
     bool driftEnabled() const { return driftVariants_ > 0; }
+
+    /// 程序 blob at-rest 加密是否开启（--vmc4-encrypt-program；issue #760 首切片）。
+    ///
+    /// @details
+    /// 开启时 VmInterpreterEmitter 把 opcode 字节流数据段以密文发射（密钥从
+    /// instanceSeed 派生），backend 在 JNI_OnLoad 发射 mj2x_vm_blob_decrypt
+    /// 原地解密调用。与 dispatch drift 正交：drift 变换作用于明文字节流的
+    /// 语义解释（unmap 表），加密作用于最终字节流的 at-rest 形态——加密在
+    /// drift 编码完成之后、发射之前施加，解密后字节流即 drift 编码流。
+    bool blobEncrypt() const { return blobEncrypt_; }
 
     /// @brief 按字节流偏移计算当前 drift 变体序号。
     ///
@@ -233,6 +251,9 @@ private:
     int              bogusHandlers_;
     int              driftVariants_;
     int              driftPeriod_;
+    /// 程序 blob at-rest 加密开关（options.programBlobEncrypt 透传，不入
+    /// describe()——trace surface 红队契约字段集保持稳定）。
+    bool             blobEncrypt_;
     /// VmOpcode 值 → 该语义的实例字节集合（canonical 在前）。
     std::array<std::vector<uint8_t>, 256> opcodeBytes_;
     std::vector<VmOpcode> handlerOrder_;
@@ -249,5 +270,16 @@ private:
 /// @details
 /// 同主 seed + 同身份 → 同实例 seed；不同身份（类/方法）→ 不同实例 seed。
 uint64_t vmc4DeriveInstanceSeed(uint64_t mainSeed, uint64_t identityHash);
+
+/// @brief 从实例 seed 派生程序 blob 加密密钥（32 位，确定性，恒非 0）。
+///
+/// @details
+/// 发射侧（VmInterpreterEmitter 加密）与运行侧（JNI_OnLoad 解密调用发射）
+/// 共用同一派生函数，保证同实例 → 同密钥。独立种子段（与 opcode 映射/
+/// handler 顺序等其他实例维度不耦合）。结果折叠到 xorshift32 的 32 位状态
+/// 空间；0 是 xorshift32 死锁态（密钥流退化为全零 = 未加密），折叠结果为 0
+/// 时回退固定种子。密钥不以数组形式落产物——生成的 C 只含 seed 常量，
+/// keystream 由解密循环现场重算（首切片边界：解密后 key 擦除留待后续）。
+uint32_t vmc4DeriveBlobKey(uint64_t instanceSeed);
 
 }   // namespace mj2x

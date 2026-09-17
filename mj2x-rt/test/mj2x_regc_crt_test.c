@@ -19,6 +19,7 @@ void test_regc_intrinsic_bit_ops(void);
 void test_regc_intrinsic_bit_ops(void);
 void test_safe_env(void);
 void mj2x_rt_protect_probe_test_run(void);
+void mj2x_vmc4_blob_crypto_test_run(void);
 
 static void record_throw(void* env, const char* class_name, const char* message)
 {
@@ -181,6 +182,7 @@ int main(void)
     test_rt_protect_fake_and_delay();
     test_rt_protect_large_step_stays_quiet();
     mj2x_rt_protect_probe_test_run();
+    mj2x_vmc4_blob_crypto_test_run();
     printf("mj2x_regc_crt_test: all passed\n");
     return 0;
 }

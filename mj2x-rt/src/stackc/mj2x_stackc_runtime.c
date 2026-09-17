@@ -150,3 +150,25 @@ jclass _mj2x_class_slow(JNIEnv* env, jclass* slot, jclass owner, const char* nam
     }
     return NULL;
 }
+
+/* xorshift32 一步推进:与 core/native_lib_crypto.hpp::xorshift32Step 及
+ * NativeLoader 字节码内实现同式(x^=x<<13; x^=x>>17; x^=x<<5)。 */
+static uint32_t mj2x_stackc_xorshift32(uint32_t state)
+{
+    uint32_t x = state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
+
+void mj2x_stackc_string_pool_decrypt(uint16_t* pool, size_t unit_count, uint32_t key)
+{
+    /* 逐单位推进密钥流再取低 16 位 XOR(不依赖字节序,与发射侧加密逐位互逆);
+     * key == 0 用固定种子,与 xorStreamBytes 同约定。 */
+    uint32_t state = (key != 0u) ? key : 0x9E3779B9u;
+    for (size_t i = 0; i < unit_count; ++i) {
+        state = mj2x_stackc_xorshift32(state);
+        pool[i] = (uint16_t)(pool[i] ^ (uint16_t)(state & 0xFFFFu));
+    }
+}

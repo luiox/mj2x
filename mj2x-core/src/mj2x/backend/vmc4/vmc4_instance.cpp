@@ -43,6 +43,7 @@ VmInstance::VmInstance(const Vmc4Options& options, uint64_t instanceSeed)
     , bogusHandlers_(std::max(0, std::min(options.bogusHandlers, 4)))
     , driftVariants_(std::max(0, std::min(options.driftVariants, 4)))
     , driftPeriod_(std::max(1, options.driftPeriod))
+    , blobEncrypt_(options.programBlobEncrypt)
 {
     buildOpcodeBytes();
     buildHandlerOrder();
@@ -351,6 +352,20 @@ uint64_t vmc4DeriveInstanceSeed(uint64_t mainSeed, uint64_t identityHash)
     // 两轮混合 + 身份哈希，保证不同身份（即使哈希低位相同）产生不同实例 seed。
     const uint64_t a = rng.next() ^ identityHash;
     return a ^ rng.next();
+}
+
+uint32_t vmc4DeriveBlobKey(uint64_t instanceSeed)
+{
+    // 独立种子段（与其他实例维度的常数偏移互不相同，避免随机流耦合）。
+    SplitMix64 rng(instanceSeed ^ 0x5B7E1A5D3F2C9E47ull);
+    const uint64_t a = rng.next();
+    const uint64_t b = rng.next();
+    // 高低 32 位折叠：保留 64 位混合结果的全部熵，落到 xorshift32 状态空间。
+    const uint32_t key = static_cast<uint32_t>(a ^ (a >> 32)) ^
+                         static_cast<uint32_t>(b ^ (b >> 32));
+    // xorshift32 的 0 是死锁态（密钥流恒 0 = 未加密），回退固定种子。
+    // 运行侧（mj2x_vm_blob_decrypt）对 0 有同一回退约定，双保险。
+    return key != 0 ? key : 0x9E3779B9u;
 }
 
 }   // namespace mj2x

@@ -376,6 +376,8 @@ StackCBackend::~StackCBackend() = default;
 
 void StackCBackend::setExceptionCheckLite(bool lite) { impl_->exceptionCheckLite = lite; }
 
+void StackCBackend::setStringsEncrypt(bool enabled) { impl_->stringsEncrypt = enabled; }
+
 void StackCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
 {
     impl_->userIntrinsics = config.intrinsics;
@@ -746,9 +748,56 @@ size_t StackCBackend::Impl::stringPoolLengthFor(const std::string& value)
     return stringPoolLengths.at(value);
 }
 
+std::uint32_t StackCBackend::Impl::stringPoolSeed() const
+{
+    // 密钥派生（确定性、自包含在产物内）：对明文单位序列的规范化字节序
+    // （每单位低字节在前）做 fnv1a64，折叠到 u32 再混入固定常量；0 回退
+    // 0x9E3779B9（与 native_lib_crypto.hpp::xorStreamBytes 的 key==0 约定一致）。
+    // 同池同 seed（可复现构建不变量）；变换 seed/clientId 未接入 StackC 链路，
+    // 后续切片若给 StackC 传 seed 可替换此处折叠输入。
+    std::string bytes;
+    bytes.reserve(stringPoolUnits.size() * 2);
+    for (const ca::u16 unit : stringPoolUnits) {
+        bytes.push_back(static_cast<char>(unit & 0xFFu));
+        bytes.push_back(static_cast<char>((unit >> 8) & 0xFFu));
+    }
+    const auto     h    = fnv1a64(bytes);
+    std::uint32_t  seed = static_cast<std::uint32_t>(h ^ (h >> 32)) ^ 0x9E3779B9u;
+    if (seed == 0u) seed = 0x9E3779B9u;
+    return seed;
+}
+
 void StackCBackend::Impl::emitStringPool(codegen::CSourceStream& out) const
 {
     if (stringPoolUnits.empty()) return;
+
+    // --strings-encrypt：池以密文形态写入 C 源（xorshift32 密钥流逐单位 XOR，
+    // 先推进 state 再取低 16 位——与 mj2x_stackc_runtime 的解密逐位互逆）。
+    // 首切片目标为 at-rest：产物 C 源/编译后 native 库内无明文 UTF-16 序列；
+    // 解密在 JNI_OnLoad 批量原地执行一次（JVM 保证单线程且先于任何 native
+    // 方法，规避 XOR 双解密污染与就绪位图竞态，调用点保持零开销）。运行期
+    // 池内存为明文——NewString 语义的必然，lazy/分块解密是后续切片。
+    // 数组去 const：原地解密需要可写（.data 段，at-rest 内容为密文）。
+    if (stringsEncrypt) {
+        std::vector<ca::u16> cipher(stringPoolUnits);
+        std::uint32_t        state = stringPoolSeed();
+        for (auto& unit : cipher) {
+            state = state ^ (state << 13);
+            state = state ^ (state >> 17);
+            state = state ^ (state << 5);
+            unit  = static_cast<ca::u16>(unit ^ static_cast<ca::u16>(state & 0xFFFFu));
+        }
+        out.appendLineStart("static uint16_t _mj2x_string_pool[] = {");
+        for (size_t i = 0; i < cipher.size(); ++i) {
+            if (i % 16 == 0) out.append("\n    ");
+            out.appendInt(static_cast<int64_t>(cipher[i]));
+            if (i + 1 < cipher.size()) out.append(", ");
+        }
+        out.append("\n};");
+        out.newLine();
+        out.emitBlankLine();
+        return;
+    }
 
     out.appendLineStart("static const uint16_t _mj2x_string_pool[] = {");
     for (size_t i = 0; i < stringPoolUnits.size(); ++i) {

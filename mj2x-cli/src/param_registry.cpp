@@ -649,6 +649,8 @@ DEF_INT(vmc4Bogus, "--vmc4-bogus", "vmc4_bogus", 0, 4)
 DEF_INT(vmc4Drift, "--vmc4-drift", "vmc4_drift", 0, 4)
 DEF_INT(vmc4DriftPeriod, "--vmc4-drift-period", "vmc4_drift_period", 1, 0)
 DEF_STR(vmc4TraceSurface, "--vmc4-trace-surface", "vmc4_trace_surface")
+DEF_BOOL(vmc4EncryptProgram, "--vmc4-encrypt-program", "vmc4_encrypt_program")
+DEF_BOOL(stringsEncrypt, "--strings-encrypt", "strings_encrypt")
 DEF_ENUM_STR(runtimeProtection, "--runtime-protection", "runtime_protection", "none,log,delay,fake,terminate", "none")
 DEF_INT(runtimeProtectionStep, "--runtime-protection-step", "runtime_protection_step", 1, 0)
 DEF_INT(runtimeProtectionDelayMs, "--runtime-protection-delay", "runtime_protection_delay_ms", 0, 0)
@@ -718,6 +720,9 @@ const ParamDef kParamTable[] = {
     PARAM("vmc4.drift", "--vmc4-drift", "vmc4_drift", ParamType::Int, nullptr, 0, 4, "0", "vmc4", "vmc4", cli_vmc4Drift, json_vmc4Drift),
     PARAM("vmc4.drift_period", "--vmc4-drift-period", "vmc4_drift_period", ParamType::Int, nullptr, 1, 0, "16", "vmc4", "vmc4", cli_vmc4DriftPeriod, json_vmc4DriftPeriod),
     PARAM("vmc4.trace_surface", "--vmc4-trace-surface", "vmc4_trace_surface", ParamType::String, nullptr, 0, 0, "", "vmc4", "vmc4", cli_vmc4TraceSurface, json_vmc4TraceSurface),
+    PARAM("vmc4.encrypt_program", "--vmc4-encrypt-program", "vmc4_encrypt_program", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4EncryptProgram, json_vmc4EncryptProgram),
+    // strings
+    PARAM("strings.encrypt", "--strings-encrypt", "strings_encrypt", ParamType::Bool, nullptr, 0, 0, "false", "strings", "stackc|regc", cli_stringsEncrypt, json_stringsEncrypt),
     // runtime
     PARAM("runtime.protection", "--runtime-protection", "runtime_protection", ParamType::Enum, "none,log,delay,fake,terminate", 0, 0, "none", "runtime_protection", "regc|vmc4|llvm", cli_runtimeProtection, json_runtimeProtection),
     PARAM("runtime.protection_step", "--runtime-protection-step", "runtime_protection_step", ParamType::Int, nullptr, 1, 0, "16", "runtime_protection", "regc|vmc4|llvm", cli_runtimeProtectionStep, json_runtimeProtectionStep),

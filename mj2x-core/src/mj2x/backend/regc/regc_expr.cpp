@@ -19,6 +19,24 @@ namespace mj2x {
 using codegen::cStringLiteral;
 using codegen::CSourceStream;
 
+namespace {
+
+/// 字面量加密登记池（--strings-encrypt）：发射期间由 RegCStringEncryptScope
+/// 安装（单线程发射，无并发）；空 = 未启用，ldc_string 保持明文发射。
+RegCCachePool* g_stringEncryptPool = nullptr;
+
+}   // namespace
+
+RegCCachePool* currentStringEncryptPool()
+{
+    return g_stringEncryptPool;
+}
+
+void setCurrentStringEncryptPool(RegCCachePool* pool)
+{
+    g_stringEncryptPool = pool;
+}
+
 const char* cType(SSAType type)
 {
     switch (type) {
@@ -265,9 +283,18 @@ ca::str::Utf8String operandExpr(const RegOperand& operand)
         // String intrinsic path can materialize the jstring without going
         // through JNI call dispatch.  Other opaques stay as annotated NULL.
         if (operand.tag.rfind("ldc_string:", 0) == 0) {
+            const auto content = operand.tag.substr(std::string("ldc_string:").size());
             CSourceStream os;
             os.append("_mj2x_intrinsic_string_literal(_mj2x_regc_current_context(), ");
-            os.append(cStringLiteral(operand.tag.substr(std::string("ldc_string:").size())));
+            if (RegCCachePool* encryptPool = currentStringEncryptPool()) {
+                // --strings-encrypt：字面量以密文缓冲引用（JNI_OnLoad 批量解密，
+                // C 源 at-rest 不含明文）；缓冲按内容哈希去重，多调用点共享同一
+                // 指针，_mj2x_intrinsic_string_literal 的指针等值快路径照常命中。
+                os.append(encryptPool->encryptedLiteralBuffer(content));
+            }
+            else {
+                os.append(cStringLiteral(content));
+            }
             os.append(")");
             return os.build();
         }

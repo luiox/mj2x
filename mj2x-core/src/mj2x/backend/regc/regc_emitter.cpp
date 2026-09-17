@@ -202,6 +202,10 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         result.reason = "RegC requires an entry block";
         return result;
     }
+    // --strings-encrypt：本函数发射期间挂上字面量加密登记池（RAII 恢复；
+    // operandExpr 的 ldc_string 分支据此发射密文缓冲引用）。
+    const RegCStringEncryptScope stringEncryptScope{
+        (cachePool_ != nullptr && cachePool_->stringsEncryptEnabled()) ? cachePool_ : nullptr};
     if (fileIndySites_ != nullptr && !fn.indySites.empty()) {
         fileIndySites_->insert(fileIndySites_->end(), fn.indySites.begin(), fn.indySites.end());
     }

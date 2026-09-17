@@ -1073,6 +1073,9 @@ int main(int argc, char** argv)
             }
             if (!options.nativeDirOutput.empty())
                 regcBackend->setSplitOutputDir(options.nativeDirOutput);
+            // --strings-encrypt：字面量 at-rest 加密（stackc/regc 专属开关，
+            // LLVM 后端不支持——PARAM 的 backends 面已限 stackc|regc）。
+            if (options.stringsEncrypt) regcBackend->setStringsEncrypt(true);
             if (options.runtimeProtection != "none") {
                 regcBackend->setRuntimeProtection(
                     parseRuntimeProtectionAction(options.runtimeProtection),
@@ -1114,6 +1117,7 @@ int main(int argc, char** argv)
             vmc4Opts.bogusHandlers = options.vmc4Bogus;
             vmc4Opts.driftVariants = options.vmc4Drift;
             vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
+            vmc4Opts.programBlobEncrypt = options.vmc4EncryptProgram;
             if (options.runtimeProtection != "none") {
                 vmc4Opts.runtimeProtection.action  =
                     parseRuntimeProtectionAction(options.runtimeProtection);
@@ -1132,6 +1136,8 @@ int main(int argc, char** argv)
             if (hasUserIntrinsics) stackCBackend->setUserIntrinsics(userIntrinsicConfig);
             if (!options.cOutputPath.empty()) stackCBackend->setOutputPath(options.cOutputPath);
             if (options.stackcExceptionCheck == "lite") stackCBackend->setExceptionCheckLite(true);
+            // --strings-encrypt：字符串池 at-rest 加密（stackc/regc 专属开关）。
+            if (options.stringsEncrypt) stackCBackend->setStringsEncrypt(true);
             nativeSourceBackend = stackCBackend.get();
             pipeline.registerBackend(std::move(stackCBackend));
         }

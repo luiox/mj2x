@@ -50,6 +50,15 @@ MJ2X_VMC4_API void mj2x_vm_throw(JNIEnv* env, void* value);
 MJ2X_VMC4_API void mj2x_vm_throw_arith(JNIEnv* env);
 MJ2X_VMC4_API int32_t mj2x_vm_exception_matches(JNIEnv* env, jobject ex, const char* caught_type);
 
+// ---- 程序 blob at-rest 解密（issue #760 首切片） ----
+// 发射期（mj2x 侧）以 xorshift32 密钥流逐字节 XOR 加密 opcode 字节流数据段；
+// 本函数在生成代码的 JNI_OnLoad（库加载期，先于任何 native 调用）被调用，
+// 对 blob 原地一次性解密。密钥流与打包侧 mj2x-core native_lib_crypto.hpp 的
+// xorStreamBytes 逐字节一致（每字节先推进 state 再取 state & 0xFF 异或）；
+// XOR 为对合运算，同一函数兼作加密/解密。key == 0 回退固定种子（与打包侧
+// 约定一致；xorshift32 的 0 态是死锁态，密钥流会退化为全零）。
+MJ2X_VMC4_API void mj2x_vm_blob_decrypt(unsigned char* data, unsigned int size, uint32_t key);
+
 #ifdef __cplusplus
 }
 #endif
