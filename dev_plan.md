@@ -90,18 +90,42 @@
   预留"方法/类选择"扩展点（`gui_config_tool_design.md` §6）。条件：无反射、无
   动态类加载、intrinsic 覆盖充分；先做单类试点再铺开。
 
-### H. indy 原生派发 backend 侧合流（波次二后续，P1-M）
+### H. indy 原生派发 backend 侧合流（波次二，3f095074f 已落 RegC 面）
 
-- 管线层静态判定原型 + 设计文档已落地（`doc_ai/indy_native_dispatch_design.md`
-  §2 判定树 / §3 缓存 / §4 回退 / §6 接口提案 P1-P10）。剩余：提案逐后端落地
-  （P1 MIR 站点载荷、P2-P4 regc 直派发射与 finalize 缓存与 D2 破解、P5 stackc
-  F1/F2 分支、P7 vmc4 编码前改写式、P10 llvm 模块级缓存分派）。
+- 管线层判定原型 + 设计文档已落地（`doc_ai/indy_native_dispatch_design.md`
+  §2 判定树 / §3 缓存 / §4 回退 / §6 接口提案）。
+- **P1 ✅**（mir/indy_dispatch.hpp 判定载荷单源化，SSA 构建期填充、值拷贝透传）、
+  **P2 ✅**（emitIndyDirectCall：F1 字段直派 + F2 record 访问器直派，单分支
+  守卫回退）、**P3 ✅**（finalize TU 级直派缓存表 + 惰性解析 READY/HELPER
+  状态机 + strings-encrypt 密文池组合）、**P4 ❌ 保持提案**（D2 运行期破解，
+  8x 主收割点，随 P5-P10 合流批评估）。
+- 剩余：P5 stackc F1/F2 分支、P7 vmc4 编码前改写式、P10 llvm 模块级缓存分派
+  ——三后端消费同一 MIR 载荷，发射面各自适配。
 - 注：P6（stackc bootstrap 结果缓存）经核已有等价物
   （stackc_mir_invoke.cpp indyTargetCache，static jobject per call-site），
   **无需实施**（设计文档写作时点误判，2026-09-18 审查订正）。
-- #879-Y4（Random 预检 registry 标志位化，替换两后端符号名/签名硬编码耦合）
-  建议与本项同批，对齐 cross_backend_semantics.md §3.1 单源方向。
-- 三后端共享层抽取（调研候选 4）继续等本批后端施工全部合流后再评估。
+- 注：F1 直派 engagement 当前仅覆盖「indy 描述符即字段形态」站点（javac 产物
+  不会出现，现实站点走 helper 零回归）——收益兑现需 D1 静态求值或 bootstrap
+  白名单扩展（发射面无需再动），与 P4 同批评估。
+- #879-Y4（Random 预检 registry 标志位化）建议与 P5-P10 合流同批，对齐
+  cross_backend_semantics.md §3.1 单源方向。
+
+### H-2. 候选 4（三后端共享层抽取）本批收口评估（2026-09-18 主线程结论）
+
+**结论：整体（工作量 L）不能在本批次收口；indy 解析子批的先导件已随 P1 收口。**
+
+- 依据 1（规模）：调研明示四个子批（JVM 类型格点映射表 10+ 张平行 →
+  RegisterNatives 基建 → indy bootstrap 运行时解析 3 份 → 多维数组分配 3 份），
+  每批需设计决策 + 全量回归。本分支已承载 vmc4 lazy（发射+rt）、regc 三优化
+  （发射+rt）、passReceiver（三后端发射点）、indy 直派（P1-P3）——全部落在
+  候选 4 要抽取的同一些发射面上；在 churn 窗口叠结构性抽取，语义风险最大
+  （G-1 的 udiv「修一漏二」即三份手工同步的实证）。
+- 依据 2（部分已收口）：indy 解析 3 份收敛的第一步 = P1 的 MIR form 载荷
+  单源化——判定从「无」到「管线层单源、后端零判定」，本批随 indy backend
+  实施落地；stackc/vmc4/llvm 消费同一载荷（P5-P7/P10 合流时天然收敛）。
+- 触发条件（重排期）：本 PR 合入 + indy P5-P7/P10 三后端消费合流完成后，
+  按映射表 → RegisterNatives → indy 解析收尾 → 多维数组 的子批顺序独立
+  排期，每子批独立提交 + 全量回归。
 
 ### G. 全线审查 round-3（2026-08-17，分支 `review/mj2x-audit-fixes`）
 
