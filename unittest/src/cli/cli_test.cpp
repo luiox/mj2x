@@ -187,6 +187,48 @@ fs::path findJavac()
     return {};
 }
 
+/// @brief 定位 zig 工具链：PATH 可解析时返回空（无需注入）；否则按 ZIG_HOME、
+/// 常见安装根（D:/sdk 下 zig-* 目录）兜底发现，返回 zig.exe 所在目录。
+fs::path findZigDir()
+{
+    if (commandAvailable("zig")) return {};
+    std::vector<fs::path> roots;
+    if (const char* zigHome = std::getenv("ZIG_HOME")) {
+        if (zigHome[0] != '\0') roots.emplace_back(zigHome);
+    }
+#ifdef _WIN32
+    roots.emplace_back("D:/sdk");
+#endif
+    for (const auto& root : roots) {
+        if (fileExists(root / "zig.exe")) return root;
+        std::error_code ec;
+        for (fs::directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_directory(ec)) continue;
+            if (fileExists(it->path() / "zig.exe")) return it->path();
+        }
+    }
+    return {};
+}
+
+/// @brief 把目录前置到当前进程 PATH，使后续 runScript 子进程可见（findZigDir
+/// 兜底发现的配套；仅影响本测试进程）。
+void prependToProcessPath(const fs::path& dir)
+{
+#ifdef _WIN32
+    const char* separator = ";";
+#else
+    const char* separator = ":";
+#endif
+    const char* current = std::getenv("PATH");
+    const std::string updated =
+        dir.string() + (current ? (std::string(separator) + current) : std::string());
+#ifdef _WIN32
+    _putenv(("PATH=" + updated).c_str());
+#else
+    setenv("PATH", updated.c_str(), 1);
+#endif
+}
+
 std::string classPath(const fs::path& first, const fs::path& second)
 {
 #ifdef _WIN32
@@ -1945,7 +1987,9 @@ TEST(CliTest, RealZigCompilesClassAndJarAndRunsJvm)
     const fs::path javac = findJavac();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
     if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
-    if (!commandAvailable("zig")) GTEST_SKIP() << "zig is not available on PATH";
+    const fs::path zigDir = findZigDir();
+    if (zigDir.empty() && !commandAvailable("zig")) GTEST_SKIP() << "zig is not available on PATH";
+    if (!zigDir.empty()) prependToProcessPath(zigDir);
 
 #ifdef _WIN32
     const fs::path java = javac.parent_path() / "java.exe";
@@ -2214,7 +2258,9 @@ TEST(CliTest, RealZigCompilesRegcCppClassAndRunsJvm)
     const fs::path javac = findJavac();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
     if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
-    if (!commandAvailable("zig")) GTEST_SKIP() << "zig is not available on PATH";
+    const fs::path zigDir = findZigDir();
+    if (zigDir.empty() && !commandAvailable("zig")) GTEST_SKIP() << "zig is not available on PATH";
+    if (!zigDir.empty()) prependToProcessPath(zigDir);
 
 #ifdef _WIN32
     const fs::path java = javac.parent_path() / "java.exe";

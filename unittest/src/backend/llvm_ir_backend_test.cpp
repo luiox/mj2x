@@ -686,9 +686,55 @@ TEST(LlvmIrBackendTest, EmitsRefEqWithoutBareCopyPseudo)
 
 TEST(LlvmIrBackendTest, EmitsExceptionDispatchWithRegions)
 {
-    // 异常表构造依赖 LabelNode + TryCatchBlockNode；DIV 后分发发射与 athrow
-    // 语义已由 CliExc E2E 覆盖（9-20-5-18-15-wrapped）。
-    GTEST_SKIP() << "exception-region dispatch is covered by CliExc E2E";
+    // try { return a / b; } catch (ArithmeticException) { return -1; }：
+    // IDIV 除零走 throw-arith + 异常表分发（ex_ 匹配 / rx_ 重抛 / handler 落点）。
+    auto* tryStart = new jbytecode::core::Label();
+    auto* tryEnd   = new jbytecode::core::Label();
+    auto method    = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                "div",
+                                "(II)I",
+                                {
+                                    new LabelNode(tryStart),
+                                    new VarInsnNode(Opcodes::ILOAD, 0),
+                                    new VarInsnNode(Opcodes::ILOAD, 1),
+                                    new InsnNode(Opcodes::IDIV),
+                                    new InsnNode(Opcodes::IRETURN),
+                                    new LabelNode(tryEnd),
+                                    new VarInsnNode(Opcodes::ASTORE, 2),
+                                    new InsnNode(Opcodes::ICONST_M1),
+                                    new InsnNode(Opcodes::IRETURN),
+                                },
+                                2,
+                                3);
+    method->tryCatchBlocks.push_back(new TryCatchBlockNode(
+        tryStart, tryEnd, tryEnd,
+        ca::str::Utf8StringRef::from_cstr("java/lang/ArithmeticException")));
+
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    LlvmIrBackend            backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto        blocks = converter.convert(*method);
+    auto        result = backend.compileMethod("Test", clazz.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("call i1 @mj2x_llvm_exception_check(ptr %env)"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call ptr @mj2x_llvm_exception_occurred(ptr %env)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call void @mj2x_llvm_exception_clear(ptr %env)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("call i1 @mj2x_llvm_exception_matches(ptr %env, ptr"),
+              std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("ex_0:"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("rx_0:"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("call void @mj2x_llvm_throw(ptr %env, ptr"), std::string::npos)
+        << result.text;
+    EXPECT_NE(result.text.find("@_mj2x_llvm_str_0"), std::string::npos) << result.text;
 }
 
 TEST(LlvmIrBackendTest, EmitsReferenceBoundary)
