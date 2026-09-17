@@ -572,6 +572,238 @@ bool canEmitSam(ca::str::Utf8StringArena& arena, const std::string& samDesc,
     return true;
 }
 
+// ---- indy native dispatch 静态判定（设计见 doc_ai/indy_native_dispatch_design.md §2）----
+
+/// lambda 站点静态展开前置判定（阶段2a-2f 支持子集）。expandLambdaSite 与
+/// classifyIndySite 共用同一谓词，保证「判定结果 = 展开行为」零漂移。
+/// 失败时经 outReason 输出稳定理由字面量（可为 null）。
+bool lambdaExpansionPrecondition(CompilerIndex& index, const InvokeDynamicInsnNode* indy,
+                                 const char** outReason = nullptr)
+{
+    auto& arena = index.arena();
+
+    const std::string indyDesc      = toStd(indy->desc);
+    std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
+
+    // functional interface = indy 返回类型（须是对象类型）。
+    const Type ifaceType = Type::getReturnType(arena.intern(indyDesc.c_str()));
+    if (ifaceType.getSort() != Type::OBJECT) {
+        if (outReason) *outReason = "lambda-metafactory: indy return type is not an object (functional interface)";
+        return false;
+    }
+
+    // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle)。
+    if (indy->bsmArgs.size() < 2) {
+        if (outReason) *outReason = "lambda-metafactory: bsmArgs missing sam/impl";
+        return false;
+    }
+    auto* samTypePtr = indy->bsmArgs[0].as<Type>();
+    auto* implPtr    = indy->bsmArgs[1].as<Handle>();
+    if (!samTypePtr || !implPtr) {
+        if (outReason) *outReason = "lambda-metafactory: bsmArgs[0]/[1] wrong constant type";
+        return false;
+    }
+    if (samTypePtr->getSort() != Type::METHOD) {
+        if (outReason) *outReason = "lambda-metafactory: samMethodType is not a MethodType";
+        return false;
+    }
+
+    // 支持的 impl handle 形态：静态 / 实例（虚·接口·已提权私有）/ 构造器。
+    const int  tag        = implPtr->getTag();
+    const bool isStatic   = (tag == Opcodes::H_INVOKESTATIC);
+    const bool isCtor     = (tag == Opcodes::H_NEWINVOKESPECIAL);
+    const bool isInstance = (tag == Opcodes::H_INVOKEVIRTUAL ||
+                             tag == Opcodes::H_INVOKEINTERFACE ||
+                             tag == Opcodes::H_INVOKESPECIAL);
+    if (!isStatic && !isCtor && !isInstance) {
+        if (outReason) *outReason = "lambda-metafactory: unsupported impl handle tag";
+        return false;
+    }
+
+    const std::string samDesc  = toStd(samTypePtr->getDescriptor());
+    const std::string implDesc = toStd(implPtr->getDesc());
+
+    // 阶段2e：解析 altMetafactory 尾部（flags/markers/bridges）。metafactory 站点 alt 为空。
+    AltLambdaInfo alt;
+    if (!parseAltMetafactoryTail(indy, alt)) {
+        if (outReason)
+            *outReason = "lambda-metafactory: altMetafactory tail parse failed (unknown flags / shape)";
+        return false;
+    }
+
+    // 主 SAM 与各 bridge 描述符逐个校验可适配（阶段2d 适配子集），任一不可适配整站点 fail-closed。
+    if (!canEmitSam(arena, samDesc, capturedTypes, *implPtr, isStatic, isCtor)) {
+        if (outReason)
+            *outReason =
+                "lambda-metafactory: unsupported impl adaptation (narrowing / box+widen / layout mismatch)";
+        return false;
+    }
+    for (const auto& bridgeDesc : alt.bridgeDescs) {
+        if (bridgeDesc == samDesc) continue;   // 与主 SAM 重复的 bridge 由 buildSam 去重
+        if (!canEmitSam(arena, bridgeDesc, capturedTypes, *implPtr, isStatic, isCtor)) {
+            if (outReason)
+                *outReason =
+                    "lambda-metafactory: unsupported bridge adaptation (narrowing / box+widen / layout mismatch)";
+            return false;
+        }
+    }
+    return true;
+}
+
+/// record（java/lang/runtime/ObjectMethods.bootstrap）站点识别（判定树 C 分支）。
+bool isRecordObjectMethodsSite(const InvokeDynamicInsnNode* indy)
+{
+    return toStd(indy->bsm.getOwner()) == "java/lang/runtime/ObjectMethods" &&
+           toStd(indy->bsm.getName()) == "bootstrap";
+}
+
+/// record bootstrap bsmArgs 形态校验：[0]=Class（recordClass）、[1]=String（方法名集）、
+/// [2]=MethodType（方法描述符集）；其后是 0..n 个访问器句柄（数量不校验——判定只需证明
+/// target 可由 recordClass+names 静态命名，句柄清单是发射期载荷）。
+bool recordBsmArgsWellFormed(const InvokeDynamicInsnNode* indy)
+{
+    if (indy->bsmArgs.size() < 3) return false;
+    auto* recordCls = indy->bsmArgs[0].as<Type>();
+    if (!recordCls || recordCls->getSort() != Type::OBJECT) return false;
+    std::string names;
+    if (!anyAsString(indy->bsmArgs[1], names)) return false;
+    auto* methodsType = indy->bsmArgs[2].as<Type>();
+    return methodsType && methodsType->getSort() == Type::METHOD;
+}
+
+/// LMF impl 句柄为字段句柄（H_GET/H_PUT × STATIC/FIELD）时的 F1 判定（设计文档 §2 B2/B3）。
+/// 返回 false = 非字段句柄（调用方继续 B1 判定）；返回 true 时 outForm/outReason 为最终结论
+///（精确一致子集内 → DirectFieldAccess，否则 RuntimeHelper 回退，不含任何适配）。
+bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const Type& samType, const Handle& impl,
+                            const std::vector<Type>& capturedTypes, IndyDispatchForm& outForm,
+                            const char*& outReason)
+{
+    const int  tag      = impl.getTag();
+    const bool isGetter = tag == Opcodes::H_GETSTATIC || tag == Opcodes::H_GETFIELD;
+    const bool isSetter = tag == Opcodes::H_PUTSTATIC || tag == Opcodes::H_PUTFIELD;
+    if (!isGetter && !isSetter) return false;
+
+    const auto        samDescRef = samType.getDescriptor();
+    std::vector<Type> samArgs    = Type::getArgumentTypes(arena.intern(toStd(samDescRef).c_str()));
+    const Type        samRet     = Type::getReturnType(arena.intern(toStd(samDescRef).c_str()));
+    const std::string fieldDesc  = toStd(impl.getDesc());
+    const std::string samRetDesc = toStd(samRet.getDescriptor());
+
+    // 精确一致子集（设计文档 §2 表）：无任何加宽/装箱适配——判定即承诺。
+    const bool ok =
+        isGetter
+            ? (tag == Opcodes::H_GETSTATIC
+                   ? samArgs.empty() && capturedTypes.empty() && samRetDesc == fieldDesc
+                   : capturedTypes.size() == 1 && isReferenceSort(capturedTypes[0].getSort()) &&
+                         samArgs.empty() && samRetDesc == fieldDesc)
+            : (tag == Opcodes::H_PUTSTATIC
+                   ? samArgs.size() == 1 && toStd(samArgs[0].getDescriptor()) == fieldDesc &&
+                         capturedTypes.empty() && samRet.getSort() == Type::VOID
+                   : capturedTypes.size() == 1 && isReferenceSort(capturedTypes[0].getSort()) &&
+                         samArgs.size() == 1 &&
+                         toStd(samArgs[0].getDescriptor()) == fieldDesc &&
+                         samRet.getSort() == Type::VOID);
+
+    if (ok) {
+        outForm = IndyDispatchForm::DirectFieldAccess;
+        switch (tag) {
+        case Opcodes::H_GETSTATIC:
+            outReason = "lambda-metafactory field getter (GETSTATIC): direct field access candidate";
+            break;
+        case Opcodes::H_GETFIELD:
+            outReason = "lambda-metafactory field getter (GETFIELD): direct field access candidate";
+            break;
+        case Opcodes::H_PUTSTATIC:
+            outReason = "lambda-metafactory field setter (PUTSTATIC): direct field access candidate";
+            break;
+        default:
+            outReason = "lambda-metafactory field setter (PUTFIELD): direct field access candidate";
+            break;
+        }
+    }
+    else {
+        outForm   = IndyDispatchForm::RuntimeHelper;
+        outReason = "lambda-metafactory field handle impl outside strict direct-access subset";
+    }
+    return true;
+}
+
+/// 判定树主体（设计文档 §2）：A concat → B LMF → C record → D 自定义 bootstrap。
+/// 只读 indy 与 index，不改任何状态；结论由 expand 行为零漂移谓词支撑（B1 共用前置）。
+IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
+{
+    IndyDispatchDecision d;
+    d.indyName = toStd(indy->name);
+    d.indyDesc = toStd(indy->desc);
+
+    // A：StringConcatFactory（阶段1 静态展开）。
+    bool withConstants = false;
+    if (isStringConcatSite(indy, withConstants)) {
+        d.form   = IndyDispatchForm::StaticExpanded;
+        d.reason = withConstants
+                       ? "string-concat: makeConcatWithConstants expanded to StringBuilder bytecode by phase-1"
+                       : "string-concat: makeConcat expanded to StringBuilder bytecode by phase-1";
+        return d;
+    }
+
+    // B：LambdaMetafactory（B1 可展开子集 / B2-B3 字段直派 / B4 回退）。
+    if (isLambdaMetafactorySite(indy)) {
+        auto&             arena         = index.arena();
+        std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(d.indyDesc.c_str()));
+
+        if (indy->bsmArgs.size() >= 2) {
+            auto* samTypePtr = indy->bsmArgs[0].as<Type>();
+            auto* implPtr    = indy->bsmArgs[1].as<Handle>();
+            if (samTypePtr && samTypePtr->getSort() == Type::METHOD && implPtr) {
+                IndyDispatchForm fieldForm   = IndyDispatchForm::RuntimeHelper;
+                const char*      fieldReason = nullptr;
+                if (classifyLmfFieldHandle(arena, *samTypePtr, *implPtr, capturedTypes, fieldForm,
+                                           fieldReason)) {
+                    // 字段句柄 impl：无论是否精确子集都就此定论（展开子集不含字段句柄）。
+                    d.form   = fieldForm;
+                    d.reason = fieldReason;
+                    return d;
+                }
+            }
+        }
+
+        const char* failReason = nullptr;
+        if (lambdaExpansionPrecondition(index, indy, &failReason)) {
+            d.form   = IndyDispatchForm::StaticExpanded;
+            d.reason = "lambda-metafactory: expandable by phase-2 (synthesized impl class)";
+        }
+        else {
+            d.form   = IndyDispatchForm::RuntimeHelper;
+            d.reason = failReason;
+        }
+        return d;
+    }
+
+    // C：record ObjectMethods.bootstrap（F2 静态可命名 target）。
+    if (isRecordObjectMethodsSite(indy)) {
+        if (recordBsmArgsWellFormed(indy)) {
+            d.form   = IndyDispatchForm::RecordObjectMethods;
+            d.reason = "record ObjectMethods.bootstrap: statically nameable accessor targets";
+        }
+        else {
+            d.form   = IndyDispatchForm::RuntimeHelper;
+            d.reason = "record ObjectMethods.bootstrap: malformed bsmArgs shape";
+        }
+        return d;
+    }
+
+    // D：自定义 bootstrap（T2；D1/D2 细分仅体现在 reason——波次一的发射面不消费）。
+    d.form = IndyDispatchForm::RuntimeHelper;
+    auto*  bsmOwnerCls = index.getClass(toStd(indy->bsm.getOwner()));
+    if (bsmOwnerCls != nullptr && !bsmOwnerCls->isLibrary) {
+        d.reason = "custom bootstrap: bsm body in compilation input (static evaluation candidate, wave-2)";
+    }
+    else {
+        d.reason = "custom bootstrap: bsm owner external (runtime crack candidate only)";
+    }
+    return d;
+}
+
 // 合成一个实现 functional interface 的类，SAM 方法转调 impl：
 //   public final class <synthName> implements <ifaceInternal> {
 //     <synthName>(capturedDescs) { super(); this.capI = capI; }
@@ -781,46 +1013,29 @@ struct PendingLambdaClass
 bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode* indy,
                       int synthCounter, std::vector<PendingLambdaClass>& pending)
 {
+    // 前置判定与 classifyIndySite 共用同一谓词（判定=展开零漂移，设计文档 §2/§5）。
+    // 不支持的形态（收窄 / 装箱+加宽 / 未知 flags / 字段句柄等）保持 indy 原样、交 SSA fail-closed。
+    if (!lambdaExpansionPrecondition(index, indy)) return false;
+
     auto& arena = index.arena();
 
     const std::string indyDesc      = toStd(indy->desc);
     std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
 
-    // functional interface = indy 返回类型（须是对象类型）。
+    // functional interface = indy 返回类型（谓词已保证是对象类型）。
     const Type ifaceType = Type::getReturnType(arena.intern(indyDesc.c_str()));
-    if (ifaceType.getSort() != Type::OBJECT) return false;
     const std::string ifaceInternal = toStd(ifaceType.getInternalName());
 
-    // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle)。
-    if (indy->bsmArgs.size() < 2) return false;
+    // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle)（谓词已保证形态）。
     auto* samTypePtr = indy->bsmArgs[0].as<Type>();
     auto* implPtr    = indy->bsmArgs[1].as<Handle>();
-    if (!samTypePtr || !implPtr) return false;
-    if (samTypePtr->getSort() != Type::METHOD) return false;
-
-    // 支持的 impl handle 形态：静态 / 实例（虚·接口·已提权私有）/ 构造器。
-    const int  tag        = implPtr->getTag();
-    const bool isStatic   = (tag == Opcodes::H_INVOKESTATIC);
-    const bool isCtor     = (tag == Opcodes::H_NEWINVOKESPECIAL);
-    const bool isInstance = (tag == Opcodes::H_INVOKEVIRTUAL ||
-                             tag == Opcodes::H_INVOKEINTERFACE ||
-                             tag == Opcodes::H_INVOKESPECIAL);
-    if (!isStatic && !isCtor && !isInstance) return false;   // H_GETFIELD/H_PUTFIELD 等暂不支持
 
     const std::string samDesc  = toStd(samTypePtr->getDescriptor());
     const std::string implDesc = toStd(implPtr->getDesc());
 
-    // 阶段2e：解析 altMetafactory 尾部（flags/markers/bridges）。metafactory 站点 alt 为空。
-    // 解析失败（未知 flag / 形态异常）→ fail-closed。
+    // 阶段2e：重新解析 altMetafactory 尾部（谓词已保证解析通过；防御性保留检查）。
     AltLambdaInfo alt;
     if (!parseAltMetafactoryTail(indy, alt)) return false;
-
-    // 主 SAM 与各 bridge 描述符逐个校验可适配（阶段2d 适配子集），任一不可适配整站点 fail-closed。
-    if (!canEmitSam(arena, samDesc, capturedTypes, *implPtr, isStatic, isCtor)) return false;
-    for (const auto& bridgeDesc : alt.bridgeDescs) {
-        if (bridgeDesc == samDesc) continue;   // 与主 SAM 重复的 bridge 由 buildSam 去重
-        if (!canEmitSam(arena, bridgeDesc, capturedTypes, *implPtr, isStatic, isCtor)) return false;
-    }
 
     // impl 目标若在本 index 的用户类且非 public，提权为 public：合成类位于 mj2x/lambda/
     // 包，跨类/跨包访问 private/protected/包私有目标（含私有实例方法、包私有构造器）都会
@@ -896,7 +1111,7 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     return true;
 }
 
-void processImpl(CompilerIndex& index)
+void processImpl(CompilerIndex& index, IndyDispatchReport* report)
 {
     auto& arena          = index.arena();
     int   expanded       = 0;
@@ -912,9 +1127,21 @@ void processImpl(CompilerIndex& index)
             // 先收集本方法的可展开站点（边遍历边改 list 会失效）。
             std::vector<InvokeDynamicInsnNode*> concatSites;
             std::vector<InvokeDynamicInsnNode*> lambdaSites;
+            const std::string                   methodName = toStd(m->name);
+            ca::i32                             siteOrdinal = 0;
             for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
                 if (insn->getType() != AbstractInsnNode::INVOKE_DYNAMIC_INSN) continue;
                 auto* indy = static_cast<InvokeDynamicInsnNode*>(insn);
+                // indy native dispatch 静态判定：只读、只标记（波次一原型，设计文档 §5），
+                // 不消费判定结果、不影响下方展开逻辑与字节码输出。
+                if (report != nullptr) {
+                    IndyDispatchDecision decision = classifyIndySiteImpl(index, indy);
+                    decision.className            = name;
+                    decision.methodName           = methodName;
+                    decision.ordinal              = siteOrdinal;
+                    report->sites.push_back(std::move(decision));
+                }
+                ++siteOrdinal;
                 bool  wc   = false;
                 if (isStringConcatSite(indy, wc)) concatSites.push_back(indy);
                 else if (isLambdaMetafactorySite(indy)) lambdaSites.push_back(indy);
@@ -975,9 +1202,28 @@ void processImpl(CompilerIndex& index)
 
 }   // namespace
 
+ca::usize IndyDispatchReport::count(IndyDispatchForm form) const
+{
+    ca::usize n = 0;
+    for (const auto& site : sites) {
+        if (site.form == form) ++n;
+    }
+    return n;
+}
+
+IndyDispatchDecision classifyIndySite(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
+{
+    return classifyIndySiteImpl(index, indy);
+}
+
 void InvokeDynamicPreprocessor::process(CompilerIndex& index)
 {
-    processImpl(index);
+    processImpl(index, nullptr);
+}
+
+void InvokeDynamicPreprocessor::process(CompilerIndex& index, IndyDispatchReport* report)
+{
+    processImpl(index, report);
 }
 
 }   // namespace mj2x
