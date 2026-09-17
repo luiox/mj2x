@@ -222,6 +222,11 @@ struct EncoderState
     /// 指令发射计数器：pickOpcodeByte 的 nonce（每条指令递增，确定性选别名）。
     uint64_t instructionNonce = 0;
 
+    /// 每条指令的起始偏移（emitOpcode/emitHaltOpcode 记录，与 bytecodes 同步
+    /// 增长）。编码收尾搬移进 VmProgram.instructionOffsets，供懒解密分块
+    /// （issue #760 切片 2）做指令对齐的块边界。
+    std::vector<uint32_t> instructionOffsets;
+
     /// 带边拷贝（块参数 RegCopy）的边 → 合成块。合成块内容 = [Copy...] + Jump 真实目标，
     /// 索引排在所有真实块之后（blockTargets 后半段）。每条带拷贝的边一个合成块，
     /// 按 (src 块, dst 块, slot) 区分（slot：Jump=0，Branch true=0/false=1）。
@@ -640,6 +645,9 @@ struct EncoderState
 void emitOpcode(EncoderState& ctx, VmOpcode op, std::vector<uint8_t>& out)
 {
     const uint64_t pc = out.size();
+    // 指令边界记录（issue #760 切片 2）：opcode 字节恒为指令首字节，
+    // emitOpcode 是全部指令发射的唯一入口（Halt 走 emitHaltOpcode 同样记录）。
+    ctx.instructionOffsets.push_back(static_cast<uint32_t>(pc));
     uint8_t byte;
     if (ctx.instance.driftEnabled()) {
         const int d = ctx.instance.variantForPc(pc);
@@ -654,6 +662,7 @@ void emitOpcode(EncoderState& ctx, VmOpcode op, std::vector<uint8_t>& out)
 /// 别名槽在字节流里不会出现，仅作为防御性停机面）。
 void emitHaltOpcode(EncoderState& ctx, std::vector<uint8_t>& out)
 {
+    ctx.instructionOffsets.push_back(static_cast<uint32_t>(out.size()));
     emitU8(out, ctx.instance.opcodeFor(VmOpcode::Halt));
 }
 
@@ -1599,6 +1608,9 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     prog->hasArrayLength = ctx.hasArrayLength;
     // Intrinsic 表（Phase 2.D 泛化）。
     prog->intrinsics = std::move(ctx.intrinsicRefs);
+    // 指令边界表（issue #760 切片 2）：emitOpcode/emitHaltOpcode 按发射顺序
+    // 记录，与 bytecodes 布局天然同步；懒解密分块据此取指令对齐的块边界。
+    prog->instructionOffsets = std::move(ctx.instructionOffsets);
     // String LDC 常量槽（Phase 2.E）。
     prog->stringLiterals = std::move(ctx.stringLiterals);
     prog->classLiterals  = std::move(ctx.classLiterals);

@@ -344,6 +344,11 @@ struct VmClassLiteral
 struct VmProgram
 {
     std::vector<uint8_t>         bytecodes;      ///< 指令字节流
+    /// 每条指令的起始字节偏移（含合成块指令与末尾 Halt 哨兵，单调不减，
+    /// 首条为 0）。issue #760 切片 2：懒解密分块要求块边界只落在指令起点
+    /// （单条指令可远超 64 字节，固定网格分块会切裂 SWITCH 等变长指令），
+    /// 发射器据此贪心打包指令对齐块。恒记录（确定性派生，与开关无关）。
+    std::vector<uint32_t>        instructionOffsets;
     std::vector<uint32_t>        blockTargets;   ///< block 索引 → bytecodes 偏移
     std::vector<VmConstantEntry> constantPool;   ///< 常量条目（prologue 预加载）
     std::vector<VmMethodRef>     methodRefs;     ///< Call 调用点的方法引用（Phase 2.0）

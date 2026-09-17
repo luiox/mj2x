@@ -320,10 +320,12 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // --- 阶段 8：组装 BackendResult ---
     backendResult.kind = BackendResult::Kind::C_SOURCE;
     backendResult.text = interpreterSrc + wrapper;
-    // 程序 blob at-rest 加密（issue #760 首切片）：登记 JNI_OnLoad 期的原地解密
+    // 程序 blob at-rest 加密（issue #760）：登记 JNI_OnLoad 期的原地解密
     // 条目（emitRegistrationCode 发射）。密钥用与发射侧同一派生函数
     // （vmc4DeriveBlobKey），同实例 seed → 同密钥，确定性一致。
-    if (options_.programBlobEncrypt) {
+    // 切片 2：分块懒解密（--vmc4-lazy-decrypt）时跳过登记——块保持密文到
+    // 首次执行，JNI_OnLoad 不做整体解密（懒解密基础设施由发射器直接发射）。
+    if (options_.programBlobEncrypt && !options_.programLazyDecrypt) {
         Impl::BlobDecryptEntry entry;
         entry.tag  = methodTag;
         entry.size = static_cast<uint32_t>(program->bytecodes.size());
@@ -603,6 +605,13 @@ void Vmc4Backend::finalize(const CompilerIndex& index)
 {
     (void)index;
 
+    // 配置防御（issue #760 切片 2）：lazy 无加密无意义（块游标/密文块不发射，
+    // VmInstance 构造已把 blobLazy 归一为 encrypt && lazy）。显式落日志提示
+    // CLI 层 requires 约束（vmc4.lazy_decrypt → vmc4.encrypt_program）被绕过。
+    if (options_.programLazyDecrypt && !options_.programBlobEncrypt) {
+        CA_LOGT_WARN("vmc4", "--vmc4-lazy-decrypt requires --vmc4-encrypt-program; lazy flag ignored\n");
+    }
+
     codegen::IncludeSet includes;
     includes.addSystem("jni.h");
     includes.addSystem("stdint.h");
@@ -735,9 +744,12 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
     // 存活期覆盖全部执行期，不产生第二份副本）。解密是纯字节变换不依赖 env，
     // 置于 GetEnv 之前。密钥只以 seed 常量形式出现在调用参数里，keystream 由
     // mj2x_vm_blob_decrypt 现场重算（产物无整块 key/keystream 数组）。
-    // 首切片边界：解密后 key 擦除与 lazy 分块留待后续切片。
+    // 切片 2 密钥擦除：mj2x_vm_blob_decrypt 返回前对密钥参数与 keystream 状态
+    // 做 volatile 清零（密钥栈擦除），传递后不留运行时副本。
+    // 切片 2 懒解密（--vmc4-lazy-decrypt）：不发整体解密调用——块保持密文到
+    // 首次执行，由生成代码的 mj2x_vm_lazy_touch_<tag> 按块懒解密。
     if (!blobDecrypts.empty()) {
-        src.emitLine("/* VMC4 program blob at-rest decrypt (issue #760 slice 1) */");
+        src.emitLine("/* VMC4 program blob at-rest decrypt (issue #760) */");
         for (const auto& entry : blobDecrypts) {
             char keyBuf[16];
             std::snprintf(keyBuf, sizeof(keyBuf), "0x%08xu", static_cast<unsigned>(entry.key));

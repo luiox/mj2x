@@ -1,7 +1,9 @@
-// VMC4 程序 blob at-rest 加密单测（issue #760 首切片，--vmc4-encrypt-program）。
+// VMC4 程序 blob at-rest 加密单测（issue #760 切片 1 --vmc4-encrypt-program +
+// 切片 2 --vmc4-lazy-decrypt 分块懒解密）。
 //
 // 本测试不调用 JNI/DLL（E2E 语义闭环由 vmc4_backend_e2e_test 的
-// ProgramBlobEncryptRoundTrip 覆盖），只验证发射文本与派生函数：
+// ProgramBlobEncryptRoundTrip / LazyChunkDecryptRoundTrip 覆盖），
+// 只验证发射文本与派生函数：
 //   1. 关闭路径（默认）：数据段保持明文 const 数组形态，无解密调用
 //      （关闭路径产物字节级不变——既有 vmc4 测试与 trace surface 契约）。
 //   2. 开启路径：数据段为 non-const 密文数组，产物文本搜不到关闭态的
@@ -15,10 +17,20 @@
 //      （两者正交：drift 是明文流的语义解释，加密是 at-rest 形态）。
 //   6. trace surface 契约：describe() 不受加密开关影响。
 //   7. backend 级：finalize 的 JNI_OnLoad 只在开启时发射解密调用，且确定性。
+// 切片 2（lazy 分块）追加：
+//   8. lazy 无加密：开关被归一为关闭（VmInstance.blobLazy 恒以 encrypt 为
+//      前提），产物回退关闭路径形态。
+//   9. lazy 开启：数据段按指令对齐 64 字节目标块独立加密（块边界 ⊆
+//      instructionOffsets、指令不跨块、超长 SWITCH 自成一块），发射
+//      cend/cstate 表与 mj2x_vm_lazy_touch_ 辅助，JNI_OnLoad 无解密调用；
+//      逐块独立解密可还原完整明文流。
+//  10. 块密钥派生（vmc4DeriveChunkKey）：确定性 / 恒非 0 / 块下标与主密钥敏感。
+//  11. lazy 与 drift 叠加、trace surface / 实例 seed 不受 lazy 开关影响。
 
 #include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdint>
 #include <string>
@@ -51,6 +63,23 @@ namespace {
 /// Utf8StringRef 视图不拷贝（与 vmc4_backend_test 的同名 helper 同约定）。
 std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char* desc,
                                        std::initializer_list<AbstractInsnNode*> insns,
+                                       int maxStack, int maxLocals)
+{
+    std::vector<ca::str::Utf8StringRef> noExcepts;
+    auto mn = std::make_unique<MethodNode>(access,
+                                           ca::str::Utf8StringRef::from_cstr(name),
+                                           ca::str::Utf8StringRef::from_cstr(desc),
+                                           ca::str::Utf8StringRef::from_cstr(""),
+                                           noExcepts);
+    mn->maxStack  = maxStack;
+    mn->maxLocals = maxLocals;
+    for (auto* insn : insns) mn->instructions.add(insn);
+    return mn;
+}
+
+/// @brief 同上，指令序列为运行期构造的 vector（超长指令 fixture 用）。
+std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char* desc,
+                                       const std::vector<AbstractInsnNode*>& insns,
                                        int maxStack, int maxLocals)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
@@ -110,6 +139,19 @@ void xorDecryptForTest(std::vector<uint8_t>& data, uint32_t key)
         state ^= state << 5;
         b = static_cast<uint8_t>(b ^ static_cast<uint8_t>(state & 0xFFu));
     }
+}
+
+/// 独立实现的分块密钥派生（与 vmc4DeriveChunkKey / CRT mj2x_vm_chunk_key 同
+/// 公式、独立成文交叉验证）：golden-ratio 扰动 + 4 轮 xorshift32，恒非 0。
+uint32_t chunkKeyForTest(uint32_t blobKey, uint32_t chunkIndex)
+{
+    uint32_t s = blobKey ^ (0x9E3779B9u + 0x9E3779B9u * (chunkIndex + 1u));
+    for (int i = 0; i < 4; ++i) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+    }
+    return s != 0u ? s : 0x9E3779B9u;
 }
 
 /// 从产物 C 源解析 `unsigned char <arrayName>[] = {0xNN, ...};` 数组字节
@@ -175,6 +217,35 @@ size_t countOccurrencesForTest(const std::string& haystack, const std::string& n
         pos += needle.size();
     }
     return count;
+}
+
+/// 从产物 C 源解析 `unsigned int <arrayName>[N] = {NNu, ...};` 数组
+/// （emitU32Array 的固定形态：只有十进制数字 + 'u' 后缀 + 逗号/空白）。
+bool extractU32ArrayForTest(const std::string& src, const std::string& arrayName,
+                            std::vector<uint32_t>& out)
+{
+    const std::string declHead = "unsigned int " + arrayName + "[";
+    const size_t       start   = src.find(declHead);
+    if (start == std::string::npos) return false;
+    const size_t brace = src.find("= {", start);
+    if (brace == std::string::npos) return false;
+    size_t            pos = brace + 3;
+    const size_t      end = src.find("};", pos);
+    if (end == std::string::npos) return false;
+    out.clear();
+    while (pos < end) {
+        if (src[pos] >= '0' && src[pos] <= '9') {
+            unsigned long long v = 0;
+            while (pos < end && src[pos] >= '0' && src[pos] <= '9') {
+                v = v * 10ull + static_cast<unsigned long long>(src[pos] - '0');
+                ++pos;
+            }
+            out.push_back(static_cast<uint32_t>(v));
+            continue;
+        }
+        ++pos;
+    }
+    return true;
 }
 
 /// backend 级编译辅助：编译一个类的单个静态方法，返回生成 C 文本。
@@ -513,4 +584,366 @@ TEST(Vmc4EncryptProgramTest, OptionFlowsIntoInstance)
     EXPECT_TRUE(iOn.blobEncrypt());
     // 加密开关不参与实例 seed 派生：同 seed 开/关是同一实例（仅发射形态不同）。
     EXPECT_EQ(iOn.instanceSeed(), vmc4DeriveInstanceSeed(on.seed, 0x42));
+}
+
+// ===========================================================================
+// 切片 2（--vmc4-lazy-decrypt，分块懒解密）
+// ===========================================================================
+
+// 10. lazy 单独开启（无 encrypt）：VmInstance.blobLazy 归一为关闭，发射产物
+//     与关闭路径同形态（明文 const 数组、无懒解密基础设施、无解密调用）。
+TEST(Vmc4EncryptProgramTest, LazyWithoutEncryptNormalizesToOff)
+{
+    Vmc4Options opts;
+    opts.seed                = 0x7E5;
+    opts.programLazyDecrypt  = true;   // 无 programBlobEncrypt
+    VmInstance instance(opts);
+    // 归一化在构造期完成：blobLazy 恒以 blobEncrypt 为前提。
+    EXPECT_FALSE(instance.blobLazy());
+    EXPECT_FALSE(instance.blobEncrypt());
+    std::string reason;
+    auto prog = encodeMethod("lazyNoEnc", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "lne1");
+    // 关闭路径形态：明文 const 数组、明文序列可见、零懒解密/解密痕迹。
+    EXPECT_NE(src.find("static const unsigned char mj2x_vm_code_lne1[] = {"), std::string::npos)
+        << src;
+    EXPECT_NE(src.find(formattedPrefixForTest(prog->bytecodes, 8)), std::string::npos) << src;
+    EXPECT_EQ(src.find("mj2x_vm_cstate_"), std::string::npos) << src;
+    EXPECT_EQ(src.find("mj2x_vm_cend_"), std::string::npos) << src;
+    EXPECT_EQ(src.find("mj2x_vm_lazy_touch_"), std::string::npos) << src;
+    EXPECT_EQ(src.find("mj2x_vm_lazy_decrypt"), std::string::npos) << src;
+    EXPECT_EQ(src.find("mj2x_vm_blob_decrypt"), std::string::npos) << src;
+}
+
+// 11. lazy 开启：密文块数组 + cend/cstate 表 + touch helper + CRT 调用形态；
+//     逐块独立解密（独立镜像的块密钥派生）还原完整明文流。
+TEST(Vmc4EncryptProgramTest, LazyDecryptEmitsChunkedCipherAndInfrastructure)
+{
+    Vmc4Options opts;
+    opts.seed                 = 0x5EED2;
+    opts.programBlobEncrypt   = true;
+    opts.programLazyDecrypt   = true;
+    VmInstance instance(opts);
+    ASSERT_TRUE(instance.blobLazy());
+    std::string reason;
+    // 循环方法（体含两段算术链）：字节流 > 64 字节，保证多块。
+    auto* loop = new LabelNode(labelScratchArena().create<Label>());
+    auto* done = new LabelNode(labelScratchArena().create<Label>());
+    auto prog = encodeMethod("lazyChunk", "(I)I",
+                             {
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 2),
+                                 loop,
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::IXOR),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new IincInsnNode(2, 1),
+                                 new JumpInsnNode(Opcodes::GOTO, loop->label),
+                                 done,
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 3, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_GT(prog->bytecodes.size(), 64u) << "fixture must span multiple chunks";
+
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "lc1");
+    // 密文 non-const 数组 + lazy 注释标记；不再有 JNI_OnLoad 整体解密标记。
+    EXPECT_NE(src.find("static unsigned char mj2x_vm_code_lc1[] = {"), std::string::npos) << src;
+    EXPECT_NE(src.find("chunked at rest, decrypted lazily on first"), std::string::npos) << src;
+    // 懒解密基础设施：块终点表 / 状态表 / touch helper / CRT 懒解密调用。
+    EXPECT_NE(src.find("static const unsigned int mj2x_vm_cend_lc1["), std::string::npos) << src;
+    EXPECT_NE(src.find("static volatile unsigned char mj2x_vm_cstate_lc1["), std::string::npos)
+        << src;
+    EXPECT_NE(src.find("static void mj2x_vm_lazy_touch_lc1("), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_chunk_locate(mj2x_vm_cend_lc1,"), std::string::npos) << src;
+    EXPECT_NE(src.find("mj2x_vm_lazy_decrypt(mj2x_vm_code_lc1,"), std::string::npos) << src;
+    EXPECT_EQ(src.find("mj2x_vm_blob_decrypt"), std::string::npos) << src;
+
+    // 产物断言：明文字节序列搜不到。
+    EXPECT_EQ(src.find(formattedPrefixForTest(prog->bytecodes, 8)), std::string::npos) << src;
+
+    // 逐块独立解密：解析密文 + cend 表，用独立镜像的块密钥派生逐块解密，
+    // 还原结果必须与 VmProgram.bytecodes 逐字节一致。
+    std::vector<uint8_t> cipher;
+    ASSERT_TRUE(extractArrayBytesForTest(src, "mj2x_vm_code_lc1", cipher));
+    ASSERT_EQ(cipher.size(), prog->bytecodes.size());
+    std::vector<uint32_t> ends;
+    ASSERT_TRUE(extractU32ArrayForTest(src, "mj2x_vm_cend_lc1", ends));
+    ASSERT_FALSE(ends.empty());
+    const uint32_t blobKey = vmc4DeriveBlobKey(instance.instanceSeed());
+    uint32_t       begin   = 0;
+    for (size_t c = 0; c < ends.size(); ++c) {
+        std::vector<uint8_t> chunk(cipher.begin() + begin, cipher.begin() + ends[c]);
+        xorDecryptForTest(chunk, chunkKeyForTest(blobKey, static_cast<uint32_t>(c)));
+        for (size_t i = 0; i < chunk.size(); ++i) cipher[begin + i] = chunk[i];
+        begin = ends[c];
+    }
+    EXPECT_EQ(cipher, prog->bytecodes)
+        << "per-chunk decryption must restore the exact VmProgram bytecodes";
+}
+
+// 12. 块边界对齐指令边界（正确性不变量）：边界 ⊆ instructionOffsets；任何
+//     指令不跨块（起止同块）；blockTargets 全部落在指令起点上。
+TEST(Vmc4EncryptProgramTest, LazyChunkBoundariesRespectInstructionBoundaries)
+{
+    Vmc4Options opts;
+    opts.seed                 = 0xB0D;
+    opts.programBlobEncrypt   = true;
+    opts.programLazyDecrypt   = true;
+    VmInstance instance(opts);
+    std::string reason;
+    auto* loop = new LabelNode(labelScratchArena().create<Label>());
+    auto* done = new LabelNode(labelScratchArena().create<Label>());
+    auto prog = encodeMethod("chunkAlign", "(I)I",
+                             {
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 2),
+                                 loop,
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new IincInsnNode(2, 1),
+                                 new JumpInsnNode(Opcodes::GOTO, loop->label),
+                                 done,
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 3, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    // 编码器恒记录指令边界（确定性派生，与开关无关）。
+    ASSERT_FALSE(prog->instructionOffsets.empty());
+    EXPECT_EQ(prog->instructionOffsets.front(), 0u);
+
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "ca1");
+    std::vector<uint32_t> ends;
+    ASSERT_TRUE(extractU32ArrayForTest(src, "mj2x_vm_cend_ca1", ends));
+    const uint32_t blobSize = static_cast<uint32_t>(prog->bytecodes.size());
+    ASSERT_FALSE(ends.empty());
+    EXPECT_EQ(ends.back(), blobSize);
+    for (size_t c = 1; c < ends.size(); ++c) {
+        EXPECT_LT(ends[c - 1], ends[c]) << "chunk ends must be strictly increasing";
+    }
+    // 每个内部块边界都是某条指令的起点。
+    for (size_t c = 0; c + 1 < ends.size(); ++c) {
+        EXPECT_NE(std::find(prog->instructionOffsets.begin(), prog->instructionOffsets.end(),
+                            ends[c]),
+                  prog->instructionOffsets.end())
+            << "chunk boundary " << ends[c] << " must fall on an instruction start";
+    }
+    // 指令不跨块：指令起点与终点 - 1 属同一块。
+    auto chunkOf = [&](uint32_t pc) {
+        size_t c = 0;
+        while (c < ends.size() && pc >= ends[c]) ++c;
+        return c;
+    };
+    for (size_t i = 0; i < prog->instructionOffsets.size(); ++i) {
+        const uint32_t start = prog->instructionOffsets[i];
+        const uint32_t end   = (i + 1 < prog->instructionOffsets.size())
+                                   ? prog->instructionOffsets[i + 1]
+                                   : blobSize;
+        EXPECT_EQ(chunkOf(start), chunkOf(end - 1))
+            << "instruction [" << start << ", " << end << ") must live in one chunk";
+    }
+    // 块入口（控制流目标）恒为指令起点：blockTargets ⊆ instructionOffsets。
+    for (uint32_t t : prog->blockTargets) {
+        EXPECT_NE(std::find(prog->instructionOffsets.begin(), prog->instructionOffsets.end(), t),
+                  prog->instructionOffsets.end())
+            << "block target " << t << " must be an instruction start";
+    }
+}
+
+// 13. 超长指令（大 tableswitch > 64 字节）自成一块，不被网格切裂。
+TEST(Vmc4EncryptProgramTest, LazyChunkingKeepsOversizedSwitchInstructionWhole)
+{
+    Vmc4Options opts;
+    opts.seed                 = 0x5717C;
+    opts.programBlobEncrypt   = true;
+    opts.programLazyDecrypt   = true;
+    VmInstance instance(opts);
+    std::string reason;
+    // 24 个 case：Switch 指令 = 6 + 24*6 = 150 字节，远超 64 字节目标块。
+    std::vector<Label*> labels;
+    for (int i = 0; i < 24; ++i) labels.push_back(labelScratchArena().create<Label>());
+    std::vector<AbstractInsnNode*> insns;
+    insns.push_back(new VarInsnNode(Opcodes::ILOAD, 0));
+    insns.push_back(new TableSwitchInsnNode(0, 23, labels[0],
+                                            std::vector<Label*>(labels.begin(), labels.end())));
+    for (int i = 0; i < 24; ++i) {
+        insns.push_back(new LabelNode(labels[i]));
+        insns.push_back(new InsnNode(Opcodes::ICONST_0));
+        insns.push_back(new InsnNode(Opcodes::IRETURN));
+    }
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "bigSwitch", "(I)I", insns,
+                         1, 1);
+    auto prog = encodeMethodNode(std::move(mn), instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_FALSE(prog->instructionOffsets.empty());
+    // Switch 指令长度（起点到下一条指令起点）必须超过块目标大小。
+    uint32_t switchLen = 0;
+    for (size_t i = 0; i + 1 < prog->instructionOffsets.size(); ++i) {
+        const uint32_t len = prog->instructionOffsets[i + 1] - prog->instructionOffsets[i];
+        if (len > switchLen) switchLen = len;
+    }
+    ASSERT_GT(switchLen, 64u) << "fixture switch instruction must exceed one chunk";
+
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "bs1");
+    std::vector<uint32_t> ends;
+    ASSERT_TRUE(extractU32ArrayForTest(src, "mj2x_vm_cend_bs1", ends));
+    // 该超长指令必须独占一个块（块长 = 指令长 > 64）。
+    bool wholeInOneChunk = false;
+    for (size_t c = 0; c < ends.size(); ++c) {
+        const uint32_t begin = (c == 0) ? 0u : ends[c - 1];
+        if (ends[c] - begin == switchLen) wholeInOneChunk = true;
+    }
+    EXPECT_TRUE(wholeInOneChunk)
+        << "oversized instruction must occupy a single dedicated chunk (ends: "
+        << testing::PrintToString(ends) << ")";
+}
+
+// 14. backend 级：lazy 开启时 JNI_OnLoad 无解密调用，懒解密基础设施齐全，
+//     同配置确定性。
+TEST(Vmc4EncryptProgramTest, BackendLazyDecryptSkipsJniOnLoadAndIsDeterministic)
+{
+    Vmc4Options opts;
+    opts.seed                 = 0x2C;
+    opts.programBlobEncrypt   = true;
+    opts.programLazyDecrypt   = true;
+    Vmc4Backend backend;
+    backend.setOptions(opts);
+    const std::string tag = codegen::hex64(codegen::fnv1a64("LazyProd.add(II)I"));
+    ASSERT_FALSE(compileOneMethod(backend, "LazyProd", "add").empty());
+    backend.finalize(CompilerIndex{});
+    const std::string full = backend.generatedSource();
+    // JNI_OnLoad 不发整体解密（块保持密文到首次执行）。
+    EXPECT_EQ(full.find("mj2x_vm_blob_decrypt"), std::string::npos) << full;
+    // 懒解密基础设施在 finalize 产物中齐备。
+    EXPECT_NE(full.find("static void mj2x_vm_lazy_touch_" + tag), std::string::npos) << full;
+    EXPECT_NE(full.find("mj2x_vm_cstate_" + tag), std::string::npos) << full;
+    EXPECT_NE(full.find("mj2x_vm_cend_" + tag), std::string::npos) << full;
+    // 确定性：同 seed 同输入 → finalize 产物逐字节一致。
+    Vmc4Backend again;
+    again.setOptions(opts);
+    ASSERT_FALSE(compileOneMethod(again, "LazyProd", "add").empty());
+    again.finalize(CompilerIndex{});
+    EXPECT_EQ(again.generatedSource(), full);
+}
+
+// 15. 块密钥派生：确定性 / 恒非 0 / 块下标与主密钥敏感。
+TEST(Vmc4EncryptProgramTest, ChunkKeyDerivationIsDeterministicNonZeroAndSensitive)
+{
+    EXPECT_EQ(vmc4DeriveChunkKey(0x12345678u, 0), vmc4DeriveChunkKey(0x12345678u, 0));
+    EXPECT_EQ(vmc4DeriveChunkKey(0u, 7u), vmc4DeriveChunkKey(0u, 7u));
+    for (uint32_t k : {0u, 1u, 0x9E3779B9u, 0xFFFFFFFFu}) {
+        for (uint32_t c = 0; c < 64; ++c) {
+            EXPECT_NE(vmc4DeriveChunkKey(k, c), 0u)
+                << "chunk key must never be 0 (key=" << k << ", chunk=" << c << ")";
+            EXPECT_NE(vmc4DeriveChunkKey(k, c), vmc4DeriveChunkKey(k, c + 1u))
+                << "chunk key must be index sensitive (key=" << k << ", chunk=" << c << ")";
+            EXPECT_NE(vmc4DeriveChunkKey(k, c), vmc4DeriveChunkKey(k ^ 0xA5A5A5A5u, c))
+                << "chunk key must be blob-key sensitive (key=" << k << ", chunk=" << c << ")";
+        }
+    }
+}
+
+// 16. lazy 与 drift 叠加：块级解密还原的是 drift 编码流（两者正交）。
+TEST(Vmc4EncryptProgramTest, LazyDecryptComposesWithDrift)
+{
+    Vmc4Options opts;
+    opts.seed                 = 0x7778;
+    opts.aliasCount           = 2;
+    opts.driftVariants        = 2;
+    opts.driftPeriod          = 8;
+    opts.programBlobEncrypt   = true;
+    opts.programLazyDecrypt   = true;
+    VmInstance instance(opts);
+    std::string reason;
+    auto* loop = new LabelNode(labelScratchArena().create<Label>());
+    auto* done = new LabelNode(labelScratchArena().create<Label>());
+    auto prog = encodeMethod("driftLazy", "(I)I",
+                             {
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new InsnNode(Opcodes::ICONST_0),
+                                 new VarInsnNode(Opcodes::ISTORE, 2),
+                                 loop,
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new JumpInsnNode(Opcodes::IF_ICMPGE, done->label),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 1),
+                                 new IincInsnNode(2, 1),
+                                 new JumpInsnNode(Opcodes::GOTO, loop->label),
+                                 done,
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 3, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string src = VmInterpreterEmitter::emit(*prog, instance, "dl1");
+    // drift 结构不受影响，仍按明文流语义发射。
+    EXPECT_NE(src.find("mj2x_vm_unmap_dl1_0"), std::string::npos) << src;
+    std::vector<uint8_t> cipher;
+    ASSERT_TRUE(extractArrayBytesForTest(src, "mj2x_vm_code_dl1", cipher));
+    ASSERT_EQ(cipher.size(), prog->bytecodes.size());
+    std::vector<uint32_t> ends;
+    ASSERT_TRUE(extractU32ArrayForTest(src, "mj2x_vm_cend_dl1", ends));
+    const uint32_t blobKey = vmc4DeriveBlobKey(instance.instanceSeed());
+    uint32_t       begin   = 0;
+    for (size_t c = 0; c < ends.size(); ++c) {
+        std::vector<uint8_t> chunk(cipher.begin() + begin, cipher.begin() + ends[c]);
+        xorDecryptForTest(chunk, chunkKeyForTest(blobKey, static_cast<uint32_t>(c)));
+        for (size_t i = 0; i < chunk.size(); ++i) cipher[begin + i] = chunk[i];
+        begin = ends[c];
+    }
+    EXPECT_EQ(cipher, prog->bytecodes);
+}
+
+// 17. trace surface / 实例 seed 不受 lazy 开关影响（红队契约字段集稳定）。
+TEST(Vmc4EncryptProgramTest, TraceSurfaceAndInstanceSeedUnaffectedByLazyFlag)
+{
+    Vmc4Options plain;
+    plain.seed = 11;
+    Vmc4Options lazy = plain;
+    lazy.programBlobEncrypt = true;
+    lazy.programLazyDecrypt = true;
+    VmInstance a(plain);
+    VmInstance b(lazy);
+    EXPECT_EQ(a.describe(), b.describe());
+    EXPECT_EQ(a.instanceSeed(), b.instanceSeed());
+    // lazy 无加密 → 归一为关闭（与既有 OptionFlowsIntoInstance 对应）。
+    Vmc4Options lazyOnly;
+    lazyOnly.programLazyDecrypt = true;
+    VmInstance c(lazyOnly);
+    EXPECT_FALSE(c.blobLazy());
 }

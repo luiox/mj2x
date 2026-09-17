@@ -86,6 +86,19 @@ struct Vmc4Options
     /// （issue #760 记录的前提缺口：jvmtp 1.6.2 起 at-rest 加密为默认形态）。
     bool programBlobEncrypt = false;
 
+    /// 程序 blob 分块懒解密（--vmc4-lazy-decrypt；默认关闭，要求
+    /// programBlobEncrypt 开启）。
+    ///
+    /// @details
+    /// issue #760 切片 2（对齐 jvmtp 1.6.4 vm.lazy-decrypt）：开启后 blob 按
+    /// 指令对齐的 64 字节目标块独立加密（块密钥从 blob 密钥 + 块下标派生），
+    /// JNI_OnLoad 不再整体解密；解释器首次取码到某块时才原地解密该块，
+    /// 未执行到的分支保持密文（内存 dump 只能拿到实际执行过的块）。解密后
+    /// 保持明文不回擦（权衡见 vm_interpreter_emit.cpp 分块发射注释）。
+    /// 单独开启（无 programBlobEncrypt）无意义：发射侧按纯加密关闭处理，
+    /// CLI 侧以 requires 约束（vmc4.encrypt_program）。
+    bool programLazyDecrypt = false;
+
     /// 反侦测检查点注入（wrapper 入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     codegen::RuntimeProtectionOptions runtimeProtection;
@@ -140,6 +153,15 @@ public:
     /// 语义解释（unmap 表），加密作用于最终字节流的 at-rest 形态——加密在
     /// drift 编码完成之后、发射之前施加，解密后字节流即 drift 编码流。
     bool blobEncrypt() const { return blobEncrypt_; }
+
+    /// 程序 blob 分块懒解密是否开启（--vmc4-lazy-decrypt；issue #760 切片 2）。
+    ///
+    /// @details
+    /// 开启时（恒以 blobEncrypt() 为前提）VmInterpreterEmitter 把字节流按指令
+    /// 对齐块独立加密并发懒解密基础设施（cstate/cend 表 + touch 调用），
+    /// backend 不再在 JNI_OnLoad 发射整体解密。与 dispatch drift 正交：加密
+    /// 作用于 drift 编码完成后的最终字节流（分块边界按最终流布局计算）。
+    bool blobLazy() const { return blobLazy_; }
 
     /// @brief 按字节流偏移计算当前 drift 变体序号。
     ///
@@ -254,6 +276,8 @@ private:
     /// 程序 blob at-rest 加密开关（options.programBlobEncrypt 透传，不入
     /// describe()——trace surface 红队契约字段集保持稳定）。
     bool             blobEncrypt_;
+    /// 分块懒解密开关（options.programLazyDecrypt 透传，不入 describe()）。
+    bool             blobLazy_;
     /// VmOpcode 值 → 该语义的实例字节集合（canonical 在前）。
     std::array<std::vector<uint8_t>, 256> opcodeBytes_;
     std::vector<VmOpcode> handlerOrder_;
@@ -279,7 +303,19 @@ uint64_t vmc4DeriveInstanceSeed(uint64_t mainSeed, uint64_t identityHash);
 /// handler 顺序等其他实例维度不耦合）。结果折叠到 xorshift32 的 32 位状态
 /// 空间；0 是 xorshift32 死锁态（密钥流退化为全零 = 未加密），折叠结果为 0
 /// 时回退固定种子。密钥不以数组形式落产物——生成的 C 只含 seed 常量，
-/// keystream 由解密循环现场重算（首切片边界：解密后 key 擦除留待后续）。
+/// keystream 由解密循环现场重算。切片 2：CRT 解密原语对密钥参数与 keystream
+/// 状态做用后擦除（密钥栈擦除）；分块密钥派生见 vmc4DeriveChunkKey。
 uint32_t vmc4DeriveBlobKey(uint64_t instanceSeed);
+
+/// @brief 从 blob 密钥 + 块下标派生懒解密分块密钥（32 位，确定性，恒非 0）。
+///
+/// @details
+/// issue #760 切片 2：blob 按指令对齐块独立加密，块 c 的密钥 =
+/// vmc4DeriveChunkKey(blobKey, c)（golden-ratio 扰动 + 4 轮 xorshift32 扩散）。
+/// 发射侧（VmInterpreterEmitter 分块加密）与运行侧（CRT mj2x_vm_chunk_key）
+/// 同一公式双镜像，纯 u32 算术逐位一致。互不耦合的独立派生面：知道某个块的
+/// 密钥不能直接推出其他块的密钥（vs 整体密钥流的分段复用）。
+/// 结果恒非 0（xorshift32 死锁态回避，与 vmc4DeriveBlobKey 同一约定）。
+uint32_t vmc4DeriveChunkKey(uint32_t blobKey, uint32_t chunkIndex);
 
 }   // namespace mj2x

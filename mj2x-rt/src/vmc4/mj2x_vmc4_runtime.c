@@ -8,6 +8,46 @@
 
 #include <limits.h>
 
+// 懒解密互斥锁（#760 切片 2）：多个 Java 线程并发首执行同一方法时，同一块
+// 只允许解密一次（XOR 对合，并发双重解密会把块还原成密文）。锁为进程级
+// 单例、静态初始化（无生命周期管理）；慢路径（块首次解密）才加锁，稳态
+// 零锁开销。平台面与 regc CRT（mj2x_regc_string_builder.c）同一套宏约定。
+#ifdef _WIN32
+#    define WIN32_LEAN_AND_MEAN
+#    include <windows.h>
+static SRWLOCK mj2x_vm_lazy_gate = SRWLOCK_INIT;
+static void mj2x_vm_lazy_gate_lock(void)
+{
+    AcquireSRWLockExclusive(&mj2x_vm_lazy_gate);
+}
+static void mj2x_vm_lazy_gate_unlock(void)
+{
+    ReleaseSRWLockExclusive(&mj2x_vm_lazy_gate);
+}
+#else
+#    ifndef _POSIX_C_SOURCE
+#        define _POSIX_C_SOURCE 200809L
+#    endif
+#    include <pthread.h>
+static pthread_mutex_t mj2x_vm_lazy_gate = PTHREAD_MUTEX_INITIALIZER;
+static void mj2x_vm_lazy_gate_lock(void)
+{
+    (void)pthread_mutex_lock(&mj2x_vm_lazy_gate);
+}
+static void mj2x_vm_lazy_gate_unlock(void)
+{
+    (void)pthread_mutex_unlock(&mj2x_vm_lazy_gate);
+}
+#endif
+
+// 密钥材料用后擦除（#760 切片 2，对齐 jvmtp 1.6.4 密钥栈擦除）：volatile
+// 写阻止编译器把清零优化掉（死存储消除），密钥/keystream 不在栈上留副本。
+static void mj2x_vm_scrub_u32(uint32_t* v)
+{
+    volatile uint32_t* p = v;
+    *p = 0u;
+}
+
 // JVM 整数除法语义:INT_MIN / -1 不抛(回绕到 INT_MIN),其余交给硬件。
 int32_t mj2x_vm_div_i32(int32_t a, int32_t b)
 {
@@ -126,4 +166,67 @@ void mj2x_vm_blob_decrypt(unsigned char* data, unsigned int size, uint32_t key)
         state = mj2x_vm_blob_xorshift32(state);
         data[i] = (unsigned char)(data[i] ^ (unsigned char)(state & 0xFFu));
     }
+    // 密钥材料用后擦除(#760 切片 2):keystream 状态与密钥参数清零后再返回,
+    // 栈上不留可被内存取证捞到的密钥副本。
+    mj2x_vm_scrub_u32(&state);
+    mj2x_vm_scrub_u32(&key);
+}
+
+// ---------------------------------------------------------------------------
+// 分块懒解密(issue #760 切片 2,--vmc4-lazy-decrypt)。
+//
+// 发射侧把 blob 按指令对齐的 64 字节目标块独立加密(块 key =
+// mj2x_vm_chunk_key(blob_key, c),密钥流各自从块 key 起);解释器取码前经
+// 生成代码的 mj2x_vm_lazy_touch_<tag> 调用本组函数,块首次进入才解密,
+// 未走到的分支保持密文(内存 dump 只能拿到实际执行过的块,对齐 jvmtp
+// 1.6.4 vm.lazy-decrypt 形态)。解密后的块保持明文不回擦:本 rt 的指令流
+// 读取方式是 handler 内联直读 code[pc](无中央取译码步骤),回擦需要在
+// 5 种 dispatcher 的每条边上插入重加密点并跟踪"块离开"事件(循环回边
+// 使该事件不可判定),收益/风险不成比例——权衡记录见切片 2 设计说明。
+// ---------------------------------------------------------------------------
+
+uint32_t mj2x_vm_chunk_key(uint32_t blob_key, uint32_t chunk_index)
+{
+    // golden-ratio 扰动把块下标散进密钥空间,再 4 轮 xorshift32 扩散;
+    // 纯 u32 算术(C 标准定义的回绕),与发射侧 vmc4DeriveChunkKey 逐位一致。
+    uint32_t s = blob_key ^ (0x9E3779B9u + 0x9E3779B9u * (chunk_index + 1u));
+    s = mj2x_vm_blob_xorshift32(s);
+    s = mj2x_vm_blob_xorshift32(s);
+    s = mj2x_vm_blob_xorshift32(s);
+    s = mj2x_vm_blob_xorshift32(s);
+    // 0 是 xorshift32 死锁态(密钥流恒 0 = 未加密),回退固定种子。
+    return s != 0u ? s : 0x9E3779B9u;
+}
+
+uint32_t mj2x_vm_chunk_locate(const uint32_t* ends, uint32_t n_chunks, uint32_t pc)
+{
+    uint32_t c;
+    for (c = 0; c < n_chunks; ++c) {
+        if (pc < ends[c]) return c;
+    }
+    // 越界 pc(仅解释器不变量被破坏时可达)归末块,不越界读。
+    return n_chunks != 0u ? n_chunks - 1u : 0u;
+}
+
+void mj2x_vm_lazy_decrypt(unsigned char* code, const uint32_t* ends,
+                          volatile unsigned char* state, uint32_t n_chunks,
+                          uint32_t blob_key, uint32_t chunk_index)
+{
+    if (code == NULL || ends == NULL || state == NULL || chunk_index >= n_chunks) return;
+    // 快路径:已解密,无锁返回。state 为 volatile 数组,每次派发生效。
+    if (state[chunk_index] == 1u) return;
+    mj2x_vm_lazy_gate_lock();
+    // 双重检查:等锁期间其他线程可能已完成本块解密。
+    if (state[chunk_index] != 1u) {
+        const uint32_t begin = (chunk_index != 0u) ? ends[chunk_index - 1u] : 0u;
+        const uint32_t end   = ends[chunk_index];
+        if (begin < end) {
+            uint32_t k = mj2x_vm_chunk_key(blob_key, chunk_index);
+            mj2x_vm_blob_decrypt(code + begin, end - begin, k);
+            // 派生密钥用后擦除:密钥只在本地变量里活到解密调用返回。
+            mj2x_vm_scrub_u32(&k);
+        }
+        state[chunk_index] = 1u;   /* 锁内发布:解密完成后才对其他线程可见 */
+    }
+    mj2x_vm_lazy_gate_unlock();
 }

@@ -1,5 +1,7 @@
 #include "mj2x/backend/vmc4/vmc4_instance.hpp"
 
+#include "mj2x/core/native_lib_crypto.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <string>
@@ -44,6 +46,7 @@ VmInstance::VmInstance(const Vmc4Options& options, uint64_t instanceSeed)
     , driftVariants_(std::max(0, std::min(options.driftVariants, 4)))
     , driftPeriod_(std::max(1, options.driftPeriod))
     , blobEncrypt_(options.programBlobEncrypt)
+    , blobLazy_(options.programLazyDecrypt && options.programBlobEncrypt)
 {
     buildOpcodeBytes();
     buildHandlerOrder();
@@ -366,6 +369,20 @@ uint32_t vmc4DeriveBlobKey(uint64_t instanceSeed)
     // xorshift32 的 0 是死锁态（密钥流恒 0 = 未加密），回退固定种子。
     // 运行侧（mj2x_vm_blob_decrypt）对 0 有同一回退约定，双保险。
     return key != 0 ? key : 0x9E3779B9u;
+}
+
+uint32_t vmc4DeriveChunkKey(uint32_t blobKey, uint32_t chunkIndex)
+{
+    // 与 CRT 侧 mj2x_vm_chunk_key（mj2x_vmc4_runtime.c）同一公式双镜像：
+    // golden-ratio 扰动散布块下标 + 4 轮 xorshift32 扩散。纯 u32 算术
+    // （C/C++ 回绕语义一致），两侧逐位一致；不得引入任何 64 位运算或
+    // 实现定义行为，改公式必须两侧同步。
+    uint32_t s = blobKey ^ (0x9E3779B9u + 0x9E3779B9u * (chunkIndex + 1u));
+    for (int round = 0; round < 4; ++round) {
+        s = xorshift32Step(s);
+    }
+    // 0 是 xorshift32 死锁态（密钥流恒 0 = 未加密），回退固定种子。
+    return s != 0u ? s : 0x9E3779B9u;
 }
 
 }   // namespace mj2x

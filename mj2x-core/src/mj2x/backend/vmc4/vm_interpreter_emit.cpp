@@ -488,13 +488,19 @@ void emitHandlerCase(CSourceStream& out, const VmInstance& instance, const Handl
 }
 
 /// 公共局部变量声明（所有 dispatcher 都在函数体开头需要这些）。
-void emitCommonDecls(CSourceStream& out, const std::string& progName, const std::string& targetsName)
+/// blobLazy 时额外声明块游标 _cc（ComputedGoto 无循环结构，靠 goto 在同一
+/// 函数体内流转，函数局部生存期天然覆盖全部 handler 体）。
+void emitCommonDecls(CSourceStream& out, const VmInstance& instance, const std::string& progName,
+                     const std::string& targetsName)
 {
     out.emitLine(format_std("const unsigned char* code = {};", progName));
     out.emitLine(format_std("const unsigned int* targets = {};", targetsName));
     out.emitLine("unsigned int pc = targets[0];");
     out.emitLine("unsigned int status = 0;");
     out.emitLine("mj2x_vm_slot* regs = slots;");
+    if (instance.blobLazy()) {
+        out.emitLine("unsigned int _cc = 0u;  /* lazy-decrypt chunk cursor */");
+    }
 }
 
 /// @brief 异常检查点（Phase 2.C）：所有 dispatcher 无条件提供。
@@ -675,6 +681,105 @@ std::string emitLabelSelectExpr(const VmInstance& instance, const std::string& t
     return s;
 }
 
+// ===========================================================================
+// 分块懒解密发射支持（issue #760 切片 2，--vmc4-lazy-decrypt）。
+// ===========================================================================
+
+/// 懒解密目标块大小（字节）。对齐竞品 jvmtp 1.6.4 vm.lazy-decrypt 的 64 字节
+/// 块粒度：dump 粒度 = 64 字节、密文驻留面与解密开销的平衡点。
+constexpr uint32_t kLazyChunkTargetBytes = 64;
+
+/// 计算懒解密分块表（块终点，排他偏移，单调）。
+///
+/// @details
+/// 块边界只落在指令起点（VmProgram.instructionOffsets）——这是正确性约束而
+/// 非优化：handler 内联直读 code[pc..pc+len)（SWITCH 按 count 读 count*6 字节，
+/// 单条指令可远超 64 字节），固定网格分块会把指令切到两个块里，首块解密后
+/// handler 仍会读到下一块的密文。贪心打包：累计指令长度超过 64 字节即开新块；
+/// 单条超长指令自成一块（块长可超 64，不变量只是「指令整块内」）。
+std::vector<uint32_t> buildLazyChunkEnds(const VmProgram& program)
+{
+    // 空流（无 Halt，仅防御）也给一个空块：NC=1、解密 size=0 无操作。
+    if (program.bytecodes.empty()) return std::vector<uint32_t>{0u};
+    std::vector<uint32_t> ends;
+    uint32_t chunkBytes = 0;
+    for (size_t i = 0; i < program.instructionOffsets.size(); ++i) {
+        const uint32_t start = program.instructionOffsets[i];
+        const uint32_t end   = (i + 1 < program.instructionOffsets.size())
+                                   ? program.instructionOffsets[i + 1]
+                                   : static_cast<uint32_t>(program.bytecodes.size());
+        const uint32_t len   = end - start;
+        if (chunkBytes != 0u && chunkBytes + len > kLazyChunkTargetBytes) {
+            ends.push_back(start);   // 新块从本指令起点开始
+            chunkBytes = 0;
+        }
+        chunkBytes += len;
+    }
+    ends.push_back(static_cast<uint32_t>(program.bytecodes.size()));
+    return ends;
+}
+
+/// 发射懒解密基础设施（blobLazy 时在 bytecode 数组之后、dispatcher 之前）：
+/// 块终点表（const）+ 块状态表（volatile，0=密文 1=已解密）+ touch helper。
+///
+/// @details
+/// touch helper 在每次取码前调用：快路径（块游标仍覆盖 pc 且已解密）只做
+/// 2 次读 + 比较；慢路径经 CRT mj2x_vm_chunk_locate 定位块并调
+/// mj2x_vm_lazy_decrypt 原地解密（CRT 内部持锁防多 Java 线程双重解密，
+/// 派生密钥用后擦除）。主密钥只以 32 位立即数出现在调用参数里（与首切片
+/// 同一形态），不落任何 key/keystream 数组。
+void emitLazyInfrastructure(CSourceStream& out, const VmInstance& instance,
+                            const std::string& tag, const std::string& progName,
+                            const std::vector<uint32_t>& chunkEnds)
+{
+    const uint32_t nChunks = static_cast<uint32_t>(chunkEnds.size());
+    out.emitLine(format_std("static const unsigned int mj2x_vm_cend_{}[{}] = {{", tag, nChunks));
+    {
+        CSourceStream::IndentGuard g(out);
+        out.emitRaw(emitU32Array(chunkEnds, "    "));
+    }
+    out.emitLine("");
+    out.emitLine("};");
+    // volatile 状态表：阻止编译器把状态读提升出解释器主循环（懒解密本身会改
+    // 状态，跨 CRT 调用的重读必须真实发生）。static 零初始化 = 初始全密文。
+    out.emitLine(format_std(
+        "static volatile unsigned char mj2x_vm_cstate_{}[{}];  /* 0=cipher, 1=decrypted */",
+        tag, nChunks));
+    char keyBuf[16];
+    std::snprintf(keyBuf, sizeof(keyBuf), "0x%08xu",
+                  static_cast<unsigned>(vmc4DeriveBlobKey(instance.instanceSeed())));
+    out.add_func(format_std("static void mj2x_vm_lazy_touch_{}(unsigned int pc, unsigned int* cc)",
+                            tag),
+                 [&](CSourceStream& f) {
+        f.emitLine(format_std("if (*cc >= {}u || pc >= mj2x_vm_cend_{}[*cc] ||", nChunks, tag));
+        f.emitLine(format_std("    (*cc != 0u && pc < mj2x_vm_cend_{}[*cc - 1u]) ||", tag));
+        f.emitLine(format_std("    mj2x_vm_cstate_{}[*cc] != 1u) {{", tag));
+        {
+            CSourceStream::IndentGuard g(f);
+            f.emitLine(format_std("*cc = mj2x_vm_chunk_locate(mj2x_vm_cend_{}, {}u, pc);", tag,
+                                  nChunks));
+            f.emitLine(format_std("if (mj2x_vm_cstate_{}[*cc] != 1u) {{", tag));
+            {
+                CSourceStream::IndentGuard g2(f);
+                f.emitLine(format_std("mj2x_vm_lazy_decrypt({}, mj2x_vm_cend_{}, "
+                                      "mj2x_vm_cstate_{}, {}u, {}, *cc);",
+                                      progName, tag, tag, nChunks, keyBuf));
+            }
+            f.emitLine("}");
+        }
+        f.emitLine("}");
+    });
+}
+
+/// 发射取码前的懒解密 touch 调用（blobLazy 关闭时零发射——关闭路径产物不变）。
+/// pcExpr 是当前指令起点表达式（各 dispatcher 形态各异），ccExpr 是块游标地址。
+void emitLazyTouchCall(CSourceStream& out, const VmInstance& instance, const std::string& tag,
+                       const std::string& pcExpr, const std::string& ccExpr)
+{
+    if (!instance.blobLazy()) return;
+    out.emitLine(format_std("mj2x_vm_lazy_touch_{}({}, {});", tag, pcExpr, ccExpr));
+}
+
 /// 生成 dispatcher 的取码语句：drift 开启时按当前 pc 算变体序号再过 unmap 表；
 /// 关闭时保持 `unsigned char opcode = code[pc++];` 原样（零回归）。
 void emitOpcodeFetch(CSourceStream& out, const VmInstance& instance, const std::string& tag)
@@ -711,10 +816,12 @@ void emitSwitchDispatcher(CSourceStream& out, const VmProgram& program, const Vm
                           const std::string& progName, const std::string& targetsName,
                           const std::string& tag)
 {
-    emitCommonDecls(out, progName, targetsName);
+    emitCommonDecls(out, instance, progName, targetsName);
     out.emitLine("for (;;) {");
     {
         CSourceStream::IndentGuard g(out);
+        // 懒解密（issue #760 切片 2）：取码前确保 pc 所在块已解密。
+        emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
         emitOpcodeFetch(out, instance, tag);
         out.emitLine("switch (opcode) {");
         {
@@ -756,13 +863,16 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
                             const VmInstance& instance, const std::string& tag)
 {
     const std::string ctxType = format_std("mj2x_vm_ctx_{}", tag);
+    // blobLazy：ctx 追加块游标字段（dispatch body 跨调用持久，懒解密快路径
+    // 依赖它；lazy 关闭时不发射该字段，保持产物逐字节不变）。
     out.emitLine(format_std(
         "struct {} {{ const unsigned char* code; const unsigned int* targets; "
         "unsigned int pc; unsigned int status; JNIEnv* env; const mj2x_vm_call_fn* call_table; "
         "const mj2x_vm_call_fn* load_field_table; const mj2x_vm_call_fn* store_field_table; "
         "const mj2x_vm_call_fn* array_load_table; const mj2x_vm_call_fn* array_store_table; "
         "const mj2x_vm_call_fn* alloc_table; const mj2x_vm_call_fn* intrinsic_table; "
-        "mj2x_vm_slot* regs; mj2x_vm_slot* retval; }};", ctxType));
+        "mj2x_vm_slot* regs; mj2x_vm_slot* retval;{} }};", ctxType,
+        instance.blobLazy() ? " unsigned int lazy_chunk;" : ""));
     out.emitLine(format_std("typedef struct {} {};", ctxType, ctxType));
     out.add_func(format_std("static void mj2x_vm_dispatch_body_{}({}* ctx)", tag, ctxType),
                  [&](CSourceStream& f) {
@@ -840,6 +950,9 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("_ctx.intrinsic_table = intrinsic_table;");
     out.emitLine("_ctx.regs = slots;");
     out.emitLine("_ctx.retval = retval;");
+    if (instance.blobLazy()) {
+        out.emitLine("_ctx.lazy_chunk = 0u;  /* lazy-decrypt chunk cursor */");
+    }
     out.emitLine(format_std("{}* ctx = &_ctx;", ctxType));
     out.emitLine(format_std("typedef void (*mj2x_vm_handler_{})({}*);", tag, ctxType));
     // 函数指针表（每项指向同一 dispatch_body，表的存在本身是间接调用的逆向特征）。
@@ -881,6 +994,10 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("for (;;) {");
     {
         CSourceStream::IndentGuard g(out);
+        // 懒解密（issue #760 切片 2）：exec 循环读 opcode 选 handler 之前确保
+        // 所在块已解密（dispatch_body 内的取码/handler 操作数读同属本条指令，
+        // 已被本次 touch 覆盖，body 内无需再 touch）。
+        emitLazyTouchCall(out, instance, tag, "ctx->pc", "&_ctx.lazy_chunk");
         if (instance.driftEnabled()) {
             out.emitLine(format_std("unsigned int d = (unsigned)(ctx->pc / {}) % {};",
                                     instance.driftPeriod(), instance.driftVariants()));
@@ -932,7 +1049,7 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
                                 const VmInstance& instance, const std::string& progName,
                                 const std::string& targetsName, const std::string& tag)
 {
-    emitCommonDecls(out, progName, targetsName);
+    emitCommonDecls(out, instance, progName, targetsName);
     // 所有槽默认指向 halt（防御非法 opcode：goto *NULL 是 UB），显式条目覆盖。
     out.emitLine("static const void* mj2x_vm_labels[256] = { [0 ... 255] = &&mj2x_vm_halt");
     {
@@ -954,6 +1071,8 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
         }
     }
     out.emitLine("};");
+    // 首次取码（懒解密：入口块在首次派发前解密）。
+    emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
     if (instance.driftEnabled()) {
         out.emitLine(format_std("unsigned int d = (unsigned)(pc / {}) % {};",
                                 instance.driftPeriod(), instance.driftVariants()));
@@ -973,6 +1092,8 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
             {
                 CSourceStream::IndentGuard g(out);
                 out.emitRaw(handlerBodyFor(instance, entry));
+                // handler 尾取码（懒解密：pc 已被 handler 推进到下一条指令起点）。
+                emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
                 if (instance.driftEnabled()) {
                     out.emitLine(format_std(
                         "unsigned int nd = (unsigned)(pc / {}) % {}; goto *mj2x_vm_labels[{}[{}[code[pc++]]]];",
@@ -1004,6 +1125,8 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
     // matched label 后重新取码；未匹配传播。
     emitExceptionCheckpoint(out, program, targetsName, "pc", "mj2x_vm_exc_fetch",
                             "status = 1; goto mj2x_vm_done;");
+    // 异常匹配后的重取码（懒解密：handler 块可能尚未解密）。
+    emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
     out.emitLine("goto *mj2x_vm_labels[code[pc++]];");
     out.label_("mj2x_vm_done");
     out.emitLine("return status;");
@@ -1014,10 +1137,12 @@ void emitIfNestDispatcher(CSourceStream& out, const VmProgram& program,
                           const VmInstance& instance, const std::string& progName,
                           const std::string& targetsName, const std::string& tag)
 {
-    emitCommonDecls(out, progName, targetsName);
+    emitCommonDecls(out, instance, progName, targetsName);
     out.emitLine("for (;;) {");
     {
         CSourceStream::IndentGuard g(out);
+        // 懒解密（issue #760 切片 2）：取码前确保 pc 所在块已解密。
+        emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
         emitOpcodeFetch(out, instance, tag);
         for (const auto& op : instance.handlerOrder()) {
             const HandlerEntry* entry = findHandler(op);
@@ -1049,11 +1174,13 @@ void emitStateDispatcher(CSourceStream& out, const VmProgram& program,
                          const VmInstance& instance, const std::string& progName,
                          const std::string& targetsName, const std::string& tag)
 {
-    emitCommonDecls(out, progName, targetsName);
+    emitCommonDecls(out, instance, progName, targetsName);
     out.emitLine("unsigned int state = 1; /* 1=RUNNING 0=DONE */");
     out.emitLine("while (state) {");
     {
         CSourceStream::IndentGuard g(out);
+        // 懒解密（issue #760 切片 2）：取码前确保 pc 所在块已解密。
+        emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
         emitOpcodeFetch(out, instance, tag);
         out.emitLine("switch (opcode) {");
         {
@@ -2067,22 +2194,48 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
     }
 
     // --- bytecode 数组 ---
+    std::vector<uint32_t> lazyChunkEnds;   // 懒解密块终点表（blobLazy 时非空）
     {
-        // programBlobEncrypt（issue #760 首切片）：开启时数据段以密文发射
+        // programBlobEncrypt（issue #760 切片 1/2）：开启时数据段以密文发射
         // （xorshift32 密钥流，密钥从 instanceSeed 现场派生），产物 C 源与编译
-        // 产物二进制中不再出现明文程序流。解密在 JNI_OnLoad（库加载期，先于
-        // 任何 native 调用；backend.emitRegistrationCode 发射调用）经
-        // mj2x_vm_blob_decrypt 对本数组原地一次性完成——static 存储期使解密
-        // 缓冲区存活期覆盖全部执行期，且不产生第二份 blob 副本。
-        // 首切片边界：lazy 分块解密、解密后 key/keystream 擦除（jvmtp 1.6.4
-        // 完整形态）留待后续切片；blockTargets/常量池不属于指令流，仍为明文。
-        // 关闭路径保持原发射形态（产物字节级不变——既有测试与 trace surface
-        // 契约不受影响）。
+        // 产物二进制中不再出现明文程序流。static 存储期使解密缓冲区存活期
+        // 覆盖全部执行期，且不产生第二份 blob 副本。blockTargets/常量池不属
+        // 于指令流，仍为明文。关闭路径保持原发射形态（产物字节级不变）。
+        //
+        // 切片 2 两种形态：
+        //   - 仅加密：整流单一密钥，JNI_OnLoad 一次性原地解密（backend 发射）。
+        //   - 加密 + lazy（--vmc4-lazy-decrypt）：按指令对齐的 64 字节目标块
+        //     独立加密（块密钥 = vmc4DeriveChunkKey(blobKey, c)，与 CRT
+        //     mj2x_vm_chunk_key 双镜像），JNI_OnLoad 不解密；解释器取码前经
+        //     mj2x_vm_lazy_touch_<tag> 确保所在块已解密（首次进入才解密，
+        //     未走到的分支保持密文，对齐 jvmtp 1.6.4 vm.lazy-decrypt）。
+        //     解密后保持明文不回擦：rt 侧 handler 内联直读 code[pc]（无中央
+        //     取译码步骤），回擦需在 5 种 dispatcher 的每条控制流边上插重加密
+        //     点并判定"块离开"事件（循环回边使其不可判定），而单块解密本身
+        //     是纳秒级操作——权衡后取「解密一次、驻留明文」，密钥侧的暴露面
+        //     由密钥栈擦除（CRT scrub）与块级密钥独立派生收敛。
         if (instance.blobEncrypt()) {
             std::vector<uint8_t> cipher = program.bytecodes;
-            xorStreamBytes(cipher.data(), cipher.size(),
-                           vmc4DeriveBlobKey(instance.instanceSeed()));
-            out.emitLine("/* program blob: encrypted at rest, decrypted once in JNI_OnLoad */");
+            if (instance.blobLazy()) {
+                lazyChunkEnds = buildLazyChunkEnds(program);
+                // 分块独立加密：块 c 用 vmc4DeriveChunkKey(blobKey, c) 起步的
+                // 独立密钥流。加密施加于 drift 编码完成后的最终字节流（与
+                // drift 正交叠加，与首切片同一施加点）。
+                const uint32_t blobKey = vmc4DeriveBlobKey(instance.instanceSeed());
+                uint32_t chunkBegin = 0;
+                for (size_t c = 0; c < lazyChunkEnds.size(); ++c) {
+                    xorStreamBytes(cipher.data() + chunkBegin,
+                                   lazyChunkEnds[c] - chunkBegin,
+                                   vmc4DeriveChunkKey(blobKey, static_cast<uint32_t>(c)));
+                    chunkBegin = lazyChunkEnds[c];
+                }
+                out.emitLine("/* program blob: chunked at rest, decrypted lazily on first"
+                             " execution (issue #760 slice 2) */");
+            } else {
+                xorStreamBytes(cipher.data(), cipher.size(),
+                               vmc4DeriveBlobKey(instance.instanceSeed()));
+                out.emitLine("/* program blob: encrypted at rest, decrypted once in JNI_OnLoad */");
+            }
             out.emitLine(format_std("static unsigned char {}[] = {{", progName));
             {
                 CSourceStream::IndentGuard g(out);
@@ -2098,6 +2251,12 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         out.emitLine("");
         out.emitLine("};");
         out.emitBlankLine();
+        // 懒解密基础设施（块终点表 + 状态表 + touch helper），须在全部
+        // dispatcher 之前发射（文件级符号）。
+        if (instance.blobLazy()) {
+            emitLazyInfrastructure(out, instance, tag, progName, lazyChunkEnds);
+            out.emitBlankLine();
+        }
     }
 
     // drift 的 per-variant unmap 表 + period 语义变义的 case 标签表是文件级
