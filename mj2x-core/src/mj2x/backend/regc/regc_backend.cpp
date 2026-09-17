@@ -1430,7 +1430,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
     emitRuntimeHelpers(full,
                        cacheDeclarations,
                        &fwd);
-    emitRegCHelperPrelude(full);
+    emitRegCHelperPrelude(full, impl_->userIntrinsicRegistry.get());
     for (size_t i = 0; i < impl_->indySites.size(); ++i) {
         emitIndyBootstrapFunction(full, i, impl_->indySites[i],
                                   impl_->cachePool.stringsEncryptEnabled() ? &impl_->cachePool

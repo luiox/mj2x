@@ -280,8 +280,11 @@ bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs,
 /// 取保护指定 block 的全部异常区域（按声明顺序）。
 std::vector<const RegExceptionRegion*> activeExceptionRegions(const RegFunction& fn,
                                                               const RegBlock*    block);
-/// 发射函数级 helper 前导声明（cached/instance 调用等）。
-void emitHelperPrelude(ca::str::Utf8StringBuilder& out);
+/// 发射函数级 helper 前导声明（cached/instance 调用等）。registry 非空时（用户
+/// 自定义 intrinsic registry）改从该实例发射——其 emitDeclarations 覆盖 builtins
+/// 固定声明并追加用户 symbol 的 extern 声明。
+void emitHelperPrelude(ca::str::Utf8StringBuilder& out,
+                       const RegCIntrinsicRegistry* intrinsicRegistry = nullptr);
 /// 判断已发射函数体是否会产生 JNI local ref（gate PushLocalFrame/PopLocalFrame）。
 bool bodyProducesLocalRefs(const ca::str::Utf8StringRef& body);
 /// 发射异常区域分发表（_mj2x_regc_exception_check + 区域边界拷贝）。

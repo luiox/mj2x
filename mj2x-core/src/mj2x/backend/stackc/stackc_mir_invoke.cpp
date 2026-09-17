@@ -55,20 +55,37 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, codegen::CSourceStre
     // 用户自定义 intrinsic（issue #818）：匹配调用点降级为直接 symbol 调用，
     // 参数从 operand stack 弹出（与 JNI 调用同一参数区），结果写回接收者槽，
     // sp 调整与普通调用一致；mayThrow 时保留 pending 异常检查。
+    // 匹配契约：static 调用点匹配 passReceiver=false 条目；instance 调用点
+    // （receiver 在 sp-argCount 槽）仅匹配显式 passReceiver=true 条目
+    // （fail-closed：未声明不匹配，回通用 JNI 派发——G-1 行为保持）。
+    // static 调用点 + passReceiver 条目的配置校验错误在 compileMethod 入口
+    // 预检 fail-closed，此处不会遇到该组合。
     {
         const UserIntrinsic* userIntr = nullptr;
         for (const auto& u : userIntrinsics) {
-            if (u.owner == owner && u.name == name && u.desc == desc && isStatic) {
+            if (u.owner == owner && u.name == name && u.desc == desc &&
+                u.passReceiver != isStatic) {
                 userIntr = &u;
                 break;
             }
         }
         if (userIntr != nullptr) {
+            // JVM 语义保持：instance 调用 receiver 为 NULL 时抛 NPE（与通用
+            // JNI 派发路径一致），不把 NULL 静默递给用户实现。
+            if (!isStatic) {
+                emitNullPointerTrap("stack[" + recvExpr + "].l", out);
+            }
             std::string call = userIntr->symbol + "(";
             bool        first = true;
             if (userIntr->passContext) {
                 call += "env";
                 first = false;
+            }
+            if (userIntr->passReceiver) {
+                if (!first) call += ", ";
+                first = false;
+                // receiver 是参数区之下第一槽的裸 jobject（局部引用直传）。
+                call += "stack[" + recvExpr + "].l";
             }
             for (int i = 0; i < argCount; ++i) {
                 if (!first) call += ", ";

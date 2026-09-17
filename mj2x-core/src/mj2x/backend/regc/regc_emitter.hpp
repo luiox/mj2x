@@ -226,7 +226,10 @@ private:
 };
 
 /// @brief Emit declarations shared by all RegC function bodies in one C file.
-void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out);
+/// @details registry 非空时（用户自定义 intrinsic registry）从该实例发射，
+///          追加用户 symbol 的 extern 声明（passReceiver 条目含 receiver 参数）。
+void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out,
+                           const RegCIntrinsicRegistry* registry = nullptr);
 
 /// @brief Validate that generated RegC text does not expose stack-machine anchors.
 ///

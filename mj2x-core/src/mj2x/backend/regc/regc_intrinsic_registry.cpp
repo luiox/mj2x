@@ -1622,11 +1622,12 @@ RegCIntrinsicRegistry::RegCIntrinsicRegistry(const std::vector<UserIntrinsic>& u
     userEntries_.reserve(userEntries.size());
     for (const auto& u : userEntries) {
         UserEntry entry;
-        entry.owner       = u.owner;
-        entry.name        = u.name;
-        entry.desc        = u.desc;
-        entry.symbol      = u.symbol;
-        entry.passContext = u.passContext;
+        entry.owner        = u.owner;
+        entry.name         = u.name;
+        entry.desc         = u.desc;
+        entry.symbol       = u.symbol;
+        entry.passContext  = u.passContext;
+        entry.passReceiver = u.passReceiver;
         userEntries_.push_back(std::move(entry));
     }
 }
@@ -1643,28 +1644,47 @@ RegCIntrinsicDecision RegCIntrinsicRegistry::matchCall(const RegInstruction& ins
 
 RegCIntrinsicDecision RegCIntrinsicRegistry::matchUserCall(const RegCIntrinsicCall& call) const
 {
-    // 用户 intrinsic 契约只覆盖静态调用点（doc/user_intrinsic.md：instance 调用不
-    // 降级）。instance 调用的 args 含 receiver，继续匹配会走 argCount 错位的
-    // Unsupported 路径并整方法 fail-closed；这里按契约直接回通用 JNI 派发。
-    if (!call.isStatic()) return RegCIntrinsicDecision{};
+    // 用户 intrinsic 匹配契约：static 调用（INVOKESTATIC）恒可匹配
+    // passReceiver=false 的条目；instance 调用（VIRTUAL/SPECIAL/INTERFACE）需
+    // 条目显式声明 passReceiver=true 才匹配（fail-closed：instance 调用点未
+    // 声明 passReceiver 回通用 JNI 派发，保持 G-1 行为——此前 instance 调用
+    // 误入 intrinsic 路径会因 argCount 含 receiver 错位整方法 fail-closed）。
+    // RegIR 约定：instance 调用 args[0] 是 receiver，argCount 含 receiver。
     for (const auto& entry : userEntries_) {
         if (call.owner != entry.owner || call.name != entry.name || call.desc != entry.desc) {
             continue;
         }
+        // 配置校验：passReceiver 条目匹配到静态调用点——静态方法无 receiver，
+        // 属配置错误；Unsupported 使整方法 fail-closed 并暴露原因（不静默回退，
+        // 避免用户配置错位被通用派发掩盖）。
+        if (call.isStatic() && entry.passReceiver) {
+            RegCIntrinsicDecision decision;
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "user intrinsic " + call.displayName() +
+                              ": passReceiver=true cannot match INVOKESTATIC call site "
+                              "(static methods have no receiver)";
+            return decision;
+        }
         const auto argTypes =
             jbytecode::core::Type::getMethodType(ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
                 .getArgumentTypes();
+        if (!call.isStatic() && !entry.passReceiver) {
+            return RegCIntrinsicDecision{};
+        }
+        const size_t expectedArgCount =
+            argTypes.size() + (entry.passReceiver ? 1u : 0u);
         RegCIntrinsicDecision decision;
-        if (call.argCount != static_cast<int>(argTypes.size())) {
+        if (call.argCount != expectedArgCount) {
             decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
             decision.reason = "malformed RegIR argument count for user intrinsic " +
                               call.displayName();
             return decision;
         }
-        decision.kind        = RegCIntrinsicDecisionKind::Emit;
-        decision.emitKind    = RegCIntrinsicEmitKind::UserIntrinsic;
-        decision.symbol      = entry.symbol;
-        decision.passContext = entry.passContext;
+        decision.kind         = RegCIntrinsicDecisionKind::Emit;
+        decision.emitKind     = RegCIntrinsicEmitKind::UserIntrinsic;
+        decision.symbol       = entry.symbol;
+        decision.passContext  = entry.passContext;
+        decision.passReceiver = entry.passReceiver;
         return decision;
     }
     return RegCIntrinsicDecision{};
@@ -1788,7 +1808,9 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("mj2x_ref mj2x_intrinsic_enum_name(mj2x_regc_context* context, mj2x_ref receiver);\n");
     out.append("int32_t mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receiver);\n");
     // 用户自定义 intrinsic symbol 声明（issue #818）：返回/参数类型由 desc 派生。
-    // 参数顺序与各后端发射一致：passContext 时第一个参数是 JNIEnv*（三后端一致）。
+    // 参数顺序与各后端发射一致：passContext 时第一个参数是 JNIEnv*；passReceiver
+    // 时其后是 receiver（mj2x_ref，与 REF 参数同型——jni.h jobject 即 void*），
+    // 再往后是 desc 参数。
     {
         auto cType = [](const ca::str::Utf8StringRef& desc) -> const char* {
             if (desc.is_empty()) return "void";
@@ -1820,6 +1842,11 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
             size_t     printed  = 0;
             if (entry.passContext) {
                 decl += "JNIEnv* env";
+                ++printed;
+            }
+            if (entry.passReceiver) {
+                if (printed > 0) decl += ", ";
+                decl += "mj2x_ref receiver";
                 ++printed;
             }
             for (const auto& arg : argTypes) {

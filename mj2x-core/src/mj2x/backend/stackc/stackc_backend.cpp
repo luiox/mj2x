@@ -399,6 +399,40 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     impl_->currentMethodName = mn->name.to_std_string();
     impl_->currentMethodDesc = mn->desc.to_std_string();
 
+    // 用户 intrinsic 配置校验（passReceiver 扩面）：passReceiver=true 条目只对
+    // instance 调用点有意义；本方法体出现匹配该条目的 INVOKESTATIC 调用点说明
+    // 条目被声明到了静态方法上（静态调用无 receiver）——配置校验错误，整方法
+    // fail-closed 保留 Java 字节码（与栈深度分析失败同一失败通道），不静默回退
+    // 通用派发掩盖错位配置。
+    if (!impl_->userIntrinsics.empty()) {
+        for (const auto& block : blocks) {
+            for (const auto& node : block->nodes) {
+                if (node->kind != MIRKind::INVOKE) continue;
+                const auto* inv = static_cast<const MIRInvoke*>(node.get());
+                if (inv->invokeOpcode != Opcodes::INVOKESTATIC) continue;
+                for (const auto& u : impl_->userIntrinsics) {
+                    if (!u.passReceiver) continue;
+                    if (u.owner != inv->owner.to_std_string() ||
+                        u.name != inv->name.to_std_string() ||
+                        u.desc != inv->desc.to_std_string()) {
+                        continue;
+                    }
+                    CA_LOGT_ERROR(
+                        "stackc",
+                        "Skipping {}.{}{}: user intrinsic config error: {}.{}{} declares "
+                        "passReceiver=true but is invoked via INVOKESTATIC (static methods "
+                        "have no receiver)\n",
+                        className.c_str(), mn->name.to_std_string().c_str(),
+                        mn->desc.to_std_string().c_str(), u.owner.c_str(), u.name.c_str(),
+                        u.desc.c_str());
+                    BackendResult failed;
+                    failed.kind = BackendResult::Kind::NONE;
+                    return failed;
+                }
+            }
+        }
+    }
+
     CSourceStream funcOut;
 
     // JNI function signature

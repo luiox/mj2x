@@ -166,9 +166,10 @@ bool fnCfgHasLoop(const RegFunction& fn)
 
 }   // namespace
 
-void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out)
+void emitRegCHelperPrelude(ca::str::Utf8StringBuilder& out,
+                           const RegCIntrinsicRegistry* registry)
 {
-    emitHelperPrelude(out);
+    emitHelperPrelude(out, registry);
 }
 
 RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& options,

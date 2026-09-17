@@ -1010,18 +1010,28 @@ bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
     for (size_t a = startArg; a < ins.args.size(); ++a) {
         mref.argKinds.push_back(toVmJniKind(ins.args[a].type));
     }
-    // 用户自定义 intrinsic（issue #818）：静态调用点匹配用户条目时降级为
-    // 直接调用用户 symbol（helper 解包参数，不经 JNI 通用派发）。
-    if (isStatic && ctx.userIntrinsics != nullptr) {
+    // 用户自定义 intrinsic（issue #818）：匹配调用点降级为直接调用用户 symbol
+    // （helper 解包参数，不经 JNI 通用派发）。匹配契约：static 调用点匹配
+    // passReceiver=false 条目；instance 调用点仅匹配显式 passReceiver=true
+    // 条目（未声明不匹配，走通用 JNI helper——G-1 行为保持）；static 调用点
+    // 遇 passReceiver 条目属配置错误（静态方法无 receiver），整方法编码失败。
+    if (ctx.userIntrinsics != nullptr) {
         const std::string owner = ins.method.owner.to_std_string();
         const std::string name  = ins.method.name.to_std_string();
         const std::string desc  = ins.method.desc.to_std_string();
         for (const auto& u : *ctx.userIntrinsics) {
-            if (u.owner == owner && u.name == name && u.desc == desc) {
-                mref.userSymbol      = u.symbol;
-                mref.userPassContext = u.passContext;
-                break;
+            if (u.owner != owner || u.name != name || u.desc != desc) continue;
+            if (isStatic && u.passReceiver) {
+                reason = "user intrinsic " + owner + "." + name + desc +
+                         ": passReceiver=true cannot match INVOKESTATIC call site "
+                         "(static methods have no receiver)";
+                return false;
             }
+            if (!isStatic && !u.passReceiver) break;
+            mref.userSymbol       = u.symbol;
+            mref.userPassContext  = u.passContext;
+            mref.userPassReceiver = u.passReceiver;
+            break;
         }
     }
     const uint16_t callSiteIdx = ctx.internMethodRef(std::move(mref));

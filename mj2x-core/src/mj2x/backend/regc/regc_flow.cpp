@@ -279,12 +279,19 @@ bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs, 
     return true;
 }
 
-void emitHelperPrelude(ca::str::Utf8StringBuilder& out)
+void emitHelperPrelude(ca::str::Utf8StringBuilder& out,
+                       const RegCIntrinsicRegistry* intrinsicRegistry)
 {
     // 历史的手工前向声明数组（issue #781）已删除：全部 runtime helper 的定义
     // 由 emitRuntimeHelpers 在方法体之前生成，声明冗余；多文件模式下声明由
     // splitRewriteStatic 从 runtime 段自动提取，无需手工列表。仅保留 intrinsic
-    // 声明（由注册表驱动，随新增 intrinsic 自动更新）。
+    // 声明（由注册表驱动，随新增 intrinsic 自动更新）。用户自定义 intrinsic
+    // registry 传入时从该实例发射：同一 emitDeclarations 覆盖 builtins 固定
+    // 声明并追加用户 symbol 的 extern 声明（passReceiver 条目含 receiver 参数）。
+    if (intrinsicRegistry != nullptr) {
+        intrinsicRegistry->emitDeclarations(out);
+        return;
+    }
     RegCIntrinsicRegistry::builtins().emitDeclarations(out);
 }
 

@@ -146,9 +146,12 @@ static bool hasExtension(std::string path, const std::string& ext)
 ///
 /// @details 格式：
 /// {"intrinsics":[{"owner":"com/x/F","name":"m","desc":"(II)I","symbol":"my_m",
-///                 "passContext":false,"mayThrow":false}],
+///                 "passContext":false,"mayThrow":false,"passReceiver":false}],
 ///  "sources":["path/to/my_m.c"]}
-/// owner/name/desc/symbol 必填；passContext/mayThrow 可选（默认 false）。
+/// owner/name/desc/symbol 必填；passContext/mayThrow/passReceiver 可选（默认
+/// false）。passReceiver=true 匹配 instance 调用点并把 receiver 作为首参传入
+/// （见 doc/user_intrinsic.md）；static 调用点匹配 passReceiver 条目为配置错误，
+/// 由后端匹配/编码面 fail-closed 报错。
 static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsicConfig& out,
                                     std::string& error)
 {
@@ -196,6 +199,8 @@ static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsic
                 u.passContext = item["passContext"].get<bool>();
             if (item.contains("mayThrow") && item["mayThrow"].is_boolean())
                 u.mayThrow = item["mayThrow"].get<bool>();
+            if (item.contains("passReceiver") && item["passReceiver"].is_boolean())
+                u.passReceiver = item["passReceiver"].get<bool>();
             out.intrinsics.push_back(std::move(u));
         }
     }

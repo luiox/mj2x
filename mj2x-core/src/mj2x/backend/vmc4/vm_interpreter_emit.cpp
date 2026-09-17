@@ -1353,21 +1353,37 @@ void emitCallInfrastructure(CSourceStream& out, const VmProgram& program, const 
 
         // 用户自定义 intrinsic（issue #818）：直接调用户 symbol——解包 regs 参数
         // 按 desc 类型调用（passContext 时第一参数传 env），结果写回 regs[dest]。
+        // passReceiver 扩面：instance 调用点把 regs[recv].ref（jobject 形态的
+        // receiver）作为 env 后第一参数传入，并在调用前做 null receiver NPE
+        // 守卫（与通用 JNI helper 同语义）。
         if (!m.userSymbol.empty()) {
             out.add_func(format_std("static void {}(JNIEnv* env, mj2x_vm_slot* regs, "
                                     "unsigned int recv, unsigned int* argIdx, "
                                     "unsigned char argc, unsigned int dest)", helper),
                          [&](CSourceStream& f) {
                 f.emitLine("(void)argc;  /* 参数数编译期固定（argKinds.size） */");
-                f.emitLine("(void)recv;  /* 用户 intrinsic 仅匹配静态调用点 */");
+                if (!m.userPassReceiver) {
+                    f.emitLine("(void)recv;  /* 用户 intrinsic 未声明 passReceiver */");
+                }
                 if (isVoid) f.emitLine("(void)dest;  /* void 返回不写 dest */");
                 if (m.argKinds.empty()) f.emitLine("(void)argIdx;  /* 无参数 */");
+
+                if (m.userPassReceiver) {
+                    f.emitLine("if (regs[recv].ref == NULL) { mj2x_vm_throw_npe(env, "
+                               "\"instance method call\"); return; }");
+                }
 
                 std::string call = m.userSymbol + "(";
                 bool        first = true;
                 if (m.userPassContext) {
                     call += "env";
                     first = false;
+                }
+                if (m.userPassReceiver) {
+                    if (!first) call += ", ";
+                    first = false;
+                    // receiver 寄存器槽的裸引用（void*，与 jobject 同型）直传。
+                    call += "regs[recv].ref";
                 }
                 for (size_t a = 0; a < m.argKinds.size(); ++a) {
                     if (!first) call += ", ";

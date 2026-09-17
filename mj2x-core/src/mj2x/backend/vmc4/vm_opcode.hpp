@@ -206,6 +206,11 @@ struct VmMethodRef
     /// symbol（helper 解包 regs 参数 → symbol，不经 JNI 通用派发）。
     std::string userSymbol;
     bool        userPassContext = false;   ///< 用户 symbol 第一参数传 JNIEnv* env
+    /// passReceiver 扩面：true 时本调用点为 instance 调用，helper 把
+    /// regs[recv].ref（receiver，jobject 形态）作为 env 后第一参数传给用户
+    /// symbol；编码期保证 static 调用点不会带 userPassReceiver（配置校验
+    /// fail-closed）。
+    bool userPassReceiver = false;
 };
 
 /// @brief 解释器调用结果。

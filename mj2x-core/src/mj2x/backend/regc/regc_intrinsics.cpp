@@ -1200,9 +1200,25 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
 
     if (decision.emitKind == RegCIntrinsicEmitKind::UserIntrinsic) {
         // 用户自定义 intrinsic（issue #818）：直接调用户 symbol。
-        // 参数顺序（三后端一致）：passContext 时第一参数 JNIEnv* env。
+        // 参数顺序（三后端一致）：passContext 时第一参数 JNIEnv* env；
+        // passReceiver（instance 调用点）时 receiver 紧随 env——RegIR instance
+        // 调用 args[0] 即 receiver，此处按序透传全部 args 即为契约顺序。
         std::vector<std::string> userArgs;
         if (decision.passContext) userArgs.push_back("_mj2x_regc_current_context()->env");
+        // JVM 语义保持：instance 调用 receiver 为 NULL 时抛 NPE（与通用 JNI
+        // 派发路径的 emitCachedCall 一致），不把 NULL 静默递给用户实现。
+        if (decision.passReceiver && !ins.args.empty()) {
+            const std::string receiverExpr = operandExpr(ins.args[0]).to_std_string();
+            const std::string destName     = ins.hasDest ? regName(ins.dest.id) : std::string();
+            out.iff(receiverExpr + " == NULL",
+                    [&](CSourceStream& u) {
+                        u.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
+                        if (ins.hasDest) {
+                            u.emitLine(destName + " = " +
+                                       std::string(defaultValue(ins.dest.type)) + ";");
+                        }
+                    });
+        }
         for (const auto& arg : ins.args) {
             userArgs.push_back(operandExpr(arg).to_std_string());
         }

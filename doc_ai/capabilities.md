@@ -403,21 +403,40 @@ RegC exception handler local 未通过异常边传递的问题，`g10.monitor` �
 完成 native/JVM 行为验证。Wave 3（#820）新增 G12 StringOps / G13 BitOps /
 G14 DeepRecursion / G15 CollectionOps（吸收 bludnov/ttvar 语义覆盖面）。
 
-### 8.1 用户自定义 intrinsic（issue #818）
+### 8.1 用户自定义 intrinsic（issue #818 + passReceiver instance 扩面）
 
-三后端统一支持把 Java 静态调用点降级为用户 native symbol 直调：
+三后端统一支持把 Java 静态调用点降级为用户 native symbol 直调；`passReceiver`
+扩面后 instance 调用点（INVOKEVIRTUAL/INVOKESPECIAL/INVOKEINTERFACE）也可降级：
 
 - 配置：`--intrinsic-config <json>`（`intrinsics` 数组 + `sources` 数组）+ `--intrinsic-src <file>`（可重复）
-- ABI：`passContext:true` 时第一参数 `JNIEnv* env`（三后端一致）
+- ABI：`passContext:true` 时第一参数 `JNIEnv* env`（三后端一致）；`passReceiver:true`
+  时 instance 调用点在 env 后传 receiver——receiver 以各后端 REF 值原生形态直传
+  （StackC 栈槽 `jobject`、RegC `mj2x_ref`、VMC4 `mj2x_vm_slot::ref`；jni.h 中
+  jobject 即 void*，三后端同型），完整参数序 `[env,] receiver, <desc 参数...>`
+- 匹配契约（fail-closed）：static 调用点仅匹配 passReceiver=false 条目；
+  instance 调用点仅匹配 passReceiver=true 条目（未声明不匹配，回通用 JNI 派发，
+  G-1 行为保持）；static 调用点匹配到 passReceiver 条目报配置校验错误并整方法
+  fail-closed（三后端一致：RegC Unsupported / StackC compileMethod 预检 / VMC4
+  encode 失败，均带显式诊断不静默回退）
+- JVM 语义保持：instance intrinsic 调用点保留 null receiver NPE trap（与通用
+  JNI 派发一致），receiver NULL 不递给用户实现
 - RegC：`RegCIntrinsicRegistry` 用户条目，`UserIntrinsic` emitKind 恒保留 pending
   异常检查与 local-ref 帧；生成 C 头部发射 `extern <ret> <symbol>(...)` 声明
-- StackC：`Impl::userIntrinsics`，`emitInvoke` 静态调用点匹配后从栈槽弹参直调；
-  `mayThrow:true` 保留调用后 ExceptionCheck
-- VMC4：`VmMethodRef.userSymbol` 参与去重，helper 解包 `regs[argIdx[]]` 直调
+  （passReceiver 条目含 receiver 参数；用户条目声明现随 finalize 前导实际发射，
+  此前仅 builtins 进入前导，用户 extern 声明依赖 C 隐式声明）
+- StackC：`Impl::userIntrinsics`，`emitInvoke` 匹配后从栈槽弹参直调（instance
+  站点 receiver 取参数区之下第一槽 `.l`）；`mayThrow:true` 保留调用后 ExceptionCheck
+- VMC4：`VmMethodRef.userSymbol/userPassReceiver` 参与去重，helper 解包
+  `regs[argIdx[]]` 直调，instance 站点 receiver 经 `regs[recv].ref` 传入
+- LLVM 后端不消费用户 intrinsic（static 与 passReceiver face 均不生效，配置忽略，
+  调用点走通用 JNI 派发）
 - sources 并入：`--compile` 直接模式追加进编译命令；`--generate-xmake` 复制到
   工程 `src/mj2x-rt/user_intrinsics/`（模板 glob 自动编译）
-- 测试：`user_intrinsic_test`（发射形态 9 例）+ `user_intrinsic_e2e_test`
-  （三后端执行矩阵，`my_m` 接管 `F.m` 验证 2003）
+- 测试：`user_intrinsic_test`（发射形态：static/instance 降级、参数序、NPE trap、
+  static+passReceiver 校验负例、instance 未声明不匹配 G-1 回归锁、extern 声明、
+  VMC4 helper receiver 槽）+ `user_intrinsic_e2e_test`（三后端执行矩阵，`my_m`
+  接管 `F.m` 验证 2003）；instance/passReceiver 执行级 E2E 依赖 CLI 解析
+  `passReceiver` 字段（CLI 辖区）另行接入
 
 ---
 

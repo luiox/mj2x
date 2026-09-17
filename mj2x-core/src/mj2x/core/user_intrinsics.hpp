@@ -23,6 +23,15 @@ namespace mj2x {
 ///   UserIntrinsicConfig::sources 并入生成工程编译。
 /// - `passContext`：为 true 时在参数前传 `JNIEnv* env`（三后端一致；
 ///   RegC 传 `_mj2x_regc_current_context()->env`）。
+/// - `passReceiver`：为 true 时匹配 instance 调用点
+///   （INVOKEVIRTUAL/INVOKESPECIAL/INVOKEINTERFACE），并在 env（若
+///   passContext）之后、Java 参数之前传 receiver。receiver 是调用点现有的
+///   局部引用，以各后端 REF 值的原生形态直传（StackC 栈槽 jobject、RegC
+///   `mj2x_ref`、VMC4 `mj2x_vm_slot::ref`——jni.h 中 jobject 即 void*，三后端
+///   同型）。完整参数顺序：`[env,] receiver, <desc 参数...>`。配置校验：
+///   passReceiver=true 的条目匹配到 INVOKESTATIC 调用点时报配置校验错误并
+///   fail-closed（静态方法无 receiver）；instance 调用点遇到未声明
+///   passReceiver 的条目不匹配（回通用 JNI 派发，保持 G-1 契约）。
 /// - `mayThrow`：为 true 时调用点保留调用后 ExceptionCheck（StackC）。
 ///   RegC 的 UserIntrinsic 恒保留检查（不做纯计算豁免）。
 struct UserIntrinsic
@@ -31,8 +40,9 @@ struct UserIntrinsic
     std::string name;
     std::string desc;
     std::string symbol;
-    bool        passContext = false;
-    bool        mayThrow    = false;
+    bool        passContext  = false;
+    bool        passReceiver = false;
+    bool        mayThrow     = false;
 };
 
 /// @brief 用户 intrinsic 全集：条目 + 用户 native 实现源文件。
