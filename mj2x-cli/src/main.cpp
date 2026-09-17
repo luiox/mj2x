@@ -818,6 +818,10 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.regc_safe_env_needs_regc"));
         return 1;
     }
+    if (options.vmc4LazyDecrypt && !options.vmc4EncryptProgram) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.lazy_decrypt_needs_encrypt"));
+        return 1;
+    }
     if (options.runtimeProtection != "none" && options.runtimeProtection != "log" &&
         options.runtimeProtection != "delay" && options.runtimeProtection != "fake" &&
         options.runtimeProtection != "terminate") {
@@ -1118,6 +1122,7 @@ int main(int argc, char** argv)
             vmc4Opts.driftVariants = options.vmc4Drift;
             vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
             vmc4Opts.programBlobEncrypt = options.vmc4EncryptProgram;
+            vmc4Opts.programLazyDecrypt = options.vmc4LazyDecrypt;
             if (options.runtimeProtection != "none") {
                 vmc4Opts.runtimeProtection.action  =
                     parseRuntimeProtectionAction(options.runtimeProtection);

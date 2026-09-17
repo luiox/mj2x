@@ -43,6 +43,7 @@ mj2x.cli.err.regc_trace_calls_needs_regc=--regc-trace-calls requires --backend r
 mj2x.cli.err.regc_safe_env_needs_regc=--regc-safe-env requires --backend regc.
 mj2x.cli.err.runtime_protection_unknown=Unknown --runtime-protection value. Expected none, log, delay, fake, or terminate.
 mj2x.cli.err.runtime_protection_needs_native=--runtime-protection requires --backend regc, vmc4, or llvm.
+mj2x.cli.err.lazy_decrypt_needs_encrypt=--vmc4-lazy-decrypt requires --vmc4-encrypt-program to be enabled.
 mj2x.cli.err.stackc_exception_check_invalid=--stackc-exception-check must be full or lite.
 mj2x.cli.err.emit_native_dir_needs_regc=--emit-native-dir requires --backend regc.
 mj2x.cli.err.llvm_tool_needs_compile=--llvm-tool requires --compile.
@@ -161,6 +162,7 @@ mj2x.param.vmc4.drift.desc=VMC4: runtime dispatch variants, 0..4 (0 = off; when 
 mj2x.param.vmc4.drift_period.desc=VMC4: drift variant switch period (in byte offsets)
 mj2x.param.vmc4.trace_surface.desc=VMC4: write the expected trace surface file (mjdbg red-team contract; same seed + same input = same content)
 mj2x.param.vmc4.encrypt_program.desc=VMC4: encrypt the program blob at rest (opcode/handler data encrypted at emission, decrypted at interpreter load; no plaintext program stream in artifacts; key derived from seed; off by default)
+mj2x.param.vmc4.lazy_decrypt.desc=VMC4: decrypt the program blob lazily per chunk (instruction-aligned 64-byte chunks encrypted independently, decrypted on first execution, key material scrubbed after use; requires vmc4.encrypt_program; off by default)
 mj2x.param.strings.encrypt.desc=Encrypt string-pool contents at rest (encrypted at emission, decrypted on first access; no plaintext literals in emitted artifacts; off by default)
 mj2x.param.runtime.protection.desc=RegC/VMC4/LLVM: method-entry anti-tamper checkpoints (default none = not injected; depends on the mj2x-rt rt_protect module; the LLVM side compiles with rt_protect sources)
 mj2x.param.runtime.protection_step.desc=Checkpoint probabilistic trigger step

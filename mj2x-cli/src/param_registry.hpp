@@ -82,6 +82,7 @@ struct CliOptions
     int                      vmc4DriftPeriod     = 16;
     std::string              vmc4TraceSurface;   ///< 非空时写 expected trace surface 文件
     bool                     vmc4EncryptProgram  = false; ///< VMC4 程序 blob at-rest 加密
+    bool                     vmc4LazyDecrypt     = false; ///< VMC4 程序 blob 分块懒解密（要求 encrypt_program）
     bool                     stringsEncrypt      = false; ///< 字符串面 at-rest 加密
     std::string              runtimeProtection        = "none";   ///< none|log|delay|fake|terminate
     int                      runtimeProtectionStep    = 16;
