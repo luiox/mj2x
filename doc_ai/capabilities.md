@@ -340,7 +340,7 @@ schema 导出四处，消灭 help 与 config 文档漂移：
 全部 CLI 用户可见文案（help 头部/参数描述/分组标题/校验错误/配置文件错误/
 schema 与模板文本）走单源翻译表 `mj2x-cli/translations/{zh_CN,en_US}.lang`
 （UTF-8 properties 风格），经 `i18n.embed-lang` rule 生成 constexpr 表嵌入
-二进制（详见 `libs/libi18n/readme.md`）：
+二进制（详见 third_party libca 的 i18n 模块 `libca_i18n`，headeronly target）：
 
 - **key 规则**：`mj2x.param.<id>.desc`（由 ParamDef.id 推导）、
   `mj2x.param.group.<slug>`、`mj2x.cli.err.*` / `mj2x.cli.help.*` 等；
