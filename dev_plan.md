@@ -14,6 +14,7 @@
 | 十三（LLVM IR 后端） | 基础款转正默认开启（v2.2）+ 二次扩面 11 项（对象/数组/实例调用/异常/monitor/ldc/窄类型等，PR #864） | ✅ 完成（见归档索引） |
 | 十四（LLVM 第二轮扩面） | invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入、mtest_set 矩阵 + protected_samples llvm 样本 | 🟢 完成（Math/包装类等 RegC-only intrinsic 下沉除外，见待做 E） |
 | 十五（mj2x-llvmrt 运行时下沉） | #894：llvm_ir_helpers.cpp 固定 IR helper 逐批下沉 mj2x-rt/src/llvmir（declare 化）；源内 define internal 41→1（仅剩 bsm 站点模板）；benchmark 中性（`benchmark/results/2026-08-23-llvmrt-sink.md`） | ✅ 完成（见归档索引；顺带修复 Compare-REF Eq 裸拷贝发射缺陷 c1ce74d79） |
+| 十六（sprint 2026-09-17/18） | #760 切片 2 lazy 分块解密+密钥擦除（`--vmc4-lazy-decrypt`）；#887 探针级优化三连（class literal 缓存/trampoline 条件发射/装箱缓存，基准 ratio 1.36→1.12，`benchmark/results/2026-09-17-regc-probe-optimization.md`）；indy 原生派发判定原型+设计文档；#879-X3 stackc indy jclass 缓存；passReceiver intrinsic 扩面 | 🟢 波次一+部分波次二完成；indy backend 合流见待做 H |
 
 ## 待做项
 
@@ -88,6 +89,19 @@
 - roadmap §2 表格行已列（算法密集类整体 native 化，边界保留 JNI）；GUI 设计已
   预留"方法/类选择"扩展点（`gui_config_tool_design.md` §6）。条件：无反射、无
   动态类加载、intrinsic 覆盖充分；先做单类试点再铺开。
+
+### H. indy 原生派发 backend 侧合流（波次二后续，P1-M）
+
+- 管线层静态判定原型 + 设计文档已落地（`doc_ai/indy_native_dispatch_design.md`
+  §2 判定树 / §3 缓存 / §4 回退 / §6 接口提案 P1-P10）。剩余：提案逐后端落地
+  （P1 MIR 站点载荷、P2-P4 regc 直派发射与 finalize 缓存与 D2 破解、P5 stackc
+  F1/F2 分支、P7 vmc4 编码前改写式、P10 llvm 模块级缓存分派）。
+- 注：P6（stackc bootstrap 结果缓存）经核已有等价物
+  （stackc_mir_invoke.cpp indyTargetCache，static jobject per call-site），
+  **无需实施**（设计文档写作时点误判，2026-09-18 审查订正）。
+- #879-Y4（Random 预检 registry 标志位化，替换两后端符号名/签名硬编码耦合）
+  建议与本项同批，对齐 cross_backend_semantics.md §3.1 单源方向。
+- 三后端共享层抽取（调研候选 4）继续等本批后端施工全部合流后再评估。
 
 ### G. 全线审查 round-3（2026-08-17，分支 `review/mj2x-audit-fixes`）
 
