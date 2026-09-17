@@ -179,6 +179,90 @@ TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister)
     expectNoStackAnchors(result.text);
 }
 
+TEST(RegCBackendTest, InstanceTrampolineSkipsGetObjectClassWhenOwnerClassUnused)
+{
+    // 纯标量实例方法：生成体不引用 _mj2x_regc_owner_class（当前只有 indy 自定义
+    // bootstrap helper 调用点引用），trampoline 跳过 GetObjectClass——每条
+    // Java→native 入口省 1 次 JNI；env 设置与 context 初始化保持不变。
+    auto method = makeMethod(Opcodes::ACC_PUBLIC,
+                             "bump",
+                             "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2,
+                             2);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_EQ(result.text.find("GetObjectClass"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("_mj2x_regc_env = env;"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("mj2x_regc_init_context(&_mj2x_regc_ctx, env,"),
+              std::string::npos)
+        << result.text;
+    expectNoStackAnchors(result.text);
+}
+
+TEST(RegCBackendTest, EscapedWrapperValueOfEmitsCachedBoxHelper)
+{
+    // static int escapeBox(int i) { Integer v = Integer.valueOf(i); return v.hashCode(); }
+    // hashCode 未知调用使装箱值逃逸 native state；逃逸链走 runtime 小值缓存装箱
+    // （Integer [-128,127] 命中 0 JNI，返回对象与 JDK valueOf 恒等），不再走
+    // 通用 invokestatic JNI 派发。
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "escapeBox",
+                             "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                    ca::str::ZUtf8StringRef::from_static("java/lang/Integer"),
+                                                    ca::str::ZUtf8StringRef::from_static("valueOf"),
+                                                    ca::str::ZUtf8StringRef::from_static("(I)Ljava/lang/Integer;"),
+                                                    false),
+                                 new VarInsnNode(Opcodes::ASTORE, 1),
+                                 new VarInsnNode(Opcodes::ALOAD, 1),
+                                 new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                    ca::str::ZUtf8StringRef::from_static("java/lang/Integer"),
+                                                    ca::str::ZUtf8StringRef::from_static("hashCode"),
+                                                    ca::str::ZUtf8StringRef::from_static("()I"),
+                                                    false),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2,
+                             2);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("_mj2x_regc_box_i32("), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("_mj2x_regc_call_ref(\"java/lang/Integer\", \"valueOf\""),
+              std::string::npos)
+        << result.text;
+    expectNoStackAnchors(result.text);
+}
+
 TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
 {
     auto first = makeMethod(

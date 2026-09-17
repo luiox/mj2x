@@ -839,6 +839,32 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             return decision;
         }
         if (state.nativeWrapperRegisters.count(ins.dest.id.value) == 0) {
+            // 逃逸链：走 runtime 小值缓存装箱（Integer/Long/Short/Byte 对
+            // [-128,127]、Character 对 [0,127]、Boolean 对 TRUE/FALSE 命中
+            // 0 JNI，返回对象与 JDK valueOf 逐次调用恒等；越界值透传 JDK
+            // 调用）。Float/Double 无 JDK 缓存语义，保持通用 invokestatic 回退。
+            static const std::unordered_map<RegCIntrinsicNativeObjectKind, std::pair<const char*, const char*>>
+                kEscapingBoxSymbols = {
+                    {RegCIntrinsicNativeObjectKind::Int, {"_mj2x_regc_box_i32", "int32_t"}},
+                    {RegCIntrinsicNativeObjectKind::Long, {"_mj2x_regc_box_i64", "int64_t"}},
+                    {RegCIntrinsicNativeObjectKind::Short, {"_mj2x_regc_box_i16", "int16_t"}},
+                    {RegCIntrinsicNativeObjectKind::Byte, {"_mj2x_regc_box_i8", "int8_t"}},
+                    {RegCIntrinsicNativeObjectKind::Bool, {"_mj2x_regc_box_bool", "bool"}},
+                    {RegCIntrinsicNativeObjectKind::Char, {"_mj2x_regc_box_char", "uint16_t"}},
+                };
+            const auto boxIt = kEscapingBoxSymbols.find(decision.nativeObjectKind);
+            if (boxIt != kEscapingBoxSymbols.end() && !ins.args.empty()) {
+                const ca::str::Utf8String argExpr = operandExpr(ins.args[0]);
+                out.appendLineStart(regName(ins.dest.id))
+                    .append(" = (mj2x_ref)")
+                    .append(codegen::exprCall(
+                        boxIt->second.first,
+                        {codegen::exprCast(boxIt->second.second,
+                                           codegen::exprParen(argExpr.to_std_string()))}))
+                    .append(";")
+                    .newLine();
+                return decision;
+            }
             decision.kind   = RegCIntrinsicDecisionKind::Fallback;
             decision.reason = "wrapper value escapes native state";
             return decision;

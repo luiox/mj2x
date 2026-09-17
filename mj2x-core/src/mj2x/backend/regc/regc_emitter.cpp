@@ -757,6 +757,9 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     out.append("}\n");
 
     const std::string sourceCode = out.build().to_std_string();
+    // 文本级判定生成体是否读取 owner class 全局（indy 自定义 bootstrap helper
+    // 调用点会引用）；trampoline 发射据此省略无谓的 GetObjectClass。
+    result.usesOwnerClass = sourceCode.find("_mj2x_regc_owner_class") != std::string::npos;
     result.source = sourceCode;
     if (!validateRegCNoStackAnchors(result.source, result.reason)) {
         result.ok = false;

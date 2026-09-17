@@ -46,6 +46,10 @@ struct RegCEmitResult
     std::string functionName;
     std::string source;
     std::string reason;
+    /// 生成体是否引用 `_mj2x_regc_owner_class`（当前仅 indy 自定义 bootstrap
+    /// helper 调用点引用）。实例方法 JNI trampoline 据此决定是否发射
+    /// GetObjectClass：不引用时每条 Java→native 入口省 1 次 JNI。
+    bool usesOwnerClass = false;
 };
 
 /// @brief Shared generated-C translation-unit cache declaration pool.

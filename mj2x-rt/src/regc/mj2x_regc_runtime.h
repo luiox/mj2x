@@ -278,6 +278,12 @@ MJ2X_REGC_API extern jmethodID _mj2x_intrinsic_string_contains_method;
 MJ2X_REGC_API int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq);
 MJ2X_REGC_API jobject _mj2x_regc_box_i32(int32_t value);
 MJ2X_REGC_API jobject _mj2x_regc_box_i64(int64_t value);
+/// 带小值缓存的包装类装箱（Integer/Long/Short/Byte 对 [-128,127]、Character
+/// 对 [0,127]、Boolean 对 TRUE/FALSE 命中 0 JNI；返回对象与 JDK valueOf 恒等）。
+MJ2X_REGC_API jobject _mj2x_regc_box_i8(int8_t value);
+MJ2X_REGC_API jobject _mj2x_regc_box_i16(int16_t value);
+MJ2X_REGC_API jobject _mj2x_regc_box_char(uint16_t value);
+MJ2X_REGC_API jobject _mj2x_regc_box_bool(bool value);
 MJ2X_REGC_API jobject _mj2x_regc_box_f32(float value);
 MJ2X_REGC_API jobject _mj2x_regc_box_f64(double value);
 MJ2X_REGC_API int32_t _mj2x_regc_unbox_i32(jobject value);

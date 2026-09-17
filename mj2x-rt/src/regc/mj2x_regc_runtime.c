@@ -111,6 +111,9 @@ jclass _mj2x_regc_find_class(const char* desc) {
     return (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, desc);
 }
 
+/// 前置声明：按 internal name 缓存查找 jclass（定义见 class_literal 区）。
+static jclass _mj2x_regc_cached_class_by_name(const char* internal_name);
+
 jclass _mj2x_regc_global_class(const char* desc, jclass* slot) {
     if (slot == NULL) return NULL;
     if (*slot != NULL) return *slot;
@@ -370,7 +373,9 @@ void _mj2x_regc_exception_clear(void) { (*_mj2x_regc_env)->ExceptionClear(_mj2x_
 int32_t _mj2x_regc_exception_matches(mj2x_ref value, const char* catch_type) {
     if (catch_type == NULL || catch_type[0] == '\0') return 1;
     if (value == NULL) return 0;
-    jclass cls = _mj2x_regc_find_class(catch_type);
+    /* catch 类型按 internal name 走缓存（命中 0 JNI），FindClass 失败时保持
+     * pending exception 并清空后返回不匹配，与原语义一致。 */
+    jclass cls = _mj2x_regc_cached_class_by_name(catch_type);
     if (cls == NULL) { (*_mj2x_regc_env)->ExceptionClear(_mj2x_regc_env); return 0; }
     return (*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls) ? 1 : 0;
 }
@@ -594,10 +599,39 @@ mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* 
     return (mj2x_ref)s;
 }
 
+/// 按 internal name 查找并缓存 jclass（全局引用）。
+///
+/// 同名类在同一 native library 内 loader 稳定，FindClass 结果对象恒等
+/// （IsSameObject 语义与逐次 FindClass 完全一致）。表项永不释放，泄漏上界 =
+/// 不同 internal name 数量，与 TU 级 class cache 的全局引用持有策略一致。
+/// 命中路径 0 JNI：ldc Class / catch 类型匹配等热调用点逐次省 1 次 FindClass。
+static jclass _mj2x_regc_cached_class_by_name(const char* internal_name)
+{
+    static struct { const char* key; jclass value; } class_cache[64];
+    static int class_cache_count = 0;
+    for (int i = 0; i < class_cache_count; ++i) {
+        if (class_cache[i].key == internal_name ||
+            strcmp(class_cache[i].key, internal_name) == 0) {
+            return class_cache[i].value;
+        }
+    }
+    jclass local = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, internal_name);
+    if (local == NULL) return NULL;
+    jclass global = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, local);
+    (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, local);
+    if (global != NULL && class_cache_count < 64) {
+        /* 索引按位保护：多线程首次并发的瞬时竞态最多覆盖已有槽，不越界 */
+        class_cache[class_cache_count & 63].key = internal_name;
+        class_cache[class_cache_count & 63].value = global;
+        ++class_cache_count;
+    }
+    return global;
+}
+
 mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* internal_name) {
     (void)context;
     if (internal_name == NULL) return NULL;
-    return (mj2x_ref)(*_mj2x_regc_env)->FindClass(_mj2x_regc_env, internal_name);
+    return (mj2x_ref)_mj2x_regc_cached_class_by_name(internal_name);
 }
 
 /* xorshift32 一步推进:与 core/native_lib_crypto.hpp::xorshift32Step 同式。 */
@@ -936,8 +970,33 @@ int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq) {
 // invokedynamic (stage 3) box/unbox helpers: primitive arguments are boxed
 // into Object[]; invokeWithArguments results are unboxed back into scalar
 // registers. class/methodID are cached globally to avoid repeated lookups.
-jobject _mj2x_regc_box_i32(int32_t value) { static jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Integer"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(I)Ljava/lang/Integer;"); if (c == NULL || m == NULL) return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }
-jobject _mj2x_regc_box_i64(int64_t value) { static jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Long"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(J)Ljava/lang/Long;"); if (c == NULL || m == NULL) return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }
+/// 小值包装类缓存：JDK Integer/Long/Short/Byte 的 valueOf 对 [-128,127]、
+/// Character 对 [0,127]、Boolean 对 TRUE/FALSE 恒返回同一缓存对象。
+/// 这里的表缓存的是 JDK valueOf 返回对象的全局引用——命中时返回的对象与
+/// JDK valueOf 逐次调用对象恒等（IsSameObject/== 语义完全一致），越界值
+/// 恒透传 JDK 调用（每次新对象，同样一致）。表项与 JDK 自身 cache 同寿命，
+/// 泄漏上界 256+128+2 个 bootstrap 类包装对象。
+static jobject _mj2x_regc_box_cached(jobject* table, int32_t slot)
+{
+    if (slot < 0 || slot > 255) return NULL;
+    return table[slot];
+}
+
+static void _mj2x_regc_box_fill(jobject* table, int32_t slot, jobject box)
+{
+    if (slot < 0 || slot > 255 || box == NULL) return;
+    jobject global = (*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, box);
+    /* 竞态并发回填无害：JDK cache 对同值恒返回同一对象，两线程写入等价。
+       NewGlobalRef 失败（OOM）时槽位留空，下次调用重试。 */
+    if (global != NULL) table[slot] = global;
+}
+
+jobject _mj2x_regc_box_i32(int32_t value) { static jclass c = NULL; static jmethodID m = NULL; static jobject cache[256]; if (value >= -128 && value <= 127) { jobject hit = _mj2x_regc_box_cached(cache, value + 128); if (hit != NULL) return hit; } if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Integer"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(I)Ljava/lang/Integer;"); if (c == NULL || m == NULL) return NULL; jobject box = (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); if (box != NULL && value >= -128 && value <= 127) _mj2x_regc_box_fill(cache, value + 128, box); return box; }
+jobject _mj2x_regc_box_i64(int64_t value) { static jclass c = NULL; static jmethodID m = NULL; static jobject cache[256]; if (value >= -128 && value <= 127) { jobject hit = _mj2x_regc_box_cached(cache, (int32_t)(value + 128)); if (hit != NULL) return hit; } if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Long"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(J)Ljava/lang/Long;"); if (c == NULL || m == NULL) return NULL; jobject box = (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); if (box != NULL && value >= -128 && value <= 127) _mj2x_regc_box_fill(cache, (int32_t)(value + 128), box); return box; }
+jobject _mj2x_regc_box_i8(int8_t value) { static jclass c = NULL; static jmethodID m = NULL; static jobject cache[256]; jobject hit = _mj2x_regc_box_cached(cache, (int32_t)value + 128); if (hit != NULL) return hit; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Byte"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(B)Ljava/lang/Byte;"); if (c == NULL || m == NULL) return NULL; jobject box = (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); _mj2x_regc_box_fill(cache, (int32_t)value + 128, box); return box; }
+jobject _mj2x_regc_box_i16(int16_t value) { static jclass c = NULL; static jmethodID m = NULL; static jobject cache[256]; jobject hit = _mj2x_regc_box_cached(cache, (int32_t)value + 128); if (hit != NULL) return hit; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Short"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(S)Ljava/lang/Short;"); if (c == NULL || m == NULL) return NULL; jobject box = (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); _mj2x_regc_box_fill(cache, (int32_t)value + 128, box); return box; }
+jobject _mj2x_regc_box_char(uint16_t value) { static jclass c = NULL; static jmethodID m = NULL; static jobject cache[128]; jobject hit = (value <= 127) ? cache[value] : NULL; if (hit != NULL) return hit; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Character"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(C)Ljava/lang/Character;"); if (c == NULL || m == NULL) return NULL; jobject box = (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); if (box != NULL && value <= 127) { jobject global = (*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, box); if (global != NULL) cache[value] = global; } return box; }
+jobject _mj2x_regc_box_bool(bool value) { static jclass c = NULL; static jmethodID m = NULL; static jobject cache[2]; jobject hit = cache[value ? 1 : 0]; if (hit != NULL) return hit; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Boolean"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(Z)Ljava/lang/Boolean;"); if (c == NULL || m == NULL) return NULL; jobject box = (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value ? JNI_TRUE : JNI_FALSE); if (box != NULL) { jobject global = (*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, box); if (global != NULL) cache[value ? 1 : 0] = global; } return box; }
 jobject _mj2x_regc_box_f32(float value) { static jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Float"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(F)Ljava/lang/Float;"); if (c == NULL || m == NULL) return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }
 jobject _mj2x_regc_box_f64(double value) { static jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Double"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, c, "valueOf", "(D)Ljava/lang/Double;"); if (c == NULL || m == NULL) return NULL; return (*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, c, m, value); }
 int32_t _mj2x_regc_unbox_i32(jobject value) { if (value == NULL) return 0; static jclass c = NULL; static jmethodID m = NULL; if (c == NULL) { jclass l = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/Integer"); if (l != NULL) c = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, l); (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, l); } if (c != NULL && m == NULL) m = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, c, "intValue", "()I"); if (c == NULL || m == NULL) return 0; return (*_mj2x_regc_env)->CallIntMethod(_mj2x_regc_env, value, m); }

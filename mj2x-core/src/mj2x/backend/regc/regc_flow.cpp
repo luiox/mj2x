@@ -310,6 +310,7 @@ bool bodyProducesLocalRefs(const ca::str::Utf8StringRef& body)
         "_mj2x_regc_alloc_",         // alloc_object / alloc_array / alloc_multi_array
         "_mj2x_regc_class_literal",  // Foo.class -> FindClass
         "_mj2x_intrinsic_string_literal",
+        "_mj2x_regc_box_",           // 小值缓存装箱（miss 路径产 local ref）
         "_mj2x_regc_load_ref_field",
         "_mj2x_regc_load_cached_ref_field",
         "_mj2x_regc_load_ref_array",

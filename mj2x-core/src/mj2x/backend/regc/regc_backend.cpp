@@ -413,12 +413,17 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
             out.emitLine(line.build().ref());
         }
         out.emitLine("_mj2x_regc_env = env;");
-        {
-            CSourceStream line;
-            line.append(isStatic ? "_mj2x_regc_owner_class = clazz;"
-                                 : "_mj2x_regc_owner_class = (jclass)(*env)->GetObjectClass(env, thisObject);");
-            out.emitLine(line.build().ref());
+        if (isStatic) {
+            // 静态方法：clazz 形参直赋（无 JNI 开销），owner class 恒有效。
+            out.emitLine("_mj2x_regc_owner_class = clazz;");
         }
+        else if (emitted.usesOwnerClass) {
+            // 生成体引用 owner class（indy 自定义 bootstrap helper 调用点）：
+            // 保留 GetObjectClass 解析。
+            out.emitLine("_mj2x_regc_owner_class = (jclass)(*env)->GetObjectClass(env, thisObject);");
+        }
+        // 其余实例方法：生成体不读 owner class，跳过 GetObjectClass——
+        // 该全局仅在发射体显式引用时才有意义，逐次 Java→native 入口省 1 JNI。
         out.emitLine("mj2x_regc_init_context(&_mj2x_regc_ctx, env, _mj2x_regc_throw_runtime);");
         if (traceCallLog) {
             // --trace-call-log:运行时开关(#894 B 类下沉后由 mj2x-rt 实现)
