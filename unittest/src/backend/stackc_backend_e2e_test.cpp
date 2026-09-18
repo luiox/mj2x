@@ -980,6 +980,37 @@ TEST_F(StackCBackendE2E, ExceptionFromNativeCallAndMonitor)
             });
 }
 
+/// athrow / monitorenter 的操作数为 NULL 时 JVM 语义是抛 NPE（JVMS）；native 化后
+/// 必须与基准行为一致（null → NPE 守卫），而不是把 NULL jobject 递进 JNI（未定义
+/// 行为，HotSpot 按"调用方保证非空"处理）。
+TEST_F(StackCBackendE2E, NullOperandSemantics)
+{
+    runCase("NullOperandSemantics",
+            "public class NullOperandSemantics {\n"
+            "  static Object sharedLock;\n"
+            "  public static int throwNullCatch() {\n"
+            "    try { throw null; }\n"
+            "    catch (NullPointerException e) { return 7; }\n"
+            "  }\n"
+            "  public static int throwNullPropagate() { throw null; }\n"
+            "  public static int monitorNullCatch() {\n"
+            "    try { synchronized (sharedLock) { } }\n"
+            "    catch (NullPointerException e) { return 9; }\n"
+            "    return 1;\n"
+            "  }\n"
+            "  public static int monitorNullPropagate() {\n"
+            "    synchronized (sharedLock) { }\n"
+            "    return 2;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"throwNullCatch()", "7"},
+                {"throwNullPropagate()", "THROW:java.lang.NullPointerException"},
+                {"monitorNullCatch()", "9"},
+                {"monitorNullPropagate()", "THROW:java.lang.NullPointerException"},
+            });
+}
+
 TEST_F(StackCBackendE2E, IntegratedSample)
 {
     runCase("IntegratedSample",

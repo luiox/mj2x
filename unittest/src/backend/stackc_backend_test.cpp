@@ -91,6 +91,75 @@ TEST(StackCBackendTest, SimpleReturn)
     EXPECT_NE(result.text.find("void"), std::string::npos);
 }
 
+/// athrow / monitorenter / monitorexit 的对象为 NULL 时必须抛 NPE（JVMS 语义）：
+/// NPE trap（ThrowNew "null reference"）必须先于 Throw / MonitorEnter / MonitorExit
+/// JNI 调用发射，否则 NULL jobject 递进 JNI 是未定义行为（HotSpot 按"调用方保证
+/// 非空"处理），且与 RegC/VMC4/LLVM 后端的 null → NPE 守卫不一致。
+TEST(StackCBackendTest, ThrowAndMonitorNullOperandEmitsNpeTrap)
+{
+    StackCBackend backend;
+
+    // athrow：ALOAD 0; ATHROW
+    {
+        auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "rethrow",
+                             "(Ljava/lang/Object;)V",
+                                       {
+                             new VarInsnNode(Opcodes::ALOAD, 0),
+                             new InsnNode(Opcodes::ATHROW),
+                         });
+        CompilerMethod cm;
+        cm.methodNode       = mn.get();
+        cm.markedForCompile = true;
+
+        ca::str::Utf8StringArena arena;
+        CodeConverter            cc(arena);
+        auto                     blocks = cc.convert(*mn);
+        auto                     result = backend.compileMethod("Test", cm, blocks);
+
+        const auto trap      = result.text.find("ThrowNew(env, ex_class, \"null reference\")");
+        const auto throwCall = result.text.find("->Throw(env, s[0].l)");
+        EXPECT_NE(trap, std::string::npos) << result.text;
+        EXPECT_NE(throwCall, std::string::npos) << result.text;
+        EXPECT_LT(trap, throwCall) << result.text;
+    }
+
+    // monitorenter + monitorexit：ALOAD 0; MONITORENTER; ALOAD 0; MONITOREXIT; RETURN
+    {
+        auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "monitorIt",
+                             "(Ljava/lang/Object;)V",
+                                       {
+                             new VarInsnNode(Opcodes::ALOAD, 0),
+                             new InsnNode(Opcodes::MONITORENTER),
+                             new VarInsnNode(Opcodes::ALOAD, 0),
+                             new InsnNode(Opcodes::MONITOREXIT),
+                             new InsnNode(Opcodes::RETURN),
+                         });
+        CompilerMethod cm;
+        cm.methodNode       = mn.get();
+        cm.markedForCompile = true;
+
+        ca::str::Utf8StringArena arena;
+        CodeConverter            cc(arena);
+        auto                     blocks = cc.convert(*mn);
+        auto                     result = backend.compileMethod("Test", cm, blocks);
+
+        const auto firstGuard  = result.text.find("ThrowNew(env, ex_class, \"null reference\")");
+        const auto monitorIn   = result.text.find("->MonitorEnter(env, s[0].l)");
+        const auto secondGuard = result.text.find("ThrowNew(env, ex_class, \"null reference\")",
+                                                  firstGuard + 1);
+        const auto monitorOut  = result.text.find("->MonitorExit(env, s[0].l)");
+        ASSERT_NE(firstGuard, std::string::npos) << result.text;
+        ASSERT_NE(monitorIn, std::string::npos) << result.text;
+        ASSERT_NE(secondGuard, std::string::npos) << result.text;
+        ASSERT_NE(monitorOut, std::string::npos) << result.text;
+        EXPECT_LT(firstGuard, monitorIn) << result.text;
+        EXPECT_LT(monitorIn, secondGuard) << result.text;
+        EXPECT_LT(secondGuard, monitorOut) << result.text;
+    }
+}
+
 TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement)
 {
     auto* tailLabel                  = new LabelNode(labelScratchArena().create<Label>());

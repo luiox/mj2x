@@ -69,6 +69,12 @@ void StackCBackend::Impl::emitPendingExceptionCheck(codegen::CSourceStream& out)
 
 void StackCBackend::Impl::emitMonitor(const MIRMonitor* node, codegen::CSourceStream& out)
 {
+    // JVM 语义（JVMS monitorenter/monitorexit）：objectref 为 NULL 时抛
+    // NullPointerException。JNI MonitorEnter/MonitorExit 对 NULL jobject 的行为
+    // 未定义（HotSpot resolve_non_null 直接崩溃），必须先做 NPE trap——与
+    // RegC（发射面守卫）/ VMC4（monitor intrinsic helper）/ LLVM
+    // （mj2x_llvm_monitor_*）的 null → NPE 守卫对齐。
+    emitNullPointerTrap("stack[sp].l", out);
     if (node->enter) {
         out.emitLine("(*env)->MonitorEnter(env, stack[sp--].l);");
     }
@@ -80,6 +86,11 @@ void StackCBackend::Impl::emitMonitor(const MIRMonitor* node, codegen::CSourceSt
 void StackCBackend::Impl::emitThrow(const MIRThrow* node, codegen::CSourceStream& out)
 {
     (void)node;
+    // JVM 语义（JVMS athrow）：objectref 为 NULL 时抛 NullPointerException。
+    // JNI Throw 对 NULL throwable 的行为未定义（HotSpot 按"调用方保证非空"处理），
+    // 必须先做 NPE trap——与 RegC（_mj2x_regc_throw）/ VMC4（mj2x_vm_throw）/
+    // LLVM（mj2x_llvm_throw）的 null → NPE 守卫对齐。
+    emitNullPointerTrap("stack[sp].l", out);
     out.emitLine("(*env)->Throw(env, stack[sp--].l);");
     if (!currentExceptionDispatchTarget.empty()) {
         out.emitLine("goto " + currentExceptionDispatchTarget + ";");
