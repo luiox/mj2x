@@ -607,6 +607,42 @@ TEST(RegCTest, EmitsReferenceCheckAndMonitorHelpers)
     expectNoStackAnchors(result.source);
 }
 
+/// monitorenter/monitorexit 的对象为 NULL 时必须抛 NPE（JVMS 语义）：守卫
+/// （_mj2x_regc_throw_null）必须先于 MonitorEnter/MonitorExit JNI 调用发射，
+/// 否则 NULL jobject 递进 JNI 是未定义行为（HotSpot 按"调用方保证非空"处理）。
+TEST(RegCTest, MonitorNullOperandThrowsNpe)
+{
+    std::string reason;
+    auto        result =
+        emitRegC("monitorNull",
+                 "(Ljava/lang/Object;)V",
+                 {
+                     new VarInsnNode(Opcodes::ALOAD, 0),
+                     new InsnNode(Opcodes::MONITORENTER),
+                     new VarInsnNode(Opcodes::ALOAD, 0),
+                     new InsnNode(Opcodes::MONITOREXIT),
+                     new InsnNode(Opcodes::RETURN),
+                 },
+                 2,
+                 1,
+                 reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    const auto firstGuard = result.source.find("_mj2x_regc_throw_null(\"monitor\")");
+    const auto enter      = result.source.find("_mj2x_regc_monitor_enter(");
+    ASSERT_NE(firstGuard, std::string::npos) << result.source;
+    ASSERT_NE(enter, std::string::npos) << result.source;
+    const auto secondGuard =
+        result.source.find("_mj2x_regc_throw_null(\"monitor\")", firstGuard + 1);
+    const auto exitCall = result.source.find("_mj2x_regc_monitor_exit(");
+    ASSERT_NE(secondGuard, std::string::npos) << result.source;
+    ASSERT_NE(exitCall, std::string::npos) << result.source;
+    EXPECT_LT(firstGuard, enter) << result.source;
+    EXPECT_LT(enter, secondGuard) << result.source;
+    EXPECT_LT(secondGuard, exitCall) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
 TEST(RegCTest, InternsRepeatedClassCachesWithinFunction)
 {
     std::string reason;

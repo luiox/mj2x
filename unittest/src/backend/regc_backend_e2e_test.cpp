@@ -425,6 +425,36 @@ TEST_F(RegCBackendE2E, MultiArrayHelpersRoundTrip)
             });
 }
 
+/// athrow / monitorenter 的操作数为 NULL 时 JVM 语义是抛 NPE（JVMS）；RegC 侧
+/// monitorenter/exit 由发射面 null → NPE 守卫保护（athrow 的守卫在 CRT
+/// _mj2x_regc_throw 内）。基准 JVM 与 protected 运行输出必须一致——修复前
+/// monitorenter(null) 会把 NULL jobject 递进 JNI MonitorEnter（未定义行为）。
+TEST_F(RegCBackendE2E, NullOperandSemanticsRoundTrip)
+{
+    runCase("RegCNullOperandSemantics",
+            "public class RegCNullOperandSemantics {\n"
+            "  static Object sharedLock;\n"
+            "  public static int throwNullCatch() {\n"
+            "    try { throw null; }\n"
+            "    catch (NullPointerException e) { return 7; }\n"
+            "  }\n"
+            "  public static int monitorNullCatch() {\n"
+            "    try { synchronized (sharedLock) { } }\n"
+            "    catch (NullPointerException e) { return 9; }\n"
+            "    return 1;\n"
+            "  }\n"
+            "  public static int monitorNullPropagate() {\n"
+            "    synchronized (sharedLock) { }\n"
+            "    return 2;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"throwNullCatch()", "RegCNullOperandSemantics.throwNullCatch()"},
+                {"monitorNullCatch()", "RegCNullOperandSemantics.monitorNullCatch()"},
+                {"monitorNullPropagate()", "RegCNullOperandSemantics.monitorNullPropagate()"},
+            });
+}
+
 TEST_F(RegCBackendE2E, SystemArraycopyRoundTrip)
 {
     runCase("RegCNativeArrayCopy",

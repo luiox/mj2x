@@ -1213,10 +1213,32 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                           "monitor.enter",
                                           reason))
                 return false;
-            out.appendLineStart("_mj2x_regc_monitor_enter(")
-                .append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]))
-                .append(");")
-                .newLine();
+            // JVM 语义（JVMS monitorenter）：对象为 NULL 时抛 NPE。JNI
+            // MonitorEnter/Exit 对 NULL jobject 行为未定义（HotSpot 按"调用方
+            // 保证非空"处理），先守卫再调用——与 StackC emitMonitor /
+            // VMC4 monitor intrinsic helper / LLVM mj2x_llvm_monitor_* 对齐。
+            // 抛出后必须立即终止当前指令路径（JVM 在 monitor 指令抛异常时按
+            // 当前 pc unwind，绝不继续执行后续指令）：未受保护块 goto cleanup
+            // 直接传播；受保护块落入指令后的异常分发（路由 handler）。若
+            // fall-through 继续执行，会踩进 sync-finally 的 monitorexit——javac
+            // 对 finally handler 还会发 [handler,handlerEnd)→handler 的自覆盖
+            // 异常表项，guard 再抛 → 再分发 → 自环死循环。
+            {
+                const bool blockProtected = !activeExceptionRegions(fn, block).empty();
+                const ca::str::Utf8String monExpr =
+                    ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]);
+                out.iff(monExpr.to_std_string() + " == NULL",
+                        [&](CSourceStream& u) {
+                            u.emitLine("_mj2x_regc_throw_null(\"monitor\");");
+                            if (!blockProtected) u.goto_("_mj2x_regc_cleanup");
+                        },
+                        [&](CSourceStream& u) {
+                            u.appendLineStart("_mj2x_regc_monitor_enter(")
+                                .append(monExpr)
+                                .append(");")
+                                .newLine();
+                        });
+            }
             return true;
         }
         if (ins.intrinsicName == "monitor.exit") {
@@ -1225,10 +1247,22 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                           "monitor.exit",
                                           reason))
                 return false;
-            out.appendLineStart("_mj2x_regc_monitor_exit(")
-                .append(ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]))
-                .append(");")
-                .newLine();
+            {
+                const bool blockProtected = !activeExceptionRegions(fn, block).empty();
+                const ca::str::Utf8String monExpr =
+                    ins.args.empty() ? ca::str::Utf8String("NULL") : operandExpr(ins.args[0]);
+                out.iff(monExpr.to_std_string() + " == NULL",
+                        [&](CSourceStream& u) {
+                            u.emitLine("_mj2x_regc_throw_null(\"monitor\");");
+                            if (!blockProtected) u.goto_("_mj2x_regc_cleanup");
+                        },
+                        [&](CSourceStream& u) {
+                            u.appendLineStart("_mj2x_regc_monitor_exit(")
+                                .append(monExpr)
+                                .append(");")
+                                .newLine();
+                        });
+            }
             return true;
         }
         // JVM 的 LCMP/FCMPG/FCMPL/DCMPG/DCMPL 三值比较（-1/0/1），由 ssa_builder 的
