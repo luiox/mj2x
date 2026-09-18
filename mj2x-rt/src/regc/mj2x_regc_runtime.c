@@ -605,27 +605,40 @@ mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* 
 /// （IsSameObject 语义与逐次 FindClass 完全一致）。表项永不释放，泄漏上界 =
 /// 不同 internal name 数量，与 TU 级 class cache 的全局引用持有策略一致。
 /// 命中路径 0 JNI：ldc Class / catch 类型匹配等热调用点逐次省 1 次 FindClass。
+///
+/// 并发口径（槽位 write-once）：key 经 CAS 从 NULL 一次性发布、永不改写，
+/// value 由赢得槽位的线程随后写入；读侧对 value 未发布（NULL）的槽按 miss
+/// 处理，自建 global（FindClass 恒等性下与表内值等价）。并发同名 miss 各建
+/// 一个 global ref 属有界冗余（上限 = 并发 miss 线程数），与表项永不释放的
+/// 持有策略同口径。
 static jclass _mj2x_regc_cached_class_by_name(const char* internal_name)
 {
-    static struct { const char* key; jclass value; } class_cache[64];
-    static int class_cache_count = 0;
-    for (int i = 0; i < class_cache_count; ++i) {
-        if (class_cache[i].key == internal_name ||
-            strcmp(class_cache[i].key, internal_name) == 0) {
-            return class_cache[i].value;
+    static struct { const char* volatile key; jclass value; } class_cache[64];
+    for (int i = 0; i < 64; ++i) {
+        const char* key = class_cache[i].key;
+        jclass      cached = class_cache[i].value;
+        if (key == NULL || cached == NULL) continue; /* 空槽或发布窗口：按 miss */
+        if (key == internal_name || strcmp(key, internal_name) == 0) {
+            return cached;
         }
     }
     jclass local = (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, internal_name);
     if (local == NULL) return NULL;
     jclass global = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, local);
     (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, local);
-    if (global != NULL && class_cache_count < 64) {
-        /* 索引按位保护：多线程首次并发的瞬时竞态最多覆盖已有槽，不越界 */
-        class_cache[class_cache_count & 63].key = internal_name;
-        class_cache[class_cache_count & 63].value = global;
-        ++class_cache_count;
+    if (global == NULL) return NULL;
+    for (int i = 0; i < 64; ++i) {
+        if (class_cache[i].key != NULL) continue;
+        /* CAS 抢占空槽：输家（同名被登记 / 槽被别名抢占）继续扫描或直接返回 */
+        const char* prev = (const char*)_mj2x_regc_ptr_cas(
+            (void* volatile*)&class_cache[i].key, NULL, (void*)internal_name);
+        if (prev == NULL) {
+            class_cache[i].value = global; /* 赢得槽位后发布 value，此后只读 */
+            return global;
+        }
+        if (prev == internal_name) return global; /* 同名已被并发登记：恒等 */
     }
-    return global;
+    return global; /* 表满：不缓存，与原实现一致 */
 }
 
 mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* internal_name) {
