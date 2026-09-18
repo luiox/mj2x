@@ -1207,16 +1207,15 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         if (decision.passContext) userArgs.push_back("_mj2x_regc_current_context()->env");
         // JVM 语义保持：instance 调用 receiver 为 NULL 时抛 NPE（与通用 JNI
         // 派发路径的 emitCachedCall 一致），不把 NULL 静默递给用户实现。
+        // ThrowNew 仅挂 pending 异常后正常返回，必须 goto cleanup 终止本调用
+        // 路径，否则 NULL receiver 仍会递给用户 C 实现（F1 直派同款写法，
+        // 见 emitIndyDirectFieldCall）。
         if (decision.passReceiver && !ins.args.empty()) {
             const std::string receiverExpr = operandExpr(ins.args[0]).to_std_string();
-            const std::string destName     = ins.hasDest ? regName(ins.dest.id) : std::string();
             out.iff(receiverExpr + " == NULL",
                     [&](CSourceStream& u) {
                         u.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
-                        if (ins.hasDest) {
-                            u.emitLine(destName + " = " +
-                                       std::string(defaultValue(ins.dest.type)) + ";");
-                        }
+                        u.goto_("_mj2x_regc_cleanup");
                     });
         }
         for (const auto& arg : ins.args) {

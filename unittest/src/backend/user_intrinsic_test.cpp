@@ -208,10 +208,18 @@ TEST(RegCUserIntrinsicTest, InstanceCallSiteWithPassReceiverLowersToUserSymbol)
     EXPECT_NE(result.source.find("my_m("), std::string::npos) << result.source;
     // 不经通用 JNI 派发。
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32("), std::string::npos) << result.source;
-    // JVM 语义保持：receiver 为 NULL 抛 NPE（与通用派发 emitCachedCall 一致）。
+    // JVM 语义保持：receiver 为 NULL 抛 NPE（与通用派发 emitCachedCall 一致），
+    // 且 ThrowNew 后必须 goto cleanup 终止调用路径——仅挂 pending 异常而不
+    // 转移控制流会把 NULL receiver 继续递给用户 C 实现。
     EXPECT_NE(result.source.find("_mj2x_regc_throw_null(\"instance method call\")"),
               std::string::npos)
         << result.source;
+    {
+        const auto trap = result.source.find("_mj2x_regc_throw_null(\"instance method call\")");
+        ASSERT_NE(trap, std::string::npos);
+        const auto gotos = result.source.find("goto _mj2x_regc_cleanup;", trap);
+        EXPECT_NE(gotos, std::string::npos) << result.source;
+    }
     // 用户实现可能经 JNI 抛异常：恒保留 pending 异常检查。
     EXPECT_NE(result.source.find("_mj2x_regc_exception_check"), std::string::npos)
         << result.source;
