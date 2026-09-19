@@ -1173,7 +1173,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 return false;
             }
             return emitInvokeDynamic(
-                out, ins, fn.indySites[localIdx], indySiteBase + localIdx, reason);
+                out, ins, fn.indySites[localIdx], indySiteBase + localIdx, fn, block, reason);
         }
         if (ins.intrinsicName == "array.length") {
             if (!rejectNativeObjectEscape(state,

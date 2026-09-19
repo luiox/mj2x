@@ -916,7 +916,7 @@ std::string indyDirectGuardCondition(size_t globalSiteIndex)
 /// 站点描述符与字段形态精确一致，寄存器类型匹配）。
 bool emitIndyDirectFieldCall(CSourceStream& out, const RegInstruction& ins,
                              const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
-                             std::string& reason)
+                             const RegFunction& fn, const RegBlock* block, std::string& reason)
 {
     const IndyDirectField& field = *site.directField;
 
@@ -947,44 +947,62 @@ bool emitIndyDirectFieldCall(CSourceStream& out, const RegInstruction& ins,
     out.iff(indyDirectGuardCondition(globalSiteIndex),
             [&](CSourceStream& o) {
                 std::string recvVar;
+                // 守卫抛出后的分流依据：站点指令所在块是否落在异常保护区间内
+                //（与 monitor enter/exit 守卫同口径）。
+                const bool blockProtected = !activeExceptionRegions(fn, block).empty();
                 if (!field.isStatic) {
                     recvVar = "_mj2x_indy_direct_recv_" + idx;
                     o.declare_var("jobject", recvVar,
                                   codegen::exprCast("jobject",
                                                     codegen::exprParen(
                                                         operandExpr(ins.args[0]).to_std_string())));
+                }
+                // 字段访问体：实例形态放进 null 守卫的 else 分支——受保护路径
+                // throw_null 落空后直接进指令后异常分发，绝不能以 NULL receiver
+                // 递进 JNI；静态形态无 receiver，直接发射。
+                auto emitAccess = [&](CSourceStream& u) {
+                    if (!field.isWrite) {
+                        const std::string access =
+                            field.isStatic
+                                ? std::string("(*_mj2x_regc_env)->GetStatic") + family +
+                                      "Field(_mj2x_regc_env, " + clsVar + ", " + fidVar + ")"
+                                : std::string("(*_mj2x_regc_env)->Get") + family +
+                                      "Field(_mj2x_regc_env, " + recvVar + ", " + fidVar + ")";
+                        u.assign(destName,
+                                 jniResultCast(fieldTag, ins.dest.type).to_std_string() + access);
+                    }
+                    else {
+                        const RegOperand& valueOperand = field.isStatic ? ins.args[0] : ins.args[1];
+                        const std::string valueExpr =
+                            std::string(jniValueCast(fieldTag)) + "(" +
+                            operandExpr(valueOperand).to_std_string() + ")";
+                        const std::string access =
+                            field.isStatic
+                                ? std::string("(*_mj2x_regc_env)->SetStatic") + family +
+                                      "Field(_mj2x_regc_env, " + clsVar + ", " + fidVar + ", " +
+                                      valueExpr + ")"
+                                : std::string("(*_mj2x_regc_env)->Set") + family +
+                                      "Field(_mj2x_regc_env, " + recvVar + ", " + fidVar + ", " +
+                                      valueExpr + ")";
+                        u.emitLine(access + ";");
+                    }
+                    u.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+                };
+                if (!field.isStatic) {
+                    // JVMS getfield/putfield：receiver NULL 时于当前 pc 抛 NPE，
+                    // 按异常表路由到方法自身 handler。未受保护块 goto cleanup 直接
+                    // 传播；受保护块落空进指令后异常分发（issue #958：原实现
+                    // 无条件 goto cleanup 跳过分发，try 内 catch NPE 接不住）。
                     o.iff(recvVar + " == NULL",
                           [&](CSourceStream& u) {
                               u.emitLine("_mj2x_regc_throw_null(\"indy direct field access\");");
-                              u.goto_("_mj2x_regc_cleanup");
-                          });
-                }
-                if (!field.isWrite) {
-                    const std::string access =
-                        field.isStatic
-                            ? std::string("(*_mj2x_regc_env)->GetStatic") + family +
-                                  "Field(_mj2x_regc_env, " + clsVar + ", " + fidVar + ")"
-                            : std::string("(*_mj2x_regc_env)->Get") + family +
-                                  "Field(_mj2x_regc_env, " + recvVar + ", " + fidVar + ")";
-                    o.assign(destName,
-                             jniResultCast(fieldTag, ins.dest.type).to_std_string() + access);
+                              if (!blockProtected) u.goto_("_mj2x_regc_cleanup");
+                          },
+                          emitAccess);
                 }
                 else {
-                    const RegOperand& valueOperand = field.isStatic ? ins.args[0] : ins.args[1];
-                    const std::string valueExpr =
-                        std::string(jniValueCast(fieldTag)) + "(" +
-                        operandExpr(valueOperand).to_std_string() + ")";
-                    const std::string access =
-                        field.isStatic
-                            ? std::string("(*_mj2x_regc_env)->SetStatic") + family +
-                                  "Field(_mj2x_regc_env, " + clsVar + ", " + fidVar + ", " +
-                                  valueExpr + ")"
-                            : std::string("(*_mj2x_regc_env)->Set") + family +
-                                  "Field(_mj2x_regc_env, " + recvVar + ", " + fidVar + ", " +
-                                  valueExpr + ")";
-                    o.emitLine(access + ";");
+                    emitAccess(o);
                 }
-                o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
             },
             [&](CSourceStream& o) {
                 helperOk = emitIndyHelperCall(o, ins, site, globalSiteIndex, reason);
@@ -999,7 +1017,7 @@ bool emitIndyDirectFieldCall(CSourceStream& out, const RegInstruction& ins,
 /// 路径——与现状逐字节一致，零回归。
 bool emitIndyDirectRecordCall(CSourceStream& out, const RegInstruction& ins,
                               const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
-                              std::string& reason)
+                              const RegFunction& fn, const RegBlock* block, std::string& reason)
 {
     const IndyRecordMethods& record = *site.recordMethods;
     if (!record.accessor.has_value()) {
@@ -1030,46 +1048,61 @@ bool emitIndyDirectRecordCall(CSourceStream& out, const RegInstruction& ins,
             [&](CSourceStream& o) {
                 size_t      firstArg = 0;
                 std::string recvVar;
+                // 守卫抛出后的分流依据（与 F1 字段面同口径）。
+                const bool blockProtected = !activeExceptionRegions(fn, block).empty();
                 if (!staticAccessor) {
                     recvVar = "_mj2x_indy_direct_recv_" + idx;
                     o.declare_var("jobject", recvVar,
                                   codegen::exprCast("jobject",
                                                     codegen::exprParen(
                                                         operandExpr(ins.args[0]).to_std_string())));
-                    o.iff(recvVar + " == NULL",
-                          [&](CSourceStream& u) {
-                              u.emitLine("_mj2x_regc_throw_null(\"indy direct accessor call\");");
-                              u.goto_("_mj2x_regc_cleanup");
-                          });
                     firstArg = 1;
                 }
                 const std::string vaVar = "_mj2x_indy_direct_va_" + idx;
-                if (paramTags.empty()) {
-                    // 无参形态：MethodA 传 NULL，不声明 jvalue 数组。
-                }
-                else {
-                    o.declare_var("jvalue",
-                                  ca::str::format_std("{}[{}]", vaVar, paramTags.size()));
-                    for (size_t i = 0; i < paramTags.size(); ++i) {
-                        o.assign(ca::str::format_std("{}[{}].{}", vaVar, i,
-                                                     jvalueSlotName(paramTags[i])),
-                                 std::string(jniValueCast(paramTags[i])) + "(" +
-                                     operandExpr(ins.args[firstArg + i]).to_std_string() + ")");
+                // 访问器调用体：实例形态放进 null 守卫的 else 分支——受保护路径
+                // throw_null 落空后直接进指令后异常分发，绝不能以 NULL receiver
+                // 递进 JNI；静态访问器无 receiver，直接发射。
+                auto emitAccessorCall = [&](CSourceStream& u) {
+                    if (!paramTags.empty()) {
+                        u.declare_var("jvalue",
+                                      ca::str::format_std("{}[{}]", vaVar, paramTags.size()));
+                        for (size_t i = 0; i < paramTags.size(); ++i) {
+                            u.assign(ca::str::format_std("{}[{}].{}", vaVar, i,
+                                                         jvalueSlotName(paramTags[i])),
+                                     std::string(jniValueCast(paramTags[i])) + "(" +
+                                         operandExpr(ins.args[firstArg + i]).to_std_string() +
+                                         ")");
+                        }
                     }
-                }
-                const std::string call =
-                    std::string("(*_mj2x_regc_env)->Call") + (staticAccessor ? "Static" : "") +
-                    jniCallFamily(returnTag) + "MethodA(_mj2x_regc_env, " +
-                    (staticAccessor ? clsVar : recvVar) + ", " + midVar + ", " +
-                    (paramTags.empty() ? std::string("NULL") : vaVar) + ")";
-                if (ins.hasDest) {
-                    o.assign(destName,
-                             jniResultCast(returnTag, ins.dest.type).to_std_string() + call);
+                    const std::string call =
+                        std::string("(*_mj2x_regc_env)->Call") + (staticAccessor ? "Static" : "") +
+                        jniCallFamily(returnTag) + "MethodA(_mj2x_regc_env, " +
+                        (staticAccessor ? clsVar : recvVar) + ", " + midVar + ", " +
+                        (paramTags.empty() ? std::string("NULL") : vaVar) + ")";
+                    if (ins.hasDest) {
+                        u.assign(destName,
+                                 jniResultCast(returnTag, ins.dest.type).to_std_string() + call);
+                    }
+                    else {
+                        u.emitLine(call + ";");
+                    }
+                    u.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
+                };
+                if (!staticAccessor) {
+                    // JVMS invokevirtual 系：receiver NULL 时于当前 pc 抛 NPE，按
+                    // 异常表路由到方法自身 handler。未受保护块 goto cleanup 直接
+                    // 传播；受保护块落空进指令后异常分发（issue #958：原实现
+                    // 无条件 goto cleanup 跳过分发，try 内 catch NPE 接不住）。
+                    o.iff(recvVar + " == NULL",
+                          [&](CSourceStream& u) {
+                              u.emitLine("_mj2x_regc_throw_null(\"indy direct accessor call\");");
+                              if (!blockProtected) u.goto_("_mj2x_regc_cleanup");
+                          },
+                          emitAccessorCall);
                 }
                 else {
-                    o.emitLine(call + ";");
+                    emitAccessorCall(o);
                 }
-                o.emitLine("if (_mj2x_regc_exception_check()) { goto _mj2x_regc_cleanup; }");
             },
             [&](CSourceStream& o) {
                 helperOk = emitIndyHelperCall(o, ins, site, globalSiteIndex, reason);
@@ -1081,16 +1114,17 @@ bool emitIndyDirectRecordCall(CSourceStream& out, const RegInstruction& ins,
 
 /// invokedynamic 站点直派发射（设计文档 §6 P2）：F1 字段读/写、F2 record 访问器。
 /// build-time 判定形态且载荷 engage 时发单分支守卫直派桩；其余（RuntimeHelper /
-/// StaticExpanded / 载荷未 engage）全部落回现状 helper 路径。
+/// StaticExpanded / 载荷未 engage）全部落回现状 helper 路径。fn/block 供直派
+/// 面的 null receiver 守卫做块保护分流（issue #958）。
 bool emitIndyDirectCall(CSourceStream& out, const RegInstruction& ins,
                         const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
-                        std::string& reason)
+                        const RegFunction& fn, const RegBlock* block, std::string& reason)
 {
     if (site.form == IndyDispatchForm::DirectFieldAccess && site.directField.has_value()) {
-        return emitIndyDirectFieldCall(out, ins, site, globalSiteIndex, reason);
+        return emitIndyDirectFieldCall(out, ins, site, globalSiteIndex, fn, block, reason);
     }
     if (site.form == IndyDispatchForm::RecordObjectMethods && site.recordMethods.has_value()) {
-        return emitIndyDirectRecordCall(out, ins, site, globalSiteIndex, reason);
+        return emitIndyDirectRecordCall(out, ins, site, globalSiteIndex, fn, block, reason);
     }
     return emitIndyHelperCall(out, ins, site, globalSiteIndex, reason);
 }
@@ -1099,9 +1133,9 @@ bool emitIndyDirectCall(CSourceStream& out, const RegInstruction& ins,
 /// emitIndyDirectCall，其余走既有 helper 路径（发射文本与现状逐字节一致）。
 bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
                        const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
-                       std::string& reason)
+                       const RegFunction& fn, const RegBlock* block, std::string& reason)
 {
-    return emitIndyDirectCall(out, ins, site, globalSiteIndex, reason);
+    return emitIndyDirectCall(out, ins, site, globalSiteIndex, fn, block, reason);
 }
 
 bool validateRegCNoStackAnchors(const std::string& source, std::string& reason)

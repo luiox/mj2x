@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "jbytecode/jbytecode.hpp"
 #include "jdk_fixture.hpp"
 #include "jdk_finder/jdk_finder.hpp"
 #include "libca/process/subprocess.hpp"
@@ -27,7 +28,8 @@
 
 namespace fs = std::filesystem;
 
-using namespace test::jdk;   // runBat / q / fileExists / ExecResult / JdkToolchain / probeJdk
+using namespace test::jdk;        // runBat / q / fileExists / ExecResult / JdkToolchain / probeJdk
+using namespace jbytecode::core;  // ClassWriter / Label / Opcodes / Type / Handle
 
 namespace {
 
@@ -1236,6 +1238,215 @@ TEST_F(RegCBackendE2E, IntegerDivisionTrapRoundTrip)
                 {"longDivOrCatch(12L, 3L)", "RegCIntegerTraps.longDivOrCatch(12L, 3L)"},
                 {"longDivOrCatch(12L, 0L)", "RegCIntegerTraps.longDivOrCatch(12L, 0L)"},
             });
+}
+
+// #958 E2E：F1 indy-direct 字段读的 null receiver 路由到内部 handler。站点形状
+// （desc 即字段操作）javac 造不出来，手工构造 Holder.class：read(LRec;)I 的方法体
+// 是 bsm=LambdaMetafactory + H_GETFIELD 的 indy，受 java/lang/Exception try/catch
+// 保护，V1_7 + 手写 handler 帧（StackMapTable）。基线跑等价 javac 实现（F1 形状的
+// indy 无法被真实 JVM LambdaMetafactory 链接，跑不了同字节基线）。受保护块内
+// trap 必须落到 handler 返回 -1；若守卫退化成直接 cleanup，NPE 逃出 Holder，
+// Driver 兜底得 -2，行比对立刻暴露。
+TEST_F(RegCBackendE2E, IndyDirectNullReceiverRoutesToHandlerRoundTrip)
+{
+    fs::path        dir = caseDir("RegCIndyDirectNull");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+
+    {
+        std::ofstream out(dir / "Rec.java");
+        out << "public class Rec { public int f; }\n";
+    }
+    auto recCompile = runBat({q(tc_.javac) + " -d " + q(dir) + " " + q(dir / "Rec.java")});
+    ASSERT_EQ(recCompile.exitCode, 0) << recCompile.out;
+
+    {
+        std::ofstream out(dir / "Holder.java");
+        out << "public class Holder {\n"
+               "  public int read(Rec r) {\n"
+               "    try { return r.f; } catch (Exception e) { return -1; }\n"
+               "  }\n"
+               "}\n";
+    }
+    auto holderCompile =
+        runBat({q(tc_.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(dir / "Holder.java")});
+    ASSERT_EQ(holderCompile.exitCode, 0) << holderCompile.out;
+
+    // safely 只兜"逃出 Holder 的异常"（-2）：内部 handler 生效应得 -1。
+    {
+        std::ofstream out(dir / "Driver.java");
+        out << "public class Driver {\n"
+               "  static int safely(Holder h, Rec r) {\n"
+               "    try { return h.read(r); } catch (Exception e) { return -2; }\n"
+               "  }\n"
+               "  public static void main(String[] args) throws Exception {\n"
+               "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+               "    if (dll != null) System.load(dll);\n"
+               "    Holder h = new Holder();\n"
+               "    Rec r = new Rec();\n"
+               "    r.f = 5;\n"
+               "    System.out.println(\"nullRecv=\" + safely(h, null));\n"
+               "    System.out.println(\"normal=\" + safely(h, r));\n"
+               "  }\n"
+               "}\n";
+    }
+    auto driverCompile =
+        runBat({q(tc_.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(dir / "Driver.java")});
+    ASSERT_EQ(driverCompile.exitCode, 0) << driverCompile.out;
+
+    auto baselineRun = runBat({q(tc_.java) + " -cp " + q(dir) + " Driver"});
+    ASSERT_EQ(baselineRun.exitCode, 0) << baselineRun.out;
+    auto baseline = splitLines(baselineRun.out);
+    ASSERT_EQ(baseline.size(), 2u) << baselineRun.out;
+    EXPECT_EQ(baseline[0], "nullRecv=-1");
+    EXPECT_EQ(baseline[1], "normal=5");
+
+    ca::str::Utf8StringArena arena;
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(LRec;)I")));
+    bsmArgs.emplace_back(
+        Handle(Opcodes::H_GETFIELD, arena.intern("Rec"), arena.intern("f"), arena.intern("I")));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(LRec;)I")));
+
+    auto* tryStart = new Label();
+    auto* tryEnd   = new Label();
+    auto* handler  = new Label();
+
+    ClassWriter writer(arena, ClassWriter::COMPUTE_MAXS);
+    writer.visit(Opcodes::V1_7, Opcodes::ACC_PUBLIC, arena.intern("Holder"),
+                 ca::str::Utf8StringRef(), arena.intern("java/lang/Object"), {});
+    {
+        auto* init = writer.visitMethod(Opcodes::ACC_PUBLIC, arena.intern("<init>"),
+                                        arena.intern("()V"), ca::str::Utf8StringRef(), {});
+        init->visitCode();
+        init->visitVarInsn(Opcodes::ALOAD, 0);
+        init->visitMethodInsn(Opcodes::INVOKESPECIAL, arena.intern("java/lang/Object"),
+                              arena.intern("<init>"), arena.intern("()V"), false);
+        init->visitInsn(Opcodes::RETURN);
+        init->visitMaxs(1, 1);
+        init->visitEnd();
+    }
+    {
+        auto* read = writer.visitMethod(Opcodes::ACC_PUBLIC, arena.intern("read"),
+                                        arena.intern("(LRec;)I"), ca::str::Utf8StringRef(), {});
+        read->visitCode();
+        read->visitTryCatchBlock(tryStart, tryEnd, handler, arena.intern("java/lang/Exception"));
+        read->visitLabel(tryStart);
+        read->visitVarInsn(Opcodes::ALOAD, 1);
+        read->visitInvokeDynamicInsn(
+            arena.intern("read"),
+            arena.intern("(LRec;)I"),
+            Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
+                   arena.intern("metafactory"),
+                   arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                                "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;"
+                                "Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)"
+                                "Ljava/lang/invoke/CallSite;")),
+            bsmArgs);
+        read->visitInsn(Opcodes::IRETURN);
+        read->visitLabel(tryEnd);
+        std::vector<ca::core::Any> frameLocals;
+        frameLocals.emplace_back(arena.intern("Holder"));
+        frameLocals.emplace_back(arena.intern("Rec"));
+        std::vector<ca::core::Any> frameStack;
+        frameStack.emplace_back(arena.intern("java/lang/Exception"));
+        read->visitFrame(Opcodes::F_FULL, 2, frameLocals, 1, frameStack);
+        read->visitLabel(handler);
+        read->visitVarInsn(Opcodes::ASTORE, 2);
+        read->visitInsn(Opcodes::ICONST_M1);
+        read->visitInsn(Opcodes::IRETURN);
+        read->visitMaxs(1, 3);
+        read->visitEnd();
+    }
+    writer.visitEnd();
+    auto crafted = writer.toByteArray();
+    ASSERT_GT(crafted.size(), 20u);
+
+    fs::path inClass  = dir / "Holder.class";
+    fs::path outClass = dir / "Holder_protected.class";
+    fs::path cFile    = dir / "Holder.c";
+    {
+        std::ofstream out(inClass, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(crafted.data()),
+                  static_cast<std::streamsize>(crafted.size()));
+    }
+
+    mj2x::PipelineConfig config;
+    config.inputPath  = inClass.string();
+    config.outputPath = outClass.string();
+    mj2x::Pipeline pipeline(std::move(config));
+    auto           backend = std::make_unique<mj2x::RegCBackend>();
+    backend->setOutputPath(cFile.string());
+    pipeline.registerBackend(std::move(backend));
+    pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
+    pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
+    pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+    pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+    ASSERT_EQ(pipeline.run(), 0);
+    ASSERT_TRUE(fileExists(cFile));
+    std::string generatedC = readText(cFile);
+    // F1 直派确已启用（直派快路 + 显式 NPE trap），而非回退 invokeWithArguments。
+    EXPECT_NE(generatedC.find("GetIntField(_mj2x_regc_env, _mj2x_indy_direct_recv_0, "
+                              "_mj2x_indy_direct_fid_0)"),
+              std::string::npos)
+        << generatedC;
+    EXPECT_NE(generatedC.find("_mj2x_regc_throw_null(\"indy direct field access\");"),
+              std::string::npos)
+        << generatedC;
+
+    fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    fs::path dll    = dir / "Holder.dll";
+    fs::path objDir = dir / "obj";
+    fs::create_directories(objDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::path generatedObj = objDir / "generated.obj";
+    fs::path crtSrc       = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+
+    std::vector<std::string> compileLines;
+    compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
+    compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(generatedObj) + " " + q(cFile) +
+                           " /I" + q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                           q(tc_.jdkIncludeWin));
+
+    std::vector<fs::path> runtimeObjs;
+    auto compileCrt = [&](const std::string& relPath, const std::string& objName) {
+        fs::path src = crtSrc / relPath;
+        ASSERT_TRUE(fileExists(src)) << src;
+        fs::path obj = objDir / objName;
+        runtimeObjs.push_back(obj);
+        compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(src) + " /I" +
+                               q(crtSrc) + " /I" + q(tc_.jdkInclude) + " /I" +
+                               q(tc_.jdkIncludeWin));
+    };
+    compileCrt("regc/mj2x_regc_crt.c", "mj2x_regc_crt.obj");
+    compileCrt("regc/mj2x_regc_runtime.c", "mj2x_regc_runtime.obj");
+    compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
+    compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
+    compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+    compileCrt("regc/mj2x_regc_intrinsic.c", "mj2x_regc_intrinsic.obj");
+
+    std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
+    for (const auto& obj : runtimeObjs) linkLine += " " + q(obj);
+    compileLines.push_back(linkLine);
+
+    auto cl = runBat(compileLines);
+    ASSERT_EQ(cl.exitCode, 0) << cl.out;
+    ASSERT_TRUE(fileExists(dll));
+
+    auto protectedRun = runBat({
+        "set \"MORPHER_DLL=" + dll.string() + "\"",
+        q(tc_.java) + " -cp " + q(dir) + " Driver",
+    });
+    ASSERT_EQ(protectedRun.exitCode, 0) << protectedRun.out;
+    auto actual = splitLines(protectedRun.out);
+    ASSERT_EQ(actual.size(), baseline.size()) << "baseline:\n"
+                                              << joinLines(baseline) << "protected:\n"
+                                              << joinLines(actual);
+    for (size_t i = 0; i < baseline.size(); ++i) {
+        EXPECT_EQ(baseline[i], actual[i]);
+    }
 }
 
 // JDK intrinsic E2E: Integer.parseInt + Math.* + String hot paths run entirely

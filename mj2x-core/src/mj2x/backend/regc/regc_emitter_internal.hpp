@@ -308,9 +308,10 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
 /// @}
 
 /// Emit one invokedynamic site call.  Defined in regc_emitter.cpp.
+/// fn/block 供直派面 null receiver 守卫做块保护分流（issue #958）。
 bool emitInvokeDynamic(codegen::CSourceStream& out, const RegInstruction& ins,
                        const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
-                       std::string& reason);
+                       const RegFunction& fn, const RegBlock* block, std::string& reason);
 
 /// 发射 invokedynamic 站点直派桩（设计文档 §6 P2）：按站点派发形态分派——
 /// F1（DirectFieldAccess+载荷）发字段访问直派、F2（RecordObjectMethods+访问器载荷）
@@ -319,6 +320,6 @@ bool emitInvokeDynamic(codegen::CSourceStream& out, const RegInstruction& ins,
 /// regc_emitter.cpp。
 bool emitIndyDirectCall(codegen::CSourceStream& out, const RegInstruction& ins,
                         const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
-                        std::string& reason);
+                        const RegFunction& fn, const RegBlock* block, std::string& reason);
 
 }   // namespace mj2x

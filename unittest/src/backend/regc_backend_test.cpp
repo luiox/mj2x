@@ -705,6 +705,182 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorEmitsGuardedCall)
         << source;
 }
 
+// ── issue #958：直派面 null receiver 守卫按块保护分流 ──
+//
+// JVMS getfield/putfield/invokevirtual 系：receiver NULL 时于当前 pc 抛 NPE，按
+// 异常表路由到方法自身 handler。守卫抛出后按块保护状态分流——受保护块落空进
+// 指令后异常分发（方法内 catch NPE 必须接得住）；未受保护块保持 goto cleanup
+// 直接传播。实例形态的访问体位于守卫 else 分支（受保护路径不得以 NULL receiver
+// 递进 JNI）。
+
+/// throw_null 站点与访问体之间是否夹着 goto cleanup（未受保护直传形态判据）。
+static bool trapGoesStraightToCleanup(const std::string& source, const char* trapText,
+                                      const char* accessMarker)
+{
+    const auto trapPos   = source.find(trapText);
+    const auto accessPos = source.find(accessMarker, trapPos);
+    if (trapPos == std::string::npos || accessPos == std::string::npos) return false;
+    const auto gotoPos = source.find("goto _mj2x_regc_cleanup", trapPos);
+    return gotoPos != std::string::npos && gotoPos < accessPos;
+}
+
+// 受保护块（try 区间覆盖 indy 站点）：throw_null 落空进指令后异常分发，
+// 不得直接 goto cleanup；访问体进守卫 else 分支。
+TEST(RegCBackendTest, IndyDirectFieldSetterNullTrapRoutesToHandlerWhenProtected)
+{
+    ca::str::Utf8StringArena arena;
+    auto* indy = regcTestDirectFieldIndy(
+        arena, "set", "(Lp/Rec;I)V", Opcodes::H_PUTFIELD, "p/Rec", "f", "I", "(I)V");
+    auto* tryStart = new LabelNode(new Label());
+    auto* tryEnd   = new LabelNode(new Label());
+    auto* handler  = new LabelNode(new Label());
+    auto  method   = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                              "put",
+                              "(Lp/Rec;I)V",
+                              {
+                                  tryStart,
+                                  new VarInsnNode(Opcodes::ALOAD, 0),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  indy,
+                                  tryEnd,
+                                  new InsnNode(Opcodes::RETURN),
+                                  handler,
+                                  new VarInsnNode(Opcodes::ASTORE, 1),
+                                  new InsnNode(Opcodes::RETURN),
+                              },
+                              3,
+                              2);
+    method->tryCatchBlocks.push_back(new TryCatchBlockNode(
+        tryStart->label, tryEnd->label, handler->label,
+        ca::str::Utf8StringRef::from_cstr("java/lang/Exception")));
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    CodeConverter converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    const auto trapPos =
+        result.text.find("_mj2x_regc_throw_null(\"indy direct field access\");");
+    const auto accessPos =
+        result.text.find("SetIntField(_mj2x_regc_env, _mj2x_indy_direct_recv_0,", trapPos);
+    ASSERT_NE(trapPos, std::string::npos) << result.text;
+    ASSERT_NE(accessPos, std::string::npos) << result.text;
+    const auto gotoPos = result.text.find("goto _mj2x_regc_cleanup", trapPos);
+    EXPECT_TRUE(gotoPos == std::string::npos || gotoPos > accessPos) << result.text;
+    // 指令后异常分发存在：NPE 可路由到方法自身 handler。
+    EXPECT_NE(result.text.find("_mj2x_regc_exception_matches("), std::string::npos)
+        << result.text;
+    expectNoStackAnchors(result.text);
+}
+
+// 未受保护块（对照）：守卫抛出后保持 goto cleanup 直接传播（现状语义不变）。
+TEST(RegCBackendTest, IndyDirectFieldSetterNullTrapPropagatesDirectlyWhenUnprotected)
+{
+    ca::str::Utf8StringArena arena;
+    auto* indy = regcTestDirectFieldIndy(
+        arena, "set", "(Lp/Rec;I)V", Opcodes::H_PUTFIELD, "p/Rec", "f", "I", "(I)V");
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "put",
+                             "(Lp/Rec;I)V",
+                             {
+                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 indy,
+                                 new InsnNode(Opcodes::RETURN),
+                             },
+                             3,
+                             2);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    CodeConverter converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_TRUE(trapGoesStraightToCleanup(result.text,
+                                          "_mj2x_regc_throw_null(\"indy direct field access\");",
+                                          "SetIntField(_mj2x_regc_env, _mj2x_indy_direct_recv_0,"))
+        << result.text;
+    expectNoStackAnchors(result.text);
+}
+
+// 受保护块 F2 record 访问器：与 F1 同口径，throw_null 落空进指令后异常分发。
+TEST(RegCBackendTest, IndyDirectRecordAccessorNullTrapRoutesToHandlerWhenProtected)
+{
+    ca::str::Utf8StringArena arena;
+    std::vector<ca::core::Any> bsmArgs;
+    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(std::string("x"));
+    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
+                                arena.intern("x"), arena.intern("()I")));
+    auto* indy = new InvokeDynamicInsnNode(
+        ca::str::ZUtf8StringRef::from_static("x"),
+        ca::str::ZUtf8StringRef::from_static("(Lp/Point;)I"),
+        Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/runtime/ObjectMethods"),
+               arena.intern("bootstrap"),
+               arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
+                            "Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/String;"
+                            "Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)Ljava/lang/Object;")),
+        std::move(bsmArgs));
+    auto* tryStart = new LabelNode(new Label());
+    auto* tryEnd   = new LabelNode(new Label());
+    auto* handler  = new LabelNode(new Label());
+    auto  method   = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                              "getX",
+                              "(Lp/Point;)I",
+                              {
+                                  tryStart,
+                                  new VarInsnNode(Opcodes::ALOAD, 0),
+                                  indy,
+                                  tryEnd,
+                                  new InsnNode(Opcodes::IRETURN),
+                                  handler,
+                                  new VarInsnNode(Opcodes::ASTORE, 1),
+                                  new InsnNode(Opcodes::ICONST_M1),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              2,
+                              2);
+    method->tryCatchBlocks.push_back(new TryCatchBlockNode(
+        tryStart->label, tryEnd->label, handler->label,
+        ca::str::Utf8StringRef::from_cstr("java/lang/Exception")));
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    CodeConverter converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    const auto trapPos =
+        result.text.find("_mj2x_regc_throw_null(\"indy direct accessor call\");");
+    const auto accessPos =
+        result.text.find("CallIntMethodA(_mj2x_regc_env, _mj2x_indy_direct_recv_0,", trapPos);
+    ASSERT_NE(trapPos, std::string::npos) << result.text;
+    ASSERT_NE(accessPos, std::string::npos) << result.text;
+    const auto gotoPos = result.text.find("goto _mj2x_regc_cleanup", trapPos);
+    EXPECT_TRUE(gotoPos == std::string::npos || gotoPos > accessPos) << result.text;
+    EXPECT_NE(result.text.find("_mj2x_regc_exception_matches("), std::string::npos)
+        << result.text;
+    expectNoStackAnchors(result.text);
+}
+
 // RuntimeHelper 站点（自定义 bootstrap）零回归锚：发射文本与现状逐字节一致
 // （参数数组装箱 + helper 取 target + invokeWithArguments + 拆箱），且不产生任何
 // 直派缓存表（build-time 判定失败的站点根本不发直派桩）。
