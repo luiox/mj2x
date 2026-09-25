@@ -1,5 +1,5 @@
 // mj2x SSA IR — 副作用描述（L4 passes 用，R1 填保守值）。
-// 详见 doc/IR_DESIGN.md §7。
+// 详见 mj2x/doc_ai/ir_design.md §7。
 #pragma once
 
 namespace mj2x {

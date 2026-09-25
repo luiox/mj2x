@@ -1,5 +1,5 @@
 // mj2x SSA IR — id 分配。
-// value id = 虚拟寄存器号（L5 直接映射成 C 局部变量 v<id>）。详见 doc/IR_DESIGN.md §9。
+// value id = 虚拟寄存器号（L5 直接映射成 C 局部变量 v<id>）。详见 mj2x/doc_ai/ir_design.md §9。
 #pragma once
 
 #include <cstdint>

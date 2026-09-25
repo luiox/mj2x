@@ -1,5 +1,5 @@
 // mj2x SSA IR — type system.
-// 对齐 L1 PrimitiveKind（frontend/mir_node.hpp），不重复发明。详见 doc/IR_DESIGN.md §5。
+// 对齐 L1 PrimitiveKind（frontend/mir_node.hpp），不重复发明。详见 mj2x/doc_ai/ir_design.md §5。
 #pragma once
 
 #include <cstdint>

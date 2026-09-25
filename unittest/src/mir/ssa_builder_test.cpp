@@ -1,6 +1,6 @@
 // R1a 端到端验收：Java 方法 → CodeConverter → SSABuilder → SSAFunction。
 //
-// 验收标准（doc/SSA_ALGORITHM.md §7）：
+// 验收标准（mj2x/doc_ai/ssa_algorithm.md §7）：
 //   1. add: 线性方法，SSA 无栈槽引用，dump 不含 cstack/sp。
 //   2. loopSum/loopCount: 循环方法，循环头块有 block arg（phi 语义）。
 //   3. dump 文本过 c2j CSTACK_RE（cstack(\d+)\.(\w)）→ 零匹配（消除锚点 2）。

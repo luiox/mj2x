@@ -12,7 +12,7 @@
 /// hatch via `emitRaw`.  The stream is a drop-in sink: callers flush it to a
 /// string when the translation unit is complete.
 ///
-/// 三层模型（doc_ai/reg_codegen_syntax.md §3）的排版层。底层存储是
+/// 三层模型（mj2x/doc_ai/codegen_style.md §3）的排版层。底层存储是
 /// `ca::str::Utf8StringBuilder`，与拼接层（Utf8StringBuilder）/驻留层
 /// （Utf8StringArena）同属 Utf8 家族：emitter 的多片段 `append` 拼一条 C 语句的
 /// 模式可无缝迁移到这里，无需跨容器转换。

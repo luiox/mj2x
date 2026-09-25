@@ -1,7 +1,7 @@
 // reaching-def 数据流自测。
 // 直接构造手工 L1 CFG（不依赖 CodeConverter/字节码），覆盖 R0.5 发现的 libjbytecode
 // Analyzer 缺陷场景（循环归纳变量的多 def 源 = phi），证明自写 pass 正确。
-// 算法见 doc/SSA_ALGORITHM.md §3。
+// 算法见 mj2x/doc_ai/ssa_algorithm.md §3。
 #include <gmock/gmock.h>
 
 #include "mj2x/mir/reaching_def.hpp"
