@@ -1,5 +1,5 @@
 ﻿// mj2x SSA IR — function 容器。
-// 详见 doc/IR_DESIGN.md §2。owns 所有块、参数、value（块内指令 owns 其 result 的生命周期，
+// 详见 mj2x/doc_ai/ir_design.md §2。owns 所有块、参数、value（块内指令 owns 其 result 的生命周期，
 // 但 Parameter/BlockArg/Literal 由 function 持有）。
 #pragma once
 

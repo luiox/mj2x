@@ -1,5 +1,5 @@
 // mj2x SSA IR — 基本块。
-// 详见 doc/IR_DESIGN.md §3。instructions 不含控制转移；所有出边归 terminator。
+// 详见 mj2x/doc_ai/ir_design.md §3。instructions 不含控制转移；所有出边归 terminator。
 #pragma once
 
 #include "ssa_instruction.hpp"

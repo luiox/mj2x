@@ -132,8 +132,7 @@ public:
     const std::vector<JarEntryRecord>& jarEntries() const { return jarEntries_; }
 
     // Utf8StringArena ownership: ClassReader/ClassWriter 需要 arena&，且 arena 必须比
-    // 它们活得更久。CompilerIndex 持有 arena，全编译期共享一个（设计背景见
-    // doc/_archive/architecture_redesign.md §2.1，已归档）。
+    // 它们活得更久。CompilerIndex 持有 arena，全编译期共享一个。
     ca::str::Utf8StringArena&       arena() { return arena_; }
     const ca::str::Utf8StringArena& arena() const { return arena_; }
 

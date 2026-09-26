@@ -1,6 +1,6 @@
 // mj2x LdcPreprocessor — 展开 LDC Handle / LDC MethodType 为 MethodHandles.Lookup 反射调用链。
 //
-// 详见 doc/PREPROCESSOR.md §3。Lookup 取 MethodHandles.lookup()（调用者即本类，
+// 详见 mj2x/doc_ai/preprocessor.md §3。Lookup 取 MethodHandles.lookup()（调用者即本类，
 // 访问权限与原 ldc 常量一致）；MethodType 构造走 fromMethodDescriptorString(desc,
 // caller.getClassLoader())（系统 ClassLoader 解析不了保护态 jar 的应用类引用）。
 //
