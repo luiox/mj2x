@@ -61,6 +61,12 @@ struct RegCFunctionEmitState
     /// （owner\nname\ndesc）。方法注入 native 后指令被清空，发射期无法再
     /// 现场验证方法体；nullptr（单测直调发射器）时回退现场验证。
     const std::set<std::string>*              enumSyntheticMethods = nullptr;
+    /// 文件作用域前向声明注册表（backend TU 级）：方法间直调的声明登记于此，
+    /// 渲染到翻译单元头部（多文件模式经 splitRewriteStatic 提取进 api.h）。
+    /// C11 6.7.1p6 禁止块作用域函数声明带 static 存储类（GCC 报
+    /// invalid storage class，MSVC 静默放行）；nullptr（单测直连发射器）时
+    /// 回退块内声明。
+    codegen::CForwardDeclarations*            forwardDecls        = nullptr;
     /// 动态实例调用是否启用 resolved native dispatch（多文件模式关闭：
     /// 函数表只在单文件 TU 内可见）。
     bool                                      resolvedDispatch    = false;
@@ -128,6 +134,36 @@ public:
 /// @{
 
 const char* cType(SSAType type);
+
+/// @brief 方法间直调的前向声明登记（三处直调发射共用，见 regc_calls/regc_flow）。
+/// @details 声明文本与 emitFunction 参数发射一致（receiver = void* r0，后续按
+///          实参 SSAType）。state.forwardDecls 非空时登记到 TU 头部注册表：
+///          块作用域函数声明带 static 违反 C11 6.7.1p6（GCC 报 invalid storage
+///          class，MSVC 静默放行），声明必须落在文件作用域；注册表为空时回退
+///          块内声明（单测直连发射器路径，仅 MSVC 兼容）。
+inline void declareDirectCallTarget(RegCFunctionEmitState& state, CSourceStream& out,
+                                    const RegInstruction& ins, const std::string& fnName)
+{
+    std::string decl;
+    decl += "static ";
+    decl += ins.hasDest ? cType(ins.dest.type) : "void";
+    decl += " ";
+    decl += fnName;
+    decl += "(";
+    for (size_t i = 0; i < ins.args.size(); ++i) {
+        if (i) decl += ", ";
+        decl += cType(ins.args[i].type);
+        decl += " r";
+        decl += std::to_string(i);
+    }
+    decl += ");";
+    if (state.forwardDecls != nullptr) {
+        state.forwardDecls->declare(decl);
+        return;
+    }
+    out.appendLineStart(decl).newLine();
+}
+
 const char* unsignedCType(SSAType type);
 bool        isIntegerLike(SSAType type);
 std::string sanitizeIdent(const std::string& text);

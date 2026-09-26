@@ -365,12 +365,26 @@ TEST_F(LdcConstantE2E, LdcHandleAndMethodTypeSurviveTranslation)
     ASSERT_EQ(transform.exitCode, 0) << transform.out;
     ASSERT_TRUE(fileExists(outClass)) << outClass.string();
 
-    const fs::path dll = dir / "LdcMhSample_protected.dll";
-    ASSERT_TRUE(fileExists(dll)) << dll.string();
+    // --compile 的 native 库产物名由 CLI nativeLibraryPath 决定：输出 stem +
+    // 平台扩展名（Windows .dll / macOS .dylib / 其余 .so）。
+#if defined(_WIN32)
+    const fs::path nativeLib = dir / "LdcMhSample_protected.dll";
+#elif defined(__APPLE__)
+    const fs::path nativeLib = dir / "LdcMhSample_protected.dylib";
+#else
+    const fs::path nativeLib = dir / "LdcMhSample_protected.so";
+#endif
+    ASSERT_TRUE(fileExists(nativeLib)) << nativeLib.string();
     fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
     ASSERT_FALSE(ec) << ec.message();
 
-    const auto nativeRun = runBat({std::string("set \"MORPHER_DLL=") + dll.string() + "\"",
+    // MORPHER_DLL 环境变量按平台注入：cmd 用 set，POSIX sh 用 export。
+#ifdef _WIN32
+    const std::string envLine = "set \"MORPHER_DLL=" + nativeLib.string() + "\"";
+#else
+    const std::string envLine = "export MORPHER_DLL=" + nativeLib.string();
+#endif
+    const auto nativeRun = runBat({envLine,
                                    q(tc_.jdk.java) + " -Xverify:all -cp " + q(dir) + " Driver"});
     ASSERT_EQ(nativeRun.exitCode, 0) << nativeRun.out;
     EXPECT_EQ(normalizeOutput(nativeRun.out), expected) << nativeRun.out;

@@ -1276,7 +1276,8 @@ TEST(CliTest, GenerateCMakeProjectEmitsStandaloneFiles)
         << result.out;
 
     std::string cmake = readText(projectDir / "CMakeLists.txt");
-    EXPECT_NE(cmake.find("find_package(JNI REQUIRED)"), std::string::npos) << cmake;
+    EXPECT_NE(cmake.find("find_package(JNI REQUIRED COMPONENTS JVM)"), std::string::npos)
+        << cmake;
     EXPECT_NE(cmake.find("add_library(mj2x_native SHARED native.c ${MJ2X_CRT_SOURCES})"),
               std::string::npos)
         << cmake;

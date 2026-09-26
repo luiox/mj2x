@@ -247,18 +247,9 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
     // 前向声明：目标函数定义可能在本调用点之后（同类方法转换顺序不保证，
     // 类内预登记使后转换方法也可直调）。无声明时 C 隐式 int() 声明与 REF
-    // 返回值冲突（C2040）。参数类型与 emitFunction 参数发射一致（receiver
-    // = void* r0，后续按实参 SSAType）。
-    out.appendLineStart("static ")
-        .append(ins.hasDest ? cType(ins.dest.type) : "void")
-        .append(" ")
-        .append(it->second)
-        .append("(");
-    for (size_t i = 0; i < ins.args.size(); ++i) {
-        if (i) out.append(", ");
-        out.append(cType(ins.args[i].type)).append(" r").append(ca::str::format_std("{}", i));
-    }
-    out.append(");").newLine();
+    // 返回值冲突（C2040）。声明登记到 TU 头部注册表——块作用域 static 函数
+    // 声明违反 C11 6.7.1p6（GCC 拒绝，MSVC 放行），见 declareDirectCallTarget。
+    declareDirectCallTarget(state, out, ins, it->second);
     if (deterministicVirtual && !ins.args.empty()) {
         // 免门控路径带 NULL receiver 守卫：JNI 调用点在 receiver 为 NULL 时
         // 抛 NPE（emitCachedCall 语义），直调必须显式复现。

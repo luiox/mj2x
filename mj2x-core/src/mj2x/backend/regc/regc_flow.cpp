@@ -464,6 +464,10 @@ static bool tryEmitStaticBoundCall(CSourceStream& out, const RegInstruction& ins
     if (direct == state.convertedFunctions->end() || direct->second.empty()) return false;
 
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
+    // 前向声明：目标函数定义可能在本调用点之后（同类方法转换顺序不保证）。
+    // 声明登记到 TU 头部注册表——块作用域 static 函数声明违反 C11 6.7.1p6
+    // （GCC 拒绝，MSVC 放行），见 declareDirectCallTarget。
+    declareDirectCallTarget(state, out, ins, direct->second);
     out.block([&](CSourceStream& o) {
         o.emitLine("jobject _mj2x_regc_rcv = " +
                    codegen::exprCast("jobject",
@@ -477,21 +481,6 @@ static bool tryEmitStaticBoundCall(CSourceStream& out, const RegInstruction& ins
                   }
               },
               [&](CSourceStream& s) {
-                  // 前向声明：目标函数定义可能在本调用点之后（同类方法转换
-                  // 顺序不保证）；参数类型与 emitFunction 的参数发射一致
-                  // （receiver = 首个实参，按实参 SSAType）。
-                  s.appendLineStart("static ")
-                      .append(ins.hasDest ? cType(ins.dest.type) : "void")
-                      .append(" ")
-                      .append(direct->second)
-                      .append("(");
-                  for (size_t i = 0; i < ins.args.size(); ++i) {
-                      if (i) s.append(", ");
-                      s.append(cType(ins.args[i].type))
-                          .append(" r")
-                          .append(ca::str::format_std("{}", i));
-                  }
-                  s.append(");").newLine();
                   // 实参：receiver 用检查过的 _mj2x_regc_rcv（null 已排除），
                   // 其余按调用点表达式。
                   s.appendLineStart();
@@ -905,20 +894,10 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 if (safeDirect && directAvailable) {
                     // 前向声明：目标函数定义可能在本调用点之后（同类方法转换
                     // 顺序不保证），无声明时 C 隐式 int() 声明与 REF 返回值冲突
-                    // （C2040）。参数类型与 emitFunction 的参数发射一致
-                    // （receiver = void* r0，后续按实参 SSAType）。
-                    u.appendLineStart("static ")
-                        .append(ins.hasDest ? cType(ins.dest.type) : "void")
-                        .append(" ")
-                        .append(directName)
-                        .append("(");
-                    for (size_t i = 0; i < ins.args.size(); ++i) {
-                        if (i) u.append(", ");
-                        u.append(cType(ins.args[i].type))
-                            .append(" r")
-                            .append(ca::str::format_std("{}", i));
-                    }
-                    u.append(");").newLine();
+                    // （C2040）。声明登记到 TU 头部注册表——块作用域 static
+                    // 函数声明违反 C11 6.7.1p6（GCC 拒绝，MSVC 放行），见
+                    // declareDirectCallTarget。
+                    declareDirectCallTarget(state, u, ins, directName);
                     if (ins.hasDest) u.appendLineStart(destName).append(" = ");
                     u.append(directName)
                         .append("(")

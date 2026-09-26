@@ -234,6 +234,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.indyFunctions                      = indyFunctions_;
     emitState.intrinsicRegistry                  = intrinsicRegistry_;
     emitState.enumSyntheticMethods               = enumSyntheticMethods_;
+    emitState.forwardDecls                       = forwardDecls_;
     emitState.resolvedDispatch                   = options_.resolvedDispatch;
     emitState.hasLocalFrame                      = fnProducesLocalRefsIR(fn);
     emitState.nativeStringBuilderRegisters       = stringBuilderPlan.nativeRegisters;

@@ -422,7 +422,9 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "cmake_minimum_required(VERSION 3.16)\n";
         out << "project(mj2x_native NONE)\n\n";
         out << "find_program(CLANG_EXECUTABLE clang REQUIRED)\n";
-        out << "find_package(JNI REQUIRED)\n\n";
+        // COMPONENTS JVM：headless JDK（linux CI）无 AWT 头/库，默认全组件必炸；
+        // 生成工程只用 JNI_INCLUDE_DIRS，JVM 组件足够。
+        out << "find_package(JNI REQUIRED COMPONENTS JVM)\n\n";
         out << "set(LLVM_IR_FILE ${CMAKE_CURRENT_SOURCE_DIR}/native.ll)\n";
         // mj2x-rt：JDK intrinsic runtime（regc/*.c）+ rt_protect 检查点（common/）
         // + mj2x_llvm_* 运行时（llvmir/）——LLVM 分发面三挂载全参与编译。
@@ -531,7 +533,8 @@ static int generateCMakeProject(const std::string& projectDirValue,
             out << "set(CMAKE_CXX_STANDARD 17)\n";
             out << "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
         }
-        out << "find_package(JNI REQUIRED)\n\n";
+        // COMPONENTS JVM：同上——headless JDK 无 AWT，默认全组件必炸。
+        out << "find_package(JNI REQUIRED COMPONENTS JVM)\n\n";
         out << "if(MSVC)\n";
         out << "  add_compile_options(/utf-8)\n";
         out << "endif()\n\n";

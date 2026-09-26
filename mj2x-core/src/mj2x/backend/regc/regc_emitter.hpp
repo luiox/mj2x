@@ -206,6 +206,13 @@ public:
     /// pass `validateRegCNoStackAnchors` before `ok` is set.
     RegCEmitResult emitFunction(const RegFunction& fn);
 
+    /// @brief 设置文件作用域前向声明注册表（backend TU 级，可选）。
+    /// @details 方法间直调的前向声明登记到此注册表并渲染到翻译单元头部。
+    ///          C11 6.7.1p6 禁止块作用域函数声明带 static 存储类（GCC 直接
+    ///          报 invalid storage class，MSVC 静默放行），生产路径必须设置；
+    ///          nullptr 时发射器回退块内声明（单测直连发射器路径）。
+    void setForwardDeclarations(codegen::CForwardDeclarations* fwd) { forwardDecls_ = fwd; }
+
     /// @brief 计算 RegFunction 生成的 C 函数体名（与 emitFunction 产出一致）。
     ///
     /// @details
@@ -223,6 +230,7 @@ private:
     const std::unordered_set<std::string>* indyFunctions_ = nullptr;
     const RegCIntrinsicRegistry* intrinsicRegistry_ = nullptr;
     const std::set<std::string>* enumSyntheticMethods_ = nullptr;
+    codegen::CForwardDeclarations* forwardDecls_ = nullptr;
 };
 
 /// @brief Emit declarations shared by all RegC function bodies in one C file.

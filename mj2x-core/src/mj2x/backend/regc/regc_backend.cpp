@@ -537,6 +537,10 @@ struct RegCBackend::Impl
     /// 如 ExceptionProbe.run 先于 risky）。实际转换失败的方法在早退路径
     /// erase 回滚，避免直调不存在的函数体。
     std::unordered_set<std::string> preRegisteredClasses;
+    /// TU 级文件作用域前向声明注册表：方法间直调的声明在此登记，finalize
+    /// 渲染到翻译单元头部。块作用域函数声明带 static 违反 C11 6.7.1p6
+    /// （GCC 报 invalid storage class，MSVC 静默放行），必须落在文件作用域。
+    codegen::CForwardDeclarations forwardDecls;
     /// 用户自定义 intrinsic registry（issue #818）：setUserIntrinsics 构造，
     /// nullptr 表示未设置（用 builtins()）。
     std::unique_ptr<RegCIntrinsicRegistry> userIntrinsicRegistry;
@@ -762,6 +766,9 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                         &impl_->indyFunctions,
                         impl_->userIntrinsicRegistry.get(),
                         &impl_->enumSyntheticMethods);
+    // 方法间直调的前向声明统一登记 TU 头部（C11 6.7.1p6 禁止块作用域
+    // static 函数声明），finalize 随 runtime helpers 一起渲染。
+    emitter.setForwardDeclarations(&impl_->forwardDecls);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。
@@ -1517,20 +1524,20 @@ void RegCBackend::finalize(const CompilerIndex& index)
     using ca::str::ZUtf8StringRef;
     const std::string cacheDeclarations = impl_->cachePool.renderDeclarations();
     const std::string emittedSource     = impl_->source.build().to_std_string();
-    // 前向声明注册表：add_func_declared 定义的帮手在此登记。resolved dispatch 的
-    // 帮手必须先登记（buildResolvedDispatchTable 生成定义时登记），声明随后在
-    // emitRuntimeHelpers 渲染到翻译单元头部，方法体无需手工维护声明顺序。
-    codegen::CForwardDeclarations fwd;
+    // 前向声明注册表：add_func_declared 定义的帮手与 compileMethod 期方法间
+    // 直调声明（impl_->forwardDecls，方法体已全部生成完毕）都在此登记，声明
+    // 随后在 emitRuntimeHelpers 渲染到翻译单元头部，方法体无需手工维护声明顺序。
+    codegen::CForwardDeclarations* fwd = &impl_->forwardDecls;
     std::string                   resolvedDispatchText;
     if (splitOutputDir_.empty()) {
         resolvedDispatchText = buildResolvedDispatchTable(impl_->convertedFunctions,
                                                           impl_->indyFunctions,
-                                                          &fwd,
+                                                          fwd,
                                                           impl_->directCalls);
     }
     emitRuntimeHelpers(full,
                        cacheDeclarations,
-                       &fwd);
+                       fwd);
     emitRegCHelperPrelude(full, impl_->userIntrinsicRegistry.get());
     for (size_t i = 0; i < impl_->indySites.size(); ++i) {
         emitIndyBootstrapFunction(full, i, impl_->indySites[i],
