@@ -1445,8 +1445,10 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
 
     if (commandAvailable("xmake")) {
         // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
-        // program for cc"——Windows 分支显式锁定 windows + msvc 工具链
-        // （与 native_project_builder 的子进程调用一致）。
+        // program for cc"——Windows 分支显式锁定 windows + msvc 工具链 + x64
+        // 架构（-p windows 缺省 arch 是 os.arch()="x86_64"，msvc 工具链按
+        // "x64" 探测会 toolchain not found；与产品侧 native_project_builder
+        // 的子进程调用一致）。
         //
         // xmake 3.x 的 -P 只切换工程加载点，配置存储目录跟随 CWD（config.lua
         // 的 _use_workingdir 语义，xmake issue #3342）：测试进程 CWD 是仓库根，
@@ -1457,7 +1459,7 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
 #ifdef _WIN32
         auto standaloneBuild = runScript({
             "cd /d " + q(projectDir),
-            "xmake f -P . -m release -p windows --toolchain=msvc",
+            "xmake f -P . -m release -p windows --toolchain=msvc -a x64",
             "xmake build -P . mj2x_native",
         });
 #else

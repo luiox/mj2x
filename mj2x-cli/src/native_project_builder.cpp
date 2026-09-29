@@ -29,6 +29,12 @@ namespace mj2x::cli {
 using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
 bool loadMsvcEnvironment(ProcessEnvironment& environment, std::filesystem::path& compilerPath);
 
+// native_compiler.cpp 提供（与 loadMsvcEnvironment 同源导出）：把捕获的 MSVC
+// 环境以「父进程环境为底、捕获变量覆盖其上（同名 case-insensitive 以捕获值
+// 胜出）」注入子进程命令，在调用点显式保证子 xmake 拿到完整环境块，不依赖
+// libca 对 Command::env 覆盖集的内部实现细节。
+void mergeProcessEnvironment(ca::process::Command& command, const ProcessEnvironment& captured);
+
 namespace fs = std::filesystem;
 namespace {
 
@@ -143,8 +149,12 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         .arg(config.mode);
 #if defined(_WIN32)
     // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
-    // program for cc"——显式锁定 windows + msvc 工具链。
-    configure.arg("-p").arg("windows").arg("--toolchain=msvc");
+    // program for cc"——显式锁定 windows + msvc 工具链。arch 也必须显式锁
+    // x64：-p windows 的缺省 arch 取 os.arch()="x86_64"（unix 命名），msvc
+    // 工具链按 "x64" 探测 VS 环境，于是 "checking for Microsoft Visual
+    // Studio (x86_64) version ... no → toolchain not found"（回归 c9edba8fe）。
+    // x64 与 loadMsvcEnvironment 固定的 vcvarsall.bat x64 同一口径。
+    configure.arg("-p").arg("windows").arg("--toolchain=msvc").arg("-a").arg("x64");
 #endif
     configure.arg("-y");
     ca::process::Command build("xmake");
@@ -161,10 +171,8 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         CA_LOGT_ERROR("compile", "cannot configure MSVC environment for xmake build.\n");
         return 1;
     }
-    for (const auto& [key, value] : environment) {
-        configure.env(key, value);
-        build.env(key, value);
-    }
+    mergeProcessEnvironment(configure, environment);
+    mergeProcessEnvironment(build, environment);
 #endif
     if (!runXmake(configure, "configure")) return 1;
 

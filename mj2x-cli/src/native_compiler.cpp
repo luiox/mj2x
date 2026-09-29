@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -18,6 +19,12 @@
 
 #ifndef _WIN32
 #    include <strings.h>
+#else
+// GetEnvironmentStringsW/WideCharToMultiByte：mergeProcessEnvironment 的父进程
+// 环境枚举用（仿 native_project_builder.cpp 的守卫口径）。
+#    define WIN32_LEAN_AND_MEAN
+#    define NOMINMAX
+#    include <windows.h>
 #endif
 // libca/process/subprocess.hpp 会 #undef 全局 stdout/stderr 宏（Command 成员
 // 同名防污染），这里在 include 之前固化宏值，供文件尾部导出的 MSVC 环境
@@ -124,6 +131,72 @@ bool loadMsvcEnvironment(ProcessEnvironment& environment,
     }
     compilerPath = found;
     return true;
+}
+
+namespace {
+
+/// 父进程当前环境块快照（UTF-8 键值对）。
+/// @details Windows 侧用 GetEnvironmentStringsW + CP_UTF8 转换——libca 子进程
+/// 环境要求 UTF-8（无效序列注入会被整体拒绝，spawn 失败），故不用 ANSI 版；
+/// 转换按替换语义（标志 0）而非 WC_ERR_INVALID_CHARS：极端脏值宁可单条劣化
+/// 也不整条丢弃（丢 PATH 会让子进程彻底失明）。键含 '=' 的 "=C:" 型伪变量
+/// 整条跳过——Command::env 键禁止含 '='，注入会让 spawn 直接失败。
+std::vector<std::pair<std::string, std::string>> currentProcessEnvironment()
+{
+    std::vector<std::pair<std::string, std::string>> result;
+#ifdef _WIN32
+    wchar_t* inherited = ::GetEnvironmentStringsW();
+    if (inherited == nullptr) return result;
+    for (const wchar_t* entry = inherited; *entry != L'\0'; entry += std::wcslen(entry) + 1) {
+        if (*entry == L'=') continue;
+        const wchar_t* separator = std::wcschr(entry, L'=');
+        if (separator == nullptr) continue;
+        const auto keyLength   = static_cast<std::size_t>(separator - entry);
+        const auto valueLength = std::wcslen(separator + 1);
+        if (keyLength == 0) continue;
+        const auto toUtf8 = [](const wchar_t* value, std::size_t length) {
+            if (length == 0) return std::string{};
+            const auto size = ::WideCharToMultiByte(
+                CP_UTF8, 0, value, static_cast<int>(length), nullptr, 0, nullptr, nullptr);
+            if (size <= 0) return std::string{};
+            std::string converted(static_cast<std::size_t>(size), '\0');
+            ::WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int>(length),
+                                  converted.data(), size, nullptr, nullptr);
+            return converted;
+        };
+        result.emplace_back(toUtf8(entry, keyLength), toUtf8(separator + 1, valueLength));
+    }
+    ::FreeEnvironmentStringsW(inherited);
+#else
+    // 非 Windows：loadMsvcEnvironment 恒产空 environment（case 1 整块继承），
+    // mergeProcessEnvironment 对空 captured 直接返回，本枚举不可达；留空即可
+    // （macOS 的 environ 枚举需 _NSGetEnviron，无谓引入平台差异）。
+#endif
+    return result;
+}
+
+}   // namespace
+
+/// @brief 把捕获的 MSVC 环境（loadMsvcEnvironment 产物）以「父进程环境为底、
+///        捕获变量覆盖其上」的方式注入子进程命令。
+/// @details 调用点显式构造完整环境块：父进程当前环境铺底，vcvars 捕获值按
+/// case-insensitive 同名胜出（PATH/INCLUDE/LIB 必须是 vcvars 版本，否则丢
+/// cl.exe）。Command::env 的语义是「覆盖集」，子进程环境块的继承行为属
+/// libca 内部实现细节（现行为是继承底+覆盖），调用方不依赖该细节。captured
+/// 为空（loadMsvcEnvironment case 1：INCLUDE 已设）时不动 env_——空 env_ 即
+/// 整块继承，行为保持不变。
+void mergeProcessEnvironment(ca::process::Command&        command,
+                             const ProcessEnvironment& captured)
+{
+    if (captured.empty()) return;
+    for (const auto& [key, value] : currentProcessEnvironment()) {
+        const auto overridden = std::any_of(
+            captured.begin(), captured.end(),
+            [&](const auto& item) { return environmentKeyEquals(item.first, key.c_str()); });
+        if (overridden) continue;
+        command.env(key, value);
+    }
+    for (const auto& [key, value] : captured) command.env(key, value);
 }
 
 namespace {
@@ -429,14 +502,9 @@ std::string uniqueCompilerSourceToken()
 
 using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
 
-bool environmentKeyEquals(const std::string& left, const char* right)
-{
-#ifdef _WIN32
-    return _stricmp(left.c_str(), right) == 0;
-#else
-    return strcasecmp(left.c_str(), right) == 0;
-#endif
-}
+// environmentKeyEquals 用本文件 mj2x::cli 作用域的导出版本（loadMsvcEnvironment
+// 上方）：此前的匿名 namespace 副本与它在 mergeProcessEnvironment 的调用点上
+// 产生 C2668 二义性，实现逐字节相同，删除副本统一走一处。
 
 std::string environmentValue(const ProcessEnvironment& environment, const char* key)
 {
@@ -520,7 +588,7 @@ int compileMsvcSourceFromTemporaryFile(std::string_view                         
     command.arg(sourceFile.path().string());
     for (const auto& source : sources) command.arg(source.string());
     command.arg("/Fe" + libraryPath.string());
-    for (const auto& [key, value] : environment) command.env(key, value);
+    mergeProcessEnvironment(command, environment);
     command.stdout(ca::process::Stdio::piped()).stderr(ca::process::Stdio::piped());
 
     auto completed = command.output();
@@ -873,7 +941,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         command.arg("/Fo" + objectDir.string());
         for (const auto& source : sources) command.arg(source.string());
         command.arg("/Fe" + libraryPath.string());
-        for (const auto& [key, value] : environment) command.env(key, value);
+        mergeProcessEnvironment(command, environment);
         result = runCompilerCommand(command, "MSVC");
 #else
         CA_LOGT_ERROR("compile", "MSVC is only supported on Windows.\n");
