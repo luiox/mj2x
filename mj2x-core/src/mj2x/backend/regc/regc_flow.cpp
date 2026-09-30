@@ -634,9 +634,26 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
         else {
             const std::string destName = regName(ins.dest.id);
-            out.assign(destName, codegen::exprCast(cType(ins.targetType),
-                                                   codegen::exprParen(
-                                                       operandExpr(ins.value).to_std_string())));
+            // 浮点→整型走 CRT helper（#1027 D2）：C 裸 cast 对 NaN/越界是 UB，
+            // JVM f2i/f2l/d2i/d2l 语义（JLS 5.1.3）是 NaN→0、向零截断、超界饱和；
+            // StackC（内联饱和块）/VMC4（mj2x_vm_f2i*）/LLVM（fptosi.sat）同语义。
+            const SSAType sourceType = ins.value.type;
+            const bool    sourceFloat = sourceType == SSAType::F32 || sourceType == SSAType::F64;
+            const bool    targetInt   = ins.targetType == SSAType::I32 ||
+                                     ins.targetType == SSAType::I64;
+            if (sourceFloat && targetInt) {
+                out.assign(destName,
+                           codegen::exprCall(
+                               ins.targetType == SSAType::I32 ? "mj2x_regc_f2i32"
+                                                              : "mj2x_regc_f2i64",
+                               {codegen::exprCast("double",
+                                                  operandExpr(ins.value).to_std_string())}));
+            }
+            else {
+                out.assign(destName, codegen::exprCast(cType(ins.targetType),
+                                                       codegen::exprParen(
+                                                           operandExpr(ins.value).to_std_string())));
+            }
         }
         return true;
     case RegInstructionKind::LoadField:

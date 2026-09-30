@@ -998,3 +998,101 @@ TEST(RegCBackendTest, IndyDirectCacheLiteralsEncryptWithStringsEncrypt)
     EXPECT_NE(source.find("_mj2x_regc_decrypt_bytes((uint8_t*)_mj2x_str_"), std::string::npos)
         << source;
 }
+
+// ── 浮点→整型转换（#1027 D2）────────────────────────────────────
+// 旧实现发裸 C cast：NaN/越界是 UB。修复后 f2i/f2l/d2i/d2l 一律发
+// mj2x_regc_f2i32/f2i64 CRT helper（JVM 语义：NaN→0、向零截断、超界饱和），
+// 与 StackC/VMC4/LLVM 三端对齐；整型间转换（i2l 等）仍走裸 cast（C 定义良好）。
+
+TEST(RegCBackendTest, FloatToIntConvertEmitsJvmSaturatingHelper)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "f2i",
+                             "(F)I",
+                             {
+                                 new VarInsnNode(Opcodes::FLOAD, 0),
+                                 new InsnNode(Opcodes::F2I),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             1,
+                             1);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // 浮点→int 走 CRT helper（double 形参，float 实参显式提升）。
+    EXPECT_NE(result.text.find("mj2x_regc_f2i32((double)"), std::string::npos) << result.text;
+    // 不得再出现裸 cast 形态的转换赋值（旧 UB 形态）。
+    EXPECT_EQ(result.text.find("= (int32_t)("), std::string::npos) << result.text;
+    expectNoStackAnchors(result.text);
+}
+
+TEST(RegCBackendTest, DoubleToLongConvertEmitsJvmSaturatingHelper)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "d2l",
+                             "(D)J",
+                             {
+                                 new VarInsnNode(Opcodes::DLOAD, 0),
+                                 new InsnNode(Opcodes::D2L),
+                                 new InsnNode(Opcodes::LRETURN),
+                             },
+                             2,
+                             2);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("mj2x_regc_f2i64((double)"), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("= (int64_t)("), std::string::npos) << result.text;
+    expectNoStackAnchors(result.text);
+}
+
+TEST(RegCBackendTest, IntToLongConvertKeepsPlainCast)
+{
+    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             "i2l",
+                             "(I)J",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::I2L),
+                                 new InsnNode(Opcodes::LRETURN),
+                             },
+                             2,
+                             2);
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend   backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*method);
+    auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // 整型加宽转换保持裸 cast（C 定义良好，无 UB 面）。
+    EXPECT_NE(result.text.find("= (int64_t)("), std::string::npos) << result.text;
+    EXPECT_EQ(result.text.find("mj2x_regc_f2i64("), std::string::npos) << result.text;
+    expectNoStackAnchors(result.text);
+}

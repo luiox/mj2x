@@ -202,6 +202,16 @@ int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
 int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 void    mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
 
+/// @brief JVM f2i/d2i 语义的浮点→int32 转换（#1027 D2）。
+///
+/// C 裸 cast `(int32_t)` 对 NaN/越界是 UB；JVM 规范（JLS 5.1.3）语义：
+/// NaN→0、向零截断、超界饱和到 INT32_MIN/INT32_MAX。与 StackC（内联
+/// 饱和块）、VMC4（mj2x_vm_f2i32）、LLVM（llvm.fptosi.sat）三端语义一致。
+int32_t mj2x_regc_f2i32(double value);
+
+/// @brief JVM f2l/d2l 语义的浮点→int64 转换（同 f2i32，饱和点为 2^63）。
+int64_t mj2x_regc_f2i64(double value);
+
 jclass    mj2x_regc_cached_class(JNIEnv* env, mj2x_regc_class_cache* cache);
 jmethodID mj2x_regc_cached_static_method(JNIEnv* env, mj2x_regc_static_method_cache* cache);
 jfieldID  mj2x_regc_cached_static_field(JNIEnv* env, mj2x_regc_static_field_cache* cache);

@@ -106,6 +106,27 @@ void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason)
     (void)reason;
 }
 
+/* JVM f2i/f2l/d2i/d2l 语义（JLS 5.1.3）：NaN->0、向零截断、超界饱和。
+ * C 裸 cast 对 NaN/越界是 UB（#1027 D2），故浮点->整型一律走这两个 helper。
+ * 饱和点取 (double)INT32_MAX + 1.0 = 2^31（INT64 侧 (double)INT64_MAX 因
+ * 53 位尾数本就舍入为 2^63），不用硬编码魔数。与 vmc4 运行时
+ * mj2x_vm_f2i32/f2i64 逐分支同语义。 */
+int32_t mj2x_regc_f2i32(double value)
+{
+    if (value != value) return 0; /* NaN */
+    if (value >= (double)INT32_MAX + 1.0) return INT32_MAX;
+    if (value < (double)INT32_MIN) return INT32_MIN;
+    return (int32_t)value;
+}
+
+int64_t mj2x_regc_f2i64(double value)
+{
+    if (value != value) return 0; /* NaN */
+    if (value >= (double)INT64_MAX) return INT64_MAX;
+    if (value < (double)INT64_MIN) return INT64_MIN;
+    return (int64_t)value;
+}
+
 static jclass mj2x_regc_find_class_uncached(JNIEnv* env, const char* desc)
 {
     if (env == NULL || desc == NULL) return NULL;
