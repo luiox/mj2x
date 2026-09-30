@@ -175,6 +175,58 @@ std::vector<std::pair<std::string, std::string>> currentProcessEnvironment()
     return result;
 }
 
+/// PATH/INCLUDE/LIB 路径族键判定（case-insensitive）。
+bool isPathFamilyKey(const std::string& key)
+{
+    return environmentKeyEquals(key, "PATH") || environmentKeyEquals(key, "INCLUDE") ||
+           environmentKeyEquals(key, "LIB");
+}
+
+/// 路径族变量值内目录去重（splitenv→unique→joinenv，保序取首个）。
+/// @details 重复目录不改变查找语义，只无谓拉长 env 块、放大子进程 env 块
+/// 构造的边界敏感性（A1 报告 §5.2：xmake pinned tbox 的填充 off-by-one 与
+/// 块内容形状相关）。Windows 下分隔符 ';' 且比较大小写不敏感（与文件系统
+/// 口径一致）；非 Windows 分隔符 ':'、精确比较——该路径实际不可达
+/// （captured 恒空，mergeProcessEnvironment 早退），仅为编译完备。
+std::string dedupePathValue(const std::string& value)
+{
+#ifdef _WIN32
+    const char separator = ';';
+    const auto same    = [](const std::string& left, const std::string& right) {
+        return _stricmp(left.c_str(), right.c_str()) == 0;
+    };
+#else
+    const char separator = ':';
+    const auto same    = [](const std::string& left, const std::string& right) {
+        return left == right;
+    };
+#endif
+    std::vector<std::string> unique;
+    std::istringstream       stream(value);
+    std::string              entry;
+    while (std::getline(stream, entry, separator)) {
+        if (entry.empty()) continue;
+        const auto duplicate =
+            std::any_of(unique.begin(), unique.end(),
+                        [&](const std::string& known) { return same(known, entry); });
+        if (duplicate) continue;
+        unique.push_back(entry);
+    }
+    std::string joined;
+    for (const auto& item : unique) {
+        if (!joined.empty()) joined += separator;
+        joined += item;
+    }
+    return joined;
+}
+
+/// 合并后 env 块字节预算（按 "KEY=VALUE" + '\0' 逐项累计）。计数为 UTF-8
+/// 字节近似（Windows 实际环境块是 UTF-16），且未计块尾终止 NUL 的 1 字节
+/// ——常数级偏差，不影响判级用途。超限只记 WARN：
+/// 现阶段收缩手段仅去重/剔除非法条目（不损失语义）；若仍超限需要删条目，
+/// 删除策略须先评审再实现（A1 报告 P0-A：统计性去险，非语义损失删除）。
+constexpr std::size_t kMergedEnvironmentBytesLimit = 16 * 1024;
+
 }   // namespace
 
 /// @brief 把捕获的 MSVC 环境（loadMsvcEnvironment 产物）以「父进程环境为底、
@@ -184,19 +236,36 @@ std::vector<std::pair<std::string, std::string>> currentProcessEnvironment()
 /// cl.exe）。Command::env 的语义是「覆盖集」，子进程环境块的继承行为属
 /// libca 内部实现细节（现行为是继承底+覆盖），调用方不依赖该细节。captured
 /// 为空（loadMsvcEnvironment case 1：INCLUDE 已设）时不动 env_——空 env_ 即
-/// 整块继承，行为保持不变。
+/// 整块继承，行为保持不变。注入前做形状卫生（A1 报告 P0-A）：路径族值
+/// （PATH/INCLUDE/LIB）目录去重（保序取首个）、剔除空值条目与含 '=' 的键
+/// ——vcvars `set` 文本解析产物没有 currentProcessEnvironment 的伪变量
+/// 防御，含 '=' 的键会让 spawn 整体失败；captured 来源的空值覆盖（VAR=）
+/// 同样被剔除——该键不注入，子进程保留父进程原值。显式全量注入契约不变。
 void mergeProcessEnvironment(ca::process::Command&        command,
                              const ProcessEnvironment& captured)
 {
     if (captured.empty()) return;
+    std::size_t totalBytes = 0;
+    const auto  inject     = [&](const std::string& key, const std::string& value) {
+        if (key.empty() || value.empty() || key.find('=') != std::string::npos) return;
+        const std::string deduped = isPathFamilyKey(key) ? dedupePathValue(value) : value;
+        totalBytes += key.size() + deduped.size() + 2;
+        command.env(key, deduped);
+    };
     for (const auto& [key, value] : currentProcessEnvironment()) {
         const auto overridden = std::any_of(
             captured.begin(), captured.end(),
             [&](const auto& item) { return environmentKeyEquals(item.first, key.c_str()); });
         if (overridden) continue;
-        command.env(key, value);
+        inject(key, value);
     }
-    for (const auto& [key, value] : captured) command.env(key, value);
+    for (const auto& [key, value] : captured) inject(key, value);
+    if (totalBytes > kMergedEnvironmentBytesLimit) {
+        CA_LOGT_WARN("compile",
+                     "merged child environment block is {} bytes (limit {}); "
+                     "path-family dedup applied, no entries dropped.\n",
+                     totalBytes, kMergedEnvironmentBytesLimit);
+    }
 }
 
 namespace {

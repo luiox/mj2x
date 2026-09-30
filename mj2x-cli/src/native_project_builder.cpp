@@ -35,6 +35,10 @@ bool loadMsvcEnvironment(ProcessEnvironment& environment, std::filesystem::path&
 // libca 对 Command::env 覆盖集的内部实现细节。
 void mergeProcessEnvironment(ca::process::Command& command, const ProcessEnvironment& captured);
 
+// native_compiler.cpp 提供（外部链接）：环境键 case-insensitive 比较
+// （Windows 环境变量键大小写不敏感口径）。
+bool environmentKeyEquals(const std::string& left, const char* right);
+
 namespace fs = std::filesystem;
 namespace {
 
@@ -46,7 +50,7 @@ void writeProcessOutput(const ca::process::Output& output)
         fwrite(output.stderr_data.data(), 1, output.stderr_data.size(), kStderrStream);
 }
 
-bool runXmake(ca::process::Command& command, const char* phase)
+bool runXmake(ca::process::Command& command, const char* phase, int* failedCode = nullptr)
 {
     auto completed = command.output();
     if (completed.is_err()) {
@@ -57,12 +61,68 @@ bool runXmake(ca::process::Command& command, const char* phase)
     auto output = std::move(completed).unwrap();
     writeProcessOutput(output);
     if (!output.status.success()) {
+        if (failedCode != nullptr) *failedCode = output.status.code;
         CA_LOGT_ERROR("compile", "xmake {} failed with exit code {}.\n", phase,
                 output.status.code);
         return false;
     }
     return true;
 }
+
+#if defined(_WIN32)
+/// 子进程异常退出判定（Windows NTSTATUS 失败码，如堆损坏 0xC0000374 →
+/// -1073740940）：libca 带符号化后是量级极大的负 int；常规错误退出
+/// （xmake exit(-1) 等）是小幅负值。<= -1000 即可区分两类，-1/-2 不触发重试。
+bool isAbnormalChildExit(int code)
+{
+    return code <= -1000;
+}
+#endif
+
+/// 构造 configure/build 两阶段的 xmake 命令（不含 env 注入）。重试需要
+/// 全新 Command 对象——旧对象已携带失败的 env 形状与参数序列。
+ca::process::Command makeXmakeCommand(const XmakeBuildConfig& config, bool configurePhase)
+{
+    ca::process::Command command("xmake");
+    command.current_dir(config.projectDir.string());
+    if (configurePhase) {
+        command.arg("f").arg("-P").arg(".").arg("-m").arg(config.mode);
+#if defined(_WIN32)
+        // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
+        // program for cc"——显式锁定 windows + msvc 工具链。arch 也必须显式锁
+        // x64：-p windows 的缺省 arch 取 os.arch()="x86_64"（unix 命名），msvc
+        // 工具链按 "x64" 探测 VS 环境，于是 "checking for Microsoft Visual
+        // Studio (x86_64) version ... no → toolchain not found"（回归 c9edba8fe）。
+        // x64 与 loadMsvcEnvironment 固定的 vcvarsall.bat x64 同一口径。
+        command.arg("-p").arg("windows").arg("--toolchain=msvc").arg("-a").arg("x64");
+#endif
+        command.arg("-y");
+    }
+    else {
+        command.arg("build").arg("-P").arg(".").arg("-y").arg("mj2x_native");
+    }
+    return command;
+}
+
+#if defined(_WIN32)
+/// NTSTATUS 失败重试用的最小 env 注入：仅 captured 中的关键覆盖集
+/// （PATH/INCLUDE/LIB/LIBPATH/TEMP/TMP，case-insensitive，空值跳过），
+/// 其余整块继承父进程（Command::env 覆盖集语义）。env 块内容形状与
+/// mergeProcessEnvironment 全量注入完全不同，作为子 xmake 对特定 env
+/// 形状缺陷（A1 报告 §5.2）的确定性逃生口。
+void injectKeyEnvironmentOverrides(ca::process::Command&     command,
+                                   const ProcessEnvironment& captured)
+{
+    static const char* const keys[] = {"PATH", "INCLUDE", "LIB", "LIBPATH", "TEMP", "TMP"};
+    for (const char* key : keys) {
+        for (const auto& [name, value] : captured) {
+            if (!environmentKeyEquals(name, key) || value.empty()) continue;
+            command.env(name, value);
+            break;
+        }
+    }
+}
+#endif
 
 const char* nativeLibraryExtension()
 {
@@ -140,30 +200,6 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         return 1;
     }
 
-    ca::process::Command configure("xmake");
-    configure.current_dir(config.projectDir.string())
-        .arg("f")
-        .arg("-P")
-        .arg(".")
-        .arg("-m")
-        .arg(config.mode);
-#if defined(_WIN32)
-    // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
-    // program for cc"——显式锁定 windows + msvc 工具链。arch 也必须显式锁
-    // x64：-p windows 的缺省 arch 取 os.arch()="x86_64"（unix 命名），msvc
-    // 工具链按 "x64" 探测 VS 环境，于是 "checking for Microsoft Visual
-    // Studio (x86_64) version ... no → toolchain not found"（回归 c9edba8fe）。
-    // x64 与 loadMsvcEnvironment 固定的 vcvarsall.bat x64 同一口径。
-    configure.arg("-p").arg("windows").arg("--toolchain=msvc").arg("-a").arg("x64");
-#endif
-    configure.arg("-y");
-    ca::process::Command build("xmake");
-    build.current_dir(config.projectDir.string())
-        .arg("build")
-        .arg("-P")
-        .arg(".")
-        .arg("-y")
-        .arg("mj2x_native");
 #if defined(_WIN32)
     ProcessEnvironment    environment;
     std::filesystem::path compilerPath;
@@ -171,12 +207,34 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         CA_LOGT_ERROR("compile", "cannot configure MSVC environment for xmake build.\n");
         return 1;
     }
-    mergeProcessEnvironment(configure, environment);
-    mergeProcessEnvironment(build, environment);
 #endif
-    if (!runXmake(configure, "configure")) return 1;
+    // 两阶段共用运行路径：全量合并 env 首跑；退码为 NTSTATUS 负值（子进程
+    // 异常崩溃，非常规错误退出）时以最小 env 覆盖集自动重试一次（A1 报告
+    // P0-B：重试 env 块形状完全改变，确定性绕开内容巧合触发；重试仍失败
+    // 照常报错）。
+    const auto runPhase = [&](const char* phase, bool configurePhase) {
+        auto command = makeXmakeCommand(config, configurePhase);
+#if defined(_WIN32)
+        mergeProcessEnvironment(command, environment);
+#endif
+        int failedCode = 0;
+        if (runXmake(command, phase, &failedCode)) return true;
+#if defined(_WIN32)
+        if (isAbnormalChildExit(failedCode)) {
+            CA_LOGT_WARN("compile",
+                         "xmake {} exited abnormally (exit code {}, NTSTATUS); "
+                         "retrying once with minimal environment overrides.\n",
+                         phase, failedCode);
+            auto retry = makeXmakeCommand(config, configurePhase);
+            injectKeyEnvironmentOverrides(retry, environment);
+            return runXmake(retry, phase);
+        }
+#endif
+        return false;
+    };
+    if (!runPhase("configure", true)) return 1;
 
-    if (!runXmake(build, "build")) return 1;
+    if (!runPhase("build", false)) return 1;
 
     std::vector<fs::path> libraries;
     const fs::path        buildRoot = config.projectDir / "build";
