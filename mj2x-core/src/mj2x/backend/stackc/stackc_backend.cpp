@@ -2,6 +2,7 @@
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 #include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/codegen/include_set.hpp"
+#include "mj2x/core/native_lib_crypto.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
@@ -816,9 +817,9 @@ void StackCBackend::Impl::emitStringPool(codegen::CSourceStream& out) const
         std::vector<ca::u16> cipher(stringPoolUnits);
         std::uint32_t        state = stringPoolSeed();
         for (auto& unit : cipher) {
-            state = state ^ (state << 13);
-            state = state ^ (state >> 17);
-            state = state ^ (state << 5);
+            // xorshift32 一步推进复用 canonical xorshift32Step（先推进再取低
+            // 16 位——与 mj2x_stackc_runtime 的解密逐位互逆）。
+            state = xorshift32Step(state);
             unit  = static_cast<ca::u16>(unit ^ static_cast<ca::u16>(state & 0xFFFFu));
         }
         out.appendLineStart("static uint16_t _mj2x_string_pool[] = {");

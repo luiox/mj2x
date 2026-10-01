@@ -10,6 +10,7 @@
 #include "libca/str/format.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
+#include "mj2x/core/native_lib_crypto.hpp"
 
 #include <cstring>
 #include <map>
@@ -320,17 +321,6 @@ std::string RegCCachePool::renderDeclarations() const
 
 namespace {
 
-/// xorshift32 一步推进（与 core/native_lib_crypto.hpp::xorshift32Step 同式，
-/// 亦与 mj2x_regc_runtime 侧解密实现一致）。
-inline std::uint32_t regcStringXorshift32(std::uint32_t state)
-{
-    std::uint32_t x = state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    return x;
-}
-
 /// 每字面量密钥派生：内容 fnv1a64 折叠到 u32，再混入 seedBase（RegC 链路取
 /// RegIR 变换 transformSeed，CLI 侧已按 --client-id 派生）与其高位；0 回退
 /// 固定种子（与 xorStreamBytes 的 key==0 约定一致）。确定性、可复现构建。
@@ -363,17 +353,15 @@ std::string RegCCachePool::encryptedLiteralBuffer(const std::string& content)
     entry.seed = deriveLiteralSeed(contentHash, stringsEncryptSeedBase_);
 
     // 内容 + 结尾 NUL 一起进密钥流：解密后即合法 C 串（NewStringUTF 直接消费）。
+    // 密钥流复用 canonical xorStreamBytes（core/native_lib_crypto.hpp，逐字节
+    // 先推进再取低 8 位；key==0 回退固定种子，deriveLiteralSeed 已保证非 0），
+    // 与 mj2x_regc_runtime 侧解密实现逐字节一致。
     entry.cipher.resize(content.size() + 1);
     if (!content.empty()) {
         std::memcpy(entry.cipher.data(), content.data(), content.size());
     }
     entry.cipher[content.size()] = 0u;
-
-    std::uint32_t state = entry.seed;
-    for (auto& byte : entry.cipher) {
-        state = regcStringXorshift32(state);
-        byte  = static_cast<std::uint8_t>(byte ^ static_cast<std::uint8_t>(state & 0xFFu));
-    }
+    xorStreamBytes(entry.cipher.data(), entry.cipher.size(), entry.seed);
 
     encryptedLiteralNames_.emplace(content, entry.name);
     encryptedLiterals_.push_back(std::move(entry));
