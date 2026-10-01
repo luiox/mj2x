@@ -4,6 +4,8 @@ target("mj2x_fake_zig")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
+    -- release 模式下保住 assert 断言（防绿验空转），见 mj2x/xmake.lua。
+    mj2x_test_keep_asserts()
     add_files("src/cli/fake_zig.cpp")
     if is_plat("windows") then
         add_defines("_CRT_SECURE_NO_WARNINGS")
@@ -13,6 +15,8 @@ target("mj2x_fake_xmake")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
+    -- release 模式下保住 assert 断言（防绿验空转），见 mj2x/xmake.lua。
+    mj2x_test_keep_asserts()
     add_files("src/cli/fake_xmake.cpp")
     if is_plat("windows") then
         add_defines("_CRT_SECURE_NO_WARNINGS")
@@ -34,6 +38,9 @@ target("mj2x_unittest")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
+
+    -- release 模式下保住 assert 断言（防绿验空转），见 mj2x/xmake.lua。
+    mj2x_test_keep_asserts()
 
     -- mj2x-cli-companion：伴生 CLI 必须在活动 buildir 内新建，防陈旧产物（见上）。
     add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake", "libca_process",
@@ -66,6 +73,9 @@ target("mj2x_integration_test")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
+
+    -- release 模式下保住 assert 断言（防绿验空转），见 mj2x/xmake.lua。
+    mj2x_test_keep_asserts()
 
     add_deps("mj2x-cli", "test_helper", "libjbytecode")
     add_packages("gtest")

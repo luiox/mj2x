@@ -37,6 +37,9 @@ target("mj2x_rt_test")
     set_default(false)
     set_languages("c99", "cxx17")
 
+    -- release 模式下保住 assert 型测试断言（防绿验空转），见 mj2x/xmake.lua。
+    mj2x_test_keep_asserts()
+
     add_deps("mj2x-rt")
     add_files("test/*.c")
     add_files("test/*.cpp")
