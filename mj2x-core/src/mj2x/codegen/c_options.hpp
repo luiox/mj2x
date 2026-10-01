@@ -52,22 +52,13 @@ struct CodeOptions
     /// 失真（issue #814 regc 2.6 ReTrace）。默认关闭保证 JVM 栈语义完整。
     bool directCalls = false;
 
-    /// @brief 生成缓存槽溯源注释（默认开，关闭可缩小产物）。
-    bool emitCacheTrace = true;
-
-    /// @brief 逐指令调试注释（独立于 commentLevel，默认关）。
-    bool emitDebugComments = false;
-
-    /// @brief 生成类型断言代码（默认开，关闭缩小产物但丢失运行时校验）。
-    bool emitTypeAsserts = true;
-
     /// @brief 反侦测检查点注入（方法入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// @details 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     RuntimeProtectionOptions runtimeProtection;
 
     /// @brief RAII 作用域覆盖：构造保存旧值，析构恢复。
     /// @details 函数级/调用点级临时改开关用；支持嵌套（内层先析构先恢复）。
-    ///          `CodeOptions::ScopeOverride guard(opts.emitDebugComments, true);`
+    ///          `CodeOptions::ScopeOverride guard(opts.traceCallLog, true);`
     class ScopeOverride
     {
     public:

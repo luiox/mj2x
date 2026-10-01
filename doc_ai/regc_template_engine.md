@@ -72,10 +72,7 @@ struct CodeOptions {
     RegCCommentLevel commentLevel = RegCCommentLevel::Summary;
     bool traceCallLog        = false;
     bool resolvedDispatch    = false;
-    bool emitDirectCalls     = false;   // classIndex != nullptr 时派生
-    bool emitTypeAsserts     = true;    // 示例新开关：类型断言代码
-    bool emitDebugComments   = false;   // 示例新开关：逐指令调试注释
-    bool emitCacheTrace      = true;    // cache 槽溯源注释
+    bool directCalls         = false;  // native-to-native 直调（#814）
     // ...
 
     // 作用域覆盖：构造时保存旧值，析构恢复（RAII，支持嵌套）
@@ -86,7 +83,7 @@ struct CodeOptions {
 
 - 收敛：`RegCEmitter` 构造参数改为接收 `const CodeOptions&`（内部按需拷贝），`RegCCachePool` 注释级别仍独立（TU 级，二者保持同步赋值）。
 - 传播：`CSourceStream` 不直接持有 options；发射函数按需读取 `state.opts`（`RegCFunctionEmitState` 挂 `CodeOptions` 引用），跨层 helper 只传需要的 bool 或引用。
-- 组合：`t.iff(state.opts.emitTypeAsserts, ...)` —— 开关就是 iff 的布尔源，不发明新语法。
+- 组合：`t.iff(state.opts.traceCallLog, ...)` —— 开关就是 iff 的布尔源，不发明新语法。
 
 ### 3.3 L3 `CodeTemplate`（命名模板，`mj2x-core/src/mj2x/codegen/c_template.hpp`）
 

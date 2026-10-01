@@ -96,8 +96,7 @@ TEST(CodeOptionsTest, DefaultsMatchRegCEmitterLegacy)
     EXPECT_EQ(opts.commentLevel, RegCCommentLevel::Summary);
     EXPECT_FALSE(opts.traceCallLog);
     EXPECT_FALSE(opts.resolvedDispatch);
-    EXPECT_TRUE(opts.emitCacheTrace);
-    EXPECT_TRUE(opts.emitTypeAsserts);
+    EXPECT_FALSE(opts.directCalls);
 }
 
 TEST(CodeOptionsTest, FieldsAreIndependentlySettable)
@@ -105,29 +104,29 @@ TEST(CodeOptionsTest, FieldsAreIndependentlySettable)
     CodeOptions opts;
     opts.commentLevel   = RegCCommentLevel::Detailed;
     opts.traceCallLog   = true;
-    opts.emitDebugComments = true;
+    opts.resolvedDispatch = true;
     EXPECT_EQ(opts.commentLevel, RegCCommentLevel::Detailed);
     EXPECT_TRUE(opts.traceCallLog);
-    EXPECT_TRUE(opts.emitDebugComments);
-    EXPECT_TRUE(opts.emitTypeAsserts);
+    EXPECT_TRUE(opts.resolvedDispatch);
+    EXPECT_FALSE(opts.directCalls);
 }
 
 TEST(CodeOptionsTest, ScopeOverrideRestoresOnScopeExit)
 {
     CodeOptions opts;
-    EXPECT_FALSE(opts.emitDebugComments);
+    EXPECT_FALSE(opts.traceCallLog);
     {
-        CodeOptions::ScopeOverride guard(opts.emitDebugComments, true);
-        EXPECT_TRUE(opts.emitDebugComments);
+        CodeOptions::ScopeOverride guard(opts.traceCallLog, true);
+        EXPECT_TRUE(opts.traceCallLog);
         {
-            CodeOptions::ScopeOverride nested(opts.emitTypeAsserts, false);
-            EXPECT_FALSE(opts.emitTypeAsserts);
+            CodeOptions::ScopeOverride nested(opts.directCalls, true);
+            EXPECT_TRUE(opts.directCalls);
         }
-        EXPECT_TRUE(opts.emitTypeAsserts);   // 内层恢复
-        EXPECT_TRUE(opts.emitDebugComments);
+        EXPECT_FALSE(opts.directCalls);          // 内层恢复
+        EXPECT_TRUE(opts.traceCallLog);
     }
-    EXPECT_FALSE(opts.emitDebugComments);    // 外层恢复
-    EXPECT_TRUE(opts.emitTypeAsserts);
+    EXPECT_FALSE(opts.traceCallLog);             // 外层恢复
+    EXPECT_FALSE(opts.directCalls);
 }
 
 // ---- CodeTemplate: 命名模板 -------------------------------------------------
@@ -162,10 +161,10 @@ TEST(CodeTemplateTest, EmitCapturesBoundParametersByValue)
 
 TEST(CodeTemplateTest, DependsOnDeclaresOptions)
 {
-    const CodeTemplate tpl = CodeTemplate::define("type_assert", [](CSourceStream&) {})
-                                 .dependsOn("emitTypeAsserts");
+    const CodeTemplate tpl = CodeTemplate::define("call_log", [](CSourceStream&) {})
+                                 .dependsOn("traceCallLog");
     ASSERT_EQ(tpl.dependencies().size(), 1u);
-    EXPECT_EQ(tpl.dependencies()[0], "emitTypeAsserts");
+    EXPECT_EQ(tpl.dependencies()[0], "traceCallLog");
 }
 
 TEST(CodeTemplateRegistryTest, AddFindAndDedupe)
