@@ -2,6 +2,7 @@
 #include "common/mj2x_rt_protect.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -167,10 +168,52 @@ static void test_rt_protect_large_step_stays_quiet(void)
     assert(cp.triggers <= 1);
 }
 
+// ---- 浮点→整型转换（#1027 D2 回归）----
+// JVM f2i/f2l/d2i/d2l 语义（JLS 5.1.3）：NaN→0、向零截断、超界饱和
+// [INT_MIN, INT_MAX]/[INT64_MIN, INT64_MAX]。这些向量对修复前的裸 C cast
+// 实现是红的：裸 cast 对 NaN/越界是 UB（x64 上 (int)NaN 常得 INT_MIN 而非 0）。
+
+static void test_float_to_int_jvm_semantics(void)
+{
+    /* mj2x_regc_f2i32：JVM f2i/d2i 口径 */
+    assert(mj2x_regc_f2i32((double)NAN) == 0);                            /* NaN→0 */
+    assert(mj2x_regc_f2i32((double)INFINITY) == INT32_MAX);               /* +inf 饱和 */
+    assert(mj2x_regc_f2i32((double)-INFINITY) == INT32_MIN);              /* -inf 饱和 */
+    assert(mj2x_regc_f2i32(1.0e30) == INT32_MAX);                         /* 超大正 */
+    assert(mj2x_regc_f2i32(-1.0e30) == INT32_MIN);                        /* 超大负 */
+    assert(mj2x_regc_f2i32(0.5) == 0);                                    /* 向零截断 */
+    assert(mj2x_regc_f2i32(-0.5) == 0);
+    assert(mj2x_regc_f2i32(1.9) == 1);
+    assert(mj2x_regc_f2i32(-1.9) == -1);
+    assert(mj2x_regc_f2i32(0.0) == 0);
+    assert(mj2x_regc_f2i32(-0.0) == 0);
+    assert(mj2x_regc_f2i32(2147483647.0) == INT32_MAX);                   /* 2^31-1 界内恰可表示 */
+    assert(mj2x_regc_f2i32(2147483648.0) == INT32_MAX);                   /* 2^31 → 饱和 */
+    assert(mj2x_regc_f2i32(-2147483648.0) == INT32_MIN);                  /* -2^31 界内恰可表示 */
+    assert(mj2x_regc_f2i32(-2147483649.0) == INT32_MIN);                  /* < -2^31 → 饱和 */
+
+    /* mj2x_regc_f2i64：JVM f2l/d2l 口径，饱和点 2^63（(double)INT64_MAX
+     * 因 53 位尾数本就舍入为 2^63，与实现注释一致）。 */
+    assert(mj2x_regc_f2i64((double)NAN) == 0);
+    assert(mj2x_regc_f2i64((double)INFINITY) == INT64_MAX);
+    assert(mj2x_regc_f2i64((double)-INFINITY) == INT64_MIN);
+    assert(mj2x_regc_f2i64(1.0e30) == INT64_MAX);
+    assert(mj2x_regc_f2i64(-1.0e30) == INT64_MIN);
+    assert(mj2x_regc_f2i64(0.5) == 0);
+    assert(mj2x_regc_f2i64(-0.5) == 0);
+    assert(mj2x_regc_f2i64(0.0) == 0);
+    assert(mj2x_regc_f2i64(-0.0) == 0);
+    assert(mj2x_regc_f2i64(9223372036854775807.0) == INT64_MAX);          /* 字面量舍入为 2^63 → 饱和 */
+    assert(mj2x_regc_f2i64(9223372036854774784.0) == 9223372036854774784LL); /* 2^63-2^10 界内 */
+    assert(mj2x_regc_f2i64(-9223372036854775808.0) == INT64_MIN);         /* -2^63 界内恰可表示 */
+    assert(mj2x_regc_f2i64(-9223372036854777856.0) == INT64_MIN);         /* < -2^63 → 饱和 */
+}
+
 int main(void)
 {
     test_div_rem_and_status_bridge();
     test_compare_intrinsics();
+    test_float_to_int_jvm_semantics();
     test_regc_intrinsic_c99_abi();
     test_regc_intrinsic_bit_ops();
     test_regc_intrinsic_bit_ops();
