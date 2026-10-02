@@ -33,6 +33,15 @@ std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char*
 
 }   // namespace
 
+/// #1065 回归守卫：测试 TU（去 NDEBUG #1063）与 libjbytecode 静态库 TU（NDEBUG）
+/// 的 InsnList 布局必须一致。漂移时本 TU 的内联访问器（size()/getFirst() 等）
+/// 读到错位字段——实证：instructions.size() 返回 ownerArena_ 低半（垃圾堆地址）
+/// + 析构走错位字段 fastfail（exit 127），表象集中在 LlvmIrBackendTest。
+TEST(LlvmIrBackendTest, InsnListLayoutMatchesLibjbytecodeTu)
+{
+    EXPECT_EQ(sizeof(InsnList), jbytecode::tree::InsnList::layoutProbeSizeof());
+}
+
 TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
 {
     auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
