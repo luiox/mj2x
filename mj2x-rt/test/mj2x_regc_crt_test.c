@@ -119,12 +119,13 @@ static void test_rt_protect_deterministic_lower_bound(void)
 {
     mj2x_rt_checkpoint cp;
     memset(&cp, 0, sizeof(cp));
-    int hit = 0;
+    // LOG 动作按契约恒返回 0（命中与否只进计数，见 mj2x_rt_protect.h
+    // "@return"与 test_rt_protect_fake_and_delay），不能作为命中信号。
     for (int i = 0; i < 3; ++i) {
-        hit = mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_LOG, 3, 0, 0) == 0 ? hit : 1;
+        assert(mj2x_rt_checkpoint_run(&cp, MJ2X_RT_PROTECT_LOG, 3, 0, 0) == 0);
     }
-    // step=3：3 次调用内必然至少一次触发（确定性下限）；计数推进。
-    assert(hit);
+    // step=3：3 次调用内必然至少一次触发（确定性下限）；触发面经 triggers
+    // 计数观察，计数推进。
     assert(cp.invocations == 3);
     assert(cp.triggers >= 1);
     assert(cp.seed != 0);   // 懒初始化生效。
