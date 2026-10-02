@@ -20,6 +20,9 @@
 -- dep/package 来源，set 不会产生重复/串源）。
 -- 覆盖面：release/releasedbg/minsizerel/profile 四种模式 xmake 均注入 NDEBUG，
 -- 一并移除（debug 等其余模式本来就不注入，过滤为无害空操作）。
+-- 注（R15 评审 N1）：本仓根 xmake.lua 只挂 mode.debug/mode.release 两规则，
+-- 四态中实际可达的仅 release，其余分支为防御性空转（releasedbg 实测产品库
+-- 亦无 NDEBUG），保留以防后续根规则扩展。
 function mj2x_test_keep_asserts()
     on_config(function (target)
         if is_mode("release", "releasedbg", "minsizerel", "profile") then
