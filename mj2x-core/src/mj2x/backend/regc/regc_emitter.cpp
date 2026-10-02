@@ -291,7 +291,9 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             bool                    active = false;
             const RegInstruction*   alloc  = nullptr;
             const RegInstruction*   initCall = nullptr;
-            ca::str::Utf8String     allocCacheName;
+            /// 池内 intern 的 cacheName 视图（addClassCache 返回端；视图寿命
+            /// 覆盖本函数发射期，池为 TU 级）。
+            ca::str::Utf8StringRef  allocCacheName;
             std::vector<ca::str::Utf8String> fusedArgs;
         } pendingFuse;
         /// getClass().getName().hashCode() 融合窗口：仅 getName/hashCode 两条
@@ -513,7 +515,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     }
                 }
                 if (hashIns != nullptr && !chainEscapes) {
-                    const ca::str::Utf8String site =
+                    const ca::str::Utf8StringRef site =
                         emitState.cachePool->classNameHashSite();
                     body.appendLineStart(regName(hashIns->dest.id))
                         .append(" = ")

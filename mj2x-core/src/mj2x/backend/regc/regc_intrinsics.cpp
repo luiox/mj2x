@@ -720,9 +720,9 @@ bool tryEmitEnumValuesCall(CSourceStream& out, const RegInstruction& ins,
                                     ins.method.desc),
                   ins.method.owner, arrayDescRef);
     if (!verified) return false;
-    const ca::str::Utf8String fieldCache = state.cachePool->staticFieldCache(
+    const ca::str::Utf8StringRef fieldCache = state.cachePool->staticFieldCache(
         ins.method.owner, ca::str::Utf8StringRef::from_cstr("$VALUES"), arrayDescRef);
-    const ca::str::Utf8String site = state.cachePool->enumValuesSite(ins.method.owner);
+    const ca::str::Utf8StringRef site = state.cachePool->enumValuesSite(ins.method.owner);
     if (!ins.hasDest) return false;   // values() 必有返回值；防御畸形 IR
     const std::string loadValues =
         codegen::exprCall("_mj2x_regc_load_cached_ref_field", {"&" + fieldCache.to_std_string()});
@@ -763,7 +763,7 @@ bool tryEmitEnumValueOfCall(CSourceStream& out, const RegInstruction& ins,
                                     ins.method.desc),
                   ins.method.owner);
     if (!verified) return false;
-    const ca::str::Utf8String site = state.cachePool->enumValueOfSite(ins.method.owner);
+    const ca::str::Utf8StringRef site = state.cachePool->enumValueOfSite(ins.method.owner);
     if (!ins.hasDest) return false;
     out.appendLineStart(regName(ins.dest.id))
         .append(" = ")

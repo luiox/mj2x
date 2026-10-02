@@ -228,14 +228,19 @@ bool isStaticCall(const RegInstruction& ins);
 bool isSelfStaticCall(const RegCFunctionEmitState& state, const RegInstruction& ins);
 std::string cacheKey(const ca::str::Utf8StringRef& first, const ca::str::Utf8StringRef& second,
                      const ca::str::Utf8StringRef& third);
-ca::str::Utf8String addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins);
-ca::str::Utf8String addInstanceMethodCache(RegCFunctionEmitState& state,
+/// 以下 5 个 add*Cache 返回值均为视图：池路径返回池内 intern 的 cacheName 视图
+///（H2 返回端，命中零 clone）；无池路径（单测直连发射器）返回 emitState 拥有的
+/// map 值视图（std::map 节点地址稳定）。视图寿命覆盖单次发射/整 TU 生成。
+ca::str::Utf8StringRef addStaticMethodCache(RegCFunctionEmitState& state,
+                                            const RegInstruction&  ins);
+ca::str::Utf8StringRef addInstanceMethodCache(RegCFunctionEmitState& state,
+                                              const RegInstruction&  ins);
+ca::str::Utf8StringRef addStaticFieldCache(RegCFunctionEmitState& state,
                                            const RegInstruction&  ins);
-ca::str::Utf8String addStaticFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins);
-ca::str::Utf8String addInstanceFieldCache(RegCFunctionEmitState& state,
-                                          const RegInstruction&  ins);
-ca::str::Utf8String addClassCache(RegCFunctionEmitState&      state,
-                                  const ca::str::Utf8StringRef& desc);
+ca::str::Utf8StringRef addInstanceFieldCache(RegCFunctionEmitState& state,
+                                             const RegInstruction&  ins);
+ca::str::Utf8StringRef addClassCache(RegCFunctionEmitState&       state,
+                                     const ca::str::Utf8StringRef& desc);
 bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classIndex);
 
 /// 发射 native-to-native 直接调用（跳过 JNI 方法分派），未命中时返回 false。

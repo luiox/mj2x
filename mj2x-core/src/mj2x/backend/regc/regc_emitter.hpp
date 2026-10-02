@@ -17,6 +17,7 @@
 #include "mj2x/codegen/c_source.hpp"
 
 #include <cstdint>
+#include <forward_list>
 #include <map>
 #include <set>
 #include <string>
@@ -59,33 +60,63 @@ struct RegCEmitResult
 /// tests.  RegCBackend supplies one pool for the whole generated C file so equal
 /// owner/name/desc or class descriptors across methods share a single static
 /// cache object.
+/// @brief RegC 缓存池复合键：owner/name/desc 三段内容视图。
+///
+/// @details
+/// 命中路径零拷贝的关键（H2）：查找用临时三段视图（内容哈希 + 内容等值），
+/// 不再拼接复合 std::string 键；未命中时池把三段各自 intern 进池内存储再存
+/// 视图键（调用方实参允许是临时串视图，见 regc_flow 的 componentDescs /
+/// intrinsicName.substr 调用点）。分隔符语义与旧 poolCacheKey 的 '\n' 拼接
+/// 等价（JVM 内部名不含 '\n'，三段等值判定与拼接键一一对应）。
+struct RegCCacheTripleKey
+{
+    ca::str::Utf8StringRef owner;
+    ca::str::Utf8StringRef name;
+    ca::str::Utf8StringRef desc;
+};
+
+/// 三段内容 FNV-1a 哈希混合（只用于桶定位；等值判定走 RegCCacheTripleEqual）。
+struct RegCCacheTripleHash
+{
+    size_t operator()(const RegCCacheTripleKey& key) const noexcept;
+};
+
+/// 逐段内容比较（Utf8StringRef operator== 为逐字节内容比较）。
+struct RegCCacheTripleEqual
+{
+    bool operator()(const RegCCacheTripleKey& lhs, const RegCCacheTripleKey& rhs) const noexcept;
+};
+
 class RegCCachePool
 {
 public:
     explicit RegCCachePool(RegCCommentLevel commentLevel = RegCCommentLevel::Summary);
 
-    ca::str::Utf8String staticMethodCache(const ca::str::Utf8StringRef& owner,
-                                          const ca::str::Utf8StringRef& name,
-                                          const ca::str::Utf8StringRef& desc);
-    ca::str::Utf8String instanceMethodCache(const ca::str::Utf8StringRef& owner,
+    /// @brief 以下 9 个查询方法的返回值均为池内 intern 存储的视图（H2 返回端）：
+    ///        命中零分配、零拷贝；视图寿命覆盖池生命周期（TU 级声明池，调用方
+    ///        只在发射期借用）。未命中路径负责 intern（键与 cacheName 均入池）。
+    ca::str::Utf8StringRef staticMethodCache(const ca::str::Utf8StringRef& owner,
+                                             const ca::str::Utf8StringRef& name,
+                                             const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8StringRef instanceMethodCache(const ca::str::Utf8StringRef& owner,
+                                               const ca::str::Utf8StringRef& name,
+                                               const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8StringRef staticFieldCache(const ca::str::Utf8StringRef& owner,
                                             const ca::str::Utf8StringRef& name,
                                             const ca::str::Utf8StringRef& desc);
-    ca::str::Utf8String staticFieldCache(const ca::str::Utf8StringRef& owner,
-                                         const ca::str::Utf8StringRef& name,
-                                         const ca::str::Utf8StringRef& desc);
-    ca::str::Utf8String instanceFieldCache(const ca::str::Utf8StringRef& owner,
-                                           const ca::str::Utf8StringRef& name,
-                                           const ca::str::Utf8StringRef& desc);
-    ca::str::Utf8String classCache(const ca::str::Utf8StringRef& desc);
-    ca::str::Utf8String resolvedCallSite(const ca::str::Utf8StringRef& owner,
-                                         const ca::str::Utf8StringRef& name,
-                                         const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8StringRef instanceFieldCache(const ca::str::Utf8StringRef& owner,
+                                              const ca::str::Utf8StringRef& name,
+                                              const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8StringRef classCache(const ca::str::Utf8StringRef& desc);
+    ca::str::Utf8StringRef resolvedCallSite(const ca::str::Utf8StringRef& owner,
+                                            const ca::str::Utf8StringRef& name,
+                                            const ca::str::Utf8StringRef& desc);
     /// javac 合成 values()/valueOf 调用点站点缓存（owner 去重；发射端已验证
     /// 方法体为 javac 合成形态）。
-    ca::str::Utf8String enumValuesSite(const ca::str::Utf8StringRef& owner);
-    ca::str::Utf8String enumValueOfSite(const ca::str::Utf8StringRef& owner);
+    ca::str::Utf8StringRef enumValuesSite(const ca::str::Utf8StringRef& owner);
+    ca::str::Utf8StringRef enumValueOfSite(const ca::str::Utf8StringRef& owner);
     /// getClass().getName().hashCode() 融合调用点站点缓存（每调用点一个）。
-    ca::str::Utf8String classNameHashSite();
+    ca::str::Utf8StringRef classNameHashSite();
 
     /// @brief 开启字符串字面量 at-rest 加密（--strings-encrypt，对标 jvmtp
     ///        obfuscation.strings / JavaShroud 字符串加密）。
@@ -128,15 +159,30 @@ public:
     void setCommentLevel(RegCCommentLevel level) { commentLevel_ = level; }
 
 private:
-    std::vector<ca::str::Utf8String>     declarations_;
-    std::map<std::string, ca::str::Utf8String> staticMethodCacheNames_;
-    std::map<std::string, ca::str::Utf8String> instanceMethodCacheNames_;
-    std::map<std::string, ca::str::Utf8String> staticFieldCacheNames_;
-    std::map<std::string, ca::str::Utf8String> instanceFieldCacheNames_;
-    std::map<std::string, ca::str::Utf8String> classCacheNames_;
-    std::map<std::string, ca::str::Utf8String> resolvedCallSiteNames_;
-    std::map<std::string, ca::str::Utf8String> enumValuesSiteNames_;
-    std::map<std::string, ca::str::Utf8String> enumValueOfSiteNames_;
+    /// 复合键族（owner/name/desc）与单段键族的缓存表类型：内容哈希 + 内容等值，
+    /// 命中路径零分配查找；值端为池拥有的 cacheName。
+    using RegCTripleCacheMap =
+        std::unordered_map<RegCCacheTripleKey, ca::str::Utf8String, RegCCacheTripleHash,
+                           RegCCacheTripleEqual>;
+    using RegCSingleCacheMap = std::unordered_map<ca::str::Utf8StringRef, ca::str::Utf8String>;
+
+    std::vector<ca::str::Utf8String> declarations_;
+    /// 键 = 池内 intern 存储的视图（内容哈希查找）；值 = 池拥有的 cacheName，
+    /// 命中返回 it->second.ref()（unordered_map 节点地址稳定，视图不过期）。
+    RegCTripleCacheMap  staticMethodCacheNames_;
+    RegCTripleCacheMap  instanceMethodCacheNames_;
+    RegCTripleCacheMap  staticFieldCacheNames_;
+    RegCTripleCacheMap  instanceFieldCacheNames_;
+    RegCSingleCacheMap  classCacheNames_;
+    RegCTripleCacheMap  resolvedCallSiteNames_;
+    RegCSingleCacheMap  enumValuesSiteNames_;
+    RegCSingleCacheMap  enumValueOfSiteNames_;
+    /// 未命中路径的键 intern 存储：forward_list 节点地址稳定，视图键不过期
+    /// （调用方实参可为临时串视图，见 regc_flow 的 componentDescs /
+    /// intrinsicName.substr 调用点）。命中路径零分配、零拷贝。
+    std::forward_list<std::string>       keyStorage_;
+    /// classNameHashSite（无键族，每调用点一个）的 cacheName intern 存储。
+    std::forward_list<ca::str::Utf8String> siteNameStorage_;
     int                                classNameHashSiteIndex_ = 0;
     int                                staticMethodCacheIndex_   = 0;
     int                                instanceMethodCacheIndex_ = 0;

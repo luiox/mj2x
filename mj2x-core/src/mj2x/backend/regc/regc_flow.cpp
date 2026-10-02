@@ -622,7 +622,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         if (!rejectNativeObjectEscape(state, ins.value, "reference conversion", reason))
             return false;
         if (ins.convertKind == SSAConvertKind::ReferenceCast) {
-            const ca::str::Utf8String cacheName = addClassCache(state, ins.referenceTypeDesc);
+            const ca::str::Utf8StringRef cacheName = addClassCache(state, ins.referenceTypeDesc);
             const std::string         destName = regName(ins.dest.id);
             out.appendLineStart(destName)
                 .append(" = _mj2x_regc_checkcast_cached(")
@@ -660,7 +660,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         if (!rejectNativeObjectEscape(state, ins.receiver, "field load receiver", reason))
             return false;
         if (ins.field.isStatic) {
-            const ca::str::Utf8String cacheName = addStaticFieldCache(state, ins);
+            const ca::str::Utf8StringRef cacheName = addStaticFieldCache(state, ins);
             const std::string         destName = regName(ins.dest.id);
             out.appendLineStart(destName)
                 .append(" = _mj2x_regc_load_cached_")
@@ -671,7 +671,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 .newLine();
         }
         else {
-            const ca::str::Utf8String cacheName = addInstanceFieldCache(state, ins);
+            const ca::str::Utf8StringRef cacheName = addInstanceFieldCache(state, ins);
             const std::string         destName = regName(ins.dest.id);
             out.appendLineStart(destName).append(" = _mj2x_regc_load_");
             if (!cacheName.is_empty()) {
@@ -712,7 +712,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             }
             const auto emitStore = [&](CSourceStream& u) {
                 if (ins.field.isStatic) {
-                    const ca::str::Utf8String cacheName = addStaticFieldCache(state, ins);
+                    const ca::str::Utf8StringRef cacheName = addStaticFieldCache(state, ins);
                     u.appendLineStart("_mj2x_regc_store_cached_")
                         .append(fieldHelperSuffix(ins.field.desc, ins.value.type))
                         .append("_field(&")
@@ -723,7 +723,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         .newLine();
                 }
                 else {
-                    const ca::str::Utf8String cacheName = addInstanceFieldCache(state, ins);
+                    const ca::str::Utf8StringRef cacheName = addInstanceFieldCache(state, ins);
                     u.appendLineStart("_mj2x_regc_store_");
                     if (!cacheName.is_empty()) {
                         u.append("cached_instance_")
@@ -839,10 +839,12 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         // 自递归直调默认关闭（JVM 栈帧语义）；关闭时 selfCall 也走 cached JNI，
         // 需要 static method cache（原逻辑 selfCall 无 cache）。
         const bool              selfCallJni = selfCall && !state.directCalls;
-        const ca::str::Utf8String cacheName =
-            (staticCall && (!selfCall || selfCallJni)) ? addStaticMethodCache(state, ins) : ca::str::Utf8String();
-        const ca::str::Utf8String instanceCacheName =
-            (!staticCall && !selfCall) ? addInstanceMethodCache(state, ins) : ca::str::Utf8String();
+        const ca::str::Utf8StringRef cacheName =
+            (staticCall && (!selfCall || selfCallJni)) ? addStaticMethodCache(state, ins)
+                                                       : ca::str::Utf8StringRef{};
+        const ca::str::Utf8StringRef instanceCacheName =
+            (!staticCall && !selfCall) ? addInstanceMethodCache(state, ins)
+                                       : ca::str::Utf8StringRef{};
         const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
         const bool dynamicInstance = !staticCall && !selfCall && !instanceCacheName.is_empty();
         const bool privateThis =
@@ -1052,7 +1054,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             else {
                 const std::string allocDestName = regName(ins.dest.id);
                 if (state.cachePool != nullptr) {
-                    const ca::str::Utf8String cacheName = addClassCache(state, ins.typeDesc);
+                    const ca::str::Utf8StringRef cacheName = addClassCache(state, ins.typeDesc);
                     out.appendLineStart(allocDestName)
                         .append(" = _mj2x_regc_alloc_object_cached(&")
                         .append(cacheName)
@@ -1073,7 +1075,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 ins.args.empty() ? RegOperand::fromInt(0, SSAType::I32) : ins.args[0];
             const std::string allocArrayDest = regName(ins.dest.id);
             if (state.cachePool != nullptr && isReferenceArrayDesc(ins.typeDesc)) {
-                const ca::str::Utf8String cacheName = addClassCache(
+                const ca::str::Utf8StringRef cacheName = addClassCache(
                     state,
                     ca::str::Utf8StringRef::from_string_view(arrayComponentDesc(ins.typeDesc)));
                 out.appendLineStart(allocArrayDest)
@@ -1124,7 +1126,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         .append("] = {");
                     for (size_t i = 0; i < componentDescs.size(); ++i) {
                         if (i != 0) u.append(", ");
-                        const ca::str::Utf8String cacheName = addClassCache(
+                        const ca::str::Utf8StringRef cacheName = addClassCache(
                             state,
                             ca::str::Utf8StringRef::from_string_view(componentDescs[i]));
                         u.append("&").append(cacheName);
@@ -1191,7 +1193,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                                           "instanceof",
                                           reason))
                 return false;
-            const ca::str::Utf8String cacheName = addClassCache(
+            const ca::str::Utf8StringRef cacheName = addClassCache(
                 state, ca::str::Utf8StringRef::from_string_view(ins.intrinsicName.substr(11)));
             const std::string destName = regName(ins.dest.id);
             out.appendLineStart(destName)

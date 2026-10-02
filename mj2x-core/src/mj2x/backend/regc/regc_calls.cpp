@@ -70,7 +70,8 @@ std::string cacheKey(const ca::str::Utf8StringRef& first, const ca::str::Utf8Str
     return first.to_std_string() + "\n" + second.to_std_string() + "\n" + third.to_std_string();
 }
 
-ca::str::Utf8String addStaticMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+ca::str::Utf8StringRef addStaticMethodCache(RegCFunctionEmitState& state,
+                                            const RegInstruction&  ins)
 {
     if (state.cachePool != nullptr) {
         return state.cachePool->staticMethodCache(
@@ -79,7 +80,7 @@ ca::str::Utf8String addStaticMethodCache(RegCFunctionEmitState& state, const Reg
 
     const std::string key = cacheKey(ins.method.owner, ins.method.name, ins.method.desc);
     auto              it  = state.staticMethodCacheNames.find(key);
-    if (it != state.staticMethodCacheNames.end()) return it->second.clone();
+    if (it != state.staticMethodCacheNames.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_cache_");
@@ -107,13 +108,13 @@ ca::str::Utf8String addStaticMethodCache(RegCFunctionEmitState& state, const Reg
     decl.append(cStringLiteral(ins.method.desc));
     decl.append(", NULL, NULL};\n");
     state.staticMethodCacheDeclarations.push_back(decl.build());
-    state.staticMethodCacheNames.emplace(key, cacheName.clone());
-    return cacheName;
+    return state.staticMethodCacheNames.emplace(key, cacheName.clone()).first->second.ref();
 }
 
-ca::str::Utf8String addInstanceMethodCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+ca::str::Utf8StringRef addInstanceMethodCache(RegCFunctionEmitState& state,
+                                              const RegInstruction&  ins)
 {
-    if (state.cachePool == nullptr) return ca::str::Utf8String();
+    if (state.cachePool == nullptr) return ca::str::Utf8StringRef{};
     return state.cachePool->instanceMethodCache(ins.method.owner, ins.method.name, ins.method.desc);
 }
 
@@ -406,8 +407,8 @@ void emitAllocateWithInit(CSourceStream& out, RegCFunctionEmitState& state,
                           const ca::str::Utf8StringRef& allocCacheName,
                           const std::vector<ca::str::Utf8String>& expressions)
 {
-    const std::vector<char>  paramTags = descriptorParamTags(initCall.method.desc);
-    const ca::str::Utf8String initCacheName = addInstanceMethodCache(state, initCall);
+    const std::vector<char>    paramTags = descriptorParamTags(initCall.method.desc);
+    const ca::str::Utf8StringRef initCacheName = addInstanceMethodCache(state, initCall);
     const std::string        destName      = regName(alloc.dest.id);
     const ca::str::Utf8String argsArg = paramTags.empty() ? ca::str::Utf8String("NULL")
                                                          : ca::str::Utf8String("_mj2x_regc_va");
@@ -795,7 +796,8 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
     });
 }
 
-ca::str::Utf8String addStaticFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+ca::str::Utf8StringRef addStaticFieldCache(RegCFunctionEmitState& state,
+                                           const RegInstruction&  ins)
 {
     if (state.cachePool != nullptr) {
         return state.cachePool->staticFieldCache(ins.field.owner, ins.field.name, ins.field.desc);
@@ -803,7 +805,7 @@ ca::str::Utf8String addStaticFieldCache(RegCFunctionEmitState& state, const RegI
 
     const std::string key = cacheKey(ins.field.owner, ins.field.name, ins.field.desc);
     auto              it  = state.staticFieldCacheNames.find(key);
-    if (it != state.staticFieldCacheNames.end()) return it->second.clone();
+    if (it != state.staticFieldCacheNames.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_field_cache_");
@@ -832,17 +834,17 @@ ca::str::Utf8String addStaticFieldCache(RegCFunctionEmitState& state, const RegI
     decl.append(cStringLiteral(ins.field.desc));
     decl.append(", NULL, NULL};\n");
     state.staticFieldCacheDeclarations.push_back(decl.build());
-    state.staticFieldCacheNames.emplace(key, cacheName.clone());
-    return cacheName;
+    return state.staticFieldCacheNames.emplace(key, cacheName.clone()).first->second.ref();
 }
 
-ca::str::Utf8String addInstanceFieldCache(RegCFunctionEmitState& state, const RegInstruction& ins)
+ca::str::Utf8StringRef addInstanceFieldCache(RegCFunctionEmitState& state,
+                                             const RegInstruction&  ins)
 {
-    if (state.cachePool == nullptr) return ca::str::Utf8String();
+    if (state.cachePool == nullptr) return ca::str::Utf8StringRef{};
     return state.cachePool->instanceFieldCache(ins.field.owner, ins.field.name, ins.field.desc);
 }
 
-ca::str::Utf8String addClassCache(RegCFunctionEmitState& state, const ca::str::Utf8StringRef& desc)
+ca::str::Utf8StringRef addClassCache(RegCFunctionEmitState& state, const ca::str::Utf8StringRef& desc)
 {
     if (state.cachePool != nullptr) {
         return state.cachePool->classCache(desc);
@@ -850,7 +852,7 @@ ca::str::Utf8String addClassCache(RegCFunctionEmitState& state, const ca::str::U
 
     const std::string descKey = desc.to_std_string();
     auto              it      = state.classCacheNames.find(descKey);
-    if (it != state.classCacheNames.end()) return it->second.clone();
+    if (it != state.classCacheNames.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_class_cache_");
@@ -871,8 +873,7 @@ ca::str::Utf8String addClassCache(RegCFunctionEmitState& state, const ca::str::U
     decl.append(cStringLiteral(desc));
     decl.append(", NULL};\n");
     state.classCacheDeclarations.push_back(decl.build());
-    state.classCacheNames.emplace(descKey, cacheName.clone());
-    return cacheName;
+    return state.classCacheNames.emplace(descKey, cacheName.clone()).first->second.ref();
 }
 
 

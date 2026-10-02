@@ -23,23 +23,54 @@ namespace mj2x {
 // 调用点保持一行；cStringLiteral 以 codegen:: 限定形式调用。
 using codegen::CSourceStream;
 
+// 复合键哈希/等值：内容 FNV-1a 三段混合（桶定位）+ 逐段内容比较（等值判定）。
+// 命中路径零分配、零拷贝——查找直接用调用方传入的三段视图，不再拼接
+// 复合 std::string 键（旧 poolCacheKey 的 3×to_std_string + 2 concat 全消）。
+size_t RegCCacheTripleHash::operator()(const RegCCacheTripleKey& key) const noexcept
+{
+    const size_t h1 = std::hash<ca::str::Utf8StringRef>{}(key.owner);
+    const size_t h2 = std::hash<ca::str::Utf8StringRef>{}(key.name);
+    const size_t h3 = std::hash<ca::str::Utf8StringRef>{}(key.desc);
+    size_t       h  = h1;
+    h ^= h2 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= h3 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+}
+
+bool RegCCacheTripleEqual::operator()(const RegCCacheTripleKey& lhs,
+                                      const RegCCacheTripleKey& rhs) const noexcept
+{
+    return lhs.owner == rhs.owner && lhs.name == rhs.name && lhs.desc == rhs.desc;
+}
+
 namespace {
 
-std::string poolCacheKey(const ca::str::Utf8StringRef& first, const ca::str::Utf8StringRef& second,
-                         const ca::str::Utf8StringRef& third)
+/// 未命中路径公用：把调用方三段视图 intern 进池内存储（forward_list 节点地址
+/// 稳定，视图键不过期），返回可入 unordered_map 的三段视图键。调用方实参允许
+/// 是临时串视图（regc_flow 的 componentDescs / intrinsicName.substr 调用点），
+/// intern 后与实参寿命解耦。命中路径不走这里——零分配、零拷贝。
+RegCCacheTripleKey internTripleKey(std::forward_list<std::string>& storage,
+                                   const ca::str::Utf8StringRef&   owner,
+                                   const ca::str::Utf8StringRef&   name,
+                                   const ca::str::Utf8StringRef&   desc)
 {
-    return first.to_std_string() + "\n" + second.to_std_string() + "\n" + third.to_std_string();
+    storage.emplace_front(owner.to_std_string());
+    const auto ownerView = ca::str::Utf8StringRef::from_string_view(storage.front());
+    storage.emplace_front(name.to_std_string());
+    const auto nameView = ca::str::Utf8StringRef::from_string_view(storage.front());
+    storage.emplace_front(desc.to_std_string());
+    const auto descView = ca::str::Utf8StringRef::from_string_view(storage.front());
+    return RegCCacheTripleKey{ownerView, nameView, descView};
 }
 
 }   // namespace
 
-ca::str::Utf8String RegCCachePool::staticMethodCache(const ca::str::Utf8StringRef& owner,
-                                                      const ca::str::Utf8StringRef& name,
-                                                      const ca::str::Utf8StringRef& desc)
+ca::str::Utf8StringRef RegCCachePool::staticMethodCache(const ca::str::Utf8StringRef& owner,
+                                                       const ca::str::Utf8StringRef& name,
+                                                       const ca::str::Utf8StringRef& desc)
 {
-    const std::string key = poolCacheKey(owner, name, desc);
-    auto              it  = staticMethodCacheNames_.find(key);
-    if (it != staticMethodCacheNames_.end()) return it->second.clone();
+    auto it = staticMethodCacheNames_.find(RegCCacheTripleKey{owner, name, desc});
+    if (it != staticMethodCacheNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_cache_tu_");
@@ -65,17 +96,16 @@ ca::str::Utf8String RegCCachePool::staticMethodCache(const ca::str::Utf8StringRe
     decl.append(codegen::cStringLiteral(desc));
     decl.append(", NULL, NULL};\n");
     declarations_.push_back(decl.build());
-    staticMethodCacheNames_.emplace(key, cacheName.clone());
-    return cacheName;
+    const RegCCacheTripleKey key = internTripleKey(keyStorage_, owner, name, desc);
+    return staticMethodCacheNames_.emplace(key, std::move(cacheName)).first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::instanceMethodCache(const ca::str::Utf8StringRef& owner,
-                                                       const ca::str::Utf8StringRef& name,
-                                                       const ca::str::Utf8StringRef& desc)
+ca::str::Utf8StringRef RegCCachePool::instanceMethodCache(const ca::str::Utf8StringRef& owner,
+                                                          const ca::str::Utf8StringRef& name,
+                                                          const ca::str::Utf8StringRef& desc)
 {
-    const std::string key = poolCacheKey(owner, name, desc);
-    auto              it  = instanceMethodCacheNames_.find(key);
-    if (it != instanceMethodCacheNames_.end()) return it->second.clone();
+    auto it = instanceMethodCacheNames_.find(RegCCacheTripleKey{owner, name, desc});
+    if (it != instanceMethodCacheNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_instance_cache_tu_");
@@ -101,17 +131,16 @@ ca::str::Utf8String RegCCachePool::instanceMethodCache(const ca::str::Utf8String
     decl.append(codegen::cStringLiteral(desc));
     decl.append(", NULL, NULL, NULL, NULL};\n");
     declarations_.push_back(decl.build());
-    instanceMethodCacheNames_.emplace(key, cacheName.clone());
-    return cacheName;
+    const RegCCacheTripleKey key = internTripleKey(keyStorage_, owner, name, desc);
+    return instanceMethodCacheNames_.emplace(key, std::move(cacheName)).first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::resolvedCallSite(const ca::str::Utf8StringRef& owner,
-                                                    const ca::str::Utf8StringRef& name,
-                                                    const ca::str::Utf8StringRef& desc)
+ca::str::Utf8StringRef RegCCachePool::resolvedCallSite(const ca::str::Utf8StringRef& owner,
+                                                       const ca::str::Utf8StringRef& name,
+                                                       const ca::str::Utf8StringRef& desc)
 {
-    const std::string key = poolCacheKey(owner, name, desc);
-    auto              it  = resolvedCallSiteNames_.find(key);
-    if (it != resolvedCallSiteNames_.end()) return it->second.clone();
+    auto it = resolvedCallSiteNames_.find(RegCCacheTripleKey{owner, name, desc});
+    if (it != resolvedCallSiteNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_resolved_site_tu_");
@@ -131,17 +160,16 @@ ca::str::Utf8String RegCCachePool::resolvedCallSite(const ca::str::Utf8StringRef
     decl.append(cacheName);
     decl.append(" = {NULL, NULL, NULL, NULL};\n");
     declarations_.push_back(decl.build());
-    resolvedCallSiteNames_.emplace(key, cacheName.clone());
-    return cacheName;
+    const RegCCacheTripleKey key = internTripleKey(keyStorage_, owner, name, desc);
+    return resolvedCallSiteNames_.emplace(key, std::move(cacheName)).first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::staticFieldCache(const ca::str::Utf8StringRef& owner,
-                                                    const ca::str::Utf8StringRef& name,
-                                                    const ca::str::Utf8StringRef& desc)
+ca::str::Utf8StringRef RegCCachePool::staticFieldCache(const ca::str::Utf8StringRef& owner,
+                                                       const ca::str::Utf8StringRef& name,
+                                                       const ca::str::Utf8StringRef& desc)
 {
-    const std::string key = poolCacheKey(owner, name, desc);
-    auto              it  = staticFieldCacheNames_.find(key);
-    if (it != staticFieldCacheNames_.end()) return it->second.clone();
+    auto it = staticFieldCacheNames_.find(RegCCacheTripleKey{owner, name, desc});
+    if (it != staticFieldCacheNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_field_cache_tu_");
@@ -168,17 +196,16 @@ ca::str::Utf8String RegCCachePool::staticFieldCache(const ca::str::Utf8StringRef
     decl.append(codegen::cStringLiteral(desc));
     decl.append(", NULL, NULL};\n");
     declarations_.push_back(decl.build());
-    staticFieldCacheNames_.emplace(key, cacheName.clone());
-    return cacheName;
+    const RegCCacheTripleKey key = internTripleKey(keyStorage_, owner, name, desc);
+    return staticFieldCacheNames_.emplace(key, std::move(cacheName)).first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::instanceFieldCache(const ca::str::Utf8StringRef& owner,
-                                                      const ca::str::Utf8StringRef& name,
-                                                      const ca::str::Utf8StringRef& desc)
+ca::str::Utf8StringRef RegCCachePool::instanceFieldCache(const ca::str::Utf8StringRef& owner,
+                                                         const ca::str::Utf8StringRef& name,
+                                                         const ca::str::Utf8StringRef& desc)
 {
-    const std::string key = poolCacheKey(owner, name, desc);
-    auto              it  = instanceFieldCacheNames_.find(key);
-    if (it != instanceFieldCacheNames_.end()) return it->second.clone();
+    auto it = instanceFieldCacheNames_.find(RegCCacheTripleKey{owner, name, desc});
+    if (it != instanceFieldCacheNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_instance_field_cache_tu_");
@@ -205,14 +232,14 @@ ca::str::Utf8String RegCCachePool::instanceFieldCache(const ca::str::Utf8StringR
     decl.append(codegen::cStringLiteral(desc));
     decl.append(", NULL, NULL};\n");
     declarations_.push_back(decl.build());
-    instanceFieldCacheNames_.emplace(key, cacheName.clone());
-    return cacheName;
+    const RegCCacheTripleKey key = internTripleKey(keyStorage_, owner, name, desc);
+    return instanceFieldCacheNames_.emplace(key, std::move(cacheName)).first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::classCache(const ca::str::Utf8StringRef& desc)
+ca::str::Utf8StringRef RegCCachePool::classCache(const ca::str::Utf8StringRef& desc)
 {
-    auto       it  = classCacheNames_.find(desc.to_std_string());
-    if (it != classCacheNames_.end()) return it->second.clone();
+    auto it = classCacheNames_.find(desc);
+    if (it != classCacheNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_class_cache_tu_");
@@ -231,15 +258,17 @@ ca::str::Utf8String RegCCachePool::classCache(const ca::str::Utf8StringRef& desc
     decl.append(codegen::cStringLiteral(desc));
     decl.append(", NULL};\n");
     declarations_.push_back(decl.build());
-    classCacheNames_.emplace(desc.to_std_string(), cacheName.clone());
-    return cacheName;
+    keyStorage_.emplace_front(desc.to_std_string());
+    return classCacheNames_
+        .emplace(ca::str::Utf8StringRef::from_string_view(keyStorage_.front()),
+                 std::move(cacheName))
+        .first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::enumValuesSite(const ca::str::Utf8StringRef& owner)
+ca::str::Utf8StringRef RegCCachePool::enumValuesSite(const ca::str::Utf8StringRef& owner)
 {
-    const std::string key = owner.to_std_string();
-    auto              it  = enumValuesSiteNames_.find(key);
-    if (it != enumValuesSiteNames_.end()) return it->second.clone();
+    auto it = enumValuesSiteNames_.find(owner);
+    if (it != enumValuesSiteNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_enum_values_site_tu_");
@@ -256,15 +285,17 @@ ca::str::Utf8String RegCCachePool::enumValuesSite(const ca::str::Utf8StringRef& 
     decl.append(cacheName);
     decl.append(" = {NULL, NULL};\n");
     declarations_.push_back(decl.build());
-    enumValuesSiteNames_.emplace(key, cacheName.clone());
-    return cacheName;
+    keyStorage_.emplace_front(owner.to_std_string());
+    return enumValuesSiteNames_
+        .emplace(ca::str::Utf8StringRef::from_string_view(keyStorage_.front()),
+                 std::move(cacheName))
+        .first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::enumValueOfSite(const ca::str::Utf8StringRef& owner)
+ca::str::Utf8StringRef RegCCachePool::enumValueOfSite(const ca::str::Utf8StringRef& owner)
 {
-    const std::string key = owner.to_std_string();
-    auto              it  = enumValueOfSiteNames_.find(key);
-    if (it != enumValueOfSiteNames_.end()) return it->second.clone();
+    auto it = enumValueOfSiteNames_.find(owner);
+    if (it != enumValueOfSiteNames_.end()) return it->second.ref();
 
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_enum_valueof_site_tu_");
@@ -283,16 +314,20 @@ ca::str::Utf8String RegCCachePool::enumValueOfSite(const ca::str::Utf8StringRef&
     decl.append(codegen::cStringLiteral(owner));
     decl.append(", NULL, NULL, NULL};\n");
     declarations_.push_back(decl.build());
-    enumValueOfSiteNames_.emplace(key, cacheName.clone());
-    return cacheName;
+    keyStorage_.emplace_front(owner.to_std_string());
+    return enumValueOfSiteNames_
+        .emplace(ca::str::Utf8StringRef::from_string_view(keyStorage_.front()),
+                 std::move(cacheName))
+        .first->second.ref();
 }
 
-ca::str::Utf8String RegCCachePool::classNameHashSite()
+ca::str::Utf8StringRef RegCCachePool::classNameHashSite()
 {
     CSourceStream cacheNameBuilder;
     cacheNameBuilder.append("_mj2x_regc_cnh_site_tu_");
     cacheNameBuilder.append(ca::str::format_std("{}", classNameHashSiteIndex_++));
-    ca::str::Utf8String cacheName = cacheNameBuilder.build();
+    siteNameStorage_.emplace_front(cacheNameBuilder.build());
+    const ca::str::Utf8String& cacheName = siteNameStorage_.front();
 
     CSourceStream decl;
     if (commentLevel_ >= RegCCommentLevel::Summary) {
@@ -302,7 +337,7 @@ ca::str::Utf8String RegCCachePool::classNameHashSite()
     decl.append(cacheName);
     decl.append(" = {{{NULL, 0}, {NULL, 0}}};\n");
     declarations_.push_back(decl.build());
-    return cacheName;
+    return cacheName.ref();
 }
 
 std::string RegCCachePool::renderDeclarations() const
