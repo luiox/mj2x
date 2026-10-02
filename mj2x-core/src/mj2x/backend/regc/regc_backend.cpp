@@ -2,6 +2,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
 #include "mj2x/backend/regc/regc_emitter_internal.hpp"
 #include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
@@ -896,21 +897,11 @@ namespace {
 using codegen::CSourceStream;
 
 /// JVM desc -> boxed 类名（invokedynamic bootstrap 参数需要 primitive Class 对象）。
+/// #1027 B3：映射单源 = indyBoxedClassNameForDescHead（原 RegC 本地 switch 收敛）。
 std::string indyBoxedClassName(const ca::str::Utf8StringRef& desc)
 {
     const std::string s = desc.to_std_string();
-    if (s.empty()) return "java/lang/Object";
-    switch (s[0]) {
-    case 'Z': return "java/lang/Boolean";
-    case 'B': return "java/lang/Byte";
-    case 'C': return "java/lang/Character";
-    case 'S': return "java/lang/Short";
-    case 'I': return "java/lang/Integer";
-    case 'J': return "java/lang/Long";
-    case 'F': return "java/lang/Float";
-    case 'D': return "java/lang/Double";
-    default: return "java/lang/Object";
-    }
+    return indyBoxedClassNameForDescHead(s.empty() ? '\0' : s[0]);
 }
 
 std::string indyTypeDescriptorString(const Type& type)
@@ -980,68 +971,35 @@ void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode:
         out.emitLine("jclass " + var + "_owner_cls = (jclass)_mj2x_regc_find_class(" +
                      codegen::cStringLiteral(owner) + ");");
         std::string fieldDesc;
-        const bool  isField = tag == Opcodes::H_GETFIELD || tag == Opcodes::H_GETSTATIC ||
-                              tag == Opcodes::H_PUTFIELD || tag == Opcodes::H_PUTSTATIC;
+        // #1027 B3：tag→find* 形态单源（indyHandleFindFor；原同式 switch 收敛）。
+        const IndyHandleFind find    = indyHandleFindFor(tag);
+        const bool           isField = find.argShape == IndyHandleArgShape::NameFieldType;
         if (isField) {
             emitIndyClassObject(out, var + "_field_type", desc);
         }
         else {
             emitIndyMethodType(out, var + "_type", desc);
         }
-        const char* findName  = "findVirtual";
-        const char* findDesc =
-            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;";
         std::string args = var + "_owner_cls";
-        switch (tag) {
-        case Opcodes::H_GETFIELD:
-            findName = "findGetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
+        switch (find.argShape) {
+        case IndyHandleArgShape::NameFieldType:
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                     codegen::cStringLiteral(name) + "), " + var + "_field_type";
             break;
-        case Opcodes::H_GETSTATIC:
-            findName = "findStaticGetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
-            args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                    codegen::cStringLiteral(name) + "), " + var + "_field_type";
-            break;
-        case Opcodes::H_PUTFIELD:
-            findName = "findSetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
-            args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                    codegen::cStringLiteral(name) + "), " + var + "_field_type";
-            break;
-        case Opcodes::H_PUTSTATIC:
-            findName = "findStaticSetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
-            args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                    codegen::cStringLiteral(name) + "), " + var + "_field_type";
-            break;
-        case Opcodes::H_INVOKESTATIC:
-            findName = "findStatic";
+        case IndyHandleArgShape::NameType:
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                     codegen::cStringLiteral(name) + "), " + var + "_type";
             break;
-        case Opcodes::H_INVOKESPECIAL:
-            findName = "findSpecial";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
+        case IndyHandleArgShape::NameTypeOwner:
             args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                     codegen::cStringLiteral(name) + "), " + var + "_type, _mj2x_regc_owner_class";
             break;
-        case Opcodes::H_NEWINVOKESPECIAL:
-            findName = "findConstructor";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;";
+        case IndyHandleArgShape::TypeOnly:
             args += ", " + var + "_type";
-            break;
-        case Opcodes::H_INVOKEINTERFACE:
-        case Opcodes::H_INVOKEVIRTUAL:
-        default:
-            args += ", (*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                    codegen::cStringLiteral(name) + "), " + var + "_type";
             break;
         }
         out.emitLine("jmethodID " + var + "_find_mid = (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, " + var + "_lookup_cls, " +
-                     codegen::cStringLiteral(findName) + ", " + codegen::cStringLiteral(findDesc) +
+                     codegen::cStringLiteral(find.findName) + ", " + codegen::cStringLiteral(find.findDesc) +
                      ");");
         out.emitLine(var + " = (jobject)(*_mj2x_regc_env)->CallObjectMethod(_mj2x_regc_env, _mj2x_indy_lookup, " + var + "_find_mid, " + args + ");");
         out.emitLine("if (_mj2x_regc_exception_check()) { return NULL; }");
@@ -1058,61 +1016,78 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
         out.emitLine("jobject " + var + " = NULL;");
         return;
     }
-    if (const auto* p = value.as<std::string>()) {
-        if (stringEncryptPool != nullptr) {
-            // --strings-encrypt：bsm 字符串常量走密文缓冲（JNI_OnLoad 批量解密，
-            // 解密后即合法 C 串，NewStringUTF 直接消费），不内联明文字面量。
-            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                         stringEncryptPool->encryptedLiteralBuffer(*p) + ");");
+    // #1027 B3：分类判定单源 = classifyIndyBsmArg（原 if 链公共判定序收敛）。
+    switch (classifyIndyBsmArg(value)) {
+    case IndyBsmArgKind::String:
+        if (const auto* p = value.as<std::string>()) {
+            if (stringEncryptPool != nullptr) {
+                // --strings-encrypt：bsm 字符串常量走密文缓冲（JNI_OnLoad 批量解密，
+                // 解密后即合法 C 串，NewStringUTF 直接消费），不内联明文字面量。
+                out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                             stringEncryptPool->encryptedLiteralBuffer(*p) + ");");
+            }
+            else {
+                out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                             codegen::cStringLiteral(*p) + ");");
+            }
         }
-        else {
-            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                         codegen::cStringLiteral(*p) + ");");
+        else if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
+            if (stringEncryptPool != nullptr) {
+                const auto text = p->to_std_string();
+                out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                             stringEncryptPool->encryptedLiteralBuffer(text) + ");");
+            }
+            else {
+                out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
+                             codegen::cStringLiteral(p->to_std_string()) + ");");
+            }
         }
-    }
-    else if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
-        if (stringEncryptPool != nullptr) {
-            const auto text = p->to_std_string();
-            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                         stringEncryptPool->encryptedLiteralBuffer(text) + ");");
+        break;
+    case IndyBsmArgKind::MethodType:
+    case IndyBsmArgKind::Class:
+        if (const auto* p = value.as<Type>()) {
+            if (p->getSort() == Type::METHOD) {
+                emitIndyMethodType(out, var, indyMethodTypeDescriptorString(*p));
+            }
+            else {
+                emitIndyClassObject(out, var, indyTypeDescriptorString(*p));
+            }
         }
-        else {
-            out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                         codegen::cStringLiteral(p->to_std_string()) + ");");
+        break;
+    case IndyBsmArgKind::Handle:
+        if (const auto* p = value.as<jbytecode::core::Handle>()) {
+            emitIndyHandle(out, var, *p);
         }
-    }
-    else if (const auto* p = value.as<Type>()) {
-        if (p->getSort() == Type::METHOD) {
-            emitIndyMethodType(out, var, indyMethodTypeDescriptorString(*p));
+        break;
+    case IndyBsmArgKind::Int:
+        if (const auto* p = value.as<ca::i32>()) {
+            out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_i32((int32_t)(" +
+                         std::to_string(*p) + "));");
         }
-        else {
-            emitIndyClassObject(out, var, indyTypeDescriptorString(*p));
+        break;
+    case IndyBsmArgKind::Long:
+        if (const auto* p = value.as<ca::i64>()) {
+            out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_i64((int64_t)(" +
+                         std::to_string(*p) + "LL));");
         }
-    }
-    else if (const auto* p = value.as<jbytecode::core::Handle>()) {
-        emitIndyHandle(out, var, *p);
-    }
-    else if (const auto* p = value.as<ca::i32>()) {
-        out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_i32((int32_t)(" +
-                     std::to_string(*p) + "));");
-    }
-    else if (const auto* p = value.as<ca::i64>()) {
-        out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_i64((int64_t)(" +
-                     std::to_string(*p) + "LL));");
-    }
-    else if (const auto* p = value.as<float>()) {
-        std::ostringstream text;
-        text << std::setprecision(9) << *p << "f";
-        out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_f32((float)(" + text.str() +
-                     "));");
-    }
-    else if (const auto* p = value.as<double>()) {
-        std::ostringstream text;
-        text << std::setprecision(17) << *p;
-        out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_f64((double)(" + text.str() +
-                     "));");
-    }
-    else {
+        break;
+    case IndyBsmArgKind::Float:
+        if (const auto* p = value.as<float>()) {
+            std::ostringstream text;
+            text << std::setprecision(9) << *p << "f";
+            out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_f32((float)(" + text.str() +
+                         "));");
+        }
+        break;
+    case IndyBsmArgKind::Double:
+        if (const auto* p = value.as<double>()) {
+            std::ostringstream text;
+            text << std::setprecision(17) << *p;
+            out.emitLine("jobject " + var + " = (jobject)_mj2x_regc_box_f64((double)(" + text.str() +
+                         "));");
+        }
+        break;
+    case IndyBsmArgKind::Null:
         out.emitLine("jobject " + var + " = NULL;");
     }
 }
@@ -1168,51 +1143,47 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
                 src.emitLine("jmethodID _mj2x_indy_bsm_mid = (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, _mj2x_indy_bsm_cls, " +
                              codegen::cStringLiteral(bsmName) + ", " +
                              codegen::cStringLiteral(bsmDesc) + ");");
-                const auto bsmArgTypes =
-                    Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
                 std::vector<std::string> bsmExprs;
-                size_t                   bsmArgIndex = 0;
-                for (size_t i = 0; i < bsmArgTypes.size(); ++i) {
-                    if (i == 0) {
+                // #1027 B3：槽位判定单源 = planIndyBsmSlots（三后端原游走逐分支
+                // 同构）。RegC 物化按 Any 动态类型，无需形参 Type。
+                const auto bsmSlots = planIndyBsmSlots(bsmDesc, site.bsmArgs.size());
+                for (const auto& slot : bsmSlots) {
+                    switch (slot.kind) {
+                    case IndyBsmSlotKind::Lookup:
                         bsmExprs.push_back("_mj2x_indy_lookup");
-                        continue;
-                    }
-                    if (i == 1) {
+                        break;
+                    case IndyBsmSlotKind::SiteName:
                         bsmExprs.push_back("_mj2x_indy_name");
-                        continue;
-                    }
-                    if (i == 2) {
+                        break;
+                    case IndyBsmSlotKind::SiteType:
                         bsmExprs.push_back("_mj2x_indy_type");
-                        continue;
-                    }
-                    const auto& formal = bsmArgTypes[i];
-                    const bool  isTrailingObjectArray =
-                        i + 1 == bsmArgTypes.size() && formal.getSort() == Type::ARRAY &&
-                        indyTypeDescriptorString(formal) == "[Ljava/lang/Object;";
-                    if (isTrailingObjectArray) {
-                        const size_t remaining =
-                            bsmArgIndex < site.bsmArgs.size() ? site.bsmArgs.size() - bsmArgIndex : 0;
+                        break;
+                    case IndyBsmSlotKind::Varargs: {
+                        const size_t remaining = slot.varargCount;
                         src.emitLine("jclass _mj2x_indy_obj_cls = (jclass)_mj2x_regc_class_literal(_mj2x_regc_current_context(), \"java/lang/Object\");");
                         src.emitLine("jobjectArray _mj2x_indy_bsm_varargs = (jobjectArray)(*_mj2x_regc_env)->NewObjectArray(_mj2x_regc_env, " +
                                      std::to_string(remaining) + ", _mj2x_indy_obj_cls, NULL);");
                         for (size_t j = 0; j < remaining; ++j) {
                             const std::string argVar = "_mj2x_indy_bsm_vararg_" + std::to_string(j);
-                            emitIndyBsmArg(src, argVar, site.bsmArgs[bsmArgIndex + j], false, stringEncryptPool);
+                            emitIndyBsmArg(src, argVar, site.bsmArgs[slot.bsmArgIndex + j], false, stringEncryptPool);
                             src.emitLine("(*_mj2x_regc_env)->SetObjectArrayElement(_mj2x_regc_env, _mj2x_indy_bsm_varargs, " + std::to_string(j) + ", " +
                                          argVar + ");");
                         }
-                        bsmArgIndex = site.bsmArgs.size();
                         bsmExprs.push_back("_mj2x_indy_bsm_varargs");
-                        continue;
+                        break;
                     }
-                    if (bsmArgIndex >= site.bsmArgs.size()) {
+                    case IndyBsmSlotKind::Null:
                         bsmExprs.push_back("NULL");
-                        continue;
+                        break;
+                    case IndyBsmSlotKind::StaticArg: {
+                        const std::string argVar =
+                            "_mj2x_indy_bsm_arg_" + std::to_string(slot.bsmArgIndex);
+                        emitIndyBsmArg(src, argVar, site.bsmArgs[slot.bsmArgIndex], false,
+                                       stringEncryptPool);
+                        bsmExprs.push_back(argVar);
+                        break;
                     }
-                    const std::string argVar = "_mj2x_indy_bsm_arg_" + std::to_string(bsmArgIndex);
-                    emitIndyBsmArg(src, argVar, site.bsmArgs[bsmArgIndex], false, stringEncryptPool);
-                    bsmExprs.push_back(argVar);
-                    ++bsmArgIndex;
+                    }
                 }
                 std::string bsmCall = "(*_mj2x_regc_env)->CallStaticObjectMethod(_mj2x_regc_env, _mj2x_indy_bsm_cls, _mj2x_indy_bsm_mid";
                 for (const auto& expr : bsmExprs) {

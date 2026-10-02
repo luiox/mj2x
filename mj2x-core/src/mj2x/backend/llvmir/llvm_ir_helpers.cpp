@@ -2,6 +2,8 @@
 /// @brief LLVM IR 后端共享 JNI helper 发射：异常/对象/字段/数组/调用/monitor 辅助函数。
 #include "llvm_ir_internal.hpp"
 
+#include "mj2x/backend/indy_bootstrap_plan.hpp"
+
 #include <cmath>
 #include <iomanip>
 
@@ -243,43 +245,63 @@ std::string indyBsmArgExpr(const std::string& siteTag, const ca::core::Any& valu
                            std::ostringstream& consts, size_t seq)
 {
     const std::string g = "_mj2x_llvm_indy_s" + siteTag + "_arg_" + std::to_string(seq);
-    if (const auto* p = value.as<std::string>()) {
-        consts << llvmConstantString(g + "_str", *p);
-        return "call ptr @mj2x_llvm_string_const(ptr %env, ptr @" + g + "_str)";
-    }
-    if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
-        consts << llvmConstantString(g + "_str", p->to_std_string());
-        return "call ptr @mj2x_llvm_string_const(ptr %env, ptr @" + g + "_str)";
-    }
-    if (const auto* p = value.as<Type>()) {
-        consts << llvmConstantString(g + "_desc", indyTypeText(*p));
-        if (p->getSort() == Type::METHOD) {
-            return "call ptr @mj2x_llvm_indy_method_type(ptr %env, ptr %owner, ptr @" + g +
-                   "_desc)";
+    // #1027 B3：分类判定单源 = classifyIndyBsmArg（原 if 链公共判定序收敛）。
+    switch (classifyIndyBsmArg(value)) {
+    case IndyBsmArgKind::String:
+        if (const auto* p = value.as<std::string>()) {
+            consts << llvmConstantString(g + "_str", *p);
+            return "call ptr @mj2x_llvm_string_const(ptr %env, ptr @" + g + "_str)";
         }
-        return "call ptr @mj2x_llvm_indy_class_object(ptr %env, ptr @" + g + "_desc)";
-    }
-    if (const auto* p = value.as<jbytecode::core::Handle>()) {
-        consts << llvmConstantString(g + "_owner", p->getOwner().to_std_string());
-        consts << llvmConstantString(g + "_name", p->getName().to_std_string());
-        consts << llvmConstantString(g + "_desc", p->getDesc().to_std_string());
-        return "call ptr @mj2x_llvm_indy_handle(ptr %env, ptr %lookup2, ptr %owner, i32 " +
-               std::to_string(p->getTag()) + ", ptr @" + g + "_owner, ptr @" + g +
-               "_name, ptr @" + g + "_desc)";
-    }
-    if (const auto* p = value.as<ca::i32>()) {
-        return "call ptr @mj2x_llvm_box_int(ptr %env, i32 " + std::to_string(*p) + ")";
-    }
-    if (const auto* p = value.as<ca::i64>()) {
-        return "call ptr @mj2x_llvm_box_long(ptr %env, i64 " + std::to_string(*p) + ")";
-    }
-    if (const auto* p = value.as<float>()) {
-        return "call ptr @mj2x_llvm_box_float(ptr %env, float " + llvmFloatLiteral(*p, true) +
-               ")";
-    }
-    if (const auto* p = value.as<double>()) {
-        return "call ptr @mj2x_llvm_box_double(ptr %env, double " + llvmFloatLiteral(*p, false) +
-               ")";
+        if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
+            consts << llvmConstantString(g + "_str", p->to_std_string());
+            return "call ptr @mj2x_llvm_string_const(ptr %env, ptr @" + g + "_str)";
+        }
+        break;
+    case IndyBsmArgKind::MethodType:
+    case IndyBsmArgKind::Class:
+        if (const auto* p = value.as<Type>()) {
+            consts << llvmConstantString(g + "_desc", indyTypeText(*p));
+            if (p->getSort() == Type::METHOD) {
+                return "call ptr @mj2x_llvm_indy_method_type(ptr %env, ptr %owner, ptr @" + g +
+                       "_desc)";
+            }
+            return "call ptr @mj2x_llvm_indy_class_object(ptr %env, ptr @" + g + "_desc)";
+        }
+        break;
+    case IndyBsmArgKind::Handle:
+        if (const auto* p = value.as<jbytecode::core::Handle>()) {
+            consts << llvmConstantString(g + "_owner", p->getOwner().to_std_string());
+            consts << llvmConstantString(g + "_name", p->getName().to_std_string());
+            consts << llvmConstantString(g + "_desc", p->getDesc().to_std_string());
+            return "call ptr @mj2x_llvm_indy_handle(ptr %env, ptr %lookup2, ptr %owner, i32 " +
+                   std::to_string(p->getTag()) + ", ptr @" + g + "_owner, ptr @" + g +
+                   "_name, ptr @" + g + "_desc)";
+        }
+        break;
+    case IndyBsmArgKind::Int:
+        if (const auto* p = value.as<ca::i32>()) {
+            return "call ptr @mj2x_llvm_box_int(ptr %env, i32 " + std::to_string(*p) + ")";
+        }
+        break;
+    case IndyBsmArgKind::Long:
+        if (const auto* p = value.as<ca::i64>()) {
+            return "call ptr @mj2x_llvm_box_long(ptr %env, i64 " + std::to_string(*p) + ")";
+        }
+        break;
+    case IndyBsmArgKind::Float:
+        if (const auto* p = value.as<float>()) {
+            return "call ptr @mj2x_llvm_box_float(ptr %env, float " + llvmFloatLiteral(*p, true) +
+                   ")";
+        }
+        break;
+    case IndyBsmArgKind::Double:
+        if (const auto* p = value.as<double>()) {
+            return "call ptr @mj2x_llvm_box_double(ptr %env, double " + llvmFloatLiteral(*p, false) +
+                   ")";
+        }
+        break;
+    case IndyBsmArgKind::Null:
+        break;
     }
     return "";   // 未知形态 → null 常量
 }
@@ -487,43 +509,38 @@ std::string emitIndyBootstrapFunction(size_t index, const RegFunction::InvokeDyn
             << siteTag << "_bsm_owner)\n"
                "  %bsmmid = call ptr %getsm(ptr %env, ptr %bsmcls, ptr @_mj2x_llvm_indy_s"
             << siteTag << "_bsm_name, ptr @_mj2x_llvm_indy_s" << siteTag << "_bsm_desc)\n";
-        const auto bsmArgTypes =
-            Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
-        const size_t formalCount = bsmArgTypes.size();
+        // #1027 B3：槽位判定单源 = planIndyBsmSlots（三后端原游走逐分支同构）。
+        // 槽数 = 形参数（槽 ↔ 形参一一对应，alloca 元素数不变）。
+        const auto   bsmSlots    = planIndyBsmSlots(bsmDesc, site.bsmArgs.size());
+        const size_t formalCount = bsmSlots.size();
         out << "  %jv2 = alloca [" << formalCount << " x { i64 }]\n";
-        size_t bsmArgIndex = 0;
-        for (size_t i = 0; i < bsmArgTypes.size(); ++i) {
+        for (size_t i = 0; i < bsmSlots.size(); ++i) {
+            const auto& bsmSlot = bsmSlots[i];
             const std::string slot = "  %u" + std::to_string(i) +
                                      " = getelementptr [" + std::to_string(formalCount) +
                                      " x { i64 }], ptr %jv2, i64 0, i64 " + std::to_string(i) +
                                      "\n";
-            if (i == 0) {
+            switch (bsmSlot.kind) {
+            case IndyBsmSlotKind::Lookup:
                 out << slot << "  %lookup3 = load ptr, ptr %lookup_slot\n"
                     << "  store ptr %lookup3, ptr %u" << i << "\n";
-                continue;
-            }
-            if (i == 1) {
+                break;
+            case IndyBsmSlotKind::SiteName:
                 out << slot << "  store ptr %name, ptr %u" << i << "\n";
-                continue;
-            }
-            if (i == 2) {
+                break;
+            case IndyBsmSlotKind::SiteType:
                 out << slot << "  store ptr %type, ptr %u" << i << "\n";
-                continue;
-            }
-            const auto& formal = bsmArgTypes[i];
-            const bool  isTrailingObjectArray =
-                i + 1 == bsmArgTypes.size() && formal.getSort() == Type::ARRAY &&
-                indyTypeText(formal) == "[Ljava/lang/Object;";
-            if (isTrailingObjectArray) {
-                const size_t remaining =
-                    bsmArgIndex < site.bsmArgs.size() ? site.bsmArgs.size() - bsmArgIndex : 0;
+                break;
+            case IndyBsmSlotKind::Varargs: {
+                const size_t remaining = bsmSlot.varargCount;
                 out << "  %objcls = call ptr @mj2x_llvm_class_const(ptr %env, ptr "
                        "@_mj2x_llvm_indy_java_lang_Object)\n";
                 out << "  %varargs = call ptr @mj2x_llvm_new_object_array(ptr %env, i32 "
                     << remaining << ", ptr %objcls)\n";
                 for (size_t j = 0; j < remaining; ++j) {
-                    const std::string expr = indyBsmArgExpr(siteTag, site.bsmArgs[bsmArgIndex + j],
-                                                            consts, bsmArgIndex + j);
+                    const std::string expr =
+                        indyBsmArgExpr(siteTag, site.bsmArgs[bsmSlot.bsmArgIndex + j], consts,
+                                       bsmSlot.bsmArgIndex + j);
                     if (expr.empty()) {
                         out << "  call void @mj2x_llvm_set_object_array_element(ptr %env, ptr "
                                "%varargs, i32 " << j << ", ptr null)\n";
@@ -535,25 +552,26 @@ std::string emitIndyBootstrapFunction(size_t index, const RegFunction::InvokeDyn
                                "%varargs, i32 " << j << ", ptr " << argVar << ")\n";
                     }
                 }
-                bsmArgIndex = site.bsmArgs.size();
                 out << slot << "  store ptr %varargs, ptr %u" << i << "\n";
-                continue;
+                break;
             }
-            if (bsmArgIndex >= site.bsmArgs.size()) {
+            case IndyBsmSlotKind::Null:
                 out << slot << "  store ptr null, ptr %u" << i << "\n";
-                continue;
+                break;
+            case IndyBsmSlotKind::StaticArg: {
+                const std::string expr = indyBsmArgExpr(
+                    siteTag, site.bsmArgs[bsmSlot.bsmArgIndex], consts, bsmSlot.bsmArgIndex);
+                if (expr.empty()) {
+                    out << slot << "  store ptr null, ptr %u" << i << "\n";
+                }
+                else {
+                    const std::string argVar = "%bsmarg_" + std::to_string(bsmSlot.bsmArgIndex);
+                    out << "  " << argVar << " = " << expr << "\n";
+                    out << slot << "  store ptr " << argVar << ", ptr %u" << i << "\n";
+                }
+                break;
             }
-            const std::string expr =
-                indyBsmArgExpr(siteTag, site.bsmArgs[bsmArgIndex], consts, bsmArgIndex);
-            if (expr.empty()) {
-                out << slot << "  store ptr null, ptr %u" << i << "\n";
             }
-            else {
-                const std::string argVar = "%bsmarg_" + std::to_string(bsmArgIndex);
-                out << "  " << argVar << " = " << expr << "\n";
-                out << slot << "  store ptr " << argVar << ", ptr %u" << i << "\n";
-            }
-            ++bsmArgIndex;
         }
         out << "  %callsite = call ptr @mj2x_llvm_indy_call_static_mid(ptr %env, ptr %bsmcls, "
                "ptr %bsmmid, ptr "

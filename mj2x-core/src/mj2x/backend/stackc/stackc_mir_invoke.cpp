@@ -5,6 +5,7 @@
 ///          主体块 indent 到 2 层，嵌套块用 indent()/dedent() 管理。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "libca/str/format.hpp"
 
 #include <iomanip>
@@ -346,73 +347,40 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
         out.appendLineStart("jclass ").append(varName).append("_owner_cls = (jclass)").append(
             trackLocalRefExpr("_mj2x_find_class(env, _mj2x_owner_class, \"" + owner + "\")")).append(";");
         out.newLine();
-        if (tag == Opcodes::H_GETFIELD || tag == Opcodes::H_GETSTATIC ||
-            tag == Opcodes::H_PUTFIELD || tag == Opcodes::H_PUTSTATIC) {
+        // #1027 B3：tag→find* 形态单源（原 StackC/RegC 两份同式 switch 收敛到
+        // indyHandleFindFor；未知 tag → findVirtual 默认形态）。
+        const IndyHandleFind find = indyHandleFindFor(tag);
+        if (find.argShape == IndyHandleArgShape::NameFieldType) {
             emitStringObject(varName + "_name", name);
             emitClassObjectForDescriptor(varName + "_field_type", desc);
         }
         else {
-            if (tag != Opcodes::H_NEWINVOKESPECIAL) {
+            if (find.emitName) {
                 emitStringObject(varName + "_name", name);
             }
             emitMethodType(varName + "_type", desc);
         }
 
-        const char* findName = "findVirtual";
-        const char* findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
-                               "Ljava/lang/invoke/MethodHandle;";
-        std::string args     = varName + "_owner_cls";
-        switch (tag) {
-        case Opcodes::H_GETFIELD:
-            findName = "findGetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+        std::string args = varName + "_owner_cls";
+        switch (find.argShape) {
+        case IndyHandleArgShape::NameFieldType:
             args += ", " + varName + "_name, " + varName + "_field_type";
             break;
-        case Opcodes::H_GETSTATIC:
-            findName = "findStaticGetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
-            args += ", " + varName + "_name, " + varName + "_field_type";
-            break;
-        case Opcodes::H_PUTFIELD:
-            findName = "findSetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
-            args += ", " + varName + "_name, " + varName + "_field_type";
-            break;
-        case Opcodes::H_PUTSTATIC:
-            findName = "findStaticSetter";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
-            args += ", " + varName + "_name, " + varName + "_field_type";
-            break;
-        case Opcodes::H_INVOKESTATIC:
-            findName = "findStatic";
+        case IndyHandleArgShape::NameType:
             args += ", " + varName + "_name, " + varName + "_type";
             break;
-        case Opcodes::H_INVOKESPECIAL:
-            findName = "findSpecial";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/"
-                       "lang/Class;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+        case IndyHandleArgShape::NameTypeOwner:
             args += ", " + varName + "_name, " + varName + "_type, _mj2x_owner_class";
             break;
-        case Opcodes::H_NEWINVOKESPECIAL:
-            findName = "findConstructor";
-            findDesc = "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
-                       "Ljava/lang/invoke/MethodHandle;";
+        case IndyHandleArgShape::TypeOnly:
             args += ", " + varName + "_type";
             break;
-        case Opcodes::H_INVOKEINTERFACE:
-        case Opcodes::H_INVOKEVIRTUAL:
-        default: args += ", " + varName + "_name, " + varName + "_type"; break;
         }
         emitCLine(out,
                   3,
                   "jmethodID " + varName + "_find_mid = (*env)->GetMethodID(env, " + varName +
-                      "_lookup_cls, " + cStringLiteral(findName) + ", " + cStringLiteral(findDesc) +
-                      ");");
+                      "_lookup_cls, " + cStringLiteral(find.findName) + ", " +
+                      cStringLiteral(find.findDesc) + ");");
         out.appendLineStart(varName).append(" = ").append(
             trackLocalRefExpr("(*env)->CallObjectMethod(env, _mj2x_indy_lookup, " + varName +
                               "_find_mid, " + args + ")")).append(";");
@@ -423,39 +391,57 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
     };
 
     auto emitAnyAsObject = [&](const std::string& varName, const ca::core::Any& value) {
-        if (auto* p = value.as<std::string>()) {
-            emitStringObject(varName, *p);
-        }
-        else if (auto* p = value.as<ca::str::Utf8StringRef>()) {
-            emitStringObject(varName, p->to_std_string());
-        }
-        else if (auto* p = value.as<Type>()) {
-            if (p->getSort() == Type::METHOD) {
-                emitMethodType(varName, methodTypeDescriptorString(*p));
+        // #1027 B3：分类判定单源 = classifyIndyBsmArg（原 if 链公共判定序收敛）。
+        switch (classifyIndyBsmArg(value)) {
+        case IndyBsmArgKind::String:
+            if (auto* p = value.as<std::string>()) {
+                emitStringObject(varName, *p);
             }
-            else {
-                emitClassObjectForDescriptor(varName, typeDescriptorString(*p));
+            else if (auto* p = value.as<ca::str::Utf8StringRef>()) {
+                emitStringObject(varName, p->to_std_string());
             }
-        }
-        else if (auto* p = value.as<Handle>()) {
-            emitMethodHandle(varName, *p);
-        }
-        else if (auto* p = value.as<ca::i32>()) {
-            emitBoxPrimitiveExpr(varName, PrimitiveKind::INT, "(jint)" + std::to_string(*p));
-        }
-        else if (auto* p = value.as<ca::i64>()) {
-            emitBoxPrimitiveExpr(
-                varName, PrimitiveKind::LONG, "(jlong)" + std::to_string(*p) + "LL");
-        }
-        else if (auto* p = value.as<float>()) {
-            emitBoxPrimitiveExpr(varName, PrimitiveKind::FLOAT, formatFloatLiteral(*p, 9) + "f");
-        }
-        else if (auto* p = value.as<double>()) {
-            emitBoxPrimitiveExpr(varName, PrimitiveKind::DOUBLE, formatFloatLiteral(*p, 17));
-        }
-        else {
+            break;
+        case IndyBsmArgKind::MethodType:
+        case IndyBsmArgKind::Class:
+            if (auto* p = value.as<Type>()) {
+                if (p->getSort() == Type::METHOD) {
+                    emitMethodType(varName, methodTypeDescriptorString(*p));
+                }
+                else {
+                    emitClassObjectForDescriptor(varName, typeDescriptorString(*p));
+                }
+            }
+            break;
+        case IndyBsmArgKind::Handle:
+            if (auto* p = value.as<Handle>()) {
+                emitMethodHandle(varName, *p);
+            }
+            break;
+        case IndyBsmArgKind::Int:
+            if (auto* p = value.as<ca::i32>()) {
+                emitBoxPrimitiveExpr(varName, PrimitiveKind::INT, "(jint)" + std::to_string(*p));
+            }
+            break;
+        case IndyBsmArgKind::Long:
+            if (auto* p = value.as<ca::i64>()) {
+                emitBoxPrimitiveExpr(
+                    varName, PrimitiveKind::LONG, "(jlong)" + std::to_string(*p) + "LL");
+            }
+            break;
+        case IndyBsmArgKind::Float:
+            if (auto* p = value.as<float>()) {
+                emitBoxPrimitiveExpr(varName, PrimitiveKind::FLOAT, formatFloatLiteral(*p, 9) + "f");
+            }
+            break;
+        case IndyBsmArgKind::Double:
+            if (auto* p = value.as<double>()) {
+                emitBoxPrimitiveExpr(varName, PrimitiveKind::DOUBLE, formatFloatLiteral(*p, 17));
+            }
+            break;
+        case IndyBsmArgKind::Null:
             out.appendLineStart("jobject ").append(varName).append(" = NULL;");
             out.newLine();
+            break;
         }
     };
 
@@ -616,49 +602,48 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
                   cStringLiteral(bsmName) + ", " + cStringLiteral(bsmDesc) + ");");
 
     std::vector<std::string> bsmExprs;
-    size_t                   bsmArgIndex = 0;
-    for (size_t i = 0; i < bsmArgTypes.size(); ++i) {
-        if (i == 0) {
+    // #1027 B3：槽位判定单源 = planIndyBsmSlots（三后端原游走逐分支同构）。
+    // 形参 Type 仍取自 bsmArgTypes——StaticArg 物化需要原语宽度（发射面契约）。
+    const auto bsmSlots = planIndyBsmSlots(bsmDesc, node->bsmArgs.size());
+    for (size_t i = 0; i < bsmSlots.size(); ++i) {
+        const auto& slot = bsmSlots[i];
+        switch (slot.kind) {
+        case IndyBsmSlotKind::Lookup:
             bsmExprs.push_back("_mj2x_indy_lookup");
-            continue;
-        }
-        if (i == 1) {
+            break;
+        case IndyBsmSlotKind::SiteName:
             bsmExprs.push_back("_mj2x_indy_name");
-            continue;
-        }
-        if (i == 2) {
+            break;
+        case IndyBsmSlotKind::SiteType:
             bsmExprs.push_back("_mj2x_indy_type");
-            continue;
-        }
-        const auto& formal                = bsmArgTypes[i];
-        const bool  isTrailingObjectArray = i + 1 == bsmArgTypes.size() &&
-                                           formal.getSort() == Type::ARRAY &&
-                                           typeDescriptorString(formal) == "[Ljava/lang/Object;";
-        if (isTrailingObjectArray) {
-            const size_t remaining =
-                bsmArgIndex < node->bsmArgs.size() ? node->bsmArgs.size() - bsmArgIndex : 0;
+            break;
+        case IndyBsmSlotKind::Varargs: {
+            const size_t remaining = slot.varargCount;
             out.appendLineStart("jobjectArray _mj2x_indy_bsm_varargs = (jobjectArray)").append(
                 trackLocalRefExpr("(*env)->NewObjectArray(env, " + std::to_string(remaining) +
                                   ", _mj2x_indy_object_cls, NULL)")).append(";");
             out.newLine();
             for (size_t j = 0; j < remaining; ++j) {
                 const std::string argVar = "_mj2x_indy_bsm_vararg_" + std::to_string(j);
-                emitAnyAsObject(argVar, node->bsmArgs[bsmArgIndex + j]);
+                emitAnyAsObject(argVar, node->bsmArgs[slot.bsmArgIndex + j]);
                 out.appendLineStart("(*env)->SetObjectArrayElement(env, _mj2x_indy_bsm_varargs, ")
                     .appendInt(static_cast<int64_t>(j)).append(", ").append(argVar).append(");");
                 out.newLine();
             }
-            bsmArgIndex = node->bsmArgs.size();
             bsmExprs.push_back("_mj2x_indy_bsm_varargs");
-            continue;
+            break;
         }
-        if (bsmArgIndex >= node->bsmArgs.size()) {
+        case IndyBsmSlotKind::Null:
             bsmExprs.push_back("NULL");
-            continue;
+            break;
+        case IndyBsmSlotKind::StaticArg: {
+            const auto&     formal = bsmArgTypes[i];   // 槽 ↔ 形参一一对应
+            const std::string argVar =
+                "_mj2x_indy_bsm_arg_" + std::to_string(slot.bsmArgIndex);
+            bsmExprs.push_back(emitAnyForFormal(argVar, formal, node->bsmArgs[slot.bsmArgIndex]));
+            break;
         }
-        const std::string argVar = "_mj2x_indy_bsm_arg_" + std::to_string(bsmArgIndex);
-        bsmExprs.push_back(emitAnyForFormal(argVar, formal, node->bsmArgs[bsmArgIndex]));
-        ++bsmArgIndex;
+        }
     }
 
     out.appendLineStart("jobject _mj2x_indy_callsite = ").append(
