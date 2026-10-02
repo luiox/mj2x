@@ -41,7 +41,10 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
                                        int maxLocals)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
-    auto&                               arena = Type::staticArena();
+    // #921 staticArena 退役：Type::staticArena() 已删除。测试夹具的节点名/描述符
+    // 借用须活过本 helper 返回——用本测试文件私有静态池（测试专属，非产物路径）。
+    static ca::str::Utf8StringArena     testArena;
+    auto&                               arena = testArena;
     auto                                mn    = std::make_unique<MethodNode>(access,
                                            arena.intern(name.c_str()),
                                            arena.intern(desc.c_str()),
@@ -2383,7 +2386,10 @@ TEST(RegCLdcClassTest, LdcClassConstantEmitsFindClass)
 {
     std::string reason;
     // ()Ljava/lang/Class;：仅一条 ldc 类常量 + areturn。
-    auto& arena = Type::staticArena();
+    // #921 staticArena 退役：Type::staticArena() 已删除，改用测试文件私有静态池
+    //（LdcInsnNode 的 desc 借用须活过 emitRegC 调用期）。
+    static ca::str::Utf8StringArena testArena;
+    auto& arena = testArena;
     auto result = emitRegC(
         "classLiteral",
         "()Ljava/lang/Class;",

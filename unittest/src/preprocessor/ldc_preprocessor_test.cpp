@@ -81,10 +81,13 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
 {
     std::vector<std::string> stack;
     const std::string        methodDesc = m->desc.to_std_string();
+    // #921 staticArena 退役：无参 getDescriptor() 已删除，检视统一走注入版
+    //（函数级局部 arena，仅瞬时转串）。
+    ca::str::Utf8StringArena scratch;
     for (const auto&         arg :
          Type::getArgumentTypes(ca::str::Utf8StringRef::from_string_view(methodDesc))) {
         // 本测试不用 long/double 形参，category 差异不影响判据。
-        stack.push_back(arg.getDescriptor().to_std_string());
+        stack.push_back(arg.getDescriptor(scratch).to_std_string());
     }
 
     for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
@@ -121,10 +124,10 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
             for (int i = argCount - 1; i >= 0; --i) {
                 const std::string actual = stack.back();
                 stack.pop_back();
-                if (!descCompatible(args[static_cast<size_t>(i)].getDescriptor().to_std_string(),
+                if (!descCompatible(args[static_cast<size_t>(i)].getDescriptor(scratch).to_std_string(),
                                     actual)) {
                     reason = "arg mismatch at " + mi->name.to_std_string() + ": expected " +
-                             args[static_cast<size_t>(i)].getDescriptor().to_std_string() +
+                             args[static_cast<size_t>(i)].getDescriptor(scratch).to_std_string() +
                              " got " + actual;
                     return false;
                 }
@@ -137,7 +140,7 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
                     return false;
                 }
             }
-            const std::string retDesc = ret.getDescriptor().to_std_string();
+            const std::string retDesc = ret.getDescriptor(scratch).to_std_string();
             if (retDesc != "V") stack.push_back(retDesc);
         }
         else if (insn->getType() == AbstractInsnNode::JUMP_INSN) {
@@ -150,7 +153,7 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
                 const std::string mDesc = m->desc.to_std_string();
                 const auto ret = Type::getReturnType(
                     ca::str::Utf8StringRef::from_string_view(mDesc));
-                if (!descCompatible(ret.getDescriptor().to_std_string(), stack.back())) {
+                if (!descCompatible(ret.getDescriptor(scratch).to_std_string(), stack.back())) {
                     reason = "areturn type mismatch: " + stack.back();
                     return false;
                 }
