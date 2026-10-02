@@ -34,6 +34,9 @@ target("mj2x-cli-companion")
     set_default(false)
     add_deps("mj2x-cli")
 
+-- gtest 面随 with_tests 门控：默认配置不定义以下 test target、不拉 gtest（D15）。
+-- （mj2x-cli-companion 是 phony 桩、不涉 gtest，留在门外；仅被门内 target 依赖。）
+if has_config("with_tests") then
 target("mj2x_unittest")
     set_kind("binary")
     set_group("mj2x/test")
@@ -93,3 +96,4 @@ target("mj2x_integration_test")
         add_cxflags("/utf-8", {tools = "cl"})
         add_defines("_CRT_SECURE_NO_WARNINGS")
     end
+end
