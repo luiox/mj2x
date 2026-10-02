@@ -1,6 +1,7 @@
 #include "mj2x/backend/vmc4/vmc4_instance.hpp"
 
 #include "mj2x/core/native_lib_crypto.hpp"
+#include "libca/random/split_mix64.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -10,30 +11,12 @@ namespace mj2x {
 
 namespace {
 
-/// 确定性伪随机流（splitmix64）：同 seed 同序列，无未播种状态。
-class SplitMix64
-{
-public:
-    explicit SplitMix64(uint64_t seed)
-        : state_(seed)
-    {}
-
-    uint64_t next()
-    {
-        state_ += 0x9E3779B97F4A7C15ull;
-        uint64_t z = state_;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-        return z ^ (z >> 31);
-    }
-
-    /// [0, bound) 均匀分布（bound 非 2 幂时轻微偏差可接受——只影响映射的
-    /// 形状，不影响语义或可复现性）。
-    uint64_t nextBounded(uint64_t bound) { return next() % bound; }
-
-private:
-    uint64_t state_;
-};
+/// 确定性伪随机流（splitmix64）：单源 = ca::random::SplitMix64（libca 0.0.10
+/// canonical，#1027 A3 收敛；本文件原内联类删除）。别名保留调用点形态。
+/// next_bounded 对 bound==0 抛 invalid_argument（原实现为 UB 取模）；全部调用
+/// 点边界已核：shuffle 环 bound=i≥2，pickOpcode* 在 size==1 短路且 size==0
+/// 不可达（buildOpcodeBytes 每语义至少分配 canonical 字节）——分歧面不可达。
+using SplitMix64 = ca::random::SplitMix64;
 
 }   // namespace
 
@@ -154,7 +137,7 @@ void VmInstance::buildOpcodeBytes()
     std::vector<VmOpcode> shuffled(kAllOpcodes, kAllOpcodes + sizeof(kAllOpcodes) / sizeof(kAllOpcodes[0]));
     SplitMix64 rng(instanceSeed_ ^ 0xD1B54A32D192ED03ull);
     for (size_t i = shuffled.size(); i > 1; --i) {
-        const size_t j = static_cast<size_t>(rng.nextBounded(i));
+        const size_t j = static_cast<size_t>(rng.next_bounded(i));
         std::swap(shuffled[i - 1], shuffled[j]);
     }
     std::vector<uint8_t> canonicalByOp(256, 0);
@@ -171,7 +154,7 @@ void VmInstance::buildOpcodeBytes()
     for (size_t i = shuffled.size(); i < total; ++i) aliasBytes.push_back(static_cast<uint8_t>(i));
     SplitMix64 aliasRng(instanceSeed_ ^ 0xE7037ED1A0B428DBull);
     for (size_t i = aliasBytes.size(); i > 1; --i) {
-        const size_t j = static_cast<size_t>(aliasRng.nextBounded(i));
+        const size_t j = static_cast<size_t>(aliasRng.next_bounded(i));
         std::swap(aliasBytes[i - 1], aliasBytes[j]);
     }
     std::vector<std::vector<uint8_t>> aliasByOp(256);
@@ -203,7 +186,7 @@ uint8_t VmInstance::pickOpcodeByte(VmOpcode op, uint64_t nonce) const
     const auto& bytes = opcodeBytes_[static_cast<uint8_t>(op)];
     if (bytes.size() == 1) return bytes[0];
     SplitMix64 rng(nonce ^ instanceSeed_);
-    return bytes[static_cast<size_t>(rng.nextBounded(bytes.size()))];
+    return bytes[static_cast<size_t>(rng.next_bounded(bytes.size()))];
 }
 
 uint8_t VmInstance::variantPickOpcodeByte(VmOpcode op, uint64_t nonce, int variant) const
@@ -225,7 +208,7 @@ uint8_t VmInstance::variantPickOpcodeByte(VmOpcode op, uint64_t nonce, int varia
     const auto& bytes = opcodeBytes_[static_cast<uint8_t>(targetOp)];
     if (bytes.size() == 1) return bytes[0];
     SplitMix64 rng(nonce ^ instanceSeed_ ^ 0x4D595DF4D0F33173ull);
-    return bytes[static_cast<size_t>(rng.nextBounded(bytes.size()))];
+    return bytes[static_cast<size_t>(rng.next_bounded(bytes.size()))];
 }
 
 uint8_t VmInstance::unmapByte(uint8_t raw, int variant) const
@@ -274,7 +257,7 @@ void VmInstance::buildDriftVariants()
                        static_cast<uint64_t>(d) * 0x9E3779B97F4A7C15ull);
         std::vector<uint8_t> perm = base;
         for (size_t i = perm.size(); i > 1; --i) {
-            const size_t j = static_cast<size_t>(rng.nextBounded(i));
+            const size_t j = static_cast<size_t>(rng.next_bounded(i));
             std::swap(perm[i - 1], perm[j]);
         }
         variantPerm_[static_cast<size_t>(d)] = std::move(perm);
@@ -298,7 +281,7 @@ void VmInstance::buildCaseLabelPerms()
                        static_cast<uint64_t>(d) * 0x9E3779B97F4A7C15ull);
         std::vector<uint8_t> perm = base;
         for (size_t i = perm.size(); i > 1; --i) {
-            const size_t j = static_cast<size_t>(rng.nextBounded(i));
+            const size_t j = static_cast<size_t>(rng.next_bounded(i));
             std::swap(perm[i - 1], perm[j]);
         }
         caseLabelPerm_[static_cast<size_t>(d)] = std::move(perm);
@@ -344,7 +327,7 @@ void VmInstance::buildHandlerOrder()
     // 用独立种子段洗牌，避免与 opcode 映射的随机流耦合。
     SplitMix64 rng(instanceSeed_ ^ 0x9E3779B97F4A7C15ull);
     for (size_t i = handlerOrder_.size(); i > 1; --i) {
-        const size_t j = static_cast<size_t>(rng.nextBounded(i));
+        const size_t j = static_cast<size_t>(rng.next_bounded(i));
         std::swap(handlerOrder_[i - 1], handlerOrder_[j]);
     }
 }

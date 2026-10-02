@@ -16,26 +16,17 @@
 
 #include <cstdint>
 
+#include "libca/random/split_mix64.hpp"
+
 namespace mj2x {
 
-namespace detail {
-
-/// splitmix64：确定性雪崩混合（与 reg_transform_passes 内部实现一致的算法族）。
-inline std::uint64_t splitmix64Step(std::uint64_t x)
-{
-    x += 0x9E3779B97F4A7C15ull;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
-    return x ^ (x >> 31);
-}
-
-}   // namespace detail
-
 /// per-client 派生：clientId == 0 恒等；否则 splitmix64(baseSeed ^ clientId)。
+/// splitmix64 单源 = ca::random::SplitMix64（libca 0.0.10 canonical，#1027 A3
+/// 收敛；一次 next() = 黄金比例增量后终混合，与原本地实现逐位一致）。
 inline std::uint64_t deriveClientSeed(std::uint64_t baseSeed, std::uint64_t clientId)
 {
     if (clientId == 0) return baseSeed;
-    return detail::splitmix64Step(baseSeed ^ clientId);
+    return ca::random::SplitMix64(baseSeed ^ clientId).next();
 }
 
 }   // namespace mj2x

@@ -1,5 +1,7 @@
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
 
+#include "libca/random/split_mix64.hpp"
+
 #include <map>
 #include <memory>
 #include <set>
@@ -540,13 +542,11 @@ RegSuccessor makeDispatcherRoute(RegSuccessor                              succe
 }
 
 /// splitmix64 派生：确定性、雪崩好，用于随机 state 码与变体选择。
-/// 同 seed 同 index → 同值（可复现构建不变量）。
+/// 同 seed 同 index → 同值（可复现构建不变量）。单源 = ca::random::SplitMix64
+///（libca canonical，#1027 A3 收敛；单步 = 播种后一次 next()，逐位同原本地式）。
 uint64_t splitmix64(uint64_t x)
 {
-    x += 0x9E3779B97F4A7C15ull;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
-    return x ^ (x >> 31);
+    return ca::random::SplitMix64(x).next();
 }
 
 /// 派生非零 I32 state 码：splitmix64(seed, index) 低位；0 冲突时退 1。

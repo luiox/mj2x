@@ -3,6 +3,7 @@
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
+#include "libca/random/split_mix64.hpp"
 #include "libca/str/format.hpp"
 
 #include <algorithm>
@@ -1208,18 +1209,14 @@ void emitStateDispatcher(CSourceStream& out, const VmProgram& program,
 void emitBogusHandlers(CSourceStream& out, const VmInstance& instance, const std::string& tag)
 {
     if (instance.bogusHandlers() <= 0) return;
-    auto splitmix = [](uint64_t& x) {
-        x += 0x9E3779B97F4A7C15ull;
-        uint64_t z = x;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-        return z ^ (z >> 31);
-    };
+    // splitmix64 单源 = ca::random::SplitMix64（libca canonical，#1027 A3 收敛；
+    // 原本地 lambda 删除）。三步连续取值 = 原 splitmix(state) 连调三次。
     for (int i = 0; i < instance.bogusHandlers(); ++i) {
-        uint64_t state = instance.instanceSeed() ^ (static_cast<uint64_t>(i + 1) * 0xABCDEF0123456789ull);
-        const uint64_t a = splitmix(state);
-        const uint64_t b = splitmix(state);
-        const uint64_t c = splitmix(state);
+        ca::random::SplitMix64 rng(instance.instanceSeed() ^
+                                   (static_cast<uint64_t>(i + 1) * 0xABCDEF0123456789ull));
+        const uint64_t a = rng.next();
+        const uint64_t b = rng.next();
+        const uint64_t c = rng.next();
         out.add_func(format_std("static unsigned int mj2x_vm_bogus_{}_{}"
                                 "(mj2x_vm_slot* _slots, mj2x_vm_slot* _ret)", tag, i),
                      [&](CSourceStream& f) {
