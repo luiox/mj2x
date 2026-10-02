@@ -83,6 +83,25 @@ struct RegCIntrinsicDecision
     bool                          passReceiver = false;
 };
 
+/// @brief 内建 intrinsic 身份视图（#1027 B2 单源）：kEntries 的只读投影。
+///
+/// @details 权威表唯一在 regc_intrinsic_registry.cpp 的 kEntries（RegC 发射属
+/// 性 + LLVM 直调能力位 llvmDirect 一体）。llvm_intrinsic_registry 由此派生
+/// LLVM 类型映射文本，不再维护手工对齐副本——新增 intrinsic 只改本表。
+struct RegCIntrinsicIdentity
+{
+    const char*                   owner;
+    const char*                   name;
+    const char*                   desc;
+    const char*                   symbol;
+    RegCIntrinsicEmitKind         emitKind;
+    RegCIntrinsicNativeObjectKind nativeObjectKind;
+    bool                          llvmDirect;
+};
+
+/// @brief 内建表全量身份（kEntries 顺序，173 条；含 llvmDirect=false 条目）。
+std::vector<RegCIntrinsicIdentity> builtinIntrinsicTable();
+
 /// @brief Lookup table for RegC JDK intrinsics.
 ///
 /// @details

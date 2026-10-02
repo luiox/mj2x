@@ -1,62 +1,31 @@
 #include "llvm_intrinsic_registry.hpp"
 
+#include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
+
 #include <cstring>
+#include <deque>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace mj2x {
 
-namespace {
+// =============================================================================
+// #1027 B2 单源化：本文件原为 92 条 (owner,name,desc,symbol) 手工对齐副本 +
+// LLVM 类型文本。现改为从 RegC 权威表（builtinIntrinsicTable，含 llvmDirect
+// 能力位）机械派生——新增 intrinsic 只改 regc_intrinsic_registry.cpp 一处。
+//
+// 派生口径（与切换前手工表逐字对齐，mj2x_unittest 的
+// LlvmIntrinsicRegistryGoldenCross 以切换前全表为 golden 逐字段钉死）：
+//   - Math/RuntimeFunction 纯标量：I→i32, J→i64, F→float, D→double（表内无
+//     窄类型；Integer/Long 位操作 llvmDirect=false 不派生，保持 JNI 回退）。
+//   - 包装类/Random/Builder 共用 crt 形参口径：Z/B→i8, C/S→i16, I→i32,
+//     J→i64, F→float, D→double, L·[→ptr；V 在返回位 → 空。
+//   - declareText = "declare <ret> @<symbol>(<args>)"（Random 前置隐式状态
+//     ptr；Builder 无 declareText 字段）。
+// =============================================================================
 
-/// @brief Math 纯函数 intrinsic 切片（对齐 RegC regc_intrinsic_registry.cpp 的
-/// RuntimeFunction 条目；符号实现见 mj2x-rt src/regc/mj2x_regc_intrinsic.c）。
-///
-/// @details 只收录 JNIEnv 无关的纯标量函数（直调 0 JNI；函数不抛异常，无需
-/// ExceptionCheck——与 RegC isPureRuntimeIntrinsic 语义一致）。包装类/String/
-/// StringBuilder/Random 等带 native 对象的切片保持 JNI 分派（待整类下沉）。
-constexpr LlvmIntrinsicEntry kEntries[] = {
-    {"java/lang/Math", "abs", "(I)I", "mj2x_math_abs_i32", "i32", {"i32"},
-     "declare i32 @mj2x_math_abs_i32(i32)"},
-    {"java/lang/Math", "abs", "(J)J", "mj2x_math_abs_i64", "i64", {"i64"},
-     "declare i64 @mj2x_math_abs_i64(i64)"},
-    {"java/lang/Math", "abs", "(F)F", "mj2x_math_abs_f32", "float", {"float"},
-     "declare float @mj2x_math_abs_f32(float)"},
-    {"java/lang/Math", "abs", "(D)D", "mj2x_math_abs_f64", "double", {"double"},
-     "declare double @mj2x_math_abs_f64(double)"},
-    {"java/lang/Math", "min", "(II)I", "mj2x_math_min_i32", "i32", {"i32", "i32"},
-     "declare i32 @mj2x_math_min_i32(i32, i32)"},
-    {"java/lang/Math", "max", "(II)I", "mj2x_math_max_i32", "i32", {"i32", "i32"},
-     "declare i32 @mj2x_math_max_i32(i32, i32)"},
-    {"java/lang/Math", "min", "(JJ)J", "mj2x_math_min_i64", "i64", {"i64", "i64"},
-     "declare i64 @mj2x_math_min_i64(i64, i64)"},
-    {"java/lang/Math", "max", "(JJ)J", "mj2x_math_max_i64", "i64", {"i64", "i64"},
-     "declare i64 @mj2x_math_max_i64(i64, i64)"},
-    {"java/lang/Math", "min", "(FF)F", "mj2x_math_min_f32", "float", {"float", "float"},
-     "declare float @mj2x_math_min_f32(float, float)"},
-    {"java/lang/Math", "max", "(FF)F", "mj2x_math_max_f32", "float", {"float", "float"},
-     "declare float @mj2x_math_max_f32(float, float)"},
-    {"java/lang/Math", "min", "(DD)D", "mj2x_math_min_f64", "double", {"double", "double"},
-     "declare double @mj2x_math_min_f64(double, double)"},
-    {"java/lang/Math", "max", "(DD)D", "mj2x_math_max_f64", "double", {"double", "double"},
-     "declare double @mj2x_math_max_f64(double, double)"},
-    {"java/lang/Math", "sin", "(D)D", "mj2x_math_sin", "double", {"double"},
-     "declare double @mj2x_math_sin(double)"},
-    {"java/lang/Math", "cos", "(D)D", "mj2x_math_cos", "double", {"double"},
-     "declare double @mj2x_math_cos(double)"},
-    {"java/lang/Math", "tan", "(D)D", "mj2x_math_tan", "double", {"double"},
-     "declare double @mj2x_math_tan(double)"},
-    {"java/lang/Math", "sqrt", "(D)D", "mj2x_math_sqrt", "double", {"double"},
-     "declare double @mj2x_math_sqrt(double)"},
-    {"java/lang/Math", "floor", "(D)D", "mj2x_math_floor", "double", {"double"},
-     "declare double @mj2x_math_floor(double)"},
-    {"java/lang/Math", "ceil", "(D)D", "mj2x_math_ceil", "double", {"double"},
-     "declare double @mj2x_math_ceil(double)"},
-    {"java/lang/Math", "pow", "(DD)D", "mj2x_math_pow", "double", {"double", "double"},
-     "declare double @mj2x_math_pow(double, double)"},
-    {"java/lang/Math", "round", "(D)J", "mj2x_math_round", "i64", {"double"},
-     "declare i64 @mj2x_math_round(double)"},
-    {"java/lang/Math", "random", "()D", "mj2x_math_random", "double", {""},
-     "declare double @mj2x_math_random()"},
-};
+namespace {
 
 bool sameText(ca::str::Utf8StringRef ref, const char* text)
 {
@@ -64,193 +33,299 @@ bool sameText(ca::str::Utf8StringRef ref, const char* text)
            std::string_view(text);
 }
 
-/// @brief 包装类装箱条目（valueOf）：shadow 结构在 mj2x-rt（mj2x_int 等单字段
-/// 值结构），LLVM 侧以命名 struct 传值。窄类型装箱参数先在发射端 trunc。
-///
-/// @details 与 RegC regc_intrinsics.cpp WrapperValueOf 条目一一对应；仅非逃逸
-/// 用法直调（逃逸根回退 JNI，见 llvm_ir_emitter 的 wrapper 分析）。
-constexpr LlvmWrapperBoxEntry kBoxEntries[] = {
-    {"java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", "int", "%mj2x_int",
-     "%mj2x_int = type { i32 }", "mj2x_int_value_of", "i32",
-     "declare %mj2x_int @mj2x_int_value_of(i32)"},
-    {"java/lang/Long", "valueOf", "(J)Ljava/lang/Long;", "long", "%mj2x_long",
-     "%mj2x_long = type { i64 }", "mj2x_long_value_of", "i64",
-     "declare %mj2x_long @mj2x_long_value_of(i64)"},
-    {"java/lang/Short", "valueOf", "(S)Ljava/lang/Short;", "short", "%mj2x_short",
-     "%mj2x_short = type { i16 }", "mj2x_short_value_of", "i16",
-     "declare %mj2x_short @mj2x_short_value_of(i16)"},
-    {"java/lang/Byte", "valueOf", "(B)Ljava/lang/Byte;", "byte", "%mj2x_byte",
-     "%mj2x_byte = type { i8 }", "mj2x_byte_value_of", "i8",
-     "declare %mj2x_byte @mj2x_byte_value_of(i8)"},
-    {"java/lang/Float", "valueOf", "(F)Ljava/lang/Float;", "float", "%mj2x_float",
-     "%mj2x_float = type { float }", "mj2x_float_value_of", "float",
-     "declare %mj2x_float @mj2x_float_value_of(float)"},
-    {"java/lang/Double", "valueOf", "(D)Ljava/lang/Double;", "double", "%mj2x_double",
-     "%mj2x_double = type { double }", "mj2x_double_value_of", "double",
-     "declare %mj2x_double @mj2x_double_value_of(double)"},
-    {"java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;", "bool", "%mj2x_bool",
-     "%mj2x_bool = type { i8 }", "mj2x_bool_value_of", "i8",
-     "declare %mj2x_bool @mj2x_bool_value_of(i8)"},
-    {"java/lang/Character", "valueOf", "(C)Ljava/lang/Character;", "char", "%mj2x_char",
-     "%mj2x_char = type { i16 }", "mj2x_char_value_of", "i16",
-     "declare %mj2x_char @mj2x_char_value_of(i16)"},
+/// crt 形参口径 → LLVM 类型（V 由调用方特判；空 desc 不应出现）。
+const char* llvmCrtType(char head)
+{
+    switch (head) {
+    case 'Z':
+    case 'B': return "i8";
+    case 'C':
+    case 'S': return "i16";
+    case 'I': return "i32";
+    case 'J': return "i64";
+    case 'F': return "float";
+    case 'D': return "double";
+    default: return "ptr";   // L...; / [
+    }
+}
+
+/// desc "(II)I" → 参数类型头字符序列 + 返回头字符。
+/// 注意必须真解析：L...; 是完整类型（跳到 ';'），不能按单字符切。
+struct DescShape
+{
+    char               ret = 'V';
+    std::vector<char>  args;
 };
 
-/// @brief 包装类拆箱条目（xxxValue）：窄类型返回值先在发射端 sext/zext 到 i32。
-constexpr LlvmWrapperUnboxEntry kUnboxEntries[] = {
-    {"java/lang/Integer", "intValue", "()I", "int", "%mj2x_int", "%mj2x_int = type { i32 }",
-     "mj2x_int_int_value", "i32", "", "declare i32 @mj2x_int_int_value(%mj2x_int)"},
-    {"java/lang/Long", "longValue", "()J", "long", "%mj2x_long", "%mj2x_long = type { i64 }",
-     "mj2x_long_long_value", "i64", "", "declare i64 @mj2x_long_long_value(%mj2x_long)"},
-    {"java/lang/Short", "shortValue", "()S", "short", "%mj2x_short",
-     "%mj2x_short = type { i16 }", "mj2x_short_short_value", "i16", "sext",
-     "declare i16 @mj2x_short_short_value(%mj2x_short)"},
-    {"java/lang/Byte", "byteValue", "()B", "byte", "%mj2x_byte", "%mj2x_byte = type { i8 }",
-     "mj2x_byte_byte_value", "i8", "sext", "declare i8 @mj2x_byte_byte_value(%mj2x_byte)"},
-    {"java/lang/Float", "floatValue", "()F", "float", "%mj2x_float",
-     "%mj2x_float = type { float }", "mj2x_float_float_value", "float", "",
-     "declare float @mj2x_float_float_value(%mj2x_float)"},
-    {"java/lang/Double", "doubleValue", "()D", "double", "%mj2x_double",
-     "%mj2x_double = type { double }", "mj2x_double_double_value", "double", "",
-     "declare double @mj2x_double_double_value(%mj2x_double)"},
-    {"java/lang/Boolean", "booleanValue", "()Z", "bool", "%mj2x_bool",
-     "%mj2x_bool = type { i8 }", "mj2x_bool_bool_value", "i8", "zext",
-     "declare i8 @mj2x_bool_bool_value(%mj2x_bool)"},
-    {"java/lang/Character", "charValue", "()C", "char", "%mj2x_char",
-     "%mj2x_char = type { i16 }", "mj2x_char_char_value", "i16", "zext",
-     "declare i16 @mj2x_char_char_value(%mj2x_char)"},
-};
+DescShape parseDesc(const char* desc)
+{
+    DescShape          shape;
+    const std::string_view view(desc);
+    const size_t       close = view.rfind(')');
+    size_t             i     = 1;
+    while (close != std::string_view::npos && i < close) {
+        const char head = view[i];
+        shape.args.push_back(head);
+        if (head == 'L') {
+            while (i < close && view[i] != ';') ++i;
+        }
+        else if (head == '[') {
+            // 数组：组件类型紧随其后（表内现无数组项，解析仍保真）。
+            size_t j = i + 1;
+            while (j < close && view[j] == '[') ++j;
+            if (j < close && view[j] == 'L') {
+                while (j < close && view[j] != ';') ++j;
+            }
+            i = j;
+        }
+        ++i;
+    }
+    shape.ret = close + 1 < view.size() ? view[close + 1] : 'V';
+    return shape;
+}
 
-/// @brief Random 状态机切片：%mj2x_random = { i64 }（crt mj2x_random 为
-/// uint64_t seed；标准 Java LCG：seed = (seed ^ 0x5DEECE66D) & ((1<<48)-1)，
-/// next(bits) 返回 seed >> (48-bits)，与 java.util.Random 逐位一致）。
-constexpr LlvmRandomEntry kRandomEntries[] = {
-    {"java/util/Random", "<init>", "(J)V", "mj2x_random_init", "void",
-     "declare void @mj2x_random_init(ptr, i64)"},
-    {"java/util/Random", "nextInt", "()I", "mj2x_random_next_int", "i32",
-     "declare i32 @mj2x_random_next_int(ptr)"},
-    {"java/util/Random", "nextInt", "(I)I", "mj2x_random_next_int_bound", "i32",
-     "declare i32 @mj2x_random_next_int_bound(ptr, i32)"},
-    {"java/util/Random", "nextLong", "()J", "mj2x_random_next_long", "i64",
-     "declare i64 @mj2x_random_next_long(ptr)"},
-    {"java/util/Random", "nextBoolean", "()Z", "mj2x_random_next_boolean", "i8",
-     "declare i8 @mj2x_random_next_boolean(ptr)"},
-    {"java/util/Random", "nextFloat", "()F", "mj2x_random_next_float", "float",
-     "declare float @mj2x_random_next_float(ptr)"},
-    {"java/util/Random", "nextDouble", "()D", "mj2x_random_next_double", "double",
-     "declare double @mj2x_random_next_double(ptr)"},
-};
+const char* wrapperKindText(RegCIntrinsicNativeObjectKind kind)
+{
+    switch (kind) {
+    case RegCIntrinsicNativeObjectKind::Int: return "int";
+    case RegCIntrinsicNativeObjectKind::Long: return "long";
+    case RegCIntrinsicNativeObjectKind::Short: return "short";
+    case RegCIntrinsicNativeObjectKind::Byte: return "byte";
+    case RegCIntrinsicNativeObjectKind::Float: return "float";
+    case RegCIntrinsicNativeObjectKind::Double: return "double";
+    case RegCIntrinsicNativeObjectKind::Bool: return "bool";
+    case RegCIntrinsicNativeObjectKind::Char: return "char";
+    default: return "";
+    }
+}
 
-/// @brief StringBuilder/StringBuffer 状态机切片：crt 堆分配状态
-/// `mj2x_string_builder*`（init 的 out_state 即寄存器槽），append 返回同一
-/// state，method 经 out 参数回写结果。全部调用返回 mj2x_regc_status。
-///
-/// @details kind：0=init（参数 + out_state**），1=append（参数 + state，
-/// dest 槽回存 state 指针），2=method（参数 + out）。argLlvm 的 i8/i16 表示
-/// crt 形参为 int8_t/uint16_t，发射端先 trunc。
-constexpr LlvmBuilderEntry kBuilderEntries[] = {
-    // init
-    {"java/lang/StringBuilder", "<init>", "()V", "mj2x_string_builder_init", 0, "",
-     {"", "", ""}},
-    {"java/lang/StringBuilder", "<init>", "(I)V", "mj2x_string_builder_init_capacity", 0, "",
-     {"i32", "", ""}},
-    {"java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V",
-     "mj2x_string_builder_init_jstring", 0, "", {"ptr", "", ""}},
-    {"java/lang/StringBuilder", "<init>", "(Ljava/lang/CharSequence;)V",
-     "mj2x_string_builder_init_char_sequence", 0, "", {"ptr", "", ""}},
-    {"java/lang/StringBuffer", "<init>", "()V", "mj2x_string_buffer_init", 0, "",
-     {"", "", ""}},
-    {"java/lang/StringBuffer", "<init>", "(I)V", "mj2x_string_buffer_init_capacity", 0, "",
-     {"i32", "", ""}},
-    {"java/lang/StringBuffer", "<init>", "(Ljava/lang/String;)V",
-     "mj2x_string_buffer_init_jstring", 0, "", {"ptr", "", ""}},
-    {"java/lang/StringBuffer", "<init>", "(Ljava/lang/CharSequence;)V",
-     "mj2x_string_buffer_init_char_sequence", 0, "", {"ptr", "", ""}},
-    // append（全部返回同一 state 指针）
-    {"java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_jstring", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_object", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuilder", "append", "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_char_sequence", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuilder", "append",
-     "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_char_sequence_range", 1, "", {"ptr", "i32", "i32"}},
-    {"java/lang/StringBuilder", "append", "(I)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_i32", 1, "", {"i32", "", ""}},
-    {"java/lang/StringBuilder", "append", "(J)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_i64", 1, "", {"i64", "", ""}},
-    {"java/lang/StringBuilder", "append", "(Z)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_bool", 1, "", {"i8", "", ""}},
-    {"java/lang/StringBuilder", "append", "(C)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_char", 1, "", {"i16", "", ""}},
-    {"java/lang/StringBuilder", "append", "(F)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_f32", 1, "", {"float", "", ""}},
-    {"java/lang/StringBuilder", "append", "(D)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_f64", 1, "", {"double", "", ""}},
-    {"java/lang/StringBuilder", "append", "([C)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_char_array", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuilder", "append", "([CII)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_char_array_range", 1, "", {"ptr", "i32", "i32"}},
-    {"java/lang/StringBuilder", "appendCodePoint", "(I)Ljava/lang/StringBuilder;",
-     "mj2x_string_builder_append_code_point", 1, "", {"i32", "", ""}},
-    {"java/lang/StringBuffer", "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_jstring", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuffer", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_object", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuffer", "append", "(Ljava/lang/CharSequence;)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_char_sequence", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuffer", "append",
-     "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_char_sequence_range", 1, "", {"ptr", "i32", "i32"}},
-    {"java/lang/StringBuffer", "append", "(I)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_i32", 1, "", {"i32", "", ""}},
-    {"java/lang/StringBuffer", "append", "(J)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_i64", 1, "", {"i64", "", ""}},
-    {"java/lang/StringBuffer", "append", "(Z)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_bool", 1, "", {"i8", "", ""}},
-    {"java/lang/StringBuffer", "append", "(C)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_char", 1, "", {"i16", "", ""}},
-    {"java/lang/StringBuffer", "append", "(F)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_f32", 1, "", {"float", "", ""}},
-    {"java/lang/StringBuffer", "append", "(D)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_f64", 1, "", {"double", "", ""}},
-    {"java/lang/StringBuffer", "append", "([C)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_char_array", 1, "", {"ptr", "", ""}},
-    {"java/lang/StringBuffer", "append", "([CII)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_char_array_range", 1, "", {"ptr", "i32", "i32"}},
-    {"java/lang/StringBuffer", "appendCodePoint", "(I)Ljava/lang/StringBuffer;",
-     "mj2x_string_buffer_append_code_point", 1, "", {"i32", "", ""}},
-    // method（toString 物化为真 jstring；length/capacity/charAt 经 out 回写）
-    {"java/lang/StringBuilder", "toString", "()Ljava/lang/String;",
-     "mj2x_string_builder_to_jstring", 2, "ptr", {"", "", ""}},
-    {"java/lang/StringBuilder", "length", "()I", "mj2x_string_builder_length", 2, "i32",
-     {"", "", ""}},
-    {"java/lang/StringBuilder", "capacity", "()I", "mj2x_string_builder_capacity", 2, "i32",
-     {"", "", ""}},
-    {"java/lang/StringBuilder", "charAt", "(I)C", "mj2x_string_builder_char_at", 2, "i16",
-     {"i32", "", ""}},
-    {"java/lang/StringBuilder", "ensureCapacity", "(I)V",
-     "mj2x_string_builder_ensure_capacity", 2, "", {"i32", "", ""}},
-    {"java/lang/StringBuilder", "setLength", "(I)V", "mj2x_string_builder_set_length", 2, "",
-     {"i32", "", ""}},
-    {"java/lang/StringBuilder", "setCharAt", "(IC)V", "mj2x_string_builder_set_char_at", 2, "",
-     {"i32", "i16", ""}},
-    {"java/lang/StringBuffer", "toString", "()Ljava/lang/String;",
-     "mj2x_string_buffer_to_jstring", 2, "ptr", {"", "", ""}},
-    {"java/lang/StringBuffer", "length", "()I", "mj2x_string_buffer_length", 2, "i32",
-     {"", "", ""}},
-    {"java/lang/StringBuffer", "capacity", "()I", "mj2x_string_buffer_capacity", 2, "i32",
-     {"", "", ""}},
-    {"java/lang/StringBuffer", "charAt", "(I)C", "mj2x_string_buffer_char_at", 2, "i16",
-     {"i32", "", ""}},
-    {"java/lang/StringBuffer", "ensureCapacity", "(I)V",
-     "mj2x_string_buffer_ensure_capacity", 2, "", {"i32", "", ""}},
-    {"java/lang/StringBuffer", "setLength", "(I)V", "mj2x_string_buffer_set_length", 2, "",
-     {"i32", "", ""}},
-    {"java/lang/StringBuffer", "setCharAt", "(IC)V", "mj2x_string_buffer_set_char_at", 2, "",
-     {"i32", "i16", ""}},
-};
+const char* wrapperShadowType(const char* kind)
+{
+    if (std::string_view(kind) == "int") return "%mj2x_int";
+    if (std::string_view(kind) == "long") return "%mj2x_long";
+    if (std::string_view(kind) == "short") return "%mj2x_short";
+    if (std::string_view(kind) == "byte") return "%mj2x_byte";
+    if (std::string_view(kind) == "float") return "%mj2x_float";
+    if (std::string_view(kind) == "double") return "%mj2x_double";
+    if (std::string_view(kind) == "bool") return "%mj2x_bool";
+    return "%mj2x_char";
+}
+
+std::string wrapperShadowDecl(const char* kind)
+{
+    const std::string_view type = wrapperShadowType(kind);
+    if (type == "%mj2x_int") return "%mj2x_int = type { i32 }";
+    if (type == "%mj2x_long") return "%mj2x_long = type { i64 }";
+    if (type == "%mj2x_short") return "%mj2x_short = type { i16 }";
+    if (type == "%mj2x_byte") return "%mj2x_byte = type { i8 }";
+    if (type == "%mj2x_float") return "%mj2x_float = type { float }";
+    if (type == "%mj2x_double") return "%mj2x_double = type { double }";
+    if (type == "%mj2x_bool") return "%mj2x_bool = type { i8 }";
+    return "%mj2x_char = type { i16 }";
+}
+
+/// 派生文本驻留区（deque：push_back 不移走既有元素，const char* 稳定）；
+/// 表为进程级 static，驻留区与其同寿。
+std::deque<std::string>& textArena()
+{
+    static std::deque<std::string> arena;
+    return arena;
+}
+
+const char* internText(std::string text)
+{
+    textArena().push_back(std::move(text));
+    return textArena().back().c_str();
+}
+
+/// Math/RuntimeFunction 条目派生。
+std::vector<LlvmIntrinsicEntry> deriveMathEntries()
+{
+    std::vector<LlvmIntrinsicEntry> out;
+    for (const auto& id : builtinIntrinsicTable()) {
+        if (!id.llvmDirect || id.emitKind != RegCIntrinsicEmitKind::RuntimeFunction) continue;
+        const DescShape shape = parseDesc(id.desc);
+        LlvmIntrinsicEntry entry{};
+        entry.owner  = id.owner;
+        entry.name   = id.name;
+        entry.desc   = id.desc;
+        entry.symbol = id.symbol;
+        entry.returnLlvm = llvmCrtType(shape.ret);
+        for (size_t i = 0; i < 2; ++i) {
+            entry.argLlvm[i] = i < shape.args.size() ? llvmCrtType(shape.args[i]) : "";
+        }
+        std::string declare = std::string("declare ") + entry.returnLlvm + " @" + id.symbol + "(";
+        for (size_t i = 0; i < shape.args.size(); ++i) {
+            if (i != 0) declare += ", ";
+            declare += llvmCrtType(shape.args[i]);
+        }
+        declare += ")";
+        entry.declareText = internText(std::move(declare));
+        out.push_back(entry);
+    }
+    return out;
+}
+
+/// 包装类装箱（WrapperValueOf）条目派生。
+std::vector<LlvmWrapperBoxEntry> deriveBoxEntries()
+{
+    std::vector<LlvmWrapperBoxEntry> out;
+    for (const auto& id : builtinIntrinsicTable()) {
+        if (!id.llvmDirect || id.emitKind != RegCIntrinsicEmitKind::WrapperValueOf) continue;
+        const DescShape     shape = parseDesc(id.desc);
+        LlvmWrapperBoxEntry entry{};
+        entry.owner  = id.owner;
+        entry.name   = id.name;
+        entry.desc   = id.desc;
+        entry.kind   = wrapperKindText(id.nativeObjectKind);
+        entry.shadowType = wrapperShadowType(entry.kind);
+        entry.shadowDecl = internText(wrapperShadowDecl(entry.kind));
+        entry.symbol = id.symbol;
+        entry.argLlvm = llvmCrtType(shape.args[0]);
+        entry.declareText = internText(std::string("declare ") + entry.shadowType + " @" +
+                                       id.symbol + "(" + entry.argLlvm + ")");
+        out.push_back(entry);
+    }
+    return out;
+}
+
+/// 包装类拆箱（WrapperUnbox）条目派生；窄结果扩展：S/B→sext，Z/C→zext。
+std::vector<LlvmWrapperUnboxEntry> deriveUnboxEntries()
+{
+    std::vector<LlvmWrapperUnboxEntry> out;
+    for (const auto& id : builtinIntrinsicTable()) {
+        if (!id.llvmDirect || id.emitKind != RegCIntrinsicEmitKind::WrapperUnbox) continue;
+        const DescShape shape = parseDesc(id.desc);
+        LlvmWrapperUnboxEntry entry{};
+        entry.owner  = id.owner;
+        entry.name   = id.name;
+        entry.desc   = id.desc;
+        entry.kind   = wrapperKindText(id.nativeObjectKind);
+        entry.shadowType = wrapperShadowType(entry.kind);
+        entry.shadowDecl = internText(wrapperShadowDecl(entry.kind));
+        entry.symbol = id.symbol;
+        entry.retLlvm = llvmCrtType(shape.ret);
+        const char* ext = "";
+        switch (shape.ret) {
+        case 'S':
+        case 'B': ext = "sext"; break;
+        case 'Z':
+        case 'C': ext = "zext"; break;
+        default: break;
+        }
+        entry.retExt = ext;
+        entry.declareText = internText(std::string("declare ") + entry.retLlvm + " @" + id.symbol +
+                                       "(" + entry.shadowType + ")");
+        out.push_back(entry);
+    }
+    return out;
+}
+
+/// Random 状态机条目派生：RandomInit 首条（对齐切换前表布局，matchLlvmRandomMethod
+/// 跳过 [0]）+ NativeObjectMethod(Random) 其余；两趟保证 init 在前。
+std::vector<LlvmRandomEntry> deriveRandomEntries()
+{
+    std::vector<LlvmRandomEntry> out;
+    for (const auto& id : builtinIntrinsicTable()) {
+        if (!id.llvmDirect || id.emitKind != RegCIntrinsicEmitKind::RandomInit) continue;
+        const DescShape shape = parseDesc(id.desc);
+        LlvmRandomEntry entry{};
+        entry.owner  = id.owner;
+        entry.name   = id.name;
+        entry.desc   = id.desc;
+        entry.symbol = id.symbol;
+        entry.retLlvm = shape.ret == 'V' ? "void" : llvmCrtType(shape.ret);
+        std::string params = "ptr";
+        for (const char head : shape.args) {
+            params += std::string(", ") + llvmCrtType(head);
+        }
+        entry.declareText =
+            internText(std::string("declare ") + entry.retLlvm + " @" + id.symbol + "(" +
+                       params + ")");
+        out.push_back(entry);
+    }
+    for (const auto& id : builtinIntrinsicTable()) {
+        const bool isMethod = id.llvmDirect &&
+                              id.emitKind == RegCIntrinsicEmitKind::NativeObjectMethod &&
+                              id.nativeObjectKind == RegCIntrinsicNativeObjectKind::Random;
+        if (!isMethod) continue;
+        const DescShape shape = parseDesc(id.desc);
+        LlvmRandomEntry entry{};
+        entry.owner  = id.owner;
+        entry.name   = id.name;
+        entry.desc   = id.desc;
+        entry.symbol = id.symbol;
+        entry.retLlvm = shape.ret == 'V' ? "void" : llvmCrtType(shape.ret);
+        std::string params = "ptr";
+        for (const char head : shape.args) {
+            params += std::string(", ") + llvmCrtType(head);
+        }
+        entry.declareText =
+            internText(std::string("declare ") + entry.retLlvm + " @" + id.symbol + "(" +
+                       params + ")");
+        out.push_back(entry);
+    }
+    return out;
+}
+
+/// StringBuilder/StringBuffer 状态机条目派生：kind 0=init 1=append 2=method。
+std::vector<LlvmBuilderEntry> deriveBuilderEntries()
+{
+    std::vector<LlvmBuilderEntry> out;
+    for (const auto& id : builtinIntrinsicTable()) {
+        if (!id.llvmDirect) continue;
+        int kind = -1;
+        if (id.emitKind == RegCIntrinsicEmitKind::StringBuilderInit) kind = 0;
+        else if (id.emitKind == RegCIntrinsicEmitKind::StringBuilderAppend) kind = 1;
+        else if (id.emitKind == RegCIntrinsicEmitKind::StringBuilderMethod) kind = 2;
+        if (kind < 0) continue;
+        const DescShape shape = parseDesc(id.desc);
+        LlvmBuilderEntry entry{};
+        entry.owner  = id.owner;
+        entry.name   = id.name;
+        entry.desc   = id.desc;
+        entry.symbol = id.symbol;
+        entry.kind   = kind;
+        if (kind == 2) {
+            // method 的 out 参数类型：V→空（纯 out 回写），其余按 crt 口径。
+            entry.outLlvm = shape.ret == 'V' ? "" : llvmCrtType(shape.ret);
+        }
+        else {
+            entry.outLlvm = "";
+        }
+        for (size_t i = 0; i < 3; ++i) {
+            entry.argLlvm[i] = i < shape.args.size() ? llvmCrtType(shape.args[i]) : "";
+        }
+        out.push_back(entry);
+    }
+    return out;
+}
+
+const std::vector<LlvmIntrinsicEntry>& mathTable()
+{
+    static const std::vector<LlvmIntrinsicEntry> table = deriveMathEntries();
+    return table;
+}
+const std::vector<LlvmWrapperBoxEntry>& boxTable()
+{
+    static const std::vector<LlvmWrapperBoxEntry> table = deriveBoxEntries();
+    return table;
+}
+const std::vector<LlvmWrapperUnboxEntry>& unboxTable()
+{
+    static const std::vector<LlvmWrapperUnboxEntry> table = deriveUnboxEntries();
+    return table;
+}
+const std::vector<LlvmRandomEntry>& randomTable()
+{
+    static const std::vector<LlvmRandomEntry> table = deriveRandomEntries();
+    return table;
+}
+const std::vector<LlvmBuilderEntry>& builderTable()
+{
+    static const std::vector<LlvmBuilderEntry> table = deriveBuilderEntries();
+    return table;
+}
 
 }   // namespace
 
@@ -258,7 +333,7 @@ const LlvmIntrinsicEntry* matchLlvmIntrinsic(ca::str::Utf8StringRef owner,
                                              ca::str::Utf8StringRef name,
                                              ca::str::Utf8StringRef desc)
 {
-    for (const auto& entry : kEntries) {
+    for (const auto& entry : mathTable()) {
         if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
             sameText(desc, entry.desc)) {
             return &entry;
@@ -271,7 +346,7 @@ const LlvmWrapperBoxEntry* matchLlvmWrapperBox(ca::str::Utf8StringRef owner,
                                                ca::str::Utf8StringRef name,
                                                ca::str::Utf8StringRef desc)
 {
-    for (const auto& entry : kBoxEntries) {
+    for (const auto& entry : boxTable()) {
         if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
             sameText(desc, entry.desc)) {
             return &entry;
@@ -284,7 +359,7 @@ const LlvmWrapperUnboxEntry* matchLlvmWrapperUnbox(ca::str::Utf8StringRef owner,
                                                    ca::str::Utf8StringRef name,
                                                    ca::str::Utf8StringRef desc)
 {
-    for (const auto& entry : kUnboxEntries) {
+    for (const auto& entry : unboxTable()) {
         if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
             sameText(desc, entry.desc)) {
             return &entry;
@@ -297,9 +372,10 @@ const LlvmRandomEntry* matchLlvmRandomInit(ca::str::Utf8StringRef owner,
                                            ca::str::Utf8StringRef name,
                                            ca::str::Utf8StringRef desc)
 {
-    if (sameText(owner, "java/util/Random") && sameText(name, "<init>") &&
-        sameText(desc, "(J)V")) {
-        return &kRandomEntries[0];
+    // RandomInit 是派生序列首条（kEntries 中 RandomInit 唯一）。
+    if (!randomTable().empty() && sameText(owner, randomTable()[0].owner) &&
+        sameText(name, randomTable()[0].name) && sameText(desc, randomTable()[0].desc)) {
+        return &randomTable()[0];
     }
     return nullptr;
 }
@@ -308,8 +384,8 @@ const LlvmRandomEntry* matchLlvmRandomMethod(ca::str::Utf8StringRef owner,
                                              ca::str::Utf8StringRef name,
                                              ca::str::Utf8StringRef desc)
 {
-    for (size_t index = 1; index < sizeof(kRandomEntries) / sizeof(kRandomEntries[0]); ++index) {
-        const auto& entry = kRandomEntries[index];
+    for (size_t index = 1; index < randomTable().size(); ++index) {
+        const auto& entry = randomTable()[index];
         if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
             sameText(desc, entry.desc)) {
             return &entry;
@@ -322,7 +398,7 @@ const LlvmBuilderEntry* matchLlvmBuilder(ca::str::Utf8StringRef owner,
                                          ca::str::Utf8StringRef name,
                                          ca::str::Utf8StringRef desc)
 {
-    for (const auto& entry : kBuilderEntries) {
+    for (const auto& entry : builderTable()) {
         if (sameText(owner, entry.owner) && sameText(name, entry.name) &&
             sameText(desc, entry.desc)) {
             return &entry;
