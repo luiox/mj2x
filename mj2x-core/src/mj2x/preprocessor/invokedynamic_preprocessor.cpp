@@ -499,11 +499,12 @@ bool parseAltMetafactoryTail(const Handle& bsm, const std::vector<ca::core::Any>
         ++pos;
         return true;
     };
+    // #921 staticArena 退役：markers/bridges 两分支的内部名/描述符仅瞬时转串，
+    // 共用本函数级局部 arena（寿命有界零驻留，裁决①局部 arena 口径）。
+    ca::str::Utf8StringArena scratch;
     if (flags & kAltFlagMarkers) {
         int cnt = 0;
         if (!readCount(cnt)) return false;
-        // #921 staticArena 退役：内部名仅瞬时转串，函数级局部 arena 零驻留。
-        ca::str::Utf8StringArena scratch;
         for (int i = 0; i < cnt; ++i) {
             if (pos >= bsmArgs.size()) return false;
             auto* mk = bsmArgs[pos].as<Type>();   // CONSTANT_Class → Type(OBJECT)
