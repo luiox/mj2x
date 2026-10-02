@@ -78,8 +78,12 @@ inline bool hasObservableEffect(const SSAEffect& effect)
 
 inline PrimitiveKind returnKind(const std::string& desc)
 {
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
+    // 落点参数按必选口径走函数级局部 arena（结果仅瞬时喂给 jvmDescToPrimitive）。
+    ca::str::Utf8StringArena scratch;
     return jvmDescToPrimitive(
-        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str())).getDescriptor());
+        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str()))
+            .getDescriptor(scratch));
 }
 
 inline std::vector<PrimitiveKind> argumentKinds(const std::string& desc)

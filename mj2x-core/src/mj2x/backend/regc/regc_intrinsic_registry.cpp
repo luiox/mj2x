@@ -1827,13 +1827,15 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
                 default: return "mj2x_ref";   // L...; / [
             }
         };
+        // #921 staticArena 退役：描述符仅瞬时转 C 类型名，函数级局部 arena 零驻留。
+        ca::str::Utf8StringArena scratch;
         for (const auto& entry : userEntries_) {
             std::string decl =
                 std::string("extern ") +
                 cType(jbytecode::core::Type::getMethodType(
                           ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
                           .getReturnType()
-                          .getDescriptor()) +
+                          .getDescriptor(scratch)) +
                 " " + entry.symbol + "(";
             const auto argTypes =
                 jbytecode::core::Type::getMethodType(
@@ -1851,7 +1853,7 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
             }
             for (const auto& arg : argTypes) {
                 if (printed > 0) decl += ", ";
-                decl += cType(arg.getDescriptor());
+                decl += cType(arg.getDescriptor(scratch));
                 ++printed;
             }
             decl += ");\n";

@@ -85,7 +85,9 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
             // 多个 class literal 相邻时局部变量/static 缓存名不冲突。
             out.emitLine("{");
             out.indent();
-            emitClassRefCache(type.getDescriptor().to_std_string(), out);
+            // #921 staticArena 退役：描述符仅瞬时转串成缓存键，函数级局部 arena 零驻留。
+            ca::str::Utf8StringArena scratch;
+            emitClassRefCache(type.getDescriptor(scratch).to_std_string(), out);
             out.appendLineStart("stack[++sp].l = lc;");
             out.newLine();
             out.dedent();

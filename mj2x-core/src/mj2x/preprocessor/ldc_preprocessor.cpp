@@ -181,7 +181,9 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
         else {
             // ldc MethodType → fromMethodDescriptorString(desc, callerClassLoader)
             Type t = ldc->cst.cast<Type>();
-            pushMethodTypeSeq(seq, t.getDescriptor());
+            // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
+            // 落点参数按必选口径走本函数作业级 arena（同上方 intern）。
+            pushMethodTypeSeq(seq, t.getDescriptor(arena));
         }
 
         // 按程序序插到 ldc 之前，然后用 removeAndDelete 摘链销毁 ldc

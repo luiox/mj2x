@@ -76,8 +76,11 @@ const char* defaultReturnValue(PrimitiveKind kind)
 
 PrimitiveKind returnKind(const std::string& desc)
 {
+    // #921 staticArena 退役：同 llvmir/regc returnKind，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
     return jvmDescToPrimitive(
-        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str())).getDescriptor());
+        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str()))
+            .getDescriptor(scratch));
 }
 
 std::vector<PrimitiveKind> argumentKinds(const std::string& desc)

@@ -660,8 +660,10 @@ bool isJavacEnumValueOfBody(const jbytecode::tree::MethodNode* method,
     }
     const auto* ldc = static_cast<const jbytecode::tree::LdcInsnNode*>(n);
     const auto* ldcType = ldc->cst.as<jbytecode::core::Type>();
+    // #921 staticArena 退役：仅瞬时比对，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
     if (ldcType == nullptr ||
-        ldcType->getDescriptor().to_std_string() != "L" + owner.to_std_string() + ";") {
+        ldcType->getDescriptor(scratch).to_std_string() != "L" + owner.to_std_string() + ";") {
         return false;
     }
     n = nextRealInsn(n->getNext());

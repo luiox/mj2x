@@ -224,7 +224,9 @@ std::string llvmFloatLiteral(double value, bool isF32)
 /// 其余（原语/数组）→ 原样描述符。
 std::string indyTypeText(const jbytecode::core::Type& type)
 {
-    const auto desc = type.getDescriptor();
+    // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
+    const auto               desc = type.getDescriptor(scratch);
     if (type.getSort() == jbytecode::core::Type::OBJECT) {
         // 剥掉 L…;（OBJECT 排序的 descriptor 带包裹符）。
         const auto text = desc.to_std_string();

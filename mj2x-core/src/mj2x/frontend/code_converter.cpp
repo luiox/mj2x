@@ -152,7 +152,9 @@ static bool isCategory2Kind(PrimitiveKind kind)
 
 static PrimitiveKind methodReturnPrimitive(const ca::str::Utf8StringRef& desc)
 {
-    return jvmDescToPrimitive(Type::getReturnType(desc).getDescriptor());
+    // #921 staticArena 退役：同各 backend returnKind，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
+    return jvmDescToPrimitive(Type::getReturnType(desc).getDescriptor(scratch));
 }
 
 static std::vector<PrimitiveKind> methodArgumentPrimitives(const ca::str::Utf8StringRef& desc)

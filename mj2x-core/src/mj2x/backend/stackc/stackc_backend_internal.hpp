@@ -313,8 +313,12 @@ inline int returnOpcodeForKind(PrimitiveKind kind)
 
 inline PrimitiveKind methodReturnKind(const std::string& methodDesc)
 {
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
+    // 落点参数按必选口径走函数级局部 arena（结果仅瞬时喂给 jvmDescToPrimitive）。
+    ca::str::Utf8StringArena scratch;
     return jvmDescToPrimitive(
-        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(methodDesc.c_str())).getDescriptor());
+        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(methodDesc.c_str()))
+            .getDescriptor(scratch));
 }
 
 inline std::string prependReceiverToMethodDesc(const std::string& ownerClassName,
@@ -341,12 +345,17 @@ inline std::string utf8RefToString(ca::str::Utf8StringRef value)
 
 inline std::string typeDescriptorString(const Type& type)
 {
-    return type.getDescriptor().to_std_string();
+    // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
+    return type.getDescriptor(scratch).to_std_string();
 }
 
 inline std::string methodTypeDescriptorString(const Type& type)
 {
-    return type.getSort() == Type::METHOD ? type.getDescriptor().to_std_string() : type.toString();
+    // #921 staticArena 退役：同上；toString 本就不 intern。
+    ca::str::Utf8StringArena scratch;
+    return type.getSort() == Type::METHOD ? type.getDescriptor(scratch).to_std_string()
+                                          : type.toString();
 }
 
 inline const char* boxedClassName(PrimitiveKind kind)

@@ -92,7 +92,9 @@ const char* appendDesc(const Type& argType)
     case Type::DOUBLE: return "(D)Ljava/lang/StringBuilder;";
     case Type::ARRAY:
     case Type::OBJECT: {
-        const std::string desc = toStd(argType.getDescriptor());
+        // #921 staticArena 退役：仅瞬时比对，函数级局部 arena 零驻留。
+        ca::str::Utf8StringArena scratch;
+        const std::string        desc = toStd(argType.getDescriptor(scratch));
         if (desc == "Ljava/lang/String;") return "(Ljava/lang/String;)Ljava/lang/StringBuilder;";
         return "(Ljava/lang/Object;)Ljava/lang/StringBuilder;";
     }
@@ -335,7 +337,10 @@ const char* boxValueOfDesc(int sort)
 // CHECKCAST 的类型串：对象用内部名，数组用描述符（JVMS 规定数组 CHECKCAST 写描述符）。
 std::string checkcastName(const Type& t)
 {
-    return t.getSort() == Type::ARRAY ? toStd(t.getDescriptor()) : toStd(t.getInternalName());
+    // #921 staticArena 退役：仅瞬时转串，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
+    return t.getSort() == Type::ARRAY ? toStd(t.getDescriptor(scratch))
+                                      : toStd(t.getInternalName(scratch));
 }
 
 // 基本类型加宽（JLS §5.1.2）对应的转换字节码 opcode；非受支持加宽返回 -1（含收窄、
@@ -364,14 +369,16 @@ int wideningOpcode(int from, int to)
 // 栈顶值能否从 from 适配到 to（对应 LambdaMetafactory 运行期适配的静态可展开子集）。
 bool canAdaptValue(const Type& from, const Type& to)
 {
-    if (toStd(from.getDescriptor()) == toStd(to.getDescriptor())) return true;
+    // #921 staticArena 退役：仅瞬时比对，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
+    if (toStd(from.getDescriptor(scratch)) == toStd(to.getDescriptor(scratch))) return true;
     const bool fromRef = isReferenceSort(from.getSort());
     const bool toRef   = isReferenceSort(to.getSort());
     if (fromRef && toRef) return true;                              // CHECKCAST
     if (fromRef && isPrimitiveSort(to.getSort())) return true;      // CHECKCAST 包装类 + 拆箱
     if (isPrimitiveSort(from.getSort()) && toRef) {
         // 装箱目标限 Object / 对应包装类（javac 擦除只产出这两种；其余形态 fail-closed）。
-        const std::string toDesc = toStd(to.getDescriptor());
+        const std::string toDesc = toStd(to.getDescriptor(scratch));
         return toDesc == "Ljava/lang/Object;" ||
                toDesc == std::string("L") + wrapperInternal(from.getSort()) + ";";
     }
@@ -386,8 +393,9 @@ bool canAdaptValue(const Type& from, const Type& to)
 void emitAdaptValue(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& seq, const Type& from,
                     const Type& to)
 {
-    const std::string fromDesc = toStd(from.getDescriptor());
-    const std::string toDesc   = toStd(to.getDescriptor());
+    // #921 staticArena 退役：仅瞬时转串比对，落点=本函数作业级 arena 参数。
+    const std::string fromDesc = toStd(from.getDescriptor(arena));
+    const std::string toDesc   = toStd(to.getDescriptor(arena));
     if (fromDesc == toDesc) return;
     const bool fromRef = isReferenceSort(from.getSort());
     if (fromRef && isReferenceSort(to.getSort())) {
@@ -494,11 +502,13 @@ bool parseAltMetafactoryTail(const Handle& bsm, const std::vector<ca::core::Any>
     if (flags & kAltFlagMarkers) {
         int cnt = 0;
         if (!readCount(cnt)) return false;
+        // #921 staticArena 退役：内部名仅瞬时转串，函数级局部 arena 零驻留。
+        ca::str::Utf8StringArena scratch;
         for (int i = 0; i < cnt; ++i) {
             if (pos >= bsmArgs.size()) return false;
             auto* mk = bsmArgs[pos].as<Type>();   // CONSTANT_Class → Type(OBJECT)
             if (!mk || mk->getSort() != Type::OBJECT) return false;
-            out.markerIfaces.push_back(toStd(mk->getInternalName()));
+            out.markerIfaces.push_back(toStd(mk->getInternalName(scratch)));
             ++pos;
         }
     }
@@ -509,7 +519,7 @@ bool parseAltMetafactoryTail(const Handle& bsm, const std::vector<ca::core::Any>
             if (pos >= bsmArgs.size()) return false;
             auto* br = bsmArgs[pos].as<Type>();   // CONSTANT_MethodType → Type(METHOD)
             if (!br || br->getSort() != Type::METHOD) return false;
-            out.bridgeDescs.push_back(toStd(br->getDescriptor()));
+            out.bridgeDescs.push_back(toStd(br->getDescriptor(scratch)));
             ++pos;
         }
     }
@@ -621,7 +631,8 @@ bool lambdaExpansionPrecondition(ca::str::Utf8StringArena& arena, const std::str
         return false;
     }
 
-    const std::string samDesc  = toStd(samTypePtr->getDescriptor());
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，落点=本函数作业级 arena。
+    const std::string samDesc  = toStd(samTypePtr->getDescriptor(arena));
     const std::string implDesc = toStd(implPtr->getDesc());
 
     // 阶段2e：解析 altMetafactory 尾部（flags/markers/bridges）。metafactory 站点 alt 为空。
@@ -694,9 +705,11 @@ std::optional<IndyRecordMethods::Accessor> matchRecordAccessor(
     std::vector<Type> indyArgs   = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
     const Type        indyRet    = Type::getReturnType(arena.intern(indyDesc.c_str()));
     const Type        accRet     = Type::getReturnType(arena.intern(accDesc.c_str()));
-    if (toStd(indyRet.getDescriptor()) != toStd(accRet.getDescriptor())) return std::nullopt;
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，落点=本函数作业级 arena。
+    if (toStd(indyRet.getDescriptor(arena)) != toStd(accRet.getDescriptor(arena)))
+        return std::nullopt;
 
-    const auto argDesc = [&arena](const Type& t) { return toStd(t.getDescriptor()); };
+    const auto argDesc = [&arena](const Type& t) { return toStd(t.getDescriptor(arena)); };
     if (tag == Opcodes::H_INVOKESTATIC) {
         if (indyArgs.size() != accArgs.size()) return std::nullopt;
         for (size_t i = 0; i < accArgs.size(); ++i) {
@@ -737,9 +750,11 @@ bool recordMethodsPayload(ca::str::Utf8StringArena& arena, const std::string& in
     auto* methodsType = bsmArgs[2].as<Type>();
     if (!methodsType || methodsType->getSort() != Type::METHOD) return false;
 
-    out.recordClass = toStd(recordCls->getInternalName());
+    // #921 staticArena 退役：OBJECT 排序 getInternalName 返回 value_ 不 intern，
+    // 落点参数按必选口径走本函数作业级 arena。
+    out.recordClass = toStd(recordCls->getInternalName(arena));
     out.names       = names;
-    out.methodsDesc = toStd(methodsType->getDescriptor());
+    out.methodsDesc = toStd(methodsType->getDescriptor(arena));
     out.accessor    = matchRecordAccessor(arena, indyName, indyDesc, bsmArgs);
     return true;
 }
@@ -754,14 +769,15 @@ bool lmfFieldHandleDirectShape(ca::str::Utf8StringArena& arena, const std::strin
     const std::string fieldDesc = toStd(impl.getDesc());
     const std::string ownerDesc = "L" + toStd(impl.getOwner()) + ";";
     const Type        indyRet   = Type::getReturnType(arena.intern(indyDesc.c_str()));
-    const auto        argDesc   = [&arena](const Type& t) { return toStd(t.getDescriptor()); };
+    // #921 staticArena 退役：落点=本函数作业级 arena 参数。
+    const auto        argDesc   = [&arena](const Type& t) { return toStd(t.getDescriptor(arena)); };
 
     switch (impl.getTag()) {
     case Opcodes::H_GETSTATIC:
-        return indyArgs.empty() && toStd(indyRet.getDescriptor()) == fieldDesc;
+        return indyArgs.empty() && toStd(indyRet.getDescriptor(arena)) == fieldDesc;
     case Opcodes::H_GETFIELD:
         return indyArgs.size() == 1 && isReferenceSort(indyArgs[0].getSort()) &&
-               argDesc(indyArgs[0]) == ownerDesc && toStd(indyRet.getDescriptor()) == fieldDesc;
+               argDesc(indyArgs[0]) == ownerDesc && toStd(indyRet.getDescriptor(arena)) == fieldDesc;
     case Opcodes::H_PUTSTATIC:
         return indyArgs.size() == 1 && argDesc(indyArgs[0]) == fieldDesc &&
                indyRet.getSort() == Type::VOID;
@@ -790,11 +806,13 @@ bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const std::string& 
     const bool isSetter = tag == Opcodes::H_PUTSTATIC || tag == Opcodes::H_PUTFIELD;
     if (!isGetter && !isSetter) return false;
 
-    const auto        samDescRef = samType.getDescriptor();
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
+    // 落点参数按必选口径走本函数作业级 arena。
+    const auto        samDescRef = samType.getDescriptor(arena);
     std::vector<Type> samArgs    = Type::getArgumentTypes(arena.intern(toStd(samDescRef).c_str()));
     const Type        samRet     = Type::getReturnType(arena.intern(toStd(samDescRef).c_str()));
     const std::string fieldDesc  = toStd(impl.getDesc());
-    const std::string samRetDesc = toStd(samRet.getDescriptor());
+    const std::string samRetDesc = toStd(samRet.getDescriptor(arena));
 
     // 直派形态优先：indy 描述符即字段操作 → 判定即承诺，载荷 engage。
     if (lmfFieldHandleDirectShape(arena, indyDesc, impl, capturedTypes)) {
@@ -826,6 +844,7 @@ bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const std::string& 
     }
 
     // 波次一精确一致子集（设计文档 §2 表）：无任何加宽/装箱适配——判定即承诺。
+    // #921 staticArena 退役：落点=本函数作业级 arena 参数。
     const bool ok =
         isGetter
             ? (tag == Opcodes::H_GETSTATIC
@@ -833,11 +852,11 @@ bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const std::string& 
                    : capturedTypes.size() == 1 && isReferenceSort(capturedTypes[0].getSort()) &&
                          samArgs.empty() && samRetDesc == fieldDesc)
             : (tag == Opcodes::H_PUTSTATIC
-                   ? samArgs.size() == 1 && toStd(samArgs[0].getDescriptor()) == fieldDesc &&
+                   ? samArgs.size() == 1 && toStd(samArgs[0].getDescriptor(arena)) == fieldDesc &&
                          capturedTypes.empty() && samRet.getSort() == Type::VOID
                    : capturedTypes.size() == 1 && isReferenceSort(capturedTypes[0].getSort()) &&
                          samArgs.size() == 1 &&
-                         toStd(samArgs[0].getDescriptor()) == fieldDesc &&
+                         toStd(samArgs[0].getDescriptor(arena)) == fieldDesc &&
                          samRet.getSort() == Type::VOID);
 
     if (ok) {
@@ -1019,7 +1038,8 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
     std::string              ctorDesc = "(";
     for (size_t i = 0; i < capturedTypes.size(); ++i) {
         capName[i] = "cap" + std::to_string(i);
-        capDesc[i] = toStd(capturedTypes[i].getDescriptor());
+        // #921 staticArena 退役：仅瞬时转串，落点=本函数作业级 arena（= index.arena()）。
+        capDesc[i] = toStd(capturedTypes[i].getDescriptor(arena));
         ctorDesc += capDesc[i];
         cn->fields.push_back(new FieldNode(Opcodes::ACC_PRIVATE | Opcodes::ACC_FINAL,
                                            arena.intern(capName[i].c_str()),
@@ -1197,13 +1217,15 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
 
     // functional interface = indy 返回类型（谓词已保证是对象类型）。
     const Type ifaceType = Type::getReturnType(arena.intern(indyDesc.c_str()));
-    const std::string ifaceInternal = toStd(ifaceType.getInternalName());
+    // #921 staticArena 退役：OBJECT 排序 getInternalName 返回 value_ 不 intern，落点同上。
+    const std::string ifaceInternal = toStd(ifaceType.getInternalName(arena));
 
     // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle)（谓词已保证形态）。
     auto* samTypePtr = indy->bsmArgs[0].as<Type>();
     auto* implPtr    = indy->bsmArgs[1].as<Handle>();
 
-    const std::string samDesc  = toStd(samTypePtr->getDescriptor());
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，落点=本函数作业级 arena。
+    const std::string samDesc  = toStd(samTypePtr->getDescriptor(arena));
     const std::string implDesc = toStd(implPtr->getDesc());
 
     // 阶段2e：重新解析 altMetafactory 尾部（谓词已保证解析通过；防御性保留检查）。
@@ -1225,7 +1247,7 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
 
     // 构造器描述符 (capturedDescs)V。
     std::string ctorDesc = "(";
-    for (const auto& t : capturedTypes) ctorDesc += toStd(t.getDescriptor());
+    for (const auto& t : capturedTypes) ctorDesc += toStd(t.getDescriptor(arena));   // #921
     ctorDesc += ")V";
 
     // 站点改写。

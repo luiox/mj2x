@@ -21,7 +21,10 @@ using codegen::hex64;
 void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, codegen::CSourceStream& out)
 {
     const ca::str::Utf8StringRef descRef = node->desc;
-    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor());
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
+    // 落点参数按必选口径走函数级局部 arena（结果仅瞬时喂给 jvmDescToPrimitive）。
+    ca::str::Utf8StringArena retScratch;
+    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor(retScratch));
     const std::string owner = node->owner.to_std_string();
     const std::string name  = node->name.to_std_string();
     const std::string desc  = node->desc.to_std_string();
@@ -208,7 +211,9 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
 {
     const ca::str::Utf8StringRef descRef  = node->desc;
     auto                         argTypes = Type::getArgumentTypes(descRef);
-    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor());
+    // #921 staticArena 退役：同 emitInvoke，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena     retScratch;
+    auto retType = jvmDescToPrimitive(Type::getReturnType(descRef).getDescriptor(retScratch));
     const int argCount = static_cast<int>(argTypes.size());
 
     auto emitExceptionCheck = [&]() {

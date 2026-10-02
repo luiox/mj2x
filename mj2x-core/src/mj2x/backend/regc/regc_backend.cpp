@@ -240,8 +240,11 @@ const char* defaultReturnValue(PrimitiveKind kind)
 
 PrimitiveKind returnKind(const std::string& desc)
 {
+    // #921 staticArena 退役：同 llvmir returnKind，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
     return jvmDescToPrimitive(
-        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str())).getDescriptor());
+        Type::getReturnType(ca::str::Utf8StringRef::from_cstr(desc.c_str()))
+            .getDescriptor(scratch));
 }
 
 std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
@@ -912,12 +915,18 @@ std::string indyBoxedClassName(const ca::str::Utf8StringRef& desc)
 
 std::string indyTypeDescriptorString(const Type& type)
 {
-    return type.getDescriptor().to_std_string();
+    // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
+    ca::str::Utf8StringArena scratch;
+    return type.getDescriptor(scratch).to_std_string();
 }
 
 std::string indyMethodTypeDescriptorString(const Type& type)
 {
-    return type.getSort() == Type::METHOD ? type.getDescriptor().to_std_string() : type.toString();
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
+    // 落点参数按必选口径走函数级局部 arena；toString 本就不 intern。
+    ca::str::Utf8StringArena scratch;
+    return type.getSort() == Type::METHOD ? type.getDescriptor(scratch).to_std_string()
+                                          : type.toString();
 }
 
 void emitIndyMethodType(CSourceStream& out, const std::string& var, const std::string& methodDesc)

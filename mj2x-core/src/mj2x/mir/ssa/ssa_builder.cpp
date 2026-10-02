@@ -103,7 +103,9 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c)
         // LDC Class 常量（Foo.class）：Type 的 internal name 即 JNI FindClass 需要的路径
         // （如 "java/lang/String"）。用 "ldc_class:" 前缀透传给 emitter 发射 FindClass。
         const auto& t = std::get<jbytecode::core::Type>(c->value);
-        return fn.newOpaque(SSAType::REF, "ldc_class:" + t.getInternalName().to_std_string());
+        // #921 staticArena 退役：内部名仅瞬时转串做 SSA 名，函数级局部 arena 零驻留。
+        ca::str::Utf8StringArena scratch;
+        return fn.newOpaque(SSAType::REF, "ldc_class:" + t.getInternalName(scratch).to_std_string());
     }
     return fn.newOpaque(mirKindToSSA(c->type), "ldc_unknown");
 }

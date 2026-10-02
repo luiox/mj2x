@@ -438,8 +438,11 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
 
     // JNI function signature
     bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
+    // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
+    // 落点参数按必选口径走函数级局部 arena。
+    ca::str::Utf8StringArena retScratch;
     auto retType =
-        jvmDescToPrimitive(Type::getReturnType(mn->desc).getDescriptor());
+        jvmDescToPrimitive(Type::getReturnType(mn->desc).getDescriptor(retScratch));
 
     std::string methodName = mn->name.to_std_string();
     std::string methodDesc = mn->desc.to_std_string();
