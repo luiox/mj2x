@@ -51,6 +51,13 @@ int main(int argc, char** argv)
     if (argc < 2) return 64;
     const std::string phase = std::string(argv[1]) == "f" ? "configure" : "build";
     const std::string failure = envValue("MJ2X_FAKE_XMAKE_FAIL");
+    // NTSTATUS crash shape (issue #1023 item 3 retry-path E2E): return
+    // 0xC0000374 (heap corruption, signed -1073740940) on both phases. A
+    // normal return yields the same exit code as a real crash (no WER), so
+    // the test can assert first-run failure -> exactly one minimal-env retry
+    // -> clear final error. ASCII comments only: this target compiles without
+    // /utf-8, and a C4819 codepage swallow could eat the line below.
+    if (failure == "crash") return -1073740940;
     if (failure == "configure" && phase == "configure") return 21;
     if (phase == "configure") return 0;
 

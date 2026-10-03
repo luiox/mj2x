@@ -3948,3 +3948,52 @@ TEST(CliTest, DISABLED_InflatedPathSentinelNestedXmakeBuild)
     EXPECT_TRUE(fileExists(nativeLibraryPathFor(outClass))) << result.out;
 }
 
+
+#ifdef _WIN32
+// 重试路径 E2E（issue #1023 item 3）：假 xmake 两阶段恒返 -1073740940
+// （0xC0000374 堆损坏的带符号化 NTSTATUS，正常 return 与真崩溃退出码同形），
+// 前置 PATH 命中。断言：重试恰好一次（首跑失败 → 最小 env 重试 → 重试仍
+// 失败，不再二次重试）且最终报错明确（CLI 非零退出、失败码可见）。线上
+// 归因兜底即 #1022 预留的首退码 WARN 日志。
+TEST(CliTest, NtstatusCrashTriggersExactlyOneRetryWithMinimalEnv)
+{
+    const fs::path cli       = findCli();
+    const fs::path fakeXmake = test::getBuildTargetPath("mj2x_fake_xmake");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeXmake)) GTEST_SKIP() << "mj2x_fake_xmake is not built";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_retry_e2e.keep").parent_path() / "mj2x_cli_retry_e2e";
+    const fs::path toolDir    = workDir / "tool";
+    const fs::path projectDir = workDir / "project";
+    const fs::path outClass   = workDir / "output.class";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    const fs::path xmakeExecutable = toolDir / "xmake.exe";
+    fs::copy_file(fakeXmake, xmakeExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = runScript({
+        "set \"PATH=" + toolDir.string() + ";%PATH%\"",
+        "set \"MJ2X_FAKE_XMAKE_FAIL=crash\"",
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+            q(projectDir) + " --compile",
+    });
+
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    // 恰好重试一次：重试 WARN 恰出现一次（重试失败不触发第二次重试）。
+    EXPECT_EQ(countOccurrences(result.out,
+                               "retrying once with minimal environment overrides"),
+              1U)
+        << result.out;
+    // configure 两跑同码失败（首跑 + 重试），无第三跑；最终报错明确。
+    EXPECT_EQ(countOccurrences(result.out,
+                               "xmake configure failed with exit code -1073740940"),
+              2U)
+        << result.out;
+}
+#endif
