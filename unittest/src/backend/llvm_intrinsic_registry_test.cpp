@@ -66,6 +66,17 @@ constexpr LlvmIntrinsicEntry kGoldenMath[] = {
      "declare double @mj2x_math_min_f64(double, double)"},
     {"java/lang/Math", "max", "(DD)D", "mj2x_math_max_f64", "double", {"double", "double"},
      "declare double @mj2x_math_max_f64(double, double)"},
+    // ---- #1117 补位：切换后新增行（kEntries 单源追加，llvmDirect=true）----
+    {"java/lang/Math", "signum", "(F)F", "mj2x_math_signum_f32", "float", {"float"},
+     "declare float @mj2x_math_signum_f32(float)"},
+    {"java/lang/Math", "signum", "(D)D", "mj2x_math_signum_f64", "double", {"double"},
+     "declare double @mj2x_math_signum_f64(double)"},
+    {"java/lang/Math", "exp", "(D)D", "mj2x_math_exp", "double", {"double"},
+     "declare double @mj2x_math_exp(double)"},
+    {"java/lang/Math", "log", "(D)D", "mj2x_math_log", "double", {"double"},
+     "declare double @mj2x_math_log(double)"},
+    {"java/lang/Math", "log10", "(D)D", "mj2x_math_log10", "double", {"double"},
+     "declare double @mj2x_math_log10(double)"},
     {"java/lang/Math", "sin", "(D)D", "mj2x_math_sin", "double", {"double"},
      "declare double @mj2x_math_sin(double)"},
     {"java/lang/Math", "cos", "(D)D", "mj2x_math_cos", "double", {"double"},
@@ -82,6 +93,8 @@ constexpr LlvmIntrinsicEntry kGoldenMath[] = {
      "declare double @mj2x_math_pow(double, double)"},
     {"java/lang/Math", "round", "(D)J", "mj2x_math_round", "i64", {"double"},
      "declare i64 @mj2x_math_round(double)"},
+    {"java/lang/Math", "round", "(F)I", "mj2x_math_round_f32", "i32", {"float"},
+     "declare i32 @mj2x_math_round_f32(float)"},
     {"java/lang/Math", "random", "()D", "mj2x_math_random", "double", {""},
      "declare double @mj2x_math_random()"},
 };
@@ -291,7 +304,7 @@ size_t sizeOf(const LlvmBuilderEntry (&)[N])
 
 TEST(LlvmIntrinsicRegistryGoldenCross, MathTableFieldByField)
 {
-    ASSERT_EQ(sizeOf(kGoldenMath), 21u);
+    ASSERT_EQ(sizeOf(kGoldenMath), 27u);
     for (const auto& golden : kGoldenMath) {
         const LlvmIntrinsicEntry* e =
             matchLlvmIntrinsic(ref(golden.owner), ref(golden.name), ref(golden.desc));
@@ -461,12 +474,13 @@ TEST(LlvmIntrinsicRegistryGoldenCross, LlvmDirectFalseStaysAbsent)
 
 TEST(LlvmIntrinsicRegistryGoldenCross, DerivedSurfaceMatchesLlvmDirectBit)
 {
-    // 单源一致性：权威表 llvmDirect 计数 == 五张派生表条目和（21+8+8+7+48=92）。
+    // 单源一致性：权威表 llvmDirect 计数 == 五张派生表条目和（27+8+8+7+48=98，
+    // 其中 Math 面 #1117 由 21 增至 27）。
     size_t direct = 0;
     for (const auto& id : builtinIntrinsicTable()) {
         if (id.llvmDirect) ++direct;
     }
-    EXPECT_EQ(builtinIntrinsicTable().size(), 173u);
+    EXPECT_EQ(builtinIntrinsicTable().size(), 179u);
     EXPECT_EQ(direct, sizeOf(kGoldenMath) + sizeOf(kGoldenBox) + sizeOf(kGoldenUnbox) +
                           sizeOf(kGoldenRandom) + sizeOf(kGoldenBuilder));
 }

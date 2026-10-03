@@ -107,6 +107,15 @@ double  mj2x_math_pow(double base, double exponent);
 double  mj2x_math_floor(double value);
 double  mj2x_math_ceil(double value);
 int64_t mj2x_math_round(double value);
+/// java.lang.Math.round(float)：(int)floor(a + 0.5f)，NaN→0，饱和到 int 边界。
+int32_t mj2x_math_round_f32(float value);
+/// java.lang.Math.signum(float/double)：NaN/±0.0 按位型原样返回，其余 ±1.0。
+float   mj2x_math_signum_f32(float value);
+double  mj2x_math_signum_f64(double value);
+/// java.lang.Math.exp/log/log10：libm 半纯实现（1 ulp 档，与 pow 同口径）。
+double  mj2x_math_exp(double value);
+double  mj2x_math_log(double value);
+double  mj2x_math_log10(double value);
 double  mj2x_math_random(void);
 
 /// @brief java.lang.Integer / java.lang.Long 位操作与无符号 radix 字符串 intrinsic。

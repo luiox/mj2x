@@ -114,7 +114,7 @@ struct RegCIntrinsicIdentity
     RegCIntrinsicPrecheck         precheck;
 };
 
-/// @brief 内建表全量身份（kEntries 顺序，173 条；含 llvmDirect=false 条目）。
+/// @brief 内建表全量身份（kEntries 顺序，179 条；含 llvmDirect=false 条目）。
 std::vector<RegCIntrinsicIdentity> builtinIntrinsicTable();
 
 /// @brief Lookup table for RegC JDK intrinsics.

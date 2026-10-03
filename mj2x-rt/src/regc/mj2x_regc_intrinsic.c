@@ -259,6 +259,52 @@ int64_t mj2x_math_round(double value)
     return (int64_t)floor(value + 0.5);
 }
 
+// java.lang.Math.round(float)：JVM 规范公式 (int)floor(a + 0.5f)——加法按
+// float 精度执行，NaN→0；溢出侧饱和到 int 边界（C 裸 float→int 转换越界
+// 是 UB，必须显式夹紧，与上方 round(double) 的 long 夹紧同口径）。
+int32_t mj2x_math_round_f32(float value)
+{
+    if (isnan(value)) return 0;
+    const float shifted = value + 0.5f;
+    if (shifted >= 2147483648.0f) return INT32_MAX;
+    if (shifted <= -2147483648.0f) return INT32_MIN;
+    return (int32_t)floorf(shifted);
+}
+
+// java.lang.Math.signum(float/double)：NaN → 同位型 NaN；±0.0 → 同符号零
+// （IEEE 比较无法区分 ±0.0，必须按符号位返回原值）；其余按符号返回 ±1.0。
+float mj2x_math_signum_f32(float value)
+{
+    if (isnan(value)) return value;
+    if (value == 0.0f) return value;
+    return value > 0.0f ? 1.0f : -1.0f;
+}
+
+double mj2x_math_signum_f64(double value)
+{
+    if (isnan(value)) return value;
+    if (value == 0.0) return value;
+    return value > 0.0 ? 1.0 : -1.0;
+}
+
+// java.lang.Math.exp/log/log10：与 sin/cos/tan/pow 同类——JVM 允许 1 ulp 内
+// 的半纯（semi-pure）实现，CRT libm 满足该精度档；特殊值（exp(±0/±Inf)、
+// log(±0/1/负数/NaN)）由 libm 按 IEEE 语义给出，与 JVM 规范一致。
+double mj2x_math_exp(double value)
+{
+    return exp(value);
+}
+
+double mj2x_math_log(double value)
+{
+    return log(value);
+}
+
+double mj2x_math_log10(double value)
+{
+    return log10(value);
+}
+
 double mj2x_math_random(void)
 {
     const uint64_t high = mj2x_math_next_random_bits(26);
