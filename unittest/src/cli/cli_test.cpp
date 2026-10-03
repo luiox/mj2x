@@ -3907,32 +3907,46 @@ TEST(CliTest, DISABLED_InflatedPathSentinelNestedXmakeBuild)
     fs::create_directories(workDir, ec);
     ASSERT_FALSE(ec) << ec.message();
 
-    // 膨胀 PATH：40 个重复目录（镜像手工哨兵口径）+ 填充至 3KB+，尾接原
+    // 膨胀 PATH：重复目录（镜像手工哨兵口径，40 个为上限）+ 填充，尾接原
     // PATH（子 xmake/cl 仍可解析），放大子 xmake env 块构造的形状敏感面。
+    // 预算自感知（#1023 评审勘实）：cmd 单行上限 8191 是「膨胀段 + 宿主段 +
+    // 子进程内 vcvarsall.bat 拼入的 VS 工具链目录(~3.4KB)」总额——固定 3KB+
+    // 填充在宿主 PATH 稍长时即假红（vcvars 先爆，哨兵想 exercise 的嵌套
+    // xmake 根本没跑，环境假红不是回归）。据此：膨胀段按预算收缩（重复数
+    // 与填充同步让位），宿主段本身吃掉预算则跳过。
 #ifdef _WIN32
     const char separator = ';';
+    constexpr size_t kInflatedBudget = 8191 - 3400 - 400;   // ≈4.3KB（vcvars 增量 + 余量）
 #else
     const char separator = ':';
+    constexpr size_t kInflatedBudget = 8191 - 400;
 #endif
-    const std::string dupDir = (workDir / "dup").string();
-    const std::string padDir = (workDir / "pad").string();
-    std::string       inflatedPath;
-    for (int i = 0; i < 40; ++i) {
+    const std::string hostPath = (std::getenv("PATH") != nullptr) ? std::getenv("PATH") : "";
+    const std::string dupDir   = (workDir / "dup").string();
+    const std::string padDir   = (workDir / "pad").string();
+    const size_t      perDup   = dupDir.size() + 1;
+    if (hostPath.size() + 1024 + 1 > kInflatedBudget || perDup * 4 > kInflatedBudget - hostPath.size())
+        GTEST_SKIP() << "host PATH (" << hostPath.size() << "B) leaves no sentinel budget ("
+                     << kInflatedBudget << "B) for the nested vcvars cmdline";
+    size_t dupCount = 40;
+    while (dupCount > 4 && perDup * dupCount + 512 > kInflatedBudget - hostPath.size()) --dupCount;
+    std::string inflatedPath;
+    for (size_t i = 0; i < dupCount; ++i) {
         if (!inflatedPath.empty()) inflatedPath += separator;
         inflatedPath += dupDir;
     }
-    while (inflatedPath.size() < 3072) {
+    while (inflatedPath.size() + 1 + padDir.size() + hostPath.size() + 1 <= kInflatedBudget
+           && inflatedPath.size() < 3072) {
         inflatedPath += separator;
         inflatedPath += padDir;
     }
 #ifdef _WIN32
-    inflatedPath += ";" + sanitizePathForBatch(std::getenv("PATH"));
+    inflatedPath += ";" + sanitizePathForBatch(hostPath.c_str());
 #else
-    if (const char* current = std::getenv("PATH")) inflatedPath += ":" + std::string(current);
+    if (!hostPath.empty()) inflatedPath += ":" + hostPath;
 #endif
-    ASSERT_GT(inflatedPath.size(), 3072U);
-    // cmd 单行上限 8191：超限说明宿主 PATH 过长，本用例的 bat 包装会失败。
-    EXPECT_LE(inflatedPath.size(), 7000U) << inflatedPath;
+    ASSERT_GT(inflatedPath.size(), 1024U) << "sentinel inflation collapsed; check budget math";
+    EXPECT_LE(inflatedPath.size(), kInflatedBudget) << inflatedPath;
 
     auto result = runScript({
 #ifdef _WIN32
