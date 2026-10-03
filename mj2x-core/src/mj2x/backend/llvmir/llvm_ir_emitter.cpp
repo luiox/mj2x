@@ -1095,15 +1095,20 @@ private:
                 opcode = sourceType == SSAType::F32 ? "fpext" : "fptrunc";
             }
             else {
-                // 浮点 → 整数：llvm.fptosi.sat（NaN→0、溢出饱和，匹配 Java f2i/f2l
-                // 语义；LLVM fptosi 对 NaN/溢出是 poison，不可直接用）。
+                // 浮点 → 整数：llvm.fptosi.sat（NaN→0、溢出饱和，匹配 Java
+                // f2i/f2l/d2i/d2l 语义；LLVM fptosi 对 NaN/溢出是 poison，不可直接用）。
+                const char* intLlvm   = targetType == SSAType::I32 ? "i32" : "i64";
+                const char* floatLlvm = sourceType == SSAType::F32 ? "f32" : "f64";
+                // 模块级 declare：LLVM intrinsic 是重载符号，clang/llc 要求先
+                // 声明（否则 'use of undefined value'，#1120）；finalize 跨函数
+                // 去重（同 registry 直调 declare 惯例）。
+                runtimeDeclares_.push_back(std::string("declare ") + intLlvm +
+                                           " @llvm.fptosi.sat." + intLlvm + "." + floatLlvm +
+                                           "(" + llvmType(sourceType) + ")");
                 const std::string result = nextTemporary();
-                out_ << "  " << result << " = call "
-                     << (targetType == SSAType::I32 ? "i32" : "i64")
-                     << " @llvm.fptosi.sat."
-                     << (targetType == SSAType::I32 ? "i32" : "i64") << "."
-                     << (sourceType == SSAType::F32 ? "f32" : "f64") << "("
-                     << llvmType(sourceType) << " " << value << ")\n";
+                out_ << "  " << result << " = call " << intLlvm << " @llvm.fptosi.sat."
+                     << intLlvm << "." << floatLlvm << "(" << llvmType(sourceType) << " "
+                     << value << ")\n";
                 return emitStore(instruction.dest, result, reason);
             }
             const std::string result = nextTemporary();
