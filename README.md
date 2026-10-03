@@ -36,13 +36,20 @@ native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <
 ## 构建
 
 ```bash
-xmake f --with_mj2x=y            # 启用 mj2x(可选 --with_mj2x_vmc4=y --with_tests=y)
+xmake f --with_mj2x=y            # 启用 mj2x(可选 --with_tests=y)
 xmake build mj2x-cli             # CLI
 xmake build mj2x_unittest        # 单元测试
 ```
 
 需要 JDK(`JAVA_HOME` 含 `jni.h`)。`--with_tests=y` 时才拉取 gtest(见根目录
-`doc/build-system.md`「gtest 的获取」);`with_mj2x_vmc4` 关闭时 vmc4 后端与测试跳过。
+`doc/build-system.md`「gtest 的获取」)。
+
+**单后端构建**(issue #886):默认全后端;`xmake f --with_mj2x=y --with_mj2x_backend=stackc|regc|vmc4|llvm`
+只把所选后端编进可执行文件——被排除后端的源码不参与编译、CLI 对 `--backend <被排除>`
+及被裁默认值 fail-closed(报可用清单)、mj2x-rt 嵌入按分发面收缩(stackc-only 产物不含
+regc CRT 等;llvm 仍收编 regc intrinsic registry 供 JDK intrinsic 直调)。需要全量
+mj2x-core 的测试 target(`mj2x_unittest`/`mj2x_integration_test`/`str_alloc_baseline`)
+在单后端构建下自动禁用,全量回归用默认配置跑。
 
 ## 运行
 

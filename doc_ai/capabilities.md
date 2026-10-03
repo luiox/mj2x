@@ -15,6 +15,7 @@
 | `.jar` 输入 → 改写后 `.jar` + emitted C | ✅ | `mj2x_unittest` JAR pipeline 测试 |
 | RegC `.class` / `.jar` 输入 → emitted C++17 | ✅ | `CliTest.RealZigCompilesRegcCppClassAndRunsJvm` + CLI negative tests |
 | LLVM IR：静态纯计算 / 对象 / 数组 / 调用 / 异常 / monitor 全 JNI 语义 → textual `.ll` + native library | ✅ v2.2 转正默认开启 | 构建开关 `with_mj2x_llvm`（默认 on）；显式 `=n` 时 CLI 不暴露 `--backend llvm`/`--emit-llvm`/`--llvm-tool`（fail-closed）；后端单测 `LlvmIrBackendTest.*` + `CliTest.Llvm*`（pipe/CMake/xmake 工程 + 综合 E2E：arraycopy/异常/monitor/ldc，clang 编译 → JVM 运行） |
+| 单后端编译（#886）：`with_mj2x_backend=stackc\|regc\|vmc4\|llvm` 仅把所选后端编入可执行文件 | ✅ | 被排除后端源码不参与编译（llvm 选择器仍收编 regc intrinsic registry/matcher）；CLI 注册/分发面以 `MJ2X_DISABLE_*_BACKEND` 编译期裁剪，`--backend <被排除>` 与被裁默认值路径均 fail-closed（报可用清单）；mj2x-rt 嵌入按分发面收缩（embed rule `resources.embed.only` opt-in 过滤）；矩阵实测：全量 3630592B → stackc-only 1855488B / regc-only 2796544B / vmc4-only 2026496B / llvm-only 2317824B，符号标记串缺席逐一验证 |
 | StackC 单 `.class` 输出附带 `mj2x-cloader` sidecar class | ✅ | StackCBackend E2E |
 | StackC `.jar` 输出注入 `mj2x-cloader` dispatch loader class | ✅ | JAR pipeline / CLI 测试 |
 | JAR 输出保留 entry 顺序和非 class 资源 payload | ✅ | JAR fixture 测试 |

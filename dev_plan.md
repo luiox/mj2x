@@ -16,6 +16,7 @@
 | 十五（mj2x-llvmrt 运行时下沉） | #894：llvm_ir_helpers.cpp 固定 IR helper 逐批下沉 mj2x-rt/src/llvmir（declare 化）；源内 define internal 41→1（仅剩 bsm 站点模板）；benchmark 中性（`benchmark/results/2026-08-23-llvmrt-sink.md`） | ✅ 完成（见归档索引；顺带修复 Compare-REF Eq 裸拷贝发射缺陷 c1ce74d79） |
 | 十六（sprint 2026-09-17/18） | #760 切片 2 lazy 分块解密+密钥擦除（`--vmc4-lazy-decrypt`）；#887 探针级优化三连（class literal 缓存/trampoline 条件发射/装箱缓存，基准 ratio 1.36→1.12，`benchmark/results/2026-09-17-regc-probe-optimization.md`）；indy 原生派发判定原型+设计文档；#879-X3 stackc indy jclass 缓存；passReceiver intrinsic 扩面 | 🟢 波次一+部分波次二完成；indy backend 合流见待做 H |
 | 十七（sprint 2026-10） | #1116 切片 A vmc4 编码期块乱序（`--vmc4-shuffle-blocks`，默认关）：块 id+物理布局 Sattolo 单环乱序、间接跳转表重映射零字节改写、异常区域随排列自洽、targets 表密文落盘（`vmc4DeriveTargetsKey`）+JNI_OnLoad 解密；与 drift/encrypt-program 正交三开 round-trip | 🟢 完成（`Vmc4ShuffleTest.*` 10 例 + `Vmc4BackendShuffleE2E` 三档 e2e；见 capabilities §4） |
+| 十八（单后端编译） | #886：`with_mj2x_backend=stackc\|regc\|vmc4\|llvm` 值型开关——被排除后端源码不编译、CLI 注册/分发面 `MJ2X_DISABLE_*_BACKEND` 编译期裁剪 + 双层 fail-closed、mj2x-rt 嵌入按分发面收缩（embed rule opt-in 过滤）；全量回归默认配置持平 | ✅ 完成（矩阵实测全量 3630592B → stackc-only 1855488B / regc-only 2796544B / vmc4-only 2026496B / llvm-only 2317824B，见日志） |
 
 ## 待做项
 
@@ -228,6 +229,28 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 > （`xmake build mj2x-cli`），否则跑的是旧发射器（#894 收尾时踩过）。
 
 ## 日志
+
+- 2026-10-04（#886 单后端编译选项，分支 `feat/mj2x-886-single-backend`）：
+  新增值型开关 `with_mj2x_backend`（all 默认 | stackc | regc | vmc4 | llvm）。
+  三层裁剪：① mj2x-core 按选择器只收编所选后端目录（llvm 额外收编 regc
+  intrinsic registry+matcher——LLNK2019 实测勘定的依赖闭包）；② CLI 注册/
+  分发面以 `MJ2X_DISABLE_{STACKC,REGC,LLVM,VMC4}_BACKEND` define 家族编译期
+  裁剪（`--backend` 枚举串/解析/四处分发分支/vmc4 trace cast/buildTransform-
+  Options 同步收缩），fail-closed 双层——显式被裁名解析期即拒，被裁默认值
+  （如 stackc 被裁时 `--emit-c` 不带 `--backend`）validation 期报
+  `backend_not_built` 并列可用清单；③ mj2x-rt 嵌入按 embedded_rt.hpp 分发面
+  收缩：共享 embed rule（xmake/libca_rules.lua，跨界：opt-in 扩展）新增
+  target 值 `resources.embed.only` 挂载过滤，未设置时行为逐字节不变。
+  需要全量 core 的测试 target（mj2x_unittest/mj2x_integration_test/
+  str_alloc_baseline）单后端构建自动禁用。`with_mj2x_vmc4` 勘实为未接线死
+  开关（描述修正，行为不动）。xmake 3.0.9 描述作用域实测无 raise/assert/
+  cprint——冲突裁决放 target on_load，提示用 print。矩阵（release，各配置
+  构建绿 + exec E2E javac→基线→transform→JVM 运行 + CLI 拒绝 + 符号标记串
+  缺席）：全量 3630592B（三后端 E2E PASS，mj2x_unittest 741=731+10 skip+0
+  fail）/ stackc-only 1855488B（-48.9%）/ regc-only 2796544B（-23.0%）/
+  vmc4-only 2026496B（-44.2%）/ llvm-only 2317824B（-36.2%；本机无 PATH
+  clang，exec 编译按既有纪律跳过，--emit-llvm 发射路径已验）。默认配置重建
+  exe 字节数与改动前一致（3630592B）；门禁六项全部与基线持平。
 
 - 2026-08-23（mj2x-cli 解析迁移 ca::opt v2，分支 `feat/mj2x-cli-opt-v2`）：
   libca PR #198（opt v2：类型化 Arg/十类错误/互斥组/ValueSource 来源查询/
