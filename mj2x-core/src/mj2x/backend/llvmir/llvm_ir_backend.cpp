@@ -54,6 +54,20 @@ std::string helperName(const std::string& className, const MethodNode& method)
                                         method.desc.to_std_string());
 }
 
+/// @brief 整方法 fail-closed 降级诊断（#1121）：降级决策保持不变，仅在命中时
+/// 打警告让 native 保护面的消失可观测。口径对齐 RegC 的 "Skipping ..." 通道
+/// （regc_backend 同款 target/格式），结果固定带 method falls back to bytecode。
+void logMethodFallback(const std::string& className, const MethodNode& method,
+                       const std::string& reason)
+{
+    CA_LOGT_WARN("llvm",
+                 "Skipping {}.{}{}: {}: method falls back to bytecode\n",
+                 className.c_str(),
+                 method.name.to_std_string().c_str(),
+                 method.desc.to_std_string().c_str(),
+                 reason.c_str());
+}
+
 /// @brief 解析并预检 LLVM IR 切片内的静态互调目标（类声明见 internal.hpp）。
 ///
 /// @details 目标须 INVOKESTATIC + 目标类在编译索引内（非 library）+ markedForCompile
@@ -280,6 +294,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     SSAType     resultType = SSAType::UNKNOWN;
     std::string reason;
     if (!supportsMethodDescriptor(*method.methodNode, resultType, reason)) {
+        logMethodFallback(className, *method.methodNode, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
@@ -322,6 +337,9 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     std::unique_ptr<RegFunction> reg;
     RegisterTypes                registerTypes;
     if (!lowerAndValidate(reg, registerTypes, reason)) {
+        // #1121：SSA/RegIR/验证层 fail-closed（如异常区域 join 的 undef 边拷贝
+        // 触发 edge copy changes value type）在此整方法降级——此前静默。
+        logMethodFallback(className, *method.methodNode, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
@@ -333,6 +351,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
         std::unique_ptr<RegFunction> transformedReg;
         RegisterTypes                transformedTypes;
         if (!lowerAndValidate(transformedReg, transformedTypes, reason)) {
+            logMethodFallback(className, *method.methodNode, reason);
             result.text = "LLVM IR lowering failed: " + reason;
             return result;
         }
@@ -366,6 +385,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
                           runtimeProtection_.enabled() ? &runtimeProtection_ : nullptr,
                           &impl_->checkpointCounter, &checkpointGlobals, &runtimeDeclares,
                           helperSource, reason)) {
+        logMethodFallback(className, *method.methodNode, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }

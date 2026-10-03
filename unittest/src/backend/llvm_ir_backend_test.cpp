@@ -3,8 +3,13 @@
 #include <memory>
 #include <regex>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "jbytecode/jbytecode.hpp"
+#include "libca/log/log_macros.hpp"
+#include "libca/log/logger.hpp"
+#include "libca/log/logger_registry.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
 #include "mj2x/frontend/code_converter.hpp"
@@ -30,6 +35,43 @@ std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char*
     for (auto* instruction : insns) method->instructions.add(instruction);
     return method;
 }
+
+/// @brief 捕获 llvm target 警告的日志后端（#1121 降级诊断断言面）。
+class CapturingLogBackend final : public ca::log::ILogBackend
+{
+public:
+    void log(ca::log::Level level, std::string_view target, std::string_view file, int line,
+             const ca::log::OpaqueFormat& message) override
+    {
+        (void)target;
+        (void)file;
+        (void)line;
+        std::string text;
+        message.render_to(text);
+        entries.emplace_back(level, std::move(text));
+    }
+
+    std::vector<std::pair<ca::log::Level, std::string>> entries;
+};
+
+/// @brief 作用域内接管 llvm target 的 logger，析构时注销（测试隔离）。
+class ScopedLlvmLogCapture
+{
+public:
+    ScopedLlvmLogCapture()
+        : backend_(std::make_shared<CapturingLogBackend>())
+    {
+        ca::log::LoggerRegistry::register_logger(
+            "llvm", std::make_shared<ca::log::Logger>(backend_));
+    }
+
+    ~ScopedLlvmLogCapture() { ca::log::LoggerRegistry::unregister_logger("llvm"); }
+
+    CapturingLogBackend& backend() const { return *backend_; }
+
+private:
+    std::shared_ptr<CapturingLogBackend> backend_;
+};
 
 }   // namespace
 
@@ -275,6 +317,160 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
     EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_add__II(ptr %env, i32 %v0, i32 %v1)"),
               std::string::npos)
         << result.text;
+}
+
+TEST(LlvmIrBackendTest, LogsFallbackDiagnosticForRegionCrossingIntraClassCall)
+{
+    // #1121 防回归钉：方法 A 的 try 区域内调同类已标记编译的 B，且调用结果
+    // 越过区域存活（handler 与 try 体在区域后合流）→ SSA join 产生带 undef
+    // 来路（Opaque UNKNOWN）的边拷贝，验证层按精确类型检查整方法 fail-closed
+    // 降级回字节码。降级本身不动；本钉断言 (a) 诊断警告出现 (b) 方法无 native
+    // define，并对照：同形调用无 try 区域时正常发射、无降级警告。
+    auto* tryStart = new jbytecode::core::Label();
+    auto* tryEnd   = new jbytecode::core::Label();
+    auto* after    = new jbytecode::core::Label();
+    auto helper    = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "helper", "(I)I",
+                                {new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN)},
+                                2, 1);
+    // trap: try { r = helper(x); } catch (RuntimeException) { r = -1; } return r;
+    auto trap = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "trap", "(I)I",
+                           {
+                               new LabelNode(tryStart),
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  ca::str::ZUtf8StringRef::from_static("Test"),
+                                                  ca::str::ZUtf8StringRef::from_static("helper"),
+                                                  ca::str::ZUtf8StringRef::from_static("(I)I"),
+                                                  false),
+                               new VarInsnNode(Opcodes::ISTORE, 1),
+                               new LabelNode(tryEnd),
+                               new JumpInsnNode(Opcodes::GOTO, after),
+                               new LabelNode(tryEnd),
+                               new VarInsnNode(Opcodes::ASTORE, 2),
+                               new InsnNode(Opcodes::ICONST_M1),
+                               new VarInsnNode(Opcodes::ISTORE, 1),
+                               new LabelNode(after),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           2, 3);
+    trap->tryCatchBlocks.push_back(new TryCatchBlockNode(
+        tryStart, tryEnd, tryEnd,
+        ca::str::Utf8StringRef::from_cstr("java/lang/RuntimeException")));
+    // noTrap: return helper(x);（无区域对照）。
+    auto noTrap = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "noTrap", "(I)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::ZUtf8StringRef::from_static("Test"),
+                                                 ca::str::ZUtf8StringRef::from_static("helper"),
+                                                 ca::str::ZUtf8StringRef::from_static("(I)I"),
+                                                 false),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 1);
+
+    CompilerIndex index;
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{helper.get(), true, false, {}});
+    clazz.methods.push_back(CompilerMethod{trap.get(), true, false, {}});
+    clazz.methods.push_back(CompilerMethod{noTrap.get(), true, false, {}});
+    index.addClass("Test", std::move(clazz));
+
+    ScopedLlvmLogCapture capture;
+    LlvmIrBackend          backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+
+    auto trapResult = backend.compileMethod(
+        "Test", index.getClass("Test")->methods[1], converter.convert(*trap), &index);
+    // 降级行为钉：fail-closed，无 native define。
+    ASSERT_EQ(trapResult.kind, BackendResult::Kind::NONE) << trapResult.text;
+    // 诊断钉：触发原因 + 降级结果出现在 llvm 警告通道。
+    const auto& warnings = capture.backend().entries;
+    bool        sawTrapDiagnostic = false;
+    for (const auto& [level, text] : warnings) {
+        if (text.find("Skipping Test.trap(I)I:") != std::string::npos) {
+            EXPECT_EQ(level, ca::log::Level::Warn);
+            EXPECT_NE(text.find("LLVM IR edge copy changes value type"), std::string::npos)
+                << text;
+            EXPECT_NE(text.find("method falls back to bytecode"), std::string::npos) << text;
+            sawTrapDiagnostic = true;
+        }
+    }
+    EXPECT_TRUE(sawTrapDiagnostic)
+        << "expected fallback diagnostic for Test.trap, got " << warnings.size() << " warnings";
+
+    // 对照：同形同类调用无 try 区域 → 正常发射，无降级诊断。
+    auto noTrapResult = backend.compileMethod(
+        "Test", index.getClass("Test")->methods[2], converter.convert(*noTrap), &index);
+    ASSERT_EQ(noTrapResult.kind, BackendResult::Kind::C_SOURCE) << noTrapResult.text;
+    EXPECT_NE(noTrapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_noTrap__I"),
+              std::string::npos)
+        << noTrapResult.text;
+    for (const auto& [level, text] : warnings) {
+        EXPECT_EQ(text.find("Skipping Test.noTrap(I)I:"), std::string::npos)
+            << "unexpected fallback diagnostic: " << text;
+    }
+}
+
+TEST(LlvmIrBackendTest, LogsFallbackDiagnosticForForEachShape)
+{
+    // #1121 附带钉：javac for-each 展开形态（数组存入中间局部，copySlice 样本
+    // 同形）在无任何 try 区域时同样触发 undef 边拷贝 fail-closed 降级——诊断
+    // 面与降级行为一并钉住，防止能力文档与实际行为漂移。
+    auto* loopHead = new jbytecode::core::Label();
+    auto* loopEnd  = new jbytecode::core::Label();
+    auto forEach = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "forEachOnly", "([I)I",
+                              {
+                                  new InsnNode(Opcodes::ICONST_0),
+                                  new VarInsnNode(Opcodes::ISTORE, 1),
+                                  new VarInsnNode(Opcodes::ALOAD, 0),
+                                  new VarInsnNode(Opcodes::ASTORE, 2),
+                                  new VarInsnNode(Opcodes::ALOAD, 2),
+                                  new InsnNode(Opcodes::ARRAYLENGTH),
+                                  new VarInsnNode(Opcodes::ISTORE, 3),
+                                  new InsnNode(Opcodes::ICONST_0),
+                                  new VarInsnNode(Opcodes::ISTORE, 4),
+                                  new LabelNode(loopHead),
+                                  new VarInsnNode(Opcodes::ILOAD, 4),
+                                  new VarInsnNode(Opcodes::ILOAD, 3),
+                                  new JumpInsnNode(Opcodes::IF_ICMPGE, loopEnd),
+                                  new VarInsnNode(Opcodes::ALOAD, 2),
+                                  new VarInsnNode(Opcodes::ILOAD, 4),
+                                  new InsnNode(Opcodes::IALOAD),
+                                  new VarInsnNode(Opcodes::ISTORE, 5),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new VarInsnNode(Opcodes::ILOAD, 5),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ISTORE, 1),
+                                  new IincInsnNode(4, 1),
+                                  new JumpInsnNode(Opcodes::GOTO, loopHead),
+                                  new LabelNode(loopEnd),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              3, 6);
+
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{forEach.get(), true, false, {}});
+    ScopedLlvmLogCapture capture;
+    LlvmIrBackend          backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto        result = backend.compileMethod("Test", clazz.methods[0], converter.convert(*forEach));
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::NONE) << result.text;
+    bool sawDiagnostic = false;
+    for (const auto& [level, text] : capture.backend().entries) {
+        if (text.find("Skipping Test.forEachOnly([I)I:") != std::string::npos) {
+            EXPECT_EQ(level, ca::log::Level::Warn);
+            EXPECT_NE(text.find("method falls back to bytecode"), std::string::npos) << text;
+            sawDiagnostic = true;
+        }
+    }
+    EXPECT_TRUE(sawDiagnostic) << "expected fallback diagnostic for Test.forEachOnly";
 }
 
 TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
