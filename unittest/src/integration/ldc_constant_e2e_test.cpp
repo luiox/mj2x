@@ -5,7 +5,9 @@
 //   1) 手构类在 JVM（-Xverify:all）上的输出 == 硬编码期望（先证明样本本身对）；
 //   2) mj2x-cli（默认注册 LdcPreprocessor，全方法翻译）处理后，加载/运行输出
 //      与基线逐字一致 —— 历史缺陷形态是处理后直接 VerifyError。
-// 覆盖全部展开家族：findStatic/findVirtual/findConstructor/findGetter/MethodType。
+// 覆盖全部展开家族：findStatic/findVirtual/findConstructor/findGetter/MethodType
+// + #879 补课的 findSpecial/findSetter/findStaticGetter/findStaticSetter
+//（9 tag find* 家族的 exec 级全量：栈序单测见 ldc_preprocessor_test.cpp）。
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -57,8 +59,9 @@ std::string normalizeOutput(std::string value)
     return value;
 }
 
-/// 手构 LdcMhSample.class：一个字段、构造器、greet/shout 普通方法 +
-/// 五个 ldc 常量方法（static/virtual/ctor/getter handle、MethodType）。
+/// 手构 LdcMhSample.class：一个实例字段、一个静态字段、构造器、greet/shout
+/// 普通方法 + 九个 ldc 常量方法（static/virtual/special/ctor/getter/setter/
+/// staticGetter/staticSetter handle、MethodType）。
 std::vector<ca::u8> buildLdcMhSample(ca::str::Utf8StringArena& arena)
 {
     ClassNode cn;
@@ -68,6 +71,13 @@ std::vector<ca::u8> buildLdcMhSample(ca::str::Utf8StringArena& arena)
     cn.superName = ref(arena, "java/lang/Object");
     cn.fields.push_back(new FieldNode(Opcodes::ACC_PRIVATE,
                                       ref(arena, "tag"),
+                                      ref(arena, "Ljava/lang/String;"),
+                                      ref(arena, ""),
+                                      ca::core::Any{}));
+    // findStaticGetter/findStaticSetter 的目标（无初值 → null 缺省，免 <clinit>；
+    // setter 先写后读，避免 null 歧义）。
+    cn.fields.push_back(new FieldNode(Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC,
+                                      ref(arena, "flag"),
                                       ref(arena, "Ljava/lang/String;"),
                                       ref(arena, ""),
                                       ca::core::Any{}));
@@ -249,6 +259,119 @@ std::vector<ca::u8> buildLdcMhSample(ca::str::Utf8StringArena& arena)
         cn.methods.push_back(m);
     }
 
+    // #879 补课：ldc Handle(H_INVOKESPECIAL, shout) → findSpecial。receiver
+    // 语义：方法首参是接收者（invokeWithArguments([instance, arg])），特殊调用
+    // 直达 LdcMhSample 声明版本，不做虚分派。期望 shout("x") on tag="sp"。
+    {
+        auto* m = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                 ref(arena, "useSpecialHandle"),
+                                 ref(arena, "()Ljava/lang/String;"),
+                                 ref(arena, ""), {});
+        m->visitCode();
+        m->visitTypeInsn(Opcodes::NEW, ref(arena, "LdcMhSample"));
+        m->visitInsn(Opcodes::DUP);
+        m->visitLdcInsn(ca::core::Any(std::string("sp")));
+        m->visitMethodInsn(Opcodes::INVOKESPECIAL, ref(arena, "LdcMhSample"),
+                           ref(arena, "<init>"), ref(arena, "(Ljava/lang/String;)V"), false);
+        m->visitVarInsn(Opcodes::ASTORE, 0);
+        m->visitLdcInsn(ca::core::Any(std::string("x")));
+        m->visitVarInsn(Opcodes::ASTORE, 1);
+        m->visitLdcInsn(ca::core::Any(Handle(Opcodes::H_INVOKESPECIAL, ref(arena, "LdcMhSample"),
+                                             ref(arena, "shout"),
+                                             ref(arena, "(Ljava/lang/String;)Ljava/lang/String;"))));
+        emitVarargsSlots(m, arena, {0, 1});
+        m->visitMethodInsn(Opcodes::INVOKEVIRTUAL, ref(arena, "java/lang/invoke/MethodHandle"),
+                           ref(arena, "invokeWithArguments"),
+                           ref(arena, "([Ljava/lang/Object;)Ljava/lang/Object;"), false);
+        m->visitTypeInsn(Opcodes::CHECKCAST, ref(arena, "java/lang/String"));
+        m->visitInsn(Opcodes::ARETURN);
+        m->visitMaxs(0, 0);
+        m->visitEnd();
+        cn.methods.push_back(m);
+    }
+
+    // ldc Handle(H_PUTFIELD, tag) → findSetter：invokeWithArguments(instance, "T")
+    // 写私有实例字段，再经 shout 读回证明写入生效。
+    {
+        auto* m = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                 ref(arena, "useSetterHandle"),
+                                 ref(arena, "()Ljava/lang/String;"),
+                                 ref(arena, ""), {});
+        m->visitCode();
+        m->visitTypeInsn(Opcodes::NEW, ref(arena, "LdcMhSample"));
+        m->visitInsn(Opcodes::DUP);
+        m->visitLdcInsn(ca::core::Any(std::string("old")));
+        m->visitMethodInsn(Opcodes::INVOKESPECIAL, ref(arena, "LdcMhSample"),
+                           ref(arena, "<init>"), ref(arena, "(Ljava/lang/String;)V"), false);
+        m->visitVarInsn(Opcodes::ASTORE, 0);
+        m->visitLdcInsn(ca::core::Any(std::string("T")));
+        m->visitVarInsn(Opcodes::ASTORE, 1);
+        m->visitLdcInsn(ca::core::Any(Handle(Opcodes::H_PUTFIELD, ref(arena, "LdcMhSample"),
+                                             ref(arena, "tag"),
+                                             ref(arena, "Ljava/lang/String;"))));
+        emitVarargsSlots(m, arena, {0, 1});
+        m->visitMethodInsn(Opcodes::INVOKEVIRTUAL, ref(arena, "java/lang/invoke/MethodHandle"),
+                           ref(arena, "invokeWithArguments"),
+                           ref(arena, "([Ljava/lang/Object;)Ljava/lang/Object;"), false);
+        m->visitInsn(Opcodes::POP);
+        m->visitVarInsn(Opcodes::ALOAD, 0);
+        m->visitLdcInsn(ca::core::Any(std::string("after")));
+        m->visitMethodInsn(Opcodes::INVOKEVIRTUAL, ref(arena, "LdcMhSample"),
+                           ref(arena, "shout"),
+                           ref(arena, "(Ljava/lang/String;)Ljava/lang/String;"), false);
+        m->visitInsn(Opcodes::ARETURN);
+        m->visitMaxs(0, 0);
+        m->visitEnd();
+        cn.methods.push_back(m);
+    }
+
+    // ldc Handle(H_PUTSTATIC, flag) → findStaticSetter：invokeWithArguments("S1")
+    // 写私有静态字段（句柄形参只有值，无接收者）。
+    {
+        auto* m = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                 ref(arena, "useStaticSetterHandle"),
+                                 ref(arena, "()Ljava/lang/String;"),
+                                 ref(arena, ""), {});
+        m->visitCode();
+        m->visitLdcInsn(ca::core::Any(std::string("S1")));
+        m->visitVarInsn(Opcodes::ASTORE, 0);
+        m->visitLdcInsn(ca::core::Any(Handle(Opcodes::H_PUTSTATIC, ref(arena, "LdcMhSample"),
+                                             ref(arena, "flag"),
+                                             ref(arena, "Ljava/lang/String;"))));
+        emitVarargsSlots(m, arena, {0});
+        m->visitMethodInsn(Opcodes::INVOKEVIRTUAL, ref(arena, "java/lang/invoke/MethodHandle"),
+                           ref(arena, "invokeWithArguments"),
+                           ref(arena, "([Ljava/lang/Object;)Ljava/lang/Object;"), false);
+        m->visitInsn(Opcodes::POP);
+        m->visitLdcInsn(ca::core::Any(std::string("set")));
+        m->visitInsn(Opcodes::ARETURN);
+        m->visitMaxs(0, 0);
+        m->visitEnd();
+        cn.methods.push_back(m);
+    }
+
+    // ldc Handle(H_GETSTATIC, flag) → findStaticGetter：空 varargs 读回静态字段
+    //（跨方法可见 setter 写入的 "S1"——native 调用间静态字段一致性）。
+    {
+        auto* m = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                 ref(arena, "useStaticGetterHandle"),
+                                 ref(arena, "()Ljava/lang/String;"),
+                                 ref(arena, ""), {});
+        m->visitCode();
+        m->visitLdcInsn(ca::core::Any(Handle(Opcodes::H_GETSTATIC, ref(arena, "LdcMhSample"),
+                                             ref(arena, "flag"),
+                                             ref(arena, "Ljava/lang/String;"))));
+        emitVarargsSlots(m, arena, {});
+        m->visitMethodInsn(Opcodes::INVOKEVIRTUAL, ref(arena, "java/lang/invoke/MethodHandle"),
+                           ref(arena, "invokeWithArguments"),
+                           ref(arena, "([Ljava/lang/Object;)Ljava/lang/Object;"), false);
+        m->visitTypeInsn(Opcodes::CHECKCAST, ref(arena, "java/lang/String"));
+        m->visitInsn(Opcodes::ARETURN);
+        m->visitMaxs(0, 0);
+        m->visitEnd();
+        cn.methods.push_back(m);
+    }
+
     // ldc MethodType("(I)V") → toMethodDescriptorString()。
     {
         auto* m = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
@@ -334,8 +457,12 @@ TEST_F(LdcConstantE2E, LdcHandleAndMethodTypeSurviveTranslation)
                "    if (dll != null) System.load(dll);\n"
                "    System.out.println(LdcMhSample.useStaticHandle(\"world\"));\n"
                "    System.out.println(LdcMhSample.useVirtualHandle(\"s\"));\n"
+               "    System.out.println(LdcMhSample.useSpecialHandle());\n"
                "    System.out.println(LdcMhSample.useCtorHandle(\"c\"));\n"
                "    System.out.println(LdcMhSample.useGetterHandle(\"g\"));\n"
+               "    System.out.println(LdcMhSample.useSetterHandle());\n"
+               "    System.out.println(LdcMhSample.useStaticSetterHandle());\n"
+               "    System.out.println(LdcMhSample.useStaticGetterHandle());\n"
                "    System.out.println(LdcMhSample.useMethodType(\"x\"));\n"
                "  }\n"
                "}\n";
@@ -351,8 +478,12 @@ TEST_F(LdcConstantE2E, LdcHandleAndMethodTypeSurviveTranslation)
     const std::string expected =
         "hello world\n"
         "s:v\n"
+        "x:sp\n"
         "ctor:c\n"
         "g\n"
+        "after:T\n"
+        "set\n"
+        "S1\n"
         "(I)V\n";
     ASSERT_EQ(normalizeOutput(baselineRun.out), expected) << baselineRun.out;
 

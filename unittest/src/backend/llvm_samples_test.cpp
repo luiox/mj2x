@@ -6,6 +6,7 @@
 
 #include <gmock/gmock.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -46,6 +47,10 @@ struct SampleSpec
     std::vector<const char*> requiredMarkers;   // native.ll 内必须出现的片段
     /// Driver 原样运行受保护类的期望 stdout。
     const char*              expectedOutput;
+    /// 可选：Driver 在 check() 输出后追加执行的 probe 表达式（受保护类的静态
+    /// 方法调用，期望值固定打印 "probe=<值>"，异常打印 "probe=iae"）。用于
+    /// no-try 传播这类需要「非翻译的 Java 调用方」观察的用例（#879）。
+    const char*              probeExpression = nullptr;
 };
 
 std::string quotePath(const fs::path& path)
@@ -276,8 +281,17 @@ protected:
                    "    String dll = System.getenv(\"MORPHER_DLL\");\n"
                    "    if (dll != null) System.load(dll);\n"
                    "    System.out.println(protected_samples.llvm."
-                << sample.className << ".check());\n"
-                   "  }\n"
+                << sample.className << ".check());\n";
+            if (sample.probeExpression != nullptr) {
+                // probe 行：受保护类静态方法的边界观察（异常 → iae）。
+                out << "    try {\n"
+                       "      System.out.println(\"probe=\" + protected_samples.llvm."
+                    << sample.className << "." << sample.probeExpression << ");\n"
+                       "    } catch (IllegalArgumentException e) {\n"
+                       "      System.out.println(\"probe=iae\");\n"
+                       "    }\n";
+            }
+            out << "  }\n"
                    "}\n";
         }
         const auto compileDriver =
@@ -311,7 +325,11 @@ protected:
                                         " Driver"});
         ASSERT_EQ(nativeRun.exitCode, 0) << sample.className << " native run:\n"
                                          << nativeRun.out;
+        // 期望值按 \n 判等（#879 起支持 probe 多行期望）：runScript 输出 CRLF，
+        // 全文去 \r 后再裁尾部换行——单行样本行为与原先逐字一致。
         std::string normalized = nativeRun.out;
+        normalized.erase(std::remove(normalized.begin(), normalized.end(), '\r'),
+                         normalized.end());
         while (!normalized.empty() && (normalized.back() == '\n' || normalized.back() == '\r')) {
             normalized.pop_back();
         }
@@ -362,10 +380,14 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
             {
                 "define internal ptr @mj2x_llvm_Java_protected_1samples_llvm_LlvmIndySurfaceSample_concat__L",
                 "define internal ptr @mj2x_llvm_Java_protected_1samples_llvm_LlvmIndySurfaceSample_check",
+                // #879：no-try 预检探针面（方法保持 native 直调切片，无区域，
+                // IAE 经 native 边界传播由 Driver 观察）。
+                "define internal i32 @mj2x_llvm_Java_protected_1samples_llvm_LlvmIndySurfaceSample_randomBoundNoTry__I",
                 "mj2x_llvm_class_const",
                 "mj2x_llvm_string_const",
             },
-            "[k]=7 slice=5 types=true rand=iae",
+            "[k]=7 slice=5 types=true rand=iae\nprobe=iae",
+            "randomBoundNoTry(0)",
         },
         {
             "LlvmExceptionMonitorSample",

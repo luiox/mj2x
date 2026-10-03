@@ -353,6 +353,9 @@ TEST_F(RegCBackendE2E, RandomNextIntBoundTrapRoundTrip)
     // 通道（旧实现 bound<=0 返回 INT32_MIN 哨兵 = fail-open），发射端预检把
     // 异常挂到 context，由调用后异常分发/JNI 边界统一处理。正常 bound 的
     // 结果与 JVM 逐位一致（标准 Java LCG）。
+    // #879 补课：noTryTrap 锁「无 try 区域」的 JNI 边界传播路径——bound<=0
+    // 发生在无区域方法内，异常必须原样冒出 native 边界（区别于 trap/trapInTry
+    // 的 try 逃逸路径）。
     runCase("RegCRandomBound",
             "public class RegCRandomBound {\n"
             "  public static int okBound(long seed, int bound) {\n"
@@ -374,6 +377,9 @@ TEST_F(RegCBackendE2E, RandomNextIntBoundTrapRoundTrip)
             "    }\n"
             "    return sink;\n"
             "  }\n"
+            "  public static int noTryTrap(long seed, int bound) {\n"
+            "    return new java.util.Random(seed).nextInt(bound);\n"
+            "  }\n"
             "}\n",
             {
                 {"okBound(42, 100)", "RegCRandomBound.okBound(42L, 100)"},
@@ -382,6 +388,7 @@ TEST_F(RegCBackendE2E, RandomNextIntBoundTrapRoundTrip)
                 {"trap(42, -3)", "RegCRandomBound.trap(42L, -3)"},
                 {"trapInTry(42, 0)", "RegCRandomBound.trapInTry(42L, 0)"},
                 {"trapInTry(42, 10)", "RegCRandomBound.trapInTry(42L, 10)"},
+                {"noTryTrap(42, 0)", "RegCRandomBound.noTryTrap(42L, 0)"},
             });
 }
 

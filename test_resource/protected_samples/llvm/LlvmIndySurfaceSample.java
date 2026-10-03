@@ -56,6 +56,16 @@ public class LlvmIndySurfaceSample {
         }
     }
 
+    /**
+     * No-region counterpart of {@link #randomBoundTrap()}: the method body has no
+     * try region, so the precheck-raised exception must propagate across the native
+     * method boundary (rethrow + default return). The sample driver observes it one
+     * JNI hop away (plain try/catch in Driver, which is not translated).
+     */
+    public static int randomBoundNoTry(int bound) {
+        return new java.util.Random(42).nextInt(bound);
+    }
+
     public static String check() {
         boolean types = intType() == Integer.TYPE && stringType() == String.class;
         return concat("k", 7) + " slice=" + copySlice(new int[] {1, 2, 3, 4}, 1, 2)
