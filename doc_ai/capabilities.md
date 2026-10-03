@@ -278,9 +278,9 @@ CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契
 （执行解码层）/ `--vmc4-encrypt-program`（落盘层）正交可叠:乱序在编码期决定最终
 布局，drift 按最终偏移选变体、加密作用于最终流。5 种 dispatcher 形态共享 handler
 片段（全部 `pc = targets[id]`、逐块显式 terminator 无 fall-through），对乱序透明。
-关闭路径产物字节级不变。验证:`Vmc4ShuffleTest.*` 9 例（乱序 ≠ 发射序/跳转闭合/targets
+关闭路径产物字节级不变。验证:`Vmc4ShuffleTest.*` 10 例（乱序 ≠ 发射序/跳转闭合/targets
 升序/异常区域重映射自洽/同 seed 逐字节一致/不同 seed 布局不同/表加密与 JNI_OnLoad
-解密/三开关叠加产物形态）+ `Vmc4BackendShuffleE2E` 三档 round-trip（shuffle 单开 /
+解密/三开关叠加产物形态/迷你 VM 模拟执行与参考语义逐输入等价）+ `Vmc4BackendShuffleE2E` 三档 round-trip（shuffle 单开 /
 +drift / +drift+encrypt，switch+循环+try/catch，`-Xverify:all`）。
 
 **已知限制**:MULTIANEWARRAY 初始 fail-closed 已放开;仍 fail-closed:反射、动态类加载、
