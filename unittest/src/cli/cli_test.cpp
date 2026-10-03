@@ -3877,3 +3877,74 @@ TEST(CliTest, BadJarInputsFailClosed)
     EXPECT_NE(emptyJar.exitCode, 0);
     EXPECT_NE(emptyJar.out.find("no root class entries"), std::string::npos) << emptyJar.out;
 }
+
+// 膨胀 PATH 哨兵（issue #1023 item 2）：原手工 5 连（PATH 40 个重复目录、
+// 3KB+，跑嵌套 xmake 编译用例）固化为 disabled gtest。DISABLED_ 前缀使其
+// 不进常规门禁（控耗时）；手工触发路径保留：
+//   xmake run -y mj2x_unittest --gtest_also_run_disabled_tests \
+//     --gtest_filter=CliTest.DISABLED_InflatedPathSentinelNestedXmakeBuild
+// 验收口径沿用原手工流程：连跑 5 次全绿。背景见
+// mj2x/doc_ai/heapcrash-analysis.md §3/§6f——触发物是子 xmake（pinned tbox）
+// env 块构造缺陷，mj2x 侧以形状卫生 + NTSTATUS 重试加固；本哨兵只防回归，
+// 不能证明触及原机崩溃。
+TEST(CliTest, DISABLED_InflatedPathSentinelNestedXmakeBuild)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!commandAvailable("xmake")) GTEST_SKIP() << "xmake is not available on PATH";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_inflated_path.keep").parent_path() /
+        "mj2x_cli_inflated_path";
+    const fs::path projectDir = workDir / "project";
+    const fs::path outClass   = workDir / "output.class";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    // 膨胀 PATH：40 个重复目录（镜像手工哨兵口径）+ 填充至 3KB+，尾接原
+    // PATH（子 xmake/cl 仍可解析），放大子 xmake env 块构造的形状敏感面。
+#ifdef _WIN32
+    const char separator = ';';
+#else
+    const char separator = ':';
+#endif
+    const std::string dupDir = (workDir / "dup").string();
+    const std::string padDir = (workDir / "pad").string();
+    std::string       inflatedPath;
+    for (int i = 0; i < 40; ++i) {
+        if (!inflatedPath.empty()) inflatedPath += separator;
+        inflatedPath += dupDir;
+    }
+    while (inflatedPath.size() < 3072) {
+        inflatedPath += separator;
+        inflatedPath += padDir;
+    }
+#ifdef _WIN32
+    inflatedPath += ";" + sanitizePathForBatch(std::getenv("PATH"));
+#else
+    if (const char* current = std::getenv("PATH")) inflatedPath += ":" + std::string(current);
+#endif
+    ASSERT_GT(inflatedPath.size(), 3072U);
+    // cmd 单行上限 8191：超限说明宿主 PATH 过长，本用例的 bat 包装会失败。
+    EXPECT_LE(inflatedPath.size(), 7000U) << inflatedPath;
+
+    auto result = runScript({
+#ifdef _WIN32
+        "set \"PATH=" + inflatedPath + "\"",
+#else
+        "export PATH=" + q(inflatedPath) + ":$PATH",
+#endif
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) + " --generate-xmake " +
+            q(projectDir) + " --compile",
+    });
+
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(nativeLibraryPathFor(outClass))) << result.out;
+}
+
