@@ -37,10 +37,29 @@ target("mj2x-cli-companion")
 -- gtest 面随 with_tests 门控：默认配置不定义以下 test target、不拉 gtest（D15）。
 -- （mj2x-cli-companion 是 phony 桩、不涉 gtest，留在门外；仅被门内 target 依赖。）
 if has_config("with_tests") then
+-- #886 单后端编译选择器（与 mj2x-core / mj2x-cli 同口径）：
+-- 单后端构建的 mj2x-core 不含全部后端，单元/集成测试面需要全量归档，自动禁用；
+-- 全量回归请在默认（with_mj2x_backend=all）配置下执行。
+local mj2x_backend = tostring(get_config("with_mj2x_backend") or "all")
+if mj2x_backend == "" then mj2x_backend = "all" end
+local mj2x_backend_single = mj2x_backend ~= "all"
+
+-- mj2x 单元/集成测试禁用面（#886）：单后端构建下置 disabled + 配置期提示。
+-- 注：描述作用域无 cprint（xmake 3.0.9 实测），提示用 print 拼接。
+function mj2x_disable_full_core_tests(target_name)
+    if mj2x_backend_single then
+        set_enabled(false)
+        print("[mj2x] " .. target_name ..
+              " disabled: with_mj2x_backend=" .. mj2x_backend ..
+              " (full mj2x-core required, issue #886)")
+    end
+end
+
 target("mj2x_unittest")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
+    mj2x_disable_full_core_tests("mj2x_unittest")
 
     -- release 模式下保住 assert 断言（防绿验空转），见 mj2x/xmake.lua。
     mj2x_test_keep_asserts()
@@ -76,6 +95,8 @@ target("mj2x_integration_test")
     set_kind("binary")
     set_group("mj2x/test")
     set_default(false)
+    -- #886：集成/E2E 矩阵覆盖全部后端，单后端构建下禁用（见顶部说明）。
+    mj2x_disable_full_core_tests("mj2x_integration_test")
 
     -- release 模式下保住 assert 断言（防绿验空转），见 mj2x/xmake.lua。
     mj2x_test_keep_asserts()
