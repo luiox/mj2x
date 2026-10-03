@@ -44,16 +44,23 @@ distributable CRT (mj2x/mj2x-rt/src/regc/)
 
 ### Math(`java.lang.Math`,static,无对象逃逸)
 - `abs(I/J/F/D)` → `mj2x_math_abs_i32/i64/f32/f64`
-- `min/max(II/JJ/FF/DD)` → `mj2x_math_min/max_*`(JLS NaN 传播,非 ISO C fmin/fmax)
+- `min/max(II/JJ/FF/DD)` → `mj2x_math_min/max_*`(JLS NaN 传播,非 ISO C fmin/fmax;
+  F/D ±0.0 结果符号按 OpenJDK 语义按符号位裁决 #1117——裸三目对 IEEE 相等的
+  ±0.0 会返回错误符号零,g17.math_nan_zero 对拍锁定)
 - `sin/cos/tan(D)D` → `mj2x_math_*`
 - `sqrt(D)D`、`pow(DD)D` → `mj2x_math_*`
+- `exp/log/log10(D)D` → `mj2x_math_*`(libm 半纯实现,#1117)
 - `floor/ceil(D)D` → `mj2x_math_*`
+- `signum(F)F/(D)D` → `mj2x_math_signum_f32/f64`(NaN/±0.0 按位型原样返回,#1117)
 - `round(D)J` → `mj2x_math_round`(floor(x+0.5),NaN→0,±Inf 钳位)
+- `round(F)I` → `mj2x_math_round_f32`(floorf(x+0.5f),NaN→0,int 边界饱和,#1117)
 - `random()D` → `mj2x_math_random`(Java 兼容 LCG 流)
 
 ### String / Integer
 - `Integer.parseInt(Ljava/lang/String;)I` → `_mj2x_intrinsic_parse_int`
-- String LDC → `_mj2x_intrinsic_string_literal`
+- String LDC → `_mj2x_intrinsic_string_literal`(TU 级缓存 + `String.intern()`
+  归一化 #1117:ldc 常量是 interned 实例,同内容常量跨站点/跨类/与 `.intern()`
+  比较恒等;缓存 32 槽溢出后逐次物化也因 intern 恒等不再破坏语义)
 - String read hot paths、concat/substring/compareTo/indexOf/replace/trim 通过
   TU-local helper 或 `mj2x-rt` UTF-16 ABI 实现。
 - `String.split(String[,limit])` 对简单字面量走 CRT fast path;空模式、转义和完整

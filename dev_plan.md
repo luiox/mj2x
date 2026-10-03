@@ -17,6 +17,7 @@
 | 十六（sprint 2026-09-17/18） | #760 切片 2 lazy 分块解密+密钥擦除（`--vmc4-lazy-decrypt`）；#887 探针级优化三连（class literal 缓存/trampoline 条件发射/装箱缓存，基准 ratio 1.36→1.12，`benchmark/results/2026-09-17-regc-probe-optimization.md`）；indy 原生派发判定原型+设计文档；#879-X3 stackc indy jclass 缓存；passReceiver intrinsic 扩面 | 🟢 波次一+部分波次二完成；indy backend 合流见待做 H |
 | 十七（sprint 2026-10） | #1116 切片 A vmc4 编码期块乱序（`--vmc4-shuffle-blocks`，默认关）：块 id+物理布局 Sattolo 单环乱序、间接跳转表重映射零字节改写、异常区域随排列自洽、targets 表密文落盘（`vmc4DeriveTargetsKey`）+JNI_OnLoad 解密；与 drift/encrypt-program 正交三开 round-trip | 🟢 完成（`Vmc4ShuffleTest.*` 10 例 + `Vmc4BackendShuffleE2E` 三档 e2e；见 capabilities §4） |
 | 十八（单后端编译） | #886：`with_mj2x_backend=stackc\|regc\|vmc4\|llvm` 值型开关——被排除后端源码不编译、CLI 注册/分发面 `MJ2X_DISABLE_*_BACKEND` 编译期裁剪 + 双层 fail-closed、mj2x-rt 嵌入按分发面收缩（embed rule opt-in 过滤）；全量回归默认配置持平 | ✅ 完成（矩阵实测全量 3630592B → stackc-only 1855488B / regc-only 2796544B / vmc4-only 2026496B / llvm-only 2317824B，见日志） |
+| 十九（#1117 坑位补位） | intrinsic × 形态对照表（`doc_ai/intrinsic_matrix.md`）；kEntries +6（round(F)/signum/exp/log/log10，llvmDirect 全开）；CRT min/max ±0.0 位型修复；RegC/StackC LDC intern 恒等；mtest_set G17 回归五条（跨界） | ✅ 完成；LLVM/VMC4 ldc intern 与 floorDiv precheck 等候选见 intrinsic_matrix §4 |
 
 ## 待做项
 

@@ -55,7 +55,10 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 等价 JNIC 3.5.1/3.7.0 stringObf=false 形态），方法体只引用 pool offset。
 `--strings-encrypt` 开启时池以密文落盘（xorshift32 keystream，密钥由 stringPoolSeed 派生），
 `JNI_OnLoad` 内经 `mj2x_stackc_string_pool_decrypt` 一次性批量原地解密（JVM 保证
-`JNI_OnLoad` 单线程且先于任何 native 方法执行，调用点无需同步）。
+`JNI_OnLoad` 单线程且先于任何 native 方法执行，调用点无需同步）。LDC 字符串物化
+经 `String.intern()` 归一化并缓存进 TU 级 `_mj2x_literal_cache[]`（global ref，
+每池条目一槽，#1117）：JVM ldc 常量是 interned 实例，同内容常量跨站点/跨方法/
+与 `.intern()` 比较恒等，命中路径 0 JNI。
 
 **已覆盖的 javac 输出形状**:
 
@@ -150,13 +153,13 @@ LDC 字符串密文落盘为内容去重缓冲 `_mj2x_str_<hex64(fnv1a64)>`（�
 
 **JDK intrinsic 覆盖(初版,匹配调用点无通用 JNI helper 派发)**:
 
-- `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、random
+- `java.lang.Math`:abs/min/max(int/long/float/double)、sin/cos/tan/sqrt/pow、floor/ceil/round、signum(float/double)、exp/log/log10、round(float)、random
 - `java.lang.Integer/Long` 位操作:rotateLeft/rotateRight、reverse/reverseBytes、bitCount、numberOfLeadingZeros/numberOfTrailingZeros、highestOneBit/lowestOneBit、signum——纯 C 计算(`mj2x_intrinsic_{int,long}_*`),语义与 OpenJDK 一致(distance 按 32/64 取模、无符号旋转/反转、符号位仅扩展在返回值),CRT 实现与 JDK 交叉验证(`mj2x-rt/test/mj2x_regc_intrinsic_test.c`);`RuntimeFunction` emitKind 纯计算 intrinsic 发射为纯 C 表达式并省略 ExceptionCheck(异常检查稀疏化,见 `regc_codegen.md` §4)
 - `java.lang.Integer.parseInt(String[,radix])`、`Long.parseLong(String[,radix])`、`Short.parseShort(String[,radix])`、`Byte.parseByte(String[,radix])`:native digit parser 解析并检查目标类型范围,NumberFormatException 经 context 回调路由
 - `java.lang.Boolean.parseBoolean(String)`:按 UTF-16 ASCII 大小写不敏感匹配 `true`;`Float.parseFloat(String)` / `Double.parseDouble(String)` 通过专用 TU 级缓存调用 JDK parser,保留 NaN、Infinity、hex float 与异常语义
 - `java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.toString`、`java.lang.Integer/Long/Short/Byte/Float/Double/Boolean/Character.compare`:无状态 compare 与基础整型/布尔/字符 `toString` 走 `mj2x-rt` C ABI;`Float/Double.toString` 复用缓存的 JDK `String.valueOf(F/D)` 保持浮点文本格式,`Float/Double.compare` 显式处理 NaN 与 signed zero 语义
 - `java.lang.String.valueOf(int|long|boolean|char|float|double|Object)`:RegC local helper 覆盖常见值转字符串;`float|double` 和 `Object` 通过缓存的 JDK methodID 保持浮点格式和虚分派语义
-- String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费
+- String LDC:经 `_mj2x_intrinsic_string_literal` 物化为 jstring,供 intrinsic 路径消费;物化经 `String.intern()` 归一化(#1117),同内容常量跨站点/跨类/与 `.intern()` 比较恒等
 - `java.lang.String`:length/isEmpty/startsWith(String)/endsWith(String)/contains(CharSequence),以及 `concat`、`compareTo`、`indexOf(int|String[,fromIndex])`、`replace(char,char)`、`trim`、`split(String[,limit])`。`split` 仅对非空且无正则元字符的 delimiter 走 native UTF-16 fast path,完整正则、空模式与转义模式回退 JDK;`contains` 对非 String `CharSequence` 同样回退缓存的 Java methodID。`equals`/`charAt`/`hashCode`/`substring(I|II)` 不走 StringMethod intrinsic:多 JNI 数据管道(3-6 个 JNI)实测劣于缓存 methodID 的 1-JNI `CallXxxMethodA`(HotSpot 对前三者有 VM intrinsic + hashCode memoization;substring 的 JDK 实现本就共享底层数组 O(1)),回退通用 cached 调用路径
 - 枚举合成面 intrinsic:编译输入枚举子类的 `name()`/`ordinal()` 直连字段读取(Enum final 语义等价);javac 合成形态验证后的 `values()`(getstatic $VALUES + 数组 clone + checkcast + areturn)内联为 cached getstatic + 站点缓存 clone,`valueOf(String)`(ldc class + Enum.valueOf + checkcast + areturn)直调 `Enum.valueOf`。合成形态验证由后端预扫描完成(injectIntoClass 清空指令前),手工字节码自定义方法体不匹配则回退通用路径
 - `getClass().getName().hashCode()` 链融合:emitter 前瞻匹配同块内三连调用链(值不逃逸到 terminator/异常边),整链折叠为单个 `mj2x_intrinsic_class_name_hash` 调用(3 JNI→1);CRT 侧双槽 receiver 身份缓存(`IsSameObject` 命中直接返回 memoized hash),miss 时经 JDK 计算并以 global ref 回填,自旋锁保护槽位一致性。典型分派/反射 hash 查找场景每迭代省 2 JNI
@@ -299,7 +302,7 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 | RegC / R3 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String/split 与 opaque StringBuilder/StringBuffer helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
-| Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random) | ✅ runtime + emitter 识别 |
+| Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random/signum/exp/log/log10) | ✅ runtime + emitter 识别；min/max F/D NaN/±0.0 位型按 OpenJDK 语义(#1117) |
 | wrapper parse / toString / compare intrinsic | ✅ Integer/Long/Short/Byte radix parser、Boolean parser、Float/Double JDK parser cache + E2E;无状态 compare/基础 `toString` 由 CRT 提供 |
 | 包装类 native struct(Integer/Long/Short/Byte/Float/Double/Boolean/Character)valueOf/xxxValue | ✅ 可证明安全的 value/unbox 使用 native shadow;逃逸链回退真实 Java wrapper |
 | Random Java 兼容 LCG(nextInt/nextLong/nextDouble/nextBoolean/nextInt(bound)) | ✅ runtime + RegC 非逃逸 new/init/next*;逃逸 fail-closed |
@@ -421,6 +424,10 @@ Wave 1 首次运行发现并修复包内单 class 的 StackC cloader sidecar 错
 RegC exception handler local 未通过异常边传递的问题，`g10.monitor` 的异常释放路径现已
 完成 native/JVM 行为验证。Wave 3（#820）新增 G12 StringOps / G13 BitOps /
 G14 DeepRecursion / G15 CollectionOps（吸收 bludnov/ttvar 语义覆盖面）。
+Wave 4（#1117）新增 G17 jvmtp 1.7.1 正确性修复语义点回归五条（Math NaN/±0.0、
+String intern、协变数组存储、兄弟方法完整性、注解可见性），并暴露修复
+mj2x CRT min/max ±0.0 位型与 RegC/StackC LDC intern 恒等两处缺陷；
+覆盖对照见 `intrinsic_matrix.md`。
 
 ### 8.1 用户自定义 intrinsic（issue #818 + passReceiver instance 扩面）
 

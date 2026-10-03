@@ -8,6 +8,7 @@
 | 文档 | 内容 |
 |---|---|
 | [capabilities.md](capabilities.md) | 已实现功能清单（三后端支持矩阵、runtime、验证入口） |
+| [intrinsic_matrix.md](intrinsic_matrix.md) | intrinsic/fast-path × 后端形态覆盖矩阵（字节码面 + kEntries 面逐后端现状、高价值判据、候选行，#1117） |
 | [test_strategy.md](test_strategy.md) | 测试分层策略（单测 / e2e / mtest_set / 覆盖率审计） |
 | [config_system_design.md](config_system_design.md) | 配置系统设计（参数注册表单源 + JSON Schema 导出，GUI 工具路径；**P0+P1 已实现**） |
 | [competitor_config_reference.md](competitor_config_reference.md) | 竞品配置系统调研（jvmtp / skidoni，配置设计输入依据） |
