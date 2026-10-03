@@ -786,6 +786,17 @@ size_t StackCBackend::Impl::stringPoolLengthFor(const std::string& value)
     return stringPoolLengths.at(value);
 }
 
+size_t StackCBackend::Impl::stringPoolSlotFor(const std::string& value)
+{
+    auto found = stringPoolSlots.find(value);
+    if (found != stringPoolSlots.end()) return found->second;
+
+    // 与 stringPoolOffsetFor 同调用序（先 offset 后 slot），两侧条目集合一致。
+    const auto slot = stringPoolSlotCount++;
+    stringPoolSlots.emplace(value, slot);
+    return slot;
+}
+
 std::uint32_t StackCBackend::Impl::stringPoolSeed() const
 {
     // 密钥派生（确定性、自包含在产物内）：对明文单位序列的规范化字节序
@@ -808,7 +819,6 @@ std::uint32_t StackCBackend::Impl::stringPoolSeed() const
 void StackCBackend::Impl::emitStringPool(codegen::CSourceStream& out) const
 {
     if (stringPoolUnits.empty()) return;
-
     // --strings-encrypt：池以密文形态写入 C 源（xorshift32 密钥流逐单位 XOR，
     // 先推进 state 再取低 16 位——与 mj2x_stackc_runtime 的解密逐位互逆）。
     // 首切片目标为 at-rest：产物 C 源/编译后 native 库内无明文 UTF-16 序列；
@@ -833,7 +843,7 @@ void StackCBackend::Impl::emitStringPool(codegen::CSourceStream& out) const
         }
         out.append("\n};");
         out.newLine();
-        out.emitBlankLine();
+        emitLiteralCacheArray(out);
         return;
     }
 
@@ -844,6 +854,19 @@ void StackCBackend::Impl::emitStringPool(codegen::CSourceStream& out) const
         if (i + 1 < stringPoolUnits.size()) out.append(", ");
     }
     out.append("\n};");
+    out.newLine();
+    emitLiteralCacheArray(out);
+}
+
+/// LDC 字符串恒等缓存（#1117）：每池条目一槽的 global-ref 数组。JVM ldc 常量
+/// 是 interned 实例，物化点首次经 String.intern() 归一化进 JVM 字符串池并缓存
+/// （同内容常量跨站点/跨方法/跨 String.intern() 恒等）；零初始化静态数组 =
+/// 全 NULL 槽，命中路径 0 JNI。
+void StackCBackend::Impl::emitLiteralCacheArray(codegen::CSourceStream& out) const
+{
+    out.appendLineStart("static jstring _mj2x_literal_cache[")
+        .appendInt(static_cast<int64_t>(stringPoolSlotCount))
+        .append("];");
     out.newLine();
     out.emitBlankLine();
 }

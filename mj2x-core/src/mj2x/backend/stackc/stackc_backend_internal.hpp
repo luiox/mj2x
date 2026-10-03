@@ -527,6 +527,10 @@ struct StackCBackend::Impl
     std::vector<std::string>                interfaceDefaultProxyClassOrder;
     std::unordered_map<std::string, size_t> stringPoolOffsets;
     std::unordered_map<std::string, size_t> stringPoolLengths;
+    /// 字符串池条目序号（#1117 LDC intern 缓存：_mj2x_literal_cache[] 按条目
+    /// 一槽，与 stringPoolOffsets 同步填充；值 = 插入序号，非字节 offset）。
+    std::unordered_map<std::string, size_t> stringPoolSlots;
+    size_t                                  stringPoolSlotCount = 0;
     std::vector<ca::u16>                    stringPoolUnits;
     std::deque<std::string>                 stableUtf8Storage;
     /// 字符串池 at-rest 加密（--strings-encrypt）：开启后池以密文发射，
@@ -601,6 +605,10 @@ struct StackCBackend::Impl
     void   emitClassRefCache(const std::string& className, codegen::CSourceStream& out);
     size_t stringPoolOffsetFor(const std::string& value);
     size_t stringPoolLengthFor(const std::string& value);
+    /// 池条目序号（与 stringPoolOffsetFor 同步填充；供 LDC intern 缓存数组索引）。
+    size_t stringPoolSlotFor(const std::string& value);
+    /// 发射 LDC 字符串恒等缓存数组（`_mj2x_literal_cache[池条目数]`）。
+    void   emitLiteralCacheArray(codegen::CSourceStream& out) const;
     /// 池加密密钥（stringsEncrypt 时使用）：对明文单位序列做 fnv1a64 折叠到
     /// u32 再混固定常量；纯函数（同池同 seed，可复现构建），0 时回退固定种子。
     std::uint32_t stringPoolSeed() const;

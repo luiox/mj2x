@@ -15,6 +15,7 @@ namespace mj2x {
 using namespace jbytecode::core;
 using namespace jbytecode::analysis;
 using codegen::cStringLiteral;
+using codegen::cFloatLiteral;
 using codegen::formatFloatLiteral;
 using codegen::fnv1a64;
 using codegen::hex64;
@@ -430,7 +431,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
             break;
         case IndyBsmArgKind::Float:
             if (auto* p = value.as<float>()) {
-                emitBoxPrimitiveExpr(varName, PrimitiveKind::FLOAT, formatFloatLiteral(*p, 9) + "f");
+                emitBoxPrimitiveExpr(varName, PrimitiveKind::FLOAT, cFloatLiteral(*p, 9) + "f");
             }
             break;
         case IndyBsmArgKind::Double:
@@ -461,7 +462,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
             return "(jlong)" + std::to_string(*p) + "LL";
         }
         if (auto* p = value.as<float>()) {
-            return formatFloatLiteral(*p, 9) + "f";
+            return cFloatLiteral(*p, 9) + "f";
         }
         if (auto* p = value.as<double>()) {
             return formatFloatLiteral(*p, 17);

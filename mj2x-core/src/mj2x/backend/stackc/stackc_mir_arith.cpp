@@ -13,6 +13,7 @@ namespace mj2x {
 
 using namespace jbytecode::core;
 using namespace jbytecode::analysis;
+using codegen::cFloatLiteral;
 using codegen::cStringLiteral;
 using codegen::fnv1a64;
 using codegen::formatFloatLiteral;
@@ -46,7 +47,7 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
             else if (std::isinf(d))
                 value = "(" + std::string(d < 0 ? "-" : "") + "INFINITY)";
             else
-                value = formatFloatLiteral(d, 9) + "f";
+                value = cFloatLiteral(d, 9) + "f";
             out.emitLine(ca::str::format_std("stack[++sp]{} = {};", acc, value));
         }
         else {
@@ -56,20 +57,54 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
             else if (std::isinf(d))
                 value = "(" + std::string(d < 0 ? "-" : "") + "(double)INFINITY)";
             else
-                value = formatFloatLiteral(d, 17);
+                value = cFloatLiteral(d, 17);
             out.emitLine(ca::str::format_std("stack[++sp]{} = {};", acc, value));
         }
     }
     else if (std::holds_alternative<ca::str::Utf8StringRef>(node->value)) {
         // UTF-16 code units 池（防 strings 扫描），等价 JNIC 3.5.1/3.7.0
         // stringObf=false 形态：NewString(env, units, len)，无明文 UTF-8 字节。
+        // #1117 LDC 恒等：JVM ldc 常量是 interned 实例——首次物化经
+        // String.intern() 归一化进 JVM 字符串池，缓存在 TU 级
+        // _mj2x_literal_cache[]（global ref）；同内容常量跨站点/跨方法/
+        // 跨 String.intern() 恒等，命中路径 0 JNI、不耗 local ref。
         const auto value  = std::get<ca::str::Utf8StringRef>(node->value).to_std_string();
         const auto offset = stringPoolOffsetFor(value);
         const auto length = stringPoolLengthFor(value);
-        out.emitLine(ca::str::format_std("stack[++sp].l = {};",
-            trackLocalRefExpr(ca::str::format_std(
-                "(*env)->NewString(env, (const jchar*)(_mj2x_string_pool + {}), {})",
-                offset, length))));
+        const auto slot   = stringPoolSlotFor(value);
+        out.emitLine("{");
+        out.indent();
+        out.emitLine(ca::str::format_std("if (_mj2x_literal_cache[{}] == NULL) {{", slot));
+        out.indent();
+        out.emitLine(ca::str::format_std(
+            "jstring lit_fresh = (jstring)(*env)->NewString(env, (const jchar*)"
+            "(_mj2x_string_pool + {}), {});",
+            offset, length));
+        out.emitLine("static jmethodID intern_mid = NULL;");
+        out.emitLine("if (intern_mid == NULL) {");
+        out.indent();
+        out.emitLine("jclass intern_class = (*env)->FindClass(env, \"java/lang/String\");");
+        out.emitLine("if (intern_class != NULL) {");
+        out.indent();
+        out.emitLine("intern_mid = (*env)->GetMethodID(env, intern_class, \"intern\", "
+                     "\"()Ljava/lang/String;\");");
+        out.emitLine("(*env)->DeleteLocalRef(env, intern_class);");
+        out.dedent();
+        out.emitLine("}");
+        out.dedent();
+        out.emitLine("}");
+        out.emitLine("jstring lit_pooled = intern_mid != NULL ? (jstring)(*env)->"
+                     "CallObjectMethod(env, lit_fresh, intern_mid) : NULL;");
+        out.emitLine("if (lit_pooled == NULL) lit_pooled = lit_fresh; "
+                     "else (*env)->DeleteLocalRef(env, lit_fresh);");
+        out.emitLine(ca::str::format_std(
+            "_mj2x_literal_cache[{}] = (*env)->NewGlobalRef(env, lit_pooled);", slot));
+        out.dedent();
+        out.emitLine("}");
+        out.emitLine(
+            ca::str::format_std("stack[++sp]{} = _mj2x_literal_cache[{}];", acc, slot));
+        out.dedent();
+        out.emitLine("}");
     }
     else if (std::holds_alternative<Type>(node->value)) {
         const auto type = std::get<Type>(node->value);
@@ -425,8 +460,20 @@ void StackCBackend::Impl::emitBranch(const MIRBranch* node, codegen::CSourceStre
     const char* acc = stackAccessor(node->type);
     out.emitLine("{");
     out.indent();
-    out.appendLineStart("int cond = (stack[sp - 1]").append(acc).append(" ")
-        .append(cmpOpToC(node->op)).append(" stack[sp]").append(acc).append(");");
+    if (node->type == PrimitiveKind::OBJECT) {
+        // if_acmpeq/acmpne：JNI 引用是句柄，同一对象的 local ref 与 global ref
+        // 句柄指针值不同，裸 == 会漏判（#1117 g17.string_intern 实测：ldc 字面量
+        // 缓存持 global ref，String.intern() 返回 local ref，恒不等）。与 RegC
+        // 同口径走 IsSameObject 判定对象同一性（对 NULL 也正确：两侧 NULL 为真）。
+        // 字节码面 acmp 只有 eq/ne 两种谓词。
+        const bool negate = (node->op == CmpOp::NE);
+        out.appendLineStart("int cond = ").append(negate ? "!" : "")
+            .append("(*env)->IsSameObject(env, stack[sp - 1].l, stack[sp].l);");
+    }
+    else {
+        out.appendLineStart("int cond = (stack[sp - 1]").append(acc).append(" ")
+            .append(cmpOpToC(node->op)).append(" stack[sp]").append(acc).append(");");
+    }
     out.newLine();
     out.emitLine("sp -= 2;");
     out.appendLineStart("if (cond) goto ")

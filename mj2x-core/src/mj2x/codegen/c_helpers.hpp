@@ -247,4 +247,18 @@ inline std::string formatFloatLiteral(double value, int precision)
     return std::string(buffer);
 }
 
+/// @brief 整数值浮点补形为合法 C 浮点字面量：`%.*g` 对 1.0/-0.0 这类值输出
+///        "1"/"-0" 纯整数文本——拼 f 后缀是非法 C（"1f"，#1117 g17 样本
+///        首次暴露），而 "-0" 作为 int 字面量取负转 double 还会丢符号位。
+///        统一补 ".0"；NaN/Inf 仍由调用方走宏分支（此处按文本防御）。
+inline std::string cFloatLiteral(double value, int precision)
+{
+    std::string text = formatFloatLiteral(value, precision);
+    if (text.find_first_of(".eEnNiI") == std::string::npos)
+    {
+        text += ".0";
+    }
+    return text;
+}
+
 }   // namespace mj2x::codegen
