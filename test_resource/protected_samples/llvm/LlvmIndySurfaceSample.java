@@ -9,8 +9,13 @@ package protected_samples.llvm;
  * <ul>
  *   <li>string concat -> invokedynamic StringConcatFactory (expanded by the
  *       InvokeDynamicPreprocessor into StringBuilder bytecode);</li>
- *   <li>System.arraycopy -> plain JNI static call for the LLVM backend
- *       (the arraycopy intrinsic is RegC-only);</li>
+ *   <li>{@link #copySlice} stays bytecode in this sample: its for-each join
+ *       produces an undef edge copy that the LLVM validation rejects
+ *       fail-closed (#1121), so the whole method falls back to bytecode (the
+ *       emitter logs "Skipping ...: method falls back to bytecode"). For
+ *       compilable shapes, System.arraycopy goes through the JNI static-call
+ *       helper mj2x_llvm_call_static_void (the arraycopy intrinsic is
+ *       RegC-only);</li>
  *   <li>Integer.TYPE / String.class -> class-literal LDC (getstatic TYPE /
  *       LDC class) emitted through mj2x_llvm_class_const.</li>
  * </ul>
