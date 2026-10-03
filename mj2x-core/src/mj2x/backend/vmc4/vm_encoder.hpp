@@ -61,4 +61,22 @@ public:
                                                  nullptr);
 };
 
+/// @brief 块 id 容量校验：总块数（真实 + 合成）必须落在 u16 表示域内（#1133）。
+///
+/// @details
+/// VMC4 块 id 是 u16 操作数（Jump/Branch/Switch 的目标、blockTargets /
+/// blockExcRegions 的下标），表示域上限 0xFFFF。总块数 = 真实块 + 合成边块
+/// （每条带 RegCopy 的后继边各物质化一个合成块，排在真实块之后、同一 id 空间）。
+/// 历史校验只卡 realCount ≤ 0xFFFE，合成边块不计入——真实块少但边拷贝多的方法
+/// 总块数仍可越过 0xFFFF，id 回绕后跳转目标静默指向错误块（fail-silent 腐蚀）。
+/// 编码入口（VmEncoder::encode）在 planSyntheticEdges 之后、任何 id 消费之前
+/// 一次性判定：超限 fail-closed 报错退出，不产出错误产物；诊断含总块数、
+/// 真实块数、合成块数、上限四个数字，可定位。
+///
+/// @param realCount 真实块数（RegFunction::blocks.size()）。
+/// @param syntheticCount 合成边块数（EncoderState::syntheticEdges.size()）。
+/// @param reason 失败时填充诊断（含四个数字）；成功时不修改。
+/// @return 总块数 ≤ 0xFFFF 返回 true；超限返回 false。
+bool checkBlockIdCapacity(size_t realCount, size_t syntheticCount, std::string& reason);
+
 }   // namespace mj2x

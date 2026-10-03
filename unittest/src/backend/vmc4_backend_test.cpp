@@ -2091,3 +2091,120 @@ TEST(Vmc4BackendTest, PerClassGranularitySharesWithinClassDivergeAcross)
     EXPECT_NE(firstOpcodeChain(a1), firstOpcodeChain(b))
         << "per-class: different classes have independent instances";
 }
+
+// ===========================================================================
+// issue #1133：u16 块 id 总块数容量 fail-closed（真实块 + 合成边块 > 0xFFFF 时
+// id 回绕静默腐蚀跳转目标；旧校验只卡 realCount ≤ 0xFFFE，合成块不计入）。
+// ===========================================================================
+
+namespace {
+
+/// @brief 构造含 realCount 个真实块的 RegFunction（内层 API 直达编码器）。
+///
+/// @details
+/// 单方法 > 65535 块无法经合法类文件构造（JVM code 属性上限 65535 字节），
+/// 容量校验只能从内部 IR 状态触发。块形态：前 jumpsWithCopies 个块各持一条
+/// Jump → 下一块且带边拷贝（每条带拷贝的边物质化一个合成块），其余块空指令
+/// + Return 终结。边拷贝固定 v1 ← v0（I32），使 scanComputeRegisters/
+/// emitSyntheticEdge 有合法寄存器可编码。
+RegFunction makeBlockCapacityFixture(size_t realCount, size_t jumpsWithCopies)
+{
+    RegFunction fn;
+    fn.symbol.owner = "test/BlockCap";
+    fn.symbol.name  = "cap";
+    fn.symbol.desc  = "()V";
+    fn.blocks.reserve(realCount);
+    for (size_t i = 0; i < realCount; ++i) {
+        fn.blocks.push_back(std::make_unique<RegBlock>(SSABlockId{static_cast<uint32_t>(i)}));
+    }
+    const RegValue v0{RegId{0}, SSAType::I32};
+    const RegValue v1{RegId{1}, SSAType::I32};
+    for (size_t i = 0; i < realCount; ++i) {
+        RegBlock* next = (i + 1 < realCount) ? fn.blocks[i + 1].get() : nullptr;
+        if (next != nullptr && i < jumpsWithCopies) {
+            RegJumpTerminator term;
+            term.target.block = next;
+            term.target.copies.push_back(RegCopy{v1, RegOperand::fromRegister(v0)});
+            fn.blocks[i]->terminator = std::move(term);
+        } else {
+            fn.blocks[i]->terminator = RegReturnTerminator{};
+        }
+    }
+    return fn;
+}
+
+}   // namespace
+
+/// 容量校验小函数直测：边界 65535 合法、65536 超限，诊断含四个数字。
+TEST(Vmc4BackendTest, BlockIdCapacityCheckBoundaries)
+{
+    std::string reason;
+    // 边界内：total == 0xFFFF 合法（id 0..65534 全部落入 u16 域）；
+    // 覆盖真实为主 / 合成为主 / 混合三种构成。
+    EXPECT_TRUE(checkBlockIdCapacity(65535, 0, reason));
+    EXPECT_TRUE(checkBlockIdCapacity(65534, 1, reason));
+    EXPECT_TRUE(checkBlockIdCapacity(0, 65535, reason));
+    EXPECT_TRUE(checkBlockIdCapacity(60000, 5000, reason));
+    EXPECT_TRUE(reason.empty()) << reason;
+    // 超限：total == 0xFFFF + 1 即报错（真实为主 / 合成为主两个方向）。
+    EXPECT_FALSE(checkBlockIdCapacity(65536, 0, reason));
+    EXPECT_FALSE(checkBlockIdCapacity(0, 65536, reason));
+    EXPECT_FALSE(checkBlockIdCapacity(60000, 5536, reason));
+    // 诊断含总块数、真实块数、合成块数、上限四个数字。
+    EXPECT_FALSE(checkBlockIdCapacity(65534, 2, reason));
+    EXPECT_NE(reason.find("total=65536"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("real=65534"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("synthetic=2"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("65535"), std::string::npos) << reason;
+}
+
+/// 负向：total == 65536（65534 真实 + 2 合成）编码 fail-closed 返回 nullptr。
+/// 旧校验（realCount ≤ 0xFFFE）对此形态放行——合成块不计入正是 #1133 的洞。
+TEST(Vmc4BackendTest, EncodeFailClosedWhenSyntheticEdgesPushTotalPastU16)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    RegFunction fn   = makeBlockCapacityFixture(65534, 2);
+    auto        prog = VmEncoder::encode(fn, instance, reason);
+    EXPECT_EQ(prog, nullptr) << "total 65534+2=65536 blocks must fail closed";
+    EXPECT_NE(reason.find("total=65536"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("synthetic=2"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("65535"), std::string::npos) << reason;
+}
+
+/// 负向：65536 个纯真实块（无合成）同样 fail-closed（total 越界与构成无关）。
+TEST(Vmc4BackendTest, EncodeFailClosedAt65536RealBlocks)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    RegFunction fn   = makeBlockCapacityFixture(65536, 0);
+    auto        prog = VmEncoder::encode(fn, instance, reason);
+    EXPECT_EQ(prog, nullptr) << "total 65536 real blocks must fail closed";
+    EXPECT_NE(reason.find("total=65536"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("real=65536"), std::string::npos) << reason;
+}
+
+/// 正向边界：total == 0xFFFF（65534 真实 + 1 合成）仍正常编码，块表覆盖
+/// 真实 + 合成全空间；65535 个纯真实块亦然（旧校验误拒的合法边界）。
+TEST(Vmc4BackendTest, EncodesAtU16TotalBlockCapacityBoundary)
+{
+    Vmc4Options opts;
+    VmInstance  instance(opts);
+    std::string reason;
+    {
+        RegFunction fn   = makeBlockCapacityFixture(65534, 1);
+        auto        prog = VmEncoder::encode(fn, instance, reason);
+        ASSERT_NE(prog, nullptr) << reason;
+        EXPECT_EQ(prog->blockTargets.size(), 65535u) << reason;
+        EXPECT_FALSE(prog->bytecodes.empty());
+    }
+    {
+        RegFunction fn   = makeBlockCapacityFixture(65535, 0);
+        auto        prog = VmEncoder::encode(fn, instance, reason);
+        ASSERT_NE(prog, nullptr) << reason;
+        EXPECT_EQ(prog->blockTargets.size(), 65535u) << reason;
+        EXPECT_FALSE(prog->bytecodes.empty());
+    }
+}

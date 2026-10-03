@@ -296,6 +296,9 @@ struct EncoderState
             SyntheticEdge edge;
             edge.realTarget = succ.block;
             edge.copies     = succ.copies;
+            // 预填发射序值：总块数 > 0xFFFF 时此 cast 会回绕，但该值在任何消费
+            // 之前必被 VmEncoder::encode 入口的 checkBlockIdCapacity（#1133）
+            // fail-closed 拦截，随后 assignBlockIndices 按合法 id 空间覆写。
             edge.index      = static_cast<uint16_t>(base + syntheticEdges.size());
             syntheticEdges.push_back(std::move(edge));
             // 存 syntheticEdges 下标（非 id）：id 在 assignBlockIndices 落定
@@ -752,8 +755,10 @@ bool assignBlockIndices(EncoderState& ctx, std::string& reason)
         reason = "RegFunction has no blocks";
         return false;
     }
-    if (ctx.fn.blocks.size() > 0xFFFE) {
-        reason = "too many blocks (>65534) for u16 block index";
+    // u16 块 id 容量：总块数（真实 + 合成）≤ 0xFFFF，见 checkBlockIdCapacity（#1133）。
+    // 旧校验只卡 realCount ≤ 0xFFFE，合成边块不计入——总块数越界时下方
+    // `static_cast<uint16_t>(k + 1)` 回绕，跳转目标静默腐蚀。
+    if (!checkBlockIdCapacity(ctx.fn.blocks.size(), ctx.syntheticEdges.size(), reason)) {
         return false;
     }
     const size_t realCount = ctx.fn.blocks.size();
@@ -1516,6 +1521,8 @@ bool encodeThrow(EncoderState& ctx, const RegThrowTerminator& term, VmProgram& p
 void encodeExceptionRegions(EncoderState& ctx, VmProgram& prog, std::string& reason)
 {
     if (ctx.fn.exceptionRegions.empty()) return;
+    // u16 cast 安全性由 VmEncoder::encode 入口的 checkBlockIdCapacity 保证
+    // （#1133：总块数 > 0xFFFF 已在编码入口 fail-closed，此处 totalBlocks 不会回绕）。
     const uint16_t totalBlocks =
         static_cast<uint16_t>(ctx.fn.blocks.size() + ctx.syntheticEdges.size());
     prog.blockExcRegions.assign(totalBlocks, {});
@@ -1662,6 +1669,19 @@ bool encodeSwitch(EncoderState& ctx, const RegBlock* srcBlock, const RegSwitchTe
 }   // namespace
 
 // ===========================================================================
+// 块 id 容量校验（issue #1133 fail-closed 面，声明见 vm_encoder.hpp）
+// ===========================================================================
+bool checkBlockIdCapacity(size_t realCount, size_t syntheticCount, std::string& reason)
+{
+    const size_t total = realCount + syntheticCount;
+    if (total <= 0xFFFF) return true;
+    reason = "too many blocks for u16 block id: total=" + std::to_string(total) + " (real="
+             + std::to_string(realCount) + " + synthetic=" + std::to_string(syntheticCount)
+             + ") exceeds limit 65535; block ids would wrap and silently corrupt jump targets";
+    return false;
+}
+
+// ===========================================================================
 // VmEncoder 公开入口
 // ===========================================================================
 std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInstance& instance,
@@ -1674,6 +1694,13 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
 
     // 合成边先于块 id 分配（合成块索引参与乱序排列的 id 空间）。
     ctx.planSyntheticEdges();
+    // 总块数容量 fail-closed（issue #1133）：块 id 是 u16，真实块 + 合成边块
+    // > 0xFFFF 时 id 回绕静默腐蚀跳转目标（旧校验只卡 realCount，合成块不计入）。
+    // 在任何 id 产生/消费（assignBlockIndices / encodeExceptionRegions 的 u16
+    // totalBlocks）之前一次性判定，超限报错退出，不产出错误产物。
+    if (!checkBlockIdCapacity(ctx.fn.blocks.size(), ctx.syntheticEdges.size(), reason)) {
+        return nullptr;
+    }
     if (!assignBlockIndices(ctx, reason)) return nullptr;
     // 异常区域（Phase 2.C）：先于 layoutBlocks 收集（边拷贝可能 intern 新常量槽，
     // 常量槽分配独立于字节流布局，顺序无影响；但必须保证区域表在 layoutBlocks
