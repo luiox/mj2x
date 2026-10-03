@@ -289,6 +289,10 @@ TEST(StackCBackendTest, InvokeDynamicOneObjectFastPathStackShape)
         << result.text;
     EXPECT_NE(result.text.find("s[0].l = "), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("stack[sp"), std::string::npos) << result.text;
+    // #879 X3 残余收口：args 数组声明下沉慢路径发射分支，快路径生成代码里
+    // 连 `_mj2x_indy_args = NULL` 声明都不再出现（稳态零多余 JNI 调用之外，
+    // 零多余局部声明）。
+    EXPECT_EQ(result.text.find("_mj2x_indy_args"), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("_mj2x_indy_arg_0"), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("NewObjectArray(env, 1"), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("invokeWithArguments"), std::string::npos) << result.text;

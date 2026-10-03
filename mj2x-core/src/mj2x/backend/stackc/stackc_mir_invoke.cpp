@@ -481,6 +481,10 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
     // 全局引用后稳态只剩一次静态读；冷路径保持原形态并回填缓存。
     // 缓存键与 indyTargetCache 同口径（含类/方法/站点定位），生命周期 = native
     // library，泄漏上界 = indy 站点数。
+    // #879 X3 评估结论：setup 块不随快/慢分流下沉。稳态成本已是静态读 + NULL
+    // 分支（零 JNI）；若移入慢路径，快路径站点的 bootstrap 块（物理上在快路径
+    // 调用点之前执行、且由快慢共用发射）里的 bsm varargs 数组须自行物化
+    // jclass——多一套发射形态、多一处作用域耦合，换不来稳态 JNI 调用的减少。
     const auto indyObjectClsCache =
         cacheIdentifier("indy_object_cls",
                         currentClassName + "." + currentMethodName + currentMethodDesc + ":" +
@@ -500,13 +504,14 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
     out.emitLine("}");
     // 快路径（OBJECT 返回 + 单对象参数）：参数在原栈槽捕获、原位覆写结果，
     // 不建 varargs 数组（省每次调用一次 NewObjectArray + SetObjectArrayElement）。
-    // 一般路径：参数装箱进 Object[] 再弹栈。
-    out.appendLineStart("jobjectArray _mj2x_indy_args = NULL;").newLine();
+    // 一般路径：参数装箱进 Object[] 再弹栈。args 数组声明只随慢路径发射
+    //（#879 X3 残余：快路径生成代码不再出现 _mj2x_indy_args，连 NULL 声明
+    // 也不留——发射期快/慢尾二选一，作用域无跨分支引用）。
     if (useOneObjectInvokeHelper) {
         out.emitLine("jobject _mj2x_indy_capture0 = stack[sp].l;");
     }
     else {
-        out.appendLineStart("_mj2x_indy_args = (jobjectArray)").append(
+        out.appendLineStart("jobjectArray _mj2x_indy_args = (jobjectArray)").append(
             trackLocalRefExpr("(*env)->NewObjectArray(env, " + std::to_string(argCount) +
                               ", _mj2x_indy_object_cls, NULL)")).append(";");
         out.newLine();
