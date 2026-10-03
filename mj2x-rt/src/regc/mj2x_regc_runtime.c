@@ -588,6 +588,32 @@ mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* 
     }
     jstring s = (jstring)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);
     if (s != NULL) {
+        /* JVM 语义：ldc 常量是 interned 实例（#1117，jvmtp 1.7.1 修复④同款
+         * 缺陷面）——首次物化经 String.intern() 归一化进 JVM 字符串池，同内容
+         * 常量跨站点/跨类/跨 String.intern() 恒等；缓存 32 槽溢出后逐次物化
+         * 也因 intern 恒等不再破坏语义（只多 2 次 JNI）。miss 路径 2 次 JNI，
+         * 命中路径保持 0 JNI。intern_mid 首次并发竞态双方算得同一 methodID，
+         * 覆写无害。 */
+        static jmethodID intern_mid = NULL;
+        if (intern_mid == NULL) {
+            jclass string_class =
+                (*_mj2x_regc_env)->FindClass(_mj2x_regc_env, "java/lang/String");
+            if (string_class != NULL) {
+                intern_mid = (*_mj2x_regc_env)->GetMethodID(
+                    _mj2x_regc_env, string_class, "intern", "()Ljava/lang/String;");
+                (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, string_class);
+            }
+        }
+        if (intern_mid != NULL) {
+            jstring pooled = (jstring)(*_mj2x_regc_env)->CallObjectMethodA(
+                _mj2x_regc_env, s, intern_mid, NULL);
+            if (pooled != NULL) {
+                (*_mj2x_regc_env)->DeleteLocalRef(_mj2x_regc_env, s);
+                s = pooled;
+            }
+        }
+    }
+    if (s != NULL) {
         s = (jstring)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, s);
     }
     if (s != NULL && literal_cache_count < 32) {
