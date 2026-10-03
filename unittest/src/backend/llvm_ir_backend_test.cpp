@@ -872,6 +872,60 @@ BackendResult compileWithBackend(LlvmIrBackend& backend, const char* name, const
     return backend.compileMethod("Test", clazz.methods[0], blocks);
 }
 
+TEST(LlvmIrBackendTest, EmitsFptosiSatDeclareMatchingCall)
+{
+    // #1120 防回归钉：llvm.fptosi.sat 是重载 intrinsic，模块必须携带对应
+    // declare（否则 clang/llc 报 'use of undefined value'）。四个签名变体
+    // （f2i/d2i/f2l/d2l）逐个核对 call 与 declare 同时存在；多方法共用一个
+    // backend 验证 finalize 跨函数去重——每个签名 declare 恰好一份。
+    LlvmIrBackend backend;
+    auto          f2i = compileWithBackend(backend, "f2i", "(F)I",
+                                  {new VarInsnNode(Opcodes::FLOAD, 0),
+                                   new InsnNode(Opcodes::F2I), new InsnNode(Opcodes::IRETURN)},
+                                  1, 1);
+    auto          d2i = compileWithBackend(backend, "d2i", "(D)I",
+                                  {new VarInsnNode(Opcodes::DLOAD, 0),
+                                   new InsnNode(Opcodes::D2I), new InsnNode(Opcodes::IRETURN)},
+                                  2, 2);
+    auto          f2l = compileWithBackend(backend, "f2l", "(F)J",
+                                  {new VarInsnNode(Opcodes::FLOAD, 0),
+                                   new InsnNode(Opcodes::F2L), new InsnNode(Opcodes::LRETURN)},
+                                  2, 1);
+    auto          d2l = compileWithBackend(backend, "d2l", "(D)J",
+                                  {new VarInsnNode(Opcodes::DLOAD, 0),
+                                   new InsnNode(Opcodes::D2L), new InsnNode(Opcodes::LRETURN)},
+                                  2, 2);
+    for (const auto* result : {&f2i, &d2i, &f2l, &d2l}) {
+        ASSERT_EQ(result->kind, BackendResult::Kind::C_SOURCE) << result->text;
+    }
+
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    const auto& ll = backend.generatedSource();
+    const char* calls[]    = {"call i32 @llvm.fptosi.sat.i32.f32(float",
+                           "call i32 @llvm.fptosi.sat.i32.f64(double",
+                           "call i64 @llvm.fptosi.sat.i64.f32(float",
+                           "call i64 @llvm.fptosi.sat.i64.f64(double"};
+    const char* declares[] = {"declare i32 @llvm.fptosi.sat.i32.f32(float)",
+                              "declare i32 @llvm.fptosi.sat.i32.f64(double)",
+                              "declare i64 @llvm.fptosi.sat.i64.f32(float)",
+                              "declare i64 @llvm.fptosi.sat.i64.f64(double)"};
+    for (int index = 0; index < 4; ++index) {
+        EXPECT_NE(ll.find(calls[index]), std::string::npos) << ll;
+        EXPECT_NE(ll.find(declares[index]), std::string::npos) << ll;
+    }
+    // finalize 跨函数去重：每个签名 declare 恰好一份（幂等）。
+    for (const char* declare : declares) {
+        size_t count = 0;
+        for (size_t pos = ll.find(declare); pos != std::string::npos;
+             pos       = ll.find(declare, pos + 1)) {
+            ++count;
+        }
+        EXPECT_EQ(count, 1u) << declare << "\n"
+                             << ll;
+    }
+}
+
 TEST(LlvmIrBackendTest, EmitsCmpNanIntrinsics)
 {
     // fcmpg/fcmpl → cmp.nan_greater/cmp.nan_less → fcmp ogt/olt 三值 + NaN select。
