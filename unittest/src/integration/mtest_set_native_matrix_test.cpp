@@ -74,6 +74,11 @@ bool llvmSupports(const char* fixtureId)
         "g10.monitor",      "g11.reflection_access", "g12.string_ops",
         "g12.string_compare", "g13.bit_ops",     "g13.shift_out_of_range",
         "g14.deep_recursion", "g15.collection_ops",
+        // ---- G17（#1117）：LLVM 支持面入列；g17.string_intern 暂缓——LLVM ldc
+        // String 物化（NewStringUTF）尚未走 intern（#1117 修复仅覆盖 RegC
+        // literal intrinsic 与 StackC 池物化），恒等断言会失败。
+        "g17.math_nan_zero", "g17.array_store_check", "g17.sibling_methods",
+        "g17.annotation_visibility",
     };
     for (const char* id : supported) {
         if (std::strcmp(id, fixtureId) == 0) return true;
