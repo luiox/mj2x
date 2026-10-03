@@ -78,6 +78,11 @@ target("mj2x_unittest")
     add_files("src/**/*_test.cpp")
     remove_files("src/integration/**.cpp")
     add_includedirs("src")
+    -- #1023 环境卫生函数簇测试（src/cli/native_env_hygiene_test.cpp）：跨模块
+    -- include mj2x-cli 内部头 native_env_hygiene.hpp（inline 定义，不引入与
+    -- mj2x-cli 的链接耦合）。include 根 = $(projectdir)/mj2x，include 形态
+    -- "mj2x-cli/src/…" 按仓库 <name>/path 跨模块约定。
+    add_includedirs("$(projectdir)/mj2x")
     -- 与 mj2x-cli 对齐：LLVM 后端显式关闭时（with_mj2x_llvm=n），LLVM 用例跳过。
     if not has_config("with_mj2x_llvm") then
         add_defines("MJ2X_DISABLE_LLVM_BACKEND")
