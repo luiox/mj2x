@@ -271,33 +271,50 @@ bool json_output(CliOptions& o, const json& j, std::string& e)
 // ---------------------------------------------------------------------------
 // backend 枚举串（#886 编译期裁剪面）：kParamTable 展示/校验清单随
 // MJ2X_DISABLE_*_BACKEND 收缩，与 parseBackendNameImpl 的裁决面一致。
-// 相邻字面量拼接；各条目的分隔符仅在存在后继条目时为 ","。
+// 相邻字面量拼接；每个条目自带前导分隔符，仅当「本条目存在且存在更早
+// 条目」时为 ","——分隔符若挂在相邻前驱的存在性上，中段条目被裁时会
+// 留下悬空逗号（单后端 schema enum 混入空串，评审 T3-2）。
 // ---------------------------------------------------------------------------
 #if !defined(MJ2X_DISABLE_STACKC_BACKEND)
-#define MJ2X_BE_STACKC     "stackc"
-#define MJ2X_BE_SEP_BEFORE_REGC ","
+#define MJ2X_BE_STACKC        "stackc"
+#define MJ2X_BE_PRIOR_STACKC  1
 #else
-#define MJ2X_BE_STACKC     ""
-#define MJ2X_BE_SEP_BEFORE_REGC ""
+#define MJ2X_BE_STACKC        ""
+#define MJ2X_BE_PRIOR_STACKC  0
 #endif
+
 #if !defined(MJ2X_DISABLE_REGC_BACKEND)
-#define MJ2X_BE_REGC     "regc"
-#define MJ2X_BE_SEP_BEFORE_LLVM ","
+#if MJ2X_BE_PRIOR_STACKC
+#define MJ2X_BE_ENTRY_REGC    "," "regc"
 #else
-#define MJ2X_BE_REGC     ""
-#define MJ2X_BE_SEP_BEFORE_LLVM ""
+#define MJ2X_BE_ENTRY_REGC    "regc"
 #endif
+#define MJ2X_BE_PRIOR_REGC    1
+#else
+#define MJ2X_BE_ENTRY_REGC    ""
+#define MJ2X_BE_PRIOR_REGC    MJ2X_BE_PRIOR_STACKC
+#endif
+
 #if !defined(MJ2X_DISABLE_LLVM_BACKEND)
-#define MJ2X_BE_LLVM     "llvm"
-#define MJ2X_BE_SEP_BEFORE_VMC4 ","
+#if MJ2X_BE_PRIOR_REGC
+#define MJ2X_BE_ENTRY_LLVM    "," "llvm"
 #else
-#define MJ2X_BE_LLVM     ""
-#define MJ2X_BE_SEP_BEFORE_VMC4 ""
+#define MJ2X_BE_ENTRY_LLVM    "llvm"
 #endif
-#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
-#define MJ2X_BE_VMC4 "vmc4"
+#define MJ2X_BE_PRIOR_LLVM    1
 #else
-#define MJ2X_BE_VMC4 ""
+#define MJ2X_BE_ENTRY_LLVM    ""
+#define MJ2X_BE_PRIOR_LLVM    MJ2X_BE_PRIOR_REGC
+#endif
+
+#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
+#if MJ2X_BE_PRIOR_LLVM
+#define MJ2X_BE_ENTRY_VMC4    "," "vmc4"
+#else
+#define MJ2X_BE_ENTRY_VMC4    "vmc4"
+#endif
+#else
+#define MJ2X_BE_ENTRY_VMC4    ""
 #endif
 
 bool parseBackendNameImpl(const std::string& name, CEmitterBackend& backend)
@@ -710,8 +727,7 @@ const ParamDef kParamTable[] = {
     PARAM("global.output", "-o", "output", ParamType::String, nullptr, 0, 0, "", "global", "", cli_output, json_output),
     // backend 枚举串随编译期裁剪面收缩（宏定义见 parseBackendNameImpl 上方）。
     PARAM("global.backend", "--backend", "backend", ParamType::Enum,
-          MJ2X_BE_STACKC MJ2X_BE_SEP_BEFORE_REGC MJ2X_BE_REGC MJ2X_BE_SEP_BEFORE_LLVM MJ2X_BE_LLVM
-              MJ2X_BE_SEP_BEFORE_VMC4 MJ2X_BE_VMC4,
+          MJ2X_BE_STACKC MJ2X_BE_ENTRY_REGC MJ2X_BE_ENTRY_LLVM MJ2X_BE_ENTRY_VMC4,
           0, 0, "stackc", "global", "", cli_backend, json_backend),
     PARAM("global.emit_c", "--emit-c", "emit_c", ParamType::String, nullptr, 0, 0, "", "global", "", cli_emit_c, json_emit_c),
     PARAM("global.emit_cpp", "--emit-cpp", "emit_cpp", ParamType::String, nullptr, 0, 0, "", "global", "", cli_emit_cpp, json_emit_cpp),

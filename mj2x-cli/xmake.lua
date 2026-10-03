@@ -10,12 +10,15 @@ target("mj2x-cli")
     set_group("mj2x")
 
     -- #886 互斥校验：llvm 选择器要求 with_mj2x_llvm 保持开启（两开关同管
-    -- llvm 面）。描述作用域无 raise/assert（xmake 3.0.9 实测），裁决放
-    -- target on_load（模块作用域）。
+    -- llvm 面）。本仓 xmake 构建的脚本沙箱剥掉全部报错原语（描述作用域/
+    -- on_load 实测 raise/assert/error/os.exit 全 nil，评审 T3-3 勘实）——
+    -- 失败面用「print 明确原因 + 命名 nil 索引强制中止」，错误行自带诊断名。
     on_load(function (target)
         if tostring(get_config("with_mj2x_backend") or "all") == "llvm"
            and not has_config("with_mj2x_llvm") then
-            assert(false, "with_mj2x_backend=llvm conflicts with with_mj2x_llvm=n")
+            print("error: with_mj2x_backend=llvm conflicts with with_mj2x_llvm=n (re-enable with_mj2x_llvm or pick another backend)")
+            local MJ2X_LLVM_BACKEND_CONFLICT = nil
+            local _ = MJ2X_LLVM_BACKEND_CONFLICT.abort
         end
     end)
 
