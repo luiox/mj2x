@@ -107,8 +107,9 @@
 - 注：F1 直派 engagement 当前仅覆盖「indy 描述符即字段形态」站点（javac 产物
   不会出现，现实站点走 helper 零回归）——收益兑现需 D1 静态求值或 bootstrap
   白名单扩展（发射面无需再动），与 P4 同批评估。
-- #879-Y4（Random 预检 registry 标志位化）建议与 P5-P10 合流同批，对齐
-  cross_backend_semantics.md §3.1 单源方向。
+- #879-Y4（Random 预检 registry 标志位化）已提前单卡落地（feat/mj2x-879-minor-batch，
+  2026-10-03）：`RegCIntrinsicPrecheck` 进 kEntries 权威表单源，两发射端按位判定，
+  对齐 cross_backend_semantics.md §3.1 单源方向——P5-P10 合流批不再含此项。
 
 ### H-2. 候选 4（三后端共享层抽取）本批收口评估（2026-09-18 主线程结论）
 

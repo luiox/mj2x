@@ -143,7 +143,8 @@ constexpr LlvmRandomEntry kGoldenRandom[] = {
     {"java/util/Random", "nextInt", "()I", "mj2x_random_next_int", "i32",
      "declare i32 @mj2x_random_next_int(ptr)"},
     {"java/util/Random", "nextInt", "(I)I", "mj2x_random_next_int_bound", "i32",
-     "declare i32 @mj2x_random_next_int_bound(ptr, i32)"},
+     "declare i32 @mj2x_random_next_int_bound(ptr, i32)",
+     RegCIntrinsicPrecheck::PositiveBound},
     {"java/util/Random", "nextLong", "()J", "mj2x_random_next_long", "i64",
      "declare i64 @mj2x_random_next_long(ptr)"},
     {"java/util/Random", "nextBoolean", "()Z", "mj2x_random_next_boolean", "i8",
@@ -360,6 +361,7 @@ TEST(LlvmIntrinsicRegistryGoldenCross, RandomTableFieldByField)
     EXPECT_TRUE(eq(init->symbol, kGoldenRandom[0].symbol));
     EXPECT_TRUE(eq(init->retLlvm, kGoldenRandom[0].retLlvm));
     EXPECT_TRUE(eq(init->declareText, kGoldenRandom[0].declareText));
+    EXPECT_EQ(init->precheck, kGoldenRandom[0].precheck);
     // method 面（其余条目；init 不得混入）
     for (size_t i = 1; i < sizeOf(kGoldenRandom); ++i) {
         const LlvmRandomEntry* e =
@@ -373,6 +375,8 @@ TEST(LlvmIntrinsicRegistryGoldenCross, RandomTableFieldByField)
         EXPECT_TRUE(eq(e->retLlvm, kGoldenRandom[i].retLlvm));
         EXPECT_TRUE(eq(e->declareText, kGoldenRandom[i].declareText))
             << kGoldenRandom[i].declareText;
+        EXPECT_EQ(e->precheck, kGoldenRandom[i].precheck)
+            << kGoldenRandom[i].name << kGoldenRandom[i].desc;
     }
     EXPECT_EQ(matchLlvmRandomMethod(ref("java/util/Random"), ref("<init>"), ref("(J)V")),
               nullptr);
