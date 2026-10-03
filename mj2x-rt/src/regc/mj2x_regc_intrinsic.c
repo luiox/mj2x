@@ -196,24 +196,46 @@ int64_t mj2x_math_max_i64(int64_t lhs, int64_t rhs)
     return lhs > rhs ? lhs : rhs;
 }
 
+// java.lang.Math.max/min float/double 语义（OpenJDK Math.max/min）：
+//   1) 任一操作数为 NaN → 返回该 NaN 操作数（保留位型，不用规范 NAN 常量）；
+//   2) +0.0/-0.0 相互比较必须返回正确符号：max(+0.0,-0.0)=+0.0、
+//      max(-0.0,+0.0)=+0.0、min(+0.0,-0.0)=-0.0、min(-0.0,+0.0)=-0.0——
+//      IEEE 754 比较把 ±0.0 视为相等，裸三目会返回错误符号的零
+//      （jvmtp 1.7.1 修复③同款缺陷；mtest_set g17.math_nan_zero 按 JVM
+//      语义对拍锁定）。
+//   实现注意：±0.0 与 NaN 都必须在三元比较前显式分流——MSVC 会把
+//   `a >= b ? a : b` 折叠成 maxss/minss 指令，而 SSE 相等（含 ±0.0/NaN
+//   tie）时返回第二操作数，恰好复现缺陷。分流后剩余路径上折叠无影响。
 float mj2x_math_min_f32(float lhs, float rhs)
 {
-    return isnan(lhs) || isnan(rhs) ? NAN : (lhs < rhs ? lhs : rhs);
+    if (isnan(lhs)) return lhs;
+    if (isnan(rhs)) return rhs;
+    if (lhs == 0.0f && rhs == 0.0f) return signbit(rhs) ? rhs : lhs;
+    return lhs <= rhs ? lhs : rhs;
 }
 
 float mj2x_math_max_f32(float lhs, float rhs)
 {
-    return isnan(lhs) || isnan(rhs) ? NAN : (lhs > rhs ? lhs : rhs);
+    if (isnan(lhs)) return lhs;
+    if (isnan(rhs)) return rhs;
+    if (lhs == 0.0f && rhs == 0.0f) return signbit(lhs) ? rhs : lhs;
+    return lhs >= rhs ? lhs : rhs;
 }
 
 double mj2x_math_min_f64(double lhs, double rhs)
 {
-    return isnan(lhs) || isnan(rhs) ? NAN : (lhs < rhs ? lhs : rhs);
+    if (isnan(lhs)) return lhs;
+    if (isnan(rhs)) return rhs;
+    if (lhs == 0.0 && rhs == 0.0) return signbit(rhs) ? rhs : lhs;
+    return lhs <= rhs ? lhs : rhs;
 }
 
 double mj2x_math_max_f64(double lhs, double rhs)
 {
-    return isnan(lhs) || isnan(rhs) ? NAN : (lhs > rhs ? lhs : rhs);
+    if (isnan(lhs)) return lhs;
+    if (isnan(rhs)) return rhs;
+    if (lhs == 0.0 && rhs == 0.0) return signbit(lhs) ? rhs : lhs;
+    return lhs >= rhs ? lhs : rhs;
 }
 
 double mj2x_math_sin(double value)

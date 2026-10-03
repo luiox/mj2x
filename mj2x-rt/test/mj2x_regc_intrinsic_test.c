@@ -2,12 +2,19 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-static void expect(int condition)
+static void expect_at(int line, int condition)
 {
-    if (!condition) abort();
+    if (!condition)
+    {
+        fprintf(stderr, "expect failed at line %d\n", line);
+        abort();
+    }
 }
+#define expect(c) expect_at(__LINE__, (c))
 
 void test_regc_intrinsic_c99_abi(void)
 {
@@ -23,6 +30,69 @@ void test_regc_intrinsic_c99_abi(void)
     expect(isnan(mj2x_math_min_f64(NAN, 3.0)));
     expect(mj2x_math_round(-2.5) == -2);
     expect(fabs(mj2x_math_sqrt(9.0) - 3.0) < 1e-12);
+
+    // ---- #1117 补位/修复面（对照 jvmtp 1.7.1 修复③：Math.max/min NaN 与
+    // ±0.0 位型；g17.math_nan_zero 按 JVM 语义 exec 对拍锁定）----
+    {
+        const float  fpz = 0.0f, fnz = -0.0f;
+        const double dpz = 0.0, dnn = -0.0;
+        // ±0.0 结果位型：IEEE 比较视为相等，必须按位断言符号。
+        const float rf1 = mj2x_math_max_f32(fpz, fnz);
+        const float rf2 = mj2x_math_max_f32(fnz, fpz);
+        const float rf3 = mj2x_math_min_f32(fpz, fnz);
+        const float rf4 = mj2x_math_min_f32(fnz, fpz);
+        expect(memcmp(&rf1, &fpz, sizeof fpz) == 0);
+        expect(memcmp(&rf2, &fpz, sizeof fpz) == 0);
+        expect(memcmp(&rf3, &fnz, sizeof fnz) == 0);
+        expect(memcmp(&rf4, &fnz, sizeof fnz) == 0);
+        const double rd1 = mj2x_math_max_f64(dpz, dnn);
+        const double rd2 = mj2x_math_max_f64(dnn, dpz);
+        const double rd3 = mj2x_math_min_f64(dpz, dnn);
+        const double rd4 = mj2x_math_min_f64(dnn, dpz);
+        expect(memcmp(&rd1, &dpz, sizeof dpz) == 0);
+        expect(memcmp(&rd2, &dpz, sizeof dpz) == 0);
+        expect(memcmp(&rd3, &dnn, sizeof dnn) == 0);
+        expect(memcmp(&rd4, &dnn, sizeof dnn) == 0);
+        // NaN 操作数：返回操作数本身（位型保留）——用带 payload 的非规范 NaN。
+        {
+            const uint32_t nan_bits = 0x7FC01234u;
+            float          nan_operand;
+            memcpy(&nan_operand, &nan_bits, sizeof nan_operand);
+            const float rn = mj2x_math_max_f32(nan_operand, 1.0f);
+            expect(memcmp(&rn, &nan_operand, sizeof nan_operand) == 0);
+            expect(isnan(mj2x_math_max_f32(1.0f, nan_operand)));
+            expect(isnan(mj2x_math_min_f64(3.0, (double)nan_operand)));
+        }
+        // round(float)：JVM 公式 (int)floor(a + 0.5f)，NaN→0，饱和夹紧。
+        expect(mj2x_math_round_f32(2.5f) == 3);
+        expect(mj2x_math_round_f32(3.499f) == 3);
+        expect(mj2x_math_round_f32(-2.5f) == -2);
+        expect(mj2x_math_round_f32(-2.4f) == -2);
+        expect(mj2x_math_round_f32(NAN) == 0);
+        expect(mj2x_math_round_f32(2.4e9f) == INT32_MAX);
+        expect(mj2x_math_round_f32(-2.4e9f) == INT32_MIN);
+        // signum：±0.0 原样返回（位型断言），NaN 透传，其余 ±1。
+        expect(mj2x_math_signum_f32(5.0f) == 1.0f);
+        expect(mj2x_math_signum_f32(-5.0f) == -1.0f);
+        const float sfz = mj2x_math_signum_f32(fnz);
+        const float sf_p = mj2x_math_signum_f32(fpz);
+        expect(memcmp(&sfz, &fnz, sizeof fnz) == 0);
+        expect(memcmp(&sf_p, &fpz, sizeof fpz) == 0);
+        expect(isnan(mj2x_math_signum_f32(NAN)));
+        expect(mj2x_math_signum_f64(9.0) == 1.0);
+        expect(mj2x_math_signum_f64(-9.0) == -1.0);
+        const double sdz = mj2x_math_signum_f64(dnn);
+        expect(memcmp(&sdz, &dnn, sizeof dnn) == 0);
+        expect(isnan(mj2x_math_signum_f64(NAN)));
+        // exp/log/log10：特殊值按 IEEE/JVM 语义，普通值 libm 精度档。
+        expect(mj2x_math_exp(0.0) == 1.0);
+        expect(fabs(mj2x_math_exp(1.0) - 2.718281828459045) < 1e-12);
+        expect(isinf(mj2x_math_exp(1e308)));
+        expect(mj2x_math_log(1.0) == 0.0);
+        expect(isinf(mj2x_math_log(0.0)));
+        expect(isnan(mj2x_math_log(-1.0)));
+        expect(fabs(mj2x_math_log10(1000.0) - 3.0) < 1e-12);
+    }
 
     mj2x_random random;
     mj2x_random_init(&random, 42);
