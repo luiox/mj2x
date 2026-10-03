@@ -197,6 +197,7 @@ std::vector<std::string> expectedKeys()
         "vmc4_trace_surface",
         "vmc4_encrypt_program",
         "vmc4_lazy_decrypt",
+        "vmc4_shuffle_blocks",
         "strings_encrypt",
         "runtime_protection",
         "runtime_protection_step",

@@ -1131,6 +1131,7 @@ int main(int argc, char** argv)
             vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
             vmc4Opts.programBlobEncrypt = options.vmc4EncryptProgram;
             vmc4Opts.programLazyDecrypt = options.vmc4LazyDecrypt;
+            vmc4Opts.shuffleBlocks = options.vmc4ShuffleBlocks;
             if (options.runtimeProtection != "none") {
                 vmc4Opts.runtimeProtection.action  =
                     parseRuntimeProtectionAction(options.runtimeProtection);

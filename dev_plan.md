@@ -15,6 +15,7 @@
 | 十四（LLVM 第二轮扩面） | invokedynamic 运行时解析、intrinsic 扩面对齐 RegC、保护特性接入、mtest_set 矩阵 + protected_samples llvm 样本 | 🟢 完成（Math/包装类等 RegC-only intrinsic 下沉除外，见待做 E） |
 | 十五（mj2x-llvmrt 运行时下沉） | #894：llvm_ir_helpers.cpp 固定 IR helper 逐批下沉 mj2x-rt/src/llvmir（declare 化）；源内 define internal 41→1（仅剩 bsm 站点模板）；benchmark 中性（`benchmark/results/2026-08-23-llvmrt-sink.md`） | ✅ 完成（见归档索引；顺带修复 Compare-REF Eq 裸拷贝发射缺陷 c1ce74d79） |
 | 十六（sprint 2026-09-17/18） | #760 切片 2 lazy 分块解密+密钥擦除（`--vmc4-lazy-decrypt`）；#887 探针级优化三连（class literal 缓存/trampoline 条件发射/装箱缓存，基准 ratio 1.36→1.12，`benchmark/results/2026-09-17-regc-probe-optimization.md`）；indy 原生派发判定原型+设计文档；#879-X3 stackc indy jclass 缓存；passReceiver intrinsic 扩面 | 🟢 波次一+部分波次二完成；indy backend 合流见待做 H |
+| 十七（sprint 2026-10） | #1116 切片 A vmc4 编码期块乱序（`--vmc4-shuffle-blocks`，默认关）：块 id+物理布局 Sattolo 单环乱序、间接跳转表重映射零字节改写、异常区域随排列自洽、targets 表密文落盘（`vmc4DeriveTargetsKey`）+JNI_OnLoad 解密；与 drift/encrypt-program 正交三开 round-trip | 🟢 完成（`Vmc4ShuffleTest.*` 9 例 + `Vmc4BackendShuffleE2E` 三档 e2e；见 capabilities §4） |
 
 ## 待做项
 

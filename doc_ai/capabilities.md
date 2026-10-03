@@ -253,7 +253,7 @@ CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契
 
 **CLI**:`--backend vmc4` + `--vmc4-dispatcher` / `--vmc4-seed` / `--vmc4-granularity` /
 `--vmc4-alias` / `--vmc4-bogus` / `--vmc4-drift` / `--vmc4-drift-period` /
-`--vmc4-trace-surface` / `--vmc4-encrypt-program`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
+`--vmc4-trace-surface` / `--vmc4-encrypt-program` / `--vmc4-shuffle-blocks`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
 
 **程序 blob at-rest 加密（`--vmc4-encrypt-program`，#760 首切片）**:开启后每个 VMC4
 实例的解释器字节码 blob 以 xorshift32 keystream 密文落盘，密钥由实例 seed 经
@@ -264,6 +264,24 @@ CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契
 分支。验证:`Vmc4EncryptProgramTest.*` 9 例（密文无明文/round-trip/错误 seed 不解/
 关闭路径不回退）+ `vmc4_backend_e2e` 加密开态 E2E + CRT 侧
 `mj2x_vmc4_blob_crypto_test`（rt 解密原语）。
+
+**编码期块乱序（`--vmc4-shuffle-blocks`，#1116 切片 A，默认关）**:开启后编码器把
+方法内 VM 块的 id 空间与物理布局按同一 seed 驱动排列打乱（Sattolo 单环排列，恒无
+不动点；入口块恒 id 0），块邻接不再映射 CFG 发射序。语义保真走**间接跳转表路线**
+——跳转/分支/switch 操作数是块 id（u16），经 `blockTargets[]` 运行期解析，乱序只需
+按新 id 序重建该表，字节流操作数零改写；解释器两条既有不变量天然兼容:prologue
+`pc = targets[0]` 表驱动（入口可在任意物理位置）、异常检查点按 `targets[]` 升序区间
+反查当前块（物理序 == id 序保序）。异常区域条目（handlerBlock/blockIdx）经
+`ctx.blockIndex` 解析，随排列自动落入新 id 空间，`blockExcRegions` 自洽。开启时间接
+跳转表以 xorshift32 keystream 密文落盘（键 `vmc4DeriveTargetsKey`，独立常数种子段，
+与 blob 密钥同族不耦合），`JNI_OnLoad` 原地解密（non-const 数组）。与 `--vmc4-drift`
+（执行解码层）/ `--vmc4-encrypt-program`（落盘层）正交可叠:乱序在编码期决定最终
+布局，drift 按最终偏移选变体、加密作用于最终流。5 种 dispatcher 形态共享 handler
+片段（全部 `pc = targets[id]`、逐块显式 terminator 无 fall-through），对乱序透明。
+关闭路径产物字节级不变。验证:`Vmc4ShuffleTest.*` 9 例（乱序 ≠ 发射序/跳转闭合/targets
+升序/异常区域重映射自洽/同 seed 逐字节一致/不同 seed 布局不同/表加密与 JNI_OnLoad
+解密/三开关叠加产物形态）+ `Vmc4BackendShuffleE2E` 三档 round-trip（shuffle 单开 /
++drift / +drift+encrypt，switch+循环+try/catch，`-Xverify:all`）。
 
 **已知限制**:MULTIANEWARRAY 初始 fail-closed 已放开;仍 fail-closed:反射、动态类加载、
 invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标。
