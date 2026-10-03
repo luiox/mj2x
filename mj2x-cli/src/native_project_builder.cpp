@@ -19,6 +19,10 @@ std::FILE* const kStderrStream = stderr;
 
 #include "libca/process/subprocess.hpp"
 #include "libca/log/log_macros.hpp"
+// 环境形状卫生函数簇（mergeProcessEnvironment/environmentKeyEquals/
+// isAbnormalChildExit/ProcessEnvironment 别名）声明与定义统一走该内部头
+// （#1023 自本文件与 native_compiler.cpp 抽出）；宏值固化须在其前（见上）。
+#include "native_env_hygiene.hpp"
 
 namespace mj2x::cli {
 
@@ -26,18 +30,7 @@ namespace mj2x::cli {
 // （INCLUDE/LIB/PATH，必要时调 vcvarsall.bat x64）。xmake 子进程复用同一环境，
 // 否则在 PATH 含 mingw64 的 shell（Git Bash）下 xmake 会探测 mingw 工具链导致
 // "cannot get program for cc"。
-using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
 bool loadMsvcEnvironment(ProcessEnvironment& environment, std::filesystem::path& compilerPath);
-
-// native_compiler.cpp 提供（与 loadMsvcEnvironment 同源导出）：把捕获的 MSVC
-// 环境以「父进程环境为底、捕获变量覆盖其上（同名 case-insensitive 以捕获值
-// 胜出）」注入子进程命令，在调用点显式保证子 xmake 拿到完整环境块，不依赖
-// libca 对 Command::env 覆盖集的内部实现细节。
-void mergeProcessEnvironment(ca::process::Command& command, const ProcessEnvironment& captured);
-
-// native_compiler.cpp 提供（外部链接）：环境键 case-insensitive 比较
-// （Windows 环境变量键大小写不敏感口径）。
-bool environmentKeyEquals(const std::string& left, const char* right);
 
 namespace fs = std::filesystem;
 namespace {
@@ -68,16 +61,6 @@ bool runXmake(ca::process::Command& command, const char* phase, int* failedCode 
     }
     return true;
 }
-
-#if defined(_WIN32)
-/// 子进程异常退出判定（Windows NTSTATUS 失败码，如堆损坏 0xC0000374 →
-/// -1073740940）：libca 带符号化后是量级极大的负 int；常规错误退出
-/// （xmake exit(-1) 等）是小幅负值。<= -1000 即可区分两类，-1/-2 不触发重试。
-bool isAbnormalChildExit(int code)
-{
-    return code <= -1000;
-}
-#endif
 
 /// 构造 configure/build 两阶段的 xmake 命令（不含 env 注入）。重试需要
 /// 全新 Command 对象——旧对象已携带失败的 env 形状与参数序列。

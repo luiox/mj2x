@@ -17,15 +17,6 @@
 #include <thread>
 #include <vector>
 
-#ifndef _WIN32
-#    include <strings.h>
-#else
-// GetEnvironmentStringsW/WideCharToMultiByte：mergeProcessEnvironment 的父进程
-// 环境枚举用（仿 native_project_builder.cpp 的守卫口径）。
-#    define WIN32_LEAN_AND_MEAN
-#    define NOMINMAX
-#    include <windows.h>
-#endif
 // libca/process/subprocess.hpp 会 #undef 全局 stdout/stderr 宏（Command 成员
 // 同名防污染），这里在 include 之前固化宏值，供文件尾部导出的 MSVC 环境
 // 加载函数（loadMsvcEnvironment）使用。
@@ -36,23 +27,17 @@ std::FILE* const kStderrStream = stderr;
 
 #include "jdk_finder/jdk_finder.hpp"
 #include "libca/process/subprocess.hpp"
+// 环境形状卫生函数簇（environmentKeyEquals/currentProcessEnvironment/
+// isPathFamilyKey/dedupePathValue/mergeProcessEnvironment 等）：#1023 抽到
+// 内部头供合成 env 断言 gtest 复用，本文件只保留 loadMsvcEnvironment 等本体。
+// 宏值固化须在其前（见上），故 include 顺序在此而非文件头。
+#include "native_env_hygiene.hpp"
 
 namespace mj2x::cli {
 
 // 导出给 native_project_builder（xmake 子进程复用 MSVC 环境）：加载
-// INCLUDE/LIB/PATH，必要时调 vcvarsall.bat x64。自包含实现——匿名 namespace
-// 内的同名函数是 internal linkage 无法跨 TU 链接，这里独立实现（宏值取自
+// INCLUDE/LIB/PATH，必要时调 vcvarsall.bat x64。自包含实现（宏值取自
 // kStdoutStream/kStderrStream，其在 subprocess.hpp 之前已固化）。
-using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
-
-bool environmentKeyEquals(const std::string& left, const char* right)
-{
-#ifdef _WIN32
-    return _stricmp(left.c_str(), right) == 0;
-#else
-    return strcasecmp(left.c_str(), right) == 0;
-#endif
-}
 
 bool loadMsvcEnvironment(ProcessEnvironment& environment,
                          std::filesystem::path& compilerPath)
@@ -131,141 +116,6 @@ bool loadMsvcEnvironment(ProcessEnvironment& environment,
     }
     compilerPath = found;
     return true;
-}
-
-namespace {
-
-/// 父进程当前环境块快照（UTF-8 键值对）。
-/// @details Windows 侧用 GetEnvironmentStringsW + CP_UTF8 转换——libca 子进程
-/// 环境要求 UTF-8（无效序列注入会被整体拒绝，spawn 失败），故不用 ANSI 版；
-/// 转换按替换语义（标志 0）而非 WC_ERR_INVALID_CHARS：极端脏值宁可单条劣化
-/// 也不整条丢弃（丢 PATH 会让子进程彻底失明）。键含 '=' 的 "=C:" 型伪变量
-/// 整条跳过——Command::env 键禁止含 '='，注入会让 spawn 直接失败。
-std::vector<std::pair<std::string, std::string>> currentProcessEnvironment()
-{
-    std::vector<std::pair<std::string, std::string>> result;
-#ifdef _WIN32
-    wchar_t* inherited = ::GetEnvironmentStringsW();
-    if (inherited == nullptr) return result;
-    for (const wchar_t* entry = inherited; *entry != L'\0'; entry += std::wcslen(entry) + 1) {
-        if (*entry == L'=') continue;
-        const wchar_t* separator = std::wcschr(entry, L'=');
-        if (separator == nullptr) continue;
-        const auto keyLength   = static_cast<std::size_t>(separator - entry);
-        const auto valueLength = std::wcslen(separator + 1);
-        if (keyLength == 0) continue;
-        const auto toUtf8 = [](const wchar_t* value, std::size_t length) {
-            if (length == 0) return std::string{};
-            const auto size = ::WideCharToMultiByte(
-                CP_UTF8, 0, value, static_cast<int>(length), nullptr, 0, nullptr, nullptr);
-            if (size <= 0) return std::string{};
-            std::string converted(static_cast<std::size_t>(size), '\0');
-            ::WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int>(length),
-                                  converted.data(), size, nullptr, nullptr);
-            return converted;
-        };
-        result.emplace_back(toUtf8(entry, keyLength), toUtf8(separator + 1, valueLength));
-    }
-    ::FreeEnvironmentStringsW(inherited);
-#else
-    // 非 Windows：loadMsvcEnvironment 恒产空 environment（case 1 整块继承），
-    // mergeProcessEnvironment 对空 captured 直接返回，本枚举不可达；留空即可
-    // （macOS 的 environ 枚举需 _NSGetEnviron，无谓引入平台差异）。
-#endif
-    return result;
-}
-
-/// PATH/INCLUDE/LIB 路径族键判定（case-insensitive）。
-bool isPathFamilyKey(const std::string& key)
-{
-    return environmentKeyEquals(key, "PATH") || environmentKeyEquals(key, "INCLUDE") ||
-           environmentKeyEquals(key, "LIB");
-}
-
-/// 路径族变量值内目录去重（splitenv→unique→joinenv，保序取首个）。
-/// @details 重复目录不改变查找语义，只无谓拉长 env 块、放大子进程 env 块
-/// 构造的边界敏感性（A1 报告 §5.2：xmake pinned tbox 的填充 off-by-one 与
-/// 块内容形状相关）。Windows 下分隔符 ';' 且比较大小写不敏感（与文件系统
-/// 口径一致）；非 Windows 分隔符 ':'、精确比较——该路径实际不可达
-/// （captured 恒空，mergeProcessEnvironment 早退），仅为编译完备。
-std::string dedupePathValue(const std::string& value)
-{
-#ifdef _WIN32
-    const char separator = ';';
-    const auto same    = [](const std::string& left, const std::string& right) {
-        return _stricmp(left.c_str(), right.c_str()) == 0;
-    };
-#else
-    const char separator = ':';
-    const auto same    = [](const std::string& left, const std::string& right) {
-        return left == right;
-    };
-#endif
-    std::vector<std::string> unique;
-    std::istringstream       stream(value);
-    std::string              entry;
-    while (std::getline(stream, entry, separator)) {
-        if (entry.empty()) continue;
-        const auto duplicate =
-            std::any_of(unique.begin(), unique.end(),
-                        [&](const std::string& known) { return same(known, entry); });
-        if (duplicate) continue;
-        unique.push_back(entry);
-    }
-    std::string joined;
-    for (const auto& item : unique) {
-        if (!joined.empty()) joined += separator;
-        joined += item;
-    }
-    return joined;
-}
-
-/// 合并后 env 块字节预算（按 "KEY=VALUE" + '\0' 逐项累计）。计数为 UTF-8
-/// 字节近似（Windows 实际环境块是 UTF-16），且未计块尾终止 NUL 的 1 字节
-/// ——常数级偏差，不影响判级用途。超限只记 WARN：
-/// 现阶段收缩手段仅去重/剔除非法条目（不损失语义）；若仍超限需要删条目，
-/// 删除策略须先评审再实现（A1 报告 P0-A：统计性去险，非语义损失删除）。
-constexpr std::size_t kMergedEnvironmentBytesLimit = 16 * 1024;
-
-}   // namespace
-
-/// @brief 把捕获的 MSVC 环境（loadMsvcEnvironment 产物）以「父进程环境为底、
-///        捕获变量覆盖其上」的方式注入子进程命令。
-/// @details 调用点显式构造完整环境块：父进程当前环境铺底，vcvars 捕获值按
-/// case-insensitive 同名胜出（PATH/INCLUDE/LIB 必须是 vcvars 版本，否则丢
-/// cl.exe）。Command::env 的语义是「覆盖集」，子进程环境块的继承行为属
-/// libca 内部实现细节（现行为是继承底+覆盖），调用方不依赖该细节。captured
-/// 为空（loadMsvcEnvironment case 1：INCLUDE 已设）时不动 env_——空 env_ 即
-/// 整块继承，行为保持不变。注入前做形状卫生（A1 报告 P0-A）：路径族值
-/// （PATH/INCLUDE/LIB）目录去重（保序取首个）、剔除空值条目与含 '=' 的键
-/// ——vcvars `set` 文本解析产物没有 currentProcessEnvironment 的伪变量
-/// 防御，含 '=' 的键会让 spawn 整体失败；captured 来源的空值覆盖（VAR=）
-/// 同样被剔除——该键不注入，子进程保留父进程原值。显式全量注入契约不变。
-void mergeProcessEnvironment(ca::process::Command&        command,
-                             const ProcessEnvironment& captured)
-{
-    if (captured.empty()) return;
-    std::size_t totalBytes = 0;
-    const auto  inject     = [&](const std::string& key, const std::string& value) {
-        if (key.empty() || value.empty() || key.find('=') != std::string::npos) return;
-        const std::string deduped = isPathFamilyKey(key) ? dedupePathValue(value) : value;
-        totalBytes += key.size() + deduped.size() + 2;
-        command.env(key, deduped);
-    };
-    for (const auto& [key, value] : currentProcessEnvironment()) {
-        const auto overridden = std::any_of(
-            captured.begin(), captured.end(),
-            [&](const auto& item) { return environmentKeyEquals(item.first, key.c_str()); });
-        if (overridden) continue;
-        inject(key, value);
-    }
-    for (const auto& [key, value] : captured) inject(key, value);
-    if (totalBytes > kMergedEnvironmentBytesLimit) {
-        CA_LOGT_WARN("compile",
-                     "merged child environment block is {} bytes (limit {}); "
-                     "path-family dedup applied, no entries dropped.\n",
-                     totalBytes, kMergedEnvironmentBytesLimit);
-    }
 }
 
 namespace {
@@ -569,11 +419,9 @@ std::string uniqueCompilerSourceToken()
            std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
 }
 
-using ProcessEnvironment = std::vector<std::pair<std::string, std::string>>;
-
-// environmentKeyEquals 用本文件 mj2x::cli 作用域的导出版本（loadMsvcEnvironment
-// 上方）：此前的匿名 namespace 副本与它在 mergeProcessEnvironment 的调用点上
-// 产生 C2668 二义性，实现逐字节相同，删除副本统一走一处。
+// environmentKeyEquals 用 native_env_hygiene.hpp 的 inline 版本（#1023 起）：
+// 此前的匿名 namespace 副本与它在 mergeProcessEnvironment 的调用点上
+// 产生过 C2668 二义性，实现逐字节相同，统一走头文件一处。
 
 std::string environmentValue(const ProcessEnvironment& environment, const char* key)
 {
