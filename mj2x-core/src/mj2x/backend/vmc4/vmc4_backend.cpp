@@ -182,6 +182,18 @@ struct Vmc4Backend::Impl
     };
     std::vector<BlobDecryptEntry> blobDecrypts;
 
+    /// 间接跳转表解密条目（issue #1116 切片 A）：shuffleBlocks 开启时每个转 VM
+    /// 方法一条（mj2x_vm_targets_<tag> 以密文落盘），finalize 的 JNI_OnLoad 期
+    /// 发射 mj2x_vm_blob_decrypt 原地解密（复用 blob 解密原语，按字节 keystream
+    /// 对合）。密钥从实例 seed 经 vmc4DeriveTargetsKey 派生（与发射侧同一函数）。
+    struct TargetsDecryptEntry
+    {
+        std::string tag;      ///< 方法级 tag（定位 mj2x_vm_targets_<tag> 数组）
+        uint32_t    size = 0; ///< 表字节数（条数 × 4）
+        uint32_t    key  = 0; ///< 解密密钥（发射期与解密期同源派生）
+    };
+    std::vector<TargetsDecryptEntry> targetsDecrypts;
+
     /// 用户自定义 intrinsic（issue #818）：编码期传入 VmEncoder 匹配调用点。
     std::vector<UserIntrinsic> userIntrinsics;
 
@@ -334,6 +346,16 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
         entry.size = static_cast<uint32_t>(program->bytecodes.size());
         entry.key  = vmc4DeriveBlobKey(instance.instanceSeed());
         impl_->blobDecrypts.push_back(std::move(entry));
+    }
+    // 间接跳转表 at-rest 加密（issue #1116 切片 A）：shuffleBlocks 开启时表以
+    // 密文落盘（发射器），此处登记 JNI_OnLoad 期的原地解密条目。与 blob 加密
+    // 正交：表加密只随 shuffle 开启，blob 加密只随 programBlobEncrypt 开启。
+    if (options_.shuffleBlocks) {
+        Impl::TargetsDecryptEntry entry;
+        entry.tag  = methodTag;
+        entry.size = static_cast<uint32_t>(program->blockTargets.size() * sizeof(uint32_t));
+        entry.key  = vmc4DeriveTargetsKey(instance.instanceSeed());
+        impl_->targetsDecrypts.push_back(std::move(entry));
     }
     impl_->source.append(backendResult.text.data(), backendResult.text.size());
     return backendResult;
@@ -758,6 +780,18 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
             std::snprintf(keyBuf, sizeof(keyBuf), "0x%08xu", static_cast<unsigned>(entry.key));
             src.emitLine("mj2x_vm_blob_decrypt(mj2x_vm_code_" + entry.tag + ", " +
                          std::to_string(entry.size) + "u, " + keyBuf + ");");
+        }
+    }
+    // 间接跳转表 at-rest 解密（issue #1116 切片 A）：与 blob 解密同一时机面
+    // （JNI_OnLoad、先于 GetEnv、加载锁内单线程，先于任何 VM 方法可达）。
+    // mj2x_vm_blob_decrypt 按字节 keystream 对合，直接作用于表的 4×N 字节。
+    if (!targetsDecrypts.empty()) {
+        src.emitLine("/* VMC4 indirect jump table at-rest decrypt (issue #1116 slice A) */");
+        for (const auto& entry : targetsDecrypts) {
+            char keyBuf[16];
+            std::snprintf(keyBuf, sizeof(keyBuf), "0x%08xu", static_cast<unsigned>(entry.key));
+            src.emitLine("mj2x_vm_blob_decrypt((unsigned char*)mj2x_vm_targets_" + entry.tag +
+                         ", " + std::to_string(entry.size) + "u, " + keyBuf + ");");
         }
     }
     src.emitLine("JNIEnv* env = NULL;");

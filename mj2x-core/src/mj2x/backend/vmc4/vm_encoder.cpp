@@ -1,6 +1,7 @@
 #include "mj2x/backend/vmc4/vm_encoder.hpp"
 
 #include "mj2x/backend/vmc4/vmc4_instance.hpp"
+#include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/mir/register_ir/reg_block.hpp"
 #include "mj2x/mir/register_ir/reg_function.hpp"
 #include "mj2x/mir/register_ir/reg_instruction.hpp"
@@ -14,9 +15,14 @@
 #include <unordered_map>
 #include <vector>
 
+#include "libca/random/split_mix64.hpp"
+
 namespace mj2x {
 
 namespace {
+
+// 块乱序排列的确定性伪随机流（splitmix64，单源 = libca canonical，#1027 A3）。
+using SplitMix64 = ca::random::SplitMix64;
 
 // RegIR / SSA 类型直接在 mj2x 命名空间（无 mj2x::mir 子命名空间）。
 
@@ -234,11 +240,16 @@ struct EncoderState
     {
         const RegBlock*           realTarget;
         std::vector<RegCopy>      copies;   ///< 边拷贝快照（值语义，安全持有）
+        /// 语义 id（blockTargets 下标 / 跳转操作数值）。planSyntheticEdges 预填
+        /// 发射序值；assignBlockIndices 落定最终 id（shuffle 开启时被乱序排列
+        /// 覆写为 Sattolo 排列后的 id，与 emitOrder/blockIndex 同一空间）。
         uint16_t                  index = 0;
     };
     std::vector<SyntheticEdge> syntheticEdges;
 
-    /// (src 块, dst 块, slot) → 合成块索引，供 encodeJump/encodeBranch 解析目标。
+    /// (src 块, dst 块, slot) → 合成块在 syntheticEdges 里的下标，供
+    /// encodeJump/encodeBranch 解析目标（resolveEdgeTarget 据此查 SyntheticEdge
+    /// 的最终语义 id——乱序后 id 由 assignBlockIndices 落定，不能缓存旧值）。
     struct EdgeKey
     {
         const RegBlock* src = nullptr;
@@ -246,6 +257,17 @@ struct EncoderState
         uint16_t        slot = 0;
     };
     std::vector<std::pair<EdgeKey, uint16_t>> edgeToSynthetic;
+
+    /// 物理发射槽：真实块指针或 syntheticEdges 下标（互斥，real == nullptr 时
+    /// synthetic >= 0）。emitOrder[id] 即「id 为 i 的块」——物理序 == 升序 id 序，
+    /// 保证 blockTargets 恒升序（解释器异常检查点按 targets 升序区间反查当前块，
+    /// 见 vm_interpreter_emit.cpp emitExceptionCheckpoint）。
+    struct EmitSlot
+    {
+        const RegBlock* real      = nullptr;
+        int             synthetic = -1;
+    };
+    std::vector<EmitSlot> emitOrder;
 
     explicit EncoderState(const RegFunction& f, const VmInstance& inst)
         : fn(f)
@@ -259,7 +281,7 @@ struct EncoderState
         scanComputeRegisters();
     }
 
-    /// @brief 为带边拷贝的后继创建合成块并分配索引（在 indexBlocks 之后调用）。
+    /// @brief 为带边拷贝的后继创建合成块（在 assignBlockIndices 之前调用）。
     ///
     /// @details
     /// SSA 块参数经 RegIR 消除后变成后继边上的 RegCopy（reg_lowering.cpp lowerSuccessor）。
@@ -276,7 +298,11 @@ struct EncoderState
             edge.copies     = succ.copies;
             edge.index      = static_cast<uint16_t>(base + syntheticEdges.size());
             syntheticEdges.push_back(std::move(edge));
-            edgeToSynthetic.push_back({{src, succ.block, slot}, syntheticEdges.back().index});
+            // 存 syntheticEdges 下标（非 id）：id 在 assignBlockIndices 落定
+            // （shuffle 开启时被乱序覆写），resolveEdgeTarget 每次现查最终值。
+            edgeToSynthetic.push_back(
+                {{src, succ.block, slot},
+                 static_cast<uint16_t>(syntheticEdges.size() - 1)});
         };
         for (const auto& block : fn.blocks) {
             std::visit(
@@ -303,13 +329,18 @@ struct EncoderState
         }
     }
 
-    /// @brief 解析边目标：该边有合成块则用合成块索引，否则用真实块索引。
+    /// @brief 解析边目标：该边有合成块则用其最终语义 id，否则用真实块索引。
+    ///
+    /// @details
+    /// edgeToSynthetic 存 syntheticEdges 下标，语义 id 现查（assignBlockIndices
+    /// 在 shuffle 开启时把合成块 id 覆写为乱序后的值——issue #1116 切片 A 修复：
+    /// 缓存 push 时点的顺序 id 会让乱序产物的跳转指向错误块，e2e 实证为死循环）。
     uint16_t resolveEdgeTarget(const RegBlock* src, const RegBlock* dst, uint16_t slot,
                                uint16_t realIndex)
     {
         for (const auto& kv : edgeToSynthetic) {
             if (kv.first.src == src && kv.first.dst == dst && kv.first.slot == slot)
-                return kv.second;
+                return syntheticEdges[kv.second].index;
         }
         return realIndex;
     }
@@ -667,11 +698,13 @@ void emitHaltOpcode(EncoderState& ctx, std::vector<uint8_t>& out)
 }
 
 // ---------------------------------------------------------------------------
-// 前向声明：layoutBlocks → encodeBlock → encodeInstruction/encodeTerminator →
-// encodeCopy/Unary/Binary/Compare/Convert/Jump/Branch/Return。
+// 前向声明：layoutBlocks → encodeBlock/emitSyntheticEdge → encodeInstruction/
+// encodeTerminator → encodeCopy/Unary/Binary/Compare/Convert/Jump/Branch/Return。
 // ---------------------------------------------------------------------------
 bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason);
 bool encodeBlock(EncoderState& ctx, const RegBlock& block, VmProgram& prog, std::string& reason);
+bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edge,
+                       VmProgram& prog, std::string& reason);
 bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
                        std::string& reason);
 bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog, std::string& reason);
@@ -696,65 +729,130 @@ bool encodeBranch(EncoderState& ctx, const RegBranchTerminator& term, VmProgram&
 bool encodeReturn(EncoderState& ctx, const RegReturnTerminator& term, VmProgram& prog,
                   std::string& reason);
 
-/// @brief 第一遍：为每个 block 分配索引，记录到 ctx.blockIndex。
+/// @brief 第一遍：为每个块分配 id 并构建物理发射序（assignBlockIndices）。
 ///
 /// @details
-/// block 索引用作 blockTargets 的下标和 Jump/Branch 的目标操作数。
-/// fn.blocks 的顺序即索引顺序（entry 是 blocks[0]，见 reg_function.hpp:38）。
-bool indexBlocks(EncoderState& ctx, std::string& reason)
+/// 块 id 用作 blockTargets 的下标和 Jump/Branch/Switch 的目标操作数；
+/// emitOrder 供 layoutBlocks 按升序 id 序物理布局（blockTargets 恒升序）。
+///
+/// 基础分配（shuffle 关闭，与历史形态逐字节一致）：fn.blocks 顺序即 id 顺序
+/// （entry 是 blocks[0]，见 reg_function.hpp:38），合成块索引排在真实块之后。
+///
+/// 块乱序（--vmc4-shuffle-blocks，issue #1116 切片 A）：入口块恒占 id 0
+/// （prologue `pc = targets[0]` 表驱动，不依赖入口物理位置，但保留 id 0 使
+/// 「targets 升序」与「entry 语义」两条不变量最简），其余块（真实 + 合成）
+/// 经 Sattolo 单环排列分配 id 1..N-1——单环保证恒无不动点，每个非入口块的
+/// id 与物理位置都必然移位，块邻接不再映射 CFG 发射序。控制流语义不变：
+/// 跳转操作数是块 id，layoutBlocks 按新 id 序重建 blockTargets 即完成
+/// 「间接跳转表重映射」，字节流操作数无需改写。排列种子 = 实例 seed ⊕
+/// 独立常数段 ⊕ 方法身份哈希（同实例不同方法排列去相关）。
+bool assignBlockIndices(EncoderState& ctx, std::string& reason)
 {
-    if (ctx.fn.blocks.size() > 0xFFFF) {
-        reason = "too many blocks (>65535) for u16 block index";
+    if (ctx.fn.blocks.empty()) {
+        reason = "RegFunction has no blocks";
         return false;
     }
-    uint16_t idx = 0;
-    for (const auto& block : ctx.fn.blocks) {
-        ctx.blockIndex[block.get()] = idx++;
+    if (ctx.fn.blocks.size() > 0xFFFE) {
+        reason = "too many blocks (>65534) for u16 block index";
+        return false;
+    }
+    const size_t realCount = ctx.fn.blocks.size();
+    const size_t totalCount = realCount + ctx.syntheticEdges.size();
+    ctx.emitOrder.assign(totalCount, EncoderState::EmitSlot{});
+
+    // id 0：入口块（fn.blocks[0]）。
+    ctx.blockIndex[ctx.fn.blocks[0].get()] = 0;
+    ctx.emitOrder[0] = {ctx.fn.blocks[0].get(), -1};
+
+    // 其余块按发射序收集：真实块 1..R-1，然后合成块 0..S-1。
+    std::vector<EncoderState::EmitSlot> rest;
+    rest.reserve(totalCount - 1);
+    for (size_t bi = 1; bi < realCount; ++bi) rest.push_back({ctx.fn.blocks[bi].get(), -1});
+    for (size_t si = 0; si < ctx.syntheticEdges.size(); ++si)
+        rest.push_back({nullptr, static_cast<int>(si)});
+
+    if (ctx.instance.shuffleBlocks() && rest.size() > 1) {
+        // Sattolo：i 从尾向头，j ∈ [0, i) 交换——结果恰为单环排列（无不动点）。
+        // 独立常数段（与其他实例维度的种子段互不相同）+ 方法身份哈希。
+        const uint64_t identityHash = codegen::fnv1a64(
+            ctx.fn.symbol.owner + "." + ctx.fn.symbol.name + ctx.fn.symbol.desc);
+        SplitMix64 rng(ctx.instance.instanceSeed() ^ 0x3B5D2C7A1E6F49B8ull ^ identityHash);
+        for (size_t i = rest.size(); i > 1; --i) {
+            const size_t j = static_cast<size_t>(rng.next_bounded(i - 1));
+            std::swap(rest[j], rest[i - 1]);
+        }
+    }
+
+    // 分配 id 1..N-1：物理序 == 升序 id 序。
+    for (size_t k = 0; k < rest.size(); ++k) {
+        const uint16_t id = static_cast<uint16_t>(k + 1);
+        if (rest[k].real != nullptr) {
+            ctx.blockIndex[rest[k].real] = id;
+        } else {
+            // 合成块：落定语义 id（resolveEdgeTarget 经 edgeToSynthetic 把
+            // 跳转操作数解析到这里——乱序后必须用新 id 空间的值）。
+            ctx.syntheticEdges[static_cast<size_t>(rest[k].synthetic)].index = id;
+        }
+        ctx.emitOrder[id] = rest[k];
     }
     return true;
 }
 
-/// @brief 第二遍 A：计算每个 block 的字节码长度，填 blockTargets（起始 offset）。
+/// @brief 第二遍 A：按 emitOrder（升序 id 序）布局全部块，填 blockTargets。
 ///
 /// @details
-/// 一遍完成：按 block 顺序边编码边记录起始 offset（block 的偏移只取决于前面
-/// block 的字节数，故一遍即够）。真实块之后布局合成块（边拷贝块，见
-/// EncoderState::planSyntheticEdges），末尾追加 Halt 作为停机哨兵。
+/// 一遍完成：按 emitOrder 顺序边编码边记录起始 offset（blockTargets[id] = 块
+/// 起点，物理序 == id 序故恒升序）。shuffle 开启时 emitOrder 是 Sattolo 乱序
+/// （assignBlockIndices），跳转操作数（块 id）在编码期已按新 id 空间写出，此
+/// 处按同一空间记录 offset 即完成间接跳转表重映射——语义不变、布局解耦。
+/// 末尾追加 Halt 作为停机哨兵。
 bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
 {
-    prog.blockTargets.assign(ctx.fn.blocks.size() + ctx.syntheticEdges.size(), 0);
-    for (size_t bi = 0; bi < ctx.fn.blocks.size(); ++bi) {
-        prog.blockTargets[bi] = static_cast<uint32_t>(prog.bytecodes.size());
-        // 编码本 block 到 prog.bytecodes（offset 已记录，后续编码直接追加）。
-        if (!encodeBlock(ctx, *ctx.fn.blocks[bi], prog, reason)) return false;
-    }
-    // 合成块：边拷贝 + Jump 到真实目标。
-    for (const auto& edge : ctx.syntheticEdges) {
-        prog.blockTargets[edge.index] = static_cast<uint32_t>(prog.bytecodes.size());
-        for (const auto& copy : edge.copies) {
-            VmType type;
-            if (!toVmType(copy.dest.type, type)) {
-                reason = "edge copy dest type not supported in MVP";
+    prog.blockTargets.assign(ctx.emitOrder.size(), 0);
+    for (size_t id = 0; id < ctx.emitOrder.size(); ++id) {
+        prog.blockTargets[id] = static_cast<uint32_t>(prog.bytecodes.size());
+        const auto& slot = ctx.emitOrder[id];
+        if (slot.real != nullptr) {
+            // 真实块：编码本 block 指令 + terminator。
+            if (!encodeBlock(ctx, *slot.real, prog, reason)) return false;
+        } else {
+            // 合成块：边拷贝 + Jump 到真实目标。
+            if (!emitSyntheticEdge(ctx, ctx.syntheticEdges[static_cast<size_t>(slot.synthetic)],
+                                   prog, reason)) {
                 return false;
             }
-            uint16_t src;
-            // 边拷贝的 undef 源（异常 handler 参数未定义）容忍为 NULL 引用。
-            if (!ctx.resolveOperand(copy.source, src, reason, true)) return false;
-            emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
-            emitU8(prog.bytecodes, static_cast<uint8_t>(type));
-            emitU16(prog.bytecodes, static_cast<uint16_t>(copy.dest.id.value));
-            emitU16(prog.bytecodes, src);
         }
-        const auto realIt = ctx.blockIndex.find(edge.realTarget);
-        if (realIt == ctx.blockIndex.end()) {
-            reason = "edge copy target block not indexed";
-            return false;
-        }
-        emitOpcode(ctx, VmOpcode::Jump, prog.bytecodes);
-        emitU16(prog.bytecodes, realIt->second);
     }
     // 末尾 Halt 作为停机哨兵（解释器主循环遇到 Halt 退出）。
     emitHaltOpcode(ctx, prog.bytecodes);
+    return true;
+}
+
+/// @brief 编码一个合成块（边拷贝序列 + Jump 真实目标）。
+bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edge,
+                       VmProgram& prog, std::string& reason)
+{
+    for (const auto& copy : edge.copies) {
+        VmType type;
+        if (!toVmType(copy.dest.type, type)) {
+            reason = "edge copy dest type not supported in MVP";
+            return false;
+        }
+        uint16_t src;
+        // 边拷贝的 undef 源（异常 handler 参数未定义）容忍为 NULL 引用。
+        if (!ctx.resolveOperand(copy.source, src, reason, true)) return false;
+        emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
+        emitU8(prog.bytecodes, static_cast<uint8_t>(type));
+        emitU16(prog.bytecodes, static_cast<uint16_t>(copy.dest.id.value));
+        emitU16(prog.bytecodes, src);
+    }
+    const auto realIt = ctx.blockIndex.find(edge.realTarget);
+    if (realIt == ctx.blockIndex.end()) {
+        reason = "edge copy target block not indexed";
+        return false;
+    }
+    emitOpcode(ctx, VmOpcode::Jump, prog.bytecodes);
+    emitU16(prog.bytecodes, realIt->second);
     return true;
 }
 
@@ -1574,11 +1672,14 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     EncoderState ctx(fn, instance);
     ctx.userIntrinsics = userIntrinsics;
 
-    if (!indexBlocks(ctx, reason)) return nullptr;
+    // 合成边先于块 id 分配（合成块索引参与乱序排列的 id 空间）。
     ctx.planSyntheticEdges();
+    if (!assignBlockIndices(ctx, reason)) return nullptr;
     // 异常区域（Phase 2.C）：先于 layoutBlocks 收集（边拷贝可能 intern 新常量槽，
     // 常量槽分配独立于字节流布局，顺序无影响；但必须保证区域表在 layoutBlocks
-    // 之后仍有效——区域表只存块索引/寄存器索引，不依赖字节流偏移）。
+    // 之后仍有效——区域表只存块索引/寄存器索引，不依赖字节流偏移。块乱序时
+    // handlerBlock/blockIdx 经 ctx.blockIndex 解析，天然落在打乱后的 id 空间，
+    // 与 blockTargets/blockExcRegions 同一空间，无需二次重映射）。
     encodeExceptionRegions(ctx, *prog, reason);
     if (!reason.empty()) return nullptr;
     if (!layoutBlocks(ctx, *prog, reason)) return nullptr;

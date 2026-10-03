@@ -2194,12 +2194,32 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         out.emitBlankLine();
     }
 
-    // --- blockTargets 数组 ---
+    // --- blockTargets 数组（间接跳转表）---
     {
-        out.emitLine(format_std("static const unsigned int {}[] = {{", targetsName));
-        {
-            CSourceStream::IndentGuard g(out);
-            out.emitRaw(emitU32Array(program.blockTargets, "    "));
+        // 块乱序（--vmc4-shuffle-blocks，issue #1116 切片 A）：开启时块 id 空间
+        // 已被打乱，本表是「打乱后的块 id → 物理偏移」的唯一映射，以 xorshift32
+        // keystream 密文落盘（键 vmc4DeriveTargetsKey，与 --vmc4-encrypt-program
+        // 同族手法、独立常数种子段），JNI_OnLoad 一次性原地解密（backend 发射，
+        // 时机安全性论证同 blob 解密）。数组因此为 non-const。关闭路径保持
+        // 原发射形态（产物字节级不变）。
+        if (instance.shuffleBlocks()) {
+            out.emitLine("/* indirect jump table: shuffled block ids, encrypted at rest"
+                         " (issue #1116 slice A) */");
+            std::vector<uint32_t> cipher = program.blockTargets;
+            xorStreamBytes(reinterpret_cast<uint8_t*>(cipher.data()),
+                           cipher.size() * sizeof(uint32_t),
+                           vmc4DeriveTargetsKey(instance.instanceSeed()));
+            out.emitLine(format_std("static unsigned int {}[] = {{", targetsName));
+            {
+                CSourceStream::IndentGuard g(out);
+                out.emitRaw(emitU32Array(cipher, "    "));
+            }
+        } else {
+            out.emitLine(format_std("static const unsigned int {}[] = {{", targetsName));
+            {
+                CSourceStream::IndentGuard g(out);
+                out.emitRaw(emitU32Array(program.blockTargets, "    "));
+            }
         }
         out.emitLine("");
         out.emitLine("};");

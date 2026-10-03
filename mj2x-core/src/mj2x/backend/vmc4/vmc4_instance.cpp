@@ -30,6 +30,7 @@ VmInstance::VmInstance(const Vmc4Options& options, uint64_t instanceSeed)
     , driftPeriod_(std::max(1, options.driftPeriod))
     , blobEncrypt_(options.programBlobEncrypt)
     , blobLazy_(options.programLazyDecrypt && options.programBlobEncrypt)
+    , shuffleBlocks_(options.shuffleBlocks)
 {
     buildOpcodeBytes();
     buildHandlerOrder();
@@ -351,6 +352,20 @@ uint32_t vmc4DeriveBlobKey(uint64_t instanceSeed)
                          static_cast<uint32_t>(b ^ (b >> 32));
     // xorshift32 的 0 是死锁态（密钥流恒 0 = 未加密），回退固定种子。
     // 运行侧（mj2x_vm_blob_decrypt）对 0 有同一回退约定，双保险。
+    return key != 0 ? key : 0x9E3779B9u;
+}
+
+uint32_t vmc4DeriveTargetsKey(uint64_t instanceSeed)
+{
+    // 独立种子段（与 blob 密钥/opcode 映射/handler 顺序等其他维度的常数偏移
+    // 互不相同，避免随机流耦合）。派生骨架与 vmc4DeriveBlobKey 同族。
+    SplitMix64 rng(instanceSeed ^ 0x7C4EA5319F2B6D85ull);
+    const uint64_t a = rng.next();
+    const uint64_t b = rng.next();
+    // 高低 32 位折叠：保留 64 位混合结果的全部熵，落到 xorshift32 状态空间。
+    const uint32_t key = static_cast<uint32_t>(a ^ (a >> 32)) ^
+                         static_cast<uint32_t>(b ^ (b >> 32));
+    // xorshift32 的 0 是死锁态（密钥流恒 0 = 未加密），回退固定种子。
     return key != 0 ? key : 0x9E3779B9u;
 }
 

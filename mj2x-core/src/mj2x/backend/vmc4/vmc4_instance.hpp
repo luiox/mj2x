@@ -86,6 +86,17 @@ struct Vmc4Options
     /// （issue #760 记录的前提缺口：jvmtp 1.6.2 起 at-rest 加密为默认形态）。
     bool programBlobEncrypt = false;
 
+    /// 编码期块乱序（--vmc4-shuffle-blocks；默认关闭，issue #1116 切片 A）。
+    ///
+    /// @details
+    /// 开启后编码器把方法内 VM 块的物理布局按 seed 确定性打乱（Sattolo 单环排列，
+    /// 恒无不动点），同时打乱块 id 空间——跳转操作数与块 id 均不再映射 CFG 发射序，
+    /// 块邻接不再镜像 CFG。控制流语义经间接跳转表（blockTargets 重映射）保持不变。
+    /// 与 --vmc4-drift（执行解码层）/ --vmc4-encrypt-program（落盘层）正交可叠。
+    /// 开启时间接跳转表以 xorshift32 keystream 加密落盘（键自 seed 派生
+    /// vmc4DeriveTargetsKey），JNI_OnLoad 一次性原地解密。
+    bool shuffleBlocks = false;
+
     /// 程序 blob 分块懒解密（--vmc4-lazy-decrypt；默认关闭，要求
     /// programBlobEncrypt 开启）。
     ///
@@ -153,6 +164,16 @@ public:
     /// 语义解释（unmap 表），加密作用于最终字节流的 at-rest 形态——加密在
     /// drift 编码完成之后、发射之前施加，解密后字节流即 drift 编码流。
     bool blobEncrypt() const { return blobEncrypt_; }
+
+    /// 编码期块乱序是否开启（--vmc4-shuffle-blocks；issue #1116 切片 A）。
+    ///
+    /// @details
+    /// 开启时 VmEncoder 把块 id 空间与物理布局按同一 Sattolo 排列打乱（入口块
+    /// id 恒 0：prologue `pc = targets[0]` 与异常检查点的 targets 升序区间反查
+    /// 两条既有不变量都依赖「物理序 == id 序」，单一排列同时满足）。语义保真
+    /// 由间接跳转表重映射保证；VmInstance::describe() 不含布局维度（trace
+    /// surface 契约字段集稳定）。
+    bool shuffleBlocks() const { return shuffleBlocks_; }
 
     /// 程序 blob 分块懒解密是否开启（--vmc4-lazy-decrypt；issue #760 切片 2）。
     ///
@@ -278,6 +299,8 @@ private:
     bool             blobEncrypt_;
     /// 分块懒解密开关（options.programLazyDecrypt 透传，不入 describe()）。
     bool             blobLazy_;
+    /// 编码期块乱序开关（options.shuffleBlocks 透传，不入 describe()）。
+    bool             shuffleBlocks_;
     /// VmOpcode 值 → 该语义的实例字节集合（canonical 在前）。
     std::array<std::vector<uint8_t>, 256> opcodeBytes_;
     std::vector<VmOpcode> handlerOrder_;
@@ -306,6 +329,16 @@ uint64_t vmc4DeriveInstanceSeed(uint64_t mainSeed, uint64_t identityHash);
 /// keystream 由解密循环现场重算。切片 2：CRT 解密原语对密钥参数与 keystream
 /// 状态做用后擦除（密钥栈擦除）；分块密钥派生见 vmc4DeriveChunkKey。
 uint32_t vmc4DeriveBlobKey(uint64_t instanceSeed);
+
+/// @brief 从实例 seed 派生间接跳转表（blockTargets）加密密钥（32 位，确定性，恒非 0）。
+///
+/// @details
+/// issue #1116 切片 A：--vmc4-shuffle-blocks 开启时块 id 空间被打乱，间接跳转表
+/// 是「打乱后的块 id → 物理偏移」的唯一映射，落盘前以 xorshift32 keystream 加密
+/// （与 vmc4DeriveBlobKey 同族手法、独立常数种子段，不与 blob 密钥耦合）。发射侧
+/// （VmInterpreterEmitter 加密）与运行侧（JNI_OnLoad 解密调用发射）共用同一派生
+/// 函数。0 回退约定与 vmc4DeriveBlobKey 一致。
+uint32_t vmc4DeriveTargetsKey(uint64_t instanceSeed);
 
 /// @brief 从 blob 密钥 + 块下标派生懒解密分块密钥（32 位，确定性，恒非 0）。
 ///
