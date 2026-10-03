@@ -176,6 +176,23 @@ Handle makeHandle(CompilerIndex& index, int tag, const char* owner, const char* 
     return Handle(tag, arena.intern(owner), arena.intern(name), arena.intern(desc));
 }
 
+// Lookup.findXxx 调用点的发射文本形态（find4 钉表用）。
+struct LookupCallShape
+{
+    std::string name;
+    std::string desc;
+};
+
+// find4 钉表用例：tag → Handle 描述符（field tag 用字段描述符）+ 期望 find
+// 名字 + 描述符。
+struct FindNameDescCase
+{
+    int         tag;
+    const char* handleDesc;
+    const char* name;
+    const char* desc;
+};
+
 class LdcPreprocessorTest : public ::testing::Test
 {
 protected:
@@ -275,6 +292,87 @@ TEST_F(LdcPreprocessorTest, ExpandPutStaticHandle)
     CompilerIndex index;
     Handle h = makeHandle(index, Opcodes::H_PUTSTATIC, "Sample", "ratio", "D");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findStaticSetter");
+}
+
+// ---- find4 收敛钉表：tag→find* 全表（8 tag + interface + 未知 tag 缺省分支）----
+// 上面的逐 tag 用例只断言 find 名字；这里把展开后 Lookup.findXxx 调用点的
+// 名字与方法描述符逐字节钉死（#1027 find4：ldc 侧 find 判定切 indyHandleFindFor
+// 单源后的发射文本不变性判据）。
+
+// 展开一个「ldc Handle(tag); areturn」方法，返回 Lookup.findXxx 调用点的
+// (name, desc)，并顺带做栈形校验（任何压栈顺序/数量错误都会被抓住）。
+// handleDesc：Handle 的描述符——field tag 须传字段描述符，method tag 传方法
+// 描述符（findGetter 系第 3 参 = 字段类型 Class，来源 h.getDesc()）。
+LookupCallShape expandAndCaptureLookupCall(int tag, const char* handleDesc)
+{
+    CompilerIndex index;
+    Handle h = makeHandle(index, tag, "Sample", "m", handleDesc);
+    std::vector<AbstractInsnNode*> insns;
+    insns.push_back(new LdcInsnNode(h));
+    insns.push_back(new JumpInsnNode(Opcodes::ARETURN, nullptr));
+    MethodNode* m =
+        addMethodToIndex(index, "Sample", "run", "()Ljava/lang/invoke/MethodHandle;", insns);
+
+    LdcPreprocessor pre;
+    pre.process(index);
+
+    std::string reason;
+    EXPECT_TRUE(verifyStackShape(m, reason)) << "tag=" << tag << ": " << reason;
+
+    LookupCallShape found;
+    int hits = 0;
+    for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
+        if (insn->getType() != AbstractInsnNode::METHOD_INSN) continue;
+        auto* mi = static_cast<MethodInsnNode*>(insn);
+        if (mi->owner.to_std_string() != "java/lang/invoke/MethodHandles$Lookup") continue;
+        ++hits;
+        found.name = mi->name.to_std_string();
+        found.desc = mi->desc.to_std_string();
+    }
+    EXPECT_EQ(hits, 1) << "tag=" << tag << ": expected exactly one Lookup.findXxx call";
+    return found;
+}
+
+TEST_F(LdcPreprocessorTest, FindNameAndDescFullTable)
+{
+    const FindNameDescCase cases[] = {
+        {Opcodes::H_GETFIELD, "I", "findGetter",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_GETSTATIC, "J", "findStaticGetter",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_PUTFIELD, "I", "findSetter",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_PUTSTATIC, "D", "findStaticSetter",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_INVOKESTATIC, "(I)V", "findStatic",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_INVOKESPECIAL, "(I)V", "findSpecial",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;"
+         "Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_NEWINVOKESPECIAL, "(I)V", "findConstructor",
+         "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_INVOKEVIRTUAL, "(I)V", "findVirtual",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        {Opcodes::H_INVOKEINTERFACE, "(I)V", "findVirtual",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+        // 未知 tag：缺省分支 → findVirtual 形态（与单源 default 一致）。
+        {999, "(I)V", "findVirtual",
+         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
+         "Ljava/lang/invoke/MethodHandle;"},
+    };
+    for (const auto& c : cases) {
+        const LookupCallShape got = expandAndCaptureLookupCall(c.tag, c.handleDesc);
+        EXPECT_EQ(got.name, c.name) << "tag=" << c.tag;
+        EXPECT_STREQ(got.desc.c_str(), c.desc) << "tag=" << c.tag;
+    }
 }
 
 // ldc MethodType：fromMethodDescriptorString(desc, callerClassLoader)。

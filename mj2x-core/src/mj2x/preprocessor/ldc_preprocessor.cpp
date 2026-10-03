@@ -1,5 +1,6 @@
 #include "ldc_preprocessor.hpp"
 
+#include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "libca/core/any.hpp"
 #include <vector>
 
@@ -112,26 +113,21 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                                              false));
             seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(h.getOwner())));
 
-            // findXxx 选择（按 tag），name/MethodType/fieldType/caller 按其描述符顺序入栈。
-            const char* lookupMethodName = "findVirtual";
-            const char* lookupMethodDesc =
-                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
-                "Ljava/lang/invoke/MethodHandle;";
-            switch (tag) {
-            case Opcodes::H_GETFIELD:
-            case Opcodes::H_GETSTATIC:
-            case Opcodes::H_PUTFIELD:
-            case Opcodes::H_PUTSTATIC:
+            // findXxx 选择（按 tag）——#1027 find4 收敛：tag→find* 形态单源 =
+            // indyHandleFindFor（原同式 switch 逐分支对拍等价后切换，发射文本
+            // 逐字节不变；未知 tag → findVirtual 默认形态）。name/MethodType/
+            // fieldType/caller 按其描述符顺序入栈。
+            const IndyHandleFind find   = indyHandleFindFor(tag);
+            const char* lookupMethodName = find.findName;
+            const char* lookupMethodDesc = find.findDesc;
+            switch (find.argShape) {
+            case IndyHandleArgShape::NameFieldType:
             {
                 // findGetter/findSetter 系：第三个参数是字段类型 Class，不是 MethodType。
                 // primitive 字段类型没有 ldc 形态的 Class 常量，用 GETSTATIC <Box>.TYPE。
-                lookupMethodName = tag == Opcodes::H_GETFIELD    ? "findGetter"
-                                   : tag == Opcodes::H_GETSTATIC ? "findStaticGetter"
-                                   : tag == Opcodes::H_PUTFIELD   ? "findSetter"
-                                                                  : "findStaticSetter";
-                lookupMethodDesc =
-                    "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)"
-                    "Ljava/lang/invoke/MethodHandle;";
+                // （ldc 侧物化策略保留：primitive 走 TYPE 常量、其余发精确类型
+                // LDC Class——primitive 装箱名与单源 indyBoxedClassNameForDescHead
+                // 逐值一致，非 primitive 分支是发射面契约差异，不收敛。）
                 seq.push_back(newStringLdc(mname));
                 const Type fieldType = Type::getType(h.getDesc());
                 if (const char* box = primitiveBoxClass(fieldType.getSort())) {
@@ -145,27 +141,17 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                 }
                 break;
             }
-            case Opcodes::H_INVOKESPECIAL:
+            case IndyHandleArgShape::NameTypeOwner:
                 // findSpecial(Class, String, MethodType, Class specialCaller)。
-                lookupMethodName = "findSpecial";
-                lookupMethodDesc =
-                    "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;"
-                    "Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
                 seq.push_back(newStringLdc(mname));
                 pushMethodTypeSeq(seq, mdesc);
                 seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(callerClass)));
                 break;
-            case Opcodes::H_NEWINVOKESPECIAL:
+            case IndyHandleArgShape::TypeOnly:
                 // findConstructor(Class, MethodType)：无 name 参数。
-                lookupMethodName = "findConstructor";
-                lookupMethodDesc =
-                    "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)"
-                    "Ljava/lang/invoke/MethodHandle;";
                 pushMethodTypeSeq(seq, mdesc);
                 break;
-            case Opcodes::H_INVOKESTATIC: lookupMethodName = "findStatic"; [[fallthrough]];
-            case Opcodes::H_INVOKEVIRTUAL:
-            case Opcodes::H_INVOKEINTERFACE:
+            case IndyHandleArgShape::NameType:
             default:
                 // findVirtual/findStatic(Class, String, MethodType)。
                 seq.push_back(newStringLdc(mname));
