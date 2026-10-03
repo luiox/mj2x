@@ -65,6 +65,7 @@ mj2x.cli.err.cmake_dir_create_failed=无法创建 CMake 工程目录: {0}
 mj2x.cli.err.xmake_dir_create_failed=无法创建 xmake 工程目录: {0}
 mj2x.cli.err.c_compiler_needs_compile=--c-compiler 需要 --compile。
 mj2x.cli.err.backend_unavailable=native 源码后端不可用。
+mj2x.cli.err.backend_not_built={0} 后端未编入本可执行文件（单后端构建）；可用后端：{1}。
 mj2x.cli.err.emit_cpp_needs_c99=--emit-cpp 需要 C99 后端源码产物。
 mj2x.cli.err.emit_cpp_write_failed=无法写入生成的 C++ 源码: {0}
 mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm 需要 LLVM IR 后端源码产物。

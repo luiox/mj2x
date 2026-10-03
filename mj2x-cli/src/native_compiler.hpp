@@ -38,6 +38,64 @@ enum class LlvmTool
     Llc,
 };
 
+/// @brief 编译期后端可用性（issue #886 单后端编译裁剪面）。
+///
+/// 全量构建（不带 with_mj2x_backend 选择器）恒为 true，行为与历史一致；
+/// 单后端构建仅所选后端为 true，被裁后端的类不参与编译（二进制无其符号）。
+/// 显式传入被裁后端名在参数解析期即被拒绝；本函数拦截默认值路径
+/// （如 stackc 被裁时 --emit-c 未带 --backend，cBackendKind 仍为默认 StackC）。
+constexpr bool backendEnabled(CEmitterBackend backend)
+{
+#if defined(MJ2X_DISABLE_STACKC_BACKEND)
+    if (backend == CEmitterBackend::StackC) return false;
+#endif
+#if defined(MJ2X_DISABLE_REGC_BACKEND)
+    if (backend == CEmitterBackend::RegC) return false;
+#endif
+#if defined(MJ2X_DISABLE_LLVM_BACKEND)
+    if (backend == CEmitterBackend::LlvmIr) return false;
+#endif
+#if defined(MJ2X_DISABLE_VMC4_BACKEND)
+    if (backend == CEmitterBackend::Vmc4) return false;
+#endif
+    return true;
+}
+
+/// @brief 后端的 CLI 名称（错误文案用，与 --backend 取值一致）。
+inline std::string_view backendCliName(CEmitterBackend backend)
+{
+    switch (backend) {
+    case CEmitterBackend::StackC: return "stackc";
+    case CEmitterBackend::RegC: return "regc";
+    case CEmitterBackend::LlvmIr: return "llvm";
+    case CEmitterBackend::Vmc4: return "vmc4";
+    }
+    return {};
+}
+
+/// @brief 本构建可用的后端 CLI 名清单（逗号分隔，错误文案用）。
+inline std::string enabledBackendCliList()
+{
+    std::string list;
+    const auto append = [&](CEmitterBackend backend) {
+        if (!list.empty()) list += ", ";
+        list += backendCliName(backend);
+    };
+#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
+    append(CEmitterBackend::StackC);
+#endif
+#if !defined(MJ2X_DISABLE_REGC_BACKEND)
+    append(CEmitterBackend::RegC);
+#endif
+#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
+    append(CEmitterBackend::LlvmIr);
+#endif
+#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
+    append(CEmitterBackend::Vmc4);
+#endif
+    return list;
+}
+
 /// @brief 解析 CLI 传入的 C 编译器名称。
 ///
 /// 支持 `msvc`、`gcc`、`clang`、`zig`。解析失败时返回 false,由 CLI 层打印参数错误。

@@ -268,26 +268,64 @@ bool json_output(CliOptions& o, const json& j, std::string& e)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// backend 枚举串（#886 编译期裁剪面）：kParamTable 展示/校验清单随
+// MJ2X_DISABLE_*_BACKEND 收缩，与 parseBackendNameImpl 的裁决面一致。
+// 相邻字面量拼接；各条目的分隔符仅在存在后继条目时为 ","。
+// ---------------------------------------------------------------------------
+#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
+#define MJ2X_BE_STACKC     "stackc"
+#define MJ2X_BE_SEP_BEFORE_REGC ","
+#else
+#define MJ2X_BE_STACKC     ""
+#define MJ2X_BE_SEP_BEFORE_REGC ""
+#endif
+#if !defined(MJ2X_DISABLE_REGC_BACKEND)
+#define MJ2X_BE_REGC     "regc"
+#define MJ2X_BE_SEP_BEFORE_LLVM ","
+#else
+#define MJ2X_BE_REGC     ""
+#define MJ2X_BE_SEP_BEFORE_LLVM ""
+#endif
+#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
+#define MJ2X_BE_LLVM     "llvm"
+#define MJ2X_BE_SEP_BEFORE_VMC4 ","
+#else
+#define MJ2X_BE_LLVM     ""
+#define MJ2X_BE_SEP_BEFORE_VMC4 ""
+#endif
+#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
+#define MJ2X_BE_VMC4 "vmc4"
+#else
+#define MJ2X_BE_VMC4 ""
+#endif
+
 bool parseBackendNameImpl(const std::string& name, CEmitterBackend& backend)
 {
+#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
     if (name == "stackc" || name == "cbackend" || name == "c") {
         backend = CEmitterBackend::StackC;
         return true;
     }
+#endif
+#if !defined(MJ2X_DISABLE_REGC_BACKEND)
     if (name == "regc") {
         backend = CEmitterBackend::RegC;
         return true;
     }
-#ifndef MJ2X_DISABLE_LLVM_BACKEND
+#endif
+#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
     if (name == "llvm") {
         backend = CEmitterBackend::LlvmIr;
         return true;
     }
 #endif
+#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
     if (name == "vmc4") {
         backend = CEmitterBackend::Vmc4;
         return true;
     }
+#endif
     return false;
 }
 
@@ -295,12 +333,11 @@ bool cli_backend(CliOptions& o, const char* v, std::string& e)
 {
     if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--backend"}); return false; }
     if (!parseBackendNameImpl(v, o.cBackendKind)) {
-#ifdef MJ2X_DISABLE_LLVM_BACKEND
-        e = trfs("mj2x.cli.err.unknown_flag_value",
-                 {"--backend", "stackc, regc, or vmc4 (cbackend also accepted)"});
+#if defined(MJ2X_DISABLE_STACKC_BACKEND)
+        e = trfs("mj2x.cli.err.unknown_flag_value", {"--backend", enabledBackendCliList()});
 #else
         e = trfs("mj2x.cli.err.unknown_flag_value",
-                 {"--backend", "stackc, regc, llvm, or vmc4 (cbackend also accepted)"});
+                 {"--backend", enabledBackendCliList() + " (cbackend/c also accepted)"});
 #endif
         return false;
     }
@@ -311,11 +348,8 @@ bool json_backend(CliOptions& o, const json& j, std::string& e)
 {
     if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"backend"}); return false; }
     if (!parseBackendNameImpl(j.get<std::string>(), o.cBackendKind)) {
-#ifdef MJ2X_DISABLE_LLVM_BACKEND
-        e = trfs("mj2x.cli.err.cfg_invalid_enum", {"backend", j.get<std::string>(), "stackc, regc, vmc4"});
-#else
-        e = trfs("mj2x.cli.err.cfg_invalid_enum", {"backend", j.get<std::string>(), "stackc, regc, llvm, vmc4"});
-#endif
+        e = trfs("mj2x.cli.err.cfg_invalid_enum",
+                 {"backend", j.get<std::string>(), enabledBackendCliList()});
         return false;
     }
     o.backendSelected = true;
@@ -674,11 +708,11 @@ const ParamDef kParamTable[] = {
     // global
     PARAM("global.input", "-i", "input", ParamType::String, nullptr, 0, 0, "", "global", "", cli_input, json_input),
     PARAM("global.output", "-o", "output", ParamType::String, nullptr, 0, 0, "", "global", "", cli_output, json_output),
-#ifdef MJ2X_DISABLE_LLVM_BACKEND
-    PARAM("global.backend", "--backend", "backend", ParamType::Enum, "stackc,regc,vmc4", 0, 0, "stackc", "global", "", cli_backend, json_backend),
-#else
-    PARAM("global.backend", "--backend", "backend", ParamType::Enum, "stackc,regc,llvm,vmc4", 0, 0, "stackc", "global", "", cli_backend, json_backend),
-#endif
+    // backend 枚举串随编译期裁剪面收缩（宏定义见 parseBackendNameImpl 上方）。
+    PARAM("global.backend", "--backend", "backend", ParamType::Enum,
+          MJ2X_BE_STACKC MJ2X_BE_SEP_BEFORE_REGC MJ2X_BE_REGC MJ2X_BE_SEP_BEFORE_LLVM MJ2X_BE_LLVM
+              MJ2X_BE_SEP_BEFORE_VMC4 MJ2X_BE_VMC4,
+          0, 0, "stackc", "global", "", cli_backend, json_backend),
     PARAM("global.emit_c", "--emit-c", "emit_c", ParamType::String, nullptr, 0, 0, "", "global", "", cli_emit_c, json_emit_c),
     PARAM("global.emit_cpp", "--emit-cpp", "emit_cpp", ParamType::String, nullptr, 0, 0, "", "global", "", cli_emit_cpp, json_emit_cpp),
 #ifndef MJ2X_DISABLE_LLVM_BACKEND

@@ -63,6 +63,7 @@ mj2x.cli.err.cmake_dir_create_failed=cannot create CMake project directory: {0}
 mj2x.cli.err.xmake_dir_create_failed=cannot create xmake project directory: {0}
 mj2x.cli.err.c_compiler_needs_compile=--c-compiler requires --compile.
 mj2x.cli.err.backend_unavailable=native source backend is unavailable.
+mj2x.cli.err.backend_not_built=the {0} backend is not compiled into this build (single-backend build); available backends: {1}.
 mj2x.cli.err.emit_cpp_needs_c99=--emit-cpp requires a C99 backend source artifact.
 mj2x.cli.err.emit_cpp_write_failed=cannot write emitted C++ source: {0}
 mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm requires an LLVM IR backend source artifact.

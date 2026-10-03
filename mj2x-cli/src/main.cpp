@@ -1,10 +1,20 @@
 #include "mj2x/mj2x.hpp"
 #include "mj2x/logging.hpp"
+// 后端头随编译期裁剪面（issue #886）条件引入：被裁后端的头不参与编译，
+// 分发分支与其类符号一并从二进制消失。
+#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
 #include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
+#endif
+#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
 #include "mj2x/backend/stackc/stackc_backend.hpp"
+#endif
+#if !defined(MJ2X_DISABLE_REGC_BACKEND)
 #include "mj2x/backend/regc/regc_backend.hpp"
+#endif
+#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
+#endif
 #include "mj2x/codegen/runtime_protection.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
 #include "mj2x/core/seed_derivation.hpp"
@@ -953,6 +963,20 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // #886 单后端编译裁剪 fail-closed：显式被裁后端名已在参数解析期拒绝，此处
+    // 拦截默认值路径（stackc 被裁时 --emit-c 未带 --backend，cBackendKind 仍持
+    // 默认 StackC），报出本构建实际可用的后端清单。
+    if ((!nativeOutputPath.empty() || pipeCompile || nativeDirMode) &&
+        !mj2x::cli::backendEnabled(options.cBackendKind)) {
+        CA_LOGT_ERROR(
+            "cli", "{}\n",
+            ca::i18n::trf("mj2x.cli.err.backend_not_built",
+                          {std::string{mj2x::cli::backendCliName(options.cBackendKind)},
+                           mj2x::cli::enabledBackendCliList()})
+                .c_str());
+        return 1;
+    }
+
     if (options.compileNative && nativeOutputPath.empty() && !nativeDirMode && !pipeCompile) {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.compile_needs_output"));
         printUsage();
@@ -1026,6 +1050,8 @@ int main(int argc, char** argv)
 
     // R4 保护变换选项（RegIR 级，RegC/LLVM 共用；基础混淆默认关闭，
     // --regc-obfuscate 显式开启基础三项，#829 增强开关各自联动对应基础项）。
+    // 双后端都被裁的构建（stackc-only/vmc4-only）下无消费方，一并裁剪。
+#if !defined(MJ2X_DISABLE_REGC_BACKEND) || !defined(MJ2X_DISABLE_LLVM_BACKEND)
     auto buildTransformOptions = [&]() -> std::optional<mj2x::RegTransformOptions> {
         if (!options.regcObfuscate && options.regcCffDead == 0 && !options.regcCffStateEncrypt &&
             !options.regcMbaDeep && !options.regcOpaqueZero) {
@@ -1045,6 +1071,7 @@ int main(int argc, char** argv)
             mj2x::deriveClientSeed(options.regcTransformSeed, options.clientId);
         return transform;
     };
+#endif   // RegC/LLVM 裁剪面
 
     mj2x::Pipeline pipeline(std::move(config));
 
@@ -1053,6 +1080,7 @@ int main(int argc, char** argv)
 
     if (needsNativeSource) {
         if (options.cBackendKind == CEmitterBackend::LlvmIr) {
+#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
             auto llvmBackend = std::make_unique<mj2x::LlvmIrBackend>();
             if (!options.llvmOutputPath.empty()) llvmBackend->setOutputPath(options.llvmOutputPath);
             if (auto transform = buildTransformOptions()) {
@@ -1066,8 +1094,10 @@ int main(int argc, char** argv)
             }
             nativeSourceBackend = llvmBackend.get();
             pipeline.registerBackend(std::move(llvmBackend));
+#endif
         }
         else if (options.cBackendKind == CEmitterBackend::RegC) {
+#if !defined(MJ2X_DISABLE_REGC_BACKEND)
             auto regcBackend = std::make_unique<mj2x::RegCBackend>();
             if (hasUserIntrinsics) regcBackend->setUserIntrinsics(userIntrinsicConfig);
             if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
@@ -1097,8 +1127,10 @@ int main(int argc, char** argv)
             nativeSourceBackend = regcBackend.get();
             // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
             pipeline.registerBackend(std::move(regcBackend));
+#endif
         }
         else if (options.cBackendKind == CEmitterBackend::Vmc4) {
+#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
             auto vmc4Backend = std::make_unique<mj2x::Vmc4Backend>();
             if (hasUserIntrinsics) vmc4Backend->setUserIntrinsics(userIntrinsicConfig);
             if (!options.cOutputPath.empty()) vmc4Backend->setOutputPath(options.cOutputPath);
@@ -1144,7 +1176,9 @@ int main(int argc, char** argv)
             // VMC4 复用同样的 native-loader clinit 注入（NativeLoaderPostprocessor）。
             nativeSourceBackend = vmc4Backend.get();
             pipeline.registerBackend(std::move(vmc4Backend));
+#endif
         }
+#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
         else {
             auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
             if (hasUserIntrinsics) stackCBackend->setUserIntrinsics(userIntrinsicConfig);
@@ -1155,6 +1189,7 @@ int main(int argc, char** argv)
             nativeSourceBackend = stackCBackend.get();
             pipeline.registerBackend(std::move(stackCBackend));
         }
+#endif
     }
 
     // Bytecode-shaping passes run before MarkAll so every selected method sees
@@ -1211,12 +1246,14 @@ int main(int argc, char** argv)
     if (rc != 0) return rc;
 
     // VMC4：写 expected trace surface 文件（mjdbg 红队契约，同 seed+同输入 → 同内容）。
+#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
     if (!options.vmc4TraceSurface.empty() &&
         options.cBackendKind == CEmitterBackend::Vmc4 && nativeSourceBackend != nullptr) {
         auto* vmc4 = ca::core::tag_cast::cast<mj2x::Vmc4Backend>(nativeSourceBackend);
         std::ofstream ts(options.vmc4TraceSurface, std::ios::binary | std::ios::trunc);
         if (ts) ts << vmc4->traceSurface();
     }
+#endif
 
     std::string                  cppSource;
     mj2x::NativeSourceArtifact nativeArtifact{mj2x::NativeSourceLanguage::C99, {}, {}};
