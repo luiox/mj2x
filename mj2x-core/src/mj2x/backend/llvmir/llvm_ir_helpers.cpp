@@ -5,6 +5,7 @@
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 
 namespace mj2x {
@@ -166,6 +167,39 @@ std::string emitObjectHelpers()
     return out.str();
 }
 
+/// @brief LLVM 浮点字面量（NaN/±Inf/-0.0 用 hex 位模式；正常值 decimal scientific）。
+///
+/// @details 特殊值 hex 位型统一为 LLVM AsmWriter 口径：F32 先窄化回 float
+///          （常量池口径），再经 double 加宽取 64 位位型按 16 位 hex 输出
+///          （如 float NaN → 0x7FF8000000000000）。LLVM 规范要求 float hex
+///          常量为 double 位型宽度，裸 8 位 float 位型任何 clang 都拒读
+///          （floating point constant invalid for type，#1117 评审 P1）。
+std::string llvmFloatLiteral(double value, bool isF32)
+{
+    const double narrowed = isF32 ? static_cast<double>(static_cast<float>(value)) : value;
+    if (std::isnan(narrowed) || std::isinf(narrowed)
+        || (narrowed == 0.0 && std::signbit(narrowed)))
+    {
+        static_assert(sizeof(double) == sizeof(unsigned long long),
+                      "double must match unsigned long long width");
+        unsigned long long pattern = 0;
+        std::memcpy(&pattern, &narrowed, sizeof(pattern));
+        std::ostringstream out;
+        out << "0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(16)
+            << pattern;
+        return out.str();
+    }
+    std::ostringstream literal;
+    literal << std::scientific << std::showpoint;
+    if (isF32) {
+        literal << std::setprecision(9) << static_cast<float>(narrowed);
+    }
+    else {
+        literal << std::setprecision(17) << narrowed;
+    }
+    return literal.str();
+}
+
 // ---- invokedynamic 运行时解析 helper（含 indy 站点时 finalize 统一生成）----
 
 namespace {
@@ -191,34 +225,6 @@ std::string llvmConstantString(const std::string& name, const std::string& text)
     }
     out << "\\00\"\n";
     return out.str();
-}
-
-/// @brief LLVM 浮点字面量（NaN/±Inf/-0.0 用 hex 位模式；正常值 decimal scientific）。
-std::string llvmFloatLiteral(double value, bool isF32)
-{
-    std::string bits;
-    if (isF32) {
-        if (std::isnan(value)) bits = "0x7FC00000";
-        else if (std::isinf(value))
-            bits = std::signbit(value) ? "0xFF800000" : "0x7F800000";
-        else if (value == 0.0 && std::signbit(value)) bits = "0x80000000";
-    }
-    else {
-        if (std::isnan(value)) bits = "0x7FF8000000000000";
-        else if (std::isinf(value))
-            bits = std::signbit(value) ? "0xFFF0000000000000" : "0x7FF0000000000000";
-        else if (value == 0.0 && std::signbit(value)) bits = "0x8000000000000000";
-    }
-    if (!bits.empty()) return bits;
-    std::ostringstream literal;
-    literal << std::scientific << std::showpoint;
-    if (isF32) {
-        literal << std::setprecision(9) << static_cast<float>(value);
-    }
-    else {
-        literal << std::setprecision(17) << value;
-    }
-    return literal.str();
 }
 
 /// @brief bsm 静态参数类型描述串：METHOD → 方法描述符；OBJECT → 内部名

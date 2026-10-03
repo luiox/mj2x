@@ -4,7 +4,6 @@
 #include "llvm_intrinsic_registry.hpp"
 
 #include <cmath>
-#include <iomanip>
 #include <type_traits>
 #include <variant>
 
@@ -434,38 +433,14 @@ private:
         }
         if (operand.kind == RegOperandKind::FloatLiteral) {
             // NaN / ±Inf / -0.0 用 LLVM hex 字面量（十进制形式无法表示）；
-            // 正常值保持十进制 scientific。
-            const double value = operand.floatValue;
-            std::string  bits;
-            if (operand.type == SSAType::F32) {
-                if (std::isnan(value)) bits = "0x7FC00000";
-                else if (std::isinf(value)) bits = std::signbit(value) ? "0xFF800000" : "0x7F800000";
-                else if (value == 0.0 && std::signbit(value)) bits = "0x80000000";
-            }
-            else if (operand.type == SSAType::F64) {
-                if (std::isnan(value)) bits = "0x7FF8000000000000";
-                else if (std::isinf(value))
-                    bits = std::signbit(value) ? "0xFFF0000000000000" : "0x7FF0000000000000";
-                else if (value == 0.0 && std::signbit(value)) bits = "0x8000000000000000";
-            }
-            else {
+            // 正常值保持十进制 scientific。发射口径统一走 llvmFloatLiteral
+            // （F32 特殊值经 double 加宽为 16 位位型，#1117 评审 P1）。
+            if (operand.type != SSAType::F32 && operand.type != SSAType::F64) {
                 reason = "LLVM IR floating literal has a non-floating type";
                 return false;
             }
-            if (!bits.empty()) {
-                // 操作数位置不带类型前缀（LLVM 按指令上下文推断 float 类型）。
-                expression = bits;
-                return true;
-            }
-            std::ostringstream literal;
-            literal << std::scientific << std::showpoint;
-            if (operand.type == SSAType::F32) {
-                literal << std::setprecision(9) << static_cast<float>(operand.floatValue);
-            }
-            else {
-                literal << std::setprecision(17) << operand.floatValue;
-            }
-            expression = literal.str();
+            // 操作数位置不带类型前缀（LLVM 按指令上下文推断 float 类型）。
+            expression = llvmFloatLiteral(operand.floatValue, operand.type == SSAType::F32);
             return true;
         }
         if (operand.kind == RegOperandKind::NullLiteral) {

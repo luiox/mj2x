@@ -466,6 +466,12 @@ bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& register
 std::string emitThrowArithmeticHelper();
 std::string emitObjectHelpers();
 
+/// @brief LLVM 浮点字面量：NaN/±Inf/-0.0 发射 hex 位型，正常值 decimal scientific。
+/// @details F32 特殊值按 AsmWriter 口径经 double 加宽为 16 位 hex 位型
+///          （LLVM 规范要求 float hex 常量为 double 位型宽度，裸 8 位形态
+///          clang 拒读，#1117 评审 P1）。
+std::string llvmFloatLiteral(double value, bool isF32);
+
 /// @brief invokedynamic 运行时解析 helper 集合（box/unbox、MethodType、Class 对象、
 /// MethodHandle 解析、JNI mid 直调），仅含 indy 站点时生成。
 std::string emitIndyHelpers();

@@ -767,31 +767,54 @@ TEST(LlvmIrBackendTest, EmitsNarrowSignatureBoundaryConversions)
 TEST(LlvmIrBackendTest, EmitsSpecialFloatLiterals)
 {
     // NaN / ±Inf / -0.0 常量以 LLVM hex 字面量发射（十进制无法表示）。
+    // F32 特殊值必须是 double 加宽位型（16 位 hex）：裸 8 位 float 位型任何
+    // clang 都拒读（floating point constant invalid for type，#1117 评审 P1）。
     auto nan = compileScalar("nanf", "()F",
                              {new LdcInsnNode(std::numeric_limits<float>::quiet_NaN()),
                               new InsnNode(Opcodes::FRETURN)},
                              1, 0);
     ASSERT_EQ(nan.kind, BackendResult::Kind::C_SOURCE) << nan.text;
-    EXPECT_NE(nan.text.find("0x7FC00000"), std::string::npos) << nan.text;
+    EXPECT_NE(nan.text.find("float 0x7FF8000000000000"), std::string::npos) << nan.text;
 
+    auto pinff = compileScalar("pinff", "()F",
+                               {new LdcInsnNode(std::numeric_limits<float>::infinity()),
+                                new InsnNode(Opcodes::FRETURN)},
+                               1, 0);
+    ASSERT_EQ(pinff.kind, BackendResult::Kind::C_SOURCE) << pinff.text;
+    EXPECT_NE(pinff.text.find("float 0x7FF0000000000000"), std::string::npos) << pinff.text;
+
+    auto ninff = compileScalar("ninff", "()F",
+                               {new LdcInsnNode(-std::numeric_limits<float>::infinity()),
+                                new InsnNode(Opcodes::FRETURN)},
+                               1, 0);
+    ASSERT_EQ(ninff.kind, BackendResult::Kind::C_SOURCE) << ninff.text;
+    EXPECT_NE(ninff.text.find("float 0xFFF0000000000000"), std::string::npos) << ninff.text;
+
+    auto nzerof =
+        compileScalar("nzerof", "()F",
+                      {new LdcInsnNode(-0.0f), new InsnNode(Opcodes::FRETURN)}, 1, 0);
+    ASSERT_EQ(nzerof.kind, BackendResult::Kind::C_SOURCE) << nzerof.text;
+    EXPECT_NE(nzerof.text.find("float 0x8000000000000000"), std::string::npos) << nzerof.text;
+
+    // F64 侧 16 位形态（本就合法）回归钉。
     auto pinf = compileScalar("pinf", "()D",
                               {new LdcInsnNode(std::numeric_limits<double>::infinity()),
                                new InsnNode(Opcodes::DRETURN)},
                               2, 0);
     ASSERT_EQ(pinf.kind, BackendResult::Kind::C_SOURCE) << pinf.text;
-    EXPECT_NE(pinf.text.find("0x7FF0000000000000"), std::string::npos) << pinf.text;
+    EXPECT_NE(pinf.text.find("double 0x7FF0000000000000"), std::string::npos) << pinf.text;
 
     auto ninf = compileScalar("ninf", "()D",
                               {new LdcInsnNode(-std::numeric_limits<double>::infinity()),
                                new InsnNode(Opcodes::DRETURN)},
                               2, 0);
     ASSERT_EQ(ninf.kind, BackendResult::Kind::C_SOURCE) << ninf.text;
-    EXPECT_NE(ninf.text.find("0xFFF0000000000000"), std::string::npos) << ninf.text;
+    EXPECT_NE(ninf.text.find("double 0xFFF0000000000000"), std::string::npos) << ninf.text;
 
     auto nzero = compileScalar("nzero", "()D",
                                {new LdcInsnNode(-0.0), new InsnNode(Opcodes::DRETURN)}, 2, 0);
     ASSERT_EQ(nzero.kind, BackendResult::Kind::C_SOURCE) << nzero.text;
-    EXPECT_NE(nzero.text.find("0x8000000000000000"), std::string::npos) << nzero.text;
+    EXPECT_NE(nzero.text.find("double 0x8000000000000000"), std::string::npos) << nzero.text;
 }
 
 TEST(LlvmIrBackendTest, EmitsStaticFieldAccess)
