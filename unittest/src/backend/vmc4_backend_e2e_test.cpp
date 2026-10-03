@@ -1479,4 +1479,238 @@ TEST(Vmc4BackendEncryptE2E, LazyChunkDecryptRoundTrip)
     }
 }
 
+// ===========================================================================
+// 块乱序 e2e（issue #1116 切片 A，--vmc4-shuffle-blocks）：三档 round-trip
+//   shuffle 单开 / shuffle+drift / shuffle+drift+encrypt-program，全部
+//   -Xverify:all 真编译执行。样本含 switch + 多路分支 + 循环 + try/catch
+//   （异常区域重映射的执行级实证）。机制：runShuffleRoundTrip 驱动（无 gtest
+//   宏，错误经 detail 上抛），TEST 只选档 + 结构断言 + 输出对拍。
+// ===========================================================================
+
+namespace {
+
+struct ShuffleRoundTripOut
+{
+    bool                     ok = false;
+    std::string              detail;
+    std::vector<std::string> baseline;
+    std::vector<std::string> actual;
+    std::string              generatedC;
+};
+
+/// 一档 shuffle round-trip（shuffle 恒开；driftVariants 0=关；encrypt 选加密档）。
+ShuffleRoundTripOut runShuffleRoundTrip(const Toolchain& tc, const std::string& className,
+                                        int driftVariants, bool encrypt)
+{
+    ShuffleRoundTripOut r;
+    fs::path dir = test::getOutPath("mj2x/vmc4_e2e/" + className + "/.keep").parent_path();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+
+    // 样本：switch + 多路分支 + 循环 + try/catch（异常区域跨块重映射）。
+    fs::path javaFile = dir / (className + ".java");
+    {
+        std::ofstream out(javaFile);
+        out << "public class " << className << " {\n"
+            << "  public static int classify(int x) {\n"
+            << "    int r;\n"
+            << "    switch (x % 4) {\n"
+            << "      case 0: r = x + 1; break;\n"
+            << "      case 1: r = x * 2; break;\n"
+            << "      case 2: r = x - 3; break;\n"
+            << "      default: r = -x; break;\n"
+            << "    }\n"
+            << "    int guard = 0;\n"
+            << "    while (r > 40) {\n"
+            << "      r -= 40;\n"
+            << "      guard++;\n"
+            << "      if (guard > 10) { r = -1; break; }\n"
+            << "    }\n"
+            << "    return r;\n"
+            << "  }\n"
+            << "  public static int divSafe(int a, int b) {\n"
+            << "    try {\n"
+            << "      return a / b + classify(a);\n"
+            << "    } catch (ArithmeticException e) {\n"
+            << "      return -7;\n"
+            << "    }\n"
+            << "  }\n"
+            << "}\n";
+    }
+    auto javac = runBat({q(tc.javac) + " -d " + q(dir) + " " + q(javaFile)});
+    if (javac.exitCode != 0) {
+        r.detail = "javac failed: " + javac.out;
+        return r;
+    }
+
+    fs::path driverFile = dir / "Driver.java";
+    {
+        std::ofstream out(driverFile);
+        out << "public class Driver {\n"
+            << "  public static void main(String[] args) {\n"
+            << "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+            << "    if (dll != null) System.load(dll);\n"
+            << "    int[] xs = {0, 1, 2, 3, 7, 44, 444, -3, 84, -45};\n"
+            << "    for (int x : xs) System.out.println(\"classify\" + x + \"=\" + "
+            << className << ".classify(x));\n"
+            << "    int[][] pairs = {{10, 2}, {7, 0}, {-9, 3}, {100, 4}, {1, 3}};\n"
+            << "    for (int[] p : pairs) System.out.println(\"divSafe\" + p[0] + \"_\" + p[1]"
+            << " + \"=\" + " << className << ".divSafe(p[0], p[1]));\n"
+            << "  }\n"
+            << "}\n";
+    }
+    auto driverCompile =
+        runBat({q(tc.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(driverFile)});
+    if (driverCompile.exitCode != 0) {
+        r.detail = "driver javac failed: " + driverCompile.out;
+        return r;
+    }
+    auto baselineRun = runBat({q(tc.java) + " -Xverify:all -cp " + q(dir) + " Driver"});
+    if (baselineRun.exitCode != 0 || splitLines(baselineRun.out).size() != 15u) {
+        r.detail = "baseline run failed: " + baselineRun.out;
+        return r;
+    }
+    r.baseline = splitLines(baselineRun.out);
+
+    // 保护管线：shuffle 恒开，drift/encrypt 按档。
+    fs::path inClass  = dir / (className + ".class");
+    fs::path outClass = dir / (className + "_protected.class");
+    fs::path cFile    = dir / (className + "_shuf.c");
+    mj2x::PipelineConfig config;
+    config.inputPath  = inClass.string();
+    config.outputPath = outClass.string();
+    mj2x::Pipeline    pipeline(std::move(config));
+    auto              backend = std::make_unique<mj2x::Vmc4Backend>();
+    backend->setOutputPath(cFile.string());
+    mj2x::Vmc4Options opts;
+    opts.dispatcherKind      = mj2x::VmDispatcherKind::SwitchTable;
+    opts.shuffleBlocks       = true;
+    opts.driftVariants       = driftVariants;
+    opts.driftPeriod         = 16;
+    opts.programBlobEncrypt  = encrypt;
+    backend->setOptions(opts);
+    pipeline.registerBackend(std::move(backend));
+    pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+    pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+    if (pipeline.run() != 0 || !fileExists(cFile)) {
+        r.detail = "pipeline failed";
+        return r;
+    }
+    r.generatedC = readText(cFile);
+
+    fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        r.detail = "copy protected class failed: " + ec.message();
+        return r;
+    }
+
+    // 编译 DLL（VMC4 自包含 /TC + 运行时 ABI）。
+    fs::path dll         = dir / (className + "_shuf.dll");
+    fs::path obj         = dir / (className + "_shuf.obj");
+    fs::path crtSrc      = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+    fs::path runtimeObj  = dir / "mj2x_vmc4_runtime_shuf.obj";
+    auto cl = runBat({
+        "call " + q(tc.vcvars64) + " x64 >nul",
+        "cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(cFile) + " /I" + q(crtSrc) +
+            " /I" + q(tc.jdkInclude) + " /I" + q(tc.jdkIncludeWin),
+        "cl /nologo /O2 /TC /utf-8 /c /Fo" + q(runtimeObj) + " " +
+            q(crtSrc / "vmc4" / "mj2x_vmc4_runtime.c") + " /I" + q(crtSrc) + " /I" +
+            q(tc.jdkInclude) + " /I" + q(tc.jdkIncludeWin),
+        "link /nologo /DLL /OUT:" + q(dll) + " " + q(obj) + " " + q(runtimeObj),
+    });
+    if (cl.exitCode != 0 || !fileExists(dll)) {
+        r.detail = "cl/link failed: " + cl.out;
+        return r;
+    }
+
+    // -Xverify:all 真编译执行（逐行与 baseline 对拍在 TEST 侧）。
+    auto protectedRun = runBat({
+        "set \"MORPHER_DLL=" + dll.string() + "\"",
+        q(tc.java) + " -Xverify:all -cp " + q(dir) + " Driver",
+    });
+    if (protectedRun.exitCode != 0) {
+        r.detail = "protected run failed: " + protectedRun.out;
+        return r;
+    }
+    r.actual = splitLines(protectedRun.out);
+    r.ok     = true;
+    return r;
+}
+
+}   // namespace
+
+/// shuffle 单开（drift/encrypt 关）：布局解耦独立生效。
+TEST(Vmc4BackendShuffleE2E, ShuffleOnlyRoundTrip)
+{
+    Toolchain tc = probeToolchain();
+    if (!tc.available) {
+        GTEST_SKIP() << "VMC4 native E2E toolchain unavailable: " << tc.reason;
+    }
+    auto r = runShuffleRoundTrip(tc, "Vmc4ShufA", 0, false);
+    ASSERT_TRUE(r.ok) << r.detail;
+    // 产物结构：targets 表密文 non-const（shuffle）；字节码数组保持 const 明文
+    // （encrypt 关）；JNI_OnLoad 有 targets 解密调用（2 个方法各一条）。
+    EXPECT_NE(r.generatedC.find("static unsigned int mj2x_vm_targets_"), std::string::npos)
+        << r.generatedC;
+    EXPECT_EQ(r.generatedC.find("static const unsigned int mj2x_vm_targets_"),
+              std::string::npos);
+    EXPECT_EQ(countOccurrences(r.generatedC,
+                               "mj2x_vm_blob_decrypt((unsigned char*)mj2x_vm_targets_"), 2u);
+    EXPECT_NE(r.generatedC.find("static const unsigned char mj2x_vm_code_"), std::string::npos);
+    EXPECT_EQ(r.generatedC.find("static unsigned char mj2x_vm_code_"), std::string::npos);
+    EXPECT_EQ(r.baseline.size(), r.actual.size())
+        << "baseline:\n" << joinLines(r.baseline) << "protected:\n" << joinLines(r.actual);
+    for (size_t i = 0; i < r.baseline.size() && i < r.actual.size(); ++i) {
+        EXPECT_EQ(r.baseline[i], r.actual[i]) << "line " << i;
+    }
+}
+
+/// shuffle + drift 叠加：执行解码层轮转与布局解耦正交。
+TEST(Vmc4BackendShuffleE2E, ShufflePlusDriftRoundTrip)
+{
+    Toolchain tc = probeToolchain();
+    if (!tc.available) {
+        GTEST_SKIP() << "VMC4 native E2E toolchain unavailable: " << tc.reason;
+    }
+    auto r = runShuffleRoundTrip(tc, "Vmc4ShufB", 2, false);
+    ASSERT_TRUE(r.ok) << r.detail;
+    // drift unmap 表 + shuffle targets 密文表共存。
+    EXPECT_NE(r.generatedC.find("mj2x_vm_unmap_"), std::string::npos) << r.generatedC;
+    EXPECT_NE(r.generatedC.find("static unsigned int mj2x_vm_targets_"), std::string::npos);
+    EXPECT_EQ(r.generatedC.find("static const unsigned int mj2x_vm_targets_"),
+              std::string::npos);
+    EXPECT_EQ(r.baseline.size(), r.actual.size())
+        << "baseline:\n" << joinLines(r.baseline) << "protected:\n" << joinLines(r.actual);
+    for (size_t i = 0; i < r.baseline.size() && i < r.actual.size(); ++i) {
+        EXPECT_EQ(r.baseline[i], r.actual[i]) << "line " << i;
+    }
+}
+
+/// shuffle + drift + encrypt-program 三开关全开：编码层/执行层/落盘层正交叠加。
+TEST(Vmc4BackendShuffleE2E, ShuffleDriftEncryptRoundTrip)
+{
+    Toolchain tc = probeToolchain();
+    if (!tc.available) {
+        GTEST_SKIP() << "VMC4 native E2E toolchain unavailable: " << tc.reason;
+    }
+    auto r = runShuffleRoundTrip(tc, "Vmc4ShufC", 2, true);
+    ASSERT_TRUE(r.ok) << r.detail;
+    // 三层形态共存：blob 密文 non-const（encrypt）+ targets 密文 non-const
+    // （shuffle）+ drift unmap 表；两类解密调用各 2 条（每虚拟化方法一条）。
+    EXPECT_NE(r.generatedC.find("static unsigned char mj2x_vm_code_"), std::string::npos);
+    EXPECT_EQ(r.generatedC.find("static const unsigned char mj2x_vm_code_"), std::string::npos);
+    EXPECT_NE(r.generatedC.find("static unsigned int mj2x_vm_targets_"), std::string::npos);
+    EXPECT_EQ(r.generatedC.find("static const unsigned int mj2x_vm_targets_"),
+              std::string::npos);
+    EXPECT_NE(r.generatedC.find("mj2x_vm_unmap_"), std::string::npos);
+    EXPECT_EQ(countOccurrences(r.generatedC, "mj2x_vm_blob_decrypt(mj2x_vm_code_"), 2u);
+    EXPECT_EQ(countOccurrences(r.generatedC,
+                               "mj2x_vm_blob_decrypt((unsigned char*)mj2x_vm_targets_"), 2u);
+    EXPECT_EQ(r.baseline.size(), r.actual.size())
+        << "baseline:\n" << joinLines(r.baseline) << "protected:\n" << joinLines(r.actual);
+    for (size_t i = 0; i < r.baseline.size() && i < r.actual.size(); ++i) {
+        EXPECT_EQ(r.baseline[i], r.actual[i]) << "line " << i;
+    }
+}
+
 }   // namespace
