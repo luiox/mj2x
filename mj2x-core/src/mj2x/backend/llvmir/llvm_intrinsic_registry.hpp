@@ -4,6 +4,8 @@
 
 #include "libca/str/utf8_string.hpp"
 
+#include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
+
 #include <string>
 
 namespace mj2x {
@@ -78,6 +80,9 @@ struct LlvmRandomEntry
     const char* symbol;      // "mj2x_random_next_int_bound" / "mj2x_random_init"
     const char* retLlvm;     // "i32"（void 为 "void"）
     const char* declareText; // "declare i32 @mj2x_random_next_int_bound(ptr, i32)"
+    /// 发射端预检位（#879 Y4）：随权威表（builtinIntrinsicTable）派生透传，
+    /// 发射端按位判定，不再 desc/name/argCount 硬编码（防 registry 演进静默失效）。
+    RegCIntrinsicPrecheck precheck;
 };
 
 /// @brief 查找 Random <init>(J)V（带种子构造；无参构造保持 JNI——JVM 语义

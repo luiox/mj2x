@@ -65,6 +65,17 @@ enum class RegCIntrinsicNativeObjectKind
     StringBuffer,
 };
 
+/// @brief 发射端直调预检位（#879 Y4 解耦）：随权威表（kEntries）单源，
+/// RegC/LLVM 两发射端按位发射同语义预检，不再各写一份符号/形态硬编码。
+enum class RegCIntrinsicPrecheck
+{
+    /// 无预检（聚合初始化零值 = 缺省）。
+    None,
+    /// 末参 <= 0 → 发射 IllegalArgumentException 预检（fail-closed：
+    /// crt 直调无异常通道，JVM 语义应抛异常）。Random.nextInt(bound) 专用。
+    PositiveBound,
+};
+
 /// @brief Registry lookup result consumed by the RegC emitter.
 ///
 /// @details
@@ -81,6 +92,8 @@ struct RegCIntrinsicDecision
     std::string                   reason;
     bool                          passContext  = false;
     bool                          passReceiver = false;
+    /// 命中条目的发射端预检位（matchNormalizedCall 从 entry 透传；用户条目恒 None）。
+    RegCIntrinsicPrecheck         precheck     = RegCIntrinsicPrecheck::None;
 };
 
 /// @brief 内建 intrinsic 身份视图（#1027 B2 单源）：kEntries 的只读投影。
@@ -97,6 +110,8 @@ struct RegCIntrinsicIdentity
     RegCIntrinsicEmitKind         emitKind;
     RegCIntrinsicNativeObjectKind nativeObjectKind;
     bool                          llvmDirect;
+    /// 发射端预检位（#879 Y4）：随 kEntries 单源，llvm 侧派生表透传。
+    RegCIntrinsicPrecheck         precheck;
 };
 
 /// @brief 内建表全量身份（kEntries 顺序，173 条；含 llvmDirect=false 条目）。

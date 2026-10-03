@@ -744,11 +744,11 @@ private:
                         callArgs += ", " + std::string(llvmTypeWide(instruction.args[index].type)) +
                                     " " + argument;
                     }
-                    // Random.nextInt(bound)：JVM 对 bound<=0 抛
-                    // IllegalArgumentException；crt 直调无异常通道（bound<=0 返回
-                    // 哨兵值），发射端预检（fail-closed，Y4）。
-                    if (instruction.method.desc == "(I)I" &&
-                        instruction.method.name == "nextInt" && instruction.args.size() == 2) {
+                    // 发射端预检位（#879 Y4 解耦）：Random.nextInt(bound)——JVM
+                    // 对 bound<=0 抛 IllegalArgumentException；crt 直调无异常通道
+                    // （bound<=0 返回哨兵值），发射端按权威表派生的 precheck 位
+                    // 预检（fail-closed），不再 desc/name/argCount 硬编码。
+                    if (random->precheck == RegCIntrinsicPrecheck::PositiveBound) {
                         const uint32_t    idx  = dispatchIndex_++;
                         const std::string bad  = nextTemporary();
                         const std::string tag  = std::to_string(idx);

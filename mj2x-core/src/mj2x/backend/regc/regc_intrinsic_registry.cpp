@@ -22,6 +22,10 @@ struct RegCIntrinsicEntry
     ///（含 RegC 有而 LLVM 直调未启用的条目，如 Integer/Long 位操作、
     /// trimToSize——开启属行为扩展，须随 LLVM 侧卡单独验证）。
     bool                          llvmDirect;
+    /// 发射端直调预检位（#879 Y4 解耦）：发射端按此位发射预检，不再按
+    /// symbol/desc 硬编码判定——registry 改符号名/新增形态时预检不会静默
+    /// 失效（fail-open 回退）。聚合初始化未写该位的行零初始化 = None。
+    RegCIntrinsicPrecheck         precheck;
 };
 
 constexpr RegCIntrinsicEntry kEntries[] = {
@@ -1058,7 +1062,10 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      false,
      2,
      false,
-     true},
+     true,
+     // Y4 预检位：JVM 对 bound<=0 抛 IllegalArgumentException，crt 直调无异常
+     // 通道——发射端按本位发预检（fail-closed），不随符号名漂移。
+     RegCIntrinsicPrecheck::PositiveBound},
     {"java/util/Random",
      "nextLong",
      "()J",
@@ -1881,6 +1888,7 @@ RegCIntrinsicDecision RegCIntrinsicRegistry::matchNormalizedCall(
         decision.nativeObjectKind = entry.nativeObjectKind;
         decision.symbol           = entry.symbol;
         decision.passContext      = entry.passContext;
+        decision.precheck         = entry.precheck;
         return decision;
     }
 
@@ -2044,7 +2052,7 @@ std::vector<RegCIntrinsicIdentity> builtinIntrinsicTable()
     for (const auto& entry : kEntries) {
         out.push_back(RegCIntrinsicIdentity{entry.owner, entry.name, entry.desc, entry.symbol,
                                             entry.emitKind, entry.nativeObjectKind,
-                                            entry.llvmDirect});
+                                            entry.llvmDirect, entry.precheck});
     }
     return out;
 }

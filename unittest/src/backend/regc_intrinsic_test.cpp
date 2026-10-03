@@ -426,6 +426,24 @@ TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
     EXPECT_EQ(nextDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(nextDecision.emitKind, RegCIntrinsicEmitKind::NativeObjectMethod);
     EXPECT_EQ(nextDecision.symbol, "mj2x_random_next_int");
+    // #879 Y4：预检位随权威表单源——无参面 None，bound 面由 decision 透传
+    // PositiveBound（发射端按位发预检，不再 symbol 硬编码）。
+    EXPECT_EQ(nextDecision.precheck, RegCIntrinsicPrecheck::None);
+
+    RegInstruction nextBound;
+    nextBound.kind                = RegInstructionKind::Call;
+    nextBound.method.owner        = U("java/util/Random");
+    nextBound.method.name         = U("nextInt");
+    nextBound.method.desc         = U("(I)I");
+    nextBound.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+    nextBound.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
+    nextBound.args.push_back(RegOperand::fromInt(100, SSAType::I32));
+
+    auto nextBoundDecision = RegCIntrinsicRegistry::builtins().matchCall(nextBound);
+    EXPECT_EQ(nextBoundDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(nextBoundDecision.emitKind, RegCIntrinsicEmitKind::NativeObjectMethod);
+    EXPECT_EQ(nextBoundDecision.symbol, "mj2x_random_next_int_bound");
+    EXPECT_EQ(nextBoundDecision.precheck, RegCIntrinsicPrecheck::PositiveBound);
 }
 
 TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)

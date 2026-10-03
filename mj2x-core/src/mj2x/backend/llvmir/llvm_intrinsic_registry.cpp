@@ -242,6 +242,7 @@ std::vector<LlvmRandomEntry> deriveRandomEntries()
         entry.declareText =
             internText(std::string("declare ") + entry.retLlvm + " @" + id.symbol + "(" +
                        params + ")");
+        entry.precheck = id.precheck;
         out.push_back(entry);
     }
     for (const auto& id : builtinIntrinsicTable()) {
@@ -263,6 +264,7 @@ std::vector<LlvmRandomEntry> deriveRandomEntries()
         entry.declareText =
             internText(std::string("declare ") + entry.retLlvm + " @" + id.symbol + "(" +
                        params + ")");
+        entry.precheck = id.precheck;
         out.push_back(entry);
     }
     return out;

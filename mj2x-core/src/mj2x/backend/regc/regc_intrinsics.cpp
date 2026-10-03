@@ -941,14 +941,12 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             decision.reason = "receiver is not native object state";
             return decision;
         }
-        // Random.nextInt(bound)：JVM 对 bound<=0 抛 IllegalArgumentException；
-        // crt 直调无异常通道（bound<=0 返回哨兵值），发射端预检并把异常挂到
-        // context——pending 由 mayThrow 的调用后异常分发（有 try 区域）或 JNI
-        // 边界（无区域）统一处理（fail-closed，Y4）。
-        const bool isRandomNextIntBound =
-            std::string_view(decision.symbol) == "mj2x_random_next_int_bound" &&
-            ins.args.size() == 2;
-        if (isRandomNextIntBound) {
+        // 发射端预检位（#879 Y4 解耦）：预检判定随权威表（kEntries 的 precheck
+        // 位）单源，此处按位发射——Random.nextInt(bound)：JVM 对 bound<=0 抛
+        // IllegalArgumentException；crt 直调无异常通道（bound<=0 返回哨兵值），
+        // 预检把异常挂到 context——pending 由 mayThrow 的调用后异常分发（有 try
+        // 区域）或 JNI 边界（无区域）统一处理（fail-closed）。
+        if (decision.precheck == RegCIntrinsicPrecheck::PositiveBound) {
             out.emitLine("if (" + operandExpr(ins.args[1]).to_std_string() + " <= 0) {");
             out.indent();
             out.emitLine("mj2x_regc_throw_exception(_mj2x_regc_current_context(), "
@@ -970,7 +968,7 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
         }
         out.append(codegen::exprCallArgs(decision.symbol, nativeArgs));
         out.append(";");
-        if (isRandomNextIntBound) {
+        if (decision.precheck == RegCIntrinsicPrecheck::PositiveBound) {
             out.newLine();
             out.dedent();
             out.emitLine("}");

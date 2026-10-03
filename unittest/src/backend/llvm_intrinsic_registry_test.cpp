@@ -380,6 +380,40 @@ TEST(LlvmIntrinsicRegistryGoldenCross, RandomTableFieldByField)
               nullptr);
 }
 
+TEST(LlvmIntrinsicRegistryGoldenCross, RandomPrecheckBitDerivedFromAuthoritativeTable)
+{
+    // #879 Y4 解耦：nextInt(I)I 的 bound<=0 预检位随权威表（builtinIntrinsicTable
+    // → deriveRandomEntries 两趟派生）透传——发射端改按位判定，registry 改符号名
+    // /新增形态时预检不再静默失效。钉三点：bound 面位 = PositiveBound、无参面
+    // 位 = None、init 面（RandomInit 趟）位 = None。
+    const LlvmRandomEntry* init =
+        matchLlvmRandomInit(ref("java/util/Random"), ref("<init>"), ref("(J)V"));
+    ASSERT_NE(init, nullptr);
+    EXPECT_EQ(init->precheck, RegCIntrinsicPrecheck::None);
+
+    const LlvmRandomEntry* nextInt =
+        matchLlvmRandomMethod(ref("java/util/Random"), ref("nextInt"), ref("()I"));
+    ASSERT_NE(nextInt, nullptr);
+    EXPECT_EQ(nextInt->precheck, RegCIntrinsicPrecheck::None);
+
+    const LlvmRandomEntry* nextIntBound =
+        matchLlvmRandomMethod(ref("java/util/Random"), ref("nextInt"), ref("(I)I"));
+    ASSERT_NE(nextIntBound, nullptr);
+    EXPECT_EQ(nextIntBound->precheck, RegCIntrinsicPrecheck::PositiveBound);
+
+    const LlvmRandomEntry* nextLong =
+        matchLlvmRandomMethod(ref("java/util/Random"), ref("nextLong"), ref("()J"));
+    ASSERT_NE(nextLong, nullptr);
+    EXPECT_EQ(nextLong->precheck, RegCIntrinsicPrecheck::None);
+
+    // 权威表投影位同值（单源一致性：kEntries 行 → Identity 投影 → LLVM 派生）。
+    size_t positiveBoundCount = 0;
+    for (const auto& id : builtinIntrinsicTable()) {
+        if (id.precheck == RegCIntrinsicPrecheck::PositiveBound) ++positiveBoundCount;
+    }
+    EXPECT_EQ(positiveBoundCount, 1u);
+}
+
 TEST(LlvmIntrinsicRegistryGoldenCross, BuilderTableFieldByField)
 {
     ASSERT_EQ(sizeOf(kGoldenBuilder), 48u);
