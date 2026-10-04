@@ -531,6 +531,42 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                 continue;
             }
 
+            // #1188：调用块位于异常受保护区时，克隆体与 merge 块同样落在保护
+            // 范围内（被内联体的 mayThrow 调用点在 try 语义下必须分发到
+            // handler），必须登记为受保护块并补异常边——否则发射端
+            // activeExceptionRegions 对新块为空，逐调用 pending 异常检查被
+            // 省略（emitInstructionWithCheck 仅对受保护块发射），挂起异常
+            // 越过 try 边界继续执行（try{Enum.valueOf}catch(IAE) 吞异常）。
+            // handlerArgs 沿用调用块现有边的实参（调用点之前的帧状态）：被
+            // 内联体只定义新值、不改写 handler 可见的局部槽，尾部指令仅在内
+            // 联体成功完成后执行——对克隆体内任意抛出点都是正确传输；merge
+            // 块沿用同一组实参与既有「块入口帧状态」精度约定一致。
+            if (!function.exceptionRegions.empty()) {
+                std::vector<SSABlock*> newBlocks;
+                newBlocks.reserve(clones.size() + 1);
+                for (const auto& c : clones) newBlocks.push_back(c.get());
+                newBlocks.push_back(mergePtr);
+                for (auto& region : function.exceptionRegions) {
+                    const SSAExceptionEdge* hostEdge = nullptr;
+                    for (const auto& edge : region.edges) {
+                        if (edge.protectedBlock == site.block) {
+                            hostEdge = &edge;
+                            break;
+                        }
+                    }
+                    if (hostEdge == nullptr) continue;   // 防御：调用块无边则保持原状
+                    // 先拷贝传输实参：edges.push_back 可能扩容令 hostEdge 悬垂。
+                    std::vector<SSAValue*> transferred = hostEdge->handlerArgs;
+                    for (SSABlock* newBlock : newBlocks) {
+                        region.protectedBlocks.push_back(newBlock);
+                        SSAExceptionEdge protectedEdge;
+                        protectedEdge.protectedBlock = newBlock;
+                        protectedEdge.handlerArgs    = transferred;
+                        region.edges.push_back(std::move(protectedEdge));
+                    }
+                }
+            }
+
             // 接线：调用块 -> 克隆 entry；克隆体在前、merge 在后
             // （merge 的 terminator/tail 使用克隆体定义的 merge arg，块序必须
             //  满足 def-before-use，RegLowering 按块序检查）。

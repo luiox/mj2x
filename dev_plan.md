@@ -278,6 +278,26 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   立案 #1188、见待做 I）。验证：mj2x_unittest 774/774 绿（10 skip）、mtest_set 25/25 绿、
   mj2x_integration 63 绿 29 skip（既有口径）、门禁 31/15/3/5/0/115 持平 +
   staticArena=0。
+- 2026-10-05（#1188 try 块内枚举 valueOf 异常不派发修复，分支
+  `fix/mj2x-1188-valueof-dispatch`）：红相活体复现修正评审归因——四口径实测
+  （`try{ProbeEnum.valueOf(input)}catch(IAE)` 同 jar 最小件，CLI RegC 全管线）：
+  默认口径与 `--regc-direct-calls` 口径均红（catch 不执行、pending 泄漏为
+  NPE 在 JNI 边界浮出、输出残缺、exit=1）；`--regc-no-inline`（站点 intrinsic）
+  与 `--regc-direct-calls --regc-no-inline`（直调）均绿——评审所称"站点
+  intrinsic 路径同样不派发"实为口径误标：`--regc-direct-calls` 不关闭内联，
+  两种评测口径实际都走内联展开路径；站点 intrinsic/直调/通用 JNI 三路径的
+  逐调用派发由 `emitInstructionWithCheck`（issue #778 稀疏化后的保留检查）
+  正确覆盖。真实缺口唯一：内联展开。修复落 SSA 内联 pass
+  （`ssa_inline_passes.cpp`）：调用块位于异常受保护区时，克隆体与 merge 块
+  登记为该区域受保护块并补异常边（handlerArgs 沿用调用块现有边 = 调用点前
+  帧状态；被内联体只定义新值、尾部指令仅在成功完成后执行，对克隆体内任意
+  抛出点均为正确传输；merge 块同一组实参与既有「块入口帧状态」精度约定
+  一致）。取舍：不选「拒内联进受保护区」——牺牲 try 块内联性能且治标；
+  不在发射端加新派发代码——`emitExceptionDispatch`/`emitInstructionWithCheck`
+  既有机制对新块自动生效（受保护面恢复后零新增发射形态，非受保护内联
+  产物逐字节不变）；不在运行时 C 加检查——保持 pending 合 JNI 惯例。SSA 层
+  修复三后端（RegC/LLVM/VMC4 共用 Reg 异常区域）同时受益。非受保护路径
+  （方法无 try）发射零变化。
 - 2026-10-04（#886 单后端编译选项，分支 `feat/mj2x-886-single-backend`）：
   新增值型开关 `with_mj2x_backend`（all 默认 | stackc | regc | vmc4 | llvm）。
   三层裁剪：① mj2x-core 按选择器只收编所选后端目录（llvm 额外收编 regc

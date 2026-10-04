@@ -69,6 +69,9 @@ using SsaInlineResolver =
 /// - 未命中 options.excludeMethod 排除谓词（可选）
 /// 克隆时参数绑定调用点实参；所有返回点改跳新汇合块（block arg 收集
 /// 返回值），原 Call 指令 result 的所有引用重定向到汇合块 arg。
+/// 调用块位于异常受保护区时（#1188），克隆体与汇合块登记为该区域的受保护
+/// 块并补异常边（handlerArgs 沿用调用块现有边——调用点之前的帧状态），
+/// 发射端对新块的逐调用 pending 异常检查因此保持开启，try 语义不因内联丢失。
 SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& options,
                                 const SsaInlineResolver& resolver,
                                 ca::str::Utf8StringArena& arena);
