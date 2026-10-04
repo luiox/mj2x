@@ -20,7 +20,7 @@
 | 站点类别 | 识别函数 | 展开函数 | 形态 |
 |---|---|---|---|
 | 字符串拼接 | `isStringConcatSite`（:224，认 `java/lang/invoke/StringConcatFactory` 的 `makeConcat` / `makeConcatWithConstants`） | `expandConcatSite`（:126，改写为 `new StringBuilder` + append 链 + toString） | 阶段1 |
-| lambda / 方法引用 | `isLambdaMetafactorySite`（:457，认 `java/lang/invoke/LambdaMetafactory` 的 `metafactory` / `altMetafactory`） | `expandLambdaSite`（:1014，为每站点合成 `mj2x/lambda/Lambda$N` 类，站点改写为 `new` + `<init>`；前置判定已抽取为 `lambdaExpansionPrecondition` :580，与 §5 判定原型共用） | 阶段2a–2f |
+| lambda / 方法引用 | `isLambdaMetafactorySite`（:457，认 `java/lang/invoke/LambdaMetafactory` 的 `metafactory` / `altMetafactory`） | `expandLambdaSite`（:1014，为每站点合成实现类（public SAM 落 `mj2x/lambda/Lambda$N`，包私有/protected SAM 落 SAM 同包 `Lambda$N`，#1182），站点改写为 `new` + `<init>`；前置判定已抽取为 `lambdaExpansionPrecondition` :580，与 §5 判定原型共用） | 阶段2a–2f |
 
 lambda 展开的静态前置谓词 `lambdaExpansionPrecondition`（:580，全部来自 classfile 静态可见内容）：
 

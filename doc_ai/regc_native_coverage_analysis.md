@@ -23,7 +23,7 @@ mj2x-cli --backend regc -i TEST.jar -o TEST-regc.jar --emit-cpp native.c --compi
 | `<init>` 有逻辑构造器 | 保留字节码（反射方法数断言兼容，见 §3） |
 | `<clinit>` | 搬运到 `__regc_clinit_<hash>`（注册时机保持在骨架头部） |
 | 抽象方法 / 接口方法 | 不可 native，保留（JVM 语义） |
-| mj2x runtime 类（`mj2x/cloader/Loader`、`mj2x/runtime/NativeLoader`、`mj2x/lambda/*`） | 保留字节码（工具类自身） |
+| mj2x runtime 类（`mj2x/cloader/Loader`、`mj2x/runtime/NativeLoader`、`mj2x/lambda/*` 及 SAM 同包 lambda 合成类） | 保留字节码（工具类自身） |
 
 ## 已收口的 fail-closed 边界（按时间）
 

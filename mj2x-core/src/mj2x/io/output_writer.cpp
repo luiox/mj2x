@@ -115,8 +115,17 @@ static bool isGeneratedRuntimeClass(const std::string& name)
 {
     // mj2x/cloader/Loader：RegisterNatives 桥接类。
     // mj2x/lambda/*：invokedynamic lambda 展开合成的 functional interface 实现类（R6.1 阶段2）。
+    // 包内 Lambda$N（#1182）：包私有 SAM 场景合成类落 SAM 同包，形态 [pkg/]Lambda$<digits>；
+    // 尾段全数字才识别，避免误吞用户手写的 Lambda$X 类。
     // 这些都不是 primary 输入类，且须相对 classpath 根写出（不跟 primary 包名走）。
-    return name == "mj2x/cloader/Loader" || name.rfind("mj2x/lambda/", 0) == 0;
+    if (name == "mj2x/cloader/Loader" || name.rfind("mj2x/lambda/", 0) == 0) return true;
+    const auto  slash = name.rfind('/');
+    const auto& last  = slash == std::string::npos ? name : name.substr(slash + 1);
+    if (last.size() <= 7 || last.rfind("Lambda$", 0) != 0) return false;
+    for (const char c : last.substr(7)) {
+        if (c < '0' || c > '9') return false;
+    }
+    return true;
 }
 
 static fs::path sidecarClassPath(const fs::path& outputPath,

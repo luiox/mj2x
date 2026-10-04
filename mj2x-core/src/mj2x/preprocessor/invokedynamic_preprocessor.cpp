@@ -2,7 +2,6 @@
 
 #include "libca/core/any.hpp"
 #include <algorithm>
-#include <cstdio>
 #include <string>
 #include <vector>
 #include "libca/log/log_macros.hpp"
@@ -1197,6 +1196,35 @@ struct PendingLambdaClass
     std::unique_ptr<ClassNode> node;
 };
 
+/// 合成 lambda 类宿主包判定（#1182）。
+///
+/// JVM 对「类实现接口」的访问检查只看接口类自身的 ACC 标志（嵌套仅命名，nest 只管
+/// private 成员）：合成类落在固定 mj2x/lambda 包时，实现包私有 SAM 必然在
+/// defineClass 阶段抛 IllegalAccessError → FindClass 返回 NULL（异常挂起）→ 生成码
+/// NULL 守卫把 op 落 NULL → lambda 包装 invoke 全 NPE。
+///
+/// javac 的 hidden-class 语义 = 定义在调用方可见的包里。等价规则（只动编译输入可判定
+/// 的形态，其余零漂移）：
+/// - SAM 在编译输入且非 public（包私有/protected/private 嵌套）→ 落 SAM 同包；
+///   private（嵌套）需 nest 成员身份才可实现，同包落位仍不可达——不比 mj2x/lambda
+///   更差，真正的解法需 nest 注入，超出本卡范围；
+/// - SAM 不在输入（库类型）→ 维持 mj2x/lambda：跨包引用的库 SAM 只可能 public；
+///   同包包私有库 SAM 属 split-package 罕态且现状即坏，不为此牺牲零漂移面。
+///
+/// 返回宿主包（恒带尾随 '/'；"mj2x/lambda/" = 维持现状）。
+std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& ifaceInternal)
+{
+    if (auto* ifaceCls = index.getClass(ifaceInternal)) {
+        if (ifaceCls->classNode != nullptr &&
+            (ifaceCls->classNode->access & Opcodes::ACC_PUBLIC) == 0) {
+            const std::size_t slash = ifaceInternal.rfind('/');
+            return slash == std::string::npos ? std::string("/")
+                                              : ifaceInternal.substr(0, slash + 1);
+        }
+    }
+    return "mj2x/lambda/";
+}
+
 // 展开单个 lambda indy 站点（无状态 + 捕获统一处理）。返回是否改写成功。
 // 失败（非 INVOKESTATIC impl / desc 不符合 captured++sam 布局）保持 indy 原样、交 SSA fail-closed。
 //
@@ -1204,7 +1232,7 @@ struct PendingLambdaClass
 // bsmArgs[0]=samMethodType, [1]=implHandle, [2]=instantiatedMethodType。impl 形参布局
 // （javac）= capturedTypes ++ samArgs。
 bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode* indy,
-                      int synthCounter, std::vector<PendingLambdaClass>& pending)
+                      int& synthCounter, std::vector<PendingLambdaClass>& pending)
 {
     // 前置判定与 classifyIndySite 共用同一谓词（判定=展开零漂移，设计文档 §2/§5）。
     // 不支持的形态（收窄 / 装箱+加宽 / 未知 flags / 字段句柄等）保持 indy 原样、交 SSA fail-closed。
@@ -1244,7 +1272,19 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
         }
     }
 
-    const std::string synthName = "mj2x/lambda/Lambda$" + std::to_string(synthCounter);
+    // 宿主包判定（#1182：编译输入的非 public SAM 落 SAM 同包，其余维持 mj2x/lambda
+    // 零漂移）。同名类防碰撞（用户类与库类一并算占用，合成类绝不顶替既有条目）：
+    // 探测前跳；成功后把计数器推到选中名之后（出参语义），同 run 后续站点不会再
+    // 探到本站点占用名。
+    const std::string hostPkg = pickLambdaSynthHostPackage(index, ifaceInternal);
+    std::string synthName;
+    int         n = synthCounter;
+    for (;; ++n) {
+        synthName = hostPkg.empty() ? "mj2x/lambda/Lambda$" + std::to_string(n)
+                                    : hostPkg + "Lambda$" + std::to_string(n);
+        if (index.getClass(synthName) == nullptr) break;
+    }
+    synthCounter = n + 1;
 
     // 构造器描述符 (capturedDescs)V。
     std::string ctorDesc = "(";
@@ -1351,7 +1391,6 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
             for (auto* indy : lambdaSites) {
                 if (expandLambdaSite(index, m, indy, synthCounter, pendingLambdaClasses)) {
                     ++lambdaExpanded;
-                    ++synthCounter;
                 }
             }
             // 展开改写了指令流：类必须标记 modified，否则 JAR 输出写回原始字节
