@@ -52,8 +52,11 @@ distributable CRT (mj2x/mj2x-rt/src/regc/)
 - `exp/log/log10(D)D` → `mj2x_math_*`(libm 半纯实现,#1117)
 - `floor/ceil(D)D` → `mj2x_math_*`
 - `signum(F)F/(D)D` → `mj2x_math_signum_f32/f64`(NaN/±0.0 按位型原样返回,#1117)
-- `round(D)J` → `mj2x_math_round`(floor(x+0.5),NaN→0,±Inf 钳位)
-- `round(F)I` → `mj2x_math_round_f32`(floorf(x+0.5f),NaN→0,int 边界饱和,#1117)
+- `round(D)J` → `mj2x_math_round`（OpenJDK 17 位运算口径 #1144：JLS tie→+∞
+  + 位路径 + Java-cast 饱和；floor(x+0.5) 公式已废弃——0.49999999999999994
+  与 [2^52,2^53) 奇整数可观测发散，见 intrinsic_matrix.md §3/§5）
+- `round(F)I` → `mj2x_math_round_f32`（OpenJDK 17 位运算口径 #1144 同上；
+  floorf(x+0.5f) 公式已废弃——0.49999997f 给 1 正确 0）
 - `random()D` → `mj2x_math_random`(Java 兼容 LCG 流)
 
 ### String / Integer
