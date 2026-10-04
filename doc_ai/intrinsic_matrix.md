@@ -126,6 +126,9 @@ JNI 底座（缓存 ID/helper 属 JNI 快路径，仍计 JNI）；**不适用** 
   不可改，以本节精确口径为准。另 `g17.math_nan_zero` 补 5 个 round 边界
   方法进样本字节码面（四列含 JVM 基线对拍）。同卡接线补缺：emitDeclarations
   补 #1117 六符号前置声明（此前 RegC 发射面调用即缺声明）。
+  #1186 起全量 float 穷举升格为常驻回归：`mj2x_rt_test` 追加 DISABLED_
+  前缀测试（2^32 位型 vs 语义参考实现逐点对拍 + 64 块 sum/xor 校验和
+  断言；日常套件不计入，`--gtest_also_run_disabled_tests` 触发）。
 
 ## 6. 维护纪律
 

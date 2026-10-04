@@ -266,3 +266,85 @@ void test_regc_intrinsic_bit_ops(void)
     expect(mj2x_intrinsic_long_signum(INT64_C(0)) == 0);
     expect(mj2x_intrinsic_long_signum(INT64_C(9)) == 1);
 }
+
+// ---- #1186：DISABLED_ 全量 float 穷举常驻回归 ----
+// 命名仿 gtest DISABLED_ 前缀约定：本套驱动器是纯 C main()（非 gtest），以
+// main() 的 argv 白名单复刻同语义——日常跑套不调用（套件函数集合与输出与
+// 改动前一致），显式传 --gtest_also_run_disabled_tests 时追加执行；
+// --gtest_filter=DISABLED_* 仅门面兼容不单独路由（gtest 同语义：单独过滤
+// DISABLED_ 也是 0 例）。SkipCSV/统计面属 mj2x_unittest gtest 套，本套无
+// 计数面，不存在 DISABLED_ 计数漂移。
+
+// 参考实现：语义定义路线。OpenJDK 17 `Math.round(float)` 实源即生产码移植的
+// 位路径版（Math.java 无 floatToIndex 辅助函数，该名出自 JDK-8010430 评审
+// 过程稿），照搬同路线会循环论证；此处按 JLS/Javadoc 契约独立推导：
+// closest int、tie→+∞、NaN→0、±Inf/出界按 Java cast 语义饱和。float→double
+// 恒等加宽后 floor(x+0.5) 对全部 |x| < 2^31 的 float 精确——float 有效位
+// ≤ 24，加半位后 ≤ 32 位 ≤ double 53 位，floor 结果为 ≤ 31 位整数亦精确，
+// 无二次舍入；与生产码位路径互为独立推导，对拍结论才非平凡。
+static int32_t round_f32_reference(float value)
+{
+    if (isnan(value)) return 0;
+    if (value >= 2147483648.0f) return INT32_MAX;   /* ≥ 2^31（含 +Inf）饱和 */
+    if (value <= -2147483648.0f) return INT32_MIN;  /* ≤ -2^31（含 -Inf）饱和 */
+    return (int32_t)floor((double)value + 0.5);
+}
+
+void test_regc_intrinsic_DISABLED_round_f32_full_sweep(void)
+{
+    // 全 2^32 float 位型逐点对拍 mj2x_math_round_f32 vs round_f32_reference；
+    // 64 块 × 2^26 点，逐块 sum/xor 校验和双侧全等断言 + 失配计数（首例位型
+    // 打印后 abort）。评审基线：4,294,967,296 点 0 失配、分块校验和全等
+    //（#1144 独立评审复现）；合计校验和随行打印，供跨机复跑比对。
+    const uint32_t chunk_shift = 26; /* 64 × 2^26 == 2^32 */
+    uint64_t total_impl_sum = 0;
+    uint32_t total_impl_xor = 0;
+    for (uint32_t chunk = 0; chunk < 64; ++chunk) {
+        const uint64_t begin = (uint64_t)chunk << chunk_shift;
+        const uint64_t end   = begin + (UINT64_C(1) << chunk_shift);
+        uint64_t impl_sum = 0, ref_sum = 0;
+        uint32_t impl_xor = 0, ref_xor = 0;
+        uint32_t first_bad_bits = 0;
+        int32_t  first_bad_impl = 0, first_bad_ref = 0;
+        uint32_t bad_count = 0;
+        for (uint64_t b = begin; b < end; ++b) {
+            const uint32_t bits = (uint32_t)b;
+            float   value;
+            int32_t impl, ref;
+            memcpy(&value, &bits, sizeof value);
+            impl = mj2x_math_round_f32(value);
+            ref  = round_f32_reference(value);
+            impl_sum += (uint32_t)impl;
+            ref_sum  += (uint32_t)ref;
+            impl_xor ^= (uint32_t)impl;
+            ref_xor  ^= (uint32_t)ref;
+            if (impl != ref) {
+                if (bad_count == 0) {
+                    first_bad_bits = bits;
+                    first_bad_impl = impl;
+                    first_bad_ref  = ref;
+                }
+                ++bad_count;
+            }
+        }
+        if (bad_count != 0) {
+            fprintf(stderr,
+                    "round_f32 sweep: chunk %u/64 first mismatch bits=0x%08X "
+                    "impl=%d ref=%d (%u mismatches in chunk)\n",
+                    (unsigned)chunk, (unsigned)first_bad_bits,
+                    (int)first_bad_impl, (int)first_bad_ref,
+                    (unsigned)bad_count);
+        }
+        expect(bad_count == 0);
+        expect(impl_sum == ref_sum);
+        expect(impl_xor == ref_xor);
+        total_impl_sum += impl_sum;
+        total_impl_xor ^= impl_xor;
+        printf("round_f32 sweep: chunk %2u/64 ok (sum=0x%016llX xor=0x%08X)\n",
+               (unsigned)chunk, (unsigned long long)impl_sum,
+               (unsigned)impl_xor);
+    }
+    printf("round_f32 sweep: 4294967296 points, 64 chunks, 0 mismatch, "
+           "total sum=0x%016llX xor=0x%08X\n",
+           (unsigned long long)total_impl_sum, (unsigned)total_impl_xor);
+}
