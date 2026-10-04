@@ -246,6 +246,10 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 > 性能数据必须先做覆盖率审计（见 `performance_evaluation_spec.md`）。
 > 注意：llvm sample E2E 外呼 `mj2x-cli.exe`，验证前须确认 CLI 已重建
 > （`xmake build mj2x-cli`），否则跑的是旧发射器（#894 收尾时踩过）。
+> 注意（#1186）：unittest/integration 的 pass/skip 分拆数字（如 #1144 收口
+> 时 768 ran/758 passed/10 skipped、integration 92 ran/63 passed/29 skipped）
+> 含环境性 skip——本机无 clang/zig 时 LLVM 列 exec 编译与性能门控整列跳过。
+> 跨机对数时 skip 数差异属环境差异，不构成回归判据；对数只看 passed/failed。
 
 ## 日志
 
@@ -295,6 +299,24 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   vmc4-only 2026496B（-44.2%）/ llvm-only 2317824B（-36.2%；本机无 PATH
   clang，exec 编译按既有纪律跳过，--emit-llvm 发射路径已验）。默认配置重建
   exe 字节数与改动前一致（3630592B）；门禁六项全部与基线持平。
+
+- 2026-10-02（#1144 评审三 nits 收尾，分支 `fix/mj2x-1144-review-nits`，#1186）：
+  ① 扫掠点数口径统一——intrinsic_matrix.md §5 #1144 追记改精确口径（float
+  侧 2^32 全位型穷举 4,294,967,296 点，评审方独立复现分块校验和全等；
+  double 侧结构化采样 25,024,406 点 0 失配），注明 #1167 提交消息「约
+  1.4 亿」系 double 侧计数误记（已合并不可改，文档为准）；顺带订正
+  regc_intrinsic.md round 两行残留旧 floor(x+0.5) 公式。② 全量 float 穷举
+  常驻回归——`mj2x_rt_test` 补 DISABLED_ 前缀测试：纯 C 驱动器以 main
+  argv 白名单复刻 gtest DISABLED_ 语义（日常跑套不调用，显式
+  `--gtest_also_run_disabled_tests` 追加执行；`--gtest_filter` 单独过滤不
+  触发同 gtest）；2^32 位型逐点对拍语义参考实现（float→double 恒等加宽
+  后 floor(x+0.5)，与生产码 OpenJDK 位路径互为独立推导不循环论证）+
+  64 块 sum/xor 校验和双侧全等断言。实测 4,294,967,296 点 0 失配全绿，
+  耗时 18s（release/x64），合计 sum=0x407FFFFFCFFFFFFF xor=0x7F7FFFFF
+  供跨机复跑比对；日常套件函数集合与输出与改动前一致。③ unittest
+  pass/skip 分拆环境注记落验证命令节（skip 数受本机编译器可得性影响，
+  跨机对数不构成回归判据）。验证：mj2x_rt_test 日常+DISABLED 全绿；
+  门禁六项 31/15/3/5/0/115 + staticArena=0 持平基线。
 
 - 2026-08-23（mj2x-cli 解析迁移 ca::opt v2，分支 `feat/mj2x-cli-opt-v2`）：
   libca PR #198（opt v2：类型化 Arg/十类错误/互斥组/ValueSource 来源查询/
