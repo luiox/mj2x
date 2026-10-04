@@ -435,6 +435,64 @@ TEST(IOTest, NativeLoaderPostprocessorInjectsClinitLoadCallForModifiedClasses)
         << "indy/ldc-expanded class without native methods must not get a clinit load call";
 }
 
+TEST(IOTest, NativeLoaderTempFileAvoidsCreateTempFileSecureRandomTax)
+{
+    // #1183：File.createTempFile 内部首次触达 SecureRandom（TempDirectory 静态
+    // 字段初始化，冷 JVM 实测 ~52-59ms，jdk21/jdk25），是 bootstrap 提取段乃至
+    // 整个 bootstrap 的主导项。生成类必须携带 newTempFile 私有助手
+    // （ThreadLocalRandom 随机名 + createNewFile 原子独占创建），且 load()
+    // 不得再引用 File.createTempFile。
+    CompilerIndex index;
+    index.setJarInput(true);
+    NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll", ".dll", false);
+    postprocessor.process(index);
+
+    ASSERT_EQ(index.jarEntries().size(), 1u);
+    ca::str::Utf8StringArena arena;
+    auto                     loaderClass = readClassFromBytes(index.jarEntries()[0].data, arena);
+    EXPECT_EQ(loaderClass->name.to_std_string(), "mj2x/runtime/NativeLoader");
+
+    auto* helper = findMethod(*loaderClass, "newTempFile");
+    ASSERT_NE(helper, nullptr) << "newTempFile helper missing from generated NativeLoader";
+    EXPECT_EQ(helper->desc.to_std_string(), "(Ljava/lang/String;)Ljava/io/File;");
+
+    // 形状钉子（#1183 排障）：newTempFile 内 new File(dir, name) 的 dir 是 String，
+    // 构造器必须取 (String,String)V 重载；曾误写 (File,String)V 致运行期 VerifyError
+    // （单元形状测试当时未覆盖此指令，漏网进门禁才暴露）。
+    bool fileInitStringString = false;
+    for (auto* insn : helper->instructions) {
+        if (insn->getOpcode() != Opcodes::INVOKESPECIAL) continue;
+        auto* mi = static_cast<MethodInsnNode*>(insn);
+        if (mi->owner.to_std_string() == "java/io/File" && mi->name.to_std_string() == "<init>") {
+            ASSERT_FALSE(fileInitStringString) << "unexpected multiple File.<init> in newTempFile";
+            EXPECT_EQ(mi->desc.to_std_string(), "(Ljava/lang/String;Ljava/lang/String;)V")
+                << "File.<init> must be the (String,String) overload (VerifyError guard)";
+            fileInitStringString = true;
+        }
+    }
+    EXPECT_TRUE(fileInitStringString) << "newTempFile must construct java/io/File";
+
+    auto* load = findMethod(*loaderClass, "load");
+    ASSERT_NE(load, nullptr);
+    bool callsHelper         = false;
+    bool callsCreateTempFile = false;
+    for (auto* insn : load->instructions) {
+        if (insn->getOpcode() != Opcodes::INVOKESTATIC) continue;
+        auto* mi = static_cast<MethodInsnNode*>(insn);
+        if (mi->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
+            mi->name.to_std_string() == "newTempFile") {
+            callsHelper = true;
+        }
+        if (mi->owner.to_std_string() == "java/io/File" &&
+            mi->name.to_std_string() == "createTempFile") {
+            callsCreateTempFile = true;
+        }
+    }
+    EXPECT_TRUE(callsHelper) << "load() must go through newTempFile helper";
+    EXPECT_FALSE(callsCreateTempFile)
+        << "load() must not use File.createTempFile (SecureRandom cold-start tax)";
+}
+
 TEST(IOTest, CLoaderPostprocessorAddsDispatchLoaderClassResource)
 {
     CompilerIndex index;

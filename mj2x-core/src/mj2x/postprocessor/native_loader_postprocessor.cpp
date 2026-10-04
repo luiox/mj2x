@@ -154,13 +154,17 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
     load->visitInsn(Opcodes::ATHROW);
 
     load->visitLabel(streamOk);
-    load->visitLdcInsn(ca::core::Any(arena.intern("mj2x-")));
+    // 临时文件不走 File.createTempFile：其内部首次触达 SecureRandom（TempDirectory
+    // 静态字段初始化），冷 JVM 实测 ~52-59ms（jdk21/jdk25，#1183 bootstrap 分解），
+    // 是提取段乃至整个 bootstrap 的主导项。改走 newTempFile 私有助手（本类内发射）：
+    // ThreadLocalRandom 随机名 + createNewFile 原子独占创建，防碰撞/防抢占语义与
+    // createTempFile 一致，首次触达实测 ~0.3ms。
     load->visitVarInsn(Opcodes::ALOAD, 1);
     load->visitMethodInsn(
         Opcodes::INVOKESTATIC,
-        Utf8StringRef::from_cstr("java/io/File"),
-        Utf8StringRef::from_cstr("createTempFile"),
-        Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)Ljava/io/File;"),
+        Utf8StringRef::from_cstr(native_loader::kClassName),
+        Utf8StringRef::from_cstr("newTempFile"),
+        Utf8StringRef::from_cstr("(Ljava/lang/String;)Ljava/io/File;"),
         false);
     load->visitVarInsn(Opcodes::ASTORE, 3);
     load->visitVarInsn(Opcodes::ALOAD, 3);
@@ -259,6 +263,141 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
     load->visitInsn(Opcodes::RETURN);
     load->visitMaxs(0, 0);
     load->visitEnd();
+
+    // newTempFile(tempSuffix)：ThreadLocalRandom 随机名 + createNewFile 原子独占
+    // 创建（32 次重试），替代 File.createTempFile 的 SecureRandom 冷启动税。
+    // Java 参考形态（与本发射逐指令对应）：
+    //   String dir = System.getProperty("java.io.tmpdir", ".");
+    //   ThreadLocalRandom rnd = ThreadLocalRandom.current();
+    //   for (int i = 0; i < 32; i++) {
+    //       File f = new File(dir, "mj2x-" + Long.toHexString(rnd.nextLong()) + suffix);
+    //       if (f.createNewFile()) return f;
+    //   }
+    //   throw new UnsatisfiedLinkError("mj2x native temp file create failed");
+    // 与 createTempFile 的语义对齐点：同目录（java.io.tmpdir）、同前缀/后缀、
+    // 原子独占（createNewFile 失败即换名重试，永不打开已存在文件——防符号链接
+    // 抢占）、失败抛 UnsatisfiedLinkError。已知差异（记录不消除）：POSIX 下
+    // 权限为默认 umask（如 644）而 createTempFile 为 600——Windows 产品线无差，
+    // POSIX 侧提取物生命周期为单 JVM 会话（deleteOnExit），内容即 jar 内资源。
+    auto* newTemp =
+        cw.visitMethod(Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_SYNTHETIC,
+                       Utf8StringRef::from_cstr("newTempFile"),
+                       Utf8StringRef::from_cstr("(Ljava/lang/String;)Ljava/io/File;"),
+                       Utf8StringRef(),
+                       {});
+    auto* tempLoop  = makeLabel();
+    auto* tempRetry = makeLabel();
+    auto* tempNext  = makeLabel();
+
+    newTemp->visitCode();
+    // dir = System.getProperty("java.io.tmpdir", ".")
+    newTemp->visitLdcInsn(ca::core::Any(arena.intern("java.io.tmpdir")));
+    newTemp->visitLdcInsn(ca::core::Any(arena.intern(".")));
+    newTemp->visitMethodInsn(Opcodes::INVOKESTATIC,
+                             Utf8StringRef::from_cstr("java/lang/System"),
+                             Utf8StringRef::from_cstr("getProperty"),
+                             Utf8StringRef::from_cstr(
+                                 "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
+                             false);
+    newTemp->visitVarInsn(Opcodes::ASTORE, 1);
+    // rnd = ThreadLocalRandom.current()
+    newTemp->visitMethodInsn(Opcodes::INVOKESTATIC,
+                             Utf8StringRef::from_cstr("java/util/concurrent/ThreadLocalRandom"),
+                             Utf8StringRef::from_cstr("current"),
+                             Utf8StringRef::from_cstr(
+                                 "()Ljava/util/concurrent/ThreadLocalRandom;"),
+                             false);
+    newTemp->visitVarInsn(Opcodes::ASTORE, 2);
+    // i = 0
+    newTemp->visitInsn(Opcodes::ICONST_0);
+    newTemp->visitVarInsn(Opcodes::ISTORE, 4);
+    // loop: f = new File(dir, "mj2x-" + Long.toHexString(rnd.nextLong()) + suffix)
+    // 注意：dir 为 String，构造器必须取 (Ljava/lang/String;Ljava/lang/String;)V
+    // 重载——曾误写 (File,String) 描述符致 VerifyError（#1183 排障记录）。
+    newTemp->visitLabel(tempLoop);
+    newTemp->visitTypeInsn(Opcodes::NEW, Utf8StringRef::from_cstr("java/io/File"));
+    newTemp->visitInsn(Opcodes::DUP);
+    newTemp->visitVarInsn(Opcodes::ALOAD, 1);
+    newTemp->visitTypeInsn(Opcodes::NEW, Utf8StringRef::from_cstr("java/lang/StringBuilder"));
+    newTemp->visitInsn(Opcodes::DUP);
+    newTemp->visitMethodInsn(Opcodes::INVOKESPECIAL,
+                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
+                             Utf8StringRef::from_cstr("<init>"),
+                             Utf8StringRef::from_cstr("()V"),
+                             false);
+    newTemp->visitLdcInsn(ca::core::Any(arena.intern("mj2x-")));
+    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
+                             Utf8StringRef::from_cstr("append"),
+                             Utf8StringRef::from_cstr(
+                                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
+                             false);
+    newTemp->visitVarInsn(Opcodes::ALOAD, 2);
+    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                             Utf8StringRef::from_cstr("java/util/concurrent/ThreadLocalRandom"),
+                             Utf8StringRef::from_cstr("nextLong"),
+                             Utf8StringRef::from_cstr("()J"),
+                             false);
+    newTemp->visitMethodInsn(Opcodes::INVOKESTATIC,
+                             Utf8StringRef::from_cstr("java/lang/Long"),
+                             Utf8StringRef::from_cstr("toHexString"),
+                             Utf8StringRef::from_cstr("(J)Ljava/lang/String;"),
+                             false);
+    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
+                             Utf8StringRef::from_cstr("append"),
+                             Utf8StringRef::from_cstr(
+                                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
+                             false);
+    newTemp->visitVarInsn(Opcodes::ALOAD, 0);
+    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
+                             Utf8StringRef::from_cstr("append"),
+                             Utf8StringRef::from_cstr(
+                                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
+                             false);
+    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
+                             Utf8StringRef::from_cstr("toString"),
+                             Utf8StringRef::from_cstr("()Ljava/lang/String;"),
+                             false);
+    newTemp->visitMethodInsn(Opcodes::INVOKESPECIAL,
+                             Utf8StringRef::from_cstr("java/io/File"),
+                             Utf8StringRef::from_cstr("<init>"),
+                             Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)V"),
+                             false);
+    newTemp->visitVarInsn(Opcodes::ASTORE, 3);
+    // if (!f.createNewFile()) goto retry（IFEQ 前跳重试；成功则顺序落入 return）
+    newTemp->visitVarInsn(Opcodes::ALOAD, 3);
+    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
+                             Utf8StringRef::from_cstr("java/io/File"),
+                             Utf8StringRef::from_cstr("createNewFile"),
+                             Utf8StringRef::from_cstr("()Z"),
+                             false);
+    newTemp->visitJumpInsn(Opcodes::IFEQ, tempRetry);
+    // hit: return f（createNewFile 成功，唯一前驱为本直落路径）
+    newTemp->visitVarInsn(Opcodes::ALOAD, 3);
+    newTemp->visitInsn(Opcodes::ARETURN);
+    // retry: i++; if (i < 32) goto loop（耗尽则顺序落入 throw）
+    newTemp->visitLabel(tempRetry);
+    newTemp->visitIincInsn(4, 1);
+    newTemp->visitVarInsn(Opcodes::ILOAD, 4);
+    newTemp->visitIntInsn(Opcodes::BIPUSH, 32);
+    newTemp->visitJumpInsn(Opcodes::IF_ICMPLT, tempLoop);
+    // next: throw new UnsatisfiedLinkError("mj2x native temp file create failed")
+    newTemp->visitLabel(tempNext);
+    newTemp->visitTypeInsn(Opcodes::NEW,
+                           Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"));
+    newTemp->visitInsn(Opcodes::DUP);
+    newTemp->visitLdcInsn(ca::core::Any(arena.intern("mj2x native temp file create failed")));
+    newTemp->visitMethodInsn(Opcodes::INVOKESPECIAL,
+                             Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"),
+                             Utf8StringRef::from_cstr("<init>"),
+                             Utf8StringRef::from_cstr("(Ljava/lang/String;)V"),
+                             false);
+    newTemp->visitInsn(Opcodes::ATHROW);
+    newTemp->visitMaxs(5, 5);
+    newTemp->visitEnd();
 
     cw.visitEnd();
     return cw.toByteArray();
