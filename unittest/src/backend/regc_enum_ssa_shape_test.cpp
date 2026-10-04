@@ -287,8 +287,10 @@ TEST(RegCEnumSsaShapeTest, ValuesHandRolledFieldOwnerMismatchRejected)
     EXPECT_FALSE(isJavacEnumValuesSsa(*h.fn));
 }
 
-// 红相：删任一指令 kind 检查（LoadField/Call/Convert）→ 缺一指令的形状漏进来，
-// 本测试转红（钉「同块 3 指令」完整性；缺 checkcast 的展开体语义已破）。
+// 红相：2 指令块（缺 checkcast）先被 size 门（同块 ≠ 3 指令）拒绝——单个 kind
+// 检查的删除不改变本例结果（2 指令撞不到 kind 门），故本例钉的是 size 门完整性；
+// 各 kind 检查由其余同形状例分钉（评审 P3-nit① 归属勘正）。缺 checkcast 的
+// 展开体语义已破，保留作形状文档。
 TEST(RegCEnumSsaShapeTest, ValuesMissingCheckCastRejected)
 {
     HandFn h = makeHandFn("Color", "values", "()[LColor;");
@@ -334,10 +336,12 @@ TEST(RegCEnumSsaShapeTest, ValuesWrongNameRejected)
     EXPECT_FALSE(isJavacEnumValuesSsa(*h.fn));
 }
 
-// 红相：删 desc 门（()[L 前缀 + 尾分号）→ 本测试转红。
+// 红相：删 desc 门（()[L 前缀 + 尾分号）→ 本测试转红。desc 取 "X)[LColor;" 使
+// substr(2) 恰为 "[LColor;"（与 field desc 一致、只漏前缀门）——若取 "(IL..."
+// 类非数组 desc，删门后仍被 field desc 失配拒绝，钉不住前缀门（评审 P3-nit② 勘正）。
 TEST(RegCEnumSsaShapeTest, ValuesWrongDescRejected)
 {
-    HandFn h = makeHandFn("Color", "values", "(ILColor;");   // 非数组返回描述符
+    HandFn h = makeHandFn("Color", "values", "X)[LColor;");  // 过数组形态、仅前缀门可拒
     SSAValue* ret = appendValuesShape(h, "Color", "[LColor;", "[LColor;");
     finishReturn(h, ret);
     EXPECT_FALSE(isJavacEnumValuesSsa(*h.fn));
