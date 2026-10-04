@@ -279,9 +279,10 @@ void test_regc_intrinsic_bit_ops(void)
 // 位路径版（Math.java 无 floatToIndex 辅助函数，该名出自 JDK-8010430 评审
 // 过程稿），照搬同路线会循环论证；此处按 JLS/Javadoc 契约独立推导：
 // closest int、tie→+∞、NaN→0、±Inf/出界按 Java cast 语义饱和。float→double
-// 恒等加宽后 floor(x+0.5) 对全部 |x| < 2^31 的 float 精确——float 有效位
-// ≤ 24，加半位后 ≤ 32 位 ≤ double 53 位，floor 结果为 ≤ 31 位整数亦精确，
-// 无二次舍入；与生产码位路径互为独立推导，对拍结论才非平凡。
+// 恒等加宽后 floor(x+0.5) 的加法在绝大多数域精确（float 有效位 ≤ 24，加半位
+// 后 ≤ 32 位 ≤ double 53 位）；仅 |x| 足够小时加法跨 53 位产生失真，但该区域
+// floor(x+0.5) 恒为 0、与精确结果一致——全域等价由 DISABLED_ 穷举兜底。
+// 与生产码位路径互为独立推导，对拍结论才非平凡。
 static int32_t round_f32_reference(float value)
 {
     if (isnan(value)) return 0;

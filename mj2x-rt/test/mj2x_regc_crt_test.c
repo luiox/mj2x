@@ -17,7 +17,6 @@ typedef struct thrown_exception
 void test_string_buffer_concurrency(void);
 void test_regc_intrinsic_c99_abi(void);
 void test_regc_intrinsic_bit_ops(void);
-void test_regc_intrinsic_bit_ops(void);
 void test_regc_intrinsic_DISABLED_round_f32_full_sweep(void);
 void test_safe_env(void);
 void mj2x_rt_protect_probe_test_run(void);
@@ -214,8 +213,9 @@ static void test_float_to_int_jvm_semantics(void)
 int main(int argc, char** argv)
 {
     // DISABLED_ 语义门（#1186）：纯 C 驱动器仿 gtest 约定——argv 白名单命中
-    // --gtest_also_run_disabled_tests 才追加执行 DISABLED_ 前缀测试；缺省时
-    // 函数集合与输出与既有套件完全一致（DISABLED_ 不计入日常跑套）。
+    // --gtest_also_run_disabled_tests（裸旗标或 =值 形式，=0 关、其余值开，
+    // 评审 P3-2）才追加执行 DISABLED_ 前缀测试；缺省时函数集合与输出与既有
+    // 套件完全一致（DISABLED_ 不计入日常跑套）。
     // --gtest_filter=DISABLED_* 仅门面兼容不单独路由（gtest 同语义：单独
     // 过滤 DISABLED_ 也是 0 例）。
     int run_disabled = 0;
@@ -223,6 +223,8 @@ int main(int argc, char** argv)
     for (argi = 1; argi < argc; ++argi) {
         if (strcmp(argv[argi], "--gtest_also_run_disabled_tests") == 0) {
             run_disabled = 1;
+        } else if (strncmp(argv[argi], "--gtest_also_run_disabled_tests=", 32) == 0) {
+            run_disabled = (strcmp(argv[argi] + 32, "0") != 0);
         }
     }
 
