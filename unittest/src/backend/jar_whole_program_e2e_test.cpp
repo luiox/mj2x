@@ -7,7 +7,8 @@
 //   逐行一致。
 //
 // 程序覆盖语义核心面：算术循环 / 位运算 / 递归 / 对象字段 / 数组 / 字符串拼接
-// （invokedynamic）/ try-catch 异常 / 反射 / 集合接口调用。
+// （invokedynamic）/ try-catch 异常 / 反射 / 集合接口调用 / 枚举语义（#1188
+// EnumSemCheck 收编：values/valueOf round-trip + try 块内 valueOf 非法名 catch）。
 // 三后端参数化：stackc / regc / vmc4（vmc4 额外覆盖 --vmc4-granularity program）。
 
 #include <gmock/gmock.h>
@@ -130,6 +131,7 @@ WholeProgram makeWholeProgram()
          "    System.out.println(\"ex=\" + Ex.guard(5));\n"
          "    System.out.println(\"ex2=\" + Ex.guard(-2));\n"
          "    System.out.println(\"refl=\" + Refl.name());\n"
+         "    System.out.println(\"enumsem=\" + EnumSem.check());\n"
          "    java.util.List<Integer> l = new java.util.ArrayList<>();\n"
          "    l.add(3); l.add(4);\n"
          "    System.out.println(\"col=\" + (l.get(0) + l.get(1)));\n"
@@ -173,6 +175,40 @@ WholeProgram makeWholeProgram()
          "  public static String name() {\n"
          "    try { return Class.forName(\"app.Refl\").getName(); }\n"
          "    catch (Exception e) { return \"err\"; }\n"
+         "  }\n"
+         "}\n"},
+        // #1188 EnumSemCheck 驱动收编（评审 N7）：枚举语义面在仓内可复核——
+        // values() 遍历 / valueOf 合法名 round-trip（引用恒等）/ name/ordinal /
+        // try 块内 valueOf 非法名必须 catch IAE（13-probe 外部门禁盲区：
+        // EnumProbe 仅合法名、ExceptionProbe 无 valueOf-in-try）。
+        {"Color",
+         "package app;\n"
+         "public enum Color {\n"
+         "  RED, GREEN, BLUE;\n"
+         "}\n"},
+        {"EnumSem",
+         "package app;\n"
+         "public class EnumSem {\n"
+         "  public static String check() {\n"
+         "    StringBuilder sb = new StringBuilder();\n"
+         "    int ord = 0;\n"
+         "    for (Color c : Color.values()) {\n"
+         "      ord += c.ordinal();\n"
+         "      if (Color.valueOf(c.name()) != c) sb.append(\"MISMATCH;\");\n"
+         "    }\n"
+         "    sb.append(\"ord=\").append(ord).append(\";\");\n"
+         "    try {\n"
+         "      Color bad = Color.valueOf(\"NOPE\");\n"
+         "      sb.append(\"NO-CATCH:\").append(bad).append(\";\");\n"
+         "    } catch (IllegalArgumentException e) {\n"
+         "      sb.append(\"caught-IAE;\");\n"
+         "    }\n"
+         "    try {\n"
+         "      sb.append(Color.valueOf(\"\").name());\n"
+         "    } catch (IllegalArgumentException e) {\n"
+         "      sb.append(\"caught-2\");\n"
+         "    }\n"
+         "    return sb.toString();\n"
          "  }\n"
          "}\n"},
     };

@@ -9,7 +9,9 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <vector>
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
@@ -562,4 +564,118 @@ TEST(SsaInlineTest, SkipsUnresolvableCall)
     EXPECT_EQ(stats.skippedUnresolvable, 1U);
     EXPECT_EQ(stats.inlinedCalls, 0U);
     EXPECT_EQ(countCalls(*callerSsa), 1U);
+}
+
+// ---------------------------------------------------------------------------
+// #1188：受保护块内内联必须补异常受保护边
+// ---------------------------------------------------------------------------
+
+TEST(SsaInlineTest, InlinedBlocksInheritCallerExceptionProtection)
+{
+    Utf8StringArena arena;
+
+    // callee: static int helper(int a) { return a + 1; }
+    auto callee = makeMethod(kStaticPublic, "helper", "(I)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0),
+                              new InsnNode(Opcodes::ICONST_1),
+                              new InsnNode(Opcodes::IADD),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 1);
+    // caller: static int f(int x) {
+    //   try { return helper(x); } catch (RuntimeException e) { return x + 1; }
+    // }
+    // handler 读 slot 0（参数）→ handler 块带 exception + slot0 两个 arg，
+    // 每条受保护边携带非空 handlerArgs（可验证传输拷贝）。
+    auto* tryStart  = new LabelNode(labelScratchArena().create<Label>());
+    auto* tryEnd    = new LabelNode(labelScratchArena().create<Label>());
+    auto* handlerBb = new LabelNode(labelScratchArena().create<Label>());
+    auto  caller    = makeMethod(kStaticPublic, "f", "(I)I",
+                                 {tryStart,
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  invokeStatic("InlineTest", "helper", "(I)I"),
+                                  new InsnNode(Opcodes::IRETURN),
+                                  tryEnd,
+                                  handlerBb,
+                                  new VarInsnNode(Opcodes::ASTORE, 1),
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ICONST_1),
+                                  new InsnNode(Opcodes::IADD),
+                                  new InsnNode(Opcodes::IRETURN)},
+                                 2, 2);
+    caller->tryCatchBlocks.push_back(new TryCatchBlockNode(
+        tryStart->label, tryEnd->label, handlerBb->label,
+        ca::str::Utf8StringRef::from_cstr("java/lang/RuntimeException")));
+
+    std::string reason;
+    std::unique_ptr<SSAFunction> callerSsa;
+    try {
+        callerSsa = buildSsa(*caller, arena, reason);
+    } catch (const std::exception& e) {
+        FAIL() << "buildSsa caller threw: " << e.what();
+    }
+    ASSERT_NE(callerSsa, nullptr) << reason;
+    ASSERT_EQ(callerSsa->exceptionRegions.size(), 1U)
+        << "caller must carry one exception region";
+    ASSERT_FALSE(callerSsa->exceptionRegions.front().edges.empty());
+    ASSERT_EQ(countCalls(*callerSsa), 1U);
+
+    // 内联前记录：块 id 集、调用块、调用块边的 handlerArgs。
+    std::set<ca::u32> idsBefore;
+    for (const auto& block : callerSsa->blocks) idsBefore.insert(block->id.value);
+    SSABlock*            callBlock = nullptr;
+    std::vector<SSAValue*> hostArgs;
+    for (const auto& block : callerSsa->blocks) {
+        bool hasCall = false;
+        for (const auto& ins : block->instructions) {
+            if (ins->kind == SSAInstructionKind::Call) hasCall = true;
+        }
+        if (!hasCall) continue;
+        callBlock = block.get();
+        for (const auto& edge : callerSsa->exceptionRegions.front().edges) {
+            if (edge.protectedBlock == callBlock) hostArgs = edge.handlerArgs;
+        }
+        break;
+    }
+    ASSERT_NE(callBlock, nullptr);
+
+    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+        if (ref.name != "helper" || ref.desc != "(I)I") return nullptr;
+        return buildSsa(*callee, arena, reason);
+    };
+    SsaInlineStats stats = applySsaInlining(*callerSsa, SsaInlineOptions{}, resolver, arena);
+    EXPECT_EQ(stats.inlinedCalls, 1U);
+    EXPECT_EQ(countCalls(*callerSsa), 0U);
+
+    // 不变量：每个新增块（克隆体 + merge）必须登记为受保护块，且有边、
+    // 边的 handlerArgs 与调用块边一致（调用点前帧状态）。
+    const auto& region = callerSsa->exceptionRegions.front();
+    std::set<ca::u32> idsAfter;
+    for (const auto& block : callerSsa->blocks) idsAfter.insert(block->id.value);
+    ca::usize newBlocks = 0;
+    for (ca::u32 id : idsAfter) {
+        if (idsBefore.count(id) != 0) continue;
+        ++newBlocks;
+        SSABlock* newBlock = nullptr;
+        for (const auto& block : callerSsa->blocks) {
+            if (block->id.value == id) newBlock = block.get();
+        }
+        ASSERT_NE(newBlock, nullptr);
+        bool protectedSeen = false;
+        for (const auto* pb : region.protectedBlocks) {
+            if (pb == newBlock) protectedSeen = true;
+        }
+        EXPECT_TRUE(protectedSeen)
+            << "new block b" << id << " must be registered as protected (#1188)";
+        bool edgeSeen      = false;
+        bool argsMatch     = false;
+        for (const auto& edge : region.edges) {
+            if (edge.protectedBlock != newBlock) continue;
+            edgeSeen  = true;
+            argsMatch = edge.handlerArgs == hostArgs;
+        }
+        EXPECT_TRUE(edgeSeen) << "new block b" << id << " must carry an exception edge";
+        EXPECT_TRUE(argsMatch) << "new block edge handlerArgs must equal call-block edge";
+    }
+    EXPECT_GT(newBlocks, 0U) << "inlining must have appended blocks";
+    EXPECT_TRUE(lowerOk(*callerSsa, reason)) << reason;
 }
