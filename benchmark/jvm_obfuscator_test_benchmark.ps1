@@ -1,7 +1,7 @@
 ﻿# jvm_obfuscator_test_benchmark.ps1 — RegC vs os30(JNIC) 13-probe 性能对比基准
 #
 # 用途：把 jvm-obf-tester（13 个探针 jar）用 mj2x-cli --backend regc 全量 native 化，
-# 与竞品 os30（JNIC 混淆产物）在同一 JDK 下对比各探针耗时，产出 markdown 报告。
+# 与竞品 os30（JNIC 混淆产物）在同一 JDK 下对比各探针耗时，产出 markdown + CSV 报告。
 # 依据：issue #787 §3.1（RegC 性能基线）+ #778（热循环性能对比）+ #887（方法论升级）。
 #
 # 方法学（performance_evaluation_spec.md 强制项 + #887 修尺子）：
@@ -9,17 +9,21 @@
 #      未附覆盖率的性能数据不予采信；
 #   2. 预热 WarmupRuns 轮（默认 3，不计入统计）；
 #   3. Runs 轮计量取样（默认 9），以中位数为主指标，
-#      同时输出 min/max/均值/标准差/CV%；
+#      同时输出 min/max/p95/均值/标准差/方差/CV%；
 #   4. 任一 CV% 超过 MaxCvPercent（默认 15）→ 报告显式标记"高方差，结果存疑"，
 #      防止单次/低样本均值造成"假打平"结论（#887：72.7 vs 71ms 即被噪声误导）；
 #   5. os30 基线缺失时 fail-closed：给出明确错误与放置路径说明，
 #      不静默跳过、不拿旧数据对比；
-#   6. 输出报告落盘到 benchmark/results/。
+#   6. 输出报告落盘到 benchmark/results/（markdown 表 + runs/stats 两个 CSV）。
+#   7. 双 JDK 参数化（#887）：-JdkHomes 传多个 JDK 时逐 JDK 计量，
+#      输出跨 JDK 对比表；同一进程会话内顺序完成，避免跨时段噪声。
 #
 # 用法：
 #   pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -Runs 9
 #   pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHome C:\Users\Canrad\.jdks\corretto-21.0.4
 #   pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -SkipBuild          # 复用已构建的 CLI
+#   pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHomes A,B       # 双 JDK 参数化（#887）
+#   pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -Attribution        # GC/类加载/JIT 日志采集
 #
 # 注意：脚本内 xmake 配置均用 -P 显式指定项目，避免 `xmake f -P` 破坏 root 配置（issue #782）。
 
@@ -27,7 +31,8 @@ param(
     [string]$Cli = "",                                    # mj2x-cli 路径；默认 <repo>/build/windows/x64/release/mj2x-cli.exe
     [string]$InputJar = "D:\WorkSpace\jvm-obf-tester\target\jvm-obf-tester.jar",
     [string]$Os30Jar = "D:\WorkSpace\jvm-obf-tester\target\jvm-obf-tester_os30.jar",
-    [string]$JdkHome = "",                                # 默认 $env:JAVA_HOME；JAVA_HOME 未设置则用 D:\sdk\java\jdk17
+    [string]$JdkHome = "",                                # 单 JDK 模式；默认 $env:JAVA_HOME。与 -JdkHomes 互斥（-JdkHomes 优先）
+    [string[]]$JdkHomes = @(),                            # 双 JDK 参数化（#887）：多个 JDK 时逐 JDK 计量并输出跨 JDK 对比表
     [int]$Runs = 9,                                       # 计量取样轮数（不含预热，≥9；中位数为主指标）
     [int]$WarmupRuns = 3,                                 # JVM 预热轮数（不计入统计）
     [double]$MaxCvPercent = 15.0,                         # CV% 阈值：超过即在报告标记"高方差，结果存疑"（#887）
@@ -36,22 +41,33 @@ param(
     [double]$MaxTotalRatio = 2.0,                         # 回归：RegC total 允许相对基线的最差倍率（防性能退化）
     [double]$MinCoverageRatio = 0.9,                      # 回归：native 覆盖率允许相对基线的最低比例
     [switch]$Regression,                                  # 回归模式：#820 步骤 5。断言 13-probe 全过 + 覆盖率 + 总耗时阈值，失败退出非零；跳过 os30 取样
-    [switch]$UpdateBaseline                               # 把本次 RegC 结果写入基线文件（维护基线用）
+    [switch]$UpdateBaseline,                              # 把本次 RegC 结果写入基线文件（维护基线用；多 JDK 时取第一个 JDK 的结果）
+    [switch]$RegcDirectCalls,                             # 转换时启用 --regc-direct-calls（#887 直调口径；产物间 native-to-native 直调）
+    [switch]$Attribution                                  # 方差归因模式（#887）：每 JDK×产物额外跑 1 轮冷启动，采集 GC/类加载/JIT 日志
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 
-if ([string]::IsNullOrWhiteSpace($JdkHome)) {
-    if (-not [string]::IsNullOrWhiteSpace($env:JAVA_HOME)) { $JdkHome = $env:JAVA_HOME }
-    elseif (Test-Path "D:\sdk\java\jdk17") { $JdkHome = "D:\sdk\java\jdk17" }
-    else { throw "JAVA_HOME 未设置且未找到 D:\sdk\java\jdk17，请用 -JdkHome 指定" }
+# ---- JDK 解析：-JdkHomes 优先；为空时退回单 -JdkHome（兼容既有调用） ----
+if ($JdkHomes.Count -gt 0) {
+    # -File 调用时 shell 不会把 `a,b` 解析成数组——整串按逗号拆开（pwsh -Command 才有数组字面量）。
+    $jdkHomeList = @($JdkHomes | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+} else {
+    if ([string]::IsNullOrWhiteSpace($JdkHome)) {
+        if (-not [string]::IsNullOrWhiteSpace($env:JAVA_HOME)) { $JdkHome = $env:JAVA_HOME }
+        elseif (Test-Path "D:\sdk\java\jdk17") { $JdkHome = "D:\sdk\java\jdk17" }
+        else { throw "JAVA_HOME 未设置且未找到 D:\sdk\java\jdk17，请用 -JdkHome/-JdkHomes 指定" }
+    }
+    $jdkHomeList = @($JdkHome)
 }
-if (-not (Test-Path (Join-Path $JdkHome "bin\java.exe"))) { throw "JDK 无效: $JdkHome" }
-$java = Join-Path $JdkHome "bin\java.exe"
-$javac = Join-Path $JdkHome "bin\javac.exe"
-$jar = Join-Path $JdkHome "bin\jar.exe"
-$javap = Join-Path $JdkHome "bin\javap.exe"
+$javaByHome = @{}
+foreach ($jdkHome in $jdkHomeList) {
+    if (-not (Test-Path (Join-Path $jdkHome "bin\java.exe"))) { throw "JDK 无效: $jdkHome" }
+    $javaByHome[$jdkHome] = Join-Path $jdkHome "bin\java.exe"
+}
+$javap = Join-Path $jdkHomeList[0] "bin\javap.exe"
+$jarTool = Join-Path $jdkHomeList[0] "bin\jar.exe"
 
 $stamp = Get-Date -Format "yyyy-MM-dd"
 $outDir = Join-Path $repo "test\jvm-obf-tester"
@@ -117,8 +133,9 @@ if (-not $SkipBuild) {
 Write-Host "==> RegC 转换 + native 编译 ..."
 Remove-Item -Recurse -Force $projDir -ErrorAction SilentlyContinue
 Remove-Item -Force $outJar -ErrorAction SilentlyContinue
-Run-ProcessChecked $Cli @("-i", $InputJar, "-o", $outJar, "--backend", "regc", "--generate-xmake", $projDir) `
-    $outDir (Join-Path $outDir "regc-convert.log") | Out-Null
+$convertArgs = @("-i", $InputJar, "-o", $outJar, "--backend", "regc", "--generate-xmake", $projDir)
+if ($RegcDirectCalls) { $convertArgs += "--regc-direct-calls" }
+Run-ProcessChecked $Cli $convertArgs $outDir (Join-Path $outDir "regc-convert.log") | Out-Null
 # -p windows -a x64 显式指定：shell 环境的 PATH/MSYSTEM 污染会让 xmake
 # 平台自检误判为 mingw（Git 自带 mingw64），基准口径漂移 + toolchain not found。
 Run-ProcessChecked "xmake" @("f", "-P", $projDir, "-p", "windows", "-a", "x64", "-m", "release") `
@@ -137,24 +154,24 @@ Remove-Item -Recurse -Force $embed -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $embed "META-INF\mj2x\native") | Out-Null
 Copy-Item $dll (Join-Path $embed "META-INF\mj2x\native\jvm-obf-tester-regc.dll") -Force
 Push-Location $embed
-& $jar uf $outJar "META-INF/mj2x/native/jvm-obf-tester-regc.dll" 2>&1 | Out-Null
+& $jarTool uf $outJar "META-INF/mj2x/native/jvm-obf-tester-regc.dll" 2>&1 | Out-Null
 Pop-Location
 
 # ---- 3. 覆盖率审计（javap 验证 ACC_NATIVE + 无 Code 属性） ----
 # 口径：可执行方法（排除 abstract）中的 native 比例。
-function Get-NativeCoverage([string]$JarPath, [string]$WorkDir) {
+function Get-NativeCoverage([string]$JarPath, [string]$WorkDir, [string]$JdkHomePath) {
     $classesDir = Join-Path $WorkDir "audit-classes"
     Remove-Item -Recurse -Force $classesDir -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $classesDir | Out-Null
     Push-Location $classesDir
-    & $jar xf $JarPath 2>&1 | Out-Null
+    & $jarTool xf $JarPath 2>&1 | Out-Null
     Pop-Location
 
     $total = 0; $executable = 0; $native = 0
     Get-ChildItem -Path $classesDir -Recurse -Filter "*.class" | ForEach-Object {
         $rel = $_.FullName.Substring($classesDir.Length + 1) -replace "\\", "/"
         $className = $rel -replace "\.class$", "" -replace "/", "."
-        $javapOut = & $javap -p -classpath $classesDir $className 2>&1
+        $javapOut = & (Join-Path $JdkHomePath "bin\javap.exe") -p -classpath $classesDir $className 2>&1
         foreach ($line in $javapOut) {
             # 方法声明行（javap -p 格式）：`  public static native int foo(int, int);`
             # 排除：字段行（含 = 或 ; 后无括号）、`static {}` 初始化块（无括号参数）。
@@ -171,16 +188,16 @@ function Get-NativeCoverage([string]$JarPath, [string]$WorkDir) {
 }
 
 Write-Host "==> 覆盖率审计（javap） ..."
-$audit = Get-NativeCoverage $outJar (Join-Path $outDir "audit-regc")
+$audit = Get-NativeCoverage $outJar (Join-Path $outDir "audit-regc") $jdkHomeList[0]
 if ($Regression) {
     $auditOs30 = $null
 } else {
-    $auditOs30 = Get-NativeCoverage $Os30Jar (Join-Path $outDir "audit-os30")
+    $auditOs30 = Get-NativeCoverage $Os30Jar (Join-Path $outDir "audit-os30") $jdkHomeList[0]
 }
 
 # ---- 4. 跑 13-probe（预热 WarmupRuns 轮 + Runs 轮计量，#887 方法论） ----
-function Run-Probes([string]$JarPath) {
-    return & $java -jar $JarPath 2>&1
+function Run-Probes([string]$JavaPath, [string]$JarPath) {
+    return & $JavaPath -jar $JarPath 2>&1
 }
 
 function Get-ProbeTimes([string[]]$Lines) {
@@ -199,11 +216,11 @@ function Get-ProbeTimes([string[]]$Lines) {
 
 # 单产物完整计量：WarmupRuns 轮 JVM 预热（每轮独立 JVM，不计入统计）+
 # Runs 轮计量取样（每轮独立 JVM 冷启动，与既有口径一致）。
-function Measure-Jar([string]$JarPath) {
-    for ($i = 1; $i -le $WarmupRuns; $i++) { Run-Probes $JarPath | Out-Null }
+function Measure-Jar([string]$JavaPath, [string]$JarPath) {
+    for ($i = 1; $i -le $WarmupRuns; $i++) { Run-Probes $JavaPath $JarPath | Out-Null }
     $totals = @(); $maps = @()
     for ($i = 1; $i -le $Runs; $i++) {
-        $out = Run-Probes $JarPath
+        $out = Run-Probes $JavaPath $JarPath
         $m = [regex]::Match(($out -join "`n"), "Total time:\s*(\d+)ms")
         $totals += [int]$m.Groups[1].Value
         $maps += Get-ProbeTimes $out
@@ -211,8 +228,9 @@ function Measure-Jar([string]$JarPath) {
     return [pscustomobject]@{ Totals = $totals; Maps = $maps }
 }
 
-# 运行统计（#887 修尺子）：中位数为主指标，附 min/max/均值/标准差/CV%。
-# CV% = 标准差/均值，用于识别 RegC 产物 60~203ms 一类的高方差分布。
+# 运行统计（#887 修尺子）：中位数为主指标，附 min/max/p95/均值/标准差/方差/CV%。
+# CV% = 标准差/均值，用于识别 RegC 产物 60~203ms 一类的高方差分布；
+# p95（nearest-rank）对调用方判断长尾位置（如"9 轮里最差的 5% 有多差"）。
 function Get-RunStats([double[]]$Values) {
     $sorted = @($Values | Sort-Object)
     $n = $sorted.Count
@@ -222,14 +240,17 @@ function Get-RunStats([double[]]$Values) {
     $mean = if ($n -gt 0) { [double]($sorted | Measure-Object -Average).Average } else { 0.0 }
     $min = if ($n -gt 0) { [double]$sorted[0] } else { 0.0 }
     $max = if ($n -gt 0) { [double]$sorted[$n - 1] } else { 0.0 }
-    $stddev = 0.0
+    # nearest-rank p95：ceil(0.95*n) 位样本（n=9 → 第 9 位即 max；n=20 → 第 19 位）。
+    $p95 = if ($n -gt 0) { [double]$sorted[[math]::Min($n - 1, [int][math]::Ceiling(0.95 * $n) - 1)] } else { 0.0 }
+    $variance = 0.0
     if ($n -gt 1) {
         $sumSq = 0.0
         foreach ($v in $sorted) { $sumSq += ($v - $mean) * ($v - $mean) }
-        $stddev = [math]::Sqrt($sumSq / ($n - 1))
+        $variance = $sumSq / ($n - 1)
     }
+    $stddev = [math]::Sqrt($variance)
     $cv = if ($mean -gt 0) { 100.0 * $stddev / $mean } else { 0.0 }
-    return [pscustomobject]@{ Median = $median; Mean = $mean; Min = $min; Max = $max; StdDev = $stddev; CvPercent = $cv; Count = $n }
+    return [pscustomobject]@{ Median = $median; Mean = $mean; Min = $min; Max = $max; P95 = $p95; StdDev = $stddev; Variance = $variance; CvPercent = $cv; Count = $n }
 }
 
 # 报告数字格式化统一出口（1/2/3 位小数），避免行内 [math]::Round 噪声。
@@ -255,57 +276,121 @@ function Get-StatsFace([object]$Measurement) {
     return [pscustomobject]@{ Total = (Get-RunStats $Measurement.Totals); Probes = $probeStats }
 }
 
-Write-Host "==> 跑探针（预热 $WarmupRuns 轮 + $Runs 轮计量，主指标=中位数） ..."
-$regcMeasurement = Measure-Jar $outJar
-$regcFace = Get-StatsFace $regcMeasurement
-$os30Measurement = $null
-$os30Face = $null
-if (-not $Regression) {
-    $os30Measurement = Measure-Jar $Os30Jar
-    $os30Face = Get-StatsFace $os30Measurement
+# JDK 标签：从 `java -version` 首行取版本主号（如 21/25），跨 JDK 表格列名用。
+function Get-JdkContext([string]$JdkHomePath) {
+    $java = $javaByHome[$JdkHomePath]
+    # java -version 走 stderr；PS5.1 会把 NativeCommandError 记录混入管道，经
+    # cmd /c 合并后取纯文本（基线 meta.jdk 同口径，防 ErrorRecord 污染 JSON）。
+    $versionLine = [string]((cmd /c "`"$java`" -version 2>&1" | Select-Object -First 1))
+    $major = if ($versionLine -match 'version "(\d+)') { $Matches[1] } else { "unknown" }
+    return [pscustomobject]@{ JdkHome = $JdkHomePath; Java = $java; Tag = "jdk$major"; Version = $versionLine }
+}
+
+Write-Host "==> 跑探针（$($jdkHomeList.Count) 个 JDK × 预热 $WarmupRuns 轮 + $Runs 轮计量，主指标=中位数） ..."
+$faces = @()
+foreach ($jdkHomePath in $jdkHomeList) {
+    $ctx = Get-JdkContext $jdkHomePath
+    Write-Host "--- [$($ctx.Tag)] RegC ..."
+    $regcMeasurement = Measure-Jar $ctx.Java $outJar
+    $os30Measurement = $null
+    if (-not $Regression) {
+        Write-Host "--- [$($ctx.Tag)] os30 ..."
+        $os30Measurement = Measure-Jar $ctx.Java $Os30Jar
+    }
+    $faces += [pscustomobject]@{
+        Ctx = $ctx
+        Regc = (Get-StatsFace $regcMeasurement)
+        RegcMeasurement = $regcMeasurement
+        Os30 = $(if ($null -ne $os30Measurement) { Get-StatsFace $os30Measurement } else { $null })
+        Os30Measurement = $os30Measurement
+    }
 }
 
 # 高方差存疑清单（#887）：total 或任一 probe 的 CV% 超阈值即入列，
 # 报告显式呈现，防止"假打平"再次误导结论。
 $highVariance = New-Object System.Collections.Generic.List[string]
-if ($regcFace.Total.CvPercent -gt $MaxCvPercent) {
-    $highVariance.Add("RegC total (CV=$([math]::Round($regcFace.Total.CvPercent, 1))%)")
-}
-foreach ($k in ($regcFace.Probes.Keys | Sort-Object)) {
-    $s = $regcFace.Probes[$k]
-    if ($s.CvPercent -gt $MaxCvPercent) {
-        $highVariance.Add("RegC $k (CV=$([math]::Round($s.CvPercent, 1))%)")
+foreach ($face in $faces) {
+    $tag = $face.Ctx.Tag
+    if ($face.Regc.Total.CvPercent -gt $MaxCvPercent) {
+        $highVariance.Add("$tag RegC total (CV=$([math]::Round($face.Regc.Total.CvPercent, 1))%)")
     }
-}
-if ($os30Face -ne $null) {
-    if ($os30Face.Total.CvPercent -gt $MaxCvPercent) {
-        $highVariance.Add("os30 total (CV=$([math]::Round($os30Face.Total.CvPercent, 1))%)")
-    }
-    foreach ($k in ($os30Face.Probes.Keys | Sort-Object)) {
-        $s = $os30Face.Probes[$k]
+    foreach ($k in ($face.Regc.Probes.Keys | Sort-Object)) {
+        $s = $face.Regc.Probes[$k]
         if ($s.CvPercent -gt $MaxCvPercent) {
-            $highVariance.Add("os30 $k (CV=$([math]::Round($s.CvPercent, 1))%)")
+            $highVariance.Add("$tag RegC $k (CV=$([math]::Round($s.CvPercent, 1))%)")
+        }
+    }
+    if ($null -ne $face.Os30) {
+        if ($face.Os30.Total.CvPercent -gt $MaxCvPercent) {
+            $highVariance.Add("$tag os30 total (CV=$([math]::Round($face.Os30.Total.CvPercent, 1))%)")
+        }
+        foreach ($k in ($face.Os30.Probes.Keys | Sort-Object)) {
+            $s = $face.Os30.Probes[$k]
+            if ($s.CvPercent -gt $MaxCvPercent) {
+                $highVariance.Add("$tag os30 $k (CV=$([math]::Round($s.CvPercent, 1))%)")
+            }
         }
     }
 }
 
-# ---- 5. 报告 ----
+# ---- 5. 归因模式（#887）：每 JDK×产物额外 1 轮冷启动，采集 GC/类加载/JIT 日志 ----
+# 相对路径落日志（-Xlog file= 相对 cwd）：Windows 盘符冒号会截断 -Xlog 的 file= 值。
+function Invoke-AttributionRound([object]$Ctx, [string]$JarPath, [string]$ArtifactName) {
+    $logDir = Join-Path $outDir "attribution"
+    New-Item -ItemType Directory -Force $logDir | Out-Null
+    $tag = "$($Ctx.Tag)-$ArtifactName"
+    # JIT 时间线用 -XX:+PrintCompilation（stdout 捕获进 $tag.stdout.log，含
+    # "made not entrant/deoptimiz" 标记）：实测 -Xlog:jit+compilation 在本机
+    # MS JDK 21.0.11 下静默零输出（JDK25 正常），PrintCompilation 全版本可靠。
+    $args = @(
+        "-Xlog:gc=info:file=$tag.gc.log:time,uptime",
+        "-Xlog:class+load=info:file=$tag.classload.log:time,uptime",
+        "-Xlog:deoptimization=info:file=$tag.deopt.log:time,uptime",
+        "-XX:+PrintCompilation",
+        "-jar", $JarPath
+    )
+    $stdout = Run-ProcessChecked $Ctx.Java $args $logDir (Join-Path $logDir "$tag.stdout.log")
+    Write-Host "    归因日志 → $logDir\$tag.*.log"
+    return $stdout
+}
+
+$attributionDir = $null
+if ($Attribution) {
+    $attributionDir = Join-Path $outDir "attribution"
+    New-Item -ItemType Directory -Force $attributionDir | Out-Null
+    Write-Host "==> 归因日志采集（GC/类加载/JIT，冷启动 1 轮） ..."
+    # 默认 GC 识别：-Xlog:gc -version 首行打印 "Using G1"/"Using The Z Garbage Collector"。
+    $gcLines = New-Object System.Collections.Generic.List[string]
+    foreach ($face in $faces) {
+        $gcDefault = (Run-ProcessChecked $face.Ctx.Java @("-Xlog:gc", "-version") $outDir $null | Select-String "Using").ToString()
+        $gcLines.Add("$($face.Ctx.Tag) ($($face.Ctx.Version)): $gcDefault")
+        Invoke-AttributionRound $face.Ctx $outJar "regc" | Out-Null
+        if (-not $Regression) { Invoke-AttributionRound $face.Ctx $Os30Jar "os30" | Out-Null }
+    }
+    Set-Content -Path (Join-Path $attributionDir "default-gc.txt") -Value $gcLines -Encoding UTF8
+    Write-Host ($gcLines | ForEach-Object { "    $_" })
+}
+
+# ---- 6. 报告（markdown + CSV） ----
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("# jvm-obf-tester 13-probe 对比（$stamp）")
 $lines.Add("")
-# java -version 走 stderr；PS5.1 会把 NativeCommandError 记录混入管道，经
-# cmd /c 合并后取纯文本（基线 meta.jdk 同口径，防 ErrorRecord 污染 JSON）。
-$jdkVersion = [string]((cmd /c "`"$java`" -version 2>&1" | Select-Object -First 1))
-$lines.Add("- 环境：JDK $jdkVersion")
-$lines.Add("- 取样：预热 $WarmupRuns 轮（不计入统计）+ $Runs 轮计量；主指标=中位数，附 min~max 与 CV%")
+$jdkDesc = ($faces | ForEach-Object { "$($_.Ctx.Tag) [$($_.Ctx.Version)]" }) -join "、"
+$lines.Add("- 环境：JDK $jdkDesc（$($faces.Count) 个 JDK，同一会话顺序计量）")
+$lines.Add("- 取样：预热 $WarmupRuns 轮（不计入统计）+ $Runs 轮计量；主指标=中位数，附 min~max/p95 与 CV%")
 $lines.Add("- 高方差判定：CV% > $MaxCvPercent% 标记 ⚠ 并汇总为存疑项（#887 方法论）")
-$lines.Add("- RegC 产物：$outJar（mj2x-cli --backend regc 全量转换 + xmake 编译嵌入）")
-if ($Regression) {
-    $lines.Add("- 模式：性能回归（#820 步骤 5，基线 $BaselineFile，MaxTotalRatio=$MaxTotalRatio，MinCoverageRatio=$MinCoverageRatio）")
-} else {
+$dcNote = if ($RegcDirectCalls) { "开（--regc-direct-calls，native-to-native 直调口径）" } else { "关（默认 JNI 边界口径）" }
+$lines.Add("- RegC 产物：$outJar（mj2x-cli --backend regc 全量转换 + xmake 编译嵌入；直调：$dcNote）")
+if (-not $Regression) {
     # 记录 os30 产物的体积与时间戳：防止拿旧版本数据对比而不自知（#887）。
     $os30Item = Get-Item $Os30Jar
     $lines.Add("- os30 产物：$Os30Jar（JNIC 竞品，黑盒对比；$($os30Item.Length) 字节，$($os30Item.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))）")
+}
+if ($Regression) {
+    $lines.Add("- 模式：性能回归（#820 步骤 5，基线 $BaselineFile，MaxTotalRatio=$MaxTotalRatio，MinCoverageRatio=$MinCoverageRatio；多 JDK 时取第一个 JDK 的结果）")
+}
+if ($Attribution) {
+    $lines.Add("- 归因日志：$attributionDir（GC/类加载/JIT，各 JDK×产物冷启动 1 轮；default-gc.txt 记录各 JDK 默认收集器）")
 }
 $lines.Add("")
 # 高方差警告置顶：结论性阅读前先看这里（#887：假打平的教训）。
@@ -324,82 +409,179 @@ if (-not $Regression) {
     $lines.Add("| os30 | $($auditOs30.Total) | $($auditOs30.Executable) | $($auditOs30.Native) | $($auditOs30.Percent)% |")
 }
 $lines.Add("")
-$lines.Add("## 总耗时（ms，主指标=中位数）")
-$lines.Add("")
-if ($Regression) {
-    $lines.Add("| 项 | RegC 中位数 | RegC min~max | RegC CV% |")
-    $lines.Add("|---|---|---|---|")
-    $t = $regcFace.Total
-    $regcTotalCvCell = "$(Round1 $t.CvPercent)%$(if ($t.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
-    $lines.Add("| Total | $(Round1 $t.Median) | $(Round1 $t.Min)~$(Round1 $t.Max) | $regcTotalCvCell |")
-} else {
-    $rt = $regcFace.Total
-    $ot = $os30Face.Total
+
+# 跨 JDK 总耗时对比表（多 JDK 时）
+if ($faces.Count -gt 1 -and -not $Regression) {
+    $lines.Add("## 跨 JDK 总耗时对比（ms，主指标=中位数）")
+    $lines.Add("")
+    $header = "| 项 |"
+    $sep = "|---|"
+    foreach ($face in $faces) {
+        $header += " $($face.Ctx.Tag) RegC 中位数 | $($face.Ctx.Tag) os30 中位数 | $($face.Ctx.Tag) ratio |"
+        $sep += "---|---|---|"
+    }
+    $lines.Add($header)
+    $lines.Add($sep)
+    $row = "| Total |"
+    foreach ($face in $faces) {
+        $rt = $face.Regc.Total; $ot = $face.Os30.Total
+        $row += " $(Round1 $rt.Median) | $(Round1 $ot.Median) | $(Round2 ($rt.Median / $ot.Median)) |"
+    }
+    $lines.Add($row)
+    $lines.Add("")
+}
+
+# 跨 JDK 探针 ratio 对比表（多 JDK 时）：一表看清哪些探针在哪些 JDK 上落后/领先。
+if ($faces.Count -gt 1 -and -not $Regression) {
+    $lines.Add("## 跨 JDK 探针 ratio 对比（RegC 中位数 / os30 中位数）")
+    $lines.Add("")
+    $header = "| Probe |"
+    $sep = "|---|"
+    foreach ($face in $faces) { $header += " $($face.Ctx.Tag) ratio |"; $sep += "---|" }
+    $lines.Add($header)
+    $lines.Add($sep)
+    $probeNames = $faces[0].Os30.Probes.Keys | Sort-Object
+    foreach ($k in $probeNames) {
+        $row = "| $k |"
+        foreach ($face in $faces) {
+            $o = $face.Os30.Probes[$k]
+            $r = if ($face.Regc.Probes.ContainsKey($k)) { $face.Regc.Probes[$k].Median } else { 0.0 }
+            $row += " $(if ($o.Median -gt 0) { Round2 ($r / $o.Median) } else { '-' }) |"
+        }
+        $lines.Add($row)
+    }
+    $lines.Add("")
+}
+
+# 每 JDK 明细节
+foreach ($face in $faces) {
+    $lines.Add("## $($face.Ctx.Tag)（$($face.Ctx.Version)）")
+    $lines.Add("")
+    $lines.Add("### 总耗时（ms，主指标=中位数）")
+    $lines.Add("")
+    $rt = $face.Regc.Total
     $regcTotalCvCell = "$(Round1 $rt.CvPercent)%$(if ($rt.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
-    $os30TotalCvCell = "$(Round1 $ot.CvPercent)%$(if ($ot.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
-    $lines.Add("| 项 | RegC 中位数 | RegC min~max | RegC CV% | os30 中位数 | os30 min~max | os30 CV% | ratio (中位数) |")
-    $lines.Add("|---|---|---|---|---|---|---|---|")
-    $lines.Add("| Total | $(Round1 $rt.Median) | $(Round1 $rt.Min)~$(Round1 $rt.Max) | $regcTotalCvCell | $(Round1 $ot.Median) | $(Round1 $ot.Min)~$(Round1 $ot.Max) | $os30TotalCvCell | $(Round2 ($rt.Median / $ot.Median)) |")
-}
-$lines.Add("")
-$lines.Add("## 各探针耗时（ms，主指标=中位数）")
-$lines.Add("")
-if ($Regression) {
-    $lines.Add("| Probe | RegC 中位数 | RegC CV% |")
-    $lines.Add("|---|---|---|")
-    foreach ($k in ($regcFace.Probes.Keys | Sort-Object)) {
-        $s = $regcFace.Probes[$k]
-        $cvCell = "$(Round1 $s.CvPercent)%$(if ($s.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
-        $lines.Add("| $k | $(Round3 $s.Median) | $cvCell |")
+    if ($Regression) {
+        $lines.Add("| 项 | RegC 中位数 | RegC min~max | RegC p95 | RegC CV% |")
+        $lines.Add("|---|---|---|---|---|")
+        $lines.Add("| Total | $(Round1 $rt.Median) | $(Round1 $rt.Min)~$(Round1 $rt.Max) | $(Round1 $rt.P95) | $regcTotalCvCell |")
+    } else {
+        $ot = $face.Os30.Total
+        $os30TotalCvCell = "$(Round1 $ot.CvPercent)%$(if ($ot.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
+        $lines.Add("| 项 | RegC 中位数 | RegC min~max | RegC p95 | RegC CV% | os30 中位数 | os30 min~max | os30 p95 | os30 CV% | ratio (中位数) |")
+        $lines.Add("|---|---|---|---|---|---|---|---|---|---|")
+        $lines.Add("| Total | $(Round1 $rt.Median) | $(Round1 $rt.Min)~$(Round1 $rt.Max) | $(Round1 $rt.P95) | $regcTotalCvCell | $(Round1 $ot.Median) | $(Round1 $ot.Min)~$(Round1 $ot.Max) | $(Round1 $ot.P95) | $os30TotalCvCell | $(Round2 ($rt.Median / $ot.Median)) |")
     }
-} else {
-    $lines.Add("| Probe | RegC 中位数 | RegC CV% | os30 中位数 | os30 CV% | ratio (中位数) |")
-    $lines.Add("|---|---|---|---|---|---|")
-    foreach ($k in ($os30Face.Probes.Keys | Sort-Object)) {
-        $o = $os30Face.Probes[$k]
-        $r = if ($regcFace.Probes.ContainsKey($k)) { $regcFace.Probes[$k] } else { $null }
-        $rMedian = if ($r -ne $null) { $r.Median } else { 0.0 }
-        $rCv = if ($r -ne $null) { $r.CvPercent } else { 0.0 }
-        $rCell = "$(Round1 $rCv)%$(if ($rCv -gt $MaxCvPercent) { ' ⚠' } else { '' })"
-        $oCell = "$(Round1 $o.CvPercent)%$(if ($o.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
-        $rr = if ($o.Median -gt 0) { Round2 ($rMedian / $o.Median) } else { "-" }
-        $lines.Add("| $k | $(Round3 $rMedian) | $rCell | $(Round3 $o.Median) | $oCell | $rr |")
+    $lines.Add("")
+    $lines.Add("### 各探针耗时（ms，主指标=中位数）")
+    $lines.Add("")
+    if ($Regression) {
+        $lines.Add("| Probe | RegC 中位数 | RegC CV% |")
+        $lines.Add("|---|---|---|")
+        foreach ($k in ($face.Regc.Probes.Keys | Sort-Object)) {
+            $s = $face.Regc.Probes[$k]
+            $cvCell = "$(Round1 $s.CvPercent)%$(if ($s.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
+            $lines.Add("| $k | $(Round3 $s.Median) | $cvCell |")
+        }
+    } else {
+        $lines.Add("| Probe | RegC 中位数 | RegC CV% | os30 中位数 | os30 CV% | ratio (中位数) |")
+        $lines.Add("|---|---|---|---|---|---|")
+        foreach ($k in ($face.Os30.Probes.Keys | Sort-Object)) {
+            $o = $face.Os30.Probes[$k]
+            $r = if ($face.Regc.Probes.ContainsKey($k)) { $face.Regc.Probes[$k] } else { $null }
+            $rMedian = if ($r -ne $null) { $r.Median } else { 0.0 }
+            $rCv = if ($r -ne $null) { $r.CvPercent } else { 0.0 }
+            $rCell = "$(Round1 $rCv)%$(if ($rCv -gt $MaxCvPercent) { ' ⚠' } else { '' })"
+            $oCell = "$(Round1 $o.CvPercent)%$(if ($o.CvPercent -gt $MaxCvPercent) { ' ⚠' } else { '' })"
+            $rr = if ($o.Median -gt 0) { Round2 ($rMedian / $o.Median) } else { "-" }
+            $lines.Add("| $k | $(Round3 $rMedian) | $rCell | $(Round3 $o.Median) | $oCell | $rr |")
+        }
     }
+    $lines.Add("")
 }
-$lines.Add("")
+
 $lines.Add("## 方法论说明（issue #887 修尺子）")
 $lines.Add("")
-$lines.Add("- 预热 $WarmupRuns 轮（独立 JVM，不计入统计）+ $Runs 轮计量（独立 JVM 冷启动）。")
+$lines.Add("- 预热 $WarmupRuns 轮（独立 JVM，不计入统计）+ $Runs 轮计量（独立 JVM 冷启动），多 JDK 时同一会话顺序完成。")
 $lines.Add("- 主指标为中位数（对 60~203ms 一类长尾抖动稳健）；均值仅供参照，不再用于结论。")
+$lines.Add("- p95 为 nearest-rank 口径（$Runs 轮中第 [ceil(0.95×$Runs)] 位）；方差/标准差为无偏估计（n-1）。")
 $lines.Add("- CV% = 标准差/均值；超过 $MaxCvPercent% 的行标记 ⚠，并在文首汇总为高方差存疑项。")
-$lines.Add("- JDK 版本：$jdkVersion。")
+$lines.Add("- 原始样本与统计面同步落 CSV：results/ 下 *-runs.csv（逐轮明细）与 *-stats.csv（统计汇总）。")
 $lines.Add("- 历史教训：#887 中单次 72.7 vs 71ms 的假打平，在预热+9 轮中位数口径下实为 ~1.6x 差距（53 vs 83ms，JDK25）。")
 $reportPath = Join-Path $reportDir "$stamp-jvm-obf-tester-os30.md"
 Set-Content -Path $reportPath -Value ($lines -join [Environment]::NewLine) -Encoding UTF8
 
-# 控制台输出
-$rt = $regcFace.Total
-"`n=== RegC total ($Runs runs, median): $(Round1 $rt.Median) ms  min~max=$(Round1 $rt.Min)~$(Round1 $rt.Max)  mean=$(Round1 $rt.Mean)  cv=$(Round1 $rt.CvPercent)%"
-if (-not $Regression) {
-    $ot = $os30Face.Total
-    "=== os30 total ($Runs runs, median): $(Round1 $ot.Median) ms  min~max=$(Round1 $ot.Min)~$(Round1 $ot.Max)  mean=$(Round1 $ot.Mean)  cv=$(Round1 $ot.CvPercent)%"
-    "=== ratio regc/os30 (median): $(Round2 ($rt.Median / $ot.Median))"
-    "=== 覆盖率审计: RegC $($audit.Native)/$($audit.Executable) ($($audit.Percent)%)  os30 $($auditOs30.Native)/$($auditOs30.Executable) ($($auditOs30.Percent)%)"
-    "{0,-32} {1,12} {2,8} {3,12} {4,8} {5,8}" -f "Probe", "regc-med(ms)", "regc-cv", "os30-med(ms)", "os30-cv", "ratio"
-    foreach ($k in ($os30Face.Probes.Keys | Sort-Object)) {
-        $o = $os30Face.Probes[$k]
-        $r = if ($regcFace.Probes.ContainsKey($k)) { $regcFace.Probes[$k] } else { $null }
-        $rMedian = if ($r -ne $null) { $r.Median } else { 0.0 }
-        $rCv = if ($r -ne $null) { $r.CvPercent } else { 0.0 }
-        $rr = if ($o.Median -gt 0) { Round2 ($rMedian / $o.Median) } else { "-" }
-        "{0,-32} {1,12} {2,8} {3,12} {4,8} {5,8}" -f $k, (Round3 $rMedian), "$(Round1 $rCv)%", (Round3 $o.Median), "$(Round1 $o.CvPercent)%", $rr
+# ---- CSV 落盘（#887：结果落 CSV/MD 表） ----
+# runs CSV：逐轮原始样本（long 格式，一行 = JDK×产物×轮次×探针）。
+$runsCsv = New-Object System.Collections.Generic.List[string]
+$runsCsv.Add("jdk,artifact,run,total_ms,probe,time_ms,status")
+foreach ($face in $faces) {
+    $tag = $face.Ctx.Tag
+    $regcM = $face.RegcMeasurement
+    for ($i = 0; $i -lt $regcM.Totals.Count; $i++) {
+        $map = $regcM.Maps[$i]
+        foreach ($k in ($map.Keys | Sort-Object)) {
+            $runsCsv.Add("$tag,regc,$($i + 1),$($regcM.Totals[$i]),$k,$($map[$k].Time),$($map[$k].Status)")
+        }
     }
-} else {
-    "=== 覆盖率审计: RegC $($audit.Native)/$($audit.Executable) ($($audit.Percent)%)"
-    "{0,-32} {1,12} {2,8}" -f "Probe", "regc-med(ms)", "regc-cv"
-    foreach ($k in ($regcFace.Probes.Keys | Sort-Object)) {
-        $s = $regcFace.Probes[$k]
-        "{0,-32} {1,12} {2,8}" -f $k, (Round3 $s.Median), "$(Round1 $s.CvPercent)%"
+    if ($null -ne $face.Os30Measurement) {
+        $os30M = $face.Os30Measurement
+        for ($i = 0; $i -lt $os30M.Totals.Count; $i++) {
+            $map = $os30M.Maps[$i]
+            foreach ($k in ($map.Keys | Sort-Object)) {
+                $runsCsv.Add("$tag,os30,$($i + 1),$($os30M.Totals[$i]),$k,$($map[$k].Time),$($map[$k].Status)")
+            }
+        }
+    }
+}
+$runsCsvPath = Join-Path $reportDir "$stamp-jvm-obf-tester-os30-runs.csv"
+Set-Content -Path $runsCsvPath -Value ($runsCsv -join [Environment]::NewLine) -Encoding UTF8
+
+# stats CSV：统计汇总（一行 = JDK×产物×探针，total 记为 __total__）。
+function Format-StatsRow([string]$Tag, [string]$Artifact, [string]$ProbeName, [object]$Stats) {
+    return "$Tag,$Artifact,$ProbeName,$(Round3 $Stats.Median),$(Round3 $Stats.Min),$(Round3 $Stats.Max),$(Round3 $Stats.P95),$(Round3 $Stats.Mean),$(Round3 $Stats.StdDev),$(Round3 $Stats.Variance),$(Round2 $Stats.CvPercent),$($Stats.Count)"
+}
+$statsCsv = New-Object System.Collections.Generic.List[string]
+$statsCsv.Add("jdk,artifact,probe,median_ms,min_ms,max_ms,p95_ms,mean_ms,stddev_ms,variance_ms2,cv_percent,samples")
+foreach ($face in $faces) {
+    $tag = $face.Ctx.Tag
+    $statsCsv.Add((Format-StatsRow $tag "regc" "__total__" $face.Regc.Total))
+    foreach ($k in ($face.Regc.Probes.Keys | Sort-Object)) {
+        $statsCsv.Add((Format-StatsRow $tag "regc" $k $face.Regc.Probes[$k]))
+    }
+    if ($null -ne $face.Os30) {
+        $statsCsv.Add((Format-StatsRow $tag "os30" "__total__" $face.Os30.Total))
+        foreach ($k in ($face.Os30.Probes.Keys | Sort-Object)) {
+            $statsCsv.Add((Format-StatsRow $tag "os30" $k $face.Os30.Probes[$k]))
+        }
+    }
+}
+$statsCsvPath = Join-Path $reportDir "$stamp-jvm-obf-tester-os30-stats.csv"
+Set-Content -Path $statsCsvPath -Value ($statsCsv -join [Environment]::NewLine) -Encoding UTF8
+
+# 控制台输出
+foreach ($face in $faces) {
+    $rt = $face.Regc.Total
+    "=== [$($face.Ctx.Tag)] RegC total ($Runs runs, median): $(Round1 $rt.Median) ms  min~max=$(Round1 $rt.Min)~$(Round1 $rt.Max)  p95=$(Round1 $rt.P95)  mean=$(Round1 $rt.Mean)  cv=$(Round1 $rt.CvPercent)%"
+    if (-not $Regression) {
+        $ot = $face.Os30.Total
+        "=== [$($face.Ctx.Tag)] os30 total ($Runs runs, median): $(Round1 $ot.Median) ms  min~max=$(Round1 $ot.Min)~$(Round1 $ot.Max)  p95=$(Round1 $ot.P95)  mean=$(Round1 $ot.Mean)  cv=$(Round1 $ot.CvPercent)%"
+        "=== [$($face.Ctx.Tag)] ratio regc/os30 (median): $(Round2 ($rt.Median / $ot.Median))"
+        "{0,-32} {1,12} {2,8} {3,12} {4,8} {5,8}" -f "Probe", "regc-med(ms)", "regc-cv", "os30-med(ms)", "os30-cv", "ratio"
+        foreach ($k in ($face.Os30.Probes.Keys | Sort-Object)) {
+            $o = $face.Os30.Probes[$k]
+            $r = if ($face.Regc.Probes.ContainsKey($k)) { $face.Regc.Probes[$k] } else { $null }
+            $rMedian = if ($r -ne $null) { $r.Median } else { 0.0 }
+            $rCv = if ($r -ne $null) { $r.CvPercent } else { 0.0 }
+            $rr = if ($o.Median -gt 0) { Round2 ($rMedian / $o.Median) } else { "-" }
+            "{0,-32} {1,12} {2,8} {3,12} {4,8} {5,8}" -f $k, (Round3 $rMedian), "$(Round1 $rCv)%", (Round3 $o.Median), "$(Round1 $o.CvPercent)%", $rr
+        }
+    } else {
+        "{0,-32} {1,12} {2,8}" -f "Probe", "regc-med(ms)", "regc-cv"
+        foreach ($k in ($face.Regc.Probes.Keys | Sort-Object)) {
+            $s = $face.Regc.Probes[$k]
+            "{0,-32} {1,12} {2,8}" -f $k, (Round3 $s.Median), "$(Round1 $s.CvPercent)%"
+        }
     }
 }
 if ($highVariance.Count -gt 0) {
@@ -407,30 +589,34 @@ if ($highVariance.Count -gt 0) {
     $highVariance | ForEach-Object { "  - $_" }
 }
 "`n报告已写入: $reportPath"
+"CSV 已写入: $runsCsvPath"
+"CSV 已写入: $statsCsvPath"
 
-# ---- 6. 基线维护与回归断言（#820 步骤 5；#887 起主指标改中位数） ----
+# ---- 7. 基线维护与回归断言（#820 步骤 5；#887 起主指标改中位数；多 JDK 取第一个） ----
 if ($Regression -or $UpdateBaseline) {
     if (-not (Test-Path $BaselineFile)) { throw "基线文件未找到: $BaselineFile" }
     $baseline = Get-Content $BaselineFile -Raw | ConvertFrom-Json
+    $firstFace = $faces[0]
+    $firstAudit = $audit
 
     if ($UpdateBaseline) {
         $baseline.meta.generated = $stamp
         # java -version 走 stderr，PS5.1 下 `& $java -version 2>&1` 会把
         # ErrorRecord 对象灌进 meta.jdk（旧基线已踩坑）——统一走 cmd /c 取纯文本。
-        $baseline.meta.jdk = $jdkVersion
+        $baseline.meta.jdk = $firstFace.Ctx.Version
         $baseline.meta.runs = $Runs
         $baseline.meta.warmupRuns = $WarmupRuns
         $baseline.meta.metric = "median"
         $baseline.meta.methodology = "预热 ${WarmupRuns} 轮（不计入统计）+ ${Runs} 轮计量取中位数；CV%>${MaxCvPercent}% 标记高方差存疑（#887）；覆盖率审计 javap 验证 ACC_NATIVE"
         # 基线主指标：中位数（#887 前的历史基线为均值口径，更新基线时随之迁移）。
-        $baseline.baseline.totalMs = Round1 $regcFace.Total.Median
-        $baseline.baseline.totalCvPercent = Round1 $regcFace.Total.CvPercent
-        $baseline.baseline.coverage.native = $audit.Native
-        $baseline.baseline.coverage.executable = $audit.Executable
-        $baseline.baseline.coverage.percent = $audit.Percent
+        $baseline.baseline.totalMs = Round1 $firstFace.Regc.Total.Median
+        $baseline.baseline.totalCvPercent = Round1 $firstFace.Regc.Total.CvPercent
+        $baseline.baseline.coverage.native = $firstAudit.Native
+        $baseline.baseline.coverage.executable = $firstAudit.Executable
+        $baseline.baseline.coverage.percent = $firstAudit.Percent
         $baseline.baseline.probesMs = [ordered]@{}
-        foreach ($k in ($regcFace.Probes.Keys | Sort-Object)) {
-            $baseline.baseline.probesMs | Add-Member -NotePropertyName $k -NotePropertyValue (Round3 $regcFace.Probes[$k].Median)
+        foreach ($k in ($firstFace.Regc.Probes.Keys | Sort-Object)) {
+            $baseline.baseline.probesMs | Add-Member -NotePropertyName $k -NotePropertyValue (Round3 $firstFace.Regc.Probes[$k].Median)
         }
         $baseline | ConvertTo-Json -Depth 6 | Set-Content $BaselineFile -Encoding UTF8
         Write-Host "`n基线已更新: $BaselineFile"
@@ -439,18 +625,18 @@ if ($Regression -or $UpdateBaseline) {
     if ($Regression) {
         $errors = New-Object System.Collections.Generic.List[string]
         # 功能门：13-probe 全部 Passed
-        foreach ($name in $regcFace.Probes.Keys) {
-            $failedRun = $regcMeasurement.Maps | Where-Object { $_.$name.Status -ne "Passed" } | Select-Object -First 1
+        foreach ($name in $firstFace.Regc.Probes.Keys) {
+            $failedRun = $firstFace.RegcMeasurement.Maps | Where-Object { $_.$name.Status -ne "Passed" } | Select-Object -First 1
             if ($failedRun) { $errors.Add("probe '$name' 未通过（功能门）") }
         }
         # 覆盖率门：native 比例不低于基线 × MinCoverageRatio
         $covFloor = [math]::Round($baseline.baseline.coverage.percent * $MinCoverageRatio, 1)
-        if ($audit.Percent -lt $covFloor) {
-            $errors.Add("覆盖率退化: $($audit.Percent)% < 基线 $($baseline.baseline.coverage.percent)% × $MinCoverageRatio = $covFloor%")
+        if ($firstAudit.Percent -lt $covFloor) {
+            $errors.Add("覆盖率退化: $($firstAudit.Percent)% < 基线 $($baseline.baseline.coverage.percent)% × $MinCoverageRatio = $covFloor%")
         }
         # 总耗时门：RegC total 中位数不高于基线 × MaxTotalRatio
         $totalCeil = [math]::Round($baseline.baseline.totalMs * $MaxTotalRatio, 1)
-        $regcTotalMedian = Round1 $regcFace.Total.Median
+        $regcTotalMedian = Round1 $firstFace.Regc.Total.Median
         if ($regcTotalMedian -gt $totalCeil) {
             $errors.Add("性能退化: RegC total 中位数 ${regcTotalMedian}ms > 基线 $($baseline.baseline.totalMs)ms × $MaxTotalRatio = ${totalCeil}ms")
         }
@@ -464,6 +650,6 @@ if ($Regression -or $UpdateBaseline) {
         if ($highVariance.Count -gt 0) {
             $varianceNote = "（注意：本次 CV% 超阈值项 $($highVariance.Count) 个，结果存疑，建议复测确认）"
         }
-        Write-Host "`n[回归通过] RegC total 中位数=${regcTotalMedian}ms (≤ ${totalCeil}ms)，覆盖率 $($audit.Percent)% (≥ $covFloor%)，13-probe 全过$varianceNote"
+        Write-Host "`n[回归通过] RegC total 中位数=${regcTotalMedian}ms (≤ ${totalCeil}ms)，覆盖率 $($firstAudit.Percent)% (≥ $covFloor%)，13-probe 全过$varianceNote"
     }
 }

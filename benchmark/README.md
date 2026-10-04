@@ -61,17 +61,26 @@ pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHome C:\Users\Ca
 # 显式指定轮数/预热
 pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -Runs 9 -WarmupRuns 3 -SkipBuild
 
-# JDK17
-pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHome D:\sdk\java\jdk17 -SkipBuild
+# 双 JDK 参数化（#887）：逐 JDK 计量，输出跨 JDK 对比表；同一会话顺序完成
+pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHomes "C:\jdk-21","C:\jdk-25" -SkipBuild
+
+# 方差归因模式（#887）：每 JDK×产物额外 1 轮冷启动，采集 GC/类加载/JIT 日志到
+# test/jvm-obf-tester/attribution/，并记录各 JDK 默认收集器（default-gc.txt）
+pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -JdkHomes "C:\jdk-21","C:\jdk-25" -Attribution -SkipBuild
+
+# RegC 直调口径（#887 基线）：转换时加 --regc-direct-calls
+pwsh -File mj2x/benchmark/jvm_obfuscator_test_benchmark.ps1 -RegcDirectCalls -SkipBuild
 ```
 
 产物与报告：
 
 - RegC 产物：`test/jvm-obf-tester/jvm-obf-tester-regc.jar`（含嵌入的 native DLL）。
 - 报告：`results/<日期>-jvm-obf-tester-os30.md`（环境/方法论 + 高方差警告块 +
-  覆盖率审计 + 总耗时中位数对比表（含 min~max/CV%）+ 13-probe 中位数明细 +
-  方法论说明），与既有 results/*.md 的章节结构兼容，列口径从"平均"升级为
-  "中位数"。
+  覆盖率审计 + 跨 JDK 对比表（多 JDK 时）+ 每 JDK 总耗时中位数对比表（含
+  min~max/p95/CV%）+ 13-probe 中位数明细 + 方法论说明），与既有 results/*.md
+  的章节结构兼容，列口径从"平均"升级为"中位数"。
+- CSV：`results/<日期>-jvm-obf-tester-os30-runs.csv`（逐轮原始样本，long 格式）
+  与 `*-stats.csv`（统计汇总：中位数/min/max/p95/均值/标准差/方差/CV%）。
 - 脚本内部处理 xmake 配置稳定性（issue #782）：`-P` 显式指定 + `-c` 重置，
   避免子项目配置破坏 root。
 
