@@ -310,6 +310,21 @@ bool isJavacEnumValueOfBody(const jbytecode::tree::MethodNode* method,
                             const ca::str::Utf8StringRef& owner);
 /// @}
 
+/// @name regc_backend.cpp：枚举合成方法 SSA 形状验证（#887 Enums 承接卡）
+/// @{
+
+/// javac 合成 values() 的 SSA 形状验证：getstatic owner.$VALUES → invokevirtual
+/// clone（owner 为数组描述符或 java/lang/Object）→ checkcast 数组描述符，同块
+/// 3 指令（按块搜索，容忍空 entry 块）。与字节码侧 isJavacEnumValuesBody 同一
+/// 口径的 fail-closed SSA 版：方法自身指令清空后字节码侧不可达，只能在其 SSA
+/// 转换当口验证。
+bool isJavacEnumValuesSsa(const SSAFunction& fn);
+/// javac 合成 valueOf(String) 的 SSA 形状验证：invokestatic
+/// java/lang/Enum.valueOf → checkcast owner，同块 3 指令（按块搜索）；首指
+/// 不查——ldc 类字面量在 SSA 降为 opaque 值不落指令，形状任意。
+bool isJavacEnumValueOfSsa(const SSAFunction& fn);
+/// @}
+
 /// @name regc_flow.cpp：指令流发射与寄存器收集
 /// @{
 
