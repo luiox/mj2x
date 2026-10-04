@@ -18,6 +18,7 @@
 #include "libca/str/utf8_string_arena.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
 #include "libca/zip/checksum.hpp"
+#include "jdk_fixture.hpp"
 #include "test_helper.hpp"
 
 namespace fs = std::filesystem;
@@ -1846,8 +1847,11 @@ TEST(CliTest, PipeCompileWithClangDoesNotWriteCSource)
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
     }
-    if (!commandAvailable("clang")) {
-        GTEST_SKIP() << "clang is not available on PATH";
+    // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
+    const auto clang = test::jdk::probeClang();
+    if (!clang.available) {
+        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                     << clang.reason;
     }
 
     const fs::path inClass = writeTinyClass();
@@ -1862,10 +1866,11 @@ TEST(CliTest, PipeCompileWithClangDoesNotWriteCSource)
     fs::create_directories(workDir, ec);
     ASSERT_FALSE(ec) << ec.message();
 
-    auto result = runScript({
-        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
-            " --compile --compile-mode pipe --c-compiler clang",
-    });
+    // clang 命中非 PATH 位置时给子进程注入 PATH（clangPathPrelude），CLI 才能
+    // 按名解析 --c-compiler clang。
+    auto result = runScript(test::jdk::clangPathPrelude(
+        clang, q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+                   " --compile --compile-mode pipe --c-compiler clang"));
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(outClass)) << result.out;
     EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
@@ -2387,8 +2392,16 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
     const fs::path javac = findJavac();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
     if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
-    if (!commandAvailable("clang")) GTEST_SKIP() << "clang is not available on PATH";
-    if (!commandAvailable("llc")) GTEST_SKIP() << "llc is not available on PATH";
+    // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
+    const auto clang = test::jdk::probeClang();
+    if (!clang.available) {
+        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                     << clang.reason;
+    }
+    // probeClang 只覆盖 clang——llc 无对应 probe，维持 PATH 判定（跳过注明口径）。
+    if (!commandAvailable("llc"))
+        GTEST_SKIP() << "llc is not available on PATH"
+                        " (probeClang covers clang only; llc stays a PATH-only check #1191)";
 
 #ifdef _WIN32
     const fs::path java = javac.parent_path() / "java.exe";
@@ -2474,9 +2487,13 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
         fs::create_directories(outputDir, ec);
         ASSERT_FALSE(ec) << ec.message();
 
-        result = runScript({q(cli) + " -i " + q(inputDir / "CliLlvm.class") + " -o " +
-                            q(outputClass) + " --backend llvm --emit-llvm " + q(llvmSource) +
-                            " --compile --llvm-tool " + llvmTool});
+        // clang 迭代命中非 PATH 位置时需 PATH 注入（clangPathPrelude）；llc 迭代
+        // 恒按 PATH 解析，注入行为空、脚本等价单命令。
+        auto compileLines = test::jdk::clangPathPrelude(clang);
+        compileLines.push_back(q(cli) + " -i " + q(inputDir / "CliLlvm.class") + " -o " +
+                               q(outputClass) + " --backend llvm --emit-llvm " + q(llvmSource) +
+                               " --compile --llvm-tool " + llvmTool);
+        result = runScript(compileLines);
         ASSERT_EQ(result.exitCode, 0) << result.out;
         ASSERT_TRUE(fileExists(llvmSource)) << result.out;
         ASSERT_TRUE(fileExists(nativeLibrary)) << result.out;
@@ -2555,7 +2572,12 @@ TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
 #else
     const fs::path cli = findCli();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
-    if (!commandAvailable("clang")) GTEST_SKIP() << "clang is not available on PATH";
+    // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
+    const auto clang = test::jdk::probeClang();
+    if (!clang.available) {
+        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                     << clang.reason;
+    }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
     }
@@ -2604,9 +2626,12 @@ TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
     const fs::path pipeDir = workDir / "pipe";
     fs::create_directories(pipeDir, ec);
     const fs::path pipeClass = pipeDir / "CliLlvmPipe.class";
-    result = runScript({q(cli) + " -i " + q(workDir / "CliLlvmPipe.class") + " -o " +
-                        q(pipeClass) + " --backend llvm --compile --compile-mode pipe "
-                        "--llvm-tool clang"});
+    // PATH 注入前置：--llvm-tool clang 按 PATH 解析（非 PATH 命中时必需）。
+    auto pipeCompileLines = test::jdk::clangPathPrelude(clang);
+    pipeCompileLines.push_back(q(cli) + " -i " + q(workDir / "CliLlvmPipe.class") + " -o " +
+                               q(pipeClass) + " --backend llvm --compile --compile-mode pipe "
+                               "--llvm-tool clang");
+    result = runScript(pipeCompileLines);
     ASSERT_EQ(result.exitCode, 0) << result.out;
     const fs::path pipeLibrary = nativeLibraryPathFor(pipeClass);
     ASSERT_TRUE(fileExists(pipeLibrary)) << result.out;
@@ -2636,8 +2661,9 @@ TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
     ASSERT_TRUE(fileExists(cmakeDir / "CMakeLists.txt")) << result.out;
     {
         const fs::path cmakeLibrary = nativeLibraryPathFor(cmakeClass);
-        result = runScript({q("clang") + " -shared " + q(cmakeDir / "native.ll") + " -o " +
-                            q(cmakeLibrary)});
+        // 直接按名调 clang：同样需要 PATH 注入前置（非 PATH 命中时必需）。
+        result = runScript(test::jdk::clangPathPrelude(
+            clang, q("clang") + " -shared " + q(cmakeDir / "native.ll") + " -o " + q(cmakeLibrary)));
         ASSERT_EQ(result.exitCode, 0) << result.out;
         fs::copy_file(workDir / "Driver.class", cmakeDir / "Driver.class",
                       fs::copy_options::overwrite_existing, ec);
@@ -2684,7 +2710,12 @@ TEST(CliTest, LlvmArraycopyAndExceptionE2E)
 #else
     const fs::path cli = findCli();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
-    if (!commandAvailable("clang")) GTEST_SKIP() << "clang is not available on PATH";
+    // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
+    const auto clang = test::jdk::probeClang();
+    if (!clang.available) {
+        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                     << clang.reason;
+    }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
     }
@@ -2757,9 +2788,12 @@ TEST(CliTest, LlvmArraycopyAndExceptionE2E)
     const fs::path pipeDir = workDir / "out";
     fs::create_directories(pipeDir, ec);
     const fs::path pipeClass = pipeDir / "CliLlvmE2E.class";
-    result = runScript({q(cli) + " -i " + q(workDir / "CliLlvmE2E.class") + " -o " +
-                        q(pipeClass) + " --backend llvm --compile --compile-mode pipe "
-                        "--llvm-tool clang"});
+    // PATH 注入前置：--llvm-tool clang 按 PATH 解析（非 PATH 命中时必需）。
+    auto e2eCompileLines = test::jdk::clangPathPrelude(clang);
+    e2eCompileLines.push_back(q(cli) + " -i " + q(workDir / "CliLlvmE2E.class") + " -o " +
+                              q(pipeClass) + " --backend llvm --compile --compile-mode pipe "
+                              "--llvm-tool clang");
+    result = runScript(e2eCompileLines);
     ASSERT_EQ(result.exitCode, 0) << result.out;
     const fs::path pipeLibrary = nativeLibraryPathFor(pipeClass);
     ASSERT_TRUE(fileExists(pipeLibrary)) << result.out;
@@ -3029,7 +3063,12 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
 #else
     const fs::path cli = findCli();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
-    if (!commandAvailable("clang")) GTEST_SKIP() << "clang is not available on PATH";
+    // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
+    const auto clang = test::jdk::probeClang();
+    if (!clang.available) {
+        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                     << clang.reason;
+    }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
     }
@@ -3104,9 +3143,12 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
         const fs::path outDir = workDir / suffix;
         fs::create_directories(outDir, ec);
         const fs::path outClass = outDir / "CliLlvmIndy.class";
-        const auto     rc = runScript({q(cli) + " -i " + q(workDir / "CliLlvmIndy.class") +
-                                       " -o " + q(outClass) + " --backend llvm --compile "
-                                       "--compile-mode pipe --llvm-tool clang " + extraArgs});
+        // PATH 注入前置：--llvm-tool clang 按 PATH 解析（非 PATH 命中时必需）。
+        auto compileLines = test::jdk::clangPathPrelude(clang);
+        compileLines.push_back(q(cli) + " -i " + q(workDir / "CliLlvmIndy.class") +
+                               " -o " + q(outClass) + " --backend llvm --compile "
+                               "--compile-mode pipe --llvm-tool clang " + extraArgs);
+        const auto rc = runScript(compileLines);
         ASSERT_EQ(rc.exitCode, 0) << rc.out;
         const fs::path library = nativeLibraryPathFor(outClass);
         ASSERT_TRUE(fileExists(library)) << rc.out;
@@ -3139,7 +3181,10 @@ TEST(CliTest, ClangCompilesRegcCppSource)
 {
     const fs::path cli = findCli();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
-    if (!commandAvailable("clang++")) GTEST_SKIP() << "clang++ is not available on PATH";
+    // probeClang 只覆盖 clang——clang++ 无对应 probe，维持 PATH 判定（跳过注明口径）。
+    if (!commandAvailable("clang++"))
+        GTEST_SKIP() << "clang++ is not available on PATH"
+                        " (probeClang covers clang only; clang++ stays a PATH-only check #1191)";
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
     }
@@ -3155,9 +3200,12 @@ TEST(CliTest, ClangCompilesRegcCppSource)
     fs::create_directories(workDir, ec);
     ASSERT_FALSE(ec) << ec.message();
 
-    const auto result = runScript({q(cli) + " -i " + q(writeTinyClass()) + " -o " +
-                                   q(outClass) + " --backend regc --emit-cpp " + q(source) +
-                                   " --compile --c-compiler clang"});
+    // 脚本实调 clang（--c-compiler clang）：PATH 注入前置保非 PATH 命中也可解析。
+    const auto clang = test::jdk::probeClang();
+    const auto result = runScript(test::jdk::clangPathPrelude(
+        clang, q(cli) + " -i " + q(writeTinyClass()) + " -o " + q(outClass) +
+                   " --backend regc --emit-cpp " + q(source) +
+                   " --compile --c-compiler clang"));
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(source)) << result.out;
     EXPECT_TRUE(fileExists(library)) << result.out;
@@ -3409,8 +3457,11 @@ TEST(CliTest, PipeCompileRegCJarEmbedsNativeLoaderAndLibraryWithClang)
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
     }
-    if (!commandAvailable("clang")) {
-        GTEST_SKIP() << "clang is not available on PATH";
+    // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
+    const auto clang = test::jdk::probeClang();
+    if (!clang.available) {
+        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                     << clang.reason;
     }
 
     const fs::path inJar = writeTinyJar();
@@ -3425,10 +3476,11 @@ TEST(CliTest, PipeCompileRegCJarEmbedsNativeLoaderAndLibraryWithClang)
     fs::create_directories(workDir, ec);
     ASSERT_FALSE(ec) << ec.message();
 
-    auto result = runScript({
-        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) +
-            " --backend regc --compile --compile-mode pipe --c-compiler clang",
-    });
+    // clang 命中非 PATH 位置时给子进程注入 PATH（clangPathPrelude），CLI 才能
+    // 按名解析 --c-compiler clang。
+    auto result = runScript(test::jdk::clangPathPrelude(
+        clang, q(cli) + " -i " + q(inJar) + " -o " + q(outJar) +
+                   " --backend regc --compile --compile-mode pipe --c-compiler clang"));
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_TRUE(fileExists(nativeLibrary)) << result.out;
     for (const auto& entry : fs::recursive_directory_iterator(workDir)) {
