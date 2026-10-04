@@ -18,7 +18,7 @@
 | 十七（sprint 2026-10） | #1116 切片 A vmc4 编码期块乱序（`--vmc4-shuffle-blocks`，默认关）：块 id+物理布局 Sattolo 单环乱序、间接跳转表重映射零字节改写、异常区域随排列自洽、targets 表密文落盘（`vmc4DeriveTargetsKey`）+JNI_OnLoad 解密；与 drift/encrypt-program 正交三开 round-trip | 🟢 完成（`Vmc4ShuffleTest.*` 10 例 + `Vmc4BackendShuffleE2E` 三档 e2e；见 capabilities §4） |
 | 十八（单后端编译） | #886：`with_mj2x_backend=stackc\|regc\|vmc4\|llvm` 值型开关——被排除后端源码不编译、CLI 注册/分发面 `MJ2X_DISABLE_*_BACKEND` 编译期裁剪 + 双层 fail-closed、mj2x-rt 嵌入按分发面收缩（embed rule opt-in 过滤）；全量回归默认配置持平 | ✅ 完成（矩阵实测全量 3630592B → stackc-only 1855488B / regc-only 2796544B / vmc4-only 2026496B / llvm-only 2317824B，见日志） |
 | 十九（#1117 坑位补位） | intrinsic × 形态对照表（`doc_ai/intrinsic_matrix.md`）；kEntries +6（round(F)/signum/exp/log/log10，llvmDirect 全开）；CRT min/max ±0.0 位型修复；RegC/StackC LDC intern 恒等；mtest_set G17 回归五条（跨界） | ✅ 完成；LLVM/VMC4 ldc intern 与 floorDiv precheck 等候选见 intrinsic_matrix §4 |
-| 二十（#887 Enums 承接卡） | 归因复核（稳态复测证实差距成立：非冷调用外推污染，机制=RegC 每迭代 JNI 边界数多于 os30）+ 三刀优化：SSA 内联排除门 + 懒加载登记（全类预扫描/按类补扫/SSA 自登记三层 fail-closed）、直调口径注册合成方法让路站点 intrinsic、native 工程 /GL+/LTCG；同窗口交替 A/B：jdk25 配对 -30.5%（11/12 胜）、jdk21 -4.5%（噪声主导，floor -18%）；`benchmark/results/2026-10-05-jvm-obf-tester-os30-regression.md` | ✅ 完成；新发现 pre-existing bug 立案见待做 I |
+| 二十（#887 Enums 承接卡） | 归因复核（稳态复测证实差距成立：非冷调用外推污染，机制=RegC 每迭代 JNI 边界数多于 os30）+ 三刀优化：SSA 内联排除门 + 懒加载登记（全类预扫描/按类补扫/SSA 自登记三层 fail-closed）、直调口径注册合成方法让路站点 intrinsic、native 工程 /GL+/LTCG；同窗口交替 A/B（配对口径）：jdk25 -30.5%（12 对，11/12 胜）、jdk21 -4.5%（合并 20 对=首轮 12+加测 8，12/20 胜；噪声主导，floor=双侧 min 值口径 -18.3%）；`benchmark/results/2026-10-05-jvm-obf-tester-os30-regression.md` | ✅ 完成；新发现 pre-existing bug 立案 #1188 见待做 I |
 
 ## 待做项
 
@@ -218,20 +218,22 @@
 - 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层
   各自为政，需在 capabilities/AGENTS 层面定一次豁免边界。
 
-### I. pre-existing bug：RegC try 块内 valueOf 异常不派发（#887 Enums 承接卡立案，P2）
+### I. pre-existing bug：RegC try 块内 valueOf 异常不派发（立案 issue #1188；#887 Enums 承接卡发现，P2）
 
 - 现象：`try { E.valueOf("非法名"); } catch (IllegalArgumentException)` 转换后
   异常不进入 handler，后续带 pending exception 继续 JNI 调用进入未定义行为
   （EnumSemCheck 语义守卫可复现：valueOf-illegal-name-IAE / null-name-NPE
   FAIL，产物输出在 FAIL 后出现 UB 痕迹，exit 1）。
-- 归因：pre-change 67193b82f 与本分支均复现——非本卡引入。valueOf 调用点被
-  SSA 内联展开（或内联后 CallStaticObjectMethodA/checkcast 序列）后，try 块
-  缺 ITE 异常派发，pending exception 不在 handler 边界检查。
-- 影响面：仅 try 块内枚举 valueOf（推测同类静态调用内联均需排查）；无 try
-  包裹时 NameProbe 全路径与纯 Java 逐字节一致（v6==prechange==pure 已证）。
-- 修复方向：内联展开体调用点若处于异常区内，要么拒绝内联（fail-closed 最小
-  修），要么在内联 clone 块后补 pending-exception 检查与 handler 派发；修复
-  后 EnumSemCheck 需全 PASS（FOLD ref=177700，参照 semcheck-pure.txt）。
+- 归因：pre-change 67193b82f 与本分支均复现——非本卡引入。评审实测定案：
+  try 块内枚举 valueOf 调用点，**SSA 内联展开与站点 intrinsic 两路径均不
+  派发**——不在 handler 边界检查 pending exception，与内联与否无关。
+- 影响面：try 块内枚举 valueOf 调用点（两路径同病）；无 try 包裹时
+  NameProbe 全路径与纯 Java 逐字节一致（v6==prechange==pure 已证）。
+- 修复方向：须覆盖 intrinsic 发射面而非仅拒内联——站点 intrinsic 调用点与
+  内联展开块若处于异常区内，均需补 pending-exception 检查与 handler 派发
+  （或等价 ITE）；修复后 EnumSemCheck 需全 PASS（FOLD ref=177700，参照
+  semcheck-pure.txt）。EnumSemCheck 随 #1188 修复卡收编为回归 fixture
+  （评审 N7）。
 
 ## 验证命令
 
@@ -255,15 +257,21 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   懒加载登记三层（全类预扫描已有/按类补扫 preRegisteredClasses/SSA 自登记
   `isJavacEnumValuesSsa`/`isJavacEnumValueOfSsa`）——多类 jar 懒加载下
   values()/valueOf() 站点 intrinsic 从不可达（tester 0 处）到全覆盖
-  （values×3/valueOf×1，直调口径同）；② `tryEmitDirectCall` 让路：注册合成
+  （values×3/valueOf×1，直调口径同）。理论时序缺口仍在（评审 N5 记录）：
+  调用方先于枚举类被编译时，两层补扫/自登记均未发生（登记只落在本枚举类
+  自身转换时点），调用点退通用 JNI 路径——fail-closed 仅损优化不损正确；
+  ② `tryEmitDirectCall` 让路：注册合成
   方法在 `--regc-direct-calls` 口径下改走 2/1 次 JNI 站点 intrinsic（直调体
   3 次 JNI）；③ native 工程 `/GL`+`/LTCG`（模板+golden 同步，jar 228KB→172KB）。
-  同窗口交替 A/B（12+12 对/JDK）：jdk25 配对 post/pre 中位 -30.5%（POST 胜
-  11/12）；jdk21 -4.5%（噪声主导 CV~20%，floor -18%，方向一致不显著）。语义
+  同窗口交替 A/B（配对口径，逐对 post-pre；明细见
+  `benchmark/results/2026-10-05-jvm-obf-tester-os30-regression.md` A/B 节）：
+  jdk25 12 对，配对 post/pre 中位 -30.5%（POST 胜 11/12）；jdk21 合并 20 对
+  （首轮 12 + 加测 8），-4.5%（POST 胜 12/20；噪声主导 CV~20%，floor=
+  双侧 min 值口径 11.248→9.188ms 即 -18.3%，方向一致不显著）。语义
   零变化：NameProbe（无异常路径）v6==prechange==纯 Java 逐字节一致；13 探针
   13/13 Passed、全输出一致（除时序/jar 体积）；EnumSemCheck values/ordinals
   全 PASS，valueOf-IAE/NPE 失败为 pre-existing bug（pre-change 同样失败，
-  立案待做 I）。验证：mj2x_unittest 774/774 绿（10 skip）、mtest_set 25/25 绿、
+  立案 #1188、见待做 I）。验证：mj2x_unittest 774/774 绿（10 skip）、mtest_set 25/25 绿、
   mj2x_integration 63 绿 29 skip（既有口径）、门禁 31/15/3/5/0/115 持平 +
   staticArena=0。
 - 2026-10-04（#886 单后端编译选项，分支 `feat/mj2x-886-single-backend`）：
