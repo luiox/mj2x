@@ -600,23 +600,32 @@ if ($Regression -or $UpdateBaseline) {
     $firstAudit = $audit
 
     if ($UpdateBaseline) {
-        $baseline.meta.generated = $stamp
+        # meta 字段统一走 Add-Member -Force：旧基线被 PS5.1 ErrorRecord 污染、
+        # 修复后可能缺 warmupRuns/metric 等键——PSCustomObject 直接赋值新属性
+        # 会抛 "property cannot be found"。Force=存在则覆写、缺失则新增。
+        $baseline.meta | Add-Member -NotePropertyName generated -NotePropertyValue $stamp -Force
         # java -version 走 stderr，PS5.1 下 `& $java -version 2>&1` 会把
         # ErrorRecord 对象灌进 meta.jdk（旧基线已踩坑）——统一走 cmd /c 取纯文本。
-        $baseline.meta.jdk = $firstFace.Ctx.Version
-        $baseline.meta.runs = $Runs
-        $baseline.meta.warmupRuns = $WarmupRuns
-        $baseline.meta.metric = "median"
-        $baseline.meta.methodology = "预热 ${WarmupRuns} 轮（不计入统计）+ ${Runs} 轮计量取中位数；CV%>${MaxCvPercent}% 标记高方差存疑（#887）；覆盖率审计 javap 验证 ACC_NATIVE"
+        $baseline.meta | Add-Member -NotePropertyName jdk -NotePropertyValue $firstFace.Ctx.Version -Force
+        $baseline.meta | Add-Member -NotePropertyName runs -NotePropertyValue $Runs -Force
+        $baseline.meta | Add-Member -NotePropertyName warmupRuns -NotePropertyValue $WarmupRuns -Force
+        $baseline.meta | Add-Member -NotePropertyName metric -NotePropertyValue "median" -Force
+        $baseline.meta | Add-Member -NotePropertyName methodology -NotePropertyValue "预热 ${WarmupRuns} 轮（不计入统计）+ ${Runs} 轮计量取中位数；CV%>${MaxCvPercent}% 标记高方差存疑（#887）；覆盖率审计 javap 验证 ACC_NATIVE" -Force
         # 基线主指标：中位数（#887 前的历史基线为均值口径，更新基线时随之迁移）。
-        $baseline.baseline.totalMs = Round1 $firstFace.Regc.Total.Median
-        $baseline.baseline.totalCvPercent = Round1 $firstFace.Regc.Total.CvPercent
-        $baseline.baseline.coverage.native = $firstAudit.Native
-        $baseline.baseline.coverage.executable = $firstAudit.Executable
-        $baseline.baseline.coverage.percent = $firstAudit.Percent
+        # 同 meta：旧 schema 可能缺 totalCvPercent 等新键，统一 Add-Member -Force。
+        $baseline.baseline | Add-Member -NotePropertyName totalMs -NotePropertyValue (Round1 $firstFace.Regc.Total.Median) -Force
+        $baseline.baseline | Add-Member -NotePropertyName totalCvPercent -NotePropertyValue (Round1 $firstFace.Regc.Total.CvPercent) -Force
+        if ($null -eq $baseline.baseline.coverage) {
+            $baseline.baseline | Add-Member -NotePropertyName coverage -NotePropertyValue ([pscustomobject]@{}) -Force
+        }
+        $baseline.baseline.coverage | Add-Member -NotePropertyName native -NotePropertyValue $firstAudit.Native -Force
+        $baseline.baseline.coverage | Add-Member -NotePropertyName executable -NotePropertyValue $firstAudit.Executable -Force
+        $baseline.baseline.coverage | Add-Member -NotePropertyName percent -NotePropertyValue $firstAudit.Percent -Force
         $baseline.baseline.probesMs = [ordered]@{}
         foreach ($k in ($firstFace.Regc.Probes.Keys | Sort-Object)) {
-            $baseline.baseline.probesMs | Add-Member -NotePropertyName $k -NotePropertyValue (Round3 $firstFace.Regc.Probes[$k].Median)
+            # OrderedDictionary 必须用索引器写键；Add-Member 只加 note property，
+            # ConvertTo-Json 序列化时会整段丢失（曾致基线 probesMs 为空对象）。
+            $baseline.baseline.probesMs[$k] = (Round3 $firstFace.Regc.Probes[$k].Median)
         }
         $baseline | ConvertTo-Json -Depth 6 | Set-Content $BaselineFile -Encoding UTF8
         Write-Host "`n基线已更新: $BaselineFile"

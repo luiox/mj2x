@@ -1,127 +1,40 @@
 {
   "meta": {
     "description": "RegC 13-probe 性能回归基线（mj2x benchmark 13-probe，--backend regc 全量 native 化）",
-    "generated": "2026-08-17",
-    "jdk": {
-      "Exception": {
-        "SerializedRemoteException": null,
-        "SerializedRemoteInvocationInfo": null,
-        "ErrorRecord": {
-          "Exception": {
-            "Message": "java version \"17.0.8\" 2023-07-18 LTS",
-            "TargetSite": null,
-            "Data": {},
-            "InnerException": null,
-            "HelpLink": null,
-            "Source": null,
-            "HResult": -2146233087,
-            "StackTrace": null
-          },
-          "TargetObject": null,
-          "CategoryInfo": {
-            "Category": 0,
-            "Activity": "",
-            "Reason": "ParentContainsErrorRecordException",
-            "TargetName": "",
-            "TargetType": ""
-          },
-          "FullyQualifiedErrorId": "RuntimeException",
-          "ErrorDetails": null,
-          "InvocationInfo": null,
-          "ScriptStackTrace": null,
-          "PipelineIterationInfo": []
-        },
-        "WasThrownFromThrowStatement": false,
-        "TargetSite": null,
-        "Message": "java version \"17.0.8\" 2023-07-18 LTS",
-        "Data": {},
-        "InnerException": null,
-        "HelpLink": null,
-        "Source": null,
-        "HResult": -2146233087,
-        "StackTrace": null
-      },
-      "TargetObject": "java version \"17.0.8\" 2023-07-18 LTS",
-      "CategoryInfo": {
-        "Category": 0,
-        "Activity": "",
-        "Reason": "RemoteException",
-        "TargetName": "java version \"17.0.8\" 2023-07-18 LTS",
-        "TargetType": "String"
-      },
-      "FullyQualifiedErrorId": "NativeCommandError",
-      "ErrorDetails": null,
-      "InvocationInfo": {
-        "MyCommand": {
-          "Path": "D:\\sdk\\java\\jdk17\\bin\\java.exe",
-          "Extension": ".exe",
-          "Definition": "D:\\sdk\\java\\jdk17\\bin\\java.exe",
-          "Source": "D:\\sdk\\java\\jdk17\\bin\\java.exe",
-          "Version": {
-            "Major": 17,
-            "Minor": 0,
-            "Build": 8,
-            "Revision": 0,
-            "MajorRevision": 0,
-            "MinorRevision": 0
-          },
-          "Visibility": 0,
-          "OutputType": [
-            {
-              "Name": "System.String",
-              "Type": "string",
-              "TypeDefinitionAst": null
-            }
-          ],
-          "Name": "java.exe",
-          "CommandType": 32,
-          "ModuleName": "",
-          "Module": null,
-          "RemotingCapability": 1,
-          "Parameters": null,
-          "ParameterSets": null
-        },
-        "BoundParameters": {},
-        "UnboundArguments": [],
-        "ScriptLineNumber": 294,
-        "OffsetInLine": 31,
-        "HistoryId": -1,
-        "ScriptName": "D:\\WorkSpace\\ai2\\morpher\\mj2x\\benchmark\\jvm_obfuscator_test_benchmark.ps1",
-        "Line": "        $baseline.meta.jdk = (& $java -version 2>&1 | Select-Object -First 1)\n",
-        "Statement": "& $java -version 2>&1",
-        "PositionMessage": "At D:\\WorkSpace\\ai2\\morpher\\mj2x\\benchmark\\jvm_obfuscator_test_benchmark.ps1:294 char:31\r\n+         $baseline.meta.jdk = (& $java -version 2>&1 | Select-Object - …\r\n+                               ~~~~~~~~~~~~~~~~~~~~~",
-        "PSScriptRoot": "D:\\WorkSpace\\ai2\\morpher\\mj2x\\benchmark",
-        "PSCommandPath": "D:\\WorkSpace\\ai2\\morpher\\mj2x\\benchmark\\jvm_obfuscator_test_benchmark.ps1",
-        "InvocationName": "&",
-        "PipelineLength": 0,
-        "PipelinePosition": 0,
-        "ExpectingInput": false,
-        "CommandOrigin": 1,
-        "DisplayScriptPosition": null
-      },
-      "ScriptStackTrace": "at <ScriptBlock>, D:\\WorkSpace\\ai2\\morpher\\mj2x\\benchmark\\jvm_obfuscator_test_benchmark.ps1: line 294",
-      "PipelineIterationInfo": [
-        0,
-        0,
-        0
-      ],
-      "PSMessageDetails": null
-    },
-    "runs": 3,
-    "methodology": "预热 1 轮 + Runs 次取样取平均；覆盖率审计 javap 验证 ACC_NATIVE；基线含 SSA 方法内联（默认开启）",
     "thresholds": {
       "maxTotalRatio": 2.0,
       "minCoverageRatio": 0.9,
       "allProbesPassed": true
-    }
+    },
+    "generated": "2026-10-04",
+    "jdk": "openjdk version \"21.0.11\" 2026-04-21 LTS",
+    "runs": 9,
+    "warmupRuns": 3,
+    "metric": "median",
+    "methodology": "预热 3 轮（不计入统计）+ 9 轮计量取中位数；CV%>15% 标记高方差存疑（#887）；覆盖率审计 javap 验证 ACC_NATIVE"
   },
   "baseline": {
-    "totalMs": 126.7,
     "coverage": {
       "native": 112,
       "executable": 150,
       "percent": 74.7
     },
-    "probesMs": {}
+    "probesMs": {
+      "Arithmetic operations": 1.449,
+      "Class loading": 0.275,
+      "Collections and generics": 8.123,
+      "Control flow": 0.163,
+      "Crypto APIs": 43.516,
+      "Enums": 7.869,
+      "Exception handling": 0.719,
+      "Inheritance and interfaces": 2.642,
+      "Inner classes": 3.791,
+      "Reflection and annotations": 33.843,
+      "Resource loading": 1.016,
+      "String and Unicode handling": 6.144,
+      "Visitor pattern": 4.106
+    },
+    "totalMs": 114.0,
+    "totalCvPercent": 5.1
   }
 }
