@@ -711,7 +711,7 @@ bool tryEmitEnumValuesCall(CSourceStream& out, const RegInstruction& ins,
     const auto arrayDescRef     = ca::str::Utf8StringRef::from_string_view(arrayDesc);
     // 预扫描集合优先（方法注入 native 后指令已清空）；单测直调发射器时回退
     // 现场验证。
-    const std::string key = ins.method.owner.to_std_string() + "\n" + "values" + "\n" + desc;
+    const std::string key = methodKey(ins.method.owner.to_std_string(), "values", desc);
     const bool verified =
         state.enumSyntheticMethods != nullptr
             ? state.enumSyntheticMethods->count(key) != 0
@@ -753,8 +753,7 @@ bool tryEmitEnumValueOfCall(CSourceStream& out, const RegInstruction& ins,
     const std::string descStr = ins.method.desc.to_std_string();
     // 预扫描集合优先（方法注入 native 后指令已清空）；单测直调发射器时回退
     // 现场验证。
-    const std::string key =
-        ins.method.owner.to_std_string() + "\n" + "valueOf" + "\n" + descStr;
+    const std::string key = methodKey(ins.method.owner.to_std_string(), "valueOf", descStr);
     const bool verified =
         state.enumSyntheticMethods != nullptr
             ? state.enumSyntheticMethods->count(key) != 0

@@ -458,7 +458,7 @@ static bool tryEmitStaticBoundCall(CSourceStream& out, const RegInstruction& ins
     const std::string owner = types[0];
     const std::string name  = ins.method.name.to_std_string();
     const std::string desc  = ins.method.desc.to_std_string();
-    const std::string key   = owner + "\n" + name + "\n" + desc;
+    const std::string key   = methodKey(owner, name, desc);
     if (state.indyFunctions != nullptr && state.indyFunctions->count(key) != 0) return false;
     const auto direct = state.convertedFunctions->find(key);
     if (direct == state.convertedFunctions->end() || direct->second.empty()) return false;
@@ -887,13 +887,13 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 // instance 调用（省 resolved 的 GetObjectClass + IsSameObject）。
                 // convertedFunctions 可为空（tryEmitDirectCall /
                 // tryEmitStaticBoundCall 同样判空），空时走 cached 调用。
-                const std::string methodKey = ins.method.owner.to_std_string() + "\n" +
-                                              ins.method.name.to_std_string() + "\n" +
-                                              ins.method.desc.to_std_string();
+                const std::string key = methodKey(ins.method.owner.to_std_string(),
+                                                  ins.method.name.to_std_string(),
+                                                  ins.method.desc.to_std_string());
                 bool        directAvailable = false;
                 std::string directName;
                 if (state.convertedFunctions != nullptr) {
-                    const auto direct = state.convertedFunctions->find(methodKey);
+                    const auto direct = state.convertedFunctions->find(key);
                     if (direct != state.convertedFunctions->end()) {
                         directAvailable = true;
                         directName      = direct->second;
@@ -901,7 +901,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 }
                 bool safeDirect = state.directCalls;   // 直调默认关闭（JVM 栈帧语义）
                 if (state.indyFunctions != nullptr &&
-                    state.indyFunctions->count(methodKey) != 0) {
+                    state.indyFunctions->count(key) != 0) {
                     safeDirect = false;
                 }
                 for (const auto& arg : ins.args) {

@@ -45,11 +45,8 @@ using codegen::hex64;
 using codegen::nativeFunctionName;
 using codegen::registerFunctionName;
 
-/// 方法唯一键（owner\nname\ndesc），用于 convertedFunctions/indyFunctions 查表。
-std::string methodKey(const std::string& owner, const std::string& name, const std::string& desc)
-{
-    return owner + "\n" + name + "\n" + desc;
-}
+// 方法唯一键（owner\nname\ndesc）：regc_emitter_internal.hpp 的 inline
+// methodKey（原 TU 内静态 helper 下沉共享，评审 nit N6），键格式逐字节不变。
 
 /// 构建 resolved native dispatch 的运行时定义文本：全局转换函数表 + 按 receiver
 /// 类解析/校验帮手。帮手函数经 add_func_declared 登记前向声明到 fwd（调用方

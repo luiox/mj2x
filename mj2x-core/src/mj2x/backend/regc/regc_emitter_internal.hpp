@@ -26,6 +26,17 @@ namespace mj2x {
 // 与既有 cpp 一致：CSourceStream 从 codegen 起别名，函数签名保持一行。
 using codegen::CSourceStream;
 
+/// 方法唯一键（owner\nname\ndesc）：convertedFunctions / indyFunctions /
+/// enumSyntheticMethods 的跨 TU 统一构建点（原 regc_backend.cpp TU 内静态
+/// helper 下沉，评审 nit N6）。键格式逐字节冻结——查表写入端
+/// （compileMethod 预登记/自登记）与读取端（直调/resolved 表还原按 '\n'
+/// 切三段）都依赖三段式布局，任何转义/分隔符语义变化都是产物级漂移。
+inline std::string methodKey(const std::string& owner, const std::string& name,
+                             const std::string& desc)
+{
+    return owner + "\n" + name + "\n" + desc;
+}
+
 /// @brief RegId 对应的 native 对象状态（装箱值/Random/StringBuilder 等 intrinsic 载体）。
 struct RegCNativeObjectState
 {

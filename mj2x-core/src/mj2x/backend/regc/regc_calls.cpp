@@ -67,7 +67,8 @@ bool isSelfStaticCall(const RegCFunctionEmitState& state, const RegInstruction& 
 std::string cacheKey(const ca::str::Utf8StringRef& first, const ca::str::Utf8StringRef& second,
                      const ca::str::Utf8StringRef& third)
 {
-    return first.to_std_string() + "\n" + second.to_std_string() + "\n" + third.to_std_string();
+    // 三段式键构建统一走 methodKey（缓存名键与方法查表键同格式，N6 下沉）。
+    return methodKey(first.to_std_string(), second.to_std_string(), third.to_std_string());
 }
 
 ca::str::Utf8StringRef addStaticMethodCache(RegCFunctionEmitState& state,
@@ -219,13 +220,13 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
              desc.back() == ';') ||
             (name == "valueOf" && desc.rfind("(Ljava/lang/String;)L", 0) == 0);
         if (syntheticShape &&
-            state.enumSyntheticMethods->count(ins.method.owner.to_std_string() + "\n" + name +
-                                              "\n" + desc) != 0) {
+            state.enumSyntheticMethods->count(
+                methodKey(ins.method.owner.to_std_string(), name, desc)) != 0) {
             return false;
         }
     }
-    std::string       key = ins.method.owner.to_std_string() + "\n" + name + "\n" +
-                            ins.method.desc.to_std_string();
+    std::string       key = methodKey(ins.method.owner.to_std_string(), name,
+                                      ins.method.desc.to_std_string());
     auto              it  = convertedFunctions->find(key);
     if ((it == convertedFunctions->end() || it->second.empty()) && classIndex != nullptr) {
         // 继承方法：调用点 owner 是 receiver 静态类型，convertedFunctions 键
@@ -254,7 +255,7 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
             if (!reResolved) cur = super;
         }
         if (reResolved) {
-            key = cur + "\n" + name + "\n" + ins.method.desc.to_std_string();
+            key = methodKey(cur, name, ins.method.desc.to_std_string());
             it  = convertedFunctions->find(key);
         }
     }
