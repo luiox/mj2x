@@ -204,6 +204,26 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     // 分派 + 已转换目标（构造器函数体），receiver 是分配对象（已知类），
     // 直调与 JNI 调用语义一致，省 resolved 的 GetObjectClass+IsSameObject。
     if (name[0] == '<' && name != "<init>") return false;
+    // javac 合成枚举 values()/valueOf() 让路站点 intrinsic（#887 Enums 承接卡）：
+    // 直调体会执行 3 次 JNI（getstatic + instance-cache clone + checkcast），
+    // intrinsic 走站点缓存仅 2/1 次（类型检查可省——$VALUES 恒为 [Lowner;、
+    // Enum.valueOf 返回恒为 owner）；且 intrinsic 同样无 JVM 栈帧，issue #814
+    // 直调门控的栈观察权衡不变。仅让路给预扫描/按类补扫/SSA 自登记验证过的
+    // 合成方法；未登记（非 javac 形状/非枚举 owner）维持直调。
+    if (state.enumSyntheticMethods != nullptr && !state.enumSyntheticMethods->empty() &&
+        ins.method.invokeOpcode == Opcodes::INVOKESTATIC &&
+        (name == "values" || name == "valueOf")) {
+        const std::string desc = ins.method.desc.to_std_string();
+        const bool        syntheticShape =
+            (name == "values" && desc.rfind("()[L", 0) == 0 && !desc.empty() &&
+             desc.back() == ';') ||
+            (name == "valueOf" && desc.rfind("(Ljava/lang/String;)L", 0) == 0);
+        if (syntheticShape &&
+            state.enumSyntheticMethods->count(ins.method.owner.to_std_string() + "\n" + name +
+                                              "\n" + desc) != 0) {
+            return false;
+        }
+    }
     std::string       key = ins.method.owner.to_std_string() + "\n" + name + "\n" +
                             ins.method.desc.to_std_string();
     auto              it  = convertedFunctions->find(key);
