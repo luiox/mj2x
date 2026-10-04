@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -36,7 +37,7 @@ struct Toolchain
     fs::path    javac;
     fs::path    java;
     fs::path    cli;
-    bool        clangAvailable = false;
+    test::jdk::ClangProbe clang;   // #1122：探测面 PATH+常见位置，探测结果可见化
 };
 
 struct SampleSpec
@@ -154,8 +155,8 @@ Toolchain probeToolchain()
         tc.reason = "mj2x-cli 未构建: " + tc.cli.string();
         return tc;
     }
-    const auto clangProbe = runScript({quotePath("clang") + " --version"});
-    tc.clangAvailable     = clangProbe.exitCode == 0;
+    const auto clangProbe = test::jdk::probeClang();
+    tc.clang              = clangProbe;
     tc.available          = true;
     return tc;
 }
@@ -193,7 +194,12 @@ class LlvmSamples : public ::testing::Test
 protected:
     static Toolchain tc_;
 
-    static void SetUpTestSuite() { tc_ = probeToolchain(); }
+    static void SetUpTestSuite()
+    {
+        tc_ = probeToolchain();
+        // #1122：探测结果可见化——找到/未找到 + 版本 + 来源，一行打测试输出。
+        std::cout << "[clang-probe] LlvmSamples: " << test::jdk::formatClangProbe(tc_.clang) << std::endl;
+    }
 
     void SetUp() override
     {
@@ -215,7 +221,8 @@ protected:
     }
 
     // javac -> cli(llvm, emit native.ll + compile with clang) -> assert IR markers
-    // -> Driver native run (expected output). clang 缺失时仅做发射断言并跳过运行。
+    // -> Driver native run (expected output). clang 探测未命中时仅做发射断言并跳过
+    // 运行（#1122：探测面 PATH+常见位置，命中即完整编译运行）。
     void generateAndRunSample(const SampleSpec& sample, const std::string& expectedOutput)
     {
         const fs::path outDir = sampleDir(sample.className);
@@ -241,17 +248,23 @@ protected:
 
         const fs::path protectedClass = outDir / (std::string(sample.className) + "_protected.class");
         const fs::path llFile         = outDir / "native.ll";
-        std::string    transformCommand =
-            quotePath(tc_.cli) + " -i " + quotePath(classFile) + " -o " +
-            quotePath(protectedClass) + " --backend llvm --emit-llvm " + quotePath(llFile) +
-            " --compile --llvm-tool clang";
-        if (!tc_.clangAvailable) {
-            // 无 clang：退化为仅发射（无 --compile，避免 cl 路径差异）。
-            transformCommand =
+        std::vector<std::string> transformLines;
+        if (tc_.clang.available) {
+            // PATH 注入前置（clang 命中非 PATH 位置时 CLI 才能解析到），再接
+            // 完整编译命令：--emit-llvm + --compile --llvm-tool clang。
+            transformLines = test::jdk::clangPathPrelude(tc_.clang);
+            transformLines.push_back(
                 quotePath(tc_.cli) + " -i " + quotePath(classFile) + " -o " +
-                quotePath(protectedClass) + " --backend llvm --emit-llvm " + quotePath(llFile);
+                quotePath(protectedClass) + " --backend llvm --emit-llvm " + quotePath(llFile) +
+                " --compile --llvm-tool clang");
         }
-        const auto transform = runScript({transformCommand});
+        else {
+            // 无 clang：退化为仅发射（无 --compile，避免 cl 路径差异）。
+            transformLines.push_back(
+                quotePath(tc_.cli) + " -i " + quotePath(classFile) + " -o " +
+                quotePath(protectedClass) + " --backend llvm --emit-llvm " + quotePath(llFile));
+        }
+        const auto transform = runScript(transformLines);
         ASSERT_EQ(transform.exitCode, 0) << sample.className << " transform:\n" << transform.out;
         ASSERT_TRUE(fileExists(llFile)) << llFile;
 
@@ -267,8 +280,9 @@ protected:
         EXPECT_TRUE(fileExists(outDir / "TRACE_SURFACE.md"));
         EXPECT_TRUE(fileExists(outDir / "LLVM_METRICS.md"));
 
-        if (!tc_.clangAvailable) {
-            GTEST_SKIP() << "clang is not available on PATH (LLVM sample native run)";
+        if (!tc_.clang.available) {
+            GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                         << tc_.clang.reason << " (LLVM sample native run)";
         }
 
         // Driver（字节码侧）加载 dll 后调用样本 check()（native）。

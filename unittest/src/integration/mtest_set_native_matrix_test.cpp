@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -105,7 +106,7 @@ struct Toolchain
     std::string  reason;
     JdkToolchain jdk;
     fs::path     cli;
-    bool         clangAvailable = false;   // LLVM 列需要 clang（非 cl/gcc）
+    ClangProbe   clang;   // LLVM 列需要 clang（非 cl/gcc）；探测面 PATH+常见位置（#1122）
 };
 
 Toolchain probeToolchain()
@@ -128,8 +129,7 @@ Toolchain probeToolchain()
         toolchain.reason = compiler.reason;
         return toolchain;
     }
-    const auto clangProbe = runBat({q("clang") + " --version"});
-    toolchain.clangAvailable = clangProbe.exitCode == 0;
+    toolchain.clang = probeClang();
     toolchain.available = true;
     return toolchain;
 }
@@ -139,15 +139,23 @@ class MtestSetNativeMatrix : public ::testing::TestWithParam<MatrixParam>
 protected:
     static Toolchain toolchain_;
 
-    static void SetUpTestSuite() { toolchain_ = probeToolchain(); }
+    static void SetUpTestSuite()
+    {
+        toolchain_ = probeToolchain();
+        // #1122：探测结果可见化——找到/未找到 + 版本 + 来源，一行打测试输出，
+        // 使 llvm 列的 SKIP 有因可查（此前无 clang 机器整列静默跳过）。
+        std::cout << "[clang-probe] MtestSetNativeMatrix: " << formatClangProbe(toolchain_.clang)
+                  << std::endl;
+    }
 
     void SetUp() override
     {
         if (!toolchain_.available) {
             GTEST_SKIP() << "native integration toolchain unavailable: " << toolchain_.reason;
         }
-        if (GetParam().backend == MatrixBackend::Llvm && !toolchain_.clangAvailable) {
-            GTEST_SKIP() << "clang is not available on PATH (LLVM matrix column)";
+        if (GetParam().backend == MatrixBackend::Llvm && !toolchain_.clang.available) {
+            GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
+                         << toolchain_.clang.reason << " (LLVM matrix column)";
         }
     }
 
@@ -219,7 +227,7 @@ protected:
                                q(outputClass) + " --backend " + backendName(param.backend) +
                                " --emit-c " + q(cFile) + " --compile";
         }
-        const auto transform = runBat({transformCommand});
+        const auto transform = runBat(clangPathPrelude(toolchain_.clang, transformCommand));
         ASSERT_EQ(transform.exitCode, 0)
             << fixture.id << " " << backendName(param.backend) << " transform:\n"
             << transform.out;
