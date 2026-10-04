@@ -540,7 +540,9 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
             // handlerArgs 沿用调用块现有边的实参（调用点之前的帧状态）：被
             // 内联体只定义新值、不改写 handler 可见的局部槽，尾部指令仅在内
             // 联体成功完成后执行——对克隆体内任意抛出点都是正确传输；merge
-            // 块沿用同一组实参与既有「块入口帧状态」精度约定一致。
+            // 块沿用同一组实参与既有「块入口帧状态」精度约定一致（#1188 评审
+            // P3-3 勘注：merge 内尾部指令自身的内部抛出点传输精度=块入口帧
+            // 状态，非精确帧状态——与修复前该指令留在调用块内时相同，无回归）。
             if (!function.exceptionRegions.empty()) {
                 std::vector<SSABlock*> newBlocks;
                 newBlocks.reserve(clones.size() + 1);

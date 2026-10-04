@@ -298,6 +298,12 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   产物逐字节不变）；不在运行时 C 加检查——保持 pending 合 JNI 惯例。SSA 层
   修复三后端（RegC/LLVM/VMC4 共用 Reg 异常区域）同时受益。非受保护路径
   （方法无 try）发射零变化。
+  评审收编（P2-1/P3-3 勘注）：EnumSemCheck E2E 对"内联受保护边"缺陷无回归
+  门禁力（类序使 valueOf 调用点不内联、main 基线同绿），该不变量的门禁面是
+  SSA 层 InlinedBlocksInheritCallerExceptionProtection 单测；merge 块尾部指令
+  内部抛出点传输精度=块入口帧状态（非精确帧状态），与修复前约定一致。
+  评审侧面发现另案立案：内联可达性依赖 jar 条目序（callee 先转则 MethodNode
+  不可解析、内联静默不发生，语义修复与性能收益覆盖面同受制约）。
 - 2026-10-04（#886 单后端编译选项，分支 `feat/mj2x-886-single-backend`）：
   新增值型开关 `with_mj2x_backend`（all 默认 | stackc | regc | vmc4 | llvm）。
   三层裁剪：① mj2x-core 按选择器只收编所选后端目录（llvm 额外收编 regc

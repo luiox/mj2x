@@ -181,6 +181,10 @@ WholeProgram makeWholeProgram()
         // values() 遍历 / valueOf 合法名 round-trip（引用恒等）/ name/ordinal /
         // try 块内 valueOf 非法名必须 catch IAE（13-probe 外部门禁盲区：
         // EnumProbe 仅合法名、ExceptionProbe 无 valueOf-in-try）。
+        // 局限（#1188 评审 P2-1）：本 E2E 对"内联受保护边"缺陷无回归门禁力——
+        // 类序（Color 先于 EnumSem 转换）使 valueOf 调用点不内联，main 基线
+        // 本 E2E 亦绿；钉住该不变量的是 SSA 层
+        // InlinedBlocksInheritCallerExceptionProtection 单测。
         {"Color",
          "package app;\n"
          "public enum Color {\n"
