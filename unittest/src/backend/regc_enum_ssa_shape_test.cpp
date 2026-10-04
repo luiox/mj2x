@@ -1,14 +1,18 @@
-// Enums 承接卡（#887）SSA 形状谓词直测 + 内联排除门计数（评审 nit N4 收尾）。
+// Enums 承接卡（#887）SSA 形状谓词直测 + 内联排除门计数（评审 nit N4 收尾；
+// #1192 评审 N4 承接：valueOf SSA 谓词死路径删除，方案 B）。
 //
 // 覆盖面（当时仅产物级验证：转换日志行 + 生成 C，本卡补符号级直测）：
-//   1. isJavacEnumValuesSsa / isJavacEnumValueOfSsa 形状判定——正例钉接受形状，
-//      反例钉拒绝边界（同形状手工方法 / 缺一指令 / 非 clone owner / 签名门）。
-//   2. SsaInlineOptions.excludeMethod + SsaInlineStats.skippedExcluded——pass 层
+//   1. isJavacEnumValuesSsa 形状判定——正例钉接受形状，反例钉拒绝边界
+//      （同形状手工方法 / 缺一指令 / 非 clone owner / 签名门）。
+//   2. javac valueOf 无 SSA 谓词的 lowering 事实钉——body 块恰为
+//      [Call, Convert] 2 条（ldc/aload 不落 SSA 指令），valueOf 合成验证
+//      唯一来源是字节码侧 isJavacEnumValueOfBody 预扫描/按类补扫。
+//   3. SsaInlineOptions.excludeMethod + SsaInlineStats.skippedExcluded——pass 层
 //      可观测面（返回结构 SsaInlineStats，仓内 ssa_inline_test 同惯例）。
 //
 // 红相论证（每 TEST 注释单列）：删谓词 / 改判定条件时哪个断言转红。
-// 正例经真实管线（CodeConverter → SSABuilder）构造；谓词对「块内指令编排」的
-// 边界用手工 SSAFunction 直测（converter 会丢 ldc，见 ValueOfJavacShape 测试）。
+// 正例经真实管线（CodeConverter → SSABuilder）构造；valueOf 的 lowering 事实
+// 见 ValueOfJavacShapeLowersToCallConvertPair（converter 会丢 ldc/aload）。
 // 注意：MethodNode 的 name/desc 是非持有 Utf8StringRef，全部 fixture 只传静态
 // 字面量，不造临时 std::string。
 #include "garena/arena.hpp"
@@ -348,17 +352,22 @@ TEST(RegCEnumSsaShapeTest, ValuesWrongDescRejected)
 }
 
 // ---------------------------------------------------------------------------
-// isJavacEnumValueOfSsa
+// javac valueOf(String) 的 SSA lowering 事实钉（#1192 评审 N4 承接，方案 B）
 // ---------------------------------------------------------------------------
 
-// 现状钉（N4 直测卡）：javac valueOf 真实形态经真实管线（CodeConverter →
-// SSABuilder）后，ldc 类字面量与 aload#0 都不落 SSA 指令（分别降为 opaque 值与
-// 局部值），body 块仅 [Call, Convert] 两条——isJavacEnumValueOfSsa 的「同块
-// 3 指令」门把它拒之门外，SSA 自登记对 valueOf 实际不可达（valueOf 站点
-// intrinsic 由字节码侧 isJavacEnumValueOfBody 预扫描/按类补扫覆盖）。
-// 红相：若把 valueOf 的 size 门改成 2 指令口径（或让 ldc 落指令），本测试
-// 翻转为 EXPECT_TRUE——它就是那次修复的红绿开关。
-TEST(RegCEnumSsaShapeTest, ValueOfJavacShapeThroughPipeline)
+// valueOf 无 SSA 形状谓词、无 SSA 自登记（谓词已删）：真实 javac valueOf 经
+// 真实管线（CodeConverter → SSABuilder）后 ldc 类字面量与 aload#0 都不落 SSA
+// 指令（分别降为 opaque 值与局部值，ssa_builder.cpp lowerConstant/
+// lowerLocalLoad），body 块恰为 [Call(Enum.valueOf), Convert(checkcast owner)]
+// 两条——任何 SSA 侧形状门都查不到 ldc desc == owner 这一 owner 绑定证据，
+// 只能造出弱于字节码门的合同（2 指令口径会放行 Enum.valueOf(他类字面量, s) +
+// checkcast 本类的病态形状并注入站点 intrinsic 信任集合，fail-open）。
+// valueOf 合成验证唯一来源 = 字节码侧 isJavacEnumValueOfBody 预扫描/按类补扫
+// （与 lowering 无关、时序严格先于本方法 SSA 构建）。
+// 红相：lowering 演进使 ldc/aload 落为 SSA 指令（body 块 ≠ 2 条）→ 本测试
+// 转红，即重估 SSA 侧 valueOf 验证可行性的时点；重新引入 valueOf SSA 形状门
+// （无论 2/3 指令口径）前必须先以本钉校准 lowering 事实。
+TEST(RegCEnumSsaShapeTest, ValueOfJavacShapeLowersToCallConvertPair)
 {
     Utf8StringArena arena;
     std::string     reason;
@@ -378,80 +387,33 @@ TEST(RegCEnumSsaShapeTest, ValueOfJavacShapeThroughPipeline)
                          2, 1);
     auto ssa = buildSsa(*mn, "Color", arena, reason);
     ASSERT_NE(ssa, nullptr) << reason;
-    EXPECT_FALSE(isJavacEnumValueOfSsa(*ssa))
-        << "current lowering drops ldc/aload, body block is [Call, Convert] (2 insns); blocks="
+
+    // 定位非空 body 块（SSABuilder 可能另生成空 entry 块），钉其恰为 2 指令。
+    const SSABlock* body = nullptr;
+    for (const auto& block : ssa->blocks) {
+        if (!block->instructions.empty()) {
+            ASSERT_EQ(body, nullptr) << "multiple non-empty blocks; blocks="
+                                     << blockShape(*ssa);
+            body = block.get();
+        }
+    }
+    ASSERT_NE(body, nullptr) << "no non-empty block; blocks=" << blockShape(*ssa);
+    ASSERT_EQ(body->instructions.size(), 2U)
+        << "lowering must keep dropping ldc/aload for javac valueOf; blocks="
         << blockShape(*ssa);
-}
-
-// 正例（谓词契约直测）：[0] 指令不查（ldc 形状任意——任意 kind 都行），
-// [1] = Enum.valueOf 调用、[2] = checkcast owner、ret 引用 cast 结果。
-// 红相：收紧 [0] 的 kind 白名单（如要求必须是某特定指令）或改 [1]/[2] 顺序 → 转红。
-TEST(RegCEnumSsaShapeTest, ValueOfLeadingInstructionUnchecked)
-{
-    // 变体 A：[0] = Intrinsic（任意非 LDC 语义指令）。
-    HandFn h = makeHandFn("Color", "valueOf", "(Ljava/lang/String;)LColor;");
-    appendIntrinsic(h, "noise");
-    SSACallInstruction* invoke =
-        appendCall(h, "java/lang/Enum", "valueOf",
-                   "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;",
-                   Opcodes::INVOKESTATIC);
-    SSAConvertInstruction* cast = appendCheckCast(h, "Color", &invoke->result);
-    finishReturn(h, &cast->result);
-    EXPECT_TRUE(isJavacEnumValueOfSsa(*h.fn));
-
-    // 变体 B：[0] = LoadField（另一 kind）——钉「任意」二字。
-    HandFn h2 = makeHandFn("Color", "valueOf", "(Ljava/lang/String;)LColor;");
-    appendLoadField(h2, "Color", "$VALUES", "[LColor;");
-    SSACallInstruction* invoke2 =
-        appendCall(h2, "java/lang/Enum", "valueOf",
-                   "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;",
-                   Opcodes::INVOKESTATIC);
-    SSAConvertInstruction* cast2 = appendCheckCast(h2, "Color", &invoke2->result);
-    finishReturn(h2, &cast2->result);
-    EXPECT_TRUE(isJavacEnumValueOfSsa(*h2.fn));
-}
-
-// 红相：删 Enum.valueOf 调用点四元组比对（opcode/owner/name/desc 任一）→ 转红。
-TEST(RegCEnumSsaShapeTest, ValueOfWrongEnumCallRejected)
-{
-    HandFn h = makeHandFn("Color", "valueOf", "(Ljava/lang/String;)LColor;");
-    appendIntrinsic(h, "noise");
-    // desc 错：Enum.valueOf 的真实签名是 (Class;String;)Enum。
-    SSACallInstruction* invoke =
-        appendCall(h, "java/lang/Enum", "valueOf",
-                   "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Object;",
-                   Opcodes::INVOKESTATIC);
-    SSAConvertInstruction* cast = appendCheckCast(h, "Color", &invoke->result);
-    finishReturn(h, &cast->result);
-    EXPECT_FALSE(isJavacEnumValueOfSsa(*h.fn));
-}
-
-// 红相：删 checkcast owner 比对（referenceTypeDesc == fn.symbol.owner）→ 转红。
-TEST(RegCEnumSsaShapeTest, ValueOfForeignCheckCastRejected)
-{
-    HandFn h = makeHandFn("Color", "valueOf", "(Ljava/lang/String;)LColor;");
-    appendIntrinsic(h, "noise");
-    SSACallInstruction* invoke =
-        appendCall(h, "java/lang/Enum", "valueOf",
-                   "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;",
-                   Opcodes::INVOKESTATIC);
-    SSAConvertInstruction* cast = appendCheckCast(h, "Other", &invoke->result);
-    finishReturn(h, &cast->result);
-    EXPECT_FALSE(isJavacEnumValueOfSsa(*h.fn));
-}
-
-// 红相：删 name/desc 签名门（valueOf / (String)Owner 前缀，owner 绑定）→ 转红。
-TEST(RegCEnumSsaShapeTest, ValueOfSignatureGateRejected)
-{
-    HandFn h = makeHandFn("Color", "valueOf", "(Ljava/lang/String;)LOther;");
-    appendIntrinsic(h, "noise");
-    SSACallInstruction* invoke =
-        appendCall(h, "java/lang/Enum", "valueOf",
-                   "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;",
-                   Opcodes::INVOKESTATIC);
-    SSAConvertInstruction* cast = appendCheckCast(h, "Color", &invoke->result);
-    finishReturn(h, &cast->result);
-    EXPECT_FALSE(isJavacEnumValueOfSsa(*h.fn));
+    ASSERT_EQ(body->instructions[0]->kind, SSAInstructionKind::Call);
+    const auto* invoke = static_cast<const SSACallInstruction*>(body->instructions[0].get());
+    EXPECT_EQ(invoke->method.owner, "java/lang/Enum");
+    EXPECT_EQ(invoke->method.name, "valueOf");
+    EXPECT_EQ(invoke->method.desc,
+              "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;");
+    ASSERT_EQ(body->instructions[1]->kind, SSAInstructionKind::Convert);
+    const auto* cast = static_cast<const SSAConvertInstruction*>(body->instructions[1].get());
+    EXPECT_EQ(cast->convertKind, SSAConvertKind::ReferenceCast);
+    EXPECT_EQ(cast->referenceTypeDesc, "Color");
+    const auto* ret = std::get_if<SSAReturnTerminator>(&body->terminator);
+    ASSERT_NE(ret, nullptr) << "body block must return";
+    EXPECT_EQ(ret->value, cast->hasResult ? &cast->result : nullptr);
 }
 
 // ---------------------------------------------------------------------------

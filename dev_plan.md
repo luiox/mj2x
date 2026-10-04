@@ -259,7 +259,9 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
   方向成立、冷调用外推的量级上限不成立（JNI 纪律内已收敛，对齐需 C 侧枚举
   元数据，超本卡）。三刀优化：① `SsaInlineOptions.excludeMethod` 排除门 +
   懒加载登记三层（全类预扫描已有/按类补扫 preRegisteredClasses/SSA 自登记
-  `isJavacEnumValuesSsa`/`isJavacEnumValueOfSsa`）——多类 jar 懒加载下
+  `isJavacEnumValuesSsa`；勘注：本卡同期引入的 `isJavacEnumValueOfSsa` 对真实
+  javac valueOf 不可达且构成 fail-open 侧门，已随 #1192 评审 N4 承接删除，
+  valueOf 覆盖唯一来源=字节码侧预扫描/补扫）——多类 jar 懒加载下
   values()/valueOf() 站点 intrinsic 从不可达（tester 0 处）到全覆盖
   （values×3/valueOf×1，直调口径同）。理论时序缺口仍在（评审 N5 记录）：
   调用方先于枚举类被编译时，两层补扫/自登记均未发生（登记只落在本枚举类

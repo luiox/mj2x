@@ -640,42 +640,17 @@ bool isJavacEnumValuesSsa(const SSAFunction& fn)
     return false;
 }
 
-/// javac 合成 valueOf(String) 的 SSA 形状验证：ldc 类字面量（形状任意）→
-/// invokestatic java/lang/Enum.valueOf → checkcast owner → ret，同块 3 指令
-/// （按块搜索，容忍空 entry 块）。
-bool isJavacEnumValueOfSsa(const SSAFunction& fn)
-{
-    const std::string owner = fn.symbol.owner;
-    const std::string desc  = fn.symbol.desc;
-    if (fn.symbol.name != "valueOf" ||
-        desc.rfind("(Ljava/lang/String;)L" + owner + ";", 0) != 0) {
-        return false;
-    }
-    for (const auto& blockPtr : fn.blocks) {
-        const auto& block = *blockPtr;
-        if (block.instructions.size() != 3) continue;
-        if (block.instructions[1]->kind != SSAInstructionKind::Call) continue;
-        const auto* invoke = static_cast<const SSACallInstruction*>(block.instructions[1].get());
-        if (invoke->method.invokeOpcode != Opcodes::INVOKESTATIC ||
-            invoke->method.owner.to_std_string() != "java/lang/Enum" ||
-            invoke->method.name.to_std_string() != "valueOf" ||
-            invoke->method.desc.to_std_string() !=
-                "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;") {
-            continue;
-        }
-        if (block.instructions[2]->kind != SSAInstructionKind::Convert) continue;
-        const auto* cast = static_cast<const SSAConvertInstruction*>(block.instructions[2].get());
-        if (cast->convertKind != SSAConvertKind::ReferenceCast ||
-            cast->referenceTypeDesc.to_std_string() != owner) {
-            continue;
-        }
-        const auto* ret = std::get_if<SSAReturnTerminator>(&block.terminator);
-        if (ret != nullptr && ret->value == (cast->hasResult ? &cast->result : nullptr)) {
-            return true;
-        }
-    }
-    return false;
-}
+// 说明（#1192 评审 N4 承接，方案 B）：javac 合成 valueOf(String) 无 SSA 形状
+// 验证、也不设 SSA 自登记——真实 javac valueOf 经 lowering 后 body 块仅
+// [Call, Convert] 2 条（ldc 类字面量降为 opaque 值、aload 0 降为局部值，均
+// 不落 SSA 指令，见 ssa_builder.cpp lowerConstant/lowerLocalLoad）。字节码门
+// 的证据（此时方法体指令尚在）严格超集于 SSA 侧可见证据——ldc desc == owner
+// 仅存于 opaque tag 字符串约定（调试用，经局部中转/phi 即失配），故 SSA 侧
+// 任何形状门都弱于字节码门：对字节码门已接受者幂等零增量，对其拒绝者净放行
+// （fail-open；旧 3 指令谓词即曾构成此类活体侧门，#1192 评审核出后删除）。
+// valueOf 的合成验证唯一来源是字节码侧 isJavacEnumValueOfBody（全类预扫描 +
+// 按类补扫，与 lowering 无关、时序严格先于本方法 SSA 构建）。若未来 lowering
+// 改动使 ldc 落为 SSA 指令，先重估 SSA 侧验证再引入。
 
 void RegCBackend::setSafeEnv(bool enabled)
 {
@@ -799,13 +774,16 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
 
-    // javac 合成枚举方法自登记（#887 Enums 承接卡）：懒加载多类 jar 中，
+    // javac 合成枚举 values() 自登记（#887 Enums 承接卡）：懒加载多类 jar 中，
     // 全类预扫描（enumSyntheticScanned，早于各类加载）与按类补扫（晚于本类
     // 首个方法的指令清空）都可能错过本方法；本方法 SSA 此刻在手，按形状
     // 自登记。站点 intrinsic 与内联排除共用该集合，双重 fail-closed：
     // 非 javac 形状不登记，站点保持旧路径。
+    // 仅 values：真实 javac values 形状（getstatic 落 SSA 指令）3 指令门可达；
+    // valueOf 无 SSA 自登记（ldc 不落指令致形状门不可达且必弱于字节码门，
+    // 覆盖唯一来源是字节码侧，见 isJavacEnumValuesSsa 后的承接说明）。
     if (index != nullptr &&
-        (isJavacEnumValuesSsa(*ssa) || isJavacEnumValueOfSsa(*ssa)) &&
+        isJavacEnumValuesSsa(*ssa) &&
         isEnumSubtypeOwner(index, ca::str::Utf8StringRef::from_string_view(ssa->symbol.owner))) {
         impl_->enumSyntheticMethods.insert(
             methodKey(ssa->symbol.owner, ssa->symbol.name, ssa->symbol.desc));
