@@ -6,6 +6,10 @@
 // 切片 2 追加：分块密钥派生镜像对拍（mj2x_vm_chunk_key）、块定位
 // （mj2x_vm_chunk_locate）、懒解密 round-trip（乱序 + 重复调用幂等，
 // mj2x_vm_lazy_decrypt）。
+// #1116 切片 B 追加：块密钥链派生镜像对拍（mj2x_vm_block_chain_key，
+// (seed, blockIdx, prevKey)、首块 prevKey=seed）、块定位（mj2x_vm_block_locate，
+// targets 划界 + 越界归末块）、链式懒解密 round-trip + 未执行块保持密文
+// （mj2x_vm_block_lazy_decrypt，乱序 + 幂等 + 防御面）。
 
 #include "vmc4/mj2x_vmc4_runtime.h"
 
@@ -31,6 +35,20 @@ static void test_side_xor_stream(unsigned char* data, unsigned int size, uint32_
 static uint32_t test_side_chunk_key(uint32_t blob_key, uint32_t chunk_index)
 {
     uint32_t s = blob_key ^ (0x9E3779B9u + 0x9E3779B9u * (chunk_index + 1u));
+    for (int i = 0; i < 4; ++i) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+    }
+    return s != 0u ? s : 0x9E3779B9u;
+}
+
+// 独立实现的块密钥链派生（与发射侧 vmc4DeriveBlockChainKey / CRT
+// mj2x_vm_block_chain_key 同公式、独立成文）：链式扰动 = 前块密钥 XOR 进
+// golden-ratio 扰动项 + 4 轮 xorshift32，恒非 0。
+static uint32_t test_side_block_chain_key(uint32_t seed, uint32_t block_index, uint32_t prev_key)
+{
+    uint32_t s = seed ^ prev_key ^ (0x9E3779B9u + 0x9E3779B9u * (block_index + 1u));
     for (int i = 0; i < 4; ++i) {
         s ^= s << 13;
         s ^= s >> 17;
@@ -134,6 +152,87 @@ void mj2x_vmc4_blob_crypto_test_run(void)
         /* 防御：越界块下标与 NULL state 不崩溃、不解密。 */
         mj2x_vm_lazy_decrypt(stream, ends, state, n, blob_key, 3u);
         mj2x_vm_lazy_decrypt(stream, ends, NULL, n, blob_key, 0u);
+        assert(memcmp(stream, plain, sizeof(stream)) == 0);
+    }
+
+    // ------------------------------------------------------------------
+    // #1116 切片 B：块粒度链式懒解密原语。
+    // ------------------------------------------------------------------
+
+    // 块密钥链派生：与独立镜像逐位一致；确定性；恒非 0；对 seed/下标/prevKey
+    // 各自敏感；首块 prevKey = seed（k_0 = F(seed, 0, seed)）口径显式验证。
+    for (uint32_t k = 1u; k < 9u; ++k) {
+        for (uint32_t c = 0u; c < 8u; ++c) {
+            const uint32_t prevs[3] = {k, k ^ 0x13579BDFu, 0xDEADBEEFu};
+            for (int pi = 0; pi < 3; ++pi) {
+                const uint32_t got = mj2x_vm_block_chain_key(k, c, prevs[pi]);
+                assert(got == test_side_block_chain_key(k, c, prevs[pi]));
+                assert(got == mj2x_vm_block_chain_key(k, c, prevs[pi]));   /* 确定性 */
+                assert(got != 0u);
+            }
+        }
+        assert(mj2x_vm_block_chain_key(k, 0u, k) == test_side_block_chain_key(k, 0u, k));
+        assert(mj2x_vm_block_chain_key(k, 0u, k) != 0u);
+        assert(mj2x_vm_block_chain_key(k, 0u, k) == mj2x_vm_block_chain_key(k, 0u, k));
+        assert(mj2x_vm_block_chain_key(k, 0u, k) != mj2x_vm_block_chain_key(k, 1u, k));
+        assert(mj2x_vm_block_chain_key(k, 3u, k) != mj2x_vm_block_chain_key(k ^ 0x5A5A5A5Au, 3u, k));
+        assert(mj2x_vm_block_chain_key(k, 3u, k) != mj2x_vm_block_chain_key(k, 3u, k ^ 0x3C3C3C3Cu));
+    }
+
+    // 块定位：targets 划界（end(c) = targets[c+1] 或 total）lower-bound + 越界归末块。
+    {
+        const uint32_t targets[4] = {0u, 64u, 128u, 192u};
+        const uint32_t total = 200u;   /* 末块 [192, 200) 含 Halt 哨兵 */
+        assert(mj2x_vm_block_locate(targets, 4u, total, 0u) == 0u);
+        assert(mj2x_vm_block_locate(targets, 4u, total, 63u) == 0u);
+        assert(mj2x_vm_block_locate(targets, 4u, total, 64u) == 1u);
+        assert(mj2x_vm_block_locate(targets, 4u, total, 199u) == 3u);
+        assert(mj2x_vm_block_locate(targets, 4u, total, 500u) == 3u);   /* 防御：归末块 */
+        assert(mj2x_vm_block_locate(targets, 0u, 0u, 0u) == 0u);        /* 防御：空表 */
+    }
+
+    // 链式懒解密 round-trip：发射侧等价（链序逐块加密）-> 乱序首达解密 ->
+    // 整流还原；未执行块保持密文（解块 1 后块 0/2 区间字节不变）；重复调用
+    // 幂等（state=1 短路，XOR 不重复施加）。
+    {
+        unsigned char stream[200];
+        unsigned char plain[200];
+        /* 块起点（模拟 blockTargets，单调；首块恒 0）；末块含尾哨兵。 */
+        const uint32_t targets[3] = {0u, 64u, 128u};
+        const uint32_t total = 200u;
+        const uint32_t n = 3u;
+        const uint32_t seed = 0x0BADC0DEu;
+        for (unsigned int i = 0; i < (unsigned int)sizeof(stream); ++i) {
+            plain[i] = (unsigned char)(i * 13u + 5u);
+        }
+        memcpy(stream, plain, sizeof(stream));
+        /* 发射侧等价：链序逐块加密（k_0 = F(seed,0,seed)，k_c = F(seed,c,k_{c-1})）。 */
+        uint32_t k = seed;
+        for (uint32_t c = 0u; c < n; ++c) {
+            const uint32_t begin = targets[c];
+            const uint32_t end = (c + 1u < n) ? targets[c + 1u] : total;
+            k = test_side_block_chain_key(seed, c, k);
+            test_side_xor_stream(stream + begin, end - begin, k);
+        }
+        assert(memcmp(stream, plain, sizeof(stream)) != 0);
+
+        /* 首达解密块 1：块 1 明文还原，块 0/2 保持密文（未执行块不解密）。 */
+        volatile unsigned char state[3] = {0, 0, 0};
+        mj2x_vm_block_lazy_decrypt(stream, targets, state, n, total, seed, 1u);
+        assert(memcmp(stream + targets[1], plain + targets[1], targets[2] - targets[1]) == 0);
+        assert(memcmp(stream, plain, targets[1]) != 0);                            /* 块 0 仍密文 */
+        assert(memcmp(stream + targets[2], plain + targets[2],
+                      total - targets[2]) != 0);                                   /* 块 2 仍密文 */
+
+        /* 乱序补齐 + 幂等：整流还原。 */
+        mj2x_vm_block_lazy_decrypt(stream, targets, state, n, total, seed, 2u);
+        mj2x_vm_block_lazy_decrypt(stream, targets, state, n, total, seed, 2u);    /* 幂等 */
+        mj2x_vm_block_lazy_decrypt(stream, targets, state, n, total, seed, 0u);
+        assert(memcmp(stream, plain, sizeof(stream)) == 0);
+
+        /* 防御：越界块下标与 NULL state 不崩溃、不解密。 */
+        mj2x_vm_block_lazy_decrypt(stream, targets, state, n, total, seed, 3u);
+        mj2x_vm_block_lazy_decrypt(stream, targets, NULL, n, total, seed, 0u);
         assert(memcmp(stream, plain, sizeof(stream)) == 0);
     }
 }

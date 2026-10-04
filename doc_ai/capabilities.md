@@ -257,7 +257,7 @@ CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契
 
 **CLI**:`--backend vmc4` + `--vmc4-dispatcher` / `--vmc4-seed` / `--vmc4-granularity` /
 `--vmc4-alias` / `--vmc4-bogus` / `--vmc4-drift` / `--vmc4-drift-period` /
-`--vmc4-trace-surface` / `--vmc4-encrypt-program` / `--vmc4-shuffle-blocks`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
+`--vmc4-trace-surface` / `--vmc4-encrypt-program` / `--vmc4-lazy-decrypt` / `--vmc4-block-lazy-decrypt` / `--vmc4-shuffle-blocks`;`--runtime-protection` 检查点注入通用(RegC/VMC4/LLVM，round-2 起 LLVM 方法入口注入同款检查点)。
 
 **程序 blob at-rest 加密（`--vmc4-encrypt-program`，#760 首切片）**:开启后每个 VMC4
 实例的解释器字节码 blob 以 xorshift32 keystream 密文落盘，密钥由实例 seed 经
@@ -286,6 +286,28 @@ CLI 全链路 round-trip 测试 `vmc4_samples_test.cpp` 守门,trace-surface 契
 升序/异常区域重映射自洽/同 seed 逐字节一致/不同 seed 布局不同/表加密与 JNI_OnLoad
 解密/三开关叠加产物形态/迷你 VM 模拟执行与参考语义逐输入等价）+ `Vmc4BackendShuffleE2E` 三档 round-trip（shuffle 单开 /
 +drift / +drift+encrypt，switch+循环+try/catch，`-Xverify:all`）。
+
+**块粒度链式懒解密（`--vmc4-block-lazy-decrypt`，#1116 切片 B，默认关）**:开启后
+blob 按 **CFG 块粒度**独立加密——块区间由 blockTargets 划界（尾块含 trailing
+Halt 哨兵），块密钥**链式派生** `vmc4DeriveBlockChainKey(seed, blockIdx, prevKey)`
+（`k_c = xorshift32^4(seed ^ prev ^ golden(c))`，首块 prevKey=seed；与 CRT
+`mj2x_vm_block_chain_key` 双镜像，纯 u32 逐位一致）。JNI_OnLoad 不解密该 blob；
+解释器首达某块时经 `mj2x_vm_block_touch_<tag>` 慢路径解密该块并置 `bstate`
+已解缓存位（快路径 2 读 + 比较；CRT 锁内从 seed 走链重导出密钥，链状态只在
+栈上瞬时存在、用后擦除），未执行块保持密文——对齐 jvmtp 1.6.8
+vm.control-flow-flatten 的 first-arrival decrypt 口径。与 64 字节网格档
+（#760 切片 2 `--vmc4-lazy-decrypt`）互斥：两档同开 CLI fail-closed，直构
+options 绕过时 block 档胜出（blobLazy 归一为关）。块边界复用 targets 表
+（零新增边界表），新数据面仅 N 字节 bstate。与 `--vmc4-drift` 正交（加密作用于
+drift 编码后最终流）；与 `--vmc4-shuffle-blocks` 正交可叠且**推荐组合**（叠加时
+targets 密文落盘，块边界亦不可见）。解密档位矩阵：encrypt±/lazy64±/blockLazy±
+中 lazy64 与 blockLazy 互斥、两者均 requires encrypt、均关 = 批量（encrypt 开）
+或明文（encrypt 关）。关闭路径产物字节级不变。验证:`Vmc4BlockLazyTest.*` 10 例
+（默认关零痕迹/无加密归一/块密文+链式 roundtrip/密钥链向量/drift 叠加/shuffle
+叠加/两档互斥归一/backend JNI_OnLoad 无整体解密+确定性/trace surface 不变/选项
+透传）+ CRT `mj2x_vmc4_blob_crypto_test` 追加链派生对拍/块定位/未执行块保持密文
++ `Vmc4BlockLazyE2E.RoundTripTiers` 三档（block-lazy / +shuffle / +shuffle+drift，
+`-Xverify:all`）。
 
 **已知限制**:MULTIANEWARRAY 初始 fail-closed 已放开;仍 fail-closed:反射、动态类加载、
 invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标。

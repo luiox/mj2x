@@ -1713,4 +1713,171 @@ TEST(Vmc4BackendShuffleE2E, ShuffleDriftEncryptRoundTrip)
     }
 }
 
+// ===========================================================================
+// issue #1116 切片 B：--vmc4-block-lazy-decrypt E2E。
+// ===========================================================================
+
+/// 块粒度链式懒解密三档叠加矩阵 round-trip：
+///   tier 0：block-lazy 单开（+encrypt 前提）
+///   tier 1：+ shuffle-blocks（切片 A 正交叠加，推荐组合）
+///   tier 2：+ drift 全开（执行解码层正交叠加）
+/// 每档独立目录 javac → Vmc4Backend → .c → DLL → Java 加载对拍 baseline。
+/// 样本含 switch 多块（pick）+ 循环（loopSum）+ 算术（addMul），保证首达解密
+/// 在多块面上触发；结构断言：块档基础设施齐备、无任何整体解密调用、
+/// JNI_OnLoad 只保留 shuffle 的 targets 解密条目。
+TEST(Vmc4BlockLazyE2E, RoundTripTiers)
+{
+    Toolchain tc = probeToolchain();
+    if (!tc.available) {
+        GTEST_SKIP() << "VMC4 native E2E toolchain unavailable: " << tc.reason;
+    }
+    const struct
+    {
+        const char* dirSuffix;
+        bool        shuffle;
+        int         drift;
+    } tiers[] = {
+        {"plain",     false, 0},
+        {"shuffle",   true,  0},
+        {"shufdrift", true,  2},
+    };
+
+    for (const auto& tier : tiers) {
+        const std::string className = "Vmc4BlockLazy_" + std::string(tier.dirSuffix);
+        fs::path dir =
+            test::getOutPath("mj2x/vmc4_e2e/" + className + "/.keep").parent_path();
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+
+        fs::path javaFile = dir / (className + ".java");
+        {
+            std::ofstream out(javaFile);
+            out << "public class " << className << " {\n"
+                << "  public static int addMul(int a, int b) { return (a + b) * 3; }\n"
+                << "  public static int loopSum(int n) {\n"
+                << "    int acc = 0;\n"
+                << "    for (int i = 0; i < n; i++) acc += i * 2;\n"
+                << "    return acc;\n"
+                << "  }\n"
+                << "  public static int pick(int x) {\n"
+                << "    switch (x % 6) {\n"
+                << "      case 0: return 100; case 1: return 101; case 2: return 102;\n"
+                << "      case 3: return 103; case 4: return 104;\n"
+                << "      default: return 105;\n"
+                << "    }\n"
+                << "  }\n"
+                << "}\n";
+        }
+        auto javac = runBat({q(tc.javac) + " -d " + q(dir) + " " + q(javaFile)});
+        ASSERT_EQ(javac.exitCode, 0) << tier.dirSuffix << ": " << javac.out;
+
+        fs::path driverFile = dir / "Driver.java";
+        {
+            std::ofstream out(driverFile);
+            out << "public class Driver {\n"
+                << "  public static void main(String[] args) throws Exception {\n"
+                << "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+                << "    if (dll != null) System.load(dll);\n"
+                << "    System.out.println(\"addMul=\" + " << className << ".addMul(3, 4));\n"
+                << "    System.out.println(\"loopSum7=\" + " << className << ".loopSum(7));\n"
+                << "    System.out.println(\"loopSum100=\" + " << className << ".loopSum(100));\n"
+                << "    System.out.println(\"pick3=\" + " << className << ".pick(3));\n"
+                << "    System.out.println(\"pick11=\" + " << className << ".pick(11));\n"
+                << "  }\n"
+                << "}\n";
+        }
+        auto driverCompile =
+            runBat({q(tc.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(driverFile)});
+        ASSERT_EQ(driverCompile.exitCode, 0) << tier.dirSuffix << ": " << driverCompile.out;
+
+        auto baselineRun = runBat({q(tc.java) + " -cp " + q(dir) + " Driver"});
+        ASSERT_EQ(baselineRun.exitCode, 0) << tier.dirSuffix << ": " << baselineRun.out;
+        const auto baseline = splitLines(baselineRun.out);
+        ASSERT_EQ(baseline.size(), 5u);
+
+        fs::path inClass  = dir / (className + ".class");
+        fs::path outClass = dir / (className + "_protected.class");
+        fs::path cFile    = dir / (className + "_blocklazy.c");
+
+        mj2x::PipelineConfig config;
+        config.inputPath  = inClass.string();
+        config.outputPath = outClass.string();
+        mj2x::Pipeline    pipeline(std::move(config));
+        auto              backend = std::make_unique<mj2x::Vmc4Backend>();
+        backend->setOutputPath(cFile.string());
+        mj2x::Vmc4Options opts;
+        opts.dispatcherKind          = mj2x::VmDispatcherKind::SwitchTable;
+        opts.driftVariants           = tier.drift;
+        opts.driftPeriod             = 16;
+        opts.programBlobEncrypt      = true;
+        opts.programBlockLazyDecrypt = true;
+        opts.shuffleBlocks           = tier.shuffle;
+        backend->setOptions(opts);
+        pipeline.registerBackend(std::move(backend));
+        pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+        pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+        ASSERT_EQ(pipeline.run(), 0) << tier.dirSuffix;
+        ASSERT_TRUE(fileExists(cFile));
+        const std::string generatedC = readText(cFile);
+
+        // 产物结构断言：块档基础设施 + 无 blob 整体解密调用；JNI_OnLoad 只保留
+        // shuffle 的 targets 解密条目（shuffle 关时连 targets 解密也无）。
+        EXPECT_NE(generatedC.find("block-chunked at rest, chain keys"), std::string::npos)
+            << tier.dirSuffix << "\n" << generatedC;
+        EXPECT_NE(generatedC.find("static volatile unsigned char mj2x_vm_bstate_"),
+                  std::string::npos) << tier.dirSuffix << "\n" << generatedC;
+        EXPECT_NE(generatedC.find("static void mj2x_vm_block_touch_"), std::string::npos)
+            << tier.dirSuffix << "\n" << generatedC;
+        EXPECT_EQ(generatedC.find("mj2x_vm_cstate_"), std::string::npos) << tier.dirSuffix;
+        EXPECT_EQ(generatedC.find("mj2x_vm_cend_"), std::string::npos) << tier.dirSuffix;
+        if (tier.shuffle) {
+            // shuffle 的 targets 表解密条目仍在（slice A 面）；blob 整体解密
+            // 条目必须为零（块保持密文到首达）。
+            EXPECT_EQ(countOccurrences(generatedC,
+                                       "mj2x_vm_blob_decrypt((unsigned char*)mj2x_vm_targets_"),
+                      3u) << tier.dirSuffix << "\n" << generatedC;
+            EXPECT_EQ(countOccurrences(generatedC, "mj2x_vm_blob_decrypt(mj2x_vm_code_"),
+                      0u) << tier.dirSuffix << "\n" << generatedC;
+        } else {
+            EXPECT_EQ(generatedC.find("mj2x_vm_blob_decrypt"), std::string::npos)
+                << tier.dirSuffix << ": block-lazy product must not decrypt any blob\n"
+                << generatedC;
+        }
+
+        fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
+        ASSERT_FALSE(ec) << ec.message();
+
+        // 编译生成的 C（与 LazyChunkDecryptRoundTrip 同一编译口径）。
+        fs::path dll = dir / (className + "_blocklazy.dll");
+        fs::path obj = dir / (className + "_blocklazy.obj");
+        fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+        fs::path runtimeObj = dir / "mj2x_vmc4_runtime_blocklazy.obj";
+        auto cl = runBat({
+            "call " + q(tc.vcvars64) + " x64 >nul",
+            "cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(cFile) + " /I" + q(crtSrc) +
+                " /I" + q(tc.jdkInclude) + " /I" + q(tc.jdkIncludeWin),
+            "cl /nologo /O2 /TC /utf-8 /c /Fo" + q(runtimeObj) + " " +
+                q(crtSrc / "vmc4" / "mj2x_vmc4_runtime.c") + " /I" + q(crtSrc) + " /I" +
+                q(tc.jdkInclude) + " /I" + q(tc.jdkIncludeWin),
+            "link /nologo /DLL /OUT:" + q(dll) + " " + q(obj) + " " + q(runtimeObj),
+        });
+        ASSERT_EQ(cl.exitCode, 0) << tier.dirSuffix << ": " << cl.out;
+        ASSERT_TRUE(fileExists(dll));
+
+        auto protectedRun = runBat({
+            "set \"MORPHER_DLL=" + dll.string() + "\"",
+            q(tc.java) + " -Xverify:all -cp " + q(dir) + " Driver",
+        });
+        ASSERT_EQ(protectedRun.exitCode, 0) << tier.dirSuffix << ": " << protectedRun.out;
+        const auto actual = splitLines(protectedRun.out);
+
+        ASSERT_EQ(baseline.size(), actual.size())
+            << tier.dirSuffix << " baseline:\n" << joinLines(baseline)
+            << "protected:\n" << joinLines(actual);
+        for (size_t i = 0; i < baseline.size(); ++i) {
+            EXPECT_EQ(baseline[i], actual[i]) << tier.dirSuffix << " line " << i;
+        }
+    }
+}
+
 }   // namespace
