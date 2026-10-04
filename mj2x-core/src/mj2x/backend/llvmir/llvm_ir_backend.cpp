@@ -337,8 +337,9 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     std::unique_ptr<RegFunction> reg;
     RegisterTypes                registerTypes;
     if (!lowerAndValidate(reg, registerTypes, reason)) {
-        // #1121：SSA/RegIR/验证层 fail-closed（如异常区域 join 的 undef 边拷贝
-        // 触发 edge copy changes value type）在此整方法降级——此前静默。
+        // #1121：SSA/RegIR/验证层 fail-closed 在此整方法降级——此前静默（undef
+        // 来路边拷贝自方向 1 起放行，不再触发；诊断通道由真 fail-closed 形态
+        // 覆盖，见 unittest RetainsFallbackDiagnosticForUndefinedLocalRead）。
         logMethodFallback(className, *method.methodNode, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;

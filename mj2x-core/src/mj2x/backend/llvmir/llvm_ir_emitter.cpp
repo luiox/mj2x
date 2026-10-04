@@ -487,7 +487,15 @@ private:
         values.reserve(copies.size());
         for (const auto& copy : copies) {
             std::string expression;
-            if (!emitOperand(copy.source, expression, reason)) return false;
+            // #1121 方向 1：undef 来路边拷贝产出 dest 槽类型的 undef 常量
+            // （槽类型是权威，emitStore 按 dest 查表；undef 对 i32/i64/f32/f64/
+            // ptr/包装类结构均为合法常量形态，读取前会被真定义覆盖的 join 形态）。
+            if (isUndefSource(copy.source)) {
+                expression = "undef";
+            }
+            else if (!emitOperand(copy.source, expression, reason)) {
+                return false;
+            }
             values.emplace_back(copy.dest, std::move(expression));
         }
         for (const auto& [destination, expression] : values) {
@@ -1502,7 +1510,15 @@ private:
             if (edge != nullptr) {
                 for (const auto& copy : edge->copies) {
                     std::string expression;
-                    if (!emitOperand(copy.source, expression, reason)) return false;
+                    // #1121 方向 1：异常边 undef 来路（handler 未定义到达局部）
+                    // 同口径产出 dest 类型 undef（异常边不经验证直达发射，放行
+                    // 面与 CFG 边拷贝一致，其余 Opaque 照旧拒绝）。
+                    if (isUndefSource(copy.source)) {
+                        expression = "undef";
+                    }
+                    else if (!emitOperand(copy.source, expression, reason)) {
+                        return false;
+                    }
                     const auto it = registerTypes_.find(copy.dest.id.value);
                     const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
                     if (type == nullptr) {

@@ -76,6 +76,26 @@ inline bool hasObservableEffect(const SSAEffect& effect)
            effect.resolvesExternal || effect.isBarrier;
 }
 
+/// @brief undef 来路判定（#1121 方向 1）：SSA join 未定义到达边的 Opaque 操作数。
+/// @details 两类形态：UNKNOWN 类型（undef_stack_arg / undef_succ_arg /
+///          entry_*_unbound——类型信息缺失的 join 兜底）与 `undef_` 前缀 tag
+///          （undef_exception_local / undef_local_N——builder 知道是 undef 但
+///          填了槽声明类型）。边拷贝语境下语义合法（undef 赋给任意槽类型仍是
+///          undef）：验证层放行类型不符检查，发射端产出 dest 槽类型的 `undef`
+///          常量（LLVM LangRef undef，非 poison——来源是未定义到达而非错误
+///          计算）。放行面以语境收窄：仅边拷贝（CFG 后继边 + 异常边）消费此
+///          判定；指令操作数语境仍按各自检查 fail-closed。
+///          契约注记：UNKNOWN 分支按类型而非 tag 判定——未来新增
+///          Opaque+UNKNOWN 构造点会自动落入本放行面（边拷贝语境隐式放行），
+///          新增构造点前须核对三处消费面（验证层 recordCopies、发射层
+///          emitCopies、异常边发射）是否应放行该形态。
+inline bool isUndefSource(const RegOperand& operand)
+{
+    if (operand.kind != RegOperandKind::Opaque) return false;
+    if (operand.type == SSAType::UNKNOWN) return true;
+    return operand.tag.rfind("undef_", 0) == 0;
+}
+
 inline PrimitiveKind returnKind(const std::string& desc)
 {
     // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，

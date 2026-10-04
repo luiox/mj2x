@@ -319,13 +319,16 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
         << result.text;
 }
 
-TEST(LlvmIrBackendTest, LogsFallbackDiagnosticForRegionCrossingIntraClassCall)
+TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
 {
-    // #1121 防回归钉：方法 A 的 try 区域内调同类已标记编译的 B，且调用结果
-    // 越过区域存活（handler 与 try 体在区域后合流）→ SSA join 产生带 undef
-    // 来路（Opaque UNKNOWN）的边拷贝，验证层按精确类型检查整方法 fail-closed
-    // 降级回字节码。降级本身不动；本钉断言 (a) 诊断警告出现 (b) 方法无 native
-    // define，并对照：同形调用无 try 区域时正常发射、无降级警告。
+    // #1121 方向 1 防回归钉：方法 A 的 try 区域内调同类已标记编译的 B，且调用
+    // 结果越过区域存活（handler 与 try 体在区域后合流）→ SSA join 产生带 undef
+    // 来路（Opaque UNKNOWN）的边拷贝。undef 来路放行后（undef 赋给任意槽类型
+    // 语义合法，发射端产出 dest 槽类型 undef 常量），该形状真正发射 native
+    // define 而非整方法 fail-closed 降级，且零降级诊断；对照：同形调用无 try
+    // 区域时照常发射。降级诊断通道由
+    // RetainsFallbackDiagnosticForUndefinedLocalRead（无区域 fail-closed 形态）
+    // 保留钉。
     auto* tryStart = new jbytecode::core::Label();
     auto* tryEnd   = new jbytecode::core::Label();
     auto* after    = new jbytecode::core::Label();
@@ -385,22 +388,19 @@ TEST(LlvmIrBackendTest, LogsFallbackDiagnosticForRegionCrossingIntraClassCall)
 
     auto trapResult = backend.compileMethod(
         "Test", index.getClass("Test")->methods[1], converter.convert(*trap), &index);
-    // 降级行为钉：fail-closed，无 native define。
-    ASSERT_EQ(trapResult.kind, BackendResult::Kind::NONE) << trapResult.text;
-    // 诊断钉：触发原因 + 降级结果出现在 llvm 警告通道。
-    const auto& warnings = capture.backend().entries;
-    bool        sawTrapDiagnostic = false;
-    for (const auto& [level, text] : warnings) {
-        if (text.find("Skipping Test.trap(I)I:") != std::string::npos) {
-            EXPECT_EQ(level, ca::log::Level::Warn);
-            EXPECT_NE(text.find("LLVM IR edge copy changes value type"), std::string::npos)
-                << text;
-            EXPECT_NE(text.find("method falls back to bytecode"), std::string::npos) << text;
-            sawTrapDiagnostic = true;
-        }
+    // 放行后行为钉：正常发射 native define，零降级诊断。
+    ASSERT_EQ(trapResult.kind, BackendResult::Kind::C_SOURCE) << trapResult.text;
+    EXPECT_NE(trapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_trap__I"),
+              std::string::npos)
+        << trapResult.text;
+    // undef 来路边拷贝的可观测形态：区域后合流边对 handler 侧异常接收局部
+    //（slot 2，try 体来路未定义）产出 dest 槽类型 undef 常量。
+    EXPECT_NE(trapResult.text.find("store ptr undef, ptr %slot_r2"), std::string::npos)
+        << trapResult.text;
+    for (const auto& [level, text] : capture.backend().entries) {
+        EXPECT_EQ(text.find("Skipping Test.trap(I)I:"), std::string::npos)
+            << "unexpected fallback diagnostic: " << text;
     }
-    EXPECT_TRUE(sawTrapDiagnostic)
-        << "expected fallback diagnostic for Test.trap, got " << warnings.size() << " warnings";
 
     // 对照：同形同类调用无 try 区域 → 正常发射，无降级诊断。
     auto noTrapResult = backend.compileMethod(
@@ -409,17 +409,18 @@ TEST(LlvmIrBackendTest, LogsFallbackDiagnosticForRegionCrossingIntraClassCall)
     EXPECT_NE(noTrapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_noTrap__I"),
               std::string::npos)
         << noTrapResult.text;
-    for (const auto& [level, text] : warnings) {
+    for (const auto& [level, text] : capture.backend().entries) {
         EXPECT_EQ(text.find("Skipping Test.noTrap(I)I:"), std::string::npos)
             << "unexpected fallback diagnostic: " << text;
     }
 }
 
-TEST(LlvmIrBackendTest, LogsFallbackDiagnosticForForEachShape)
+TEST(LlvmIrBackendTest, EmitsForEachShapeOverUndefEdgeCopy)
 {
-    // #1121 附带钉：javac for-each 展开形态（数组存入中间局部，copySlice 样本
-    // 同形）在无任何 try 区域时同样触发 undef 边拷贝 fail-closed 降级——诊断
-    // 面与降级行为一并钉住，防止能力文档与实际行为漂移。
+    // #1121 方向 1 附带钉：javac for-each 展开形态（数组存入中间局部，copySlice
+    // 样本同形）在无任何 try 区域时同样产生 undef 来路（Opaque UNKNOWN）边拷贝
+    // ——循环头块参数在回边有定义、进入边未定义。放行后正常发射 native define
+    // （undef 来路产出 dest 槽类型 undef 常量），零降级诊断。
     auto* loopHead = new jbytecode::core::Label();
     auto* loopEnd  = new jbytecode::core::Label();
     auto forEach = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "forEachOnly", "([I)I",
@@ -461,16 +462,53 @@ TEST(LlvmIrBackendTest, LogsFallbackDiagnosticForForEachShape)
     CodeConverter            converter(arena);
     auto        result = backend.compileMethod("Test", clazz.methods[0], converter.convert(*forEach));
 
+    // 放行后行为钉：正常发射 native define，零降级诊断。
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_forEachOnly___3I"),
+              std::string::npos)
+        << result.text;
+    // undef 来路边拷贝的可观测形态：进入边对循环头未定义局部（v 槽）产出 undef。
+    EXPECT_NE(result.text.find("store i32 undef, ptr %slot_r5"), std::string::npos) << result.text;
+    for (const auto& [level, text] : capture.backend().entries) {
+        EXPECT_EQ(text.find("Skipping Test.forEachOnly([I)I:"), std::string::npos)
+            << "unexpected fallback diagnostic: " << text;
+    }
+}
+
+TEST(LlvmIrBackendTest, RetainsFallbackDiagnosticForUndefinedLocalRead)
+{
+    // #1121 方向 1 诊断通道保留钉（无区域对照）：undef 来路边拷贝放行后，原两枚
+    // 降级钉翻转成功发射，整方法 fail-closed 降级诊断通道（Skipping ...: method
+    // falls back to bytecode）改由真 fail-closed 形态钉住——未初始化局部读取
+    //（undef Opaque 带已知类型）在指令操作数语境仍被拒绝，整方法降级并打警告。
+    auto undefRead = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "undefRead", "()I",
+                                {new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::IRETURN)},
+                                1, 1);
+    CompilerClass clazz;
+    clazz.methods.push_back(CompilerMethod{undefRead.get(), true, false, {}});
+
+    ScopedLlvmLogCapture capture;
+    LlvmIrBackend          backend;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto result = backend.compileMethod("Test", clazz.methods[0], converter.convert(*undefRead));
+
+    // fail-closed 行为不变：无 native define。
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE) << result.text;
+    // 诊断通道钉：触发原因 + 降级结果出现在 llvm 警告通道。
     bool sawDiagnostic = false;
     for (const auto& [level, text] : capture.backend().entries) {
-        if (text.find("Skipping Test.forEachOnly([I)I:") != std::string::npos) {
+        if (text.find("Skipping Test.undefRead()I:") != std::string::npos) {
             EXPECT_EQ(level, ca::log::Level::Warn);
+            EXPECT_NE(text.find("LLVM IR first slice rejects reference and opaque operands"),
+                      std::string::npos)
+                << text;
             EXPECT_NE(text.find("method falls back to bytecode"), std::string::npos) << text;
             sawDiagnostic = true;
         }
     }
-    EXPECT_TRUE(sawDiagnostic) << "expected fallback diagnostic for Test.forEachOnly";
+    EXPECT_TRUE(sawDiagnostic) << "expected fallback diagnostic for Test.undefRead";
 }
 
 TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)

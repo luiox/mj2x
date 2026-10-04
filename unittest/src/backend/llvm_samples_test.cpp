@@ -383,6 +383,10 @@ TEST_F(LlvmSamples, GenerateMjdbgFixtures)
                 // #879：no-try 预检探针面（方法保持 native 直调切片，无区域，
                 // IAE 经 native 边界传播由 Driver 观察）。
                 "define internal i32 @mj2x_llvm_Java_protected_1samples_llvm_LlvmIndySurfaceSample_randomBoundNoTry__I",
+                // #1121 方向 1：for-each undef 来路边拷贝放行后 copySlice 真发射
+                // （基线原为整方法降级字节码）；arraycopy 走 JNI static helper。
+                "define internal i32 @mj2x_llvm_Java_protected_1samples_llvm_LlvmIndySurfaceSample_copySlice___3III",
+                "mj2x_llvm_call_static_void",
                 "mj2x_llvm_class_const",
                 "mj2x_llvm_string_const",
             },
