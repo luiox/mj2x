@@ -86,15 +86,19 @@ javap -p -c -cp <native.jar> <Class> | grep -B1 "    Code:"
 
 把"首次调用成本 × 调用次数"当作循环总成本是**错误模型**。JDK 反射
 (`Method.invoke` 的 accessor/LambdaForm 链)首次调用 ~8.4µs,但同一 `Method`
-对象复用时,链条装配完成后稳态即落到 **0.37µs/次**(解释+JIT 暖后);
-3000 次调用实为 ~1-13ms,而非 25ms。
+对象复用时,链条装配完成后稳态即落到亚 µs 量级——**0.37µs/次**是转换产物
+(invoke 机器+JNI+native 通道)的稳态实测,纯 JDK 反射稳态独立复测更低
+(0.12-0.2µs/次);3000 次调用实为 ~0.4-13ms,而非 25ms。
 
 #887 优化一(Reflection 探针)实测链:`invoke 去虚拟化`切片
 (runtime 直调 helper + 生成端 target 表 + 发射拦截)语义零变化
 (21 项检查 fixture,jdk21/jdk25 与未混淆参考逐字节一致)后,
 同会话对照 9 轮中位数:**探针中位数不动**(jdk21 38.9→40.5ms,
-jdk25 43.0→44.0ms,CV 内);微基准显示直调快路稳态 0.55µs/次
-**慢于** JDK 稳态 0.37µs/次——切片已回退(revert patch 存档于
+jdk25 43.0→44.0ms,CV 内)。评审复测补注:同日另一次 AFTER 轮
+Reflection 探针反降 9.9%/3.6%,且同轮非 reflection 探针漂移远大于该增量
+(Inner classes −35.5%、Visitor −23~−30%)——机间抖动大于切片效应,
+增量不可归因,回退裁决不变。微基准显示直调快路稳态 0.55µs/次
+**慢于**转换产物 invoke 稳态 0.37µs/次——切片已回退(revert patch 存档于
 工作底稿,未入库)。
 
 探针真实成本构成(独立冷 JVM 拆解,SecretBox 探针路径):

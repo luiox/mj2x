@@ -508,7 +508,10 @@ $lines.Add("- p95 为 nearest-rank 口径（$Runs 轮中第 [ceil(0.95×$Runs)] 
 $lines.Add("- CV% = 标准差/均值；超过 $MaxCvPercent% 的行标记 ⚠，并在文首汇总为高方差存疑项。")
 $lines.Add("- 原始样本与统计面同步落 CSV：results/ 下 *-runs.csv（逐轮明细）与 *-stats.csv（统计汇总）。")
 $lines.Add("- 历史教训：#887 中单次 72.7 vs 71ms 的假打平，在预热+9 轮中位数口径下实为 ~1.6x 差距（53 vs 83ms，JDK25）。")
-$reportPath = Join-Path $reportDir "$stamp-jvm-obf-tester-os30.md"
+# 评审 N4（#887）：stamp 仅到日期，UpdateBaseline 与 Regression 同日产物互相覆盖，
+# 基线中位数失去 CSV 对应留档——模式入名分离。
+$outTag = if ($UpdateBaseline) { "updatebaseline" } else { "regression" }
+$reportPath = Join-Path $reportDir "$stamp-jvm-obf-tester-os30-$outTag.md"
 Set-Content -Path $reportPath -Value ($lines -join [Environment]::NewLine) -Encoding UTF8
 
 # ---- CSV 落盘（#887：结果落 CSV/MD 表） ----
@@ -621,7 +624,14 @@ if ($Regression -or $UpdateBaseline) {
         $baseline.baseline.coverage | Add-Member -NotePropertyName native -NotePropertyValue $firstAudit.Native -Force
         $baseline.baseline.coverage | Add-Member -NotePropertyName executable -NotePropertyValue $firstAudit.Executable -Force
         $baseline.baseline.coverage | Add-Member -NotePropertyName percent -NotePropertyValue $firstAudit.Percent -Force
-        $baseline.baseline.probesMs = [ordered]@{}
+        # 评审 N5（#887）：schema 缺 probesMs 键时直赋值在 PS5.1 抛"找不到属性"，
+        # 与其他键统一走 Add-Member -Force；已有键（含旧 JSON 的 PSCustomObject）则整体替换。
+        if ($null -eq $baseline.baseline.probesMs) {
+            $baseline.baseline | Add-Member -NotePropertyName probesMs -NotePropertyValue ([ordered]@{}) -Force
+        }
+        else {
+            $baseline.baseline.probesMs = [ordered]@{}
+        }
         foreach ($k in ($firstFace.Regc.Probes.Keys | Sort-Object)) {
             # OrderedDictionary 必须用索引器写键；Add-Member 只加 note property，
             # ConvertTo-Json 序列化时会整段丢失（曾致基线 probesMs 为空对象）。
