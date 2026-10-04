@@ -2017,6 +2017,16 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("double mj2x_math_floor(double value);\n");
     out.append("double mj2x_math_ceil(double value);\n");
     out.append("int64_t mj2x_math_round(double value);\n");
+    // #1144 接线补缺：#1117 六行（round(F)I/signum×2/exp/log/log10）此前只进
+    // kEntries 未进本声明表——RegC 发射面调用即缺前置声明（隐式声明靠编译器
+    // 宽容，C23/clang 16 起直接报错）。符号签名与 mj2x-rt
+    // mj2x_regc_intrinsic.h 逐一对应。
+    out.append("int32_t mj2x_math_round_f32(float value);\n");
+    out.append("float mj2x_math_signum_f32(float value);\n");
+    out.append("double mj2x_math_signum_f64(double value);\n");
+    out.append("double mj2x_math_exp(double value);\n");
+    out.append("double mj2x_math_log(double value);\n");
+    out.append("double mj2x_math_log10(double value);\n");
     out.append("double mj2x_math_random();\n");
     out.append("int32_t mj2x_intrinsic_int_rotate_left(int32_t value, int32_t distance);\n");
     out.append("int32_t mj2x_intrinsic_int_rotate_right(int32_t value, int32_t distance);\n");

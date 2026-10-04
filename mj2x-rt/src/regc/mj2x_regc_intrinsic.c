@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define MJ2X_RANDOM_MULT UINT64_C(0x5DEECE66D)
 #define MJ2X_RANDOM_ADD UINT64_C(0xB)
@@ -273,24 +274,86 @@ double mj2x_math_ceil(double value)
     return ceil(value);
 }
 
-int64_t mj2x_math_round(double value)
+// ---- java.lang.Math.round(F)I/(D)J：OpenJDK 17 位运算实现（#1144）----
+//
+// JDK 17 java.lang.Math.round 不再是 Javadoc 提及的 (int)floor(a+0.5) 公式
+// （JDK-8010430 起废弃）：该公式在 IEEE754 二进制上有两处可观测发散——
+//   1. 最大的小于 0.5 的浮点数（0.49999997f / 0.49999999999999994d）：
+//      a+0.5 半偶进位到 1.0，公式给 1，正确值 0；
+//   2. [2^23,2^24) / [2^52,2^53) 内的奇整数：a+0.5 不可表示舍入到偶整数，
+//      公式差 ±1。
+// 这里按 OpenJDK 17 实源（java.lang.Math.round(float/double)）逐式移植。
+// C 移植的两处改写（语义逐一等价，防 UB / 实现定义行为）：
+//   - Java >> 是算术右移（负数 floor 除法），C 对负数带符号右移是实现定义
+//     行为——改写为幅值域 ceil 除法再取负：r>>shift（r=-m）== -ceil(m/2^shift)
+//     == -q；随后 ((r>>shift)+1)>>1 在负侧恒等于 -(q>>1)（q 奇偶两例均合）。
+//     全程无符号移位，u32/u64 域无溢出（m ≤ 2^24-1 + 2^31-1 < 2^32；
+//     m ≤ 2^53-1 + 2^63-1 < 2^64）。
+//   - 出界分支的 (int)a / (long)a 是 Java cast（JLS 5.1.3：NaN→0、越界饱和），
+//     裸 C 浮点→整数转换越界/NaN 是 UB（x86 统一给 INT_MIN），必须显式夹紧。
+
+// Java cast float→int（JLS 5.1.3）：NaN→0，向零截断，越界饱和。
+static int32_t mj2x_math_java_f2i_cast(float value)
 {
     if (isnan(value)) return 0;
-    if (value >= (double)INT64_MAX) return INT64_MAX;
-    if (value <= (double)INT64_MIN) return INT64_MIN;
-    return (int64_t)floor(value + 0.5);
+    if (value >= 2147483648.0f) return INT32_MAX;    // ≥ 2^31
+    if (value <= -2147483648.0f) return INT32_MIN;   // ≤ -2^31（-2^31 截断即 MIN，同 Java）
+    return (int32_t)value;
 }
 
-// java.lang.Math.round(float)：JVM 规范公式 (int)floor(a + 0.5f)——加法按
-// float 精度执行，NaN→0；溢出侧饱和到 int 边界（C 裸 float→int 转换越界
-// 是 UB，必须显式夹紧，与上方 round(double) 的 long 夹紧同口径）。
-int32_t mj2x_math_round_f32(float value)
+// Java cast double→long（JLS 5.1.3）：NaN→0，向零截断，越界饱和。
+static int64_t mj2x_math_java_f2l_cast(double value)
 {
     if (isnan(value)) return 0;
-    const float shifted = value + 0.5f;
-    if (shifted >= 2147483648.0f) return INT32_MAX;
-    if (shifted <= -2147483648.0f) return INT32_MIN;
-    return (int32_t)floorf(shifted);
+    if (value >= 9223372036854775808.0) return INT64_MAX;    // ≥ 2^63
+    if (value <= -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)value;
+}
+
+int64_t mj2x_math_round(double value)
+{
+    // doubleToRawLongBits 位型（memcpy 双关，免别名 UB）。
+    uint64_t intBits;
+    memcpy(&intBits, &value, sizeof intBits);
+    const int64_t biasedExp =
+        (int64_t)((intBits & UINT64_C(0x7FF0000000000000)) >> 52);
+    // shift = (SIGNIFICAND_WIDTH-2 + EXP_BIAS) - biasedExp = 1074 - biasedExp；
+    // 位路径生效当且仅当 shift ∈ [0,63]（JDK 的 (shift & -64) == 0），即
+    // ulp(a) < 1（biasedExp ≤ 1074，|a| < 2^52）；出界含 NaN/±Inf、ulp ≥ 1
+    // 的整数值（Java cast 恒等）与 |a| < 2^-12（round 本就为 0）。
+    const int64_t shift = 1074 - biasedExp;
+    if (shift < 0 || shift > 63) return mj2x_math_java_f2l_cast(value);
+    // r = a / ulp(a) ∈ [2^52, 2^53)，幅值域（SIGNIF_BIT_MASK | 隐含位）。
+    const uint64_t r = (intBits & UINT64_C(0x000FFFFFFFFFFFFF)) |
+                       UINT64_C(0x0010000000000000);
+    if ((intBits & UINT64_C(0x8000000000000000)) == 0) {
+        // floor(a / (2·ulp(a))) · 2·ulp(a) == floor(a + 1/2)
+        return (int64_t)(((r >> shift) + UINT64_C(1)) >> 1);
+    }
+    const uint64_t q = (r + ((UINT64_C(1) << shift) - UINT64_C(1))) >> shift;
+    return -(int64_t)(q >> 1);
+}
+
+int32_t mj2x_math_round_f32(float value)
+{
+    // floatToRawIntBits 位型（memcpy 双关，免别名 UB）。
+    uint32_t intBits;
+    memcpy(&intBits, &value, sizeof intBits);
+    const int32_t biasedExp = (int32_t)((intBits & 0x7F800000U) >> 23);
+    // shift = (SIGNIFICAND_WIDTH-2 + EXP_BIAS) - biasedExp = 149 - biasedExp；
+    // 位路径生效当且仅当 shift ∈ [0,31]（JDK 的 (shift & -32) == 0），即
+    // ulp(a) < 1（biasedExp ≤ 149，|a| < 2^23）；出界含 NaN/±Inf、ulp ≥ 1
+    // 的整数值（Java cast 恒等）与 |a| < 2^-9（round 本就为 0）。
+    const int32_t shift = 149 - biasedExp;
+    if (shift < 0 || shift > 31) return mj2x_math_java_f2i_cast(value);
+    // r = a / ulp(a) ∈ [2^23, 2^24)，幅值域（SIGNIF_BIT_MASK | 隐含位）。
+    const uint32_t r = (intBits & 0x007FFFFFU) | 0x00800000U;
+    if ((intBits & 0x80000000U) == 0) {
+        // floor(a / (2·ulp(a))) · 2·ulp(a) == floor(a + 1/2)
+        return (int32_t)(((r >> shift) + 1U) >> 1);
+    }
+    const uint32_t q = (r + ((1U << shift) - 1U)) >> shift;
+    return -(int32_t)(q >> 1);
 }
 
 // java.lang.Math.signum(float/double)：NaN → 同位型 NaN；±0.0 → 同符号零

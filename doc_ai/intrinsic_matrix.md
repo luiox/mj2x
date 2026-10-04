@@ -63,7 +63,7 @@ JNI 底座（缓存 ID/helper 属 JNI 快路径，仍计 JNI）；**不适用** 
 
 | 面（kEntries 行数） | RegC | LLVM | VMC4 / StackC |
 |---|---|---|---|
-| Math 标量 27 行：abs×4 / min-max I,J,F,D / signum F,D（#1117）/ exp,log,log10（#1117）/ sin,cos,tan,sqrt,floor,ceil,pow / round D,J + **round F,I（#1117）** / random | RuntimeFunction 直调 CRT（0 JNI、无 ExceptionCheck） | 直调同 CRT 符号（llvmDirect=true，declare 派生） | 普通 JNI 调用 |
+| Math 标量 27 行：abs×4 / min-max I,J,F,D / signum F,D（#1117）/ exp,log,log10（#1117）/ sin,cos,tan,sqrt,floor,ceil,pow / round D,J + **round F,I（#1117）**（**#1144 起为 OpenJDK 17 位运算口径，floor(x+0.5) 公式废弃**）/ random | RuntimeFunction 直调 CRT（0 JNI、无 ExceptionCheck） | 直调同 CRT 符号（llvmDirect=true，declare 派生） | 普通 JNI 调用 |
 | Integer/Long 位操作 24 行（rotate/reverse/bitCount/nlz/ntz/oneBit/signum/toHex/Octal/Binary） | RuntimeFunction | JNI 回退（llvmDirect=false，行为扩展须随 LLVM 卡验证） | 普通 JNI 调用 |
 | parse/toString/compare 34 行（Integer/Long/Short/Byte/Float/Double/Boolean/Character + String.valueOf×7） | RegCLocalHelper（context 回调路由异常） | JNI 回退（llvmDirect=false） | 普通 JNI 调用 |
 | wrapper value/unbox 16 行 | WrapperValueOf/Unbox（不逃逸 shadow struct） | 同构 shadow（llvmDirect=true） | 普通 JNI 调用 |
@@ -82,6 +82,7 @@ JNI 底座（缓存 ID/helper 属 JNI 快路径，仍计 JNI）；**不适用** 
 | `String.equals/charAt/hashCode/substring` | **有意排除（文档化判据）** | 多 JNI 数据管道实测劣于 1-JNI 缓存调用；HotSpot 对前三者有 VM intrinsic + hashCode memoization。勿翻案（capabilities §3 同款判据）。 |
 | `StrictMath.*` | 走 JNI | **不适用**：严格语义必须走真 StrictMath，native 直调 CRT 无严格档保证。 |
 | `Object.clone` / `System.identityHashCode` / `Thread.onSpinWait` 等 | 走 JNI | 单次 JNI 调用即最优形态，fast-path 无收益空间。 |
+| CONSTANT_Float/Double NaN 载荷位型不保（**StackC 限定**，NAN 宏规范化） | StackC LDC 物化走 `NAN`/`(double)NAN` 宏（`stackc_mir_arith.cpp`），载荷位型与符号位被规范化为标准 quiet NaN | `Float.floatToRawIntBits`/`Double.doubleToRawLongBits` 透传可观测发散。RegC（`_mj2x_regc_f32/f64_from_bits` 位型直写）与 LLVM（hex 字面量，F32 经 double 加宽）已保真。候选修法：StackC NaN 常量改位型物化（对齐 RegC 形态）。待卡。 |
 
 ## 5. #1117 补位记录
 
@@ -113,6 +114,15 @@ JNI 底座（缓存 ID/helper 属 JNI 快路径，仍计 JNI）；**不适用** 
   / `g17.string_intern` / `g17.array_store_check` / `g17.sibling_methods` /
   `g17.annotation_visibility`——对应 jvmtp 1.7.1 五项正确性修复语义点，
   StackC/RegC 列矩阵全覆盖 + LLVM 列白名单（intern 例外），JVM 基线逐语义点判等。
+- **#1144 追记（2026-10-02）**：`mj2x_math_round(F)I/(D)J` 由 floor(x+0.5)
+  公式改 **OpenJDK 17 位运算口径**（JLS tie→+∞ + 位路径 + Java-cast 饱和），
+  F/D 同修——公式版在 0.49999997f（给 1，正确 0）与 [2^23,2^24) 奇整数
+  （8388609.0f 给 8388610，正确 8388609）可观测发散（JDK-8010430 类缺陷）。
+  对拍：rt 单测 F 27 项/D 22 项边界全表（HotSpot 17.0.20.1 实测硬编码）+
+  移植算法与 `Math.round` 等价扫掠（float 全 2^32 位型穷举 + double 结构化
+  边界带/随机 2000 万点）+ `g17.math_nan_zero` 补 5 个 round 边界方法进
+  样本字节码面（四列含 JVM 基线对拍）。同卡接线补缺：emitDeclarations
+  补 #1117 六符号前置声明（此前 RegC 发射面调用即缺声明）。
 
 ## 6. 维护纪律
 

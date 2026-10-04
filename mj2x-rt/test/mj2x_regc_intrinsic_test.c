@@ -63,14 +63,105 @@ void test_regc_intrinsic_c99_abi(void)
             expect(isnan(mj2x_math_max_f32(1.0f, nan_operand)));
             expect(isnan(mj2x_math_min_f64(3.0, (double)nan_operand)));
         }
-        // round(float)：JVM 公式 (int)floor(a + 0.5f)，NaN→0，饱和夹紧。
-        expect(mj2x_math_round_f32(2.5f) == 3);
-        expect(mj2x_math_round_f32(3.499f) == 3);
-        expect(mj2x_math_round_f32(-2.5f) == -2);
-        expect(mj2x_math_round_f32(-2.4f) == -2);
-        expect(mj2x_math_round_f32(NAN) == 0);
-        expect(mj2x_math_round_f32(2.4e9f) == INT32_MAX);
-        expect(mj2x_math_round_f32(-2.4e9f) == INT32_MIN);
+        // ---- round(F)I / round(D)J：OpenJDK 17 位运算实现（#1144）----
+        // 期望值全部取自 HotSpot 17.0.20.1 (Temurin) Math.round 实测
+        //（临时 Java 探针，不入库）；输入按位型构造，杜绝字面量解析歧义。
+        // 两个经典发散形状（floor(x+0.5) 公式的 JDK-8010430 类缺陷）：
+        // 0.49999997f 公式给 1 实际 0；8388609.0f 公式给 8388610 实际 8388609。
+        {
+            struct RoundFCase
+            {
+                uint32_t bits;
+                int32_t  expected;
+            };
+            static const struct RoundFCase cases[] = {
+                {0x3EFFFFFFu, 0},           // 0.49999997f（最大的小于 0.5）
+                {0x3EFFFFFDu, 0},           // 0.4999999f（次边界）
+                {0x3F000000u, 1},           // 0.5f
+                {0x3FBFFFFFu, 1},           // 1.4999999f
+                {0x3FC00000u, 2},           // 1.5f（tie→+∞）
+                {0xBFC00000u, -1},          // -1.5f（tie→+∞）
+                {0x40200000u, 3},           // 2.5f
+                {0xC0200000u, -2},          // -2.5f
+                {0xBF000000u, 0},           // -0.5f（tie→+∞）
+                {0xBEFFFFFFu, 0},           // -0.49999997f
+                {0x4B000001u, 8388609},     // [2^23,2^24) 奇整数（公式差 +1）
+                {0xCB000001u, -8388609},    // 同上负侧（公式差 -1）
+                {0x4B000000u, 8388608},     // 2^23 整数
+                {0x4B7FFFFFu, 16777215},    // 2^24-1 整数
+                {0xCB7FFFFFu, -16777215},
+                {0x00000000u, 0},           // +0.0
+                {0x80000000u, 0},           // -0.0
+                {0x7FC00000u, 0},           // NaN
+                {0x7F800000u, INT32_MAX},   // +Inf
+                {0xFF800000u, INT32_MIN},   // -Inf
+                {0x00000001u, 0},           // Float.MIN_VALUE
+                {0x80000001u, 0},           // -MIN_VALUE
+                {0x4EFFFFFFu, 2147483520},  // ≤ INT_MAX 的最大 float
+                {0x4F000000u, INT32_MAX},   // 2^31（> INT_MAX，饱和）
+                {0xCF000000u, INT32_MIN},   // -2^31
+                {0x4F0F0D18u, INT32_MAX},   // 2.4e9f 饱和
+                {0xCF0F0D18u, INT32_MIN},
+            };
+            for (unsigned int i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+                float   input;
+                int32_t got;
+                memcpy(&input, &cases[i].bits, sizeof input);
+                got = mj2x_math_round_f32(input);
+                if (got != cases[i].expected)
+                {
+                    fprintf(stderr,
+                            "round_f32(0x%08X) = %d, expected %d\n",
+                            (unsigned int)cases[i].bits, (int)got, (int)cases[i].expected);
+                }
+                expect(got == cases[i].expected);
+            }
+        }
+        {
+            struct RoundDCase
+            {
+                uint64_t bits;
+                int64_t  expected;
+            };
+            static const struct RoundDCase cases[] = {
+                {UINT64_C(0x3FDFFFFFFFFFFFFF), 0},                   // 最大的小于 0.5
+                {UINT64_C(0x3FDFFFFFFFFFFFFE), 0},                   // 次边界
+                {UINT64_C(0x3FE0000000000000), 1},                   // 0.5
+                {UINT64_C(0xBFE0000000000000), 0},                   // -0.5（tie→+∞）
+                {UINT64_C(0xBFDFFFFFFFFFFFFF), 0},                   // -0.49999999999999994
+                {UINT64_C(0x4330000000000001), INT64_C(4503599627370497)},  // 2^52+1 奇整数
+                {UINT64_C(0xC330000000000001), INT64_C(-4503599627370497)},
+                {UINT64_C(0x4330000000000000), INT64_C(4503599627370496)},  // 2^52
+                {UINT64_C(0x433FFFFFFFFFFFFF), INT64_C(9007199254740991)},  // 2^53-1
+                {UINT64_C(0xC33FFFFFFFFFFFFF), INT64_C(-9007199254740991)},
+                {UINT64_C(0x4004000000000000), 3},                   // 2.5
+                {UINT64_C(0xC004000000000000), -2},                  // -2.5
+                {UINT64_C(0x0000000000000000), 0},                   // +0.0
+                {UINT64_C(0x8000000000000000), 0},                   // -0.0
+                {UINT64_C(0x7FF8000000000000), 0},                   // NaN
+                {UINT64_C(0x7FF0000000000000), INT64_MAX},           // +Inf
+                {UINT64_C(0xFFF0000000000000), INT64_MIN},           // -Inf
+                {UINT64_C(0x0000000000000001), 0},                   // Double.MIN_VALUE
+                {UINT64_C(0x43E0000000000000), INT64_MAX},           // 2^63（饱和）
+                {UINT64_C(0xC3E0000000000000), INT64_MIN},           // -2^63
+                {UINT64_C(0x7E37E43C8800759C), INT64_MAX},           // 1e300 饱和
+                {UINT64_C(0xFE37E43C8800759C), INT64_MIN},           // -1e300
+            };
+            for (unsigned int i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+                double  input;
+                int64_t got;
+                memcpy(&input, &cases[i].bits, sizeof input);
+                got = mj2x_math_round(input);
+                if (got != cases[i].expected)
+                {
+                    fprintf(stderr,
+                            "round(0x%016llX) = %lld, expected %lld\n",
+                            (unsigned long long)cases[i].bits,
+                            (long long)got, (long long)cases[i].expected);
+                }
+                expect(got == cases[i].expected);
+            }
+        }
         // signum：±0.0 原样返回（位型断言），NaN 透传，其余 ±1。
         expect(mj2x_math_signum_f32(5.0f) == 1.0f);
         expect(mj2x_math_signum_f32(-5.0f) == -1.0f);
