@@ -25,6 +25,11 @@ struct SsaInlineOptions
     ca::u32 maxCalleeInstructions = 48;
     /// 嵌套内联深度上限（A→B→C 链）。
     ca::u32 maxInlineDepth        = 2;
+    /// 调用点排除谓词（返回 true = 该调用点不内联）。RegC 用它把已验证
+    /// javac 合成 values() 留给调用点站点 intrinsic（getstatic + 站点缓存
+    /// clone，2 次 JNI 边界；内联展开体多一次 checkcast→IsInstanceOf）；
+    /// nullptr = 不排除（默认，保持既有形状）。
+    std::function<bool(const SSAMethodRef&)> excludeMethod;
 };
 
 /// @brief 内联统计（测试与诊断用）。
@@ -37,6 +42,7 @@ struct SsaInlineStats
     ca::usize skippedByRecursion    = 0;
     ca::usize skippedByDepth        = 0;
     ca::usize skippedNotInlinable   = 0;
+    ca::usize skippedExcluded       = 0;
 };
 
 /// @brief 按方法引用构建被调方法 SSA 的回调。
@@ -60,6 +66,7 @@ using SsaInlineResolver =
 /// - 指令数 ≤ maxCalleeInstructions
 /// - 非递归（调用链上不含目标方法自身）
 /// - 嵌套深度 ≤ maxInlineDepth
+/// - 未命中 options.excludeMethod 排除谓词（可选）
 /// 克隆时参数绑定调用点实参；所有返回点改跳新汇合块（block arg 收集
 /// 返回值），原 Call 指令 result 的所有引用重定向到汇合块 arg。
 SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& options,

@@ -403,6 +403,12 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                     ++stats.skippedNotInlinable;
                     continue;
                 }
+                // 安全条件 0.5：调用点排除谓词（RegC：已验证 javac 合成 values()
+                // 留给站点 intrinsic，展开体反而多一次 JNI 边界）。
+                if (options.excludeMethod && options.excludeMethod(call->method)) {
+                    ++stats.skippedExcluded;
+                    continue;
+                }
                 // 安全条件 1：目标可解析。
                 auto callee = resolver(call->method);
                 if (callee == nullptr) {

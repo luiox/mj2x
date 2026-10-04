@@ -596,6 +596,90 @@ void RegCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
         std::make_unique<RegCIntrinsicRegistry>(config.intrinsics);
 }
 
+/// javac 合成 values() 的 SSA 形状验证（#887 Enums 承接卡）：
+/// getstatic owner.$VALUES:[Lowner; → invokevirtual clone（owner 为数组描述符
+/// 或 java/lang/Object）→ checkcast [Lowner; → ret，同块 3 指令（SSABuilder
+/// 可能另生成空 entry 块，故按块搜索）。与字节码侧 isJavacEnumValuesBody
+/// 同一口径的 fail-closed SSA 版：懒加载多类 jar 里该方法自身指令清空后，
+/// 字节码侧验证不可达，只能在其自身 SSA 转换当口验证。
+bool isJavacEnumValuesSsa(const SSAFunction& fn)
+{
+    const std::string desc = fn.symbol.desc;
+    if (fn.symbol.name != "values" || desc.rfind("()[L", 0) != 0 || desc.back() != ';') {
+        return false;
+    }
+    const std::string arrayDesc = desc.substr(2);
+    for (const auto& blockPtr : fn.blocks) {
+        const auto& block = *blockPtr;
+        if (block.instructions.size() != 3) continue;
+        if (block.instructions[0]->kind != SSAInstructionKind::LoadField) continue;
+        const auto* load = static_cast<const SSALoadFieldInstruction*>(block.instructions[0].get());
+        if (!load->field.isStatic ||
+            load->field.owner.to_std_string() != fn.symbol.owner ||
+            load->field.name.to_std_string() != "$VALUES" ||
+            load->field.desc.to_std_string() != arrayDesc) {
+            continue;
+        }
+        if (block.instructions[1]->kind != SSAInstructionKind::Call) continue;
+        const auto* clone = static_cast<const SSACallInstruction*>(block.instructions[1].get());
+        if (clone->method.invokeOpcode != Opcodes::INVOKEVIRTUAL ||
+            clone->method.name.to_std_string() != "clone" ||
+            clone->method.desc.to_std_string() != "()Ljava/lang/Object;" ||
+            !(clone->method.owner.to_std_string() == arrayDesc ||
+              clone->method.owner.to_std_string() == "java/lang/Object")) {
+            continue;
+        }
+        if (block.instructions[2]->kind != SSAInstructionKind::Convert) continue;
+        const auto* cast = static_cast<const SSAConvertInstruction*>(block.instructions[2].get());
+        if (cast->convertKind != SSAConvertKind::ReferenceCast ||
+            cast->referenceTypeDesc.to_std_string() != arrayDesc) {
+            continue;
+        }
+        const auto* ret = std::get_if<SSAReturnTerminator>(&block.terminator);
+        if (ret != nullptr && ret->value == (cast->hasResult ? &cast->result : nullptr)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// javac 合成 valueOf(String) 的 SSA 形状验证：ldc 类字面量（形状任意）→
+/// invokestatic java/lang/Enum.valueOf → checkcast owner → ret，同块 3 指令
+/// （按块搜索，容忍空 entry 块）。
+bool isJavacEnumValueOfSsa(const SSAFunction& fn)
+{
+    const std::string owner = fn.symbol.owner;
+    const std::string desc  = fn.symbol.desc;
+    if (fn.symbol.name != "valueOf" ||
+        desc.rfind("(Ljava/lang/String;)L" + owner + ";", 0) != 0) {
+        return false;
+    }
+    for (const auto& blockPtr : fn.blocks) {
+        const auto& block = *blockPtr;
+        if (block.instructions.size() != 3) continue;
+        if (block.instructions[1]->kind != SSAInstructionKind::Call) continue;
+        const auto* invoke = static_cast<const SSACallInstruction*>(block.instructions[1].get());
+        if (invoke->method.invokeOpcode != Opcodes::INVOKESTATIC ||
+            invoke->method.owner.to_std_string() != "java/lang/Enum" ||
+            invoke->method.name.to_std_string() != "valueOf" ||
+            invoke->method.desc.to_std_string() !=
+                "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;") {
+            continue;
+        }
+        if (block.instructions[2]->kind != SSAInstructionKind::Convert) continue;
+        const auto* cast = static_cast<const SSAConvertInstruction*>(block.instructions[2].get());
+        if (cast->convertKind != SSAConvertKind::ReferenceCast ||
+            cast->referenceTypeDesc.to_std_string() != owner) {
+            continue;
+        }
+        const auto* ret = std::get_if<SSAReturnTerminator>(&block.terminator);
+        if (ret != nullptr && ret->value == (cast->hasResult ? &cast->result : nullptr)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void RegCBackend::setSafeEnv(bool enabled)
 {
     impl_->safeEnvEnabled = enabled;
@@ -663,6 +747,31 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     if (index != nullptr && impl_->preRegisteredClasses.insert(className).second) {
         CompilerClass* cls = index->getClass(className);
         if (cls != nullptr) {
+            // 枚举合成方法按类补扫（#887 Enums 承接卡）：懒加载顺序下，首个方法
+            // 转换时的全类预扫描（enumSyntheticScanned）看不到尚未加载的枚举类，
+            // 多类 jar（如 jvm-obf-tester）里 values()/valueOf() 的站点 intrinsic
+            // 与内联排除会整体失效。每类在其任何方法指令被清空之前验证自身
+            // values()/valueOf() 形状，与全类预扫描同一集合、同一 fail-closed 口径。
+            const ca::str::Utf8StringRef clsRef = cls->classNode->name;
+            if (isEnumSubtypeOwner(index, clsRef)) {
+                for (const auto& m : cls->methods) {
+                    auto* em = m.methodNode;
+                    if (em == nullptr || em->instructions.isEmpty()) continue;
+                    const std::string emName = em->name.to_std_string();
+                    const std::string emDesc = em->desc.to_std_string();
+                    if (emName == "values" && emDesc.rfind("()[L", 0) == 0 &&
+                        isJavacEnumValuesBody(
+                            em, clsRef,
+                            ca::str::Utf8StringRef::from_string_view(emDesc.substr(2)))) {
+                        impl_->enumSyntheticMethods.insert(methodKey(className, emName, emDesc));
+                    }
+                    else if (emName == "valueOf" &&
+                             emDesc.rfind("(Ljava/lang/String;)L", 0) == 0 &&
+                             isJavacEnumValueOfBody(em, clsRef)) {
+                        impl_->enumSyntheticMethods.insert(methodKey(className, emName, emDesc));
+                    }
+                }
+            }
             for (const auto& m : cls->methods) {
                 if (!m.markedForCompile) continue;
                 auto                mn     = m.methodNode;
@@ -693,6 +802,20 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
 
+    // javac 合成枚举方法自登记（#887 Enums 承接卡）：懒加载多类 jar 中，
+    // 全类预扫描（enumSyntheticScanned，早于各类加载）与按类补扫（晚于本类
+    // 首个方法的指令清空）都可能错过本方法；本方法 SSA 此刻在手，按形状
+    // 自登记。站点 intrinsic 与内联排除共用该集合，双重 fail-closed：
+    // 非 javac 形状不登记，站点保持旧路径。
+    if (index != nullptr &&
+        (isJavacEnumValuesSsa(*ssa) || isJavacEnumValueOfSsa(*ssa)) &&
+        isEnumSubtypeOwner(index, ca::str::Utf8StringRef::from_string_view(ssa->symbol.owner))) {
+        impl_->enumSyntheticMethods.insert(
+            methodKey(ssa->symbol.owner, ssa->symbol.name, ssa->symbol.desc));
+        CA_LOGT_INFO("regc", "enum synthetic self-registered: {}.{}{}\n", ssa->symbol.owner,
+                     ssa->symbol.name, ssa->symbol.desc);
+    }
+
     // SSA 方法内联（性能主线：消除 JNI 往返；默认开启，--regc-no-inline 关闭）。
     // resolver：从 CompilerIndex 取被调方法 MethodNode → CodeConverter → SSABuilder。
     if (inlineEnabled_) {
@@ -720,14 +843,30 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
             }
             return nullptr;
         };
-        SsaInlineStats stats = applySsaInlining(*ssa, SsaInlineOptions{}, resolver, ssaArena);
+        SsaInlineOptions inlineOptions;
+        // javac 合成 values() 不内联（#887 Enums 承接卡）：内联展开体为
+        // getstatic + clone + checkcast（3 次 JNI 边界），而调用点站点 intrinsic
+        // （tryEmitEnumValuesCall → mj2x_intrinsic_enum_values）为 getstatic +
+        // 站点缓存 clone（2 次）。排除集合复用枚举预扫描结果（同 fail-closed
+        // 口径：预扫描未命中就不排除，退回内联展开）。仅限定 values 形状，
+        // valueOf 维持现状（其体内含 JDK 调用，本就不内联）。
+        inlineOptions.excludeMethod = [this](const SSAMethodRef& ref) -> bool {
+            const std::string name = ref.name.to_std_string();
+            const std::string desc = ref.desc.to_std_string();
+            if (name != "values" || desc.rfind("()[L", 0) != 0 || desc.back() != ';') {
+                return false;
+            }
+            return impl_->enumSyntheticMethods.count(
+                       methodKey(ref.owner.to_std_string(), name, desc)) != 0;
+        };
+        SsaInlineStats stats = applySsaInlining(*ssa, inlineOptions, resolver, ssaArena);
         if (stats.inlinedCalls > 0) {
             CA_LOGT_INFO("regc", "inline {} calls in {}.{}{}: unresolvable={} exc={} size={} "
-                                 "rec={} depth={} notinlinable={}\n",
+                                 "rec={} depth={} notinlinable={} excluded={}\n",
                          stats.inlinedCalls, className.c_str(), methodName.c_str(),
                          methodDesc.c_str(), stats.skippedUnresolvable, stats.skippedByException,
                          stats.skippedBySize, stats.skippedByRecursion, stats.skippedByDepth,
-                         stats.skippedNotInlinable);
+                         stats.skippedNotInlinable, stats.skippedExcluded);
         }
     }
 
