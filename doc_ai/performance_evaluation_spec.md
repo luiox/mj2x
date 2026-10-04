@@ -113,6 +113,49 @@ Reflection 探针反降 9.9%/3.6%,且同轮非 reflection 探针漂移远大于�
 **推论**:归因排序必须用"harness 形状的循环成本",不得用"单次冷调用成本 ×
 次数"外推;优化前置判断以同会话 BEFORE/AFTER 9 轮中位数为最终裁决。
 
+### 3.6 runtime bootstrap 成本分解与主导项优化(#1183 实测,2026-10)
+
+RegC 产物 Class.forName 首触 bootstrap(NativeLoader.load 的提取/加载/注册/
+Loader 类定义)的四段分解。探针:`mj2x/benchmark/bootstrap_probe/`
+(BootstrapProbe.java 逐段计时 + bootstrap_probe.ps1 双 JDK 协议),每种模式
+独立冷 JVM、段内 System.nanoTime、预热 3 + 计量 9 取中位数。被测产物:tester
+jar(34 转换类/111 native 方法/180KB DLL,--regc-direct-calls)。
+
+**BEFORE 分解表**(优化前行为):
+
+| 段 | jdk21 | jdk25 | 说明 |
+|---|---|---|---|
+| 1 提取(资源读+临时文件+写出) | 70.8ms | 74.3ms | **主导项(~98%)** |
+| 2 加载(System.load:LoadLibrary+重定位+CRT+JNI_OnLoad+Loader 定义) | 16.1ms | 8.2ms | 次要 |
+| 3 逐类注册(registerNativesForClass) | 2.9ms/13类 | 2.7ms/13类 | **线性 ~0.25ms/类**,总量小 |
+| 4 Loader 类定义(=段2−load_predef) | ≤4ms(噪) | ~1.8ms(噪) | 小 |
+| 总和锚点 full(端到端首类 clinit) | 86.5ms | 77.1ms | 分段和≈锚点 |
+
+**提取段根因**(阶段探针,双 JDK 一致):`File.createTempFile` 内部首次触达
+`SecureRandom`(TempDirectory 静态字段初始化)在冷 JVM 上耗时 **~52-59ms**,
+是提取段乃至整个 bootstrap 的真主导项;其余为 classpath jar 首开 ~5-10ms
+(真实流程已在 Main 类加载时支付)+ 180KB 读写 ~1.5ms。
+
+**优化(#1183,语义零变化)**:生成 NativeLoader 弃用 `File.createTempFile`,
+改发射 `newTempFile` 私有助手——ThreadLocalRandom 随机名 + `createNewFile`
+原子独占创建(32 次重试;防碰撞/防抢占语义与 createTempFile 一致;首次触达
+~0.3ms)。同会话前后对照:
+
+| 指标 | jdk21 BEFORE→AFTER | jdk25 BEFORE→AFTER |
+|---|---|---|
+| 提取段(现行加载器复刻) | —→24.4ms | —→22.5ms |
+| bootstrap 端到端 full | **86.5→20.0ms(-77%)** | **77.1→29.2ms(-62%)** |
+
+**已证伪/裁决不动项**(度量裁决,同 #887 教训):RegisterNatives 逐类注册线性
+且 13 类总量 ~3ms,分批/延迟无收益;System.load 段 6-16ms 属 JVM/OS 侧加载
+成本,mj2x 侧无杠杆;「DLL 跨运行缓存复用」上限仅再省提取段残余 ~20ms,代价
+是解密 DLL 以可预测路径持久化落盘(防护姿态变化),**记录不实施**,留产品
+决策。
+
+方法论注记:段 1 探针(extract 模式)为驱动侧对生成字节码的逐调用复刻,含
+jar 首开 ~10ms,略高于产物内真实提取成本;full 锚点为最终裁决口径。原始 CSV
+不入库。
+
 ## 4. 标准基准套件(推荐)
 
 基于 `NativeBench`(整数运算,两后端都真 native),已验证三方法在 StackC/RegC 都完整 lowering:

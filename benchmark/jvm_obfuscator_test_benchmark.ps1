@@ -643,6 +643,17 @@ if ($Regression -or $UpdateBaseline) {
 
     if ($Regression) {
         $errors = New-Object System.Collections.Generic.List[string]
+        # 数据完整性门（fail-closed，#1183）：探针表为空或 total=0 说明产物根本没
+        # 跑起来/输出未被解析（实例：生成 NativeLoader 字节码 VerifyError 致 main
+        # clinit 崩，13-probe 表为空、total=0，功能门/性能门空转出"假绿"）——先于
+        # 功能门判失败并给排查入口。
+        if ($firstFace.Regc.Probes.Keys.Count -eq 0) {
+            $errors.Add("探针表为空：产物运行输出未解析到任何 probe 行（检查产物可运行性与输出格式）")
+        }
+        $regcTotalRaw = $firstFace.Regc.Total.Median
+        if ($regcTotalRaw -le 0) {
+            $errors.Add("RegC total 中位数=${regcTotalRaw}ms：total 未解析到有效样本（Total time 行缺失）")
+        }
         # 功能门：13-probe 全部 Passed
         foreach ($name in $firstFace.Regc.Probes.Keys) {
             $failedRun = $firstFace.RegcMeasurement.Maps | Where-Object { $_.$name.Status -ne "Passed" } | Select-Object -First 1
