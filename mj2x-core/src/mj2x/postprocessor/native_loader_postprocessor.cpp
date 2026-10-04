@@ -158,7 +158,8 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
     // 静态字段初始化），冷 JVM 实测 ~52-59ms（jdk21/jdk25，#1183 bootstrap 分解），
     // 是提取段乃至整个 bootstrap 的主导项。改走 newTempFile 私有助手（本类内发射）：
     // ThreadLocalRandom 随机名 + createNewFile 原子独占创建，防碰撞/防抢占语义与
-    // createTempFile 一致，首次触达实测 ~0.3ms。
+    // createTempFile 一致；ThreadLocalRandom 首触实测 ~0.3ms（createNewFile 的
+    // 磁盘成本冷态 ~13ms，新旧两路径共有，不计入收益口径）。
     load->visitVarInsn(Opcodes::ALOAD, 1);
     load->visitMethodInsn(
         Opcodes::INVOKESTATIC,

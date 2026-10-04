@@ -131,6 +131,9 @@ jar(34 转换类/111 native 方法/180KB DLL,--regc-direct-calls)。
 | 4 Loader 类定义(=段2−load_predef) | ≤4ms(噪) | ~1.8ms(噪) | 小 |
 | 总和锚点 full(端到端首类 clinit) | 86.5ms | 77.1ms | 分段和≈锚点 |
 
+注:段 3 数字为 reg_13 探针「前 13 类各自首触 clinit 内注册」的窗口口径;
+全产物 34 类注册总量 ~8.5ms,分散在各类首触点,不聚集于单一首类。
+
 **提取段根因**(阶段探针,双 JDK 一致):`File.createTempFile` 内部首次触达
 `SecureRandom`(TempDirectory 静态字段初始化)在冷 JVM 上耗时 **~52-59ms**,
 是提取段乃至整个 bootstrap 的真主导项;其余为 classpath jar 首开 ~5-10ms
@@ -138,8 +141,10 @@ jar(34 转换类/111 native 方法/180KB DLL,--regc-direct-calls)。
 
 **优化(#1183,语义零变化)**:生成 NativeLoader 弃用 `File.createTempFile`,
 改发射 `newTempFile` 私有助手——ThreadLocalRandom 随机名 + `createNewFile`
-原子独占创建(32 次重试;防碰撞/防抢占语义与 createTempFile 一致;首次触达
-~0.3ms)。同会话前后对照:
+原子独占创建(32 次重试;防碰撞/防抢占语义与 createTempFile 一致;
+ThreadLocalRandom 首触 ~0.3ms;createNewFile 磁盘成本冷态 ~13ms 新旧两路径
+共有,不计入收益口径)。失败路径异常类型差异(记录不消除):新路径耗尽重试
+抛 `UnsatisfiedLinkError`,JDK `createTempFile` 抛 `IOException`。同会话前后对照:
 
 | 指标 | jdk21 BEFORE→AFTER | jdk25 BEFORE→AFTER |
 |---|---|---|
@@ -154,7 +159,11 @@ jar(34 转换类/111 native 方法/180KB DLL,--regc-direct-calls)。
 
 方法论注记:段 1 探针(extract 模式)为驱动侧对生成字节码的逐调用复刻,含
 jar 首开 ~10ms,略高于产物内真实提取成本;full 锚点为最终裁决口径。原始 CSV
-不入库。
+不入库。发射确定性验证口径(N1):同输入 jar 两次独立转换,生成
+`mj2x/runtime/NativeLoader.class` 字节逐一致(1732B,sha256 两次相同),且产物
+对 `File.createTempFile` 引用为 0。门禁回归对拍基线以库内
+`test/jvm-obf-tester/gate-baseline/regc-perf-baseline.json` 为准(N2),不引
+未入库的本地基线数字。
 
 ## 4. 标准基准套件(推荐)
 
