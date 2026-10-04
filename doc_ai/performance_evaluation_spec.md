@@ -82,6 +82,33 @@ javap -p -c -cp <native.jar> <Class> | grep -B1 "    Code:"
 
 绝对耗时 <5ms 的方法,测量误差主导,**无参考价值**。要么增大工作量(更多迭代),要么标注"无参考价值"。
 
+### 3.5 冷启动成本模型警示(#887 优化一教训,2026-10)
+
+把"首次调用成本 × 调用次数"当作循环总成本是**错误模型**。JDK 反射
+(`Method.invoke` 的 accessor/LambdaForm 链)首次调用 ~8.4µs,但同一 `Method`
+对象复用时,链条装配完成后稳态即落到 **0.37µs/次**(解释+JIT 暖后);
+3000 次调用实为 ~1-13ms,而非 25ms。
+
+#887 优化一(Reflection 探针)实测链:`invoke 去虚拟化`切片
+(runtime 直调 helper + 生成端 target 表 + 发射拦截)语义零变化
+(21 项检查 fixture,jdk21/jdk25 与未混淆参考逐字节一致)后,
+同会话对照 9 轮中位数:**探针中位数不动**(jdk21 38.9→40.5ms,
+jdk25 43.0→44.0ms,CV 内);微基准显示直调快路稳态 0.55µs/次
+**慢于** JDK 稳态 0.37µs/次——切片已回退(revert patch 存档于
+工作底稿,未入库)。
+
+探针真实成本构成(独立冷 JVM 拆解,SecretBox 探针路径):
+
+| 阶段 | 耗时量级 | 可优化性 |
+|---|---|---|
+| Class.forName 首触(运行时 bootstrap:DLL 提取/加载/RegisterNatives/cloader 定义) | 数十 ms(隔离冷跑 ~80ms,harness 内显著衰减) | **mj2x 侧可控**,后续优化主杠杆 |
+| getAnnotation(JDK 注解解析,元注解递归) | ~19-20ms | JDK 内部,不可绕 |
+| Field.get 首次 | ~2.5ms | JDK 内部 |
+| Method.invoke 循环(3000 次) | ~1ms(暖)/~13ms(冷) | 已证伪为瓶颈 |
+
+**推论**:归因排序必须用"harness 形状的循环成本",不得用"单次冷调用成本 ×
+次数"外推;优化前置判断以同会话 BEFORE/AFTER 9 轮中位数为最终裁决。
+
 ## 4. 标准基准套件(推荐)
 
 基于 `NativeBench`(整数运算,两后端都真 native),已验证三方法在 StackC/RegC 都完整 lowering:
