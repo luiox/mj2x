@@ -164,6 +164,7 @@ mj2x.param.vmc4.drift_period.desc=VMC4: drift variant switch period (in byte off
 mj2x.param.vmc4.trace_surface.desc=VMC4: write the expected trace surface file (mjdbg red-team contract; same seed + same input = same content)
 mj2x.param.vmc4.encrypt_program.desc=VMC4: encrypt the program blob at rest (opcode/handler data encrypted at emission, decrypted at interpreter load; no plaintext program stream in artifacts; key derived from seed; off by default)
 mj2x.param.vmc4.lazy_decrypt.desc=VMC4: decrypt the program blob lazily per chunk (instruction-aligned 64-byte chunks encrypted independently, decrypted on first execution, key material scrubbed after use; requires vmc4.encrypt_program; off by default)
+mj2x.param.vmc4.shuffle_blocks.desc=VMC4: shuffle VM block layout at emission time (Sattolo single-cycle permutation over block ids and physical order, entry block fixed at id 0, control flow preserved via the encrypted indirect jump table; orthogonal and stackable with vmc4-drift and vmc4-encrypt-program; issue #1116 slice A; off by default)
 mj2x.param.strings.encrypt.desc=Encrypt string-pool contents at rest (encrypted at emission, decrypted on first access; no plaintext literals in emitted artifacts; off by default)
 mj2x.param.runtime.protection.desc=RegC/VMC4/LLVM: method-entry anti-tamper checkpoints (default none = not injected; depends on the mj2x-rt rt_protect module; the LLVM side compiles with rt_protect sources)
 mj2x.param.runtime.protection_step.desc=Checkpoint probabilistic trigger step
