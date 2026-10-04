@@ -83,6 +83,7 @@ struct CliOptions
     std::string              vmc4TraceSurface;   ///< 非空时写 expected trace surface 文件
     bool                     vmc4EncryptProgram  = false; ///< VMC4 程序 blob at-rest 加密
     bool                     vmc4LazyDecrypt     = false; ///< VMC4 程序 blob 分块懒解密（要求 encrypt_program）
+    bool                     vmc4BlockLazyDecrypt = false; ///< VMC4 块粒度链式懒解密（要求 encrypt_program；与 lazy_decrypt 互斥，#1116 切片 B）
     bool                     vmc4ShuffleBlocks   = false; ///< VMC4 编码期块乱序（issue #1116 切片 A）
     bool                     stringsEncrypt      = false; ///< 字符串面 at-rest 加密
     std::string              runtimeProtection        = "none";   ///< none|log|delay|fake|terminate

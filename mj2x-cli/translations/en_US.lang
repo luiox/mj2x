@@ -44,6 +44,8 @@ mj2x.cli.err.regc_safe_env_needs_regc=--regc-safe-env requires --backend regc.
 mj2x.cli.err.runtime_protection_unknown=Unknown --runtime-protection value. Expected none, log, delay, fake, or terminate.
 mj2x.cli.err.runtime_protection_needs_native=--runtime-protection requires --backend regc, vmc4, or llvm.
 mj2x.cli.err.lazy_decrypt_needs_encrypt=--vmc4-lazy-decrypt requires --vmc4-encrypt-program to be enabled.
+mj2x.cli.err.block_lazy_needs_encrypt=--vmc4-block-lazy-decrypt requires --vmc4-encrypt-program to be enabled.
+mj2x.cli.err.block_lazy_conflicts_lazy=--vmc4-block-lazy-decrypt and --vmc4-lazy-decrypt are mutually exclusive (aligns with jvmtp vm.lazy-decrypt vs vm.control-flow-flatten).
 mj2x.cli.err.stackc_exception_check_invalid=--stackc-exception-check must be full or lite.
 mj2x.cli.err.emit_native_dir_needs_regc=--emit-native-dir requires --backend regc.
 mj2x.cli.err.llvm_tool_needs_compile=--llvm-tool requires --compile.
@@ -164,6 +166,7 @@ mj2x.param.vmc4.drift_period.desc=VMC4: drift variant switch period (in byte off
 mj2x.param.vmc4.trace_surface.desc=VMC4: write the expected trace surface file (mjdbg red-team contract; same seed + same input = same content)
 mj2x.param.vmc4.encrypt_program.desc=VMC4: encrypt the program blob at rest (opcode/handler data encrypted at emission, decrypted at interpreter load; no plaintext program stream in artifacts; key derived from seed; off by default)
 mj2x.param.vmc4.lazy_decrypt.desc=VMC4: decrypt the program blob lazily per chunk (instruction-aligned 64-byte chunks encrypted independently, decrypted on first execution, key material scrubbed after use; requires vmc4.encrypt_program; off by default)
+mj2x.param.vmc4.block_lazy_decrypt.desc=VMC4: decrypt the program blob lazily per CFG block (blocks bounded by the indirect jump table, chain keys derived as (seed, blockIdx, prevKey) with the first block keyed from the seed, decrypted on first arrival, unexecuted blocks stay encrypted, key material scrubbed after use; requires vmc4.encrypt_program, mutually exclusive with vmc4.lazy_decrypt; pairs with vmc4.shuffle-blocks; issue #1116 slice B; off by default)
 mj2x.param.vmc4.shuffle_blocks.desc=VMC4: shuffle VM block layout at emission time (Sattolo single-cycle permutation over block ids and physical order, entry block fixed at id 0, control flow preserved via the encrypted indirect jump table; orthogonal and stackable with vmc4-drift and vmc4-encrypt-program; issue #1116 slice A; off by default)
 mj2x.param.strings.encrypt.desc=Encrypt string-pool contents at rest (encrypted at emission, decrypted on first access; no plaintext literals in emitted artifacts; off by default)
 mj2x.param.runtime.protection.desc=RegC/VMC4/LLVM: method-entry anti-tamper checkpoints (default none = not injected; depends on the mj2x-rt rt_protect module; the LLVM side compiles with rt_protect sources)

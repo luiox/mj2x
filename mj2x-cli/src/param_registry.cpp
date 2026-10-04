@@ -702,6 +702,7 @@ DEF_INT(vmc4DriftPeriod, "--vmc4-drift-period", "vmc4_drift_period", 1, 0)
 DEF_STR(vmc4TraceSurface, "--vmc4-trace-surface", "vmc4_trace_surface")
 DEF_BOOL(vmc4EncryptProgram, "--vmc4-encrypt-program", "vmc4_encrypt_program")
 DEF_BOOL(vmc4LazyDecrypt, "--vmc4-lazy-decrypt", "vmc4_lazy_decrypt")
+DEF_BOOL(vmc4BlockLazyDecrypt, "--vmc4-block-lazy-decrypt", "vmc4_block_lazy_decrypt")
 DEF_BOOL(vmc4ShuffleBlocks, "--vmc4-shuffle-blocks", "vmc4_shuffle_blocks")
 DEF_BOOL(stringsEncrypt, "--strings-encrypt", "strings_encrypt")
 DEF_ENUM_STR(runtimeProtection, "--runtime-protection", "runtime_protection", "none,log,delay,fake,terminate", "none")
@@ -774,6 +775,7 @@ const ParamDef kParamTable[] = {
     PARAM("vmc4.trace_surface", "--vmc4-trace-surface", "vmc4_trace_surface", ParamType::String, nullptr, 0, 0, "", "vmc4", "vmc4", cli_vmc4TraceSurface, json_vmc4TraceSurface),
     PARAM("vmc4.encrypt_program", "--vmc4-encrypt-program", "vmc4_encrypt_program", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4EncryptProgram, json_vmc4EncryptProgram),
     PARAM("vmc4.lazy_decrypt", "--vmc4-lazy-decrypt", "vmc4_lazy_decrypt", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4LazyDecrypt, json_vmc4LazyDecrypt),
+    PARAM("vmc4.block_lazy_decrypt", "--vmc4-block-lazy-decrypt", "vmc4_block_lazy_decrypt", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4BlockLazyDecrypt, json_vmc4BlockLazyDecrypt),
     PARAM("vmc4.shuffle_blocks", "--vmc4-shuffle-blocks", "vmc4_shuffle_blocks", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4ShuffleBlocks, json_vmc4ShuffleBlocks),
     // strings
     PARAM("strings.encrypt", "--strings-encrypt", "strings_encrypt", ParamType::Bool, nullptr, 0, 0, "false", "strings", "stackc|regc", cli_stringsEncrypt, json_stringsEncrypt),

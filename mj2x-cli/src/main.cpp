@@ -840,6 +840,16 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.lazy_decrypt_needs_encrypt"));
         return 1;
     }
+    // 块粒度链式懒解密（#1116 切片 B）：requires encrypt_program（同 64B 档
+    // 口径）+ 与 64B 档互斥（对齐 jvmtp vm.lazy-decrypt ⊕ vm.control-flow-flatten）。
+    if (options.vmc4BlockLazyDecrypt && !options.vmc4EncryptProgram) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.block_lazy_needs_encrypt"));
+        return 1;
+    }
+    if (options.vmc4BlockLazyDecrypt && options.vmc4LazyDecrypt) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.block_lazy_conflicts_lazy"));
+        return 1;
+    }
     if (options.runtimeProtection != "none" && options.runtimeProtection != "log" &&
         options.runtimeProtection != "delay" && options.runtimeProtection != "fake" &&
         options.runtimeProtection != "terminate") {
@@ -1163,6 +1173,7 @@ int main(int argc, char** argv)
             vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
             vmc4Opts.programBlobEncrypt = options.vmc4EncryptProgram;
             vmc4Opts.programLazyDecrypt = options.vmc4LazyDecrypt;
+            vmc4Opts.programBlockLazyDecrypt = options.vmc4BlockLazyDecrypt;
             vmc4Opts.shuffleBlocks = options.vmc4ShuffleBlocks;
             if (options.runtimeProtection != "none") {
                 vmc4Opts.runtimeProtection.action  =
