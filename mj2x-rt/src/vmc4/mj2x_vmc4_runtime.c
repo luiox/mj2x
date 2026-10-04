@@ -230,3 +230,69 @@ void mj2x_vm_lazy_decrypt(unsigned char* code, const uint32_t* ends,
     }
     mj2x_vm_lazy_gate_unlock();
 }
+
+// ---------------------------------------------------------------------------
+// 块粒度链式懒解密(issue #1116 切片 B,--vmc4-block-lazy-decrypt)。
+//
+// 发射侧把 blob 按 CFG 块粒度独立加密(块区间由 blockTargets 划界,块 key =
+// mj2x_vm_block_chain_key 链式派生:首块 k_0 = F(seed,0,seed),其后
+// k_c = F(seed,c,k_{c-1}));解释器取码前经生成代码的 mj2x_vm_block_touch_<tag>
+// 调用本组函数,块首次进入才解密,未走到的块保持密文(内存 dump 只能拿到
+// 实际执行过的块,对齐 jvmtp 1.6.8 vm.control-flow-flatten 的 first-arrival
+// decrypt 口径)。与 --vmc4-lazy-decrypt(64 字节网格档)互斥,两档不共存。
+// 解密后的块保持明文不回擦:权衡同上节(循环回边使"块离开"事件不可判定)。
+// 链上密钥材料不持久驻留:块 c 的密钥从 seed 逐块重导出(O(c) 次 4 轮
+// xorshift32,u16 块数上界亦微秒级),链状态只在栈上瞬时存在,用后擦除。
+// ---------------------------------------------------------------------------
+
+uint32_t mj2x_vm_block_chain_key(uint32_t seed, uint32_t block_index, uint32_t prev_key)
+{
+    // golden-ratio 扰动项与前块密钥 XOR 后 4 轮 xorshift32 扩散;纯 u32 算术
+    // (C 标准定义的回绕),与发射侧 vmc4DeriveBlockChainKey 逐位一致。
+    uint32_t s = seed ^ prev_key ^ (0x9E3779B9u + 0x9E3779B9u * (block_index + 1u));
+    s = mj2x_vm_blob_xorshift32(s);
+    s = mj2x_vm_blob_xorshift32(s);
+    s = mj2x_vm_blob_xorshift32(s);
+    s = mj2x_vm_blob_xorshift32(s);
+    // 0 是 xorshift32 死锁态(密钥流恒 0 = 未加密),回退固定种子。
+    return s != 0u ? s : 0x9E3779B9u;
+}
+
+uint32_t mj2x_vm_block_locate(const uint32_t* targets, uint32_t n_blocks,
+                              uint32_t total_bytes, uint32_t pc)
+{
+    for (uint32_t c = 0; c < n_blocks; ++c) {
+        const uint32_t end = (c + 1u < n_blocks) ? targets[c + 1u] : total_bytes;
+        if (pc < end) return c;
+    }
+    // 越界 pc(仅解释器不变量被破坏时可达)归末块,不越界读。
+    return n_blocks != 0u ? n_blocks - 1u : 0u;
+}
+
+void mj2x_vm_block_lazy_decrypt(unsigned char* code, const uint32_t* targets,
+                                volatile unsigned char* state, uint32_t n_blocks,
+                                uint32_t total_bytes, uint32_t seed, uint32_t block_index)
+{
+    if (code == NULL || targets == NULL || state == NULL || block_index >= n_blocks) return;
+    // 快路径:已解密,无锁返回。state 为 volatile 数组,每次派发生效。
+    if (state[block_index] == 1u) return;
+    mj2x_vm_lazy_gate_lock();
+    // 双重检查:等锁期间其他线程可能已完成本块解密。
+    if (state[block_index] != 1u) {
+        const uint32_t begin = targets[block_index];
+        const uint32_t end = (block_index + 1u < n_blocks) ? targets[block_index + 1u]
+                                                           : total_bytes;
+        if (begin < end) {
+            // 从 seed 走链重导出 k_block_index:首块 prevKey = seed,链状态只在
+            // 本地变量里瞬时存在,用后擦除(密钥材料不持久驻留)。
+            uint32_t k = seed;
+            for (uint32_t i = 0; i <= block_index; ++i) {
+                k = mj2x_vm_block_chain_key(seed, i, k);
+            }
+            mj2x_vm_blob_decrypt(code + begin, end - begin, k);
+            mj2x_vm_scrub_u32(&k);
+        }
+        state[block_index] = 1u;   /* 锁内发布:解密完成后才对其他线程可见 */
+    }
+    mj2x_vm_lazy_gate_unlock();
+}

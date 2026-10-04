@@ -110,6 +110,20 @@ struct Vmc4Options
     /// CLI 侧以 requires 约束（vmc4.encrypt_program）。
     bool programLazyDecrypt = false;
 
+    /// 程序 blob 块粒度链式懒解密（--vmc4-block-lazy-decrypt；默认关闭，
+    /// 要求 programBlobEncrypt 开启；与 programLazyDecrypt 互斥）。
+    ///
+    /// @details
+    /// issue #1116 切片 B（对齐 jvmtp 1.6.8 vm.control-flow-flatten 的
+    /// first-arrival decrypt 口径）：开启后 blob 按 CFG 块粒度独立加密
+    /// （块区间由 blockTargets 划界，尾块含 trailing Halt 哨兵），块密钥
+    /// 链式派生 vmc4DeriveBlockChainKey(seed, blockIdx, prevKey)（首块
+    /// prevKey = seed）；JNI_OnLoad 不解密该 blob，解释器首达某块时才
+    /// 原地解密并置已解缓存位（bstate 表），未执行块保持密文。与 64 字节
+    /// 网格档（programLazyDecrypt）互斥：两档同开时 CLI fail-closed，
+    /// 直构 options 绕过 CLI 时本档胜出（VmInstance 归一化）。
+    bool programBlockLazyDecrypt = false;
+
     /// 反侦测检查点注入（wrapper 入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     codegen::RuntimeProtectionOptions runtimeProtection;
@@ -183,6 +197,18 @@ public:
     /// backend 不再在 JNI_OnLoad 发射整体解密。与 dispatch drift 正交：加密
     /// 作用于 drift 编码完成后的最终字节流（分块边界按最终流布局计算）。
     bool blobLazy() const { return blobLazy_; }
+
+    /// 程序 blob 块粒度链式懒解密是否开启（--vmc4-block-lazy-decrypt；
+    /// issue #1116 切片 B）。
+    ///
+    /// @details
+    /// 开启时（恒以 blobEncrypt() 为前提）VmInterpreterEmitter 把字节流按
+    /// blockTargets 划界的 CFG 块独立加密并发块懒解密基础设施
+    /// （bstate 表 + block_touch 调用，块边界复用 targets 表），backend 不再
+    /// 在 JNI_OnLoad 发射该 blob 的整体解密。与 64 字节网格档互斥：两档同开
+    /// 时本档胜出（blobLazy 归一化为关）。与 dispatch drift 正交：加密作用于
+    /// drift 编码完成后的最终字节流（块边界按最终流布局的 blockTargets 计算）。
+    bool blockLazy() const { return blockLazy_; }
 
     /// @brief 按字节流偏移计算当前 drift 变体序号。
     ///
@@ -299,6 +325,9 @@ private:
     bool             blobEncrypt_;
     /// 分块懒解密开关（options.programLazyDecrypt 透传，不入 describe()）。
     bool             blobLazy_;
+    /// 块粒度链式懒解密开关（options.programBlockLazyDecrypt 透传，不入
+    /// describe()——trace surface 红队契约字段集保持稳定）。
+    bool             blockLazy_;
     /// 编码期块乱序开关（options.shuffleBlocks 透传，不入 describe()）。
     bool             shuffleBlocks_;
     /// VmOpcode 值 → 该语义的实例字节集合（canonical 在前）。
@@ -350,5 +379,21 @@ uint32_t vmc4DeriveTargetsKey(uint64_t instanceSeed);
 /// 密钥不能直接推出其他块的密钥（vs 整体密钥流的分段复用）。
 /// 结果恒非 0（xorshift32 死锁态回避，与 vmc4DeriveBlobKey 同一约定）。
 uint32_t vmc4DeriveChunkKey(uint32_t blobKey, uint32_t chunkIndex);
+
+/// @brief 块密钥链式派生（seed, blockIdx, prevKey）→ 32 位块密钥（确定性，恒非 0）。
+///
+/// @details
+/// issue #1116 切片 B（--vmc4-block-lazy-decrypt）：CFG 块粒度懒解密的块密钥
+/// 链——k_c = xorshift32^4(seed ^ prevKey ^ golden(c))，golden(c) 与
+/// vmc4DeriveChunkKey 同族（golden-ratio 扰动散布块下标）；首块 prevKey = seed
+/// （k_0 = F(seed, 0, seed)）。发射侧（VmInterpreterEmitter 按块加密）与运行侧
+/// （CRT mj2x_vm_block_chain_key 从 seed 走链重导出）同一公式双镜像，纯 u32
+/// 算术逐位一致；不得引入任何 64 位运算或实现定义行为，改公式必须两侧同步。
+/// blockIdx = blockTargets 下标 = 洗牌后的逻辑块 id（切片 A 已把 id 空间本身
+/// 打乱且保持「物理序 == id 序」，两种口径同一空间）。链上任何密钥材料不落
+/// 产物/静态存储：运行期首达块 c 时从 seed 逐块重导出（O(c) 次 4 轮
+/// xorshift32），链状态只在栈上瞬时存在、用后擦除（CRT 侧 volatile 清零）。
+/// 结果恒非 0（xorshift32 死锁态回避，与 vmc4DeriveChunkKey 同一约定）。
+uint32_t vmc4DeriveBlockChainKey(uint32_t seed, uint32_t blockIdx, uint32_t prevKey);
 
 }   // namespace mj2x

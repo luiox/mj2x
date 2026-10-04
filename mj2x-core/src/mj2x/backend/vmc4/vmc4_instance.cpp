@@ -29,7 +29,9 @@ VmInstance::VmInstance(const Vmc4Options& options, uint64_t instanceSeed)
     , driftVariants_(std::max(0, std::min(options.driftVariants, 4)))
     , driftPeriod_(std::max(1, options.driftPeriod))
     , blobEncrypt_(options.programBlobEncrypt)
-    , blobLazy_(options.programLazyDecrypt && options.programBlobEncrypt)
+    , blobLazy_(options.programLazyDecrypt && !options.programBlockLazyDecrypt &&
+                options.programBlobEncrypt)
+    , blockLazy_(options.programBlockLazyDecrypt && options.programBlobEncrypt)
     , shuffleBlocks_(options.shuffleBlocks)
 {
     buildOpcodeBytes();
@@ -376,6 +378,21 @@ uint32_t vmc4DeriveChunkKey(uint32_t blobKey, uint32_t chunkIndex)
     // （C/C++ 回绕语义一致），两侧逐位一致；不得引入任何 64 位运算或
     // 实现定义行为，改公式必须两侧同步。
     uint32_t s = blobKey ^ (0x9E3779B9u + 0x9E3779B9u * (chunkIndex + 1u));
+    for (int round = 0; round < 4; ++round) {
+        s = xorshift32Step(s);
+    }
+    // 0 是 xorshift32 死锁态（密钥流恒 0 = 未加密），回退固定种子。
+    return s != 0u ? s : 0x9E3779B9u;
+}
+
+uint32_t vmc4DeriveBlockChainKey(uint32_t seed, uint32_t blockIdx, uint32_t prevKey)
+{
+    // 与 CRT 侧 mj2x_vm_block_chain_key（mj2x_vmc4_runtime.c）同一公式双镜像：
+    // 链式扰动 = 前块密钥 XOR 进 golden-ratio 扰动项，再 4 轮 xorshift32 扩散。
+    // 首块 prevKey = seed（seed ^ seed = 0，扰动项只剩 golden(blockIdx)，无退化）。
+    // 纯 u32 算术（C/C++ 回绕语义一致），两侧逐位一致；不得引入任何 64 位
+    // 运算或实现定义行为，改公式必须两侧同步。
+    uint32_t s = seed ^ prevKey ^ (0x9E3779B9u + 0x9E3779B9u * (blockIdx + 1u));
     for (int round = 0; round < 4; ++round) {
         s = xorshift32Step(s);
     }

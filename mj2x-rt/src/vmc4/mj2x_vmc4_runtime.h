@@ -87,6 +87,34 @@ MJ2X_VMC4_API void mj2x_vm_lazy_decrypt(unsigned char* code, const uint32_t* end
                                         volatile unsigned char* state, uint32_t n_chunks,
                                         uint32_t blob_key, uint32_t chunk_index);
 
+// ---- 块粒度链式懒解密（issue #1116 切片 B，--vmc4-block-lazy-decrypt） ----
+// 程序 blob 按 CFG 块粒度独立加密（块区间由 blockTargets 划界：
+// 块 c = [targets[c], c+1 < n ? targets[c+1] : total_bytes)，尾块含 trailing
+// Halt 哨兵）；解释器首达某块时才原地解密该块，未走到的块保持密文。与
+// --vmc4-lazy-decrypt（64 字节网格档）互斥，两档不共存。
+
+// 块密钥链式派生：k_c = xorshift32^4(seed ^ prev_key ^ golden(c))，golden(c)
+// = 0x9E3779B9 + 0x9E3779B9*(c+1)；首块 prev_key = seed（k_0 = F(seed,0,seed)）。
+// 与发射侧 vmc4DeriveBlockChainKey（mj2x-core vmc4_instance.cpp）同一公式
+// 双镜像，纯 u32 算术逐位一致。结果恒非 0（0 是 xorshift32 死锁态）。
+MJ2X_VMC4_API uint32_t mj2x_vm_block_chain_key(uint32_t seed, uint32_t block_index,
+                                               uint32_t prev_key);
+
+// pc → 块下标：返回满足 pc < end(c) 的最小 c（end(c) = c+1 < n ?
+// targets[c+1] : total_bytes，targets 单调不减）；pc 越界时归末块（防御）。
+// 慢路径专用（块首次进入），线性扫描即可。
+MJ2X_VMC4_API uint32_t mj2x_vm_block_locate(const uint32_t* targets, uint32_t n_blocks,
+                                            uint32_t total_bytes, uint32_t pc);
+
+// 链式懒解密一块：state[c] == 1 视为已解密（快路径无锁）；否则进程级互斥锁内
+// 从 seed 逐块走链重导出 k_c（prevKey 链只在栈上瞬时存在，用后 volatile 清零，
+// 任何密钥材料不持久驻留），解密块 c 并置 state[c] = 1——多 Java 线程首执行
+// 同一方法时只解一次（XOR 对合防重入，复用既有锁面）。
+MJ2X_VMC4_API void mj2x_vm_block_lazy_decrypt(unsigned char* code, const uint32_t* targets,
+                                              volatile unsigned char* state, uint32_t n_blocks,
+                                              uint32_t total_bytes, uint32_t seed,
+                                              uint32_t block_index);
+
 #ifdef __cplusplus
 }
 #endif

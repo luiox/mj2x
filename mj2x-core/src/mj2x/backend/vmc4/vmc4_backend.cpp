@@ -340,7 +340,10 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // （vmc4DeriveBlobKey），同实例 seed → 同密钥，确定性一致。
     // 切片 2：分块懒解密（--vmc4-lazy-decrypt）时跳过登记——块保持密文到
     // 首次执行，JNI_OnLoad 不做整体解密（懒解密基础设施由发射器直接发射）。
-    if (options_.programBlobEncrypt && !options_.programLazyDecrypt) {
+    // 切片 B（#1116，--vmc4-block-lazy-decrypt）：块粒度链式懒解密同理跳过
+    // 登记（块首达解密基础设施由发射器直接发射，bstate 表 + block_touch）。
+    if (options_.programBlobEncrypt && !options_.programLazyDecrypt &&
+        !options_.programBlockLazyDecrypt) {
         Impl::BlobDecryptEntry entry;
         entry.tag  = methodTag;
         entry.size = static_cast<uint32_t>(program->bytecodes.size());
@@ -633,6 +636,17 @@ void Vmc4Backend::finalize(const CompilerIndex& index)
     // 配置防御（issue #760 切片 2）：lazy 无加密无意义（块游标/密文块不发射，
     // VmInstance 构造已把 blobLazy 归一为 encrypt && lazy）。显式落日志提示
     // CLI 层 requires 约束（vmc4.lazy_decrypt → vmc4.encrypt_program）被绕过。
+    // 切片 B（#1116）：block-lazy 同一 requires 口径；两档同开时 block 档
+    // 胜出（VmInstance 归一化 blobLazy=关），显式日志说明优先级。
+    if (options_.programBlockLazyDecrypt && !options_.programBlobEncrypt) {
+        CA_LOGT_WARN("vmc4", "--vmc4-block-lazy-decrypt requires --vmc4-encrypt-program;"
+                             " block-lazy flag ignored\n");
+    }
+    if (options_.programBlockLazyDecrypt && options_.programLazyDecrypt &&
+        options_.programBlobEncrypt) {
+        CA_LOGT_WARN("vmc4", "--vmc4-lazy-decrypt conflicts with --vmc4-block-lazy-decrypt;"
+                             " block-lazy wins, chunk flag ignored\n");
+    }
     if (options_.programLazyDecrypt && !options_.programBlobEncrypt) {
         CA_LOGT_WARN("vmc4", "--vmc4-lazy-decrypt requires --vmc4-encrypt-program; lazy flag ignored\n");
     }

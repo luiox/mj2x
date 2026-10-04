@@ -489,8 +489,8 @@ void emitHandlerCase(CSourceStream& out, const VmInstance& instance, const Handl
 }
 
 /// 公共局部变量声明（所有 dispatcher 都在函数体开头需要这些）。
-/// blobLazy 时额外声明块游标 _cc（ComputedGoto 无循环结构，靠 goto 在同一
-/// 函数体内流转，函数局部生存期天然覆盖全部 handler 体）。
+/// blobLazy/blockLazy 时额外声明块游标 _cc（ComputedGoto 无循环结构，靠 goto
+/// 在同一函数体内流转，函数局部生存期天然覆盖全部 handler 体）。
 void emitCommonDecls(CSourceStream& out, const VmInstance& instance, const std::string& progName,
                      const std::string& targetsName)
 {
@@ -499,8 +499,8 @@ void emitCommonDecls(CSourceStream& out, const VmInstance& instance, const std::
     out.emitLine("unsigned int pc = targets[0];");
     out.emitLine("unsigned int status = 0;");
     out.emitLine("mj2x_vm_slot* regs = slots;");
-    if (instance.blobLazy()) {
-        out.emitLine("unsigned int _cc = 0u;  /* lazy-decrypt chunk cursor */");
+    if (instance.blobLazy() || instance.blockLazy()) {
+        out.emitLine("unsigned int _cc = 0u;  /* lazy-decrypt block cursor */");
     }
 }
 
@@ -772,13 +772,75 @@ void emitLazyInfrastructure(CSourceStream& out, const VmInstance& instance,
     });
 }
 
-/// 发射取码前的懒解密 touch 调用（blobLazy 关闭时零发射——关闭路径产物不变）。
+/// 发射取码前的懒解密 touch 调用（两档全关时零发射——关闭路径产物不变）。
 /// pcExpr 是当前指令起点表达式（各 dispatcher 形态各异），ccExpr 是块游标地址。
+/// 64 字节网格档（blobLazy）与 CFG 块粒度档（blockLazy）互斥，按模式分派到
+/// 各自的 touch helper（命名面可辨：mj2x_vm_lazy_touch_ / mj2x_vm_block_touch_）。
 void emitLazyTouchCall(CSourceStream& out, const VmInstance& instance, const std::string& tag,
                        const std::string& pcExpr, const std::string& ccExpr)
 {
-    if (!instance.blobLazy()) return;
-    out.emitLine(format_std("mj2x_vm_lazy_touch_{}({}, {});", tag, pcExpr, ccExpr));
+    if (instance.blobLazy()) {
+        out.emitLine(format_std("mj2x_vm_lazy_touch_{}({}, {});", tag, pcExpr, ccExpr));
+    } else if (instance.blockLazy()) {
+        out.emitLine(format_std("mj2x_vm_block_touch_{}({}, {});", tag, pcExpr, ccExpr));
+    }
+}
+
+/// 发射块粒度链式懒解密基础设施（blockLazy 时在 bytecode 数组之后、dispatcher
+/// 之前）：块状态表（volatile，0=密文 1=已解密）+ touch helper。
+///
+/// @details
+/// issue #1116 切片 B（--vmc4-block-lazy-decrypt）。与 64 字节网格档的两点
+/// 结构差异：①**边界表零新增**——块区间直接复用 blockTargets（targets 形参，
+/// end(c) = c+1<N ? targets[c+1] : totalBytes，尾块含 trailing Halt 哨兵），
+/// 不发射独立 cend 表；②**密钥链式派生**——慢路径经 CRT
+/// mj2x_vm_block_lazy_decrypt 从 seed 走链重导出块密钥（(seed, blockIdx,
+/// prevKey)，首块 prevKey=seed；链状态只在 CRT 栈上瞬时存在，用后擦除）。
+/// 快路径同样只做 2 次读 + 比较；慢路径 CRT 内部持锁防多 Java 线程双重解密。
+/// 主密钥只以 32 位立即数出现在调用参数里（与首切片同一形态），不落任何
+/// key/keystream 数组。
+void emitBlockLazyInfrastructure(CSourceStream& out, const VmInstance& instance,
+                                 const std::string& tag, const std::string& progName,
+                                 const std::string& targetsName, uint32_t nBlocks,
+                                 uint32_t totalBytes)
+{
+    // 状态表条数取 max(nBlocks,1)：真实程序恒 ≥1 块（assignBlockIndices
+    // fail-closed 保证）；下界只为退化防御形态不出零长数组（与网格档
+    // buildLazyChunkEnds 的 {0} 空块同一防御姿态）。
+    const uint32_t nState = nBlocks != 0u ? nBlocks : 1u;
+    // volatile 状态表：阻止编译器把状态读提升出解释器主循环（懒解密本身会改
+    // 状态，跨 CRT 调用的重读必须真实发生）。static 零初始化 = 初始全密文。
+    out.emitLine(format_std(
+        "static volatile unsigned char mj2x_vm_bstate_{}[{}];  /* 0=cipher, 1=decrypted */",
+        tag, nState));
+    char keyBuf[16];
+    std::snprintf(keyBuf, sizeof(keyBuf), "0x%08xu",
+                  static_cast<unsigned>(vmc4DeriveBlobKey(instance.instanceSeed())));
+    out.add_func(format_std("static void mj2x_vm_block_touch_{}(unsigned int pc, unsigned int* cc)",
+                            tag),
+                 [&](CSourceStream& f) {
+        // 快路径：游标命中块区间且已解密 → 直接过。end(cc) 内联计算
+        // （尾块 = totalBytes），不引入边界表。
+        f.emitLine(format_std("unsigned int _be = (*cc + 1u < {}u) ? {}[*cc + 1u] : {}u;",
+                              nBlocks, targetsName, totalBytes));
+        f.emitLine(format_std("if (*cc >= {}u || pc >= _be ||", nBlocks));
+        f.emitLine(format_std("    (*cc != 0u && pc < {}[*cc]) ||", targetsName));
+        f.emitLine(format_std("    mj2x_vm_bstate_{}[*cc] != 1u) {{", tag));
+        {
+            CSourceStream::IndentGuard g(f);
+            f.emitLine(format_std("*cc = mj2x_vm_block_locate({}, {}u, {}u, pc);", targetsName,
+                                  nBlocks, totalBytes));
+            f.emitLine(format_std("if (mj2x_vm_bstate_{}[*cc] != 1u) {{", tag));
+            {
+                CSourceStream::IndentGuard g2(f);
+                f.emitLine(format_std("mj2x_vm_block_lazy_decrypt({}, {}, "
+                                      "mj2x_vm_bstate_{}, {}u, {}u, {}, *cc);",
+                                      progName, targetsName, tag, nBlocks, totalBytes, keyBuf));
+            }
+            f.emitLine("}");
+        }
+        f.emitLine("}");
+    });
 }
 
 /// 生成 dispatcher 的取码语句：drift 开启时按当前 pc 算变体序号再过 unmap 表；
@@ -864,8 +926,8 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
                             const VmInstance& instance, const std::string& tag)
 {
     const std::string ctxType = format_std("mj2x_vm_ctx_{}", tag);
-    // blobLazy：ctx 追加块游标字段（dispatch body 跨调用持久，懒解密快路径
-    // 依赖它；lazy 关闭时不发射该字段，保持产物逐字节不变）。
+    // blobLazy/blockLazy：ctx 追加块游标字段（dispatch body 跨调用持久，懒解密
+    // 快路径依赖它；lazy 关闭时不发射该字段，保持产物逐字节不变）。
     out.emitLine(format_std(
         "struct {} {{ const unsigned char* code; const unsigned int* targets; "
         "unsigned int pc; unsigned int status; JNIEnv* env; const mj2x_vm_call_fn* call_table; "
@@ -873,7 +935,7 @@ void emitFuncPtrFilePrelude(CSourceStream& out, const VmProgram& program,
         "const mj2x_vm_call_fn* array_load_table; const mj2x_vm_call_fn* array_store_table; "
         "const mj2x_vm_call_fn* alloc_table; const mj2x_vm_call_fn* intrinsic_table; "
         "mj2x_vm_slot* regs; mj2x_vm_slot* retval;{} }};", ctxType,
-        instance.blobLazy() ? " unsigned int lazy_chunk;" : ""));
+        (instance.blobLazy() || instance.blockLazy()) ? " unsigned int lazy_chunk;" : ""));
     out.emitLine(format_std("typedef struct {} {};", ctxType, ctxType));
     out.add_func(format_std("static void mj2x_vm_dispatch_body_{}({}* ctx)", tag, ctxType),
                  [&](CSourceStream& f) {
@@ -951,8 +1013,8 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("_ctx.intrinsic_table = intrinsic_table;");
     out.emitLine("_ctx.regs = slots;");
     out.emitLine("_ctx.retval = retval;");
-    if (instance.blobLazy()) {
-        out.emitLine("_ctx.lazy_chunk = 0u;  /* lazy-decrypt chunk cursor */");
+    if (instance.blobLazy() || instance.blockLazy()) {
+        out.emitLine("_ctx.lazy_chunk = 0u;  /* lazy-decrypt block cursor */");
     }
     out.emitLine(format_std("{}* ctx = &_ctx;", ctxType));
     out.emitLine(format_std("typedef void (*mj2x_vm_handler_{})({}*);", tag, ctxType));
@@ -2235,21 +2297,48 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         // 覆盖全部执行期，且不产生第二份 blob 副本。blockTargets/常量池不属
         // 于指令流，仍为明文。关闭路径保持原发射形态（产物字节级不变）。
         //
-        // 切片 2 两种形态：
+        // 三种解密档位（互斥，见 vmc4_instance.hpp 互斥矩阵）：
         //   - 仅加密：整流单一密钥，JNI_OnLoad 一次性原地解密（backend 发射）。
-        //   - 加密 + lazy（--vmc4-lazy-decrypt）：按指令对齐的 64 字节目标块
-        //     独立加密（块密钥 = vmc4DeriveChunkKey(blobKey, c)，与 CRT
-        //     mj2x_vm_chunk_key 双镜像），JNI_OnLoad 不解密；解释器取码前经
-        //     mj2x_vm_lazy_touch_<tag> 确保所在块已解密（首次进入才解密，
+        //   - 加密 + lazy（--vmc4-lazy-decrypt，#760 切片 2）：按指令对齐的
+        //     64 字节目标块独立加密（块密钥 = vmc4DeriveChunkKey(blobKey, c)，
+        //     与 CRT mj2x_vm_chunk_key 双镜像），JNI_OnLoad 不解密；解释器取码
+        //     前经 mj2x_vm_lazy_touch_<tag> 确保所在块已解密（首次进入才解密，
         //     未走到的分支保持密文，对齐 jvmtp 1.6.4 vm.lazy-decrypt）。
-        //     解密后保持明文不回擦：rt 侧 handler 内联直读 code[pc]（无中央
-        //     取译码步骤），回擦需在 5 种 dispatcher 的每条控制流边上插重加密
-        //     点并判定"块离开"事件（循环回边使其不可判定），而单块解密本身
-        //     是纳秒级操作——权衡后取「解密一次、驻留明文」，密钥侧的暴露面
-        //     由密钥栈擦除（CRT scrub）与块级密钥独立派生收敛。
+        //   - 加密 + block lazy（--vmc4-block-lazy-decrypt，#1116 切片 B）：
+        //     按 blockTargets 划界的 CFG 块独立加密（块密钥链式派生
+        //     vmc4DeriveBlockChainKey(seed, c, prev)，首块 prev=seed，与 CRT
+        //     mj2x_vm_block_chain_key 双镜像），JNI_OnLoad 不解密；解释器首达
+        //     某块时经 mj2x_vm_block_touch_<tag> 解密该块并置已解缓存位
+        //     （未执行块保持密文，对齐 jvmtp 1.6.8 vm.control-flow-flatten 的
+        //     first-arrival decrypt 口径）。块边界复用 targets 表，零新增表。
+        //     两档解密后均保持明文不回擦：rt 侧 handler 内联直读 code[pc]
+        //     （无中央取译码步骤），回擦需在 5 种 dispatcher 的每条控制流边上
+        //     插重加密点并判定"块离开"事件（循环回边使其不可判定），而单块
+        //     解密本身是纳秒级操作——权衡后取「解密一次、驻留明文」，密钥侧
+        //     的暴露面由密钥栈擦除（CRT scrub）与块级密钥独立派生收敛。
         if (instance.blobEncrypt()) {
             std::vector<uint8_t> cipher = program.bytecodes;
-            if (instance.blobLazy()) {
+            if (instance.blockLazy()) {
+                // 块粒度链式加密：块 c 区间 = [targets[c], 下一块起点或流尾
+                // （尾块含 trailing Halt 哨兵）]，密钥按链序推导（k_0 =
+                // F(seed,0,seed)，k_c = F(seed,c,k_{c-1})）。加密施加于 drift
+                // 编码完成后的最终字节流（与 drift 正交叠加，与首切片同一
+                // 施加点）；blockTargets 与发射布局同一 id 空间（切片 A：
+                // 物理序 == id 序），链下标与运行期首达定位天然一致。
+                const uint32_t blobKey = vmc4DeriveBlobKey(instance.instanceSeed());
+                const size_t   nBlocks = program.blockTargets.size();
+                uint32_t       k       = blobKey;
+                for (size_t c = 0; c < nBlocks; ++c) {
+                    k = vmc4DeriveBlockChainKey(blobKey, static_cast<uint32_t>(c), k);
+                    const uint32_t begin = program.blockTargets[c];
+                    const uint32_t end = (c + 1 < nBlocks)
+                                             ? program.blockTargets[c + 1]
+                                             : static_cast<uint32_t>(cipher.size());
+                    xorStreamBytes(cipher.data() + begin, end - begin, k);
+                }
+                out.emitLine("/* program blob: block-chunked at rest, chain keys, decrypted"
+                             " lazily on first arrival (issue #1116 slice B) */");
+            } else if (instance.blobLazy()) {
                 lazyChunkEnds = buildLazyChunkEnds(program);
                 // 分块独立加密：块 c 用 vmc4DeriveChunkKey(blobKey, c) 起步的
                 // 独立密钥流。加密施加于 drift 编码完成后的最终字节流（与
@@ -2284,10 +2373,16 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         out.emitLine("");
         out.emitLine("};");
         out.emitBlankLine();
-        // 懒解密基础设施（块终点表 + 状态表 + touch helper），须在全部
-        // dispatcher 之前发射（文件级符号）。
+        // 懒解密基础设施（网格档：块终点表 + 状态表 + touch helper；块档：
+        // 状态表 + touch helper，块边界复用 targets 表），须在全部 dispatcher
+        // 之前发射（文件级符号）。两档互斥，至多发射其一。
         if (instance.blobLazy()) {
             emitLazyInfrastructure(out, instance, tag, progName, lazyChunkEnds);
+            out.emitBlankLine();
+        } else if (instance.blockLazy()) {
+            emitBlockLazyInfrastructure(out, instance, tag, progName, targetsName,
+                                        static_cast<uint32_t>(program.blockTargets.size()),
+                                        static_cast<uint32_t>(program.bytecodes.size()));
             out.emitBlankLine();
         }
     }
