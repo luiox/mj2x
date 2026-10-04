@@ -486,9 +486,10 @@ bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& register
 std::string emitThrowArithmeticHelper();
 std::string emitObjectHelpers();
 
-/// @brief LLVM 浮点字面量：NaN/±Inf/-0.0 发射 hex 位型，正常值 decimal scientific。
-/// @details F32 特殊值按 AsmWriter 口径经 double 加宽为 16 位 hex 位型
-///          （LLVM 规范要求 float hex 常量为 double 位型宽度，裸 8 位形态
+/// @brief LLVM 浮点字面量：全量发射 hex 位型（#1122 实跑暴露：正常值 decimal
+///          scientific 形态 clang 拒读——LLVM 十进制浮点常量须精确等值）。
+/// @details 一律按 AsmWriter 口径经 double 加宽为 16 位 hex 位型（float 亦然：
+///          LLVM 规范要求 float hex 常量为 double 位型宽度，裸 8 位形态
 ///          clang 拒读，#1117 评审 P1）。
 std::string llvmFloatLiteral(double value, bool isF32);
 
