@@ -432,9 +432,10 @@ private:
             return true;
         }
         if (operand.kind == RegOperandKind::FloatLiteral) {
-            // NaN / ±Inf / -0.0 用 LLVM hex 字面量（十进制形式无法表示）；
-            // 正常值保持十进制 scientific。发射口径统一走 llvmFloatLiteral
-            // （F32 特殊值经 double 加宽为 16 位位型，#1117 评审 P1）。
+            // 全量 LLVM hex 字面量（LLVM AsmWriter 口径）：十进制字面量须
+            // "恰好等于该浮点值"才合法，正常值大多不可精确表示，round-trip
+            // 可逆的短十进制也拒读（实跑暴露，#1122）。发射口径统一走
+            // llvmFloatLiteral（F32 经 double 加宽为 16 位位型，#1117 评审 P1）。
             if (operand.type != SSAType::F32 && operand.type != SSAType::F64) {
                 reason = "LLVM IR floating literal has a non-floating type";
                 return false;

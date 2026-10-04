@@ -4,7 +4,6 @@
 
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 
-#include <cmath>
 #include <cstring>
 #include <iomanip>
 
@@ -167,37 +166,25 @@ std::string emitObjectHelpers()
     return out.str();
 }
 
-/// @brief LLVM 浮点字面量（NaN/±Inf/-0.0 用 hex 位模式；正常值 decimal scientific）。
+/// @brief LLVM 浮点字面量：全量 hex 位模式（LLVM AsmWriter 口径）。
 ///
-/// @details 特殊值 hex 位型统一为 LLVM AsmWriter 口径：F32 先窄化回 float
-///          （常量池口径），再经 double 加宽取 64 位位型按 16 位 hex 输出
-///          （如 float NaN → 0x7FF8000000000000）。LLVM 规范要求 float hex
+/// @details F32 先窄化回 float（常量池口径），再经 double 加宽取 64 位位型
+///          按 16 位 hex 输出；F64 直接取 64 位位型。LLVM 规范要求 float hex
 ///          常量为 double 位型宽度，裸 8 位 float 位型任何 clang 都拒读
 ///          （floating point constant invalid for type，#1117 评审 P1）。
+///          正常值同样只走 hex：十进制字面量须"恰好等于该浮点值"才合法，
+///          LLVM 按类型语义做精确转换，round-trip 可逆的短十进制（如
+///          4.99999970e-01）同样拒读——实跑暴露于 #1122，十进制分支整体撤销。
 std::string llvmFloatLiteral(double value, bool isF32)
 {
     const double narrowed = isF32 ? static_cast<double>(static_cast<float>(value)) : value;
-    if (std::isnan(narrowed) || std::isinf(narrowed)
-        || (narrowed == 0.0 && std::signbit(narrowed)))
-    {
-        static_assert(sizeof(double) == sizeof(unsigned long long),
-                      "double must match unsigned long long width");
-        unsigned long long pattern = 0;
-        std::memcpy(&pattern, &narrowed, sizeof(pattern));
-        std::ostringstream out;
-        out << "0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(16)
-            << pattern;
-        return out.str();
-    }
-    std::ostringstream literal;
-    literal << std::scientific << std::showpoint;
-    if (isF32) {
-        literal << std::setprecision(9) << static_cast<float>(narrowed);
-    }
-    else {
-        literal << std::setprecision(17) << narrowed;
-    }
-    return literal.str();
+    static_assert(sizeof(double) == sizeof(unsigned long long),
+                  "double must match unsigned long long width");
+    unsigned long long pattern = 0;
+    std::memcpy(&pattern, &narrowed, sizeof(pattern));
+    std::ostringstream out;
+    out << "0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(16) << pattern;
+    return out.str();
 }
 
 // ---- invokedynamic 运行时解析 helper（含 indy 站点时 finalize 统一生成）----

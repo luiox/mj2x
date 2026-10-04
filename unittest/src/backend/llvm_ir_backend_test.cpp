@@ -855,6 +855,27 @@ TEST(LlvmIrBackendTest, EmitsSpecialFloatLiterals)
     EXPECT_NE(nzero.text.find("double 0x8000000000000000"), std::string::npos) << nzero.text;
 }
 
+TEST(LlvmIrBackendTest, EmitsNormalFloatLiteralsAsHex)
+{
+    // 正常浮点常量同样以 double 加宽 hex 位型发射（LLVM AsmWriter 口径）：
+    // 十进制字面量须"恰好等于该浮点值"才合法，round-trip 可逆的短十进制
+    // （如 0.49999997f 的 4.99999970e-01）clang 同样拒读——integration 实跑
+    // g17.math_nan_zero 暴露（#1122）。0.49999997f = 0x3EFFFFFF，加宽
+    // double 位型 0x3FDFFFFFE0000000；0.1 double 位型 0x3FB999999999999A。
+    auto quarterish = compileScalar("roundhalf", "()F",
+                                    {new LdcInsnNode(0.49999997f),
+                                     new InsnNode(Opcodes::FRETURN)},
+                                    1, 0);
+    ASSERT_EQ(quarterish.kind, BackendResult::Kind::C_SOURCE) << quarterish.text;
+    EXPECT_NE(quarterish.text.find("float 0x3FDFFFFFE0000000"), std::string::npos)
+        << quarterish.text;
+
+    auto tenth = compileScalar("tenth", "()D",
+                               {new LdcInsnNode(0.1), new InsnNode(Opcodes::DRETURN)}, 2, 0);
+    ASSERT_EQ(tenth.kind, BackendResult::Kind::C_SOURCE) << tenth.text;
+    EXPECT_NE(tenth.text.find("double 0x3FB999999999999A"), std::string::npos) << tenth.text;
+}
+
 TEST(LlvmIrBackendTest, EmitsStaticFieldAccess)
 {
     // putstatic + getstatic（i32）：JNI 字段 helper 发射 + 全局字符串。
