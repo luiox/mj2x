@@ -45,6 +45,11 @@ target("mj2x_native")
     if is_plat("windows") then
         add_cflags("/utf-8", {tools = "cl"})
         add_cxxflags("/utf-8", {tools = "cl"})
+        -- 生成码与 mj2x-rt 跨 TU：热路径 JNI 薄包装（如 enum values 站点、
+        -- 字段缓存读写）在 generated TU 与 runtime TU 间调用，跨 TU 内联
+        -- 需要全程序优化。仅 cl 生效（/GL + /LTCG，tools 守卫），mingw/gcc 不受影响。
+        add_cxflags("/GL", {tools = "cl"})
+        add_ldflags("/LTCG", {tools = "link"})
     else
         add_syslinks("pthread", "m")
     end
