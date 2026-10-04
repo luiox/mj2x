@@ -745,15 +745,17 @@ void addInterfaceToIndex(CompilerIndex& index, const std::string& name, int acce
 }
 
 // 在 caller 类造无状态 lambda 站点（SAM 返回类型 = samIface 内部名）+ 静态 impl 方法。
-// 无状态：indy desc "()"（零捕获），impl 布局 = sam = (I)I。
+// 无状态：indy desc "()"（零捕获），impl 布局 = sam = (I)I。tag 供同 caller 双站点。
 MethodNode* addLambdaCaller(CompilerIndex& index, const std::string& callerName,
-                            const std::string& samIface)
+                            const std::string& samIface, const std::string& tag = "")
 {
     auto& arena = index.arena();
+    const std::string makeName = "make" + tag;
+    const std::string implName = "impl" + tag;
     std::vector<ca::core::Any> bsmArgs;
     bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern(callerName.c_str()),
-                                arena.intern("impl"), arena.intern("(I)I")));
+                                arena.intern(implName.c_str()), arena.intern("(I)I")));
     bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
     auto* indy = new InvokeDynamicInsnNode(
         arena.intern("apply"),
@@ -761,16 +763,38 @@ MethodNode* addLambdaCaller(CompilerIndex& index, const std::string& callerName,
         lambdaMetafactoryBsm(index), bsmArgs);
     std::vector<ca::str::Utf8StringRef> noExc;
     const std::string                   desc = "()L" + samIface + ";";
-    MethodNode* m = addMethodToIndex(index, callerName, "make", desc,
-                                     {indy, new InsnNode(Opcodes::ARETURN)});
+    auto* cls = index.getClass(callerName);
+    if (cls == nullptr) {
+        // 首站点：建类（addMethodToIndex 的 make 方法即本站点方法，impl 随后追加）。
+        MethodNode* m = addMethodToIndex(index, callerName, makeName, desc,
+                                         {indy, new InsnNode(Opcodes::ARETURN)});
+        auto* impl = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                                    arena.intern(implName.c_str()), arena.intern("(I)I"),
+                                    arena.intern(""), noExc);
+        impl->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
+        impl->instructions.add(new InsnNode(Opcodes::IRETURN));
+        impl->maxStack  = 1;
+        impl->maxLocals = 1;
+        index.getClass(callerName)->classNode->methods.push_back(impl);
+        return m;
+    }
+    // 同 caller 第二站点：追加方法（addMethodToIndex 的 addClass 语义是整体替换，不能用）。
+    auto* m = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                             arena.intern(makeName.c_str()), arena.intern(desc.c_str()),
+                             arena.intern(""), noExc);
+    m->instructions.add(indy);
+    m->instructions.add(new InsnNode(Opcodes::ARETURN));
+    m->maxStack  = 10;
+    m->maxLocals = 4;
     auto* impl = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                                arena.intern("impl"), arena.intern("(I)I"),
+                                arena.intern(implName.c_str()), arena.intern("(I)I"),
                                 arena.intern(""), noExc);
     impl->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
     impl->instructions.add(new InsnNode(Opcodes::IRETURN));
     impl->maxStack  = 1;
     impl->maxLocals = 1;
-    index.getClass(callerName)->classNode->methods.push_back(impl);
+    cls->classNode->methods.push_back(m);
+    cls->classNode->methods.push_back(impl);
     return m;
 }
 
@@ -815,7 +839,52 @@ TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForLibrarySam)
     EXPECT_EQ(index.getClass("demo/pkg/Lambda$0"), nullptr);
 }
 
-// 用户类占用合成名 → 探测前跳，不静默覆盖；计数器推进，后续站点不回退撞名。
+// default 包包私有 SAM → 合成类落 default 包（裸名 Lambda$0，不得产出非法名 /Lambda$0）。
+// （#1182 评审收口 P1：无 '/' 时宿主包必须返回空串。）
+TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePackagePrivateSamSynthInDefaultPackage)
+{
+    CompilerIndex index;
+    addInterfaceToIndex(index, "PriOp", 0);   // default 包包私有接口（内部名无 '/'）
+    MethodNode* m = addLambdaCaller(index, "Caller", "PriOp");
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_NE(index.getClass("Lambda$0"), nullptr);
+    EXPECT_EQ(index.getClass("/Lambda$0"), nullptr);
+}
+
+// default 包 private 嵌套 SAM（javac 落盘不写 ACC_PRIVATE，非 public 位触发判定）
+// → 同样落 default 包裸名（#1182 评审收口 P1 第二形态）。
+TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePrivateNestedSamSynthInDefaultPackage)
+{
+    CompilerIndex index;
+    addInterfaceToIndex(index, "Outer$Op", 0);   // default 包嵌套私有接口（javac 形态）
+    MethodNode* m = addLambdaCaller(index, "Outer", "Outer$Op");
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_NE(index.getClass("Lambda$0"), nullptr);
+    EXPECT_EQ(index.getClass("/Lambda$0"), nullptr);
+}
+
+// protected 嵌套 SAM 的 javac 落盘形态即 ACC_PUBLIC（javap 实证 0x0601）→ 谓词不
+// 触发，维持 mj2x/lambda 且运行绿（行为钉；protected 分支在判定中实为死分支）。
+TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForJavacProtectedNestedSam)
+{
+    CompilerIndex index;
+    addInterfaceToIndex(index, "demo/pkg/Outer$Op", Opcodes::ACC_PUBLIC);   // javac 0x0601 形态
+    MethodNode* m = addLambdaCaller(index, "demo/pkg/Outer", "demo/pkg/Outer$Op");
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+    EXPECT_EQ(index.getClass("demo/pkg/Lambda$0"), nullptr);
+}
+
+// 用户类占用合成名 → 探测前跳，不静默覆盖；计数器推进，第二站点不回退撞名。
 TEST(InvokeDynamicPreprocessorTest, SkipsUserClassOccupyingSynthName)
 {
     CompilerIndex index;
@@ -823,10 +892,12 @@ TEST(InvokeDynamicPreprocessorTest, SkipsUserClassOccupyingSynthName)
     // 用户恰有一个非库类叫 demo/pkg/Lambda$0（合法但极端），含标记方法 dummy。
     addMethodToIndex(index, "demo/pkg/Lambda$0", "dummy", "()V", {});
     MethodNode* m1 = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Op");
+    MethodNode* m2 = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Op", "2");
 
     InvokeDynamicPreprocessor().process(index);
 
     EXPECT_EQ(countInsnType(m1, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_EQ(countInsnType(m2, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     // 用户类原样保留（未被合成类覆盖）。
     auto* user = index.getClass("demo/pkg/Lambda$0");
     ASSERT_NE(user, nullptr);
@@ -835,6 +906,7 @@ TEST(InvokeDynamicPreprocessorTest, SkipsUserClassOccupyingSynthName)
         if (mm->name.to_std_string() == "dummy") hasDummy = true;
     }
     EXPECT_TRUE(hasDummy);
-    // 合成类跳到 Lambda$1。
+    // 合成类跳到 Lambda$1，第二站点推到 Lambda$2（计数器确已跨过占用名推进）。
     EXPECT_NE(index.getClass("demo/pkg/Lambda$1"), nullptr);
+    EXPECT_NE(index.getClass("demo/pkg/Lambda$2"), nullptr);
 }

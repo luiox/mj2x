@@ -101,7 +101,11 @@ void _mj2x_regc_throw_null(const char* message) {
 
 jclass _mj2x_regc_find_class(const char* desc) {
     if (desc == NULL) return NULL;
-    if (desc[0] == 'L') {
+    /* 'L' 前缀仅在完整字段描述符形态（L...;）时剥壳转内部名：裸内部名可能以 'L'
+     * 开头（default 包合成类 Lambda$N，#1182 评审收口 P1），按首字符无条件剥壳
+     * 会把名字截成 "ambda$N" → NoClassDefFoundError。 */
+    const size_t desc_len = strlen(desc);
+    if (desc[0] == 'L' && desc_len >= 3 && desc[desc_len - 1] == ';') {
         char name[1024];
         int i = 0;
         while (desc[i + 1] != ';' && desc[i + 1] != '\0' && i < 1023) { name[i] = desc[i + 1]; i++; }

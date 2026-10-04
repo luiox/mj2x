@@ -8,7 +8,7 @@
 | 阶段 | 覆盖 | 机制 | 状态 |
 |---|---|---|---|
 | 阶段1 | `StringConcatFactory.makeConcat[WithConstants]` | pre-SSA 展开为 `new StringBuilder`/`append` 序列 | ✅ |
-| 阶段2 | `LambdaMetafactory.metafactory`/`altMetafactory` | pre-SSA 为每站点合成实现类（public SAM 落 `mj2x/lambda/*`；包私有/protected SAM 落 SAM 同包，#1182），SAM `invokestatic` 转 impl，含捕获/方法引用/装箱/桥接/序列化等 2a-2f | ✅ |
+| 阶段2 | `LambdaMetafactory.metafactory`/`altMetafactory` | pre-SSA 为每站点合成实现类（public SAM 落 `mj2x/lambda/*`；包私有/private 嵌套 SAM 落 SAM 同包（javac protected 落盘即 public，谓词不触发），#1182；default 包 SAM 落 default 包裸名。生成器侧修复：已发布产物遇包私有 SAM 不自动治愈，需重转换），SAM `invokestatic` 转 impl，含捕获/方法引用/装箱/桥接/序列化等 2a-2f | ✅ |
 | 阶段3 | 任意自定义 bootstrap | SSA 层登记站点 + RegIR 透传 + finalize 生成文件级 `_mj2x_regc_indy_bsm_<i>` 运行时 call-site helper | ✅（2026-08-09） |
 
 ## 阶段3 机制

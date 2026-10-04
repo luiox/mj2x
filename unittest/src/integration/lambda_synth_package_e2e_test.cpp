@@ -40,6 +40,12 @@ public class Main {
     // 包私有函数式接口：合成 lambda 类不得落固定 mj2x/lambda 包（#1182 根因面）。
     interface Op { int apply(int x); }
 
+    // private 嵌套接口：javac 落盘不写 ACC_PRIVATE（非 public 位触发宿主包判定），
+    // 合成类落 demo1182 同包即运行全绿（评审收口 ①：类级访问不查 nest + impl 提权）。
+    private interface Pri { int f(int x); }
+
+    private int privScale(int v) { return v * 2 + 7; }
+
     static int work(Op op, int v) { return op.apply(v); }
 
     public static class SecretBox {
@@ -85,6 +91,12 @@ public class Main {
         Method apply = Op.class.getMethod("apply", int.class);
         Object opObj = (Object) cap;                 // 反射打 lambda 包装实例本身
         check("refl-op", ((Integer) apply.invoke(opObj, 7)).intValue() == 128);
+
+        // private 嵌套 SAM + 捕获 + 私有实例 impl（评审收口 ①绿钉形态）。
+        Main inst = new Main();
+        int  factor = 3;
+        Pri priv = x -> inst.privScale(x) + factor;
+        check("priv", priv.f(5) == 20);
 
         System.out.println("ALL_OK");
     }
@@ -178,6 +190,7 @@ TEST_F(LambdaSynthPackageE2E, PackagePrivateSamLambdaSurvivesRegcNative)
         "ok refl\n"
         "ok refl2\n"
         "ok refl-op\n"
+        "ok priv\n"
         "ALL_OK\n";
     ASSERT_EQ(normalizeOutput(baseline.out), expected) << baseline.out;
 
@@ -206,5 +219,84 @@ TEST_F(LambdaSynthPackageE2E, PackagePrivateSamLambdaSurvivesRegcNative)
     const auto protectedRun = runBat({q(tc_.jdk.java) + " -jar " + q(outJar)});
     ASSERT_EQ(protectedRun.exitCode, 0) << protectedRun.out;
     EXPECT_EQ(normalizeOutput(protectedRun.out), expected) << protectedRun.out;
+    EXPECT_EQ(protectedRun.out.find("Exception"), std::string::npos) << protectedRun.out;
+}
+
+// default 包 SAM（评审收口 P1 复现形态）：合成类落 default 包裸名 Lambda$N（首字符
+// 'L'），同时钉 runtime 的 L 描述符剥壳守卫（裸名按首字符剥壳会截成 "ambda$N" →
+// NoClassDefFoundError）——两修缺一此形态即运行红。
+const char* kDefaultPackageSample = R"(import java.lang.reflect.Method;
+
+public class Main {
+    interface Op { int apply(int x); }
+
+    static int work(Op op, int v) { return op.apply(v); }
+
+    public static void main(String[] args) throws Exception {
+        Op cap = x -> x * 2 + 1;
+        if (work(cap, 10) != 21) throw new AssertionError("cap FAILED");
+        Method apply = Op.class.getMethod("apply", int.class);
+        try {
+            if (((Integer) apply.invoke((Object) cap, 7)).intValue() != 15) {
+                throw new AssertionError("refl FAILED");
+            }
+        }
+        catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+        System.out.println("DEFAULT_PKG_OK");
+    }
+}
+)";
+
+TEST_F(LambdaSynthPackageE2E, DefaultPackageSamSurvivesRegcNative)
+{
+    const fs::path dir = test::getOutPath("mj2x/integration/lambda_synth_deflt/.keep").parent_path();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+
+    const fs::path srcFile = dir / "Main.java";
+    {
+        std::ofstream out(srcFile, std::ios::binary);
+        out << kDefaultPackageSample;
+        ASSERT_TRUE(out.good());
+    }
+    const fs::path classesDir = dir / "classes";
+    const auto compile =
+        runBat({q(tc_.jdk.javac) + " -encoding UTF-8 -d " + q(classesDir) + " " + q(srcFile)});
+    ASSERT_EQ(compile.exitCode, 0) << compile.out;
+
+    const fs::path inJar = dir / "lambda-deflt-input.jar";
+    const auto jarCreate =
+        runBat({q(tc_.jarTool) + " --create --file=" + q(inJar) +
+                " --main-class Main -C " + q(classesDir) + " ."});
+    ASSERT_EQ(jarCreate.exitCode, 0) << jarCreate.out;
+
+    const auto baseline = runBat({q(tc_.jdk.java) + " -cp " + q(classesDir) + " Main"});
+    ASSERT_EQ(baseline.exitCode, 0) << baseline.out;
+    ASSERT_EQ(normalizeOutput(baseline.out), "DEFAULT_PKG_OK\n") << baseline.out;
+
+    const fs::path outJar = dir / "lambda-deflt-regc.jar";
+    const fs::path proj   = dir / "native_project";
+    const auto transform = runBat({q(tc_.cli) + " -i " + q(inJar) + " -o " + q(outJar) +
+                                   " --backend regc --regc-direct-calls --generate-xmake " +
+                                   q(proj) + " --compile"});
+    ASSERT_EQ(transform.exitCode, 0) << transform.out;
+    ASSERT_TRUE(fileExists(outJar)) << outJar.string();
+
+    // 产物形状钉：default 包合成类 = 裸名条目（合法），且不存在非法 /Lambda$0.class
+    // 条目（P1 修复前宿主包误返 "/" 的产物形态）。
+    std::ifstream     jarIn(outJar, std::ios::binary);
+    const std::string jarBytes((std::istreambuf_iterator<char>(jarIn)),
+                               std::istreambuf_iterator<char>());
+    ASSERT_NE(jarBytes.find("META-INF/mj2x/native/"), std::string::npos) << "转换产物缺嵌入 DLL";
+    ASSERT_NE(jarBytes.find("Lambda$0.class"), std::string::npos) << "default 包合成类缺失";
+    ASSERT_EQ(jarBytes.find("/Lambda$0.class"), std::string::npos)
+        << "存在非法根斜杠条目（P1 修复前宿主包误返 \"/\" 的产物形态）";
+
+    const auto protectedRun = runBat({q(tc_.jdk.java) + " -jar " + q(outJar)});
+    ASSERT_EQ(protectedRun.exitCode, 0) << protectedRun.out;
+    EXPECT_EQ(normalizeOutput(protectedRun.out), "DEFAULT_PKG_OK\n") << protectedRun.out;
     EXPECT_EQ(protectedRun.out.find("Exception"), std::string::npos) << protectedRun.out;
 }

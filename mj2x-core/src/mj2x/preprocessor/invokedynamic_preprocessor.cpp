@@ -1196,29 +1196,31 @@ struct PendingLambdaClass
     std::unique_ptr<ClassNode> node;
 };
 
-/// 合成 lambda 类宿主包判定（#1182）。
+/// 合成 lambda 类宿主包判定（#1182，评审收口 P1 修：default 包返回空串）。
 ///
 /// JVM 对「类实现接口」的访问检查只看接口类自身的 ACC 标志（嵌套仅命名，nest 只管
-/// private 成员）：合成类落在固定 mj2x/lambda 包时，实现包私有 SAM 必然在
-/// defineClass 阶段抛 IllegalAccessError → FindClass 返回 NULL（异常挂起）→ 生成码
-/// NULL 守卫把 op 落 NULL → lambda 包装 invoke 全 NPE。
+/// private 成员；javac 嵌套类类文件不写 ACC_PRIVATE，protected 写 ACC_PUBLIC）：
+/// 合成类落在固定 mj2x/lambda 包时，实现包私有 SAM 必然在 defineClass 阶段抛
+/// IllegalAccessError → FindClass 返回 NULL（异常挂起）→ 生成码 NULL 守卫把 op 落
+/// NULL → lambda 包装 invoke 全 NPE。
 ///
 /// javac 的 hidden-class 语义 = 定义在调用方可见的包里。等价规则（只动编译输入可判定
 /// 的形态，其余零漂移）：
-/// - SAM 在编译输入且非 public（包私有/protected/private 嵌套）→ 落 SAM 同包；
-///   private（嵌套）需 nest 成员身份才可实现，同包落位仍不可达——不比 mj2x/lambda
-///   更差，真正的解法需 nest 注入，超出本卡范围；
+/// - SAM 在编译输入且非 public（包私有/private 嵌套）→ 落 SAM 同包。private 嵌套
+///   实测同包落位即运行全绿（评审实测：类级访问不查 nest + 类文件无 ACC_PRIVATE +
+///   impl 提权既有覆盖）；protected 按 javac 落盘形态即 public，谓词不触发（死分支）；
 /// - SAM 不在输入（库类型）→ 维持 mj2x/lambda：跨包引用的库 SAM 只可能 public；
 ///   同包包私有库 SAM 属 split-package 罕态且现状即坏，不为此牺牲零漂移面。
 ///
-/// 返回宿主包（恒带尾随 '/'；"mj2x/lambda/" = 维持现状）。
+/// 返回宿主包（包内带尾随 '/'；default 包=空串；"mj2x/lambda/" = 维持现状）。
+/// 注意本修复是生成器侧：已发布产物遇包私有 SAM 不会自动治愈，需重转换。
 std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& ifaceInternal)
 {
     if (auto* ifaceCls = index.getClass(ifaceInternal)) {
         if (ifaceCls->classNode != nullptr &&
             (ifaceCls->classNode->access & Opcodes::ACC_PUBLIC) == 0) {
             const std::size_t slash = ifaceInternal.rfind('/');
-            return slash == std::string::npos ? std::string("/")
+            return slash == std::string::npos ? std::string()
                                               : ifaceInternal.substr(0, slash + 1);
         }
     }
@@ -1280,8 +1282,7 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     std::string synthName;
     int         n = synthCounter;
     for (;; ++n) {
-        synthName = hostPkg.empty() ? "mj2x/lambda/Lambda$" + std::to_string(n)
-                                    : hostPkg + "Lambda$" + std::to_string(n);
+        synthName = hostPkg + "Lambda$" + std::to_string(n);
         if (index.getClass(synthName) == nullptr) break;
     }
     synthCounter = n + 1;
