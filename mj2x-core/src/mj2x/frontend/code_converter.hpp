@@ -11,7 +11,6 @@
 
 #include "block.hpp"
 #include "mir_node.hpp"
-#include "method_stack.hpp"
 #include "mj2x/core/compiler_index.hpp"
 
 #include <jbytecode/jbytecode.hpp>

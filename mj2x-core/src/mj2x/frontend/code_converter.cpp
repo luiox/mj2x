@@ -688,7 +688,7 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
     {
         auto* vi  = ca::core::tag_cast::cast<VarInsnNode>(insn);
         int   opc = vi->opcode;
-        // 局部变量类型直接由 opcode 推导（比 MethodStack 更精确：MethodStack 只跟踪参数 slot）。
+        // 局部变量类型直接由 opcode 推导。
         // ILOAD/LLOAD/FLOAD/DLOAD/ALOAD 与对应 STORE 是连续 opcode（21..25 / 54..58）。
         auto varKind = [](int op) -> PrimitiveKind {
             switch (op) {

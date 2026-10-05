@@ -188,7 +188,7 @@ FrameState {
 
 ### 5.4 类型推断
 
-`SSAInstruction` 的 result type 由操作数类型决定（首版用 L1 `method_stack` 的类型推导结果，或保守用 `SSA_I32`）。首版目标是结构正确（无栈槽），类型精确度推到 lowering 阶段（lowering 需要精确类型）。
+`SSAInstruction` 的 result type 由操作数类型决定（不确定时保守用 `SSA_I32`）。首版目标是结构正确（无栈槽），类型精确度推到 lowering 阶段（lowering 需要精确类型）。
 
 ---
 

@@ -4,7 +4,6 @@
 #include <type_traits>
 
 #include "mj2x/frontend/code_converter.hpp"
-#include "mj2x/frontend/method_stack.hpp"
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/frontend/opcode_utils.hpp"
 #include "jbytecode/jbytecode.hpp"
@@ -107,57 +106,6 @@ TEST(OpcodeUtilsTest, BranchZeroOpcodeMapping)
     EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFGE), CmpOp::GE);
     EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFGT), CmpOp::GT);
     EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFLE), CmpOp::LE);
-}
-
-// ============================================================
-// MethodStack tests
-// ============================================================
-
-TEST(MethodStackTest, StaticMethodParameterTypes)
-{
-    std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode                          mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                  ca::str::Utf8StringRef::from_cstr("add"),
-                  ca::str::Utf8StringRef::from_cstr("(II)I"),
-                  ca::str::Utf8StringRef::from_cstr(""),
-                  noExcepts);
-    mn.maxStack  = 2;
-    mn.maxLocals = 2;
-
-    MethodStack ms(mn);
-    EXPECT_EQ(ms.maxStack(), 2);
-    EXPECT_EQ(ms.maxLocals(), 2);
-    EXPECT_EQ(ms.getLocalType(0), PrimitiveKind::INT);
-    EXPECT_EQ(ms.getLocalType(1), PrimitiveKind::INT);
-}
-
-TEST(MethodStackTest, InstanceMethodHasThis)
-{
-    std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode                          mn(Opcodes::ACC_PUBLIC,
-                  ca::str::Utf8StringRef::from_cstr("getValue"),
-                  ca::str::Utf8StringRef::from_cstr("()I"),
-                  ca::str::Utf8StringRef::from_cstr(""),
-                  noExcepts);
-    mn.maxLocals = 1;
-
-    MethodStack ms(mn);
-    EXPECT_EQ(ms.getLocalType(0), PrimitiveKind::OBJECT);   // this
-}
-
-TEST(MethodStackTest, LongAndDoubleTakeTwoSlots)
-{
-    std::vector<ca::str::Utf8StringRef> noExcepts;
-    MethodNode                          mn(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-                  ca::str::Utf8StringRef::from_cstr("test"),
-                  ca::str::Utf8StringRef::from_cstr("(JD)V"),
-                  ca::str::Utf8StringRef::from_cstr(""),
-                  noExcepts);
-    mn.maxLocals = 4;
-
-    MethodStack ms(mn);
-    EXPECT_EQ(ms.getLocalType(0), PrimitiveKind::LONG);     // slot 0-1
-    EXPECT_EQ(ms.getLocalType(2), PrimitiveKind::DOUBLE);   // slot 2-3
 }
 
 // ============================================================
