@@ -220,6 +220,13 @@
 
 ### I. pre-existing bug：RegC try 块内 valueOf 异常不派发（立案 issue #1188；#887 Enums 承接卡发现，P2）
 
+> **【已收官 2026-10】** 本 bug 已修复关闭（PR #1195，issue #1188 CLOSED）。
+> 注意：下文"两路径均不派发"归因系评审初判，后被四模式红绿矩阵仲裁**勘正**——
+> 真实缺口仅内联展开一路（克隆块未入 protectedBlocks；站点 intrinsic 路径
+> 经 emitExceptionDispatch 已正确派发，`--regc-direct-calls` 不禁用内联故
+> 评审两模式皆走内联）。勘正与修复记录见日志 #1188 条目。以下为立案时原文，
+> 保留存档：
+
 - 现象：`try { E.valueOf("非法名"); } catch (IllegalArgumentException)` 转换后
   异常不进入 handler，后续带 pending exception 继续 JNI 调用进入未定义行为
   （EnumSemCheck 语义守卫可复现：valueOf-illegal-name-IAE / null-name-NPE
@@ -234,6 +241,45 @@
   （或等价 ITE）；修复后 EnumSemCheck 需全 PASS（FOLD ref=177700，参照
   semcheck-pure.txt）。EnumSemCheck 随 #1188 修复卡收编为回归 fixture
   （评审 N7）。
+
+### J. 待办池（2026-10-02 冻结收官盘点；后续开卡从这里取）
+
+**工程挂账（小项，均可独立成卡）**
+
+1. cli_test probe SKIP reason 措辞：MORPHER_CLANG_HOME / MATLAB 自带 clang
+   命中时消息仍写 "not on PATH"（#1191 挂账）——dead fallback 文案改按实际
+   探测来源措辞。
+2. clangPathPrelude 扩面：脚本实调 clang 处已接（#1191），cl / gcc（MSVC、
+   zig）列未覆盖——外部工具列统一注入面。
+3. isGeneratedRuntimeClass 用户手写 `Lambda$N` 理论误判：名字识别法对用户
+   自定义同名类的理论冲突，低概率，记录在案。
+4. L-shell guard 直钉 C 用例：RegC 仅剥全 `L...;` 描述符（裸名 `Lambda$0`
+   直通）现为间接覆盖，补一条 C 级直钉。
+5. EnumSemCheck E2E 门禁力：现类序使内联不发生，E2E 对 #1188 类内联缺口无
+   门禁力（SSA 单测是真门）——caller-first 排序变体可解锁 E2E 防护。
+6. #1193 P3 三项：INFO 日志分支抑制逐方法 WARN（内联失败可诊性缺口）；
+   calleeReason 丢失（内联跳过原因未透出到调用侧）；goto/nop 注释严格度。
+7. N4/N6 dev_plan 历史日志数字微误：PR body 已勘正，本文件日志正文回填
+   （低优先级，纯记录）。
+8. #1194 P3-4：模板 glob 收编 `src/generated/` 下任意 .c/.cpp——目录为 CLI
+   专有无现风险；若未来开放手工放置需加来源约束。
+
+**产品/机器决策项（需拍板）**
+
+9. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——
+   改仓库样本路径还是提升为配置项。
+10. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2
+    （仅剩 zig 系），integration LLVM 列 28 例在 CI 转实跑。
+11. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与
+    「不落明文 DLL」威胁模型冲突——接受现状或重评威胁模型。
+12. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs
+    收紧（Windows 无影响，POSIX 加固项）。
+
+**编排层**
+
+13. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
+    不持锁、`xmake build <target>` 单 target 单命令——落 doc_ai 归档页，
+    供后续 sub agent 会话直接引用。
 
 ## 验证命令
 
