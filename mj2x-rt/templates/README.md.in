@@ -13,6 +13,8 @@ xmake mj2x_native
 
 Layout:
 
-- `src/generated/native.c`: C emitted by StackC or RegC.
+- `src/generated/`: emitted sources (`.c` from StackC/RegC/VMC4, `.cpp` via
+  `--emit-cpp`, named by `--emit-c`/`--emit-cpp` when given). The xmake
+  project collects every source here.
 - `src/mj2x-rt/`: native runtime source pack copied from `mj2x/mj2x-rt`.
   The generated xmake project compiles both C and C++ runtime sources.

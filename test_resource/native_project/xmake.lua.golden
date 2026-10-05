@@ -6,15 +6,19 @@ add_rules("mode.debug", "mode.release")
 target("mj2x_native")
     set_kind("shared")
     set_targetdir("$(projectdir)/build/$(plat)/$(arch)/$(mode)")
-    if os.isfile("src/generated/native.c") then
+    -- 生成码按落盘实名全量收编（#1194）：--emit-c/--emit-cpp 允许自定名，
+    -- CLI 按原名把生成源拷入 src/generated/；此前模板只收编 native.c/
+    -- native.cpp 两个固定名，自定名源不进编译面，链接「成功」但 DLL 静默
+    -- 缺失全部生成码。glob 零匹配安全（空表 #=0，与下方 mj2x-rt cpp 行同式）。
+    if #os.files("src/generated/*.c") > 0 then
         if is_plat("windows") then
-            add_files("src/generated/native.c", {cxflags = "/TC"})
+            add_files("src/generated/*.c", {cxflags = "/TC"})
         else
-            add_files("src/generated/native.c")
+            add_files("src/generated/*.c")
         end
     end
-    if os.isfile("src/generated/native.cpp") then
-        add_files("src/generated/native.cpp")
+    if #os.files("src/generated/*.cpp") > 0 then
+        add_files("src/generated/*.cpp")
     end
     if is_plat("windows") then
         add_files("src/mj2x-rt/**.c", {cxflags = "/TC"})
