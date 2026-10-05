@@ -14,6 +14,8 @@
 
 #include <functional>
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace mj2x {
 
@@ -43,7 +45,13 @@ struct SsaInlineStats
     ca::usize skippedByDepth        = 0;
     ca::usize skippedNotInlinable   = 0;
     ca::usize skippedExcluded       = 0;
+    /// 不可解析调用点样例（#1193 可见化）：按首次出现去重，超过上限截断。
+    /// 形如 "owner.name:desc"（同名重载按 desc 区分）。
+    std::vector<std::string> unresolvableSamples;
 };
+
+/// unresolvableSamples 单函数内保留的样例上限（去重后仍超限时只增计数不增样例）。
+inline constexpr ca::usize kUnresolvableSampleCap = 8;
 
 /// @brief 按方法引用构建被调方法 SSA 的回调。
 ///

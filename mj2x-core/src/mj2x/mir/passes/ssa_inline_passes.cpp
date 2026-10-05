@@ -413,6 +413,18 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                 auto callee = resolver(call->method);
                 if (callee == nullptr) {
                     ++stats.skippedUnresolvable;
+                    // #1193 可见化：unresolvable 调用点过去完全静默（内联不发生
+                    // 且无任何日志），这里按首次出现去重收集样例，由调用方
+                    // （RegCBackend）汇总输出。
+                    const std::string sample = call->method.owner.to_std_string() + "." +
+                                               call->method.name.to_std_string() + ":" +
+                                               call->method.desc.to_std_string();
+                    if (stats.unresolvableSamples.size() < size_t(kUnresolvableSampleCap) &&
+                        std::find(stats.unresolvableSamples.begin(),
+                                  stats.unresolvableSamples.end(),
+                                  sample) == stats.unresolvableSamples.end()) {
+                        stats.unresolvableSamples.push_back(sample);
+                    }
                     continue;
                 }
                 // 安全条件 2：被调方法无异常区。

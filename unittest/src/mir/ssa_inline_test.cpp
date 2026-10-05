@@ -566,6 +566,80 @@ TEST(SsaInlineTest, SkipsUnresolvableCall)
     EXPECT_EQ(countCalls(*callerSsa), 1U);
 }
 
+// #1193 可见化：unresolvable 调用点样例收集——多调用点去重、计数不丢。
+TEST(SsaInlineTest, CollectsDedupedUnresolvableSamples)
+{
+    Utf8StringArena arena;
+
+    // 同一不可解析目标两个调用点：POP 首个返回值后再调一次。
+    auto caller = makeMethod(kStaticPublic, "f", "()I",
+                             {new IntInsnNode(Opcodes::BIPUSH, 1),
+                              invokeStatic("Other", "missing", "(I)I"),
+                              new InsnNode(Opcodes::POP),
+                              new IntInsnNode(Opcodes::BIPUSH, 2),
+                              invokeStatic("Other", "missing", "(I)I"),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 0);
+
+    std::string reason;
+    std::unique_ptr<SSAFunction> callerSsa;
+    try {
+        callerSsa = buildSsa(*caller, arena, reason);
+    } catch (const std::exception& e) {
+        FAIL() << "buildSsa caller threw: " << e.what();
+    }
+    ASSERT_NE(callerSsa, nullptr) << reason;
+
+    SsaInlineStats stats =
+        applySsaInlining(*callerSsa, SsaInlineOptions{},
+                         [](const SSAMethodRef&) -> std::unique_ptr<SSAFunction> { return nullptr; },
+                         arena);
+
+    EXPECT_EQ(stats.skippedUnresolvable, 2U);
+    ASSERT_EQ(stats.unresolvableSamples.size(), 1U);   // 去重后 1 条
+    EXPECT_EQ(stats.unresolvableSamples[0], "Other.missing:(I)I");
+}
+
+// #1193 可见化：样例封顶——超过 kUnresolvableSampleCap 只计数不增样例。
+TEST(SsaInlineTest, CapsUnresolvableSamples)
+{
+    Utf8StringArena arena;
+
+    // 20 个不同目标名（样例去重键为 "owner.name:desc"，同名会合并成 1 条）。
+    // names 存活到测试结束：from_cstr 按字面量约定引用外部存储，不复制。
+    std::vector<std::string> names;
+    for (int i = 0; i < 20; ++i) names.push_back("missing" + std::to_string(i));
+    std::vector<AbstractInsnNode*> insns;
+    for (int i = 0; i < 19; ++i) {
+        insns.push_back(new IntInsnNode(Opcodes::BIPUSH, i));
+        insns.push_back(invokeStatic("Other", names[i].c_str(), "(I)I"));
+        insns.push_back(new InsnNode(Opcodes::POP));
+    }
+    // 末次调用结果直接返回（IRETURN 需要栈顶 int）。
+    insns.push_back(new IntInsnNode(Opcodes::BIPUSH, 19));
+    insns.push_back(invokeStatic("Other", names[19].c_str(), "(I)I"));
+    insns.push_back(new InsnNode(Opcodes::IRETURN));
+    auto caller = makeMethod(kStaticPublic, "f", "()I", {}, 2, 0);
+    for (auto* insn : insns) caller->instructions.add(insn);
+
+    std::string reason;
+    std::unique_ptr<SSAFunction> callerSsa;
+    try {
+        callerSsa = buildSsa(*caller, arena, reason);
+    } catch (const std::exception& e) {
+        FAIL() << "buildSsa caller threw: " << e.what();
+    }
+    ASSERT_NE(callerSsa, nullptr) << reason;
+
+    SsaInlineStats stats =
+        applySsaInlining(*callerSsa, SsaInlineOptions{},
+                         [](const SSAMethodRef&) -> std::unique_ptr<SSAFunction> { return nullptr; },
+                         arena);
+
+    EXPECT_EQ(stats.skippedUnresolvable, 20U);
+    EXPECT_EQ(stats.unresolvableSamples.size(), size_t(kUnresolvableSampleCap));
+}
+
 // ---------------------------------------------------------------------------
 // #1188：受保护块内内联必须补异常受保护边
 // ---------------------------------------------------------------------------
