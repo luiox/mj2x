@@ -106,36 +106,34 @@
    zig）列未覆盖——外部工具列统一注入面。
 2. isGeneratedRuntimeClass 用户手写 `Lambda$N` 理论误判：名字识别法对用户
    自定义同名类的理论冲突，低概率，记录在案。
-4. L-shell guard 直钉 C 用例：RegC 仅剥全 `L...;` 描述符（裸名 `Lambda$0`
-   直通）现为间接覆盖，补一条 C 级直钉。
-5. EnumSemCheck E2E 门禁力：现类序使内联不发生，E2E 对 #1188 类内联缺口无
+3. EnumSemCheck E2E 门禁力：现类序使内联不发生，E2E 对 #1188 类内联缺口无
    门禁力（SSA 单测是真门）——caller-first 排序变体可解锁 E2E 防护。
-6. #1193 P3 三项：INFO 日志分支抑制逐方法 WARN（内联失败可诊性缺口）；
+4. #1193 P3 三项：INFO 日志分支抑制逐方法 WARN（内联失败可诊性缺口）；
    calleeReason 丢失（内联跳过原因未透出到调用侧）；goto/nop 注释严格度。
-7. N4/N6 dev_plan 历史日志数字微误：PR body 已勘正，本文件日志正文回填
+5. N4/N6 dev_plan 历史日志数字微误：PR body 已勘正，本文件日志正文回填
    （低优先级，纯记录）。
-8. #1194 P3-4：模板 glob 收编 `src/generated/` 下任意 .c/.cpp——目录为 CLI
+6. #1194 P3-4：模板 glob 收编 `src/generated/` 下任意 .c/.cpp——目录为 CLI
    专有无现风险；若未来开放手工放置需加来源约束。
 
 **产品/机器决策项（需拍板）**
 
-9. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——
+7. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——
    改仓库样本路径还是提升为配置项。
-10. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2
+8. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2
     （仅剩 zig 系），integration LLVM 列 28 例在 CI 转实跑。
-11. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与
+9. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与
     「不落明文 DLL」威胁模型冲突——接受现状或重评威胁模型。
-12. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs
+10. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs
     收紧（Windows 无影响，POSIX 加固项）。
 
 **编排层**
 
-13. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
+11. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
     不持锁、`xmake build <target>` 单 target 单命令——落 doc_ai 归档页，
     供后续 sub agent 会话直接引用。
-14. test_strategy.md 重写：计划期表格（落地波次列）大多已落地，删表留分层
+12. test_strategy.md 重写：计划期表格（落地波次列）大多已落地，删表留分层
     策略与覆盖率审计方法学。
-15. 代码注释与 Doxygen 组名里的 R3/R6 轮次代号退役（`regc_r3_abi` 等），
+13. 代码注释与 Doxygen 组名里的 R3/R6 轮次代号退役（`regc_r3_abi` 等），
     文档侧已先行（本 PR）。
 
 ## 验证命令

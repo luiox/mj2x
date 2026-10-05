@@ -19,6 +19,7 @@ void test_regc_intrinsic_c99_abi(void);
 void test_regc_intrinsic_bit_ops(void);
 void test_regc_intrinsic_DISABLED_round_f32_full_sweep(void);
 void test_safe_env(void);
+void test_regc_find_class_desc_shell(void);
 void mj2x_rt_protect_probe_test_run(void);
 void mj2x_vmc4_blob_crypto_test_run(void);
 
@@ -237,6 +238,7 @@ int main(int argc, char** argv)
     test_string_builder_utf16_and_errors();
     test_string_buffer_concurrency();
     test_safe_env();
+    test_regc_find_class_desc_shell();
     test_rt_protect_deterministic_lower_bound();
     test_rt_protect_step_one_triggers_every_call();
     test_rt_protect_fake_and_delay();
