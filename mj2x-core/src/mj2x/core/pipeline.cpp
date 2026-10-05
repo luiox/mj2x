@@ -84,6 +84,10 @@ void Pipeline::compileMethods()
 {
     if (backends_.empty()) return;
 
+    // beforeCompile（issue #1193）：任何方法指令被清空前的唯一整输入时机，
+    // 后端在此建立条目序无关的解析层（如 RegC 内联缓存）。
+    for (auto& backend : backends_) backend->beforeCompile(*index_);
+
     CodeConverter converter(index_->arena());
 
     for (auto& [name, cls] : index_->getClasses()) {

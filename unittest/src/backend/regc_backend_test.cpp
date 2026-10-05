@@ -1096,3 +1096,112 @@ TEST(RegCBackendTest, IntToLongConvertKeepsPlainCast)
     EXPECT_EQ(result.text.find("mj2x_regc_f2i64("), std::string::npos) << result.text;
     expectNoStackAnchors(result.text);
 }
+
+// ---------------------------------------------------------------------------
+// #1193：内联可达性与 jar 条目序解耦——beforeCompile 预解析缓存。
+// 被调方法先于调用方被「转换清空」（instructions.clear + ACC_NATIVE，即
+// injectIntoClass 之后的形态）时：
+//   - 无 beforeCompile（旧驱动序）：resolver 现场解析失败 → 不内联（回退
+//     通用 JNI 调用，即条目序依赖的静默回退面）；
+//   - 有 beforeCompile：缓存命中 → 内联照常发生（生成体无 JNI 调用）。
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 构造两个类的 index：Callee.add(II)I 静态方法 + Caller.caller(II)I 调它。
+/// 返回后 callerMethod 指向 Caller 的 CompilerMethod。
+CompilerIndex makeTwoClassIndex(std::unique_ptr<MethodNode>& add,
+                                std::unique_ptr<MethodNode>& caller,
+                                CompilerMethod*&             callerMethod)
+{
+    add = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
+                     {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                      new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                     2, 2);
+    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(II)I",
+                        {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                         new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                            ca::str::Utf8StringRef::from_cstr("Callee"),
+                                            ca::str::Utf8StringRef::from_cstr("add"),
+                                            ca::str::Utf8StringRef::from_cstr("(II)I"), false),
+                         new InsnNode(Opcodes::IRETURN)},
+                        2, 2);
+
+    auto makeClassNode = [](const char* name) {
+        auto cn                = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name               = ca::str::Utf8StringRef::from_cstr(name);
+        cn->version            = Opcodes::V1_8;
+        cn->access             = Opcodes::ACC_PUBLIC;
+        cn->superName          = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        return cn;
+    };
+
+    CompilerClass calleeCls;
+    calleeCls.classNode = makeClassNode("Callee");
+    calleeCls.methods.push_back(CompilerMethod{add.get(), true, false, {}});
+
+    CompilerClass callerCls;
+    callerCls.classNode = makeClassNode("Caller");
+    callerCls.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
+
+    CompilerIndex index;
+    index.addClass("Callee", std::move(calleeCls));
+    index.addClass("Caller", std::move(callerCls));
+    callerMethod = &index.getClass("Caller")->methods[0];
+    return index;
+}
+
+/// 模拟 callee 已被先转换：injectIntoClass 之后的形态（指令清空 + native）。
+void simulateAlreadyConverted(CompilerIndex& index)
+{
+    auto* cls = index.getClass("Callee");
+    auto* mn  = cls->methods[0].methodNode;
+    mn->access |= Opcodes::ACC_NATIVE;
+    mn->instructions.clear();
+}
+
+}   // namespace
+
+TEST(RegCBackendTest, BeforeCompileCacheDecouplesInlineFromConversionOrder)
+{
+    std::unique_ptr<MethodNode> add;
+    std::unique_ptr<MethodNode> caller;
+    CompilerMethod*             callerMethod = nullptr;
+    CompilerIndex               index        = makeTwoClassIndex(add, caller, callerMethod);
+
+    RegCBackend backend;
+    backend.beforeCompile(index);
+    // 被调方法先被转换清空（callee-first 条目序的等效形态）。
+    simulateAlreadyConverted(index);
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*caller);
+    auto          result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // 缓存命中：内联展开，生成体不含通用 JNI 静态调用。
+    EXPECT_EQ(result.text.find("CallStaticIntMethodA"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("regc_Caller_caller"), std::string::npos) << result.text;
+}
+
+TEST(RegCBackendTest, WithoutBeforeCompileClearedCalleeFallsBackToJniCall)
+{
+    std::unique_ptr<MethodNode> add;
+    std::unique_ptr<MethodNode> caller;
+    CompilerMethod*             callerMethod = nullptr;
+    CompilerIndex               index        = makeTwoClassIndex(add, caller, callerMethod);
+
+    RegCBackend backend;
+    // 无 beforeCompile：被调方法已清空 → resolver 现场解析失败（旧行为：
+    // 条目序依赖的静默回退）。
+    simulateAlreadyConverted(index);
+
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto          blocks = converter.convert(*caller);
+    auto          result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("CallStaticIntMethodA"), std::string::npos) << result.text;
+}

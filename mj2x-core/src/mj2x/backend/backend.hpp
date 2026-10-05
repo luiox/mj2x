@@ -41,7 +41,9 @@ struct NativeSourceArtifact
 /// @brief 抽象后端：把选定方法的 L1 MIR 翻译成 native 源。
 ///
 /// @details
-/// 三个核心方法的调用时机（见 Pipeline::run）：
+/// 四个核心方法的调用时机（见 Pipeline::run）：
+///  - beforeCompile：全部方法编译开始前调一次，此时全类目录已加载、
+///    preprocessor 已跑完、任何 MethodNode 指令尚未被转换清空。
 ///  - compileMethod：每个 markedForCompile 方法调一次，产出 BackendResult。
 ///  - injectIntoClass：compileMethod 之后对同一方法调一次，改写 class（标 ACC_NATIVE、
 ///    清指令）。失败 lowering（result.kind 非 C_SOURCE）时不应改写。
@@ -53,6 +55,14 @@ public:
 
     /// 后端名（用于日志，如 "c_source" / "regc_native"）。
     virtual std::string_view name() const = 0;
+
+    /// @brief 全部方法编译开始前的整输入钩子（issue #1193）。
+    ///
+    /// @details
+    /// 唯一能看见全部方法体原始指令的时机：此后 compileMethod/injectIntoClass
+    /// 逐方法清空指令，跨方法体访问（如内联被调解析）即受转换顺序制约。
+    /// 需要条目序无关视角的后端在此做整 jar 预解析。默认无操作。
+    virtual void beforeCompile(CompilerIndex& /*index*/) {}
 
     /// @brief 翻译一个方法的 L1 blocks 为 native 源。
     /// @return 成功时 result.kind=C_SOURCE 且 text 含生成源；失败时 fail-closed。

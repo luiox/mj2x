@@ -25,6 +25,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -538,6 +540,21 @@ struct RegCBackend::Impl
     /// 如 ExceptionProbe.run 先于 risky）。实际转换失败的方法在早退路径
     /// erase 回滚，避免直调不存在的函数体。
     std::unordered_set<std::string> preRegisteredClasses;
+    /// #1193 内联可达性缓存：beforeCompile（任何方法指令被清空前的唯一整输入
+    /// 时机）对全部非库类静态方法预转换的 L1 blocks。内联 resolver 优先查
+    /// 缓存——被调类先于调用方被转换清空也能解析，内联判定与 jar 条目序
+    /// 解耦。Block 归 converter 所有，条目持 converter 存活到 backend 析构。
+    struct InlineBlockCacheEntry
+    {
+        std::unique_ptr<CodeConverter> converter;
+        std::vector<Block*>            blocks;
+        int                            maxLocals = 0;
+    };
+    std::unordered_map<std::string, InlineBlockCacheEntry> inlineBlockCache;
+    /// 内联可见化汇总（#1193）：finalize 输出整 jar 汇总；样例封顶防日志爆炸。
+    ca::usize             inlineTotalInlined      = 0;
+    ca::usize             inlineTotalUnresolvable = 0;
+    std::set<std::string> inlineUnresolvableSamples;
     /// TU 级文件作用域前向声明注册表：方法间直调的声明在此登记，finalize
     /// 渲染到翻译单元头部。块作用域函数声明带 static 违反 C11 6.7.1p6
     /// （GCC 报 invalid storage class，MSVC 静默放行），必须落在文件作用域。
@@ -591,6 +608,43 @@ void RegCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
 {
     impl_->userIntrinsicRegistry =
         std::make_unique<RegCIntrinsicRegistry>(config.intrinsics);
+}
+
+/// #1193 缓存准入的字节码指令数上限：内联大小门（maxCalleeInstructions=48）
+/// 按 SSA 指令数计，单条字节码至少产出一条 SSA（仅 nop/空转会被吸收），
+/// 字节码数超过 4 倍上限的方法 SSA 计数必然超标，内联大小门必拒——不入
+/// 缓存零漂移，同时把预解析内存约束在与内联相关的形状上。
+constexpr int kInlineCacheMaxBytecodeInsns = 48 * 4;
+
+/// #1193：全输入预转换（Pipeline::compileMethods 在任何方法指令被清空前调用
+/// 一次）。非库类静态方法整 jar 预转换为 L1 blocks 缓存，内联 resolver 先查
+/// 缓存——被调类先于调用方被转换清空后仍可内联，判定与 jar 条目序解耦。
+/// 缓存准入与既有 resolver 资格口径一致（有指令体、非 synchronized），另排除
+/// `<clinit>`/`<init>`（无合法 INVOKESTATIC 调用点，且 clinit 会在转换期被
+/// 注入 registerNatives 调用——保持走既有现场路径零漂移）与超长方法（内存
+/// 护栏，见 kInlineCacheMaxBytecodeInsns）。--regc-no-inline 时不建缓存。
+void RegCBackend::beforeCompile(CompilerIndex& index)
+{
+    if (!inlineEnabled_) return;
+    for (auto& [className, cls] : index.getClasses()) {
+        if (cls.isLibrary || cls.classNode == nullptr) continue;
+        for (const auto& m : cls.methods) {
+            auto* mn = m.methodNode;
+            if (mn == nullptr || mn->instructions.isEmpty()) continue;
+            if ((mn->access & Opcodes::ACC_STATIC) == 0) continue;
+            if ((mn->access & Opcodes::ACC_SYNCHRONIZED) != 0) continue;
+            const std::string nameStr = mn->name.to_std_string();
+            if (!nameStr.empty() && nameStr[0] == '<') continue;
+            if (mn->instructions.size() > kInlineCacheMaxBytecodeInsns) continue;
+            auto  entry     = Impl::InlineBlockCacheEntry{};
+            entry.converter = std::make_unique<CodeConverter>(index.arena());
+            entry.blocks    = entry.converter->convert(*mn);
+            if (entry.blocks.empty()) continue;   // 现场路径与既有行为一致
+            entry.maxLocals = mn->maxLocals;
+            impl_->inlineBlockCache.insert_or_assign(
+                methodKey(className, nameStr, mn->desc.to_std_string()), std::move(entry));
+        }
+    }
 }
 
 /// javac 合成 values() 的 SSA 形状验证（#887 Enums 承接卡）：
@@ -796,6 +850,21 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     if (inlineEnabled_) {
         const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
             if (index == nullptr) return nullptr;
+            // #1193：先查 beforeCompile 预解析缓存（与转换序解耦——被调类先于
+            // 调用方被转换清空也能解析），未命中再走既有现场路径（library 类、
+            // 缓存外形状，行为与以前一致）。
+            if (auto it = impl_->inlineBlockCache.find(
+                    methodKey(ref.owner.to_std_string(), ref.name.to_std_string(),
+                              ref.desc.to_std_string()));
+                it != impl_->inlineBlockCache.end()) {
+                const auto& entry = it->second;
+                SSABuilder  calleeBuilder;
+                std::string calleeReason;
+                return calleeBuilder.build(entry.blocks, ref.owner.to_std_string(),
+                                           ref.name.to_std_string(), ref.desc.to_std_string(),
+                                           /*isStatic=*/true, entry.maxLocals, ssaArena,
+                                           calleeReason);
+            }
             CompilerClass* cls = index->getClass(ref.owner.to_std_string());
             if (cls == nullptr) return nullptr;
             for (const auto& m : cls->methods) {
@@ -835,6 +904,15 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                        methodKey(ref.owner.to_std_string(), name, desc)) != 0;
         };
         SsaInlineStats stats = applySsaInlining(*ssa, inlineOptions, resolver, ssaArena);
+        impl_->inlineTotalInlined += stats.inlinedCalls;
+        impl_->inlineTotalUnresolvable += stats.skippedUnresolvable;
+        for (const auto& sample : stats.unresolvableSamples) {
+            if (impl_->inlineUnresolvableSamples.size() < size_t(kUnresolvableSampleCap)) {
+                impl_->inlineUnresolvableSamples.insert(sample);
+            }
+        }
+        // #1193 可见化：旧口径只在 inlinedCalls>0 时打日志，「内联静默不发生」
+        // 无从发现；unresolvable>0 时同样输出（含调用点样例）。
         if (stats.inlinedCalls > 0) {
             CA_LOGT_INFO("regc", "inline {} calls in {}.{}{}: unresolvable={} exc={} size={} "
                                  "rec={} depth={} notinlinable={} excluded={}\n",
@@ -842,6 +920,16 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                          methodDesc.c_str(), stats.skippedUnresolvable, stats.skippedByException,
                          stats.skippedBySize, stats.skippedByRecursion, stats.skippedByDepth,
                          stats.skippedNotInlinable, stats.skippedExcluded);
+        }
+        else if (stats.skippedUnresolvable > 0) {
+            std::string samples;
+            for (const auto& sample : stats.unresolvableSamples) {
+                if (!samples.empty()) samples += ", ";
+                samples += sample;
+            }
+            CA_LOGT_WARN("regc", "inline unresolvable callees in {}.{}{}: n={} samples: {}\n",
+                         className.c_str(), methodName.c_str(), methodDesc.c_str(),
+                         stats.skippedUnresolvable, samples.c_str());
         }
     }
 
@@ -1587,6 +1675,24 @@ void writeFileIfNeeded(const std::filesystem::path& path, const std::string& con
 void RegCBackend::finalize(const CompilerIndex& index)
 {
     (void)index;
+
+    // #1193 转换结束汇总：整 jar 内联发生面 + 不可解析调用点样例（可见化，
+    // 不再静默）。unresolvable>0 说明存在内联机会因 callee 不可解析而放弃
+    // （缓存外形状：library 类、超大小门、synchronized 等）。
+    if (inlineEnabled_ &&
+        (impl_->inlineTotalInlined > 0 || impl_->inlineTotalUnresolvable > 0)) {
+        CA_LOGT_INFO("regc", "inline summary: inlined={} unresolvable={}\n",
+                     impl_->inlineTotalInlined, impl_->inlineTotalUnresolvable);
+        if (!impl_->inlineUnresolvableSamples.empty()) {
+            std::string samples;
+            for (const auto& sample : impl_->inlineUnresolvableSamples) {
+                if (!samples.empty()) samples += ", ";
+                samples += sample;
+            }
+            CA_LOGT_WARN("regc", "inline unresolvable samples (cap {}): {}\n",
+                         size_t(kUnresolvableSampleCap), samples.c_str());
+        }
+    }
 
     // strtol + errno back the Integer.parseInt intrinsic body emitted below.
     codegen::IncludeSet includes;

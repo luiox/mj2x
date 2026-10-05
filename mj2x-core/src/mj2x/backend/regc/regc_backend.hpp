@@ -87,6 +87,11 @@ public:
 
     void finalize(const CompilerIndex& index) override;
 
+    /// @brief 全输入预转换（issue #1193）：任何方法指令被清空前的唯一整输入
+    /// 时机，对非库类静态方法建 L1 blocks 内联缓存，使内联被调解析与 jar
+    /// 条目序/转换序解耦。--regc-no-inline 时不建缓存。
+    void beforeCompile(CompilerIndex& index) override;
+
     /// @brief Set a `.c` output path written during finalize.
     ///
     /// @details
