@@ -102,12 +102,9 @@
 
 **工程挂账（小项，均可独立成卡）**
 
-1. cli_test probe SKIP reason 措辞：MORPHER_CLANG_HOME / MATLAB 自带 clang
-   命中时消息仍写 "not on PATH"（#1191 挂账）——dead fallback 文案改按实际
-   探测来源措辞。
-2. clangPathPrelude 扩面：脚本实调 clang 处已接（#1191），cl / gcc（MSVC、
+1. clangPathPrelude 扩面：脚本实调 clang 处已接（#1191），cl / gcc（MSVC、
    zig）列未覆盖——外部工具列统一注入面。
-3. isGeneratedRuntimeClass 用户手写 `Lambda$N` 理论误判：名字识别法对用户
+2. isGeneratedRuntimeClass 用户手写 `Lambda$N` 理论误判：名字识别法对用户
    自定义同名类的理论冲突，低概率，记录在案。
 4. L-shell guard 直钉 C 用例：RegC 仅剥全 `L...;` 描述符（裸名 `Lambda$0`
    直通）现为间接覆盖，补一条 C 级直钉。

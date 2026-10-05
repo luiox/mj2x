@@ -1889,8 +1889,8 @@ TEST(CliTest, PipeCompileWithClangDoesNotWriteCSource)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
-                     << clang.reason;
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        GTEST_SKIP() << "clang not found: " << clang.reason;
     }
 
     const fs::path inClass = writeTinyClass();
@@ -2434,8 +2434,8 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
-                     << clang.reason;
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        GTEST_SKIP() << "clang not found: " << clang.reason;
     }
     // probeClang 只覆盖 clang——llc 无对应 probe，维持 PATH 判定（跳过注明口径）。
     if (!commandAvailable("llc"))
@@ -2614,8 +2614,8 @@ TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
-                     << clang.reason;
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        GTEST_SKIP() << "clang not found: " << clang.reason;
     }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
@@ -2752,8 +2752,8 @@ TEST(CliTest, LlvmArraycopyAndExceptionE2E)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
-                     << clang.reason;
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        GTEST_SKIP() << "clang not found: " << clang.reason;
     }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
@@ -3105,8 +3105,8 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
-                     << clang.reason;
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        GTEST_SKIP() << "clang not found: " << clang.reason;
     }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
         GTEST_SKIP() << "JAVA_HOME is not set";
@@ -3499,8 +3499,8 @@ TEST(CliTest, PipeCompileRegCJarEmbedsNativeLoaderAndLibraryWithClang)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        GTEST_SKIP() << "clang not found (probed PATH + common install locations): "
-                     << clang.reason;
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        GTEST_SKIP() << "clang not found: " << clang.reason;
     }
 
     const fs::path inJar = writeTinyJar();
