@@ -980,6 +980,8 @@ nlohmann::json buildConfigSchemaJson()
 
 // ---------- --help 分组输出 ----------
 
+namespace {
+
 /// 「名字|描述」结构化 flag help 行（\n 分行、| 分列，值内零对齐空格）→
 /// HelpTable 渲染期对齐，与 mjt printUsage 的两列 help 同约定。列位来源不同：
 /// mj2x 历史基线的 flag 描述列逐行手工摆放且并不统一（config/help 行在全行
@@ -1007,6 +1009,8 @@ void printFlagHelp(const char* key, std::size_t descColumn)
         start = (nl == std::string::npos) ? value.size() : nl + 1;
     }
 }
+
+}   // namespace
 
 void printHelp()
 {
