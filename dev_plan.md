@@ -102,8 +102,10 @@
 
 **工程挂账（小项，均可独立成卡）**
 
-1. clangPathPrelude 扩面：脚本实调 clang 处已接（#1191），cl / gcc（MSVC、
-   zig）列未覆盖——外部工具列统一注入面。
+1. llc / clang++ SKIP 门探测面收口（2026-10-06 调研收窄：原"cl/gcc/zig 列
+   统一注入面"不成立——三者非 clang 家族，不属 clangPathPrelude 注入面）。
+   仅 LLVM 标准安装未上 PATH / Homebrew llvm 未链接环境受益，已建档环境
+   增益为零且需动 #1191 门禁双键基线——待此类环境入档再开卡。
 2. isGeneratedRuntimeClass 用户手写 `Lambda$N` 理论误判：名字识别法对用户
    自定义同名类的理论冲突，低概率，记录在案。
 3. EnumSemCheck E2E 门禁力：现类序使内联不发生，E2E 对 #1188 类内联缺口无
