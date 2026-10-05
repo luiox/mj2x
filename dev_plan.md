@@ -253,6 +253,38 @@ xmake build mtest_set_unittest && xmake run mtest_set_unittest
 
 ## 日志
 
+- 2026-10-05（#1193 内联可达性依赖 jar 条目序，分支
+  `fix/mj2x-1193-inline-order-decouple`）：红相矩阵实锤（InlineCallee.f +
+  InlineCaller.run 同 jar 两序各转一次）——caller-first 内联 2 处（含 try 块
+  内），callee-first 0 内联且零日志（inlinedCalls=0 时整行不打：静默盲区），
+  生成 C 双证据（内联体算术展开 vs 2× CallStaticIntMethodA）；#1188 已修后
+  两序语义均绿，判据取内联发生面。选型分期 B：不采 A 全量两遍化——内联候选
+  天然仅静态方法（pass 只内联 INVOKESTATIC），全量解析层无增量收益，且
+  SSAFunction 缓存与 pass 字面量 move-out 契约冲突（必须缓存 L1 blocks、每
+  resolve 现建 SSA）。落地三件：① `Backend::beforeCompile` 钩子
+  （Pipeline::compileMethods 入口、任何指令清空前唯一整输入时机，默认
+  no-op，多后端序无关）；② RegC 对非库类静态方法预转 L1 blocks 缓存
+  （InlineBlockCacheEntry 持 converter 保 Block 所有权；准入与 resolver 同
+  口径 + `<clinit>`/`<init>`/超长方法（>192 字节码指令，4×大小门护栏）排除；
+  resolver 缓存优先、现场路径兜底零漂移）；③ unresolvable 可见化——pass 侧
+  `SsaInlineStats.unresolvableSamples`（去重封顶 8）+ 逐方法 WARN（旧口径
+  inlinedCalls=0 整行不打）+ finalize 整 jar 汇总。验证：条目序一致性 E2E
+  两序 run 体逐字节一致且与修前良好序一致（均零 JNI 调用）；synchronized
+  fixture 保持 fail-closed 拒内联且三处日志可见；rebase onto origin/main
+  260252059（#1191 门禁双基键 + #1192 死路径删除同文件交汇）零冲突，rebase
+  后 mj2x_unittest 811 ran / 807 passed / 4 skip / 0 failed（skip 门禁
+  4=4 持平 #1191 标准机基线）、mtest_set 25/25、mj2x_integration_test
+  94 ran / 93 passed / 1 skip / 0 failed（clang 启用态 93/1/0，MATLAB
+  clang 16.0.6 probe 生效，skip 门禁 1≤29 OK）、门禁六项
+  31/15/3/5/0/115 + staticArena=0 持平、13-probe 单轮抽检 14 Passed/0
+  Failed（inlined=52/unresolvable=134；样例口径勘正（#1193 评审 P2）：8 条
+  抽样含 2 条项目内 I18n.enUs/zhCn 静态方法——SSA 构建层固有不可解析，main
+  与 fix 在该调用点发射形态逐字相同，其余为 JDK 静态方法；历来不可内联，
+  现首次可见）。tester.c 生成源逐字节零漂移（比对基线：开发 reb 前后两轮 +
+  评审独立复跑三方 md5 全同 `23cac084`——同 jar 下 fix vs main 合法不同
+  （内联面 35→52、C 增 25KB），"零漂移"指同版本重转换确定性，非跨版本）。
+  产物输出状态行与纯 Java 逐行一致（Result id 系运行性非语义判据）。
+
 - 2026-10-05（#887 Enums 承接卡，分支 `perf/mj2x-enums-opt`）：归因复核裁决——
   稳态复测（同会话/预热 3+9 轮中位数）重现 RegC/os30 Enums 差距（jdk21
   7.9ms vs 1.41ms、jdk25 11.29ms vs 1.29ms，ratio 5.6~8.8），#887 普查的机制
