@@ -444,6 +444,19 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                     ++stats.skippedByRecursion;
                     continue;
                 }
+                // 安全条件 5：被调方法非空块集。克隆体 = 逐源块拷贝
+                // （cloneCalleeBlocks 第一遍每源块恰产一块），空块集无 entry
+                // 可跳、无体可内联。判定必须在此处（任何迁移发生前）完成：
+                // 既往实现把 clones.empty() 判空放在 terminator/tail 迁移之后
+                // （#1194），该路径一旦触发，调用块已被 resize 截断（call 指令
+                // 销毁）、tail 与 merge 块析构、call result 的既有引用重定向到
+                // 已析构的 merge arg——调用块悬空。resolver 契约下不应出现，
+                // 但按本 pass 的 fail-closed 契约跳过调用点（call 原样保留），
+                // 不用断言：断言在 NDEBUG 下剥除，悬空路径依旧存在。
+                if (callee->blocks.empty()) {
+                    ++stats.skippedNotInlinable;
+                    continue;
+                }
                 Site site;
                 site.block  = block.get();
                 site.index  = i;
@@ -533,15 +546,12 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
             insns.resize(site.index);
             mergeBlock->instructions = std::move(tail);
 
-            // 克隆被调方法全部块。
+            // 克隆被调方法全部块。clones 非空由安全条件 5 结构性保证
+            // （每源块恰产一块，callee.blocks 非空）——#1194 之前这里的
+            // clones.empty() 迟到判空发生在迁移之后，已删除。
             std::vector<std::unique_ptr<SSABlock>> clones;
             cloneCalleeBlocks(callee, remap, arena, function.ids, mergePtr, remap, indyBase,
                               clones);
-            if (clones.empty()) {
-                // 空方法体（无块）不应出现；跳过防破坏。
-                ++stats.skippedNotInlinable;
-                continue;
-            }
 
             // #1188：调用块位于异常受保护区时，克隆体与 merge 块同样落在保护
             // 范围内（被内联体的 mayThrow 调用点在 try 语义下必须分发到

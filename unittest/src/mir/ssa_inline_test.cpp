@@ -640,6 +640,75 @@ TEST(SsaInlineTest, CapsUnresolvableSamples)
     EXPECT_EQ(stats.unresolvableSamples.size(), size_t(kUnresolvableSampleCap));
 }
 
+// #1194：callee 空块集必须在任何迁移发生前拒绝（安全条件 5，fail-closed）。
+// 红相论证（修复前行为）：resolver 返回无块函数时，旧实现的 clones.empty()
+// 迟到判空位于 terminator/tail 迁移之后——此时 mergeBlock 已建、call result
+// 已重定向到 merge arg、tail（ICONST_1/IADD）已迁出、调用块经 resize 截断
+// （call 指令销毁）；continue 后 mergeBlock 析构，countCalls 由 1 → 0（本测
+// 试的确定性红相），IRETURN/IADD 持有已析构 merge arg 的悬垂引用。修复后判
+// 空前移到安全条件段：调用点整体跳过，call 与 tail 原样保留。断言用 ASSERT
+// 而非 EXPECT：修复前若放行到 lowerOk 会解引用悬垂值（UB），红相必须在
+// 触碰 UB 之前落锤。
+TEST(SsaInlineTest, SkipsCalleeWithoutBlocks)
+{
+    Utf8StringArena arena;
+
+    // callee: static int helper(int a) { return a + 1; }（真实体，构建后挖空块集）。
+    auto callee = makeMethod(kStaticPublic, "helper", "(I)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0),
+                              new InsnNode(Opcodes::ICONST_1),
+                              new InsnNode(Opcodes::IADD),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 1);
+    // caller: static int f(int x) { return helper(x) + 1; }（call 后有 tail）。
+    auto caller = makeMethod(kStaticPublic, "f", "(I)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0),
+                              invokeStatic("InlineTest", "helper", "(I)I"),
+                              new InsnNode(Opcodes::ICONST_1),
+                              new InsnNode(Opcodes::IADD),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 1);
+
+    std::string reason;
+    std::unique_ptr<SSAFunction> callerSsa;
+    try {
+        callerSsa = buildSsa(*caller, arena, reason);
+    } catch (const std::exception& e) {
+        FAIL() << "buildSsa caller threw: " << e.what();
+    }
+    ASSERT_NE(callerSsa, nullptr) << reason;
+    ASSERT_EQ(countCalls(*callerSsa), 1U);
+    const ca::usize blocksBefore = callerSsa->blocks.size();
+
+    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+        if (ref.name != "helper" || ref.desc != "(I)I") return nullptr;
+        auto calleeSsa = buildSsa(*callee, arena, reason);
+        if (calleeSsa != nullptr) {
+            // 畸形化：无块集（resolver 契约下不应出现；entry 一并清空保持
+            // 一致，pass 契约上不触碰 entry）。
+            calleeSsa->blocks.clear();
+            calleeSsa->entry = nullptr;
+        }
+        return calleeSsa;
+    };
+
+    SsaInlineStats stats = applySsaInlining(*callerSsa, SsaInlineOptions{}, resolver, arena);
+
+    ASSERT_EQ(stats.skippedNotInlinable, 1U);
+    EXPECT_EQ(stats.inlinedCalls, 0U);
+    // 红相钉：修复前 call 已被 resize 截断销毁，此断言 1 ≠ 0 落红。
+    ASSERT_EQ(countCalls(*callerSsa), 1U) << "call site must be skipped intact";
+    ASSERT_EQ(callerSsa->blocks.size(), blocksBefore) << "no blocks appended on skip";
+    // call 后 tail 必须原位保留（修复前已随 merge 块析构）。SSA 形状口径：
+    // ILOAD 0 折叠进参数、ICONST_1 折叠成字面量、IRETURN 是 terminator——
+    // 调用块保留的指令恰为 Call + Binary(Add) = 2。
+    const SSAFunction& fn = *callerSsa;
+    ca::usize             totalInsns = 0;
+    for (const auto& block : fn.blocks) totalInsns += block->instructions.size();
+    ASSERT_EQ(totalInsns, 2U) << "call-site tail (Binary Add) must remain in the caller";
+    EXPECT_TRUE(lowerOk(*callerSsa, reason)) << reason;
+}
+
 // ---------------------------------------------------------------------------
 // #1188：受保护块内内联必须补异常受保护边
 // ---------------------------------------------------------------------------

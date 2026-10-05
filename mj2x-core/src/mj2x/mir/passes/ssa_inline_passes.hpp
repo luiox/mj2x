@@ -73,6 +73,7 @@ using SsaInlineResolver =
 /// - 被调方法无异常区（exceptionRegions 为空）
 /// - 指令数 ≤ maxCalleeInstructions
 /// - 非递归（调用链上不含目标方法自身）
+/// - 被调方法非空块集（空块集无克隆体；判定前置于任何迁移，#1194）
 /// - 嵌套深度 ≤ maxInlineDepth
 /// - 未命中 options.excludeMethod 排除谓词（可选）
 /// 克隆时参数绑定调用点实参；所有返回点改跳新汇合块（block arg 收集
