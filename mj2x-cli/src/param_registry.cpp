@@ -1017,19 +1017,32 @@ void printHelp()
     printf("  %s\n", ca::i18n::tr("mj2x.cli.help.dump_template_flag"));
     printFlagHelp("mj2x.cli.help.lang_flag", 33);
 
+    // 参数表主体同样经 HelpTable 渲染：描述列 = 2 缩进 + 名字段宽 + 2 分隔
+    // 空格，与原 printf("  %-*s  %s") 口径一致（名册均为 ASCII，码点计宽同
+    // 字节宽）；分组标题仍整行打印，组间断开渲染即可，列位不变。
     std::size_t width = 2;
     for (std::size_t i = 0; i < kParamCount; ++i) {
         width = std::max(width, std::strlen(kParams[i].cliFlag));
     }
-    const char* currentGroup = nullptr;
+    const std::size_t descColumn = width + 4;
+    const char*       currentGroup = nullptr;
+    ca::opt::HelpTable table;
+    auto flushTable = [&table, descColumn]() {
+        if (!table.empty()) {
+            fputs(table.render_to_column(2, descColumn).c_str(), stdout);
+            table = ca::opt::HelpTable{};
+        }
+    };
     for (std::size_t i = 0; i < kParamCount; ++i) {
         const ParamDef& p = kParams[i];
         if (!currentGroup || std::strcmp(currentGroup, p.group) != 0) {
+            flushTable();
             currentGroup = p.group;
             printf("\n  [%s]\n", trParamGroup(p.group).c_str());
         }
-        printf("  %-*s  %s\n", static_cast<int>(width), p.cliFlag, trParamDesc(p.id).c_str());
+        table.add(p.cliFlag, trParamDesc(p.id));
     }
+    flushTable();
     printFlagHelp("mj2x.cli.help.help_flag", 31);
 }
 
