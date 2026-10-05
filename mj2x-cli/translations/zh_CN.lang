@@ -5,11 +5,11 @@
 # ---- help 头部与固定选项行 ----
 mj2x.cli.help.usage=用法: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]
 mj2x.cli.help.options_header=选项:
-mj2x.cli.help.config_flag=--config <file>              加载 JSON 配置;命令行值覆盖配置
-mj2x.cli.help.dump_schema_flag=--dump-config-schema [<file>]  输出配置 JSON Schema(draft-07)到文件或 stdout
+mj2x.cli.help.config_flag=--config <file>|加载 JSON 配置;命令行值覆盖配置
+mj2x.cli.help.dump_schema_flag=--dump-config-schema [<file>]|输出配置 JSON Schema(draft-07)到文件或 stdout
 mj2x.cli.help.dump_template_flag=--dump-config-template [<file>] 输出带注释的配置模板到文件或 stdout
-mj2x.cli.help.lang_flag=--lang <lang>                  界面语言(zh_CN / en_US;亦可用 MJ2X_LANG 环境变量)
-mj2x.cli.help.help_flag=--help                       打印帮助
+mj2x.cli.help.lang_flag=--lang <lang>|界面语言(zh_CN / en_US;亦可用 MJ2X_LANG 环境变量)
+mj2x.cli.help.help_flag=--help|打印帮助
 
 # ---- schema 顶层 ----
 mj2x.schema.description=mj2x native 保护配置

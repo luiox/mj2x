@@ -3,11 +3,11 @@
 # ---- help header and fixed option rows ----
 mj2x.cli.help.usage=Usage: mj2x-cli -i <input.class|input.jar> -o <output.class|output.jar> [options]
 mj2x.cli.help.options_header=Options:
-mj2x.cli.help.config_flag=--config <file>              Load JSON options; command line values override it
-mj2x.cli.help.dump_schema_flag=--dump-config-schema [<file>]  Write config JSON Schema (draft-07) to file or stdout
+mj2x.cli.help.config_flag=--config <file>|Load JSON options; command line values override it
+mj2x.cli.help.dump_schema_flag=--dump-config-schema [<file>]|Write config JSON Schema (draft-07) to file or stdout
 mj2x.cli.help.dump_template_flag=--dump-config-template [<file>] Write commented config template to file or stdout
-mj2x.cli.help.lang_flag=--lang <lang>                  UI language (zh_CN / en_US; MJ2X_LANG env is also honored)
-mj2x.cli.help.help_flag=--help                       Print help
+mj2x.cli.help.lang_flag=--lang <lang>|UI language (zh_CN / en_US; MJ2X_LANG env is also honored)
+mj2x.cli.help.help_flag=--help|Print help
 
 # ---- schema top level ----
 mj2x.schema.description=mj2x native protection configuration

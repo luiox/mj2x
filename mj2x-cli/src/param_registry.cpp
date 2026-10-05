@@ -980,14 +980,42 @@ nlohmann::json buildConfigSchemaJson()
 
 // ---------- --help 分组输出 ----------
 
+/// 「名字|描述」结构化 flag help 行（\n 分行、| 分列，值内零对齐空格）→
+/// HelpTable 渲染期对齐，与 mjt printUsage 的两列 help 同约定。列位来源不同：
+/// mj2x 历史基线的 flag 描述列逐行手工摆放且并不统一（config/help 行在全行
+/// 31 列、dump_schema/lang 行在 33 列，均含 printf 的 2 空格缩进），逐字节
+/// 回归基线（#1075 验收项 4）要求锁死现状，故由调用方逐行给出描述列。
+/// 无 '|' 的整行值按迁移前行为原样打印（自带名字列的遗留形态兜底）。
+void printFlagHelp(const char* key, std::size_t descColumn)
+{
+    const std::string    value = ca::i18n::tr(key);
+    std::string::size_type start = 0;
+    while (start < value.size()) {
+        const std::string::size_type nl = value.find('\n', start);
+        const std::string row =
+            nl == std::string::npos ? value.substr(start) : value.substr(start, nl - start);
+        if (!row.empty()) {
+            const std::string::size_type sep = row.find('|');
+            if (sep == std::string::npos) {
+                printf("  %s\n", row.c_str());
+            } else {
+                ca::opt::HelpTable table;
+                table.add(row.substr(0, sep), row.substr(sep + 1));
+                fputs(table.render_to_column(2, descColumn).c_str(), stdout);
+            }
+        }
+        start = (nl == std::string::npos) ? value.size() : nl + 1;
+    }
+}
+
 void printHelp()
 {
     printf("%s\n", ca::i18n::tr("mj2x.cli.help.usage"));
     printf("%s\n", ca::i18n::tr("mj2x.cli.help.options_header"));
-    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.config_flag"));
-    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.dump_schema_flag"));
+    printFlagHelp("mj2x.cli.help.config_flag", 31);
+    printFlagHelp("mj2x.cli.help.dump_schema_flag", 33);
     printf("  %s\n", ca::i18n::tr("mj2x.cli.help.dump_template_flag"));
-    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.lang_flag"));
+    printFlagHelp("mj2x.cli.help.lang_flag", 33);
 
     std::size_t width = 2;
     for (std::size_t i = 0; i < kParamCount; ++i) {
@@ -1002,7 +1030,7 @@ void printHelp()
         }
         printf("  %-*s  %s\n", static_cast<int>(width), p.cliFlag, trParamDesc(p.id).c_str());
     }
-    printf("  %s\n", ca::i18n::tr("mj2x.cli.help.help_flag"));
+    printFlagHelp("mj2x.cli.help.help_flag", 31);
 }
 
 // ---------- 配置模板生成（--dump-config-template，JSONC） ----------

@@ -207,6 +207,45 @@ TEST_F(CliI18nTest, UnknownLangFallsBackToZhCn)
     EXPECT_NE(result.out.find(kZhUsage), std::string::npos) << result.out;
 }
 
+// ── help flag 段 golden（issue #1075 验收项 4）──
+// flag 段两列布局迁入 HelpTable 渲染（值内零对齐空格），描述列逐行锁死历史
+// 列位。以下逐行断言整行字节（前导缩进 + 名字列 + 历史描述列位）；换行符
+// 不入断言（Windows 捕获为 CRLF、POSIX 为 LF）。历史列位本就不统一：
+// config/help 行在全行 31 列、dump_schema/lang 行在 33 列、未迁移的
+// dump_template 行在 34 列（自带对齐空格）。zh 描述为 UTF-8 字面量，
+// \x 转义后紧跟十六进制字符处用 "" 分段防转义串位。
+
+TEST_F(CliI18nTest, HelpFlagSectionGoldenEn)
+{
+    const auto result = runCliEnv({"--lang", "en_US", "--help"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("  --config <file>              Load JSON options; command line values override it"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --dump-config-schema [<file>]  Write config JSON Schema (draft-07) to file or stdout"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --dump-config-template [<file>] Write commented config template to file or stdout"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --lang <lang>                  UI language (zh_CN / en_US; MJ2X_LANG env is also honored)"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --help                       Print help"), std::string::npos) << result.out;
+}
+
+TEST_F(CliI18nTest, HelpFlagSectionGoldenZh)
+{
+    const auto result = runCliEnv({"--help"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("  --config <file>              \xE5\x8A\xA0\xE8\xBD\xBD JSON \xE9\x85\x8D\xE7\xBD\xAE;\xE5\x91\xBD\xE4\xBB\xA4\xE8\xA1\x8C\xE5\x80\xBC\xE8\xA6\x86\xE7\x9B\x96\xE9\x85\x8D\xE7\xBD\xAE"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --dump-config-schema [<file>]  \xE8\xBE\x93\xE5\x87\xBA\xE9\x85\x8D\xE7\xBD\xAE JSON Schema(draft-07)\xE5\x88\xB0\xE6\x96\x87\xE4\xBB\xB6\xE6\x88\x96 stdout"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --dump-config-template [<file>] \xE8\xBE\x93\xE5\x87\xBA\xE5\xB8\xA6\xE6\xB3\xA8\xE9\x87\x8A\xE7\x9A\x84\xE9\x85\x8D\xE7\xBD\xAE\xE6\xA8\xA1\xE6\x9D\xBF\xE5\x88\xB0\xE6\x96\x87\xE4\xBB\xB6\xE6\x88\x96 stdout"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --lang <lang>                  \xE7\x95\x8C\xE9\x9D\xA2\xE8\xAF\xAD\xE8\xA8\x80(zh_CN / en_US;\xE4\xBA\xA6\xE5\x8F\xAF\xE7\x94\xA8 MJ2X_LANG \xE7\x8E\xAF\xE5\xA2\x83\xE5\x8F\x98\xE9\x87\x8F)"),
+              std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("  --help                       \xE6\x89\x93\xE5\x8D\xB0\xE5\xB8\xAE\xE5\x8A\xA9"),
+              std::string::npos) << result.out;
+}
+
 // 迁移后 --lang 由 opt 按 String 选项解析（迁移前为容忍式手写扫描）：
 // 悬空无值报 MissingValue，fail-closed。锁定该行为变更。
 TEST_F(CliI18nTest, DanglingLangFlagFailsClosed)
