@@ -35,17 +35,13 @@
 
 MVP (C 后端) 不需要 LLVM 或其他第三方库。所有依赖均为 morpher-native 现有内部库。
 
-### 1.5 R3 runtime crypto status
+### 1.5 runtime crypto status
 
-R3 runtime core currently carries an in-repo minimal implementation under
-`mj2x/runtime/src/crypto/`: SHA-256, HMAC-SHA256, AES-128 block encryption,
-AES-128 CTR, and constant-time comparison.  This keeps the first RegC/runtime
-samples dependency-free and testable while the loader ABI is still moving.
+The only in-repo crypto today is the XOR keystream shared by the packer and
+`NativeLoader` (`mj2x-core/src/mj2x/core/native_lib_crypto.hpp`) plus the VMC4
+blob key derivation. Both are explicitly non-cryptographic obfuscation: they
+keep plaintext DLLs from being trivially extracted, nothing more.
 
-The implementation is covered by public SHA/HMAC/AES/HKDF known-answer vectors
-in `mj2x_runtime_test`.  It is not a claim of hardened side-channel resistance.
-Before mj2x claims production-grade cryptographic hardening, this module should
-be reviewed or replaced with a locked, audited lightweight library.
 
 | Replacement candidate | Shape | Evaluation point |
 |------|------|---------|
@@ -53,8 +49,10 @@ be reviewed or replaced with a locked, audited lightweight library.
 | **Mbed TLS subset** | trimmed C library | complete primitive set; more integration work |
 | **BearSSL subset** | constant-time-oriented C library | stronger side-channel posture; lower-level API |
 
-**Decision point**: before R3 is advertised as hardened rather than functional,
-lock a reviewed choice here and in `third_party/VERSIONS.lock.md`.
+**Decision point**: mj2x must not claim hardened crypto. If a protection feature
+ever needs real primitives, lock a reviewed, audited lightweight library
+(tiny-AES-c / Mbed TLS subset / BearSSL subset) here and in
+`third_party/VERSIONS.lock.md` first.
 
 ---
 

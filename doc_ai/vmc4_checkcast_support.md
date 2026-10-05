@@ -7,7 +7,7 @@
 
 ## 现状
 
-- `vm_encoder.cpp:835`：Convert 只支持 Numeric 转换，ReferenceCast（CHECKCAST）
+- `vm_encoder.cpp`：Convert 只支持 Numeric 转换，ReferenceCast（CHECKCAST）
   直接 fail-closed（"MVP 只支持 Numeric convert"）。
 - 但 **instanceof 已支持**：`instanceof:<desc>` intrinsic 走 IsInstanceOf helper
   （懒缓存 class，null → false），Phase 2.D 落地，4 dispatcher e2e 覆盖。

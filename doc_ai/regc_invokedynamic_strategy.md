@@ -1,7 +1,7 @@
 # RegC invokedynamic 策略
 
 > 状态：2026-08-09 更新。invokedynamic 支持分阶段实施，本文记录每阶段的
-> 覆盖范围、机制与 fail-closed 边界。支撑 `dev_plan.md` R6.1。
+> 覆盖范围、机制与 fail-closed 边界。
 
 ## 分阶段策略
 

@@ -7,7 +7,7 @@ Backend: `regc`
 Target issue: https://github.com/luiox/morpher/issues/462
 
 Purpose: extend mjdbg observation reports to RegC samples whose Java semantics
-have moved behind the R3 runtime ABI rather than the intrinsic/helper layer.
+have moved behind the C runtime ABI rather than the intrinsic/helper layer.
 `divOrCatch` and `remOrCatch` exercise integer div/rem plus an
 `ArithmeticException` catch handler; `longDiv` exercises the i64 CRT ABI path.
 This contrasts `RegCIntrinsicSurfaceSample`, which keeps arithmetic inside the
@@ -23,7 +23,7 @@ Entry methods (consumed by the protected-sample driver via `--entry-method`):
 
 - Java method trace for `divOrCatch`, `remOrCatch` and `longDiv`.
 - Native/JNI entry wrapper trace for the generated RegC native methods.
-- R3 runtime ABI div/rem surface: `mj2x_regc_div_i32`, `mj2x_regc_rem_i32`
+- C runtime ABI div/rem surface: `mj2x_regc_div_i32`, `mj2x_regc_rem_i32`
   (and `mj2x_regc_div_i64` for `longDiv`).
 - Exception dispatch surface for the catch handlers:
   `_mj2x_regc_exception_check`, `_mj2x_regc_exception_occurred`,

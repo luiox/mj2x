@@ -64,7 +64,7 @@ marshalling 轴已收敛（intrinsic 符号实现单点 mj2x-rt），但「匹�
 | 候选 | 现状（平行份数） | 说明 |
 |---|---|---|
 | intrinsic/JNI 匹配表 | `llvm_intrinsic_registry.cpp` ↔ `regc_intrinsic_registry.cpp`（第二份匹配表，与 RegC 的 928-980 段同构） | 新增 intrinsic 面要改两处表 + 两处发射；Y4 的 nextInt(bound) 预检就是两后端各写一遍（#879 Y4 已解：预检判定收敛为权威表 `RegCIntrinsicPrecheck` 位单源，LLVM 派生表透传，两发射端按位发射，符号/形态硬编码已删） |
-| 逃逸/切片分析 | `analyzeWrapperShadows()`（llvm_ir_emitter.cpp:143-386）是 RegC 逃逸分析的 LLVM 重写 | 判定语义相同（全指令扫描 + 逃逸即整根回退 JNI），实现各自演化 |
+| 逃逸/切片分析 | `analyzeWrapperShadows()`（llvm_ir_emitter.cpp）是 RegC 逃逸分析的 LLVM 重写 | 判定语义相同（全指令扫描 + 逃逸即整根回退 JNI），实现各自演化 |
 | indy bootstrap 解析 | StackC / RegC（`emitIndyBootstrapFunction`）/ LLVM（`emitIndyBootstrapFunction` helpers 文本 IR）各一份，同语义第三/四份 | lookup/privateLookupIn/MethodType/bsm 常量物化/CallSite.getTarget/全局缓存链路三处维护；Y2/Y3 的移植降级正是第三份拷贝的产物 |
 
 抽取方向：匹配表 → 共享「(owner,name,desc) → 语义标签」单源（各后端只留

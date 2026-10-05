@@ -1,6 +1,6 @@
 # VMC4 红队契约（Phase 4）
 
-> 本文是 mj2x 与 mjdbg 红队闭环在 VMC4 侧的交付物定义（`doc/roadmap.md:10-18` 红蓝闭环、
+> 本文是 mj2x 与 mjdbg 红队闭环在 VMC4 侧的交付物定义（`doc/roadmap.md` 红蓝闭环、
 > `deobf-attack-doctrine.md` §5 样本契约）。mjdbg 对 VMC4 样本的分析结论必须能回到这里
 > 定义的观测面与强度基线。
 >

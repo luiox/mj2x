@@ -1,10 +1,10 @@
 # mj2x SSA 构造算法（block-argument SSA + 自写 reaching-def）
 
-> 状态：R1a 实现 note，权威随代码演进
+> 状态：首版 实现 note，权威随代码演进
 > 日期：2026-06-25
 > 关系：本文档定义 `ssa_builder` 的构造算法。
 > IR 结构定义见 `ir_design.md`。
-> 决策依据：`dev_plan.md` R1-A（block-arg SSA）、R1-B（自写 reaching-def 兜底）。
+> 决策依据：block-arg SSA 形态、自写 reaching-def 兜底。
 >
 > 本文只讲"怎么从 L1 MIR 构造出 SSA"；"IR 长什么样"在 `ir_design.md`。
 
@@ -20,7 +20,7 @@
 
 这套对一个"先把栈语义消除掉"的目标来说**重了**，而且容易写出 bug。mj2x 改用 **block-argument SSA**（WebAssembly / MLIR / Grunt `JvmSSAImporter` 都用），它把 φ 隐式编码在块的入口参数里，**不需要支配树、不需要显式 φ 插入、不需要重命名**。
 
-代价是 SSA value 稍多（block args），但对 R1 目标（消除 cstack 锚点 + 给 L4/L5 一个干净的 IR）完全够用，且实现简单、易测。
+代价是 SSA value 稍多（block args），但对 首版目标（消除 cstack 锚点 + 给 L4/L5 一个干净的 IR）完全够用，且实现简单、易测。
 
 ---
 
@@ -91,18 +91,18 @@ def 用 `(slot, defId)` 表示，`defId` = 该 MIR 节点在块内的序号 + �
 
 收敛性保证：def 集合单调增长，有上界（全 function 的 def 总数），必收敛。
 
-**复杂度**：O(blocks × avg_defs × iterations)，对 R1 测试样本（几十块）毫秒级。
+**复杂度**：O(blocks × avg_defs × iterations)，对首版测试样本（几十块）毫秒级。
 
 ### 3.4 从 reaching-def 得"是否需要 block arg"
 
 对块 B 的入口，对每个 local slot N：
 - 若 `IN[B]` 中 slot N 有 **≥2 个 def** → N 在 B 入口需要一个 block arg（φ）。
 - 若 `IN[B]` 中 slot N 有 **恰好 1 个 def** → N 在 B 入口的值就是那个 def（不需要 arg，前驱直接传那个 value）。
-- 若 `IN[B]` 中 slot N 有 **0 个 def**（未定义到达） → 用 `SSAOpaqueValue` 兜底（R1 测试样本不应出现；出现 = L1 分析或样本问题，fail-closed）。
+- 若 `IN[B]` 中 slot N 有 **0 个 def**（未定义到达） → 用 `SSAOpaqueValue` 兜底（测试样本不应出现；出现 = L1 分析或样本问题，fail-closed）。
 
 **block args 集合** = B 入口所有"≥2 源"的 slot。块的 `args[]` 就按这个建（每个 arg 一个唯一 `SSABlockArg`）。
 
-> 注：R1 实现里可以更激进 —— 对"≥1 源"的 slot 都开 arg（统一传值），简化前驱传值逻辑。Grunt 的 `frameShape()` 就是把入口 frame 里所有 local+stack 都开成 arg。mj2x R1 采用这个更简单的策略：**块入口处所有 live 的 local slot 都开 arg**，前驱一律传值。代价是 arg 多几个（占一点生成 C 的变量数），但逻辑简单、不易错。L4 可加 pass 消除冗余 arg。
+> 注：实现上可以更激进 —— 对"≥1 源"的 slot 都开 arg（统一传值），简化前驱传值逻辑。Grunt 的 `frameShape()` 就是把入口 frame 里所有 local+stack 都开成 arg。mj2x 首版采用这个更简单的策略：**块入口处所有 live 的 local slot 都开 arg**，前驱一律传值。代价是 arg 多几个（占一点生成 C 的变量数），但逻辑简单、不易错。L4 可加 pass 消除冗余 arg。
 
 ---
 
@@ -181,14 +181,14 @@ FrameState {
 1. 查 S 的 `args[]`（阶段 B 决定）。
 2. 对 S 的每个 arg（对应一个 local slot N 或 stack slot K）：
    - 若是 local slot N → 取 `FrameState.locals[N]`（B 出口处 N 的当前值）。
-   - 若是 stack slot → 取 `FrameState.stack[K]`（R1 一般为空）。
+   - 若是 stack slot → 取 `FrameState.stack[K]`（首版一般为空）。
 3. 构造 `SSASuccessor{block=S, args=[取出的 SSA value...]}`。
 
 这样 S 的每个 arg 在不同前驱进来时拿到不同值 = φ 语义。
 
 ### 5.4 类型推断
 
-`SSAInstruction` 的 result type 由操作数类型决定（R1 用 L1 `method_stack` 的类型推导结果，或保守用 `SSA_I32`）。R1 目标是结构正确（无栈槽），类型精确度推到 R2（lowering 需要精确类型）。
+`SSAInstruction` 的 result type 由操作数类型决定（首版用 L1 `method_stack` 的类型推导结果，或保守用 `SSA_I32`）。首版目标是结构正确（无栈槽），类型精确度推到 lowering 阶段（lowering 需要精确类型）。
 
 ---
 
@@ -210,7 +210,7 @@ FrameState {
 
 ---
 
-## 7. 正确性测试（R1 验收）
+## 7. 正确性测试（首版验收）
 
 ### 7.1 结构断言
 
@@ -227,13 +227,13 @@ FrameState {
 
 ### 7.3 reaching-def 数据流自测
 
-- `reaching_def` 单元测试：构造一个 2-块循环（手工 L1 Block），断言循环头 `IN[B]` 含 ≥2 个 def for 归纳变量 slot。这直接覆盖了 R0.5 发现的 libjbytecode Analyzer 缺陷场景，证明自写 pass 正确。
+- `reaching_def` 单元测试：构造一个 2-块循环（手工 L1 Block），断言循环头 `IN[B]` 含 ≥2 个 def for 归纳变量 slot。这直接覆盖了 早期调研 发现的 libjbytecode Analyzer 缺陷场景，证明自写 pass 正确。
 
 ---
 
 ## 8. 与竞品算法的对照
 
-| 维度 | mj2x R1（本文） | Grunt `JvmSSAImporter` | masxinlingvonta | 经典 SSA |
+| 维度 | mj2x 首版（本文） | Grunt `JvmSSAImporter` | masxinlingvonta | 经典 SSA |
 |------|----------------|----------------------|----------------|----------|
 | SSA 变体 | block-arg（φ 隐式） | block-arg（φ 隐式） | LLVM alloca+mem2reg | 显式 φ |
 | 数据流来源 | **自写 reaching-def**（基于 L1 CFG） | ASM `BasicInterpreter` | ASM `SourceInterpreter` + LLVM | 自写 dominance+DF |
@@ -246,12 +246,12 @@ mj2x 与 Grunt 算法骨架相同（block-arg），差别只在数据流来源�
 
 ---
 
-## 9. 已知简化（R1 接受，后续补）
+## 9. 已知简化（首版接受，后续补）
 
 1. **block arg 策略**：所有 live local 都开 arg（不只 ≥2 源），arg 数偏多。L4 加 arg-elimination pass。
-2. **类型精确度**：R1 用保守类型，R2 lowering 前补精确推断。
+2. **类型精确度**：首版用保守类型，lowering 阶段 前补精确推断。
 3. **异常处理**：已支持 try/catch handler 单异常对象入口；更复杂的 verifier 级异常/栈形状仍保守处理。
 4. **stack 跨块合并**：普通控制流仍要求块入口栈空；handler 单元素栈是显式特例。
-5. **INVOKEDYNAMIC/MULTIANEWARRAY**：R1a 不直接处理，R1b preprocessor 先展开（dev_plan R1b.4）。
+5. **INVOKEDYNAMIC/MULTIANEWARRAY**：SSA 层不直接处理，preprocessor 先展开。
 
-这些简化都不影响 R1 验收标准（无栈槽 + phi 正确）。
+这些简化都不影响 首版验收标准（无栈槽 + phi 正确）。

@@ -5,7 +5,7 @@
 RegC 是 mj2x 当前的保护导向 native 后端。它不直接输出 JVM operand stack 模板，而是走：
 
 ```text
-L1 stack MIR -> SSA -> RegIR -> RegC -> JNI wrapper / R3 runtime helpers
+L1 stack MIR -> SSA -> RegIR -> RegC -> JNI wrapper / mj2x-rt helpers
 ```
 
 目标是让生成 C 呈现 virtual-register、block label、edge copy、helper/runtime call 的结构，
@@ -66,7 +66,7 @@ native。JAR 输入仍沿用 mj2x pipeline 的整包读写能力；signed-JAR me
 ## 已知限制
 
 - RegC 是保护路线 MVP，不是完整 javac/bytecode 全覆盖后端；遇到 unsupported shape 必须 fail closed。
-- 对象、字段、数组、调用等多数 Java 语义仍通过生成 C 内的 helper 层承载；R3 runtime ABI 目前先接入
+- 对象、字段、数组、调用等多数 Java 语义仍通过生成 C 内的 helper 层承载；mj2x-rt 运行时 ABI 目前先接入
   div/rem/barrier 等核心 helper。
 - `invokedynamic` 暂不直译，展开策略见 `../doc_ai/regc_codegen.md` §转换边界。
 - JAR 输出沿用 pipeline MVP 限制：资源保留、class 替换、stored ZIP 输出；

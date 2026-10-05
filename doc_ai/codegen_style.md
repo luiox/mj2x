@@ -144,7 +144,7 @@ _mj2x_register_<sanitize(className)>
 | helper 函数 | Java 侧完整签名 | `// RegC method: com/x/Foo.compute(ILjava/lang/String;)I` |
 | `block_b<n>` | 来源（入口/handler/终结类型） | `// block_b2: exception handler of Lcom/x/Foo;` |
 | 缓存槽声明 | 对应 Java 符号（有注释行随声明一起输出） | `// cache: static com/x/Foo.value I` |
-| 帧/清理区 | 用途短语 | `// R6 ref frame: PushLocalFrame(16)` |
+| 帧/清理区 | 用途短语 | `// ref frame: PushLocalFrame(16)` |
 
 注释只表达"这段代码是什么"的溯源事实；不允许在生成代码里写设计决策长文（设计理由留在 `doc_ai/`）。生成注释不影响产物符号与 E2E 基线断言（现有断言均匹配 `regc_*`/`_mj2x_*` 标识符，注释共存）。
 

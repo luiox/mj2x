@@ -22,7 +22,7 @@ The samples are split into two surfaces:
   reference checks through `_mj2x_regc_*` helper calls
 - `RegCExceptionSurfaceSample`: try/catch dispatch, handler exception
   registers, unmatched rethrow, and callee-throw/caller-catch paths
-- `RegCRuntimeSurfaceSample`: integer div/rem helpers that call the R3 runtime
+- `RegCRuntimeSurfaceSample`: integer div/rem helpers that call the C runtime
   ABI and route arithmetic traps through the generated adapter callback
 
 ## Generated Output
@@ -64,8 +64,8 @@ mjdbg should use these samples to compare:
 
 - StackC: JNI native functions with explicit operand-stack storage
 - RegC: helper-style C using virtual registers, labels, edge copies, and
-  transitional `_mj2x_regc_*` helpers plus R3 ABI calls such as
+  transitional `_mj2x_regc_*` helpers plus C runtime ABI calls such as
   `mj2x_regc_div_i32`
 
 This comparison should guide what trace grouping and weakness reports need to
-look like as RegC moves more helper semantics behind the R3 runtime boundary.
+look like as RegC moves more helper semantics behind the C runtime boundary.

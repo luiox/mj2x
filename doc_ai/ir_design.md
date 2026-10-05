@@ -1,6 +1,6 @@
 # mj2x L2 SSA IR 设计
 
-> 状态：R1a 实现 note，权威随代码演进
+> 状态：首版 实现 note，权威随代码演进
 > 关系：本文档定义 `src/mj2x/mir/ssa/` 的 L2 SSA IR 数据结构。
 > 上层依据：`../doc/architecture.md` 的 MIR / SSA / RegIR 分层。
 > 算法依据：`ssa_algorithm.md`（reaching-def + block-arg 构造流程）。
@@ -14,11 +14,11 @@
 
 IR 是为**消除 c2j 锚点 2（`cstack[N]`/sp 栈数组）**服务的。硬性约束：
 
-1. **无栈数组语义**：IR 的操作数必须是"值"（有唯一 id），不能是"`cstack[3]` 这种带下标的存储槽"。这是 R1 的验收标准（dump 过 `CSTACK_RE` 零匹配）。
-2. **寄存器化天然成立**：每个 value 就是一个虚拟寄存器，L5 生成 C 时直接映射成 `v<id>` 局部变量。**不另做物理寄存器分配**（C 局部变量无限，无意义）。见 dev_plan R1-C。
+1. **无栈数组语义**：IR 的操作数必须是"值"（有唯一 id），不能是"`cstack[3]` 这种带下标的存储槽"。这是 RegC 的验收标准（dump 过 `CSTACK_RE` 零匹配）。
+2. **寄存器化天然成立**：每个 value 就是一个虚拟寄存器，L5 生成 C 时直接映射成 `v<id>` 局部变量。**不另做物理寄存器分配**（C 局部变量无限，无意义）。
 3. **φ 不显式存在**：采用 **block-argument SSA**（WebAssembly / MLIR / Grunt 路线），φ 编码在前驱→后继边的传值里。这砍掉了经典 dominance + φ 插入 + 重命名这一大坨。见 `ssa_algorithm.md`。
 4. **类型复用 L1**：`SSAType` 与 `frontend/mir_node.hpp::PrimitiveKind` 对齐，避免重复。
-5. **零 libjbytecode analysis 依赖**：reaching-def 自写（R0.5 实测 libjbytecode Analyzer 有 bug，见 dev_plan R1-B）。IR 本身只依赖 STL。
+5. **零 libjbytecode analysis 依赖**：reaching-def 自写（早期调研 实测 libjbytecode Analyzer 有 bug，）。IR 本身只依赖 STL。
 
 ---
 
@@ -78,7 +78,7 @@ SSAValue（抽象基类）
 | `SSAIntLiteral` | 整型常量（ICONST/BIPUSH/LDC int/long） | 字面量 |
 | `SSAFloatLiteral` | 浮点常量（FCONST/DCONST/LDC float/double） | 字面量 |
 | `SSANullLiteral` | ACONST_NULL | 字面量 |
-| `SSAOpaqueValue` | 兜底/未建模值（如 LDC String/Type/Handle，R1 先不细化） | 防止构建崩 |
+| `SSAOpaqueValue` | 兜底/未建模值（如 LDC String/Type/Handle，首版先不细化） | 防止构建崩 |
 
 **关键不变式**：`SSAParameter`、`SSABlockArg`、`SSAInstructionResult` 三者构成"被引用的值"的全部来源；指令的 `operands`/`SSASuccessor.args` 只能引用这三类（或 literal）。
 
@@ -88,7 +88,7 @@ SSAValue（抽象基类）
 
 与 L1 `PrimitiveKind` 对齐（`frontend/mir_node.hpp`），不重复发明：
 
-| SSAType | 对应 PrimitiveKind | C lowering（R2 用） |
+| SSAType | 对应 PrimitiveKind | C lowering（lowering 阶段用） |
 |---------|-------------------|---------------------|
 | `SSA_I8` | BYTE | jbyte / uint32_t 计算 |
 | `SSA_I16` | SHORT | jshort / uint32_t |
@@ -99,7 +99,7 @@ SSAValue（抽象基类）
 | `SSA_BOOL` | BOOLEAN | jboolean |
 | `SSA_CHAR` | CHAR | jchar |
 | `SSA_REF` | OBJECT | jobject（引用类型） |
-| `SSA_ARRAY` | OBJECT（带维度） | jobject（R1 用 REF 统一表示，R2 细化） |
+| `SSA_ARRAY` | OBJECT（带维度） | jobject（首版用 REF 统一表示，lowering 阶段细化） |
 | `SSA_VOID` | VOID | 无值（return/void call） |
 | `SSA_UNKNOWN` | — | 兜底，构建期不应进入 lowering |
 
@@ -165,12 +165,12 @@ B_header(s_arg: I32, i_arg: I32):    ; ← 两个入口 arg 就是 φ
 | `SSAStoreField` | [receiver?, value] | 无 | PUTFIELD / PUTSTATIC |
 | `SSAArrayLoad` | [array, index] | 有 | IALOAD / AALOAD |
 | `SSAArrayStore` | [array, index, value] | 无 | IASTORE |
-| `SSACall` | [args...] | 可选 | INVOKE*（R1 先建 IR，R2 lowering） |
+| `SSACall` | [args...] | 可选 | INVOKE*（首版先建 IR，lowering 阶段发射） |
 | `SSAAllocate` | [args...] | 有 | NEW / NEWARRAY / ANEWARRAY / MULTIANEWARRAY |
 | `SSAIntrinsic` | [args...] | 可选 | ARRAYLENGTH / MONITORENTER / LCMP 三元比较 |
 | `SSABarrier` | [] | 无 | 副作用栅栏（占位，防 DCE 误删） |
 
-每条指令带 `SSAEffect`（L4 passes 用，R1 先填保守值）：
+每条指令带 `SSAEffect`（L4 passes 用，首版先填保守值）：
 ```
 SSAEffect {
   mayThrow, readsMemory, writesMemory,
@@ -198,7 +198,7 @@ native 侧走 MethodHandle runtime bridge；RegC 在进入 SSA 前由 `InvokeDyn
 | `SSABranch` | condition:SSAValue, successors[2] (true/false) | 条件跳；各传 args |
 | `SSASwitch` | value:SSAValue, cases[]{key, successor}, default:successor | switch；各传 args |
 | `SSAReturn` | value:SSAValue? | 返回（void 则 value=null） |
-| `SSAThrow` | value:SSAValue | 抛异常（R1：翻译为 Throw+return） |
+| `SSAThrow` | value:SSAValue | 抛异常（首版：翻译为 Throw+return） |
 | `SSAUnreachable` | — | 不可达（构造期占位，验证期应被消除或保留为 trap） |
 
 `SSASuccessor { block:SSABlock*, args:SSAValue[] }` —— 每条出边显式传后继块 args。
@@ -218,7 +218,7 @@ native 侧走 MethodHandle runtime bridge；RegC 在进入 SSA 前由 `InvokeDyn
 
 ## 10. 与 L1 MIR 的关系
 
-L1（`frontend/mir_node.hpp` 的 `MIRNode` 体系）是**接近 ASM 的栈式 IR**，保留完整 JVM 栈语义。R1 的 SSA builder **消费 L1 的 `Block[]`**（复用 `CodeConverter` 的 CFG + `predecessors/successors`），把栈式语义"烤进 block args"：
+L1（`frontend/mir_node.hpp` 的 `MIRNode` 体系）是**接近 ASM 的栈式 IR**，保留完整 JVM 栈语义。首版的 SSA builder **消费 L1 的 `Block[]`**（复用 `CodeConverter` 的 CFG + `predecessors/successors`），把栈式语义"烤进 block args"：
 
 - L1 `MIRLocalStore varIndex=N` → SSA：pop 一个 value，定义"local N 的当前值 = 该 value"。
 - L1 `MIRLocalLoad varIndex=N` → SSA：push"local N 的当前值"（reaching-def 给出是哪个 SSA value）。
@@ -229,11 +229,11 @@ L1（`frontend/mir_node.hpp` 的 `MIRNode` 体系）是**接近 ASM 的栈式 IR
 
 ---
 
-## 11. 不变量校验（R1 测试硬断言）
+## 11. 不变量校验（测试硬断言）
 
 构建完成后，`SSAVerifier`（或测试）检查：
 1. 每个 `SSAInstructionResult`、`SSAParameter`、`SSABlockArg` 在 function 内 id 唯一。
-2. 每条指令的 operands、每个 `SSASuccessor.args` 引用的 value 都在该 value 的支配范围内（R1 用 reaching-def 近似：被引用时其 def 必可达）。
+2. 每条指令的 operands、每个 `SSASuccessor.args` 引用的 value 都在该 value 的支配范围内（首版用 reaching-def 近似：被引用时其 def 必可达）。
 3. 每个 `SSABlock.args.size()` == 每个前驱 `SSASuccessor.args.size()`。
 4. **dump 文本不含 `cstack`、`sp`、`cclasses` 等任何 c2j 锚点子串**（验收硬标准）。
 

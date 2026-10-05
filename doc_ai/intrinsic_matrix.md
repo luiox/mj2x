@@ -17,7 +17,7 @@
 3. **语义可零 JVM 内部依赖 native 化**：纯 CRT 计算（无异常面或异常面已有
    通道），或不逃逸 shadow state（wrapper/Random/builder 模式）。
 
-不满足判据 3 的面**只进对照表标候选，不进 kEntries**（#1027 B2 纪律：权威表
+不满足判据 3 的面**只进对照表标候选，不进 kEntries**（#1027 纪律：权威表
 不收语义无把握的行；发射端 RuntimeFunction 省略 ExceptionCheck，任何可能抛
 异常的纯计算行必须先有 precheck 位方案）。
 
@@ -56,7 +56,7 @@ JNI 底座（缓存 ID/helper 属 JNI 快路径，仍计 JNI）；**不适用** 
 ## 3. JDK 方法 intrinsic 面（kEntries 权威表）× 后端
 
 权威表 `mj2x/mj2x-core/src/mj2x/backend/regc/regc_intrinsic_registry.cpp` kEntries
-（#1027 B2 单源，179 行）；LLVM 侧 `llvm_intrinsic_registry` 由
+（#1027 单源）；LLVM 侧 `llvm_intrinsic_registry` 由
 `builtinIntrinsicTable()` 的 `llvmDirect` 位机械派生，计数锁定在
 `LlvmIntrinsicRegistryGoldenCross`。VMC4 / StackC 无 JDK 方法 intrinsic 机制，
 下列面一律走普通 JNI 调用（`MathIntrinsicDualBackendParity` 等 E2E 对拍正确性）。
@@ -132,7 +132,7 @@ JNI 底座（缓存 ID/helper 属 JNI 快路径，仍计 JNI）；**不适用** 
 
 ## 6. 维护纪律
 
-- 新增 JDK 方法 intrinsic 只改 kEntries 一处（#1027 B2 单源）：`emitKind` /
+- 新增 JDK 方法 intrinsic 只改 kEntries 一处（#1027 单源）：`emitKind` /
   `nativeObjectKind` / `passContext` / `argCount` / `isStatic` / `llvmDirect` /
   `precheck` 逐行裁决；不确行的宁可不加，进 §4 候选。
 - 新形态后端（register 化 VMC4 等）合入前先对 §2 表逐行补列——本文即为

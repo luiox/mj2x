@@ -136,8 +136,7 @@ distributable C99/JNI source pack for generated RegC projects; it owns the
 public helper ABI and must not depend on `libca`. The former in-tree
 `mj2x-runtime` library was retired: its intrinsic surface lives on as
 `mj2x-rt/src/regc/mj2x_regc_intrinsic.c`, and its protection probes were
-ported into `mj2x-rt/src/common/mj2x_rt_protect.c` (see
-`doc_ai/r3_protect_integration.md`).
+ported into `mj2x-rt/src/common/mj2x_rt_protect.c`.
 
 Current/runtime domains:
 

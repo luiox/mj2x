@@ -12,7 +12,7 @@ xmake f --with_mj2x=y --with_tests=y
 xmake build mj2x-cli       # CLI 工具
 xmake build mj2x-core      # 核心静态库(被 CLI 依赖)
 xmake build mj2x_unittest  # 单元测试
-xmake build mj2x_runtime_test  # R3 runtime 测试
+xmake build mj2x_rt_test  # C 运行时测试
 ```
 
 需要 JDK(`JAVA_HOME` 指向 JDK 安装目录,必须包含 `jni.h`)。
@@ -408,8 +408,8 @@ java -Djava.library.path=. Hello
 | 需要最大正确性覆盖、不关心抗分析 | StackC |
 | 保护导向,需要无栈输出抗 c2j | RegC |
 | 需要 VM 虚拟化 + 编译期/执行期随机化 | VMC4（保护导向，性能非关键） |
-| 需要除零 trap 符合 JVM 语义 | RegC + R3 runtime |
-| 代码大量使用 `Math.*` / `Integer.parseInt` / 包装类拆箱 / `Random.next*` | RegC + R3 runtime intrinsic |
+| 需要除零 trap 符合 JVM 语义 | RegC + C 运行时 |
+| 代码大量使用 `Math.*` / `Integer.parseInt` / 包装类拆箱 / `Random.next*` | RegC + C 运行时 intrinsic |
 
 后端的详细支持矩阵和限制:
 - StackC:`doc/stackc_backend_readme.md`

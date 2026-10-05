@@ -9,7 +9,7 @@
 > - `regc_codegen.md`：RegC 的生成策略与 fail-closed 哲学，VMC4 继承同一套语义保真/fail-closed 原则。
 > - `phantom_shield_codegen_notes.md` §7-8：Themida `VM_TIGER_WHITE` 现实参照物（二进制后处理范式）。
 >
-> 状态：设计稿，未进入 `dev_plan.md` 待办。实现前需经 mjdbg 红队反馈确认 RegC/runtime 闭环已稳定（见 `doc/roadmap.md:66`）。
+> 状态：**已实现**（v2.2 起为可用后端，对象/字段/数组/调用/异常全覆盖，现状见 `capabilities.md` §4）。本文的设计动机与机制建模部分仍然有效；§1.1 的"现状盘点"为成文时历史快照。
 
 ---
 
@@ -19,11 +19,10 @@
 
 VMC4 在仓库里只以"暂不作为主线"的文字出现：
 
-- `doc/roadmap.md:46` ——「VMC4 | 高价值方法可选 VM 虚拟化支线 | 暂不作为主线」
-- `doc/roadmap.md:66` ——「不把 VMC4 提前拉回主线，除非 RegC/runtime 闭环证明需要」
-- `doc/mvp_release_scope.md:98` ——「VMC4 native VM backend and VM runtime」列在 **Explicitly Out of Scope**
-- `doc/architecture.md:147` ——「VMC4 as the default path」列在 **Non-Goals**
-- `dev_plan.md` ——当前待办（R5/R6/R6.1/R6.2）**无 VMC4 条目**
+- `doc/roadmap.md` ——「VMC4 | 高价值方法可选 VM 虚拟化支线 | 暂不作为主线」
+- `doc/roadmap.md` ——「不把 VMC4 提前拉回主线，除非 RegC/runtime 闭环证明需要」
+- `doc/architecture.md` ——「VMC4 as the default path」列在 **Non-Goals**
+- `dev_plan.md` ——成文时待办无 VMC4 条目
 
 现有三个后端（`mj2x-core/src/mj2x/backend/`）全部是"把 Java 字节码翻译成 native 源码"的**直接翻译器**，没有任何 opcode 编码、handler table、dispatch loop、解释器循环这类 VM 解释器基础设施：
 
@@ -33,7 +32,7 @@ VMC4 在仓库里只以"暂不作为主线"的文字出现：
 | RegC | `backend/regc/` | 无栈寄存器式 C/C++，保护主线 |
 | LLVM IR | `backend/llvmir/` | 受限的 textual IR |
 
-**结论**：VMC4 是从零建一个新后端，不是改造现有结构。但后端挂载契约（`backend.hpp:48`）和前端 IR（L1/SSA/RegIR）都已就绪，新后端是"插件式接入"。
+**结论**：VMC4 是从零建一个新后端，不是改造现有结构。但后端挂载契约（`backend.hpp`）和前端 IR（L1/SSA/RegIR）都已就绪，新后端是"插件式接入"。
 
 ### 1.2 为什么目标定为 Themida 风格多 VM，而不是单一固定 VM
 
@@ -71,8 +70,8 @@ VMC4 的目标是**第一类**：per-method 或 per-class 粒度的可变 VM 实
 
 | JavaShroud 宣称 | 代码实际 | 位置 |
 |---|---|---|
-| 6 种 dispatcher 形态（switch/threaded/call/if-nest/interpolation） | `js_vm_dispatcher.c` **全是 TODO 占位**，真正只有一种 switch/if 链 | `core-engine/src/main/native/js_vm_dispatcher.c:34-106` |
-| 多 dispatcher profile（0-5） | profile 1-5 的 case 匹配里 `& 0u` 掩码，**退化为 profile 0** | `js_vm_core.c:5456-5499` |
+| 6 种 dispatcher 形态（switch/threaded/call/if-nest/interpolation） | `js_vm_dispatcher.c` **全是 TODO 占位**，真正只有一种 switch/if 链 | `core-engine/src/main/native/js_vm_dispatcher.c` |
+| 多 dispatcher profile（0-5） | profile 1-5 的 case 匹配里 `& 0u` 掩码，**退化为 profile 0** | `js_vm_core.c` |
 | opcode 随机化 | `generateOpcodeMapping()` 只覆盖 16 个 const opcode，~130 个 canonical 编号固定 | `MethodVirtualizationTransforms.kt:667-679` |
 | 解释器可变 | 内核 `js_vm_core.c`（7276 行手写）逻辑固定，只在**源码文本层**注入 junk/重排 handler | `NativeRecompilationTransforms.kt:1053-1082` |
 | 每构建独立 opcode 映射 | opcode 映射在方法循环**之外**调用，是"每构建一份"而非"每方法一份" | `MethodVirtualizationTransforms.kt:211-212` |
@@ -98,8 +97,8 @@ JavaShroud 的真正多变性来自：ALT 别名 opcode、super-operator 折叠�
 
 1. **多 VM 实例**：受保护方法按 per-method 或 per-class 粒度获得**结构不同的 VM 实例**（不同 opcode 编号映射、不同 handler 顺序、不同 dispatcher 算法）。一个 VM 实例的分析结论不适用于另一个。
 2. **ISA 与解释器随机化**：opcode 编号、handler 实现形态、dispatcher 调度方式都由 seed 驱动生成，不是固定常量。
-3. **复用现有前端**：VMC4 消费 L1 → SSA → RegIR 前端（与 RegC 共享），不重新从 JVM 字节码建模。RegIR 只有 13 个 instruction family（`reg_instruction.hpp:21-36`），是 VM opcode 建模的干净输入。
-4. **复用现有后端契约**：实现 `mj2x::Backend` 子类（`backend.hpp:48`），产物仍是"改写 class + C 源码"，仍走 ACC_NATIVE + RegisterNatives（`regc_backend.hpp:23-28`），不引入新的 class 注入机制。
+3. **复用现有前端**：VMC4 消费 L1 → SSA → RegIR 前端（与 RegC 共享），不重新从 JVM 字节码建模。RegIR 只有 13 个 instruction family（`reg_instruction.hpp`），是 VM opcode 建模的干净输入。
+4. **复用现有后端契约**：实现 `mj2x::Backend` 子类（`backend.hpp`），产物仍是"改写 class + C 源码"，仍走 ACC_NATIVE + RegisterNatives（`regc_backend.hpp`），不引入新的 class 注入机制。
 5. **fail-closed**：继承 RegC 的语义保真/fail-closed 原则（`regc_codegen.md` §1）。任何无法保证语义正确性的情况保留字节码、不转 VM。
 
 ### 3.2 非目标
@@ -152,7 +151,7 @@ VmInstance
 
 ### 4.3 指令集建模：RegIR → opcode
 
-VMC4 不从 JVM 字节码的 200+ 条指令建模，而是从 RegIR 的 13 个 instruction family 建模（`reg_instruction.hpp:21-36`）：
+VMC4 不从 JVM 字节码的 200+ 条指令建模，而是从 RegIR 的 13 个 instruction family 建模（`reg_instruction.hpp`）：
 
 | RegInstructionKind | VM opcode 语义 | 备注 |
 |---|---|---|
@@ -231,25 +230,25 @@ VMC4 接入 mj2x 现有契约，改动面可控。按依赖顺序：
 
 ### 5.1 构建脚本（无需改）
 
-`mj2x/xmake.lua:11` 的 `add_files("src/mj2x/**.cpp")` 会自动纳入新目录。新建 `mj2x-core/src/mj2x/backend/vmc4/` 即可，**无需改 xmake.lua**。
+`mj2x/xmake.lua` 的 `add_files("src/mj2x/**.cpp")` 会自动纳入新目录。新建 `mj2x-core/src/mj2x/backend/vmc4/` 即可，**无需改 xmake.lua**。
 
 ### 5.2 后端契约（无需改）
 
-实现 `mj2x::Backend` 子类（`backend.hpp:48`），实现 5 个虚函数即可：`name()` / `compileMethod()` / `injectIntoClass()` / `finalize()` / `generatedSource()`。`NativeSourceLanguage` 枚举（`backend.hpp:23`）复用 `C99`——VM 解释器是 C 输出。
+实现 `mj2x::Backend` 子类（`backend.hpp`），实现 5 个虚函数即可：`name()` / `compileMethod()` / `injectIntoClass()` / `finalize()` / `generatedSource()`。`NativeSourceLanguage` 枚举（`backend.hpp`）复用 `C99`——VM 解释器是 C 输出。
 
 ### 5.3 前端复用（无需改）
 
-VMC4 从 Pipeline 拿 L1 block（`pipeline.cpp:90` 的 `converter.convert(...)`），自建 SSA/RegIR（复用 `ssa_builder` + `reg_lowering`），在 RegIR 之后分叉。前端代码零改动。
+VMC4 从 Pipeline 拿 L1 block（`pipeline.cpp` 的 `converter.convert(...)`），自建 SSA/RegIR（复用 `ssa_builder` + `reg_lowering`），在 RegIR 之后分叉。前端代码零改动。
 
 ### 5.4 CLI 接线（3 处必改）
 
-- `mj2x-cli/src/main.cpp:65-70` —— `enum class CEmitterBackend` 加 `Vmc4`
-- `mj2x-cli/src/main.cpp:158-173` —— `parseBackendName` 加 `"vmc4"` 分支
-- `mj2x-cli/src/main.cpp:829-853` —— 实例化分支加 `std::make_unique<Vmc4Backend>(...)`
+- `mj2x-cli/src/main.cpp` —— `enum class CEmitterBackend` 加 `Vmc4`
+- `mj2x-cli/src/main.cpp` —— `parseBackendName` 加 `"vmc4"` 分支
+- `mj2x-cli/src/main.cpp` —— 实例化分支加 `std::make_unique<Vmc4Backend>(...)`
 
 ### 5.5 per-method 后端选择（新能力，需新增）
 
-当前是"全方法二选一标 native"（`pipeline.cpp:96-100` 对所有方法用同一个 backend 列表）。VMC4 的 per-method/per-class 粒度需要这层选择能力：
+当前是"全方法二选一标 native"（`pipeline.cpp` 对所有方法用同一个 backend 列表）。VMC4 的 per-method/per-class 粒度需要这层选择能力：
 
 - **方案 A（最小侵入）**：VMC4 后端内部维护"哪些方法进 VM、哪些 fail-closed 保留字节码"的筛选逻辑，Pipeline 不变。粒度由注解或 CLI 传入 Vmc4Backend。
 - **方案 B（通用化）**：Pipeline 支持 per-method backend 路由（一个方法可指定不同后端）。改动面大，但对未来多后端组合有用。
@@ -294,13 +293,13 @@ VmInstance 的所有随机维度都必须从 seed 确定性派生，**不得引�
 
 ## 8. 与 mjdbg 红队的闭环
 
-VMC4 的保护强度必须由 mjdbg 量化验证（`doc/roadmap.md:10-18` 的红蓝闭环）：
+VMC4 的保护强度必须由 mjdbg 量化验证（`doc/roadmap.md` 的红蓝闭环）：
 
 - **expected trace surface**：每个 VMC4 样本必须写明红队应观察到的 trace 特征（dispatcher 形态、handler 数量、opcode 编码熵）。
 - **跨实例分析复用性测试**： mjdbg 对方法 A 的 VM 分析结论是否适用于方法 B 的 VM。若适用，说明粒度/可变性不足。
 - **强度归零基准**：若 mjdbg 能自动化还原某个 VmInstance 的 ISA，该实例的强度记为 0，反馈调整可变性维度。
 
-VMC4 进入主线的前置条件：RegC/runtime 闭环已稳定 + mjdbg 提供 c2j/VM 分析 agent（见 `dev_plan.md` R5 阻塞说明）。
+VMC4 进入主线的前置条件：RegC/runtime 闭环已稳定 + mjdbg 提供 c2j/VM 分析 agent（见 `doc/roadmap.md`）。
 
 ---
 
@@ -401,7 +400,7 @@ Phase 0+1 的单测只验证"编码成功 + 文本结构"，从未把生成的 C
 
 - **问题 1（代码膨胀）**：MVP 采用"解释器模板 + per-VM 数据表"形态——5 种 dispatcher 共享 handler 逻辑片段，只在外层调度结构上不同，体积可控。per-method 独立解释器源码留 Phase 3。
 - **问题 2（computed goto）**：emit 阶段生成 `goto *` + `&&label`（GCC 扩展）。MSVC 编译生成的 C 会失败，但 emit（C++ 生成 C 文本）不依赖 GCC。CLI 默认 switch_table，显式指定 computed_goto 时由调用方保证用 GCC/clang 编译。
-- **问题 3（handler 复用）**：MVP 不复用 RegC 的 `_mj2x_regc_*` helper。VMC4 handler 内联进 dispatcher，语义（整数环绕、除零、UShr）独立实现，与 RegC 的 `binaryExpr()`（`regc_emitter.cpp:1033`）行为对齐但代码独立。
+- **问题 3（handler 复用）**：MVP 不复用 RegC 的 `_mj2x_regc_*` helper。VMC4 handler 内联进 dispatcher，语义（整数环绕、除零、UShr）独立实现，与 RegC 的 `binaryExpr()`（`regc_emitter.cpp`）行为对齐但代码独立。
 - **问题 4（invokedynamic）**：MVP fail-closed（Intrinsic family 不编码）。后续 Phase 直接复用 RegIR 的 `Intrinsic("indy:<index>")` 透传，与 RegC 阶段3 已支持的 indy 解耦。
 - **问题 5（注解粒度）**：MVP 用 CLI 全局控制（`--vmc4-dispatcher`/`--vmc4-seed`）。`@VmProtected` 注解触发留后续。
 

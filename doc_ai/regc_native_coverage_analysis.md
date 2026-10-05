@@ -1,6 +1,6 @@
 # RegC native 覆盖率分析
 
-> 状态：2026-08-09 更新。本文是 `dev_plan.md` R6 的支撑文档，跟踪 RegC
+> 状态：2026-08-09 更新。本文跟踪 RegC
 > fail-closed 边界的收口进度与实测覆盖率。
 
 ## 实测基准
@@ -29,12 +29,12 @@ mj2x-cli --backend regc -i TEST.jar -o TEST-regc.jar --emit-cpp native.c --compi
 
 | 边界 | 收口 |
 |---|---|
-| 反射组（`Class`/`reflect/*`/`Object.getClass`） | R6 引用管理（PushLocalFrame/PopLocalFrame）后放开 |
-| IO 组（`InputStream`/`ByteArrayInputStream`） | R6-A 后放开 |
-| 类加载组（`ClassLoader.loadClass`/`getResourceAsStream`/`defineClass`） | R6-B 后放开 |
+| 反射组（`Class`/`reflect/*`/`Object.getClass`） | 引用管理（PushLocalFrame/PopLocalFrame）落地后放开 |
+| IO 组（`InputStream`/`ByteArrayInputStream`） | 已放开（collect_args 数组参数修正后） |
+| 类加载组（`ClassLoader.loadClass`/`getResourceAsStream`/`defineClass`） | 已放开（byte[] 参数修正后） |
 | 并发组（`Thread`/`java.util.concurrent/*`） | thread-local env/ctx 修复后放开（2026-08-09） |
 | System 组（`exit`/`setSecurityManager`/`getSecurityManager`） | thread-local 修复后放开（JDK17 语义一致） |
-| 内部类 `$`（RegisterNatives 动态绑定） | R6-C 已放开 |
+| 内部类 `$`（RegisterNatives 动态绑定） | 已放开 |
 | invokedynamic 自定义 bootstrap | 阶段3 运行时 call-site helper（2026-08-09） |
 
 ## 仍未转 native 的合法情形

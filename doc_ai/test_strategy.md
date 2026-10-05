@@ -4,8 +4,7 @@
 > v1 的测试目标（≥80 单元，仅针对 StackC）调整为按层分质量门。
 > 架构概览见 `../doc/architecture.md`。
 >
-> **MVP freeze（2026-07-06）**：当前发版范围见 `mvp_release_scope.md`。
-> 发版前只补冻结范围内的 JAR/CLI/unsupported 边界测试，不新增 R4/VMC4 等后续功能。
+> 当前发版范围见 `../doc/roadmap.md` 与 `../dev_plan.md`。
 
 ---
 
@@ -28,7 +27,7 @@
 | **`integration/mtest_set_native_matrix_test.cpp`** | **双后端真 E2E** | 36 | 18 个中性 fixture x StackC/RegC |
 | `cli/cli_test.cpp` | CLI | 5+ | 覆盖 RegC backend flag、StackC/RegC JAR 输入/输出入口、CMake 工程输出、负向参数、坏 JAR fail-closed |
 
-### 1.2 各层测试目标（R1-R4 落地时补）
+### 1.2 各层测试目标
 
 | 层 | 测试文件（计划） | 测试内容 | 落地波次 |
 |----|----------------|---------|---------|
@@ -37,7 +36,7 @@
 | **L3** 寄存器 IR | `mir/register_ir_test`（★新增） | φ 消解、虚拟寄存器分配、**操作数无 stack slot**（硬断言） | R1 |
 | **L4** 变换 pass | `mir/passes/*_test`（★新增） | 每个 pass（常量折叠/DCE/MBA/CFF）的语义保持 + 变换生效 | R4 |
 | **L5** RegC | `backend/regc_test`（★新增） | RegIR→C 生成正确性、**生成 C 无 `cstack` 模式**（硬断言） | R2 |
-| **RT** 运行时 | `runtime/test/*_test.cpp` | crypto/kernel/stringpool 正确性；antijvmti 在 mock 篡改下 fail-closed；antidebug probe 可调用 | R3 |
+| **RT** 运行时 | `mj2x-rt/test/*_test.c` | crypto/kernel/stringpool 正确性；antijvmti 在 mock 篡改下 fail-closed；antidebug probe 可调用 | R3 |
 
 ### 1.3 关键结构断言（防御有效性验证）
 
@@ -162,7 +161,7 @@ src/unittest/
         └── stackc_backend_legacy_test.cpp  — legacy StackC（仅历史计划；当前未使用）
 ```
 
-runtime 纯逻辑单测（R3）随 `mj2x_rt_test` 运行（如
+runtime 纯逻辑单测随 `mj2x_rt_test` 运行（如
 `mj2x_rt_protect_probe_test.c` 的探测解码器用例）；原 `mj2x-runtime`
 独立测试树已随该库退役。
 
@@ -199,9 +198,9 @@ libjbytecode Type 全局状态交互导致 flaky，已修）。
 少数 E2E 测试用 `test_resource/` 下的真实 `.class`（与 libjbytecode 共用资源目录）。
 输出一律走 `test::getOutPath()` 等 test_helper API，**绝不写 `test_resource/`**。
 
-### 3.3 c2j 攻击验证样本（R3+）
+### 3.3 c2j 攻击验证样本
 
-R3 起，受保护样本需在 c2j agent 下验证。样本与 expected trace surface 文档化，
+受保护样本需在 c2j agent 下验证。样本与 expected trace surface 文档化，
 交 mjdbg 协作验证（见 ROADMAP §5 Shared Contracts）。
 
 ### 3.4 StackC protected sample fixtures
@@ -272,27 +271,13 @@ caller catch。`IntegerDivisionTrapRoundTrip` 覆盖 i32/i64 除零捕获/传播
 byte/short/char array helper 的 DLL round-trip。
 设计说明见 `regc_codegen.md`（RegIR→C 生成规则、转换边界与运行时 ABI 总览，代码生成审查入口）与 `codegen_style.md`（命名/注释规范）。
 
-### 3.10 R3 runtime core
+### 3.10 运行时 C 层（mj2x-rt）
 
-`mj2x/runtime/src/{crypto,kernel,antidebug,antijvmti,stringpool,intrinsic}/` 提供 R3
-runtime foundation。`mj2x_runtime_test` 覆盖 SHA-256/HMAC 标准向量、
-HKDF-SHA256 RFC 5869 向量、HMAC 校验、volatile wipe、JNI table tamper mock、
-agent 参数扫描、anti-debug signal 聚合和 string-pool 派生流解码。
-
-`intrinsic/` 子模块承载 JDK intrinsic 的 runtime 实现:`intrinsic_wrapper`
-(包装类 valueOf/xxxValue + Integer cache)、`intrinsic_math`(Math abs/min/max/
-sin/.../random,JLS NaN 语义)、`intrinsic_random`(Java 兼容 LCG,序列逐位对齐
-`new java.util.Random(42)`)。`mj2x_runtime_test` 对应三个 `Intrinsic*Test` 套件。
-
-`regc_intrinsic_test.cpp` 在 RegC 单测层断言 emitter 把 JDK 调用(Math/parseInt)
-识别为 intrinsic,生成 C 不含对应 `_mj2x_regc_call_*`;`RegCBackendE2E.
-IntrinsicMathAndParseIntRoundTrip` 在 JDK/MSVC 可用时真编译 DLL 并与 Java 基准
-逐项对比(parseInt "42" -> 42,sin/sqrt/round 浮点与语义对比),且断言生成 C 在
-Math/parseInt 调用点无 JNI 派发。
-
-设计说明见 `runtime_crypto.md`、`runtime_kernel.md`、
-`runtime_antijvmti.md`、`runtime_antidebug.md`、`runtime_stringpool.md`、
-`regc_intrinsic.md`。
+runtime C 源在 `mj2x/mj2x-rt/src/`，随 `mj2x_rt_test` 运行（C 级语义、
+protect 探针、字符串族测试）。JDK intrinsic 识别在 RegC 单测层断言
+（生成 C 无对应 JNI 派发）；exec 级与 Java 基准对拍在有 JDK+编译器的机器随
+`mj2x_unittest` 的 CliTest E2E 进行。设计说明见 `regc_intrinsic.md`。
+原 `mj2x-runtime` 整树已退役并入 mj2x-rt。
 
 ---
 
@@ -309,8 +294,8 @@ xmake build mj2x_unittest && xmake run mj2x_unittest
 xmake run mj2x_unittest --gtest_filter="RegC*"
 xmake run mj2x_unittest --gtest_filter="SsaTest.*"
 
-# runtime 单测（R3 起）
-xmake build mj2x_runtime_test && xmake run mj2x_runtime_test
+# C 运行时单测
+xmake build mj2x_rt_test && xmake run mj2x_rt_test
 ```
 
 ---

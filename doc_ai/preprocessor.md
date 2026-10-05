@@ -1,6 +1,6 @@
 # mj2x L1 Preprocessor 设计
 
-> 状态：R1b 实现 note，权威随代码演进
+> 状态：实现 note，权威随代码演进
 > 日期：2026-06-25
 > 关系：本文档定义 `src/mj2x/preprocessor/` 下的字节码改写预处理。
 > 上层依据：`../doc/architecture.md` 的 pipeline / preprocessor 边界。
@@ -22,7 +22,7 @@ L1 `CodeConverter`（栈式 MIR 翻译）对几类 JVM 指令**无法直接翻�
 把"难翻译"的指令替换成"易翻译"的等价指令序列。改写后 `CodeConverter` 看到的全是它能直译的指令。
 
 > 这是 native-obfuscator 的成熟做法（`IndyPreprocessor`/`LdcPreprocessor`/`MethodHandleUtils`），
-> masxinlingvonta 也用 `InstructionExtractor` 做同类事。mj2x R1b 移植这套思路到 C++。
+> masxinlingvonta 也用 `InstructionExtractor` 做同类事。mj2x 把这套思路移植到 C++。
 
 ---
 
@@ -46,7 +46,7 @@ Pipeline 注册顺序：`LdcPreprocessor` → `InvokeDynamicPreprocessor` → `M
 
 ---
 
-## 3. LdcPreprocessor（R1b.3）
+## 3. LdcPreprocessor
 
 ### 3.1 处理对象
 
@@ -83,12 +83,12 @@ INVOKESTATIC java/lang/invoke/MethodType.fromMethodDescriptorString
 ### 3.4 magic 调用
 
 `native/magic/.../{lookup,classloader}/obfuscator<rand>.a` 是合成标记方法（不是真类）。
-R1b 不需要它们真的存在 —— 在 L5 生成阶段（R2）识别这些标记并 inline 成 C helper
-（`get_lookup(env, clazz)` / `get_classloader(env, clazz)`）。R1b 只保证字节码层等价。
+实现不需要它们真的存在——识别这些标记并 inline 成 C helper
+（`get_lookup(env, clazz)` / `get_classloader(env, clazz)`）。预处理只保证字节码层等价。
 
-> R1b 简化：先**不**注入 magic 调用，而是直接用 `MethodHandles.lookup()`（INVOKESTATIC）
+> 简化：先**不**注入 magic 调用，而是直接用 `MethodHandles.lookup()`（INVOKESTATIC）
 > 和 `getClass().getClassLoader()`。这避开 magic 标记机制，让 L1/L5 阶段更简单。
-> magic 化（每样本随机名）留到 R4 多样化 pass。
+> magic 化（每样本随机名）留作多样化 pass 候选。
 
 ---
 
@@ -98,7 +98,7 @@ R1b 不需要它们真的存在 —— 在 L5 生成阶段（R2）识别这些�
 
 `InvokeDynamicInsnNode`（bsm + bsmArgs + name + desc）。
 
-### 4.2 STD_JAVA 路径（R1b 唯一实现）
+### 4.2 STD_JAVA 路径（唯一实现）
 
 StackC 当前不在 preprocessor 中改写字节码，而是在 `MIRInvokeDynamic` 中保留
 bootstrap handle 与 bsmArgs。StackC 发射 C 时执行：
@@ -126,14 +126,14 @@ unbox / jobject 返回
 若 BSM descriptor 末参是 `Object...` 而 bsmArgs 数量与固定参数不匹配，补 `null` 或截断
 （`StringConcatFactory.makeConcatWithConstants` 等场景）。
 
-### 4.4 R1b 不做 HOTSPOT 路径
+### 4.4 不做 HOTSPOT 路径
 
 `linkCallSite`（`MethodHandleNatives.linkCallSite`）是 Hotspot 内部 fast-path，
-依赖 JVM 私有 API。R1b 只做 STD_JAVA（通用、可移植）。HOTSPOT 路径推到 R5+（若 SnakeGame 需要）。
+依赖 JVM 私有 API。当前只做 STD_JAVA（通用、可移植）；HOTSPOT 路径仅在真实样本需要时考虑。
 
 ---
 
-## 5. MultiANewArrayPreprocessor（R1b.5）
+## 5. MultiANewArrayPreprocessor
 
 ### 5.1 处理对象
 
@@ -142,13 +142,13 @@ unbox / jobject 返回
 ### 5.2 展开
 
 把 `multianewarray T d dims` 展开为嵌套分配（最外层 anewarray，内层循环 anewarray）。
-但**循环展开在字节码层很重**。R1b 采用更简单的等价：
+但**循环展开在字节码层很重**。实现采用更简单的等价：
 
 **方案 A（当前采用）**：保留 `multianewarray` 但在 L1 翻译时把它映射到
 `MIRMultiNewArray`，后续 SSA/RegIR/RegC 通过 `_mj2x_regc_alloc_multi_array`
 helper 执行。preprocessor **不改字节码**，只统计并提示该站点会走 helper 路径。
 
-> 早期 R1b 最小实现只要求“不静默落 `MIRNop`”；当前 RegC 已有 multi-array
+> 早期最小实现只要求“不静默落 `MIRNop`”；当前 RegC 已有 multi-array
 > helper 和 E2E 覆盖，所以这里不再是 fail-closed 边界。
 
 **方案 B（保留备选）**：字节码层展开为 anewarray + 嵌套填充循环（参考
@@ -156,7 +156,7 @@ masxinlingvonta `InstructionExtractor`）。成本高，当前不需要。
 
 ---
 
-## 6. R1b 验收
+## 6. 验收
 
 1. `LdcPreprocessor`：一个含 `ldc MethodType`/`ldc MethodHandle` 的方法，preprocess 后
    `CodeConverter` 不再遇到原始 ldc Handle/Type（被展开成方法调用序列）。
@@ -166,7 +166,7 @@ masxinlingvonta `InstructionExtractor`）。成本高，当前不需要。
    进入 `MIRMultiNewArray` / RegC helper 路径。
 4. 现有 45/46 测试不回归。
 
-R1b 用 javac 编译的小样本验证（`test_resource/preproc/`）。
+用 javac 编译的小样本验证（`test_resource/preproc/`）。
 
 ---
 
@@ -176,14 +176,14 @@ R1b 用 javac 编译的小样本验证（`test_resource/preproc/`）。
 src/mj2x/preprocessor/
 ├── preprocessor.hpp                  # 接口（已有）
 ├── mark_all_preprocessor.hpp         # 已有
-├── ldc_preprocessor.{hpp,cpp}        # R1b.3
-├── invokedynamic_preprocessor.{hpp,cpp}  # R1b.4
-└── multianewarray_preprocessor.{hpp,cpp} # R1b.5（最小：fail-closed 标记）
+├── ldc_preprocessor.{hpp,cpp}
+├── invokedynamic_preprocessor.{hpp,cpp}
+└── multianewarray_preprocessor.{hpp,cpp} (最小: fail-closed 标记)
 ```
 
 ## 8. 不做的事
 
-- HOTSPOT linkCallSite fast-path（R5+，若 SnakeGame 触发）。
-- magic 调用的随机化命名（R4 多样化 pass）。
+- HOTSPOT linkCallSite fast-path（真实样本需要时再评估）。
+- magic 调用的随机化命名（多样化 pass 候选）。
 - multianewarray 字节码层循环展开（方案 B，SnakeGame 用不到）。
 - ConstantDynamic（`condy`，JDK11+）—— 极罕见，遇到再补。

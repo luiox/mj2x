@@ -3,7 +3,7 @@
 > 本文档列举 mj2x 当前**已实现且可用**的功能。
 > 用法见 `doc/user_guide.md`;路线图见 `doc/roadmap.md`;待办见 `dev_plan.md`。
 >
-> 能力边界对应 `dev.3` 的实现(2026-07-06 冻结),权威范围见 `doc/mvp_release_scope.md`。
+> 能力边界对应 `dev.3` 的实现（2026-07-06 冻结）；当前范围以 `doc/roadmap.md` 与 `dev_plan.md` 为准。
 
 ---
 
@@ -118,7 +118,7 @@ TU 级 `_mj2x_string_pool[]`（**UTF-16 code units，`uint16_t` 数组**，方�
 
 **JNI local ref 引用管理**:每个 native 方法用 JNI `PushLocalFrame`(入口) / `PopLocalFrame`(单出口 `_mj2x_regc_cleanup`，REF 返回值 promote 到父帧、非 REF 传 NULL)批量释放方法内产生的 local ref，避免反射等密集调用撑爆 JNI 16 槽 local ref 表。零 C 数组、不引入 stack anchor；纯标量方法不发射帧。缓存 class/method/field 走 `NewGlobalRef` 不受帧影响。REF 相等比较(`if_acmpeq/ne`、与 null 比较)使用 `IsSameObject` 而非裸 `void*` 指针比较。
 
-**invokedynamic 分阶段展开(R6.1)**:`InvokeDynamicPreprocessor` 在 SSA 前把可静态解析的 indy 改写成 RegC 已能 lower 的普通字节码；阶段3（2026-08-09）起自定义 bootstrap 不再整方法保留字节码，由 SSA 登记站点 + finalize 生成运行时 call-site helper（见 `regc_invokedynamic_strategy.md`）。已展开：string concat（StringBuilder 链）、无状态/捕获 lambda、实例/构造器/接口方法引用、擦除泛型装箱/桥接、altMetafactory（serializable/marker/bridge）、基本类型加宽；自定义 bootstrap 运行时解析已实现。仍 fail-closed：基本类型收窄、装箱+加宽复合。展开形态与边界见 `regc_codegen.md` §转换边界。
+**invokedynamic 分阶段展开**:`InvokeDynamicPreprocessor` 在 SSA 前把可静态解析的 indy 改写成 RegC 已能 lower 的普通字节码；阶段3（2026-08-09）起自定义 bootstrap 不再整方法保留字节码，由 SSA 登记站点 + finalize 生成运行时 call-site helper（见 `regc_invokedynamic_strategy.md`）。已展开：string concat（StringBuilder 链）、无状态/捕获 lambda、实例/构造器/接口方法引用、擦除泛型装箱/桥接、altMetafactory（serializable/marker/bridge）、基本类型加宽；自定义 bootstrap 运行时解析已实现。仍 fail-closed：基本类型收窄、装箱+加宽复合。展开形态与边界见 `regc_codegen.md` §转换边界。
 
 **覆盖率限制(重要)**:RegC 对部分方法 fail-closed 保留 Java 字节码(显式 skip + 可观测 fail-closed),实测复杂 jar(JavaObfuscatorTest `TEST.jar`)业务方法（非构造器）已 **100% 转 native（零 skip）**。未转的合法情形：有逻辑构造器（局部变量表非空——注入方法会被反射方法数断言计数，业界同此策略）、含 try-catch/局部变量注解/跨段 label 引用的构造器、抽象方法、mj2x runtime 类自身。历史 fail-closed 分组（反射组、IO 组、类加载组、并发组 `Thread`/`java.util.concurrent/*`、System 组 `exit`/`SecurityManager`、invokedynamic 自定义 bootstrap）均已放开（引用管理 + thread-local env/ctx + 阶段3 实现）。**内部类 `$`** 注册已随 RegisterNatives 撤销,`this$0` 合成字段访问与外部类方法调用路径端到端通过。浮点/long 三值比较(`cmp.nan_*` intrinsic)已实现。大异常表(多 catch)已支持(lowering 三层无上限)。fail-closed 点通过 `[RegCBackend] Skipping <method>: <stage> failed: <reason>` 日志暴露,不再静默。**性能评估必须先做覆盖率审计**,见 [performance_evaluation_spec.md](performance_evaluation_spec.md) 与 [regc_native_coverage_analysis.md](regc_native_coverage_analysis.md)。
 
@@ -147,7 +147,7 @@ LDC 字符串密文落盘为内容去重缓冲 `_mj2x_str_<hex64(fnv1a64)>`（�
 - throw
 - try / catch
 - null trap
-- integer div / rem trap(走 R3 runtime ABI)
+- integer div / rem trap（走 C 运行时 ABI）
 - generated C TU 级 static/instance method、static/instance field、class cache CSE:跨方法复用相同 JNI ID/class cache declaration;String intrinsic class cache、固定异常类 class cache、`new`/reference-array allocation 的编译期 descriptor class cache 也统一入池。动态 descriptor 与 runtime `class_name` 不进入全局 cache，避免破坏 class-loader identity 和类卸载语义；决策理由见 `regc_codegen.md` §6
 - **JDK intrinsic(Math / Integer/Long 位操作 / wrapper parse/toString/compare/value-unbox / Random next* / String UTF-16 hot paths / mutable String CRT 链)**:RegC 在 Call 分支识别 JDK 方法签名,匹配调用点不发 `_mj2x_regc_call_*` 通用 JNI helper,直接调用 CRT ABI 或 TU-local cache helper
 
@@ -314,14 +314,14 @@ invokedynamic 自定义 bootstrap 等与 RegC 相同的边界。性能非目标�
 
 ---
 
-## 5. R3 Runtime 基础
+## 5. C 运行时（mj2x-rt）基础
 
 | 模块 | 状态 |
 |---|---|
 | runtime core(crypto / kernel / stringpool / antidebug / antijvmti) | ✅ 单测模块 |
 | `mj2x-rt` 可分发 RegC ABI | ✅ C99/JNI source pack + `mj2x_crt_test`;包含 Math、Random 和非逃逸 primitive wrapper intrinsic；#894 起 RegC 运行时主体（call/field helper、单例缓存、TLS env、trace）并入 `regc/mj2x_regc_runtime.{h,c}`，生成代码 extern 直访；无 `libca` 分发依赖 |
 | mj2x-rt 按后端分发 + 后端宏 | ✅ 分发面单一事实源 `rtFoldersForBackend`（StackC=stackc；RegC=common+regc；VMC4=common+vmc4；LLVM=common+regc+llvmir，含 `mj2x_llvmir_runtime`）；生成工程与 `--compile` 全链路注入唯一 `MJ2X_RT_BACKEND_*` 宏（xmake 模板 token / CMake `target_compile_definitions` / LLVM 内联脚本 / 直驱编译命令 MSVC `/D` 其余 `-D`），运行时源与用户 intrinsic 同一定义面 |
-| RegC / R3 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String/split 与 opaque StringBuilder/StringBuffer helper |
+| RegC / C 运行时 ABI 冻结 | ✅ 当前覆盖 div / rem / barrier、compare、基础 `toString`、UTF-16 String/split 与 opaque StringBuilder/StringBuffer helper |
 | runtime-backed div / rem trap | ✅ RegC native E2E 覆盖 |
 | **JDK intrinsic runtime**(intrinsic/wrapper、intrinsic/math、intrinsic/random) | ✅ 单测模块,RegC native E2E 覆盖 |
 | Math intrinsic(abs/min/max/sin/cos/tan/sqrt/pow/floor/ceil/round/random/signum/exp/log/log10) | ✅ runtime + emitter 识别；min/max F/D NaN/±0.0 位型按 OpenJDK 语义(#1117) |

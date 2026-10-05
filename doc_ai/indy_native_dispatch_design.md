@@ -1,9 +1,8 @@
 # indy 原生派发（invokedynamic native dispatch）设计
 
-> 状态：sprint 波次一设计稿（2026-09-17，agent D）。
-> 波次一交付：本文档 + 管线层静态判定原型（`InvokeDynamicPreprocessor`）+ 判定单测。
-> 波次二交付（2026-09-17，agent F）：本文 §6 提案 **P1/P2/P3 已在 RegC 面落地**（见各条
-> 「波次二落地」标注）；P4 保持提案状态。StackC/VMC4/LLVM 面（P5-P10）未动。
+> 状态：设计稿（2026-09-17）。管线层静态判定原型 + 判定单测已交付；§6 提案
+> P1/P2/P3 已在 RegC 面落地，P4 保持提案，StackC/VMC4/LLVM 面（P5-P10）未动，
+> 剩余合流见 `../dev_plan.md` 待做 H。
 > 竞品锚点：jvmtp 1.6.4 indy 纯 native dispatch（~84ns vs ~660ns，~8x）+
 > `indy.crack-adapters`（识别他方 MutableCallSite adapter 形状直派，1.8x~9x），
 > 见根 `doc_ai/research/draft-jvmtp-jvmtidev.md` §2/§6.1(P2)。
@@ -19,14 +18,14 @@
 
 | 站点类别 | 识别函数 | 展开函数 | 形态 |
 |---|---|---|---|
-| 字符串拼接 | `isStringConcatSite`（:224，认 `java/lang/invoke/StringConcatFactory` 的 `makeConcat` / `makeConcatWithConstants`） | `expandConcatSite`（:126，改写为 `new StringBuilder` + append 链 + toString） | 阶段1 |
-| lambda / 方法引用 | `isLambdaMetafactorySite`（:457，认 `java/lang/invoke/LambdaMetafactory` 的 `metafactory` / `altMetafactory`） | `expandLambdaSite`（:1014，为每站点合成实现类（public SAM 落 `mj2x/lambda/Lambda$N`；包私有/private 嵌套 SAM 落 SAM 同包 `Lambda$N`，default 包落裸名 `Lambda$N`——#1182 评审收口 P1；javac protected 落盘即 public 故谓词不触发），站点改写为 `new` + `<init>`；前置判定已抽取为 `lambdaExpansionPrecondition` :580，与 §5 判定原型共用） | 阶段2a–2f |
+| 字符串拼接 | `isStringConcatSite`（认 `java/lang/invoke/StringConcatFactory` 的 `makeConcat` / `makeConcatWithConstants`） | `expandConcatSite`（改写为 `new StringBuilder` + append 链 + toString） | 阶段1 |
+| lambda / 方法引用 | `isLambdaMetafactorySite`（认 `java/lang/invoke/LambdaMetafactory` 的 `metafactory` / `altMetafactory`） | `expandLambdaSite`（为每站点合成实现类（public SAM 落 `mj2x/lambda/Lambda$N`；包私有/private 嵌套 SAM 落 SAM 同包 `Lambda$N`，default 包落裸名 `Lambda$N`——#1182 评审收口 P1；javac protected 落盘即 public 故谓词不触发），站点改写为 `new` + `<init>`；前置判定已抽取为 `lambdaExpansionPrecondition`，与 §5 判定原型共用） | 阶段2a–2f |
 
-lambda 展开的静态前置谓词 `lambdaExpansionPrecondition`（:580，全部来自 classfile 静态可见内容）：
+lambda 展开的静态前置谓词 `lambdaExpansionPrecondition`（全部来自 classfile 静态可见内容）：
 
-- impl handle tag ∈ {`H_INVOKESTATIC`, `H_INVOKEVIRTUAL`, `H_INVOKEINTERFACE`, `H_INVOKESPECIAL`（展开期提权）, `H_NEWINVOKESPECIAL`}（:612–:621；`H_GETFIELD`/`H_PUTFIELD` 等字段句柄 **不在** 展开支持面内，进入 §2 B2/B3 直派判定）；
-- `parseAltMetafactoryTail`（:468）：altMetafactory 的 serializable / markers / bridges 解析，未知 flag 位 fail-closed；
-- `canEmitSam`（:531）+ `canAdaptValue`（:364）：主 SAM 与各 bridge 描述符逐位可适配——同型、CHECKCAST 收窄、拆箱、装箱（目标限 Object/对应包装类）、基本类型加宽（阶段2f：i2l/i2f/i2d/l2f/l2d/f2d）、void 返回丢弃（POP/POP2）。
+- impl handle tag ∈ {`H_INVOKESTATIC`, `H_INVOKEVIRTUAL`, `H_INVOKEINTERFACE`, `H_INVOKESPECIAL`（展开期提权）, `H_NEWINVOKESPECIAL`}（`H_GETFIELD`/`H_PUTFIELD` 等字段句柄 **不在** 展开支持面内，进入 §2 B2/B3 直派判定）；
+- `parseAltMetafactoryTail`）：altMetafactory 的 serializable / markers / bridges 解析，未知 flag 位 fail-closed；
+- `canEmitSam` + `canAdaptValue`：主 SAM 与各 bridge 描述符逐位可适配——同型、CHECKCAST 收窄、拆箱、装箱（目标限 Object/对应包装类）、基本类型加宽（阶段2f：i2l/i2f/i2d/l2f/l2d/f2d）、void 返回丢弃（POP/POP2）。
 
 **不支持形态（fail-closed，indy 原样保留）**：基本类型收窄、装箱+加宽复合、字段句柄 impl、未知 alt flag、非 LMF/concat 的一切自定义 bootstrap。
 
@@ -34,16 +33,16 @@ lambda 展开的静态前置谓词 `lambdaExpansionPrecondition`（:580，全部
 
 未被展开的 indy 站点（自定义 bootstrap / 不支持形态，含 record 的 `ObjectMethods.bootstrap`）走运行时解析：
 
-1. **SSA**：`ssa_builder.cpp:1113 lowerInvokeDynamic` 把站点登记进 `SSAFunction::indySites`
-   （`{name, desc, bsm, bsmArgs}`，`ssa_function.hpp:76`），生成 `Intrinsic("indy:<index>")`，
+1. **SSA**：`ssa_builder.cpp lowerInvokeDynamic` 把站点登记进 `SSAFunction::indySites`
+   （`{name, desc, bsm, bsmArgs}`，`ssa_function.hpp`），生成 `Intrinsic("indy:<index>")`，
    实参为 SSA 值，effect = externalCall（不可 DCE/重排）。
-2. **RegIR**：`RegFunction::indySites` 值拷贝透传（`reg_function.hpp:27`），Intrinsic 名不变。
-3. **RegC 每调用发射**（`regc_emitter.cpp:770 emitInvokeDynamic`）：
+2. **RegIR**：`RegFunction::indySites` 值拷贝透传（`reg_function.hpp`），Intrinsic 名不变。
+3. **RegC 每调用发射**（`regc_emitter.cpp emitInvokeDynamic`）：
    - `NewObjectArray` + 逐参装箱（`_mj2x_regc_box_*`，每参 1–2 个 JNI）+ `SetObjectArrayElement`；
    - 调文件级 helper `_mj2x_regc_indy_bsm_<i>(owner)` 取 target；
    - **每次调用现场 `GetMethodID(MethodHandle.invokeWithArguments)`（未缓存）**；
    - `CallObjectMethod(invokeWithArguments)` + `ExceptionCheck` + 结果拆箱（`_mj2x_regc_unbox_*`）。
-4. **RegC finalize helper**（`regc_backend.cpp:1099 emitIndyBootstrapFunction`）：每站点一个
+4. **RegC finalize helper**（`regc_backend.cpp emitIndyBootstrapFunction`）：每站点一个
    static 函数；static jobject 缓存 `CallSite.getTarget()` 结果（命中 = `NewLocalRef` 一次直达；
    miss 时完整重建 `MethodHandles.lookup` → `privateLookupIn(owner)`（失败回退 public）→
    `MethodType.fromMethodDescriptorString` → bsmArgs 重建（String/Class/MethodType/Handle/装箱
@@ -65,11 +64,11 @@ jvmtp ~84ns 的本质：构建期/首调用期把 target **破解**为 `(declari
 
 **其余后端现状**：
 
-- **StackC**（`stackc_mir_invoke.cpp:190 emitInvokeDynamic`）：**每次调用完整重建整条 bootstrap 链**
+- **StackC**（`stackc_mir_invoke.cpp emitInvokeDynamic`）：**每次调用完整重建整条 bootstrap 链**
   （FindClass / GetMethodID / lookup / privateLookupIn / MethodType / bsmArgs / 调 bsm / getTarget /
   invokeWithArguments 全部 per-call，零缓存），仅有「OBJECT 返回+单对象参」快路径省 varargs 数组——
   残留 indy 的每调用成本高于 RegC。
-- **VMC4**：`indy:<idx>` intrinsic 未实现（`vm_encoder.cpp:1246` fail-closed）→ 含残留 indy 的方法
+- **VMC4**：`indy:<idx>` intrinsic 未实现（`vm_encoder.cpp` fail-closed）→ 含残留 indy 的方法
   **整方法不转 VM**，保留 Java 字节码。VMC4 的问题不是派发慢，而是**覆盖率缺口**。
 - **LLVM**：`indy:<idx>` 模块级全局缓存（NewLocalRef + NewGlobalRef 稳定化）+ 运行时 bootstrap 解析，
   与 RegC 同构（`doc_ai/capabilities.md` §1 LLVM 节）。
@@ -94,9 +93,9 @@ indy site（pre-SSA 遇到的每个 InvokeDynamicInsnNode）
 │   │       且主 SAM + 全部 bridge 逐位可适配（canEmitSam 子集）且 alt 尾解析通过
 │   │       → T0  StaticExpanded（阶段2a–2f，现状）
 │   ├── B2. impl tag ∈ {GETSTATIC, GETFIELD} 且 captured++sam 布局与字段类型精确一致（getter）
-│   │       → F1  DirectFieldAccess（新直派形态；波次二发射字段读）
+│   │       → F1  DirectFieldAccess（新直派形态；发射字段读）
 │   ├── B3. impl tag ∈ {PUTSTATIC, PUTFIELD} 且 sam=(字段类型)V、captured 布局一致（setter）
-│   │       → F1  DirectFieldAccess（波次二发射字段写）
+│   │       → F1  DirectFieldAccess（发射字段写）
 │   └── B4. 其余（收窄 / 装箱+加宽 / 未知 flag / 不支持 tag / 字段句柄但布局不符）
 │           → T2  RuntimeHelper（现状阶段3；reason 记录具体原因）
 ├── C. bsm = java/lang/runtime/ObjectMethods.bootstrap（record）
@@ -107,7 +106,7 @@ indy site（pre-SSA 遇到的每个 InvokeDynamicInsnNode）
 └── D. 其他自定义 bootstrap
     ├── D1. bsm owner 是编译输入内的非 library 类
     │       → T2  RuntimeHelper + 标记 staticEvalCandidate
-    │       （波次二可对 bsm 方法体做受控 DSL 静态求值：findStatic/findVirtual + insertArguments/
+    │       （可对 bsm 方法体做受控 DSL 静态求值：findStatic/findVirtual + insertArguments/
     │         asType/permute 常量折叠 → 证明结果为 ConstantCallSite 时升级 F3 StaticDirect）
     └── D2. bsm owner 在库/JDK 内（或找不到）
             → T2  RuntimeHelper + 标记 runtimeCrackCandidate
@@ -125,9 +124,9 @@ F1/B2/B3 的**严格精确子集**（原型实现，宁窄勿宽）：
 | `H_PUTSTATIC`（写静态字段） | sam 参数恰 1 个且 desc == 字段 desc、captured 为空、sam 返回 void |
 | `H_PUTFIELD`（写实例字段） | captured 恰 1 个引用类型（receiver）+ sam 参数恰 1 个且 desc == 字段 desc、sam 返回 void |
 
-不满足精确一致（含任何加宽/装箱差异）一律回 T2——F1 的发射（波次二）不含适配代码，判定即承诺。
+不满足精确一致（含任何加宽/装箱差异）一律回 T2——F1 的发射不含适配代码，判定即承诺。
 
-判定与展开的**一致性**：B1 的谓词与 `expandLambdaSite` 前置检查共用同一函数（波次一原型已抽取
+判定与展开的**一致性**：B1 的谓词与 `expandLambdaSite` 前置检查共用同一函数（原型已抽取
 `lambdaExpansionPrecondition`），保证「判定 = 展开」零漂移；判定结果只是标记，不改写行为。
 
 ---
@@ -141,7 +140,7 @@ F1/B2/B3 的**严格精确子集**（原型实现，宁窄勿宽）：
 （`InvokeDynamicSite`，§6 接口 P1）透传到后端；后端只发射、不再判定。
 
 ```c
-/* 每直派站点一组 TU 级 static 缓存（发射形态，波次二落地） */
+/* 每直派站点一组 TU 级 static 缓存（发射形态） */
 static jclass    _mj2x_indy_direct_cls_<i>;     /* declaring class（global ref） */
 static jmethodID _mj2x_indy_direct_mid_<i>;     /* 直派方法 ID */
 static jobject   _mj2x_indy_direct_recv_<i>;    /* bound receiver global ref（无则 NULL） */
@@ -150,14 +149,14 @@ static u8        _mj2x_indy_direct_state_<i>;   /* 0=CRACK 1=READY 2=HELPER */
 
 **键（build time）**：`(className, methodName, siteOrdinal, indyName, indyDesc,
 fnv1a64(bsmOwner + bsmName + bsmArgs 值序列))` → 全局站点编号 i。内容哈希使同形站点可去重共享
-（与字符串池同思路；波次二可选优化，首版按站点一表一项）。
+（与字符串池同思路；可选优化，首版按站点一表一项）。
 
 **失效语义**：
 
 - **T0/F1/F2（build-time 判定形态）**：JVMS §5.4.3.6：indy 链接每类至多一次；返回
   `ConstantCallSite` 时链接永久。F2 的 ObjectMethods 恒返回 ConstantCallSite（JDK 实现）；
   F1 无 bootstrap 参与。**现状阶段3 target 缓存已隐含「target 永不变」假设**
-  （`regc_backend.cpp:1111–1118`：static jobject 缓存永不失效）——直派缓存语义等同现状，
+  （`regc_backend.cpp–1118`：static jobject 缓存永不失效）——直派缓存语义等同现状，
   不引入新风险。
 - **bootstrap 返回 MutableCallSite 的场景**：build-time 判定**不承诺**（D1 静态求值必须证明
   ConstantCallSite 才升级 F3）；D2 运行期破解仅当 `revealDirect` 成功且能确认目标为
@@ -215,7 +214,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
 
 ---
 
-## 5. 波次一原型（管线层，已实现）
+## 5. 管线层原型（已实现）
 
 `invokedynamic_preprocessor.{hpp,cpp}` 新增（不影响字节码输出，对现有行为零回归）：
 
@@ -228,14 +227,14 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
 - `process(CompilerIndex&, IndyDispatchReport*)` 重载：与既有流程同一代码路径，仅旁路收集判定；
   既有 `process(CompilerIndex&)` 行为不变（既有单测全部继续成立）。
 
-波次一**不**新增字节码形态、不改写任何站点行为；DirectFieldAccess / RecordObjectMethods 的
-展开与发射在波次二按 §6 提案落地。
+原型**不**新增字节码形态、不改写任何站点行为；DirectFieldAccess / RecordObjectMethods 的
+展开与发射按 §6 提案落地。
 
 ---
 
-## 6. 三后端接入面（接口需求提案——波次二主线程合流的输入）
+## 6. 三后端接入面（接口需求提案）
 
-> **波次二落地状态（2026-09-17）**：P1/P2/P3 已在 RegC 面实施（P4 未做）。载荷结构
+> **落地状态（2026-09-17）**：P1/P2/P3 已在 RegC 面实施（P4 未做）。载荷结构
 > 落在 `mj2x/mir/indy_dispatch.hpp`（`IndyDispatchForm` + `IndyDirectField` +
 > `IndyRecordMethods` + `IndyDispatchPayload`）；判定核心抽为站点数据级
 > `classifyCore`（`classifyIndySite` 与新增站点级入口 `classifyIndySiteForm` 共用，
@@ -243,7 +242,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
 >
 > 1. **F1 载荷 engagement**：`DirectFieldAccess` 站点仅当 **indy 调用描述符本身就是
 >    字段操作形态**（读 = 参数空/仅 receiver 且返回==字段 desc；写 = 值布局且返回
->    void；receiver 描述符精确等于声明类）才填 `directField` 载荷、发直派桩。波次一
+>    void；receiver 描述符精确等于声明类）才填 `directField` 载荷、发直派桩。原型阶段的
 >    精确一致子集（captured++sam lambda 布局，站点=创建函数接口实例）保持
 >    form=DirectFieldAccess 候选标记（reason 逐字不变）但载荷不 engage——发射走
 >    helper，零回归。原因：lambda 捕获形态的站点结果是 lambda 对象而非字段值，
@@ -258,7 +257,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
 
 ### 6.0 共同前置（MIR 层数据结构）
 
-- **P1 `InvokeDynamicSite` 增加派发形态载荷** ✅ 波次二已落地（RegC 链路）
+- **P1 `InvokeDynamicSite` 增加派发形态载荷** ✅ 已落地（RegC 链路）
   - 落地形态：`IndyDispatchForm`/载荷提升到 `mj2x/mir/indy_dispatch.hpp`
     （`IndyDirectField{isStatic,isWrite,owner,name,fieldDesc}`、
     `IndyRecordMethods{recordClass,names,methodsDesc,accessor}`——accessor 为判定内
@@ -271,7 +270,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
     每站点一次判定、发射端零判定逻辑）；不依赖 CompilerIndex 的站点级入口使 MIR
     构建处可直接复用判定（D1/D2 理由细分仅存在于报告面）。
   - 签名：`SSAFunction::InvokeDynamicSite` 与 `RegFunction::InvokeDynamicSite`
-    （`mj2x/mj2x-core/src/mj2x/mir/ssa/ssa_function.hpp:76`、`mir/register_ir/reg_function.hpp:27`）增加：
+    （`mj2x/mj2x-core/src/mj2x/mir/ssa/ssa_function.hpp`、`mir/register_ir/reg_function.hpp`）增加：
 
     ```cpp
     /// 静态派发形态（InvokeDynamicPreprocessor::classifyIndySite 判定，值拷贝透传）。
@@ -287,22 +286,22 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
   - 理由：形态判定发生在管线层（只有管线层看得到 classfile 与编译输入类集合）；后端按
     form 查表发射，不做任何判定逻辑，避免三后端三份判定漂移。`IndyDispatchForm` 枚举定义
     需从 preprocessor 头提升到 MIR 可见位置（或 MIR 自带同值枚举 + 边界映射，取主线程偏好）。
-  - 波次一原型已提供判定入口与单测锁定，字段落地即接上。
+  - 原型已提供判定入口与单测锁定，字段落地即接上。
 
 ### 6.1 RegC（regc_emitter / regc_backend）
 
-- **P2 直派发射分支** ✅ 波次二已落地
+- **P2 直派发射分支** ✅ 已落地
   - 落地形态：`emitIndyDirectCall`（`regc_emitter.cpp`，`emitInvokeDynamic` 入口按
     `site.form` 分派）；F1 → `emitIndyDirectFieldCall`（Get/Put[Static]<Type>Field，
     JNI 变体按字段描述符选择），F2 → `emitIndyDirectRecordCall`（Call*MethodA 直调
     访问器，jvalue marshalling 复用 cached-call 面的 tag/cast 工具）。现状 helper
     主体逐字保留为 `emitIndyHelperCall`——RuntimeHelper 站点与其余一切未 engage
-    形态的发射文本与波次二之前逐字节一致（零回归锚，测试锁定）。
+    形态的发射文本与实施前逐字节一致（零回归锚，测试锁定）。
   - 回退语义：单分支守卫 `if (_mj2x_indy_direct_state_<i> == 1 ||
     _mj2x_indy_direct_resolve_<i>()) { 快路 } else { 既有 helper 路径 }`；实例访问
     receiver NULL 显式 `_mj2x_regc_throw_null`（NPE 语义复现），字段/调用异常经
     ExceptionCheck 进既有 cleanup 分发。
-- **P3 站点缓存表 + finalize 发射** ✅ 波次二已落地
+- **P3 站点缓存表 + finalize 发射** ✅ 已落地
   - 落地形态：`emitIndyDirectCache`（`regc_backend.cpp`，finalize 期、密文缓冲定义
     之后方法体之前发射）。TU 级 static：`_mj2x_indy_direct_cls_<i>` +
     `_mj2x_indy_direct_fid_<i>`（F1）/`_mj2x_indy_direct_mid_<i>`（F2）+
@@ -314,7 +313,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
     `--strings-encrypt` 开启时走 `RegCCachePool::encryptedLiteralBuffer`（直派桩
     方法体内零字面量）。§3.1 的 `_mj2x_indy_direct_recv_<i>`（bound receiver 全局
     引用）未落地：receiver 一律取自站点实参（等价且无 stale 面）。
-- **P4（可选，wave 2 后半）D2 运行期破解升级** ❌ 波次二未做（保持提案状态）
+- **P4（可选）D2 运行期破解升级** ❌ 未做（保持提案状态）
   - 签名：`_mj2x_regc_indy_bsm_<i>` helper 内 target 取得后追加 crack 段：
     `Lookup.revealDirect(target)` → `MethodHandleInfo{getDeclaringClass, getName,
     getReferenceKind, getMethodType}` → 写 §3.1 缓存并置 READY。
@@ -326,7 +325,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
 ### 6.2 StackC（stackc_mir_invoke）
 
 - **P5 `emitInvokeDynamic` 增加 F1/F2 分支**
-  - 签名：`emitInvokeDynamic`（`stackc_mir_invoke.cpp:190`）入口按 `MIRInvokeDynamic` 携带的
+  - 签名：`emitInvokeDynamic`（`stackc_mir_invoke.cpp`）入口按 `MIRInvokeDynamic` 携带的
     form 分派（MIR 节点需透传 P1 载荷）。
   - 语义：F1 → 直接 Get/PutField JNI（经既有 `classExprForDescriptor` + 懒缓存 jfieldID）；
     F2 getter → 既有 cached invoke 路径调访问器。
@@ -334,7 +333,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
     直派同时消掉重建与 invokeWithArguments。
 - **P6（独立小步，建议先行）bootstrap 结果缓存**
   - 签名：`emitInvokeDynamic` 尾部把 `getTarget()` 结果缓存进 TU 级 `static jobject`
-    （对齐 RegC :1111 形态；`trackLocalRef` 换 global ref）。
+    （对齐 RegC 现行形态；`trackLocalRef` 换 global ref）。
   - 理由：不依赖任何判定、纯现状语义收紧，一行状态位即可让残留 indy 稳态从「全量重建」降到
     「NewLocalRef + invokeWithArguments」，是零风险先手棋。
 
@@ -356,7 +355,7 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
   调用与其他普通调用一样进密文 blob）；直派缓存表为 native 侧数据不进 blob。D2 破解升级在
   VMC4 不可用（VM 内无 crack 桩），VMC4 只消费 build-time 可判定形态——明确写入行为边界。
 
-### 6.4 LLVM（llvm_ir_backend，波次二顺带对齐）
+### 6.4 LLVM（llvm_ir_backend，顺带对齐）
 
 - **P10**：`indy:<idx>` 模块级缓存路径（capabilities §1 LLVM 节）按 `site.form` 分派：F1/F2
   直接发射 `Call*MethodA` / `Get*Field`（复用既有 class/method 缓存池），跳过运行时 bootstrap
@@ -370,9 +369,9 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
   canEmitSam 子集）+ 运行期（READY 写入前 jmethodID 非空；§4 降级阶梯单调回退）。
 - **异常传播**：同 target 方法 → 异常对象与分发路径一致；包装层差异由 build-time 校验排除；
   null receiver NPE trap 复用既有基础设施；bootstrap 自身抛出的异常在 CRACK 首调用经既有
-  helper 路径传播（与现状一致，不被 NPE 掩盖——`regc_emitter.cpp:845–846` 既有守卫保持）。
+  helper 路径传播（与现状一致，不被 NPE 掩盖——`regc_emitter.cpp–846` 既有守卫保持）。
 - **`--strings-encrypt` 交互**：直派桩中的 owner/name/desc 字符串一律走密文池
-  （P3/P5 显式要求，模板即 `emitIndyBsmArg` :1033 现状处理）；判定 reason 只存在于编译期日志，
+  （P3/P5 显式要求，模板即 `emitIndyBsmArg` 现状处理）；判定 reason 只存在于编译期日志，
   不落产物。
 - **#760 加密 / `--vmc4-encrypt-program` 组合**：见 P9——改写式方案下加密面零变化；native
   侧缓存表（cls/mid/ref）与既有 jmethodID/jclass 缓存同密级（不加密），无新增明文。
@@ -386,9 +385,9 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
 
 ## 8. 验证与验收锚点
 
-- 波次一：`mj2x/unittest/src/preprocessor/indy_dispatch_classify_test.cpp`（判定矩阵，见 §5）；
+- 原型：`mj2x/unittest/src/preprocessor/indy_dispatch_classify_test.cpp`（判定矩阵，见 §5）；
   既有 `invokedynamic_preprocessor_test.cpp` 全绿 = 零回归证明。
-- 波次二（RegC 发射落地，2026-09-17）：同文件新增 F1/F2 载荷 engagement 断言
+- RegC 发射落地（2026-09-17）：同文件新增 F1/F2 载荷 engagement 断言
   （直派形态 engage / lambda 捕获与保留名不 engage）；
   `mj2x/unittest/src/backend/regc_backend_test.cpp` 新增发射级锚——F1 读/写直派桩
   （守卫 + GetStatic/SetIntField + NPE trap）、F2 访问器直调（CallIntMethodA）、
@@ -396,5 +395,5 @@ state=CRACK（首调用）→ 走既有 _mj2x_regc_indy_bsm_<i> 拿 target（与
   RuntimeHelper 站点发射文本逐字节一致且零直派缓存、`--strings-encrypt` 组合下
   解析函数字面量密文化。按 `performance_evaluation_spec.md` 的覆盖率审计与
   microbench 对比（残留 helper vs F1/F2 直派）留待发射合流后执行。
-- 后续波次：三后端各一条 exec-level E2E（record site + 字段句柄 site）随 P5-P10
+- 后续：三后端各一条 exec-level E2E（record site + 字段句柄 site）随 P5-P10
   消费合流补齐。

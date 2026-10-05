@@ -31,7 +31,7 @@ distributable CRT (mj2x/mj2x-rt/src/regc/)
   │                               trace 状态与 intrinsic 实现(string_literal/
   │                               parse_* 等);生成代码 extern 直访
   ├─ mj2x_regc_intrinsic.c        wrapper/Math/Random/位操作 intrinsic 权威实现
-  │                               (原 mj2x-runtime in-tree C++ 版已删除,R3 整合)
+  │                               (原 mj2x-runtime in-tree C++ 版已删除)
   ├─ mj2x_regc_string.c           String UTF-16 operations + split fast path
   └─ mj2x_regc_string_builder.c   StringBuilder/StringBuffer opaque state
 ```

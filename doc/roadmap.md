@@ -44,7 +44,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 | Runtime core | crypto、kernel、stringpool、antidebug、antijvmti | 反侦测体系已落地（PR #797：Linux antidebug + enforcement + 检查点注入 + agent 检测） |
 | JDK intrinsic | 包装类、Math/Random、String/StringBuilder、位操作、System.arraycopy | 位操作 intrinsic 补全（PR #793）；System.arraycopy intrinsic 已完成（#819）；LLVM 侧 intrinsic 扩面对齐 RegC 面 **已完成**（PR #870：Math 纯函数 / 包装类 valueOf·xxxValue / Random / StringBuilder·StringBuffer 切片直调 mj2x-rt，toString 映射 to_jstring；String 类方法面保持 JNI 留待整类下沉） |
 | String/UTF-16 | Java String 语义、StringBuilder/StringBuffer | 依赖 libca UTF-16 或 mj2x 最小垫片 |
-| L4 变换 pass | DCE、常量传播、MBA、CFF、opaque predicate | 只有 RegC/R3 live 验证稳定后再扩 |
+| L4 变换 pass | DCE、常量传播、MBA、CFF、opaque predicate | 只有 RegC/C 运行时 live 验证稳定后再扩 |
 | 整类下沉 | 算法密集类内部方法全 native，边界保留 JNI | 先做无反射、无动态类加载、intrinsic 覆盖充分的类 |
 | Protected samples | StackC/RegC 样本、expected trace surface、hardening history | 必须给 mjdbg 攻击 |
 | safe-env（JNI 表保护） | 快照 + 入口恢复，`--regc-safe-env`（#748） | **已实现**（PR #754/#768）；mjdbg 侧 JNI-hook 分析工具（#756）作常态化 E2E 对手，进行中 |
