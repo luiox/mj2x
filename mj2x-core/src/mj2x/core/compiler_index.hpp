@@ -23,18 +23,6 @@ struct MethodID
     }
 };
 
-struct FieldID
-{
-    std::string owner;
-    std::string name;
-    std::string desc;
-
-    bool operator==(const FieldID& o) const
-    {
-        return owner == o.owner && name == o.name && desc == o.desc;
-    }
-};
-
 struct BackendResult;
 
 struct CompilerMethod
@@ -77,21 +65,12 @@ struct CompilerClass
 
 }   // namespace mj2x
 
-// -- hash specializations for MethodID / FieldID --
+// -- hash specialization for MethodID --
 namespace std {
 template<>
 struct hash<mj2x::MethodID>
 {
     size_t operator()(const mj2x::MethodID& id) const
-    {
-        return hash<string>()(id.owner) ^ (hash<string>()(id.name) << 1) ^
-               (hash<string>()(id.desc) << 2);
-    }
-};
-template<>
-struct hash<mj2x::FieldID>
-{
-    size_t operator()(const mj2x::FieldID& id) const
     {
         return hash<string>()(id.owner) ^ (hash<string>()(id.name) << 1) ^
                (hash<string>()(id.desc) << 2);
