@@ -610,10 +610,17 @@ void RegCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
         std::make_unique<RegCIntrinsicRegistry>(config.intrinsics);
 }
 
-/// #1193 缓存准入的字节码指令数上限：内联大小门（maxCalleeInstructions=48）
-/// 按 SSA 指令数计，单条字节码至少产出一条 SSA（仅 nop/空转会被吸收），
-/// 字节码数超过 4 倍上限的方法 SSA 计数必然超标，内联大小门必拒——不入
-/// 缓存零漂移，同时把预解析内存约束在与内联相关的形状上。
+/// #1193 缓存准入的字节码指令数上限（预解析内存粗护栏）。#1193 评审 P3-3
+/// 勘误：字节码数与 SSA 指令数之间没有严格下界关系——控制流字节码
+/// （goto/if*/return/athrow/switch）只落 terminator、nop 被吸收，均不产出
+/// SSA 指令，goto/nop 密集方法的 SSA 计数可远低于字节码数。故「字节码数
+/// 超限 ⇒ 内联大小门必拒」不成立，本护栏只是转换前的粗筛，两个方向都不
+/// 精确，均无正确性漂移：
+/// - 字节码超限但 SSA 计数达标：不入缓存，resolver 回落现场路径
+///   （fail-closed；这类形状保留 jar 条目序依赖窗口）。
+/// - 字节码达标但 SSA 计数超标：入缓存，内联大小门在 resolve 时拒绝
+///   （缓存条目浪费，无行为漂移）。
+/// 收紧为精确门需先转换再按 SSA 计数筛，与护栏省转换的目标矛盾，维持粗筛。
 constexpr int kInlineCacheMaxBytecodeInsns = 48 * 4;
 
 /// #1193：全输入预转换（Pipeline::compileMethods 在任何方法指令被清空前调用
