@@ -96,6 +96,7 @@ mj2x.cli.err.flag_requires_value_enum={0} requires a value: {1}
 mj2x.cli.err.invalid_int=invalid value for {0}: {1} (expected integer{2})
 mj2x.cli.err.invalid_value=invalid value for {0}: {1}
 mj2x.cli.err.invalid_hex=invalid hex value for {0}: {1}
+mj2x.cli.err.negative_unsigned={0} does not accept negative values: {1} (legal range {2})
 mj2x.cli.err.unknown_enum=Unknown value for {0}: {1} (expected: {2})
 mj2x.cli.err.unknown_flag_value=Unknown {0} value. Expected {1}.
 mj2x.cli.err.cfg_type_bool=config key must be a boolean: {0}

@@ -76,9 +76,12 @@ std::string trfs(const char* key, std::initializer_list<std::string_view> args)
         }                                                                                     \
         char*  end  = nullptr;                                                                \
         long long val = std::strtoll(v, &end, 0);                                             \
-        if (end == v || *end != '\0' || (lo != 0 && val < lo) || (hi != 0 && val > hi)) {     \
+        if (end == v || *end != '\0' || val < 0 || (lo != 0 && val < lo) || (hi != 0 && val > hi)) { \
             std::string range;                                                          \
-            if (lo != 0 || hi != 0) {                                                         \
+            if (lo == 0 && hi == 0) {                                                         \
+                range = ">= 0";                                                               \
+            }                                                                                 \
+            else {                                                                            \
                 range = "[" + std::to_string(lo) + "," + std::to_string(hi) + "]";            \
             }                                                                                 \
             e = trfs("mj2x.cli.err.invalid_int", {flag, v, range});                                                                         \
@@ -94,11 +97,14 @@ std::string trfs(const char* key, std::initializer_list<std::string_view> args)
             return false;                                                                     \
         }                                                                                     \
         const long long val = j.get<long long>();                                             \
-        if ((lo != 0 && val < lo) || (hi != 0 && val > hi)) {                                 \
+        if (val < 0 || (lo != 0 && val < lo) || (hi != 0 && val > hi)) {                      \
             std::string range;                                                                 \
-            if (lo != 0 || hi != 0) {                                                         \
+            if (lo == 0 && hi == 0) {                                                          \
+                range = ">= 0";                                                                \
+            }                                                                                  \
+            else {                                                                             \
                 range = "[" + std::to_string(lo) + "," + std::to_string(hi) + "]";             \
-            }                                                                                 \
+            }                                                                                  \
             e = trfs("mj2x.cli.err.cfg_int_range", {jp, range});                              \
             return false;                                                                     \
         }                                                                                     \
@@ -113,6 +119,11 @@ std::string trfs(const char* key, std::initializer_list<std::string_view> args)
             e = trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
             return false;                                                                     \
         }                                                                                     \
+        if (v[0] == '-') {                                                                    \
+            e = trfs("mj2x.cli.err.negative_unsigned",                                        \
+                     {flag, v, "[0,18446744073709551615]"});                                  \
+            return false;                                                                     \
+        }                                                                                     \
         char*      end = nullptr;                                                             \
         const unsigned long long val = std::strtoull(v, &end, 0);                             \
         if (end == v || *end != '\0') {                                                       \
@@ -124,13 +135,18 @@ std::string trfs(const char* key, std::initializer_list<std::string_view> args)
     }                                                                                         \
     static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
     {                                                                                         \
-        if (j.is_number_unsigned()) {                                                         \
+        if (j.is_number_unsigned()) {                                                     \
             o.member = j.get<uint64_t>();                                                     \
             return true;                                                                      \
         }                                                                                     \
         if (j.is_number_integer() && j.get<long long>() >= 0) {                               \
             o.member = static_cast<uint64_t>(j.get<long long>());                             \
             return true;                                                                      \
+        }                                                                                     \
+        if (j.is_number_integer()) {                                                          \
+            e = trfs("mj2x.cli.err.negative_unsigned",                                        \
+                     {jp, j.dump(), "[0,18446744073709551615]"});                             \
+            return false;                                                                     \
         }                                                                                     \
         e = trfs("mj2x.cli.err.cfg_type_uint", {jp});                  \
         return false;                                                                         \
@@ -141,6 +157,11 @@ std::string trfs(const char* key, std::initializer_list<std::string_view> args)
     {                                                                                         \
         if (!v) {                                                                             \
             e = trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
+            return false;                                                                     \
+        }                                                                                     \
+        if (v[0] == '-') {                                                                    \
+            e = trfs("mj2x.cli.err.negative_unsigned",                                        \
+                     {flag, v, "[0,0xFFFFFFFF]"});                                            \
             return false;                                                                     \
         }                                                                                     \
         char*  end = nullptr;                                                                 \
@@ -156,6 +177,11 @@ std::string trfs(const char* key, std::initializer_list<std::string_view> args)
     {                                                                                         \
         if (j.is_string()) {                                                                  \
             const std::string s = j.get<std::string>();                                       \
+            if (!s.empty() && s[0] == '-') {                                                  \
+                e = trfs("mj2x.cli.err.negative_unsigned",                                    \
+                         {jp, s, "[0,0xFFFFFFFF]"});                                          \
+                return false;                                                                 \
+            }                                                                                 \
             char*            end = nullptr;                                                   \
             const unsigned long val = std::strtoul(s.c_str(), &end, 16);                     \
             if (end == s.c_str() || *end != '\0') {                                           \
@@ -603,6 +629,10 @@ bool json_regc_safe_env_debug(CliOptions& o, const json& j, std::string& e)
 bool cli_vmc4_seed(CliOptions& o, const char* v, std::string& e)
 {
     if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--vmc4-seed"}); return false; }
+    if (v[0] == '-') {
+        e = trfs("mj2x.cli.err.negative_unsigned", {"--vmc4-seed", v, "[0,18446744073709551615]"});
+        return false;
+    }
     // 16 进制（0x...）或十进制均可，strtoull 自动识别（历史行为）。
     char*      end = nullptr;
     const unsigned long long val = std::strtoull(v, &end, 0);
@@ -623,6 +653,11 @@ bool json_vmc4_seed(CliOptions& o, const json& j, std::string& e)
     }
     if (j.is_string()) {
         const std::string s = j.get<std::string>();
+        if (!s.empty() && s[0] == '-') {
+            e = trfs("mj2x.cli.err.negative_unsigned",
+                     {"vmc4_seed", s, "[0,18446744073709551615]"});
+            return false;
+        }
         char*             end = nullptr;
         const unsigned long long val = std::strtoull(s.c_str(), &end, 0);
         if (end == s.c_str() || *end != '\0') {
@@ -640,6 +675,10 @@ bool json_vmc4_seed(CliOptions& o, const json& j, std::string& e)
 bool cli_native_lib_key(CliOptions& o, const char* v, std::string& e)
 {
     if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--native-lib-key"}); return false; }
+    if (v[0] == '-') {
+        e = trfs("mj2x.cli.err.negative_unsigned", {"--native-lib-key", v, "[0,0xFFFFFFFF]"});
+        return false;
+    }
     char*  end = nullptr;
     const unsigned long val = std::strtoul(v, &end, 16);
     if (end == v || *end != '\0') {
@@ -654,6 +693,10 @@ bool json_native_lib_key(CliOptions& o, const json& j, std::string& e)
 {
     if (j.is_string()) {
         const std::string s = j.get<std::string>();
+        if (!s.empty() && s[0] == '-') {
+            e = trfs("mj2x.cli.err.negative_unsigned", {"native_lib_key", s, "[0,0xFFFFFFFF]"});
+            return false;
+        }
         char*             end = nullptr;
         const unsigned long val = std::strtoul(s.c_str(), &end, 16);
         if (end == s.c_str() || *end != '\0') {
@@ -930,7 +973,9 @@ nlohmann::json buildConfigSchemaJson()
             break;
         case ParamType::Int:
             node["type"] = "integer";
-            if (p.minValue != 0) node["minimum"] = p.minValue;
+            // 负值统一 fail-closed（DEF_INT 恒拒），minValue=0（无追加下界）
+            // 的 schema 下界即 0，与解析行为同源。
+            node["minimum"] = p.minValue;
             if (p.maxValue != 0) node["maximum"] = p.maxValue;
             node["default"] = p.defaultStr[0] ? std::stoll(p.defaultStr) : 0;
             break;

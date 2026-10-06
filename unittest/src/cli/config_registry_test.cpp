@@ -273,10 +273,11 @@ TEST(ConfigRegistryTest, SchemaAnnotationsMatchRegistrySemantics)
               std::string::npos)
         << out;
 
-    // 数值范围（dump 键按字母序；minimum 仅对 >0 的下界输出）。
+    // 数值范围（dump 键按字母序；Int 恒非负，minimum 恒输出——无追加下界即为 0）。
     EXPECT_NE(out.find("\"regc_cff_dead\": {"), std::string::npos) << out;
-    EXPECT_NE(out.find("\"maximum\": 3,\n      \"type\": \"integer\""), std::string::npos)
+    EXPECT_NE(out.find("\"minimum\": 0,\n      \"type\": \"integer\""), std::string::npos)
         << out;
+    EXPECT_NE(out.find("\"maximum\": 3,\n      \"minimum\": 0,"), std::string::npos) << out;
     EXPECT_NE(out.find("\"minimum\": 1,"), std::string::npos) << out;
     EXPECT_NE(out.find("\"maximum\": 4,"), std::string::npos) << out;
 

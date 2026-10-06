@@ -91,10 +91,16 @@
 - 性能遗留：SSA 构建 O(n²)（fallthroughBlock 线性扫 / findBlockByLabel /
   reaching_def 无邻接表）；JAR 输出每条目全量拷贝；llvmir
   GlobalStringTable::intern 线性查。
-- CLI 无下界整数参数负值回绕。
+- CLI 无下界整数参数负值回绕（2026-10-06 收口：Int/UInt64/Hex 及手写
+  vmc4-seed、native-lib-key 校验器恒拒负值并给合法范围提示，schema minimum
+  同源；豁免清单为空，现存整数参数均无负值语义）。
 - 死代码清理批次：cli dispatcher 别名死分支核查（2026-10-06 核查：唯一别名面
   `--backend cbackend/c` 有 cli_test 用例 + user_guide.md + 双语翻译三重活引用，
   属文档化的旧脚本兼容契约，非死代码，跳过；MONITOR_EXIT 死枚举已删）。
+- 挂账（libs 层，跨界）：`jbytecode::core::Type::getArgumentTypes("")` 对空
+  描述符做 `byte_at(1)` 越界读，异常类型随越界字节内容漂移；mj2x 侧
+  indy_bootstrap_plan 已加空串守卫确定性抛 invalid_argument，libs 层其余
+  调用方的暴露面待共享层统一收口。
 - 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层
   各自为政，需在 capabilities/AGENTS 层面定一次豁免边界。
 

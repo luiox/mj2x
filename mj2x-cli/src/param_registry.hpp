@@ -107,9 +107,9 @@ struct CliOptions
 enum class ParamType
 {
     Bool,       ///< 无值开关
-    Int,        ///< 有符号整数（minValue/maxValue 约束，0 表示无界）
-    UInt64,     ///< 无符号 64 位（strtoull 语义，0x 前缀支持）
-    Hex,        ///< 16 进制解析（strtoul base 16）
+    Int,        ///< 非负整数（恒拒负值；minValue/maxValue 追加界，0 表示无追加界）
+    UInt64,     ///< 无符号 64 位（恒拒负值字面量；strtoull 语义，0x 前缀支持）
+    Hex,        ///< 16 进制解析（恒拒负号；strtoul base 16）
     Enum,       ///< 字符串枚举（enumValues 逗号分隔）
     String,     ///< 字符串
     StringList, ///< 字符串数组（JSON array / CLI 可重复）

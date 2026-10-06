@@ -3882,6 +3882,44 @@ TEST_P(CliLangTest, NegativeArgumentsFail)
     EXPECT_NE(missingInput.out.find("load failed"), std::string::npos) << missingInput.out;
 }
 
+/// 整数参数负值 fail-closed：Int/UInt64/Hex 三类一律拒绝负值字面量并给合法
+/// 范围提示（校验环先于输入加载，负值即报即退）。豁免清单为空——注册表现有
+/// 整数参数（计数/档位/毫秒/周期/种子/客户端号）均无负值语义。
+TEST(CliTest, NegativeIntegerArgsFailClosed)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    // Int 无追加界（lo=0,hi=0）：提示 ">= 0"。
+    auto unboundedInt = runScript({q(cli) + " --regc-cff-dead=-1"});
+    EXPECT_NE(unboundedInt.exitCode, 0);
+    EXPECT_NE(unboundedInt.out.find("--regc-cff-dead"), std::string::npos) << unboundedInt.out;
+    EXPECT_NE(unboundedInt.out.find(">= 0"), std::string::npos) << unboundedInt.out;
+
+    // Int 有追加界（lo=0,hi=3）：负值同样拒，提示既有区间。
+    auto boundedInt = runScript({q(cli) + " --vmc4-alias=-1"});
+    EXPECT_NE(boundedInt.exitCode, 0);
+    EXPECT_NE(boundedInt.out.find("[0,3]"), std::string::npos) << boundedInt.out;
+
+    // UInt64：负字面量此前被 strtoull 静默回绕为 2^64-1，现拒绝并给范围。
+    auto u64 = runScript({q(cli) + " --client-id=-1"});
+    EXPECT_NE(u64.exitCode, 0);
+    EXPECT_NE(u64.out.find("--client-id"), std::string::npos) << u64.out;
+    EXPECT_NE(u64.out.find("[0,18446744073709551615]"), std::string::npos) << u64.out;
+
+    // 十六进制/混合种子（base0 strtoull）：负号此前被静默回绕，现拒绝并给范围。
+    auto hex = runScript({q(cli) + " --vmc4-seed=-1"});
+    EXPECT_NE(hex.exitCode, 0);
+    EXPECT_NE(hex.out.find("--vmc4-seed"), std::string::npos) << hex.out;
+    EXPECT_NE(hex.out.find("[0,18446744073709551615]"), std::string::npos) << hex.out;
+
+    // 32 位 hex（strtoul base16）：负号此前按补码回绕，现拒绝并给范围。
+    auto hex32 = runScript({q(cli) + " --native-lib-key=-1"});
+    EXPECT_NE(hex32.exitCode, 0);
+    EXPECT_NE(hex32.out.find("--native-lib-key"), std::string::npos) << hex32.out;
+    EXPECT_NE(hex32.out.find("[0,0xFFFFFFFF]"), std::string::npos) << hex32.out;
+}
+
 INSTANTIATE_TEST_SUITE_P(
     CliLangs, CliLangTest,
     ::testing::Values(
