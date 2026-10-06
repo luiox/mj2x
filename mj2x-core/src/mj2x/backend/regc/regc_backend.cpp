@@ -215,17 +215,6 @@ const char* regcType(PrimitiveKind kind)
     }
 }
 
-const char* defaultReturnValue(PrimitiveKind kind)
-{
-    switch (kind) {
-    case PrimitiveKind::VOID: return "";
-    case PrimitiveKind::FLOAT: return "0.0f";
-    case PrimitiveKind::DOUBLE: return "0.0";
-    case PrimitiveKind::OBJECT: return "NULL";
-    default: return "0";
-    }
-}
-
 // ---------------------------------------------------------------------------
 // RegisterNatives naming helpers.
 //
@@ -308,30 +297,6 @@ bool shouldKeepBytecodeForCompatibility(const std::vector<Block*>& blocks, std::
         }
     }
     return false;
-}
-
-std::string emitFailureBody(const std::string& reason, PrimitiveKind retKind)
-{
-    CSourceStream out;
-    out.indent();
-    {
-        CSourceStream line;
-        line.append("/* RegC lowering failed: ");
-        line.append(reason);
-        line.append(" */");
-        out.emitLine(line.build().ref());
-    }
-    if (retKind == PrimitiveKind::VOID) {
-        out.emitLine("return;");
-    }
-    else {
-        CSourceStream line;
-        line.append("return ");
-        line.append(defaultReturnValue(retKind));
-        line.append(";");
-        out.emitLine(line.build().ref());
-    }
-    return out.str();
 }
 
 /// 发射单个 native 方法的 C 函数（不透明 `static ... JNICALL __mj2x_c_<hash>`）。
@@ -431,14 +396,6 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
         if (traceCallLog) {
             // --trace-call-log:运行时开关(#894 B 类下沉后由 mj2x-rt 实现)
             out.emitLine("mj2x_regc_set_trace_call_log(1);");
-        }
-
-        if (!emitted.ok) {
-            const std::string failure = emitFailureBody(emitted.reason, retKind);
-            out.emitRaw(failure);
-            out.emitLine("}");
-            out.emitBlankLine();
-            return out.str();
         }
 
         {
