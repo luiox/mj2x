@@ -92,7 +92,9 @@
   reaching_def 无邻接表）；JAR 输出每条目全量拷贝；llvmir
   GlobalStringTable::intern 线性查。
 - CLI 无下界整数参数负值回绕。
-- 死代码清理批次：MONITOR_EXIT 死枚举、cli dispatcher 别名死分支。
+- 死代码清理批次：cli dispatcher 别名死分支核查（2026-10-06 核查：唯一别名面
+  `--backend cbackend/c` 有 cli_test 用例 + user_guide.md + 双语翻译三重活引用，
+  属文档化的旧脚本兼容契约，非死代码，跳过；MONITOR_EXIT 死枚举已删）。
 - 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层
   各自为政，需在 capabilities/AGENTS 层面定一次豁免边界。
 

@@ -1095,8 +1095,7 @@ void StackCBackend::Impl::emitNode(const MIRNode* node, codegen::CSourceStream& 
         break;
     case MIRKind::CHECK_CAST: emitCheckCast(static_cast<const MIRCheckCast*>(node), out); break;
     case MIRKind::INSTANCE_OF: emitInstanceOf(static_cast<const MIRInstanceOf*>(node), out); break;
-    case MIRKind::MONITOR_ENTER:
-    case MIRKind::MONITOR_EXIT: emitMonitor(static_cast<const MIRMonitor*>(node), out); break;
+    case MIRKind::MONITOR_ENTER: emitMonitor(static_cast<const MIRMonitor*>(node), out); break;
     case MIRKind::THROW: emitThrow(static_cast<const MIRThrow*>(node), out); break;
     default: break;
     }

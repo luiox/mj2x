@@ -1663,7 +1663,6 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
                 if (!lowerInstanceOf(ca::core::tag_cast::cast<MIRInstanceOf>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::MONITOR_ENTER:
-            case MIRKind::MONITOR_EXIT:
                 if (!lowerMonitor(ca::core::tag_cast::cast<MIRMonitor>(node.get()), d, reason)) return false;
                 break;
             case MIRKind::NOP:

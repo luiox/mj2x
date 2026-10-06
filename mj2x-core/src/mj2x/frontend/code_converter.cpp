@@ -1152,7 +1152,6 @@ static const char* mirKindName(MIRKind k)
     case MIRKind::CHECK_CAST: return "CHECKCAST";
     case MIRKind::INSTANCE_OF: return "INSTANCEOF";
     case MIRKind::MONITOR_ENTER: return "MONITOR_ENTER";
-    case MIRKind::MONITOR_EXIT: return "MONITOR_EXIT";
     case MIRKind::THROW: return "ATHROW";
     case MIRKind::FRAME: return "FRAME";
     default: return "???";

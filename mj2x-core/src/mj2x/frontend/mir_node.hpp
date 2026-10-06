@@ -62,7 +62,6 @@ enum class MIRKind : uint8_t
     CHECK_CAST,
     INSTANCE_OF,
     MONITOR_ENTER,
-    MONITOR_EXIT,
     THROW,
     FRAME,
     LINE,
