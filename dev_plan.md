@@ -92,7 +92,7 @@
   reaching_def 无邻接表）；JAR 输出每条目全量拷贝；llvmir
   GlobalStringTable::intern 线性查。
 - CLI 无下界整数参数负值回绕。
-- 死代码清理批次：shouldKeepBytecodeForCompatibility 恒 false、无引用 intrinsic string
+- 死代码清理批次：无引用 intrinsic string
   helper、MONITOR_EXIT 死枚举、cli dispatcher 别名死分支。
 - 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层
   各自为政，需在 capabilities/AGENTS 层面定一次豁免边界。

@@ -246,59 +246,6 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
     return kinds;
 }
 
-// high-risk 运行时调用黑名单：命中则该方法保留字节码路径、不转 native（fail-closed）。
-// 分组便于逐项放开——每组放开的前置条件不同：
-//
-//   [反射组] 已放开（R6 引用管理前置完成后）。根因是 call_ref 返回的 Class/Method/Field
-//            local ref 生命周期不受管理，现由 emitFunction 的 PushLocalFrame/PopLocalFrame
-//            统一批量释放，反射临时 ref 不再撑爆 JNI 16 槽 local ref 表。
-//   [类加载]  已放开（R6-B）：ClassLoader 的 loadClass(String)/getResourceAsStream(String)
-//            经 ref 参数与 Class/InputStream ref 返回值，引用管理已吸收。defineClass(byte[])
-//            的 byte[] 参数经 collect_args array 修正（R6-A）正确传递。
-//   [并发]    已放开（thread-local env/ctx 修复后）：历史根因是全局 JNIEnv 在多线程 native
-//            并发（主线程 + 线程池线程）下互相覆盖，导致 Thread.sleep 等在 native 帧调用时
-//            破坏线程池 monitor 状态抛 IllegalMonitorStateException。thread_local 修复后每个
-//            线程持有独立 env/ctx，该根因消除；java/lang/Thread 与 java/util/concurrent/* 的
-//            普通方法调用均为常规 JNI 调用，恢复转 native。
-//   [IO]      已放开（R6-A）：InputStream/ByteArrayInputStream 的 read/available 等返回 int，
-//            byte[] 读写经 ref-array helper，引用管理已吸收 native 帧内产生的 ref。
-//   [System]  已放开：setSecurityManager/getSecurityManager 在 JDK17 直接抛
-//            UnsupportedOperationException，native 路径调用行为一致；exit 为常规静态调用。
-bool isCompatibilityRiskCall(const ca::str::Utf8StringRef& owner, const ca::str::Utf8StringRef& name)
-{
-    (void)owner;
-    (void)name;
-    return false;
-}
-
-bool shouldKeepBytecodeForCompatibility(const std::vector<Block*>& blocks, std::string& reason)
-{
-    // 注意：原 lambda$ 整体 skip 已撤销。javac 合成的 lambda$ 方法现在由
-    // InvokeDynamicPreprocessor（regc_invokedynamic_strategy.md 阶段2-2f）把每个
-    // LambdaMetafactory 站点重写为合成实现类，invokedynamic 标记与 lambda$ 体在进入
-    // RegC 前已被消除，故无需再按方法名前缀 skip。覆盖见 e2e InvokeDynamic*LambdaRoundTrip。
-    // 异常表阈值放宽：lowering 三层对 catch 数量无上限（实测 pack.Main 14 个 catch 正常）。
-    // 原 >4 阈值过保守，会把 main 等含多 try-catch 的方法误伤。此处不再按异常表数量 skip。
-    for (auto* block : blocks) {
-        for (const auto& node : block->nodes) {
-            // invokedynamic（阶段3 自定义 bootstrap）由 SSA 层登记站点并生成
-            // Intrinsic("indy:<idx>")，RegC emit 运行时解析，不再整方法保留字节码。
-            if (node->kind == MIRKind::INVOKE_DYNAMIC) {
-                continue;
-            }
-            if (node->kind == MIRKind::INVOKE) {
-                const auto* invoke = static_cast<const MIRInvoke*>(node.get());
-                if (isCompatibilityRiskCall(invoke->owner, invoke->name)) {
-                    reason = "high-risk runtime call remains on bytecode path: " +
-                             invoke->owner.to_std_string() + "." + invoke->name.to_std_string();
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
 /// 发射单个 native 方法的 C 函数（不透明 `static ... JNICALL __mj2x_c_<hash>`）。
 ///
 /// 这是受 RegisterNatives 绑定的函数：签名必须匹配 Java 描述符的 JNI 调用约定
@@ -718,17 +665,8 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     const std::string methodName = mn->name.to_std_string();
     const std::string methodDesc = mn->desc.to_std_string();
     const bool        isStatic   = (mn->access & Opcodes::ACC_STATIC) != 0;
+    std::string       reason;
 
-    std::string reason;
-    // 内部类（含 $）整体 skip 已撤销：RegC 现用 RegisterNatives 动态绑定，
-    // 函数名/符号导出与 JNI 查找完全脱钩，内部类的 native 方法可以像普通类一样注册。
-    if (shouldKeepBytecodeForCompatibility(blocks, reason)) {
-        CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}\n", className.c_str(),
-               methodName.c_str(),
-               methodDesc.c_str(),
-               reason.c_str());
-        return backendResult;
-    }
 
     // 类内预登记：本类全部计划转换方法的 regc_* 函数名提前可知（functionName
     // 只依赖 owner/name/desc）。private-this 直接调用依赖它——同类方法转换
