@@ -114,21 +114,28 @@
    （低优先级，纯记录）。
 5. #1194 P3-4：模板 glob 收编 `src/generated/` 下任意 .c/.cpp——目录为 CLI
    专有无现风险；若未来开放手工放置需加来源约束。
+6. IndyBootstrapPlanTest.WalkEdgeShapes 非确定性翻车（2026-10-06 T3 评审
+   发现）：`Type::getArgumentTypes("")` 对空描述符自 `byte_at(1)` 起越界读
+   零长串，结果随栈残留字节浮动，同一二进制逐次运行可红可绿（实测 5 连跑
+   2 红），全量门禁对任意二进制布局变化噪声化。消除判据：libs/libjbytecode
+   的 type.cpp `getArgumentCount`/`getArgumentTypes` 入口加 `length < 2`
+   边界检查显式抛 invalid_argument，测试改用合法最小描述符；动共享层需
+   跨线回归。
 
 **产品/机器决策项（需拍板）**
 
-6. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——
+7. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——
    改仓库样本路径还是提升为配置项。
-7. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2
+8. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2
     （仅剩 zig 系），integration LLVM 列 28 例在 CI 转实跑。
-8. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与
+9. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与
     「不落明文 DLL」威胁模型冲突——接受现状或重评威胁模型。
-9. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs
+10. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs
     收紧（Windows 无影响，POSIX 加固项）。
 
 **编排层**
 
-10. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
+11. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
     不持锁、`xmake build <target>` 单 target 单命令——落 doc_ai 归档页，
     供后续 sub agent 会话直接引用。
 12. test_strategy.md 重写：计划期表格（落地波次列）大多已落地，删表留分层
