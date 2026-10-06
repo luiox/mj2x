@@ -1,5 +1,7 @@
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 
+#include <stdexcept>
+
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string_arena.hpp"
 
@@ -8,8 +10,12 @@ namespace mj2x {
 std::vector<IndyBsmSlot> planIndyBsmSlots(const std::string& bsmDesc, size_t bsmArgCount)
 {
     std::vector<IndyBsmSlot> slots;
-    // 空描述符不特判：Type::getArgumentTypes 与切换前三后端一致抛
-    // Invalid descriptor（畸形 bootstrap 的原失败面保持）。
+    if (bsmDesc.empty()) {
+        // 空描述符按 golden 契约确定性抛 Invalid descriptor。不特判会走进
+        // Type::getArgumentTypes 的空串越界读（libs 层遗留，异常类型随越界
+        // 字节内容漂移，同一二进制逐次运行可变的 flake）。
+        throw std::invalid_argument("Invalid descriptor: empty bootstrap method descriptor");
+    }
     const auto bsmArgTypes =
         jbytecode::core::Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
     // bsmArgIndex 语义（对齐切换前三后端原判定，bsmArgs 不含 Lookup/name/type
