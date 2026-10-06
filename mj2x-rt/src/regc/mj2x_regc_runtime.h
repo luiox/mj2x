@@ -75,7 +75,6 @@ MJ2X_REGC_API extern mj2x_regc_static_method_cache _mj2x_rt_double_parse_double_
 MJ2X_REGC_API extern mj2x_regc_class_cache _mj2x_rt_npe_class_cache;
 MJ2X_REGC_API extern mj2x_regc_class_cache _mj2x_rt_cce_class_cache;
 MJ2X_REGC_API extern mj2x_regc_class_cache _mj2x_rt_oom_class_cache;
-MJ2X_REGC_API extern mj2x_regc_class_cache _mj2x_rt_sioobe_class_cache;
 MJ2X_REGC_API extern mj2x_regc_class_cache _mj2x_rt_uoe_class_cache;
 
 // ---- helper 原型 ----
@@ -266,10 +265,7 @@ MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_float_to_string(mj2x_regc_context* contex
 MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_double_to_string(mj2x_regc_context* context, double value);
 MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_object_to_string(mj2x_regc_context* context, mj2x_ref value);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_is_string(mj2x_ref value);
-MJ2X_REGC_API int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_string_length(mj2x_ref value);
-MJ2X_REGC_API uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index);
-MJ2X_REGC_API int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_string_is_empty(mj2x_ref value);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix);

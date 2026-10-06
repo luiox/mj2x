@@ -66,7 +66,6 @@ mj2x_regc_static_method_cache _mj2x_rt_double_parse_double_cache = {
 mj2x_regc_class_cache _mj2x_rt_npe_class_cache = {"java/lang/NullPointerException", NULL};
 mj2x_regc_class_cache _mj2x_rt_cce_class_cache = {"java/lang/ClassCastException", NULL};
 mj2x_regc_class_cache _mj2x_rt_oom_class_cache = {"java/lang/OutOfMemoryError", NULL};
-mj2x_regc_class_cache _mj2x_rt_sioobe_class_cache = {"java/lang/StringIndexOutOfBoundsException", NULL};
 mj2x_regc_class_cache _mj2x_rt_uoe_class_cache = {"java/lang/UnsupportedOperationException", NULL};
 mj2x_regc_context* _mj2x_regc_current_context(void) { return &_mj2x_regc_ctx; }
 
@@ -879,55 +878,9 @@ int32_t _mj2x_intrinsic_is_string(mj2x_ref value) {
     return (*_mj2x_regc_env)->IsInstanceOf(_mj2x_regc_env, (jobject)value, cls) ? 1 : 0;
 }
 
-int32_t _mj2x_intrinsic_string_equals(mj2x_ref lhs, mj2x_ref rhs) {
-    if (lhs == NULL) { _mj2x_regc_throw_null("String.equals"); return 0; }
-    if (lhs == rhs) return 1;
-    if (rhs == NULL || !_mj2x_intrinsic_is_string(rhs)) return 0;
-    jsize lhs_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)lhs);
-    jsize rhs_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)rhs);
-    if (lhs_len != rhs_len) return 0;
-    if (lhs_len == 0) return 1;
-    const jchar* lhs_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)lhs, NULL);
-    if (lhs_chars == NULL) return 0;
-    const jchar* rhs_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)rhs, NULL);
-    if (rhs_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)lhs, lhs_chars); return 0; }
-    int32_t same = 1;
-    for (jsize i = 0; i < lhs_len; ++i) { if (lhs_chars[i] != rhs_chars[i]) { same = 0; break; } }
-    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)lhs, lhs_chars);
-    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)rhs, rhs_chars);
-    return same;
-}
-
 int32_t _mj2x_intrinsic_string_length(mj2x_ref value) {
     if (value == NULL) { _mj2x_regc_throw_null("String.length"); return 0; }
     return (int32_t)(*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
-}
-
-uint16_t _mj2x_intrinsic_string_char_at(mj2x_ref value, int32_t index) {
-    if (value == NULL) { _mj2x_regc_throw_null("String.charAt"); return 0; }
-    jsize len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
-    if (index < 0 || index >= len) {
-        jclass ex = _mj2x_regc_cached_class(&_mj2x_rt_sioobe_class_cache);
-        if (ex != NULL) (*_mj2x_regc_env)->ThrowNew(_mj2x_regc_env, ex, "String.charAt");
-        return 0;
-    }
-    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
-    if (chars == NULL) return 0;
-    uint16_t ch = (uint16_t)chars[index];
-    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
-    return ch;
-}
-
-int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value) {
-    if (value == NULL) { _mj2x_regc_throw_null("String.hashCode"); return 0; }
-    jsize len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
-    if (len == 0) return 0;
-    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
-    if (chars == NULL) return 0;
-    uint32_t hash = 0;
-    for (jsize i = 0; i < len; ++i) hash = hash * 31u + (uint32_t)chars[i];
-    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
-    return (int32_t)hash;
 }
 
 int32_t _mj2x_intrinsic_string_is_empty(mj2x_ref value) {
