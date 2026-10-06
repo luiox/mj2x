@@ -2,9 +2,13 @@
 
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
+#include "libca/log/logger.hpp"
+#include "libca/log/logger_registry.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
@@ -15,6 +19,43 @@ using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
 namespace {
+
+/// @brief 捕获 regc target 日志的后端（#1193 内联可诊性断言面）。
+class CapturingRegcLogBackend final : public ca::log::ILogBackend
+{
+public:
+    void log(ca::log::Level level, std::string_view target, std::string_view file, int line,
+             const ca::log::OpaqueFormat& message) override
+    {
+        (void)target;
+        (void)file;
+        (void)line;
+        std::string text;
+        message.render_to(text);
+        entries.emplace_back(level, std::move(text));
+    }
+
+    std::vector<std::pair<ca::log::Level, std::string>> entries;
+};
+
+/// @brief 作用域内接管 regc target 的 logger，析构时注销（测试隔离）。
+class ScopedRegcLogCapture
+{
+public:
+    ScopedRegcLogCapture()
+        : backend_(std::make_shared<CapturingRegcLogBackend>())
+    {
+        ca::log::LoggerRegistry::register_logger("regc",
+                                                 std::make_shared<ca::log::Logger>(backend_));
+    }
+
+    ~ScopedRegcLogCapture() { ca::log::LoggerRegistry::unregister_logger("regc"); }
+
+    CapturingRegcLogBackend& backend() const { return *backend_; }
+
+private:
+    std::shared_ptr<CapturingRegcLogBackend> backend_;
+};
 
 std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char* desc,
                                        std::initializer_list<AbstractInsnNode*> insns, int maxStack,
@@ -1204,4 +1245,88 @@ TEST(RegCBackendTest, WithoutBeforeCompileClearedCalleeFallsBackToJniCall)
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
     EXPECT_NE(result.text.find("CallStaticIntMethodA"), std::string::npos) << result.text;
+}
+
+// ---------------------------------------------------------------------------
+// #1193 评审 P3-1：逐方法 unresolvable WARN 不得被 INFO 分支压制。
+// 方法内同时存在成功内联（Callee.add 缓存命中）与 unresolvable 调用点
+// （Other.missing 类不在 index）时，旧实现 else-if 串联——WARN 只在
+// inlinedCalls==0 时发射，部分内联的方法反而拿不到可诊性输出（可见性
+// 不对称）。红相：删 WARN 独立发射 → 本测试转红。
+// ---------------------------------------------------------------------------
+
+TEST(RegCBackendTest, UnresolvableWarnNotSuppressedWhenOtherCallsInlined)
+{
+    auto add = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
+                          {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                           new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                          2, 2);
+    // caller: static int caller(int a, int b) {
+    //             int s = Callee.add(a, b);     // 可解析 → 内联
+    //             return s + Other.missing(a);  // 类不在 index → unresolvable
+    //         }
+    auto caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(II)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0),
+                              new VarInsnNode(Opcodes::ILOAD, 1),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("Callee"),
+                                                 ca::str::Utf8StringRef::from_cstr("add"),
+                                                 ca::str::Utf8StringRef::from_cstr("(II)I"), false),
+                              new VarInsnNode(Opcodes::ISTORE, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("Other"),
+                                                 ca::str::Utf8StringRef::from_cstr("missing"),
+                                                 ca::str::Utf8StringRef::from_cstr("(I)I"), false),
+                              new InsnNode(Opcodes::IADD),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 3);
+
+    auto makeClassNode = [](const char* name) {
+        auto cn       = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name      = ca::str::Utf8StringRef::from_cstr(name);
+        cn->version   = Opcodes::V1_8;
+        cn->access    = Opcodes::ACC_PUBLIC;
+        cn->superName = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        return cn;
+    };
+
+    CompilerClass calleeCls;
+    calleeCls.classNode = makeClassNode("Callee");
+    calleeCls.methods.push_back(CompilerMethod{add.get(), true, false, {}});
+    CompilerClass callerCls;
+    callerCls.classNode = makeClassNode("Caller");
+    callerCls.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
+
+    CompilerIndex index;
+    index.addClass("Callee", std::move(calleeCls));
+    index.addClass("Caller", std::move(callerCls));
+    CompilerMethod* callerMethod = &index.getClass("Caller")->methods[0];
+
+    RegCBackend backend;
+    backend.beforeCompile(index);
+
+    ScopedRegcLogCapture capture;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto   blocks = converter.convert(*caller);
+    auto   result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+
+    bool sawInlineInfo  = false;
+    bool sawUnresolvableWarn = false;
+    for (const auto& [level, text] : capture.backend().entries) {
+        if (level == ca::log::Level::Info && text.find("inline 1 calls in Caller.caller") !=
+                                                 std::string::npos) {
+            sawInlineInfo = true;
+        }
+        if (level == ca::log::Level::Warn &&
+            text.find("inline unresolvable callees in Caller.caller(II)I") != std::string::npos) {
+            sawUnresolvableWarn = true;
+        }
+    }
+    EXPECT_TRUE(sawInlineInfo) << "INFO 行必须保留（inlinedCalls>0 汇总）";
+    EXPECT_TRUE(sawUnresolvableWarn)
+        << "unresolvable 逐方法 WARN 不得因同方法存在成功内联而被压制";
 }

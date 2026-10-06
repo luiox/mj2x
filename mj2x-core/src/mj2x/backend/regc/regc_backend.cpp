@@ -913,6 +913,9 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         }
         // #1193 可见化：旧口径只在 inlinedCalls>0 时打日志，「内联静默不发生」
         // 无从发现；unresolvable>0 时同样输出（含调用点样例）。
+        // #1193 评审 P3-1：两路输出解耦——旧 else-if 串联下，方法内同时存在
+        // 成功内联与 unresolvable 调用点时，逐方法 WARN 被 INFO 分支吞掉
+        //（可见性不对称：完全没内联的方法有 WARN，部分内联的反而没有）。
         if (stats.inlinedCalls > 0) {
             CA_LOGT_INFO("regc", "inline {} calls in {}.{}{}: unresolvable={} exc={} size={} "
                                  "rec={} depth={} notinlinable={} excluded={}\n",
@@ -921,7 +924,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                          stats.skippedBySize, stats.skippedByRecursion, stats.skippedByDepth,
                          stats.skippedNotInlinable, stats.skippedExcluded);
         }
-        else if (stats.skippedUnresolvable > 0) {
+        if (stats.skippedUnresolvable > 0) {
             std::string samples;
             for (const auto& sample : stats.unresolvableSamples) {
                 if (!samples.empty()) samples += ", ";
