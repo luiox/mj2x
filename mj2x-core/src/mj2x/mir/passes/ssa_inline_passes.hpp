@@ -46,7 +46,9 @@ struct SsaInlineStats
     ca::usize skippedNotInlinable   = 0;
     ca::usize skippedExcluded       = 0;
     /// 不可解析调用点样例（#1193 可见化）：按首次出现去重，超过上限截断。
-    /// 形如 "owner.name:desc"（同名重载按 desc 区分）。
+    /// 形如 "owner.name:desc"；resolver 给出拒因时带括号后缀
+    /// "owner.name:desc (reason)"（#1193 评审 P3-2），去重键随拒因细分
+    /// （同一 callee 因不同原因被拒时分别留样）。
     std::vector<std::string> unresolvableSamples;
 };
 
@@ -57,11 +59,14 @@ inline constexpr ca::usize kUnresolvableSampleCap = 8;
 ///
 /// @details
 /// 由调用方（RegCBackend）提供：从 CompilerIndex 取 MethodNode，走
-/// CodeConverter → SSABuilder 构建。返回 nullptr 表示目标不可解析/不可内联。
-/// 返回的 SSA 仅用于克隆（pass 会深拷贝并把 Utf8StringRef 重新入调用方
-/// arena），回调返回后可立即析构。
+/// CodeConverter → SSABuilder 构建。返回 nullptr 表示目标不可解析/不可内联，
+/// 此时必须向 `failReason` 写入人类可读拒因（#1193 评审 P3-2：resolver 侧
+/// 拒因经样例透出到逐方法 WARN 与 finalize 汇总，说清「为什么没内联」；
+/// 返回非空时 failReason 内容无意义）。返回的 SSA 仅用于克隆（pass 会深拷贝
+/// 并把 Utf8StringRef 重新入调用方 arena），回调返回后可立即析构。
 using SsaInlineResolver =
-    std::function<std::unique_ptr<SSAFunction>(const SSAMethodRef& method)>;
+    std::function<std::unique_ptr<SSAFunction>(const SSAMethodRef& method,
+                                               std::string&       failReason)>;
 
 /// @brief 对函数做方法内联（可多次迭代：克隆进来的调用点下一轮继续）。
 ///

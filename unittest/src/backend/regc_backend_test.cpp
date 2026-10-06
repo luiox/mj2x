@@ -1330,3 +1330,121 @@ TEST(RegCBackendTest, UnresolvableWarnNotSuppressedWhenOtherCallsInlined)
     EXPECT_TRUE(sawUnresolvableWarn)
         << "unresolvable 逐方法 WARN 不得因同方法存在成功内联而被压制";
 }
+
+// ---------------------------------------------------------------------------
+// #1193 评审 P3-2：resolver 拒因透出。现场路径（缓存外形状）的各拒绝原因
+// 经 failReason 进样例：synchronized callee（beforeCompile 准入排除 → 缓存
+// 必未命中）与 class not in index（library 或缺失类）。
+// ---------------------------------------------------------------------------
+
+TEST(RegCBackendTest, UnresolvableWarnSampleCarriesResolverReason)
+{
+    auto add = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
+                          {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
+                           new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+                          2, 2);
+    auto syncHelper = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC |
+                                     Opcodes::ACC_SYNCHRONIZED,
+                                 "helper", "(I)I",
+                                 {new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ICONST_1),
+                                  new InsnNode(Opcodes::IADD),
+                                  new InsnNode(Opcodes::IRETURN)},
+                                 2, 1);
+    // caller: static int caller(int a, int b) {
+    //             int s = Callee.add(a, b);          // 缓存命中 → 内联
+    //             s += SynchCallee.helper(a);        // synchronized → 现场路径拒绝
+    //             return s + Other.missing(a);       // 类不在 index → 拒绝
+    //         }
+    auto caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(II)I",
+                             {new VarInsnNode(Opcodes::ILOAD, 0),
+                              new VarInsnNode(Opcodes::ILOAD, 1),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("Callee"),
+                                                 ca::str::Utf8StringRef::from_cstr("add"),
+                                                 ca::str::Utf8StringRef::from_cstr("(II)I"), false),
+                              new VarInsnNode(Opcodes::ISTORE, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("SynchCallee"),
+                                                 ca::str::Utf8StringRef::from_cstr("helper"),
+                                                 ca::str::Utf8StringRef::from_cstr("(I)I"), false),
+                              new InsnNode(Opcodes::IADD),
+                              new VarInsnNode(Opcodes::ISTORE, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("Other"),
+                                                 ca::str::Utf8StringRef::from_cstr("missing"),
+                                                 ca::str::Utf8StringRef::from_cstr("(I)I"), false),
+                              new InsnNode(Opcodes::IADD),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 3);
+
+    auto makeClassNode = [](const char* name) {
+        auto cn       = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name      = ca::str::Utf8StringRef::from_cstr(name);
+        cn->version   = Opcodes::V1_8;
+        cn->access    = Opcodes::ACC_PUBLIC;
+        cn->superName = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        return cn;
+    };
+
+    CompilerClass calleeCls;
+    calleeCls.classNode = makeClassNode("Callee");
+    calleeCls.methods.push_back(CompilerMethod{add.get(), true, false, {}});
+    CompilerClass syncCls;
+    syncCls.classNode = makeClassNode("SynchCallee");
+    syncCls.methods.push_back(CompilerMethod{syncHelper.get(), true, false, {}});
+    CompilerClass callerCls;
+    callerCls.classNode = makeClassNode("Caller");
+    callerCls.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
+
+    CompilerIndex index;
+    index.addClass("Callee", std::move(calleeCls));
+    index.addClass("SynchCallee", std::move(syncCls));
+    index.addClass("Caller", std::move(callerCls));
+    CompilerMethod* callerMethod = &index.getClass("Caller")->methods[0];
+
+    RegCBackend backend;
+    backend.beforeCompile(index);
+
+    ScopedRegcLogCapture capture;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto   blocks = converter.convert(*caller);
+    auto   result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+
+    std::string warnText;
+    for (const auto& [level, text] : capture.backend().entries) {
+        if (level == ca::log::Level::Warn &&
+            text.find("inline unresolvable callees in Caller.caller(II)I") != std::string::npos) {
+            warnText = text;
+        }
+    }
+    ASSERT_NE(warnText, "") << "unresolvable>0 必有逐方法 WARN";
+    // 现场路径 synchronized 拒因（SynchCallee 在 index，beforeCompile 准入
+    // 排除 → 缓存未命中 → 现场解析命中方法后拒绝）。
+    EXPECT_NE(warnText.find("SynchCallee.helper:(I)I (synchronized callee)"), std::string::npos)
+        << warnText;
+    // 类缺失拒因。
+    EXPECT_NE(warnText.find("Other.missing:(I)I (class not in index (library or absent))"),
+              std::string::npos)
+        << warnText;
+
+    // finalize 整 jar 汇总同样携带拒因（样例集与逐方法行同源）。
+    backend.finalize(index);
+    std::string summaryText;
+    for (const auto& [level, text] : capture.backend().entries) {
+        if (level == ca::log::Level::Warn &&
+            text.find("inline unresolvable samples (cap") != std::string::npos) {
+            summaryText = text;
+        }
+    }
+    ASSERT_NE(summaryText, "") << "finalize 汇总必须输出 unresolvable 样例";
+    EXPECT_NE(summaryText.find("SynchCallee.helper:(I)I (synchronized callee)"),
+              std::string::npos)
+        << summaryText;
+}

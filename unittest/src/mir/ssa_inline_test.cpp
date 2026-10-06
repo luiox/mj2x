@@ -150,7 +150,8 @@ TEST(SsaInlineTest, InlinesStaticAddWithParamBindingAndReturnMerge)
     ASSERT_NE(callerSsa, nullptr) << reason;
     ASSERT_EQ(countCalls(*callerSsa), 1U);
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "helper" || ref.desc != "(II)I") return nullptr;
         return buildSsa(*callee, arena, reason);
     };
@@ -211,7 +212,8 @@ TEST(SsaInlineTest, MergesMultipleReturnPoints)
     ASSERT_NE(callerSsa, nullptr) << reason;
     const ca::usize blocksBefore = callerSsa->blocks.size();
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "pick" || ref.desc != "(I)I") return nullptr;
         return buildSsa(*callee, arena, reason);
     };
@@ -256,7 +258,8 @@ TEST(SsaInlineTest, InlinesStaticCallWithRefParamAndIndySite)
     const ca::usize indyBefore = callerSsa->indySites.size();
     ASSERT_EQ(countCalls(*callerSsa), 1U);
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "wrap" || ref.desc != "(Ljava/lang/String;)Ljava/lang/String;") {
             return nullptr;
         }
@@ -332,7 +335,8 @@ TEST(SsaInlineTest, InlinesCalleeWithExternalCallAndFieldStore)
     ASSERT_EQ(countCalls(*callerSsa), 1U);
     const ca::usize blocksBefore = callerSsa->blocks.size();
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "fe" || ref.desc != "(J)Ljava/lang/String;") return nullptr;
         return buildSsa(*callee, arena, reason);
     };
@@ -380,7 +384,8 @@ TEST(SsaInlineTest, InlinesVoidStaticCallWithoutReturnValue)
     }
     ASSERT_NE(callerSsa, nullptr) << reason;
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "bump" || ref.desc != "()V") return nullptr;
         return buildSsa(*callee, arena, reason);
     };
@@ -413,7 +418,8 @@ TEST(SsaInlineTest, SkipsRecursiveCall)
     auto        ssa = buildSsa(*method, arena, reason);
     ASSERT_NE(ssa, nullptr) << reason;
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         return buildSsa(*method, arena, reason);   // 解析出自身
     };
 
@@ -449,7 +455,8 @@ TEST(SsaInlineTest, SkipsExceptionalCallee)
     }
     ASSERT_NE(callerSsa, nullptr) << reason;
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         auto calleeSsa = buildSsa(*callee, arena, reason);
         if (calleeSsa != nullptr) calleeSsa->exceptionRegions.push_back(SSAExceptionRegion{});
         return calleeSsa;
@@ -488,7 +495,8 @@ TEST(SsaInlineTest, SkipsOversizedCallee)
     }
     ASSERT_NE(callerSsa, nullptr) << reason;
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         return buildSsa(*callee, arena, reason);
     };
 
@@ -526,7 +534,8 @@ TEST(SsaInlineTest, SkipsNonStaticCall)
                              {new InsnNode(Opcodes::ICONST_0),
                               new InsnNode(Opcodes::IRETURN)},
                              1, 0);
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         return buildSsa(*callee, arena, reason);
     };
 
@@ -558,7 +567,7 @@ TEST(SsaInlineTest, SkipsUnresolvableCall)
 
     SsaInlineStats stats =
         applySsaInlining(*callerSsa, SsaInlineOptions{},
-                         [](const SSAMethodRef&) -> std::unique_ptr<SSAFunction> { return nullptr; },
+                         [](const SSAMethodRef&, std::string&) -> std::unique_ptr<SSAFunction> { return nullptr; },
                          arena);
 
     EXPECT_EQ(stats.skippedUnresolvable, 1U);
@@ -592,7 +601,7 @@ TEST(SsaInlineTest, CollectsDedupedUnresolvableSamples)
 
     SsaInlineStats stats =
         applySsaInlining(*callerSsa, SsaInlineOptions{},
-                         [](const SSAMethodRef&) -> std::unique_ptr<SSAFunction> { return nullptr; },
+                         [](const SSAMethodRef&, std::string&) -> std::unique_ptr<SSAFunction> { return nullptr; },
                          arena);
 
     EXPECT_EQ(stats.skippedUnresolvable, 2U);
@@ -633,11 +642,52 @@ TEST(SsaInlineTest, CapsUnresolvableSamples)
 
     SsaInlineStats stats =
         applySsaInlining(*callerSsa, SsaInlineOptions{},
-                         [](const SSAMethodRef&) -> std::unique_ptr<SSAFunction> { return nullptr; },
+                         [](const SSAMethodRef&, std::string&) -> std::unique_ptr<SSAFunction> { return nullptr; },
                          arena);
 
     EXPECT_EQ(stats.skippedUnresolvable, 20U);
     EXPECT_EQ(stats.unresolvableSamples.size(), size_t(kUnresolvableSampleCap));
+}
+
+// #1193 评审 P3-2：resolver 拒因透出——样例带括号拒因后缀，逐方法行/finalize
+// 汇总能说清「为什么没内联」；去重键随拒因细分（同一 callee 不同拒因分别留样）。
+TEST(SsaInlineTest, UnresolvableSampleCarriesResolverReason)
+{
+    Utf8StringArena arena;
+
+    // 同一不可解析目标两个调用点：resolver 依次给出不同拒因。
+    auto caller = makeMethod(kStaticPublic, "f", "()I",
+                             {new IntInsnNode(Opcodes::BIPUSH, 1),
+                              invokeStatic("Other", "missing", "(I)I"),
+                              new InsnNode(Opcodes::POP),
+                              new IntInsnNode(Opcodes::BIPUSH, 2),
+                              invokeStatic("Other", "missing", "(I)I"),
+                              new InsnNode(Opcodes::IRETURN)},
+                             2, 0);
+
+    std::string reason;
+    std::unique_ptr<SSAFunction> callerSsa;
+    try {
+        callerSsa = buildSsa(*caller, arena, reason);
+    } catch (const std::exception& e) {
+        FAIL() << "buildSsa caller threw: " << e.what();
+    }
+    ASSERT_NE(callerSsa, nullptr) << reason;
+
+    int          calls = 0;
+    SsaInlineStats stats = applySsaInlining(
+        *callerSsa, SsaInlineOptions{},
+        [&](const SSAMethodRef&, std::string& failReason) -> std::unique_ptr<SSAFunction> {
+            failReason = (calls++ == 0) ? "synchronized callee" : "class not in index";
+            return nullptr;
+        },
+        arena);
+
+    EXPECT_EQ(stats.skippedUnresolvable, 2U);
+    ASSERT_EQ(stats.unresolvableSamples.size(), 2U);
+    // 样例序 = 调用点扫描序（块内指令序，确定）。
+    EXPECT_EQ(stats.unresolvableSamples[0], "Other.missing:(I)I (synchronized callee)");
+    EXPECT_EQ(stats.unresolvableSamples[1], "Other.missing:(I)I (class not in index)");
 }
 
 // #1194：callee 空块集必须在任何迁移发生前拒绝（安全条件 5，fail-closed）。
@@ -680,7 +730,8 @@ TEST(SsaInlineTest, SkipsCalleeWithoutBlocks)
     ASSERT_EQ(countCalls(*callerSsa), 1U);
     const ca::usize blocksBefore = callerSsa->blocks.size();
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "helper" || ref.desc != "(I)I") return nullptr;
         auto calleeSsa = buildSsa(*callee, arena, reason);
         if (calleeSsa != nullptr) {
@@ -781,7 +832,8 @@ TEST(SsaInlineTest, InlinedBlocksInheritCallerExceptionProtection)
     }
     ASSERT_NE(callBlock, nullptr);
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "helper" || ref.desc != "(I)I") return nullptr;
         return buildSsa(*callee, arena, reason);
     };

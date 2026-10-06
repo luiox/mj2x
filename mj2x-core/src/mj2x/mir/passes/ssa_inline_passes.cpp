@@ -409,16 +409,20 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                     ++stats.skippedExcluded;
                     continue;
                 }
-                // 安全条件 1：目标可解析。
-                auto callee = resolver(call->method);
+                // 安全条件 1：目标可解析（拒因经 failReason 透出，进样例可诊）。
+                std::string resolveReason;
+                auto callee = resolver(call->method, resolveReason);
                 if (callee == nullptr) {
                     ++stats.skippedUnresolvable;
                     // #1193 可见化：unresolvable 调用点过去完全静默（内联不发生
                     // 且无任何日志），这里按首次出现去重收集样例，由调用方
-                    // （RegCBackend）汇总输出。
-                    const std::string sample = call->method.owner.to_std_string() + "." +
-                                               call->method.name.to_std_string() + ":" +
-                                               call->method.desc.to_std_string();
+                    // （RegCBackend）汇总输出。#1193 评审 P3-2：样例带 resolver
+                    // 拒因括号后缀，逐方法 WARN 与 finalize 汇总可以说清
+                    // 「为什么没内联」；拒因缺席保持旧格式（去重键随之细分）。
+                    std::string sample = call->method.owner.to_std_string() + "." +
+                                         call->method.name.to_std_string() + ":" +
+                                         call->method.desc.to_std_string();
+                    if (!resolveReason.empty()) sample += " (" + resolveReason + ")";
                     if (stats.unresolvableSamples.size() < size_t(kUnresolvableSampleCap) &&
                         std::find(stats.unresolvableSamples.begin(),
                                   stats.unresolvableSamples.end(),

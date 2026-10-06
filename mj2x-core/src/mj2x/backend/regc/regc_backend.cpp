@@ -848,8 +848,15 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     // SSA 方法内联（性能主线：消除 JNI 往返；默认开启，--regc-no-inline 关闭）。
     // resolver：从 CompilerIndex 取被调方法 MethodNode → CodeConverter → SSABuilder。
     if (inlineEnabled_) {
-        const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
-            if (index == nullptr) return nullptr;
+        // #1193 评审 P3-2：resolver 各拒绝路径把拒因写入 failReason（原
+        // calleeReason 就地丢弃），随 nullptr 经 pass 侧进样例——逐方法 WARN
+        // 与 finalize 汇总能说清「为什么没内联」。
+        const auto resolver = [&](const SSAMethodRef& ref,
+                                  std::string&       failReason) -> std::unique_ptr<SSAFunction> {
+            if (index == nullptr) {
+                failReason = "no compiler index";
+                return nullptr;
+            }
             // #1193：先查 beforeCompile 预解析缓存（与转换序解耦——被调类先于
             // 调用方被转换清空也能解析），未命中再走既有现场路径（library 类、
             // 缓存外形状，行为与以前一致）。
@@ -859,32 +866,45 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                 it != impl_->inlineBlockCache.end()) {
                 const auto& entry = it->second;
                 SSABuilder  calleeBuilder;
-                std::string calleeReason;
+                // build 失败返回 nullptr 时拒因已写入 failReason（SSABuilder 契约）。
                 return calleeBuilder.build(entry.blocks, ref.owner.to_std_string(),
                                            ref.name.to_std_string(), ref.desc.to_std_string(),
                                            /*isStatic=*/true, entry.maxLocals, ssaArena,
-                                           calleeReason);
+                                           failReason);
             }
             CompilerClass* cls = index->getClass(ref.owner.to_std_string());
-            if (cls == nullptr) return nullptr;
+            if (cls == nullptr) {
+                failReason = "class not in index (library or absent)";
+                return nullptr;
+            }
+            // 名字+描述符命中（类内唯一）后的拒绝原因单独记：native/abstract、
+            // synchronized、SSA 构建失败各自透出，未命中任何方法则报 not found。
+            bool matched = false;
             for (const auto& m : cls->methods) {
                 auto* mn = m.methodNode;
-                if (mn == nullptr || mn->instructions.isEmpty()) continue;   // native/abstract
+                if (mn == nullptr || mn->name != ref.name || mn->desc != ref.desc) continue;
+                matched = true;
+                if (mn->instructions.isEmpty()) {
+                    failReason = "callee has no body (native or abstract)";
+                    continue;
+                }
                 // synchronized 方法：JVM 方法级锁在调用点自动获取，内联会丢锁语义，拒绝。
-                if ((mn->access & jbytecode::core::Opcodes::ACC_SYNCHRONIZED) != 0) continue;
-                if (mn->name != ref.name || mn->desc != ref.desc) continue;
+                if ((mn->access & jbytecode::core::Opcodes::ACC_SYNCHRONIZED) != 0) {
+                    failReason = "synchronized callee";
+                    continue;
+                }
                 // 只有静态方法进入内联候选（invokeOpcode 检查在 pass 侧）。
                 CodeConverter            converter(index->arena());
                 const std::vector<Block*> calleeBlocks = converter.convert(*mn);
                 SSABuilder               calleeBuilder;
-                std::string              calleeReason;
                 const bool               calleeStatic =
                     (mn->access & jbytecode::core::Opcodes::ACC_STATIC) != 0;
-                auto calleeSsa = calleeBuilder.build(
+                // 命中即返回（含 build 失败的 nullptr，拒因已写入 failReason）。
+                return calleeBuilder.build(
                     calleeBlocks, ref.owner.to_std_string(), ref.name.to_std_string(),
-                    ref.desc.to_std_string(), calleeStatic, mn->maxLocals, ssaArena, calleeReason);
-                return calleeSsa;
+                    ref.desc.to_std_string(), calleeStatic, mn->maxLocals, ssaArena, failReason);
             }
+            if (!matched) failReason = "method not found in class";
             return nullptr;
         };
         SsaInlineOptions inlineOptions;

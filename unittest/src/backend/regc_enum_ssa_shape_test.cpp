@@ -437,7 +437,8 @@ TEST(RegCEnumSsaShapeTest, ExcludedSyntheticValuesNotInlined)
     ASSERT_NE(callerSsa, nullptr) << reason;
     ASSERT_EQ(countCalls(*callerSsa), 1U);
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "values" || ref.desc != "()[LColor;") return nullptr;
         return buildSsa(*callee, "Color", arena, reason);
     };
@@ -467,7 +468,8 @@ TEST(RegCEnumSsaShapeTest, PredicateMissStillInlines)
     ASSERT_NE(callerSsa, nullptr) << reason;
     ASSERT_EQ(countCalls(*callerSsa), 1U);
 
-    const auto resolver = [&](const SSAMethodRef& ref) -> std::unique_ptr<SSAFunction> {
+    const auto resolver = [&](const SSAMethodRef& ref,
+                              std::string& /*failReason*/) -> std::unique_ptr<SSAFunction> {
         if (ref.name != "values" || ref.desc != "()[LColor;") return nullptr;
         return buildSsa(*callee, "Color", arena, reason);
     };
