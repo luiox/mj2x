@@ -127,26 +127,30 @@
    的 type.cpp `getArgumentCount`/`getArgumentTypes` 入口加 `length < 2`
    边界检查显式抛 invalid_argument，测试改用合法最小描述符；动共享层需
    跨线回归。
+7. DEF_HEX 零注册死宏退役（deadcode 批次 T3 评审 P3-1）：param_registry
+   的 DEF_HEX 宏在 main 上即无任何注册点，负值收口对其补丁属给死代码
+   上锁，与清理主题相悖——删宏或注明口径；对应地，负值收口声明口径应为
+   「DEF_INT/DEF_U64 两类宏 + vmc4-seed/native-lib-key 两支手写校验器」。
 
 **产品/机器决策项（需拍板）**
 
-7. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——
+8. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——
    改仓库样本路径还是提升为配置项。
-8. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2
+9. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2
     （仅剩 zig 系），integration LLVM 列 28 例在 CI 转实跑。
-9. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与
+10. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与
     「不落明文 DLL」威胁模型冲突——接受现状或重评威胁模型。
-10. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs
+11. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs
     收紧（Windows 无影响，POSIX 加固项）。
 
 **编排层**
 
-11. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
+12. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
     不持锁、`xmake build <target>` 单 target 单命令——落 doc_ai 归档页，
     供后续 sub agent 会话直接引用。
-12. test_strategy.md 重写：计划期表格（落地波次列）大多已落地，删表留分层
+13. test_strategy.md 重写：计划期表格（落地波次列）大多已落地，删表留分层
     策略与覆盖率审计方法学。
-13. 代码注释与 Doxygen 组名里的 R3/R6 轮次代号退役（`regc_r3_abi` 等），
+14. 代码注释与 Doxygen 组名里的 R3/R6 轮次代号退役（`regc_r3_abi` 等），
     文档侧已先行（本 PR）。
 
 ## 验证命令
