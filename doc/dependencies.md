@@ -1,5 +1,11 @@
 # mj2x — Dependency Analysis & Version Lock
 
+> **拆仓注记（2026-10-13）**：本文为 MVP 期快照，依赖面已整体换代——现行为
+> luiox-repo 中心包仓直连包（libca 0.0.15 / libjbytecode 0.0.2 / libjstr /
+> libjzip / libgarena 0.0.2 / libjdk_finder 0.0.1，嵌套 libca 统一钉定），包
+> 清单与钉定方式以根 xmake.lua 为事实源，来历见 [MIGRATION.md](../MIGRATION.md)。
+> 下文的 submodule/VERSIONS.lock.md/libtyped 等描述均已失效，仅作历史参考。
+
 > 遵循 morpher-native third_party 依赖策略 (DEPENDENCY_POLICY.md)
 > 所有版本必须固定 commit/tag，不可浮动。
 
