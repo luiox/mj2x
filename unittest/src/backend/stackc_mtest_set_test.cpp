@@ -38,7 +38,7 @@ void PrintTo(const mtest_set::NativeFixtureCase& fixture, std::ostream* os)
 namespace {
 
 // mj2x-rt 源包容器根(#894 起 StackC 运行时 ABI 在 src/stackc,链接消费)。
-fs::path rtSrcDir() { return fs::current_path() / "mj2x" / "mj2x-rt" / "src"; }
+fs::path rtSrcDir() { return fs::current_path() / "mj2x-rt" / "src"; }
 
 
 

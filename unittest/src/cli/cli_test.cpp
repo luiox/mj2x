@@ -383,7 +383,7 @@ fs::path compileProvidedAnnotationSample(const fs::path& javac)
         out << "}\n";
     }
 
-    fs::path annotationSource = test::getTopProjectPath() / "mj2x" / "mj2x-annotations" / "src" /
+    fs::path annotationSource = test::getTopProjectPath() / "mj2x-annotations" / "src" /
                                 "main" / "java" / "mj2x" / "Native.java";
     auto result = runScript({
         q(javac) + " -d " + q(dir) + " " + q(annotationSource) + " " + q(sampleSource),
@@ -1417,7 +1417,7 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
     EXPECT_TRUE(fileExists(projectDir / "xmake.lua")) << result.out;
 
     fs::path repoRoot = test::getTopProjectPath();
-    fs::path crtRoot  = repoRoot / "mj2x" / "mj2x-rt";
+    fs::path crtRoot  = repoRoot / "mj2x-rt";
     // StackC 分发面:仅 stackc 挂载逐文件字节比对,其余挂载断言缺席。
     compareRtTreePerBackend(projectDir, crtRoot, "stackc");
 
@@ -1486,7 +1486,7 @@ TEST(CliTest, GenerateXmakeProjectPerBackendMountsAndDefines)
     std::error_code ec;
     fs::remove_all(workDir, ec);
 
-    const fs::path crtRoot = test::getTopProjectPath() / "mj2x" / "mj2x-rt";
+    const fs::path crtRoot = test::getTopProjectPath() / "mj2x-rt";
     // 四后端分发面 + 唯一后端宏:C 工程宏经模板 add_defines,LLVM 内联脚本
     // 直接挂在 clang 命令上。
     const std::vector<std::pair<std::string, std::string>> cases{

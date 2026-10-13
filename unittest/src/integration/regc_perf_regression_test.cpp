@@ -31,7 +31,7 @@ TEST(RegcPerfRegression, ThirteenProbesWithinBaseline)
     ASSERT_TRUE(jdk.available) << jdk.reason;
 
     const fs::path repo = test::getTopProjectPath();
-    const fs::path script = repo / "mj2x" / "benchmark" / "jvm_obfuscator_test_benchmark.ps1";
+    const fs::path script = repo / "benchmark" / "jvm_obfuscator_test_benchmark.ps1";
     ASSERT_TRUE(test::jdk::fileExists(script)) << script.string();
 
     const fs::path cli = test::getBuildTargetPath("mj2x-cli");

@@ -236,7 +236,7 @@ protected:
         // mj2x_vmc4_runtime.c;/I 加 rt src 与 jni.h 路径(/TC 显式 C 模式)。
         fs::path dll = dir / (className + ".dll");
         fs::path obj = dir / (className + ".obj");
-        fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+        fs::path crtSrc = fs::current_path() / "mj2x-rt" / "src";
         fs::path runtimeObj = dir / "mj2x_vmc4_runtime.obj";
         std::vector<std::string> compileLines;
         compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
@@ -365,7 +365,7 @@ private:
         fs::create_directories(objDir, ec);
         std::vector<std::string> compileLines;
         compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
-        fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+        fs::path crtSrc = fs::current_path() / "mj2x-rt" / "src";
         if (backendName == "regc") {
             fs::path generatedObj = objDir / "generated.obj";
             compileLines.push_back("cl /nologo /O2 /utf-8 /c /Fo" + q(generatedObj) + " " +
@@ -1312,7 +1312,7 @@ TEST(Vmc4BackendEncryptE2E, ProgramBlobEncryptRoundTrip)
     // 编译生成的 C（与 runCase 同一编译口径：mj2x_vmc4_runtime.c 一并链接）。
     fs::path dll = dir / (className + "_enc.dll");
     fs::path obj = dir / (className + "_enc.obj");
-    fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+    fs::path crtSrc = fs::current_path() / "mj2x-rt" / "src";
     fs::path runtimeObj = dir / "mj2x_vmc4_runtime_enc.obj";
     auto cl = runBat({
         "call " + q(tc.vcvars64) + " x64 >nul",
@@ -1450,7 +1450,7 @@ TEST(Vmc4BackendEncryptE2E, LazyChunkDecryptRoundTrip)
     // 编译生成的 C（与 ProgramBlobEncryptRoundTrip 同一编译口径）。
     fs::path dll = dir / (className + "_lazy.dll");
     fs::path obj = dir / (className + "_lazy.obj");
-    fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+    fs::path crtSrc = fs::current_path() / "mj2x-rt" / "src";
     fs::path runtimeObj = dir / "mj2x_vmc4_runtime_lazy.obj";
     auto cl = runBat({
         "call " + q(tc.vcvars64) + " x64 >nul",
@@ -1607,7 +1607,7 @@ ShuffleRoundTripOut runShuffleRoundTrip(const Toolchain& tc, const std::string& 
     // 编译 DLL（VMC4 自包含 /TC + 运行时 ABI）。
     fs::path dll         = dir / (className + "_shuf.dll");
     fs::path obj         = dir / (className + "_shuf.obj");
-    fs::path crtSrc      = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+    fs::path crtSrc      = fs::current_path() / "mj2x-rt" / "src";
     fs::path runtimeObj  = dir / "mj2x_vmc4_runtime_shuf.obj";
     auto cl = runBat({
         "call " + q(tc.vcvars64) + " x64 >nul",
@@ -1850,7 +1850,7 @@ TEST(Vmc4BlockLazyE2E, RoundTripTiers)
         // 编译生成的 C（与 LazyChunkDecryptRoundTrip 同一编译口径）。
         fs::path dll = dir / (className + "_blocklazy.dll");
         fs::path obj = dir / (className + "_blocklazy.obj");
-        fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+        fs::path crtSrc = fs::current_path() / "mj2x-rt" / "src";
         fs::path runtimeObj = dir / "mj2x_vmc4_runtime_blocklazy.obj";
         auto cl = runBat({
             "call " + q(tc.vcvars64) + " x64 >nul",

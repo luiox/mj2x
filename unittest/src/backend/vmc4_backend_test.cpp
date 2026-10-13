@@ -50,7 +50,7 @@ namespace {
 std::string readVmc4RuntimeSource()
 {
     const std::filesystem::path path =
-        std::filesystem::current_path() / "mj2x" / "mj2x-rt" / "src" / "vmc4" / "mj2x_vmc4_runtime.c";
+        std::filesystem::current_path() / "mj2x-rt" / "src" / "vmc4" / "mj2x_vmc4_runtime.c";
     std::ifstream in(path, std::ios::binary);
     if (!in) return {};
     return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};

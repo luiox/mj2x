@@ -47,7 +47,7 @@ using namespace test::jdk;   // runBat / q / probeJdk / JdkToolchain
 
 namespace {
 
-constexpr const char* kFixtureSrc = "mj2x/test_resource/benchmark/java_obfuscator_style/src";
+constexpr const char* kFixtureSrc = "test_resource/benchmark/java_obfuscator_style/src";
 
 struct ConversionCounts
 {

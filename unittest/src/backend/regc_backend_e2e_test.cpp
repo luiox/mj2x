@@ -203,7 +203,7 @@ protected:
         fs::create_directories(objDir, ec);
         ASSERT_FALSE(ec) << ec.message();
         fs::path generatedObj = objDir / "generated.obj";
-        fs::path crtSrc       = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+        fs::path crtSrc       = fs::current_path() / "mj2x-rt" / "src";
 
         // Generated RegC includes the distributable CRT ABI directly.
         // wrapper/Math/Random/位操作 intrinsic 全部在 crt 的
@@ -1409,7 +1409,7 @@ TEST_F(RegCBackendE2E, IndyDirectNullReceiverRoutesToHandlerRoundTrip)
     fs::create_directories(objDir, ec);
     ASSERT_FALSE(ec) << ec.message();
     fs::path generatedObj = objDir / "generated.obj";
-    fs::path crtSrc       = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+    fs::path crtSrc       = fs::current_path() / "mj2x-rt" / "src";
 
     std::vector<std::string> compileLines;
     compileLines.push_back("call " + q(tc_.vcvars64) + " x64 >nul");
@@ -2404,7 +2404,7 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
     fs::path dll    = dir / "protected.dll";
     fs::path objDir = dir / "obj";
     fs::create_directories(objDir, ec);
-    fs::path crtSrc = fs::current_path() / "mj2x" / "mj2x-rt" / "src";
+    fs::path crtSrc = fs::current_path() / "mj2x-rt" / "src";
 
     std::string vcvarsError;
     auto        env = loadVcvarsEnv(tc, vcvarsError);

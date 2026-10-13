@@ -534,7 +534,7 @@ TEST(IOTest, CLoaderPostprocessorAddsSidecarClassForClassOutput)
 TEST(IOTest, CLoaderJavaReferenceStaysInSyncWithGenerator)
 {
     namespace fs = std::filesystem;
-    const fs::path source = fs::current_path() / "mj2x" / "cloader" / "Loader.java";
+    const fs::path source = fs::current_path() / "cloader" / "Loader.java";
     ASSERT_TRUE(fs::exists(source)) << source;
     std::ifstream in(source, std::ios::binary);
     ASSERT_TRUE(in.is_open());
