@@ -58,9 +58,18 @@ mjt 独立仓先例):
 ## 仓内路径修复(拆出后)
 
 测试代码原有 `current_path() / "mj2x" / "mj2x-rt"` 形态的 monorepo 相对路径,
-拆出后改为仓根直取(10 文件,backend e2e ×4、cli_test、io_test、perf regression);
-CLI 生产代码 `findCrtRoot` 的 monorepo 布局候选(`cwd/mj2x/mj2x-rt`)保留——
-同一 exe 在 monorepo 检出内仍可用,`MJ2X_CRT_DIR` 可显式覆盖。
+拆出后改为仓根直取(11 处:backend e2e ×4、cli_test、io_test、
+vmc4_conversion_test 的 kFixtureSrc、perf regression);CLI 生产代码
+`findCrtRoot` 的 monorepo 布局候选(`cwd/mj2x/mj2x-rt`)保留——同一 exe 在
+monorepo 检出内仍可用,`MJ2X_CRT_DIR` 可显式覆盖。
+
+行尾契约恢复:`.gitattributes` 原在 monorepo 根未随拆迁移,缺失时全局
+`core.autocrlf=true` 把文本检出成 CRLF,native 工程生成物(LF)与 golden
+基线的逐字节比对失败(gitignore/xmake.lua/README golden),已按主仓原样恢复。
+
+已知文案性残留(不咬合任何基线,暂不改):samples/protected/llvm 测试生成的
+报告头 `Generated from \`mj2x/test_resource/...\`` 仍带 monorepo 前缀,属
+来源注记文字。
 
 ## 后续待办
 
