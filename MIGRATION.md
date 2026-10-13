@@ -5,7 +5,9 @@
 ## 拆出来源
 
 - 源仓:`morpher`(D:\WorkSpace\morpher)@ HEAD `0afa97db84b6a7c989752e45c75888a87522db51`
-  (分支 `codex/libjbc-foundation-fixes`,拆仓日 2026-10-13)。
+  (分支 `codex/libjbc-foundation-fixes`,拆仓日 2026-10-13)。注:该 HEAD 本身未触
+  mj2x 路径,filter 后空提交被剪,mj2x 内容的最后落点是 `a1c737dce2393d4e1a4de44000ab2d8705de3470`
+  (新仓基线 `a785a86`,见 commit-map);树哈希逐字节相等已证内容保真。
 - 旧 hash 回查:filter-repo 的 `commit-map` 在本仓 `.git/filter-repo/commit-map`
   (旧 monorepo hash → 新仓 hash 全映射);monorepo 侧 issue 号(#NNN)仍指向
   morpher 仓,本仓不可直接引用。
