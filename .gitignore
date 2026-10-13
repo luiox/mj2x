@@ -1,0 +1,7 @@
+# 构建与配置缓存
+build/
+.xmake/
+compile_commands.json
+
+# 测试运行输出（test-helper 约定：<project_root>/test/；基线在 test_resource/ 不忽略）
+/test/

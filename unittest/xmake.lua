@@ -65,14 +65,15 @@ target("mj2x_unittest")
     mj2x_test_keep_asserts()
 
     -- mj2x-cli-companion：伴生 CLI 必须在活动 buildir 内新建，防陈旧产物（见上）。
-    add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake", "libca_process",
+    -- 独立仓接线：libca_process 垫片退场，libca/libjbytecode 直连包显式挂载。
+    add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake",
              "mj2x-cli-companion")
-    add_packages("gtest")
+    add_packages("gtest", "libca", "libjbytecode")
     -- xmake 3.x 不把静态 target 依赖传进 binary 链接：显式给全闭包，按
     -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
     -- mj2x-core → libjbytecode 聚合库（实现分散在子库），须逐个补齐；
-    -- test_helper 自身依赖 libca_test/libjdk_finder，一并补入。
-    morpher_binary_link_closure("mj2x-core", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "libjzip", "test_helper", "libca_test", "libjdk_finder")
+    -- test_helper 自身依赖 libca_test/libjdk_finder（包链接项提供），一并补入。
+    mj2x_binary_link_closure("mj2x-core", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "libjzip", "test_helper", "libca_test", "libjdk_finder")
     -- 注：libca_resources 为 headeronly target（无 .lib 产物），只入 add_deps 不入 add_links。
     add_files("src/main.cpp")
     add_files("src/**/*_test.cpp")
@@ -80,9 +81,9 @@ target("mj2x_unittest")
     add_includedirs("src")
     -- #1023 环境卫生函数簇测试（src/cli/native_env_hygiene_test.cpp）：跨模块
     -- include mj2x-cli 内部头 native_env_hygiene.hpp（inline 定义，不引入与
-    -- mj2x-cli 的链接耦合）。include 根 = $(projectdir)/mj2x，include 形态
-    -- "mj2x-cli/src/…" 按仓库 <name>/path 跨模块约定。
-    add_includedirs("$(projectdir)/mj2x")
+    -- mj2x-cli 的链接耦合）。include 根 = 仓根（独立仓即原 mj2x 子树根），
+    -- include 形态 "mj2x-cli/src/…" 按跨模块约定保持不变。
+    add_includedirs("$(projectdir)")
     -- 与 mj2x-cli 对齐：LLVM 后端显式关闭时（with_mj2x_llvm=n），LLVM 用例跳过。
     if not has_config("with_mj2x_llvm") then
         add_defines("MJ2X_DISABLE_LLVM_BACKEND")
@@ -106,12 +107,12 @@ target("mj2x_integration_test")
     -- release 模式下保住 assert 断言（防绿验空转），见 mj2x/xmake.lua。
     mj2x_test_keep_asserts()
 
-    add_deps("mj2x-cli", "test_helper", "libjbytecode")
-    add_packages("gtest")
+    add_deps("mj2x-cli", "test_helper")
+    add_packages("gtest", "libca", "libjbytecode")
     -- xmake 3.x 不把静态 target 依赖传进 binary 链接：显式给全闭包，按
     -- 「消费者在前、被依赖在后」排序（mj2x-cli 为 binary 依赖，只定构建顺序，
     -- 不参与链接，故此处闭包只覆盖 test_helper + libjbytecode 族）。
-    morpher_binary_link_closure("libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "test_helper", "libca_test", "libjdk_finder")
+    mj2x_binary_link_closure("libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "test_helper", "libca_test", "libjdk_finder")
     add_files("src/integration/main.cpp")
     add_files("src/integration/*_test.cpp")
     add_includedirs("src")
