@@ -4,6 +4,9 @@ mj2x 是独立的 Java 字节码 → native 编译器仓：把 `.class`/`.jar` �
 并将原方法标记 `native`，经 JNI 保持 Java 运行时互操作。自 morpher monorepo 拆出
 （拆仓来历与 vendor 清单见 [MIGRATION.md](MIGRATION.md)）。
 
+**仓库私有，不开源**（所有者裁决）：商业保护产品线，建仓必须 `--private`；
+不得公开、不得加公开镜像 remote；对外只走产品发布物。
+
 ## 命令
 
 ```sh

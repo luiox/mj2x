@@ -79,6 +79,9 @@ monorepo 检出内仍可用,`MJ2X_CRT_DIR` 可显式覆盖。
   `mtest_set/src` vendor 改包消费。
 - **CI**:独立仓流水线待建(Windows MSVC + 三后端矩阵 + JDK/clang 依赖面)。
 - **远程托管**:git remote 由仓库所有者后定(拆出仓未配 remote)。
+  **仓库定位为私有仓库,不开源**(所有者裁决):mj2x 是商业保护产品线,
+  建仓时必须用 `--private`(如 `gh repo create --private`);不得公开、
+  不得添加公开镜像 remote;对外展示/试用走产品发布物,不走源码仓。
 - **跨仓引用残留**:README 引用的 DLL 加壳需求文档在 morpher 主仓
   `doc_ai/dll_packer_requirements.md`(未随拆迁移);`benchmark/` 依赖的
   jvm-obf-tester 外部样本仓为环境依赖,非仓内文件。
