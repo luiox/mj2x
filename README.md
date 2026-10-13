@@ -1,7 +1,8 @@
 # mj2x — Bytecode to Native Compiler
 
 把 Java 字节码(`.class` / `.jar`)翻译为 C 源码,并将原方法标记为 `native`。
-通过 JNI 实现 Java 运行时互操作。是 morpher 字节码工具平台的一条产品线,定位为代码混淆 / 硬化工具链。
+通过 JNI 实现 Java 运行时互操作。定位为代码混淆 / 硬化工具链,自 morpher
+字节码工具平台拆出的独立仓(拆仓来历见 [MIGRATION.md](MIGRATION.md))。
 
 参考项目:[masxinlingvonta](https://github.com/superblaabeere27/masxinlingvonta)(Java → LLVM IR,单后端)。
 
@@ -36,19 +37,23 @@ native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <
 ## 构建
 
 ```bash
-xmake f --with_mj2x=y            # 启用 mj2x(可选 --with_tests=y)
+xmake f --with_tests=y           # 开测试(gtest 经 xrepo 自动拉取)
 xmake build mj2x-cli             # CLI
 xmake build mj2x_unittest        # 单元测试
 ```
 
-需要 JDK(`JAVA_HOME` 含 `jni.h`)。`--with_tests=y` 时才拉取 gtest(见根目录
-`doc/build-system.md`「gtest 的获取」)。
+外部库(liba / libjstr / libjbytecode / libjzip / libgarena / libjdk_finder)全部走
+[luiox-repo](https://github.com/luiox/luiox-repo) 中心包仓直连包,首次配置自动克隆
+安装;仓内自带 `test_helper/` 与 `mtest_set/src/` 测试基建子集(来历见
+[MIGRATION.md](MIGRATION.md))。
 
-**单后端构建**(issue #886):默认全后端;`xmake f --with_mj2x=y --with_mj2x_backend=stackc|regc|vmc4|llvm`
+需要 JDK(`JAVA_HOME` 含 `jni.h`)与 MSVC;E2E 另需 clang(PATH 探测)。
+
+**单后端构建**(issue #886):默认全后端;`xmake f --with_mj2x_backend=stackc|regc|vmc4|llvm`
 只把所选后端编进可执行文件——被排除后端的源码不参与编译、CLI 对 `--backend <被排除>`
 及被裁默认值 fail-closed(报可用清单)、mj2x-rt 嵌入按分发面收缩(stackc-only 产物不含
 regc CRT 等;llvm 仍收编 regc intrinsic registry 供 JDK intrinsic 直调)。需要全量
-mj2x-core 的测试 target(`mj2x_unittest`/`mj2x_integration_test`/`str_alloc_baseline`)
+mj2x-core 的测试 target(`mj2x_unittest`/`mj2x_integration_test`)
 在单后端构建下自动禁用,全量回归用默认配置跑。
 
 ## 运行
@@ -84,7 +89,7 @@ mj2x-cli --lang en_US --help
 
 - [doc_ai/cloakwork_research.md](doc_ai/cloakwork_research.md) — Cloakwork 借鉴项评估（issue #829）
 - [doc_ai/regc_safe_env.md](doc_ai/regc_safe_env.md) — safe-env(JNI 函数表恢复)
-- 产物 DLL 加壳（sepacker 扩展）需求见根 [doc_ai/dll_packer_requirements.md](../doc_ai/dll_packer_requirements.md)
+- 产物 DLL 加壳（sepacker 扩展）需求文档在 morpher 主仓 `doc_ai/dll_packer_requirements.md`（跨仓,未随拆迁移）
 
 ### 架构与设计
 
@@ -106,3 +111,10 @@ mj2x-cli --lang en_US --help
 - [doc_ai/test_strategy.md](doc_ai/test_strategy.md) / [doc/regc_test_strategy.md](doc/regc_test_strategy.md)
 - [doc_ai/performance_evaluation_spec.md](doc_ai/performance_evaluation_spec.md) — 性能评测方法学
 - [benchmark/README.md](benchmark/README.md) — 基准脚本与结果
+
+### 仓库与协作
+
+- [AGENTS.md](AGENTS.md) — agent/开发者工作约定(命令、惯例、构建门)
+- [MIGRATION.md](MIGRATION.md) — 拆仓来历、vendor 清单与待办
+- [dev_plan.md](dev_plan.md) — 当前挂账与计划
+- [doc_ai/README.md](doc_ai/README.md) — doc_ai 完整索引
