@@ -71,6 +71,14 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
     }
     if (targets.empty()) return false;
 
+    // 展开链的操作数栈峰值高于原 ldc（原 ldc 峰 = D+1，D 为 ldc 处栈深）：
+    // 最深形态 NameType/NameTypeOwner（lookup→owner Class→name→pushMethodTypeSeq
+    // 内部 desc+callerClass 峰 +2→findXxx）达 D+5；合法栈深上界 D ≤ maxStack-1，
+    // 故方法 maxStack 保守 +4 即兜住任意形态与多 ldc 叠压（对齐 invokedynamic
+    // 预处理器 maxStack += 3 的先例）。漏抬则 stackc 后端 union jvalue s[maxStack]
+    // 开小，LDC 解析内联写穿 s[] 触发栈保护（issue #1 栈溢出根因）。
+    m->maxStack += 4;
+
     // LDC String 常量（desc / name）。
     auto newStringLdc = [&](ca::str::Utf8StringRef value) {
         return m->create<LdcInsnNode>(
