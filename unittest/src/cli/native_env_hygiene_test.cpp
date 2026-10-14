@@ -41,8 +41,14 @@ using mj2x::cli::ProcessEnvironment;
 
 TEST(NativeEnvHygieneDedupePathValue, KeepsFirstOccurrenceInOrder)
 {
+#ifdef _WIN32
     EXPECT_EQ(dedupePathValue("C:\\a;C:\\b;C:\\a;C:\\b;C:\\a"), "C:\\a;C:\\b");
     EXPECT_EQ(dedupePathValue("C:\\b;C:\\a"), "C:\\b;C:\\a");
+#else
+    // 非 Windows 分隔符 ':'、精确比较（同 NonWindowsUsesColonAndExactCompare）。
+    EXPECT_EQ(dedupePathValue("/a:/b:/a:/b:/a"), "/a:/b");
+    EXPECT_EQ(dedupePathValue("/b:/a"), "/b:/a");
+#endif
 }
 
 TEST(NativeEnvHygieneDedupePathValue, MergesCaseVariantsOnWindows)
@@ -57,10 +63,16 @@ TEST(NativeEnvHygieneDedupePathValue, MergesCaseVariantsOnWindows)
 
 TEST(NativeEnvHygieneDedupePathValue, DropsEmptySegments)
 {
-    // 内部空段与尾分号均剔除（去重只收缩形状，不改查找语义）。
+    // 内部空段与尾分隔符均剔除（去重只收缩形状，不改查找语义）。
+#ifdef _WIN32
     EXPECT_EQ(dedupePathValue("C:\\a;;C:\\b;"), "C:\\a;C:\\b");
     EXPECT_EQ(dedupePathValue(""), "");
     EXPECT_EQ(dedupePathValue(";;"), "");
+#else
+    EXPECT_EQ(dedupePathValue("/a::/b:"), "/a:/b");
+    EXPECT_EQ(dedupePathValue(""), "");
+    EXPECT_EQ(dedupePathValue("::"), "");
+#endif
 }
 
 TEST(NativeEnvHygieneDedupePathValue, KeepsQuotedPathDistinctFromBare)
