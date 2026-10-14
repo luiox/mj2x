@@ -1,0 +1,133 @@
+# mj2x CI（Linux + Windows）
+#
+# 范围：mj2x-cli + mj2x_unittest / mj2x_integration_test / mj2x_rt_test
+# （需 --with_tests=y）。E2E 依赖 javac/java（setup-java 提供）；MSVC/clang
+# 缺失的用例按 AGENTS.md 约定 skip（不算失败）。依赖：luiox-repo git 直连包
+# 由 CI 显式注册（与根 xmake.lua 的声明幂等同源）；gtest/nlohmann_json 走
+# xrepo。全量回归用默认配置（backend=all），根因见 AGENTS.md「命令」。
+# 注：set_defaultplat("windows")，linux 作业必须显式 -p linux。
+
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test-linux:
+    name: build & test (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK (E2E javac/java)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: v3.0.9
+          actions-cache-folder: '.xmake-cache'
+
+      - name: Cache xrepo packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.xmake/packages
+            ~/.local/share/xmake
+          key: mj2x-xrepo-linux-x64-xmake309-${{ hashFiles('xmake.lua', 'xmake/**') }}
+          restore-keys: |
+            mj2x-xrepo-linux-x64-xmake309-
+
+      - name: Register luiox-repo
+        run: xmake repo --add luiox-repo https://github.com/luiox/luiox-repo.git
+
+      - name: Configure (with tests)
+        run: xmake f -p linux --with_tests=y -y
+
+      - name: Build product
+        run: xmake build -y mj2x-cli
+
+      - name: Build tests
+        run: |
+          xmake build -y mj2x_unittest
+          xmake build -y mj2x_integration_test
+          xmake build -y mj2x_rt_test
+
+      - name: Run unit tests
+        run: xmake run mj2x_unittest --gtest_brief=1
+
+      - name: Run integration tests
+        run: xmake run mj2x_integration_test --gtest_brief=1
+
+      - name: Run runtime tests
+        run: xmake run mj2x_rt_test --gtest_brief=1
+
+  build-and-test-windows:
+    name: build & test (windows)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK (E2E javac/java)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: v3.0.9
+          actions-cache-folder: '.xmake-cache'
+
+      - name: Cache xrepo packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/.xmake/packages
+          key: mj2x-xrepo-windows-x64-xmake309-${{ hashFiles('xmake.lua', 'xmake/**') }}
+          restore-keys: |
+            mj2x-xrepo-windows-x64-xmake309-
+
+      - name: Register luiox-repo
+        shell: bash
+        run: xmake repo --add luiox-repo https://github.com/luiox/luiox-repo.git
+
+      - name: Configure (with tests)
+        shell: bash
+        run: xmake f -p windows --with_tests=y -y
+
+      - name: Build product
+        shell: bash
+        run: xmake build -y mj2x-cli
+
+      - name: Build tests
+        shell: bash
+        run: |
+          xmake build -y mj2x_unittest
+          xmake build -y mj2x_integration_test
+          xmake build -y mj2x_rt_test
+
+      - name: Run unit tests
+        shell: bash
+        run: xmake run mj2x_unittest --gtest_brief=1
+
+      - name: Run integration tests
+        shell: bash
+        run: xmake run mj2x_integration_test --gtest_brief=1
+
+      - name: Run runtime tests
+        shell: bash
+        run: xmake run mj2x_rt_test --gtest_brief=1
