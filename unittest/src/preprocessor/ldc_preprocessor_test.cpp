@@ -77,6 +77,9 @@ bool descCompatible(const std::string& expected, const std::string& actual)
 
 // 抽象解释方法体，返回是否全程栈形一致；失败原因写入 reason。
 // 方法形参按 desc 预压栈（静态方法），返回时栈应只剩返回类型。
+// 同时跟踪操作数栈峰值并断言 ≤ m->maxStack——本文件用例全为无参方法（形参
+// 走局部变量不占栈），预压不干扰峰值口径。这是 issue #1 的判据：LDC 展开链
+// 峰值若超出方法 maxStack，stackc 后端 union jvalue s[maxStack] 即写穿。
 bool verifyStackShape(MethodNode* m, std::string& reason)
 {
     std::vector<std::string> stack;
@@ -89,6 +92,7 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
         // 本测试不用 long/double 形参，category 差异不影响判据。
         stack.push_back(arg.getDescriptor(scratch).to_std_string());
     }
+    size_t peak = stack.size();
 
     for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
         if (insn->getType() == AbstractInsnNode::LDC_INSN) {
@@ -160,9 +164,15 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
                 stack.pop_back();
             }
         }
+        if (stack.size() > peak) peak = stack.size();
     }
     if (!stack.empty()) {
         reason = "leftover stack depth " + std::to_string(stack.size());
+        return false;
+    }
+    if (peak > static_cast<size_t>(m->maxStack)) {
+        reason = "peak stack depth " + std::to_string(peak) + " exceeds maxStack " +
+                 std::to_string(m->maxStack);
         return false;
     }
     return true;
@@ -208,6 +218,10 @@ protected:
 
         LdcPreprocessor pre;
         pre.process(index);
+
+        // 展开必须抬 maxStack +4（16 为本 fixture 初值；否则 stackc 后端
+        // union jvalue s[maxStack] 开小，LDC 解析内联写穿 s[]——issue #1）。
+        EXPECT_EQ(m->maxStack, 16 + 4);
 
         std::string reason;
         ASSERT_TRUE(verifyStackShape(m, reason)) << reason;
@@ -383,6 +397,28 @@ TEST_F(LdcPreprocessorTest, ExpandMethodTypeConstant)
     runAndVerify(ca::core::Any(mt), "()Ljava/lang/invoke/MethodType;", nullptr);
 }
 
+// issue #1 回归：真实类文件形态下（ldc Handle + invoke* ⇒ max_stack=2），展开链
+// 峰值 D+5（D=0 起算即 5）须被抬升后的 maxStack 覆盖。预处理器漏抬时
+// verifyStackShape 的峰值断言直接判红——这正是 stackc s[] 写穿的成因。
+TEST_F(LdcPreprocessorTest, BumpsMaxStackToCoverExpansionPeak)
+{
+    CompilerIndex index;
+    Handle h = makeHandle(index, Opcodes::H_INVOKESTATIC, "Sample", "add", "(II)I");
+    std::vector<AbstractInsnNode*> insns;
+    insns.push_back(new LdcInsnNode(ca::core::Any(h)));
+    insns.push_back(new JumpInsnNode(Opcodes::ARETURN, nullptr));
+    MethodNode* m =
+        addMethodToIndex(index, "Sample", "run", "()Ljava/lang/invoke/MethodHandle;", insns);
+    m->maxStack = 2;   // 手构样本 LdcMhSample 的真实 max_stack 形态。
+
+    LdcPreprocessor pre;
+    pre.process(index);
+
+    EXPECT_EQ(m->maxStack, 2 + 4);
+    std::string reason;
+    ASSERT_TRUE(verifyStackShape(m, reason)) << reason;
+}
+
 // 非 Handle/MethodType 的 ldc 不动。
 TEST_F(LdcPreprocessorTest, LeavesPlainLdcAlone)
 {
@@ -396,6 +432,8 @@ TEST_F(LdcPreprocessorTest, LeavesPlainLdcAlone)
     pre.process(index);
 
     EXPECT_EQ(m->instructions.size(), 2u);
+    // 无展开不得误抬 maxStack。
+    EXPECT_EQ(m->maxStack, 16);
 }
 
 }   // namespace
