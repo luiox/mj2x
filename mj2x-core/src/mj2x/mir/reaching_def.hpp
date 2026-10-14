@@ -14,6 +14,7 @@
 #include "mj2x/frontend/block.hpp"
 
 #include <cstdint>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -50,7 +51,11 @@ using DefSet = std::unordered_set<DefId, DefIdHash>;
 // slot -> {def...}。集合大小 ≥2 表示该 slot 在此处需要 φ（block arg）。
 struct SlotDefMap
 {
-    std::unordered_map<int, DefSet> bySlot;
+    // std::map（slot 升序）而非 unordered_map：块参数（φ block arg）按 bySlot
+    // 遍历序开列（ssa_builder buildBlocks），unordered 遍历序跨 STL 实现不同
+    // （libstdc++/MSVC）会导致 arg 顺序漂移、后端输出随实现变化（#1121
+    // llvm 后端 linux CI 红因：undef 边拷贝落槽位置两平台不一致）。
+    std::map<int, DefSet> bySlot;
 
     const DefSet* defsFor(int slot) const
     {
