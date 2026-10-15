@@ -8,3 +8,5 @@ compile_commands.json
 
 # 测试运行输出（test-helper 约定：<project_root>/test/；基线在 test_resource/ 不忽略）
 /test/
+/work
+/.workbuddy
