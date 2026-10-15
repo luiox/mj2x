@@ -31,9 +31,12 @@
 | global | `dump_mir` | boolean | `false` |
 | selection | `native_annotation` | string（JVM desc） | — |
 | selection | `native_method_prefixes` | string[] | — |
+| selection | `native_include` / `native_exclude` | string[]（类名 glob；`*` 不跨段、`**` 跨段、`/` 与 `.` 等价；exclude 优先；空片段拒绝） | — |
 | compile | `compile` | boolean | `false` |
 | compile | `compile_mode` | `file` \| `pipe` | `file` |
 | compile | `c_compiler` | `auto` \| `msvc` \| `gcc` \| `clang` \| `zig` \| `xmake` | `auto` |
+| compile | `native_opt_level` | `0` \| `1` \| `2` \| `3` \| `s` | `2` |
+| compile | `native_timeout` | integer ≥ 0（秒；`0` = 不限时；每次外呼独立计时，超时整树终止） | `900` |
 | compile | `llvm_tool` | `clang` \| `llc` | `clang` |
 | compile | `generate_cmake` / `generate_xmake` | string | — |
 | stackc | `stackc_exception_check` | `full` \| `lite` | `full` |
@@ -46,6 +49,8 @@
 | vmc4 | `vmc4_granularity` | `class` \| `method` \| `program` | `class` |
 | vmc4 | `vmc4_alias`（0..3）/ `vmc4_bogus`（0..4）/ `vmc4_drift`（0..4）/ `vmc4_drift_period`（≥1） | integer | `1` / `1` / `0` / `16` |
 | vmc4 | `vmc4_trace_surface` | string | — |
+| vmc4 | `vmc4_encrypt_program` / `vmc4_lazy_decrypt` / `vmc4_block_lazy_decrypt` / `vmc4_shuffle_blocks` | boolean（两个懒解密档要求 `vmc4_encrypt_program` 且互斥） | `false` |
+| strings | `strings_encrypt` | boolean | `false` |
 | runtime | `runtime_protection` | `none` \| `log` \| `delay` \| `fake` \| `terminate` | `none` |
 | runtime | `runtime_protection_step`（≥1）/ `runtime_protection_delay_ms`（≥0） | integer | `16` / `500` |
 | nativeLib | `native_lib_key` | hex string / number | — |
