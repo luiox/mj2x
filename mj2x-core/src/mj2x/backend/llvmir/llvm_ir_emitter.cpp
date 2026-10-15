@@ -3,6 +3,8 @@
 #include "llvm_ir_internal.hpp"
 #include "llvm_intrinsic_registry.hpp"
 
+#include "mj2x/mir/passes/const_key_derivation.hpp"
+
 #include <cmath>
 #include <type_traits>
 #include <variant>
@@ -1421,6 +1423,30 @@ private:
                 out_ << "  " << unboxed << " = call " << unboxReturnType(instruction.dest.type)
                      << " @mj2x_llvm_unbox_" << unboxKind << "(ptr %env, ptr " << result << ")\n";
                 return emitStore(instruction.dest, unboxed, reason);
+            }
+            if (name.rfind(mj2x::kConstKeyIntrinsicPrefix, 0) == 0) {
+                // 立即数隐藏 per-site 密钥（对标 jvmtp obfuscation.constants）：
+                // RegIR 合成 Intrinsic → mj2x-rt 不透明调用（独立 TU + volatile
+                // 读，LTO 下 IPSCCP 不可折叠）。site 解析与 indy: 同款纪律。
+                size_t site = 0;
+                try {
+                    site = static_cast<size_t>(std::stoull(name.substr(10)));
+                }
+                catch (const std::exception&) {
+                    reason = "invalid const.key site index in intrinsic name";
+                    return false;
+                }
+                if (!instruction.hasDest || instruction.dest.type != SSAType::I64 ||
+                    !instruction.args.empty()) {
+                    reason = "const.key intrinsic must produce one i64 value with no operands";
+                    return false;
+                }
+                // 模块级 declare（finalize 跨函数去重，同 registry 直调 declare 惯例）。
+                runtimeDeclares_.push_back("declare i64 @mj2x_llvm_const_key(i64)");
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call i64 @mj2x_llvm_const_key(i64 " << site
+                     << ")\n";
+                return emitStore(instruction.dest, result, reason);
             }
             reason = "LLVM IR first slice rejects this intrinsic";
             return false;

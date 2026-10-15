@@ -2,6 +2,8 @@
 /// @brief LLVM IR 后端验证层：RegIR → 寄存器类型表（fail-closed 检查）。
 #include "llvm_ir_internal.hpp"
 
+#include "mj2x/mir/passes/const_key_derivation.hpp"
+
 #include <type_traits>
 #include <variant>
 
@@ -267,6 +269,29 @@ bool recordInstruction(RegisterTypes& types, const RegInstruction& instruction,
                 if (!recordOperand(types, arg, reason)) return false;
             }
             return true;
+        }
+        if (instruction.intrinsicName.rfind(mj2x::kConstKeyIntrinsicPrefix, 0) == 0) {
+            // 立即数隐藏 per-site 密钥（对标 jvmtp obfuscation.constants）：
+            // 无参数、dest 必须为 I64（E64 异或面）；site 索引仅发射端解析。
+            size_t site = 0;
+            try {
+                site = static_cast<size_t>(
+                    std::stoull(instruction.intrinsicName.substr(10)));
+            }
+            catch (const std::exception&) {
+                reason = "invalid const.key site index in intrinsic name";
+                return false;
+            }
+            (void)site;
+            if (!instruction.args.empty()) {
+                reason = "const.key intrinsic takes no operands";
+                return false;
+            }
+            if (instruction.dest.type != SSAType::I64) {
+                reason = "const.key intrinsic result must be i64";
+                return false;
+            }
+            return recordValue(types, instruction.dest, reason);
         }
         if (instruction.intrinsicName != "array.length" &&
             instruction.intrinsicName.rfind("instanceof:", 0) != 0 &&
