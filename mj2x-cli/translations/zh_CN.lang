@@ -158,6 +158,7 @@ mj2x.param.regc.mba_deep.desc=RegC: 深 MBA（De Morgan/进位链 + barrier 防�
 mj2x.param.regc.no_inline.desc=RegC: 关闭 SSA 方法内联（默认开启：静态调用 + 无异常区 + 大小/递归门控的语义等价内联，消除 native 方法间 JNI 往返）
 mj2x.param.regc.obfuscate.desc=RegC/LLVM: 开启基础混淆变换（MBA + opaque 谓词 + CFF 平坦化；RegIR 级与 RegC 同源；默认全部关闭保持语义直译最快路径；LLVM 侧变换产物超子集时回退未变换）
 mj2x.param.regc.opaque_zero.desc=RegC/LLVM: opaque-零恒等变体（demorgan/shift-pair/or-dec，按种子选变体；默认关闭）
+mj2x.param.regc.hide_constants.desc=RegC/LLVM: 立即数隐藏（整型立即数改写为 E ^ const_key(site)，E 编译期物化、K 运行时 splitmix64 派生；对标 jvmtp obfuscation.constants；默认关闭且不被 --regc-obfuscate 联动——每立即数多一次运行时调用，是混淆家族里最重的一项）
 mj2x.param.regc.safe_env.desc=RegC: 开启 safe-env（JNI 函数表快照 + 方法入口恢复；捕获时表已污染则 JNI_OnLoad fail closed）
 mj2x.param.regc.safe_env_debug.desc=RegC: safe-env 调试观察模式（检出 hook 只打告警不 fail，隐含开启 --regc-safe-env）
 mj2x.param.regc.trace_calls.desc=RegC: 生成运行时调用日志（[CALL]/[DEEP]，stderr，排查用）

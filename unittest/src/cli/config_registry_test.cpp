@@ -190,6 +190,7 @@ std::vector<std::string> expectedKeys()
         "regc_cff_state_encrypt",
         "regc_mba_deep",
         "regc_opaque_zero",
+        "regc_hide_constants",
         "regc_transform_seed",
         "vmc4_dispatcher",
         "vmc4_seed",
