@@ -8,6 +8,8 @@
 /// 生成代码零差异。
 #include "regc_emitter_internal.hpp"
 
+#include "mj2x/mir/passes/const_key_derivation.hpp"
+
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/format.hpp"
 #include "mj2x/codegen/c_expr.hpp"
@@ -1303,6 +1305,29 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 // 整型（LCMP）：long 不可能为 NaN，直接三值比较。
                 out.assign(destName, threeWay.to_std_string());
             }
+            return true;
+        }
+        if (ins.intrinsicName.rfind(mj2x::kConstKeyIntrinsicPrefix, 0) == 0) {
+            // 立即数隐藏 per-site 密钥（对标 jvmtp obfuscation.constants）：
+            // RegIR 合成 Intrinsic → CRT 不透明调用（独立 TU + volatile 读，
+            // LTO 不可折叠）。site 解析与 indy: 同款纪律（stoull + 范围外拒收）。
+            size_t site = 0;
+            try {
+                site = static_cast<size_t>(std::stoull(ins.intrinsicName.substr(10)));
+            }
+            catch (const std::exception&) {
+                reason = "invalid const.key site index in intrinsic name";
+                return false;
+            }
+            if (!ins.hasDest || ins.dest.type != SSAType::I64 || !ins.args.empty()) {
+                reason = "const.key intrinsic must produce one i64 value with no operands";
+                return false;
+            }
+            out.appendLineStart(regName(ins.dest.id))
+                .append(" = mj2x_regc_const_key(")
+                .append(ca::str::format_std("{}", site))
+                .append(");")
+                .newLine();
             return true;
         }
         reason = "unsupported RegC intrinsic: " + ins.intrinsicName;

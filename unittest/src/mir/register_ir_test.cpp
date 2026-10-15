@@ -13,6 +13,7 @@
 #include "libca/str/utf8_string.hpp"
 #include "libca/str/utf8_string_arena.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "mj2x/mir/passes/const_key_derivation.hpp"
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
 #include "mj2x/mir/register_ir/reg_dump.hpp"
@@ -238,9 +239,22 @@ RegFunction makeParamAddFunction()
     return function;
 }
 
+/// 按目标类型宽度窄化一个 64 位位型（JVM 整型窄化：截断后按目标符号扩展）。
+int64_t truncateToType(int64_t value, SSAType type)
+{
+    switch (type) {
+    case SSAType::BOOL: return (value & 0xFFu) != 0 ? 1 : 0;
+    case SSAType::I8: return static_cast<int64_t>(static_cast<int8_t>(value & 0xFFu));
+    case SSAType::I16: return static_cast<int64_t>(static_cast<int16_t>(value & 0xFFFFu));
+    case SSAType::CHAR: return static_cast<int64_t>(static_cast<uint16_t>(value & 0xFFFFu));
+    case SSAType::I32: return static_cast<int64_t>(static_cast<int32_t>(value & 0xFFFFFFFFu));
+    default: return value;
+    }
+}
+
 /// 直线求值 mbaDeep 变换后的单块指令链：参数寄存器代入具体值，按序执行
-/// Unary/Binary/Copy（Barrier 跳过），返回 return 操作数的求值结果（按类型
-/// 宽度截断）。用于逐 (a,b) 样本断言 r == a+b（模 2^N）。
+/// Unary/Binary/Copy/Convert/Intrinsic（Barrier 跳过），返回 return 操作数
+/// 的求值结果（按类型宽度截断）。用于逐 (a,b) 样本断言 r == a+b（模 2^N）。
 int64_t evaluateStraightLineRegIR(const RegFunction& fn, int64_t a, int64_t b)
 {
     std::map<uint32_t, int64_t> regs;
@@ -282,6 +296,25 @@ int64_t evaluateStraightLineRegIR(const RegFunction& fn, int64_t a, int64_t b)
             break;
         }
         case RegInstructionKind::Copy: result = operandValue(ins.copy.source); break;
+        case RegInstructionKind::Convert: {
+            // 立即数隐藏链末位（I64→I32 截断）；按目标类型宽度窄化。
+            const int64_t source = operandValue(ins.value);
+            result               = truncateToType(source, ins.targetType);
+            break;
+        }
+        case RegInstructionKind::Intrinsic: {
+            // 立即数隐藏密钥：const.key:<site> → splitmix64(site ^ kConstKeyOpaque)。
+            // 与 RT 双端 mj2x_regc_const_key / mj2x_llvm_const_key 同源
+            // （跨语言一致性由 E2E 真实编译+运行守）。
+            const std::string prefix(kConstKeyIntrinsicPrefix);
+            if (ins.intrinsicName.rfind(prefix, 0) != 0) {
+                ADD_FAILURE() << "unsupported intrinsic in straight-line evaluation";
+                return 0;
+            }
+            result = static_cast<int64_t>(
+                deriveConstKey(std::stoll(ins.intrinsicName.substr(prefix.size()))));
+            break;
+        }
         case RegInstructionKind::Barrier: continue;
         default: ADD_FAILURE() << "unexpected instruction kind in mba chain"; return 0;
         }
@@ -929,6 +962,209 @@ TEST(RegTransformPassTest, CffStateCodesStayWithinPositiveInt32)
     }
 }
 
+// ---------- 批次 2 第 6 项：立即数隐藏（对标 jvmtp obfuscation.constants） ----------
+
+/// 参数 + 立即数：`int f(int a, int b) { return a + imm + b; }`
+/// （立即数隐藏语义求值用——隐藏后求值结果须与隐藏前逐样本相同。）
+RegFunction makeParamAddImmediateFunction(int64_t immediate, SSAType type)
+{
+    RegFunction    function;
+    auto           block = std::make_unique<RegBlock>(SSABlockId{0});
+    const RegValue lhs{RegId{0}, type};
+    const RegValue rhs{RegId{1}, type};
+    const RegValue sum{RegId{2}, type};
+    const RegValue result{RegId{3}, type};
+
+    RegInstruction addImmediate;
+    addImmediate.kind     = RegInstructionKind::Binary;
+    addImmediate.hasDest  = true;
+    addImmediate.dest     = sum;
+    addImmediate.lhs      = RegOperand::fromRegister(lhs);
+    addImmediate.rhs      = RegOperand::fromInt(immediate, type);
+    addImmediate.binaryOp = SSABinaryOp::Add;
+    addImmediate.effect   = SSAEffect::pure();
+
+    RegInstruction addParameter;
+    addParameter.kind     = RegInstructionKind::Binary;
+    addParameter.hasDest  = true;
+    addParameter.dest     = result;
+    addParameter.lhs      = RegOperand::fromRegister(sum);
+    addParameter.rhs      = RegOperand::fromRegister(rhs);
+    addParameter.binaryOp = SSABinaryOp::Add;
+    addParameter.effect   = SSAEffect::pure();
+
+    block->instructions.push_back(addImmediate);
+    block->instructions.push_back(addParameter);
+    block->terminator = RegReturnTerminator{true, RegOperand::fromRegister(result)};
+    function.entry    = block.get();
+    function.parameters.push_back(lhs);
+    function.parameters.push_back(rhs);
+    function.blocks.push_back(std::move(block));
+    return function;
+}
+
+/// 收集一条指令的全部操作数槽（与 pass 侧遍历面一致，漏槽位即漏断言）。
+std::vector<const RegOperand*> operandSlotsOf(const RegInstruction& instruction)
+{
+    std::vector<const RegOperand*> slots;
+    slots.push_back(&instruction.value);
+    slots.push_back(&instruction.lhs);
+    slots.push_back(&instruction.rhs);
+    slots.push_back(&instruction.receiver);
+    slots.push_back(&instruction.index);
+    if (instruction.kind == RegInstructionKind::Copy) slots.push_back(&instruction.copy.source);
+    for (const auto& argument : instruction.args) slots.push_back(&argument);
+    return slots;
+}
+
+/// 断言整块指令里不再出现某个立即数值（隐藏效果证据）。
+bool blockMentionsImmediate(const RegFunction& function, int64_t immediate)
+{
+    for (const auto& block : function.blocks) {
+        for (const auto& instruction : block->instructions) {
+            for (const auto* slot : operandSlotsOf(instruction)) {
+                if (slot->kind == RegOperandKind::IntLiteral && slot->intValue == immediate)
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+// E ^ K == C 的端到端证据：隐藏后求值结果与隐藏前逐样本相同。
+// 同时守住「原立即数不再以字面量出现」与 site 单调分配两个不变量。
+TEST(RegTransformPassTest, ConstantHidingPreservesImmediateSemantics)
+{
+    const int64_t immediates[] = {0, 1, -1, 42, 0x12345678, INT32_MIN, INT32_MAX, -123456789};
+    for (int64_t immediate : immediates) {
+        SCOPED_TRACE("immediate=" + std::to_string(immediate));
+        RegFunction original = makeParamAddImmediateFunction(immediate, SSAType::I32);
+        const int64_t expected = evaluateStraightLineRegIR(original, 5, 7);
+
+        RegFunction        function = makeParamAddImmediateFunction(immediate, SSAType::I32);
+        RegTransformOptions options;
+        options.hideImmediateConstants = true;
+        const auto stats = applyRegTransformPasses(function, options);
+
+        EXPECT_EQ(stats.constantsHidden, 1U);
+        EXPECT_FALSE(blockMentionsImmediate(function, immediate))
+            << "hidden immediate must not survive as a literal";
+        EXPECT_EQ(evaluateStraightLineRegIR(function, 5, 7), expected);
+
+        std::string validationReason;
+        EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+    }
+}
+
+// I64 立即数：Xor 结果即目标值，不追加 Convert（多余截断会破坏宽常量）。
+TEST(RegTransformPassTest, ConstantHidingKeepsI64WithoutTruncation)
+{
+    const int64_t immediate = 0x0123456789ABCDEFull;
+    RegFunction   function  = makeParamAddImmediateFunction(immediate, SSAType::I64);
+
+    RegTransformOptions options;
+    options.hideImmediateConstants = true;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.constantsHidden, 1U);
+    const auto& instructions = function.blocks.front()->instructions;
+    ASSERT_EQ(instructions.size(), 4U);
+    EXPECT_EQ(instructions[0].kind, RegInstructionKind::Intrinsic);
+    EXPECT_EQ(instructions[1].kind, RegInstructionKind::Binary);
+    EXPECT_EQ(instructions[1].binaryOp, SSABinaryOp::Xor);
+    EXPECT_EQ(instructions[2].kind, RegInstructionKind::Binary);   // 原 Add，无 Convert
+    EXPECT_EQ(instructions[2].binaryOp, SSABinaryOp::Add);
+    EXPECT_EQ(evaluateStraightLineRegIR(function, 5, 7),
+              static_cast<int64_t>(5 + immediate + 7));
+}
+
+// 浮点立即数不动：浮点没有 XOR 恒等改写面，改写会引入精度/位型风险。
+TEST(RegTransformPassTest, ConstantHidingSkipsFloatImmediates)
+{
+    RegFunction function;
+    auto        block = std::make_unique<RegBlock>(SSABlockId{0});
+    const RegValue lhs{RegId{0}, SSAType::F64};
+    const RegValue result{RegId{1}, SSAType::F64};
+
+    RegInstruction add;
+    add.kind     = RegInstructionKind::Binary;
+    add.hasDest  = true;
+    add.dest     = result;
+    add.lhs      = RegOperand::fromRegister(lhs);
+    add.rhs      = RegOperand::fromFloat(2.5, SSAType::F64);
+    add.binaryOp = SSABinaryOp::Add;
+    add.effect   = SSAEffect::pure();
+    block->instructions.push_back(add);
+    block->terminator = RegReturnTerminator{true, RegOperand::fromRegister(result)};
+    function.entry    = block.get();
+    function.parameters.push_back(lhs);
+    function.blocks.push_back(std::move(block));
+
+    RegTransformOptions options;
+    options.hideImmediateConstants = true;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.constantsHidden, 0U);
+    ASSERT_EQ(function.blocks.front()->instructions.size(), 1U);
+    EXPECT_EQ(function.blocks.front()->instructions[0].rhs.kind, RegOperandKind::FloatLiteral);
+}
+
+// site 是函数内局部计数器、不掺 seed：不同 seed 产物必须逐字节相同
+// （可复现构建不变量的另一面——seed 只影响 MBA/opaque/CFF 变体与 state 码）。
+TEST(RegTransformPassTest, ConstantHidingIsSeedIndependent)
+{
+    auto fingerprint = [](uint64_t seed) {
+        RegFunction        function = makeParamAddImmediateFunction(0x5EED1234, SSAType::I32);
+        RegTransformOptions options;
+        options.hideImmediateConstants = true;
+        options.transformSeed          = seed;
+        const auto stats = applyRegTransformPasses(function, options);
+        std::string out = std::to_string(stats.constantsHidden);
+        for (const auto& instruction : function.blocks.front()->instructions) {
+            out += "|" + instruction.intrinsicName;
+            out += "|" + std::to_string(instruction.value.intValue);
+            out += "|" + std::to_string(instruction.rhs.intValue);
+        }
+        return out;
+    };
+    EXPECT_EQ(fingerprint(0), fingerprint(1));
+    EXPECT_EQ(fingerprint(0), fingerprint(0xDEADBEEFCAFE1234ull));
+}
+
+// 与 CFF 叠加的零交互证据：立即数隐藏排 CFF 之后，dispatcher 的 switch
+// case key 保持字面量（分发表完整性），被隐藏的是块内常量。
+TEST(RegTransformPassTest, ConstantHidingRunsAfterCffAndKeepsDispatcherKeys)
+{
+    RegFunction function = makePureBranchFunction();
+
+    RegTransformOptions options;
+    options.enableControlFlowFlattening = true;
+    options.cffStateEncryption          = true;
+    options.hideImmediateConstants      = true;
+    options.transformSeed               = 11;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_TRUE(stats.controlFlowFlattened);
+    EXPECT_GT(stats.constantsHidden, 0U);
+    // dispatcher 的 case key 未被改写（仍是字面量）。
+    const RegSwitchTerminator* dispatcher = nullptr;
+    for (const auto& block : function.blocks) {
+        const auto* candidate = std::get_if<RegSwitchTerminator>(&block->terminator);
+        if (candidate != nullptr && candidate->cases.size() == 3U) {
+            dispatcher = candidate;
+            break;
+        }
+    }
+    ASSERT_NE(dispatcher, nullptr);
+    for (const auto& item : dispatcher->cases) {
+        EXPECT_GE(item.key, 1);
+        EXPECT_LE(item.key, INT32_MAX);
+    }
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
 TEST(RegTransformPassTest, All829OptionsDefaultOff)
 {
     RegTransformOptions options;
@@ -941,5 +1177,7 @@ TEST(RegTransformPassTest, All829OptionsDefaultOff)
     EXPECT_FALSE(options.cffStateEncryption);
     EXPECT_FALSE(options.mbaDeep);
     EXPECT_FALSE(options.opaqueZero);
+    // 批次 2：立即数隐藏默认关闭（每立即数一次运行时调用，最重的一项）。
+    EXPECT_FALSE(options.hideImmediateConstants);
     EXPECT_EQ(options.transformSeed, 0ULL);
 }

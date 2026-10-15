@@ -47,6 +47,13 @@ struct RegTransformOptions
     /// opaque-零恒等变体扩展：demorgan / shift-pair / or-dec（恒真、零 UB
     /// 位运算恒等），按 (seed, site) 选变体。
     bool opaqueZero = false;
+    /// 立即数隐藏（对标 jvmtp `obfuscation.constants`）：整型立即数改写为
+    /// `E ^ const_key(site)`（E = C ^ K 编译期物化，K 运行时 splitmix64
+    /// 派生，RT 双端同源）。默认关闭；**不**被 `--regc-obfuscate` 联动
+    /// （每立即数多一次运行时调用，是家族里最重的一项，仅显式开启）。
+    /// 仅 RegC/LLVM 两后端发射面支持（vmc4 显式不走 transform passes）。
+    /// 排 CFF 之后零交互。
+    bool hideImmediateConstants = false;
     /// 变换种子：派生 state 码 / 变体选择均从此确定性派生（同 seed 同产物）。
     uint64_t transformSeed = 0;
 };
@@ -60,6 +67,7 @@ struct RegTransformStats
     ca::usize cffDeadBlocks        = 0;
     ca::usize mbaDeepRewrites      = 0;
     ca::usize opaqueZeroPredicates = 0;
+    ca::usize constantsHidden      = 0;
     bool      controlFlowFlattened = false;
 };
 
