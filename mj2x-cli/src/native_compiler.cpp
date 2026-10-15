@@ -1,3 +1,15 @@
+// 宏值固化必须先于任何能到达 libca/process/subprocess.hpp 的 include：
+// 本文件首个 include（native_compiler.hpp → native_process_timeout.hpp）
+// 即传递引入 subprocess.hpp，其会 #undef Windows UCRT 的 stdout/stderr 宏
+// （Command 同名成员防污染）。故 <cstdio> 与固化块置于所有项目头之前，
+// 供文件尾部导出的 MSVC 环境加载函数（loadMsvcEnvironment）使用。
+#include <cstdio>
+
+namespace {
+std::FILE* const kStdoutStream = stdout;
+std::FILE* const kStderrStream = stderr;
+}
+
 #include "native_compiler.hpp"
 
 #include "embedded_rt.hpp"
@@ -17,14 +29,6 @@
 #include <thread>
 #include <vector>
 
-// libca/process/subprocess.hpp 会 #undef 全局 stdout/stderr 宏（Command 成员
-// 同名防污染），这里在 include 之前固化宏值，供文件尾部导出的 MSVC 环境
-// 加载函数（loadMsvcEnvironment）使用。
-namespace {
-std::FILE* const kStdoutStream = stdout;
-std::FILE* const kStderrStream = stderr;
-}
-
 #include "jdk_finder/jdk_finder.hpp"
 #include "libca/process/subprocess.hpp"
 // 环境形状卫生函数簇（environmentKeyEquals/currentProcessEnvironment/
@@ -32,6 +36,10 @@ std::FILE* const kStderrStream = stderr;
 // 内部头供合成 env 断言 gtest 复用，本文件只保留 loadMsvcEnvironment 等本体。
 // 宏值固化须在其前（见上），故 include 顺序在此而非文件头。
 #include "native_env_hygiene.hpp"
+// P1-4 外部进程超时（对标 jvmtp compiler.timeout）：libca 0.0.15 subprocess
+// 超时基件的 mj2x 侧策略/文案单源。须在 kStdoutStream 固化之后 include
+// （subprocess.hpp 会 #undef Windows UCRT 的 stdin/stdout/stderr 宏）。
+#include "native_process_timeout.hpp"
 
 namespace mj2x::cli {
 
@@ -40,7 +48,8 @@ namespace mj2x::cli {
 // kStdoutStream/kStderrStream，其在 subprocess.hpp 之前已固化）。
 
 bool loadMsvcEnvironment(ProcessEnvironment& environment,
-                         std::filesystem::path& compilerPath)
+                         std::filesystem::path& compilerPath,
+                         ProcessTimeout timeout)
 {
     const char* includeValue = std::getenv("INCLUDE");
     if (includeValue != nullptr && includeValue[0] != '\0') {
@@ -61,8 +70,12 @@ bool loadMsvcEnvironment(ProcessEnvironment& environment,
     shell.env("MJ2X_VCVARS_COMMAND",
               "chcp 65001 >nul && call vcvarsall.bat x64 >nul && set");
     shell.arg("/d").arg("/c").arg("%MJ2X_VCVARS_COMMAND%");
-    auto captured = shell.output();
+    auto captured = shell.output(outputOptionsWithTimeout(timeout));
     if (captured.is_err()) {
+        if (isDeadlineExceeded(captured.unwrap_err())) {
+            logProcessTimeout("MSVC environment setup (vcvarsall.bat)", timeout);
+            return false;
+        }
         CA_LOGT_ERROR("compile", "cannot configure MSVC environment: {}\n", captured.unwrap_err().to_string().c_str());
         return false;
     }
@@ -319,10 +332,15 @@ void writeProcessOutput(const ca::process::Output& output)
         fwrite(output.stderr_data.data(), 1, output.stderr_data.size(), kStderrStream);
 }
 
-int runCompilerCommand(ca::process::Command& command, const char* compilerName)
+int runCompilerCommand(ca::process::Command& command, const char* compilerName,
+                       ProcessTimeout timeout)
 {
-    auto completed = command.output();
+    auto completed = command.output(outputOptionsWithTimeout(timeout));
     if (completed.is_err()) {
+        if (isDeadlineExceeded(completed.unwrap_err())) {
+            logProcessTimeout(compilerName, timeout);
+            return 1;
+        }
         CA_LOGT_ERROR("compile", "cannot start {} compiler: {}\n", compilerName,
                 completed.unwrap_err().to_string().c_str());
         return 1;
@@ -379,7 +397,8 @@ bool compileCrtSourcesToObjects(const std::vector<std::filesystem::path>& source
                                 const std::vector<std::filesystem::path>& includes,
                                 CCompilerKind compiler, CEmitterBackend backend,
                                 const std::filesystem::path& objectDirectory,
-                                std::vector<std::filesystem::path>& objects)
+                                std::vector<std::filesystem::path>& objects,
+                                ProcessTimeout timeout)
 {
     for (std::size_t index = 0; index < sources.size(); ++index) {
         const auto object = objectDirectory / ("crt_" + std::to_string(index) + ".o");
@@ -404,7 +423,8 @@ bool compileCrtSourcesToObjects(const std::vector<std::filesystem::path>& source
             for (const auto& include : includes) command.arg("-I" + include.string());
             command.arg(sources[index].string()).arg("-o").arg(object.string());
         }
-        if (runCompilerCommand(command, compilerExecutable(compiler)) != 0) return false;
+        if (runCompilerCommand(command, compilerExecutable(compiler), timeout) != 0)
+            return false;
         objects.push_back(object);
     }
     return true;
@@ -471,11 +491,12 @@ int compileMsvcSourceFromTemporaryFile(std::string_view                         
                                        const std::filesystem::path&               libraryPath,
                                        const std::vector<std::filesystem::path>& includes,
                                        const std::vector<std::filesystem::path>& sources,
-                                       CEmitterBackend backend)
+                                       CEmitterBackend backend,
+                                       ProcessTimeout timeout)
 {
     ProcessEnvironment    environment;
     std::filesystem::path compilerPath;
-    if (!loadMsvcEnvironment(environment, compilerPath)) return 1;
+    if (!loadMsvcEnvironment(environment, compilerPath, timeout)) return 1;
 
     std::filesystem::path sourceDir = libraryPath.parent_path();
     if (sourceDir.empty()) sourceDir = ".";
@@ -508,8 +529,12 @@ int compileMsvcSourceFromTemporaryFile(std::string_view                         
     mergeProcessEnvironment(command, environment);
     command.stdout(ca::process::Stdio::piped()).stderr(ca::process::Stdio::piped());
 
-    auto completed = command.output();
+    auto completed = command.output(outputOptionsWithTimeout(timeout));
     if (completed.is_err()) {
+        if (isDeadlineExceeded(completed.unwrap_err())) {
+            logProcessTimeout("MSVC compiler", timeout);
+            return 1;
+        }
         CA_LOGT_ERROR("compile", "cannot start MSVC compiler: {}\n", completed.unwrap_err().to_string().c_str());
         return 1;
     }
@@ -632,7 +657,8 @@ bool prepareLlvmCrtSources(const std::filesystem::path&        crtRoot,
 
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
                         LlvmTool tool, bool withRuntimeProtection,
-                        const std::filesystem::path& crtRoot)
+                        const std::filesystem::path& crtRoot,
+                        ProcessTimeout timeout)
 {
     std::error_code ec;
     const std::filesystem::path sourcePath(llvmOutputPath);
@@ -698,7 +724,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
         if (!rtProtectSource.empty()) command.arg(rtProtectSource.string());
         for (const auto& source : crtSources) command.arg(source.string());
         command.arg("-o").arg(libraryPath.string());
-        result = runCompilerCommand(command, "clang");
+        result = runCompilerCommand(command, "clang", timeout);
     }
     else {
         std::filesystem::path parent = libraryPath.parent_path();
@@ -720,7 +746,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
 #endif
         llcCommand.arg("-filetype=obj").arg(sourcePath.string()).arg("-o").arg(
             objectPath.string());
-        if (runCompilerCommand(llcCommand, "llc") != 0) return 1;
+        if (runCompilerCommand(llcCommand, "llc", timeout) != 0) return 1;
 
         std::vector<std::filesystem::path> linkInputs{objectPath};
         if (!rtProtectSource.empty()) {
@@ -733,7 +759,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
             rtCompile.arg("-fPIC"); // 产物进 .so，见 compileLlvmIr 侧的 TPOFF32 说明。
 #endif
             rtCompile.arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
-            if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
+            if (runCompilerCommand(rtCompile, "clang", timeout) != 0) return 1;
             linkInputs.push_back(rtObject);
         }
         for (size_t index = 0; index < crtSources.size(); ++index) {
@@ -747,7 +773,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
 #endif
             for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
             crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
-            if (runCompilerCommand(crtCompile, "clang") != 0) return 1;
+            if (runCompilerCommand(crtCompile, "clang", timeout) != 0) return 1;
             linkInputs.push_back(crtObject);
         }
 
@@ -757,7 +783,7 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
         clangCommand.arg(sharedFlag);
         for (const auto& input : linkInputs) clangCommand.arg(input.string());
         clangCommand.arg("-o").arg(libraryPath.string());
-        result = runCompilerCommand(clangCommand, "clang");
+        result = runCompilerCommand(clangCommand, "clang", timeout);
     }
 
     if (result != 0) {
@@ -777,7 +803,8 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
 int compileNativeSource(const std::string& sourcePath, const std::string& outputPath,
                         CEmitterBackend backend, CCompilerKind requestedCompiler,
                         const std::filesystem::path& crtRoot, bool useCpp17,
-                        const std::vector<std::string>& extraSources)
+                        const std::vector<std::string>& extraSources,
+                        ProcessTimeout timeout)
 {
     std::error_code ec;
     if (!std::filesystem::exists(sourcePath, ec)) {
@@ -835,7 +862,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         }
         if (!compileCrtSourcesToObjects(
                 crtSources, includes, compiler, backend, cppObjectDirectory.path(),
-                cppCrtObjects)) {
+                cppCrtObjects, timeout)) {
             return 1;
         }
     }
@@ -846,7 +873,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
 #ifdef _WIN32
         ProcessEnvironment    environment;
         std::filesystem::path compilerPath;
-        if (!loadMsvcEnvironment(environment, compilerPath)) return 1;
+        if (!loadMsvcEnvironment(environment, compilerPath, timeout)) return 1;
         ca::process::Command command(compilerPath.string());
         command.arg("/nologo").arg("/LD").arg("/utf-8");
         if (useCpp17) command.arg("/std:c++17");
@@ -859,7 +886,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         for (const auto& source : sources) command.arg(source.string());
         command.arg("/Fe" + libraryPath.string());
         mergeProcessEnvironment(command, environment);
-        result = runCompilerCommand(command, "MSVC");
+        result = runCompilerCommand(command, "MSVC", timeout);
 #else
         CA_LOGT_ERROR("compile", "MSVC is only supported on Windows.\n");
 #endif
@@ -887,7 +914,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
         command.arg("-lm");
 #endif
         for (const auto& object : cppCrtObjects) command.arg(object.string());
-        result = runCompilerCommand(command, executable);
+        result = runCompilerCommand(command, executable, timeout);
     }
 
     if (result != 0) {
@@ -907,25 +934,28 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
 int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
                    CEmitterBackend backend, CCompilerKind requestedCompiler,
                    const std::filesystem::path& crtRoot,
-                   const std::vector<std::string>& extraSources)
+                   const std::vector<std::string>& extraSources,
+                   ProcessTimeout timeout)
 {
     return compileNativeSource(cOutputPath, outputPath, backend, requestedCompiler, crtRoot,
-                               false, extraSources);
+                               false, extraSources, timeout);
 }
 
 int compileCppSource(const std::string& cppOutputPath, const std::string& outputPath,
                      CEmitterBackend backend, CCompilerKind requestedCompiler,
                      const std::filesystem::path& crtRoot,
-                     const std::vector<std::string>& extraSources)
+                     const std::vector<std::string>& extraSources,
+                     ProcessTimeout timeout)
 {
     return compileNativeSource(cppOutputPath, outputPath, backend, requestedCompiler, crtRoot,
-                               true, extraSources);
+                               true, extraSources, timeout);
 }
 
 int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
                            CEmitterBackend backend, CCompilerKind requestedCompiler,
                            const std::filesystem::path& crtRoot,
-                           const std::vector<std::string>& extraSources)
+                           const std::vector<std::string>& extraSources,
+                           ProcessTimeout timeout)
 {
     if (cSource.empty()) {
         CA_LOGT_ERROR("compile", "generated C source is empty.\n");
@@ -958,7 +988,8 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
         printf("Compiling native library with MSVC temporary source fallback: %s\n",
                libraryPath.string().c_str());
         const int rc =
-            compileMsvcSourceFromTemporaryFile(cSource, libraryPath, includes, sources, backend);
+            compileMsvcSourceFromTemporaryFile(cSource, libraryPath, includes, sources, backend,
+                                               timeout);
         if (rc != 0) return rc;
         std::error_code ec;
         if (!std::filesystem::is_regular_file(libraryPath, ec) ||
@@ -1014,12 +1045,10 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
     // 死锁（大源码 + 多警告输出时必现窗口）。
     spawnStdinWriter(std::move(*input), std::string(cSource));
 
-    auto completed = child.wait_with_output();
-    if (completed.is_err()) {
-        CA_LOGT_ERROR("compile", "cannot wait for C compiler: {}\n", completed.unwrap_err().to_string().c_str());
-        return 1;
-    }
-    auto output = std::move(completed).unwrap();
+    // 超时路径：helper 内部收割进程树并收尸后返回 false（已记录超时日志）；
+    // 输出无条件先落盘——卡死前编译器吐出的部分告警对定位源码有价值。
+    ca::process::Output output;
+    if (!waitChildWithTimeout(child, "C compiler", timeout, output)) return 1;
     writeProcessOutput(output);
     if (!output.status.success()) {
         CA_LOGT_ERROR("compile", "C compiler failed with exit code {}.\n", output.status.code);
@@ -1037,7 +1066,8 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 
 int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
                           LlvmTool tool, bool withRuntimeProtection,
-                          const std::filesystem::path& crtRoot)
+                          const std::filesystem::path& crtRoot,
+                          ProcessTimeout timeout)
 {
     if (!jdk_finder::commandExists("clang")) {
         CA_LOGT_ERROR("compile", "LLVM IR compilation requires clang on PATH.\n");
@@ -1120,13 +1150,8 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             return 1;
         }
         spawnStdinWriter(std::move(*input), std::string(llvmSource));
-        auto completed = child.wait_with_output();
-        if (completed.is_err()) {
-            CA_LOGT_ERROR("compile", "cannot wait for clang: {}\n",
-                          completed.unwrap_err().to_string().c_str());
-            return 1;
-        }
-        auto output = std::move(completed).unwrap();
+        ca::process::Output output;
+        if (!waitChildWithTimeout(child, "clang", timeout, output)) return 1;
         writeProcessOutput(output);
         if (!output.status.success()) {
             std::filesystem::remove(libraryPath, ec);
@@ -1173,13 +1198,8 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             return 1;
         }
         spawnStdinWriter(std::move(*llcInput), std::string(llvmSource));
-        auto llcCompleted = llcChild.wait_with_output();
-        if (llcCompleted.is_err()) {
-            CA_LOGT_ERROR("compile", "cannot wait for llc: {}\n",
-                          llcCompleted.unwrap_err().to_string().c_str());
-            return 1;
-        }
-        auto llcOutput = std::move(llcCompleted).unwrap();
+        ca::process::Output llcOutput;
+        if (!waitChildWithTimeout(llcChild, "llc", timeout, llcOutput)) return 1;
         writeProcessOutput(llcOutput);
         if (!llcOutput.status.success()) {
             CA_LOGT_ERROR("compile", "llc failed with exit code {}.\n", llcOutput.status.code);
@@ -1197,7 +1217,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
             rtCompile.arg("-fPIC"); // 产物进 .so，见 compileLlvmIr 侧的 TPOFF32 说明。
 #endif
             rtCompile.arg(rtProtectSource.string()).arg("-o").arg(rtObject.string());
-            if (runCompilerCommand(rtCompile, "clang") != 0) return 1;
+            if (runCompilerCommand(rtCompile, "clang", timeout) != 0) return 1;
             linkInputs.push_back(rtObject);
         }
         for (size_t index = 0; index < crtSources.size(); ++index) {
@@ -1211,7 +1231,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
 #endif
             for (const auto& include : crtIncludes) crtCompile.arg("-I").arg(include.string());
             crtCompile.arg(crtSources[index].string()).arg("-o").arg(crtObject.string());
-            if (runCompilerCommand(crtCompile, "clang") != 0) return 1;
+            if (runCompilerCommand(crtCompile, "clang", timeout) != 0) return 1;
             linkInputs.push_back(crtObject);
         }
 
@@ -1221,7 +1241,7 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
         clangCommand.arg(sharedFlag);
         for (const auto& input : linkInputs) clangCommand.arg(input.string());
         clangCommand.arg("-o").arg(libraryPath.string());
-        if (runCompilerCommand(clangCommand, "clang") != 0) {
+        if (runCompilerCommand(clangCommand, "clang", timeout) != 0) {
             std::filesystem::remove(libraryPath, ec);
             return 1;
         }

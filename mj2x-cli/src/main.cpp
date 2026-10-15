@@ -39,6 +39,9 @@
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
 #include "param_registry.hpp"
+// P1-4 外部进程超时（--native-timeout）：native_compiler.hpp 已透传
+// ProcessTimeout/processTimeoutFromSeconds，本文件的 pack hook 站点直接用。
+#include "native_process_timeout.hpp"
 #include "jzip/memory_segment.hpp"
 #include "libca/core/tag_cast.hpp"
 #include "jzip/zip_io.hpp"
@@ -77,6 +80,13 @@
 using mj2x::cli::CEmitterBackend;
 using mj2x::cli::CliOptions;
 using mj2x::cli::NativeBuildDriver;
+// P1-4 外部进程超时（native_process_timeout.hpp，mj2x::cli 命名空间）：
+// pack hook 站点与 compile dispatch 直接以无限定名使用。
+using mj2x::cli::ProcessTimeout;
+using mj2x::cli::isDeadlineExceeded;
+using mj2x::cli::logProcessTimeout;
+using mj2x::cli::outputOptionsWithTimeout;
+using mj2x::cli::processTimeoutFromSeconds;
 
 static void printUsage()
 {
@@ -297,8 +307,12 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&
 /// `{in}` 占位符替换为编译产物路径；hook 应就地改写该文件（加壳/签名等），
 /// 随后的嵌入（可选 --native-lib-key 加密）使用处理后的产物。经系统 shell
 /// 执行（Windows: ComSpec /d /c；POSIX: sh -c），非零退出码视为失败。
+/// @param timeout 墙钟超时（P1-4；0 = 不限时）。超时只杀 shell 本身——
+/// hook 自行拉起的子孙进程不在收割范围（用户自有命令，与 jvmtp 对
+/// 用户钩子的口径一致）。
 static int runNativeLibPackHook(const std::string&    hookTemplate,
-                                const std::filesystem::path& nativeLibraryPath)
+                                const std::filesystem::path& nativeLibraryPath,
+                                ProcessTimeout timeout)
 {
     std::string commandLine = hookTemplate;
     const std::string marker  = "{in}";
@@ -321,9 +335,13 @@ static int runNativeLibPackHook(const std::string&    hookTemplate,
 #else
     command.arg("-c").arg(commandLine);
 #endif
-    auto completed = command.output();
+    auto completed = command.output(outputOptionsWithTimeout(timeout));
     CA_LOGT_INFO("cli", "native pack hook command line: {}\n", commandLine.c_str());
     if (completed.is_err()) {
+        if (isDeadlineExceeded(completed.unwrap_err())) {
+            logProcessTimeout("native pack hook", timeout);
+            return 1;
+        }
         CA_LOGT_ERROR("cli", "cannot start native pack hook: {}\n",
                       completed.unwrap_err().to_string().c_str());
         return 1;
@@ -1391,10 +1409,14 @@ int main(int argc, char** argv)
 
     if (options.compileNative) {
         int compileRc = 1;
+        // P1-4：--native-timeout（秒，0=∞）→ 毫秒；下面每次外呼独立计时。
+        const ProcessTimeout processTimeout =
+            processTimeoutFromSeconds(options.nativeTimeoutSec);
         if (options.buildDriver == NativeBuildDriver::Xmake) {
             mj2x::cli::XmakeBuildConfig buildConfig;
             buildConfig.projectDir        = options.xmakeProjectDir;
             buildConfig.outputLibraryPath = nativeLibraryPath;
+            buildConfig.processTimeout    = processTimeout;
             compileRc                     = mj2x::cli::buildXmakeProject(buildConfig);
         }
         else {
@@ -1420,12 +1442,12 @@ int main(int argc, char** argv)
                 if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
                     compileRc = mj2x::cli::compileLlvmIrFromPipe(
                         nativeArtifact.content, options.outputPath, options.llvmTool,
-                        withRuntimeProtection, crtRoot);
+                        withRuntimeProtection, crtRoot, processTimeout);
                 }
                 else {
                     compileRc = mj2x::cli::compileLlvmIrSource(
                         nativeOutputPath, options.outputPath, options.llvmTool,
-                        withRuntimeProtection, crtRoot);
+                        withRuntimeProtection, crtRoot, processTimeout);
                 }
             }
             else if (options.compileMode == mj2x::cli::CompileMode::Pipe) {
@@ -1439,7 +1461,7 @@ int main(int argc, char** argv)
                 }
                 compileRc = mj2x::cli::compileCSourceFromPipe(
                     nativeArtifact.content, options.outputPath, options.cBackendKind,
-                    options.cCompilerKind, crtRoot, userIntrinsicConfig.sources);
+                    options.cCompilerKind, crtRoot, userIntrinsicConfig.sources, processTimeout);
             }
             else {
                 // 多文件模式（--emit-native-dir）：编译目录内全部 .c。
@@ -1452,14 +1474,16 @@ int main(int argc, char** argv)
                                       options.cBackendKind,
                                       options.cCompilerKind,
                                       crtRoot,
-                                      userIntrinsicConfig.sources)
+                                      userIntrinsicConfig.sources,
+                                      processTimeout)
                                 : mj2x::cli::compileCSource(
                                       compileSource,
                                       options.outputPath,
                                       options.cBackendKind,
                                       options.cCompilerKind,
                                       crtRoot,
-                                      userIntrinsicConfig.sources);
+                                      userIntrinsicConfig.sources,
+                                      processTimeout);
             }
         }
         if (compileRc != 0) return compileRc;
@@ -1468,7 +1492,7 @@ int main(int argc, char** argv)
             // 随后嵌入（可选 --native-lib-key 加密）使用处理后的文件。
             if (!options.nativeLibPackHook.empty()) {
                 const int hookRc = runNativeLibPackHook(options.nativeLibPackHook,
-                                                        nativeLibraryPath);
+                                                        nativeLibraryPath, processTimeout);
                 if (hookRc != 0) return hookRc;
             }
             return embedNativeLibraryInJar(options.outputPath, nativeResourceEntry,

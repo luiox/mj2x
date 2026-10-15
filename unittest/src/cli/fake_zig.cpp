@@ -5,6 +5,12 @@
 #include <iterator>
 #include <string>
 
+#ifdef _WIN32
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#endif
+
 namespace {
 
 bool writeFileFromEnvironment(const char* name, const std::string& data)
@@ -14,6 +20,30 @@ bool writeFileFromEnvironment(const char* name, const std::string& data)
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output.write(data.data(), static_cast<std::streamsize>(data.size()));
     return output.good();
+}
+
+void sleepSeconds(int seconds)
+{
+#ifdef _WIN32
+    Sleep(static_cast<DWORD>(seconds) * 1000);
+#else
+    sleep(static_cast<unsigned>(seconds));
+#endif
+}
+
+// MJ2X_FAKE_ZIG_HANG: simulated hung compiler (P1-4 timeout E2E). Called
+// after stdin is fully consumed so the shape matches a real compiler that
+// read the source and then stalled; sleeps MJ2X_FAKE_ZIG_HANG_SECS seconds
+// (default 60, far beyond the E2E --native-timeout of 1s).
+void hangIfRequested()
+{
+    const char* hang = std::getenv("MJ2X_FAKE_ZIG_HANG");
+    if (hang == nullptr || *hang == '\0' || std::string(hang) == "0") return;
+    int seconds = 60;
+    if (const char* secs = std::getenv("MJ2X_FAKE_ZIG_HANG_SECS"))
+        seconds = std::atoi(secs);
+    if (seconds <= 0) seconds = 60;
+    sleepSeconds(seconds);
 }
 
 }
@@ -38,6 +68,9 @@ int main(int argc, char** argv)
     if (readsStdin)
         source.assign(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
     if (!writeFileFromEnvironment("MJ2X_FAKE_ZIG_SOURCE", source)) return 66;
+
+    hangIfRequested();
+
     if (outputPath.empty() || (readsStdin && source.empty())) return 67;
     if (const char* skipOutput = std::getenv("MJ2X_FAKE_ZIG_SKIP_OUTPUT");
         skipOutput != nullptr && *skipOutput != '\0')
