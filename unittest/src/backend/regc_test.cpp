@@ -10,6 +10,7 @@
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "mj2x/mir/passes/reg_transform_passes.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 
@@ -743,6 +744,102 @@ TEST(RegCTest, EmitsTryCatchExceptionDispatch)
         << result.source;
     EXPECT_NE(result.source.find("goto block_b"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
+}
+
+// H3 守门：CFF 的 state 寄存器必须以 volatile 发射。
+// 不加 volatile 时，state 是可跨基本块常量传播的普通局部量，C 编译器的
+// jump-threading 会把 `dispatcher: switch(state)` 整块消解回原始结构化控制流
+// ——产物源码看着复杂，二进制里根本没有平坦化（clang -O2 实测，见
+// `work/cff_probe/st_cff.ll` vs `st_vol.ll`）。
+TEST(RegCTest, CffStateRegisterIsEmittedVolatile)
+{
+    RegFunction fn;
+    auto        entry      = std::make_unique<RegBlock>(SSABlockId{0});
+    auto        trueBlock  = std::make_unique<RegBlock>(SSABlockId{1});
+    auto        falseBlock = std::make_unique<RegBlock>(SSABlockId{2});
+
+    const RegValue input{RegId{0}, SSAType::I32};
+    const RegValue result{RegId{1}, SSAType::I32};
+    const RegValue edgeValue{RegId{2}, SSAType::I32};
+    fn.parameters.push_back(input);
+    fn.symbol.owner      = "CffVolatile";
+    fn.symbol.name       = "branch";
+    fn.symbol.desc       = "(I)I";
+    fn.symbol.returnType = SSAType::I32;
+
+    RegInstruction add;
+    add.kind            = RegInstructionKind::Binary;
+    add.hasDest         = true;
+    add.dest            = result;
+    add.lhs             = RegOperand::fromRegister(input);
+    add.rhs             = RegOperand::fromInt(1, SSAType::I32);
+    add.binaryOp        = SSABinaryOp::Add;
+    add.effect          = SSAEffect::pure();
+    entry->instructions = {add};
+
+    RegSuccessor trueTarget;
+    trueTarget.block = trueBlock.get();
+    trueTarget.copies.push_back(RegCopy{edgeValue, RegOperand::fromRegister(result)});
+    RegSuccessor falseTarget;
+    falseTarget.block = falseBlock.get();
+    falseTarget.copies.push_back(RegCopy{edgeValue, RegOperand::fromRegister(input)});
+    entry->terminator = RegBranchTerminator{
+        RegOperand::fromInt(1, SSAType::BOOL), std::move(trueTarget), std::move(falseTarget)};
+    trueBlock->terminator  = RegReturnTerminator{true, RegOperand::fromRegister(edgeValue)};
+    falseBlock->terminator = RegReturnTerminator{true, RegOperand::fromRegister(edgeValue)};
+    fn.entry               = entry.get();
+    fn.blocks.push_back(std::move(entry));
+    fn.blocks.push_back(std::move(trueBlock));
+    fn.blocks.push_back(std::move(falseBlock));
+
+    RegTransformOptions options;
+    options.enableControlFlowFlattening = true;
+    const auto stats = applyRegTransformPasses(fn, options);
+    ASSERT_TRUE(stats.controlFlowFlattened);
+    ASSERT_TRUE(fn.cffVolatileState.has_value()) << "CFF must publish its state register";
+
+    RegCEmitter emitter;
+    auto        emitted = emitter.emitFunction(fn);
+    ASSERT_TRUE(emitted.ok) << emitted.reason;
+
+    // state 声明带 volatile，且它正是 dispatcher switch 的输入变量。
+    const std::string stateName = "r" + std::to_string(fn.cffVolatileState->id.value);
+    EXPECT_NE(emitted.source.find("volatile int32_t " + stateName + " = 0;"), std::string::npos)
+        << "state must be volatile: " << emitted.source;
+    EXPECT_NE(emitted.source.find("switch (" + stateName + ")"), std::string::npos)
+        << "dispatcher must switch on the state register: " << emitted.source;
+    expectNoStackAnchors(emitted.source);
+}
+
+// 关闭开关（cffStateVolatile=false）时回到普通局部量，产物形态与历史一致。
+TEST(RegCTest, CffStateVolatileCanBeDisabled)
+{
+    RegFunction fn;
+    auto        entry = std::make_unique<RegBlock>(SSABlockId{0});
+    fn.symbol.owner   = "CffVolatile";
+    fn.symbol.name    = "straight";
+    fn.symbol.desc    = "()I";
+    fn.symbol.returnType = SSAType::I32;
+    entry->terminator    = RegReturnTerminator{true, RegOperand::fromInt(7, SSAType::I32)};
+    // 人为给一个分支，让 CFF 有可平坦化的控制流。
+    auto other = std::make_unique<RegBlock>(SSABlockId{1});
+    other->terminator = RegReturnTerminator{true, RegOperand::fromInt(8, SSAType::I32)};
+    entry->terminator = RegJumpTerminator{RegSuccessor{other.get(), {}}};
+    fn.entry          = entry.get();
+    fn.blocks.push_back(std::move(entry));
+    fn.blocks.push_back(std::move(other));
+
+    RegTransformOptions options;
+    options.enableControlFlowFlattening = true;
+    options.cffStateVolatile            = false;
+    const auto stats = applyRegTransformPasses(fn, options);
+    ASSERT_TRUE(stats.controlFlowFlattened);
+    EXPECT_FALSE(fn.cffVolatileState.has_value());
+
+    RegCEmitter emitter;
+    auto        emitted = emitter.emitFunction(fn);
+    ASSERT_TRUE(emitted.ok) << emitted.reason;
+    EXPECT_EQ(emitted.source.find("volatile int32_t"), std::string::npos) << emitted.source;
 }
 
 TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)

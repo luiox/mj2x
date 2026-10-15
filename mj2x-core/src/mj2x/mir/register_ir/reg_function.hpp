@@ -47,6 +47,19 @@ struct RegFunction
     /// dispatch pending JNI exceptions from protected blocks into the matching
     /// handler while materializing the handler's synthetic exception register.
     std::vector<RegExceptionRegion> exceptionRegions;
+
+    /// @brief CFF dispatcher 的 state 寄存器（已平坦化的函数才有值）。
+    ///
+    /// @details
+    /// 由 applyRegTransformPasses 的 CFF 分支写入，供发射端把该变量声明为
+    /// `volatile`。动机：state 若是普通 SSA 局部量，`dispatcher: switch(state)`
+    /// 的每个前驱都只写常量，C 编译器的 jump-threading + instcombine 会把
+    /// dispatcher 整个消解回原始结构化控制流（clang -O2 实测），平坦化形同虚设。
+    /// volatile 使 store/load 不可被优化器跨基本块推导，dispatcher 得以存活。
+    ///
+    /// 发射端契约：RegC 已消费（变量声明加 volatile）；LLVM 后端是纯 SSA 无内存槽，
+    /// 暂不适用（待 inline-asm 屏障方案），见 doc_ai/jvmtp_gap_analysis.md §4。
+    std::optional<RegValue> cffVolatileState;
 };
 
 /// @brief Validate RegIR structural invariants required before RegC.

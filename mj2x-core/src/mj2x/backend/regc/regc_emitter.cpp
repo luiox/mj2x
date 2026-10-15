@@ -664,7 +664,16 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             }
         }
         if (!isParameter) {
-            out.declare_var(cType(type), regName(RegId{id}), "0");
+            // CFF dispatcher 的 state 必须 volatile 发射：否则 C 编译器的
+            // jump-threading 会把它消解回原始结构化控制流（H3）。
+            const bool isCffState =
+                fn.cffVolatileState.has_value() && fn.cffVolatileState->id.value == id;
+            if (isCffState) {
+                out.declare_var(std::string("volatile ") + cType(type), regName(RegId{id}), "0");
+            }
+            else {
+                out.declare_var(cType(type), regName(RegId{id}), "0");
+            }
         }
     }
     // Declare edge-copy temporaries based on the types actually captured during emit
