@@ -468,8 +468,15 @@ bool isCffPureInstruction(const RegInstruction& instruction)
     case RegInstructionKind::ArrayStore:
     case RegInstructionKind::Call:
     case RegInstructionKind::Allocate:
-    case RegInstructionKind::Intrinsic:
-    case RegInstructionKind::Barrier: return false;
+    case RegInstructionKind::Intrinsic: return false;
+    // Barrier 放行（#X H2）：它虽带 isBarrier effect，但语义上是"不可折叠锚点"——
+    // 无数据流产出、不抛异常、不读外部状态，唯一作用是阻止 C 编译器把其相邻的
+    // MBA/恒假推导常量化。CFF 只改**块间**路由（原 CFG 边 → dispatcher state
+    // 迁移），块内指令序列逐字保留，故 barrier 与其它 effect 的相对顺序不变。
+    // 反面后果（实测）：若在此判 false，`--regc-mba-deep` 注入的 barrier 会让
+    // 整函数被排除，深 MBA 与 CFF 互为毒药——同一纯算术函数开启两者后 dispatcher
+    // 从 12 块退回原始 CFG（保护强度归零而不报错）。
+    case RegInstructionKind::Barrier: return true;
     }
     return false;
 }
@@ -551,18 +558,24 @@ uint64_t splitmix64(uint64_t x)
 
 /// 派生非零 I32 state 码：splitmix64(seed, index) 低位；0 冲突时退 1。
 /// CFF 加密模式下 state 码不再是顺序 1,2,3..，而是伪随机分布。
+///
+/// 值域收敛到 int32 **正**区间：`RegSwitchCase::key` 以 int64_t 承载，但 RegC
+/// 发射为 C `switch` 的 case 常量，u32 最高位置 1 会溢出 int32（clang
+/// `-Wswitch: overflow converting case value`，且踩整型转换实现域）。码空间从
+/// 2^32 降到 2^31 只抬高碰撞概率，dispatcher 建表处已有查重 + 线性探测兜底。
 ca::u32 deriveStateCode(uint64_t seed, ca::u32 index)
 {
     const uint64_t mixed = splitmix64(seed ^ (static_cast<uint64_t>(index) * 0x85EBCA77u));
-    ca::u32        code  = static_cast<ca::u32>(mixed);
+    ca::u32        code  = static_cast<ca::u32>(mixed) & 0x7FFFFFFFu;
     return code == 0 ? 1u : code;
 }
 
 /// 状态异或 key：常量（非零），写入值 = code，dispatch 前 state ^= key，
 /// case 常量 = code ^ key（二进制中写入常量与比较常量不同）。
+/// 同 deriveStateCode 的 int32 正值域约束——key 越界会让 case 常量连带溢出。
 ca::u32 deriveStateXorKey(uint64_t seed)
 {
-    const ca::u32 key = static_cast<ca::u32>(splitmix64(seed ^ 0x9E3779B97F4A7C15ull));
+    ca::u32 key = static_cast<ca::u32>(splitmix64(seed ^ 0x9E3779B97F4A7C15ull)) & 0x7FFFFFFFu;
     return key == 0 ? 0x9E3779B9u : key;
 }
 
