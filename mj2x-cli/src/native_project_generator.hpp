@@ -15,6 +15,9 @@ struct XmakeProjectConfig
     std::string           projectName = "mj2x_native_project";
     /// 随工程分发的 mj2x-rt 挂载子集与后端宏按此选择(embedded_rt.hpp)。
     CEmitterBackend       backend     = CEmitterBackend::StackC;
+    /// 优化级别 `0`/`1`/`2`/`3`/`s`（默认 "2"）。低于 2 时生成的源码形态（如
+    /// CFF dispatcher）不会被宿主编译器优化掉；`s` 面向体积。
+    std::string           optLevel    = "2";
 };
 
 struct XmakeBuildConfig

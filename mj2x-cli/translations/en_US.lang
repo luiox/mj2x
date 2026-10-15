@@ -140,6 +140,7 @@ mj2x.param.selection.native_annotation.desc=Translate only methods carrying the 
 mj2x.param.selection.native_method_prefixes.desc=Translate only methods whose owner.name starts with the given prefix (repeatable)
 mj2x.param.compile.enabled.desc=Compile the generated C/C++ source into a native library (next to --output)
 mj2x.param.compile.mode.desc=Native compilation input mode
+mj2x.param.compile.opt_level.desc=Optimization level for the generated native project (0/1/2/3/s, default 2; lower levels keep source-level shapes such as CFF flattening from being optimized away, s targets size)
 mj2x.param.compile.c_compiler.desc=C compiler or build driver (xmake = build driver)
 mj2x.param.compile.llvm_tool.desc=LLVM IR compilation path
 mj2x.param.compile.generate_cmake.desc=Generate a standalone CMake native project directory
