@@ -82,6 +82,7 @@ struct CliOptions
     bool                     regcCffStateEncrypt = false;
     bool                     regcMbaDeep         = false;
     bool                     regcOpaqueZero      = false;
+    bool                     regcHideConstants   = false;   ///< 立即数隐藏（obfuscation.constants，不被 --regc-obfuscate 联动）
     uint64_t                 regcTransformSeed   = 0;
     std::string              stackcExceptionCheck = "full";
     std::string              vmc4Dispatcher      = "switch_table";

@@ -197,7 +197,8 @@ RegC：
 | `--regc-cff-state-encrypt` | CFF 派生随机 state 码（splitmix64(seed,index) 替代顺序 1,2,3）+ dispatcher 入口状态异或。隐含开启 CFF（issue #829） |
 | `--regc-mba-deep` | Add 深展开（De Morgan/进位恒等链 + barrier 防折叠 + per-site 按 seed 选变体）。隐含开启 MBA（issue #829） |
 | `--regc-opaque-zero` | opaque 恒真谓词变体（demorgan `~(~x)==x` / shift-pair / or-dec，零 UB 位运算恒等）。隐含开启 opaque（issue #829） |
-| `--regc-transform-seed <n>` | 混淆变换种子（state 码/变体选择，默认 0；同 seed 同产物） |
+| `--regc-hide-constants` | 立即数隐藏：整型立即数 C 改写为 `E ^ const_key(site)`（E 编译期物化、密钥运行时经独立 TU 派生，LTO 下不可折叠）。**不被 `--regc-obfuscate` 联动**——每立即数多一次运行时调用，是混淆家族里最重的一项（对标 jvmtp `obfuscation.constants`） |
+| `--regc-transform-seed <n>` | 混淆变换种子（state 码/变体选择，默认 0；同 seed 同产物）。立即数隐藏的 site 为函数内局部计数器，不掺 seed（site 必物化在产物里，掺 seed 不增加分析者成本） |
 
 VMC4：
 

@@ -1116,7 +1116,7 @@ int main(int argc, char** argv)
 #if !defined(MJ2X_DISABLE_REGC_BACKEND) || !defined(MJ2X_DISABLE_LLVM_BACKEND)
     auto buildTransformOptions = [&]() -> std::optional<mj2x::RegTransformOptions> {
         if (!options.regcObfuscate && options.regcCffDead == 0 && !options.regcCffStateEncrypt &&
-            !options.regcMbaDeep && !options.regcOpaqueZero) {
+            !options.regcMbaDeep && !options.regcOpaqueZero && !options.regcHideConstants) {
             return std::nullopt;
         }
         mj2x::RegTransformOptions transform;
@@ -1129,6 +1129,9 @@ int main(int argc, char** argv)
         transform.cffStateEncryption  = options.regcCffStateEncrypt;
         transform.mbaDeep             = options.regcMbaDeep;
         transform.opaqueZero          = options.regcOpaqueZero;
+        // 立即数隐藏不被 --regc-obfuscate 联动（每立即数多一次运行时调用，
+        // 家族里最重的一项，仅显式开启）；排 CFF 之后由 pass 内部保证。
+        transform.hideImmediateConstants = options.regcHideConstants;
         transform.transformSeed =
             mj2x::deriveClientSeed(options.regcTransformSeed, options.clientId);
         return transform;
