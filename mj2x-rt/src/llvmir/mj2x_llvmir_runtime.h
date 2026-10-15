@@ -155,6 +155,15 @@ MJ2X_LLVMIR_API void* mj2x_llvm_indy_method_handle2(JNIEnv* env, void* lkcls, vo
 MJ2X_LLVMIR_API void* mj2x_llvm_indy_handle(JNIEnv* env, void* lookup, void* owner_class,
     int32_t tag, const char* owner, const char* name, const char* desc);
 
+// ---- 阶段五:立即数隐藏 per-site 密钥派生 ----
+// 对标 jvmtp obfuscation.constants：applyConstantHiding 把整型立即数 C 改写为
+// E ^ mj2x_llvm_const_key(site)（E = C ^ K 编译期物化，K 运行时派生）。splitmix64
+// 单步（输入先掺 volatile 不透明常量 g_const_key_opaque，LTO 不可折叠）与
+// reg_transform_passes.cpp 的 splitmix64（ca::random::SplitMix64 正典，#1027 A3
+// 逐位锁定）+ kOpaqueConstant 同源——改常数/移位/顺序即使 E ^ K != C。site 为
+// 函数内局部计数器，不掺 seed（site 必物化在产物里，掺 seed 不增加分析者成本）。
+MJ2X_LLVMIR_API int64_t mj2x_llvm_const_key(int64_t site);
+
 #ifdef __cplusplus
 }
 #endif
