@@ -1,10 +1,13 @@
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
 
+#include "mj2x/mir/passes/const_key_derivation.hpp"
+
 #include "libca/random/split_mix64.hpp"
 
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -833,6 +836,122 @@ void applyCffDeadBlocks(RegFunction& function, const RegTransformOptions& option
     }
 }
 
+/// 可隐藏操作数判定：仅整型 IntLiteral（I32/I64）。浮点/null/opaque 不动；
+/// BOOL/I8/I16/CHAR 窄类型实践中不作为 IntLiteral 操作数出现（lowering 统一
+/// I32 计算位宽），保守跳过。
+bool canHideImmediate(const RegOperand& operand)
+{
+    return operand.kind == RegOperandKind::IntLiteral &&
+           (operand.type == SSAType::I32 || operand.type == SSAType::I64);
+}
+
+/// 隐藏一个整型立即数：`k = const_key(site)`（I64，不透明调用）→
+/// `e = Xor(E64, k)`（I64）→ 仅 I32 追加 `Convert` 截断。返回承载还原值的
+/// 寄存器操作数；合成指令先于被改写指令追加（同块 SSA 序）。E64 = C64 ^ K
+/// 编译期算；K = splitmix64(site ^ kOpaqueConstant) 与 RT 双端逐位同源。
+RegOperand hideImmediateOperand(const RegOperand& operand, ca::u32& site, ca::u32& nextRegister,
+                                RegTransformStats& stats, std::vector<RegInstruction>& out)
+{
+    const ca::u32  currentSite = site++;
+    const uint64_t key         = deriveConstKey(static_cast<int64_t>(currentSite));
+    const uint64_t hidden64    = static_cast<uint64_t>(operand.intValue) ^ key;
+
+    const RegValue keyReg{RegId{nextRegister++}, SSAType::I64};
+    RegInstruction  keyInstruction;
+    keyInstruction.kind          = RegInstructionKind::Intrinsic;
+    keyInstruction.hasDest       = true;
+    keyInstruction.dest          = keyReg;
+    keyInstruction.intrinsicName = std::string(kConstKeyIntrinsicPrefix) +
+                                   std::to_string(currentSite);
+    keyInstruction.effect        = SSAEffect::pure();
+    out.push_back(std::move(keyInstruction));
+
+    const RegValue xorReg{RegId{nextRegister++}, SSAType::I64};
+    out.push_back(makeBinary(xorReg, RegOperand::fromRegister(keyReg),
+                             RegOperand::fromInt(static_cast<int64_t>(hidden64), SSAType::I64),
+                             SSABinaryOp::Xor));
+    ++stats.constantsHidden;
+
+    if (operand.type == SSAType::I64) return RegOperand::fromRegister(xorReg);
+
+    // I32：E64 符号扩展 + 末位 Convert 截断。XOR 低 32 位只依赖操作数低 32 位，
+    // (int32)(E32 ^ K32) == (int32)C 恒等。
+    const RegValue narrowReg{RegId{nextRegister++}, operand.type};
+    RegInstruction  narrow;
+    narrow.kind        = RegInstructionKind::Convert;
+    narrow.hasDest     = true;
+    narrow.dest        = narrowReg;
+    narrow.value       = RegOperand::fromRegister(xorReg);
+    narrow.convertKind = SSAConvertKind::Numeric;
+    narrow.targetType  = operand.type;
+    narrow.effect      = SSAEffect::pure();
+    out.push_back(std::move(narrow));
+    return RegOperand::fromRegister(narrowReg);
+}
+
+/// 立即数隐藏（对标 jvmtp `obfuscation.constants` / `.constants.mba`）。
+///
+/// 纯字面量恒等式必被编译器折叠（`(C^k)^k` 同值异指令也会被重结合折叠），
+/// 唯一可行路线是「编译期密钥 + 运行时不可折叠读取」（同 OLLVM constant
+/// encryption）：每个整型立即数 C 改写为
+///     k = Intrinsic("const.key:<site>")   // 运行时 splitmix64 派生，独立 TU 不透明调用
+///     e = Xor(E64, k)                     // E64 = C64 ^ K，编译期算
+///     c = Convert(e)                      // 仅 I32：截断回 32 位
+/// 原操作数 `IntLiteral(C)` → `Register(c)`。site 为函数内局部计数器（确定性，
+/// 可复现构建不变量）；K = splitmix64(site ^ kOpaqueConstant) 与 RT 双端
+/// mj2x_regc_const_key / mj2x_llvm_const_key 逐位同源（#1027 A3 + 不透明
+/// 常量契约，E2E 真实编译+运行守跨语言一致）。
+///
+/// 顺序纪律：必须排在 CFF **之后**——`isCffPureInstruction` 的 switch 中
+/// `Intrinsic → false`，若先插入合成 Intrinsic 会杀死平坦化（零交互保证）。
+/// terminator 的 switch case key 不迭代（dispatcher 表完整性）；CFF 之前
+/// 各 pass 生成的字面量（opaque 谓词的 1、state 码）随本 pass 一并隐藏，
+/// 语义不变。
+///
+/// 合成 Intrinsic 留 `SSAEffect::pure()`（无 mayThrow → 不触发 ExceptionCheck；
+/// 非 Call → 不进 local ref 统计），与原立即数的效果面一致。
+void applyConstantHiding(RegFunction& function, ca::u32& nextRegister, RegTransformStats& stats)
+{
+    ca::u32 site = 0;
+    for (auto& block : function.blocks) {
+        std::vector<RegInstruction> transformed;
+        transformed.reserve(block->instructions.size() * 4);
+        for (const auto& instruction : block->instructions) {
+            RegInstruction rewritten = instruction;
+            // 按 operand 槽位逐个隐藏（合成指令插在被改写指令之前，同块 SSA 序）。
+            // 全槽位统一判定，漏槽位即漏隐藏；dest 是定义不是操作数，不动。
+            if (canHideImmediate(rewritten.value))
+                rewritten.value = hideImmediateOperand(rewritten.value, site, nextRegister, stats,
+                                                       transformed);
+            if (canHideImmediate(rewritten.lhs))
+                rewritten.lhs =
+                    hideImmediateOperand(rewritten.lhs, site, nextRegister, stats, transformed);
+            if (canHideImmediate(rewritten.rhs))
+                rewritten.rhs =
+                    hideImmediateOperand(rewritten.rhs, site, nextRegister, stats, transformed);
+            if (canHideImmediate(rewritten.receiver))
+                rewritten.receiver = hideImmediateOperand(rewritten.receiver, site, nextRegister,
+                                                          stats, transformed);
+            if (canHideImmediate(rewritten.index))
+                rewritten.index =
+                    hideImmediateOperand(rewritten.index, site, nextRegister, stats, transformed);
+            for (auto& argument : rewritten.args) {
+                if (canHideImmediate(argument))
+                    argument =
+                        hideImmediateOperand(argument, site, nextRegister, stats, transformed);
+            }
+            if (rewritten.kind == RegInstructionKind::Copy &&
+                canHideImmediate(rewritten.copy.source)) {
+                rewritten.copy.source =
+                    hideImmediateOperand(rewritten.copy.source, site, nextRegister, stats,
+                                         transformed);
+            }
+            transformed.push_back(std::move(rewritten));
+        }
+        block->instructions = std::move(transformed);
+    }
+}
+
 }   // namespace
 
 RegTransformStats applyRegTransformPasses(RegFunction&               function,
@@ -850,6 +969,9 @@ RegTransformStats applyRegTransformPasses(RegFunction&               function,
         applyOpaquePredicates(function, nextRegister, options, stats);
     if (options.enableControlFlowFlattening)
         applyControlFlowFlattening(function, nextRegister, options, stats);
+    // 立即数隐藏必须排 CFF 之后（isCffPureInstruction 对 Intrinsic 返回 false，
+    // 先插合成 Intrinsic 会杀死平坦化）。
+    if (options.hideImmediateConstants) applyConstantHiding(function, nextRegister, stats);
     return stats;
 }
 
