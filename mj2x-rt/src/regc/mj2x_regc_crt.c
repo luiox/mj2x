@@ -127,6 +127,90 @@ int64_t mj2x_regc_const_key(int64_t site)
     return (int64_t)(z ^ (z >> 31));
 }
 
+/* ---- 调用目标间接化（对标 jvmtp obfuscation.calls.*） ---- */
+
+/* 按 (table, index) 解析目标方法并缓存入条目。invoke 形态取自条目：
+   0 = virtual/interface（GetMethodID, receiver 实际类），
+   1 = static（GetStaticMethodID），2 = special（GetObjectClass(receiver) + GetMethodID）。
+   解析失败返回 NULL 并保持 pending exception（与 _mj2x_regc_method_id 同口径）。 */
+static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site* site,
+                                 void* receiver)
+{
+    // 缓存命中优先：命中路径 0 次 FindClass / GetMethodID，与既有 cached 帮手
+    // 同开销（1 次目标 JNI 调用）。
+    if (site->method != NULL) return site->method;
+
+    // CRT 层的 context 是无状态的 env 载体（与 runtime.c 的 _mj2x_regc_env
+    // 全局不同），解析一律走 context->env。
+    JNIEnv* env    = (JNIEnv*)context->env;
+    jclass  cls    = (*env)->FindClass(env, site->owner);
+    jclass  target = cls;
+    if (cls == NULL) return NULL;
+    if (site->invokeKind == 2 && receiver != NULL) {
+        // invokespecial：解析类取 receiver 实际类（与 cached 帮手对齐）。
+        target = (*env)->GetObjectClass(env, receiver);
+        if (target == NULL) return NULL;
+    }
+    if (site->invokeKind == 1) {
+        site->method = (*env)->GetStaticMethodID(env, target, site->name, site->desc);
+    }
+    else {
+        if (receiver == NULL) {
+            // 与 _mj2x_regc_call_cached_* 同口径：receiver 为 NULL 抛 NPE。
+            mj2x_regc_throw_exception(context, "java/lang/NullPointerException",
+                                        "instance method call");
+            return NULL;
+        }
+        site->method = (*env)->GetMethodID(env, target, site->name, site->desc);
+    }
+    site->ownerClass = target;
+    return site->method;
+}
+
+/* per-signature dispatcher 公共体：解析后按返回标签分派一次 JNI 调用。
+   helper 名后缀与既有 _mj2x_regc_call_* 一致（void/i32/i64/f32/f64/ref）；
+   void 形态单列（C 不允许 void 函数 return 值）。 */
+#define MJ2X_REGC_DISPATCH_VALUE(name, RetT, JN)                                        \
+    RetT mj2x_regc_dispatch_##name(mj2x_regc_context* context,                       \
+                                                  mj2x_regc_call_site* table,            \
+                                                  int32_t index, void* receiver,          \
+                                                  jvalue* args)                           \
+    {                                                                                     \
+        JNIEnv*              env  = (JNIEnv*)context->env;                             \
+        mj2x_regc_call_site* site = &table[index];                                      \
+        const jmethodID      m   = resolveCallSite(context, site, receiver);               \
+        if (m == NULL) return (RetT)0;                                                    \
+        if (site->invokeKind == 1)                                                        \
+            return (RetT)(*env)->CallStatic##JN##MethodA(env, site->ownerClass, m, args); \
+        return (RetT)(*env)->Call##JN##MethodA(env, (jobject)receiver, m, args);        \
+    }
+
+#define MJ2X_REGC_DISPATCH_VOID()                                                       \
+    void mj2x_regc_dispatch_void(mj2x_regc_context* context,                        \
+                                                  mj2x_regc_call_site* table,           \
+                                                  int32_t index, void* receiver,         \
+                                                  jvalue* args)                          \
+    {                                                                                     \
+        JNIEnv*              env  = (JNIEnv*)context->env;                            \
+        mj2x_regc_call_site* site = &table[index];                                      \
+        const jmethodID      m   = resolveCallSite(context, site, receiver);               \
+        if (m == NULL) return;                                                            \
+        if (site->invokeKind == 1)                                                        \
+            (*env)->CallStaticVoidMethodA(env, site->ownerClass, m, args);                   \
+        else                                                                                \
+            (*env)->CallVoidMethodA(env, (jobject)receiver, m, args);                     \
+    }
+
+MJ2X_REGC_DISPATCH_VOID()
+MJ2X_REGC_DISPATCH_VALUE(i32, int32_t, Int)
+MJ2X_REGC_DISPATCH_VALUE(i64, int64_t, Long)
+MJ2X_REGC_DISPATCH_VALUE(f32, float, Float)
+MJ2X_REGC_DISPATCH_VALUE(f64, double, Double)
+MJ2X_REGC_DISPATCH_VALUE(ref, void*, Object)
+
+#undef MJ2X_REGC_DISPATCH_VOID
+#undef MJ2X_REGC_DISPATCH_VALUE
+
 /* JVM f2i/f2l/d2i/d2l 语义（JLS 5.1.3）：NaN->0、向零截断、超界饱和。
  * C 裸 cast 对 NaN/越界是 UB（#1027 D2），故浮点->整型一律走这两个 helper。
  * 饱和点取 (double)INT32_MAX + 1.0 = 2^31（INT64 侧 (double)INT64_MAX 因

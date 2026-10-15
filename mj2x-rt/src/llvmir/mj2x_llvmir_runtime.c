@@ -791,3 +791,80 @@ int64_t mj2x_llvm_const_key(int64_t site)
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
     return (int64_t)(z ^ (z >> 31));
 }
+
+// ---- 阶段六:调用目标间接化 per-signature dispatcher ----
+
+// 按 (table, index) 解析目标方法并缓存入条目；返回 NULL 表示解析失败
+// （pending exception 由生成代码的 ExceptionCheck 面感知）。
+static void* resolveLlvmCallSite(JNIEnv* env, mj2x_llvm_call_site* site, void* rcv)
+{
+    jclass cls;
+    jclass target;
+    if (site->method != NULL) return site->method;
+    cls = (*env)->FindClass(env, site->owner);
+    if (cls == NULL) return NULL;
+    target = cls;
+    if (site->invokeKind == 2 && rcv != NULL) {
+        // invokespecial：解析类取 receiver 实际类（与 RegC cached 帮手对齐）。
+        target = (*env)->GetObjectClass(env, rcv);
+        if (target == NULL) {
+            (*env)->DeleteLocalRef(env, cls);
+            return NULL;
+        }
+    }
+    if (site->invokeKind == 1) {
+        site->ownerClass = target;
+        site->method     = (void*)(*env)->GetStaticMethodID(env, target, site->name, site->desc);
+        return site->method;
+    }
+    if (rcv == NULL) {
+        (*env)->DeleteLocalRef(env, cls);
+        mj2x_llvm_throw_null(env);
+        return NULL;
+    }
+    site->ownerClass = target;
+    site->method     = (void*)(*env)->GetMethodID(env, target, site->name, site->desc);
+    return site->method;
+}
+
+// per-signature dispatcher：解析后按返回类型分派一次 JNI 调用。
+// static/virtual 由条目 invokeKind 决定（special 走虚调用面：GetObjectClass
+// 已把解析类定为 receiver 实际类，与 RegC cached 同语义）。
+#define MJ2X_LLVM_DISPATCH_VALUE(name, RetT, JN)                                        \
+    MJ2X_LLVMIR_API RetT mj2x_llvm_dispatch_##name(JNIEnv* env,                       \
+                                                  mj2x_llvm_call_site* table,           \
+                                                  int32_t index, void* rcv, jvalue* jv)    \
+    {                                                                                     \
+        mj2x_llvm_call_site* site = &table[index];                                      \
+        void*                 m   = resolveLlvmCallSite(env, site, rcv);                  \
+        if (m == NULL) return (RetT)0;                                                    \
+        if (site->invokeKind == 1)                                                        \
+            return (RetT)(*env)->CallStatic##JN##MethodA(env, (jclass)site->ownerClass,     \
+                                                     (jmethodID)m, jv);                  \
+        return (RetT)(*env)->Call##JN##MethodA(env, (jobject)rcv, (jmethodID)m, jv);       \
+    }
+
+#define MJ2X_LLVM_DISPATCH_VOID()                                                        \
+    MJ2X_LLVMIR_API void mj2x_llvm_dispatch_void(JNIEnv* env,                        \
+                                                  mj2x_llvm_call_site* table,           \
+                                                  int32_t index, void* rcv, jvalue* jv)   \
+    {                                                                                     \
+        mj2x_llvm_call_site* site = &table[index];                                      \
+        void*                 m   = resolveLlvmCallSite(env, site, rcv);                  \
+        if (m == NULL) return;                                                            \
+        if (site->invokeKind == 1)                                                        \
+            (*env)->CallStaticVoidMethodA(env, (jclass)site->ownerClass,                   \
+                                             (jmethodID)m, jv);                         \
+        else                                                                              \
+            (*env)->CallVoidMethodA(env, (jobject)rcv, (jmethodID)m, jv);                 \
+    }
+
+MJ2X_LLVM_DISPATCH_VOID()
+MJ2X_LLVM_DISPATCH_VALUE(i32, int32_t, Int)
+MJ2X_LLVM_DISPATCH_VALUE(i64, int64_t, Long)
+MJ2X_LLVM_DISPATCH_VALUE(f32, float, Float)
+MJ2X_LLVM_DISPATCH_VALUE(f64, double, Double)
+MJ2X_LLVM_DISPATCH_VALUE(ref, void*, Object)
+
+#undef MJ2X_LLVM_DISPATCH_VOID
+#undef MJ2X_LLVM_DISPATCH_VALUE

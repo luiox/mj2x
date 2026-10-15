@@ -164,6 +164,35 @@ MJ2X_LLVMIR_API void* mj2x_llvm_indy_handle(JNIEnv* env, void* lookup, void* own
 // 函数内局部计数器，不掺 seed（site 必物化在产物里，掺 seed 不增加分析者成本）。
 MJ2X_LLVMIR_API int64_t mj2x_llvm_const_key(int64_t site);
 
+// ---- 阶段六:调用目标间接化 per-signature dispatcher ----
+// 对标 jvmtp obfuscation.calls.*：applyCallIndirections 把外部（JDK/库）方法
+// 调用点改写为按签名分派的运行时调用——调用点只带 (table, index)，目标身份
+// （owner/name/desc 字符串）从调用点移出，静态分析须先解析 index → 条目才能
+// 还原调用边。首次分派解析 owner 类 + jmethodID 并缓存入条目。
+// invokeKind：0 = virtual/interface，1 = static，2 = special。
+typedef struct mj2x_llvm_call_site
+{
+    void*       ownerClass;   // jclass 缓存（NULL = 未解析）
+    void*       method;       // jmethodID 缓存（NULL = 未解析）
+    const char* owner;
+    const char* name;
+    const char* desc;
+    int32_t     invokeKind;
+} mj2x_llvm_call_site;
+
+MJ2X_LLVMIR_API int32_t mj2x_llvm_dispatch_i32(JNIEnv* env, mj2x_llvm_call_site* table,
+    int32_t index, void* rcv, jvalue* jv);
+MJ2X_LLVMIR_API int64_t mj2x_llvm_dispatch_i64(JNIEnv* env, mj2x_llvm_call_site* table,
+    int32_t index, void* rcv, jvalue* jv);
+MJ2X_LLVMIR_API float mj2x_llvm_dispatch_f32(JNIEnv* env, mj2x_llvm_call_site* table,
+    int32_t index, void* rcv, jvalue* jv);
+MJ2X_LLVMIR_API double mj2x_llvm_dispatch_f64(JNIEnv* env, mj2x_llvm_call_site* table,
+    int32_t index, void* rcv, jvalue* jv);
+MJ2X_LLVMIR_API void* mj2x_llvm_dispatch_ref(JNIEnv* env, mj2x_llvm_call_site* table,
+    int32_t index, void* rcv, jvalue* jv);
+MJ2X_LLVMIR_API void mj2x_llvm_dispatch_void(JNIEnv* env, mj2x_llvm_call_site* table,
+    int32_t index, void* rcv, jvalue* jv);
+
 #ifdef __cplusplus
 }
 #endif
