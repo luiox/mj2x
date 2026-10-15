@@ -977,6 +977,234 @@ TEST(CliTest, NativeClassFilterViaJsonConfig)
     EXPECT_FALSE((bAdd->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
 }
 
+// --native-timeout（P1-4）：pipe 模式下 C 编译器挂起必须被超时整树收割，
+// 而不是把"超时"拖成无限期阻塞（孙进程管道 EOF 死锁的回归护栏）。
+TEST(CliTest, NativeTimeoutKillsHungCompiler)
+{
+    const fs::path cli     = findCli();
+    const fs::path fakeZig = test::getBuildTargetPath("mj2x_fake_zig");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeZig)) GTEST_SKIP() << "mj2x_fake_zig is not built";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_timeout_compiler.keep").parent_path() /
+        "mj2x_cli_timeout_compiler";
+    const fs::path toolDir       = workDir / "tool";
+    const fs::path outClass      = workDir / "output.class";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outClass);
+#ifdef _WIN32
+    const fs::path zigExecutable = toolDir / "zig.exe";
+#else
+    const fs::path zigExecutable = toolDir / "zig";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::copy_file(fakeZig, zigExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+#ifndef _WIN32
+    fs::permissions(zigExecutable,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add,
+                    ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+
+    std::vector<std::string> lines;
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_HANG=1\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_ZIG_HANG=1");
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+                    " --compile --compile-mode pipe --c-compiler zig --native-timeout 1");
+    auto result = runScript(lines);
+
+    // 挂起的假编译器（睡 60s）应在 1s 超时后被收割：非零退出 + 超时文案，
+    // 且不留下 native 库。超时失效时假编译器 60s 后正常退出并产出库，
+    // 本断言转为失败（慢速但确定的回归信号）。
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("timed out"), std::string::npos) << result.out;
+    EXPECT_FALSE(fileExists(nativeLibrary)) << result.out;
+}
+
+// xmake 站点同样受 --native-timeout 约束：configure 阶段挂起 → 整树收割。
+// Windows 上预置 INCLUDE 走 loadMsvcEnvironment 快速路径（等价于已在开发者
+// 命令提示符内），避免 1s 超时被 vcvarsall.bat 探针自身消耗而测不到点子上。
+TEST(CliTest, NativeTimeoutKillsHungXmake)
+{
+    const fs::path cli       = findCli();
+    const fs::path fakeXmake = test::getBuildTargetPath("mj2x_fake_xmake");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeXmake)) GTEST_SKIP() << "mj2x_fake_xmake is not built";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_timeout_xmake.keep").parent_path() /
+        "mj2x_cli_timeout_xmake";
+    const fs::path toolDir    = workDir / "tool";
+    const fs::path projectDir = workDir / "project";
+    const fs::path outClass   = workDir / "output.class";
+#ifdef _WIN32
+    const fs::path xmakeExecutable = toolDir / "xmake.exe";
+#else
+    const fs::path xmakeExecutable = toolDir / "xmake";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::copy_file(fakeXmake, xmakeExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+#ifndef _WIN32
+    fs::permissions(xmakeExecutable,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add,
+                    ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+
+    std::vector<std::string> lines;
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_XMAKE_HANG=1\"");
+    lines.push_back("set \"INCLUDE=stub-include\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_XMAKE_HANG=1");
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+                    " --generate-xmake " + q(projectDir) + " --compile --native-timeout 1");
+    auto result = runScript(lines);
+
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("xmake configure timed out"), std::string::npos)
+        << result.out;
+}
+
+// --native-timeout 非法值 fail-closed：负数/非整数在 CLI 空格传值形态与
+// JSON 配置两侧都拒绝（DEF_INT 语义 + 越界文案）。
+TEST(CliTest, NativeTimeoutRejectsInvalidValues)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inJar = writeTinyJar();
+    fs::path outJar = test::getTempOutPath("mj2x_cli_timeout_invalid_output.jar");
+    fs::path cFile  = test::getTempOutPath("mj2x_cli_timeout_invalid_output.c");
+
+    // 空格传值形态：opt 的 String kind 消费后继 token（即使以 '-' 开头），
+    // 负数由 DEF_INT 的 val < 0 分支拒绝。
+    auto negative = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) + " --emit-c " + q(cFile) +
+            " --native-timeout -1",
+    });
+    EXPECT_NE(negative.exitCode, 0) << negative.out;
+    EXPECT_NE(negative.out.find("--native-timeout"), std::string::npos) << negative.out;
+
+    auto nonNumeric = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) + " --emit-c " + q(cFile) +
+            " --native-timeout abc",
+    });
+    EXPECT_NE(nonNumeric.exitCode, 0) << nonNumeric.out;
+    EXPECT_NE(nonNumeric.out.find("--native-timeout"), std::string::npos) << nonNumeric.out;
+
+    fs::path config = test::getTempOutPath("mj2x_cli_timeout_invalid_config.json");
+    writeText(config,
+              "{\n"
+              "  \"input\": \"" +
+                  inJar.generic_string() +
+                  "\",\n"
+                  "  \"output\": \"" +
+                  outJar.generic_string() +
+                  "\",\n"
+                  "  \"emit_c\": \"" +
+                  cFile.generic_string() +
+                  "\",\n"
+                  "  \"native_timeout\": -5\n"
+                  "}");
+    auto viaJson = runScript({q(cli) + " --config " + q(config)});
+    EXPECT_NE(viaJson.exitCode, 0) << viaJson.out;
+    EXPECT_NE(viaJson.out.find("native_timeout"), std::string::npos) << viaJson.out;
+}
+
+// native_timeout 经 JSON 配置透传：配置文件驱动的挂起编译器同样被收割。
+TEST(CliTest, NativeTimeoutViaJsonConfig)
+{
+    const fs::path cli     = findCli();
+    const fs::path fakeZig = test::getBuildTargetPath("mj2x_fake_zig");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeZig)) GTEST_SKIP() << "mj2x_fake_zig is not built";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_timeout_json.keep").parent_path() /
+        "mj2x_cli_timeout_json";
+    const fs::path toolDir       = workDir / "tool";
+    const fs::path outClass      = workDir / "output.class";
+    const fs::path nativeLibrary = nativeLibraryPathFor(outClass);
+    const fs::path config        = workDir / "config.json";
+#ifdef _WIN32
+    const fs::path zigExecutable = toolDir / "zig.exe";
+#else
+    const fs::path zigExecutable = toolDir / "zig";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::copy_file(fakeZig, zigExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+#ifndef _WIN32
+    fs::permissions(zigExecutable,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add,
+                    ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+    writeText(config,
+              "{\n"
+              "  \"input\": \"" +
+                  inClass.generic_string() +
+                  "\",\n"
+                  "  \"output\": \"" +
+                  outClass.generic_string() +
+                  "\",\n"
+                  "  \"compile\": true,\n"
+                  "  \"compile_mode\": \"pipe\",\n"
+                  "  \"c_compiler\": \"zig\",\n"
+                  "  \"native_timeout\": 1\n"
+              "}");
+
+    std::vector<std::string> lines;
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_HANG=1\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_ZIG_HANG=1");
+#endif
+    lines.push_back(q(cli) + " --config " + q(config));
+    auto result = runScript(lines);
+
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("timed out"), std::string::npos) << result.out;
+    EXPECT_FALSE(fileExists(nativeLibrary)) << result.out;
+}
+
 TEST(CliTest, ProvidedJavaAnnotationCanSelectMethods)
 {
     fs::path cli = findCli();

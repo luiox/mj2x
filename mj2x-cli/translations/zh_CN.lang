@@ -122,6 +122,7 @@ mj2x.param.compile.generate_cmake.desc=生成独立 CMake native 工程目录
 mj2x.param.compile.generate_xmake.desc=生成独立 xmake native 工程目录（推荐；配合 --compile 一键出 DLL/SO）
 mj2x.param.compile.llvm_tool.desc=LLVM IR 编译路径
 mj2x.param.compile.mode.desc=native 编译输入模式
+mj2x.param.compile.timeout.desc=native 编译外部进程墙钟超时（秒，默认 900，0 = 不限时；对标 jvmtp compiler.timeout。每次外呼——编译器/link/llc/xmake/加壳钩子——独立计时，超时整树终止并以非 0 退出，防卡死编译器无限占用资源）
 mj2x.param.global.backend.desc=选择 native 发射后端（stackc 默认；cbackend/c 为兼容别名）
 mj2x.param.global.dump_mir.desc=打印中间表示（调试用）
 mj2x.param.global.emit_c.desc=输出的 C 源码路径

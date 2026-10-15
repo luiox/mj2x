@@ -17,6 +17,14 @@
 
 #include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
 
+#ifdef _WIN32
+// param_registry.hpp → native_compiler.hpp → native_process_timeout.hpp 传递
+// 引入的 libca/process/subprocess.hpp 为保护 Command 同名成员 #undef 了全局
+// stdout 宏；恢复 MSVC CRT 语义（printHelp 分组输出的 fputs 需要）。
+#    include <cstdio>
+#    define stdout (__acrt_iob_func(1))
+#endif
+
 namespace mj2x::cli {
 namespace {
 
@@ -813,6 +821,7 @@ DEF_BOOL(stringsEncrypt, "--strings-encrypt", "strings_encrypt")
 DEF_ENUM_STR(runtimeProtection, "--runtime-protection", "runtime_protection", "none,log,delay,fake,terminate", "none")
 DEF_INT(runtimeProtectionStep, "--runtime-protection-step", "runtime_protection_step", 1, 0)
 DEF_INT(runtimeProtectionDelayMs, "--runtime-protection-delay", "runtime_protection_delay_ms", 0, 0)
+DEF_INT(nativeTimeoutSec, "--native-timeout", "native_timeout", 0, 0)
 DEF_STR(nativeLibPackHook, "--native-lib-pack-hook", "native_lib_pack_hook")
 DEF_STR(intrinsicConfigPath, "--intrinsic-config", "intrinsic_config")
 DEF_STR_LIST(intrinsicSources, "--intrinsic-src", "intrinsic_src")
@@ -852,6 +861,7 @@ const ParamDef kParamTable[] = {
     PARAM("compile.enabled", "--compile", "compile", ParamType::Bool, nullptr, 0, 0, "false", "compile", "", cli_compileNative, json_compileNative),
     PARAM("compile.mode", "--compile-mode", "compile_mode", ParamType::Enum, "file,pipe", 0, 0, "file", "compile", "", cli_compile_mode, json_compile_mode),
     PARAM("compile.c_compiler", "--c-compiler", "c_compiler", ParamType::Enum, "auto,msvc,gcc,clang,zig,xmake", 0, 0, "auto", "compile", "", cli_c_compiler, json_c_compiler),
+    PARAM("compile.timeout", "--native-timeout", "native_timeout", ParamType::Int, nullptr, 0, 0, "900", "compile", "", cli_nativeTimeoutSec, json_nativeTimeoutSec),
 #ifndef MJ2X_DISABLE_LLVM_BACKEND
     PARAM("compile.llvm_tool", "--llvm-tool", "llvm_tool", ParamType::Enum, "clang,llc", 0, 0, "clang", "compile", "", cli_llvm_tool, json_llvm_tool),
 #endif

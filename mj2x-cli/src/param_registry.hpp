@@ -54,6 +54,11 @@ struct CliOptions
     /// `*` 不跨段、`**` 跨段；`/` 归一化为 `.`。见 native_class_filter_preprocessor.hpp。
     std::vector<std::string> nativeClassIncludes;
     std::vector<std::string> nativeClassExcludes;
+    /// native 编译外部进程墙钟超时（秒；0 = 不限时，默认 900，对标 jvmtp
+    /// `compiler.timeout`）。每次外呼（编译器/link/llc/vcvars 探针/xmake/
+    /// pack hook）独立计时，超时整树终止并以非 0 退出。见
+    /// native_process_timeout.hpp。
+    int                      nativeTimeoutSec   = 900;
     CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
     CCompilerKind            cCompilerKind    = CCompilerKind::Auto;
     CompileMode              compileMode      = CompileMode::File;

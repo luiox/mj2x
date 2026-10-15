@@ -1,9 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "native_process_timeout.hpp"
 
 namespace mj2x::cli {
 
@@ -122,22 +125,27 @@ std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath);
 /// @param backend 决定参与编译的 mj2x-rt 挂载子集与注入的后端宏
 ///        (embedded_rt.hpp 分发面)。
 /// @param extraSources 用户自定义 intrinsic 实现文件（issue #818），追加进编译。
+/// @param processTimeout 外部进程墙钟超时（每次外呼独立计时；0 = 不限时）。
+///        见 native_process_timeout.hpp（P1-4）。
 int compileCSource(const std::string& cOutputPath, const std::string& outputPath,
                    CEmitterBackend backend, CCompilerKind requestedCompiler,
                    const std::filesystem::path& crtRoot = {},
-                   const std::vector<std::string>& extraSources = {});
+                   const std::vector<std::string>& extraSources = {},
+                   ProcessTimeout processTimeout = {});
 
 /// @brief 把已生成的 C++17 源码编译为与输出 class/JAR 同目录的 native library。
 int compileCppSource(const std::string& cppOutputPath, const std::string& outputPath,
                      CEmitterBackend backend, CCompilerKind requestedCompiler,
                      const std::filesystem::path& crtRoot = {},
-                     const std::vector<std::string>& extraSources = {});
+                     const std::vector<std::string>& extraSources = {},
+                     ProcessTimeout processTimeout = {});
 
 /// @brief 编译内存中的 C 源码；GCC/Clang/Zig 使用 stdin，MSVC 使用并清理临时源文件。
 int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPath,
                            CEmitterBackend backend, CCompilerKind requestedCompiler,
                            const std::filesystem::path& crtRoot = {},
-                           const std::vector<std::string>& extraSources = {});
+                           const std::vector<std::string>& extraSources = {},
+                           ProcessTimeout processTimeout = {});
 
 /// @brief 把 textual LLVM IR 编译为与输出 class/JAR 同目录的 native library。
 ///
@@ -149,9 +157,11 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
 ///        目录并一起编译（--runtime-protection 检查点的实现侧）。
 /// @param crtRoot 把 mj2x-rt 源一并编译（JDK intrinsic 直调的 runtime
 ///        符号，如 mj2x_math_*）。
+/// @param processTimeout 外部进程墙钟超时（每次外呼独立计时；0 = 不限时）。
 int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& outputPath,
                         LlvmTool tool, bool withRuntimeProtection,
-                        const std::filesystem::path& crtRoot = {});
+                        const std::filesystem::path& crtRoot = {},
+                        ProcessTimeout processTimeout = {});
 
 /// @brief 编译内存中的 LLVM IR 源码（--compile-mode pipe）。
 ///
@@ -159,8 +169,10 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
 /// clang 链接。失败时返回非 0。
 /// @param withRuntimeProtection 同 compileLlvmIrSource。
 /// @param crtRoot 同 compileLlvmIrSource。
+/// @param processTimeout 同 compileLlvmIrSource。
 int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& outputPath,
                           LlvmTool tool, bool withRuntimeProtection,
-                          const std::filesystem::path& crtRoot = {});
+                          const std::filesystem::path& crtRoot = {},
+                          ProcessTimeout processTimeout = {});
 
 }   // namespace mj2x::cli

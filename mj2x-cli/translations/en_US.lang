@@ -145,6 +145,7 @@ mj2x.param.compile.enabled.desc=Compile the generated C/C++ source into a native
 mj2x.param.compile.mode.desc=Native compilation input mode
 mj2x.param.compile.opt_level.desc=Optimization level for the generated native project (0/1/2/3/s, default 2; lower levels keep source-level shapes such as CFF flattening from being optimized away, s targets size)
 mj2x.param.compile.c_compiler.desc=C compiler or build driver (xmake = build driver)
+mj2x.param.compile.timeout.desc=Wall-clock timeout for native compilation external processes (seconds, default 900, 0 = unlimited; mirrors jvmtp compiler.timeout. Each invocation - compiler/link/llc/xmake/pack hook - is timed independently; on timeout the whole process tree is killed and the run fails, so a stuck compiler cannot hold resources forever)
 mj2x.param.compile.llvm_tool.desc=LLVM IR compilation path
 mj2x.param.compile.generate_cmake.desc=Generate a standalone CMake native project directory
 mj2x.param.compile.generate_xmake.desc=Generate a standalone xmake native project directory (recommended; with --compile produces a DLL/SO in one step)

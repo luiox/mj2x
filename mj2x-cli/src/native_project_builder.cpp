@@ -1,7 +1,18 @@
+// 宏值固化必须先于任何能到达 libca/process/subprocess.hpp 的 include：
+// 本文件首个 include（native_project_generator.hpp → native_compiler.hpp →
+// native_process_timeout.hpp）即传递引入 subprocess.hpp，其会 #undef
+// Windows UCRT 的 stdout/stderr 宏（Command 同名成员防污染）。故 <cstdio>
+// 与固化块置于所有项目头之前，供下方 writeProcessOutput 使用。
+#include <cstdio>
+
+namespace {
+std::FILE* const kStdoutStream = stdout;
+std::FILE* const kStderrStream = stderr;
+}
+
 #include "native_project_generator.hpp"
 
 #include <chrono>
-#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -12,25 +23,26 @@
 #    include <windows.h>
 #endif
 
-namespace {
-std::FILE* const kStdoutStream = stdout;
-std::FILE* const kStderrStream = stderr;
-}
-
 #include "libca/process/subprocess.hpp"
 #include "libca/log/log_macros.hpp"
 // 环境形状卫生函数簇（mergeProcessEnvironment/environmentKeyEquals/
 // isAbnormalChildExit/ProcessEnvironment 别名）声明与定义统一走该内部头
 // （#1023 自本文件与 native_compiler.cpp 抽出）；宏值固化须在其前（见上）。
 #include "native_env_hygiene.hpp"
+// P1-4 外部进程超时：xmake 站点走 spawn + waitChildWithTimeout（超时先
+// taskkill /T /F 收割进程树再收尸——xmake 拉起的 cl.exe/link.exe 继承管道
+// 写端，只杀 xmake 会让收尸的 EOF 等待永不到达）。须在 kStdoutStream 固化
+// 之后 include（subprocess.hpp 会 #undef Windows UCRT 的 stdin/stdout/stderr）。
+#include "native_process_timeout.hpp"
 
 namespace mj2x::cli {
 
 // native_compiler.cpp 提供的外部链接实现（无头文件声明）：加载 MSVC 编译环境
 // （INCLUDE/LIB/PATH，必要时调 vcvarsall.bat x64）。xmake 子进程复用同一环境，
 // 否则在 PATH 含 mingw64 的 shell（Git Bash）下 xmake 会探测 mingw 工具链导致
-// "cannot get program for cc"。
-bool loadMsvcEnvironment(ProcessEnvironment& environment, std::filesystem::path& compilerPath);
+// "cannot get program for cc"。timeout 同时作用于 vcvarsall.bat 探针（P1-4）。
+bool loadMsvcEnvironment(ProcessEnvironment& environment, std::filesystem::path& compilerPath,
+                         ProcessTimeout timeout);
 
 namespace fs = std::filesystem;
 namespace {
@@ -43,15 +55,25 @@ void writeProcessOutput(const ca::process::Output& output)
         fwrite(output.stderr_data.data(), 1, output.stderr_data.size(), kStderrStream);
 }
 
-bool runXmake(ca::process::Command& command, const char* phase, int* failedCode = nullptr)
+bool runXmake(ca::process::Command& command, const char* phase, int* failedCode,
+              ProcessTimeout timeout)
 {
-    auto completed = command.output();
-    if (completed.is_err()) {
+    auto spawned = command.spawn();
+    if (spawned.is_err()) {
         CA_LOGT_ERROR("compile", "cannot start xmake for {}: {}\n", phase,
-                completed.unwrap_err().to_string().c_str());
+                spawned.unwrap_err().to_string().c_str());
         return false;
     }
-    auto output = std::move(completed).unwrap();
+    auto child = std::move(spawned).unwrap();
+    ca::process::Output output;
+    // 超时路径在 helper 内部：先 taskkill /T /F 收割整树（xmake 的 cl.exe/
+    // link.exe 孙进程继承管道写端）再收尸，已排空的日志随 Output 返回不丢。
+    // name 带阶段前缀，超时日志可定位到 configure 还是 build。
+    const std::string phaseName = std::string("xmake ") + phase;
+    if (!waitChildWithTimeout(child, phaseName.c_str(), timeout, output)) {
+        writeProcessOutput(output);
+        return false;
+    }
     writeProcessOutput(output);
     if (!output.status.success()) {
         if (failedCode != nullptr) *failedCode = output.status.code;
@@ -186,7 +208,7 @@ int buildXmakeProject(const XmakeBuildConfig& config)
 #if defined(_WIN32)
     ProcessEnvironment    environment;
     std::filesystem::path compilerPath;
-    if (!loadMsvcEnvironment(environment, compilerPath)) {
+    if (!loadMsvcEnvironment(environment, compilerPath, config.processTimeout)) {
         CA_LOGT_ERROR("compile", "cannot configure MSVC environment for xmake build.\n");
         return 1;
     }
@@ -201,7 +223,7 @@ int buildXmakeProject(const XmakeBuildConfig& config)
         mergeProcessEnvironment(command, environment);
 #endif
         int failedCode = 0;
-        if (runXmake(command, phase, &failedCode)) return true;
+        if (runXmake(command, phase, &failedCode, config.processTimeout)) return true;
 #if defined(_WIN32)
         if (isAbnormalChildExit(failedCode)) {
             CA_LOGT_WARN("compile",
@@ -210,7 +232,7 @@ int buildXmakeProject(const XmakeBuildConfig& config)
                          phase, failedCode);
             auto retry = makeXmakeCommand(config, configurePhase);
             injectKeyEnvironmentOverrides(retry, environment);
-            return runXmake(retry, phase);
+            return runXmake(retry, phase, nullptr, config.processTimeout);
         }
 #endif
         return false;

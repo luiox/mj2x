@@ -5,6 +5,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -15,6 +17,29 @@ std::string envValue(const char* name)
 {
     const char* value = std::getenv(name);
     return value == nullptr ? std::string{} : std::string(value);
+}
+
+void sleepSeconds(int seconds)
+{
+#ifdef _WIN32
+    Sleep(static_cast<DWORD>(seconds) * 1000);
+#else
+    sleep(static_cast<unsigned>(seconds));
+#endif
+}
+
+// MJ2X_FAKE_XMAKE_HANG: simulated hung xmake (P1-4 timeout E2E). Hangs on
+// every phase; the CLI's --native-timeout must reap the whole process tree
+// (xmake plus any grandchildren) instead of blocking on the pipes forever.
+void hangIfRequested()
+{
+    const std::string hang = envValue("MJ2X_FAKE_XMAKE_HANG");
+    if (hang.empty() || hang == "0") return;
+    int seconds = 60;
+    const std::string secs = envValue("MJ2X_FAKE_XMAKE_HANG_SECS");
+    if (!secs.empty()) seconds = std::atoi(secs.c_str());
+    if (seconds <= 0) seconds = 60;
+    sleepSeconds(seconds);
 }
 
 fs::path projectPath(int argc, char** argv)
@@ -50,6 +75,7 @@ int main(int argc, char** argv)
 {
     if (argc < 2) return 64;
     const std::string phase = std::string(argv[1]) == "f" ? "configure" : "build";
+    hangIfRequested();
     const std::string failure = envValue("MJ2X_FAKE_XMAKE_FAIL");
     // NTSTATUS crash shape (issue #1023 item 3 retry-path E2E): return
     // 0xC0000374 (heap corruption, signed -1073740940) on both phases. A

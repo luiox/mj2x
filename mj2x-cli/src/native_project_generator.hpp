@@ -25,6 +25,9 @@ struct XmakeBuildConfig
     std::filesystem::path projectDir;
     std::filesystem::path outputLibraryPath;
     std::string           mode = "release";
+    /// 外部进程墙钟超时（P1-4；每次 xmake 外呼独立计时，0 = 不限时）。
+    /// 超时整树终止（Windows: taskkill /T /F）并以非 0 退出。
+    ProcessTimeout        processTimeout{};
 };
 
 std::filesystem::path findCrtRoot(const char* argv0);
