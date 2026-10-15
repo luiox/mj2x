@@ -106,6 +106,27 @@ void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason)
     (void)reason;
 }
 
+/* LTO 不可折叠不透明常量：volatile 读迫使编译器每次真实加载——cross-TU
+   IPSCCP/常量传播无法把 const_key(site) 折成常量（否则 E ^ K 被折回 C，
+   立即数隐藏白做；--native-opt-level 的 LTO 档同样守得住）。
+   值与 RegIR pass（reg_transform_passes.cpp kOpaqueConstant）同源，改必须同步。 */
+static volatile uint64_t g_const_key_opaque = 0x517CC1B727220A95ull;
+
+/* 立即数隐藏密钥派生：splitmix64 单步（黄金比例增量后四步混合），输入先掺
+   不透明常量。与 reg_transform_passes.cpp 的 splitmix64（ca::random::
+   SplitMix64 正典，#1027 A3 逐位锁定）+ kOpaqueConstant 同源——改常数/
+   移位/顺序即使 E ^ K != C，两端必须同步改。site 为函数内局部计数器；不掺
+   seed 的理由见头文件契约。 */
+int64_t mj2x_regc_const_key(int64_t site)
+{
+    const uint64_t x     = (uint64_t)site ^ g_const_key_opaque;
+    uint64_t       state = x + 0x9E3779B97F4A7C15ull;
+    uint64_t       z     = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return (int64_t)(z ^ (z >> 31));
+}
+
 /* JVM f2i/f2l/d2i/d2l 语义（JLS 5.1.3）：NaN->0、向零截断、超界饱和。
  * C 裸 cast 对 NaN/越界是 UB（#1027 D2），故浮点->整型一律走这两个 helper。
  * 饱和点取 (double)INT32_MAX + 1.0 = 2^31（INT64 侧 (double)INT64_MAX 因

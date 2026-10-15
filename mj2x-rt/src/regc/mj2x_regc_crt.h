@@ -46,6 +46,7 @@
 /// - try/catch 分派（`_mj2x_regc_exception_check` 等 4 个 helper）
 /// - Java 整数除/余（CRT ABI 调用，带 `ArithmeticException`）
 /// - 运行时策略 barrier（`mj2x_regc_barrier`，当前 no-op）
+/// - 立即数隐藏 per-site 密钥派生（`mj2x_regc_const_key`）
 /// - 基本类型 compare 和 `Integer`/`Long`/`Boolean`/`Character` `toString`
 
 #pragma once
@@ -201,6 +202,25 @@ int64_t mj2x_regc_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 int32_t mj2x_regc_rem_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
 int64_t mj2x_regc_rem_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 void    mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
+
+/// @brief 立即数隐藏的 per-site 密钥派生（对标 jvmtp `obfuscation.constants`）。
+///
+/// @details
+/// `applyConstantHiding`（reg_transform_passes.cpp）把每个整型立即数 C 改写为
+/// `E ^ mj2x_regc_const_key(site)`：E = C ^ K 在编译期计算并物化为立即数，K 在
+/// 运行时由本函数从 site 派生。纯字面量恒等式必被编译器折叠，唯一可行路线是
+/// 「编译期密钥 + 运行时不可折叠读取」（同 OLLVM constant encryption）。
+///
+/// 两端同常量同产物：本实现的 splitmix64 单步（输入先掺 volatile 不透明常量
+/// `g_const_key_opaque`，LTO 不可折叠）与 reg_transform_passes.cpp 的
+/// `splitmix64`（`ca::random::SplitMix64` 正典，#1027 A3 逐位锁定）+
+/// `kOpaqueConstant` 同源。任何常数/移位/顺序调整都会使 `E ^ K != C`，
+/// 属不兼容变更，两端必须同步改。
+///
+/// site 为函数内局部计数器（0,1,2,...），不掺 transformSeed：site 作为调用
+/// 参数必然物化在产物里，掺 seed 只增大立即数位宽、不增加分析者成本（读取
+/// site 后同样一步派生 K）。本变换定位是抗静态分析，非密码学强度。
+int64_t mj2x_regc_const_key(int64_t site);
 
 /// @brief JVM f2i/d2i 语义的浮点→int32 转换（#1027 D2）。
 ///
