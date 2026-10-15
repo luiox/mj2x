@@ -854,6 +854,81 @@ TEST(RegTransformPassTest, CffStateEncryptionDerivesRandomizedStateCodes)
     EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
 }
 
+// H2 守门：深 MBA 注入的 Barrier 不得让 CFF 放弃整函数。
+// 历史缺陷——pass 顺序 MBA → opaque → CFF，而 CFF 把 Barrier 判为非 pure，结果
+// `--regc-mba-deep` 与 CFF 同一函数并开时， ciphertext 形态退化回原始 CFG 且不报错
+// （实测：同一纯算术函数 dispatcher 12 块 → 5 块）。Barrier 是无数据流/无异常的
+// 不可折叠锚点，不构成 CFF 必须保守的理由。
+TEST(RegTransformPassTest, MbaDeepBarriersDoNotSuppressFlattening)
+{
+    RegFunction function = makePureBranchFunction();   // 内含一条 Add，mba-deep 会展开
+
+    RegTransformOptions options;
+    options.enableControlFlowFlattening = true;
+    options.enableMba                   = true;
+    options.mbaDeep                     = true;
+    options.transformSeed               = 4242;
+    const auto stats = applyRegTransformPasses(function, options);
+
+    EXPECT_GT(stats.mbaDeepRewrites, 0U) << "deep MBA must have rewritten something";
+    EXPECT_TRUE(stats.controlFlowFlattened)
+        << "barrier injection must not disable CFF for the whole function";
+
+    // 结构未退化：bootstrap + dispatcher 确实存在，且 barrier 留在块内。
+    const RegSwitchTerminator* dispatcher = nullptr;
+    bool                       sawBarrier = false;
+    for (const auto& block : function.blocks) {
+        if (std::get_if<RegSwitchTerminator>(&block->terminator) != nullptr &&
+            std::get<RegSwitchTerminator>(block->terminator).cases.size() == 3U) {
+            dispatcher = &std::get<RegSwitchTerminator>(block->terminator);
+        }
+        for (const auto& ins : block->instructions) {
+            if (ins.kind == RegInstructionKind::Barrier) sawBarrier = true;
+        }
+    }
+    EXPECT_NE(dispatcher, nullptr);
+    EXPECT_TRUE(sawBarrier) << "barriers must survive the flattening pass";
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+}
+
+// B1 守门：state 码与 xor key 必须落在 int32 正区间。
+// RegSwitchCase::key 以 int64_t 承载，但 RegC 发射成 C `switch` 的 case 常量；
+// u32 最高位置 1 会溢出 int32，clang 报 `-Wswitch: overflow converting case value`
+// 且踩整型转换实现域。
+TEST(RegTransformPassTest, CffStateCodesStayWithinPositiveInt32)
+{
+    RegFunction function = makePureBranchFunction();
+
+    RegTransformOptions options;
+    options.enableControlFlowFlattening = true;
+    options.cffStateEncryption          = true;
+    for (uint64_t seed : {uint64_t{0}, uint64_t{1}, uint64_t{99}, uint64_t{0xDEADBEEFull},
+                          uint64_t{0xFFFFFFFFFFFFFFFFull}}) {
+        SCOPED_TRACE("seed=" + std::to_string(seed));
+        RegFunction        seeded = makePureBranchFunction();
+        RegTransformOptions opts  = options;
+        opts.transformSeed        = seed;
+        const auto stats = applyRegTransformPasses(seeded, opts);
+        ASSERT_TRUE(stats.controlFlowFlattened);
+
+        const RegSwitchTerminator* dispatcher = nullptr;
+        for (const auto& block : seeded.blocks) {
+            const auto* candidate = std::get_if<RegSwitchTerminator>(&block->terminator);
+            if (candidate != nullptr && candidate->cases.size() == 3U) {
+                dispatcher = candidate;
+                break;
+            }
+        }
+        ASSERT_NE(dispatcher, nullptr);
+        for (const auto& item : dispatcher->cases) {
+            EXPECT_GE(item.key, 1) << "state case key must be a positive int32";
+            EXPECT_LE(item.key, INT32_MAX) << "state case key must not overflow int32";
+        }
+    }
+}
+
 TEST(RegTransformPassTest, All829OptionsDefaultOff)
 {
     RegTransformOptions options;
