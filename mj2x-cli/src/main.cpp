@@ -30,6 +30,7 @@
 #include "mj2x/preprocessor/multianewarray_preprocessor.hpp"
 #include "mj2x/preprocessor/native_annotation_preprocessor.hpp"
 #include "mj2x/preprocessor/native_method_prefix_preprocessor.hpp"
+#include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "config_file.hpp"
@@ -1241,6 +1242,13 @@ int main(int argc, char** argv)
     pipeline.registerPreprocessor(std::make_unique<mj2x::LdcPreprocessor>());
     pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
     pipeline.registerPreprocessor(std::make_unique<mj2x::MultiANewArrayPreprocessor>());
+    // 类级 glob 过滤器（对标 jvmtp filter.*）：必须在任何方法级选择与
+    // <init>/<clinit> 搬运之前注册——后三者按 CompilerClass::filteredOut 跳过。
+    // 与 annotation / method-prefix 正交：过滤器收窄类集合，方法级选择在集合内生效。
+    if (!options.nativeClassIncludes.empty() || !options.nativeClassExcludes.empty()) {
+        pipeline.registerPreprocessor(std::make_unique<mj2x::NativeClassFilterPreprocessor>(
+            options.nativeClassIncludes, options.nativeClassExcludes));
+    }
     if (!options.nativeAnnotation.empty()) {
         pipeline.registerPreprocessor(
             std::make_unique<mj2x::NativeAnnotationPreprocessor>(options.nativeAnnotation));
