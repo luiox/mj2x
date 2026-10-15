@@ -16,6 +16,8 @@
 namespace mj2x {
 namespace {
 
+using jbytecode::core::Opcodes;
+
 // 前置声明（定义在文件后部；applyMbaDeep / applyControlFlowFlattening 先使用）。
 uint64_t splitmix64(uint64_t x);
 void applyCffDeadBlocks(RegFunction& function, const RegTransformOptions& options,
@@ -889,6 +891,55 @@ RegOperand hideImmediateOperand(const RegOperand& operand, ca::u32& site, ca::u3
     return RegOperand::fromRegister(narrowReg);
 }
 
+/// 调用目标间接化的 invoke 形态编码（与 RT 侧 mj2x_regc_call_site 同值）。
+int32_t invokeKindOf(const RegInstruction& instruction)
+{
+    switch (instruction.method.invokeOpcode) {
+    case Opcodes::INVOKESTATIC: return 1;
+    case Opcodes::INVOKESPECIAL: return 2;
+    default: return 0;   // INVOKEVIRTUAL / INVOKEINTERFACE
+    }
+}
+
+/// 调用目标间接化（对标 jvmtp `obfuscation.calls.*`）。
+///
+/// 只给**外部**目标（JDK/库方法）打标记：调用点改走 per-signature dispatcher，
+/// 身份字符串（owner/name/desc）从调用点移出，静态分析必须先解析
+/// (表, 索引) → 条目才能还原调用边——调用图收敛到单一 dispatcher 符号。
+///
+/// 为什么不改已转换目标：那类调用在发射端有直接 C 调用快路径（0 JNI），
+/// 间接化它只会退化成 JNI 调用，纯开销、零混淆收益。
+///
+/// 真正落到 dispatcher 的是发射端：pass 只置 `RegInstruction::indirectCall`，
+/// 发射端在通用 JNI 兜底路径（tryEmitDirectCall / intrinsic / resolved 均未
+/// 命中）按标记改发 dispatcher 调用。这样"是否外部"由发射端既有的解析
+/// 结果决定，pass 无需跨函数全局信息（保持可复现构建不变量）。
+void applyCallIndirections(RegFunction& function, RegTransformStats& stats)
+{
+    // 同 desc 分组的组内索引（发射端按签名分表，索引空间按组独立）。
+    std::map<std::string, int32_t> groupCounters;
+    for (auto& block : function.blocks) {
+        for (auto& instruction : block->instructions) {
+            if (instruction.kind != RegInstructionKind::Call) continue;
+            // 自递归静态调用保留原路径（JVM 栈帧语义），其余一律标记。
+            if (instruction.method.invokeOpcode == Opcodes::INVOKESTATIC &&
+                instruction.method.owner == function.symbol.owner) {
+                continue;
+            }
+            const std::string signature = instruction.method.desc.to_std_string();
+            const int32_t     groupIndex = groupCounters[signature]++;
+            function.callSites.push_back(RegFunction::CallSite{
+                instruction.method.owner.to_std_string(),
+                instruction.method.name.to_std_string(),
+                signature,
+                invokeKindOf(instruction),
+                groupIndex});
+            instruction.indirectCall = true;
+            ++stats.callsIndirected;
+        }
+    }
+}
+
 /// 立即数隐藏（对标 jvmtp `obfuscation.constants` / `.constants.mba`）。
 ///
 /// 纯字面量恒等式必被编译器折叠（`(C^k)^k` 同值异指令也会被重结合折叠），
@@ -969,6 +1020,8 @@ RegTransformStats applyRegTransformPasses(RegFunction&               function,
         applyOpaquePredicates(function, nextRegister, options, stats);
     if (options.enableControlFlowFlattening)
         applyControlFlowFlattening(function, nextRegister, options, stats);
+    // 调用目标间接化：只标记，不改指令形态（发射端按标记换发分派调用）。
+    if (options.indirectCallTargets) applyCallIndirections(function, stats);
     // 立即数隐藏必须排 CFF 之后（isCffPureInstruction 对 Intrinsic 返回 false，
     // 先插合成 Intrinsic 会杀死平坦化）。
     if (options.hideImmediateConstants) applyConstantHiding(function, nextRegister, stats);

@@ -58,6 +58,14 @@ struct RegInstruction
     bool               hasDest = false;
     RegValue           dest{};
     SSAEffect          effect;
+    /// @brief 调用目标间接化标记（`applyCallIndirections` 写入）。
+    ///
+    /// @details
+    /// 置位时发射端走 per-signature dispatcher（调用点只带站点索引），
+    /// 替代把 owner/name/desc 身份字符串直接落在调用点上。
+    /// 已解析到"已转换 native 函数"的目标保留直接 C 调用快路径
+    /// （间接化它是纯开销，不产生任何混淆收益）。
+    bool indirectCall = false;
 
     RegCopy             copy{};
     SSAUnaryOp          unaryOp          = SSAUnaryOp::Neg;

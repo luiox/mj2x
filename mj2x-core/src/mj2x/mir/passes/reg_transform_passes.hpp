@@ -54,6 +54,11 @@ struct RegTransformOptions
     /// 仅 RegC/LLVM 两后端发射面支持（vmc4 显式不走 transform passes）。
     /// 排 CFF 之后零交互。
     bool hideImmediateConstants = false;
+    /// 调用目标间接化（对标 jvmtp `obfuscation.calls.*`）：外部（JDK/库）方法
+    /// 调用改写为 per-signature dispatcher 调用，调用点只带站点索引。
+    /// 默认关闭；**不**被 `--regc-obfuscate` 联动（每次调用多一层分派，
+    /// 热路径开销可观，属"要保护才付"的档位）。仅 RegC/LLVM 两后端支持。
+    bool indirectCallTargets = false;
     /// 变换种子：派生 state 码 / 变体选择均从此确定性派生（同 seed 同产物）。
     uint64_t transformSeed = 0;
 };
@@ -68,6 +73,7 @@ struct RegTransformStats
     ca::usize mbaDeepRewrites      = 0;
     ca::usize opaqueZeroPredicates = 0;
     ca::usize constantsHidden      = 0;
+    ca::usize callsIndirected      = 0;
     bool      controlFlowFlattened = false;
 };
 
