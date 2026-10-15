@@ -222,6 +222,50 @@ void    mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
 /// site 后同样一步派生 K）。本变换定位是抗静态分析，非密码学强度。
 int64_t mj2x_regc_const_key(int64_t site);
 
+/// @brief 调用目标间接化的站点表条目（对标 jvmtp `obfuscation.calls.*`）。
+///
+/// @details
+/// `applyCallIndirections`（reg_transform_passes.cpp）把外部（JDK/库）方法调用
+/// 点改写为按签名分派的运行时调用：调用点只带 `(table, index)`，目标身份
+/// （owner/name/desc 字符串）不再出现在调用点上——静态分析必须先解析
+/// index → 表条目，才能看出"这个调用去哪了"。
+///
+/// 首次分派解析 owner 类 + jmethodID 并缓存在条目内，其后与既有
+/// `_mj2x_regc_call_cached_*` 同开销（1 JNI）。
+///
+/// `desc` 决定分派签名：同一签名共享一个 dispatcher（编译期已知返回类型，
+/// 无需运行时按返回值分派，也不涉及装箱/拆箱）。
+typedef struct mj2x_regc_call_site
+{
+    jclass      ownerClass;   ///< owner 类解析缓存（NULL = 未解析）
+    jmethodID   method;       ///< 方法解析缓存（NULL = 未解析；解析失败保持 NULL）
+    const char* owner;        ///< JVM 内部名，如 "java/lang/Math"
+    const char* name;         ///< 方法名
+    const char* desc;         ///< 方法描述符（分派签名）
+    int32_t     invokeKind;   ///< 0 = virtual/interface，1 = static，2 = special
+} mj2x_regc_call_site;
+
+/// @brief per-signature dispatcher：按 (table, index) 解析目标并直接 JNI 调用。
+///
+/// @details
+/// 返回类型由签名（dispatcher 名后缀）静态决定，故无需装箱/拆箱；invoke 形态
+/// （virtual/static/special）来自表条目，运行时一次分派。解析结果缓存进条目，
+/// 后续调用与既有 cached 帮手同开销。
+/// 解析失败（类/方法不存在）时返回零值并保持 pending exception，由生成代码
+/// 的 ExceptionCheck 面感知（与 `_mj2x_regc_call_*` 行为一致）。
+int32_t mj2x_regc_dispatch_i32(mj2x_regc_context* context, mj2x_regc_call_site* table,
+                                 int32_t index, void* receiver, jvalue* args);
+int64_t mj2x_regc_dispatch_i64(mj2x_regc_context* context, mj2x_regc_call_site* table,
+                                 int32_t index, void* receiver, jvalue* args);
+float mj2x_regc_dispatch_f32(mj2x_regc_context* context, mj2x_regc_call_site* table,
+                              int32_t index, void* receiver, jvalue* args);
+double mj2x_regc_dispatch_f64(mj2x_regc_context* context, mj2x_regc_call_site* table,
+                               int32_t index, void* receiver, jvalue* args);
+void* mj2x_regc_dispatch_ref(mj2x_regc_context* context, mj2x_regc_call_site* table,
+                              int32_t index, void* receiver, jvalue* args);
+void mj2x_regc_dispatch_void(mj2x_regc_context* context, mj2x_regc_call_site* table,
+                               int32_t index, void* receiver, jvalue* args);
+
 /// @brief JVM f2i/d2i 语义的浮点→int32 转换（#1027 D2）。
 ///
 /// C 裸 cast `(int32_t)` 对 NaN/越界是 UB；JVM 规范（JLS 5.1.3）语义：
