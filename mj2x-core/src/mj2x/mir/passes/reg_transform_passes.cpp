@@ -452,8 +452,20 @@ void applyOpaquePredicates(RegFunction& function, ca::u32& nextRegister,
     }
 }
 
+/// domain-specific note 见函数体结尾：Barrier 是**唯一**被放行的带 effect 指令。
+///
+/// 注意判定顺序：Barrier 的 effect.isBarrier 会被 hasObservableEffect() 判为可观
+/// 测，因此必须在 effect 检查**之前**特判放行，否则开关形同虚设。
 bool isCffPureInstruction(const RegInstruction& instruction)
 {
+    // Barrier 放行（#X H2）：它虽带 isBarrier effect，但语义上是"不可折叠锚点"——
+    // 无数据流产出、不抛异常、不读外部状态，唯一作用是阻止 C 编译器把其相邻的
+    // MBA/恒假推导常量化。CFF 只改**块间**路由（原 CFG 边 → dispatcher state
+    // 迁移），块内指令序列逐字保留，故 barrier 与其它 effect 的相对顺序不变。
+    // 反面后果（实测）：若在此判 false，`--regc-mba-deep` 注入的 barrier 会让
+    // 整函数被排除，深 MBA 与 CFF 互为毒药——同一纯算术函数开启两者后 dispatcher
+    // 从 12 块退回原始 CFG（保护强度归零且**不报错**，用户无从察觉）。
+    if (instruction.kind == RegInstructionKind::Barrier) return true;
     if (hasObservableEffect(instruction.effect)) return false;
     switch (instruction.kind) {
     case RegInstructionKind::Copy:
@@ -719,6 +731,10 @@ bool applyControlFlowFlattening(RegFunction& function, ca::u32& nextRegister,
     function.blocks.push_back(std::move(bootstrap));
     function.blocks.push_back(std::move(dispatcher));
     for (auto& block : created) function.blocks.push_back(std::move(block));
+    // 交给发射端：把 state 声明为 volatile，使 dispatcher 不被优化器消解。
+    // 语义不受影响（volatile 只约束优化器，不改变单线程语义）；死块内的
+    // barrier 已是 volatile 无关的副作用锚点，两者叠加不冲突。
+    if (options.cffStateVolatile) function.cffVolatileState = state;
     stats.controlFlowFlattened = true;
     if (options.cffDeadBlockDensity != 0)
         applyCffDeadBlocks(function, options, state, nextRegister, stats);

@@ -33,6 +33,14 @@ struct RegTransformOptions
     /// CFF state 码派生随机映射（splitmix64(seed, index)）+ dispatcher 入口
     /// 状态异或（case 常量与写入值不同）。
     bool cffStateEncryption = false;
+    /// CFF state 寄存器以 `volatile` 发射（防 C 编译器把 dispatcher 优化回原始
+    /// 结构化控制流）。
+    ///
+    /// 默认 true：不加就等于白做——state 若可跨基本块常量传播，clang -O2 下
+    /// dispatcher switch 会被 jump-threading 完全消解（实测见
+    /// `work/cff_probe/st_cff.ll`）。仅 CFF 生效时才有影响，不改变默认产物形态。
+    /// 关闭的唯一理由是需要省下 volatile 读写开销（此时平坦化只剩源码可读性收益）。
+    bool cffStateVolatile = true;
     /// 深 MBA：Add 展开为 De Morgan/进位链（per-site 变体），链中夹
     /// `mj2x_regc_barrier` 防编译器折叠。
     bool mbaDeep = false;
