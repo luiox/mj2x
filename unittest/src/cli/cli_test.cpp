@@ -3581,6 +3581,11 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
                      "--runtime-protection fake --runtime-protection-step 1000000");
     // --regc-obfuscate：R4 变换（MBA 等）作用于 RegIR 后发射。
     runNativeVariant("obfuscated", "--regc-obfuscate");
+    // --regc-hide-constants：整型立即数改写为 E ^ const_key(site)（对标
+    // jvmtp obfuscation.constants，批次 2 第 6 项）。本变体守跨语言一致性——
+    // K 由可分发运行时（mj2x-rt 的 C 实现）派生，pass 编译期算 E 用同源公式；
+    // 任一侧漂移（常数/移位/顺序）会让产出值与 JVM 基线不符。
+    runNativeVariant("hidden_constants", "--regc-hide-constants");
 #endif
 }
 
