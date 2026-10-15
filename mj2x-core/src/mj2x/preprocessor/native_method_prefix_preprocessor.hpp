@@ -21,6 +21,8 @@ public:
         int marked = 0;
         for (auto& [className, cls] : index.getClasses()) {
             if (cls.isLibrary) continue;
+            // 类级 glob 过滤器剔除的类不标记（--native-include/--native-exclude）。
+            if (cls.filteredOut) continue;
             for (auto& method : cls.methods) {
                 auto* mn = method.methodNode;
                 if (mn->access &

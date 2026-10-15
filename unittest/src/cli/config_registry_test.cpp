@@ -169,6 +169,8 @@ std::vector<std::string> expectedKeys()
         "dump_mir",
         "native_annotation",
         "native_method_prefixes",
+        "native_include",
+        "native_exclude",
         "compile",
         "compile_mode",
         "c_compiler",

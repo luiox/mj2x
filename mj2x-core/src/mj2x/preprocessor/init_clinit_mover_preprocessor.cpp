@@ -339,6 +339,9 @@ void InitClinitMoverPreprocessor::process(CompilerIndex& index)
 {
     for (auto& [name, cls] : index.getClasses()) {
         if (cls.isLibrary) continue;
+        // 类级 glob 过滤器剔除的类整体不进 native 集，不生成 __regc_* 搬运方法
+        // （否则会留下永不标记的死静态方法，并无谓改变类形态）。
+        if (cls.filteredOut) continue;
         // 注意：遍历的是原始方法列表；生成方法在循环末尾追加，不回遍历。
         const size_t count = cls.classNode->methods.size();
         for (size_t i = 0; i < count; ++i) {

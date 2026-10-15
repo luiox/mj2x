@@ -15,6 +15,8 @@
 
 #include "libca/i18n/i18n.hpp"
 
+#include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
+
 namespace mj2x::cli {
 namespace {
 
@@ -507,6 +509,65 @@ bool json_native_method_prefix(CliOptions& o, const json& j, std::string& e)
     return true;
 }
 
+// 类级 glob 过滤器（--native-include/--native-exclude）。CLI 值可逗号分隔
+// （与 jvmtp filter.* 的 properties 形态一致），`/` 归一化为 `.`；空片段报错，
+// 防 "a,,b" 之类笔误静默丢模式。
+bool cli_native_class_glob(CliOptions& o, const char* v, const char* flag, bool include,
+                           std::string& e)
+{
+    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {flag}); return false; }
+    bool& seen = include ? o.cliNativeIncludeSeen : o.cliNativeExcludeSeen;
+    if (!seen) {
+        (include ? o.nativeClassIncludes : o.nativeClassExcludes).clear();
+        seen = true;
+    }
+    std::vector<std::string> globs;
+    if (!normalizeClassGlobs({std::string(v)}, globs)) {
+        e = trfs("mj2x.cli.err.class_glob_empty", {flag});
+        return false;
+    }
+    auto& target = include ? o.nativeClassIncludes : o.nativeClassExcludes;
+    for (auto& glob : globs) target.push_back(std::move(glob));
+    return true;
+}
+bool json_native_class_glob(CliOptions& o, const json& j, const char* key, bool include,
+                            std::string& e)
+{
+    if (!j.is_array()) { e = trfs("mj2x.cli.err.cfg_type_strarr", {key}); return false; }
+    std::vector<std::string> raw;
+    for (const auto& item : j) {
+        if (!item.is_string()) {
+            e = trfs("mj2x.cli.err.cfg_arr_nonstr", {key});
+            return false;
+        }
+        raw.push_back(item.get<std::string>());
+    }
+    std::vector<std::string> globs;
+    if (!normalizeClassGlobs(raw, globs)) {
+        e = trfs("mj2x.cli.err.class_glob_empty", {key});
+        return false;
+    }
+    auto& target = include ? o.nativeClassIncludes : o.nativeClassExcludes;
+    target      = std::move(globs);
+    return true;
+}
+bool cli_native_include(CliOptions& o, const char* v, std::string& e)
+{
+    return cli_native_class_glob(o, v, "--native-include", true, e);
+}
+bool json_native_include(CliOptions& o, const json& j, std::string& e)
+{
+    return json_native_class_glob(o, j, "native_include", true, e);
+}
+bool cli_native_exclude(CliOptions& o, const char* v, std::string& e)
+{
+    return cli_native_class_glob(o, v, "--native-exclude", false, e);
+}
+bool json_native_exclude(CliOptions& o, const json& j, std::string& e)
+{
+    return json_native_class_glob(o, j, "native_exclude", false, e);
+}
+
 bool cli_compile_mode(CliOptions& o, const char* v, std::string& e)
 {
     if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--compile-mode"}); return false; }
@@ -784,6 +845,8 @@ const ParamDef kParamTable[] = {
     // selection
     PARAM("selection.native_annotation", "--native-annotation", "native_annotation", ParamType::String, nullptr, 0, 0, "", "selection", "", cli_nativeAnnotation, json_nativeAnnotation),
     PARAM("selection.native_method_prefixes", "--native-method-prefix", "native_method_prefixes", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_method_prefix, json_native_method_prefix),
+    PARAM("selection.native_include", "--native-include", "native_include", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_include, json_native_include),
+    PARAM("selection.native_exclude", "--native-exclude", "native_exclude", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_exclude, json_native_exclude),
     // compile
     PARAM("compile.opt_level", "--native-opt-level", "native_opt_level", ParamType::Enum, "0,1,2,3,s", 0, 0, "2", "compile", "", cli_nativeOptLevel, json_nativeOptLevel),
     PARAM("compile.enabled", "--compile", "compile", ParamType::Bool, nullptr, 0, 0, "false", "compile", "", cli_compileNative, json_compileNative),

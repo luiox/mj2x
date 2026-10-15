@@ -837,6 +837,146 @@ TEST(CliTest, NativeMethodPrefixIsRepeatableAndSelectsMatchingMethods)
     EXPECT_NE(source.find("{(char*)\"plainSub\", (char*)\"(II)I\""), std::string::npos) << source;
 }
 
+// --native-include：白名单外的类整体不进 native 集（JAR 内 A 命中 / B 不命中）。
+TEST(CliTest, NativeClassFilterIncludesOnlyMatchingClasses)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inJar  = writeTinyJar();
+    fs::path outJar = test::getTempOutPath("mj2x_cli_filter_include_output.jar");
+    fs::path cFile  = test::getTempOutPath("mj2x_cli_filter_include_output.c");
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) + " --emit-c " + q(cFile) +
+            " --native-include " + quoteArg("demo.CliJarA"),
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+
+    // JAR 往返保留两个条目；只有 A 被标记 native。
+    auto                     aBytes = readJarEntry(outJar, "demo/CliJarA.class");
+    auto                     bBytes = readJarEntry(outJar, "demo/CliJarB.class");
+    ASSERT_FALSE(aBytes.empty());
+    ASSERT_FALSE(bBytes.empty());
+    ca::str::Utf8StringArena arena;
+    auto                     aClass = readClassFromBytes(aBytes, arena);
+    auto                     bClass = readClassFromBytes(bBytes, arena);
+    auto*                    aAdd   = findMethod(*aClass, "add");
+    auto*                    bAdd   = findMethod(*bClass, "add");
+    ASSERT_NE(aAdd, nullptr);
+    ASSERT_NE(bAdd, nullptr);
+    EXPECT_TRUE((aAdd->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_FALSE((bAdd->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+
+    // RegisterNatives 表只剩 A 的一个条目。
+    std::string source = readText(cFile);
+    EXPECT_EQ(countOccurrences(source, "{(char*)\"add\", (char*)\"(II)I\""), 1u) << source;
+}
+
+// exclude 优先于 include；顺带覆盖逗号分隔与 `/` → `.` 归一化（jvmtp 形态直贴）。
+TEST(CliTest, NativeClassFilterExcludeTakesPrecedenceOverInclude)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inJar  = writeTinyJar();
+    fs::path outJar = test::getTempOutPath("mj2x_cli_filter_exclude_output.jar");
+    fs::path cFile  = test::getTempOutPath("mj2x_cli_filter_exclude_output.c");
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) + " --emit-c " + q(cFile) +
+            " --native-include " + quoteArg("demo/**") + " --native-exclude " +
+            quoteArg("demo/CliJarB"),
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+
+    auto                     aBytes = readJarEntry(outJar, "demo/CliJarA.class");
+    auto                     bBytes = readJarEntry(outJar, "demo/CliJarB.class");
+    ASSERT_FALSE(aBytes.empty());
+    ASSERT_FALSE(bBytes.empty());
+    ca::str::Utf8StringArena arena;
+    auto                     aClass = readClassFromBytes(aBytes, arena);
+    auto                     bClass = readClassFromBytes(bBytes, arena);
+    auto*                    aAdd   = findMethod(*aClass, "add");
+    auto*                    bAdd   = findMethod(*bClass, "add");
+    ASSERT_NE(aAdd, nullptr);
+    ASSERT_NE(bAdd, nullptr);
+    EXPECT_TRUE((aAdd->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_FALSE((bAdd->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+
+    std::string source = readText(cFile);
+    EXPECT_EQ(countOccurrences(source, "{(char*)\"add\", (char*)\"(II)I\""), 1u) << source;
+}
+
+// 空 glob 片段（逗号分隔的每个模式都必须非空）fail-closed。
+TEST(CliTest, NativeClassFilterRejectsEmptyGlobFragment)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inJar = writeTinyJar();
+    fs::path outJar = test::getTempOutPath("mj2x_cli_filter_empty_output.jar");
+    fs::path cFile  = test::getTempOutPath("mj2x_cli_filter_empty_output.c");
+
+    auto result = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJar) + " --emit-c " + q(cFile) +
+            " --native-include " + quoteArg("demo.**,"),
+    });
+    EXPECT_NE(result.exitCode, 0);
+    EXPECT_NE(result.out.find("--native-include"), std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("glob"), std::string::npos) << result.out;
+}
+
+// 配置文件路径（native_include / native_exclude 数组）与 CLI 等价。
+TEST(CliTest, NativeClassFilterViaJsonConfig)
+{
+    fs::path cli = findCli();
+    if (cli.empty()) {
+        GTEST_SKIP() << "mj2x-cli is not built";
+    }
+
+    fs::path inJar  = writeTinyJar();
+    fs::path outJar = test::getTempOutPath("mj2x_cli_filter_json_output.jar");
+    fs::path cFile  = test::getTempOutPath("mj2x_cli_filter_json_output.c");
+    fs::path config = test::getTempOutPath("mj2x_cli_filter_config.json");
+    writeText(config,
+              "{\n"
+              "  \"input\": \"" +
+                  inJar.generic_string() +
+                  "\",\n"
+                  "  \"output\": \"" +
+                  outJar.generic_string() +
+                  "\",\n"
+                  "  \"emit_c\": \"" +
+                  cFile.generic_string() +
+                  "\",\n"
+                  "  \"native_exclude\": [\"demo.CliJarB\"]\n"
+                  "}");
+
+    auto result = runScript({q(cli) + " --config " + q(config)});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+
+    auto                     aBytes = readJarEntry(outJar, "demo/CliJarA.class");
+    auto                     bBytes = readJarEntry(outJar, "demo/CliJarB.class");
+    ASSERT_FALSE(aBytes.empty());
+    ASSERT_FALSE(bBytes.empty());
+    ca::str::Utf8StringArena arena;
+    auto                     aClass = readClassFromBytes(aBytes, arena);
+    auto                     bClass = readClassFromBytes(bBytes, arena);
+    auto*                    aAdd   = findMethod(*aClass, "add");
+    auto*                    bAdd   = findMethod(*bClass, "add");
+    ASSERT_NE(aAdd, nullptr);
+    ASSERT_NE(bAdd, nullptr);
+    EXPECT_TRUE((aAdd->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+    EXPECT_FALSE((bAdd->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
+}
+
 TEST(CliTest, ProvidedJavaAnnotationCanSelectMethods)
 {
     fs::path cli = findCli();

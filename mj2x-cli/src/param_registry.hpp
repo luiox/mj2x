@@ -49,6 +49,11 @@ struct CliOptions
     std::string              nativeOptLevel = "2";
     std::string              nativeAnnotation;
     std::vector<std::string> nativeMethodPrefixes;
+    /// 类级 glob 过滤器（对标 jvmtp filter.*）：include 非空时只编译命中的类，
+    /// exclude 命中的类一律剔除（exclude 优先）。模式为 `.` 分隔的内部类名，
+    /// `*` 不跨段、`**` 跨段；`/` 归一化为 `.`。见 native_class_filter_preprocessor.hpp。
+    std::vector<std::string> nativeClassIncludes;
+    std::vector<std::string> nativeClassExcludes;
     CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
     CCompilerKind            cCompilerKind    = CCompilerKind::Auto;
     CompileMode              compileMode      = CompileMode::File;
@@ -104,6 +109,8 @@ struct CliOptions
     /// CLI 侧内部标志：首个 emit 输出参数出现时清空其他输出（与历史行为一致）。
     bool                     cliEmitOutputSeen    = false;
     bool                     cliNativePrefixSeen  = false;
+    bool                     cliNativeIncludeSeen = false;
+    bool                     cliNativeExcludeSeen = false;
 };
 
 /// @brief 参数类型。
