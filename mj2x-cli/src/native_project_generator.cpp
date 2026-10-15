@@ -188,6 +188,17 @@ std::filesystem::path findCrtRoot(const char* argv0)
     return {};
 }
 
+/// @brief --native-opt-level 取值 → xmake `set_optimize` 档位。
+const char* xmakeOptimizeFor(const std::string& level)
+{
+    if (level == "0") return "none";
+    if (level == "1") return "faster";
+    if (level == "2") return "fastest";
+    if (level == "3") return "aggressive";
+    if (level == "s") return "smallest";
+    return "fastest";   // 未知值回退默认档（参数层已做枚举校验，这里只兜底）。
+}
+
 int generateXmakeProject(const XmakeProjectConfig& config)
 {
     std::error_code ec;
@@ -240,9 +251,14 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     // 后端宏行(模板 @RT_BACKEND_DEFINES@):恰好一个 MJ2X_RT_BACKEND_*。
     const std::string definesLine =
         "    add_defines(\"" + std::string{mj2x::cli::rtBackendDefine(config.backend)} + "\")";
+    // 优化级别行(模板 @RT_OPTIMIZE@):--native-opt-level 映射到 xmake 的
+    // set_optimize 档位。默认 fastest(= -O2)。
+    const std::string optimizeLine =
+        "    set_optimize(\"" + std::string{xmakeOptimizeFor(config.optLevel)} + "\")";
     if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate,
                               {{"@PROJECT_NAME@", config.projectName},
-                               {"@RT_BACKEND_DEFINES@", definesLine}})) {
+                               {"@RT_BACKEND_DEFINES@", definesLine},
+                               {"@RT_OPTIMIZE@", optimizeLine}})) {
         return 1;
     }
     if (!writeProjectTemplate(config.projectDir / "README.md", readmeTemplate,

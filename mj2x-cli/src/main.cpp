@@ -384,12 +384,35 @@ static bool isNativeAnnotationDescriptor(const std::string& descriptor)
            descriptor.find('.') == std::string::npos;
 }
 
+/// @brief --native-opt-level 取值 → MSVC 优化开关。
+static const char* msvcOptFlag(const std::string& level)
+{
+    if (level == "0") return "/Od";
+    if (level == "1") return "/O1";
+    if (level == "2") return "/O2";
+    if (level == "3") return "/Ox";
+    if (level == "s") return "/Os";
+    return "/O2";
+}
+
+/// @brief --native-opt-level 取值 → GCC/Clang 优化开关。
+static const char* gnuOptFlag(const std::string& level)
+{
+    if (level == "0") return "-O0";
+    if (level == "1") return "-O1";
+    if (level == "2") return "-O2";
+    if (level == "3") return "-O3";
+    if (level == "s") return "-Os";
+    return "-O2";
+}
+
 /// @brief LLVM IR 版 CMake 工程：native.ll + CMakeLists.txt（clang 编译 .ll）。
 /// @param withRuntimeProtection 为 true 时内嵌 mj2x-rt rt_protect 源并一起编译
 ///        （--runtime-protection 检查点的实现侧）。
 static int generateLlvmCMakeProject(const std::string& projectDirValue,
                                     const std::string& nativeOutputPath,
-                                    bool withRuntimeProtection)
+                                    bool withRuntimeProtection,
+                                    const std::string& optLevel)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -454,7 +477,9 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
             << std::string{mj2x::cli::rtBackendDefine(CEmitterBackend::LlvmIr)} << "\")\n";
         out << "add_custom_command(\n";
         out << "  OUTPUT ${NATIVE_LIB}\n";
-        out << "  COMMAND ${CLANG_EXECUTABLE} -shared ${CRT_ARGS} ${LLVM_IR_FILE} "
+        // --native-opt-level：LLVM 侧直接落进 clang 命令行（无 MSVC 分支）。
+        out << "  COMMAND ${CLANG_EXECUTABLE} -shared " << gnuOptFlag(optLevel)
+            << " ${CRT_ARGS} ${LLVM_IR_FILE} "
                "${CRT_SOURCES} -o ${NATIVE_LIB}\n";
         out << "  DEPENDS ${LLVM_IR_FILE} ${CRT_SOURCES}\n";
         out << "  COMMENT \"Compiling LLVM IR with clang\")\n";
@@ -494,7 +519,7 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
 static int generateCMakeProject(const std::string& projectDirValue,
                                 const std::string& nativeOutputPath,
                                 const std::filesystem::path& crtRoot,
-                                CEmitterBackend backend)
+                                CEmitterBackend backend, const std::string& optLevel)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -557,6 +582,14 @@ static int generateCMakeProject(const std::string& projectDirValue,
                "${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt)\n";
         out << "target_compile_definitions(mj2x_native PRIVATE "
             << std::string{mj2x::cli::rtBackendDefine(backend)} << ")\n";
+        // --native-opt-level：MSVC 与 GNU/Clang 的档位拼写不同，按生成器分支。
+        out << "if(MSVC)\n";
+        out << "  target_compile_options(mj2x_native PRIVATE "
+            << msvcOptFlag(optLevel) << ")\n";
+        out << "else()\n";
+        out << "  target_compile_options(mj2x_native PRIVATE "
+            << gnuOptFlag(optLevel) << ")\n";
+        out << "endif()\n";
         out << "if(UNIX AND NOT APPLE)\n";
         out << "  target_link_libraries(mj2x_native PRIVATE pthread)\n";
         out << "endif()\n";
@@ -1304,7 +1337,8 @@ int main(int argc, char** argv)
     if (!options.cmakeProjectDir.empty()) {
         if (options.cBackendKind == CEmitterBackend::LlvmIr) {
             int projectRc = generateLlvmCMakeProject(options.cmakeProjectDir, nativeOutputPath,
-                                                     withRuntimeProtection);
+                                                     withRuntimeProtection,
+                                                     options.nativeOptLevel);
             if (projectRc != 0) return projectRc;
         }
         else {
@@ -1312,7 +1346,7 @@ int main(int argc, char** argv)
             // 四后端运行时 ABI 全在 mj2x-rt);外部源包缺失时嵌入兜底。
             int projectRc = generateCMakeProject(options.cmakeProjectDir, nativeOutputPath,
                                                  mj2x::cli::findCrtRoot(argv[0]),
-                                                 options.cBackendKind);
+                                                 options.cBackendKind, options.nativeOptLevel);
             if (projectRc != 0) return projectRc;
         }
     }
@@ -1331,6 +1365,7 @@ int main(int argc, char** argv)
             projectConfig.crtRoot             = mj2x::cli::findCrtRoot(argv[0]);
             projectConfig.projectName         = "mj2x_native_project";
             projectConfig.backend             = options.cBackendKind;
+            projectConfig.optLevel            = options.nativeOptLevel;
             int projectRc                     = mj2x::cli::generateXmakeProject(projectConfig);
             if (projectRc != 0) return projectRc;
             // 用户 intrinsic 实现文件（issue #818）：复制进工程 src/mj2x-rt/ 下，

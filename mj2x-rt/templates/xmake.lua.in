@@ -30,6 +30,7 @@ target("mj2x_native")
     end
     add_includedirs("src/mj2x-rt")
 @RT_BACKEND_DEFINES@
+@RT_OPTIMIZE@
     local jdk_path = os.getenv("JAVA_HOME")
     if jdk_path then
         add_includedirs(jdk_path .. "/include")

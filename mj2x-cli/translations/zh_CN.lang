@@ -114,6 +114,7 @@ mj2x.cli.err.cfg_invalid_enum=配置键 {0} 的取值无效: {1}(合法值: {2})
 mj2x.cli.err.cfg_invalid_hex=配置键 {0} 的十六进制取值无效: {1}
 mj2x.cli.err.cfg_invalid_value=配置键 {0} 的取值无效: {1}
 mj2x.param.client.id.desc=per-client 唯一派生（默认 0 = 不变：产物与历史逐字节一致；非 0 时所有后端 seed 经 splitmix64(baseSeed ^ clientId) 派生，每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物）
+mj2x.param.compile.opt_level.desc=生成 native 工程的优化级别（0/1/2/3/s，默认 2；级别越低越能保住 CFF 平坦化等源码形态不被编译器优化掉，s 面向体积）
 mj2x.param.compile.c_compiler.desc=C 编译器或构建驱动（xmake 为构建驱动）
 mj2x.param.compile.enabled.desc=把生成的 C/C++ 源码编译为 native library（位于 --output 旁）
 mj2x.param.compile.generate_cmake.desc=生成独立 CMake native 工程目录

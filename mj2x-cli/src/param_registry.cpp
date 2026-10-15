@@ -722,6 +722,7 @@ bool json_native_lib_key(CliOptions& o, const json& j, std::string& e)
 // global
 DEF_STR(nativeAnnotation, "--native-annotation", "native_annotation")
 DEF_BOOL(dumpMIR, "--dump-mir", "dump_mir")
+DEF_ENUM_STR(nativeOptLevel, "--native-opt-level", "native_opt_level", "0,1,2,3,s", "2")
 DEF_BOOL(compileNative, "--compile", "compile")
 DEF_STR(cmakeProjectDir, "--generate-cmake", "generate_cmake")
 DEF_STR(xmakeProjectDir, "--generate-xmake", "generate_xmake")
@@ -784,6 +785,7 @@ const ParamDef kParamTable[] = {
     PARAM("selection.native_annotation", "--native-annotation", "native_annotation", ParamType::String, nullptr, 0, 0, "", "selection", "", cli_nativeAnnotation, json_nativeAnnotation),
     PARAM("selection.native_method_prefixes", "--native-method-prefix", "native_method_prefixes", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_method_prefix, json_native_method_prefix),
     // compile
+    PARAM("compile.opt_level", "--native-opt-level", "native_opt_level", ParamType::Enum, "0,1,2,3,s", 0, 0, "2", "compile", "", cli_nativeOptLevel, json_nativeOptLevel),
     PARAM("compile.enabled", "--compile", "compile", ParamType::Bool, nullptr, 0, 0, "false", "compile", "", cli_compileNative, json_compileNative),
     PARAM("compile.mode", "--compile-mode", "compile_mode", ParamType::Enum, "file,pipe", 0, 0, "file", "compile", "", cli_compile_mode, json_compile_mode),
     PARAM("compile.c_compiler", "--c-compiler", "c_compiler", ParamType::Enum, "auto,msvc,gcc,clang,zig,xmake", 0, 0, "auto", "compile", "", cli_c_compiler, json_c_compiler),

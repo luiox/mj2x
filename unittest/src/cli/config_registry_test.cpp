@@ -172,6 +172,7 @@ std::vector<std::string> expectedKeys()
         "compile",
         "compile_mode",
         "c_compiler",
+        "native_opt_level",
         "generate_cmake",
         "generate_xmake",
         "stackc_exception_check",

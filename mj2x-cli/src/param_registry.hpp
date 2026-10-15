@@ -44,6 +44,9 @@ struct CliOptions
     std::string              nativeDirOutput;
     std::string              cmakeProjectDir;
     std::string              xmakeProjectDir;
+    /// 生成 native 工程的优化级别（`0`/`1`/`2`/`3`/`s`），默认 "2"。
+    /// 控制 CFF 平坦化会不会被宿主编译器优化掉——见 capabilities §3 CFF 边界。
+    std::string              nativeOptLevel = "2";
     std::string              nativeAnnotation;
     std::vector<std::string> nativeMethodPrefixes;
     CEmitterBackend          cBackendKind     = CEmitterBackend::StackC;
