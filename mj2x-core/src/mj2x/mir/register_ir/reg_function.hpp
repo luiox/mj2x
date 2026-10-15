@@ -36,6 +36,25 @@ struct RegFunction
     };
     std::vector<InvokeDynamicSite> indySites;
 
+    /// @brief 调用目标间接化的站点条目（applyCallIndirections 写入）。
+    ///
+    /// @details
+    /// 条目 i 对应方法内被间接化的第 i 个外部调用目标；发射端按方法描述符
+    /// （desc = 分派签名）分组，每组生成一张 per-signature 表，调用点只带
+    /// (表, 组内索引)。因此 index 空间是**按 desc 分组**的：同签名共享一张
+    /// 表、独立计数。
+    ///
+    /// 值语义（std::string），不依赖 SSA arena 生命周期（与 indySites 同纪律）。
+    struct CallSite
+    {
+        std::string owner;   ///< JVM 内部名，如 "java/lang/Math"
+        std::string name;
+        std::string desc;   ///< 方法描述符（分派签名，同时是分组键）
+        int32_t     invokeKind = 0;   ///< 0 = virtual/interface，1 = static，2 = special
+        int32_t     groupIndex = 0;   ///< 在该 desc 分组内的索引（发射端用）
+    };
+    std::vector<CallSite> callSites;
+
     SSAFunctionSymbol                      symbol;
     std::vector<RegValue>                  parameters;
     std::vector<std::unique_ptr<RegBlock>> blocks;
