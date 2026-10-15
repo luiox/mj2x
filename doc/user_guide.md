@@ -121,6 +121,25 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --native-annotati
 - `<init>` / `<clinit>` 不会被翻译
 - `mj2x.Native` 使用 `RetentionPolicy.CLASS`,运行时不依赖该注解类出现在应用 classpath
 
+### 3.4b 按类名选择:glob include/exclude
+
+真实 JAR 通常混合自有代码与第三方库,只想转自己的类时用类级 glob 过滤器:
+
+```bash
+# 只编译 com/acme 下的类(含子包)
+mj2x-cli -i myapp.jar -o myapp_native.jar --emit-c myapp.c --native-include 'com/acme/**'
+
+# 白名单 + 黑名单(exclude 优先)
+mj2x-cli -i myapp.jar -o myapp_native.jar --emit-c myapp.c \
+    --native-include 'com/acme/**' --native-exclude 'com/acme/test/**,com/third/**'
+```
+
+- glob 语义:`*` 不跨段、`**` 跨段、`?` 单字符;`/` 与 `.` 等价,jvmtp `filter.*` 的 `com/example/**` 形态可直接粘贴
+- `--native-include` / `--native-exclude` 均可重复,单次取值内也支持逗号分隔
+- 过滤器只收窄**类集合**,集合内的方法级选择(注解 / 前缀 / 默认全标记)照常生效
+- 被剔除的类原样保留在输出 JAR 里(不标记 native、不改写字节码),只是不生成对应 C 代码
+- 空片段(如 `a,,b`、纯空白)按 fail-closed 拒绝,防止笔误静默丢模式
+
 ### 3.5 调试:查看中间表示
 
 ```bash
@@ -145,6 +164,9 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--intrinsic-src <file>` | 追加用户 intrinsic 实现源文件（可重复，与配置内 `sources` 叠加） |
 | `--backend <stackc\|regc\|llvm\|vmc4>` | 选择后端(默认 `stackc`; `cbackend` / `c` 是兼容旧脚本的别名)。`llvm` 转换标量计算/控制流 + 对象/数组/实例与外部调用/异常表/monitor/ldc（窄类型签名、引用类型与 JNI 边界均已支持；round-2 起 invokedynamic 运行时解析 / intrinsic 扩面 / 保护特性接入，剩余面 fail-closed，见 §5.4）；`vmc4` 为 VM 虚拟化后端（v2.2 可用版，保护导向） |
 | `--native-annotation <desc>` | 只翻译带目标方法注解的方法,如 `Lmj2x/Native;` |
+| `--native-method-prefix <prefix>` | 只翻译 `owner.name` 以指定前缀开头的方法(可重复;与 `--native-annotation` 互斥) |
+| `--native-include <glob>` | 类名 glob 白名单:只编译命中的类(可重复/逗号分隔)。`*` 不跨段、`**` 跨段、`?` 单字符;`/` 与 `.` 等价。默认空 = 全部类;与注解/前缀选择正交,见 §3.4b |
+| `--native-exclude <glob>` | 类名 glob 黑名单:命中的类一律不编译,**优先于** `--native-include`(可重复/逗号分隔) |
 | `--compile` | 在 `--emit-c`、`--emit-cpp` 或 `--emit-llvm` 后自动编译 native library |
 | `--c-compiler <auto\|msvc\|gcc\|clang\|zig\|xmake>` | 覆盖自动探测到的 native 编译器；C++17 分别调用 `cl`、`g++`、`clang++` 或 `zig c++`；`xmake` 走构建驱动（工程式编译）；`auto` 回到自动探测（默认） |
 | `--compile-mode <file\|pipe>` | native 编译输入模式（默认 file；pipe 经 stdin 直传不落源文件） |
@@ -153,6 +175,10 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用 |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
 | `--generate-xmake <dir>` | 生成独立 xmake native 工程（推荐；CLI 内嵌 mj2x-rt 源，配合 `--compile` 一键出 DLL/SO） |
+| `--native-opt-level <0\|1\|2\|3\|s>` | 生成 native 工程的优化级别（默认 `2`）。MSVC 映射 `/Od\|/O1\|/O2\|/Ox\|/Os`，GCC/Clang 与 LLVM 侧映射 `-O0..-O3\|-Os`，xmake 工程映射 `set_optimize`。**级别越低越能保住源码级形态**：`--backend regc --regc-obfuscate` 的 CFF dispatcher 在 `-O2` 下会被优化器消解（RegC 已用 volatile state 兜住，见 §CFF 边界），降档可进一步确保形态留存；`s` 面向体积 |
+| `--native-timeout <秒>` | native 编译外部进程（编译器 / link / MSVC 环境探针 / xmake / pack hook）的墙钟超时，默认 `900` 秒；`0` = 不限时。**每次外呼独立计时**；超时即整树终止（Windows 先 `taskkill /T /F` 收割进程树再收尸，Linux 杀进程组）并以非零退出，日志记 `timed out after <n>s`。编译器卡死/挂起的环境把默认 900 调小可快速失败；对标 jvmtp `compiler.timeout` |
+| `--strings-encrypt` | 字符串常量 at-rest 加密（StackC/RegC）：明文字符串序列加密后落入产物（密钥由明文 fnv1a64 折叠派生），运行时解密使用，静态分析看不到明文。默认关闭 |
+| `--lang <zh_CN\|en_US>` | 消息语言（默认 `zh_CN`；`MJ2X_LANG` 环境变量同效；`--lang=<lang>` 或 `--lang <lang> <args...>` 形态，悬空值 fail-closed） |
 | `--dump-mir` | 打印中间表示(调试用) |
 | `--quiet` | 日志只保留警告与错误（stderr） |
 | `--verbose` | 日志提升到 debug 级别（stderr） |
@@ -187,6 +213,11 @@ VMC4：
 | `--vmc4-alias <n>` / `--vmc4-bogus <n>` | 别名/伪 handler 数量 |
 | `--vmc4-drift <0..4>` | 执行期 dispatch 变体数（默认 0 关闭；issue #762 低风险档） |
 | `--vmc4-drift-period <bytes>` | drift 变体切换周期（默认 16） |
+| `--vmc4-encrypt-program` | 程序 blob at-rest 加密：编码期加密 opcode/字节流数据段（密钥自主 seed 派生），解释器加载期整体解密；产物 C 源与二进制中不出现明文程序流。默认关闭 |
+| `--vmc4-lazy-decrypt` | 程序 blob 分块懒解密（要求 `--vmc4-encrypt-program`）：按 64 字节指令对齐块独立加密，解释器首次取码到某块才原地解密，未执行分支保持密文（内存 dump 只能拿到实际执行过的块）。与 `--vmc4-block-lazy-decrypt` 互斥 |
+| `--vmc4-block-lazy-decrypt` | 程序 blob 块粒度链式懒解密（要求 `--vmc4-encrypt-program`）：按 CFG 块独立加密，块密钥链式派生（首块 prevKey = seed），JNI_OnLoad 不解密、解释器首达才解密并置缓存位。与 `--vmc4-lazy-decrypt` 互斥（同开 fail-closed） |
+| `--vmc4-shuffle-blocks` | 编码期块乱序：方法内 VM 块物理布局按 seed 确定性打乱（Sattolo 单环，恒无不动点），块 id 空间一并打乱，块邻接不再镜像 CFG；语义经间接跳转表重映射保持不变。开启时间接跳转表以 xorshift32 keystream 加密落盘、JNI_OnLoad 一次性原地解密。与 drift / encrypt-program 正交可叠 |
+| `--vmc4-trace-surface <file>` | 导出 VMC4 期望 trace surface（mjdbg 红队契约的实例描述清单）到文件；仅 `--backend vmc4` 有效 |
 
 通用（RegC/VMC4）：
 

@@ -77,8 +77,10 @@
 - RegC 进程级缓存并发残留：jclass 与 methodID 两写间的短暂错配窗（需原子对
   或 seqlock 才能闭）、字符串字面量 32 槽缓存的瞬时覆盖竞态（越界安全，
   维持既有注记）；并发契约见 `mj2x_regc_runtime.c` 文件头。
-- CLI 外部进程调用（编译器/xmake/pack hook）无超时（需 libca 扩展或手写
-  并发排空框架）。
+- ~~CLI 外部进程调用（编译器/xmake/pack hook）无超时~~ **已销项（2026-10-15，P1-4）**：
+  `--native-timeout`（默认 900s，0=∞）+ `native_process_timeout.hpp` 策略单源覆盖全部
+  外呼点；Windows taskkill 整树收割防 EOF 死锁。libca 0.0.15 已有超时基元，原挂账
+  "需 libca 扩展"不成立。
 - 三后端共享层抽取（结构性最大项）：JVM 类型格点映射表（10+ 张平行）、
   RegisterNatives 基建、indy bootstrap 运行时解析（3 份）、多维数组分配
   （3 份）；按 H-2 触发条件独立排期。
@@ -153,12 +155,75 @@
 14. 代码注释与 Doxygen 组名里的 R3/R6 轮次代号退役（`regc_r3_abi` 等），
     文档侧已先行（本 PR）。
 
+### K. jvmtp 对标差距（2026-10-14 调研）
+
+> 对标对象 jvmtp **1.7.3**。结论：mj2x 在"变换能力"上不落后，在"交付形态"与"抗分析面"上明显落后。
+> 卡片按 ROI 排序，**批次 1 建议在开发任何新功能前先行**。
+
+**批次 1：把"说法"变成"事实"（小改动、无架构风险）**
+
+1. ~~**CFF 抗还原（P1-1）**~~ **已完成（2026-10-15）**：state 由 `RegFunction::cffVolatileState`
+   发布、RegC 声明为 `volatile int32_t`（`RegTransformOptions::cffStateVolatile` 默认 true）。
+   实测：修复前 clang `-O2` 下 dispatcher 被完全还原，修复后 `switch i32` 存活；顺带
+   `-Wswitch` 溢出警告归零（B1）。守门：`RegCTest.CffStateRegisterIsEmittedVolatile` /
+   `CffStateVolatileCanBeDisabled`。
+   - **遗留**：① LLVM 后端纯 SSA 无内存槽，volatile 方案不适用——`--backend llvm` + CFF
+     组合仍会被优化器还原，需 inline-asm 屏障（`asm volatile("" : "+r"(state))`）或模块级
+     volatile 槽；② 尚未把「clang -O2 后 dispatcher 存活」做成自动化 CI 断言，目前靠
+     人工跑 `work/cff_probe/` 的 standalone 编译对照。
+2. ~~**生成工程优化级别（P1-2）**~~ **已完成（2026-10-15）**：新增
+   `--native-opt-level <0|1|2|3|s>`（默认 `2`），xmake 工程映射 `set_optimize`
+   （none/faster/fastest/aggressive/smallest），CMake 与 LLVM 侧分别注入
+   `/O*` 与 `-O*`。LTO 未做（对标 `compiler.lto`），留待需要时开卡。
+3. ~~**类级 glob include/exclude（P1-3）**~~ **已完成（2026-10-15）**：新增
+   `--native-include` / `--native-exclude`（可重复 + 逗号分隔；`*` 不跨段、`**` 跨段、
+   `?` 单字符，`/` 与 `.` 等价，exclude 优先），JSON 键 `native_include` /
+   `native_exclude`。实现为 `NativeClassFilterPreprocessor`（置
+   `CompilerClass::filteredOut`），方法级选择（annotation / prefix / mark-all）与
+   `<init>`/`<clinit>` 搬运入口按该标志跳过；被剔除类保留在输出 JAR 中不改写。
+   空 glob 片段 fail-closed（`mj2x.cli.err.class_glob_empty`）。守门：
+   `NativeClassFilterGlobTest.*` / `NativeClassFilterPreprocessorTest.*` +
+   `CliTest.NativeClassFilter*` 四条 E2E。
+4. ~~**外部进程超时（P1-4）**~~ **已完成（2026-10-15）**：新增 `--native-timeout <秒>`
+   （默认 `900`，`0`=∞；JSON 键 `native_timeout`；对标 jvmtp `compiler.timeout`）。
+   每次外呼独立计时，覆盖编译器/link/vcvars 探针/xmake 两阶段/pack hook 共 10 余个站点。
+   libca 0.0.15 subprocess 已具备超时基元（`OutputOptions{timeout, kill_on_timeout}` /
+   `wait_with_output_for` / `StatusCode::DEADLINE_EXCEEDED`），无需扩展——§G 原挂账
+   "需 libca 扩展或手写并发排空框架"判定过时。策略与文案单源在
+   `mj2x-cli/src/native_process_timeout.hpp`（内部头 + inline，unittest 跨模块实例化）。
+   关键设计：Windows 单进程 kill 只终止直接子进程，孙进程（xmake→cl.exe、cmd→ping）
+   继承管道写端使收尸的 EOF 等待永不到达——`waitChildWithTimeout` 先 `taskkill /T /F`
+   整树收割再收尸（Linux 依赖 libca 进程组 kill），把"超时"从死锁变回失败。
+   守门：`NativeProcessTimeoutTest` 7 例（含 async+wait_for 金丝雀把挂起回归转确定性
+   失败）+ `CliTest.NativeTimeout*` 4 条 E2E（假 zig/xmake 挂起 + 非法值 + JSON 透传）。
+5. ~~mba-deep 与 CFF 互斥~~ 与 ~~state 码溢出 int32~~：**已修**（2026-10-14），
+   分别由 `RegTransformPassTest.MbaDeepBarriersDoNotSuppressFlattening` /
+   `CffStateCodesStayWithinPositiveInt32` 守门。
+
+**批次 2：补缺失的保护面（中改动）**
+
+6. 原生混淆三件套：立即数隐藏（`obfuscation.constants` / `.constants.mba`）、调用目标
+   间接化 + per-signature dispatcher（`obfuscation.calls.*`）、computed jumps
+   （`obfuscation.jumps`）——**mj2x 目前全缺**。
+7. 混淆两级作用域 include/exclude（全局 + per-module）——混淆真正可用的前提。
+8. VMC4：super-ops（相邻 VM 指令融合）+ 指令碎片化——打破"VM 指令 ↔ 字节码 1:1 对应"。
+9. VMC4 第二形态：寄存器机（对标 `vm.register`）。
+
+**批次 3：产品化（大改动，需拍板）**
+
+10. 交叉编译 + 多目标产物（bundled zig / toolchain 反射）：fat JAR + `<triple>.jar` +
+    注入 NativeLoader 自动注册——**jvmtp 最大的护城河，也是我们对位最大差距**。
+11. Gradle 插件 + Java SDK SPI（可替换 packer/compiler 的显式 LifecycleEvent API）。
+12. packer（代码段流加密 + 两阶段 loader + 免落盘）+ 签名流水线。
+
 ## 验证命令
 
 ```bash
-xmake f --with_mj2x=y --with_mtest_set=y --with_tests=y -y   # 全量配置（勿用 -P 子项目，issue #782）
+# 全量配置（选项见 xmake/options.lua；--with_mj2x 总开关已随拆仓退场，勿再传；
+# 勿用 -P 子项目，issue #782）。测试 target 需显式开 --with_tests=y。
+xmake f --with_tests=y -y
 xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
-xmake build mtest_set_unittest && xmake run mtest_set_unittest
+xmake build mj2x_integration_test && xmake run mj2x_integration_test
 ```
 
 > 性能数据必须先做覆盖率审计（见 `performance_evaluation_spec.md`）。
