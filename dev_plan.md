@@ -202,9 +202,23 @@
 
 **批次 2：补缺失的保护面（中改动）**
 
-6. 原生混淆三件套：立即数隐藏（`obfuscation.constants` / `.constants.mba`）、调用目标
-   间接化 + per-signature dispatcher（`obfuscation.calls.*`）、computed jumps
-   （`obfuscation.jumps`）——**mj2x 目前全缺**。
+6. 原生混淆三件套：
+   - ~~**立即数隐藏（`obfuscation.constants` / `.constants.mba`）**~~ **已完成
+     （2026-10-16）**：新增 `--regc-hide-constants`（JSON 键
+     `regc_hide_constants`，默认关闭）。RegIR pass `applyConstantHiding`
+     把每个整型 `IntLiteral` 操作数 C 改写为
+     `E ^ Intrinsic("const.key:<site>")`：E = C ^ K 编译期物化，K 运行时由可分发
+     运行时（regc CRT / LLVM runtime 的 `const_key`）按同一 site 派生，I32 追加
+     `Convert` 截断。两端 splitmix64 公式同源（`ca::random::SplitMix64` 正典，
+     #1027 A3 逐位锁定）；不透明常量由 `static volatile` 承载以防 LTO 下
+     IPSCCP 折回原值。site 为函数内局部计数器、不掺 seed（site 必物化在产物
+     里，掺 seed 只增大位宽不增加分析成本）。**不被
+     `--regc-obfuscate` 联动**——每立即数一次运行时调用，是家族里最重的一项。
+     守门：`RegTransformPassTest.ConstantHiding*` 5 例（语义等价求值 / I64 不截
+     断 / 浮点跳过 / seed 无关 / 与 CFF 叠加后 dispatcher key 仍字面量）+
+     `mj2x_rt_test.test_const_key_derivation` + LLVM E2E 变体。
+   - **调用目标间接化 + per-signature dispatcher（`obfuscation.calls.*`）——未开工。**
+   - **computed jumps（`obfuscation.jumps`）——未开工。**
 7. 混淆两级作用域 include/exclude（全局 + per-module）——混淆真正可用的前提。
 8. VMC4：super-ops（相邻 VM 指令融合）+ 指令碎片化——打破"VM 指令 ↔ 字节码 1:1 对应"。
 9. VMC4 第二形态：寄存器机（对标 `vm.register`）。
