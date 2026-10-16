@@ -1,0 +1,51 @@
+# git-cliff 配置：约定式提交 → 中文分组 changelog。
+# 范围纪律：只描述本仓（拆仓基线 a785a86 之后）的提交；monorepo 遗留的
+# `[mj2x]` 方括号格式不入册（MIGRATION.md「历史不 amend」既成事实）。
+# 发版用法：release workflow 里 `git-cliff <上个v*tag>..<新tag> -o notes.md`，
+# 首个 tag 前无上个 tag 时 range 回退到 a785a86（MIGRATION.md 拆出基线）。
+
+[changelog]
+header = ""
+body = """
+{% set groups = ["破坏性变更", "新增", "修复", "性能", "文档"] %}
+{% for g in groups -%}
+{% set items = commits | filter(attribute="group", value=g) -%}
+{% if items -%}
+### {{ g }}
+{% for commit in items -%}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message }}
+{% endfor %}
+{% endif -%}
+{% endfor -%}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+# 非约定式提交（monorepo 遗留 [mj2x]、Merge 线等）直接滤掉
+filter_unconventional = true
+# 本仓 issue 链接改写（monorepo 期 #NNN 随历史被范围排除，不会误链）
+commit_preprocessors = [
+    { pattern = "issue #(\\d+)", replace = "[issue #$1](https://github.com/luiox/mj2x/issues/$1)" },
+]
+commit_parsers = [
+    # 破坏性变更置顶（`type!:` 由 conventional 解析标记）
+    { message = "^[a-z]+!:", group = "破坏性变更" },
+    { message = "^feat", group = "新增" },
+    { message = "^fix", group = "修复" },
+    { message = "^perf", group = "性能" },
+    { message = "^revert", group = "修复" },
+    { message = "^docs?", group = "文档" },
+    # 重构/测试/构建/chore 属内部过程，不进面向使用者的 changelog；
+    # 归组后由 body 模板的 groups 白名单控制出不出，兜底组「其他」同样不展示。
+    { message = "^refactor", group = "重构" },
+    { message = "^test", group = "测试" },
+    { message = "^build", group = "构建" },
+    { message = "^ci", group = "构建" },
+    { message = "^chore", group = "其他" },
+    # 兜底：未知类型归入其他，不静默丢弃
+    { message = ".*", group = "其他" },
+]
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
