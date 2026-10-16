@@ -616,6 +616,30 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     for (const auto& declaration : emitState.classCacheDeclarations) {
         out.append(declaration);
     }
+    // 调用目标间接化站点表：per-signature dispatcher 按 (表, 组内索引) 取目标。
+    // 条目字段与 RT 侧 mj2x_regc_call_site 一致（ownerClass/method 为解析缓存）。
+    for (const auto& entry : emitState.indirectSiteTables) {
+        CSourceStream decl;
+        decl.append("static mj2x_regc_call_site ")
+            .append(emitState.indirectSiteTableNames.at(entry.first).c_str())
+            .append("[] = {");
+        for (const auto& site : entry.second) {
+            decl.append("{0, 0, ")
+                .append(codegen::cStringLiteral(
+                    ca::str::Utf8StringRef::from_cstr(site.owner.c_str())))
+                .append(", ")
+                .append(codegen::cStringLiteral(
+                    ca::str::Utf8StringRef::from_cstr(site.name.c_str())))
+                .append(", ")
+                .append(codegen::cStringLiteral(
+                    ca::str::Utf8StringRef::from_cstr(site.desc.c_str())))
+                .append(", ")
+                .append(ca::str::format_std("{}", site.invokeKind))
+                .append("},");
+        }
+        decl.append("};").newLine();
+        out.append(decl.build());
+    }
     if (!emitState.staticMethodCacheDeclarations.empty() ||
         !emitState.staticFieldCacheDeclarations.empty() ||
         !emitState.classCacheDeclarations.empty())

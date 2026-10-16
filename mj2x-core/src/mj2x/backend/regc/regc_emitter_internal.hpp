@@ -44,6 +44,19 @@ struct RegCNativeObjectState
     std::string                   storageName;
 };
 
+/// @brief 调用目标间接化的站点条目（对标 jvmtp `obfuscation.calls.*`）。
+///
+/// @details
+/// 站表由生成工程 emit：调用点只带 `(表, 组内索引)`，目标身份字符串
+/// （owner/name/desc）从调用点移出，静态分析须先解析索引才能还原调用边。
+struct RegCIndirectCallSite
+{
+    std::string owner;
+    std::string name;
+    std::string desc;
+    int32_t     invokeKind = 0;   ///< 0 = virtual/interface，1 = static，2 = special
+};
+
 /// @brief 单个 RegFunction 发射过程的状态：native 对象表、缓存名表、临时索引。
 ///
 /// @details
@@ -105,6 +118,11 @@ struct RegCFunctionEmitState
     /// exception edge copies once per throw site, so the count can exceed the static
     /// CFG edge count).
     std::vector<SSAType>                      edgeTempTypes;
+    /// 调用目标间接化站点表：按返回形态（dispatcher 后缀）分组，每组一张表、
+    /// 组内独立索引。按指令遍历序登记——与 pass 遍历序一致，产物可复现。
+    std::map<std::string, std::vector<RegCIndirectCallSite>> indirectSiteTables;
+    std::map<std::string, std::string>                       indirectSiteTableNames;
+    int                                                     indirectSiteTableIndex = 0;
 };
 
 /// @brief analyzeStringBuilders 输出：native StringBuilder 寄存器集合与归属关系。
@@ -264,7 +282,8 @@ bool tryEmitDirectCall(CSourceStream&                                     out,
 /// 发射缓存化的 JNI 调用点（jvalue 数组 + CallXxxMethodA）。
 /// ownerMethodOnly：仅按声明 owner 解析 methodID（GetMethodID 一次 + 缓存，
 /// 之后每调用 0 JNI 解析；CallXxxMethodA 的 JNI 虚分派保证语义正确）。
-void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCall,
+void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegInstruction& ins,
+                    bool staticCall,
                     const ca::str::Utf8StringRef&            cacheName,
                     const std::vector<ca::str::Utf8String>& expressions,
                     bool ownerMethodOnly = false);

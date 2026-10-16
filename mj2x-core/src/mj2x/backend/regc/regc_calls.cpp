@@ -314,8 +314,43 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
 /// 直接按已知参数类型填充 jvalue 数组并走 CallXxxMethodA。行为与原有
 /// _mj2x_regc_call_cached_* 帮手一致：方法/类解析失败时目标寄存器落默认值，
 /// 实例调用 receiver 为 NULL 时抛 NullPointerException。
-void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCall,
-                    const ca::str::Utf8StringRef& cacheName,
+/// 登记一个调用目标间接化站点，返回 (站点表名, 组内索引)。
+///
+/// 表按返回形态（dispatcher 后缀）分组：同签名共享一张表、组内独立计数。
+/// 登记顺序即指令遍历序（确定性），产物可复现。
+std::pair<std::string, int32_t> addIndirectCallSite(RegCFunctionEmitState& state,
+                                                    const RegInstruction& ins,
+                                                    const char* suffix)
+{
+    std::string tableName;
+    auto        nameIt = state.indirectSiteTableNames.find(suffix);
+    if (nameIt == state.indirectSiteTableNames.end()) {
+        tableName = "_mj2x_ct_" + std::to_string(state.indirectSiteTableIndex++);
+        nameIt    = state.indirectSiteTableNames.emplace(suffix, tableName).first;
+        state.indirectSiteTables.emplace(suffix, std::vector<RegCIndirectCallSite>{});
+    }
+    auto& table = state.indirectSiteTables[suffix];
+    // 同 (owner, name, desc, invokeKind) 复用同一条目：同一目标的多个调用点
+    // 指向同一条目，缓存也只解析一次。
+    const std::string owner = ins.method.owner.to_std_string();
+    const std::string name  = ins.method.name.to_std_string();
+    const std::string desc  = ins.method.desc.to_std_string();
+    const int32_t     kind  = ins.method.invokeOpcode == Opcodes::INVOKESTATIC      ? 1
+                              : ins.method.invokeOpcode == Opcodes::INVOKESPECIAL   ? 2
+                                                                                    : 0;
+    for (size_t i = 0; i < table.size(); ++i) {
+        if (table[i].owner == owner && table[i].name == name && table[i].desc == desc &&
+            table[i].invokeKind == kind) {
+            return std::make_pair(nameIt->second, static_cast<int32_t>(i));
+        }
+    }
+    const int32_t index = static_cast<int32_t>(table.size());
+    table.push_back(RegCIndirectCallSite{owner, name, desc, kind});
+    return std::make_pair(nameIt->second, index);
+}
+
+void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegInstruction& ins,
+                    bool staticCall, const ca::str::Utf8StringRef& cacheName,
                     const std::vector<ca::str::Utf8String>& expressions, bool ownerMethodOnly)
 {
     const char               returnTag = descriptorReturnTag(ins.method.desc);
@@ -333,6 +368,50 @@ void emitCachedCall(CSourceStream& out, const RegInstruction& ins, bool staticCa
         }
         if (!paramTags.empty()) {
             o.declare_var("jvalue", ca::str::format_std("_mj2x_regc_va[{}]", paramTags.size()));
+        }
+        // 调用目标间接化：调用点只带 (站点表, 组内索引)，目标身份字符串移出
+        // 调用点，由可分发运行时的 per-signature dispatcher 解析并缓存。
+        if (ins.indirectCall) {
+            const char*  suffix  = hasDest ? helperSuffix(ins.dest.type) : "void";
+            const size_t argBase = staticCall ? 0 : 1;
+            for (size_t i = 0; i < paramTags.size(); ++i) {
+                o.assign(codegen::exprMember(
+                             codegen::exprIndex("_mj2x_regc_va", ca::str::format_std("{}", i)),
+                             jvalueSlotName(paramTags[i])),
+                         std::string(jniValueCast(paramTags[i])) +
+                             codegen::exprParen(expressions[argBase + i].to_std_string()));
+            }
+            const auto   site = addIndirectCallSite(state, ins, suffix);
+            const std::string dispatchCall = codegen::exprCall(
+                std::string("_mj2x_regc_dispatch_") + suffix,
+                {"_mj2x_regc_current_context()", site.first,
+                 ca::str::format_std("{}", site.second),
+                 staticCall ? "NULL" : "_mj2x_regc_rcv", argsArg.to_std_string()});
+            const auto   emitDispatch = [&](CSourceStream& u) {
+                if (hasDest) {
+                    u.assign(destName,
+                             jniResultCast(returnTag, ins.dest.type).to_std_string() +
+                                 dispatchCall);
+                }
+                else {
+                    u.emitLine(dispatchCall + ";");
+                }
+            };
+            if (!staticCall) {
+                // 与 cached 帮手同口径：receiver 为 NULL 抛 NPE。
+                o.iff(codegen::exprBinop("==", "_mj2x_regc_rcv", "NULL"),
+                      [&](CSourceStream& u) {
+                          u.emitLine("_mj2x_regc_throw_null(\"instance method call\");");
+                          if (hasDest) {
+                              u.assign(destName, std::string(defaultValue(ins.dest.type)));
+                          }
+                      },
+                      emitDispatch);
+            }
+            else {
+                emitDispatch(o);
+            }
+            return;
         }
         o.declare_var("jmethodID", "_mj2x_regc_m");
         if (staticCall) {

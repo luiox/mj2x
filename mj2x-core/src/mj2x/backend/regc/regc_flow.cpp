@@ -928,11 +928,13 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 }
                 else {
                     // private 无覆写：按声明 owner 解析即可（免每调用 GetObjectClass）。
-                    emitCachedCall(u, ins, false, instanceCacheName, argumentExpressions, true);
+                    emitCachedCall(u, state, ins, false, instanceCacheName, argumentExpressions,
+                                   true);
                 }
             }
             else if (inlineCached) {
-                emitCachedCall(u, ins, staticCall, staticCall ? cacheName : instanceCacheName,
+                emitCachedCall(u, state, ins, staticCall,
+                               staticCall ? cacheName : instanceCacheName,
                                argumentExpressions, libraryOwner && !staticCall);
             }
             else if (ins.hasDest) {
