@@ -23,7 +23,7 @@ public:
                         InternalCallResolver* resolver, GlobalStringTable& strings,
                         size_t indySiteBase,
                         const codegen::RuntimeProtectionOptions* runtimeProtection,
-                        uint32_t* checkpointCounter)
+                        uint32_t* checkpointCounter, LlvmIndirectSiteRegistry* indirectSites)
         : function_(function)
         , registerTypes_(registerTypes)
         , functionName_(functionName)
@@ -33,6 +33,7 @@ public:
         , indySiteBase_(indySiteBase)
         , runtimeProtection_(runtimeProtection)
         , checkpointCounter_(checkpointCounter)
+        , indirectSites_(indirectSites)
     {}
 
     bool emit(std::string& source, std::string& reason)
@@ -966,6 +967,45 @@ private:
                 out_ << "  store " << llvmType(argType) << " " << expression << ", ptr " << slot
                      << "\n";
             }
+            // 调用目标间接化：调用点只带 (站点表, 组内索引)，身份字符串移出调用点
+            // （站点表是模块级 internal global）。jvalue 装载与直接 JNI 分派同路径，
+            // 只有"目标从哪来"不同——dispatcher 首调解析并缓存进条目。
+            if (instruction.indirectCall && indirectSites_ != nullptr) {
+                const char* suffix = dispatchSuffixFor(retKind);
+                if (suffix == nullptr) {
+                    reason = "LLVM IR indirect call has an unsupported return type";
+                    return false;
+                }
+                const std::string owner = instruction.method.owner.to_std_string();
+                const std::string name  = instruction.method.name.to_std_string();
+                const int32_t     kind  = instruction.method.invokeOpcode == Opcodes::INVOKESTATIC ? 1
+                                          : instruction.method.invokeOpcode == Opcodes::INVOKESPECIAL ? 2
+                                                                                                    : 0;
+                const auto        site  = indirectSites_->add(strings_, suffix, owner, name, desc, kind);
+                runtimeDeclares_.push_back(LlvmIndirectSiteRegistry::typeDeclaration());
+                runtimeDeclares_.push_back(std::string("declare ") + dispatchReturnType(suffix) +
+                                           " @mj2x_llvm_dispatch_" + suffix +
+                                           "(ptr, ptr, i32, ptr, ptr)");
+                std::string dispatchArgs = "ptr %env, ptr " + site.first + ", i32 " +
+                                           std::to_string(site.second);
+                if (receiverOffset == 1) {
+                    std::string receiver;
+                    if (!emitOperand(instruction.args[0], receiver, reason)) return false;
+                    dispatchArgs += ", ptr " + receiver;
+                }
+                else {
+                    dispatchArgs += ", ptr null";
+                }
+                dispatchArgs += ", ptr " + jv;
+                if (retKind == PrimitiveKind::VOID) {
+                    out_ << "  call void @mj2x_llvm_dispatch_void(" << dispatchArgs << ")\n";
+                    return true;
+                }
+                const std::string result = nextTemporary();
+                out_ << "  " << result << " = call " << dispatchReturnType(suffix)
+                     << " @mj2x_llvm_dispatch_" << suffix << "(" << dispatchArgs << ")\n";
+                return emitStore(instruction.dest, result, reason);
+            }
             std::string callArgs = "ptr %env";
             if (receiverOffset == 1) {
                 std::string receiver;
@@ -1684,6 +1724,8 @@ private:
     size_t                   indySiteBase_ = 0;
     const codegen::RuntimeProtectionOptions* runtimeProtection_ = nullptr;
     uint32_t*                checkpointCounter_ = nullptr;   // 文件级检查点计数（跨函数唯一）
+    /// 模块级调用目标间接化站点表注册表（跨函数累积；nullptr = 本模块未启用）。
+    LlvmIndirectSiteRegistry* indirectSites_ = nullptr;
     std::ostringstream       out_;
     uint32_t                 temporaryIndex_ = 0;
     uint32_t                 edgeIndex_ = 0;
@@ -1716,10 +1758,11 @@ bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& register
                       const codegen::RuntimeProtectionOptions* runtimeProtection,
                       uint32_t* checkpointCounter, std::vector<std::string>* checkpointGlobals,
                       std::vector<std::string>* runtimeDeclares, std::string& source,
-                      std::string& reason)
+                      std::string& reason, LlvmIndirectSiteRegistry* indirectSites)
 {
     LlvmFunctionEmitter emitter(function, registerTypes, functionName, returnType, resolver,
-                                strings, indySiteBase, runtimeProtection, checkpointCounter);
+                                strings, indySiteBase, runtimeProtection, checkpointCounter,
+                                indirectSites);
     if (!emitter.emit(source, reason)) return false;
     if (checkpointGlobals != nullptr) *checkpointGlobals = emitter.checkpointGlobals();
     if (runtimeDeclares != nullptr) *runtimeDeclares = emitter.runtimeDeclares();

@@ -246,6 +246,41 @@ inline const char* callKindFor(PrimitiveKind kind)
     }
 }
 
+/// @brief 方法返回类型 → 调用目标间接化 dispatcher 后缀。
+///
+/// @details
+/// 窄返回类型（boolean/byte/char/short）在 dispatcher 内经 `CallIntMethodA` 取回
+/// （JNI 规范四类同为 32 位），故统一走 i32 形态，不涉及符号扩展——槽类型对窄
+/// 结果本就是 i32。
+inline const char* dispatchSuffixFor(PrimitiveKind kind)
+{
+    switch (kind) {
+    case PrimitiveKind::BOOLEAN:
+    case PrimitiveKind::BYTE:
+    case PrimitiveKind::CHAR:
+    case PrimitiveKind::SHORT:
+    case PrimitiveKind::INT: return "i32";
+    case PrimitiveKind::LONG: return "i64";
+    case PrimitiveKind::FLOAT: return "f32";
+    case PrimitiveKind::DOUBLE: return "f64";
+    case PrimitiveKind::OBJECT: return "ref";
+    case PrimitiveKind::VOID: return "void";
+    default: return nullptr;
+    }
+}
+
+/// @brief dispatcher 后缀 → 返回值的 LLVM 类型。
+inline const char* dispatchReturnType(const char* suffix)
+{
+    const std::string value(suffix == nullptr ? "" : suffix);
+    if (value == "i64") return "i64";
+    if (value == "f32") return "float";
+    if (value == "f64") return "double";
+    if (value == "ref") return "ptr";
+    if (value == "void") return "void";
+    return "i32";
+}
+
 /// @brief JNI 函数表槽位（jni.h `JNINativeInterface_` 成员序号，含 reserved0-3）。
 namespace jni_slot {
 
@@ -449,6 +484,106 @@ private:
     std::vector<std::string> strings_;
 };
 
+/// @brief 调用目标间接化的站点表条目（对标 jvmtp `obfuscation.calls.*`）。
+///
+/// @details
+/// 身份字符串在登记时即 intern 为 `@_mj2x_llvm_str_N` 全局常量引用（与直接 JNI
+/// 分派共用同一张字符串表，不新增字符串）。ownerClass/method 两个解析缓存槽初始
+/// 为 null，由 dispatcher 首调时填充。
+struct LlvmIndirectCallSite
+{
+    std::string owner;                  ///< intern 后的 owner 全局引用
+    std::string name;                   ///< intern 后的 name 全局引用
+    std::string desc;                   ///< intern 后的 desc 全局引用
+    int32_t     invokeKind = 0;         ///< 0 = virtual/interface，1 = static，2 = special
+};
+
+/// @brief 模块级调用目标间接化站点表注册表（跨函数累积）。
+///
+/// @details
+/// 按 dispatcher 后缀（返回形态）分表：同签名共享一张表、组内独立索引。同一
+/// (owner, name, desc, invokeKind) 在整个模块内只登记一条目，多个调用点指向同
+/// 一条目，运行时也只解析一次。登记顺序即发射顺序（编译顺序确定），产物可复现。
+///
+/// 表本体是模块级 `internal global`：不进目标文件符号表，但字符串常量仍可被
+/// `strings`/`grep` 扫到——间接化的收益在于调用点不再自带身份，静态分析须先
+/// 解析 index 才能还原调用边。
+class LlvmIndirectSiteRegistry
+{
+public:
+    /// @brief 登记一个调用目标，返回 (表全局名, 组内索引)。
+    std::pair<std::string, int32_t> add(GlobalStringTable& strings, const char* suffix,
+                                        const std::string& owner, const std::string& name,
+                                        const std::string& desc, int32_t invokeKind)
+    {
+        auto tableIt = tableBySuffix_.find(suffix);
+        if (tableIt == tableBySuffix_.end()) {
+            const size_t             index = tables_.size();
+            LlvmIndirectSiteTable    table;
+            table.suffix = suffix;
+            table.name   = "@_mj2x_llvm_ct_" + std::to_string(index);
+            tableBySuffix_.emplace(suffix, index);
+            tables_.push_back(std::move(table));
+            tableIt = tableBySuffix_.find(suffix);
+        }
+        LlvmIndirectSiteTable& table = tables_[tableIt->second];
+        // 先 intern 再去重：同一字符串的 intern 结果相同，比对 interned 引用等价于
+        // 比对原文，且去重命中不会往字符串表里塞重复项。
+        const std::string ownerRef = strings.intern(owner);
+        const std::string nameRef  = strings.intern(name);
+        const std::string descRef  = strings.intern(desc);
+        for (size_t index = 0; index < table.sites.size(); ++index) {
+            const LlvmIndirectCallSite& site = table.sites[index];
+            if (site.owner == ownerRef && site.name == nameRef && site.desc == descRef &&
+                site.invokeKind == invokeKind) {
+                return std::make_pair(table.name, static_cast<int32_t>(index));
+            }
+        }
+        const int32_t index = static_cast<int32_t>(table.sites.size());
+        table.sites.push_back(LlvmIndirectCallSite{ownerRef, nameRef, descRef, invokeKind});
+        return std::make_pair(table.name, index);
+    }
+
+    bool empty() const { return tables_.empty(); }
+
+    /// @brief 站点表结构类型定义（模块级，须早于任何引用）。
+    static const char* typeDeclaration()
+    {
+        return "%mj2x_llvm_call_site = type { ptr, ptr, ptr, ptr, ptr, i32 }";
+    }
+
+    /// @brief 输出全部站点表定义。
+    std::string emitDefinitions() const
+    {
+        std::ostringstream out;
+        for (const auto& table : tables_) {
+            out << table.name << " = internal global [" << table.sites.size()
+                << " x %mj2x_llvm_call_site] [\n";
+            for (size_t index = 0; index < table.sites.size(); ++index) {
+                const LlvmIndirectCallSite& site = table.sites[index];
+                out << "  %mj2x_llvm_call_site { ptr null, ptr null, ptr " << site.owner
+                    << ", ptr " << site.name << ", ptr " << site.desc << ", i32 "
+                    << site.invokeKind << " }";
+                if (index + 1 < table.sites.size()) out << ",";
+                out << "\n";
+            }
+            out << "]\n";
+        }
+        return out.str();
+    }
+
+private:
+    struct LlvmIndirectSiteTable
+    {
+        std::string                       suffix;   ///< dispatcher 后缀（返回形态）
+        std::string                       name;     ///< 表全局名 "@_mj2x_llvm_ct_N"
+        std::vector<LlvmIndirectCallSite> sites;
+    };
+
+    std::vector<LlvmIndirectSiteTable>  tables_;
+    std::map<std::string, size_t>       tableBySuffix_;
+};
+
 // ---- 验证（llvm_ir_validation.cpp） ----
 
 bool recordValue(RegisterTypes& types, RegValue value, std::string& reason);
@@ -472,6 +607,7 @@ class LlvmFunctionEmitter;
 ///                          rt_protect，编译侧链接 mj2x_rt_protect.c）。
 /// @param checkpointGlobals 出参：本函数注入的检查点状态全局（模块级输出用）。
 /// @param runtimeDeclares 出参：本函数用到的 JDK intrinsic 直调声明。
+/// @param indirectSites 非空时接受调用目标间接化站点登记（模块级累积）。
 bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& registerTypes,
                       const std::string& functionName, SSAType returnType,
                       InternalCallResolver* resolver, GlobalStringTable& strings,
@@ -479,7 +615,7 @@ bool emitLlvmFunction(const RegFunction& function, const RegisterTypes& register
                       const codegen::RuntimeProtectionOptions* runtimeProtection,
                       uint32_t* checkpointCounter, std::vector<std::string>* checkpointGlobals,
                       std::vector<std::string>* runtimeDeclares, std::string& source,
-                      std::string& reason);
+                      std::string& reason, LlvmIndirectSiteRegistry* indirectSites);
 
 // ---- 共享 helper 发射（llvm_ir_helpers.cpp） ----
 
