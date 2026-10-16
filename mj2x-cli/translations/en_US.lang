@@ -162,6 +162,7 @@ mj2x.param.regc.cff_state_encrypt.desc=RegC/LLVM: CFF derived random state codes
 mj2x.param.regc.mba_deep.desc=RegC: deep MBA (De Morgan/carry chains + anti-folding barriers, per-site variants; off by default; LLVM-side barriers exceed the subset, the transform falls back to untransformed)
 mj2x.param.regc.opaque_zero.desc=RegC/LLVM: opaque-zero identity variants (demorgan/shift-pair/or-dec, variant chosen by seed; off by default)
 mj2x.param.regc.hide_constants.desc=RegC/LLVM: immediate hiding (integer immediates become E ^ const_key(site); E is materialized at compile time, K is derived at runtime via splitmix64; mirrors jvmtp obfuscation.constants; off by default and NOT implied by --regc-obfuscate - one extra runtime call per immediate, the heaviest transform in the family)
+mj2x.param.regc.indirect_calls.desc=RegC/LLVM: indirect call targets (external JDK/library calls are routed through a per-signature dispatcher, so a call site carries only a site index and the target identity strings move off the call site; mirrors jvmtp obfuscation.calls.*; off by default and NOT implied by --regc-obfuscate - one extra dispatch layer per call)
 mj2x.param.regc.transform_seed.desc=RegC/LLVM: transform seed (default 0; drives state codes/variant selection, same seed = same artifact)
 mj2x.param.vmc4.dispatcher.desc=VMC4 (experimental): dispatcher form (switch_table default; computed_goto needs GCC/clang)
 mj2x.param.vmc4.seed.desc=VMC4: master seed driving per-instance opcode mapping/handler order (same seed + same input = same artifact)
