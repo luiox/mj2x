@@ -239,6 +239,61 @@ RegFunction makeParamAddFunction()
     return function;
 }
 
+/// 调用目标间接化测试用：单块函数，块内依次放若干 Call 指令后 return。
+/// owner 决定是否自递归（applyCallIndirections 跳过同 owner 的 INVOKESTATIC）。
+/// 身份串用字符串字面量（静态存储期，无需 arena 保活）。
+RegFunction makeCallFunction(const std::string& selfOwner,
+                             std::initializer_list<std::tuple<const char*, const char*, const char*,
+                                                               int>> calls)
+{
+    RegFunction    function;
+    auto           block    = std::make_unique<RegBlock>(SSABlockId{0});
+    const RegValue argument = {RegId{0}, SSAType::I32};
+    function.parameters.push_back(argument);
+    function.symbol.owner = selfOwner;
+
+    int32_t nextRegister = 1;
+    for (const auto& [owner, name, desc, invokeOpcode] : calls) {
+        RegInstruction call;
+        call.kind   = RegInstructionKind::Call;
+        call.effect = SSAEffect::externalCall();
+        call.method = SSAMethodRef{Utf8StringRef::from_cstr(owner),
+                                   Utf8StringRef::from_cstr(name),
+                                   Utf8StringRef::from_cstr(desc),
+                                   invokeOpcode};
+        if (invokeOpcode == Opcodes::INVOKESTATIC) {
+            call.args.push_back(RegOperand::fromRegister(argument));
+        }
+        else {
+            call.args.push_back(RegOperand::fromRegister(argument));
+            call.args.push_back(RegOperand::fromRegister(argument));
+        }
+        if (desc[0] != 'V') {
+            call.hasDest = true;
+            call.dest    = RegValue{RegId{static_cast<uint32_t>(nextRegister++)}, SSAType::I32};
+        }
+        block->instructions.push_back(call);
+    }
+    block->terminator = RegReturnTerminator{true, RegOperand::fromRegister(argument)};
+    function.entry    = block.get();
+    function.blocks.push_back(std::move(block));
+    return function;
+}
+
+/// 收集函数内所有 Call 指令的 indirectCall 标记（按指令序）。
+std::vector<bool> indirectCallFlags(const RegFunction& function)
+{
+    std::vector<bool> flags;
+    for (const auto& block : function.blocks) {
+        for (const auto& instruction : block->instructions) {
+            if (instruction.kind == RegInstructionKind::Call) {
+                flags.push_back(instruction.indirectCall);
+            }
+        }
+    }
+    return flags;
+}
+
 /// 按目标类型宽度窄化一个 64 位位型（JVM 整型窄化：截断后按目标符号扩展）。
 int64_t truncateToType(int64_t value, SSAType type)
 {
@@ -1179,5 +1234,117 @@ TEST(RegTransformPassTest, All829OptionsDefaultOff)
     EXPECT_FALSE(options.opaqueZero);
     // 批次 2：立即数隐藏默认关闭（每立即数一次运行时调用，最重的一项）。
     EXPECT_FALSE(options.hideImmediateConstants);
+    // 调用目标间接化默认关闭（每次调用多一层 dispatcher 分派）。
+    EXPECT_FALSE(options.indirectCallTargets);
     EXPECT_EQ(options.transformSeed, 0ULL);
+}
+
+// ===========================================================================
+// 调用目标间接化（对标 jvmtp obfuscation.calls.*）
+// ===========================================================================
+
+// 默认关闭：不置任何标记（fail-closed 基线）。
+TEST(RegTransformPassTest, IndirectCallOffByDefault)
+{
+    RegFunction function = makeCallFunction("com/app/Foo",
+                                            {{"java/lang/Math", "max", "(II)I", Opcodes::INVOKESTATIC}});
+
+    const auto stats = applyRegTransformPasses(function);
+
+    EXPECT_EQ(stats.callsIndirected, 0U);
+    EXPECT_EQ(indirectCallFlags(function), std::vector<bool>({false}));
+}
+
+// 非自递归调用一律标记；自递归静态调用跳过（走 self-call 直调路径）。
+TEST(RegTransformPassTest, IndirectCallMarksCallsButSkipsSelfRecursion)
+{
+    RegFunction function = makeCallFunction(
+        "com/app/Foo",
+        {
+            {"java/lang/Math", "max", "(II)I", Opcodes::INVOKESTATIC},
+            {"com/app/Foo", "helper", "(I)I", Opcodes::INVOKESTATIC},   // 自递归
+            {"java/lang/String", "length", "()I", Opcodes::INVOKEVIRTUAL},
+            {"com/app/Bar", "build", "()V", Opcodes::INVOKESPECIAL},
+        });
+
+    RegTransformOptions options;
+    options.indirectCallTargets = true;
+    const auto stats           = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.callsIndirected, 3U);
+    EXPECT_EQ(indirectCallFlags(function), std::vector<bool>({true, false, true, true}));
+}
+
+// 标记不改变 RegIR 结构：仍是无栈形态，DCE/验证面对 indirectCall 无感
+// （发射端才按标记分流，IR 层只是多一个布尔）。
+TEST(RegTransformPassTest, IndirectCallKeepsRegIRValid)
+{
+    RegFunction function = makeCallFunction(
+        "com/app/Foo",
+        {
+            {"java/lang/Math", "max", "(II)I", Opcodes::INVOKESTATIC},
+            {"java/lang/String", "length", "()I", Opcodes::INVOKEVIRTUAL},
+        });
+
+    RegTransformOptions options;
+    options.indirectCallTargets = true;
+    applyRegTransformPasses(function, options);
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
+    EXPECT_EQ(function.blocks.size(), 1U);
+    EXPECT_EQ(function.blocks.front()->instructions.size(), 2U);
+}
+
+// 标记与 seed 无关（可复现构建不变量：站点表由发射端按遍历序建，
+// seed 只影响 MBA/opaque/CFF 的变体选择）。
+TEST(RegTransformPassTest, IndirectCallIsSeedIndependent)
+{
+    auto fingerprint = [](uint64_t seed) {
+        RegFunction function = makeCallFunction(
+            "com/app/Foo",
+            {
+                {"java/lang/Math", "max", "(II)I", Opcodes::INVOKESTATIC},
+                {"java/lang/String", "length", "()I", Opcodes::INVOKEVIRTUAL},
+            });
+        RegTransformOptions options;
+        options.indirectCallTargets = true;
+        options.transformSeed       = seed;
+        applyRegTransformPasses(function, options);
+        std::string out;
+        for (bool flag : indirectCallFlags(function)) out += flag ? "1" : "0";
+        return out;
+    };
+    EXPECT_EQ(fingerprint(0), fingerprint(1));
+    EXPECT_EQ(fingerprint(0), fingerprint(0xDEADBEEFCAFE1234ull));
+}
+
+// 与立即数隐藏叠加：pass 顺序是 calls → constants，两者互不破坏对方的标记
+// （立即数隐藏插合成 Intrinsic，调用指令的 indirectCall 标记不丢）。
+TEST(RegTransformPassTest, IndirectCallComposesWithConstantHiding)
+{
+    RegFunction function = makeCallFunction(
+        "com/app/Foo", {{"java/lang/Math", "max", "(II)I", Opcodes::INVOKESTATIC}});
+    // 追加一个带立即数的纯指令，供立即数隐藏改写。
+    RegInstruction add;
+    add.kind     = RegInstructionKind::Binary;
+    add.hasDest  = true;
+    add.dest     = RegValue{RegId{9}, SSAType::I32};
+    add.lhs      = RegOperand::fromRegister(RegValue{RegId{0}, SSAType::I32});
+    add.rhs      = RegOperand::fromInt(0x5EED, SSAType::I32);
+    add.binaryOp = SSABinaryOp::Add;
+    add.effect   = SSAEffect::pure();
+    function.blocks.front()->instructions.push_back(add);
+
+    RegTransformOptions options;
+    options.indirectCallTargets    = true;
+    options.hideImmediateConstants = true;
+    const auto stats               = applyRegTransformPasses(function, options);
+
+    EXPECT_EQ(stats.callsIndirected, 1U);
+    EXPECT_GT(stats.constantsHidden, 0U);
+    EXPECT_EQ(indirectCallFlags(function), std::vector<bool>({true}));
+
+    std::string validationReason;
+    EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
 }
