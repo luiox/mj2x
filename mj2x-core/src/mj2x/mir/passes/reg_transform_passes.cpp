@@ -891,49 +891,28 @@ RegOperand hideImmediateOperand(const RegOperand& operand, ca::u32& site, ca::u3
     return RegOperand::fromRegister(narrowReg);
 }
 
-/// 调用目标间接化的 invoke 形态编码（与 RT 侧 mj2x_regc_call_site 同值）。
-int32_t invokeKindOf(const RegInstruction& instruction)
-{
-    switch (instruction.method.invokeOpcode) {
-    case Opcodes::INVOKESTATIC: return 1;
-    case Opcodes::INVOKESPECIAL: return 2;
-    default: return 0;   // INVOKEVIRTUAL / INVOKEINTERFACE
-    }
-}
-
 /// 调用目标间接化（对标 jvmtp `obfuscation.calls.*`）。
 ///
-/// 只给**外部**目标（JDK/库方法）打标记：调用点改走 per-signature dispatcher，
-/// 身份字符串（owner/name/desc）从调用点移出，静态分析必须先解析
-/// (表, 索引) → 条目才能还原调用边——调用图收敛到单一 dispatcher 符号。
+/// 被标记的调用点改走 per-signature dispatcher：身份字符串（owner/name/desc）
+/// 从调用点移出，静态分析必须先解析 (表, 索引) → 条目才能还原调用边——调用图
+/// 收敛到单一 dispatcher 符号。
 ///
-/// 为什么不改已转换目标：那类调用在发射端有直接 C 调用快路径（0 JNI），
-/// 间接化它只会退化成 JNI 调用，纯开销、零混淆收益。
+/// pass 只置 `RegInstruction::indirectCall`，站点表由发射端建：pass 看不到
+/// 跨函数的"哪些方法已被转换"，而发射端本就按解析结果分流（intrinsic /
+/// 同模块直调 / resolved / cached JNI 兜底）。真正落到 dispatcher 的只有兜底
+/// JNI 路径——已转换目标的直调快路径天然不受影响，无需 pass 判断内外。
 ///
-/// 真正落到 dispatcher 的是发射端：pass 只置 `RegInstruction::indirectCall`，
-/// 发射端在通用 JNI 兜底路径（tryEmitDirectCall / intrinsic / resolved 均未
-/// 命中）按标记改发 dispatcher 调用。这样"是否外部"由发射端既有的解析
-/// 结果决定，pass 无需跨函数全局信息（保持可复现构建不变量）。
+/// 自递归静态调用跳过：它走 self-call 直调路径（JVM 栈帧语义），间接化只会
+/// 把 0 JNI 的自调用变成一次 FindClass + GetStaticMethodID。
 void applyCallIndirections(RegFunction& function, RegTransformStats& stats)
 {
-    // 同 desc 分组的组内索引（发射端按签名分表，索引空间按组独立）。
-    std::map<std::string, int32_t> groupCounters;
     for (auto& block : function.blocks) {
         for (auto& instruction : block->instructions) {
             if (instruction.kind != RegInstructionKind::Call) continue;
-            // 自递归静态调用保留原路径（JVM 栈帧语义），其余一律标记。
             if (instruction.method.invokeOpcode == Opcodes::INVOKESTATIC &&
                 instruction.method.owner == function.symbol.owner) {
                 continue;
             }
-            const std::string signature = instruction.method.desc.to_std_string();
-            const int32_t     groupIndex = groupCounters[signature]++;
-            function.callSites.push_back(RegFunction::CallSite{
-                instruction.method.owner.to_std_string(),
-                instruction.method.name.to_std_string(),
-                signature,
-                invokeKindOf(instruction),
-                groupIndex});
             instruction.indirectCall = true;
             ++stats.callsIndirected;
         }
