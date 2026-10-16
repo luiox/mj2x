@@ -805,6 +805,7 @@ DEF_BOOL(regcCffStateEncrypt, "--regc-cff-state-encrypt", "regc_cff_state_encryp
 DEF_BOOL(regcMbaDeep, "--regc-mba-deep", "regc_mba_deep")
 DEF_BOOL(regcOpaqueZero, "--regc-opaque-zero", "regc_opaque_zero")
 DEF_BOOL(regcHideConstants, "--regc-hide-constants", "regc_hide_constants")
+DEF_BOOL(regcIndirectCalls, "--regc-indirect-calls", "regc_indirect_calls")
 DEF_U64(regcTransformSeed, "--regc-transform-seed", "regc_transform_seed")
 DEF_ENUM_STR(stackcExceptionCheck, "--stackc-exception-check", "stackc_exception_check", "full,lite", "full")
 DEF_ENUM_STR(vmc4Dispatcher, "--vmc4-dispatcher", "vmc4_dispatcher", "switch_table,funcptr_table,computed_goto,if_nest,state_dispatcher", "switch_table")
@@ -883,6 +884,7 @@ const ParamDef kParamTable[] = {
     PARAM("regc.mba_deep", "--regc-mba-deep", "regc_mba_deep", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcMbaDeep, json_regcMbaDeep),
     PARAM("regc.opaque_zero", "--regc-opaque-zero", "regc_opaque_zero", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcOpaqueZero, json_regcOpaqueZero),
     PARAM("regc.hide_constants", "--regc-hide-constants", "regc_hide_constants", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcHideConstants, json_regcHideConstants),
+    PARAM("regc.indirect_calls", "--regc-indirect-calls", "regc_indirect_calls", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcIndirectCalls, json_regcIndirectCalls),
     PARAM("regc.transform_seed", "--regc-transform-seed", "regc_transform_seed", ParamType::UInt64, nullptr, 0, 0, "0", "regc_llvm", "regc|llvm", cli_regcTransformSeed, json_regcTransformSeed),
     // vmc4
     PARAM("vmc4.dispatcher", "--vmc4-dispatcher", "vmc4_dispatcher", ParamType::Enum, "switch_table,funcptr_table,computed_goto,if_nest,state_dispatcher", 0, 0, "switch_table", "vmc4", "vmc4", cli_vmc4Dispatcher, json_vmc4Dispatcher),
