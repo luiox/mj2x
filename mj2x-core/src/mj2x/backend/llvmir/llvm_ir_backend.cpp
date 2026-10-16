@@ -273,6 +273,8 @@ struct LlvmIrBackend::Impl
     uint32_t checkpointCounter = 0;
     // JDK intrinsic 直调 declare（模块级输出，跨函数去重累积）。
     std::string runtimeDeclares;
+    // 调用目标间接化站点表（模块级累积，finalize 统一输出）。
+    LlvmIndirectSiteRegistry indirectSites;
 };
 
 LlvmIrBackend::LlvmIrBackend()
@@ -348,7 +350,8 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     // R4 保护变换（--regc-obfuscate 等；RegIR 级，与 RegC 同源）：变换后重新
     // 验证；被拒则回退未变换形态（LLVM 子集窄于 RegC，变换不应丢方法）。
     if (transformOptions_.enableMba || transformOptions_.enableOpaquePredicates ||
-        transformOptions_.enableControlFlowFlattening) {
+        transformOptions_.enableControlFlowFlattening ||
+        transformOptions_.hideImmediateConstants || transformOptions_.indirectCallTargets) {
         std::unique_ptr<RegFunction> transformedReg;
         RegisterTypes                transformedTypes;
         if (!lowerAndValidate(transformedReg, transformedTypes, reason)) {
@@ -385,7 +388,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
                           impl_->strings, indySiteBase,
                           runtimeProtection_.enabled() ? &runtimeProtection_ : nullptr,
                           &impl_->checkpointCounter, &checkpointGlobals, &runtimeDeclares,
-                          helperSource, reason)) {
+                          helperSource, reason, &impl_->indirectSites)) {
         logMethodFallback(className, *method.methodNode, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
@@ -434,6 +437,11 @@ void LlvmIrBackend::finalize(const CompilerIndex&)
     if (!strings.empty()) full << "\n";
     full << impl_->runtimeDeclares;
     if (!impl_->runtimeDeclares.empty()) full << "\n";
+    // 调用目标间接化站点表：结构类型须早于任何表定义与 dispatcher 调用。
+    if (!impl_->indirectSites.empty()) {
+        full << LlvmIndirectSiteRegistry::typeDeclaration() << "\n";
+        full << impl_->indirectSites.emitDefinitions() << "\n";
+    }
     full << impl_->checkpointGlobals;
     full << impl_->bodies.str();
     const std::string bodies = impl_->bodies.str();
