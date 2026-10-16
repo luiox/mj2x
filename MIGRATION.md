@@ -25,7 +25,8 @@ python -m git_filter_repo --force --path-rename 'mj2x/:'
 拆出基线验证(通过):567 提交、367 文件、根化后 `HEAD^{tree}` =
 `ee0e7fb885b201e7863ab553cc7700b4f3fd90a5`,与 monorepo `HEAD:mj2x` 树哈希相等
 (内容逐字节未动)。历史保留 filter-repo 原样,未 amend;monorepo 的 v2.x 系列
-tag(v2.0 … v2.2)随历史重写保留。分支收敛为单 `main`。
+tag(v2.0 … v2.2)未随拆仓带出(实测本仓 tag 为 0,原"随历史重写保留"的记载
+有误)。分支收敛为单 `main`。
 
 ## 依赖接线
 
@@ -85,5 +86,8 @@ monorepo 检出内仍可用,`MJ2X_CRT_DIR` 可显式覆盖。
 - **跨仓引用残留**:README 引用的 DLL 加壳需求文档在 morpher 主仓
   `doc_ai/dll_packer_requirements.md`(未随拆迁移);`benchmark/` 依赖的
   jvm-obf-tester 外部样本仓为环境依赖,非仓内文件。
-- **tag 语义**:随历史保留的 v2.x tag 是 monorepo 全线发版标记,在独立仓语境下
-  语义需重新约定(或清理)。
+- **版本与 tag 语义**(2026-10 定案):拆仓时 v2.x tag 未带出(见上),独立仓
+  版本归零,semver 从 `0.1.0` 起(`xmake.lua` set_version 与发版 tag 同源)。
+  推 `v*` tag 触发 release workflow:git-cliff(cliff.toml)从拆仓基线
+  `a785a86` 起算生成 changelog,`gh release create` 落 GitHub Release。
+  拆仓前历史不入 changelog(monorepo 全线语义,与本仓发版无关)。

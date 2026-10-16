@@ -62,3 +62,18 @@ clang（LLVM/RegC intrinsic 直编，PATH 探测）。缺哪样，对应用例 s
 - 不提交测试产物与临时文件（`test/`、`build/`、`.xmake/`）；提交前 `git status`。
 - 提交信息用约定式前缀并带模块作用域：`feat(core): …`、`fix(cli): …`、
   `chore(build): …`、`docs: …`。
+
+## 发版
+
+版本号从 `0.1.0` 起（拆仓归零，见 MIGRATION.md），单源是 `xmake.lua` 的
+`set_version`，发版 tag 与其同值（`v0.1.0` …）。
+
+1. 确认 main 绿（CI linux + windows 两门都过），改 `set_version("X.Y.Z")`
+   提交合入；
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`；
+3. tag push 触发 release workflow：先验该 tag 指向提交的 CI 全绿，再用
+   git-cliff（`cliff.toml`）生成 changelog（从拆仓基线 `a785a86` 起算，
+   与上个 `v*` tag 之间），`gh release create` 发布 Release。
+
+changelog 只收约定式提交（拆仓后）；monorepo 遗留 `[mj2x]` 格式不入册。
+本地预览 changelog：`git-cliff a785a86..HEAD`（需 git-cliff）。
