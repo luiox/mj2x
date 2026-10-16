@@ -51,10 +51,10 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 | VMC4 可用版 | 完整方法语义的 VM 后端 | **已完成**（PR #789/#790/#792/#796/#798/#802：对象/字段/数组/调用/异常/intrinsic，转化率 100%）；执行期 dispatch drift 低风险档已落地（PR #766，#762 升级档待 mjdbg 对抗验证） |
 | VMC4 实例粒度 | class / method / program 三档（program = 全程序共享一个 VM，opcode 空间全局统一） | **program 粒度已落地**（#827）；三粒度测试锚定（class/method/program 实例共享/独立语义） |
 | 用户 intrinsic | 任意 Java 静态调用点降级为用户 native symbol 直调 | **已完成**（#818，PR #826，三后端统一 ABI + CLI JSON 配置；文档 `doc/user_intrinsic.md`） |
-| 自建测试集 | mtest_set 语义样本 + 三后端矩阵 + jar 整体 E2E | **第一批已完成**（#820：Wave1-3 G1-G15 样本；用户 intrinsic 三后端 E2E；多类 jar 整体程序三后端 E2E）；**四后端语义回归集已建**（2026-08：`g13.shift_out_of_range`（超界/负数移位计数,计数走参数防常量折叠）+ `g12.string_compare`,矩阵/LLVM 白名单/VMC4 E2E 接入——历史移位掩码四处漂移正是缺这类集的产物,设计见 `doc_ai/cross_backend_semantics.md`）；**性能回归已并入测试集**（#820 步骤 5：benchmark `-Regression` 断言 + `mj2x_integration_test` 门控用例）；mjdbg 对抗闭环待做 |
-| 跨后端语义一致性 | 同一 JVM 语义四后端不漂移（掩码/槽序/异常表序） | 掩码决策已单源化（`codegen/jvm_semantics.hpp`,RegC/LLVM 共用,2026-08 修复两后端缺 `&31/&63` + LLVM long 移位计数未 zext 的非法定 IR）；📋 RegIR 层语义显式化（决策挂指令属性、发射端断言、按标签扩回归集）为 v2.3+ 候选,路径见 `doc_ai/cross_backend_semantics.md` §3 |
+| 自建测试集 | mtest_set 语义样本 + 三后端矩阵 + jar 整体 E2E | **第一批已完成**（#820：Wave1-3 G1-G15 样本；用户 intrinsic 三后端 E2E；多类 jar 整体程序三后端 E2E）；**四后端语义回归集已建**（2026-08：`g13.shift_out_of_range`（超界/负数移位计数,计数走参数防常量折叠）+ `g12.string_compare`,矩阵/LLVM 白名单/VMC4 E2E 接入——历史移位掩码四处漂移正是缺这类集的产物）；**性能回归已并入测试集**（#820 步骤 5：benchmark `-Regression` 断言 + `mj2x_integration_test` 门控用例）；mjdbg 对抗闭环待做 |
+| 跨后端语义一致性 | 同一 JVM 语义四后端不漂移（掩码/槽序/异常表序） | 掩码决策已单源化（`codegen/jvm_semantics.hpp`,RegC/LLVM 共用,2026-08 修复两后端缺 `&31/&63` + LLVM long 移位计数未 zext 的非法定 IR）；📋 RegIR 层语义显式化（决策挂指令属性、发射端断言、按标签扩回归集）为 v2.3+ 候选 |
 | RegC 性能 | 追平/反超 JNIC（os30）基线 | **已完成第一轮**（PR #793/#803：JDK17/21 双矩阵，0.88x-1.16x）；方法内联已完成（SSA 内联默认开启，消除 native 方法间 JNI 往返）；System.arraycopy intrinsic 已完成（#819）；剩余待办见 §3 第 1 条 |
-| 配置系统 | 参数注册表单源 + 全量参数配置化 + JSON Schema 导出 | 📋 **设计完成**（doc_ai/config_system_design.md v1：单源 ParamDef 表驱动 CLI/config/help/schema；GUI 工具路径 = 消费 schema 渲染表单）；P1 实现待做 |
+| 配置系统 | 参数注册表单源 + 全量参数配置化 + JSON Schema 导出 | 📋 **设计完成**（单源 ParamDef 表驱动 CLI/config/help/schema；GUI 工具路径 = 消费 schema 渲染表单）；P1 实现待做 |
 | Release packaging | CLI、runtime、注解包、样本和验证脚本 | v2.1 已纳入发布矩阵；v2.2 持续 |
 
 ---
@@ -83,7 +83,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 - LLVM 后端已转正并二次扩面（v2.2 起默认开启；PR #864 已支持对象/字段/数组/实例调用/异常/monitor/ldc 字符串与类常量；PR #870 完成 invokedynamic 运行时解析、intrinsic 扩面对齐 RegC（Math/包装类/Random/StringBuilder）与保护特性接入（runtime-protection / MBA / opaque / CFF）；String 类方法面与整类下沉留待 v2.3+ 视需求）。
 - ldc Handle/MethodType 常量**已真实支持**（2026-08 修正 LdcPreprocessor 历史
   栈序缺陷——旧展开产出必 VerifyError 字节码却无失败信号；现按 findXxx 描述符
-  展开并有栈形校验器单测 + exec E2E 守门,详见 capabilities §3）；其余不支持
+  展开并有栈形校验器单测 + exec E2E 守门）；其余不支持
   场景维持「显式拒绝（fail-closed 保字节码 + 可观测日志）」承诺,不走静默降级。
 
 ---

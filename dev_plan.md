@@ -1,6 +1,6 @@
 # dev_plan：mj2x 施工计划
 
-> 本文件只保留**待做项**。已完成的工作不写日志——git log 即记录；重要的机制与契约写进 doc_ai 设计文档与 capabilities。
+> 本文件只保留**待做项**。已完成的工作不写日志——git log 即记录；重要的机制与契约写进设计文档（`doc/techniques/`）。
 
 ## 待做项
 
@@ -8,7 +8,7 @@
 
 - period 语义变义（case 标签周期轮换）已实现（#844）且 mjdbg N-7 对抗闭环就绪
   （五形态识别 + period 变义 label 表提取/case 常量反查 + computed_goto 产物修复，
-  见 `mj2x/doc_ai/vmc4_red_team_contract.md` §6）。剩余：开 `feat/mj2x-vmc4-mutation`
+  见 vmc4 红队契约 §6）。剩余：开 `feat/mj2x-vmc4-mutation`
   的 S2 对抗验证 + 红队契约扩展（变义强度模型同批）。
 
 ### B. mj2x 自建测试集（#820）
@@ -33,18 +33,18 @@
 ### D. 配置系统 GUI 工具（P2）
 
 - 配置系统 P0+P1 已完成（见归档索引）。设计已完成
-  （`doc_ai/gui_config_tool_design.md`：vite+vue 方案、schema 驱动渲染、
+  （GUI 配置工具设计：vite+vue 方案、schema 驱动渲染、
   联动/校验/导出/可选 sidecar 执行）。剩余：P1 实现（表单渲染 + 校验 + 导出）。
 
 ### F. 整类下沉（P3，记录不阻塞）
 
 - roadmap §2 表格行已列（算法密集类整体 native 化，边界保留 JNI）；GUI 设计已
-  预留"方法/类选择"扩展点（`gui_config_tool_design.md` §6）。条件：无反射、无
+  预留"方法/类选择"扩展点。条件：无反射、无
   动态类加载、intrinsic 覆盖充分；先做单类试点再铺开。
 
 ### H. indy 原生派发 backend 侧合流（RegC 面已落地）
 
-- 管线层判定原型 + 设计文档已落地（`doc_ai/indy_native_dispatch_design.md`
+- 管线层判定原型 + 设计文档已落地（indy 原生派发设计：
   §2 判定树 / §3 缓存 / §4 回退 / §6 接口提案）。
 - P1（判定载荷单源化）、P2（字段/record 直派）、P3（TU 级直派缓存 + 惰性
   解析）已落地；P4（运行期破解）保持提案，随合流批评估。
@@ -104,7 +104,7 @@
   indy_bootstrap_plan 已加空串守卫确定性抛 invalid_argument，libs 层其余
   调用方的暴露面待共享层统一收口。
 - 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层
-  各自为政，需在 capabilities/AGENTS 层面定一次豁免边界。
+  各自为政，需在 AGENTS 层面定一次豁免边界。
 
 ### J. 待办池（2026-10-02 冻结收官盘点；后续开卡从这里取）
 
@@ -148,9 +148,9 @@
 **编排层**
 
 12. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates
-    不持锁、`xmake build <target>` 单 target 单命令——落 doc_ai 归档页，
+    不持锁、`xmake build <target>` 单 target 单命令——落归档页，
     供后续 sub agent 会话直接引用。
-13. test_strategy.md 重写：计划期表格（落地波次列）大多已落地，删表留分层
+13. 测试分层策略文档重写：计划期表格（落地波次列）大多已落地，删表留分层
     策略与覆盖率审计方法学。
 14. 代码注释与 Doxygen 组名里的 R3/R6 轮次代号退役（`regc_r3_abi` 等），
     文档侧已先行（本 PR）。
@@ -226,7 +226,7 @@ xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
 xmake build mj2x_integration_test && xmake run mj2x_integration_test
 ```
 
-> 性能数据必须先做覆盖率审计（见 `performance_evaluation_spec.md`）。
+> 性能数据必须先做覆盖率审计。
 > 注意：llvm sample E2E 外呼 `mj2x-cli.exe`，验证前须确认 CLI 已重建
 > （`xmake build mj2x-cli`），否则跑的是旧发射器（#894 收尾时踩过）。
 > unittest/integration 的 skip 数含环境性 skip（本机无 clang/zig 时 LLVM 列
