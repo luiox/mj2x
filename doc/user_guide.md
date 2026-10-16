@@ -1,7 +1,7 @@
 # mj2x 用户指南
 
 > mj2x 把 Java 字节码(`.class` / `.jar`)翻译为 C 源码,并将原方法标记为 `native`。
-> 本文档讲怎么用。项目概览见 `../readme.md`;已实现能力清单见 `capabilities.md`。
+> 本文档讲怎么用。项目概览见 `../readme.md`。
 
 ---
 
@@ -38,8 +38,6 @@ git diff --check HEAD
 分别验证 StackC/RegC 的 class 与 jar 输入,并比较连续两次生成的 `.class` /
 `.jar` / `.c` SHA-256。生成物统一写到 `test/product_sample_hardening/mj2x/`。
 
-能力到测试的追溯表见 [capabilities.md](../doc_ai/capabilities.md) 与 [test_strategy.md](../doc_ai/test_strategy.md)。
-
 ---
 
 ## 3. 基本用法
@@ -69,7 +67,7 @@ java -cp myapp_native.jar app.Main   # 运行改写后的完整程序
 ```
 
 生成的 DLL 内嵌在 `META-INF/mj2x/native/`，类加载时自动释放加载，无需改运行命令。
-**JNI 符号转义说明**：生成代码里 native 方法 JNI 符号的 `$` 按 JNI 规范转义为 `_00024`（JDK 1.2+ 约定；早于该约定的 `_24` 写法会让 HotSpot 找不到内类/带 `$` 描述符的 wrapper）。外部脚本若按旧符号名定位导出函数，需要同步该约定（详见 doc_ai/capabilities.md 已知限制）。
+**JNI 符号转义说明**：生成代码里 native 方法 JNI 符号的 `$` 按 JNI 规范转义为 `_00024`（JDK 1.2+ 约定；早于该约定的 `_24` 写法会让 HotSpot 找不到内类/带 `$` 描述符的 wrapper）。外部脚本若按旧符号名定位导出函数，需要同步该约定。
 整程序语义对比（多类 jar 三后端一致）由 `jar_whole_program_e2e_test` 锁定。
 
 ### 3.3 选择后端
@@ -81,8 +79,6 @@ mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --backend stackc
 # RegC(保护导向,无栈)
 mj2x-cli -i Hello.class -o Hello_native.class --emit-c Hello.c --backend regc
 ```
-
-后端对比见 [capabilities.md §2 / §3](../doc_ai/capabilities.md)。
 
 ### 3.4 只翻译带注解的方法
 
@@ -157,7 +153,7 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--emit-c <file>` | 输出的 C 源码路径 |
 | `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
 | `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm`（v2.2 起默认开启；`with_mj2x_llvm=n` 构建时不暴露） |
-| `--config <file>` | 从 JSON 配置读取默认参数，命令行显式参数覆盖配置。**全量 45+ 参数可配置**（参数注册表单源，见 [config_file.md](config_file.md) 键表；设计见 [doc_ai/config_system_design.md](../doc_ai/config_system_design.md)） |
+| `--config <file>` | 从 JSON 配置读取默认参数，命令行显式参数覆盖配置。**全量 45+ 参数可配置**（参数注册表单源，见 [config_file.md](config_file.md) 键表） |
 | `--dump-config-schema[=<file>]` | 输出配置 JSON Schema（draft-07；裸=stdout，内联 `=` 指定文件）——GUI 配置工具 / VS Code / ajv 直接消费 |
 | `--dump-config-template[=<file>]` | 输出全量键 + 默认值 + 注释的配置模板（JSONC，删除注释即得合法配置）；文件目标仅内联 `=` 形态 |
 | `--intrinsic-config <file>` | 用户自定义 intrinsic 配置（JSON，三后端通用；详见 [user_intrinsic.md](user_intrinsic.md)） |
@@ -226,7 +222,7 @@ VMC4：
 | `--client-id <n>` | per-client 唯一派生（默认 0 = 不变，产物与历史逐字节一致；非 0 时所有后端 seed 经 `splitmix64(baseSeed ^ clientId)` 派生——每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物，可复现构建不受影响）。竞品借鉴（#759/#760）低成本项：分发时为每个客户独立构建 |
 | `--runtime-protection <none\|log\|delay\|fake\|terminate>` | 反侦测检查点注入（方法入口 `mj2x_rt_checkpoint_run`） |
 | `--runtime-protection-step <n>` / `--runtime-protection-delay <ms>` | 检查点步长/延迟参数 |
-| `--native-lib-key <hex>` | native lib 加密存储（默认关闭 = 明文嵌入）：嵌入前 XOR 加密（xorshift32 密钥流），资源入口加 `.enc` 后缀，运行时 NativeLoader 解密加载；静态 `jar tf` 提取不可直接加载（sepacker 加壳 DLL 走同一形态，见 doc_ai/native_library_packaging.md） |
+| `--native-lib-key <hex>` | native lib 加密存储（默认关闭 = 明文嵌入）：嵌入前 XOR 加密（xorshift32 密钥流），资源入口加 `.enc` 后缀，运行时 NativeLoader 解密加载；静态 `jar tf` 提取不可直接加载（sepacker 加壳 DLL 走同一形态） |
 | `--native-lib-pack-hook <cmd>` | 嵌入前外部处理钩子（sepacker DLL 加壳等，默认关闭）：`{in}` 替换为编译产物路径，hook 应就地改写该文件，非零退出码视为失败；顺序：hook → 可选加密 → 嵌入 |
 
 ### 4.1 日志
@@ -445,7 +441,7 @@ java -Djava.library.path=. Hello
 后端的详细支持矩阵和限制:
 - StackC:`doc/stackc_backend_readme.md`
 - RegC:`doc/regc_backend_readme.md`
-- VMC4:`doc_ai/vmc4_multi_vm_design.md`（能力边界见 `doc_ai/capabilities.md §4`）
+- VMC4：参数面见 §4.0.1，能力边界见 §5.4 与 §7
 
 ### 7.1 RegC intrinsic 支持范围
 

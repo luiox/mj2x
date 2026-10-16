@@ -89,6 +89,5 @@ passthrough，不参与 root class 解析或 native injection。
 
 ## 相关设计文档
 
-- `stackc_revival_and_waves.md`：Wave 0-7 覆盖推进记录。
-- `doc_ai/samples/stackc_protected_samples.md`：mjdbg StackCBackend 样本契约。
-- `capabilities.md`：能力到测试/样本的验证索引。
+- [techniques/codegen_strategies.md](../techniques/codegen_strategies.md)：代码生成策略（栈机 vs 寄存器、lowering）。
+- [techniques/](../techniques/)：JVM → 原生编译技术文档总索引。

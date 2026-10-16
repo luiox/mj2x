@@ -39,7 +39,7 @@ The benchmark requires a JDK. The script adds `JAVA_HOME/bin` to `PATH` for
 
 RegC 性能对比主路径：把 jvm-obf-tester（13 个探针 jar）用
 `mj2x-cli --backend regc` 全量 native 化，与竞品 os30（JNIC 混淆产物）在同一
-JDK 下对比各探针耗时。方法学遵循 performance_evaluation_spec + #887 修尺子：
+JDK 下对比各探针耗时。方法学如下（#887 修尺子）：
 
 - 覆盖率审计先行（javap 验证 ACC_NATIVE），未附覆盖率的性能数据不予采信；
 - **预热 `-WarmupRuns` 轮（默认 3，不计入统计）**；

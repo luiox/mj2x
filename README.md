@@ -87,29 +87,20 @@ mj2x-cli --lang en_US --help
 
 ### 混淆与保护
 
-- [doc_ai/cloakwork_research.md](doc_ai/cloakwork_research.md) — Cloakwork 借鉴项评估（issue #829）
-- [doc_ai/regc_safe_env.md](doc_ai/regc_safe_env.md) — safe-env(JNI 函数表恢复)
 - 产物 DLL 加壳（sepacker 扩展）需求文档在 morpher 主仓 `doc_ai/dll_packer_requirements.md`（跨仓,未随拆迁移）
 
 ### 架构与设计
 
 - [doc/architecture.md](doc/architecture.md) — 当前架构概览
 - [doc/roadmap.md](doc/roadmap.md) — v2.2 能力路线图与优先级
-- [doc_ai/ir_design.md](doc_ai/ir_design.md) / [doc_ai/ssa_algorithm.md](doc_ai/ssa_algorithm.md) — MIR/SSA
-- [doc_ai/regc_codegen.md](doc_ai/regc_codegen.md) / [doc_ai/regc_intrinsic.md](doc_ai/regc_intrinsic.md) — RegC 生成与 intrinsic
-- [doc_ai/vmc4_multi_vm_design.md](doc_ai/vmc4_multi_vm_design.md) / [doc_ai/vmc4_red_team_contract.md](doc_ai/vmc4_red_team_contract.md) — VMC4 设计与红队契约
-- [doc_ai/capabilities.md](doc_ai/capabilities.md) — 已实现功能清单 + 边界
-- doc_ai/ 完整索引见 [doc_ai/README.md](doc_ai/README.md)
 
 ### 后端
 
 - [doc/stackc_backend_readme.md](doc/stackc_backend_readme.md) / [doc/regc_backend_readme.md](doc/regc_backend_readme.md) — 各后端支持矩阵
-- [doc_ai/regc_template_engine.md](doc_ai/regc_template_engine.md) — 模板化源码生成引擎
 
 ### 测试与验证
 
-- [doc_ai/test_strategy.md](doc_ai/test_strategy.md) / [doc/regc_test_strategy.md](doc/regc_test_strategy.md)
-- [doc_ai/performance_evaluation_spec.md](doc_ai/performance_evaluation_spec.md) — 性能评测方法学
+- [doc/regc_test_strategy.md](doc/regc_test_strategy.md)
 - [benchmark/README.md](benchmark/README.md) — 基准脚本与结果
 
 ### 仓库与协作
@@ -117,4 +108,3 @@ mj2x-cli --lang en_US --help
 - [AGENTS.md](AGENTS.md) — agent/开发者工作约定(命令、惯例、构建门)
 - [MIGRATION.md](MIGRATION.md) — 拆仓来历、vendor 清单与待办
 - [dev_plan.md](dev_plan.md) — 当前挂账与计划
-- [doc_ai/README.md](doc_ai/README.md) — doc_ai 完整索引
