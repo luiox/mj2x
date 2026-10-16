@@ -1,0 +1,82 @@
+# mj2x 发版：推 vX.Y.Z tag 触发（版本号单源 xmake.lua set_version，见 AGENTS.md 发版节）。
+# 三步：CI 绿门 → git-cliff 生成 changelog → gh release create。
+# CI 门说明：ci.yml 只在 main push/PR 上跑，tag push 不重跑测试；本工作流验
+# "tag 指向提交"的 check runs 全绿（tag 必须打在 main 已过 CI 的提交上）。
+# changelog 范围：上个 v* tag..新 tag；首个 tag 无上个 tag 时回退拆仓基线
+# a785a86（MIGRATION.md），拆仓前 monorepo 历史不入册。
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: tag → changelog → GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git-cliff 需要完整历史与全部 tag 才能算 range
+          fetch-depth: 0
+
+      - name: CI 绿门（等待 tag 指向提交的检查完成并全绿）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="${{ github.sha }}"
+          deadline=$((SECONDS + 600))
+          while true; do
+            resp=$(gh api "repos/${{ github.repository }}/commits/${sha}/check-runs?per_page=100")
+            total=$(jq -r '.total_count' <<<"$resp")
+            pending=$(jq -r '[.check_runs[] | select(.status != "completed")] | length' <<<"$resp")
+            bad=$(jq -r '[.check_runs[] | select(.status == "completed" and (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral"))] | length' <<<"$resp")
+            if [ "$total" -eq 0 ]; then
+              echo "::error::该提交没有任何 CI 检查记录；tag 必须打在 main 上已过 CI 的提交"
+              exit 1
+            fi
+            if [ "$pending" -eq 0 ]; then
+              if [ "$bad" -gt 0 ]; then
+                echo "::error::CI 未全绿（$bad 个失败），不发版"
+                exit 1
+              fi
+              echo "CI 全绿（$total 项检查）"
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo::error::等待 CI 完成超时（10 分钟）
+              exit 1
+            fi
+            echo "CI 还有 $pending 项在跑，30 秒后再查…"
+            sleep 30
+          done
+
+      - name: 生成 changelog（git-cliff）
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # 上个发版 tag；首 tag（或指向首个 tag 的父提交上无 tag）时回退拆仓基线
+          PREV=$(git describe --tags --match 'v[0-9]*' --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [ -z "${PREV}" ]; then
+            PREV="a785a86"
+          fi
+          echo "changelog range: ${PREV}..${TAG}"
+          curl -sSfL "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-unknown-linux-gnu.tar.gz" | tar -xz
+          ./git-cliff-2.14.2/git-cliff -c cliff.toml "${PREV}..${TAG}" --tag "${TAG}" -o notes.md
+          echo "--- release notes ---"
+          cat notes.md
+
+      - name: 发布 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md \
+            --verify-tag
