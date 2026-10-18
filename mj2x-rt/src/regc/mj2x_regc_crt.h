@@ -235,14 +235,24 @@ int64_t mj2x_regc_const_key(int64_t site);
 ///
 /// `desc` 决定分派签名：同一签名共享一个 dispatcher（编译期已知返回类型，
 /// 无需运行时按返回值分派，也不涉及装箱/拆箱）。
+///
+/// 缓存纪律（与 `_mj2x_regc_cached_instance_method` 对齐，缺一即错）：
+/// - 存进条目的 jclass 必须是 **global ref**。FindClass/GetObjectClass 返回的是
+///   local ref，只在当次 native 调用内有效；直接缓存会在下一次调用时悬垂。
+/// - virtual/special 形态按 **receiver 实际类**解析，不按声明 owner：抽象/接口
+///   owner 上按声明类解析会拿到抽象条目，`CallXxxMethodA` 触发
+///   AbstractMethodError（HotSpot 17 实测 ACCESS_VIOLATION，见 runtime.c 注释）。
+///   因此另设 per-receiver-class 槽，同类重复调用经 IsSameObject 命中。
 typedef struct mj2x_regc_call_site
 {
-    jclass      ownerClass;   ///< owner 类解析缓存（NULL = 未解析）
+    jclass      ownerClass;   ///< owner 类解析缓存（global ref；NULL = 未解析）
     jmethodID   method;       ///< 方法解析缓存（NULL = 未解析；解析失败保持 NULL）
     const char* owner;        ///< JVM 内部名，如 "java/lang/Math"
     const char* name;         ///< 方法名
     const char* desc;         ///< 方法描述符（分派签名）
     int32_t     invokeKind;   ///< 0 = virtual/interface，1 = static，2 = special
+    jclass      lastReceiverClass;    ///< virtual/special 的 per-receiver-class 槽（global ref）
+    jmethodID   lastReceiverMethod;   ///< 与 lastReceiverClass 配对的解析结果
 } mj2x_regc_call_site;
 
 /// @brief per-signature dispatcher：按 (table, index) 解析目标并直接 JNI 调用。
