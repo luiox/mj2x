@@ -383,7 +383,7 @@ void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegI
             }
             const auto   site = addIndirectCallSite(state, ins, suffix);
             const std::string dispatchCall = codegen::exprCall(
-                std::string("_mj2x_regc_dispatch_") + suffix,
+                std::string("mj2x_regc_dispatch_") + suffix,
                 {"_mj2x_regc_current_context()", site.first,
                  ca::str::format_std("{}", site.second),
                  staticCall ? "NULL" : "_mj2x_regc_rcv", argsArg.to_std_string()});
