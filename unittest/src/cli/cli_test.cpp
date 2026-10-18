@@ -4513,3 +4513,122 @@ TEST(CliTest, NtstatusCrashTriggersExactlyOneRetryWithMinimalEnv)
         << result.out;
 }
 #endif
+
+// 调用目标间接化（对标 jvmtp obfuscation.calls.*）的端到端语义验证。
+//
+// 样本刻意覆盖 dispatcher 容易踩空的四种目标形态：JDK 静态方法（Math.max，
+// 本用例里走 intrinsic 直调）、final 类虚调用（String.concat）、**接口 owner
+// 的成员**（List.add/size，receiver 是 ArrayList）、以及 receiver 为 null 的
+// NPE 路径。第三种是 dispatcher 的解析纪律落点：按声明 owner 解析会拿到抽象
+// 条目，必须按 receiver 实际类解析（见 mj2x-rt 的 mj2x_regc_call_site 契约）。
+//
+// RegC / LLVM 双后端各跑一遍：站点表布局与 dispatcher 调用分别在两个发射端
+// 生成，符号名/字段序错一处就是编译失败或运行期崩——单测层覆盖不到。
+TEST(CliTest, IndirectCallTargetsPreserveSemanticsUnderBothBackends)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    const fs::path javac = findJavac();
+    if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
+        GTEST_SKIP() << "JAVA_HOME is not set";
+    }
+    // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
+    const auto clang = test::jdk::probeClang();
+    if (!clang.available) {
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        GTEST_SKIP() << "clang not found: " << clang.reason;
+    }
+#ifdef _WIN32
+    const fs::path java = javac.parent_path() / "java.exe";
+#else
+    const fs::path java = javac.parent_path() / "java";
+#endif
+    if (!fileExists(java)) GTEST_SKIP() << "java executable is unavailable beside javac";
+
+    const fs::path workDir =
+        test::getTempOutPath("mj2x_cli_indirect_calls.keep").parent_path() /
+        "mj2x_cli_indirect_calls";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    {
+        std::ofstream out(workDir / "CliCalls.java");
+        ASSERT_TRUE(out) << (workDir / "CliCalls.java").string();
+        out << "public class CliCalls {\n"
+               "  public static int max(int a, int b) { return Math.max(a, b); }\n"
+               "  public static String greet(String s) { return s.concat(\"!\"); }\n"
+               "  public static int listSize() {\n"
+               "    java.util.List<String> l = new java.util.ArrayList<>();\n"
+               "    l.add(\"x\");\n"
+               "    l.add(\"y\");\n"
+               "    return l.size();\n"
+               "  }\n"
+               "  public static String nullTrim() {\n"
+               "    String s = null;\n"
+               "    try { return s.trim(); }\n"
+               "    catch (NullPointerException e) { return \"npe\"; }\n"
+               "  }\n"
+               "}\n";
+    }
+    {
+        std::ofstream out(workDir / "Driver.java");
+        ASSERT_TRUE(out) << (workDir / "Driver.java").string();
+        out << "public class Driver {\n"
+               "  public static void main(String[] args) {\n"
+               "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+               "    if (dll != null) System.load(dll);\n"
+               "    System.out.print(CliCalls.max(3, 9));\n"
+               "    System.out.print(\"-\" + CliCalls.greet(\"hi\"));\n"
+               "    System.out.print(\"-\" + CliCalls.listSize());\n"
+               "    System.out.print(\"-\" + CliCalls.nullTrim());\n"
+               "  }\n"
+               "}\n";
+    }
+    auto result = runScript({q(javac) + " -cp " + q(workDir) + " -d " + q(workDir) + " " +
+                             q(workDir / "CliCalls.java") + " " + q(workDir / "Driver.java")});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    // JVM 基线（未加载原生库）。
+    constexpr const char* kExpected = "9-hi!-2-npe";
+    result = runScript({q(java) + " -Xverify:all -cp " + q(workDir) + " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, kExpected);
+
+    const auto runBackend = [&](const char* backend, const std::string& compileArgs) {
+        SCOPED_TRACE(backend);
+        const fs::path outDir = workDir / backend;
+        fs::create_directories(outDir, ec);
+        const fs::path outClass = outDir / "CliCalls.class";
+        // PATH 注入前置：clang 命中非 PATH 位置时 CLI 才能按名解析。
+        auto compileLines = test::jdk::clangPathPrelude(clang);
+        compileLines.push_back(q(cli) + " -i " + q(workDir / "CliCalls.class") + " -o " +
+                               q(outClass) + " " + compileArgs);
+        const auto rc = runScript(compileLines);
+        ASSERT_EQ(rc.exitCode, 0) << rc.out;
+        const fs::path library = nativeLibraryPathFor(outClass);
+        ASSERT_TRUE(fileExists(library)) << rc.out;
+        fs::copy_file(workDir / "Driver.class", outDir / "Driver.class",
+                      fs::copy_options::overwrite_existing, ec);
+        ASSERT_FALSE(ec) << ec.message();
+        std::vector<std::string> runLines;
+#ifdef _WIN32
+        runLines.push_back("set \"MORPHER_DLL=" + library.string() + "\"");
+#else
+        runLines.push_back("export MORPHER_DLL=" + q(library));
+#endif
+        runLines.push_back(q(java) + " -Xverify:all -cp " + q(outDir) + " Driver");
+        const auto runResult = runScript(runLines);
+        ASSERT_EQ(runResult.exitCode, 0) << runResult.out;
+        EXPECT_EQ(runResult.out, kExpected);
+    };
+
+    runBackend("regc_indirect",
+               "--backend regc --compile --compile-mode pipe --c-compiler clang "
+               "--regc-indirect-calls");
+    runBackend("llvm_indirect",
+               "--backend llvm --compile --compile-mode pipe --llvm-tool clang "
+               "--regc-indirect-calls");
+}
