@@ -87,6 +87,8 @@ mj2x-cli --lang en_US --help
 
 ### 混淆与保护
 
+- **[doc/techniques/README.md](doc/techniques/README.md)** — 技术一览（每项技术叫什么、对抗什么、机制、代价、开关、状态）
+  - [保护技术总览](doc/techniques/protection_overview.md) — 威胁模型、开关联动规则、pass 组合纪律、后端覆盖面
 - 产物 DLL 加壳（sepacker 扩展）需求文档在 morpher 主仓 `doc_ai/dll_packer_requirements.md`（跨仓,未随拆迁移）
 
 ### 架构与设计
