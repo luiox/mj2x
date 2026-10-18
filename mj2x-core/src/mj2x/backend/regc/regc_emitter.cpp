@@ -617,7 +617,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         out.append(declaration);
     }
     // 调用目标间接化站点表：per-signature dispatcher 按 (表, 组内索引) 取目标。
-    // 条目字段与 RT 侧 mj2x_regc_call_site 一致（ownerClass/method 为解析缓存）。
+    // 条目字段与 RT 侧 mj2x_regc_call_site 一致；末尾两个 0 是
+    // lastReceiverClass/lastReceiverMethod 缓存槽（dispatcher 首调时填充）。
     for (const auto& entry : emitState.indirectSiteTables) {
         CSourceStream decl;
         decl.append("static mj2x_regc_call_site ")
@@ -635,7 +636,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     ca::str::Utf8StringRef::from_cstr(site.desc.c_str())))
                 .append(", ")
                 .append(ca::str::format_std("{}", site.invokeKind))
-                .append("},");
+                .append(", 0, 0},");
         }
         decl.append("};").newLine();
         out.append(decl.build());

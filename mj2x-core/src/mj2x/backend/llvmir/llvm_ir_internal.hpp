@@ -547,9 +547,15 @@ public:
     bool empty() const { return tables_.empty(); }
 
     /// @brief 站点表结构类型定义（模块级，须早于任何引用）。
+    ///
+    /// @details
+    /// 字段与 RT 侧 `mj2x_llvm_call_site` 逐位对应（顺序含括 invokeKind 在第 6 位）：
+    /// ownerClass、method、owner、name、desc、invokeKind、lastReceiverClass、
+    /// lastReceiverMethod。前六个 align 到 C 结构体，后两个是 per-receiver-class
+    /// 缓存槽，初始全 null，由 dispatcher 首调时填充。
     static const char* typeDeclaration()
     {
-        return "%mj2x_llvm_call_site = type { ptr, ptr, ptr, ptr, ptr, i32 }";
+        return "%mj2x_llvm_call_site = type { ptr, ptr, ptr, ptr, ptr, i32, ptr, ptr }";
     }
 
     /// @brief 输出全部站点表定义。
@@ -563,7 +569,7 @@ public:
                 const LlvmIndirectCallSite& site = table.sites[index];
                 out << "  %mj2x_llvm_call_site { ptr null, ptr null, ptr " << site.owner
                     << ", ptr " << site.name << ", ptr " << site.desc << ", i32 "
-                    << site.invokeKind << " }";
+                    << site.invokeKind << ", ptr null, ptr null }";
                 if (index + 1 < table.sites.size()) out << ",";
                 out << "\n";
             }

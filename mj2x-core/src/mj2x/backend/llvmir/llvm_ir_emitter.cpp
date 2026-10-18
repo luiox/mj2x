@@ -982,7 +982,7 @@ private:
                                           : instruction.method.invokeOpcode == Opcodes::INVOKESPECIAL ? 2
                                                                                                     : 0;
                 const auto        site  = indirectSites_->add(strings_, suffix, owner, name, desc, kind);
-                runtimeDeclares_.push_back(LlvmIndirectSiteRegistry::typeDeclaration());
+                // 结构类型定义由后端 finalize 统一输出（模块级单一出口，避免重复定义）。
                 runtimeDeclares_.push_back(std::string("declare ") + dispatchReturnType(suffix) +
                                            " @mj2x_llvm_dispatch_" + suffix +
                                            "(ptr, ptr, i32, ptr, ptr)");
