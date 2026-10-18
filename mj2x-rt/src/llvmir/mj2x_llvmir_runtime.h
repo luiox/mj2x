@@ -170,14 +170,23 @@ MJ2X_LLVMIR_API int64_t mj2x_llvm_const_key(int64_t site);
 // （owner/name/desc 字符串）从调用点移出，静态分析须先解析 index → 条目才能
 // 还原调用边。首次分派解析 owner 类 + jmethodID 并缓存入条目。
 // invokeKind：0 = virtual/interface，1 = static，2 = special。
+//
+// 缓存纪律（与 mj2x-rt regc 侧 _mj2x_regc_cached_instance_method 对齐）：
+// - 存进条目的 jclass 必须是 global ref：FindClass/GetObjectClass 返回 local ref，
+//   只在当次 native 调用内有效，直接缓存会在下一次调用时悬垂。
+// - virtual/special 按 receiver 实际类解析，不按声明 owner：抽象/接口 owner 上
+//   按声明类解析会拿到抽象条目，CallXxxMethodA 触发 AbstractMethodError
+//   （HotSpot 17 实测 ACCESS_VIOLATION）。故另设 per-receiver-class 槽。
 typedef struct mj2x_llvm_call_site
 {
-    void*       ownerClass;   // jclass 缓存（NULL = 未解析）
+    void*       ownerClass;   // jclass 缓存（global ref；NULL = 未解析）
     void*       method;       // jmethodID 缓存（NULL = 未解析）
     const char* owner;
     const char* name;
     const char* desc;
     int32_t     invokeKind;
+    void*       lastReceiverClass;    // virtual/special 的 per-receiver-class 槽（global ref）
+    void*       lastReceiverMethod;   // 与 lastReceiverClass 配对的解析结果
 } mj2x_llvm_call_site;
 
 MJ2X_LLVMIR_API int32_t mj2x_llvm_dispatch_i32(JNIEnv* env, mj2x_llvm_call_site* table,

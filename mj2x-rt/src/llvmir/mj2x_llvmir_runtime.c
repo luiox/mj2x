@@ -794,42 +794,82 @@ int64_t mj2x_llvm_const_key(int64_t site)
 
 // ---- 阶段六:调用目标间接化 per-signature dispatcher ----
 
+// 槽位原子换占（与 regc 侧 mj2x_regc_crt.c 的 regc_ptr_cas 同实现）。
+static void* llvm_ptr_cas(void* volatile* slot, void* expected, void* desired)
+{
+#if defined(_MSC_VER)
+    return _InterlockedCompareExchangePointer(slot, desired, expected);
+#elif defined(__GNUC__)
+    return __sync_val_compare_and_swap(slot, expected, desired);
+#else
+    void* previous = *slot;
+    if (previous == expected) *slot = desired;
+    return previous;
+#endif
+}
+
 // 按 (table, index) 解析目标方法并缓存入条目；返回 NULL 表示解析失败
 // （pending exception 由生成代码的 ExceptionCheck 面感知）。
+// 缓存纪律（global ref + 按 receiver 实际类分槽）见头文件 mj2x_llvm_call_site。
 static void* resolveLlvmCallSite(JNIEnv* env, mj2x_llvm_call_site* site, void* rcv)
 {
-    jclass cls;
-    jclass target;
-    if (site->method != NULL) return site->method;
-    cls = (*env)->FindClass(env, site->owner);
-    if (cls == NULL) return NULL;
-    target = cls;
-    if (site->invokeKind == 2 && rcv != NULL) {
-        // invokespecial：解析类取 receiver 实际类（与 RegC cached 帮手对齐）。
-        target = (*env)->GetObjectClass(env, rcv);
-        if (target == NULL) {
+    // static：解析类固定为声明 owner，解析一次即缓存。
+    if (site->invokeKind == 1) {
+        if (site->method != NULL) return site->method;
+        jclass cls = (*env)->FindClass(env, site->owner);
+        if (cls == NULL) return NULL;
+        void*  method = (void*)(*env)->GetStaticMethodID(env, cls, site->name, site->desc);
+        if (method == NULL) {
             (*env)->DeleteLocalRef(env, cls);
             return NULL;
         }
-    }
-    if (site->invokeKind == 1) {
-        site->ownerClass = target;
-        site->method     = (void*)(*env)->GetStaticMethodID(env, target, site->name, site->desc);
+        jclass pinned = (jclass)(*env)->NewGlobalRef(env, cls);
+        (*env)->DeleteLocalRef(env, cls);
+        if (pinned != NULL) {
+            jclass previous = (jclass)llvm_ptr_cas((void* volatile*)&site->ownerClass, NULL, pinned);
+            if (previous != NULL) (*env)->DeleteGlobalRef(env, pinned);
+        }
+        site->method = method;
         return site->method;
     }
+
+    // virtual / special：按 receiver 实际类解析。
     if (rcv == NULL) {
-        (*env)->DeleteLocalRef(env, cls);
         mj2x_llvm_throw_null(env);
         return NULL;
     }
-    site->ownerClass = target;
-    site->method     = (void*)(*env)->GetMethodID(env, target, site->name, site->desc);
-    return site->method;
+    jclass receiverClass = (*env)->GetObjectClass(env, (jobject)rcv);
+    if (receiverClass == NULL) return NULL;
+    // 同 receiver 类命中缓存槽。
+    if (site->lastReceiverClass != NULL &&
+        (*env)->IsSameObject(env, (jobject)site->lastReceiverClass,
+                             (jobject)receiverClass)) {
+        (*env)->DeleteLocalRef(env, receiverClass);
+        return site->lastReceiverMethod;
+    }
+    void* method = (void*)(*env)->GetMethodID(env, receiverClass, site->name, site->desc);
+    (*env)->DeleteLocalRef(env, receiverClass);
+    if (method == NULL) return NULL;
+    // 换占式缓存：只增不删（并发读者可能正对旧 global ref 做 IsSameObject）。
+    jclass pinned = (jclass)(*env)->NewGlobalRef(env, receiverClass);
+    if (pinned != NULL) {
+        jclass observed = (jclass)site->lastReceiverClass;
+        jclass previous = (jclass)llvm_ptr_cas((void* volatile*)&site->lastReceiverClass,
+                                               observed, pinned);
+        if (previous == observed) {
+            site->lastReceiverMethod = method;
+        }
+        else {
+            (*env)->DeleteGlobalRef(env, pinned);
+        }
+    }
+    return method;
 }
 
 // per-signature dispatcher：解析后按返回类型分派一次 JNI 调用。
-// static/virtual 由条目 invokeKind 决定（special 走虚调用面：GetObjectClass
-// 已把解析类定为 receiver 实际类，与 RegC cached 同语义）。
+// static 走 CallStaticXxxMethodA（解析类是声明 owner 的 global ref）；
+// virtual/special 走 CallXxxMethodA（receiver 原样传入，JNI 按实际类虚分派，
+// 解析类已在 resolveLlvmCallSite 内定为 receiver 实际类）。
 #define MJ2X_LLVM_DISPATCH_VALUE(name, RetT, JN)                                        \
     MJ2X_LLVMIR_API RetT mj2x_llvm_dispatch_##name(JNIEnv* env,                       \
                                                   mj2x_llvm_call_site* table,           \

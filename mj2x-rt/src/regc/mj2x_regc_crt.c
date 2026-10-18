@@ -129,42 +129,93 @@ int64_t mj2x_regc_const_key(int64_t site)
 
 /* ---- 调用目标间接化（对标 jvmtp obfuscation.calls.*） ---- */
 
+/* 槽位原子换占（与 runtime.c 的 _mj2x_regc_ptr_cas 同实现）。CRT 侧不依赖
+   runtime.c 的 static inline，故自带一份。 */
+static void* regc_ptr_cas(void* volatile* slot, void* expected, void* desired)
+{
+#if defined(_MSC_VER)
+    return _InterlockedCompareExchangePointer(slot, desired, expected);
+#elif defined(__GNUC__)
+    return __sync_val_compare_and_swap(slot, expected, desired);
+#else
+    void* previous = *slot;
+    if (previous == expected) *slot = desired;
+    return previous;
+#endif
+}
+
 /* 按 (table, index) 解析目标方法并缓存入条目。invoke 形态取自条目：
    0 = virtual/interface（GetMethodID, receiver 实际类），
-   1 = static（GetStaticMethodID），2 = special（GetObjectClass(receiver) + GetMethodID）。
-   解析失败返回 NULL 并保持 pending exception（与 _mj2x_regc_method_id 同口径）。 */
+   1 = static（GetStaticMethodID, 声明 owner），2 = special（receiver 实际类）。
+   解析失败返回 NULL 并保持 pending exception（与 _mj2x_regc_method_id 同口径）。
+
+   缓存两条纪律，见头文件 mj2x_regc_call_site 的契约注释：
+   - 存条目的一律 global ref（FindClass/GetObjectClass 给的是 local ref，
+     跨 native 调用即悬垂）；
+   - virtual/special 按 receiver 实际类解析并按 receiver 类分槽——抽象/接口
+     owner 上按声明类解析会拿到抽象条目。 */
 static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site* site,
                                  void* receiver)
 {
-    // 缓存命中优先：命中路径 0 次 FindClass / GetMethodID，与既有 cached 帮手
-    // 同开销（1 次目标 JNI 调用）。
-    if (site->method != NULL) return site->method;
-
     // CRT 层的 context 是无状态的 env 载体（与 runtime.c 的 _mj2x_regc_env
     // 全局不同），解析一律走 context->env。
-    JNIEnv* env    = (JNIEnv*)context->env;
-    jclass  cls    = (*env)->FindClass(env, site->owner);
-    jclass  target = cls;
-    if (cls == NULL) return NULL;
-    if (site->invokeKind == 2 && receiver != NULL) {
-        // invokespecial：解析类取 receiver 实际类（与 cached 帮手对齐）。
-        target = (*env)->GetObjectClass(env, receiver);
-        if (target == NULL) return NULL;
-    }
+    JNIEnv* env = (JNIEnv*)context->env;
+
+    // static：解析类固定为声明 owner，解析一次即缓存。
     if (site->invokeKind == 1) {
-        site->method = (*env)->GetStaticMethodID(env, target, site->name, site->desc);
-    }
-    else {
-        if (receiver == NULL) {
-            // 与 _mj2x_regc_call_cached_* 同口径：receiver 为 NULL 抛 NPE。
-            mj2x_regc_throw_exception(context, "java/lang/NullPointerException",
-                                        "instance method call");
+        if (site->method != NULL) return site->method;
+        jclass cls = (*env)->FindClass(env, site->owner);
+        if (cls == NULL) return NULL;
+        jmethodID method = (*env)->GetStaticMethodID(env, cls, site->name, site->desc);
+        if (method == NULL) {
+            (*env)->DeleteLocalRef(env, cls);
             return NULL;
         }
-        site->method = (*env)->GetMethodID(env, target, site->name, site->desc);
+        jclass pinned = (jclass)(*env)->NewGlobalRef(env, cls);
+        (*env)->DeleteLocalRef(env, cls);
+        if (pinned == NULL) return method;   // global ref 失败仍返回本次解析值
+        jclass previous = (jclass)regc_ptr_cas((void* volatile*)&site->ownerClass, NULL, pinned);
+        if (previous != NULL) (*env)->DeleteGlobalRef(env, pinned);
+        site->method = method;
+        return site->method;
     }
-    site->ownerClass = target;
-    return site->method;
+
+    // virtual / special：按 receiver 实际类解析。
+    if (receiver == NULL) {
+        // 与 _mj2x_regc_call_cached_* 同口径：receiver 为 NULL 抛 NPE。
+        mj2x_regc_throw_exception(context, "java/lang/NullPointerException",
+                                    "instance method call");
+        return NULL;
+    }
+    jclass receiverClass = (*env)->GetObjectClass(env, (jobject)receiver);
+    if (receiverClass == NULL) return NULL;
+    // 同 receiver 类命中缓存槽（与 cached 帮手的 subclass 路径同结构）。
+    if (site->lastReceiverClass != NULL &&
+        (*env)->IsSameObject(env, site->lastReceiverClass, receiverClass)) {
+        (*env)->DeleteLocalRef(env, receiverClass);
+        return site->lastReceiverMethod;
+    }
+    jmethodID method = (*env)->GetMethodID(env, receiverClass, site->name, site->desc);
+    (*env)->DeleteLocalRef(env, receiverClass);
+    if (method == NULL) return NULL;
+    // 换占式缓存：只增不删——CAS 把旧类换出后不 Delete 旧 global ref，旧方案
+    // Delete→NULL→New 窗口下其他线程可能正对旧句柄做 IsSameObject
+    // （use-after-free，含双重 Delete）。泄漏上界 = 本调用点出现过的 distinct
+    // receiver 类数（仅子类交替场景触发）。
+    jclass pinned = (jclass)(*env)->NewGlobalRef(env, receiverClass);
+    if (pinned != NULL) {
+        jclass observed = site->lastReceiverClass;
+        jclass previous = (jclass)regc_ptr_cas((void* volatile*)&site->lastReceiverClass,
+                                               observed, pinned);
+        if (previous == observed) {
+            site->lastReceiverMethod = method;
+        }
+        else {
+            // 槽被并发线程换占：撤自己的新 ref，本次调用仍用现场解析值。
+            (*env)->DeleteGlobalRef(env, pinned);
+        }
+    }
+    return method;
 }
 
 /* per-signature dispatcher 公共体：解析后按返回标签分派一次 JNI 调用。
