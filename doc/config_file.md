@@ -13,6 +13,7 @@
   "backend": "regc",
   "regc_obfuscate": true,
   "regc_hide_constants": true,
+  "regc_indirect_calls": true,
   "regc_transform_seed": 42,
   "client_id": 7,
   "runtime_protection": "fake",
@@ -41,7 +42,7 @@
 | compile | `llvm_tool` | `clang` \| `llc` | `clang` |
 | compile | `generate_cmake` / `generate_xmake` | string | — |
 | stackc | `stackc_exception_check` | `full` \| `lite` | `full` |
-| regc | `regc_trace_calls` / `regc_direct_calls` / `regc_safe_env` / `regc_safe_env_debug` / `regc_no_inline` / `regc_obfuscate` / `regc_cff_state_encrypt` / `regc_mba_deep` / `regc_opaque_zero` / `regc_hide_constants` | boolean | `false` |
+| regc | `regc_trace_calls` / `regc_direct_calls` / `regc_safe_env` / `regc_safe_env_debug` / `regc_no_inline` / `regc_obfuscate` / `regc_cff_state_encrypt` / `regc_mba_deep` / `regc_opaque_zero` / `regc_hide_constants` / `regc_indirect_calls` | boolean | `false` |
 | regc | `regc_comment_level` | `none` \| `summary` \| `detailed` | `summary` |
 | regc | `regc_cff_dead` | integer ≥ 0 | `0` |
 | regc | `regc_transform_seed` | integer ≥ 0 | `0` |
