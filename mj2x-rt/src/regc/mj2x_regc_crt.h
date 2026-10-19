@@ -176,6 +176,18 @@ typedef struct mj2x_regc_class_name_hash_site
     mj2x_regc_class_name_hash_slot slots[2];
 } mj2x_regc_class_name_hash_site;
 
+/// @brief `getClass().getName().hashCode()` 融合调用（站点缓存由发射端声明）。
+///
+/// @details
+/// 命中缓存槽时 1 个 JNI 替代 GetObjectClass + getName + hashCode 的 3 个 JNI。
+/// receiver 为 NULL 抛 NullPointerException 并返回 0。
+///
+/// 实现在 mj2x_regc_intrinsic.c（随生成工程分发的 CRT 源集里），声明必须在
+/// 本头文件——生成代码只 include 这一个头，漏声明会让 C 编译器按隐式声明处理
+/// （C99 起即错误）。
+int32_t mj2x_intrinsic_class_name_hash(mj2x_regc_context* context, mj2x_ref receiver,
+                                       mj2x_regc_class_name_hash_site* site);
+
 /// @brief Opaque UTF-16 StringBuilder state owned by mj2x-rt.
 ///
 /// The allocation and representation stay private so a later C++ source pack
