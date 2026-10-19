@@ -77,27 +77,10 @@ inline std::string_view backendCliName(CEmitterBackend backend)
 }
 
 /// @brief 本构建可用的后端 CLI 名清单（逗号分隔，错误文案用）。
-inline std::string enabledBackendCliList()
-{
-    std::string list;
-    const auto append = [&](CEmitterBackend backend) {
-        if (!list.empty()) list += ", ";
-        list += backendCliName(backend);
-    };
-#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
-    append(CEmitterBackend::StackC);
-#endif
-#if !defined(MJ2X_DISABLE_REGC_BACKEND)
-    append(CEmitterBackend::RegC);
-#endif
-#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
-    append(CEmitterBackend::LlvmIr);
-#endif
-#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
-    append(CEmitterBackend::Vmc4);
-#endif
-    return list;
-}
+///
+/// 注册表驱动（backend_registry.cpp）：顺序 = displayOrder（stackc, regc,
+/// llvm, vmc4），与历史宏拼接清单逐字节一致；被裁后端不注册、不入清单。
+std::string enabledBackendCliList();
 
 /// @brief 解析 CLI 传入的 C 编译器名称。
 ///
