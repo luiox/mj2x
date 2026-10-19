@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -448,4 +450,218 @@ TEST(ConfigRegistryTest, ConfigSupportsAllBackendFamilies)
     EXPECT_TRUE(result.out.find("Usage: mj2x-cli") != std::string::npos ||
                 result.out.find("\xE7\x94\xA8\xE6\xB3\x95: mj2x-cli") != std::string::npos)
         << result.out;
+}
+
+// ---- preset（默认配置档）+ 生效配置回显 ----
+//
+// 四层合并顺序：默认值 < preset < 配置文件 < CLI。preset 不是第四套语法——
+// 它是内置的 JSON 对象，键名与配置文件完全相同，走同一套 parseJson 校验。
+
+/// --dump-effective-config 的输出 → key -> {value 原文, source 层名}。
+///
+/// @details
+/// 回显是排查"到底开了啥"的唯一手段，故测试按它断言而不是另造观测点。
+/// 逐行扫描而非正则：dump(2) 是缩进多行输出，跨行正则在不同标准库实现上行为
+/// 不一致（MSVC 实测匹配不到），逐行扫描没有这层风险。
+std::map<std::string, std::pair<std::string, std::string>> parseEffective(const std::string& out)
+{
+    std::map<std::string, std::pair<std::string, std::string>> result;
+    std::istringstream                                         in(out);
+    std::string                                                line;
+    std::string                                                key;
+    std::string                                                value;
+    std::string                                                source;
+    bool                                                       hasValue  = false;
+    bool                                                       hasSource = false;
+
+    // nlohmann::json 按字母序输出对象键，条目内是 "source" 先于 "value"。
+    // 故不能假定读取顺序：只有两个字段都到齐才算一条完整条目。
+    auto reset = [&]() {
+        key.clear();
+        value.clear();
+        source.clear();
+        hasValue = hasSource = false;
+    };
+    auto flush = [&]() {
+        // 只在实际提交后重置——字段到齐前重置会把已读到的那一半丢掉。
+        if (!key.empty() && hasValue && hasSource) {
+            result[key] = {value, source};
+            reset();
+        }
+    };
+
+    auto trimmed = [](const std::string& text) {
+        const size_t b = text.find_first_not_of(" \t\r\n");
+        if (b == std::string::npos) return std::string();
+        const size_t e = text.find_last_not_of(" \t\r\n");
+        return text.substr(b, e - b + 1);
+    };
+
+    while (std::getline(in, line)) {
+        const std::string text = trimmed(line);
+        if (text.rfind("\"", 0) != 0) continue;
+        const size_t nameEnd = text.find('"', 1);
+        if (nameEnd == std::string::npos) continue;
+        const std::string name = text.substr(1, nameEnd - 1);
+        const std::string rest = trimmed(text.substr(nameEnd + 1));
+        if (rest.empty()) continue;
+        if (rest[0] != ':') continue;
+        const std::string body = trimmed(rest.substr(1));
+        if (body == "{") {
+            // 条目开头："<key>": {（跳过 effective/layers/preset/config 这几个
+            // 顶层键，它们不是参数条目）。
+            flush();
+            reset();
+            if (name != "effective" && name != "layers" && name != "preset" && name != "config") {
+                key = name;
+            }
+            continue;
+        }
+        if (key.empty()) continue;
+        if (name == "value") {
+            value = body;
+            while (!value.empty() && value.back() == ',') value.pop_back();
+            hasValue = true;
+            flush();
+        }
+        else if (name == "source") {
+            source = body;
+            while (!source.empty() && (source.back() == ',' || source.back() == '"')) {
+                source.pop_back();
+            }
+            if (!source.empty() && source.front() == '"') source.erase(0, 1);
+            hasSource = true;
+            flush();
+        }
+    }
+    flush();
+    return result;
+}
+
+TEST(ConfigRegistryTest, PresetUnknownNameIsRejectedWithValidList)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    const auto result = runCli({"--preset", "bogus"});
+    EXPECT_NE(result.exitCode, 0);
+    EXPECT_NE(result.out.find("bogus"), std::string::npos) << result.out;
+    // 报错要列出合法档位，否则用户只能去翻文档。
+    for (const char* name : {"none", "perf", "balanced", "max"}) {
+        EXPECT_NE(result.out.find(name), std::string::npos) << result.out;
+    }
+}
+
+TEST(ConfigRegistryTest, PresetNamesAreAcceptedCaseInsensitively)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    for (const char* name : {"none", "perf", "balanced", "max", "BALANCED", "Max"}) {
+        SCOPED_TRACE(name);
+        const auto result = runCli({"--preset", name, "--dump-effective-config"});
+        EXPECT_EQ(result.exitCode, 0) << result.out;
+        EXPECT_NE(result.out.find("\"preset\""), std::string::npos) << result.out;
+    }
+}
+
+// perf 档：JNI 边界压到最少（直调开、内联保留、safe-env 关），零混淆。
+TEST(ConfigRegistryTest, PerfPresetTurnsOnDirectCalls)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    const auto result = runCli({"--preset", "perf", "--dump-effective-config"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    const auto effective = parseEffective(result.out);
+    ASSERT_FALSE(effective.empty()) << result.out;
+
+    // 字符串值在回显里是 JSON 原始 token，带引号。
+    EXPECT_EQ(effective.at("regc_direct_calls").first, "\"all\"") << result.out;
+    EXPECT_EQ(effective.at("regc_direct_calls").second, "preset") << result.out;
+    EXPECT_EQ(effective.at("regc_no_inline").first, "false");
+    EXPECT_EQ(effective.at("regc_no_inline").second, "preset");
+    // 零混淆：重型两项保持默认。
+    EXPECT_EQ(effective.at("regc_hide_constants").second, "default");
+    EXPECT_EQ(effective.at("regc_indirect_calls").second, "default");
+}
+
+// max 档：两个重型项必须被打开——它们不被 --regc-obfuscate 联动，靠手记开关
+// 最容易漏，正是"要保护才付代价"的那两项。
+TEST(ConfigRegistryTest, MaxPresetTurnsOnHeavyweightOptions)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    const auto result = runCli({"--preset", "max", "--dump-effective-config"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    const auto effective = parseEffective(result.out);
+    ASSERT_FALSE(effective.empty()) << result.out;
+
+    for (const char* key : {"regc_hide_constants", "regc_indirect_calls", "regc_obfuscate",
+                            "regc_mba_deep", "regc_opaque_zero", "regc_cff_state_encrypt"}) {
+        ASSERT_NE(effective.find(key), effective.end()) << key << " missing: " << result.out;
+        EXPECT_EQ(effective.at(key).first, "true") << key;
+        EXPECT_EQ(effective.at(key).second, "preset") << key;
+    }
+}
+
+// 四层优先级的可观测证据：同一键在 preset / config / cli 三层各给一次，
+// 生效值与来源层必须逐层推进。
+TEST(ConfigRegistryTest, FourLayerPriorityIsObservable)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    // 未给 preset/config：默认层。
+    const auto plain = parseEffective(runCli({"--dump-effective-config"}).out);
+    ASSERT_FALSE(plain.empty());
+    EXPECT_EQ(plain.at("regc_obfuscate").first, "false");
+    EXPECT_EQ(plain.at("regc_obfuscate").second, "default");
+
+    // preset max 打开它。
+    const auto fromPreset =
+        parseEffective(runCli({"--preset", "max", "--dump-effective-config"}).out);
+    EXPECT_EQ(fromPreset.at("regc_obfuscate").first, "true");
+    EXPECT_EQ(fromPreset.at("regc_obfuscate").second, "preset");
+
+    // 配置文件关掉它 → config 层赢过 preset。
+    const std::string cfg = writeConfig("{\"regc_obfuscate\": false}", "mj2x_cfg_over_preset.json");
+    const auto fromConfig =
+        parseEffective(runCli({"--preset", "max", "--config", cfg, "--dump-effective-config"}).out);
+    EXPECT_EQ(fromConfig.at("regc_obfuscate").first, "false");
+
+    // CLI 显式打开 → cli 层赢过 config。
+    const auto fromCli = parseEffective(
+        runCli({"--preset", "max", "--config", cfg, "--regc-obfuscate", "--dump-effective-config"})
+            .out);
+    EXPECT_EQ(fromCli.at("regc_obfuscate").first, "true");
+    EXPECT_EQ(fromCli.at("regc_obfuscate").second, "cli");
+}
+
+// --dump-effective-config 不要求 -i/-o（与 schema/template 同口径）：它的用途
+// 就是排查"到底开了啥"，产不产物无关。
+TEST(ConfigRegistryTest, EffectiveConfigDumpDoesNotRequireInputOutput)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    const auto result = runCli({"--dump-effective-config"});
+    EXPECT_EQ(result.exitCode, 0) << result.out;
+    // 走到 -i/-o 校验会打用法（"用法"的 UTF-8），出现即说明位置放错了。
+    EXPECT_EQ(result.out.find("\xE7\x94\xA8\xE6\xB3\x95"), std::string::npos) << result.out;
+    // 四个层都要在输出里出现。
+    for (const char* layer : {"default", "preset", "config", "cli"}) {
+        EXPECT_NE(result.out.find(layer), std::string::npos) << result.out;
+    }
+}
+
+// 三个 dump 互斥（与 schema/template 同组）。
+TEST(ConfigRegistryTest, DumpFlagsAreMutuallyExclusiveWithEffectiveConfig)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    const auto result = runCli({"--dump-config-schema", "--dump-effective-config"});
+    EXPECT_NE(result.exitCode, 0) << result.out;
 }

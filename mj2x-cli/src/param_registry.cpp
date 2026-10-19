@@ -638,10 +638,14 @@ ca::opt::Command buildOptCommand()
     // 行为变更由 DanglingLangFlagFailsClosed / LangFlagFollowedByFlagFailsClosed
     // 锁定；合法用法为 --lang=<lang> 或 --lang <lang> <args...>。
     addSpecialArg(cmd, "lang", ca::opt::OptKind::String);
+    // preset：内置配置档（默认 < preset < 配置文件 < CLI 的第二层）。
+    addSpecialArg(cmd, "preset", ca::opt::OptKind::String);
     addSpecialArg(cmd, "dump-config-schema", ca::opt::OptKind::OptionalString);
     addSpecialArg(cmd, "dump-config-template", ca::opt::OptKind::OptionalString);
+    // 生效配置回显：把四层合并结果打出来，排查"到底开了啥"。
+    addSpecialArg(cmd, "dump-effective-config", ca::opt::OptKind::OptionalString);
     ca::opt::MutexGroup dumpOnce;
-    dumpOnce.names = {"dump-config-schema", "dump-config-template"};
+    dumpOnce.names = {"dump-config-schema", "dump-config-template", "dump-effective-config"};
     // 组标识回填 ParseError.group,main.cpp 按其分派错误文案。
     dumpOnce.label = "dump_once";
     cmd.mutex_groups.push_back(dumpOnce);

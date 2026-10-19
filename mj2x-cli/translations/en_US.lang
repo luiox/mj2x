@@ -20,6 +20,7 @@ mj2x.cli.template.requires=requires
 # ---- terms (embedded in dump_write_failed) ----
 mj2x.cli.term.config_schema=config schema
 mj2x.cli.term.config_template=config template
+mj2x.cli.term.effective_config=effective config
 
 # ---- informational output ----
 mj2x.cli.info.embedded_lib=Embedded native library in JAR: {0}
@@ -28,7 +29,10 @@ mj2x.cli.info.cmake_written=CMake project written: {0}
 # ---- parsing/validation errors (main.cpp) ----
 mj2x.cli.err.config_requires_path=--config requires a JSON file path.
 mj2x.cli.err.config_once=--config may only be specified once.
-mj2x.cli.err.dump_once=--dump-config-schema/--dump-config-template may only be specified once.
+mj2x.cli.err.preset_requires_name=--preset requires a preset name.
+mj2x.cli.err.preset_once=--preset may only be specified once.
+mj2x.cli.err.preset_unknown=unknown preset: {0} (valid: {1})
+mj2x.cli.err.dump_once=--dump-config-schema/--dump-config-template/--dump-effective-config may only be specified once.
 mj2x.cli.err.unknown_option=unknown option: {0}
 mj2x.cli.err.flag_requires_value={0} requires a value
 mj2x.cli.err.dump_write_failed=cannot write {0}: {1}

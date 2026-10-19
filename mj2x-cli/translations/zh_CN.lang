@@ -22,6 +22,7 @@ mj2x.cli.template.requires=依赖
 # ---- 术语(dump_write_failed 内嵌) ----
 mj2x.cli.term.config_schema=配置 schema
 mj2x.cli.term.config_template=配置模板
+mj2x.cli.term.effective_config=生效配置
 
 # ---- 信息性输出 ----
 mj2x.cli.info.embedded_lib=已嵌入 native library 到 JAR: {0}
@@ -30,7 +31,10 @@ mj2x.cli.info.cmake_written=CMake 工程已生成: {0}
 # ---- 参数解析/校验错误(main.cpp) ----
 mj2x.cli.err.config_requires_path=--config 需要一个 JSON 文件路径。
 mj2x.cli.err.config_once=--config 只能指定一次。
-mj2x.cli.err.dump_once=--dump-config-schema/--dump-config-template 只能指定一次。
+mj2x.cli.err.preset_requires_name=--preset 需要一个档位名。
+mj2x.cli.err.preset_once=--preset 只能指定一次。
+mj2x.cli.err.preset_unknown=未知配置档: {0}（合法档位: {1}）
+mj2x.cli.err.dump_once=--dump-config-schema/--dump-config-template/--dump-effective-config 只能指定一次。
 mj2x.cli.err.unknown_option=未知选项: {0}
 mj2x.cli.err.flag_requires_value={0} 需要提供值
 mj2x.cli.err.dump_write_failed=无法写入{0}: {1}
