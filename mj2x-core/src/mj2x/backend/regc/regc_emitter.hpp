@@ -239,6 +239,8 @@ public:
                          CompilerIndex* classIndex = nullptr,
                          const std::unordered_map<std::string, std::string>* convertedFunctions =
                              nullptr,
+                         const std::unordered_map<std::string, std::string>* convertedFunctionDecls =
+                             nullptr,
                          const std::unordered_set<std::string>* indyFunctions = nullptr,
                          const RegCIntrinsicRegistry* intrinsicRegistry = nullptr,
                          const std::set<std::string>* enumSyntheticMethods = nullptr);
@@ -273,6 +275,7 @@ private:
     size_t indySiteBase_ = 0;
     CompilerIndex* classIndex_ = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions_ = nullptr;
+    const std::unordered_map<std::string, std::string>* convertedFunctionDecls_ = nullptr;
     const std::unordered_set<std::string>* indyFunctions_ = nullptr;
     const RegCIntrinsicRegistry* intrinsicRegistry_ = nullptr;
     const std::set<std::string>* enumSyntheticMethods_ = nullptr;

@@ -37,23 +37,6 @@ struct FrameState
 };
 
 // 把 SSAType 从 PrimitiveKind 映射（R1 保守，细化推 R2）。
-SSAType mirKindToSSA(PrimitiveKind k)
-{
-    switch (k) {
-    case PrimitiveKind::BOOLEAN: return SSAType::BOOL;
-    case PrimitiveKind::BYTE: return SSAType::I8;
-    case PrimitiveKind::CHAR: return SSAType::CHAR;
-    case PrimitiveKind::SHORT: return SSAType::I16;
-    case PrimitiveKind::INT: return SSAType::I32;
-    case PrimitiveKind::LONG: return SSAType::I64;
-    case PrimitiveKind::FLOAT: return SSAType::F32;
-    case PrimitiveKind::DOUBLE: return SSAType::F64;
-    case PrimitiveKind::VOID: return SSAType::VOID;
-    case PrimitiveKind::OBJECT: return SSAType::REF;
-    default: return SSAType::UNKNOWN;
-    }
-}
-
 SSAType jvmTypeToSSA(const Type& type)
 {
     return mirKindToSSA(jvmSortToPrimitive(type.getSort()));

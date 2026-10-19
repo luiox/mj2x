@@ -13,6 +13,7 @@
 
 #include "mj2x/backend/regc/regc_intrinsic_registry.hpp"
 #include "mj2x/core/compiler_index.hpp"
+#include "mj2x/frontend/type_utils.hpp"
 
 #include <map>
 #include <set>
@@ -77,6 +78,9 @@ struct RegCFunctionEmitState
     /// native-to-native 直接调用上下文（compileMethod 传入，nullptr 关闭）。
     CompilerIndex*                            classIndex          = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions = nullptr;
+    /// 函数名 → 由被调方签名生成的规范前向声明文本（直调声明的唯一权威，
+    /// 见 directCallDeclFor）。nullptr 时回退按调用点推导。
+    const std::unordered_map<std::string, std::string>* convertedFunctionDecls = nullptr;
     const std::unordered_set<std::string>*    indyFunctions       = nullptr;
     /// intrinsic 匹配 registry（issue #818）：nullptr 时用 builtins()。
     /// RegCBackend::setUserIntrinsics 构造带用户条目的 registry 实例后设置。
@@ -170,9 +174,55 @@ const char* cType(SSAType type);
 ///          块作用域函数声明带 static 违反 C11 6.7.1p6（GCC 报 invalid storage
 ///          class，MSVC 静默放行），声明必须落在文件作用域；注册表为空时回退
 ///          块内声明（单测直连发射器路径，仅 MSVC 兼容）。
+/// @brief 由返回类型 + 参数类型表生成规范前向声明文本。
+///
+/// @details
+/// 声明必须与被调方的函数定义逐字一致（同一 `cType` 映射、同一参数序）。不能用
+/// 调用点的操作数类型推导：JVM 窄类型（bool/byte/char/short）在调用点可能被
+/// 提升为 I32，同一函数在两个调用点上算出的声明文本不同，去重按文本做就会登记
+/// 两条（或与定义本身冲突），C 编译器报 conflicting types。
+inline std::string directCallDeclForTypes(const std::string& fnName, SSAType returnType,
+                                          const std::vector<SSAType>& parameterTypes)
+{
+    std::string decl = "static ";
+    decl += cType(returnType);
+    decl += " ";
+    decl += fnName;
+    decl += "(";
+    for (size_t i = 0; i < parameterTypes.size(); ++i) {
+        if (i) decl += ", ";
+        decl += cType(parameterTypes[i]);
+    }
+    decl += ");";
+    return decl;
+}
+
+/// @brief 由**被调方** RegFunction 生成规范前向声明文本。
+/// @details 见 directCallDeclForTypes。
+inline std::string directCallDeclFor(const std::string& fnName, const RegFunction& fn)
+{
+    std::vector<SSAType> parameterTypes;
+    parameterTypes.reserve(fn.parameters.size());
+    for (const auto& parameter : fn.parameters) parameterTypes.push_back(parameter.type);
+    return directCallDeclForTypes(fnName, fn.symbol.returnType, parameterTypes);
+}
+
 inline void declareDirectCallTarget(RegCFunctionEmitState& state, CSourceStream& out,
                                     const RegInstruction& ins, const std::string& fnName)
 {
+    // 有被调方签名时优先用它（与定义逐字一致）；否则回退按调用点推导（类级
+    // 预登记阶段尚无签名，维持原行为）。
+    if (state.convertedFunctionDecls != nullptr) {
+        const auto declIt = state.convertedFunctionDecls->find(fnName);
+        if (declIt != state.convertedFunctionDecls->end()) {
+            if (state.forwardDecls != nullptr) {
+                state.forwardDecls->declare(declIt->second);
+                return;
+            }
+            out.appendLineStart(declIt->second).newLine();
+            return;
+        }
+    }
     std::string decl;
     decl += "static ";
     decl += ins.hasDest ? cType(ins.dest.type) : "void";
@@ -205,6 +255,28 @@ const char* helperSuffix(SSAType type);
 std::vector<char> descriptorParamTags(const ca::str::Utf8StringRef& desc);
 /// 描述符返回类型标签（')' 之后的首字符），无效描述符返回 '\0'。
 char descriptorReturnTag(const ca::str::Utf8StringRef& desc);
+
+/// @brief 由**方法描述符**生成同样的声明（被调方尚未 lowering 时用）。
+///
+/// @details
+/// 类级预登记阶段只有 MethodNode，没有 RegFunction；但直调声明必须在任何调用
+/// 方发射之前就备好（调用方可能先于被调方编译），故走描述符算出同一份签名。
+/// 参数序与 ssa_builder 一致：非静态方法首位是 receiver（REF）。
+inline std::string directCallDeclForDescriptor(const std::string& fnName, const std::string& desc,
+                                              bool isStatic)
+{
+    const std::vector<char> tags = descriptorParamTags(ca::str::Utf8StringRef::from_cstr(desc.c_str()));
+    std::vector<SSAType>    parameterTypes;
+    if (!isStatic) parameterTypes.push_back(SSAType::REF);
+    for (char tag : tags) {
+        const std::string slot(1, tag);
+        parameterTypes.push_back(descriptorSlotToSSA(slot));
+    }
+    const char  returnTag = descriptorReturnTag(ca::str::Utf8StringRef::from_cstr(desc.c_str()));
+    const SSAType returnType =
+        returnTag == '\0' ? SSAType::VOID : descriptorSlotToSSA(std::string(1, returnTag));
+    return directCallDeclForTypes(fnName, returnType, parameterTypes);
+}
 /// JNI CallXxxMethodA 的类型族名，如 'I' -> "Int"。
 const char* jniCallFamily(char tag);
 /// jvalue 联合体成员名，如 'I' -> "i"。
