@@ -913,13 +913,13 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                         impl_->indySites.size(),
                         impl_->currentIndex,
                         &impl_->convertedFunctions,
-                        &impl_->convertedFunctionDecls,
                         &impl_->indyFunctions,
                         impl_->userIntrinsicRegistry.get(),
                         &impl_->enumSyntheticMethods);
     // 方法间直调的前向声明统一登记 TU 头部（C11 6.7.1p6 禁止块作用域
     // static 函数声明），finalize 随 runtime helpers 一起渲染。
     emitter.setForwardDeclarations(&impl_->forwardDecls);
+    emitter.setConvertedFunctionDecls(&impl_->convertedFunctionDecls);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。

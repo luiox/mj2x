@@ -176,7 +176,6 @@ RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& o
                          std::vector<RegFunction::InvokeDynamicSite>* fileIndySites,
                          size_t indySiteBase, CompilerIndex* classIndex,
                          const std::unordered_map<std::string, std::string>* convertedFunctions,
-                         const std::unordered_map<std::string, std::string>* convertedFunctionDecls,
                          const std::unordered_set<std::string>* indyFunctions,
                          const RegCIntrinsicRegistry* intrinsicRegistry,
                          const std::set<std::string>* enumSyntheticMethods)
@@ -186,7 +185,6 @@ RegCEmitter::RegCEmitter(RegCCachePool* cachePool, const codegen::CodeOptions& o
     , indySiteBase_(indySiteBase)
     , classIndex_(classIndex)
     , convertedFunctions_(convertedFunctions)
-    , convertedFunctionDecls_(convertedFunctionDecls)
     , indyFunctions_(indyFunctions)
     , intrinsicRegistry_(intrinsicRegistry)
     , enumSyntheticMethods_(enumSyntheticMethods)
