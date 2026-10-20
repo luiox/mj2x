@@ -298,6 +298,9 @@ CompilerIndex makeCallerIndex(std::unique_ptr<MethodNode>& add,
 
 }   // namespace
 
+// 同类内静态调用走直调（--regc-direct-calls=intra-class 起）。LLVM 侧原先无条件
+// 直调、与 RegC 的默认关不一致；纳入同一档位门控后，默认 Off 下应当退化成 JNI
+// 分派——两条用例一起钉住"档位在 LLVM 侧真的生效"这件事。
 TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
 {
     std::unique_ptr<MethodNode> add;
@@ -305,6 +308,7 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
     CompilerIndex               index = makeCallerIndex(add, caller);
 
     LlvmIrBackend backend;
+    backend.setDirectCallTier(codegen::DirectCallTier::IntraClass);
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
     auto                     blocks = converter.convert(*caller);
@@ -316,6 +320,28 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
         << result.text;
     EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_add__II(ptr %env, i32 %v0, i32 %v1)"),
               std::string::npos)
+        << result.text;
+}
+
+// Off 档（默认）：同类内静态调用不应直调——LLVM 侧此前没有这层门控，一直在承担
+// #814 的栈观察语义代价。
+TEST(LlvmIrBackendTest, DirectCallTierOffRoutesIntraClassStaticCallThroughJni)
+{
+    std::unique_ptr<MethodNode> add;
+    std::unique_ptr<MethodNode> caller;
+    CompilerIndex               index = makeCallerIndex(add, caller);
+
+    LlvmIrBackend backend;   // 默认 Off
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = converter.convert(*caller);
+    auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_caller__II(ptr %env, i32 %p0, i32 %p1)"),
+              std::string::npos)
+        << result.text;
+    EXPECT_EQ(result.text.find("call i32 @mj2x_llvm_Java_Test_add__II("), std::string::npos)
         << result.text;
 }
 

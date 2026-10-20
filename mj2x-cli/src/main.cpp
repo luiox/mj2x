@@ -843,6 +843,12 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.emit_llvm_needs_llvm"));
         return 1;
     }
+    // 直调档位：注册表存字符串（纯声明式），这里是唯一的字符串 → 枚举转换点。
+    const mj2x::codegen::DirectCallTier directCallTier =
+        options.regcDirectCalls == "all"          ? mj2x::codegen::DirectCallTier::All
+        : options.regcDirectCalls == "intra-class" ? mj2x::codegen::DirectCallTier::IntraClass
+                                                  : mj2x::codegen::DirectCallTier::Off;
+
     if (options.cBackendKind == CEmitterBackend::LlvmIr && options.llvmOutputPath.empty() &&
         options.compileMode != mj2x::cli::CompileMode::Pipe) {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.backend_llvm_needs_emit_llvm"));

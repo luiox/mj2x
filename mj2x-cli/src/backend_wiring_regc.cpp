@@ -24,7 +24,12 @@ bool wireRegC(BackendWiringContext& context)
     if (context.hasUserIntrinsics()) backend->setUserIntrinsics(*context.userIntrinsics);
     if (!options.cOutputPath.empty()) backend->setOutputPath(options.cOutputPath);
     if (options.regcTraceCalls) backend->setTraceCallLog(true);
-    if (options.regcDirectCalls) backend->setDirectCalls(true);
+    // 直调档位：off/intra-class/all → DirectCallTier（与 LLVM 同一门控）。
+    const mj2x::codegen::DirectCallTier directCallTier =
+        options.regcDirectCalls == "all"           ? mj2x::codegen::DirectCallTier::All
+        : options.regcDirectCalls == "intra-class" ? mj2x::codegen::DirectCallTier::IntraClass
+                                                   : mj2x::codegen::DirectCallTier::Off;
+    backend->setDirectCallTier(directCallTier);
     backend->setCommentLevel(options.regcCommentLevel);
     if (options.regcSafeEnv) backend->setSafeEnv(true);
     if (options.regcSafeEnvDebug) backend->setSafeEnvDebug(true);
@@ -52,7 +57,7 @@ bool wireRegC(BackendWiringContext& context)
 // ---------- 参数段（拼装于基表 compile 段与 strings 段之间，行序=历史表） ----------
 
 DEF_BOOL(regcTraceCalls, "--regc-trace-calls", "regc_trace_calls")
-DEF_BOOL(regcDirectCalls, "--regc-direct-calls", "regc_direct_calls")
+DEF_ENUM_STR(regcDirectCalls, "--regc-direct-calls", "regc_direct_calls", "off,intra-class,all", "off")
 DEF_BOOL(regcSafeEnv, "--regc-safe-env", "regc_safe_env")
 DEF_BOOL(regcNoInline, "--regc-no-inline", "regc_no_inline")
 DEF_BOOL(regcObfuscate, "--regc-obfuscate", "regc_obfuscate")
@@ -110,7 +115,7 @@ bool json_regc_safe_env_debug(CliOptions& o, const json& j, std::string& e)
 
 const ParamDef kRegCParams[] = {
     PARAM("regc.trace_calls", "--regc-trace-calls", "regc_trace_calls", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcTraceCalls, json_regcTraceCalls),
-    PARAM("regc.direct_calls", "--regc-direct-calls", "regc_direct_calls", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcDirectCalls, json_regcDirectCalls),
+    PARAM("regc.direct_calls", "--regc-direct-calls", "regc_direct_calls", ParamType::Enum, "off,intra-class,all", 0, 0, "off", "regc_llvm", "regc|llvm", cli_regcDirectCalls, json_regcDirectCalls),
     PARAM("regc.comment_level", "--regc-comment-level", "regc_comment_level", ParamType::Enum, "none,summary,detailed", 0, 0, "summary", "regc", "regc", cli_regc_comment_level, json_regc_comment_level),
     PARAM("regc.safe_env", "--regc-safe-env", "regc_safe_env", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcSafeEnv, json_regcSafeEnv),
     PARAM("regc.safe_env_debug", "--regc-safe-env-debug", "regc_safe_env_debug", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regc_safe_env_debug, json_regc_safe_env_debug),

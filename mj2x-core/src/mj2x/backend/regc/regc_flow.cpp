@@ -441,9 +441,10 @@ static bool tryEmitStaticBoundCall(CSourceStream& out, const RegInstruction& ins
                                    const RegBlock* block,
                                    const std::vector<ca::str::Utf8String>& expressions)
 {
-    // 与 tryEmitDirectCall 一致：直调默认关闭（CodeOptions.directCalls），
+    // 与 tryEmitDirectCall 一致：按档位判定（CodeOptions.directCallTier），
     // 保持 JVM 栈帧语义（getStackTrace/StackWalker/反射，issue #814）。
-    if (!state.directCalls) return false;
+    // 静态绑定调用点是同类外的静态目标，故 sameClass=false。
+    if (!allowsDirectCall(state.directCallTier, false, false)) return false;
     if (ins.args.empty()) return false;
     const RegOperand& receiver = ins.args[0];
     if (receiver.kind != RegOperandKind::Register) return false;
@@ -838,9 +839,11 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
         const bool              staticCall = isStaticCall(ins);
         const bool              selfCall   = isSelfStaticCall(state, ins);
-        // 自递归直调默认关闭（JVM 栈帧语义）；关闭时 selfCall 也走 cached JNI，
-        // 需要 static method cache（原逻辑 selfCall 无 cache）。
-        const bool              selfCallJni = selfCall && !state.directCalls;
+        // 自递归直调：Off 档下走 cached JNI，需要 static method cache（原逻辑
+        // selfCall 无 cache）。自递归必同类，IntraClass 档起即直调。
+        const bool              selfCallDirect =
+            allowsDirectCall(state.directCallTier, true, false);
+        const bool              selfCallJni = selfCall && !selfCallDirect;
         const ca::str::Utf8StringRef cacheName =
             (staticCall && (!selfCall || selfCallJni)) ? addStaticMethodCache(state, ins)
                                                        : ca::str::Utf8StringRef{};
@@ -901,7 +904,10 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         directName      = direct->second;
                     }
                 }
-                bool safeDirect = state.directCalls;   // 直调默认关闭（JVM 栈帧语义）
+                // privateThis 的 receiver 就是 this，目标 owner 即当前类——
+                // 栈失真限制在类内，IntraClass 档起允许直调。
+                const bool sameOwner = ins.method.owner == state.symbol.owner;
+                bool       safeDirect = allowsDirectCall(state.directCallTier, sameOwner, false);
                 if (state.indyFunctions != nullptr &&
                     state.indyFunctions->count(key) != 0) {
                     safeDirect = false;
@@ -939,7 +945,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             }
             else if (ins.hasDest) {
                 u.appendLineStart(destName).append(" = ");
-                if (selfCall && state.directCalls) {
+                if (selfCall && selfCallDirect) {
                     u.append(state.functionName)
                         .append("(")
                         .append(directCallArgs(ins.args, argumentExpressions))
@@ -985,7 +991,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             }
             else {
                 u.appendLineStart();
-                if (selfCall && state.directCalls) {
+                if (selfCall && selfCallDirect) {
                     u.append(state.functionName)
                         .append("(")
                         .append(directCallArgs(ins.args, argumentExpressions))

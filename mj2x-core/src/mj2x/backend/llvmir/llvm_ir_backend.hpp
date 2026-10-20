@@ -14,6 +14,7 @@
 #pragma once
 
 #include "mj2x/backend/backend.hpp"
+#include "mj2x/codegen/c_options.hpp"
 #include "mj2x/codegen/runtime_protection.hpp"
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
 
@@ -57,6 +58,12 @@ public:
     ///        产物若超出 LLVM 子集则回退未变换形态（fail-closed 保方法）。
     void setTransformOptions(const RegTransformOptions& options) { transformOptions_ = options; }
 
+    /// @brief native→native 直调档位（--regc-direct-calls；默认 Off）。
+    /// @details 与 RegC 共用 codegen::allowsDirectCall 判定。LLVM 侧原先无条件
+    ///          直调同模块 statics，既与 RegC 默认关的口径不一致，又一直在承担
+    ///          #814 的栈观察语义代价——纳入同一门控后两端口径统一。
+    void setDirectCallTier(codegen::DirectCallTier tier) { directCallTier_ = tier; }
+
     const std::string& generatedSource() const override { return sourceCode_; }
     NativeSourceArtifact generatedSourceArtifact() const override
     {
@@ -74,6 +81,7 @@ private:
     std::string sourceCode_;
     codegen::RuntimeProtectionOptions runtimeProtection_;
     RegTransformOptions               transformOptions_;
+    codegen::DirectCallTier           directCallTier_ = codegen::DirectCallTier::Off;
 };
 
 }   // namespace mj2x

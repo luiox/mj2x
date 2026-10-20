@@ -56,7 +56,7 @@ using codegen::registerFunctionName;
 std::string buildResolvedDispatchTable(
     const std::unordered_map<std::string, std::string>& functions,
     const std::unordered_set<std::string>& indyFunctions, codegen::CForwardDeclarations* fwd,
-    bool directCalls)
+    codegen::DirectCallTier directCallTier)
 {
     CSourceStream src;
     src.setForwardDeclarations(fwd);
@@ -77,9 +77,9 @@ std::string buildResolvedDispatchTable(
         const std::string desc = key.substr(second + 1);
         const auto fnIt = functions.find(key);
         if (fnIt == functions.end() || fnIt->second.empty()) continue;
-        // directCalls 关闭（默认）时 fn 绑 NULL：resolved 调用点命中后走 JNI
+        // Off 档（默认）时 fn 绑 NULL：resolved 调用点命中后走 JNI
         // CallXxxMethodA（产生 JVM 栈帧，getStackTrace 语义正确，issue #814）。
-        if (directCalls) {
+        if (directCallTier != codegen::DirectCallTier::Off) {
             src.emitLine("    {" + codegen::cStringLiteral(owner) + ", " +
                          codegen::cStringLiteral(name) + ", " + codegen::cStringLiteral(desc) +
                          ", NULL, (mj2x_regc_fn_ptr_t)&" + fnIt->second + "},");
@@ -397,8 +397,9 @@ struct RegCBackend::Impl
     RegCCachePool             cachePool;
     RegCCommentLevel          commentLevel = RegCCommentLevel::Summary;
     bool                      traceCallLog = false;
-    /// native-to-native 直接 C 调用（--regc-direct-calls；默认关闭保持 JVM 栈帧语义）。
-    bool directCalls = false;
+    /// native-to-native 直接 C 调用档位（--regc-direct-calls；默认 Off 保持
+    /// JVM 栈帧语义）。
+    codegen::DirectCallTier directCallTier = codegen::DirectCallTier::Off;
     /// 字面量 at-rest 加密（--strings-encrypt）：cachePool.setStringsEncrypt 配置后
     /// 由 emitRegistrationCode 据此发射 JNI_OnLoad 批量解密块。
     bool stringsEncryptEnabled_ = false;
@@ -507,9 +508,9 @@ void RegCBackend::setTraceCallLog(bool enabled)
     impl_->traceCallLog = enabled;
 }
 
-void RegCBackend::setDirectCalls(bool enabled)
+void RegCBackend::setDirectCallTier(codegen::DirectCallTier tier)
 {
-    impl_->directCalls = enabled;
+    impl_->directCallTier = tier;
 }
 
 void RegCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
@@ -911,7 +912,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     codegen::CodeOptions emitterOptions;
     emitterOptions.commentLevel    = impl_->commentLevel;
     emitterOptions.traceCallLog    = impl_->traceCallLog;
-    emitterOptions.directCalls     = impl_->directCalls;
+    emitterOptions.directCallTier     = impl_->directCallTier;
     emitterOptions.resolvedDispatch = splitOutputDir_.empty();
     emitterOptions.runtimeProtection = runtimeProtection_;
     if (stringsEncrypt_ && !impl_->cachePool.stringsEncryptEnabled()) {
@@ -1697,7 +1698,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
         resolvedDispatchText = buildResolvedDispatchTable(impl_->convertedFunctions,
                                                           impl_->indyFunctions,
                                                           fwd,
-                                                          impl_->directCalls);
+                                                          impl_->directCallTier);
     }
     emitRuntimeHelpers(full,
                        cacheDeclarations,

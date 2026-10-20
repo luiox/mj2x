@@ -6,6 +6,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
+#include "mj2x/codegen/c_options.hpp"
 #include "mj2x/codegen/jvm_semantics.hpp"
 #include "mj2x/codegen/runtime_protection.hpp"
 #include "mj2x/frontend/type_utils.hpp"
@@ -414,9 +415,14 @@ struct CallTarget
 class InternalCallResolver
 {
 public:
-    InternalCallResolver(CompilerIndex& index, const std::string& className)
+    /// @param directCallTier native→native 直调档位。Off（默认）时本解析器一律
+    ///        解析失败——LLVM 侧原先是无门控直调，与 RegC 的默认关不一致，
+    ///        且一直在承担 #814 的栈观察语义代价。
+    InternalCallResolver(CompilerIndex& index, const std::string& className,
+                         codegen::DirectCallTier directCallTier = codegen::DirectCallTier::Off)
         : index_(index)
         , className_(className)
+        , directCallTier_(directCallTier)
     {}
 
     bool resolve(const SSAMethodRef& method, CallTarget& target, std::string& reason);
@@ -430,6 +436,7 @@ private:
 
     CompilerIndex&                     index_;
     const std::string&                 className_;
+    codegen::DirectCallTier            directCallTier_ = codegen::DirectCallTier::Off;
     std::unordered_map<MethodID, CallTarget> cache_;
     std::unordered_set<MethodID>       visiting_;
 };

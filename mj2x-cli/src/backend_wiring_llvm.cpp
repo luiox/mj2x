@@ -20,6 +20,13 @@ bool wireLlvmIr(BackendWiringContext& context)
     const CliOptions& options = context.options;
     auto              backend = std::make_unique<mj2x::LlvmIrBackend>();
     if (!options.llvmOutputPath.empty()) backend->setOutputPath(options.llvmOutputPath);
+    // LLVM 侧原先无条件直调同模块 statics，口径与 RegC 的默认关不一致，
+    // 且一直在承担 #814 的栈观察语义代价。纳入同一档位门控。
+    const mj2x::codegen::DirectCallTier directCallTier =
+        options.regcDirectCalls == "all"           ? mj2x::codegen::DirectCallTier::All
+        : options.regcDirectCalls == "intra-class" ? mj2x::codegen::DirectCallTier::IntraClass
+                                                   : mj2x::codegen::DirectCallTier::Off;
+    backend->setDirectCallTier(directCallTier);
     if (auto transform = buildRegTransformOptions(options)) {
         backend->setTransformOptions(*transform);
     }

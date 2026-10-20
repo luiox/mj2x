@@ -51,7 +51,8 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
 // 放同一作用域，对齐该寿命约定。
 RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
                         std::initializer_list<AbstractInsnNode*> insns, int maxStack, int maxLocals,
-                        std::string& reason, bool directCalls = false)
+                        std::string& reason,
+                        codegen::DirectCallTier tier = codegen::DirectCallTier::Off)
 {
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
@@ -76,7 +77,7 @@ RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
     }
 
     codegen::CodeOptions options;
-    options.directCalls = directCalls;
+    options.directCallTier = tier;
     RegCEmitter emitter(nullptr, options);
     return emitter.emitFunction(*reg);
 }
@@ -427,7 +428,7 @@ TEST(RegCTest, InternsRepeatedStaticMethodAndFieldCachesWithinFunction)
 
 TEST(RegCTest, EmitsSelfStaticCallAsDirectCDispatch)
 {
-    // 自递归直调仅在显式开启 directCalls 时发射（默认关闭保持 JVM 栈帧语义）。
+    // 自递归直调仅在 All 档发射（默认 Off 保持 JVM 栈帧语义）。
     std::string reason;
     auto        result = emitRegC("self",
                            "(I)I",
@@ -445,7 +446,7 @@ TEST(RegCTest, EmitsSelfStaticCallAsDirectCDispatch)
                            2,
                            1,
                            reason,
-                           /*directCalls=*/true);
+                           codegen::DirectCallTier::All);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
@@ -458,7 +459,7 @@ TEST(RegCTest, EmitsSelfStaticCallAsDirectCDispatch)
 
 TEST(RegCTest, EmitsJniCallForSelfStaticByDefault)
 {
-    // 默认（directCalls=false）时自递归走 cached JNI（保 JVM 栈帧语义），
+    // 默认（Off 档）时自递归走 cached JNI（保 JVM 栈帧语义），
     // 不发射 regc_* 直调（issue #814 regc 2.6 ReTrace）。
     std::string reason;
     auto        result = emitRegC("self",
@@ -947,7 +948,7 @@ RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc
                                 std::initializer_list<AbstractInsnNode*> insns, int maxStack,
                                 int maxLocals, std::string& reason,
                                 const std::unordered_map<std::string, std::string>& converted,
-                                bool directCalls = false)
+                                codegen::DirectCallTier tier = codegen::DirectCallTier::Off)
 {
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
@@ -974,7 +975,7 @@ RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc
     RegCCachePool            pool;
     codegen::CodeOptions     options;
     options.resolvedDispatch = true;
-    options.directCalls      = directCalls;
+    options.directCallTier   = tier;
     RegCEmitter emitter(&pool, options, nullptr, 0, nullptr, &converted, nullptr);
     return emitter.emitFunction(*reg);
 }
@@ -983,7 +984,7 @@ TEST(RegCTest, EmitsStaticBoundCallForSingleAllocationReceiver)
 {
     // 动态实例调用 receiver 是单一分配点（new Bar()）且目标方法已转换：
     // 跳过 resolved 运行时类检查，直接调用 regc_* 函数（保留 null 检查）。
-    // 该直调仅在显式开启 directCalls 时发射（默认关闭保持 JVM 栈帧语义）。
+    // 该直调仅在 All 档发射（默认 Off 保持 JVM 栈帧语义）。
     std::string reason;
     auto result = emitRegCResolved("staticBound",
                                    "(I)I",
@@ -1009,7 +1010,7 @@ TEST(RegCTest, EmitsStaticBoundCallForSingleAllocationReceiver)
                                    1,
                                    reason,
                                    {{"Bar\ncompute\n(I)I", "regc_test_Bar_compute__I_I"}},
-                                   /*directCalls=*/true);
+                                   codegen::DirectCallTier::All);
 
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("regc_test_Bar_compute__I_I("), std::string::npos)
@@ -1045,4 +1046,87 @@ TEST(RegCTest, KeepsResolvedDispatchForUnknownReceiverType)
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_regc_resolved_site"), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
+}
+
+// ---- 直调档位（issue #18）----
+//
+// 三档按"栈失真范围"划分，不是布尔开关：Off 全走 JNI、IntraClass 只放行同类内
+// 直调、All 放行全部确定性分派。用自递归（必同类）验证阶梯：Off 走 cached JNI，
+// IntraClass 起直调。
+
+TEST(RegCTest, DirectCallTierOffKeepsCachedJniForSelfCall)
+{
+    std::string reason;
+    auto        result = emitRegC("self",
+                          "(I)I",
+                                  {
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new InsnNode(Opcodes::ICONST_1),
+                              new InsnNode(Opcodes::ISUB),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("InlineRegC"),
+                                                 ca::str::Utf8StringRef::from_cstr("self"),
+                                                 ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                 false),
+                              new InsnNode(Opcodes::IRETURN),
+                          },
+                          2,
+                          1,
+                          reason,
+                          codegen::DirectCallTier::Off);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    // Off：自递归退回 cached JNI（保 JVM 栈帧语义，issue #814）。
+    // 负向断言要带实参强转——只写函数名会命中函数定义本身那一行。
+    EXPECT_EQ(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
+        << result.source;
+}
+
+TEST(RegCTest, DirectCallTierIntraClassEnablesSelfCall)
+{
+    std::string reason;
+    auto        result = emitRegC("self",
+                          "(I)I",
+                                  {
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new InsnNode(Opcodes::ICONST_1),
+                              new InsnNode(Opcodes::ISUB),
+                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                 ca::str::Utf8StringRef::from_cstr("InlineRegC"),
+                                                 ca::str::Utf8StringRef::from_cstr("self"),
+                                                 ca::str::Utf8StringRef::from_cstr("(I)I"),
+                                                 false),
+                              new InsnNode(Opcodes::IRETURN),
+                          },
+                          2,
+                          1,
+                          reason,
+                          codegen::DirectCallTier::IntraClass);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    // 自递归必同类，IntraClass 档即应直调。
+    EXPECT_NE(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
+        << result.source;
+}
+
+// 档位判定本身：同类/跨类在各档下的取值。RegC 与 LLVM 共用同一函数，两端口径
+// 不一致正是本档位要消掉的东西。
+TEST(RegCTest, AllowsDirectCallFollowsTierAndClassBoundary)
+{
+    using codegen::DirectCallTier;
+    // 确定性虚调用任何档位都放行：resolved 路径本来就直调 fn，语义与直调一致。
+    EXPECT_TRUE(codegen::allowsDirectCall(DirectCallTier::Off, false, true));
+    EXPECT_TRUE(codegen::allowsDirectCall(DirectCallTier::Off, true, true));
+
+    // 非确定性分派：按档位 + 是否同类。
+    EXPECT_FALSE(codegen::allowsDirectCall(DirectCallTier::Off, true, false));
+    EXPECT_FALSE(codegen::allowsDirectCall(DirectCallTier::Off, false, false));
+
+    EXPECT_TRUE(codegen::allowsDirectCall(DirectCallTier::IntraClass, true, false));
+    EXPECT_FALSE(codegen::allowsDirectCall(DirectCallTier::IntraClass, false, false));
+
+    EXPECT_TRUE(codegen::allowsDirectCall(DirectCallTier::All, true, false));
+    EXPECT_TRUE(codegen::allowsDirectCall(DirectCallTier::All, false, false));
 }

@@ -151,7 +151,7 @@ mj2x.param.compile.generate_cmake.desc=Generate a standalone CMake native projec
 mj2x.param.compile.generate_xmake.desc=Generate a standalone xmake native project directory (recommended; with --compile produces a DLL/SO in one step)
 mj2x.param.stackc.exception_check.desc=StackC pending-exception check density (lite keeps only handler-boundary checks)
 mj2x.param.regc.trace_calls.desc=RegC: emit runtime call logs ([CALL]/[DEEP] to stderr, for troubleshooting)
-mj2x.param.regc.direct_calls.desc=RegC: enable native-to-native direct C calls (off by default: direct calls produce no JVM stack frames, breaking getStackTrace-like semantics)
+mj2x.param.regc.direct_calls.desc=RegC/LLVM: native-to-native direct C call tier (off = JNI everywhere, JVM stack frames intact; intra-class = same-class calls only, stack distortion bounded to a class; all = every deterministic dispatch, full stack-observation distortion; see issue #814). The old boolean flag is equivalent to all
 mj2x.param.regc.comment_level.desc=RegC: generated comment level
 mj2x.param.regc.safe_env.desc=RegC: enable safe-env (JNI function table snapshot + method entry restore; JNI_OnLoad fails closed if the table is already tainted at capture time)
 mj2x.param.regc.safe_env_debug.desc=RegC: safe-env debug observation mode (detected hooks only warn instead of failing; implies --regc-safe-env)
