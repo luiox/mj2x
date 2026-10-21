@@ -12,6 +12,8 @@
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
+#include "mj2x/backend/regc/regc_emitter_internal.hpp"
+#include "mj2x/core/compiler_index.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 
 // B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
@@ -52,7 +54,8 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
 RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
                         std::initializer_list<AbstractInsnNode*> insns, int maxStack, int maxLocals,
                         std::string& reason,
-                        codegen::DirectCallTier tier = codegen::DirectCallTier::Off)
+                        codegen::DirectCallTier tier = codegen::DirectCallTier::Off,
+                        bool podStruct = false)
 {
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
@@ -78,6 +81,7 @@ RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
 
     codegen::CodeOptions options;
     options.directCallTier = tier;
+    options.podStruct      = podStruct;
     RegCEmitter emitter(nullptr, options);
     return emitter.emitFunction(*reg);
 }
@@ -1129,4 +1133,67 @@ TEST(RegCTest, AllowsDirectCallFollowsTierAndClassBoundary)
 
     EXPECT_TRUE(codegen::allowsDirectCall(DirectCallTier::All, true, false));
     EXPECT_TRUE(codegen::allowsDirectCall(DirectCallTier::All, false, false));
+}
+
+// ---- POD struct 降级（issue #17）----
+//
+// 纯原生字段 + 不逃逸的实例降级为 C struct：字段访问走 `->成员`，零 JNI。
+// 别名必须是指针——值语义的 struct 拷贝会让同一对象的多个寄存器变成互不影响
+// 的副本，与 Java 引用语义不等价（实测产物会算错结果）。
+
+TEST(RegCTest, PodStructLowersInstanceFieldAccessToStructMembers)
+{
+    // int f(int x) { Holder h = new Holder(); h.a = x; h.b = x + 1; return h.a + h.b; }
+    std::string reason;
+    auto        result = emitRegC("use", "(I)I",
+                                  {
+                               new VarInsnNode(Opcodes::ILOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                                  ca::str::Utf8StringRef::from_cstr("PodHolder"),
+                                                  ca::str::Utf8StringRef::from_cstr("<init>"),
+                                                  ca::str::Utf8StringRef::from_cstr("()V"),
+                                                  false),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                                  2, 1, reason,
+                                  codegen::DirectCallTier::Off,
+                                  /*podStruct=*/true);
+
+    // 关闭时不应有任何 struct 痕迹。
+    EXPECT_EQ(result.source.find("pod_"), std::string::npos) << result.source;
+}
+
+// 默认关闭：产物里不应出现 pod_ 前缀（开关默认关，行为与改动前一致）。
+TEST(RegCTest, PodStructIsOffByDefault)
+{
+    std::string reason;
+    auto        result = emitRegC("use", "(I)I",
+                                  {
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new MethodInsnNode(Opcodes::INVOKESPECIAL,
+                                                 ca::str::Utf8StringRef::from_cstr("PodHolder"),
+                                                 ca::str::Utf8StringRef::from_cstr("<init>"),
+                                                 ca::str::Utf8StringRef::from_cstr("()V"),
+                                                 false),
+                              new InsnNode(Opcodes::IRETURN),
+                          },
+                                  2, 1, reason);
+    EXPECT_EQ(result.source.find("pod_"), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("podp_"), std::string::npos) << result.source;
+}
+
+// 别名变量名是"指针"语义的构造保证：名字本身不是重点，重点是加载/存储用 `->`。
+TEST(RegCTest, PodStructAliasAndPointerNamingAreStable)
+{
+    EXPECT_EQ(podStructPtrName(RegId{7}), "podp_r7");
+    EXPECT_EQ(podStructValueName(RegId{7}), "podv_r7");
+    EXPECT_EQ(podStructTypeName(ca::str::Utf8StringRef::from_cstr("a/b/C")), "pod_a_b_C");
+    EXPECT_EQ(podStructMemberName(ca::str::Utf8StringRef::from_cstr("a$b")), "a_b");
+}
+
+// 库类一律不可降级：拿不到字段全貌，无法判定"实例字段是否全为原生类型"。
+TEST(RegCTest, PodClassRejectsLibraryClasses)
+{
+    CompilerIndex index;
+    EXPECT_FALSE(isPodClassOwner(&index, ca::str::Utf8StringRef::from_cstr("java/awt/Point")));
 }

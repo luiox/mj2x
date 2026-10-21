@@ -207,13 +207,23 @@ bool emitEdgeCopies(CSourceStream& out, const std::vector<RegCopy>& copies,
 
     // Edge copies are parallel phi transfers.  Stage sources in temporaries so
     // cycles such as r1<-r2 and r2<-r1 remain well-defined for later RegC work.
-    std::vector<int> tempIds;
+    std::vector<int>      tempIds;
     tempIds.reserve(copies.size());
+    // 需要按值补发 struct 拷贝的边拷贝下标（POD struct 专用）。
+    std::vector<size_t>   podStructEdgeIndices;
     for (size_t i = 0; i < copies.size(); ++i) {
         const RegCNativeObjectState* objectState = nativeObjectFor(state, copies[i].source);
-        if (objectState != nullptr && !isMutableStringKind(objectState->kind)) {
+        if (objectState != nullptr && !isMutableStringKind(objectState->kind) &&
+            objectState->kind != RegCIntrinsicNativeObjectKind::PodStruct) {
             reason = "native object escaped through CFG edge copy";
             return false;
+        }
+        // POD struct 是值语义，跨 CFG 边传递拷贝的是结构体本身，放行。临时变量
+        // 与索引记账照常参与（否则 tempIds 与第二个循环错位），结构体拷贝在两个
+        // 循环之后补发。
+        if (objectState != nullptr &&
+            objectState->kind == RegCIntrinsicNativeObjectKind::PodStruct) {
+            podStructEdgeIndices.push_back(i);
         }
         const int tempId = edgeTempIndex++;
         tempIds.push_back(tempId);
@@ -235,6 +245,10 @@ bool emitEdgeCopies(CSourceStream& out, const std::vector<RegCopy>& copies,
     for (size_t i = 0; i < copies.size(); ++i) {
         const std::string destName = regName(copies[i].dest.id);
         out.assign(destName, ca::str::format_std("edge_tmp_{}", tempIds[i]));
+    }
+    // POD struct 的按值拷贝：临时变量通道只搬了 NULL 引用，结构体本体在这里补。
+    for (size_t i : podStructEdgeIndices) {
+        podStructEdgeCopy(out, state, copies[i]);
     }
     return true;
 }
@@ -660,6 +674,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
         return true;
     case RegInstructionKind::LoadField:
+        if (emitPodStructFieldLoad(out, state, ins)) return true;
         if (!rejectNativeObjectEscape(state, ins.receiver, "field load receiver", reason))
             return false;
         if (ins.field.isStatic) {
@@ -703,6 +718,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
         return true;
     case RegInstructionKind::StoreField:
+        if (emitPodStructFieldStore(out, state, ins, reason)) return true;
         if (!rejectNativeObjectEscape(state, ins.receiver, "field store receiver", reason))
             return false;
         {
@@ -806,6 +822,20 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
         }
     case RegInstructionKind::Call:
     {
+        // POD struct 的构造器调用整条跳过：struct 已由 `= {0}` 零初始化，构造器
+        // 体的字段赋值也走 struct 成员路径。不跳过的话 receiver 是 native 对象，
+        // 会被 rejectNativeObjectEscape 判为逃逸、整函数 fail-closed。
+        if (!ins.args.empty() && ins.method.name == "<init>" &&
+            podStructStorageFor(state, ins.args[0]) != nullptr) {
+            if (state.commentLevel != codegen::RegCCommentLevel::None) {
+                out.appendLineStart("/* POD struct construction elided: ")
+                    .append(ins.method.owner)
+                    .append(".<init> */")
+                    .newLine();
+            }
+            if (ins.hasDest) out.assign(regName(ins.dest.id), defaultValue(ins.dest.type));
+            return true;
+        }
         // native-to-native 直接调用优先（确定性分派 + 已转换目标），未命中再走
         // intrinsic/通用 JNI 路径。
         if (tryEmitDirectCall(out, ins, state, state.classIndex, state.convertedFunctions,
@@ -1060,6 +1090,29 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 out.assign(sbDestName, "(void*)&" + stringBuilderOwnerName(ins.dest.id).to_std_string());
                 state.nativeObjects[ins.dest.id.value] =
                     RegCNativeObjectState{nativeIt->second.kind, sbDestName};
+            }
+            else if (!state.podStructRoots.empty() &&
+                     isPodClassOwner(state.classIndex, ins.typeDesc)) {
+                // POD struct 降级：对象不存在于 JVM 堆，改成一个 C struct 局部
+                // 变量。REF 寄存器置 NULL——后续若有非字段使用，
+                // rejectNativeObjectEscape 会把它挡回去（保守 fail-closed）。
+                const std::string structTypeName = podStructTypeName(ins.typeDesc);
+                // 变量已在函数作用域声明，这里只做零初始化 + 指针绑定（复合字面量）。
+                out.appendLineStart(podStructValueName(ins.dest.id))
+                    .append(" = (")
+                    .append(structTypeName)
+                    .append("){0};")
+                    .newLine();
+                out.appendLineStart(podStructPtrName(ins.dest.id))
+                    .append(" = &")
+                    .append(podStructValueName(ins.dest.id))
+                    .append(";")
+                    .newLine();
+                const std::string destName = regName(ins.dest.id);
+                out.assign(destName, "NULL");
+                state.nativeObjects[ins.dest.id.value] =
+                    RegCNativeObjectState{RegCIntrinsicNativeObjectKind::PodStruct,
+                                         podStructPtrName(ins.dest.id), structTypeName};
             }
             else {
                 const std::string allocDestName = regName(ins.dest.id);

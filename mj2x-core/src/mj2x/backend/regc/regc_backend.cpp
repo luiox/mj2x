@@ -400,6 +400,8 @@ struct RegCBackend::Impl
     /// native-to-native 直接 C 调用档位（--regc-direct-calls；默认 Off 保持
     /// JVM 栈帧语义）。
     codegen::DirectCallTier directCallTier = codegen::DirectCallTier::Off;
+    /// POD 类降级为 C struct（--regc-pod-struct；默认关）。
+    bool                    podStruct       = false;
     /// 字面量 at-rest 加密（--strings-encrypt）：cachePool.setStringsEncrypt 配置后
     /// 由 emitRegistrationCode 据此发射 JNI_OnLoad 批量解密块。
     bool stringsEncryptEnabled_ = false;
@@ -511,6 +513,11 @@ void RegCBackend::setTraceCallLog(bool enabled)
 void RegCBackend::setDirectCallTier(codegen::DirectCallTier tier)
 {
     impl_->directCallTier = tier;
+}
+
+void RegCBackend::setPodStruct(bool enabled)
+{
+    impl_->podStruct = enabled;
 }
 
 void RegCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
@@ -913,6 +920,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     emitterOptions.commentLevel    = impl_->commentLevel;
     emitterOptions.traceCallLog    = impl_->traceCallLog;
     emitterOptions.directCallTier     = impl_->directCallTier;
+    emitterOptions.podStruct          = impl_->podStruct;
     emitterOptions.resolvedDispatch = splitOutputDir_.empty();
     emitterOptions.runtimeProtection = runtimeProtection_;
     if (stringsEncrypt_ && !impl_->cachePool.stringsEncryptEnabled()) {

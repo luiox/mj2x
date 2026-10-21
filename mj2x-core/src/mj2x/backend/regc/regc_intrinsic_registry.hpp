@@ -63,6 +63,9 @@ enum class RegCIntrinsicNativeObjectKind
     Random,
     StringBuilder,
     StringBuffer,
+    /// POD 类降级出的 C struct（--regc-pod-struct）。不是 intrinsic 目标，但
+    /// 与它们共享"native 态对象"的表示：REF 寄存器为 NULL，真实数据在 C 侧存储。
+    PodStruct,
 };
 
 /// @brief 发射端直调预检位（#879 Y4 解耦）：随权威表（kEntries）单源，

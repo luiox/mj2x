@@ -102,33 +102,6 @@ bool rejectNativeObjectEscapes(const RegCFunctionEmitState&   state,
 
 namespace {
 
-class RegIdUnionFind
-{
-public:
-    void add(uint32_t id) { parent_.emplace(id, id); }
-
-    uint32_t find(uint32_t id)
-    {
-        add(id);
-        uint32_t parent = parent_[id];
-        if (parent == id) return id;
-        parent_[id] = find(parent);
-        return parent_[id];
-    }
-
-    void unite(uint32_t lhs, uint32_t rhs)
-    {
-        const uint32_t lhsRoot = find(lhs);
-        const uint32_t rhsRoot = find(rhs);
-        if (lhsRoot != rhsRoot) parent_[rhsRoot] = lhsRoot;
-    }
-
-    const std::map<uint32_t, uint32_t>& entries() const { return parent_; }
-
-private:
-    std::map<uint32_t, uint32_t> parent_;
-};
-
 bool referenceRegister(const RegOperand& operand, uint32_t& id)
 {
     if (operand.kind != RegOperandKind::Register || operand.type != SSAType::REF) return false;

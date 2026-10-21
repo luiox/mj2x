@@ -25,6 +25,38 @@
 namespace mj2x {
 
 // 与既有 cpp 一致：CSourceStream 从 codegen 起别名，函数签名保持一行。
+/// @brief REF 寄存器并查集：把"同一个对象的多个寄存器"归并到一个根。
+///
+/// @details
+/// StringBuilder/StringBuffer 的 native lowering 与 POD struct 降级共用——两份
+/// 副本必然漂移，故放在这里。逃逸分析的第一步都是"这个寄存器指的是哪个对象"。
+class RegIdUnionFind
+{
+public:
+    void add(uint32_t id) { parent_.emplace(id, id); }
+
+    uint32_t find(uint32_t id)
+    {
+        add(id);
+        uint32_t parent = parent_[id];
+        if (parent == id) return id;
+        parent_[id] = find(parent);
+        return parent_[id];
+    }
+
+    void unite(uint32_t lhs, uint32_t rhs)
+    {
+        const uint32_t lhsRoot = find(lhs);
+        const uint32_t rhsRoot = find(rhs);
+        if (lhsRoot != rhsRoot) parent_[rhsRoot] = lhsRoot;
+    }
+
+    const std::map<uint32_t, uint32_t>& entries() const { return parent_; }
+
+private:
+    std::map<uint32_t, uint32_t> parent_;
+};
+
 using codegen::CSourceStream;
 
 /// 方法唯一键（owner\nname\ndesc）：convertedFunctions / indyFunctions /
@@ -43,6 +75,9 @@ struct RegCNativeObjectState
 {
     RegCIntrinsicNativeObjectKind kind = RegCIntrinsicNativeObjectKind::None;
     std::string                   storageName;
+    /// 仅 PodStruct 用：结构体的 C 类型名。其余 native 态对象（Random / 包装类
+    /// 等）的类型由 kind 唯一决定，不需要这一项。
+    std::string                   typeName;
 };
 
 /// @brief 调用目标间接化的站点条目（对标 jvmtp `obfuscation.calls.*`）。
@@ -113,6 +148,8 @@ struct RegCFunctionEmitState
     int                                       classCacheIndex        = 0;
     int                                       stringBuilderTempIndex = 0;
     std::set<uint32_t>                        nativeStringBuilderRegisters;
+    /// POD struct 降级：可降级实例的并查集根 -> 类名。
+    std::map<uint32_t, std::string>          podStructRoots;
     std::vector<uint32_t>                     nativeStringBuilderOwners;
     std::map<uint32_t, uint32_t>              nativeStringBuilderOwnerByRegister;
     std::set<uint32_t>                        nativeWrapperRegisters;
@@ -127,6 +164,26 @@ struct RegCFunctionEmitState
     std::map<std::string, std::vector<RegCIndirectCallSite>> indirectSiteTables;
     std::map<std::string, std::string>                       indirectSiteTableNames;
     int                                                     indirectSiteTableIndex = 0;
+};
+
+/// @brief analyzePodStructs 输出：可降级为 C struct 的寄存器根集合。
+///
+/// @details
+/// `structRoots` 是不逃逸的 POD 实例根（并查集根 id）；`ownerByRoot` 给出每个
+/// 根的类名（用于取 struct 类型名）。`escapedRoots` 保留供诊断——降级覆盖面窄
+/// 时需要能说出"为什么这个实例没降级"。
+struct RegCPodStructPlan
+{
+    std::set<uint32_t>              structRoots;
+    std::set<uint32_t>              escapedRoots;
+    std::map<uint32_t, std::string> ownerByRoot;
+    /// 并查集里属于 POD 根的**全部寄存器** -> 类名。结构体变量必须在函数作用域
+    /// 预声明（边拷贝发生在块作用域，块内声明跨块即不可见），故需要完整集合
+    /// 而不只是根。
+    std::map<uint32_t, std::string> ownerByRegister;
+    /// 真正 `new` 出来的寄存器（别名的背后实例）。只有它们需要 backing struct
+    /// 变量；其余寄存器是指针别名。
+    std::set<uint32_t>              allocationRegisters;
 };
 
 /// @brief analyzeStringBuilders 输出：native StringBuilder 寄存器集合与归属关系。
@@ -398,6 +455,48 @@ std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn);
 /// registry 用于识别 StringBuilder 方法 intrinsic（nullptr 时用 builtins()）。
 RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
                                             const RegCIntrinsicRegistry* registry = nullptr);
+
+/// @brief 判定某类的实例字段是否全为原生类型（POD 类）。
+/// @details 同时要求无接口、直接继承 Object——继承/接口会让字段布局不等于本类
+///          字段表，struct 降级不再等价。库类一律否（拿不到字段全貌）。
+bool isPodClassOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& owner);
+/// @brief POD 类生成的 C struct 类型名（pod_<sanitized owner>）。
+std::string podStructTypeName(const ca::str::Utf8StringRef& owner);
+/// @brief 字段名 → C struct 成员名（sanitize，合成字段的 `$` 也要处理）。
+std::string podStructMemberName(const ca::str::Utf8StringRef& name);
+/// @brief POD struct 实例的**指针别名**变量名。
+///
+/// @details
+/// 别名必须是指针：同一个对象在 RegIR 里可以有多个寄存器（phi / 边拷贝），
+/// 值语义的 struct 拷贝会让它们变成互不影响的独立副本，与 Java 的引用语义
+/// 不等价（实测产物算错结果）。指针拷贝才是别名。
+std::string podStructPtrName(RegId id);
+/// @brief 分配点的 backing struct 变量名（指针别名指向它）。
+std::string podStructValueName(RegId id);
+/// @brief struct 的一个成员声明（名称 + C 类型文本）。
+struct RegCPodStructMember
+{
+    std::string name;
+    std::string cType;
+};
+/// @brief 某 POD 类的实例字段成员表（按类字段表顺序，只含原生字段）。
+std::vector<RegCPodStructMember> podStructMembers(CompilerIndex* classIndex,
+                                                 const std::string& owner);
+/// @brief 取操作数对应的 POD struct 存储名（非 POD struct 返回 nullptr）。
+const std::string* podStructStorageFor(const RegCFunctionEmitState& state,
+                                      const RegOperand& operand);
+/// @brief POD struct 的 CFG 边拷贝（按值拷贝结构体，非 POD 时不做任何事）。
+void podStructEdgeCopy(CSourceStream& out, RegCFunctionEmitState& state, const RegCopy& copy);
+/// @brief POD struct 实例字段读（命中返回 true 表示已发射）。
+bool emitPodStructFieldLoad(CSourceStream& out, RegCFunctionEmitState& state,
+                            const RegInstruction& ins);
+/// @brief POD struct 实例字段写（命中返回 true 表示已发射）。
+bool emitPodStructFieldStore(CSourceStream& out, RegCFunctionEmitState& state,
+                             const RegInstruction& ins, std::string& reason);
+/// @brief 逐函数判定哪些 POD 实例可以不逃逸地降级为 C struct。
+/// @details 逃逸判定保守：白名单（实例字段读写 + <init> receiver）之外一律逃逸。
+///          漏判逃逸会导致数据静默错乱，宁可覆盖面小。
+RegCPodStructPlan analyzePodStructs(const RegFunction& fn, CompilerIndex* classIndex);
 /// 尝试发射 intrinsic 调用（StringBuilder/StringBuffer/字符串运行时方法）。
 RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out, const RegInstruction& ins,
                                         RegCFunctionEmitState& state);

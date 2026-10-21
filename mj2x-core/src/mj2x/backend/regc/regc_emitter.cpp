@@ -221,6 +221,10 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     if (!collectRegisters(fn, regs, result.reason)) return result;
     const RegCStringBuilderPlan stringBuilderPlan = analyzeStringBuilders(fn, intrinsicRegistry_);
     const std::set<uint32_t>    nativeWrapperRegisters = analyzeNativeWrappers(fn);
+    // POD struct 降级：默认关闭（options_.podStruct），关闭时 plan 为空。
+    const RegCPodStructPlan     podPlan = options_.podStruct
+                                             ? analyzePodStructs(fn, classIndex_)
+                                             : RegCPodStructPlan{};
 
     RegCFunctionEmitState emitState;
     emitState.functionName                       = result.functionName;
@@ -242,6 +246,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.nativeStringBuilderOwners          = stringBuilderPlan.ownerRegisters;
     emitState.nativeStringBuilderOwnerByRegister = stringBuilderPlan.ownerByRegister;
     emitState.nativeWrapperRegisters             = nativeWrapperRegisters;
+    // 并查集根 -> 类名：字段读写按 receiver 的根查表决定走 struct 成员还是 JNI。
+    emitState.podStructRoots                     = podPlan.ownerByRoot;
     for (uint32_t id : stringBuilderPlan.nativeRegisters) {
         const auto kindIt = stringBuilderPlan.kindByRegister.find(id);
         if (kindIt == stringBuilderPlan.kindByRegister.end()) {
@@ -675,6 +681,46 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     }
     out.append(") {\n");
     out.indent();
+
+    // POD struct 降级用到的结构体类型：函数体开头一次性声明（C 要求类型在使用
+    // 点之前可见）。字段顺序按类字段表，成员名即字段名。
+    if (!podPlan.ownerByRoot.empty()) {
+        std::set<std::string> emittedOwners;
+        for (const auto& [root, owner] : podPlan.ownerByRoot) {
+            if (!emittedOwners.insert(owner).second) continue;
+            const std::string typeName =
+                podStructTypeName(ca::str::Utf8StringRef::from_cstr(owner.c_str()));
+            out.append("typedef struct ");
+            out.append(typeName);
+            out.append(" {\n");
+            out.indent();
+            for (const auto& member : podStructMembers(classIndex_, owner)) {
+                out.append(member.cType);
+                out.append(" ");
+                out.append(member.name);
+                out.append(";\n");
+            }
+            out.dedent();
+            out.append("} ");
+            out.append(typeName);
+            out.append(";\n");
+        }
+    }
+
+    // 结构体变量必须在**函数作用域**声明：分配点/边拷贝都在块作用域内，块内
+    // 声明的 struct 跨块即不可见（实测产物报 use of undeclared identifier）。
+    // 这里按寄存器预声明，分配与拷贝只做赋值。
+    if (!podPlan.ownerByRegister.empty()) {
+        for (const auto& [id, owner] : podPlan.ownerByRegister) {
+            const std::string typeName =
+                podStructTypeName(ca::str::Utf8StringRef::from_cstr(owner.c_str()));
+            // 分配点额外声明 backing struct；所有 POD 寄存器都有指针别名。
+            if (podPlan.allocationRegisters.count(id) != 0) {
+                out.declare_var(typeName, podStructValueName(RegId{id}));
+            }
+            out.declare_var(typeName + "*", podStructPtrName(RegId{id}));
+        }
+    }
 
     if (fn.symbol.returnType != SSAType::VOID) {
         out.declare_var(cType(fn.symbol.returnType), "_mj2x_regc_result",

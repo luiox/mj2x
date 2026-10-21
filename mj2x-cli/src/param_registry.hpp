@@ -80,6 +80,8 @@ struct CliOptions
     /// 存字符串而非枚举值：注册表是纯声明式的参数表，枚举解析与档位映射统一
     /// 由 DEF_ENUM_STR + main 的一次转换承担，不在此处引入自定义类型。
     std::string              regcDirectCalls   = "off";
+    /// POD 类降级为 C struct（--regc-pod-struct；默认关）。
+    bool                     regcPodStruct     = false;
     mj2x::codegen::RegCCommentLevel regcCommentLevel = mj2x::codegen::RegCCommentLevel::Summary;
     bool                     regcSafeEnv      = false;
     bool                     regcSafeEnvDebug = false;

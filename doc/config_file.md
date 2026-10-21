@@ -42,8 +42,7 @@
 | compile | `llvm_tool` | `clang` \| `llc` | `clang` |
 | compile | `generate_cmake` / `generate_xmake` | string | — |
 | stackc | `stackc_exception_check` | `full` \| `lite` | `full` |
-| obf_scope | `obf_scope_include` / `obf_scope_exclude` | string array（类级 glob，与 `native_include` 同语义） | `[]` |
-| regc | `regc_trace_calls` / `regc_safe_env` / `regc_safe_env_debug` / `regc_no_inline` / `regc_obfuscate` / `regc_cff_state_encrypt` / `regc_mba_deep` / `regc_opaque_zero` / `regc_hide_constants` / `regc_indirect_calls` | boolean | `false` |
+| regc | `regc_trace_calls` / `regc_safe_env` / `regc_safe_env_debug` / `regc_no_inline` / `regc_obfuscate` / `regc_cff_state_encrypt` / `regc_mba_deep` / `regc_opaque_zero` / `regc_hide_constants` / `regc_indirect_calls` / `regc_pod_struct` | boolean | `false` |
 | regc | `regc_direct_calls` | `off` \| `intra-class` \| `all`（RegC + LLVM 同一门控） | `off` |
 | regc | `regc_comment_level` | `none` \| `summary` \| `detailed` | `summary` |
 | regc | `regc_cff_dead` | integer ≥ 0 | `0` |
