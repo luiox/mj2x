@@ -110,6 +110,10 @@ struct RegCFunctionEmitState
     /// native-to-native 直接调用档位（CodeOptions.directCallTier；默认 Off 保持
     /// JVM 栈帧语义，见 c_options.hpp 的 DirectCallTier）。
     codegen::DirectCallTier                   directCallTier = codegen::DirectCallTier::Off;
+    /// computed jumps：switch 目标间接化开关（默认关）。
+    bool                                      computedJumps  = false;
+    /// 本函数已用过的 computed-jumps 站点计数（表名唯一化）。
+    size_t                                    computedJumpSites = 0;
     /// native-to-native 直接调用上下文（compileMethod 传入，nullptr 关闭）。
     CompilerIndex*                            classIndex          = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions = nullptr;
@@ -485,6 +489,15 @@ std::vector<RegCPodStructMember> podStructMembers(CompilerIndex* classIndex,
 /// @brief 取操作数对应的 POD struct 存储名（非 POD struct 返回 nullptr）。
 const std::string* podStructStorageFor(const RegCFunctionEmitState& state,
                                       const RegOperand& operand);
+/// @brief 发射 computed jumps 的分派前奏：查表解析出块索引。
+///
+/// @details
+/// 成功时 `indexExpression` 为块索引变量名，调用方改按 0..N-1 的索引 switch。
+/// 返回 false（无 TU 头部注册表，key 表无处安放）时 `indexExpression` 保持空，
+/// 调用方**退回按原始 case key 分派**——本项是混淆增益，不该让方法编译不了。
+bool emitComputedJumpDispatch(CSourceStream& out, RegCFunctionEmitState& state,
+                              const RegSwitchTerminator& t, std::string& indexExpression,
+                              std::string& reason);
 /// @brief POD struct 的 CFG 边拷贝（按值拷贝结构体，非 POD 时不做任何事）。
 void podStructEdgeCopy(CSourceStream& out, RegCFunctionEmitState& state, const RegCopy& copy);
 /// @brief POD struct 实例字段读（命中返回 true 表示已发射）。

@@ -82,6 +82,8 @@ struct CliOptions
     std::string              regcDirectCalls   = "off";
     /// POD 类降级为 C struct（--regc-pod-struct；默认关）。
     bool                     regcPodStruct     = false;
+    /// computed jumps / 跳转目标间接化（--regc-computed-jumps；默认关）。
+    bool                     regcComputedJumps = false;
     mj2x::codegen::RegCCommentLevel regcCommentLevel = mj2x::codegen::RegCCommentLevel::Summary;
     bool                     regcSafeEnv      = false;
     bool                     regcSafeEnvDebug = false;

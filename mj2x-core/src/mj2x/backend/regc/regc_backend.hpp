@@ -165,6 +165,16 @@ public:
     /// 的兼容性代价，故默认关。
     void setPodStruct(bool enabled);
 
+    /// @brief 开启 computed jumps / 跳转目标间接化（默认关闭，
+    ///        --regc-computed-jumps）。
+    ///
+    /// @details
+    /// switch 的 "case key -> 目标块" 映射从代码挪到数据表（key 按 site 密钥
+    /// 异或存放），分派改走运行时解析出的块索引。产物里不再有
+    /// `case <字面量>: goto block_bX` 这种直接可读的映射。
+    /// 代价是每次分派多一次表扫描。
+    void setComputedJumps(bool enabled);
+
     /// @brief 设置多文件输出目录（--emit-native-dir）。
     ///
     /// @details

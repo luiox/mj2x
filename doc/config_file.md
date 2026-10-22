@@ -42,7 +42,7 @@
 | compile | `llvm_tool` | `clang` \| `llc` | `clang` |
 | compile | `generate_cmake` / `generate_xmake` | string | — |
 | stackc | `stackc_exception_check` | `full` \| `lite` | `full` |
-| regc | `regc_trace_calls` / `regc_safe_env` / `regc_safe_env_debug` / `regc_no_inline` / `regc_obfuscate` / `regc_cff_state_encrypt` / `regc_mba_deep` / `regc_opaque_zero` / `regc_hide_constants` / `regc_indirect_calls` / `regc_pod_struct` | boolean | `false` |
+| regc | `regc_trace_calls` / `regc_safe_env` / `regc_safe_env_debug` / `regc_no_inline` / `regc_obfuscate` / `regc_cff_state_encrypt` / `regc_mba_deep` / `regc_opaque_zero` / `regc_hide_constants` / `regc_indirect_calls` / `regc_pod_struct` / `regc_computed_jumps` | boolean | `false` |
 | regc | `regc_direct_calls` | `off` \| `intra-class` \| `all`（RegC + LLVM 同一门控） | `off` |
 | regc | `regc_comment_level` | `none` \| `summary` \| `detailed` | `summary` |
 | regc | `regc_cff_dead` | integer ≥ 0 | `0` |

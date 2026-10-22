@@ -31,6 +31,7 @@ bool wireRegC(BackendWiringContext& context)
                                                    : mj2x::codegen::DirectCallTier::Off;
     backend->setDirectCallTier(directCallTier);
     if (options.regcPodStruct) backend->setPodStruct(true);
+    if (options.regcComputedJumps) backend->setComputedJumps(true);
     backend->setCommentLevel(options.regcCommentLevel);
     if (options.regcSafeEnv) backend->setSafeEnv(true);
     if (options.regcSafeEnvDebug) backend->setSafeEnvDebug(true);
@@ -60,6 +61,7 @@ bool wireRegC(BackendWiringContext& context)
 DEF_BOOL(regcTraceCalls, "--regc-trace-calls", "regc_trace_calls")
 DEF_ENUM_STR(regcDirectCalls, "--regc-direct-calls", "regc_direct_calls", "off,intra-class,all", "off")
 DEF_BOOL(regcPodStruct, "--regc-pod-struct", "regc_pod_struct")
+DEF_BOOL(regcComputedJumps, "--regc-computed-jumps", "regc_computed_jumps")
 DEF_BOOL(regcSafeEnv, "--regc-safe-env", "regc_safe_env")
 DEF_BOOL(regcNoInline, "--regc-no-inline", "regc_no_inline")
 DEF_BOOL(regcObfuscate, "--regc-obfuscate", "regc_obfuscate")
@@ -119,6 +121,7 @@ const ParamDef kRegCParams[] = {
     PARAM("regc.trace_calls", "--regc-trace-calls", "regc_trace_calls", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcTraceCalls, json_regcTraceCalls),
     PARAM("regc.direct_calls", "--regc-direct-calls", "regc_direct_calls", ParamType::Enum, "off,intra-class,all", 0, 0, "off", "regc_llvm", "regc|llvm", cli_regcDirectCalls, json_regcDirectCalls),
     PARAM("regc.pod_struct", "--regc-pod-struct", "regc_pod_struct", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcPodStruct, json_regcPodStruct),
+    PARAM("regc.computed_jumps", "--regc-computed-jumps", "regc_computed_jumps", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcComputedJumps, json_regcComputedJumps),
     PARAM("regc.comment_level", "--regc-comment-level", "regc_comment_level", ParamType::Enum, "none,summary,detailed", 0, 0, "summary", "regc", "regc", cli_regc_comment_level, json_regc_comment_level),
     PARAM("regc.safe_env", "--regc-safe-env", "regc_safe_env", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcSafeEnv, json_regcSafeEnv),
     PARAM("regc.safe_env_debug", "--regc-safe-env-debug", "regc_safe_env_debug", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regc_safe_env_debug, json_regc_safe_env_debug),
