@@ -127,6 +127,27 @@ struct Vmc4Options
     /// 反侦测检查点注入（wrapper 入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     codegen::RuntimeProtectionOptions runtimeProtection;
+
+    /// super-operator 融合（--vmc4-super-ops；默认关闭，issue #9）。
+    ///
+    /// @details
+    /// 两类融合，均由编码器在发射前规划（需要看到相邻指令序列 + 全函数使用
+    /// 计数）：
+    ///   - `Binary(x, ±1)` 折叠为 SuperInc/SuperDec（去掉 rhs 操作数）；
+    ///   - 同一基本块内相邻的 `t = a op1 b` + `dest = t op2 c`（t 仅此一处
+    ///     消费）折叠为一条 FusedBinary，中间值不再以独立寄存器存在。
+    /// 语义零变化；融合后 VM 指令与 JVM 字节码不再 1:1。与 fragment 可组合。
+    bool superOps = false;
+
+    /// 指令碎片化（--vmc4-fragment；默认关闭，issue #9）。
+    ///
+    /// @details
+    /// 每条计算指令（Binary/Unary/Compare/Convert）的寄存器操作数先经专用
+    /// 临时槽中转一次：一条指令拆成「Copy... + 原指令」多段，每段单独看是
+    /// 无意义的中间搬运。纯编码期变换（不新增 opcode）。
+    /// **代价**：指令数约变为 2~3 倍，解释执行开销同步上升——面向高保护
+    /// 诉求的场景按需开启，文档已写明该代价。与 superOps 可组合。
+    bool fragment = false;
 };
 
 /// @brief 一个 VM 实例的描述对象。

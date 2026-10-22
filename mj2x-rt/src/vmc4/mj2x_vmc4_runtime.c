@@ -7,6 +7,7 @@
 #include "vmc4/mj2x_vmc4_runtime.h"
 
 #include <limits.h>
+#include <math.h>
 
 // 懒解密互斥锁（#760 切片 2）：多个 Java 线程并发首执行同一方法时，同一块
 // 只允许解密一次（XOR 对合，并发双重解密会把块还原成密文）。锁为进程级
@@ -90,6 +91,74 @@ int64_t mj2x_vm_f2i64(double v)
     if (v >= (double)INT64_MAX) return INT64_MAX;
     if (v < (double)INT64_MIN) return INT64_MIN;
     return (int64_t)v;
+}
+
+// ---- 单步二元运算（FusedBinary super-op 的两段共用，issue #9） ----
+// 与解释器 BINARY handler 的分支逐条对应（同一份语义两个镜像，改其一必须同步
+// 另一个）。整数路径的 I32 逐步截断是关键：未折叠形态下中间值先存 regs[t].i
+// 再读，截断发生在存储点；折叠后中间值只活在调用方局部变量里，必须在 helper
+// 内收窄，否则两步之间的位宽语义丢失。
+int mj2x_vm_bin_step_i(JNIEnv* env, int64_t x, int64_t y, unsigned char op, unsigned char type,
+                       int64_t* out)
+{
+    int64_t r = 0;
+    switch (op) {
+    case 0: r = (int64_t)((uint64_t)x + (uint64_t)y); break;
+    case 1: r = (int64_t)((uint64_t)x - (uint64_t)y); break;
+    case 2: r = (int64_t)((uint64_t)x * (uint64_t)y); break;
+    case 3:
+        if (y == 0) { mj2x_vm_throw_arith(env); return 1; }
+        r = (type == 0) ? mj2x_vm_div_i32((int32_t)x, (int32_t)y) : mj2x_vm_div_i64(x, y);
+        break;
+    case 4:
+        if (y == 0) { mj2x_vm_throw_arith(env); return 1; }
+        r = (type == 0) ? mj2x_vm_rem_i32((int32_t)x, (int32_t)y) : mj2x_vm_rem_i64(x, y);
+        break;
+    case 5: r = x & y; break;
+    case 6: r = x | y; break;
+    case 7: r = x ^ y; break;
+    case 8: r = (type == 0) ? (int32_t)((uint32_t)x << (y & 31))
+                            : (int64_t)((uint64_t)x << (y & 63)); break;
+    case 9: r = (type == 0) ? ((int32_t)x >> (y & 31)) : (x >> (y & 63)); break;
+    case 10: r = (type == 0) ? (int32_t)((uint32_t)x >> (y & 31))
+                             : (int64_t)((uint64_t)x >> (y & 63)); break;
+    default: break;
+    }
+    *out = (type == 0) ? (int32_t)r : r;
+    return 0;
+}
+
+// 浮点单步：F32（type == 2）走 float 精度运算并舍回 float（与 BINARY handler
+// 一致——slot 是 double，不做 float 舍入会引入 double 中间精度，比较/再次运算
+// 时差 1 ULP）；F64 直接 double。浮点运算不抛异常，恒返回 0。
+int mj2x_vm_bin_step_f(JNIEnv* env, double x, double y, unsigned char op, unsigned char type,
+                       double* out)
+{
+    (void)env;
+    double r = 0;
+    if (type == 2) {
+        float fa = (float)x, fb = (float)y, fr = 0;
+        switch (op) {
+        case 0: fr = fa + fb; break;
+        case 1: fr = fa - fb; break;
+        case 2: fr = fa * fb; break;
+        case 3: fr = fa / fb; break;
+        case 4: fr = fmodf(fa, fb); break;
+        default: break;
+        }
+        r = fr;
+    } else {
+        switch (op) {
+        case 0: r = x + y; break;
+        case 1: r = x - y; break;
+        case 2: r = x * y; break;
+        case 3: r = x / y; break;
+        case 4: r = fmod(x, y); break;
+        default: break;
+        }
+    }
+    *out = r;
+    return 0;
 }
 
 // 抛 NullPointerException(数组/对象 null 访问)。pending exception 由调用方

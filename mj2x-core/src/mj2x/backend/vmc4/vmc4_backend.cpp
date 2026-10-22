@@ -310,7 +310,12 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
         it = inserted.first;
     }
     VmInstance& instance = *it->second;
-    auto        program  = VmEncoder::encode(*reg, instance, reason, &impl_->userIntrinsics);
+    // super-ops / 碎片化（issue #9）：编码期选项，逐方法传入编码器。
+    VmEncodeOptions encodeOptions;
+    encodeOptions.superOps = options_.superOps;
+    encodeOptions.fragment = options_.fragment;
+    auto        program  = VmEncoder::encode(*reg, instance, reason, &impl_->userIntrinsics,
+                                             encodeOptions);
     if (!program) {
         CA_LOGT_ERROR("vmc4", "Skipping {}.{}{}: VM encode failed: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
         return backendResult;

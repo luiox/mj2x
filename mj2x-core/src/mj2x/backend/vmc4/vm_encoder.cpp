@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -224,6 +225,41 @@ struct EncoderState
 
     /// 已分配的最大寄存器索引 + 1（含参数、常量槽、计算寄存器）。
     uint16_t maxReg = 0;
+    /// 编码期选项（super-ops / 碎片化），默认全关。
+    VmEncodeOptions options;
+
+    /// 碎片化专用临时寄存器（3 个），惰性预留（见 ensureFragmentTemps）。
+    /// 不能复用计算寄存器（破坏活值）或常量槽（污染常量）。3 个而非 2 个：
+    /// FusedBinary 有三个源操作数要中转（issue #9 组合开关）。
+    uint16_t fragmentTemps[3] = {0, 0, 0};
+    bool     fragmentTempsReady = false;
+
+    /// @brief 取得碎片化临时槽；首次调用时在寄存器高水位末端预留两个。
+    ///
+    /// @details
+    /// **必须惰性预留，不能在编码前预留**：常量槽与编码期 observeReg 新抬高的
+    /// 寄存器都从 maxReg 高水位向上分配，若提前占住 [M, M+2)，编码期间任何
+    /// 落到该区间的分配都会与临时槽重叠（常量被覆盖 / 活值被踩）。首次使用时
+    /// maxReg 是当时的真实高水位，预留后立即 += 2，此后一切分配只能落在临时槽
+    /// 之上——这是无条件成立的，不依赖预扫描完备性。
+    bool ensureFragmentTemps(std::string& reason)
+    {
+        if (fragmentTempsReady) return true;
+        if (!options.fragment) {
+            reason = "fragment temps requested while fragment option is off";
+            return false;
+        }
+        if (maxReg > static_cast<uint16_t>(0xFFFD)) {
+            reason = "fragment temp registers exceed u16 register file";
+            return false;
+        }
+        fragmentTemps[0]    = maxReg;
+        fragmentTemps[1]    = static_cast<uint16_t>(maxReg + 1);
+        fragmentTemps[2]    = static_cast<uint16_t>(maxReg + 2);
+        maxReg              = static_cast<uint16_t>(maxReg + 3);
+        fragmentTempsReady  = true;
+        return true;
+    }
 
     /// 指令发射计数器：pickOpcodeByte 的 nonce（每条指令递增，确定性选别名）。
     uint64_t instructionNonce = 0;
@@ -346,6 +382,152 @@ struct EncoderState
                 return syntheticEdges[kv.second].index;
         }
         return realIndex;
+    }
+
+    // ---- super-op 融合计划（issue #9，--vmc4-super-ops）----
+    //
+    // 融合判定必须看到相邻指令序列与全函数使用计数，与逐指令编码解耦，故在
+    // layoutBlocks 之前一次性规划，编码期只查表。落点在此而非 RegIR：融合是
+    // VMC4 指令集专属的编码格式决策（RegIR 没有 super-op 概念），RegC/LLVM/
+    // StackC 共用同一份 RegIR，把后端专属概念泄到共享 IR 会迫使三个后端都
+    // 认识一个新指令种类。
+    //
+    // superOpFusedNext[block][i] = i+1 表示「第 i 条被第 i+1 条吸收，融合产物
+    // 由第 i+1 条承载」；-1 表示不融合。融合永不跨基本块（逐块独立规划），
+    // 也绝不链式重叠（命中后跳过下一条，避免三链）。
+    std::map<const RegBlock*, std::vector<int>> superOpFusedNext;
+
+    /// @brief 统计一个 Register 操作数的使用次数（融合唯一消费判定用）。
+    static void countOperandUse(const RegOperand& op, std::map<uint32_t, int>& useCount)
+    {
+        if (op.kind == RegOperandKind::Register) ++useCount[op.reg.value];
+    }
+
+    /// @brief 统计一条指令读到的所有寄存器（不含 dest——dest 是定义不是使用）。
+    void countInstructionUses(const RegInstruction& ins, std::map<uint32_t, int>& useCount) const
+    {
+        switch (ins.kind) {
+        case RegInstructionKind::Copy:
+            countOperandUse(ins.copy.source, useCount);
+            break;
+        case RegInstructionKind::Unary:
+        case RegInstructionKind::Convert:
+            countOperandUse(ins.value, useCount);
+            break;
+        case RegInstructionKind::Binary:
+        case RegInstructionKind::Compare:
+            countOperandUse(ins.lhs, useCount);
+            countOperandUse(ins.rhs, useCount);
+            break;
+        case RegInstructionKind::Call:
+            countOperandUse(ins.receiver, useCount);
+            for (const auto& a : ins.args) countOperandUse(a, useCount);
+            break;
+        case RegInstructionKind::LoadField:
+            countOperandUse(ins.receiver, useCount);
+            break;
+        case RegInstructionKind::StoreField:
+            countOperandUse(ins.receiver, useCount);
+            countOperandUse(ins.value, useCount);
+            break;
+        case RegInstructionKind::ArrayLoad:
+            countOperandUse(ins.receiver, useCount);
+            countOperandUse(ins.index, useCount);
+            break;
+        case RegInstructionKind::ArrayStore:
+            countOperandUse(ins.receiver, useCount);
+            countOperandUse(ins.index, useCount);
+            countOperandUse(ins.value, useCount);
+            break;
+        case RegInstructionKind::Intrinsic:
+            for (const auto& a : ins.args) countOperandUse(a, useCount);
+            break;
+        case RegInstructionKind::Barrier:
+        case RegInstructionKind::Allocate:
+            break;
+        }
+    }
+
+    /// @brief 规划相邻双 Binary 融合（issue #9）。
+    ///
+    /// @details
+    /// 模式：`t = a op1 b` 紧接 `dest = t op2 c`（同一基本块、下标相邻），且 t
+    /// 在全函数只被这一处消费。折叠为一条 FusedBinary，中间值 t 不再以独立
+    /// 寄存器存在（只活在 handler 局部变量里）。
+    ///
+    /// 安全性论证：
+    /// - **唯一消费**：t 无其他使用点（含 terminator 边拷贝与异常区域拷贝），
+    ///   折叠后不存在"读不到 t"的代码。
+    /// - **异常语义**：op1 抛异常（除零）时，未折叠形态下 handler 看到的是
+    ///   「t 未写」的现场；折叠形态同样是「t 未写」（t 本就不存在），一致。
+    ///   op2 抛异常时未折叠形态下 t 已写、折叠形态下 t 不存在——但 t 无其他
+    ///   使用点，差异不可观测。
+    /// - **类型**：两条 Binary 的 type 必须一致，否则融合指令的单一 type
+    ///   操作数无法同时解释两段运算。
+    void planSuperOps()
+    {
+        if (!options.superOps) return;
+
+        std::map<uint32_t, int> useCount;
+        for (const auto& block : fn.blocks) {
+            for (const auto& ins : block->instructions) countInstructionUses(ins, useCount);
+            const auto& term = block->terminator;
+            std::visit(
+                [&](const auto& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                        countOperandUse(t.condition, useCount);
+                    } else if constexpr (std::is_same_v<T, RegReturnTerminator>) {
+                        if (t.hasValue) countOperandUse(t.value, useCount);
+                    } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                        countOperandUse(t.value, useCount);
+                    }
+                    // 边拷贝：dest 是定义、source 是使用。
+                    auto countCopies = [&](const RegSuccessor& succ) {
+                        for (const auto& copy : succ.copies) countOperandUse(copy.source, useCount);
+                    };
+                    if constexpr (std::is_same_v<T, RegJumpTerminator>) {
+                        countCopies(t.target);
+                    } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
+                        countCopies(t.trueTarget);
+                        countCopies(t.falseTarget);
+                    } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
+                        for (const auto& c : t.cases) countCopies(c.target);
+                        countCopies(t.defaultTarget);
+                    }
+                },
+                term);
+        }
+        // 合成边拷贝（planSyntheticEdges 的产物）同样可能读中间值。
+        for (const auto& edge : syntheticEdges) {
+            for (const auto& copy : edge.copies) countOperandUse(copy.source, useCount);
+        }
+        // 异常区域边拷贝（Phase 2.C）：handler 参数同样可能读中间值。
+        for (const auto& region : fn.exceptionRegions) {
+            for (const auto& edge : region.edges) {
+                for (const auto& copy : edge.copies) countOperandUse(copy.source, useCount);
+            }
+        }
+
+        for (const auto& block : fn.blocks) {
+            const size_t n = block->instructions.size();
+            auto&        plan = superOpFusedNext[block.get()];
+            plan.assign(n, -1);
+            for (size_t i = 0; i + 1 < n; ++i) {
+                const auto& first  = block->instructions[i];
+                const auto& second = block->instructions[i + 1];
+                if (first.kind != RegInstructionKind::Binary) continue;
+                if (second.kind != RegInstructionKind::Binary) continue;
+                if (!first.hasDest) continue;
+                if (first.dest.type != second.dest.type) continue;
+                // 后一条的第一个操作数必须恰是前一条的 dest（寄存器形态）。
+                if (second.lhs.kind != RegOperandKind::Register) continue;
+                if (second.lhs.reg.value != first.dest.id.value) continue;
+                if (useCount[first.dest.id.value] != 1) continue;
+                plan[i] = static_cast<int>(i + 1);
+                ++i;   // 前一条已吸收，跳过以避免三链重叠
+            }
+        }
     }
 
     /// @brief 第一遍：扫描所有指令的 dest 与 Register 操作数，抬高 maxReg。
@@ -714,6 +896,8 @@ bool encodeTerminator(EncoderState& ctx, const RegBlock& block, VmProgram& prog,
 bool encodeCopy(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeUnary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
+bool encodeFusedBinary(EncoderState& ctx, const RegInstruction& first, const RegInstruction& second,
+                       VmProgram& prog, std::string& reason);
 bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
 bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason);
@@ -866,10 +1050,25 @@ bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edg
 /// @details
 /// 在 layoutBlocks 里被调用，直接追加到 prog.bytecodes。block 起始 offset
 /// 已由调用方记录到 blockTargets。
+///
+/// super-op 融合（issue #9）：被前一条吸收的指令不单独发射；承载融合产物的
+/// 指令改发 FusedBinary（两条相邻 Binary 的合作见 encodeFusedBinary）。
 bool encodeBlock(EncoderState& ctx, const RegBlock& block, VmProgram& prog, std::string& reason)
 {
-    for (const auto& ins : block.instructions) {
-        if (!encodeInstruction(ctx, ins, prog, reason)) return false;
+    const auto planIt = ctx.superOpFusedNext.find(&block);
+    const std::vector<int>* plan = (planIt == ctx.superOpFusedNext.end()) ? nullptr : &planIt->second;
+    const size_t n = block.instructions.size();
+    for (size_t i = 0; i < n; ++i) {
+        const bool carrier = (plan != nullptr && i > 0 && (*plan)[i - 1] == static_cast<int>(i));
+        const bool absorbed = (plan != nullptr && (*plan)[i] != -1);
+        if (absorbed && !carrier) continue;   // 已被下一条吸收
+        if (carrier) {
+            if (!encodeFusedBinary(ctx, block.instructions[i - 1], block.instructions[i], prog,
+                                   reason))
+                return false;
+            continue;
+        }
+        if (!encodeInstruction(ctx, block.instructions[i], prog, reason)) return false;
     }
     return encodeTerminator(ctx, block, prog, reason);
 }
@@ -896,6 +1095,35 @@ bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& 
     }
     reason = "unknown RegInstructionKind";
     return false;
+}
+
+/// @brief 碎片化操作数中转（issue #9）：把一个寄存器操作数经临时槽搬一次。
+///
+/// @details
+/// fragment 开启时先发射 `Copy(temp, src)` 再返回 temp，调用方随后的指令读 temp
+/// 而非 src——单条指令就此拆成「无意义搬运 + 原指令」两段，VM 指令与字节码不再
+/// 1:1。fragment 关闭时原样返回 src（零成本，字节流与历史形态逐字节一致）。
+///
+/// 临时槽取自寄存器高水位末端（EncoderState::ensureFragmentTemps 惰性预留），
+/// 不复用计算寄存器（破坏活值）或常量槽（污染常量）。Copy 的 handler 整体拷贝
+/// union，故任何 VmType 的中转都不改位模式，语义恒等。
+///
+/// @param tempIdx 0/1：同一指令的多个操作数各占一个临时槽（指令内即用即弃，
+///                跨指令复用安全——执行完本指令后临时槽已死）。
+/// @return 中转后的寄存器索引；失败时 reason 非空（调用方须中止）。
+uint16_t stageFragmentOperand(EncoderState& ctx, VmProgram& prog, int tempIdx, uint16_t srcReg,
+                              VmType type, std::string& reason)
+{
+    if (!ctx.options.fragment) return srcReg;
+    if (!ctx.ensureFragmentTemps(reason)) return srcReg;
+    const uint16_t temp = (tempIdx == 0) ? ctx.fragmentTemps[0]
+                       : (tempIdx == 1) ? ctx.fragmentTemps[1]
+                                        : ctx.fragmentTemps[2];
+    emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
+    emitU8(prog.bytecodes, static_cast<uint8_t>(type));
+    emitU16(prog.bytecodes, temp);
+    emitU16(prog.bytecodes, srcReg);
+    return temp;
 }
 
 bool encodeCopy(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, std::string& reason)
@@ -936,6 +1164,9 @@ bool encodeUnary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, 
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
+    src = stageFragmentOperand(ctx, prog, 0, src, type, reason);
+    if (!reason.empty()) return false;
+
     emitOpcode(ctx, VmOpcode::Unary, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(op));
     emitU8(prog.bytecodes, static_cast<uint8_t>(type));
@@ -960,7 +1191,10 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
     // super-operator 折叠（Phase 3）：Binary(x, 1, Add/Sub) → SuperInc/SuperDec。
     // 语义等价（整数环绕/浮点 ±1 一致），但指令格式更短（无 rhs operand），
     // 且引入独立 opcode 增加指令集膨胀。rhs 必须是 IntLiteral(1) 字面量。
-    if (ins.rhs.kind == RegOperandKind::IntLiteral && ins.rhs.intValue == 1 &&
+    // super-ops 默认关（issue #9）：原先无条件折叠，与 --vmc4-* 其他开关
+    // "默认关、不被联动"的约定不一致。
+    if (ctx.options.superOps && ins.rhs.kind == RegOperandKind::IntLiteral &&
+        ins.rhs.intValue == 1 &&
         (ins.binaryOp == SSABinaryOp::Add || ins.binaryOp == SSABinaryOp::Sub)) {
         const VmOpcode superOp = ins.binaryOp == SSABinaryOp::Add ? VmOpcode::SuperInc
                                                                   : VmOpcode::SuperDec;
@@ -968,6 +1202,12 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
         if (!ctx.resolveOperand(ins.lhs, src, reason)) return false;
         const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
         ctx.observeReg(dest);
+
+        // 与碎片化组合（issue #9：两者可组合）：super-op 的操作数同样中转一次，
+        // 避免"折叠过的指令反而没被打散"的漏网岛。
+        src = stageFragmentOperand(ctx, prog, 0, src, type, reason);
+        if (!reason.empty()) return false;
+
         emitOpcode(ctx, superOp, prog.bytecodes);
         emitU8(prog.bytecodes, static_cast<uint8_t>(type));
         emitU16(prog.bytecodes, dest);
@@ -981,12 +1221,72 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
 
+    // 指令碎片化（issue #9）：Binary 的两个操作数各经一次临时槽中转，一条指令
+    // 拆成「Copy; Copy; Binary」三段。纯编码期变换（不新增 opcode），代价是
+    // 指令数与解释开销上升——故默认关，且须在文档写明代价。
+    lhs = stageFragmentOperand(ctx, prog, 0, lhs, type, reason);
+    if (!reason.empty()) return false;
+    rhs = stageFragmentOperand(ctx, prog, 1, rhs, type, reason);
+    if (!reason.empty()) return false;
+
     emitOpcode(ctx, VmOpcode::Binary, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(op));
     emitU8(prog.bytecodes, static_cast<uint8_t>(type));
     emitU16(prog.bytecodes, dest);
     emitU16(prog.bytecodes, lhs);
     emitU16(prog.bytecodes, rhs);
+    return true;
+}
+
+/// @brief 编码相邻双 Binary 的融合产物（issue #9，--vmc4-super-ops）。
+///
+/// @details
+/// first/second 由 planSuperOps 判定可融合（同一基本块相邻、first 的 dest 仅被
+/// second 消费、type 一致）。发射一条 FusedBinary：
+///   [op1][op2][type][dest][a][b][c]  ⇒  dest = (a op1 b) op2 c
+/// 中间值 first.dest 不出现在字节流里（handler 局部变量承载），VM 指令与
+/// 字节码的 1:1 映射自此断裂。
+bool encodeFusedBinary(EncoderState& ctx, const RegInstruction& first, const RegInstruction& second,
+                       VmProgram& prog, std::string& reason)
+{
+    VmType type;
+    if (!toVmType(second.dest.type, type)) {
+        reason = "FusedBinary dest type not supported in MVP";
+        return false;
+    }
+    VmBinaryOp op1, op2;
+    if (!toVmBinaryOp(first.binaryOp, op1)) {
+        reason = "FusedBinary first op not supported";
+        return false;
+    }
+    if (!toVmBinaryOp(second.binaryOp, op2)) {
+        reason = "FusedBinary second op not supported";
+        return false;
+    }
+    uint16_t a, b, c;
+    if (!ctx.resolveOperand(first.lhs, a, reason)) return false;
+    if (!ctx.resolveOperand(first.rhs, b, reason)) return false;
+    if (!ctx.resolveOperand(second.rhs, c, reason)) return false;
+    const uint16_t dest = static_cast<uint16_t>(second.dest.id.value);
+    ctx.observeReg(dest);
+
+    // 与碎片化组合：三个源操作数各中转一次（临时槽 3 个，见 EncoderState）。
+    a = stageFragmentOperand(ctx, prog, 0, a, type, reason);
+    if (!reason.empty()) return false;
+    b = stageFragmentOperand(ctx, prog, 1, b, type, reason);
+    if (!reason.empty()) return false;
+    c = stageFragmentOperand(ctx, prog, 2, c, type, reason);
+    if (!reason.empty()) return false;
+
+    prog.hasFusedBinary = true;
+    emitOpcode(ctx, VmOpcode::FusedBinary, prog.bytecodes);
+    emitU8(prog.bytecodes, static_cast<uint8_t>(op1));
+    emitU8(prog.bytecodes, static_cast<uint8_t>(op2));
+    emitU8(prog.bytecodes, static_cast<uint8_t>(type));
+    emitU16(prog.bytecodes, dest);
+    emitU16(prog.bytecodes, a);
+    emitU16(prog.bytecodes, b);
+    emitU16(prog.bytecodes, c);
     return true;
 }
 
@@ -1014,6 +1314,11 @@ bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     if (!ctx.resolveOperand(ins.rhs, rhs, reason)) return false;
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
+
+    lhs = stageFragmentOperand(ctx, prog, 0, lhs, operandType, reason);
+    if (!reason.empty()) return false;
+    rhs = stageFragmentOperand(ctx, prog, 1, rhs, operandType, reason);
+    if (!reason.empty()) return false;
 
     emitOpcode(ctx, VmOpcode::Compare, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(pred));
@@ -1058,6 +1363,9 @@ bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     if (!ctx.resolveOperand(ins.value, src, reason)) return false;
     const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
     ctx.observeReg(dest);
+
+    src = stageFragmentOperand(ctx, prog, 0, src, from, reason);
+    if (!reason.empty()) return false;
 
     emitOpcode(ctx, VmOpcode::Convert, prog.bytecodes);
     emitU8(prog.bytecodes, static_cast<uint8_t>(from));
@@ -1686,14 +1994,19 @@ bool checkBlockIdCapacity(size_t realCount, size_t syntheticCount, std::string& 
 // ===========================================================================
 std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInstance& instance,
                                              std::string& reason,
-                                             const std::vector<UserIntrinsic>* userIntrinsics)
+                                             const std::vector<UserIntrinsic>* userIntrinsics,
+                                             const VmEncodeOptions& options)
 {
     auto prog = std::make_unique<VmProgram>();
     EncoderState ctx(fn, instance);
     ctx.userIntrinsics = userIntrinsics;
+    ctx.options        = options;
 
     // 合成边先于块 id 分配（合成块索引参与乱序排列的 id 空间）。
     ctx.planSyntheticEdges();
+    // super-op 融合规划（issue #9）：需要相邻指令序列 + 全函数使用计数，与逐指令
+    // 编码解耦，故在 layoutBlocks 之前一次性完成。
+    ctx.planSuperOps();
     // 总块数容量 fail-closed（issue #1133）：块 id 是 u16，真实块 + 合成边块
     // > 0xFFFF 时 id 回绕静默腐蚀跳转目标（旧校验只卡 realCount，合成块不计入）。
     // 在任何 id 产生/消费（assignBlockIndices / encodeExceptionRegions 的 u16

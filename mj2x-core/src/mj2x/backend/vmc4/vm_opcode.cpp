@@ -26,6 +26,7 @@ const char* vmOpcodeName(VmOpcode op)
     case VmOpcode::Switch: return "SWITCH";
     case VmOpcode::SuperInc: return "SUPER_INC";
     case VmOpcode::SuperDec: return "SUPER_DEC";
+    case VmOpcode::FusedBinary: return "FUSED_BINARY";
     }
     return "?";
 }

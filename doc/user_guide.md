@@ -215,6 +215,10 @@ VMC4：
 | `--vmc4-lazy-decrypt` | 程序 blob 分块懒解密（要求 `--vmc4-encrypt-program`）：按 64 字节指令对齐块独立加密，解释器首次取码到某块才原地解密，未执行分支保持密文（内存 dump 只能拿到实际执行过的块）。与 `--vmc4-block-lazy-decrypt` 互斥 |
 | `--vmc4-block-lazy-decrypt` | 程序 blob 块粒度链式懒解密（要求 `--vmc4-encrypt-program`）：按 CFG 块独立加密，块密钥链式派生（首块 prevKey = seed），JNI_OnLoad 不解密、解释器首达才解密并置缓存位。与 `--vmc4-lazy-decrypt` 互斥（同开 fail-closed） |
 | `--vmc4-shuffle-blocks` | 编码期块乱序：方法内 VM 块物理布局按 seed 确定性打乱（Sattolo 单环，恒无不动点），块 id 空间一并打乱，块邻接不再镜像 CFG；语义经间接跳转表重映射保持不变。开启时间接跳转表以 xorshift32 keystream 加密落盘、JNI_OnLoad 一次性原地解密。与 drift / encrypt-program 正交可叠 |
+| `--vmc4-super-ops` | super-operator 融合（issue #9）：相邻指令折叠成复合指令——`Binary(x, ±1)` 折成 SuperInc/SuperDec（去掉 rhs 操作数）；同一基本块内相邻的 `t = a op1 b` + `dest = t op2 c`（t 仅此一处消费）折成一条 FusedBinary，中间值不再以独立寄存器存在。融合后 VM 指令与 JVM 字节码不再 1:1。与 `--vmc4-fragment` 可组合 |
+| `--vmc4-fragment` | 指令碎片化（issue #9）：每条计算指令（Binary/Unary/Compare/Convert）的寄存器操作数先经专用临时槽中转一次，一条指令拆成「Copy + 原指令」多段，每段单独看是无意义的中间搬运。纯编码期变换（不新增 opcode）。**代价：指令数约 2~3 倍，解释执行开销同步上升**，面向高保护诉求按需开启。与 `--vmc4-super-ops` 可组合 |
+
+两项指令级变换的机制、代价与绕过面见 [doc/techniques/vm_super_ops.md](techniques/vm_super_ops.md)。
 | `--vmc4-trace-surface <file>` | 导出 VMC4 期望 trace surface（mjdbg 红队契约的实例描述清单）到文件；仅 `--backend vmc4` 有效 |
 
 通用（RegC/VMC4）：

@@ -44,6 +44,18 @@ namespace mj2x {
 struct RegFunction;
 class VmInstance;
 
+/// @brief 编码期选项（issue #9：super-ops / 指令碎片化）。
+///
+/// @details
+/// 两项都是默认关、不被其他开关联动（与 --vmc4-* 现有开关同一约定）。
+/// - superOps：相邻指令折叠成复合指令（±1 → SuperInc/SuperDec）
+/// - fragment：一条指令拆成多条等价碎片，单独看每条是无意义中间态
+struct VmEncodeOptions
+{
+    bool superOps = false;   ///< super-operator 折叠（默认关）
+    bool fragment = false;   ///< 指令碎片化（默认关）
+};
+
 /// @brief RegIR → VM bytecode 编码器。
 class VmEncoder
 {
@@ -56,9 +68,10 @@ public:
     /// @param userIntrinsics 用户自定义 intrinsic（issue #818）；nullptr 时不匹配。
     /// @return 成功返回 VmProgram；失败返回 nullptr（含 MVP 不支持的 family）。
     static std::unique_ptr<VmProgram> encode(const RegFunction& fn, const VmInstance& instance,
-                                             std::string& reason,
+                                             std::string&                   reason,
                                              const std::vector<UserIntrinsic>* userIntrinsics =
-                                                 nullptr);
+                                                 nullptr,
+                                             const VmEncodeOptions& options = {});
 };
 
 /// @brief 块 id 容量校验：总块数（真实 + 合成）必须落在 u16 表示域内（#1133）。

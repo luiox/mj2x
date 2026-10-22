@@ -44,6 +44,17 @@ MJ2X_VMC4_API int64_t mj2x_vm_rem_i64(int64_t a, int64_t b);
 MJ2X_VMC4_API int32_t mj2x_vm_f2i32(double v);
 MJ2X_VMC4_API int64_t mj2x_vm_f2i64(double v);
 
+// ---- 单步二元运算（FusedBinary super-op 的两段共用，issue #9） ----
+// 语义与解释器 BINARY handler 逐条一致：整数路径含 JVM 环绕与 I32 逐步截断
+// （未折叠形态下中间值先存 regs[t].i 再读，截断发生在存储点——折叠后必须
+// 在 helper 内收窄，否则两步之间的位宽语义丢失）、除零/除模抛
+// ArithmeticException 并返回 1（调用方 goto mj2x_vm_exc）；浮点路径含 F32 的
+// float 精度逐步舍入，不抛异常。op/type 编码与 VM 指令操作数一致。
+MJ2X_VMC4_API int mj2x_vm_bin_step_i(JNIEnv* env, int64_t x, int64_t y, unsigned char op,
+                                     unsigned char type, int64_t* out);
+MJ2X_VMC4_API int mj2x_vm_bin_step_f(JNIEnv* env, double x, double y, unsigned char op,
+                                     unsigned char type, double* out);
+
 // ---- 异常抛出与匹配 ----
 MJ2X_VMC4_API void mj2x_vm_throw_npe(JNIEnv* env, const char* msg);
 MJ2X_VMC4_API void mj2x_vm_throw(JNIEnv* env, void* value);

@@ -52,6 +52,7 @@
 | vmc4 | `vmc4_alias`（0..3）/ `vmc4_bogus`（0..4）/ `vmc4_drift`（0..4）/ `vmc4_drift_period`（≥1） | integer | `1` / `1` / `0` / `16` |
 | vmc4 | `vmc4_trace_surface` | string | — |
 | vmc4 | `vmc4_encrypt_program` / `vmc4_lazy_decrypt` / `vmc4_block_lazy_decrypt` / `vmc4_shuffle_blocks` | boolean（两个懒解密档要求 `vmc4_encrypt_program` 且互斥） | `false` |
+| vmc4 | `vmc4_super_ops` / `vmc4_fragment` | boolean（相邻指令融合 / 指令碎片化，可组合；fragment 指令数约 2~3 倍） | `false` |
 | strings | `strings_encrypt` | boolean | `false` |
 | runtime | `runtime_protection` | `none` \| `log` \| `delay` \| `fake` \| `terminate` | `none` |
 | runtime | `runtime_protection_step`（≥1）/ `runtime_protection_delay_ms`（≥0） | integer | `16` / `500` |
