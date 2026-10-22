@@ -64,6 +64,9 @@ public:
     }
 
 private:
+    /// 当前类是否在混淆作用域内（--obf-scope-include/exclude）。
+    bool currentClassInObfuscationScope(const std::string& className, CompilerIndex* index);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 

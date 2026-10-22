@@ -559,6 +559,65 @@ bool json_native_class_glob(CliOptions& o, const json& j, const char* key, bool 
     target      = std::move(globs);
     return true;
 }
+// 混淆作用域 glob（--obf-scope-include/--obf-scope-exclude，issue #8）。语义与
+// --native-include/exclude 完全一致（同一套 classPassesFilter），只作用在"要不要
+// 施加 RegIR 变换"而非"进不进编译集"。
+bool cli_obf_scope_glob(CliOptions& o, const char* v, const char* flag, bool include,
+                        std::string& e)
+{
+    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {flag}); return false; }
+    bool& seen = include ? o.cliObfScopeIncludeSeen : o.cliObfScopeExcludeSeen;
+    if (!seen) {
+        (include ? o.obfScopeIncludes : o.obfScopeExcludes).clear();
+        seen = true;
+    }
+    std::vector<std::string> globs;
+    if (!normalizeClassGlobs({std::string(v)}, globs)) {
+        e = trfs("mj2x.cli.err.class_glob_empty", {flag});
+        return false;
+    }
+    auto& target = include ? o.obfScopeIncludes : o.obfScopeExcludes;
+    for (auto& glob : globs) target.push_back(std::move(glob));
+    return true;
+}
+bool json_obf_scope_glob(CliOptions& o, const json& j, const char* key, bool include,
+                         std::string& e)
+{
+    if (!j.is_array()) { e = trfs("mj2x.cli.err.cfg_type_strarr", {key}); return false; }
+    std::vector<std::string> raw;
+    for (const auto& item : j) {
+        if (!item.is_string()) {
+            e = trfs("mj2x.cli.err.cfg_arr_nonstr", {key});
+            return false;
+        }
+        raw.push_back(item.get<std::string>());
+    }
+    std::vector<std::string> globs;
+    if (!normalizeClassGlobs(raw, globs)) {
+        e = trfs("mj2x.cli.err.class_glob_empty", {key});
+        return false;
+    }
+    auto& target = include ? o.obfScopeIncludes : o.obfScopeExcludes;
+    target      = std::move(globs);
+    return true;
+}
+bool cli_obf_scope_include(CliOptions& o, const char* v, std::string& e)
+{
+    return cli_obf_scope_glob(o, v, "--obf-scope-include", true, e);
+}
+bool json_obf_scope_include(CliOptions& o, const json& j, std::string& e)
+{
+    return json_obf_scope_glob(o, j, "obf_scope_include", true, e);
+}
+bool cli_obf_scope_exclude(CliOptions& o, const char* v, std::string& e)
+{
+    return cli_obf_scope_glob(o, v, "--obf-scope-exclude", false, e);
+}
+bool json_obf_scope_exclude(CliOptions& o, const json& j, std::string& e)
+{
+    return json_obf_scope_glob(o, j, "obf_scope_exclude", false, e);
+}
+
 bool cli_native_include(CliOptions& o, const char* v, std::string& e)
 {
     return cli_native_class_glob(o, v, "--native-include", true, e);
@@ -857,6 +916,8 @@ const ParamDef kParamTable[] = {
     PARAM("selection.native_annotation", "--native-annotation", "native_annotation", ParamType::String, nullptr, 0, 0, "", "selection", "", cli_nativeAnnotation, json_nativeAnnotation),
     PARAM("selection.native_method_prefixes", "--native-method-prefix", "native_method_prefixes", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_method_prefix, json_native_method_prefix),
     PARAM("selection.native_include", "--native-include", "native_include", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_include, json_native_include),
+    PARAM("obf_scope.include", "--obf-scope-include", "obf_scope_include", ParamType::StringList, nullptr, 0, 0, "", "obf_scope", "", cli_obf_scope_include, json_obf_scope_include),
+    PARAM("obf_scope.exclude", "--obf-scope-exclude", "obf_scope_exclude", ParamType::StringList, nullptr, 0, 0, "", "obf_scope", "", cli_obf_scope_exclude, json_obf_scope_exclude),
     PARAM("selection.native_exclude", "--native-exclude", "native_exclude", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_exclude, json_native_exclude),
     // compile
     PARAM("compile.opt_level", "--native-opt-level", "native_opt_level", ParamType::Enum, "0,1,2,3,s", 0, 0, "2", "compile", "", cli_nativeOptLevel, json_nativeOptLevel),

@@ -54,6 +54,11 @@ struct CliOptions
     /// `*` 不跨段、`**` 跨段；`/` 归一化为 `.`。见 native_class_filter_preprocessor.hpp。
     std::vector<std::string> nativeClassIncludes;
     std::vector<std::string> nativeClassExcludes;
+    /// 混淆作用域（issue #8）：按类级 glob 收窄"哪些类受 RegIR 变换影响"。
+    /// 语义与 nativeClassIncludes/Excludes 一致（exclude 优先、include 空 = 全部）。
+    /// 两者都为空时零行为变化。
+    std::vector<std::string> obfScopeIncludes;
+    std::vector<std::string> obfScopeExcludes;
     /// native 编译外部进程墙钟超时（秒；0 = 不限时，默认 900，对标 jvmtp
     /// `compiler.timeout`）。每次外呼（编译器/link/llc/vcvars 探针/xmake/
     /// pack hook）独立计时，超时整树终止并以非 0 退出。见
@@ -118,6 +123,8 @@ struct CliOptions
     bool                     cliNativePrefixSeen  = false;
     bool                     cliNativeIncludeSeen = false;
     bool                     cliNativeExcludeSeen = false;
+    bool                     cliObfScopeIncludeSeen = false;
+    bool                     cliObfScopeExcludeSeen = false;
 };
 
 /// @brief 参数类型。

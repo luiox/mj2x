@@ -67,6 +67,15 @@ struct CompilerClass
     /// 条目、其他类可能引用它），但方法级选择与 <init>/<clinit> 搬运入口
     /// 一律跳过。置位者：NativeClassFilterPreprocessor。
     bool                                        filteredOut = false;
+    /// @brief 是否在**混淆作用域**内（--obf-scope-include/exclude）。
+    ///
+    /// @details
+    /// 与 filteredOut 正交：filteredOut 决定"进不进 native 编译集"，本标志决定
+    /// "编译出来要不要施加 RegIR 变换"。作用域外的类仍编译成 native，只是跳过
+    /// MBA / opaque / CFF / 常量隐藏 / 调用间接化——产物与未开混淆时一致。
+    /// 默认 true（不给任何作用域模式时零行为变化）。
+    /// 置位者：ObfuscationScopePreprocessor。
+    bool                                        inObfuscationScope = true;
 };
 
 }   // namespace mj2x
