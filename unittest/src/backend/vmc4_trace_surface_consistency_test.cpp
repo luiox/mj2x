@@ -33,9 +33,10 @@ using mj2x::vmOpcodeName;
 const VmOpcode kSupportedOpcodes[] = {
     VmOpcode::Halt,       VmOpcode::Copy,     VmOpcode::Unary,    VmOpcode::Binary,
     VmOpcode::Compare,    VmOpcode::Convert,  VmOpcode::Jump,     VmOpcode::Branch,
-    VmOpcode::Return,     VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
-    VmOpcode::LoadField,  VmOpcode::StoreField, VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
-    VmOpcode::Allocate,   VmOpcode::Intrinsic,  VmOpcode::Throw,  VmOpcode::Switch,
+    VmOpcode::Return,     VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::FusedBinary,
+    VmOpcode::Call,       VmOpcode::LoadField, VmOpcode::StoreField, VmOpcode::ArrayLoad,
+    VmOpcode::ArrayStore, VmOpcode::Allocate,  VmOpcode::Intrinsic,  VmOpcode::Throw,
+    VmOpcode::Switch,
 };
 
 Vmc4Options makeOpts(uint64_t seed, int alias, int bogus, int drift = 0, int period = 16)

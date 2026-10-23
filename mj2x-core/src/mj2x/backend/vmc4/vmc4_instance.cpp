@@ -62,6 +62,7 @@ static const VmOpcode kAllOpcodes[] = {
     VmOpcode::Return,
     VmOpcode::SuperInc,
     VmOpcode::SuperDec,
+    VmOpcode::FusedBinary,
     VmOpcode::Call,
     VmOpcode::LoadField,
     VmOpcode::StoreField,
@@ -321,12 +322,12 @@ void VmInstance::buildHandlerOrder()
 {
     // 计算/控制流 + object-op opcode（不含 Halt），与 kAllOpcodes 的子集一致。
     handlerOrder_ = {VmOpcode::Copy,    VmOpcode::Unary,     VmOpcode::Binary,
-                     VmOpcode::Compare, VmOpcode::Convert,   VmOpcode::Jump,
-                     VmOpcode::Branch,  VmOpcode::Return,    VmOpcode::SuperInc,
-                     VmOpcode::SuperDec, VmOpcode::Call,     VmOpcode::LoadField,
-                     VmOpcode::StoreField, VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
-                     VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw,
-                     VmOpcode::Switch};
+                     VmOpcode::Compare,  VmOpcode::Convert,   VmOpcode::Jump,
+                     VmOpcode::Branch,   VmOpcode::Return,    VmOpcode::SuperInc,
+                     VmOpcode::SuperDec, VmOpcode::FusedBinary, VmOpcode::Call,
+                     VmOpcode::LoadField, VmOpcode::StoreField, VmOpcode::ArrayLoad,
+                     VmOpcode::ArrayStore, VmOpcode::Allocate, VmOpcode::Intrinsic,
+                     VmOpcode::Throw, VmOpcode::Switch};
     // 用独立种子段洗牌，避免与 opcode 映射的随机流耦合。
     SplitMix64 rng(instanceSeed_ ^ 0x9E3779B97F4A7C15ull);
     for (size_t i = handlerOrder_.size(); i > 1; --i) {

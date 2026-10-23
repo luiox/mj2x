@@ -269,6 +269,33 @@ const char* kHandlerSuperDec =
     "            else if (type == 2) regs[dest].f = (float)((float)regs[src].f - 1.0f);\n"
     "            else regs[dest].f = regs[src].f - 1.0;\n";
 
+/// FUSED_BINARY: dest = (a op1 b) op2 c（相邻双 Binary 融合，issue #9）。
+///
+/// 两步运算各经一个运行时 helper 完成（mj2x_vm_bin_step_i/_f，与 BINARY handler
+/// 同语义：整数环绕、I32 逐步截断、除零抛 ArithmeticException、F32 的 float
+/// 精度逐步舍入）。任一 helper 报抛异常时 goto mj2x_vm_exc 进入异常检查点（与
+/// BINARY handler 同一通道）。helper 落在 VMC4 运行时（mj2x-rt），不按 TU 发射
+/// ——handler 表对每个解释器恒全量发射，按需发射 helper 会留下未定义符号。
+const char* kHandlerFusedBinary =
+    "            unsigned char op1 = code[pc++];\n"
+    "            unsigned char op2 = code[pc++];\n"
+    "            unsigned char type = code[pc++];\n"
+    "            unsigned int dest = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int a = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int b = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            unsigned int c = (unsigned)code[pc] | ((unsigned)code[pc+1] << 8); pc += 2;\n"
+    "            if (type == 0 || type == 1) {\n"
+    "                int64_t t = 0, r = 0;\n"
+    "                if (mj2x_vm_bin_step_i(env, regs[a].i, regs[b].i, op1, type, &t)) goto mj2x_vm_exc;\n"
+    "                if (mj2x_vm_bin_step_i(env, t, regs[c].i, op2, type, &r)) goto mj2x_vm_exc;\n"
+    "                regs[dest].i = r;\n"
+    "            } else {\n"
+    "                double t = 0, r = 0;\n"
+    "                mj2x_vm_bin_step_f(env, regs[a].f, regs[b].f, op1, type, &t);\n"
+    "                mj2x_vm_bin_step_f(env, t, regs[c].f, op2, type, &r);\n"
+    "                regs[dest].f = r;\n"
+    "            }\n";
+
 /// CALL: 经函数指针表分派到 per-callsite JNI helper（Phase 2.0）。
 /// argBuf[32] 承载参数寄存器索引（argCount 上限 32，见 encodeCall）。
 /// handler 引用 exec 参数 env 与 call_table（SwitchTable 等 dispatcher 内直接可见；
@@ -381,8 +408,7 @@ const char* kHandlerSwitch =
     "            }\n"
     "            pc = targets[target];\n";
 
-/// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。
-/// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
+/// opcode → handler 片段表（按 VmOpcode 语义索引，实例字节由 VmInstance 映射）。/// bodyAlt 为等价变形形态（Phase 3 handler 形态维度），可为 nullptr（无变形）。
 struct HandlerEntry
 {
     VmOpcode    opcode;
@@ -402,6 +428,7 @@ const HandlerEntry kHandlers[] = {
     {VmOpcode::Return,   "RETURN",     kHandlerReturn},
     {VmOpcode::SuperInc, "SUPER_INC",  kHandlerSuperInc},
     {VmOpcode::SuperDec, "SUPER_DEC",  kHandlerSuperDec},
+    {VmOpcode::FusedBinary, "FUSED_BINARY", kHandlerFusedBinary},
     {VmOpcode::Call,     "CALL",       kHandlerCall},
     {VmOpcode::LoadField,  "LOAD_FIELD",  kHandlerLoadField},
     {VmOpcode::StoreField, "STORE_FIELD", kHandlerStoreField},

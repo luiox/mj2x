@@ -1244,6 +1244,8 @@ int main(int argc, char** argv)
             vmc4Opts.programLazyDecrypt = options.vmc4LazyDecrypt;
             vmc4Opts.programBlockLazyDecrypt = options.vmc4BlockLazyDecrypt;
             vmc4Opts.shuffleBlocks = options.vmc4ShuffleBlocks;
+            vmc4Opts.superOps = options.vmc4SuperOps;
+            vmc4Opts.fragment = options.vmc4Fragment;
             if (options.runtimeProtection != "none") {
                 vmc4Opts.runtimeProtection.action  =
                     parseRuntimeProtectionAction(options.runtimeProtection);

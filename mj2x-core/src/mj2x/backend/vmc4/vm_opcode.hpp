@@ -77,6 +77,17 @@ enum class VmOpcode : uint8_t
     SuperInc   = 0x23,   ///< regs[dest] = regs[src] + 1           [type:u8][dest:u16][src:u16]
     SuperDec   = 0x24,   ///< regs[dest] = regs[src] - 1           [type:u8][dest:u16][src:u16]
 
+    /// @brief 相邻双 Binary 融合（issue #9，--vmc4-super-ops）。
+    ///
+    /// @details
+    /// `regs[dest] = (regs[a] op1 regs[b]) op2 regs[c]`——把同一基本块内相邻的
+    /// 两条 Binary（前一条的 dest 仅被后一条消费）折成一条复合指令，handler 内联
+    /// 展开两步运算。融合后 VM 指令与 JVM 字节码不再 1:1，且中间值不再以独立
+    /// 寄存器存在（只活在 handler 的局部变量里）。
+    ///
+    /// 编码：[op1:u8][op2:u8][type:u8][dest:u16][a:u16][b:u16][c:u16]
+    FusedBinary = 0x25,
+
     // --- 以下 family 预留，MVP fail-closed ---
     LoadField  = 0x30,
     StoreField = 0x31,
@@ -363,6 +374,9 @@ struct VmProgram
     std::vector<VmArrayRef>      arrayStoreRefs; ///< ArrayStore 元素类型引用（Phase 2.A）
     std::vector<VmAllocRef>      allocRefs;      ///< Allocate 分配引用（Phase 2.A）
     bool                         hasArrayLength = false;   ///< 含 array.length intrinsic（Phase 2.A）
+    /// 含 FusedBinary super-op（issue #9）：发射侧据此决定是否生成融合 handler
+    /// 依赖的 TU 级静态 helper（不生成则无未使用函数告警）。
+    bool                         hasFusedBinary = false;
     std::vector<VmIntrinsicRef>  intrinsics;     ///< Intrinsic 引用表（Phase 2.D，按 name 去重）
     std::vector<VmStringLiteral> stringLiterals; ///< String LDC 常量槽（Phase 2.E，按内容去重）
     std::vector<VmClassLiteral>  classLiterals;  ///< .class 字面量常量槽（按内部名去重）

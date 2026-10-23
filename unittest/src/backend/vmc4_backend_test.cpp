@@ -79,7 +79,8 @@ std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char*
 /// 完整编码管线：MethodNode -> VmProgram（复用 regc_test 的 emitRegC 结构，末段换 VmEncoder）。
 std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
                                             const VmInstance& instance, std::string& reason,
-                                            std::unique_ptr<RegFunction>* outReg = nullptr)
+                                            std::unique_ptr<RegFunction>* outReg = nullptr,
+                                            const VmEncodeOptions& encodeOptions = {})
 {
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
@@ -92,7 +93,7 @@ std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
     auto        reg = lowering.lower(*ssa, reason);
     if (!reg) return nullptr;
     eliminateDeadRegInstructions(*reg);
-    auto encoded = VmEncoder::encode(*reg, instance, reason);
+    auto encoded = VmEncoder::encode(*reg, instance, reason, nullptr, encodeOptions);
     // 出参移交所有权：RegFunction 由调用方持有（此前交裸指针、函数返回即悬垂，
     // ASan heap-use-after-free 实证——DEV-8 测试合同 ①）。
     if (outReg) *outReg = std::move(reg);
@@ -104,11 +105,12 @@ std::unique_ptr<VmProgram> encodeMethod(const std::string& name, const std::stri
                                         std::initializer_list<AbstractInsnNode*> insns,
                                         int maxStack, int maxLocals, const VmInstance& instance,
                                         std::string&                 reason,
-                                        std::unique_ptr<RegFunction>* outReg = nullptr)
+                                        std::unique_ptr<RegFunction>* outReg = nullptr,
+                                        const VmEncodeOptions&        encodeOptions = {})
 {
     auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name.c_str(), desc.c_str(),
                          insns, maxStack, maxLocals);
-    return encodeMethodNode(std::move(mn), instance, reason, outReg);
+    return encodeMethodNode(std::move(mn), instance, reason, outReg, encodeOptions);
 }
 
 /// 与发射器 emitOpcodeByteOrChain 同构：`opcode == b1 || opcode == b2 ...`。
@@ -179,6 +181,85 @@ uint32_t maxComputeRegister(const RegFunction& reg)
     return maxId;
 }
 
+/// 支持集全集（须与 vmc4_instance.cpp kAllOpcodes 一致；测试侧多处反查语义用）。
+const std::vector<VmOpcode>& allOpcodesForTest()
+{
+    static const std::vector<VmOpcode> kAllOps = {
+        VmOpcode::Halt,        VmOpcode::Copy,     VmOpcode::Unary,
+        VmOpcode::Binary,      VmOpcode::Compare,  VmOpcode::Convert,
+        VmOpcode::Jump,        VmOpcode::Branch,   VmOpcode::Return,
+        VmOpcode::SuperInc,    VmOpcode::SuperDec, VmOpcode::FusedBinary,
+        VmOpcode::Call,        VmOpcode::LoadField, VmOpcode::StoreField,
+        VmOpcode::ArrayLoad,   VmOpcode::ArrayStore, VmOpcode::Allocate,
+        VmOpcode::Intrinsic,   VmOpcode::Throw,    VmOpcode::Switch,
+    };
+    return kAllOps;
+}
+
+/// @brief 原始 opcode 字节 → 语义（无别名/drift 时即 canonical 反查）。
+/// 不属于支持集时返回 VmOpcode::Halt 之外的未定义值不可表达，故以
+/// std::optional 表达"未知"。
+std::optional<VmOpcode> semanticForByteForTest(const VmInstance& inst, uint8_t raw)
+{
+    for (const auto cand : allOpcodesForTest()) {
+        if (inst.opcodeFor(cand) == raw) return cand;
+    }
+    return std::nullopt;
+}
+
+/// 按 VmOpcode 查 operand 长度（u8/u16 混合，与 vm_interpreter_emit.cpp 的
+/// handler 片段一致），用于把字节流逐指令解码。未知 opcode 返回 -1。
+int operandLenForTest(VmOpcode op)
+{
+    switch (op) {
+    case VmOpcode::Halt:      return 0;
+    case VmOpcode::Jump:      return 2;
+    case VmOpcode::Return:    return 3;   // has_value:u8 + src:u16
+    case VmOpcode::Branch:    return 6;   // cond:u16 + true:u16 + false:u16
+    case VmOpcode::Copy:      return 5;   // type:u8 + dest:u16 + src:u16
+    case VmOpcode::Unary:     return 6;   // op:u8 + type:u8 + dest:u16 + src:u16
+    case VmOpcode::Convert:   return 6;   // from:u8 + to:u8 + dest:u16 + src:u16
+    case VmOpcode::Binary:    return 8;   // op:u8 + type:u8 + dest:u16 + lhs:u16 + rhs:u16
+    case VmOpcode::Compare:   return 8;   // pred:u8 + type:u8 + dest:u16 + lhs:u16 + rhs:u16
+    case VmOpcode::SuperInc:  return 5;
+    case VmOpcode::SuperDec:  return 5;
+    case VmOpcode::FusedBinary: return 11;  // op1:u8 + op2:u8 + type:u8 + dest/a/b/c:u16×4
+    case VmOpcode::LoadField:  return 7;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=0)
+    case VmOpcode::StoreField: return 9;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=1) + valueIdx:u16
+    case VmOpcode::ArrayLoad:  return 9;   // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=1) + indexIdx:u16
+    case VmOpcode::ArrayStore: return 11;  // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=2) + indexIdx:u16 + valueIdx:u16
+    case VmOpcode::Allocate:  return 7;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8（Object=0；Array=1 +lenIdx）
+    case VmOpcode::Intrinsic: return 7;   // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=0)
+    default:                  return -1;  // Call/Throw/Switch：变长或未覆盖，停扫
+    }
+}
+
+/// @brief 按指令长度表线性扫描字节流，统计某语义的指令条数。
+///
+/// @details 指令长度取自 operandLenForTest（与 vm_interpreter_emit.cpp 的 handler
+/// 片段同源），故本函数与解释器的取指逻辑天然一致。**不能用裸 std::find/
+/// std::count 查 opcode 字节**——operand 字节（寄存器索引/常量位模式）会与某
+/// 语义的 canonical 字节碰撞，opcode 集大小变化会移动 canonical 赋值，裸查必然
+/// 误报（SuperOpFoldsIncDec 的历史注释已记此坑）。遇到长度未知的 opcode 即停扫
+/// 并返回已统计值——调用方只用它比较「开关开/关」两种形态的相对数量，绝对全集
+/// 不参与断言。
+size_t countInstructionsForTest(const VmProgram& prog, const VmInstance& instance, VmOpcode op)
+{
+    const auto&   code = prog.bytecodes;
+    const uint8_t want = instance.opcodeFor(op);
+    size_t        count = 0;
+    for (size_t pc = 0; pc < code.size();) {
+        const uint8_t         raw        = code[pc];
+        const std::optional<VmOpcode> semantic = semanticForByteForTest(instance, raw);
+        if (!semantic) break;   // 未知 opcode：停扫（见上面的约定）
+        const int operandLen = operandLenForTest(*semantic);
+        if (operandLen < 0) break;
+        if (raw == want) ++count;
+        pc += 1u + static_cast<size_t>(operandLen);
+    }
+    return count;
+}
+
 }   // namespace
 
 // ===========================================================================
@@ -242,6 +323,198 @@ TEST(Vmc4BackendTest, EncodesLoopMethod)
     EXPECT_FALSE(prog->bytecodes.empty());
     // 循环意味着至少 2 个 block（loop body + exit），blockTargets 应反映这点。
     EXPECT_GE(prog->blockTargets.size(), 2u);
+}
+
+// ===========================================================================
+// issue #9：指令碎片化 —— 一条计算指令拆成「Copy + 原指令」多段。
+// ===========================================================================
+
+// issue #9：碎片化把一条 Binary 拆成两条 Copy + 原 Binary；关闭时与历史形态
+// 逐字节一致（零成本路径）。
+TEST(Vmc4BackendTest, FragmentExpandsBinaryIntoCopies)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    // int f(int a, int b) { return (a + b) * (a - b); } —— 三条 Binary，无 ±1。
+    const auto encode = [&](const VmEncodeOptions& eo) {
+        return encodeMethod("fm", "(II)I",
+                            {
+                                new VarInsnNode(Opcodes::ILOAD, 0),
+                                new VarInsnNode(Opcodes::ILOAD, 1),
+                                new InsnNode(Opcodes::IADD),
+                                new VarInsnNode(Opcodes::ILOAD, 0),
+                                new VarInsnNode(Opcodes::ILOAD, 1),
+                                new InsnNode(Opcodes::ISUB),
+                                new InsnNode(Opcodes::IMUL),
+                                new InsnNode(Opcodes::IRETURN),
+                            },
+                            3, 2, instance, reason, nullptr, eo);
+    };
+
+    auto plain = encode({});
+    ASSERT_NE(plain, nullptr) << reason;
+    const size_t plainBinary = countInstructionsForTest(*plain, instance, VmOpcode::Binary);
+    const size_t plainCopy   = countInstructionsForTest(*plain, instance, VmOpcode::Copy);
+    ASSERT_EQ(plainBinary, 3u) << "three Binaries expected in the plain form";
+
+    VmEncodeOptions encOpts;
+    encOpts.fragment = true;
+    auto frag = encode(encOpts);
+    ASSERT_NE(frag, nullptr) << reason;
+    // 每条 Binary 前多两条 Copy（lhs/rhs 各一次中转）。
+    EXPECT_EQ(countInstructionsForTest(*frag, instance, VmOpcode::Binary), plainBinary)
+        << "fragmentation must not change the Binary count";
+    EXPECT_EQ(countInstructionsForTest(*frag, instance, VmOpcode::Copy),
+              plainCopy + 2 * plainBinary)
+        << "each Binary must gain two staging Copies";
+    // 碎片化在寄存器文件末端预留 3 个临时槽（FusedBinary 三操作数上界），
+    // 不能与常量槽/计算寄存器重叠：常量槽必须仍高于全部计算寄存器。
+    std::unique_ptr<RegFunction> reg;
+    auto                         withReg = encode(encOpts);
+    ASSERT_NE(withReg, nullptr) << reason;
+    (void)withReg;
+    // 重新编码一次以取回 RegFunction（上面的调用未请求出参）。
+    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "fm", "(II)I",
+                         {
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new VarInsnNode(Opcodes::ILOAD, 1),
+                             new InsnNode(Opcodes::IADD),
+                             new VarInsnNode(Opcodes::ILOAD, 0),
+                             new VarInsnNode(Opcodes::ILOAD, 1),
+                             new InsnNode(Opcodes::ISUB),
+                             new InsnNode(Opcodes::IMUL),
+                             new InsnNode(Opcodes::IRETURN),
+                         },
+                         3, 2);
+    auto p2 = encodeMethodNode(std::move(mn), instance, reason, &reg, encOpts);
+    ASSERT_NE(p2, nullptr) << reason;
+    ASSERT_NE(reg, nullptr);
+    const uint32_t maxCompute = maxComputeRegister(*reg);
+    for (const auto& e : frag->constantPool) {
+        EXPECT_GT(e.destSlot, maxCompute) << "constant slot must stay above compute registers";
+    }
+    EXPECT_GE(frag->numRegs, maxCompute + frag->constantPool.size() + 3)
+        << "register file must cover compute + constants + 3 fragment temps";
+}
+
+// issue #9：碎片化关闭时字节流与历史形态逐字节一致（默认关、零成本）。
+TEST(Vmc4BackendTest, FragmentOffByDefaultIsByteIdentical)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    const auto encode = [&](const VmEncodeOptions& eo) {
+        return encodeMethod("fm2", "(II)I",
+                            {
+                                new VarInsnNode(Opcodes::ILOAD, 0),
+                                new VarInsnNode(Opcodes::ILOAD, 1),
+                                new InsnNode(Opcodes::IADD),
+                                new InsnNode(Opcodes::INEG),
+                                new InsnNode(Opcodes::IRETURN),
+                            },
+                            2, 2, instance, reason, nullptr, eo);
+    };
+    auto withDefault  = encode({});
+    ASSERT_NE(withDefault, nullptr) << reason;
+    auto explicitOff  = encode(VmEncodeOptions{});   // 全 false
+    ASSERT_NE(explicitOff, nullptr) << reason;
+    EXPECT_EQ(withDefault->bytecodes, explicitOff->bytecodes)
+        << "default-off must be byte-identical to explicit-off";
+    EXPECT_EQ(withDefault->numRegs, explicitOff->numRegs);
+}
+
+// issue #9：碎片化与 super-ops 可组合——±1 折叠后的 SuperInc 同样被碎片化
+// （操作数中转一次），不存在"折叠过的指令反而没被打散"的漏网岛。
+TEST(Vmc4BackendTest, FragmentComposesWithSuperOps)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions encOpts;
+    encOpts.superOps = true;
+    encOpts.fragment = true;
+    auto prog = encodeMethod("inc", "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason, nullptr, encOpts);
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::SuperInc), 1u)
+        << "x+1 must still fold to SuperInc when composed with fragment";
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::Copy), 1u)
+        << "the folded SuperInc operand must be staged through one Copy";
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::Binary), 0u)
+        << "no plain Binary may remain";
+}
+
+// issue #9：FusedBinary 与碎片化组合——三个源操作数各中转一次。
+TEST(Vmc4BackendTest, FragmentComposesWithFusedBinary)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions encOpts;
+    encOpts.superOps = true;
+    encOpts.fragment = true;
+    auto prog = encodeMethod("chain", "(III)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             3, 3, instance, reason, nullptr, encOpts);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_TRUE(prog->hasFusedBinary);
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::FusedBinary), 1u);
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::Copy), 3u)
+        << "three fused operands must each be staged through one Copy";
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::Binary), 0u);
+}
+
+// issue #9：中间值被多处消费时不融合（唯一消费是融合的前提——否则折叠后
+// 有代码读不到该值）。
+TEST(Vmc4BackendTest, FusedBinaryRequiresSingleUseIntermediate)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions encOpts;
+    encOpts.superOps = true;
+    // int f(int a, int b, int c) {
+    //     int t = a + b;
+    //     int u = t * c;
+    //     return t + u;      // t 被第二处消费 → 不得融合
+    // }
+    auto prog = encodeMethod("reuse", "(III)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 3),
+                                 new VarInsnNode(Opcodes::ILOAD, 3),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new VarInsnNode(Opcodes::ISTORE, 4),
+                                 new VarInsnNode(Opcodes::ILOAD, 3),
+                                 new VarInsnNode(Opcodes::ILOAD, 4),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             3, 5, instance, reason, nullptr, encOpts);
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_FALSE(prog->hasFusedBinary) << "multi-use intermediate must not be fused";
 }
 
 // ===========================================================================
@@ -663,7 +936,8 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
     for (const auto op : {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
                           VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
                           VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
-                          VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
+                          VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::FusedBinary,
+                          VmOpcode::Call,
                           VmOpcode::LoadField, VmOpcode::StoreField,
                           VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
                           VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw,
@@ -695,7 +969,8 @@ TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
 }
 
 // P2-2：映射是支持集上的双射（互不相同）+ handler 顺序是排列。
-// Phase 2.C 起支持集 = 18 语义；Switch（Phase 3 增补）加入后 = 19。
+// Phase 2.C 起支持集 = 18 语义；Switch（Phase 3 增补）加入后 = 19；
+// FusedBinary（issue #9 super-ops）加入后 = 20。
 TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
 {
     Vmc4Options opts;
@@ -713,14 +988,15 @@ TEST(Vmc4BackendTest, OpcodeMappingIsBijectiveOnSupportedSet)
     EXPECT_EQ(bytes[0], instance.haltByte());
 
     const auto& order = instance.handlerOrder();
-    EXPECT_EQ(order.size(), 19u) << "handler order covers the 19 supported opcodes";
+    EXPECT_EQ(order.size(), 20u) << "handler order covers the 20 supported opcodes";
     std::vector<VmOpcode> sortedOrder = order;
     std::sort(sortedOrder.begin(), sortedOrder.end(),
               [](VmOpcode l, VmOpcode r) { return static_cast<uint8_t>(l) < static_cast<uint8_t>(r); });
     std::vector<VmOpcode> expected = {VmOpcode::Copy,   VmOpcode::Unary,  VmOpcode::Binary,
                                       VmOpcode::Compare, VmOpcode::Convert, VmOpcode::Jump,
                                       VmOpcode::Branch, VmOpcode::Return,  VmOpcode::SuperInc,
-                                      VmOpcode::SuperDec, VmOpcode::LoadField, VmOpcode::StoreField,
+                                      VmOpcode::SuperDec, VmOpcode::FusedBinary,
+                                      VmOpcode::LoadField, VmOpcode::StoreField,
                                       VmOpcode::ArrayLoad, VmOpcode::ArrayStore, VmOpcode::Call,
                                       VmOpcode::Allocate, VmOpcode::Intrinsic, VmOpcode::Throw,
                                       VmOpcode::Switch};
@@ -1427,6 +1703,7 @@ TEST(Vmc4BackendTest, BogusHandlersEmittedButNotReferenced)
 }
 
 // P3-7：super-operator 折叠——Binary(x,1,Add/Sub) → SuperInc/SuperDec。
+// issue #9 起该折叠由 --vmc4-super-ops 门控（默认关），故显式开启后再断言。
 TEST(Vmc4BackendTest, SuperOpFoldsIncDec)
 {
     Vmc4Options opts;
@@ -1434,30 +1711,228 @@ TEST(Vmc4BackendTest, SuperOpFoldsIncDec)
     opts.aliasCount = 0;
     VmInstance instance(opts);
     std::string reason;
-    // int inc(int x) { return x + 1; }  int dec(int x) { return x - 1; }
-    auto prog = encodeMethod("incDec", "(I)I",
+    VmEncodeOptions encOpts;
+    encOpts.superOps = true;
+    // int incDec(int x, int y) { return (x + 1) + (y - 1); }
+    // 两处 ±1 各自独立（互不为对方的操作数），不会被 FusedBinary 融合——
+    // 否则 ±1 折叠本身被融合产物取代，测不到 SuperInc/SuperDec。
+    auto prog = encodeMethod("incDec", "(II)I",
                              {
                                  new VarInsnNode(Opcodes::ILOAD, 0),
                                  new InsnNode(Opcodes::ICONST_1),
                                  new InsnNode(Opcodes::IADD),
-                                 new VarInsnNode(Opcodes::ISTORE, 1),
                                  new VarInsnNode(Opcodes::ILOAD, 1),
                                  new InsnNode(Opcodes::ICONST_1),
                                  new InsnNode(Opcodes::ISUB),
+                                 new InsnNode(Opcodes::IADD),
                                  new InsnNode(Opcodes::IRETURN),
                              },
-                             2, 2, instance, reason);
+                             3, 2, instance, reason, nullptr, encOpts);
     ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_FALSE(prog->hasFusedBinary) << "the two ±1 sites are independent, not a chain";
 
     const auto& code = prog->bytecodes;
-    EXPECT_NE(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::SuperInc)), code.end())
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::SuperInc), 1u)
         << "x+1 must fold to SuperInc";
-    EXPECT_NE(std::find(code.begin(), code.end(), instance.opcodeFor(VmOpcode::SuperDec)), code.end())
-        << "x-1 must fold to SuperDec";
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::SuperDec), 1u)
+        << "y-1 must fold to SuperDec";
     // 该方法恰有一处 +1 和一处 -1，两条 Binary 各自全或否地折叠。SuperInc 与 SuperDec
     // 同时出现即证明两处都已折叠，故无未折叠 Binary 残留——不再用裸 std::find 查
     // Binary 字节（operand 字节会与 Binary 的 canonical 字节碰撞，opcode 集大小变化
     // 会移动 canonical 赋值导致误报）。
+}
+
+// issue #9：super-ops 默认关——不带选项编码时不得出现任何 super-op 折叠
+// （与 --vmc4-* 其他开关"默认关、不被联动"的约定一致）。
+TEST(Vmc4BackendTest, SuperOpsOffByDefault)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    // 与 SuperOpFoldsIncDec 同形：(x+1)+(y-1)，两处 ±1 互相独立。
+    auto prog = encodeMethod("incDec", "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::ISUB),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             3, 2, instance, reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::SuperInc), 0u)
+        << "super-ops must be off by default";
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::SuperDec), 0u)
+        << "super-ops must be off by default";
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::FusedBinary), 0u)
+        << "super-ops must be off by default";
+    EXPECT_FALSE(prog->hasFusedBinary);
+}
+
+// issue #9：融合判定边界——只有 rhs 恰为 IntLiteral(1) 且 op 为 Add/Sub 才折叠。
+// +2 / *1 都不得折叠（rhs 不是 1，或 op 不是加减）。
+TEST(Vmc4BackendTest, SuperOpFoldDecisionBoundary)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions encOpts;
+    encOpts.superOps = true;
+
+    const auto countOpcode = [&](const std::unique_ptr<VmProgram>& prog, VmOpcode op) {
+        return countInstructionsForTest(*prog, instance, op);
+    };
+
+    // x + 2：rhs 是 2 不是 1，不得折叠。
+    auto add2 = encodeMethod("add2", "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::ICONST_2),
+                                 new InsnNode(Opcodes::IADD),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason, nullptr, encOpts);
+    ASSERT_NE(add2, nullptr) << reason;
+    EXPECT_EQ(countOpcode(add2, VmOpcode::SuperInc), 0u) << "x+2 must not fold";
+    EXPECT_EQ(countOpcode(add2, VmOpcode::SuperDec), 0u) << "x+2 must not fold";
+
+    // x * 1：op 是 Mul 不是 Add/Sub，不得折叠。
+    auto mul1 = encodeMethod("mul1", "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason, nullptr, encOpts);
+    ASSERT_NE(mul1, nullptr) << reason;
+    EXPECT_EQ(countOpcode(mul1, VmOpcode::SuperInc), 0u) << "x*1 must not fold";
+    EXPECT_EQ(countOpcode(mul1, VmOpcode::SuperDec), 0u) << "x*1 must not fold";
+
+    // x - 1：op 是 Sub、rhs 是 1 → 折叠为 SuperDec（而非 SuperInc）。
+    auto sub1 = encodeMethod("sub1", "(I)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new InsnNode(Opcodes::ICONST_1),
+                                 new InsnNode(Opcodes::ISUB),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2, 2, instance, reason, nullptr, encOpts);
+    ASSERT_NE(sub1, nullptr) << reason;
+    EXPECT_EQ(countOpcode(sub1, VmOpcode::SuperDec), 1u) << "x-1 must fold to SuperDec";
+    EXPECT_EQ(countOpcode(sub1, VmOpcode::SuperInc), 0u);
+}
+
+// issue #9：FusedBinary 融合——同基本块内相邻的 t=a op1 b + dest=t op2 c
+// （t 仅此一处消费）折成一条 FusedBinary；字节流操作数回读验证融合判定
+// 与 operand 绑定（a/b/c、op1/op2、type）。
+TEST(Vmc4BackendTest, FusedBinaryFoldsAdjacentPair)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions encOpts;
+    encOpts.superOps = true;
+    // int f(int a, int b, int c) { return (a + b) * c; }
+    std::unique_ptr<RegFunction> reg;
+    auto prog = encodeMethod("chain", "(III)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             3, 3, instance, reason, &reg, encOpts);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_NE(reg, nullptr);
+    ASSERT_TRUE(prog->hasFusedBinary) << "adjacent Binary chain must fold to FusedBinary";
+
+    // 逐指令扫描字节流，定位 FusedBinary 并回读操作数。
+    const uint8_t fusedByte = instance.opcodeFor(VmOpcode::FusedBinary);
+    const auto&   code      = prog->bytecodes;
+    size_t fusedCount = 0;
+    for (size_t pc = 0; pc < code.size();) {
+        const uint8_t op = code[pc];
+        auto          semantic = semanticForByteForTest(instance, op);
+        if (!semantic) break;   // 未识别字节：停扫（终结者由后续计数断言覆盖）
+        const size_t len = 1u + static_cast<size_t>(operandLenForTest(*semantic));
+        if (*semantic == VmOpcode::FusedBinary) {
+            ++fusedCount;
+            const uint8_t op1  = code[pc + 1];
+            const uint8_t op2  = code[pc + 2];
+            const uint8_t type = code[pc + 3];
+            const uint16_t a = static_cast<uint16_t>(code[pc + 6] | (code[pc + 7] << 8));
+            const uint16_t b = static_cast<uint16_t>(code[pc + 8] | (code[pc + 9] << 8));
+            const uint16_t c = static_cast<uint16_t>(code[pc + 10] | (code[pc + 11] << 8));
+            EXPECT_EQ(op1, static_cast<uint8_t>(VmBinaryOp::Add)) << "first op must be Add";
+            EXPECT_EQ(op2, static_cast<uint8_t>(VmBinaryOp::Mul)) << "second op must be Mul";
+            EXPECT_EQ(type, static_cast<uint8_t>(VmType::I32));
+            // a/b 是前两个参数寄存器（0/1），c 是第三个参数寄存器（2）。
+            EXPECT_LT(a, 3u);
+            EXPECT_LT(b, 3u);
+            EXPECT_EQ(c, 2u) << "c must be the third parameter register";
+        }
+        pc += len;
+    }
+    EXPECT_EQ(fusedCount, 1u) << "exactly one fused instruction expected";
+    // 折叠后不再有独立的两条 Binary（原 t = a+b 与 dest = t*c 已合并）。
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::Binary), 0u)
+        << "both Binaries must be absorbed by the fused instruction";
+}
+
+// issue #9：融合永不跨基本块——两条 Binary 分属不同基本块时不得融合
+// （逐块独立规划，相邻性以基本块为界）。
+TEST(Vmc4BackendTest, FusedBinaryNeverCrossesBlockBoundary)
+{
+    Vmc4Options opts;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions encOpts;
+    encOpts.superOps = true;
+    // int f(int a, int b, int c, boolean flag) {
+    //     int t = a + b;
+    //     if (flag) t = t * 2;      // 另一基本块内的 Binary
+    //     return t * c;             // 汇合基本块内的 Binary
+    // }
+    // 三条 Binary 分属不同基本块 → 一条都不融合。
+    auto* join = new LabelNode(labelScratchArena().create<Label>());
+    auto prog = encodeMethod("split", "(IIIZ)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new InsnNode(Opcodes::IADD),
+                                 new VarInsnNode(Opcodes::ISTORE, 4),
+                                 new VarInsnNode(Opcodes::ILOAD, 3),
+                                 new JumpInsnNode(Opcodes::IFEQ, join->label),
+                                 new VarInsnNode(Opcodes::ILOAD, 4),
+                                 new InsnNode(Opcodes::ICONST_2),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new VarInsnNode(Opcodes::ISTORE, 4),
+                                 join,
+                                 new VarInsnNode(Opcodes::ILOAD, 4),
+                                 new VarInsnNode(Opcodes::ILOAD, 2),
+                                 new InsnNode(Opcodes::IMUL),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             4, 5, instance, reason, nullptr, encOpts);
+    ASSERT_NE(prog, nullptr) << reason;
+    EXPECT_FALSE(prog->hasFusedBinary)
+        << "Binaries in different basic blocks must not be fused";
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::FusedBinary), 0u);
+    // 三条 Binary 都保持原状（未折叠也未融合）。
+    EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::Binary), 3u)
+        << "all three Binaries must stay unfolded across block boundaries";
 }
 
 // P3-8：handler 形态等价变形——确定性选择 + 解释器按实例发射 alt body。
@@ -1548,32 +2023,6 @@ TEST(Vmc4BackendTest, TraceSurfaceDescribesInstanceDeterministically)
 // Phase 5：执行期 dispatch drift（语义标签轮转）
 // ===========================================================================
 
-/// 按 VmOpcode 查 operand 长度（u8/u16 混合，与 vm_interpreter_emit.cpp 的
-/// handler 片段一致），用于把字节流逐指令解码。
-int operandLenForTest(VmOpcode op)
-{
-    switch (op) {
-    case VmOpcode::Halt:      return 0;
-    case VmOpcode::Jump:      return 2;
-    case VmOpcode::Return:    return 3;   // has_value:u8 + src:u16
-    case VmOpcode::Branch:    return 6;   // cond:u16 + true:u16 + false:u16
-    case VmOpcode::Copy:      return 5;   // type:u8 + dest:u16 + src:u16
-    case VmOpcode::Unary:     return 6;   // op:u8 + type:u8 + dest:u16 + src:u16
-    case VmOpcode::Convert:   return 6;   // from:u8 + to:u8 + dest:u16 + src:u16
-    case VmOpcode::Binary:    return 7;   // op:u8 + type:u8 + dest:u16 + lhs:u16 + rhs:u16
-    case VmOpcode::Compare:   return 7;
-    case VmOpcode::SuperInc:  return 5;
-    case VmOpcode::SuperDec:  return 5;
-    case VmOpcode::LoadField:  return 7;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=0)
-    case VmOpcode::StoreField: return 9;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8(=1) + valueIdx:u16
-    case VmOpcode::ArrayLoad:  return 9;   // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=1) + indexIdx:u16
-    case VmOpcode::ArrayStore: return 11;  // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=2) + indexIdx:u16 + valueIdx:u16
-    case VmOpcode::Allocate:  return 7;   // siteIdx:u16 + recv:u16 + dest:u16 + argc:u8（Object=0；Array=1 +lenIdx）
-    case VmOpcode::Intrinsic: return 7;   // siteIdx:u16 + arrayIdx:u16 + dest:u16 + argc:u8(=0)
-    default:                  return 0;
-    }
-}
-
 /// 用 unmap 逐指令解码字节流：全部指令 canonical 合法（非 0xFF）返回 true，
 /// 并统计遇到的变体集合与"同一语义跨变体字节不同"是否发生。
 bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>& bytes,
@@ -1583,14 +2032,6 @@ bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>
     sawRotation = false;
     size_t pc = 0;
     std::map<uint8_t, uint8_t> firstRawByCanonical;   // canonical -> 首个 raw
-    // 支持集（须与 vmc4_instance.cpp kAllOpcodes 一致，含 Phase 2.0 Call + 2.A field/array/alloc）。
-    static const VmOpcode kAllOps[] = {VmOpcode::Halt,    VmOpcode::Copy,     VmOpcode::Unary,
-                                       VmOpcode::Binary,  VmOpcode::Compare,  VmOpcode::Convert,
-                                       VmOpcode::Jump,    VmOpcode::Branch,   VmOpcode::Return,
-                                       VmOpcode::SuperInc, VmOpcode::SuperDec, VmOpcode::Call,
-                                       VmOpcode::LoadField, VmOpcode::StoreField,
-                                       VmOpcode::ArrayLoad, VmOpcode::ArrayStore,
-                                       VmOpcode::Allocate, VmOpcode::Intrinsic};
     while (pc < bytes.size()) {
         const int d = inst.variantForPc(pc);
         variants.insert(d);
@@ -1599,17 +2040,16 @@ bool decodeStreamCleanForTest(const VmInstance& inst, const std::vector<uint8_t>
         if (canonical == 0xFF) return false;
         // canonical 是洗牌后的字节值，必须反查成语义，再按语义推进 pc
         // （不能把 canonical 字节值 cast 成 VmOpcode，也不能把 operand 字节当 opcode）。
-        VmOpcode op       = VmOpcode::Halt;
-        bool     found    = false;
-        for (const auto cand : kAllOps) {
-            if (inst.opcodeFor(cand) == canonical) { op = cand; found = true; break; }
-        }
-        if (!found) return false;
+        auto opOpt = semanticForByteForTest(inst, canonical);
+        if (!opOpt) return false;
+        VmOpcode op = *opOpt;
         auto it = firstRawByCanonical.find(canonical);
         if (it != firstRawByCanonical.end() && it->second != raw) sawRotation = true;
         if (it == firstRawByCanonical.end()) firstRawByCanonical[canonical] = raw;
         if (op == VmOpcode::Halt) break;
-        pc += 1u + static_cast<size_t>(operandLenForTest(op));
+        const int len = operandLenForTest(op);
+        if (len < 0) return false;
+        pc += 1u + static_cast<size_t>(len);
     }
     return true;
 }
