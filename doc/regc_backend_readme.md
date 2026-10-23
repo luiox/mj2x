@@ -75,6 +75,6 @@ native。JAR 输入仍沿用 mj2x pipeline 的整包读写能力；signed-JAR me
 
 ## 相关设计文档
 
-- [techniques/ssa_construction.md](../techniques/ssa_construction.md)：SSA 构造与 SSA → 后端 lowering。
-- [techniques/codegen_strategies.md](../techniques/codegen_strategies.md)：代码生成策略（寄存器/栈机、lowering、C codegen）。
-- [techniques/](../techniques/)：JVM → 原生编译技术文档总索引。
+- [techniques/ssa_construction.md](techniques/ssa_construction.md)：SSA 构造与 SSA → 后端 lowering。
+- [techniques/codegen_strategies.md](techniques/codegen_strategies.md)：代码生成策略（寄存器/栈机、lowering、C codegen）。
+- [techniques/](techniques/)：JVM → 原生编译技术文档总索引。

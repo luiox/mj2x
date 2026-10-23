@@ -89,5 +89,5 @@ passthrough，不参与 root class 解析或 native injection。
 
 ## 相关设计文档
 
-- [techniques/codegen_strategies.md](../techniques/codegen_strategies.md)：代码生成策略（栈机 vs 寄存器、lowering）。
-- [techniques/](../techniques/)：JVM → 原生编译技术文档总索引。
+- [techniques/codegen_strategies.md](techniques/codegen_strategies.md)：代码生成策略（栈机 vs 寄存器、lowering）。
+- [techniques/](techniques/)：JVM → 原生编译技术文档总索引。
