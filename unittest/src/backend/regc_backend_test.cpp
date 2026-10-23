@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "garena/arena.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
 #include "libca/log/logger.hpp"
@@ -1447,4 +1448,89 @@ TEST(RegCBackendTest, UnresolvableWarnSampleCarriesResolverReason)
     EXPECT_NE(summaryText.find("SynchCallee.helper:(I)I (synchronized callee)"),
               std::string::npos)
         << summaryText;
+}
+
+// ---- computed jumps / 跳转目标间接化（issue #7）----
+//
+// switch 的 "case key -> 目标块" 映射从代码挪到数据表：key 按站点密钥异或存放，
+// 分派改走运行时解析出的块索引。产物里不再有 `case <字面量>: goto block_bX`。
+//
+// 走 backend 级而非发射器直连：key 表要安放在 TU 头部注册表，直连发射器没有
+// 注册表（会按设计降级为字面量 case）。
+
+namespace {
+
+std::unique_ptr<MethodNode> makeSwitchMethod()
+{
+    // 标签需要 arena 寿命：与 regc_test.cpp 同形状。
+    static garena::Arena labelArena;
+    auto* case0 = new LabelNode(labelArena.create<Label>());
+    auto* case1 = new LabelNode(labelArena.create<Label>());
+    auto* def   = new LabelNode(labelArena.create<Label>());
+    return makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+                      "pick",
+                      "(I)I",
+                      {
+                          new VarInsnNode(Opcodes::ILOAD, 0),
+                          new TableSwitchInsnNode(0, 1, def->label, {case0->label, case1->label}),
+                          case0,
+                          new IntInsnNode(Opcodes::BIPUSH, 7),
+                          new InsnNode(Opcodes::IRETURN),
+                          case1,
+                          new IntInsnNode(Opcodes::BIPUSH, 9),
+                          new InsnNode(Opcodes::IRETURN),
+                          def,
+                          new InsnNode(Opcodes::ICONST_M1),
+                          new InsnNode(Opcodes::IRETURN),
+                      },
+                      2,
+                      1);
+}
+
+}   // namespace
+
+TEST(RegCBackendTest, ComputedJumpsMovesCaseKeysIntoDataTable)
+{
+    auto method = makeSwitchMethod();
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend backend;
+    backend.setComputedJumps(true);
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto blocks = converter.convert(*method);
+    auto result = backend.compileMethod("Test", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    // key 表进 TU 头部。
+    EXPECT_NE(result.text.find("_mj2x_cj_keys_"), std::string::npos) << result.text;
+    // 分派改走运行时解析出的索引（而非原始 switch 值）。
+    EXPECT_NE(result.text.find("switch (_mj2x_cj_idx_"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("mj2x_regc_const_key("), std::string::npos) << result.text;
+    // 站点密钥只派生一次（static 局部量），不是每次分派调一次。
+    EXPECT_NE(result.text.find("static int64_t _mj2x_cj_k_"), std::string::npos) << result.text;
+}
+
+TEST(RegCBackendTest, ComputedJumpsOffKeepsLiteralCaseKeys)
+{
+    auto method = makeSwitchMethod();
+
+    CompilerMethod cm;
+    cm.methodNode = method.get();
+    CompilerClass cls;
+    cls.methods.push_back(cm);
+
+    RegCBackend backend;   // 默认关
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto blocks = converter.convert(*method);
+    auto result = backend.compileMethod("Test", cls.methods[0], blocks);
+
+    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    EXPECT_EQ(result.text.find("_mj2x_cj_"), std::string::npos) << result.text;
+    EXPECT_NE(result.text.find("case 0"), std::string::npos) << result.text;
 }

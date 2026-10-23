@@ -1452,9 +1452,27 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
             else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
                 if (!rejectNativeObjectEscape(state, t.value, "switch value", reason)) return false;
                 bool copiesOk = true;
-                out.switch_(operandExpr(t.value).to_std_string(), [&](CSourceStream& u) {
-                    for (const auto& c : t.cases) {
-                        u.case_(ca::str::format_std("{}", c.key), [&](CSourceStream& v) {
+                // computed jumps（--regc-computed-jumps）：key -> 目标块的映射
+                // 挪进数据表，分派改走运行时解析出的块索引。产物里不再有
+                // `case <字面量>: goto block_bX` 这种直接可读的映射。
+                std::string cjIndex;
+                if (state.computedJumps && t.cases.size() >= 2) {
+                    // 拿不到 TU 头部注册表（key 表无处安放）时退回字面量 case，
+                    // 不整方法 fail-closed——本项是混淆增益，不该让方法编译不了。
+                    emitComputedJumpDispatch(out, state, t, cjIndex, reason);
+                }
+                const bool         useIndex = !cjIndex.empty();
+                const std::string  dispatchExpr =
+                    useIndex ? cjIndex : operandExpr(t.value).to_std_string();
+                // 走索引时分派的 case 标签是 0..N-1（N = case 数），default 兜底。
+                const auto caseLabel = [&](size_t i, int32_t key) {
+                    return useIndex ? ca::str::format_std("{}", i)
+                                    : ca::str::format_std("{}", key);
+                };
+                out.switch_(dispatchExpr, [&](CSourceStream& u) {
+                    for (size_t i = 0; i < t.cases.size(); ++i) {
+                        const auto& c = t.cases[i];
+                        u.case_(caseLabel(i, c.key), [&](CSourceStream& v) {
                             if (!emitEdgeCopies(v, c.target.copies, state, edgeTempIndex, reason)) {
                                 copiesOk = false;
                                 return;

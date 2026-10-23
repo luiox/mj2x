@@ -96,6 +96,13 @@ struct CodeOptions
     ///          空壳——这是本项的主要兼容性代价。
     bool podStruct = false;
 
+    /// @brief computed jumps：跳转目标间接化（默认关闭，--regc-computed-jumps）。
+    /// @details switch 的 case key -> 目标块映射从**代码**挪到**数据表**：
+    ///          key 表按 site 密钥异或后存放，运行时解析出块索引再分派。产物里
+    ///          不再有 `case <字面量>: goto block_bX` 这种直接可读的映射。
+    ///          代价是每次分派多一次表扫描。
+    bool computedJumps = false;
+
     /// @brief 反侦测检查点注入（方法入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// @details 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     RuntimeProtectionOptions runtimeProtection;

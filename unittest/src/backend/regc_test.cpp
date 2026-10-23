@@ -55,7 +55,7 @@ RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
                         std::initializer_list<AbstractInsnNode*> insns, int maxStack, int maxLocals,
                         std::string& reason,
                         codegen::DirectCallTier tier = codegen::DirectCallTier::Off,
-                        bool podStruct = false)
+                        bool podStruct = false, bool computedJumps = false)
 {
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
@@ -82,6 +82,7 @@ RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
     codegen::CodeOptions options;
     options.directCallTier = tier;
     options.podStruct      = podStruct;
+    options.computedJumps  = computedJumps;
     RegCEmitter emitter(nullptr, options);
     return emitter.emitFunction(*reg);
 }
@@ -1196,4 +1197,61 @@ TEST(RegCTest, PodClassRejectsLibraryClasses)
 {
     CompilerIndex index;
     EXPECT_FALSE(isPodClassOwner(&index, ca::str::Utf8StringRef::from_cstr("java/awt/Point")));
+}
+
+// ---- computed jumps / 跳转目标间接化（issue #7）----
+//
+// switch 的 "case key -> 目标块" 映射从代码挪到数据表：key 按站点密钥异或存放，
+// 分派改走运行时解析出的块索引。产物里不再有 `case <字面量>: goto block_bX`。
+
+namespace {
+
+RegCEmitResult emitSwitchPick(bool computedJumps, std::string& reason)
+{
+    auto* case0 = new LabelNode(labelScratchArena().create<Label>());
+    auto* case1 = new LabelNode(labelScratchArena().create<Label>());
+    auto* def   = new LabelNode(labelScratchArena().create<Label>());
+
+    return emitRegC("pick",
+                    "(I)I",
+                    {
+                        new VarInsnNode(Opcodes::ILOAD, 0),
+                        new TableSwitchInsnNode(0, 1, def->label, {case0->label, case1->label}),
+                        case0,
+                        new IntInsnNode(Opcodes::BIPUSH, 7),
+                        new InsnNode(Opcodes::IRETURN),
+                        case1,
+                        new IntInsnNode(Opcodes::BIPUSH, 9),
+                        new InsnNode(Opcodes::IRETURN),
+                        def,
+                        new InsnNode(Opcodes::ICONST_M1),
+                        new InsnNode(Opcodes::IRETURN),
+                    },
+                    2, 1, reason,
+                    codegen::DirectCallTier::Off,
+                    /*podStruct=*/false,
+                    computedJumps);
+}
+
+}   // namespace
+
+TEST(RegCTest, ComputedJumpsOffKeepsLiteralCaseKeys)
+{
+    std::string reason;
+    auto        result = emitSwitchPick(/*computedJumps=*/false, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("case 0"), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_cj_"), std::string::npos) << result.source;
+}
+
+// 发射器直连路径没有 TU 头部注册表（key 表无处安放），按设计降级为按原始 case
+// key 分派。这条钉住"降级不报错、仍产出正确 switch"——真实表发射由
+// regc_backend_test.cpp 的 backend 级用例守。
+TEST(RegCTest, ComputedJumpsDegradesGracefullyWithoutTuRegistry)
+{
+    std::string reason;
+    auto        result = emitSwitchPick(/*computedJumps=*/true, reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("switch (r0)"), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("case 0"), std::string::npos) << result.source;
 }

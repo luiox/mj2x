@@ -248,6 +248,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.nativeWrapperRegisters             = nativeWrapperRegisters;
     // 并查集根 -> 类名：字段读写按 receiver 的根查表决定走 struct 成员还是 JNI。
     emitState.podStructRoots                     = podPlan.ownerByRoot;
+    emitState.computedJumps                      = options_.computedJumps;
     for (uint32_t id : stringBuilderPlan.nativeRegisters) {
         const auto kindIt = stringBuilderPlan.kindByRegister.find(id);
         if (kindIt == stringBuilderPlan.kindByRegister.end()) {
