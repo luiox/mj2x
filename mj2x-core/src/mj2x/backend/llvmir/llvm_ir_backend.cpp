@@ -283,6 +283,15 @@ LlvmIrBackend::LlvmIrBackend()
 
 LlvmIrBackend::~LlvmIrBackend() = default;
 
+/// @brief 当前类是否在混淆作用域内（issue #8，与 RegC 同语义）。
+bool LlvmIrBackend::currentClassInObfuscationScope(const std::string& className,
+                                                  CompilerIndex* index)
+{
+    if (index == nullptr) return true;
+    CompilerClass* clazz = index->getClass(className);
+    return clazz == nullptr ? true : clazz->inObfuscationScope;
+}
+
 BackendResult LlvmIrBackend::compileMethod(const std::string& className, CompilerMethod& method,
                                            const std::vector<Block*>& blocks,
                                            CompilerIndex* index)
@@ -359,7 +368,10 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
             result.text = "LLVM IR lowering failed: " + reason;
             return result;
         }
-        applyRegTransformPasses(*transformedReg, transformOptions_);
+        // 混淆作用域（issue #8）：与 RegC 同语义。
+        if (currentClassInObfuscationScope(className, index)) {
+            applyRegTransformPasses(*transformedReg, transformOptions_);
+        }
         RegisterTypes validatedTypes;
         if (collectRegisterTypes(*transformedReg, validatedTypes, callResolver.get(), reason)) {
             reg            = std::move(transformedReg);

@@ -192,6 +192,8 @@ RegC：
 | `--regc-safe-env` | 开启 safe-env：JNI 函数表快照 + 方法入口恢复，阻断 agent 的 JNI hook（issue #748） |
 | `--regc-safe-env-debug` | safe-env 调试观察模式（检出 hook 只告警不 fail，隐含开启 `--regc-safe-env`） |
 | `--regc-comment-level <none\|summary\|detailed>` | 生成注释级别（默认 summary） |
+| `--obf-scope-include <glob>` / `--obf-scope-exclude <glob>` | **混淆作用域**（可重复、可逗号分隔）：按类级 glob 收窄「哪些类受 RegIR 变换影响」。真实工程通常只想保护少数核心类——性能、产物体积、可调试性都要求收窄作用域。模式语义与 `--native-include/exclude` 一致（`*` 不跨段、`**` 跨段、exclude 优先） |
+| | 显式给 include 即隐含开启混淆，不必再开 `--regc-obfuscate`；单独给 exclude 不隐含开启（它只做收窄）。两者都为空时零行为变化 |
 | `--regc-obfuscate` | 开启基础混淆变换（MBA + opaque 谓词 + CFF 平坦化）。**默认全部关闭**：RegC 定位高性能 native 生成器，默认产物语义直译零混淆 |
 | `--regc-cff-dead <n>` | CFF 恒假死块注入密度（默认 0 关闭；N = 每 N 个 dispatcher 跳转插 1 死块；死块条件 `(state*state+1)==0` 模 2³² 无解恒假、依赖运行时 state 不可被编译器证明，内容夹 `mj2x_regc_barrier` 防 DCE）。隐含开启 CFF（issue #829） |
 | `--regc-cff-state-encrypt` | CFF 派生随机 state 码（splitmix64(seed,index) 替代顺序 1,2,3）+ dispatcher 入口状态异或。隐含开启 CFF（issue #829） |

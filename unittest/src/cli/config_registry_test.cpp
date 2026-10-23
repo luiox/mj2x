@@ -213,6 +213,8 @@ std::vector<std::string> expectedKeys()
         "native_lib_pack_hook",
         "client_id",
         "intrinsic_config",
+        "obf_scope_exclude",
+        "obf_scope_include",
         "intrinsic_src",
         "log_quiet",
         "log_verbose",

@@ -632,6 +632,16 @@ void RegCBackend::setSafeEnvDebug(bool enabled)
     impl_->safeEnvDebug   = enabled;
 }
 
+/// @brief 当前类是否在混淆作用域内（issue #8）。
+/// @details 未挂 index 或类不在 index 时按"在作用域内"处理——拿不到信息时保守
+///          沿用现状，不静默改变行为。
+bool RegCBackend::currentClassInObfuscationScope(const std::string& className)
+{
+    if (impl_->currentIndex == nullptr) return true;
+    CompilerClass* clazz = impl_->currentIndex->getClass(className);
+    return clazz == nullptr ? true : clazz->inObfuscationScope;
+}
+
 BackendResult RegCBackend::compileMethod(const std::string& className, CompilerMethod& method,
                                          const std::vector<Block*>& blocks,
                                          CompilerIndex* index)
@@ -884,7 +894,11 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
-    applyRegTransformPasses(*reg, transformOptions_);
+    // 混淆作用域（issue #8）：作用域外的类仍编译成 native，只是跳过 RegIR 变换
+    // ——产物与未开混淆时一致。全局开关照旧作用于作用域内的类。
+    if (currentClassInObfuscationScope(className)) {
+        applyRegTransformPasses(*reg, transformOptions_);
+    }
 
     // 提前登记函数名（供本方法内实例自递归/已转换目标的直接调用决策）；
     // emit 失败时回滚，避免调用方直接调用到不存在的函数体。

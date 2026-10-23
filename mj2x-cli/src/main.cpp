@@ -31,6 +31,7 @@
 #include "mj2x/preprocessor/native_annotation_preprocessor.hpp"
 #include "mj2x/preprocessor/native_method_prefix_preprocessor.hpp"
 #include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
+#include "mj2x/preprocessor/obfuscation_scope_preprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
 #include "config_file.hpp"
@@ -1114,6 +1115,15 @@ int main(int argc, char** argv)
     // --regc-obfuscate 显式开启基础三项，#829 增强开关各自联动对应基础项）。
     // 双后端都被裁的构建（stackc-only/vmc4-only）下无消费方，一并裁剪。
 #if !defined(MJ2X_DISABLE_REGC_BACKEND) || !defined(MJ2X_DISABLE_LLVM_BACKEND)
+    // 混淆作用域（issue #8）：显式给了 include 即隐含开启混淆——否则用户要开
+    // 两个开关才能"只混淆这几个类"。exclude 单独给不隐含开启（它只做收窄）。
+    //
+    // 必须早于 buildTransformOptions：那个 lambda 在这里定义、在下面被调用，
+    // 晚于此处的赋值读不到。
+    if (!options.obfScopeIncludes.empty() && !options.regcObfuscate) {
+        options.regcObfuscate = true;
+    }
+
     auto buildTransformOptions = [&]() -> std::optional<mj2x::RegTransformOptions> {
         if (!options.regcObfuscate && options.regcCffDead == 0 && !options.regcCffStateEncrypt &&
             !options.regcMbaDeep && !options.regcOpaqueZero && !options.regcHideConstants &&
@@ -1270,6 +1280,10 @@ int main(int argc, char** argv)
     // 类级 glob 过滤器（对标 jvmtp filter.*）：必须在任何方法级选择与
     // <init>/<clinit> 搬运之前注册——后三者按 CompilerClass::filteredOut 跳过。
     // 与 annotation / method-prefix 正交：过滤器收窄类集合，方法级选择在集合内生效。
+    if (!options.obfScopeIncludes.empty() || !options.obfScopeExcludes.empty()) {
+        pipeline.registerPreprocessor(std::make_unique<mj2x::ObfuscationScopePreprocessor>(
+            options.obfScopeIncludes, options.obfScopeExcludes));
+    }
     if (!options.nativeClassIncludes.empty() || !options.nativeClassExcludes.empty()) {
         pipeline.registerPreprocessor(std::make_unique<mj2x::NativeClassFilterPreprocessor>(
             options.nativeClassIncludes, options.nativeClassExcludes));
