@@ -148,8 +148,8 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 
 | 参数 | 说明 |
 |---|---|
-| `-i, --input <.class/.jar>` | 输入文件 |
-| `-o, --output <.class/.jar>` | 输出文件(方法被标记为 native) |
+| `-i <.class/.jar>` | 输入文件（无 `--input` 长形式；JSON 键 `input`） |
+| `-o <.class/.jar>` | 输出文件(方法被标记为 native)（无 `--output` 长形式；JSON 键 `output`） |
 | `--emit-c <file>` | 输出的 C 源码路径 |
 | `--emit-cpp <file>` | 输出 RegC C++17 源码路径；必须以 `.cpp` 结尾并配合 `--backend regc` |
 | `--emit-llvm <file>` | 输出 LLVM textual IR 路径；必须以 `.ll` 结尾并配合 `--backend llvm`（v2.2 起默认开启；`with_mj2x_llvm=n` 构建时不暴露） |
@@ -292,7 +292,7 @@ Clang 和 Zig (`zig cc`) 直接从 stdin 读取源码，不产生 `.c` 文件。
 Windows 命名管道路径，因此 Windows/MSVC 使用受控临时 `.c` fallback；CLI 在编译成功和失败
 返回前都会清理该文件，但这不是严格的 no-write 模式。需要严格不落盘时显式选择 Clang。
 
-输出文件位于 `--output` 同目录:
+输出文件位于 `-o` 指定的输出文件同目录:
 
 - Windows:`Hello_native.dll`
 - Linux:`Hello_native.so`
@@ -336,7 +336,7 @@ mj2x-cli -i Hello.class -o Hello_native.class --compile --c-compiler xmake
 ```
 
 第二种形式在输出目录创建唯一临时工程，构建完成或失败后都会清理。两种形式都顺序执行
-xmake configure/build，验证唯一 release 共享库后原子复制到 `--output` 同目录；JAR 输出随后嵌入
+xmake configure/build，验证唯一 release 共享库后原子复制到 `-o` 指定的输出文件同目录；JAR 输出随后嵌入
 该库。xmake 是落地工程模式，不能与 `--compile-mode pipe` 同用。显式 direct 编译器（如
 `--c-compiler clang`）也不能和 `--generate-xmake ... --compile` 同时指定。
 

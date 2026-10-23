@@ -1,58 +1,93 @@
 # computed jumps（跳转目标间接化）
 
-> 把跳转/分支的目标从"字面量基本块"改成"运行时计算的索引"，让块间关系不能靠读
-> 跳转指令直接得出。
+> CFF 把控制流打散成 dispatcher，但 dispatcher 的 case key 仍是字面量——逆序
+> case key 就能还原控制流。本项把「key → 目标块」的映射从代码挪到数据表：
+> key 按站点密钥异或存放，分派前先查表解析出块索引，再按索引 switch。产物里
+> 不再有 `case 5: goto block_b17` 这种直接可读的映射。
 
 | 项 | 值 |
 |---|---|
 | 对标术语 | jvmtp `obfuscation.jumps`；业界通称 computed jump / jump table obfuscation |
-| 作用层 | RegIR pass（拟）→ 发射端 |
-| 开关 | 拟 `--regc-computed-jumps`（默认关，不联动 `--regc-obfuscate`） |
-| 后端 | 拟 RegC / LLVM |
-| 默认 | 关 |
-| 状态 | 📋 **未实现**（issue #7） |
+| 作用层 | 发射端（RegC 的 switch terminator 发射路径） |
+| 开关 | `--regc-computed-jumps` |
+| 后端 | RegC（LLVM 侧 switch 是天然形态，未走这条路） |
+| 默认 | 关（不联动 `--regc-obfuscate`） |
+| 状态 | ✅ 已落地（issue #7，PR #27） |
 
 ## 对抗什么
 
 调用目标间接化（见 [call_indirection.md](call_indirection.md)）打散的是**调用边**，
-但函数内部的**跳转边**仍然是字面量：`goto L3`、`switch (v) { case 2: ... }` 的
-目标在产物里一目了然，块间关系直接可读。
+但函数内部的**跳转边**仍是字面量：`goto L3`、`switch (v) { case 2: ... }` 的目标
+在产物里一目了然。
 
 computed jumps 补的是这一半。两者合起来，调用图和 CFG 才都变成"要解析索引才能
 还原"。
 
-## 现状与阻碍
+## 机制
 
-`RegBranchTerminator` / `RegSwitchTerminator` 的 successor 是 `RegSuccessor*`
-直指针，目标编译期恒定。CFF 已经把 switch 收敛到单一 dispatcher，但 case key
-仍是字面量——逆序 case key 就能还原控制流。
+### 数据表与密钥派生
 
-## 候选路线（实现前需先做 spike）
+- CFF 先把 switch 收敛到单一 dispatcher，本项在其之上把 case key 与目标数组
+  拆到**模块级数据表**。
+- 落盘的 key 是 `真实 key ^ const_key(site)`，密钥走与立即数隐藏同源的
+  splitmix64 派生（跨 TU、故意不可内联），运行时不可折叠。
+- 分派形态：`idx = 解出的块索引; switch (idx)`。
 
-| 路线 | 做法 | 阻碍 |
+### 便携性是硬约束
+
+MSVC 是主目标，**不能用 GCC 的 computed goto**（`&&label`）。表驱动 + 索引
+switch 是标准 C 内可表达的最强形态——这是本项的**能力上限，不是偷懒**。
+
+候选路线里的另一条（opaque 索引：目标索引 = 真实索引 `^ opaque(site)`）与本项
+同源（同一套 splitmix64 派生），最终选了表驱动路线，因为它对 CFF dispatcher
+的形状改动最小。
+
+### edge copies 必须跟着目标走
+
+这是本项最容易做错的地方。间接化后，跳转边携带的 phi 副本（edge copies）也要
+随目标一起查表携带——漏掉即是数据流错误，且只在特定分支路径上暴露。
+
+## 代价
+
+实测（jvm-obf-tester，5 次取中位数，单次运行内对照）：
+
+| | 合计 | ControlFlow probe |
 |---|---|---|
-| 跳转表间接化 | case key 与 target 数组拆到模块级表，terminator 改为 `idx = f(state); goto table[idx]` | MSVC 不支持 GCC 的 `computed goto`（`&&label`），需降级为 `switch (table[idx])` 或函数指针表；后者带来函数指针表的符号可见性问题 |
-| opaque 索引 | 目标索引 = 真实索引 `^ opaque(site)`，分派前还原 | 与立即数隐藏同族（编译期密钥 + 运行时不可折叠读取），可复用 `const_key_derivation.hpp` 的 splitmix64 派生 |
+| 关 | 137.139ms | 0.374ms |
+| 开 | 149.304ms | 0.477ms |
 
-## 约束（设计前先记下的硬条件）
++8.9% 合计，switch 密集处 +27%。
 
-- **MSVC 是主目标**，产物必须落在 C 标准子集内，不能依赖 GCC 扩展。
-- **必须排 CFF 之后**——CFF 之前没有可改的 switch terminator。
-- **edge copies 必须跟着目标走**。间接化后 copies 也要查表携带，漏掉即数据流错。
-  这是本项最容易做错的地方。
-- LLVM 子集：`switch` 是天然形态，但 `getelementptr` + `indirectbr` 需先验证
-  现有验证层与发射层是否支持。
-- 语义零变化，E2E 必须真实编译 + 运行比对。
+**表扫描本身便宜，成本几乎全在密钥派生。** 每分派调一次 `mj2x_regc_const_key`
+实测让 ControlFlow 慢 70%；改成 static 局部量只派生一次后降到 27%。
 
-## 验收标准
+属混淆增益而非性能项，默认关。
 
-- 新开关（默认关，不被 `--regc-obfuscate` 联动）
-- RegIR 单测：标记语义 / 与 CFF 叠加后 dispatcher 表完整性 / 可复现性
-- E2E：真实编译 + 运行，输出与未变换一致
-- `doc/user_guide.md` + `doc/config_file.md` 同步选项说明
+## 一个设计取舍
+
+拿不到 TU 头部注册表时（key 表无处安放）**退回字面量 case，不整方法
+fail-closed**。本项是"有则更好"的增益，不该让方法编译不了——初版写成
+fail-closed，被单测抓出。
+
+## 已知绕过面
+
+- **表本身是可读的**：key 与目标都在数据段里，静态拿到表 + 拿到派生密钥即可
+  还原映射。本项提高的是"读跳转指令即得控制流"的成本，不是让它不可能。
+- **CFF 之外的跳转不受影响**：本项作用于 CFF dispatcher 的 switch terminator，
+  普通 `goto` 边仍是字面量目标。
+
+## 验证
+
+- jvm-obf-tester 全量 13 项 probe Passed（开关打开状态下）
+- RegCBackendTest 新增 2 项（backend 级，走真实 TU 注册表：key 表 + 索引分派 +
+  密钥只派生一次）
+- RegCTest 新增 2 项（默认关无痕迹 / 无注册表时优雅降级）
+- 全量回归 868 tests
 
 ## 与其他技术的关系
 
 - 与 CFF 都作用于控制流，但层次不同：CFF 改**结构**（多跳 dispatcher），
-  computed jumps 改**目标的表达方式**。
+  computed jumps 改**目标的表达方式**。必须先有 CFF——CFF 之前没有可改的
+  switch terminator。
 - 与 opaque 谓词互补：一个改跳到哪，一个改跳不跳。
+- 与**立即数隐藏**同族（共用 splitmix64 站点密钥派生），可叠。

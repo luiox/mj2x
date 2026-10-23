@@ -121,5 +121,6 @@ static mj2x_regc_call_site _mj2x_ct_0[] = {
 ## 与其他技术的关系
 
 - 排 **CFF 之后、立即数隐藏之前**；只置标记不改指令序列，与前后两者零交互。
-- 与 **computed jumps** 是同族的下一项：本项打散"调用边"，computed jumps 打散
-  "跳转边"（issue #7，未实现）。
+- 与 **computed jumps** 是同族的另一半：本项打散"调用边"，computed jumps 打散
+  "跳转边"（已落地，见 [computed_jumps.md](computed_jumps.md)）。两者合起来，
+  调用图和 CFG 才都变成"要解析索引才能还原"。

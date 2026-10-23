@@ -7,10 +7,10 @@
 |---|---|
 | 对标术语 | 无通用业界名；本仓内部称 direct call / native-to-native call |
 | 作用层 | 发射端（`tryEmitDirectCall` / `InternalCallResolver`） |
-| 开关 | `--regc-direct-calls`（RegC）；LLVM 侧**无门控** |
-| 后端 | RegC ✅ / LLVM ✅（仅 INVOKESTATIC）/ StackC ❌ / VMC4 ❌ |
-| 默认 | RegC 关；LLVM 开 |
-| 状态 | ✅ 已落地（两端口径待统一） |
+| 开关 | `--regc-direct-calls`（三档，两后端共用同一门控） |
+| 后端 | RegC ✅ / LLVM ✅ / StackC ❌ / VMC4 ❌ |
+| 默认 | `off` |
+| 状态 | ✅ 已落地（两端口径自 PR #23 起统一） |
 
 ## 对抗什么
 
@@ -62,21 +62,39 @@ C 直调**不产生 JVM 栈帧**。`getStackTrace`、`StackWalker`、反射等�
 
 这是本项最大的代价，也是它默认关的唯一理由。
 
-## 两端口径不一致（待修）
+## 分档（PR #23 统一了两端口径）
 
-| 后端 | 门控 | 覆盖面 |
+**历史问题**：RegC 有布尔门控但默认关，LLVM 侧无条件直调同模块 statics。结果
+是一边覆盖面更广却默认不用，另一边一直在承担 #814 的栈观察语义代价却没有开关。
+
+现在两后端走**同一档位、同一判定**（`codegen::allowsDirectCall`）：
+
+| 档 | 直调范围 | 栈失真范围 |
 |---|---|---|
-| RegC | `--regc-direct-calls`，默认关 | 静态 / 虚 / special，含继承 |
-| LLVM | **无门控，默认直调** | **仅 INVOKESTATIC** |
+| `off`（默认） | 仅确定性分派的虚调用 | 无 |
+| `intra-class` | + 同类内调用（含自递归、privateThis） | 类内 |
+| `all` | + 所有确定性分派的已转换目标 | 跨类 |
 
-也就是说 LLVM 侧一直在承担 #814 的语义代价却没有开关，而 RegC 侧的覆盖面更广
-却默认关着。拟改为统一门控 + 分档：
+**按栈失真范围划分而不是"开不开"**——栈观察语义失真是本项唯一的实质代价，
+档位让用户按能接受的失真范围选，不必在"全要/全不要"之间二选一。
 
-| 档 | 语义 |
-|---|---|
-| `off` | 全走 JNI（当前 RegC 默认） |
-| `intra-class` | 仅同类内直调，栈失真范围可控 |
-| `all` | 所有确定性分派直调（当前 `--regc-direct-calls`） |
+确定性分派的虚调用在**任何档位**都直调：resolved 路径命中 implClass 后本来就
+直调 fn，运行时 IsInstanceOf 是纯冗余，直调不引入新的语义差异。
+
+### 实测（jvm-obf-tester，7 次取中位数，同机同 JDK）
+
+| 档 | 合计 | Inheritance | Visitor |
+|---|---|---|---|
+| off | 114.492ms | 13.157ms | 6.593ms |
+| intra-class | 108.584ms | 10.541ms | 4.603ms |
+| all | **99.616ms** | **2.109ms** | **4.433ms** |
+| 未混淆 JVM 基线 | 104.946ms | 1.699ms | 1.012ms |
+| os30（第三方 j2c） | 89.812ms | 7.773ms | 7.852ms |
+
+off → all 合计快 13.0%，且 all 档**反超未混淆 JVM 基线 5.1%**。与 os30 的差距
+从 1.275x 收窄到 1.109x——剩余差距已不在对象互操作（Inheritance 3.7x 快、
+Visitor 1.8x 快、Enums 1.6x 快），而在纯计算面（Arithmetic 3.3x 慢、
+Control flow 3.1x 慢）。
 
 ## 代价
 

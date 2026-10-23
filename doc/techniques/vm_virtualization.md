@@ -35,6 +35,12 @@
 | `--vmc4-alias` | 每语义的 ALT 别名字节数 0..3——同一语义有多个 opcode 编码 |
 | `--vmc4-bogus` | 注入不可达假 handler 0..4，只污染静态分析不参与执行 |
 | `--vmc4-shuffle-blocks` | 编码期块乱序（Sattolo 单环排列），块 id 空间与物理布局同时打乱，入口块恒 id 0，控制流语义经加密间接跳转表保持 |
+| `--vmc4-super-ops` | 指令级：相邻多条 VM 指令合成一条复合指令（`±1` → SuperInc/SuperDec；同块相邻双 Binary → FusedBinary，中间值不再独立成寄存器）。详见 [vm_super_ops.md](vm_super_ops.md) |
+| `--vmc4-fragment` | 指令级：每条计算指令的操作数经专用临时槽中转，一条拆成「Copy + 原指令」多段无意义搬运。实测 +34% 解释耗时，面向高保护诉求按需开启。详见 [vm_super_ops.md](vm_super_ops.md) |
+
+前六项改的是**指令的编码与布局**（字节到语义的映射、块顺序、加密形态），后两项
+改的是**指令序列本身的内容与条数**——这是两个不同的层次，正交可叠。VM 本体只
+做到"换指令集"，指令级变换才进一步做到"打散结构"。
 
 ### 执行期面
 
@@ -78,6 +84,11 @@ drift / 块乱序 / 加密），再叠 RegIR 变换收益递减且 doubling 了�
 ## 与其他技术的关系
 
 - 与所有 RegIR 变换**互斥**（见上）。
+- 与 **VM 指令级变换**（[vm_super_ops.md](vm_super_ops.md)）**正交可叠**：本项
+  换指令集与布局，那一项改指令序列的内容与条数。两者都作用在同一条 VM 指令流
+  上但动的是不同维度。
 - 与 **运行时保护检查点**可叠（`--runtime-protection` 支持 VMC4）。
 - 与 **trace surface** 契约：`--vmc4-trace-surface` 写 expected trace surface
-  文件，是 mjdbg 红队的对抗契约（同 seed + 同输入 → 同内容）。
+  文件，是 mjdbg 红队的对抗契约（同 seed + 同输入 → 同内容）。新增 opcode
+  （如 FusedBinary）会改变 trace surface 的 opcodeTable 行数，测试侧的支持集
+  镜像必须同步。

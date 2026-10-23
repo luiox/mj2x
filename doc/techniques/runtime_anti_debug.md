@@ -6,7 +6,7 @@
 |---|---|
 | 对标术语 | 业界通称 anti-debug / anti-tamper；本仓内称 runtime protection |
 | 作用层 | 发射端（入口注入）+ 运行时（mj2x-rt `rt_protect` 模块） |
-| 开关 | `--runtime-protection <动作>` / `--runtime-protection-step` / `--runtime-protection-delay-ms` |
+| 开关 | `--runtime-protection <动作>` / `--runtime-protection-step` / `--runtime-protection-delay <ms>` |
 | 后端 | RegC ✅ / LLVM ✅ / VMC4 ✅ / StackC ❌ |
 | 默认 | `none`（不注入） |
 | 状态 | ✅ 已落地（PR #797） |
