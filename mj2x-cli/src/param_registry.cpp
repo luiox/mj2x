@@ -1,7 +1,12 @@
 // param_registry.cpp
 //
-// 参数注册表单源实现（配置系统主线十二）：全量参数声明、CLI/JSON 解析回调、
+// 参数注册表单源实现（配置系统主线十二）：基表声明、CLI/JSON 解析回调、
 // JSON Schema 构建、--help 分组输出、配置模板生成。
+//
+// 完整参数表 = 静态基表（global/selection/compile + strings/runtime/nativeLib/
+// client/intrinsic/log）+ 各后端接线单元的参数段（backend_registry 注册序），
+// 首次访问时拼装（main() 启动后，全部接线单元已完成静态注册）。行序即
+// --help 分组/schema 属性/模板键序，单后端构建被裁后端段自然缺席。
 //
 // 设计文档：mj2x/doc_ai/config_system_design.md
 
@@ -12,10 +17,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <vector>
 
-#include "libca/i18n/i18n.hpp"
-
+#include "backend_registry.hpp"
+#include "param_registry_internal.hpp"
 #include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
+#include "libca/i18n/i18n.hpp"
 
 #ifdef _WIN32
 // param_registry.hpp → native_compiler.hpp → native_process_timeout.hpp 传递
@@ -30,368 +37,53 @@ namespace {
 
 using json = nlohmann::json;
 
-/// trf 的 std::string 便捷包装:错误回调填 std::string& e 的场景。
-std::string trfs(const char* key, std::initializer_list<std::string_view> args)
-{
-    return ca::i18n::trf(key, args).to_std_string();
-}
-
-// ---------- 简单类型参数回调宏 ----------
-// 每个宏生成 cli_<member> / json_<member> 两个函数，供 kParams 表引用。
-
-#define DEF_BOOL(member, flag, jp)                                            \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        (void)v;                                                                              \
-        (void)e;                                                                              \
-        o.member = true;                                                                      \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (!j.is_boolean()) {                                                                \
-            e = trfs("mj2x.cli.err.cfg_type_bool", {jp});                           \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = j.get<bool>();                                                             \
-        return true;                                                                          \
-    }
-
-#define DEF_STR(member, flag, jp)                                             \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        if (!v) {                                                                             \
-            e = trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = v;                                                                         \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (!j.is_string()) {                                                                 \
-            e = trfs("mj2x.cli.err.cfg_type_str", {jp});                            \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = j.get<std::string>();                                                      \
-        return true;                                                                          \
-    }
-
-#define DEF_INT(member, flag, jp, lo, hi)                                     \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        if (!v) {                                                                             \
-            e = trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
-            return false;                                                                     \
-        }                                                                                     \
-        char*  end  = nullptr;                                                                \
-        long long val = std::strtoll(v, &end, 0);                                             \
-        if (end == v || *end != '\0' || val < 0 || (lo != 0 && val < lo) || (hi != 0 && val > hi)) { \
-            std::string range;                                                          \
-            if (lo == 0 && hi == 0) {                                                         \
-                range = ">= 0";                                                               \
-            }                                                                                 \
-            else {                                                                            \
-                range = "[" + std::to_string(lo) + "," + std::to_string(hi) + "]";            \
-            }                                                                                 \
-            e = trfs("mj2x.cli.err.invalid_int", {flag, v, range});                                                                         \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = static_cast<int>(val);                                                     \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (!j.is_number_integer()) {                                                         \
-            e = trfs("mj2x.cli.err.cfg_type_int", {jp});                          \
-            return false;                                                                     \
-        }                                                                                     \
-        const long long val = j.get<long long>();                                             \
-        if (val < 0 || (lo != 0 && val < lo) || (hi != 0 && val > hi)) {                      \
-            std::string range;                                                                 \
-            if (lo == 0 && hi == 0) {                                                          \
-                range = ">= 0";                                                                \
-            }                                                                                  \
-            else {                                                                             \
-                range = "[" + std::to_string(lo) + "," + std::to_string(hi) + "]";             \
-            }                                                                                  \
-            e = trfs("mj2x.cli.err.cfg_int_range", {jp, range});                              \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = static_cast<int>(val);                                                     \
-        return true;                                                                          \
-    }
-
-#define DEF_U64(member, flag, jp)                                             \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        if (!v) {                                                                             \
-            e = trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
-            return false;                                                                     \
-        }                                                                                     \
-        if (v[0] == '-') {                                                                    \
-            e = trfs("mj2x.cli.err.negative_unsigned",                                        \
-                     {flag, v, "[0,18446744073709551615]"});                                  \
-            return false;                                                                     \
-        }                                                                                     \
-        char*      end = nullptr;                                                             \
-        const unsigned long long val = std::strtoull(v, &end, 0);                             \
-        if (end == v || *end != '\0') {                                                       \
-            e = trfs("mj2x.cli.err.invalid_value", {flag, v});                          \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = static_cast<uint64_t>(val);                                                \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (j.is_number_unsigned()) {                                                     \
-            o.member = j.get<uint64_t>();                                                     \
-            return true;                                                                      \
-        }                                                                                     \
-        if (j.is_number_integer() && j.get<long long>() >= 0) {                               \
-            o.member = static_cast<uint64_t>(j.get<long long>());                             \
-            return true;                                                                      \
-        }                                                                                     \
-        if (j.is_number_integer()) {                                                          \
-            e = trfs("mj2x.cli.err.negative_unsigned",                                        \
-                     {jp, j.dump(), "[0,18446744073709551615]"});                             \
-            return false;                                                                     \
-        }                                                                                     \
-        e = trfs("mj2x.cli.err.cfg_type_uint", {jp});                  \
-        return false;                                                                         \
-    }
-
-#define DEF_HEX(member, flag, jp)                                             \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        if (!v) {                                                                             \
-            e = trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
-            return false;                                                                     \
-        }                                                                                     \
-        if (v[0] == '-') {                                                                    \
-            e = trfs("mj2x.cli.err.negative_unsigned",                                        \
-                     {flag, v, "[0,0xFFFFFFFF]"});                                            \
-            return false;                                                                     \
-        }                                                                                     \
-        char*  end = nullptr;                                                                 \
-        const unsigned long val = std::strtoul(v, &end, 16);                                  \
-        if (end == v || *end != '\0') {                                                       \
-            e = trfs("mj2x.cli.err.invalid_hex", {flag, v});                      \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = static_cast<std::uint32_t>(val);                                           \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (j.is_string()) {                                                                  \
-            const std::string s = j.get<std::string>();                                       \
-            if (!s.empty() && s[0] == '-') {                                                  \
-                e = trfs("mj2x.cli.err.negative_unsigned",                                    \
-                         {jp, s, "[0,0xFFFFFFFF]"});                                          \
-                return false;                                                                 \
-            }                                                                                 \
-            char*            end = nullptr;                                                   \
-            const unsigned long val = std::strtoul(s.c_str(), &end, 16);                     \
-            if (end == s.c_str() || *end != '\0') {                                           \
-                e = trfs("mj2x.cli.err.cfg_invalid_hex", {jp, s});         \
-                return false;                                                                 \
-            }                                                                                 \
-            o.member = static_cast<std::uint32_t>(val);                                       \
-            return true;                                                                      \
-        }                                                                                     \
-        if (j.is_number_unsigned()) {                                                         \
-            o.member = j.get<std::uint32_t>();                                                \
-            return true;                                                                      \
-        }                                                                                     \
-        e = trfs("mj2x.cli.err.cfg_type_hex", {jp});                  \
-        return false;                                                                         \
-    }
-
-// 逗号分隔枚举值集合查询。
-bool enumContains(const char* values, const std::string& v)
-{
-    std::istringstream in(values);
-    std::string        item;
-    while (std::getline(in, item, ',')) {
-        if (item == v) return true;
-    }
-    return false;
-}
-
-#define DEF_ENUM_STR(member, flag, jp, values, def)                           \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        if (!v) {                                                                             \
-            e = trfs("mj2x.cli.err.flag_requires_value_enum", {flag, values});                           \
-            return false;                                                                     \
-        }                                                                                     \
-        if (!enumContains(values, v)) {                                                       \
-            e = trfs("mj2x.cli.err.unknown_enum", {flag, v, values});                                                                 \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = v;                                                                         \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (!j.is_string()) {                                                                 \
-            e = trfs("mj2x.cli.err.cfg_type_str", {jp});                            \
-            return false;                                                                     \
-        }                                                                                     \
-        const std::string v = j.get<std::string>();                                           \
-        if (!enumContains(values, v)) {                                                       \
-            e = trfs("mj2x.cli.err.cfg_invalid_enum", {jp, v, values});                                                \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = v;                                                                         \
-        return true;                                                                          \
-    }
-
-#define DEF_STR_LIST(member, flag, jp)                                        \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        if (!v) {                                                                             \
-            e = trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member.push_back(v);                                                                \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (!j.is_array()) {                                                                  \
-            e = trfs("mj2x.cli.err.cfg_type_strarr", {jp});                      \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member.clear();                                                                     \
-        for (const auto& item : j) {                                                          \
-            if (!item.is_string()) {                                                          \
-                e = trfs("mj2x.cli.err.cfg_arr_nonstr", {jp});            \
-                return false;                                                                 \
-            }                                                                                 \
-            o.member.push_back(item.get<std::string>());                                      \
-        }                                                                                     \
-        return true;                                                                          \
-    }
-
 // ---------- 特殊参数回调 ----------
 
 bool cli_input(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"-i"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"-i"}); return false; }
     o.inputPath = v;
     return true;
 }
 bool json_input(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"input"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"input"}); return false; }
     o.inputPath = j.get<std::string>();
     return true;
 }
 
 bool cli_output(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"-o"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"-o"}); return false; }
     o.outputPath = v;
     return true;
 }
 bool json_output(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"output"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"output"}); return false; }
     o.outputPath = j.get<std::string>();
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// backend 枚举串（#886 编译期裁剪面）：kParamTable 展示/校验清单随
-// MJ2X_DISABLE_*_BACKEND 收缩，与 parseBackendNameImpl 的裁决面一致。
-// 相邻字面量拼接；每个条目自带前导分隔符，仅当「本条目存在且存在更早
-// 条目」时为 ","——分隔符若挂在相邻前驱的存在性上，中段条目被裁时会
-// 留下悬空逗号（单后端 schema enum 混入空串，评审 T3-2）。
-// ---------------------------------------------------------------------------
-#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
-#define MJ2X_BE_STACKC        "stackc"
-#define MJ2X_BE_PRIOR_STACKC  1
-#else
-#define MJ2X_BE_STACKC        ""
-#define MJ2X_BE_PRIOR_STACKC  0
-#endif
-
-#if !defined(MJ2X_DISABLE_REGC_BACKEND)
-#if MJ2X_BE_PRIOR_STACKC
-#define MJ2X_BE_ENTRY_REGC    "," "regc"
-#else
-#define MJ2X_BE_ENTRY_REGC    "regc"
-#endif
-#define MJ2X_BE_PRIOR_REGC    1
-#else
-#define MJ2X_BE_ENTRY_REGC    ""
-#define MJ2X_BE_PRIOR_REGC    MJ2X_BE_PRIOR_STACKC
-#endif
-
-#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
-#if MJ2X_BE_PRIOR_REGC
-#define MJ2X_BE_ENTRY_LLVM    "," "llvm"
-#else
-#define MJ2X_BE_ENTRY_LLVM    "llvm"
-#endif
-#define MJ2X_BE_PRIOR_LLVM    1
-#else
-#define MJ2X_BE_ENTRY_LLVM    ""
-#define MJ2X_BE_PRIOR_LLVM    MJ2X_BE_PRIOR_REGC
-#endif
-
-#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
-#if MJ2X_BE_PRIOR_LLVM
-#define MJ2X_BE_ENTRY_VMC4    "," "vmc4"
-#else
-#define MJ2X_BE_ENTRY_VMC4    "vmc4"
-#endif
-#else
-#define MJ2X_BE_ENTRY_VMC4    ""
-#endif
-
+// backend 枚举串注册表单源（拼装期回填 global.backend 行）；CLI 名与兼容
+// 别名（cbackend/c → stackc）由各后端模块自报，被裁后端不可解析（#886）。
 bool parseBackendNameImpl(const std::string& name, CEmitterBackend& backend)
 {
-#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
-    if (name == "stackc" || name == "cbackend" || name == "c") {
-        backend = CEmitterBackend::StackC;
-        return true;
-    }
-#endif
-#if !defined(MJ2X_DISABLE_REGC_BACKEND)
-    if (name == "regc") {
-        backend = CEmitterBackend::RegC;
-        return true;
-    }
-#endif
-#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
-    if (name == "llvm") {
-        backend = CEmitterBackend::LlvmIr;
-        return true;
-    }
-#endif
-#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
-    if (name == "vmc4") {
-        backend = CEmitterBackend::Vmc4;
-        return true;
-    }
-#endif
-    return false;
+    const BackendModule* module = findBackendModuleByCliName(name);
+    if (module == nullptr) return false;
+    backend = module->kind;
+    return true;
 }
 
 bool cli_backend(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--backend"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--backend"}); return false; }
     if (!parseBackendNameImpl(v, o.cBackendKind)) {
-#if defined(MJ2X_DISABLE_STACKC_BACKEND)
-        e = trfs("mj2x.cli.err.unknown_flag_value", {"--backend", enabledBackendCliList()});
-#else
-        e = trfs("mj2x.cli.err.unknown_flag_value",
-                 {"--backend", enabledBackendCliList() + " (cbackend/c also accepted)"});
-#endif
+        if (findBackendModule(CEmitterBackend::StackC) == nullptr)
+            e = param_internal::trfs("mj2x.cli.err.unknown_flag_value", {"--backend", enabledBackendCliList()});
+        else
+            e = param_internal::trfs("mj2x.cli.err.unknown_flag_value",
+                     {"--backend", enabledBackendCliList() + " (cbackend/c also accepted)"});
         return false;
     }
     o.backendSelected = true;
@@ -399,9 +91,9 @@ bool cli_backend(CliOptions& o, const char* v, std::string& e)
 }
 bool json_backend(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"backend"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"backend"}); return false; }
     if (!parseBackendNameImpl(j.get<std::string>(), o.cBackendKind)) {
-        e = trfs("mj2x.cli.err.cfg_invalid_enum",
+        e = param_internal::trfs("mj2x.cli.err.cfg_invalid_enum",
                  {"backend", j.get<std::string>(), enabledBackendCliList()});
         return false;
     }
@@ -413,7 +105,7 @@ bool json_backend(CliOptions& o, const json& j, std::string& e)
 // config 侧不做清空（互斥由校验兜底，与旧 applyConfigOptions 一致）。
 bool cli_emit_c(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--emit-c"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--emit-c"}); return false; }
     if (!o.cliEmitOutputSeen) {
         o.cOutputPath.clear();
         o.cppOutputPath.clear();
@@ -426,14 +118,14 @@ bool cli_emit_c(CliOptions& o, const char* v, std::string& e)
 }
 bool json_emit_c(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"emit_c"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"emit_c"}); return false; }
     o.cOutputPath = j.get<std::string>();
     return true;
 }
 
 bool cli_emit_cpp(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--emit-cpp"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--emit-cpp"}); return false; }
     if (!o.cliEmitOutputSeen) {
         o.cOutputPath.clear();
         o.cppOutputPath.clear();
@@ -446,7 +138,7 @@ bool cli_emit_cpp(CliOptions& o, const char* v, std::string& e)
 }
 bool json_emit_cpp(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"emit_cpp"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"emit_cpp"}); return false; }
     o.cppOutputPath = j.get<std::string>();
     return true;
 }
@@ -454,7 +146,7 @@ bool json_emit_cpp(CliOptions& o, const json& j, std::string& e)
 #ifndef MJ2X_DISABLE_LLVM_BACKEND
 bool cli_emit_llvm(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--emit-llvm"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--emit-llvm"}); return false; }
     if (!o.cliEmitOutputSeen) {
         o.cOutputPath.clear();
         o.cppOutputPath.clear();
@@ -467,7 +159,7 @@ bool cli_emit_llvm(CliOptions& o, const char* v, std::string& e)
 }
 bool json_emit_llvm(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"emit_llvm"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"emit_llvm"}); return false; }
     o.llvmOutputPath = j.get<std::string>();
     return true;
 }
@@ -475,7 +167,7 @@ bool json_emit_llvm(CliOptions& o, const json& j, std::string& e)
 
 bool cli_emit_native_dir(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--emit-native-dir"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--emit-native-dir"}); return false; }
     if (!o.cliEmitOutputSeen) {
         o.cOutputPath.clear();
         o.cppOutputPath.clear();
@@ -488,14 +180,14 @@ bool cli_emit_native_dir(CliOptions& o, const char* v, std::string& e)
 }
 bool json_emit_native_dir(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"emit_native_dir"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"emit_native_dir"}); return false; }
     o.nativeDirOutput = j.get<std::string>();
     return true;
 }
 
 bool cli_native_method_prefix(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--native-method-prefix"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--native-method-prefix"}); return false; }
     if (!o.cliNativePrefixSeen) {
         o.nativeMethodPrefixes.clear();
         o.cliNativePrefixSeen = true;
@@ -505,11 +197,11 @@ bool cli_native_method_prefix(CliOptions& o, const char* v, std::string& e)
 }
 bool json_native_method_prefix(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_array()) { e = trfs("mj2x.cli.err.cfg_type_strarr", {"native_method_prefixes"}); return false; }
+    if (!j.is_array()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_strarr", {"native_method_prefixes"}); return false; }
     o.nativeMethodPrefixes.clear();
     for (const auto& item : j) {
         if (!item.is_string()) {
-            e = trfs("mj2x.cli.err.cfg_arr_nonstr", {"native_method_prefixes"});
+            e = param_internal::trfs("mj2x.cli.err.cfg_arr_nonstr", {"native_method_prefixes"});
             return false;
         }
         o.nativeMethodPrefixes.push_back(item.get<std::string>());
@@ -517,13 +209,13 @@ bool json_native_method_prefix(CliOptions& o, const json& j, std::string& e)
     return true;
 }
 
-// 类级 glob 过滤器（--native-include/--native-exclude）。CLI 值可逗号分隔
-// （与 jvmtp filter.* 的 properties 形态一致），`/` 归一化为 `.`；空片段报错，
-// 防 "a,,b" 之类笔误静默丢模式。
+// 类级 glob 过滤器（--native-include/--native-exclude）：CLI 值可逗号分隔
+// （对标 jvmtp filter.* 在 properties 里的形态一致），`/` 统一化为 `.`。零片段报错
+// 由 "a,,b" 之类的空片段默认模式。
 bool cli_native_class_glob(CliOptions& o, const char* v, const char* flag, bool include,
                            std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {flag}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {flag}); return false; }
     bool& seen = include ? o.cliNativeIncludeSeen : o.cliNativeExcludeSeen;
     if (!seen) {
         (include ? o.nativeClassIncludes : o.nativeClassExcludes).clear();
@@ -531,7 +223,7 @@ bool cli_native_class_glob(CliOptions& o, const char* v, const char* flag, bool 
     }
     std::vector<std::string> globs;
     if (!normalizeClassGlobs({std::string(v)}, globs)) {
-        e = trfs("mj2x.cli.err.class_glob_empty", {flag});
+        e = param_internal::trfs("mj2x.cli.err.class_glob_empty", {flag});
         return false;
     }
     auto& target = include ? o.nativeClassIncludes : o.nativeClassExcludes;
@@ -541,18 +233,18 @@ bool cli_native_class_glob(CliOptions& o, const char* v, const char* flag, bool 
 bool json_native_class_glob(CliOptions& o, const json& j, const char* key, bool include,
                             std::string& e)
 {
-    if (!j.is_array()) { e = trfs("mj2x.cli.err.cfg_type_strarr", {key}); return false; }
+    if (!j.is_array()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_strarr", {key}); return false; }
     std::vector<std::string> raw;
     for (const auto& item : j) {
         if (!item.is_string()) {
-            e = trfs("mj2x.cli.err.cfg_arr_nonstr", {key});
+            e = param_internal::trfs("mj2x.cli.err.cfg_arr_nonstr", {key});
             return false;
         }
         raw.push_back(item.get<std::string>());
     }
     std::vector<std::string> globs;
     if (!normalizeClassGlobs(raw, globs)) {
-        e = trfs("mj2x.cli.err.class_glob_empty", {key});
+        e = param_internal::trfs("mj2x.cli.err.class_glob_empty", {key});
         return false;
     }
     auto& target = include ? o.nativeClassIncludes : o.nativeClassExcludes;
@@ -565,7 +257,7 @@ bool json_native_class_glob(CliOptions& o, const json& j, const char* key, bool 
 bool cli_obf_scope_glob(CliOptions& o, const char* v, const char* flag, bool include,
                         std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {flag}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {flag}); return false; }
     bool& seen = include ? o.cliObfScopeIncludeSeen : o.cliObfScopeExcludeSeen;
     if (!seen) {
         (include ? o.obfScopeIncludes : o.obfScopeExcludes).clear();
@@ -573,7 +265,7 @@ bool cli_obf_scope_glob(CliOptions& o, const char* v, const char* flag, bool inc
     }
     std::vector<std::string> globs;
     if (!normalizeClassGlobs({std::string(v)}, globs)) {
-        e = trfs("mj2x.cli.err.class_glob_empty", {flag});
+        e = param_internal::trfs("mj2x.cli.err.class_glob_empty", {flag});
         return false;
     }
     auto& target = include ? o.obfScopeIncludes : o.obfScopeExcludes;
@@ -583,18 +275,18 @@ bool cli_obf_scope_glob(CliOptions& o, const char* v, const char* flag, bool inc
 bool json_obf_scope_glob(CliOptions& o, const json& j, const char* key, bool include,
                          std::string& e)
 {
-    if (!j.is_array()) { e = trfs("mj2x.cli.err.cfg_type_strarr", {key}); return false; }
+    if (!j.is_array()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_strarr", {key}); return false; }
     std::vector<std::string> raw;
     for (const auto& item : j) {
         if (!item.is_string()) {
-            e = trfs("mj2x.cli.err.cfg_arr_nonstr", {key});
+            e = param_internal::trfs("mj2x.cli.err.cfg_arr_nonstr", {key});
             return false;
         }
         raw.push_back(item.get<std::string>());
     }
     std::vector<std::string> globs;
     if (!normalizeClassGlobs(raw, globs)) {
-        e = trfs("mj2x.cli.err.class_glob_empty", {key});
+        e = param_internal::trfs("mj2x.cli.err.class_glob_empty", {key});
         return false;
     }
     auto& target = include ? o.obfScopeIncludes : o.obfScopeExcludes;
@@ -637,9 +329,9 @@ bool json_native_exclude(CliOptions& o, const json& j, std::string& e)
 
 bool cli_compile_mode(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--compile-mode"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--compile-mode"}); return false; }
     if (!parseCompileModeName(v, o.compileMode)) {
-        e = trfs("mj2x.cli.err.unknown_flag_value", {"--compile-mode", "file or pipe"});
+        e = param_internal::trfs("mj2x.cli.err.unknown_flag_value", {"--compile-mode", "file or pipe"});
         return false;
     }
     o.compileModeSelected = true;
@@ -647,9 +339,9 @@ bool cli_compile_mode(CliOptions& o, const char* v, std::string& e)
 }
 bool json_compile_mode(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"compile_mode"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"compile_mode"}); return false; }
     if (!parseCompileModeName(j.get<std::string>(), o.compileMode)) {
-        e = trfs("mj2x.cli.err.cfg_invalid_enum", {"compile_mode", j.get<std::string>(), "file, pipe"});
+        e = param_internal::trfs("mj2x.cli.err.cfg_invalid_enum", {"compile_mode", j.get<std::string>(), "file, pipe"});
         return false;
     }
     o.compileModeSelected = true;
@@ -658,21 +350,21 @@ bool json_compile_mode(CliOptions& o, const json& j, std::string& e)
 
 bool cli_c_compiler(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--c-compiler"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--c-compiler"}); return false; }
     o.compilerSelected = true;
     if (v == std::string("xmake")) {
         o.buildDriver = NativeBuildDriver::Xmake;
         return true;
     }
     if (!parseCompilerName(v, o.cCompilerKind)) {
-        e = trfs("mj2x.cli.err.unknown_flag_value", {"--c-compiler", "auto, msvc, gcc, clang, zig, or xmake"});
+        e = param_internal::trfs("mj2x.cli.err.unknown_flag_value", {"--c-compiler", "auto, msvc, gcc, clang, zig, or xmake"});
         return false;
     }
     return true;
 }
 bool json_c_compiler(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"c_compiler"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"c_compiler"}); return false; }
     const std::string v = j.get<std::string>();
     o.compilerSelected = true;
     if (v == "xmake") {
@@ -680,7 +372,7 @@ bool json_c_compiler(CliOptions& o, const json& j, std::string& e)
         return true;
     }
     if (!parseCompilerName(v, o.cCompilerKind)) {
-        e = trfs("mj2x.cli.err.cfg_invalid_enum",
+        e = param_internal::trfs("mj2x.cli.err.cfg_invalid_enum",
                 {"c_compiler", v, "auto, msvc, gcc, clang, zig, xmake"});
         return false;
     }
@@ -690,9 +382,9 @@ bool json_c_compiler(CliOptions& o, const json& j, std::string& e)
 #ifndef MJ2X_DISABLE_LLVM_BACKEND
 bool cli_llvm_tool(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--llvm-tool"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--llvm-tool"}); return false; }
     if (!parseLlvmToolName(v, o.llvmTool)) {
-        e = trfs("mj2x.cli.err.unknown_flag_value", {"--llvm-tool", "clang or llc"});
+        e = param_internal::trfs("mj2x.cli.err.unknown_flag_value", {"--llvm-tool", "clang or llc"});
         return false;
     }
     o.llvmToolSelected = true;
@@ -700,9 +392,9 @@ bool cli_llvm_tool(CliOptions& o, const char* v, std::string& e)
 }
 bool json_llvm_tool(CliOptions& o, const json& j, std::string& e)
 {
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"llvm_tool"}); return false; }
+    if (!j.is_string()) { e = param_internal::trfs("mj2x.cli.err.cfg_type_str", {"llvm_tool"}); return false; }
     if (!parseLlvmToolName(j.get<std::string>(), o.llvmTool)) {
-        e = trfs("mj2x.cli.err.cfg_invalid_enum", {"llvm_tool", j.get<std::string>(), "clang, llc"});
+        e = param_internal::trfs("mj2x.cli.err.cfg_invalid_enum", {"llvm_tool", j.get<std::string>(), "clang, llc"});
         return false;
     }
     o.llvmToolSelected = true;
@@ -710,107 +402,17 @@ bool json_llvm_tool(CliOptions& o, const json& j, std::string& e)
 }
 #endif
 
-bool cli_regc_comment_level(CliOptions& o, const char* v, std::string& e)
-{
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--regc-comment-level"}); return false; }
-    if (v == std::string("none")) o.regcCommentLevel = mj2x::codegen::RegCCommentLevel::None;
-    else if (v == std::string("summary")) o.regcCommentLevel = mj2x::codegen::RegCCommentLevel::Summary;
-    else if (v == std::string("detailed")) o.regcCommentLevel = mj2x::codegen::RegCCommentLevel::Detailed;
-    else {
-        e = trfs("mj2x.cli.err.unknown_flag_value", {"--regc-comment-level", "none, summary, or detailed"});
-        return false;
-    }
-    return true;
-}
-bool json_regc_comment_level(CliOptions& o, const json& j, std::string& e)
-{
-    if (!j.is_string()) { e = trfs("mj2x.cli.err.cfg_type_str", {"regc_comment_level"}); return false; }
-    const std::string v = j.get<std::string>();
-    if (v == "none") o.regcCommentLevel = mj2x::codegen::RegCCommentLevel::None;
-    else if (v == "summary") o.regcCommentLevel = mj2x::codegen::RegCCommentLevel::Summary;
-    else if (v == "detailed") o.regcCommentLevel = mj2x::codegen::RegCCommentLevel::Detailed;
-    else {
-        e = trfs("mj2x.cli.err.cfg_invalid_enum",
-                {"regc_comment_level", v, "none, summary, detailed"});
-        return false;
-    }
-    return true;
-}
-
-bool cli_regc_safe_env_debug(CliOptions& o, const char* v, std::string& e)
-{
-    (void)v;
-    (void)e;
-    // 调试观察模式隐含开启 safe-env（历史行为）。
-    o.regcSafeEnv      = true;
-    o.regcSafeEnvDebug = true;
-    return true;
-}
-bool json_regc_safe_env_debug(CliOptions& o, const json& j, std::string& e)
-{
-    if (!j.is_boolean()) { e = trfs("mj2x.cli.err.cfg_type_bool", {"regc_safe_env_debug"}); return false; }
-    o.regcSafeEnvDebug = j.get<bool>();
-    if (o.regcSafeEnvDebug) o.regcSafeEnv = true;
-    return true;
-}
-
-bool cli_vmc4_seed(CliOptions& o, const char* v, std::string& e)
-{
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--vmc4-seed"}); return false; }
-    if (v[0] == '-') {
-        e = trfs("mj2x.cli.err.negative_unsigned", {"--vmc4-seed", v, "[0,18446744073709551615]"});
-        return false;
-    }
-    // 16 进制（0x...）或十进制均可，strtoull 自动识别（历史行为）。
-    char*      end = nullptr;
-    const unsigned long long val = std::strtoull(v, &end, 0);
-    if (end == v || *end != '\0') {
-        e = trfs("mj2x.cli.err.invalid_value", {"--vmc4-seed", v});
-        return false;
-    }
-    o.vmc4Seed         = static_cast<uint64_t>(val);
-    o.vmc4SeedSelected = true;
-    return true;
-}
-bool json_vmc4_seed(CliOptions& o, const json& j, std::string& e)
-{
-    if (j.is_number_unsigned()) {
-        o.vmc4Seed         = j.get<uint64_t>();
-        o.vmc4SeedSelected = true;
-        return true;
-    }
-    if (j.is_string()) {
-        const std::string s = j.get<std::string>();
-        if (!s.empty() && s[0] == '-') {
-            e = trfs("mj2x.cli.err.negative_unsigned",
-                     {"vmc4_seed", s, "[0,18446744073709551615]"});
-            return false;
-        }
-        char*             end = nullptr;
-        const unsigned long long val = std::strtoull(s.c_str(), &end, 0);
-        if (end == s.c_str() || *end != '\0') {
-            e = trfs("mj2x.cli.err.cfg_invalid_value", {"vmc4_seed", s});
-            return false;
-        }
-        o.vmc4Seed         = static_cast<uint64_t>(val);
-        o.vmc4SeedSelected = true;
-        return true;
-    }
-    e = trfs("mj2x.cli.err.cfg_type_num_hex", {"vmc4_seed"});
-    return false;
-}
-
 bool cli_native_lib_key(CliOptions& o, const char* v, std::string& e)
 {
-    if (!v) { e = trfs("mj2x.cli.err.flag_requires_value", {"--native-lib-key"}); return false; }
+    if (!v) { e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {"--native-lib-key"}); return false; }
     if (v[0] == '-') {
-        e = trfs("mj2x.cli.err.negative_unsigned", {"--native-lib-key", v, "[0,0xFFFFFFFF]"});
+        e = param_internal::trfs("mj2x.cli.err.negative_unsigned", {"--native-lib-key", v, "[0,0xFFFFFFFF]"});
         return false;
     }
     char*  end = nullptr;
     const unsigned long val = std::strtoul(v, &end, 16);
     if (end == v || *end != '\0') {
-        e = trfs("mj2x.cli.err.invalid_hex", {"--native-lib-key", v});
+        e = param_internal::trfs("mj2x.cli.err.invalid_hex", {"--native-lib-key", v});
         return false;
     }
     o.nativeLibKey         = static_cast<std::uint32_t>(val);
@@ -822,13 +424,13 @@ bool json_native_lib_key(CliOptions& o, const json& j, std::string& e)
     if (j.is_string()) {
         const std::string s = j.get<std::string>();
         if (!s.empty() && s[0] == '-') {
-            e = trfs("mj2x.cli.err.negative_unsigned", {"native_lib_key", s, "[0,0xFFFFFFFF]"});
+            e = param_internal::trfs("mj2x.cli.err.negative_unsigned", {"native_lib_key", s, "[0,0xFFFFFFFF]"});
             return false;
         }
         char*             end = nullptr;
         const unsigned long val = std::strtoul(s.c_str(), &end, 16);
         if (end == s.c_str() || *end != '\0') {
-            e = trfs("mj2x.cli.err.cfg_invalid_hex", {"native_lib_key", s});
+            e = param_internal::trfs("mj2x.cli.err.cfg_invalid_hex", {"native_lib_key", s});
             return false;
         }
         o.nativeLibKey         = static_cast<std::uint32_t>(val);
@@ -840,72 +442,29 @@ bool json_native_lib_key(CliOptions& o, const json& j, std::string& e)
         o.nativeLibKeySelected = true;
         return true;
     }
-    e = trfs("mj2x.cli.err.cfg_type_hex", {"native_lib_key"});
+    e = param_internal::trfs("mj2x.cli.err.cfg_type_hex", {"native_lib_key"});
     return false;
 }
 
-// ---------- 参数表 ----------
-// 顺序即 --help 分组展示顺序。group 变化时打印分组标题。
+// ---------- 基表（global/selection/compile + strings/../log 两段） ----------
+// 后端参数段不在此声明：各后端接线单元持有，经 backend_registry 拼装。
 
-// global
+// global + selection + compile（compile 段之后由注册表插入各后端段）
 DEF_STR(nativeAnnotation, "--native-annotation", "native_annotation")
 DEF_BOOL(dumpMIR, "--dump-mir", "dump_mir")
 DEF_ENUM_STR(nativeOptLevel, "--native-opt-level", "native_opt_level", "0,1,2,3,s", "2")
 DEF_BOOL(compileNative, "--compile", "compile")
 DEF_STR(cmakeProjectDir, "--generate-cmake", "generate_cmake")
 DEF_STR(xmakeProjectDir, "--generate-xmake", "generate_xmake")
-DEF_BOOL(regcTraceCalls, "--regc-trace-calls", "regc_trace_calls")
-DEF_BOOL(regcDirectCalls, "--regc-direct-calls", "regc_direct_calls")
-DEF_BOOL(regcSafeEnv, "--regc-safe-env", "regc_safe_env")
-DEF_BOOL(regcNoInline, "--regc-no-inline", "regc_no_inline")
-DEF_BOOL(regcObfuscate, "--regc-obfuscate", "regc_obfuscate")
-DEF_INT(regcCffDead, "--regc-cff-dead", "regc_cff_dead", 0, 0)
-DEF_BOOL(regcCffStateEncrypt, "--regc-cff-state-encrypt", "regc_cff_state_encrypt")
-DEF_BOOL(regcMbaDeep, "--regc-mba-deep", "regc_mba_deep")
-DEF_BOOL(regcOpaqueZero, "--regc-opaque-zero", "regc_opaque_zero")
-DEF_BOOL(regcHideConstants, "--regc-hide-constants", "regc_hide_constants")
-DEF_BOOL(regcIndirectCalls, "--regc-indirect-calls", "regc_indirect_calls")
-DEF_U64(regcTransformSeed, "--regc-transform-seed", "regc_transform_seed")
-DEF_ENUM_STR(stackcExceptionCheck, "--stackc-exception-check", "stackc_exception_check", "full,lite", "full")
-DEF_ENUM_STR(vmc4Dispatcher, "--vmc4-dispatcher", "vmc4_dispatcher", "switch_table,funcptr_table,computed_goto,if_nest,state_dispatcher", "switch_table")
-DEF_ENUM_STR(vmc4Granularity, "--vmc4-granularity", "vmc4_granularity", "class,method,program", "class")
-DEF_INT(vmc4Alias, "--vmc4-alias", "vmc4_alias", 0, 3)
-DEF_INT(vmc4Bogus, "--vmc4-bogus", "vmc4_bogus", 0, 4)
-DEF_INT(vmc4Drift, "--vmc4-drift", "vmc4_drift", 0, 4)
-DEF_INT(vmc4DriftPeriod, "--vmc4-drift-period", "vmc4_drift_period", 1, 0)
-DEF_STR(vmc4TraceSurface, "--vmc4-trace-surface", "vmc4_trace_surface")
-DEF_BOOL(vmc4EncryptProgram, "--vmc4-encrypt-program", "vmc4_encrypt_program")
-DEF_BOOL(vmc4LazyDecrypt, "--vmc4-lazy-decrypt", "vmc4_lazy_decrypt")
-DEF_BOOL(vmc4BlockLazyDecrypt, "--vmc4-block-lazy-decrypt", "vmc4_block_lazy_decrypt")
-DEF_BOOL(vmc4ShuffleBlocks, "--vmc4-shuffle-blocks", "vmc4_shuffle_blocks")
-DEF_BOOL(vmc4SuperOps, "--vmc4-super-ops", "vmc4_super_ops")
-DEF_BOOL(vmc4Fragment, "--vmc4-fragment", "vmc4_fragment")
-DEF_BOOL(stringsEncrypt, "--strings-encrypt", "strings_encrypt")
-DEF_ENUM_STR(runtimeProtection, "--runtime-protection", "runtime_protection", "none,log,delay,fake,terminate", "none")
-DEF_INT(runtimeProtectionStep, "--runtime-protection-step", "runtime_protection_step", 1, 0)
-DEF_INT(runtimeProtectionDelayMs, "--runtime-protection-delay", "runtime_protection_delay_ms", 0, 0)
 DEF_INT(nativeTimeoutSec, "--native-timeout", "native_timeout", 0, 0)
-DEF_STR(nativeLibPackHook, "--native-lib-pack-hook", "native_lib_pack_hook")
-DEF_STR(intrinsicConfigPath, "--intrinsic-config", "intrinsic_config")
-DEF_STR_LIST(intrinsicSources, "--intrinsic-src", "intrinsic_src")
-DEF_BOOL(quiet, "--quiet", "log_quiet")
-DEF_BOOL(verbose, "--verbose", "log_verbose")
-DEF_U64(clientId, "--client-id", "client_id")
 
-}   // namespace
-
-// ---------- 注册表数组（顺序即 --help 展示顺序） ----------
-
-#define PARAM(id_, flag_, jp_, type_, enum_, lo_, hi_, def_, grp_, req_, cliFn, jsonFn) \
-    { id_, flag_, jp_, type_, enum_, lo_, hi_, def_, grp_, req_, cliFn, jsonFn }
-
-const ParamDef kParamTable[] = {
+const ParamDef kBaseParamsBefore[] = {
     // global
     PARAM("global.input", "-i", "input", ParamType::String, nullptr, 0, 0, "", "global", "", cli_input, json_input),
     PARAM("global.output", "-o", "output", ParamType::String, nullptr, 0, 0, "", "global", "", cli_output, json_output),
-    // backend 枚举串随编译期裁剪面收缩（宏定义见 parseBackendNameImpl 上方）。
+    // 枚举串拼装期自注册表回填（此处占位，从不被读取）。
     PARAM("global.backend", "--backend", "backend", ParamType::Enum,
-          MJ2X_BE_STACKC MJ2X_BE_ENTRY_REGC MJ2X_BE_ENTRY_LLVM MJ2X_BE_ENTRY_VMC4,
+          "",
           0, 0, "stackc", "global", "", cli_backend, json_backend),
     PARAM("global.emit_c", "--emit-c", "emit_c", ParamType::String, nullptr, 0, 0, "", "global", "", cli_emit_c, json_emit_c),
     PARAM("global.emit_cpp", "--emit-cpp", "emit_cpp", ParamType::String, nullptr, 0, 0, "", "global", "", cli_emit_cpp, json_emit_cpp),
@@ -922,8 +481,8 @@ const ParamDef kParamTable[] = {
     PARAM("obf_scope.exclude", "--obf-scope-exclude", "obf_scope_exclude", ParamType::StringList, nullptr, 0, 0, "", "obf_scope", "", cli_obf_scope_exclude, json_obf_scope_exclude),
     PARAM("selection.native_exclude", "--native-exclude", "native_exclude", ParamType::StringList, nullptr, 0, 0, "", "selection", "", cli_native_exclude, json_native_exclude),
     // compile
-    PARAM("compile.opt_level", "--native-opt-level", "native_opt_level", ParamType::Enum, "0,1,2,3,s", 0, 0, "2", "compile", "", cli_nativeOptLevel, json_nativeOptLevel),
     PARAM("compile.enabled", "--compile", "compile", ParamType::Bool, nullptr, 0, 0, "false", "compile", "", cli_compileNative, json_compileNative),
+    PARAM("compile.opt_level", "--native-opt-level", "native_opt_level", ParamType::Enum, "0,1,2,3,s", 0, 0, "2", "compile", "", cli_nativeOptLevel, json_nativeOptLevel),
     PARAM("compile.mode", "--compile-mode", "compile_mode", ParamType::Enum, "file,pipe", 0, 0, "file", "compile", "", cli_compile_mode, json_compile_mode),
     PARAM("compile.c_compiler", "--c-compiler", "c_compiler", ParamType::Enum, "auto,msvc,gcc,clang,zig,xmake", 0, 0, "auto", "compile", "", cli_c_compiler, json_c_compiler),
     PARAM("compile.timeout", "--native-timeout", "native_timeout", ParamType::Int, nullptr, 0, 0, "900", "compile", "", cli_nativeTimeoutSec, json_nativeTimeoutSec),
@@ -932,38 +491,21 @@ const ParamDef kParamTable[] = {
 #endif
     PARAM("compile.generate_cmake", "--generate-cmake", "generate_cmake", ParamType::String, nullptr, 0, 0, "", "compile", "", cli_cmakeProjectDir, json_cmakeProjectDir),
     PARAM("compile.generate_xmake", "--generate-xmake", "generate_xmake", ParamType::String, nullptr, 0, 0, "", "compile", "", cli_xmakeProjectDir, json_xmakeProjectDir),
-    // stackc
-    PARAM("stackc.exception_check", "--stackc-exception-check", "stackc_exception_check", ParamType::Enum, "full,lite", 0, 0, "full", "stackc", "stackc", cli_stackcExceptionCheck, json_stackcExceptionCheck),
-    // regc
-    PARAM("regc.trace_calls", "--regc-trace-calls", "regc_trace_calls", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcTraceCalls, json_regcTraceCalls),
-    PARAM("regc.direct_calls", "--regc-direct-calls", "regc_direct_calls", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcDirectCalls, json_regcDirectCalls),
-    PARAM("regc.comment_level", "--regc-comment-level", "regc_comment_level", ParamType::Enum, "none,summary,detailed", 0, 0, "summary", "regc", "regc", cli_regc_comment_level, json_regc_comment_level),
-    PARAM("regc.safe_env", "--regc-safe-env", "regc_safe_env", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcSafeEnv, json_regcSafeEnv),
-    PARAM("regc.safe_env_debug", "--regc-safe-env-debug", "regc_safe_env_debug", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regc_safe_env_debug, json_regc_safe_env_debug),
-    PARAM("regc.no_inline", "--regc-no-inline", "regc_no_inline", ParamType::Bool, nullptr, 0, 0, "false", "regc", "regc", cli_regcNoInline, json_regcNoInline),
-    PARAM("regc.obfuscate", "--regc-obfuscate", "regc_obfuscate", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcObfuscate, json_regcObfuscate),
-    PARAM("regc.cff_dead", "--regc-cff-dead", "regc_cff_dead", ParamType::Int, nullptr, 0, 0, "0", "regc_llvm", "regc|llvm", cli_regcCffDead, json_regcCffDead),
-    PARAM("regc.cff_state_encrypt", "--regc-cff-state-encrypt", "regc_cff_state_encrypt", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcCffStateEncrypt, json_regcCffStateEncrypt),
-    PARAM("regc.mba_deep", "--regc-mba-deep", "regc_mba_deep", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcMbaDeep, json_regcMbaDeep),
-    PARAM("regc.opaque_zero", "--regc-opaque-zero", "regc_opaque_zero", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcOpaqueZero, json_regcOpaqueZero),
-    PARAM("regc.hide_constants", "--regc-hide-constants", "regc_hide_constants", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcHideConstants, json_regcHideConstants),
-    PARAM("regc.indirect_calls", "--regc-indirect-calls", "regc_indirect_calls", ParamType::Bool, nullptr, 0, 0, "false", "regc_llvm", "regc|llvm", cli_regcIndirectCalls, json_regcIndirectCalls),
-    PARAM("regc.transform_seed", "--regc-transform-seed", "regc_transform_seed", ParamType::UInt64, nullptr, 0, 0, "0", "regc_llvm", "regc|llvm", cli_regcTransformSeed, json_regcTransformSeed),
-    // vmc4
-    PARAM("vmc4.dispatcher", "--vmc4-dispatcher", "vmc4_dispatcher", ParamType::Enum, "switch_table,funcptr_table,computed_goto,if_nest,state_dispatcher", 0, 0, "switch_table", "vmc4", "vmc4", cli_vmc4Dispatcher, json_vmc4Dispatcher),
-    PARAM("vmc4.seed", "--vmc4-seed", "vmc4_seed", ParamType::Hex, nullptr, 0, 0, "0", "vmc4", "vmc4", cli_vmc4_seed, json_vmc4_seed),
-    PARAM("vmc4.granularity", "--vmc4-granularity", "vmc4_granularity", ParamType::Enum, "class,method,program", 0, 0, "class", "vmc4", "vmc4", cli_vmc4Granularity, json_vmc4Granularity),
-    PARAM("vmc4.alias", "--vmc4-alias", "vmc4_alias", ParamType::Int, nullptr, 0, 3, "1", "vmc4", "vmc4", cli_vmc4Alias, json_vmc4Alias),
-    PARAM("vmc4.bogus", "--vmc4-bogus", "vmc4_bogus", ParamType::Int, nullptr, 0, 4, "1", "vmc4", "vmc4", cli_vmc4Bogus, json_vmc4Bogus),
-    PARAM("vmc4.drift", "--vmc4-drift", "vmc4_drift", ParamType::Int, nullptr, 0, 4, "0", "vmc4", "vmc4", cli_vmc4Drift, json_vmc4Drift),
-    PARAM("vmc4.drift_period", "--vmc4-drift-period", "vmc4_drift_period", ParamType::Int, nullptr, 1, 0, "16", "vmc4", "vmc4", cli_vmc4DriftPeriod, json_vmc4DriftPeriod),
-    PARAM("vmc4.trace_surface", "--vmc4-trace-surface", "vmc4_trace_surface", ParamType::String, nullptr, 0, 0, "", "vmc4", "vmc4", cli_vmc4TraceSurface, json_vmc4TraceSurface),
-    PARAM("vmc4.encrypt_program", "--vmc4-encrypt-program", "vmc4_encrypt_program", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4EncryptProgram, json_vmc4EncryptProgram),
-    PARAM("vmc4.lazy_decrypt", "--vmc4-lazy-decrypt", "vmc4_lazy_decrypt", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4LazyDecrypt, json_vmc4LazyDecrypt),
-    PARAM("vmc4.block_lazy_decrypt", "--vmc4-block-lazy-decrypt", "vmc4_block_lazy_decrypt", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4BlockLazyDecrypt, json_vmc4BlockLazyDecrypt),
-    PARAM("vmc4.shuffle_blocks", "--vmc4-shuffle-blocks", "vmc4_shuffle_blocks", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4ShuffleBlocks, json_vmc4ShuffleBlocks),
-    PARAM("vmc4.super_ops", "--vmc4-super-ops", "vmc4_super_ops", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4SuperOps, json_vmc4SuperOps),
-    PARAM("vmc4.fragment", "--vmc4-fragment", "vmc4_fragment", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4Fragment, json_vmc4Fragment),
+};
+
+// strings 及之后（compile 段与 strings 段之间为各后端参数段）
+DEF_BOOL(stringsEncrypt, "--strings-encrypt", "strings_encrypt")
+DEF_ENUM_STR(runtimeProtection, "--runtime-protection", "runtime_protection", "none,log,delay,fake,terminate", "none")
+DEF_INT(runtimeProtectionStep, "--runtime-protection-step", "runtime_protection_step", 1, 0)
+DEF_INT(runtimeProtectionDelayMs, "--runtime-protection-delay", "runtime_protection_delay_ms", 0, 0)
+DEF_STR(nativeLibPackHook, "--native-lib-pack-hook", "native_lib_pack_hook")
+DEF_STR(intrinsicConfigPath, "--intrinsic-config", "intrinsic_config")
+DEF_STR_LIST(intrinsicSources, "--intrinsic-src", "intrinsic_src")
+DEF_BOOL(quiet, "--quiet", "log_quiet")
+DEF_BOOL(verbose, "--verbose", "log_verbose")
+DEF_U64(clientId, "--client-id", "client_id")
+
+const ParamDef kBaseParamsAfter[] = {
     // strings
     PARAM("strings.encrypt", "--strings-encrypt", "strings_encrypt", ParamType::Bool, nullptr, 0, 0, "false", "strings", "stackc|regc", cli_stringsEncrypt, json_stringsEncrypt),
     // runtime
@@ -983,23 +525,77 @@ const ParamDef kParamTable[] = {
     PARAM("log.verbose", "--verbose", "log_verbose", ParamType::Bool, nullptr, 0, 0, "false", "logging", "", cli_verbose, json_verbose),
 };
 
-#undef PARAM
+/// --backend 枚举串：注册表单源（displayOrder 序）。逗号无空格——历史宏拼接
+/// 口径，schema enum 与解析按 ',' 切分。
+std::string backendEnumValues()
+{
+    std::string values;
+    for (const BackendModule* module : backendModules()) {
+        if (!values.empty()) values += ",";
+        values += module->cliName;
+    }
+    return values;
+}
 
-const ParamDef* kParams     = kParamTable;
-const std::size_t kParamCount = sizeof(kParamTable) / sizeof(kParamTable[0]);
+std::vector<ParamDef> assembleParamTable(const std::string& backendEnum)
+{
+    const std::size_t beforeCount = sizeof(kBaseParamsBefore) / sizeof(kBaseParamsBefore[0]);
+    const std::size_t afterCount  = sizeof(kBaseParamsAfter) / sizeof(kBaseParamsAfter[0]);
+    std::vector<ParamDef> table;
+    table.reserve(beforeCount + afterCount + 4);
+    table.insert(table.end(), kBaseParamsBefore, kBaseParamsBefore + beforeCount);
+    for (const BackendModule* module : backendModules()) {
+        if (module->paramCount != 0) {
+            table.insert(table.end(), module->params, module->params + module->paramCount);
+        }
+    }
+    table.insert(table.end(), kBaseParamsAfter, kBaseParamsAfter + afterCount);
+    // global.backend 行的枚举串拼装期回填（静态基表无法表达运行时裁剪面）。
+    for (ParamDef& param : table) {
+        if (std::strcmp(param.id, "global.backend") == 0) param.enumValues = backendEnum.c_str();
+    }
+    return table;
+}
+
+const std::vector<ParamDef>& paramTable()
+{
+    // 声明序保证枚举串先于表构造；首次访问在 main() 启动后，全部接线单元
+    // 的静态注册已完成，拼装序与 TU 初始化顺序无关。
+    static const std::string          kBackendEnum = backendEnumValues();
+    static const std::vector<ParamDef> kTable      = assembleParamTable(kBackendEnum);
+    return kTable;
+}
+
+}   // namespace
+
+// ---------- 公开访问器（全量表，运行时拼装） ----------
+
+const ParamDef* params()
+{
+    return paramTable().data();
+}
+
+std::size_t paramCount()
+{
+    return paramTable().size();
+}
 
 const ParamDef* findParamByCli(const std::string& cliFlag)
 {
-    for (std::size_t i = 0; i < kParamCount; ++i) {
-        if (cliFlag == kParams[i].cliFlag) return &kParams[i];
+    const std::size_t count = paramCount();
+    const ParamDef*   table = params();
+    for (std::size_t i = 0; i < count; ++i) {
+        if (cliFlag == table[i].cliFlag) return &table[i];
     }
     return nullptr;
 }
 
 const ParamDef* findParamByJsonPath(const std::string& jsonPath)
 {
-    for (std::size_t i = 0; i < kParamCount; ++i) {
-        if (jsonPath == kParams[i].jsonPath) return &kParams[i];
+    const std::size_t count = paramCount();
+    const ParamDef*   table = params();
+    for (std::size_t i = 0; i < count; ++i) {
+        if (jsonPath == table[i].jsonPath) return &table[i];
     }
     return nullptr;
 }
@@ -1050,8 +646,10 @@ ca::opt::Command buildOptCommand()
     dumpOnce.label = "dump_once";
     cmd.mutex_groups.push_back(dumpOnce);
 
-    for (std::size_t i = 0; i < kParamCount; ++i) {
-        const ParamDef& p = kParams[i];
+    const std::size_t count = paramCount();
+    const ParamDef*   table = params();
+    for (std::size_t i = 0; i < count; ++i) {
+        const ParamDef& p = table[i];
         ca::opt::Arg arg;
         arg.name = optCanonicalName(p.cliFlag);
         switch (p.type) {
@@ -1106,8 +704,10 @@ std::string trParamGroup(const char* slug)
 nlohmann::json buildConfigSchemaJson()
 {
     json props = json::object();
-    for (std::size_t i = 0; i < kParamCount; ++i) {
-        const ParamDef& p = kParams[i];
+    const std::size_t count = paramCount();
+    const ParamDef*   table = params();
+    for (std::size_t i = 0; i < count; ++i) {
+        const ParamDef& p = table[i];
         json            node;
         node["description"] = trParamDesc(p.id);
         switch (p.type) {
@@ -1214,26 +814,28 @@ void printHelp()
     // 空格，与原 printf("  %-*s  %s") 口径一致（名册均为 ASCII，码点计宽同
     // 字节宽）；分组标题仍整行打印，组间断开渲染即可，列位不变。
     std::size_t width = 2;
-    for (std::size_t i = 0; i < kParamCount; ++i) {
-        width = std::max(width, std::strlen(kParams[i].cliFlag));
+    const std::size_t count = paramCount();
+    const ParamDef*   table = params();
+    for (std::size_t i = 0; i < count; ++i) {
+        width = std::max(width, std::strlen(table[i].cliFlag));
     }
     const std::size_t descColumn = width + 4;
     const char*       currentGroup = nullptr;
-    ca::opt::HelpTable table;
-    auto flushTable = [&table, descColumn]() {
-        if (!table.empty()) {
-            fputs(table.render_to_column(2, descColumn).c_str(), stdout);
-            table = ca::opt::HelpTable{};
+    ca::opt::HelpTable helpTable;
+    auto flushTable = [&helpTable, descColumn]() {
+        if (!helpTable.empty()) {
+            fputs(helpTable.render_to_column(2, descColumn).c_str(), stdout);
+            helpTable = ca::opt::HelpTable{};
         }
     };
-    for (std::size_t i = 0; i < kParamCount; ++i) {
-        const ParamDef& p = kParams[i];
+    for (std::size_t i = 0; i < count; ++i) {
+        const ParamDef& p = table[i];
         if (!currentGroup || std::strcmp(currentGroup, p.group) != 0) {
             flushTable();
             currentGroup = p.group;
             printf("\n  [%s]\n", trParamGroup(p.group).c_str());
         }
-        table.add(p.cliFlag, trParamDesc(p.id));
+        helpTable.add(p.cliFlag, trParamDesc(p.id));
     }
     flushTable();
     printFlagHelp("mj2x.cli.help.help_flag", 31);
@@ -1247,8 +849,10 @@ std::string buildConfigTemplateText()
     out << "// " << ca::i18n::tr("mj2x.cli.template.header1") << "\n"
         << "// " << ca::i18n::tr("mj2x.cli.template.header2") << "\n"
         << "{\n";
-    for (std::size_t i = 0; i < kParamCount; ++i) {
-        const ParamDef& p = kParams[i];
+    const std::size_t count = paramCount();
+    const ParamDef*   table = params();
+    for (std::size_t i = 0; i < count; ++i) {
+        const ParamDef& p = table[i];
         std::string     value;
         switch (p.type) {
         case ParamType::Bool:
@@ -1268,7 +872,7 @@ std::string buildConfigTemplateText()
             break;
         }
         out << "  \"" << p.jsonPath << "\": " << value;
-        if (i + 1 < kParamCount) out << ",";
+        if (i + 1 < count) out << ",";
         out << "  // " << p.id;
         if (p.requires && p.requires[0]) {
             out << "(" << ca::i18n::tr("mj2x.cli.template.requires") << ": " << p.requires << ")";
@@ -1280,4 +884,3 @@ std::string buildConfigTemplateText()
 }
 
 }   // namespace mj2x::cli
-

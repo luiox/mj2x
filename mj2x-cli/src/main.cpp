@@ -1,27 +1,9 @@
 #include "mj2x/mj2x.hpp"
 #include "mj2x/logging.hpp"
-// 后端头随编译期裁剪面（issue #886）条件引入：被裁后端的头不参与编译，
-// 分发分支与其类符号一并从二进制消失。
-#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
-#include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
-#endif
-#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
-#include "mj2x/backend/stackc/stackc_backend.hpp"
-#endif
-#if !defined(MJ2X_DISABLE_REGC_BACKEND)
-#include "mj2x/backend/regc/regc_backend.hpp"
-#endif
-#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
-#include "mj2x/backend/vmc4/vmc4_backend.hpp"
-#include "mj2x/backend/vmc4/vm_opcode.hpp"
-#endif
-#include "mj2x/codegen/runtime_protection.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
-#include "mj2x/core/seed_derivation.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
 
 #include <fstream>
-#include <optional>
 #include <nlohmann/json.hpp>
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
@@ -34,6 +16,8 @@
 #include "mj2x/preprocessor/obfuscation_scope_preprocessor.hpp"
 #include "mj2x/postprocessor/native_loader_postprocessor.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
+#include "backend_registry.hpp"
+#include "backend_wiring.hpp"
 #include "config_file.hpp"
 #include "cpp_source_dialect.hpp"
 #include "embedded_rt.hpp"
@@ -44,7 +28,6 @@
 // ProcessTimeout/processTimeoutFromSeconds，本文件的 pack hook 站点直接用。
 #include "native_process_timeout.hpp"
 #include "jzip/memory_segment.hpp"
-#include "libca/core/tag_cast.hpp"
 #include "jzip/zip_io.hpp"
 #include "libca/zip/checksum.hpp"
 
@@ -144,17 +127,6 @@ private:
 
     std::filesystem::path path_;
 };
-
-/// @brief --runtime-protection 字符串 → codegen::RuntimeProtectionAction。
-static mj2x::codegen::RuntimeProtectionAction parseRuntimeProtectionAction(
-    const std::string& name)
-{
-    if (name == "log") return mj2x::codegen::RuntimeProtectionAction::Log;
-    if (name == "delay") return mj2x::codegen::RuntimeProtectionAction::Delay;
-    if (name == "fake") return mj2x::codegen::RuntimeProtectionAction::Fake;
-    if (name == "terminate") return mj2x::codegen::RuntimeProtectionAction::Terminate;
-    return mj2x::codegen::RuntimeProtectionAction::None;
-}
 
 static bool hasExtension(std::string path, const std::string& ext)
 {
@@ -309,8 +281,8 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&
 /// 随后的嵌入（可选 --native-lib-key 加密）使用处理后的产物。经系统 shell
 /// 执行（Windows: ComSpec /d /c；POSIX: sh -c），非零退出码视为失败。
 /// @param timeout 墙钟超时（P1-4；0 = 不限时）。超时只杀 shell 本身——
-/// hook 自行拉起的子孙进程不在收割范围（用户自有命令，与 jvmtp 对
-/// 用户钩子的口径一致）。
+///        hook 自行拉起的子孙进程不在收割范围（用户自有命令，与 jvmtp 的
+///        用户钩子的口径一致）。
 static int runNativeLibPackHook(const std::string&    hookTemplate,
                                 const std::filesystem::path& nativeLibraryPath,
                                 ProcessTimeout timeout)
@@ -497,7 +469,7 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
             << std::string{mj2x::cli::rtBackendDefine(CEmitterBackend::LlvmIr)} << "\")\n";
         out << "add_custom_command(\n";
         out << "  OUTPUT ${NATIVE_LIB}\n";
-        // --native-opt-level：LLVM 侧直接落进 clang 命令行（无 MSVC 分支）。
+        // --native-opt-level：LLVM 侧直接落到 clang 命令行（无 MSVC 分支）。
         out << "  COMMAND ${CLANG_EXECUTABLE} -shared " << gnuOptFlag(optLevel)
             << " ${CRT_ARGS} ${LLVM_IR_FILE} "
                "${CRT_SOURCES} -o ${NATIVE_LIB}\n";
@@ -784,8 +756,8 @@ int main(int argc, char** argv)
     // "首个 CLI 输出清空其他"的替换语义（回归测试
     // JsonConfigSupportsCppOutputAndCommandLineCanReplaceIt 锁定）。Bool Flag
     // 出现即置位；StringList 逐项追加。
-    for (std::size_t i = 0; i < mj2x::cli::kParamCount; ++i) {
-        const mj2x::cli::ParamDef& param = mj2x::cli::kParams[i];
+    for (std::size_t i = 0; i < mj2x::cli::paramCount(); ++i) {
+        const mj2x::cli::ParamDef& param = mj2x::cli::params()[i];
         const std::string          name  = mj2x::cli::optCanonicalName(param.cliFlag);
         if (input.source_of(name) != ca::opt::ValueSource::CommandLine) continue;
         std::string error;
@@ -1111,168 +1083,26 @@ int main(int argc, char** argv)
     const std::string nativeResourcePath = nativeResourceEntry;
     const std::string nativeTempSuffix   = nativeLibraryPath.extension().string();
 
-    // R4 保护变换选项（RegIR 级，RegC/LLVM 共用；基础混淆默认关闭，
-    // --regc-obfuscate 显式开启基础三项，#829 增强开关各自联动对应基础项）。
-    // 双后端都被裁的构建（stackc-only/vmc4-only）下无消费方，一并裁剪。
-#if !defined(MJ2X_DISABLE_REGC_BACKEND) || !defined(MJ2X_DISABLE_LLVM_BACKEND)
-    // 混淆作用域（issue #8）：显式给了 include 即隐含开启混淆——否则用户要开
-    // 两个开关才能"只混淆这几个类"。exclude 单独给不隐含开启（它只做收窄）。
-    //
-    // 必须早于 buildTransformOptions：那个 lambda 在这里定义、在下面被调用，
-    // 晚于此处的赋值读不到。
-    if (!options.obfScopeIncludes.empty() && !options.regcObfuscate) {
-        options.regcObfuscate = true;
-    }
-
-    auto buildTransformOptions = [&]() -> std::optional<mj2x::RegTransformOptions> {
-        if (!options.regcObfuscate && options.regcCffDead == 0 && !options.regcCffStateEncrypt &&
-            !options.regcMbaDeep && !options.regcOpaqueZero && !options.regcHideConstants &&
-            !options.regcIndirectCalls) {
-            return std::nullopt;
-        }
-        mj2x::RegTransformOptions transform;
-        transform.enableMba                   = options.regcObfuscate || options.regcMbaDeep;
-        transform.enableOpaquePredicates      = options.regcObfuscate || options.regcOpaqueZero;
-        transform.enableControlFlowFlattening = options.regcObfuscate ||
-                                                options.regcCffDead != 0 ||
-                                                options.regcCffStateEncrypt;
-        transform.cffDeadBlockDensity = static_cast<ca::u32>(options.regcCffDead);
-        transform.cffStateEncryption  = options.regcCffStateEncrypt;
-        transform.mbaDeep             = options.regcMbaDeep;
-        transform.opaqueZero          = options.regcOpaqueZero;
-        // 立即数隐藏不被 --regc-obfuscate 联动（每立即数多一次运行时调用，
-        // 家族里最重的一项，仅显式开启）；排 CFF 之后由 pass 内部保证。
-        transform.hideImmediateConstants = options.regcHideConstants;
-        // 调用目标间接化同样不被 --regc-obfuscate 联动（每次调用多一层
-        // 分派，热路径开销可观）；排 CFF 之后由 pass 内部保证。
-        transform.indirectCallTargets = options.regcIndirectCalls;
-        transform.transformSeed =
-            mj2x::deriveClientSeed(options.regcTransformSeed, options.clientId);
-        return transform;
-    };
-#endif   // RegC/LLVM 裁剪面
+    // R4 保护变换选项已下沉至后端接线单元（backend_wiring_regtransform.cpp，
+    // RegC/LLVM 共用；stackc-only/vmc4-only 构建无消费方，TU 整体裁剪）。
 
     mj2x::Pipeline pipeline(std::move(config));
 
     const bool needsNativeSource = !nativeOutputPath.empty() || pipeCompile || nativeDirMode;
     mj2x::Backend* nativeSourceBackend = nullptr;
 
-    if (needsNativeSource) {
-        if (options.cBackendKind == CEmitterBackend::LlvmIr) {
-#if !defined(MJ2X_DISABLE_LLVM_BACKEND)
-            auto llvmBackend = std::make_unique<mj2x::LlvmIrBackend>();
-            if (!options.llvmOutputPath.empty()) llvmBackend->setOutputPath(options.llvmOutputPath);
-            if (auto transform = buildTransformOptions()) {
-                llvmBackend->setTransformOptions(*transform);
-            }
-            if (options.runtimeProtection != "none") {
-                llvmBackend->setRuntimeProtection(
-                    parseRuntimeProtectionAction(options.runtimeProtection),
-                    static_cast<uint32_t>(options.runtimeProtectionStep),
-                    static_cast<uint32_t>(options.runtimeProtectionDelayMs));
-            }
-            nativeSourceBackend = llvmBackend.get();
-            pipeline.registerBackend(std::move(llvmBackend));
-#endif
-        }
-        else if (options.cBackendKind == CEmitterBackend::RegC) {
-#if !defined(MJ2X_DISABLE_REGC_BACKEND)
-            auto regcBackend = std::make_unique<mj2x::RegCBackend>();
-            if (hasUserIntrinsics) regcBackend->setUserIntrinsics(userIntrinsicConfig);
-            if (!options.cOutputPath.empty()) regcBackend->setOutputPath(options.cOutputPath);
-            if (options.regcTraceCalls) regcBackend->setTraceCallLog(true);
-            if (options.regcDirectCalls) regcBackend->setDirectCalls(true);
-            regcBackend->setCommentLevel(options.regcCommentLevel);
-            if (options.regcSafeEnv) regcBackend->setSafeEnv(true);
-            if (options.regcSafeEnvDebug) regcBackend->setSafeEnvDebug(true);
-            if (options.regcNoInline) regcBackend->setInlineEnabled(false);
-            // 基础混淆默认关闭；--regc-obfuscate 显式开启基础三项，
-            // #829 增强开关各自联动对应基础项（mbaDeep→MBA、opaqueZero→opaque、
-            // cffDead/stateEncrypt→CFF）。RegIR 级变换与 LLVM 后端共用。
-            if (auto transform = buildTransformOptions()) {
-                regcBackend->setTransformOptions(*transform);
-            }
-            if (!options.nativeDirOutput.empty())
-                regcBackend->setSplitOutputDir(options.nativeDirOutput);
-            // --strings-encrypt：字面量 at-rest 加密（stackc/regc 专属开关，
-            // LLVM 后端不支持——PARAM 的 backends 面已限 stackc|regc）。
-            if (options.stringsEncrypt) regcBackend->setStringsEncrypt(true);
-            if (options.runtimeProtection != "none") {
-                regcBackend->setRuntimeProtection(
-                    parseRuntimeProtectionAction(options.runtimeProtection),
-                    static_cast<uint32_t>(options.runtimeProtectionStep),
-                    static_cast<uint32_t>(options.runtimeProtectionDelayMs));
-            }
-            nativeSourceBackend = regcBackend.get();
-            // RegC 的 native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责。
-            pipeline.registerBackend(std::move(regcBackend));
-#endif
-        }
-        else if (options.cBackendKind == CEmitterBackend::Vmc4) {
-#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
-            auto vmc4Backend = std::make_unique<mj2x::Vmc4Backend>();
-            if (hasUserIntrinsics) vmc4Backend->setUserIntrinsics(userIntrinsicConfig);
-            if (!options.cOutputPath.empty()) vmc4Backend->setOutputPath(options.cOutputPath);
-            // dispatcher 形态字符串 -> 枚举（默认 switch_table）。
-            mj2x::Vmc4Options vmc4Opts;
-            vmc4Opts.seed = mj2x::deriveClientSeed(options.vmc4Seed, options.clientId);
-            const std::string& disp = options.vmc4Dispatcher;
-            if (disp == "funcptr_table" || disp == "funcptr")
-                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::FuncPtrTable;
-            else if (disp == "computed_goto" || disp == "goto")
-                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::ComputedGoto;
-            else if (disp == "if_nest" || disp == "ifnest")
-                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::IfNest;
-            else if (disp == "state_dispatcher" || disp == "state")
-                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::StateDispatcher;
-            else
-                vmc4Opts.dispatcherKind = mj2x::VmDispatcherKind::SwitchTable;
-            // 实例粒度：per-class（默认，同类方法共享 VM 实例）/ per-method /
-            // per-program（全程序共享一个 VM 实例，opcode 空间全局统一）。
-            if (options.vmc4Granularity == "method" || options.vmc4Granularity == "per-method")
-                vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerMethod;
-            else if (options.vmc4Granularity == "program" ||
-                     options.vmc4Granularity == "per-program")
-                vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerProgram;
-            else
-                vmc4Opts.granularity = mj2x::Vmc4Options::Granularity::PerClass;
-            vmc4Opts.aliasCount = options.vmc4Alias;
-            vmc4Opts.bogusHandlers = options.vmc4Bogus;
-            vmc4Opts.driftVariants = options.vmc4Drift;
-            vmc4Opts.driftPeriod = options.vmc4DriftPeriod;
-            vmc4Opts.programBlobEncrypt = options.vmc4EncryptProgram;
-            vmc4Opts.programLazyDecrypt = options.vmc4LazyDecrypt;
-            vmc4Opts.programBlockLazyDecrypt = options.vmc4BlockLazyDecrypt;
-            vmc4Opts.shuffleBlocks = options.vmc4ShuffleBlocks;
-            vmc4Opts.superOps = options.vmc4SuperOps;
-            vmc4Opts.fragment = options.vmc4Fragment;
-            if (options.runtimeProtection != "none") {
-                vmc4Opts.runtimeProtection.action  =
-                    parseRuntimeProtectionAction(options.runtimeProtection);
-                vmc4Opts.runtimeProtection.step    =
-                    static_cast<uint32_t>(options.runtimeProtectionStep);
-                vmc4Opts.runtimeProtection.delayMs =
-                    static_cast<uint32_t>(options.runtimeProtectionDelayMs);
-            }
-            vmc4Backend->setOptions(vmc4Opts);
-            // VMC4 复用同样的 native-loader clinit 注入（NativeLoaderPostprocessor）。
-            nativeSourceBackend = vmc4Backend.get();
-            pipeline.registerBackend(std::move(vmc4Backend));
-#endif
-        }
-#if !defined(MJ2X_DISABLE_STACKC_BACKEND)
-        else {
-            auto stackCBackend = std::make_unique<mj2x::StackCBackend>();
-            if (hasUserIntrinsics) stackCBackend->setUserIntrinsics(userIntrinsicConfig);
-            if (!options.cOutputPath.empty()) stackCBackend->setOutputPath(options.cOutputPath);
-            if (options.stackcExceptionCheck == "lite") stackCBackend->setExceptionCheckLite(true);
-            // --strings-encrypt：字符串池 at-rest 加密（stackc/regc 专属开关）。
-            if (options.stringsEncrypt) stackCBackend->setStringsEncrypt(true);
-            nativeSourceBackend = stackCBackend.get();
-            pipeline.registerBackend(std::move(stackCBackend));
-        }
-#endif
+    // 后端接线单元化：主流程只依赖 backend_registry（#886 裁剪面——被裁后端
+    // 的模块不注册，此处查不到即无该后端；显式被裁后端名已在参数解析期拒绝、
+    // 默认值路径在上方 backendEnabled 拦截，故命中失败不可达，防御性报错）。
+    const mj2x::cli::BackendModule* backendModule =
+        needsNativeSource ? mj2x::cli::findBackendModule(options.cBackendKind) : nullptr;
+    mj2x::cli::BackendWiringContext wiringContext{
+        options, hasUserIntrinsics ? &userIntrinsicConfig : nullptr, pipeline};
+    if (backendModule != nullptr && !backendModule->wire(wiringContext)) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.backend_unavailable"));
+        return 1;
     }
+    nativeSourceBackend = wiringContext.nativeSourceBackend;
 
     // Bytecode-shaping passes run before MarkAll so every selected method sees
     // the same normalized L1 input regardless of the chosen native backend.
@@ -1305,10 +1135,7 @@ int main(int argc, char** argv)
         pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
-    if (needsNativeSource &&
-        (options.cBackendKind == CEmitterBackend::StackC ||
-         options.cBackendKind == CEmitterBackend::RegC ||
-         options.cBackendKind == CEmitterBackend::Vmc4)) {
+    if (needsNativeSource && backendModule != nullptr && backendModule->usesCloaderBridge) {
         // StackC / RegC / VMC4 均使用 RegisterNatives 动态绑定，需要
         // mj2x/cloader/Loader 桥接类（其 native 方法 registerNativesForClass 由
         // 本侧 _mj2x_register_for_class 实现；VMC4 finalize 同样发射该桥接 C
@@ -1325,9 +1152,8 @@ int main(int argc, char** argv)
         // injectClinitCalls 决定是否往每个 modified 类的 <clinit> 前插 NativeLoader.load：
         //  - RegC / LLVM IR：需要 load（库通过 System.load 加载，再触发 JNI_OnLoad）。
         //  - StackC：自己重写整个 clinit（含 load），故此处只注入资源（injectClinitCalls=false）。
-        const bool injectLoadIntoClinit = needsNativeSource &&
-                                          (options.cBackendKind == CEmitterBackend::RegC ||
-                                           options.cBackendKind == CEmitterBackend::LlvmIr);
+        const bool injectLoadIntoClinit =
+            backendModule != nullptr && backendModule->injectsNativeLoaderIntoClinit;
         pipeline.registerPostprocessor(std::make_unique<mj2x::NativeLoaderPostprocessor>(
             nativeResourcePath,
             nativeTempSuffix.empty() ? ".mj2x" : nativeTempSuffix,
@@ -1338,15 +1164,11 @@ int main(int argc, char** argv)
     int rc = pipeline.run();
     if (rc != 0) return rc;
 
-    // VMC4：写 expected trace surface 文件（mjdbg 红队契约，同 seed+同输入 → 同内容）。
-#if !defined(MJ2X_DISABLE_VMC4_BACKEND)
-    if (!options.vmc4TraceSurface.empty() &&
-        options.cBackendKind == CEmitterBackend::Vmc4 && nativeSourceBackend != nullptr) {
-        auto* vmc4 = ca::core::tag_cast::cast<mj2x::Vmc4Backend>(nativeSourceBackend);
-        std::ofstream ts(options.vmc4TraceSurface, std::ios::binary | std::ios::trunc);
-        if (ts) ts << vmc4->traceSurface();
+    // 后端产物后处理（VMC4：写 expected trace surface 文件——mjdbg 红队契约，
+    // 同 seed+同输入 → 同内容；其余后端无钩子，空转）。
+    if (backendModule != nullptr && backendModule->afterPipelineRun != nullptr) {
+        backendModule->afterPipelineRun(wiringContext);
     }
-#endif
 
     std::string                  cppSource;
     mj2x::NativeSourceArtifact nativeArtifact{mj2x::NativeSourceLanguage::C99, {}, {}};

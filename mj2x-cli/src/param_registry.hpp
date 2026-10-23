@@ -162,9 +162,13 @@ struct ParamDef
     bool (*parseJson)(CliOptions&, const nlohmann::json& value, std::string& error);
 };
 
-/// 全量参数表（param_registry.cpp 定义）。
-extern const ParamDef* kParams;
-extern const std::size_t kParamCount;
+/// @brief 全量参数表（运行时拼装：静态基表 + 各后端模块参数段，段序 = 注册表
+///        displayOrder；首次访问在 main() 启动后，接线单元注册已完成）。
+///        行序即 --help 分组 / schema 属性 / 模板键的展示序。
+const ParamDef* params();
+
+/// @brief 全量参数表行数。
+std::size_t paramCount();
 
 /// @brief 按 CLI flag 查找（无匹配返回 nullptr）。
 const ParamDef* findParamByCli(const std::string& cliFlag);
