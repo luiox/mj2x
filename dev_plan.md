@@ -217,8 +217,12 @@
      守门：`RegTransformPassTest.ConstantHiding*` 5 例（语义等价求值 / I64 不截
      断 / 浮点跳过 / seed 无关 / 与 CFF 叠加后 dispatcher key 仍字面量）+
      `mj2x_rt_test.test_const_key_derivation` + LLVM E2E 变体。
-   - **调用目标间接化 + per-signature dispatcher（`obfuscation.calls.*`）——RT 与
-     IR 层已落地（2026-10-16，PR #5），发射端未接线。**
+   - ~~**调用目标间接化 + per-signature dispatcher（`obfuscation.calls.*`）**~~
+     **已完成（2026-10-18，PR #15；发射端接线同批完成）**：RegC 发射端通用兜底
+     换发 `_mj2x_regc_dispatch_<后缀>`、LLVM 发射端 `call.dispatch:` 分支 + 模块级
+     declare、validation 白名单放行、CLI `--regc-indirect-calls`（默认关、不被
+     `--regc-obfuscate` 联动）。分篇见
+     [doc/techniques/call_indirection.md](doc/techniques/call_indirection.md)。
      已落地：① 可分发运行时双端（regc CRT / LLVM runtime）各加六返回形态
      per-signature dispatcher，按 (站点表, 索引) 解析 owner 类 + jmethodID 并缓存
      入条目，解析失败返零值并保留 pending exception；② `RegInstruction::indirectCall`
@@ -229,13 +233,25 @@
      间接化它只会退化成 JNI 调用、纯开销零收益。是否"外部"由发射端既有解析
      结果（tryEmitDirectCall / intrinsic / resolved 均未命中）决定，pass 无需跨
      函数全局信息 → 保住可复现构建不变量。
-     **未完成**：RegC 发射端通用兜底路径换发 `_mj2x_regc_dispatch_<后缀>`、
-     LLVM 发射端 `call.dispatch:` 分支 + 模块级 declare、LLVM validation 白名单
-     放行、CLI `--regc-indirect-calls`、单测与 E2E。
-   - **computed jumps（`obfuscation.jumps`）——未开工。**
-7. 混淆两级作用域 include/exclude（全局 + per-module）——混淆真正可用的前提。
-8. VMC4：super-ops（相邻 VM 指令融合）+ 指令碎片化——打破"VM 指令 ↔ 字节码 1:1 对应"。
-9. VMC4 第二形态：寄存器机（对标 `vm.register`）。
+   - ~~**computed jumps（`obfuscation.jumps`）**~~ **已完成（2026-10-23，PR #27）**：
+     `--regc-computed-jumps`（默认关、不联动）。把 CFF dispatcher 的
+     "key → 目标块"映射从代码挪到模块级数据表（key 按站点密钥异或，splitmix64
+     派生），分派走解析出的块索引。MSVC 不能用 computed goto，表驱动 + 索引
+     switch 是标准 C 上限。实测合计 +8.9%、switch 密集处 +27%。分篇见
+     [doc/techniques/computed_jumps.md](doc/techniques/computed_jumps.md)。
+7. ~~**混淆两级作用域 include/exclude**~~ **已完成（2026-10-23，PR #28）**：
+   `--obf-scope-include/exclude` 类级 glob，判定落到
+   `CompilerClass::inObfuscationScope`（pass 与 backend 只问"在不在作用域内"）。
+   两者都为空 = 零行为变化；显式给 include 隐含开启混淆。详见
+   [protection_overview.md §六](doc/techniques/protection_overview.md)。
+8. ~~**VMC4：super-ops + 指令碎片化**~~ **已完成（2026-10-23，PR #29）**：
+   `--vmc4-super-ops` / `--vmc4-fragment`（均默认关、可组合）。分篇见
+   [doc/techniques/vm_super_ops.md](doc/techniques/vm_super_ops.md)。
+9. VMC4 寄存器文件定长化（issue #10）：**前提已勘误**——VMC4 现在就已是寄存器机
+   （三地址指令 + `regs[]` 寄存器文件 + 全仓无操作数栈），"第二形态：寄存器机"
+   无实现对象。重定界为"线性扫描分配 + 溢出槽"（`--vmc4-regfile <n>` +
+   Spill/Reload 两个新 opcode），方案与验收见 issue #10。规模与 #27/#29 同量级，
+   **独立排期，尚未开工**。
 
 **批次 3：产品化（大改动，需拍板）**
 
