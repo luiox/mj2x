@@ -90,6 +90,12 @@ struct CodeOptions
     /// 边界开销（issue #814 regc 2.6 ReTrace）。
     DirectCallTier directCallTier = DirectCallTier::Off;
 
+    /// @brief POD 类降级为 C struct（默认关闭）。
+    /// @details 不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI。降级后
+    ///          Java 侧对象不存在（REF 寄存器为 NULL），反射/序列化访问它会读到
+    ///          空壳——这是本项的主要兼容性代价。
+    bool podStruct = false;
+
     /// @brief 反侦测检查点注入（方法入口 mj2x_rt_checkpoint_run；默认关闭）。
     /// @details 依赖 mj2x-rt 的 rt_protect 模块（rt.resources 内嵌）。
     RuntimeProtectionOptions runtimeProtection;

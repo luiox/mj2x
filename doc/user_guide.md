@@ -202,6 +202,8 @@ RegC：
 | `--regc-opaque-zero` | opaque 恒真谓词变体（demorgan `~(~x)==x` / shift-pair / or-dec，零 UB 位运算恒等）。隐含开启 opaque（issue #829） |
 | `--regc-hide-constants` | 立即数隐藏：整型立即数 C 改写为 `E ^ const_key(site)`（E 编译期物化、密钥运行时经独立 TU 派生，LTO 下不可折叠）。**不被 `--regc-obfuscate` 联动**——每立即数多一次运行时调用，是混淆家族里最重的一项（对标 jvmtp `obfuscation.constants`） |
 | `--regc-indirect-calls` | 调用目标间接化：调用点改走 per-signature dispatcher，只带 `(站点表, 组内索引)`，目标身份（owner/name/desc 字符串）移出调用点——调用图收敛到单一 dispatcher 符号（对标 jvmtp `obfuscation.calls.*`）。**不被 `--regc-obfuscate` 联动**——每次调用多一层分派，热路径开销可观。只有通用 JNI 兜底路径会落到 dispatcher：自有 intrinsic（StringBuilder/String 等）、JDK 纯函数 intrinsic（如 `Math.max`）与同模块直调快路径各自保持原有形态 |
+| `--regc-pod-struct` | POD 类降级为 C struct（**默认关**）：不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI，字段名从产物里消失。降级后 Java 侧对象不存在，反射/序列化访问它会读到空壳——这是主要代价 |
+| | 实测（PodBench 样本，字段访问密集）：关 611ms → 开 **103ms**（5.9x），结果与 JVM 基线一致 |
 | `--regc-transform-seed <n>` | 混淆变换种子（state 码/变体选择，默认 0；同 seed 同产物）。立即数隐藏的 site 为函数内局部计数器，不掺 seed（site 必物化在产物里，掺 seed 不增加分析者成本） |
 
 VMC4：

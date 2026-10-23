@@ -562,6 +562,11 @@ bool canFuseAllocateInit(const RegCFunctionEmitState& state, const RegInstructio
     if (alloc.typeDesc == "java/lang/StringBuilder" || alloc.typeDesc == "java/lang/StringBuffer") {
         return false;
     }
+    // POD struct 降级：这类分配根本不产生 jobject（走 C struct 声明），融合成
+    // NewObjectA 会让 Allocate 分支永远拿不到它。不排除的话降级覆盖面为零。
+    if (!state.podStructRoots.empty() && isPodClassOwner(state.classIndex, alloc.typeDesc)) {
+        return false;
+    }
     if (state.nativeObjects.count(alloc.dest.id.value) != 0) return false;
     if (call.kind != RegInstructionKind::Call) return false;
     if (call.method.name != "<init>") return false;

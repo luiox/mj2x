@@ -157,6 +157,14 @@ public:
     /// 语义失真换 JNI 边界开销（issue #814 regc 2.6 ReTrace）。
     void setDirectCallTier(codegen::DirectCallTier tier);
 
+    /// @brief 开启 POD 类降级为 C struct（默认关闭，--regc-pod-struct）。
+    ///
+    /// @details
+    /// 不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI。降级后 Java 侧对象
+    /// 不存在（REF 寄存器为 NULL）——反射/序列化访问它会读到空壳，这是本项主要
+    /// 的兼容性代价，故默认关。
+    void setPodStruct(bool enabled);
+
     /// @brief 设置多文件输出目录（--emit-native-dir）。
     ///
     /// @details

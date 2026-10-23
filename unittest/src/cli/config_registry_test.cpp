@@ -192,6 +192,7 @@ std::vector<std::string> expectedKeys()
         "regc_opaque_zero",
         "regc_hide_constants",
         "regc_indirect_calls",
+        "regc_pod_struct",
         "regc_transform_seed",
         "vmc4_dispatcher",
         "vmc4_seed",
