@@ -231,6 +231,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.directCalls                        = options_.directCalls;
     emitState.classIndex                         = classIndex_;
     emitState.convertedFunctions                 = convertedFunctions_;
+    emitState.convertedFunctionDecls             = convertedFunctionDecls_;
     emitState.indyFunctions                      = indyFunctions_;
     emitState.intrinsicRegistry                  = intrinsicRegistry_;
     emitState.enumSyntheticMethods               = enumSyntheticMethods_;

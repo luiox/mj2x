@@ -430,6 +430,10 @@ struct RegCBackend::Impl
     /// 已成功转换的方法 -> regc_* 函数体名（owner\nname\ndesc 键）。
     /// 供 native-to-native 直接调用（deterministic dispatch 目标）使用。
     std::unordered_map<std::string, std::string> convertedFunctions;
+    /// 函数体名 -> 由被调方签名生成的规范前向声明文本。直调声明必须与被调方
+    /// 定义逐字一致——按调用点操作数类型推导会因窄类型提升产生多条不同声明
+    /// （C 编译器报 conflicting types），故权威声明在这里按签名生成。
+    std::unordered_map<std::string, std::string> convertedFunctionDecls;
     /// 预扫描验证过的 javac 合成枚举 values()/valueOf() 方法键集合
     /// （owner\nname\ndesc）。首个 compileMethod 前填充一次——方法注入
     /// native 后指令被清空，发射期无法再现场验证方法体。
@@ -706,9 +710,15 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                 const std::string   mnName = mn->name.to_std_string();
                 const std::string   mnDesc = mn->desc.to_std_string();
                 const std::string   key    = methodKey(className, mnName, mnDesc);
-                impl_->convertedFunctions[key] =
+                const std::string   fnName =
                     RegCEmitter::functionNameFor(SSAFunctionSymbol{
                         className, mnName, mnDesc, {}, SSAType::UNKNOWN});
+                impl_->convertedFunctions[key] = fnName;
+                // 规范直调声明：调用方可能先于被调方编译，声明必须在任何调用点
+                // 发射之前备好，故此处按描述符算（无需等 lowering）。
+                const bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
+                impl_->convertedFunctionDecls[fnName] =
+                    directCallDeclForDescriptor(fnName, mnDesc, isStatic);
             }
         }
     }
@@ -727,6 +737,9 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "SSA build failed", reason.c_str());
         impl_->convertedFunctions.erase(methodKey(className, methodName, methodDesc));
+        impl_->convertedFunctionDecls.erase(
+            RegCEmitter::functionNameFor(SSAFunctionSymbol{className, methodName, methodDesc, {},
+                                                           SSAType::UNKNOWN}));
         return backendResult;
     }
 
@@ -865,6 +878,9 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "lowering failed", reason.c_str());
         impl_->convertedFunctions.erase(methodKey(className, methodName, methodDesc));
+        impl_->convertedFunctionDecls.erase(
+            RegCEmitter::functionNameFor(SSAFunctionSymbol{className, methodName, methodDesc, {},
+                                                           SSAType::UNKNOWN}));
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
@@ -873,7 +889,10 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     // 提前登记函数名（供本方法内实例自递归/已转换目标的直接调用决策）；
     // emit 失败时回滚，避免调用方直接调用到不存在的函数体。
     const std::string funcKey = methodKey(className, methodName, methodDesc);
-    impl_->convertedFunctions[funcKey] = RegCEmitter::functionNameFor(reg->symbol);
+    const std::string preName = RegCEmitter::functionNameFor(reg->symbol);
+    impl_->convertedFunctions[funcKey] = preName;
+    // 规范直调声明（供本方法内实例自递归直调；声明按被调方签名生成）。
+    impl_->convertedFunctionDecls[preName] = directCallDeclFor(preName, *reg);
 
     codegen::CodeOptions emitterOptions;
     emitterOptions.commentLevel    = impl_->commentLevel;
@@ -900,17 +919,23 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     // 方法间直调的前向声明统一登记 TU 头部（C11 6.7.1p6 禁止块作用域
     // static 函数声明），finalize 随 runtime helpers 一起渲染。
     emitter.setForwardDeclarations(&impl_->forwardDecls);
+    emitter.setConvertedFunctionDecls(&impl_->convertedFunctionDecls);
     auto        emitted = emitter.emitFunction(*reg);
     if (!emitted.ok) {
         // F3: 静默 fail-closed 补可观测日志，消除 emitter 发射阶段的诊断盲区。
         CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(),
                "emit failed", emitted.reason.c_str());
         impl_->convertedFunctions.erase(funcKey);
+        impl_->convertedFunctionDecls.erase(RegCEmitter::functionNameFor(reg->symbol));
         return backendResult;
     }
 
     // native-to-native 直接调用登记：只有成功转换的方法才可被直接调用。
     impl_->convertedFunctions[funcKey] = emitted.functionName;
+    // 声明以最终发射的函数体为准覆盖一次（发射期 RegIR 可能被 pass 改写，
+    // 但参数/返回类型不变，这里重写只为防预登记名与最终名不一致）。
+    impl_->convertedFunctionDecls[emitted.functionName] =
+        directCallDeclFor(emitted.functionName, *reg);
     if (!reg->indySites.empty()) {
         impl_->indyFunctions.insert(funcKey);
     }

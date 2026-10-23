@@ -259,6 +259,17 @@ public:
     ///          nullptr 时发射器回退块内声明（单测直连发射器路径）。
     void setForwardDeclarations(codegen::CForwardDeclarations* fwd) { forwardDecls_ = fwd; }
 
+    /// @brief 设置「函数名 -> 规范直调前向声明」表（backend TU 级，可选）。
+    /// @details 直调声明必须与被调方定义逐字一致，按签名预先算好在 backend 侧
+    ///          维护（发射端按调用点推导会因窄类型提升产生冲突声明）。nullptr
+    ///          时发射端回退按调用点推导。
+    ///          走 setter 而非构造参数：构造参数插在中间会打断既有位置调用者。
+    void setConvertedFunctionDecls(
+        const std::unordered_map<std::string, std::string>* decls)
+    {
+        convertedFunctionDecls_ = decls;
+    }
+
     /// @brief 计算 RegFunction 生成的 C 函数体名（与 emitFunction 产出一致）。
     ///
     /// @details
@@ -273,6 +284,7 @@ private:
     size_t indySiteBase_ = 0;
     CompilerIndex* classIndex_ = nullptr;
     const std::unordered_map<std::string, std::string>* convertedFunctions_ = nullptr;
+    const std::unordered_map<std::string, std::string>* convertedFunctionDecls_ = nullptr;
     const std::unordered_set<std::string>* indyFunctions_ = nullptr;
     const RegCIntrinsicRegistry* intrinsicRegistry_ = nullptr;
     const std::set<std::string>* enumSyntheticMethods_ = nullptr;
