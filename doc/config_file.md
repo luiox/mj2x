@@ -6,6 +6,9 @@
 **全量 45+ 参数均可配置**（参数注册表单源驱动）。
 未知键与类型错误被拒绝，报错定位到键名。
 
+参数数量已到 59 个（regc 域独占 14 个），命令行越来越难管理。除配置文件外另提供
+两组能力：**preset 默认配置档**（一次设一组）与**生效配置回显**（排查"到底开了啥"）。
+
 ```json
 {
   "input": "app.jar",
@@ -78,9 +81,51 @@ mj2x-cli --dump-config-template[=<file>]    # 全量键 + 默认值 + 注释模�
   键含 `description`/`default`/`enum`/`minimum`/`maximum`/`x-requires`。
 - **模板** 是带注释的手写起点（删除注释即得合法配置）。
 
+## preset（默认配置档）
+
+`mj2x-cli --preset <name>` 一次设一组参数。
+
+| 档 | 定位 | 内容 |
+|---|---|---|
+| `none` | 零混淆，最快路径（**默认**） | 与不加 `--preset` 完全一致 |
+| `perf` | 性能优先，零混淆 | `regc_direct_calls` 开、`regc_no_inline` 关（保留内联）、`regc_safe_env` 关、`native_opt_level` = `3`、`regc_comment_level` = `none` |
+| `balanced` | 常规保护，代价可控 | `regc_obfuscate` 开 + `regc_cff_state_encrypt`（编译期随机化，零运行时代价）+ `strings_encrypt` |
+| `max` | 最强，代价不设限 | 基础三项 + `regc_mba_deep` / `regc_opaque_zero` / `regc_cff_state_encrypt` / `regc_cff_dead=3` + 两项重型（`regc_hide_constants` / `regc_indirect_calls`）+ `strings_encrypt` + `runtime_protection=fake` |
+
+preset 不是第四套配置语法——它是**内置的 JSON 对象**，键名与配置文件完全相同，
+走同一套 `parseJson` 校验。档位只列"与默认值不同"的键，是建议值不是硬编码全量：
+在 preset 之上仍可用配置文件或 CLI 逐项改。
+
+`perf` 档的主要收益来自直调：实测（jvm-obf-tester，7 次取中位数）把 Inheritance
+probe 从 12.858ms 降到 2.542ms（5.06x），合计追平未混淆的 JVM 基线。代价是
+#814 的栈观察语义失真，故只在明确性能优先的档位里开。
+
+## 生效配置回显
+
+```sh
+mj2x-cli --dump-effective-config[=<file>]      # 四层合并结果（裸=stdout，内联 =file 写文件）
+```
+
+59 个开关 + 四层合并 + 联动规则（增强项隐含开基础项），出错时没有可核对的输出
+就只能靠猜。回显形如：
+
+```json
+{
+  "preset": "max",
+  "config": "app.json",
+  "layers": ["default", "preset", "config", "cli"],
+  "effective": {
+    "regc_obfuscate": { "value": false, "source": "config" }
+  }
+}
+```
+
+`source` 是最终写入该键的那一层。`--dump-effective-config` 与
+`--dump-config-schema` / `--dump-config-template` 互斥，且都不要求 `-i/-o`。
+
 ## 语义
 
-- 合并顺序：默认值 < 配置文件 < CLI 参数（CLI 显式给出即覆盖）。
+- 合并顺序：默认值 < preset < 配置文件 < CLI 参数（每层显式给出即覆盖上一层）。
 - 未知键/类型错误/枚举越界/范围越界 → 报错含键名（如
   `unknown config key: foo_bar`、`config key must be an integer: regc_cff_dead`）。
 - 后端相关性（regc/vmc4/runtime 族）沿用 main.cpp 交叉校验，schema 以

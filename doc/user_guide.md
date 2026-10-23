@@ -205,6 +205,8 @@ RegC：
 | `--regc-computed-jumps` | computed jumps / 跳转目标间接化（**默认关**）：switch 的 `case key -> 目标块` 映射从代码挪到数据表（key 按站点密钥异或存放），分派改走运行时解析出的块索引，产物里不再有 `case <字面量>: goto block_bX` 这种直接可读的映射 |
 | | 实测代价（jvm-obf-tester，5 次中位数）：ControlFlow probe 0.374ms → 0.477ms（+27%），合计 +8.9%。属混淆增益，按需开 | POD 类降级为 C struct（**默认关**）：不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI，字段名从产物里消失。降级后 Java 侧对象不存在，反射/序列化访问它会读到空壳——这是主要代价 |
 | | 实测（PodBench 样本，字段访问密集）：关 611ms → 开 **103ms**（5.9x），结果与 JVM 基线一致 |
+| `--preset <档>` | **一次设一组参数**：`none`（默认）/ `perf` / `balanced` / `max`。参数已到 59 个，命令行动辄十几项，档位是省事的正解；档位只给建议值，仍可用配置文件或 CLI 逐项覆盖。档位内容与四层合并顺序见 [config_file.md](config_file.md) |
+| `--dump-effective-config[=<file>]` | 回显四层合并后的最终配置（含每个键来自哪一层）。排查"到底开了啥"用——59 个开关 + 联动规则，没有这个只能靠猜。与两个 `--dump-config-*` 互斥，都不要求 `-i/-o` |
 | `--regc-transform-seed <n>` | 混淆变换种子（state 码/变体选择，默认 0；同 seed 同产物）。立即数隐藏的 site 为函数内局部计数器，不掺 seed（site 必物化在产物里，掺 seed 不增加分析者成本） |
 
 VMC4：

@@ -39,23 +39,36 @@ bool readJsonFile(const std::string& path, json& out, std::string& error)
 
 }   // namespace
 
-bool loadConfigFile(const std::string& path, CliOptions& options, std::string& error)
+bool applyJsonObject(const json& root, CliOptions& options, const std::string& unknownKeyPrefix,
+                     std::string& error)
 {
-    json root;
-    if (!readJsonFile(path, root, error)) return false;
-
+    if (!root.is_object()) {
+        error = ca::i18n::tr("mj2x.cli.err.cfg_root_object");
+        return false;
+    }
     for (auto it = root.begin(); it != root.end(); ++it) {
         const ParamDef* param = findParamByJsonPath(it.key());
         if (!param) {
             error = ca::i18n::trf("mj2x.cli.err.cfg_unknown_key", {it.key()}).to_std_string();
+            if (!unknownKeyPrefix.empty()) error = unknownKeyPrefix + ": " + error;
             return false;
         }
         if (!param->parseJson(options, it.value(), error)) {
-            // parseJson 的错误已含键名；统一加配置文件路径便于定位。
-            error = path + ": " + error;
+            // parseJson 的错误已含键名；统一加来源层前缀便于定位。
+            if (!unknownKeyPrefix.empty()) error = unknownKeyPrefix + ": " + error;
             return false;
         }
     }
+    return true;
+}
+
+bool loadConfigFile(const std::string& path, CliOptions& options, std::string& error,
+                    json* outRoot)
+{
+    json root;
+    if (!readJsonFile(path, root, error)) return false;
+    if (!applyJsonObject(root, options, path, error)) return false;
+    if (outRoot != nullptr) *outRoot = std::move(root);
     return true;
 }
 

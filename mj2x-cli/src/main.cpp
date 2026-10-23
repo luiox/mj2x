@@ -24,6 +24,7 @@
 #include "native_compiler.hpp"
 #include "native_project_generator.hpp"
 #include "param_registry.hpp"
+#include "preset_config.hpp"
 // P1-4 外部进程超时（--native-timeout）：native_compiler.hpp 已透传
 // ProcessTimeout/processTimeoutFromSeconds，本文件的 pack hook 站点直接用。
 #include "native_process_timeout.hpp"
@@ -665,14 +666,31 @@ int main(int argc, char** argv)
 
     CliOptions               options;
     std::string              configPath;
+    std::string              presetArg;
+    // 配置文件解析出的对象本体：--dump-effective-config 判断某个键最终落在
+    // 哪一层需要它（只报 preset/default 会让"生效配置"名不副实）。
+    nlohmann::json           configRoot = nlohmann::json::object();
     TemporaryProjectCleanup temporaryProjectCleanup;
 
-    // 第一遍扫描：--config 路径与日志级别（CLI 显式优先于配置）。
+    // 第一遍扫描：--config 路径、--preset 档位与日志级别（CLI 显式优先于配置）。
     bool cliQuiet   = false;
     bool cliVerbose = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg == "--config") {
+        if (arg == "--preset") {
+            if (i + 1 >= argc) {
+                CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.preset_requires_name"));
+                printUsage();
+                return 1;
+            }
+            if (!presetArg.empty()) {
+                CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.preset_once"));
+                printUsage();
+                return 1;
+            }
+            presetArg = argv[++i];
+        }
+        else if (arg == "--config") {
             if (i + 1 >= argc) {
                 CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.config_requires_path"));
                 printUsage();
@@ -693,11 +711,35 @@ int main(int argc, char** argv)
     if (cliQuiet) mj2x::setLogLevel(ca::log::Level::Warn);
     else if (cliVerbose) mj2x::setLogLevel(ca::log::Level::Debug);
 
-    // 配置文件：注册表驱动加载，直接写入 options（默认值 < 配置；CLI 显式
-    // 参数随后经 parseCli 覆盖同名字段，构成三级优先级）。
+    // preset（第二层）：内置的一组建议值，走与配置文件相同的键与校验。
+    // 放在配置文件之前——配置文件是用户显式写的，应当能覆盖 preset。
+    mj2x::cli::PresetName preset = mj2x::cli::PresetName::None;
+    if (!presetArg.empty()) {
+        if (!mj2x::cli::parsePresetName(presetArg, preset)) {
+            std::string names;
+            for (const auto& name : mj2x::cli::presetNames()) {
+                if (!names.empty()) names += ", ";
+                names += name;
+            }
+            CA_LOGT_ERROR("cli", "{}\n",
+                          ca::i18n::trf("mj2x.cli.err.preset_unknown", {presetArg, names}));
+            printUsage();
+            return 1;
+        }
+        std::string error;
+        // 报错前缀带档位名：preset 是内置的，报了错用户也找不到"文件"可改。
+        if (!mj2x::cli::applyJsonObject(mj2x::cli::presetObject(preset), options,
+                                        "preset " + mj2x::cli::presetNameString(preset), error)) {
+            CA_LOGT_ERROR("cli", "{}\n", error.c_str());
+            return 1;
+        }
+    }
+
+    // 配置文件：注册表驱动加载，直接写入 options（默认值 < preset < 配置；
+    // CLI 显式参数随后经 parseCli 覆盖同名字段，构成四级优先级）。
     if (!configPath.empty()) {
         std::string error;
-        if (!mj2x::cli::loadConfigFile(configPath, options, error)) {
+        if (!mj2x::cli::loadConfigFile(configPath, options, error, &configRoot)) {
             CA_LOGT_ERROR("cli", "{}\n", error.c_str());
             return 1;
         }
@@ -782,20 +824,56 @@ int main(int argc, char** argv)
         }
     }
 
-    bool         dumpSchema   = false;
-    bool         dumpTemplate = false;
-    std::string  dumpFile;
-    dumpSchema   = input.source_of("dump-config-schema") != ca::opt::ValueSource::None;
-    dumpTemplate = input.source_of("dump-config-template") != ca::opt::ValueSource::None;
-    dumpFile     = dumpSchema   ? input.get("dump-config-schema")
-                   : dumpTemplate ? input.get("dump-config-template")
-                                  : std::string{};
+    const bool dumpSchema = input.source_of("dump-config-schema") != ca::opt::ValueSource::None;
+    const bool dumpTemplate =
+        input.source_of("dump-config-template") != ca::opt::ValueSource::None;
+    const bool dumpEffective =
+        input.source_of("dump-effective-config") != ca::opt::ValueSource::None;
+    std::string dumpFile = dumpSchema      ? input.get("dump-config-schema")
+                           : dumpTemplate  ? input.get("dump-config-template")
+                           : dumpEffective ? input.get("dump-effective-config")
+                                           : std::string{};
 
     // --dump-config-schema / --dump-config-template：不要求 -i/-o，输出后退出。
     if (dumpSchema || dumpTemplate) {
-        const std::string text = dumpSchema
-                                     ? mj2x::cli::buildConfigSchemaJson().dump(2)
-                                     : mj2x::cli::buildConfigTemplateText();
+        const std::string term = dumpSchema ? ca::i18n::tr("mj2x.cli.term.config_schema")
+                                            : ca::i18n::tr("mj2x.cli.term.config_template");
+        const std::string text = dumpSchema ? mj2x::cli::buildConfigSchemaJson().dump(2)
+                                            : mj2x::cli::buildConfigTemplateText();
+        if (dumpFile.empty()) {
+            printf("%s\n", text.c_str());
+        }
+        else {
+            std::ofstream out(dumpFile, std::ios::binary);
+            if (!out) {
+                CA_LOGT_ERROR("cli", "{}\n",
+                      ca::i18n::trf("mj2x.cli.err.dump_write_failed", {term, dumpFile}).c_str());
+                return 1;
+            }
+            out << text << "\n";
+        }
+        return 0;
+    }
+
+    // --dump-effective-config：四层合并后的最终配置（含每个键的来源层）。
+    // 放在全部解析之后、业务校验之前——它要回显的是"合并结果"，产不产物无关。
+    if (dumpEffective) {
+        const ca::opt::ParseResult* inputPtr = &input;
+        const std::string           text     = mj2x::cli::buildEffectiveConfigJson(
+                      preset, configRoot, configPath, options,
+                      [](const mj2x::cli::ParamDef& param, void* ctx) -> bool {
+                          const auto* parsed = static_cast<const ca::opt::ParseResult*>(ctx);
+                          return parsed->source_of(mj2x::cli::optCanonicalName(param.cliFlag)) ==
+                                 ca::opt::ValueSource::CommandLine;
+                      },
+                      [](const mj2x::cli::ParamDef& param, void* ctx) -> std::string {
+                          const auto* parsed  = static_cast<const ca::opt::ParseResult*>(ctx);
+                          const std::string name = mj2x::cli::optCanonicalName(param.cliFlag);
+                          if (param.type == mj2x::cli::ParamType::Bool) return "true";
+                          return parsed->get(name);
+                      },
+                      const_cast<ca::opt::ParseResult*>(inputPtr))
+                      .dump(2);
         if (dumpFile.empty()) {
             printf("%s\n", text.c_str());
         }
@@ -804,10 +882,8 @@ int main(int argc, char** argv)
             if (!out) {
                 CA_LOGT_ERROR("cli", "{}\n",
                       ca::i18n::trf("mj2x.cli.err.dump_write_failed",
-                                 {dumpSchema ? ca::i18n::tr("mj2x.cli.term.config_schema")
-                                             : ca::i18n::tr("mj2x.cli.term.config_template"),
-                                  dumpFile})
-                                      .c_str());
+                                 {ca::i18n::tr("mj2x.cli.term.effective_config"), dumpFile})
+                          .c_str());
                 return 1;
             }
             out << text << "\n";
