@@ -96,7 +96,7 @@ TEST(CodeOptionsTest, DefaultsMatchRegCEmitterLegacy)
     EXPECT_EQ(opts.commentLevel, RegCCommentLevel::Summary);
     EXPECT_FALSE(opts.traceCallLog);
     EXPECT_FALSE(opts.resolvedDispatch);
-    EXPECT_FALSE(opts.directCalls);
+    EXPECT_EQ(opts.directCallTier, DirectCallTier::Off);
 }
 
 TEST(CodeOptionsTest, FieldsAreIndependentlySettable)
@@ -108,7 +108,7 @@ TEST(CodeOptionsTest, FieldsAreIndependentlySettable)
     EXPECT_EQ(opts.commentLevel, RegCCommentLevel::Detailed);
     EXPECT_TRUE(opts.traceCallLog);
     EXPECT_TRUE(opts.resolvedDispatch);
-    EXPECT_FALSE(opts.directCalls);
+    EXPECT_EQ(opts.directCallTier, DirectCallTier::Off);
 }
 
 TEST(CodeOptionsTest, ScopeOverrideRestoresOnScopeExit)
@@ -119,14 +119,14 @@ TEST(CodeOptionsTest, ScopeOverrideRestoresOnScopeExit)
         CodeOptions::ScopeOverride guard(opts.traceCallLog, true);
         EXPECT_TRUE(opts.traceCallLog);
         {
-            CodeOptions::ScopeOverride nested(opts.directCalls, true);
-            EXPECT_TRUE(opts.directCalls);
+            CodeOptions::ScopeOverride nested(opts.directCallTier, DirectCallTier::All);
+            EXPECT_EQ(opts.directCallTier, DirectCallTier::All);
         }
-        EXPECT_FALSE(opts.directCalls);          // 内层恢复
+        EXPECT_EQ(opts.directCallTier, DirectCallTier::Off);          // 内层恢复
         EXPECT_TRUE(opts.traceCallLog);
     }
     EXPECT_FALSE(opts.traceCallLog);             // 外层恢复
-    EXPECT_FALSE(opts.directCalls);
+    EXPECT_EQ(opts.directCallTier, DirectCallTier::Off);
 }
 
 // ---- CodeTemplate: 命名模板 -------------------------------------------------

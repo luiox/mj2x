@@ -153,7 +153,7 @@ mj2x.param.native_lib.pack_hook.desc=嵌入前外部处理钩子（sepacker DLL 
 mj2x.param.regc.cff_dead.desc=RegC/LLVM: CFF 恒假死块密度（默认 0 关闭；N = 每 N 个跳转插 1 死块；死块条件依赖运行时 state，编译器无法证明恒假不可 DCE；注入 barrier 的方法在 LLVM 侧回退未变换）
 mj2x.param.regc.cff_state_encrypt.desc=RegC/LLVM: CFF 派生随机 state 码 + dispatcher 状态异或（默认关闭；同 seed 同产物）
 mj2x.param.regc.comment_level.desc=RegC: 生成注释级别
-mj2x.param.regc.direct_calls.desc=RegC: 启用 native-to-native 直接 C 调用（默认关闭：直调不产生 JVM 栈帧，getStackTrace 等语义失真）
+mj2x.param.regc.direct_calls.desc=RegC/LLVM: native-to-native 直接 C 调用档位（off 默认，全走 JNI 保 JVM 栈帧语义；intra-class 只放行同类内直调，栈失真限制在类内；all 放行全部确定性分派，栈观察语义整体失真；见 issue #814）。改用档位前布尔开关语义等价于 all
 mj2x.param.regc.mba_deep.desc=RegC: 深 MBA（De Morgan/进位链 + barrier 防折叠，per-site 变体；默认关闭；LLVM 侧 barrier 超出子集，变换回退未变换）
 mj2x.param.regc.no_inline.desc=RegC: 关闭 SSA 方法内联（默认开启：静态调用 + 无异常区 + 大小/递归门控的语义等价内联，消除 native 方法间 JNI 往返）
 mj2x.param.regc.obfuscate.desc=RegC/LLVM: 开启基础混淆变换（MBA + opaque 谓词 + CFF 平坦化；RegIR 级与 RegC 同源；默认全部关闭保持语义直译最快路径；LLVM 侧变换产物超子集时回退未变换）

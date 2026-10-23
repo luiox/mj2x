@@ -184,19 +184,20 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
                        const std::unordered_map<std::string, std::string>* convertedFunctions,
                        const std::unordered_set<std::string>* indyFunctions)
 {
-    // 直调默认关闭（CodeOptions.directCalls）：C 直调不产生 JVM 栈帧，
-    // getStackTrace/StackWalker/反射等栈观察语义失真（issue #814）。开启仅
-    // 用于性能优先且确认无栈观察的产物。
+    // 直调档位（CodeOptions.directCallTier）：C 直调不产生 JVM 栈帧，
+    // getStackTrace/StackWalker/反射等栈观察语义失真（issue #814）。档位按
+    // 栈失真范围划分而非"开不开"——Off 之外每档都以失真换 JNI 边界开销。
     //
-    // 例外——确定性分派的虚调用：final 方法 / final owner / 编译输入无覆写
-    // 时，resolved 路径命中 implClass 后本来就直调 fn（无 JVM 帧，栈观察
-    // 语义与直调完全一致），运行时 IsInstanceOf 检查是纯冗余（任意 receiver
-    // 子类都分派到同一实现）。这类调用点免门控直调，省每调用点 1 个 JNI。
-    // 静态/INVOKESPECIAL 调用仍要求显式 --regc-direct-calls。
+    // 两个免门控例外（任何档位都直调）：
+    // - 确定性分派的虚调用：final 方法 / final owner / 编译输入无覆写时，
+    //   resolved 路径命中 implClass 后本来就直调 fn（无 JVM 帧，语义与直调
+    //   完全一致），运行时 IsInstanceOf 检查是纯冗余。
+    // - 同类内调用：栈失真限制在类内，IntraClass 档起允许。
     const bool deterministicVirtual =
         ins.method.invokeOpcode == Opcodes::INVOKEVIRTUAL &&
         isDeterministicDispatch(ins, classIndex);
-    if (!state.directCalls && !deterministicVirtual) return false;
+    const bool sameClass = ins.method.owner == state.symbol.owner;
+    if (!allowsDirectCall(state.directCallTier, sameClass, deterministicVirtual)) return false;
     if (convertedFunctions == nullptr) return false;
     if (isSelfStaticCall(state, ins)) return false;
     const std::string name = ins.method.name.to_std_string();

@@ -80,6 +80,13 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
         reason = "LLVM IR first slice only supports static method calls";
         return false;
     }
+    // 直调档位门控（与 RegC 的 allowsDirectCall 同一判定）：Off 档不直调，
+    // IntraClass 档只放行同类目标。LLVM 侧只会走到 INVOKESTATIC，确定性虚调用
+    // 的免门控分支不适用，故第三参恒 false。
+    if (!codegen::allowsDirectCall(directCallTier_, method.owner == className_, false)) {
+        reason = "direct call disabled by --regc-direct-calls tier";
+        return false;
+    }
     const std::string owner = method.owner.to_std_string();
     const MethodID id{owner, method.name.to_std_string(), method.desc.to_std_string()};
     const auto     cached = cache_.find(id);
@@ -314,7 +321,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     // 互调需要编译器索引（单元测试不传 index 时行为与以前一致：静态调用走 JNI）。
     std::unique_ptr<InternalCallResolver> callResolver;
     if (index != nullptr) {
-        callResolver = std::make_unique<InternalCallResolver>(*index, className);
+        callResolver = std::make_unique<InternalCallResolver>(*index, className, directCallTier_);
     }
 
     // SSA → RegIR → 验证（每轮 fresh builder/lowering：变换失败需回退未变换形态，

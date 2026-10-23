@@ -7,7 +7,7 @@
 //
 // 判据闭环：
 //   1) 源样本（包私有 SAM 捕获/无捕获/嵌套/反射包装 lambda）在 JVM 基线全绿；
-//   2) mj2x-cli --backend regc --regc-direct-calls --generate-xmake --compile 后
+//   2) mj2x-cli --backend regc --regc-direct-calls=all --generate-xmake --compile 后
 //      java -jar 运行输出与基线逐字一致（修复前此处全 NPE）；
 //   3) 产物形状钉：包私有 SAM 的合成类落 demo1182/ 包、public SAM 合成类维持
 //      mj2x/lambda/、嵌入 DLL 在场（#887 假阴性防护条款）。
@@ -198,7 +198,7 @@ TEST_F(LambdaSynthPackageE2E, PackagePrivateSamLambdaSurvivesRegcNative)
     const fs::path outJar = dir / "lambda-synth-regc.jar";
     const fs::path proj   = dir / "native_project";
     const auto transform = runBat({q(tc_.cli) + " -i " + q(inJar) + " -o " + q(outJar) +
-                                   " --backend regc --regc-direct-calls --generate-xmake " +
+                                   " --backend regc --regc-direct-calls=all --generate-xmake " +
                                    q(proj) + " --compile"});
     ASSERT_EQ(transform.exitCode, 0) << transform.out;
     ASSERT_TRUE(fileExists(outJar)) << outJar.string();
@@ -280,7 +280,7 @@ TEST_F(LambdaSynthPackageE2E, DefaultPackageSamSurvivesRegcNative)
     const fs::path outJar = dir / "lambda-deflt-regc.jar";
     const fs::path proj   = dir / "native_project";
     const auto transform = runBat({q(tc_.cli) + " -i " + q(inJar) + " -o " + q(outJar) +
-                                   " --backend regc --regc-direct-calls --generate-xmake " +
+                                   " --backend regc --regc-direct-calls=all --generate-xmake " +
                                    q(proj) + " --compile"});
     ASSERT_EQ(transform.exitCode, 0) << transform.out;
     ASSERT_TRUE(fileExists(outJar)) << outJar.string();

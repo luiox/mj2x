@@ -188,7 +188,8 @@ RegC：
 |---|---|
 | `--regc-no-inline` | 关闭 SSA 方法内联（**默认开启**：静态调用 + 无异常区 + 大小(≤48 指令)/深度(≤2)/递归门控的语义等价内联，消除 native 方法间 JNI 往返；benchmark 对照用） |
 | `--regc-trace-calls` | 生成运行时调用日志（`[CALL]`/`[DEEP]`，stderr，排查用） |
-| `--regc-direct-calls` | 启用 native-to-native 直接 C 调用（**默认关闭**：直调不产生 JVM 栈帧，`Throwable.getStackTrace` 等语义失真，issue #814/#816）。仅用于性能优先且确认无栈观察的产物 |
+| `--regc-direct-calls <档>` | native-to-native 直接 C 调用的**档位**（默认 `off`）。直调不产生 JVM 栈帧，`Throwable.getStackTrace` 等语义失真（issue #814），故按**栈失真范围**分档：`off` 只放行确定性分派的虚调用；`intra-class` 加同类内调用（含自递归）；`all` 放行全部确定性分派。原布尔开关语义等价于 `all` |
+| | 实测（jvm-obf-tester，7 次取中位数，合计）：`off` 114.5ms → `intra-class` 108.6ms → `all` 99.6ms；`all` 档反超未混淆 JVM 基线（104.9ms） |
 | `--regc-safe-env` | 开启 safe-env：JNI 函数表快照 + 方法入口恢复，阻断 agent 的 JNI hook（issue #748） |
 | `--regc-safe-env-debug` | safe-env 调试观察模式（检出 hook 只告警不 fail，隐含开启 `--regc-safe-env`） |
 | `--regc-comment-level <none\|summary\|detailed>` | 生成注释级别（默认 summary） |

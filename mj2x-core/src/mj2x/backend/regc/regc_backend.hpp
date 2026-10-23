@@ -148,13 +148,14 @@ public:
         runtimeProtection_.delayMs = delayMs;
     }
 
-    /// @brief 启用 native-to-native 直接 C 调用（默认关闭，--regc-direct-calls）。
+    /// @brief 设置 native-to-native 直接 C 调用档位（默认 Off，--regc-direct-calls）。
     ///
     /// @details
-    /// 关闭时所有调用走 JNI（JVM 栈帧完整，getStackTrace/StackWalker/反射语义
-    /// 正确）；开启时已转换目标走 C 直调（省 JNI 开销）但栈观察语义失真，
-    /// 仅用于性能优先且确认无栈观察的产物（issue #814 regc 2.6 ReTrace）。
-    void setDirectCalls(bool enabled);
+    /// 档位按栈失真范围划分（见 codegen::DirectCallTier）：
+    /// Off 保持 JVM 栈帧完整（getStackTrace/StackWalker/反射语义正确）；
+    /// IntraClass 只放行同类内直调；All 放行全部确定性分派。后两档都以栈观察
+    /// 语义失真换 JNI 边界开销（issue #814 regc 2.6 ReTrace）。
+    void setDirectCallTier(codegen::DirectCallTier tier);
 
     /// @brief 设置多文件输出目录（--emit-native-dir）。
     ///
