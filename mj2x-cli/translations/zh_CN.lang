@@ -190,4 +190,5 @@ mj2x.param.vmc4.block_lazy_decrypt.desc=VMC4: 程序 blob 块粒度链式懒解�
 mj2x.param.vmc4.shuffle_blocks.desc=VMC4: 编码期 VM 块乱序（Sattolo 单环排列同时打乱块 id 空间与物理布局，入口块恒 id 0，控制流语义经加密间接跳转表保持；与 vmc4-drift、vmc4-encrypt-program 正交可叠；issue #1116 切片 A；默认关闭）
 mj2x.param.vmc4.super_ops.desc=VMC4: super-operator 融合（相邻指令折叠成复合指令：Binary(x,±1)→SuperInc/SuperDec；同基本块内相邻的 t=a op1 b + dest=t op2 c 且 t 仅一处消费时折成 FusedBinary，中间值不再独立成寄存器；融合后 VM 指令与字节码不再 1:1；与 vmc4-fragment 可组合；issue #9；默认关闭）
 mj2x.param.vmc4.fragment.desc=VMC4: 指令碎片化（每条计算指令的操作数先经专用临时槽中转，一条指令拆成「Copy + 原指令」多段；纯编码期变换；代价是指令数约 2~3 倍、解释开销同步上升；与 vmc4-super-ops 可组合；issue #9；默认关闭）
+mj2x.param.vmc4.regfile.desc=VMC4: 寄存器文件定长化（线性扫描分配把计算寄存器压入 n 槽定长池，死值槽位复用，寄存器号不再镜像 SSA value id；装不下的活值分到稳定溢出槽，以统一 slots 数组高位索引直接寻址——无搬运指令、零运行时开销；与 vmc4-fragment 组合时碎片临时槽占池顶 3 槽；与 vmc4-super-ops / vmc4-fragment 可组合；issue #10；默认关闭）
 mj2x.param.strings.encrypt.desc=字符串池 at-rest 加密（发射期加密、首次访问解密；产物无明文字面量；默认关闭）

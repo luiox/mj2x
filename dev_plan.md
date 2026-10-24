@@ -247,11 +247,17 @@
 8. ~~**VMC4：super-ops + 指令碎片化**~~ **已完成（2026-10-23，PR #29）**：
    `--vmc4-super-ops` / `--vmc4-fragment`（均默认关、可组合）。分篇见
    [doc/techniques/vm_super_ops.md](doc/techniques/vm_super_ops.md)。
-9. VMC4 寄存器文件定长化（issue #10）：**前提已勘误**——VMC4 现在就已是寄存器机
-   （三地址指令 + `regs[]` 寄存器文件 + 全仓无操作数栈），"第二形态：寄存器机"
-   无实现对象。重定界为"线性扫描分配 + 溢出槽"（`--vmc4-regfile <n>` +
-   Spill/Reload 两个新 opcode），方案与验收见 issue #10。规模与 #27/#29 同量级，
-   **独立排期，尚未开工**。
+9. ~~**VMC4 寄存器文件定长化**~~ **已完成（2026-10-24，issue #10）**：
+   `--vmc4-regfile <n>`（默认 0 关、不联动）。线性扫描分配（块级活性不动点 →
+   连续包络区间 → Poletto）把计算寄存器压入定长池 `[numInputs, n)`，死值槽位
+   复用，寄存器号不再镜像 SSA value id；装不下的活值分稳定溢出槽。**实现定界
+   偏差**：原稿「+ Spill/Reload 两个新 opcode」改为**溢出槽直接寻址**（统一
+   slots 数组高位索引，操作数直接读写）——零运行时搬运、零 opcode/解释器/
+   trace-surface 面改动；若未来运行时拆定长栈上数组 + 独立溢出区再补双 opcode。
+   fail-closed：limit < numInputs（溢出槽与参数区重叠）拒编；fragment 组合要求
+   limit ≥ numInputs + 3（碎片临时槽占池顶）；numRegs > 0xFFFF 编码入口拦截
+   （#1133 同款，恒等映射形态同受益）。分篇见
+   [doc/techniques/vm_regfile.md](doc/techniques/vm_regfile.md)。
 
 **批次 3：产品化（大改动，需拍板）**
 

@@ -61,6 +61,7 @@ bool wireVmc4(BackendWiringContext& context)
     vmc4Opts.shuffleBlocks          = options.vmc4ShuffleBlocks;
     vmc4Opts.superOps               = options.vmc4SuperOps;
     vmc4Opts.fragment               = options.vmc4Fragment;
+    vmc4Opts.regfile                = static_cast<uint32_t>(options.vmc4Regfile);
     if (options.runtimeProtection != "none") {
         vmc4Opts.runtimeProtection.action  = parseRuntimeProtectionAction(options.runtimeProtection);
         vmc4Opts.runtimeProtection.step    = static_cast<uint32_t>(options.runtimeProtectionStep);
@@ -97,6 +98,7 @@ DEF_BOOL(vmc4BlockLazyDecrypt, "--vmc4-block-lazy-decrypt", "vmc4_block_lazy_dec
 DEF_BOOL(vmc4ShuffleBlocks, "--vmc4-shuffle-blocks", "vmc4_shuffle_blocks")
 DEF_BOOL(vmc4SuperOps, "--vmc4-super-ops", "vmc4_super_ops")
 DEF_BOOL(vmc4Fragment, "--vmc4-fragment", "vmc4_fragment")
+DEF_INT(vmc4Regfile, "--vmc4-regfile", "vmc4_regfile", 0, 65535)
 
 bool cli_vmc4_seed(CliOptions& o, const char* v, std::string& e)
 {
@@ -159,6 +161,7 @@ const ParamDef kVmc4Params[] = {
     PARAM("vmc4.shuffle_blocks", "--vmc4-shuffle-blocks", "vmc4_shuffle_blocks", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4ShuffleBlocks, json_vmc4ShuffleBlocks),
     PARAM("vmc4.super_ops", "--vmc4-super-ops", "vmc4_super_ops", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4SuperOps, json_vmc4SuperOps),
     PARAM("vmc4.fragment", "--vmc4-fragment", "vmc4_fragment", ParamType::Bool, nullptr, 0, 0, "false", "vmc4", "vmc4", cli_vmc4Fragment, json_vmc4Fragment),
+    PARAM("vmc4.regfile", "--vmc4-regfile", "vmc4_regfile", ParamType::Int, nullptr, 0, 65535, "0", "vmc4", "vmc4", cli_vmc4Regfile, json_vmc4Regfile),
 };
 
 /// displayOrder 3 = 历史 CLI 清单末位。

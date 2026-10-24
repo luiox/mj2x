@@ -211,6 +211,7 @@ std::vector<std::string> expectedKeys()
         "vmc4_shuffle_blocks",
         "vmc4_super_ops",
         "vmc4_fragment",
+        "vmc4_regfile",
         "strings_encrypt",
         "runtime_protection",
         "runtime_protection_step",

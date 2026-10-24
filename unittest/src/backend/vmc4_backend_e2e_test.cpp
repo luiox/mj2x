@@ -1880,4 +1880,196 @@ TEST(Vmc4BlockLazyE2E, RoundTripTiers)
     }
 }
 
+// ===========================================================================
+// 寄存器文件定长化（issue #10，--vmc4-regfile）E2E：线性扫描分配 + 溢出槽。
+//
+// 直接寻址方案：溢出槽是统一 slots 数组的高位索引，操作数直接读写，无搬运
+// 指令。E2E 验证点 = 真实编译 + JVM 执行输出与 baseline 一致，覆盖：
+//   - 高压力方法（同时活跃值远超池容量 → 溢出槽真实读写）
+//   - 循环携带值（跨块 liveness，back edge 活跃区间延长）
+//   - try/catch（异常区域边拷贝 + handler 块参数的映射）
+// 两档：regfile 小档单开；regfile + super-ops + fragment 三开关组合。
+// ===========================================================================
+
+struct RegfileRoundTripOut
+{
+    bool        ok = false;
+    std::string detail;
+};
+
+/// 一档 regfile round-trip（javac → Vmc4Backend → .c → DLL → Java 对拍 baseline）。
+RegfileRoundTripOut runRegfileRoundTrip(const Toolchain& tc, const std::string& className,
+                                        uint32_t regfileLimit, bool superOps, bool fragment)
+{
+    RegfileRoundTripOut r;
+    fs::path dir = test::getOutPath("mj2x/vmc4_e2e/" + className + "/.keep").parent_path();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+
+    // 样本：高压力（6 个同时活跃值）+ 循环携带 + 分支 + try/catch。
+    fs::path javaFile = dir / (className + ".java");
+    {
+        std::ofstream out(javaFile);
+        out << "public class " << className << " {\n"
+            << "  public static int pressure(int a, int b) {\n"
+            << "    int v1 = a + 1;\n"
+            << "    int v2 = a + 2;\n"
+            << "    int v3 = b + 3;\n"
+            << "    int v4 = b + 4;\n"
+            << "    int v5 = a * 2;\n"
+            << "    int v6 = b * 3;\n"
+            << "    return v1 + v2 + v3 + v4 + v5 + v6;\n"
+            << "  }\n"
+            << "  public static int loopCarry(int n) {\n"
+            << "    int acc = 1;\n"
+            << "    for (int i = 0; i < n; i++) {\n"
+            << "      acc = acc * 3 + i;\n"
+            << "      if (acc > 100000) { acc = acc - 100000; }\n"
+            << "    }\n"
+            << "    return acc;\n"
+            << "  }\n"
+            << "  public static int divCatch(int a, int b) {\n"
+            << "    try {\n"
+            << "      return a / b + pressure(a, b);\n"
+            << "    } catch (ArithmeticException e) {\n"
+            << "      return -7;\n"
+            << "    }\n"
+            << "  }\n"
+            << "}\n";
+    }
+    auto javac = runBat({q(tc.javac) + " -d " + q(dir) + " " + q(javaFile)});
+    if (javac.exitCode != 0) {
+        r.detail = "javac failed: " + javac.out;
+        return r;
+    }
+
+    fs::path driverFile = dir / "Driver.java";
+    {
+        std::ofstream out(driverFile);
+        out << "public class Driver {\n"
+            << "  public static void main(String[] args) {\n"
+            << "    String dll = System.getenv(\"MORPHER_DLL\");\n"
+            << "    if (dll != null) System.load(dll);\n"
+            << "    int[][] pp = {{3, 5}, {7, 2}, {-4, 6}, {10, 1}};\n"
+            << "    for (int[] p : pp) System.out.println(\"pressure\" + p[0] + \"_\" + p[1]"
+            << " + \"=\" + " << className << ".pressure(p[0], p[1]));\n"
+            << "    int[] ns = {0, 1, 5, 23};\n"
+            << "    for (int n : ns) System.out.println(\"loopCarry\" + n + \"=\" + "
+            << className << ".loopCarry(n));\n"
+            << "    int[][] dd = {{10, 2}, {7, 0}, {-9, 3}};\n"
+            << "    for (int[] d : dd) System.out.println(\"divCatch\" + d[0] + \"_\" + d[1]"
+            << " + \"=\" + " << className << ".divCatch(d[0], d[1]));\n"
+            << "  }\n"
+            << "}\n";
+    }
+    auto driverCompile =
+        runBat({q(tc.javac) + " -cp " + q(dir) + " -d " + q(dir) + " " + q(driverFile)});
+    if (driverCompile.exitCode != 0) {
+        r.detail = "driver javac failed: " + driverCompile.out;
+        return r;
+    }
+    auto baselineRun = runBat({q(tc.java) + " -Xverify:all -cp " + q(dir) + " Driver"});
+    if (baselineRun.exitCode != 0 || splitLines(baselineRun.out).size() != 11u) {
+        r.detail = "baseline run failed: " + baselineRun.out;
+        return r;
+    }
+    const auto baseline = splitLines(baselineRun.out);
+
+    // 保护管线：regfile 小档（池容量远小于方法活性压力），super-ops/fragment 按档。
+    fs::path inClass  = dir / (className + ".class");
+    fs::path outClass = dir / (className + "_protected.class");
+    fs::path cFile    = dir / (className + "_rf.c");
+    mj2x::PipelineConfig config;
+    config.inputPath  = inClass.string();
+    config.outputPath = outClass.string();
+    mj2x::Pipeline    pipeline(std::move(config));
+    auto              backend = std::make_unique<mj2x::Vmc4Backend>();
+    backend->setOutputPath(cFile.string());
+    mj2x::Vmc4Options opts;
+    opts.dispatcherKind = mj2x::VmDispatcherKind::SwitchTable;
+    opts.regfile        = regfileLimit;
+    opts.superOps       = superOps;
+    opts.fragment       = fragment;
+    backend->setOptions(opts);
+    pipeline.registerBackend(std::move(backend));
+    pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
+    pipeline.registerPostprocessor(std::make_unique<mj2x::CLoaderPostprocessor>());
+    if (pipeline.run() != 0 || !fileExists(cFile)) {
+        r.detail = "pipeline failed";
+        return r;
+    }
+
+    fs::path dll        = dir / (className + ".dll");
+    fs::path obj        = dir / (className + ".obj");
+    fs::path runtimeObj = dir / "mj2x_vmc4_runtime.obj";
+    fs::path crtSrc     = fs::current_path() / "mj2x-rt" / "src";
+    std::vector<std::string> compileLines;
+    compileLines.push_back("call " + q(tc.vcvars64) + " x64 >nul");
+    compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(obj) + " " + q(cFile) +
+                           " /I" + q(crtSrc) + " /I" + q(tc.jdkInclude) + " /I" +
+                           q(tc.jdkIncludeWin));
+    compileLines.push_back("cl /nologo /O2 /TC /utf-8 /c /Fo" + q(runtimeObj) + " " +
+                           q(crtSrc / "vmc4" / "mj2x_vmc4_runtime.c") + " /I" + q(crtSrc) +
+                           " /I" + q(tc.jdkInclude) + " /I" + q(tc.jdkIncludeWin));
+    compileLines.push_back("link /nologo /DLL /OUT:" + q(dll) + " " + q(obj) + " " +
+                           q(runtimeObj));
+    auto cl = runBat(compileLines);
+    if (cl.exitCode != 0) {
+        r.detail = "cl/link failed: " + cl.out;
+        return r;
+    }
+    if (!fileExists(dll)) {
+        r.detail = "dll missing";
+        return r;
+    }
+
+    auto protectedRun = runBat({
+        "set \"MORPHER_DLL=" + dll.string() + "\"",
+        q(tc.java) + " -Xverify:all -cp " + q(dir) + " Driver",
+    });
+    if (protectedRun.exitCode != 0) {
+        r.detail = "protected run failed: " + protectedRun.out;
+        return r;
+    }
+    const auto actual = splitLines(protectedRun.out);
+    if (baseline.size() != actual.size()) {
+        r.detail = "line count mismatch: baseline " + std::to_string(baseline.size()) + " vs "
+                   + std::to_string(actual.size());
+        return r;
+    }
+    for (size_t i = 0; i < baseline.size(); ++i) {
+        if (baseline[i] != actual[i]) {
+            r.detail = "line " + std::to_string(i) + " mismatch: baseline <" + baseline[i]
+                       + "> vs actual <" + actual[i] + ">";
+            return r;
+        }
+    }
+    r.ok = true;
+    return r;
+}
+
+/// regfile 单开小档：池容量 5（远小于 pressure 的 6+ 同时活跃值）——溢出槽
+/// 真实读写 + 循环携带 + 异常区域映射，全链路输出与 baseline 一致。
+TEST(Vmc4BlockLazyE2E, RegfileRoundTrip)
+{
+    Toolchain tc = probeToolchain();
+    if (!tc.available) {
+        GTEST_SKIP() << "VMC4 native E2E toolchain unavailable: " << tc.reason;
+    }
+    auto r = runRegfileRoundTrip(tc, "Vmc4RegfileA", 5, false, false);
+    ASSERT_TRUE(r.ok) << r.detail;
+}
+
+/// regfile + super-ops + fragment 三开关组合：fragment 临时槽占池顶、融合对
+/// 参与分配，语义仍与 baseline 一致。
+TEST(Vmc4BlockLazyE2E, RegfileSuperOpsFragmentRoundTrip)
+{
+    Toolchain tc = probeToolchain();
+    if (!tc.available) {
+        GTEST_SKIP() << "VMC4 native E2E toolchain unavailable: " << tc.reason;
+    }
+    auto r = runRegfileRoundTrip(tc, "Vmc4RegfileB", 8, true, true);
+    ASSERT_TRUE(r.ok) << r.detail;
+}
+
 }   // namespace

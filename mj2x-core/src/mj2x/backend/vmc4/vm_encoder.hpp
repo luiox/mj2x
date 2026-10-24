@@ -7,14 +7,19 @@
 ///
 /// ### 寄存器映射策略
 ///
-/// RegIR 的虚拟寄存器（RegId）统一映射到 VM 寄存器索引（u16）。映射是**恒等映射**：
+/// RegIR 的虚拟寄存器（RegId）统一映射到 VM 寄存器索引（u16）。默认**恒等映射**：
 ///   - RegId.value 直接作为 VM 寄存器索引（MVP 不做 per-instance 重映射，Phase 2 起
 ///     VmInstance.opcodeTable 会引入寄存器编号随机化）。
 ///   - 字面量（RegOperandKind::IntLiteral/FloatLiteral）收集到 constantPool，编码前
 ///     预扫描全部计算寄存器得到高水位，常量槽分配在其之后（与计算寄存器空间隔离，
 ///     避免 SSA value id 密集递增导致的重叠），prologue 预加载。
 ///
-/// 寄存器文件布局（见 vm_opcode.hpp）：
+/// regfile 开启（issue #10）时改为**线性扫描分配映射**：计算寄存器压入定长池
+/// [numInputs, poolTop)，死值槽位复用，寄存器号不再镜像 SSA value id；池装不下
+/// 的活值分到溢出槽（统一 slots 数组高位索引，操作数直接寻址），常量槽在溢出槽
+/// 区之后分配。映射计划见 vm_regfile.hpp。
+///
+/// 寄存器文件布局（见 vm_opcode.hpp；regfile 开启时计算段换为分配池 + 溢出槽区）：
 ///   [0 .. numInputs)         : 方法参数
 ///   [numInputs .. maxCompute): 计算临时寄存器（= RegId.value 范围）
 ///   [maxCompute .. numRegs)  : 常量槽（prologue 从 constantPool 加载）
@@ -44,16 +49,20 @@ namespace mj2x {
 struct RegFunction;
 class VmInstance;
 
-/// @brief 编码期选项（issue #9：super-ops / 指令碎片化）。
+/// @brief 编码期选项（issue #9：super-ops / 指令碎片化；issue #10：寄存器文件定长化）。
 ///
 /// @details
-/// 两项都是默认关、不被其他开关联动（与 --vmc4-* 现有开关同一约定）。
+/// 三项都是默认关、不被其他开关联动（与 --vmc4-* 现有开关同一约定）。
 /// - superOps：相邻指令折叠成复合指令（±1 → SuperInc/SuperDec）
 /// - fragment：一条指令拆成多条等价碎片，单独看每条是无意义中间态
+/// - regfile：寄存器文件定长化池顶（0 = 关）。开启后计算寄存器经线性扫描
+///   分配压入 [numInputs, poolTop)，装不下的活值分到溢出槽（直接寻址，
+///   见 vm_regfile.hpp）；fragment 开启时其临时槽改占池顶 3 槽。
 struct VmEncodeOptions
 {
-    bool superOps = false;   ///< super-operator 折叠（默认关）
-    bool fragment = false;   ///< 指令碎片化（默认关）
+    bool     superOps = false;   ///< super-operator 折叠（默认关）
+    bool     fragment = false;   ///< 指令碎片化（默认关）
+    uint32_t regfile  = 0;       ///< 寄存器文件池顶上限（0 = 关，恒等映射；issue #10）
 };
 
 /// @brief RegIR → VM bytecode 编码器。

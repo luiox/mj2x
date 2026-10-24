@@ -314,6 +314,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     VmEncodeOptions encodeOptions;
     encodeOptions.superOps = options_.superOps;
     encodeOptions.fragment = options_.fragment;
+    encodeOptions.regfile  = options_.regfile;
     auto        program  = VmEncoder::encode(*reg, instance, reason, &impl_->userIntrinsics,
                                              encodeOptions);
     if (!program) {

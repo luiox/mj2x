@@ -114,6 +114,7 @@ struct CliOptions
     bool                     vmc4ShuffleBlocks   = false; ///< VMC4 编码期块乱序（issue #1116 切片 A）
     bool                     vmc4SuperOps        = false; ///< VMC4 super-operator 融合（issue #9）
     bool                     vmc4Fragment        = false; ///< VMC4 指令碎片化（issue #9）
+    int                      vmc4Regfile         = 0;     ///< VMC4 寄存器文件定长化池顶（0 = 关，issue #10）
     bool                     stringsEncrypt      = false; ///< 字符串面 at-rest 加密
     std::string              runtimeProtection        = "none";   ///< none|log|delay|fake|terminate
     int                      runtimeProtectionStep    = 16;

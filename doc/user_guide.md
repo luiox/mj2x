@@ -225,6 +225,7 @@ VMC4：
 | `--vmc4-shuffle-blocks` | 编码期块乱序：方法内 VM 块物理布局按 seed 确定性打乱（Sattolo 单环，恒无不动点），块 id 空间一并打乱，块邻接不再镜像 CFG；语义经间接跳转表重映射保持不变。开启时间接跳转表以 xorshift32 keystream 加密落盘、JNI_OnLoad 一次性原地解密。与 drift / encrypt-program 正交可叠 |
 | `--vmc4-super-ops` | super-operator 融合（issue #9）：相邻指令折叠成复合指令——`Binary(x, ±1)` 折成 SuperInc/SuperDec（去掉 rhs 操作数）；同一基本块内相邻的 `t = a op1 b` + `dest = t op2 c`（t 仅此一处消费）折成一条 FusedBinary，中间值不再以独立寄存器存在。融合后 VM 指令与 JVM 字节码不再 1:1。与 `--vmc4-fragment` 可组合 |
 | `--vmc4-fragment` | 指令碎片化（issue #9）：每条计算指令（Binary/Unary/Compare/Convert）的寄存器操作数先经专用临时槽中转一次，一条指令拆成「Copy + 原指令」多段，每段单独看是无意义的中间搬运。纯编码期变换（不新增 opcode）。**代价：指令数约 2~3 倍，解释执行开销同步上升**，面向高保护诉求按需开启。与 `--vmc4-super-ops` 可组合 |
+| `--vmc4-regfile <n>` | 寄存器文件定长化（issue #10）：计算寄存器经线性扫描分配压入 n 槽定长池，死值槽位复用，寄存器号不再镜像 SSA value id；装不下的活值分到稳定溢出槽，以统一 slots 数组高位索引直接寻址——无搬运指令、零运行时开销。与 `--vmc4-super-ops` / `--vmc4-fragment` 可组合（fragment 临时槽改占池顶，要求 n ≥ 参数数 + 3；n < 参数数 fail-closed）。默认 0 = 关（恒等映射） |
 
 两项指令级变换的机制、代价与绕过面见 [doc/techniques/vm_super_ops.md](techniques/vm_super_ops.md)。
 | `--vmc4-trace-surface <file>` | 导出 VMC4 期望 trace surface（mjdbg 红队契约的实例描述清单）到文件；仅 `--backend vmc4` 有效 |
