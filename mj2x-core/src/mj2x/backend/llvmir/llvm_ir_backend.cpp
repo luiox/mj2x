@@ -97,7 +97,7 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
     CompilerMethod* targetMethod = findTarget(id, reason);
     if (targetMethod == nullptr || targetMethod->methodNode == nullptr) return false;
 
-    if (targetMethod->backendResult.kind == BackendResult::Kind::C_SOURCE) {
+    if (targetMethod->backendResult.kind == BackendResult::Kind::LLVM_IR) {
         // 已编译成功：方法体已被 injectIntoClass 清空，不能再预检；成功即已通过
         // 完整验证，签名直接从描述解析。
         CallTarget parsed;
@@ -413,7 +413,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
         return result;
     }
 
-    result.kind = BackendResult::Kind::C_SOURCE;
+    result.kind = BackendResult::Kind::LLVM_IR;
     result.text = helperSource +
                   emitJniWrapper(className, *method.methodNode, helper, resultType,
                                  isStatic);
@@ -434,7 +434,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
 void LlvmIrBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                                     const BackendResult& result)
 {
-    if (result.kind != BackendResult::Kind::C_SOURCE || method.methodNode == nullptr) return;
+    if (result.kind != BackendResult::Kind::LLVM_IR || method.methodNode == nullptr) return;
     method.methodNode->access |= Opcodes::ACC_NATIVE;
     method.methodNode->instructions.clear();
     // native 方法无字节码：maxStack/maxLocals 清零，对齐 StackC/VMC4。

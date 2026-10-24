@@ -84,9 +84,12 @@
 - 三后端共享层抽取（结构性最大项）：JVM 类型格点映射表（10+ 张平行）、
   RegisterNatives 基建、indy bootstrap 运行时解析（3 份）、多维数组分配
   （3 份）；按 H-2 触发条件独立排期。
-- backend.hpp 收拾：Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位、
-  finalize 无错误通道（三后端失败行为不一致）、接口默认方法能力边界
-  （MarkAll 下产出带 ACC_NATIVE 的接口方法 → ClassFormatError）。
+- ~~backend.hpp 收拾：Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位~~
+  **已销项（2026-10-24）**：`BackendResult::Kind` 删 BINARY 死枚举 + 无人消费的
+  `data` 字段，新增 `LLVM_IR`（LLVM 后端产物不再语义错位挂 C_SOURCE，backend.hpp
+  契约文档同步）。剩余两项仍挂账：finalize 无错误通道（三后端失败行为不一致）、
+  接口默认方法能力边界（MarkAll 下产出带 ACC_NATIVE 的接口方法 →
+  ClassFormatError）。
 - RegC intrinsic 判定热点：每条 Call 重复 match 6-10 次（含多次 std::string
   构造与全表线性扫），应函数级一次算好 decision；registry 视图不统一
   （analyze 走 builtins、emit 走用户 registry，覆盖判定有漂移风险）。
@@ -261,8 +264,16 @@
 
 **批次 3：产品化（大改动，需拍板）**
 
-10. 交叉编译 + 多目标产物（bundled zig / toolchain 反射）：fat JAR + `<triple>.jar` +
-    注入 NativeLoader 自动注册——**jvmtp 最大的护城河，也是我们对位最大差距**。
+10. ~~**交叉编译 + 多目标产物（第一切片）**~~ **已完成（2026-10-24，issue #11）**：
+    `--targets <abi,...>` + `--target-cc <abi>=<path>`（方案 a：显式交叉工具链，
+    zig 为仓内默认交叉面、自动带 `-target` 三元组；宿主 ABI 回落自动探测）。
+    逐 ABI 产物落 `<输出目录>/<abi>/<库名>`，manifest `<stem>.targets.json`
+    记录 built/skipped/failed 与原因（CI 集成挂点）；退出码两态（全部 built
+    → 0）。v1 定界（定界外 fail-closed）：C99 后端（regc/vmc4）+ 直接驱动
+    （file/pipe）；xmake/LLVM/StackC/jar 嵌入/native-dir 拒绝。
+    **剩余（后续切片，需拍板）**：fat JAR + 多 ABI jar 嵌入 + NativeLoader
+    按平台挑选注册、bundled zig / toolchain 反射自动发现、darwin/mach ABI 档
+    ——**jvmtp 最大的护城河**对位仍未闭合。
 11. Gradle 插件 + Java SDK SPI（可替换 packer/compiler 的显式 LifecycleEvent API）。
 12. packer（代码段流加密 + 两阶段 loader + 免落盘）+ 签名流水线。
 
