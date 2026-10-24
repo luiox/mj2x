@@ -143,12 +143,19 @@
    `NoClassDefFoundError: class lookup failed`（三后端一致；LambdasCapture
    首曝——捕获 + 静态方法引用 + 构造器引用 + 循环捕获组合，lambda_synth
    既有 E2E 未覆盖）。待根因：class lookup 的 owner 传递面。
-9. regc 引用值丢 null：`makeLongs` 返回 long[] 调用点拿到 null、StringBuilder
-   局部 append 链打印 "null"（ArraysAllTypes / StringsAndBoxing regc 双例互
-   证；new + 方法返回值/多步引用传递形态）。
-10. regc LDC 字符串物化代理对：增补平面字符（emoji）被逐字节拆成 4 个 char
-    （BMP 面正常）——常量池 UTF-8 → NewStringUTF 的 supplementary 转换错误
-    （TextUnicode regc）。
+9. regc 引用值丢 null（**2026-10-24 二轮定位更新**）：最小复现
+   （test/tmp/nullbisect NullMin：`makeLongs` 返回 long[] + for-each）下
+   症状升级为 **JVM 崩溃**（AV in jvm.dll，`NullMin.main+0`，读地址
+   0xFFFFFFFFFFFFFFFF）；`--regc-no-inline` 同崩 → **排除内联器**；
+   main 生成体的静态调用缓存（`{"NullMin","makeLongs","(I)[J}",NULL,NULL}`
+   分派路径与 wrapper 早期生命周期为头号嫌疑（崩在方法入口 +0，-1 索引
+   特征）。StringsAndBoxing 的 "sb null" 同源待并入定位。
+10. ~~regc LDC 字符串物化代理对~~ **已修（2026-10-24）**：常量池是标准 UTF-8
+    而 NewStringUTF 按 modified UTF-8 解码——BMP 面（1/2/3 字节）两编码逐字节
+    相同故历来正常，增补平面（4 字节）被逐字节拆解。修复：发射期
+    `utf8ToModifiedUtf8`（NUL→C0 80、增补平面→代理对 3+3 字节）统一转换，
+    strings-encrypt 密文池同面受益；最小复现验证通过
+    （test/tmp/utfsmoke，emoji codePoint 往返一致）。
 11. **已修（2026-10-24）**：stackc `instanceof` 对 null 返回 true（JNI
     IsInstanceOf(NULL)=TRUE 未前置判空，InstanceLifecycle/IntrinsicSurface
     双例首曝）；vmc4 `i2s/i2b/i2c` 窄化退化为恒等（toVmType 坍缩使 Convert

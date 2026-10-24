@@ -22,8 +22,3 @@ LambdasCapture vmc4 lambda bootstrap 后类查找失败（class lookup failed）
 ArraysAllTypes regc 引用值丢失为 null（makeLongs 返回点）
 StringsAndBoxing regc 引用值丢失为 null（StringBuilder 局部链）
 
-# regc LDC 字符串物化：增补平面字符（代理对，如 emoji U+1F600）被逐字节拆成
-# 4 个 char（应为 1 个 codePoint/2 个 UTF-16 unit）——常量池 UTF-8 → JNI
-# NewStringUTF 的转换对 supplementary 面错误（BMP 面正常）。后续 charAt 抛
-# StringIndexOutOfBoundsException。
-TextUnicode regc LDC 代理对字符物化错误（逐字节拆分）
