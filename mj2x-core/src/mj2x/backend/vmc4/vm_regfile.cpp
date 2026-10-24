@@ -281,6 +281,27 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
             },
             block.terminator);
     }
+    const bool dbgBlocks = std::getenv("MJ2X_REGFILE_DEBUG") != nullptr;
+    if (dbgBlocks) {
+        for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+            const RegBlock& blk = *fn.blocks[bi];
+            std::fprintf(stderr, "[regfile-ir] b=%zu term-reads={", bi);
+            for (uint32_t id : scans[bi].term.reads) std::fprintf(stderr, "%u,", id);
+            std::fprintf(stderr, "} succ={");
+            for (size_t s2 : succs[bi]) std::fprintf(stderr, "%zu,", s2);
+            std::fprintf(stderr, "}\n");
+            for (size_t ii = 0; ii < blk.instructions.size(); ++ii) {
+                const RegInstruction& ins = blk.instructions[ii];
+                std::fprintf(stderr, "[regfile-ir]   kind=%d dest=%d%s reads={", (int)ins.kind,
+                             ins.hasDest ? (int)ins.dest.id.value : -1,
+                             ins.hasDest ? "" : " (none)");
+                std::vector<uint32_t> rd;
+                collectInstructionReads(ins, out.numInputs, rd);
+                for (uint32_t id : rd) std::fprintf(stderr, "%u,", id);
+                std::fprintf(stderr, "}\n");
+            }
+        }
+    }
     bool changed = true;
     while (changed) {
         changed = false;
@@ -299,6 +320,26 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
                 liveIn[bi] = std::move(inSet);
                 changed    = true;
             }
+        }
+    }
+
+    if (dbgBlocks) {
+        for (size_t bi = 0; bi < blockCount; ++bi) {
+            std::fprintf(stderr, "[regfile-succ] b=%zu succ={", bi);
+            for (size_t s2 : succs[bi]) std::fprintf(stderr, "%zu,", s2);
+            std::fprintf(stderr, "}\n");
+        }
+        for (size_t bi = 0; bi < blockCount; ++bi) {
+            std::fprintf(stderr, "[regfile-block] b=%zu pos=[%u..%u] useGen={", bi,
+                         scans[bi].startPos, scans[bi].endPos);
+            for (uint32_t id : useGen[bi]) std::fprintf(stderr, "%u,", id);
+            std::fprintf(stderr, "} defAll={");
+            for (uint32_t id : defAll[bi]) std::fprintf(stderr, "%u,", id);
+            std::fprintf(stderr, "} liveIn={");
+            for (uint32_t id : liveIn[bi]) std::fprintf(stderr, "%u,", id);
+            std::fprintf(stderr, "} liveOut={");
+            for (uint32_t id : liveOut[bi]) std::fprintf(stderr, "%u,", id);
+            std::fprintf(stderr, "}\n");
         }
     }
 
@@ -339,6 +380,13 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
 
     std::vector<Interval> intervals;
     intervals.reserve(birth.size());
+    const bool dbgIntervals = std::getenv("MJ2X_REGFILE_DEBUG") != nullptr;
+    if (dbgIntervals) {
+        for (const auto& kv : birth)
+            std::fprintf(stderr, "[regfile-interval] id=%u birth=%u death=%u\n", kv.first,
+                         kv.second,
+                         death.count(kv.first) ? death.at(kv.first) : kv.second);
+    }
     for (const auto& kv : birth) {
         if (foldedIds.count(kv.first)) continue;   // 融合吸收的 dest 不分配
         Interval iv;

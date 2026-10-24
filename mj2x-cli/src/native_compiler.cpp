@@ -910,8 +910,9 @@ int compileCSourceFromPipeForTarget(std::string_view cSource, const CompileTarge
         CA_LOGT_ERROR("compile", "generated C source is empty.\n");
         return 1;
     }
-    return compileForTargetImpl({}, &std::string{cSource.begin(), cSource.end()}, target, backend,
-                                requestedCompiler, crtRoot, extraSources, timeout);
+    std::string buffer(cSource);
+    return compileForTargetImpl({}, &buffer, target, backend, requestedCompiler, crtRoot,
+                                extraSources, timeout);
 }
 
 /// @brief 把内嵌 mj2x-rt common(rt_protect)源写入临时目录；返回 .c 路径（空 = 失败）。
