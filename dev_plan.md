@@ -137,6 +137,45 @@
    上锁，与清理主题相悖——删宏或注明口径；对应地，负值收口声明口径应为
    「DEF_INT/DEF_U64 两类宏 + vmc4-seed/native-lib-key 两支手写校验器」。
 
+**java_corpus 语料集首曝（2026-10-24，test_resource/java_corpus；修后删 exclusions 行）**
+
+8. lambda bootstrap 类查找：受保护类经 lambda bootstrap 反查自身形态下运行期
+   `NoClassDefFoundError: class lookup failed`（三后端一致；LambdasCapture
+   首曝——捕获 + 静态方法引用 + 构造器引用 + 循环捕获组合，lambda_synth
+   既有 E2E 未覆盖）。待根因：class lookup 的 owner 传递面。
+9. regc 引用值丢 null：`makeLongs` 返回 long[] 调用点拿到 null、StringBuilder
+   局部 append 链打印 "null"（ArraysAllTypes / StringsAndBoxing regc 双例互
+   证；new + 方法返回值/多步引用传递形态）。
+10. regc LDC 字符串物化代理对：增补平面字符（emoji）被逐字节拆成 4 个 char
+    （BMP 面正常）——常量池 UTF-8 → NewStringUTF 的 supplementary 转换错误
+    （TextUnicode regc）。
+11. **已修（2026-10-24）**：stackc `instanceof` 对 null 返回 true（JNI
+    IsInstanceOf(NULL)=TRUE 未前置判空，InstanceLifecycle/IntrinsicSurface
+    双例首曝）；vmc4 `i2s/i2b/i2c` 窄化退化为恒等（toVmType 坍缩使 Convert
+    丢失精确类型，BigIntMini vmc4 首曝——VmType 增 I16/I8/CHAR Convert 专用
+    标签 + handler 符号/零扩展）。
+12. **regfile 区间计算缺陷（#10 回归，PR #31 引入，未修）**：
+    `--vmc4-regfile` 在「256 项表由嵌套循环构建 + 溢出参与」形态下，线性扫描
+    分配出越池/重叠的物理槽（分配 dump 实证：id 10 → 槽 8 = spillBase 越出池
+    [1,8)；多 id 共享槽 1 的重叠区间），表现为数组 load 的 recv 指向错误对象、
+    元素值变成下标残值（GetIntArrayRegion 失败 + helper `_v` 未初始化读栈残
+    ——helper 缺 ExceptionCheck 是次生放大面）。最小复现：CRC 表构建形态
+    （test/tmp/rfmin 复现脚本，256 循环 + `table[idx]`）；
+    `--vmc4-super-ops / --vmc4-fragment / --vmc4-shuffle-blocks` 单开均正常，
+    仅 regfile 触发；池大小无关（8/12/16/24/64 全失败）。
+    **已做的遏制**：语料 obf 档暂撤 `--vmc4-regfile`（corpus runner 注释）；
+    plain 档 regfile E2E（Vmc4RegfileA/B）未覆盖此形态故仍绿。
+    **修复方向**：区间 hull 的 liveIn/liveOut 扩展或 victim 换出路径的活性
+    失真；修后 (a) 排查 helper 的 ExceptionCheck 面，(b) obf 档重新加入
+    regfile，(c) 本条最小复现收编为 emit 级单测。
+13. **computed jumps 大 switch 缺陷（PR #27 回归，未修）**：
+    `--regc-computed-jumps` 在 250-case switch 形态下输出错误
+    （java_corpus BigSwitch 首曝；obf 档二分锁定单开即复现，
+    test/tmp/bsbisect 复现脚本）。既有 computed-jumps E2E 未覆盖大 switch
+    密集形态。**已做遏制**：语料 obf 档暂撤该开关（corpus runner 注释）。
+    **修复方向**：key→目标映射表在 case 数量大时的编码/解析面；修后
+    (a) BigSwitch 收编为该开关的 E2E 用例，(b) obf 档重新加入。
+
 **产品/机器决策项（需拍板）**
 
 8. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads——

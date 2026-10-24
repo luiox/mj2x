@@ -1,0 +1,29 @@
+# java_corpus 排除表（已知缺口显式记账）
+#
+# 格式：`<case名> <backend> <原因...>`（backend ∈ stackc | regc | vmc4；列不齐时
+# 该 (case, backend) 组合在矩阵中 SKIP 并打印原因）。
+# 原则：出现失败先分诊——能修就修后端；确属已知能力缺口才进表，修复后删行。
+# perf/ 用例不进本表（性能档全列对拍，无排除面）。
+
+# --- 2026-10-24 首轮分诊（java_corpus 首曝，待修后删行） ---
+
+# lambda/方法引用：运行时 NoClassDefFoundError: class lookup failed（三后端
+# 一致）——indy bootstrap 后的类查找面在「受保护类经 lambda bootstrap 反查自身」
+# 形态下失败；lambda_synth 既有 E2E 未覆盖本形态（捕获 + 静态方法引用 +
+# 构造器引用 + 循环捕获组合）。待根因定位（class lookup 的 owner 传递）。
+LambdasCapture stackc lambda bootstrap 后类查找失败（class lookup failed）
+LambdasCapture regc lambda bootstrap 后类查找失败（class lookup failed）
+LambdasCapture vmc4 lambda bootstrap 后类查找失败（class lookup failed）
+
+# regc 引用值丢 null：返回 long[] 的方法调用点拿到 null（for-each 前无 NPE，
+# 输出 "long null"）；StringBuilder 局部变量 append 链后打印 "null"。
+# 共同形态：new + 方法返回值/多步引用传递。ArraysAllTypes 与 StringsAndBoxing
+# 互为印证，待根因定位。
+ArraysAllTypes regc 引用值丢失为 null（makeLongs 返回点）
+StringsAndBoxing regc 引用值丢失为 null（StringBuilder 局部链）
+
+# regc LDC 字符串物化：增补平面字符（代理对，如 emoji U+1F600）被逐字节拆成
+# 4 个 char（应为 1 个 codePoint/2 个 UTF-16 unit）——常量池 UTF-8 → JNI
+# NewStringUTF 的转换对 supplementary 面错误（BMP 面正常）。后续 charAt 抛
+# StringIndexOutOfBoundsException。
+TextUnicode regc LDC 代理对字符物化错误（逐字节拆分）
