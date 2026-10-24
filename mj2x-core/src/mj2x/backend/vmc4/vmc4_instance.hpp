@@ -148,6 +148,17 @@ struct Vmc4Options
     /// **代价**：指令数约变为 2~3 倍，解释执行开销同步上升——面向高保护
     /// 诉求的场景按需开启，文档已写明该代价。与 superOps 可组合。
     bool fragment = false;
+
+    /// 寄存器文件定长化池顶（--vmc4-regfile <n>；0 = 关闭，issue #10）。
+    ///
+    /// @details
+    /// 开启后计算寄存器经线性扫描分配压入定长池 [numInputs, poolTop)（池顶 =
+    /// 本值），死值槽位复用——寄存器号不再镜像 SSA value id（红队的结构性
+    /// 锚点）；池装不下的活值分到溢出槽（统一 slots 数组高位索引，操作数直接
+    /// 寻址，无搬运指令、零运行时开销）。fragment 开启时其临时槽改占池顶 3 槽
+    /// （要求 n ≥ numInputs + 3，编码期 fail-closed）。与 superOps/fragment
+    /// 可组合。语义零变化（E2E 对拍验证）。
+    uint32_t regfile = 0;
 };
 
 /// @brief 一个 VM 实例的描述对象。

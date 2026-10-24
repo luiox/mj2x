@@ -1,5 +1,6 @@
 #include "mj2x/backend/vmc4/vm_encoder.hpp"
 
+#include "mj2x/backend/vmc4/vm_regfile.hpp"
 #include "mj2x/backend/vmc4/vmc4_instance.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/mir/register_ir/reg_block.hpp"
@@ -223,10 +224,49 @@ struct EncoderState
     /// 取决于计算寄存器扫描结果，而非固定 numInputs。
     uint16_t numInputs = 0;
 
-    /// 已分配的最大寄存器索引 + 1（含参数、常量槽、计算寄存器）。
-    uint16_t maxReg = 0;
-    /// 编码期选项（super-ops / 碎片化），默认全关。
+    /// 已分配的最大寄存器索引 + 1（含参数、常量槽、计算寄存器、溢出槽区）。
+    /// u32 承载以探测 u16 回绕：最终 numRegs > 0xFFFF 时编码入口 fail-closed
+    /// （#1133 同款——回绕后操作数静默腐蚀，必须报错而非静默截断）。
+    uint32_t maxReg = 0;
+    /// 编码期选项（super-ops / 碎片化 / 寄存器文件定长化），默认全关。
     VmEncodeOptions options;
+
+    /// 寄存器文件定长化分配计划（issue #10）；regfile 关闭时 regfileOn == false，
+    /// 全部寄存器位点走恒等映射（历史形态逐字节一致）。
+    VmRegfilePlan regfilePlan;
+    bool          regfileOn = false;
+
+    /// @brief RegId → VM 槽位索引重映射（regfile 关闭 = 恒等）。
+    ///
+    /// @details
+    /// 参数区 [0, numInputs) 恒等（入口现场，不可移动）；其余查分配计划，
+    /// 未映射（扫描遗漏/融合吸收的 dest 被引用）属内部不变量破坏，fail-closed
+    /// 中止编码——方法保留字节码不转 VM，绝不产出错误产物。
+    bool mapReg(uint32_t id, uint16_t& out, std::string& reason) const
+    {
+        if (!regfileOn) {
+            out = static_cast<uint16_t>(id);
+            return true;
+        }
+        if (id < regfilePlan.numInputs) {
+            out = static_cast<uint16_t>(id);
+            return true;
+        }
+        const auto it = regfilePlan.vmRegOf.find(id);
+        if (it == regfilePlan.vmRegOf.end()) {
+            reason = "regfile: unmapped register id " + std::to_string(id)
+                     + " (allocator scan missed a register site)";
+            return false;
+        }
+        out = static_cast<uint16_t>(it->second);
+        return true;
+    }
+
+    /// @brief dest 寄存器重映射（mapReg 的 RegValue 便捷形态）。
+    bool mapDest(const RegValue& dest, uint16_t& out, std::string& reason) const
+    {
+        return mapReg(dest.id.value, out, reason);
+    }
 
     /// 碎片化专用临时寄存器（3 个），惰性预留（见 ensureFragmentTemps）。
     /// 不能复用计算寄存器（破坏活值）或常量槽（污染常量）。3 个而非 2 个：
@@ -242,6 +282,10 @@ struct EncoderState
     /// 落到该区间的分配都会与临时槽重叠（常量被覆盖 / 活值被踩）。首次使用时
     /// maxReg 是当时的真实高水位，预留后立即 += 2，此后一切分配只能落在临时槽
     /// 之上——这是无条件成立的，不依赖预扫描完备性。
+    ///
+    /// regfile 开启（issue #10）时改为占用**池顶 3 槽** [poolTop, poolTop+3)：
+    /// 临时槽保持在上限之内（溢出槽区从 limit 起，互不重叠）；池容量由
+    /// planVmRegfile fail-closed 保证（limit ≥ numInputs + 3），此处不再校验。
     bool ensureFragmentTemps(std::string& reason)
     {
         if (fragmentTempsReady) return true;
@@ -249,14 +293,21 @@ struct EncoderState
             reason = "fragment temps requested while fragment option is off";
             return false;
         }
-        if (maxReg > static_cast<uint16_t>(0xFFFD)) {
+        if (regfileOn) {
+            fragmentTemps[0]   = regfilePlan.poolTop;
+            fragmentTemps[1]   = static_cast<uint16_t>(regfilePlan.poolTop + 1);
+            fragmentTemps[2]   = static_cast<uint16_t>(regfilePlan.poolTop + 2);
+            fragmentTempsReady = true;
+            return true;
+        }
+        if (maxReg > static_cast<uint32_t>(0xFFFD)) {
             reason = "fragment temp registers exceed u16 register file";
             return false;
         }
-        fragmentTemps[0]    = maxReg;
+        fragmentTemps[0]    = static_cast<uint16_t>(maxReg);
         fragmentTemps[1]    = static_cast<uint16_t>(maxReg + 1);
         fragmentTemps[2]    = static_cast<uint16_t>(maxReg + 2);
-        maxReg              = static_cast<uint16_t>(maxReg + 3);
+        maxReg              = maxReg + 3;
         fragmentTempsReady  = true;
         return true;
     }
@@ -624,7 +675,7 @@ struct EncoderState
             return it->second;
         }
 
-        const uint16_t slot = maxReg;   // 常量槽紧接在已分配寄存器之后
+        const uint16_t slot = static_cast<uint16_t>(maxReg);   // 常量槽紧接在已分配寄存器之后
         observeReg(slot);
         constSlotBySignature[sig] = slot;
         return slot;
@@ -745,7 +796,7 @@ struct EncoderState
             observeReg(it->second);
             return it->second;
         }
-        const uint16_t slot = maxReg;   // 常量槽紧接在已分配寄存器之后
+        const uint16_t slot = static_cast<uint16_t>(maxReg);   // 常量槽紧接在已分配寄存器之后
         observeReg(slot);
         stringSlotByValue[value] = slot;
         VmStringLiteral lit;
@@ -766,7 +817,7 @@ struct EncoderState
             observeReg(it->second);
             return it->second;
         }
-        const uint16_t slot = maxReg;
+        const uint16_t slot = static_cast<uint16_t>(maxReg);
         observeReg(slot);
         classSlotByDesc[typeDesc] = slot;
         VmClassLiteral lit;
@@ -793,11 +844,10 @@ struct EncoderState
                         bool allowOpaqueNull = false)
     {
         switch (op.kind) {
-        case RegOperandKind::Register: {
-            regIdx = static_cast<uint16_t>(op.reg.value);
+        case RegOperandKind::Register:
+            if (!mapReg(op.reg.value, regIdx, reason)) return false;
             observeReg(regIdx);
             return true;
-        }
         case RegOperandKind::IntLiteral: {
             VmType vt;
             if (!toVmType(op.type, vt)) {
@@ -1027,12 +1077,14 @@ bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edg
             reason = "edge copy dest type not supported in MVP";
             return false;
         }
+        uint16_t dest;
+        if (!ctx.mapDest(copy.dest, dest, reason)) return false;
         uint16_t src;
         // 边拷贝的 undef 源（异常 handler 参数未定义）容忍为 NULL 引用。
         if (!ctx.resolveOperand(copy.source, src, reason, true)) return false;
         emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
         emitU8(prog.bytecodes, static_cast<uint8_t>(type));
-        emitU16(prog.bytecodes, static_cast<uint16_t>(copy.dest.id.value));
+        emitU16(prog.bytecodes, dest);
         emitU16(prog.bytecodes, src);
     }
     const auto realIt = ctx.blockIndex.find(edge.realTarget);
@@ -1137,7 +1189,8 @@ bool encodeCopy(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
     // 用的字段，对 Copy 是默认构造的 Opaque）。
     uint16_t src;
     if (!ctx.resolveOperand(ins.copy.source, src, reason)) return false;
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
@@ -1161,7 +1214,8 @@ bool encodeUnary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, 
     }
     uint16_t src;
     if (!ctx.resolveOperand(ins.value, src, reason)) return false;
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     src = stageFragmentOperand(ctx, prog, 0, src, type, reason);
@@ -1200,7 +1254,8 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
                                                                   : VmOpcode::SuperDec;
         uint16_t src;
         if (!ctx.resolveOperand(ins.lhs, src, reason)) return false;
-        const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+        uint16_t dest;
+        if (!ctx.mapDest(ins.dest, dest, reason)) return false;
         ctx.observeReg(dest);
 
         // 与碎片化组合（issue #9：两者可组合）：super-op 的操作数同样中转一次，
@@ -1218,7 +1273,8 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
     uint16_t lhs, rhs;
     if (!ctx.resolveOperand(ins.lhs, lhs, reason)) return false;
     if (!ctx.resolveOperand(ins.rhs, rhs, reason)) return false;
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     // 指令碎片化（issue #9）：Binary 的两个操作数各经一次临时槽中转，一条指令
@@ -1267,7 +1323,8 @@ bool encodeFusedBinary(EncoderState& ctx, const RegInstruction& first, const Reg
     if (!ctx.resolveOperand(first.lhs, a, reason)) return false;
     if (!ctx.resolveOperand(first.rhs, b, reason)) return false;
     if (!ctx.resolveOperand(second.rhs, c, reason)) return false;
-    const uint16_t dest = static_cast<uint16_t>(second.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(second.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     // 与碎片化组合：三个源操作数各中转一次（临时槽 3 个，见 EncoderState）。
@@ -1312,7 +1369,8 @@ bool encodeCompare(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     uint16_t lhs, rhs;
     if (!ctx.resolveOperand(ins.lhs, lhs, reason)) return false;
     if (!ctx.resolveOperand(ins.rhs, rhs, reason)) return false;
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     lhs = stageFragmentOperand(ctx, prog, 0, lhs, operandType, reason);
@@ -1361,7 +1419,8 @@ bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
     }
     uint16_t src;
     if (!ctx.resolveOperand(ins.value, src, reason)) return false;
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     src = stageFragmentOperand(ctx, prog, 0, src, from, reason);
@@ -1456,7 +1515,7 @@ bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
     // 返回值寄存器（void 方法无 dest）。
     uint16_t dest = 0;
     if (ins.hasDest) {
-        dest = static_cast<uint16_t>(ins.dest.id.value);
+        if (!ctx.mapDest(ins.dest, dest, reason)) return false;
         ctx.observeReg(dest);
     }
 
@@ -1510,7 +1569,8 @@ bool encodeLoadField(EncoderState& ctx, const RegInstruction& ins, VmProgram& pr
     if (!ins.field.isStatic) {
         if (!ctx.resolveOperand(ins.receiver, recv, reason)) return false;
     }
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     emitOpcode(ctx, VmOpcode::LoadField, prog.bytecodes);
@@ -1580,7 +1640,8 @@ bool encodeArrayLoad(EncoderState& ctx, const RegInstruction& ins, VmProgram& pr
     if (!ctx.resolveOperand(ins.receiver, arrayIdx, reason)) return false;
     uint16_t indexIdx;
     if (!ctx.resolveOperand(ins.index, indexIdx, reason)) return false;
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     emitOpcode(ctx, VmOpcode::ArrayLoad, prog.bytecodes);
@@ -1637,7 +1698,8 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
     aref.typeDesc = ins.typeDesc.to_std_string();
     const uint16_t siteIdx = ctx.internAllocRef(std::move(aref));
 
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
 
     // 维度寄存器（MultiArray：每维一个 int；Array：length；Object：无 args）。
@@ -1743,7 +1805,8 @@ bool encodeIntrinsic(EncoderState& ctx, const RegInstruction& ins, VmProgram& pr
         if (!ctx.resolveOperand(a, ai, reason)) return false;
         argIdxs.push_back(ai);
     }
-    const uint16_t dest = static_cast<uint16_t>(ins.dest.id.value);
+    uint16_t dest;
+    if (!ctx.mapDest(ins.dest, dest, reason)) return false;
     ctx.observeReg(dest);
     if (ins.intrinsicName == "array.length") ctx.hasArrayLength = true;
 
@@ -1867,17 +1930,20 @@ void encodeExceptionRegions(EncoderState& ctx, VmProgram& prog, std::string& rea
             VmExceptionRegionEntry entry;
             entry.handlerBlock  = handlerIt->second;
             entry.caughtTypeIdx = caughtTypeIdx;
-            entry.exceptionReg  = static_cast<uint16_t>(region.exceptionValue.id.value);
-            entry.blockIdx      = blockIt->second;
-            ctx.observeReg(entry.exceptionReg);
+            uint16_t excReg;
+            if (!ctx.mapReg(region.exceptionValue.id.value, excReg, reason)) return;
+            entry.exceptionReg = excReg;
+            entry.blockIdx     = blockIt->second;
+            ctx.observeReg(excReg);
             // 该块的边拷贝（edges 中 protectedBlock 匹配的项）。
             for (const auto& edge : region.edges) {
                 if (edge.protectedBlock != protectedBlock) continue;
                 for (const auto& copy : edge.copies) {
+                    uint16_t dest;
+                    if (!ctx.mapDest(copy.dest, dest, reason)) return;
                     uint16_t src;
                     // 异常边拷贝的 undef 源（handler 参数在该帧未定义）容忍为 NULL。
                     if (!ctx.resolveOperand(copy.source, src, reason, true)) return;
-                    const uint16_t dest = static_cast<uint16_t>(copy.dest.id.value);
                     ctx.observeReg(dest);
                     entry.copies.emplace_back(dest, src);
                 }
@@ -2007,6 +2073,17 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     // super-op 融合规划（issue #9）：需要相邻指令序列 + 全函数使用计数，与逐指令
     // 编码解耦，故在 layoutBlocks 之前一次性完成。
     ctx.planSuperOps();
+    // 寄存器文件定长化（issue #10）：融合计划落地后做线性扫描分配（融合对按
+    // 单条复合指令参与分配），maxReg 抬到溢出槽区终点——常量槽自此从溢出槽区
+    // 之后分配，池内寄存器与溢出槽全部落在计划空间内。
+    if (options.regfile > 0) {
+        ctx.regfileOn = true;
+        if (!planVmRegfile(fn, options.regfile, options.fragment, ctx.superOpFusedNext,
+                           ctx.regfilePlan, reason)) {
+            return nullptr;
+        }
+        ctx.maxReg = ctx.regfilePlan.highWater;
+    }
     // 总块数容量 fail-closed（issue #1133）：块 id 是 u16，真实块 + 合成边块
     // > 0xFFFF 时 id 回绕静默腐蚀跳转目标（旧校验只卡 realCount，合成块不计入）。
     // 在任何 id 产生/消费（assignBlockIndices / encodeExceptionRegions 的 u16
@@ -2067,7 +2144,15 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     prog->classLiterals  = std::move(ctx.classLiterals);
 
     prog->numInputs = ctx.numInputs;
-    prog->numRegs   = ctx.maxReg;
+    // 寄存器文件总量 u16 容量守卫（#1133 同款 fail-closed）：操作数是 u16 索引，
+    // numRegs 回绕后解释器 regs[] 尺寸与操作数空间静默错位。maxReg 以 u32 承载
+    // 探测回绕，此处一次性拦截（历史恒等映射形态同样受益）。
+    if (ctx.maxReg > 0xFFFF) {
+        reason = "register file exceeds u16 operand range: numRegs="
+                 + std::to_string(ctx.maxReg) + " exceeds 65535";
+        return nullptr;
+    }
+    prog->numRegs = static_cast<uint16_t>(ctx.maxReg);
     return prog;
 }
 

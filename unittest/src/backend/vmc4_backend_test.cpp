@@ -14,9 +14,11 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
@@ -2646,5 +2648,519 @@ TEST(Vmc4BackendTest, EncodesAtU16TotalBlockCapacityBoundary)
         ASSERT_NE(prog, nullptr) << reason;
         EXPECT_EQ(prog->blockTargets.size(), 65535u) << reason;
         EXPECT_FALSE(prog->bytecodes.empty());
+    }
+}
+
+// ===========================================================================
+// 寄存器文件定长化（issue #10，--vmc4-regfile）：线性扫描分配 + 溢出槽。
+//
+// 分配语义：计算寄存器压入定长池 [numInputs, poolTop)，死值槽位复用（寄存器号
+// 不再镜像 SSA value id）；池装不下的活值分到稳定溢出槽（统一 slots 数组高位
+// 索引，操作数直接寻址——无搬运指令）。溢出槽区起点 = regfile limit，常量槽
+// 在溢出槽区之后。默认关闭（regfile=0）保持恒等映射，字节流与历史形态一致。
+// ===========================================================================
+
+namespace {
+
+/// 一条解码后的 VM 指令（测试用）：语义 + 全部 u16 操作数 + 寄存器操作数下标。
+struct RegfileDecodedInsnForTest
+{
+    VmOpcode              semantic{};
+    std::vector<uint16_t> operands;      ///< 全部 u16 操作数（发射序）
+    std::vector<size_t>   regPositions;  ///< operands 中属于寄存器操作数的下标
+};
+
+/// @brief 按 instructionOffsets 划界线性解码字节流（与发射器布局同源的操作数表）。
+///
+/// @details
+/// 每条指令的字节跨度取自相邻 instructionOffsets 差值，操作数布局表与
+/// vm_encoder.cpp 的发射函数一一对应（u8 字段跳过、u16 字段小端组装）。
+/// 布局表同时充当**布局一致性断言**：解码长度若与指令跨度不符即停扫，
+/// 上层断言「解码条数 == 指令边界数」就会失败。只覆盖纯计算/控制流 opcode
+/// ——本组测试方法不产生 Call/Throw/Switch/Barrier。
+std::vector<RegfileDecodedInsnForTest> decodeProgramForRegfileTest(const VmProgram& prog,
+                                                                   const VmInstance& instance)
+{
+    struct Layout
+    {
+        int                 u8Count;
+        int                 u16Count;
+        std::vector<size_t> regIdx;   ///< 寄存器操作数在 u16 序列中的下标
+    };
+    static const std::map<VmOpcode, Layout> kLayouts = {
+        {VmOpcode::Halt,        {0, 0, {}}},
+        {VmOpcode::Copy,        {1, 2, {0, 1}}},
+        {VmOpcode::Unary,       {2, 2, {0, 1}}},
+        {VmOpcode::Binary,      {2, 3, {0, 1, 2}}},
+        {VmOpcode::Compare,     {2, 3, {0, 1, 2}}},
+        {VmOpcode::Convert,     {2, 2, {0, 1}}},
+        {VmOpcode::SuperInc,    {1, 2, {0, 1}}},
+        {VmOpcode::SuperDec,    {1, 2, {0, 1}}},
+        {VmOpcode::FusedBinary, {3, 4, {0, 1, 2, 3}}},
+        {VmOpcode::Return,      {1, 1, {0}}},
+        {VmOpcode::Jump,        {0, 1, {}}},
+        {VmOpcode::Branch,      {0, 3, {0}}},
+    };
+    std::vector<RegfileDecodedInsnForTest> out;
+    const auto& code = prog.bytecodes;
+    for (size_t i = 0; i < prog.instructionOffsets.size(); ++i) {
+        const uint32_t start = prog.instructionOffsets[i];
+        const uint32_t end   = (i + 1 < prog.instructionOffsets.size())
+                                   ? prog.instructionOffsets[i + 1]
+                                   : static_cast<uint32_t>(code.size());
+        if (start >= end) break;
+        const auto semantic = semanticForByteForTest(instance, code[start]);
+        if (!semantic) break;
+        const auto lit = kLayouts.find(*semantic);
+        if (lit == kLayouts.end()) break;
+        RegfileDecodedInsnForTest rec;
+        rec.semantic = *semantic;
+        size_t pc    = start + 1u + static_cast<size_t>(lit->second.u8Count);
+        const bool fits =
+            (pc + static_cast<size_t>(lit->second.u16Count) * 2u) <= static_cast<size_t>(end);
+        if (!fits) break;   // 布局表与指令跨度不符：上层覆盖率断言会失败
+        for (int k = 0; k < lit->second.u16Count; ++k) {
+            const uint16_t v = static_cast<uint16_t>(
+                code[pc] | static_cast<uint16_t>(code[pc + 1] << 8));
+            rec.operands.push_back(v);
+            pc += 2;
+        }
+        rec.regPositions = lit->second.regIdx;
+        out.push_back(std::move(rec));
+    }
+    return out;
+}
+
+/// 收集一条解码指令的寄存器操作数值。
+std::vector<uint16_t> regOperandsForTest(const RegfileDecodedInsnForTest& ins)
+{
+    std::vector<uint16_t> out;
+    for (const size_t idx : ins.regPositions) out.push_back(ins.operands[idx]);
+    return out;
+}
+
+}   // namespace
+
+// 说明：本组测试刻意**不走**共享的「双编码助手」——两条实证约束决定了必须
+// 在每个 encodeMethod 调用点内联全新指令列表：
+//   ① 指令节点经 makeMethod 进入 MethodNode 后被管线接管/改写，同一批节点
+//      复用于第二次编码 = 堆损坏（cdb: free heap block modified after freed）；
+//   ② builder-lambda 返回 initializer_list 的底层临时数组落在 lambda 栈帧上，
+//      返回后即悬垂（MSVC 实证 AV）——initializer_list 只能在调用点内联。
+// 冗余的两份列表是有意为之的测试合同，勿「去重」。
+
+/// 默认关：VmEncodeOptions{} 与显式 regfile=0 编码产物逐字节一致
+/// （--vmc4-* 开关「默认关、不被联动」约定在 regfile 上的体现）。
+TEST(Vmc4BackendTest, RegfileOffByDefaultIsByteIdentical)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions explicitOff;
+    explicitOff.regfile = 0;
+    auto a = encodeMethod("m", "(II)I",
+                          {
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new VarInsnNode(Opcodes::ILOAD, 1),
+                              new InsnNode(Opcodes::IADD),
+                              new VarInsnNode(Opcodes::ISTORE, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 2),
+                              new InsnNode(Opcodes::ICONST_3),
+                              new InsnNode(Opcodes::IMUL),
+                              new InsnNode(Opcodes::IRETURN),
+                          },
+                          3, 3, instance, reason, nullptr, explicitOff);
+    ASSERT_NE(a, nullptr) << reason;
+    auto b = encodeMethod("m", "(II)I",
+                          {
+                              new VarInsnNode(Opcodes::ILOAD, 0),
+                              new VarInsnNode(Opcodes::ILOAD, 1),
+                              new InsnNode(Opcodes::IADD),
+                              new VarInsnNode(Opcodes::ISTORE, 2),
+                              new VarInsnNode(Opcodes::ILOAD, 2),
+                              new InsnNode(Opcodes::ICONST_3),
+                              new InsnNode(Opcodes::IMUL),
+                              new InsnNode(Opcodes::IRETURN),
+                          },
+                          3, 3, instance, reason);
+    ASSERT_NE(b, nullptr) << reason;
+    EXPECT_EQ(a->bytecodes, b->bytecodes);
+    EXPECT_EQ(a->numRegs, b->numRegs);
+    EXPECT_EQ(a->constantPool.size(), b->constantPool.size());
+}
+
+/// 池复用：定长池内死值槽位被复用，numRegs 相比恒等映射收缩，且本方法
+/// 活性压力在池内（无溢出槽——全部计算操作数落在 [numInputs, limit)）。
+TEST(Vmc4BackendTest, RegfileReuseShrinksRegisterFile)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    // int mix(int a, int b) { return (a + b) * (a - b) - a; }
+    // SSA 形态：t1=a+b, t2=a-b, t3=t1*t2, t4=t3-a——恒等映射下 4 个计算寄存器
+    // （numRegs=6）；t1/t2 在 t3 处同点死亡，t4 在 t1/t2 死后出生，池 [2,5)
+    // 恰好容纳（t4 复用死亡槽位），无溢出。
+    VmEncodeOptions identity;
+    auto plain = encodeMethod("mix", "(II)I",
+                              {
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new InsnNode(Opcodes::ISUB),
+                                  new InsnNode(Opcodes::IMUL),
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ISUB),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              3, 2, instance, reason, nullptr, identity);
+    ASSERT_NE(plain, nullptr) << reason;
+    VmEncodeOptions alloc;
+    alloc.regfile = 5;   // numInputs=2 → 池 [2,5)，3 个池寄存器
+    VmInstance instance2(opts);
+    auto packed = encodeMethod("mix", "(II)I",
+                               {
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new InsnNode(Opcodes::ISUB),
+                                   new InsnNode(Opcodes::IMUL),
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new InsnNode(Opcodes::ISUB),
+                                   new InsnNode(Opcodes::IRETURN),
+                               },
+                               3, 2, instance2, reason, nullptr, alloc);
+    ASSERT_NE(packed, nullptr) << reason;
+
+    EXPECT_LT(packed->numRegs, plain->numRegs)
+        << "pool reuse must shrink the register file (identity=" << plain->numRegs
+        << " packed=" << packed->numRegs << ")";
+    EXPECT_EQ(packed->numRegs, 5u)
+        << "no-spill method: numRegs == limit (pool [2,5), no spill slots, no constants)";
+    // 全部寄存器操作数落在参数区或池内（无溢出槽、无越界），且池 3 槽装下
+    // 4 个 SSA 计算值 = 复用实证。
+    std::set<uint16_t> computeRegs;
+    for (const auto& ins : decodeProgramForRegfileTest(*packed, instance)) {
+        for (const uint16_t reg : regOperandsForTest(ins)) {
+            ASSERT_LT(reg, packed->numRegs) << "operand out of register file";
+            ASSERT_LT(reg, 5u) << "compute operand " << reg << " outside pool [2,5)";
+            if (reg >= 2) computeRegs.insert(reg);
+        }
+    }
+    EXPECT_EQ(computeRegs.size(), 3u) << "4 SSA values into 3 pool slots = reuse";
+}
+
+/// 压力溢出：同时活跃值数超过池容量时，超出的值分到溢出槽（操作数直接以
+/// 高位索引读写），寄存器文件仍以 limit 为池顶、总槽位小于恒等映射。
+TEST(Vmc4BackendTest, RegfileSpillsUnderPressure)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    // int spread(int a)：v1..v4 同时活跃后求和——池 2 槽装不下，必溢出。
+    VmEncodeOptions identity;
+    auto plain = encodeMethod("spread", "(I)I",
+                              {
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ICONST_1),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ISTORE, 1),
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ICONST_2),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ISTORE, 2),
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ICONST_3),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ISTORE, 3),
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ICONST_4),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ISTORE, 4),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new VarInsnNode(Opcodes::ILOAD, 2),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ILOAD, 3),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ILOAD, 4),
+                                  new InsnNode(Opcodes::IADD),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              3, 5, instance, reason, nullptr, identity);
+    ASSERT_NE(plain, nullptr) << reason;
+    VmEncodeOptions alloc;
+    alloc.regfile = 3;   // numInputs=1 → 池 [1,3)，2 个池寄存器；v1..v4 同时活跃
+    VmInstance instance2(opts);
+    auto packed = encodeMethod("spread", "(I)I",
+                               {
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new InsnNode(Opcodes::ICONST_1),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ISTORE, 1),
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new InsnNode(Opcodes::ICONST_2),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ISTORE, 2),
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new InsnNode(Opcodes::ICONST_3),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ISTORE, 3),
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new InsnNode(Opcodes::ICONST_4),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ISTORE, 4),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new VarInsnNode(Opcodes::ILOAD, 2),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ILOAD, 3),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ILOAD, 4),
+                                   new InsnNode(Opcodes::IADD),
+                                   new InsnNode(Opcodes::IRETURN),
+                               },
+                               3, 5, instance2, reason, nullptr, alloc);
+    ASSERT_NE(packed, nullptr) << reason;
+
+    // 溢出实证：存在 ≥ limit 的计算操作数（溢出槽区 [3, ...)）；参数 0 是
+    // 合法操作数（恒等映射），不参与该断言。
+    bool sawSpill = false;
+    for (const auto& ins : decodeProgramForRegfileTest(*packed, instance)) {
+        for (const uint16_t reg : regOperandsForTest(ins)) {
+            ASSERT_LT(reg, packed->numRegs) << "operand out of register file";
+            if (reg >= 3) sawSpill = true;
+        }
+    }
+    EXPECT_TRUE(sawSpill) << "4 simultaneously live values in a 2-slot pool must spill";
+    EXPECT_LT(packed->numRegs, plain->numRegs)
+        << "spill region must not exceed the identity-mapped register file (identity="
+        << plain->numRegs << " packed=" << packed->numRegs << ")";
+}
+
+/// fail-closed：limit 低于参数数时溢出槽区会与参数区重叠——拒绝编码而非静默
+/// 腐蚀；limit=0（默认）不受影响。
+TEST(Vmc4BackendTest, RegfileLimitBelowNumInputsFailClosed)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    VmEncodeOptions bad;
+    bad.regfile = 1;   // numInputs=2：spillBase=1 落进参数区
+    auto prog   = encodeMethod("m", "(II)I",
+                               {
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new InsnNode(Opcodes::IADD),
+                                   new InsnNode(Opcodes::IRETURN),
+                               },
+                               2, 2, instance, reason, nullptr, bad);
+    EXPECT_EQ(prog, nullptr) << "limit < numInputs must fail closed";
+    EXPECT_NE(reason.find("below parameter count"), std::string::npos) << reason;
+}
+
+/// 与 fragment 组合：碎片临时槽改占池顶 3 槽（保持在上限之内），碎片化行为
+/// （Copy 中转条数）与恒等映射形态一致。
+TEST(Vmc4BackendTest, RegfileComposesWithFragment)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    // int incDec(int x, int y) { return (x + 1) + (y - 1); }
+    // fragment 下三段各经临时槽中转：SuperInc 1 次 + SuperDec 1 次 + Binary 2 次。
+    VmEncodeOptions plainOpts;
+    plainOpts.fragment = true;
+    auto plain = encodeMethod("incDec", "(II)I",
+                              {
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new InsnNode(Opcodes::ICONST_1),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new InsnNode(Opcodes::ICONST_1),
+                                  new InsnNode(Opcodes::ISUB),
+                                  new InsnNode(Opcodes::IADD),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              3, 2, instance, reason, nullptr, plainOpts);
+    ASSERT_NE(plain, nullptr) << reason;
+    VmEncodeOptions packedOpts;
+    packedOpts.fragment = true;
+    packedOpts.regfile  = 6;   // numInputs=2 → 池 [2,3)，临时槽 [3,6)
+    VmInstance instance2(opts);
+    auto packed = encodeMethod("incDec", "(II)I",
+                               {
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new InsnNode(Opcodes::ICONST_1),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new InsnNode(Opcodes::ICONST_1),
+                                   new InsnNode(Opcodes::ISUB),
+                                   new InsnNode(Opcodes::IADD),
+                                   new InsnNode(Opcodes::IRETURN),
+                               },
+                               3, 2, instance2, reason, nullptr, packedOpts);
+    ASSERT_NE(packed, nullptr) << reason;
+
+    EXPECT_EQ(countInstructionsForTest(*plain, instance, VmOpcode::Copy),
+              countInstructionsForTest(*packed, instance, VmOpcode::Copy))
+        << "fragment staging count must survive allocation";
+    // 全部操作数在寄存器文件内；碎片目的临时槽（Copy 的 dest）不得越过 limit
+    // ——源操作数允许是常量槽（字面量操作数同样经中转，常量槽在 limit 之上）。
+    for (const auto& ins : decodeProgramForRegfileTest(*packed, instance)) {
+        for (const uint16_t reg : regOperandsForTest(ins)) {
+            ASSERT_LT(reg, packed->numRegs) << "operand out of register file";
+            if (ins.semantic == VmOpcode::Copy) {
+                ASSERT_LT(ins.operands[0], 6u)
+                    << "fragment temp dest must stay inside the limit";
+            }
+        }
+    }
+}
+
+/// 与 super-ops 组合：融合计划在分配前落地，融合对按单条复合指令参与分配
+/// ——融合仍发生，且被吸收的 dest 不出现在任何操作数里。
+TEST(Vmc4BackendTest, RegfileComposesWithSuperOps)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    VmInstance instance(opts);
+    std::string reason;
+    // int fused(int a, int b, int c) { return (a + b) * c; }
+    // t = a+b 仅被下一条消费 → 折成 FusedBinary；t 不再以寄存器存在。
+    VmEncodeOptions plainOpts;
+    plainOpts.superOps = true;
+    auto plain = encodeMethod("fused", "(III)I",
+                              {
+                                  new VarInsnNode(Opcodes::ILOAD, 0),
+                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new InsnNode(Opcodes::IADD),
+                                  new VarInsnNode(Opcodes::ILOAD, 2),
+                                  new InsnNode(Opcodes::IMUL),
+                                  new InsnNode(Opcodes::IRETURN),
+                              },
+                              3, 3, instance, reason, nullptr, plainOpts);
+    ASSERT_NE(plain, nullptr) << reason;
+    VmEncodeOptions packedOpts;
+    packedOpts.superOps = true;
+    packedOpts.regfile  = 6;   // numInputs=3 → 池 [3,6)
+    VmInstance instance2(opts);
+    auto packed = encodeMethod("fused", "(III)I",
+                               {
+                                   new VarInsnNode(Opcodes::ILOAD, 0),
+                                   new VarInsnNode(Opcodes::ILOAD, 1),
+                                   new InsnNode(Opcodes::IADD),
+                                   new VarInsnNode(Opcodes::ILOAD, 2),
+                                   new InsnNode(Opcodes::IMUL),
+                                   new InsnNode(Opcodes::IRETURN),
+                               },
+                               3, 3, instance2, reason, nullptr, packedOpts);
+    ASSERT_NE(packed, nullptr) << reason;
+
+    EXPECT_EQ(countInstructionsForTest(*plain, instance, VmOpcode::FusedBinary), 1u)
+        << "fusion baseline";
+    EXPECT_EQ(countInstructionsForTest(*packed, instance, VmOpcode::FusedBinary), 1u)
+        << "fusion must survive register allocation";
+    // 全部操作数在寄存器文件内（参数寄存器是合法操作数）。
+    for (const auto& ins : decodeProgramForRegfileTest(*packed, instance)) {
+        for (const uint16_t reg : regOperandsForTest(ins)) {
+            ASSERT_LT(reg, packed->numRegs) << "operand out of register file";
+        }
+    }
+}
+
+/// 控制流与解码一致性：分支/循环方法在定长化下完整解码——布局表驱动的
+/// 遍历覆盖全部指令边界（含 Halt 哨兵），寄存器与块目标操作数全部在界内，
+/// 且跨块存活的 acc/i 在 2 槽池内经复用容纳（numRegs 收缩）。
+TEST(Vmc4BackendTest, RegfileControlFlowDecodeCoversWholeProgram)
+{
+    Vmc4Options opts;
+    opts.seed       = 0x314159;
+    opts.aliasCount = 0;
+    std::string     reason;
+    // int loopSum(int n) { int acc = 0; for (int i = 0; i < n; i++) acc += i; return acc; }
+    // label 是一次性 arena 资源，两遍编码各自重建（列表在调用点内联）。
+    VmInstance instancePlain(opts);
+    auto*      loopA = new LabelNode(labelScratchArena().create<Label>());
+    auto*      doneA = new LabelNode(labelScratchArena().create<Label>());
+    auto       plain = encodeMethod("loopSum", "(I)I",
+                                    {
+                                        new InsnNode(Opcodes::ICONST_0),
+                                        new VarInsnNode(Opcodes::ISTORE, 1),
+                                        new InsnNode(Opcodes::ICONST_0),
+                                        new VarInsnNode(Opcodes::ISTORE, 2),
+                                        loopA,
+                                        new VarInsnNode(Opcodes::ILOAD, 2),
+                                        new VarInsnNode(Opcodes::ILOAD, 0),
+                                        new JumpInsnNode(Opcodes::IF_ICMPGE, doneA->label),
+                                        new VarInsnNode(Opcodes::ILOAD, 1),
+                                        new VarInsnNode(Opcodes::ILOAD, 2),
+                                        new InsnNode(Opcodes::IADD),
+                                        new VarInsnNode(Opcodes::ISTORE, 1),
+                                        new IincInsnNode(2, 1),
+                                        new JumpInsnNode(Opcodes::GOTO, loopA->label),
+                                        doneA,
+                                        new VarInsnNode(Opcodes::ILOAD, 1),
+                                        new InsnNode(Opcodes::IRETURN),
+                                    },
+                                    3, 3, instancePlain, reason);
+    ASSERT_NE(plain, nullptr) << reason;
+    VmEncodeOptions alloc;
+    alloc.regfile = 3;   // numInputs=1 → 池 [1,3)；acc 与 i 跨块存活必施压
+    VmInstance instancePacked(opts);
+    auto*      loopB  = new LabelNode(labelScratchArena().create<Label>());
+    auto*      doneB  = new LabelNode(labelScratchArena().create<Label>());
+    auto       packed = encodeMethod("loopSum", "(I)I",
+                                     {
+                                         new InsnNode(Opcodes::ICONST_0),
+                                         new VarInsnNode(Opcodes::ISTORE, 1),
+                                         new InsnNode(Opcodes::ICONST_0),
+                                         new VarInsnNode(Opcodes::ISTORE, 2),
+                                         loopB,
+                                         new VarInsnNode(Opcodes::ILOAD, 2),
+                                         new VarInsnNode(Opcodes::ILOAD, 0),
+                                         new JumpInsnNode(Opcodes::IF_ICMPGE, doneB->label),
+                                         new VarInsnNode(Opcodes::ILOAD, 1),
+                                         new VarInsnNode(Opcodes::ILOAD, 2),
+                                         new InsnNode(Opcodes::IADD),
+                                         new VarInsnNode(Opcodes::ISTORE, 1),
+                                         new IincInsnNode(2, 1),
+                                         new JumpInsnNode(Opcodes::GOTO, loopB->label),
+                                         doneB,
+                                         new VarInsnNode(Opcodes::ILOAD, 1),
+                                         new InsnNode(Opcodes::IRETURN),
+                                     },
+                                     3, 3, instancePacked, reason, nullptr, alloc);
+    ASSERT_NE(packed, nullptr) << reason;
+
+    const auto decoded = decodeProgramForRegfileTest(*packed, instancePacked);
+    ASSERT_EQ(decoded.size(), packed->instructionOffsets.size())
+        << "layout-table decode must cover every instruction boundary (incl. Halt)";
+    ASSERT_FALSE(decoded.empty());
+    EXPECT_EQ(decoded.back().semantic, VmOpcode::Halt) << "last instruction is the Halt sentinel";
+    EXPECT_LT(packed->numRegs, plain->numRegs)
+        << "loop-carried liveness (acc/i) must fit a 2-slot pool via reuse";
+    for (const auto& ins : decoded) {
+        for (const uint16_t r : regOperandsForTest(ins)) {
+            ASSERT_LT(r, packed->numRegs) << "register operand out of file";
+        }
+        if (ins.semantic == VmOpcode::Jump || ins.semantic == VmOpcode::Branch) {
+            const size_t firstTarget = ins.semantic == VmOpcode::Jump ? 0 : 1;
+            for (size_t k = firstTarget; k < ins.operands.size(); ++k) {
+                ASSERT_LT(ins.operands[k], packed->blockTargets.size())
+                    << "block id out of range";
+            }
+        }
     }
 }

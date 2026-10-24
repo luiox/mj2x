@@ -41,6 +41,7 @@
 | [pod_struct.md](pod_struct.md) | POD 类降级为 C struct | `--regc-pod-struct` | 关 |
 | [vm_virtualization.md](vm_virtualization.md) | VM 虚拟化（VMC4） | `--backend vmc4` + `--vmc4-*` | 关 |
 | [vm_super_ops.md](vm_super_ops.md) | VM 指令级变换（super-ops / 指令碎片化） | `--vmc4-super-ops` / `--vmc4-fragment` | 关（不联动） |
+| [vm_regfile.md](vm_regfile.md) | 寄存器文件定长化（线性扫描 + 溢出槽） | `--vmc4-regfile <n>` | 关（不联动） |
 
 ### E. 运行时与产物保护
 
