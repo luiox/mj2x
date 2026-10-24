@@ -9,6 +9,9 @@
 
 按作用层分族。单项技术回答四个问题：叫什么、对抗什么、机制是什么、代价是什么。
 
+组合纪律（pass 顺序、开关联动、后端覆盖面、作用域）见
+[总览](protection_overview.md)，单项分篇只写自己那一项。
+
 ### A. 数据流混淆（RegIR pass）
 
 | 文档 | 技术 | 开关 | 默认 |
@@ -22,7 +25,7 @@
 | 文档 | 技术 | 开关 | 默认 |
 |---|---|---|---|
 | [control_flow_flattening.md](control_flow_flattening.md) | CFF 控制流平坦化 | `--regc-obfuscate` / `--regc-cff-*` | 关 |
-| [computed_jumps.md](computed_jumps.md) | computed jumps | 拟 `--regc-computed-jumps` | 📋 未实现（#7） |
+| [computed_jumps.md](computed_jumps.md) | computed jumps | `--regc-computed-jumps` | 关（不联动） |
 
 ### C. 调用图混淆
 
@@ -34,9 +37,10 @@
 
 | 文档 | 技术 | 开关 | 默认 |
 |---|---|---|---|
-| [native_direct_call.md](native_direct_call.md) | native→native 直接 C 调用 | `--regc-direct-calls` | 关（#814） |
-| [pod_struct.md](pod_struct.md) | POD 类降级为 C struct | 拟 `--regc-pod-struct` | 📋 未实现 |
+| [native_direct_call.md](native_direct_call.md) | native→native 直接 C 调用 | `--regc-direct-calls`（三档） | `off` |
+| [pod_struct.md](pod_struct.md) | POD 类降级为 C struct | `--regc-pod-struct` | 关 |
 | [vm_virtualization.md](vm_virtualization.md) | VM 虚拟化（VMC4） | `--backend vmc4` + `--vmc4-*` | 关 |
+| [vm_super_ops.md](vm_super_ops.md) | VM 指令级变换（super-ops / 指令碎片化） | `--vmc4-super-ops` / `--vmc4-fragment` | 关（不联动） |
 
 ### E. 运行时与产物保护
 
@@ -54,6 +58,7 @@
 | RegisterNatives 动态绑定 | 总是开 | 函数名/可见性与 JNI 符号查找完全脱钩，绑定靠 finalize 发射的注册表 |
 | 方法内联 | `--regc-no-inline` 反向控制 | SSA 内联默认开，消除 native 方法间 JNI 往返 |
 | 用户 intrinsic | `--intrinsic-config` | 任意 Java 静态调用点降级为用户 native symbol 直调，见 [user_intrinsic.md](../user_intrinsic.md) |
+| 混淆作用域（横切） | `--obf-scope-include` / `--obf-scope-exclude` | 决定上面这些 RegIR 变换作用于哪些类（类级 glob，两者都为空 = 零行为变化）。本身不是一项技术，见 [总览 §六](protection_overview.md) |
 
 ## 编译技术
 
