@@ -180,6 +180,8 @@ std::vector<std::string> expectedKeys()
         "native_opt_level",
         "generate_cmake",
         "generate_xmake",
+        "targets",
+        "target_cc",
         "stackc_exception_check",
         "regc_trace_calls",
         "regc_direct_calls",

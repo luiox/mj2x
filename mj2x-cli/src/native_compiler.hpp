@@ -28,6 +28,60 @@ enum class CCompilerKind
     Zig,
 };
 
+/// @brief 多目标产物 ABI（issue #11，--targets）。
+///
+/// @details
+/// v1 注册表四项（issue #11 的目标清单；darwin/mach 生态后续按需补）。
+/// 每项决定：产物扩展名、JDK include 平台子目录（jni.h 下的 jni_md.h 按
+/// 平台选）、zig cc -target 三元组（zig 自带交叉 libc，是唯一的仓内默认
+/// 交叉面；gcc/clang 交叉由用户显式提供预配置好的 cross 工具链——issue #11
+/// 方案 (a)）。host ABI 由编译期平台宏推导，恒可走自动探测。
+enum class TargetAbi
+{
+    WindowsX64,
+    LinuxX64,
+    LinuxAarch64,
+    AndroidArm64,
+};
+
+/// @brief ABI 注册表条目。
+struct TargetAbiInfo
+{
+    const char* id;             ///< CLI/manifest 标识（如 "windows-x64"）
+    const char* librarySuffix;  ///< 产物扩展名（".dll" / ".so"）
+    const char* jniPlatform;    ///< JDK include 平台子目录（"win32" / "linux"）
+    const char* zigTriple;      ///< zig cc -target 三元组
+};
+
+/// @brief 解析 --targets 传入的 ABI 标识；未知返回 false（调用方给合法清单）。
+bool parseTargetAbi(const std::string& id, TargetAbi& out);
+
+/// @brief ABI 注册表条目。
+const TargetAbiInfo& targetAbiInfo(TargetAbi abi);
+
+/// @brief 全部合法 ABI 标识（逗号分隔，错误文案用）。
+std::string targetAbiIdList();
+
+/// @brief 宿主 ABI（编译期平台宏推导）。
+TargetAbi hostTargetAbi();
+
+/// @brief 从可执行文件路径推断编译器种类（--target-cc 显式路径用）：
+/// cl*.exe → Msvc、zig* → Zig、*gcc* → Gcc、*clang* → Clang。
+/// 推断失败返回 false（调用方 fail-closed 报错）。
+bool inferCompilerKindFromPath(const std::filesystem::path& executable, CCompilerKind& out);
+
+/// @brief 多目标编译规格（issue #11）：显式产物路径与显式编译器路径。
+///
+/// @details
+/// libraryPath 非空时绕开「outputPath → 宿主扩展名」推导（多目标每 ABI 一个
+/// 路径）；compilerPath 非空时绕开 PATH 探测（--target-cc 显式工具链）。
+struct CompileTargetSpec
+{
+    TargetAbi             abi          = TargetAbi::WindowsX64;
+    std::filesystem::path libraryPath;   ///< 产物库路径（显式）
+    std::string           compilerPath;  ///< 编译器可执行文件（显式；空 = 探测）
+};
+
 enum class CompileMode
 {
     File,
@@ -157,5 +211,37 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
                           LlvmTool tool, bool withRuntimeProtection,
                           const std::filesystem::path& crtRoot = {},
                           ProcessTimeout processTimeout = {});
+
+/// @brief 宿主编译器可用性探测（多目标 skip/failed 分类用，issue #11）：
+/// requested 为 Auto 时按宿主优先序探测，否则探测指定种类。
+bool probeHostCompiler(CCompilerKind requested);
+
+/// @brief 编译器种类的 CLI 名（"msvc"/"gcc"/"clang"/"zig"；Auto 返回空）。
+std::string_view compilerKindName(CCompilerKind kind);
+
+/// @brief 按 ABI 目标编译 C 源文件（issue #11 多目标；文件模式）。
+///
+/// @details
+/// 与 compileCSource 的差异全部由 @p target 驱动：产物路径显式给定；JNI include
+/// 平台子目录、shared/PIC/链接 flag 按目标 ABI 而非宿主宏推导；zig 恒带
+/// `-target <三元组>`。target.compilerPath 非空时直接用作编译器（按文件名推断
+/// 种类，推断失败 fail-closed）；为空时按 @p requestedCompiler 探测（仅宿主
+/// ABI 语义合理）。MSVC 只支持 Windows 宿主 + windows-x64 目标。
+int compileCSourceForTarget(const std::string& cOutputPath, const CompileTargetSpec& target,
+                            CEmitterBackend backend, CCompilerKind requestedCompiler,
+                            const std::filesystem::path& crtRoot = {},
+                            const std::vector<std::string>& extraSources = {},
+                            ProcessTimeout processTimeout = {});
+
+/// @brief 按 ABI 目标编译内存中的 C 源码（issue #11 多目标；pipe 模式）。
+///
+/// @details
+/// 非 MSVC 编译器经 stdin（`-x c -`）喂源；MSVC 走临时文件回退（仅 Windows
+/// 宿主 + windows-x64 目标）。其余同 compileCSourceForTarget。
+int compileCSourceFromPipeForTarget(std::string_view cSource, const CompileTargetSpec& target,
+                                    CEmitterBackend backend, CCompilerKind requestedCompiler,
+                                    const std::filesystem::path& crtRoot = {},
+                                    const std::vector<std::string>& extraSources = {},
+                                    ProcessTimeout processTimeout = {});
 
 }   // namespace mj2x::cli

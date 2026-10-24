@@ -71,6 +71,12 @@ struct CliOptions
     NativeBuildDriver        buildDriver      = NativeBuildDriver::Direct;
     bool                     backendSelected  = false;
     bool                     compileNative    = false;
+    /// --targets（issue #11）：多目标 ABI 列表（windows-x64,linux-x64,...）。
+    /// 非空即多目标模式：一次输入逐 ABI 产物 + manifest（--compile 语义不变）。
+    std::vector<std::string> targets;
+    /// --target-cc（issue #11）："abi=path" 显式交叉工具链（方案 a）；
+    /// 未配置的非宿主 ABI 记 skipped 并在 manifest/汇总报告。
+    std::vector<std::string> targetCc;
     bool                     compileModeSelected = false;
     bool                     compilerSelected = false;
     bool                     llvmToolSelected = false;

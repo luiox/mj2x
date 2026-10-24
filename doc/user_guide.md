@@ -171,6 +171,8 @@ mj2x-cli -i Hello.class -o /dev/null --dump-mir
 | `--llvm-tool <clang\|llc>` | LLVM IR 的编译路径。`clang` 直接生成动态库，`llc` 先生成 object 再由 clang 链接；仅与 `--backend llvm --compile` 同用 |
 | `--generate-cmake <dir>` | 生成独立 CMake native 工程；未指定 source output 时写入 `<dir>/native.c` |
 | `--generate-xmake <dir>` | 生成独立 xmake native 工程（推荐；CLI 内嵌 mj2x-rt 源，配合 `--compile` 一键出 DLL/SO） |
+| `--targets <abi,...>` | 多目标产物（issue #11）：逗号分隔 ABI 清单（`windows-x64`、`linux-x64`、`linux-aarch64`、`android-arm64`）。native 源生成一次、逐 ABI 编译到 `<输出目录>/<abi>/<库名>`，并写 `<stem>.targets.json` manifest 记录每个 ABI 的 built/skipped/failed 与原因（CI 集成挂点）。未配置编译器的非宿主 ABI 记 skipped 并明确报告（不静默失败）；**仅当全部目标 built 才退出 0**。要求 `--compile`；v1 支持 regc/vmc4 + 直接驱动（xmake/LLVM/StackC/jar 嵌入 fail-closed 拒绝；多 ABI jar 嵌入为后续项） |
+| `--target-cc <abi>=<path>` | 按 ABI 显式交叉工具链（issue #11 方案 a，可重复/逗号分隔）：如 `--target-cc linux-x64=C:/zig/zig.exe`。可执行文件名决定编译器种类（`cl`/`zig`/`gcc`/`clang`）；zig 自动带 `-target <三元组>`（zig 自带交叉 libc，是仓内默认交叉面；gcc/clang 交叉请提供预配置好的 cross 工具链）。无条目的目标仅宿主 ABI 回落 `--c-compiler` 自动探测，其余记 skipped |
 | `--native-opt-level <0\|1\|2\|3\|s>` | 生成 native 工程的优化级别（默认 `2`）。MSVC 映射 `/Od\|/O1\|/O2\|/Ox\|/Os`，GCC/Clang 与 LLVM 侧映射 `-O0..-O3\|-Os`，xmake 工程映射 `set_optimize`。**级别越低越能保住源码级形态**：`--backend regc --regc-obfuscate` 的 CFF dispatcher 在 `-O2` 下会被优化器消解（RegC 已用 volatile state 兜住，见 §CFF 边界），降档可进一步确保形态留存；`s` 面向体积 |
 | `--native-timeout <秒>` | native 编译外部进程（编译器 / link / MSVC 环境探针 / xmake / pack hook）的墙钟超时，默认 `900` 秒；`0` = 不限时。**每次外呼独立计时**；超时即整树终止（Windows 先 `taskkill /T /F` 收割进程树再收尸，Linux 杀进程组）并以非零退出，日志记 `timed out after <n>s`。编译器卡死/挂起的环境把默认 900 调小可快速失败；对标 jvmtp `compiler.timeout` |
 | `--strings-encrypt` | 字符串常量 at-rest 加密（StackC/RegC）：明文字符串序列加密后落入产物（密钥由明文 fnv1a64 折叠派生），运行时解密使用，静态分析看不到明文。默认关闭 |

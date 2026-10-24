@@ -71,6 +71,23 @@ bool toVmType(SSAType s, VmType& out)
 }
 
 /// @brief SSAUnaryOp → VmUnaryOp。
+/// @brief Convert 的**精确** SSAType → VmType 映射。
+///
+/// @details
+/// toVmType 把 I16/I8/CHAR 坍缩到 I32（计算面 slot 承载形态），但 Convert 的
+/// from/to 操作数必须携带原始窄化语义——坍缩会让 i2s/i2b/i2c 在 handler 侧
+/// 退化成恒等（java_corpus/BigIntMini vmc4 首曝）。I16/I8/CHAR 是 Convert
+/// 专用标签（见 vm_opcode.hpp VmType 注释），其余形态回落 toVmType。
+bool toVmTypeExact(SSAType s, VmType& out)
+{
+    switch (s) {
+    case SSAType::I16: out = VmType::I16; return true;
+    case SSAType::I8: out = VmType::I8; return true;
+    case SSAType::CHAR: out = VmType::CHAR; return true;
+    default: return toVmType(s, out);
+    }
+}
+
 bool toVmUnaryOp(SSAUnaryOp op, VmUnaryOp& out)
 {
     switch (op) {
@@ -1409,11 +1426,11 @@ bool encodeConvert(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog
         return encodeIntrinsic(ctx, asIntrinsic, prog, reason);
     }
     VmType from, to;
-    if (!toVmType(ins.value.type, from)) {
+    if (!toVmTypeExact(ins.value.type, from)) {
         reason = "Convert source type not supported in MVP";
         return false;
     }
-    if (!toVmType(ins.targetType, to)) {
+    if (!toVmTypeExact(ins.targetType, to)) {
         reason = "Convert target type not supported in MVP";
         return false;
     }

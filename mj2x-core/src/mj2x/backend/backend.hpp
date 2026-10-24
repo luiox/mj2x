@@ -46,7 +46,7 @@ struct NativeSourceArtifact
 ///    preprocessor 已跑完、任何 MethodNode 指令尚未被转换清空。
 ///  - compileMethod：每个 markedForCompile 方法调一次，产出 BackendResult。
 ///  - injectIntoClass：compileMethod 之后对同一方法调一次，改写 class（标 ACC_NATIVE、
-///    清指令）。失败 lowering（result.kind 非 C_SOURCE）时不应改写。
+///    清指令）。失败 lowering（result.kind 非成功产物形态）时不应改写。
 ///  - finalize：所有方法编译完后调一次，输出累积的 native 源。
 class Backend
 {
@@ -65,7 +65,8 @@ public:
     virtual void beforeCompile(CompilerIndex& /*index*/) {}
 
     /// @brief 翻译一个方法的 L1 blocks 为 native 源。
-    /// @return 成功时 result.kind=C_SOURCE 且 text 含生成源；失败时 fail-closed。
+    /// @return 成功时 result.kind 为成功产物形态（C 系后端 C_SOURCE / LLVM 后端
+///         LLVM_IR）且 text 含生成源；失败时 fail-closed（kind=NONE）。
     /// @param index 可选：整个编译输入的类索引（调用目标元数据/已转换集合）。
     ///              纯后端的既有测试不传时为 nullptr，行为与以前一致。
     virtual BackendResult compileMethod(const std::string& className, CompilerMethod& method,
@@ -73,7 +74,7 @@ public:
                                         CompilerIndex* index = nullptr) = 0;
 
     /// @brief 把编译结果写回 class（标记 native、清字节码指令）。
-    /// @details result.kind 非 C_SOURCE 时应直接返回，保留原字节码。
+    /// @details result.kind 非本后端成功产物形态时应直接返回，保留原字节码。
     virtual void injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                                  const BackendResult& result) = 0;
 

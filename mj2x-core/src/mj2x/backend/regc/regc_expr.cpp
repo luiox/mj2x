@@ -17,6 +17,66 @@
 namespace mj2x {
 
 using codegen::cStringLiteral;
+
+namespace {
+
+/// @brief 标准 UTF-8 → JNI modified UTF-8（JLS/JNI 规范差异面，java_corpus
+/// TextUnicode 首曝：增补平面字符被 NewStringUTF 逐字节拆解）。
+///
+/// @details
+/// 常量池 CONSTANT_Utf8 是标准 UTF-8，而 NewStringUTF 按 modified UTF-8 解码：
+///   - U+0000：标准 1 字节 0x00 → modified 2 字节 C0 80；
+///   - U+10000+：标准 4 字节序列 → modified 代理对（两个 3 字节序列）；
+///   - 其余（U+0001..U+FFFF 的 1/2/3 字节）两编码逐字节相同。
+/// ldc 字面量发射前统一转换，NewStringUTF/intern 的语义才与 javac 常量一致。
+std::string utf8ToModifiedUtf8(std::string_view utf8)
+{
+    std::string out;
+    out.reserve(utf8.size());
+    for (size_t i = 0; i < utf8.size();) {
+        const unsigned char b0 = static_cast<unsigned char>(utf8[i]);
+        if (b0 == 0x00) {
+            out += "À";
+            ++i;
+            continue;
+        }
+        if (b0 < 0x80) {
+            out += static_cast<char>(b0);
+            ++i;
+            continue;
+        }
+        const size_t seqLen = (b0 & 0xE0) == 0xC0 ? 2
+                              : (b0 & 0xF0) == 0xE0 ? 3
+                              : (b0 & 0xF8) == 0xF0 ? 4
+                                                    : 1;
+        if (seqLen != 4) {
+            out.append(utf8.substr(i, seqLen));
+            i += seqLen;
+            continue;
+        }
+        // 4 字节序列 → 解码码点 → 代理对各 3 字节 modified 编码
+        if (i + 3 >= utf8.size() + 0 && i + 4 > utf8.size()) {
+            out.append(utf8.substr(i));   // 截断序列：原样收尾
+            break;
+        }
+        const uint32_t cp = ((static_cast<uint32_t>(b0) & 0x07) << 18)
+                            | ((static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 1])) & 0x3F) << 12)
+                            | ((static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 2])) & 0x3F) << 6)
+                            | (static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 3])) & 0x3F);
+        const uint32_t high = 0xD800 + ((cp - 0x10000) >> 10);
+        const uint32_t low  = 0xDC00 + ((cp - 0x10000) & 0x3FF);
+        out += static_cast<char>(0xE0 | (high >> 12));
+        out += static_cast<char>(0x80 | ((high >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (high & 0x3F));
+        out += static_cast<char>(0xE0 | (low >> 12));
+        out += static_cast<char>(0x80 | ((low >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (low & 0x3F));
+        i += 4;
+    }
+    return out;
+}
+
+}   // namespace
 using codegen::CSourceStream;
 
 namespace {
@@ -283,7 +343,8 @@ ca::str::Utf8String operandExpr(const RegOperand& operand)
         // String intrinsic path can materialize the jstring without going
         // through JNI call dispatch.  Other opaques stay as annotated NULL.
         if (operand.tag.rfind("ldc_string:", 0) == 0) {
-            const auto content = operand.tag.substr(std::string("ldc_string:").size());
+            const auto content = utf8ToModifiedUtf8(
+                operand.tag.substr(std::string("ldc_string:").size()));
             CSourceStream os;
             os.append("_mj2x_intrinsic_string_literal(_mj2x_regc_current_context(), ");
             if (RegCCachePool* encryptPool = currentStringEncryptPool()) {

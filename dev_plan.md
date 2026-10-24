@@ -84,9 +84,12 @@
 - 三后端共享层抽取（结构性最大项）：JVM 类型格点映射表（10+ 张平行）、
   RegisterNatives 基建、indy bootstrap 运行时解析（3 份）、多维数组分配
   （3 份）；按 H-2 触发条件独立排期。
-- backend.hpp 收拾：Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位、
-  finalize 无错误通道（三后端失败行为不一致）、接口默认方法能力边界
-  （MarkAll 下产出带 ACC_NATIVE 的接口方法 → ClassFormatError）。
+- ~~backend.hpp 收拾：Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位~~
+  **已销项（2026-10-24）**：`BackendResult::Kind` 删 BINARY 死枚举 + 无人消费的
+  `data` 字段，新增 `LLVM_IR`（LLVM 后端产物不再语义错位挂 C_SOURCE，backend.hpp
+  契约文档同步）。剩余两项仍挂账：finalize 无错误通道（三后端失败行为不一致）、
+  接口默认方法能力边界（MarkAll 下产出带 ACC_NATIVE 的接口方法 →
+  ClassFormatError）。
 - RegC intrinsic 判定热点：每条 Call 重复 match 6-10 次（含多次 std::string
   构造与全表线性扫），应函数级一次算好 decision；registry 视图不统一
   （analyze 走 builtins、emit 走用户 registry，覆盖判定有漂移风险）。
@@ -133,6 +136,52 @@
    的 DEF_HEX 宏在 main 上即无任何注册点，负值收口对其补丁属给死代码
    上锁，与清理主题相悖——删宏或注明口径；对应地，负值收口声明口径应为
    「DEF_INT/DEF_U64 两类宏 + vmc4-seed/native-lib-key 两支手写校验器」。
+
+**java_corpus 语料集首曝（2026-10-24，test_resource/java_corpus；修后删 exclusions 行）**
+
+8. lambda bootstrap 类查找：受保护类经 lambda bootstrap 反查自身形态下运行期
+   `NoClassDefFoundError: class lookup failed`（三后端一致；LambdasCapture
+   首曝——捕获 + 静态方法引用 + 构造器引用 + 循环捕获组合，lambda_synth
+   既有 E2E 未覆盖）。待根因：class lookup 的 owner 传递面。
+9. regc 引用值丢 null（**2026-10-24 二轮定位更新**）：最小复现
+   （test/tmp/nullbisect NullMin：`makeLongs` 返回 long[] + for-each）下
+   症状升级为 **JVM 崩溃**（AV in jvm.dll，`NullMin.main+0`，读地址
+   0xFFFFFFFFFFFFFFFF）；`--regc-no-inline` 同崩 → **排除内联器**；
+   main 生成体的静态调用缓存（`{"NullMin","makeLongs","(I)[J}",NULL,NULL}`
+   分派路径与 wrapper 早期生命周期为头号嫌疑（崩在方法入口 +0，-1 索引
+   特征）。StringsAndBoxing 的 "sb null" 同源待并入定位。
+10. ~~regc LDC 字符串物化代理对~~ **已修（2026-10-24）**：常量池是标准 UTF-8
+    而 NewStringUTF 按 modified UTF-8 解码——BMP 面（1/2/3 字节）两编码逐字节
+    相同故历来正常，增补平面（4 字节）被逐字节拆解。修复：发射期
+    `utf8ToModifiedUtf8`（NUL→C0 80、增补平面→代理对 3+3 字节）统一转换，
+    strings-encrypt 密文池同面受益；最小复现验证通过
+    （test/tmp/utfsmoke，emoji codePoint 往返一致）。
+11. **已修（2026-10-24）**：stackc `instanceof` 对 null 返回 true（JNI
+    IsInstanceOf(NULL)=TRUE 未前置判空，InstanceLifecycle/IntrinsicSurface
+    双例首曝）；vmc4 `i2s/i2b/i2c` 窄化退化为恒等（toVmType 坍缩使 Convert
+    丢失精确类型，BigIntMini vmc4 首曝——VmType 增 I16/I8/CHAR Convert 专用
+    标签 + handler 符号/零扩展）。
+12. **regfile 区间计算缺陷（#10 回归，PR #31 引入，未修）**：
+    `--vmc4-regfile` 在「256 项表由嵌套循环构建 + 溢出参与」形态下，线性扫描
+    分配出越池/重叠的物理槽（分配 dump 实证：id 10 → 槽 8 = spillBase 越出池
+    [1,8)；多 id 共享槽 1 的重叠区间），表现为数组 load 的 recv 指向错误对象、
+    元素值变成下标残值（GetIntArrayRegion 失败 + helper `_v` 未初始化读栈残
+    ——helper 缺 ExceptionCheck 是次生放大面）。最小复现：CRC 表构建形态
+    （test/tmp/rfmin 复现脚本，256 循环 + `table[idx]`）；
+    `--vmc4-super-ops / --vmc4-fragment / --vmc4-shuffle-blocks` 单开均正常，
+    仅 regfile 触发；池大小无关（8/12/16/24/64 全失败）。
+    **已做的遏制**：语料 obf 档暂撤 `--vmc4-regfile`（corpus runner 注释）；
+    plain 档 regfile E2E（Vmc4RegfileA/B）未覆盖此形态故仍绿。
+    **修复方向**：区间 hull 的 liveIn/liveOut 扩展或 victim 换出路径的活性
+    失真；修后 (a) 排查 helper 的 ExceptionCheck 面，(b) obf 档重新加入
+    regfile，(c) 本条最小复现收编为 emit 级单测。
+13. **computed jumps 大 switch 缺陷（PR #27 回归，未修）**：
+    `--regc-computed-jumps` 在 250-case switch 形态下输出错误
+    （java_corpus BigSwitch 首曝；obf 档二分锁定单开即复现，
+    test/tmp/bsbisect 复现脚本）。既有 computed-jumps E2E 未覆盖大 switch
+    密集形态。**已做遏制**：语料 obf 档暂撤该开关（corpus runner 注释）。
+    **修复方向**：key→目标映射表在 case 数量大时的编码/解析面；修后
+    (a) BigSwitch 收编为该开关的 E2E 用例，(b) obf 档重新加入。
 
 **产品/机器决策项（需拍板）**
 
@@ -261,8 +310,16 @@
 
 **批次 3：产品化（大改动，需拍板）**
 
-10. 交叉编译 + 多目标产物（bundled zig / toolchain 反射）：fat JAR + `<triple>.jar` +
-    注入 NativeLoader 自动注册——**jvmtp 最大的护城河，也是我们对位最大差距**。
+10. ~~**交叉编译 + 多目标产物（第一切片）**~~ **已完成（2026-10-24，issue #11）**：
+    `--targets <abi,...>` + `--target-cc <abi>=<path>`（方案 a：显式交叉工具链，
+    zig 为仓内默认交叉面、自动带 `-target` 三元组；宿主 ABI 回落自动探测）。
+    逐 ABI 产物落 `<输出目录>/<abi>/<库名>`，manifest `<stem>.targets.json`
+    记录 built/skipped/failed 与原因（CI 集成挂点）；退出码两态（全部 built
+    → 0）。v1 定界（定界外 fail-closed）：C99 后端（regc/vmc4）+ 直接驱动
+    （file/pipe）；xmake/LLVM/StackC/jar 嵌入/native-dir 拒绝。
+    **剩余（后续切片，需拍板）**：fat JAR + 多 ABI jar 嵌入 + NativeLoader
+    按平台挑选注册、bundled zig / toolchain 反射自动发现、darwin/mach ABI 档
+    ——**jvmtp 最大的护城河**对位仍未闭合。
 11. Gradle 插件 + Java SDK SPI（可替换 packer/compiler 的显式 LifecycleEvent API）。
 12. packer（代码段流加密 + 两阶段 loader + 免落盘）+ 签名流水线。
 

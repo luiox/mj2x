@@ -4632,3 +4632,332 @@ TEST(CliTest, IndirectCallTargetsPreserveSemanticsUnderBothBackends)
                "--backend llvm --compile --compile-mode pipe --llvm-tool clang "
                "--regc-indirect-calls");
 }
+
+// ===========================================================================
+// 多目标产物（issue #11，--targets / --target-cc）：一次输入 → 多 ABI 原生库
+// + manifest。验证面：参数校验 fail-closed（v1 定界外一律明确拒绝）、逐 ABI
+// 编译与产物布局、skipped/failed 明确报告（不静默失败）、退出码两态语义
+// （全部 built → 0，任一 skipped/failed → 1）。
+// ===========================================================================
+
+namespace {
+
+/// 多目标校验用例的公共驱动：跑一条 CLI 命令，断言非 0 退出且输出含片段。
+/// MJ2X_LANG=en_US 固定英文文案（i18n 错误按 locale 出双语文案，测试对英文面）。
+void expectMultiTargetRejected(const std::string& args, const std::string& messageFragment)
+{
+    const fs::path cli       = findCli();
+    const fs::path workDir   = test::getTempOutPath("mj2x_cli_multi_target.keep").parent_path() /
+                             "mj2x_cli_multi_target_reject";
+    const fs::path inClass  = writeTinyClass();
+    std::error_code ec;
+    fs::create_directories(workDir, ec);
+    std::vector<std::string> lines;
+#ifdef _WIN32
+    lines.push_back("set \"MJ2X_LANG=en_US\"");
+#else
+    lines.push_back("export MJ2X_LANG=en_US");
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(workDir / "o.class") +
+                    " " + args);
+    const auto result = runScript(lines);
+    EXPECT_NE(result.exitCode, 0) << "expected rejection for: " << args << "\n" << result.out;
+    EXPECT_NE(result.out.find(messageFragment), std::string::npos)
+        << "missing '" << messageFragment << "' for: " << args << "\n"
+        << result.out;
+}
+
+}   // namespace
+
+// v1 定界校验：定界外组合全部 fail-closed（明确诊断，不静默降级）。
+TEST(CliTest, MultiTargetRejectsOutOfScopeConfigurations)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+
+    expectMultiTargetRejected("--emit-c x.c --targets windows-x64", "requires --compile");
+    expectMultiTargetRejected("--backend vmc4 --compile --compile-mode pipe --targets bogus-x",
+                              "unknown target ABI");
+    expectMultiTargetRejected(
+        "--backend vmc4 --compile --compile-mode pipe --targets windows-x64,windows-x64",
+        "duplicate target ABI");
+    expectMultiTargetRejected(
+        "--backend vmc4 --compile --compile-mode pipe --targets windows-x64 --target-cc "
+        "windows-x64",
+        "expected <abi>=<path>");
+    expectMultiTargetRejected(
+        "--backend vmc4 --compile --compile-mode pipe --targets windows-x64 --target-cc "
+        "linux-x64=z.exe",
+        "not listed in --targets");
+    expectMultiTargetRejected(
+        "--backend vmc4 --compile --compile-mode pipe --targets windows-x64 --target-cc "
+        "windows-x64=a.exe,windows-x64=b.exe",
+        "duplicate --target-cc entry");
+    expectMultiTargetRejected("--backend vmc4 --compile --generate-xmake xproj --targets "
+                              "windows-x64",
+                              "xmake build driver");
+    expectMultiTargetRejected("--backend stackc --compile --compile-mode pipe --targets "
+                              "windows-x64",
+                              "C99 native backends");
+}
+
+// 显式编译器构建 + manifest 记录 + skipped 报告：windows-x64 经 fake zig
+// （--target-cc 显式路径）构建，linux-x64 未配置 → skipped，退出码 1。
+TEST(CliTest, MultiTargetBuildsViaExplicitCompilerAndSkipsUnconfigured)
+{
+    const fs::path cli     = findCli();
+    const fs::path fakeZig = test::getBuildTargetPath("mj2x_fake_zig");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeZig)) GTEST_SKIP() << "mj2x_fake_zig is not built";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir = test::getTempOutPath("mj2x_cli_multi_target.keep").parent_path() /
+                             "mj2x_cli_multi_target_basic";
+    const fs::path toolDir  = workDir / "tool";
+    const fs::path outClass = workDir / "output.class";
+    const fs::path logFile  = workDir / "zig-args.txt";
+#ifdef _WIN32
+    const fs::path zigExecutable = toolDir / "zig.exe";
+#else
+    const fs::path zigExecutable = toolDir / "zig";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    fs::copy_file(fakeZig, zigExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    std::vector<std::string> lines;
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_LOG=" + logFile.string() + "\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_ZIG_LOG=" + q(logFile));
+#endif
+    // built 目标恒 windows-x64（显式 cc）；skipped 目标按宿主选非宿主 ABI：
+    // Windows 宿主 → linux-x64；Linux 宿主 → android-arm64（linux-x64 是宿主）。
+#ifdef _WIN32
+    const char* targetsAndSkip = "windows-x64,linux-x64";
+#else
+    const char* targetsAndSkip = "windows-x64,android-arm64";
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+                    " --backend vmc4 --compile --compile-mode pipe --native-timeout 60"
+                    " --targets " +
+                    targetsAndSkip + " --target-cc windows-x64=" + q(zigExecutable));
+    const auto result = runScript(lines);
+
+    // 无编译器配置的目标 → skipped（明确报告、不静默失败）→ 退出码非 0
+    // （POSIX 下 runScript 透传的是 wait status：退出码 1 → 256）。
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("[built]"), std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("[skipped]"), std::string::npos) << result.out;
+#ifdef _WIN32
+    EXPECT_NE(result.out.find("[skipped] linux-x64"), std::string::npos) << result.out;
+#else
+    EXPECT_NE(result.out.find("[skipped] android-arm64"), std::string::npos) << result.out;
+#endif
+
+    // 产物布局：<out 目录>/<abi>/<库名><ABI 扩展名>。
+    const fs::path winLibrary = workDir / "windows-x64" / "output.dll";
+    EXPECT_TRUE(fileExists(winLibrary)) << result.out;
+
+    // fake zig 收到的命令面：zig kind → cc 子命令 + -target 三元组 +
+    // 目标 ABI 的 JNI 平台子目录（win32 的 jlong 是 long long）。
+    const std::string log = readText(logFile);
+    EXPECT_EQ(log.rfind("cc\n", 0), 0U) << log;
+    EXPECT_NE(log.find("-target\nx86_64-windows-gnu\n"), std::string::npos) << log;
+#ifdef _WIN32
+    EXPECT_NE(log.find("include\\win32"), std::string::npos) << log;
+#else
+    EXPECT_NE(log.find("include/win32"), std::string::npos) << log;
+#endif
+
+    // manifest：schema + 逐 ABI 结果 + 汇总（CI 集成挂点）。
+    const std::string manifest = readText(workDir / "output.targets.json");
+    EXPECT_NE(manifest.find("\"schema\": 1"), std::string::npos) << manifest;
+    EXPECT_NE(manifest.find("\"abi\": \"windows-x64\""), std::string::npos) << manifest;
+    EXPECT_NE(manifest.find("\"status\": \"built\""), std::string::npos) << manifest;
+    EXPECT_NE(manifest.find("\"status\": \"skipped\""), std::string::npos) << manifest;
+    EXPECT_NE(manifest.find("\"built\": 1"), std::string::npos) << manifest;
+    EXPECT_NE(manifest.find("\"skipped\": 1"), std::string::npos) << manifest;
+}
+
+// 部分失败语义：配置的编译器路径不存在 → failed（已要求故按失败记，不 skip），
+// 与 built 混合时退出码 1，manifest 如实分档。
+TEST(CliTest, MultiTargetPartialFailureExitCodeAndManifest)
+{
+    const fs::path cli     = findCli();
+    const fs::path fakeZig = test::getBuildTargetPath("mj2x_fake_zig");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeZig)) GTEST_SKIP() << "mj2x_fake_zig is not built";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir = test::getTempOutPath("mj2x_cli_multi_target.keep").parent_path() /
+                             "mj2x_cli_multi_target_partial";
+    const fs::path toolDir  = workDir / "tool";
+    const fs::path outClass = workDir / "output.class";
+#ifdef _WIN32
+    const fs::path zigExecutable = toolDir / "zig.exe";
+#else
+    const fs::path zigExecutable = toolDir / "zig";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    fs::copy_file(fakeZig, zigExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    // windows-x64 经 fake zig（built）+ linux-aarch64 指向不存在的编译器（failed）。
+    const auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+            " --backend vmc4 --compile --compile-mode pipe --native-timeout 60"
+            " --targets windows-x64,linux-aarch64 --target-cc windows-x64=" +
+            q(zigExecutable) + " --target-cc linux-aarch64=" + q(workDir / "no-such-cc.exe"),
+    });
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("[failed]"), std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("configured compiler not found"), std::string::npos) << result.out;
+
+    const std::string manifest = readText(workDir / "output.targets.json");
+    EXPECT_NE(manifest.find("\"built\": 1"), std::string::npos) << manifest;
+    EXPECT_NE(manifest.find("\"failed\": 1"), std::string::npos) << manifest;
+}
+
+// 编译器跑通但未产出库（fake 桩 SKIP_OUTPUT 钩子）→ 该目标 failed，
+// 产物目录不落半成品。
+TEST(CliTest, MultiTargetCompilerWithoutArtifactFailsTarget)
+{
+    const fs::path cli     = findCli();
+    const fs::path fakeZig = test::getBuildTargetPath("mj2x_fake_zig");
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (!fileExists(fakeZig)) GTEST_SKIP() << "mj2x_fake_zig is not built";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir = test::getTempOutPath("mj2x_cli_multi_target.keep").parent_path() /
+                             "mj2x_cli_multi_target_noart";
+    const fs::path toolDir  = workDir / "tool";
+    const fs::path outClass = workDir / "output.class";
+#ifdef _WIN32
+    const fs::path zigExecutable = toolDir / "zig.exe";
+#else
+    const fs::path zigExecutable = toolDir / "zig";
+#endif
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(toolDir, ec);
+    fs::copy_file(fakeZig, zigExecutable, fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    std::vector<std::string> lines;
+#ifdef _WIN32
+    lines.push_back("set \"PATH=" + toolDir.string() + ";%PATH%\"");
+    lines.push_back("set \"MJ2X_FAKE_ZIG_SKIP_OUTPUT=1\"");
+#else
+    lines.push_back("export PATH=" + q(toolDir) + ":$PATH");
+    lines.push_back("export MJ2X_FAKE_ZIG_SKIP_OUTPUT=1");
+#endif
+    lines.push_back(q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+                    " --backend vmc4 --compile --compile-mode pipe --native-timeout 60"
+                    " --targets windows-x64 --target-cc windows-x64=" +
+                    q(zigExecutable));
+    const auto result = runScript(lines);
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_NE(result.out.find("[failed]"), std::string::npos) << result.out;
+    EXPECT_FALSE(fileExists(workDir / "windows-x64" / "output.dll")) << result.out;
+    const std::string manifest = readText(workDir / "output.targets.json");
+    EXPECT_NE(manifest.find("\"failed\": 1"), std::string::npos) << manifest;
+}
+
+// 全部目标 skipped（只请求非宿主 ABI 且无 --target-cc）→ 退出码 1，
+// 不触碰任何编译器，manifest 记录逐目标原因。
+TEST(CliTest, MultiTargetAllSkippedReportsAndFails)
+{
+    const fs::path cli = findCli();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0')
+        GTEST_SKIP() << "JAVA_HOME is not set";
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir = test::getTempOutPath("mj2x_cli_multi_target.keep").parent_path() /
+                             "mj2x_cli_multi_target_allskip";
+    const fs::path outClass = workDir / "output.class";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+
+    // 只请求非宿主 ABI（按宿主宏选），全部无 --target-cc → 全 skipped。
+#ifdef _WIN32
+    const char* allSkipTargets = "linux-x64,linux-aarch64,android-arm64";
+#else
+    const char* allSkipTargets = "windows-x64,linux-aarch64,android-arm64";
+#endif
+    const auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+            " --backend vmc4 --compile --compile-mode pipe --native-timeout 60 --targets " +
+            allSkipTargets,
+    });
+    EXPECT_NE(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out.find("[built]"), std::string::npos) << result.out;
+    EXPECT_NE(result.out.find("[skipped]"), std::string::npos) << result.out;
+    EXPECT_FALSE(fileExists(workDir / "linux-x64")) << result.out;
+    EXPECT_FALSE(fileExists(workDir / "windows-x64")) << result.out;
+    const std::string manifest = readText(workDir / "output.targets.json");
+    EXPECT_NE(manifest.find("\"skipped\": 3"), std::string::npos) << manifest;
+}
+
+// 真实工具链 E2E（issue #11 验收：≥ 2 ABI 同时产出）：宿主 ABI 走自动探测
+// （Windows=MSVC / Linux=gcc），非宿主 ABI 经真实 zig 交叉（-target 三元组，
+// zig 自带交叉 libc）。产物只验在生成（执行非本 issue 面），exit 0。
+TEST(CliTest, MultiTargetRealToolchainsProduceHostAndCross)
+{
+    const fs::path cli   = findCli();
+    const fs::path javac = findJavac();
+    if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
+    if (javac.empty()) GTEST_SKIP() << "javac not found; set JAVA_HOME";
+    const fs::path zigDir = findZigDir();
+    if (zigDir.empty() && !commandAvailable("zig")) GTEST_SKIP() << "zig is not available on PATH";
+    if (!zigDir.empty()) prependToProcessPath(zigDir);
+
+    const fs::path inClass = writeTinyClass();
+    const fs::path workDir = test::getTempOutPath("mj2x_cli_multi_target.keep").parent_path() /
+                             "mj2x_cli_multi_target_real";
+    const fs::path outClass = workDir / "output.class";
+    std::error_code ec;
+    fs::remove_all(workDir, ec);
+    ec.clear();
+    fs::create_directories(workDir, ec);
+
+#ifdef _WIN32
+    const char* crossAbi = "linux-x64";
+    const fs::path hostLibrary = workDir / "windows-x64" / "output.dll";
+#else
+    const char*    crossAbi    = "windows-x64";
+    const fs::path hostLibrary = workDir / "linux-x64" / "output.so";
+#endif
+    const fs::path crossLibrary = workDir / crossAbi /
+                                  (std::string("output") + (crossAbi[0] == 'w' ? ".dll" : ".so"));
+
+    const auto result = runScript({
+        q(cli) + " -i " + q(inClass) + " -o " + q(outClass) +
+            " --backend vmc4 --compile --compile-mode pipe --native-timeout 600"
+            " --targets windows-x64,linux-x64 --target-cc " +
+            std::string(crossAbi) + "=zig",
+    });
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_TRUE(fileExists(hostLibrary)) << result.out;
+    EXPECT_TRUE(fileExists(crossLibrary)) << result.out;
+    const std::string manifest = readText(workDir / "output.targets.json");
+    EXPECT_NE(manifest.find("\"built\": 2"), std::string::npos) << manifest;
+}

@@ -109,7 +109,7 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
     auto blocks = converter.convert(*method);
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_add__II(ptr %env, i32 %p0, i32 %p1)"),
               std::string::npos)
         << result.text;
@@ -192,7 +192,7 @@ TEST(LlvmIrBackendTest, EmitsMonitorIntrinsics)
     auto monitorResult = backend.compileMethod(
         "Test", compilerClass.methods[0], converter.convert(*monitorMethod));
 
-    ASSERT_EQ(monitorResult.kind, BackendResult::Kind::C_SOURCE) << monitorResult.text;
+    ASSERT_EQ(monitorResult.kind, BackendResult::Kind::LLVM_IR) << monitorResult.text;
     EXPECT_NE(monitorResult.text.find("call void @mj2x_llvm_monitor_enter(ptr %env, ptr %v0)"),
               std::string::npos)
         << monitorResult.text;
@@ -239,7 +239,7 @@ TEST(LlvmIrBackendTest, EmitsShiftOperationsWithJavaModuloSemantics)
         CodeConverter            converter(arena);
         auto                     blocks = converter.convert(*method);
         auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
-        ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+        ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
         EXPECT_NE(result.text.find(expect), std::string::npos) << result.text;
     };
     compile(Opcodes::ISHL, "shl i32");
@@ -265,7 +265,7 @@ TEST(LlvmIrBackendTest, EmitsShiftOperationsWithJavaModuloSemantics)
     CodeConverter            converter(arena);
     auto                     blocks = converter.convert(*lmethod);
     auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("shl i64"), std::string::npos) << result.text;
 }
 
@@ -314,7 +314,7 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
     auto                     blocks = converter.convert(*caller);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_caller__II(ptr %env, i32 %p0, i32 %p1)"),
               std::string::npos)
         << result.text;
@@ -337,7 +337,7 @@ TEST(LlvmIrBackendTest, DirectCallTierOffRoutesIntraClassStaticCallThroughJni)
     auto                     blocks = converter.convert(*caller);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_caller__II(ptr %env, i32 %p0, i32 %p1)"),
               std::string::npos)
         << result.text;
@@ -415,7 +415,7 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
     auto trapResult = backend.compileMethod(
         "Test", index.getClass("Test")->methods[1], converter.convert(*trap), &index);
     // 放行后行为钉：正常发射 native define，零降级诊断。
-    ASSERT_EQ(trapResult.kind, BackendResult::Kind::C_SOURCE) << trapResult.text;
+    ASSERT_EQ(trapResult.kind, BackendResult::Kind::LLVM_IR) << trapResult.text;
     EXPECT_NE(trapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_trap__I"),
               std::string::npos)
         << trapResult.text;
@@ -431,7 +431,7 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
     // 对照：同形同类调用无 try 区域 → 正常发射，无降级诊断。
     auto noTrapResult = backend.compileMethod(
         "Test", index.getClass("Test")->methods[2], converter.convert(*noTrap), &index);
-    ASSERT_EQ(noTrapResult.kind, BackendResult::Kind::C_SOURCE) << noTrapResult.text;
+    ASSERT_EQ(noTrapResult.kind, BackendResult::Kind::LLVM_IR) << noTrapResult.text;
     EXPECT_NE(noTrapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_noTrap__I"),
               std::string::npos)
         << noTrapResult.text;
@@ -489,7 +489,7 @@ TEST(LlvmIrBackendTest, EmitsForEachShapeOverUndefEdgeCopy)
     auto        result = backend.compileMethod("Test", clazz.methods[0], converter.convert(*forEach));
 
     // 放行后行为钉：正常发射 native define，零降级诊断。
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_forEachOnly___3I"),
               std::string::npos)
         << result.text;
@@ -567,7 +567,7 @@ TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
     // target 不可转换 → 调用方走 JNI call_static_* fallback（不再 fail-closed）。
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @"),
               std::string::npos)
         << result.text;
@@ -612,7 +612,7 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
     auto          indexlessBlocks = converter.convert(*indexless);
     auto          indexlessResult =
         indexlessBackend.compileMethod("Test", indexlessClazz.methods[0], indexlessBlocks, nullptr);
-    ASSERT_EQ(indexlessResult.kind, BackendResult::Kind::C_SOURCE) << indexlessResult.text;
+    ASSERT_EQ(indexlessResult.kind, BackendResult::Kind::LLVM_IR) << indexlessResult.text;
     EXPECT_NE(indexlessResult.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @_mj2x_llvm_str_"),
               std::string::npos)
         << indexlessResult.text;
@@ -620,7 +620,7 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
     // 跨类（带 index，目标类缺失）→ JNI call_static_* helper。
     auto crossResult = backend.compileMethod("Test", index.getClass("Test")->methods[0],
                                              converter.convert(*crossClass), &index);
-    ASSERT_EQ(crossResult.kind, BackendResult::Kind::C_SOURCE) << crossResult.text;
+    ASSERT_EQ(crossResult.kind, BackendResult::Kind::LLVM_IR) << crossResult.text;
     EXPECT_NE(crossResult.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @_mj2x_llvm_str_"),
               std::string::npos)
         << crossResult.text;
@@ -650,7 +650,7 @@ TEST(LlvmIrBackendTest, EmitsRecursiveStaticCall)
     auto blocks = converter.convert(*recursive);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[0], blocks, &index);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call i32 @mj2x_llvm_Java_Test_recursive(ptr %env)"),
               std::string::npos)
         << result.text;
@@ -678,7 +678,7 @@ TEST(LlvmIrBackendTest, EmitsStringAndClassConstants)
     auto str = compileScalar("greet", "()Ljava/lang/String;",
                              {new LdcInsnNode(std::string("hi")), new InsnNode(Opcodes::ARETURN)},
                              1, 0);
-    ASSERT_EQ(str.kind, BackendResult::Kind::C_SOURCE) << str.text;
+    ASSERT_EQ(str.kind, BackendResult::Kind::LLVM_IR) << str.text;
     EXPECT_NE(str.text.find("call ptr @mj2x_llvm_string_const(ptr %env, ptr @_mj2x_llvm_str_0)"),
               std::string::npos)
         << str.text;
@@ -696,7 +696,7 @@ TEST(LlvmIrBackendTest, EmitsJniInstanceAndExternalCalls)
                                                     ca::str::Utf8StringRef::from_cstr("()I"), false),
                                  new InsnNode(Opcodes::IRETURN)},
                                 1, 1);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call i32 @mj2x_llvm_call_int(ptr %env, ptr %"),
               std::string::npos)
         << result.text;
@@ -709,7 +709,7 @@ TEST(LlvmIrBackendTest, EmitsJniInstanceAndExternalCalls)
                                                  ca::str::Utf8StringRef::from_cstr("(I)I"), false),
                               new InsnNode(Opcodes::IRETURN)},
                              1, 1);
-    ASSERT_EQ(ext.kind, BackendResult::Kind::C_SOURCE) << ext.text;
+    ASSERT_EQ(ext.kind, BackendResult::Kind::LLVM_IR) << ext.text;
     EXPECT_NE(ext.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @_mj2x_llvm_str_"),
               std::string::npos)
         << ext.text;
@@ -728,7 +728,7 @@ TEST(LlvmIrBackendTest, EmitsInstanceWrapperThis)
     CodeConverter            converter(arena);
     auto blocks = converter.convert(*method);
     auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_getX(ptr %env, ptr %p0)"),
               std::string::npos)
         << result.text;
@@ -749,7 +749,7 @@ TEST(LlvmIrBackendTest, EmitsIntegerDivisionWithZeroCheck)
                                  new VarInsnNode(Opcodes::ILOAD, 1), new InsnNode(Opcodes::IDIV),
                                  new InsnNode(Opcodes::IRETURN)},
                                 2, 2);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("icmp eq i32"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("sdiv i32"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("icmp eq i32") , std::string::npos) << result.text;
@@ -770,7 +770,7 @@ TEST(LlvmIrBackendTest, EmitsIntegerRemainderWithZeroCheck)
                                  new VarInsnNode(Opcodes::LLOAD, 2), new InsnNode(Opcodes::LREM),
                                  new InsnNode(Opcodes::LRETURN)},
                                 4, 4);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("icmp eq i64"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("srem i64"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find(", -9223372036854775808\n"), std::string::npos) << result.text;
@@ -784,7 +784,7 @@ TEST(LlvmIrBackendTest, EmitsSaturatingFloatToIntConversion)
                              {new VarInsnNode(Opcodes::FLOAD, 0), new InsnNode(Opcodes::F2I),
                               new InsnNode(Opcodes::IRETURN)},
                              1, 1);
-    ASSERT_EQ(f2i.kind, BackendResult::Kind::C_SOURCE) << f2i.text;
+    ASSERT_EQ(f2i.kind, BackendResult::Kind::LLVM_IR) << f2i.text;
     EXPECT_NE(f2i.text.find("call i32 @llvm.fptosi.sat.i32.f32(float"), std::string::npos)
         << f2i.text;
 
@@ -793,7 +793,7 @@ TEST(LlvmIrBackendTest, EmitsSaturatingFloatToIntConversion)
                              {new VarInsnNode(Opcodes::DLOAD, 0), new InsnNode(Opcodes::D2L),
                               new InsnNode(Opcodes::LRETURN)},
                              2, 2);
-    ASSERT_EQ(d2l.kind, BackendResult::Kind::C_SOURCE) << d2l.text;
+    ASSERT_EQ(d2l.kind, BackendResult::Kind::LLVM_IR) << d2l.text;
     EXPECT_NE(d2l.text.find("call i64 @llvm.fptosi.sat.i64.f64(double"), std::string::npos)
         << d2l.text;
 }
@@ -812,7 +812,7 @@ TEST(LlvmIrBackendTest, EmitsNarrowSignatureBoundaryConversions)
                                  new InsnNode(Opcodes::IADD),
                                  new InsnNode(Opcodes::IRETURN)},
                                 4, 4);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     // wrapper 边界：窄参数类型 + 提升 + trunc 返回。
     EXPECT_NE(result.text.find("define dllexport i16 @Java_Test_narrow__BSZC(ptr %env, ptr %clazz, i8 %p0, i16 %p1, i8 %p2, i16 %p3)"),
               std::string::npos)
@@ -837,27 +837,27 @@ TEST(LlvmIrBackendTest, EmitsSpecialFloatLiterals)
                              {new LdcInsnNode(std::numeric_limits<float>::quiet_NaN()),
                               new InsnNode(Opcodes::FRETURN)},
                              1, 0);
-    ASSERT_EQ(nan.kind, BackendResult::Kind::C_SOURCE) << nan.text;
+    ASSERT_EQ(nan.kind, BackendResult::Kind::LLVM_IR) << nan.text;
     EXPECT_NE(nan.text.find("float 0x7FF8000000000000"), std::string::npos) << nan.text;
 
     auto pinff = compileScalar("pinff", "()F",
                                {new LdcInsnNode(std::numeric_limits<float>::infinity()),
                                 new InsnNode(Opcodes::FRETURN)},
                                1, 0);
-    ASSERT_EQ(pinff.kind, BackendResult::Kind::C_SOURCE) << pinff.text;
+    ASSERT_EQ(pinff.kind, BackendResult::Kind::LLVM_IR) << pinff.text;
     EXPECT_NE(pinff.text.find("float 0x7FF0000000000000"), std::string::npos) << pinff.text;
 
     auto ninff = compileScalar("ninff", "()F",
                                {new LdcInsnNode(-std::numeric_limits<float>::infinity()),
                                 new InsnNode(Opcodes::FRETURN)},
                                1, 0);
-    ASSERT_EQ(ninff.kind, BackendResult::Kind::C_SOURCE) << ninff.text;
+    ASSERT_EQ(ninff.kind, BackendResult::Kind::LLVM_IR) << ninff.text;
     EXPECT_NE(ninff.text.find("float 0xFFF0000000000000"), std::string::npos) << ninff.text;
 
     auto nzerof =
         compileScalar("nzerof", "()F",
                       {new LdcInsnNode(-0.0f), new InsnNode(Opcodes::FRETURN)}, 1, 0);
-    ASSERT_EQ(nzerof.kind, BackendResult::Kind::C_SOURCE) << nzerof.text;
+    ASSERT_EQ(nzerof.kind, BackendResult::Kind::LLVM_IR) << nzerof.text;
     EXPECT_NE(nzerof.text.find("float 0x8000000000000000"), std::string::npos) << nzerof.text;
 
     // F64 侧 16 位形态（本就合法）回归钉。
@@ -865,19 +865,19 @@ TEST(LlvmIrBackendTest, EmitsSpecialFloatLiterals)
                               {new LdcInsnNode(std::numeric_limits<double>::infinity()),
                                new InsnNode(Opcodes::DRETURN)},
                               2, 0);
-    ASSERT_EQ(pinf.kind, BackendResult::Kind::C_SOURCE) << pinf.text;
+    ASSERT_EQ(pinf.kind, BackendResult::Kind::LLVM_IR) << pinf.text;
     EXPECT_NE(pinf.text.find("double 0x7FF0000000000000"), std::string::npos) << pinf.text;
 
     auto ninf = compileScalar("ninf", "()D",
                               {new LdcInsnNode(-std::numeric_limits<double>::infinity()),
                                new InsnNode(Opcodes::DRETURN)},
                               2, 0);
-    ASSERT_EQ(ninf.kind, BackendResult::Kind::C_SOURCE) << ninf.text;
+    ASSERT_EQ(ninf.kind, BackendResult::Kind::LLVM_IR) << ninf.text;
     EXPECT_NE(ninf.text.find("double 0xFFF0000000000000"), std::string::npos) << ninf.text;
 
     auto nzero = compileScalar("nzero", "()D",
                                {new LdcInsnNode(-0.0), new InsnNode(Opcodes::DRETURN)}, 2, 0);
-    ASSERT_EQ(nzero.kind, BackendResult::Kind::C_SOURCE) << nzero.text;
+    ASSERT_EQ(nzero.kind, BackendResult::Kind::LLVM_IR) << nzero.text;
     EXPECT_NE(nzero.text.find("double 0x8000000000000000"), std::string::npos) << nzero.text;
 }
 
@@ -892,13 +892,13 @@ TEST(LlvmIrBackendTest, EmitsNormalFloatLiteralsAsHex)
                                     {new LdcInsnNode(0.49999997f),
                                      new InsnNode(Opcodes::FRETURN)},
                                     1, 0);
-    ASSERT_EQ(quarterish.kind, BackendResult::Kind::C_SOURCE) << quarterish.text;
+    ASSERT_EQ(quarterish.kind, BackendResult::Kind::LLVM_IR) << quarterish.text;
     EXPECT_NE(quarterish.text.find("float 0x3FDFFFFFE0000000"), std::string::npos)
         << quarterish.text;
 
     auto tenth = compileScalar("tenth", "()D",
                                {new LdcInsnNode(0.1), new InsnNode(Opcodes::DRETURN)}, 2, 0);
-    ASSERT_EQ(tenth.kind, BackendResult::Kind::C_SOURCE) << tenth.text;
+    ASSERT_EQ(tenth.kind, BackendResult::Kind::LLVM_IR) << tenth.text;
     EXPECT_NE(tenth.text.find("double 0x3FB999999999999A"), std::string::npos) << tenth.text;
 }
 
@@ -917,7 +917,7 @@ TEST(LlvmIrBackendTest, EmitsStaticFieldAccess)
                                                    ca::str::Utf8StringRef::from_cstr("I")),
                                  new InsnNode(Opcodes::IRETURN)},
                                 1, 0);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call void @mj2x_llvm_field_store_int(ptr %env, ptr null, ptr @_mj2x_llvm_str_0, ptr @_mj2x_llvm_str_1, ptr @_mj2x_llvm_str_2, i32 1, i32"),
               std::string::npos)
         << result.text;
@@ -933,7 +933,7 @@ TEST(LlvmIrBackendTest, EmitsThrowTerminator)
                                 {new VarInsnNode(Opcodes::ALOAD, 0),
                                  new InsnNode(Opcodes::ATHROW)},
                                 1, 1);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call void @mj2x_llvm_throw(ptr %env, ptr %v0)"),
               std::string::npos)
         << result.text;
@@ -953,7 +953,7 @@ TEST(LlvmIrBackendTest, EmitsRefComparisonViaIsSameObject)
                        new InsnNode(Opcodes::IRETURN), new LabelNode(target),
                        new InsnNode(Opcodes::ICONST_0), new InsnNode(Opcodes::IRETURN)},
                       2, 2);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call i1 @mj2x_llvm_ref_eq(ptr %env, ptr %v0, ptr %v1)"),
               std::string::npos)
         << result.text;
@@ -974,7 +974,7 @@ TEST(LlvmIrBackendTest, EmitsRefEqWithoutBareCopyPseudo)
                        new InsnNode(Opcodes::IRETURN), new LabelNode(eqTarget),
                        new InsnNode(Opcodes::ICONST_0), new InsnNode(Opcodes::IRETURN)},
                       2, 2);
-    ASSERT_EQ(eqResult.kind, BackendResult::Kind::C_SOURCE) << eqResult.text;
+    ASSERT_EQ(eqResult.kind, BackendResult::Kind::LLVM_IR) << eqResult.text;
     EXPECT_NE(eqResult.text.find("call i1 @mj2x_llvm_ref_eq(ptr %env, ptr %v0, ptr %v1)"),
               std::string::npos)
         << eqResult.text;
@@ -987,7 +987,7 @@ TEST(LlvmIrBackendTest, EmitsRefEqWithoutBareCopyPseudo)
                        new InsnNode(Opcodes::IRETURN), new LabelNode(nullTarget),
                        new InsnNode(Opcodes::ICONST_0), new InsnNode(Opcodes::IRETURN)},
                       1, 1);
-    ASSERT_EQ(nullResult.kind, BackendResult::Kind::C_SOURCE) << nullResult.text;
+    ASSERT_EQ(nullResult.kind, BackendResult::Kind::LLVM_IR) << nullResult.text;
     EXPECT_NE(nullResult.text.find("call i1 @mj2x_llvm_ref_eq(ptr %env, ptr %v0, ptr null)"),
               std::string::npos)
         << nullResult.text;
@@ -1031,7 +1031,7 @@ TEST(LlvmIrBackendTest, EmitsExceptionDispatchWithRegions)
     auto        blocks = converter.convert(*method);
     auto        result = backend.compileMethod("Test", clazz.methods[0], blocks);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call i1 @mj2x_llvm_exception_check(ptr %env)"), std::string::npos)
         << result.text;
     EXPECT_NE(result.text.find("call ptr @mj2x_llvm_exception_occurred(ptr %env)"),
@@ -1056,7 +1056,7 @@ TEST(LlvmIrBackendTest, EmitsReferenceBoundary)
     auto result = compileScalar("id", "(Ljava/lang/String;)Ljava/lang/String;",
                                 {new VarInsnNode(Opcodes::ALOAD, 0), new InsnNode(Opcodes::ARETURN)},
                                 1, 1);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("define internal ptr @mj2x_llvm_Java_Test_id__Ljava_lang_String_2(ptr %env, ptr %p0)"),
               std::string::npos)
         << result.text;
@@ -1073,7 +1073,7 @@ TEST(LlvmIrBackendTest, EmitsObjectAllocationAndTypeChecks)
                                                  ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
                                 new InsnNode(Opcodes::ARETURN)},
                                1, 0);
-    ASSERT_EQ(alloc.kind, BackendResult::Kind::C_SOURCE) << alloc.text;
+    ASSERT_EQ(alloc.kind, BackendResult::Kind::LLVM_IR) << alloc.text;
     EXPECT_NE(alloc.text.find("call ptr @mj2x_llvm_new_object(ptr %env, ptr @_mj2x_llvm_str_0)"),
               std::string::npos)
         << alloc.text;
@@ -1086,7 +1086,7 @@ TEST(LlvmIrBackendTest, EmitsObjectAllocationAndTypeChecks)
                                                 ca::str::Utf8StringRef::from_cstr("java/lang/String")),
                                new InsnNode(Opcodes::ARETURN)},
                               1, 1);
-    ASSERT_EQ(cast.kind, BackendResult::Kind::C_SOURCE) << cast.text;
+    ASSERT_EQ(cast.kind, BackendResult::Kind::LLVM_IR) << cast.text;
     EXPECT_NE(cast.text.find("call ptr @mj2x_llvm_check_cast(ptr %env, ptr %v0, ptr @_mj2x_llvm_str_0)"),
               std::string::npos)
         << cast.text;
@@ -1098,7 +1098,7 @@ TEST(LlvmIrBackendTest, EmitsObjectAllocationAndTypeChecks)
                                                     ca::str::Utf8StringRef::from_cstr("java/lang/String")),
                                    new InsnNode(Opcodes::IRETURN)},
                                   1, 1);
-    ASSERT_EQ(instance.kind, BackendResult::Kind::C_SOURCE) << instance.text;
+    ASSERT_EQ(instance.kind, BackendResult::Kind::LLVM_IR) << instance.text;
     EXPECT_NE(instance.text.find("call i32 @mj2x_llvm_instance_of(ptr %env, ptr %v0, ptr @_mj2x_llvm_str_0)"),
               std::string::npos)
         << instance.text;
@@ -1111,7 +1111,7 @@ TEST(LlvmIrBackendTest, EmitsArrayAccessAndLength)
                               {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
                                new InsnNode(Opcodes::IALOAD), new InsnNode(Opcodes::IRETURN)},
                               2, 2);
-    ASSERT_EQ(load.kind, BackendResult::Kind::C_SOURCE) << load.text;
+    ASSERT_EQ(load.kind, BackendResult::Kind::LLVM_IR) << load.text;
     EXPECT_NE(load.text.find("call i32 @mj2x_llvm_array_load_int(ptr %env, ptr %v0, i32 %v1)"),
               std::string::npos)
         << load.text;
@@ -1122,7 +1122,7 @@ TEST(LlvmIrBackendTest, EmitsArrayAccessAndLength)
                                 new VarInsnNode(Opcodes::ILOAD, 2), new InsnNode(Opcodes::IASTORE),
                                 new InsnNode(Opcodes::RETURN)},
                                3, 3);
-    ASSERT_EQ(store.kind, BackendResult::Kind::C_SOURCE) << store.text;
+    ASSERT_EQ(store.kind, BackendResult::Kind::LLVM_IR) << store.text;
     EXPECT_NE(store.text.find("call void @mj2x_llvm_array_store_int(ptr %env, ptr %v0, i32 %v1, i32 %v2)"),
               std::string::npos)
         << store.text;
@@ -1132,7 +1132,7 @@ TEST(LlvmIrBackendTest, EmitsArrayAccessAndLength)
                              {new VarInsnNode(Opcodes::ALOAD, 0), new InsnNode(Opcodes::ARRAYLENGTH),
                               new InsnNode(Opcodes::IRETURN)},
                              1, 1);
-    ASSERT_EQ(len.kind, BackendResult::Kind::C_SOURCE) << len.text;
+    ASSERT_EQ(len.kind, BackendResult::Kind::LLVM_IR) << len.text;
     EXPECT_NE(len.text.find("call i32 @mj2x_llvm_array_length(ptr %env, ptr %v0)"),
               std::string::npos)
         << len.text;
@@ -1144,7 +1144,7 @@ TEST(LlvmIrBackendTest, EmitsArrayAccessAndLength)
                                    new VarInsnNode(Opcodes::ALOAD, 2),
                                    new InsnNode(Opcodes::AASTORE), new InsnNode(Opcodes::RETURN)},
                                   3, 3);
-    ASSERT_EQ(refStore.kind, BackendResult::Kind::C_SOURCE) << refStore.text;
+    ASSERT_EQ(refStore.kind, BackendResult::Kind::LLVM_IR) << refStore.text;
     EXPECT_NE(refStore.text.find("call void @mj2x_llvm_array_store_ref(ptr %env, ptr %v0, i32 %v1, ptr %v2)"),
               std::string::npos)
         << refStore.text;
@@ -1155,7 +1155,7 @@ TEST(LlvmIrBackendTest, EmitsArrayAccessAndLength)
                                    new VarInsnNode(Opcodes::ILOAD, 1),
                                    new InsnNode(Opcodes::BALOAD), new InsnNode(Opcodes::IRETURN)},
                                   2, 2);
-    ASSERT_EQ(byteLoad.kind, BackendResult::Kind::C_SOURCE) << byteLoad.text;
+    ASSERT_EQ(byteLoad.kind, BackendResult::Kind::LLVM_IR) << byteLoad.text;
     EXPECT_NE(byteLoad.text.find("call i32 @mj2x_llvm_array_load_byte(ptr %env, ptr %v0, i32 %v1)"),
               std::string::npos)
         << byteLoad.text;
@@ -1200,7 +1200,7 @@ TEST(LlvmIrBackendTest, EmitsFptosiSatDeclareMatchingCall)
                                    new InsnNode(Opcodes::D2L), new InsnNode(Opcodes::LRETURN)},
                                   2, 2);
     for (const auto* result : {&f2i, &d2i, &f2l, &d2l}) {
-        ASSERT_EQ(result->kind, BackendResult::Kind::C_SOURCE) << result->text;
+        ASSERT_EQ(result->kind, BackendResult::Kind::LLVM_IR) << result->text;
     }
 
     CompilerIndex emptyIndex;
@@ -1237,7 +1237,7 @@ TEST(LlvmIrBackendTest, EmitsCmpNanIntrinsics)
                            {new VarInsnNode(Opcodes::FLOAD, 0), new VarInsnNode(Opcodes::FLOAD, 1),
                             new InsnNode(Opcodes::FCMPG), new InsnNode(Opcodes::IRETURN)},
                            2, 2);
-    ASSERT_EQ(g.kind, BackendResult::Kind::C_SOURCE) << g.text;
+    ASSERT_EQ(g.kind, BackendResult::Kind::LLVM_IR) << g.text;
     EXPECT_NE(g.text.find("fcmp ogt float"), std::string::npos) << g.text;
     EXPECT_NE(g.text.find("fcmp olt float"), std::string::npos) << g.text;
     EXPECT_NE(g.text.find("fcmp uno float"), std::string::npos) << g.text;
@@ -1248,7 +1248,7 @@ TEST(LlvmIrBackendTest, EmitsCmpNanIntrinsics)
                            {new VarInsnNode(Opcodes::LLOAD, 0), new VarInsnNode(Opcodes::LLOAD, 2),
                             new InsnNode(Opcodes::LCMP), new InsnNode(Opcodes::IRETURN)},
                            4, 4);
-    ASSERT_EQ(l.kind, BackendResult::Kind::C_SOURCE) << l.text;
+    ASSERT_EQ(l.kind, BackendResult::Kind::LLVM_IR) << l.text;
     EXPECT_NE(l.text.find("icmp sgt i64"), std::string::npos) << l.text;
     EXPECT_EQ(l.text.find("fcmp uno"), std::string::npos) << l.text;
 }
@@ -1280,7 +1280,7 @@ TEST(LlvmIrBackendTest, EmitsIndyRuntimeResolution)
     auto          blocks = converter.convert(*method);
     auto          result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call ptr @mj2x_llvm_indy_bsm_0(ptr %env, ptr"),
               std::string::npos)
         << result.text;
@@ -1315,7 +1315,7 @@ TEST(LlvmIrBackendTest, EmitsRuntimeProtectionCheckpoint)
                                       new VarInsnNode(Opcodes::ILOAD, 1),
                                       new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
                                      2, 2);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     // 函数体内：checkpoint 全局引用 + run 调用 + FAKE 默认返回标签。
     EXPECT_NE(result.text.find("call i32 @mj2x_rt_checkpoint_run(ptr @mj2x_rt_cp_0, i32 3, i32 "
                                "16, i32 500, i32 1)"),
@@ -1357,7 +1357,7 @@ TEST(LlvmIrBackendTest, EmitsMathIntrinsicDirectCall)
                                           ca::str::ZUtf8StringRef::from_static("(I)I"), false),
                                       new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
                                      2, 2);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call i32 @mj2x_math_abs_i32(i32 %v0)"), std::string::npos)
         << result.text;
     // 两个 Math.abs 调用点都直调（第二个操作数临时号前移一个）。
@@ -1384,7 +1384,7 @@ TEST(LlvmIrBackendTest, EmitsMathIntrinsicDirectCall)
                             ca::str::ZUtf8StringRef::from_static("()D"), false),
          new InsnNode(Opcodes::DADD), new InsnNode(Opcodes::DRETURN)},
         2, 2);
-    ASSERT_EQ(minResult.kind, BackendResult::Kind::C_SOURCE) << minResult.text;
+    ASSERT_EQ(minResult.kind, BackendResult::Kind::LLVM_IR) << minResult.text;
     EXPECT_NE(minResult.text.find("call double @mj2x_math_min_f64(double %v0, double"),
               std::string::npos)
         << minResult.text;
@@ -1427,7 +1427,7 @@ TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
 
     auto intResult = box("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", "intValue",
                          "()I", "mj2x_int_value_of", "mj2x_int_int_value", "%mj2x_int");
-    ASSERT_EQ(intResult.kind, BackendResult::Kind::C_SOURCE) << intResult.text;
+    ASSERT_EQ(intResult.kind, BackendResult::Kind::LLVM_IR) << intResult.text;
     EXPECT_NE(intResult.text.find("call %mj2x_int @mj2x_int_value_of(i32 %v0)"),
               std::string::npos)
         << intResult.text;
@@ -1443,7 +1443,7 @@ TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
     auto shortResult = box("java/lang/Short", "valueOf", "(S)Ljava/lang/Short;", "shortValue",
                            "()S", "mj2x_short_value_of", "mj2x_short_short_value",
                            "%mj2x_short");
-    ASSERT_EQ(shortResult.kind, BackendResult::Kind::C_SOURCE) << shortResult.text;
+    ASSERT_EQ(shortResult.kind, BackendResult::Kind::LLVM_IR) << shortResult.text;
     EXPECT_NE(shortResult.text.find("call %mj2x_short @mj2x_short_value_of(i16"),
               std::string::npos)
         << shortResult.text;
@@ -1466,7 +1466,7 @@ TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
                             false),
          new InsnNode(Opcodes::ARETURN)},
         2, 1);
-    ASSERT_EQ(escape.kind, BackendResult::Kind::C_SOURCE) << escape.text;
+    ASSERT_EQ(escape.kind, BackendResult::Kind::LLVM_IR) << escape.text;
     EXPECT_NE(escape.text.find("mj2x_llvm_call_static_object"), std::string::npos)
         << escape.text;
     EXPECT_EQ(escape.text.find("alloca %mj2x_int"), std::string::npos) << escape.text;
@@ -1490,7 +1490,7 @@ TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
                             ca::str::ZUtf8StringRef::from_static("(J)V"), false),
          new InsnNode(Opcodes::POP), new InsnNode(Opcodes::RETURN)},
         2, 0);
-    ASSERT_EQ(initOnly.kind, BackendResult::Kind::C_SOURCE) << initOnly.text;
+    ASSERT_EQ(initOnly.kind, BackendResult::Kind::LLVM_IR) << initOnly.text;
     EXPECT_NE(initOnly.text.find("alloca %mj2x_random"), std::string::npos) << initOnly.text;
     EXPECT_NE(initOnly.text.find("call void @mj2x_random_init(ptr %slot_r"),
               std::string::npos)
@@ -1514,7 +1514,7 @@ TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
                             ca::str::ZUtf8StringRef::from_static("(I)I"), false),
          new InsnNode(Opcodes::IRETURN)},
         2, 1);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("call i32 @mj2x_random_next_int_bound(ptr %slot_r"),
               std::string::npos)
         << result.text;
@@ -1541,7 +1541,7 @@ TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
                             ca::str::ZUtf8StringRef::from_static("(J)V"), false),
          new InsnNode(Opcodes::ARETURN)},
         2, 0);
-    ASSERT_EQ(escape.kind, BackendResult::Kind::C_SOURCE) << escape.text;
+    ASSERT_EQ(escape.kind, BackendResult::Kind::LLVM_IR) << escape.text;
     EXPECT_NE(escape.text.find("mj2x_llvm_new_object"), std::string::npos) << escape.text;
     EXPECT_EQ(escape.text.find("alloca %mj2x_random"), std::string::npos) << escape.text;
 }
@@ -1580,7 +1580,7 @@ TEST(LlvmIrBackendTest, EmitsStringBuilderStateMachineDirectCalls)
                             ca::str::ZUtf8StringRef::from_static("()Ljava/lang/String;"), false),
          new InsnNode(Opcodes::ARETURN)},
         3, 1);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     // 上下文前导 + 全链直调 + 状态检查。
     EXPECT_NE(result.text.find("call void @mj2x_regc_init_context(ptr %mj2x_llvm_ctx"),
               std::string::npos)
@@ -1630,7 +1630,7 @@ TEST(LlvmIrBackendTest, EmitsStringBuilderStateMachineDirectCalls)
                             ca::str::ZUtf8StringRef::from_static("()V"), false),
          new InsnNode(Opcodes::ARETURN)},
         2, 0);
-    ASSERT_EQ(escape.kind, BackendResult::Kind::C_SOURCE) << escape.text;
+    ASSERT_EQ(escape.kind, BackendResult::Kind::LLVM_IR) << escape.text;
     EXPECT_NE(escape.text.find("mj2x_llvm_new_object"), std::string::npos) << escape.text;
     EXPECT_EQ(escape.text.find("mj2x_string_builder_init"), std::string::npos) << escape.text;
 }
@@ -1647,7 +1647,7 @@ TEST(LlvmIrBackendTest, EmitsMbaTransformedAddition)
                                       new VarInsnNode(Opcodes::ILOAD, 1),
                                       new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
                                      2, 2);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     // MBA: a + b → (a|b) + (a&b)。
     EXPECT_NE(result.text.find("or i32"), std::string::npos) << result.text;
     EXPECT_NE(result.text.find("and i32"), std::string::npos) << result.text;
@@ -1668,7 +1668,7 @@ TEST(LlvmIrBackendTest, FallsBackToUntransformedWhenTransformRejected)
                                       new VarInsnNode(Opcodes::ILOAD, 1),
                                       new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
                                      2, 2);
-    ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
+    ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     // 未变换形态：纯 add，无 and/or 链。
     EXPECT_NE(result.text.find("add i32"), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("and i32"), std::string::npos) << result.text;
