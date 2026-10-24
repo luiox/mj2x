@@ -22,6 +22,7 @@
 #include "cpp_source_dialect.hpp"
 #include "embedded_rt.hpp"
 #include "native_compiler.hpp"
+#include "multi_target.hpp"
 #include "native_project_generator.hpp"
 #include "param_registry.hpp"
 #include "preset_config.hpp"
@@ -52,6 +53,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <set>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -1165,6 +1167,73 @@ int main(int argc, char** argv)
     const std::string nativeResourcePath = nativeResourceEntry;
     const std::string nativeTempSuffix   = nativeLibraryPath.extension().string();
 
+    // 多目标（issue #11）：--targets 开启一次输入 → 多 ABI 产物 + manifest。
+    // v1 定界（全部 fail-closed 拒绝、明确诊断）：C99 后端（regc/vmc4）+ 直接
+    // 驱动（file/pipe 皆可）；xmake 驱动 / LLVM / StackC(C++) / jar 嵌入 /
+    // --emit-native-dir 不在 v1 面。ABI 清单与 target-cc 配对在此校验，
+    // multi_target.cpp 只承担逐目标解析与编译。
+    if (!options.targets.empty()) {
+        if (!options.compileNative) {
+            CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.targets_requires_compile"));
+            return 1;
+        }
+        if (options.buildDriver == NativeBuildDriver::Xmake) {
+            CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.targets_no_xmake"));
+            return 1;
+        }
+        if (jarOutput) {
+            CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.targets_no_jar"));
+            return 1;
+        }
+        if (nativeDirMode) {
+            CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.targets_no_native_dir"));
+            return 1;
+        }
+        if (options.cBackendKind == CEmitterBackend::LlvmIr ||
+            options.cBackendKind == CEmitterBackend::StackC) {
+            CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.targets_c99_only"));
+            return 1;
+        }
+        std::set<std::string> requestedAbis;
+        for (const auto& id : options.targets) {
+            mj2x::cli::TargetAbi abi;
+            if (!mj2x::cli::parseTargetAbi(id, abi)) {
+                CA_LOGT_ERROR("cli", "{}\n",
+                              ca::i18n::trf("mj2x.cli.err.targets_unknown_abi",
+                                            {id, mj2x::cli::targetAbiIdList()})
+                                  .c_str());
+                return 1;
+            }
+            if (!requestedAbis.insert(id).second) {
+                CA_LOGT_ERROR("cli", "{}\n",
+                              ca::i18n::trf("mj2x.cli.err.targets_duplicate", {id}).c_str());
+                return 1;
+            }
+        }
+        std::set<std::string> configuredAbis;
+        for (const auto& entry : options.targetCc) {
+            const auto sep = entry.find('=');
+            mj2x::cli::TargetAbi abi;
+            if (sep == std::string::npos || sep == 0 || sep + 1 == entry.size() ||
+                !mj2x::cli::parseTargetAbi(entry.substr(0, sep), abi)) {
+                CA_LOGT_ERROR("cli", "{}\n",
+                              ca::i18n::trf("mj2x.cli.err.targets_cc_format", {entry}).c_str());
+                return 1;
+            }
+            const std::string abiId = entry.substr(0, sep);
+            if (!configuredAbis.insert(abiId).second) {
+                CA_LOGT_ERROR("cli", "{}\n",
+                              ca::i18n::trf("mj2x.cli.err.targets_cc_duplicate", {abiId}).c_str());
+                return 1;
+            }
+            if (requestedAbis.count(abiId) == 0) {
+                CA_LOGT_ERROR("cli", "{}\n",
+                              ca::i18n::trf("mj2x.cli.err.targets_cc_unrequested", {abiId}).c_str());
+                return 1;
+            }
+        }
+    }
+
     // R4 保护变换选项已下沉至后端接线单元（backend_wiring_regtransform.cpp，
     // RegC/LLVM 共用；stackc-only/vmc4-only 构建无消费方，TU 整体裁剪）。
 
@@ -1339,6 +1408,34 @@ int main(int argc, char** argv)
         // P1-4：--native-timeout（秒，0=∞）→ 毫秒；下面每次外呼独立计时。
         const ProcessTimeout processTimeout =
             processTimeoutFromSeconds(options.nativeTimeoutSec);
+        if (!options.targets.empty()) {
+            // issue #11 多目标：源生成一次，逐 ABI 编译 + manifest。jar 嵌入
+            // 不在 v1 面（校验段已拦截 jarOutput），多目标编译完即终。
+            std::filesystem::path crtRoot = mj2x::cli::findCrtRoot(argv[0]);
+            if (crtRoot.empty()) {
+                CA_LOGT_ERROR("cli", "{}\n",
+                              ca::i18n::trf("mj2x.cli.err.compile_crt_required",
+                                            {std::string(mj2x::cli::backendCliName(
+                                                options.cBackendKind))})
+                                  .c_str());
+                return 1;
+            }
+            mj2x::cli::MultiTargetRequest multi;
+            multi.inputPath          = options.inputPath;
+            multi.outputPath         = options.outputPath;
+            multi.backendName        = std::string(mj2x::cli::backendCliName(options.cBackendKind));
+            multi.backend            = options.cBackendKind;
+            multi.requestedCompiler  = options.cCompilerKind;
+            multi.targets            = options.targets;
+            multi.targetCc           = options.targetCc;
+            multi.pipeMode           = options.compileMode == mj2x::cli::CompileMode::Pipe;
+            multi.sourcePath         = nativeOutputPath;
+            multi.pipeSource         = nativeArtifact.content;
+            multi.crtRoot            = crtRoot;
+            multi.extraSources       = userIntrinsicConfig.sources;
+            multi.processTimeout     = processTimeout;
+            return mj2x::cli::runMultiTargetCompile(multi);
+        }
         if (options.buildDriver == NativeBuildDriver::Xmake) {
             mj2x::cli::XmakeBuildConfig buildConfig;
             buildConfig.projectDir        = options.xmakeProjectDir;

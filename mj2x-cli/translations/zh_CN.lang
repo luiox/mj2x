@@ -78,6 +78,16 @@ mj2x.cli.err.emit_cpp_write_failed=无法写入生成的 C++ 源码: {0}
 mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm 需要 LLVM IR 后端源码产物。
 mj2x.cli.err.compile_crt_required={0} --compile 需要 mj2x-rt 源码包;请设置 MJ2X_CRT_DIR 或使用 --generate-xmake。
 mj2x.cli.err.pipe_c99_only=--compile-mode pipe 仅支持 C99 native 源码产物。
+mj2x.cli.err.targets_requires_compile=--targets 需要 --compile（多目标是原生库产出模式）。
+mj2x.cli.err.targets_no_xmake=--targets 不支持 xmake 构建驱动（生成工程面向宿主）；请用单目标 --compile 或直接 C 编译器驱动。
+mj2x.cli.err.targets_no_jar=--targets 暂不支持 jar 嵌入（多 ABI jar 嵌入为后续项）；jar 输出请用单目标 --compile。
+mj2x.cli.err.targets_no_native_dir=--targets 不支持 --emit-native-dir。
+mj2x.cli.err.targets_c99_only=--targets 当前仅支持 C99 原生后端（regc、vmc4）；stackc（C++17 源）与 llvm 暂不支持。
+mj2x.cli.err.targets_unknown_abi=未知目标 ABI '{0}'（合法值：{1}）。
+mj2x.cli.err.targets_duplicate=目标 ABI 重复：'{0}'。
+mj2x.cli.err.targets_cc_format=--target-cc 条目格式错误：'{0}'（应为 <abi>=<路径>）。
+mj2x.cli.err.targets_cc_duplicate=--target-cc 对 ABI '{0}' 重复配置。
+mj2x.cli.err.targets_cc_unrequested=--target-cc 引用了未出现在 --targets 中的 ABI '{0}'。
 mj2x.cli.err.jar_rewrite_failed=无法重写输出 JAR: {0}
 
 # ---- 配置文件加载(config_file.cpp) ----
@@ -124,6 +134,8 @@ mj2x.param.compile.c_compiler.desc=C 编译器或构建驱动（xmake 为构建�
 mj2x.param.compile.enabled.desc=把生成的 C/C++ 源码编译为 native library（位于 --output 旁）
 mj2x.param.compile.generate_cmake.desc=生成独立 CMake native 工程目录
 mj2x.param.compile.generate_xmake.desc=生成独立 xmake native 工程目录（推荐；配合 --compile 一键出 DLL/SO）
+mj2x.param.compile.targets.desc=多目标产物（issue #11）：逗号分隔 ABI 清单（windows-x64、linux-x64、linux-aarch64、android-arm64）；对生成的 native 源逐 ABI 编译到 <输出目录>/<abi>/<库名>，并写 <stem>.targets.json manifest 记录每个 ABI 的 built/skipped/failed 与原因；未配置编译器的 ABI 记 skipped 并明确报告（不静默失败）；仅当全部目标 built 才退出 0；要求 --compile；v1 支持 regc/vmc4 + 直接驱动（xmake/llvm/stackc/jar 嵌入 fail-closed 拒绝）
+mj2x.param.compile.target_cc.desc=按 ABI 显式交叉工具链（issue #11 方案 a）：<abi>=<编译器路径>（如 --target-cc linux-x64=C:/zig/zig.exe）；可执行文件名决定种类（cl/zig/gcc/clang）；zig 自动带 -target <三元组>；无条目的目标仅宿主 ABI 回落自动探测，其余记 skipped
 mj2x.param.compile.llvm_tool.desc=LLVM IR 编译路径
 mj2x.param.compile.mode.desc=native 编译输入模式
 mj2x.param.compile.timeout.desc=native 编译外部进程墙钟超时（秒，默认 900，0 = 不限时；对标 jvmtp compiler.timeout。每次外呼——编译器/link/llc/xmake/加壳钩子——独立计时，超时整树终止并以非 0 退出，防卡死编译器无限占用资源）

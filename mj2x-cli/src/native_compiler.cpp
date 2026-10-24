@@ -18,6 +18,7 @@ std::FILE* const kStderrStream = stderr;
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -305,7 +306,8 @@ std::filesystem::path nativeLibraryPath(const std::string& outputPath)
     return dir / (output.stem().string() + ext);
 }
 
-bool jniIncludePaths(std::vector<std::filesystem::path>& includes)
+bool jniIncludePaths(std::vector<std::filesystem::path>& includes,
+                     const char* platformOverride = nullptr)
 {
     jdk_finder::FindOptions opts;
     opts.requireJniHeader = true;
@@ -315,7 +317,15 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes)
         return false;
     }
     includes.push_back(jdk.jdkInclude);
-    includes.push_back(jdk.jdkIncludePlat);
+    if (platformOverride == nullptr) {
+        includes.push_back(jdk.jdkIncludePlat);
+    }
+    else {
+        // 交叉目标（issue #11）：jni_md.h 按目标 ABI 的平台子目录取
+        // （win32 的 jlong 是 long long，linux 是 long——交叉编译必须用目标的）。
+        // jdkInclude 本身就是 <jdk>/include 目录，平台子目录是其直接子目录。
+        includes.push_back(jdk.jdkInclude / platformOverride);
+    }
     return true;
 }
 
@@ -519,13 +529,22 @@ int compileMsvcSourceFromTemporaryFile(std::string_view                         
     command.arg("/nologo").arg("/LD").arg("/TC").arg("/utf-8");
     appendRtBackendDefine(command, true, backend);
     for (const auto& include : includes) command.arg("/I" + include.string());
-    std::filesystem::path objectDir = libraryPath.parent_path();
-    if (objectDir.empty()) objectDir = ".";
+    // 中间件（.obj/.lib/.exp）走 scoped 临时目录：产物目录只留 .dll（多目标
+    // 的 <abi>/ 是产品布局，不收编译中间件）。
+    std::filesystem::path objectParent = libraryPath.parent_path();
+    if (objectParent.empty()) objectParent = ".";
+    ScopedTemporaryDirectory objectDirectory;
+    if (!objectDirectory.create(objectParent, ".mj2x-obj-")) {
+        CA_LOGT_ERROR("compile", "cannot create temporary MSVC object directory.\n");
+        return 1;
+    }
+    std::filesystem::path objectDir = objectDirectory.path();
     objectDir /= "";
     command.arg("/Fo" + objectDir.string());
     command.arg(sourceFile.path().string());
     for (const auto& source : sources) command.arg(source.string());
     command.arg("/Fe" + libraryPath.string());
+    command.arg("/link").arg("/IMPLIB:" + (objectDirectory.path() / "mj2x_native.lib").string());
     mergeProcessEnvironment(command, environment);
     command.stdout(ca::process::Stdio::piped()).stderr(ca::process::Stdio::piped());
 
@@ -547,6 +566,185 @@ int compileMsvcSourceFromTemporaryFile(std::string_view                         
     return 0;
 }
 #endif
+
+/// 多目标按 ABI 编译的共享实现（issue #11）：file 模式给 sourcePath（pipeSource
+/// 为空）、pipe 模式给 pipeSource（sourcePath 忽略）。编译器解析（显式路径 >
+/// PATH 探测）、JNI 平台子目录、shared/PIC/链接 flag、zig -target 全部由
+/// target ABI 驱动，而非宿主宏。
+int compileForTargetImpl(const std::string& sourcePath, const std::string* pipeSource,
+                         const CompileTargetSpec& target, CEmitterBackend backend,
+                         CCompilerKind requestedCompiler, const std::filesystem::path& crtRoot,
+                         const std::vector<std::string>& extraSources, ProcessTimeout timeout)
+{
+    const TargetAbiInfo& info = targetAbiInfo(target.abi);
+
+    CCompilerKind compiler = CCompilerKind::Auto;
+    std::string   executable;
+    if (!target.compilerPath.empty()) {
+        if (!inferCompilerKindFromPath(std::filesystem::path(target.compilerPath), compiler)) {
+            CA_LOGT_ERROR("compile",
+                          "cannot infer compiler kind from '{}' (expected a cl/zig/gcc/clang "
+                          "executable name).\n",
+                          target.compilerPath.c_str());
+            return 1;
+        }
+        executable = target.compilerPath;
+    }
+    else {
+        if (!detectCompiler(requestedCompiler, compiler)) {
+            if (requestedCompiler == CCompilerKind::Auto) {
+                CA_LOGT_ERROR("compile", "no supported C compiler found on PATH.\n");
+            }
+            else {
+                CA_LOGT_ERROR("compile", "C compiler '{}' not found on PATH.\n",
+                              compilerExecutable(requestedCompiler));
+            }
+            return 1;
+        }
+        executable = compilerExecutable(compiler);
+    }
+
+    if (compiler == CCompilerKind::Msvc) {
+#if defined(_WIN32)
+        if (target.abi != TargetAbi::WindowsX64) {
+            CA_LOGT_ERROR("compile", "MSVC can only target windows-x64 (got {}); use a "
+                                     "zig/gcc cross toolchain via --target-cc.\n",
+                          info.id);
+            return 1;
+        }
+#else
+        (void)info;
+        CA_LOGT_ERROR("compile", "MSVC is only supported on Windows hosts; use a zig/gcc "
+                                 "cross toolchain via --target-cc for cross targets.\n");
+        return 1;
+#endif
+    }
+
+    std::vector<std::filesystem::path> includes;
+    if (!jniIncludePaths(includes, info.jniPlatform)) return 1;
+
+    std::vector<std::filesystem::path> crtSources;
+    if (!crtRoot.empty() && !addCrtSources(crtRoot, includes, crtSources, backend)) return 1;
+    for (const auto& s : extraSources) crtSources.push_back(std::filesystem::path(s));
+
+    const std::filesystem::path libraryPath = target.libraryPath;
+    std::error_code             ec;
+    std::filesystem::create_directories(libraryPath.parent_path(), ec);
+    ec.clear();
+    std::filesystem::remove(libraryPath, ec);
+    ec.clear();
+
+    int result = 1;
+#ifdef _WIN32
+    if (compiler == CCompilerKind::Msvc) {
+        if (pipeSource != nullptr) {
+            printf("Compiling native library with MSVC temporary source fallback: %s\n",
+                   libraryPath.string().c_str());
+            result = compileMsvcSourceFromTemporaryFile(*pipeSource, libraryPath, includes,
+                                                        crtSources, backend, timeout);
+        }
+        else {
+            ProcessEnvironment    environment;
+            std::filesystem::path compilerPath;
+            if (!loadMsvcEnvironment(environment, compilerPath, timeout)) return 1;
+            // 中间件走 scoped 临时目录（同 pipe 形态：产物目录只留 .dll）。
+            std::filesystem::path objectParent = libraryPath.parent_path();
+            if (objectParent.empty()) objectParent = ".";
+            ScopedTemporaryDirectory objectDirectory;
+            if (!objectDirectory.create(objectParent, ".mj2x-obj-")) {
+                CA_LOGT_ERROR("compile", "cannot create temporary MSVC object directory.\n");
+                return 1;
+            }
+            ca::process::Command command(compilerPath.string());
+            command.arg("/nologo").arg("/LD").arg("/TC").arg("/utf-8");
+            appendRtBackendDefine(command, true, backend);
+            for (const auto& include : includes) command.arg("/I" + include.string());
+            std::filesystem::path objectDir = objectDirectory.path();
+            objectDir /= "";
+            command.arg("/Fo" + objectDir.string());
+            command.arg(std::filesystem::path(sourcePath).string());
+            command.arg("/Fe" + libraryPath.string());
+            command.arg("/link").arg(
+                "/IMPLIB:" + (objectDirectory.path() / "mj2x_native.lib").string());
+            mergeProcessEnvironment(command, environment);
+            printf("Compiling native library: %s\n", libraryPath.string().c_str());
+            result = runCompilerCommand(command, "MSVC", timeout);
+        }
+    }
+    else
+#endif
+    {
+        // 目标 ABI 决定 flag 面：windows-gnu 目标不要 -fPIC/-pthread/-lm；
+        // linux/android 目标与宿主 POSIX 形态一致。
+        ca::process::Command command(executable);
+        if (compiler == CCompilerKind::Zig) {
+            command.arg("cc");
+            command.arg("-target").arg(info.zigTriple);
+        }
+        command.arg("-shared");
+        appendRtBackendDefine(command, false, backend);
+        const bool posixTarget = (target.abi != TargetAbi::WindowsX64);
+        if (posixTarget) command.arg("-fPIC").arg("-pthread");
+        for (const auto& include : includes) command.arg("-I" + include.string());
+        command.arg("-o").arg(libraryPath.string());
+        if (pipeSource != nullptr) {
+            for (const auto& source : crtSources) command.arg(source.string());
+            command.arg("-x").arg("c").arg("-");
+            command.stdin(ca::process::Stdio::piped())
+                .stdout(ca::process::Stdio::piped())
+                .stderr(ca::process::Stdio::piped());
+            printf("Compiling native library from stdin: %s\n", libraryPath.string().c_str());
+            auto spawned = command.spawn();
+            if (spawned.is_err()) {
+                CA_LOGT_ERROR("compile", "cannot start C compiler: {}\n",
+                              spawned.unwrap_err().to_string().c_str());
+                return 1;
+            }
+            auto child = std::move(spawned).unwrap();
+            auto input = child.take_stdin();
+            if (!input.has_value()) {
+                child.kill();
+                child.wait();
+                CA_LOGT_ERROR("compile", "C compiler stdin pipe is unavailable.\n");
+                return 1;
+            }
+            // stdin 写入放独立线程（与宿主 pipe 形态同契约：wait 并发排空
+            // stdout/stderr，同步 write_all 在大源码下双向死锁）。
+            spawnStdinWriter(std::move(*input), *pipeSource);
+            ca::process::Output output;
+            if (!waitChildWithTimeout(child, "C compiler", timeout, output)) return 1;
+            writeProcessOutput(output);
+            if (!output.status.success()) {
+                CA_LOGT_ERROR("compile", "C compiler failed with exit code {}.\n",
+                              output.status.code);
+                result = 1;
+            }
+            else {
+                result = 0;
+            }
+        }
+        else {
+            command.arg(std::filesystem::path(sourcePath).string());
+            if (posixTarget) command.arg("-lm");
+            printf("Compiling native library: %s\n", libraryPath.string().c_str());
+            result = runCompilerCommand(command, executable.c_str(), timeout);
+        }
+    }
+
+    if (result != 0) {
+        std::filesystem::remove(libraryPath, ec);
+        return 1;
+    }
+    if (!std::filesystem::is_regular_file(libraryPath, ec) ||
+        std::filesystem::file_size(libraryPath, ec) == 0) {
+        std::filesystem::remove(libraryPath, ec);
+        CA_LOGT_ERROR("compile", "compiler succeeded without a native library: {}\n",
+                      libraryPath.string().c_str());
+        return 1;
+    }
+    printf("Native library written: %s\n", libraryPath.string().c_str());
+    return 0;
+}
 
 }   // namespace
 
@@ -605,6 +803,115 @@ bool parseLlvmToolName(const std::string& name, LlvmTool& tool)
 std::filesystem::path nativeLibraryPathForOutput(const std::string& outputPath)
 {
     return nativeLibraryPath(outputPath);
+}
+
+// ===========================================================================
+// 多目标 ABI 注册表（issue #11，--targets）。宿主 ABI 由编译期平台宏推导；
+// 交叉目标经 --target-cc 显式工具链（issue 方案 (a)），zig 恒带 -target 三元组。
+// ===========================================================================
+
+bool parseTargetAbi(const std::string& id, TargetAbi& out)
+{
+    if (id == "windows-x64") { out = TargetAbi::WindowsX64; return true; }
+    if (id == "linux-x64") { out = TargetAbi::LinuxX64; return true; }
+    if (id == "linux-aarch64") { out = TargetAbi::LinuxAarch64; return true; }
+    if (id == "android-arm64") { out = TargetAbi::AndroidArm64; return true; }
+    return false;
+}
+
+const TargetAbiInfo& targetAbiInfo(TargetAbi abi)
+{
+    static const TargetAbiInfo kRegistry[] = {
+        {"windows-x64", ".dll", "win32", "x86_64-windows-gnu"},
+        {"linux-x64", ".so", "linux", "x86_64-linux-gnu"},
+        {"linux-aarch64", ".so", "linux", "aarch64-linux-gnu"},
+        {"android-arm64", ".so", "linux", "aarch64-linux-android"},
+    };
+    return kRegistry[static_cast<size_t>(abi)];
+}
+
+std::string targetAbiIdList()
+{
+    std::string out;
+    for (const TargetAbi v :
+         {TargetAbi::WindowsX64, TargetAbi::LinuxX64, TargetAbi::LinuxAarch64,
+          TargetAbi::AndroidArm64}) {
+        if (!out.empty()) out += ", ";
+        out += targetAbiInfo(v).id;
+    }
+    return out;
+}
+
+TargetAbi hostTargetAbi()
+{
+#if defined(_WIN32)
+    return TargetAbi::WindowsX64;
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return TargetAbi::LinuxAarch64;   // darwin-arm64 不在 v1 注册表；按 arm64 归 linux 档
+#else
+    return TargetAbi::LinuxX64;
+#endif
+}
+
+bool inferCompilerKindFromPath(const std::filesystem::path& executable, CCompilerKind& out)
+{
+    const std::string name = executable.filename().string();
+    const std::string lower = [=] {
+        std::string s = name;
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    }();
+    if (lower.rfind("cl", 0) == 0) { out = CCompilerKind::Msvc; return true; }
+    if (lower.rfind("zig", 0) == 0) { out = CCompilerKind::Zig; return true; }
+    if (lower.find("clang") != std::string::npos) { out = CCompilerKind::Clang; return true; }
+    if (lower.find("gcc") != std::string::npos || lower.find("g++") != std::string::npos ||
+        lower == "cc") {
+        out = CCompilerKind::Gcc;
+        return true;
+    }
+    return false;
+}
+
+int compileCSourceForTarget(const std::string& cOutputPath, const CompileTargetSpec& target,
+                            CEmitterBackend backend, CCompilerKind requestedCompiler,
+                            const std::filesystem::path& crtRoot,
+                            const std::vector<std::string>& extraSources, ProcessTimeout timeout)
+{
+    return compileForTargetImpl(cOutputPath, nullptr, target, backend, requestedCompiler, crtRoot,
+                                extraSources, timeout);
+}
+
+bool probeHostCompiler(CCompilerKind requested)
+{
+    CCompilerKind detected = CCompilerKind::Auto;
+    return detectCompiler(requested, detected);
+}
+
+std::string_view compilerKindName(CCompilerKind kind)
+{
+    switch (kind) {
+    case CCompilerKind::Msvc: return "msvc";
+    case CCompilerKind::Gcc: return "gcc";
+    case CCompilerKind::Clang: return "clang";
+    case CCompilerKind::Zig: return "zig";
+    case CCompilerKind::Auto: break;
+    }
+    return {};
+}
+
+int compileCSourceFromPipeForTarget(std::string_view cSource, const CompileTargetSpec& target,
+                                    CEmitterBackend backend, CCompilerKind requestedCompiler,
+                                    const std::filesystem::path& crtRoot,
+                                    const std::vector<std::string>& extraSources,
+                                    ProcessTimeout timeout)
+{
+    if (cSource.empty()) {
+        CA_LOGT_ERROR("compile", "generated C source is empty.\n");
+        return 1;
+    }
+    return compileForTargetImpl({}, &std::string{cSource.begin(), cSource.end()}, target, backend,
+                                requestedCompiler, crtRoot, extraSources, timeout);
 }
 
 /// @brief 把内嵌 mj2x-rt common(rt_protect)源写入临时目录；返回 .c 路径（空 = 失败）。

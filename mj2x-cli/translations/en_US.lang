@@ -76,6 +76,16 @@ mj2x.cli.err.emit_cpp_write_failed=cannot write emitted C++ source: {0}
 mj2x.cli.err.emit_llvm_needs_artifact=--emit-llvm requires an LLVM IR backend source artifact.
 mj2x.cli.err.compile_crt_required={0} --compile requires an mj2x-rt source pack; set MJ2X_CRT_DIR or use --generate-xmake.
 mj2x.cli.err.pipe_c99_only=--compile-mode pipe only supports C99 native source artifacts.
+mj2x.cli.err.targets_requires_compile=--targets requires --compile (multi-target is a native-library production mode).
+mj2x.cli.err.targets_no_xmake=--targets is not supported with the xmake build driver (the generated project targets the host); use single-target --compile or a direct C compiler driver.
+mj2x.cli.err.targets_no_jar=--targets does not support jar embedding yet (multi-ABI jar embedding is a planned follow-up); use single-target --compile for jar outputs.
+mj2x.cli.err.targets_no_native_dir=--targets is not supported with --emit-native-dir.
+mj2x.cli.err.targets_c99_only=--targets currently supports C99 native backends (regc, vmc4) only; stackc (C++17 source) and llvm are not supported yet.
+mj2x.cli.err.targets_unknown_abi=unknown target ABI '{0}' (valid: {1}).
+mj2x.cli.err.targets_duplicate=duplicate target ABI '{0}'.
+mj2x.cli.err.targets_cc_format=malformed --target-cc entry '{0}' (expected <abi>=<path>).
+mj2x.cli.err.targets_cc_duplicate=duplicate --target-cc entry for ABI '{0}'.
+mj2x.cli.err.targets_cc_unrequested=--target-cc references ABI '{0}' which is not listed in --targets.
 mj2x.cli.err.jar_rewrite_failed=cannot rewrite output JAR: {0}
 
 # ---- config file loading (config_file.cpp) ----
@@ -153,6 +163,8 @@ mj2x.param.compile.timeout.desc=Wall-clock timeout for native compilation extern
 mj2x.param.compile.llvm_tool.desc=LLVM IR compilation path
 mj2x.param.compile.generate_cmake.desc=Generate a standalone CMake native project directory
 mj2x.param.compile.generate_xmake.desc=Generate a standalone xmake native project directory (recommended; with --compile produces a DLL/SO in one step)
+mj2x.param.compile.targets.desc=Multi-target production (issue #11): comma-separated ABI list (windows-x64, linux-x64, linux-aarch64, android-arm64); compiles the generated native source once per ABI into <output dir>/<abi>/<lib> and writes a <stem>.targets.json manifest recording built/skipped/failed per ABI with reasons; skipped ABIs (no compiler configured) are reported, never silent; exit 0 only when every requested ABI is built; requires --compile; v1 supports regc/vmc4 with the direct drivers (xmake/llvm/stackc/jar embedding are rejected fail-closed)
+mj2x.param.compile.target_cc.desc=Explicit cross toolchain per ABI (issue #11 option a): <abi>=<compiler path> entries (e.g. --target-cc linux-x64=C:/zig/zig.exe); the executable name determines the kind (cl/zig/gcc/clang); zig gets -target <triple> automatically; targets without an entry fall back to host auto-detection only for the host ABI and are skipped otherwise
 mj2x.param.stackc.exception_check.desc=StackC pending-exception check density (lite keeps only handler-boundary checks)
 mj2x.param.regc.trace_calls.desc=RegC: emit runtime call logs ([CALL]/[DEEP] to stderr, for troubleshooting)
 mj2x.param.regc.direct_calls.desc=RegC/LLVM: native-to-native direct C call tier (off = JNI everywhere, JVM stack frames intact; intra-class = same-class calls only, stack distortion bounded to a class; all = every deterministic dispatch, full stack-observation distortion; see issue #814). The old boolean flag is equivalent to all

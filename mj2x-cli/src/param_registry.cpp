@@ -457,6 +457,8 @@ DEF_BOOL(compileNative, "--compile", "compile")
 DEF_STR(cmakeProjectDir, "--generate-cmake", "generate_cmake")
 DEF_STR(xmakeProjectDir, "--generate-xmake", "generate_xmake")
 DEF_INT(nativeTimeoutSec, "--native-timeout", "native_timeout", 0, 0)
+DEF_STR_LIST(targets, "--targets", "targets")
+DEF_STR_LIST(targetCc, "--target-cc", "target_cc")
 
 const ParamDef kBaseParamsBefore[] = {
     // global
@@ -491,6 +493,8 @@ const ParamDef kBaseParamsBefore[] = {
 #endif
     PARAM("compile.generate_cmake", "--generate-cmake", "generate_cmake", ParamType::String, nullptr, 0, 0, "", "compile", "", cli_cmakeProjectDir, json_cmakeProjectDir),
     PARAM("compile.generate_xmake", "--generate-xmake", "generate_xmake", ParamType::String, nullptr, 0, 0, "", "compile", "", cli_xmakeProjectDir, json_xmakeProjectDir),
+    PARAM("compile.targets", "--targets", "targets", ParamType::StringList, nullptr, 0, 0, "", "compile", "", cli_targets, json_targets),
+    PARAM("compile.target_cc", "--target-cc", "target_cc", ParamType::StringList, nullptr, 0, 0, "", "compile", "", cli_targetCc, json_targetCc),
 };
 
 // strings 及之后（compile 段与 strings 段之间为各后端参数段）
