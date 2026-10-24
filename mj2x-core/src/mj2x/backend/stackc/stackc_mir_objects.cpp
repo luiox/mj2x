@@ -425,7 +425,10 @@ void StackCBackend::Impl::emitCheckCast(const MIRCheckCast* node, codegen::CSour
 
 void StackCBackend::Impl::emitInstanceOf(const MIRInstanceOf* node, codegen::CSourceStream& out)
 {
-    out.appendLineStart("stack[sp].i = (*env)->IsInstanceOf(env, stack[sp].l, ")
+    // null instanceof T → false（JLS 15.20.2）。JNI IsInstanceOf(NULL, ·) 返回
+    // JNI_TRUE，必须前置判空短路（与 emitCheckCast 的 null 直通同一契约）——
+    // 否则 null 值命中任意 instanceof 分支（java_corpus/InstanceLifecycle 首曝）。
+    out.appendLineStart("stack[sp].i = stack[sp].l != NULL && (*env)->IsInstanceOf(env, stack[sp].l, ")
         .append(classExprForDescriptor(node->typeDesc.to_std_string())).append(");");
     out.newLine();
 }

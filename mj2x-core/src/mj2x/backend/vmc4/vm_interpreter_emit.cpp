@@ -211,6 +211,9 @@ const char* kHandlerCompareAlt =
 
 /// CONVERT: 数值宽窄/整浮转换（向零截断，JVM 语义）
 /// 浮点→整数用饱和 helper（NaN→0、超界→min/max），C 原生 cast 对 NaN/超界是 UB。
+/// from/to 是编码器的**精确**类型标签（I16/I8/CHAR 仅 Convert 使用）：int 窄化
+/// （i2s/i2b/i2c）在计算面都是 I32，坍缩会退化成恒等——handler 据精确标签做
+/// 符号/零扩展（java_corpus/BigIntMini vmc4 首曝）。
 const char* kHandlerConvert =
     "            unsigned char from = code[pc++];\n"
     "            unsigned char to = code[pc++];\n"
@@ -221,7 +224,10 @@ const char* kHandlerConvert =
     "                if (to == 0) regs[dest].i = (int32_t)v;\n"
     "                else if (to == 1) regs[dest].i = v;\n"
     "                else if (to == 2) regs[dest].f = (float)v;\n"
-    "                else regs[dest].f = (double)v;\n"
+    "                else if (to == 3) regs[dest].f = (double)v;\n"
+    "                else if (to == 5) regs[dest].i = (int16_t)(v & 0xFFFF);\n"
+    "                else if (to == 6) regs[dest].i = (int8_t)(v & 0xFF);\n"
+    "                else if (to == 7) regs[dest].i = (uint16_t)(v & 0xFFFF);\n"
     "            } else {\n"
     "                double v = regs[src].f;\n"
     "                if (to == 0) regs[dest].i = mj2x_vm_f2i32(v);\n"

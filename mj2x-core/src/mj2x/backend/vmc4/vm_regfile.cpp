@@ -9,6 +9,8 @@
 #include "mj2x/mir/register_ir/reg_value.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -403,6 +405,12 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
     }
     out.spillCount = spillNext - out.spillBase;
     out.highWater  = spillNext;
+    if (std::getenv("MJ2X_REGFILE_DEBUG") != nullptr) {
+        std::fprintf(stderr, "[regfile] numInputs=%u poolTop=%u spillBase=%u spillCount=%u\n",
+                     out.numInputs, out.poolTop, out.spillBase, out.spillCount);
+        for (const auto& kv : out.vmRegOf)
+            std::fprintf(stderr, "[regfile] id=%u -> slot=%u\n", kv.first, kv.second);
+    }
     return true;
 }
 

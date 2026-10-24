@@ -149,6 +149,14 @@ enum class VmType : uint8_t
     F32 = 2,
     F64 = 3,
     REF = 4,   ///< 对象引用（slot.ref 承载 jobject）
+
+    // --- Convert 专用精确标签（issue：int 窄化语义）---
+    // 仅出现在 Convert 指令的 from/to 操作数里（编码器 encodeConvert 用精确
+    // 映射，其余指令仍走 toVmType 的计算坍缩）。槽位布局仍是 I32——这三个
+    // 标签只告诉 handler 做符号/零扩展，不改变 slot 的承载形态。
+    I16   = 5,   ///< i2s：截断到 16 位并符号扩展
+    I8    = 6,   ///< i2b：截断到 8 位并符号扩展
+    CHAR  = 7,   ///< i2c：截断到 16 位并零扩展
 };
 
 /// @brief 方法调用形态（对应 JVM invoke 指令的 4 种 dispatch）。
