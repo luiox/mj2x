@@ -1528,6 +1528,38 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
             fs.push(exceptionArg);
         }
 
+        // Exception-table entries are implicit CFG edges. The handler's local
+        // arguments must be the values live when ENTERING the protected block:
+        // an exception can fire at any instruction inside the block, before the
+        // block's own re-definitions complete (e.g. `state = state + 10 / 0` —
+        // the div throws before the add writes state). Capturing after the
+        // whole block lowers would reference not-yet-defined SSA values, which
+        // read as garbage/stale slots in every register backend (stackc masks
+        // it via operand-stack carry-over). The synthetic exception stack
+        // argument is assigned by the backends from the pending JNI exception
+        // and is therefore omitted. Residual imprecision (documented): a local
+        // reassigned mid-block and read by the handler after a LATER throwing
+        // instruction still sees the entry value — javac shapes that matter
+        // (write folded into the throwing expression) are covered.
+        for (auto& region : fn.exceptionRegions) {
+            if (std::find(region.protectedBlocks.begin(), region.protectedBlocks.end(), sb) ==
+                region.protectedBlocks.end())
+                continue;
+
+            SSAExceptionEdge edge;
+            edge.protectedBlock = sb;
+            for (auto& arg : region.handler->args) {
+                if (&arg == region.exceptionValue) continue;
+                SSAValue* value = nullptr;
+                if (arg.slot >= 0 && arg.slot < static_cast<int>(fs.locals.size())) {
+                    value = fs.locals[arg.slot];
+                }
+                if (!value) value = fn.newOpaque(arg.type, "undef_exception_local");
+                edge.handlerArgs.push_back(value);
+            }
+            region.edges.push_back(std::move(edge));
+        }
+
         // 翻译块内节点
         for (auto& node : lb->nodes) {
             // lowering 上下文：所有 per-kind lower 函数通过它读写 SSA 输出与栈模拟。
@@ -1668,29 +1700,6 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
             SSAJumpTerminator jt;
             jt.target      = buildSuccessor(nextSb, fs, fn);
             sb->terminator = std::move(jt);
-        }
-
-        // Exception-table entries are implicit CFG edges. Preserve the
-        // handler's local arguments using the frame that is live at this
-        // protected block; the synthetic exception stack argument is assigned
-        // by RegC from the pending JNI exception and is therefore omitted.
-        for (auto& region : fn.exceptionRegions) {
-            if (std::find(region.protectedBlocks.begin(), region.protectedBlocks.end(), sb) ==
-                region.protectedBlocks.end())
-                continue;
-
-            SSAExceptionEdge edge;
-            edge.protectedBlock = sb;
-            for (auto& arg : region.handler->args) {
-                if (&arg == region.exceptionValue) continue;
-                SSAValue* value = nullptr;
-                if (arg.slot >= 0 && arg.slot < static_cast<int>(fs.locals.size())) {
-                    value = fs.locals[arg.slot];
-                }
-                if (!value) value = fn.newOpaque(arg.type, "undef_exception_local");
-                edge.handlerArgs.push_back(value);
-            }
-            region.edges.push_back(std::move(edge));
         }
     }
 

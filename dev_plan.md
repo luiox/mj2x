@@ -143,13 +143,16 @@
    `NoClassDefFoundError: class lookup failed`（三后端一致；LambdasCapture
    首曝——捕获 + 静态方法引用 + 构造器引用 + 循环捕获组合，lambda_synth
    既有 E2E 未覆盖）。待根因：class lookup 的 owner 传递面。
-9. regc 引用值丢 null（**2026-10-24 二轮定位更新**）：最小复现
-   （test/tmp/nullbisect NullMin：`makeLongs` 返回 long[] + for-each）下
-   症状升级为 **JVM 崩溃**（AV in jvm.dll，`NullMin.main+0`，读地址
-   0xFFFFFFFFFFFFFFFF）；`--regc-no-inline` 同崩 → **排除内联器**；
-   main 生成体的静态调用缓存（`{"NullMin","makeLongs","(I)[J}",NULL,NULL}`
-   分派路径与 wrapper 早期生命周期为头号嫌疑（崩在方法入口 +0，-1 索引
-   特征）。StringsAndBoxing 的 "sb null" 同源待并入定位。
+9. regc 引用值丢 null（**2026-10-25 三轮：异常家族已修，残留收窄**）：
+    根因主修——ssa_builder 异常边 handlerArgs 在整块翻译完后取 fs.locals，
+    引用块内未完成定义的 SSA 值（`state = state + 10/0` 的 div 抛出时 add
+    未写）：三后端通用缺陷（stackc 靠操作数栈携带侥幸通过；vmc4 identity
+    靠上一迭代槽位残留巧合通过；regc 读未写变量 = 0/null——J-9 的 null
+    形态即此）。修复 = 捕获点移至块入口参数绑定后。ExceptionFlow 三格、
+    ExceptionEntryState（新增语料）三后端全绿。**残留**（数组返回 + for-each
+    形态，crash 而非 null）：最小复现 NullMin（test/tmp/nullbisect）JVM 崩溃
+    AV@main+0 读 -1，--regc-no-inline 同崩排除内联器；ArraysAllTypes /
+    StringsAndBoxing / LoopCarriedTable 三格 regc 仍记账。
 10. ~~regc LDC 字符串物化代理对~~ **已修（2026-10-24）**：常量池是标准 UTF-8
     而 NewStringUTF 按 modified UTF-8 解码——BMP 面（1/2/3 字节）两编码逐字节
     相同故历来正常，增补平面（4 字节）被逐字节拆解。修复：发射期
@@ -179,16 +182,17 @@
     resolveParallelOrder（贪心排序 + scratch 槽惰性预留破环），合成边与
     异常区域拷贝两面接线。SwLoop/BigSwitch/LoopCarriedTable(vmc4)/
     ArraysAllTypes(vmc4) 全复绿。
-14. **regfile × 异常区域拷贝细节（J-12 残留，未修）**：`--vmc4-regfile` 单开
-    下 ExceptionFlow 的 loop-exc=115≠100（差 15）；生成的异常分派拷贝出现
-    `regs[0] = regs[8]`（dest 落参数区/源落常量槽的形态）——异常区拷贝的
-    映射或 resolveParallelOrder 与解释器逐槽拷贝语义的对接待核。复现：
-    test/tmp/j12d（ExceptionFlow.java + regfile 8 单开）。
-15. **regfile × monitor 密集代码病态慢（未修）**：obf 档（super-ops+
-    fragment+regfile+shuffle）下 InnerClassesMonitor/vmc4 单格 42 分钟
-    （4GB JVM）——单开关二分未做，疑 regfile+fragment 组合在 monitor
-    intrinsic 循环的指令膨胀/活跃计算病态。plain 档正常。
-    两项修复后 obf 档重新加入 --vmc4-regfile。
+14. ~~**regfile × 异常区域拷贝细节（J-12 残留）**~~ **已修（2026-10-25）**：
+    双因修复——(a) 同一入口点的块参数区间穿透目标块（死参数与后续读参数
+    按真实区间不重叠而共享槽位，异常分派同点并行写入时后者覆盖前者，
+    Mini 首曝 regs[1]=regs[2];regs[1]=regs[9]）；(b) ssa_builder 异常边
+    入口快照（见 J-9，115≠100 的直接根因）。ExceptionFlow regfile 单开
+    与全语料复绿。
+15. ~~**regfile × monitor 密集代码病态慢**~~ **已消（2026-10-25，随 12/14
+    修复消失）**：InnerClassesMonitor 全组合（super-ops+fragment+regfile 8
+    +shuffle）单格从 42 分钟恢复至秒级且输出一致（病态慢是 12/14 缺陷的
+    副作用——异常分派拷贝错误致解释器异常路径病态循环）。obf 档 vmc4 列
+    已恢复全组合。
     `--vmc4-regfile` 在「256 项表由嵌套循环构建 + 溢出参与」形态下，线性扫描
     分配出越池/重叠的物理槽（分配 dump 实证：id 10 → 槽 8 = spillBase 越出池
     [1,8)；多 id 共享槽 1 的重叠区间），表现为数组 load 的 recv 指向错误对象、

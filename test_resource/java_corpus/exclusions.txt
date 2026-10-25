@@ -7,10 +7,16 @@
 
 # --- 2026-10-24 首轮分诊（java_corpus 首曝，待修后删行） ---
 
-# regc 引用值丢 null（J-9 家族）：循环内 StringBuilder append 链 + 数组
-# 增强 for——to_jstring 返回 null（原生所有者路径断裂）。与
-# StringsAndBoxing 的 sb null 同源（J-9）。
-LoopCarriedTable regc 引用值丢 null（J-9 家族：循环内 sb append 链）
+
+# regc 引用值丢 null/crash（J-9 残留家族）：静态方法返回数组 + for-each 消费
+# 形态（makeLongs/alloc+调用链）与 StringBuilder 原生所有者链。**异常家族已修**
+# （2026-10-25 ssa_builder 异常边入口快照——handlerArgs 引用块内未完成定义的
+# SSA 值，三后端通用缺陷，vmc4/regc 实证修复）；残留为数组返回 + 循环消费
+# 形态：JVM 崩溃 AV@main+0 读 -1（最小复现 test/tmp/nullbisect NullMin），
+# --regc-no-inline 同崩排除内联器。
+ArraysAllTypes regc 引用值丢失/crash（J-9 残留：数组返回+for-each）
+StringsAndBoxing regc 引用值丢失（J-9 残留：StringBuilder 原生所有者链）
+LoopCarriedTable regc 引用值丢失（J-9 残留：同 StringsAndBoxing 形态）
 
 # lambda/方法引用：运行时 NoClassDefFoundError: class lookup failed（三后端
 # 一致）——indy bootstrap 后的类查找面在「受保护类经 lambda bootstrap 反查自身」
@@ -20,10 +26,4 @@ LambdasCapture stackc lambda bootstrap 后类查找失败（class lookup failed�
 LambdasCapture regc lambda bootstrap 后类查找失败（class lookup failed）
 LambdasCapture vmc4 lambda bootstrap 后类查找失败（class lookup failed）
 
-# regc 引用值丢 null：返回 long[] 的方法调用点拿到 null（for-each 前无 NPE，
-# 输出 "long null"）；StringBuilder 局部变量 append 链后打印 "null"。
-# 共同形态：new + 方法返回值/多步引用传递。ArraysAllTypes 与 StringsAndBoxing
-# 互为印证，待根因定位。
-ArraysAllTypes regc 引用值丢失为 null（makeLongs 返回点）
-StringsAndBoxing regc 引用值丢失为 null（StringBuilder 局部链）
 

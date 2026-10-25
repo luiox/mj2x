@@ -395,7 +395,15 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
     // birth = 源块 terminator 位点（EntryDef.srcIdx 的 endPos）——边拷贝在源块
     // 结尾执行，参数槽位的占用从写入时刻起算；若取目标块起点，目标块复用该槽
     // 位的值会被边拷贝覆盖（java_corpus RfMin 首曝的第二半）。多入口取 min。
-    for (const auto& ed : entryDefList) noteBirth(ed.id, scans[ed.srcIdx].endPos);
+    // death = 穿透整个目标块：同一入口点的全部参数在同一程序点被（合成边拷贝
+    // 序列/异常分派）逐个写入——死参数（如 catch 中未使用的 i）与后续才读的
+    // 参数若按各自真实使用区间分配会共享槽位，第二个写覆盖第一个的值
+    // （java_corpus Mini 首曝：regs[1]=regs[2]; regs[1]=regs[9]）。参数区间
+    // live-through 目标块保证同块参数两两重叠 → 槽位互斥。
+    for (const auto& ed : entryDefList) {
+        noteBirth(ed.id, scans[ed.srcIdx].endPos);
+        noteDeath(ed.id, scans[ed.dst].endPos);
+    }
     // liveIn/liveOut 块跨度扩展：包络覆盖块内全部活位点（含乱序线性化与跨块携带）。
     for (size_t bi = 0; bi < blockCount; ++bi) {
         for (const uint32_t id : liveIn[bi]) noteBirth(id, scans[bi].startPos);
