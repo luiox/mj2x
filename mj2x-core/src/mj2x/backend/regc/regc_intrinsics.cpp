@@ -1209,6 +1209,25 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
     fallbackArgs.reserve(ins.args.size() + 1);
     if (decision.passContext) fallbackArgs.push_back("_mj2x_regc_current_context()");
     for (const auto& arg : ins.args) {
+        // 本地 helper（RegCLocalHelper）同样吃 jobject 形参：native 持有的
+        // StringBuilder/StringBuffer 寄存器 operandExpr 产出的是 owner 结构体
+        // 指针（栈地址）而非 jobject——直接透传 = 把栈指针当引用喂 JNI
+        // （java_corpus V7 首曝：String.valueOf(sb) → object_to_string(ctx,
+        // &native_owner_rN) → JVM 崩溃）。与通用调用路径（regc_flow.cpp）同
+        // 模式：mutable string 先物化成 jstring/jobject，其余 native 对象
+        // fail-closed 拒绝逃逸。
+        ca::str::Utf8String expression;
+        if (emitMaterializedStringBuilder(out, state, arg, expression)) {
+            fallbackArgs.push_back(expression.to_std_string());
+            continue;
+        }
+        if (nativeObjectFor(state, arg) != nullptr) {
+            decision.kind   = RegCIntrinsicDecisionKind::Unsupported;
+            decision.reason = "native object escaped through local helper " +
+                              ins.method.owner.to_std_string() + "." +
+                              ins.method.name.to_std_string();
+            return decision;
+        }
         fallbackArgs.push_back(operandExpr(arg).to_std_string());
     }
     out.appendLineStart();
