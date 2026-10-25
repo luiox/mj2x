@@ -116,16 +116,16 @@ std::string backendFlags(CorpusBackend backend)
     switch (backend) {
     case CorpusBackend::StackC: return "--backend stackc";
     case CorpusBackend::RegC:
-        // obf 档暂不含 --regc-computed-jumps：大 switch（250 case）形态下
-        // 跳转目标间接化有未修缺陷（dev_plan J-13，BigSwitch 首曝；修复后
-        // 重新加入）。
         return corpusTier() == "obf"
-                   ? "--backend regc --regc-obfuscate --regc-hide-constants"
+                   ? "--backend regc --regc-obfuscate --regc-computed-jumps --regc-hide-constants"
                    : "--backend regc";
     case CorpusBackend::Vmc4:
+        // obf 档暂不含 --vmc4-regfile：交换环修复后仍有两个未修面——
+        // 异常区域拷贝的分派细节（ExceptionFlow 差 15，dev_plan J-14）与
+        // monitor 密集代码的病态慢（InnerClassesMonitor 42min，J-15）。
+        // plain 档与 regfile 专项 E2E 全绿；两项修复后重新加入。
         return corpusTier() == "obf"
-                   ? "--backend vmc4 --vmc4-super-ops --vmc4-fragment --vmc4-regfile 8 "
-                     "--vmc4-shuffle-blocks"
+                   ? "--backend vmc4 --vmc4-super-ops --vmc4-fragment --vmc4-shuffle-blocks"
                    : "--backend vmc4";
     }
     return "--backend stackc";

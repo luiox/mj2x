@@ -187,6 +187,10 @@ bool toVmComparePred(SSAComparePredicate p, VmComparePred& out)
 }
 
 /// @brief 编码期上下文：常量池 + block 索引映射 + 寄存器计数。
+/// emitOpcode 前置声明：EncoderState::emitParallelCopies（成员）先于其定义使用。
+struct EncoderState;
+void emitOpcode(EncoderState& ctx, VmOpcode op, std::vector<uint8_t>& out);
+
 struct EncoderState
 {
     const RegFunction& fn;
@@ -254,6 +258,148 @@ struct EncoderState
     /// 全部寄存器位点走恒等映射（历史形态逐字节一致）。
     VmRegfilePlan regfilePlan;
     bool          regfileOn = false;
+
+    /// parallel-move scratch 槽（regfile 专用，惰性预留）：边拷贝构成交换环
+    /// （dest A = src B 且 dest B = src A）时顺序执行会互相覆盖——身份映射下
+    /// SSA id 互异不成环，regfile 槽位复用后才可能出现（java_corpus SwLoop
+    /// 首曝：回边 acc/i 互换，第二拷贝读到第一拷贝的写入）。惰性取当前
+    /// maxReg 并 +1，与常量槽互不重叠（一切后续分配只能落在其上）。
+    uint16_t parallelScratch   = 0;
+    bool     parallelScratchOn = false;
+
+    /// @brief 惰性预留 parallel-move scratch 槽（见 parallelScratch 注释）。
+    uint16_t ensureParallelScratch()
+    {
+        if (!parallelScratchOn) {
+            parallelScratch   = static_cast<uint16_t>(maxReg);
+            maxReg            = maxReg + 1;
+            parallelScratchOn = true;
+        }
+        return parallelScratch;
+    }
+
+    /// @brief 并行拷贝序列的环破碎发射（parallel-move / phi 消除经典问题）。
+    ///
+    /// @details
+    /// 贪心：反复发射「dest 不被任何剩余拷贝用作 src」的拷贝；卡住即成环——
+    /// 取环上一条 (d0←s0)，先发 Copy(scratch←s0)，把该拷贝改写为 (d0←scratch)
+    /// 后继续。拷贝列表 ≤ 4 项，O(n²) 足够。自环 (d←d) 跳过。
+    /// regfile 关闭时恒等映射下 SSA id 互异不成环，直接顺序发射（字节流与
+    /// 历史形态逐字节一致）。
+    void emitParallelCopies(std::vector<std::pair<uint16_t, uint16_t>>& pairs, VmProgram& prog,
+                            const std::vector<uint8_t>& types)
+    {
+        if (!regfileOn) {
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                if (pairs[i].first == pairs[i].second) continue;
+                emitOpcode(*this, VmOpcode::Copy, prog.bytecodes);
+                emitU8(prog.bytecodes, types[i]);
+                emitU16(prog.bytecodes, pairs[i].first);
+                emitU16(prog.bytecodes, pairs[i].second);
+            }
+            return;
+        }
+        std::vector<bool> done(pairs.size(), false);
+        size_t remaining  = pairs.size();
+        size_t guardCount = 0;
+        while (remaining > 0) {
+            bool progressed = false;
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                if (done[i]) continue;
+                if (pairs[i].first == pairs[i].second) {
+                    done[i] = true;
+                    --remaining;
+                    progressed = true;
+                    continue;
+                }
+                bool destUsedAsSrc = false;
+                for (size_t j = 0; j < pairs.size(); ++j) {
+                    if (done[j] || j == i) continue;
+                    if (pairs[j].second == pairs[i].first) {
+                        destUsedAsSrc = true;
+                        break;
+                    }
+                }
+                if (!destUsedAsSrc) {
+                    emitOpcode(*this, VmOpcode::Copy, prog.bytecodes);
+                    emitU8(prog.bytecodes, types[i]);
+                    emitU16(prog.bytecodes, pairs[i].first);
+                    emitU16(prog.bytecodes, pairs[i].second);
+                    done[i] = true;
+                    --remaining;
+                    progressed = true;
+                }
+            }
+            if (!progressed) {
+                // 环：破碎第一条未完成拷贝（经 scratch 中转后继续贪心）。
+                for (size_t i = 0; i < pairs.size(); ++i) {
+                    if (done[i]) continue;
+                    const uint16_t scratch = ensureParallelScratch();
+                    emitOpcode(*this, VmOpcode::Copy, prog.bytecodes);
+                    emitU8(prog.bytecodes, types[i]);
+                    emitU16(prog.bytecodes, scratch);
+                    emitU16(prog.bytecodes, pairs[i].second);
+                    pairs[i].second = scratch;
+                    progressed      = true;
+                    break;
+                }
+            }
+            if (!progressed) break;   // 防御：不可达（列表非空必有环或可发射项）
+            if (++guardCount > pairs.size() * pairs.size() + pairs.size() + 2) break;
+        }
+    }
+
+    /// @brief parallel-move 纯解析（不发射）：返回按依赖序排列、环已破碎的
+    /// (dest, src) 序列（异常区拷贝以数据形态入表、由生成 C 顺序执行——与
+    /// emitParallelCopies 同一算法的数组版）。
+    std::vector<std::pair<uint16_t, uint16_t>> resolveParallelOrder(
+        std::vector<std::pair<uint16_t, uint16_t>> pairs)
+    {
+        std::vector<std::pair<uint16_t, uint16_t>> out;
+        if (!regfileOn) return pairs;
+        std::vector<bool> done(pairs.size(), false);
+        size_t remaining  = pairs.size();
+        size_t guardCount = 0;
+        while (remaining > 0) {
+            bool progressed = false;
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                if (done[i]) continue;
+                if (pairs[i].first == pairs[i].second) {
+                    done[i] = true;
+                    --remaining;
+                    progressed = true;
+                    continue;
+                }
+                bool destUsedAsSrc = false;
+                for (size_t j = 0; j < pairs.size(); ++j) {
+                    if (done[j] || j == i) continue;
+                    if (pairs[j].second == pairs[i].first) {
+                        destUsedAsSrc = true;
+                        break;
+                    }
+                }
+                if (!destUsedAsSrc) {
+                    out.push_back(pairs[i]);
+                    done[i] = true;
+                    --remaining;
+                    progressed = true;
+                }
+            }
+            if (!progressed) {
+                for (size_t i = 0; i < pairs.size(); ++i) {
+                    if (done[i]) continue;
+                    const uint16_t scratch = ensureParallelScratch();
+                    out.emplace_back(scratch, pairs[i].second);
+                    pairs[i].second = scratch;
+                    progressed      = true;
+                    break;
+                }
+            }
+            if (!progressed) break;
+            if (++guardCount > pairs.size() * pairs.size() + pairs.size() + 2) break;
+        }
+        return out;
+    }
 
     /// @brief RegId → VM 槽位索引重映射（regfile 关闭 = 恒等）。
     ///
@@ -1090,6 +1236,8 @@ bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
 bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edge,
                        VmProgram& prog, std::string& reason)
 {
+    std::vector<std::pair<uint16_t, uint16_t>> pairs;
+    std::vector<uint8_t>                       types;
     for (const auto& copy : edge.copies) {
         VmType type;
         if (!toVmType(copy.dest.type, type)) {
@@ -1101,11 +1249,16 @@ bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edg
         uint16_t src;
         // 边拷贝的 undef 源（异常 handler 参数未定义）容忍为 NULL 引用。
         if (!ctx.resolveOperand(copy.source, src, reason, true)) return false;
-        emitOpcode(ctx, VmOpcode::Copy, prog.bytecodes);
-        emitU8(prog.bytecodes, static_cast<uint8_t>(type));
-        emitU16(prog.bytecodes, dest);
-        emitU16(prog.bytecodes, src);
+        if (std::getenv("MJ2X_VM_DISASM") != nullptr) {
+            std::fprintf(stderr, "[edge-copy] id%u -> slot%u (src slot%u, type %d)\n",
+                         copy.dest.id.value, dest, src, static_cast<int>(type));
+        }
+        pairs.emplace_back(dest, src);
+        types.push_back(static_cast<uint8_t>(type));
     }
+    // parallel-move 发射（环破碎）：regfile 槽位复用可使两条拷贝构成交换
+    // （dest A = src B 且 dest B = src A），顺序执行互相覆盖（SwLoop 首曝）。
+    ctx.emitParallelCopies(pairs, prog, types);
     const auto realIt = ctx.blockIndex.find(edge.realTarget);
     if (realIt == ctx.blockIndex.end()) {
         reason = "edge copy target block not indexed";
@@ -1954,9 +2107,13 @@ void encodeExceptionRegions(EncoderState& ctx, VmProgram& prog, std::string& rea
             entry.exceptionReg = excReg;
             entry.blockIdx     = blockIt->second;
             ctx.observeReg(excReg);
-            // 该块的边拷贝（edges 中 protectedBlock 匹配的项）。
+            // 该块的边拷贝（edges 中 protectedBlock 匹配的项）。异常分派时由
+            // 解释器生成代码**顺序执行**——与合成边同一 parallel-move 危险面：
+            // regfile 槽位复用可构成交换环（先用贪心排序 + scratch 破环解析）。
             for (const auto& edge : region.edges) {
                 if (edge.protectedBlock != protectedBlock) continue;
+                std::vector<std::pair<uint16_t, uint16_t>> pairs;
+                std::vector<uint8_t>                       copyTypes;
                 for (const auto& copy : edge.copies) {
                     uint16_t dest;
                     if (!ctx.mapDest(copy.dest, dest, reason)) return;
@@ -1964,7 +2121,17 @@ void encodeExceptionRegions(EncoderState& ctx, VmProgram& prog, std::string& rea
                     // 异常边拷贝的 undef 源（handler 参数在该帧未定义）容忍为 NULL。
                     if (!ctx.resolveOperand(copy.source, src, reason, true)) return;
                     ctx.observeReg(dest);
-                    entry.copies.emplace_back(dest, src);
+                    pairs.emplace_back(dest, src);
+                    copyTypes.push_back(0);   // 解释器异常路径整体槽拷贝，type 不参与
+                }
+                if (ctx.regfileOn) {
+                    // 解析后的 (dest, src) 序列直接入表（生成 C 顺序执行）。
+                    for (const auto& p : ctx.resolveParallelOrder(pairs)) {
+                        entry.copies.push_back(p);
+                    }
+                }
+                else {
+                    for (const auto& p : pairs) entry.copies.push_back(p);
                 }
                 break;
             }

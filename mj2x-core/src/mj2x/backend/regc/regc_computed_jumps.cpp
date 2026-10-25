@@ -63,17 +63,21 @@ bool emitComputedJumpDispatch(codegen::CSourceStream& out, RegCFunctionEmitState
                                           operandExpr(t.value).to_std_string(), keyVar));
         o.block([&](codegen::CSourceStream& p) {
             p.declare_var("int32_t", "_mj2x_cj_i", "0");
-            p.iff(ca::str::format_std("_mj2x_cj_i < {}", t.cases.size()),
-                  [&](codegen::CSourceStream& q) {
-                      q.iff(ca::str::format_std("{}[_mj2x_cj_i] == _mj2x_cj_probe", keys),
-                            [&](codegen::CSourceStream& r) {
-                                r.assign(idx, "_mj2x_cj_i");
-                                // 命中即跳出：把计数推到上界。
-                                r.assign("_mj2x_cj_i",
-                                         ca::str::format_std("{}", t.cases.size()));
-                            },
-                            [&](codegen::CSourceStream& r) { r.emitLine("_mj2x_cj_i += 1;"); });
-                  });
+            // 线性扫表必须是循环：iff 只查 keys[0] 一次，其余 case 全落 default
+            //（java_corpus BigSwitch 首曝——只有首个 case 与 default 命中）。
+            p.while_(ca::str::format_std("_mj2x_cj_i < {}", t.cases.size()),
+                     [&](codegen::CSourceStream& q) {
+                         q.iff(ca::str::format_std("{}[_mj2x_cj_i] == _mj2x_cj_probe", keys),
+                               [&](codegen::CSourceStream& r) {
+                                   r.assign(idx, "_mj2x_cj_i");
+                                   // 命中即跳出：把计数推到上界。
+                                   r.assign("_mj2x_cj_i",
+                                            ca::str::format_std("{}", t.cases.size()));
+                               },
+                               [&](codegen::CSourceStream& r) {
+                                   r.emitLine("_mj2x_cj_i += 1;");
+                               });
+                     });
         });
     });
 

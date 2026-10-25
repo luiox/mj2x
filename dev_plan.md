@@ -171,6 +171,24 @@
     E2E/单测全过 + RfMin 最小复现一致；obf 档 regfile 已重新加入。
     同形态在 **regc** 下仍有 J-9 家族缺陷（LoopCarriedTable probes 段
     sb null，已记账）。
+    **二段修复（2026-10-25，parallel-move 环破碎）**：块参数活性修复后
+    switch/循环形态仍错（SwLoop 最小复现：6-case switch + 循环 acc 冻结）。
+    真根因 = 边拷贝的**交换环**：regfile 槽位复用使回边拷贝构成
+    (slotA←slotB, slotB←slotA)，顺序执行互相覆盖（身份映射下 SSA id 互异
+    永不成环，故 regfile 关闭时无此面）。修复：emitParallelCopies /
+    resolveParallelOrder（贪心排序 + scratch 槽惰性预留破环），合成边与
+    异常区域拷贝两面接线。SwLoop/BigSwitch/LoopCarriedTable(vmc4)/
+    ArraysAllTypes(vmc4) 全复绿。
+14. **regfile × 异常区域拷贝细节（J-12 残留，未修）**：`--vmc4-regfile` 单开
+    下 ExceptionFlow 的 loop-exc=115≠100（差 15）；生成的异常分派拷贝出现
+    `regs[0] = regs[8]`（dest 落参数区/源落常量槽的形态）——异常区拷贝的
+    映射或 resolveParallelOrder 与解释器逐槽拷贝语义的对接待核。复现：
+    test/tmp/j12d（ExceptionFlow.java + regfile 8 单开）。
+15. **regfile × monitor 密集代码病态慢（未修）**：obf 档（super-ops+
+    fragment+regfile+shuffle）下 InnerClassesMonitor/vmc4 单格 42 分钟
+    （4GB JVM）——单开关二分未做，疑 regfile+fragment 组合在 monitor
+    intrinsic 循环的指令膨胀/活跃计算病态。plain 档正常。
+    两项修复后 obf 档重新加入 --vmc4-regfile。
     `--vmc4-regfile` 在「256 项表由嵌套循环构建 + 溢出参与」形态下，线性扫描
     分配出越池/重叠的物理槽（分配 dump 实证：id 10 → 槽 8 = spillBase 越出池
     [1,8)；多 id 共享槽 1 的重叠区间），表现为数组 load 的 recv 指向错误对象、
