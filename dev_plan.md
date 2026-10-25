@@ -161,7 +161,16 @@
     双例首曝）；vmc4 `i2s/i2b/i2c` 窄化退化为恒等（toVmType 坍缩使 Convert
     丢失精确类型，BigIntMini vmc4 首曝——VmType 增 I16/I8/CHAR Convert 专用
     标签 + handler 符号/零扩展）。
-12. **regfile 区间计算缺陷（#10 回归，PR #31 引入，未修）**：
+12. ~~**regfile 区间计算缺陷（#10 回归，PR #31 引入）**~~ **已修（2026-10-25）**：
+    根因 = 块参数（边拷贝 dest）对活性不动点不可见——定义在「边上」不在任何
+    块内，幻影回流通达方法入口（全值区间 [0,N]），且死块参数（零使用）的
+    边拷贝写入发生在方法末尾、覆盖已分配给其他活值的池槽。修复双段：
+    (a) liveOut 回流排除后继的 entryDefs（参数在定义边上死亡，不流入前驱）；
+    (b) 参数 birth 取源块 terminator 位点（边拷贝执行点），而非目标块起点
+    ——目标块复用槽位的值不再被边拷贝覆盖。vmc4 语料全格复绿 + regfile
+    E2E/单测全过 + RfMin 最小复现一致；obf 档 regfile 已重新加入。
+    同形态在 **regc** 下仍有 J-9 家族缺陷（LoopCarriedTable probes 段
+    sb null，已记账）。
     `--vmc4-regfile` 在「256 项表由嵌套循环构建 + 溢出参与」形态下，线性扫描
     分配出越池/重叠的物理槽（分配 dump 实证：id 10 → 槽 8 = spillBase 越出池
     [1,8)；多 id 共享槽 1 的重叠区间），表现为数组 load 的 recv 指向错误对象、

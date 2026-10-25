@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <unordered_map>
@@ -2161,6 +2163,19 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     prog->classLiterals  = std::move(ctx.classLiterals);
 
     prog->numInputs = ctx.numInputs;
+    if (std::getenv("MJ2X_VM_DISASM") != nullptr) {
+        std::fprintf(stderr, "[disasm] numInputs=%u numRegs=%u\n", ctx.numInputs, ctx.maxReg);
+        for (size_t i = 0; i < prog->instructionOffsets.size(); ++i) {
+            const uint32_t start = prog->instructionOffsets[i];
+            const uint32_t end = (i + 1 < prog->instructionOffsets.size())
+                                     ? prog->instructionOffsets[i + 1]
+                                     : static_cast<uint32_t>(prog->bytecodes.size());
+            std::fprintf(stderr, "[disasm] @%u:", start);
+            for (uint32_t b = start; b < end && b < prog->bytecodes.size(); ++b)
+                std::fprintf(stderr, " %02x", prog->bytecodes[b]);
+            std::fprintf(stderr, "\n");
+        }
+    }
     // 寄存器文件总量 u16 容量守卫（#1133 同款 fail-closed）：操作数是 u16 索引，
     // numRegs 回绕后解释器 regs[] 尺寸与操作数空间静默错位。maxReg 以 u32 承载
     // 探测回绕，此处一次性拦截（历史恒等映射形态同样受益）。

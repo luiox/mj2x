@@ -123,10 +123,9 @@ std::string backendFlags(CorpusBackend backend)
                    ? "--backend regc --regc-obfuscate --regc-hide-constants"
                    : "--backend regc";
     case CorpusBackend::Vmc4:
-        // obf 档暂不含 --vmc4-regfile：大循环构建 + 溢出形态下分配器有未修的
-        // 区间计算缺陷（dev_plan J-12，HashAndCrypto 首曝；修复后重新加入）。
         return corpusTier() == "obf"
-                   ? "--backend vmc4 --vmc4-super-ops --vmc4-fragment --vmc4-shuffle-blocks"
+                   ? "--backend vmc4 --vmc4-super-ops --vmc4-fragment --vmc4-regfile 8 "
+                     "--vmc4-shuffle-blocks"
                    : "--backend vmc4";
     }
     return "--backend stackc";

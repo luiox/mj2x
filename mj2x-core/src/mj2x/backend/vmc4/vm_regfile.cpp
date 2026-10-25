@@ -204,44 +204,60 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
         ++pos;
     }
 
-    // 入口定义：后继边拷贝 dest（块参数）在目标块入口诞生；异常区域拷贝 dest 与
-    // exceptionValue 在 handler 块入口诞生。无使用的入口定义同样入表（编码器仍会
-    // 发射这些写入位点，寄存器映射必须全）。
+    // 入口定义：后继边拷贝 dest（块参数）在**源块 terminator 位点**诞生（边拷贝
+    // 在源块结尾、目标块开头之间执行），而非目标块入口——birth 取源块 endPos，
+    // 否则目标块复用槽位的值会被边拷贝覆盖（java_corpus RfMin 首曝的第二半）。
+    // 异常区域拷贝 dest 与 exceptionValue 同为 handler 块入口诞生（分派点在
+    // 保护块内，保守取 handler 起点即可——无跨块覆盖面）。无使用的入口定义
+    // 同样入表（编码器仍会发射这些写入位点，寄存器映射必须全）。
+    struct EntryDef
+    {
+        size_t   dst = 0;     ///< 目标块下标
+        uint32_t id = 0;
+        size_t   srcIdx = 0;  ///< 源块下标（birth = 源块 endPos）
+    };
+    std::vector<EntryDef> entryDefList;
     std::vector<std::set<uint32_t>> entryDefs(fn.blocks.size());
-    auto noteEntryDef = [&](const RegBlock* dst, uint32_t id) {
+    auto noteEntryDef = [&](size_t srcIdx, const RegBlock* dst, uint32_t id) {
         if (id < out.numInputs) return;
         auto it = blockIndexOf.find(dst);
-        if (it != blockIndexOf.end()) entryDefs[it->second].insert(id);
+        if (it == blockIndexOf.end()) return;
+        entryDefs[it->second].insert(id);
+        entryDefList.push_back({it->second, id, static_cast<uint32_t>(srcIdx)});
     };
-    for (const auto& block : fn.blocks) {
+    for (size_t srcIdx = 0; srcIdx < fn.blocks.size(); ++srcIdx) {
+        const RegBlock& srcBlock = *fn.blocks[srcIdx];
         std::visit(
             [&](const auto& t) {
                 using T = std::decay_t<decltype(t)>;
                 if constexpr (std::is_same_v<T, RegJumpTerminator>) {
-                    for (const auto& copy : t.target.copies) noteEntryDef(t.target.block,
-                                                                          copy.dest.id.value);
+                    for (const auto& copy : t.target.copies)
+                        noteEntryDef(srcIdx, t.target.block, copy.dest.id.value);
                 } else if constexpr (std::is_same_v<T, RegBranchTerminator>) {
                     for (const auto& copy : t.trueTarget.copies)
-                        noteEntryDef(t.trueTarget.block, copy.dest.id.value);
+                        noteEntryDef(srcIdx, t.trueTarget.block, copy.dest.id.value);
                     for (const auto& copy : t.falseTarget.copies)
-                        noteEntryDef(t.falseTarget.block, copy.dest.id.value);
+                        noteEntryDef(srcIdx, t.falseTarget.block, copy.dest.id.value);
                 } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
                     for (const auto& c : t.cases)
                         for (const auto& copy : c.target.copies)
-                            noteEntryDef(c.target.block, copy.dest.id.value);
+                            noteEntryDef(srcIdx, c.target.block, copy.dest.id.value);
                     for (const auto& copy : t.defaultTarget.copies)
-                        noteEntryDef(t.defaultTarget.block, copy.dest.id.value);
+                        noteEntryDef(srcIdx, t.defaultTarget.block, copy.dest.id.value);
                 } else {
                     (void)t;   // Return/Throw/Unreachable：无后继拷贝
                 }
             },
-            block->terminator);
+            srcBlock.terminator);
     }
     for (const auto& region : fn.exceptionRegions) {
         if (region.handler != nullptr && region.exceptionValue.id.value >= out.numInputs)
-            noteEntryDef(region.handler, region.exceptionValue.id.value);
+            noteEntryDef(blockIndexOf.at(region.handler), region.handler,
+                         region.exceptionValue.id.value);
         for (const auto& edge : region.edges)
-            for (const auto& copy : edge.copies) noteEntryDef(region.handler, copy.dest.id.value);
+            for (const auto& copy : edge.copies)
+                noteEntryDef(blockIndexOf.at(region.handler), region.handler,
+                             copy.dest.id.value);
     }
 
     // --- 块级活性分析（backward 不动点）---
@@ -307,8 +323,14 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
         changed = false;
         for (size_t bi = 0; bi < blockCount; ++bi) {
             std::set<uint32_t> outSet;
-            for (const size_t s : succs[bi])
-                outSet.insert(liveIn[s].begin(), liveIn[s].end());
+            for (const size_t s : succs[bi]) {
+                // 后继的块参数（边拷贝 dest）在**边上**诞生（边拷贝写入），
+                // 不应经 liveOut 回流进前驱——否则参数的幻影活性回灌全方法
+                // （birth=0 / 死参数区间 [0,0] 却在方法末尾的边拷贝处写槽，
+                // 覆盖已分配给其他活值的槽——java_corpus RfMin 首曝）。
+                for (const uint32_t id : liveIn[s])
+                    if (!entryDefs[s].count(id)) outSet.insert(id);
+            }
             std::set<uint32_t> inSet = useGen[bi];
             for (const uint32_t id : outSet)
                 if (!defAll[bi].count(id)) inSet.insert(id);
@@ -370,8 +392,10 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
     }
     for (const auto& kv : lastUse) noteDeath(kv.first, kv.second);
     // 入口定义（块参数/exceptionValue）：即使无使用也要有退化区间（编码器发射写入）。
-    for (size_t bi = 0; bi < blockCount; ++bi)
-        for (const uint32_t id : entryDefs[bi]) noteBirth(id, scans[bi].startPos);
+    // birth = 源块 terminator 位点（EntryDef.srcIdx 的 endPos）——边拷贝在源块
+    // 结尾执行，参数槽位的占用从写入时刻起算；若取目标块起点，目标块复用该槽
+    // 位的值会被边拷贝覆盖（java_corpus RfMin 首曝的第二半）。多入口取 min。
+    for (const auto& ed : entryDefList) noteBirth(ed.id, scans[ed.srcIdx].endPos);
     // liveIn/liveOut 块跨度扩展：包络覆盖块内全部活位点（含乱序线性化与跨块携带）。
     for (size_t bi = 0; bi < blockCount; ++bi) {
         for (const uint32_t id : liveIn[bi]) noteBirth(id, scans[bi].startPos);
