@@ -9,12 +9,5 @@
 
 
 
-# lambda/方法引用：运行时 NoClassDefFoundError: class lookup failed（三后端
-# 一致）——indy bootstrap 后的类查找面在「受保护类经 lambda bootstrap 反查自身」
-# 形态下失败；lambda_synth 既有 E2E 未覆盖本形态（捕获 + 静态方法引用 +
-# 构造器引用 + 循环捕获组合）。待根因定位（class lookup 的 owner 传递）。
-LambdasCapture stackc lambda bootstrap 后类查找失败（class lookup failed）
-LambdasCapture regc lambda bootstrap 后类查找失败（class lookup failed）
-LambdasCapture vmc4 lambda bootstrap 后类查找失败（class lookup failed）
 
 

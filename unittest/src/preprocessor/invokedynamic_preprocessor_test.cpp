@@ -854,6 +854,56 @@ TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePackagePrivateSamSynthIn
     EXPECT_EQ(index.getClass("/Lambda$0"), nullptr);
 }
 
+// 在 index 里造外围类，其 InnerClasses 属性声明嵌套 SAM 的访问位——javac 把
+// 嵌套类型的真实 access 位记在外围类的 InnerClasses 属性而非嵌套类自身 flags。
+void addOuterClassWithNestedSam(CompilerIndex& index, const std::string& outerName,
+                                const std::string& samName, int samAccess)
+{
+    auto& arena = index.arena();
+    auto  cn    = std::make_unique<ClassNode>();
+    cn->name      = arena.intern(outerName.c_str());
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->superName = arena.intern("java/lang/Object");
+    cn->innerClasses.push_back(cn->create<InnerClassNode>(
+        arena.intern(samName.c_str()), arena.intern(outerName.c_str()),
+        arena.intern(samName.substr(samName.rfind('$') + 1).c_str()), samAccess));
+    CompilerClass cls;
+    cls.classNode = std::move(cn);
+    index.addClass(outerName, std::move(cls));
+}
+
+// J-8（LambdasCapture 首曝形态）：SAM 是包私有嵌套接口且不在 index（单类输入
+// 只带站点宿主），外围类在 index → 读 InnerClasses 真实访问位，非公开落 SAM 同包。
+TEST(InvokeDynamicPreprocessorTest, PlacesSynthNextToNonPublicNestedSamMissingFromIndex)
+{
+    CompilerIndex index;
+    addOuterClassWithNestedSam(index, "demo/pkg/Outer", "demo/pkg/Outer$Op", 0);
+    MethodNode* m = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Outer$Op");
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_NE(index.getClass("demo/pkg/Lambda$0"), nullptr);
+    EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+}
+
+// 对称守卫：InnerClasses 标 public 的嵌套 SAM（不在 index）→ 维持 mj2x/lambda，
+// 防止外围类命中即同包的过宽回落。
+TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForPublicNestedSamMissingFromIndex)
+{
+    CompilerIndex index;
+    addOuterClassWithNestedSam(index, "demo/pkg/Outer", "demo/pkg/Outer$Op",
+                               Opcodes::ACC_PUBLIC);
+    MethodNode* m = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Outer$Op");
+
+    InvokeDynamicPreprocessor().process(index);
+
+    EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
+    EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
+    EXPECT_EQ(index.getClass("demo/pkg/Lambda$0"), nullptr);
+}
+
 // default 包 private 嵌套 SAM（javac 落盘不写 ACC_PRIVATE，非 public 位触发判定）
 // → 同样落 default 包裸名（#1182 评审收口 P1 第二形态）。
 TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePrivateNestedSamSynthInDefaultPackage)

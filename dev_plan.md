@@ -139,20 +139,30 @@
 
 **java_corpus 语料集首曝（2026-10-24，test_resource/java_corpus；修后删 exclusions 行）**
 
-8. lambda bootstrap 类查找：受保护类经 lambda bootstrap 反查自身形态下运行期
-   `NoClassDefFoundError: class lookup failed`（三后端一致；LambdasCapture
-   首曝——捕获 + 静态方法引用 + 构造器引用 + 循环捕获组合，lambda_synth
-   既有 E2E 未覆盖）。待根因：class lookup 的 owner 传递面。
-9. regc 引用值丢 null（**2026-10-25 三轮：异常家族已修，残留收窄**）：
+8. ~~lambda bootstrap 类查找~~ **已修（2026-10-26）**：受保护类经 lambda
+   bootstrap 反查自身形态下运行期 `NoClassDefFoundError: class lookup
+   failed`（三后端一致；LambdasCapture 首曝——捕获 + 静态方法引用 + 构造器
+   引用 + 循环捕获组合，lambda_synth 既有 E2E 未覆盖）。根因 = 合成类落点
+   规则：SAM 为**包私有嵌套接口**且不在编译 index（单类输入）时，
+   `pickLambdaSynthHostPackage` 默认落 `mj2x/lambda/`——跨包实现包私有接口
+   IllegalAccessError。修复 = SAM 不在 index 时按 `$` 拆外围类候选查 index，
+   命中则读外围类 classNode->innerClasses 的**真实 access 位**（ACC_PUBLIC
+   缺失 → 落 SAM 同包；public 或外围未知 → 维持 mj2x/lambda/），排除仅凭
+   名字猜测访问位的误判面。L1 最小复现三后端一致 + LambdasCapture 三格
+   复绿 + exclusions 清零。
+9. ~~regc 引用值丢 null~~ **已修（2026-10-25 收官，a305796）**：
     根因主修——ssa_builder 异常边 handlerArgs 在整块翻译完后取 fs.locals，
     引用块内未完成定义的 SSA 值（`state = state + 10/0` 的 div 抛出时 add
     未写）：三后端通用缺陷（stackc 靠操作数栈携带侥幸通过；vmc4 identity
     靠上一迭代槽位残留巧合通过；regc 读未写变量 = 0/null——J-9 的 null
     形态即此）。修复 = 捕获点移至块入口参数绑定后。ExceptionFlow 三格、
-    ExceptionEntryState（新增语料）三后端全绿。**残留**（数组返回 + for-each
-    形态，crash 而非 null）：最小复现 NullMin（test/tmp/nullbisect）JVM 崩溃
-    AV@main+0 读 -1，--regc-no-inline 同崩排除内联器；ArraysAllTypes /
-    StringsAndBoxing / LoopCarriedTable 三格 regc 仍记账。
+    ExceptionEntryState（新增语料）三后端全绿。**残留收官**（数组返回 +
+    for-each 崩溃形态）：真根因 = RegCLocalHelper intrinsic 默认发射把
+    native 持有的 StringBuilder 寄存器 operandExpr（owner 结构体栈指针）
+    当 jobject 喂 JNI；修复 = fallback 发射对 mutable string 参数先
+    emitMaterializedStringBuilder 物化（V7 最小复现锁定）。ArraysAllTypes /
+    StringsAndBoxing / LoopCarriedTable 三格 regc 复绿，语料 exclusions
+    就此清零。
 10. ~~regc LDC 字符串物化代理对~~ **已修（2026-10-24）**：常量池是标准 UTF-8
     而 NewStringUTF 按 modified UTF-8 解码——BMP 面（1/2/3 字节）两编码逐字节
     相同故历来正常，增补平面（4 字节）被逐字节拆解。修复：发射期

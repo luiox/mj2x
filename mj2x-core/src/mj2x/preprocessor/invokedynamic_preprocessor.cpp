@@ -1223,6 +1223,28 @@ std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& 
             return slash == std::string::npos ? std::string()
                                               : ifaceInternal.substr(0, slash + 1);
         }
+        return "mj2x/lambda/";
+    }
+    // SAM 不在 index（单类输入时嵌套接口是独立 class 文件、库/JDK 接口）：
+    // 若是**嵌套类型**且其外围类在 index，查外围类 InnerClasses 属性拿 SAM
+    // 的真实访问位——包私有时 mj2x/lambda 落点会 IllegalAccessError（合成类
+    // 跨包实现不可访问接口，java_corpus LambdasCapture 首曝：L1$Op 包私有、
+    // 单类输入不在 index → synth 落 mj2x/lambda → 链接失败）。非嵌套（库/
+    // JDK 顶层 SAM）或访问位未知 → 维持 mj2x/lambda 零漂移（非 public 的
+    // 顶层类无法被跨包引用，引用方对其访问必已由 public 保证）。
+    for (std::size_t dollar = ifaceInternal.find('$'); dollar != std::string::npos;
+         dollar     = ifaceInternal.find('$', dollar + 1)) {
+        auto* outerCls = index.getClass(ifaceInternal.substr(0, dollar));
+        if (outerCls == nullptr || outerCls->classNode == nullptr) continue;
+        for (auto* ic : outerCls->classNode->innerClasses) {
+            if (ic == nullptr || toStd(ic->name) != ifaceInternal) continue;
+            if ((ic->access & Opcodes::ACC_PUBLIC) == 0) {
+                const std::size_t slash = ifaceInternal.rfind('/');
+                return slash == std::string::npos ? std::string()
+                                                  : ifaceInternal.substr(0, slash + 1);
+            }
+            return "mj2x/lambda/";
+        }
     }
     return "mj2x/lambda/";
 }
