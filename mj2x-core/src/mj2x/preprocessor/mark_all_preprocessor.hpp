@@ -14,6 +14,12 @@ public:
             if (cls.isLibrary) continue;
             // 类级 glob 过滤器剔除的类不标记（--native-include/--native-exclude）。
             if (cls.filteredOut) continue;
+            // 接口整体跳过：JLS 9.4/JVMS 4.6 禁止接口方法带 ACC_NATIVE，default/
+            // static/私有接口方法（有 Code、非 abstract）一旦标记会产出
+            // ClassFormatError 的接口类文件。接口的具体方法保持字节码运行。
+            if (cls.classNode &&
+                (cls.classNode->access & jbytecode::core::Opcodes::ACC_INTERFACE))
+                continue;
             for (auto& method : cls.methods) {
                 // Skip abstract and native methods
                 auto* mn = method.methodNode;
