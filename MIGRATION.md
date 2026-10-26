@@ -86,8 +86,9 @@ monorepo 检出内仍可用,`MJ2X_CRT_DIR` 可显式覆盖。
 - **跨仓引用残留**:README 引用的 DLL 加壳需求文档在 morpher 主仓
   `doc_ai/dll_packer_requirements.md`(未随拆迁移);`benchmark/` 依赖的
   jvm-obf-tester 外部样本仓为环境依赖,非仓内文件。
-- **版本与 tag 语义**(2026-10 定案):拆仓时 v2.x tag 未带出(见上),独立仓
-  版本归零,semver 从 `0.1.0` 起(`xmake.lua` set_version 与发版 tag 同源)。
+- **版本与 tag 语义**(2026-10-26 修订):拆仓时 v2.x tag 未带出(见上);初定
+  版本归零从 `0.1.0` 起,后经所有者裁决改为**继承 morpher 产品线版本号**,
+  首个版本 `2.3`(`xmake.lua` set_version 与发版 tag 同源)。
   推 `v*` tag 触发 release workflow:git-cliff(cliff.toml)从拆仓基线
   `a785a86` 起算生成 changelog,`gh release create` 落 GitHub Release。
   拆仓前历史不入 changelog(monorepo 全线语义,与本仓发版无关)。

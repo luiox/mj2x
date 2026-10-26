@@ -61,8 +61,8 @@ end
 add_rules("plugin.compile_commands.autoupdate", {outputdir = "."})
 
 set_project("mj2x")
--- 版本号即发版 tag（v0.1.0 …），与 git-cliff changelog 同源；发版见 AGENTS.md。
-set_version("0.1.0")
+-- 版本号即发版 tag（v2.3 …），与 git-cliff changelog 同源；发版见 AGENTS.md。
+set_version("2.3")
 set_xmakever("2.9.3")
 set_allowedplats("windows", "linux", "macosx")
 set_defaultplat("windows")

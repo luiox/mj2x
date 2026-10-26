@@ -65,8 +65,9 @@ clang（LLVM/RegC intrinsic 直编，PATH 探测）。缺哪样，对应用例 s
 
 ## 发版
 
-版本号从 `0.1.0` 起（拆仓归零，见 MIGRATION.md），单源是 `xmake.lua` 的
-`set_version`，发版 tag 与其同值（`v0.1.0` …）。
+版本号继承 morpher 产品线 v2.x（2026-10-26 所有者裁决，首个版本 `2.3`，
+推翻此前拆仓归零定案），单源是 `xmake.lua` 的 `set_version`，发版 tag 与其
+同值（`v2.3` …）。
 
 1. 确认 main 绿（CI linux + windows 两门都过），改 `set_version("X.Y.Z")`
    提交合入；
