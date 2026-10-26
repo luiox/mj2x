@@ -3,6 +3,7 @@
 #include "llvm_ir_internal.hpp"
 #include "llvm_intrinsic_registry.hpp"
 
+#include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/mir/passes/const_key_derivation.hpp"
 
 #include <cmath>
@@ -453,11 +454,15 @@ private:
         }
         if (operand.kind == RegOperandKind::Opaque) {
             // String/Class 常量：JNI NewStringUTF / FindClass 构造（物化为临时）。
+            // 字符串先过 modified UTF-8 转换：运行时 NewStringUTF 按 modified
+            // UTF-8 解码且 strlen 取长，标准 UTF-8 的嵌入 NUL / 增补平面 4 字节
+            // 序列不转换会截断/错解（与 regc/vmc4 同口径，java_corpus 首曝）。
             if (operand.tag.rfind("ldc_string:", 0) == 0) {
                 const std::string temporary = nextTemporary();
                 out_ << "  " << temporary
                      << " = call ptr @mj2x_llvm_string_const(ptr %env, ptr "
-                     << strings_.intern(operand.tag.substr(11)) << ")\n";
+                     << strings_.intern(codegen::utf8ToModifiedUtf8(operand.tag.substr(11)))
+                     << ")\n";
                 expression = temporary;
                 return true;
             }

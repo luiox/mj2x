@@ -614,8 +614,18 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
                         removeActiveHandler(activeExceptionHandlers, i);
                 }
                 for (int i = 0; i < static_cast<int>(exceptionHandlers.size()); ++i) {
-                    if (exceptionHandlers[static_cast<size_t>(i)].start == label)
-                        activeExceptionHandlers.push_back(i);
+                    if (exceptionHandlers[static_cast<size_t>(i)].start == label) {
+                        // 按表索引有序插入：JVM 分派按异常表顺序取**首个**区域含
+                        // 当前 pc 且类型匹配的条目，不是按区域激活（嵌套）顺序。
+                        // javac 的合成 handler（如 t-w-r 的 catch Throwable primary
+                        // 捕获）表序在外层用户 catch 之前、区域却内层后激活——
+                        // 无序插入会把检查顺序排反，跳过 primary/close 语义
+                        // （java_corpus TryWithResources stackc 首曝）。
+                        activeExceptionHandlers.insert(
+                            std::lower_bound(activeExceptionHandlers.begin(),
+                                             activeExceptionHandlers.end(), i),
+                            i);
+                    }
                 }
             }
             std::string dispatchTarget;
@@ -1113,6 +1123,18 @@ void StackCBackend::Impl::emitNodeWithExceptionDispatch(const MIRNode*      node
         tmp.appendLineStart("if ((*env)->ExceptionCheck(env)) goto ")
             .append(dispatchTarget).append(";");
         tmp.newLine();
+    }
+    else if (dispatchTarget.empty() &&
+             (node->kind == MIRKind::ARRAY_LOAD || node->kind == MIRKind::ARRAY_STORE)) {
+        // JNI 数组访问可抛 AIOOBE/ArrayStoreException；无保护区域的调用点也必须
+        // 立即返回让 pending 传播——跨节点滞留的 pending 会让后续 FindClass/
+        // GetMethodID 全部返回 NULL，被误报成 NoClassDefFoundError 掩蔽真实异常
+        // （java_corpus TryWithResources stackc 首曝的次生形态）。
+        tmp.emitLine("if ((*env)->ExceptionCheck(env)) {");
+        tmp.indent();
+        emitExceptionReturn(currentMethodDesc, tmp);
+        tmp.dedent();
+        tmp.emitLine("}");
     }
     // 栈访问静态化：stack[sp±k] → s[<编译期深度>]，并统计净效应推进深度。
     std::string text = tmp.str();

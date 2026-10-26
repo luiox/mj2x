@@ -3,6 +3,7 @@
 #include "llvm_ir_internal.hpp"
 
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
+#include "mj2x/codegen/c_helpers.hpp"
 
 #include <cstring>
 #include <iomanip>
@@ -242,11 +243,12 @@ std::string indyBsmArgExpr(const std::string& siteTag, const ca::core::Any& valu
     switch (classifyIndyBsmArg(value)) {
     case IndyBsmArgKind::String:
         if (const auto* p = value.as<std::string>()) {
-            consts << llvmConstantString(g + "_str", *p);
+            consts << llvmConstantString(g + "_str", codegen::utf8ToModifiedUtf8(*p));
             return "call ptr @mj2x_llvm_string_const(ptr %env, ptr @" + g + "_str)";
         }
         if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
-            consts << llvmConstantString(g + "_str", p->to_std_string());
+            consts << llvmConstantString(g + "_str",
+                                         codegen::utf8ToModifiedUtf8(p->to_std_string()));
             return "call ptr @mj2x_llvm_string_const(ptr %env, ptr @" + g + "_str)";
         }
         break;

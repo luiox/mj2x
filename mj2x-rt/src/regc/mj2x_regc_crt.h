@@ -251,10 +251,14 @@ int64_t mj2x_regc_const_key(int64_t site);
 /// 缓存纪律（与 `_mj2x_regc_cached_instance_method` 对齐，缺一即错）：
 /// - 存进条目的 jclass 必须是 **global ref**。FindClass/GetObjectClass 返回的是
 ///   local ref，只在当次 native 调用内有效；直接缓存会在下一次调用时悬垂。
-/// - virtual/special 形态按 **receiver 实际类**解析，不按声明 owner：抽象/接口
+/// - virtual 形态按 **receiver 实际类**解析，不按声明 owner：抽象/接口
 ///   owner 上按声明类解析会拿到抽象条目，`CallXxxMethodA` 触发
 ///   AbstractMethodError（HotSpot 17 实测 ACCESS_VIOLATION，见 runtime.c 注释）。
 ///   因此另设 per-receiver-class 槽，同类重复调用经 IsSameObject 命中。
+///   special（invokespecial，kind=2）例外：按 owner 声明解析 +
+///   `CallNonvirtualXxxMethodA` 精确分派——invokespecial 语义就是绕过
+///   receiver 的覆写（super.m() / X.super.m()），虚分派会命中调用方自身的
+///   覆写造成无限递归。
 typedef struct mj2x_regc_call_site
 {
     jclass      ownerClass;   ///< owner 类解析缓存（global ref；NULL = 未解析）
@@ -262,7 +266,7 @@ typedef struct mj2x_regc_call_site
     const char* owner;        ///< JVM 内部名，如 "java/lang/Math"
     const char* name;         ///< 方法名
     const char* desc;         ///< 方法描述符（分派签名）
-    int32_t     invokeKind;   ///< 0 = virtual/interface，1 = static，2 = special
+    int32_t     invokeKind;   ///< 0 = virtual/interface，1 = static，2 = special（owner 解析 + CallNonvirtual 精确分派）
     jclass      lastReceiverClass;    ///< virtual/special 的 per-receiver-class 槽（global ref）
     jmethodID   lastReceiverMethod;   ///< 与 lastReceiverClass 配对的解析结果
 } mj2x_regc_call_site;

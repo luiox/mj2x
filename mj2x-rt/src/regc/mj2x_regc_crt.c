@@ -152,8 +152,9 @@ static void* regc_ptr_cas(void* volatile* slot, void* expected, void* desired)
    缓存两条纪律，见头文件 mj2x_regc_call_site 的契约注释：
    - 存条目的一律 global ref（FindClass/GetObjectClass 给的是 local ref，
      跨 native 调用即悬垂）；
-   - virtual/special 按 receiver 实际类解析并按 receiver 类分槽——抽象/接口
-     owner 上按声明类解析会拿到抽象条目。 */
+   - virtual 按 receiver 实际类解析并按 receiver 类分槽——抽象/接口
+     owner 上按声明类解析会拿到抽象条目；special（invokespecial）按 owner
+     声明解析 + CallNonvirtual 精确分派（虚分派命中 receiver 覆写会递归）。 */
 static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site* site,
                                  void* receiver)
 {
@@ -186,6 +187,26 @@ static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site
         mj2x_regc_throw_exception(context, "java/lang/NullPointerException",
                                     "instance method call");
         return NULL;
+    }
+    // special（invokespecial）：owner 声明解析（与 static 同构缓存 ownerClass +
+    // method，一次解析终身复用）。调用侧走 CallNonvirtual 精确分派——虚分派会
+    // 命中 receiver 实际类的覆写（X.super.m() 调用方自身覆写 → 无限递归）。
+    if (site->invokeKind == 2) {
+        if (site->method != NULL) return site->method;
+        jclass cls = (*env)->FindClass(env, site->owner);
+        if (cls == NULL) return NULL;
+        jmethodID method = (*env)->GetMethodID(env, cls, site->name, site->desc);
+        if (method == NULL) {
+            (*env)->DeleteLocalRef(env, cls);
+            return NULL;
+        }
+        jclass pinned = (jclass)(*env)->NewGlobalRef(env, cls);
+        (*env)->DeleteLocalRef(env, cls);
+        if (pinned == NULL) return method;   // global ref 失败仍返回本次解析值
+        jclass previous = (jclass)regc_ptr_cas((void* volatile*)&site->ownerClass, NULL, pinned);
+        if (previous != NULL) (*env)->DeleteGlobalRef(env, pinned);
+        site->method = method;
+        return site->method;
     }
     jclass receiverClass = (*env)->GetObjectClass(env, (jobject)receiver);
     if (receiverClass == NULL) return NULL;
@@ -233,6 +254,10 @@ static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site
         if (m == NULL) return (RetT)0;                                                    \
         if (site->invokeKind == 1)                                                        \
             return (RetT)(*env)->CallStatic##JN##MethodA(env, site->ownerClass, m, args); \
+        if (site->invokeKind == 2)                                                        \
+            /* JNI 参数序：obj 在前、clazz 在后。 */                                       \
+            return (RetT)(*env)->CallNonvirtual##JN##MethodA(env, (jobject)receiver,      \
+                                                             site->ownerClass, m, args);    \
         return (RetT)(*env)->Call##JN##MethodA(env, (jobject)receiver, m, args);        \
     }
 
@@ -248,6 +273,9 @@ static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site
         if (m == NULL) return;                                                            \
         if (site->invokeKind == 1)                                                        \
             (*env)->CallStaticVoidMethodA(env, site->ownerClass, m, args);                   \
+        else if (site->invokeKind == 2)                                                    \
+            (*env)->CallNonvirtualVoidMethodA(env, (jobject)receiver, site->ownerClass,    \
+                                              m, args);                                    \
         else                                                                                \
             (*env)->CallVoidMethodA(env, (jobject)receiver, m, args);                     \
     }

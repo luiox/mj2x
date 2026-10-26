@@ -508,13 +508,16 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
         // 预加载 String LDC 常量槽（Phase 2.E）：NewStringUTF 把 UTF-8 内容物化为
         // jstring，写入编码期分配的专用槽（按内容去重）。调用帧内局部引用，
         // 方法返回后由 JVM 释放——寄存器仅在本帧解释期间使用，安全。
+        // 内容先过 modified UTF-8 转换：NewStringUTF 按 modified UTF-8 解码且以
+        // strlen 取长，标准 UTF-8 的嵌入 NUL（C0 80）与增补平面（4 字节 → 代理对）
+        // 不转换会截断/错解（java_corpus TextBlocksAndEscapes vmc4 首曝）。
         for (size_t i = 0; i < program.stringLiterals.size(); ++i) {
             const auto& lit = program.stringLiterals[i];
             CSourceStream line;
             line.append("regs[");
             line.appendInt(static_cast<ca::i64>(lit.slot));
             line.append("].ref = (void*)(*env)->NewStringUTF(env, ");
-            line.append(codegen::cStringLiteral(lit.value));
+            line.append(codegen::cStringLiteral(codegen::utf8ToModifiedUtf8(lit.value)));
             line.append(");");
             out.emitLine(line.build().ref());
         }

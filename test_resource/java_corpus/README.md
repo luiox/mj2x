@@ -34,11 +34,14 @@ javac 产物（而非手工字节码）压后端全链路，挖语义回归与�
 4. 提交前本地双跑 diff 确认确定性。
 5. 中文注释保存为 UTF-8（runner javac 带 `-encoding UTF-8`）。
 
-## 覆盖清单（当前 36 用例）
+## 覆盖清单（当前 46 用例）
 
-- **language (16)**：算术边界、浮点语义、switch 全形态、分支与循环、方法形态、
+- **language (26)**：算术边界、浮点语义、switch 全形态、分支与循环、方法形态、
   对象分派、数组全类型、异常流、字符串与装箱、枚举、lambda 捕获、内部类与
-  监视器、泛型与集合、实例生命周期、双槽交错、intrinsic 命中面
+  监视器、泛型与集合、实例生命周期、双槽交错、intrinsic 命中面；JDK17 现代
+  特性批（2026-10-26）：record、sealed+instanceof 模式、switch 表达式、
+  文本块与转义（NUL/代理对）、接口默认方法深面、varargs 深面、
+  try-with-resources、multi-catch 精确重抛、静态初始化顺序、assert 语义
 - **typical (8)**：词频统计、矩阵运算、迷你 JSON、哈希与位操作、排序查找、
   状态机、迷你大整数、图遍历
 - **edge (8)**：wide 局部变量、大 switch、超长表达式链、参数数边界、finally

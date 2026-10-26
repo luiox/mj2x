@@ -896,10 +896,16 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             return cls == nullptr || cls->isLibrary;
         }();
         const bool useResolved = dynamicInstance && state.resolvedDispatch && !state.traceCalls &&
-                                 !privateThis && !libraryOwner;
+                                 !privateThis && !libraryOwner &&
+                                 // resolved 分派按 receiver 实际类解析 + 虚调用，
+                                 // INVOKESPECIAL 需要 owner 声明 + CallNonvirtual。
+                                 ins.method.invokeOpcode != Opcodes::INVOKESPECIAL;
         const bool inlineCached =
             !selfCall && !useResolved && !privateThis && (staticCall || !instanceCacheName.is_empty()) &&
-            !(state.traceCalls && !staticCall && !ins.hasDest);
+            (!(state.traceCalls && !staticCall && !ins.hasDest) ||
+             // INVOKESPECIAL 一律走内联 cached 路径（emitCachedCall 的
+             // CallNonvirtual 发射）；va-arg 家族只做虚分派，不接手 special。
+             (!staticCall && ins.method.invokeOpcode == Opcodes::INVOKESPECIAL));
         const auto emitCall = [&](CSourceStream& u) {
             if (useResolved) {
                 // receiver 精确类型静态绑定优先：receiver 的 SSA def 可证为

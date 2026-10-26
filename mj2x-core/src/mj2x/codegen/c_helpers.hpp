@@ -28,6 +28,65 @@ using ca::u32;
 using ca::u8;
 using ca::usize;
 
+/// @brief 标准 UTF-8 → JNI modified UTF-8（JLS 常量池 vs NewStringUTF 解码差异面）。
+/// @details 常量池 CONSTANT_Utf8 是标准 UTF-8，而 `NewStringUTF` 按 modified
+///          UTF-8 解码且以 strlen 取长（嵌入 NUL 即截断）：
+///          - U+0000：1 字节 0x00 → 2 字节 C0 80；
+///          - U+10000+：4 字节序列 → 代理对（两个 3 字节序列，modified 无 4 字节形）；
+///          - 其余（U+0001..U+FFFF）两编码逐字节相同。
+///          所有经 C 字符串字面量喂 NewStringUTF 的发射端（RegC / VMC4 / LLVM）
+///          必须先过本转换；StackC 的 UTF-16 码元池（NewString 按长度）无此面。
+///          字节序列一律用显式转义构造——字符串字面量里直接放 0xC0/0x80 等
+///          原始字节会被编辑器按文本编码重写（java_corpus TextBlocksAndEscapes
+///          首曝：C0 80 被存成 U+00C0/U+0080 两字符的 UTF-8 四字节）。
+inline std::string utf8ToModifiedUtf8(std::string_view utf8)
+{
+    std::string out;
+    out.reserve(utf8.size());
+    for (size_t i = 0; i < utf8.size();) {
+        const unsigned char b0 = static_cast<unsigned char>(utf8[i]);
+        if (b0 == 0x00) {
+            out += static_cast<char>(0xC0);
+            out += static_cast<char>(0x80);
+            ++i;
+            continue;
+        }
+        if (b0 < 0x80) {
+            out += static_cast<char>(b0);
+            ++i;
+            continue;
+        }
+        const size_t seqLen = (b0 & 0xE0) == 0xC0 ? 2
+                              : (b0 & 0xF0) == 0xE0 ? 3
+                              : (b0 & 0xF8) == 0xF0 ? 4
+                                                    : 1;
+        if (seqLen != 4) {
+            out.append(utf8.substr(i, seqLen));
+            i += seqLen;
+            continue;
+        }
+        // 4 字节序列 → 解码码点 → 代理对各 3 字节 modified 编码
+        if (i + 4 > utf8.size()) {
+            out.append(utf8.substr(i));   // 截断序列：原样收尾
+            break;
+        }
+        const uint32_t cp = ((static_cast<uint32_t>(b0) & 0x07) << 18)
+                            | ((static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 1])) & 0x3F) << 12)
+                            | ((static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 2])) & 0x3F) << 6)
+                            | (static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 3])) & 0x3F);
+        const uint32_t high = 0xD800 + ((cp - 0x10000) >> 10);
+        const uint32_t low  = 0xDC00 + ((cp - 0x10000) & 0x3FF);
+        out += static_cast<char>(0xE0 | (high >> 12));
+        out += static_cast<char>(0x80 | ((high >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (high & 0x3F));
+        out += static_cast<char>(0xE0 | (low >> 12));
+        out += static_cast<char>(0x80 | ((low >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (low & 0x3F));
+        i += 4;
+    }
+    return out;
+}
+
 /// @brief Escape arbitrary JVM symbol bytes into ASCII-safe text for comments/dumps.
 /// @details Obfuscated or re-native samples can carry any byte in class/method/field
 ///          names and descriptors.  Generated comments must stay textually intact, so

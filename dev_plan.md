@@ -87,9 +87,12 @@
 - ~~backend.hpp 收拾：Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位~~
   **已销项（2026-10-24）**：`BackendResult::Kind` 删 BINARY 死枚举 + 无人消费的
   `data` 字段，新增 `LLVM_IR`（LLVM 后端产物不再语义错位挂 C_SOURCE，backend.hpp
-  契约文档同步）。剩余两项仍挂账：finalize 无错误通道（三后端失败行为不一致）、
-  接口默认方法能力边界（MarkAll 下产出带 ACC_NATIVE 的接口方法 →
-  ClassFormatError）。
+  契约文档同步）。剩余一项仍挂账：finalize 无错误通道（三后端失败行为不一致）。
+  ~~接口默认方法能力边界~~ **已修（2026-10-26）**：JLS 9.4/JVMS 4.6 禁止接口
+  方法带 ACC_NATIVE——MarkAll / annotation / prefix 三条标记路径统一整体跳过
+  接口类（default/static/私有接口方法保持字节码），InitClinitMover 同步跳过
+  （不再产出永不标记的 `__regc_*` 死静态方法）；契约测试
+  InterfaceNativeSkipTest 四用例。
 - RegC intrinsic 判定热点：每条 Call 重复 match 6-10 次（含多次 std::string
   构造与全表线性扫），应函数级一次算好 decision；registry 视图不统一
   （analyze 走 builtins、emit 走用户 registry，覆盖判定有漂移风险）。
@@ -223,6 +226,40 @@
     密集形态。**已做遏制**：语料 obf 档暂撤该开关（corpus runner 注释）。
     **修复方向**：key→目标映射表在 case 数量大时的编码/解析面；修后
     (a) BigSwitch 收编为该开关的 E2E 用例，(b) obf 档重新加入。
+
+**JDK17 现代特性语料批首曝（2026-10-26，10 新用例全部修复）**
+
+16. ~~regc INVOKESPECIAL 虚分派~~ **已修（2026-10-26）**：接口默认方法语料
+    （InterfaceDefaultMethods）首曝 `Greeter.super.greet()` 无限递归
+    （StackOverflowError）——regc 全链路（cached/间接 dispatcher）对
+    INVOKESPECIAL 一律 `Call*MethodA` 虚分派，命中调用方自身覆写。此前语料
+    的 super 调用都在嵌套类（未被保护），受保护代码发出 invokespecial 属
+    首次覆盖。修复：emitCachedCall special 分支 + dispatcher kind==2 改
+    **owner 声明解析 + CallNonvirtual\*MethodA**（与 stackc 同口径）；二段
+    修复 = JNI 参数序（obj 在前 clazz 在后，对调会把 jclass 当 receiver →
+    IncompatibleClassChangeError，最小复现 test/tmp/idmmin 实证）；
+    useResolved/inlineCached 门控排除 special。
+17. ~~字符串常量 modified UTF-8 面（regc/vmc4/llvm 三面）~~ **已修
+    （2026-10-26）**：TextBlocksAndEscapes 首曝。(a) regc：J-10 修复的
+    `utf8ToModifiedUtf8` NUL 分支源码里 C0 80 是**字符串字面量原始字节**
+    （历史上被编辑器按文本编码重写成 U+00C0/U+0080 的 UTF-8 四字节）——
+    NewStringUTF 解出 6 字符串；(b) vmc4：LDC 常量直接 `cStringLiteral` 进
+    NewStringUTF，嵌入 NUL 被 strlen 截断（`"a\000b\000"` → `"a"`，模式
+    `"\0"` → 空串，`replace("",..)` 每字符间插入）；(c) llvm：LLVM 常量数组
+    长度显式但运行时 `mj2x_llvm_string_const` 仍 strlen 截断。修复：转换函数
+    提升为共享 `codegen::utf8ToModifiedUtf8`（字节一律显式转义构造，杜绝
+    编辑器重写面），regc/vmc4 LDC/llvm LDC+indy bsm String 三处接线；
+    stackc 的 UTF-16 码元池（NewString 按长度）本就无此面。
+18. ~~stackc 异常分派 handler 顺序反排~~ **已修（2026-10-26）**：
+    TryWithResources 首曝（suppressed 丢失 + NoClassDefFoundError 掩蔽）。
+    根因 = activeExceptionHandlers 按**区域激活序**（外层用户 catch 从方法
+    头先激活）而非 **JVM 异常表序**（首个区域含 pc 且类型匹配的条目获胜）
+    ——t-w-r 合成 catch(Throwable)（表序靠前、区域内层）被排在用户 catch
+    之后，IAE 直接跳用户 handler，primary 赋值与 close()/addSuppressed
+    整段被跳过。修复 = 激活时按表索引 lower_bound 有序插入。次生修复：
+    ARRAY_LOAD/STORE 在无保护区域也立即 ExceptionCheck 返回（pending
+    跨节点滞留会让后续 FindClass 全 NULL，被误报 NoClassDefFoundError
+    掩蔽真实 AIOOBE）。最小复现 test/tmp/twrmin 实证。
 
 **产品/机器决策项（需拍板）**
 

@@ -360,6 +360,12 @@ void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegI
     const std::string        destName  = hasDest ? regName(ins.dest.id) : std::string();
     const ca::str::Utf8String argsArg  = paramTags.empty() ? ca::str::Utf8String("NULL")
                                                           : ca::str::Utf8String("_mj2x_regc_va");
+    // INVOKESPECIAL（super.m() / X.super.m() / 私有 / 未融合 <init>）：owner 声明
+    // 解析 + CallNonvirtual 精确分派。虚分派会命中 receiver 实际类的覆写——
+    // X.super.m() 的调用方自身覆写该方法时直接无限递归（java_corpus
+    // InterfaceDefaultMethods regc 首曝：Greeter.super.greet() 虚分派回 main
+    // 的 greet 覆写 → StackOverflowError）。
+    const bool specialCall = !staticCall && ins.method.invokeOpcode == Opcodes::INVOKESPECIAL;
 
     out.block([&](CSourceStream& o) {
         if (!staticCall) {
@@ -469,15 +475,38 @@ void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegI
                       }
                       u.assign("_mj2x_regc_m",
                                codegen::exprCall(
-                                   ownerMethodOnly ? "_mj2x_regc_cached_owner_method"
-                                                   : "_mj2x_regc_cached_instance_method",
+                                   specialCall || ownerMethodOnly
+                                       ? "_mj2x_regc_cached_owner_method"
+                                       : "_mj2x_regc_cached_instance_method",
                                    {"&" + cacheName.to_std_string(), "_mj2x_regc_rcv"}));
-                      const std::string callExpr = codegen::exprCall(
-                          std::string("(*_mj2x_regc_env)->Call") + jniCallFamily(returnTag) +
-                              "MethodA",
-                          {"_mj2x_regc_env", "_mj2x_regc_rcv", "_mj2x_regc_m",
-                           argsArg.to_std_string()});
-                      u.iff(codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
+                      const std::string callExpr =
+                          specialCall
+                              ? codegen::exprCall(
+                                    std::string("(*_mj2x_regc_env)->CallNonvirtual") +
+                                        jniCallFamily(returnTag) + "MethodA",
+                                    // JNI 参数序：obj 在前、clazz 在后（Call* 在前
+                                    // 加 receiver，CallNonvirtual* 在 obj 后插
+                                    // jclass）。clazz/obj 对调会把 jclass 当
+                                    // receiver → ICCE。
+                                    {"_mj2x_regc_env", "_mj2x_regc_rcv",
+                                     codegen::exprMember(cacheName.to_std_string(), "ownerClass"),
+                                     "_mj2x_regc_m", argsArg.to_std_string()})
+                              : codegen::exprCall(
+                                    std::string("(*_mj2x_regc_env)->Call") +
+                                        jniCallFamily(returnTag) + "MethodA",
+                                    {"_mj2x_regc_env", "_mj2x_regc_rcv", "_mj2x_regc_m",
+                                     argsArg.to_std_string()});
+                      const std::string methodGuard =
+                          specialCall
+                              ? codegen::exprBinop(
+                                    "&&",
+                                    codegen::exprBinop("!=", "_mj2x_regc_m", "NULL"),
+                                    codegen::exprBinop(
+                                        "!=",
+                                        codegen::exprMember(cacheName.to_std_string(), "ownerClass"),
+                                        "NULL"))
+                              : codegen::exprBinop("!=", "_mj2x_regc_m", "NULL");
+                      u.iff(methodGuard,
                             [&](CSourceStream& v) {
                                 if (hasDest) {
                                     v.assign(destName,
