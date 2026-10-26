@@ -50,11 +50,9 @@ int Pipeline::run()
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
         runPreprocessors();
-        syncTreeToDom(*index_);   // BISECT-A
-
-
+        syncTreeToDom(*index_);   // 批 2：预处理树改动 → DOM（批 3 起供读方消费）
         compileMethods();
-
+        syncTreeToDom(*index_);   // 批 2：backend 注入 → DOM
         runPostprocessors();
     }
     catch (const std::exception& e) {
@@ -98,6 +96,13 @@ void Pipeline::compileMethods()
     for (auto& [name, cls] : index_->getClasses()) {
         if (cls.isLibrary) continue;
 
+        // 批 3b：读路径主入口走 DOM（批 2 同步产物）。同步保序 tree→DOM，
+        // 再按 name+desc（类内唯一）锚定下标，双保险防御序漂移。
+        if (cls.dom == nullptr) {
+            throw std::runtime_error("pipeline: DOM not synced for " + name);
+        }
+        auto* dom = cls.dom.get();
+
         for (auto& method : cls.methods) {
             if (!method.markedForCompile) continue;
 
@@ -105,7 +110,19 @@ void Pipeline::compileMethods()
             auto mnDesc = method.methodNode->desc.to_std_string();
             CA_LOGT_INFO("pipeline", "  Compiling {}.{}{}\n", name.c_str(), mnName.c_str(), mnDesc.c_str());
 
-            auto blocks = converter.convert(*method.methodNode);
+            ca::usize domIndex = dom->methods.size();
+            for (ca::usize i = 0; i < dom->methods.size(); ++i) {
+                const auto& dm = dom->methods[i];
+                if (dom->cp.utf8Equals(dm.nameCp, mnName) && dom->cp.utf8Equals(dm.descCp, mnDesc)) {
+                    domIndex = i;
+                    break;
+                }
+            }
+            if (domIndex == dom->methods.size()) {
+                throw std::runtime_error("pipeline: method not in DOM: " + name + "." + mnName);
+            }
+
+            auto blocks = converter.convert(*dom, domIndex);
 
             if (config_.dumpMIR) {
                 printf("--- MIR dump ---\n%s\n", CodeConverter::dumpMIR(blocks).c_str());

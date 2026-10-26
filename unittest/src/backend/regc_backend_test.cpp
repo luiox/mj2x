@@ -691,7 +691,7 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorEmitsGuardedCall)
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
     bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
-    bsmArgs.emplace_back(std::string("x"));
+    bsmArgs.emplace_back(ca::str::Utf8StringRef::from_cstr("x"));
     bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));
@@ -863,7 +863,7 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorNullTrapRoutesToHandlerWhenProtect
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
     bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
-    bsmArgs.emplace_back(std::string("x"));
+    bsmArgs.emplace_back(ca::str::Utf8StringRef::from_cstr("x"));
     bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));

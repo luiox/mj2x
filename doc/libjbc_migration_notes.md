@@ -53,3 +53,107 @@
 tree 状态」，帧重算归 output_writer（过渡期）/批 6 的 `smt_build`。
 批 6 摘除旧栈 writer 后此副作用面整体消失；保真路径必须用 libjbc 的
 writeClass（fidelity copy-through，无此副作用类）重验。
+
+## 批 3a 实证发现（全量回归 169 败根因）
+
+**现象**：批 3a 提交（93eef88）后全量回归 169 败，全部 E2E 面（StackC/RegC/VMC4/
+MtestSet/BackendMatrix）报 `java.lang.VerifyError: Operand stack overflow`；
+单测面全绿——单测不跑 JVM 验证，暴露不了。
+
+**根因**：C++ 非限定名查找的静默改绑。批 3a 给 `mir_node.hpp` 加了
+`jvm_type.hpp` include，`mj2x::Type` 顺 include 链（code_converter.hpp →
+regc_backend.cpp 等）进入大量 TU。这些 TU 里原有的非限定
+`Type::getObjectType(...)`（构造树侧 LDC 载荷）从 `jbytecode::core::Type`
+（using-directive）**静默改绑**到 `mj2x::Type`——外层命名空间成员名优先于
+using-directive 引入名，不构成二义性，编译器不报错。旧栈 writer 的
+`visitLdcInsn` 按 Any 载荷类型分派，`mj2x::Type` 不匹配任何分支 →
+`constantSymbol = nullptr` → **静默降级发射 ACONST_NULL**（连压栈宽度都不记），
+clinit 的 `ldc int; ldc class; invokestatic` 退化成 `ldc int; aconst_null;
+invokestatic`，maxStack 少 1 → VerifyError。
+
+**修复**：树载荷构造点全部限定旧栈类型——regc_backend.cpp / vmc4_backend.cpp /
+stackc_registration.cpp / ldc_preprocessor.cpp 共 6 处
+`jbytecode::core::Type::getObjectType/getType(...)`。
+
+**规则（批 4/5/6 沿用）**：
+- 凡把对象**装箱进树**（LdcInsnNode::cst、bsmArgs、FrameNode 值、Any 载荷）的
+  构造点，必须显式限定 `jbytecode::core::Type` / `jbytecode::core::Handle`，
+  树契约在批 6 摘树前不变。
+- 门面 Type 与旧栈 Type 的 Sort 数值逐位一致（VOID=0..OBJECT=10,METHOD=11,
+  INTERNAL=12，getSort 双侧掩蔽 INTERNAL→OBJECT），旧对象上的
+  `getSort() == Type::METHOD` 类比较侥幸安全，但**不得依赖侥幸**：消费旧对象
+  的比较点同样限定 `jbytecode::core::Type::`。
+- 旧栈 writer 的 LDC 未知载荷静默降级 ACONST_NULL 是行为面地雷：批 6 切
+  writeClass 后此面消失；在那之前新代码给树喂载荷一律走限定名 + 单测兜底。
+- 提交纪律：调试态（BISECT-A 注释、临时注释掉的调用）随 93eef88 误提交过，
+  commit 前 `git diff --cached` 必查。
+
+## 批 3b 实证发现
+
+**1. Label 身份断言适配（DOM 合成标签）**。DOM 读路径的跳转目标是
+LabelPool 按 pc 合成的 `Label`（`labelAt` 同 pc 同指针），与树侧
+`LabelNode::label` 不是同一对象——垫片经字节回环后树标签指针必然丢失。
+CodeConverterTest 的分支/switch 断言全部改为「目标锚定」：分支的
+`targetLabel` 必须等价于某目标块内 MIRLabel 持有的同一指针
+（`blockHasLabel` / `targetAnchored` 两个 lambda），指针等值断言不再
+跨树/DOM 两侧成立。这同时把断言语义从"指针巧合"收紧为"图结构锚定"。
+
+**2. `std::string` bsm arg 写出废索引 0**。旧栈 writer 的 bootstrap arg
+分派（symbol_table.cpp `addBootstrapMethod`）只认 int/i64/float/double/
+Utf8StringRef/Type/Handle/ConstantDynamic；`std::string` 落 else 分支
+`argIndices.push_back(0)`，字节里写出 CP 索引 0。树路径不序列化所以
+从不暴露；垫片字节回环后 readClass 忠实读回 0 → 消费端拿到废索引。
+修法在测试件：bsm arg 一律给 writer 可序列化的载荷（`Utf8StringRef`
+→ CONSTANT_String，恰是真实 javac 类的形态）。
+
+**3. CP 占位槽/续槽的 tag 哨兵是 Utf8**。libjbc 常量池 slot 0 占位与
+Long/Double 续槽的 tag 都记 `CpTag::Utf8` 但 `valid()==false`
+（constant_pool.cpp `tagOf` 对无效索引同样返回 Utf8）。这会把"索引 0
+的废 arg"伪装成"合法 Utf8 条目"——批 3b 首个症状
+（`unsupported CP tag 1 in bootstrap arg`）就是这个哨兵骗出来的，
+真因是发现 2。消费 CP 索引前先 `valid()`，不要只看 tag。
+
+**4. resolveConstPayload 补 Utf8 分支**。防御性收下 CONSTANT_Utf8 形态
+的 bsm arg（返回 Utf8StringRef 载荷，`classifyIndyBsmArg` 的 String
+分支同收 std::string/Utf8StringRef 双型）。JVM 规范 bsm arg 应为可加载
+常量，javac 不会写 Utf8，但外部类不必守。
+
+**5. 陈旧 exe 教训再确认**。SwitchInstructions 一度"探针证明机制正确但
+断言仍败"，实为中间构建的陈旧 exe 伪影——delete-then-rebuild 后
+同构建内探针与断言一致。多轮探针调试时每轮结果必须与当轮 exe 的
+构建时间戳对账。
+
+**6. DOM CP 裸视图悬垂（本批最深的坑）**。resolveHandle/resolveConstPayload/LDC
+Class/MethodType 载荷最初直接持 `cf->cp.utf8Ref(...)` 裸视图——DOM
+ClassFile 是 convert 内的局部 unique_ptr，**convert 返回即析构**，MIR
+里的 Handle/Type/字符串视图全部悬垂。症状漂移：INDY bsm desc 长度字段
+被复用内存改写（115→107）抛 "truncated descriptor"、内容被发射期 IR
+文本覆盖抛 "Invalid method descriptor: %v3 = call ..."。旧树路径无此
+问题（树节点自持字符串）。修法：**凡从 DOM CP 解出的字符串载荷，一律
+先 `arena->intern(...)` 再装箱**（Handle 三件、String/Class/MethodType/
+Utf8 载荷、LDC Class/MethodType）。这条是批 4/5/6 的硬约束。
+
+**7. 块 id 禁用指针截断**。最初 DOM 目标块 id = `labelKey(Label*)`
+（指针截断 int）。Windows x64 堆地址超 4GB 时截断为负，translate 里
+`labelKeyHere >= 0` 卫语句把负键误判为"非目标"→ 目标块拿合成 id、
+MIRLabel 不发射、异常表回填失败——**随 ASLR 50/50 翻车**
+（同一二进制两次运行结果不同）。修法：标签身份改顺序 id（labelAt 建
+档时 `nextLabelId++`），块 id/异常表键/labelToInsnIdx 全走顺序 id；
+指针身份只留在 MIR Label* 消费面（stackc labelToIndex、ssa 节点扫描，
+双侧同源恒成立）。
+
+**8. LLVM 异常边拷贝 dest 查表落空 → 跳过而非回退**。handler 块参数若
+在块内未读即被重定义，RegIR DCE 后不进寄存器类型表，槽 alloca 也不存在；
+异常边拷贝发射时 `registerTypes_.find(dest)` 落空。树路径因夹具双标签
+怪癖恰好带出多余块参数掩盖了此面。曾试"回退用块参数自带 SSAType"——
+产出 store 到未声明槽的非法 IR（clang 拒收 `use of undefined value`）。
+定案修法：查表落空直接 `continue` 跳过该拷贝（拷贝本身无人读，跳过
+无损），类型不受支持才 fail-closed。
+
+**9. stackc 深度分析要求全块可达 + DOM 标签锚定**。computeBlockDepths
+对 entryDepths 恒 -1 的块（不可达）直接 fail-closed（空文本 NONE）。
+夹具 `[GOTO tail, RETURN, tail:]` 的 RETURN 块不可达即翻车。且 DOM 语义
+下「空目标块」不存在：标签只在锚定真实指令时物化为目标块的 MIRLabel
+首节点（RawInsn 序列无 Label 伪指令），MIRLabel 发射自带 `label:` +
+空语句；树时代 `[RETURN, tailLabel]` 的尾部游离标签形状退役，等价钉义
+收窄为 `[GOTO tail, tail:, RETURN]`（目标块以标签发射开场）。

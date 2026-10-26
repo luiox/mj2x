@@ -419,9 +419,11 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
     EXPECT_NE(trapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_trap__I"),
               std::string::npos)
         << trapResult.text;
-    // undef 来路边拷贝的可观测形态：区域后合流边对 handler 侧异常接收局部
-    //（slot 2，try 体来路未定义）产出 dest 槽类型 undef 常量。
-    EXPECT_NE(trapResult.text.find("store ptr undef, ptr %slot_r2"), std::string::npos)
+    // undef 来路边拷贝的可观测形态：区域后合流边对 handler 块参数（try 体
+    // 来路未定义）产出 dest 槽类型 undef 常量。批 3b DOM 读路径的 handler
+    // 块参数不再携带树侧双标签怪癖的 slot_r2 局部，REF 槽型 undef 拷贝落在
+    // 异常接收局部（slot_r4），槽型保真钉义不变（ptr 而非 i32 塌缩）。
+    EXPECT_NE(trapResult.text.find("store ptr undef, ptr %slot_r"), std::string::npos)
         << trapResult.text;
     for (const auto& [level, text] : capture.backend().entries) {
         EXPECT_EQ(text.find("Skipping Test.trap(I)I:"), std::string::npos)

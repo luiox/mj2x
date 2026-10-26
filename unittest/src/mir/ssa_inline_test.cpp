@@ -237,7 +237,7 @@ TEST(SsaInlineTest, InlinesStaticCallWithRefParamAndIndySite)
                               new InvokeDynamicInsnNode(
                                   ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                                   ca::str::Utf8StringRef::from_cstr("(Ljava/lang/String;)Ljava/lang/String;"),
-                                  jbytecode::core::Handle(0,
+                                  jbytecode::core::Handle(Opcodes::H_INVOKESTATIC,
                                                           ca::str::Utf8StringRef::from_cstr("java/lang/invoke/StringConcatFactory"),
                                                           ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                                                           ca::str::Utf8StringRef::from_cstr("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;")),
@@ -299,7 +299,7 @@ TEST(SsaInlineTest, InlinesCalleeWithExternalCallAndFieldStore)
                                                 ca::str::Utf8StringRef::from_cstr("Ljava/util/Locale;")),
                               new LdcInsnNode(ca::str::Utf8StringRef::from_cstr("%s")),
                               new InsnNode(Opcodes::ICONST_1),
-                              new IntInsnNode(Opcodes::ANEWARRAY, 1),
+                              new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
                               new InsnNode(Opcodes::DUP),
                               new InsnNode(Opcodes::ICONST_0),
                               new VarInsnNode(Opcodes::LLOAD, 0),

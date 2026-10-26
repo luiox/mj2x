@@ -1591,7 +1591,13 @@ private:
                         return false;
                     }
                     const auto it = registerTypes_.find(copy.dest.id.value);
-                    const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
+                    if (it == registerTypes_.end()) {
+                        // dest 块参数已被 DCE（handler 内未读即重定义）→ 槽 alloca
+                        // 不存在，拷贝本身也无人读：直接跳过。发射 store 到未声明
+                        // 槽会产出 clang 拒收的非法 IR。
+                        continue;
+                    }
+                    const char* type = llvmType(it->second);
                     if (type == nullptr) {
                         reason = "LLVM IR exception edge copy has an unsupported type";
                         return false;

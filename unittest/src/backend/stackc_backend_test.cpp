@@ -162,15 +162,21 @@ TEST(StackCBackendTest, ThrowAndMonitorNullOperandEmitsNpeTrap)
 
 TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement)
 {
+    // 批 3b 垫片走字节回环：非跳转目标的标签不进字节流（树专有怪癖退役）。
+    // DOM 语义下「空目标块」不存在：标签只在锚定真实指令时物化为目标块的
+    // MIRLabel 首节点，而发射器对 MIRLabel 恒产 `label:` + 空语句。钉义收窄
+    // 为「GOTO 目标块以标签发射开场」：GOTO 尾跳 + RETURN 落在标签块内，
+    // 块全部可达（不可达块会让 stackc 深度分析 fail-closed）。
     auto* tailLabel                  = new LabelNode(labelScratchArena().create<Label>());
-    tailLabel->label->bytecodeOffset = 1;
+    tailLabel->label->bytecodeOffset = 3;
     StackCBackend  backend;
     auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "tailLabel",
                          "()V",
                                    {
-                             new InsnNode(Opcodes::RETURN),
+                             new JumpInsnNode(Opcodes::GOTO, tailLabel->label),
                              tailLabel,
+                             new InsnNode(Opcodes::RETURN),
                          });
     CompilerMethod cm;
     cm.methodNode       = mn.get();
@@ -229,7 +235,7 @@ TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge)
                              new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
                                                        testArena.intern("(I)Ljava/lang/String;"),
                                                        bsm,
-                                                                 {std::string("v=\x01")}),
+                                                                 {ca::core::Any(ca::str::Utf8StringRef::from_cstr("v=\x01"))}),
                              new InsnNode(Opcodes::ARETURN),
                          });
     CompilerMethod cm;
@@ -269,7 +275,7 @@ TEST(StackCBackendTest, InvokeDynamicOneObjectFastPathStackShape)
                                                        testArena.intern(
                                                            "(Ljava/lang/Object;)Ljava/lang/Object;"),
                                                        bsm,
-                                                                 {std::string("\x01")}),
+                                                                 {ca::core::Any(ca::str::Utf8StringRef::from_cstr("\x01"))}),
                              new InsnNode(Opcodes::ARETURN),
                          });
     CompilerMethod cm;
@@ -355,7 +361,7 @@ TEST(StackCBackendTest, StaticizeSkipsStringLiteralsAndComments)
                              new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
                                                        testArena.intern("(I)Ljava/lang/String;"),
                                                        bsm,
-                                                                 {std::string("v=") + poison + "\x01"}),
+                                                                 {ca::core::Any(ca::str::Utf8StringRef::from_cstr(("v=" + poison + "\x01").c_str()))}),
                              new InsnNode(Opcodes::ARETURN),
                          });
     CompilerMethod cm;

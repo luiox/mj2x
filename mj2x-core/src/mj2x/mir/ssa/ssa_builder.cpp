@@ -328,16 +328,28 @@ SSABlock* fallthroughBlock(const std::vector<Block*>&                l1blocks,
 // 的 goto 0）只合成 Label 对象、不发 LABEL 指令，CodeConverter 不会为该方法
 // 入口块建立该 label 映射，ssaByLabel 查不到。此时目标语义 = 方法真入口块
 // （fn.blocks[0]，合成 entry 之前的第一个 L1 块），回退到它并保持 args 绑定。
-SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel, int labelKey,
+Block* findBlockByLabel(const std::vector<Block*>& blocks, int labelId);
+
+SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel,
+                            const std::vector<Block*>&                 l1blocks,
+                            const std::vector<std::unique_ptr<SSABlock>>& fnBlocks, int labelKey,
                             SSABlock* realEntry)
 {
     auto it = ssaByLabel.find(labelKey);
-    return it != ssaByLabel.end() ? it->second : realEntry;
+    if (it != ssaByLabel.end()) return it->second;
+    // 块 id 与 mirLabelKey 不同域（批 3b 顺序 id）：回退 MIRLabel 节点扫描，
+    // Label* → 所在 L1 块 → 同 id 的 SSABlock。目标块必含同指针 MIRLabel。
+    if (const Block* l1 = findBlockByLabel(l1blocks, labelKey)) {
+        for (const auto& sb : fnBlocks) {
+            if (sb->l1LabelId == l1->id) return sb.get();
+        }
+    }
+    return realEntry;
 }
 
-// targetLabel is a Label*; CodeConverter stores label identity as the
-// pointer-derived key because libjbytecode resets bytecode offsets during tree
-// reconstruction.
+// targetLabel is a Label*; CodeConverter 批 3b 起块 id 用顺序标签 id（指针
+// 截断 id 在 x64 上可为负且 ASLR 依赖，已废除）。Label* → 块的解析一律经
+// MIRLabel 节点扫描（目标块必含同指针 MIRLabel），再落块 id 域。
 int mirLabelKey(jbytecode::core::Label* lbl)
 {
     return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
@@ -888,7 +900,7 @@ bool lowerReturnValue(const MIRReturnValue* /*rv*/, LowerCtx& d, std::string& re
 bool lowerUncondBranch(const MIRUncondBranch* ub, LowerCtx& d, std::string& /*reason*/)
 {
     int               tkey   = mirLabelKey(ub->targetLabel);
-    SSABlock*         target = resolveJumpTarget(d.ssaByLabel, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
+    SSABlock*         target = resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
     SSAJumpTerminator jt;
     jt.target      = buildSuccessor(target, d.fs, d.fn);
     d.sb->terminator = std::move(jt);
@@ -917,7 +929,7 @@ bool lowerBranchZero(const MIRBranchZero* bz, LowerCtx& d, std::string& reason)
     bt.condition  = cond;
     int bzKey     = mirLabelKey(bz->targetLabel);
     bt.trueTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
@@ -943,7 +955,7 @@ bool lowerBranch(const MIRBranch* br, LowerCtx& d, std::string& reason)
     bt.condition  = cond;
     int brKey     = mirLabelKey(br->targetLabel);
     bt.trueTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
@@ -963,12 +975,12 @@ bool lowerSwitch(const MIRSwitch* sw, LowerCtx& d, std::string& reason)
         SSASwitchCase sc;
         sc.key    = c.key;
         sc.target = buildSuccessor(
-            resolveJumpTarget(d.ssaByLabel, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+            resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
         st.cases.push_back(std::move(sc));
     }
     int defaultKey   = mirLabelKey(sw->defaultLabel);
     st.defaultTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     d.sb->terminator = std::move(st);
     return true;
 }
@@ -1338,24 +1350,32 @@ std::vector<ExceptionHandler> SSABuilder::exceptionTable(const std::vector<Block
     return blocks.front()->exceptionTable;
 }
 
-void SSABuilder::collectOutEdges(Block* b, std::vector<int>& targets)
+void SSABuilder::collectOutEdges(Block* b, const std::vector<Block*>& all,
+                                 std::vector<int>& targets)
 {
+    // Label* → 所在块 id（MIRLabel 节点扫描）；找不到不产边（防御）。
+    // 块 id 与 mirLabelKey 不同域（批 3b 顺序 id），边键必须落块 id 域。
+    auto pushBlockId = [&all, &targets](jbytecode::core::Label* lbl) {
+        if (const Block* l1 = findBlockByLabel(all, mirLabelKey(lbl))) {
+            targets.push_back(l1->id);
+        }
+    };
     for (auto& node : b->nodes) {
         switch (node->kind) {
         case MIRKind::UNCOND_BRANCH:
-            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRUncondBranch>(node.get())->targetLabel));
+            pushBlockId(ca::core::tag_cast::cast<MIRUncondBranch>(node.get())->targetLabel);
             break;
         case MIRKind::BRANCH:
-            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRBranch>(node.get())->targetLabel));
+            pushBlockId(ca::core::tag_cast::cast<MIRBranch>(node.get())->targetLabel);
             break;
         case MIRKind::BRANCH_ZERO:
-            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRBranchZero>(node.get())->targetLabel));
+            pushBlockId(ca::core::tag_cast::cast<MIRBranchZero>(node.get())->targetLabel);
             break;
         case MIRKind::SWITCH:
         {
             auto* sw = ca::core::tag_cast::cast<MIRSwitch>(node.get());
-            targets.push_back(mirLabelKey(sw->defaultLabel));
-            for (auto& c : sw->cases) targets.push_back(mirLabelKey(c.targetLabel));
+            pushBlockId(sw->defaultLabel);
+            for (auto& c : sw->cases) pushBlockId(c.targetLabel);
             break;
         }
         default: break;
@@ -1388,7 +1408,7 @@ std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector
     for (size_t i = 0; i < blocks.size(); ++i) {
         Block*           b = blocks[i];
         std::vector<int> outs;
-        collectOutEdges(b, outs);
+        collectOutEdges(b, blocks, outs);
         // 非终结块 fallthrough 到序列下一块（R1a.2：CFG 保真的关键 —— fallthrough 也是边）。
         if (!blockEndsWithTerminator(b) && i + 1 < blocks.size()) {
             outs.push_back(blocks[i + 1]->id);

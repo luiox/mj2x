@@ -508,8 +508,20 @@ TEST(CodeConverterTest, UnconditionalBranch)
     bool foundGoto = false;
     for (auto& n : entryBlock->nodes) {
         if (n->kind == MIRKind::UNCOND_BRANCH) {
-            // targetLabel 现在是 Label* 身份（不再用 bytecodeOffset，见 R1a.3）
-            EXPECT_EQ(ca::core::tag_cast::cast<MIRUncondBranch>(n.get())->targetLabel, label->label);
+            auto* gotoNode = ca::core::tag_cast::cast<MIRUncondBranch>(n.get());
+            // 批 3b DOM 读路径：目标是 LabelPool 合成标签，与树侧 Label*
+            // 身份等价性经「目标块内 MIRLabel 同指针」断言。
+            bool targetAnchored = false;
+            for (auto* b : blocks) {
+                for (auto& nn : b->nodes) {
+                    if (nn->kind == MIRKind::LABEL &&
+                        static_cast<const MIRLabel*>(nn.get())->labelNode ==
+                            gotoNode->targetLabel) {
+                        targetAnchored = true;
+                    }
+                }
+            }
+            EXPECT_TRUE(targetAnchored);
             foundGoto = true;
         }
     }
@@ -568,7 +580,11 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
             new InvokeDynamicInsnNode(ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                                       ca::str::Utf8StringRef::from_cstr("()Ljava/lang/String;"),
                                       bsm,
-                                       {std::string("v=\x01")}),
+                                      // 批 3b：垫片走字节回环，bsm arg 须是旧 writer
+                                      // 可序列化的载荷（Utf8StringRef→CONSTANT_String）；
+                                      // std::string 不在其分派内会写出废索引 0。
+                                       {ca::core::Any(
+                                           ca::str::Utf8StringRef::from_cstr("v=\x01"))}),
             new InsnNode(Opcodes::ARETURN),
         });
 
@@ -623,7 +639,19 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
                 auto* bz = ca::core::tag_cast::cast<MIRBranchZero>(n.get());
                 EXPECT_EQ(bz->op, CmpOp::EQ);
                 EXPECT_EQ(bz->type, PrimitiveKind::OBJECT);
-                EXPECT_EQ(bz->targetLabel, label->label);
+                // 批 3b DOM 读路径：目标是 LabelPool 合成标签，与树侧 Label*
+                // 身份等价性经「目标块内 MIRLabel 同指针」断言。
+                bool targetAnchored = false;
+                for (auto* b : blocks) {
+                    for (auto& nn : b->nodes) {
+                        if (nn->kind == MIRKind::LABEL &&
+                            static_cast<const MIRLabel*>(nn.get())->labelNode ==
+                                bz->targetLabel) {
+                            targetAnchored = true;
+                        }
+                    }
+                }
+                EXPECT_TRUE(targetAnchored);
                 foundObjectNullBranch = true;
             }
         }
@@ -801,20 +829,26 @@ TEST(CodeConverterTest, NewObjectAndInvokeSpecial)
 
 TEST(CodeConverterTest, SwitchInstructions)
 {
-    auto* defaultLabel                  = new LabelNode(labelScratchArena().create<Label>());
-    defaultLabel->label->bytecodeOffset = 100;
-    auto* caseLabel                     = new LabelNode(labelScratchArena().create<Label>());
-    caseLabel->label->bytecodeOffset    = 50;
+    // 批 3b 起转换走 DOM 读路径（树经 plain 序列化字节往返），夹具必须是
+    // 合法字节码：tableswitch 的 labels 数 == max-min+1（旧树模型不序列化，
+    // 非法夹具不再可用）。目标身份断言改为 DOM 合成语义：switch 的目标
+    // Label* 与目标块内 MIRLabel 的 labelNode 同指针（LabelPool 同 pc 同身份）。
+    auto* defaultLabel = new LabelNode(labelScratchArena().create<Label>());
+    auto* caseLabel0   = new LabelNode(labelScratchArena().create<Label>());
+    auto* caseLabel1   = new LabelNode(labelScratchArena().create<Label>());
 
     auto mn =
         makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                    "sw",
                    "()V",
                    {
-                       new TableSwitchInsnNode(0, 10, defaultLabel->label, {caseLabel->label}),
+                       new TableSwitchInsnNode(0, 1, defaultLabel->label,
+                                               {caseLabel0->label, caseLabel1->label}),
                        defaultLabel,
                        new InsnNode(Opcodes::RETURN),
-                       caseLabel,
+                       caseLabel0,
+                       new InsnNode(Opcodes::RETURN),
+                       caseLabel1,
                        new InsnNode(Opcodes::RETURN),
                    });
 
@@ -838,9 +872,23 @@ TEST(CodeConverterTest, SwitchInstructions)
     for (auto& n : entryBlock->nodes) {
         if (n->kind == MIRKind::SWITCH) {
             auto* sw = ca::core::tag_cast::cast<MIRSwitch>(n.get());
-            // defaultLabel 现在是 Label* 身份（不再用 bytecodeOffset，见 R1a.3）
-            EXPECT_EQ(sw->defaultLabel, defaultLabel->label);
-            ASSERT_EQ(sw->cases.size(), 1);
+            ASSERT_EQ(sw->cases.size(), 2u);
+            // 目标身份：每个目标 Label* 必有含对应 MIRLabel 的块（键 = case 0..1）。
+            auto blockHasLabel = [&](Label* l) {
+                for (auto* b : blocks) {
+                    for (auto& nn : b->nodes) {
+                        if (nn->kind != MIRKind::LABEL) continue;
+                        if (static_cast<const MIRLabel*>(nn.get())->labelNode == l) return true;
+                    }
+                }
+                return false;
+            };
+            EXPECT_TRUE(blockHasLabel(sw->defaultLabel));
+            EXPECT_TRUE(blockHasLabel(sw->cases[0].targetLabel));
+            EXPECT_TRUE(blockHasLabel(sw->cases[1].targetLabel));
+            // 目标互异（default 与两个 case 各自独立块）。
+            EXPECT_NE(sw->defaultLabel, sw->cases[0].targetLabel);
+            EXPECT_NE(sw->cases[0].targetLabel, sw->cases[1].targetLabel);
             foundSwitch = true;
         }
     }
