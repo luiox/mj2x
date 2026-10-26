@@ -8,6 +8,8 @@
 #include "regc_emitter_internal.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "libca/str/format.hpp"
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
@@ -15,7 +17,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 
 using codegen::cStringLiteral;
 using codegen::CSourceStream;

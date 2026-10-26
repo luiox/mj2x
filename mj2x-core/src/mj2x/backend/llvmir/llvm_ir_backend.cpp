@@ -5,6 +5,8 @@
 #include "llvm_ir_internal.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
@@ -21,7 +23,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 using namespace jbytecode::tree;
 using namespace llvmir;   // 类型工具 / 验证 / 发射器 / 共享 helper
 

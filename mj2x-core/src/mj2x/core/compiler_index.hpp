@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <jbytecode/jbytecode.hpp>
+#include <jbc/core/class_file.hpp>
 #include <libca/str/utf8_string_arena.hpp>
 
 #include <unordered_map>
@@ -57,6 +58,12 @@ struct JarEntryRecord
 struct CompilerClass
 {
     std::unique_ptr<jbytecode::tree::ClassNode> classNode;
+    /// @brief libjbc DOM 视图（批 2 双表示过渡，libjbc 迁移批 3-6 逐批接管消费）。
+    ///
+    /// 由 syncTreeToDom 在 pipeline 阶段边界从当前 tree 序列化字节派生
+    /// （唯一同步通道 = 真实编解码器字节往返，见 class_dom_sync.hpp）；
+    /// 新鲜度契约：compile 入口与 postprocessor 入口时刻与 tree 一致。
+    std::unique_ptr<jbc::core::ClassFile>       dom;
     std::vector<CompilerMethod>                 methods;
     std::vector<CompilerField>                  fields;
     bool                                        modified  = false;

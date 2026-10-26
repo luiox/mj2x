@@ -4,6 +4,8 @@
 #pragma once
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_options.hpp"
@@ -28,7 +30,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
 using codegen::mangleMethod;

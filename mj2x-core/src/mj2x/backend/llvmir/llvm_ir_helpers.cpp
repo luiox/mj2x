@@ -254,9 +254,9 @@ std::string indyBsmArgExpr(const std::string& siteTag, const ca::core::Any& valu
         break;
     case IndyBsmArgKind::MethodType:
     case IndyBsmArgKind::Class:
-        if (const auto* p = value.as<Type>()) {
+        if (const auto* p = value.as<jbytecode::core::Type>()) {
             consts << llvmConstantString(g + "_desc", indyTypeText(*p));
-            if (p->getSort() == Type::METHOD) {
+            if (p->getSort() == jbytecode::core::Type::METHOD) {
                 return "call ptr @mj2x_llvm_indy_method_type(ptr %env, ptr %owner, ptr @" + g +
                        "_desc)";
             }

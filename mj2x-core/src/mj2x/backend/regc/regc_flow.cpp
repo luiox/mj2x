@@ -11,6 +11,8 @@
 #include "mj2x/mir/passes/const_key_derivation.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "libca/str/format.hpp"
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
@@ -23,7 +25,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 
 using codegen::cStringLiteral;
 using codegen::CSourceStream;
@@ -363,7 +364,7 @@ bool isPrivateThisCall(const RegCFunctionEmitState& state, const RegInstruction&
     const std::string desc = ins.method.desc.to_std_string();
     for (const auto& mn : cls->classNode->methods) {
         if (mn->name.to_std_string() == name && mn->desc.to_std_string() == desc) {
-            return (mn->access & jbytecode::core::Opcodes::ACC_PRIVATE) != 0;
+            return (mn->access & Opcodes::ACC_PRIVATE) != 0;
         }
     }
     return false;

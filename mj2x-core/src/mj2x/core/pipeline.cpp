@@ -1,5 +1,6 @@
 #include "pipeline.hpp"
 #include "mj2x/io/input_loader.hpp"
+#include "mj2x/core/class_dom_sync.hpp"
 #include "mj2x/io/output_writer.hpp"
 
 #include "libca/log/log_macros.hpp"
@@ -49,7 +50,9 @@ int Pipeline::run()
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
         runPreprocessors();
+        syncTreeToDom(*index_);   // 批 2：预处理树改动 → DOM（批 3 起供读方消费）
         compileMethods();
+        syncTreeToDom(*index_);   // 批 2：backend 注入 → DOM
         runPostprocessors();
     }
     catch (const std::exception& e) {

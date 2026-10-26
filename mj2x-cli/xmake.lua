@@ -30,7 +30,7 @@ target("mj2x-cli")
     -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
     -- mj2x-core → libjbytecode 聚合库（实现分散在子库），须逐个补齐到 libca_core；
     -- 裸 libca_*/libjdk_finder 库名落到包 libdir 解析（add_packages 传导 libpath）。
-    mj2x_binary_link_closure("mj2x-core", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
+    mj2x_binary_link_closure("mj2x-core", "libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
               "libjbytecode_tree", "libjbytecode_core", "libgarena",
               "libjstr", "libjzip", "libca_log", "libjdk_finder",
               "libca_process", "libca_opt", "libca_zip",

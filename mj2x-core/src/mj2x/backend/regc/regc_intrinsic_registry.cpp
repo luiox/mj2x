@@ -1,6 +1,8 @@
 #include "regc_intrinsic_registry.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 
 namespace mj2x {
 
@@ -1904,7 +1906,7 @@ RegCIntrinsicDecision RegCIntrinsicRegistry::matchUserCall(const RegCIntrinsicCa
             return decision;
         }
         const auto argTypes =
-            jbytecode::core::Type::getMethodType(ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
+            Type::getMethodType(ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
                 .getArgumentTypes();
         if (!call.isStatic() && !entry.passReceiver) {
             return RegCIntrinsicDecision{};
@@ -2081,13 +2083,13 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
         for (const auto& entry : userEntries_) {
             std::string decl =
                 std::string("extern ") +
-                cType(jbytecode::core::Type::getMethodType(
+                cType(Type::getMethodType(
                           ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
                           .getReturnType()
                           .getDescriptor(scratch)) +
                 " " + entry.symbol + "(";
             const auto argTypes =
-                jbytecode::core::Type::getMethodType(
+                Type::getMethodType(
                     ca::str::Utf8StringRef::from_cstr(entry.desc.c_str()))
                     .getArgumentTypes();
             size_t     printed  = 0;

@@ -13,7 +13,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
 class LlvmFunctionEmitter
