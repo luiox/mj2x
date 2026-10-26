@@ -1029,7 +1029,7 @@ void prependRegisterNativesCall(CompilerClass& clazz, int classId)
     using namespace jbytecode::tree;
     InsnList prefix;
     prefix.add(clinit->create<LdcInsnNode>(classId));
-    prefix.add(clinit->create<LdcInsnNode>(Type::getObjectType(clazz.classNode->name)));
+    prefix.add(clinit->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(clazz.classNode->name)));
     prefix.add(clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                                   ca::str::ZUtf8StringRef::from_static(cloader::kClassName),
                                   ca::str::ZUtf8StringRef::from_static(cloader::kRegisterName),
@@ -1087,20 +1087,21 @@ std::string indyBoxedClassName(const ca::str::Utf8StringRef& desc)
     return indyBoxedClassNameForDescHead(s.empty() ? '\0' : s[0]);
 }
 
-std::string indyTypeDescriptorString(const Type& type)
+std::string indyTypeDescriptorString(const jbytecode::core::Type& type)
 {
     // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
     ca::str::Utf8StringArena scratch;
     return type.getDescriptor(scratch).to_std_string();
 }
 
-std::string indyMethodTypeDescriptorString(const Type& type)
+std::string indyMethodTypeDescriptorString(const jbytecode::core::Type& type)
 {
     // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
     // 落点参数按必选口径走函数级局部 arena；toString 本就不 intern。
     ca::str::Utf8StringArena scratch;
-    return type.getSort() == Type::METHOD ? type.getDescriptor(scratch).to_std_string()
-                                          : type.toString();
+    return type.getSort() == jbytecode::core::Type::METHOD
+                   ? type.getDescriptor(scratch).to_std_string()
+                   : type.toString();
 }
 
 void emitIndyMethodType(CSourceStream& out, const std::string& var, const std::string& methodDesc)
@@ -1228,8 +1229,8 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
         break;
     case IndyBsmArgKind::MethodType:
     case IndyBsmArgKind::Class:
-        if (const auto* p = value.as<Type>()) {
-            if (p->getSort() == Type::METHOD) {
+        if (const auto* p = value.as<jbytecode::core::Type>()) {
+            if (p->getSort() == jbytecode::core::Type::METHOD) {
                 emitIndyMethodType(out, var, indyMethodTypeDescriptorString(*p));
             }
             else {

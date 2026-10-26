@@ -404,8 +404,8 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
             break;
         case IndyBsmArgKind::MethodType:
         case IndyBsmArgKind::Class:
-            if (auto* p = value.as<Type>()) {
-                if (p->getSort() == Type::METHOD) {
+            if (auto* p = value.as<jbytecode::core::Type>()) {
+                if (p->getSort() == jbytecode::core::Type::METHOD) {
                     emitMethodType(varName, methodTypeDescriptorString(*p));
                 }
                 else {

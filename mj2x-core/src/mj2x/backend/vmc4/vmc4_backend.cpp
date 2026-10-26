@@ -137,7 +137,7 @@ void prependRegisterNativesCall(CompilerClass& clazz, int classId)
     }
     InsnList prefix;
     prefix.add(clinit->create<LdcInsnNode>(classId));
-    prefix.add(clinit->create<LdcInsnNode>(Type::getObjectType(clazz.classNode->name)));
+    prefix.add(clinit->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(clazz.classNode->name)));
     prefix.add(clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                                   ca::str::ZUtf8StringRef::from_static(cloader::kClassName),
                                   ca::str::ZUtf8StringRef::from_static(cloader::kRegisterName),

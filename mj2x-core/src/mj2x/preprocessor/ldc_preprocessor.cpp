@@ -90,7 +90,7 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
     auto pushMethodTypeSeq = [&](std::vector<AbstractInsnNode*>& seq,
                                  ca::str::Utf8StringRef desc) {
         seq.push_back(newStringLdc(desc));
-        seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(callerClass)));
+        seq.push_back(m->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(callerClass)));
         seq.push_back(m->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL,
                                          intern(arena, "java/lang/Class"),
                                          intern(arena, "getClassLoader"),
@@ -119,7 +119,7 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                                              intern(arena, "lookup"),
                                              intern(arena, "()Ljava/lang/invoke/MethodHandles$Lookup;"),
                                              false));
-            seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(h.getOwner())));
+            seq.push_back(m->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(h.getOwner())));
 
             // findXxx 选择（按 tag）——#1027 find4 收敛：tag→find* 形态单源 =
             // indyHandleFindFor（原同式 switch 逐分支对拍等价后切换，发射文本
@@ -145,7 +145,7 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                                                     intern(arena, "Ljava/lang/Class;")));
                 }
                 else {
-                    seq.push_back(m->create<LdcInsnNode>(Type::getType(h.getDesc())));
+                    seq.push_back(m->create<LdcInsnNode>(jbytecode::core::Type::getType(h.getDesc())));
                 }
                 break;
             }
@@ -153,7 +153,7 @@ bool expandLdcInMethod(ca::str::Utf8StringArena& arena, ca::str::Utf8StringRef c
                 // findSpecial(Class, String, MethodType, Class specialCaller)。
                 seq.push_back(newStringLdc(mname));
                 pushMethodTypeSeq(seq, mdesc);
-                seq.push_back(m->create<LdcInsnNode>(Type::getObjectType(callerClass)));
+                seq.push_back(m->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(callerClass)));
                 break;
             case IndyHandleArgShape::TypeOnly:
                 // findConstructor(Class, MethodType)：无 name 参数。

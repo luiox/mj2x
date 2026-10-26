@@ -343,19 +343,20 @@ inline std::string utf8RefToString(ca::str::Utf8StringRef value)
     return value.to_std_string();
 }
 
-inline std::string typeDescriptorString(const Type& type)
+inline std::string typeDescriptorString(const jbytecode::core::Type& type)
 {
     // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
     ca::str::Utf8StringArena scratch;
     return type.getDescriptor(scratch).to_std_string();
 }
 
-inline std::string methodTypeDescriptorString(const Type& type)
+inline std::string methodTypeDescriptorString(const jbytecode::core::Type& type)
 {
     // #921 staticArena 退役：同上；toString 本就不 intern。
     ca::str::Utf8StringArena scratch;
-    return type.getSort() == Type::METHOD ? type.getDescriptor(scratch).to_std_string()
-                                          : type.toString();
+    return type.getSort() == jbytecode::core::Type::METHOD
+                   ? type.getDescriptor(scratch).to_std_string()
+                   : type.toString();
 }
 
 inline const char* boxedClassName(PrimitiveKind kind)

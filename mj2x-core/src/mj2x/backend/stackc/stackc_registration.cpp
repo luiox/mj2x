@@ -100,7 +100,7 @@ static void emitClassRegistrationCall(MethodNode* clinit, ca::str::Utf8StringRef
     // <clinit>，故转换类 clinit 只需 registerNativesForClass，不再重复携带
     // 相同的资源路径字符串与调用。
     clinit->instructions.add(clinit->create<LdcInsnNode>(classId));
-    clinit->instructions.add(clinit->create<LdcInsnNode>(Type::getObjectType(className)));
+    clinit->instructions.add(clinit->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(className)));
     clinit->instructions.add(
         clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
                            ca::str::ZUtf8StringRef::from_static(kRegisterBridgeClassName),
