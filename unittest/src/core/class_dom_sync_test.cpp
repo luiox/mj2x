@@ -44,7 +44,7 @@ static std::unique_ptr<ClassNode> makeSyncClass(const char* className)
 
 static std::vector<ca::u8> serialize(const CompilerClass& cls, Utf8StringArena& arena)
 {
-    ClassWriter writer(arena, ClassWriter::COMPUTE_MAXS);
+    ClassWriter writer(arena, 0);   // 与 sync 同口径（plain 序列化）
     cls.classNode->accept(&writer);
     return writer.toByteArray();
 }

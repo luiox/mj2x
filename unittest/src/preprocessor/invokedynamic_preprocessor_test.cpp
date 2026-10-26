@@ -180,10 +180,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsStatelessLambda)
 
     // bsmArgs: [0]=samMethodType (I)I, [1]=implHandle Lam.base(I)I static, [2]=instantiated (I)I。
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
                                 arena.intern("(I)I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
                                            arena.intern("()Ljava/util/function/IntUnaryOperator;"),
@@ -223,10 +223,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsCapturingLambda)
     // bsmArgs: [0]=samMethodType (I)I, [1]=impl Cap.lambda$make$0(I I)I static（捕获在前）,
     //          [2]=instantiated (I)I。
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Cap"),
                                 arena.intern("lambda$make$0"), arena.intern("(II)I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
 
     // 捕获 lambda：indy desc 带一个捕获参数 (I)，返回 functional interface。
     auto* indy =
@@ -271,10 +271,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsUnboundInstanceRef)
 
     // samMethodType (Lp/Rec;)I：receiver 就是唯一 SAM 参数；impl 虚调用 Rec.val()I。
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Rec;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Rec"),
                                 arena.intern("val"), arena.intern("()I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Rec;)I")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"),
                                            arena.intern("()Lp/Fn;"),
@@ -303,10 +303,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsBoundInstanceRef)
 
     // samMethodType ()I：无 SAM 参数；receiver 来自 indy 捕获参数 (Lp/Rec;)。
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("()I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("()I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Rec"),
                                 arena.intern("val"), arena.intern("()I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("()I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("()I")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("get"),
                                            arena.intern("(Lp/Rec;)Lp/Sup;"),
@@ -336,10 +336,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsInterfaceMethodRef)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/util/List;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Ljava/util/List;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEINTERFACE, arena.intern("java/util/List"),
                                 arena.intern("size"), arena.intern("()I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/util/List;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Ljava/util/List;)I")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"), arena.intern("()Lp/Fn;"),
                                            lambdaMetafactoryBsm(index), bsmArgs);
@@ -363,10 +363,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsConstructorRef)
 
     // samMethodType (I)Lp/Rec;：一个 int 参 → 造出 Rec；impl = Rec.<init>(I)V。
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)Lp/Rec;")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)Lp/Rec;")));
     bsmArgs.emplace_back(Handle(Opcodes::H_NEWINVOKESPECIAL, arena.intern("p/Rec"),
                                 arena.intern("<init>"), arena.intern("(I)V")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)Lp/Rec;")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)Lp/Rec;")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("make"), arena.intern("()Lp/Factory;"),
                                            lambdaMetafactoryBsm(index), bsmArgs);
@@ -404,10 +404,10 @@ TEST(InvokeDynamicPreprocessorTest, LeavesUnsupportedHandleUnexpanded)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Rec;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_GETFIELD, arena.intern("p/Rec"),
                                 arena.intern("field"), arena.intern("I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Rec;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Rec;)I")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"), arena.intern("()Lp/Fn;"),
                                            lambdaMetafactoryBsm(index), bsmArgs);
@@ -432,11 +432,11 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsErasedStaticRefWithBoxing)
 
     std::vector<ca::core::Any> bsmArgs;
     bsmArgs.emplace_back(
-        Type::getMethodType(arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;")));
+        jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("M"), arena.intern("abs"),
                                 arena.intern("(I)I")));
     bsmArgs.emplace_back(
-        Type::getMethodType(arena.intern("(Ljava/lang/Integer;)Ljava/lang/Integer;")));
+        jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/Integer;)Ljava/lang/Integer;")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"),
                                            arena.intern("()Ljava/util/function/Function;"),
@@ -464,10 +464,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsErasedConsumerDroppingReturn)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/Object;)V")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/Object;)V")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("C"), arena.intern("use"),
                                 arena.intern("(Ljava/lang/String;)I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/String;)V")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/String;)V")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("accept"),
                                            arena.intern("()Ljava/util/function/Consumer;"),
@@ -497,10 +497,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsErasedInstanceRefReceiverCast)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/Object;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/Object;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("java/lang/String"),
                                 arena.intern("length"), arena.intern("()I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Ljava/lang/String;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/String;)I")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
                                            arena.intern("()Ljava/util/function/ToIntFunction;"),
@@ -534,10 +534,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsPrimitiveWidening)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)V")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)V")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("W"), arena.intern("useLong"),
                                 arena.intern("(J)V")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)V")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)V")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("accept"), arena.intern("()Lp/IntSink;"),
                                            lambdaMetafactoryBsm(index), bsmArgs);
@@ -560,10 +560,10 @@ TEST(InvokeDynamicPreprocessorTest, LeavesPrimitiveNarrowingUnexpanded)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(J)V")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(J)V")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("N"), arena.intern("useInt"),
                                 arena.intern("(I)V")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(J)V")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(J)V")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("accept"), arena.intern("()Lp/LongSink;"),
                                            lambdaMetafactoryBsm(index), bsmArgs);
@@ -607,10 +607,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactorySerializable)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
                                 arena.intern("(I)I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(1);   // FLAG_SERIALIZABLE
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
@@ -636,13 +636,13 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactoryMarkerInterface)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
                                 arena.intern("(I)I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(2);   // FLAG_MARKERS
     bsmArgs.emplace_back(1);   // markerCount
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("java/lang/Cloneable")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("java/lang/Cloneable")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
                                            arena.intern("()Ljava/util/function/IntUnaryOperator;"),
@@ -667,15 +667,15 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactoryWithBridge)
     // 主 SAM 擦除为 (Object)Object，bridge 是具体 (String)String；impl 静态 id(String)String。
     std::vector<ca::core::Any> bsmArgs;
     bsmArgs.emplace_back(
-        Type::getMethodType(arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;")));
+        jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Id"), arena.intern("id"),
                                 arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
     bsmArgs.emplace_back(
-        Type::getMethodType(arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
+        jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
     bsmArgs.emplace_back(4);   // FLAG_BRIDGES
     bsmArgs.emplace_back(1);   // bridgeCount
     bsmArgs.emplace_back(
-        Type::getMethodType(arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
+        jbytecode::core::Type::getMethodType(arena.intern("(Ljava/lang/String;)Ljava/lang/String;")));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("apply"), arena.intern("()Lp/Fn;"),
                                            lambdaAltMetafactoryBsm(index), bsmArgs);
@@ -705,10 +705,10 @@ TEST(InvokeDynamicPreprocessorTest, LeavesUnknownAltFlagsUnexpanded)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
                                 arena.intern("(I)I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(8);   // 未知 flag 位
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("applyAsInt"),
@@ -753,10 +753,10 @@ MethodNode* addLambdaCaller(CompilerIndex& index, const std::string& callerName,
     const std::string makeName = "make" + tag;
     const std::string implName = "impl" + tag;
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKESTATIC, arena.intern(callerName.c_str()),
                                 arena.intern(implName.c_str()), arena.intern("(I)I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)I")));
     auto* indy = new InvokeDynamicInsnNode(
         arena.intern("apply"),
         arena.intern(("()" + std::string("L") + samIface + ";").c_str()),

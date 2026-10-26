@@ -1,5 +1,7 @@
 #include "ssa_builder.hpp"
 #include "mj2x/frontend/type_utils.hpp"
+#include "mj2x/core/jvm_type.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 
 #include <cassert>
@@ -11,7 +13,7 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
+using jbytecode::core::Label;
 
 namespace {
 
@@ -82,10 +84,10 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c)
         // and dump apply their own escaping when rendering.
         return fn.newOpaque(SSAType::REF, "ldc_string:" + std::get<ca::str::Utf8StringRef>(c->value).to_std_string());
     }
-    if (std::holds_alternative<jbytecode::core::Type>(c->value)) {
+    if (std::holds_alternative<Type>(c->value)) {
         // LDC Class 常量（Foo.class）：Type 的 internal name 即 JNI FindClass 需要的路径
         // （如 "java/lang/String"）。用 "ldc_class:" 前缀透传给 emitter 发射 FindClass。
-        const auto& t = std::get<jbytecode::core::Type>(c->value);
+        const auto& t = std::get<Type>(c->value);
         // #921 staticArena 退役：内部名仅瞬时转串做 SSA 名，函数级局部 arena 零驻留。
         ca::str::Utf8StringArena scratch;
         return fn.newOpaque(SSAType::REF, "ldc_class:" + t.getInternalName(scratch).to_std_string());

@@ -6,12 +6,14 @@
 ///          自带完整缩进文本经 append 整体写入。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/core/jvm_type.hpp"
+
 #include "libca/str/format.hpp"
 #include <cmath>
 
 namespace mj2x {
 
-using namespace jbytecode::core;
+using jbytecode::core::Label;
 using namespace jbytecode::analysis;
 using codegen::cFloatLiteral;
 using codegen::cStringLiteral;

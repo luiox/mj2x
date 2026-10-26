@@ -1310,10 +1310,10 @@ TEST_F(RegCBackendE2E, IndyDirectNullReceiverRoutesToHandlerRoundTrip)
 
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(LRec;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(LRec;)I")));
     bsmArgs.emplace_back(
         Handle(Opcodes::H_GETFIELD, arena.intern("Rec"), arena.intern("f"), arena.intern("I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(LRec;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(LRec;)I")));
 
     auto* tryStart = new Label();
     auto* tryEnd   = new Label();

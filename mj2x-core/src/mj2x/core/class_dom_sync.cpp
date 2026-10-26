@@ -16,10 +16,15 @@ using jbytecode::core::ClassWriter;
 
 namespace {
 
-/// @brief tree 序列化旗标：与 output_writer 同口径（modified 判据一致）。
+/// @brief tree 序列化旗标：恒 plain（0）。
 static ca::i32 writerFlags(const CompilerClass& cls)
 {
-    return cls.modified ? ClassWriter::COMPUTE_FRAMES : ClassWriter::COMPUTE_MAXS;
+    (void)cls;
+    // 旗标恒 0（plain）：COMPUTE_MAXS/FRAMES 的帧计算在旧栈 writer 上有
+    // 树/arena 侧副作用（批 2 实证：COMPUTE 同步致 LLVM 样例回退 + dump
+    // 段错误；plain 序列化无此面）。帧重算归 output_writer / 批 6 的
+    // smt_build，本同步只求「如实序列化当前 tree 状态」。
+    return 0;
 }
 
 static std::vector<ca::u8> serializeTree(const CompilerClass& cls,

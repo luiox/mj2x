@@ -88,7 +88,7 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
     //（函数级局部 arena，仅瞬时转串）。
     ca::str::Utf8StringArena scratch;
     for (const auto&         arg :
-         Type::getArgumentTypes(ca::str::Utf8StringRef::from_string_view(methodDesc))) {
+         jbytecode::core::Type::getArgumentTypes(ca::str::Utf8StringRef::from_string_view(methodDesc))) {
         // 本测试不用 long/double 形参，category 差异不影响判据。
         stack.push_back(arg.getDescriptor(scratch).to_std_string());
     }
@@ -113,9 +113,9 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
             auto* mi = static_cast<MethodInsnNode*>(insn);
             // desc 先落具名局部（Type 持有的是视图，不能指向临时 string）。
             const std::string miDesc = mi->desc.to_std_string();
-            const auto args = Type::getArgumentTypes(
+            const auto args = jbytecode::core::Type::getArgumentTypes(
                 ca::str::Utf8StringRef::from_string_view(miDesc));
-            const auto ret = Type::getReturnType(
+            const auto ret = jbytecode::core::Type::getReturnType(
                 ca::str::Utf8StringRef::from_string_view(miDesc));
             const bool hasReceiver = mi->getOpcode() != Opcodes::INVOKESTATIC;
             const int  argCount    = static_cast<int>(args.size());
@@ -155,7 +155,7 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
                     return false;
                 }
                 const std::string mDesc = m->desc.to_std_string();
-                const auto ret = Type::getReturnType(
+                const auto ret = jbytecode::core::Type::getReturnType(
                     ca::str::Utf8StringRef::from_string_view(mDesc));
                 if (!descCompatible(ret.getDescriptor(scratch).to_std_string(), stack.back())) {
                     reason = "areturn type mismatch: " + stack.back();
@@ -393,7 +393,7 @@ TEST_F(LdcPreprocessorTest, FindNameAndDescFullTable)
 TEST_F(LdcPreprocessorTest, ExpandMethodTypeConstant)
 {
     CompilerIndex index;
-    Type mt = Type::getMethodType(ca::str::Utf8StringRef::from_cstr("(I)V"));
+    Type mt = jbytecode::core::Type::getMethodType(ca::str::Utf8StringRef::from_cstr("(I)V"));
     runAndVerify(ca::core::Any(mt), "()Ljava/lang/invoke/MethodType;", nullptr);
 }
 

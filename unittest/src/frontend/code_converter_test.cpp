@@ -32,12 +32,12 @@ namespace {}
 
 TEST(TypeUtilsTest, JvmSortToPrimitive)
 {
-    EXPECT_EQ(jvmSortToPrimitive(Type::INT), PrimitiveKind::INT);
-    EXPECT_EQ(jvmSortToPrimitive(Type::LONG), PrimitiveKind::LONG);
-    EXPECT_EQ(jvmSortToPrimitive(Type::FLOAT), PrimitiveKind::FLOAT);
-    EXPECT_EQ(jvmSortToPrimitive(Type::DOUBLE), PrimitiveKind::DOUBLE);
-    EXPECT_EQ(jvmSortToPrimitive(Type::BOOLEAN), PrimitiveKind::BOOLEAN);
-    EXPECT_EQ(jvmSortToPrimitive(Type::VOID), PrimitiveKind::VOID);
+    EXPECT_EQ(jvmSortToPrimitive(jbytecode::core::Type::INT), PrimitiveKind::INT);
+    EXPECT_EQ(jvmSortToPrimitive(jbytecode::core::Type::LONG), PrimitiveKind::LONG);
+    EXPECT_EQ(jvmSortToPrimitive(jbytecode::core::Type::FLOAT), PrimitiveKind::FLOAT);
+    EXPECT_EQ(jvmSortToPrimitive(jbytecode::core::Type::DOUBLE), PrimitiveKind::DOUBLE);
+    EXPECT_EQ(jvmSortToPrimitive(jbytecode::core::Type::BOOLEAN), PrimitiveKind::BOOLEAN);
+    EXPECT_EQ(jvmSortToPrimitive(jbytecode::core::Type::VOID), PrimitiveKind::VOID);
     EXPECT_EQ(jvmSortToPrimitive(99), PrimitiveKind::OBJECT);   // unknown → OBJECT
 }
 
@@ -876,11 +876,11 @@ TEST(CodeConverterTest, NodeFieldsHoldArenaBackedUtf8StringRef)
                   "MIRInvokeDynamic::name must be Utf8StringRef (#698)");
     static_assert(std::is_same_v<decltype(MIRInvokeDynamic::desc), ca::str::Utf8StringRef>,
                   "MIRInvokeDynamic::desc must be Utf8StringRef (#698)");
-    // MIRConstant 的 variant string 槽
+    // MIRConstant 的 variant string 槽（Type 槽批 3a 起为 mj2x::Type 门面）
     using ConstVariant = decltype(MIRConstant::value);
     static_assert(std::is_same_v<ConstVariant,
                                  std::variant<int64_t, double, std::nullptr_t,
-                                              ca::str::Utf8StringRef, jbytecode::core::Type>>,
+                                              ca::str::Utf8StringRef, mj2x::Type>>,
                   "MIRConstant::value string slot must hold Utf8StringRef (#698)");
 
     // ---- 2) 运行期：intern 后内容正确、且 ref 指向 arena 内副本（data() 不指向源 cstr）----

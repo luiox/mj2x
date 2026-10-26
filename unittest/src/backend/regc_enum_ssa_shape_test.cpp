@@ -372,7 +372,7 @@ TEST(RegCEnumSsaShapeTest, ValueOfJavacShapeLowersToCallConvertPair)
     Utf8StringArena arena;
     std::string     reason;
     auto mn = makeMethod(kStaticPublic, "valueOf", "(Ljava/lang/String;)LColor;",
-                         {new LdcInsnNode(Type::getObjectType(arena.intern("Color"))),
+                         {new LdcInsnNode(jbytecode::core::Type::getObjectType(arena.intern("Color"))),
                           new VarInsnNode(Opcodes::ALOAD, 0),
                           new MethodInsnNode(
                               Opcodes::INVOKESTATIC,

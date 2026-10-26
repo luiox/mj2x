@@ -36,3 +36,20 @@
   （LUIOX_LIBCA_VERSION/LUIOX_LIBCA_MODULES 双单源）。
 - 包沙箱自解析的 libca 与消费图钉定版本/模块必须完全一致，否则双实例
   （D33 同族根因，见 root xmake.lua 注记）。
+
+## 批 2 实证发现：旧栈 ClassWriter COMPUTE 模式有树/arena 侧副作用（2026-10-26）
+
+**现象**：syncTreeToDom 以 COMPUTE_MAXS/COMPUTE_FRAMES 序列化后，
+`LlvmSamples.GenerateMjdbgFixtures` 稳定失败（native 编译产物坏），且
+`--dump-mir` 路径段错误；flags=0（plain）序列化则全部正常，MIR dump
+逐字节一致（label 身份差异除外）。
+
+**结论**：COMPUTE 模式的帧/maxs 计算在旧栈 writer 上留下了超出「产出字节」
+的副作用（树侧 label 状态 / arena 状态）；同树二次序列化（output_writer）
+与后续编译读到的状态因此漂移。基线里 preprocessors 内的既有 ClassWriter
+全用 flags=0（cloader/indy 两处），从未触发此面。
+
+**迁移决策**：syncTreeToDom 旗标恒 plain——同步通道只求「如实序列化当前
+tree 状态」，帧重算归 output_writer（过渡期）/批 6 的 `smt_build`。
+批 6 摘除旧栈 writer 后此副作用面整体消失；保真路径必须用 libjbc 的
+writeClass（fidelity copy-through，无此副作用类）重验。

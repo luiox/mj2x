@@ -2412,7 +2412,7 @@ TEST(RegCLdcClassTest, LdcClassConstantEmitsFindClass)
         "classLiteral",
         "()Ljava/lang/Class;",
         {
-            new LdcInsnNode(Type::getObjectType(arena.intern("java/lang/String"))),
+            new LdcInsnNode(jbytecode::core::Type::getObjectType(arena.intern("java/lang/String"))),
             new InsnNode(Opcodes::ARETURN),
         },
         1,

@@ -121,9 +121,9 @@ std::vector<ca::core::Any> lambdaBsmArgs(CompilerIndex& index, const std::string
 {
     auto&                      arena = index.arena();
     std::vector<ca::core::Any> args;
-    args.emplace_back(Type::getMethodType(arena.intern(samDesc.c_str())));
+    args.emplace_back(jbytecode::core::Type::getMethodType(arena.intern(samDesc.c_str())));
     args.emplace_back(impl);
-    args.emplace_back(Type::getMethodType(arena.intern(instantiatedDesc.c_str())));
+    args.emplace_back(jbytecode::core::Type::getMethodType(arena.intern(instantiatedDesc.c_str())));
     return args;
 }
 
@@ -244,9 +244,9 @@ TEST(IndyDispatchClassifyTest, RecordObjectMethodsIsDirectCandidate)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x;y"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)Lp/Point;")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(I)Lp/Point;")));
     auto* indy = makeIndy(index, "toString", "(Lp/Point;)Ljava/lang/String;",
                           recordObjectMethodsBsm(index), std::move(bsmArgs));
 
@@ -419,9 +419,9 @@ TEST(IndyDispatchClassifyTest, RecordAccessorMatchEngagesAccessorPayload)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));
     auto* indy =
@@ -451,9 +451,9 @@ TEST(IndyDispatchClassifyTest, ReservedObjectMethodsNameKeepsHelperFallbackPaylo
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x;y"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));
     auto* indy = makeIndy(index, "hashCode", "(Lp/Point;)I", recordObjectMethodsBsm(index),

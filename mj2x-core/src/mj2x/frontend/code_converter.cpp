@@ -7,12 +7,15 @@
 #include <sstream>
 #include <string>
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "libca/core/datatype.hpp"
 #include "libca/str/utf8_string.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::core;
+using jbytecode::core::Handle;
+using jbytecode::core::Label;
 using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
@@ -24,6 +27,18 @@ using namespace jbytecode::util;
 static int labelKey(jbytecode::core::Label* lbl)
 {
     return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
+}
+
+/// @brief 树侧 LDC Any 载荷（旧栈 Type）→ MIR 门面 Type（批 3a）。
+///
+/// Class/MethodType 两类载荷经描述符重建：OBJECT/INTERNAL 取内部名
+/// （getObjectType 对 '[' 前缀自动落 ARRAY），METHOD 取方法描述符。
+static Type facadeTypeFromOld(const jbytecode::core::Type& old, ca::str::Utf8StringArena& arena)
+{
+    switch (old.getSort()) {
+    case Type::METHOD: return Type::getMethodType(old.getDescriptor(arena));
+    default:           return Type::getObjectType(old.getInternalName(arena));
+    }
 }
 
 static PrimitiveKind castSourceType(int opcode)
@@ -944,9 +959,11 @@ void CodeConverter::processInsn(AbstractInsnNode* insn)
             node->type  = PrimitiveKind::OBJECT;
             node->value = impl_->arena->intern(*p);
         }
-        else if (auto* p = ld->cst.template as<Type>()) {
+        else if (auto* p = ld->cst.template as<jbytecode::core::Type>()) {
             node->type  = PrimitiveKind::OBJECT;
-            node->value = *p;
+            // 批 3a：树侧 Any 载荷仍为旧栈 Type（树未亡），入 MIR 前转门面；
+            // 批 3b 树遍历切 DOM 后本分支直接从 CP 构造门面 Type。
+            node->value = facadeTypeFromOld(*p, *impl_->arena);
         }
         else {
             // LDC Handle / 未经 LdcPreprocessor 展开的常量：不能静默翻成 null

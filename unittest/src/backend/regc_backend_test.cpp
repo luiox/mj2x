@@ -567,10 +567,10 @@ InvokeDynamicInsnNode* regcTestDirectFieldIndy(ca::str::Utf8StringArena& arena, 
                                                const char* samDesc)
 {
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern(samDesc)));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern(samDesc)));
     bsmArgs.emplace_back(Handle(handleTag, arena.intern(owner), arena.intern(fieldName),
                                 arena.intern(fieldDesc)));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern(samDesc)));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern(samDesc)));
     return new InvokeDynamicInsnNode(ca::str::ZUtf8StringRef::from_static(name),
                                      ca::str::ZUtf8StringRef::from_static(desc), regcTestLmfBsm(arena),
                                      std::move(bsmArgs));
@@ -690,9 +690,9 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorEmitsGuardedCall)
 {
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));
     auto* indy = new InvokeDynamicInsnNode(
@@ -862,9 +862,9 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorNullTrapRoutesToHandlerWhenProtect
 {
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
     bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));
     auto* indy = new InvokeDynamicInsnNode(

@@ -380,7 +380,7 @@ std::vector<ca::u8> buildLdcMhSample(ca::str::Utf8StringArena& arena)
                                  ref(arena, ""), {});
         m->visitCode();
         m->visitLdcInsn(ca::core::Any(
-            Type::getMethodType(ca::str::Utf8StringRef::from_cstr("(I)V"))));
+            jbytecode::core::Type::getMethodType(ca::str::Utf8StringRef::from_cstr("(I)V"))));
         m->visitMethodInsn(Opcodes::INVOKEVIRTUAL, ref(arena, "java/lang/invoke/MethodType"),
                            ref(arena, "toMethodDescriptorString"),
                            ref(arena, "()Ljava/lang/String;"), false);
