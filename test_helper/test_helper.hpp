@@ -135,4 +135,30 @@ void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index, Report* report)
     mj2x::syncDomToTree(index);
 }
 
+// ---- 批 5 backend 注入（injectIntoClass 走 DOM）的测试适配 ----
+
+/// 为树夹具类物化 DOM（注入的改写权威）：类移入临时 index 走 syncTreeToDom
+/// 后搬回。要求 cls.classNode 已挂方法（DOM 按树生成，未挂树的悬空 MethodNode
+/// 不在 DOM 里，注入按 name+desc 找不到即抛）。树不动——夹具既有树指针仍有效。
+inline void ensureDomFor(mj2x::CompilerClass& cls, const std::string& name)
+{
+    if (cls.dom != nullptr) return;
+    mj2x::CompilerIndex tmp;
+    tmp.addClass(name, std::move(cls));
+    mj2x::syncTreeToDom(tmp);
+    cls = std::move(*tmp.getClass(name));
+}
+
+/// 注入后把 DOM 刷新回树（断言面保持树形态）。classNode/methods 全部重建——
+/// 夹具侧持有的旧 MethodNode* 全部失效，断言一律经 cls.methods 里重锚后的
+/// methodNode 现查。
+inline void refreshTreeFromDom(mj2x::CompilerClass& cls, const std::string& name)
+{
+    if (cls.dom == nullptr) return;
+    mj2x::CompilerIndex tmp;
+    tmp.addClass(name, std::move(cls));
+    mj2x::syncDomToTree(tmp);
+    cls = std::move(*tmp.getClass(name));
+}
+
 }   // namespace test

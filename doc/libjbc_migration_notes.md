@@ -245,3 +245,21 @@ anyAsString 双吃两种表示）；DOM 世界树→字节→readClass 同步后
 mj2x-cli 子进程走管线，`xmake build mj2x_unittest` 不重链 cli——改了
 mj2x-core 后只跑单测门会漏掉 cli 侧 stale 链接，症状 = 单测绿、e2e 仍报
 旧行为。core 改动后 cli/unittest 两个 exe 都要重编再下结论。
+
+**21. backend 注入切 DOM 后树投影由管线统一刷，混合态没有捷径**。
+injectIntoClass 的「标 ACC_NATIVE + 清指令」DOM 对应物 = MemberInfo.access
+置位 + 摘除 Code 属性槽（JVMS：native 方法无 Code）；clinit 前缀注入 =
+promote + insertBefore(first) 同锚保序（insertAtStart 的对偶，无需逆序）。
+管线序变为 pre→syncDomToTree→compile(inject 走 DOM)→post→syncDomToTree：
+编译后 tree→DOM 同步点消失。**stackc 的 clinit 重写必须同批切 DOM**——
+它重写 clinit 体（hidden clinit 代理），若留树上做，post 的 DOM 会话提交
+经 syncDomToTree 会把树改动顶掉。hidden clinit 的「改名→编译→改回」借
+编译期树投影（inject 只动 DOM，树此刻仍与 DOM 同源），改名不落任何权威。
+
+**22. syncDomToTree 重建树会销毁旧 ClassNode，树方法节点按 tree 所有权
+delete**（libjbytecode ClassNode 析构 delete fields/methods 堆对象）——
+夹具把 unique_ptr<MethodNode> 挂进 classNode 后调用 refreshTreeFromDom，
+旧 ClassNode 析构 delete 节点、夹具 unique_ptr 析构再 delete = 双删 AV
+（0xc0000005，表象在测试体尾声）。测试纪律：**挂树即 release 所有权**
+（stackc 夹具既有模式），release 后原 unique_ptr 不可再解引用，访问一律
+经 cls.methods 现查 methodNode。

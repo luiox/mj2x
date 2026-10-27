@@ -2,6 +2,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/vmc4/vm_interpreter_emit.hpp"
 #include "mj2x/backend/vmc4/vmc4_instance.hpp"
 #include "mj2x/backend/vmc4/vm_encoder.hpp"
@@ -108,43 +109,12 @@ const char* slotField(PrimitiveKind k)
     }
 }
 
-MethodNode* findMethod(CompilerClass& clazz, const char* name, const char* desc)
-{
-    for (auto* method : clazz.classNode->methods) {
-        if (method->name.to_std_string() == name && method->desc.to_std_string() == desc) {
-            return method;
-        }
-    }
-    return nullptr;
-}
-
 /// 往 clinit 头部前插 registerNativesForClass(classId, thisClass) 调用（镜像 regc）。
-void prependRegisterNativesCall(CompilerClass& clazz, int classId)
+/// 批 5：改写权威在 DOM（dom_inject 门面），树投影由管线统一刷。
+void prependRegisterNativesCall(CompilerClass& clazz, const std::string& className, int classId)
 {
-    constexpr int kClinitMaxStack = 2;
-    MethodNode*    clinit         = findMethod(clazz, "<clinit>", "()V");
-    if (clinit == nullptr) {
-        std::vector<ca::str::Utf8StringRef> noExceptions;
-        clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                ca::str::ZUtf8StringRef::from_static("<clinit>"),
-                                ca::str::ZUtf8StringRef::from_static("()V"),
-                                ca::str::ZUtf8StringRef::from_static(""),
-                                noExceptions);
-        clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
-        clinit->maxStack  = 0;
-        clinit->maxLocals = 0;
-        clazz.classNode->methods.push_back(clinit);
-    }
-    InsnList prefix;
-    prefix.add(clinit->create<LdcInsnNode>(classId));
-    prefix.add(clinit->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(clazz.classNode->name)));
-    prefix.add(clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kClassName),
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterName),
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterDesc),
-                                  false));
-    clinit->instructions.insert(clinit->instructions.getFirst(), prefix);
-    if (clinit->maxStack < kClinitMaxStack) clinit->maxStack = kClinitMaxStack;
+    dom_inject::prependClinitRegisterCall(clazz, className, classId, cloader::kClassName,
+                                          cloader::kRegisterName, cloader::kRegisterDesc);
 }
 
 }   // namespace
@@ -612,6 +582,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
 
 // ===========================================================================
 // injectIntoClass：标 ACC_NATIVE + clinit 注入（镜像 regc_backend.cpp:508）。
+// 批 5：改写权威在 DOM（dom_inject 门面）；树投影由管线统一刷。
 // ===========================================================================
 void Vmc4Backend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                                   const BackendResult& result)
@@ -619,18 +590,18 @@ void Vmc4Backend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
     auto* mn = method.methodNode;
-    mn->access |= Opcodes::ACC_NATIVE;
-    mn->instructions.clear();
-    mn->maxStack  = 0;
-    mn->maxLocals = 0;
-    clazz.modified = true;
+    if (mn == nullptr) return;
+    if (clazz.dom == nullptr) {
+        throw std::runtime_error("vmc4_backend: DOM not synced for native injection");
+    }
+    const std::string className(clazz.dom->thisName());
+    dom_inject::markMethodNative(clazz, className, mn->name.to_std_string(),
+                                 mn->desc.to_std_string());
 
-    if (clazz.classNode == nullptr) return;
-    const std::string className = clazz.classNode->name.to_std_string();
     if (className.empty()) return;
     if (impl_->classIds.find(className) != impl_->classIds.end() &&
         impl_->clinitInjected.find(className) == impl_->clinitInjected.end()) {
-        prependRegisterNativesCall(clazz, impl_->classIds[className]);
+        prependRegisterNativesCall(clazz, className, impl_->classIds[className]);
         impl_->clinitInjected.insert(className);
     }
 }

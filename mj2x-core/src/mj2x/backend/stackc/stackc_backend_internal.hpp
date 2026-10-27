@@ -616,7 +616,8 @@ struct StackCBackend::Impl
     void   emitStringPool(codegen::CSourceStream& out) const;
     void   emitRegistrationCode(codegen::CSourceStream& out) const;
     ca::str::Utf8StringRef stableUtf8(const std::string& value);
-    void                   protectClassInitializer(StackCBackend& backend, CompilerClass& clazz);
+    void                   protectClassInitializer(StackCBackend& backend, CompilerClass& clazz,
+                                                   const std::string& className);
     void                   registerHiddenClinitProxy(const std::string& className,
                                                      const std::string& hiddenMethodName,
                                                      const std::string& compiledFunctionName);

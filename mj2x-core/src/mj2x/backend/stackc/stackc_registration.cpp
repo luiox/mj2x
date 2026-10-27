@@ -3,6 +3,7 @@
 ///        RegisterNatives 发射（从 stackc_backend.cpp 单体拆出）。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
@@ -109,14 +110,18 @@ static void emitClassRegistrationCall(MethodNode* clinit, ca::str::Utf8StringRef
                            false));
 }
 
-void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, CompilerClass& clazz)
+void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, CompilerClass& clazz,
+                                                  const std::string& className)
 {
-    const auto className = clazz.classNode->name.to_std_string();
     if (!protectedClinitClasses.insert(className).second) return;
 
     auto idIt = registrationClassIds.find(className);
     if (idIt == registrationClassIds.end()) return;
 
+    // hidden clinit 编译（簿记面）：clinit 体此刻仍与 DOM 同源（树投影未被
+    // inject 触碰），借树节点改名 → 树 convert → compileMethod 注册 hidden 名
+    // 后改回。临时改名不落任何权威——clinit 体在下方于 DOM 全量重建，管线级
+    // syncDomToTree 随后统一刷树。
     auto*       clinit = findMethod(clazz, "<clinit>", "()V");
     std::string hiddenName;
     std::string hiddenFunctionName;
@@ -148,24 +153,27 @@ void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, Compil
             registerHiddenClinitProxy(className, hiddenName, hiddenFunctionName);
     }
 
-    if (clinit == nullptr) {
-        std::vector<ca::str::Utf8StringRef> noExceptions;
-        clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                ca::str::ZUtf8StringRef::from_static("<clinit>"),
-                                ca::str::ZUtf8StringRef::from_static("()V"),
-                                ca::str::ZUtf8StringRef::from_static(""),
-                                noExceptions);
-        clazz.classNode->methods.push_back(clinit);
-    }
-
-    clinit->access &= ~Opcodes::ACC_NATIVE;
-    clinit->instructions.clear();
-    clearMethodDebugAndHandlers(clinit);
-    emitClassRegistrationCall(clinit, clazz.classNode->name, idIt->second);
-    clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
-    clinit->maxStack  = 2;
-    clinit->maxLocals = 0;
-    clazz.modified    = true;
+    // clinit 重建（DOM 权威）：体 = [ldc classId, ldc thisClass, invokestatic
+    // bridge, RETURN]；原体已编译为 hidden proxy（运行期由 wrapper 调用）。
+    const ca::i32 classId = idIt->second;
+    dom_inject::replaceMethodBody(
+        clazz, className, "<clinit>", "()V",
+        [className, classId](jbc::ir::ClassSession& session, jbc::ir::CodeEditor& editor) {
+            (void)className;
+            auto add = [&editor](jbc::ir::Insn in) {
+                (void)editor.append(std::move(in));
+            };
+            add(jbc::ir::CodeEditor::loadConst(session.internInteger(classId)));
+            add(jbc::ir::CodeEditor::cpInsn(jbc::core::Op::LDC,
+                                            session.internClass(session.backing().thisName())));
+            jbc::ir::Insn call;
+            call.op = jbc::core::Op::INVOKESTATIC;
+            call.cp = session.internMethodRef(kRegisterBridgeClassName, kRegisterBridgeMethodName,
+                                              kRegisterBridgeMethodDesc);
+            add(std::move(call));
+            add(jbc::ir::CodeEditor::simple(jbc::core::Op::RETURN));
+        },
+        2, 0, ~static_cast<ca::u32>(Opcodes::ACC_NATIVE));
 }
 
 void StackCBackend::Impl::registerHiddenClinitProxy(const std::string& className,
@@ -260,30 +268,45 @@ void StackCBackend::Impl::registerInterfaceDefaultProxy(CompilerClass& clazz, Me
 void StackCBackend::Impl::rewriteInterfaceDefaultMethodToProxy(
     CompilerClass& clazz, MethodNode& method, const CHiddenInterfaceDefaultProxy& proxy)
 {
-    method.access &= ~Opcodes::ACC_NATIVE;
-    method.instructions.clear();
-    clearMethodDebugAndHandlers(&method);
+    // 批 5：体重建走 DOM（replaceMethodBody）；method 节点仅作描述符只读源。
+    const std::string className(clazz.dom != nullptr ? clazz.dom->thisName() : "");
+    const std::string mnName  = method.name.to_std_string();
+    const std::string mnDesc  = method.desc.to_std_string();
 
-    method.instructions.add(method.create<VarInsnNode>(Opcodes::ALOAD, 0));
+    // 形参布局（slot/maxStack）按旧口径在会话外算好，回调内逐参 xLOAD。
+    auto argTypes = Type::getArgumentTypes(method.desc);
     int  slot     = 1;
     int  maxStack = 1;
-    auto argTypes = Type::getArgumentTypes(method.desc);
     for (const auto& argType : argTypes) {
-        method.instructions.add(method.create<VarInsnNode>(loadOpcodeForSort(argType.getSort()), slot));
-        auto      pk    = jvmSortToPrimitive(argType.getSort());
-        const int width = primitiveStackSize(pk);
+        const int width = primitiveStackSize(jvmSortToPrimitive(argType.getSort()));
         slot += width;
         maxStack += width;
     }
-    method.instructions.add(method.create<MethodInsnNode>(Opcodes::INVOKESTATIC,
-                                               stableUtf8(proxy.hiddenClassName),
-                                               stableUtf8(proxy.hiddenMethodName),
-                                               stableUtf8(proxy.hiddenMethodDesc),
-                                               false));
-    method.instructions.add(method.create<InsnNode>(returnOpcodeForKind(methodReturnKind(proxy.javaDesc))));
-    method.maxStack  = maxStack;
-    method.maxLocals = slot;
-    clazz.modified   = true;
+
+    dom_inject::replaceMethodBody(
+        clazz, className, mnName, mnDesc,
+        [&proxy, &argTypes](jbc::ir::ClassSession& session, jbc::ir::CodeEditor& editor) {
+            auto add = [&editor](jbc::ir::Insn in) {
+                (void)editor.append(std::move(in));
+            };
+            add(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 0));
+            int paramSlot = 1;
+            for (const auto& argType : argTypes) {
+                add(jbc::ir::CodeEditor::local(
+                    static_cast<jbc::core::Op>(loadOpcodeForSort(argType.getSort())),
+                    static_cast<ca::u32>(paramSlot)));
+                paramSlot += primitiveStackSize(jvmSortToPrimitive(argType.getSort()));
+            }
+            jbc::ir::Insn call;
+            call.op = jbc::core::Op::INVOKESTATIC;
+            call.cp = session.internMethodRef(proxy.hiddenClassName, proxy.hiddenMethodName,
+                                              proxy.hiddenMethodDesc);
+            add(std::move(call));
+            add(jbc::ir::CodeEditor::simple(
+                static_cast<jbc::core::Op>(returnOpcodeForKind(methodReturnKind(proxy.javaDesc)))));
+        },
+        static_cast<ca::u16>(maxStack), static_cast<ca::u16>(slot),
+        ~static_cast<ca::u32>(Opcodes::ACC_NATIVE));
 }
 
 void StackCBackend::Impl::emitRegistrationCode(codegen::CSourceStream& out) const

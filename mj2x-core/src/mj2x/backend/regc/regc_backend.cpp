@@ -2,6 +2,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
 #include "mj2x/backend/regc/regc_emitter_internal.hpp"
@@ -1006,37 +1007,12 @@ ca::str::Utf8StringBuilder methodSource;
 /// 这保证先加载 native 库再绑定 native 方法，且绑定发生在用户静态初始化之前
 /// （用户 clinit 可能调用 native 方法，必须先完成绑定）。
 ///
-/// className 取自 clazz.classNode->name（Utf8StringRef，arena 持有），避免临时
-/// std::string 生命周期的悬垂引用。
-void prependRegisterNativesCall(CompilerClass& clazz, int classId)
+/// 批 5：改写权威在 DOM（dom_inject 门面，与 pre/postprocessor 同会话纪律）；
+/// 树投影由管线在 compileMethods 后统一 syncDomToTree 刷新。
+void prependRegisterNativesCall(CompilerClass& clazz, const std::string& className, int classId)
 {
-    constexpr int kClinitMaxStack = 2;   // ldc int + ldc class 各占 1 slot
-
-    MethodNode* clinit = findMethod(clazz, "<clinit>", "()V");
-    if (clinit == nullptr) {
-        std::vector<ca::str::Utf8StringRef> noExceptions;
-        clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                ca::str::ZUtf8StringRef::from_static("<clinit>"),
-                                ca::str::ZUtf8StringRef::from_static("()V"),
-                                ca::str::ZUtf8StringRef::from_static(""),
-                                noExceptions);
-        clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
-        clinit->maxStack  = 0;
-        clinit->maxLocals = 0;
-        clazz.classNode->methods.push_back(clinit);
-    }
-
-    using namespace jbytecode::tree;
-    InsnList prefix;
-    prefix.add(clinit->create<LdcInsnNode>(classId));
-    prefix.add(clinit->create<LdcInsnNode>(jbytecode::core::Type::getObjectType(clazz.classNode->name)));
-    prefix.add(clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kClassName),
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterName),
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterDesc),
-                                  false));
-    clinit->instructions.insert(clinit->instructions.getFirst(), prefix);
-    if (clinit->maxStack < kClinitMaxStack) clinit->maxStack = kClinitMaxStack;
+    dom_inject::prependClinitRegisterCall(clazz, className, classId, cloader::kClassName,
+                                          cloader::kRegisterName, cloader::kRegisterDesc);
 }
 
 void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
@@ -1046,23 +1022,24 @@ void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
     // from being rewritten to native when no working RegC body was emitted.
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
+    // 批 5：标 ACC_NATIVE + 摘 Code 槽（「清指令」的 DOM 对应物），会话字节往返
+    // 提交；树投影由管线统一刷。类名从 DOM 取（树投影在管线级同步）。
     auto* mn = method.methodNode;
-    mn->access |= Opcodes::ACC_NATIVE;
-    mn->instructions.clear();
-    mn->maxStack   = 0;
-    mn->maxLocals  = 0;
-    clazz.modified = true;
+    if (mn == nullptr) return;
+    if (clazz.dom == nullptr) {
+        throw std::runtime_error("regc_backend: DOM not synced for native injection");
+    }
+    const std::string className(clazz.dom->thisName());
+    const std::string mnName = mn->name.to_std_string();
+    const std::string mnDesc = mn->desc.to_std_string();
+    dom_inject::markMethodNative(clazz, className, mnName, mnDesc);
 
     // RegisterNatives：在该类首次被注入 native 方法时，往 clinit 前插
     // registerNativesForClass(classId, thisClass)。每类只注入一次。
-    // classNode 为空（单元测试直调 injectIntoClass）时跳过 clinit 注入——
-    // 这种场景没有类文件可改，注册基础设施仍由 finalize 正常发射。
-    if (clazz.classNode == nullptr) return;
-    const std::string className = clazz.classNode->name.to_std_string();
     if (className.empty()) return;
     if (impl_->classIds.find(className) != impl_->classIds.end() &&
         impl_->clinitInjected.find(className) == impl_->clinitInjected.end()) {
-        prependRegisterNativesCall(clazz, impl_->classIds[className]);
+        prependRegisterNativesCall(clazz, className, impl_->classIds[className]);
         impl_->clinitInjected.insert(className);
     }
     // Native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责（见

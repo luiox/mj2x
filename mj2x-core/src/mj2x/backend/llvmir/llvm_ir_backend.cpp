@@ -5,6 +5,7 @@
 #include "llvm_ir_internal.hpp"
 
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
@@ -99,8 +100,8 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
     if (targetMethod == nullptr || targetMethod->methodNode == nullptr) return false;
 
     if (targetMethod->backendResult.kind == BackendResult::Kind::LLVM_IR) {
-        // 已编译成功：方法体已被 injectIntoClass 清空，不能再预检；成功即已通过
-        // 完整验证，签名直接从描述解析。
+        // 已编译成功（backendResult 是注入权威，批 5 起 inject 改 DOM 不清树）：
+        // 成功即已通过完整验证，签名直接从描述解析。
         CallTarget parsed;
         if (!fillTargetFromDescriptor(owner, *targetMethod->methodNode, parsed, reason))
             return false;
@@ -436,12 +437,14 @@ void LlvmIrBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
                                     const BackendResult& result)
 {
     if (result.kind != BackendResult::Kind::LLVM_IR || method.methodNode == nullptr) return;
-    method.methodNode->access |= Opcodes::ACC_NATIVE;
-    method.methodNode->instructions.clear();
-    // native 方法无字节码：maxStack/maxLocals 清零，对齐 StackC/VMC4。
-    method.methodNode->maxStack  = 0;
-    method.methodNode->maxLocals = 0;
-    clazz.modified = true;
+    // 批 5：改写权威在 DOM（标 ACC_NATIVE + 摘 Code 槽；native 方法无字节码，
+    // 对齐 StackC/VMC4）；树投影由管线在 compileMethods 后统一刷。
+    if (clazz.dom == nullptr) {
+        throw std::runtime_error("llvmir_backend: DOM not synced for native injection");
+    }
+    dom_inject::markMethodNative(clazz, std::string(clazz.dom->thisName()),
+                                 method.methodNode->name.to_std_string(),
+                                 method.methodNode->desc.to_std_string());
 }
 
 void LlvmIrBackend::finalize(const CompilerIndex&)

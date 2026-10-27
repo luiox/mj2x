@@ -1,4 +1,5 @@
 #include "stackc_backend.hpp"
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 #include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/codegen/include_set.hpp"
@@ -694,13 +695,21 @@ void StackCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
 {
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
-    impl_->protectClassInitializer(*this, clazz);
+    // 批 5：改写权威在 DOM（dom_inject 门面）；类名从 DOM 取，树投影由管线
+    // 在 compileMethods 后统一刷。
+    if (clazz.dom == nullptr) {
+        throw std::runtime_error("stackc_backend: DOM not synced for native injection");
+    }
+    const std::string className(clazz.dom->thisName());
+
+    impl_->protectClassInitializer(*this, clazz, className);
 
     auto* mn = method.methodNode;
+    if (mn == nullptr) return;
+    const std::string mnName = mn->name.to_std_string();
+    const std::string mnDesc = mn->desc.to_std_string();
     if (isInterfaceDefaultMethod(clazz, *mn)) {
-        const auto className    = clazz.classNode->name.to_std_string();
-        const auto functionName = impl_->findCompiledFunctionName(
-            className, mn->name.to_std_string(), mn->desc.to_std_string());
+        const auto functionName = impl_->findCompiledFunctionName(className, mnName, mnDesc);
         if (!functionName.empty()) {
             impl_->registerInterfaceDefaultProxy(clazz, *mn, functionName);
             const auto& proxies = impl_->interfaceDefaultProxiesByClass[className];
@@ -709,12 +718,8 @@ void StackCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
         return;
     }
 
-    // Mark method as native and clear bytecode
-    mn->access |= Opcodes::ACC_NATIVE;
-    mn->instructions.clear();
-    mn->maxStack   = 0;
-    mn->maxLocals  = 0;
-    clazz.modified = true;
+    // Mark method as native and clear bytecode（DOM：标 ACC_NATIVE + 摘 Code 槽）。
+    dom_inject::markMethodNative(clazz, className, mnName, mnDesc);
 }
 
 ca::str::Utf8StringRef StackCBackend::Impl::stableUtf8(const std::string& value)

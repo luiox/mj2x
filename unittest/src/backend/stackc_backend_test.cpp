@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "mj2x/backend/stackc/stackc_backend.hpp"
+#include "test_helper.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string_arena.hpp"
@@ -84,7 +85,7 @@ TEST(StackCBackendTest, SimpleReturn)
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("return;"), std::string::npos);
@@ -827,16 +828,23 @@ TEST(StackCBackendTest, InjectMakesMethodNative)
     cm.markedForCompile = true;
 
     auto cls = makeCompilerClass("Test");
+    cls.classNode->methods.push_back(mn.get());
+    mn.release();   // 所有权移交树：syncDomToTree 重建树时旧节点随旧 ClassNode 析构
+    // 批 5：注入走 DOM（dom_inject）——物化 DOM，注入断言回树现查。
+    test::ensureDomFor(cls, "Test");
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_FALSE(mn->access & Opcodes::ACC_NATIVE);
+    EXPECT_FALSE(cm.methodNode->access & Opcodes::ACC_NATIVE);
     backend.injectIntoClass(cls, cm, result);
-    EXPECT_TRUE(mn->access & Opcodes::ACC_NATIVE);
-    EXPECT_EQ(mn->instructions.size(), 0);
+    test::refreshTreeFromDom(cls, "Test");
+    auto* injected = cls.methods[0].methodNode;
+    ASSERT_NE(injected, nullptr);
+    EXPECT_TRUE(injected->access & Opcodes::ACC_NATIVE);
+    EXPECT_EQ(injected->instructions.size(), 0u);
 }
 
 TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall)
@@ -856,7 +864,10 @@ TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall)
     CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
+    // 批 5：注入走 DOM——物化 DOM，注入断言回树现查。
+    test::ensureDomFor(cls, "com/example/Foo");
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Foo");
 
     auto* bridge = findClassMethod(cls, "__mj2x_registerClass", "(I)V");
     EXPECT_EQ(bridge, nullptr);
@@ -907,7 +918,10 @@ TEST(StackCBackendTest, ClinitRegistersBridgeWithoutNativeLoad)
     CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
+    // 批 5：注入走 DOM——物化 DOM，注入断言回树现查。
+    test::ensureDomFor(cls, "com/example/Foo");
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Foo");
 
     auto* clinit = findClassMethod(cls, "<clinit>", "()V");
     ASSERT_NE(clinit, nullptr);
@@ -957,7 +971,10 @@ TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy)
     CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
+    // 批 5：注入走 DOM——物化 DOM，注入断言回树现查。
+    test::ensureDomFor(cls, "com/example/Foo");
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Foo");
 
     auto* rewrittenClinit = findClassMethod(cls, "<clinit>", "()V");
     ASSERT_NE(rewrittenClinit, nullptr);
@@ -1021,7 +1038,10 @@ TEST(StackCBackendTest, InterfaceDefaultMethodUsesHiddenProxy)
     CodeConverter            cc(arena);
     auto          blocks = cc.convert(*cm.methodNode);
     auto          result = backend.compileMethod("com/example/Op", cm, blocks);
+    // 批 5：注入走 DOM——物化 DOM，注入断言回树现查。
+    test::ensureDomFor(cls, "com/example/Op");
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Op");
 
     auto* rewritten = findClassMethod(cls, "inc", "(I)I");
     ASSERT_NE(rewritten, nullptr);

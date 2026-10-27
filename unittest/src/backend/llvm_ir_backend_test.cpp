@@ -1,4 +1,6 @@
 #include <gmock/gmock.h>
+#include <cstdio>
+#include <cstdio>
 
 #include <memory>
 #include <regex>
@@ -13,6 +15,7 @@
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "test_helper.hpp"
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -102,14 +105,28 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
     compilerMethod.methodNode = method.get();
     CompilerClass compilerClass;
     compilerClass.methods.push_back(compilerMethod);
+    // 批 5：注入走 DOM（dom_inject）——方法挂树后物化 DOM，注入断言回树现查。
+    ca::str::Utf8StringArena arena;
+    {
+        auto cn = std::make_unique<ClassNode>();
+        cn->name      = arena.intern("Test");
+        cn->version   = Opcodes::V1_8;
+        cn->access    = Opcodes::ACC_PUBLIC;
+        cn->superName = arena.intern("java/lang/Object");
+        cn->methods.push_back(method.get());
+        method.release();   // 所有权移交树：syncDomToTree 重建树时旧节点随旧 ClassNode 析构
+        compilerClass.classNode = std::move(cn);
+    }
+    test::ensureDomFor(compilerClass, "Test");
+    std::fprintf(stderr, "MARK-1 dom ready\n");
 
     LlvmIrBackend backend;
-    ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = converter.convert(*compilerClass.methods[0].methodNode);
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
+    std::fprintf(stderr, "MARK-2 compiled\n");
     EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_add__II(ptr %env, i32 %p0, i32 %p1)"),
               std::string::npos)
         << result.text;
@@ -118,9 +135,15 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
         << result.text;
     EXPECT_NE(result.text.find("add i32"), std::string::npos) << result.text;
 
+    std::fprintf(stderr, "MARK-3 injecting\n");
     backend.injectIntoClass(compilerClass, compilerClass.methods[0], result);
-    EXPECT_TRUE(method->access & Opcodes::ACC_NATIVE);
-    EXPECT_EQ(method->instructions.size(), 0);
+    std::fprintf(stderr, "MARK-4 injected\n");
+    test::refreshTreeFromDom(compilerClass, "Test");
+    std::fprintf(stderr, "MARK-5 refreshed\n");
+    auto* injected = compilerClass.methods[0].methodNode;
+    ASSERT_NE(injected, nullptr);
+    EXPECT_TRUE(injected->access & Opcodes::ACC_NATIVE);
+    EXPECT_EQ(injected->instructions.size(), 0u);
     EXPECT_TRUE(compilerClass.modified);
 
     CompilerIndex emptyIndex;

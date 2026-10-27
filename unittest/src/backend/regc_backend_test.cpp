@@ -12,6 +12,7 @@
 #include "libca/log/logger_registry.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
+#include "test_helper.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 
@@ -114,11 +115,23 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
     cm.methodNode = method.get();
     CompilerClass cls;
     cls.methods.push_back(cm);
+    // 批 5：注入走 DOM（dom_inject）——方法挂树后物化 DOM，注入断言回树现查。
+    ca::str::Utf8StringArena arena;
+    {
+        auto cn = std::make_unique<ClassNode>();
+        cn->name      = arena.intern("Test");
+        cn->version   = Opcodes::V1_8;
+        cn->access    = Opcodes::ACC_PUBLIC;
+        cn->superName = arena.intern("java/lang/Object");
+        cn->methods.push_back(method.get());
+        method.release();   // 所有权移交树：syncDomToTree 重建树时旧节点随旧 ClassNode 析构
+        cls.classNode = std::move(cn);
+    }
+    test::ensureDomFor(cls, "Test");
 
     RegCBackend   backend;
-    ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = converter.convert(*cls.methods[0].methodNode);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
@@ -132,8 +145,11 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
     expectNoStackAnchors(result.text);
 
     backend.injectIntoClass(cls, cls.methods[0], result);
-    EXPECT_TRUE(method->access & Opcodes::ACC_NATIVE);
-    EXPECT_EQ(method->instructions.size(), 0);
+    test::refreshTreeFromDom(cls, "Test");
+    auto* injected = cls.methods[0].methodNode;
+    ASSERT_NE(injected, nullptr);
+    EXPECT_TRUE(injected->access & Opcodes::ACC_NATIVE);
+    EXPECT_EQ(injected->instructions.size(), 0u);
     EXPECT_TRUE(cls.modified);
 }
 

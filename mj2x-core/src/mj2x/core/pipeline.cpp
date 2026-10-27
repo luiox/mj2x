@@ -50,10 +50,9 @@ int Pipeline::run()
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
         runPreprocessors();      // 批 4：preprocessor 直接改 DOM（改写权威）
-        syncDomToTree(*index_);  // DOM → 树刷新：backend inject 与 output 的兼容投影
-        compileMethods();        // 读 DOM；inject 仍改树（批 5 切）
-        syncTreeToDom(*index_);  // inject 树改动 → DOM（postprocessor 的改写基线）
-        runPostprocessors();     // 批 4：postprocessor 直接改 DOM
+        syncDomToTree(*index_);  // DOM → 树刷新：backend 树读（stackc hidden 编译等）与 output 的兼容投影
+        compileMethods();        // 读 DOM；批 5 起 inject 也改 DOM（dom_inject 门面）
+        runPostprocessors();     // 批 4：postprocessor 直接改 DOM（inject 后无需再树→DOM）
         syncDomToTree(*index_);  // output 仍读树（批 6 切 writeClass 后摘）
     }
     catch (const std::exception& e) {
@@ -112,10 +111,16 @@ void Pipeline::compileMethods()
         if (cls.dom == nullptr) {
             throw std::runtime_error("pipeline: DOM not synced for " + name);
         }
-        auto* dom = cls.dom.get();
 
         for (auto& method : cls.methods) {
             if (!method.markedForCompile) continue;
+
+            // 批 5：inject 走 DOM（dom_inject 会话字节往返提交会替换 cls.dom），
+            // dom 指针每方法重取；domIndex 同因重锚。
+            if (cls.dom == nullptr) {
+                throw std::runtime_error("pipeline: DOM consumed for " + name);
+            }
+            auto* dom = cls.dom.get();
 
             auto mnName = method.methodNode->name.to_std_string();
             auto mnDesc = method.methodNode->desc.to_std_string();
