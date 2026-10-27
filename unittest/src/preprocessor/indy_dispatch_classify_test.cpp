@@ -15,12 +15,25 @@
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
+#include "test_helper.hpp"
 
 using namespace mj2x;
 using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
 namespace {
+
+// 按类名+方法名现查树方法（syncDomToTree 重建树后旧指针悬空，断言面一律现查）。
+MethodNode* findMethodIn(CompilerIndex& index, const std::string& className,
+                         const std::string& methodName)
+{
+    auto* cls = index.getClass(className);
+    if (!cls || !cls->classNode) return nullptr;
+    for (auto* m : cls->classNode->methods) {
+        if (m->name.to_std_string() == methodName) return m;
+    }
+    return nullptr;
+}
 
 // 在 index 里造一个类，含一个静态方法，方法体是给定指令。返回方法指针（归 index 所有）。
 MethodNode* addMethodToIndex(CompilerIndex& index, const std::string& className,
@@ -211,7 +224,7 @@ TEST(IndyDispatchClassifyTest, MakeConcatWithConstantsIsStaticExpanded)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(std::string("a=\x01,s=\x01"));
+    bsmArgs.emplace_back(arena.intern("a=\x01,s=\x01"));
     auto* indy = makeIndy(index, "makeConcatWithConstants",
                           "(ILjava/lang/String;)Ljava/lang/String;",
                           stringConcatBsm(index, "makeConcatWithConstants"), std::move(bsmArgs));
@@ -576,15 +589,16 @@ TEST(IndyDispatchClassifyTest, ReportCollectsOrdinalsFormsAndCounts)
                             "invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
         std::vector<ca::core::Any>{});
 
-    MethodNode* m = addMethodToIndex(
+    addMethodToIndex(
         index, "Mix", "run", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
         {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ALOAD, 1), concat,
          new InsnNode(Opcodes::ICONST_0), lambda, new InsnNode(Opcodes::POP),
          new InsnNode(Opcodes::ICONST_0), custom, new InsnNode(Opcodes::POP),
          new InsnNode(Opcodes::ARETURN)});
 
+    // DOM 载体 pass：树夹具经三明治进 DOM（editsDom 默认 true，裸 process 无 dom 可接管）。
     IndyDispatchReport report;
-    InvokeDynamicPreprocessor().process(index, &report);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index, &report);
 
     // 判定报告：3 站点、指令序 0/1/2、形态与定位正确。
     ASSERT_EQ(report.sites.size(), 3u);
@@ -606,7 +620,7 @@ TEST(IndyDispatchClassifyTest, ReportCollectsOrdinalsFormsAndCounts)
     EXPECT_EQ(report.count(IndyDispatchForm::RecordObjectMethods), 0u);
 
     // 字节码输出不受 report 收集影响：concat/lambda 展开、自定义 indy 保留。
-    EXPECT_EQ(countIndy(m), 1);
+    EXPECT_EQ(countIndy(findMethodIn(index, "Mix", "run")), 1);
     EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
 }
 
@@ -620,7 +634,7 @@ MethodNode* buildSingleConcatIndex(CompilerIndex& index)
 {
     auto& arena = index.arena();
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(std::string("a=\x01"));
+    bsmArgs.emplace_back(arena.intern("a=\x01"));
     auto* indy = makeIndy(index, "makeConcatWithConstants", "(I)Ljava/lang/String;",
                           stringConcatBsm(index, "makeConcatWithConstants"), std::move(bsmArgs));
     return addMethodToIndex(index, "Same", "join", "(I)Ljava/lang/String;",
@@ -633,16 +647,17 @@ MethodNode* buildSingleConcatIndex(CompilerIndex& index)
 TEST(IndyDispatchClassifyTest, ReportOverloadMatchesDefaultOverloadBehavior)
 {
     CompilerIndex index1;
-    MethodNode*   method1 = buildSingleConcatIndex(index1);
-    InvokeDynamicPreprocessor().process(index1);
+    buildSingleConcatIndex(index1);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index1);
 
     CompilerIndex   index2;
-    MethodNode*     method2 = buildSingleConcatIndex(index2);
+    buildSingleConcatIndex(index2);
     IndyDispatchReport report;
-    InvokeDynamicPreprocessor().process(index2, &report);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index2, &report);
 
-    EXPECT_EQ(countIndy(method1), 0);
-    EXPECT_EQ(countIndy(method2), 0);
+    // DOM 载体 pass 后树由 syncDomToTree 重建，断言面现查。
+    EXPECT_EQ(countIndy(findMethodIn(index1, "Same", "join")), 0);
+    EXPECT_EQ(countIndy(findMethodIn(index2, "Same", "join")), 0);
     ASSERT_EQ(report.sites.size(), 1u);
     EXPECT_EQ(report.sites[0].form, IndyDispatchForm::StaticExpanded);
     EXPECT_EQ(report.sites[0].className, "Same");

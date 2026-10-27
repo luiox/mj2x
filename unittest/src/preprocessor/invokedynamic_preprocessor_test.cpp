@@ -13,12 +13,25 @@
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
+#include "test_helper.hpp"
 
 using namespace mj2x;
 using namespace jbytecode::core;
 using namespace jbytecode::tree;
 
 namespace {
+
+// 按类名+方法名现查树方法（syncDomToTree 重建树后夹具期捕获的指针悬空）。
+MethodNode* findMethodIn(CompilerIndex& index, const std::string& className,
+                         const std::string& methodName)
+{
+    auto* cls = index.getClass(className);
+    if (!cls || !cls->classNode) return nullptr;
+    for (auto* m : cls->classNode->methods) {
+        if (m->name.to_std_string() == methodName) return m;
+    }
+    return nullptr;
+}
 
 // 统计一个方法里指定 opcode / 节点类型的指令数量。
 int countInsnType(MethodNode* m, int insnType)
@@ -111,9 +124,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsMakeConcatWithConstants)
     auto&         arena = index.arena();
 
     // recipe "a=,s="：两个动态参数（int, String），中间/前缀是字面量。
-    std::string               recipe = "a=\x01,s=\x01";
+    // 载荷必须 intern（Utf8StringRef）：旧栈 writer 对 std::string bsm 参数
+    // 不识别、落 CP 0，DOM 世界经树→字节→readClass 同步后即成坏索引。
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(recipe);
+    bsmArgs.emplace_back(arena.intern("a=\x01,s=\x01"));
 
     auto* indy = new InvokeDynamicInsnNode(arena.intern("makeConcatWithConstants"),
                                            arena.intern("(ILjava/lang/String;)Ljava/lang/String;"),
@@ -124,7 +138,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsMakeConcatWithConstants)
                          {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ALOAD, 1),
                           indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Concat", "join");
+
 
     // indy marker 应消失。
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
@@ -152,7 +168,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsMakeConcatWithoutConstants)
         {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ALOAD, 1), indy,
          new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Concat2", "cat");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_EQ(countMethodCall(m, "java/lang/StringBuilder", "<init>"), 1);
@@ -201,7 +219,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsStatelessLambda)
     base->maxLocals = 1;
     index.getClass("Lam")->classNode->methods.push_back(base);
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Lam", "make");
+    base = findMethodIn(index, "Lam", "base");
+
 
     // indy 消失，换成 NEW + INVOKESPECIAL <init>。
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
@@ -248,7 +269,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsCapturingLambda)
     impl->maxLocals = 2;
     index.getClass("Cap")->classNode->methods.push_back(impl);
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Cap", "make");
+    impl = findMethodIn(index, "Cap", "lambda$make$0");
+
 
     // indy 消失、换成 new。合成类入 index，含 1 个捕获字段 cap0。
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
@@ -282,7 +306,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsUnboundInstanceRef)
     MethodNode* m = addMethodToIndex(index, "UB", "make", "()Lp/Fn;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "UB", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::TYPE_INSN), 1);   // NEW 合成类
@@ -315,7 +341,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsBoundInstanceRef)
                                      {new VarInsnNode(Opcodes::ALOAD, 0), indy,
                                       new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "BD", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     auto* synth = index.getClass("mj2x/lambda/Lambda$0");
@@ -346,7 +374,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsInterfaceMethodRef)
     MethodNode* m = addMethodToIndex(index, "IF", "make", "()Lp/Fn;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "IF", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
@@ -385,7 +415,10 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsConstructorRef)
     ctor->maxLocals = 2;
     index.getClass("p/Rec")->classNode->methods.push_back(ctor);
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "p/Rec", "factory");
+    ctor = findMethodIn(index, "p/Rec", "<init>");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
@@ -414,7 +447,9 @@ TEST(InvokeDynamicPreprocessorTest, LeavesUnsupportedHandleUnexpanded)
     MethodNode* m = addMethodToIndex(index, "GF", "make", "()Lp/Fn;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "GF", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
     EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -444,7 +479,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsErasedStaticRefWithBoxing)
     MethodNode* m = addMethodToIndex(index, "FnBox", "make", "()Ljava/util/function/Function;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "FnBox", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
@@ -475,7 +512,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsErasedConsumerDroppingReturn)
     MethodNode* m = addMethodToIndex(index, "CnDrop", "make", "()Ljava/util/function/Consumer;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "CnDrop", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
@@ -509,7 +548,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsErasedInstanceRefReceiverCast)
                                      "()Ljava/util/function/ToIntFunction;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "RecvCast", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
@@ -544,7 +585,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsPrimitiveWidening)
     MethodNode* m = addMethodToIndex(index, "Wide", "make", "()Lp/IntSink;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Wide", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     MethodNode* sam = synthSamMethod(index, "mj2x/lambda/Lambda$0");
@@ -570,7 +613,9 @@ TEST(InvokeDynamicPreprocessorTest, LeavesPrimitiveNarrowingUnexpanded)
     MethodNode* m = addMethodToIndex(index, "Narrow", "make", "()Lp/LongSink;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Narrow", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
     EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -620,7 +665,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactorySerializable)
                                      "()Ljava/util/function/IntUnaryOperator;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Lam", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     ASSERT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -651,7 +698,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactoryMarkerInterface)
                                      "()Ljava/util/function/IntUnaryOperator;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Mk", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     ASSERT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -682,7 +731,9 @@ TEST(InvokeDynamicPreprocessorTest, ExpandsAltMetafactoryWithBridge)
     MethodNode* m = addMethodToIndex(index, "Br", "make", "()Lp/Fn;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Br", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     auto* synth = index.getClass("mj2x/lambda/Lambda$0");
@@ -718,7 +769,9 @@ TEST(InvokeDynamicPreprocessorTest, LeavesUnknownAltFlagsUnexpanded)
                                      "()Ljava/util/function/IntUnaryOperator;",
                                      {indy, new InsnNode(Opcodes::ARETURN)});
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Unk", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 1);
     EXPECT_EQ(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -805,7 +858,9 @@ TEST(InvokeDynamicPreprocessorTest, MovesSynthNextToPackagePrivateSam)
     addInterfaceToIndex(index, "demo/pkg/Op", 0);   // 包私有（无 ACC_PUBLIC）
     MethodNode* m = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Op");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "demo/pkg/Caller", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("demo/pkg/Lambda$0"), nullptr);
@@ -819,7 +874,9 @@ TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForPublicSam)
     addInterfaceToIndex(index, "demo/pkg/Op", Opcodes::ACC_PUBLIC);
     MethodNode* m = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Op");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "demo/pkg/Caller", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -832,7 +889,9 @@ TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForLibrarySam)
     CompilerIndex index;
     MethodNode*   m = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/LibOp");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "demo/pkg/Caller", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -847,7 +906,9 @@ TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePackagePrivateSamSynthIn
     addInterfaceToIndex(index, "PriOp", 0);   // default 包包私有接口（内部名无 '/'）
     MethodNode* m = addLambdaCaller(index, "Caller", "PriOp");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Caller", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("Lambda$0"), nullptr);
@@ -881,7 +942,9 @@ TEST(InvokeDynamicPreprocessorTest, PlacesSynthNextToNonPublicNestedSamMissingFr
     addOuterClassWithNestedSam(index, "demo/pkg/Outer", "demo/pkg/Outer$Op", 0);
     MethodNode* m = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Outer$Op");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "demo/pkg/Caller", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("demo/pkg/Lambda$0"), nullptr);
@@ -897,7 +960,9 @@ TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForPublicNestedSamMiss
                                Opcodes::ACC_PUBLIC);
     MethodNode* m = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Outer$Op");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "demo/pkg/Caller", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -912,7 +977,9 @@ TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePrivateNestedSamSynthInD
     addInterfaceToIndex(index, "Outer$Op", 0);   // default 包嵌套私有接口（javac 形态）
     MethodNode* m = addLambdaCaller(index, "Outer", "Outer$Op");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "Outer", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("Lambda$0"), nullptr);
@@ -927,7 +994,9 @@ TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForJavacProtectedNeste
     addInterfaceToIndex(index, "demo/pkg/Outer$Op", Opcodes::ACC_PUBLIC);   // javac 0x0601 形态
     MethodNode* m = addLambdaCaller(index, "demo/pkg/Outer", "demo/pkg/Outer$Op");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m = findMethodIn(index, "demo/pkg/Outer", "make");
+
 
     EXPECT_EQ(countInsnType(m, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
@@ -944,7 +1013,10 @@ TEST(InvokeDynamicPreprocessorTest, SkipsUserClassOccupyingSynthName)
     MethodNode* m1 = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Op");
     MethodNode* m2 = addLambdaCaller(index, "demo/pkg/Caller", "demo/pkg/Op", "2");
 
-    InvokeDynamicPreprocessor().process(index);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index);
+    m1 = findMethodIn(index, "demo/pkg/Caller", "make");
+    m2 = findMethodIn(index, "demo/pkg/Caller", "make2");
+
 
     EXPECT_EQ(countInsnType(m1, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);
     EXPECT_EQ(countInsnType(m2, AbstractInsnNode::INVOKE_DYNAMIC_INSN), 0);

@@ -126,4 +126,13 @@ void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index)
     mj2x::syncDomToTree(index);
 }
 
+/// 带 report 收集参数的版本（InvokeDynamicPreprocessor::process(index, report*)）。
+template <typename Pass, typename Report>
+void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index, Report* report)
+{
+    mj2x::syncTreeToDom(index);
+    pass.process(index, report);
+    mj2x::syncDomToTree(index);
+}
+
 }   // namespace test

@@ -220,3 +220,28 @@ frame_rewire：首帧 offset 即绝对 pc，其后 offset_delta 经 smtAbsPc 链
 JVMS 4.4.8 拒绝越界 reference_kind——「未知 tag 缺省分支」用例在 DOM
 世界不可构建（indyHandleFindFor 的 default 分支对合法类文件不可达），
 find4 钉表退役该用例、保留合法 9 tag 全表。
+
+**18. CodeDom 插入路径强制 `srcPc = kNoPc`，元数据锚点要显式回填**。
+appendSlot/insertAt 对传入 Insn 一律 `in.srcPc = kNoPc`（「合成指令没有源
+位置，原指令 srcPc 只来自 importFrom」），先改 seq 再插入的写法是纯死写。
+lower 的属性重定位 pcmap 以**存活指令的 srcPc** 为键（relocateLnt/Lvt/Smt
+全部 fail-closed，miss 即 RelocationBadTarget）——erase 掉站点指令后，锚在
+该 pc 上的 LNT/LVT/SMT 行全部脱靶：e2e 实证 = `IntUnaryOperator op =
+InvokeDynamicLambda::base;` 的 LNT 行 line5:0 锚在 indy(pc 0)，展开后 lower
+直接拒编译。正门修法：insertBefore 后经 **CodeDom::get(InsnId)**（公有可变
+访问，指针稳定不因插入悬空）把替换序列**首条**的 srcPc 回填为被删指令的
+srcPc——行号语义不变（替换首条即原语句位置），LVT 起点/SMT 锚点同一通道
+命中。
+
+**19. 旧栈 writer 对不识别的 bsm 参数 Any 载荷落 CP 0**。
+SymbolTable::addBootstrapMethod 的分派链只认 int/i64/float/double/
+Utf8StringRef/Type/Handle/ConstantDynamic，**std::string 落 `argIndices
+push_back(0)`**。树时代夹具用 std::string 装 recipe 能活（载荷不落盘、
+anyAsString 双吃两种表示）；DOM 世界树→字节→readClass 同步后即成坏索引
+（`dom_payload: bad CP utf8 index 0`）。测试载荷一律 `arena.intern(...)`
+（Utf8StringRef）。
+
+**20.indy 站点替换的 e2e 通道是 mj2x-cli.exe**。e2e 夹具 runCase 经
+mj2x-cli 子进程走管线，`xmake build mj2x_unittest` 不重链 cli——改了
+mj2x-core 后只跑单测门会漏掉 cli 侧 stale 链接，症状 = 单测绿、e2e 仍报
+旧行为。core 改动后 cli/unittest 两个 exe 都要重编再下结论。

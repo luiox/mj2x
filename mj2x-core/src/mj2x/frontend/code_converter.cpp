@@ -11,6 +11,7 @@
 #include "jbc/core/insn_codec.hpp"
 #include "jbc/core/reader.hpp"
 #include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/dom_payload.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include "libca/core/datatype.hpp"
@@ -291,21 +292,7 @@ struct CodeConverter::Impl
     /// @brief 解析 CP MethodHandle → 旧栈 Handle（MIR bsm 槽与树契约同型）。
     Handle resolveHandle(ca::u32 cpIdx) const
     {
-        const auto& entry = cf->cp.at(cpIdx);
-        if (entry.tag != jbc::core::CpTag::MethodHandle) {
-            throw std::invalid_argument("code_converter: CP " + std::to_string(cpIdx)
-                                        + " is not a MethodHandle");
-        }
-        ca::str::Utf8StringRef owner, name, desc;
-        bool                   itf = false;
-        resolveRef(entry.b, owner, name, desc, itf);
-        // Handle 持 Utf8StringRef 裸视图；DOM CP 存储随 convert 返回析构，
-        // 视图必须转 intern 进 converter arena 才能活过 convert 生命周期。
-        return Handle(entry.a,
-                      arena->intern(owner),
-                      arena->intern(name),
-                      arena->intern(desc),
-                      itf);
+        return resolveDomHandle(*cf, cpIdx, *arena);
     }
 
     /// @brief 解析 CP 常量为树契约同型 Any 载荷（bsmArgs 用）。
@@ -316,50 +303,13 @@ struct CodeConverter::Impl
     /// MethodHandle→旧栈 Handle。ConstantDynamic 不支持（fail loud）。
     ca::core::Any resolveConstPayload(ca::u32 cpIdx) const
     {
-        const auto& entry = cf->cp.at(cpIdx);
-        switch (entry.tag) {
-        case jbc::core::CpTag::Integer: return ca::core::Any(entry.ival);
-        case jbc::core::CpTag::Float: return ca::core::Any(floatFromBits(entry.ival));
-        case jbc::core::CpTag::Long: return ca::core::Any(entry.lval);
-        case jbc::core::CpTag::Double: return ca::core::Any(doubleFromBits(entry.lval));
-        // Any 载荷里的字符串视图一律先 intern（DOM CP 存储随 convert 返回析构，
-        // 裸视图活不过 convert 生命周期——批 3b 实证）。
-        case jbc::core::CpTag::String:
-            return ca::core::Any(arena->intern(utf8(entry.a)));
-        case jbc::core::CpTag::Class:
-            return ca::core::Any(
-                jbytecode::core::Type::getObjectType(arena->intern(utf8(entry.a))));
-        case jbc::core::CpTag::MethodType:
-            return ca::core::Any(
-                jbytecode::core::Type::getMethodType(arena->intern(utf8(entry.a))));
-        case jbc::core::CpTag::MethodHandle: return ca::core::Any(resolveHandle(cpIdx));
-        case jbc::core::CpTag::Utf8:
-            // 旧栈 writer 对 bootstrap arg 的 std::string 载荷 intern 成 CONSTANT_Utf8；
-            // classifyIndyBsmArg 的 String 分支同收 Utf8StringRef。
-            return ca::core::Any(arena->intern(utf8(cpIdx)));
-        default:
-            throw std::invalid_argument("code_converter: unsupported CP tag "
-                                        + std::to_string(static_cast<int>(entry.tag))
-                                        + " in bootstrap arg");
-        }
+        return resolveDomConstPayload(*cf, cpIdx, *arena);
     }
 
     /// @brief 类级 BootstrapMethods 属性（INVOKEDYNAMIC 的 bsm 解析用）。
     const jbc::core::BootstrapMethodsAttr* bootstrapMethods() const
     {
-        for (auto& slot : cf->attrs) {
-            if (!cf->cp.utf8Equals(slot.nameCp, "BootstrapMethods")) continue;
-            if (slot.peek() != nullptr) {
-                return ca::core::tag_cast::cast<jbc::core::BootstrapMethodsAttr>(slot.peek());
-            }
-            auto r = const_cast<jbc::core::ClassFile*>(cf)->decodeAttr(slot);
-            if (r.is_err()) {
-                throw std::invalid_argument("code_converter: BootstrapMethods decode failed");
-            }
-            return ca::core::tag_cast::cast<jbc::core::BootstrapMethodsAttr>(
-                std::move(r).unwrap());
-        }
-        return nullptr;
+        return domBootstrapMethods(const_cast<jbc::core::ClassFile&>(*cf));
     }
 
     void push(PrimitiveKind kind)
