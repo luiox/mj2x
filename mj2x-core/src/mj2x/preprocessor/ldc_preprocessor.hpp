@@ -14,7 +14,6 @@
 
 #include "mj2x/preprocessor/preprocessor.hpp"
 
-#include <jbytecode/jbytecode.hpp>
 
 namespace mj2x {
 

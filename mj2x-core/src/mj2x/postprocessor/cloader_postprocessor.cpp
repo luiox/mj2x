@@ -46,8 +46,13 @@ std::unique_ptr<jbc::core::ClassFile> buildCLoaderClassDom(const std::string& re
         if (added.is_err()) {
             throw std::runtime_error("cloader_postprocessor: addMethod " + what + " failed");
         }
-        const ca::usize mi  = ses->backing().methods.size() - 1;
-        auto            promoted = jbc::ir::promoteMethod(*ses, mi);
+        const ca::usize mi = ses->backing().methods.size() - 1;
+        if (!seed.withCode) {
+            // native 桥接（registerNativesForClass）无 Code 属性，无体可发
+            //（promoteMethod 对无 Code 方法返回 Err）——落位即收。
+            return;
+        }
+        auto promoted = jbc::ir::promoteMethod(*ses, mi);
         if (promoted.is_err()) {
             throw std::runtime_error("cloader_postprocessor: promote " + what + " failed");
         }

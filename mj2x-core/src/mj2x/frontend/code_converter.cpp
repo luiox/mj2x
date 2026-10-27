@@ -10,7 +10,6 @@
 #include <string>
 #include "jbc/core/insn_codec.hpp"
 #include "jbc/core/reader.hpp"
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/dom_payload.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
@@ -19,11 +18,6 @@
 
 namespace mj2x {
 
-using jbytecode::core::Handle;
-using namespace jbytecode::tree;
-using namespace jbytecode::analysis;
-using namespace jbytecode::commons;
-using namespace jbytecode::util;
 
 static PrimitiveKind castSourceType(int opcode)
 {
@@ -1142,31 +1136,6 @@ std::vector<Block*> CodeConverter::convert(jbc::core::ClassFile& cf, ca::usize m
     return impl_->blockOrder;
 }
 
-std::vector<Block*> CodeConverter::convert(MethodNode& mn)
-{
-    // 测试垫片：树 → plain 字节 → DOM → 同一读路径。plain 旗标：COMPUTE 的
-    // 树/arena 副作用见批 2 实证（libjbc_migration_notes.md）。INDY 的 bsm 由
-    // 旧栈 writer 的 visitInvokeDynamicInsn intern 进输出类 BootstrapMethods
-    // 属性，读回侧照 CP 解析。批 6 摘树时本垫片随树退役（测试件改喂字节）。
-    ClassNode shim;
-    shim.version   = Opcodes::V1_8;
-    shim.access    = Opcodes::ACC_PUBLIC | Opcodes::ACC_SUPER;
-    shim.name      = impl_->arena->intern("shim/Class");
-    shim.superName = impl_->arena->intern("java/lang/Object");
-    shim.methods.push_back(&mn);
-
-    jbytecode::core::ClassWriter writer(*impl_->arena, 0);
-    shim.accept(&writer);
-    shim.methods.clear();   // 方法是借用（测试侧 unique_ptr 持有），防 ClassNode 析构误删
-    auto bytes = writer.toByteArray();
-
-    auto read = jbc::core::readClass(jbc::core::ByteView{bytes.data(), bytes.size()});
-    if (read.is_err()) {
-        throw std::invalid_argument("code_converter: shim readClass failed");
-    }
-    auto dom = std::move(read).unwrap();
-    return convert(*dom.file, 0);
-}
 
 // -- MIR dump --
 

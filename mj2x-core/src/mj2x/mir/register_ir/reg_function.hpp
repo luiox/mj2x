@@ -10,6 +10,8 @@
 #include "mj2x/mir/register_ir/reg_block.hpp"
 #include "mj2x/mir/ssa/ssa_function.hpp"
 
+#include "libca/core/any.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include <memory>
 #include <optional>
 #include <vector>
@@ -27,7 +29,7 @@ struct RegFunction
     struct InvokeDynamicSite
     {
         std::string                            name, desc;
-        std::optional<jbytecode::core::Handle> bsm;
+        std::optional<mj2x::Handle> bsm;
         std::vector<ca::core::Any>             bsmArgs;
         /// 静态派发形态与直派载荷（值拷贝自 SSAFunction::indySites，发射端只消费）。
         IndyDispatchForm                       form = IndyDispatchForm::RuntimeHelper;

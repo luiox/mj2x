@@ -2,6 +2,8 @@
 /// @brief LLVM IR 后端共享 JNI helper 发射：异常/对象/字段/数组/调用/monitor 辅助函数。
 #include "llvm_ir_internal.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 
@@ -11,8 +13,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 
 std::string emitThrowArithmeticHelper()
@@ -218,12 +218,12 @@ std::string llvmConstantString(const std::string& name, const std::string& text)
 /// @brief bsm 静态参数类型描述串：METHOD → 方法描述符；OBJECT → 内部名
 /// （FindClass 需要 "java/lang/String" 而非 "Ljava/lang/String;"）；
 /// 其余（原语/数组）→ 原样描述符。
-std::string indyTypeText(const jbytecode::core::Type& type)
+std::string indyTypeText(const mj2x::Type& type)
 {
     // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
     ca::str::Utf8StringArena scratch;
     const auto               desc = type.getDescriptor(scratch);
-    if (type.getSort() == jbytecode::core::Type::OBJECT) {
+    if (type.getSort() == mj2x::Type::OBJECT) {
         // 剥掉 L…;（OBJECT 排序的 descriptor 带包裹符）。
         const auto text = desc.to_std_string();
         return text.size() >= 2 ? text.substr(1, text.size() - 2) : text;
@@ -254,9 +254,9 @@ std::string indyBsmArgExpr(const std::string& siteTag, const ca::core::Any& valu
         break;
     case IndyBsmArgKind::MethodType:
     case IndyBsmArgKind::Class:
-        if (const auto* p = value.as<jbytecode::core::Type>()) {
+        if (const auto* p = value.as<mj2x::Type>()) {
             consts << llvmConstantString(g + "_desc", indyTypeText(*p));
-            if (p->getSort() == jbytecode::core::Type::METHOD) {
+            if (p->getSort() == mj2x::Type::METHOD) {
                 return "call ptr @mj2x_llvm_indy_method_type(ptr %env, ptr %owner, ptr @" + g +
                        "_desc)";
             }
@@ -264,7 +264,7 @@ std::string indyBsmArgExpr(const std::string& siteTag, const ca::core::Any& valu
         }
         break;
     case IndyBsmArgKind::Handle:
-        if (const auto* p = value.as<jbytecode::core::Handle>()) {
+        if (const auto* p = value.as<mj2x::Handle>()) {
             consts << llvmConstantString(g + "_owner", p->getOwner().to_std_string());
             consts << llvmConstantString(g + "_name", p->getName().to_std_string());
             consts << llvmConstantString(g + "_desc", p->getDesc().to_std_string());

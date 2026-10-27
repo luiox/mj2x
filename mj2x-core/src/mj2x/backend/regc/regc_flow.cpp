@@ -10,7 +10,6 @@
 
 #include "mj2x/mir/passes/const_key_derivation.hpp"
 
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include "libca/str/format.hpp"

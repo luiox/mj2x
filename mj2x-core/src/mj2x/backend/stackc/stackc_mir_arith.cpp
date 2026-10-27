@@ -13,8 +13,6 @@
 
 namespace mj2x {
 
-using jbytecode::core::Label;
-using namespace jbytecode::analysis;
 using codegen::cFloatLiteral;
 using codegen::cStringLiteral;
 using codegen::fnv1a64;

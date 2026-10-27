@@ -4,7 +4,6 @@
 #include "llvm_ir_backend.hpp"
 #include "llvm_ir_internal.hpp"
 
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
@@ -24,7 +23,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::tree;
 using namespace llvmir;   // 类型工具 / 验证 / 发射器 / 共享 helper
 
 using codegen::mangleMethod;

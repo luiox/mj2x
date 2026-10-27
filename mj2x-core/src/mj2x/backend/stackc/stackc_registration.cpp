@@ -3,6 +3,8 @@
 ///        RegisterNatives 发射（从 stackc_backend.cpp 单体拆出）。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/frontend/code_converter.hpp"
@@ -10,12 +12,9 @@
 
 #include <cstdio>
 
-#include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 using codegen::CSourceStream;
 using codegen::fnv1a64;
 using codegen::hex64;

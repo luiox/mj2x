@@ -1,5 +1,7 @@
 #include "mj2x/mir/passes/reg_transform_passes.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "mj2x/mir/passes/const_key_derivation.hpp"
 
 #include "libca/random/split_mix64.hpp"
@@ -16,7 +18,6 @@
 namespace mj2x {
 namespace {
 
-using jbytecode::core::Opcodes;
 
 // 前置声明（定义在文件后部；applyMbaDeep / applyControlFlowFlattening 先使用）。
 uint64_t splitmix64(uint64_t x);

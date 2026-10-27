@@ -12,10 +12,11 @@
 
 #include "mj2x/mir/passes/ssa_inline_passes.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "mj2x/mir/ssa/ssa_instruction.hpp"
 #include "mj2x/mir/ssa/ssa_terminator.hpp"
 
-#include <jbytecode/jbytecode.hpp>
 
 #include <algorithm>
 #include <unordered_map>
@@ -23,7 +24,6 @@
 namespace mj2x {
 namespace {
 
-using jbytecode::core::Opcodes;
 
 using ValueMap = std::unordered_map<const SSAValue*, SSAValue*>;
 

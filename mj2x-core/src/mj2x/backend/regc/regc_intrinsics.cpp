@@ -7,6 +7,8 @@
 /// 从原 regc_emitter.cpp 纯搬移，生成代码零差异。
 #include "regc_emitter_internal.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "jbc/core/insn.hpp"
 #include "jbc/core/insn_codec.hpp"
 #include "libca/str/format.hpp"
@@ -16,7 +18,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 
 using codegen::cStringLiteral;
 using codegen::CSourceStream;

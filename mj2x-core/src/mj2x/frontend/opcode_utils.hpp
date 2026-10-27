@@ -2,7 +2,6 @@
 
 #include "mir_node.hpp"
 
-#include <jbytecode/jbytecode.hpp>
 
 namespace mj2x {
 

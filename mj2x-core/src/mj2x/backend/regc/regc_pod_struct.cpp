@@ -13,14 +13,12 @@
 
 #include "mj2x/backend/regc/regc_emitter_internal.hpp"
 
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 
 namespace mj2x {
 namespace {
 
-using namespace jbytecode::tree;
 
 bool isPrimitiveFieldDesc(std::string_view desc)
 {

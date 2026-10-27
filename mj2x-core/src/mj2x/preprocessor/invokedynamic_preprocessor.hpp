@@ -26,9 +26,9 @@
 
 #include "mj2x/preprocessor/preprocessor.hpp"
 
+#include "mj2x/core/jvm_type.hpp"
 #include "mj2x/mir/indy_dispatch.hpp"
 
-#include <jbytecode/jbytecode.hpp>
 
 #include <libca/core/any.hpp>
 
@@ -78,15 +78,6 @@ public:
     void process(CompilerIndex& index, IndyDispatchReport* report);
 };
 
-/// 判定单个 indy 站点的静态派发形态（设计文档 §2 判定树的可执行版本）。
-///
-/// @details
-/// 纯函数：只读 indy 节点与 index（用编译输入类集合区分自定义 bootstrap 的 D1/D2 分支），
-/// 不改写任何状态。B1（LMF 可展开子集）与 expandLambdaSite 共用同一前置谓词，
-/// 保证「判定结果 = 展开行为」零漂移。
-IndyDispatchDecision classifyIndySite(CompilerIndex& index,
-                                      const jbytecode::tree::InvokeDynamicInsnNode* indy);
-
 /// 站点级判定（SSA 登记站点时填充直派载荷的入口；设计文档 §6 P1）。
 ///
 /// @details
@@ -98,7 +89,7 @@ IndyDispatchDecision classifyIndySite(CompilerIndex& index,
 IndyDispatchPayload classifyIndySiteForm(ca::str::Utf8StringArena& arena,
                                          const std::string&             indyName,
                                          const std::string&             indyDesc,
-                                         const std::optional<jbytecode::core::Handle>& bsm,
+                                         const std::optional<mj2x::Handle>& bsm,
                                          const std::vector<ca::core::Any>&             bsmArgs);
 
 }   // namespace mj2x

@@ -1,8 +1,9 @@
 #include "regc_backend.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "jbc/core/insn.hpp"
 #include "jbc/core/insn_codec.hpp"
-#include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
@@ -39,8 +40,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 namespace {
 
@@ -1059,19 +1058,19 @@ std::string indyBoxedClassName(const ca::str::Utf8StringRef& desc)
     return indyBoxedClassNameForDescHead(s.empty() ? '\0' : s[0]);
 }
 
-std::string indyTypeDescriptorString(const jbytecode::core::Type& type)
+std::string indyTypeDescriptorString(const mj2x::Type& type)
 {
     // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
     ca::str::Utf8StringArena scratch;
     return type.getDescriptor(scratch).to_std_string();
 }
 
-std::string indyMethodTypeDescriptorString(const jbytecode::core::Type& type)
+std::string indyMethodTypeDescriptorString(const mj2x::Type& type)
 {
     // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
     // 落点参数按必选口径走函数级局部 arena；toString 本就不 intern。
     ca::str::Utf8StringArena scratch;
-    return type.getSort() == jbytecode::core::Type::METHOD
+    return type.getSort() == mj2x::Type::METHOD
                    ? type.getDescriptor(scratch).to_std_string()
                    : type.toString();
 }
@@ -1113,7 +1112,7 @@ void emitIndyClassObject(CSourceStream& out, const std::string& var, const std::
     }
 }
 
-void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode::core::Handle& handle)
+void emitIndyHandle(CSourceStream& out, const std::string& var, const mj2x::Handle& handle)
 {
     const int    tag   = handle.getTag();
     const std::string owner = handle.getOwner().to_std_string();
@@ -1201,8 +1200,8 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
         break;
     case IndyBsmArgKind::MethodType:
     case IndyBsmArgKind::Class:
-        if (const auto* p = value.as<jbytecode::core::Type>()) {
-            if (p->getSort() == jbytecode::core::Type::METHOD) {
+        if (const auto* p = value.as<mj2x::Type>()) {
+            if (p->getSort() == mj2x::Type::METHOD) {
                 emitIndyMethodType(out, var, indyMethodTypeDescriptorString(*p));
             }
             else {
@@ -1211,7 +1210,7 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
         }
         break;
     case IndyBsmArgKind::Handle:
-        if (const auto* p = value.as<jbytecode::core::Handle>()) {
+        if (const auto* p = value.as<mj2x::Handle>()) {
             emitIndyHandle(out, var, *p);
         }
         break;

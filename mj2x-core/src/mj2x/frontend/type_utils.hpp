@@ -3,7 +3,6 @@
 #include "mir_node.hpp"
 #include "mj2x/mir/ssa/ssa_type.hpp"
 
-#include <jbytecode/jbytecode.hpp>
 
 #include <string_view>
 

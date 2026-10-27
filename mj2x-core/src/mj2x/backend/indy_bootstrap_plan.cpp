@@ -1,7 +1,6 @@
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 
 
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include "libca/str/utf8_string_arena.hpp"
@@ -69,7 +68,6 @@ IndyHandleFind indyHandleFindFor(int handleTag)
     static constexpr const char* kFindVirtualDesc =
         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
         "Ljava/lang/invoke/MethodHandle;";
-    using jbytecode::core::Opcodes;
     switch (handleTag) {
     case Opcodes::H_GETFIELD:
         return {"findGetter",
@@ -114,11 +112,11 @@ IndyBsmArgKind classifyIndyBsmArg(const ca::core::Any& value)
 {
     if (value.as<std::string>() != nullptr) return IndyBsmArgKind::String;
     if (value.as<ca::str::Utf8StringRef>() != nullptr) return IndyBsmArgKind::String;
-    if (const auto* type = value.as<jbytecode::core::Type>()) {
+    if (const auto* type = value.as<mj2x::Type>()) {
         return type->getSort() == Type::METHOD ? IndyBsmArgKind::MethodType
                                                                 : IndyBsmArgKind::Class;
     }
-    if (value.as<jbytecode::core::Handle>() != nullptr) return IndyBsmArgKind::Handle;
+    if (value.as<mj2x::Handle>() != nullptr) return IndyBsmArgKind::Handle;
     if (value.as<ca::i32>() != nullptr) return IndyBsmArgKind::Int;
     if (value.as<ca::i64>() != nullptr) return IndyBsmArgKind::Long;
     if (value.as<float>() != nullptr) return IndyBsmArgKind::Float;

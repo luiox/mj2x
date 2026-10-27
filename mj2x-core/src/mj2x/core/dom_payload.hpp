@@ -4,9 +4,9 @@
 /// @brief       DOM CP → 树契约同型载荷的共享解析面（code_converter /
 ///              invokedynamic preprocessor 共用，批 4b 收口单源）。
 ///
-/// 批 3a/3b 实证规则：树/Any 载荷一律旧栈类型——Class/MethodType 走
-/// jbytecode::core::Type 限定名构造、MethodHandle 走旧栈 Handle、字符串视图
-/// 必须 intern 进作业 arena（DOM CP 存储生命周期独立，裸视图会悬垂）。
+/// 批 6e 门面收口：Any 载荷一律 mj2x 自有类型——Class/MethodType 走
+/// mj2x::Type、MethodHandle 走 mj2x::Handle、字符串视图必须 intern 进
+/// 作业 arena（DOM CP 存储生命周期独立，裸视图会悬垂）。
 /// ConstantDynamic 不支持（fail loud）。
 
 #include <cstring>
@@ -17,9 +17,10 @@
 #include "jbc/core/attribute.hpp"
 #include "jbc/core/class_file.hpp"
 #include "jbc/core/constant_pool.hpp"
-#include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
 #include "libca/core/tag_cast.hpp"
+
+#include "mj2x/core/jvm_type.hpp"
 #include "libca/str/utf8_string_arena.hpp"
 
 namespace mj2x {
@@ -34,7 +35,7 @@ inline ca::str::Utf8StringRef domUtf8(const jbc::core::ClassFile& dom, ca::u32 i
 }
 
 /// @brief CP MethodHandle → 旧栈 Handle（引用视图 intern 进 arena）。
-inline jbytecode::core::Handle resolveDomHandle(jbc::core::ClassFile& dom, ca::u32 cpIdx,
+inline mj2x::Handle resolveDomHandle(jbc::core::ClassFile& dom, ca::u32 cpIdx,
                                                 ca::str::Utf8StringArena& arena)
 {
     const auto& entry = dom.cp.at(cpIdx);
@@ -44,7 +45,7 @@ inline jbytecode::core::Handle resolveDomHandle(jbc::core::ClassFile& dom, ca::u
     }
     const auto& ref = dom.cp.at(entry.b);      // Methodref / InterfaceMethodref
     const auto& nat = dom.cp.at(ref.b);
-    return jbytecode::core::Handle(entry.a, arena.intern(domUtf8(dom, dom.cp.at(ref.a).a)),
+    return mj2x::Handle(entry.a, arena.intern(domUtf8(dom, dom.cp.at(ref.a).a)),
                                    arena.intern(domUtf8(dom, nat.a)),
                                    arena.intern(domUtf8(dom, nat.b)),
                                    ref.tag == jbc::core::CpTag::InterfaceMethodref);
@@ -78,10 +79,10 @@ inline ca::core::Any resolveDomConstPayload(jbc::core::ClassFile& dom, ca::u32 c
     case jbc::core::CpTag::String: return ca::core::Any(arena.intern(domUtf8(dom, entry.a)));
     case jbc::core::CpTag::Class:
         return ca::core::Any(
-            jbytecode::core::Type::getObjectType(arena.intern(domUtf8(dom, entry.a))));
+            mj2x::Type::getObjectType(arena.intern(domUtf8(dom, entry.a))));
     case jbc::core::CpTag::MethodType:
         return ca::core::Any(
-            jbytecode::core::Type::getMethodType(arena.intern(domUtf8(dom, entry.a))));
+            mj2x::Type::getMethodType(arena.intern(domUtf8(dom, entry.a))));
     case jbc::core::CpTag::MethodHandle: return ca::core::Any(resolveDomHandle(dom, cpIdx, arena));
     case jbc::core::CpTag::Utf8:
         // 旧栈 writer 对 bootstrap arg 的 std::string 载荷 intern 成 CONSTANT_Utf8。
@@ -117,10 +118,10 @@ struct DomIndySite
 {
     std::string                name;
     std::string                desc;
-    jbytecode::core::Handle    bsm;
+    mj2x::Handle    bsm;
     std::vector<ca::core::Any> bsmArgs;
 
-    DomIndySite(std::string n, std::string d, jbytecode::core::Handle h)
+    DomIndySite(std::string n, std::string d, mj2x::Handle h)
         : name(std::move(n)), desc(std::move(d)), bsm(std::move(h))
     {
     }

@@ -16,7 +16,6 @@
 #include <jbc/core/attribute.hpp>
 #include <jbc/core/class_file.hpp>
 #include <jbc/core/insn.hpp>
-#include <jbytecode/jbytecode.hpp>
 
 #include <memory>
 #include <unordered_map>
@@ -46,7 +45,6 @@ public:
     std::vector<Block*> convert(jbc::core::ClassFile& cf, ca::usize methodIndex);
 
     /// @brief 测试垫片：MethodNode → plain 字节 → DOM → 同一读路径。
-    std::vector<Block*> convert(jbytecode::tree::MethodNode& mn);
 
     /// dump L1 MIR 为可读文本（调试/dumpMIR 用）。
     static std::string dumpMIR(const std::vector<Block*>& blocks);

@@ -7,7 +7,6 @@
 /// 从原 regc_emitter.cpp 纯搬移，生成代码零差异。
 #include "regc_emitter_internal.hpp"
 
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include "libca/str/format.hpp"

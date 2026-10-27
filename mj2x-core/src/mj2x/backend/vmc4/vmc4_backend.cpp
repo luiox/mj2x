@@ -1,6 +1,7 @@
 #include "mj2x/backend/vmc4/vmc4_backend.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/vmc4/vm_interpreter_emit.hpp"
@@ -32,8 +33,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 namespace {
 

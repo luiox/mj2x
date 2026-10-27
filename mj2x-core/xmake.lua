@@ -29,7 +29,7 @@ target("mj2x-core")
 
     -- 独立仓接线：monorepo 时期的 phony 垫片（libca_*/libjbytecode 族 target）
     -- 换成 luiox-repo 直连包；public 供 mj2x-cli/unittest 传递可见。
-    add_packages("libca", "libjbc", "libjbytecode", "libjstr", "libjzip", {public = true})
+    add_packages("libca", "libjbc", "libjstr", "libjzip", {public = true})
 
     -- #886 单后端编译裁剪：with_mj2x_backend=all（默认）保持全量收编，行为
     -- 与历史一致；单后端构建只编入所选后端目录，被排除后端不进归档（CLI

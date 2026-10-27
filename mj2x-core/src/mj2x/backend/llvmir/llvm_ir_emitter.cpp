@@ -1,6 +1,8 @@
 /// @file llvm_ir_emitter.cpp
 /// @brief LLVM IR 后端发射器：RegIR 函数 → textual LLVM IR（含异常分发）。
 #include "llvm_ir_internal.hpp"
+#include <set>
+#include <unordered_map>
 #include "llvm_intrinsic_registry.hpp"
 
 #include "mj2x/codegen/c_helpers.hpp"
@@ -13,7 +15,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::tree;
 
 class LlvmFunctionEmitter
 {

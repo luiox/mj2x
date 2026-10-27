@@ -1,4 +1,6 @@
 #include "stackc_backend.hpp"
+
+#include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 #include "mj2x/codegen/code_snippet.hpp"
@@ -10,16 +12,10 @@
 #include <fstream>
 #include <string>
 
-#include "jbytecode/jbytecode.hpp"
 #include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
-using namespace jbytecode::analysis;
-using namespace jbytecode::commons;
-using namespace jbytecode::util;
 using codegen::CSourceStream;
 using codegen::fnv1a64;
 using codegen::hex64;

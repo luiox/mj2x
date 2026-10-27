@@ -1,7 +1,7 @@
 /// @file        jvm_type.hpp
 /// @brief       JVM 类型投影：描述符解析门面（libjbc 迁移批 1）。
 ///
-/// 旧栈 jbytecode::core::Type 的消费侧对位面（批 1 盘点：getType/
+/// 旧栈 mj2x::Type 的消费侧对位面（批 1 盘点：getType/
 /// getObjectType/getMethodType/getArgumentTypes/getReturnType 静态族 +
 /// getSort/getDescriptor/getInternalName/实例 getArgumentTypes/getReturnType/
 /// toString/operator==）。语义逐位对齐旧栈（视图存储、INTERNAL 掩蔽为
@@ -89,6 +89,42 @@ private:
 
     int                    sort_;
     ca::str::Utf8StringRef value_;
+};
+
+
+/// @brief JVM 方法句柄值（tag + owner/name/desc 视图 + itf 位）。
+///
+/// 旧栈 mj2x::Handle 的消费侧对位面：bsm/implMethod Any 载荷与
+/// MIR/SSA/RegIR 携带面的自有载体。视图寿命随 intern 进 Utf8StringArena 的
+/// 底串（与 mj2x::Type 同纪律）。无默认构造（载荷随构造注入，旧栈契约）。
+class Handle
+{
+public:
+    Handle(int tag, const ca::str::Utf8StringRef& owner, const ca::str::Utf8StringRef& name,
+           const ca::str::Utf8StringRef& desc, bool itf)
+        : tag_(tag), owner_(owner), name_(name), desc_(desc), itf_(itf)
+    {}
+
+    int getTag() const noexcept { return tag_; }
+    const ca::str::Utf8StringRef& getOwner() const noexcept { return owner_; }
+    const ca::str::Utf8StringRef& getName() const noexcept { return name_; }
+    const ca::str::Utf8StringRef& getDesc() const noexcept { return desc_; }
+    /// @brief 接口方法句柄位（Methodref vs InterfaceMethodref）。
+    bool isInterface() const noexcept { return itf_; }
+
+    bool operator==(const Handle& other) const
+    {
+        return tag_ == other.tag_ && itf_ == other.itf_ && owner_ == other.owner_
+            && name_ == other.name_ && desc_ == other.desc_;
+    }
+    bool operator!=(const Handle& other) const { return !(*this == other); }
+
+private:
+    int                    tag_;
+    ca::str::Utf8StringRef owner_;
+    ca::str::Utf8StringRef name_;
+    ca::str::Utf8StringRef desc_;
+    bool                   itf_;
 };
 
 }   // namespace mj2x

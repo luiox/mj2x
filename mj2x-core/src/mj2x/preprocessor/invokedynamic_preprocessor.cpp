@@ -1,5 +1,7 @@
 #include "invokedynamic_preprocessor.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "jbc/core/attribute.hpp"
 #include "jbc/core/reader.hpp"
 #include "jbc/core/writer.hpp"
@@ -16,8 +18,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 namespace {
 
@@ -1085,13 +1085,6 @@ IndyDispatchDecision classifyIndySitePayload(CompilerIndex& index, const std::st
     return d;
 }
 
-/// 判定树包装（报告面）：树节点拆载荷后走同一主体。
-IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
-{
-    return classifyIndySitePayload(index, toStd(indy->name), toStd(indy->desc), indy->bsm,
-                                   indy->bsmArgs);
-}
-
 // 合成一个实现 functional interface 的类（DOM 载体，从零建 libjbc ClassFile）：
 //   public final class <synthName> implements <ifaceInternal> {
 //     <synthName>(capturedDescs) { super(); this.capI = capI; }
@@ -1760,15 +1753,10 @@ ca::usize IndyDispatchReport::count(IndyDispatchForm form) const
     return n;
 }
 
-IndyDispatchDecision classifyIndySite(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
-{
-    return classifyIndySiteImpl(index, indy);
-}
-
 IndyDispatchPayload classifyIndySiteForm(ca::str::Utf8StringArena& arena,
                                          const std::string&             indyName,
                                          const std::string&             indyDesc,
-                                         const std::optional<jbytecode::core::Handle>& bsm,
+                                         const std::optional<mj2x::Handle>& bsm,
                                          const std::vector<ca::core::Any>&             bsmArgs)
 {
     const CoreDecision core = classifyCore(

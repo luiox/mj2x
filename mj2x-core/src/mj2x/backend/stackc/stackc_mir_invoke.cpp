@@ -5,6 +5,8 @@
 ///          主体块 indent 到 2 层，嵌套块用 indent()/dedent() 管理。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "libca/str/format.hpp"
 
@@ -12,8 +14,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::analysis;
 using codegen::cStringLiteral;
 using codegen::cFloatLiteral;
 using codegen::formatFloatLiteral;
@@ -404,8 +404,8 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
             break;
         case IndyBsmArgKind::MethodType:
         case IndyBsmArgKind::Class:
-            if (auto* p = value.as<jbytecode::core::Type>()) {
-                if (p->getSort() == jbytecode::core::Type::METHOD) {
+            if (auto* p = value.as<mj2x::Type>()) {
+                if (p->getSort() == mj2x::Type::METHOD) {
                     emitMethodType(varName, methodTypeDescriptorString(*p));
                 }
                 else {

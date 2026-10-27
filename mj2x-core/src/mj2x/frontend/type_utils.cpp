@@ -1,14 +1,9 @@
 #include "type_utils.hpp"
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::tree;
-using namespace jbytecode::analysis;
-using namespace jbytecode::commons;
-using namespace jbytecode::util;
 
 PrimitiveKind jvmSortToPrimitive(int sort)
 {

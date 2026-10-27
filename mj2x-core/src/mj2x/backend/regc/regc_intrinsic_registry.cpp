@@ -1,6 +1,5 @@
 #include "regc_intrinsic_registry.hpp"
 
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 

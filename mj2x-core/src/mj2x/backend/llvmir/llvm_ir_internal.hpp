@@ -3,7 +3,6 @@
 ///        互调解析器与发射器接口（实现拆分到 llvm_ir_*.cpp，保持主文件精简）。
 #pragma once
 
-#include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include "mj2x/backend/backend.hpp"
@@ -30,7 +29,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::tree;
 
 using codegen::mangleMethod;
 

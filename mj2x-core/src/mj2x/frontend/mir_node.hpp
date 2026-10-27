@@ -1,6 +1,6 @@
 #pragma once
 
-#include <jbytecode/jbytecode.hpp>
+#include "libca/core/any.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include <libca/str/utf8_string.hpp>
 #include "libca/core/tag_cast.hpp"
@@ -375,7 +375,7 @@ struct MIRInvoke : MIRNode
 struct MIRInvokeDynamic : MIRNode
 {
     ca::str::Utf8StringRef                 name, desc;
-    std::optional<jbytecode::core::Handle> bsm;
+    std::optional<mj2x::Handle> bsm;
     std::vector<ca::core::Any>             bsmArgs;
     MIRInvokeDynamic()
         : MIRNode(MIRKind::INVOKE_DYNAMIC)
