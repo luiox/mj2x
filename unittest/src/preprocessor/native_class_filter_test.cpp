@@ -13,6 +13,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/compiler_index.hpp"
+#include "test_helper.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
 
@@ -195,7 +196,7 @@ TEST(NativeClassFilterPreprocessorTest, SetsFilteredOutAndCounts)
     buildSimpleClass(index, "com/third/Widget");
 
     NativeClassFilterPreprocessor filter({"com.acme.**"}, {"com.acme.test.**"});
-    filter.process(index);
+    test::runWithDomSync(filter, index);
 
     EXPECT_FALSE(index.getClass("com/acme/Engine")->filteredOut);
     EXPECT_TRUE(index.getClass("com/acme/test/Helper")->filteredOut);
@@ -210,7 +211,7 @@ TEST(NativeClassFilterPreprocessorTest, LibraryClassesAreNeverFiltered)
     index.getClass("com/third/Widget")->isLibrary = true;
 
     NativeClassFilterPreprocessor filter({}, {"com.third.**"});
-    filter.process(index);
+    test::runWithDomSync(filter, index);
 
     EXPECT_FALSE(index.getClass("com/third/Widget")->filteredOut);
     EXPECT_EQ(filter.filteredCount(), 0u);
@@ -223,8 +224,8 @@ TEST(NativeClassFilterPreprocessorTest, MarkAllSkipsFilteredClasses)
     buildSimpleClass(index, "com/third/Widget");
 
     NativeClassFilterPreprocessor filter({"com.acme.**"}, {});
-    filter.process(index);
-    MarkAllMethodsPreprocessor().process(index);
+    test::runWithDomSync(filter, index);
+    test::runWithDomSync(MarkAllMethodsPreprocessor(), index);
 
     EXPECT_TRUE(anyMarked(*index.getClass("com/acme/Engine")));
     EXPECT_FALSE(anyMarked(*index.getClass("com/third/Widget")));
@@ -237,8 +238,8 @@ TEST(NativeClassFilterPreprocessorTest, EmptyFilterMarksEverything)
     buildSimpleClass(index, "com/third/Widget");
 
     NativeClassFilterPreprocessor filter({}, {});
-    filter.process(index);
-    MarkAllMethodsPreprocessor().process(index);
+    test::runWithDomSync(filter, index);
+    test::runWithDomSync(MarkAllMethodsPreprocessor(), index);
 
     EXPECT_TRUE(anyMarked(*index.getClass("com/acme/Engine")));
     EXPECT_TRUE(anyMarked(*index.getClass("com/third/Widget")));

@@ -25,4 +25,13 @@ namespace mj2x {
 /// Err 即抛 std::runtime_error（pipeline 边界既有 catch 面）。
 void syncTreeToDom(CompilerIndex& index);
 
+/// @brief 对 index 内全部类执行 DOM→tree 反向同步（重建 classNode/methods/fields）。
+///
+/// 批 4 载体切换后 DOM 是改写权威：DOM → `writeClass` 字节 → 旧栈
+/// ClassReader → 新 tree。CompilerMethod 的管线状态（markedForCompile/
+/// compiled/backendResult）按 name+desc（类内唯一）锚定迁移到新节点，
+/// DOM 侧新增的方法（如 __regc_* 搬运产物）按默认状态落位。
+/// Err 即抛 std::runtime_error（pipeline 边界既有 catch 面）。
+void syncDomToTree(CompilerIndex& index);
+
 }   // namespace mj2x

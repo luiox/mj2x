@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "mj2x/core/compiler_index.hpp"
+#include "test_helper.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 
@@ -126,7 +127,7 @@ TEST(InitClinitMoverTest, MovesInitBodyIntoStaticMirror)
                            new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::POP),
                            new InsnNode(Opcodes::RETURN)});
     buildClass(index, "p/Foo", {init});
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls = *index.getClass("p/Foo");
     auto*          skeleton = findMethod(cls, "<init>");
@@ -163,7 +164,7 @@ TEST(InitClinitMoverTest, InitArgsSlotLayout)
     auto* init = makeInit(index, "(JLjava/lang/String;D)V",
                           {new InsnNode(Opcodes::RETURN)});
     buildClass(index, "p/Foo", {init});
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls   = *index.getClass("p/Foo");
     auto*          skel  = findMethod(cls, "<init>");
@@ -185,7 +186,7 @@ TEST(InitClinitMoverTest, InitSkeletonCallsMirror)
     CompilerIndex index;
     auto* init = makeInit(index, "()V", {new InsnNode(Opcodes::RETURN)});
     buildClass(index, "Foo", {init});
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls  = *index.getClass("Foo");
     auto*          skel = findMethod(cls, "<init>");
@@ -214,14 +215,18 @@ TEST(InitClinitMoverTest, MovesInitWithBareLabelInPrefix)
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
     buildClass(index, "Foo", {mn});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls = *index.getClass("Foo");
     EXPECT_EQ(cls.classNode->methods.size(), 2);
-    EXPECT_EQ(mn->instructions.size(), 6);   // label+aload0+super+aload0+invokestatic+return
-    EXPECT_TRUE(hasOpcode(mn, Opcodes::ALOAD));
-    EXPECT_TRUE(hasOpcode(mn, Opcodes::INVOKESTATIC));
-    EXPECT_TRUE(hasOpcode(mn, Opcodes::RETURN));
+    // 三明治重建树，断言现查新节点；裸 label 在字节域无形态（无 LNT 锚定、
+    // 无跳转引用），骨架重建后为 5 条指令。
+    auto* skel = findMethod(cls, "<init>");
+    ASSERT_NE(skel, nullptr);
+    EXPECT_EQ(skel->instructions.size(), 5);   // aload0+super+aload0+invokestatic+return
+    EXPECT_TRUE(hasOpcode(skel, Opcodes::ALOAD));
+    EXPECT_TRUE(hasOpcode(skel, Opcodes::INVOKESTATIC));
+    EXPECT_TRUE(hasOpcode(skel, Opcodes::RETURN));
 }
 
 // 切点前有 FRAME → 不搬运（骨架帧状态复杂，v1 不处理）。
@@ -245,13 +250,18 @@ TEST(InitClinitMoverTest, SkipsInitWithFrameInPrefix)
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
     buildClass(index, "Foo", {mn});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls = *index.getClass("Foo");
     EXPECT_EQ(cls.classNode->methods.size(), 1);
-    EXPECT_EQ(mn->instructions.size(), 4);
-    EXPECT_TRUE(hasOpcode(mn, Opcodes::INVOKESPECIAL));
-    EXPECT_TRUE(hasOpcode(mn, Opcodes::RETURN));
+    // 三明治重建树，断言现查新节点（FRAME 经 SMT 往返原样回树）。
+    auto* skel = findMethod(cls, "<init>");
+    ASSERT_NE(skel, nullptr);
+    // 帧经 SMT 往返回树时，帧锚点会先落一个 LabelNode（帧引用 label）——
+    // 重建序：FrameNode + LN(0) + aload0 + super + return。
+    EXPECT_EQ(skel->instructions.size(), 5);
+    EXPECT_TRUE(hasOpcode(skel, Opcodes::INVOKESPECIAL));
+    EXPECT_TRUE(hasOpcode(skel, Opcodes::RETURN));
 }
 
 // body 分支向后引用骨架段 label → 跨切点引用，不搬运。
@@ -277,12 +287,15 @@ TEST(InitClinitMoverTest, SkipsInitWithCrossSegmentLabelRef)
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
     buildClass(index, "Foo", {mn});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls = *index.getClass("Foo");
     EXPECT_EQ(cls.classNode->methods.size(), 1);
-    EXPECT_EQ(mn->instructions.size(), 6);   // 原样保留：label+aload0+super+goto+target+return
-    EXPECT_TRUE(hasOpcode(mn, Opcodes::GOTO));
+    // 三明治重建树，断言现查新节点（label 经跳转目标往返原样回树）。
+    auto* skel = findMethod(cls, "<init>");
+    ASSERT_NE(skel, nullptr);
+    EXPECT_EQ(skel->instructions.size(), 5);   // label(0,被 goto 引用)+aload0+super+goto+return
+    EXPECT_TRUE(hasOpcode(skel, Opcodes::GOTO));
 }
 
 // 带异常表的构造器不搬运。
@@ -291,17 +304,31 @@ TEST(InitClinitMoverTest, SkipsInitWithTryCatch)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto* mn = makeInit(index, "()V", {new InsnNode(Opcodes::RETURN)});
-    auto* tc = mn->create<TryCatchBlockNode>(new Label(), new Label(), new Label(),
+    auto* mn = makeInit(index, "()V", {});
+    // 异常表夹具：label 必须挂进指令流（writer 按 LabelNode 位点解析 pc，
+    // 悬空 label 写不出异常表）。try [l0,l1) 罩住 aload+super，handler=lh。
+    auto* l0 = labelScratchArena().create<Label>();
+    auto* l1 = labelScratchArena().create<Label>();
+    auto* lh = labelScratchArena().create<Label>();
+    auto& ins = mn->instructions;
+    ins.insert(ins.getFirst(), new LabelNode(l0));
+    ins.add(new LabelNode(l1));   // try 终点（与 super 调用后、RETURN 前同位点）
+    ins.add(new LabelNode(lh));   // handler 同位点
+    ins.add(new InsnNode(Opcodes::RETURN));
+    auto* tc = mn->create<TryCatchBlockNode>(l0, l1, lh,
                                      arena.intern("java/lang/Exception"));
     mn->tryCatchBlocks.push_back(tc);
     buildClass(index, "Foo", {mn});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls = *index.getClass("Foo");
     EXPECT_EQ(cls.classNode->methods.size(), 1);
-    EXPECT_EQ(mn->instructions.size(), 3);   // aload0+super+return
+    // 三明治重建树，断言现查新节点（异常表往返回树：start/handler/end 三个
+    // label 锚点 + 3 条指令）。
+    auto* skel = findMethod(cls, "<init>");
+    ASSERT_NE(skel, nullptr);
+    EXPECT_EQ(skel->instructions.size(), 5);   // LN(0)+aload0+super+LN(4,end/handler 同点合并)+return
 }
 
 // <clinit> 整段搬走，骨架只留 invokestatic + return。
@@ -320,7 +347,7 @@ TEST(InitClinitMoverTest, MovesClinitBody)
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
     buildClass(index, "Foo", {mn});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls = *index.getClass("Foo");
     auto*          clinit = findMethod(cls, "<clinit>");
@@ -353,9 +380,12 @@ TEST(InitClinitMoverTest, OrdinaryClassUntouched)
     mn->instructions.add(new InsnNode(Opcodes::RETURN));
     buildClass(index, "Foo", {mn});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
     CompilerClass& cls = *index.getClass("Foo");
     EXPECT_EQ(cls.classNode->methods.size(), 1);
-    EXPECT_EQ(mn->instructions.size(), 1);
+    // 三明治重建树，断言现查新节点。
+    auto* run = findMethod(cls, "run");
+    ASSERT_NE(run, nullptr);
+    EXPECT_EQ(run->instructions.size(), 1);
 }

@@ -16,11 +16,14 @@
 // main 里先 test::setup("<子项目名>")。
 
 #include <cstdint>
+#include <iostream>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 #include "libca/test/test.hpp"
+
+#include "mj2x/core/class_dom_sync.hpp"
 
 namespace test {
 
@@ -108,6 +111,19 @@ inline bool hasResource(const std::string& filename)
 inline std::vector<uint8_t> getResource(const std::string& filename)
 {
     return ca::test::resource(filename);
+}
+
+// ---- 批 4 DOM 载体 pass 的测试三明治 ----
+
+/// DOM 载体 pre/postprocessor 的测试适配：夹具通常只建树（CompilerClass 无
+/// dom），pass 已改在 DOM 权威上。三明治 = 树→DOM、执行 pass、DOM→树回投影，
+/// 断言面（树 InsnList/成员列表）零改动。
+template <typename Pass>
+void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index)
+{
+    mj2x::syncTreeToDom(index);
+    pass.process(index);
+    mj2x::syncDomToTree(index);
 }
 
 }   // namespace test

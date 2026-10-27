@@ -1,5 +1,7 @@
 #include "class_dom_sync.hpp"
 
+#include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,6 +57,61 @@ void syncTreeToDom(CompilerIndex& index)
         cls.dom = std::move(result.file);
         CA_LOGT_DEBUG("core", "dom synced: {} ({} methods)\n", name.c_str(),
                       cls.dom->methods.size());
+    }
+}
+
+void syncDomToTree(CompilerIndex& index)
+{
+    for (auto& [name, cls] : index.getClasses()) {
+        if (!cls.dom) continue;
+
+        // DOM 是批 4 后的改写权威：writeClass 保真字节 → 旧栈 ClassReader
+        // 重建树（真实编解码器往返，与 tree→DOM 方向同一纪律）。
+        auto written = jbc::core::writeClass(*cls.dom);
+        if (written.is_err()) {
+            throw std::runtime_error("class_dom_sync: writeClass failed for " + name);
+        }
+        auto bytes = std::move(written).unwrap();
+
+        // CompilerMethod 管线状态按 name+desc（类内唯一）锚定迁移；DOM 侧
+        // 新增方法（__regc_* 搬运产物等）无旧状态可迁，按默认状态落位。
+        std::map<std::string, CompilerMethod> carried;
+        for (auto& method : cls.methods) {
+            if (method.methodNode == nullptr) continue;
+            auto key = method.methodNode->name.to_std_string() + ":"
+                     + method.methodNode->desc.to_std_string();
+            carried.emplace(std::move(key), std::move(method));
+        }
+        cls.methods.clear();
+        for (auto& field : cls.fields) {
+            (void)field;   // CompilerField 无管线状态，重建即可
+        }
+        cls.fields.clear();
+
+        auto reader = std::make_unique<jbytecode::core::ClassReader>(
+            index.arena(), bytes.data(), static_cast<ca::i32>(bytes.size()));
+        auto node = std::make_unique<jbytecode::tree::ClassNode>();
+        reader->accept(node.get(), 0);
+        cls.classNode = std::move(node);
+
+        for (auto* mn : cls.classNode->methods) {
+            CompilerMethod cm;
+            auto key = mn->name.to_std_string() + ":" + mn->desc.to_std_string();
+            auto it  = carried.find(key);
+            if (it != carried.end()) {
+                cm = std::move(it->second);
+                carried.erase(it);
+            }
+            cm.methodNode = mn;
+            cls.methods.push_back(std::move(cm));
+        }
+        for (auto* fn : cls.classNode->fields) {
+            CompilerField cf;
+            cf.fieldNode = fn;
+            cls.fields.push_back(std::move(cf));
+        }
+        CA_LOGT_DEBUG("core", "dom->tree synced: {} ({} methods)\n", name.c_str(),
+                      cls.methods.size());
     }
 }
 

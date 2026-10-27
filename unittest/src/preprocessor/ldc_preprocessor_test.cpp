@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "mj2x/core/compiler_index.hpp"
+#include "test_helper.hpp"
 #include "mj2x/preprocessor/ldc_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
@@ -46,6 +47,18 @@ MethodNode* addMethodToIndex(CompilerIndex& index, const std::string& className,
     cls.classNode = std::move(cn);
     index.addClass(className, std::move(cls));
     return index.getClass(className)->classNode->methods.back();
+}
+
+// 三明治（runWithDomSync）重建树后旧 MethodNode* 全换代——按 name+desc 现查。
+MethodNode* findMethodIn(CompilerIndex& index, const std::string& className,
+                         const std::string& methodName)
+{
+    auto* cls = index.getClass(className);
+    if (cls == nullptr) return nullptr;
+    for (auto* m : cls->classNode->methods) {
+        if (m->name.to_std_string() == methodName) return m;
+    }
+    return nullptr;
 }
 
 // ---- 迷你栈校验器：对 LDC/INVOKE/GETSTATIC 做抽象解释，模拟 verifier 的栈形检查 ----
@@ -147,22 +160,19 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
             const std::string retDesc = ret.getDescriptor(scratch).to_std_string();
             if (retDesc != "V") stack.push_back(retDesc);
         }
-        else if (insn->getType() == AbstractInsnNode::JUMP_INSN) {
-            auto* ji = static_cast<JumpInsnNode*>(insn);
-            if (ji->opcode == Opcodes::ARETURN) {
-                if (stack.size() != 1) {
-                    reason = "areturn with stack depth " + std::to_string(stack.size());
-                    return false;
-                }
-                const std::string mDesc = m->desc.to_std_string();
-                const auto ret = jbytecode::core::Type::getReturnType(
-                    ca::str::Utf8StringRef::from_string_view(mDesc));
-                if (!descCompatible(ret.getDescriptor(scratch).to_std_string(), stack.back())) {
-                    reason = "areturn type mismatch: " + stack.back();
-                    return false;
-                }
-                stack.pop_back();
+        else if (insn->getOpcode() == Opcodes::ARETURN) {
+            if (stack.size() != 1) {
+                reason = "areturn with stack depth " + std::to_string(stack.size());
+                return false;
             }
+            const std::string mDesc = m->desc.to_std_string();
+            const auto ret = jbytecode::core::Type::getReturnType(
+                ca::str::Utf8StringRef::from_string_view(mDesc));
+            if (!descCompatible(ret.getDescriptor(scratch).to_std_string(), stack.back())) {
+                reason = "areturn type mismatch: " + stack.back();
+                return false;
+            }
+            stack.pop_back();
         }
         if (stack.size() > peak) peak = stack.size();
     }
@@ -213,11 +223,15 @@ protected:
         CompilerIndex index;
         std::vector<AbstractInsnNode*> insns;
         insns.push_back(new LdcInsnNode(cst));
-        insns.push_back(new JumpInsnNode(Opcodes::ARETURN, nullptr));
+        insns.push_back(new InsnNode(Opcodes::ARETURN));
         MethodNode* m = addMethodToIndex(index, "Sample", "run", methodDesc, insns);
 
         LdcPreprocessor pre;
-        pre.process(index);
+        test::runWithDomSync(pre, index);
+
+        // 三明治重建树，产物断言一律现查新节点。
+        m = findMethodIn(index, "Sample", "run");
+        ASSERT_NE(m, nullptr);
 
         // 展开必须抬 maxStack +4（16 为本 fixture 初值；否则 stackc 后端
         // union jvalue s[maxStack] 开小，LDC 解析内联写穿 s[]——issue #1）。
@@ -323,12 +337,17 @@ LookupCallShape expandAndCaptureLookupCall(int tag, const char* handleDesc)
     Handle h = makeHandle(index, tag, "Sample", "m", handleDesc);
     std::vector<AbstractInsnNode*> insns;
     insns.push_back(new LdcInsnNode(h));
-    insns.push_back(new JumpInsnNode(Opcodes::ARETURN, nullptr));
+    insns.push_back(new InsnNode(Opcodes::ARETURN));
     MethodNode* m =
         addMethodToIndex(index, "Sample", "run", "()Ljava/lang/invoke/MethodHandle;", insns);
 
     LdcPreprocessor pre;
-    pre.process(index);
+    test::runWithDomSync(pre, index);
+
+    // 三明治重建树，断言现查新节点。
+    m = findMethodIn(index, "Sample", "run");
+    EXPECT_NE(m, nullptr);
+    if (m == nullptr) return LookupCallShape{};
 
     std::string reason;
     EXPECT_TRUE(verifyStackShape(m, reason)) << "tag=" << tag << ": " << reason;
@@ -377,10 +396,9 @@ TEST_F(LdcPreprocessorTest, FindNameAndDescFullTable)
         {Opcodes::H_INVOKEINTERFACE, "(I)V", "findVirtual",
          "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
          "Ljava/lang/invoke/MethodHandle;"},
-        // 未知 tag：缺省分支 → findVirtual 形态（与单源 default 一致）。
-        {999, "(I)V", "findVirtual",
-         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
-         "Ljava/lang/invoke/MethodHandle;"},
+        // 注：缺省分支（非法 tag）在 DOM 世界不可达——reference_kind 合法域
+        // 1..9（JVMS 4.4.8），越界值在树→DOM 同步的 readClass 即被拒，用例
+        // 无法构建；合法 9 tag 全表已在上列钉死。
     };
     for (const auto& c : cases) {
         const LookupCallShape got = expandAndCaptureLookupCall(c.tag, c.handleDesc);
@@ -406,13 +424,17 @@ TEST_F(LdcPreprocessorTest, BumpsMaxStackToCoverExpansionPeak)
     Handle h = makeHandle(index, Opcodes::H_INVOKESTATIC, "Sample", "add", "(II)I");
     std::vector<AbstractInsnNode*> insns;
     insns.push_back(new LdcInsnNode(ca::core::Any(h)));
-    insns.push_back(new JumpInsnNode(Opcodes::ARETURN, nullptr));
+    insns.push_back(new InsnNode(Opcodes::ARETURN));
     MethodNode* m =
         addMethodToIndex(index, "Sample", "run", "()Ljava/lang/invoke/MethodHandle;", insns);
     m->maxStack = 2;   // 手构样本 LdcMhSample 的真实 max_stack 形态。
 
     LdcPreprocessor pre;
-    pre.process(index);
+    test::runWithDomSync(pre, index);
+
+    // 三明治重建树，断言现查新节点。
+    m = findMethodIn(index, "Sample", "run");
+    ASSERT_NE(m, nullptr);
 
     EXPECT_EQ(m->maxStack, 2 + 4);
     std::string reason;
@@ -425,11 +447,15 @@ TEST_F(LdcPreprocessorTest, LeavesPlainLdcAlone)
     CompilerIndex index;
     std::vector<AbstractInsnNode*> insns;
     insns.push_back(new LdcInsnNode(std::string("plain")));
-    insns.push_back(new JumpInsnNode(Opcodes::ARETURN, nullptr));
+    insns.push_back(new InsnNode(Opcodes::ARETURN));
     MethodNode* m = addMethodToIndex(index, "Sample", "run", "()Ljava/lang/String;", insns);
 
     LdcPreprocessor pre;
-    pre.process(index);
+    test::runWithDomSync(pre, index);
+
+    // 三明治重建树，断言现查新节点。
+    m = findMethodIn(index, "Sample", "run");
+    ASSERT_NE(m, nullptr);
 
     EXPECT_EQ(m->instructions.size(), 2u);
     // 无展开不得误抬 maxStack。

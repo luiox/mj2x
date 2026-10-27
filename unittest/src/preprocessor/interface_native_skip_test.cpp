@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "mj2x/core/compiler_index.hpp"
+#include "test_helper.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/native_annotation_preprocessor.hpp"
@@ -58,7 +59,7 @@ MethodNode* makeMethod(CompilerIndex& index, int access, const std::string& name
                                  arena.intern(desc.c_str()), arena.intern(""), noExc);
     mn->maxStack  = 4;
     mn->maxLocals = 4;
-    if (withBody) mn->instructions.add(new InsnNode(Opcodes::RETURN));
+    if (withBody) mn->instructions.add(new InsnNode(jbytecode::core::Opcodes::RETURN));
     return mn;
 }
 
@@ -69,9 +70,9 @@ CompilerClass& buildClass(CompilerIndex& index, const std::string& className,
     auto& arena = index.arena();
     auto  cn    = std::make_unique<ClassNode>();
     cn->name      = arena.intern(className.c_str());
-    cn->version   = Opcodes::V1_8;
-    cn->access    = isInterface ? (Opcodes::ACC_INTERFACE | Opcodes::ACC_ABSTRACT)
-                                : Opcodes::ACC_PUBLIC;
+    cn->version   = jbytecode::core::Opcodes::V1_8;
+    cn->access    = isInterface ? (jbytecode::core::Opcodes::ACC_INTERFACE | jbytecode::core::Opcodes::ACC_ABSTRACT)
+                                : jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->superName = arena.intern("java/lang/Object");
     cn->methods   = std::move(methods);
 
@@ -90,11 +91,11 @@ CompilerClass& buildClass(CompilerIndex& index, const std::string& className,
 std::vector<MethodNode*> interfaceMethods(CompilerIndex& index)
 {
     return {
-        makeMethod(index, Opcodes::ACC_PUBLIC, "greet", "()Ljava/lang/String;"),
-        makeMethod(index, Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "kind",
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "greet", "()Ljava/lang/String;"),
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "kind",
                    "()Ljava/lang/String;"),
-        makeMethod(index, Opcodes::ACC_PRIVATE, "secret", "()Ljava/lang/String;"),
-        makeMethod(index, Opcodes::ACC_PUBLIC | Opcodes::ACC_ABSTRACT, "name",
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PRIVATE, "secret", "()Ljava/lang/String;"),
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_ABSTRACT, "name",
                    "()Ljava/lang/String;", false),
     };
 }
@@ -107,9 +108,9 @@ TEST(InterfaceNativeSkipTest, MarkAllSkipsInterfaceConcreteMethods)
     CompilerIndex index;
     auto& iface = buildClass(index, "demo/Op", true, interfaceMethods(index));
     auto& cls   = buildClass(index, "demo/Impl", false,
-                             {makeMethod(index, Opcodes::ACC_PUBLIC, "run", "()V")});
+                             {makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "run", "()V")});
 
-    MarkAllMethodsPreprocessor().process(index);
+    test::runWithDomSync(MarkAllMethodsPreprocessor(), index);
 
     EXPECT_EQ(markedCount(iface), 0);
     EXPECT_FALSE(isMarked(iface, "greet"));
@@ -124,9 +125,9 @@ TEST(InterfaceNativeSkipTest, PrefixMarkerSkipsInterfaceMethods)
     CompilerIndex index;
     auto& iface = buildClass(index, "demo/Op", true, interfaceMethods(index));
     auto& cls   = buildClass(index, "demo/Impl", false,
-                             {makeMethod(index, Opcodes::ACC_PUBLIC, "run", "()V")});
+                             {makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "run", "()V")});
 
-    NativeMethodPrefixPreprocessor({"demo/"}).process(index);
+    test::runWithDomSync(NativeMethodPrefixPreprocessor({"demo/"}), index);
 
     EXPECT_EQ(markedCount(iface), 0);
     EXPECT_TRUE(isMarked(cls, "run"));
@@ -139,12 +140,12 @@ TEST(InterfaceNativeSkipTest, AnnotationMarkerSkipsInterfaceMethods)
 
     const char*        annDesc = "Lnative/Native;";
     auto&              iface   = buildClass(index, "demo/Op", true, interfaceMethods(index));
-    auto*              clsM    = makeMethod(index, Opcodes::ACC_PUBLIC, "run", "()V");
+    auto*              clsM    = makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "run", "()V");
     clsM->visibleAnnotations.push_back(
         clsM->create<AnnotationNode>(clsM->arena(), index.arena().intern(annDesc)));
     auto& cls = buildClass(index, "demo/Impl", false, {clsM});
 
-    NativeAnnotationPreprocessor(annDesc).process(index);
+    test::runWithDomSync(NativeAnnotationPreprocessor(annDesc), index);
 
     EXPECT_EQ(markedCount(iface), 0);
     EXPECT_TRUE(isMarked(cls, "run"));
@@ -154,12 +155,13 @@ TEST(InterfaceNativeSkipTest, AnnotationMarkerSkipsInterfaceMethods)
 TEST(InterfaceNativeSkipTest, ClinitMoverSkipsInterfaceClinit)
 {
     CompilerIndex index;
-    auto* clinit = makeMethod(index, Opcodes::ACC_STATIC, "<clinit>", "()V");
+    auto* clinit = makeMethod(index, jbytecode::core::Opcodes::ACC_STATIC, "<clinit>", "()V");
     auto& iface  = buildClass(index, "demo/Op", true, {clinit});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
-    EXPECT_EQ(findMethod(iface, "<clinit>"), clinit);
+    // 三明治重建树，指针换代——只断言 <clinit> 仍在且无搬运产物。
+    EXPECT_NE(findMethod(iface, "<clinit>"), nullptr);
     bool hasMoved = false;
     for (auto* m : iface.classNode->methods) {
         if (m->name.to_std_string().rfind("__regc_", 0) == 0) hasMoved = true;

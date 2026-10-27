@@ -157,3 +157,66 @@ MIRLabel 不发射、异常表回填失败——**随 ASLR 50/50 翻车**
 首节点（RawInsn 序列无 Label 伪指令），MIRLabel 发射自带 `label:` +
 空语句；树时代 `[RETURN, tailLabel]` 的尾部游离标签形状退役，等价钉义
 收窄为 `[GOTO tail, tail:, RETURN]`（目标块以标签发射开场）。
+
+## 批 4 实证（pre/post 改写载体切 DOM）
+
+**10. 属性名槽是 CONSTANT_Utf8，不是 CONSTANT_String**。Code/LNT 等
+AttrSlot.nameCp 必须指向 Utf8 条目；`ClassSession::internString` 是
+ldc 语义（Utf8+String 两跳，返回 String 条目索引）——用它填属性名 =
+writeClass Unencodable（CP 索引失效）。属性名走
+`cp.findUtf8(name)` 命中既有池不膨胀、miss `cp.addUtf8(name)`（库的
+intern 纪律配对 API）。指令操作数语义（LDC String/Class、invoke ref）
+才用 session.internString/internClass/internMethodRef 家族。
+
+**11. syncDomToTree：DOM 权威→树投影的状态迁移**。批 4 双载体期
+pipeline 拆段：树载体 pass（indy，批 4b 收尾）先跑 → syncTreeToDom
+（顺带为 lambda 合成类补 DOM）→ DOM 载体 pass → syncDomToTree →
+compile（读 DOM）→ syncTreeToDom（inject 树改动落 DOM）→ post（DOM）→
+syncDomToTree（output 读树）。syncDomToTree 重建 classNode 时
+CompilerMethod 管线状态按 name+desc 锚定迁移；DOM 侧新增方法（__regc_*
+搬运产物）以树空壳 MethodNode 影子进 cls.methods（methodNode 是
+CompilerMethod 身份源，markAll 等 DOM 读侧 pass 依赖它锚定），空壳只活
+到 syncDomToTree 重建为止。
+
+**12. init_clinit_mover 的 DOM 形态走字节域转移**。CodeEditor 无同会话
+方法体搬移（adoptMethod 是跨会话语义）；构造器切点的尾段控制流封闭
+（守卫：骨架段无控制流 + 尾段跳转目标不出段 + 异常表空 + 无 LVT/LVTT），
+段内跳转相对偏移平移不变——尾段字节原样转移 + 嵌套 LNT 条目按 startPc
+归属拆分（尾段条目 startPc -= cutEnd）+ SMT 丢弃（output COMPUTE 重算）。
+clinit 整体搬移 = CodeAttr 槽所有权转移（Decoded 槽写回 copy 源 span，
+字节保真）。骨架 CodeAttr 手工编码（INVOKESTATIC u2 + RETURN）。
+
+**13. 测试 TU 的 Opcodes 歧义**。批 4 后 dom_edit 传递引入 mj2x::Opcodes，
+`using namespace mj2x + jbytecode::core` 双开的测试 TU 里裸 `Opcodes::`
+变歧义——统一改 `jbytecode::core::Opcodes::` 限定（树语境测试的旧栈
+口径）。另有 libca process/subprocess.hpp `#undef stdout/stderr` 的坑：
+需要 stdout/stderr 的头不得排在它后面。
+
+**14. AttrSlot 改 body 必须经 mutate() 置脏**。状态机：Untouched/Decoded
+写回都 copy 源 span，只有 Modified/New 重编码（`needsReencode()`）。
+`decodeAttr` 只置 Decoded——解码后裸改 body（如 LNT rows 拆分）而不过
+`slot.mutate()`，改动被写回静默丢弃：e2e 实证 = mover 拆了 LNT 尾段
+条目，writeClass 仍按源 span 写回原始三行，骨架 code 缩短后行 startPc
+越界 → JVM ClassFormatError。纪律：**只读 peek（slot.body.get()），
+要写必经 mutate()**；findLnt 类辅助函数返回 AttrSlot* 而非 body 指针，
+把置脏责任显式化。
+
+**15. CodeEditor.insertAtStart 连续前缀块要逆序插入**。insertAtStart
+恒插位首、后插者在前——按最终序正序逐条插，产出恰好颠倒（e2e 实证 =
+NativeLoader clinit 注入 emitLoadCallDom 把 invokestatic 插到 @0，操作
+数栈下溢 VerifyError）。按最终程序序的逆序插入（call→suffix→path）。
+
+**16. mover 的 SMT（Frame）守卫口径**。树版 hasForbiddenPrefix 的 FRAME
+分支在字节域落为：骨架段 [0..cutEnd) 内锚定的帧 → 拒绝搬运；尾段锚定
+的帧 → 随体丢弃（output COMPUTE 重算）。帧绝对 pc 链式口径同 mjbase
+frame_rewire：首帧 offset 即绝对 pc，其后 offset_delta 经 smtAbsPc 链算。
+实证：javac 对无分支方法**完全不发 SMT**（分支目标才需要帧）——真类
+构造器经此守卫照常搬运；夹具手构 FrameNode 经树→DOM 往返后帧锚点回树
+时 reader 会先落一个 LabelNode（帧引用 label），同 pc 多 label 合并单
+锚点，裸 label（无 LNT 锚定/无跳转引用）在字节域无形态。
+
+**17. JVMS reference_kind 1..9 是 DOM 世界的硬边界**。树时代夹具可以
+手构 tag=999 的 Handle 走全管线（旧栈不校验）；DOM 同步的 readClass 按
+JVMS 4.4.8 拒绝越界 reference_kind——「未知 tag 缺省分支」用例在 DOM
+世界不可构建（indyHandleFindFor 的 default 分支对合法类文件不可达），
+find4 钉表退役该用例、保留合法 9 tag 全表。

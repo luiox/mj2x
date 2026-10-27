@@ -3,7 +3,10 @@
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
 #include "garena/arena.hpp"
+#include "jbc/ir/code_editor.hpp"
 #include "jbytecode/jbytecode.hpp"
+
+#include "mj2x/core/dom_edit.hpp"
 
 #include <cstdint>
 
@@ -416,26 +419,6 @@ NativeLoaderPostprocessor::NativeLoaderPostprocessor(std::string resourcePath,
     , xorKey_(xorKey)
 {}
 
-// 找到或创建类的 <clinit>，确保存在一个可前插 load 调用的静态初始化方法。
-// 与原 RegCBackend::prependNativeLoaderCall 行为一致：缺失时新建带 RETURN 的 clinit。
-MethodNode* ensureClinit(CompilerClass& clazz)
-{
-    for (auto* method : clazz.classNode->methods) {
-        if (method->name.to_std_string() == "<clinit>" && method->desc.to_std_string() == "()V") {
-            return method;
-        }
-    }
-    std::vector<Utf8StringRef> noExceptions;
-    auto* clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                  ZUtf8StringRef::from_static("<clinit>"),
-                                  ZUtf8StringRef::from_static("()V"),
-                                  ZUtf8StringRef::from_static(""),
-                                  noExceptions);
-    clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
-    clazz.classNode->methods.push_back(clinit);
-    return clinit;
-}
-
 void NativeLoaderPostprocessor::process(CompilerIndex& index)
 {
     // 资源注入对 class 和 JAR 输出都需要；clinit 调用注入只在 JAR 场景有意义。
@@ -444,6 +427,7 @@ void NativeLoaderPostprocessor::process(CompilerIndex& index)
     if (!needResource && !needClinit) return;
 
     if (needResource) {
+        // 从零建类发射面（buildNativeLoaderClass）批 6 随 output 侧一并切。
         index.upsertJarResource(kLoaderEntry, buildNativeLoaderClass(xorKey_));
     }
 
@@ -452,19 +436,49 @@ void NativeLoaderPostprocessor::process(CompilerIndex& index)
     // 对每个被后端改写过的非库类前插 NativeLoader.load 调用。判定条件是
     // 「modified 且含 ACC_NATIVE 方法」：modified 现在也被 indy/ldc 展开置位
     //（那些类改写了指令流但不含 native 方法），仅凭 modified 会给纯字节码类
-    // 误注入 clinit 加载调用。
+    // 误注入 clinit 加载调用。批 4：改写载体切 DOM（findMethod/addMethod/
+    // promote/insertAtStart/lower），native 方法判定读 DOM access。
     for (auto& [name, cls] : index.getClasses()) {
-        if (!cls.modified || cls.isLibrary || !cls.classNode) continue;
+        if (!cls.modified || cls.isLibrary || !cls.dom) continue;
         bool hasNative = false;
-        for (const auto* m : cls.classNode->methods) {
-            if ((m->access & Opcodes::ACC_NATIVE) != 0) {
+        for (const auto& dm : cls.dom->methods) {
+            if ((dm.access & Opcodes::ACC_NATIVE) != 0) {
                 hasNative = true;
                 break;
             }
         }
         if (!hasNative) continue;
-        MethodNode* clinit = ensureClinit(cls);
-        native_loader::emitLoadCall(clinit, resourcePath_, tempSuffix_);
+
+        auto session = openDomEdit(cls, name);
+        auto idx     = session->unit().findMethod("<clinit>", "()V");
+        bool created = (idx == jbc::ir::kNoMethod);
+        if (created) {
+            // 缺失时新建（对齐树版 ensureClinit）：withCode 起步，load 序列
+            // 前插 + RETURN 追加保证非空方法体。
+            auto genId = session->addMethod(jbc::ir::MethodSeed{
+                "<clinit>", "()V", Opcodes::ACC_STATIC, true});
+            if (genId.is_err()) {
+                throw std::runtime_error("native_loader: addMethod <clinit> failed for "
+                                         + name);
+            }
+            idx = session->unit().indexOf(std::move(genId).unwrap());
+        }
+
+        auto promoted = jbc::ir::promoteMethod(*session, idx);
+        if (promoted.is_err()) {
+            throw std::runtime_error("native_loader: promote clinit failed for " + name);
+        }
+        auto unit = std::move(promoted).unwrap();
+        native_loader::emitLoadCallDom(*session, *unit, resourcePath_, tempSuffix_);
+        if (created) {
+            jbc::ir::CodeEditor editor(*unit);
+            (void)editor.append(jbc::ir::CodeEditor::simple(jbc::core::Op::RETURN));
+        }
+        auto lowered = jbc::ir::lowerMethod(*session, idx);
+        if (lowered.is_err()) {
+            throw std::runtime_error("native_loader: lower clinit failed for " + name);
+        }
+        commitDomEdit(cls, name, session);
     }
 }
 

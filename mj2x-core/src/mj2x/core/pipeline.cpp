@@ -49,11 +49,12 @@ int Pipeline::run()
     // 中段（预处理器/编译/后处理器）与 IO 同级防护：CLI main 不兜异常，
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
-        runPreprocessors();
-        syncTreeToDom(*index_);   // 批 2：预处理树改动 → DOM（批 3 起供读方消费）
-        compileMethods();
-        syncTreeToDom(*index_);   // 批 2：backend 注入 → DOM
-        runPostprocessors();
+        runPreprocessors();      // 批 4：preprocessor 直接改 DOM（改写权威）
+        syncDomToTree(*index_);  // DOM → 树刷新：backend inject 与 output 的兼容投影
+        compileMethods();        // 读 DOM；inject 仍改树（批 5 切）
+        syncTreeToDom(*index_);  // inject 树改动 → DOM（postprocessor 的改写基线）
+        runPostprocessors();     // 批 4：postprocessor 直接改 DOM
+        syncDomToTree(*index_);  // output 仍读树（批 6 切 writeClass 后摘）
     }
     catch (const std::exception& e) {
         CA_LOGT_ERROR("pipeline", "compile stage failed - {}\n", e.what());
@@ -80,7 +81,17 @@ void Pipeline::loadInput()
 
 void Pipeline::runPreprocessors()
 {
-    for (auto& p : preprocs_) p->process(*index_);
+    // 批 4 双载体拆段：树载体 pass（invokedynamic，批 4b 收尾）先跑，树改动
+    // 经 syncTreeToDom 落 DOM（顺带为 lambda 合成类补 DOM 载体）；DOM 载体
+    // pass 随后在 DOM 权威上改写。无序依赖：树/DOM pass 的改写产物互不可见
+    //（indy 展开产 LDC String/Class，不被 LdcPreprocessor 二次处理；反向亦然）。
+    for (auto& p : preprocs_) {
+        if (!p->editsDom()) p->process(*index_);
+    }
+    syncTreeToDom(*index_);
+    for (auto& p : preprocs_) {
+        if (p->editsDom()) p->process(*index_);
+    }
 }
 
 void Pipeline::compileMethods()

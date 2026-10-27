@@ -213,7 +213,7 @@ std::string emitRegCForMethod(ClassNode* cn, MethodNode* method, std::string& re
     auto                     blocks = converter.convert(*method);
 
     SSABuilder builder;
-    bool       isStatic = (method->access & Opcodes::ACC_STATIC) != 0;
+    bool       isStatic = (method->access & jbytecode::core::Opcodes::ACC_STATIC) != 0;
     auto       ssa      = builder.build(blocks,
                              toStr(cn->name),
                              toStr(method->name),

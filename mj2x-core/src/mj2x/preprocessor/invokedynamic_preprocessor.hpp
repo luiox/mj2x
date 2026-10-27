@@ -74,6 +74,10 @@ class InvokeDynamicPreprocessor : public Preprocessor
 public:
     void process(CompilerIndex& index) override;
 
+    /// 批 4 唯一留树载体的 pass（1500 行树改写逻辑批 4b 收尾切 DOM）；
+    /// pipeline 据此把它排在树载体段先跑。
+    bool editsDom() const noexcept override { return false; }
+
     /// 同一流程 + 旁路收集判定报告（report 可为 null，等价 process(index)）。
     void process(CompilerIndex& index, IndyDispatchReport* report);
 };
