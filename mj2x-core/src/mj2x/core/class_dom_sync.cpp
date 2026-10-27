@@ -115,4 +115,19 @@ void syncDomToTree(CompilerIndex& index)
     }
 }
 
+void ensureDomFromTree(CompilerClass& cls, const std::string& name,
+                       ca::str::Utf8StringArena& arena)
+{
+    if (cls.dom || !cls.classNode) return;
+
+    auto bytes = serializeTree(cls, arena);
+    auto read  = jbc::core::readClass(jbc::core::ByteView{bytes.data(), bytes.size()});
+    if (read.is_err()) {
+        throw std::runtime_error("class_dom_sync: readClass failed for " + name);
+    }
+    cls.dom = std::move(read).unwrap().file;
+    CA_LOGT_DEBUG("core", "dom ensured from tree: {} ({} methods)\n", name.c_str(),
+                  cls.dom->methods.size());
+}
+
 }   // namespace mj2x

@@ -12,8 +12,8 @@
 /// - 批 5：注入改 DOM，编译后同步点消失；
 /// - 批 6：output 改读 DOM，tree 载体与同步器一并退役。
 ///
-/// 序列化旗标与 output_writer 同口径（modified → COMPUTE_FRAMES，否则
-/// COMPUTE_MAXS），保证 DOM 反映的字节形态与最终产物一致。
+/// 同步序列化旗标恒 plain（0）：COMPUTE 的帧计算是 output 侧语义（批 6
+/// 帧垫片），本同步只求「如实序列化当前 tree 状态」。
 #pragma once
 
 #include "mj2x/core/compiler_index.hpp"
@@ -33,5 +33,13 @@ void syncTreeToDom(CompilerIndex& index);
 /// DOM 侧新增的方法（如 __regc_* 搬运产物）按默认状态落位。
 /// Err 即抛 std::runtime_error（pipeline 边界既有 catch 面）。
 void syncDomToTree(CompilerIndex& index);
+
+/// @brief 树权威类补 DOM 载体（仅 dom == nullptr 且挂树的类；幂等）。
+///
+/// 批 6 过渡面：output 切 writeClass 后，仅存的树权威类（后处理器构建的
+/// 生成类）在写字节前经本入口落 DOM。生成类构建面切 DOM 后随
+/// class_dom_sync 一并退役。Err 即抛 std::runtime_error。
+void ensureDomFromTree(CompilerClass& cls, const std::string& name,
+                       ca::str::Utf8StringArena& arena);
 
 }   // namespace mj2x

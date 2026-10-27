@@ -50,10 +50,11 @@ int Pipeline::run()
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
         runPreprocessors();      // 批 4：preprocessor 直接改 DOM（改写权威）
-        syncDomToTree(*index_);  // DOM → 树刷新：backend 树读（stackc hidden 编译等）与 output 的兼容投影
+        syncDomToTree(*index_);  // DOM → 树刷新：backend 树读（stackc hidden 编译等）的兼容投影
         compileMethods();        // 读 DOM；批 5 起 inject 也改 DOM（dom_inject 门面）
         runPostprocessors();     // 批 4：postprocessor 直接改 DOM（inject 后无需再树→DOM）
-        syncDomToTree(*index_);  // output 仍读树（批 6 切 writeClass 后摘）
+        // 批 6：output 改读 DOM（writeClass 直出 + 帧垫片），编译后 DOM→tree
+        // 同步点摘除；树权威的生成类在 output 内经 ensureDomFromTree 落位。
     }
     catch (const std::exception& e) {
         CA_LOGT_ERROR("pipeline", "compile stage failed - {}\n", e.what());
