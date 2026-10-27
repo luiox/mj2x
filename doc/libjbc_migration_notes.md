@@ -263,3 +263,106 @@ delete**（libjbytecode ClassNode 析构 delete fields/methods 堆对象）—�
 （0xc0000005，表象在测试体尾声）。测试纪律：**挂树即 release 所有权**
 （stackc 夹具既有模式），release 后原 unique_ptr 不可再解引用，访问一律
 经 cls.methods 现查 methodNode。
+
+## 批 6a 实证（output 切 writeClass 直出 + modified 类帧重算垫片，c2c9725，2026-10-27）
+
+**output 弃旧栈 ClassWriter，writeClass 直出**。writeClassBytes 改为：仅存的
+树权威类（后处理器构建的生成类，Loader 等）先 `ensureDomFromTree` 落 DOM
+（批 6 过渡面，6d 随同步器退役）；modified 类过帧重算垫片后 `writeClass`
+直出；未修改类字节原样保留——批 0 盘点的保真收益（round-trip 恒等）在此
+兑现，旧 tree writer 不可复现的 verifier 敏感 SMT/debug 元数据不再失真。
+
+**帧重算垫片对齐旧 COMPUTE_FRAMES 口径**。`recomputeOutputFrames`（6d 提为
+共享 frame_recompute）：全方法 `promoteMethod` → `FrameEngine(Strict).compute`
+→ `applyComputedMaxes`（maxs 落位）→ `lower` → `buildStackMapTable`（v50+，
+`ClassTooOld` 同地板跳过）。公共父类口径 = `PortedCommonSuperResolver`——
+旧栈 `DefaultCommonSuperClassProvider` 硬编码父类链逐行移植（Byte..Double
+→Number、Exception/Error→Throwable、RuntimeException→Exception、
+String/Boolean/Character→Object，表外一律 Object 兜底）；mj2x 从未注入
+typeResolver，旧 writer 的公共父类判定就是这张表，移植即同口径。Strict 档
+不可算即抛（旧 writer 同口径：不可验证的类写不出来）。SMT 槽换装在 Code
+嵌套属性表上：needed=false 不留空表（对齐旧 writer），已有槽删除、缺失槽
+`AttrSlot::makeNew` 补挂（mutate 置脏纪律沿用发现 14）。abstract/native
+（无 Code 槽）promote 即 Err，静默跳过——6e 在生成类构建器上撞到同一语义
+（见 23）。
+
+**pipeline 编译后 DOM→tree 同步点摘除**。output 改读 DOM 后 `syncDomToTree`
+的最后一个消费方消失；同步序列化旗标恒 plain（COMPUTE 的帧计算自此是
+output 侧语义，同步通道只求如实序列化当前 tree 状态——批 2 决策的终局形态）。
+
+**回归基线**：全量回归 921 项：908 过 / 0 败 / 11 工具链门控跳过 /
+9 disabled。输出面首次整体行走 libjbc writer 的全量基线。
+
+## 批 6d 实证（树载体退役：CompilerMethod 快照化 + 全消费方切 DOM，1037818，2026-10-27）
+
+**CompilerClass 快照模型**。`classNode`/`methodNode` 字段与 class_dom_sync
+同步器整体摘除；CompilerMethod/Field 改为纯元数据快照（name/desc/access/
+maxStack/maxLocals——Code 属性快照供 stackc C 发射与 SSA/llvm 消费）。方法
+身份源 = name+desc（类内唯一键，与 DOM MemberInfo 对齐），指令/CP 一律经
+`cls.dom` 读。`refreshMethodSnapshots` 在管线边界与 DOM 对齐：name+desc
+锚定迁移管线旗标（markedForCompile/compiled/backendResult），DOM 侧新增
+方法按默认状态落位、消失条目随快照摘除。input_loader 同步简化：`readClass`
+是唯一解析通道，快照随建（树解析退役）。
+
+**管线单段化**。runPreprocessors 的双载体拆段（树载体 pass → syncTreeToDom
+→ DOM pass）退役，全部 preprocessor 单段顺序执行；管线收缩为
+pre → refreshSnapshots → compile → post。
+
+**MIR 标签 id 化**。MIRLabel/Branch/Switch 持 `int labelId`（CodeConverter
+顺序发放，同 pc 恒同 id），`labelKey`/`mirLabelKey` 指针键与 labelPool 合成
+Label 全删——批 3b 发现 7（指针截断 id 的 ASLR 翻车）的修复面就此收编为
+唯一表示：标签身份全链（MIR 节点、块 id、异常表键、dumpMIR）统一顺序 id，
+旧栈 `Label*` 产品面清零。stackc 异常表消费切 `Block::exceptionTable`
+（CodeConverter 回填、标签 id 键）。
+
+**backend 全面切快照/DOM**。stackc（hidden <clinit> 幻影方法 + 注册壳类）、
+regc（内联缓存/枚举形态验证改 decodeInsns raw 匹配、native 壳类）、
+llvmir/vmc4（快照签名）。
+
+**生成类构建器 DOM 化**。cloader/native_loader 生成类从树 ClassNode 构建
+改为从零建 ClassFile + ClassSession 构建器：`addMethod(MethodSeed)` →
+`promote` → `CodeEditor.append` → `lower` → `writeClass`（与 indy lambda
+合成类同一构建形态；方法体 javac 直译，全部直线体无分支，v52 校验无 SMT
+依赖）。
+
+**帧重算提为共享 frame_recompute**。6a 的 output 侧垫片提为 core 共享件
+（`PortedCommonSuperResolver` + `recomputeSessionFrames`），cloader/
+native_loader 生成类的 maxes 计算同入口消费。resolver 是权宜实现（硬编码
+父类链 = 旧栈 provider 移植，行为对拍基线）：**mjbase 帧计算就绪后换装
+mjbase 包实现，已拍板后置**，不阻塞本迁移收口。
+
+**已知断裂（批 6f 处理）**：test_helper 三明治与 unittest 树夹具面待迁 DOM。
+
+## 批 6e 实证（Type/Handle 门面收口，产品面零 libjbytecode，805c330，2026-10-28）
+
+**mj2x::Handle 门面补位**（jvm_type.hpp）。tag/owner/name/desc/itf 视图语义
++ operator==；视图寿命随 intern 进 Utf8StringArena 的底串（与 mj2x::Type 同
+纪律），无默认构造（载荷随构造注入，旧栈契约）。dom_payload 的 Any 载荷
+随之换型：Class/MethodType 走 `mj2x::Type`、MethodHandle 走 `mj2x::Handle`
+——批 3a 规则「树/Any 载荷一律旧栈类型」随树载体退役翻转，Any 载荷一律
+mj2x 自有类型，旧栈载荷类型清零。
+
+**全仓 include/using 清扫 + 死面摘除**。jbytecode include/using 行全删
+（diff 触达 41 文件：39 代码文件 + 2 xmake）；死面三处：code_converter 树
+shim convert（测试垫片，树退役后测试件改喂字节——6f 面）、native_loader_call
+树版 emitLoadCall、indy classifyIndySite 树包装（报告面统一走 payload 版）。
+产品面（core/cli/rt）源码零残留，仅存 4 处注释性历史提及（jvm_opcodes/
+block/indy_dispatch/reaching_def）。
+
+**xmake 摘依赖**。mj2x-core 摘 libjbytecode 包（add_packages 剩 libca/
+libjbc/libjstr/libjzip）；mj2x-cli 链接闭包摘 `libjbytecode_{util,commons,
+analysis,tree,core}` 与 libgarena（libjbytecode 传递依赖）。产品面不再触碰
+libjbytecode：仓内剩余消费方只有测试件（test_helper/unittest/mtest_set 夹具
++ 根 xmake.lua 的 add_requires，留至 6f 收口退役）。
+
+**23. cloader 构建器对 native 无体方法 promote 返回 Err**。CLI 冒烟实证：
+`registerNativesForClass` 是 native 桥接方法（无 Code 属性），`addMethod`
+落位后 `promoteMethod` 对无 Code 方法返回 Err，构建器 throw runtime_error。
+修复 = `MethodSeed.withCode == false` 时跳过 promote/append/lower（无体可
+发，落位即收）。与 6a 帧垫片的「无 Code 槽跳过」同一语义两面：DOM 世界
+无 Code 属性的方法没有可 promote 的体，任何 promote-emit 管线都要先问
+withCode。
+
+**验证现状**。CLI 冒烟（SsaSamples）通过（Pipeline done + class/c 产物落
+盘）。批 6d/6e 未跑全量回归——unittest 面断裂（test_helper 的 class_dom_sync
+引用、树夹具）是已知态，由批 6f 迁移收口后重跑全量作最终门。

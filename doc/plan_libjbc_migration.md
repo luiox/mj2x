@@ -104,12 +104,33 @@
 - 批 6（收口）：output_writer → `writeClass`（未触碰类保真直出）+ 摘 tree
   载体 + 摘 `libjbytecode` 依赖 + 测试件（test_helper/mtest_set/unittest
   夹具）收尾 + 文档收口。**保真收益在批 6 兑现**：未改写类字节原样直出。
+  实际推进拆子批 6a/6d/6e/6f/6g（勾账见下）。
 - 批 0/1 维持原案：批 0 = 包接线 + 覆盖面盘点（见
   [libjbc_migration_notes.md](libjbc_migration_notes.md)）；批 1 = type/opcode
   工具层（`jbc::type` 门面 + `Opcodes` → `jbc::core::Op` 别名，J-6 根治验证）。
 
 每批：分支提交（单分支 `feat/libjbc-migration` 按批 commit）+ 全量回归门
 （unittest + integration + java_corpus 三后端 + LLVM 列）。
+
+### 批次勾账（按批回写；提交号 = 单分支 feat/libjbc-migration 上的批次 commit）
+
+| 批次 | 内容 | 状态 | 提交 |
+|---|---|---|---|
+| 批 0 | libjbc 0.4.15 包接线 + 覆盖面盘点 | ✅ 完成 | 7ea4c96 |
+| 批 1+2 | JvmType 描述符门面/Opcodes 镜像 + tree→DOM 阶段边界同步 | ✅ 完成 | 0923add + adb2b6f |
+| 批 3a | MIR 常量载荷切 mj2x::Type 门面 + 同步 plain 化 | ✅ 完成 | 93eef88（修正 6e77aa8） |
+| 批 3b | code_converter 读路径切 DOM | ✅ 完成 | 53cadb0 |
+| 批 4a | pre/post 改写载体切 DOM（6 pass + 管线双载体拆段） | ✅ 完成 | 8bf3f79 |
+| 批 4b | invokedynamic preprocessor 切 DOM（树载体收尾） | ✅ 完成 | aefc14b |
+| 批 5 | 四后端 injectIntoClass 切 DOM，编译后同步点消失 | ✅ 完成 | fb80c26 |
+| 批 6a | output 切 writeClass 直出 + modified 类帧重算垫片（全量回归 921 项 908 过 0 败） | ✅ 完成 | c2c9725 |
+| 批 6d | 树载体退役：CompilerMethod 快照化 + 全消费方切 DOM | ✅ 完成 | 1037818 |
+| 批 6e | Type/Handle 门面收口，产品面零 libjbytecode | ✅ 完成 | 805c330 |
+| 批 6f | 测试件迁移（test_helper/unittest/mtest_set 夹具） | 🔄 进行中 | — |
+| 批 6g | 文档收口 + 全量回归终验 | 🔄 进行中 | — |
+
+注：批 6 子批号按实际推进取用（6b/6c 未产生独立提交），勾账只记实际发生的
+批次。T1 小卡与终验收（§五/§六）不在本表范围。
 
 ### 风险与回退
 
