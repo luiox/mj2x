@@ -7,7 +7,8 @@
 /// 从原 regc_emitter.cpp 纯搬移，生成代码零差异。
 #include "regc_emitter_internal.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "jbc/core/insn.hpp"
+#include "jbc/core/insn_codec.hpp"
 #include "libca/str/format.hpp"
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
@@ -527,143 +528,154 @@ std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn)
 /// 枚举子类 owner 判定：编译输入内的超类链抵达 java/lang/Enum。
 ///
 /// @details
-/// 只信任编译输入的 classNode 层级：JDK/第三方枚举不在索引（getClass 返回
+/// 只信任编译输入的 DOM 层级：JDK/第三方枚举不在索引（getClass 返回
 /// nullptr）时无法验证，保守返回 false（调用点保持原 resolved/cached 路径）。
 /// java/lang/Enum 自身由 registry 精确匹配，不经此判定。
-bool isEnumSubtypeOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& owner)
+bool isEnumSubtypeOwner(CompilerIndex* classIndex, std::string_view owner)
 {
     if (classIndex == nullptr) return false;
-    std::string cur = owner.to_std_string();
+    std::string cur(owner);
     for (int depth = 0; !cur.empty() && depth < 64; ++depth) {
         CompilerClass* cls = classIndex->getClass(cur);
-        if (cls == nullptr || cls->classNode == nullptr) return false;
-        const ca::str::Utf8StringRef super = cls->classNode->superName;
+        if (cls == nullptr || cls->dom == nullptr) return false;
+        const auto super = cls->dom->superName();
         if (super == "java/lang/Enum") return true;
-        cur = super.to_std_string();
+        cur = std::string(super);
     }
     return false;
 }
 
-/// 跳过 LABEL/LINE/FRAME 元节点，返回下一条真实指令（可能为 nullptr）。
-const jbytecode::tree::AbstractInsnNode* nextRealInsn(
-    const jbytecode::tree::AbstractInsnNode* node)
+/// @brief 方法体 raw 指令序列（批 6d DOM 形态：Code 槽解码 + decodeInsns；
+///        无体/解码失败返回空）。
+static std::vector<jbc::core::RawInsn> bodyInsnsOf(const CompilerClass& cls,
+                                                   const CompilerMethod& method)
 {
-    while (node != nullptr) {
-        const int type = node->getType();
-        if (type != jbytecode::tree::AbstractInsnNode::LABEL &&
-            type != jbytecode::tree::AbstractInsnNode::LINE &&
-            type != jbytecode::tree::AbstractInsnNode::FRAME) {
-            break;
-        }
-        node = node->getNext();
+    if (cls.dom == nullptr) return {};
+    for (auto& dm : cls.dom->methods) {
+        if (!cls.dom->cp.utf8Equals(dm.nameCp, method.name)) continue;
+        if (!cls.dom->cp.utf8Equals(dm.descCp, method.desc)) continue;
+        auto code = cls.dom->decodeCode(dm);
+        if (code.is_err()) return {};
+        auto* c = std::move(code).unwrap();
+        if (c == nullptr || c->code.empty()) return {};
+        auto parsed = jbc::core::decodeInsns(
+            jbc::core::ByteView{c->code.data(), c->code.size()});
+        if (parsed.is_err()) return {};
+        return std::move(parsed).unwrap();
     }
-    return node;
+    return {};
 }
 
-/// 在编译类里找 name/desc 精确匹配的方法节点（仅编译输入自有方法）。
-const jbytecode::tree::MethodNode* findOwnMethodNode(CompilerIndex* classIndex,
-                                                     const ca::str::Utf8StringRef& owner,
-                                                     const ca::str::Utf8StringRef& name,
-                                                     const ca::str::Utf8StringRef& desc)
+/// @brief CP Fieldref/Methodref 解析（owner/name/desc 三元组；畸形返回 false）。
+static bool resolveMemberRef(const jbc::core::ClassFile& dom, ca::u32 cpIdx,
+                             std::string& owner, std::string& name, std::string& desc)
+{
+    const auto& entry = dom.cp.at(cpIdx);
+    if (entry.a == 0 || entry.b == 0) return false;
+    const auto& nat = dom.cp.at(entry.b);
+    if (nat.b == 0) return false;
+    owner = std::string(dom.className(entry.a));
+    name  = std::string(dom.cp.utf8Of(nat.a));
+    desc  = std::string(dom.cp.utf8Of(nat.b));
+    return !owner.empty() && !name.empty() && !desc.empty();
+}
+
+/// 在编译类里找 name/desc 精确匹配的方法快照（仅编译输入自有方法）。
+const CompilerMethod* findOwnMethod(CompilerIndex* classIndex,
+                                    const ca::str::Utf8StringRef& owner,
+                                    const ca::str::Utf8StringRef& name,
+                                    const ca::str::Utf8StringRef& desc)
 {
     if (classIndex == nullptr) return nullptr;
     CompilerClass* cls = classIndex->getClass(owner.to_std_string());
-    if (cls == nullptr || cls->classNode == nullptr) return nullptr;
+    if (cls == nullptr) return nullptr;
     for (const auto& member : cls->methods) {
-        if (member.methodNode == nullptr) continue;
-        if (member.methodNode->name == name && member.methodNode->desc == desc) {
-            return member.methodNode;
+        if (member.name == name.to_std_string() && member.desc == desc.to_std_string()) {
+            return &member;
         }
     }
     return nullptr;
 }
 
-/// javac 合成 values() 形态验证：getstatic owner.$VALUES:[LX; →
-/// invokevirtual java/lang/Object.clone → checkcast [LX; → areturn。
+/// javac 合成 values() 形态验证（批 6d DOM raw 指令匹配）：
+/// getstatic owner.$VALUES:[LX; → invokevirtual clone → checkcast [LX; → areturn。
 /// 非该形态（手工字节码自定义 values()）时不允许 intrinsic 化。
-bool isJavacEnumValuesBody(const jbytecode::tree::MethodNode* method,
-                           const ca::str::Utf8StringRef& owner,
-                           const ca::str::Utf8StringRef& arrayDesc)
+bool isJavacEnumValuesBody(const CompilerClass& cls, const CompilerMethod& method,
+                           const std::string& owner, const std::string& arrayDesc)
 {
-    if (method == nullptr) return false;
-    const auto* n = nextRealInsn(method->instructions.getFirst());
-    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::FIELD_INSN ||
-        n->getOpcode() != Opcodes::GETSTATIC) {
-        return false;
-    }
-    const auto* field = static_cast<const jbytecode::tree::FieldInsnNode*>(n);
-    if (!(field->owner == owner && field->name == "$VALUES" && field->desc == arrayDesc)) {
-        return false;
-    }
-    n = nextRealInsn(n->getNext());
-    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::METHOD_INSN ||
-        n->getOpcode() != Opcodes::INVOKEVIRTUAL) {
-        return false;
-    }
-    const auto* clone = static_cast<const jbytecode::tree::MethodInsnNode*>(n);
+    if (cls.dom == nullptr) return false;
+    auto&      dom   = *cls.dom;
+    const auto insns = bodyInsnsOf(cls, method);
+    ca::usize  i     = 0;
+    const auto at    = [&](ca::usize k) -> const jbc::core::RawInsn* {
+        return k < insns.size() ? &insns[k] : nullptr;
+    };
+
+    const auto* g = at(i++);
+    if (g == nullptr || g->op != jbc::core::Op::GETSTATIC) return false;
+    std::string fOwner, fName, fDesc;
+    if (!resolveMemberRef(dom, g->cp, fOwner, fName, fDesc)) return false;
+    if (!(fOwner == owner && fName == "$VALUES" && fDesc == arrayDesc)) return false;
+
+    const auto* clone = at(i++);
+    if (clone == nullptr || clone->op != jbc::core::Op::INVOKEVIRTUAL) return false;
+    std::string cOwner, cName, cDesc;
+    if (!resolveMemberRef(dom, clone->cp, cOwner, cName, cDesc)) return false;
     // clone owner：javac 对数组 clone 发射数组类型描述符（"[LX;"）；
     // 同时接受 java/lang/Object（手工/旧编译器形态），desc 恒为
     // ()Ljava/lang/Object;。
-    if (!(clone->name == "clone" && clone->desc == "()Ljava/lang/Object;" &&
-          (clone->owner == arrayDesc || clone->owner == "java/lang/Object"))) {
+    if (!(cName == "clone" && cDesc == "()Ljava/lang/Object;" &&
+          (cOwner == arrayDesc || cOwner == "java/lang/Object"))) {
         return false;
     }
-    n = nextRealInsn(n->getNext());
-    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::TYPE_INSN ||
-        n->getOpcode() != Opcodes::CHECKCAST) {
-        return false;
-    }
-    if (static_cast<const jbytecode::tree::TypeInsnNode*>(n)->desc != arrayDesc) return false;
-    n = nextRealInsn(n->getNext());
-    return n != nullptr && n->getType() == jbytecode::tree::AbstractInsnNode::INSN &&
-           n->getOpcode() == Opcodes::ARETURN;
+
+    const auto* cast = at(i++);
+    if (cast == nullptr || cast->op != jbc::core::Op::CHECKCAST) return false;
+    if (std::string(dom.className(cast->cp)) != arrayDesc) return false;
+
+    const auto* ret = at(i++);
+    return ret != nullptr && ret->op == jbc::core::Op::ARETURN;
 }
 
-/// javac 合成 valueOf(String) 形态验证：ldc Lowner; → aload 0 →
-/// invokestatic java/lang/Enum.valueOf(Ljava/lang/Class;Ljava/lang/String;)
+/// javac 合成 valueOf(String) 形态验证（批 6d DOM raw 指令匹配）：
+/// ldc Lowner; → aload 0 → invokestatic
+/// java/lang/Enum.valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;
 /// → checkcast owner → areturn。
-bool isJavacEnumValueOfBody(const jbytecode::tree::MethodNode* method,
-                            const ca::str::Utf8StringRef& owner)
+bool isJavacEnumValueOfBody(const CompilerClass& cls, const CompilerMethod& method,
+                            const std::string& owner)
 {
-    if (method == nullptr) return false;
-    const auto* n = nextRealInsn(method->instructions.getFirst());
-    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::LDC_INSN ||
-        n->getOpcode() != Opcodes::LDC) {
+    if (cls.dom == nullptr) return false;
+    auto&      dom   = *cls.dom;
+    const auto insns = bodyInsnsOf(cls, method);
+    ca::usize  i     = 0;
+    const auto at    = [&](ca::usize k) -> const jbc::core::RawInsn* {
+        return k < insns.size() ? &insns[k] : nullptr;
+    };
+
+    const auto* ldc = at(i++);
+    if (ldc == nullptr || ldc->op != jbc::core::Op::LDC) return false;
+    // DOM 形态的类字面量 = CP Class 条目（树载体的 Type cst 同义）。
+    if (dom.cp.tagOf(ldc->cp) != jbc::core::CpTag::Class) return false;
+    if (std::string(dom.className(ldc->cp)) != owner) return false;
+
+    const auto* load0 = at(i++);
+    if (load0 == nullptr || load0->op != jbc::core::Op::ALOAD || load0->a != 0) return false;
+
+    const auto* valueOf = at(i++);
+    if (valueOf == nullptr || valueOf->op != jbc::core::Op::INVOKESTATIC) return false;
+    std::string vOwner, vName, vDesc;
+    if (!resolveMemberRef(dom, valueOf->cp, vOwner, vName, vDesc)) return false;
+    if (!(vOwner == "java/lang/Enum" && vName == "valueOf" &&
+          vDesc == "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;")) {
         return false;
     }
-    const auto* ldc = static_cast<const jbytecode::tree::LdcInsnNode*>(n);
-    const auto* ldcType = ldc->cst.as<jbytecode::core::Type>();
-    // #921 staticArena 退役：仅瞬时比对，函数级局部 arena 零驻留。
-    ca::str::Utf8StringArena scratch;
-    if (ldcType == nullptr ||
-        ldcType->getDescriptor(scratch).to_std_string() != "L" + owner.to_std_string() + ";") {
-        return false;
-    }
-    n = nextRealInsn(n->getNext());
-    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::VAR_INSN ||
-        n->getOpcode() != Opcodes::ALOAD ||
-        static_cast<const jbytecode::tree::VarInsnNode*>(n)->var != 0) {
-        return false;
-    }
-    n = nextRealInsn(n->getNext());
-    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::METHOD_INSN ||
-        n->getOpcode() != Opcodes::INVOKESTATIC) {
-        return false;
-    }
-    const auto* valueOf = static_cast<const jbytecode::tree::MethodInsnNode*>(n);
-    if (!(valueOf->owner == "java/lang/Enum" && valueOf->name == "valueOf" &&
-          valueOf->desc == "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;")) {
-        return false;
-    }
-    n = nextRealInsn(n->getNext());
-    if (n == nullptr || n->getType() != jbytecode::tree::AbstractInsnNode::TYPE_INSN ||
-        n->getOpcode() != Opcodes::CHECKCAST ||
-        static_cast<const jbytecode::tree::TypeInsnNode*>(n)->desc != owner) {
-        return false;
-    }
-    n = nextRealInsn(n->getNext());
-    return n != nullptr && n->getType() == jbytecode::tree::AbstractInsnNode::INSN &&
-           n->getOpcode() == Opcodes::ARETURN;
+
+    const auto* cast = at(i++);
+    if (cast == nullptr || cast->op != jbc::core::Op::CHECKCAST) return false;
+    if (std::string(dom.className(cast->cp)) != owner) return false;
+
+    const auto* ret = at(i++);
+    return ret != nullptr && ret->op == jbc::core::Op::ARETURN;
 }
 
 /// javac 合成 values() 调用点 intrinsic：getstatic $VALUES（cached field）+
@@ -685,13 +697,19 @@ bool tryEmitEnumValuesCall(CSourceStream& out, const RegInstruction& ins,
     // 预扫描集合优先（方法注入 native 后指令已清空）；单测直调发射器时回退
     // 现场验证。
     const std::string key = methodKey(ins.method.owner.to_std_string(), "values", desc);
+    const CompilerClass* ownerCls = state.classIndex != nullptr
+        ? state.classIndex->getClass(ins.method.owner.to_std_string())
+        : nullptr;
+    const CompilerMethod* ownMethod =
+        ownerCls != nullptr
+            ? findOwnMethod(state.classIndex, ins.method.owner, ins.method.name, ins.method.desc)
+            : nullptr;
     const bool verified =
         state.enumSyntheticMethods != nullptr
             ? state.enumSyntheticMethods->count(key) != 0
-            : isJavacEnumValuesBody(
-                  findOwnMethodNode(state.classIndex, ins.method.owner, ins.method.name,
-                                    ins.method.desc),
-                  ins.method.owner, arrayDescRef);
+            : ownerCls != nullptr && ownMethod != nullptr &&
+                  isJavacEnumValuesBody(*ownerCls, *ownMethod,
+                                        ins.method.owner.to_std_string(), arrayDesc);
     if (!verified) return false;
     const ca::str::Utf8StringRef fieldCache = state.cachePool->staticFieldCache(
         ins.method.owner, ca::str::Utf8StringRef::from_cstr("$VALUES"), arrayDescRef);
@@ -727,13 +745,19 @@ bool tryEmitEnumValueOfCall(CSourceStream& out, const RegInstruction& ins,
     // 预扫描集合优先（方法注入 native 后指令已清空）；单测直调发射器时回退
     // 现场验证。
     const std::string key = methodKey(ins.method.owner.to_std_string(), "valueOf", descStr);
+    const CompilerClass* ownerCls = state.classIndex != nullptr
+        ? state.classIndex->getClass(ins.method.owner.to_std_string())
+        : nullptr;
+    const CompilerMethod* ownMethod =
+        ownerCls != nullptr
+            ? findOwnMethod(state.classIndex, ins.method.owner, ins.method.name, ins.method.desc)
+            : nullptr;
     const bool verified =
         state.enumSyntheticMethods != nullptr
             ? state.enumSyntheticMethods->count(key) != 0
-            : isJavacEnumValueOfBody(
-                  findOwnMethodNode(state.classIndex, ins.method.owner, ins.method.name,
-                                    ins.method.desc),
-                  ins.method.owner);
+            : ownerCls != nullptr && ownMethod != nullptr &&
+                  isJavacEnumValueOfBody(*ownerCls, *ownMethod,
+                                         ins.method.owner.to_std_string());
     if (!verified) return false;
     const ca::str::Utf8StringRef site = state.cachePool->enumValueOfSite(ins.method.owner);
     if (!ins.hasDest) return false;

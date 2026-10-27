@@ -1,6 +1,5 @@
 ﻿#pragma once
 
-#include <jbytecode/jbytecode.hpp>
 #include <jbc/core/class_file.hpp>
 #include <libca/str/utf8_string_arena.hpp>
 
@@ -26,17 +25,29 @@ struct MethodID
 
 struct BackendResult;
 
+/// @brief 方法管线状态条目：元数据快照 + 管线旗标（libjbc 迁移批 6d）。
+///
+/// 树载体退役后方法身份源 = 本快照（name+desc 类内唯一键，与 DOM
+/// MemberInfo 对齐）；指令/CP 一律经 cls.dom 读（domMethodFor /
+/// convert(cf, idx)）。快照由 refreshMethodSnapshots 在管线边界与 DOM
+/// 对齐（key 锚定迁移管线旗标，DOM 侧新增方法按默认状态落位）。
 struct CompilerMethod
 {
-    jbytecode::tree::MethodNode* methodNode       = nullptr;
-    bool                         markedForCompile = false;
-    bool                         compiled         = false;
-    BackendResult                backendResult;
+    std::string   name;
+    std::string   desc;
+    ca::u16       access           = 0;
+    ca::u16       maxStack         = 0;   ///< Code 属性快照（stackc C 发射消费）
+    ca::u16       maxLocals        = 0;   ///< Code 属性快照（SSA/llvm 消费）
+    bool          markedForCompile = false;
+    bool          compiled         = false;
+    BackendResult backendResult;
 };
 
 struct CompilerField
 {
-    jbytecode::tree::FieldNode* fieldNode = nullptr;
+    std::string name;
+    std::string desc;
+    ca::u16     access = 0;
 };
 
 /// @brief Original JAR entry tracked for whole-archive input/output.
@@ -57,12 +68,11 @@ struct JarEntryRecord
 
 struct CompilerClass
 {
-    std::unique_ptr<jbytecode::tree::ClassNode> classNode;
-    /// @brief libjbc DOM 视图（批 2 双表示过渡，libjbc 迁移批 3-6 逐批接管消费）。
+    /// @brief libjbc DOM：唯一权威载体（批 6d 树载体退役）。
     ///
-    /// 由 syncTreeToDom 在 pipeline 阶段边界从当前 tree 序列化字节派生
-    /// （唯一同步通道 = 真实编解码器字节往返，见 class_dom_sync.hpp）；
-    /// 新鲜度契约：compile 入口与 postprocessor 入口时刻与 tree 一致。
+    /// 指令/常量池/属性一律经本对象读改（ClassSession 会话纪律见
+    /// dom_edit.hpp）；methods/fields 是元数据快照（refreshMethodSnapshots
+    /// 在管线边界与 DOM 对齐），不承载指令。
     std::unique_ptr<jbc::core::ClassFile>       dom;
     std::vector<CompilerMethod>                 methods;
     std::vector<CompilerField>                  fields;
@@ -84,6 +94,15 @@ struct CompilerClass
     /// 置位者：ObfuscationScopePreprocessor。
     bool                                        inObfuscationScope = true;
 };
+
+/// @brief 方法/字段元数据快照与 DOM 对齐（name+desc 锚定迁移管线状态；
+///        DOM 侧新增方法按默认状态落位，DOM 侧消失的条目随快照摘除）。
+void refreshMethodSnapshots(CompilerClass& cls);
+
+class CompilerIndex;
+
+/// @brief 对 index 内全部类执行快照刷新（管线边界入口）。
+void refreshSnapshots(CompilerIndex& index);
 
 }   // namespace mj2x
 

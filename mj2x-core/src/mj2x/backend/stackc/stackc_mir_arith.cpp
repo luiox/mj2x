@@ -479,7 +479,7 @@ void StackCBackend::Impl::emitBranch(const MIRBranch* node, codegen::CSourceStre
     out.newLine();
     out.emitLine("sp -= 2;");
     out.appendLineStart("if (cond) goto ")
-        .append(labelIdent(labelIndex.at(node->targetLabel))).append(";");
+        .append(labelIdent(node->targetLabel)).append(";");
     out.newLine();
     out.dedent();
     out.emitLine("}");
@@ -496,7 +496,7 @@ void StackCBackend::Impl::emitBranchZero(const MIRBranchZero* node, codegen::CSo
     out.newLine();
     out.emitLine("sp--;");
     out.appendLineStart("if (cond) goto ")
-        .append(labelIdent(labelIndex.at(node->targetLabel))).append(";");
+        .append(labelIdent(node->targetLabel)).append(";");
     out.newLine();
     out.dedent();
     out.emitLine("}");
@@ -504,7 +504,7 @@ void StackCBackend::Impl::emitBranchZero(const MIRBranchZero* node, codegen::CSo
 
 void StackCBackend::Impl::emitUncondBranch(const MIRUncondBranch* node, codegen::CSourceStream& out)
 {
-    out.appendLineStart("goto ").append(labelIdent(labelIndex.at(node->targetLabel))).append(";");
+    out.appendLineStart("goto ").append(labelIdent(node->targetLabel)).append(";");
     out.newLine();
 }
 
@@ -514,11 +514,11 @@ void StackCBackend::Impl::emitSwitch(const MIRSwitch* node, codegen::CSourceStre
     out.indent();
     for (auto& c : node->cases) {
         out.appendLineStart("case ").appendInt(c.key).append(": goto ")
-            .append(labelIdent(labelIndex.at(c.targetLabel))).append(";");
+            .append(labelIdent(c.targetLabel)).append(";");
         out.newLine();
     }
     out.appendLineStart("default: goto ")
-        .append(labelIdent(labelIndex.at(node->defaultLabel))).append(";");
+        .append(labelIdent(node->defaultLabel)).append(";");
     out.newLine();
     out.dedent();
     out.emitLine("}");

@@ -22,7 +22,7 @@ public:
             if (cls.dom && (cls.dom->access & Opcodes::ACC_INTERFACE)) continue;
             for (auto& method : cls.methods) {
                 // Skip abstract and native methods
-                const auto& dm = domMethodFor(cls, method, name);
+                const auto& dm = domMethodFor(cls, method.name, method.desc);
                 if (dm.access &
                     (Opcodes::ACC_ABSTRACT | Opcodes::ACC_NATIVE))
                     continue;

@@ -1,5 +1,6 @@
 #include "invokedynamic_preprocessor.hpp"
 
+#include "jbc/core/attribute.hpp"
 #include "jbc/core/reader.hpp"
 #include "jbc/core/writer.hpp"
 #include "jbc/ir/code_editor.hpp"
@@ -1377,8 +1378,8 @@ std::unique_ptr<jbc::core::ClassFile> buildLambdaClassDom(ca::str::Utf8StringAre
 }
 
 // 待注册的合成类（在 getClasses 遍历结束后统一 addClass/upsertJarResource，避免
-// 遍历中改 map 使迭代器失效）。DOM 载体：合成类直接持 libjbc ClassFile，树投影
-// 由 syncDomToTree 物化。
+// 遍历中改 map 使迭代器失效）。DOM 载体：合成类直接持 libjbc ClassFile
+//（批 6d：树投影退役，合成类经 refreshMethodSnapshots 入 index）。
 struct PendingLambdaClass
 {
     std::string                           internalName;   // e.g. mj2x/lambda/Lambda$0
@@ -1406,8 +1407,7 @@ struct PendingLambdaClass
 std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& ifaceInternal)
 {
     if (auto* ifaceCls = index.getClass(ifaceInternal)) {
-        if (ifaceCls->classNode != nullptr &&
-            (ifaceCls->classNode->access & Opcodes::ACC_PUBLIC) == 0) {
+        if (ifaceCls->dom != nullptr && (ifaceCls->dom->access & Opcodes::ACC_PUBLIC) == 0) {
             const std::size_t slash = ifaceInternal.rfind('/');
             return slash == std::string::npos ? std::string()
                                               : ifaceInternal.substr(0, slash + 1);
@@ -1424,15 +1424,29 @@ std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& 
     for (std::size_t dollar = ifaceInternal.find('$'); dollar != std::string::npos;
          dollar     = ifaceInternal.find('$', dollar + 1)) {
         auto* outerCls = index.getClass(ifaceInternal.substr(0, dollar));
-        if (outerCls == nullptr || outerCls->classNode == nullptr) continue;
-        for (auto* ic : outerCls->classNode->innerClasses) {
-            if (ic == nullptr || toStd(ic->name) != ifaceInternal) continue;
-            if ((ic->access & Opcodes::ACC_PUBLIC) == 0) {
-                const std::size_t slash = ifaceInternal.rfind('/');
-                return slash == std::string::npos ? std::string()
-                                                  : ifaceInternal.substr(0, slash + 1);
+        if (outerCls == nullptr || outerCls->dom == nullptr) continue;
+        auto& outerDom = *outerCls->dom;
+        for (auto& slot : outerDom.attrs) {
+            if (slot.body == nullptr) {
+                // 类级旁路槽 lazy 解码（失败即放弃嵌套判定，维持 mj2x/lambda 零漂移）。
+                if (outerDom.decodeAttr(slot).is_err()) continue;
             }
-            return "mj2x/lambda/";
+            if (slot.body == nullptr ||
+                slot.body->kind() != jbc::core::AttrKind::InnerClasses) {
+                continue;
+            }
+            const auto& icAttr = *ca::core::tag_cast::cast<jbc::core::InnerClassesAttr>(slot.body.get());
+            for (const auto& row : icAttr.rows) {
+                if (std::string(outerDom.className(row.innerClassInfoCp)) != ifaceInternal) {
+                    continue;
+                }
+                if ((row.accessFlags & Opcodes::ACC_PUBLIC) == 0) {
+                    const std::size_t slash = ifaceInternal.rfind('/');
+                    return slash == std::string::npos ? std::string()
+                                                      : ifaceInternal.substr(0, slash + 1);
+                }
+                return "mj2x/lambda/";
+            }
         }
     }
     return "mj2x/lambda/";

@@ -1,111 +1,143 @@
 #include "cloader_postprocessor.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include <stdexcept>
+
+#include "jbc/core/reader.hpp"
+#include "jbc/core/writer.hpp"
+#include "jbc/ir/units.hpp"
+
+#include "mj2x/core/compiler_index.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
 namespace mj2x {
-
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
-using ca::str::Utf8StringArena;
-using ca::str::Utf8StringRef;
 
 namespace {
 
 static constexpr const char* kCLoaderClass = "mj2x/cloader/Loader";
 static constexpr const char* kCLoaderEntry = "mj2x/cloader/Loader.class";
 
-std::unique_ptr<ClassNode> buildCLoaderClassNode(ca::str::Utf8StringArena& arena,
-                                                 const std::string&         resourcePath,
-                                                 const std::string&         tempSuffix)
+/// @brief Loader 生成类 DOM 构建器（批 6d 树退役：与 lambda 合成类同一构建
+///        形态——addMethod/promote/append/lower 发射，writeClass→readClass
+///        字节往返收口）。
+///
+/// 方法形态与旧树构建器逐位同源（javac 直译；全部直线体无分支，v52 校验
+/// 无 StackMapTable 依赖）。native 桥接方法（registerNativesForClass）无体。
+std::unique_ptr<jbc::core::ClassFile> buildCLoaderClassDom(const std::string& resourcePath,
+                                                           const std::string& tempSuffix)
 {
-    auto cn     = std::make_unique<ClassNode>();
-    cn->version = Opcodes::V1_8;
-    cn->access =
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
-    cn->name      = arena.intern(kCLoaderClass);
-    cn->superName = arena.intern("java/lang/Object");
+    auto cf       = std::make_unique<jbc::core::ClassFile>();
+    cf->major     = 52;   // V1_8
+    cf->access    = Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SUPER
+                 | Opcodes::ACC_SYNTHETIC;
+    cf->thisClass  = cf->cp.addClass(cf->cp.addUtf8(kCLoaderClass));
+    cf->superClass = cf->cp.addClass(cf->cp.addUtf8("java/lang/Object"));
 
-    std::vector<ca::str::Utf8StringRef> noExceptions;
-    auto*                               init = new MethodNode(Opcodes::ACC_PRIVATE,
-                                arena.intern("<init>"),
-                                arena.intern("()V"),
-                                arena.intern(""),
-                                noExceptions);
-    init->instructions.add(init->create<VarInsnNode>(Opcodes::ALOAD, 0));
-    init->instructions.add(init->create<MethodInsnNode>(Opcodes::INVOKESPECIAL,
-                                              arena.intern("java/lang/Object"),
-                                              arena.intern("<init>"),
-                                              arena.intern("()V"),
-                                              false));
-    init->instructions.add(init->create<InsnNode>(Opcodes::RETURN));
-    init->maxStack  = 1;
-    init->maxLocals = 1;
-    cn->methods.push_back(init);
+    auto opened = jbc::ir::makeSession(std::move(cf));
+    if (opened.is_err()) {
+        throw std::runtime_error("cloader_postprocessor: makeSession failed");
+    }
+    auto ses = std::move(opened).unwrap();
+
+    auto addAndEmit = [&](const jbc::ir::MethodSeed& seed,
+                          std::vector<jbc::ir::Insn> seq) {
+        const std::string what(seed.name);
+        auto added = ses->addMethod(seed);
+        if (added.is_err()) {
+            throw std::runtime_error("cloader_postprocessor: addMethod " + what + " failed");
+        }
+        const ca::usize mi  = ses->backing().methods.size() - 1;
+        auto            promoted = jbc::ir::promoteMethod(*ses, mi);
+        if (promoted.is_err()) {
+            throw std::runtime_error("cloader_postprocessor: promote " + what + " failed");
+        }
+        auto unit = std::move(promoted).unwrap();
+        {
+            jbc::ir::CodeEditor editor(*unit);
+            for (auto& in : seq) {
+                auto appendRes = editor.append(std::move(in));
+                if (appendRes.is_err()) {
+                    throw std::runtime_error("cloader_postprocessor: append " + what + " failed");
+                }
+            }
+        }
+        auto lowered = jbc::ir::lowerMethod(*ses, mi);
+        if (lowered.is_err()) {
+            throw std::runtime_error("cloader_postprocessor: lower " + what + " failed");
+        }
+    };
+
+    // <init>()V : super.<init>()。
+    {
+        std::vector<jbc::ir::Insn> seq;
+        seq.push_back(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 0));
+        jbc::ir::Insn superInit;
+        superInit.op = jbc::core::Op::INVOKESPECIAL;
+        superInit.cp = ses->internMethodRef("java/lang/Object", "<init>", "()V");
+        seq.push_back(std::move(superInit));
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::RETURN));
+        addAndEmit(jbc::ir::MethodSeed{"<init>", "()V", Opcodes::ACC_PRIVATE, true, 1, 1},
+                   std::move(seq));
+    }
 
     // <clinit>：配置了 native 资源时注入一次 NativeLoader.load（load 只在
     // Loader 首次初始化时执行一次；转换类 clinit 只需 registerNativesForClass，
     // 避免每个类重复携带相同的资源路径字符串与调用）。
     if (!resourcePath.empty()) {
-        auto* clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                      arena.intern("<clinit>"),
-                                      arena.intern("()V"),
-                                      arena.intern(""),
-                                      noExceptions);
-        clinit->instructions.add(clinit->create<LdcInsnNode>(resourcePath));
-        clinit->instructions.add(clinit->create<LdcInsnNode>(tempSuffix.empty() ? ".mj2x" : tempSuffix));
-        clinit->instructions.add(
-            clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
-                               arena.intern(native_loader::kClassName),
-                               arena.intern("load"),
-                               arena.intern(native_loader::kLoadDesc),
-                               false));
-        clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
-        clinit->maxStack  = 2;
-        clinit->maxLocals = 0;
-        cn->methods.push_back(clinit);
+        std::vector<jbc::ir::Insn> seq;
+        seq.push_back(jbc::ir::CodeEditor::loadConst(ses->internString(resourcePath)));
+        seq.push_back(jbc::ir::CodeEditor::loadConst(
+            ses->internString(tempSuffix.empty() ? ".mj2x" : tempSuffix)));
+        jbc::ir::Insn load;
+        load.op = jbc::core::Op::INVOKESTATIC;
+        load.cp = ses->internMethodRef(native_loader::kClassName, "load",
+                                       native_loader::kLoadDesc);
+        seq.push_back(std::move(load));
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::RETURN));
+        addAndEmit(jbc::ir::MethodSeed{"<clinit>", "()V", Opcodes::ACC_STATIC, true, 2, 0},
+                   std::move(seq));
     }
 
-    auto* registerMethod = new MethodNode(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
-        arena.intern("registerNativesForClass"),
-        arena.intern("(ILjava/lang/Class;)V"),
-        arena.intern(""),
-        noExceptions);
-    registerMethod->maxStack  = 0;
-    registerMethod->maxLocals = 2;
-    cn->methods.push_back(registerMethod);
+    // native 桥接：RegisterNatives 的目标（JNI 实现落在运行时库）。
+    addAndEmit(jbc::ir::MethodSeed{"registerNativesForClass", "(ILjava/lang/Class;)V",
+                                   static_cast<ca::u16>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC
+                                                        | Opcodes::ACC_NATIVE
+                                                        | Opcodes::ACC_SYNTHETIC),
+                                   false, 0, 2},
+               {});
 
-    auto* invokeOne = new MethodNode(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNTHETIC,
-        arena.intern("invokeMethodHandle1"),
-        arena.intern("(Ljava/lang/invoke/MethodHandle;Ljava/lang/Object;)Ljava/lang/Object;"),
-        arena.intern(""),
-        noExceptions);
-    invokeOne->instructions.add(invokeOne->create<VarInsnNode>(Opcodes::ALOAD, 0));
-    invokeOne->instructions.add(invokeOne->create<VarInsnNode>(Opcodes::ALOAD, 1));
-    invokeOne->instructions.add(
-        invokeOne->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL,
-                           arena.intern("java/lang/invoke/MethodHandle"),
-                           arena.intern("invoke"),
-                           arena.intern("(Ljava/lang/Object;)Ljava/lang/Object;"),
-                           false));
-    invokeOne->instructions.add(invokeOne->create<InsnNode>(Opcodes::ARETURN));
-    invokeOne->maxStack  = 2;
-    invokeOne->maxLocals = 2;
-    cn->methods.push_back(invokeOne);
+    // invokeMethodHandle1：lambda 桥接直通车（MethodHandle.invoke(Object)Object）。
+    {
+        std::vector<jbc::ir::Insn> seq;
+        seq.push_back(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 0));
+        seq.push_back(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 1));
+        jbc::ir::Insn invoke;
+        invoke.op = jbc::core::Op::INVOKEVIRTUAL;
+        invoke.cp = ses->internMethodRef("java/lang/invoke/MethodHandle", "invoke",
+                                         "(Ljava/lang/Object;)Ljava/lang/Object;");
+        seq.push_back(std::move(invoke));
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::ARETURN));
+        addAndEmit(jbc::ir::MethodSeed{"invokeMethodHandle1",
+                                       "(Ljava/lang/invoke/MethodHandle;Ljava/lang/Object;)Ljava/lang/Object;",
+                                       static_cast<ca::u16>(Opcodes::ACC_PUBLIC
+                                                            | Opcodes::ACC_STATIC
+                                                            | Opcodes::ACC_SYNTHETIC),
+                                       true, 2, 2},
+                   std::move(seq));
+    }
 
-    return cn;
-}
-
-std::vector<ca::u8> buildCLoaderClass(const std::string& resourcePath,
-                                      const std::string& tempSuffix)
-{
-    Utf8StringArena arena;
-    auto            cn = buildCLoaderClassNode(arena, resourcePath, tempSuffix);
-    ClassWriter     cw(arena, 0);
-    cn->accept(&cw);
-    return cw.toByteArray();
+    // 会话收口：字节往返还回独立 ClassFile（真实编解码器纪律，与
+    // dom_edit commitDomEdit 同通道；Loader 进 index 后还要过注入与输出面）。
+    auto written = jbc::core::writeClass(ses->backing());
+    if (written.is_err()) {
+        throw std::runtime_error("cloader_postprocessor: writeClass failed");
+    }
+    auto bytes = std::move(written).unwrap();
+    auto read  = jbc::core::readClass(jbc::core::ByteView{bytes.data(), bytes.size()});
+    if (read.is_err()) {
+        throw std::runtime_error("cloader_postprocessor: readClass failed");
+    }
+    return std::move(read).unwrap().file;
 }
 
 }   // namespace
@@ -114,13 +146,19 @@ void CLoaderPostprocessor::process(CompilerIndex& index)
 {
     if (!index.isJarInput()) {
         CompilerClass cls;
-        cls.classNode = buildCLoaderClassNode(index.arena(), resourcePath_, tempSuffix_);
+        cls.dom       = buildCLoaderClassDom(resourcePath_, tempSuffix_);
         cls.isLibrary = true;
         cls.modified  = true;
+        refreshMethodSnapshots(cls);
         index.addClass(kCLoaderClass, std::move(cls));
         return;
     }
-    index.upsertJarResource(kCLoaderEntry, buildCLoaderClass(resourcePath_, tempSuffix_));
+    auto dom     = buildCLoaderClassDom(resourcePath_, tempSuffix_);
+    auto written = jbc::core::writeClass(*dom);
+    if (written.is_err()) {
+        throw std::runtime_error("cloader_postprocessor: resource writeClass failed");
+    }
+    index.upsertJarResource(kCLoaderEntry, std::move(written).unwrap());
 }
 
 }   // namespace mj2x

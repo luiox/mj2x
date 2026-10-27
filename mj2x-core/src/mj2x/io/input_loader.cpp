@@ -12,17 +12,13 @@
 #include <string>
 #include <vector>
 
-#include "jbytecode/jbytecode.hpp"
-#include "libca/str/utf8_string.hpp"
+#include "jbc/core/class_file.hpp"
+#include "jbc/core/reader.hpp"
 #include "libca/log/log_macros.hpp"
 
-namespace mj2x {
+#include "mj2x/core/compiler_index.hpp"
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
-using namespace jbytecode::analysis;
-using namespace jbytecode::commons;
-using namespace jbytecode::util;
+namespace mj2x {
 
 struct InputLoader::Impl
 {};
@@ -59,33 +55,25 @@ static CompilerClass parseClass(CompilerIndex& index, const std::vector<ca::u8>&
     if (bytes.size() > static_cast<size_t>(std::numeric_limits<ca::i32>::max())) {
         throw std::runtime_error("class file too large");
     }
-    // ClassReader 需要 arena&，arena 归 CompilerIndex 持有，比 reader 活得久。
-    ClassReader reader(index.arena(), bytes.data(), static_cast<ca::i32>(bytes.size()));
-    auto        classNode = std::make_unique<ClassNode>();
-    reader.accept(classNode.get(), 0);
+    // 批 6d 树退役：readClass 是唯一解析通道（DOM 权威），元数据快照随建。
+    auto read = jbc::core::readClass(jbc::core::ByteView{bytes.data(), bytes.size()});
+    if (read.is_err()) {
+        throw std::runtime_error("readClass failed: "
+                                 + std::string(jbc::core::to_string(read.unwrap_err())));
+    }
 
     CompilerClass cls;
-    cls.classNode = std::move(classNode);
-    cls.modified  = false;
-
-    for (auto* mn : cls.classNode->methods) {
-        CompilerMethod cm;
-        cm.methodNode = mn;
-        cls.methods.push_back(std::move(cm));
-    }
-    for (auto* fn : cls.classNode->fields) {
-        CompilerField cf;
-        cf.fieldNode = fn;
-        cls.fields.push_back(std::move(cf));
-    }
+    cls.dom      = std::move(read).unwrap().file;
+    cls.modified = false;
+    refreshMethodSnapshots(cls);
     return cls;
 }
 
 static void addClassToIndex(CompilerIndex& index, CompilerClass cls)
 {
-    auto className  = cls.classNode->name.to_std_string();
-    auto numMethods = cls.classNode->methods.size();
-    auto numFields  = cls.classNode->fields.size();
+    const std::string className(cls.dom->thisName());
+    const auto numMethods = cls.methods.size();
+    const auto numFields  = cls.fields.size();
 
     index.addClass(className, std::move(cls));
 
@@ -147,7 +135,7 @@ std::unique_ptr<CompilerIndex> InputLoader::load(const std::string& path)
                 // The class name comes from the bytecode, not the ZIP path; this
                 // keeps output replacement correct even for odd but valid paths.
                 auto cls        = parseClass(*index, data);
-                entry.className = cls.classNode->name.to_std_string();
+                entry.className = std::string(cls.dom->thisName());
                 addClassToIndex(*index, std::move(cls));
                 ++classCount;
             }

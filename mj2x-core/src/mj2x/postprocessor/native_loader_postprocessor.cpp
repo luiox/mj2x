@@ -2,271 +2,317 @@
 #include "mj2x/core/native_lib_crypto.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
-#include "garena/arena.hpp"
+#include "jbc/core/reader.hpp"
+#include "jbc/core/writer.hpp"
 #include "jbc/ir/code_editor.hpp"
-#include "jbytecode/jbytecode.hpp"
+#include "jbc/ir/units.hpp"
 
 #include "mj2x/core/dom_edit.hpp"
+#include "mj2x/core/frame_recompute.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
 
 #include <cstdint>
+#include <stdexcept>
+#include <vector>
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
-using ca::str::Utf8StringArena;
-using ca::str::Utf8StringRef;
-using ca::str::ZUtf8StringRef;
-
 namespace {
 
+using jbc::core::Op;
+using jbc::ir::CodeEditor;
+using jbc::ir::InsnId;
+using jbc::ir::LabelId;
+
 static constexpr const char* kLoaderEntry = "mj2x/runtime/NativeLoader.class";
+
+static InsnId appendInsn(CodeEditor& editor, jbc::ir::Insn in)
+{
+    auto r = editor.append(std::move(in));
+    if (r.is_err()) throw std::runtime_error("native_loader: append failed");
+    return std::move(r).unwrap();
+}
+
+static LabelId createLabel(CodeEditor& editor)
+{
+    auto r = editor.createLabel();
+    if (r.is_err()) throw std::runtime_error("native_loader: createLabel failed");
+    return std::move(r).unwrap();
+}
+
+static void bindLabelAt(CodeEditor& editor, LabelId label, InsnId anchor)
+{
+    if (editor.bindLabel(label, anchor).is_err()) {
+        throw std::runtime_error("native_loader: bindLabel failed");
+    }
+}
 
 /// XOR 解密字节码片段（xorshift32 密钥流，与 C++ 侧 native_lib_crypto.hpp
 /// 逐字节一致）：`state = xorshift32(state); buf[i] ^= state & 0xFF`。
 /// 循环前状态：
 ///   slot 6 = n（本次读取字节数），slot 7 = decrypt（boolean），slot 8 = state，
 ///   slot 9 = i（循环索引）。密钥 0 时用固定种子（与打包侧一致）。
-void emitXorDecryptLoop(MethodVisitor* m, Label* xorLoop, Label* write)
+/// write 标签由调用方绑定（本函数只引用，避免重复绑破坏栈映射）。
+void emitXorDecryptLoop(CodeEditor& editor, LabelId xorLoop, LabelId write)
 {
+    using jbc::ir::CodeEditor;
     // if (!decrypt) goto write
-    m->visitVarInsn(Opcodes::ILOAD, 7);
-    m->visitJumpInsn(Opcodes::IFEQ, write);
+    appendInsn(editor, CodeEditor::local(Op::ILOAD, 7));
+    appendInsn(editor, CodeEditor::branch(Op::IFEQ, write));
     // i = 0
-    m->visitInsn(Opcodes::ICONST_0);
-    m->visitVarInsn(Opcodes::ISTORE, 9);
-    m->visitLabel(xorLoop);
+    appendInsn(editor, CodeEditor::simple(Op::ICONST_0));
+    appendInsn(editor, CodeEditor::local(Op::ISTORE, 9));
+    bindLabelAt(editor, xorLoop,
+                appendInsn(editor, CodeEditor::local(Op::ILOAD, 8)));
     // state = xorshift32(state)
-    m->visitVarInsn(Opcodes::ILOAD, 8);
-    m->visitInsn(Opcodes::DUP);
-    m->visitIntInsn(Opcodes::BIPUSH, 13);
-    m->visitInsn(Opcodes::ISHL);
-    m->visitInsn(Opcodes::IXOR);
-    m->visitInsn(Opcodes::DUP);
-    m->visitIntInsn(Opcodes::BIPUSH, 17);
-    m->visitInsn(Opcodes::IUSHR);
-    m->visitInsn(Opcodes::IXOR);
-    m->visitInsn(Opcodes::DUP);
-    m->visitIntInsn(Opcodes::BIPUSH, 5);
-    m->visitInsn(Opcodes::ISHL);
-    m->visitInsn(Opcodes::IXOR);
-    m->visitVarInsn(Opcodes::ISTORE, 8);
+    appendInsn(editor, CodeEditor::simple(Op::DUP));
+    appendInsn(editor, CodeEditor::local(Op::BIPUSH, 13));
+    appendInsn(editor, CodeEditor::simple(Op::ISHL));
+    appendInsn(editor, CodeEditor::simple(Op::IXOR));
+    appendInsn(editor, CodeEditor::simple(Op::DUP));
+    appendInsn(editor, CodeEditor::local(Op::BIPUSH, 17));
+    appendInsn(editor, CodeEditor::simple(Op::IUSHR));
+    appendInsn(editor, CodeEditor::simple(Op::IXOR));
+    appendInsn(editor, CodeEditor::simple(Op::DUP));
+    appendInsn(editor, CodeEditor::local(Op::BIPUSH, 5));
+    appendInsn(editor, CodeEditor::simple(Op::ISHL));
+    appendInsn(editor, CodeEditor::simple(Op::IXOR));
+    appendInsn(editor, CodeEditor::local(Op::ISTORE, 8));
     // buf[i] = (byte)(buf[i] ^ (state & 0xFF))
-    m->visitVarInsn(Opcodes::ALOAD, 5);
-    m->visitVarInsn(Opcodes::ILOAD, 9);
-    m->visitVarInsn(Opcodes::ALOAD, 5);
-    m->visitVarInsn(Opcodes::ILOAD, 9);
-    m->visitInsn(Opcodes::BALOAD);
-    m->visitVarInsn(Opcodes::ILOAD, 8);
-    m->visitIntInsn(Opcodes::BIPUSH, 255);
-    m->visitInsn(Opcodes::IAND);
-    m->visitInsn(Opcodes::IXOR);
-    m->visitInsn(Opcodes::I2B);
-    m->visitInsn(Opcodes::BASTORE);
+    appendInsn(editor, CodeEditor::local(Op::ALOAD, 5));
+    appendInsn(editor, CodeEditor::local(Op::ILOAD, 9));
+    appendInsn(editor, CodeEditor::local(Op::ALOAD, 5));
+    appendInsn(editor, CodeEditor::local(Op::ILOAD, 9));
+    appendInsn(editor, CodeEditor::simple(Op::BALOAD));
+    appendInsn(editor, CodeEditor::local(Op::ILOAD, 8));
+    // BIPUSH 值域 [−128,127]，255 走 SIPUSH（语义同）。
+    appendInsn(editor, CodeEditor::local(Op::SIPUSH, 255));
+    appendInsn(editor, CodeEditor::simple(Op::IAND));
+    appendInsn(editor, CodeEditor::simple(Op::IXOR));
+    appendInsn(editor, CodeEditor::simple(Op::I2B));
+    appendInsn(editor, CodeEditor::simple(Op::BASTORE));
     // i++; if (i < n) goto xorLoop
-    m->visitIincInsn(9, 1);
-    m->visitVarInsn(Opcodes::ILOAD, 9);
-    m->visitVarInsn(Opcodes::ILOAD, 6);
-    m->visitJumpInsn(Opcodes::IF_ICMPLT, xorLoop);
-    // write 标签由调用方 visitLabel（本函数只引用，避免重复 visit 破坏栈映射）。
+    appendInsn(editor, CodeEditor::iinc(9, 1));
+    appendInsn(editor, CodeEditor::local(Op::ILOAD, 9));
+    appendInsn(editor, CodeEditor::local(Op::ILOAD, 6));
+    appendInsn(editor, CodeEditor::branch(Op::IF_ICMPLT, xorLoop));
 }
 
 /// @param xorKey native lib 加密密钥（0 = 明文形态，load 不做解密）。
 std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
 {
-    Utf8StringArena arena;
-    // Label 建点 scratch arena（B8 归属制，同 ClassReader labelArena_ 模式）：控制流
-    // Label 全部由此分配并盖章，MethodWriter 仅在 toByteArray() 前借用改写，原件随本
-    // 函数栈帧统一回收——不再堆泄漏（DEV-14 清账）。
-    garena::Arena   labelScratch;
-    auto            makeLabel = [&]() -> Label* {
-        auto* l = labelScratch.create<Label>();
-        l->setOwner(&labelScratch);
-        return l;
+    static constexpr const char* kSelf = native_loader::kClassName;
+
+    // 批 6d 树退役：与 cloader 同一 DOM 构建形态（addMethod/promote/append/
+    // lower 发射）。major 49 = v1.5：无 StackMapTable（对齐旧 ClassWriter
+    // visit(49) 形态）；maxes 由 recomputeSessionFrames 帧引擎计算（替代旧
+    // COMPUTE_MAXS），v<50 只落 maxes 不建表。
+    auto cf       = std::make_unique<jbc::core::ClassFile>();
+    cf->major     = 49;
+    cf->access    = Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SYNTHETIC;
+    cf->thisClass  = cf->cp.addClass(cf->cp.addUtf8(kSelf));
+    cf->superClass = cf->cp.addClass(cf->cp.addUtf8("java/lang/Object"));
+
+    auto opened = jbc::ir::makeSession(std::move(cf));
+    if (opened.is_err()) {
+        throw std::runtime_error("native_loader: makeSession failed");
+    }
+    auto ses = std::move(opened).unwrap();
+
+    if (ses->addField(jbc::ir::FieldSeed{"loaded", "Z",
+                                         Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC})
+            .is_err()) {
+        throw std::runtime_error("native_loader: addField loaded failed");
+    }
+
+    const ca::u32 cpLoadedField = ses->internFieldRef(kSelf, "loaded", "Z");
+    const ca::u32 cpSelfClass   = ses->internClass(kSelf);
+    const ca::u32 cpNewTempFile = ses->internMethodRef(
+        kSelf, "newTempFile", "(Ljava/lang/String;)Ljava/io/File;");
+
+    auto addMethod = [&](const jbc::ir::MethodSeed& seed) -> ca::usize {
+        auto added = ses->addMethod(seed);
+        if (added.is_err()) {
+            throw std::runtime_error("native_loader: addMethod " + std::string(seed.name)
+                                     + " failed");
+        }
+        return ses->backing().methods.size() - 1;
     };
-    ClassWriter     cw(arena, ClassWriter::COMPUTE_MAXS);
-    cw.visit(49,
-             Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SYNTHETIC,
-             Utf8StringRef::from_cstr(native_loader::kClassName),
-             Utf8StringRef(),
-             Utf8StringRef::from_cstr("java/lang/Object"),
-             {});
+    auto promote = [&](ca::usize mi) {
+        auto promoted = jbc::ir::promoteMethod(*ses, mi);
+        if (promoted.is_err()) {
+            throw std::runtime_error("native_loader: promote failed");
+        }
+        return std::move(promoted).unwrap();
+    };
+    auto lower = [&](ca::usize mi) {
+        auto lowered = jbc::ir::lowerMethod(*ses, mi);
+        if (lowered.is_err()) {
+            throw std::runtime_error("native_loader: lower failed");
+        }
+    };
 
-    cw.visitField(Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC,
-                  Utf8StringRef::from_cstr("loaded"),
-                  Utf8StringRef::from_cstr("Z"),
-                  Utf8StringRef(),
-                  {});
+    // <init>()V : super.<init>()。
+    {
+        const ca::usize mi = addMethod(jbc::ir::MethodSeed{
+            "<init>", "()V", Opcodes::ACC_PRIVATE, true});
+        auto  unit   = promote(mi);
+        CodeEditor editor(*unit);
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 0));
+        appendInsn(editor, CodeEditor::cpInsn(
+                               Op::INVOKESPECIAL,
+                               ses->internMethodRef("java/lang/Object", "<init>", "()V")));
+        appendInsn(editor, CodeEditor::simple(Op::RETURN));
+        lower(mi);
+    }
 
-    auto* init = cw.visitMethod(Opcodes::ACC_PRIVATE,
-                                Utf8StringRef::from_cstr("<init>"),
-                                Utf8StringRef::from_cstr("()V"),
-                                Utf8StringRef(),
-                                {});
-    init->visitCode();
-    init->visitVarInsn(Opcodes::ALOAD, 0);
-    init->visitMethodInsn(Opcodes::INVOKESPECIAL,
-                          Utf8StringRef::from_cstr("java/lang/Object"),
-                          Utf8StringRef::from_cstr("<init>"),
-                          Utf8StringRef::from_cstr("()V"),
-                          false);
-    init->visitInsn(Opcodes::RETURN);
-    init->visitMaxs(1, 1);
-    init->visitEnd();
+    // load(String,String)V：委托链 = 查 loaded 幂等 → getSystemResourceAsStream →
+    // newTempFile 落盘（可选 XOR 解密）→ System.load → loaded=true。
+    {
+        const ca::usize mi = addMethod(jbc::ir::MethodSeed{
+            "load", "(Ljava/lang/String;Ljava/lang/String;)V",
+            Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNCHRONIZED, true});
+        auto       unit   = promote(mi);
+        CodeEditor editor(*unit);
 
-    auto* load =
-        cw.visitMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNCHRONIZED,
-                       Utf8StringRef::from_cstr("load"),
-                       Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)V"),
-                       Utf8StringRef(),
-                       {});
-    auto* continueLabel = makeLabel();
-    auto* streamOk      = makeLabel();
-    auto* loop          = makeLabel();
-    auto* done          = makeLabel();
-    auto* streamLoop    = makeLabel();
-    auto* xorLoop       = makeLabel();
-    auto* writeBlock    = makeLabel();
+        const LabelId continueLabel = createLabel(editor);
+        const LabelId streamOk      = createLabel(editor);
+        const LabelId loop          = createLabel(editor);
+        const LabelId done          = createLabel(editor);
+        const LabelId streamLoop    = createLabel(editor);
+        const LabelId xorLoop       = createLabel(editor);
+        const LabelId writeBlock    = createLabel(editor);
 
-    load->visitCode();
-    load->visitFieldInsn(Opcodes::GETSTATIC,
-                         Utf8StringRef::from_cstr(native_loader::kClassName),
-                         Utf8StringRef::from_cstr("loaded"),
-                         Utf8StringRef::from_cstr("Z"));
-    load->visitJumpInsn(Opcodes::IFEQ, continueLabel);
-    load->visitInsn(Opcodes::RETURN);
+        appendInsn(editor, CodeEditor::cpInsn(Op::GETSTATIC, cpLoadedField));
+        appendInsn(editor, CodeEditor::branch(Op::IFEQ, continueLabel));
+        appendInsn(editor, CodeEditor::simple(Op::RETURN));
 
-    load->visitLabel(continueLabel);
-    load->visitVarInsn(Opcodes::ALOAD, 0);
-    load->visitMethodInsn(Opcodes::INVOKESTATIC,
-                          Utf8StringRef::from_cstr("java/lang/ClassLoader"),
-                          Utf8StringRef::from_cstr("getSystemResourceAsStream"),
-                          Utf8StringRef::from_cstr("(Ljava/lang/String;)Ljava/io/InputStream;"),
-                          false);
-    load->visitVarInsn(Opcodes::ASTORE, 2);
-    load->visitVarInsn(Opcodes::ALOAD, 2);
-    load->visitJumpInsn(Opcodes::IFNONNULL, streamOk);
-    load->visitTypeInsn(Opcodes::NEW, Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"));
-    load->visitInsn(Opcodes::DUP);
-    load->visitLdcInsn(ca::core::Any(arena.intern("mj2x native resource not found")));
-    load->visitMethodInsn(Opcodes::INVOKESPECIAL,
-                          Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"),
-                          Utf8StringRef::from_cstr("<init>"),
-                          Utf8StringRef::from_cstr("(Ljava/lang/String;)V"),
-                          false);
-    load->visitInsn(Opcodes::ATHROW);
+        bindLabelAt(editor, continueLabel,
+                    appendInsn(editor, CodeEditor::local(Op::ALOAD, 0)));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESTATIC,
+                                      ses->internMethodRef(
+                                          "java/lang/ClassLoader",
+                                          "getSystemResourceAsStream",
+                                          "(Ljava/lang/String;)Ljava/io/InputStream;")));
+        appendInsn(editor, CodeEditor::local(Op::ASTORE, 2));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 2));
+        appendInsn(editor, CodeEditor::branch(Op::IFNONNULL, streamOk));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::NEW,
+                                      ses->internClass("java/lang/UnsatisfiedLinkError")));
+        appendInsn(editor, CodeEditor::simple(Op::DUP));
+        appendInsn(editor,
+                   CodeEditor::loadConst(ses->internString("mj2x native resource not found")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESPECIAL,
+                                      ses->internMethodRef("java/lang/UnsatisfiedLinkError",
+                                                           "<init>",
+                                                           "(Ljava/lang/String;)V")));
+        appendInsn(editor, CodeEditor::simple(Op::ATHROW));
 
-    load->visitLabel(streamOk);
-    // 临时文件不走 File.createTempFile：其内部首次触达 SecureRandom（TempDirectory
-    // 静态字段初始化），冷 JVM 实测 ~52-59ms（jdk21/jdk25，#1183 bootstrap 分解），
-    // 是提取段乃至整个 bootstrap 的主导项。改走 newTempFile 私有助手（本类内发射）：
-    // ThreadLocalRandom 随机名 + createNewFile 原子独占创建，防碰撞/防抢占语义与
-    // createTempFile 一致；ThreadLocalRandom 首触实测 ~0.3ms（createNewFile 的
-    // 磁盘成本冷态 ~13ms，新旧两路径共有，不计入收益口径）。
-    load->visitVarInsn(Opcodes::ALOAD, 1);
-    load->visitMethodInsn(
-        Opcodes::INVOKESTATIC,
-        Utf8StringRef::from_cstr(native_loader::kClassName),
-        Utf8StringRef::from_cstr("newTempFile"),
-        Utf8StringRef::from_cstr("(Ljava/lang/String;)Ljava/io/File;"),
-        false);
-    load->visitVarInsn(Opcodes::ASTORE, 3);
-    load->visitVarInsn(Opcodes::ALOAD, 3);
-    load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                          Utf8StringRef::from_cstr("java/io/File"),
-                          Utf8StringRef::from_cstr("deleteOnExit"),
-                          Utf8StringRef::from_cstr("()V"),
-                          false);
+        bindLabelAt(editor, streamOk,
+                    appendInsn(editor, CodeEditor::local(Op::ALOAD, 1)));
+        // 临时文件不走 File.createTempFile：其内部首次触达 SecureRandom（TempDirectory
+        // 静态字段初始化），冷 JVM 实测 ~52-59ms（jdk21/jdk25，#1183 bootstrap 分解），
+        // 是提取段乃至整个 bootstrap 的主导项。改走 newTempFile 私有助手（本类内发射）：
+        // ThreadLocalRandom 随机名 + createNewFile 原子独占创建，防碰撞/防抢占语义与
+        // createTempFile 一致；ThreadLocalRandom 首触实测 ~0.3ms（createNewFile 的
+        // 磁盘成本冷态 ~13ms，新旧两路径共有，不计入收益口径）。
+        appendInsn(editor, CodeEditor::cpInsn(Op::INVOKESTATIC, cpNewTempFile));
+        appendInsn(editor, CodeEditor::local(Op::ASTORE, 3));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 3));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/io/File", "deleteOnExit",
+                                                           "()V")));
 
-    load->visitTypeInsn(Opcodes::NEW, Utf8StringRef::from_cstr("java/io/FileOutputStream"));
-    load->visitInsn(Opcodes::DUP);
-    load->visitVarInsn(Opcodes::ALOAD, 3);
-    load->visitMethodInsn(Opcodes::INVOKESPECIAL,
-                          Utf8StringRef::from_cstr("java/io/FileOutputStream"),
-                          Utf8StringRef::from_cstr("<init>"),
-                          Utf8StringRef::from_cstr("(Ljava/io/File;)V"),
-                          false);
-    load->visitVarInsn(Opcodes::ASTORE, 4);
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::NEW,
+                                      ses->internClass("java/io/FileOutputStream")));
+        appendInsn(editor, CodeEditor::simple(Op::DUP));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 3));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESPECIAL,
+                                      ses->internMethodRef("java/io/FileOutputStream",
+                                                           "<init>", "(Ljava/io/File;)V")));
+        appendInsn(editor, CodeEditor::local(Op::ASTORE, 4));
 
-    load->visitIntInsn(Opcodes::SIPUSH, 8192);
-    load->visitIntInsn(Opcodes::NEWARRAY, Opcodes::T_BYTE);
-    load->visitVarInsn(Opcodes::ASTORE, 5);
+        appendInsn(editor, CodeEditor::local(Op::SIPUSH, 8192));
+        appendInsn(editor, CodeEditor::local(Op::NEWARRAY, Opcodes::T_BYTE));
+        appendInsn(editor, CodeEditor::local(Op::ASTORE, 5));
 
-    // 加密形态：resourcePath 以 .enc 结尾时，读块后先 XOR 解密再写出。
-    // decrypt = resourcePath.endsWith(".enc")
-    load->visitVarInsn(Opcodes::ALOAD, 0);
-    load->visitLdcInsn(ca::core::Any(arena.intern(mj2x::kNativeLibEncryptedSuffix)));
-    load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                          Utf8StringRef::from_cstr("java/lang/String"),
-                          Utf8StringRef::from_cstr("endsWith"),
-                          Utf8StringRef::from_cstr("(Ljava/lang/String;)Z"),
-                          false);
-    load->visitVarInsn(Opcodes::ISTORE, 7);
-    // state = xorKey != 0 ? xorKey : 0x9E3779B9（三目：DUP 保留判定值）
-    load->visitLdcInsn(ca::core::Any(static_cast<ca::i32>(xorKey)));
-    load->visitInsn(Opcodes::DUP);
-    load->visitJumpInsn(Opcodes::IFNE, streamLoop);
-    load->visitInsn(Opcodes::POP);
-    load->visitLdcInsn(ca::core::Any(static_cast<ca::i32>(0x9E3779B9)));
-    load->visitLabel(streamLoop);
-    load->visitVarInsn(Opcodes::ISTORE, 8);
+        // 加密形态：resourcePath 以 .enc 结尾时，读块后先 XOR 解密再写出。
+        // decrypt = resourcePath.endsWith(".enc")
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 0));
+        appendInsn(editor,
+                   CodeEditor::loadConst(ses->internString(kNativeLibEncryptedSuffix)));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/lang/String", "endsWith",
+                                                           "(Ljava/lang/String;)Z")));
+        appendInsn(editor, CodeEditor::local(Op::ISTORE, 7));
+        // state = xorKey != 0 ? xorKey : 0x9E3779B9（三目：DUP 保留判定值）
+        appendInsn(editor,
+                   CodeEditor::loadConst(ses->internInteger(static_cast<ca::i32>(xorKey))));
+        appendInsn(editor, CodeEditor::simple(Op::DUP));
+        appendInsn(editor, CodeEditor::branch(Op::IFNE, streamLoop));
+        appendInsn(editor, CodeEditor::simple(Op::POP));
+        appendInsn(editor,
+                   CodeEditor::loadConst(
+                       ses->internInteger(static_cast<ca::i32>(0x9E3779B9u))));
+        bindLabelAt(editor, streamLoop,
+                    appendInsn(editor, CodeEditor::local(Op::ISTORE, 8)));
 
-    load->visitLabel(loop);
-    load->visitVarInsn(Opcodes::ALOAD, 2);
-    load->visitVarInsn(Opcodes::ALOAD, 5);
-    load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                          Utf8StringRef::from_cstr("java/io/InputStream"),
-                          Utf8StringRef::from_cstr("read"),
-                          Utf8StringRef::from_cstr("([B)I"),
-                          false);
-    load->visitVarInsn(Opcodes::ISTORE, 6);
-    load->visitVarInsn(Opcodes::ILOAD, 6);
-    load->visitJumpInsn(Opcodes::IFLT, done);
-    emitXorDecryptLoop(load, xorLoop, writeBlock);
-    load->visitLabel(writeBlock);
-    load->visitVarInsn(Opcodes::ALOAD, 4);
-    load->visitVarInsn(Opcodes::ALOAD, 5);
-    load->visitInsn(Opcodes::ICONST_0);
-    load->visitVarInsn(Opcodes::ILOAD, 6);
-    load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                          Utf8StringRef::from_cstr("java/io/OutputStream"),
-                          Utf8StringRef::from_cstr("write"),
-                          Utf8StringRef::from_cstr("([BII)V"),
-                          false);
-    load->visitJumpInsn(Opcodes::GOTO, loop);
+        bindLabelAt(editor, loop,
+                    appendInsn(editor, CodeEditor::local(Op::ALOAD, 2)));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 5));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/io/InputStream", "read",
+                                                           "([B)I")));
+        appendInsn(editor, CodeEditor::local(Op::ISTORE, 6));
+        appendInsn(editor, CodeEditor::local(Op::ILOAD, 6));
+        appendInsn(editor, CodeEditor::branch(Op::IFLT, done));
+        emitXorDecryptLoop(editor, xorLoop, writeBlock);
 
-    load->visitLabel(done);
-    load->visitVarInsn(Opcodes::ALOAD, 4);
-    load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                          Utf8StringRef::from_cstr("java/io/OutputStream"),
-                          Utf8StringRef::from_cstr("close"),
-                          Utf8StringRef::from_cstr("()V"),
-                          false);
-    load->visitVarInsn(Opcodes::ALOAD, 2);
-    load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                          Utf8StringRef::from_cstr("java/io/InputStream"),
-                          Utf8StringRef::from_cstr("close"),
-                          Utf8StringRef::from_cstr("()V"),
-                          false);
-    load->visitVarInsn(Opcodes::ALOAD, 3);
-    load->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                          Utf8StringRef::from_cstr("java/io/File"),
-                          Utf8StringRef::from_cstr("getAbsolutePath"),
-                          Utf8StringRef::from_cstr("()Ljava/lang/String;"),
-                          false);
-    load->visitMethodInsn(Opcodes::INVOKESTATIC,
-                          Utf8StringRef::from_cstr("java/lang/System"),
-                          Utf8StringRef::from_cstr("load"),
-                          Utf8StringRef::from_cstr("(Ljava/lang/String;)V"),
-                          false);
-    load->visitInsn(Opcodes::ICONST_1);
-    load->visitFieldInsn(Opcodes::PUTSTATIC,
-                         Utf8StringRef::from_cstr(native_loader::kClassName),
-                         Utf8StringRef::from_cstr("loaded"),
-                         Utf8StringRef::from_cstr("Z"));
-    load->visitInsn(Opcodes::RETURN);
-    load->visitMaxs(0, 0);
-    load->visitEnd();
+        bindLabelAt(editor, writeBlock,
+                    appendInsn(editor, CodeEditor::local(Op::ALOAD, 4)));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 5));
+        appendInsn(editor, CodeEditor::simple(Op::ICONST_0));
+        appendInsn(editor, CodeEditor::local(Op::ILOAD, 6));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/io/OutputStream", "write",
+                                                           "([BII)V")));
+        appendInsn(editor, CodeEditor::branch(Op::GOTO, loop));
+
+        bindLabelAt(editor, done,
+                    appendInsn(editor, CodeEditor::local(Op::ALOAD, 4)));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/io/OutputStream", "close",
+                                                           "()V")));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 2));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/io/InputStream", "close",
+                                                           "()V")));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 3));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef(
+                                          "java/io/File", "getAbsolutePath",
+                                          "()Ljava/lang/String;")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESTATIC,
+                                      ses->internMethodRef("java/lang/System", "load",
+                                                           "(Ljava/lang/String;)V")));
+        appendInsn(editor, CodeEditor::simple(Op::ICONST_1));
+        appendInsn(editor, CodeEditor::cpInsn(Op::PUTSTATIC, cpLoadedField));
+        appendInsn(editor, CodeEditor::simple(Op::RETURN));
+        lower(mi);
+    }
 
     // newTempFile(tempSuffix)：ThreadLocalRandom 随机名 + createNewFile 原子独占
     // 创建（32 次重试），替代 File.createTempFile 的 SecureRandom 冷启动税。
@@ -283,128 +329,137 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
     // 抢占）、失败抛 UnsatisfiedLinkError。已知差异（记录不消除）：POSIX 下
     // 权限为默认 umask（如 644）而 createTempFile 为 600——Windows 产品线无差，
     // POSIX 侧提取物生命周期为单 JVM 会话（deleteOnExit），内容即 jar 内资源。
-    auto* newTemp =
-        cw.visitMethod(Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_SYNTHETIC,
-                       Utf8StringRef::from_cstr("newTempFile"),
-                       Utf8StringRef::from_cstr("(Ljava/lang/String;)Ljava/io/File;"),
-                       Utf8StringRef(),
-                       {});
-    auto* tempLoop  = makeLabel();
-    auto* tempRetry = makeLabel();
-    auto* tempNext  = makeLabel();
+    {
+        const ca::usize mi = addMethod(jbc::ir::MethodSeed{
+            "newTempFile", "(Ljava/lang/String;)Ljava/io/File;",
+            Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_SYNTHETIC, true});
+        auto       unit   = promote(mi);
+        CodeEditor editor(*unit);
 
-    newTemp->visitCode();
-    // dir = System.getProperty("java.io.tmpdir", ".")
-    newTemp->visitLdcInsn(ca::core::Any(arena.intern("java.io.tmpdir")));
-    newTemp->visitLdcInsn(ca::core::Any(arena.intern(".")));
-    newTemp->visitMethodInsn(Opcodes::INVOKESTATIC,
-                             Utf8StringRef::from_cstr("java/lang/System"),
-                             Utf8StringRef::from_cstr("getProperty"),
-                             Utf8StringRef::from_cstr(
-                                 "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
-                             false);
-    newTemp->visitVarInsn(Opcodes::ASTORE, 1);
-    // rnd = ThreadLocalRandom.current()
-    newTemp->visitMethodInsn(Opcodes::INVOKESTATIC,
-                             Utf8StringRef::from_cstr("java/util/concurrent/ThreadLocalRandom"),
-                             Utf8StringRef::from_cstr("current"),
-                             Utf8StringRef::from_cstr(
-                                 "()Ljava/util/concurrent/ThreadLocalRandom;"),
-                             false);
-    newTemp->visitVarInsn(Opcodes::ASTORE, 2);
-    // i = 0
-    newTemp->visitInsn(Opcodes::ICONST_0);
-    newTemp->visitVarInsn(Opcodes::ISTORE, 4);
-    // loop: f = new File(dir, "mj2x-" + Long.toHexString(rnd.nextLong()) + suffix)
-    // 注意：dir 为 String，构造器必须取 (Ljava/lang/String;Ljava/lang/String;)V
-    // 重载——曾误写 (File,String) 描述符致 VerifyError（#1183 排障记录）。
-    newTemp->visitLabel(tempLoop);
-    newTemp->visitTypeInsn(Opcodes::NEW, Utf8StringRef::from_cstr("java/io/File"));
-    newTemp->visitInsn(Opcodes::DUP);
-    newTemp->visitVarInsn(Opcodes::ALOAD, 1);
-    newTemp->visitTypeInsn(Opcodes::NEW, Utf8StringRef::from_cstr("java/lang/StringBuilder"));
-    newTemp->visitInsn(Opcodes::DUP);
-    newTemp->visitMethodInsn(Opcodes::INVOKESPECIAL,
-                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
-                             Utf8StringRef::from_cstr("<init>"),
-                             Utf8StringRef::from_cstr("()V"),
-                             false);
-    newTemp->visitLdcInsn(ca::core::Any(arena.intern("mj2x-")));
-    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
-                             Utf8StringRef::from_cstr("append"),
-                             Utf8StringRef::from_cstr(
-                                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
-                             false);
-    newTemp->visitVarInsn(Opcodes::ALOAD, 2);
-    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                             Utf8StringRef::from_cstr("java/util/concurrent/ThreadLocalRandom"),
-                             Utf8StringRef::from_cstr("nextLong"),
-                             Utf8StringRef::from_cstr("()J"),
-                             false);
-    newTemp->visitMethodInsn(Opcodes::INVOKESTATIC,
-                             Utf8StringRef::from_cstr("java/lang/Long"),
-                             Utf8StringRef::from_cstr("toHexString"),
-                             Utf8StringRef::from_cstr("(J)Ljava/lang/String;"),
-                             false);
-    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
-                             Utf8StringRef::from_cstr("append"),
-                             Utf8StringRef::from_cstr(
-                                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
-                             false);
-    newTemp->visitVarInsn(Opcodes::ALOAD, 0);
-    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
-                             Utf8StringRef::from_cstr("append"),
-                             Utf8StringRef::from_cstr(
-                                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
-                             false);
-    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                             Utf8StringRef::from_cstr("java/lang/StringBuilder"),
-                             Utf8StringRef::from_cstr("toString"),
-                             Utf8StringRef::from_cstr("()Ljava/lang/String;"),
-                             false);
-    newTemp->visitMethodInsn(Opcodes::INVOKESPECIAL,
-                             Utf8StringRef::from_cstr("java/io/File"),
-                             Utf8StringRef::from_cstr("<init>"),
-                             Utf8StringRef::from_cstr("(Ljava/lang/String;Ljava/lang/String;)V"),
-                             false);
-    newTemp->visitVarInsn(Opcodes::ASTORE, 3);
-    // if (!f.createNewFile()) goto retry（IFEQ 前跳重试；成功则顺序落入 return）
-    newTemp->visitVarInsn(Opcodes::ALOAD, 3);
-    newTemp->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
-                             Utf8StringRef::from_cstr("java/io/File"),
-                             Utf8StringRef::from_cstr("createNewFile"),
-                             Utf8StringRef::from_cstr("()Z"),
-                             false);
-    newTemp->visitJumpInsn(Opcodes::IFEQ, tempRetry);
-    // hit: return f（createNewFile 成功，唯一前驱为本直落路径）
-    newTemp->visitVarInsn(Opcodes::ALOAD, 3);
-    newTemp->visitInsn(Opcodes::ARETURN);
-    // retry: i++; if (i < 32) goto loop（耗尽则顺序落入 throw）
-    newTemp->visitLabel(tempRetry);
-    newTemp->visitIincInsn(4, 1);
-    newTemp->visitVarInsn(Opcodes::ILOAD, 4);
-    newTemp->visitIntInsn(Opcodes::BIPUSH, 32);
-    newTemp->visitJumpInsn(Opcodes::IF_ICMPLT, tempLoop);
-    // next: throw new UnsatisfiedLinkError("mj2x native temp file create failed")
-    newTemp->visitLabel(tempNext);
-    newTemp->visitTypeInsn(Opcodes::NEW,
-                           Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"));
-    newTemp->visitInsn(Opcodes::DUP);
-    newTemp->visitLdcInsn(ca::core::Any(arena.intern("mj2x native temp file create failed")));
-    newTemp->visitMethodInsn(Opcodes::INVOKESPECIAL,
-                             Utf8StringRef::from_cstr("java/lang/UnsatisfiedLinkError"),
-                             Utf8StringRef::from_cstr("<init>"),
-                             Utf8StringRef::from_cstr("(Ljava/lang/String;)V"),
-                             false);
-    newTemp->visitInsn(Opcodes::ATHROW);
-    newTemp->visitMaxs(5, 5);
-    newTemp->visitEnd();
+        const LabelId tempLoop  = createLabel(editor);
+        const LabelId tempRetry = createLabel(editor);
+        const LabelId tempNext  = createLabel(editor);
 
-    cw.visitEnd();
-    return cw.toByteArray();
+        // dir = System.getProperty("java.io.tmpdir", ".")
+        appendInsn(editor, CodeEditor::loadConst(ses->internString("java.io.tmpdir")));
+        appendInsn(editor, CodeEditor::loadConst(ses->internString(".")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESTATIC,
+                                      ses->internMethodRef(
+                                          "java/lang/System", "getProperty",
+                                          "(Ljava/lang/String;Ljava/lang/String;)"
+                                          "Ljava/lang/String;")));
+        appendInsn(editor, CodeEditor::local(Op::ASTORE, 1));
+        // rnd = ThreadLocalRandom.current()
+        appendInsn(editor,
+                   CodeEditor::cpInsn(
+                       Op::INVOKESTATIC,
+                       ses->internMethodRef("java/util/concurrent/ThreadLocalRandom",
+                                            "current",
+                                            "()Ljava/util/concurrent/ThreadLocalRandom;")));
+        appendInsn(editor, CodeEditor::local(Op::ASTORE, 2));
+        // i = 0
+        appendInsn(editor, CodeEditor::simple(Op::ICONST_0));
+        appendInsn(editor, CodeEditor::local(Op::ISTORE, 4));
+        // loop: f = new File(dir, "mj2x-" + Long.toHexString(rnd.nextLong()) + suffix)
+        // 注意：dir 为 String，构造器必须取 (Ljava/lang/String;Ljava/lang/String;)V
+        // 重载——曾误写 (File,String) 描述符致 VerifyError（#1183 排障记录）。
+        bindLabelAt(editor, tempLoop,
+                    appendInsn(editor,
+                               CodeEditor::cpInsn(Op::NEW,
+                                                  ses->internClass("java/io/File"))));
+        appendInsn(editor, CodeEditor::simple(Op::DUP));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 1));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::NEW,
+                                      ses->internClass("java/lang/StringBuilder")));
+        appendInsn(editor, CodeEditor::simple(Op::DUP));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESPECIAL,
+                                      ses->internMethodRef("java/lang/StringBuilder",
+                                                           "<init>", "()V")));
+        appendInsn(editor, CodeEditor::loadConst(ses->internString("mj2x-")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef(
+                                          "java/lang/StringBuilder", "append",
+                                          "(Ljava/lang/String;)"
+                                          "Ljava/lang/StringBuilder;")));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 2));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef(
+                                          "java/util/concurrent/ThreadLocalRandom",
+                                          "nextLong", "()J")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESTATIC,
+                                      ses->internMethodRef("java/lang/Long", "toHexString",
+                                                           "(J)Ljava/lang/String;")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef(
+                                          "java/lang/StringBuilder", "append",
+                                          "(Ljava/lang/String;)"
+                                          "Ljava/lang/StringBuilder;")));
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 0));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef(
+                                          "java/lang/StringBuilder", "append",
+                                          "(Ljava/lang/String;)"
+                                          "Ljava/lang/StringBuilder;")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/lang/StringBuilder",
+                                                           "toString",
+                                                           "()Ljava/lang/String;")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESPECIAL,
+                                      ses->internMethodRef(
+                                          "java/io/File", "<init>",
+                                          "(Ljava/lang/String;Ljava/lang/String;)V")));
+        appendInsn(editor, CodeEditor::local(Op::ASTORE, 3));
+        // if (!f.createNewFile()) goto retry（IFEQ 前跳重试；成功则顺序落入 return）
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 3));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKEVIRTUAL,
+                                      ses->internMethodRef("java/io/File",
+                                                           "createNewFile", "()Z")));
+        appendInsn(editor, CodeEditor::branch(Op::IFEQ, tempRetry));
+        // hit: return f（createNewFile 成功，唯一前驱为本直落路径）
+        appendInsn(editor, CodeEditor::local(Op::ALOAD, 3));
+        appendInsn(editor, CodeEditor::simple(Op::ARETURN));
+        // retry: i++; if (i < 32) goto loop（耗尽则顺序落入 throw）
+        bindLabelAt(editor, tempRetry, appendInsn(editor, CodeEditor::iinc(4, 1)));
+        appendInsn(editor, CodeEditor::local(Op::ILOAD, 4));
+        appendInsn(editor, CodeEditor::local(Op::BIPUSH, 32));
+        appendInsn(editor, CodeEditor::branch(Op::IF_ICMPLT, tempLoop));
+        // next: throw new UnsatisfiedLinkError("mj2x native temp file create failed")
+        bindLabelAt(editor, tempNext,
+                    appendInsn(editor,
+                               CodeEditor::cpInsn(
+                                   Op::NEW,
+                                   ses->internClass("java/lang/UnsatisfiedLinkError"))));
+        appendInsn(editor, CodeEditor::simple(Op::DUP));
+        appendInsn(editor,
+                   CodeEditor::loadConst(
+                       ses->internString("mj2x native temp file create failed")));
+        appendInsn(editor,
+                   CodeEditor::cpInsn(Op::INVOKESPECIAL,
+                                      ses->internMethodRef("java/lang/UnsatisfiedLinkError",
+                                                           "<init>",
+                                                           "(Ljava/lang/String;)V")));
+        appendInsn(editor, CodeEditor::simple(Op::ATHROW));
+        lower(mi);
+    }
+
+    recomputeSessionFrames(kSelf, *ses);
+
+    auto written = jbc::core::writeClass(ses->backing());
+    if (written.is_err()) {
+        throw std::runtime_error("native_loader: writeClass failed");
+    }
+    return std::move(written).unwrap();
 }
 
 }   // namespace
@@ -427,7 +482,7 @@ void NativeLoaderPostprocessor::process(CompilerIndex& index)
     if (!needResource && !needClinit) return;
 
     if (needResource) {
-        // 从零建类发射面（buildNativeLoaderClass）批 6 随 output 侧一并切。
+        // 批 6d：从零建类发射面走 DOM 构建器（帧引擎出 maxes）。
         index.upsertJarResource(kLoaderEntry, buildNativeLoaderClass(xorKey_));
     }
 

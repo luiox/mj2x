@@ -467,7 +467,7 @@ bool isPodClassOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& ow
 /// @brief POD 类生成的 C struct 类型名（pod_<sanitized owner>）。
 std::string podStructTypeName(const ca::str::Utf8StringRef& owner);
 /// @brief 字段名 → C struct 成员名（sanitize，合成字段的 `$` 也要处理）。
-std::string podStructMemberName(const ca::str::Utf8StringRef& name);
+std::string podStructMemberName(std::string_view name);
 /// @brief POD struct 实例的**指针别名**变量名。
 ///
 /// @details
@@ -514,14 +514,14 @@ RegCPodStructPlan analyzePodStructs(const RegFunction& fn, CompilerIndex* classI
 RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out, const RegInstruction& ins,
                                         RegCFunctionEmitState& state);
 /// 编译输入内 owner 的超类链抵达 java/lang/Enum（枚举子类判定）。
-bool isEnumSubtypeOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& owner);
-/// javac 合成 values() 形态验证（getstatic $VALUES + Object.clone + checkcast + areturn）。
-bool isJavacEnumValuesBody(const jbytecode::tree::MethodNode* method,
-                           const ca::str::Utf8StringRef& owner,
-                           const ca::str::Utf8StringRef& arrayDesc);
+bool isEnumSubtypeOwner(CompilerIndex* classIndex, std::string_view owner);
+/// javac 合成 values() 形态验证（getstatic $VALUES + clone + checkcast + areturn；
+/// 批 6d：DOM raw 指令匹配，cls/m = 目标类与方法快照）。
+bool isJavacEnumValuesBody(const CompilerClass& cls, const CompilerMethod& method,
+                           const std::string& owner, const std::string& arrayDesc);
 /// javac 合成 valueOf(String) 形态验证（ldc class + Enum.valueOf + checkcast + areturn）。
-bool isJavacEnumValueOfBody(const jbytecode::tree::MethodNode* method,
-                            const ca::str::Utf8StringRef& owner);
+bool isJavacEnumValueOfBody(const CompilerClass& cls, const CompilerMethod& method,
+                            const std::string& owner);
 /// @}
 
 /// @name regc_backend.cpp：枚举合成方法 SSA 形状验证（#887 Enums 承接卡）

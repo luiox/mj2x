@@ -20,20 +20,10 @@
 namespace mj2x {
 
 using jbytecode::core::Handle;
-using jbytecode::core::Label;
 using namespace jbytecode::tree;
 using namespace jbytecode::analysis;
 using namespace jbytecode::commons;
 using namespace jbytecode::util;
-
-// label 标识：Label* 转 int（读取期稳定）。
-// 批 3b DOM 读路径无标签对象：LabelPool 按目标 pc 合成 Label（MIR 仍持
-// Label* 指针身份，批 6 摘树时随 MIR 换标签 id）。同一 pc 恒同一 Label*，
-// 与树路径「同一 LabelNode 同一指针」的块 id 契约一致。
-static int labelKey(jbytecode::core::Label* lbl)
-{
-    return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
-}
 
 static PrimitiveKind castSourceType(int opcode)
 {
@@ -192,36 +182,27 @@ struct CodeConverter::Impl
 
     // -- 批 3b DOM 读路径状态（每次 convert 重置） --
     jbc::core::ClassFile* cf = nullptr;   ///< CP 解析借用（convert 期间稳定）
-    std::deque<Label>                     labelPool;   ///< 按目标 pc 合成的标签（地址稳定）
 
-    /// 标签身份三件套：MIR 持 Label*（消费面 stackc labelToIndex / ssa 节点扫描），
-    /// 块 id 与异常表键用顺序 id。不得用指针截断 int 作块 id——x64 堆地址
-    /// 截断可为负（ASLR 依赖），会把 isTarget/异常表回填随机打挂。
-    struct LabelSlot
-    {
-        Label* label = nullptr;
-        int    id    = 0;
-    };
-    std::unordered_map<ca::u32, LabelSlot> labelByPc;
-    int                                    nextLabelId = 1;
+    /// 批 6d 标签 id 化：MIR/块 id/异常表键统一用顺序 id（同 pc 恒同 id）。
+    /// 不得用指针截断 int 作块 id——x64 堆地址截断可为负（ASLR 依赖），
+    /// 会把 isTarget/异常表回填随机打挂。
+    std::unordered_map<ca::u32, int> labelIdByPc;
+    int                              nextLabelId = 1;
 
-    /// @brief 目标 pc → 合成 Label（同一 pc 恒同一指针、恒同一 id）。
-    Label* labelAt(ca::u32 pc)
+    /// @brief 目标 pc → 标签 id（批 6d 标签 id 化：同一 pc 恒同一 id）。
+    int labelAt(ca::u32 pc)
     {
-        auto it = labelByPc.find(pc);
-        if (it != labelByPc.end()) return it->second.label;
-        labelPool.emplace_back();
-        auto* lbl           = &labelPool.back();
-        lbl->bytecodeOffset = static_cast<int>(pc);   // 信息性；身份只看指针
-        int id              = nextLabelId++;
-        return labelByPc.emplace(pc, LabelSlot{lbl, id}).first->second.label;
+        auto it = labelIdByPc.find(pc);
+        if (it != labelIdByPc.end()) return it->second;
+        const int id = nextLabelId++;
+        return labelIdByPc.emplace(pc, id).first->second;
     }
 
     /// @brief 目标 pc 的标签 id（未建档返回 -1；id 从 1 起，与 entry 块 id=0 不撞）。
     int labelIdAt(ca::u32 pc)
     {
-        auto it = labelByPc.find(pc);
-        return it != labelByPc.end() ? it->second.id : -1;
+        auto it = labelIdByPc.find(pc);
+        return it != labelIdByPc.end() ? it->second : -1;
     }
 
     /// @brief DOM 方法初始状态：this 槽 + 描述符参数槽。
@@ -920,7 +901,7 @@ void CodeConverter::processInsn(const jbc::core::RawInsn& in)
     // -- 分支族（Branch2/Branch4，目标 = pc + 相对偏移） --
     else if (jbc::core::shapeOf(in.op) == jbc::core::Shape::Branch2 ||
              jbc::core::shapeOf(in.op) == jbc::core::Shape::Branch4) {
-        Label* target = impl_->labelAt(static_cast<ca::u32>(in.pc + in.t));
+        const int target = impl_->labelAt(static_cast<ca::u32>(in.pc + in.t));
 
         if (opc == Opcodes::GOTO || opc == Opcodes::GOTO_W) {
             auto node         = std::make_unique<MIRUncondBranch>();
@@ -1069,11 +1050,10 @@ void CodeConverter::translateInstructions(const std::vector<jbc::core::RawInsn>&
         const auto& in = insns[idx];
 
         // 目标 pc 的合成标签（analyzeControlFlow 已为全部目标建档）。
-        // labelByPc 命中即目标（仅 noteTarget/分支建档时插入）；id 顺序发放，
+        // labelIdByPc 命中即目标（仅 noteTarget/分支建档时插入）；id 顺序发放，
         // 与 entry 块 id=0、合成负 id 空间互斥。
-        auto lit         = impl_->labelByPc.find(in.pc);
-        bool isTarget    = lit != impl_->labelByPc.end();
-        int  labelIdHere = isTarget ? lit->second.id : -1;
+        const int labelIdHere = impl_->labelIdAt(in.pc);
+        const bool isTarget   = labelIdHere >= 0;
 
         // 块入口处切换/创建 currentBlock。块 id：
         //   - 序列首个块 → 0（entry 契约）
@@ -1092,11 +1072,10 @@ void CodeConverter::translateInstructions(const std::vector<jbc::core::RawInsn>&
                 blockId = impl_->nextSyntheticBlockId--;
             }
             impl_->currentBlock = getOrCreateBlock(blockId);
-            // 树路径每个 LabelNode 产 MIRLabel（stackc labelToIndex 与 ssa
-            // blockContainsLabel 的块内标签消费面）；DOM 对目标块补发同形节点。
+            // 每个跳转/异常目标产 MIRLabel（stackc labelToIndex 与 ssa
+            // blockContainsLabel 的块内标签消费面）。
             if (isTarget) {
-                auto lnode = std::make_unique<MIRLabel>(lit->second.label);
-                impl_->currentBlock->nodes.push_back(std::move(lnode));
+                impl_->currentBlock->nodes.push_back(std::make_unique<MIRLabel>(labelIdHere));
             }
         }
 
@@ -1141,8 +1120,7 @@ std::vector<Block*> CodeConverter::convert(jbc::core::ClassFile& cf, ca::usize m
     }
 
     impl_->cf         = &cf;
-    impl_->labelPool.clear();
-    impl_->labelByPc.clear();
+    impl_->labelIdByPc.clear();
     impl_->initMethodState(mi.access, cf.descOf(mi));
     if (code != nullptr) analyzeControlFlow(insns, *code);
     buildBlocks();
@@ -1265,7 +1243,7 @@ std::string CodeConverter::dumpMIR(const std::vector<Block*>& blocks)
             oss << "  " << mirKindName(n->kind);
             switch (n->kind) {
             case MIRKind::LABEL:
-                oss << " L" << labelKey(static_cast<MIRLabel*>(n.get())->labelNode);
+                oss << " L" << static_cast<MIRLabel*>(n.get())->labelId;
                 break;
             case MIRKind::LOCAL_LOAD:
                 oss << " v" << static_cast<MIRLocalLoad*>(n.get())->varIndex;
@@ -1286,13 +1264,13 @@ std::string CodeConverter::dumpMIR(const std::vector<Block*>& blocks)
                 break;
             }
             case MIRKind::BRANCH:
-                oss << " -> L" << labelKey(static_cast<MIRBranch*>(n.get())->targetLabel);
+                oss << " -> L" << static_cast<MIRBranch*>(n.get())->targetLabel;
                 break;
             case MIRKind::BRANCH_ZERO:
-                oss << " -> L" << labelKey(static_cast<MIRBranchZero*>(n.get())->targetLabel);
+                oss << " -> L" << static_cast<MIRBranchZero*>(n.get())->targetLabel;
                 break;
             case MIRKind::UNCOND_BRANCH:
-                oss << " -> L" << labelKey(static_cast<MIRUncondBranch*>(n.get())->targetLabel);
+                oss << " -> L" << static_cast<MIRUncondBranch*>(n.get())->targetLabel;
                 break;
             case MIRKind::NEW_OBJECT:
                 oss << " " << static_cast<MIRNewObject*>(n.get())->typeDesc;

@@ -140,11 +140,11 @@ struct MIRNop : MIRNode
 
 struct MIRLabel : MIRNode
 {
-    // label 标识用 Label*（读取期稳定）。bytecodeOffset 在树形重建后被重置为 -1，不可靠。
-    jbytecode::core::Label* labelNode = nullptr;
-    explicit MIRLabel(jbytecode::core::Label* ln)
+    // 批 6d 标签 id 化：label 标识 = CodeConverter 的顺序 id（同 pc 恒同 id）。
+    int labelId = 0;
+    explicit MIRLabel(int id)
         : MIRNode(MIRKind::LABEL)
-        , labelNode(ln)
+        , labelId(id)
     {}
 };
 
@@ -234,9 +234,9 @@ struct MIRCast : MIRNode
 
 struct MIRBranch : MIRNode
 {
-    CmpOp                   op          = CmpOp::EQ;
-    PrimitiveKind           type        = PrimitiveKind::INT;
-    jbytecode::core::Label* targetLabel = nullptr;
+    CmpOp         op          = CmpOp::EQ;
+    PrimitiveKind type        = PrimitiveKind::INT;
+    int           targetLabel = 0;
     MIRBranch()
         : MIRNode(MIRKind::BRANCH)
     {}
@@ -244,9 +244,9 @@ struct MIRBranch : MIRNode
 
 struct MIRBranchZero : MIRNode
 {
-    CmpOp                   op          = CmpOp::EQ;
-    PrimitiveKind           type        = PrimitiveKind::INT;
-    jbytecode::core::Label* targetLabel = nullptr;
+    CmpOp         op          = CmpOp::EQ;
+    PrimitiveKind type        = PrimitiveKind::INT;
+    int           targetLabel = 0;
     MIRBranchZero()
         : MIRNode(MIRKind::BRANCH_ZERO)
     {}
@@ -254,7 +254,7 @@ struct MIRBranchZero : MIRNode
 
 struct MIRUncondBranch : MIRNode
 {
-    jbytecode::core::Label* targetLabel = nullptr;
+    int targetLabel = 0;
     MIRUncondBranch()
         : MIRNode(MIRKind::UNCOND_BRANCH)
     {}
@@ -264,11 +264,11 @@ struct MIRSwitch : MIRNode
 {
     struct Case
     {
-        int                     key;
-        jbytecode::core::Label* targetLabel;
+        int key;
+        int targetLabel;
     };
-    jbytecode::core::Label* defaultLabel = nullptr;
-    std::vector<Case>       cases;
+    int               defaultLabel = 0;
+    std::vector<Case> cases;
     MIRSwitch()
         : MIRNode(MIRKind::SWITCH)
     {}

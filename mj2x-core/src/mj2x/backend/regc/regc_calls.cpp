@@ -140,15 +140,16 @@ bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classInde
     if (classIndex == nullptr) return false;
     const CompilerClass* ownerClass =
         classIndex->getClass(ins.method.owner.to_std_string());
-    if (ownerClass == nullptr || ownerClass->classNode == nullptr) return false;
-    if ((ownerClass->classNode->access & Opcodes::ACC_FINAL) != 0) return true;
+    if (ownerClass == nullptr || ownerClass->dom == nullptr) return false;
+    if ((ownerClass->dom->access & Opcodes::ACC_FINAL) != 0) return true;
+    const std::string methodName = ins.method.name.to_std_string();
+    const std::string methodDesc = ins.method.desc.to_std_string();
     for (const auto& member : ownerClass->methods) {
-        if (member.methodNode == nullptr) continue;
-        if (member.methodNode->name != ins.method.name) continue;
-        if (member.methodNode->desc != ins.method.desc) continue;
+        if (member.name != methodName) continue;
+        if (member.desc != methodDesc) continue;
         // 声明为 final → 确定；声明非 final（如新版 javac 不给匿名类/方法设
         // ACC_FINAL）→ 继续做子类覆写分析，而不是直接判动态。
-        if ((member.methodNode->access & Opcodes::ACC_FINAL) != 0) return true;
+        if ((member.access & Opcodes::ACC_FINAL) != 0) return true;
         break;
     }
     // 无覆写分析：owner 的每个编译输入子类（含递归）都不声明该方法 → 确定。
@@ -157,8 +158,8 @@ bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classInde
         const CompilerClass* cur = &cls;
         std::string          curName = clsName;
         bool                 isSub = false;
-        while (cur != nullptr && cur->classNode != nullptr) {
-            curName = cur->classNode->superName.to_std_string();
+        while (cur != nullptr && cur->dom != nullptr) {
+            curName = std::string(cur->dom->superName());
             if (curName.empty()) break;
             if (curName == ins.method.owner.to_std_string()) {
                 isSub = true;
@@ -168,9 +169,8 @@ bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classInde
         }
         if (!isSub) continue;
         for (const auto& member : cls.methods) {
-            if (member.methodNode == nullptr) continue;
-            if (member.methodNode->name != ins.method.name) continue;
-            if (member.methodNode->desc != ins.method.desc) continue;
+            if (member.name != methodName) continue;
+            if (member.desc != methodDesc) continue;
             return false;   // 有子类覆写 → 动态分派
         }
     }
@@ -237,16 +237,14 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
         bool        reResolved = false;
         for (int depth = 0; depth < 32 && !reResolved; ++depth) {
             CompilerClass* cls = classIndex->getClass(cur);
-            if (cls == nullptr || cls->classNode == nullptr) break;
-            const std::string super = cls->classNode->superName.to_std_string();
+            if (cls == nullptr || cls->dom == nullptr) break;
+            const std::string super = std::string(cls->dom->superName());
             if (super.empty()) break;
             CompilerClass* superCls = classIndex->getClass(super);
-            if (superCls != nullptr && superCls->classNode != nullptr) {
+            if (superCls != nullptr && superCls->dom != nullptr) {
                 for (const auto& member : superCls->methods) {
-                    if (member.methodNode == nullptr) continue;
-                    if (member.methodNode->name.to_std_string() != name) continue;
-                    if (member.methodNode->desc.to_std_string() !=
-                        ins.method.desc.to_std_string()) {
+                    if (member.name != name) continue;
+                    if (member.desc != ins.method.desc.to_std_string()) {
                         continue;
                     }
                     cur        = super;

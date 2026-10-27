@@ -1,13 +1,12 @@
 #include "pipeline.hpp"
 #include "mj2x/io/input_loader.hpp"
-#include "mj2x/core/class_dom_sync.hpp"
+
 #include "mj2x/io/output_writer.hpp"
 
 #include "libca/log/log_macros.hpp"
 
 #include <cstdio>
 #include <string>
-#include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 
 namespace mj2x {
@@ -49,12 +48,10 @@ int Pipeline::run()
     // 中段（预处理器/编译/后处理器）与 IO 同级防护：CLI main 不兜异常，
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
-        runPreprocessors();      // 批 4：preprocessor 直接改 DOM（改写权威）
-        syncDomToTree(*index_);  // DOM → 树刷新：backend 树读（stackc hidden 编译等）的兼容投影
-        compileMethods();        // 读 DOM；批 5 起 inject 也改 DOM（dom_inject 门面）
-        runPostprocessors();     // 批 4：postprocessor 直接改 DOM（inject 后无需再树→DOM）
-        // 批 6：output 改读 DOM（writeClass 直出 + 帧垫片），编译后 DOM→tree
-        // 同步点摘除；树权威的生成类在 output 内经 ensureDomFromTree 落位。
+        runPreprocessors();         // 批 4：preprocessor 直接改 DOM（改写权威）
+        refreshSnapshots(*index_);  // 元数据快照对齐 DOM（批 6d 树退役；init_clinit_mover 生成方法落位）
+        compileMethods();           // 读 DOM；批 5 起 inject 也改 DOM（dom_inject 门面）
+        runPostprocessors();  // 批 4：postprocessor 直接改 DOM（inject 后无需再同步）
     }
     catch (const std::exception& e) {
         CA_LOGT_ERROR("pipeline", "compile stage failed - {}\n", e.what());
@@ -81,17 +78,9 @@ void Pipeline::loadInput()
 
 void Pipeline::runPreprocessors()
 {
-    // 批 4 双载体拆段：树载体 pass（invokedynamic，批 4b 收尾）先跑，树改动
-    // 经 syncTreeToDom 落 DOM（顺带为 lambda 合成类补 DOM 载体）；DOM 载体
-    // pass 随后在 DOM 权威上改写。无序依赖：树/DOM pass 的改写产物互不可见
-    //（indy 展开产 LDC String/Class，不被 LdcPreprocessor 二次处理；反向亦然）。
-    for (auto& p : preprocs_) {
-        if (!p->editsDom()) p->process(*index_);
-    }
-    syncTreeToDom(*index_);
-    for (auto& p : preprocs_) {
-        if (p->editsDom()) p->process(*index_);
-    }
+    // 批 6d：全部 preprocessor 均为 DOM 权威改写（indy 树载体已退役），
+    // 单段顺序执行。
+    for (auto& p : preprocs_) p->process(*index_);
 }
 
 void Pipeline::compileMethods()
@@ -123,8 +112,8 @@ void Pipeline::compileMethods()
             }
             auto* dom = cls.dom.get();
 
-            auto mnName = method.methodNode->name.to_std_string();
-            auto mnDesc = method.methodNode->desc.to_std_string();
+            const auto& mnName = method.name;
+            const auto& mnDesc = method.desc;
             CA_LOGT_INFO("pipeline", "  Compiling {}.{}{}\n", name.c_str(), mnName.c_str(), mnDesc.c_str());
 
             ca::usize domIndex = dom->methods.size();

@@ -17,7 +17,7 @@ void MultiANewArrayPreprocessor::process(CompilerIndex& index)
     for (auto& [name, cls] : index.getClasses()) {
         if (cls.isLibrary) continue;
         for (auto& method : cls.methods) {
-            auto& dm = domMethodFor(cls, method, name);
+            auto& dm = domMethodFor(cls, method.name, method.desc);
             auto code = cls.dom->decodeCode(dm);
             if (code.is_err()) continue;
             auto* attr = std::move(code).unwrap();

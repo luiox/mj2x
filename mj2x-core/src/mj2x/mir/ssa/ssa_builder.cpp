@@ -13,7 +13,6 @@
 
 namespace mj2x {
 
-using jbytecode::core::Label;
 
 namespace {
 
@@ -337,8 +336,8 @@ SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel
 {
     auto it = ssaByLabel.find(labelKey);
     if (it != ssaByLabel.end()) return it->second;
-    // 块 id 与 mirLabelKey 不同域（批 3b 顺序 id）：回退 MIRLabel 节点扫描，
-    // Label* → 所在 L1 块 → 同 id 的 SSABlock。目标块必含同指针 MIRLabel。
+    // 块 id 与标签 id 在批 6d 前是不同域：回退 MIRLabel 节点扫描，标签 id →
+    // 所在 L1 块 → 同 id 的 SSABlock。目标块必含同 id MIRLabel。
     if (const Block* l1 = findBlockByLabel(l1blocks, labelKey)) {
         for (const auto& sb : fnBlocks) {
             if (sb->l1LabelId == l1->id) return sb.get();
@@ -347,22 +346,15 @@ SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel
     return realEntry;
 }
 
-// targetLabel is a Label*; CodeConverter 批 3b 起块 id 用顺序标签 id（指针
-// 截断 id 在 x64 上可为负且 ASLR 依赖，已废除）。Label* → 块的解析一律经
-// MIRLabel 节点扫描（目标块必含同指针 MIRLabel），再落块 id 域。
-int mirLabelKey(jbytecode::core::Label* lbl)
-{
-    return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
-}
-
+// 批 6d 标签 id 化：targetLabel 即顺序标签 id（指针截断 id 在 x64 上可为
+// 负且 ASLR 依赖，已废除）。
 bool blockContainsLabel(const Block* block, int labelId)
 {
     if (!block) return false;
     if (block->id == labelId) return true;
     for (const auto& node : block->nodes) {
         if (node->kind != MIRKind::LABEL) continue;
-        auto* label = static_cast<const MIRLabel*>(node.get());
-        if (mirLabelKey(label->labelNode) == labelId) return true;
+        if (static_cast<const MIRLabel*>(node.get())->labelId == labelId) return true;
     }
     return false;
 }
@@ -427,7 +419,7 @@ SSABlockArg* findExceptionArg(SSABlock* block)
 // translateBlocks 的内层 switch 拆成按 JVM 语义族分组的 lower 函数。
 // 每个 lower 函数返回 bool：false = fail-closed（reason 已填），true = 成功。
 // 所有函数共享匿名 namespace 的 free helper（constantValue / mapBinaryOp /
-// buildSuccessor / mirLabelKey 等），状态通过 LowerCtx 显式传递。
+// buildSuccessor 等），状态通过 LowerCtx 显式传递。
 // ============================================================
 
 // lowering 阶段的可变上下文：translateBlocks 主循环为每个块构造一次。
@@ -899,7 +891,7 @@ bool lowerReturnValue(const MIRReturnValue* /*rv*/, LowerCtx& d, std::string& re
 
 bool lowerUncondBranch(const MIRUncondBranch* ub, LowerCtx& d, std::string& /*reason*/)
 {
-    int               tkey   = mirLabelKey(ub->targetLabel);
+    int               tkey   = ub->targetLabel;
     SSABlock*         target = resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
     SSAJumpTerminator jt;
     jt.target      = buildSuccessor(target, d.fs, d.fn);
@@ -927,7 +919,7 @@ bool lowerBranchZero(const MIRBranchZero* bz, LowerCtx& d, std::string& reason)
     d.sb->instructions.push_back(std::move(cmp));
     SSABranchTerminator bt;
     bt.condition  = cond;
-    int bzKey     = mirLabelKey(bz->targetLabel);
+    int bzKey     = bz->targetLabel;
     bt.trueTarget = buildSuccessor(
         resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
@@ -953,7 +945,7 @@ bool lowerBranch(const MIRBranch* br, LowerCtx& d, std::string& reason)
     d.sb->instructions.push_back(std::move(cmp));
     SSABranchTerminator bt;
     bt.condition  = cond;
-    int brKey     = mirLabelKey(br->targetLabel);
+    int brKey     = br->targetLabel;
     bt.trueTarget = buildSuccessor(
         resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
@@ -971,14 +963,14 @@ bool lowerSwitch(const MIRSwitch* sw, LowerCtx& d, std::string& reason)
     SSASwitchTerminator st;
     st.value = value;
     for (const auto& c : sw->cases) {
-        int           key = mirLabelKey(c.targetLabel);
+        int           key = c.targetLabel;
         SSASwitchCase sc;
         sc.key    = c.key;
         sc.target = buildSuccessor(
             resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
         st.cases.push_back(std::move(sc));
     }
-    int defaultKey   = mirLabelKey(sw->defaultLabel);
+    int defaultKey   = sw->defaultLabel;
     st.defaultTarget = buildSuccessor(
         resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     d.sb->terminator = std::move(st);
@@ -1354,9 +1346,10 @@ void SSABuilder::collectOutEdges(Block* b, const std::vector<Block*>& all,
                                  std::vector<int>& targets)
 {
     // Label* → 所在块 id（MIRLabel 节点扫描）；找不到不产边（防御）。
-    // 块 id 与 mirLabelKey 不同域（批 3b 顺序 id），边键必须落块 id 域。
-    auto pushBlockId = [&all, &targets](jbytecode::core::Label* lbl) {
-        if (const Block* l1 = findBlockByLabel(all, mirLabelKey(lbl))) {
+    // 标签 id → 所在块 id（MIRLabel 节点扫描）；找不到不产边（防御）。
+    // 块 id 与标签 id 在批 6d 前是不同域，边键必须落块 id 域。
+    auto pushBlockId = [&all, &targets](int labelId) {
+        if (const Block* l1 = findBlockByLabel(all, labelId)) {
             targets.push_back(l1->id);
         }
     };

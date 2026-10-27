@@ -217,10 +217,9 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
 {
     (void)index;
     BackendResult     backendResult;
-    auto*             mn         = method.methodNode;
-    const std::string methodName = mn->name.to_std_string();
-    const std::string methodDesc = mn->desc.to_std_string();
-    const bool        isStatic   = (mn->access & Opcodes::ACC_STATIC) != 0;
+    const std::string methodName = method.name;
+    const std::string methodDesc = method.desc;
+    const bool        isStatic   = (method.access & Opcodes::ACC_STATIC) != 0;
 
     // 构造器/类初始化器不直接标 ACC_NATIVE（JVM 部分实现拒收），MVP 不转。
     if (methodName == "<init>" || methodName == "<clinit>") {
@@ -241,7 +240,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     SSABuilder             ssaBuilder;
     ca::str::Utf8StringArena ssaArena;
     std::string            reason;
-    auto ssa = ssaBuilder.build(blocks, className, methodName, methodDesc, isStatic, mn->maxLocals,
+    auto ssa = ssaBuilder.build(blocks, className, methodName, methodDesc, isStatic, method.maxLocals,
                                 ssaArena, reason);
     if (!ssa) {
         CA_LOGT_ERROR("vmc4", "Skipping {}.{}{}: SSA build failed: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(), reason.c_str());
@@ -589,14 +588,11 @@ void Vmc4Backend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
 {
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
-    auto* mn = method.methodNode;
-    if (mn == nullptr) return;
     if (clazz.dom == nullptr) {
         throw std::runtime_error("vmc4_backend: DOM not synced for native injection");
     }
     const std::string className(clazz.dom->thisName());
-    dom_inject::markMethodNative(clazz, className, mn->name.to_std_string(),
-                                 mn->desc.to_std_string());
+    dom_inject::markMethodNative(clazz, className, method.name, method.desc);
 
     if (className.empty()) return;
     if (impl_->classIds.find(className) != impl_->classIds.end() &&

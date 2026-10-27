@@ -6,7 +6,7 @@
 /// 批 4 起 pre/postprocessor 直接改 DOM（libjbc ClassSession/CodeEditor 载体，
 /// 语义 intern/promote/lower 全走库契约），DOM 是改写权威。会话构造接管
 /// CompilerClass.dom，commit 经 writeClass→readClass 字节往返还回（真实
-/// 编解码器纪律，与 class_dom_sync 同一通道；ClassFile 不可移动——AttrSlot
+/// 编解码器纪律，与管线同步同一通道（批 6d 同步器退役后为唯一通道）；ClassFile 不可移动——AttrSlot
 /// 的 lazy span 指向 source_，移动即悬垂，故不做指针交换捷径）。
 ///
 /// fail-loud：会话打开/提交失败一律抛 std::runtime_error（pipeline 边界
@@ -57,22 +57,20 @@ inline void commitDomEdit(CompilerClass& cls, const std::string& name,
     cls.dom = std::move(read).unwrap().file;
 }
 
-/// @brief CompilerMethod 的 DOM 成员锚定（name+desc 类内唯一，fail-loud）。
+/// @brief 方法身份（name+desc）的 DOM 成员锚定（类内唯一，fail-loud）。
 ///
 /// 读侧共享入口：mark/annotation/filter 族 preprocessor 的方法级查询一律
-/// 经此落 DOM，不再触树节点。
-inline jbc::core::MemberInfo& domMethodFor(CompilerClass& cls, const CompilerMethod& method,
-                                           const std::string& className)
+/// 经此落 DOM（批 6d 树退役后快照 name/desc 即身份源）。
+inline jbc::core::MemberInfo& domMethodFor(CompilerClass& cls, const std::string& name,
+                                           const std::string& desc)
 {
-    auto* dom  = cls.dom.get();
-    const auto name = method.methodNode->name.to_std_string();
-    const auto desc = method.methodNode->desc.to_std_string();
+    auto* dom = cls.dom.get();
     for (auto& dm : dom->methods) {
         if (dom->cp.utf8Equals(dm.nameCp, name) && dom->cp.utf8Equals(dm.descCp, desc)) {
             return dm;
         }
     }
-    throw std::runtime_error("dom_edit: method not in DOM: " + className + "." + name);
+    throw std::runtime_error("dom_edit: method not in DOM: " + name + desc);
 }
 
 }   // namespace mj2x

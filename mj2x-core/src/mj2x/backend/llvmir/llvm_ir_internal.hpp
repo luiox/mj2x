@@ -430,10 +430,11 @@ public:
 
 private:
     CompilerMethod* findTarget(const MethodID& id, std::string& reason);
-    bool            fillTargetFromDescriptor(const std::string& owner, MethodNode& node,
-                                             CallTarget& target, std::string& reason);
-    bool            analyze(const std::string& owner, MethodNode& node, CallTarget& target,
-                            std::string& reason);
+    bool            fillTargetFromDescriptor(const std::string& owner,
+                                             const CompilerMethod& node, CallTarget& target,
+                                             std::string& reason);
+    bool            analyze(const std::string& owner, CompilerClass& clazz,
+                            const CompilerMethod& node, CallTarget& target, std::string& reason);
 
     CompilerIndex&                     index_;
     const std::string&                 className_;

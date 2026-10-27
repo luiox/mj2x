@@ -394,21 +394,16 @@ std::string moveInit(jbc::ir::ClassSession& session, CompilerClass& cls,
     return genName;
 }
 
-/// gen 元数据的树影子：CompilerMethod 以 methodNode 为身份源，markAll 等
-/// DOM 读侧 pass 仍按 name+desc 锚定 cls.methods。空壳 MethodNode（无指令）
-/// 只活到 syncDomToTree 重建树为止，保持 markAll 能标记生成方法。
-void mirrorGenToTree(CompilerIndex& index, CompilerClass& cls, const std::string& genName,
-                     const std::string& genDesc, ca::u32 access)
+/// gen 元数据快照落位：批 6d 树退役后 CompilerMethod 快照即方法身份源，
+/// markAll 等 pass 按 name+desc 锚定 cls.methods——生成方法直接追加快照
+/// （指令体已在 DOM 会话内建好，快照只承载元数据与管线旗标）。
+void mirrorGenToSnapshot(CompilerClass& cls, const std::string& genName,
+                         const std::string& genDesc, ca::u32 access)
 {
-    auto& arena = index.arena();
-    auto  gen   = std::make_unique<jbytecode::tree::MethodNode>(
-        access, arena.intern(genName.c_str()), arena.intern(genDesc.c_str()),
-        arena.intern(""), std::vector<ca::str::Utf8StringRef>{});
-    auto* genPtr = gen.get();
-    cls.classNode->methods.push_back(genPtr);
-    (void)gen.release();   // 树节点由 classNode 列表统一持有
     CompilerMethod cm;
-    cm.methodNode = genPtr;
+    cm.name   = genName;
+    cm.desc   = genDesc;
+    cm.access = static_cast<ca::u16>(access);
     cls.methods.push_back(std::move(cm));
 }
 
@@ -435,19 +430,19 @@ void InitClinitMoverPreprocessor::process(CompilerIndex& index)
             if (mname == "<clinit>") {
                 auto genName = moveClinit(*session, cls, dm, name);
                 if (!genName.empty()) {
-                    mirrorGenToTree(index, cls, genName, "()V",
-                                    Opcodes::ACC_STATIC | Opcodes::ACC_PRIVATE
-                                        | Opcodes::ACC_SYNTHETIC);
+                    mirrorGenToSnapshot(cls, genName, "()V",
+                                        Opcodes::ACC_STATIC | Opcodes::ACC_PRIVATE
+                                            | Opcodes::ACC_SYNTHETIC);
                 }
             }
             else if (mname == "<init>") {
                 const auto   desc    = std::string(session->backing().descOf(dm));
                 auto         genName = moveInit(*session, cls, dm, name);
                 if (!genName.empty()) {
-                    mirrorGenToTree(index, cls, genName,
-                                    "(L" + name + ";" + desc.substr(1),
-                                    Opcodes::ACC_STATIC | Opcodes::ACC_PRIVATE
-                                        | Opcodes::ACC_SYNTHETIC);
+                    mirrorGenToSnapshot(cls, genName,
+                                        "(L" + name + ";" + desc.substr(1),
+                                        Opcodes::ACC_STATIC | Opcodes::ACC_PRIVATE
+                                            | Opcodes::ACC_SYNTHETIC);
                 }
             }
         }
