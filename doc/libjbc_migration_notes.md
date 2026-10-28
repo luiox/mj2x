@@ -394,3 +394,34 @@ vector。(5) indy 站点 insertBefore 静默吞错改显式抛（部分插入即
 908 过 / 0 败 / 11 工具链门控跳过 / 9 disabled（总量 928），exit 0，对齐批 6a 基线。
 排障记录：第 3 轮 tail 管道吞掉 FAILED 块（860+11≠919 账不平暴露），第 4 轮落盘
 重跑还原 48 项失败清单——读 gtest 汇总先核对 ran = 过 + 败 + 跳 恒等式再下结论。
+
+## 批 6f 补记：CI 双门与 corpus 回归修复（d7d7f79..31a44b1，2026-10-29）
+
+PR #34 首轮 CI 双挂揭出 unittest 之外的整层验证面：integration 套件（230 项，
+含 java_corpus 语料 × 三后端差分对拍 + 真实 JVM 运行）从未本地跑过。修复五簇：
+
+**移植性**。runWithDomSync 的 Pass& 临时绑定 MSVC 放行、GCC 整 TU 编译失败
+——签名改转发引用。
+
+**字节保真**。CP 内容是 modified UTF-8：arena.intern 校验对孤代理对返回空视图，
+字符串常量整条变空（TextUnicode 首曝）——CP 来源一律 intern_raw，下游三个
+to_std_string 消费点改原始字节。
+
+**帧锚定**。DOM converter 丢了树 reader 的帧节点——converter 从 Code 嵌套 SMT
+重建 MIRFrame（链式 delta 还原 pc；lower 的 relocation 已把 SMT 重锚到与
+srcPc 同域），vmc4 边拷贝对死槽类型冲突合并（javac 槽位复用 + TOP 杀槽）
+退回源操作数类型。
+
+**DOM 编辑契约**。indy 站点可为分支目标（erase StillUsed）——replaceAllUses
+先重定向；合成局部索引 > 0xFF 须 wide 前缀；replaceMethodBody 全量擦除后孤儿
+标签槽失锚须显式销毁、旧 LNT/SMT 嵌套属性须随体丢弃；clinit 注入的硬编码
+LDC 在大常量池类超 u8——loadConst 自动升 LDC_W。
+
+**会话接管盲区**。openDomEdit move 语义下 cls.dom 为空——宿主包判定（6e）
+与同类的 dom 读取在会话期间恒空：当前类一律经 session->backing() 读
+（LambdasCapture：SAM 在本类，嵌套判定静默跳过 → 包私有 SAM 跨包
+IllegalAccessError）。同类隐患面：任何「会话期间经 index 读本类 dom」的路径。
+
+**终验（第 6 轮）**：unittest 919 可跑 908 过 / 0 败 exit 0；integration 230 项
+225 过 / 5 工具链门控跳过 exit 0。读 gtest 输出的教训补一条：CA_LOGT 的 tag 未
+注册时日志静默丢弃——插桩先用已知可打印的 tag 验证通路，再换业务 tag。
