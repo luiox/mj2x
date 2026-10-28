@@ -21,6 +21,9 @@ void MultiANewArrayPreprocessor::process(CompilerIndex& index)
             auto code = cls.dom->decodeCode(dm);
             if (code.is_err()) continue;
             auto* attr = std::move(code).unwrap();
+            // decodeCode 对无 Code 方法（abstract/native，如接口的抽象方法）
+            // 返回 Ok(nullptr)——只查 is_err 不查 null 即空指针解引用。
+            if (attr == nullptr) continue;
             auto insns = jbc::core::decodeInsns(
                 jbc::core::ByteView{attr->code.data(), attr->code.size()});
             if (insns.is_err()) continue;

@@ -28,6 +28,16 @@ namespace {
 constexpr char kTagArg   = '\x01';
 constexpr char kTagConst = '\x02';
 
+/// 合成局部访问：索引 > 0xFF 必须带 wide 前缀（JVMS wide 修饰），否则导出
+/// 编码放不下——WideLocals 首曝：拼接参数溢出槽 378 的 LSTORE/LLOAD 走非
+/// wide 形态，lower 导出 BadInstructions。
+jbc::ir::Insn synthLocal(jbc::core::Op op, ca::u32 idx)
+{
+    auto in = jbc::ir::CodeEditor::local(op, idx);
+    if (idx > 0xFF) in.wide = true;
+    return in;
+}
+
 // 字符串 → Utf8StringRef（经 arena intern）。arena 归 CompilerIndex 持有，比预处理期长命。
 ca::str::Utf8StringRef intern(ca::str::Utf8StringArena& arena, const char* s)
 {
@@ -140,7 +150,8 @@ void emitAppendStringSeq(jbc::ir::ClassSession& session, std::vector<jbc::ir::In
 //（行号语义不变：替换首条就是原 lambda/拼接语句的位置）。
 bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit,
                          jbc::ir::CodeEditor& editor, jbc::ir::InsnId at, const DomIndySite& site,
-                         bool withConstants, ca::u32 srcPc, ca::str::Utf8StringArena& arena)
+                         bool withConstants, ca::u32 srcPc, ca::str::Utf8StringArena& arena,
+                         jbc::ir::InsnId* firstPlacedOut)
 {
     const std::string indyDesc = site.desc;
     std::vector<Type> argTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
@@ -192,7 +203,7 @@ bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit
     // 1. 逆序把栈上参数存进局部槽（栈顶是最后一个参数）。
     for (size_t r = argTypes.size(); r > 0; --r) {
         const size_t i = r - 1;
-        seq.push_back(jbc::ir::CodeEditor::local(
+        seq.push_back(synthLocal(
             static_cast<jbc::core::Op>(storeOpcode(argTypes[i].getSort())),
             static_cast<ca::u32>(argSlot[i])));
     }
@@ -223,7 +234,7 @@ bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit
         if (c == kTagArg) {
             flushPending();
             const Type& t = argTypes[nextArg];
-            seq.push_back(jbc::ir::CodeEditor::local(
+            seq.push_back(synthLocal(
                 static_cast<jbc::core::Op>(loadOpcode(t.getSort())),
                 static_cast<ca::u32>(argSlot[nextArg])));
             jbc::ir::Insn append;
@@ -274,6 +285,7 @@ bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit
             firstPlaced = std::move(placed).unwrap();
         }
     }
+    if (firstPlacedOut != nullptr) *firstPlacedOut = firstPlaced;
     if (srcPc != jbc::ir::kNoPc && firstPlaced != jbc::ir::kNoInsn) {
         auto mut = unit.dom.get(firstPlaced);
         if (mut.is_ok()) std::move(mut).unwrap()->srcPc = srcPc;
@@ -1405,10 +1417,23 @@ struct PendingLambdaClass
 ///
 /// 返回宿主包（包内带尾随 '/'；default 包=空串；"mj2x/lambda/" = 维持现状）。
 /// 注意本修复是生成器侧：已发布产物遇包私有 SAM 不会自动治愈，需重转换。
-std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& ifaceInternal)
+std::string pickLambdaSynthHostPackage(CompilerIndex& index, jbc::ir::ClassSession* currentSession,
+                                       const std::string& ifaceInternal)
 {
-    if (auto* ifaceCls = index.getClass(ifaceInternal)) {
-        if (ifaceCls->dom != nullptr && (ifaceCls->dom->access & Opcodes::ACC_PUBLIC) == 0) {
+    // 当前类被会话接管时 cls.dom 为空（openDomEdit move 语义），当前类的
+    // 读取经 session->backing()（LambdasCapture 首曝：SAM 在本类，嵌套判定
+    // 全程 null dom → 恒落 mj2x/lambda → 包私有 SAM 跨包 IllegalAccessError）。
+    const auto domOf = [&](const std::string& name) -> jbc::core::ClassFile* {
+        auto* cls = index.getClass(name);
+        if (cls != nullptr && cls->dom != nullptr) return cls->dom.get();
+        if (cls != nullptr && currentSession != nullptr
+            && std::string(currentSession->backing().thisName()) == name) {
+            return &currentSession->backing();
+        }
+        return nullptr;
+    };
+    if (jbc::core::ClassFile* ifaceDom = domOf(ifaceInternal)) {
+        if ((ifaceDom->access & Opcodes::ACC_PUBLIC) == 0) {
             const std::size_t slash = ifaceInternal.rfind('/');
             return slash == std::string::npos ? std::string()
                                               : ifaceInternal.substr(0, slash + 1);
@@ -1424,13 +1449,12 @@ std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& 
     // 顶层类无法被跨包引用，引用方对其访问必已由 public 保证）。
     for (std::size_t dollar = ifaceInternal.find('$'); dollar != std::string::npos;
          dollar     = ifaceInternal.find('$', dollar + 1)) {
-        auto* outerCls = index.getClass(ifaceInternal.substr(0, dollar));
-        if (outerCls == nullptr || outerCls->dom == nullptr) continue;
-        auto& outerDom = *outerCls->dom;
-        for (auto& slot : outerDom.attrs) {
+        jbc::core::ClassFile* outerDom = domOf(ifaceInternal.substr(0, dollar));
+        if (outerDom == nullptr) continue;
+        for (auto& slot : outerDom->attrs) {
             if (slot.body == nullptr) {
                 // 类级旁路槽 lazy 解码（失败即放弃嵌套判定，维持 mj2x/lambda 零漂移）。
-                if (outerDom.decodeAttr(slot).is_err()) continue;
+                if (outerDom->decodeAttr(slot).is_err()) continue;
             }
             if (slot.body == nullptr ||
                 slot.body->kind() != jbc::core::AttrKind::InnerClasses) {
@@ -1438,7 +1462,7 @@ std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& 
             }
             const auto& icAttr = *ca::core::tag_cast::cast<jbc::core::InnerClassesAttr>(slot.body.get());
             for (const auto& row : icAttr.rows) {
-                if (std::string(outerDom.className(row.innerClassInfoCp)) != ifaceInternal) {
+                if (std::string(outerDom->className(row.innerClassInfoCp)) != ifaceInternal) {
                     continue;
                 }
                 if ((row.accessFlags & Opcodes::ACC_PUBLIC) == 0) {
@@ -1463,7 +1487,8 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
                          jbc::ir::CodeUnit& unit, jbc::ir::CodeEditor& editor, jbc::ir::InsnId at,
                          const DomIndySite& site, ca::u32 srcPc, int& synthCounter,
                          std::vector<PendingLambdaClass>&  pending,
-                         std::vector<PendingAccessFix>&    pendingAccessFixes)
+                         std::vector<PendingAccessFix>&    pendingAccessFixes,
+                         jbc::ir::InsnId*                  firstPlacedOut)
 {
     // 前置判定与 classifyIndySite 共用同一谓词（判定=展开零漂移，设计文档 §2/§5）。
     // 不支持的形态（收窄 / 装箱+加宽 / 未知 flags / 字段句柄等）保持 indy 原样、交 SSA fail-closed。
@@ -1505,7 +1530,7 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
     // 同名类防碰撞（用户类与库类一并算占用，合成类绝不顶替既有条目）：
     // 探测前跳；成功后把计数器推到选中名之后（出参语义），同 run 后续站点不会再
     // 探到本站点占用名。
-    const std::string hostPkg = pickLambdaSynthHostPackage(index, ifaceInternal);
+    const std::string hostPkg = pickLambdaSynthHostPackage(index, &session, ifaceInternal);
     std::string synthName;
     int         n = synthCounter;
     for (;; ++n) {
@@ -1547,7 +1572,7 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
         // 逆序 xSTORE（栈顶 capN-1 先存）。
         for (size_t r = capturedTypes.size(); r > 0; --r) {
             const size_t i = r - 1;
-            seq.push_back(jbc::ir::CodeEditor::local(
+            seq.push_back(synthLocal(
                 static_cast<jbc::core::Op>(storeOpcode(capturedTypes[i].getSort())),
                 static_cast<ca::u32>(capSlot[i])));
         }
@@ -1559,7 +1584,7 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
         seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::DUP));
         int loadStack = 0;
         for (size_t i = 0; i < capturedTypes.size(); ++i) {
-            seq.push_back(jbc::ir::CodeEditor::local(
+            seq.push_back(synthLocal(
                 static_cast<jbc::core::Op>(loadOpcode(capturedTypes[i].getSort())),
                 static_cast<ca::u32>(capSlot[i])));
             loadStack += slotSize(capturedTypes[i].getSort());
@@ -1588,6 +1613,7 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
             firstPlaced = std::move(placed).unwrap();
         }
     }
+    if (firstPlacedOut != nullptr) *firstPlacedOut = firstPlaced;
     if (srcPc != jbc::ir::kNoPc && firstPlaced != jbc::ir::kNoInsn) {
         auto mut = unit.dom.get(firstPlaced);
         if (mut.is_ok()) std::move(mut).unwrap()->srcPc = srcPc;
@@ -1670,23 +1696,38 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
 
                 bool siteExpanded = false;
                 bool wc           = false;
+                jbc::ir::InsnId   firstPlacedOfSite{};
                 if (isStringConcatSite(&site.bsm, wc)) {
                     siteExpanded =
                         expandConcatSiteDom(*session, *unit, editor, id, site, wc, in->srcPc,
-                                            arena);
+                                            arena, &firstPlacedOfSite);
                     if (siteExpanded) ++expanded;
                 }
                 else if (isLambdaMetafactorySite(&site.bsm)) {
                     siteExpanded = expandLambdaSiteDom(index, *session, *unit, editor, id, site,
                                                        in->srcPc, synthCounter,
-                                                       pendingLambdaClasses, pendingAccessFixes);
+                                                       pendingLambdaClasses, pendingAccessFixes,
+                                                       &firstPlacedOfSite);
                     if (siteExpanded) ++lambdaExpanded;
                 }
                 if (siteExpanded) {
+                    // 站点可为分支目标（如循环出口直落 concat）：引用者先重定向到
+                    // 首条替换指令，否则 erase 按 StillUsed 拒绝。
+                    if (!unit->dom.usersOf(id).empty()) {
+                        auto retarget = unit->dom.replaceAllUses(id, firstPlacedOfSite);
+                        if (retarget.is_err()) {
+                            throw std::runtime_error(
+                                "invokedynamic_preprocessor: retarget indy site users failed "
+                                "for " + name + " method #" + std::to_string(mi) + ": "
+                                + jbc::ir::to_string(retarget.unwrap_err()));
+                        }
+                    }
                     auto erased = editor.erase(id);
                     if (erased.is_err()) {
-                        throw std::runtime_error("invokedynamic_preprocessor: erase indy site failed for "
-                                                 + name + " method #" + std::to_string(mi));
+                        throw std::runtime_error(
+                            "invokedynamic_preprocessor: erase indy site failed for " + name
+                            + " method #" + std::to_string(mi) + ": "
+                            + jbc::ir::to_string(erased.unwrap_err()));
                     }
                     ++methodExpanded;
                     changed = true;

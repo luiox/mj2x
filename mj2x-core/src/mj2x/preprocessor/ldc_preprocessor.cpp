@@ -22,6 +22,7 @@
 
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "mj2x/core/dom_edit.hpp"
+#include "mj2x/core/jvm_type.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -157,7 +158,15 @@ void expandHandleSite(jbc::ir::ClassSession& session, jbc::ir::CodeEditor& edito
             (void)editor.insertBefore(at, std::move(getType));
         }
         else {
-            emitClassLdc(session, editor, at, desc);
+            // 字段类型描述符 → Class 常量要求的内部名（findGetter 第 3 参是
+            // Class 对象；直传描述符成非法类名——LdcMhSample ClassFormatError
+            // 首曝）。数组类型 getInternalName 保留描述符形态（JVMS 数组类
+            // LDC 写描述符）。
+            ca::str::Utf8StringArena scratch;
+            emitClassLdc(session, editor, at,
+                         std::string(mj2x::Type::getType(
+                                         ca::str::Utf8StringRef::from_string_view(desc))
+                                         .getInternalName(scratch)));
         }
         break;
     }
