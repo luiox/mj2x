@@ -1629,10 +1629,13 @@ void writeFileIfNeeded(const std::filesystem::path& path, const std::string& con
 void RegCBackend::finalize(const CompilerIndex& index)
 {
     (void)index;
+    resetDiagnostics();
 
     // #1193 转换结束汇总：整 jar 内联发生面 + 不可解析调用点样例（可见化，
     // 不再静默）。unresolvable>0 说明存在内联机会因 callee 不可解析而放弃
     // （缓存外形状：library 类、超大小门、synchronized 等）。
+    // T1：unresolvable>0 即降级事实，同入诊断聚合（samples 原样搬运），
+    // 管线/CLI 可编程消费；日志口径不变。
     if (inlineEnabled_ &&
         (impl_->inlineTotalInlined > 0 || impl_->inlineTotalUnresolvable > 0)) {
         CA_LOGT_INFO("regc", "inline summary: inlined={} unresolvable={}\n",
@@ -1645,6 +1648,9 @@ void RegCBackend::finalize(const CompilerIndex& index)
             }
             CA_LOGT_WARN("regc", "inline unresolvable samples (cap {}): {}\n",
                          size_t(kUnresolvableSampleCap), samples.c_str());
+            adoptDiagnostics(
+                std::vector<std::string>(impl_->inlineUnresolvableSamples.begin(),
+                                         impl_->inlineUnresolvableSamples.end()));
         }
     }
 

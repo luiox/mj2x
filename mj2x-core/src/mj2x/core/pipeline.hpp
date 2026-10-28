@@ -19,6 +19,7 @@
 #include "mj2x/preprocessor/preprocessor.hpp"
 #include "mj2x/postprocessor/postprocessor.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,6 +49,10 @@ public:
     /// 运行完整流水线，返回 0 表示成功。
     int run();
 
+    /// @brief run() 后可查：全部后端 finalize 期降级告警总数（T1 聚合面）。
+    /// @details 编程消费入口（corpus 门禁等）；0 = 无降级。
+    std::size_t finalizeWarningCount() const { return finalizeWarningCount_; }
+
 private:
     void loadInput();
     void runPreprocessors();
@@ -60,6 +65,7 @@ private:
     std::vector<std::unique_ptr<Backend>>       backends_;
     std::vector<std::unique_ptr<Preprocessor>>  preprocs_;
     std::vector<std::unique_ptr<Postprocessor>> postprocs_;
+    std::size_t                                 finalizeWarningCount_ = 0;
 };
 
 }   // namespace mj2x

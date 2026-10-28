@@ -143,6 +143,19 @@ void Pipeline::compileMethods()
     }
 
     for (auto& backend : backends_) backend->finalize(*index_);
+
+    // T1 finalize 诊断聚合：降级告警（RegC 内联放弃 / VMC4 配置冲突等）此前
+    // 散在各 tag 的 WARN 里，这里单行摘要统一口径；编程消费面走
+    // backend->diagnostics()。
+    for (auto& backend : backends_) {
+        const auto& diag = backend->diagnostics();
+        if (diag.warnings == 0) continue;
+        finalizeWarningCount_ += diag.warnings;
+        std::string first = diag.samples.empty() ? std::string() : diag.samples.front();
+        if (!first.empty()) first = ": " + first;
+        CA_LOGT_WARN("pipeline", "finalize diagnostics [{}]: {} warning(s){}\n",
+                     backend->name(), diag.warnings, first.c_str());
+    }
 }
 
 void Pipeline::runPostprocessors()

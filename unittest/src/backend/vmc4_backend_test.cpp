@@ -3160,3 +3160,28 @@ TEST(Vmc4BackendTest, RegfileControlFlowDecodeCoversWholeProgram)
         }
     }
 }
+
+/// T1 诊断聚合：VMC4 配置冲突的 WARN 同入诊断面（日志文本不变），管线/CLI
+/// 经 diagnostics() 编程消费；后端复用时 finalize 入口清零不跨 run 叠加。
+TEST(Vmc4BackendTest, FinalizeRecordsConfigConflictDiagnosticsAndResets)
+{
+    Vmc4Options opts;
+    opts.programBlockLazyDecrypt = true;   // 缺 encrypt → block-lazy 档冲突
+    Vmc4Backend backend;
+    backend.setOptions(opts);
+    backend.setOutputPath("unused.c");
+
+    CompilerIndex index;
+    backend.finalize(index);
+    ASSERT_EQ(backend.diagnostics().warnings, 1u);
+    ASSERT_FALSE(backend.diagnostics().samples.empty());
+    EXPECT_NE(backend.diagnostics().samples.front().find("block-lazy"), std::string::npos)
+        << backend.diagnostics().samples.front();
+
+    // 复用 backend：改回干净选项再 finalize，诊断须清零（不跨 run 叠加）。
+    opts.programBlockLazyDecrypt = false;
+    backend.setOptions(opts);
+    backend.finalize(index);
+    EXPECT_EQ(backend.diagnostics().warnings, 0u);
+    EXPECT_TRUE(backend.diagnostics().samples.empty());
+}
