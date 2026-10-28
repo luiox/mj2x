@@ -110,8 +110,10 @@ inline void prependClinitRegisterCall(CompilerClass& cls, const std::string& cla
         const auto          anchor = unit->dom.first();
         std::vector<jbc::ir::Insn> prefix;
         prefix.push_back(jbc::ir::CodeEditor::loadConst(session->internInteger(classId)));
-        prefix.push_back(jbc::ir::CodeEditor::cpInsn(
-            jbc::core::Op::LDC, session->internClass(dom.thisName())));
+        // loadConst（索引 > 0xFF 自动升 LDC_W）：cpInsn 硬编码 LDC 在大常量池类
+        // 索引超 u8，导出 bad instructions（IntrinsicSurface/StringsAndBoxing 首曝）。
+        prefix.push_back(
+            jbc::ir::CodeEditor::loadConst(session->internClass(dom.thisName())));
         prefix.push_back(jbc::ir::CodeEditor::cpInsn(
             jbc::core::Op::INVOKESTATIC,
             session->internMethodRef(bridgeClass, bridgeName, bridgeDesc)));
@@ -165,8 +167,23 @@ inline void replaceMethodBody(
     auto unit = std::move(promoted).unwrap();
 
     // 全量重建：逐条 erase 首条直至清空（句柄域稳定）；异常表/调试属性引用
-    // 旧布局，随体丢弃。
+    // 旧布局，随体丢弃。erase 不清除标签槽（导入期 ControlFlow 标签留槽失锚），
+    // 残留孤儿标签会让后续 lower 按「目标未锚定」拒绝——IntrinsicSurface 首
+    // 曝（clinit 含 LVT 搬运被弃，原体带分支标签，重建后 lower bad
+    // instructions）——擦除前收集全部引用标签，清空后统一销毁。
     {
+        std::vector<jbc::ir::LabelId> doomed;
+        for (auto id2 : unit->dom.order()) {
+            const auto* din = unit->dom.peek(id2);
+            if (din == nullptr) continue;
+            if (din->target != jbc::ir::kNoLabel) doomed.push_back(din->target);
+            for (auto t : din->targets) doomed.push_back(t);
+        }
+        for (const auto& e : unit->exc) {
+            doomed.push_back(e.start);
+            doomed.push_back(e.end);
+            doomed.push_back(e.handler);
+        }
         jbc::ir::CodeEditor editor(*unit);
         while (unit->dom.size() > 0) {
             auto erased = editor.erase(unit->dom.first());
@@ -175,8 +192,17 @@ inline void replaceMethodBody(
                                          + name);
             }
         }
+        unit->exc.clear();
+        for (auto lbl : doomed) (void)unit->dom.destroyLabel(lbl);
+        // 嵌套调试属性（LNT/LVT/SMT）引用旧布局：随体丢弃——lower 的嵌套
+        // 属性重定位按旧锚执行，体已全换则无锚可依。
+        for (auto& slot : session->backing().methods[mi].attrs) {
+            if (!session->backing().cp.utf8Equals(slot.nameCp, "Code")) continue;
+            auto* body = slot.mutate();
+            if (body != nullptr) static_cast<jbc::core::CodeAttr&>(*body).attrs.clear();
+            break;
+        }
     }
-    unit->exc.clear();
     {
         jbc::ir::CodeEditor editor(*unit);
         emit(*session, editor);

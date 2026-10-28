@@ -135,8 +135,9 @@ void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, Compil
                 (void)editor.append(std::move(in));
             };
             add(jbc::ir::CodeEditor::loadConst(session.internInteger(classId)));
-            add(jbc::ir::CodeEditor::cpInsn(jbc::core::Op::LDC,
-                                            session.internClass(session.backing().thisName())));
+            // loadConst（索引 > 0xFF 自动升 LDC_W）：cpInsn 硬编码 LDC 在大常量池
+            // 类（IntrinsicSurface 20 拼接站点）索引超 u8，导出 bad instructions。
+            add(jbc::ir::CodeEditor::loadConst(session.internClass(session.backing().thisName())));
             jbc::ir::Insn call;
             call.op = jbc::core::Op::INVOKESTATIC;
             call.cp = session.internMethodRef(kRegisterBridgeClassName, kRegisterBridgeMethodName,

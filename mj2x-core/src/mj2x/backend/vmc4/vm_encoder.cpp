@@ -1241,8 +1241,11 @@ bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edg
     for (const auto& copy : edge.copies) {
         VmType type;
         if (!toVmType(copy.dest.type, type)) {
-            reason = "edge copy dest type not supported in MVP";
-            return false;
+            // UNKNOWN dest = 死槽位的跨作用域类型冲突合并（javac 槽位复用 +
+            // R1 每槽建 arg 策略，如 catch 的 e 槽复用为后续 int——SMT 已以 TOP
+            // 杀槽，arg 值实际不活）。边拷贝只是搬位：寄存器形态退回源操作数
+            // 类型；源同样不可映射时按 undef 源同口径落 NULL 引用。
+            if (!toVmType(copy.source.type, type)) type = VmType::REF;
         }
         uint16_t dest;
         if (!ctx.mapDest(copy.dest, dest, reason)) return false;
