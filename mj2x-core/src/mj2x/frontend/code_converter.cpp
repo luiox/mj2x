@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <sstream>
 #include <string>
 #include "jbc/core/insn_codec.hpp"
@@ -17,6 +18,106 @@
 #include "libca/str/utf8_string.hpp"
 
 namespace mj2x {
+
+
+// -- StackMapTable → MIRFrame 重建 --
+//
+// DOM 读取路径（批 3b/6d）丢了树 reader 的帧节点：SSA 的块栈参数类型只能靠
+// 前驱推断，verifier 分裂块 / handler 入口退 UNKNOWN，vmc4 边拷贝编码
+// fail-closed（java_corpus ArithEdges 首曝）。这里从 Code 嵌套 SMT 重建帧序：
+// lower 的 relocation 已把 SMT pc 重锚到新布局（与存活指令 srcPc 同域），
+// 链式 delta 还原 pc，形态标签映射 ASM 语义帧型。消费面（SSA
+// stackArgTypes/appendFrameStackTypes）只读 FULL/SAME1 的栈项，APPEND/CHOP
+// 无需持久栈推导。
+
+struct DomFrame
+{
+    int                        frameType = 0;
+    std::vector<PrimitiveKind> stackTypes;
+};
+
+static PrimitiveKind smtTagToKind(ca::u8 tag)
+{
+    using VT = jbc::core::StackMapTableAttr::VType;
+    switch (tag) {
+    case VT::kInteger: return PrimitiveKind::INT;
+    case VT::kFloat: return PrimitiveKind::FLOAT;
+    case VT::kLong: return PrimitiveKind::LONG;
+    case VT::kDouble: return PrimitiveKind::DOUBLE;
+    default: return tag == VT::kTop ? PrimitiveKind::VOID : PrimitiveKind::OBJECT;
+    }
+}
+
+static std::map<ca::u32, DomFrame> framesByPc(jbc::core::ClassFile& cf,
+                                              jbc::core::CodeAttr& code)
+{
+    using Smt = jbc::core::StackMapTableAttr;
+    std::map<ca::u32, DomFrame> out;
+    const Smt*                  smt = nullptr;
+    for (auto& slot : code.attrs) {
+        if (!cf.cp.utf8Equals(slot.nameCp, "StackMapTable")) continue;
+        if (slot.peek() != nullptr) {
+            smt = ca::core::tag_cast::cast<Smt>(slot.peek());
+            break;
+        }
+        auto decoded = cf.decodeAttr(slot);
+        if (decoded.is_err()) return out;
+        smt = ca::core::tag_cast::cast<Smt>(std::move(decoded).unwrap());
+        break;
+    }
+    if (smt == nullptr) return out;
+
+    // 帧链：首帧 offset 直取；后续 pc = prev + delta + 1（JVMS 4.7.4）。
+    ca::u32 prevPc    = 0;
+    bool    first     = true;
+    for (const auto& f : smt->frames) {
+        ca::u32                    delta     = 0;
+        int                        frameType = Opcodes::F_SAME;
+        std::vector<PrimitiveKind> stack;
+        if (f.type <= Smt::Frame::kSameMax) {
+            delta     = f.type;
+            frameType = Opcodes::F_SAME;
+        }
+        else if (f.type <= Smt::Frame::kSame1Max) {
+            delta     = f.type - Smt::Frame::kSame1Base;
+            frameType = Opcodes::F_SAME1;
+        }
+        else if (f.type == Smt::Frame::kSame1Ext) {
+            delta     = f.offset;
+            frameType = Opcodes::F_SAME1;
+        }
+        else if (f.type <= Smt::Frame::kChopMin) {
+            delta     = f.offset;
+            frameType = Opcodes::F_CHOP;
+        }
+        else if (f.type == Smt::Frame::kSameExt) {
+            delta     = f.offset;
+            frameType = Opcodes::F_SAME;
+        }
+        else if (f.type <= Smt::Frame::kAppendMax) {
+            delta     = f.offset;
+            frameType = Opcodes::F_APPEND;
+        }
+        else if (f.type == Smt::Frame::kFull) {
+            delta     = f.offset;
+            frameType = Opcodes::F_FULL;
+        }
+        else {
+            continue;   // 128..246 保留段：不出现于合法输入
+        }
+        if (frameType == Opcodes::F_FULL || frameType == Opcodes::F_SAME1) {
+            for (const auto& v : f.stack) {
+                const PrimitiveKind k = smtTagToKind(v.tag);
+                if (k != PrimitiveKind::VOID) stack.push_back(k);
+            }
+        }
+        const ca::u32 pc = first ? delta : prevPc + delta + 1;
+        first           = false;
+        prevPc          = pc;
+        out.emplace(pc, DomFrame{frameType, std::move(stack)});
+    }
+    return out;
+}
 
 
 static PrimitiveKind castSourceType(int opcode)
@@ -181,6 +282,8 @@ struct CodeConverter::Impl
     /// 不得用指针截断 int 作块 id——x64 堆地址截断可为负（ASLR 依赖），
     /// 会把 isTarget/异常表回填随机打挂。
     std::unordered_map<ca::u32, int> labelIdByPc;
+    /// @brief SMT 重建帧（pc → 帧型 + 栈项）；批 6f 恢复树 reader 的帧锚定。
+    std::map<ca::u32, DomFrame>      framesByPcMap;
     int                              nextLabelId = 1;
 
     /// @brief 目标 pc → 标签 id（批 6d 标签 id 化：同一 pc 恒同一 id）。
@@ -967,16 +1070,22 @@ void CodeConverter::processInsn(const jbc::core::RawInsn& in)
             node->value = doubleFromBits(entry.lval);
             break;
         case jbc::core::CpTag::String:
+            // CP 内容恒为 modified UTF-8：intern 校验对孤代理对/C0 80 返回空视图
+            // （TextUnicode 代理对常量整条变空首曝），一律 intern_raw（jbc addUtf8
+            // 同口径）。
             node->type  = PrimitiveKind::OBJECT;
-            node->value = impl_->arena->intern(impl_->utf8(entry.a));
+            node->value = impl_->arena->intern_raw(impl_->utf8(entry.a).data(),
+                                                   impl_->utf8(entry.a).byte_length());
             break;
         case jbc::core::CpTag::Class:
             node->type  = PrimitiveKind::OBJECT;
-            node->value = Type::getObjectType(impl_->arena->intern(impl_->utf8(entry.a)));
+            node->value = Type::getObjectType(impl_->arena->intern_raw(
+                impl_->utf8(entry.a).data(), impl_->utf8(entry.a).byte_length()));
             break;
         case jbc::core::CpTag::MethodType:
             node->type  = PrimitiveKind::OBJECT;
-            node->value = Type::getMethodType(impl_->arena->intern(impl_->utf8(entry.a)));
+            node->value = Type::getMethodType(impl_->arena->intern_raw(
+                impl_->utf8(entry.a).data(), impl_->utf8(entry.a).byte_length()));
             break;
         default:
             // LDC Handle / ConstantDynamic：不能静默翻成 null（行为悄悄漂移），
@@ -1075,6 +1184,15 @@ void CodeConverter::translateInstructions(const std::vector<jbc::core::RawInsn>&
 
         if (!impl_->currentBlock) impl_->currentBlock = getOrCreateBlock(0);
 
+        // 帧锚定：SMT 帧落在本 pc 的块首（lower 重锚后与 srcPc 同域）。树 reader
+        // 时代的帧节点消费面（SSA 块栈参数类型）依赖此锚定。
+        if (auto fit = impl_->framesByPcMap.find(in.pc); fit != impl_->framesByPcMap.end()) {
+            auto node        = std::make_unique<MIRFrame>();
+            node->frameType  = fit->second.frameType;
+            node->stackTypes = fit->second.stackTypes;
+            impl_->currentBlock->nodes.push_back(std::move(node));
+        }
+
         // 维护块内指令序号范围。
         if (impl_->currentBlock->firstInsnIdx < 0) {
             impl_->currentBlock->firstInsnIdx = static_cast<int>(idx);
@@ -1115,6 +1233,7 @@ std::vector<Block*> CodeConverter::convert(jbc::core::ClassFile& cf, ca::usize m
 
     impl_->cf         = &cf;
     impl_->labelIdByPc.clear();
+    impl_->framesByPcMap = (code != nullptr) ? framesByPc(cf, *code) : std::map<ca::u32, DomFrame>();
     impl_->initMethodState(mi.access, cf.descOf(mi));
     if (code != nullptr) analyzeControlFlow(insns, *code);
     buildBlocks();

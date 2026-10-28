@@ -2,6 +2,7 @@
 #include "mj2x/frontend/type_utils.hpp"
 #include "mj2x/core/jvm_type.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
+#include "libca/log/log_macros.hpp"
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 
 #include <cassert>
@@ -81,7 +82,13 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c)
         // separate IR value kind.  The "ldc_string:" prefix marks this opaque
         // as a String LDC; anything after it is the raw UTF-8 content.  Emitter
         // and dump apply their own escaping when rendering.
-        return fn.newOpaque(SSAType::REF, "ldc_string:" + std::get<ca::str::Utf8StringRef>(c->value).to_std_string());
+        // 原始字节拼 tag：to_std_string 语义不保证字节保真，ldc_string 后随
+        // modified UTF-8 原文（消费方 utf8ToModifiedUtf8 对孤代理恒等）。
+        const auto& lit = std::get<ca::str::Utf8StringRef>(c->value);
+        return fn.newOpaque(SSAType::REF,
+                            "ldc_string:"
+                                + std::string(reinterpret_cast<const char*>(lit.data()),
+                                              lit.byte_length()));
     }
     if (std::holds_alternative<Type>(c->value)) {
         // LDC Class 常量（Foo.class）：Type 的 internal name 即 JNI FindClass 需要的路径
@@ -196,6 +203,8 @@ void ensureSuccessorStackArgs(SSABlock* target, const FrameState& fs, SSAFunctio
     // the target is translated later in L1 order.
     for (size_t i = 0; i < fs.stack.size(); ++i) {
         SSAType type = fs.stack[i] ? fs.stack[i]->type : SSAType::UNKNOWN;
+        if (type == SSAType::UNKNOWN) {
+        }
         target->args.emplace_back(
             fn.ids.newValueId(), type, ssaStackValueSlot(static_cast<int>(i)));
     }
@@ -1457,7 +1466,12 @@ void SSABuilder::buildBlocks(SSAFunction& fn, const std::vector<Block*>& l1block
                 if (defs.empty()) continue;
                 // 每个有 def 的 slot 开一个 arg（≥2 源 = 真 phi；1 源 = 冗余但正确）。
                 // 类型从 reaching defs 回看具体 STORE/IINC，供 RegC 保留 long/double 槽语义。
-                sb->args.emplace_back(fn.ids.newValueId(), blockArgType(l1blocks, defs), slot);
+                const SSAType dbgT = blockArgType(l1blocks, defs);
+                if (dbgT == SSAType::UNKNOWN) {
+                    for (const auto& d : defs) {
+                    }
+                }
+                sb->args.emplace_back(fn.ids.newValueId(), dbgT, slot);
             }
         }
 

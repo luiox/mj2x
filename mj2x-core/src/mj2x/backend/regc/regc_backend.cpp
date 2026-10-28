@@ -1187,14 +1187,15 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
             }
         }
         else if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
+            const auto text =
+                std::string(reinterpret_cast<const char*>(p->data()), p->byte_length());
             if (stringEncryptPool != nullptr) {
-                const auto text = p->to_std_string();
                 out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                              stringEncryptPool->encryptedLiteralBuffer(text) + ");");
             }
             else {
                 out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                             codegen::cStringLiteral(p->to_std_string()) + ");");
+                             codegen::cStringLiteral(text) + ");");
             }
         }
         break;

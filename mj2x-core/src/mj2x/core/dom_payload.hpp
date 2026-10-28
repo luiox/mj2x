@@ -34,6 +34,16 @@ inline ca::str::Utf8StringRef domUtf8(const jbc::core::ClassFile& dom, ca::u32 i
     return dom.cp.utf8Ref(idx);
 }
 
+/// @brief CP 来源内容 intern：必须走 intern_raw（modified UTF-8 含孤代理对/
+/// C0 80 一类序列不是合法标准 UTF-8，intern 校验失败返回空视图——TextUnicode
+/// 代理对常量整条变空首曝）。CP 内容按 JVMS 恒为 modified UTF-8，与 jbc
+/// addUtf8 的 intern_raw 口径一致。
+inline ca::str::Utf8StringRef internCpUtf8(ca::str::Utf8StringArena& arena,
+                                           const ca::str::Utf8StringRef& ref)
+{
+    return arena.intern_raw(ref.data(), ref.byte_length());
+}
+
 /// @brief CP MethodHandle → 旧栈 Handle（引用视图 intern 进 arena）。
 inline mj2x::Handle resolveDomHandle(jbc::core::ClassFile& dom, ca::u32 cpIdx,
                                                 ca::str::Utf8StringArena& arena)
@@ -45,9 +55,9 @@ inline mj2x::Handle resolveDomHandle(jbc::core::ClassFile& dom, ca::u32 cpIdx,
     }
     const auto& ref = dom.cp.at(entry.b);      // Methodref / InterfaceMethodref
     const auto& nat = dom.cp.at(ref.b);
-    return mj2x::Handle(entry.a, arena.intern(domUtf8(dom, dom.cp.at(ref.a).a)),
-                                   arena.intern(domUtf8(dom, nat.a)),
-                                   arena.intern(domUtf8(dom, nat.b)),
+    return mj2x::Handle(entry.a, internCpUtf8(arena, domUtf8(dom, dom.cp.at(ref.a).a)),
+                                   internCpUtf8(arena, domUtf8(dom, nat.a)),
+                                   internCpUtf8(arena, domUtf8(dom, nat.b)),
                                    ref.tag == jbc::core::CpTag::InterfaceMethodref);
 }
 
@@ -76,17 +86,17 @@ inline ca::core::Any resolveDomConstPayload(jbc::core::ClassFile& dom, ca::u32 c
         return ca::core::Any(d);
     }
     // Any 载荷里的字符串视图一律先 intern（DOM CP 存储生命周期独立）。
-    case jbc::core::CpTag::String: return ca::core::Any(arena.intern(domUtf8(dom, entry.a)));
+    case jbc::core::CpTag::String: return ca::core::Any(internCpUtf8(arena, domUtf8(dom, entry.a)));
     case jbc::core::CpTag::Class:
         return ca::core::Any(
-            mj2x::Type::getObjectType(arena.intern(domUtf8(dom, entry.a))));
+            mj2x::Type::getObjectType(internCpUtf8(arena, domUtf8(dom, entry.a))));
     case jbc::core::CpTag::MethodType:
         return ca::core::Any(
-            mj2x::Type::getMethodType(arena.intern(domUtf8(dom, entry.a))));
+            mj2x::Type::getMethodType(internCpUtf8(arena, domUtf8(dom, entry.a))));
     case jbc::core::CpTag::MethodHandle: return ca::core::Any(resolveDomHandle(dom, cpIdx, arena));
     case jbc::core::CpTag::Utf8:
         // 旧栈 writer 对 bootstrap arg 的 std::string 载荷 intern 成 CONSTANT_Utf8。
-        return ca::core::Any(arena.intern(domUtf8(dom, cpIdx)));
+        return ca::core::Any(internCpUtf8(arena, domUtf8(dom, cpIdx)));
     default:
         throw std::invalid_argument("dom_payload: unsupported CP tag "
                                     + std::to_string(static_cast<int>(entry.tag))

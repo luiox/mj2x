@@ -243,6 +243,9 @@ struct Opcodes
     static constexpr ca::i32 ACC_SYNCHRONIZED     = 0x0020;
     static constexpr ca::i32 ACC_SYNTHETIC        = 0x1000;
     static constexpr ca::i32 F_FULL               = 0;
+    static constexpr ca::i32 F_APPEND             = 1;
+    static constexpr ca::i32 F_CHOP               = 2;
+    static constexpr ca::i32 F_SAME               = 3;
     static constexpr ca::i32 F_SAME1              = 4;
     static constexpr ca::i32 H_GETFIELD           = 1;
     static constexpr ca::i32 H_GETSTATIC          = 2;
