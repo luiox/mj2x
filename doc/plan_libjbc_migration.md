@@ -123,11 +123,11 @@
 | 批 4a | pre/post 改写载体切 DOM（6 pass + 管线双载体拆段） | ✅ 完成 | 8bf3f79 |
 | 批 4b | invokedynamic preprocessor 切 DOM（树载体收尾） | ✅ 完成 | aefc14b |
 | 批 5 | 四后端 injectIntoClass 切 DOM，编译后同步点消失 | ✅ 完成 | fb80c26 |
-| 批 6a | output 切 writeClass 直出 + modified 类帧重算垫片（全量回归 921 项 908 过 0 败） | ✅ 完成 | c2c9725 |
+| 批 6a | output 切 writeClass 直出 + modified 类帧重算垫片（全量回归 919 可跑 908 过 0 败） | ✅ 完成 | c2c9725 |
 | 批 6d | 树载体退役：CompilerMethod 快照化 + 全消费方切 DOM | ✅ 完成 | 1037818 |
 | 批 6e | Type/Handle 门面收口，产品面零 libjbytecode | ✅ 完成 | 805c330 |
-| 批 6f | 测试件迁移（test_helper/unittest/mtest_set 夹具） | 🔄 进行中 | — |
-| 批 6g | 文档收口 + 全量回归终验 | 🔄 进行中 | — |
+| 批 6f | 测试件迁移（test_helper/unittest/mtest_set 夹具） | ✅ 完成 | 70d8c7d |
+| 批 6g | 文档收口 + 全量回归终验（919 可跑 908 过 0 败，928 总量含 9 disabled） | ✅ 完成 | 本提交 |
 
 注：批 6 子批号按实际推进取用（6b/6c 未产生独立提交），勾账只记实际发生的
 批次。T1 小卡与终验收（§五/§六）不在本表范围。

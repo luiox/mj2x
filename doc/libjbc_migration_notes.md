@@ -290,8 +290,9 @@ typeResolver，旧 writer 的公共父类判定就是这张表，移植即同口
 的最后一个消费方消失；同步序列化旗标恒 plain（COMPUTE 的帧计算自此是
 output 侧语义，同步通道只求如实序列化当前 tree 状态——批 2 决策的终局形态）。
 
-**回归基线**：全量回归 921 项：908 过 / 0 败 / 11 工具链门控跳过 /
-9 disabled。输出面首次整体行走 libjbc writer 的全量基线。
+**回归基线**：全量回归 919 可跑项：908 过 / 0 败 / 11 工具链门控跳过 /
+9 disabled（套件总量 928；早期勾账误记的 921 为总量笔误）。输出面首次
+整体行走 libjbc writer 的全量基线。
 
 ## 批 6d 实证（树载体退役：CompilerMethod 快照化 + 全消费方切 DOM，1037818，2026-10-27）
 
@@ -331,7 +332,8 @@ native_loader 生成类的 maxes 计算同入口消费。resolver 是权宜实�
 父类链 = 旧栈 provider 移植，行为对拍基线）：**mjbase 帧计算就绪后换装
 mjbase 包实现，已拍板后置**，不阻塞本迁移收口。
 
-**已知断裂（批 6f 处理）**：test_helper 三明治与 unittest 树夹具面待迁 DOM。
+**已知断裂（批 6f 已收口，70d8c7d）**：test_helper 三明治与 unittest 树夹具面
+已迁 DOM（classFromTree/treeFromDom 五助手 + 追加式投影 shelf）。
 
 ## 批 6e 实证（Type/Handle 门面收口，产品面零 libjbytecode，805c330，2026-10-28）
 
@@ -353,7 +355,7 @@ block/indy_dispatch/reaching_def）。
 libjbc/libjstr/libjzip）；mj2x-cli 链接闭包摘 `libjbytecode_{util,commons,
 analysis,tree,core}` 与 libgarena（libjbytecode 传递依赖）。产品面不再触碰
 libjbytecode：仓内剩余消费方只有测试件（test_helper/unittest/mtest_set 夹具
-+ 根 xmake.lua 的 add_requires，留至 6f 收口退役）。
++ 根 xmake.lua 的 add_requires，树建模用途长期保留，见批 6f 收口口径）。
 
 **23. cloader 构建器对 native 无体方法 promote 返回 Err**。CLI 冒烟实证：
 `registerNativesForClass` 是 native 桥接方法（无 Code 属性），`addMethod`
@@ -366,3 +368,29 @@ withCode。
 **验证现状**。CLI 冒烟（SsaSamples）通过（Pipeline done + class/c 产物落
 盘）。批 6d/6e 未跑全量回归——unittest 面断裂（test_helper 的 class_dom_sync
 引用、树夹具）是已知态，由批 6f 迁移收口后重跑全量作最终门。
+
+## 批 6f 实证（test_helper 树投影器 + unittest 夹具迁 DOM，70d8c7d，2026-10-28）
+
+**三明治 DOM 化**。test_helper_dom_sync 五助手：classFromTree（树 plain 序列化 →
+jbc readClass 落 DOM + 快照）、treeFromDom（writeClass → 旧栈 reader 回投影断言树）、
+findMethodNode、snapshotMethod、convertMethodNode（shim 类喂字节）；runWithDomSync =
+缺 dom 抛错 + pass.process + refreshSnapshots。class_dom_sync_test 随树同步器退役删除。
+
+**验证揪出的产品缺陷（随批修复，9016e99）**。(1) stackc 分支/switch 五发射点直传
+MIR labelId，与批 6d 引入的 per-method labelIndex 错位，C 产物 goto 悬垂（MSVC
+C2094）：带跳转的 StackC E2E 15 例 + mtest_set 7 例全灭，直落用例全绿恰好划出
+病灶边界；修 = 统一 labelIndex.at。(2) native loader 前向分支 append 期目标未锚定，
+jbc checkHandles 拒 InvalidHandle（IOTest.NativeLoader 3 例抛错）；修 = 
+begin/endDeferredTargets 受控延后绑定态（design.md §34.3 契约路径），退出全量补验。
+
+**夹具纪律两条**。(3) 树→字节序列化只认旧栈常量：门面 Handle/Type 喂树，
+MethodHandle/MethodType 常量在 classFromTree 写类步死亡（ldc 12 例 0 hits；classify
+的 BootstrapMethods 写坏报 bad CP utf8 0）——树建模常量回旧栈类型，门面只用于管线
+读出侧载荷断言。(4) 投影 shelf 追加不销毁：同测试内二次 findMethodIn 会 move 覆盖
+shelf 槽，先前方法指针悬垂成空指令列表（indy lambda 2 例假绿）——shelf 改 per-class
+vector。(5) indy 站点 insertBefore 静默吞错改显式抛（部分插入即字节码损坏）。
+
+**验证现状**。第 5 轮全量回归（强删重链 + 完整日志落盘 + 真实退出码）：919 可跑
+908 过 / 0 败 / 11 工具链门控跳过 / 9 disabled（总量 928），exit 0，对齐批 6a 基线。
+排障记录：第 3 轮 tail 管道吞掉 FAILED 块（860+11≠919 账不平暴露），第 4 轮落盘
+重跑还原 48 项失败清单——读 gtest 汇总先核对 ran = 过 + 败 + 跳 恒等式再下结论。

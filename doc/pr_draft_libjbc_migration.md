@@ -1,8 +1,7 @@
 # PR 草稿：libjbytecode → libjbc 全栈迁移
 
-> 状态：草稿（批 6g 文档收口时点，2026-10-28）。批 6f/6g 收尾后按本稿开 PR
->（单分支 `feat/libjbc-migration`，开完停手等合并，家族约定同 PR #20/#33）。
-> 开 PR 前把「分批清单」「验证现状」刷成终态。
+> 状态：终态（批 6g 收口，2026-10-28）。按本稿开 PR（单分支
+> `feat/libjbc-migration`，开完停手等合并，家族约定同 PR #20/#33）。
 
 建议标题：`feat: libjbytecode → libjbc 全栈迁移——DOM 权威 + 保真直出，产品面零 libjbytecode`
 
@@ -23,8 +22,8 @@ mj2x 是旧栈 libjbytecode（ASM 风格 visitor/tree 模型）最后的活跃�
   增删/adopt、MethodEditor/CodeEditor 编辑载体、indy/condy/注解族 typed
   建模——覆盖 mj2x 全部已知使用形态（盘点见 plan §三）。
 
-规模：12 个批次提交，92 文件 +6012/−2901（mj2x-core / mj2x-cli / xmake 接线
-/ doc）。测试件（test_helper / unittest / mtest_set）迁移在批 6f 进行中。
+规模：16 个提交，107 文件 +7512/−3963（mj2x-core / mj2x-cli / xmake 接线
+/ test_helper / unittest / doc）。
 
 ## 分批清单
 
@@ -40,8 +39,8 @@ mj2x 是旧栈 libjbytecode（ASM 风格 visitor/tree 模型）最后的活跃�
 | 批 6a | output 切 writeClass 直出 + modified 类帧重算垫片 | c2c9725 |
 | 批 6d | 树载体退役：CompilerMethod 快照化 + 全消费方切 DOM | 1037818 |
 | 批 6e | Type/Handle 门面收口，产品面零 libjbytecode | 805c330 |
-| 批 6f | 测试件迁移（test_helper / unittest / mtest_set 夹具） | 进行中 |
-| 批 6g | 文档收口 + 全量回归终验 | 进行中 |
+| 批 6f | 测试件迁移（test_helper / unittest / mtest_set 夹具） | 9016e99 + 70d8c7d |
+| 批 6g | 文档收口 + 全量回归终验 | 本提交 |
 
 批 6 子批号按实际推进取用（6b/6c 未产生独立提交）。批次设计与风险预案见
 [plan_libjbc_migration.md](plan_libjbc_migration.md)，逐批实证见
@@ -49,13 +48,13 @@ mj2x 是旧栈 libjbytecode（ASM 风格 visitor/tree 模型）最后的活跃�
 
 ## 验证现状
 
-- **全量回归基线（批 6a 时点）**：921 项 908 过 / 0 败 / 11 工具链门控跳过 /
-  9 disabled——输出面整体行走 libjbc writer 后的首个全量基线。
-- **批 6d/6e 未跑全量**：unittest 面断裂（test_helper 的 class_dom_sync
-  引用、树夹具）是已知态，由批 6f 迁移收口；**6f 后重跑全量回归**（unittest
-  + integration + java_corpus 三后端）作为本 PR 最终门。
-- **批 6e CLI 冒烟**：SsaSamples 转换通过（Pipeline done + class/c 产物落盘）。
-- 逐批全量门历史：批 3b/4a/4b/5 时点均为 921 项全绿（910 过 / 11 禁用）。
+- **全量回归终验（批 6g 时点，第 5 轮）**：919 可跑 908 过 / 0 败 / 11 工具链
+  门控跳过 / 9 disabled（总量 928），exit 0——对齐批 6a 基线。
+- **回归数字口径**：早期勾账的 921/919 系总量笔误，真实总量 928（919 可跑
+  + 9 disabled）；读 gtest 汇总核对 ran = 过 + 败 + 跳 恒等式。
+- **批 6f 验证揪出并修复的产品缺陷**：stackc 分支发射标签错位（C2094 悬垂
+  goto）、native loader 前向分支锚定拒发（见 notes 批 6f 实证节）。
+- 逐批全量门历史：批 3b/4a/4b/5 时点均为 919 可跑全绿（908 过 / 11 跳）。
 
 ## 产品面零 libjbytecode 说明
 
@@ -80,3 +79,5 @@ mj2x 是旧栈 libjbytecode（ASM 风格 visitor/tree 模型）最后的活跃�
 - **T1 小卡未动**：dev_plan 账目校准 + BigSwitch/regfile 形态收编 E2E、
   finalize 错误通道统一、RegC intrinsic 判定热点、性能遗留三件等，按
   plan §五 在迁移合并后推进；终验收（§六）不在本 PR 范围。
+- **帧引擎权宜实现**：frame_recompute（PortedCommonSuperResolver +
+  recomputeSessionFrames）在 mjbase 帧计算就绪后换装，接口已收敛。
