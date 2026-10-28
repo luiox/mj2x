@@ -16,6 +16,8 @@
 #include "mj2x/core/compiler_index.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 
+#include "test_helper.hpp"
+
 // B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
@@ -62,7 +64,7 @@ RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     auto ssa = builder.build(blocks, "InlineRegC", name, desc, true, maxLocals, arena, reason);
     if (!ssa) {
@@ -884,7 +886,7 @@ TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     std::string              reason;
     auto                     ssa = builder.build(blocks,
@@ -960,7 +962,7 @@ RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     auto ssa = builder.build(blocks, "InlineRegC", name, desc, true, maxLocals, arena, reason);
     if (!ssa) {

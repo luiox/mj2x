@@ -2,6 +2,7 @@
 
 #include "mj2x/core/compiler_index.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "test_helper.hpp"
 
 using namespace mj2x;
 
@@ -16,13 +17,12 @@ TEST(CompilerIndexTest, AddAndRetrieveClass)
     cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->superName = superName.ref();
 
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    index.addClass("Test", std::move(cls));
+    index.addClass("Test", test::classFromTree("Test", *cn, index.arena()));
 
     auto* retrieved = index.getClass("Test");
     ASSERT_NE(retrieved, nullptr);
-    EXPECT_EQ(retrieved->classNode->name, name.ref());
+    ASSERT_NE(retrieved->dom, nullptr);
+    EXPECT_EQ(retrieved->dom->thisName(), "Test");
     EXPECT_FALSE(retrieved->modified);
 }
 

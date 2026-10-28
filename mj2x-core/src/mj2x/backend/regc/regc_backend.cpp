@@ -1,7 +1,11 @@
 #include "regc_backend.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+
+#include "jbc/core/insn.hpp"
+#include "jbc/core/insn_codec.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
 #include "mj2x/backend/regc/regc_emitter_internal.hpp"
@@ -36,8 +40,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 namespace {
 
@@ -259,13 +261,13 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
 /// @param[out] cFuncName 生成的 C 函数名（供 compileMethod 登记到 RegisterNatives 表）。
 /// @param safeEnvEnabled safe-env 开启时在入口首行发射表恢复调用。
 /// @param safeEnvDebug   safe-env 调试观察模式（检出只记录不 fail）。
-std::string emitNativeMethod(const std::string& className, const MethodNode& method,
+std::string emitNativeMethod(const std::string& className, const CompilerMethod& method,
                              const RegCEmitResult& emitted, std::string& cFuncName,
                              bool safeEnvEnabled, bool safeEnvDebug, bool traceCallLog)
 {
-    const std::string methodName = method.name.to_std_string();
-    const std::string methodDesc = method.desc.to_std_string();
-    const bool        isStatic   = (method.access & Opcodes::ACC_STATIC) != 0;
+    const std::string& methodName = method.name;
+    const std::string& methodDesc = method.desc;
+    const bool         isStatic   = (method.access & Opcodes::ACC_STATIC) != 0;
     const auto        retKind    = returnKind(methodDesc);
     const auto        args       = argumentKinds(methodDesc);
 
@@ -378,16 +380,6 @@ std::string emitNativeMethod(const std::string& className, const MethodNode& met
     return out.str();
 }
 
-
-MethodNode* findMethod(CompilerClass& clazz, const char* name, const char* desc)
-{
-    for (auto* method : clazz.classNode->methods) {
-        if (method->name.to_std_string() == name && method->desc.to_std_string() == desc) {
-            return method;
-        }
-    }
-    return nullptr;
-}
 
 }   // namespace
 
@@ -557,22 +549,30 @@ void RegCBackend::beforeCompile(CompilerIndex& index)
 {
     if (!inlineEnabled_) return;
     for (auto& [className, cls] : index.getClasses()) {
-        if (cls.isLibrary || cls.classNode == nullptr) continue;
-        for (const auto& m : cls.methods) {
-            auto* mn = m.methodNode;
-            if (mn == nullptr || mn->instructions.isEmpty()) continue;
-            if ((mn->access & Opcodes::ACC_STATIC) == 0) continue;
-            if ((mn->access & Opcodes::ACC_SYNCHRONIZED) != 0) continue;
-            const std::string nameStr = mn->name.to_std_string();
+        if (cls.isLibrary || cls.dom == nullptr) continue;
+        for (ca::usize mi = 0; mi < cls.methods.size(); ++mi) {
+            auto&       m  = cls.methods[mi];
+            const bool  isStat = (m.access & Opcodes::ACC_STATIC) != 0;
+            if (!isStat) continue;
+            if ((m.access & Opcodes::ACC_SYNCHRONIZED) != 0) continue;
+            const std::string& nameStr = m.name;
             if (!nameStr.empty() && nameStr[0] == '<') continue;
-            if (mn->instructions.size() > kInlineCacheMaxBytecodeInsns) continue;
+            // 批 6d：体可见性与规模走 DOM Code 槽（树 instructions 同义）。
+            auto code = cls.dom->decodeCode(cls.dom->methods[mi]);
+            if (code.is_err()) continue;
+            auto* c = std::move(code).unwrap();
+            if (c == nullptr || c->code.empty()) continue;
+            auto insnCount = jbc::core::decodeInsns(
+                jbc::core::ByteView{c->code.data(), c->code.size()});
+            if (insnCount.is_err()) continue;
+            if (insnCount.unwrap().size() > kInlineCacheMaxBytecodeInsns) continue;
             auto  entry     = Impl::InlineBlockCacheEntry{};
             entry.converter = std::make_unique<CodeConverter>(index.arena());
-            entry.blocks    = entry.converter->convert(*mn);
+            entry.blocks    = entry.converter->convert(*cls.dom, mi);
             if (entry.blocks.empty()) continue;   // 现场路径与既有行为一致
-            entry.maxLocals = mn->maxLocals;
+            entry.maxLocals = m.maxLocals;
             impl_->inlineBlockCache.insert_or_assign(
-                methodKey(className, nameStr, mn->desc.to_std_string()), std::move(entry));
+                methodKey(className, nameStr, m.desc), std::move(entry));
         }
     }
 }
@@ -668,33 +668,29 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     if (index != nullptr && !impl_->enumSyntheticScanned) {
         impl_->enumSyntheticScanned = true;
         for (auto& [clsName, cls] : index->getClasses()) {
-            if (cls.classNode == nullptr || cls.isLibrary) continue;
-            const ca::str::Utf8StringRef clsRef = cls.classNode->name;
-            if (!isEnumSubtypeOwner(index, clsRef)) continue;
+            if (cls.dom == nullptr || cls.isLibrary) continue;
+            if (!isEnumSubtypeOwner(index, cls.dom->thisName())) continue;
             for (const auto& m : cls.methods) {
-                auto* em = m.methodNode;
-                if (em == nullptr || em->instructions.isEmpty()) continue;
-                const std::string emName = em->name.to_std_string();
-                const std::string emDesc = em->desc.to_std_string();
+                const std::string& emName = m.name;
+                const std::string& emDesc = m.desc;
                 if (emName == "values" && emDesc.rfind("()[L", 0) == 0 &&
                     isJavacEnumValuesBody(
-                        em, clsRef,
-                        ca::str::Utf8StringRef::from_string_view(emDesc.substr(2)))) {
+                        cls, m, emName,
+                        emDesc.substr(2))) {
                     impl_->enumSyntheticMethods.insert(methodKey(clsName, emName, emDesc));
                 }
                 else if (emName == "valueOf" &&
                          emDesc.rfind("(Ljava/lang/String;)L", 0) == 0 &&
-                         isJavacEnumValueOfBody(em, clsRef)) {
+                         isJavacEnumValueOfBody(cls, m, emName)) {
                     impl_->enumSyntheticMethods.insert(methodKey(clsName, emName, emDesc));
                 }
             }
         }
     }
-    auto*             mn         = method.methodNode;
-    const std::string methodName = mn->name.to_std_string();
-    const std::string methodDesc = mn->desc.to_std_string();
-    const bool        isStatic   = (mn->access & Opcodes::ACC_STATIC) != 0;
-    std::string       reason;
+    const std::string& methodName = method.name;
+    const std::string& methodDesc = method.desc;
+    const bool         isStatic   = (method.access & Opcodes::ACC_STATIC) != 0;
+    std::string        reason;
 
 
     // 类内预登记：本类全部计划转换方法的 regc_* 函数名提前可知（functionName
@@ -709,39 +705,35 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
             // 多类 jar（如 jvm-obf-tester）里 values()/valueOf() 的站点 intrinsic
             // 与内联排除会整体失效。每类在其任何方法指令被清空之前验证自身
             // values()/valueOf() 形状，与全类预扫描同一集合、同一 fail-closed 口径。
-            const ca::str::Utf8StringRef clsRef = cls->classNode->name;
-            if (isEnumSubtypeOwner(index, clsRef)) {
+            if (isEnumSubtypeOwner(index, cls->dom->thisName())) {
                 for (const auto& m : cls->methods) {
-                    auto* em = m.methodNode;
-                    if (em == nullptr || em->instructions.isEmpty()) continue;
-                    const std::string emName = em->name.to_std_string();
-                    const std::string emDesc = em->desc.to_std_string();
+                    const std::string& emName = m.name;
+                    const std::string& emDesc = m.desc;
                     if (emName == "values" && emDesc.rfind("()[L", 0) == 0 &&
                         isJavacEnumValuesBody(
-                            em, clsRef,
-                            ca::str::Utf8StringRef::from_string_view(emDesc.substr(2)))) {
+                            *cls, m, emName,
+                            emDesc.substr(2))) {
                         impl_->enumSyntheticMethods.insert(methodKey(className, emName, emDesc));
                     }
                     else if (emName == "valueOf" &&
                              emDesc.rfind("(Ljava/lang/String;)L", 0) == 0 &&
-                             isJavacEnumValueOfBody(em, clsRef)) {
+                             isJavacEnumValueOfBody(*cls, m, emName)) {
                         impl_->enumSyntheticMethods.insert(methodKey(className, emName, emDesc));
                     }
                 }
             }
             for (const auto& m : cls->methods) {
                 if (!m.markedForCompile) continue;
-                auto                mn     = m.methodNode;
-                const std::string   mnName = mn->name.to_std_string();
-                const std::string   mnDesc = mn->desc.to_std_string();
-                const std::string   key    = methodKey(className, mnName, mnDesc);
-                const std::string   fnName =
+                const std::string& mnName = m.name;
+                const std::string& mnDesc = m.desc;
+                const std::string  key    = methodKey(className, mnName, mnDesc);
+                const std::string  fnName =
                     RegCEmitter::functionNameFor(SSAFunctionSymbol{
                         className, mnName, mnDesc, {}, SSAType::UNKNOWN});
                 impl_->convertedFunctions[key] = fnName;
                 // 规范直调声明：调用方可能先于被调方编译，声明必须在任何调用点
                 // 发射之前备好，故此处按描述符算（无需等 lowering）。
-                const bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
+                const bool isStatic = (m.access & Opcodes::ACC_STATIC) != 0;
                 impl_->convertedFunctionDecls[fnName] =
                     directCallDeclForDescriptor(fnName, mnDesc, isStatic);
             }
@@ -756,7 +748,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     // Pipeline 注入的 job arena（更长寿命），两者共存无冲突（spec §6.3/§6.4）。
     ca::str::Utf8StringArena ssaArena;
     auto ssa = ssaBuilder.build(
-        blocks, className, methodName, methodDesc, isStatic, mn->maxLocals, ssaArena, reason);
+        blocks, className, methodName, methodDesc, isStatic, method.maxLocals, ssaArena, reason);
     if (!ssa) {
         // F1: 静默 fail-closed 补可观测日志，消除 SSA 构建阶段的诊断盲区。
         CA_LOGT_WARN("regc", "Skipping {}.{}{}: {}: {}\n", className.c_str(), methodName.c_str(), methodDesc.c_str(),
@@ -820,29 +812,36 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
             // 名字+描述符命中（类内唯一）后的拒绝原因单独记：native/abstract、
             // synchronized、SSA 构建失败各自透出，未命中任何方法则报 not found。
             bool matched = false;
-            for (const auto& m : cls->methods) {
-                auto* mn = m.methodNode;
-                if (mn == nullptr || mn->name != ref.name || mn->desc != ref.desc) continue;
+            for (ca::usize mi = 0; mi < cls->methods.size(); ++mi) {
+                const auto& m = cls->methods[mi];
+                if (m.name != ref.name.to_std_string() || m.desc != ref.desc.to_std_string())
+                    continue;
                 matched = true;
-                if (mn->instructions.isEmpty()) {
+                // 批 6d：体可见性走 DOM Code 槽。
+                auto code = cls->dom->decodeCode(cls->dom->methods[mi]);
+                if (code.is_err()) {
+                    failReason = "callee has no body (native or abstract)";
+                    continue;
+                }
+                auto* c = std::move(code).unwrap();
+                if (c == nullptr || c->code.empty()) {
                     failReason = "callee has no body (native or abstract)";
                     continue;
                 }
                 // synchronized 方法：JVM 方法级锁在调用点自动获取，内联会丢锁语义，拒绝。
-                if ((mn->access & jbytecode::core::Opcodes::ACC_SYNCHRONIZED) != 0) {
+                if ((m.access & Opcodes::ACC_SYNCHRONIZED) != 0) {
                     failReason = "synchronized callee";
                     continue;
                 }
                 // 只有静态方法进入内联候选（invokeOpcode 检查在 pass 侧）。
                 CodeConverter            converter(index->arena());
-                const std::vector<Block*> calleeBlocks = converter.convert(*mn);
+                const std::vector<Block*> calleeBlocks = converter.convert(*cls->dom, mi);
                 SSABuilder               calleeBuilder;
-                const bool               calleeStatic =
-                    (mn->access & jbytecode::core::Opcodes::ACC_STATIC) != 0;
+                const bool calleeStatic = (m.access & Opcodes::ACC_STATIC) != 0;
                 // 命中即返回（含 build 失败的 nullptr，拒因已写入 failReason）。
                 return calleeBuilder.build(
                     calleeBlocks, ref.owner.to_std_string(), ref.name.to_std_string(),
-                    ref.desc.to_std_string(), calleeStatic, mn->maxLocals, ssaArena, failReason);
+                    ref.desc.to_std_string(), calleeStatic, m.maxLocals, ssaArena, failReason);
             }
             if (!matched) failReason = "method not found in class";
             return nullptr;
@@ -979,7 +978,7 @@ ca::str::Utf8StringBuilder methodSource;
     methodSource.append(emitted.source.data(), emitted.source.size());
     methodSource.append("\n");
     {
-        const std::string wrapper = emitNativeMethod(className, *mn, emitted, cFuncName,
+        const std::string wrapper = emitNativeMethod(className, method, emitted, cFuncName,
                                                      impl_->safeEnvEnabled, impl_->safeEnvDebug,
                                                      impl_->traceCallLog);
         methodSource.append(wrapper.data(), wrapper.size());
@@ -1006,37 +1005,12 @@ ca::str::Utf8StringBuilder methodSource;
 /// 这保证先加载 native 库再绑定 native 方法，且绑定发生在用户静态初始化之前
 /// （用户 clinit 可能调用 native 方法，必须先完成绑定）。
 ///
-/// className 取自 clazz.classNode->name（Utf8StringRef，arena 持有），避免临时
-/// std::string 生命周期的悬垂引用。
-void prependRegisterNativesCall(CompilerClass& clazz, int classId)
+/// 批 5：改写权威在 DOM（dom_inject 门面，与 pre/postprocessor 同会话纪律）；
+/// 树投影由管线在 compileMethods 后统一 syncDomToTree 刷新。
+void prependRegisterNativesCall(CompilerClass& clazz, const std::string& className, int classId)
 {
-    constexpr int kClinitMaxStack = 2;   // ldc int + ldc class 各占 1 slot
-
-    MethodNode* clinit = findMethod(clazz, "<clinit>", "()V");
-    if (clinit == nullptr) {
-        std::vector<ca::str::Utf8StringRef> noExceptions;
-        clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                ca::str::ZUtf8StringRef::from_static("<clinit>"),
-                                ca::str::ZUtf8StringRef::from_static("()V"),
-                                ca::str::ZUtf8StringRef::from_static(""),
-                                noExceptions);
-        clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
-        clinit->maxStack  = 0;
-        clinit->maxLocals = 0;
-        clazz.classNode->methods.push_back(clinit);
-    }
-
-    using namespace jbytecode::tree;
-    InsnList prefix;
-    prefix.add(clinit->create<LdcInsnNode>(classId));
-    prefix.add(clinit->create<LdcInsnNode>(Type::getObjectType(clazz.classNode->name)));
-    prefix.add(clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kClassName),
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterName),
-                                  ca::str::ZUtf8StringRef::from_static(cloader::kRegisterDesc),
-                                  false));
-    clinit->instructions.insert(clinit->instructions.getFirst(), prefix);
-    if (clinit->maxStack < kClinitMaxStack) clinit->maxStack = kClinitMaxStack;
+    dom_inject::prependClinitRegisterCall(clazz, className, classId, cloader::kClassName,
+                                          cloader::kRegisterName, cloader::kRegisterDesc);
 }
 
 void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
@@ -1046,23 +1020,20 @@ void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
     // from being rewritten to native when no working RegC body was emitted.
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
-    auto* mn = method.methodNode;
-    mn->access |= Opcodes::ACC_NATIVE;
-    mn->instructions.clear();
-    mn->maxStack   = 0;
-    mn->maxLocals  = 0;
-    clazz.modified = true;
+    // 批 5：标 ACC_NATIVE + 摘 Code 槽（「清指令」的 DOM 对应物），会话字节往返
+    // 提交。批 6d：类名从 DOM 取，身份源 = 快照 name/desc。
+    if (clazz.dom == nullptr) {
+        throw std::runtime_error("regc_backend: DOM not synced for native injection");
+    }
+    const std::string className(clazz.dom->thisName());
+    dom_inject::markMethodNative(clazz, className, method.name, method.desc);
 
     // RegisterNatives：在该类首次被注入 native 方法时，往 clinit 前插
     // registerNativesForClass(classId, thisClass)。每类只注入一次。
-    // classNode 为空（单元测试直调 injectIntoClass）时跳过 clinit 注入——
-    // 这种场景没有类文件可改，注册基础设施仍由 finalize 正常发射。
-    if (clazz.classNode == nullptr) return;
-    const std::string className = clazz.classNode->name.to_std_string();
     if (className.empty()) return;
     if (impl_->classIds.find(className) != impl_->classIds.end() &&
         impl_->clinitInjected.find(className) == impl_->clinitInjected.end()) {
-        prependRegisterNativesCall(clazz, impl_->classIds[className]);
+        prependRegisterNativesCall(clazz, className, impl_->classIds[className]);
         impl_->clinitInjected.insert(className);
     }
     // Native-loader clinit 注入由 NativeLoaderPostprocessor 统一负责（见
@@ -1087,20 +1058,21 @@ std::string indyBoxedClassName(const ca::str::Utf8StringRef& desc)
     return indyBoxedClassNameForDescHead(s.empty() ? '\0' : s[0]);
 }
 
-std::string indyTypeDescriptorString(const Type& type)
+std::string indyTypeDescriptorString(const mj2x::Type& type)
 {
     // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
     ca::str::Utf8StringArena scratch;
     return type.getDescriptor(scratch).to_std_string();
 }
 
-std::string indyMethodTypeDescriptorString(const Type& type)
+std::string indyMethodTypeDescriptorString(const mj2x::Type& type)
 {
     // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
     // 落点参数按必选口径走函数级局部 arena；toString 本就不 intern。
     ca::str::Utf8StringArena scratch;
-    return type.getSort() == Type::METHOD ? type.getDescriptor(scratch).to_std_string()
-                                          : type.toString();
+    return type.getSort() == mj2x::Type::METHOD
+                   ? type.getDescriptor(scratch).to_std_string()
+                   : type.toString();
 }
 
 void emitIndyMethodType(CSourceStream& out, const std::string& var, const std::string& methodDesc)
@@ -1140,7 +1112,7 @@ void emitIndyClassObject(CSourceStream& out, const std::string& var, const std::
     }
 }
 
-void emitIndyHandle(CSourceStream& out, const std::string& var, const jbytecode::core::Handle& handle)
+void emitIndyHandle(CSourceStream& out, const std::string& var, const mj2x::Handle& handle)
 {
     const int    tag   = handle.getTag();
     const std::string owner = handle.getOwner().to_std_string();
@@ -1215,21 +1187,22 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
             }
         }
         else if (const auto* p = value.as<ca::str::Utf8StringRef>()) {
+            const auto text =
+                std::string(reinterpret_cast<const char*>(p->data()), p->byte_length());
             if (stringEncryptPool != nullptr) {
-                const auto text = p->to_std_string();
                 out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
                              stringEncryptPool->encryptedLiteralBuffer(text) + ");");
             }
             else {
                 out.emitLine("jobject " + var + " = (jobject)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, " +
-                             codegen::cStringLiteral(p->to_std_string()) + ");");
+                             codegen::cStringLiteral(text) + ");");
             }
         }
         break;
     case IndyBsmArgKind::MethodType:
     case IndyBsmArgKind::Class:
-        if (const auto* p = value.as<Type>()) {
-            if (p->getSort() == Type::METHOD) {
+        if (const auto* p = value.as<mj2x::Type>()) {
+            if (p->getSort() == mj2x::Type::METHOD) {
                 emitIndyMethodType(out, var, indyMethodTypeDescriptorString(*p));
             }
             else {
@@ -1238,7 +1211,7 @@ void emitIndyBsmArg(CSourceStream& out, const std::string& var, const ca::core::
         }
         break;
     case IndyBsmArgKind::Handle:
-        if (const auto* p = value.as<jbytecode::core::Handle>()) {
+        if (const auto* p = value.as<mj2x::Handle>()) {
             emitIndyHandle(out, var, *p);
         }
         break;

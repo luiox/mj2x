@@ -3,7 +3,8 @@
 ///        互调解析器与发射器接口（实现拆分到 llvm_ir_*.cpp，保持主文件精简）。
 #pragma once
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "mj2x/backend/backend.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_options.hpp"
@@ -28,8 +29,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 using codegen::mangleMethod;
 
@@ -429,10 +428,11 @@ public:
 
 private:
     CompilerMethod* findTarget(const MethodID& id, std::string& reason);
-    bool            fillTargetFromDescriptor(const std::string& owner, MethodNode& node,
-                                             CallTarget& target, std::string& reason);
-    bool            analyze(const std::string& owner, MethodNode& node, CallTarget& target,
-                            std::string& reason);
+    bool            fillTargetFromDescriptor(const std::string& owner,
+                                             const CompilerMethod& node, CallTarget& target,
+                                             std::string& reason);
+    bool            analyze(const std::string& owner, CompilerClass& clazz,
+                            const CompilerMethod& node, CallTarget& target, std::string& reason);
 
     CompilerIndex&                     index_;
     const std::string&                 className_;

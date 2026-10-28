@@ -3266,7 +3266,7 @@ std::vector<ca::u8> buildCustomIndyClass(ca::str::Utf8StringArena& arena)
     bsm->visitInsn(Opcodes::DUP);
     invokestatic(bsm, "java/lang/invoke/MethodHandles", "lookup",
                  "()Ljava/lang/invoke/MethodHandles$Lookup;");
-    bsm->visitLdcInsn(Type::getObjectType(arena.intern("CliLlvmIndy")));
+    bsm->visitLdcInsn(jbytecode::core::Type::getObjectType(arena.intern("CliLlvmIndy")));
     bsm->visitLdcInsn(std::string("add"));
     bsm->visitVarInsn(Opcodes::ALOAD, 2);   // 站点 MethodType（indy 机制传入）
     bsm->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
@@ -3296,7 +3296,7 @@ std::vector<ca::u8> buildCustomIndyClass(ca::str::Utf8StringArena& arena)
     bsmArgs->visitInsn(Opcodes::DUP);
     invokestatic(bsmArgs, "java/lang/invoke/MethodHandles", "lookup",
                  "()Ljava/lang/invoke/MethodHandles$Lookup;");
-    bsmArgs->visitLdcInsn(Type::getObjectType(arena.intern("CliLlvmIndy")));
+    bsmArgs->visitLdcInsn(jbytecode::core::Type::getObjectType(arena.intern("CliLlvmIndy")));
     bsmArgs->visitLdcInsn(std::string("add"));
     bsmArgs->visitVarInsn(Opcodes::ALOAD, 2);   // 站点 MethodType
     bsmArgs->visitMethodInsn(Opcodes::INVOKEVIRTUAL,
@@ -3357,7 +3357,7 @@ std::vector<ca::u8> buildCustomIndyClass(ca::str::Utf8StringArena& arena)
     bsmRef->visitInsn(Opcodes::DUP);
     invokestatic(bsmRef, "java/lang/invoke/MethodHandles", "lookup",
                  "()Ljava/lang/invoke/MethodHandles$Lookup;");
-    bsmRef->visitLdcInsn(Type::getObjectType(arena.intern("CliLlvmIndy")));
+    bsmRef->visitLdcInsn(jbytecode::core::Type::getObjectType(arena.intern("CliLlvmIndy")));
     bsmRef->visitLdcInsn(std::string("greet"));
     bsmRef->visitVarInsn(Opcodes::ALOAD, 2);
     bsmRef->visitMethodInsn(Opcodes::INVOKEVIRTUAL,

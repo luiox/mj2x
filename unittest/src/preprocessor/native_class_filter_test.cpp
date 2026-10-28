@@ -13,6 +13,7 @@
 
 #include "jbytecode/jbytecode.hpp"
 #include "mj2x/core/compiler_index.hpp"
+#include "test_helper.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
 
@@ -21,6 +22,7 @@ using namespace mj2x;
 namespace {
 
 // 构造一个空方法体类（名 + 一个普通静态方法），供 preprocessor 集成测试。
+// 批 6d：树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
 void buildSimpleClass(CompilerIndex& index, const std::string& className)
 {
     auto& arena = index.arena();
@@ -37,14 +39,7 @@ void buildSimpleClass(CompilerIndex& index, const std::string& className)
     mn->instructions.add(new jbytecode::tree::InsnNode(jbytecode::core::Opcodes::RETURN));
     cn->methods.push_back(mn);
 
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    for (auto* m : cls.classNode->methods) {
-        CompilerMethod cm;
-        cm.methodNode = m;
-        cls.methods.push_back(std::move(cm));
-    }
-    index.addClass(className, std::move(cls));
+    index.addClass(className, test::classFromTree(className, *cn, arena));
 }
 
 bool anyMarked(const CompilerClass& cls)
@@ -195,7 +190,7 @@ TEST(NativeClassFilterPreprocessorTest, SetsFilteredOutAndCounts)
     buildSimpleClass(index, "com/third/Widget");
 
     NativeClassFilterPreprocessor filter({"com.acme.**"}, {"com.acme.test.**"});
-    filter.process(index);
+    test::runWithDomSync(filter, index);
 
     EXPECT_FALSE(index.getClass("com/acme/Engine")->filteredOut);
     EXPECT_TRUE(index.getClass("com/acme/test/Helper")->filteredOut);
@@ -210,7 +205,7 @@ TEST(NativeClassFilterPreprocessorTest, LibraryClassesAreNeverFiltered)
     index.getClass("com/third/Widget")->isLibrary = true;
 
     NativeClassFilterPreprocessor filter({}, {"com.third.**"});
-    filter.process(index);
+    test::runWithDomSync(filter, index);
 
     EXPECT_FALSE(index.getClass("com/third/Widget")->filteredOut);
     EXPECT_EQ(filter.filteredCount(), 0u);
@@ -223,8 +218,8 @@ TEST(NativeClassFilterPreprocessorTest, MarkAllSkipsFilteredClasses)
     buildSimpleClass(index, "com/third/Widget");
 
     NativeClassFilterPreprocessor filter({"com.acme.**"}, {});
-    filter.process(index);
-    MarkAllMethodsPreprocessor().process(index);
+    test::runWithDomSync(filter, index);
+    test::runWithDomSync(MarkAllMethodsPreprocessor(), index);
 
     EXPECT_TRUE(anyMarked(*index.getClass("com/acme/Engine")));
     EXPECT_FALSE(anyMarked(*index.getClass("com/third/Widget")));
@@ -237,8 +232,8 @@ TEST(NativeClassFilterPreprocessorTest, EmptyFilterMarksEverything)
     buildSimpleClass(index, "com/third/Widget");
 
     NativeClassFilterPreprocessor filter({}, {});
-    filter.process(index);
-    MarkAllMethodsPreprocessor().process(index);
+    test::runWithDomSync(filter, index);
+    test::runWithDomSync(MarkAllMethodsPreprocessor(), index);
 
     EXPECT_TRUE(anyMarked(*index.getClass("com/acme/Engine")));
     EXPECT_TRUE(anyMarked(*index.getClass("com/third/Widget")));

@@ -6,19 +6,19 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
 
-#include "jbytecode/jbytecode.hpp"
 #include "libca/log/log_macros.hpp"
+
+#include "mj2x/core/dom_edit.hpp"
+#include "mj2x/core/frame_recompute.hpp"
 
 namespace mj2x {
 
 namespace fs = std::filesystem;
-
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
-using namespace jbytecode::analysis;
-using namespace jbytecode::commons;
-using namespace jbytecode::util;
 
 struct OutputWriter::Impl
 {};
@@ -29,12 +29,26 @@ OutputWriter::OutputWriter()
 
 OutputWriter::~OutputWriter() = default;
 
-static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& cls)
+/// @brief 类字节输出：DOM writeClass 直出。modified 类先过帧重算垫片
+///        （对齐旧 COMPUTE_FRAMES）；未修改类保真直出（round-trip 恒等）。
+static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& cls,
+                                           const std::string& name)
 {
-    const ca::i32 flags = cls.modified ? ClassWriter::COMPUTE_FRAMES : ClassWriter::COMPUTE_MAXS;
-    ClassWriter   writer(index.arena(), flags);
-    cls.classNode->accept(&writer);
-    return writer.toByteArray();
+    if (cls.dom == nullptr) {
+        throw std::runtime_error("output_writer: DOM missing for " + name
+                                 + " (批 6d 起类载体生而带 DOM)");
+    }
+    if (cls.modified) {
+        auto session = openDomEdit(cls, name);
+        recomputeSessionFrames(name, *session);
+        commitDomEdit(cls, name, std::move(session));
+    }
+    auto written = jbc::core::writeClass(*cls.dom);
+    if (written.is_err()) {
+        throw std::runtime_error("output_writer: writeClass failed for " + name + ": "
+                                 + jbc::core::to_string(std::move(written).unwrap_err()));
+    }
+    return std::move(written).unwrap();
 }
 
 static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&         name,
@@ -79,17 +93,15 @@ static void writeJar(const std::string& path, CompilerIndex& index)
     size_t           resourceCount = 0;
 
     for (const auto& entry : index.jarEntries()) {
-        // 仅 modified 类需要新字节；其余条目引用原数据，避免大 JAR 每条目
-        // 全量拷贝（内存峰值约翻倍）。
+        // modified 类走 DOM writeClass（帧垫片后直出）；其余条目引用原数据，
+        // 未修改类字节原样保留（保真收益：旧 tree writer 不可复现的
+        // verifier 敏感元数据不再失真）。
         const std::vector<ca::u8>* data      = &entry.data;
         std::vector<ca::u8>        rewritten;
         if (entry.isClass) {
-            // Preserve untouched class bytes. Some real-world classes carry
-            // verifier-sensitive StackMapTable/debug metadata that the tree
-            // writer cannot yet reproduce byte-for-byte.
             if (auto* cls = index.getClass(entry.className)) {
                 if (cls->modified) {
-                    rewritten = writeClassBytes(index, *cls);
+                    rewritten = writeClassBytes(index, *cls, entry.className);
                     data      = &rewritten;
                 }
                 ++classCount;
@@ -171,7 +183,7 @@ static void writeClassFile(const std::string& path, CompilerIndex& index)
         primaryName = it->first;
     }
 
-    auto bytes = writeClassBytes(index, *primary);
+    auto bytes = writeClassBytes(index, *primary, primaryName);
     writeBytes(path, bytes);
     CA_LOGT_INFO("io", "Written: {} ({} bytes)\n", path.c_str(), bytes.size());
 
@@ -182,7 +194,7 @@ static void writeClassFile(const std::string& path, CompilerIndex& index)
         const auto      sidecarPath = sidecarClassPath(outputPath, name, primaryName);
         std::error_code ec;
         fs::create_directories(sidecarPath.parent_path(), ec);
-        auto sidecarBytes = writeClassBytes(index, cls);
+        auto sidecarBytes = writeClassBytes(index, cls, name);
         writeBytes(sidecarPath.string(), sidecarBytes);
         CA_LOGT_INFO("io", "Written sidecar: {} ({} bytes)\n", sidecarPath.string().c_str(),
                sidecarBytes.size());

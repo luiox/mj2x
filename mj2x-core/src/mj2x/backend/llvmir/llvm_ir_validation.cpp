@@ -10,8 +10,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 bool recordValue(RegisterTypes& types, RegValue value, std::string& reason)
 {

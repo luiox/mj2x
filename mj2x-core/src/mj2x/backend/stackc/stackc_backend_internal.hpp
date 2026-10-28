@@ -12,6 +12,8 @@
 #pragma once
 
 #include "mj2x/backend/stackc/stackc_backend.hpp"
+
+#include "mj2x/core/jvm_opcodes.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
 #include "mj2x/frontend/mir_node.hpp"
@@ -20,7 +22,6 @@
 
 #include "mj2x/codegen/code_snippet.hpp"
 
-#include <jbytecode/jbytecode.hpp>
 
 #include <cstdint>
 #include <deque>
@@ -33,9 +34,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
-using namespace jbytecode::analysis;
 
 // ============================================================
 // 注册/代理辅助结构
@@ -83,10 +81,10 @@ struct CHiddenInterfaceDefaultProxy
 
 struct CExceptionHandlerInfo
 {
-    jbytecode::core::Label* start   = nullptr;
-    jbytecode::core::Label* end     = nullptr;
-    jbytecode::core::Label* handler = nullptr;
-    std::string             catchType;
+    int         start   = 0;   ///< 保护区间起点标签 id（批 6d 标签 id 化）
+    int         end     = 0;   ///< 保护区间终点标签 id（半开）
+    int         handler = 0;   ///< handler 入口标签 id
+    std::string catchType;
 };
 
 struct CExceptionDispatchInfo
@@ -329,13 +327,12 @@ inline std::string prependReceiverToMethodDesc(const std::string& ownerClassName
     return "(L" + ownerClassName + ";" + methodDesc.substr(1);
 }
 
-inline bool isInterfaceDefaultMethod(const CompilerClass& clazz, const jbytecode::tree::MethodNode& method)
+inline bool isInterfaceDefaultMethod(const CompilerClass& clazz, const CompilerMethod& method)
 {
-    if ((clazz.classNode->access & Opcodes::ACC_INTERFACE) == 0) return false;
+    if (clazz.dom == nullptr || (clazz.dom->access & Opcodes::ACC_INTERFACE) == 0) return false;
     if ((method.access & (Opcodes::ACC_ABSTRACT | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE)) != 0)
         return false;
-    const auto name = method.name.to_std_string();
-    return name != "<init>" && name != "<clinit>";
+    return method.name != "<init>" && method.name != "<clinit>";
 }
 
 inline std::string utf8RefToString(ca::str::Utf8StringRef value)
@@ -343,19 +340,20 @@ inline std::string utf8RefToString(ca::str::Utf8StringRef value)
     return value.to_std_string();
 }
 
-inline std::string typeDescriptorString(const Type& type)
+inline std::string typeDescriptorString(const mj2x::Type& type)
 {
     // #921 staticArena 退役：描述符仅瞬时转串，函数级局部 arena 零驻留。
     ca::str::Utf8StringArena scratch;
     return type.getDescriptor(scratch).to_std_string();
 }
 
-inline std::string methodTypeDescriptorString(const Type& type)
+inline std::string methodTypeDescriptorString(const mj2x::Type& type)
 {
     // #921 staticArena 退役：同上；toString 本就不 intern。
     ca::str::Utf8StringArena scratch;
-    return type.getSort() == Type::METHOD ? type.getDescriptor(scratch).to_std_string()
-                                          : type.toString();
+    return type.getSort() == mj2x::Type::METHOD
+                   ? type.getDescriptor(scratch).to_std_string()
+                   : type.toString();
 }
 
 inline const char* boxedClassName(PrimitiveKind kind)
@@ -551,9 +549,9 @@ struct StackCBackend::Impl
     /// emitNodeWithExceptionDispatch 静态化栈访问后更新。
     int currentStackDepth = 0;
 
-    /// 当前方法的 label 顺序索引：以 Label* 为 key（进程内身份匹配），值为方法内首次出现顺序。
+    /// 当前方法的 label 顺序索引：以标签 id 为 key，值为方法内首次出现顺序。
     /// 每个 compileMethod 开始时重建，用于生成确定性 C label（见 labelIdent）。
-    std::unordered_map<jbytecode::core::Label*, unsigned> labelIndex;
+    std::unordered_map<int, unsigned> labelIndex;
 
     void emitStackInit(int maxStack);
     void emitLocalsInit(const std::string& desc, int access);
@@ -615,13 +613,18 @@ struct StackCBackend::Impl
     void   emitStringPool(codegen::CSourceStream& out) const;
     void   emitRegistrationCode(codegen::CSourceStream& out) const;
     ca::str::Utf8StringRef stableUtf8(const std::string& value);
-    void                   protectClassInitializer(StackCBackend& backend, CompilerClass& clazz);
+    void                   protectClassInitializer(StackCBackend& backend, CompilerClass& clazz,
+                                                   const std::string& className);
     void                   registerHiddenClinitProxy(const std::string& className,
                                                      const std::string& hiddenMethodName,
                                                      const std::string& compiledFunctionName);
-    void                   registerInterfaceDefaultProxy(CompilerClass& clazz, MethodNode& method,
+    void                   registerInterfaceDefaultProxy(CompilerClass& clazz,
+                                                         const std::string& methodName,
+                                                         const std::string& methodDesc,
                                                          const std::string& compiledFunctionName);
-    void        rewriteInterfaceDefaultMethodToProxy(CompilerClass& clazz, MethodNode& method,
+    void        rewriteInterfaceDefaultMethodToProxy(CompilerClass& clazz,
+                                                     const std::string& methodName,
+                                                     const std::string& methodDesc,
                                                      const CHiddenInterfaceDefaultProxy& proxy);
     std::string findCompiledFunctionName(const std::string& className,
                                          const std::string& methodName,
@@ -629,13 +632,11 @@ struct StackCBackend::Impl
     bool        hasInterfaceDefaultProxies(const std::string& className) const;
     void        removeRegistration(const std::string& className, const std::string& methodName,
                                    const std::string& methodDesc);
-    jbytecode::tree::MethodNode* findMethod(CompilerClass& clazz, const char* name,
-                                            const char* desc = nullptr) const;
     /// 每块入口栈深度数据流：自建控制流边（converter 不填 successors），
     /// handler 入口深度=1，块内净效应按节点发射文本统计。
     /// 返回 false 表示深度无法收敛（非法字节码，调用方 fail-closed 跳过）。
     bool computeBlockDepths(const std::vector<Block*>& blocks,
-                            const std::vector<jbytecode::core::Label*>& handlerLabels,
+                            const std::vector<int>& handlerLabels,
                             std::vector<int>& entryDepths);
 };
 
@@ -671,6 +672,5 @@ std::vector<uint8_t> makeHiddenClinitClassBytes(const std::string& hiddenClassNa
 std::vector<uint8_t> makeHiddenInterfaceDefaultClassBytes(const std::string& hiddenClassName,
                                                           const std::string& hiddenMethodName,
                                                           const std::string& hiddenMethodDesc);
-void                 clearMethodDebugAndHandlers(MethodNode* method);
 
 }   // namespace mj2x

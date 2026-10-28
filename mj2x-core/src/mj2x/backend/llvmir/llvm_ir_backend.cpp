@@ -4,7 +4,9 @@
 #include "llvm_ir_backend.hpp"
 #include "llvm_ir_internal.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/backend/dom_inject.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/frontend/type_utils.hpp"
@@ -21,18 +23,16 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 using namespace llvmir;   // 类型工具 / 验证 / 发射器 / 共享 helper
 
 using codegen::mangleMethod;
 using RegisterTypes = llvmir::RegisterTypes;
 
-bool supportsMethodDescriptor(const MethodNode& method, SSAType& resultType, std::string& reason)
+bool supportsMethodDescriptor(const CompilerMethod& method, SSAType& resultType, std::string& reason)
 {
     // 实例方法自 Phase 4 起支持：this 为 SSA 参数 0（REF），wrapper 第二参为
     // jobject this；实例内调用经 JNI 分派（CallXxxMethodA）。
-    const std::string descriptor = method.desc.to_std_string();
+    const std::string descriptor = method.desc;
     resultType = primitiveToSsaType(returnKind(descriptor));
     if (resultType == SSAType::UNKNOWN) {
         reason = "LLVM IR first slice only supports int/long/float/double/void returns";
@@ -47,24 +47,22 @@ bool supportsMethodDescriptor(const MethodNode& method, SSAType& resultType, std
     return true;
 }
 
-std::string helperName(const std::string& className, const MethodNode& method)
+std::string helperName(const std::string& className, const CompilerMethod& method)
 {
-    return "mj2x_llvm_" + mangleMethod(className,
-                                        method.name.to_std_string(),
-                                        method.desc.to_std_string());
+    return "mj2x_llvm_" + mangleMethod(className, method.name, method.desc);
 }
 
 /// @brief 整方法 fail-closed 降级诊断（#1121）：降级决策保持不变，仅在命中时
 /// 打警告让 native 保护面的消失可观测。口径对齐 RegC 的 "Skipping ..." 通道
 /// （regc_backend 同款 target/格式），结果固定带 method falls back to bytecode。
-void logMethodFallback(const std::string& className, const MethodNode& method,
+void logMethodFallback(const std::string& className, const CompilerMethod& method,
                        const std::string& reason)
 {
     CA_LOGT_WARN("llvm",
                  "Skipping {}.{}{}: {}: method falls back to bytecode\n",
                  className.c_str(),
-                 method.name.to_std_string().c_str(),
-                 method.desc.to_std_string().c_str(),
+                 method.name.c_str(),
+                 method.desc.c_str(),
                  reason.c_str());
 }
 
@@ -95,13 +93,13 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
         return true;
     }
     CompilerMethod* targetMethod = findTarget(id, reason);
-    if (targetMethod == nullptr || targetMethod->methodNode == nullptr) return false;
+    if (targetMethod == nullptr) return false;
 
     if (targetMethod->backendResult.kind == BackendResult::Kind::LLVM_IR) {
-        // 已编译成功：方法体已被 injectIntoClass 清空，不能再预检；成功即已通过
-        // 完整验证，签名直接从描述解析。
+        // 已编译成功（backendResult 是注入权威，批 5 起 inject 改 DOM 不清树）：
+        // 成功即已通过完整验证，签名直接从描述解析。
         CallTarget parsed;
-        if (!fillTargetFromDescriptor(owner, *targetMethod->methodNode, parsed, reason))
+        if (!fillTargetFromDescriptor(owner, *targetMethod, parsed, reason))
             return false;
         cache_.emplace(id, parsed);
         target = parsed;
@@ -117,7 +115,7 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
     // 接受即可；环上各方法的非递归部分由各自的 analyze 负责验证。
     if (!visiting_.insert(id).second) {
         CallTarget parsed;
-        if (!fillTargetFromDescriptor(owner, *targetMethod->methodNode, parsed, reason))
+        if (!fillTargetFromDescriptor(owner, *targetMethod, parsed, reason))
             return false;
         cache_.emplace(id, parsed);
         target = parsed;
@@ -125,7 +123,13 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
     }
 
     // 未编译且非递归：字节码完好，完整预检（含嵌套调用）。
-    if (!analyze(owner, *targetMethod->methodNode, target, reason)) {
+    auto* targetClass = index_.getClass(owner);
+    if (targetClass == nullptr || targetClass->dom == nullptr) {
+        reason = "LLVM IR call target class is not in the compilation index";
+        visiting_.erase(id);
+        return false;
+    }
+    if (!analyze(owner, *targetClass, *targetMethod, target, reason)) {
         visiting_.erase(id);
         return false;
     }
@@ -146,9 +150,8 @@ CompilerMethod* InternalCallResolver::findTarget(const MethodID& id, std::string
         return nullptr;
     }
     for (auto& candidate : clazz->methods) {
-        if (!candidate.markedForCompile || candidate.methodNode == nullptr) continue;
-        if (candidate.methodNode->name.to_std_string() == id.name &&
-            candidate.methodNode->desc.to_std_string() == id.desc) {
+        if (!candidate.markedForCompile) continue;
+        if (candidate.name == id.name && candidate.desc == id.desc) {
             return &candidate;
         }
     }
@@ -156,14 +159,15 @@ CompilerMethod* InternalCallResolver::findTarget(const MethodID& id, std::string
     return nullptr;
 }
 
-bool InternalCallResolver::fillTargetFromDescriptor(const std::string& owner, MethodNode& node,
+bool InternalCallResolver::fillTargetFromDescriptor(const std::string& owner,
+                                                    const CompilerMethod& node,
                                                     CallTarget& target, std::string& reason)
 {
     SSAType resultType = SSAType::UNKNOWN;
     if (!supportsMethodDescriptor(node, resultType, reason)) return false;
     target.symbol     = helperName(owner, node);
     target.returnType = resultType;
-    for (const PrimitiveKind kind : argumentKinds(node.desc.to_std_string())) {
+    for (const PrimitiveKind kind : argumentKinds(node.desc)) {
         target.argTypes.push_back(primitiveToSsaType(kind));
     }
     return true;
@@ -171,19 +175,34 @@ bool InternalCallResolver::fillTargetFromDescriptor(const std::string& owner, Me
 
 /// @brief 目标方法体级预检（不发射）：复用主编译链的 SSA/RegIR 验证。
 /// @param owner 目标方法所属类（跨类调用时符号与 SSA 上下文使用目标类名）。
-bool InternalCallResolver::analyze(const std::string& owner, MethodNode& node, CallTarget& target,
+bool InternalCallResolver::analyze(const std::string& owner, CompilerClass& clazz,
+                                   const CompilerMethod& node, CallTarget& target,
                                    std::string& reason)
 {
     SSAType resultType = SSAType::UNKNOWN;
     if (!supportsMethodDescriptor(node, resultType, reason)) return false;
+    // 批 6d：体转换走 DOM（convert(dom, idx)），身份源 = 快照 name/desc。
+    auto&     dom = *clazz.dom;
+    ca::usize idx = dom.methods.size();
+    for (ca::usize i = 0; i < dom.methods.size(); ++i) {
+        const auto& dm = dom.methods[i];
+        if (dom.cp.utf8Equals(dm.nameCp, node.name) && dom.cp.utf8Equals(dm.descCp, node.desc)) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx == dom.methods.size()) {
+        reason = "LLVM IR call target is not in the class DOM";
+        return false;
+    }
     CodeConverter converter(index_.arena());
-    auto          blocks = converter.convert(node);
+    auto          blocks = converter.convert(dom, idx);
     SSABuilder    builder;
     ca::str::Utf8StringArena ssaArena;   // SSA 派生串入池，活到 ssa 消费完（本函数内同步）
     auto ssa = builder.build(blocks,
                              owner,
-                             node.name.to_std_string(),
-                             node.desc.to_std_string(),
+                             node.name,
+                             node.desc,
                              true,
                              node.maxLocals,
                              ssaArena,
@@ -196,7 +215,7 @@ bool InternalCallResolver::analyze(const std::string& owner, MethodNode& node, C
     if (!collectRegisterTypes(*reg, types, this, reason)) return false;
     target.symbol     = helperName(owner, node);
     target.returnType = resultType;
-    for (const PrimitiveKind kind : argumentKinds(node.desc.to_std_string())) {
+    for (const PrimitiveKind kind : argumentKinds(node.desc)) {
         target.argTypes.push_back(primitiveToSsaType(kind));
     }
     return true;
@@ -208,10 +227,10 @@ const char* calcArgType(PrimitiveKind kind)
     return llvmType(primitiveToSsaType(kind));
 }
 
-std::string emitJniWrapper(const std::string& className, const MethodNode& method,
+std::string emitJniWrapper(const std::string& className, const CompilerMethod& method,
                            const std::string& helper, SSAType /*returnType*/, bool isStatic)
 {
-    const std::string             descriptor = method.desc.to_std_string();
+    const std::string             descriptor = method.desc;
     const std::vector<PrimitiveKind> arguments = argumentKinds(descriptor);
     const PrimitiveKind          retKind   = returnKind(descriptor);
     const char*                  boundaryRet = jniBoundaryType(retKind);
@@ -219,7 +238,7 @@ std::string emitJniWrapper(const std::string& className, const MethodNode& metho
     std::ostringstream           out;
     // JNI native 签名：静态方法第二参为 jclass；实例方法为 jobject this。
     out << "define dllexport " << boundaryRet << " @"
-        << mangleMethod(className, method.name.to_std_string(), descriptor) << "(ptr %env, ptr "
+        << mangleMethod(className, method.name, descriptor) << "(ptr %env, ptr "
         << (isStatic ? "%clazz" : "%this");
     for (size_t index = 0; index < arguments.size(); ++index) {
         out << ", " << jniBoundaryType(arguments[index]) << " %p" << index;
@@ -304,20 +323,16 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
                                            CompilerIndex* index)
 {
     BackendResult result;
-    if (method.methodNode == nullptr) {
-        result.text = "LLVM IR lowering failed: missing method node";
-        return result;
-    }
 
     SSAType     resultType = SSAType::UNKNOWN;
     std::string reason;
-    if (!supportsMethodDescriptor(*method.methodNode, resultType, reason)) {
-        logMethodFallback(className, *method.methodNode, reason);
+    if (!supportsMethodDescriptor(method, resultType, reason)) {
+        logMethodFallback(className, method, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
 
-    const bool isStatic = (method.methodNode->access & Opcodes::ACC_STATIC) != 0;
+    const bool isStatic = (method.access & Opcodes::ACC_STATIC) != 0;
     // 互调需要编译器索引（单元测试不传 index 时行为与以前一致：静态调用走 JNI）。
     std::unique_ptr<InternalCallResolver> callResolver;
     if (index != nullptr) {
@@ -335,10 +350,10 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
         SSABuilder     freshBuilder;
         auto           freshSsa = freshBuilder.build(blocks,
                                                      className,
-                                                     method.methodNode->name.to_std_string(),
-                                                     method.methodNode->desc.to_std_string(),
+                                                     method.name,
+                                                     method.desc,
                                                      isStatic,
-                                                     method.methodNode->maxLocals,
+                                                     method.maxLocals,
                                                      ssaArena,
                                                      r);
         if (!freshSsa) return false;
@@ -358,7 +373,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
         // #1121：SSA/RegIR/验证层 fail-closed 在此整方法降级——此前静默（undef
         // 来路边拷贝自方向 1 起放行，不再触发；诊断通道由真 fail-closed 形态
         // 覆盖，见 unittest RetainsFallbackDiagnosticForUndefinedLocalRead）。
-        logMethodFallback(className, *method.methodNode, reason);
+        logMethodFallback(className, method, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
@@ -371,7 +386,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
         std::unique_ptr<RegFunction> transformedReg;
         RegisterTypes                transformedTypes;
         if (!lowerAndValidate(transformedReg, transformedTypes, reason)) {
-            logMethodFallback(className, *method.methodNode, reason);
+            logMethodFallback(className, method, reason);
             result.text = "LLVM IR lowering failed: " + reason;
             return result;
         }
@@ -389,8 +404,8 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
                          "{}.{}{}: transform output rejected ({}); using untransformed "
                          "IR\n",
                          className.c_str(),
-                         method.methodNode->name.to_std_string().c_str(),
-                         method.methodNode->desc.to_std_string().c_str(),
+                         method.name.c_str(),
+                         method.desc.c_str(),
                          reason.c_str());
         }
     }
@@ -399,7 +414,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     const size_t indySiteBase = impl_->indySites.size();
     impl_->indySites.insert(impl_->indySites.end(), reg->indySites.begin(), reg->indySites.end());
 
-    const std::string helper = helperName(className, *method.methodNode);
+    const std::string helper = helperName(className, method);
     std::string       helperSource;
     std::vector<std::string> checkpointGlobals;
     std::vector<std::string> runtimeDeclares;
@@ -408,15 +423,14 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
                           runtimeProtection_.enabled() ? &runtimeProtection_ : nullptr,
                           &impl_->checkpointCounter, &checkpointGlobals, &runtimeDeclares,
                           helperSource, reason, &impl_->indirectSites)) {
-        logMethodFallback(className, *method.methodNode, reason);
+        logMethodFallback(className, method, reason);
         result.text = "LLVM IR lowering failed: " + reason;
         return result;
     }
 
     result.kind = BackendResult::Kind::LLVM_IR;
     result.text = helperSource +
-                  emitJniWrapper(className, *method.methodNode, helper, resultType,
-                                 isStatic);
+                  emitJniWrapper(className, method, helper, resultType, isStatic);
     impl_->bodies << result.text;
     if (!impl_->checkpointGlobals.empty()) impl_->checkpointGlobals += "\n";
     for (const auto& global : checkpointGlobals) {
@@ -434,13 +448,14 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
 void LlvmIrBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                                     const BackendResult& result)
 {
-    if (result.kind != BackendResult::Kind::LLVM_IR || method.methodNode == nullptr) return;
-    method.methodNode->access |= Opcodes::ACC_NATIVE;
-    method.methodNode->instructions.clear();
-    // native 方法无字节码：maxStack/maxLocals 清零，对齐 StackC/VMC4。
-    method.methodNode->maxStack  = 0;
-    method.methodNode->maxLocals = 0;
-    clazz.modified = true;
+    if (result.kind != BackendResult::Kind::LLVM_IR) return;
+    // 批 5：改写权威在 DOM（标 ACC_NATIVE + 摘 Code 槽；native 方法无字节码，
+    // 对齐 StackC/VMC4）；批 6d：身份源 = 快照 name/desc。
+    if (clazz.dom == nullptr) {
+        throw std::runtime_error("llvmir_backend: DOM not synced for native injection");
+    }
+    dom_inject::markMethodNative(clazz, std::string(clazz.dom->thisName()),
+                                 method.name, method.desc);
 }
 
 void LlvmIrBackend::finalize(const CompilerIndex&)

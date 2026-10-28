@@ -1,4 +1,6 @@
 #include <gmock/gmock.h>
+#include <cstdio>
+#include <cstdio>
 
 #include <memory>
 #include <regex>
@@ -13,6 +15,7 @@
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/llvmir/llvm_ir_backend.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "test_helper.hpp"
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -98,15 +101,25 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
                              2,
                              2);
 
-    CompilerMethod compilerMethod;
-    compilerMethod.methodNode = method.get();
+    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    ca::str::Utf8StringArena arena;
+    MethodNode*   methodPtr = method.get();
     CompilerClass compilerClass;
-    compilerClass.methods.push_back(compilerMethod);
+    {
+        auto cn = std::make_unique<ClassNode>();
+        cn->name      = arena.intern("Test");
+        cn->version   = Opcodes::V1_8;
+        cn->access    = Opcodes::ACC_PUBLIC;
+        cn->superName = arena.intern("java/lang/Object");
+        cn->methods.push_back(method.get());
+        compilerClass = test::classFromTree("Test", *cn, arena);
+        cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+        compilerClass.methods[0].markedForCompile = true;
+    }
 
     LlvmIrBackend backend;
-    ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = test::convertMethodNode(converter, *methodPtr, arena);
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
@@ -119,8 +132,13 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
     EXPECT_NE(result.text.find("add i32"), std::string::npos) << result.text;
 
     backend.injectIntoClass(compilerClass, compilerClass.methods[0], result);
-    EXPECT_TRUE(method->access & Opcodes::ACC_NATIVE);
-    EXPECT_EQ(method->instructions.size(), 0);
+    test::refreshTreeFromDom(compilerClass, "Test");
+    auto injectedTree = test::treeFromDom(compilerClass, arena);
+    ASSERT_NE(injectedTree, nullptr);
+    auto* injected = test::findMethodNode(injectedTree.get(), "add");
+    ASSERT_NE(injected, nullptr);
+    EXPECT_TRUE(injected->access & Opcodes::ACC_NATIVE);
+    EXPECT_EQ(injected->instructions.size(), 0u);
     EXPECT_TRUE(compilerClass.modified);
 
     CompilerIndex emptyIndex;
@@ -144,15 +162,12 @@ TEST(LlvmIrBackendTest, KeepsUnsupportedMethodBytecode)
                              1,
                              1);
 
-    CompilerMethod compilerMethod;
-    compilerMethod.methodNode = method.get();
     CompilerClass compilerClass;
-    compilerClass.methods.push_back(compilerMethod);
-
+    compilerClass.methods.push_back(test::snapshotMethod(*method));
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE) << result.text;
@@ -181,16 +196,13 @@ TEST(LlvmIrBackendTest, EmitsMonitorIntrinsics)
                                     2,
                                     1);
 
-    CompilerMethod monitorCompilerMethod;
-    monitorCompilerMethod.methodNode = monitorMethod.get();
     CompilerClass compilerClass;
-    compilerClass.methods.push_back(monitorCompilerMethod);
-
+    compilerClass.methods.push_back(test::snapshotMethod(*monitorMethod));
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
     auto monitorResult = backend.compileMethod(
-        "Test", compilerClass.methods[0], converter.convert(*monitorMethod));
+        "Test", compilerClass.methods[0], test::convertMethodNode(converter, *monitorMethod, arena));
 
     ASSERT_EQ(monitorResult.kind, BackendResult::Kind::LLVM_IR) << monitorResult.text;
     EXPECT_NE(monitorResult.text.find("call void @mj2x_llvm_monitor_enter(ptr %env, ptr %v0)"),
@@ -209,11 +221,11 @@ BackendResult compileSingle(const char* name, const char* desc,
     auto        method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns,
                                     maxStack, maxLocals);
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*method, true));
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*method);
+    auto                     blocks = test::convertMethodNode(converter, *method, arena);
     return backend.compileMethod("Test", clazz.methods[0], blocks);
 }
 
@@ -233,11 +245,11 @@ TEST(LlvmIrBackendTest, EmitsShiftOperationsWithJavaModuloSemantics)
                                  2,
                                  2);
         CompilerClass clazz;
-        clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+        clazz.methods.push_back(test::snapshotMethod(*method, true));
         LlvmIrBackend backend;
         ca::str::Utf8StringArena arena;
         CodeConverter            converter(arena);
-        auto                     blocks = converter.convert(*method);
+        auto                     blocks = test::convertMethodNode(converter, *method, arena);
         auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
         ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
         EXPECT_NE(result.text.find(expect), std::string::npos) << result.text;
@@ -259,11 +271,11 @@ TEST(LlvmIrBackendTest, EmitsShiftOperationsWithJavaModuloSemantics)
                               4,
                               4);
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{lmethod.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*lmethod, true));
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*lmethod);
+    auto                     blocks = test::convertMethodNode(converter, *lmethod, arena);
     auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("shl i64"), std::string::npos) << result.text;
@@ -289,9 +301,17 @@ CompilerIndex makeCallerIndex(std::unique_ptr<MethodNode>& add,
                          new InsnNode(Opcodes::IRETURN)},
                         2, 2);
     CompilerIndex index;
-    CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{add.get(), true, false, {}});
-    clazz.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
+    auto&         fArena = index.arena();
+    auto cn = std::make_unique<ClassNode>();
+    cn->name      = fArena.intern("Test");
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->superName = fArena.intern("java/lang/Object");
+    cn->methods.push_back(add.get());
+    cn->methods.push_back(caller.get());
+    auto clazz = test::classFromTree("Test", *cn, fArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    for (auto& m : clazz.methods) m.markedForCompile = true;
     index.addClass("Test", std::move(clazz));
     return index;
 }
@@ -311,7 +331,7 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
     backend.setDirectCallTier(codegen::DirectCallTier::IntraClass);
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*caller);
+    auto                     blocks = test::convertMethodNode(converter, *caller, arena);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
@@ -334,7 +354,7 @@ TEST(LlvmIrBackendTest, DirectCallTierOffRoutesIntraClassStaticCallThroughJni)
     LlvmIrBackend backend;   // 默认 Off
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*caller);
+    auto                     blocks = test::convertMethodNode(converter, *caller, arena);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
@@ -400,11 +420,20 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
                               new InsnNode(Opcodes::IRETURN)},
                              2, 1);
 
+    // 批 6d：index 上下文的后端按 DOM 解析被调方法——夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
-    CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{helper.get(), true, false, {}});
-    clazz.methods.push_back(CompilerMethod{trap.get(), true, false, {}});
-    clazz.methods.push_back(CompilerMethod{noTrap.get(), true, false, {}});
+    auto&         fArena = index.arena();
+    auto cn = std::make_unique<ClassNode>();
+    cn->name      = fArena.intern("Test");
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->superName = fArena.intern("java/lang/Object");
+    cn->methods.push_back(helper.get());
+    cn->methods.push_back(trap.get());
+    cn->methods.push_back(noTrap.get());
+    auto clazz = test::classFromTree("Test", *cn, fArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    for (auto& m : clazz.methods) m.markedForCompile = true;
     index.addClass("Test", std::move(clazz));
 
     ScopedLlvmLogCapture capture;
@@ -413,15 +442,17 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
     CodeConverter            converter(arena);
 
     auto trapResult = backend.compileMethod(
-        "Test", index.getClass("Test")->methods[1], converter.convert(*trap), &index);
+        "Test", index.getClass("Test")->methods[1], test::convertMethodNode(converter, *trap, arena), &index);
     // 放行后行为钉：正常发射 native define，零降级诊断。
     ASSERT_EQ(trapResult.kind, BackendResult::Kind::LLVM_IR) << trapResult.text;
     EXPECT_NE(trapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_trap__I"),
               std::string::npos)
         << trapResult.text;
-    // undef 来路边拷贝的可观测形态：区域后合流边对 handler 侧异常接收局部
-    //（slot 2，try 体来路未定义）产出 dest 槽类型 undef 常量。
-    EXPECT_NE(trapResult.text.find("store ptr undef, ptr %slot_r2"), std::string::npos)
+    // undef 来路边拷贝的可观测形态：区域后合流边对 handler 块参数（try 体
+    // 来路未定义）产出 dest 槽类型 undef 常量。批 3b DOM 读路径的 handler
+    // 块参数不再携带树侧双标签怪癖的 slot_r2 局部，REF 槽型 undef 拷贝落在
+    // 异常接收局部（slot_r4），槽型保真钉义不变（ptr 而非 i32 塌缩）。
+    EXPECT_NE(trapResult.text.find("store ptr undef, ptr %slot_r"), std::string::npos)
         << trapResult.text;
     for (const auto& [level, text] : capture.backend().entries) {
         EXPECT_EQ(text.find("Skipping Test.trap(I)I:"), std::string::npos)
@@ -430,7 +461,7 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
 
     // 对照：同形同类调用无 try 区域 → 正常发射，无降级诊断。
     auto noTrapResult = backend.compileMethod(
-        "Test", index.getClass("Test")->methods[2], converter.convert(*noTrap), &index);
+        "Test", index.getClass("Test")->methods[2], test::convertMethodNode(converter, *noTrap, arena), &index);
     ASSERT_EQ(noTrapResult.kind, BackendResult::Kind::LLVM_IR) << noTrapResult.text;
     EXPECT_NE(noTrapResult.text.find("define internal i32 @mj2x_llvm_Java_Test_noTrap__I"),
               std::string::npos)
@@ -481,12 +512,12 @@ TEST(LlvmIrBackendTest, EmitsForEachShapeOverUndefEdgeCopy)
                               3, 6);
 
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{forEach.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*forEach, true));
     ScopedLlvmLogCapture capture;
     LlvmIrBackend          backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto        result = backend.compileMethod("Test", clazz.methods[0], converter.convert(*forEach));
+    auto        result = backend.compileMethod("Test", clazz.methods[0], test::convertMethodNode(converter, *forEach, arena));
 
     // 放行后行为钉：正常发射 native define，零降级诊断。
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
@@ -512,13 +543,13 @@ TEST(LlvmIrBackendTest, RetainsFallbackDiagnosticForUndefinedLocalRead)
                                  new InsnNode(Opcodes::IRETURN)},
                                 1, 1);
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{undefRead.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*undefRead, true));
 
     ScopedLlvmLogCapture capture;
     LlvmIrBackend          backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto result = backend.compileMethod("Test", clazz.methods[0], converter.convert(*undefRead));
+    auto result = backend.compileMethod("Test", clazz.methods[0], test::convertMethodNode(converter, *undefRead, arena));
 
     // fail-closed 行为不变：无 native define。
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE) << result.text;
@@ -554,16 +585,25 @@ TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
                                             false),
                          new InsnNode(Opcodes::IRETURN)},
                         1, 0);
+    // 批 6d：index 上下文的后端按 DOM 解析被调方法——夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
-    CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{target.get(), true, false, {}});
-    clazz.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
+    auto&         fArena = index.arena();
+    auto cn = std::make_unique<ClassNode>();
+    cn->name      = fArena.intern("Test");
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->superName = fArena.intern("java/lang/Object");
+    cn->methods.push_back(target.get());
+    cn->methods.push_back(caller.get());
+    auto clazz = test::classFromTree("Test", *cn, fArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    for (auto& m : clazz.methods) m.markedForCompile = true;
     index.addClass("Test", std::move(clazz));
 
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*caller);
+    auto                     blocks = test::convertMethodNode(converter, *caller, arena);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[1], blocks, &index);
 
     // target 不可转换 → 调用方走 JNI call_static_* fallback（不再 fail-closed）。
@@ -586,9 +626,18 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
          new InsnNode(Opcodes::IRETURN)},
         1, 0);
 
+    // 批 6d：夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
-    CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{crossClass.get(), true, false, {}});
+    auto&         fArena = index.arena();
+    auto cn = std::make_unique<ClassNode>();
+    cn->name      = fArena.intern("Test");
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->superName = fArena.intern("java/lang/Object");
+    cn->methods.push_back(crossClass.get());
+    auto clazz = test::classFromTree("Test", *cn, fArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    clazz.methods[0].markedForCompile = true;
     index.addClass("Test", std::move(clazz));
 
     LlvmIrBackend backend;
@@ -607,9 +656,9 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
          new InsnNode(Opcodes::IRETURN)},
         1, 0);
     CompilerClass indexlessClazz;
-    indexlessClazz.methods.push_back(CompilerMethod{indexless.get(), true, false, {}});
+    indexlessClazz.methods.push_back(test::snapshotMethod(*indexless, true));
     LlvmIrBackend indexlessBackend;
-    auto          indexlessBlocks = converter.convert(*indexless);
+    auto          indexlessBlocks = test::convertMethodNode(converter, *indexless, arena);
     auto          indexlessResult =
         indexlessBackend.compileMethod("Test", indexlessClazz.methods[0], indexlessBlocks, nullptr);
     ASSERT_EQ(indexlessResult.kind, BackendResult::Kind::LLVM_IR) << indexlessResult.text;
@@ -619,7 +668,7 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
 
     // 跨类（带 index，目标类缺失）→ JNI call_static_* helper。
     auto crossResult = backend.compileMethod("Test", index.getClass("Test")->methods[0],
-                                             converter.convert(*crossClass), &index);
+                                             test::convertMethodNode(converter, *crossClass, arena), &index);
     ASSERT_EQ(crossResult.kind, BackendResult::Kind::LLVM_IR) << crossResult.text;
     EXPECT_NE(crossResult.text.find("call i32 @mj2x_llvm_call_static_int(ptr %env, ptr @_mj2x_llvm_str_"),
               std::string::npos)
@@ -639,15 +688,24 @@ TEST(LlvmIrBackendTest, EmitsRecursiveStaticCall)
          new InsnNode(Opcodes::IRETURN)},
         1, 0);
 
+    // 批 6d：夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
-    CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{recursive.get(), true, false, {}});
+    auto&         fArena = index.arena();
+    auto cn = std::make_unique<ClassNode>();
+    cn->name      = fArena.intern("Test");
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->superName = fArena.intern("java/lang/Object");
+    cn->methods.push_back(recursive.get());
+    auto clazz = test::classFromTree("Test", *cn, fArena);
+    cn->methods.clear();
+    clazz.methods[0].markedForCompile = true;
     index.addClass("Test", std::move(clazz));
 
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*recursive);
+    auto blocks = test::convertMethodNode(converter, *recursive, arena);
     auto result = backend.compileMethod("Test", index.getClass("Test")->methods[0], blocks, &index);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
@@ -664,11 +722,11 @@ BackendResult compileScalar(const char* name, const char* desc,
     auto          method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns,
                                       maxStack, maxLocals);
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*method, true));
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = test::convertMethodNode(converter, *method, arena);
     return backend.compileMethod("Test", clazz.methods[0], blocks);
 }
 
@@ -722,11 +780,11 @@ TEST(LlvmIrBackendTest, EmitsInstanceWrapperThis)
     auto method = makeMethod(Opcodes::ACC_PUBLIC, "getX", "()I",
                              {new InsnNode(Opcodes::ICONST_1), new InsnNode(Opcodes::IRETURN)}, 1, 1);
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*method, true));
     LlvmIrBackend backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("Test", clazz.methods[0], blocks);
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
     EXPECT_NE(result.text.find("define internal i32 @mj2x_llvm_Java_Test_getX(ptr %env, ptr %p0)"),
@@ -1024,11 +1082,11 @@ TEST(LlvmIrBackendTest, EmitsExceptionDispatchWithRegions)
         ca::str::Utf8StringRef::from_cstr("java/lang/ArithmeticException")));
 
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*method, true));
     LlvmIrBackend            backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto        blocks = converter.convert(*method);
+    auto        blocks = test::convertMethodNode(converter, *method, arena);
     auto        result = backend.compileMethod("Test", clazz.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;
@@ -1169,10 +1227,10 @@ BackendResult compileWithBackend(LlvmIrBackend& backend, const char* name, const
     auto          method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns,
                                       maxStack, maxLocals);
     CompilerClass clazz;
-    clazz.methods.push_back(CompilerMethod{method.get(), true, false, {}});
+    clazz.methods.push_back(test::snapshotMethod(*method, true));
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = test::convertMethodNode(converter, *method, arena);
     return backend.compileMethod("Test", clazz.methods[0], blocks);
 }
 
@@ -1262,7 +1320,7 @@ TEST(LlvmIrBackendTest, EmitsIndyRuntimeResolution)
     std::vector<ca::core::Any>       bsmArgs;
     auto* indy = new InvokeDynamicInsnNode(
         arena.intern("run"), arena.intern("(II)I"),
-        Handle(Opcodes::H_INVOKESTATIC, arena.intern("Test"), arena.intern("bsm"),
+        jbytecode::core::Handle(Opcodes::H_INVOKESTATIC, arena.intern("Test"), arena.intern("bsm"),
                arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                              "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
         bsmArgs);
@@ -1270,14 +1328,11 @@ TEST(LlvmIrBackendTest, EmitsIndyRuntimeResolution)
                              {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
                               indy, new InsnNode(Opcodes::IRETURN)},
                              2, 2);
-    CompilerMethod compilerMethod;
-    compilerMethod.methodNode = method.get();
     CompilerClass compilerClass;
-    compilerClass.methods.push_back(compilerMethod);
-
+    compilerClass.methods.push_back(test::snapshotMethod(*method));
     LlvmIrBackend backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Test", compilerClass.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::LLVM_IR) << result.text;

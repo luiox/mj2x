@@ -1,6 +1,7 @@
 #include "regc_emitter_internal.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/codegen/c_source.hpp"
@@ -26,7 +27,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 
 namespace {
 

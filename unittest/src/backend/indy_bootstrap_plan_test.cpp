@@ -23,6 +23,7 @@
 #include "libca/str/utf8_string_arena.hpp"
 
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
+#include "mj2x/core/jvm_type.hpp"
 
 namespace {
 
@@ -211,17 +212,19 @@ TEST(IndyBootstrapPlanTest, ClassifyBsmArgAllKinds)
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any(1.5f)), IndyBsmArgKind::Float);
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any(2.5)), IndyBsmArgKind::Double);
 
-    jbytecode::core::Type methodType = jbytecode::core::Type::getMethodType(
+    // Any 载荷门面（批 6e）：bsm/bsmArgs 的 Class/MethodType 载荷 = mj2x::Type、
+    // MethodHandle 载荷 = mj2x::Handle（classifyIndyBsmArg 按 as<mj2x::Type/Handle> 判定）。
+    mj2x::Type methodType = mj2x::Type::getMethodType(
         ca::str::Utf8StringRef::from_cstr("(II)I"));
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any(methodType)), IndyBsmArgKind::MethodType);
-    jbytecode::core::Type objectType = jbytecode::core::Type::getObjectType(
+    mj2x::Type objectType = mj2x::Type::getObjectType(
         ca::str::Utf8StringRef::from_cstr("java/lang/String"));
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any(objectType)), IndyBsmArgKind::Class);
 
-    jbytecode::core::Handle handle(jbytecode::core::Opcodes::H_INVOKESTATIC,
-                                   ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
-                                   ca::str::Utf8StringRef::from_cstr("x"),
-                                   ca::str::Utf8StringRef::from_cstr("(II)I"));
+    mj2x::Handle handle(jbytecode::core::Opcodes::H_INVOKESTATIC,
+                        ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
+                        ca::str::Utf8StringRef::from_cstr("x"),
+                        ca::str::Utf8StringRef::from_cstr("(II)I"), false);
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any(handle)), IndyBsmArgKind::Handle);
 
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any()), IndyBsmArgKind::Null);
@@ -501,16 +504,28 @@ IndyBsmArgKind classifyRegCRef(const ca::core::Any& value)
 
 TEST(IndyBootstrapPlanTest, ThreeWayClassifyCrossCheck)
 {
-    jbytecode::core::Type methodType = jbytecode::core::Type::getMethodType(
+    // 同位样本对：旧栈载荷（参考实现侧）与 mj2x 门面载荷（产品单源侧）各构一份——
+    // 批 6e 后产品按 as<mj2x::Type/Handle> 判定，参考转录保持旧栈载荷形态。
+    jbytecode::core::Type refMethodType = jbytecode::core::Type::getMethodType(
         ca::str::Utf8StringRef::from_cstr("(II)I"));
-    jbytecode::core::Type objectType = jbytecode::core::Type::getObjectType(
+    jbytecode::core::Type refObjectType = jbytecode::core::Type::getObjectType(
         ca::str::Utf8StringRef::from_cstr("java/lang/String"));
-    jbytecode::core::Type intType =
+    jbytecode::core::Type refIntType =
         jbytecode::core::Type::getObjectType(ca::str::Utf8StringRef::from_cstr("I"));
-    jbytecode::core::Handle handle(jbytecode::core::Opcodes::H_INVOKESTATIC,
-                                   ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
-                                   ca::str::Utf8StringRef::from_cstr("x"),
-                                   ca::str::Utf8StringRef::from_cstr("(II)I"));
+    jbytecode::core::Handle refHandle(jbytecode::core::Opcodes::H_INVOKESTATIC,
+                                      ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
+                                      ca::str::Utf8StringRef::from_cstr("x"),
+                                      ca::str::Utf8StringRef::from_cstr("(II)I"));
+    mj2x::Type methodType = mj2x::Type::getMethodType(
+        ca::str::Utf8StringRef::from_cstr("(II)I"));
+    mj2x::Type objectType = mj2x::Type::getObjectType(
+        ca::str::Utf8StringRef::from_cstr("java/lang/String"));
+    mj2x::Type intType =
+        mj2x::Type::getObjectType(ca::str::Utf8StringRef::from_cstr("I"));
+    mj2x::Handle handle(jbytecode::core::Opcodes::H_INVOKESTATIC,
+                        ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
+                        ca::str::Utf8StringRef::from_cstr("x"),
+                        ca::str::Utf8StringRef::from_cstr("(II)I"), false);
     const std::pair<ca::core::Any, IndyBsmArgKind> kSamples[] = {
         {ca::core::Any(std::string("s")), IndyBsmArgKind::String},
         {ca::core::Any(ca::str::Utf8StringRef::from_cstr("s")), IndyBsmArgKind::String},
@@ -526,9 +541,30 @@ TEST(IndyBootstrapPlanTest, ThreeWayClassifyCrossCheck)
         {ca::core::Any(2.5), IndyBsmArgKind::Double},
         {ca::core::Any(), IndyBsmArgKind::Null},
     };
+    const std::pair<ca::core::Any, IndyBsmArgKind> kRefSamples[] = {
+        {ca::core::Any(std::string("s")), IndyBsmArgKind::String},
+        {ca::core::Any(ca::str::Utf8StringRef::from_cstr("s")), IndyBsmArgKind::String},
+        {ca::core::Any(refMethodType), IndyBsmArgKind::MethodType},
+        {ca::core::Any(refObjectType), IndyBsmArgKind::Class},
+        {ca::core::Any(refIntType), IndyBsmArgKind::Class},
+        {ca::core::Any(refHandle), IndyBsmArgKind::Handle},
+        {ca::core::Any(static_cast<ca::i32>(-2147483647 - 1)), IndyBsmArgKind::Int},
+        {ca::core::Any(static_cast<ca::i32>(2147483647)), IndyBsmArgKind::Int},
+        {ca::core::Any(static_cast<ca::i64>(-9223372036854775807ll - 1)), IndyBsmArgKind::Long},
+        {ca::core::Any(static_cast<ca::i64>(9223372036854775807ll)), IndyBsmArgKind::Long},
+        {ca::core::Any(1.5f), IndyBsmArgKind::Float},
+        {ca::core::Any(2.5), IndyBsmArgKind::Double},
+        {ca::core::Any(), IndyBsmArgKind::Null},
+    };
     for (const auto& sample : kSamples) {
-        EXPECT_EQ(classifyIndyBsmArg(sample.first), classifyRegCRef(sample.first));
         EXPECT_EQ(classifyIndyBsmArg(sample.first), sample.second);
+    }
+    for (const auto& sample : kRefSamples) {
+        EXPECT_EQ(classifyRegCRef(sample.first), sample.second);
+    }
+    for (size_t i = 0; i < sizeof(kSamples) / sizeof(kSamples[0]); ++i) {
+        EXPECT_EQ(classifyIndyBsmArg(kSamples[i].first),
+                  classifyRegCRef(kRefSamples[i].first));
     }
 }
 

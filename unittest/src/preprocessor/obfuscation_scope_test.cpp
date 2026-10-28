@@ -16,6 +16,7 @@
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/preprocessor/native_class_filter_preprocessor.hpp"
 #include "mj2x/preprocessor/obfuscation_scope_preprocessor.hpp"
+#include "test_helper.hpp"
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -34,8 +35,8 @@ void addClass(CompilerIndex& index, const char* internalName, bool isLibrary = f
     auto node = std::make_unique<ClassNode>();
     node->name = ca::str::Utf8StringRef::from_cstr(internalName);
     node->superName = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
-    CompilerClass clazz;
-    clazz.classNode = std::move(node);
+    node->version = jbytecode::core::Opcodes::V1_8;
+    auto clazz = test::classFromTree(internalName, *node, index.arena());
     clazz.isLibrary = isLibrary;
     index.addClass(internalName, std::move(clazz));
 }

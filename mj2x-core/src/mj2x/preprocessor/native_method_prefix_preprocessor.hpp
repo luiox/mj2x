@@ -7,6 +7,8 @@
 #include <vector>
 #include "libca/log/log_macros.hpp"
 
+#include "mj2x/core/dom_edit.hpp"
+
 namespace mj2x {
 
 class NativeMethodPrefixPreprocessor : public Preprocessor
@@ -25,16 +27,16 @@ public:
             if (cls.filteredOut) continue;
             // 接口整体跳过：接口方法禁止 ACC_NATIVE（JLS 9.4/JVMS 4.6），
             // 标记接口的 default/static/私有方法会产出 ClassFormatError。
-            if (cls.classNode &&
-                (cls.classNode->access & jbytecode::core::Opcodes::ACC_INTERFACE))
+            // 批 4：读侧落 DOM（access 位是 ClassFile 头字段）。
+            if (cls.dom && (cls.dom->access & Opcodes::ACC_INTERFACE))
                 continue;
             for (auto& method : cls.methods) {
-                auto* mn = method.methodNode;
-                if (mn->access &
-                    (jbytecode::core::Opcodes::ACC_ABSTRACT | jbytecode::core::Opcodes::ACC_NATIVE))
+                const auto& dm = domMethodFor(cls, method.name, method.desc);
+                if (dm.access &
+                    (Opcodes::ACC_ABSTRACT | Opcodes::ACC_NATIVE))
                     continue;
 
-                const auto methodName = mn->name.to_std_string();
+                const auto methodName = std::string(cls.dom->nameOf(dm));
                 if (methodName == "<init>" || methodName == "<clinit>") continue;
 
                 const std::string key = className + "." + methodName;

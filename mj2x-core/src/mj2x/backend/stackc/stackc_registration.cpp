@@ -3,33 +3,23 @@
 ///        RegisterNatives 发射（从 stackc_backend.cpp 单体拆出）。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/postprocessor/native_loader_call.hpp"
 
 #include <cstdio>
 
-#include "jbytecode/jbytecode.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 using codegen::CSourceStream;
 using codegen::fnv1a64;
 using codegen::hex64;
 using codegen::cStringLiteral;
 using codegen::registerFunctionName;
-
-void clearMethodDebugAndHandlers(MethodNode* method)
-{
-    for (auto* tc : method->tryCatchBlocks)
-        if (!method->arena().owns(tc)) delete tc;   // 混合清除(B7)
-    method->tryCatchBlocks.clear();
-    for (auto* lv : method->localVariables)
-        if (!method->arena().owns(lv)) delete lv;   // 混合清除(B7)
-    method->localVariables.clear();
-}
 
 std::string hiddenClinitClassNameFor(const std::string& ownerClassName)
 {
@@ -39,133 +29,123 @@ std::string hiddenClinitClassNameFor(const std::string& ownerClassName)
     return ownerClassName.substr(0, slash + 1) + simpleName;
 }
 
+/// @brief native 代理壳类字节（批 6d DOM 构建）：单 native 静态方法、无体
+///        无分支——native 方法不带 Code 属性（JVMS 4.7.3），RegisterNatives
+///        运行时绑定与 maxStack/maxLocals 无关。
+static std::vector<ca::u8> buildNativeProxyClassBytes(const std::string& hiddenClassName,
+                                                      const std::string& methodName,
+                                                      const std::string& methodDesc,
+                                                      ca::u32            visibility)
+{
+    auto cf        = std::make_unique<jbc::core::ClassFile>();
+    cf->major      = 52;   // V1_8
+    cf->access     = Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
+    cf->thisClass  = cf->cp.addClass(cf->cp.addUtf8(hiddenClassName));
+    cf->superClass = cf->cp.addClass(cf->cp.addUtf8("java/lang/Object"));
+
+    jbc::core::MemberInfo proxy;
+    proxy.access = visibility | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE
+                 | Opcodes::ACC_SYNTHETIC;
+    proxy.nameCp = cf->cp.addUtf8(methodName);
+    proxy.descCp = cf->cp.addUtf8(methodDesc);
+    cf->methods.push_back(std::move(proxy));
+
+    auto written = jbc::core::writeClass(*cf);
+    if (written.is_err()) {
+        throw std::runtime_error("stackc_registration: proxy class writeClass failed");
+    }
+    return std::move(written).unwrap();
+}
+
 std::vector<uint8_t> makeHiddenClinitClassBytes(const std::string& hiddenClassName,
                                                 const std::string& hiddenMethodName)
 {
-    ca::str::Utf8StringArena arena;
-    ClassNode                cn;
-    cn.version   = Opcodes::V1_8;
-    cn.access    = Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
-    cn.name      = arena.intern(hiddenClassName.c_str());
-    cn.superName = arena.intern("java/lang/Object");
-
-    std::vector<ca::str::Utf8StringRef> noExceptions;
-    auto*                               proxy = new MethodNode(
-        Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
-        arena.intern(hiddenMethodName.c_str()),
-        arena.intern(kHiddenClinitMethodDesc),
-        arena.intern(""),
-        noExceptions);
-    proxy->maxStack  = 0;
-    proxy->maxLocals = 1;
-    cn.methods.push_back(proxy);
-
-    ClassWriter writer(arena, 0);
-    cn.accept(&writer);
-    return writer.toByteArray();
+    return buildNativeProxyClassBytes(hiddenClassName, hiddenMethodName, kHiddenClinitMethodDesc,
+                                      Opcodes::ACC_PRIVATE);
 }
 
 std::vector<uint8_t> makeHiddenInterfaceDefaultClassBytes(const std::string& hiddenClassName,
                                                           const std::string& hiddenMethodName,
                                                           const std::string& hiddenMethodDesc)
 {
-    ca::str::Utf8StringArena arena;
-    ClassNode                cn;
-    cn.version   = Opcodes::V1_8;
-    cn.access    = Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
-    cn.name      = arena.intern(hiddenClassName.c_str());
-    cn.superName = arena.intern("java/lang/Object");
-
-    std::vector<ca::str::Utf8StringRef> noExceptions;
-    auto*                               proxy = new MethodNode(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_NATIVE | Opcodes::ACC_SYNTHETIC,
-        arena.intern(hiddenMethodName.c_str()),
-        arena.intern(hiddenMethodDesc.c_str()),
-        arena.intern(""),
-        noExceptions);
-    proxy->maxStack  = 0;
-    proxy->maxLocals = 0;
-    cn.methods.push_back(proxy);
-
-    ClassWriter writer(arena, 0);
-    cn.accept(&writer);
-    return writer.toByteArray();
+    return buildNativeProxyClassBytes(hiddenClassName, hiddenMethodName, hiddenMethodDesc,
+                                      Opcodes::ACC_PUBLIC);
 }
 
-static void emitClassRegistrationCall(MethodNode* clinit, ca::str::Utf8StringRef className,
-                                      int classId)
+void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, CompilerClass& clazz,
+                                                  const std::string& className)
 {
-    // native 库加载已收敛到 Loader.<clinit>（CLoaderPostprocessor 注入一次
-    // NativeLoader.load）：JVM 保证首次调用 Loader 的 static 方法前先执行其
-    // <clinit>，故转换类 clinit 只需 registerNativesForClass，不再重复携带
-    // 相同的资源路径字符串与调用。
-    clinit->instructions.add(clinit->create<LdcInsnNode>(classId));
-    clinit->instructions.add(clinit->create<LdcInsnNode>(Type::getObjectType(className)));
-    clinit->instructions.add(
-        clinit->create<MethodInsnNode>(Opcodes::INVOKESTATIC,
-                           ca::str::ZUtf8StringRef::from_static(kRegisterBridgeClassName),
-                           ca::str::ZUtf8StringRef::from_static(kRegisterBridgeMethodName),
-                           ca::str::ZUtf8StringRef::from_static(kRegisterBridgeMethodDesc),
-                           false));
-}
-
-void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, CompilerClass& clazz)
-{
-    const auto className = clazz.classNode->name.to_std_string();
     if (!protectedClinitClasses.insert(className).second) return;
 
     auto idIt = registrationClassIds.find(className);
     if (idIt == registrationClassIds.end()) return;
 
-    auto*       clinit = findMethod(clazz, "<clinit>", "()V");
+    // hidden clinit 编译（簿记面）：clinit 体此刻仍是原体（inject 未触碰），
+    // convert 直读 DOM；hidden 名走幻影快照（compileMethod 的名字源 =
+    // CompilerMethod.name）——不落任何权威，clinit 体在下方于 DOM 全量重建。
     std::string hiddenName;
     std::string hiddenFunctionName;
-
-    if (clinit != nullptr && clinit->instructions.size() > 0) {
-        hiddenName        = "__mj2x_hidden_clinit_" + hex64(fnv1a64(className));
-        auto originalName = clinit->name;
-        clinit->name      = stableUtf8(hiddenName);
-
-        CompilerMethod hiddenMethod;
-        hiddenMethod.methodNode       = clinit;
-        hiddenMethod.markedForCompile = true;
-        // blocks 在下方 compileMethod 同步消费完即弃，局部 arena 活过消费期即可（spec §6.4）。
-        ca::str::Utf8StringArena converterArena;
-        CodeConverter            converter(converterArena);
-        auto                     blocks = converter.convert(*clinit);
-        (void)backend.compileMethod(className, hiddenMethod, blocks);
-        auto regsIt = registrationsByClass.find(className);
-        if (regsIt != registrationsByClass.end()) {
-            for (auto it = regsIt->second.rbegin(); it != regsIt->second.rend(); ++it) {
-                if (it->javaName == hiddenName && it->javaDesc == "()V") {
-                    hiddenFunctionName = it->cFunctionName;
-                    break;
-                }
+    {
+        auto&       dom       = *clazz.dom;
+        const auto  clinitIdx = dom_inject::findMethodInDom(dom, "<clinit>", "()V");
+        bool        hasBody   = false;
+        if (clinitIdx < dom.methods.size()) {
+            auto codeRes = dom.decodeCode(dom.methods[clinitIdx]);
+            if (codeRes.is_ok()) {
+                auto* code = std::move(codeRes).unwrap();
+                hasBody    = code != nullptr && !code->code.empty();
             }
         }
-        clinit->name = originalName;
-        if (!hiddenFunctionName.empty())
-            registerHiddenClinitProxy(className, hiddenName, hiddenFunctionName);
+
+        if (hasBody) {
+            hiddenName = "__mj2x_hidden_clinit_" + hex64(fnv1a64(className));
+
+            CompilerMethod hiddenMethod;
+            hiddenMethod.name             = hiddenName;
+            hiddenMethod.desc             = "()V";
+            hiddenMethod.access           = Opcodes::ACC_STATIC;
+            hiddenMethod.markedForCompile = true;
+            // blocks 在下方 compileMethod 同步消费完即弃，局部 arena 活过消费期即可（spec §6.4）。
+            ca::str::Utf8StringArena converterArena;
+            CodeConverter            converter(converterArena);
+            auto                     blocks = converter.convert(dom, clinitIdx);
+            (void)backend.compileMethod(className, hiddenMethod, blocks);
+            auto regsIt = registrationsByClass.find(className);
+            if (regsIt != registrationsByClass.end()) {
+                for (auto it = regsIt->second.rbegin(); it != regsIt->second.rend(); ++it) {
+                    if (it->javaName == hiddenName && it->javaDesc == "()V") {
+                        hiddenFunctionName = it->cFunctionName;
+                        break;
+                    }
+                }
+            }
+            if (!hiddenFunctionName.empty())
+                registerHiddenClinitProxy(className, hiddenName, hiddenFunctionName);
+        }
     }
 
-    if (clinit == nullptr) {
-        std::vector<ca::str::Utf8StringRef> noExceptions;
-        clinit = new MethodNode(Opcodes::ACC_STATIC,
-                                ca::str::ZUtf8StringRef::from_static("<clinit>"),
-                                ca::str::ZUtf8StringRef::from_static("()V"),
-                                ca::str::ZUtf8StringRef::from_static(""),
-                                noExceptions);
-        clazz.classNode->methods.push_back(clinit);
-    }
-
-    clinit->access &= ~Opcodes::ACC_NATIVE;
-    clinit->instructions.clear();
-    clearMethodDebugAndHandlers(clinit);
-    emitClassRegistrationCall(clinit, clazz.classNode->name, idIt->second);
-    clinit->instructions.add(clinit->create<InsnNode>(Opcodes::RETURN));
-    clinit->maxStack  = 2;
-    clinit->maxLocals = 0;
-    clazz.modified    = true;
+    // clinit 重建（DOM 权威）：体 = [ldc classId, ldc thisClass, invokestatic
+    // bridge, RETURN]；原体已编译为 hidden proxy（运行期由 wrapper 调用）。
+    const ca::i32 classId = idIt->second;
+    dom_inject::replaceMethodBody(
+        clazz, className, "<clinit>", "()V",
+        [className, classId](jbc::ir::ClassSession& session, jbc::ir::CodeEditor& editor) {
+            (void)className;
+            auto add = [&editor](jbc::ir::Insn in) {
+                (void)editor.append(std::move(in));
+            };
+            add(jbc::ir::CodeEditor::loadConst(session.internInteger(classId)));
+            // loadConst（索引 > 0xFF 自动升 LDC_W）：cpInsn 硬编码 LDC 在大常量池
+            // 类（IntrinsicSurface 20 拼接站点）索引超 u8，导出 bad instructions。
+            add(jbc::ir::CodeEditor::loadConst(session.internClass(session.backing().thisName())));
+            jbc::ir::Insn call;
+            call.op = jbc::core::Op::INVOKESTATIC;
+            call.cp = session.internMethodRef(kRegisterBridgeClassName, kRegisterBridgeMethodName,
+                                              kRegisterBridgeMethodDesc);
+            add(std::move(call));
+            add(jbc::ir::CodeEditor::simple(jbc::core::Op::RETURN));
+        },
+        2, 0, ~static_cast<ca::u32>(Opcodes::ACC_NATIVE));
 }
 
 void StackCBackend::Impl::registerHiddenClinitProxy(const std::string& className,
@@ -226,12 +206,12 @@ bool StackCBackend::Impl::hasInterfaceDefaultProxies(const std::string& classNam
     return found != interfaceDefaultProxiesByClass.end() && !found->second.empty();
 }
 
-void StackCBackend::Impl::registerInterfaceDefaultProxy(CompilerClass& clazz, MethodNode& method,
+void StackCBackend::Impl::registerInterfaceDefaultProxy(CompilerClass& clazz,
+                                                        const std::string& methodName,
+                                                        const std::string& methodDesc,
                                                         const std::string& compiledFunctionName)
 {
-    const auto className  = clazz.classNode->name.to_std_string();
-    const auto methodName = method.name.to_std_string();
-    const auto methodDesc = method.desc.to_std_string();
+    const auto className = clazz.dom != nullptr ? std::string(clazz.dom->thisName()) : std::string();
     const auto suffix     = hex64(fnv1a64(className + "." + methodName + methodDesc));
 
     CHiddenInterfaceDefaultProxy proxy;
@@ -258,32 +238,46 @@ void StackCBackend::Impl::registerInterfaceDefaultProxy(CompilerClass& clazz, Me
 }
 
 void StackCBackend::Impl::rewriteInterfaceDefaultMethodToProxy(
-    CompilerClass& clazz, MethodNode& method, const CHiddenInterfaceDefaultProxy& proxy)
+    CompilerClass& clazz, const std::string& mnName, const std::string& mnDesc,
+    const CHiddenInterfaceDefaultProxy& proxy)
 {
-    method.access &= ~Opcodes::ACC_NATIVE;
-    method.instructions.clear();
-    clearMethodDebugAndHandlers(&method);
+    // 批 5：体重建走 DOM（replaceMethodBody）；批 6d：身份源 = 快照 name/desc。
+    const std::string className(clazz.dom != nullptr ? std::string(clazz.dom->thisName()) : "");
 
-    method.instructions.add(method.create<VarInsnNode>(Opcodes::ALOAD, 0));
+    // 形参布局（slot/maxStack）按旧口径在会话外算好，回调内逐参 xLOAD。
+    auto argTypes = Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(mnDesc.c_str()));
     int  slot     = 1;
     int  maxStack = 1;
-    auto argTypes = Type::getArgumentTypes(method.desc);
     for (const auto& argType : argTypes) {
-        method.instructions.add(method.create<VarInsnNode>(loadOpcodeForSort(argType.getSort()), slot));
-        auto      pk    = jvmSortToPrimitive(argType.getSort());
-        const int width = primitiveStackSize(pk);
+        const int width = primitiveStackSize(jvmSortToPrimitive(argType.getSort()));
         slot += width;
         maxStack += width;
     }
-    method.instructions.add(method.create<MethodInsnNode>(Opcodes::INVOKESTATIC,
-                                               stableUtf8(proxy.hiddenClassName),
-                                               stableUtf8(proxy.hiddenMethodName),
-                                               stableUtf8(proxy.hiddenMethodDesc),
-                                               false));
-    method.instructions.add(method.create<InsnNode>(returnOpcodeForKind(methodReturnKind(proxy.javaDesc))));
-    method.maxStack  = maxStack;
-    method.maxLocals = slot;
-    clazz.modified   = true;
+
+    dom_inject::replaceMethodBody(
+        clazz, className, mnName, mnDesc,
+        [&proxy, &argTypes](jbc::ir::ClassSession& session, jbc::ir::CodeEditor& editor) {
+            auto add = [&editor](jbc::ir::Insn in) {
+                (void)editor.append(std::move(in));
+            };
+            add(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 0));
+            int paramSlot = 1;
+            for (const auto& argType : argTypes) {
+                add(jbc::ir::CodeEditor::local(
+                    static_cast<jbc::core::Op>(loadOpcodeForSort(argType.getSort())),
+                    static_cast<ca::u32>(paramSlot)));
+                paramSlot += primitiveStackSize(jvmSortToPrimitive(argType.getSort()));
+            }
+            jbc::ir::Insn call;
+            call.op = jbc::core::Op::INVOKESTATIC;
+            call.cp = session.internMethodRef(proxy.hiddenClassName, proxy.hiddenMethodName,
+                                              proxy.hiddenMethodDesc);
+            add(std::move(call));
+            add(jbc::ir::CodeEditor::simple(
+                static_cast<jbc::core::Op>(returnOpcodeForKind(methodReturnKind(proxy.javaDesc)))));
+        },
+        static_cast<ca::u16>(maxStack), static_cast<ca::u16>(slot),
+        ~static_cast<ca::u32>(Opcodes::ACC_NATIVE));
 }
 
 void StackCBackend::Impl::emitRegistrationCode(codegen::CSourceStream& out) const

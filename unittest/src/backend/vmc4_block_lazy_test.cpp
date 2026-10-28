@@ -19,6 +19,7 @@
 //  10. trace surface 契约：describe() 不受 blockLazy 开关影响。
 
 #include "garena/arena.hpp"
+#include "test_helper.hpp"
 #include <gmock/gmock.h>
 
 #include <algorithm>
@@ -77,7 +78,7 @@ std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
 {
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     auto ssa = builder.build(blocks, "InlineVmc4Enc", mn->name.to_std_string(),
                              mn->desc.to_std_string(), true, mn->maxLocals, arena, reason);
@@ -263,11 +264,10 @@ std::string compileOneMethod(Vmc4Backend& backend, const std::string& cls,
                              new InsnNode(Opcodes::IRETURN),
                          },
                          2, 2);
-    CompilerMethod cm;
-    cm.methodNode = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     auto result = backend.compileMethod(cls, cm, blocks);
     return result.kind == BackendResult::Kind::C_SOURCE ? result.text : std::string{};
 }

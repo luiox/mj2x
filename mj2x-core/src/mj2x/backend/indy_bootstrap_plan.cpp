@@ -1,8 +1,8 @@
 #include "mj2x/backend/indy_bootstrap_plan.hpp"
 
-#include <stdexcept>
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "libca/str/utf8_string_arena.hpp"
 
 namespace mj2x {
@@ -10,14 +10,11 @@ namespace mj2x {
 std::vector<IndyBsmSlot> planIndyBsmSlots(const std::string& bsmDesc, size_t bsmArgCount)
 {
     std::vector<IndyBsmSlot> slots;
-    if (bsmDesc.empty()) {
-        // 空描述符按 golden 契约确定性抛 Invalid descriptor。不特判会走进
-        // Type::getArgumentTypes 的空串越界读（libs 层遗留，异常类型随越界
-        // 字节内容漂移，同一二进制逐次运行可变的 flake）。
-        throw std::invalid_argument("Invalid descriptor: empty bootstrap method descriptor");
-    }
+    // 空描述符不再特判：mj2x::Type 门面（批 1 libjbc 迁移）经 jbc::type 结构
+    // 校验前置，空/截断描述符确定性抛 invalid_argument——旧栈
+    // Type::getArgumentTypes 空串越界读的 flake 面已根治（J-6）。
     const auto bsmArgTypes =
-        jbytecode::core::Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
+        Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
     // bsmArgIndex 语义（对齐切换前三后端原判定，bsmArgs 不含 Lookup/name/type
     // 三件套——它们是 invokedynamic 隐式实参）：全程 = 静态实参序数（0 起）。
     // Varargs 槽：起点 = 当前序数，数量 = 静态实参总数 - 起点（原式
@@ -41,7 +38,7 @@ std::vector<IndyBsmSlot> planIndyBsmSlots(const std::string& bsmDesc, size_t bsm
         // ARRAY 排序 + 描述符全等）。
         ca::str::Utf8StringArena  scratch;
         const bool isTrailingObjectArray = i + 1 == bsmArgTypes.size() &&
-                                           formal.getSort() == jbytecode::core::Type::ARRAY &&
+                                           formal.getSort() == Type::ARRAY &&
                                            formal.getDescriptor(scratch).to_std_string() ==
                                                "[Ljava/lang/Object;";
         if (isTrailingObjectArray) {
@@ -71,7 +68,6 @@ IndyHandleFind indyHandleFindFor(int handleTag)
     static constexpr const char* kFindVirtualDesc =
         "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
         "Ljava/lang/invoke/MethodHandle;";
-    using jbytecode::core::Opcodes;
     switch (handleTag) {
     case Opcodes::H_GETFIELD:
         return {"findGetter",
@@ -116,11 +112,11 @@ IndyBsmArgKind classifyIndyBsmArg(const ca::core::Any& value)
 {
     if (value.as<std::string>() != nullptr) return IndyBsmArgKind::String;
     if (value.as<ca::str::Utf8StringRef>() != nullptr) return IndyBsmArgKind::String;
-    if (const auto* type = value.as<jbytecode::core::Type>()) {
-        return type->getSort() == jbytecode::core::Type::METHOD ? IndyBsmArgKind::MethodType
+    if (const auto* type = value.as<mj2x::Type>()) {
+        return type->getSort() == Type::METHOD ? IndyBsmArgKind::MethodType
                                                                 : IndyBsmArgKind::Class;
     }
-    if (value.as<jbytecode::core::Handle>() != nullptr) return IndyBsmArgKind::Handle;
+    if (value.as<mj2x::Handle>() != nullptr) return IndyBsmArgKind::Handle;
     if (value.as<ca::i32>() != nullptr) return IndyBsmArgKind::Int;
     if (value.as<ca::i64>() != nullptr) return IndyBsmArgKind::Long;
     if (value.as<float>() != nullptr) return IndyBsmArgKind::Float;

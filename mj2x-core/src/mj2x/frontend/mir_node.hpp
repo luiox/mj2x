@@ -1,6 +1,7 @@
 #pragma once
 
-#include <jbytecode/jbytecode.hpp>
+#include "libca/core/any.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include <libca/str/utf8_string.hpp>
 #include "libca/core/tag_cast.hpp"
 
@@ -139,11 +140,11 @@ struct MIRNop : MIRNode
 
 struct MIRLabel : MIRNode
 {
-    // label 标识用 Label*（读取期稳定）。bytecodeOffset 在树形重建后被重置为 -1，不可靠。
-    jbytecode::core::Label* labelNode = nullptr;
-    explicit MIRLabel(jbytecode::core::Label* ln)
+    // 批 6d 标签 id 化：label 标识 = CodeConverter 的顺序 id（同 pc 恒同 id）。
+    int labelId = 0;
+    explicit MIRLabel(int id)
         : MIRNode(MIRKind::LABEL)
-        , labelNode(ln)
+        , labelId(id)
     {}
 };
 
@@ -151,7 +152,9 @@ struct MIRConstant : MIRNode
 {
     // string 槽持 arena-backed Utf8StringRef（LDC String 常量），由 CodeConverter 经
     // index.arena().intern(...) 入池（str-ownership-spec §6.1）。
-    std::variant<int64_t, double, std::nullptr_t, ca::str::Utf8StringRef, jbytecode::core::Type> value;
+    // Type 槽批 3a 起为 mj2x::Type 门面（旧栈 Type 只活在树侧 Any 载荷，
+    // 经 CodeConverter 转换后入 MIR；libjbc 迁移账 plan_libjbc_migration.md 批 3）。
+    std::variant<int64_t, double, std::nullptr_t, ca::str::Utf8StringRef, Type> value;
     PrimitiveKind type = PrimitiveKind::INT;
     MIRConstant()
         : MIRNode(MIRKind::CONSTANT)
@@ -231,9 +234,9 @@ struct MIRCast : MIRNode
 
 struct MIRBranch : MIRNode
 {
-    CmpOp                   op          = CmpOp::EQ;
-    PrimitiveKind           type        = PrimitiveKind::INT;
-    jbytecode::core::Label* targetLabel = nullptr;
+    CmpOp         op          = CmpOp::EQ;
+    PrimitiveKind type        = PrimitiveKind::INT;
+    int           targetLabel = 0;
     MIRBranch()
         : MIRNode(MIRKind::BRANCH)
     {}
@@ -241,9 +244,9 @@ struct MIRBranch : MIRNode
 
 struct MIRBranchZero : MIRNode
 {
-    CmpOp                   op          = CmpOp::EQ;
-    PrimitiveKind           type        = PrimitiveKind::INT;
-    jbytecode::core::Label* targetLabel = nullptr;
+    CmpOp         op          = CmpOp::EQ;
+    PrimitiveKind type        = PrimitiveKind::INT;
+    int           targetLabel = 0;
     MIRBranchZero()
         : MIRNode(MIRKind::BRANCH_ZERO)
     {}
@@ -251,7 +254,7 @@ struct MIRBranchZero : MIRNode
 
 struct MIRUncondBranch : MIRNode
 {
-    jbytecode::core::Label* targetLabel = nullptr;
+    int targetLabel = 0;
     MIRUncondBranch()
         : MIRNode(MIRKind::UNCOND_BRANCH)
     {}
@@ -261,11 +264,11 @@ struct MIRSwitch : MIRNode
 {
     struct Case
     {
-        int                     key;
-        jbytecode::core::Label* targetLabel;
+        int key;
+        int targetLabel;
     };
-    jbytecode::core::Label* defaultLabel = nullptr;
-    std::vector<Case>       cases;
+    int               defaultLabel = 0;
+    std::vector<Case> cases;
     MIRSwitch()
         : MIRNode(MIRKind::SWITCH)
     {}
@@ -372,7 +375,7 @@ struct MIRInvoke : MIRNode
 struct MIRInvokeDynamic : MIRNode
 {
     ca::str::Utf8StringRef                 name, desc;
-    std::optional<jbytecode::core::Handle> bsm;
+    std::optional<mj2x::Handle> bsm;
     std::vector<ca::core::Any>             bsmArgs;
     MIRInvokeDynamic()
         : MIRNode(MIRKind::INVOKE_DYNAMIC)

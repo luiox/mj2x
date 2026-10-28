@@ -1,10 +1,10 @@
 #include "regc_intrinsic_matcher.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 
 bool RegCIntrinsicCall::isStatic() const
 {

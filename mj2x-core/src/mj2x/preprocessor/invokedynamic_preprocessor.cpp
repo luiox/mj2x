@@ -1,15 +1,23 @@
 #include "invokedynamic_preprocessor.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
+#include "jbc/core/attribute.hpp"
+#include "jbc/core/reader.hpp"
+#include "jbc/core/writer.hpp"
+#include "jbc/ir/code_editor.hpp"
+#include "jbc/ir/units.hpp"
 #include "libca/core/any.hpp"
 #include <algorithm>
 #include <string>
 #include <vector>
 #include "libca/log/log_macros.hpp"
 
+#include "mj2x/core/dom_edit.hpp"
+#include "mj2x/core/dom_payload.hpp"
+
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 namespace {
 
@@ -19,6 +27,16 @@ namespace {
 //   其余字符 = 字面量文本
 constexpr char kTagArg   = '\x01';
 constexpr char kTagConst = '\x02';
+
+/// 合成局部访问：索引 > 0xFF 必须带 wide 前缀（JVMS wide 修饰），否则导出
+/// 编码放不下——WideLocals 首曝：拼接参数溢出槽 378 的 LSTORE/LLOAD 走非
+/// wide 形态，lower 导出 BadInstructions。
+jbc::ir::Insn synthLocal(jbc::core::Op op, ca::u32 idx)
+{
+    auto in = jbc::ir::CodeEditor::local(op, idx);
+    if (idx > 0xFF) in.wide = true;
+    return in;
+}
 
 // 字符串 → Utf8StringRef（经 arena intern）。arena 归 CompilerIndex 持有，比预处理期长命。
 ca::str::Utf8StringRef intern(ca::str::Utf8StringArena& arena, const char* s)
@@ -101,21 +119,22 @@ const char* appendDesc(const Type& argType)
     }
 }
 
-// 在 seq 尾部追加「append 一个字符串字面量」的字节码：LDC <str> + INVOKEVIRTUAL
+// 在 seq 尾部追加「append 一个字符串字面量」的指令：LDC <str> + INVOKEVIRTUAL
 // StringBuilder.append(String)。栈上此前须有 StringBuilder 引用，append 返回自身，
-// 栈保持 StringBuilder 顶（链式）。
-void emitAppendString(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& seq,
-                      const std::string& literal)
+// 栈保持 StringBuilder 顶（链式）。CP 经调用方 session 语义 intern。
+void emitAppendStringSeq(jbc::ir::ClassSession& session, std::vector<jbc::ir::Insn>& seq,
+                         const std::string& literal)
 {
-    seq.add(m.create<LdcInsnNode>(literal));
-    seq.add(m.create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL, intern(arena, "java/lang/StringBuilder"),
-                                     intern(arena, "append"),
-                                     intern(arena, "(Ljava/lang/String;)Ljava/lang/StringBuilder;"),
-                                     false));
+    seq.push_back(jbc::ir::CodeEditor::loadConst(session.internString(literal)));
+    jbc::ir::Insn append;
+    append.op = jbc::core::Op::INVOKEVIRTUAL;
+    append.cp = session.internMethodRef("java/lang/StringBuilder", "append",
+                                        "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+    seq.push_back(std::move(append));
 }
 
-// 展开单个 makeConcat[WithConstants] indy 站点。返回是否改写成功；失败（不支持的形态）
-// 保持 indy 原样、交由 SSA fail-closed。
+// 展开单个 makeConcat[WithConstants] indy 站点（DOM 载体）。返回是否改写成功；
+// 失败（不支持的形态）保持 indy 原样、交由 SSA fail-closed。
 //
 // 策略：indy 执行前 N 个动态实参已在操作数栈上（栈底=第1参，栈顶=第N参）。改写为：
 //   1. 逆序 xSTORE 到新分配的局部槽（栈顶=最后一个参数先存），清空这些参数；
@@ -124,18 +143,25 @@ void emitAppendString(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& 
 //      常量占位→LDC/append；
 //   4. toString()，栈顶恢复为单个 String（与 indy 返回一致）。
 // 单块直线代码，不引入分支/label，StackMapTable 帧不受影响；仅 maxLocals 增大。
-bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDynamicInsnNode* indy,
-                      bool withConstants)
+// 发射序在预校验通过后逐条 insertBefore(at)（同锚点保序）；预校验保证发射段
+// 无失败路径（DOM 逐条插入无整段回滚）。
+// srcPc：被替换 indy 的原 pc。替换序列首条继承之——lower 的属性重定位 pcmap
+// 以「存活指令的 srcPc」为键，锚在被删指令 pc 上的 LNT/LVT/SMT 行才会继续命中
+//（行号语义不变：替换首条就是原 lambda/拼接语句的位置）。
+bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit,
+                         jbc::ir::CodeEditor& editor, jbc::ir::InsnId at, const DomIndySite& site,
+                         bool withConstants, ca::u32 srcPc, ca::str::Utf8StringArena& arena,
+                         jbc::ir::InsnId* firstPlacedOut)
 {
-    const std::string indyDesc = toStd(indy->desc);
-    std::vector<Type> argTypes  = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
+    const std::string indyDesc = site.desc;
+    std::vector<Type> argTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
 
     // recipe：makeConcatWithConstants 的 bsmArgs[0] 是 recipe；makeConcat 无 recipe，
     // 等价于「全部动态参数顺序拼接」。
     std::string recipe;
     size_t      nextConst = 1;   // withConstants 时常量从 bsmArgs[1] 起
     if (withConstants) {
-        if (indy->bsmArgs.empty() || !anyAsString(indy->bsmArgs[0], recipe)) {
+        if (site.bsmArgs.empty() || !anyAsString(site.bsmArgs[0], recipe)) {
             return false;   // 无 recipe 常量 → 不支持形态
         }
     }
@@ -144,58 +170,85 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
         recipe.assign(argTypes.size(), kTagArg);
     }
 
+    // 预校验：recipe 动态占位数与描述符一致、常量占位全部可串化。
+    {
+        size_t args = 0;
+        size_t consts = 0;
+        for (char c : recipe) {
+            if (c == kTagArg) ++args;
+            else if (c == kTagConst) ++consts;
+        }
+        if (args != argTypes.size()) return false;   // recipe 与描述符不一致
+        size_t constIdx = 1;
+        for (char c : recipe) {
+            if (c != kTagConst) continue;
+            if (constIdx >= site.bsmArgs.size()) return false;
+            std::string constStr;
+            if (!anyAsString(site.bsmArgs[constIdx], constStr)) return false;
+            ++constIdx;
+        }
+    }
+
     // 为每个动态参数分配局部槽（从当前 maxLocals 起）。
     std::vector<int> argSlot(argTypes.size());
-    int              slot = m->maxLocals;
+    int              slot = unit.maxLocals;
     for (size_t i = 0; i < argTypes.size(); ++i) {
         argSlot[i] = slot;
         slot += slotSize(argTypes[i].getSort());
     }
 
-    // 展开序列写进临时 list，再整段 insertBefore(indy) + remove(indy)。
-    InsnList seq(&m->arena());
+    // 展开序列构建后逐条 insertBefore(at)（同锚点保序，CodeDom 句柄域稳定）。
+    std::vector<jbc::ir::Insn> seq;
 
     // 1. 逆序把栈上参数存进局部槽（栈顶是最后一个参数）。
     for (size_t r = argTypes.size(); r > 0; --r) {
         const size_t i = r - 1;
-        seq.add(m->create<VarInsnNode>(storeOpcode(argTypes[i].getSort()), argSlot[i]));
+        seq.push_back(synthLocal(
+            static_cast<jbc::core::Op>(storeOpcode(argTypes[i].getSort())),
+            static_cast<ca::u32>(argSlot[i])));
     }
 
     // 2. new StringBuilder / dup / <init>()V。
-    seq.add(m->create<TypeInsnNode>(Opcodes::NEW, intern(arena, "java/lang/StringBuilder")));
-    seq.add(m->create<InsnNode>(Opcodes::DUP));
-    seq.add(m->create<MethodInsnNode>(Opcodes::INVOKESPECIAL, intern(arena, "java/lang/StringBuilder"),
-                               intern(arena, "<init>"), intern(arena, "()V"), false));
+    {
+        jbc::ir::Insn nw;
+        nw.op = jbc::core::Op::NEW;
+        nw.cp = session.internClass("java/lang/StringBuilder");
+        seq.push_back(std::move(nw));
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::DUP));
+        jbc::ir::Insn init;
+        init.op = jbc::core::Op::INVOKESPECIAL;
+        init.cp = session.internMethodRef("java/lang/StringBuilder", "<init>", "()V");
+        seq.push_back(std::move(init));
+    }
 
     // 3. 遍历 recipe。
     size_t      nextArg = 0;
     std::string pending;   // 累积的字面量文本
     auto        flushPending = [&]() {
         if (!pending.empty()) {
-            emitAppendString(*m, arena, seq, pending);
+            emitAppendStringSeq(session, seq, pending);
             pending.clear();
         }
     };
     for (char c : recipe) {
         if (c == kTagArg) {
             flushPending();
-            if (nextArg >= argTypes.size()) return false;   // recipe 与描述符不一致
             const Type& t = argTypes[nextArg];
-            seq.add(m->create<VarInsnNode>(loadOpcode(t.getSort()), argSlot[nextArg]));
-            seq.add(m->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL,
-                                       intern(arena, "java/lang/StringBuilder"),
-                                       intern(arena, "append"), intern(arena, appendDesc(t)),
-                                       false));
+            seq.push_back(synthLocal(
+                static_cast<jbc::core::Op>(loadOpcode(t.getSort())),
+                static_cast<ca::u32>(argSlot[nextArg])));
+            jbc::ir::Insn append;
+            append.op = jbc::core::Op::INVOKEVIRTUAL;
+            append.cp = session.internMethodRef("java/lang/StringBuilder", "append",
+                                                appendDesc(t));
+            seq.push_back(std::move(append));
             ++nextArg;
         }
         else if (c == kTagConst) {
             flushPending();
             std::string constStr;
-            if (nextConst >= indy->bsmArgs.size() ||
-                !anyAsString(indy->bsmArgs[nextConst], constStr)) {
-                return false;   // 非字符串常量占位 → 暂不支持
-            }
-            emitAppendString(*m, arena, seq, constStr);
+            (void)anyAsString(site.bsmArgs[nextConst], constStr);
+            emitAppendStringSeq(session, seq, constStr);
             ++nextConst;
         }
         else {
@@ -205,18 +258,42 @@ bool expandConcatSite(ca::str::Utf8StringArena& arena, MethodNode* m, InvokeDyna
     flushPending();
 
     // 4. toString()。
-    seq.add(m->create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL, intern(arena, "java/lang/StringBuilder"),
-                               intern(arena, "toString"),
-                               intern(arena, "()Ljava/lang/String;"), false));
+    {
+        jbc::ir::Insn toString;
+        toString.op = jbc::core::Op::INVOKEVIRTUAL;
+        toString.cp = session.internMethodRef("java/lang/StringBuilder", "toString",
+                                              "()Ljava/lang/String;");
+        seq.push_back(std::move(toString));
+    }
 
-    // 插入到 indy 之前并用 removeAndDelete 摘链销毁 indy
-    //（对齐 init_clinit_mover 先例）。
-    m->instructions.insert(indy, seq);
-    m->instructions.removeAndDelete(indy);
+    // 逐条 insertBefore(at)（同锚点保序）。首条回填被删 indy 的 srcPc：CodeDom
+    // 插入路径强制 srcPc=kNoPc（appendSlot/insertAt），而 lower 的属性重定位
+    // pcmap 以存活指令 srcPc 为键——锚在被删 pc 上的 LNT/LVT/SMT 行靠首条命中
+    //（行号语义不变：替换首条即原语句位置）。CodeDom::get 是正门可变访问。
+    jbc::ir::InsnId firstPlaced{};
+    for (auto& in : seq) {
+        const auto op = in.op;
+        auto placed = editor.insertBefore(at, std::move(in));
+        if (placed.is_err()) {
+            // 站点改写部分插入即字节码损坏——显式失败，不静默吞。
+            throw std::runtime_error(std::string("invokedynamic_preprocessor: insertBefore "
+                                                 "failed (op=")
+                                     + std::to_string(static_cast<int>(op)) + ", "
+                                     + jbc::ir::to_string(placed.unwrap_err()) + ")");
+        }
+        if (firstPlaced == jbc::ir::kNoInsn) {
+            firstPlaced = std::move(placed).unwrap();
+        }
+    }
+    if (firstPlacedOut != nullptr) *firstPlacedOut = firstPlaced;
+    if (srcPc != jbc::ir::kNoPc && firstPlaced != jbc::ir::kNoInsn) {
+        auto mut = unit.dom.get(firstPlaced);
+        if (mut.is_ok()) std::move(mut).unwrap()->srcPc = srcPc;
+    }
 
     // maxLocals 增大以容纳新槽；maxStack 需容纳 StringBuilder+dup+参数，保守 +3。
-    if (slot > m->maxLocals) m->maxLocals = slot;
-    m->maxStack += 3;
+    if (slot > unit.maxLocals) unit.maxLocals = static_cast<ca::u16>(slot);
+    unit.maxStack = static_cast<ca::u16>(unit.maxStack + 3);
     return true;
 }
 
@@ -388,41 +465,56 @@ bool canAdaptValue(const Type& from, const Type& to)
     return false;
 }
 
-// 在 seq 尾部发射「栈顶值 from → to」的适配字节码。调用前须先 canAdaptValue 校验。
-void emitAdaptValue(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& seq, const Type& from,
-                    const Type& to)
+// 在 seq 尾部发射「栈顶值 from → to」的适配指令。调用前须先 canAdaptValue 校验。
+// CP 经调用方 session 语义 intern（CHECKCAST/NEW 的 Class 条目、拆装箱的方法引用）。
+void emitAdaptValueSeq(jbc::ir::ClassSession& session, std::vector<jbc::ir::Insn>& seq,
+                       const Type& from, const Type& to)
 {
-    // #921 staticArena 退役：仅瞬时转串比对，落点=本函数作业级 arena 参数。
-    const std::string fromDesc = toStd(from.getDescriptor(arena));
-    const std::string toDesc   = toStd(to.getDescriptor(arena));
+    // #921 staticArena 退役：仅瞬时转串比对，落点=函数级局部 arena。
+    ca::str::Utf8StringArena scratch;
+    const std::string fromDesc = toStd(from.getDescriptor(scratch));
+    const std::string toDesc   = toStd(to.getDescriptor(scratch));
     if (fromDesc == toDesc) return;
     const bool fromRef = isReferenceSort(from.getSort());
     if (fromRef && isReferenceSort(to.getSort())) {
         // 收窄到 Object 无需 cast（一切引用 <: Object）；其余发 CHECKCAST 保证验证器通过。
-        if (toDesc != "Ljava/lang/Object;")
-            seq.add(m.create<TypeInsnNode>(Opcodes::CHECKCAST, intern(arena, checkcastName(to).c_str())));
+        if (toDesc != "Ljava/lang/Object;") {
+            jbc::ir::Insn cast;
+            cast.op = jbc::core::Op::CHECKCAST;
+            cast.cp = session.internClass(checkcastName(to));
+            seq.push_back(std::move(cast));
+        }
         return;
     }
     if (fromRef) {
         // 引用 → 基本类型：CHECKCAST 包装类（已是包装类则免）+ xxxValue() 拆箱。
         const char*       w     = wrapperInternal(to.getSort());
         const std::string wDesc = std::string("L") + w + ";";
-        if (fromDesc != wDesc)
-            seq.add(m.create<TypeInsnNode>(Opcodes::CHECKCAST, intern(arena, w)));
-        seq.add(m.create<MethodInsnNode>(Opcodes::INVOKEVIRTUAL, intern(arena, w),
-                                   intern(arena, unboxMethodName(to.getSort())),
-                                   intern(arena, unboxMethodDesc(to.getSort())), false));
+        if (fromDesc != wDesc) {
+            jbc::ir::Insn cast;
+            cast.op = jbc::core::Op::CHECKCAST;
+            cast.cp = session.internClass(w);
+            seq.push_back(std::move(cast));
+        }
+        jbc::ir::Insn unbox;
+        unbox.op = jbc::core::Op::INVOKEVIRTUAL;
+        unbox.cp = session.internMethodRef(w, unboxMethodName(to.getSort()),
+                                           unboxMethodDesc(to.getSort()));
+        seq.push_back(std::move(unbox));
         return;
     }
     // 基本类型 → 基本类型：加宽（canAdaptValue 已保证是受支持加宽，阶段2f）。
     if (isPrimitiveSort(to.getSort())) {
-        seq.add(m.create<InsnNode>(wideningOpcode(from.getSort(), to.getSort())));
+        seq.push_back(jbc::ir::CodeEditor::simple(
+            static_cast<jbc::core::Op>(wideningOpcode(from.getSort(), to.getSort()))));
         return;
     }
     // 基本类型 → 引用：包装类.valueOf 装箱（canAdaptValue 已限定目标为 Object/包装类）。
     const char* w = wrapperInternal(from.getSort());
-    seq.add(m.create<MethodInsnNode>(Opcodes::INVOKESTATIC, intern(arena, w), intern(arena, "valueOf"),
-                               intern(arena, boxValueOfDesc(from.getSort())), false));
+    jbc::ir::Insn box;
+    box.op = jbc::core::Op::INVOKESTATIC;
+    box.cp = session.internMethodRef(w, "valueOf", boxValueOfDesc(from.getSort()));
+    seq.push_back(std::move(box));
 }
 
 // impl 返回值能否适配为 SAM 返回值。
@@ -434,17 +526,20 @@ bool canAdaptReturn(const Type& implRet, const Type& samRet)
 }
 
 // 发射 SAM 返回序列：适配栈顶 impl 返回值（或丢弃）后按 samRet 发 xRETURN。
-void emitReturnAdapt(MethodNode& m, ca::str::Utf8StringArena& arena, InsnList& seq,
-                     const Type& implRet, const Type& samRet)
+void emitReturnAdaptSeq(jbc::ir::ClassSession& session, std::vector<jbc::ir::Insn>& seq,
+                        const Type& implRet, const Type& samRet)
 {
     if (samRet.getSort() == Type::VOID) {
-        if (implRet.getSort() != Type::VOID)
-            seq.add(m.create<InsnNode>(slotSize(implRet.getSort()) == 2 ? Opcodes::POP2 : Opcodes::POP));
-        seq.add(m.create<InsnNode>(Opcodes::RETURN));
+        if (implRet.getSort() != Type::VOID) {
+            seq.push_back(jbc::ir::CodeEditor::simple(
+                slotSize(implRet.getSort()) == 2 ? jbc::core::Op::POP2 : jbc::core::Op::POP));
+        }
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::RETURN));
         return;
     }
-    emitAdaptValue(m, arena, seq, implRet, samRet);
-    seq.add(m.create<InsnNode>(returnOpcode(samRet.getSort())));
+    emitAdaptValueSeq(session, seq, implRet, samRet);
+    seq.push_back(
+        jbc::ir::CodeEditor::simple(static_cast<jbc::core::Op>(returnOpcode(samRet.getSort()))));
 }
 
 // altMetafactory flags（见 JDK java.lang.invoke.LambdaMetafactory）。
@@ -527,16 +622,28 @@ bool parseAltMetafactoryTail(const Handle& bsm, const std::vector<ca::core::Any>
 }
 
 // 在 index 的非 library 类里按 owner/name/desc 找方法（用于给私有目标方法提权）。
-MethodNode* findMethodInIndex(CompilerIndex& index, const std::string& owner,
-                              const std::string& name, const std::string& desc)
+// DOM 读面：遍历期间会话持有调用方的 dom（cls.dom 为空），提权因此延迟到
+// processImpl 遍历结束后统一执行（PendingAccessFix）。
+jbc::core::MemberInfo* domMethodInIndex(CompilerIndex& index, const std::string& owner,
+                                        const std::string& name, const std::string& desc)
 {
     auto* cls = index.getClass(owner);
-    if (!cls || !cls->classNode) return nullptr;
-    for (auto* m : cls->classNode->methods) {
-        if (m->name.to_std_string() == name && m->desc.to_std_string() == desc) return m;
+    if (!cls || !cls->dom) return nullptr;
+    for (auto& m : cls->dom->methods) {
+        if (cls->dom->cp.utf8Equals(m.nameCp, name) && cls->dom->cp.utf8Equals(m.descCp, desc)) {
+            return &m;
+        }
     }
     return nullptr;
 }
+
+/// 延迟执行的 impl 提权（会话开闭期间 cls.dom 被接管，遍历后统一落）。
+struct PendingAccessFix
+{
+    std::string owner;
+    std::string name;
+    std::string desc;
+};
 
 // 校验给定 SAM 描述符能否按 impl handle 形态发射（fullArgs 逐位可适配 + 返回可适配）。
 // 供主 SAM 与各 bridge 描述符复用——bridge 与主 SAM 同名不同签，须各自满足适配才允许展开，
@@ -972,22 +1079,25 @@ CoreDecision classifyCore(ca::str::Utf8StringArena& arena, const std::string& in
     return d;
 }
 
-/// 判定树包装（报告面）：同一核心 + 站点定位由调用方补齐。
-IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
+/// 判定主体（载荷版）：同一核心 + 站点定位由调用方补齐。DOM/树两载体共用。
+IndyDispatchDecision classifyIndySitePayloadImpl(CompilerIndex& index, const std::string& indyName,
+                                             const std::string& indyDesc,
+                                             const Handle&                     bsm,
+                                             const std::vector<ca::core::Any>& bsmArgs)
 {
     IndyDispatchDecision d;
-    d.indyName = toStd(indy->name);
-    d.indyDesc = toStd(indy->desc);
+    d.indyName = indyName;
+    d.indyDesc = indyDesc;
 
     // D1/D2 理由细分需要编译输入类集合（仅影响 reason，不影响 form）。
-    auto*  bsmOwnerCls = index.getClass(toStd(indy->bsm.getOwner()));
+    auto*  bsmOwnerCls = index.getClass(toStd(bsm.getOwner()));
     const char* customReason =
         bsmOwnerCls != nullptr && !bsmOwnerCls->isLibrary
             ? "custom bootstrap: bsm body in compilation input (static evaluation candidate, wave-2)"
             : "custom bootstrap: bsm owner external (runtime crack candidate only)";
 
-    const CoreDecision core =
-        classifyCore(index.arena(), d.indyName, d.indyDesc, &indy->bsm, indy->bsmArgs, customReason);
+    const CoreDecision core = classifyCore(index.arena(), indyName, indyDesc, &bsm, bsmArgs,
+                                           customReason);
     d.form          = core.form;
     d.reason        = core.reason;
     d.directField   = core.directField;
@@ -995,7 +1105,7 @@ IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDyna
     return d;
 }
 
-// 合成一个实现 functional interface 的类，SAM 方法转调 impl：
+// 合成一个实现 functional interface 的类（DOM 载体，从零建 libjbc ClassFile）：
 //   public final class <synthName> implements <ifaceInternal> {
 //     <synthName>(capturedDescs) { super(); this.capI = capI; }
 //     public <samName><samDesc> { return <impl>(fullArgs...); }
@@ -1010,7 +1120,9 @@ IndyDispatchDecision classifyIndySiteImpl(CompilerIndex& index, const InvokeDyna
 //   H_INVOKEINTERFACE         → INVOKEINTERFACE，同上
 //   H_NEWINVOKESPECIAL        → NEW owner / DUP / fullArgs / INVOKESPECIAL <init> ; ARETURN
 // （H_INVOKESPECIAL 私有实例方法引用已在 expandLambdaSite 提权，故按 INVOKEVIRTUAL 发射。）
-std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
+// 方法体经 session addMethod+CodeEditor.append+lowerMethod 发射（库编码路径），
+// 成品经 writeClass→readClass 字节往返还回（真实编解码器纪律，同 dom_edit）。
+std::unique_ptr<jbc::core::ClassFile> buildLambdaClassDom(ca::str::Utf8StringArena& arena,
                                                 const std::string& synthName,
                                                 const std::string& ifaceInternal,
                                                 const std::string& samName,
@@ -1019,18 +1131,21 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
                                                 const Handle&            impl,
                                                 const AltLambdaInfo&     alt)
 {
-    auto cn     = std::make_unique<ClassNode>();
-    cn->version = Opcodes::V1_8;
-    cn->access =
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SUPER | Opcodes::ACC_SYNTHETIC;
-    cn->name      = arena.intern(synthName.c_str());
-    cn->superName = arena.intern("java/lang/Object");
-    cn->interfaces.push_back(arena.intern(ifaceInternal.c_str()));
-    // 阶段2e：altMetafactory 追加的 marker 接口（含 Serializable / 交集类型的额外接口）。
-    // 均为无方法 marker，SAM 体不受影响，只满足 instanceof / 序列化标记语义。
-    for (const auto& marker : alt.markerIfaces) cn->interfaces.push_back(arena.intern(marker.c_str()));
-
-    std::vector<ca::str::Utf8StringRef> noExc;
+    auto cf     = std::make_unique<jbc::core::ClassFile>();
+    cf->major   = 52;   // V1_8
+    cf->access  = Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL | Opcodes::ACC_SUPER
+                | Opcodes::ACC_SYNTHETIC;
+    {
+        auto& cp       = cf->cp;
+        cf->thisClass  = cp.addClass(cp.addUtf8(synthName));
+        cf->superClass = cp.addClass(cp.addUtf8("java/lang/Object"));
+        cf->interfaces.push_back(cp.addClass(cp.addUtf8(ifaceInternal)));
+        // 阶段2e：altMetafactory 追加的 marker 接口（含 Serializable / 交集类型的额外接口）。
+        // 均为无方法 marker，SAM 体不受影响，只满足 instanceof / 序列化标记语义。
+        for (const auto& marker : alt.markerIfaces) {
+            cf->interfaces.push_back(cp.addClass(cp.addUtf8(marker)));
+        }
+    }
 
     // 捕获字段 cap0..capN-1（private final）+ 构造器描述符 (capturedDescs)V。
     std::vector<std::string> capName(capturedTypes.size());
@@ -1038,50 +1153,97 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
     std::string              ctorDesc = "(";
     for (size_t i = 0; i < capturedTypes.size(); ++i) {
         capName[i] = "cap" + std::to_string(i);
-        // #921 staticArena 退役：仅瞬时转串，落点=本函数作业级 arena（= index.arena()）。
-        capDesc[i] = toStd(capturedTypes[i].getDescriptor(arena));
+        // #921 staticArena 退役：仅瞬时转串。
+        ca::str::Utf8StringArena scratch;
+        capDesc[i] = toStd(capturedTypes[i].getDescriptor(scratch));
         ctorDesc += capDesc[i];
-        cn->fields.push_back(new FieldNode(Opcodes::ACC_PRIVATE | Opcodes::ACC_FINAL,
-                                           arena.intern(capName[i].c_str()),
-                                           arena.intern(capDesc[i].c_str()), arena.intern(""),
-                                           ca::core::Any{}));
+        jbc::core::MemberInfo field;
+        field.access = Opcodes::ACC_PRIVATE | Opcodes::ACC_FINAL;
+        field.nameCp = cf->cp.addUtf8(capName[i]);
+        field.descCp = cf->cp.addUtf8(capDesc[i]);
+        cf->fields.push_back(std::move(field));
     }
     ctorDesc += ")V";
 
+    auto opened = jbc::ir::makeSession(std::move(cf));
+    if (opened.is_err()) {
+        throw std::runtime_error("invokedynamic_preprocessor: lambda synth session failed for "
+                                 + synthName);
+    }
+    auto ses = std::move(opened).unwrap();
+
+    // 方法体发射（骨架已建、体为空 → 逐条 append 保序）。
+    auto emitBody = [&](jbc::ir::CodeUnit& unit, std::vector<jbc::ir::Insn> seq) {
+        jbc::ir::CodeEditor editor(unit);
+        for (auto& in : seq) {
+            auto added = editor.append(std::move(in));
+            if (added.is_err()) {
+                throw std::runtime_error("invokedynamic_preprocessor: lambda synth append failed for "
+                                         + synthName);
+            }
+        }
+    };
+
     // <init>(capturedDescs)V : super.<init>() 后逐个 aload_0 / xload param / putfield capI。
-    auto* init = new MethodNode(Opcodes::ACC_PUBLIC, arena.intern("<init>"),
-                                arena.intern(ctorDesc.c_str()), arena.intern(""), noExc);
-    init->instructions.add(init->create<VarInsnNode>(Opcodes::ALOAD, 0));
-    init->instructions.add(init->create<MethodInsnNode>(Opcodes::INVOKESPECIAL,
-                                              arena.intern("java/lang/Object"),
-                                              arena.intern("<init>"), arena.intern("()V"), false));
     int ctorSlot     = 1;   // slot 0 = this
     int ctorMaxStack = 1;
     for (size_t i = 0; i < capturedTypes.size(); ++i) {
-        const int sort = capturedTypes[i].getSort();
-        init->instructions.add(init->create<VarInsnNode>(Opcodes::ALOAD, 0));
-        init->instructions.add(init->create<VarInsnNode>(loadOpcode(sort), ctorSlot));
-        init->instructions.add(init->create<FieldInsnNode>(Opcodes::PUTFIELD, arena.intern(synthName.c_str()),
-                                                 arena.intern(capName[i].c_str()),
-                                                 arena.intern(capDesc[i].c_str())));
-        ctorSlot += slotSize(sort);
+        ctorSlot += slotSize(capturedTypes[i].getSort());
         // putfield 峰值：this(1) + value(1或2)。
-        ctorMaxStack = std::max(ctorMaxStack, 1 + slotSize(sort));
+        ctorMaxStack = std::max(ctorMaxStack, 1 + slotSize(capturedTypes[i].getSort()));
     }
-    init->instructions.add(init->create<InsnNode>(Opcodes::RETURN));
-    init->maxStack  = ctorMaxStack;
-    init->maxLocals = ctorSlot;
-    cn->methods.push_back(init);
+    {
+        auto added = ses->addMethod(jbc::ir::MethodSeed{"<init>", ctorDesc,
+                                                        static_cast<ca::u16>(Opcodes::ACC_PUBLIC),
+                                                        true, static_cast<ca::u16>(ctorMaxStack),
+                                                        static_cast<ca::u16>(ctorSlot)});
+        if (added.is_err()) {
+            throw std::runtime_error("invokedynamic_preprocessor: lambda synth addMethod <init> failed for "
+                                     + synthName);
+        }
+        const ca::usize mi = ses->backing().methods.size() - 1;
+        auto            promoted = jbc::ir::promoteMethod(*ses, mi);
+        if (promoted.is_err()) {
+            throw std::runtime_error("invokedynamic_preprocessor: lambda synth promote <init> failed for "
+                                     + synthName);
+        }
+        auto unit = std::move(promoted).unwrap();
+
+        std::vector<jbc::ir::Insn> seq;
+        seq.push_back(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 0));
+        jbc::ir::Insn superInit;
+        superInit.op = jbc::core::Op::INVOKESPECIAL;
+        superInit.cp = ses->internMethodRef("java/lang/Object", "<init>", "()V");
+        seq.push_back(std::move(superInit));
+        int slot = 1;
+        for (size_t i = 0; i < capturedTypes.size(); ++i) {
+            seq.push_back(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 0));
+            seq.push_back(jbc::ir::CodeEditor::local(
+                static_cast<jbc::core::Op>(loadOpcode(capturedTypes[i].getSort())),
+                static_cast<ca::u32>(slot)));
+            jbc::ir::Insn put;
+            put.op = jbc::core::Op::PUTFIELD;
+            put.cp = ses->internFieldRef(synthName, capName[i], capDesc[i]);
+            seq.push_back(std::move(put));
+            slot += slotSize(capturedTypes[i].getSort());
+        }
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::RETURN));
+        emitBody(*unit, std::move(seq));
+
+        auto lowered = jbc::ir::lowerMethod(*ses, mi);
+        if (lowered.is_err()) {
+            throw std::runtime_error("invokedynamic_preprocessor: lambda synth lower <init> failed for "
+                                     + synthName);
+        }
+    }
 
     // SAM 方法体：把 fullArgs = 捕获字段（GETFIELD）+ SAM 参数（xLOAD）按序压栈，每个值
-    // 压栈后立即按 impl 期望类型适配（阶段2d：CHECKCAST / 拆箱 / 装箱，见 emitAdaptValue），
+    // 压栈后立即按 impl 期望类型适配（阶段2d：CHECKCAST / 拆箱 / 装箱），
     // 再按 impl 的 handle tag 发射调用。实例方法引用的 receiver 天然是 fullArgs 的首元（bound
     // 时来自捕获字段、unbound 时来自 SAM 首参），故压栈顺序与静态调用完全一致，只有调用
     // 指令不同。构造器引用需先 NEW/DUP 目标类型再压 fullArgs。
     const int         tag       = impl.getTag();
     const bool        isCtorRef = (tag == Opcodes::H_NEWINVOKESPECIAL);
-    const bool        isInstRef = (tag == Opcodes::H_INVOKEVIRTUAL ||
-                            tag == Opcodes::H_INVOKEINTERFACE || tag == Opcodes::H_INVOKESPECIAL);
     const std::string implOwner = toStd(impl.getOwner());
     const std::string implName  = toStd(impl.getName());
     const std::string implDesc  = toStd(impl.getDesc());
@@ -1089,33 +1251,37 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
     // fullArgs 各位置的目标类型：实例引用首元是 receiver（owner 对象类型），其余对应 implArgs。
     std::vector<Type> implArgs = Type::getArgumentTypes(arena.intern(implDesc.c_str()));
     std::vector<Type> toTypes;
-    if (isInstRef) toTypes.push_back(Type::getObjectType(arena.intern(implOwner.c_str())));
+    if (!isCtorRef && (tag == Opcodes::H_INVOKEVIRTUAL || tag == Opcodes::H_INVOKEINTERFACE
+                       || tag == Opcodes::H_INVOKESPECIAL)) {
+        toTypes.push_back(Type::getObjectType(arena.intern(implOwner.c_str())));
+    }
     toTypes.insert(toTypes.end(), implArgs.begin(), implArgs.end());
 
     // 发射一个 SAM 体（主 SAM 与各 bridge 复用）：按给定描述符 sDesc 载入 fullArgs、适配、
     // 按 impl handle tag 发射调用。extraAccess 供 bridge 加 ACC_BRIDGE|ACC_SYNTHETIC。
-    auto buildSam = [&](const std::string& sName, const std::string& sDesc,
-                        int extraAccess) -> MethodNode* {
-        auto* sam = new MethodNode(Opcodes::ACC_PUBLIC | extraAccess, arena.intern(sName.c_str()),
-                                   arena.intern(sDesc.c_str()), arena.intern(""), noExc);
+    auto buildSam = [&](const std::string& sName, const std::string& sDesc, int extraAccess) {
         int    samStack = 0;
         size_t argPos   = 0;   // fullArgs 位置游标（捕获段 + SAM 参数段共用）
 
+        std::vector<jbc::ir::Insn> seq;
         // 构造器引用：先 NEW/DUP 目标类型（占 2 个栈位，位于 fullArgs 之下）。
         if (isCtorRef) {
-            sam->instructions.add(sam->create<TypeInsnNode>(Opcodes::NEW, intern(arena, implOwner.c_str())));
-            sam->instructions.add(sam->create<InsnNode>(Opcodes::DUP));
+            jbc::ir::Insn nw;
+            nw.op = jbc::core::Op::NEW;
+            nw.cp = ses->internClass(implOwner);
+            seq.push_back(std::move(nw));
+            seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::DUP));
             samStack += 2;
         }
 
         // fullArgs 第一段：捕获字段 cap0..capN-1（GETFIELD + 适配）。
         for (size_t i = 0; i < capturedTypes.size(); ++i, ++argPos) {
-            sam->instructions.add(sam->create<VarInsnNode>(Opcodes::ALOAD, 0));
-            sam->instructions.add(sam->create<FieldInsnNode>(Opcodes::GETFIELD,
-                                                    arena.intern(synthName.c_str()),
-                                                    arena.intern(capName[i].c_str()),
-                                                    arena.intern(capDesc[i].c_str())));
-            emitAdaptValue(*sam, arena, sam->instructions, capturedTypes[i], toTypes[argPos]);
+            seq.push_back(jbc::ir::CodeEditor::local(jbc::core::Op::ALOAD, 0));
+            jbc::ir::Insn get;
+            get.op = jbc::core::Op::GETFIELD;
+            get.cp = ses->internFieldRef(synthName, capName[i], capDesc[i]);
+            seq.push_back(std::move(get));
+            emitAdaptValueSeq(*ses, seq, capturedTypes[i], toTypes[argPos]);
             // 适配可能改变栈宽（如 Object→long 1→2），按两侧较大者计。
             samStack += std::max(slotSize(capturedTypes[i].getSort()),
                                  slotSize(toTypes[argPos].getSort()));
@@ -1124,8 +1290,9 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         std::vector<Type> samArgs = Type::getArgumentTypes(arena.intern(sDesc.c_str()));
         int               slot    = 1;
         for (const auto& t : samArgs) {
-            sam->instructions.add(sam->create<VarInsnNode>(loadOpcode(t.getSort()), slot));
-            emitAdaptValue(*sam, arena, sam->instructions, t, toTypes[argPos]);
+            seq.push_back(jbc::ir::CodeEditor::local(
+                static_cast<jbc::core::Op>(loadOpcode(t.getSort())), static_cast<ca::u32>(slot)));
+            emitAdaptValueSeq(*ses, seq, t, toTypes[argPos]);
             slot += slotSize(t.getSort());
             samStack += std::max(slotSize(t.getSort()), slotSize(toTypes[argPos].getSort()));
             ++argPos;
@@ -1134,12 +1301,12 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         const Type samRet = Type::getReturnType(arena.intern(sDesc.c_str()));
         if (isCtorRef) {
             // NEW/DUP/fullArgs/INVOKESPECIAL <init> → 栈顶留下新建对象，适配（一般免 cast）后 ARETURN。
-            sam->instructions.add(sam->create<MethodInsnNode>(Opcodes::INVOKESPECIAL,
-                                                     intern(arena, implOwner.c_str()),
-                                                     intern(arena, "<init>"),
-                                                     intern(arena, implDesc.c_str()), false));
-            emitReturnAdapt(*sam, arena, sam->instructions,
-                            Type::getObjectType(arena.intern(implOwner.c_str())), samRet);
+            jbc::ir::Insn initCall;
+            initCall.op = jbc::core::Op::INVOKESPECIAL;
+            initCall.cp = ses->internMethodRef(implOwner, "<init>", implDesc);
+            seq.push_back(std::move(initCall));
+            emitReturnAdaptSeq(*ses, seq, Type::getObjectType(arena.intern(implOwner.c_str())),
+                               samRet);
         }
         else {
             int  invokeOpcode = Opcodes::INVOKESTATIC;
@@ -1153,11 +1320,13 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
             // H_INVOKEVIRTUAL 与已提权的 H_INVOKESPECIAL 均按虚调用发射。
             default: invokeOpcode = Opcodes::INVOKEVIRTUAL; break;
             }
-            sam->instructions.add(sam->create<MethodInsnNode>(invokeOpcode, intern(arena, implOwner.c_str()),
-                                                     intern(arena, implName.c_str()),
-                                                     intern(arena, implDesc.c_str()), invokeIface));
-            emitReturnAdapt(*sam, arena, sam->instructions,
-                            Type::getReturnType(arena.intern(implDesc.c_str())), samRet);
+            jbc::ir::Insn call;
+            call.op = static_cast<jbc::core::Op>(invokeOpcode);
+            call.cp = invokeIface ? ses->internInterfaceMethodRef(implOwner, implName, implDesc)
+                                  : ses->internMethodRef(implOwner, implName, implDesc);
+            seq.push_back(std::move(call));
+            emitReturnAdaptSeq(*ses, seq, Type::getReturnType(arena.intern(implDesc.c_str())),
+                               samRet);
         }
         // 栈峰值另须容纳返回值（如零参 SAM 调 ()J impl：参数段 0 栈位、返回 2 栈位）。
         const Type implRetT =
@@ -1166,13 +1335,33 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         const int retSlots =
             std::max(implRetT.getSort() == Type::VOID ? 0 : slotSize(implRetT.getSort()),
                      samRet.getSort() == Type::VOID ? 0 : slotSize(samRet.getSort()));
-        sam->maxStack  = std::max({samStack, retSlots, 1});
-        sam->maxLocals = slot;
-        return sam;
+        const int maxStack  = std::max({samStack, retSlots, 1});
+        const int maxLocals = slot;
+
+        auto added = ses->addMethod(jbc::ir::MethodSeed{
+            sName, sDesc,
+            static_cast<ca::u16>(Opcodes::ACC_PUBLIC | extraAccess), true,
+            static_cast<ca::u16>(maxStack), static_cast<ca::u16>(maxLocals)});
+        if (added.is_err()) {
+            throw std::runtime_error("invokedynamic_preprocessor: lambda synth addMethod " + sName
+                                     + " failed for " + synthName);
+        }
+        const ca::usize mi       = ses->backing().methods.size() - 1;
+        auto            promoted = jbc::ir::promoteMethod(*ses, mi);
+        if (promoted.is_err()) {
+            throw std::runtime_error("invokedynamic_preprocessor: lambda synth promote " + sName
+                                     + " failed for " + synthName);
+        }
+        emitBody(*std::move(promoted).unwrap(), std::move(seq));
+        auto lowered = jbc::ir::lowerMethod(*ses, mi);
+        if (lowered.is_err()) {
+            throw std::runtime_error("invokedynamic_preprocessor: lambda synth lower " + sName
+                                     + " failed for " + synthName);
+        }
     };
 
     // 主 SAM。
-    cn->methods.push_back(buildSam(samName, samDesc, 0));
+    buildSam(samName, samDesc, 0);
     // 阶段2e：altMetafactory 桥接方法（同名不同签，通常是擦除到更泛的描述符）。逐个发射
     // ACC_BRIDGE|ACC_SYNTHETIC 方法，body 复用同一 impl 适配路径。去重并跳过与主 SAM 重复的
     // 描述符，避免出现同名同签的重复方法。
@@ -1181,19 +1370,33 @@ std::unique_ptr<ClassNode> buildLambdaClassNode(ca::str::Utf8StringArena& arena,
         if (std::find(emittedDescs.begin(), emittedDescs.end(), bridgeDesc) != emittedDescs.end())
             continue;
         emittedDescs.push_back(bridgeDesc);
-        cn->methods.push_back(
-            buildSam(samName, bridgeDesc, Opcodes::ACC_BRIDGE | Opcodes::ACC_SYNTHETIC));
+        buildSam(samName, bridgeDesc, Opcodes::ACC_BRIDGE | Opcodes::ACC_SYNTHETIC);
     }
 
-    return cn;
+    // writeClass→readClass 字节往返还回（真实编解码器纪律，与 dom_edit 同通道；
+    // ClassFile 不可移动——AttrSlot lazy span 指向 source_，移动即悬垂）。
+    auto written = jbc::core::writeClass(ses->backing());
+    if (written.is_err()) {
+        throw std::runtime_error("invokedynamic_preprocessor: lambda synth writeClass failed for "
+                                 + synthName + ": "
+                                 + jbc::core::to_string(std::move(written).unwrap_err()));
+    }
+    auto bytes = std::move(written).unwrap();
+    auto read  = jbc::core::readClass(jbc::core::ByteView{bytes.data(), bytes.size()});
+    if (read.is_err()) {
+        throw std::runtime_error("invokedynamic_preprocessor: lambda synth readClass failed for "
+                                 + synthName);
+    }
+    return std::move(read).unwrap().file;
 }
 
 // 待注册的合成类（在 getClasses 遍历结束后统一 addClass/upsertJarResource，避免
-// 遍历中改 map 使迭代器失效）。
+// 遍历中改 map 使迭代器失效）。DOM 载体：合成类直接持 libjbc ClassFile
+//（批 6d：树投影退役，合成类经 refreshMethodSnapshots 入 index）。
 struct PendingLambdaClass
 {
-    std::string                internalName;   // e.g. mj2x/lambda/Lambda$0
-    std::unique_ptr<ClassNode> node;
+    std::string                           internalName;   // e.g. mj2x/lambda/Lambda$0
+    std::unique_ptr<jbc::core::ClassFile> dom;
 };
 
 /// 合成 lambda 类宿主包判定（#1182，评审收口 P1 修：default 包返回空串）。
@@ -1214,11 +1417,23 @@ struct PendingLambdaClass
 ///
 /// 返回宿主包（包内带尾随 '/'；default 包=空串；"mj2x/lambda/" = 维持现状）。
 /// 注意本修复是生成器侧：已发布产物遇包私有 SAM 不会自动治愈，需重转换。
-std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& ifaceInternal)
+std::string pickLambdaSynthHostPackage(CompilerIndex& index, jbc::ir::ClassSession* currentSession,
+                                       const std::string& ifaceInternal)
 {
-    if (auto* ifaceCls = index.getClass(ifaceInternal)) {
-        if (ifaceCls->classNode != nullptr &&
-            (ifaceCls->classNode->access & Opcodes::ACC_PUBLIC) == 0) {
+    // 当前类被会话接管时 cls.dom 为空（openDomEdit move 语义），当前类的
+    // 读取经 session->backing()（LambdasCapture 首曝：SAM 在本类，嵌套判定
+    // 全程 null dom → 恒落 mj2x/lambda → 包私有 SAM 跨包 IllegalAccessError）。
+    const auto domOf = [&](const std::string& name) -> jbc::core::ClassFile* {
+        auto* cls = index.getClass(name);
+        if (cls != nullptr && cls->dom != nullptr) return cls->dom.get();
+        if (cls != nullptr && currentSession != nullptr
+            && std::string(currentSession->backing().thisName()) == name) {
+            return &currentSession->backing();
+        }
+        return nullptr;
+    };
+    if (jbc::core::ClassFile* ifaceDom = domOf(ifaceInternal)) {
+        if ((ifaceDom->access & Opcodes::ACC_PUBLIC) == 0) {
             const std::size_t slash = ifaceInternal.rfind('/');
             return slash == std::string::npos ? std::string()
                                               : ifaceInternal.substr(0, slash + 1);
@@ -1234,38 +1449,55 @@ std::string pickLambdaSynthHostPackage(CompilerIndex& index, const std::string& 
     // 顶层类无法被跨包引用，引用方对其访问必已由 public 保证）。
     for (std::size_t dollar = ifaceInternal.find('$'); dollar != std::string::npos;
          dollar     = ifaceInternal.find('$', dollar + 1)) {
-        auto* outerCls = index.getClass(ifaceInternal.substr(0, dollar));
-        if (outerCls == nullptr || outerCls->classNode == nullptr) continue;
-        for (auto* ic : outerCls->classNode->innerClasses) {
-            if (ic == nullptr || toStd(ic->name) != ifaceInternal) continue;
-            if ((ic->access & Opcodes::ACC_PUBLIC) == 0) {
-                const std::size_t slash = ifaceInternal.rfind('/');
-                return slash == std::string::npos ? std::string()
-                                                  : ifaceInternal.substr(0, slash + 1);
+        jbc::core::ClassFile* outerDom = domOf(ifaceInternal.substr(0, dollar));
+        if (outerDom == nullptr) continue;
+        for (auto& slot : outerDom->attrs) {
+            if (slot.body == nullptr) {
+                // 类级旁路槽 lazy 解码（失败即放弃嵌套判定，维持 mj2x/lambda 零漂移）。
+                if (outerDom->decodeAttr(slot).is_err()) continue;
             }
-            return "mj2x/lambda/";
+            if (slot.body == nullptr ||
+                slot.body->kind() != jbc::core::AttrKind::InnerClasses) {
+                continue;
+            }
+            const auto& icAttr = *ca::core::tag_cast::cast<jbc::core::InnerClassesAttr>(slot.body.get());
+            for (const auto& row : icAttr.rows) {
+                if (std::string(outerDom->className(row.innerClassInfoCp)) != ifaceInternal) {
+                    continue;
+                }
+                if ((row.accessFlags & Opcodes::ACC_PUBLIC) == 0) {
+                    const std::size_t slash = ifaceInternal.rfind('/');
+                    return slash == std::string::npos ? std::string()
+                                                      : ifaceInternal.substr(0, slash + 1);
+                }
+                return "mj2x/lambda/";
+            }
         }
     }
     return "mj2x/lambda/";
 }
 
-// 展开单个 lambda indy 站点（无状态 + 捕获统一处理）。返回是否改写成功。
+// 展开单个 lambda indy 站点（DOM 载体，无状态 + 捕获统一处理）。返回是否改写成功。
 // 失败（非 INVOKESTATIC impl / desc 不符合 captured++sam 布局）保持 indy 原样、交 SSA fail-closed。
 //
 // indy desc 参数 = 捕获变量（无状态则为空），已在 indy 前压栈；返回类型 = functional interface。
 // bsmArgs[0]=samMethodType, [1]=implHandle, [2]=instantiatedMethodType。impl 形参布局
 // （javac）= capturedTypes ++ samArgs。
-bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode* indy,
-                      int& synthCounter, std::vector<PendingLambdaClass>& pending)
+bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
+                         jbc::ir::CodeUnit& unit, jbc::ir::CodeEditor& editor, jbc::ir::InsnId at,
+                         const DomIndySite& site, ca::u32 srcPc, int& synthCounter,
+                         std::vector<PendingLambdaClass>&  pending,
+                         std::vector<PendingAccessFix>&    pendingAccessFixes,
+                         jbc::ir::InsnId*                  firstPlacedOut)
 {
     // 前置判定与 classifyIndySite 共用同一谓词（判定=展开零漂移，设计文档 §2/§5）。
     // 不支持的形态（收窄 / 装箱+加宽 / 未知 flags / 字段句柄等）保持 indy 原样、交 SSA fail-closed。
-    if (!lambdaExpansionPrecondition(index.arena(), toStd(indy->desc), indy->bsm, indy->bsmArgs))
+    if (!lambdaExpansionPrecondition(index.arena(), site.desc, site.bsm, site.bsmArgs))
         return false;
 
     auto& arena = index.arena();
 
-    const std::string indyDesc      = toStd(indy->desc);
+    const std::string indyDesc      = site.desc;
     std::vector<Type> capturedTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
 
     // functional interface = indy 返回类型（谓词已保证是对象类型）。
@@ -1274,8 +1506,8 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     const std::string ifaceInternal = toStd(ifaceType.getInternalName(arena));
 
     // bsmArgs：[0]=samMethodType(Type), [1]=implMethodHandle(Handle)（谓词已保证形态）。
-    auto* samTypePtr = indy->bsmArgs[0].as<Type>();
-    auto* implPtr    = indy->bsmArgs[1].as<Handle>();
+    auto* samTypePtr = site.bsmArgs[0].as<Type>();
+    auto* implPtr    = site.bsmArgs[1].as<Handle>();
 
     // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，落点=本函数作业级 arena。
     const std::string samDesc  = toStd(samTypePtr->getDescriptor(arena));
@@ -1283,24 +1515,22 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
 
     // 阶段2e：重新解析 altMetafactory 尾部（谓词已保证解析通过；防御性保留检查）。
     AltLambdaInfo alt;
-    if (!parseAltMetafactoryTail(indy->bsm, indy->bsmArgs, alt)) return false;
+    if (!parseAltMetafactoryTail(site.bsm, site.bsmArgs, alt)) return false;
 
     // impl 目标若在本 index 的用户类且非 public，提权为 public：合成类位于 mj2x/lambda/
     // 包，跨类/跨包访问 private/protected/包私有目标（含私有实例方法、包私有构造器）都会
     // 触发 IllegalAccessError。库方法（通常已 public）与 JDK 类（找不到）无需处理。
-    if (auto* target = findMethodInIndex(index, toStd(implPtr->getOwner()),
-                                         toStd(implPtr->getName()), implDesc)) {
-        if (!(target->access & Opcodes::ACC_PUBLIC)) {
-            target->access &= ~(Opcodes::ACC_PRIVATE | Opcodes::ACC_PROTECTED);
-            target->access |= Opcodes::ACC_PUBLIC;
-        }
-    }
+    // 会话开闭期间 cls.dom 被 session 接管，提权延迟到 processImpl 遍历结束统一落。
+    pendingAccessFixes.push_back(
+        PendingAccessFix{toStd(implPtr->getOwner()), toStd(implPtr->getName()), implDesc});
 
     // 宿主包判定（#1182：编译输入的非 public SAM 落 SAM 同包，其余维持 mj2x/lambda
-    // 零漂移）。同名类防碰撞（用户类与库类一并算占用，合成类绝不顶替既有条目）：
+    // 零漂移）。宿主包只读类 access/InnerClasses 静态位——树在 DOM 载体 pass 期间
+    // 是稳定投影（syncDomToTree 在段尾才重建），树读零漂移。
+    // 同名类防碰撞（用户类与库类一并算占用，合成类绝不顶替既有条目）：
     // 探测前跳；成功后把计数器推到选中名之后（出参语义），同 run 后续站点不会再
     // 探到本站点占用名。
-    const std::string hostPkg = pickLambdaSynthHostPackage(index, ifaceInternal);
+    const std::string hostPkg = pickLambdaSynthHostPackage(index, &session, ifaceInternal);
     std::string synthName;
     int         n = synthCounter;
     for (;; ++n) {
@@ -1314,23 +1544,27 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
     for (const auto& t : capturedTypes) ctorDesc += toStd(t.getDescriptor(arena));   // #921
     ctorDesc += ")V";
 
-    // 站点改写。
+    // 站点改写（DOM 发射序逐条 insertBefore(at)，同锚点保序）。
     //   无捕获：new synth / dup / invokespecial synth.<init>()V。
     //   有捕获：捕获值已在栈上（栈底=cap0，栈顶=capN-1）。先逆序 xSTORE 到新局部槽腾空栈，
-    //     再 new / dup / 逆序? —— 需按构造器形参顺序（cap0..capN-1）重新 xLOAD，
-    //     故先全部存槽，再 new/dup，再顺序 load。
-    InsnList seq(&m->arena());
+    //     再 new / dup，再按构造器形参顺序（cap0..capN-1）重新 xLOAD。
+    std::vector<jbc::ir::Insn> seq;
     if (capturedTypes.empty()) {
-        seq.add(m->create<TypeInsnNode>(Opcodes::NEW, intern(arena, synthName.c_str())));
-        seq.add(m->create<InsnNode>(Opcodes::DUP));
-        seq.add(m->create<MethodInsnNode>(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
-                                   intern(arena, "<init>"), intern(arena, "()V"), false));
-        m->maxStack += 2;
+        jbc::ir::Insn nw;
+        nw.op = jbc::core::Op::NEW;
+        nw.cp = session.internClass(synthName);
+        seq.push_back(std::move(nw));
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::DUP));
+        jbc::ir::Insn init;
+        init.op = jbc::core::Op::INVOKESPECIAL;
+        init.cp = session.internMethodRef(synthName, "<init>", "()V");
+        seq.push_back(std::move(init));
+        unit.maxStack = static_cast<ca::u16>(unit.maxStack + 2);
     }
     else {
-        // 为捕获值分配局部槽（从 m->maxLocals 起）。
+        // 为捕获值分配局部槽（从当前 maxLocals 起）。
         std::vector<int> capSlot(capturedTypes.size());
-        int              slot = m->maxLocals;
+        int              slot = unit.maxLocals;
         for (size_t i = 0; i < capturedTypes.size(); ++i) {
             capSlot[i] = slot;
             slot += slotSize(capturedTypes[i].getSort());
@@ -1338,35 +1572,58 @@ bool expandLambdaSite(CompilerIndex& index, MethodNode* m, InvokeDynamicInsnNode
         // 逆序 xSTORE（栈顶 capN-1 先存）。
         for (size_t r = capturedTypes.size(); r > 0; --r) {
             const size_t i = r - 1;
-            seq.add(m->create<VarInsnNode>(storeOpcode(capturedTypes[i].getSort()), capSlot[i]));
+            seq.push_back(synthLocal(
+                static_cast<jbc::core::Op>(storeOpcode(capturedTypes[i].getSort())),
+                static_cast<ca::u32>(capSlot[i])));
         }
         // new / dup / 顺序 xLOAD cap0..capN-1 / invokespecial <init>(capturedDescs)V。
-        seq.add(m->create<TypeInsnNode>(Opcodes::NEW, intern(arena, synthName.c_str())));
-        seq.add(m->create<InsnNode>(Opcodes::DUP));
+        jbc::ir::Insn nw;
+        nw.op = jbc::core::Op::NEW;
+        nw.cp = session.internClass(synthName);
+        seq.push_back(std::move(nw));
+        seq.push_back(jbc::ir::CodeEditor::simple(jbc::core::Op::DUP));
         int loadStack = 0;
         for (size_t i = 0; i < capturedTypes.size(); ++i) {
-            seq.add(m->create<VarInsnNode>(loadOpcode(capturedTypes[i].getSort()), capSlot[i]));
+            seq.push_back(synthLocal(
+                static_cast<jbc::core::Op>(loadOpcode(capturedTypes[i].getSort())),
+                static_cast<ca::u32>(capSlot[i])));
             loadStack += slotSize(capturedTypes[i].getSort());
         }
-        seq.add(m->create<MethodInsnNode>(Opcodes::INVOKESPECIAL, intern(arena, synthName.c_str()),
-                                   intern(arena, "<init>"), intern(arena, ctorDesc.c_str()),
-                                   false));
-        if (slot > m->maxLocals) m->maxLocals = slot;
+        jbc::ir::Insn init;
+        init.op = jbc::core::Op::INVOKESPECIAL;
+        init.cp = session.internMethodRef(synthName, "<init>", ctorDesc);
+        seq.push_back(std::move(init));
+        if (slot > unit.maxLocals) unit.maxLocals = static_cast<ca::u16>(slot);
         // 栈峰值：new+dup(2) + 全部捕获实参。
-        m->maxStack += 2 + loadStack;
+        unit.maxStack = static_cast<ca::u16>(unit.maxStack + 2 + loadStack);
     }
-    // InsnList::remove 只摘链不释放；buildLambdaClassNode 还要读 indy->name，
-    // 故先摘链、读完后按 B7 混合清除纪律释放：reader 建树后方法体节点由
-    // nodeArena_ 持有（owns 直接跳过），仅外来堆节点需要 delete。
-    m->instructions.insert(indy, seq);
-    m->instructions.remove(indy);
+    // 逐条 insertBefore(at)（同锚点保序）+ 首条回填 srcPc，理由同 expandConcatSiteDom。
+    jbc::ir::InsnId firstPlaced{};
+    for (auto& in : seq) {
+        const auto op = in.op;
+        auto placed = editor.insertBefore(at, std::move(in));
+        if (placed.is_err()) {
+            // 站点改写部分插入即字节码损坏——显式失败，不静默吞。
+            throw std::runtime_error(std::string("invokedynamic_preprocessor: insertBefore "
+                                                 "failed (op=")
+                                     + std::to_string(static_cast<int>(op)) + ", "
+                                     + jbc::ir::to_string(placed.unwrap_err()) + ")");
+        }
+        if (firstPlaced == jbc::ir::kNoInsn) {
+            firstPlaced = std::move(placed).unwrap();
+        }
+    }
+    if (firstPlacedOut != nullptr) *firstPlacedOut = firstPlaced;
+    if (srcPc != jbc::ir::kNoPc && firstPlaced != jbc::ir::kNoInsn) {
+        auto mut = unit.dom.get(firstPlaced);
+        if (mut.is_ok()) std::move(mut).unwrap()->srcPc = srcPc;
+    }
 
     PendingLambdaClass pc;
     pc.internalName = synthName;
-    pc.node = buildLambdaClassNode(arena, synthName, ifaceInternal, toStd(indy->name), samDesc,
-                                   capturedTypes, *implPtr, alt);
+    pc.dom = buildLambdaClassDom(arena, synthName, ifaceInternal, site.name, samDesc,
+                                 capturedTypes, *implPtr, alt);
     pending.push_back(std::move(pc));
-    if (!m->arena().owns(indy)) delete indy;
     return true;
 }
 
@@ -1379,68 +1636,152 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
     int   synthCounter   = 0;
 
     std::vector<PendingLambdaClass> pendingLambdaClasses;
+    std::vector<PendingAccessFix>   pendingAccessFixes;
 
     for (auto& [name, cls] : index.getClasses()) {
         if (cls.isLibrary) continue;
-        for (auto* m : cls.classNode->methods) {
-            // 先收集本方法的可展开站点（边遍历边改 list 会失效）。
-            std::vector<InvokeDynamicInsnNode*> concatSites;
-            std::vector<InvokeDynamicInsnNode*> lambdaSites;
-            const std::string                   methodName = toStd(m->name);
-            ca::i32                             siteOrdinal = 0;
-            for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
-                if (insn->getType() != AbstractInsnNode::INVOKE_DYNAMIC_INSN) continue;
-                auto* indy = static_cast<InvokeDynamicInsnNode*>(insn);
+
+        auto session = openDomEdit(cls, name);
+        bool changed = false;
+
+        // 类级 BootstrapMethods 懒解码（首个 indy 站点时）。
+        const jbc::core::BootstrapMethodsAttr* bsmAttr = nullptr;
+
+        const ca::usize methodCount = session->unit().methods.size();
+        for (ca::usize mi = 0; mi < methodCount; ++mi) {
+            if (!jbc::ir::hasCode(*session, mi)) continue;
+
+            auto promoted = jbc::ir::promoteMethod(*session, mi);
+            if (promoted.is_err()) {
+                throw std::runtime_error("invokedynamic_preprocessor: promote failed for " + name
+                                         + " method #" + std::to_string(mi));
+            }
+            auto unit = std::move(promoted).unwrap();
+
+            // 先收集后改写（CodeDom 句柄域稳定，insertBefore 不失效既有句柄）。
+            std::vector<jbc::ir::InsnId> siteIds;
+            for (auto id : unit->dom.order()) {
+                const auto* in = unit->dom.peek(id);
+                if (in->op == jbc::core::Op::INVOKEDYNAMIC) siteIds.push_back(id);
+            }
+            if (siteIds.empty()) continue;
+
+            if (bsmAttr == nullptr) bsmAttr = domBootstrapMethods(session->backing());
+            if (bsmAttr == nullptr) {
+                throw std::runtime_error("invokedynamic_preprocessor: INVOKEDYNAMIC without "
+                                         "BootstrapMethods in "
+                                         + name);
+            }
+
+            const std::string methodName(session->backing().nameOf(session->backing().methods[mi]));
+            jbc::ir::CodeEditor editor(*unit);
+            ca::i32             siteOrdinal   = 0;
+            int                 methodExpanded = 0;
+            for (auto id : siteIds) {
+                const auto* in = unit->dom.peek(id);
+                DomIndySite site = decodeDomIndySite(session->backing(), in->cp, *bsmAttr, arena);
+
                 // indy native dispatch 静态判定：只读、只标记（波次一原型，设计文档 §5），
                 // 不消费判定结果、不影响下方展开逻辑与字节码输出。
                 if (report != nullptr) {
-                    IndyDispatchDecision decision = classifyIndySiteImpl(index, indy);
-                    decision.className            = name;
-                    decision.methodName           = methodName;
-                    decision.ordinal              = siteOrdinal;
+                    IndyDispatchDecision decision =
+                        classifyIndySitePayloadImpl(index, site.name, site.desc, site.bsm,
+                                                site.bsmArgs);
+                    decision.className  = name;
+                    decision.methodName = methodName;
+                    decision.ordinal    = siteOrdinal;
                     report->sites.push_back(std::move(decision));
                 }
                 ++siteOrdinal;
-                bool  wc   = false;
-                if (isStringConcatSite(&indy->bsm, wc)) concatSites.push_back(indy);
-                else if (isLambdaMetafactorySite(&indy->bsm)) lambdaSites.push_back(indy);
-            }
-            const int expandedBefore = expanded + lambdaExpanded;
-            for (auto* indy : concatSites) {
-                bool wc = false;
-                isStringConcatSite(&indy->bsm, wc);
-                if (expandConcatSite(arena, m, indy, wc)) ++expanded;
-            }
-            for (auto* indy : lambdaSites) {
-                if (expandLambdaSite(index, m, indy, synthCounter, pendingLambdaClasses)) {
-                    ++lambdaExpanded;
+
+                bool siteExpanded = false;
+                bool wc           = false;
+                jbc::ir::InsnId   firstPlacedOfSite{};
+                if (isStringConcatSite(&site.bsm, wc)) {
+                    siteExpanded =
+                        expandConcatSiteDom(*session, *unit, editor, id, site, wc, in->srcPc,
+                                            arena, &firstPlacedOfSite);
+                    if (siteExpanded) ++expanded;
+                }
+                else if (isLambdaMetafactorySite(&site.bsm)) {
+                    siteExpanded = expandLambdaSiteDom(index, *session, *unit, editor, id, site,
+                                                       in->srcPc, synthCounter,
+                                                       pendingLambdaClasses, pendingAccessFixes,
+                                                       &firstPlacedOfSite);
+                    if (siteExpanded) ++lambdaExpanded;
+                }
+                if (siteExpanded) {
+                    // 站点可为分支目标（如循环出口直落 concat）：引用者先重定向到
+                    // 首条替换指令，否则 erase 按 StillUsed 拒绝。
+                    if (!unit->dom.usersOf(id).empty()) {
+                        auto retarget = unit->dom.replaceAllUses(id, firstPlacedOfSite);
+                        if (retarget.is_err()) {
+                            throw std::runtime_error(
+                                "invokedynamic_preprocessor: retarget indy site users failed "
+                                "for " + name + " method #" + std::to_string(mi) + ": "
+                                + jbc::ir::to_string(retarget.unwrap_err()));
+                        }
+                    }
+                    auto erased = editor.erase(id);
+                    if (erased.is_err()) {
+                        throw std::runtime_error(
+                            "invokedynamic_preprocessor: erase indy site failed for " + name
+                            + " method #" + std::to_string(mi) + ": "
+                            + jbc::ir::to_string(erased.unwrap_err()));
+                    }
+                    ++methodExpanded;
+                    changed = true;
                 }
             }
-            // 展开改写了指令流：类必须标记 modified，否则 JAR 输出写回原始字节
-            //（OutputWriter 只重写 modified 类，展开静默作废），单类输出走
-            // COMPUTE_MAXS 配新指令流有 VerifyError 风险（对齐 ldc_preprocessor
-            // 同约束）。native_loader 的 clinit 注入按「modified 且含 ACC_NATIVE
-            // 方法」判定，不受本处影响。
-            if (expanded + lambdaExpanded > expandedBefore) cls.modified = true;
-            // 统计仍残留的 indy（展开失败或非 concat/lambda 形态）。
-            for (auto* insn = m->instructions.getFirst(); insn; insn = insn->nextInsn) {
-                if (insn->getType() == AbstractInsnNode::INVOKE_DYNAMIC_INSN) ++remainingIndy;
+            remainingIndy += static_cast<int>(siteIds.size()) - methodExpanded;
+
+            // 展开改写了指令流才 lower（lower 写回 Code 槽；未改写保持原样）。
+            if (methodExpanded > 0) {
+                auto lowered = jbc::ir::lowerMethod(*session, mi);
+                if (lowered.is_err()) {
+                    throw std::runtime_error(
+                        "invokedynamic_preprocessor: lower failed for " + name + " method #"
+                        + std::to_string(mi) + ": "
+                        + jbc::ir::to_string(std::move(lowered).unwrap_err()));
+                }
+            }
+        }
+
+        // 展开改写了指令流：类必须标记 modified，否则 JAR 输出写回原始字节
+        //（OutputWriter 只重写 modified 类，展开静默作废），单类输出走
+        // COMPUTE_MAXS 配新指令流有 VerifyError 风险（对齐 ldc_preprocessor
+        // 同约束）。native_loader 的 clinit 注入按「modified 且含 ACC_NATIVE
+        // 方法」判定，不受本处影响。
+        if (changed) cls.modified = true;
+        commitDomEdit(cls, name, session);
+    }
+
+    // 遍历结束后统一执行 impl 提权（会话期间 cls.dom 被接管，见 PendingAccessFix）。
+    for (const auto& fix : pendingAccessFixes) {
+        if (auto* target = domMethodInIndex(index, fix.owner, fix.name, fix.desc)) {
+            if (!(target->access & Opcodes::ACC_PUBLIC)) {
+                target->access &= ~(Opcodes::ACC_PRIVATE | Opcodes::ACC_PROTECTED);
+                target->access |= Opcodes::ACC_PUBLIC;
             }
         }
     }
 
     // 遍历结束后统一注册合成 lambda 类（遍历中改 getClasses map 会使迭代器失效）。
-    // 单类输出走 addClass（sidecar），JAR 输出走 upsertJarResource。isLibrary=true 使
-    // RegC 跳过编译（合成类保留纯字节码，由 OutputWriter 写出）。
+    // 单类输出走 addClass（sidecar，DOM 载体——树投影由 syncDomToTree 物化），JAR 输出
+    // 走 upsertJarResource。isLibrary=true 使 RegC 跳过编译（合成类保留纯字节码，由
+    // OutputWriter 写出）。
     for (auto& pc : pendingLambdaClasses) {
         if (index.isJarInput()) {
-            ClassWriter cw(arena, 0);
-            pc.node->accept(&cw);
-            index.upsertJarResource(pc.internalName + ".class", cw.toByteArray());
+            auto bytes = jbc::core::writeClass(*pc.dom);
+            if (bytes.is_err()) {
+                throw std::runtime_error("invokedynamic_preprocessor: synth lambda writeClass failed for "
+                                         + pc.internalName);
+            }
+            index.upsertJarResource(pc.internalName + ".class", std::move(bytes).unwrap());
         }
         else {
             CompilerClass synthCls;
-            synthCls.classNode = std::move(pc.node);
+            synthCls.dom       = std::move(pc.dom);
             synthCls.isLibrary = true;
             synthCls.modified  = true;
             index.addClass(pc.internalName, std::move(synthCls));
@@ -1460,6 +1801,15 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
 
 }   // namespace
 
+IndyDispatchDecision classifyIndySitePayload(CompilerIndex& index,
+                                             const std::string&             indyName,
+                                             const std::string&             indyDesc,
+                                             const mj2x::Handle&            bsm,
+                                             const std::vector<ca::core::Any>& bsmArgs)
+{
+    return classifyIndySitePayloadImpl(index, indyName, indyDesc, bsm, bsmArgs);
+}
+
 ca::usize IndyDispatchReport::count(IndyDispatchForm form) const
 {
     ca::usize n = 0;
@@ -1469,15 +1819,10 @@ ca::usize IndyDispatchReport::count(IndyDispatchForm form) const
     return n;
 }
 
-IndyDispatchDecision classifyIndySite(CompilerIndex& index, const InvokeDynamicInsnNode* indy)
-{
-    return classifyIndySiteImpl(index, indy);
-}
-
 IndyDispatchPayload classifyIndySiteForm(ca::str::Utf8StringArena& arena,
                                          const std::string&             indyName,
                                          const std::string&             indyDesc,
-                                         const std::optional<jbytecode::core::Handle>& bsm,
+                                         const std::optional<mj2x::Handle>& bsm,
                                          const std::vector<ca::core::Any>&             bsmArgs)
 {
     const CoreDecision core = classifyCore(

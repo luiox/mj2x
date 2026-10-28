@@ -1,6 +1,8 @@
 /// @file llvm_ir_emitter.cpp
 /// @brief LLVM IR 后端发射器：RegIR 函数 → textual LLVM IR（含异常分发）。
 #include "llvm_ir_internal.hpp"
+#include <set>
+#include <unordered_map>
 #include "llvm_intrinsic_registry.hpp"
 
 #include "mj2x/codegen/c_helpers.hpp"
@@ -13,8 +15,6 @@
 namespace mj2x {
 namespace llvmir {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
 class LlvmFunctionEmitter
 {
@@ -1592,7 +1592,13 @@ private:
                         return false;
                     }
                     const auto it = registerTypes_.find(copy.dest.id.value);
-                    const char* type = it == registerTypes_.end() ? nullptr : llvmType(it->second);
+                    if (it == registerTypes_.end()) {
+                        // dest 块参数已被 DCE（handler 内未读即重定义）→ 槽 alloca
+                        // 不存在，拷贝本身也无人读：直接跳过。发射 store 到未声明
+                        // 槽会产出 clang 拒收的非法 IR。
+                        continue;
+                    }
+                    const char* type = llvmType(it->second);
                     if (type == nullptr) {
                         reason = "LLVM IR exception edge copy has an unsupported type";
                         return false;

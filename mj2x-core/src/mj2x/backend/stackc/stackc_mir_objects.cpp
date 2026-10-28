@@ -10,11 +10,12 @@
 /// 缩进约定：调用方保证 out 处于 2 层（8 空格），内部块用 indent()/dedent()。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/core/jvm_opcodes.hpp"
+
 #include "libca/str/format.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 using codegen::cStringLiteral;
 using codegen::CSourceStream;
 using codegen::fnv1a64;

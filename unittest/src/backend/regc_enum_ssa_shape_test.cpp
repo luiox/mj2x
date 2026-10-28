@@ -25,6 +25,7 @@
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_emitter_internal.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "test_helper.hpp"
 #include "mj2x/mir/passes/ssa_inline_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dump.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
@@ -63,7 +64,7 @@ std::unique_ptr<SSAFunction> buildSsa(MethodNode& mn, const char* owner, Utf8Str
                                       std::string& reason)
 {
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(mn);
+    auto          blocks = test::convertMethodNode(converter, mn, arena);
     SSABuilder    builder;
     const bool    isStatic = (mn.access & Opcodes::ACC_STATIC) != 0;
     return builder.build(blocks, owner, mn.name.to_std_string(), mn.desc.to_std_string(),
@@ -372,7 +373,7 @@ TEST(RegCEnumSsaShapeTest, ValueOfJavacShapeLowersToCallConvertPair)
     Utf8StringArena arena;
     std::string     reason;
     auto mn = makeMethod(kStaticPublic, "valueOf", "(Ljava/lang/String;)LColor;",
-                         {new LdcInsnNode(Type::getObjectType(arena.intern("Color"))),
+                         {new LdcInsnNode(jbytecode::core::Type::getObjectType(arena.intern("Color"))),
                           new VarInsnNode(Opcodes::ALOAD, 0),
                           new MethodInsnNode(
                               Opcodes::INVOKESTATIC,

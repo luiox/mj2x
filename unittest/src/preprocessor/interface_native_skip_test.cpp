@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "mj2x/core/compiler_index.hpp"
+#include "test_helper.hpp"
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "mj2x/preprocessor/mark_all_preprocessor.hpp"
 #include "mj2x/preprocessor/native_annotation_preprocessor.hpp"
@@ -26,7 +27,7 @@ namespace {
 bool isMarked(CompilerClass& cls, const std::string& name)
 {
     for (auto& m : cls.methods) {
-        if (m.methodNode->name.to_std_string() == name) return m.markedForCompile;
+        if (m.name == name) return m.markedForCompile;
     }
     return false;
 }
@@ -40,14 +41,6 @@ int markedCount(CompilerClass& cls)
     return n;
 }
 
-MethodNode* findMethod(CompilerClass& cls, const std::string& name)
-{
-    for (auto* m : cls.classNode->methods) {
-        if (m->name.to_std_string() == name) return m;
-    }
-    return nullptr;
-}
-
 /// 造一个方法：access + name + desc + 体（默认一条 RETURN 类指令保非空）。
 MethodNode* makeMethod(CompilerIndex& index, int access, const std::string& name,
                        const std::string& desc, bool withBody = true)
@@ -58,31 +51,25 @@ MethodNode* makeMethod(CompilerIndex& index, int access, const std::string& name
                                  arena.intern(desc.c_str()), arena.intern(""), noExc);
     mn->maxStack  = 4;
     mn->maxLocals = 4;
-    if (withBody) mn->instructions.add(new InsnNode(Opcodes::RETURN));
+    if (withBody) mn->instructions.add(new InsnNode(jbytecode::core::Opcodes::RETURN));
     return mn;
 }
 
 /// 造一个类：isInterface 决定 ACC_INTERFACE|ACC_ABSTRACT 复合访问位。
+/// 批 6d：树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
 CompilerClass& buildClass(CompilerIndex& index, const std::string& className,
                           bool isInterface, std::vector<MethodNode*> methods)
 {
     auto& arena = index.arena();
     auto  cn    = std::make_unique<ClassNode>();
     cn->name      = arena.intern(className.c_str());
-    cn->version   = Opcodes::V1_8;
-    cn->access    = isInterface ? (Opcodes::ACC_INTERFACE | Opcodes::ACC_ABSTRACT)
-                                : Opcodes::ACC_PUBLIC;
+    cn->version   = jbytecode::core::Opcodes::V1_8;
+    cn->access    = isInterface ? (jbytecode::core::Opcodes::ACC_INTERFACE | jbytecode::core::Opcodes::ACC_ABSTRACT)
+                                : jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->superName = arena.intern("java/lang/Object");
     cn->methods   = std::move(methods);
 
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    for (auto* m : cls.classNode->methods) {
-        CompilerMethod cm;
-        cm.methodNode = m;
-        cls.methods.push_back(std::move(cm));
-    }
-    index.addClass(className, std::move(cls));
+    index.addClass(className, test::classFromTree(className, *cn, arena));
     return *index.getClass(className);
 }
 
@@ -90,11 +77,11 @@ CompilerClass& buildClass(CompilerIndex& index, const std::string& className,
 std::vector<MethodNode*> interfaceMethods(CompilerIndex& index)
 {
     return {
-        makeMethod(index, Opcodes::ACC_PUBLIC, "greet", "()Ljava/lang/String;"),
-        makeMethod(index, Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "kind",
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "greet", "()Ljava/lang/String;"),
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "kind",
                    "()Ljava/lang/String;"),
-        makeMethod(index, Opcodes::ACC_PRIVATE, "secret", "()Ljava/lang/String;"),
-        makeMethod(index, Opcodes::ACC_PUBLIC | Opcodes::ACC_ABSTRACT, "name",
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PRIVATE, "secret", "()Ljava/lang/String;"),
+        makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_ABSTRACT, "name",
                    "()Ljava/lang/String;", false),
     };
 }
@@ -107,9 +94,9 @@ TEST(InterfaceNativeSkipTest, MarkAllSkipsInterfaceConcreteMethods)
     CompilerIndex index;
     auto& iface = buildClass(index, "demo/Op", true, interfaceMethods(index));
     auto& cls   = buildClass(index, "demo/Impl", false,
-                             {makeMethod(index, Opcodes::ACC_PUBLIC, "run", "()V")});
+                             {makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "run", "()V")});
 
-    MarkAllMethodsPreprocessor().process(index);
+    test::runWithDomSync(MarkAllMethodsPreprocessor(), index);
 
     EXPECT_EQ(markedCount(iface), 0);
     EXPECT_FALSE(isMarked(iface, "greet"));
@@ -124,9 +111,9 @@ TEST(InterfaceNativeSkipTest, PrefixMarkerSkipsInterfaceMethods)
     CompilerIndex index;
     auto& iface = buildClass(index, "demo/Op", true, interfaceMethods(index));
     auto& cls   = buildClass(index, "demo/Impl", false,
-                             {makeMethod(index, Opcodes::ACC_PUBLIC, "run", "()V")});
+                             {makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "run", "()V")});
 
-    NativeMethodPrefixPreprocessor({"demo/"}).process(index);
+    test::runWithDomSync(NativeMethodPrefixPreprocessor({"demo/"}), index);
 
     EXPECT_EQ(markedCount(iface), 0);
     EXPECT_TRUE(isMarked(cls, "run"));
@@ -139,12 +126,12 @@ TEST(InterfaceNativeSkipTest, AnnotationMarkerSkipsInterfaceMethods)
 
     const char*        annDesc = "Lnative/Native;";
     auto&              iface   = buildClass(index, "demo/Op", true, interfaceMethods(index));
-    auto*              clsM    = makeMethod(index, Opcodes::ACC_PUBLIC, "run", "()V");
+    auto*              clsM    = makeMethod(index, jbytecode::core::Opcodes::ACC_PUBLIC, "run", "()V");
     clsM->visibleAnnotations.push_back(
         clsM->create<AnnotationNode>(clsM->arena(), index.arena().intern(annDesc)));
     auto& cls = buildClass(index, "demo/Impl", false, {clsM});
 
-    NativeAnnotationPreprocessor(annDesc).process(index);
+    test::runWithDomSync(NativeAnnotationPreprocessor(annDesc), index);
 
     EXPECT_EQ(markedCount(iface), 0);
     EXPECT_TRUE(isMarked(cls, "run"));
@@ -154,16 +141,19 @@ TEST(InterfaceNativeSkipTest, AnnotationMarkerSkipsInterfaceMethods)
 TEST(InterfaceNativeSkipTest, ClinitMoverSkipsInterfaceClinit)
 {
     CompilerIndex index;
-    auto* clinit = makeMethod(index, Opcodes::ACC_STATIC, "<clinit>", "()V");
+    auto* clinit = makeMethod(index, jbytecode::core::Opcodes::ACC_STATIC, "<clinit>", "()V");
     auto& iface  = buildClass(index, "demo/Op", true, {clinit});
 
-    InitClinitMoverPreprocessor().process(index);
+    test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
-    EXPECT_EQ(findMethod(iface, "<clinit>"), clinit);
+    // 树回投影现查（快照随 pass 对齐；树方法指针仅在本树存活期内有效）。
+    auto tree = test::treeFromDom(iface, index.arena());
+    ASSERT_NE(tree, nullptr);
+    EXPECT_NE(test::findMethodNode(tree.get(), "<clinit>"), nullptr);
     bool hasMoved = false;
-    for (auto* m : iface.classNode->methods) {
+    for (auto* m : tree->methods) {
         if (m->name.to_std_string().rfind("__regc_", 0) == 0) hasMoved = true;
     }
     EXPECT_FALSE(hasMoved);
-    EXPECT_EQ(iface.classNode->methods.size(), 1u);
+    EXPECT_EQ(tree->methods.size(), 1u);
 }

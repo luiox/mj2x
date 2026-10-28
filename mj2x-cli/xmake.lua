@@ -28,11 +28,10 @@ target("mj2x-cli")
 
     -- xmake 3.x 不把静态 target 依赖传进 binary 链接：显式给全闭包，按
     -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
-    -- mj2x-core → libjbytecode 聚合库（实现分散在子库），须逐个补齐到 libca_core；
+    -- 批 6e：mj2x-core 已零 libjbytecode 符号引用，链接闭包随之摘除。
     -- 裸 libca_*/libjdk_finder 库名落到包 libdir 解析（add_packages 传导 libpath）。
-    mj2x_binary_link_closure("mj2x-core", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis",
-              "libjbytecode_tree", "libjbytecode_core", "libgarena",
-              "libjstr", "libjzip", "libca_log", "libjdk_finder",
+    mj2x_binary_link_closure("mj2x-core", "libjbc", "libjstr",
+              "libjzip", "libca_log", "libjdk_finder",
               "libca_process", "libca_opt", "libca_zip",
               "libca_str", "libca_crypto", "libca_core")
     -- 注：libca_resources/libca_i18n 为 headeronly target（无 .lib 产物），

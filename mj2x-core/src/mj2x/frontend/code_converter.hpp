@@ -13,7 +13,9 @@
 #include "mir_node.hpp"
 #include "mj2x/core/compiler_index.hpp"
 
-#include <jbytecode/jbytecode.hpp>
+#include <jbc/core/attribute.hpp>
+#include <jbc/core/class_file.hpp>
+#include <jbc/core/insn.hpp>
 
 #include <memory>
 #include <unordered_map>
@@ -22,7 +24,12 @@
 
 namespace mj2x {
 
-/// 把 MethodNode 字节码转换为 L1 MIR 基本块序列（前端）。
+/// 把方法字节码转换为 L1 MIR 基本块序列（前端）。
+///
+/// 批 3b 起主入口走 libjbc DOM（批 2 的 tree→DOM 阶段边界同步产物）：
+/// decodeInsns 逐指令投影 + CP 解析 + 按 pc 切块。MethodNode 重载是测试垫片
+/// （树经 plain 序列化 + readClass 字节往返到 DOM 后走同一读路径），批 6 摘树
+/// 时随树一并退役。
 class CodeConverter
 {
 public:
@@ -32,18 +39,22 @@ public:
     explicit CodeConverter(ca::str::Utf8StringArena& arena);
     ~CodeConverter();
 
-    /// @brief 转换一个方法的字节码为 L1 MIR blocks。
+    /// @brief 转换 DOM 中第 methodIndex 个方法的字节码为 L1 MIR blocks。
+    /// @param cf  批 2 同步产出的类 DOM；decodeCode 的 lazy 缓存落在其上。
     /// @return Block* 指针由 converter 内部拥有，调用方只读消费。
-    std::vector<Block*> convert(jbytecode::tree::MethodNode& mn);
+    std::vector<Block*> convert(jbc::core::ClassFile& cf, ca::usize methodIndex);
+
+    /// @brief 测试垫片：MethodNode → plain 字节 → DOM → 同一读路径。
 
     /// dump L1 MIR 为可读文本（调试/dumpMIR 用）。
     static std::string dumpMIR(const std::vector<Block*>& blocks);
 
 private:
-    void   analyzeControlFlow(jbytecode::tree::MethodNode& mn);
+    void   analyzeControlFlow(const std::vector<jbc::core::RawInsn>& insns,
+                              const jbc::core::CodeAttr&             code);
     void   buildBlocks();
-    void   translateInstructions(jbytecode::tree::MethodNode& mn);
-    void   processInsn(jbytecode::tree::AbstractInsnNode* insn);
+    void   translateInstructions(const std::vector<jbc::core::RawInsn>& insns);
+    void   processInsn(const jbc::core::RawInsn& insn);
     Block* getOrCreateBlock(int labelId);
 
     struct Impl;

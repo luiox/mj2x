@@ -1,12 +1,12 @@
 #include "pipeline.hpp"
 #include "mj2x/io/input_loader.hpp"
+
 #include "mj2x/io/output_writer.hpp"
 
 #include "libca/log/log_macros.hpp"
 
 #include <cstdio>
 #include <string>
-#include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 
 namespace mj2x {
@@ -48,9 +48,10 @@ int Pipeline::run()
     // 中段（预处理器/编译/后处理器）与 IO 同级防护：CLI main 不兜异常，
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
-        runPreprocessors();
-        compileMethods();
-        runPostprocessors();
+        runPreprocessors();         // 批 4：preprocessor 直接改 DOM（改写权威）
+        refreshSnapshots(*index_);  // 元数据快照对齐 DOM（批 6d 树退役；init_clinit_mover 生成方法落位）
+        compileMethods();           // 读 DOM；批 5 起 inject 也改 DOM（dom_inject 门面）
+        runPostprocessors();  // 批 4：postprocessor 直接改 DOM（inject 后无需再同步）
     }
     catch (const std::exception& e) {
         CA_LOGT_ERROR("pipeline", "compile stage failed - {}\n", e.what());
@@ -77,6 +78,8 @@ void Pipeline::loadInput()
 
 void Pipeline::runPreprocessors()
 {
+    // 批 6d：全部 preprocessor 均为 DOM 权威改写（indy 树载体已退役），
+    // 单段顺序执行。
     for (auto& p : preprocs_) p->process(*index_);
 }
 
@@ -93,14 +96,39 @@ void Pipeline::compileMethods()
     for (auto& [name, cls] : index_->getClasses()) {
         if (cls.isLibrary) continue;
 
+        // 批 3b：读路径主入口走 DOM（批 2 同步产物）。同步保序 tree→DOM，
+        // 再按 name+desc（类内唯一）锚定下标，双保险防御序漂移。
+        if (cls.dom == nullptr) {
+            throw std::runtime_error("pipeline: DOM not synced for " + name);
+        }
+
         for (auto& method : cls.methods) {
             if (!method.markedForCompile) continue;
 
-            auto mnName = method.methodNode->name.to_std_string();
-            auto mnDesc = method.methodNode->desc.to_std_string();
+            // 批 5：inject 走 DOM（dom_inject 会话字节往返提交会替换 cls.dom），
+            // dom 指针每方法重取；domIndex 同因重锚。
+            if (cls.dom == nullptr) {
+                throw std::runtime_error("pipeline: DOM consumed for " + name);
+            }
+            auto* dom = cls.dom.get();
+
+            const auto& mnName = method.name;
+            const auto& mnDesc = method.desc;
             CA_LOGT_INFO("pipeline", "  Compiling {}.{}{}\n", name.c_str(), mnName.c_str(), mnDesc.c_str());
 
-            auto blocks = converter.convert(*method.methodNode);
+            ca::usize domIndex = dom->methods.size();
+            for (ca::usize i = 0; i < dom->methods.size(); ++i) {
+                const auto& dm = dom->methods[i];
+                if (dom->cp.utf8Equals(dm.nameCp, mnName) && dom->cp.utf8Equals(dm.descCp, mnDesc)) {
+                    domIndex = i;
+                    break;
+                }
+            }
+            if (domIndex == dom->methods.size()) {
+                throw std::runtime_error("pipeline: method not in DOM: " + name + "." + mnName);
+            }
+
+            auto blocks = converter.convert(*dom, domIndex);
 
             if (config_.dumpMIR) {
                 printf("--- MIR dump ---\n%s\n", CodeConverter::dumpMIR(blocks).c_str());

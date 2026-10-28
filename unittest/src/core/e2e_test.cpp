@@ -29,23 +29,23 @@ static std::string writeTestClass(const std::string& name, const std::string& su
     Utf8StringArena arena;
     auto            name_ref = arena.intern(name.c_str());
 
-    cn->version   = Opcodes::V1_8;
-    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->version   = jbytecode::core::Opcodes::V1_8;
+    cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->name      = name_ref;
     cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<Utf8StringRef> noExcepts;
-    auto mn       = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn       = std::make_unique<MethodNode>(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                                            ZUtf8StringRef::from_static("add"),
                                            ZUtf8StringRef::from_static("(II)I"),
                                            ZUtf8StringRef::from_static(""),
                                            noExcepts);
     mn->maxStack  = 2;
     mn->maxLocals = 2;
-    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
-    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 1));
-    mn->instructions.add(new InsnNode(Opcodes::IADD));
-    mn->instructions.add(new InsnNode(Opcodes::IRETURN));
+    mn->instructions.add(new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0));
+    mn->instructions.add(new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1));
+    mn->instructions.add(new InsnNode(jbytecode::core::Opcodes::IADD));
+    mn->instructions.add(new InsnNode(jbytecode::core::Opcodes::IRETURN));
     cn->methods.push_back(mn.release());
 
     ClassWriter cw(arena, ClassWriter::COMPUTE_MAXS);
@@ -104,8 +104,10 @@ TEST(E2ETest, PipelineWithStackCBackend)
         auto*       cls   = index->getClass("E2ETest");
         ASSERT_NE(cls, nullptr);
         ASSERT_GE(cls->methods.size(), 1);
-        EXPECT_TRUE(cls->methods[0].methodNode->access & Opcodes::ACC_NATIVE);
-        EXPECT_EQ(cls->methods[0].methodNode->instructions.size(), 0);
+        // 快照读（native 方法无 Code 槽 → 栈/局部快照归零）。
+        EXPECT_TRUE(cls->methods[0].access & jbytecode::core::Opcodes::ACC_NATIVE);
+        EXPECT_EQ(cls->methods[0].maxStack, 0);
+        EXPECT_EQ(cls->methods[0].maxLocals, 0);
     }
 
     std::remove(inPath.c_str());
@@ -154,8 +156,10 @@ TEST(E2ETest, PipelineWithRegCBackend)
         auto*       cls   = index->getClass("RegCE2ETest");
         ASSERT_NE(cls, nullptr);
         ASSERT_GE(cls->methods.size(), 1);
-        EXPECT_TRUE(cls->methods[0].methodNode->access & Opcodes::ACC_NATIVE);
-        EXPECT_EQ(cls->methods[0].methodNode->instructions.size(), 0);
+        // 快照读（native 方法无 Code 槽 → 栈/局部快照归零）。
+        EXPECT_TRUE(cls->methods[0].access & jbytecode::core::Opcodes::ACC_NATIVE);
+        EXPECT_EQ(cls->methods[0].maxStack, 0);
+        EXPECT_EQ(cls->methods[0].maxLocals, 0);
     }
 
     std::remove(inPath.c_str());
@@ -171,20 +175,20 @@ TEST(E2ETest, VoidMethodWithStackCBackend)
 
     // Manual class construction
     auto cn       = std::make_unique<ClassNode>();
-    cn->version   = Opcodes::V1_8;
-    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->version   = jbytecode::core::Opcodes::V1_8;
+    cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->name      = ZUtf8StringRef::from_static("VoidTest");
     cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<Utf8StringRef> noExcepts;
-    auto mn       = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn       = std::make_unique<MethodNode>(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                                            ZUtf8StringRef::from_static("noop"),
                                            ZUtf8StringRef::from_static("()V"),
                                            ZUtf8StringRef::from_static(""),
                                            noExcepts);
     mn->maxStack  = 1;
     mn->maxLocals = 0;
-    mn->instructions.add(new InsnNode(Opcodes::RETURN));
+    mn->instructions.add(new InsnNode(jbytecode::core::Opcodes::RETURN));
     cn->methods.push_back(mn.release());
 
     Utf8StringArena arena;

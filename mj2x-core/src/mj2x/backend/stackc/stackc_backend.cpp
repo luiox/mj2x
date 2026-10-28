@@ -1,4 +1,7 @@
 #include "stackc_backend.hpp"
+
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 #include "mj2x/codegen/code_snippet.hpp"
 #include "mj2x/codegen/include_set.hpp"
@@ -9,16 +12,10 @@
 #include <fstream>
 #include <string>
 
-#include "jbytecode/jbytecode.hpp"
 #include "libca/log/log_macros.hpp"
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
-using namespace jbytecode::analysis;
-using namespace jbytecode::commons;
-using namespace jbytecode::util;
 using codegen::CSourceStream;
 using codegen::fnv1a64;
 using codegen::hex64;
@@ -250,24 +247,24 @@ int staticizeStackText(std::string& text, int baseDepth)
 /// @brief 每块入口栈深度的数据流迭代（定义在匿名命名空间外：Impl 静态成员）。
 ///        语义见 internal.hpp 声明。
 bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
-                                             const std::vector<jbytecode::core::Label*>& handlerLabels,
+                                             const std::vector<int>& handlerLabels,
                                              std::vector<int>& entryDepths)
 {
     const size_t n = blocks.size();
     entryDepths.assign(n, -1);
     if (n == 0) return true;
 
-    std::unordered_map<jbytecode::core::Label*, size_t> labelToIndex;
+    std::unordered_map<int, size_t> labelToIndex;
     for (size_t bi = 0; bi < n; ++bi) {
         for (auto& node : blocks[bi]->nodes) {
             if (node->kind == MIRKind::LABEL) {
-                labelToIndex[static_cast<const MIRLabel*>(node.get())->labelNode] = bi;
+                labelToIndex[static_cast<const MIRLabel*>(node.get())->labelId] = bi;
             }
         }
     }
     // handler 入口深度恒为 1（异常对象在 s[0]）。
     std::unordered_set<size_t> handlerBlocks;
-    for (auto* lbl : handlerLabels) {
+    for (const int lbl : handlerLabels) {
         auto found = labelToIndex.find(lbl);
         if (found != labelToIndex.end()) handlerBlocks.insert(found->second);
     }
@@ -307,7 +304,7 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
                 break;
             }
             const MIRKind lastKind = lastReal != nullptr ? lastReal->kind : MIRKind::NOP;
-            auto pushLabel = [&](jbytecode::core::Label* lbl) {
+            auto pushLabel = [&](int lbl) {
                 auto found = labelToIndex.find(lbl);
                 if (found != labelToIndex.end()) succs.push_back(found->second);
             };
@@ -355,8 +352,7 @@ bool StackCBackend::Impl::computeBlockDepths(const std::vector<Block*>& blocks,
             for (auto& node : blocks[bi]->nodes) {
                 if (node->kind == MIRKind::LABEL) {
                     labels += std::to_string(
-                                  static_cast<const MIRLabel*>(node.get())->labelNode
-                                      ->bytecodeOffset) +
+                                  static_cast<const MIRLabel*>(node.get())->labelId) +
                               " ";
                 }
             }
@@ -393,12 +389,13 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
                                            CompilerIndex* index)
 {
     (void)index;
-    auto* mn                = method.methodNode;
     impl_->currentClassName = className;
     auto& cls               = impl_->currentClassName;
 
-    impl_->currentMethodName = mn->name.to_std_string();
-    impl_->currentMethodDesc = mn->desc.to_std_string();
+    impl_->currentMethodName = method.name;
+    impl_->currentMethodDesc = method.desc;
+    const std::string& methodName = method.name;
+    const std::string& methodDesc = method.desc;
 
     // 用户 intrinsic 配置校验（passReceiver 扩面）：passReceiver=true 条目只对
     // instance 调用点有意义；本方法体出现匹配该条目的 INVOKESTATIC 调用点说明
@@ -423,8 +420,8 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
                         "Skipping {}.{}{}: user intrinsic config error: {}.{}{} declares "
                         "passReceiver=true but is invoked via INVOKESTATIC (static methods "
                         "have no receiver)\n",
-                        className.c_str(), mn->name.to_std_string().c_str(),
-                        mn->desc.to_std_string().c_str(), u.owner.c_str(), u.name.c_str(),
+                        className.c_str(), methodName.c_str(),
+                        methodDesc.c_str(), u.owner.c_str(), u.name.c_str(),
                         u.desc.c_str());
                     BackendResult failed;
                     failed.kind = BackendResult::Kind::NONE;
@@ -437,15 +434,14 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     CSourceStream funcOut;
 
     // JNI function signature
-    bool isStatic = (mn->access & Opcodes::ACC_STATIC) != 0;
+    bool isStatic = (method.access & Opcodes::ACC_STATIC) != 0;
     // #921 staticArena 退役：METHOD 排序 getDescriptor 返回 value_ 不 intern，
     // 落点参数按必选口径走函数级局部 arena。
     ca::str::Utf8StringArena retScratch;
     auto retType =
-        jvmDescToPrimitive(Type::getReturnType(mn->desc).getDescriptor(retScratch));
-
-    std::string methodName = mn->name.to_std_string();
-    std::string methodDesc = mn->desc.to_std_string();
+        jvmDescToPrimitive(
+            Type::getReturnType(ca::str::Utf8StringRef::from_string_view(methodDesc))
+                .getDescriptor(retScratch));
     auto        funcName   = nativeFunctionName(cls, methodName, methodDesc);
     if (!impl_->nativeFunctions.insert(funcName).second) {
         int         suffix = 1;
@@ -470,7 +466,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
         .append(isStatic ? "jclass clazz" : "jobject this");
 
     // Add method parameters
-    auto desc     = Type::getMethodType(mn->desc);
+    auto desc     = Type::getMethodType(ca::str::Utf8StringRef::from_string_view(methodDesc));
     auto argTypes = desc.getArgumentTypes();
     int  slot     = 0;
     int  paramIdx = 0;
@@ -487,9 +483,9 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     // Stack and locals declaration
     // 操作数栈用「静态槽」s[N]（对齐 JNIC 命名槽模型）：发射时按编译期栈深度
     // 把 stack[sp±k] 静态化为 s[<常量>]，-O2 下编译器可寄存器化；无运行期 sp。
-    int maxLocalsVal = mn->maxLocals > 0 ? mn->maxLocals : 1;
+    int maxLocalsVal = method.maxLocals > 0 ? method.maxLocals : 1;
     funcOut.appendLineStart("union jvalue s[")
-        .appendInt(mn->maxStack > 0 ? mn->maxStack : 1).append("];");
+        .appendInt(method.maxStack > 0 ? method.maxStack : 1).append("];");
     funcOut.newLine();
     funcOut.appendLineStart("union jvalue locals[").appendInt(maxLocalsVal).append("];");
     funcOut.newLine();
@@ -523,14 +519,18 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     }
     funcOut.emitBlankLine();
 
+    // 批 6d：异常表取自 DOM convert 产物（Block::exceptionTable，标签 id 键），
+    // 与 MIR 同一标签空间；catchType 空串 = finally（catch 一切）。
     std::vector<CExceptionHandlerInfo> exceptionHandlers;
-    for (auto* tcb : mn->tryCatchBlocks) {
-        CExceptionHandlerInfo h;
-        h.start     = tcb->start;
-        h.end       = tcb->end;
-        h.handler   = tcb->handler;
-        h.catchType = tcb->type.to_std_string();
-        exceptionHandlers.push_back(std::move(h));
+    if (!blocks.empty()) {
+        for (const auto& tcb : blocks.front()->exceptionTable) {
+            CExceptionHandlerInfo h;
+            h.start     = tcb.startLabel;
+            h.end       = tcb.endLabel;
+            h.handler   = tcb.handlerLabel;
+            h.catchType = tcb.catchType.to_std_string();
+            exceptionHandlers.push_back(std::move(h));
+        }
     }
     std::vector<int>                             activeExceptionHandlers;
     std::unordered_map<std::string, std::string> dispatchLabelByKey;
@@ -547,20 +547,20 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     };
 
     // Build deterministic per-method label index. Walk blocks in order; assign a
+    // Build deterministic per-method label index. Walk blocks in order; assign a
     // sequential index to every label the first time it is referenced, whether as a
-    // LABEL definition or as a jump/switch target. The Label* is used only as a map
-    // key for identity within this process — it never reaches the output, so two
-    // independent CLI processes produce identical C labels (L0, L1, ...).
+    // LABEL definition or as a jump/switch target. The label id is only used as a
+    // map key — it never reaches the output, so two independent CLI processes
+    // produce identical C labels (L0, L1, ...).
     impl_->labelIndex.clear();
-    auto assignLabelIndex = [&](jbytecode::core::Label* lbl) {
-        if (lbl == nullptr) return;
+    auto assignLabelIndex = [&](int lbl) {
         impl_->labelIndex.emplace(lbl, static_cast<unsigned>(impl_->labelIndex.size()));
     };
     for (auto* block : blocks) {
         for (auto& node : block->nodes) {
             switch (node->kind) {
             case MIRKind::LABEL:
-                assignLabelIndex(static_cast<const MIRLabel*>(node.get())->labelNode);
+                assignLabelIndex(static_cast<const MIRLabel*>(node.get())->labelId);
                 break;
             case MIRKind::BRANCH: assignLabelIndex(static_cast<const MIRBranch*>(node.get())->targetLabel); break;
             case MIRKind::BRANCH_ZERO:
@@ -585,7 +585,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
 
     // 每块入口栈深度（数据流）；无法收敛（非法字节码）则 fail-closed 保留整方法。
     std::vector<int> blockEntryDepths;
-    std::vector<jbytecode::core::Label*> handlerLabels;
+    std::vector<int> handlerLabels;
     for (const auto& h : exceptionHandlers) handlerLabels.push_back(h.handler);
     if (!impl_->computeBlockDepths(blocks, handlerLabels, blockEntryDepths)) {
         CA_LOGT_ERROR("stackc", "Skipping {}.{}{}: stack depth analysis failed\n", className.c_str(), methodName.c_str(), methodDesc.c_str());
@@ -608,7 +608,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
         impl_->currentStackDepth = blockEntryDepths[bi];
         for (auto& node : block->nodes) {
             if (node->kind == MIRKind::LABEL) {
-                auto* label = static_cast<const MIRLabel*>(node.get())->labelNode;
+                const int label = static_cast<const MIRLabel*>(node.get())->labelId;
                 for (int i = 0; i < static_cast<int>(exceptionHandlers.size()); ++i) {
                     if (exceptionHandlers[static_cast<size_t>(i)].end == label)
                         removeActiveHandler(activeExceptionHandlers, i);
@@ -694,44 +694,34 @@ void StackCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
 {
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
-    impl_->protectClassInitializer(*this, clazz);
+    // 批 5：改写权威在 DOM（dom_inject 门面）；类名从 DOM 取，树投影由管线
+    // 在 compileMethods 后统一刷。
+    if (clazz.dom == nullptr) {
+        throw std::runtime_error("stackc_backend: DOM not synced for native injection");
+    }
+    const std::string className(clazz.dom->thisName());
 
-    auto* mn = method.methodNode;
-    if (isInterfaceDefaultMethod(clazz, *mn)) {
-        const auto className    = clazz.classNode->name.to_std_string();
-        const auto functionName = impl_->findCompiledFunctionName(
-            className, mn->name.to_std_string(), mn->desc.to_std_string());
+    impl_->protectClassInitializer(*this, clazz, className);
+
+    if (isInterfaceDefaultMethod(clazz, method)) {
+        const auto functionName = impl_->findCompiledFunctionName(className, method.name, method.desc);
         if (!functionName.empty()) {
-            impl_->registerInterfaceDefaultProxy(clazz, *mn, functionName);
+            impl_->registerInterfaceDefaultProxy(clazz, method.name, method.desc, functionName);
             const auto& proxies = impl_->interfaceDefaultProxiesByClass[className];
-            impl_->rewriteInterfaceDefaultMethodToProxy(clazz, *mn, proxies.back());
+            impl_->rewriteInterfaceDefaultMethodToProxy(clazz, method.name, method.desc,
+                                                        proxies.back());
         }
         return;
     }
 
-    // Mark method as native and clear bytecode
-    mn->access |= Opcodes::ACC_NATIVE;
-    mn->instructions.clear();
-    mn->maxStack   = 0;
-    mn->maxLocals  = 0;
-    clazz.modified = true;
+    // Mark method as native and clear bytecode（DOM：标 ACC_NATIVE + 摘 Code 槽）。
+    dom_inject::markMethodNative(clazz, className, method.name, method.desc);
 }
 
 ca::str::Utf8StringRef StackCBackend::Impl::stableUtf8(const std::string& value)
 {
     stableUtf8Storage.push_back(value);
     return ca::str::Utf8StringRef::from_cstr(stableUtf8Storage.back().c_str());
-}
-
-jbytecode::tree::MethodNode* StackCBackend::Impl::findMethod(CompilerClass& clazz, const char* name,
-                                                             const char* desc) const
-{
-    for (auto* method : clazz.classNode->methods) {
-        if (method->name.to_std_string() != name) continue;
-        if (desc != nullptr && method->desc.to_std_string() != desc) continue;
-        return method;
-    }
-    return nullptr;
 }
 
 // ============================================================
@@ -889,7 +879,7 @@ void StackCBackend::Impl::emitNode(const MIRNode* node, codegen::CSourceStream& 
 {
     switch (node->kind) {
     case MIRKind::LABEL:
-        out.append(labelIdent(labelIndex.at(static_cast<const MIRLabel*>(node)->labelNode)))
+        out.append(labelIdent(labelIndex.at(static_cast<const MIRLabel*>(node)->labelId)))
             .append(":");
         out.newLine();
         out.emitLine(";");

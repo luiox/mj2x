@@ -1310,58 +1310,58 @@ TEST_F(RegCBackendE2E, IndyDirectNullReceiverRoutesToHandlerRoundTrip)
 
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(LRec;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(LRec;)I")));
     bsmArgs.emplace_back(
-        Handle(Opcodes::H_GETFIELD, arena.intern("Rec"), arena.intern("f"), arena.intern("I")));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(LRec;)I")));
+        Handle(jbytecode::core::Opcodes::H_GETFIELD, arena.intern("Rec"), arena.intern("f"), arena.intern("I")));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(LRec;)I")));
 
     auto* tryStart = new Label();
     auto* tryEnd   = new Label();
     auto* handler  = new Label();
 
     ClassWriter writer(arena, ClassWriter::COMPUTE_MAXS);
-    writer.visit(Opcodes::V1_7, Opcodes::ACC_PUBLIC, arena.intern("Holder"),
+    writer.visit(jbytecode::core::Opcodes::V1_7, jbytecode::core::Opcodes::ACC_PUBLIC, arena.intern("Holder"),
                  ca::str::Utf8StringRef(), arena.intern("java/lang/Object"), {});
     {
-        auto* init = writer.visitMethod(Opcodes::ACC_PUBLIC, arena.intern("<init>"),
+        auto* init = writer.visitMethod(jbytecode::core::Opcodes::ACC_PUBLIC, arena.intern("<init>"),
                                         arena.intern("()V"), ca::str::Utf8StringRef(), {});
         init->visitCode();
-        init->visitVarInsn(Opcodes::ALOAD, 0);
-        init->visitMethodInsn(Opcodes::INVOKESPECIAL, arena.intern("java/lang/Object"),
+        init->visitVarInsn(jbytecode::core::Opcodes::ALOAD, 0);
+        init->visitMethodInsn(jbytecode::core::Opcodes::INVOKESPECIAL, arena.intern("java/lang/Object"),
                               arena.intern("<init>"), arena.intern("()V"), false);
-        init->visitInsn(Opcodes::RETURN);
+        init->visitInsn(jbytecode::core::Opcodes::RETURN);
         init->visitMaxs(1, 1);
         init->visitEnd();
     }
     {
-        auto* read = writer.visitMethod(Opcodes::ACC_PUBLIC, arena.intern("read"),
+        auto* read = writer.visitMethod(jbytecode::core::Opcodes::ACC_PUBLIC, arena.intern("read"),
                                         arena.intern("(LRec;)I"), ca::str::Utf8StringRef(), {});
         read->visitCode();
         read->visitTryCatchBlock(tryStart, tryEnd, handler, arena.intern("java/lang/Exception"));
         read->visitLabel(tryStart);
-        read->visitVarInsn(Opcodes::ALOAD, 1);
+        read->visitVarInsn(jbytecode::core::Opcodes::ALOAD, 1);
         read->visitInvokeDynamicInsn(
             arena.intern("read"),
             arena.intern("(LRec;)I"),
-            Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
+            Handle(jbytecode::core::Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
                    arena.intern("metafactory"),
                    arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                                 "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;"
                                 "Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)"
                                 "Ljava/lang/invoke/CallSite;")),
             bsmArgs);
-        read->visitInsn(Opcodes::IRETURN);
+        read->visitInsn(jbytecode::core::Opcodes::IRETURN);
         read->visitLabel(tryEnd);
         std::vector<ca::core::Any> frameLocals;
         frameLocals.emplace_back(arena.intern("Holder"));
         frameLocals.emplace_back(arena.intern("Rec"));
         std::vector<ca::core::Any> frameStack;
         frameStack.emplace_back(arena.intern("java/lang/Exception"));
-        read->visitFrame(Opcodes::F_FULL, 2, frameLocals, 1, frameStack);
+        read->visitFrame(jbytecode::core::Opcodes::F_FULL, 2, frameLocals, 1, frameStack);
         read->visitLabel(handler);
-        read->visitVarInsn(Opcodes::ASTORE, 2);
-        read->visitInsn(Opcodes::ICONST_M1);
-        read->visitInsn(Opcodes::IRETURN);
+        read->visitVarInsn(jbytecode::core::Opcodes::ASTORE, 2);
+        read->visitInsn(jbytecode::core::Opcodes::ICONST_M1);
+        read->visitInsn(jbytecode::core::Opcodes::IRETURN);
         read->visitMaxs(1, 3);
         read->visitEnd();
     }

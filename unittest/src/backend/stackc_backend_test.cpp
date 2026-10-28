@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "mj2x/backend/stackc/stackc_backend.hpp"
+#include "test_helper.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string_arena.hpp"
@@ -47,22 +48,31 @@ static std::unique_ptr<MethodNode> makeMethod(int access, const std::string& nam
     return mn;
 }
 
-static CompilerClass makeCompilerClass(const std::string& name)
+// 批 6d：夹具树先建（CompilerClass 无树槽），DOM 由 test::classFromTree 一次性落定。
+static std::unique_ptr<ClassNode> makeClassNode(const std::string& name)
 {
-    CompilerClass cls;
-    auto          cn = std::make_unique<ClassNode>();
-    cn->name         = testArena.intern(name.c_str());
-    cn->version      = Opcodes::V1_8;
-    cn->access       = Opcodes::ACC_PUBLIC;
-    cn->superName    = testArena.intern("java/lang/Object");
-    cls.classNode    = std::move(cn);
-    return cls;
+    auto cn = std::make_unique<ClassNode>();
+    cn->name      = testArena.intern(name.c_str());
+    cn->version   = Opcodes::V1_8;
+    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->superName = testArena.intern("java/lang/Object");
+    return cn;
 }
 
-static MethodNode* findClassMethod(const CompilerClass& cls, const std::string& name,
+// 回投影暂存：DOM→树重建的树挂本 shelf，方法指针有效到下次投影（断言面现查）。
+static std::unique_ptr<ClassNode>& projShelf()
+{
+    static std::unique_ptr<ClassNode> shelf;
+    return shelf;
+}
+
+static MethodNode* findClassMethod(CompilerClass& cls, const std::string& name,
                                    const std::string& desc)
 {
-    for (auto* method : cls.classNode->methods) {
+    auto tree = test::treeFromDom(cls, testArena);
+    if (tree == nullptr) return nullptr;
+    projShelf() = std::move(tree);
+    for (auto* method : projShelf()->methods) {
         if (method->name.to_std_string() == name && method->desc.to_std_string() == desc) {
             return method;
         }
@@ -78,13 +88,12 @@ TEST(StackCBackendTest, SimpleReturn)
     StackCBackend backend;
     auto          mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "empty", "()V", {new InsnNode(Opcodes::RETURN)});
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("return;"), std::string::npos);
@@ -108,13 +117,12 @@ TEST(StackCBackendTest, ThrowAndMonitorNullOperandEmitsNpeTrap)
                              new VarInsnNode(Opcodes::ALOAD, 0),
                              new InsnNode(Opcodes::ATHROW),
                          });
-        CompilerMethod cm;
-        cm.methodNode       = mn.get();
+        CompilerMethod cm = test::snapshotMethod(*mn);
         cm.markedForCompile = true;
 
         ca::str::Utf8StringArena arena;
         CodeConverter            cc(arena);
-        auto                     blocks = cc.convert(*mn);
+        auto                     blocks = test::convertMethodNode(cc, *mn, arena);
         auto                     result = backend.compileMethod("Test", cm, blocks);
 
         const auto trap      = result.text.find("ThrowNew(env, ex_class, \"null reference\")");
@@ -136,13 +144,12 @@ TEST(StackCBackendTest, ThrowAndMonitorNullOperandEmitsNpeTrap)
                              new InsnNode(Opcodes::MONITOREXIT),
                              new InsnNode(Opcodes::RETURN),
                          });
-        CompilerMethod cm;
-        cm.methodNode       = mn.get();
+        CompilerMethod cm = test::snapshotMethod(*mn);
         cm.markedForCompile = true;
 
         ca::str::Utf8StringArena arena;
         CodeConverter            cc(arena);
-        auto                     blocks = cc.convert(*mn);
+        auto                     blocks = test::convertMethodNode(cc, *mn, arena);
         auto                     result = backend.compileMethod("Test", cm, blocks);
 
         const auto firstGuard  = result.text.find("ThrowNew(env, ex_class, \"null reference\")");
@@ -162,23 +169,28 @@ TEST(StackCBackendTest, ThrowAndMonitorNullOperandEmitsNpeTrap)
 
 TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement)
 {
+    // 批 3b 垫片走字节回环：非跳转目标的标签不进字节流（树专有怪癖退役）。
+    // DOM 语义下「空目标块」不存在：标签只在锚定真实指令时物化为目标块的
+    // MIRLabel 首节点，而发射器对 MIRLabel 恒产 `label:` + 空语句。钉义收窄
+    // 为「GOTO 目标块以标签发射开场」：GOTO 尾跳 + RETURN 落在标签块内，
+    // 块全部可达（不可达块会让 stackc 深度分析 fail-closed）。
     auto* tailLabel                  = new LabelNode(labelScratchArena().create<Label>());
-    tailLabel->label->bytecodeOffset = 1;
+    tailLabel->label->bytecodeOffset = 3;
     StackCBackend  backend;
     auto           mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                          "tailLabel",
                          "()V",
                                    {
-                             new InsnNode(Opcodes::RETURN),
+                             new JumpInsnNode(Opcodes::GOTO, tailLabel->label),
                              tailLabel,
+                             new InsnNode(Opcodes::RETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find(":\n;\n"), std::string::npos) << result.text;
@@ -196,13 +208,12 @@ TEST(StackCBackendTest, AddMethod)
                              new InsnNode(Opcodes::IADD),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("jint"), std::string::npos);
@@ -213,7 +224,7 @@ TEST(StackCBackendTest, AddMethod)
 
 TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge)
 {
-    auto           bsm = Handle(Opcodes::H_INVOKESTATIC,
+    auto           bsm = jbytecode::core::Handle(Opcodes::H_INVOKESTATIC,
                       testArena.intern("java/lang/invoke/StringConcatFactory"),
                       testArena.intern("makeConcatWithConstants"),
                       testArena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
@@ -229,16 +240,15 @@ TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge)
                              new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
                                                        testArena.intern("(I)Ljava/lang/String;"),
                                                        bsm,
-                                                                 {std::string("v=\x01")}),
+                                                                 {ca::core::Any(ca::str::Utf8StringRef::from_cstr("v=\x01"))}),
                              new InsnNode(Opcodes::ARETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
@@ -252,7 +262,7 @@ TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge)
 // 的脆弱写法（X3 复核结论：旧写法净效应恰好正确，但依赖已弹栈槽的陈旧值）。
 TEST(StackCBackendTest, InvokeDynamicOneObjectFastPathStackShape)
 {
-    auto           bsm = Handle(Opcodes::H_INVOKESTATIC,
+    auto           bsm = jbytecode::core::Handle(Opcodes::H_INVOKESTATIC,
                       testArena.intern("java/lang/invoke/StringConcatFactory"),
                       testArena.intern("makeConcatWithConstants"),
                       testArena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
@@ -269,16 +279,15 @@ TEST(StackCBackendTest, InvokeDynamicOneObjectFastPathStackShape)
                                                        testArena.intern(
                                                            "(Ljava/lang/Object;)Ljava/lang/Object;"),
                                                        bsm,
-                                                                 {std::string("\x01")}),
+                                                                 {ca::core::Any(ca::str::Utf8StringRef::from_cstr("\x01"))}),
                              new InsnNode(Opcodes::ARETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -314,13 +323,12 @@ TEST(StackCBackendTest, BooleanInvokeResultUsesFullStackSlot)
                                                 false),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
@@ -338,7 +346,7 @@ TEST(StackCBackendTest, BooleanInvokeResultUsesFullStackSlot)
 //（普通 LDC 字符串走字符串池不内联，不构成碰撞面。）
 TEST(StackCBackendTest, StaticizeSkipsStringLiteralsAndComments)
 {
-    auto bsm = Handle(Opcodes::H_INVOKESTATIC,
+    auto bsm = jbytecode::core::Handle(Opcodes::H_INVOKESTATIC,
                       testArena.intern("java/lang/invoke/StringConcatFactory"),
                       testArena.intern("makeConcatWithConstants"),
                       testArena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
@@ -355,16 +363,21 @@ TEST(StackCBackendTest, StaticizeSkipsStringLiteralsAndComments)
                              new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
                                                        testArena.intern("(I)Ljava/lang/String;"),
                                                        bsm,
-                                                                 {std::string("v=") + poison + "\x01"}),
+                                                       // 配方 intern 进 arena：Utf8StringRef 是
+                                                       // 视图（jbc plain writer 序列化它），指向
+                                                       // 临时串即悬垂——GCC 下堆复用发射垃圾字节
+                                                       // （CI linux 首曝）；std::string 载荷则
+                                                       // jbc writer 不认，CP 写 0。
+                                                       {ca::core::Any(testArena.intern(
+                                                           ("v=" + poison + "\x01").c_str()))}),
                              new InsnNode(Opcodes::ARETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -387,13 +400,12 @@ TEST(StackCBackendTest, CastEmission)
                              new InsnNode(Opcodes::D2I),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("isnan(v)"), std::string::npos);
@@ -414,13 +426,12 @@ TEST(StackCBackendTest, LongShiftAndCompareEmission)
                              new InsnNode(Opcodes::LCMP),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find(".i & 63"), std::string::npos);
@@ -440,13 +451,12 @@ TEST(StackCBackendTest, FloatRemainderEmission)
                              new InsnNode(Opcodes::FREM),
                              new InsnNode(Opcodes::FRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("fmodf("), std::string::npos);
@@ -474,13 +484,12 @@ TEST(StackCBackendTest, TypedWideStackOpsEmitConcreteShuffle)
                              new InsnNode(Opcodes::DUP2_X2),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_EQ(result.text.find("Unsupported"), std::string::npos) << result.text;
@@ -505,13 +514,12 @@ TEST(StackCBackendTest, FieldAccess)
                                                ca::str::Utf8StringRef::from_cstr("I")),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("GetIntField"), std::string::npos);
@@ -536,13 +544,12 @@ TEST(StackCBackendTest, InvokeMethod)
                                                 false),
                              new InsnNode(Opcodes::RETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("CallStaticVoidMethod"), std::string::npos);
@@ -569,13 +576,12 @@ TEST(StackCBackendTest, StaticInvokeReturnUsesArgumentBaseSlot)
                                                 false),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("CallStaticIntMethod"), std::string::npos);
@@ -599,13 +605,12 @@ TEST(StackCBackendTest, InvokeSpecialLooksUpDeclaringClass)
                                false),
             new InsnNode(Opcodes::ARETURN),
         });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     // 类引用走 static jclass CAS 缓存（对标 JNIC cached_c_N），不再每处 find_class。
@@ -627,13 +632,12 @@ TEST(StackCBackendTest, StringConstantEmission)
                              new LdcInsnNode(std::string("hello \"jni\"\\path")),
                              new InsnNode(Opcodes::ARETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     // 字符串常量走 UTF-16 code units 池（防 strings 扫描，jnic370 形态）：
@@ -682,13 +686,12 @@ TEST(StackCBackendTest, PrimitiveArrayEmission)
                              new InsnNode(Opcodes::IALOAD),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("NewIntArray"), std::string::npos);
@@ -713,13 +716,12 @@ TEST(StackCBackendTest, ByteArrayOpsDisambiguateBooleanArrays)
                              new InsnNode(Opcodes::BALOAD),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("FindClass(env, \"[Z\")"), std::string::npos);
@@ -743,13 +745,12 @@ TEST(StackCBackendTest, CheckCastEmission)
                                         ca::str::Utf8StringRef::from_cstr("java/lang/String")),
                        new InsnNode(Opcodes::ARETURN),
                    });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("ClassCastException"), std::string::npos);
@@ -782,13 +783,12 @@ TEST(StackCBackendTest, ClassLookupsUseOwnerClassLoaderHelper)
                                false),
             new InsnNode(Opcodes::IRETURN),
         });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("pkg/Owner", cm, blocks);
 
     EXPECT_NE(result.text.find(
@@ -816,21 +816,30 @@ TEST(StackCBackendTest, InjectMakesMethodNative)
     StackCBackend backend;
     auto          mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "test", "()V", {new InsnNode(Opcodes::RETURN)});
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    auto cls = makeCompilerClass("Test");
+    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    auto cn = makeClassNode("Test");
+    cn->methods.push_back(mn.get());
+    auto cls = test::classFromTree("Test", *cn, testArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    cls.methods[0].markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
-    EXPECT_FALSE(mn->access & Opcodes::ACC_NATIVE);
+    EXPECT_FALSE(cm.access & Opcodes::ACC_NATIVE);
     backend.injectIntoClass(cls, cm, result);
-    EXPECT_TRUE(mn->access & Opcodes::ACC_NATIVE);
-    EXPECT_EQ(mn->instructions.size(), 0);
+    test::refreshTreeFromDom(cls, "Test");
+    auto injectedTree = test::treeFromDom(cls, testArena);
+    ASSERT_NE(injectedTree, nullptr);
+    auto* injected = test::findMethodNode(injectedTree.get(), "test");
+    ASSERT_NE(injected, nullptr);
+    EXPECT_TRUE(injected->access & Opcodes::ACC_NATIVE);
+    EXPECT_EQ(injected->instructions.size(), 0u);
 }
 
 TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall)
@@ -838,19 +847,22 @@ TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall)
     StackCBackend backend;
     auto          mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "test", "()V", {new InsnNode(Opcodes::RETURN)});
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    auto cls = makeCompilerClass("com/example/Foo");
-    cls.classNode->methods.push_back(mn.get());
-    mn.release();
+    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    auto cn = makeClassNode("com/example/Foo");
+    cn->methods.push_back(mn.get());
+    auto cls = test::classFromTree("com/example/Foo", *cn, testArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    cls.methods[0].markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*cm.methodNode);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Foo");
 
     auto* bridge = findClassMethod(cls, "__mj2x_registerClass", "(I)V");
     EXPECT_EQ(bridge, nullptr);
@@ -889,19 +901,22 @@ TEST(StackCBackendTest, ClinitRegistersBridgeWithoutNativeLoad)
     StackCBackend backend;
     auto mn = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "test", "()V", {new InsnNode(Opcodes::RETURN)});
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    auto cls = makeCompilerClass("com/example/Foo");
-    cls.classNode->methods.push_back(mn.get());
-    mn.release();
+    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    auto cn = makeClassNode("com/example/Foo");
+    cn->methods.push_back(mn.get());
+    auto cls = test::classFromTree("com/example/Foo", *cn, testArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    cls.methods[0].markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*cm.methodNode);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Foo");
 
     auto* clinit = findClassMethod(cls, "<clinit>", "()V");
     ASSERT_NE(clinit, nullptr);
@@ -937,21 +952,23 @@ TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy)
                                                    testArena.intern("I")),
                                  new InsnNode(Opcodes::RETURN),
                              });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    auto cls = makeCompilerClass("com/example/Foo");
-    cls.classNode->methods.push_back(mn.get());
-    cls.classNode->methods.push_back(clinit.get());
-    mn.release();
-    clinit.release();
+    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    auto cn = makeClassNode("com/example/Foo");
+    cn->methods.push_back(mn.get());
+    cn->methods.push_back(clinit.get());
+    auto cls = test::classFromTree("com/example/Foo", *cn, testArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    cls.methods[0].markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*cm.methodNode);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Foo");
 
     auto* rewrittenClinit = findClassMethod(cls, "<clinit>", "()V");
     ASSERT_NE(rewrittenClinit, nullptr);
@@ -964,7 +981,9 @@ TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy)
     EXPECT_EQ(bridgeInvoke->desc.to_std_string(), "(ILjava/lang/Class;)V");
     EXPECT_EQ(rewrittenClinit->instructions.get(3)->opcode, Opcodes::RETURN);
 
-    for (auto* method : cls.classNode->methods) {
+    auto postTree = test::treeFromDom(cls, testArena);
+    ASSERT_NE(postTree, nullptr);
+    for (auto* method : postTree->methods) {
         EXPECT_EQ(method->name.to_std_string().find("__mj2x_hidden_clinit_"), std::string::npos)
             << method->name.to_std_string();
     }
@@ -1002,20 +1021,23 @@ TEST(StackCBackendTest, InterfaceDefaultMethodUsesHiddenProxy)
                          });
     mn->maxStack     = 2;
     mn->maxLocals    = 2;
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    auto cls = makeCompilerClass("com/example/Op");
-    cls.classNode->access |= Opcodes::ACC_INTERFACE | Opcodes::ACC_ABSTRACT;
-    cls.classNode->methods.push_back(mn.get());
-    mn.release();
+    // 批 6d：方法随夹具树一次落 DOM（接口位在序列化前置位；注入走 dom_inject）。
+    auto cn = makeClassNode("com/example/Op");
+    cn->access |= Opcodes::ACC_INTERFACE | Opcodes::ACC_ABSTRACT;
+    cn->methods.push_back(mn.get());
+    auto cls = test::classFromTree("com/example/Op", *cn, testArena);
+    cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+    cls.methods[0].markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*cm.methodNode);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("com/example/Op", cm, blocks);
     backend.injectIntoClass(cls, cm, result);
+    test::refreshTreeFromDom(cls, "com/example/Op");
 
     auto* rewritten = findClassMethod(cls, "inc", "(I)I");
     ASSERT_NE(rewritten, nullptr);
@@ -1067,13 +1089,12 @@ TEST(StackCBackendTest, BranchAndComparison)
                              new InsnNode(Opcodes::ICONST_1),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("goto"), std::string::npos);
@@ -1103,14 +1124,13 @@ TEST(StackCBackendTest, CrossInstanceBranchOutputIsDeterministic)
                                            new InsnNode(Opcodes::ICONST_1),
                                            new InsnNode(Opcodes::IRETURN),
                                        });
-        CompilerMethod cm;
-        cm.methodNode       = mn.get();
+        CompilerMethod cm = test::snapshotMethod(*mn);
         cm.markedForCompile = true;
 
         ca::str::Utf8StringArena arena;
         CodeConverter            cc(arena);
         StackCBackend            backend;
-        auto           blocks = cc.convert(*mn);
+        auto           blocks = test::convertMethodNode(cc, *mn, arena);
         auto           result = backend.compileMethod("Test", cm, blocks);
         *outText              = std::move(result.text);
     };
@@ -1145,13 +1165,12 @@ TEST(StackCBackendTest, BranchZeroObjectUsesReferenceAccessor)
                              new InsnNode(Opcodes::ICONST_1),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("s[0].l == NULL"), std::string::npos);
@@ -1175,13 +1194,12 @@ TEST(StackCBackendTest, NewObject)
                                false),
             new InsnNode(Opcodes::ARETURN),
         });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("AllocObject"), std::string::npos);
@@ -1198,13 +1216,12 @@ TEST(StackCBackendTest, IincInstruction)
                              new VarInsnNode(Opcodes::ILOAD, 0),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("Test", cm, blocks);
 
     EXPECT_NE(result.text.find("locals[0].i += 5"), std::string::npos);
@@ -1217,13 +1234,12 @@ TEST(StackCBackendTest, StaticNativeFunctionAndOnLoadRegistration)
                          "add",
                          "(II)I",
                                    {new InsnNode(Opcodes::IRETURN)});
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          result = backend.compileMethod("com/example/Foo", cm, blocks);
 
     EXPECT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
@@ -1252,13 +1268,12 @@ TEST(StackCBackendTest, RegisterNativesKeepsObjectParameterDescriptor)
                              new InsnNode(Opcodes::ICONST_0),
                              new InsnNode(Opcodes::IRETURN),
                          });
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     (void)backend.compileMethod("Test", cm, blocks);
 
     CompilerIndex emptyIndex;

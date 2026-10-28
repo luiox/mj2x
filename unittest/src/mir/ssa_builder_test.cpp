@@ -82,7 +82,7 @@ std::unique_ptr<SSAFunction> buildSSAFor(ClassNode* cn, MethodNode* m,
                                          ca::str::Utf8StringArena& arena, std::string& reason)
 {
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*m);
+    auto          blocks = test::convertMethodNode(converter, *m, arena);
     SSABuilder    builder;
     bool          isStatic = (m->access & Opcodes::ACC_STATIC) != 0;
     return builder.build(blocks, toStr(cn->name), toStr(m->name), toStr(m->desc), isStatic,
@@ -1139,7 +1139,7 @@ TEST(SSABuilderJavaSamples, ExceptionPrecisionRanges)
         ASSERT_NE(m, nullptr);
         std::string reason;
         CodeConverter converter(arena);
-        auto          l1 = converter.convert(*m);
+        auto          l1 = test::convertMethodNode(converter, *m, arena);
         ASSERT_FALSE(l1.empty());
         ASSERT_FALSE(l1.front()->exceptionTable.empty()) << name << " should have try/catch";
         const auto& h = l1.front()->exceptionTable[0];
@@ -1203,7 +1203,7 @@ TEST(SSABuilderE2E, DISABLED_DumpLoopSumBlocks)
     auto*               m  = findMethod(cn, "loopSum", "(I)I");
     ASSERT_NE(m, nullptr);
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*m);
+    auto          blocks = test::convertMethodNode(converter, *m, arena);
     printf("\n=== loopSum L1 blocks (%zu) ===\n", blocks.size());
     printf("%s\n", CodeConverter::dumpMIR(blocks).c_str());
 }

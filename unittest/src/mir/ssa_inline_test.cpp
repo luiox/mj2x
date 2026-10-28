@@ -16,6 +16,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "test_helper.hpp"
 #include "mj2x/mir/passes/ssa_inline_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dump.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
@@ -70,7 +71,7 @@ MethodInsnNode* invokeStatic(const char* owner, const char* name, const char* de
 std::unique_ptr<SSAFunction> buildSsa(MethodNode& mn, Utf8StringArena& arena, std::string& reason)
 {
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(mn);
+    auto          blocks = test::convertMethodNode(converter, mn, arena);
     SSABuilder    builder;
     const bool    isStatic = (mn.access & Opcodes::ACC_STATIC) != 0;
     return builder.build(blocks, "InlineTest", mn.name.to_std_string(), mn.desc.to_std_string(),
@@ -237,7 +238,7 @@ TEST(SsaInlineTest, InlinesStaticCallWithRefParamAndIndySite)
                               new InvokeDynamicInsnNode(
                                   ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                                   ca::str::Utf8StringRef::from_cstr("(Ljava/lang/String;)Ljava/lang/String;"),
-                                  jbytecode::core::Handle(0,
+                                  jbytecode::core::Handle(Opcodes::H_INVOKESTATIC,
                                                           ca::str::Utf8StringRef::from_cstr("java/lang/invoke/StringConcatFactory"),
                                                           ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                                                           ca::str::Utf8StringRef::from_cstr("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;")),
@@ -299,7 +300,7 @@ TEST(SsaInlineTest, InlinesCalleeWithExternalCallAndFieldStore)
                                                 ca::str::Utf8StringRef::from_cstr("Ljava/util/Locale;")),
                               new LdcInsnNode(ca::str::Utf8StringRef::from_cstr("%s")),
                               new InsnNode(Opcodes::ICONST_1),
-                              new IntInsnNode(Opcodes::ANEWARRAY, 1),
+                              new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
                               new InsnNode(Opcodes::DUP),
                               new InsnNode(Opcodes::ICONST_0),
                               new VarInsnNode(Opcodes::LLOAD, 0),

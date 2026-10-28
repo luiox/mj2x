@@ -158,6 +158,11 @@ LUIOX_LIBCA_MODULES = "core,crypto,str,fs,io,json,net,http,process,opt,thread,lo
 add_requires("libca " .. LUIOX_LIBCA_VERSION, {configs = {modules = LUIOX_LIBCA_MODULES}})
 -- test 模块必须显式点名：test_helper 调用 ca::test::top_project_path()，
 -- 缺模块时链接期 undefined reference；包 on_load 按依赖闭包展开排序链接项。
+-- libjbc 走项目内联包定义（git 直连 + commit 锁，与 mjt/mjbase 同版本同定义）：
+-- luiox-repo 的发布版定义缺 Windows /utf-8 on_load 修正（GBK ACP 探针安装失败），
+-- 内联定义是唯一能就地修探针的承载形态；详见包文件头注。
+includes("xmake/packages/libjbc.lua")
+add_requires("libjbc 0.4.15")
 add_requires("libjstr 0.0.2")
 add_requires("libjbytecode 0.0.2")
 add_requires("libjzip 0.0.2")
@@ -168,6 +173,7 @@ add_requireconfs("libjstr.libca",                {version = LUIOX_LIBCA_VERSION,
 add_requireconfs("libjbytecode.libca",           {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libjbytecode.libjstr.libca",   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libjbytecode.libgarena.libca", {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjbc.libca",                 {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libjzip.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libgarena.libca",              {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libjdk_finder.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})

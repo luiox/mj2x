@@ -13,19 +13,17 @@
 
 #include "mj2x/backend/regc/regc_emitter_internal.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 
 namespace mj2x {
 namespace {
 
-using namespace jbytecode::core;
-using namespace jbytecode::tree;
 
-bool isPrimitiveFieldDesc(const ca::str::Utf8StringRef& desc)
+bool isPrimitiveFieldDesc(std::string_view desc)
 {
-    const std::string text = desc.to_std_string();
-    if (text.empty()) return false;
-    switch (text[0]) {
+    if (desc.empty()) return false;
+    switch (desc[0]) {
     case 'Z':
     case 'B':
     case 'C':
@@ -53,21 +51,20 @@ bool isPodClassOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& ow
 {
     if (classIndex == nullptr) return false;
     CompilerClass* clazz = classIndex->getClass(owner.to_std_string());
-    if (clazz == nullptr || clazz->classNode == nullptr) return false;
+    if (clazz == nullptr || clazz->dom == nullptr) return false;
     // 库类拿不到字段全貌，无法判定。
     if (clazz->isLibrary) return false;
-    ClassNode* node = clazz->classNode.get();
 
     // 继承/接口意味着实例可能被当成别的类型用，字段布局不再等于本类字段表。
-    if (!node->interfaces.empty()) return false;
-    if (node->superName.to_std_string() != "java/lang/Object") return false;
+    if (!clazz->dom->interfaces.empty()) return false;
+    if (clazz->dom->superName() != "java/lang/Object") return false;
 
     // 所有实例字段必须是原生类型。静态字段走 JVM 语义，不参与 struct 布局。
     bool hasInstanceField = false;
-    for (const auto& field : node->fields) {
-        if ((field->access & Opcodes::ACC_STATIC) != 0) continue;
+    for (const auto& field : clazz->fields) {
+        if ((field.access & Opcodes::ACC_STATIC) != 0) continue;
         hasInstanceField = true;
-        if (!isPrimitiveFieldDesc(field->desc)) return false;
+        if (!isPrimitiveFieldDesc(field.desc)) return false;
     }
     return hasInstanceField;
 }
@@ -94,10 +91,10 @@ std::string podStructValueName(RegId id)
     return "podv_r" + std::to_string(id.value);
 }
 
-std::string podStructMemberName(const ca::str::Utf8StringRef& name)
+std::string podStructMemberName(std::string_view name)
 {
     // 字段名可能是 Java 标识符之外的形状（合成字段带 $），统一成 C 标识符。
-    return sanitizeOwner(name.to_std_string());
+    return sanitizeOwner(std::string(name));
 }
 
 std::vector<RegCPodStructMember> podStructMembers(CompilerIndex* classIndex,
@@ -106,11 +103,11 @@ std::vector<RegCPodStructMember> podStructMembers(CompilerIndex* classIndex,
     std::vector<RegCPodStructMember> members;
     if (classIndex == nullptr) return members;
     CompilerClass* clazz = classIndex->getClass(owner);
-    if (clazz == nullptr || clazz->classNode == nullptr) return members;
-    for (const auto& field : clazz->classNode->fields) {
-        if ((field->access & Opcodes::ACC_STATIC) != 0) continue;
-        if (!isPrimitiveFieldDesc(field->desc)) continue;
-        const char tag = field->desc.to_std_string()[0];
+    if (clazz == nullptr || clazz->dom == nullptr) return members;
+    for (const auto& field : clazz->fields) {
+        if ((field.access & Opcodes::ACC_STATIC) != 0) continue;
+        if (!isPrimitiveFieldDesc(field.desc)) continue;
+        const char tag = field.desc[0];
         const char* type = "int32_t";
         switch (tag) {
         case 'Z': type = "int32_t"; break;   // JVM 布尔按 int 传，与槽宽对齐
@@ -123,7 +120,7 @@ std::vector<RegCPodStructMember> podStructMembers(CompilerIndex* classIndex,
         case 'D': type = "double"; break;
         default: continue;
         }
-        members.push_back(RegCPodStructMember{podStructMemberName(field->name), type});
+        members.push_back(RegCPodStructMember{podStructMemberName(field.name), type});
     }
     return members;
 }

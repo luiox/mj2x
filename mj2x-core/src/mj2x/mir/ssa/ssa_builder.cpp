@@ -1,5 +1,8 @@
 #include "ssa_builder.hpp"
 #include "mj2x/frontend/type_utils.hpp"
+#include "mj2x/core/jvm_type.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "libca/log/log_macros.hpp"
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 
 #include <cassert>
@@ -11,7 +14,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 
 namespace {
 
@@ -80,12 +82,18 @@ SSAValue* constantValue(SSAFunction& fn, const MIRConstant* c)
         // separate IR value kind.  The "ldc_string:" prefix marks this opaque
         // as a String LDC; anything after it is the raw UTF-8 content.  Emitter
         // and dump apply their own escaping when rendering.
-        return fn.newOpaque(SSAType::REF, "ldc_string:" + std::get<ca::str::Utf8StringRef>(c->value).to_std_string());
+        // 原始字节拼 tag：to_std_string 语义不保证字节保真，ldc_string 后随
+        // modified UTF-8 原文（消费方 utf8ToModifiedUtf8 对孤代理恒等）。
+        const auto& lit = std::get<ca::str::Utf8StringRef>(c->value);
+        return fn.newOpaque(SSAType::REF,
+                            "ldc_string:"
+                                + std::string(reinterpret_cast<const char*>(lit.data()),
+                                              lit.byte_length()));
     }
-    if (std::holds_alternative<jbytecode::core::Type>(c->value)) {
+    if (std::holds_alternative<Type>(c->value)) {
         // LDC Class 常量（Foo.class）：Type 的 internal name 即 JNI FindClass 需要的路径
         // （如 "java/lang/String"）。用 "ldc_class:" 前缀透传给 emitter 发射 FindClass。
-        const auto& t = std::get<jbytecode::core::Type>(c->value);
+        const auto& t = std::get<Type>(c->value);
         // #921 staticArena 退役：内部名仅瞬时转串做 SSA 名，函数级局部 arena 零驻留。
         ca::str::Utf8StringArena scratch;
         return fn.newOpaque(SSAType::REF, "ldc_class:" + t.getInternalName(scratch).to_std_string());
@@ -195,6 +203,8 @@ void ensureSuccessorStackArgs(SSABlock* target, const FrameState& fs, SSAFunctio
     // the target is translated later in L1 order.
     for (size_t i = 0; i < fs.stack.size(); ++i) {
         SSAType type = fs.stack[i] ? fs.stack[i]->type : SSAType::UNKNOWN;
+        if (type == SSAType::UNKNOWN) {
+        }
         target->args.emplace_back(
             fn.ids.newValueId(), type, ssaStackValueSlot(static_cast<int>(i)));
     }
@@ -326,29 +336,34 @@ SSABlock* fallthroughBlock(const std::vector<Block*>&                l1blocks,
 // 的 goto 0）只合成 Label 对象、不发 LABEL 指令，CodeConverter 不会为该方法
 // 入口块建立该 label 映射，ssaByLabel 查不到。此时目标语义 = 方法真入口块
 // （fn.blocks[0]，合成 entry 之前的第一个 L1 块），回退到它并保持 args 绑定。
-SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel, int labelKey,
+Block* findBlockByLabel(const std::vector<Block*>& blocks, int labelId);
+
+SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel,
+                            const std::vector<Block*>&                 l1blocks,
+                            const std::vector<std::unique_ptr<SSABlock>>& fnBlocks, int labelKey,
                             SSABlock* realEntry)
 {
     auto it = ssaByLabel.find(labelKey);
-    return it != ssaByLabel.end() ? it->second : realEntry;
+    if (it != ssaByLabel.end()) return it->second;
+    // 块 id 与标签 id 在批 6d 前是不同域：回退 MIRLabel 节点扫描，标签 id →
+    // 所在 L1 块 → 同 id 的 SSABlock。目标块必含同 id MIRLabel。
+    if (const Block* l1 = findBlockByLabel(l1blocks, labelKey)) {
+        for (const auto& sb : fnBlocks) {
+            if (sb->l1LabelId == l1->id) return sb.get();
+        }
+    }
+    return realEntry;
 }
 
-// targetLabel is a Label*; CodeConverter stores label identity as the
-// pointer-derived key because libjbytecode resets bytecode offsets during tree
-// reconstruction.
-int mirLabelKey(jbytecode::core::Label* lbl)
-{
-    return static_cast<int>(reinterpret_cast<intptr_t>(lbl));
-}
-
+// 批 6d 标签 id 化：targetLabel 即顺序标签 id（指针截断 id 在 x64 上可为
+// 负且 ASLR 依赖，已废除）。
 bool blockContainsLabel(const Block* block, int labelId)
 {
     if (!block) return false;
     if (block->id == labelId) return true;
     for (const auto& node : block->nodes) {
         if (node->kind != MIRKind::LABEL) continue;
-        auto* label = static_cast<const MIRLabel*>(node.get());
-        if (mirLabelKey(label->labelNode) == labelId) return true;
+        if (static_cast<const MIRLabel*>(node.get())->labelId == labelId) return true;
     }
     return false;
 }
@@ -413,7 +428,7 @@ SSABlockArg* findExceptionArg(SSABlock* block)
 // translateBlocks 的内层 switch 拆成按 JVM 语义族分组的 lower 函数。
 // 每个 lower 函数返回 bool：false = fail-closed（reason 已填），true = 成功。
 // 所有函数共享匿名 namespace 的 free helper（constantValue / mapBinaryOp /
-// buildSuccessor / mirLabelKey 等），状态通过 LowerCtx 显式传递。
+// buildSuccessor 等），状态通过 LowerCtx 显式传递。
 // ============================================================
 
 // lowering 阶段的可变上下文：translateBlocks 主循环为每个块构造一次。
@@ -885,8 +900,8 @@ bool lowerReturnValue(const MIRReturnValue* /*rv*/, LowerCtx& d, std::string& re
 
 bool lowerUncondBranch(const MIRUncondBranch* ub, LowerCtx& d, std::string& /*reason*/)
 {
-    int               tkey   = mirLabelKey(ub->targetLabel);
-    SSABlock*         target = resolveJumpTarget(d.ssaByLabel, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
+    int               tkey   = ub->targetLabel;
+    SSABlock*         target = resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
     SSAJumpTerminator jt;
     jt.target      = buildSuccessor(target, d.fs, d.fn);
     d.sb->terminator = std::move(jt);
@@ -913,9 +928,9 @@ bool lowerBranchZero(const MIRBranchZero* bz, LowerCtx& d, std::string& reason)
     d.sb->instructions.push_back(std::move(cmp));
     SSABranchTerminator bt;
     bt.condition  = cond;
-    int bzKey     = mirLabelKey(bz->targetLabel);
+    int bzKey     = bz->targetLabel;
     bt.trueTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
@@ -939,9 +954,9 @@ bool lowerBranch(const MIRBranch* br, LowerCtx& d, std::string& reason)
     d.sb->instructions.push_back(std::move(cmp));
     SSABranchTerminator bt;
     bt.condition  = cond;
-    int brKey     = mirLabelKey(br->targetLabel);
+    int brKey     = br->targetLabel;
     bt.trueTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
@@ -957,16 +972,16 @@ bool lowerSwitch(const MIRSwitch* sw, LowerCtx& d, std::string& reason)
     SSASwitchTerminator st;
     st.value = value;
     for (const auto& c : sw->cases) {
-        int           key = mirLabelKey(c.targetLabel);
+        int           key = c.targetLabel;
         SSASwitchCase sc;
         sc.key    = c.key;
         sc.target = buildSuccessor(
-            resolveJumpTarget(d.ssaByLabel, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+            resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
         st.cases.push_back(std::move(sc));
     }
-    int defaultKey   = mirLabelKey(sw->defaultLabel);
+    int defaultKey   = sw->defaultLabel;
     st.defaultTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     d.sb->terminator = std::move(st);
     return true;
 }
@@ -1336,24 +1351,33 @@ std::vector<ExceptionHandler> SSABuilder::exceptionTable(const std::vector<Block
     return blocks.front()->exceptionTable;
 }
 
-void SSABuilder::collectOutEdges(Block* b, std::vector<int>& targets)
+void SSABuilder::collectOutEdges(Block* b, const std::vector<Block*>& all,
+                                 std::vector<int>& targets)
 {
+    // Label* → 所在块 id（MIRLabel 节点扫描）；找不到不产边（防御）。
+    // 标签 id → 所在块 id（MIRLabel 节点扫描）；找不到不产边（防御）。
+    // 块 id 与标签 id 在批 6d 前是不同域，边键必须落块 id 域。
+    auto pushBlockId = [&all, &targets](int labelId) {
+        if (const Block* l1 = findBlockByLabel(all, labelId)) {
+            targets.push_back(l1->id);
+        }
+    };
     for (auto& node : b->nodes) {
         switch (node->kind) {
         case MIRKind::UNCOND_BRANCH:
-            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRUncondBranch>(node.get())->targetLabel));
+            pushBlockId(ca::core::tag_cast::cast<MIRUncondBranch>(node.get())->targetLabel);
             break;
         case MIRKind::BRANCH:
-            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRBranch>(node.get())->targetLabel));
+            pushBlockId(ca::core::tag_cast::cast<MIRBranch>(node.get())->targetLabel);
             break;
         case MIRKind::BRANCH_ZERO:
-            targets.push_back(mirLabelKey(ca::core::tag_cast::cast<MIRBranchZero>(node.get())->targetLabel));
+            pushBlockId(ca::core::tag_cast::cast<MIRBranchZero>(node.get())->targetLabel);
             break;
         case MIRKind::SWITCH:
         {
             auto* sw = ca::core::tag_cast::cast<MIRSwitch>(node.get());
-            targets.push_back(mirLabelKey(sw->defaultLabel));
-            for (auto& c : sw->cases) targets.push_back(mirLabelKey(c.targetLabel));
+            pushBlockId(sw->defaultLabel);
+            for (auto& c : sw->cases) pushBlockId(c.targetLabel);
             break;
         }
         default: break;
@@ -1386,7 +1410,7 @@ std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector
     for (size_t i = 0; i < blocks.size(); ++i) {
         Block*           b = blocks[i];
         std::vector<int> outs;
-        collectOutEdges(b, outs);
+        collectOutEdges(b, blocks, outs);
         // 非终结块 fallthrough 到序列下一块（R1a.2：CFG 保真的关键 —— fallthrough 也是边）。
         if (!blockEndsWithTerminator(b) && i + 1 < blocks.size()) {
             outs.push_back(blocks[i + 1]->id);
@@ -1442,7 +1466,12 @@ void SSABuilder::buildBlocks(SSAFunction& fn, const std::vector<Block*>& l1block
                 if (defs.empty()) continue;
                 // 每个有 def 的 slot 开一个 arg（≥2 源 = 真 phi；1 源 = 冗余但正确）。
                 // 类型从 reaching defs 回看具体 STORE/IINC，供 RegC 保留 long/double 槽语义。
-                sb->args.emplace_back(fn.ids.newValueId(), blockArgType(l1blocks, defs), slot);
+                const SSAType dbgT = blockArgType(l1blocks, defs);
+                if (dbgT == SSAType::UNKNOWN) {
+                    for (const auto& d : defs) {
+                    }
+                }
+                sb->args.emplace_back(fn.ids.newValueId(), dbgT, slot);
             }
         }
 

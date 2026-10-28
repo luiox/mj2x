@@ -11,7 +11,9 @@
 #include "libca/log/logger.hpp"
 #include "libca/log/logger_registry.hpp"
 #include "libca/str/utf8_string.hpp"
+#include "mj2x/backend/dom_inject.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
+#include "test_helper.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 
@@ -98,27 +100,36 @@ size_t countSubstring(const std::string& text, const std::string& needle)
 
 TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "add",
                              "(II)I",
                              {
-                                 new VarInsnNode(Opcodes::ILOAD, 0),
-                                 new VarInsnNode(Opcodes::ILOAD, 1),
-                                 new InsnNode(Opcodes::IADD),
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                                 new InsnNode(jbytecode::core::Opcodes::IADD),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              2,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    ca::str::Utf8StringArena arena;
     CompilerClass cls;
-    cls.methods.push_back(cm);
+    {
+        auto cn = std::make_unique<ClassNode>();
+        cn->name      = arena.intern("Test");
+        cn->version   = jbytecode::core::Opcodes::V1_8;
+        cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName = arena.intern("java/lang/Object");
+        cn->methods.push_back(method.get());
+        cls = test::classFromTree("Test", *cn, arena);
+        cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+        cls.methods[0].markedForCompile = true;
+    }
 
     RegCBackend   backend;
-    ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
@@ -132,8 +143,13 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
     expectNoStackAnchors(result.text);
 
     backend.injectIntoClass(cls, cls.methods[0], result);
-    EXPECT_TRUE(method->access & Opcodes::ACC_NATIVE);
-    EXPECT_EQ(method->instructions.size(), 0);
+    test::refreshTreeFromDom(cls, "Test");
+    auto injectedTree = test::treeFromDom(cls, arena);
+    ASSERT_NE(injectedTree, nullptr);
+    auto* injected = test::findMethodNode(injectedTree.get(), "add");
+    ASSERT_NE(injected, nullptr);
+    EXPECT_TRUE(injected->access & jbytecode::core::Opcodes::ACC_NATIVE);
+    EXPECT_EQ(injected->instructions.size(), 0u);
     EXPECT_TRUE(cls.modified);
 }
 
@@ -142,26 +158,25 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
 //   - 开启后 helper 入口含 mj2x_rt_checkpoint_run + FAKE 默认值走 cleanup
 TEST(RegCBackendTest, RuntimeProtectionInjection)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "add",
                              "(II)I",
                              {
-                                 new VarInsnNode(Opcodes::ILOAD, 0),
-                                 new VarInsnNode(Opcodes::ILOAD, 1),
-                                 new InsnNode(Opcodes::IADD),
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                                 new InsnNode(jbytecode::core::Opcodes::IADD),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              2,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*method);
+    auto                     blocks = test::convertMethodNode(converter, *method, arena);
 
     // 默认：不注入。
     RegCBackend plain;
@@ -188,27 +203,26 @@ TEST(RegCBackendTest, RuntimeProtectionInjection)
 
 TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC,
                              "bump",
                              "(I)I",
                              {
-                                 new VarInsnNode(Opcodes::ILOAD, 1),
-                                 new InsnNode(Opcodes::ICONST_1),
-                                 new InsnNode(Opcodes::IADD),
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                                 new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+                                 new InsnNode(jbytecode::core::Opcodes::IADD),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              2,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
@@ -227,27 +241,26 @@ TEST(RegCBackendTest, InstanceTrampolineSkipsGetObjectClassWhenOwnerClassUnused)
     // 纯标量实例方法：生成体不引用 _mj2x_regc_owner_class（当前只有 indy 自定义
     // bootstrap helper 调用点引用），trampoline 跳过 GetObjectClass——每条
     // Java→native 入口省 1 次 JNI；env 设置与 context 初始化保持不变。
-    auto method = makeMethod(Opcodes::ACC_PUBLIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC,
                              "bump",
                              "(I)I",
                              {
-                                 new VarInsnNode(Opcodes::ILOAD, 1),
-                                 new InsnNode(Opcodes::ICONST_1),
-                                 new InsnNode(Opcodes::IADD),
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                                 new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+                                 new InsnNode(jbytecode::core::Opcodes::IADD),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              2,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -265,37 +278,36 @@ TEST(RegCBackendTest, EscapedWrapperValueOfEmitsCachedBoxHelper)
     // hashCode 未知调用使装箱值逃逸 native state；逃逸链走 runtime 小值缓存装箱
     // （Integer [-128,127] 命中 0 JNI，返回对象与 JDK valueOf 恒等），不再走
     // 通用 invokestatic JNI 派发。
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "escapeBox",
                              "(I)I",
                              {
-                                 new VarInsnNode(Opcodes::ILOAD, 0),
-                                 new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                                 new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                                     ca::str::ZUtf8StringRef::from_static("java/lang/Integer"),
                                                     ca::str::ZUtf8StringRef::from_static("valueOf"),
                                                     ca::str::ZUtf8StringRef::from_static("(I)Ljava/lang/Integer;"),
                                                     false),
-                                 new VarInsnNode(Opcodes::ASTORE, 1),
-                                 new VarInsnNode(Opcodes::ALOAD, 1),
-                                 new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                 new VarInsnNode(jbytecode::core::Opcodes::ASTORE, 1),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 1),
+                                 new MethodInsnNode(jbytecode::core::Opcodes::INVOKEVIRTUAL,
                                                     ca::str::ZUtf8StringRef::from_static("java/lang/Integer"),
                                                     ca::str::ZUtf8StringRef::from_static("hashCode"),
                                                     ca::str::ZUtf8StringRef::from_static("()I"),
                                                     false),
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              2,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("pkg/Box", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -309,100 +321,98 @@ TEST(RegCBackendTest, EscapedWrapperValueOfEmitsCachedBoxHelper)
 TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
 {
     auto first = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
         "first",
         "(Ljava/lang/Object;)I",
         {
-            new TypeInsnNode(Opcodes::NEW, ca::str::ZUtf8StringRef::from_static("Foo")),
-            new InsnNode(Opcodes::POP),
-            new InsnNode(Opcodes::ICONST_1),
-            new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::ZUtf8StringRef::from_static("Foo")),
-            new InsnNode(Opcodes::POP),
-            new InsnNode(Opcodes::ICONST_1),
-            new InsnNode(Opcodes::ICONST_1),
+            new TypeInsnNode(jbytecode::core::Opcodes::NEW, ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+            new TypeInsnNode(jbytecode::core::Opcodes::ANEWARRAY, ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+            new InsnNode(jbytecode::core::Opcodes::ICONST_1),
             new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"),
                                        2),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new TypeInsnNode(Opcodes::CHECKCAST,
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+            new TypeInsnNode(jbytecode::core::Opcodes::CHECKCAST,
                              ca::str::ZUtf8StringRef::from_static("java/lang/CharSequence")),
-            new InsnNode(Opcodes::POP),
-            new FieldInsnNode(Opcodes::GETSTATIC,
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new FieldInsnNode(jbytecode::core::Opcodes::GETSTATIC,
                               ca::str::ZUtf8StringRef::from_static("Foo"),
                               ca::str::ZUtf8StringRef::from_static("sink"),
                               ca::str::ZUtf8StringRef::from_static("I")),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
+            new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                ca::str::ZUtf8StringRef::from_static("Foo"),
                                ca::str::ZUtf8StringRef::from_static("mix"),
                                ca::str::ZUtf8StringRef::from_static("(I)I"),
                                false),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new FieldInsnNode(Opcodes::GETFIELD,
+            new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+            new FieldInsnNode(jbytecode::core::Opcodes::GETFIELD,
                               ca::str::ZUtf8StringRef::from_static("Foo"),
                               ca::str::ZUtf8StringRef::from_static("value"),
                               ca::str::ZUtf8StringRef::from_static("I")),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+            new InsnNode(jbytecode::core::Opcodes::IADD),
+            new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+            new MethodInsnNode(jbytecode::core::Opcodes::INVOKEVIRTUAL,
                                ca::str::ZUtf8StringRef::from_static("Foo"),
                                ca::str::ZUtf8StringRef::from_static("bump"),
                                ca::str::ZUtf8StringRef::from_static("()I"),
                                false),
-            new InsnNode(Opcodes::IADD),
-            new InsnNode(Opcodes::IRETURN),
+            new InsnNode(jbytecode::core::Opcodes::IADD),
+            new InsnNode(jbytecode::core::Opcodes::IRETURN),
         },
         2,
         1);
     auto second = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
         "second",
         "(Ljava/lang/Object;)I",
         {
-            new TypeInsnNode(Opcodes::NEW, ca::str::ZUtf8StringRef::from_static("Foo")),
-            new InsnNode(Opcodes::POP),
-            new InsnNode(Opcodes::ICONST_1),
-            new TypeInsnNode(Opcodes::ANEWARRAY, ca::str::ZUtf8StringRef::from_static("Foo")),
-            new InsnNode(Opcodes::POP),
-            new InsnNode(Opcodes::ICONST_1),
-            new InsnNode(Opcodes::ICONST_1),
+            new TypeInsnNode(jbytecode::core::Opcodes::NEW, ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+            new TypeInsnNode(jbytecode::core::Opcodes::ANEWARRAY, ca::str::ZUtf8StringRef::from_static("Foo")),
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+            new InsnNode(jbytecode::core::Opcodes::ICONST_1),
             new MultiANewArrayInsnNode(ca::str::Utf8StringRef::from_cstr("[[Ljava/lang/String;"),
                                        2),
-            new InsnNode(Opcodes::POP),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new TypeInsnNode(Opcodes::CHECKCAST,
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+            new TypeInsnNode(jbytecode::core::Opcodes::CHECKCAST,
                              ca::str::ZUtf8StringRef::from_static("java/lang/CharSequence")),
-            new InsnNode(Opcodes::POP),
-            new FieldInsnNode(Opcodes::GETSTATIC,
+            new InsnNode(jbytecode::core::Opcodes::POP),
+            new FieldInsnNode(jbytecode::core::Opcodes::GETSTATIC,
                               ca::str::ZUtf8StringRef::from_static("Foo"),
                               ca::str::ZUtf8StringRef::from_static("sink"),
                               ca::str::ZUtf8StringRef::from_static("I")),
-            new MethodInsnNode(Opcodes::INVOKESTATIC,
+            new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                ca::str::ZUtf8StringRef::from_static("Foo"),
                                ca::str::ZUtf8StringRef::from_static("mix"),
                                ca::str::ZUtf8StringRef::from_static("(I)I"),
                                false),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new FieldInsnNode(Opcodes::GETFIELD,
+            new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+            new FieldInsnNode(jbytecode::core::Opcodes::GETFIELD,
                               ca::str::ZUtf8StringRef::from_static("Foo"),
                               ca::str::ZUtf8StringRef::from_static("value"),
                               ca::str::ZUtf8StringRef::from_static("I")),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+            new InsnNode(jbytecode::core::Opcodes::IADD),
+            new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+            new MethodInsnNode(jbytecode::core::Opcodes::INVOKEVIRTUAL,
                                ca::str::ZUtf8StringRef::from_static("Foo"),
                                ca::str::ZUtf8StringRef::from_static("bump"),
                                ca::str::ZUtf8StringRef::from_static("()I"),
                                false),
-            new InsnNode(Opcodes::IADD),
-            new InsnNode(Opcodes::IRETURN),
+            new InsnNode(jbytecode::core::Opcodes::IADD),
+            new InsnNode(jbytecode::core::Opcodes::IRETURN),
         },
         2,
         1);
 
-    CompilerMethod firstMethod;
-    firstMethod.methodNode = first.get();
-    CompilerMethod secondMethod;
-    secondMethod.methodNode = second.get();
+    CompilerMethod firstMethod = test::snapshotMethod(*first);
+    CompilerMethod secondMethod = test::snapshotMethod(*second);
     CompilerClass cls;
     cls.methods.push_back(firstMethod);
     cls.methods.push_back(secondMethod);
@@ -411,8 +421,8 @@ TEST(RegCBackendTest, InternsCachesAcrossGeneratedTranslationUnit)
     ca::str::Utf8StringArena arena;
     CodeConverter            firstConverter(arena);
     CodeConverter            secondConverter(arena);
-    auto          firstBlocks  = firstConverter.convert(*first);
-    auto          secondBlocks = secondConverter.convert(*second);
+    auto          firstBlocks  = test::convertMethodNode(firstConverter, *first, arena);
+    auto          secondBlocks = test::convertMethodNode(secondConverter, *second, arena);
     auto          firstResult  = backend.compileMethod("CacheOwner", cls.methods[0], firstBlocks);
     auto          secondResult = backend.compileMethod("CacheOwner", cls.methods[1], secondBlocks);
 
@@ -511,24 +521,23 @@ TEST(RegCBackendTest, ReportsC99SourceArtifact)
 
 TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "bad",
                              "()I",
                              {
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              0,
                              0);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Bad", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::NONE);
@@ -536,7 +545,7 @@ TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
     // 字节码保留由 injectIntoClass 负责。失败原因已通过 printf 诊断日志输出。
 
     backend.injectIntoClass(cls, cls.methods[0], result);
-    EXPECT_FALSE(method->access & Opcodes::ACC_NATIVE);
+    EXPECT_FALSE(method->access & jbytecode::core::Opcodes::ACC_NATIVE);
     EXPECT_GT(method->instructions.size(), 0);
     EXPECT_FALSE(cls.modified);
 }
@@ -550,9 +559,9 @@ TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
 namespace {
 
 // 构造一个 LMF metafactory bsm（与 classify 测试同形）。
-Handle regcTestLmfBsm(ca::str::Utf8StringArena& arena)
+jbytecode::core::Handle regcTestLmfBsm(ca::str::Utf8StringArena& arena)
 {
-    return Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
+    return jbytecode::core::Handle(jbytecode::core::Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
                   arena.intern("metafactory"),
                   arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                                "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;"
@@ -567,10 +576,10 @@ InvokeDynamicInsnNode* regcTestDirectFieldIndy(ca::str::Utf8StringArena& arena, 
                                                const char* samDesc)
 {
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern(samDesc)));
-    bsmArgs.emplace_back(Handle(handleTag, arena.intern(owner), arena.intern(fieldName),
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern(samDesc)));
+    bsmArgs.emplace_back(jbytecode::core::Handle(handleTag, arena.intern(owner), arena.intern(fieldName),
                                 arena.intern(fieldDesc)));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern(samDesc)));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern(samDesc)));
     return new InvokeDynamicInsnNode(ca::str::ZUtf8StringRef::from_static(name),
                                      ca::str::ZUtf8StringRef::from_static(desc), regcTestLmfBsm(arena),
                                      std::move(bsmArgs));
@@ -584,25 +593,24 @@ TEST(RegCBackendTest, IndyDirectFieldGetterEmitsGuardedDirectAccess)
 {
     ca::str::Utf8StringArena arena;
     auto*                    indy =
-        regcTestDirectFieldIndy(arena, "read", "()I", Opcodes::H_GETSTATIC, "p/Rec", "SV", "I", "()I");
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        regcTestDirectFieldIndy(arena, "read", "()I", jbytecode::core::Opcodes::H_GETSTATIC, "p/Rec", "SV", "I", "()I");
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "read",
                              "()I",
                              {
                                  indy,
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              0,
                              1);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -641,28 +649,27 @@ TEST(RegCBackendTest, IndyDirectFieldSetterEmitsNullTrapAndStore)
 {
     ca::str::Utf8StringArena arena;
     auto*                    indy = regcTestDirectFieldIndy(arena, "set", "(Lp/Rec;I)V",
-                                                            Opcodes::H_PUTFIELD, "p/Rec", "f", "I",
+                                                            jbytecode::core::Opcodes::H_PUTFIELD, "p/Rec", "f", "I",
                                                             "(I)V");
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "put",
                              "(Lp/Rec;I)V",
                              {
-                                 new VarInsnNode(Opcodes::ALOAD, 0),
-                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
                                  indy,
-                                 new InsnNode(Opcodes::RETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::RETURN),
                              },
                              3,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -690,39 +697,38 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorEmitsGuardedCall)
 {
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
-    bsmArgs.emplace_back(std::string("x"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
-    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(ca::str::Utf8StringRef::from_cstr("x"));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Handle(jbytecode::core::Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));
     auto* indy = new InvokeDynamicInsnNode(
         ca::str::ZUtf8StringRef::from_static("x"),
         ca::str::ZUtf8StringRef::from_static("(Lp/Point;)I"),
-        Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/runtime/ObjectMethods"),
+        jbytecode::core::Handle(jbytecode::core::Opcodes::H_INVOKESTATIC, arena.intern("java/lang/runtime/ObjectMethods"),
                arena.intern("bootstrap"),
                arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                             "Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/String;"
                             "Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)Ljava/lang/Object;")),
         std::move(bsmArgs));
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "getX",
                              "(Lp/Point;)I",
                              {
-                                 new VarInsnNode(Opcodes::ALOAD, 0),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
                                  indy,
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              2,
                              1);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -772,23 +778,23 @@ TEST(RegCBackendTest, IndyDirectFieldSetterNullTrapRoutesToHandlerWhenProtected)
 {
     ca::str::Utf8StringArena arena;
     auto* indy = regcTestDirectFieldIndy(
-        arena, "set", "(Lp/Rec;I)V", Opcodes::H_PUTFIELD, "p/Rec", "f", "I", "(I)V");
+        arena, "set", "(Lp/Rec;I)V", jbytecode::core::Opcodes::H_PUTFIELD, "p/Rec", "f", "I", "(I)V");
     auto* tryStart = new LabelNode(new Label());
     auto* tryEnd   = new LabelNode(new Label());
     auto* handler  = new LabelNode(new Label());
-    auto  method   = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto  method   = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                               "put",
                               "(Lp/Rec;I)V",
                               {
                                   tryStart,
-                                  new VarInsnNode(Opcodes::ALOAD, 0),
-                                  new VarInsnNode(Opcodes::ILOAD, 1),
+                                  new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+                                  new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
                                   indy,
                                   tryEnd,
-                                  new InsnNode(Opcodes::RETURN),
+                                  new InsnNode(jbytecode::core::Opcodes::RETURN),
                                   handler,
-                                  new VarInsnNode(Opcodes::ASTORE, 1),
-                                  new InsnNode(Opcodes::RETURN),
+                                  new VarInsnNode(jbytecode::core::Opcodes::ASTORE, 1),
+                                  new InsnNode(jbytecode::core::Opcodes::RETURN),
                               },
                               3,
                               2);
@@ -796,14 +802,13 @@ TEST(RegCBackendTest, IndyDirectFieldSetterNullTrapRoutesToHandlerWhenProtected)
         tryStart->label, tryEnd->label, handler->label,
         ca::str::Utf8StringRef::from_cstr("java/lang/Exception")));
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -826,27 +831,26 @@ TEST(RegCBackendTest, IndyDirectFieldSetterNullTrapPropagatesDirectlyWhenUnprote
 {
     ca::str::Utf8StringArena arena;
     auto* indy = regcTestDirectFieldIndy(
-        arena, "set", "(Lp/Rec;I)V", Opcodes::H_PUTFIELD, "p/Rec", "f", "I", "(I)V");
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        arena, "set", "(Lp/Rec;I)V", jbytecode::core::Opcodes::H_PUTFIELD, "p/Rec", "f", "I", "(I)V");
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "put",
                              "(Lp/Rec;I)V",
                              {
-                                 new VarInsnNode(Opcodes::ALOAD, 0),
-                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
                                  indy,
-                                 new InsnNode(Opcodes::RETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::RETURN),
                              },
                              3,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -862,15 +866,15 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorNullTrapRoutesToHandlerWhenProtect
 {
     ca::str::Utf8StringArena arena;
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
-    bsmArgs.emplace_back(std::string("x"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
-    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
+    bsmArgs.emplace_back(jbytecode::core::Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(ca::str::Utf8StringRef::from_cstr("x"));
+    bsmArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(jbytecode::core::Handle(jbytecode::core::Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
                                 arena.intern("x"), arena.intern("()I")));
     auto* indy = new InvokeDynamicInsnNode(
         ca::str::ZUtf8StringRef::from_static("x"),
         ca::str::ZUtf8StringRef::from_static("(Lp/Point;)I"),
-        Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/runtime/ObjectMethods"),
+        jbytecode::core::Handle(jbytecode::core::Opcodes::H_INVOKESTATIC, arena.intern("java/lang/runtime/ObjectMethods"),
                arena.intern("bootstrap"),
                arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                             "Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/String;"
@@ -879,19 +883,19 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorNullTrapRoutesToHandlerWhenProtect
     auto* tryStart = new LabelNode(new Label());
     auto* tryEnd   = new LabelNode(new Label());
     auto* handler  = new LabelNode(new Label());
-    auto  method   = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto  method   = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                               "getX",
                               "(Lp/Point;)I",
                               {
                                   tryStart,
-                                  new VarInsnNode(Opcodes::ALOAD, 0),
+                                  new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
                                   indy,
                                   tryEnd,
-                                  new InsnNode(Opcodes::IRETURN),
+                                  new InsnNode(jbytecode::core::Opcodes::IRETURN),
                                   handler,
-                                  new VarInsnNode(Opcodes::ASTORE, 1),
-                                  new InsnNode(Opcodes::ICONST_M1),
-                                  new InsnNode(Opcodes::IRETURN),
+                                  new VarInsnNode(jbytecode::core::Opcodes::ASTORE, 1),
+                                  new InsnNode(jbytecode::core::Opcodes::ICONST_M1),
+                                  new InsnNode(jbytecode::core::Opcodes::IRETURN),
                               },
                               2,
                               2);
@@ -899,14 +903,13 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorNullTrapRoutesToHandlerWhenProtect
         tryStart->label, tryEnd->label, handler->label,
         ca::str::Utf8StringRef::from_cstr("java/lang/Exception")));
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyDirect", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -932,28 +935,27 @@ TEST(RegCBackendTest, IndyRuntimeHelperSiteKeepsLegacyHelperText)
     auto*                    indy = new InvokeDynamicInsnNode(
         ca::str::ZUtf8StringRef::from_static("call"),
         ca::str::ZUtf8StringRef::from_static("()I"),
-        Handle(Opcodes::H_INVOKESTATIC, arena.intern("some/lib/Hidden"), arena.intern("link"),
+        jbytecode::core::Handle(jbytecode::core::Opcodes::H_INVOKESTATIC, arena.intern("some/lib/Hidden"), arena.intern("link"),
                arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                             "Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
         std::vector<ca::core::Any>{});
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "call",
                              "()I",
                              {
                                  indy,
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              1,
                              0);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyHelper", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -994,26 +996,25 @@ TEST(RegCBackendTest, IndyDirectCacheLiteralsEncryptWithStringsEncrypt)
 {
     ca::str::Utf8StringArena arena;
     auto*                    indy =
-        regcTestDirectFieldIndy(arena, "read", "()I", Opcodes::H_GETSTATIC, "p/Rec", "SV", "I", "()I");
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        regcTestDirectFieldIndy(arena, "read", "()I", jbytecode::core::Opcodes::H_GETSTATIC, "p/Rec", "SV", "I", "()I");
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "read",
                              "()I",
                              {
                                  indy,
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              0,
                              1);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend backend;
     backend.setStringsEncrypt(true);
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("IndyDirectEnc", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -1048,26 +1049,25 @@ TEST(RegCBackendTest, IndyDirectCacheLiteralsEncryptWithStringsEncrypt)
 
 TEST(RegCBackendTest, FloatToIntConvertEmitsJvmSaturatingHelper)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "f2i",
                              "(F)I",
                              {
-                                 new VarInsnNode(Opcodes::FLOAD, 0),
-                                 new InsnNode(Opcodes::F2I),
-                                 new InsnNode(Opcodes::IRETURN),
+                                 new VarInsnNode(jbytecode::core::Opcodes::FLOAD, 0),
+                                 new InsnNode(jbytecode::core::Opcodes::F2I),
+                                 new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              },
                              1,
                              1);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -1080,26 +1080,25 @@ TEST(RegCBackendTest, FloatToIntConvertEmitsJvmSaturatingHelper)
 
 TEST(RegCBackendTest, DoubleToLongConvertEmitsJvmSaturatingHelper)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "d2l",
                              "(D)J",
                              {
-                                 new VarInsnNode(Opcodes::DLOAD, 0),
-                                 new InsnNode(Opcodes::D2L),
-                                 new InsnNode(Opcodes::LRETURN),
+                                 new VarInsnNode(jbytecode::core::Opcodes::DLOAD, 0),
+                                 new InsnNode(jbytecode::core::Opcodes::D2L),
+                                 new InsnNode(jbytecode::core::Opcodes::LRETURN),
                              },
                              2,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -1110,26 +1109,25 @@ TEST(RegCBackendTest, DoubleToLongConvertEmitsJvmSaturatingHelper)
 
 TEST(RegCBackendTest, IntToLongConvertKeepsPlainCast)
 {
-    auto method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                              "i2l",
                              "(I)J",
                              {
-                                 new VarInsnNode(Opcodes::ILOAD, 0),
-                                 new InsnNode(Opcodes::I2L),
-                                 new InsnNode(Opcodes::LRETURN),
+                                 new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                                 new InsnNode(jbytecode::core::Opcodes::I2L),
+                                 new InsnNode(jbytecode::core::Opcodes::LRETURN),
                              },
                              2,
                              2);
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -1156,50 +1154,50 @@ CompilerIndex makeTwoClassIndex(std::unique_ptr<MethodNode>& add,
                                 std::unique_ptr<MethodNode>& caller,
                                 CompilerMethod*&             callerMethod)
 {
-    add = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
-                     {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
-                      new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+    add = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "add", "(II)I",
+                     {new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0), new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                      new InsnNode(jbytecode::core::Opcodes::IADD), new InsnNode(jbytecode::core::Opcodes::IRETURN)},
                      2, 2);
-    caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(II)I",
-                        {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
-                         new MethodInsnNode(Opcodes::INVOKESTATIC,
+    caller = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "caller", "(II)I",
+                        {new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0), new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                         new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                             ca::str::Utf8StringRef::from_cstr("Callee"),
                                             ca::str::Utf8StringRef::from_cstr("add"),
                                             ca::str::Utf8StringRef::from_cstr("(II)I"), false),
-                         new InsnNode(Opcodes::IRETURN)},
+                         new InsnNode(jbytecode::core::Opcodes::IRETURN)},
                         2, 2);
 
     auto makeClassNode = [](const char* name) {
         auto cn                = std::make_unique<jbytecode::tree::ClassNode>();
         cn->name               = ca::str::Utf8StringRef::from_cstr(name);
-        cn->version            = Opcodes::V1_8;
-        cn->access             = Opcodes::ACC_PUBLIC;
+        cn->version            = jbytecode::core::Opcodes::V1_8;
+        cn->access             = jbytecode::core::Opcodes::ACC_PUBLIC;
         cn->superName          = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
         return cn;
     };
 
-    CompilerClass calleeCls;
-    calleeCls.classNode = makeClassNode("Callee");
-    calleeCls.methods.push_back(CompilerMethod{add.get(), true, false, {}});
-
-    CompilerClass callerCls;
-    callerCls.classNode = makeClassNode("Caller");
-    callerCls.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
-
     CompilerIndex index;
-    index.addClass("Callee", std::move(calleeCls));
-    index.addClass("Caller", std::move(callerCls));
+    auto makeDom = [&](const char* name, MethodNode* m) {
+        auto cn  = makeClassNode(name);
+        cn->methods.push_back(m);
+        auto cls = test::classFromTree(name, *cn, index.arena());
+        cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+        cls.methods[0].markedForCompile = true;
+        return cls;
+    };
+    index.addClass("Callee", makeDom("Callee", add.get()));
+    index.addClass("Caller", makeDom("Caller", caller.get()));
     callerMethod = &index.getClass("Caller")->methods[0];
     return index;
 }
 
-/// 模拟 callee 已被先转换：injectIntoClass 之后的形态（指令清空 + native）。
+/// 模拟 callee 已被先转换：injectIntoClass 之后的形态（无 Code 槽 + native）。
+/// 批 6d 后该形态直接落 DOM（dom_inject 的 markMethodNative，同产品注入路径）。
 void simulateAlreadyConverted(CompilerIndex& index)
 {
     auto* cls = index.getClass("Callee");
-    auto* mn  = cls->methods[0].methodNode;
-    mn->access |= Opcodes::ACC_NATIVE;
-    mn->instructions.clear();
+    dom_inject::markMethodNative(*cls, "Callee", "add", "(II)I");
+    mj2x::refreshMethodSnapshots(*cls);
 }
 
 }   // namespace
@@ -1218,7 +1216,7 @@ TEST(RegCBackendTest, BeforeCompileCacheDecouplesInlineFromConversionOrder)
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*caller);
+    auto          blocks = test::convertMethodNode(converter, *caller, arena);
     auto          result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -1241,7 +1239,7 @@ TEST(RegCBackendTest, WithoutBeforeCompileClearedCalleeFallsBackToJniCall)
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*caller);
+    auto          blocks = test::convertMethodNode(converter, *caller, arena);
     auto          result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -1258,51 +1256,53 @@ TEST(RegCBackendTest, WithoutBeforeCompileClearedCalleeFallsBackToJniCall)
 
 TEST(RegCBackendTest, UnresolvableWarnNotSuppressedWhenOtherCallsInlined)
 {
-    auto add = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
-                          {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
-                           new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+    auto add = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "add", "(II)I",
+                          {new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0), new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                           new InsnNode(jbytecode::core::Opcodes::IADD), new InsnNode(jbytecode::core::Opcodes::IRETURN)},
                           2, 2);
     // caller: static int caller(int a, int b) {
     //             int s = Callee.add(a, b);     // 可解析 → 内联
     //             return s + Other.missing(a);  // 类不在 index → unresolvable
     //         }
-    auto caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(II)I",
-                             {new VarInsnNode(Opcodes::ILOAD, 0),
-                              new VarInsnNode(Opcodes::ILOAD, 1),
-                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+    auto caller = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "caller", "(II)I",
+                             {new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                              new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                                  ca::str::Utf8StringRef::from_cstr("Callee"),
                                                  ca::str::Utf8StringRef::from_cstr("add"),
                                                  ca::str::Utf8StringRef::from_cstr("(II)I"), false),
-                              new VarInsnNode(Opcodes::ISTORE, 2),
-                              new VarInsnNode(Opcodes::ILOAD, 2),
-                              new VarInsnNode(Opcodes::ILOAD, 0),
-                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                              new VarInsnNode(jbytecode::core::Opcodes::ISTORE, 2),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 2),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                              new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                                  ca::str::Utf8StringRef::from_cstr("Other"),
                                                  ca::str::Utf8StringRef::from_cstr("missing"),
                                                  ca::str::Utf8StringRef::from_cstr("(I)I"), false),
-                              new InsnNode(Opcodes::IADD),
-                              new InsnNode(Opcodes::IRETURN)},
+                              new InsnNode(jbytecode::core::Opcodes::IADD),
+                              new InsnNode(jbytecode::core::Opcodes::IRETURN)},
                              2, 3);
 
     auto makeClassNode = [](const char* name) {
         auto cn       = std::make_unique<jbytecode::tree::ClassNode>();
         cn->name      = ca::str::Utf8StringRef::from_cstr(name);
-        cn->version   = Opcodes::V1_8;
-        cn->access    = Opcodes::ACC_PUBLIC;
+        cn->version   = jbytecode::core::Opcodes::V1_8;
+        cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
         cn->superName = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
         return cn;
     };
 
-    CompilerClass calleeCls;
-    calleeCls.classNode = makeClassNode("Callee");
-    calleeCls.methods.push_back(CompilerMethod{add.get(), true, false, {}});
-    CompilerClass callerCls;
-    callerCls.classNode = makeClassNode("Caller");
-    callerCls.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
-
+    // 批 6d：方法随夹具树一次落 DOM（classFromTree + 快照对齐）。
     CompilerIndex index;
-    index.addClass("Callee", std::move(calleeCls));
-    index.addClass("Caller", std::move(callerCls));
+    auto makeDom = [&](const char* name, MethodNode* m) {
+        auto cn  = makeClassNode(name);
+        cn->methods.push_back(m);
+        auto cls = test::classFromTree(name, *cn, index.arena());
+        cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+        cls.methods[0].markedForCompile = true;
+        return cls;
+    };
+    index.addClass("Callee", makeDom("Callee", add.get()));
+    index.addClass("Caller", makeDom("Caller", caller.get()));
     CompilerMethod* callerMethod = &index.getClass("Caller")->methods[0];
 
     RegCBackend backend;
@@ -1311,7 +1311,7 @@ TEST(RegCBackendTest, UnresolvableWarnNotSuppressedWhenOtherCallsInlined)
     ScopedRegcLogCapture capture;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto   blocks = converter.convert(*caller);
+    auto   blocks = test::convertMethodNode(converter, *caller, arena);
     auto   result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
 
@@ -1340,72 +1340,71 @@ TEST(RegCBackendTest, UnresolvableWarnNotSuppressedWhenOtherCallsInlined)
 
 TEST(RegCBackendTest, UnresolvableWarnSampleCarriesResolverReason)
 {
-    auto add = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
-                          {new VarInsnNode(Opcodes::ILOAD, 0), new VarInsnNode(Opcodes::ILOAD, 1),
-                           new InsnNode(Opcodes::IADD), new InsnNode(Opcodes::IRETURN)},
+    auto add = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "add", "(II)I",
+                          {new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0), new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                           new InsnNode(jbytecode::core::Opcodes::IADD), new InsnNode(jbytecode::core::Opcodes::IRETURN)},
                           2, 2);
-    auto syncHelper = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC |
-                                     Opcodes::ACC_SYNCHRONIZED,
+    auto syncHelper = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC |
+                                     jbytecode::core::Opcodes::ACC_SYNCHRONIZED,
                                  "helper", "(I)I",
-                                 {new VarInsnNode(Opcodes::ILOAD, 0),
-                                  new InsnNode(Opcodes::ICONST_1),
-                                  new InsnNode(Opcodes::IADD),
-                                  new InsnNode(Opcodes::IRETURN)},
+                                 {new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                                  new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+                                  new InsnNode(jbytecode::core::Opcodes::IADD),
+                                  new InsnNode(jbytecode::core::Opcodes::IRETURN)},
                                  2, 1);
     // caller: static int caller(int a, int b) {
     //             int s = Callee.add(a, b);          // 缓存命中 → 内联
     //             s += SynchCallee.helper(a);        // synchronized → 现场路径拒绝
     //             return s + Other.missing(a);       // 类不在 index → 拒绝
     //         }
-    auto caller = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "caller", "(II)I",
-                             {new VarInsnNode(Opcodes::ILOAD, 0),
-                              new VarInsnNode(Opcodes::ILOAD, 1),
-                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+    auto caller = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "caller", "(II)I",
+                             {new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                              new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                                  ca::str::Utf8StringRef::from_cstr("Callee"),
                                                  ca::str::Utf8StringRef::from_cstr("add"),
                                                  ca::str::Utf8StringRef::from_cstr("(II)I"), false),
-                              new VarInsnNode(Opcodes::ISTORE, 2),
-                              new VarInsnNode(Opcodes::ILOAD, 2),
-                              new VarInsnNode(Opcodes::ILOAD, 0),
-                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                              new VarInsnNode(jbytecode::core::Opcodes::ISTORE, 2),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 2),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                              new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                                  ca::str::Utf8StringRef::from_cstr("SynchCallee"),
                                                  ca::str::Utf8StringRef::from_cstr("helper"),
                                                  ca::str::Utf8StringRef::from_cstr("(I)I"), false),
-                              new InsnNode(Opcodes::IADD),
-                              new VarInsnNode(Opcodes::ISTORE, 2),
-                              new VarInsnNode(Opcodes::ILOAD, 2),
-                              new VarInsnNode(Opcodes::ILOAD, 0),
-                              new MethodInsnNode(Opcodes::INVOKESTATIC,
+                              new InsnNode(jbytecode::core::Opcodes::IADD),
+                              new VarInsnNode(jbytecode::core::Opcodes::ISTORE, 2),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 2),
+                              new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                              new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                                  ca::str::Utf8StringRef::from_cstr("Other"),
                                                  ca::str::Utf8StringRef::from_cstr("missing"),
                                                  ca::str::Utf8StringRef::from_cstr("(I)I"), false),
-                              new InsnNode(Opcodes::IADD),
-                              new InsnNode(Opcodes::IRETURN)},
+                              new InsnNode(jbytecode::core::Opcodes::IADD),
+                              new InsnNode(jbytecode::core::Opcodes::IRETURN)},
                              2, 3);
 
     auto makeClassNode = [](const char* name) {
         auto cn       = std::make_unique<jbytecode::tree::ClassNode>();
         cn->name      = ca::str::Utf8StringRef::from_cstr(name);
-        cn->version   = Opcodes::V1_8;
-        cn->access    = Opcodes::ACC_PUBLIC;
+        cn->version   = jbytecode::core::Opcodes::V1_8;
+        cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
         cn->superName = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
         return cn;
     };
 
-    CompilerClass calleeCls;
-    calleeCls.classNode = makeClassNode("Callee");
-    calleeCls.methods.push_back(CompilerMethod{add.get(), true, false, {}});
-    CompilerClass syncCls;
-    syncCls.classNode = makeClassNode("SynchCallee");
-    syncCls.methods.push_back(CompilerMethod{syncHelper.get(), true, false, {}});
-    CompilerClass callerCls;
-    callerCls.classNode = makeClassNode("Caller");
-    callerCls.methods.push_back(CompilerMethod{caller.get(), true, false, {}});
-
+    // 批 6d：方法随夹具树一次落 DOM（classFromTree + 快照对齐）。
     CompilerIndex index;
-    index.addClass("Callee", std::move(calleeCls));
-    index.addClass("SynchCallee", std::move(syncCls));
-    index.addClass("Caller", std::move(callerCls));
+    auto makeDom = [&](const char* name, MethodNode* m) {
+        auto cn  = makeClassNode(name);
+        cn->methods.push_back(m);
+        auto cls = test::classFromTree(name, *cn, index.arena());
+        cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+        cls.methods[0].markedForCompile = true;
+        return cls;
+    };
+    index.addClass("Callee", makeDom("Callee", add.get()));
+    index.addClass("SynchCallee", makeDom("SynchCallee", syncHelper.get()));
+    index.addClass("Caller", makeDom("Caller", caller.get()));
     CompilerMethod* callerMethod = &index.getClass("Caller")->methods[0];
 
     RegCBackend backend;
@@ -1414,7 +1413,7 @@ TEST(RegCBackendTest, UnresolvableWarnSampleCarriesResolverReason)
     ScopedRegcLogCapture capture;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto   blocks = converter.convert(*caller);
+    auto   blocks = test::convertMethodNode(converter, *caller, arena);
     auto   result = backend.compileMethod("Caller", *callerMethod, blocks, &index);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
 
@@ -1467,21 +1466,21 @@ std::unique_ptr<MethodNode> makeSwitchMethod()
     auto* case0 = new LabelNode(labelArena.create<Label>());
     auto* case1 = new LabelNode(labelArena.create<Label>());
     auto* def   = new LabelNode(labelArena.create<Label>());
-    return makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    return makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                       "pick",
                       "(I)I",
                       {
-                          new VarInsnNode(Opcodes::ILOAD, 0),
+                          new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
                           new TableSwitchInsnNode(0, 1, def->label, {case0->label, case1->label}),
                           case0,
-                          new IntInsnNode(Opcodes::BIPUSH, 7),
-                          new InsnNode(Opcodes::IRETURN),
+                          new IntInsnNode(jbytecode::core::Opcodes::BIPUSH, 7),
+                          new InsnNode(jbytecode::core::Opcodes::IRETURN),
                           case1,
-                          new IntInsnNode(Opcodes::BIPUSH, 9),
-                          new InsnNode(Opcodes::IRETURN),
+                          new IntInsnNode(jbytecode::core::Opcodes::BIPUSH, 9),
+                          new InsnNode(jbytecode::core::Opcodes::IRETURN),
                           def,
-                          new InsnNode(Opcodes::ICONST_M1),
-                          new InsnNode(Opcodes::IRETURN),
+                          new InsnNode(jbytecode::core::Opcodes::ICONST_M1),
+                          new InsnNode(jbytecode::core::Opcodes::IRETURN),
                       },
                       2,
                       1);
@@ -1493,8 +1492,7 @@ TEST(RegCBackendTest, ComputedJumpsMovesCaseKeysIntoDataTable)
 {
     auto method = makeSwitchMethod();
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
@@ -1502,7 +1500,7 @@ TEST(RegCBackendTest, ComputedJumpsMovesCaseKeysIntoDataTable)
     backend.setComputedJumps(true);
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
@@ -1519,15 +1517,14 @@ TEST(RegCBackendTest, ComputedJumpsOffKeepsLiteralCaseKeys)
 {
     auto method = makeSwitchMethod();
 
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     RegCBackend backend;   // 默认关
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto blocks = converter.convert(*method);
+    auto blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;

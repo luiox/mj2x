@@ -29,13 +29,13 @@ using namespace ca::str;
 static std::unique_ptr<ClassNode> makeSimpleClass(const char* className = "TestClass")
 {
     auto cn       = std::make_unique<ClassNode>();
-    cn->version   = Opcodes::V1_8;
-    cn->access    = Opcodes::ACC_PUBLIC;
+    cn->version   = jbytecode::core::Opcodes::V1_8;
+    cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
     cn->name      = Utf8StringRef::from_cstr(className);
     cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
 
     std::vector<ca::str::Utf8StringRef> noExceptions;
-    auto mn       = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn       = std::make_unique<MethodNode>(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                                            ZUtf8StringRef::from_static("add"),
                                            ZUtf8StringRef::from_static("(II)I"),
                                            ZUtf8StringRef::from_static(""),
@@ -43,10 +43,10 @@ static std::unique_ptr<ClassNode> makeSimpleClass(const char* className = "TestC
     mn->maxStack  = 2;
     mn->maxLocals = 2;
 
-    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 0));
-    mn->instructions.add(new VarInsnNode(Opcodes::ILOAD, 1));
-    mn->instructions.add(new InsnNode(Opcodes::IADD));
-    mn->instructions.add(new InsnNode(Opcodes::IRETURN));
+    mn->instructions.add(new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0));
+    mn->instructions.add(new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1));
+    mn->instructions.add(new InsnNode(jbytecode::core::Opcodes::IADD));
+    mn->instructions.add(new InsnNode(jbytecode::core::Opcodes::IRETURN));
 
     cn->methods.push_back(mn.release());
     return cn;
@@ -65,9 +65,9 @@ static std::vector<ca::u8> annotationInterfaceBytes()
 {
     auto                     cn = std::make_unique<ClassNode>();
     ca::str::Utf8StringArena arena;
-    cn->version = Opcodes::V1_8;
-    cn->access  = Opcodes::ACC_PUBLIC | Opcodes::ACC_ABSTRACT | Opcodes::ACC_INTERFACE |
-                 Opcodes::ACC_ANNOTATION;
+    cn->version = jbytecode::core::Opcodes::V1_8;
+    cn->access  = jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_ABSTRACT | jbytecode::core::Opcodes::ACC_INTERFACE |
+                 jbytecode::core::Opcodes::ACC_ANNOTATION;
     cn->name      = arena.intern("pkg/Anno");
     cn->superName = ZUtf8StringRef::from_static("java/lang/Object");
     cn->interfaces.push_back(ZUtf8StringRef::from_static("java/lang/annotation/Annotation"));
@@ -81,7 +81,7 @@ static std::vector<ca::u8> annotationInterfaceBytes()
 
     std::vector<ca::str::Utf8StringRef> noExceptions;
     auto                                addDefaultedMethod = [&](const char* name) {
-        auto  mn = std::make_unique<MethodNode>(Opcodes::ACC_PUBLIC | Opcodes::ACC_ABSTRACT,
+        auto  mn = std::make_unique<MethodNode>(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_ABSTRACT,
                                                ZUtf8StringRef::from_static(name),
                                                ZUtf8StringRef::from_static("()Ljava/lang/String;"),
                                                ZUtf8StringRef::from_static(""),
@@ -259,7 +259,8 @@ TEST(IOTest, InputLoaderRoundtrip)
 
     auto* cls = index->getClass("TestClass");
     ASSERT_NE(cls, nullptr);
-    EXPECT_EQ(cls->classNode->methods.size(), 1);
+    ASSERT_NE(cls->dom, nullptr);
+    EXPECT_EQ(cls->dom->methods.size(), 1u);
 
     std::remove(path.c_str());
 }
@@ -364,7 +365,7 @@ TEST(IOTest, NativeLoaderPostprocessorAddsLoaderClassResource)
     index.setJarInput(true);
     // 仅注入资源，不开 clinit 注入（对齐 StackC 场景）。
     NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll", ".dll", false);
-    postprocessor.process(index);
+    test::runWithDomSync(postprocessor, index);
 
     ASSERT_EQ(index.jarEntries().size(), 1u);
     EXPECT_EQ(index.jarEntries()[0].name, "mj2x/runtime/NativeLoader.class");
@@ -386,39 +387,49 @@ TEST(IOTest, NativeLoaderPostprocessorInjectsClinitLoadCallForModifiedClasses)
     index.setJarInput(true);
 
     // 构造一个 modified + native 类（模拟 RegC injectIntoClass 后的状态）。
-    CompilerClass cls;
-    cls.classNode  = std::make_unique<ClassNode>();
-    cls.modified   = true;
-    cls.isLibrary  = false;
-    cls.classNode->name = index.arena().intern("test/Sample");
     {
+        auto cn = std::make_unique<ClassNode>();
+        cn->name      = index.arena().intern("test/Sample");
+        cn->version   = jbytecode::core::Opcodes::V1_8;
+        cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName = index.arena().intern("java/lang/Object");
         std::vector<ca::str::Utf8StringRef> noExcepts;
-        cls.classNode->methods.push_back(new MethodNode(
-            Opcodes::ACC_PUBLIC | Opcodes::ACC_NATIVE,
+        cn->methods.push_back(new MethodNode(
+            jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_NATIVE,
             index.arena().intern("nativeOp"), index.arena().intern("()V"),
             index.arena().intern(""), noExcepts));
+        auto cls = test::classFromTree("test/Sample", *cn, index.arena());
+        cls.modified  = true;
+        cls.isLibrary = false;
+        index.addClass("test/Sample", std::move(cls));
     }
-    index.addClass("test/Sample", std::move(cls));
 
     // 构造一个仅因 indy/ldc 展开而 modified 的纯字节码类：不得注入 clinit。
-    CompilerClass expandedOnly;
-    expandedOnly.classNode  = std::make_unique<ClassNode>();
-    expandedOnly.modified   = true;
-    expandedOnly.isLibrary  = false;
-    expandedOnly.classNode->name = index.arena().intern("test/IndyOnly");
-    index.addClass("test/IndyOnly", std::move(expandedOnly));
+    {
+        auto cn = std::make_unique<ClassNode>();
+        cn->name      = index.arena().intern("test/IndyOnly");
+        cn->version   = jbytecode::core::Opcodes::V1_8;
+        cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName = index.arena().intern("java/lang/Object");
+        auto cls = test::classFromTree("test/IndyOnly", *cn, index.arena());
+        cls.modified  = true;
+        cls.isLibrary = false;
+        index.addClass("test/IndyOnly", std::move(cls));
+    }
 
     NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll", ".dll", true);
-    postprocessor.process(index);
+    test::runWithDomSync(postprocessor, index);
 
     CompilerClass* out = index.getClass("test/Sample");
     ASSERT_NE(out, nullptr);
-    MethodNode* clinit = findMethod(*out->classNode, "<clinit>");
+    auto sampleTree = test::treeFromDom(*out, index.arena());
+    ASSERT_NE(sampleTree, nullptr);
+    MethodNode* clinit = findMethod(*sampleTree, "<clinit>");
     ASSERT_NE(clinit, nullptr);
     // clinit 应含 NativeLoader.load 调用（INVOKESTATIC mj2x/runtime/NativeLoader.load）。
     bool foundLoadCall = false;
     for (auto* insn : clinit->instructions) {
-        if (insn->getOpcode() == Opcodes::INVOKESTATIC) {
+        if (insn->getOpcode() == jbytecode::core::Opcodes::INVOKESTATIC) {
             auto* mi = static_cast<MethodInsnNode*>(insn);
             if (mi->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
                 mi->name.to_std_string() == "load") {
@@ -431,7 +442,9 @@ TEST(IOTest, NativeLoaderPostprocessorInjectsClinitLoadCallForModifiedClasses)
 
     CompilerClass* indyOnly = index.getClass("test/IndyOnly");
     ASSERT_NE(indyOnly, nullptr);
-    EXPECT_EQ(findMethod(*indyOnly->classNode, "<clinit>"), nullptr)
+    auto indyTree = test::treeFromDom(*indyOnly, index.arena());
+    ASSERT_NE(indyTree, nullptr);
+    EXPECT_EQ(findMethod(*indyTree, "<clinit>"), nullptr)
         << "indy/ldc-expanded class without native methods must not get a clinit load call";
 }
 
@@ -445,7 +458,7 @@ TEST(IOTest, NativeLoaderTempFileAvoidsCreateTempFileSecureRandomTax)
     CompilerIndex index;
     index.setJarInput(true);
     NativeLoaderPostprocessor postprocessor("META-INF/mj2x/native/app.dll", ".dll", false);
-    postprocessor.process(index);
+    test::runWithDomSync(postprocessor, index);
 
     ASSERT_EQ(index.jarEntries().size(), 1u);
     ca::str::Utf8StringArena arena;
@@ -461,7 +474,7 @@ TEST(IOTest, NativeLoaderTempFileAvoidsCreateTempFileSecureRandomTax)
     // （单元形状测试当时未覆盖此指令，漏网进门禁才暴露）。
     bool fileInitStringString = false;
     for (auto* insn : helper->instructions) {
-        if (insn->getOpcode() != Opcodes::INVOKESPECIAL) continue;
+        if (insn->getOpcode() != jbytecode::core::Opcodes::INVOKESPECIAL) continue;
         auto* mi = static_cast<MethodInsnNode*>(insn);
         if (mi->owner.to_std_string() == "java/io/File" && mi->name.to_std_string() == "<init>") {
             ASSERT_FALSE(fileInitStringString) << "unexpected multiple File.<init> in newTempFile";
@@ -477,7 +490,7 @@ TEST(IOTest, NativeLoaderTempFileAvoidsCreateTempFileSecureRandomTax)
     bool callsHelper         = false;
     bool callsCreateTempFile = false;
     for (auto* insn : load->instructions) {
-        if (insn->getOpcode() != Opcodes::INVOKESTATIC) continue;
+        if (insn->getOpcode() != jbytecode::core::Opcodes::INVOKESTATIC) continue;
         auto* mi = static_cast<MethodInsnNode*>(insn);
         if (mi->owner.to_std_string() == "mj2x/runtime/NativeLoader" &&
             mi->name.to_std_string() == "newTempFile") {
@@ -499,7 +512,7 @@ TEST(IOTest, CLoaderPostprocessorAddsDispatchLoaderClassResource)
     index.setJarInput(true);
     CLoaderPostprocessor postprocessor;
 
-    postprocessor.process(index);
+    test::runWithDomSync(postprocessor, index);
 
     ASSERT_EQ(index.jarEntries().size(), 1u);
     EXPECT_EQ(index.jarEntries()[0].name, "mj2x/cloader/Loader.class");
@@ -510,7 +523,7 @@ TEST(IOTest, CLoaderPostprocessorAddsDispatchLoaderClassResource)
     EXPECT_EQ(loaderClass->name.to_std_string(), "mj2x/cloader/Loader");
     auto* registerMethod = findMethod(*loaderClass, "registerNativesForClass");
     ASSERT_NE(registerMethod, nullptr);
-    EXPECT_TRUE((registerMethod->access & Opcodes::ACC_NATIVE) != 0);
+    EXPECT_TRUE((registerMethod->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
 }
 
 TEST(IOTest, CLoaderPostprocessorAddsSidecarClassForClassOutput)
@@ -518,15 +531,16 @@ TEST(IOTest, CLoaderPostprocessorAddsSidecarClassForClassOutput)
     CompilerIndex        index;
     CLoaderPostprocessor postprocessor;
 
-    postprocessor.process(index);
+    test::runWithDomSync(postprocessor, index);
 
     auto* loaderClass = index.getClass("mj2x/cloader/Loader");
     ASSERT_NE(loaderClass, nullptr);
-    ASSERT_NE(loaderClass->classNode, nullptr);
-    EXPECT_EQ(loaderClass->classNode->name.to_std_string(), "mj2x/cloader/Loader");
-    auto* registerMethod = findMethod(*loaderClass->classNode, "registerNativesForClass");
+    auto loaderTree = test::treeFromDom(*loaderClass, index.arena());
+    ASSERT_NE(loaderTree, nullptr);
+    EXPECT_EQ(loaderTree->name.to_std_string(), "mj2x/cloader/Loader");
+    auto* registerMethod = findMethod(*loaderTree, "registerNativesForClass");
     ASSERT_NE(registerMethod, nullptr);
-    EXPECT_TRUE((registerMethod->access & Opcodes::ACC_NATIVE) != 0);
+    EXPECT_TRUE((registerMethod->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
 }
 
 // 可读源码版(mj2x/cloader/Loader.java)与生成器防漂移守卫:关键结构面
@@ -662,7 +676,7 @@ TEST(PipelineTest, JarPipelineMarksClassesNativeAndPreservesResources)
     auto                     cn  = readClassFromBytes(classBytes, arena);
     auto*                    add = findMethod(*cn, "add");
     ASSERT_NE(add, nullptr);
-    EXPECT_TRUE((add->access & Opcodes::ACC_NATIVE) != 0);
+    EXPECT_TRUE((add->access & jbytecode::core::Opcodes::ACC_NATIVE) != 0);
     auto* bridge = findMethod(*cn, "__mj2x_registerClass");
     EXPECT_EQ(bridge, nullptr);
     EXPECT_NE(findMethod(*cn, "<clinit>"), nullptr);

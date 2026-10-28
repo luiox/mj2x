@@ -7,6 +7,8 @@
 //（判定=标记，不改写行为；既有 invokedynamic_preprocessor_test.cpp 锁定展开行为）。
 #include <gmock/gmock.h>
 
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,6 +17,7 @@
 #include "mj2x/preprocessor/invokedynamic_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 #include "libca/core/any.hpp"
+#include "test_helper.hpp"
 
 using namespace mj2x;
 using namespace jbytecode::core;
@@ -22,10 +25,33 @@ using namespace jbytecode::tree;
 
 namespace {
 
-// 在 index 里造一个类，含一个静态方法，方法体是给定指令。返回方法指针（归 index 所有）。
-MethodNode* addMethodToIndex(CompilerIndex& index, const std::string& className,
-                             const std::string& methodName, const std::string& methodDesc,
-                             const std::vector<AbstractInsnNode*>& insns)
+// 树夹具暂存（键 = 类名，投影追加不销毁）：批 6d 后 CompilerClass 无树槽，DOM 由
+// classFromTree 一次性落定；追加式 shelf 让历次回投影存活到测试结束（方法指针不悬垂）。
+std::map<std::string, std::vector<std::unique_ptr<ClassNode>>>& treeShelf()
+{
+    static std::map<std::string, std::vector<std::unique_ptr<ClassNode>>> shelf;
+    return shelf;
+}
+
+// 按类名+方法名现查树方法（DOM 权威改写后经回投影现查，指针随投影存活）。
+MethodNode* findMethodIn(CompilerIndex& index, const std::string& className,
+                         const std::string& methodName)
+{
+    auto* cls = index.getClass(className);
+    if (cls == nullptr) return nullptr;
+    auto tree = test::treeFromDom(*cls, index.arena());
+    if (tree == nullptr) return nullptr;
+    // append-only projection shelf: earlier projections stay alive, so method
+    // pointers taken from previous findMethodIn calls of the same class stay valid.
+    auto& projections = treeShelf()[className];
+    projections.push_back(std::move(tree));
+    return test::findMethodNode(projections.back().get(), methodName);
+}
+
+// 在 index 里造一个类，含一个静态方法，方法体是给定指令（classFromTree 落 DOM）。
+void addMethodToIndex(CompilerIndex& index, const std::string& className,
+                      const std::string& methodName, const std::string& methodDesc,
+                      const std::vector<AbstractInsnNode*>& insns)
 {
     auto& arena = index.arena();
     auto  cn    = std::make_unique<ClassNode>();
@@ -43,10 +69,8 @@ MethodNode* addMethodToIndex(CompilerIndex& index, const std::string& className,
     for (auto* insn : insns) mn->instructions.add(insn);
     cn->methods.push_back(mn);
 
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    index.addClass(className, std::move(cls));
-    return index.getClass(className)->classNode->methods.back();
+    treeShelf()[className].push_back(std::move(cn));
+    index.addClass(className, test::classFromTree(className, *treeShelf()[className].back(), arena));
 }
 
 // 在 index 里注册一个空壳类（供 D1 分支「bsm owner 在编译输入内」判定用）。
@@ -58,9 +82,16 @@ void addEmptyClass(CompilerIndex& index, const std::string& className)
     cn->version   = Opcodes::V1_8;
     cn->access    = Opcodes::ACC_PUBLIC;
     cn->superName = arena.intern("java/lang/Object");
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    index.addClass(className, std::move(cls));
+    index.addClass(className, test::classFromTree(className, *cn, arena));
+}
+
+// 判定入口（批 6d 后）：站点自持数据（indy 名/描述符/bsm/bsmArgs）直接走
+// classifyIndySitePayload——树包装 classifyIndySite 已随树载体退役。
+IndyDispatchDecision classifySite(CompilerIndex& index, const std::string& name,
+                                  const std::string& desc, const mj2x::Handle& bsm,
+                                  std::vector<ca::core::Any> bsmArgs)
+{
+    return classifyIndySitePayload(index, name, desc, bsm, bsmArgs);
 }
 
 // 统计方法里 INVOKE_DYNAMIC_INSN 数量。
@@ -73,20 +104,20 @@ int countIndy(MethodNode* m)
     return n;
 }
 
-Handle stringConcatBsm(CompilerIndex& index, const char* name)
+mj2x::Handle stringConcatBsm(CompilerIndex& index, const char* name)
 {
     auto& arena = index.arena();
-    return Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/StringConcatFactory"),
+    return mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/StringConcatFactory"),
                   arena.intern(name),
                   arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                                "Ljava/lang/invoke/MethodType;Ljava/lang/String;"
                                "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"));
 }
 
-Handle lmfBsm(CompilerIndex& index, const char* name)
+mj2x::Handle lmfBsm(CompilerIndex& index, const char* name)
 {
     auto& arena = index.arena();
-    return Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
+    return mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
                   arena.intern(name),
                   arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                                "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;"
@@ -94,20 +125,20 @@ Handle lmfBsm(CompilerIndex& index, const char* name)
                                "Ljava/lang/invoke/CallSite;"));
 }
 
-Handle lmfAltBsm(CompilerIndex& index)
+mj2x::Handle lmfAltBsm(CompilerIndex& index)
 {
     auto& arena = index.arena();
-    return Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
+    return mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/invoke/LambdaMetafactory"),
                   arena.intern("altMetafactory"),
                   arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                                "Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)"
                                "Ljava/lang/invoke/CallSite;"));
 }
 
-Handle recordObjectMethodsBsm(CompilerIndex& index)
+mj2x::Handle recordObjectMethodsBsm(CompilerIndex& index)
 {
     auto& arena = index.arena();
-    return Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/runtime/ObjectMethods"),
+    return mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("java/lang/runtime/ObjectMethods"),
                   arena.intern("bootstrap"),
                   arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;"
                                "Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/String;"
@@ -115,25 +146,45 @@ Handle recordObjectMethodsBsm(CompilerIndex& index)
                                "Ljava/lang/Object;"));
 }
 
-// lambda bsmArgs 三件套：[0]=sam、[1]=impl、[2]=instantiated。
+// lambda bsmArgs 三件套：[0]=sam、[1]=impl、[2]=instantiated（Any 载荷 = mj2x 门面）。
 std::vector<ca::core::Any> lambdaBsmArgs(CompilerIndex& index, const std::string& samDesc,
-                                         const Handle& impl, const std::string& instantiatedDesc)
+                                         const mj2x::Handle& impl,
+                                         const std::string& instantiatedDesc)
 {
     auto&                      arena = index.arena();
     std::vector<ca::core::Any> args;
-    args.emplace_back(Type::getMethodType(arena.intern(samDesc.c_str())));
+    args.emplace_back(mj2x::Type::getMethodType(arena.intern(samDesc.c_str())));
     args.emplace_back(impl);
-    args.emplace_back(Type::getMethodType(arena.intern(instantiatedDesc.c_str())));
+    args.emplace_back(mj2x::Type::getMethodType(arena.intern(instantiatedDesc.c_str())));
     return args;
 }
 
 InvokeDynamicInsnNode* makeIndy(CompilerIndex& index, const std::string& name,
-                                const std::string& desc, const Handle& bsm,
+                                const std::string& desc, const mj2x::Handle& bsm,
                                 std::vector<ca::core::Any> bsmArgs)
 {
     auto& arena = index.arena();
-    return new InvokeDynamicInsnNode(arena.intern(name.c_str()), arena.intern(desc.c_str()), bsm,
-                                     std::move(bsmArgs));
+    // 树夹具仍走旧栈节点：bsm 与载荷里的门面 Handle/MethodType 一并投影回旧栈
+    // 形态——树→字节序列化只认旧栈常量（门面载荷是管线读出侧形态，喂树即坏
+    // CP：先前只投影 bsm 不投影载荷，BootstrapMethods 写坏报 bad CP utf8 0）。
+    jbytecode::core::Handle treeBsm(bsm.getTag(), bsm.getOwner(), bsm.getName(), bsm.getDesc());
+    std::vector<ca::core::Any> treeArgs;
+    for (const auto& a : bsmArgs) {
+        if (auto* h = a.as<mj2x::Handle>()) {
+            treeArgs.emplace_back(jbytecode::core::Handle(h->getTag(), h->getOwner(),
+                                                          h->getName(), h->getDesc()));
+        }
+        else if (auto* t = a.as<mj2x::Type>()) {
+            ca::str::Utf8StringArena scratch;
+            treeArgs.emplace_back(jbytecode::core::Type::getMethodType(arena.intern(
+                ca::str::Utf8StringRef::from_string_view(t->getDescriptor(scratch)))));
+        }
+        else {
+            treeArgs.push_back(a);
+        }
+    }
+    return new InvokeDynamicInsnNode(arena.intern(name.c_str()), arena.intern(desc.c_str()),
+                                     treeBsm, std::move(treeArgs));
 }
 
 }   // namespace
@@ -146,13 +197,11 @@ TEST(IndyDispatchClassifyTest, StatelessLambdaIsStaticExpanded)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
-                       arena.intern("(I)I"));
-    auto* indy = makeIndy(index, "applyAsInt", "()Ljava/util/function/IntUnaryOperator;",
+    auto impl = mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
+                       arena.intern("(I)I"), false);
+    auto d = classifySite(index, "applyAsInt", "()Ljava/util/function/IntUnaryOperator;",
                           lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "(I)I", impl, "(I)I"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::StaticExpanded);
     EXPECT_STREQ(d.reason, "lambda-metafactory: expandable by phase-2 (synthesized impl class)");
 }
@@ -163,13 +212,11 @@ TEST(IndyDispatchClassifyTest, CapturingLambdaIsStaticExpanded)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_INVOKESTATIC, arena.intern("Cap"), arena.intern("lambda$make$0"),
-                       arena.intern("(II)I"));
-    auto* indy = makeIndy(index, "applyAsInt", "(I)Ljava/util/function/IntUnaryOperator;",
+    auto impl = mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("Cap"), arena.intern("lambda$make$0"),
+                       arena.intern("(II)I"), false);
+    auto d = classifySite(index, "applyAsInt", "(I)Ljava/util/function/IntUnaryOperator;",
                           lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "(I)I", impl, "(I)I"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::StaticExpanded);
     EXPECT_STREQ(d.reason, "lambda-metafactory: expandable by phase-2 (synthesized impl class)");
 }
@@ -180,12 +227,10 @@ TEST(IndyDispatchClassifyTest, UnboundInstanceMethodRefIsStaticExpanded)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Rec"), arena.intern("val"),
-                       arena.intern("()I"));
-    auto* indy = makeIndy(index, "apply", "()Lp/Fn;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Rec"), arena.intern("val"),
+                       arena.intern("()I"), false);
+    auto d = classifySite(index, "apply", "()Lp/Fn;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "(Lp/Rec;)I", impl, "(Lp/Rec;)I"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::StaticExpanded);
 }
 
@@ -195,12 +240,10 @@ TEST(IndyDispatchClassifyTest, ConstructorRefIsStaticExpanded)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_NEWINVOKESPECIAL, arena.intern("p/Rec"), arena.intern("<init>"),
-                       arena.intern("(I)V"));
-    auto* indy = makeIndy(index, "make", "()Lp/Factory;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_NEWINVOKESPECIAL, arena.intern("p/Rec"), arena.intern("<init>"),
+                       arena.intern("(I)V"), false);
+    auto d = classifySite(index, "make", "()Lp/Factory;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "(I)Lp/Rec;", impl, "(I)Lp/Rec;"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::StaticExpanded);
 }
 
@@ -211,12 +254,10 @@ TEST(IndyDispatchClassifyTest, MakeConcatWithConstantsIsStaticExpanded)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(std::string("a=\x01,s=\x01"));
-    auto* indy = makeIndy(index, "makeConcatWithConstants",
+    bsmArgs.emplace_back(arena.intern("a=\x01,s=\x01"));
+    auto d = classifySite(index, "makeConcatWithConstants",
                           "(ILjava/lang/String;)Ljava/lang/String;",
                           stringConcatBsm(index, "makeConcatWithConstants"), std::move(bsmArgs));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::StaticExpanded);
     EXPECT_STREQ(d.reason,
                  "string-concat: makeConcatWithConstants expanded to StringBuilder bytecode by phase-1");
@@ -227,10 +268,8 @@ TEST(IndyDispatchClassifyTest, MakeConcatIsStaticExpanded)
 {
     CompilerIndex index;
 
-    auto* indy = makeIndy(index, "makeConcat", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+    auto d = classifySite(index, "makeConcat", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
                           stringConcatBsm(index, "makeConcat"), std::vector<ca::core::Any>{});
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::StaticExpanded);
     EXPECT_STREQ(d.reason, "string-concat: makeConcat expanded to StringBuilder bytecode by phase-1");
 }
@@ -244,13 +283,11 @@ TEST(IndyDispatchClassifyTest, RecordObjectMethodsIsDirectCandidate)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(mj2x::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x;y"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(I)Lp/Point;")));
-    auto* indy = makeIndy(index, "toString", "(Lp/Point;)Ljava/lang/String;",
+    bsmArgs.emplace_back(mj2x::Type::getMethodType(arena.intern("(I)Lp/Point;")));
+    auto d = classifySite(index, "toString", "(Lp/Point;)Ljava/lang/String;",
                           recordObjectMethodsBsm(index), std::move(bsmArgs));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RecordObjectMethods);
     EXPECT_STREQ(d.reason, "record ObjectMethods.bootstrap: statically nameable accessor targets");
 }
@@ -260,10 +297,8 @@ TEST(IndyDispatchClassifyTest, RecordMalformedArgsFallsBack)
 {
     CompilerIndex index;
 
-    auto* indy = makeIndy(index, "hashCode", "(Lp/Point;)I", recordObjectMethodsBsm(index),
+    auto d = classifySite(index, "hashCode", "(Lp/Point;)I", recordObjectMethodsBsm(index),
                           std::vector<ca::core::Any>{});
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RuntimeHelper);
     EXPECT_STREQ(d.reason, "record ObjectMethods.bootstrap: malformed bsmArgs shape");
 }
@@ -276,12 +311,10 @@ TEST(IndyDispatchClassifyTest, StaticFieldGetterIsDirectFieldAccess)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
-                       arena.intern("I"));
-    auto* indy = makeIndy(index, "get", "()Lp/Sup;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
+                       arena.intern("I"), false);
+    auto d = classifySite(index, "get", "()Lp/Sup;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "()I", impl, "()I"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field getter (GETSTATIC): direct field access candidate");
@@ -293,12 +326,10 @@ TEST(IndyDispatchClassifyTest, InstanceFieldGetterIsDirectFieldAccess)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_GETFIELD, arena.intern("p/Rec"), arena.intern("f"),
-                       arena.intern("I"));
-    auto* indy = makeIndy(index, "get", "(Lp/Rec;)Lp/Sup;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_GETFIELD, arena.intern("p/Rec"), arena.intern("f"),
+                       arena.intern("I"), false);
+    auto d = classifySite(index, "get", "(Lp/Rec;)Lp/Sup;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "()I", impl, "()I"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field getter (GETFIELD): direct field access candidate");
@@ -310,12 +341,10 @@ TEST(IndyDispatchClassifyTest, InstanceFieldSetterIsDirectFieldAccess)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_PUTFIELD, arena.intern("p/Rec"), arena.intern("f"),
-                       arena.intern("I"));
-    auto* indy = makeIndy(index, "set", "(Lp/Rec;)Lp/Csm;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_PUTFIELD, arena.intern("p/Rec"), arena.intern("f"),
+                       arena.intern("I"), false);
+    auto d = classifySite(index, "set", "(Lp/Rec;)Lp/Csm;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "(I)V", impl, "(I)V"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field setter (PUTFIELD): direct field access candidate");
@@ -327,12 +356,10 @@ TEST(IndyDispatchClassifyTest, FieldGetterTypeMismatchFallsBack)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
-                       arena.intern("I"));
-    auto* indy = makeIndy(index, "get", "()Lp/Sup;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
+                       arena.intern("I"), false);
+    auto d = classifySite(index, "get", "()Lp/Sup;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "()J", impl, "()J"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RuntimeHelper);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field handle impl outside strict direct-access subset");
@@ -347,12 +374,10 @@ TEST(IndyDispatchClassifyTest, DirectFieldGetterShapeEngagesPayload)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
-                       arena.intern("I"));
-    auto* indy = makeIndy(index, "get", "()I", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
+                       arena.intern("I"), false);
+    auto d = classifySite(index, "get", "()I", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "()I", impl, "()I"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field getter (GETSTATIC): direct field access site "
@@ -372,12 +397,10 @@ TEST(IndyDispatchClassifyTest, DirectFieldSetterShapeEngagesPayload)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_PUTFIELD, arena.intern("p/Rec"), arena.intern("f"),
-                       arena.intern("I"));
-    auto* indy = makeIndy(index, "set", "(Lp/Rec;I)V", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_PUTFIELD, arena.intern("p/Rec"), arena.intern("f"),
+                       arena.intern("I"), false);
+    auto d = classifySite(index, "set", "(Lp/Rec;I)V", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "(I)V", impl, "(I)V"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field setter (PUTFIELD): direct field access site "
@@ -398,12 +421,10 @@ TEST(IndyDispatchClassifyTest, LambdaCaptureFieldHandleKeepsCandidateWithoutPayl
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
-                       arena.intern("I"));
-    auto* indy = makeIndy(index, "get", "()Lp/Sup;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_GETSTATIC, arena.intern("p/Rec"), arena.intern("SV"),
+                       arena.intern("I"), false);
+    auto d = classifySite(index, "get", "()Lp/Sup;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "()I", impl, "()I"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::DirectFieldAccess);
     EXPECT_STREQ(d.reason,
                  "lambda-metafactory field getter (GETSTATIC): direct field access candidate");
@@ -419,15 +440,12 @@ TEST(IndyDispatchClassifyTest, RecordAccessorMatchEngagesAccessorPayload)
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(mj2x::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
-    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
-                                arena.intern("x"), arena.intern("()I")));
-    auto* indy =
-        makeIndy(index, "x", "(Lp/Point;)I", recordObjectMethodsBsm(index), std::move(bsmArgs));
-
-    auto d = classifyIndySite(index, indy);
+    bsmArgs.emplace_back(mj2x::Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(mj2x::Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
+                                  arena.intern("x"), arena.intern("()I"), false));
+    auto d = classifySite(index, "x", "(Lp/Point;)I", recordObjectMethodsBsm(index), std::move(bsmArgs));
     EXPECT_EQ(d.form, IndyDispatchForm::RecordObjectMethods);
     EXPECT_STREQ(d.reason, "record ObjectMethods.bootstrap: statically nameable accessor targets");
     ASSERT_TRUE(d.recordMethods.has_value());
@@ -438,7 +456,7 @@ TEST(IndyDispatchClassifyTest, RecordAccessorMatchEngagesAccessorPayload)
     EXPECT_EQ(d.recordMethods->accessor->tag, Opcodes::H_INVOKEVIRTUAL);
     EXPECT_EQ(d.recordMethods->accessor->owner, "p/Point");
     EXPECT_EQ(d.recordMethods->accessor->name, "x");
-    EXPECT_EQ(d.recordMethods->accessor->name, indy->name.to_std_string());
+    EXPECT_EQ(d.recordMethods->accessor->name, "x");
     EXPECT_EQ(d.recordMethods->accessor->desc, "()I");
     EXPECT_FALSE(d.directField.has_value());
 }
@@ -451,15 +469,13 @@ TEST(IndyDispatchClassifyTest, ReservedObjectMethodsNameKeepsHelperFallbackPaylo
     auto&         arena = index.arena();
 
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(Type::getObjectType(arena.intern("p/Point")));
+    bsmArgs.emplace_back(mj2x::Type::getObjectType(arena.intern("p/Point")));
     bsmArgs.emplace_back(std::string("x;y"));
-    bsmArgs.emplace_back(Type::getMethodType(arena.intern("(Lp/Point;)I")));
-    bsmArgs.emplace_back(Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
-                                arena.intern("x"), arena.intern("()I")));
-    auto* indy = makeIndy(index, "hashCode", "(Lp/Point;)I", recordObjectMethodsBsm(index),
+    bsmArgs.emplace_back(mj2x::Type::getMethodType(arena.intern("(Lp/Point;)I")));
+    bsmArgs.emplace_back(mj2x::Handle(Opcodes::H_INVOKEVIRTUAL, arena.intern("p/Point"),
+                                  arena.intern("x"), arena.intern("()I"), false));
+    auto d = classifySite(index, "hashCode", "(Lp/Point;)I", recordObjectMethodsBsm(index),
                           std::move(bsmArgs));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RecordObjectMethods);
     EXPECT_STREQ(d.reason, "record ObjectMethods.bootstrap: statically nameable accessor targets");
     ASSERT_TRUE(d.recordMethods.has_value());
@@ -475,12 +491,10 @@ TEST(IndyDispatchClassifyTest, LmfPrimitiveNarrowingFallsBack)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_INVOKESTATIC, arena.intern("N"), arena.intern("useInt"),
-                       arena.intern("(I)V"));
-    auto* indy = makeIndy(index, "accept", "()Lp/LongSink;", lmfBsm(index, "metafactory"),
+    auto impl = mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("N"), arena.intern("useInt"),
+                       arena.intern("(I)V"), false);
+    auto d = classifySite(index, "accept", "()Lp/LongSink;", lmfBsm(index, "metafactory"),
                           lambdaBsmArgs(index, "(J)V", impl, "(J)V"));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RuntimeHelper);
     EXPECT_STREQ(
         d.reason,
@@ -493,14 +507,12 @@ TEST(IndyDispatchClassifyTest, AltMetafactoryUnknownFlagsFallBack)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto impl = Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
-                       arena.intern("(I)I"));
+    auto impl = mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
+                       arena.intern("(I)I"), false);
     auto args = lambdaBsmArgs(index, "(I)I", impl, "(I)I");
     args.emplace_back(8);   // 未知 flag 位
-    auto* indy = makeIndy(index, "applyAsInt", "()Ljava/util/function/IntUnaryOperator;",
+    auto d = classifySite(index, "applyAsInt", "()Ljava/util/function/IntUnaryOperator;",
                           lmfAltBsm(index), std::move(args));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RuntimeHelper);
     EXPECT_STREQ(
         d.reason, "lambda-metafactory: altMetafactory tail parse failed (unknown flags / shape)");
@@ -516,16 +528,14 @@ TEST(IndyDispatchClassifyTest, CustomBootstrapInCompilationInputFallsBack)
 
     std::vector<ca::core::Any> bsmArgs;
     bsmArgs.emplace_back(42);
-    auto* indy = makeIndy(
-        index, "call", "(I)I",
-        Handle(Opcodes::H_INVOKESTATIC, index.arena().intern("my/Bsm"),
-               index.arena().intern("bootstrap"),
-               index.arena().intern(
-                   "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/"
-                   "MethodType;I)Ljava/lang/invoke/CallSite;")),
+    auto d = classifySite(index, "call", "(I)I",
+        mj2x::Handle(Opcodes::H_INVOKESTATIC, index.arena().intern("my/Bsm"),
+                     index.arena().intern("bootstrap"),
+                     index.arena().intern(
+                         "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/"
+                         "invoke/MethodType;I)Ljava/lang/invoke/CallSite;"),
+                     false),
         std::move(bsmArgs));
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RuntimeHelper);
     EXPECT_STREQ(
         d.reason,
@@ -538,15 +548,13 @@ TEST(IndyDispatchClassifyTest, CustomBootstrapExternalBsmFallsBack)
     CompilerIndex index;
     auto&         arena = index.arena();
 
-    auto* indy = makeIndy(
-        index, "call", "(I)I",
-        Handle(Opcodes::H_INVOKESTATIC, arena.intern("some/lib/Hidden"),
-               arena.intern("link"),
-               arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/"
-                            "invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
+    auto d = classifySite(index, "call", "(I)I",
+        mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("some/lib/Hidden"),
+                     arena.intern("link"),
+                     arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/"
+                                  "lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;"),
+                     false),
         std::vector<ca::core::Any>{});
-
-    auto d = classifyIndySite(index, indy);
     EXPECT_EQ(d.form, IndyDispatchForm::RuntimeHelper);
     EXPECT_STREQ(d.reason, "custom bootstrap: bsm owner external (runtime crack candidate only)");
 }
@@ -564,27 +572,28 @@ TEST(IndyDispatchClassifyTest, ReportCollectsOrdinalsFormsAndCounts)
     auto* concat = makeIndy(index, "makeConcat", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
                             stringConcatBsm(index, "makeConcat"), std::vector<ca::core::Any>{});
     // 站点2：无参 lambda。
-    auto impl = Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
-                       arena.intern("(I)I"));
+    auto impl = mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("Lam"), arena.intern("base"),
+                       arena.intern("(I)I"), false);
     auto* lambda = makeIndy(index, "applyAsInt", "()Ljava/util/function/IntUnaryOperator;",
                             lmfBsm(index, "metafactory"), lambdaBsmArgs(index, "(I)I", impl, "(I)I"));
     // 站点3：自定义 bootstrap（外部 owner）。
     auto* custom = makeIndy(
         index, "call", "(I)I",
-        Handle(Opcodes::H_INVOKESTATIC, arena.intern("some/lib/Hidden"), arena.intern("link"),
+        mj2x::Handle(Opcodes::H_INVOKESTATIC, arena.intern("some/lib/Hidden"), arena.intern("link"),
                arena.intern("(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/"
                             "invoke/MethodType;)Ljava/lang/invoke/CallSite;")),
         std::vector<ca::core::Any>{});
 
-    MethodNode* m = addMethodToIndex(
+    addMethodToIndex(
         index, "Mix", "run", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
         {new VarInsnNode(Opcodes::ALOAD, 0), new VarInsnNode(Opcodes::ALOAD, 1), concat,
          new InsnNode(Opcodes::ICONST_0), lambda, new InsnNode(Opcodes::POP),
          new InsnNode(Opcodes::ICONST_0), custom, new InsnNode(Opcodes::POP),
          new InsnNode(Opcodes::ARETURN)});
 
+    // DOM 载体 pass：树夹具经三明治进 DOM（editsDom 默认 true，裸 process 无 dom 可接管）。
     IndyDispatchReport report;
-    InvokeDynamicPreprocessor().process(index, &report);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index, &report);
 
     // 判定报告：3 站点、指令序 0/1/2、形态与定位正确。
     ASSERT_EQ(report.sites.size(), 3u);
@@ -606,7 +615,7 @@ TEST(IndyDispatchClassifyTest, ReportCollectsOrdinalsFormsAndCounts)
     EXPECT_EQ(report.count(IndyDispatchForm::RecordObjectMethods), 0u);
 
     // 字节码输出不受 report 收集影响：concat/lambda 展开、自定义 indy 保留。
-    EXPECT_EQ(countIndy(m), 1);
+    EXPECT_EQ(countIndy(findMethodIn(index, "Mix", "run")), 1);
     EXPECT_NE(index.getClass("mj2x/lambda/Lambda$0"), nullptr);
 }
 
@@ -615,17 +624,17 @@ TEST(IndyDispatchClassifyTest, ReportCollectsOrdinalsFormsAndCounts)
 // 展开后的指令形态一致。
 namespace {
 
-// 构建一个含单个 makeConcatWithConstants 站点的 index，返回方法指针。
-MethodNode* buildSingleConcatIndex(CompilerIndex& index)
+// 构建一个含单个 makeConcatWithConstants 站点的 index。
+void buildSingleConcatIndex(CompilerIndex& index)
 {
     auto& arena = index.arena();
     std::vector<ca::core::Any> bsmArgs;
-    bsmArgs.emplace_back(std::string("a=\x01"));
+    bsmArgs.emplace_back(arena.intern("a=\x01"));
     auto* indy = makeIndy(index, "makeConcatWithConstants", "(I)Ljava/lang/String;",
                           stringConcatBsm(index, "makeConcatWithConstants"), std::move(bsmArgs));
-    return addMethodToIndex(index, "Same", "join", "(I)Ljava/lang/String;",
-                            {new VarInsnNode(Opcodes::ILOAD, 0), indy,
-                             new InsnNode(Opcodes::ARETURN)});
+    addMethodToIndex(index, "Same", "join", "(I)Ljava/lang/String;",
+                     {new VarInsnNode(Opcodes::ILOAD, 0), indy,
+                      new InsnNode(Opcodes::ARETURN)});
 }
 
 }   // namespace
@@ -633,16 +642,17 @@ MethodNode* buildSingleConcatIndex(CompilerIndex& index)
 TEST(IndyDispatchClassifyTest, ReportOverloadMatchesDefaultOverloadBehavior)
 {
     CompilerIndex index1;
-    MethodNode*   method1 = buildSingleConcatIndex(index1);
-    InvokeDynamicPreprocessor().process(index1);
+    buildSingleConcatIndex(index1);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index1);
 
     CompilerIndex   index2;
-    MethodNode*     method2 = buildSingleConcatIndex(index2);
+    buildSingleConcatIndex(index2);
     IndyDispatchReport report;
-    InvokeDynamicPreprocessor().process(index2, &report);
+    test::runWithDomSync(InvokeDynamicPreprocessor(), index2, &report);
 
-    EXPECT_EQ(countIndy(method1), 0);
-    EXPECT_EQ(countIndy(method2), 0);
+    // DOM 载体 pass 后树由 syncDomToTree 重建，断言面现查。
+    EXPECT_EQ(countIndy(findMethodIn(index1, "Same", "join")), 0);
+    EXPECT_EQ(countIndy(findMethodIn(index2, "Same", "join")), 0);
     ASSERT_EQ(report.sites.size(), 1u);
     EXPECT_EQ(report.sites[0].form, IndyDispatchForm::StaticExpanded);
     EXPECT_EQ(report.sites[0].className, "Same");

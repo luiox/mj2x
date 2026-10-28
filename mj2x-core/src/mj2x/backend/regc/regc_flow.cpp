@@ -10,7 +10,8 @@
 
 #include "mj2x/mir/passes/const_key_derivation.hpp"
 
-#include "jbytecode/jbytecode.hpp"
+#include "mj2x/core/jvm_opcodes.hpp"
+#include "mj2x/core/jvm_type.hpp"
 #include "libca/str/format.hpp"
 #include "mj2x/codegen/c_expr.hpp"
 #include "mj2x/codegen/c_helpers.hpp"
@@ -23,7 +24,6 @@
 
 namespace mj2x {
 
-using namespace jbytecode::core;
 
 using codegen::cStringLiteral;
 using codegen::CSourceStream;
@@ -358,12 +358,12 @@ bool isPrivateThisCall(const RegCFunctionEmitState& state, const RegInstruction&
     if (receiver.reg.value != fn.parameters[0].id.value) return false;
     if (state.classIndex == nullptr) return false;
     CompilerClass* cls = state.classIndex->getClass(ins.method.owner.to_std_string());
-    if (cls == nullptr || cls->classNode == nullptr) return false;
+    if (cls == nullptr || cls->dom == nullptr) return false;
     const std::string name = ins.method.name.to_std_string();
     const std::string desc = ins.method.desc.to_std_string();
-    for (const auto& mn : cls->classNode->methods) {
-        if (mn->name.to_std_string() == name && mn->desc.to_std_string() == desc) {
-            return (mn->access & jbytecode::core::Opcodes::ACC_PRIVATE) != 0;
+    for (const auto& mn : cls->methods) {
+        if (mn.name == name && mn.desc == desc) {
+            return (mn.access & Opcodes::ACC_PRIVATE) != 0;
         }
     }
     return false;

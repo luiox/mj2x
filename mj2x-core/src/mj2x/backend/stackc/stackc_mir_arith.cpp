@@ -6,13 +6,13 @@
 ///          自带完整缩进文本经 append 整体写入。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"
 
+#include "mj2x/core/jvm_type.hpp"
+
 #include "libca/str/format.hpp"
 #include <cmath>
 
 namespace mj2x {
 
-using namespace jbytecode::core;
-using namespace jbytecode::analysis;
 using codegen::cFloatLiteral;
 using codegen::cStringLiteral;
 using codegen::fnv1a64;
@@ -68,7 +68,8 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
         // String.intern() 归一化进 JVM 字符串池，缓存在 TU 级
         // _mj2x_literal_cache[]（global ref）；同内容常量跨站点/跨方法/
         // 跨 String.intern() 恒等，命中路径 0 JNI、不耗 local ref。
-        const auto value  = std::get<ca::str::Utf8StringRef>(node->value).to_std_string();
+        const auto&  lit   = std::get<ca::str::Utf8StringRef>(node->value);
+        const std::string value(reinterpret_cast<const char*>(lit.data()), lit.byte_length());
         const auto offset = stringPoolOffsetFor(value);
         const auto length = stringPoolLengthFor(value);
         const auto slot   = stringPoolSlotFor(value);
