@@ -363,7 +363,13 @@ TEST(StackCBackendTest, StaticizeSkipsStringLiteralsAndComments)
                              new InvokeDynamicInsnNode(testArena.intern("makeConcatWithConstants"),
                                                        testArena.intern("(I)Ljava/lang/String;"),
                                                        bsm,
-                                                                 {ca::core::Any(ca::str::Utf8StringRef::from_cstr(("v=" + poison + "\x01").c_str()))}),
+                                                       // 配方 intern 进 arena：Utf8StringRef 是
+                                                       // 视图（jbc plain writer 序列化它），指向
+                                                       // 临时串即悬垂——GCC 下堆复用发射垃圾字节
+                                                       // （CI linux 首曝）；std::string 载荷则
+                                                       // jbc writer 不认，CP 写 0。
+                                                       {ca::core::Any(testArena.intern(
+                                                           ("v=" + poison + "\x01").c_str()))}),
                              new InsnNode(Opcodes::ARETURN),
                          });
     CompilerMethod cm = test::snapshotMethod(*mn);
