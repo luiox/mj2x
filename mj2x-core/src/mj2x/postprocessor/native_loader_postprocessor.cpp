@@ -28,8 +28,13 @@ static constexpr const char* kLoaderEntry = "mj2x/runtime/NativeLoader.class";
 
 static InsnId appendInsn(CodeEditor& editor, jbc::ir::Insn in)
 {
-    auto r = editor.append(std::move(in));
-    if (r.is_err()) throw std::runtime_error("native_loader: append failed");
+    const auto op = in.op;
+    auto       r  = editor.append(std::move(in));
+    if (r.is_err()) {
+        throw std::runtime_error(std::string("native_loader: append failed (op=")
+                                 + std::to_string(static_cast<int>(op)) + ", "
+                                 + jbc::ir::to_string(r.unwrap_err()) + ")");
+    }
     return std::move(r).unwrap();
 }
 
@@ -172,7 +177,10 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
         const ca::usize mi = addMethod(jbc::ir::MethodSeed{
             "load", "(Ljava/lang/String;Ljava/lang/String;)V",
             Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNCHRONIZED, true});
-        auto       unit   = promote(mi);
+        auto unit = promote(mi);
+        // 前向分支逐条源序发射，目标指令后到——append 期锚定校验机制性不可
+        // 满足（design.md §34.3），走受控延后绑定态，退出时全量补验悬垂。
+        unit->dom.beginDeferredTargets();
         CodeEditor editor(*unit);
 
         const LabelId continueLabel = createLabel(editor);
@@ -311,6 +319,9 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
         appendInsn(editor, CodeEditor::simple(Op::ICONST_1));
         appendInsn(editor, CodeEditor::cpInsn(Op::PUTSTATIC, cpLoadedField));
         appendInsn(editor, CodeEditor::simple(Op::RETURN));
+        if (unit->dom.endDeferredTargets().is_err()) {
+            throw std::runtime_error("native_loader: load deferred targets dangling");
+        }
         lower(mi);
     }
 
@@ -333,7 +344,9 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
         const ca::usize mi = addMethod(jbc::ir::MethodSeed{
             "newTempFile", "(Ljava/lang/String;)Ljava/io/File;",
             Opcodes::ACC_PRIVATE | Opcodes::ACC_STATIC | Opcodes::ACC_SYNTHETIC, true});
-        auto       unit   = promote(mi);
+        auto unit = promote(mi);
+        // 前向分支同 load：受控延后绑定态发射，退出全量补验。
+        unit->dom.beginDeferredTargets();
         CodeEditor editor(*unit);
 
         const LabelId tempLoop  = createLabel(editor);
@@ -450,6 +463,9 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
                                                            "<init>",
                                                            "(Ljava/lang/String;)V")));
         appendInsn(editor, CodeEditor::simple(Op::ATHROW));
+        if (unit->dom.endDeferredTargets().is_err()) {
+            throw std::runtime_error("native_loader: newTempFile deferred targets dangling");
+        }
         lower(mi);
     }
 
