@@ -124,7 +124,7 @@ inline std::vector<uint8_t> getResource(const std::string& filename)
 /// 快照与 DOM 对齐（markedForCompile/backendResult 等管线旗标按 name+desc 锚定
 /// 迁移）。指令/常量池断言经 treeFromDom 回投影现查。
 template <typename Pass>
-void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index)
+void runWithDomSync(Pass&& pass, mj2x::CompilerIndex& index)
 {
     for (auto& entry : index.getClasses()) {
         if (entry.second.dom == nullptr) {
@@ -139,7 +139,7 @@ void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index)
 
 /// 带 report 收集参数的版本（InvokeDynamicPreprocessor::process(index, report*)）。
 template <typename Pass, typename Report>
-void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index, Report* report)
+void runWithDomSync(Pass&& pass, mj2x::CompilerIndex& index, Report* report)
 {
     for (auto& entry : index.getClasses()) {
         if (entry.second.dom == nullptr) {
