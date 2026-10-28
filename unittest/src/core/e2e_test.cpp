@@ -104,8 +104,10 @@ TEST(E2ETest, PipelineWithStackCBackend)
         auto*       cls   = index->getClass("E2ETest");
         ASSERT_NE(cls, nullptr);
         ASSERT_GE(cls->methods.size(), 1);
-        EXPECT_TRUE(cls->methods[0].methodNode->access & jbytecode::core::Opcodes::ACC_NATIVE);
-        EXPECT_EQ(cls->methods[0].methodNode->instructions.size(), 0);
+        // 快照读（native 方法无 Code 槽 → 栈/局部快照归零）。
+        EXPECT_TRUE(cls->methods[0].access & jbytecode::core::Opcodes::ACC_NATIVE);
+        EXPECT_EQ(cls->methods[0].maxStack, 0);
+        EXPECT_EQ(cls->methods[0].maxLocals, 0);
     }
 
     std::remove(inPath.c_str());
@@ -154,8 +156,10 @@ TEST(E2ETest, PipelineWithRegCBackend)
         auto*       cls   = index->getClass("RegCE2ETest");
         ASSERT_NE(cls, nullptr);
         ASSERT_GE(cls->methods.size(), 1);
-        EXPECT_TRUE(cls->methods[0].methodNode->access & jbytecode::core::Opcodes::ACC_NATIVE);
-        EXPECT_EQ(cls->methods[0].methodNode->instructions.size(), 0);
+        // 快照读（native 方法无 Code 槽 → 栈/局部快照归零）。
+        EXPECT_TRUE(cls->methods[0].access & jbytecode::core::Opcodes::ACC_NATIVE);
+        EXPECT_EQ(cls->methods[0].maxStack, 0);
+        EXPECT_EQ(cls->methods[0].maxLocals, 0);
     }
 
     std::remove(inPath.c_str());

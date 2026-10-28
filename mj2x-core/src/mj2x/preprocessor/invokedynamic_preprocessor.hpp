@@ -86,6 +86,15 @@ public:
 /// 不需要 CompilerIndex。区别只有 D 分支理由细分（D1/D2 需要 index 查编译输入，
 /// 只影响报告 reason 不影响 form）。返回的载荷经 SSAFunction::indySites 值拷贝
 /// 透传到 RegFunction，发射端只消费不做判定。
+/// 判定主体（载荷版，判定单源）：站点自持数据（indy 名/描述符/bsm/bsmArgs）
+/// 直接判定。classifyIndySiteForm 与 DOM 展开判定共用本核心；测试经本入口
+/// 拿完整 Decision（含 reason，IndyDispatchPayload 只留 form）。
+IndyDispatchDecision classifyIndySitePayload(CompilerIndex& index,
+                                             const std::string&             indyName,
+                                             const std::string&             indyDesc,
+                                             const mj2x::Handle&            bsm,
+                                             const std::vector<ca::core::Any>& bsmArgs);
+
 IndyDispatchPayload classifyIndySiteForm(ca::str::Utf8StringArena& arena,
                                          const std::string&             indyName,
                                          const std::string&             indyDesc,

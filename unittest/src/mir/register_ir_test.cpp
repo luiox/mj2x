@@ -21,6 +21,8 @@
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 #include "mj2x/mir/ssa/ssa_terminator.hpp"
 
+#include "test_helper.hpp"
+
 // B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
@@ -92,7 +94,7 @@ InlineSsaBundle buildInlineSSA(const std::string& name, const std::string& desc,
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
 
     CodeConverter converter(*bundle.arena);
-    auto          blocks = converter.convert(*mn);
+    auto          blocks = test::convertMethodNode(converter, *mn, *bundle.arena);
     SSABuilder    builder;
     bundle.fn =
         builder.build(blocks, "InlineRegIR", name, desc, true, maxLocals, *bundle.arena, reason);

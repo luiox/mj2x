@@ -18,12 +18,13 @@
 #include <cstdint>
 #include <iostream>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "libca/test/test.hpp"
 
-#include "mj2x/core/class_dom_sync.hpp"
+#include "test_helper_dom_sync.hpp"
 
 namespace test {
 
@@ -113,52 +114,61 @@ inline std::vector<uint8_t> getResource(const std::string& filename)
     return ca::test::resource(filename);
 }
 
-// ---- 批 4 DOM 载体 pass 的测试三明治 ----
+// ---- 批 6d DOM 权威 pass 的测试三明治 ----
+//
+// 树载体退役后，夹具建模 = mj2x::test::classFromTree（树 → DOM + 快照对齐），
+// 树断言 = mj2x::test::treeFromDom 回投影。三明治退化为「DOM 权威执行 pass +
+// 快照对齐」：缺 dom 的夹具类直接报错（迁移漏网的裸 CompilerClass 夹具）。
 
-/// DOM 载体 pre/postprocessor 的测试适配：夹具通常只建树（CompilerClass 无
-/// dom），pass 已改在 DOM 权威上。三明治 = 树→DOM、执行 pass、DOM→树回投影，
-/// 断言面（树 InsnList/成员列表）零改动。
+/// DOM 权威 pre/postprocessor 的测试适配：执行 pass 后把 methods/fields 元数据
+/// 快照与 DOM 对齐（markedForCompile/backendResult 等管线旗标按 name+desc 锚定
+/// 迁移）。指令/常量池断言经 treeFromDom 回投影现查。
 template <typename Pass>
 void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index)
 {
-    mj2x::syncTreeToDom(index);
+    for (auto& entry : index.getClasses()) {
+        if (entry.second.dom == nullptr) {
+            throw std::runtime_error("runWithDomSync: class without dom (fixture must go "
+                                     "through test::classFromTree): "
+                                     + entry.first);
+        }
+    }
     pass.process(index);
-    mj2x::syncDomToTree(index);
+    mj2x::refreshSnapshots(index);
 }
 
 /// 带 report 收集参数的版本（InvokeDynamicPreprocessor::process(index, report*)）。
 template <typename Pass, typename Report>
 void runWithDomSync(Pass& pass, mj2x::CompilerIndex& index, Report* report)
 {
-    mj2x::syncTreeToDom(index);
+    for (auto& entry : index.getClasses()) {
+        if (entry.second.dom == nullptr) {
+            throw std::runtime_error("runWithDomSync: class without dom (fixture must go "
+                                     "through test::classFromTree): "
+                                     + entry.first);
+        }
+    }
     pass.process(index, report);
-    mj2x::syncDomToTree(index);
+    mj2x::refreshSnapshots(index);
 }
 
 // ---- 批 5 backend 注入（injectIntoClass 走 DOM）的测试适配 ----
 
-/// 为树夹具类物化 DOM（注入的改写权威）：类移入临时 index 走 syncTreeToDom
-/// 后搬回。要求 cls.classNode 已挂方法（DOM 按树生成，未挂树的悬空 MethodNode
-/// 不在 DOM 里，注入按 name+desc 找不到即抛）。树不动——夹具既有树指针仍有效。
+/// 注入前守卫：批 6d 后树载体退役，夹具经 classFromTree 落 DOM，本函数退化为
+/// 缺守卫（dom 已在则零操作；裸 CompilerClass 即迁移漏网，报错暴露）。
 inline void ensureDomFor(mj2x::CompilerClass& cls, const std::string& name)
 {
     if (cls.dom != nullptr) return;
-    mj2x::CompilerIndex tmp;
-    tmp.addClass(name, std::move(cls));
-    mj2x::syncTreeToDom(tmp);
-    cls = std::move(*tmp.getClass(name));
+    throw std::runtime_error("ensureDomFor: class without dom (fixture must go through "
+                             "test::classFromTree): "
+                             + name);
 }
 
-/// 注入后把 DOM 刷新回树（断言面保持树形态）。classNode/methods 全部重建——
-/// 夹具侧持有的旧 MethodNode* 全部失效，断言一律经 cls.methods 里重锚后的
-/// methodNode 现查。
-inline void refreshTreeFromDom(mj2x::CompilerClass& cls, const std::string& name)
+/// 注入后刷新：树槽已随批 6d 退役，本函数退化为快照对齐（methods/fields 元数据
+/// 与 DOM 对齐）。指令/成员断言一律经 treeFromDom 回投影现查或读快照字段。
+inline void refreshTreeFromDom(mj2x::CompilerClass& cls, const std::string& /*name*/)
 {
-    if (cls.dom == nullptr) return;
-    mj2x::CompilerIndex tmp;
-    tmp.addClass(name, std::move(cls));
-    mj2x::syncDomToTree(tmp);
-    cls = std::move(*tmp.getClass(name));
+    mj2x::refreshMethodSnapshots(cls);
 }
 
 }   // namespace test

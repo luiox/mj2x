@@ -261,8 +261,16 @@ bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit
     //（行号语义不变：替换首条即原语句位置）。CodeDom::get 是正门可变访问。
     jbc::ir::InsnId firstPlaced{};
     for (auto& in : seq) {
+        const auto op = in.op;
         auto placed = editor.insertBefore(at, std::move(in));
-        if (placed.is_ok() && firstPlaced == jbc::ir::kNoInsn) {
+        if (placed.is_err()) {
+            // 站点改写部分插入即字节码损坏——显式失败，不静默吞。
+            throw std::runtime_error(std::string("invokedynamic_preprocessor: insertBefore "
+                                                 "failed (op=")
+                                     + std::to_string(static_cast<int>(op)) + ", "
+                                     + jbc::ir::to_string(placed.unwrap_err()) + ")");
+        }
+        if (firstPlaced == jbc::ir::kNoInsn) {
             firstPlaced = std::move(placed).unwrap();
         }
     }
@@ -1060,7 +1068,7 @@ CoreDecision classifyCore(ca::str::Utf8StringArena& arena, const std::string& in
 }
 
 /// 判定主体（载荷版）：同一核心 + 站点定位由调用方补齐。DOM/树两载体共用。
-IndyDispatchDecision classifyIndySitePayload(CompilerIndex& index, const std::string& indyName,
+IndyDispatchDecision classifyIndySitePayloadImpl(CompilerIndex& index, const std::string& indyName,
                                              const std::string& indyDesc,
                                              const Handle&                     bsm,
                                              const std::vector<ca::core::Any>& bsmArgs)
@@ -1567,8 +1575,16 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
     // 逐条 insertBefore(at)（同锚点保序）+ 首条回填 srcPc，理由同 expandConcatSiteDom。
     jbc::ir::InsnId firstPlaced{};
     for (auto& in : seq) {
+        const auto op = in.op;
         auto placed = editor.insertBefore(at, std::move(in));
-        if (placed.is_ok() && firstPlaced == jbc::ir::kNoInsn) {
+        if (placed.is_err()) {
+            // 站点改写部分插入即字节码损坏——显式失败，不静默吞。
+            throw std::runtime_error(std::string("invokedynamic_preprocessor: insertBefore "
+                                                 "failed (op=")
+                                     + std::to_string(static_cast<int>(op)) + ", "
+                                     + jbc::ir::to_string(placed.unwrap_err()) + ")");
+        }
+        if (firstPlaced == jbc::ir::kNoInsn) {
             firstPlaced = std::move(placed).unwrap();
         }
     }
@@ -1643,7 +1659,7 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
                 // 不消费判定结果、不影响下方展开逻辑与字节码输出。
                 if (report != nullptr) {
                     IndyDispatchDecision decision =
-                        classifyIndySitePayload(index, site.name, site.desc, site.bsm,
+                        classifyIndySitePayloadImpl(index, site.name, site.desc, site.bsm,
                                                 site.bsmArgs);
                     decision.className  = name;
                     decision.methodName = methodName;
@@ -1743,6 +1759,15 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
 }
 
 }   // namespace
+
+IndyDispatchDecision classifyIndySitePayload(CompilerIndex& index,
+                                             const std::string&             indyName,
+                                             const std::string&             indyDesc,
+                                             const mj2x::Handle&            bsm,
+                                             const std::vector<ca::core::Any>& bsmArgs)
+{
+    return classifyIndySitePayloadImpl(index, indyName, indyDesc, bsm, bsmArgs);
+}
 
 ca::usize IndyDispatchReport::count(IndyDispatchForm form) const
 {

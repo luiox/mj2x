@@ -27,7 +27,7 @@ namespace {
 bool isMarked(CompilerClass& cls, const std::string& name)
 {
     for (auto& m : cls.methods) {
-        if (m.methodNode->name.to_std_string() == name) return m.markedForCompile;
+        if (m.name == name) return m.markedForCompile;
     }
     return false;
 }
@@ -39,14 +39,6 @@ int markedCount(CompilerClass& cls)
         if (m.markedForCompile) ++n;
     }
     return n;
-}
-
-MethodNode* findMethod(CompilerClass& cls, const std::string& name)
-{
-    for (auto* m : cls.classNode->methods) {
-        if (m->name.to_std_string() == name) return m;
-    }
-    return nullptr;
 }
 
 /// 造一个方法：access + name + desc + 体（默认一条 RETURN 类指令保非空）。
@@ -64,6 +56,7 @@ MethodNode* makeMethod(CompilerIndex& index, int access, const std::string& name
 }
 
 /// 造一个类：isInterface 决定 ACC_INTERFACE|ACC_ABSTRACT 复合访问位。
+/// 批 6d：树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
 CompilerClass& buildClass(CompilerIndex& index, const std::string& className,
                           bool isInterface, std::vector<MethodNode*> methods)
 {
@@ -76,14 +69,7 @@ CompilerClass& buildClass(CompilerIndex& index, const std::string& className,
     cn->superName = arena.intern("java/lang/Object");
     cn->methods   = std::move(methods);
 
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    for (auto* m : cls.classNode->methods) {
-        CompilerMethod cm;
-        cm.methodNode = m;
-        cls.methods.push_back(std::move(cm));
-    }
-    index.addClass(className, std::move(cls));
+    index.addClass(className, test::classFromTree(className, *cn, arena));
     return *index.getClass(className);
 }
 
@@ -160,12 +146,14 @@ TEST(InterfaceNativeSkipTest, ClinitMoverSkipsInterfaceClinit)
 
     test::runWithDomSync(InitClinitMoverPreprocessor(), index);
 
-    // 三明治重建树，指针换代——只断言 <clinit> 仍在且无搬运产物。
-    EXPECT_NE(findMethod(iface, "<clinit>"), nullptr);
+    // 树回投影现查（快照随 pass 对齐；树方法指针仅在本树存活期内有效）。
+    auto tree = test::treeFromDom(iface, index.arena());
+    ASSERT_NE(tree, nullptr);
+    EXPECT_NE(test::findMethodNode(tree.get(), "<clinit>"), nullptr);
     bool hasMoved = false;
-    for (auto* m : iface.classNode->methods) {
+    for (auto* m : tree->methods) {
         if (m->name.to_std_string().rfind("__regc_", 0) == 0) hasMoved = true;
     }
     EXPECT_FALSE(hasMoved);
-    EXPECT_EQ(iface.classNode->methods.size(), 1u);
+    EXPECT_EQ(tree->methods.size(), 1u);
 }

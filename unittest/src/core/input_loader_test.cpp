@@ -54,8 +54,9 @@ TEST(InputLoaderTest, ReadRealClass)
 
     auto* clazz = index->getClass("Test");
     ASSERT_NE(clazz, nullptr);
-    EXPECT_GE(clazz->classNode->methods.size(), 1);
-    EXPECT_EQ(clazz->classNode->name, ZUtf8StringRef::from_static("Test"));
+    ASSERT_NE(clazz->dom, nullptr);
+    EXPECT_GE(clazz->dom->methods.size(), 1u);
+    EXPECT_EQ(clazz->dom->thisName(), "Test");
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

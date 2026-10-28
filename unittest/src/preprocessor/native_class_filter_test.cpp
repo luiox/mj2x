@@ -22,6 +22,7 @@ using namespace mj2x;
 namespace {
 
 // 构造一个空方法体类（名 + 一个普通静态方法），供 preprocessor 集成测试。
+// 批 6d：树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
 void buildSimpleClass(CompilerIndex& index, const std::string& className)
 {
     auto& arena = index.arena();
@@ -38,14 +39,7 @@ void buildSimpleClass(CompilerIndex& index, const std::string& className)
     mn->instructions.add(new jbytecode::tree::InsnNode(jbytecode::core::Opcodes::RETURN));
     cn->methods.push_back(mn);
 
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    for (auto* m : cls.classNode->methods) {
-        CompilerMethod cm;
-        cm.methodNode = m;
-        cls.methods.push_back(std::move(cm));
-    }
-    index.addClass(className, std::move(cls));
+    index.addClass(className, test::classFromTree(className, *cn, arena));
 }
 
 bool anyMarked(const CompilerClass& cls)

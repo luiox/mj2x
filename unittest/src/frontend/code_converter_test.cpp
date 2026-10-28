@@ -8,6 +8,8 @@
 #include "mj2x/frontend/opcode_utils.hpp"
 #include "jbytecode/jbytecode.hpp"
 
+#include "test_helper.hpp"
+
 // B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
@@ -64,48 +66,48 @@ TEST(TypeUtilsTest, PrimitiveStackSize)
 
 TEST(OpcodeUtilsTest, BinaryOpMapping)
 {
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IADD), BinaryOp::ADD);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::LADD), BinaryOp::ADD);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::ISUB), BinaryOp::SUB);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IMUL), BinaryOp::MUL);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IDIV), BinaryOp::DIV);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IREM), BinaryOp::REM);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::ISHL), BinaryOp::SHL);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::ISHR), BinaryOp::SHR);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IUSHR), BinaryOp::USHR);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IAND), BinaryOp::AND);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IOR), BinaryOp::OR);
-    EXPECT_EQ(opcodeToBinaryOp(Opcodes::IXOR), BinaryOp::XOR);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IADD), BinaryOp::ADD);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::LADD), BinaryOp::ADD);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::ISUB), BinaryOp::SUB);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IMUL), BinaryOp::MUL);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IDIV), BinaryOp::DIV);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IREM), BinaryOp::REM);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::ISHL), BinaryOp::SHL);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::ISHR), BinaryOp::SHR);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IUSHR), BinaryOp::USHR);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IAND), BinaryOp::AND);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IOR), BinaryOp::OR);
+    EXPECT_EQ(opcodeToBinaryOp(jbytecode::core::Opcodes::IXOR), BinaryOp::XOR);
 }
 
 TEST(OpcodeUtilsTest, ResultTypeMapping)
 {
-    EXPECT_EQ(opcodeToResultType(Opcodes::IADD), PrimitiveKind::INT);
-    EXPECT_EQ(opcodeToResultType(Opcodes::LADD), PrimitiveKind::LONG);
-    EXPECT_EQ(opcodeToResultType(Opcodes::FREM), PrimitiveKind::FLOAT);
-    EXPECT_EQ(opcodeToResultType(Opcodes::DDIV), PrimitiveKind::DOUBLE);
-    EXPECT_EQ(opcodeToResultType(Opcodes::LSHL), PrimitiveKind::LONG);
-    EXPECT_EQ(opcodeToResultType(Opcodes::DNEG), PrimitiveKind::DOUBLE);
+    EXPECT_EQ(opcodeToResultType(jbytecode::core::Opcodes::IADD), PrimitiveKind::INT);
+    EXPECT_EQ(opcodeToResultType(jbytecode::core::Opcodes::LADD), PrimitiveKind::LONG);
+    EXPECT_EQ(opcodeToResultType(jbytecode::core::Opcodes::FREM), PrimitiveKind::FLOAT);
+    EXPECT_EQ(opcodeToResultType(jbytecode::core::Opcodes::DDIV), PrimitiveKind::DOUBLE);
+    EXPECT_EQ(opcodeToResultType(jbytecode::core::Opcodes::LSHL), PrimitiveKind::LONG);
+    EXPECT_EQ(opcodeToResultType(jbytecode::core::Opcodes::DNEG), PrimitiveKind::DOUBLE);
 }
 
 TEST(OpcodeUtilsTest, BranchOpcodeMapping)
 {
-    EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPEQ), CmpOp::EQ);
-    EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPNE), CmpOp::NE);
-    EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPLT), CmpOp::LT);
-    EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPGE), CmpOp::GE);
-    EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPGT), CmpOp::GT);
-    EXPECT_EQ(branchOpcodeToCmpOp(Opcodes::IF_ICMPLE), CmpOp::LE);
+    EXPECT_EQ(branchOpcodeToCmpOp(jbytecode::core::Opcodes::IF_ICMPEQ), CmpOp::EQ);
+    EXPECT_EQ(branchOpcodeToCmpOp(jbytecode::core::Opcodes::IF_ICMPNE), CmpOp::NE);
+    EXPECT_EQ(branchOpcodeToCmpOp(jbytecode::core::Opcodes::IF_ICMPLT), CmpOp::LT);
+    EXPECT_EQ(branchOpcodeToCmpOp(jbytecode::core::Opcodes::IF_ICMPGE), CmpOp::GE);
+    EXPECT_EQ(branchOpcodeToCmpOp(jbytecode::core::Opcodes::IF_ICMPGT), CmpOp::GT);
+    EXPECT_EQ(branchOpcodeToCmpOp(jbytecode::core::Opcodes::IF_ICMPLE), CmpOp::LE);
 }
 
 TEST(OpcodeUtilsTest, BranchZeroOpcodeMapping)
 {
-    EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFEQ), CmpOp::EQ);
-    EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFNE), CmpOp::NE);
-    EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFLT), CmpOp::LT);
-    EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFGE), CmpOp::GE);
-    EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFGT), CmpOp::GT);
-    EXPECT_EQ(branchZeroOpcodeToCmpOp(Opcodes::IFLE), CmpOp::LE);
+    EXPECT_EQ(branchZeroOpcodeToCmpOp(jbytecode::core::Opcodes::IFEQ), CmpOp::EQ);
+    EXPECT_EQ(branchZeroOpcodeToCmpOp(jbytecode::core::Opcodes::IFNE), CmpOp::NE);
+    EXPECT_EQ(branchZeroOpcodeToCmpOp(jbytecode::core::Opcodes::IFLT), CmpOp::LT);
+    EXPECT_EQ(branchZeroOpcodeToCmpOp(jbytecode::core::Opcodes::IFGE), CmpOp::GE);
+    EXPECT_EQ(branchZeroOpcodeToCmpOp(jbytecode::core::Opcodes::IFGT), CmpOp::GT);
+    EXPECT_EQ(branchZeroOpcodeToCmpOp(jbytecode::core::Opcodes::IFLE), CmpOp::LE);
 }
 
 // ============================================================
@@ -135,11 +137,11 @@ static std::unique_ptr<MethodNode> makeMethod(int access, const std::string& nam
 
 TEST(CodeConverterTest, EmptyReturnsEntryBlock)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "empty", "()V", {});
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "empty", "()V", {});
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
 
     ASSERT_GE(blocks.size(), 1);
     EXPECT_EQ(blocks[0]->id, 0);   // entry block
@@ -149,11 +151,11 @@ TEST(CodeConverterTest, EmptyReturnsEntryBlock)
 TEST(CodeConverterTest, SimpleReturn)
 {
     auto mn = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "ret", "()V", {new InsnNode(Opcodes::RETURN)});
+        jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC, "ret", "()V", {new InsnNode(jbytecode::core::Opcodes::RETURN)});
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
 
     ASSERT_GE(blocks.size(), 1);
     auto& nodes = blocks[0]->nodes;
@@ -163,14 +165,14 @@ TEST(CodeConverterTest, SimpleReturn)
 
 TEST(CodeConverterTest, ReturnValue)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "retVal",
                          "()I",
-                         {new InsnNode(Opcodes::IRETURN)});
+                         {new InsnNode(jbytecode::core::Opcodes::IRETURN)});
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
 
     auto& nodes = blocks[0]->nodes;
     EXPECT_EQ(nodes.back()->kind, MIRKind::RETURN_VALUE);
@@ -178,17 +180,17 @@ TEST(CodeConverterTest, ReturnValue)
 
 TEST(CodeConverterTest, LocalLoadStore)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "ldst",
                          "(I)I",
                          {
-                             new VarInsnNode(Opcodes::ILOAD, 0),
-                             new InsnNode(Opcodes::IRETURN),
+                             new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     // Find LOAD node
@@ -204,19 +206,19 @@ TEST(CodeConverterTest, LocalLoadStore)
 
 TEST(CodeConverterTest, BinaryOp)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "add",
                          "(II)I",
                          {
-                             new VarInsnNode(Opcodes::ILOAD, 0),
-                             new VarInsnNode(Opcodes::ILOAD, 1),
-                             new InsnNode(Opcodes::IADD),
-                             new InsnNode(Opcodes::IRETURN),
+                             new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                             new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                             new InsnNode(jbytecode::core::Opcodes::IADD),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundBinary = false;
@@ -231,21 +233,21 @@ TEST(CodeConverterTest, BinaryOp)
 
 TEST(CodeConverterTest, CastAndNumericCompare)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "casts",
                          "(ID)I",
                          {
-                             new VarInsnNode(Opcodes::ILOAD, 0),
-                             new InsnNode(Opcodes::I2L),
-                             new VarInsnNode(Opcodes::DLOAD, 1),
-                             new InsnNode(Opcodes::D2I),
-                             new InsnNode(Opcodes::LCMP),
-                             new InsnNode(Opcodes::IRETURN),
+                             new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                             new InsnNode(jbytecode::core::Opcodes::I2L),
+                             new VarInsnNode(jbytecode::core::Opcodes::DLOAD, 1),
+                             new InsnNode(jbytecode::core::Opcodes::D2I),
+                             new InsnNode(jbytecode::core::Opcodes::LCMP),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundI2L = false;
@@ -277,18 +279,18 @@ TEST(CodeConverterTest, CastAndNumericCompare)
 
 TEST(CodeConverterTest, DoubleToLongCast)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "d2l",
                          "(D)J",
                          {
-                             new VarInsnNode(Opcodes::DLOAD, 0),
-                             new InsnNode(Opcodes::D2L),
-                             new InsnNode(Opcodes::LRETURN),
+                             new VarInsnNode(jbytecode::core::Opcodes::DLOAD, 0),
+                             new InsnNode(jbytecode::core::Opcodes::D2L),
+                             new InsnNode(jbytecode::core::Opcodes::LRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundD2L = false;
@@ -304,23 +306,23 @@ TEST(CodeConverterTest, DoubleToLongCast)
 
 TEST(CodeConverterTest, FloatingCompareNaNDirection)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "cmp",
                          "(FFDD)I",
                          {
-                             new VarInsnNode(Opcodes::FLOAD, 0),
-                             new VarInsnNode(Opcodes::FLOAD, 1),
-                             new InsnNode(Opcodes::FCMPG),
-                             new VarInsnNode(Opcodes::DLOAD, 2),
-                             new VarInsnNode(Opcodes::DLOAD, 4),
-                             new InsnNode(Opcodes::DCMPL),
-                             new InsnNode(Opcodes::IADD),
-                             new InsnNode(Opcodes::IRETURN),
+                             new VarInsnNode(jbytecode::core::Opcodes::FLOAD, 0),
+                             new VarInsnNode(jbytecode::core::Opcodes::FLOAD, 1),
+                             new InsnNode(jbytecode::core::Opcodes::FCMPG),
+                             new VarInsnNode(jbytecode::core::Opcodes::DLOAD, 2),
+                             new VarInsnNode(jbytecode::core::Opcodes::DLOAD, 4),
+                             new InsnNode(jbytecode::core::Opcodes::DCMPL),
+                             new InsnNode(jbytecode::core::Opcodes::IADD),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundFcmpg = false;
@@ -337,21 +339,21 @@ TEST(CodeConverterTest, FloatingCompareNaNDirection)
 
 TEST(CodeConverterTest, FieldAccess)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC,
                          "getX",
                          "()I",
                          {
-                             new VarInsnNode(Opcodes::ALOAD, 0),   // this
-                             new FieldInsnNode(Opcodes::GETFIELD,
+                             new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),   // this
+                             new FieldInsnNode(jbytecode::core::Opcodes::GETFIELD,
                                                ca::str::Utf8StringRef::from_cstr("Foo"),
                                                ca::str::Utf8StringRef::from_cstr("x"),
                                                ca::str::Utf8StringRef::from_cstr("I")),
-                             new InsnNode(Opcodes::IRETURN),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundGet = false;
@@ -369,21 +371,21 @@ TEST(CodeConverterTest, FieldAccess)
 
 TEST(CodeConverterTest, MethodInvoke)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "call",
                          "()V",
                          {
-                             new MethodInsnNode(Opcodes::INVOKESTATIC,
+                             new MethodInsnNode(jbytecode::core::Opcodes::INVOKESTATIC,
                                                 ca::str::Utf8StringRef::from_cstr("Other"),
                                                 ca::str::Utf8StringRef::from_cstr("run"),
                                                 ca::str::Utf8StringRef::from_cstr("()V"),
                                                 false),
-                             new InsnNode(Opcodes::RETURN),
+                             new InsnNode(jbytecode::core::Opcodes::RETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundInvoke = false;
@@ -400,17 +402,17 @@ TEST(CodeConverterTest, MethodInvoke)
 
 TEST(CodeConverterTest, StringLdcKeepsLiteralValue)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "literal",
                          "()Ljava/lang/String;",
                          {
                              new LdcInsnNode(std::string("hello \"jni\"")),
-                             new InsnNode(Opcodes::ARETURN),
+                             new InsnNode(jbytecode::core::Opcodes::ARETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundString = false;
@@ -429,27 +431,27 @@ TEST(CodeConverterTest, StringLdcKeepsLiteralValue)
 
 TEST(CodeConverterTest, ArrayInstructionsCarryComponentType)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "arrays",
                          "()V",
                          {
-                             new InsnNode(Opcodes::ICONST_2),
-                             new IntInsnNode(Opcodes::NEWARRAY, Opcodes::T_LONG),
-                             new InsnNode(Opcodes::DUP),
-                             new InsnNode(Opcodes::ICONST_0),
-                             new InsnNode(Opcodes::LCONST_1),
-                             new InsnNode(Opcodes::LASTORE),
-                             new InsnNode(Opcodes::DUP),
-                             new InsnNode(Opcodes::ICONST_0),
-                             new InsnNode(Opcodes::LALOAD),
-                             new InsnNode(Opcodes::POP2),
-                             new InsnNode(Opcodes::POP),
-                             new InsnNode(Opcodes::RETURN),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_2),
+                             new IntInsnNode(jbytecode::core::Opcodes::NEWARRAY, jbytecode::core::Opcodes::T_LONG),
+                             new InsnNode(jbytecode::core::Opcodes::DUP),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::LCONST_1),
+                             new InsnNode(jbytecode::core::Opcodes::LASTORE),
+                             new InsnNode(jbytecode::core::Opcodes::DUP),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::LALOAD),
+                             new InsnNode(jbytecode::core::Opcodes::POP2),
+                             new InsnNode(jbytecode::core::Opcodes::POP),
+                             new InsnNode(jbytecode::core::Opcodes::RETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundNewLongArray = false;
@@ -479,19 +481,19 @@ TEST(CodeConverterTest, UnconditionalBranch)
     auto* label                  = new LabelNode(labelScratchArena().create<Label>());
     label->label->bytecodeOffset = 10;
 
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "br",
                          "()V",
                          {
-                             new JumpInsnNode(Opcodes::GOTO, label->label),
-                             new InsnNode(Opcodes::RETURN),
+                             new JumpInsnNode(jbytecode::core::Opcodes::GOTO, label->label),
+                             new InsnNode(jbytecode::core::Opcodes::RETURN),
                              label,
-                             new InsnNode(Opcodes::RETURN),
+                             new InsnNode(jbytecode::core::Opcodes::RETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
 
     ASSERT_GE(blocks.size(), 2);
 
@@ -515,7 +517,7 @@ TEST(CodeConverterTest, UnconditionalBranch)
             for (auto* b : blocks) {
                 for (auto& nn : b->nodes) {
                     if (nn->kind == MIRKind::LABEL &&
-                        static_cast<const MIRLabel*>(nn.get())->labelNode ==
+                        static_cast<const MIRLabel*>(nn.get())->labelId ==
                             gotoNode->targetLabel) {
                         targetAnchored = true;
                     }
@@ -533,19 +535,19 @@ TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes)
     auto* label                  = new LabelNode(labelScratchArena().create<Label>());
     label->label->bytecodeOffset = 10;
 
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "legacySubroutine",
                          "()V",
                          {
-                             new JumpInsnNode(Opcodes::JSR, label->label),
-                             new InsnNode(Opcodes::RETURN),
+                             new JumpInsnNode(jbytecode::core::Opcodes::JSR, label->label),
+                             new InsnNode(jbytecode::core::Opcodes::RETURN),
                              label,
-                             new VarInsnNode(Opcodes::RET, 0),
+                             new VarInsnNode(jbytecode::core::Opcodes::RET, 0),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
 
     bool foundJsr = false;
     bool foundRet = false;
@@ -564,7 +566,7 @@ TEST(CodeConverterTest, JsrAndRetBecomeUnsupportedBoundaryNodes)
 
 TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
 {
-    auto bsm = Handle(Opcodes::H_INVOKESTATIC,
+    auto bsm = jbytecode::core::Handle(jbytecode::core::Opcodes::H_INVOKESTATIC,
                       ca::str::Utf8StringRef::from_cstr("java/lang/invoke/StringConcatFactory"),
                       ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                       ca::str::Utf8StringRef::from_cstr(
@@ -573,7 +575,7 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
                           "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;"),
                       false);
     auto mn  = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
         "concat",
         "()Ljava/lang/String;",
         {
@@ -585,12 +587,12 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
                                       // std::string 不在其分派内会写出废索引 0。
                                        {ca::core::Any(
                                            ca::str::Utf8StringRef::from_cstr("v=\x01"))}),
-            new InsnNode(Opcodes::ARETURN),
+            new InsnNode(jbytecode::core::Opcodes::ARETURN),
         });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     ASSERT_GE(blocks.size(), 1u);
 
     bool foundIndy = false;
@@ -615,22 +617,22 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
     auto* label                  = new LabelNode(labelScratchArena().create<Label>());
     label->label->bytecodeOffset = 10;
 
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "isNull",
                          "(Ljava/lang/Object;)I",
                          {
-                             new VarInsnNode(Opcodes::ALOAD, 0),
-                             new JumpInsnNode(Opcodes::IFNULL, label->label),
-                             new InsnNode(Opcodes::ICONST_0),
-                             new InsnNode(Opcodes::IRETURN),
+                             new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+                             new JumpInsnNode(jbytecode::core::Opcodes::IFNULL, label->label),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                              label,
-                             new InsnNode(Opcodes::ICONST_1),
-                             new InsnNode(Opcodes::IRETURN),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
 
     bool foundObjectNullBranch = false;
     for (auto* block : blocks) {
@@ -645,7 +647,7 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
                 for (auto* b : blocks) {
                     for (auto& nn : b->nodes) {
                         if (nn->kind == MIRKind::LABEL &&
-                            static_cast<const MIRLabel*>(nn.get())->labelNode ==
+                            static_cast<const MIRLabel*>(nn.get())->labelId ==
                                 bz->targetLabel) {
                             targetAnchored = true;
                         }
@@ -661,19 +663,19 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
 
 TEST(CodeConverterTest, DumpOutput)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "add",
                          "(II)I",
                          {
-                             new VarInsnNode(Opcodes::ILOAD, 0),
-                             new VarInsnNode(Opcodes::ILOAD, 1),
-                             new InsnNode(Opcodes::IADD),
-                             new InsnNode(Opcodes::IRETURN),
+                             new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 0),
+                             new VarInsnNode(jbytecode::core::Opcodes::ILOAD, 1),
+                             new InsnNode(jbytecode::core::Opcodes::IADD),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto          dump   = CodeConverter::dumpMIR(blocks);
 
     EXPECT_FALSE(dump.empty());
@@ -684,26 +686,26 @@ TEST(CodeConverterTest, DumpOutput)
 
 TEST(CodeConverterTest, ConstantInstructions)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "consts",
                          "()V",
                          {
-                             new InsnNode(Opcodes::ICONST_0),
-                             new InsnNode(Opcodes::ICONST_1),
-                             new InsnNode(Opcodes::LCONST_0),
-                             new InsnNode(Opcodes::FCONST_0),
-                             new InsnNode(Opcodes::DCONST_0),
-                             new InsnNode(Opcodes::ACONST_NULL),
-                             new InsnNode(Opcodes::POP2),   // clean up long
-                             new InsnNode(Opcodes::POP2),   // clean up double
-                             new InsnNode(Opcodes::POP),    // clean up float
-                             new InsnNode(Opcodes::POP2),   // clean up null + iconst_0
-                             new InsnNode(Opcodes::RETURN),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+                             new InsnNode(jbytecode::core::Opcodes::LCONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::FCONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::DCONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::ACONST_NULL),
+                             new InsnNode(jbytecode::core::Opcodes::POP2),   // clean up long
+                             new InsnNode(jbytecode::core::Opcodes::POP2),   // clean up double
+                             new InsnNode(jbytecode::core::Opcodes::POP),    // clean up float
+                             new InsnNode(jbytecode::core::Opcodes::POP2),   // clean up null + iconst_0
+                             new InsnNode(jbytecode::core::Opcodes::RETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     int constCount = 0;
@@ -715,31 +717,31 @@ TEST(CodeConverterTest, ConstantInstructions)
 
 TEST(CodeConverterTest, StackShapeInstructionsArePreserved)
 {
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                          "stackShape",
                          "()V",
                          {
-                             new InsnNode(Opcodes::ICONST_0),
-                             new InsnNode(Opcodes::POP),
-                             new InsnNode(Opcodes::LCONST_0),
-                             new InsnNode(Opcodes::POP2),
-                             new InsnNode(Opcodes::ICONST_1),
-                             new InsnNode(Opcodes::ICONST_2),
-                             new InsnNode(Opcodes::ICONST_3),
-                             new InsnNode(Opcodes::DUP2_X1),
-                             new InsnNode(Opcodes::POP2),
-                             new InsnNode(Opcodes::POP2),
-                             new InsnNode(Opcodes::ICONST_1),
-                             new InsnNode(Opcodes::ICONST_2),
-                             new InsnNode(Opcodes::ICONST_3),
-                             new InsnNode(Opcodes::ICONST_4),
-                             new InsnNode(Opcodes::DUP2_X2),
-                             new InsnNode(Opcodes::RETURN),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::POP),
+                             new InsnNode(jbytecode::core::Opcodes::LCONST_0),
+                             new InsnNode(jbytecode::core::Opcodes::POP2),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_2),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_3),
+                             new InsnNode(jbytecode::core::Opcodes::DUP2_X1),
+                             new InsnNode(jbytecode::core::Opcodes::POP2),
+                             new InsnNode(jbytecode::core::Opcodes::POP2),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_1),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_2),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_3),
+                             new InsnNode(jbytecode::core::Opcodes::ICONST_4),
+                             new InsnNode(jbytecode::core::Opcodes::DUP2_X2),
+                             new InsnNode(jbytecode::core::Opcodes::RETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundPop      = false;
@@ -788,23 +790,23 @@ TEST(CodeConverterTest, StackShapeInstructionsArePreserved)
 TEST(CodeConverterTest, NewObjectAndInvokeSpecial)
 {
     auto mn = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
         "create",
         "()Ljava/lang/Object;",
         {
-            new TypeInsnNode(Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
-            new InsnNode(Opcodes::DUP),
-            new MethodInsnNode(Opcodes::INVOKESPECIAL,
+            new TypeInsnNode(jbytecode::core::Opcodes::NEW, ca::str::Utf8StringRef::from_cstr("java/lang/Object")),
+            new InsnNode(jbytecode::core::Opcodes::DUP),
+            new MethodInsnNode(jbytecode::core::Opcodes::INVOKESPECIAL,
                                ca::str::Utf8StringRef::from_cstr("java/lang/Object"),
                                ca::str::Utf8StringRef::from_cstr("<init>"),
                                ca::str::Utf8StringRef::from_cstr("()V"),
                                false),
-            new InsnNode(Opcodes::ARETURN),
+            new InsnNode(jbytecode::core::Opcodes::ARETURN),
         });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
     auto&         nodes  = blocks[0]->nodes;
 
     bool foundNew = false, foundDup = false, foundInvoke = false;
@@ -838,23 +840,23 @@ TEST(CodeConverterTest, SwitchInstructions)
     auto* caseLabel1   = new LabelNode(labelScratchArena().create<Label>());
 
     auto mn =
-        makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
+        makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_STATIC,
                    "sw",
                    "()V",
                    {
                        new TableSwitchInsnNode(0, 1, defaultLabel->label,
                                                {caseLabel0->label, caseLabel1->label}),
                        defaultLabel,
-                       new InsnNode(Opcodes::RETURN),
+                       new InsnNode(jbytecode::core::Opcodes::RETURN),
                        caseLabel0,
-                       new InsnNode(Opcodes::RETURN),
+                       new InsnNode(jbytecode::core::Opcodes::RETURN),
                        caseLabel1,
-                       new InsnNode(Opcodes::RETURN),
+                       new InsnNode(jbytecode::core::Opcodes::RETURN),
                    });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto          blocks = cc.convert(*mn);
+    auto          blocks = test::convertMethodNode(cc, *mn, arena);
 
     ASSERT_GE(blocks.size(), 1);
 
@@ -874,11 +876,11 @@ TEST(CodeConverterTest, SwitchInstructions)
             auto* sw = ca::core::tag_cast::cast<MIRSwitch>(n.get());
             ASSERT_EQ(sw->cases.size(), 2u);
             // 目标身份：每个目标 Label* 必有含对应 MIRLabel 的块（键 = case 0..1）。
-            auto blockHasLabel = [&](Label* l) {
+            auto blockHasLabel = [&](int l) {
                 for (auto* b : blocks) {
                     for (auto& nn : b->nodes) {
                         if (nn->kind != MIRKind::LABEL) continue;
-                        if (static_cast<const MIRLabel*>(nn.get())->labelNode == l) return true;
+                        if (static_cast<const MIRLabel*>(nn.get())->labelId == l) return true;
                     }
                 }
                 return false;
@@ -932,21 +934,21 @@ TEST(CodeConverterTest, NodeFieldsHoldArenaBackedUtf8StringRef)
                   "MIRConstant::value string slot must hold Utf8StringRef (#698)");
 
     // ---- 2) 运行期：intern 后内容正确、且 ref 指向 arena 内副本（data() 不指向源 cstr）----
-    auto mn = makeMethod(Opcodes::ACC_PUBLIC,
+    auto mn = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC,
                          "getX",
                          "()I",
                          {
-                             new VarInsnNode(Opcodes::ALOAD, 0),
-                             new FieldInsnNode(Opcodes::GETFIELD,
+                             new VarInsnNode(jbytecode::core::Opcodes::ALOAD, 0),
+                             new FieldInsnNode(jbytecode::core::Opcodes::GETFIELD,
                                                ca::str::Utf8StringRef::from_cstr("Foo"),
                                                ca::str::Utf8StringRef::from_cstr("x"),
                                                ca::str::Utf8StringRef::from_cstr("I")),
-                             new InsnNode(Opcodes::IRETURN),
+                             new InsnNode(jbytecode::core::Opcodes::IRETURN),
                          });
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
 
     MIRFieldGet* fg = nullptr;
     for (auto& n : blocks[0]->nodes) {

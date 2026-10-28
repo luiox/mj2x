@@ -16,6 +16,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/frontend/code_converter.hpp"
+#include "test_helper.hpp"
 #include "mj2x/mir/passes/ssa_inline_passes.hpp"
 #include "mj2x/mir/register_ir/reg_dump.hpp"
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
@@ -70,7 +71,7 @@ MethodInsnNode* invokeStatic(const char* owner, const char* name, const char* de
 std::unique_ptr<SSAFunction> buildSsa(MethodNode& mn, Utf8StringArena& arena, std::string& reason)
 {
     CodeConverter converter(arena);
-    auto          blocks = converter.convert(mn);
+    auto          blocks = test::convertMethodNode(converter, mn, arena);
     SSABuilder    builder;
     const bool    isStatic = (mn.access & Opcodes::ACC_STATIC) != 0;
     return builder.build(blocks, "InlineTest", mn.name.to_std_string(), mn.desc.to_std_string(),

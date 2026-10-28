@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "jbytecode/jbytecode.hpp"
+#include "test_helper.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
@@ -96,7 +97,7 @@ RegCEmitResult emitRegCWithUsers(const std::vector<UserIntrinsic>& users, std::s
     auto mn = makeUserCallMethod();
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     auto ssa = builder.build(blocks, "UserIntrinsicRegC", mn->name.to_std_string(),
                              mn->desc.to_std_string(), true, mn->maxLocals, arena, reason);
@@ -170,7 +171,7 @@ RegCEmitResult emitRegCInstanceCallWithUsers(const std::vector<UserIntrinsic>& u
     auto mn = makeInstanceCallMethod();
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     auto ssa = builder.build(blocks, "UserIntrinsicRegC", mn->name.to_std_string(),
                              mn->desc.to_std_string(), false, mn->maxLocals, arena, reason);
@@ -276,13 +277,12 @@ TEST(StackCUserIntrinsicTest, StaticCallSiteLowersToDirectSymbolCall)
     backend.setUserIntrinsics(cfg);
 
     auto mn = makeUserCallMethod();
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     auto result = backend.compileMethod("com/x/F", cm, blocks);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
 
@@ -301,13 +301,12 @@ TEST(StackCUserIntrinsicTest, PassContextAndMayThrow)
     backend.setUserIntrinsics(cfg);
 
     auto mn = makeUserCallMethod();
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     auto result = backend.compileMethod("com/x/F", cm, blocks);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
 
@@ -328,13 +327,12 @@ TEST(StackCUserIntrinsicTest, UnmatchedCallSiteStillUsesJniDispatch)
     backend.setUserIntrinsics(cfg);
 
     auto mn = makeUserCallMethod();
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     auto result = backend.compileMethod("com/x/F", cm, blocks);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
 
@@ -354,13 +352,12 @@ BackendResult emitStackCInstance(const std::vector<UserIntrinsic>& users)
     backend.setUserIntrinsics(cfg);
 
     auto mn = makeInstanceCallMethod();
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     return backend.compileMethod("com/x/F", cm, blocks);
 }
 
@@ -401,13 +398,12 @@ TEST(StackCUserIntrinsicTest, StaticCallSiteWithPassReceiverEntryFailsClosed)
     backend.setUserIntrinsics(cfg);
 
     auto mn = makeUserCallMethod();
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     auto result = backend.compileMethod("com/x/F", cm, blocks);
     EXPECT_EQ(result.kind, BackendResult::Kind::NONE);
 }
@@ -425,13 +421,12 @@ TEST(RegCUserIntrinsicTest, BackendCompileMethodCarriesUserIntrinsics)
     backend.setOutputPath("unused.c");
 
     auto mn = makeUserCallMethod();
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     auto result = backend.compileMethod("com/x/F", cm, blocks);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
     EXPECT_NE(result.text.find("my_m("), std::string::npos) << result.text;
@@ -448,7 +443,7 @@ std::unique_ptr<VmProgram> encodeWithUsers(const std::vector<UserIntrinsic>& use
     auto mn = makeUserCallMethod();
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     auto ssa = builder.build(blocks, "UserIntrinsicVmc4", mn->name.to_std_string(),
                              mn->desc.to_std_string(), true, mn->maxLocals, arena, reason);
@@ -502,7 +497,7 @@ std::unique_ptr<VmProgram> encodeInstanceWithUsers(const std::vector<UserIntrins
     auto mn = makeInstanceCallMethod();
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     // isStatic=false：实例布局 fixture（this@0 + 2 参），与 RegC 实例 helper
     // 对齐——传 true 会少建 receiver 参数，locals[3] 落 undef 拒绝编码。

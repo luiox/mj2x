@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "jbytecode/jbytecode.hpp"
+#include "test_helper.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/vmc4/vm_encoder.hpp"
 #include "mj2x/backend/vmc4/vm_interpreter_emit.hpp"
@@ -86,7 +87,7 @@ std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
 {
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*mn);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     auto ssa = builder.build(blocks, "InlineVmc4", mn->name.to_std_string(),
                              mn->desc.to_std_string(), true, mn->maxLocals, arena, reason);
@@ -836,15 +837,14 @@ TEST(Vmc4BackendTest, VirtualizesInstanceMethodWithThisInReg0)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              1, 1);
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     Vmc4Backend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
     // 实例方法转 VM：产出 C_SOURCE，wrapper 填 this 到 regs[0]。
@@ -868,15 +868,14 @@ TEST(Vmc4BackendTest, InstanceMethodArgsStartAtReg1)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              2, 2);
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     Vmc4Backend   backend;
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto          blocks = converter.convert(*method);
+    auto          blocks = test::convertMethodNode(converter, *method, arena);
     auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE);
     // this 占 regs[0]，p0/p1 填 regs[1]/regs[2]。
@@ -1504,15 +1503,14 @@ TEST(Vmc4BackendTest, SkipsConstructorAndClinit)
                                      new InsnNode(Opcodes::RETURN),
                                  },
                                  0, 0);
-        CompilerMethod cm;
-        cm.methodNode = method.get();
+        CompilerMethod cm = test::snapshotMethod(*method);
         CompilerClass cls;
         cls.methods.push_back(cm);
 
         Vmc4Backend   backend;
         ca::str::Utf8StringArena arena;
         CodeConverter            converter(arena);
-        auto          blocks = converter.convert(*method);
+        auto          blocks = test::convertMethodNode(converter, *method, arena);
         auto          result = backend.compileMethod("Test", cls.methods[0], blocks);
 
         EXPECT_EQ(result.kind, BackendResult::Kind::NONE) << ctorName;
@@ -2329,14 +2327,13 @@ TEST(Vmc4BackendTest, RuntimeProtectionInjection)
                                  new InsnNode(Opcodes::IRETURN),
                              },
                              2, 2);
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*method);
+    auto                     blocks = test::convertMethodNode(converter, *method, arena);
 
     // 默认：不注入。
     Vmc4Backend plain;
@@ -2424,12 +2421,11 @@ std::string compileSingleMethodWithBackend(Vmc4Backend& backend, const std::stri
                              new InsnNode(Opcodes::IRETURN),
                          },
                          2, 2);
-    CompilerMethod cm;
-    cm.methodNode       = mn.get();
+    CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
     ca::str::Utf8StringArena arena;
     CodeConverter            cc(arena);
-    auto                     blocks = cc.convert(*mn);
+    auto                     blocks = test::convertMethodNode(cc, *mn, arena);
     auto result = backend.compileMethod(cls, cm, blocks);
     if (result.kind != BackendResult::Kind::C_SOURCE) {
         reason = result.text;

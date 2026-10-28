@@ -7,6 +7,8 @@
 // 检查，任何压栈顺序/数量错误都会被抓住，不需要真跑 JVM verifier。
 #include <gmock/gmock.h>
 
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,10 +24,18 @@ using namespace jbytecode::tree;
 
 namespace {
 
-// 在 index 里造一个类，含一个静态方法，方法体是给定指令。返回方法指针（归 index 所有）。
+// 树夹具暂存（键 = 类名，重建即替换）：批 6d 后 CompilerClass 无树槽，DOM 由
+// classFromTree 一次性落定；shelf 让树与回投影存活到测试结束（方法指针有效面）。
+std::map<std::string, std::vector<std::unique_ptr<ClassNode>>>& treeShelf()
+{
+    static std::map<std::string, std::vector<std::unique_ptr<ClassNode>>> shelf;
+    return shelf;
+}
+
+// 在 index 里造一个类，含一个静态方法，方法体是给定指令。返回方法指针（树侧，归 shelf 所有）。
 MethodNode* addMethodToIndex(CompilerIndex& index, const std::string& className,
                              const std::string& methodName, const std::string& methodDesc,
-                             const std::vector<AbstractInsnNode*>& insns)
+                             const std::vector<AbstractInsnNode*>& insns, int maxStack = 16)
 {
     auto& arena = index.arena();
     auto  cn    = std::make_unique<ClassNode>();
@@ -38,27 +48,30 @@ MethodNode* addMethodToIndex(CompilerIndex& index, const std::string& className,
     auto* mn = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                               arena.intern(methodName.c_str()),
                               arena.intern(methodDesc.c_str()), arena.intern(""), noExcepts);
-    mn->maxStack  = 16;
+    mn->maxStack  = maxStack;
     mn->maxLocals = 4;
     for (auto* insn : insns) mn->instructions.add(insn);
     cn->methods.push_back(mn);
+    MethodNode* raw = mn;
 
-    CompilerClass cls;
-    cls.classNode = std::move(cn);
-    index.addClass(className, std::move(cls));
-    return index.getClass(className)->classNode->methods.back();
+    treeShelf()[className].push_back(std::move(cn));
+    index.addClass(className, test::classFromTree(className, *treeShelf()[className].back(), arena));
+    return raw;
 }
 
-// 三明治（runWithDomSync）重建树后旧 MethodNode* 全换代——按 name+desc 现查。
+// DOM→树回投影后按名现查（投影 shelf 进同键槽，指针有效到测试结束）。
 MethodNode* findMethodIn(CompilerIndex& index, const std::string& className,
                          const std::string& methodName)
 {
     auto* cls = index.getClass(className);
     if (cls == nullptr) return nullptr;
-    for (auto* m : cls->classNode->methods) {
-        if (m->name.to_std_string() == methodName) return m;
-    }
-    return nullptr;
+    auto tree = test::treeFromDom(*cls, index.arena());
+    if (tree == nullptr) return nullptr;
+    // append-only projection shelf: earlier projections stay alive, so method
+    // pointers taken from previous findMethodIn calls of the same class stay valid.
+    auto& projections = treeShelf()[className];
+    projections.push_back(std::move(tree));
+    return test::findMethodNode(projections.back().get(), methodName);
 }
 
 // ---- 迷你栈校验器：对 LDC/INVOKE/GETSTATIC 做抽象解释，模拟 verifier 的栈形检查 ----
@@ -73,8 +86,8 @@ std::string ldcCstDesc(const ca::core::Any& cst)
     if (cst.as<std::string>() != nullptr || cst.as<ca::str::Utf8StringRef>() != nullptr) {
         return "Ljava/lang/String;";
     }
-    if (auto* t = cst.as<Type>()) {
-        if (t->getSort() == Type::METHOD) return "Ljava/lang/invoke/MethodType;";
+    if (auto* t = cst.as<jbytecode::core::Type>()) {
+        if (t->getSort() == jbytecode::core::Type::METHOD) return "Ljava/lang/invoke/MethodType;";
         return "Ljava/lang/Class;";
     }
     return "<?>";
@@ -101,7 +114,7 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
     //（函数级局部 arena，仅瞬时转串）。
     ca::str::Utf8StringArena scratch;
     for (const auto&         arg :
-         jbytecode::core::Type::getArgumentTypes(ca::str::Utf8StringRef::from_string_view(methodDesc))) {
+         mj2x::Type::getArgumentTypes(ca::str::Utf8StringRef::from_string_view(methodDesc))) {
         // 本测试不用 long/double 形参，category 差异不影响判据。
         stack.push_back(arg.getDescriptor(scratch).to_std_string());
     }
@@ -124,11 +137,11 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
         }
         else if (insn->getType() == AbstractInsnNode::METHOD_INSN) {
             auto* mi = static_cast<MethodInsnNode*>(insn);
-            // desc 先落具名局部（Type 持有的是视图，不能指向临时 string）。
+            // desc 先落具名局部（mj2x::Type 持有的是视图，不能指向临时 string）。
             const std::string miDesc = mi->desc.to_std_string();
-            const auto args = jbytecode::core::Type::getArgumentTypes(
+            const auto args = mj2x::Type::getArgumentTypes(
                 ca::str::Utf8StringRef::from_string_view(miDesc));
-            const auto ret = jbytecode::core::Type::getReturnType(
+            const auto ret = mj2x::Type::getReturnType(
                 ca::str::Utf8StringRef::from_string_view(miDesc));
             const bool hasReceiver = mi->getOpcode() != Opcodes::INVOKESTATIC;
             const int  argCount    = static_cast<int>(args.size());
@@ -166,7 +179,7 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
                 return false;
             }
             const std::string mDesc = m->desc.to_std_string();
-            const auto ret = jbytecode::core::Type::getReturnType(
+            const auto ret = mj2x::Type::getReturnType(
                 ca::str::Utf8StringRef::from_string_view(mDesc));
             if (!descCompatible(ret.getDescriptor(scratch).to_std_string(), stack.back())) {
                 reason = "areturn type mismatch: " + stack.back();
@@ -188,12 +201,12 @@ bool verifyStackShape(MethodNode* m, std::string& reason)
     return true;
 }
 
-// 构造 ldc Handle + areturn 的方法，跑 preprocessor，断言栈形一致 + findXxx 名称。
-Handle makeHandle(CompilerIndex& index, int tag, const char* owner, const char* name,
-                  const char* desc)
+// 构造 ldc 旧栈 Handle(树建模) + areturn 的方法，跑 preprocessor，断言栈形一致 + findXxx 名称。
+jbytecode::core::Handle makeHandle(CompilerIndex& index, int tag, const char* owner, const char* name,
+                                   const char* desc)
 {
     auto& arena = index.arena();
-    return Handle(tag, arena.intern(owner), arena.intern(name), arena.intern(desc));
+    return jbytecode::core::Handle(tag, arena.intern(owner), arena.intern(name), arena.intern(desc));
 }
 
 // Lookup.findXxx 调用点的发射文本形态（find4 钉表用）。
@@ -203,7 +216,7 @@ struct LookupCallShape
     std::string desc;
 };
 
-// find4 钉表用例：tag → Handle 描述符（field tag 用字段描述符）+ 期望 find
+// find4 钉表用例：tag → 旧栈 Handle 描述符（field tag 用字段描述符）+ 期望 find
 // 名字 + 描述符。
 struct FindNameDescCase
 {
@@ -259,7 +272,7 @@ protected:
 TEST_F(LdcPreprocessorTest, ExpandInvokeVirtualHandle)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_INVOKEVIRTUAL, "Sample", "greet",
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_INVOKEVIRTUAL, "Sample", "greet",
                           "(Ljava/lang/String;)Ljava/lang/String;");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findVirtual");
 }
@@ -267,7 +280,7 @@ TEST_F(LdcPreprocessorTest, ExpandInvokeVirtualHandle)
 TEST_F(LdcPreprocessorTest, ExpandInvokeInterfaceHandle)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_INVOKEINTERFACE, "Sample", "greet",
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_INVOKEINTERFACE, "Sample", "greet",
                           "(Ljava/lang/String;)Ljava/lang/String;");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findVirtual");
 }
@@ -275,21 +288,21 @@ TEST_F(LdcPreprocessorTest, ExpandInvokeInterfaceHandle)
 TEST_F(LdcPreprocessorTest, ExpandInvokeStaticHandle)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_INVOKESTATIC, "Sample", "add", "(II)I");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_INVOKESTATIC, "Sample", "add", "(II)I");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findStatic");
 }
 
 TEST_F(LdcPreprocessorTest, ExpandInvokeSpecialHandle)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_INVOKESPECIAL, "Sample", "secret", "(I)I");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_INVOKESPECIAL, "Sample", "secret", "(I)I");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findSpecial");
 }
 
 TEST_F(LdcPreprocessorTest, ExpandNewInvokeSpecialHandle)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_NEWINVOKESPECIAL, "Sample", "<init>", "(I)V");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_NEWINVOKESPECIAL, "Sample", "<init>", "(I)V");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findConstructor");
 }
 
@@ -297,28 +310,28 @@ TEST_F(LdcPreprocessorTest, ExpandNewInvokeSpecialHandle)
 TEST_F(LdcPreprocessorTest, ExpandGetFieldHandlePrimitive)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_GETFIELD, "Sample", "count", "I");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_GETFIELD, "Sample", "count", "I");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findGetter");
 }
 
 TEST_F(LdcPreprocessorTest, ExpandPutFieldHandleReference)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_PUTFIELD, "Sample", "name", "Ljava/lang/String;");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_PUTFIELD, "Sample", "name", "Ljava/lang/String;");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findSetter");
 }
 
 TEST_F(LdcPreprocessorTest, ExpandGetStaticHandle)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_GETSTATIC, "Sample", "total", "J");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_GETSTATIC, "Sample", "total", "J");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findStaticGetter");
 }
 
 TEST_F(LdcPreprocessorTest, ExpandPutStaticHandle)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_PUTSTATIC, "Sample", "ratio", "D");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_PUTSTATIC, "Sample", "ratio", "D");
     runAndVerify(ca::core::Any(h), "()Ljava/lang/invoke/MethodHandle;", "findStaticSetter");
 }
 
@@ -327,14 +340,14 @@ TEST_F(LdcPreprocessorTest, ExpandPutStaticHandle)
 // 名字与方法描述符逐字节钉死（#1027 find4：ldc 侧 find 判定切 indyHandleFindFor
 // 单源后的发射文本不变性判据）。
 
-// 展开一个「ldc Handle(tag); areturn」方法，返回 Lookup.findXxx 调用点的
+// 展开一个「ldc 旧栈 Handle(tag); areturn」方法，返回 Lookup.findXxx 调用点的
 // (name, desc)，并顺带做栈形校验（任何压栈顺序/数量错误都会被抓住）。
 // handleDesc：Handle 的描述符——field tag 须传字段描述符，method tag 传方法
 // 描述符（findGetter 系第 3 参 = 字段类型 Class，来源 h.getDesc()）。
 LookupCallShape expandAndCaptureLookupCall(int tag, const char* handleDesc)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, tag, "Sample", "m", handleDesc);
+    jbytecode::core::Handle h = makeHandle(index, tag, "Sample", "m", handleDesc);
     std::vector<AbstractInsnNode*> insns;
     insns.push_back(new LdcInsnNode(h));
     insns.push_back(new InsnNode(Opcodes::ARETURN));
@@ -411,23 +424,23 @@ TEST_F(LdcPreprocessorTest, FindNameAndDescFullTable)
 TEST_F(LdcPreprocessorTest, ExpandMethodTypeConstant)
 {
     CompilerIndex index;
-    Type mt = jbytecode::core::Type::getMethodType(ca::str::Utf8StringRef::from_cstr("(I)V"));
+    jbytecode::core::Type mt = jbytecode::core::Type::getMethodType(ca::str::Utf8StringRef::from_cstr("(I)V"));
     runAndVerify(ca::core::Any(mt), "()Ljava/lang/invoke/MethodType;", nullptr);
 }
 
-// issue #1 回归：真实类文件形态下（ldc Handle + invoke* ⇒ max_stack=2），展开链
+// issue #1 回归：真实类文件形态下（ldc mj2x::Handle + invoke* ⇒ max_stack=2），展开链
 // 峰值 D+5（D=0 起算即 5）须被抬升后的 maxStack 覆盖。预处理器漏抬时
 // verifyStackShape 的峰值断言直接判红——这正是 stackc s[] 写穿的成因。
 TEST_F(LdcPreprocessorTest, BumpsMaxStackToCoverExpansionPeak)
 {
     CompilerIndex index;
-    Handle h = makeHandle(index, Opcodes::H_INVOKESTATIC, "Sample", "add", "(II)I");
+    jbytecode::core::Handle h = makeHandle(index, Opcodes::H_INVOKESTATIC, "Sample", "add", "(II)I");
     std::vector<AbstractInsnNode*> insns;
     insns.push_back(new LdcInsnNode(ca::core::Any(h)));
     insns.push_back(new InsnNode(Opcodes::ARETURN));
+    // maxStack=2 须在序列化前落定（DOM 快照随 classFromTree 一次性生成）。
     MethodNode* m =
-        addMethodToIndex(index, "Sample", "run", "()Ljava/lang/invoke/MethodHandle;", insns);
-    m->maxStack = 2;   // 手构样本 LdcMhSample 的真实 max_stack 形态。
+        addMethodToIndex(index, "Sample", "run", "()Ljava/lang/invoke/MethodHandle;", insns, 2);
 
     LdcPreprocessor pre;
     test::runWithDomSync(pre, index);
@@ -441,7 +454,7 @@ TEST_F(LdcPreprocessorTest, BumpsMaxStackToCoverExpansionPeak)
     ASSERT_TRUE(verifyStackShape(m, reason)) << reason;
 }
 
-// 非 Handle/MethodType 的 ldc 不动。
+// 非 mj2x::Handle/MethodType 的 ldc 不动。
 TEST_F(LdcPreprocessorTest, LeavesPlainLdcAlone)
 {
     CompilerIndex index;

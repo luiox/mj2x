@@ -101,7 +101,7 @@ class Handle
 {
 public:
     Handle(int tag, const ca::str::Utf8StringRef& owner, const ca::str::Utf8StringRef& name,
-           const ca::str::Utf8StringRef& desc, bool itf)
+           const ca::str::Utf8StringRef& desc, bool itf = false)
         : tag_(tag), owner_(owner), name_(name), desc_(desc), itf_(itf)
     {}
 

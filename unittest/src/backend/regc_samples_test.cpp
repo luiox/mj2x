@@ -210,7 +210,7 @@ std::string emitRegCForMethod(ClassNode* cn, MethodNode* method, std::string& re
 {
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*method);
+    auto                     blocks = test::convertMethodNode(converter, *method, arena);
 
     SSABuilder builder;
     bool       isStatic = (method->access & jbytecode::core::Opcodes::ACC_STATIC) != 0;

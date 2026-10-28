@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "jbytecode/jbytecode.hpp"
+#include "test_helper.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/regc/regc_backend.hpp"
 #include "mj2x/backend/regc/regc_emitter.hpp"
@@ -186,8 +187,7 @@ std::string compileRegCGreeter(const std::string& literal, bool encrypt)
                              },
                              1,
                              0);
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
@@ -195,7 +195,7 @@ std::string compileRegCGreeter(const std::string& literal, bool encrypt)
     if (encrypt) backend.setStringsEncrypt(true);
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*method);
+    auto                     blocks = test::convertMethodNode(converter, *method, arena);
     auto result = backend.compileMethod("StrTarget", cls.methods[0], blocks);
     EXPECT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
 
@@ -221,8 +221,7 @@ TEST(StringsEncryptTest, StackCDisabledDefaultEmitsPlainConstPool)
                              },
                              2,
                              0);
-    CompilerMethod cm;
-    cm.methodNode       = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     cm.markedForCompile = true;
 
     StackCBackend defaultBackend;
@@ -232,7 +231,7 @@ TEST(StringsEncryptTest, StackCDisabledDefaultEmitsPlainConstPool)
     ca::str::Utf8StringArena arena;
     for (auto* backend : {&defaultBackend, &explicitOffBackend}) {
         CodeConverter converter(arena);
-        auto          blocks = converter.convert(*method);
+        auto          blocks = test::convertMethodNode(converter, *method, arena);
         backend->compileMethod("StrTarget", cm, blocks);
         CompilerIndex emptyIndex;
         backend->finalize(emptyIndex);
@@ -261,8 +260,7 @@ TEST(StringsEncryptTest, StackCEncryptedPoolHidesPlaintextUnits)
                              },
                              2,
                              0);
-    CompilerMethod cm;
-    cm.methodNode       = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     cm.markedForCompile = true;
 
     StackCBackend plainBackend;
@@ -271,13 +269,13 @@ TEST(StringsEncryptTest, StackCEncryptedPoolHidesPlaintextUnits)
 
     ca::str::Utf8StringArena arena;
     CodeConverter            plainConverter(arena);
-    auto                     plainBlocks = plainConverter.convert(*method);
+    auto                     plainBlocks = test::convertMethodNode(plainConverter, *method, arena);
     plainBackend.compileMethod("StrTarget", cm, plainBlocks);
     CompilerIndex plainIndex;
     plainBackend.finalize(plainIndex);
 
     CodeConverter            encConverter(arena);
-    auto                     encBlocks = encConverter.convert(*method);
+    auto                     encBlocks = test::convertMethodNode(encConverter, *method, arena);
     encryptedBackend.compileMethod("StrTarget", cm, encBlocks);
     CompilerIndex encIndex;
     encryptedBackend.finalize(encIndex);
@@ -350,8 +348,7 @@ TEST(StringsEncryptTest, RegCEncryptedLiteralDedupesByContent)
                              },
                              1,
                              1);
-    CompilerMethod cm;
-    cm.methodNode = method.get();
+    CompilerMethod cm = test::snapshotMethod(*method);
     CompilerClass cls;
     cls.methods.push_back(cm);
 
@@ -359,7 +356,7 @@ TEST(StringsEncryptTest, RegCEncryptedLiteralDedupesByContent)
     backend.setStringsEncrypt(true);
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
-    auto                     blocks = converter.convert(*method);
+    auto                     blocks = test::convertMethodNode(converter, *method, arena);
     backend.compileMethod("StrTarget", cls.methods[0], blocks);
     CompilerIndex emptyIndex;
     backend.finalize(emptyIndex);
