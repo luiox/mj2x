@@ -1,6 +1,5 @@
 #include "output_writer.hpp"
 
-#include "jzip/zip_io.hpp"
 #include "libca/zip/checksum.hpp"
 
 #include <cstdio>
@@ -51,24 +50,6 @@ static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& 
     return std::move(written).unwrap();
 }
 
-static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&         name,
-                                                              const std::vector<ca::u8>& data)
-{
-    auto       local = std::make_unique<jzip::LocalFileHeader>();
-    ca::zip::Crc32 crc;
-    crc.update(data.data(), data.size());
-
-    local->setFileName(name);
-    local->setGeneralPurposeBitFlag(0x0800);
-    local->setCompressionMethod(0);
-    local->setCrc32(crc.value());
-    local->setCompressedSize(static_cast<ca::i64>(data.size()));
-    local->setUncompressedSize(static_cast<ca::i64>(data.size()));
-    local->setFileData(data);
-    local->setOffset(0);
-    return local;
-}
-
 static void writeBytes(const std::string& path, const std::vector<ca::u8>& bytes)
 {
     std::ofstream ofs(path, std::ios::binary);
@@ -86,12 +67,141 @@ static void writeBytes(const std::string& path, const std::vector<ca::u8>& bytes
     }
 }
 
+/// @brief STORED 条目直流写出（T1 性能：JAR 输出每条目全量拷贝退役）。
+///
+/// @details
+/// 旧路径 entry.data → LocalFileHeader（jzip setFileData 库内整条拷贝）→
+/// ZipArchive 驻留 → writeDirect 全量字节 → writeBytes 落盘，大 jar 内存
+/// ~3× 峰值。STORED-only 契约下 zip 布局是确定的：这里直接流式写本地头 +
+/// 数据 + 中央目录 + EOCD，jzip 退出输出面（读取侧 ZipReader 不动），
+/// 内存降到 ~1×（index 的 entry.data 本体）。确定性保持：mod time/date 恒 0。
+/// 越界面 fail-loud（条目数/偏移超 zip32 界即抛，不留静默截断）。
+struct StoredJarWriter
+{
+    explicit StoredJarWriter(const std::string& path) : path_(path), ofs_(path, std::ios::binary)
+    {
+        if (!ofs_) throw std::runtime_error("cannot open output file: " + path);
+    }
+
+    void add(const std::string& name, const std::vector<ca::u8>& data)
+    {
+        if (entries_ >= 0xFFFE) {
+            throw std::runtime_error("jar entry count over zip32 bound: " + name);
+        }
+        // offset_ 用 64 位累计，越 zip32 界在写头前抛（u32 会静默回绕产出坏包）。
+        if (data.size() > 0xFFFFFFFFull ||
+            offset_ + 30 + name.size() + data.size() > 0xFFFFFFFFull) {
+            throw std::runtime_error("jar entry over zip32 bound: " + name);
+        }
+
+        ca::zip::Crc32 crc;
+        crc.update(data.data(), data.size());
+
+        const ca::u32 localOffset = static_cast<ca::u32>(offset_);
+        std::vector<ca::u8> header;
+        header.reserve(30 + name.size());
+        putU32(header, 0x04034b50);
+        putU16(header, 20);          // version needed
+        putU16(header, 0x0800);      // gp flags：UTF-8 名
+        putU16(header, 0);           // stored
+        putU16(header, 0);           // mod time（确定性）
+        putU16(header, 0);           // mod date
+        putU32(header, crc.value());
+        putU32(header, static_cast<ca::u32>(data.size()));
+        putU32(header, static_cast<ca::u32>(data.size()));
+        putU16(header, static_cast<ca::u16>(name.size()));
+        putU16(header, 0);           // extra len
+        header.insert(header.end(), name.begin(), name.end());
+        write(header);
+        write(data);
+
+        std::vector<ca::u8> cen;
+        cen.reserve(46 + name.size());
+        putU32(cen, 0x02014b50);
+        putU16(cen, 20);             // version made by
+        putU16(cen, 20);             // version needed
+        putU16(cen, 0x0800);
+        putU16(cen, 0);
+        putU16(cen, 0);              // mod time
+        putU16(cen, 0);              // mod date
+        putU32(cen, crc.value());
+        putU32(cen, static_cast<ca::u32>(data.size()));
+        putU32(cen, static_cast<ca::u32>(data.size()));
+        putU16(cen, static_cast<ca::u16>(name.size()));
+        putU16(cen, 0);              // extra len
+        putU16(cen, 0);              // comment len
+        putU16(cen, 0);              // disk start
+        putU16(cen, 0);              // internal attrs
+        putU32(cen, 0);              // external attrs
+        putU32(cen, localOffset);
+        cen.insert(cen.end(), name.begin(), name.end());
+        central_.insert(central_.end(), cen.begin(), cen.end());
+        ++entries_;
+    }
+
+    /// 中央目录 + EOCD 收尾；返回产物总字节数（日志口径）。
+    ca::usize finish()
+    {
+        if (offset_ + central_.size() > 0xFFFFFFFFull) {
+            throw std::runtime_error("jar central directory over zip32 bound");
+        }
+        const ca::u32 cdOffset = static_cast<ca::u32>(offset_);
+        write(central_);
+
+        std::vector<ca::u8> eocd;
+        eocd.reserve(22);
+        putU32(eocd, 0x06054b50);
+        putU16(eocd, 0);
+        putU16(eocd, 0);
+        putU16(eocd, static_cast<ca::u16>(entries_));
+        putU16(eocd, static_cast<ca::u16>(entries_));
+        putU32(eocd, static_cast<ca::u32>(central_.size()));
+        putU32(eocd, cdOffset);
+        putU16(eocd, 0);
+        write(eocd);
+
+        ofs_.flush();
+        if (!ofs_.good()) {
+            throw std::runtime_error("short write to output jar: " + path_);
+        }
+        return offset_ + central_.size() + eocd.size();
+    }
+
+private:
+    static void putU16(std::vector<ca::u8>& out, ca::u16 v)
+    {
+        out.push_back(static_cast<ca::u8>(v & 0xFF));
+        out.push_back(static_cast<ca::u8>((v >> 8) & 0xFF));
+    }
+    static void putU32(std::vector<ca::u8>& out, ca::u32 v)
+    {
+        for (int i = 0; i < 4; ++i) {
+            out.push_back(static_cast<ca::u8>((v >> (8 * i)) & 0xFF));
+        }
+    }
+    void write(const std::vector<ca::u8>& bytes)
+    {
+        ofs_.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+        if (!ofs_.good()) {
+            throw std::runtime_error("short write to output jar: " + path_);
+        }
+        offset_ += static_cast<ca::u32>(bytes.size());
+    }
+
+    std::ofstream       ofs_;
+    std::string         path_;
+    std::vector<ca::u8> central_;
+    ca::u64             offset_ = 0;
+    ca::u32             entries_ = 0;
+};
+
 static void writeJar(const std::string& path, CompilerIndex& index)
 {
-    jzip::ZipArchive archive;
-    size_t           classCount    = 0;
-    size_t           resourceCount = 0;
+    size_t classCount    = 0;
+    size_t resourceCount = 0;
 
+    StoredJarWriter jar(path);
     for (const auto& entry : index.jarEntries()) {
         // modified 类走 DOM writeClass（帧垫片后直出）；其余条目引用原数据，
         // 未修改类字节原样保留（保真收益：旧 tree writer 不可复现的
@@ -110,15 +220,12 @@ static void writeJar(const std::string& path, CompilerIndex& index)
         else {
             ++resourceCount;
         }
-        archive.addPart(makeStoredEntry(entry.name, *data));
+        jar.add(entry.name, *data);
     }
 
-    // MVP JAR output writes STORED entries.  That keeps the implementation
-    // deterministic while preserving resource payloads byte-for-byte.
-    auto bytes = jzip::ZipIO::writeDirect(archive);
-    writeBytes(path, bytes);
+    const ca::usize total = jar.finish();
     CA_LOGT_INFO("io", "Written JAR: {} ({} bytes, {} classes, {} resources)\n", path.c_str(),
-           bytes.size(),
+           total,
            classCount,
            resourceCount);
 }

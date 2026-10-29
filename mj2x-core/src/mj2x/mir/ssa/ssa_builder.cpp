@@ -319,98 +319,45 @@ SSASuccessor buildSuccessor(SSABlock* target, const FrameState& fs, SSAFunction&
     return s;
 }
 
-// 找 lb 在 l1blocks 序列里的下一个块对应的 SSABlock（fallthrough 目标）。
-SSABlock* fallthroughBlock(const std::vector<Block*>&                l1blocks,
-                           const std::unordered_map<int, SSABlock*>& ssaByLabel, Block* lb)
+/// @brief labelId -> 所在 L1 块的一次性索引（T1 性能：findBlockByLabel 的
+/// 线性扫在 reaching-def/translation 的逐分支查询下 O(n^2)，一趛建图后
+/// 全部调用点走 O(1) 查找。同 id 首块胜，与线性版首个命中同语义）。
+std::unordered_map<int, Block*> buildLabelBlockMap(const std::vector<Block*>& blocks)
 {
-    for (size_t i = 0; i < l1blocks.size(); ++i) {
-        if (l1blocks[i] == lb && i + 1 < l1blocks.size()) {
-            auto it = ssaByLabel.find(l1blocks[i + 1]->id);
-            return it != ssaByLabel.end() ? it->second : nullptr;
+    std::unordered_map<int, Block*> byLabel;
+    byLabel.reserve(blocks.size() * 2);
+    for (auto* block : blocks) {
+        byLabel.emplace(block->id, block);
+        for (auto& node : block->nodes) {
+            if (node->kind == MIRKind::LABEL) {
+                byLabel.emplace(static_cast<const MIRLabel*>(node.get())->labelId, block);
+            }
         }
     }
-    return nullptr;
+    return byLabel;
 }
 
-// 按 Label* 解析跳转目标。javac 对"回边到方法首条指令"（如 while(true) 循环
-// 的 goto 0）只合成 Label 对象、不发 LABEL 指令，CodeConverter 不会为该方法
-// 入口块建立该 label 映射，ssaByLabel 查不到。此时目标语义 = 方法真入口块
-// （fn.blocks[0]，合成 entry 之前的第一个 L1 块），回退到它并保持 args 绑定。
-Block* findBlockByLabel(const std::vector<Block*>& blocks, int labelId);
+Block* findBlockByLabel(const std::unordered_map<int, Block*>& byLabel, int labelId)
+{
+    auto it = byLabel.find(labelId);
+    return it != byLabel.end() ? it->second : nullptr;
+}
 
 SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel,
-                            const std::vector<Block*>&                 l1blocks,
+                            const std::unordered_map<int, Block*>&    byLabel,
                             const std::vector<std::unique_ptr<SSABlock>>& fnBlocks, int labelKey,
                             SSABlock* realEntry)
 {
     auto it = ssaByLabel.find(labelKey);
     if (it != ssaByLabel.end()) return it->second;
-    // 块 id 与标签 id 在批 6d 前是不同域：回退 MIRLabel 节点扫描，标签 id →
+    // 块 id 与标签 id 在批 6d 前是不同域：回退标签索引，标签 id →
     // 所在 L1 块 → 同 id 的 SSABlock。目标块必含同 id MIRLabel。
-    if (const Block* l1 = findBlockByLabel(l1blocks, labelKey)) {
+    if (const Block* l1 = findBlockByLabel(byLabel, labelKey)) {
         for (const auto& sb : fnBlocks) {
             if (sb->l1LabelId == l1->id) return sb.get();
         }
     }
     return realEntry;
-}
-
-// 批 6d 标签 id 化：targetLabel 即顺序标签 id（指针截断 id 在 x64 上可为
-// 负且 ASLR 依赖，已废除）。
-bool blockContainsLabel(const Block* block, int labelId)
-{
-    if (!block) return false;
-    if (block->id == labelId) return true;
-    for (const auto& node : block->nodes) {
-        if (node->kind != MIRKind::LABEL) continue;
-        if (static_cast<const MIRLabel*>(node.get())->labelId == labelId) return true;
-    }
-    return false;
-}
-
-/// @brief 块是否落在异常表保护区 `[startLabel, endLabel)` 内。
-///
-/// @details
-/// 判定真源 = 指令序号区间（ExceptionHandler::startInsnIdx/endInsnIdx 与
-/// Block::firstInsnIdx/lastInsnIdx，同一条指令列表的下标）：块的指令范围与
-/// 保护区相交即受保护。这与 JVM 指令级 `[start_pc, end_pc)` 语义对齐，且不
-/// 依赖"块序 == 字节码序"的 label 区间扫描（旧实现：从含 startLabel 的块到
-/// 含 endLabel 的块之间所有块都算保护，块序乱序或 label 与指令同块时会扩大
-/// 保护区）。start/end 指令序号未解析（-1）时退化为旧 label 扫描语义
-/// （防御，宁可过度保护也不漏保护）。
-bool blockInProtectedRange(const std::vector<Block*>& blocks, const ExceptionHandler& handler,
-                           const Block* needle)
-{
-    if (needle == nullptr) return false;
-    if (handler.startInsnIdx >= 0 && handler.endInsnIdx >= 0 && needle->firstInsnIdx >= 0 &&
-        needle->lastInsnIdx >= 0) {
-        // [start, end) 半开区间与块指令范围相交（含块首伪指令 idx，同尺一致）。
-        return needle->firstInsnIdx < handler.endInsnIdx &&
-               needle->lastInsnIdx >= handler.startInsnIdx;
-    }
-    // 未解析 fallback：旧语义（块序区间扫描）。
-    bool active = false;
-    for (auto* block : blocks) {
-        if (blockContainsLabel(block, handler.startLabel)) active = true;
-        if (blockContainsLabel(block, handler.endLabel)) active = false;
-        if (active && block == needle) return true;
-    }
-    return false;
-}
-
-bool isExceptionHandlerBlock(const std::vector<ExceptionHandler>& handlers, const Block* block)
-{
-    return std::any_of(handlers.begin(), handlers.end(), [&](const ExceptionHandler& handler) {
-        return blockContainsLabel(block, handler.handlerLabel);
-    });
-}
-
-Block* findBlockByLabel(const std::vector<Block*>& blocks, int labelId)
-{
-    for (auto* block : blocks) {
-        if (blockContainsLabel(block, labelId)) return block;
-    }
-    return nullptr;
 }
 
 SSABlockArg* findExceptionArg(SSABlock* block)
@@ -438,8 +385,10 @@ struct LowerCtx
     SSABlock*&                                sb;          // 当前块的指令累积目标
     FrameState&                               fs;          // 构造期栈模拟
     const std::unordered_map<int, SSABlock*>& ssaByLabel;  // l1Label -> SSABlock*
+    const std::unordered_map<int, Block*>&    byLabel;     // 标签 id -> L1 块（T1 性能：O(1) 解析）
     const std::vector<Block*>&                l1blocks;    // fallthrough 查询用
     Block*                                    lb;          // 当前 L1 块
+    SSABlock*                                 cachedFallthrough = nullptr;  ///< 本块 fallthrough 目标（每块预计算一次，T1 性能）
     ca::str::Utf8StringArena&                 arena;       ///< 派生串（如数组 desc）入池用
 };
 
@@ -901,7 +850,7 @@ bool lowerReturnValue(const MIRReturnValue* /*rv*/, LowerCtx& d, std::string& re
 bool lowerUncondBranch(const MIRUncondBranch* ub, LowerCtx& d, std::string& /*reason*/)
 {
     int               tkey   = ub->targetLabel;
-    SSABlock*         target = resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
+    SSABlock*         target = resolveJumpTarget(d.ssaByLabel, d.byLabel, d.fn.blocks, tkey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get());
     SSAJumpTerminator jt;
     jt.target      = buildSuccessor(target, d.fs, d.fn);
     d.sb->terminator = std::move(jt);
@@ -930,8 +879,8 @@ bool lowerBranchZero(const MIRBranchZero* bz, LowerCtx& d, std::string& reason)
     bt.condition  = cond;
     int bzKey     = bz->targetLabel;
     bt.trueTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
-    bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.byLabel, d.fn.blocks, bzKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+    bt.falseTarget = buildSuccessor(d.cachedFallthrough, d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
 }
@@ -956,8 +905,8 @@ bool lowerBranch(const MIRBranch* br, LowerCtx& d, std::string& reason)
     bt.condition  = cond;
     int brKey     = br->targetLabel;
     bt.trueTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
-    bt.falseTarget = buildSuccessor(fallthroughBlock(d.l1blocks, d.ssaByLabel, d.lb), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.byLabel, d.fn.blocks, brKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+    bt.falseTarget = buildSuccessor(d.cachedFallthrough, d.fs, d.fn);
     d.sb->terminator = std::move(bt);
     return true;
 }
@@ -976,12 +925,12 @@ bool lowerSwitch(const MIRSwitch* sw, LowerCtx& d, std::string& reason)
         SSASwitchCase sc;
         sc.key    = c.key;
         sc.target = buildSuccessor(
-            resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+            resolveJumpTarget(d.ssaByLabel, d.byLabel, d.fn.blocks, key, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
         st.cases.push_back(std::move(sc));
     }
     int defaultKey   = sw->defaultLabel;
     st.defaultTarget = buildSuccessor(
-        resolveJumpTarget(d.ssaByLabel, d.l1blocks, d.fn.blocks, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
+        resolveJumpTarget(d.ssaByLabel, d.byLabel, d.fn.blocks, defaultKey, d.fn.blocks.empty() ? nullptr : d.fn.blocks[0].get()), d.fs, d.fn);
     d.sb->terminator = std::move(st);
     return true;
 }
@@ -1351,14 +1300,14 @@ std::vector<ExceptionHandler> SSABuilder::exceptionTable(const std::vector<Block
     return blocks.front()->exceptionTable;
 }
 
-void SSABuilder::collectOutEdges(Block* b, const std::vector<Block*>& all,
+void SSABuilder::collectOutEdges(Block* b, const std::unordered_map<int, Block*>& byLabel,
                                  std::vector<int>& targets)
 {
-    // Label* → 所在块 id（MIRLabel 节点扫描）；找不到不产边（防御）。
-    // 标签 id → 所在块 id（MIRLabel 节点扫描）；找不到不产边（防御）。
+    // 标签 id → 所在块 id（一次性索引 O(1) 查，T1 性能：此前每分支线性扫全块
+    // 是 reaching-def 预计算的主导 O(n²)）；找不到不产边（防御）。
     // 块 id 与标签 id 在批 6d 前是不同域，边键必须落块 id 域。
-    auto pushBlockId = [&all, &targets](int labelId) {
-        if (const Block* l1 = findBlockByLabel(all, labelId)) {
+    auto pushBlockId = [&byLabel, &targets](int labelId) {
+        if (const Block* l1 = findBlockByLabel(byLabel, labelId)) {
             targets.push_back(l1->id);
         }
     };
@@ -1401,16 +1350,64 @@ static bool blockEndsWithTerminator(Block* b)
     return false;
 }
 
+
+// 批 6d 标签 id 化：targetLabel 即顺序标签 id（指针截断 id 在 x64 上可为
+// 负且 ASLR 依赖，已废除）。
+bool blockContainsLabel(const Block* block, int labelId)
+{
+    if (!block) return false;
+    if (block->id == labelId) return true;
+    for (const auto& node : block->nodes) {
+        if (node->kind != MIRKind::LABEL) continue;
+        if (static_cast<const MIRLabel*>(node.get())->labelId == labelId) return true;
+    }
+    return false;
+}
+
+bool isExceptionHandlerBlock(const std::vector<ExceptionHandler>& handlers, const Block* block)
+{
+    return std::any_of(handlers.begin(), handlers.end(), [&](const ExceptionHandler& handler) {
+        return blockContainsLabel(block, handler.handlerLabel);
+    });
+}
+
+/// @brief 块是否落在异常表保护区 [startLabel, endLabel) 内。
+///
+/// 判定真源 = 指令序号区间（ExceptionHandler::startInsnIdx/endInsnIdx 与
+/// Block::firstInsnIdx/lastInsnIdx，同一条指令列表的下标）：块的指令范围与
+/// 保护区相交即受保护。start/end 指令序号未解析（-1）时退化为 label 扫描
+/// 语义（防御，宁可过度保护也不漏保护）。
+bool blockInProtectedRange(const std::vector<Block*>& blocks, const ExceptionHandler& handler,
+                           const Block* needle)
+{
+    if (needle == nullptr) return false;
+    if (handler.startInsnIdx >= 0 && handler.endInsnIdx >= 0 && needle->firstInsnIdx >= 0 &&
+        needle->lastInsnIdx >= 0) {
+        // [start, end) 半开区间与块指令范围相交（含块首伪指令 idx，同尺一致）。
+        return needle->firstInsnIdx < handler.endInsnIdx &&
+               needle->lastInsnIdx >= handler.startInsnIdx;
+    }
+    // 未解析 fallback：旧语义（块序区间扫描）。
+    bool active = false;
+    for (auto* block : blocks) {
+        if (blockContainsLabel(block, handler.startLabel)) active = true;
+        if (blockContainsLabel(block, handler.endLabel)) active = false;
+        if (active && block == needle) return true;
+    }
+    return false;
+}
+
 // ---- 阶段 A：构造 reaching-def 视图 ----
 std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector<Block*>& blocks)
 {
     // label -> 所有以它为目标 label 的源块（前驱）
     std::unordered_map<int, std::vector<int>> predsOf;
     const auto                                handlers = exceptionTable(blocks);
+    const auto                                byLabel  = buildLabelBlockMap(blocks);
     for (size_t i = 0; i < blocks.size(); ++i) {
         Block*           b = blocks[i];
         std::vector<int> outs;
-        collectOutEdges(b, blocks, outs);
+        collectOutEdges(b, byLabel, outs);
         // 非终结块 fallthrough 到序列下一块（R1a.2：CFG 保真的关键 —— fallthrough 也是边）。
         if (!blockEndsWithTerminator(b) && i + 1 < blocks.size()) {
             outs.push_back(blocks[i + 1]->id);
@@ -1419,7 +1416,7 @@ std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector
 
         for (const auto& handler : handlers) {
             if (blockInProtectedRange(blocks, handler, b)) {
-                auto* handlerBlock = findBlockByLabel(blocks, handler.handlerLabel);
+                auto* handlerBlock = findBlockByLabel(byLabel, handler.handlerLabel);
                 if (handlerBlock) predsOf[handlerBlock->id].push_back(b->id);
             }
         }
@@ -1454,6 +1451,7 @@ void SSABuilder::buildBlocks(SSAFunction& fn, const std::vector<Block*>& l1block
                              const ReachingDefResult& rd)
 {
     const auto handlers = exceptionTable(l1blocks);
+    const auto byLabel  = buildLabelBlockMap(l1blocks);
     for (size_t blockIndex = 0; blockIndex < l1blocks.size(); ++blockIndex) {
         auto* lb      = l1blocks[blockIndex];
         auto  sb      = std::make_unique<SSABlock>(fn.ids.newBlockId());
@@ -1499,7 +1497,7 @@ void SSABuilder::buildBlocks(SSAFunction& fn, const std::vector<Block*>& l1block
     }
     for (const auto& handler : handlers) {
         SSAExceptionRegion region;
-        auto*              handlerBlock = findBlockByLabel(l1blocks, handler.handlerLabel);
+        auto*              handlerBlock = findBlockByLabel(byLabel, handler.handlerLabel);
         auto               handlerIt    = ssaByL1Block.find(handlerBlock);
         region.handler        = handlerIt != ssaByL1Block.end() ? handlerIt->second : nullptr;
         region.exceptionValue = findExceptionArg(region.handler);
@@ -1525,15 +1523,26 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
     // l1Label -> SSABlock*
     std::unordered_map<int, SSABlock*> ssaByLabel;
     for (auto& sb : fn.blocks) ssaByLabel[sb->l1LabelId] = sb.get();
+    // 标签 id -> L1 块（一次性索引，T1 性能：resolveJumpTarget 回退 O(1) 解析）。
+    const auto byLabel = buildLabelBlockMap(l1blocks);
 
     // 每个 SSA 块的入口 FrameState 初始化：
     //   locals[slot]：若 slot 是该块的 arg → arg 指针；否则从方法入口参数或 reaching-def 兜底。
     // R1 简化：只处理"slot 是 arg"的情况；非 arg 的 slot 引用 = opaque 兜底（测试样本不应触发）。
 
-    for (auto* lb : l1blocks) {
+    for (size_t blockIdx = 0; blockIdx < l1blocks.size(); ++blockIdx) {
+        auto*      lb = l1blocks[blockIdx];
         SSABlock*  sb = ssaByLabel.at(lb->id);
         FrameState fs(methodMaxLocals > 0 ? methodMaxLocals : 1);
         if (fs.locals.size() < 8) fs.locals.resize(8, nullptr);
+
+        // 本块 fallthrough 目标预计算一次（T1 性能：此前每个条件分支 lowering
+        // 都线性扫 l1blocks，O(n²)）。
+        SSABlock* cachedFallthrough = nullptr;
+        if (blockIdx + 1 < l1blocks.size()) {
+            auto ftIt = ssaByLabel.find(l1blocks[blockIdx + 1]->id);
+            cachedFallthrough = ftIt != ssaByLabel.end() ? ftIt->second : nullptr;
+        }
 
         // Method parameters are available in every block unless a block arg
         // shadows the same local slot.  This keeps loop conditions that read an
@@ -1592,7 +1601,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
         // 翻译块内节点
         for (auto& node : lb->nodes) {
             // lowering 上下文：所有 per-kind lower 函数通过它读写 SSA 输出与栈模拟。
-            LowerCtx d{fn, sb, fs, ssaByLabel, l1blocks, lb, *arena_};
+            LowerCtx d{fn, sb, fs, ssaByLabel, byLabel, l1blocks, lb, cachedFallthrough, *arena_};
             switch (node->kind) {
             case MIRKind::CONSTANT:
                 if (!lowerConstant(ca::core::tag_cast::cast<MIRConstant>(node.get()), d, reason)) return false;
@@ -1725,7 +1734,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
         // 块翻译完若仍 Unreachable（无显式 terminator）= fallthrough 块：
         // 合成 SSAJump 到序列下一块，并按后继 args 传值。
         if (std::holds_alternative<SSAUnreachableTerminator>(sb->terminator)) {
-            SSABlock*         nextSb = fallthroughBlock(l1blocks, ssaByLabel, lb);
+            SSABlock*         nextSb = cachedFallthrough;
             SSAJumpTerminator jt;
             jt.target      = buildSuccessor(nextSb, fs, fn);
             sb->terminator = std::move(jt);
