@@ -71,7 +71,7 @@ private:
     std::vector<ReachingDefBlock> buildReachingDefView(const std::vector<Block*>& blocks);
 
     /// @brief Collect explicit branch/switch targets from one L1 block.
-    void collectOutEdges(Block* b, const std::vector<Block*>& all, std::vector<int>& targets);
+    void collectOutEdges(Block* b, const std::unordered_map<int, Block*>& byLabel, std::vector<int>& targets);
 
     /// @brief Stage B: create SSABlocks and their block-argument local slots.
     void buildBlocks(SSAFunction& fn, const std::vector<Block*>& l1blocks,

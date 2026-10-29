@@ -455,11 +455,13 @@ class GlobalStringTable
 public:
     std::string intern(const std::string& text)
     {
-        for (size_t index = 0; index < strings_.size(); ++index) {
-            if (strings_[index] == text) return "@_mj2x_llvm_str_" + std::to_string(index);
-        }
+        // T1 性能：哈希旁路——线性扫在重字符串输入（每 invoke owner/name/desc
+        // 三连 intern）下 O(n^2)。
+        auto it = indexOf_.find(text);
+        if (it != indexOf_.end()) return "@_mj2x_llvm_str_" + std::to_string(it->second);
         const size_t index = strings_.size();
         strings_.push_back(text);
+        indexOf_.emplace(text, index);
         return "@_mj2x_llvm_str_" + std::to_string(index);
     }
 
@@ -489,6 +491,7 @@ public:
 
 private:
     std::vector<std::string> strings_;
+    std::unordered_map<std::string, size_t> indexOf_;
 };
 
 /// @brief 调用目标间接化的站点表条目（对标 jvmtp `obfuscation.calls.*`）。
