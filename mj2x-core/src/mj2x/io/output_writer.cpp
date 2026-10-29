@@ -14,6 +14,7 @@
 
 #include "mj2x/core/dom_edit.hpp"
 #include "mj2x/core/frame_recompute.hpp"
+#include "mj2x/core/lca_type_resolver.hpp"
 
 namespace mj2x {
 
@@ -30,8 +31,10 @@ OutputWriter::~OutputWriter() = default;
 
 /// @brief 类字节输出：DOM writeClass 直出。modified 类先过帧重算垫片
 ///        （对齐旧 COMPUTE_FRAMES）；未修改类保真直出（round-trip 恒等）。
+///        @p lca 非空时帧重算走谱系 LCA 解析器（帧换装），缺省硬编码表。
 static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& cls,
-                                           const std::string& name)
+                                           const std::string& name,
+                                           LcaTypeResolver* lca = nullptr)
 {
     if (cls.dom == nullptr) {
         throw std::runtime_error("output_writer: DOM missing for " + name
@@ -39,7 +42,7 @@ static std::vector<ca::u8> writeClassBytes(CompilerIndex& index, CompilerClass& 
     }
     if (cls.modified) {
         auto session = openDomEdit(cls, name);
-        recomputeSessionFrames(name, *session);
+        recomputeSessionFrames(name, *session, lca);
         commitDomEdit(cls, name, std::move(session));
     }
     auto written = jbc::core::writeClass(*cls.dom);
@@ -196,7 +199,7 @@ private:
     ca::u32             entries_ = 0;
 };
 
-static void writeJar(const std::string& path, CompilerIndex& index)
+static void writeJar(const std::string& path, CompilerIndex& index, LcaTypeResolver* lca)
 {
     size_t classCount    = 0;
     size_t resourceCount = 0;
@@ -211,7 +214,7 @@ static void writeJar(const std::string& path, CompilerIndex& index)
         if (entry.isClass) {
             if (auto* cls = index.getClass(entry.className)) {
                 if (cls->modified) {
-                    rewritten = writeClassBytes(index, *cls, entry.className);
+                    rewritten = writeClassBytes(index, *cls, entry.className, lca);
                     data      = &rewritten;
                 }
                 ++classCount;
@@ -271,7 +274,8 @@ static fs::path sidecarClassPath(const fs::path& outputPath,
     return sidecar;
 }
 
-static void writeClassFile(const std::string& path, CompilerIndex& index)
+static void writeClassFile(const std::string& path, CompilerIndex& index,
+                           LcaTypeResolver* lca)
 {
     auto&          classes = index.getClasses();
     CompilerClass* primary = nullptr;
@@ -290,7 +294,7 @@ static void writeClassFile(const std::string& path, CompilerIndex& index)
         primaryName = it->first;
     }
 
-    auto bytes = writeClassBytes(index, *primary, primaryName);
+    auto bytes = writeClassBytes(index, *primary, primaryName, lca);
     writeBytes(path, bytes);
     CA_LOGT_INFO("io", "Written: {} ({} bytes)\n", path.c_str(), bytes.size());
 
@@ -301,14 +305,14 @@ static void writeClassFile(const std::string& path, CompilerIndex& index)
         const auto      sidecarPath = sidecarClassPath(outputPath, name, primaryName);
         std::error_code ec;
         fs::create_directories(sidecarPath.parent_path(), ec);
-        auto sidecarBytes = writeClassBytes(index, cls, name);
+        auto sidecarBytes = writeClassBytes(index, cls, name, lca);
         writeBytes(sidecarPath.string(), sidecarBytes);
         CA_LOGT_INFO("io", "Written sidecar: {} ({} bytes)\n", sidecarPath.string().c_str(),
                sidecarBytes.size());
     }
 }
 
-void OutputWriter::write(const std::string& path, CompilerIndex& index)
+void OutputWriter::write(const std::string& path, CompilerIndex& index, LcaTypeResolver* lca)
 {
     auto& classes = index.getClasses();
     if (classes.empty()) {
@@ -317,11 +321,11 @@ void OutputWriter::write(const std::string& path, CompilerIndex& index)
     }
 
     if (index.isJarInput()) {
-        writeJar(path, index);
+        writeJar(path, index, lca);
         return;
     }
 
-    writeClassFile(path, index);
+    writeClassFile(path, index, lca);
 }
 
 }   // namespace mj2x

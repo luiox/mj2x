@@ -1,5 +1,7 @@
 #include "mj2x/core/frame_recompute.hpp"
 
+#include "mj2x/core/lca_type_resolver.hpp"
+
 #include <stdexcept>
 #include <vector>
 
@@ -91,11 +93,17 @@ std::string_view PortedCommonSuperResolver::refForName(std::string_view type)
     return "java/lang/Object";
 }
 
-void recomputeSessionFrames(const std::string& name, jbc::ir::ClassSession& session)
+void recomputeSessionFrames(const std::string& name, jbc::ir::ClassSession& session,
+                            LcaTypeResolver* lca)
 {
-    auto&                     dom      = session.backing();
-    PortedCommonSuperResolver resolver;
-    FrameEngine               engine(dom.cp, resolver, FramePolicy::Strict);
+    auto& dom = session.backing();
+    // 帧换装：谱系 LCA 解析器（输入 jar 内类型对精确求公共父类）；未供图
+    // （生成类/nloader 面）或单测默认路径维持硬编码表口径。
+    PortedCommonSuperResolver defaultResolver;
+    jbc::analysis::ITypeResolver& resolver =
+        lca != nullptr ? static_cast<jbc::analysis::ITypeResolver&>(*lca)
+                       : static_cast<jbc::analysis::ITypeResolver&>(defaultResolver);
+    FrameEngine engine(dom.cp, resolver, FramePolicy::Strict);
 
     for (ca::usize i = 0; i < dom.methods.size(); ++i) {
         auto promoted = jbc::ir::promoteMethod(session, i);

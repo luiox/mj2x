@@ -13,6 +13,8 @@ class ClassSession;
 
 namespace mj2x {
 
+class LcaTypeResolver;
+
 /// @brief 旧栈 DefaultCommonSuperClassProvider 的硬编码父类链移植（批 6）。
 ///
 /// 旧 writer 的 COMPUTE_FRAMES 公共父类口径 = 这张表 + Object 兜底（mj2x
@@ -34,6 +36,9 @@ public:
 ///        maxStack/maxLocals（lower 落位）+ StackMapTable（v50+，槽换装）。
 ///        帧引擎 Strict 档不可算即抛（旧 writer 同口径：不可验证的类写不出
 ///        来）。生成类构建器（cloader/native_loader）用同一入口拿 maxes。
-void recomputeSessionFrames(const std::string& name, jbc::ir::ClassSession& session);
+///        @p lca 非空时用谱系 LCA 解析器（帧换装：输入 jar 内类型对精确求
+///        公共父类），缺省维持硬编码表口径。
+void recomputeSessionFrames(const std::string& name, jbc::ir::ClassSession& session,
+                            LcaTypeResolver* lca = nullptr);
 
 }   // namespace mj2x

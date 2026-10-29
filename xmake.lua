@@ -206,6 +206,35 @@ add_requireconfs("libjdk_finder.libca",          {version = LUIOX_LIBCA_VERSION,
 -- 单实例，且防未来词条发新版后嵌套解析漂移。
 add_requireconfs("libjbytecode.libjstr",         {version = "0.0.4", override = true})
 add_requireconfs("libjbytecode.libgarena",       {version = LUIOX_LIBGARENA_VERSION, override = true})
+-- 帧换装底座：mjbase（hierarchy/LCA 公共父类求解 + 帧查询面）及其依赖闭包
+-- libjstd/libjhasm/libjclassfile；zlib/libarchive 随 mjbase 链接闭包（libarchive
+-- 覆盖包见上方 mj2x-repo，mjbase 静态库闭包含 libarchive 符号，消费方须同版本
+-- 同配置实例满足 final link）。
+add_requires("mjbase 0.0.4")
+add_requires("libjclassfile 0.0.2")
+add_requires("libjstd 0.0.1")
+add_requires("libjhasm 0.3.3")
+add_requires("zlib")
+-- mjbase/libjhasm/libjclassfile/libjstd 闭包的嵌套 libca 全路径钉定（同上纪律，
+-- 缺一条就多一个实例）：libjhasm 内部依赖链 libjblw→libjbytecode 逐级列出。
+add_requireconfs("libjclassfile.libca",                            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjclassfile.libjstr.libca",                    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjstd.libca",                                  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libca",                                 {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libca",                         {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libjbytecode.libca",            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libjbytecode.libjstr.libca",    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libjbytecode.libgarena.libca",  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjbytecode.libca",                    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjbytecode.libjstr.libca",            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjbytecode.libgarena.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libca",                                   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjbc.libca",                            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjstd.libca",                           {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libca",                          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libjblw.libca",                  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libjblw.libjbytecode.libca",     {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libjbytecode.libca",             {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 -- i18n/resources 构建规则内嵌（.lang/.resources add_files 规则，包安装产物
 -- 不带规则；来源 luiox/libca @ 1ab29dea，libca 升级若规则变更需同步）。
 includes("xmake/libca_rules.lua")
