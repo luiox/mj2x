@@ -607,23 +607,28 @@ void Vmc4Backend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
 void Vmc4Backend::finalize(const CompilerIndex& index)
 {
     (void)index;
+    resetDiagnostics();
 
     // 配置防御（issue #760 切片 2）：lazy 无加密无意义（块游标/密文块不发射，
     // VmInstance 构造已把 blobLazy 归一为 encrypt && lazy）。显式落日志提示
     // CLI 层 requires 约束（vmc4.lazy_decrypt → vmc4.encrypt_program）被绕过。
     // 切片 B（#1116）：block-lazy 同一 requires 口径；两档同开时 block 档
     // 胜出（VmInstance 归一化 blobLazy=关），显式日志说明优先级。
+    // T1：三条同入诊断聚合（日志文本不变），管线/CLI 可编程消费。
     if (options_.programBlockLazyDecrypt && !options_.programBlobEncrypt) {
-        CA_LOGT_WARN("vmc4", "--vmc4-block-lazy-decrypt requires --vmc4-encrypt-program;"
-                             " block-lazy flag ignored\n");
+        recordWarning("vmc4",
+                      "--vmc4-block-lazy-decrypt requires --vmc4-encrypt-program;"
+                      " block-lazy flag ignored");
     }
     if (options_.programBlockLazyDecrypt && options_.programLazyDecrypt &&
         options_.programBlobEncrypt) {
-        CA_LOGT_WARN("vmc4", "--vmc4-lazy-decrypt conflicts with --vmc4-block-lazy-decrypt;"
-                             " block-lazy wins, chunk flag ignored\n");
+        recordWarning("vmc4",
+                      "--vmc4-lazy-decrypt conflicts with --vmc4-block-lazy-decrypt;"
+                      " block-lazy wins, chunk flag ignored");
     }
     if (options_.programLazyDecrypt && !options_.programBlobEncrypt) {
-        CA_LOGT_WARN("vmc4", "--vmc4-lazy-decrypt requires --vmc4-encrypt-program; lazy flag ignored\n");
+        recordWarning("vmc4",
+                      "--vmc4-lazy-decrypt requires --vmc4-encrypt-program; lazy flag ignored");
     }
 
     codegen::IncludeSet includes;

@@ -12,11 +12,29 @@
 #include "mj2x/core/compiler_index.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
 #include "mj2x/frontend/block.hpp"
+#include "libca/log/log_macros.hpp"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace mj2x {
+
+/// @brief finalize 期诊断聚合（T1：三后端失败/降级行为口径统一）。
+///
+/// @details
+/// finalize 期的事实多是「降级而非失败」：RegC 内联因 callee 不可解析放弃、
+/// VMC4 配置冲突被归一化——此前只落各自 tag 的 WARN 日志，管线/CLI 无编程
+/// 消费面，口径散在三个后端。finalize 把告警同时收进本结构（日志照发），
+/// warnings > 0 即本次产物存在降级；samples 携带逐条一句话描述（封顶由各
+/// 后端自定）。
+struct BackendDiagnostics
+{
+    std::size_t              warnings = 0;
+    std::vector<std::string> samples;
+};
+
 
 /// @brief Native 源文件的语言方言。
 ///
@@ -81,6 +99,11 @@ public:
     /// 所有方法编译完后调用，输出累积的 native 源到文件或 generatedSource()。
     virtual void finalize(const CompilerIndex& index) = 0;
 
+    /// @brief finalize 期诊断（降级告警计数 + 采样）。
+    /// @details finalize 入口清零、期间经 recordWarning 累积；管线在全部后端
+    ///          finalize 后聚合输出，编程消费面（corpus 门禁等）经此读取。
+    const BackendDiagnostics& diagnostics() const { return diagnostics_; }
+
     /// @brief 返回 finalize 后生成的完整 native 源码。
     /// @details 返回的引用由 backend 持有，在 backend 生命周期内有效。
     virtual const std::string& generatedSource() const = 0;
@@ -93,6 +116,32 @@ public:
     /// 的调用发射路径（RegC registry 合并、StackC emitInvoke 匹配、VMC4
     /// encodeCall 自定义 helper）。在 compileMethod 前调用。
     virtual void setUserIntrinsics(const UserIntrinsicConfig& /*config*/) {}
+
+protected:
+    /// @brief 记录一条 finalize 期降级告警：日志照发 + 进诊断聚合。
+    void recordWarning(const char* tag, const std::string& message)
+    {
+        ++diagnostics_.warnings;
+        diagnostics_.samples.push_back(message);
+        CA_LOGT_WARN(tag, "{}\n", message.c_str());
+    }
+
+    /// @brief finalize 入口调用：清零上一轮诊断（后端可跨 run 复用）。
+    void resetDiagnostics()
+    {
+        diagnostics_ = BackendDiagnostics{};
+    }
+
+    /// @brief 收编已另行落日志的降级事实（不重复打日志）：1 条告警 + 采样入聚合。
+    void adoptDiagnostics(std::vector<std::string> samples)
+    {
+        if (samples.empty()) return;
+        ++diagnostics_.warnings;
+        diagnostics_.samples = std::move(samples);
+    }
+
+private:
+    BackendDiagnostics diagnostics_;
 };
 
 }   // namespace mj2x
