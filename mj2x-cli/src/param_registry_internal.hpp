@@ -169,53 +169,6 @@ inline bool enumContains(const char* values, const std::string& v)
         return false;                                                                         \
     }
 
-#define DEF_HEX(member, flag, jp)                                             \
-    static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
-    {                                                                                         \
-        if (!v) {                                                                             \
-            e = param_internal::trfs("mj2x.cli.err.flag_requires_value", {flag});                                      \
-            return false;                                                                     \
-        }                                                                                     \
-        if (v[0] == '-') {                                                                    \
-            e = param_internal::trfs("mj2x.cli.err.negative_unsigned",                                        \
-                     {flag, v, "[0,0xFFFFFFFF]"});                                            \
-            return false;                                                                     \
-        }                                                                                     \
-        char*  end = nullptr;                                                                 \
-        const unsigned long val = std::strtoul(v, &end, 16);                                  \
-        if (end == v || *end != '\0') {                                                       \
-            e = param_internal::trfs("mj2x.cli.err.invalid_hex", {flag, v});                      \
-            return false;                                                                     \
-        }                                                                                     \
-        o.member = static_cast<std::uint32_t>(val);                                           \
-        return true;                                                                          \
-    }                                                                                         \
-    static bool json_##member(CliOptions& o, const json& j, std::string& e)                   \
-    {                                                                                         \
-        if (j.is_string()) {                                                                  \
-            const std::string s = j.get<std::string>();                                       \
-            if (!s.empty() && s[0] == '-') {                                                  \
-                e = param_internal::trfs("mj2x.cli.err.negative_unsigned",                                    \
-                         {jp, s, "[0,0xFFFFFFFF]"});                                          \
-                return false;                                                                 \
-            }                                                                                 \
-            char*            end = nullptr;                                                   \
-            const unsigned long val = std::strtoul(s.c_str(), &end, 16);                      \
-            if (end == s.c_str() || *end != '\0') {                                           \
-                e = param_internal::trfs("mj2x.cli.err.cfg_invalid_hex", {jp, s});         \
-                return false;                                                                 \
-            }                                                                                 \
-            o.member = static_cast<std::uint32_t>(val);                                       \
-            return true;                                                                      \
-        }                                                                                     \
-        if (j.is_number_unsigned()) {                                                         \
-            o.member = j.get<std::uint32_t>();                                                \
-            return true;                                                                      \
-        }                                                                                     \
-        e = param_internal::trfs("mj2x.cli.err.cfg_type_hex", {jp});                  \
-        return false;                                                                         \
-    }
-
 #define DEF_ENUM_STR(member, flag, jp, values, def)                           \
     static bool cli_##member(CliOptions& o, const char* v, std::string& e)                    \
     {                                                                                         \
