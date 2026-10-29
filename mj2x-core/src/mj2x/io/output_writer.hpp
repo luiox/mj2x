@@ -7,6 +7,8 @@
 
 namespace mj2x {
 
+class LcaTypeResolver;
+
 class OutputWriter
 {
 public:
@@ -20,7 +22,9 @@ public:
     /// replacing compiled class entries with rewritten class bytes.  MVP output
     /// uses stored ZIP entries, so signed JAR metadata is preserved as bytes but
     /// existing signatures are not expected to remain valid after class changes.
-    void write(const std::string& path, CompilerIndex& index);
+    /// @p lca 非空时 modified 类帧重算走谱系 LCA（帧换装，Pipeline 供给）；
+    /// 缺省 nullptr = 硬编码表口径（直连调用面/单测兼容）。
+    void write(const std::string& path, CompilerIndex& index, LcaTypeResolver* lca = nullptr);
 
 private:
     struct Impl;

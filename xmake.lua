@@ -148,35 +148,45 @@ end
 add_requires("nlohmann_json 3.12.0")
 
 -- 中心包仓直连包（无仓内副本、无 phony 垫片，消费点直接 add_packages）。
-add_repositories("luiox-repo https://github.com/luiox/luiox-repo.git")
+add_repositories("luiox-repo C:/sw/luiox-repo")
+-- libarchive 本地覆盖仓（同 morpher/mjt）：官方 xmake-repo 包只在 windows 传
+-- -DPOSIX_REGEX_LIB=NONE，linux/macOS 沙箱构建走系统正则探测分支会失败；
+-- 覆盖包对所有平台传 NONE（mjbase 静态库闭包含 libarchive 符号，消费方须
+-- 同版本同配置实例满足 final link）。
+add_repositories("mj2x-repo xmake/repo")
 -- libca 版本/模块双单源：顶层与全部嵌套路径一律归并到同一 (版本, 模块集)。
 -- 家族包内声明的 libca 依赖无版本约束且是小模块超集（core,str,log,crypto,zip），
 -- 放任自解析会多出实例；消费方目标同名包去重后落到无 json 的实例时，
 -- 链接期 LNK2019 ca::json（morpher D33 同族根因）。升级 libca 只改下面两行。
-LUIOX_LIBCA_VERSION = "0.0.15"
+LUIOX_LIBCA_VERSION = "0.0.16"
 LUIOX_LIBCA_MODULES = "core,crypto,str,fs,io,json,net,http,process,opt,thread,log,zip,resources,i18n,test"
 add_requires("libca " .. LUIOX_LIBCA_VERSION, {configs = {modules = LUIOX_LIBCA_MODULES}})
 -- test 模块必须显式点名：test_helper 调用 ca::test::top_project_path()，
 -- 缺模块时链接期 undefined reference；包 on_load 按依赖闭包展开排序链接项。
--- libjbc 走项目内联包定义（git 直连 + commit 锁，与 mjt/mjbase 同版本同定义）：
--- luiox-repo 的发布版定义缺 Windows /utf-8 on_load 修正（GBK ACP 探针安装失败），
--- 内联定义是唯一能就地修探针的承载形态；详见包文件头注。
-includes("xmake/packages/libjbc.lua")
-add_requires("libjbc 0.4.15")
-add_requires("libjstr 0.0.2")
+-- 嵌套 libca 通配钉定（morpher 终局口径）：一条 **.libca 覆盖全树任意深度，
+-- 新包接入不再逐路径补条目；override 让包定义内已声明的配置也归并。
+add_requireconfs("**.libca", {override = true, version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+-- 基础库统一超集升级（2026-10-29，随 mjbase 0.0.3 接入）：libjbc 0.4.15→0.4.23
+-- （上游定义已自带 /utf-8 on_load 修正，项目内联定义整体退役）、
+-- libjstr/libjzip/libgarena 0.0.2→0.0.3、libjdk_finder 0.0.2→0.1.0（snake_case
+-- 破坏性 API）；libjbytecode 退役（libjbc 迁移完成后零代码消费方）。
+-- 新增 mjbase 0.0.3（hierarchy/LCA 公共父类求解 + 帧查询面，帧换装底座）及其
+-- 依赖闭包 libjstd/libjhasm/libjclassfile；libarchive/zlib 随 mjbase 链接闭包。
+add_requires("libjbc 0.4.23")
+add_requires("libjstr 0.0.4")
+add_requires("libjzip 0.0.4")
+add_requires("libgarena 0.0.4")
+add_requires("libjclassfile 0.0.2")
+add_requires("libjstd 0.0.1")
+add_requires("libjhasm 0.3.2")
+add_requires("libjdk_finder 0.1.0")
+-- libjbytecode 0.0.2：unittest 测试夹具面仍在消费（jbytecode 树 API 构造
+-- MethodNode/InsnNode 夹具）；产品面（core/cli/rt）已零消费。弃用注记在案，
+-- 夹具迁 libjbc MethodEditor 后退役。
 add_requires("libjbytecode 0.0.2")
-add_requires("libjzip 0.0.2")
-add_requires("libgarena 0.0.2")
-add_requires("libjdk_finder 0.0.2")
--- 嵌套 libca 全路径钉定，缺一条就多一个实例。
-add_requireconfs("libjstr.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjbytecode.libca",           {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjbytecode.libjstr.libca",   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjbytecode.libgarena.libca", {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjbc.libca",                 {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjzip.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libgarena.libca",              {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjdk_finder.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requires("mjbase 0.0.3")
+add_requires("zlib")
+add_requires("libarchive 3.8.8", {configs = {openssl3 = false}})
 -- i18n/resources 构建规则内嵌（.lang/.resources add_files 规则，包安装产物
 -- 不带规则；来源 luiox/libca @ 1ab29dea，libca 升级若规则变更需同步）。
 includes("xmake/libca_rules.lua")
