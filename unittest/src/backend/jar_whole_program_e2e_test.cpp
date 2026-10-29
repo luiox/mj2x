@@ -181,10 +181,16 @@ WholeProgram makeWholeProgram()
         // values() 遍历 / valueOf 合法名 round-trip（引用恒等）/ name/ordinal /
         // try 块内 valueOf 非法名必须 catch IAE（13-probe 外部门禁盲区：
         // EnumProbe 仅合法名、ExceptionProbe 无 valueOf-in-try）。
-        // 局限（#1188 评审 P2-1）：本 E2E 对"内联受保护边"缺陷无回归门禁力——
-        // 类序（Color 先于 EnumSem 转换）使 valueOf 调用点不内联，main 基线
-        // 本 E2E 亦绿；钉住该不变量的是 SSA 层
-        // InlinedBlocksInheritCallerExceptionProtection 单测。
+        // 门禁力（2026-10-29 实证，替代 #1188 评审 P2-1 旧局限注记）：#1193
+        // 内联缓存（beforeCompile 预解析，与类序解耦）使三处 Color.valueOf
+        // 调用点照常内联（CLI 日志 inline 3 calls in EnumSem.check；产物为
+        // 内联进来的 javac valueOf 体——Enum.valueOf 2 参调用形态），其中
+        // "NOPE"/"" 两处位于 try 内。本 E2E 对 #1188"内联受保护边"缺陷有真
+        // 门禁力：变异测试（临时禁用 ssa_inline_passes 的保护继承登记）
+        // regc 案例红、失败形态即预言的"挂起异常越过 try 边界"（NPE at
+        // EnumSem.check(Native Method)），stackc/vmc4 不受 SSA 内联影响、
+        // 回滚后复绿。SSA 层 InlinedBlocksInheritCallerExceptionProtection
+        // 单测仍是第一道门，本 E2E 是端到端第二道。
         {"Color",
          "package app;\n"
          "public enum Color {\n"
