@@ -165,7 +165,10 @@ add_requires("libca " .. LUIOX_LIBCA_VERSION, {configs = {modules = LUIOX_LIBCA_
 -- 缺模块时链接期 undefined reference；包 on_load 按依赖闭包展开排序链接项。
 -- 嵌套 libca 通配钉定（morpher 终局口径）：一条 **.libca 覆盖全树任意深度，
 -- 新包接入不再逐路径补条目；override 让包定义内已声明的配置也归并。
-add_requireconfs("**.libca", {override = true, version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+-- 注意：通配只给 configs（morpher 形）。带 version 的通配会让包 deps 的
+-- libca 解析丢掉包定义的 modules 配置（CI 冷缓存实证：libjdk_finder 链接
+-- undefined ca::env::get）——版本归并交给 root 的 add_requires 单源。
+add_requireconfs("**.libca", {override = true, configs = {modules = LUIOX_LIBCA_MODULES}})
 -- 基础库统一超集升级（2026-10-29，随 mjbase 0.0.3 接入）：libjbc 0.4.15→0.4.23
 -- （上游定义已自带 /utf-8 on_load 修正，项目内联定义整体退役）、
 -- libjstr/libjzip/libgarena 0.0.2→0.0.3、libjdk_finder 0.0.2→0.1.0（snake_case
