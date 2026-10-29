@@ -149,6 +149,72 @@ TEST(RegCUserIntrinsicTest, UnmatchedCallSiteStillUsesGenericDispatch)
     EXPECT_NE(result.source.find("CallStaticIntMethodA"), std::string::npos) << result.source;
 }
 
+/// 遮蔽内建 Math.abs(I)I 的用户条目。
+UserIntrinsic makeShadowAbsEntry()
+{
+    UserIntrinsic u;
+    u.owner  = "java/lang/Math";
+    u.name   = "abs";
+    u.desc   = "(I)I";
+    u.symbol = "my_abs";
+    return u;
+}
+
+/// 漂移回归（T1 intrinsic 决策表）：用户条目遮蔽内建 RuntimeFunction 签名时，
+/// 异常检查稀疏化判定必须与发射面同用用户 registry 视图。旧实现稀疏化硬用
+/// builtins()（Math.abs → RuntimeFunction → 纯计算豁免）——受保护区内的用户
+/// 调用点被省掉异常分发，my_abs 抛出的异常越过 try 边界；判定表统一后
+/// UserIntrinsic 非纯计算，分发保留。方法形状：try { return Math.abs(a); }
+/// catch (Exception e) { return -1; }——调用点与内建 RuntimeFunction 同键且
+/// 处于受保护区。
+TEST(RegCUserIntrinsicTest, ShadowedBuiltinKeepsExceptionDispatch)
+{
+    auto* tryStart = new LabelNode(new Label());
+    auto* tryEnd   = new LabelNode(new Label());
+    auto* handler  = new LabelNode(new Label());
+    auto  mn       = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "userAbs", "(I)I",
+                                {
+                                    tryStart,
+                                    new VarInsnNode(Opcodes::ILOAD, 0),
+                                    new MethodInsnNode(Opcodes::INVOKESTATIC, U("java/lang/Math"),
+                                                       U("abs"), U("(I)I"), false),
+                                    new InsnNode(Opcodes::IRETURN),
+                                    tryEnd,
+                                    handler,
+                                    new VarInsnNode(Opcodes::ASTORE, 1),
+                                    new InsnNode(Opcodes::ICONST_M1),
+                                    new InsnNode(Opcodes::IRETURN),
+                                },
+                                1, 2);
+    mn->tryCatchBlocks.push_back(new TryCatchBlockNode(
+        tryStart->label, tryEnd->label, handler->label,
+        ca::str::Utf8StringRef::from_cstr("java/lang/Exception")));
+
+    std::string             reason;
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto                     blocks = test::convertMethodNode(converter, *mn, arena);
+    SSABuilder               builder;
+    auto ssa = builder.build(blocks, "UserIntrinsicRegC", mn->name.to_std_string(),
+                             mn->desc.to_std_string(), true, mn->maxLocals, arena, reason);
+    ASSERT_TRUE(ssa != nullptr) << reason;
+    RegLowering lowering;
+    auto        reg = lowering.lower(*ssa, reason);
+    ASSERT_TRUE(reg != nullptr) << reason;
+    RegCIntrinsicRegistry registry({makeShadowAbsEntry()});
+    RegCEmitter           emitter(nullptr, {}, nullptr, 0, nullptr, nullptr, nullptr, &registry);
+    auto                  result = emitter.emitFunction(*reg);
+    ASSERT_TRUE(result.ok) << result.reason;
+    // 发射面：用户 symbol 直调（emit 侧用户视图生效）。
+    EXPECT_NE(result.source.find("my_abs("), std::string::npos) << result.source;
+    // UserIntrinsic 恒保留 pending 异常检查。
+    EXPECT_NE(result.source.find("_mj2x_regc_exception_check"), std::string::npos)
+        << result.source;
+    // 稀疏化同视图：受保护区内的非纯计算调用点必须发射异常分发。
+    EXPECT_NE(result.source.find("_mj2x_regc_exception_matches"), std::string::npos)
+        << result.source;
+}
+
 /// com/x/F.m(II)I 实例调用（int call(F f, int a, int b) { return f.m(a, b); }）——
 /// owner/name/desc 与用户条目同键，用于锁定 instance 调用不进用户 intrinsic 路径。
 std::unique_ptr<MethodNode> makeInstanceCallMethod()
