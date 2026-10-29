@@ -1670,6 +1670,9 @@ void RegCBackend::finalize(const CompilerIndex& index)
     includes.addProject("regc/mj2x_regc_crt.h");
     includes.addProject("regc/mj2x_regc_runtime.h");
     includes.addProject("regc/mj2x_regc_safe_env.h");
+    // T1 纯标量 intrinsic 单源头（static inline）：热循环 rotate/reverse 等
+    // 免跨 TU 调用（对标 JIT 的 rol/bswap 单指令形态），见头注。
+    includes.addProject("regc/mj2x_regc_intrinsic_inline.h");
     if (runtimeProtection_.enabled()) {
         includes.addProject("common/mj2x_rt_protect.h");
     }
@@ -1784,6 +1787,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
         apiIncludes.addProject("regc/mj2x_regc_crt.h");
         apiIncludes.addProject("regc/mj2x_regc_runtime.h");
         apiIncludes.addProject("regc/mj2x_regc_safe_env.h");
+        apiIncludes.addProject("regc/mj2x_regc_intrinsic_inline.h");
         const std::string rendered = apiIncludes.render();
         api.append(rendered.data(), rendered.size());
     }
