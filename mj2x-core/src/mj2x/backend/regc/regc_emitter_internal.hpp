@@ -24,6 +24,9 @@
 
 namespace mj2x {
 
+/// @brief 函数级 intrinsic 判定表（定义见下方 class 模板区；emitState 持指针）。
+class RegCIntrinsicDecisionTable;
+
 // 与既有 cpp 一致：CSourceStream 从 codegen 起别名，函数签名保持一行。
 /// @brief REF 寄存器并查集：把"同一个对象的多个寄存器"归并到一个根。
 ///
@@ -124,6 +127,11 @@ struct RegCFunctionEmitState
     /// intrinsic 匹配 registry（issue #818）：nullptr 时用 builtins()。
     /// RegCBackend::setUserIntrinsics 构造带用户条目的 registry 实例后设置。
     const RegCIntrinsicRegistry*              intrinsicRegistry   = nullptr;
+    /// 函数级 intrinsic 判定表（T1）：emitFunction 入口以与 intrinsicRegistry
+    /// 同源的 registry 实例预计算；发射期全部 intrinsic 判定取此表，
+    /// intrinsicRegistry 仅作声明发射等表外用途。nullptr（单测直连发射器
+    /// 未设表）时 emitIntrinsicCall 回退现场 matchCall。
+    const RegCIntrinsicDecisionTable*         decisions           = nullptr;
     /// 后端预扫描验证过的 javac 合成枚举 values()/valueOf() 方法键集合
     /// （owner\nname\ndesc）。方法注入 native 后指令被清空，发射期无法再
     /// 现场验证方法体；nullptr（单测直调发射器）时回退现场验证。
@@ -453,12 +461,58 @@ bool rejectNativeObjectEscape(const RegCFunctionEmitState& state, const RegOpera
 bool rejectNativeObjectEscapes(const RegCFunctionEmitState&   state,
                                const std::vector<RegOperand>& operands,
                                const std::string&            surface, std::string& reason);
+/// @brief 函数级 intrinsic 判定表（T1 判定热点 + registry 视图统一）。
+///
+/// @details
+/// emitFunction 入口对全部 Call 指令以唯一 registry 实例算一次 matchCall，
+/// StringBuilder/wrapper 分析（各两遍）、local-ref 帧判定、异常检查稀疏化
+/// 与 emitIntrinsicCall 共享同一份决策。此前各消费点自行重复判定（每 Call
+/// 至多 6 次 fromInstruction + 179 条目线性扫），且 analyze/稀疏化侧硬编码
+/// builtins() 而 emit 侧用用户 registry——用户条目遮蔽内建签名时两侧判定
+/// 漂移（wrapper 分析按 WrapperValueOf 建 native 态、emit 按 UserIntrinsic
+/// 出 jobject 的错配；纯计算豁免 ExceptionCheck 套在可抛用户函数上）。
+/// 表键取指令地址：RegFunction 块/指令为 unique_ptr 所有权，单次发射内
+/// 地址稳定。
+class RegCIntrinsicDecisionTable
+{
+public:
+    RegCIntrinsicDecisionTable(const RegFunction&             fn,
+                               const RegCIntrinsicRegistry& registry)
+    {
+        ca::usize callCount = 0;
+        for (const auto& block : fn.blocks) callCount += block->instructions.size();
+        byCall_.reserve(callCount);
+        for (const auto& block : fn.blocks) {
+            for (const auto& ins : block->instructions) {
+                if (ins.kind != RegInstructionKind::Call) continue;
+                byCall_.emplace(&ins, registry.matchCall(ins));
+            }
+        }
+    }
+
+    /// @brief Call 指令的预计算判定。
+    /// @details 构造覆盖函数内全部 Call；非 Call 指令或跨函数查询返回缺省
+    /// Fallback（消费方语义即"按通用 JNI 派发处理"，与 miss 时保守行为一致）。
+    const RegCIntrinsicDecision& at(const RegInstruction& ins) const
+    {
+        const auto it = byCall_.find(&ins);
+        return it != byCall_.end() ? it->second : fallback_;
+    }
+
+private:
+    std::unordered_map<const RegInstruction*, RegCIntrinsicDecision> byCall_;
+    /// at() 对表外指令的保守应答（通用派发语义）。
+    RegCIntrinsicDecision fallback_;
+};
+
 /// 分析函数内登记的 native 包装寄存器集合（含参数传入的包装对象）。
-std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn);
+/// 判定一律取决策表（与 emit 同一 registry 视图）。
+std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn,
+                                         const RegCIntrinsicDecisionTable& decisions);
 /// 分析 StringBuilder/StringBuffer 的分配/连接/逃逸，产出 materialize 计划。
-/// registry 用于识别 StringBuilder 方法 intrinsic（nullptr 时用 builtins()）。
+/// 判定一律取决策表（与 emit 同一 registry 视图）。
 RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
-                                            const RegCIntrinsicRegistry* registry = nullptr);
+                                            const RegCIntrinsicDecisionTable& decisions);
 
 /// @brief 判定某类的实例字段是否全为原生类型（POD 类）。
 /// @details 同时要求无接口、直接继承 Object——继承/接口会让字段布局不等于本类

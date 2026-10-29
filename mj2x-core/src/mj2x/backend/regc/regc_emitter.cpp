@@ -45,23 +45,12 @@ using codegen::CSourceStream;
 /// intrinsic 与普通调用，统一标 mayThrow，导致热循环每轮都做 ExceptionCheck。
 /// 这里在发射异常分发前复判一次：匹配成功且为 RuntimeFunction 时省略检查
 /// （与 emitIntrinsicCall 的发射行为一致——该分支无 native-state 回退）。
-bool isPureRuntimeIntrinsic(const RegInstruction& ins)
+bool isPureRuntimeIntrinsic(const RegInstruction& ins, const RegCIntrinsicDecisionTable& decisions)
 {
     if (ins.kind != RegInstructionKind::Call) return false;
-    const RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+    const RegCIntrinsicDecision& decision = decisions.at(ins);
     return decision.kind == RegCIntrinsicDecisionKind::Emit &&
            decision.emitKind == RegCIntrinsicEmitKind::RuntimeFunction;
-}
-
-/// Object.getClass() intrinsic（发射为 JNI GetObjectClass）本身不抛 Java 异常，
-/// NULL receiver 的 NPE 已在发射点显式处理。无异常区域的方法可省略调用后
-/// ExceptionCheck（有异常区域时保守保留，避免 NPE 挂起后错过 catch 分发）。
-bool isObjectGetClass(const RegInstruction& ins)
-{
-    if (ins.kind != RegInstructionKind::Call) return false;
-    const RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
-    return decision.kind == RegCIntrinsicDecisionKind::Emit &&
-           decision.emitKind == RegCIntrinsicEmitKind::ObjectGetClass;
 }
 
 /// IR 级"方法体是否产 JNI local ref"判定：PushLocalFrame 帧发射的补充判定
@@ -73,13 +62,13 @@ bool isObjectGetClass(const RegInstruction& ins)
 /// - ArrayLoad/ArrayStore 的 elementType 为 REF：true
 /// - Intrinsic 指令（array.length/monitor/cmp.nan）纯计算不产 ref；string
 ///   literal 物化走 LDC 表达式路径（tag 前缀），不在指令层面 → false
-bool fnProducesLocalRefsIR(const RegFunction& fn)
+bool fnProducesLocalRefsIR(const RegFunction& fn, const RegCIntrinsicDecisionTable& decisions)
 {
     for (const auto& block : fn.blocks) {
         for (const auto& ins : block->instructions) {
             switch (ins.kind) {
                 case RegInstructionKind::Call:
-                    if (!isPureRuntimeIntrinsic(ins)) return true;
+                    if (!isPureRuntimeIntrinsic(ins, decisions)) return true;
                     break;
                 case RegInstructionKind::Allocate: return true;
                 case RegInstructionKind::LoadField:
@@ -103,14 +92,14 @@ bool fnProducesLocalRefsIR(const RegFunction& fn)
 /// 统计方法体产 JNI local ref 的指令数（与 fnProducesLocalRefsIR 同一分类，
 /// 计数而非布尔）。无环 CFG 中每条指令至多执行一次，计数即单次调用的 local
 /// ref 消耗上界（保守：Call 一律计 1，含稳态零 ref 的 resolved/intrinsic 调用）。
-size_t fnLocalRefCountIR(const RegFunction& fn)
+size_t fnLocalRefCountIR(const RegFunction& fn, const RegCIntrinsicDecisionTable& decisions)
 {
     size_t count = 0;
     for (const auto& block : fn.blocks) {
         for (const auto& ins : block->instructions) {
             switch (ins.kind) {
                 case RegInstructionKind::Call:
-                    if (!isPureRuntimeIntrinsic(ins)) ++count;
+                    if (!isPureRuntimeIntrinsic(ins, decisions)) ++count;
                     break;
                 case RegInstructionKind::Allocate: ++count; break;
                 case RegInstructionKind::LoadField:
@@ -219,8 +208,15 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
 
     std::map<uint32_t, SSAType> regs;
     if (!collectRegisters(fn, regs, result.reason)) return result;
-    const RegCStringBuilderPlan stringBuilderPlan = analyzeStringBuilders(fn, intrinsicRegistry_);
-    const std::set<uint32_t>    nativeWrapperRegisters = analyzeNativeWrappers(fn);
+    // 函数级 intrinsic 决策表：唯一 registry 视图（用户 registry 优先）在入口
+    // 算一次，分析两件套、local-ref 帧判定、异常检查稀疏化与 emitIntrinsicCall
+    // 全部查表（T1 判定热点 + 视图统一，见 RegCIntrinsicDecisionTable）。
+    const RegCIntrinsicRegistry& effectiveIntrinsicRegistry =
+        intrinsicRegistry_ != nullptr ? *intrinsicRegistry_
+                                      : RegCIntrinsicRegistry::builtins();
+    const RegCIntrinsicDecisionTable decisions(fn, effectiveIntrinsicRegistry);
+    const RegCStringBuilderPlan      stringBuilderPlan = analyzeStringBuilders(fn, decisions);
+    const std::set<uint32_t>         nativeWrapperRegisters = analyzeNativeWrappers(fn, decisions);
     // POD struct 降级：默认关闭（options_.podStruct），关闭时 plan 为空。
     const RegCPodStructPlan     podPlan = options_.podStruct
                                              ? analyzePodStructs(fn, classIndex_)
@@ -238,10 +234,11 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     emitState.convertedFunctionDecls             = convertedFunctionDecls_;
     emitState.indyFunctions                      = indyFunctions_;
     emitState.intrinsicRegistry                  = intrinsicRegistry_;
+    emitState.decisions                          = &decisions;
     emitState.enumSyntheticMethods               = enumSyntheticMethods_;
     emitState.forwardDecls                       = forwardDecls_;
     emitState.resolvedDispatch                   = options_.resolvedDispatch;
-    emitState.hasLocalFrame                      = fnProducesLocalRefsIR(fn);
+    emitState.hasLocalFrame                      = fnProducesLocalRefsIR(fn, decisions);
     emitState.nativeStringBuilderRegisters       = stringBuilderPlan.nativeRegisters;
     emitState.nativeStringBuilderOwners          = stringBuilderPlan.ownerRegisters;
     emitState.nativeStringBuilderOwnerByRegister = stringBuilderPlan.ownerByRegister;
@@ -400,7 +397,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             // 无异常区域（方法无 try/catch）时省略调用后 ExceptionCheck：pending
             // 异常直接泄漏到 JNI 边界由 JVM 处理（与 Java 语义及 os30 一致），省
             // 每次调用的 check 开销；有异常区域时保留（分发到 handler 必需）。
-            if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins) &&
+            if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins, decisions) &&
                 !activeRegions.empty()) {
                 if (!emitExceptionDispatch(body,
                                            activeRegions,
@@ -444,7 +441,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
                     emitAllocateWithInit(body, emitState, *pendingFuse.alloc, ins,
                                          pendingFuse.allocCacheName, pendingFuse.fusedArgs);
                     pendingFuse.active = false;
-                    if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins) &&
+                    if (ins.effect.mayThrow && !isPureRuntimeIntrinsic(ins, decisions) &&
                         !activeRegions.empty()) {
                         if (!emitExceptionDispatch(body,
                                                    activeRegions,
@@ -783,7 +780,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     // intrinsic 缓存命中）下这类叶子函数产 ref 为 0，被热循环直调时每迭代
     // 省 2 JNI。循环内产 ref 点随迭代累积，不豁免。
     const bool frameEligible =
-        producesRefs && !fnCfgHasLoop(fn) && fnLocalRefCountIR(fn) <= 6;
+        producesRefs && !fnCfgHasLoop(fn) && fnLocalRefCountIR(fn, decisions) <= 6;
     const bool needsLocalFrame = producesRefs && !frameEligible;
     if (needsLocalFrame) {
         out.iff("(*_mj2x_regc_env)->PushLocalFrame(_mj2x_regc_env, 16) != 0",

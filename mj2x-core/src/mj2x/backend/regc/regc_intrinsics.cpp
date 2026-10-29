@@ -144,11 +144,9 @@ void connectTerminatorCopies(RegIdUnionFind& ids, const RegTerminator& terminato
 
 }   // namespace
 
-RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
-                                            const RegCIntrinsicRegistry* registry)
+RegCStringBuilderPlan analyzeStringBuilders(const RegFunction&                fn,
+                                            const RegCIntrinsicDecisionTable& decisions)
 {
-    const RegCIntrinsicRegistry& intrinsicRegistry =
-        registry == nullptr ? RegCIntrinsicRegistry::builtins() : *registry;
     RegIdUnionFind                                                  ids;
     std::vector<std::pair<uint32_t, RegCIntrinsicNativeObjectKind>> allocations;
 
@@ -172,8 +170,7 @@ RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
                 ids.add(ins.dest.id.value);
             }
             else if (ins.kind == RegInstructionKind::Call) {
-                const RegCIntrinsicDecision decision =
-                    intrinsicRegistry.matchCall(ins);
+                const RegCIntrinsicDecision& decision = decisions.at(ins);
                 if (decision.kind == RegCIntrinsicDecisionKind::Emit &&
                     decision.emitKind == RegCIntrinsicEmitKind::StringBuilderAppend &&
                     ins.hasDest && !ins.args.empty()) {
@@ -257,8 +254,7 @@ RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
             case RegInstructionKind::Intrinsic: fallbackAll(ins.args, 0); break;
             case RegInstructionKind::Call:
             {
-                const RegCIntrinsicDecision decision =
-                    RegCIntrinsicRegistry::builtins().matchCall(ins);
+                const RegCIntrinsicDecision& decision = decisions.at(ins);
                 const bool safeInit = decision.kind == RegCIntrinsicDecisionKind::Emit &&
                                       decision.emitKind == RegCIntrinsicEmitKind::StringBuilderInit;
                 const bool safeAppend =
@@ -399,7 +395,8 @@ RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
     return plan;
 }
 
-std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn)
+std::set<uint32_t> analyzeNativeWrappers(const RegFunction&                fn,
+                                         const RegCIntrinsicDecisionTable& decisions)
 {
     RegIdUnionFind ids;
     for (const auto& parameter : fn.parameters) {
@@ -423,7 +420,7 @@ std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn)
                 ins.dest.type != SSAType::REF) {
                 continue;
             }
-            const RegCIntrinsicDecision decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+            const RegCIntrinsicDecision& decision = decisions.at(ins);
             if (decision.kind != RegCIntrinsicDecisionKind::Emit ||
                 decision.emitKind != RegCIntrinsicEmitKind::WrapperValueOf) {
                 continue;
@@ -478,8 +475,7 @@ std::set<uint32_t> analyzeNativeWrappers(const RegFunction& fn)
             case RegInstructionKind::Intrinsic: fallbackAll(ins.args, 0); break;
             case RegInstructionKind::Call:
             {
-                const RegCIntrinsicDecision decision =
-                    RegCIntrinsicRegistry::builtins().matchCall(ins);
+                const RegCIntrinsicDecision& decision = decisions.at(ins);
                 if (decision.kind == RegCIntrinsicDecisionKind::Emit &&
                     decision.emitKind == RegCIntrinsicEmitKind::WrapperUnbox && !ins.args.empty()) {
                     uint32_t root = 0;
@@ -817,10 +813,18 @@ bool tryEmitEnumMemberAccess(CSourceStream& out, const RegInstruction& ins,
 RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
                                         const RegInstruction& ins, RegCFunctionEmitState& state)
 {
-    const RegCIntrinsicRegistry& intrinsicRegistry =
-        state.intrinsicRegistry == nullptr ? RegCIntrinsicRegistry::builtins()
-                                           : *state.intrinsicRegistry;
-    RegCIntrinsicDecision decision = intrinsicRegistry.matchCall(ins);
+    // 判定一律取函数级决策表（与 analyze/稀疏化同一 registry 视图）；
+    // 单测直连发射器未设表时回退现场判定（与既有行为一致）。
+    RegCIntrinsicDecision decision;
+    if (state.decisions != nullptr) {
+        decision = state.decisions->at(ins);
+    }
+    else {
+        const RegCIntrinsicRegistry& intrinsicRegistry =
+            state.intrinsicRegistry == nullptr ? RegCIntrinsicRegistry::builtins()
+                                               : *state.intrinsicRegistry;
+        decision = intrinsicRegistry.matchCall(ins);
+    }
     if (decision.kind == RegCIntrinsicDecisionKind::Fallback &&
         (tryEmitEnumMemberAccess(out, ins, state) ||
          tryEmitEnumValuesCall(out, ins, state) ||
