@@ -163,12 +163,39 @@ LUIOX_LIBCA_MODULES = "core,crypto,str,fs,io,json,net,http,process,opt,thread,lo
 add_requires("libca " .. LUIOX_LIBCA_VERSION, {configs = {modules = LUIOX_LIBCA_MODULES}})
 -- test 模块必须显式点名：test_helper 调用 ca::test::top_project_path()，
 -- 缺模块时链接期 undefined reference；包 on_load 按依赖闭包展开排序链接项。
--- 嵌套 libca 通配钉定（morpher 终局口径）：一条 **.libca 覆盖全树任意深度，
--- 新包接入不再逐路径补条目；override 让包定义内已声明的配置也归并。
--- 注意：通配只给 configs（morpher 形）。带 version 的通配会让包 deps 的
--- libca 解析丢掉包定义的 modules 配置（CI 冷缓存实证：libjdk_finder 链接
--- undefined ca::env::get）——版本归并交给 root 的 add_requires 单源。
+-- 嵌套 libca 钉定：通配（configs-only）管 modules 归并 + 显式路径（带
+-- version）锁版本。只靠通配不够——包 deps 的 libca 是无版本依赖，CI 冷
+-- 缓存下会解析到缓存里的旧版实例（libjdk_finder 0.1.0 需要新 ca::env::get
+-- optional 重载，0.0.15 没有 → undefined reference，2026-10-29 CI 实证）；
+-- 而 versioned 通配又会丢包定义的 modules 配置（同日实证）。两者并用：
+-- 显式路径锁版本，通配兜未列路径的 modules 归并。
 add_requireconfs("**.libca", {override = true, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjbc.libca",                          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjstr.libca",                         {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjzip.libca",                         {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libgarena.libca",                       {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjclassfile.libca",                   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjclassfile.libjstr.libca",           {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjstd.libca",                         {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjbytecode.libca",                    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjbytecode.libjstr.libca",            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjbytecode.libgarena.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libca",                        {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libjbytecode.libca",   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libjbytecode.libjstr.libca",  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjblw.libjbytecode.libgarena.libca", {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjbytecode.libca",           {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjbytecode.libjstr.libca",   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjbytecode.libgarena.libca", {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjdk_finder.libca",                   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libca",                          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjbc.libca",                   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjstd.libca",                  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libca",                 {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libjblw.libca",         {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libjblw.libjbytecode.libca",   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libjbytecode.libca",    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 -- 基础库统一超集升级（2026-10-29，随 mjbase 0.0.3 接入）：libjbc 0.4.15→0.4.23
 -- （上游定义已自带 /utf-8 on_load 修正，项目内联定义整体退役）、
 -- libjstr/libjzip/libgarena 0.0.2→0.0.3、libjdk_finder 0.0.2→0.1.0（snake_case
