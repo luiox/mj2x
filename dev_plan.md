@@ -122,8 +122,13 @@
    增益为零且需动 #1191 门禁双键基线——待此类环境入档再开卡。
 2. isGeneratedRuntimeClass 用户手写 `Lambda$N` 理论误判：名字识别法对用户
    自定义同名类的理论冲突，低概率，记录在案。
-3. EnumSemCheck E2E 门禁力：现类序使内联不发生，E2E 对 #1188 类内联缺口无
-   门禁力（SSA 单测是真门）——caller-first 排序变体可解锁 E2E 防护。
+3. ~~EnumSemCheck E2E 门禁力~~（2026-10-29 收卡）：前提失效——#1193 内联
+   缓存（beforeCompile 预解析）与类序解耦，三处 Color.valueOf 调用点照常
+   内联进 EnumSem.check（实测 CLI `inline 3 calls`；产物为内联进来的 javac
+   valueOf 体，Enum.valueOf 2 参调用形态），其中两处在 try 内。变异测试
+  （临时禁用 ssa_inline_passes 保护继承登记）实证 E2E 门禁力：regc 红
+  （挂起异常越过 try 边界）、stackc/vmc4 不受影响、回滚复绿。caller-first
+   排序变体不再需要；测试文件局限注记同步更新。
 4. N4/N6 dev_plan 历史日志数字微误：PR body 已勘正，本文件日志正文回填
    （低优先级，纯记录）。
 5. #1194 P3-4：模板 glob 收编 `src/generated/` 下任意 .c/.cpp——目录为 CLI
