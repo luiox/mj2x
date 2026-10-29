@@ -74,6 +74,12 @@
 - rt_protect Linux rwx 检测疑似对宿主 JVM CodeCache（rwxp）误报（force 下
   自毁）；需 Linux 真机验证后按 safe-env 模式排除 libjvm 自身映射——现有
   exec 级测试全在 Windows，掩盖此问题。
+  **验证（2026-10-29，WSL2 Ubuntu 24.04 + OpenJDK 17.0.20）**：`/proc/PID/maps`
+  探针——静息态与 2 亿次迭代 JIT 满载态均**零 rwx 段**（perm 直方图仅
+  r--p/rw-p/r-xp/r--s；CodeHeap 为 r-x，无 rwxp 形态）。疑点不成立于现代
+  HotSpot 栈（原疑点大概来自 JDK8/11 时代形态），`mj2x_rt_maps_has_rwx`
+  在目标环境不会误触发。检测面保持现状；若未来遇受影响环境（旧 JDK/其他
+  JVM/异常内核），再按 safe-env 模式做 libjvm 自身映射排除的细化。
 - RegC 进程级缓存并发残留：jclass 与 methodID 两写间的短暂错配窗（需原子对
   或 seqlock 才能闭）、字符串字面量 32 槽缓存的瞬时覆盖竞态（越界安全，
   维持既有注记）；并发契约见 `mj2x_regc_runtime.c` 文件头。
@@ -221,14 +227,24 @@
     仅 regfile 触发；池大小无关（8/12/16/24/64 全失败）。
     **已做的遏制**：语料 obf 档暂撤 `--vmc4-regfile`（corpus runner 注释）；
     plain 档 regfile E2E（Vmc4RegfileA/B）未覆盖此形态故仍绿。
-    **修复方向**：区间 hull 的 liveIn/liveOut 扩展或 victim 换出路径的活性
-    失真；修后 (a) 排查 helper 的 ExceptionCheck 面，(b) obf 档重新加入
-    regfile，(c) 本条最小复现收编为 emit 级单测。
-13. **computed jumps 大 switch 缺陷（PR #27 回归，未修）**：
-    `--regc-computed-jumps` 在 250-case switch 形态下输出错误
-    （java_corpus BigSwitch 首曝；obf 档二分锁定单开即复现，
-    test/tmp/bsbisect 复现脚本）。既有 computed-jumps E2E 未覆盖大 switch
-    密集形态。**已做遏制**：语料 obf 档暂撤该开关（corpus runner 注释）。
+    ~~修复方向：区间 hull 的 liveIn/liveOut 扩展或 victim 换出路径的活性失真。~~
+    **已消（2026-10-29 校准）：随 J-12 二段（f6d39b8 parallel-move 环破碎）+
+    J-14（e170a92 异常边入口快照）修复级联消失**。复验证据：① 256 循环 CRC
+    表形态重建复现（test/tmp/rfmin256：table 256 构建 + 变量下标读 + crc
+    消费 + 溢出参与），`--vmc4-regfile 8` 单开输出与 plain 档逐行全等；
+    ② obf 档全语料 132 格（44 case × 3 后端，`--vmc4-regfile 8` 满配组合）
+    全绿。后续清单口径：(b) obf 档复接已完成（测试文件 obf 档现含该开关）；
+   (a) helper ExceptionCheck 加固与 (c) 最小复现收编 emit 级单测——主缺陷
+    消失后降级为健壮性备注，遇回归再启用。
+13. ~~**computed jumps 大 switch 缺陷（PR #27 回归，未修）**~~ **已修（f6d39b8，
+    2026-10-25）**：根因 = key→目标映射表的扫表循环缺陷，与 J-12 二段同提交
+    修复；同提交内 obf 档复接 `--regc-computed-jumps`。
+    **复验（2026-10-29 校准）**：test/tmp/bsbisect 重现脚本在 main 重新生成
+    （250-case 稠密+稀疏 switch × 循环），`--regc-computed-jumps` 单开编译
+    运行与 JVM 基线全等——BigSwitch.main 1000 次循环 pick 覆盖全部 250 case
+    （4 全扫）+ 稀疏探针（7000/249/1000007）；obf 档全语料 132 格全绿。
+    BigSwitch 形态已由 obf 档 corpus 例行覆盖（该开关复接后每次 obf 跑都
+    经过 250-case 大 switch 面）。
     **修复方向**：key→目标映射表在 case 数量大时的编码/解析面；修后
     (a) BigSwitch 收编为该开关的 E2E 用例，(b) obf 档重新加入。
 
