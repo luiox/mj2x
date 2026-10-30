@@ -206,3 +206,5 @@ mj2x.param.intrinsic.config.desc=User-defined intrinsic JSON (issue #818): {"int
 mj2x.param.intrinsic.sources.desc=Append user intrinsic implementation sources (repeatable; compiled into the generated project)
 mj2x.param.log.quiet.desc=Keep only warnings and errors in the log (stderr)
 mj2x.param.log.verbose.desc=Raise the log level to debug (stderr)
+mj2x.param.compile.lca_classpath.desc=Frame-swap LCA supply: classpath dependency jars (OS path separator; jars and directories accepted) extend the class hierarchy, so frame-recompute common-superclass resolution becomes a real LCA for dependency types instead of the Object fallback
+mj2x.param.compile.no_jdk_hierarchy.desc=Disable JDK hierarchy scan (default on: JDK jmods/rt.jar are scanned into the hierarchy with a disk cache; when off, JDK type pairs fall back to the hardcoded parent table)

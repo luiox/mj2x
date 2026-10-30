@@ -204,3 +204,5 @@ mj2x.param.vmc4.super_ops.desc=VMC4: super-operator 融合（相邻指令折叠�
 mj2x.param.vmc4.fragment.desc=VMC4: 指令碎片化（每条计算指令的操作数先经专用临时槽中转，一条指令拆成「Copy + 原指令」多段；纯编码期变换；代价是指令数约 2~3 倍、解释开销同步上升；与 vmc4-super-ops 可组合；issue #9；默认关闭）
 mj2x.param.vmc4.regfile.desc=VMC4: 寄存器文件定长化（线性扫描分配把计算寄存器压入 n 槽定长池，死值槽位复用，寄存器号不再镜像 SSA value id；装不下的活值分到稳定溢出槽，以统一 slots 数组高位索引直接寻址——无搬运指令、零运行时开销；与 vmc4-fragment 组合时碎片临时槽占池顶 3 槽；与 vmc4-super-ops / vmc4-fragment 可组合；issue #10；默认关闭）
 mj2x.param.strings.encrypt.desc=字符串池 at-rest 加密（发射期加密、首次访问解密；产物无明文字面量；默认关闭）
+mj2x.param.compile.lca_classpath.desc=帧换装 LCA 供给面：classpath 依赖 jar（os 路径分隔符分隔；.jar 与目录皆可），谱系图据此扩容——帧重算公共父类求解对依赖库内类型对从 Object 兜底变真 LCA（最近公共祖先），消除合并点下游 invokevirtual 的 VerifyError 面
+mj2x.param.compile.no_jdk_hierarchy.desc=关闭 JDK 谱系扫描（默认开：JDK jmods/rt.jar 扫描建图并入谱系，带磁盘缓存；关闭后 JDK 类型对回退硬编码父类表口径）

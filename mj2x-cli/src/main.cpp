@@ -1137,6 +1137,9 @@ int main(int argc, char** argv)
     config.inputPath  = options.inputPath;
     config.outputPath = options.outputPath;
     config.dumpMIR    = options.dumpMIR;
+    // 帧换装 LCA 供给面：谱系图扩容（classpath jar + JDK 扫描）。
+    config.lcaClasspath = options.lcaClasspath;
+    config.jdkHierarchy = !options.noJdkHierarchy;
 
     // 用户自定义 intrinsic（issue #818）：--intrinsic-config JSON + --intrinsic-src 追加。
     mj2x::UserIntrinsicConfig userIntrinsicConfig;

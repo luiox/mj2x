@@ -81,6 +81,11 @@ struct CliOptions
     bool                     compilerSelected = false;
     bool                     llvmToolSelected = false;
     bool                     dumpMIR          = false;
+    /// 帧换装 LCA 供给面：classpath 依赖 jar（os 路径分隔符分隔；空 = 不供）。
+    /// 供谱系图扩容，帧重算公共父类求解从 Object 兜底变真 LCA。
+    std::string              lcaClasspath;
+    /// 关闭 JDK 谱系扫描（默认开；jmods 扫描带磁盘缓存，首次几秒）。
+    bool                     noJdkHierarchy   = false;
     bool                     regcTraceCalls   = false;
     /// native→native 直调档位（--regc-direct-calls，默认 "off"）。
     /// 存字符串而非枚举值：注册表是纯声明式的参数表，枚举解析与档位映射统一

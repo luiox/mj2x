@@ -182,6 +182,8 @@ std::vector<std::string> expectedKeys()
         "generate_xmake",
         "targets",
         "target_cc",
+        "lca_classpath",
+        "no_jdk_hierarchy",
         "stackc_exception_check",
         "regc_trace_calls",
         "regc_direct_calls",

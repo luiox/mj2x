@@ -74,7 +74,7 @@ Toolchain probeToolchain()
     }
 
     // vcvars64：复用 libjdk_finder 的探测（VCToolsInstallDir→ProgramFiles 扫描）。
-    tc.vcvars64 = jdk_finder::findVcvarsAll();
+    tc.vcvars64 = jdk_finder::find_vcvars_all();
     if (tc.vcvars64.empty()) {
         tc.reason = "未找到 VS vcvars64.bat（需要 MSVC 编译生成的 .c）";
         return tc;
