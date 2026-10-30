@@ -147,6 +147,14 @@ end
 
 add_requires("nlohmann_json 3.12.0")
 
+-- libarchive：mj2x-core io zip_util 的解包后端（zip/tar/tar.xz/tar.gz/zst，
+-- 下载后解压场景——dev_plan 交叉编译切片的 toolchain 获取面）。
+-- 本地覆盖包（xmake/repo/packages/l/libarchive/xmake.lua）规避官方包在
+-- Linux 漏传 POSIX_REGEX_LIB=NONE 导致的编译失败；配方与 mjt/mjbase/grunt
+-- 四仓同源，升级需同步。
+add_repositories("mj2x-repo xmake/repo")
+add_requires("libarchive 3.8.8", {configs = {openssl3 = false}})
+
 -- 中心包仓直连包（无仓内副本、无 phony 垫片，消费点直接 add_packages）。
 add_repositories("luiox-repo https://github.com/luiox/luiox-repo.git")
 -- libca 版本/模块双单源：顶层与全部嵌套路径一律归并到同一 (版本, 模块串)。

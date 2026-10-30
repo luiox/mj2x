@@ -73,6 +73,8 @@ target("mj2x_unittest")
     -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
     -- mj2x-core → libjbytecode 聚合库（实现分散在子库），须逐个补齐；
     -- test_helper 自身依赖 libca_test/libjdk_finder（包链接项提供），一并补入。
+    -- libarchive 经 mj2x-core 的包链接信息传导（zip_util 单测消费），裸名
+    -- archive 不进闭包——与包注入的链接项重复会触发 xmake 每趟重链。
     mj2x_binary_link_closure("mj2x-core", "libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "libjzip", "test_helper", "libca_test", "libjdk_finder",
              "libca_fs", "libca_json", "libca_net", "libca_http", "libca_io", "libca_thread", "libca_env",
              "libca_log", "libca_process", "libca_opt", "libca_zip", "libca_str", "libca_crypto", "libca_core")
