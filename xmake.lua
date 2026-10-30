@@ -202,13 +202,13 @@ add_requireconfs("mjbase.libjhasm.libjbytecode.libca",    {version = LUIOX_LIBCA
 -- 破坏性 API）；libjbytecode 退役（libjbc 迁移完成后零代码消费方）。
 -- 新增 mjbase 0.0.3（hierarchy/LCA 公共父类求解 + 帧查询面，帧换装底座）及其
 -- 依赖闭包 libjstd/libjhasm/libjclassfile；libarchive/zlib 随 mjbase 链接闭包。
-add_requires("libjbc 0.4.23")
+add_requires("libjbc 0.4.24")
 add_requires("libjstr 0.0.4")
 add_requires("libjzip 0.0.4")
 add_requires("libgarena 0.0.4")
 add_requires("libjclassfile 0.0.2")
 add_requires("libjstd 0.0.1")
-add_requires("libjhasm 0.3.2")
+add_requires("libjhasm 0.3.3")
 add_requires("libjdk_finder 0.1.0")
 -- libjbytecode 0.0.2：unittest 测试夹具面仍在消费（jbytecode 树 API 构造
 -- MethodNode/InsnNode 夹具）；产品面（core/cli/rt）已零消费。弃用注记在案，
