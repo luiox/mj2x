@@ -92,3 +92,5 @@ monorepo 检出内仍可用,`MJ2X_CRT_DIR` 可显式覆盖。
   推 `v*` tag 触发 release workflow:git-cliff(cliff.toml)从拆仓基线
   `a785a86` 起算生成 changelog,`gh release create` 落 GitHub Release。
   拆仓前历史不入 changelog(monorepo 全线语义,与本仓发版无关)。
+
+<!-- probe:ci-baseline-20261030 零功能改动，仅为触发 CI 取 main 当日基线，结果后即闭 -->
