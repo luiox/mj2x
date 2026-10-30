@@ -58,7 +58,7 @@ bool loadMsvcEnvironment(ProcessEnvironment& environment,
         return true;
     }
 
-    const auto vcvars = jdk_finder::findVcvarsAll();
+    const auto vcvars = jdk_finder::find_vcvars_all();
     if (vcvars.empty()) {
         CA_LOGT_ERROR("compile",
                       "MSVC environment is not configured and vcvarsall.bat was not found.\n");
@@ -194,23 +194,23 @@ const char* cppCompilerExecutable(CCompilerKind compiler)
 jdk_finder::CCompilerKind toFinderKind(CCompilerKind kind)
 {
     switch (kind) {
-    case CCompilerKind::Msvc:  return jdk_finder::CCompilerKind::Msvc;
-    case CCompilerKind::Gcc:   return jdk_finder::CCompilerKind::Gcc;
-    case CCompilerKind::Clang: return jdk_finder::CCompilerKind::Clang;
-    case CCompilerKind::Zig:   return jdk_finder::CCompilerKind::Zig;
+    case CCompilerKind::Msvc:  return jdk_finder::CCompilerKind::MSVC;
+    case CCompilerKind::Gcc:   return jdk_finder::CCompilerKind::GCC;
+    case CCompilerKind::Clang: return jdk_finder::CCompilerKind::CLANG;
+    case CCompilerKind::Zig:   return jdk_finder::CCompilerKind::ZIG;
     case CCompilerKind::Auto:  break;
     }
-    return jdk_finder::CCompilerKind::Auto;
+    return jdk_finder::CCompilerKind::AUTO;
 }
 
 CCompilerKind fromFinderKind(jdk_finder::CCompilerKind kind)
 {
     switch (kind) {
-    case jdk_finder::CCompilerKind::Msvc:  return CCompilerKind::Msvc;
-    case jdk_finder::CCompilerKind::Gcc:   return CCompilerKind::Gcc;
-    case jdk_finder::CCompilerKind::Clang: return CCompilerKind::Clang;
-    case jdk_finder::CCompilerKind::Zig:   return CCompilerKind::Zig;
-    case jdk_finder::CCompilerKind::Auto:  break;
+    case jdk_finder::CCompilerKind::MSVC:  return CCompilerKind::Msvc;
+    case jdk_finder::CCompilerKind::GCC:   return CCompilerKind::Gcc;
+    case jdk_finder::CCompilerKind::CLANG: return CCompilerKind::Clang;
+    case jdk_finder::CCompilerKind::ZIG:   return CCompilerKind::Zig;
+    case jdk_finder::CCompilerKind::AUTO:  break;
     }
     return CCompilerKind::Auto;
 }
@@ -277,13 +277,13 @@ bool addCrtSources(const std::filesystem::path&        crtRoot,
 
 bool canUseMsvc()
 {
-    auto tc = jdk_finder::findNativeCompiler(jdk_finder::CCompilerKind::Msvc);
+    auto tc = jdk_finder::find_native_compiler(jdk_finder::CCompilerKind::MSVC);
     return tc.available;
 }
 
 bool detectCompiler(CCompilerKind requested, CCompilerKind& detected)
 {
-    auto tc = jdk_finder::findNativeCompiler(toFinderKind(requested));
+    auto tc = jdk_finder::find_native_compiler(toFinderKind(requested));
     if (!tc.available) return false;
     detected = fromFinderKind(tc.compiler);
     return true;
@@ -310,28 +310,28 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes,
                      const char* platformOverride = nullptr)
 {
     jdk_finder::FindOptions opts;
-    opts.requireJniHeader = true;
-    auto jdk = jdk_finder::findJdk(opts);
+    opts.require_jni_header = true;
+    auto jdk = jdk_finder::find_jdk(opts);
     if (!jdk.available) {
         CA_LOGT_ERROR("compile", "{}; required to locate JNI headers.\n", jdk.reason.c_str());
         return false;
     }
-    includes.push_back(jdk.jdkInclude);
+    includes.push_back(jdk.jdk_include);
     if (platformOverride == nullptr) {
-        includes.push_back(jdk.jdkIncludePlat);
+        includes.push_back(jdk.jdk_include_plat);
     }
     else {
         // 交叉目标（issue #11）：jni_md.h 按目标 ABI 的平台子目录取
         // （win32 的 jlong 是 long long，linux 是 long——交叉编译必须用目标的）。
         // jdkInclude 本身就是 <jdk>/include 目录，平台子目录是其直接子目录。
-        includes.push_back(jdk.jdkInclude / platformOverride);
+        includes.push_back(jdk.jdk_include / platformOverride);
     }
     return true;
 }
 
 std::filesystem::path findVcvarsAll()
 {
-    return jdk_finder::findVcvarsAll();
+    return jdk_finder::find_vcvars_all();
 }
 
 void writeProcessOutput(const ca::process::Output& output)
@@ -974,11 +974,11 @@ int compileLlvmIrSource(const std::string& llvmOutputPath, const std::string& ou
         CA_LOGT_ERROR("compile", "emitted LLVM IR source does not exist: {}\n", llvmOutputPath.c_str());
         return 1;
     }
-    if (!jdk_finder::commandExists("clang")) {
+    if (!jdk_finder::command_exists("clang")) {
         CA_LOGT_ERROR("compile", "LLVM IR compilation requires clang on PATH.\n");
         return 1;
     }
-    if (tool == LlvmTool::Llc && !jdk_finder::commandExists("llc")) {
+    if (tool == LlvmTool::Llc && !jdk_finder::command_exists("llc")) {
         CA_LOGT_ERROR("compile", "--llvm-tool llc requires llc on PATH.\n");
         return 1;
     }
@@ -1377,11 +1377,11 @@ int compileLlvmIrFromPipe(std::string_view llvmSource, const std::string& output
                           const std::filesystem::path& crtRoot,
                           ProcessTimeout timeout)
 {
-    if (!jdk_finder::commandExists("clang")) {
+    if (!jdk_finder::command_exists("clang")) {
         CA_LOGT_ERROR("compile", "LLVM IR compilation requires clang on PATH.\n");
         return 1;
     }
-    if (tool == LlvmTool::Llc && !jdk_finder::commandExists("llc")) {
+    if (tool == LlvmTool::Llc && !jdk_finder::command_exists("llc")) {
         CA_LOGT_ERROR("compile", "--llvm-tool llc requires llc on PATH.\n");
         return 1;
     }

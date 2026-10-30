@@ -77,7 +77,7 @@ Toolchain probeToolchain()
     tc.jdkInclude    = jdk.jdkInclude;
     tc.jdkIncludeWin = jdk.jdkIncludeWin;
 
-    tc.vcvars64 = jdk_finder::findVcvarsAll();
+    tc.vcvars64 = jdk_finder::find_vcvars_all();
     if (tc.vcvars64.empty()) {
         tc.reason = "vcvars64.bat not found; MSVC is required";
         return tc;
