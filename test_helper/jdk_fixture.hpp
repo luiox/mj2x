@@ -160,7 +160,7 @@ struct JdkToolchain
     fs::path                   jdkIncludeWin;  // <home>/include/win32
 };
 
-/// probeJdk 的可选配置（透传给 jdk_finder::findJdk）。
+/// probeJdk 的可选配置（透传给 jdk_finder::find_jdk）。
 struct ProbeOptions
 {
     /// JAVA_HOME / MORPHER_JDK_HOME 都没命中时的额外回落候选。
@@ -169,21 +169,21 @@ struct ProbeOptions
     bool requireJniHeader = false;
 };
 
-/// 探测 JDK 并解析 javac/java 路径。底层委托 jdk_finder::findJdk。
+/// 探测 JDK 并解析 javac/java 路径。底层委托 jdk_finder::find_jdk。
 inline JdkToolchain probeJdk(const ProbeOptions& opts = {})
 {
     JdkToolchain tc;
     jdk_finder::FindOptions fopts;
-    fopts.fallbackHomes      = opts.fallbackHomes;
-    fopts.requireJniHeader   = opts.requireJniHeader;
-    auto loc = jdk_finder::findJdk(fopts);
-    tc.javaHome      = loc.javaHome;
-    tc.jdkInclude    = loc.jdkInclude;
-    tc.jdkIncludeWin = loc.jdkIncludePlat;
+    fopts.fallback_homes      = opts.fallbackHomes;
+    fopts.require_jni_header   = opts.requireJniHeader;
+    auto loc = jdk_finder::find_jdk(fopts);
+    tc.javaHome      = loc.java_home;
+    tc.jdkInclude    = loc.jdk_include;
+    tc.jdkIncludeWin = loc.jdk_include_plat;
     tc.reason        = loc.reason;
     if (!loc.available) return tc;
-    tc.javac = jdk_finder::jdkExecutable(loc, "javac");
-    tc.java  = jdk_finder::jdkExecutable(loc, "java");
+    tc.javac = jdk_finder::jdk_executable(loc, "javac");
+    tc.java  = jdk_finder::jdk_executable(loc, "java");
     if (tc.javac.empty() || tc.java.empty()) {
         tc.available = false;
         tc.reason    = "javac 或 java 不存在: " + tc.javaHome.string();
@@ -359,7 +359,7 @@ inline std::string formatClangProbe(const ClangProbe& probe)
 }
 
 /// clang 命中非 PATH 位置时，给子进程脚本前置 PATH 注入行——mj2x-cli --compile
-/// 与 --c-compiler/--llvm-tool clang 均按 PATH 解析 clang（jdk_finder::commandExists
+/// 与 --c-compiler/--llvm-tool clang 均按 PATH 解析 clang（jdk_finder::command_exists
 /// / ca::process::Command）。PATH 命中或未找到返回空（未找到时调用方本就该 SKIP）。
 inline std::vector<std::string> clangPathPrelude(const ClangProbe& probe)
 {
