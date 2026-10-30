@@ -75,7 +75,7 @@ Toolchain probeToolchain()
         tc.reason = "mj2x-cli 未构建（请先 xmake build mj2x-cli）: " + tc.mj2xCli.string();
         return tc;
     }
-    tc.vcvars64 = jdk_finder::findVcvarsAll();
+    tc.vcvars64 = jdk_finder::find_vcvars_all();
     if (tc.vcvars64.empty()) {
         tc.reason = "未找到 vcvarsall.bat（需要 MSVC）";
         return tc;

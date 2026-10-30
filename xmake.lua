@@ -157,25 +157,32 @@ add_requires("libarchive 3.8.8", {configs = {openssl3 = false}})
 
 -- 中心包仓直连包（无仓内副本、无 phony 垫片，消费点直接 add_packages）。
 add_repositories("luiox-repo https://github.com/luiox/luiox-repo.git")
--- libca 版本/模块双单源：顶层与全部嵌套路径一律归并到同一 (版本, 模块集)。
--- 家族包内声明的 libca 依赖无版本约束且是小模块超集（core,str,log,crypto,zip），
--- 放任自解析会多出实例；消费方目标同名包去重后落到无 json 的实例时，
--- 链接期 LNK2019 ca::json（morpher D33 同族根因）。升级 libca 只改下面两行。
-LUIOX_LIBCA_VERSION = "0.0.15"
-LUIOX_LIBCA_MODULES = "core,crypto,str,fs,io,json,net,http,process,opt,thread,log,zip,resources,i18n,test"
+-- libca 版本/模块双单源：顶层与全部嵌套路径一律归并到同一 (版本, 模块串)。
+-- 家族包词条的 add_deps 不吃消费方 requireconfs（实测），词条内已直接声明
+-- 家族统一超集模块串；顶层 (版本, 模块串) 必须与词条逐字一致才能归并单实例
+-- （实例归并靠 version+configs 双匹配，任何偏差都会多出一个 libca 实例：
+-- 链接闭包多条 -libpath，同名符号双归档——2026-10-30 词条改超集串后旧
+-- 16 模块钉定即因此翻车，llvm/regc 套件 SEH，见 chore/stack-upgrade PR 正文）。
+-- 模块串从 mjbase xmake.lua @1b80687 一字不差抄入；升级 libca 只改下面两行。
+LUIOX_LIBCA_VERSION = "0.0.16"
+LUIOX_LIBCA_MODULES = "core,crypto,str,fs,env,io,json,net,http,process,opt,thread,log,zip,resources,i18n,test"
 add_requires("libca " .. LUIOX_LIBCA_VERSION, {configs = {modules = LUIOX_LIBCA_MODULES}})
 -- test 模块必须显式点名：test_helper 调用 ca::test::top_project_path()，
 -- 缺模块时链接期 undefined reference；包 on_load 按依赖闭包展开排序链接项。
--- libjbc 走项目内联包定义（git 直连 + commit 锁，与 mjt/mjbase 同版本同定义）：
--- luiox-repo 的发布版定义缺 Windows /utf-8 on_load 修正（GBK ACP 探针安装失败），
--- 内联定义是唯一能就地修探针的承载形态；详见包文件头注。
-includes("xmake/packages/libjbc.lua")
-add_requires("libjbc 0.4.15")
-add_requires("libjstr 0.0.2")
+-- libjbc 0.4.24 起直接用 luiox-repo 定义：上游 on_load 已自带 /utf-8 修正
+-- （原项目内联定义的唯一存在理由，其文件头自注"修复合入上游后整体退役"），
+-- xmake/packages/libjbc.lua 随本次升级删除；词条 add_deps 已钉家族超集串。
+add_requires("libjbc 0.4.24")
+add_requires("libjstr 0.0.4")
 add_requires("libjbytecode 0.0.2")
-add_requires("libjzip 0.0.2")
-add_requires("libgarena 0.0.2")
-add_requires("libjdk_finder 0.0.2")
+add_requires("libjzip 0.0.4")
+-- libgarena 钉 0.0.4（libca 0.0.16 对齐代）而非最新 0.0.5：0.0.5（2026-10-30
+-- "多 chunk reset 修复"）下全量单测 279 例 SEH 0xc0000005——cdb 实锤写指针
+-- 指向 0xC0 毒化 arena chunk（reset 后悬垂指针被写），逐包二分定位到 0.0.5
+-- 单变量翻转红绿。回 0.0.4 全绿（12 例既有环境失败）。0.0.5 待家族侧结论
+-- （garena 修复回归 vs mj2x 潜伏悬垂暴露）后再跟版，见升级 PR 正文。
+add_requires("libgarena 0.0.4")
+add_requires("libjdk_finder 0.1.1")
 -- 嵌套 libca 全路径钉定，缺一条就多一个实例。
 add_requireconfs("libjstr.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libjbytecode.libca",           {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
@@ -185,6 +192,13 @@ add_requireconfs("libjbc.libca",                 {version = LUIOX_LIBCA_VERSION,
 add_requireconfs("libjzip.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libgarena.libca",              {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libjdk_finder.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+-- 嵌套中间包版本钉定（同 mjbase libjhasm.libjbc 钉定纪律）：libjbytecode 词条
+-- 内 libjstr/libgarena 为裸名依赖，放任解析会取词条最新版——若与顶层版本
+-- 不一致即形成双 libjstr 实例（链接闭包两条 -libpath，同族 ODR；2026-10-30
+-- 实测 libjstr 0.0.2/0.0.4 双实例 279 例 SEH）。显式钉到与顶层同版本归并
+-- 单实例，且防未来词条发新版后嵌套解析漂移。
+add_requireconfs("libjbytecode.libjstr",         {version = "0.0.4", override = true})
+add_requireconfs("libjbytecode.libgarena",       {version = "0.0.4", override = true})
 -- i18n/resources 构建规则内嵌（.lang/.resources add_files 规则，包安装产物
 -- 不带规则；来源 luiox/libca @ 1ab29dea，libca 升级若规则变更需同步）。
 includes("xmake/libca_rules.lua")

@@ -124,7 +124,7 @@ Toolchain probeToolchain()
         toolchain.reason = "mj2x-cli 未构建: " + toolchain.cli.string();
         return toolchain;
     }
-    const auto compiler = jdk_finder::findNativeCompiler();
+    const auto compiler = jdk_finder::find_native_compiler();
     if (!compiler.available) {
         toolchain.reason = compiler.reason;
         return toolchain;

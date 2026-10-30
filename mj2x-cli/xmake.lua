@@ -30,9 +30,15 @@ target("mj2x-cli")
     -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
     -- 批 6e：mj2x-core 已零 libjbytecode 符号引用，链接闭包随之摘除。
     -- 裸 libca_*/libjdk_finder 库名落到包 libdir 解析（add_packages 传导 libpath）。
+    -- libca 0.0.16 起模块间出现跨模块符号引用（fs→core/str 等，"fs 读 stdio
+    -- + SHA-3 重写"）：模块库全量入闭包且 str/crypto/core 垫后——仅靠
+    -- add_packages 传导不保证 str/core 落在传导 fs 之后，GNU ld 单遍解析下
+    -- mj2x-cli 链接期 undefined reference（Linux CI 实测）。
     mj2x_binary_link_closure("mj2x-core", "libjbc", "libjstr",
-              "libjzip", "libca_log", "libjdk_finder",
-              "libca_process", "libca_opt", "libca_zip",
+              "libjzip", "libjdk_finder",
+              "libca_fs", "libca_json", "libca_net", "libca_http",
+              "libca_io", "libca_thread", "libca_env",
+              "libca_log", "libca_process", "libca_opt", "libca_zip",
               "libca_str", "libca_crypto", "libca_core")
     -- 注：libca_resources/libca_i18n 为 headeronly target（无 .lib 产物），
     -- 只入 add_deps 不入 add_links。

@@ -69,7 +69,7 @@ Toolchain probeToolchain()
     tc.jdkIncludeWin = jdk.jdkIncludeWin;
 
     // vcvars64：复用 libjdk_finder 的探测。
-    tc.vcvars64 = jdk_finder::findVcvarsAll();
+    tc.vcvars64 = jdk_finder::find_vcvars_all();
     if (tc.vcvars64.empty()) {
         tc.reason = "vcvars64.bat not found; MSVC is required";
         return tc;

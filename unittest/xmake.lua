@@ -75,8 +75,13 @@ target("mj2x_unittest")
     -- test_helper 自身依赖 libca_test/libjdk_finder（包链接项提供），一并补入。
     -- libarchive 经 mj2x-core 的包链接信息传导（zip_util 单测消费），裸名
     -- archive 不进闭包——与包注入的链接项重复会触发 xmake 每趟重链。
-    mj2x_binary_link_closure("mj2x-core", "libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "libjzip", "test_helper", "libca_test", "libjdk_finder")
-    -- 注：libca_resources 为 headeronly target（无 .lib 产物），只入 add_deps 不入 add_links。
+    mj2x_binary_link_closure("mj2x-core", "libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "libjzip", "test_helper", "libca_test", "libjdk_finder",
+             "libca_fs", "libca_json", "libca_net", "libca_http", "libca_io", "libca_thread", "libca_env",
+             "libca_log", "libca_process", "libca_opt", "libca_zip", "libca_str", "libca_crypto", "libca_core")
+    -- 注 1：libca_resources 为 headeronly target（无 .lib 产物），只入 add_deps 不入 add_links。
+    -- 注 2：libca 模块库全量垫后（str/crypto/core 最末）——0.0.16 起模块间有
+    -- 跨模块符号引用（fs→core/str 等），GNU ld 单遍解析要求消费方在前（同
+    -- mj2x-cli 闭包口径，Linux CI 实测 mj2x-cli 踩坑）。
     add_files("src/main.cpp")
     add_files("src/**/*_test.cpp")
     remove_files("src/integration/**.cpp")
@@ -114,7 +119,10 @@ target("mj2x_integration_test")
     -- xmake 3.x 不把静态 target 依赖传进 binary 链接：显式给全闭包，按
     -- 「消费者在前、被依赖在后」排序（mj2x-cli 为 binary 依赖，只定构建顺序，
     -- 不参与链接，故此处闭包只覆盖 test_helper + libjbytecode 族）。
-    mj2x_binary_link_closure("libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "test_helper", "libca_test", "libjdk_finder")
+    mj2x_binary_link_closure("libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "test_helper", "libca_test", "libjdk_finder",
+             "libca_fs", "libca_json", "libca_net", "libca_http", "libca_io", "libca_thread", "libca_env",
+             "libca_log", "libca_process", "libca_opt", "libca_zip", "libca_str", "libca_crypto", "libca_core")
+    -- libca 模块库垫后同上注 2（GNU ld 单遍解析，消费方在前）。
     add_files("src/integration/main.cpp")
     add_files("src/integration/*_test.cpp")
     add_includedirs("src")
