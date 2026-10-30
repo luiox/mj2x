@@ -176,12 +176,19 @@ add_requires("libjbc 0.4.24")
 add_requires("libjstr 0.0.4")
 add_requires("libjbytecode 0.0.2")
 add_requires("libjzip 0.0.4")
--- libgarena 钉 0.0.4（libca 0.0.16 对齐代）而非最新 0.0.5：0.0.5（2026-10-30
--- "多 chunk reset 修复"）下全量单测 279 例 SEH 0xc0000005——cdb 实锤写指针
--- 指向 0xC0 毒化 arena chunk（reset 后悬垂指针被写），逐包二分定位到 0.0.5
--- 单变量翻转红绿。回 0.0.4 全绿（12 例既有环境失败）。0.0.5 待家族侧结论
--- （garena 修复回归 vs mj2x 潜伏悬垂暴露）后再跟版，见升级 PR 正文。
-add_requires("libgarena 0.0.4")
+-- libgarena 单源版本变量：顶层与嵌套 override 钉定（见下）同源取值，复刻
+-- LUIOX_LIBCA_VERSION 纪律。0.0.4->0.0.5 曾在 #44 停跟：当时顶层翻 0.0.5
+-- 但 libjbytecode 缓存实例仍按旧 garena 头构建——0.0.5 给 Arena 加
+-- bump_chunk_（sizeof 80->88，static_assert 实证），libjbytecode 公开头
+-- 按值内嵌 Arena（FieldNode/MethodNode/ClassNode/ClassReader），两版头
+-- 同图布局腐化致全量 279 例 SEH（0xC0 碎片非毒化——家族唯一毒化为 debug
+-- 0xDD；崩溃点 Label::setOwner 写 owner_@+0x18）。翻案实验（#44 合并后）：
+-- 顶层+override 同步 0.0.5 并强建 libjbytecode 实例，930 ran / 917 passed /
+-- 12 例既有环境失败 / 1 skipped / 0 SEH——无回归，归属为混链非 garena 缺陷。
+-- 注意：升级翻版后须 xmake require -f "libjbytecode 0.0.2" 按新 garena 头
+-- 重建实例（实例缓存不随嵌套依赖版本翻新，实测）。
+LUIOX_LIBGARENA_VERSION = "0.0.5"
+add_requires("libgarena " .. LUIOX_LIBGARENA_VERSION)
 add_requires("libjdk_finder 0.1.1")
 -- 嵌套 libca 全路径钉定，缺一条就多一个实例。
 add_requireconfs("libjstr.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
@@ -198,7 +205,7 @@ add_requireconfs("libjdk_finder.libca",          {version = LUIOX_LIBCA_VERSION,
 -- 实测 libjstr 0.0.2/0.0.4 双实例 279 例 SEH）。显式钉到与顶层同版本归并
 -- 单实例，且防未来词条发新版后嵌套解析漂移。
 add_requireconfs("libjbytecode.libjstr",         {version = "0.0.4", override = true})
-add_requireconfs("libjbytecode.libgarena",       {version = "0.0.4", override = true})
+add_requireconfs("libjbytecode.libgarena",       {version = LUIOX_LIBGARENA_VERSION, override = true})
 -- i18n/resources 构建规则内嵌（.lang/.resources add_files 规则，包安装产物
 -- 不带规则；来源 luiox/libca @ 1ab29dea，libca 升级若规则变更需同步）。
 includes("xmake/libca_rules.lua")
