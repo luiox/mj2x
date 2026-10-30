@@ -202,19 +202,23 @@ add_requireconfs("mjbase.libjhasm.libjbytecode.libca",    {version = LUIOX_LIBCA
 -- 破坏性 API）；libjbytecode 退役（libjbc 迁移完成后零代码消费方）。
 -- 新增 mjbase 0.0.3（hierarchy/LCA 公共父类求解 + 帧查询面，帧换装底座）及其
 -- 依赖闭包 libjstd/libjhasm/libjclassfile；libarchive/zlib 随 mjbase 链接闭包。
+-- 2026-10-30 跟版：libjbc 0.4.24（嵌套 libca 0.0.16 统一）、libjhasm 0.3.3、
+-- mjbase 0.0.4（libjhasm >=0.3.3 裸下界，双实例归一）、libgarena 0.0.5（mjbase
+-- 裸名 add_deps 必解析最新，项目侧同步跟版避免双实例）、libjdk_finder 0.1.1
+-- （定义 libca 改裸名 + 全超集，嵌套旧实例 LNK2019 根修；厂商嵌套布局漏扫修复）。
 add_requires("libjbc 0.4.24")
 add_requires("libjstr 0.0.4")
 add_requires("libjzip 0.0.4")
-add_requires("libgarena 0.0.4")
+add_requires("libgarena 0.0.5")
 add_requires("libjclassfile 0.0.2")
 add_requires("libjstd 0.0.1")
 add_requires("libjhasm 0.3.3")
-add_requires("libjdk_finder 0.1.0")
+add_requires("libjdk_finder 0.1.1")
 -- libjbytecode 0.0.2：unittest 测试夹具面仍在消费（jbytecode 树 API 构造
 -- MethodNode/InsnNode 夹具）；产品面（core/cli/rt）已零消费。弃用注记在案，
 -- 夹具迁 libjbc MethodEditor 后退役。
 add_requires("libjbytecode 0.0.2")
-add_requires("mjbase 0.0.3")
+add_requires("mjbase 0.0.4")
 add_requires("zlib")
 add_requires("libarchive 3.8.8", {configs = {openssl3 = false}})
 -- i18n/resources 构建规则内嵌（.lang/.resources add_files 规则，包安装产物
