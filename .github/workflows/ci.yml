@@ -46,9 +46,9 @@ jobs:
           path: |
             ~/.xmake/packages
             ~/.local/share/xmake
-          key: mj2x-xrepo-linux-x64-xmake309-${{ hashFiles('xmake.lua', 'xmake/**') }}
+          key: mj2x-xrepo-linux-x64-xmake309v2-${{ hashFiles('xmake.lua', 'xmake/**') }}
           restore-keys: |
-            mj2x-xrepo-linux-x64-xmake309-
+            mj2x-xrepo-linux-x64-xmake309v2-
 
       - name: Register luiox-repo
         run: xmake repo --add luiox-repo https://github.com/luiox/luiox-repo.git
@@ -98,9 +98,9 @@ jobs:
         with:
           path: |
             ~/AppData/Local/.xmake/packages
-          key: mj2x-xrepo-windows-x64-xmake309-${{ hashFiles('xmake.lua', 'xmake/**') }}
+          key: mj2x-xrepo-windows-x64-xmake309v2-${{ hashFiles('xmake.lua', 'xmake/**') }}
           restore-keys: |
-            mj2x-xrepo-windows-x64-xmake309-
+            mj2x-xrepo-windows-x64-xmake309v2-
 
       - name: Register luiox-repo
         shell: bash
