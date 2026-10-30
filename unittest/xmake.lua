@@ -68,13 +68,14 @@ target("mj2x_unittest")
     -- 独立仓接线：libca_process 垫片退场，libca/libjbytecode 直连包显式挂载。
     add_deps("mj2x-core", "test_helper", "mj2x_fake_zig", "mj2x_fake_xmake",
              "mj2x-cli-companion")
-    add_packages("gtest", "libca", "libjbc", "libjbytecode", "libarchive")
+    add_packages("gtest", "libca", "libjbc", "libjbytecode")
     -- xmake 3.x 不把静态 target 依赖传进 binary 链接：显式给全闭包，按
     -- 「消费者在前、被依赖在后」排序（Linux CI 与 Windows 同一口径）。
     -- mj2x-core → libjbytecode 聚合库（实现分散在子库），须逐个补齐；
     -- test_helper 自身依赖 libca_test/libjdk_finder（包链接项提供），一并补入。
-    -- libarchive：zip_util 单测消费（archive 紧随 mj2x-core，叶子依赖置后）。
-    mj2x_binary_link_closure("mj2x-core", "archive", "libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "libjzip", "test_helper", "libca_test", "libjdk_finder")
+    -- libarchive 经 mj2x-core 的包链接信息传导（zip_util 单测消费），裸名
+    -- archive 不进闭包——与包注入的链接项重复会触发 xmake 每趟重链。
+    mj2x_binary_link_closure("mj2x-core", "libjbc", "libjbytecode_util", "libjbytecode_commons", "libjbytecode_analysis", "libjbytecode_tree", "libjbytecode_core", "libgarena", "libjstr", "libjzip", "test_helper", "libca_test", "libjdk_finder")
     -- 注：libca_resources 为 headeronly target（无 .lib 产物），只入 add_deps 不入 add_links。
     add_files("src/main.cpp")
     add_files("src/**/*_test.cpp")

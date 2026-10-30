@@ -29,10 +29,10 @@ target("mj2x-core")
 
     -- 独立仓接线：monorepo 时期的 phony 垫片（libca_*/libjbytecode 族 target）
     -- 换成 luiox-repo 直连包；public 供 mj2x-cli/unittest 传递可见。
-    add_packages("libca", "libjbc", "libjstr", "libjzip", {public = true})
-    -- libarchive：io zip_util 的解包后端（zip/tar 族整包落盘解压）。仅
-    -- zip_util.cpp 消费，不 public——下游 binary 需要链接时各自声明。
-    add_packages("libarchive")
+    add_packages("libca", "libjbc", "libjstr", "libjzip", "libarchive", {public = true})
+    -- libarchive：io zip_util 的解包后端（zip/tar 族整包落盘解压）。
+    -- public 与上排包同口径：mj2x-cli/unittest 经 dep 透传包链接信息；
+    -- 非 public 的半传导形态实测会让下游 binary 每趟重链（链接序不稳定）。
 
     -- #886 单后端编译裁剪：with_mj2x_backend=all（默认）保持全量收编，行为
     -- 与历史一致；单后端构建只编入所选后端目录，被排除后端不进归档（CLI
