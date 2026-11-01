@@ -127,9 +127,14 @@ void expandHandleSite(jbc::ir::ClassSession& session, jbc::ir::CodeEditor& edito
     if (entry.tag != jbc::core::CpTag::MethodHandle) {
         throw std::runtime_error("ldc_preprocessor: ldc CP is not a MethodHandle");
     }
-    std::string owner, name, desc;
-    bool        itf = false;
-    domResolveRef(session.backing(), entry.b, owner, name, desc, itf);
+    // CP at() 返回的 Entry& 是 vector 内部存储，intern 家族 append 即可能扩容
+    // 搬迁（"Entry& 不得跨 append 存活"）：后续发射段的 internMethodRef/
+    // internClass 都会追加 CP，先把 Handle 细节快照成值再进入发射段。
+    const ca::u32 handleRefKind = entry.a;
+    const ca::u32 memberRefCp   = entry.b;
+    std::string   owner, name, desc;
+    bool          itf = false;
+    domResolveRef(session.backing(), memberRefCp, owner, name, desc, itf);
 
     // Lookup receiver + declaring Class。
     {
@@ -143,7 +148,7 @@ void expandHandleSite(jbc::ir::ClassSession& session, jbc::ir::CodeEditor& edito
 
     // findXxx 选择（按 tag）——#1027 find4 收敛：tag→find* 形态单源 =
     // indyHandleFindFor；name/MethodType/fieldType/caller 按其描述符顺序入栈。
-    const IndyHandleFind find = indyHandleFindFor(entry.a);
+    const IndyHandleFind find = indyHandleFindFor(handleRefKind);
     switch (find.argShape) {
     case IndyHandleArgShape::NameFieldType:
     {
