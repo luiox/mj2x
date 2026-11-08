@@ -49,16 +49,22 @@ bool wireVmx64(BackendWiringContext& context)
 /// 仅 --emit-c（无工程/编译）时不落盘——emit-only 产物面保持单一 .asm。
 void afterPipelineRun(BackendWiringContext& context)
 {
+    namespace fs = std::filesystem;
     if (context.options.xmakeProjectDir.empty() || context.nativeSourceBackend == nullptr) return;
     auto* vmx64 = ca::core::tag_cast::cast<mj2x::Vmx64Backend>(context.nativeSourceBackend);
     if (vmx64 == nullptr) return;
-    const std::string& reg = vmx64->registrationSource();
-    if (reg.empty()) return;   // fail-closed：无虚拟化方法不产空注册面
-
-    namespace fs = std::filesystem;
     std::error_code ec;
-    const fs::path dest = fs::path(context.options.xmakeProjectDir) / "src" / "generated" /
-                          "vmx64_reg.c";
+    const fs::path dest =
+        fs::path(context.options.xmakeProjectDir) / "src" / "generated" / "vmx64_reg.c";
+    const std::string& reg = vmx64->registrationSource();
+    if (reg.empty()) {
+        // fail-closed：无虚拟化方法不产空注册面。同一工程目录二次生成时先
+        // 摘除上一轮的 vmx64_reg.c——残留过期注册 TU 会被模板 glob 收编，
+        // 引用本轮 .asm 里已不存在的入口符号而链接失败。
+        fs::remove(dest, ec);
+        return;
+    }
+
     fs::create_directories(dest.parent_path(), ec);
     if (ec) {
         CA_LOGT_ERROR("cli", "vmx64: cannot create generated dir for registration TU: {}\n",

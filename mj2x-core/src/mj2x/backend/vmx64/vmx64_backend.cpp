@@ -268,6 +268,10 @@ void Vmx64Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) c
     src.emitLine(" * (public mj2x_vmx64_exec_<tag>); this TU only binds them. */");
 
     // extern 声明：jni.h 类型拼原型（jint/jlong/void，Phase 2 最小 opcode 面）。
+    // 第二参恒写 jclass：当前实例方法因 this(REF) 在编码器 fail-closed 不可达
+    //（静态方法收 jclass），到场的全是静态方法；将来放开实例方法时此参应为
+    // jobject（JNI ABI 的 thisOrClass 双形态，.asm 入口按 rdx 原样接收不受
+    // 影响），需回改此声明。
     for (const auto& className : classOrder) {
         auto found = regsByClass.find(className);
         if (found == regsByClass.end()) continue;

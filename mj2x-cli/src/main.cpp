@@ -1497,6 +1497,7 @@ int main(int argc, char** argv)
                     if (options.cBackendKind == CEmitterBackend::StackC) backendName = "StackC";
                     else if (options.cBackendKind == CEmitterBackend::Vmc4) backendName = "VMC4";
                     else if (options.cBackendKind == CEmitterBackend::LlvmIr) backendName = "LLVM";
+                    else if (options.cBackendKind == CEmitterBackend::Vmx64) backendName = "Vmx64";
                     CA_LOGT_ERROR("cli", "{}\n",
                                       ca::i18n::trf("mj2x.cli.err.compile_crt_required",
                                                 {std::string{backendName}})
