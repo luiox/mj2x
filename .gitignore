@@ -10,3 +10,6 @@ compile_commands.json
 /test/
 /work
 /.workbuddy
+
+# Sphinx 构建产物（doc/_build）
+/doc/_build/
