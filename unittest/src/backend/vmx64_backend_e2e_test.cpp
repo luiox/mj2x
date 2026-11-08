@@ -266,14 +266,39 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         << "same seed + same input must be byte-identical across CLI invocations";
 
     // --- Java 调用保护类（System.load -> JNI_OnLoad -> clinit 注册）---
+    // 有界执行护栏（CI 实证：VM 死循环 = java 永不返回 = runBat 永等 = 烧满
+    // 6h job timeout 才见分晓）。PowerShell WaitForExit 上限 120s，超时杀进程
+    // 退出码 124——已落盘的部分 stdout/stderr 即"挂死发生在哪次调用"的现场。
     fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
     ASSERT_FALSE(ec) << ec.message();
-    const auto protectedRun = runBat({
-        "set \"MORPHER_DLL=" + dll.string() + "\"",
-        q(tc_.java) + " -cp " + q(dir) + " Driver",
-    });
+    const fs::path ps1    = dir / "run_bounded.ps1";
+    const fs::path outTxt = dir / "driver_stdout.txt";
+    const fs::path errTxt = dir / "driver_stderr.txt";
+    {
+        std::ofstream out(ps1);
+        out << "$env:MORPHER_DLL = $args[0]\n"
+            << "$p = Start-Process -FilePath $args[1] "
+               "-ArgumentList '-cp',$args[2],'Driver' -NoNewWindow "
+               "-RedirectStandardOutput $args[3] -RedirectStandardError $args[4] -PassThru\n"
+            << "if (-not $p.WaitForExit(120000)) {\n"
+            << "  Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue\n"
+            << "  Write-Output 'VM RUN TIMEOUT (120s): native call did not return'\n"
+            << "  exit 124\n"
+            << "}\n"
+            << "exit $p.ExitCode\n";
+    }
+    const auto protectedRun =
+        runBat({std::string("powershell -NoProfile -ExecutionPolicy Bypass -File ") + q(ps1) +
+                " " + q(dll) + " " + q(tc_.java) + " " + q(dir) + " " + q(outTxt) + " " +
+                q(errTxt)});
+    ASSERT_NE(protectedRun.exitCode, 124)
+        << "protected Driver timed out after 120s (dispatch loop suspected)\nstdout so far:\n"
+        << (fileExists(outTxt) ? readText(outTxt) : "<none>") << "\nstderr:\n"
+        << (fileExists(errTxt) ? readText(errTxt) : "<none>") << "\nrunner out:\n"
+        << protectedRun.out;
     ASSERT_EQ(protectedRun.exitCode, 0) << protectedRun.out;
-    const auto actual = splitLines(protectedRun.out);
+    const auto actual =
+        splitLines(fileExists(outTxt) ? readText(outTxt) : std::string());
 
     ASSERT_EQ(baseline.size(), actual.size())
         << "baseline:\n" << joinLines(baseline) << "protected:\n" << joinLines(actual);
