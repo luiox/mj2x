@@ -62,7 +62,7 @@ private:
 
 using codegen::CSourceStream;
 
-/// 方法唯一键（owner\nname\ndesc）：convertedFunctions / indyFunctions /
+/// 方法唯一键（`owner\nname\ndesc`）：convertedFunctions / indyFunctions /
 /// enumSyntheticMethods 的跨 TU 统一构建点（原 regc_backend.cpp TU 内静态
 /// helper 下沉，评审 nit N6）。键格式逐字节冻结——查表写入端
 /// （compileMethod 预登记/自登记）与读取端（直调/resolved 表还原按 '\n'
@@ -133,7 +133,7 @@ struct RegCFunctionEmitState
     /// 未设表）时 emitIntrinsicCall 回退现场 matchCall。
     const RegCIntrinsicDecisionTable*         decisions           = nullptr;
     /// 后端预扫描验证过的 javac 合成枚举 values()/valueOf() 方法键集合
-    /// （owner\nname\ndesc）。方法注入 native 后指令被清空，发射期无法再
+    /// （`owner\nname\ndesc`）。方法注入 native 后指令被清空，发射期无法再
     /// 现场验证方法体；nullptr（单测直调发射器）时回退现场验证。
     const std::set<std::string>*              enumSyntheticMethods = nullptr;
     /// 文件作用域前向声明注册表（backend TU 级）：方法间直调的声明登记于此，
@@ -433,7 +433,7 @@ void emitAllocateWithInit(CSourceStream& out, RegCFunctionEmitState& state,
                           const RegInstruction& alloc, const RegInstruction& initCall,
                           const ca::str::Utf8StringRef& allocCacheName,
                           const std::vector<ca::str::Utf8String>& expressions);
-/// Allocate 与紧邻 <init> 调用可否融合为 NewObjectA（语义条件判定）。
+/// Allocate 与紧邻 `<init>` 调用可否融合为 NewObjectA（语义条件判定）。
 bool canFuseAllocateInit(const RegCFunctionEmitState& state, const RegInstruction& alloc,
                          const RegInstruction& call);
 /// 发射动态实例调用的 resolved native dispatch。
@@ -561,7 +561,7 @@ bool emitPodStructFieldLoad(CSourceStream& out, RegCFunctionEmitState& state,
 bool emitPodStructFieldStore(CSourceStream& out, RegCFunctionEmitState& state,
                              const RegInstruction& ins, std::string& reason);
 /// @brief 逐函数判定哪些 POD 实例可以不逃逸地降级为 C struct。
-/// @details 逃逸判定保守：白名单（实例字段读写 + <init> receiver）之外一律逃逸。
+/// @details 逃逸判定保守：白名单（实例字段读写 + `<init>` receiver）之外一律逃逸。
 ///          漏判逃逸会导致数据静默错乱，宁可覆盖面小。
 RegCPodStructPlan analyzePodStructs(const RegFunction& fn, CompilerIndex* classIndex);
 /// 尝试发射 intrinsic 调用（StringBuilder/StringBuffer/字符串运行时方法）。

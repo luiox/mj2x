@@ -212,7 +212,7 @@ RegCPodStructPlan analyzePodStructs(const RegFunction& fn, CompilerIndex* classI
     // 第二遍：白名单之外的一切使用都算逃逸。
     //
     // 刻意保守：漏判逃逸 = 数据静默错乱（比崩溃更难查），宁可不降级。覆盖面
-    // 小是本项的已知代价，见 doc/techniques/pod_struct.md。
+    // 小是本项的已知代价，见 doc:pod-struct。
     for (const auto& block : fn.blocks) {
         for (const auto& ins : block->instructions) {
             switch (ins.kind) {

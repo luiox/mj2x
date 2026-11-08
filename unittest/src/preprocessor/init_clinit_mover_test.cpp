@@ -1,4 +1,4 @@
-// InitClinitMoverPreprocessor 单元测试（搬运法，regc_conversion_decisions.md §7.1）。
+// InitClinitMoverPreprocessor 单元测试（搬运法）。
 //
 // 验证：
 // - <init>：super 调用留在骨架，body 搬进静态 __regc_init_<hash>，

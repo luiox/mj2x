@@ -73,7 +73,7 @@ inline std::string_view rtBackendDefine(CEmitterBackend backend)
     return {};
 }
 
-/// 按后端把内嵌运行时源写入 <projectDir>/src/mj2x-rt/<挂载名>/<路径>。
+/// 按后端把内嵌运行时源写入 `<projectDir>/src/mj2x-rt/<挂载名>/<路径>`。
 /// 任一所需挂载缺失或写出失败返回 false(调用方 fail-closed)。
 inline bool writeRtTree(const std::filesystem::path& projectDir, CEmitterBackend backend)
 {

@@ -8,11 +8,12 @@
 2. 代码面出现的 ``doc/...rst`` 路径必须存在。
 3. 代码面不得引用设计内容形态的 ``.md``。豁免只有：流程文档白名单（AGENTS/
    dev_plan/README/MIGRATION/roadmap）；带仓名标记的跨仓出处（libjbc /
-   morpher / mjbase / mjt / luiox / 私有仓）；以及下方 TRANSITIONAL 过渡
-   白名单（第一批 rst 改造遗留，TODO 第二批收编时移除）。
+   morpher / mjbase / mjt / luiox / 私有仓）；test//build/ 下的生成物报告
+   路径；以及无目录的裸 ``.md`` 文件名（生成的报告/模板文件名字面量，非文档
+   引用）。
 
 doc/archive/ 是历史归档（只进不出）：不进 toctree、不做任何 .md/.rst 检查；
-长期归宿（删除或压缩）待第二批定。
+长期归宿（删除或压缩）待后续批次定。
 
 用法：python doc/check_refs.py [仓库根]
 """
@@ -59,14 +60,6 @@ UPSTREAM_MARKERS = ("libjbc", "morpher", "mjbase", "mjt", "luiox", "私有仓", 
 DOC_DIRNAME = "doc"
 ARCHIVE_DIRNAME = "doc/archive"
 
-# ===== 过渡白名单（TODO 第二批收编时移除）=====
-# 仍指向已转 rst 的旧 md 路径（doc/user_intrinsic.md、config_file.md）的代码
-# 文件——代码面在第一批文档改造中禁改，第二批统一改线到 doc/<slug>.rst。
-TRANSITIONAL_MD_REFS = {"mj2x-cli/src/main.cpp", "mj2x-cli/src/native_compiler.cpp"}
-# md 提及的路径前缀白名单：doc/techniques/ 属中观层 spec（第二批转 rst，其间
-# rst/doc 内保留 md 相对链接）；doc_ai/ 是 monorepo 时代的一次性分析目录
-# （现 gitignore），代码面 30 余处历史引用随第二批代码注释清理收编。
-TRANSITIONAL_MD_PREFIXES = ("doc/techniques/", "techniques/", "doc_ai/", "mj2x/doc_ai/")
 # 生成物输出路径（gitignore 的 test/、build/ 下）：报告文件名，不是文档引用。
 ARTIFACT_MD_PREFIXES = ("test/", "build/")
 
@@ -145,20 +138,6 @@ def toctree_entries(index: Path):
     return entries
 
 
-def transitional_md_ok(mention: str, rst_side: bool, techniques: set[str]) -> bool:
-    """过渡白名单命中判定。
-
-    rst 侧不豁免 doc_ai（文档不得指向一次性目录）；techniques/ 现存 md 的提及
-    （含省略目录的引用形态，如 ``vm_super_ops.md``_ 链接）两侧都豁免——该子树
-    第二批转 rst 后本函数连同 techniques 豁免一并删除。
-    """
-    if rst_side and mention.startswith(("doc_ai/", "mj2x/doc_ai/")):
-        return False
-    if mention.startswith(TRANSITIONAL_MD_PREFIXES):
-        return True
-    return Path(mention).name.lstrip("_") in techniques
-
-
 def check(root: Path):
     problems = []
     doc_dir = root / DOC_DIRNAME
@@ -167,12 +146,11 @@ def check(root: Path):
     labels, rsts, dup = collect_labels(doc_dir)
     problems += dup
     in_tree = toctree_entries(doc_dir / "index.rst")
-    techniques_dir = doc_dir / "techniques"
-    techniques = {p.name for p in techniques_dir.glob("*.md")} if techniques_dir.is_dir() else set()
 
     # RST 侧：文档内链必须指向在册文件/已声明 label，匿名 md/rst 链接一律禁止。
     for p in rst_files(doc_dir):
-        if p.name != "index.rst" and p.stem not in in_tree:
+        rel_no_ext = p.relative_to(doc_dir).with_suffix("").as_posix()
+        if p.name != "index.rst" and p.stem not in in_tree and rel_no_ext not in in_tree:
             problems.append(f"{p.name}: 未挂进 index.rst 的 toctree（Sphinx -W 会报 orphan）")
     for p in rst_files(doc_dir):
         for lineno, line in iter_lines(p):
@@ -182,8 +160,6 @@ def check(root: Path):
                 if Path(m.group(0)).name in PROCESS_DOCS:
                     continue
                 if any(marker in line for marker in UPSTREAM_MARKERS):
-                    continue
-                if transitional_md_ok(m.group(0), rst_side=True, techniques=techniques):
                     continue
                 problems.append(
                     f"{p.name}:{lineno}: 文档点名 markdown 规格 {m.group(0)}——"
@@ -217,16 +193,10 @@ def check(root: Path):
                     continue
                 if any(marker in line for marker in UPSTREAM_MARKERS):
                     continue
-                if rel in TRANSITIONAL_MD_REFS:
-                    # TODO 第二批：main.cpp/native_compiler.cpp 的旧 md 引用改线 rst 后移除。
-                    continue
-                if transitional_md_ok(name, rst_side=False, techniques=techniques):
-                    # TODO 第二批：techniques 转 rst、doc_ai 历史引用清理后移除。
-                    continue
                 if "/" not in name:
-                    # TODO 第二批（过渡）：无目录的裸 .md 名——monorepo 时代一次性
-                    # 文档的 § 引用残留（regc_codegen.md §1 形态）与测试产物文件名
-                    # （TRACE_SURFACE.md 等）。新引用必须写 doc/*.rst 路径或 doc:<label>。
+                    # 无目录的裸 .md 名 = 文件名字面量（生成的报告 TRACE_SURFACE.md、
+                    # 工程模板 README.md.in 等），不是文档引用；文档引用必须写
+                    # doc/*.rst 路径或 doc:<label>。
                     continue
                 problems.append(
                     f"{rel}:{lineno}: 代码面引用 markdown 规格 {name}——设计内容转 {DOC_DIRNAME}/*.rst，或删指"

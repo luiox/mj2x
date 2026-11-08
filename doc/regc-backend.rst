@@ -153,10 +153,7 @@ RegC E2E 覆盖
 相关设计文档
 ------------
 
-- SSA 构造与 SSA → 后端 lowering：techniques/ 子树 `ssa_construction.md`_
-- 代码生成策略（寄存器/栈机、lowering、C codegen）：techniques/ 子树
-  `codegen_strategies.md`_
-- JVM → 原生编译技术文档总索引：techniques/ 子树 ``README``\ （目录索引）
-
-.. _ssa_construction.md: techniques/ssa_construction.md
-.. _codegen_strategies.md: techniques/codegen_strategies.md
+- SSA 构造与 SSA → 后端 lowering：:doc:`/techniques/ssa-construction`
+- 代码生成策略（寄存器/栈机、lowering、C codegen）：
+  :doc:`/techniques/codegen-strategies`
+- JVM → 原生编译技术文档总索引：:doc:`/techniques`\ （目录篇）

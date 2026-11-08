@@ -176,7 +176,7 @@ protected:
         // R6.1：先展开 StringConcatFactory invokedynamic → StringBuilder 字节码，
         // 再 mark-all，使 concat 方法能进入 RegC native 流程。
         pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
-        // 搬运法（regc_conversion_decisions.md §7.1）：<init>/<clinit> 体先进
+        // 搬运法：<init>/<clinit> 体先进
         // __regc_* 静态方法（MarkAll 标记后编译成 native），骨架保留字节码。
         pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
@@ -551,7 +551,7 @@ TEST_F(RegCBackendE2E, CallHelpersRoundTrip)
             });
 }
 
-// R6.1 构造器/静态块搬运验证（regc_conversion_decisions.md §7.1 搬运法）：
+// 构造器/静态块搬运验证（搬运法）：
 // <init>/<clinit> 方法体被搬进 __regc_init_*/__regc_clinit_* 静态方法后经
 // MarkAll 编成 native；原方法保留字节码骨架（super 调用链 / registerNatives 注入点）。
 // javac 默认( -g:lines,source)在 <init> 头部生成 LineNumberTable 锚点 label，

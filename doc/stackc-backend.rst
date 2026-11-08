@@ -165,8 +165,5 @@ passthrough，不参与 root class 解析或 native injection。
 相关设计文档
 ------------
 
-- 代码生成策略（栈机 vs 寄存器、lowering）：techniques/ 子树
-  `codegen_strategies.md`_
-- JVM → 原生编译技术文档总索引：techniques/ 子树 ``README``\ （目录索引）
-
-.. _codegen_strategies.md: techniques/codegen_strategies.md
+- 代码生成策略（栈机 vs 寄存器、lowering）：:doc:`/techniques/codegen-strategies`
+- JVM → 原生编译技术文档总索引：:doc:`/techniques`\ （目录篇）

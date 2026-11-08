@@ -60,7 +60,7 @@ libjzip / libgarena / libjdk_finder + xrepo 的 gtest / nlohmann_json），不�
 在一次性文档删除后全部悬空，没有任何工具报错，就是这么烂掉的。RST 白送这三样，
 规范才谈得上执行。
 
-硬规则（`doc/check_refs.py` + Sphinx `-W` 在 CI 挡）：
+硬规则（`doc/check_refs.py` + Sphinx `-W` + Doxygen `WARN_AS_ERROR` 三道门禁在 CI 挡）：
 
 1. 代码/测试/构建脚本只可引用 `doc/*.rst`，路径必须存在。
 2. 代码面出现 `.md` 路径即失败。两类豁免：流程文档白名单（AGENTS.md、dev_plan.md、
@@ -79,26 +79,49 @@ libjzip / libgarena / libjdk_finder + xrepo 的 gtest / nlohmann_json），不�
    归 git log 与 PR 描述。判据：删掉这句话，读者对「现在怎么做」的理解有没有变化；
    没变化就是废话。
 
-过渡豁免（第一批 rst 改造遗留，集中登记在 `doc/check_refs.py` 的 TRANSITIONAL
-段，第二批收编后移除）：`doc/techniques/**` 仍为 md（中观层 spec，待转 rst）；
-`mj2x-cli/src/main.cpp` 与 `mj2x-cli/src/native_compiler.cpp` 仍指向已转 rst 的
-旧 md 路径；代码面 `doc_ai/` 历史引用与裸文件名 § 引用（monorepo 时代残留）。
+过渡豁免已随第二批收编移除；现存永久豁免只有三类：流程文档白名单（校验
+存在性）、带仓名标记的跨仓出处、`test/`、`build/` 生成物报告路径与无目录的裸
+`.md` 文件名字面量（生成的报告/模板文件名，非文档引用）。
 
 RST 写作约定（中文正文的坑，实测）：
 
 - 表格一律 `.. list-table::`，**禁用 grid table**：docutils 按显示宽度校验 grid 边框，
-  全角字形造成 "Malformed table data"，`-W` 下直接失败。
+  全角字形造成 "Malformed table data"，`-W` 下直接失败。标题下划线同理按**东亚
+  显示宽度**计长，CJK 标题的下划线要比字符数更长。
 - 行内代码紧邻中文时必须写 `` ``x``\ 中文 ``（转义空格不能省）：docutils 判 end-string
   要求闭定界符后接空白或 ASCII 标点，紧随汉字（Lo）会报 start-string without end-string。
-- 标题层级 `=` / `-` / `^`；代码块标 `.. code-block:: <lang>`；
+  ``**强调**`` 同理；子目录文档进 toctree 用相对路径（`techniques/xxx`）。
+- 标题层级 `=` / `-` / `^`；代码块标 `.. code-block:: <lang>`（无对应 lexer 的
+  伪代码用 `text`，中文注释的伪 C 也是——Pygments 的 C lexer 吃不了全角标点）；
   与代码同步的事实（参数默认值、锁定依赖版本）集中一处定义，不跨文档复述。
 - 首段写状态行：`状态：定稿/草案/部分落地（已落地面见本文 §X）`。
 
-命令（从仓库根执行）：
+Doxygen 写作约定（`///` 走 markdown 解析，坑同样实测）：
+
+- 尖括号占位符与 JVM 特殊名（`<init>`、`<clinit>`、`<cstdio>`、`--flag <n>`、
+  `mj2x.param.<id>.desc`）必须包进行内代码，否则被当 HTML 标签报
+  "Unsupported xml/html tag"。
+- 全角标点紧邻、且内容以左括号开头的行内代码段会产出不配对的 `</tt>` 标签
+  （1.18 实测，如「…调用：」后紧跟 `((sig)expr)(args)` 形态的代码段）：在起始
+  反引号前留一个 ASCII 空格即可。
+- `@`/`\` 字面量（模板占位符 `@NAME@`、键格式 `owner\nname\ndesc`、`#undef`）
+  包进行内代码，否则被当命令报 "Found unknown command"；`@example` 是示例文件
+  引入命令，写示例用「示例：`...`」prose 形式。
+- 行首 `-` / `+` 是列表标记：`@brief` 换行续行不能以 `+` 开头（会把后文判成非法列表项）。
+- `@ref 目标` 会吞掉紧随的中文标点，目标名后要留空格并用两参形式
+  `@ref 目标 "显示文字"`；指向类型名的出处直接写行内代码，不用 `@ref`。
+- 模块级背景/定位用 `/// @defgroup <slug> <标题>` 放在 umbrella header 顶部，
+  文件名即锚点；组与文件注释各说一半，不复述。
+- 门禁松紧档写在仓根 `Doxyfile`：`WARN_AS_ERROR=YES` 挡写错的文档，
+  `WARN_IF_UNDOCUMENTED=NO` 不挡没写的，`WARN_IF_INCOMPLETE_DOC=NO` 暂不挡
+  漏写 `@param`（收紧见该文件注记）。
+
+命令（从仓库根执行，三道门禁）：
 
 ```sh
-sphinx-build -b html -E -W --keep-going doc doc/_build   # -E：增量会吞掉旧警告
 python doc/check_refs.py .                               # 代码引用面校验
+sphinx-build -b html -E -W --keep-going doc doc/_build   # -E：增量会吞掉旧警告
+doxygen Doxyfile                                         # 微观层（只吃 *.hpp /// 注释）
 ```
 
 ## 加依赖前的判断

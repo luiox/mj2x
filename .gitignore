@@ -11,5 +11,6 @@ compile_commands.json
 /work
 /.workbuddy
 
-# Sphinx 构建产物（doc/_build）
+# Sphinx 构建产物（doc/_build）与 Doxygen 输出（doc/_apidoc）
 /doc/_build/
+/doc/_apidoc/

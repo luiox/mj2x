@@ -2,7 +2,7 @@
 /// @brief 生成开关系统：CodeOptions 命名开关表 + 注释级别 + 作用域覆盖。
 ///
 /// @details
-/// 见 doc_ai/regc_template_engine.md §3.2。发射层的"要不要生成某段代码"决策
+/// 发射层的"要不要生成某段代码"决策
 /// 全部收敛到 CodeOptions 的强类型字段：发射点用 `opts.field` 查询，组合进
 /// `CSourceStream::iff` 的条件。来源可配置（backend 配置 / CLI），作用域覆盖
 /// 用 RAII 的 ScopeOverride 表达。注释级别枚举从 regc_emitter.hpp 迁入本文件

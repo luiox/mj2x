@@ -225,7 +225,7 @@ public:
     ///                      追加进文件级表（finalize 据此生成 bootstrap 函数）。
     /// @param indySiteBase  文件级表的全局站点偏移（本方法首个站点的全局索引）。
     /// @param classIndex    可选：调用目标元数据（final 判定）；nullptr 关闭直接调用。
-    /// @param convertedFunctions 可选：已转换方法表（owner\nname\ndesc -> regc_* 函数名）。
+    /// @param convertedFunctions 可选：已转换方法表（`owner\nname\ndesc` -> regc_* 函数名）。
     /// @param indyFunctions      可选：含 invokedynamic 站点的方法键集合（直接调用排除）。
     /// @param intrinsicRegistry  可选：用户自定义 intrinsic registry（issue #818）；
     ///                           nullptr 时用 builtins()。

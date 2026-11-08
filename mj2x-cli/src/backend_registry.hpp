@@ -58,7 +58,7 @@ struct BackendModule
     bool (*wire)(BackendWiringContext& context);
     /// 需要 RegisterNatives cloader 桥接后处理（StackC/RegC/VMC4；LLVM 直发 .ll 不需要）。
     bool usesCloaderBridge;
-    /// jar native-loader 模式下向每个转换类 <clinit> 注入 NativeLoader.load
+    /// jar native-loader 模式下向每个转换类 `<clinit>` 注入 NativeLoader.load
     /// （RegC/LLVM 经 System.load 加载；StackC 自重写 clinit，VMC4 经 Loader 桥）。
     bool injectsNativeLoaderIntoClinit;
     /// pipeline.run() 之后的产物后处理（VMC4 trace surface 等）；空 = 无。

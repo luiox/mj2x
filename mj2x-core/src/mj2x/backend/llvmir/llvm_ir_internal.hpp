@@ -403,7 +403,7 @@ constexpr int64_t ExceptionCheck       = 228;
 /// @brief Resolved intra-class static call target for the LLVM IR slice.
 struct CallTarget
 {
-    std::string          symbol;   ///< internal helper symbol（@mj2x_llvm_Java_...）
+    std::string          symbol;   ///< internal helper symbol（`@mj2x_llvm_Java_...`）
     SSAType              returnType = SSAType::UNKNOWN;
     std::vector<SSAType> argTypes;
 };

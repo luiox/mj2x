@@ -11,7 +11,7 @@
 //
 // 强度说明：非密码学（密钥藏于 NativeLoader 字节码常量），用途是把 jar 内
 // 明文 dll 变成静态不可直接提取的 blob，抬高取证/静态分析门槛；强加密 +
-// 密钥下沉 native 层属 sepacker 对接范围（native_library_packaging.md）。
+// 密钥下沉 native 层属 sepacker 对接范围（见 doc:native-lib-encryption）。
 
 #pragma once
 

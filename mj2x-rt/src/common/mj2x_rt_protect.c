@@ -1,8 +1,7 @@
 /// @file mj2x_rt_protect.c
 /// @brief mj2x_rt_protect 实现（C99，Windows/Linux）。
 ///
-/// 探测目录含 mj2x-runtime C++ antidebug 层的移植版（R3 整合，见
-/// doc_ai/r3_protect_integration.md）：PEB BeingDebugged/NtGlobalFlag、
+/// 探测面：PEB BeingDebugged/NtGlobalFlag、
 /// NtQueryInformationProcess 调试三元组、硬件断点调试寄存器、Linux agent
 /// 库映射扫描。所有探测 fail-open：探测失败按无信号处理。
 // nanosleep 与 struct timespec 需要 _GNU_SOURCE（严格 c99 下 glibc 默认隐藏），

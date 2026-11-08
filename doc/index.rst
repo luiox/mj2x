@@ -21,3 +21,31 @@ mj2x 设计规格
    stackc-backend
    regc-backend
    regc-test-strategy
+
+.. toctree::
+   :maxdepth: 2
+   :caption: 技术文档
+
+   techniques
+   techniques/ssa-construction
+   techniques/bytecode-translation
+   techniques/codegen-strategies
+   techniques/jni-bridge
+   techniques/intrinsic-mapping
+   techniques/runtime-protection
+   techniques/protection-overview
+   techniques/mba
+   techniques/opaque-predicate
+   techniques/constant-hiding
+   techniques/control-flow-flattening
+   techniques/computed-jumps
+   techniques/call-indirection
+   techniques/native-direct-call
+   techniques/pod-struct
+   techniques/vm-virtualization
+   techniques/vm-super-ops
+   techniques/vm-regfile
+   techniques/jni-table-protection
+   techniques/runtime-anti-debug
+   techniques/string-encryption
+   techniques/native-lib-encryption

@@ -1,5 +1,5 @@
 // Unit tests for the template-engine core: CExpr builders, CodeOptions switches
-// and CodeTemplate registry (doc_ai/regc_template_engine.md §3-4).
+// and CodeTemplate registry.
 //
 // Every composed expression/statement must pass the lexical balance scan
 // (balanced_c.hpp) — this is the executable guard against hand-spliced brackets.

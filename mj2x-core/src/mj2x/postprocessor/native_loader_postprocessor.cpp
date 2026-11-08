@@ -179,7 +179,7 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
             Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNCHRONIZED, true});
         auto unit = promote(mi);
         // 前向分支逐条源序发射，目标指令后到——append 期锚定校验机制性不可
-        // 满足（design.md §34.3），走受控延后绑定态，退出时全量补验悬垂。
+        // 满足，走受控延后绑定态，退出时全量补验悬垂。
         unit->dom.beginDeferredTargets();
         CodeEditor editor(*unit);
 

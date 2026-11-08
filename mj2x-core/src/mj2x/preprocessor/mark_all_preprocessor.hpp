@@ -28,8 +28,8 @@ public:
                     continue;
                 // 跳过 <init>/<clinit>：JVM 校验对构造器/类初始化器的 ACC_NATIVE 修饰
                 // 有限制（部分实现拒收 native <init>）。构造器/类初始化逻辑由
-                // InitClinitMoverPreprocessor 提前搬入 __regc_* 静态方法（见
-                // regc_conversion_decisions.md §7.1），此处骨架保留原 Java 字节码。
+                // InitClinitMoverPreprocessor 提前搬入 __regc_* 静态方法，
+                // 此处骨架保留原 Java 字节码。
                 auto mname = std::string(cls.dom->nameOf(dm));
                 if (mname == "<init>" || mname == "<clinit>") continue;
                 method.markedForCompile = true;

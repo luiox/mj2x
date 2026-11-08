@@ -3,7 +3,7 @@
 ///
 /// @details
 /// 判定单源在管线层（InvokeDynamicPreprocessor::classifyIndySite /
-/// classifyIndySiteForm，判定树见 doc_ai/indy_native_dispatch_design.md §2）；
+/// classifyIndySiteForm）；
 /// 本头文件只承载判定结论的值载荷：SSAFunction::InvokeDynamicSite 与
 /// RegFunction::InvokeDynamicSite 持有 form + 载荷，值拷贝透传到后端。
 /// 发射端按 form 查表消费，不做任何判定逻辑（后端零判定）。
