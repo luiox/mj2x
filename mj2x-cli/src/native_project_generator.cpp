@@ -212,27 +212,25 @@ const char* xmakeOptimizeFor(const std::string& level)
 std::string vmx64AsmRuleSection()
 {
     // 生成工程 xmake.lua 的项目描述作用域沙箱极严：raise/add_asfiles/assert 全部
-    // 不注入（CI 两轮实证 nil 调用），可用面只有描述 API + print（模板正文同款）。
-    // 描述段只做 glob 收编（add_files，msvc 工具链下 xmake 自动路由 ml64）与
-    // 错平台 print 警告——错平台的硬失败由链接期缺 exec 符号兜底；装配器硬校验
-    // 留在 on_load 脚本作用域（raise 是 xmake 文档化的脚本作用域惯用法）。
+    // 不注入（CI 实证 nil 调用），且 xmake f 平台探测阶段会多次求值项目文件、
+    // is_plat 时序不可靠（描述段检查会误报）。描述段只做 glob 收编（add_files，
+    // msvc 工具链下 xmake 自动路由 ml64）；装配器硬校验放 on_config 脚本作用域
+    // ——target:tool 在 on_load 里尚未解析（CI 实证），xmake 报错原文即要求
+    // 挪 on_config。
     std::string section;
     section += "    -- vmx64 backend section (injected only for backend=vmx64): the generated\n";
     section += "    -- MASM x64 TU (src/generated/*.asm) is assembled by ml64 via add_files\n";
     section += "    -- (xmake routes .asm to ml64 under the msvc toolchain on x64).\n";
     section += "    if #os.files(\"src/generated/*.asm\") > 0 then\n";
-    section += "        if not is_plat(\"windows\") or not is_arch(\"x64\") then\n";
-    section += "            print(\"error: mj2x vmx64: generated MASM x64 sources require windows/x64; \"\n";
-    section += "                  .. \"reconfigure with: xmake f -p windows -a x64 --toolchain=msvc\")\n";
-    section += "        end\n";
     section += "        add_files(\"src/generated/*.asm\")\n";
     section += "    end\n";
-    section += "    on_load(function (target)\n";
+    section += "    on_config(function (target)\n";
     section += "        if #os.files(\"src/generated/*.asm\") > 0 then\n";
     section += "            local as = target:tool(\"as\")\n";
     section += "            if type(as) ~= \"string\" or not as:find(\"ml64\", 1, true) then\n";
-    section += "                raise(\"mj2x vmx64: MASM x64 sources require the ml64 assembler \""
-               " .. \"(msvc toolchain on x64); detected: \" .. tostring(as))\n";
+    section += "                raise(\"mj2x vmx64: generated MASM x64 sources require windows/x64; \""
+               " .. \"reconfigure with: xmake f -p windows -a x64 --toolchain=msvc \""
+               " .. \"(detected as tool: \" .. tostring(as) .. \")\")\n";
     section += "            end\n";
     section += "        end\n";
     section += "    end)\n";
