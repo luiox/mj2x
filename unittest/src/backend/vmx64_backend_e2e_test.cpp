@@ -278,7 +278,8 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         std::ofstream out(ps1);
         out << "$env:MORPHER_DLL = $args[0]\n"
             << "$p = Start-Process -FilePath $args[1] "
-               "-ArgumentList '-cp',$args[2],'Driver' -NoNewWindow "
+               "-ArgumentList '-XX:-CreateCoredumpOnCrash','-cp',$args[2],'Driver' "
+               "-WorkingDirectory $args[2] -NoNewWindow "
                "-RedirectStandardOutput $args[3] -RedirectStandardError $args[4] -PassThru\n"
             << "if (-not $p.WaitForExit(120000)) {\n"
             << "  Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue\n"
@@ -300,14 +301,19 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         d += fileExists(errTxt) ? readText(errTxt) : "<none>";
         d += "\n--- runner out ---\n" + protectedRun.out;
         std::error_code lec;
-        for (fs::directory_iterator it(dir, lec), endIt; it != endIt && !lec; ++it) {
-            const std::string name = it->path().filename().string();
-            if (name.rfind("hs_err_pid", 0) == 0) {
-                d += "\n--- " + name + " (first 120 lines) ---\n";
-                std::vector<std::string> lines =
-                    splitLines(readText(it->path()));
-                for (size_t i = 0; i < lines.size() && i < 120; ++i)
-                    d += lines[i] + "\n";
+        // hs_err 由 java 落在其 CWD（Start-Process 已指到 case 目录）；测试进程
+        // 自身 CWD（仓库根）兜底再扫一遍。
+        const fs::path hsDirs[2] = {dir, fs::current_path()};
+        for (const auto& hsDir : hsDirs) {
+            for (fs::directory_iterator it(hsDir, lec), endIt; it != endIt && !lec; ++it) {
+                const std::string name = it->path().filename().string();
+                if (name.rfind("hs_err_pid", 0) == 0) {
+                    d += "\n--- " + name + " (first 120 lines) ---\n";
+                    std::vector<std::string> lines =
+                        splitLines(readText(it->path()));
+                    for (size_t i = 0; i < lines.size() && i < 120; ++i)
+                        d += lines[i] + "\n";
+                }
             }
         }
         d += "\n--- emitted vmx64.asm ---\n";
