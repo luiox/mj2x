@@ -252,13 +252,19 @@ TEST(Vmx64BackendTest, EncodesLoopMethodWithFusedBranch)
 // ===========================================================================
 TEST(Vmx64BackendTest, DeterministicEmitForSameSeed)
 {
-    const auto mkInsns = []() {
-        return std::initializer_list<AbstractInsnNode*>{
-            new VarInsnNode(Opcodes::ILOAD, 0), new InsnNode(Opcodes::ICONST_3),
-            new InsnNode(Opcodes::IMUL), new InsnNode(Opcodes::IRETURN)};
-    };
-    const std::string a = emitViaBackend("det", "(I)I", mkInsns(), 2, 1, 0xBEEF);
-    const std::string b = emitViaBackend("det", "(I)I", mkInsns(), 2, 1, 0xBEEF);
+    // 指令列表必须内联花括号直传：lambda 返回 std::initializer_list 时底层数组
+    // 是 lambda 栈帧上的临时量，函数返回即死亡——调用方拿到悬垂视图，makeMethod
+    // 读到的就是垃圾节点指针（CI 首跑 SEGV 的根因）。
+    const std::string a = emitViaBackend(
+        "det", "(I)I",
+        {new VarInsnNode(Opcodes::ILOAD, 0), new InsnNode(Opcodes::ICONST_3),
+         new InsnNode(Opcodes::IMUL), new InsnNode(Opcodes::IRETURN)},
+        2, 1, 0xBEEF);
+    const std::string b = emitViaBackend(
+        "det", "(I)I",
+        {new VarInsnNode(Opcodes::ILOAD, 0), new InsnNode(Opcodes::ICONST_3),
+         new InsnNode(Opcodes::IMUL), new InsnNode(Opcodes::IRETURN)},
+        2, 1, 0xBEEF);
     ASSERT_FALSE(a.empty());
     EXPECT_EQ(a, b) << "same seed + same input must be byte-identical";
     // 头注释不含时间戳/绝对路径类内容（确定性文本抽查）。
@@ -271,13 +277,17 @@ TEST(Vmx64BackendTest, DeterministicEmitForSameSeed)
 // ===========================================================================
 TEST(Vmx64BackendTest, DifferentSeedProducesDifferentArtifact)
 {
-    const auto mkInsns = []() {
-        return std::initializer_list<AbstractInsnNode*>{
-            new VarInsnNode(Opcodes::ILOAD, 0), new InsnNode(Opcodes::ICONST_3),
-            new InsnNode(Opcodes::IMUL), new InsnNode(Opcodes::IRETURN)};
-    };
-    const std::string a = emitViaBackend("sd", "(I)I", mkInsns(), 2, 1, 0x1111);
-    const std::string b = emitViaBackend("sd", "(I)I", mkInsns(), 2, 1, 0x2222);
+    // 同上：内联花括号直传，杜绝 initializer_list 出函数即悬垂。
+    const std::string a = emitViaBackend(
+        "sd", "(I)I",
+        {new VarInsnNode(Opcodes::ILOAD, 0), new InsnNode(Opcodes::ICONST_3),
+         new InsnNode(Opcodes::IMUL), new InsnNode(Opcodes::IRETURN)},
+        2, 1, 0x1111);
+    const std::string b = emitViaBackend(
+        "sd", "(I)I",
+        {new VarInsnNode(Opcodes::ILOAD, 0), new InsnNode(Opcodes::ICONST_3),
+         new InsnNode(Opcodes::IMUL), new InsnNode(Opcodes::IRETURN)},
+        2, 1, 0x2222);
     ASSERT_FALSE(a.empty());
     ASSERT_FALSE(b.empty());
     EXPECT_NE(a, b) << "different seeds must produce different .asm artifacts";
@@ -377,8 +387,14 @@ TEST(Vmx64BackendTest, FailClosedLeavesNoPartialArtifact)
     opts.seed = 7;
     backend.setOptions(opts);
     CompilerClass cls;
-    ca::str::Utf8StringArena arena;
-    CodeConverter            converter(arena);
+    // 每方法独立 arena + converter：CodeConverter 的 Block 池由 converter 拥有，
+    // 且每次 convert() 在 buildBlocks 里先清空池——同一 converter 转第二个方法
+    // 会析构第一个方法的 Block，先拿到的 okBlocks 立刻悬垂（CI 上 ok 编码
+    // 无故失败、exec 段缺失的根因）。与 emitViaBackend 每调用新建同一口径。
+    ca::str::Utf8StringArena okArena;
+    CodeConverter            okConverter(okArena);
+    ca::str::Utf8StringArena badArena;
+    CodeConverter            badConverter(badArena);
 
     auto okMethod = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "ok", "(I)I",
                                {
@@ -401,8 +417,8 @@ TEST(Vmx64BackendTest, FailClosedLeavesNoPartialArtifact)
     cls.methods.push_back(okCm);
     cls.methods.push_back(badCm);
 
-    auto okBlocks  = test::convertMethodNode(converter, *okMethod, arena);
-    auto badBlocks = test::convertMethodNode(converter, *badMethod, arena);
+    auto okBlocks  = test::convertMethodNode(okConverter, *okMethod, okArena);
+    auto badBlocks = test::convertMethodNode(badConverter, *badMethod, badArena);
     auto okResult  = backend.compileMethod("Mix", cls.methods[0], okBlocks);
     auto badResult = backend.compileMethod("Mix", cls.methods[1], badBlocks);
     EXPECT_EQ(okResult.kind, BackendResult::Kind::ASM_SOURCE);
