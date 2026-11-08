@@ -971,6 +971,16 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.runtime_protection_needs_native"));
         return 1;
     }
+    // vmx64 Phase 1 面：只开放 --emit-c（.asm 产物）。native 编译/pipe、CMake/
+    // xmake 工程生成、native-dir 均未接线（ml64 汇编步骤 + RegisterNatives
+    // 注册 C TU 是 Phase 2 缺口，见 vmx64_backend.hpp）——fail-closed 报错，
+    // 不产半成品工程。
+    if (options.cBackendKind == CEmitterBackend::Vmx64 &&
+        (options.compileNative || !options.cmakeProjectDir.empty() ||
+         !options.xmakeProjectDir.empty() || !options.nativeDirOutput.empty())) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.vmx64_emit_only"));
+        return 1;
+    }
     if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.stackc_exception_check_invalid"));
         return 1;

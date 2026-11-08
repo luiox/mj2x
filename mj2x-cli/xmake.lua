@@ -55,6 +55,7 @@ target("mj2x-cli")
         if mj2x_backend ~= "stackc" then add_defines("MJ2X_DISABLE_STACKC_BACKEND") end
         if mj2x_backend ~= "regc" then add_defines("MJ2X_DISABLE_REGC_BACKEND") end
         if mj2x_backend ~= "vmc4" then add_defines("MJ2X_DISABLE_VMC4_BACKEND") end
+        if mj2x_backend ~= "vmx64" then add_defines("MJ2X_DISABLE_VMX64_BACKEND") end
     end
 
     add_files("src/*.cpp")
@@ -70,6 +71,7 @@ target("mj2x-cli")
             regc   = "common,regc,templates",
             vmc4   = "common,vmc4,templates",
             llvm   = "common,regc,llvmir,templates",
+            vmx64  = "common,templates",
         }
         set_values("resources.embed.only", rt_mounts[mj2x_backend])
     end

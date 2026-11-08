@@ -47,6 +47,7 @@ mj2x.cli.err.regc_trace_calls_needs_regc=--regc-trace-calls requires --backend r
 mj2x.cli.err.regc_safe_env_needs_regc=--regc-safe-env requires --backend regc.
 mj2x.cli.err.runtime_protection_unknown=Unknown --runtime-protection value. Expected none, log, delay, fake, or terminate.
 mj2x.cli.err.runtime_protection_needs_native=--runtime-protection requires --backend regc, vmc4, or llvm.
+mj2x.cli.err.vmx64_emit_only=The vmx64 backend currently supports --emit-c (.asm output) only; native compilation and project generation are Phase 2 gaps.
 mj2x.cli.err.lazy_decrypt_needs_encrypt=--vmc4-lazy-decrypt requires --vmc4-encrypt-program to be enabled.
 mj2x.cli.err.block_lazy_needs_encrypt=--vmc4-block-lazy-decrypt requires --vmc4-encrypt-program to be enabled.
 mj2x.cli.err.block_lazy_conflicts_lazy=--vmc4-block-lazy-decrypt and --vmc4-lazy-decrypt are mutually exclusive (aligns with jvmtp vm.lazy-decrypt vs vm.control-flow-flatten).

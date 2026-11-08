@@ -46,8 +46,8 @@ const BackendModule* BackendModuleRegistry::findByCliName(const std::string& nam
 
 /// @brief 本构建可用的后端 CLI 名清单（逗号分隔，错误文案用）。
 ///
-/// 顺序 = 注册表 displayOrder（stackc, regc, llvm, vmc4），与历史宏拼接清单
-/// 逐字节一致。
+/// 顺序 = 注册表 displayOrder（stackc, regc, llvm, vmc4, vmx64），被裁后端
+/// 不注册、不入清单。
 std::string enabledBackendCliList()
 {
     std::string list;

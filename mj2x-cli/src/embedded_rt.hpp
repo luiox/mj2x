@@ -42,7 +42,9 @@ inline std::string readEmbeddedText(std::string_view mount, std::string_view pat
 
 /// mj2x-rt 分发面(单一事实源):后端 → 随生成工程分发/参与编译的挂载集。
 /// StackC 仅 stackc 慢路径运行时;RegC 全量 C 运行时;VMC4 仅 vmc4 解释辅助 +
-/// common;LLVM 为 llvmir 运行时 + regc intrinsic 实现 + common。common 对
+/// common;LLVM 为 llvmir 运行时 + regc intrinsic 实现 + common;vmx64 产物是
+/// 自包含 .asm(Phase 1 最小 opcode 集不在 VM 循环内外呼 C),只随发 common
+/// (Phase 2 extern C helper 接 mj2x-rt 时在此扩挂载)。common 对
 /// RegC/VMC4/LLVM 无条件分发(--runtime-protection 检查点 mj2x_rt_protect 在
 /// 此,一个文件对的成本换保护开关不参与分发决策)。
 inline std::vector<std::string_view> rtFoldersForBackend(CEmitterBackend backend)
@@ -56,6 +58,8 @@ inline std::vector<std::string_view> rtFoldersForBackend(CEmitterBackend backend
         return {"common", "regc", "llvmir"};
     case CEmitterBackend::Vmc4:
         return {"common", "vmc4"};
+    case CEmitterBackend::Vmx64:
+        return {"common"};
     }
     return {};
 }
@@ -69,6 +73,7 @@ inline std::string_view rtBackendDefine(CEmitterBackend backend)
     case CEmitterBackend::RegC: return "MJ2X_RT_BACKEND_REGC=1";
     case CEmitterBackend::LlvmIr: return "MJ2X_RT_BACKEND_LLVM=1";
     case CEmitterBackend::Vmc4: return "MJ2X_RT_BACKEND_VMC4=1";
+    case CEmitterBackend::Vmx64: return "MJ2X_RT_BACKEND_VMX64=1";
     }
     return {};
 }
