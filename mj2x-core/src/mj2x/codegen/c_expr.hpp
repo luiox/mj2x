@@ -2,9 +2,8 @@
 /// @brief C 表达式构建器：纯函数，括号内聚。
 ///
 /// @details
-/// 见 doc_ai/regc_template_engine.md §3.1。每个构建器是纯函数，返回 `std::string`
-/// （短生命周期值对象，非拼接容器，不违反 codegen_style.md §3.3；产物文本仍只经
-/// CSourceStream 入流）。括号内聚规则：调用方永远不需要手写 `"(" + ... + ")"`，
+/// 每个构建器是纯函数，返回 `std::string`
+/// （短生命周期值对象，非拼接容器；产物文本仍只经 CSourceStream 入流）。括号内聚规则：调用方永远不需要手写 `"(" + ... + ")"`，
 /// 嵌套调用结果已含必要括号。`exprBinop` 不隐式加括号，优先级由调用方用
 /// `exprParen` 显式表达（生成代码可读性优先）。
 #pragma once
@@ -22,10 +21,10 @@ std::string exprCall(std::string_view fn, std::initializer_list<std::string_view
 /// @brief 函数调用：`fn(a, b, ...)`（动态数量参数，如寄存器列表）。
 std::string exprCallArgs(std::string_view fn, const std::vector<std::string>& args);
 
-/// @brief 类型强转：`(type)expr`。
+/// @brief 类型强转： `(type)expr`。
 std::string exprCast(std::string_view type, std::string_view expr);
 
-/// @brief 函数指针调用：`((fnPtrSig)fnExpr)(a, b, ...)`。
+/// @brief 函数指针调用： `((fnPtrSig)fnExpr)(a, b, ...)`。
 std::string exprFnPtrCall(std::string_view fnPtrSig, std::string_view fnExpr,
                           std::initializer_list<std::string_view> args);
 
@@ -42,10 +41,10 @@ std::string exprBinop(std::string_view op, std::string_view lhs, std::string_vie
 std::string exprTernary(std::string_view cond, std::string_view thenExpr,
                         std::string_view elseExpr);
 
-/// @brief 括号包裹：`(expr)`（优先级歧义时显式表达）。
+/// @brief 括号包裹： `(expr)`（优先级歧义时显式表达）。
 std::string exprParen(std::string_view expr);
 
-/// @brief 统一空指针写法：`(void*)0`。
+/// @brief 统一空指针写法： `(void*)0`。
 std::string exprNull();
 
 // ---- 实现（header-only，纯函数） -------------------------------------------

@@ -3,7 +3,7 @@
 // native_class_filter_preprocessor.hpp
 //
 // 类级 glob include/exclude 过滤器（对标 jvmtp `filter.include` /
-// `filter.exclude`，见 doc_ai/jvmtp_gap_analysis.md §K P1-3）。
+// `filter.exclude`）。
 //
 // 语义（与 jvmtp 对齐）：
 //   - 按内部类名匹配（CompilerIndex 键为 JVM 内部形态 `demo/CliJarA`；匹配前

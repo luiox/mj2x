@@ -20,11 +20,11 @@
 ///     按进程树收割；Linux 上 kill 已针对整个进程组（libca 契约）。
 ///
 /// include 顺序约束（同 native_env_hygiene.hpp）：本头 include
-/// libca/process/subprocess.hpp，其会 #undef Windows UCRT 的 stdin/stdout/
+/// libca/process/subprocess.hpp，其会 `#undef` Windows UCRT 的 stdin/stdout/
 /// stderr 宏；调用方若需先把全局流固化成 kStdoutStream 之类局部常量，必须
 /// 在本头之前完成。**传递引入同样致命**：native_compiler.hpp 含本头，故
 /// 任何 include native_compiler.hpp / native_project_generator.hpp 的 TU
-/// （native_compiler.cpp / native_project_builder.cpp）也必须把 <cstdio>
+/// （native_compiler.cpp / native_project_builder.cpp）也必须把 `<cstdio>`
 /// 与固化块置于首个 include 之前——固化写在项目头之后会直接 C2065。
 
 #include <chrono>

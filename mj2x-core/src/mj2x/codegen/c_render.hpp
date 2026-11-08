@@ -21,7 +21,7 @@ namespace mj2x::codegen {
 /// 渲染模板:values 提供占位符文本,flags 提供条件块开关。
 /// 未知占位符/悬空指令视为模板缺陷,返回 false 并填充 err。
 ///
-/// 字节扫描语义:占位符 @NAME@ 在任意位置内联替换;指令(@#IF:/@#ELSE@/@#ENDIF@)
+/// 字节扫描语义:占位符 `@NAME@` 在任意位置内联替换;指令(`@#IF:/@#ELSE@/@#ENDIF@`)
 /// 必须独占一行(含行尾换行),渲染后整行(连同换行)消失、不产出任何字节;
 /// 其余文本逐字节透传——模板内文本自带的换行不做任何增删。
 inline bool renderCTemplate(std::string_view tpl,

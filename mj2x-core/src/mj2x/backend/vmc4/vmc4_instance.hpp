@@ -149,7 +149,7 @@ struct Vmc4Options
     /// 诉求的场景按需开启，文档已写明该代价。与 superOps 可组合。
     bool fragment = false;
 
-    /// 寄存器文件定长化池顶（--vmc4-regfile <n>；0 = 关闭，issue #10）。
+    /// 寄存器文件定长化池顶（`--vmc4-regfile <n>`；0 = 关闭，issue #10）。
     ///
     /// @details
     /// 开启后计算寄存器经线性扫描分配压入定长池 [numInputs, poolTop)（池顶 =

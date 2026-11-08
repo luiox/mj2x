@@ -140,7 +140,7 @@ enum class VmComparePred : uint8_t
 /// @details
 /// I32/I64/F32/F64 是计算类型；REF（对象引用）承载 jobject，自 Phase 2.0 起用于
 /// 对象参数/返回值/字段。编码在每条计算指令的 type operand 里，handler 据此解释
-/// 寄存器槽的位模式。Copy 的 handler 整体拷贝 union（`(void)type`），故 REF 值在
+/// 寄存器槽的位模式。Copy 的 handler 整体拷贝 union（ `(void)type`），故 REF 值在
 /// 寄存器间传递无需特殊处理。
 enum class VmType : uint8_t
 {
@@ -189,7 +189,7 @@ enum class VmJniKind : uint8_t
 /// @details
 /// 数组元素访问必须用精确类型：GetIntArrayRegion 与 GetBooleanArrayRegion 不可互换
 /// （不同数组类型）。故不沿用 VmJniKind 的粗粒度（boolean/byte/char/short 归 Int32），
-/// 而保留 9 个精确类别，编码期由 SSAType 推导。base 类型用 Get/Set<Type>ArrayRegion
+/// 而保留 9 个精确类别，编码期由 SSAType 推导。base 类型用 `Get/Set<Type>ArrayRegion`
 /// （长度 1），ref 用 Get/SetObjectArrayElement。
 enum class VmArrayElemKind : uint8_t
 {
@@ -260,7 +260,7 @@ struct VmConstantEntry
 /// @details
 /// 编码期把每个字段访问点的 SSAFieldRef 收集到 VmProgram.loadFieldRefs/
 /// storeFieldRefs，字节流只存 fieldSiteIdx（索引）。backend 为每项发射一个
-/// TU-local helper（懒缓存 fieldID + Get/Set[Static]<Type>Field），解释器经函数
+/// TU-local helper（懒缓存 fieldID + `Get/Set[Static]<Type>Field`），解释器经函数
 /// 指针表分派。jniKind 由字段描述符推导，helper 据此 marshalling 值。
 /// 去重键 (owner,name,desc,isStatic) 已含 desc，故 jniKind 一致。
 struct VmFieldRef
@@ -305,7 +305,7 @@ struct VmAllocRef
 ///
 /// @details
 /// SSA 产生的 intrinsic 名称：array.length、cmp.nan_greater/nan_less（FCMPG/FCMPL
-/// 三值比较）、instanceof:<内部名>、monitor.enter/exit。Math/wrapper 等方法是普通
+/// 三值比较）、`instanceof:<内部名>`、monitor.enter/exit。Math/wrapper 等方法是普通
 /// Call（invokestatic），不走此表。arg0Kind 记录首个参数类别（浮点比较/引用操作
 /// 需要区分槽位），retKind 为结果类别。去重按 name。
 struct VmIntrinsicRef

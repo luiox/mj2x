@@ -18,7 +18,7 @@
 // 仍 fail-closed 诊断的形态：基本类型收窄、装箱+加宽复合适配、自定义 bootstrap
 //   （交由后续阶段处理）。
 //
-// indy native dispatch 判定（sprint 波次一原型，设计见 doc_ai/indy_native_dispatch_design.md）：
+// indy native dispatch 判定：
 //   classifyIndySite 对每个站点按 classfile 静态可见内容判定派发形态（T0 静态展开 /
 //   F1 字段直派 / F2 record 直派 / T2 运行时 helper），process 重载旁路收集判定报告。
 //   判定只打标记，不改写任何字节码——对现有行为零回归。

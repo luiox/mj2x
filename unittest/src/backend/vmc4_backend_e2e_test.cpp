@@ -556,7 +556,7 @@ TEST_P(Vmc4BackendE2E, ShiftMaskAndStringCompareRoundTrip)
 
 // 浮点路径：double 全精度一致；float 只用可精确表示的值（MVP 的 F32 handler
 // 内部用 double 计算、仅在 JNI 边界转回 float，多步 float 链会与 Java 的
-// 每步 binary32 舍入不同——已知偏差，见 vmc4_multi_vm_design.md §11）。
+// 每步 binary32 舍入不同——已知偏差）。
 // f2i/f2l 饱和语义（NaN→0、超界→min/max）与 JVM 一致。
 TEST_P(Vmc4BackendE2E, FloatDoubleAndConvertRoundTrip)
 {

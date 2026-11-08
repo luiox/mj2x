@@ -14,8 +14,8 @@
 /// - Linux：/proc/self/status TracerPid + /proc/self/maps 可写可执行段与
 ///   agent 库映射 + /proc/self/cmdline 扫描
 ///
-/// 探测逻辑移植自 mj2x-runtime C++ antidebug 层（R3 整合，见
-/// doc_ai/r3_protect_integration.md）；全部 fail-open。
+/// 全部 fail-open（探测失败按无信号处理；信号清单与技术定位见
+/// doc:runtime-anti-debug）。
 ///
 /// ## 触发模型
 ///

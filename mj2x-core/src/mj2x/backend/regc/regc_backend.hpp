@@ -100,7 +100,7 @@ public:
     /// `generatedSource()` but does not write a file.
     void setOutputPath(const std::string& cOutputPath) { cOutputPath_ = cOutputPath; }
 
-    /// @brief 设置生成注释的详细级别（见 reg_codegen_syntax.md §4.2）。
+    /// @brief 设置生成注释的详细级别（--regc-comment-level，键表见 doc:user-guide-params-backend）。
     ///
     /// @details
     /// 必须在 compileMethod 之前调用：级别透传给 RegCCachePool 与 RegCEmitter，
@@ -123,8 +123,7 @@ public:
     /// （表项归属必须为 jvm.dll/libjvm.so 代码段），每个 protected native
     /// 方法入口首行恢复表内容。捕获时表已污染（启动期 agent）默认 fail
     /// closed（JNI_OnLoad 返回 JNI_ERR）；`setSafeEnvDebug(true)` 改为
-    /// 打印告警后继续。默认关闭，不产生任何运行时开销。设计见
-    /// `doc_ai/regc_safe_env.md`。
+    /// 打印告警后继续。默认关闭，不产生任何运行时开销。设计见 doc:jni-table-protection。
     void setSafeEnv(bool enabled);
 
     /// @brief safe-env 调试观察模式（--regc-safe-env-debug，隐含开启 safe-env）。

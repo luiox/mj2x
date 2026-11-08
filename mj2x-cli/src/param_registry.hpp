@@ -11,7 +11,7 @@
 //   - --dump-config-schema（JSON Schema draft-07，GUI 配置工具消费）
 //   - --dump-config-template（全量键 + 默认值 + 注释的 JSONC 起点模板）
 //
-// 设计文档：mj2x/doc_ai/config_system_design.md
+// 设计文档见 doc:config-file（参数注册表单源）。
 
 #include <cstdint>
 #include <nlohmann/json.hpp>
@@ -159,8 +159,8 @@ enum class ParamType
 
 /// @brief 单参数声明。parseCli/parseJson 由注册表提供,读写 CliOptions。
 ///
-/// 用户可见文案(描述/分组标题)不入本表:描述经 mj2x.param.<id>.desc、分组经
-/// mj2x.param.group.<group> 查 i18n 单源表(translations/*.lang),help/schema/
+/// 用户可见文案(描述/分组标题)不入本表:描述经 `mj2x.param.<id>.desc`、分组经
+/// `mj2x.param.group.<group>` 查 i18n 单源表(translations/*.lang),help/schema/
 /// template 三表面同源本地化。
 struct ParamDef
 {
@@ -172,7 +172,7 @@ struct ParamDef
     ca::i64     minValue;    ///< Int 用:最小值(0 = 无约束)
     ca::i64     maxValue;    ///< Int 用:最大值(0 = 无约束)
     const char* defaultStr;  ///< 默认值文本(help/schema 展示用)
-    const char* group;       ///< 分组 slug(help 标题经 mj2x.param.group.<slug> 查表)
+    const char* group;       ///< 分组 slug(help 标题经 `mj2x.param.group.<slug>` 查表)
     const char* requires;    ///< 依赖的 CLI flag 名(文档用;运行时校验沿用 main.cpp 交叉校验)
     bool (*parseCli)(CliOptions&, const char* value, std::string& error);
     bool (*parseJson)(CliOptions&, const nlohmann::json& value, std::string& error);

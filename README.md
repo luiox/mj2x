@@ -11,14 +11,14 @@
 | 后端 | 定位 | 输出风格 |
 |---|---|---|
 | **StackC** | 广覆盖正确性基线 | `union jvalue stack[]` + `sp` 操作(stack-style) |
-| **RegC** | 高性能 native 生成器（默认零混淆；`--regc-obfuscate` 显式开启混淆，`--regc-*` 增强档见 [doc/user_guide.md](doc/user_guide.md)） | 虚拟寄存器 + block label,无栈锚点(默认走 JNI 调用保 JVM 栈帧语义,`--regc-direct-calls` 可开启直调) |
+| **RegC** | 高性能 native 生成器（默认零混淆；`--regc-obfuscate` 显式开启混淆，`--regc-*` 增强档见 [doc/user-guide.rst](doc/user-guide.rst)） | 虚拟寄存器 + block label,无栈锚点(默认走 JNI 调用保 JVM 栈帧语义,`--regc-direct-calls` 可开启直调) |
 | **VMC4** | VM 虚拟化(保护导向,性能非关键) | 表驱动解释器,编译期随机化 + 执行期 dispatch drift(`--vmc4-drift`) |
 
 ## 用户自定义 intrinsic（#818）
 
 三个后端（StackC / RegC / VMC4）都支持把任意 Java 静态调用点降级为对用户
 native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <file>`）。
-配置格式、ABI 契约与示例见 [doc/user_intrinsic.md](doc/user_intrinsic.md)。
+配置格式、ABI 契约与示例见 [doc/user-intrinsic.rst](doc/user-intrinsic.rst)。
 
 ## 模块组成
 
@@ -74,16 +74,18 @@ xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
 mj2x-cli --lang en_US --help
 ```
 
-详细用法见 [doc/user_guide.md](doc/user_guide.md)。
+详细用法见 [doc/user-guide.rst](doc/user-guide.rst)。
 
 ## 文档
 
+设计规格层（rst，Sphinx 构建，引用面由 `doc/check_refs.py` 门禁；分层规则见
+[AGENTS.md](AGENTS.md)「文档规范」）：
+
 ### 使用
 
-- **[doc/user_guide.md](doc/user_guide.md)** — 怎么用(命令、参数、示例、FAQ)
-- [doc/config_file.md](doc/config_file.md) — JSON 配置文件
-- [doc/compile_system_tech.md](doc/compile_system_tech.md) — 编译系统(pipe / xmake / cmake)技术说明
-- [doc/dependencies.md](doc/dependencies.md) — 依赖
+- **[doc/user-guide.rst](doc/user-guide.rst)** — 怎么用(命令、参数、示例、FAQ)
+- [doc/config-file.rst](doc/config-file.rst) — JSON 配置文件
+- [doc/compile-system.rst](doc/compile-system.rst) — 编译系统(pipe / xmake / cmake)技术说明
 
 ### 混淆与保护
 
@@ -93,20 +95,22 @@ mj2x-cli --lang en_US --help
 
 ### 架构与设计
 
-- [doc/architecture.md](doc/architecture.md) — 当前架构概览
+- [doc/architecture.rst](doc/architecture.rst) — 当前架构概览
+- [doc/user-intrinsic.rst](doc/user-intrinsic.rst) — 用户自定义 intrinsic
 - [doc/roadmap.md](doc/roadmap.md) — v2.2 能力路线图与优先级
 
 ### 后端
 
-- [doc/stackc_backend_readme.md](doc/stackc_backend_readme.md) / [doc/regc_backend_readme.md](doc/regc_backend_readme.md) — 各后端支持矩阵
+- [doc/stackc-backend.rst](doc/stackc-backend.rst) / [doc/regc-backend.rst](doc/regc-backend.rst) — 各后端支持矩阵
 
 ### 测试与验证
 
-- [doc/regc_test_strategy.md](doc/regc_test_strategy.md)
+- [doc/regc-test-strategy.rst](doc/regc-test-strategy.rst)
 - [benchmark/README.md](benchmark/README.md) — 基准脚本与结果
 
 ### 仓库与协作
 
-- [AGENTS.md](AGENTS.md) — agent/开发者工作约定(命令、惯例、构建门)
+- [AGENTS.md](AGENTS.md) — agent/开发者工作约定(命令、惯例、构建门、文档规范)
 - [MIGRATION.md](MIGRATION.md) — 拆仓来历、vendor 清单与待办
 - [dev_plan.md](dev_plan.md) — 当前挂账与计划
+- [doc/archive/](doc/archive/) — 历史归档（迁移账本、批次笔记、失效快照，只进不出）

@@ -4393,8 +4393,7 @@ TEST(CliTest, BadJarInputsFailClosed)
 // 不进常规门禁（控耗时）；手工触发路径保留：
 //   xmake run -y mj2x_unittest --gtest_also_run_disabled_tests \
 //     --gtest_filter=CliTest.DISABLED_InflatedPathSentinelNestedXmakeBuild
-// 验收口径沿用原手工流程：连跑 5 次全绿。背景见
-// mj2x/doc_ai/heapcrash-analysis.md §3/§6f——触发物是子 xmake（pinned tbox）
+// 验收口径沿用原手工流程：连跑 5 次全绿。触发物是子 xmake（pinned tbox）
 // env 块构造缺陷，mj2x 侧以形状卫生 + NTSTATUS 重试加固；本哨兵只防回归，
 // 不能证明触及原机崩溃。
 TEST(CliTest, DISABLED_InflatedPathSentinelNestedXmakeBuild)

@@ -750,7 +750,7 @@ int compileForTargetImpl(const std::string& sourcePath, const std::string* pipeS
 
 bool parseCompilerName(const std::string& name, CCompilerKind& compiler)
 {
-    // "auto" 是 config_file.md 记载的默认值形态：显式写 auto = 回到自动探测。
+    // "auto" 是配置文件记载的默认值形态（键表见 doc:config-file）：显式写 auto = 回到自动探测。
     if (name == "auto") {
         compiler = CCompilerKind::Auto;
         return true;

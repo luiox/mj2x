@@ -12,7 +12,7 @@
 /// hatch via `emitRaw`.  The stream is a drop-in sink: callers flush it to a
 /// string when the translation unit is complete.
 ///
-/// 三层模型（mj2x/doc_ai/codegen_style.md §3）的排版层。底层存储是
+/// 发射流的排版层。底层存储是
 /// `ca::str::Utf8StringBuilder`，与拼接层（Utf8StringBuilder）/驻留层
 /// （Utf8StringArena）同属 Utf8 家族：emitter 的多片段 `append` 拼一条 C 语句的
 /// 模式可无缝迁移到这里，无需跨容器转换。
@@ -198,7 +198,7 @@ public:
     }
 
     /// @brief 发射一个函数/语句块定义；signature 为完整签名行（不含 `{`）。
-    /// @example add_func("static int32_t foo(int32_t x)", [](CSourceStream& s){ ... });
+    /// 示例：`add_func("static int32_t foo(int32_t x)", [](CSourceStream& s){ ... });`
     void add_func(std::string_view signature, const CBody& body)
     {
         emitLine(signature);
@@ -388,7 +388,7 @@ public:
         emitLine(text);
     }
 
-    /// @brief 函数指针调用语句：`((sig)expr)(args);`。
+    /// @brief 函数指针调用语句： `((sig)expr)(args);`。
     void call_fn_ptr(std::string_view fnPointerSig, std::string_view expr,
                      std::initializer_list<std::string_view> args)
     {

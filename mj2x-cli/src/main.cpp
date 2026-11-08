@@ -147,7 +147,7 @@ static bool hasExtension(std::string path, const std::string& ext)
 ///  "sources":["path/to/my_m.c"]}
 /// owner/name/desc/symbol 必填；passContext/mayThrow/passReceiver 可选（默认
 /// false）。passReceiver=true 匹配 instance 调用点并把 receiver 作为首参传入
-/// （见 doc/user_intrinsic.md）；static 调用点匹配 passReceiver 条目为配置错误，
+/// （见 doc:user-intrinsic）；static 调用点匹配 passReceiver 条目为配置错误，
 /// 由后端匹配/编码面 fail-closed 报错。
 static bool loadUserIntrinsicConfig(const std::string& path, mj2x::UserIntrinsicConfig& out,
                                     std::string& error)
@@ -1321,7 +1321,7 @@ int main(int argc, char** argv)
             std::make_unique<mj2x::NativeMethodPrefixPreprocessor>(options.nativeMethodPrefixes));
     }
     else {
-        // 搬运法（regc_conversion_decisions.md §7.1）：MarkAll 之前先把 <init>/<clinit>
+        // 搬运法：MarkAll 之前先把 <init>/<clinit>
         // 的体搬进 __regc_* 静态方法，让构造逻辑能进入 native 编译流程（<init>/<clinit>
         // 本身保留字节码骨架，不标 ACC_NATIVE）。
         pipeline.registerPreprocessor(std::make_unique<mj2x::InitClinitMoverPreprocessor>());

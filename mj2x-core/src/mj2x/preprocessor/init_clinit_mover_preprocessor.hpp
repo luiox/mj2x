@@ -4,8 +4,7 @@
 
 namespace mj2x {
 
-/// @brief `<init>`/`<clinit>` 搬运 preprocessor（搬运法，见
-/// regc_conversion_decisions.md §7.1）。
+/// @brief `<init>`/`<clinit>` 搬运 preprocessor（搬运法）。
 ///
 /// JVM 校验对构造器/类初始化器的 ACC_NATIVE 有限制（部分实现拒收 native
 /// `<init>`），不能直接把 `<init>`/`<clinit>` 标记 native。改为：

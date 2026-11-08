@@ -34,8 +34,7 @@
 /// ### fail-closed
 ///
 /// 遇到 MVP 不支持的 family（LoadField/Call/Allocate 等）时返回 nullptr 并填 reason，
-/// Vmc4Backend 据此保留字节码不转 VM。这符合 mj2x 的 fail-closed 哲学
-/// （见 doc_ai/vmc4_multi_vm_design.md §7）。
+/// Vmc4Backend 据此保留字节码不转 VM。这符合 mj2x 的 fail-closed 哲学。
 #pragma once
 
 #include "mj2x/backend/vmc4/vm_opcode.hpp"
