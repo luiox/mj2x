@@ -24,7 +24,7 @@
 ///   发射 per-class register 函数、mj2x/cloader 桥接（_mj2x_register_for_class）
 ///   与 JNI_OnLoad（结构镜像 Vmc4Backend::Impl::emitRegistrationCode）。CLI 侧
 ///   把它写进生成工程的 src/generated/，与 .asm 一并编译链接。
-/// - clinit 注入：injectIntoClass 标 ACC_NATIVE 后向受保护类 <clinit> 前插
+/// - clinit 注入：injectIntoClass 标 ACC_NATIVE 后向受保护类 `<clinit>`\ 前插
 ///   Loader.registerNativesForClass(classId, thisClass)（dom_inject，同 regc/vmc4）。
 /// - CLI：--compile/--generate-xmake 走 xmake 工程（模板 add_asfiles 经 ml64
 ///   汇编 .asm）；CMake 工程、direct 编译驱动、pipe、多目标仍 fail-closed。

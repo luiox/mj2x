@@ -211,24 +211,25 @@ const char* xmakeOptimizeFor(const std::string& level)
 /// 手动配置生成工程的用户由此段获得明确诊断。
 std::string vmx64AsmRuleSection()
 {
+    // 生成工程 xmake.lua 的项目描述作用域沙箱不注入 raise/add_asfiles（CI 实证
+    // attempt to call a nil value）——描述段只用 assert（纯 Lua）与 add_files
+    // （.asm 在 msvc 工具链下由 xmake 自动路由 ml64）；on_load 同样用 assert。
     std::string section;
     section += "    -- vmx64 backend section (injected only for backend=vmx64): the generated\n";
-    section += "    -- MASM x64 TU (src/generated/*.asm) is assembled by ml64 via add_asfiles\n";
+    section += "    -- MASM x64 TU (src/generated/*.asm) is assembled by ml64 via add_files\n";
     section += "    -- (xmake routes .asm to ml64 under the msvc toolchain on x64).\n";
     section += "    if #os.files(\"src/generated/*.asm\") > 0 then\n";
-    section += "        if not is_plat(\"windows\") or not is_arch(\"x64\") then\n";
-    section += "            raise(\"mj2x vmx64: generated MASM x64 sources require windows/x64; \""
-               " .. \"reconfigure with: xmake f -p windows -a x64 --toolchain=msvc\")\n";
-    section += "        end\n";
-    section += "        add_asfiles(\"src/generated/*.asm\")\n";
+    section += "        assert(is_plat(\"windows\") and is_arch(\"x64\"),\n";
+    section += "               \"mj2x vmx64: generated MASM x64 sources require windows/x64; \"\n";
+    section += "               .. \"reconfigure with: xmake f -p windows -a x64 --toolchain=msvc\")\n";
+    section += "        add_files(\"src/generated/*.asm\")\n";
     section += "    end\n";
     section += "    on_load(function (target)\n";
     section += "        if #os.files(\"src/generated/*.asm\") > 0 then\n";
     section += "            local as = target:tool(\"as\")\n";
-    section += "            if type(as) ~= \"string\" or not as:find(\"ml64\", 1, true) then\n";
-    section += "                raise(\"mj2x vmx64: MASM x64 sources require the ml64 assembler \""
-               " .. \"(msvc toolchain on x64); detected: \" .. tostring(as))\n";
-    section += "            end\n";
+    section += "            assert(type(as) == \"string\" and as:find(\"ml64\", 1, true),\n";
+    section += "                   \"mj2x vmx64: MASM x64 sources require the ml64 assembler \"\n";
+    section += "                   .. \"(msvc toolchain on x64); detected: \" .. tostring(as))\n";
     section += "        end\n";
     section += "    end)\n";
     return section;

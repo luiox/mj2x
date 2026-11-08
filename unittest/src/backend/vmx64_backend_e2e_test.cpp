@@ -1,5 +1,5 @@
 // vmx64 native E2E harness (Phase 2)：Java source -> javac -> mj2x-cli (vmx64)
-// -> xmake 工程（模板 add_asfiles 经 ml64 汇编 .asm + 注册 C TU）-> DLL
+// -> xmake 工程（模板 add_files 收编 .asm 经 ml64 汇编 + 注册 C TU）-> DLL
 // -> Java System.load + RegisterNatives 绑定 -> 调用结果与 JVM 基线对拍。
 //
 // 与 vmc4_backend_e2e_test.cpp 的差别：
@@ -222,9 +222,10 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         << "RegisterNatives binding TU must be written into src/generated";
 
     const std::string xmakeLua = readText(project / "xmake.lua");
-    // vmx64 专属段注入：ml64 汇编分流 + 平台 fail-closed（raise 文案标记——
-    // is_plat 在共享模板正文已有出现，不能作注入证据）。
-    EXPECT_NE(xmakeLua.find("add_asfiles(\"src/generated/*.asm\")"), std::string::npos)
+    // vmx64 专属段注入：ml64 汇编分流 + 平台 fail-closed（assert 文案标记——
+    // is_plat/add_files 在共享模板正文已有出现，不能作注入证据；描述作用域
+    // 沙箱没有 raise/add_asfiles，注入段只能用 assert + add_files）。
+    EXPECT_NE(xmakeLua.find("add_files(\"src/generated/*.asm\")"), std::string::npos)
         << xmakeLua;
     EXPECT_NE(xmakeLua.find("mj2x vmx64: generated MASM x64 sources require windows/x64"),
               std::string::npos)

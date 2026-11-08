@@ -46,7 +46,7 @@
 ///
 ///   - **单源锚点**：keystream 只经 vmx64Ks64（本文件唯一公开派生函数），
 ///     加密器 = 读产物 → 定位 .data 表/流（按发射器落盘符号名
-///     mj2x_vmx64_sites_<tag>/mj2x_vmx64_code_<tag> 的 COFF/PE 段偏移）→
+///     `mj2x_vmx64_sites_<tag>`/`mj2x_vmx64_code_<tag>` 的 COFF/PE 段偏移）→
 ///     重算 keystream → 异或改写 → 原地落盘。发射侧不新增平行公式。
 ///   - **时序**：CLI 侧在 buildXmakeProject 产出 DLL 之后、嵌入/交付之前
 ///     插桩（单消费点，与 VMC4 的 JNI_OnLoad at-rest 解密互斥——纯 XOR 改写
