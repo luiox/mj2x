@@ -291,17 +291,38 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         runBat({std::string("powershell -NoProfile -ExecutionPolicy Bypass -File ") + q(ps1) +
                 " " + q(dll) + " " + q(tc_.java) + " " + q(dir) + " " + q(outTxt) + " " +
                 q(errTxt)});
+    // 失败现场全量转储：hs_err_pid*.log（崩溃寄存器/故障指令——JVM 崩在
+    // native 内时它是唯一寄存器级现场）+ 发射 .asm + CLI 构建日志。
+    const auto crashDiag = [&]() {
+        std::string d = "\n--- driver stdout ---\n";
+        d += fileExists(outTxt) ? readText(outTxt) : "<none>";
+        d += "\n--- driver stderr ---\n";
+        d += fileExists(errTxt) ? readText(errTxt) : "<none>";
+        d += "\n--- runner out ---\n" + protectedRun.out;
+        std::error_code lec;
+        for (fs::directory_iterator it(dir, lec), endIt; it != endIt && !lec; ++it) {
+            const std::string name = it->path().filename().string();
+            if (name.rfind("hs_err_pid", 0) == 0) {
+                d += "\n--- " + name + " (first 120 lines) ---\n";
+                std::vector<std::string> lines =
+                    splitLines(readText(it->path()));
+                for (size_t i = 0; i < lines.size() && i < 120; ++i)
+                    d += lines[i] + "\n";
+            }
+        }
+        d += "\n--- emitted vmx64.asm ---\n";
+        d += fileExists(asmArtifact) ? readText(asmArtifact) : "<missing>";
+        return d;
+    };
     ASSERT_NE(protectedRun.exitCode, 124)
-        << "protected Driver timed out after 120s (dispatch loop suspected)\nstdout so far:\n"
-        << (fileExists(outTxt) ? readText(outTxt) : "<none>") << "\nstderr:\n"
-        << (fileExists(errTxt) ? readText(errTxt) : "<none>") << "\nrunner out:\n"
-        << protectedRun.out;
-    ASSERT_EQ(protectedRun.exitCode, 0) << protectedRun.out;
+        << "protected Driver timed out after 120s (dispatch loop suspected)" << crashDiag();
+    ASSERT_EQ(protectedRun.exitCode, 0) << "protected Driver crashed" << crashDiag();
     const auto actual =
         splitLines(fileExists(outTxt) ? readText(outTxt) : std::string());
 
     ASSERT_EQ(baseline.size(), actual.size())
-        << "baseline:\n" << joinLines(baseline) << "protected:\n" << joinLines(actual);
+        << "baseline:\n" << joinLines(baseline) << "protected:\n" << joinLines(actual)
+        << crashDiag();
     for (size_t i = 0; i < baseline.size(); ++i) {
         EXPECT_EQ(baseline[i], actual[i]) << "line " << i;
     }
