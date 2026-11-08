@@ -127,6 +127,8 @@ std::string dumpSites(const Vmx64Program& p)
 InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots,
                               uint64_t stepBudget = 100000)
 {
+    // 与 asm 的已知差异：此处 slot 零初始化，asm 的池是未初始化栈内存
+    //（类型化程序里每个槽先写后读，不可观测）。
     InterpOutcome out;
     const auto    fail = [&](const std::string& what, const std::vector<std::string>& trace,
                              uint32_t pc) {
@@ -164,6 +166,12 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             const uint16_t idx = rd16(p.stream, off);
             return slots[idx];   // 越界由调用前的检查拦截
         };
+        // i32 写镜像 asm 的 dword store：只落低 4 字节、高 4 字节保留陈旧值
+        //（E2E 崩溃根因恰是"高位残留拼接垃圾指针"——解释器必须暴露而非
+        // 掩盖该位级效应；类型化程序里 i64 槽不会被 i32 写触碰，不可观测）。
+        const auto w32 = [](uint64_t& slot, uint32_t v) {
+            slot = (slot & 0xFFFFFFFF00000000ULL) | v;
+        };
         const auto checkSlot = [&](uint32_t off) -> bool {
             const uint16_t idx = rd16(p.stream, off);
             return idx < slots.size();
@@ -172,7 +180,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
         switch (op) {
         case Vmx64Op::IConst:
             if (!checkSlot(pc + 2)) return fail("iconst dst out of slots", trace, pc);
-            slotAt(pc + 2) = rd32(p.stream, pc + 4);
+            w32(slotAt(pc + 2), rd32(p.stream, pc + 4));
             trace.push_back("iconst");
             pc += 8;
             break;
@@ -186,7 +194,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
         case Vmx64Op::IStore:
             if (!checkSlot(pc + 2) || !checkSlot(pc + 4))
                 return fail("i32 copy slot out of range", trace, pc);
-            slotAt(pc + 2) = static_cast<uint32_t>(slotAt(pc + 4));
+            w32(slotAt(pc + 2), static_cast<uint32_t>(slotAt(pc + 4)));
             trace.push_back("i32copy");
             pc += 6;
             break;
@@ -209,7 +217,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             if (op == Vmx64Op::IAdd) r = a + b;
             else if (op == Vmx64Op::ISub) r = a - b;
             else r = a * b;
-            slotAt(pc + 2) = r;
+            w32(slotAt(pc + 2), r);
             trace.push_back("i32arith");
             pc += 8;
             break;
@@ -495,8 +503,7 @@ TEST(Vmx64StreamInterpTest, FrameLayoutKeepsVregsBelowSavedRegisters)
     EXPECT_EQ(leaRsi, subRsp + kSavedRegs) << asmText;
     // 帧头紧跟保存区之下：env@0x38+8、this@0x38+0x10。
     EXPECT_EQ(envDisp, kSavedRegs + 8) << asmText;
-    EXPECT_NE(asmText.find("    mov [rbp-" + std::string("48") + "h], rdx"), std::string::npos)
-        << asmText;
+    EXPECT_NE(asmText.find("    mov [rbp-48h], rdx"), std::string::npos) << asmText;
     // vreg 池完整落在 [rbp-0x58, rbp-0x38) 内：不小于 slot 总量。
     EXPECT_GE(leaRsi - kSavedRegs - 0x20, prog->numSlots * 8u) << asmText;
     // 旧缺陷形态（帧头砸在保存区上）必须绝迹。
