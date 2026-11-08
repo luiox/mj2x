@@ -13,7 +13,7 @@
    引用）。
 
 doc/archive/ 是历史归档（只进不出）：不进 toctree、不做任何 .md/.rst 检查；
-长期归宿（删除或压缩）待第二批定。
+长期归宿（删除或压缩）待后续批次定。
 
 用法：python doc/check_refs.py [仓库根]
 """
