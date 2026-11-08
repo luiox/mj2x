@@ -60,7 +60,7 @@ struct RegFunction
     /// volatile 使 store/load 不可被优化器跨基本块推导，dispatcher 得以存活。
     ///
     /// 发射端契约：RegC 已消费（变量声明加 volatile）；LLVM 后端是纯 SSA 无内存槽，
-    /// 暂不适用（待 inline-asm 屏障方案），见 doc_ai/jvmtp_gap_analysis.md §4。
+    /// 暂不适用（待 inline-asm 屏障方案）。
     std::optional<RegValue> cffVolatileState;
 };
 

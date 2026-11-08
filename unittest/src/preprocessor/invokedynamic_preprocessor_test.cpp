@@ -2,8 +2,8 @@
 //
 // 验证 StringConcatFactory 站点被展开成 StringBuilder 字节码（indy marker 消失），
 // 且非 concat 的 indy（lambda / 自定义 bootstrap）保持 fail-closed 原样保留。
-// 对齐 regc_invokedynamic_strategy.md §Tests：SSA/RegIR test showing the indy
-// marker is gone before lowering + negative test 证明不支持形态仍 fail-closed。
+// 验收口径：SSA/RegIR 层 indy marker 在 lowering 前消失 + negative test
+// 证明不支持形态仍 fail-closed。
 #include <gmock/gmock.h>
 
 #include <map>

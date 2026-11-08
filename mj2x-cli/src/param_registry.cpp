@@ -8,7 +8,7 @@
 // 首次访问时拼装（main() 启动后，全部接线单元已完成静态注册）。行序即
 // --help 分组/schema 属性/模板键序，单后端构建被裁后端段自然缺席。
 //
-// 设计文档：mj2x/doc_ai/config_system_design.md
+// 设计文档见 doc:config-file（参数注册表单源）。
 
 #include "param_registry.hpp"
 

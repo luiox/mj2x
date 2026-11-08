@@ -1,4 +1,4 @@
-// indy native dispatch 静态判定单测（sprint 波次一，设计见 mj2x/doc_ai/indy_native_dispatch_design.md）。
+// indy native dispatch 静态判定单测。
 //
 // 锁定 classifyIndySite 的判定矩阵：无参/捕获 lambda、方法引用、string concat、
 // record ObjectMethods、LMF 字段句柄精确子集、非标准 bootstrap——各形态断言

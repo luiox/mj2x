@@ -692,7 +692,7 @@ bool canEmitSam(ca::str::Utf8StringArena& arena, const std::string& samDesc,
     return true;
 }
 
-// ---- indy native dispatch 静态判定（设计见 doc_ai/indy_native_dispatch_design.md §2）----
+// ---- indy native dispatch 静态判定 ----
 
 /// lambda 站点静态展开前置判定（阶段2a-2f 支持子集）。expandLambdaSite 与
 /// classifyIndySite / classifyIndySiteForm 共用同一谓词，保证「判定结果 = 展开行为」

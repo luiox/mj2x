@@ -10,7 +10,8 @@
 /// stable SSAValue objects.  This is the mechanism that removes the old StackC
 /// cstack/sp anchor from downstream IR.
 ///
-/// The construction algorithm is documented in `mj2x/doc_ai/ssa_algorithm.md`.
+/// The construction approach (block-argument SSA, no phi nodes) is surveyed
+/// in doc:ssa-construction.
 /// In short, it:
 ///   1. computes a reaching-def view over local slots,
 ///   2. creates SSABlock arguments for values that must cross block boundaries,

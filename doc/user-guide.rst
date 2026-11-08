@@ -442,7 +442,7 @@ VMC4：
        仅 ``--backend vmc4``\ 有效
 
 ``--vmc4-super-ops``\ 与 ``--vmc4-fragment``\ 两项指令级变换的机制、代价与绕过面
-见 techniques/ 子树的技术分篇 `vm_super_ops.md`_。
+见技术分篇 :doc:`/techniques/vm-super-ops`。
 
 通用（RegC/VMC4）：
 
@@ -763,5 +763,3 @@ RegC 会对未展开的 ``invokedynamic``\ 走运行时 bootstrap 解析（与 L
 
 **Q: RegC 输出里有 ``cstack`` / ``sp``\ ?**
 不应该有。如果有，是 bug——RegC 的结构断言禁止 stack-machine anchor。
-
-.. _vm_super_ops.md: techniques/vm_super_ops.md

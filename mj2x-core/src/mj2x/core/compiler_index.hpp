@@ -81,7 +81,7 @@ struct CompilerClass
     /// @brief 被类级 glob 过滤器（--native-include/--native-exclude）剔除。
     ///
     /// 只影响"是否进入 native 编译集"：类仍留在 index 里（JAR 往返保留原始
-    /// 条目、其他类可能引用它），但方法级选择与 <init>/<clinit> 搬运入口
+    /// 条目、其他类可能引用它），但方法级选择与 `<init>`/`<clinit>` 搬运入口
     /// 一律跳过。置位者：NativeClassFilterPreprocessor。
     bool                                        filteredOut = false;
     /// @brief 是否在**混淆作用域**内（--obf-scope-include/exclude）。

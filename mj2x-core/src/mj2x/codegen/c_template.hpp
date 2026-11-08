@@ -2,7 +2,7 @@
 /// @brief 命名代码模板：可复用发射片段 + 注册表。
 ///
 /// @details
-/// 见 doc_ai/regc_template_engine.md §3.3。CodeTemplate 是"命名 + 复用 + 可验证"
+/// CodeTemplate 是"命名 + 复用 + 可验证"
 /// 的发射单元：定义时以 lambda 捕获上下文参数（值捕获），实例化 `emit(out)` 即
 /// 带参发射。依赖开关用 `dependsOn` 声明（文档/校验用途，不强制运行时检查）。
 /// 注册表按名字去重，单测可遍历验证模板存在性与输出。

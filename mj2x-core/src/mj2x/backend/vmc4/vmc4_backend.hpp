@@ -24,15 +24,15 @@
 /// ## 失败策略
 ///
 /// fail-closed：SSA/RegIR/编码任一阶段失败（含 MVP 不支持的 family），
-/// 保留字节码、不标 native、留可观测日志。继承 RegC 哲学（regc_codegen.md §1）。
+/// 保留字节码、不标 native、留可观测日志。继承 RegC 哲学（fail-closed 纪律见 doc:regc-backend）。
 ///
 /// ## 运行时边界
 ///
 /// 自 Phase 2.0 起对象引用经 slot.ref 直通（参数/返回/局部）；调用/字段/数组/
 /// 分配/intrinsic（array.length / cmp.nan_* / instanceof / monitor）由 encoder
 /// 编码为 per-site JNI helper，经 vm_call_table 分派；异常区域静态展开为
-/// VmExceptionRegionEntry。能力面与边界详见 doc_ai/capabilities.md §4（对齐
-/// encoder 的实际支持集）；不支持形态仍整体 fail-closed、保留字节码。
+/// VmExceptionRegionEntry。能力面与边界对齐 encoder 的实际支持集（覆盖面见
+/// doc:vm-virtualization）；不支持形态仍整体 fail-closed、保留字节码。
 #pragma once
 
 #include "mj2x/backend/backend.hpp"

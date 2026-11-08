@@ -70,7 +70,7 @@ const LlvmWrapperUnboxEntry* matchLlvmWrapperUnbox(ca::str::Utf8StringRef owner,
 
 /// @brief Random 状态机条目（shadow 结构 %mj2x_random，指针状态直调）。
 ///
-/// @details RegC 同 face 为 inert（Allocate+<init> 融合成 NewObjectA 绕过
+/// @details RegC 同 face 为 inert（`Allocate+<init>` 融合成 NewObjectA 绕过
 /// registry，方法体从不直调）；LLVM 实现真切片（对齐先例：indy 运行时解析）。
 struct LlvmRandomEntry
 {
@@ -85,7 +85,7 @@ struct LlvmRandomEntry
     RegCIntrinsicPrecheck precheck;
 };
 
-/// @brief 查找 Random <init>(J)V（带种子构造；无参构造保持 JNI——JVM 语义
+/// @brief 查找 `Random <init>(J)V`（带种子构造；无参构造保持 JNI——JVM 语义
 /// 依赖时钟/seedUniquifier，不确定）。
 const LlvmRandomEntry* matchLlvmRandomInit(ca::str::Utf8StringRef owner,
                                            ca::str::Utf8StringRef name,

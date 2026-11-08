@@ -35,7 +35,7 @@ std::filesystem::path findCrtRoot(const char* argv0);
 /// @brief 目录是否为合法 mj2x-rt 源包(rt.resources + regc crt 头 + 模板)。
 bool isCrtRoot(const std::filesystem::path& root);
 
-/// @brief 把外部磁盘源包按后端分发面复制到 <to>/<挂载>/。
+/// @brief 把外部磁盘源包按后端分发面复制到 `<to>/<挂载>/`。
 /// 任一所需挂载缺失或复制失败返回 false。
 bool copyRtTree(const std::filesystem::path& root, const std::filesystem::path& to,
                 CEmitterBackend backend);

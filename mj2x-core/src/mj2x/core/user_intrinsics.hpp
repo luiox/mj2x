@@ -18,7 +18,7 @@ namespace mj2x {
 ///
 /// @details
 /// - `owner` 用内部形式（`java/lang/Math`，不带 `L...;`）。
-/// - `desc` 是 JVM 方法描述符（`(II)I`）。
+/// - `desc` 是 JVM 方法描述符（ `(II)I`）。
 /// - `symbol` 是用户 native 实现的可链接符号名；实现文件经
 ///   UserIntrinsicConfig::sources 并入生成工程编译。
 /// - `passContext`：为 true 时在参数前传 `JNIEnv* env`（三后端一致；

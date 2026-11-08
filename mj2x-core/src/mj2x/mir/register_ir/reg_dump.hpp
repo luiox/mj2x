@@ -17,7 +17,7 @@ std::string dumpRegIR(const RegFunction& fn);
 /// @details No trailing newline.  JVM symbol bytes are escaped (ASCII-safe,
 ///          traceable) so the text is safe to embed in generated comments.
 ///          RegC 的 `RegCCommentLevel::Detailed` 直接复用本渲染：每条指令生成的
-///          C 代码前以 `// ` 前缀注入本行（见 reg_codegen_syntax.md §4.2）。
+///          C 代码前以 `// ` 前缀注入本行。
 ca::str::Utf8String regInstructionLine(const RegInstruction& ins);
 
 /// @brief Render a block terminator as comment-ready lines, each ending with '\n'.

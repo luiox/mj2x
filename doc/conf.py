@@ -1,8 +1,8 @@
-"""Sphinx 配置：mj2x 设计规格层（宏观）。
+"""Sphinx 配置：mj2x 设计规格层（宏观 + 中观技术分篇）。
 
-规范见 AGENTS.md「文档规范」：本目录收 RST 设计规格；markdown 属人读/AI
-方向层（README/AGENTS/dev_plan/roadmap 与 techniques/ 过渡期 md），不进
-doctree。CI 以 -W --keep-going 构建，警告即失败。
+规范见 AGENTS.md「文档规范」：本目录收 RST 设计规格（含 techniques/
+技术分篇子树）；markdown 属人读/AI 方向层（README/AGENTS/dev_plan/
+roadmap），不进 doctree。CI 以 -W --keep-going 构建，警告即失败。
 """
 
 project = "mj2x"

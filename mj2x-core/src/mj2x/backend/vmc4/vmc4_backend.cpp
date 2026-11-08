@@ -257,7 +257,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // 注意：不调用 applyRegTransformPasses（MBA/CFF/opaque-predicates 是 RegC 的
     // 发射期混淆）。CFF 会注入 switch dispatcher + state copy，VMC4 的 opcode 编码器
     // 不支持 switch terminator；且 VMC4 的混淆本体就是它自己的 opcode 编码与解释器
-    // 形态（vmc4_multi_vm_design.md §4），不需要在 VM 内部再套 RegC 变换。
+    // 形态，不需要在 VM 内部再套 RegC 变换（分工决定见 doc:vm-virtualization）。
 
     // --- 阶段 5：VMC4 分叉点 —— RegIR → opcode 流 ---
     // 实例按粒度派生：per-class 同类方法共享同一 VmInstance（缓存），
