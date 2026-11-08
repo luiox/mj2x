@@ -234,8 +234,11 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
         out += std::string("mj2x_vmx64_h_") + c.name + ":\n";
         out += "    movzx r8d, word ptr [r14+rbx+2]\n";
         out += "    movzx r9d, word ptr [r14+rbx+4]\n";
-        out += "    mov r10d, dword ptr [r14+rbx+6]\n";
-        out += "    mov r11d, dword ptr [r14+rbx+10]\n";
+        // 操作数序 [true:u32][false:u32]，cmov 覆盖语义要求默认值装 false
+        //（+10）、条件成立时以 true（+6）覆盖——此前 true 装在 r10d 被反向
+        // 覆盖，分支整体取反（CI 实证 sum(100)=0：i<n 成立却走 false 边）。
+        out += "    mov r10d, dword ptr [r14+rbx+10]\n";
+        out += "    mov r11d, dword ptr [r14+rbx+6]\n";
         out += "    mov eax, dword ptr [rsi+r8*8]\n";
         out += "    cmp eax, dword ptr [rsi+r9*8]\n";
         out += std::string("    cmov") + c.cc + " r10d, r11d\n";
