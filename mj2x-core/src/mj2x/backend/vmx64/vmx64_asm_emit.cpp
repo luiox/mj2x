@@ -142,13 +142,13 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
     out += "\n";
 
     // --- 槽间拷贝（load/store 语义孪生）---
-    for (const auto* pair : {std::pair<const char*, const char*>{"iload", "eax"},
+    for (const auto& pair : {std::pair<const char*, const char*>{"iload", "eax"},
                              {"istore", "eax"}, {"lload", "rax"}, {"lstore", "rax"}}) {
-        const bool is64 = pair->second[0] == 'r';
+        const bool is64 = pair.second[0] == 'r';
         out += "; slot[dst] = slot[src] (";
         out += is64 ? "i64" : "i32";
         out += " copy)\n";
-        out += std::string("mj2x_vmx64_h_") + pair->first + ":\n";
+        out += std::string("mj2x_vmx64_h_") + pair.first + ":\n";
         out += "    movzx ecx, word ptr [r14+rbx+2]\n";
         out += "    movzx r8d, word ptr [r14+rbx+4]\n";
         if (is64) {
