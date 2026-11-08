@@ -222,9 +222,9 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         << "RegisterNatives binding TU must be written into src/generated";
 
     const std::string xmakeLua = readText(project / "xmake.lua");
-    // vmx64 专属段注入：ml64 汇编分流 + 平台 fail-closed（assert 文案标记——
-    // is_plat/add_files 在共享模板正文已有出现，不能作注入证据；描述作用域
-    // 沙箱没有 raise/add_asfiles，注入段只能用 assert + add_files）。
+    // vmx64 专属段注入：ml64 汇编分流 + 平台警告（文案标记——is_plat/add_files
+    // 在共享模板正文已有出现，不能作注入证据；描述作用域沙箱连 assert 都没有，
+    // 描述段只有 print+add_files，装配器硬校验在 on_load 脚本作用域）。
     EXPECT_NE(xmakeLua.find("add_files(\"src/generated/*.asm\")"), std::string::npos)
         << xmakeLua;
     EXPECT_NE(xmakeLua.find("mj2x vmx64: generated MASM x64 sources require windows/x64"),
