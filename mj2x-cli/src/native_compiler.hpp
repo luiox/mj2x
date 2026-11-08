@@ -17,6 +17,7 @@ enum class CEmitterBackend
     RegC,
     LlvmIr,
     Vmc4,
+    Vmx64,   ///< VMC4 虚拟化体系的 x64 汇编形态（MASM .asm；Phase 1 emit-only）
 };
 
 enum class CCompilerKind
@@ -115,6 +116,9 @@ constexpr bool backendEnabled(CEmitterBackend backend)
 #if defined(MJ2X_DISABLE_VMC4_BACKEND)
     if (backend == CEmitterBackend::Vmc4) return false;
 #endif
+#if defined(MJ2X_DISABLE_VMX64_BACKEND)
+    if (backend == CEmitterBackend::Vmx64) return false;
+#endif
     return true;
 }
 
@@ -126,6 +130,7 @@ inline std::string_view backendCliName(CEmitterBackend backend)
     case CEmitterBackend::RegC: return "regc";
     case CEmitterBackend::LlvmIr: return "llvm";
     case CEmitterBackend::Vmc4: return "vmc4";
+    case CEmitterBackend::Vmx64: return "vmx64";
     }
     return {};
 }

@@ -108,6 +108,8 @@ struct CliOptions
     uint64_t                 vmc4Seed            = 0;
     bool                     vmc4SeedSelected    = false;
     uint64_t                 clientId            = 0;   ///< per-client 唯一派生（0 = 不变）
+    uint64_t                 vmx64Seed           = 0;   ///< vmx64 主 seed（emit 密钥派生）
+    bool                     vmx64SeedSelected   = false;
     std::string              vmc4Granularity     = "class";
     int                      vmc4Alias           = 1;
     int                      vmc4Bogus           = 1;

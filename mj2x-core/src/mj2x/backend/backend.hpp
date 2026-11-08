@@ -38,12 +38,14 @@ struct BackendDiagnostics
 
 /// @brief Native 源文件的语言方言。
 ///
-/// 当前两个后端都只生成 C99；C++17 和 LLVM IR 由后续 emitter 通过同一契约接入。
+/// 当前两个后端都只生成 C99；C++17 / LLVM IR / MASM x64 由后续 emitter 通过
+/// 同一契约接入（vmx64 后端的 .asm 产物走 MasmX64）。
 enum class NativeSourceLanguage
 {
     C99,
     Cpp17,
     LlvmIr,
+    MasmX64,   ///< vmx64 后端的 MASM x64 汇编文本（ml64，.asm）
 };
 
 /// @brief finalize 后由 native backend 公开的源产物。

@@ -49,6 +49,7 @@ mj2x.cli.err.regc_trace_calls_needs_regc=--regc-trace-calls 需要 --backend reg
 mj2x.cli.err.regc_safe_env_needs_regc=--regc-safe-env 需要 --backend regc。
 mj2x.cli.err.runtime_protection_unknown=未知 --runtime-protection 取值。合法值: none、log、delay、fake、terminate。
 mj2x.cli.err.runtime_protection_needs_native=--runtime-protection 需要 --backend regc、vmc4 或 llvm。
+mj2x.cli.err.vmx64_emit_only=vmx64 后端当前只支持 --emit-c（.asm 产物）；native 编译与工程生成是 Phase 2 缺口。
 mj2x.cli.err.lazy_decrypt_needs_encrypt=--vmc4-lazy-decrypt 需要同时开启 --vmc4-encrypt-program。
 mj2x.cli.err.block_lazy_needs_encrypt=--vmc4-block-lazy-decrypt 需要同时开启 --vmc4-encrypt-program。
 mj2x.cli.err.block_lazy_conflicts_lazy=--vmc4-block-lazy-decrypt 与 --vmc4-lazy-decrypt 互斥（对齐 jvmtp vm.lazy-decrypt 与 vm.control-flow-flatten 的互斥口径）。

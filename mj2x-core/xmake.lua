@@ -5,7 +5,7 @@
 -- #886 后端选择器合法值校验：必须在文件顶 local function 里做——target 描述
 -- 块的子沙箱无 raise/assert（实测 3.0.9 连 error/os.exit 都没有），而文件级
 -- 函数环境与 mjdbg 各线先例一致可用 raise（评审 T3-3）。
-local kMj2xBackendDirs = {stackc = "stackc", regc = "regc", vmc4 = "vmc4", llvm = "llvmir"}
+local kMj2xBackendDirs = {stackc = "stackc", regc = "regc", vmc4 = "vmc4", llvm = "llvmir", vmx64 = "vmx64"}
 -- 本仓 xmake 构建的工程脚本沙箱剥掉了全部报错原语（raise/assert/error/
 -- os.exit 在文件作用域、target 描述块、on_load 三层实测全 nil，评审 T3-3
 -- 勘实）；可用的失败面只有「print 明确原因 + 命名 nil 索引强制中止」——
@@ -14,7 +14,7 @@ local function mj2x_backend_check()
     local backend = tostring(get_config("with_mj2x_backend") or "all")
     if backend == "" then backend = "all" end
     if backend ~= "all" and kMj2xBackendDirs[backend] == nil then
-        print("error: with_mj2x_backend='" .. backend .. "' is invalid (allowed: all | stackc | regc | vmc4 | llvm)")
+        print("error: with_mj2x_backend='" .. backend .. "' is invalid (allowed: all | stackc | regc | vmc4 | llvm | vmx64)")
         -- 命名 local 携带诊断信息进中止错误行（本沙箱无 raise/assert 可用）
         local MJ2X_INVALID_WITH_MJ2X_BACKEND_VALUE = nil
         local _ = MJ2X_INVALID_WITH_MJ2X_BACKEND_VALUE.abort
