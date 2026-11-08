@@ -32,21 +32,44 @@
 ///   - 表加密：table[t] = handler 地址 - ks64(t)——handler 解密用 add。
 ///     （XOR 对重定位符号不可表达——`sym XOR imm` 不是合法 MASM 数据表达式，
 ///     源级可表达的最近形态是 `sym - imm`（重定位 + addend）；故编号链用
-///     XOR、地址表用 SUB/ADD。二进制层若需纯 XOR，Phase 2 换 post-link
-///     加密器，接口已按 ks64 单点收口。）
+///     XOR、地址表用 SUB/ADD。二进制层若需纯 XOR，走 post-link 加密器，
+///     见下方「post-link 纯 XOR 加密器」设计注。）
+///
+/// ### post-link 纯 XOR 加密器（设计注，未实现——接口意向定档）
+///
+/// 源级 `sym - imm` 形态把 addend 明文留在重定位里（.obj/.dll 的
+/// RELOC{IE}NT 携带明文 handler 偏移差，逆向者重放 `+addend` 即还原明文表）。
+/// 消除该静态痕迹需在**链接后**对产物字节做二次加密，把表项改写成
+/// `handler - ks64(t) XOR mask` 纯异或形态——但那要求 handler 侧解密序列
+/// 同步改为 `xor`，且解密用的 mask 域与重定位解析互斥（重定位写入的地址
+/// 会覆盖密文）。定档设计约束（实现时在此接口下单点收口，不改散装公式）：
+///
+///   - **单源锚点**：keystream 只经 vmx64Ks64（本文件唯一公开派生函数），
+///     加密器 = 读产物 → 定位 .data 表/流（按发射器落盘符号名
+///     `mj2x_vmx64_sites_<tag>`/`mj2x_vmx64_code_<tag>` 的 COFF/PE 段偏移）→
+///     重算 keystream → 异或改写 → 原地落盘。发射侧不新增平行公式。
+///   - **时序**：CLI 侧在 buildXmakeProject 产出 DLL 之后、嵌入/交付之前
+///     插桩（单消费点，与 VMC4 的 JNI_OnLoad at-rest 解密互斥——纯 XOR 改写
+///     后运行期无需解密原语，明文只在 dispatch 瞬时存在于 rdx）。
+///   - **确定性**：同 seed + 同产物 → 逐字节相同（keystream 全部由
+///     instanceSeed/站点号/流偏移确定性派生，无随机量）。
+///   - **前置条件**：加密器要求产物含 vmx64 符号名（发射器符号命名是契约，
+///     不得在加密器侧重新推导）；不满足即整体拒绝（fail-closed，不产半加密
+///     产物）。
 ///
 /// ### 确定性
 ///
 /// 同 instanceSeed + 同 Vmx64Program → 逐字节相同的 .asm 文本（无时间戳、
 /// 无绝对路径、无宿主环境差异）。
 ///
-/// ### JNI 边界（Phase 1 混合链接边界）
+/// ### JNI 边界（混合链接边界）
 ///
 /// 每方法入口 `mj2x_vmx64_exec_<tag> PROC FRAME` 按 JNIEnv ABI 收参
 /// （env=rcx、thisOrClass=rdx、p0=r8、p1=r9、p2+ 走栈），env/this 落帧槽
-/// [rbp-8]/[rbp-16] 供 Phase 2 的 extern C helper（mj2x-rt 字段访问/分配/
-/// 异常等 env 重活）经既定边界取用；Phase 1 最小 opcode 集不在 VM 循环内
-/// 外呼 C。RegisterNatives 绑定 C TU 是 Phase 2 缺口（见 backend 注释）。
+/// [rbp-40h]/[rbp-48h]（被保存寄存器区 0x38 之下）供后续的 extern C
+/// helper（mj2x-rt 字段访问/分配/异常等 env 重活）经既定边界取用；最小
+/// opcode 集不在 VM 循环内外呼 C。RegisterNatives 绑定 C TU 由
+/// Vmx64Backend::finalize 发射（registrationSource()，见 backend 注释）。
 #pragma once
 
 #include "mj2x/backend/vmx64/vmx64_opcode.hpp"

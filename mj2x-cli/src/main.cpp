@@ -909,6 +909,14 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.emit_cpp_needs_cpp_ext"));
         return 1;
     }
+    // vmx64 的 --emit-c 产物是 MASM x64 汇编：强制 .asm 扩展名。工程生成按
+    // 扩展名 glob 分流（*.asm → add_asfiles/ml64，*.c → C 编译器），错误扩展
+    // 名会把汇编文本喂进 C 编译面——fail-closed 在此拦截。
+    if (!options.cOutputPath.empty() && options.cBackendKind == CEmitterBackend::Vmx64 &&
+        !hasExtension(options.cOutputPath, ".asm")) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.emit_vmx64_needs_asm_ext"));
+        return 1;
+    }
     if (!options.cppOutputPath.empty() && options.cBackendKind != CEmitterBackend::RegC) {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.emit_cpp_needs_regc"));
         return 1;
@@ -971,14 +979,13 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.runtime_protection_needs_native"));
         return 1;
     }
-    // vmx64 Phase 1 面：只开放 --emit-c（.asm 产物）。native 编译/pipe、CMake/
-    // xmake 工程生成、native-dir 均未接线（ml64 汇编步骤 + RegisterNatives
-    // 注册 C TU 是 Phase 2 缺口，见 vmx64_backend.hpp）——fail-closed 报错，
-    // 不产半成品工程。
-    if (options.cBackendKind == CEmitterBackend::Vmx64 &&
-        (options.compileNative || !options.cmakeProjectDir.empty() ||
-         !options.xmakeProjectDir.empty() || !options.nativeDirOutput.empty())) {
-        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.vmx64_emit_only"));
+    // vmx64 面（Phase 2 起）：--emit-c / --compile / --generate-xmake 走 xmake
+    // 工程（模板 add_asfiles 经 ml64 汇编 .asm，注册 C TU 由接线单元落盘）。
+    // CMake 工程模板无 .asm 汇编步骤——仍 fail-closed，不产半成品工程；
+    // pipe / direct 驱动 / 多目标由各自的既有校验拦截（pipe_c99_only、
+    // xmake 强制、targets 面）。
+    if (options.cBackendKind == CEmitterBackend::Vmx64 && !options.cmakeProjectDir.empty()) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.vmx64_no_cmake"));
         return 1;
     }
     if (options.stackcExceptionCheck != "full" && options.stackcExceptionCheck != "lite") {
@@ -995,6 +1002,12 @@ int main(int argc, char** argv)
     }
     if (options.cBackendKind == CEmitterBackend::LlvmIr && options.compilerSelected) {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.llvm_backend_no_c_compiler"));
+        return 1;
+    }
+    // vmx64 native 编译恒走 xmake 工程（.asm 由模板 add_asfiles 经 ml64 汇编），
+    // 编译器选择只对 direct 驱动有意义——fail-closed（对齐 llvm 后端口径）。
+    if (options.cBackendKind == CEmitterBackend::Vmx64 && options.compilerSelected) {
+        CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.vmx64_no_c_compiler"));
         return 1;
     }
 
@@ -1022,6 +1035,15 @@ int main(int argc, char** argv)
             CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.direct_compiler_no_xmake"));
             return 1;
         }
+        options.buildDriver = NativeBuildDriver::Xmake;
+    }
+    // vmx64：native 编译恒走 xmake 驱动（.asm 汇编步骤只在 xmake 模板里）。
+    // 未显式给工程目录时沿用 xmake 驱动的临时工程路径（下方既有逻辑建
+    // .mj2x-xmake-*）；--c-compiler 组合已在上方 fail-closed。--targets 例外：
+    // 多目标校验环稍后以 targets 面口径拒绝（该环把 xmake 驱动视为独立错误，
+    // 提前改写会遮住 vmx64 专属文案）。
+    if (options.compileNative && options.cBackendKind == CEmitterBackend::Vmx64 &&
+        options.xmakeProjectDir.empty() && options.targets.empty()) {
         options.buildDriver = NativeBuildDriver::Xmake;
     }
     if (options.compileNative && options.buildDriver == NativeBuildDriver::Xmake &&
@@ -1074,6 +1096,14 @@ int main(int argc, char** argv)
             options.llvmOutputPath =
                 (std::filesystem::path(options.xmakeProjectDir) / "native.ll").string();
             options.cOutputPath.clear();
+        }
+        // vmx64 产物是 MASM 汇编：默认名 vmx64.asm（模板按 *.asm glob 分流到
+        // add_asfiles/ml64；native.c 会被 *.c glob 误当 C 源编译）。
+        if (options.cBackendKind == CEmitterBackend::Vmx64) {
+            options.cOutputPath =
+                (std::filesystem::path(options.xmakeProjectDir) / "src" / "generated" /
+                 "vmx64.asm")
+                    .string();
         }
     }
 
@@ -1200,7 +1230,8 @@ int main(int argc, char** argv)
             return 1;
         }
         if (options.cBackendKind == CEmitterBackend::LlvmIr ||
-            options.cBackendKind == CEmitterBackend::StackC) {
+            options.cBackendKind == CEmitterBackend::StackC ||
+            options.cBackendKind == CEmitterBackend::Vmx64) {
             CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.targets_c99_only"));
             return 1;
         }
@@ -1297,10 +1328,11 @@ int main(int argc, char** argv)
         pipeline.registerPreprocessor(std::make_unique<mj2x::MarkAllMethodsPreprocessor>());
     }
     if (needsNativeSource && backendModule != nullptr && backendModule->usesCloaderBridge) {
-        // StackC / RegC / VMC4 均使用 RegisterNatives 动态绑定，需要
+        // StackC / RegC / VMC4 / vmx64 均使用 RegisterNatives 动态绑定，需要
         // mj2x/cloader/Loader 桥接类（其 native 方法 registerNativesForClass 由
-        // 本侧 _mj2x_register_for_class 实现；VMC4 finalize 同样发射该桥接 C
-        // 函数，缺 Loader.class 时 jar 模式运行报 NoClassDefFoundError）。
+        // 本侧 _mj2x_register_for_class 实现；VMC4 finalize 与 vmx64 的注册 C TU
+        // 同样发射该桥接函数，缺 Loader.class 时 jar 模式运行报
+        // NoClassDefFoundError）。
         // native 库加载注入到 Loader.<clinit>（只注入一次，转换类 clinit 不再重复 load）。
         auto cloaderPostprocessor = std::make_unique<mj2x::CLoaderPostprocessor>();
         if (jarNativeLoaderEnabled) {
@@ -1465,6 +1497,7 @@ int main(int argc, char** argv)
                     if (options.cBackendKind == CEmitterBackend::StackC) backendName = "StackC";
                     else if (options.cBackendKind == CEmitterBackend::Vmc4) backendName = "VMC4";
                     else if (options.cBackendKind == CEmitterBackend::LlvmIr) backendName = "LLVM";
+                    else if (options.cBackendKind == CEmitterBackend::Vmx64) backendName = "Vmx64";
                     CA_LOGT_ERROR("cli", "{}\n",
                                       ca::i18n::trf("mj2x.cli.err.compile_crt_required",
                                                 {std::string{backendName}})

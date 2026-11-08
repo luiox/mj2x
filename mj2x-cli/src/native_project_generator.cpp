@@ -199,6 +199,44 @@ const char* xmakeOptimizeFor(const std::string& level)
     return "fastest";   // 未知值回退默认档（参数层已做枚举校验，这里只兜底）。
 }
 
+/// @brief vmx64 后端的 .asm 编译段（模板 @VMX64_ASM_RULE@ 行的注入体）。
+///
+/// @details
+/// 仅 backend=vmx64 注入；其余后端替换为空行（token 含换行，非 vmx64 整行
+/// 消失，现有 regc/stackc/vmc4 生成工程逐字节不变）。共享模板按后端差异化的
+/// 唯一注入点：xmake 对 msvc 工具链的 .asm 走 ml64（add_asfiles），非
+/// windows/x64 或非 msvc 工具链在模板层 fail-closed——MASM 语法没有其他受
+/// 支持的汇编器，宁可配置期清晰报错不产半成品。CLI 自身的构建路径恒以
+/// `-p windows --toolchain=msvc -a x64` 配置（native_project_builder.cpp），
+/// 手动配置生成工程的用户由此段获得明确诊断。
+std::string vmx64AsmRuleSection()
+{
+    // 生成工程 xmake.lua 的项目描述作用域沙箱极严：raise/add_asfiles/assert 全部
+    // 不注入（CI 实证 nil 调用），且 xmake f 平台探测阶段会多次求值项目文件、
+    // is_plat 时序不可靠（描述段检查会误报）。描述段只做 glob 收编（add_files，
+    // msvc 工具链下 xmake 自动路由 ml64）；装配器硬校验放 on_config 脚本作用域
+    // ——target:tool 在 on_load 里尚未解析（CI 实证），xmake 报错原文即要求
+    // 挪 on_config。
+    std::string section;
+    section += "    -- vmx64 backend section (injected only for backend=vmx64): the generated\n";
+    section += "    -- MASM x64 TU (src/generated/*.asm) is assembled by ml64 via add_files\n";
+    section += "    -- (xmake routes .asm to ml64 under the msvc toolchain on x64).\n";
+    section += "    if #os.files(\"src/generated/*.asm\") > 0 then\n";
+    section += "        add_files(\"src/generated/*.asm\")\n";
+    section += "    end\n";
+    section += "    on_config(function (target)\n";
+    section += "        if #os.files(\"src/generated/*.asm\") > 0 then\n";
+    section += "            local as = target:tool(\"as\")\n";
+    section += "            if type(as) ~= \"string\" or not as:find(\"ml64\", 1, true) then\n";
+    section += "                raise(\"mj2x vmx64: generated MASM x64 sources require windows/x64; \""
+               " .. \"reconfigure with: xmake f -p windows -a x64 --toolchain=msvc \""
+               " .. \"(detected as tool: \" .. tostring(as) .. \")\")\n";
+    section += "            end\n";
+    section += "        end\n";
+    section += "    end)\n";
+    return section;
+}
+
 int generateXmakeProject(const XmakeProjectConfig& config)
 {
     std::error_code ec;
@@ -255,8 +293,14 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     // set_optimize 档位。默认 fastest(= -O2)。
     const std::string optimizeLine =
         "    set_optimize(\"" + std::string{xmakeOptimizeFor(config.optLevel)} + "\")";
+    // vmx64 .asm 段(模板 @VMX64_ASM_RULE@ 行):仅 vmx64 注入,其余后端整行
+    // 消失——共享模板的后端差异化只此一处,非 vmx64 生成工程保持原样。
+    // token 含换行:空替换时删除整行,不留空行。
+    const std::string asmRule =
+        config.backend == CEmitterBackend::Vmx64 ? vmx64AsmRuleSection() : std::string{};
     if (!writeProjectTemplate(config.projectDir / "xmake.lua", xmakeTemplate,
                               {{"@PROJECT_NAME@", config.projectName},
+                               {"@VMX64_ASM_RULE@\n", asmRule},
                                {"@RT_BACKEND_DEFINES@", definesLine},
                                {"@RT_OPTIMIZE@", optimizeLine}})) {
         return 1;

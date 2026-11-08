@@ -20,6 +20,7 @@ target("mj2x_native")
     if #os.files("src/generated/*.cpp") > 0 then
         add_files("src/generated/*.cpp")
     end
+@VMX64_ASM_RULE@
     if is_plat("windows") then
         add_files("src/mj2x-rt/**.c", {cxflags = "/TC"})
     else
