@@ -106,6 +106,11 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
     out += "    jmp rdx\n";
     out += "endm\n";
     out += "\n";
+    // 宏定义后必须先开 .code 段再落 handler 标签/指令：MASM 要求一切指令在
+    // 段内（段外代码报 "must be in segment block"）。public 与标签都收进
+    // .code；后续方法段自带 .data/.code 切换，与共享段共存于同一 TU。
+    out += ".code\n";
+    out += "\n";
     out += "public mj2x_vmx64_h_iconst\n";
     out += "public mj2x_vmx64_h_lconst\n";
     out += "public mj2x_vmx64_h_iload\n";

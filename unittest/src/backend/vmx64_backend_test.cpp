@@ -1,14 +1,17 @@
-// vmx64 后端单元测试（Phase 1 emit 级）：Java 字节码 -> L1 -> SSA -> RegIR ->
-// Vmx64Encoder -> Vmx64AsmEmitter -> MASM x64 .asm 文本。
+// vmx64 后端单元测试（emit 级）：Java 字节码 -> L1 -> SSA -> RegIR ->
+// Vmx64Encoder -> Vmx64AsmEmitter -> MASM x64 .asm 文本 + 注册 C TU。
 //
-// 本测试不汇编/不调 JNI/DLL（exec 级 E2E 是已知 Phase 1 缺口——模板侧 ml64
-// 步骤 + RegisterNatives 注册 C TU 未接线，见 vmx64_backend.hpp），只验证：
+// 本测试不汇编/不调 JNI/DLL（exec 级 E2E 在 vmx64_backend_e2e_test.cpp，走
+// 真实 CLI + xmake 工程 + ml64），只验证：
 //   1. 纯 i32/i64 算术 + 控制流方法能编码成 Vmx64Program 并发射 .asm。
 //   2. 确定性：同 seed 两次 emit 逐字节相同；不同 seed 产物不同。
 //   3. fail-closed：不支持的形态（除法/字段/浮点/实例方法 this）编码失败且
 //      不落半成品（成功方法与失败方法混编时产物只含成功方法段）。
 //   4. .asm 结构 sanity：jmp rdx、加密站点表（label - addend 形态）、
-//      PROC FRAME 入口、流/表数据段、vmx64_NEXT 宏。
+//      PROC FRAME 入口、流/表数据段、vmx64_NEXT 宏、段指令（.code 先于
+//      共享 handler）、文件尾 end。
+//   5. 注册 C TU（Phase 2）：extern 声明 .asm 入口符号、per-class register
+//      函数、cloader 桥接、JNI_OnLoad；无虚拟化方法时为空（fail-closed）。
 
 #include "garena/arena.hpp"
 #include <gmock/gmock.h>
@@ -464,6 +467,13 @@ TEST(Vmx64BackendTest, AsmStructureSanity)
     EXPECT_GE(countOccurrences(src, "    vmx64_NEXT\n"), 20u)
         << "every handler tail must dispatch through vmx64_NEXT";
 
+    // 段指令：共享 handler 块必须先开 .code 段再落指令（MASM 要求一切指令
+    // 在段内；handler 标签不得先于任何段指令出现）。
+    const auto codeDirective = src.find(".code\n");
+    ASSERT_NE(codeDirective, std::string::npos) << "shared handlers need a .code segment";
+    EXPECT_LT(codeDirective, src.find("mj2x_vmx64_h_iconst:"))
+        << "handler labels must come after the .code directive";
+
     // 加密站点表：DQ label-addend 形态（编译期 seed 派生加密）。
     EXPECT_NE(src.find("mj2x_vmx64_sites_" + tag + " label qword"), std::string::npos);
     EXPECT_NE(src.find("dq mj2x_vmx64_h_"), std::string::npos);
@@ -484,6 +494,10 @@ TEST(Vmx64BackendTest, AsmStructureSanity)
     EXPECT_NE(src.find(".endprolog"), std::string::npos);
     EXPECT_NE(src.find("mj2x_vmx64_exec_" + tag + " endp"), std::string::npos);
     EXPECT_NE(src.find("public mj2x_vmx64_exec_" + tag), std::string::npos);
+
+    // 文件尾 end 指令（MASM 源终止符）。
+    EXPECT_EQ(src.compare(src.size() - 4, 4, "end\n"), 0)
+        << "the .asm TU must terminate with the end directive";
 
     // 共享 handler 集存在（iconst/算术/返回族）。
     EXPECT_NE(src.find("mj2x_vmx64_h_iadd:"), std::string::npos);
@@ -548,4 +562,63 @@ TEST(Vmx64BackendTest, StreamCarriesEncryptedHandlerNumbers)
         << "same instance seed must encrypt the stream identically";
     EXPECT_NE(firstDbLine(asmA1), firstDbLine(asmB))
         << "instance seed must key the stream cipher";
+}
+
+// ===========================================================================
+// 12. 注册 C TU（Phase 2）：finalize 后 registrationSource() 携带 extern 声明、
+//     per-class register 函数、cloader 桥接与 JNI_OnLoad。
+// ===========================================================================
+TEST(Vmx64BackendTest, RegistrationSourceBindsAsmEntries)
+{
+    auto        method = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "add", "(II)I",
+                                    {
+                                        new VarInsnNode(Opcodes::ILOAD, 0),
+                                        new VarInsnNode(Opcodes::ILOAD, 1),
+                                        new InsnNode(Opcodes::IADD),
+                                        new InsnNode(Opcodes::IRETURN),
+                                    },
+                                    2, 2);
+    CompilerMethod cm  = test::snapshotMethod(*method);
+    CompilerClass  cls;
+    cls.methods.push_back(cm);
+
+    Vmx64Backend backend;
+    Vmx64Options opts;
+    opts.seed = 0x600D;
+    backend.setOptions(opts);
+    ca::str::Utf8StringArena arena;
+    CodeConverter            converter(arena);
+    auto    blocks = test::convertMethodNode(converter, *method, arena);
+    auto    result = backend.compileMethod("Vmx64T", cls.methods[0], blocks);
+    ASSERT_EQ(result.kind, BackendResult::Kind::ASM_SOURCE);
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+
+    const std::string& reg = backend.registrationSource();
+    ASSERT_FALSE(reg.empty());
+    const std::string tag = codegen::hex64(codegen::fnv1a64("Vmx64T.add(II)I"));
+    // extern 原型：jint 返回 + (JNIEnv*, jclass, jint, jint)。
+    EXPECT_NE(reg.find("extern jint mj2x_vmx64_exec_" + tag +
+                       "(JNIEnv*, jclass, jint, jint);"),
+              std::string::npos)
+        << reg;
+    // 注册基础设施三件套（镜像 regc/vmc4 契约）。
+    EXPECT_NE(reg.find("#include <jni.h>"), std::string::npos) << reg;
+    EXPECT_NE(reg.find("_mj2x_register_for_class"), std::string::npos) << reg;
+    EXPECT_NE(reg.find("JNI_OnLoad"), std::string::npos) << reg;
+    EXPECT_NE(reg.find("(void*)mj2x_vmx64_exec_" + tag), std::string::npos)
+        << "RegisterNatives entry must reference the .asm symbol";
+    // 注册 TU 不携带 .asm 内容（两产物严格分离）。
+    EXPECT_EQ(reg.find("proc frame"), std::string::npos) << reg;
+}
+
+// ===========================================================================
+// 13. 注册 C TU fail-closed：无虚拟化方法时 finalize 不产空注册面。
+// ===========================================================================
+TEST(Vmx64BackendTest, RegistrationSourceEmptyWhenNothingVirtualized)
+{
+    Vmx64Backend backend;
+    CompilerIndex emptyIndex;
+    backend.finalize(emptyIndex);
+    EXPECT_TRUE(backend.registrationSource().empty());
 }
