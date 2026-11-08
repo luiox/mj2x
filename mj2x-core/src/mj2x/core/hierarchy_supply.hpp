@@ -37,8 +37,8 @@ ca::usize supplyClasspathSkeletons(mjbase::hierarchy::ClassHierarchy& hierarchy,
                                    std::string& note);
 
 /// @brief JDK 供给：jdk_finder 定位 JDK → jmods/*.jmod（JDK9+）或 rt.jar（JDK8）
-///        扫描建图。带磁盘缓存（<temp>/mj2x_lca_cache/<release 哈希>.txt；
-///        java_info 不可得时退化为每次实扫）。
+///        扫描建图。带磁盘缓存（临时目录下 mj2x_lca_cache 内按 release
+///        哈希命名的缓存文件；java_info 不可得时退化为每次实扫）。
 /// @return 登记增量；@p note 追加供给面描述（含 JDK 路径/缓存命中态）。
 ca::usize supplyJdkSkeletons(mjbase::hierarchy::ClassHierarchy& hierarchy, mjbase::KeyPool& pool,
                              std::string& note);
