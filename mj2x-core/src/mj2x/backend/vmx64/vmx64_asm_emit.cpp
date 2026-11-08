@@ -30,6 +30,18 @@ std::string hexNum(uint64_t value, int width)
     return std::string(buffer);
 }
 
+/// 数值 → MASM 十六进制字面量：h 后缀，首字符为字母时补前导 0（如
+/// 0x0FEDC… → "0fedc…h"）。ml64 不认 0x 前缀——解析为 0 后跟标识符，
+/// A2206 missing operator in expression（本机 ml64 14.44 实证）。发射侧
+/// 数值一律走这里，禁止 0x 进产物。
+std::string masmHex(uint64_t value)
+{
+    std::string h = hexNum(value, 0);
+    if (h.empty()) h = "0";
+    if (h[0] >= 'a' && h[0] <= 'f') h.insert(h.begin(), '0');
+    return h + "h";
+}
+
 /// 入口帧头区字节数：env/thisOrClass/两个保留槽（Phase 2 C helper 边界）。
 constexpr uint32_t kFrameHeaderBytes = 0x20;
 
@@ -79,15 +91,15 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
     out += "\n";
     out += "vmx64_NEXT macro\n";
     out += "    movzx eax, word ptr [r14+rbx]\n";
-    out += "    imul r12, rbx, 0x61C88647\n";
+    out += "    imul r12, rbx, 61C88647h\n";
     out += "    rol r12, 13\n";
     out += "    xor r12, r15\n";
-    out += "    imul r12, r12, 0x045D9F3B\n";
+    out += "    imul r12, r12, 045D9F3Bh\n";
     out += "    xor ax, r12w\n";
-    out += "    imul r11, rax, 0x61C88647\n";
+    out += "    imul r11, rax, 61C88647h\n";
     out += "    rol r11, 13\n";
     out += "    xor r11, r15\n";
-    out += "    imul r11, r11, 0x045D9F3B\n";
+    out += "    imul r11, r11, 045D9F3Bh\n";
     out += "    mov rdx, [rdi+rax*8]\n";
     out += "    add rdx, r11\n";
     out += "    xor r12, r11\n";
@@ -275,7 +287,10 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     std::vector<uint8_t> stream = program.stream;
     for (size_t t = 0; t < program.sites.size(); ++t) {
         const uint32_t off = program.sites[t].streamOffset;
-        if (off + 1 >= stream.size()) continue;   // 防御（编码器保证不达）
+        // 编码器契约破坏（site 越界）时不静默跳过——那会留下 tEnc 未加密的
+        // 可汇编产物。发射 .err 让汇编期硬失败（fail-closed 到工具链层）。
+        if (off + 1 >= stream.size())
+            return "; vmx64: site stream offset out of range (encoder contract violated)\n.err\n";
         const uint16_t ks      = static_cast<uint16_t>(vmx64Ks64(off, k1) & 0xFFFFULL);
         const uint16_t plain   = static_cast<uint16_t>(t);
         const uint16_t cipher  = static_cast<uint16_t>(plain ^ ks);
@@ -285,7 +300,7 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
 
     std::string out;
     out += "; ----------------------------------------------------------------------------\n";
-    out += "; method " + methodTag + "  (instance seed 0x" + hexNum(instanceSeed, 16) + ")\n";
+    out += "; method " + methodTag + "  (instance seed " + masmHex(instanceSeed) + ")\n";
     out += "; ----------------------------------------------------------------------------\n";
     out += "\n";
     out += ".data\n";
@@ -296,12 +311,14 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
         for (size_t i = 0; i < stream.size(); i += 16) {
             int  pos  = std::snprintf(line, sizeof(line), "    db ");
             for (size_t j = i; j < i + 16 && j < stream.size(); ++j) {
-                pos += std::snprintf(line + pos, sizeof(line) - static_cast<size_t>(pos), "0x%02x%s",
+                pos += std::snprintf(line + pos, sizeof(line) - static_cast<size_t>(pos), "%02xh%s",
                                      stream[j], (j + 1 < stream.size() && j + 1 < i + 16) ? "," : "");
             }
             out += std::string(line) + "\n";
         }
-        if (stream.empty()) out += "    db 0x00\n";   // 防御（编码器保证非空）
+        // 编码器保证流非空；空流是契约破坏——.err 汇编期硬失败，不产占位产物。
+        if (stream.empty())
+            out += "    .err   ; vmx64: empty instruction stream (encoder contract violated)\n";
     }
     out += "\n";
     out += "align 8\n";
@@ -311,7 +328,7 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     for (size_t t = 0; t < program.sites.size(); ++t) {
         const uint64_t addend = vmx64Ks64(static_cast<uint64_t>(t), k1);
         out += "    dq mj2x_vmx64_h_" + std::string(vmx64OpHandlerName(program.sites[t].op)) +
-               "-0x" + hexNum(addend, 16) + "\n";
+               "-" + masmHex(addend) + "\n";
     }
     out += "\n";
 
@@ -327,6 +344,9 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     out += "; Mixed-linking boundary (Phase 1): env / thisOrClass homed into frame slots\n";
     out += "; [rbp-8] / [rbp-16] for Phase 2 extern C helpers (mj2x-rt field access,\n";
     out += "; allocation, exceptions). The Phase 1 opcode subset never calls out.\n";
+    out += "; Alignment: 8 pushes (incl. rbp) + 16-aligned locals leave rsp = 8 (mod 16)\n";
+    out += "; at runtime — any future extern C helper call must re-align to 16 before\n";
+    out += "; `call` per the Windows x64 ABI.\n";
     out += "mj2x_vmx64_exec_" + methodTag + " proc frame\n";
     out += "    push rbp\n";
     out += "    .pushreg rbp\n";
@@ -346,20 +366,20 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     out += "    .pushreg r14\n";
     out += "    push r15\n";
     out += "    .pushreg r15\n";
-    out += "    sub rsp, 0x" + hexNum(localsSize, 0) + "\n";
-    out += "    .allocstack 0x" + hexNum(localsSize, 0) + "\n";
+    out += "    sub rsp, " + masmHex(localsSize) + "\n";
+    out += "    .allocstack " + masmHex(localsSize) + "\n";
     out += "    .endprolog\n";
     out += "    mov [rbp-8], rcx\n";
     out += "    mov [rbp-16], rdx\n";
-    out += "    lea rsi, [rbp-0x" + hexNum(vregBaseDisp, 0) + "]\n";
+    out += "    lea rsi, [rbp-" + masmHex(vregBaseDisp) + "]\n";
     out += "    lea rdi, [mj2x_vmx64_sites_" + methodTag + "]\n";
     out += "    lea r14, [mj2x_vmx64_code_" + methodTag + "]\n";
     out += "    lea r13, [mj2x_vmx64_done_" + methodTag + "]\n";
-    out += "    mov r15, 0x" + hexNum(k1, 16) + "\n";
+    out += "    mov r15, " + masmHex(k1) + "\n";
     // 参数落槽：p0=r8 / p1=r9 / p(i>=2)=[rbp+0x30+8*(i-2)]。
     for (size_t i = 0; i < program.args.size(); ++i) {
         const auto& arg     = program.args[i];
-        const auto  slotStr = "+0x" + hexNum(static_cast<uint64_t>(arg.slot) * 8ull, 0);
+        const auto  slotStr = "+" + masmHex(static_cast<uint64_t>(arg.slot) * 8ull);
         std::string srcReg;
         std::string srcMem;
         if (i == 0)
@@ -367,7 +387,7 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
         else if (i == 1)
             srcReg = arg.is64 ? "r9" : "r9d";
         else
-            srcMem = "[rbp+0x" + hexNum(0x30 + 8 * (i - 2), 0) + "]";
+            srcMem = "[rbp+" + masmHex(static_cast<uint64_t>(0x30 + 8 * (i - 2))) + "]";
         if (!srcMem.empty()) {
             if (arg.is64) {
                 out += "    mov rax, qword ptr " + srcMem + "\n";
@@ -389,7 +409,7 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     out += "    xor ebx, ebx\n";
     out += "    vmx64_NEXT\n";
     out += "mj2x_vmx64_done_" + methodTag + ":\n";
-    out += "    add rsp, 0x" + hexNum(localsSize, 0) + "\n";
+    out += "    add rsp, " + masmHex(localsSize) + "\n";
     out += "    pop r15\n";
     out += "    pop r14\n";
     out += "    pop r13\n";

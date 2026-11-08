@@ -451,12 +451,17 @@ TEST(Vmx64BackendTest, AsmStructureSanity)
     // 加密站点表：DQ label-addend 形态（编译期 seed 派生加密）。
     EXPECT_NE(src.find("mj2x_vmx64_sites_" + tag + " label qword"), std::string::npos);
     EXPECT_NE(src.find("dq mj2x_vmx64_h_"), std::string::npos);
-    EXPECT_NE(src.find("-0x"), std::string::npos)
-        << "site table entries must carry seed-derived addends";
+    EXPECT_NE(src.find("h\n"), std::string::npos)
+        << "site table entries must carry seed-derived addends (h-suffix)";
 
     // 指令流数据段。
     EXPECT_NE(src.find("mj2x_vmx64_code_" + tag + " label byte"), std::string::npos);
-    EXPECT_NE(src.find("    db 0x"), std::string::npos);
+    EXPECT_NE(src.find("    db "), std::string::npos);
+
+    // ml64 拒绝 0x 前缀（A2206 missing operator in expression，本机 14.44 实证）：
+    // 产物数值必须全是 h 后缀形态，任何 0x 字面量都是发射器回归。
+    EXPECT_EQ(src.find("0x"), std::string::npos)
+        << "ml64 rejects 0x-prefixed literals; all numbers must be h-suffix";
 
     // JNI 入口 PROC（SEH unwind 注记齐全）。
     EXPECT_NE(src.find("mj2x_vmx64_exec_" + tag + " proc frame"), std::string::npos);
@@ -511,7 +516,7 @@ TEST(Vmx64BackendTest, StreamCarriesEncryptedHandlerNumbers)
 
     // 行为级断言（不重复实现发射器内部 K1 派生）：同 program + 同 seed → 同
     // 密文 db 行；不同 instance seed → 密文 db 行不同（密钥参与流加密）。
-    const std::string firstDb = "    db 0x";
+    const std::string firstDb = "    db ";
     const auto        firstDbLine = [&firstDb](const std::string& text) {
         const auto pos = text.find(firstDb);
         return pos == std::string::npos ? std::string{}

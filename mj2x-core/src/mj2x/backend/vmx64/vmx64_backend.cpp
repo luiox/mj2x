@@ -163,7 +163,12 @@ void Vmx64Backend::finalize(const CompilerIndex& index)
     sourceCode_ = std::move(full);
     if (!asmOutputPath_.empty()) {
         std::ofstream ofs(asmOutputPath_, std::ios::binary);
-        if (ofs.is_open()) ofs << sourceCode_;
+        if (ofs.is_open()) {
+            ofs << sourceCode_;
+            ofs.flush();
+            if (!ofs.good())
+                CA_LOGT_ERROR("vmx64", "finalize: short write to {}\n", asmOutputPath_);
+        }
     }
 }
 
