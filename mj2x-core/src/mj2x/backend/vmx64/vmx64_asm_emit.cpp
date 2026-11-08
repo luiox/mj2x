@@ -316,7 +316,9 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
         for (size_t i = 0; i < stream.size(); i += 16) {
             int  pos  = std::snprintf(line, sizeof(line), "    db ");
             for (size_t j = i; j < i + 16 && j < stream.size(); ++j) {
-                pos += std::snprintf(line + pos, sizeof(line) - static_cast<size_t>(pos), "%02xh%s",
+                // 恒三位数字开头（%03x）：MASM 十六进制字面量首字符必须是数字
+                // （c0h 会被当标识符，CI 实证 A2006 undefined symbol），0c0h 合法。
+                pos += std::snprintf(line + pos, sizeof(line) - static_cast<size_t>(pos), "%03xh%s",
                                      stream[j], (j + 1 < stream.size() && j + 1 < i + 16) ? "," : "");
             }
             out += std::string(line) + "\n";
