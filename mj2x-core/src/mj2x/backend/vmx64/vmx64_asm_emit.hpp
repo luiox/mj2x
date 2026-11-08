@@ -66,10 +66,10 @@
 ///
 /// 每方法入口 `mj2x_vmx64_exec_<tag> PROC FRAME` 按 JNIEnv ABI 收参
 /// （env=rcx、thisOrClass=rdx、p0=r8、p1=r9、p2+ 走栈），env/this 落帧槽
-/// [rbp-8]/[rbp-16] 供后续的 extern C helper（mj2x-rt 字段访问/分配/
-/// 异常等 env 重活）经既定边界取用；最小 opcode 集不在 VM 循环内
-/// 外呼 C。RegisterNatives 绑定 C TU 由 Vmx64Backend::finalize 发射
-///（registrationSource()，见 backend 注释）。
+/// [rbp-40h]/[rbp-48h]（被保存寄存器区 0x38 之下）供后续的 extern C
+/// helper（mj2x-rt 字段访问/分配/异常等 env 重活）经既定边界取用；最小
+/// opcode 集不在 VM 循环内外呼 C。RegisterNatives 绑定 C TU 由
+/// Vmx64Backend::finalize 发射（registrationSource()，见 backend 注释）。
 #pragma once
 
 #include "mj2x/backend/vmx64/vmx64_opcode.hpp"

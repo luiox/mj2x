@@ -42,7 +42,15 @@ std::string masmHex(uint64_t value)
     return h + "h";
 }
 
-/// 入口帧头区字节数：env/thisOrClass/两个保留槽（Phase 2 C helper 边界）。
+/// prologue 在 rbp 之下压栈的非易失寄存器字节数：rbx/rsi/rdi/r12/r13/r14/r15
+/// 共 7 个（rbp 自身的保存在 [rbp]，不占 rbp 下方）。帧头与 vreg 池必须位于
+/// 该区之下——按 rbp-0x20 起算会把 slot 9/10/11 叠在 saved r15/r14/r13 上，
+/// epilogue pop 出垃圾寄存器回 JVM native 存根（E2E 实证：sum 的回边拷贝
+/// 写 slot9/slot11 后 r13/r15 高低字拼接成 heap_base|slot 值，存根解引用崩）。
+constexpr uint32_t kSavedRegsBytes = 7u * 8u;
+
+/// 入口帧头区字节数：env/thisOrClass/两个保留槽（Phase 2 C helper 边界），
+/// 位于被保存寄存器区之下。
 constexpr uint32_t kFrameHeaderBytes = 0x20;
 
 /// vreg slot 池字节数（16 对齐）。
@@ -343,17 +351,24 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     out += "\n";
 
     // --- JNI 入口 ---
+    // 帧布局（rbp 之下）：[saved rbp][7 个非易失寄存器 0x38][帧头 0x20：
+    // env/thisOrClass/保留][vreg 池]。`sub rsp` 发生在 7 个 push 之后，
+    // locals 区 = 帧头 + vreg，全部位于 saved 区之下（见 kSavedRegsBytes）。
     const uint32_t vregBytes  = vregBytesFor(program.numSlots);
     const uint32_t localsSize = kFrameHeaderBytes + vregBytes;
-    const uint32_t vregBaseDisp = kFrameHeaderBytes + vregBytes;   // rsi = rbp - vregBaseDisp
+    const uint32_t envDisp    = kSavedRegsBytes + 8;   // [rbp-0x40]
+    const uint32_t thisDisp   = kSavedRegsBytes + 16;  // [rbp-0x48]
+    const uint32_t vregBaseDisp =
+        kSavedRegsBytes + kFrameHeaderBytes + vregBytes;   // rsi = rbp - vregBaseDisp
 
     out += ".code\n";
     out += "public mj2x_vmx64_exec_" + methodTag + "\n";
     out += "; JNI native entry: (JNIEnv* env [rcx], jclass/jobject thisOrClass [rdx],\n";
     out += ";                     p0 [r8], p1 [r9], p2+ on stack)\n";
     out += "; Mixed-linking boundary (Phase 1): env / thisOrClass homed into frame slots\n";
-    out += "; [rbp-8] / [rbp-16] for Phase 2 extern C helpers (mj2x-rt field access,\n";
-    out += "; allocation, exceptions). The Phase 1 opcode subset never calls out.\n";
+    out += "; [rbp-40h] / [rbp-48h] (below the saved-register area) for Phase 2 extern C\n";
+    out += "; helpers (mj2x-rt field access, allocation, exceptions). The Phase 1\n";
+    out += "; opcode subset never calls out.\n";
     out += "; Alignment: 8 pushes (incl. rbp) + 16-aligned locals leave rsp = 8 (mod 16)\n";
     out += "; at runtime — any future extern C helper call must re-align to 16 before\n";
     out += "; `call` per the Windows x64 ABI.\n";
@@ -379,8 +394,8 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     out += "    sub rsp, " + masmHex(localsSize) + "\n";
     out += "    .allocstack " + masmHex(localsSize) + "\n";
     out += "    .endprolog\n";
-    out += "    mov [rbp-8], rcx\n";
-    out += "    mov [rbp-16], rdx\n";
+    out += "    mov [rbp-" + masmHex(envDisp) + "], rcx\n";
+    out += "    mov [rbp-" + masmHex(thisDisp) + "], rdx\n";
     out += "    lea rsi, [rbp-" + masmHex(vregBaseDisp) + "]\n";
     out += "    lea rdi, [mj2x_vmx64_sites_" + methodTag + "]\n";
     out += "    lea r14, [mj2x_vmx64_code_" + methodTag + "]\n";

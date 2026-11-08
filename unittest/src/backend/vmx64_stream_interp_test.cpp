@@ -461,7 +461,51 @@ TEST(Vmx64StreamInterpTest, StraightLineArithmeticMatchesJvm)
 }
 
 // ===========================================================================
-// 4. 发射产物回读：db 行字节与明文流逐位对账（操作数字段不变、tEnc 密文可
+// 4. 帧布局不变量：vreg 池与帧头必须整体位于被保存寄存器区（7 个非易失
+//    寄存器，0x38 字节）之下。历史缺陷（E2E 实证）：按 rbp-0x20 起算时
+//    slot 9/10/11 叠在 saved r15/r14/r13 上，epilogue pop 出「高位残留 +
+//    slot 值」拼接的垃圾寄存器，JVM native 存根解引用即崩（sum 循环必踩，
+//    直算方法水位低而侥幸存活）。以文本级断言锁死偏移关系。
+// ===========================================================================
+TEST(Vmx64StreamInterpTest, FrameLayoutKeepsVregsBelowSavedRegisters)
+{
+    std::string reason;
+    auto        prog = encodeSumJavacShape(reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    const std::string asmText = Vmx64AsmEmitter::emitMethod(*prog, 0xABCD, "frm");
+    ASSERT_EQ(asmText.find(".err"), std::string::npos) << asmText;
+
+    const auto hexAfter = [&](const std::string& prefix) -> uint32_t {
+        const auto pos = asmText.find(prefix);
+        EXPECT_NE(pos, std::string::npos) << asmText;
+        if (pos == std::string::npos) return 0;
+        const auto end = asmText.find('h', pos);
+        EXPECT_NE(end, std::string::npos) << asmText;
+        return static_cast<uint32_t>(
+            std::stoul(asmText.substr(pos + prefix.size(), end - pos - prefix.size()),
+                       nullptr, 16));
+    };
+
+    const uint32_t subRsp    = hexAfter("    sub rsp, ");
+    const uint32_t leaRsi    = hexAfter("    lea rsi, [rbp-");
+    const uint32_t envDisp   = hexAfter("    mov [rbp-");
+    constexpr uint32_t kSavedRegs = 7u * 8u;   // rbx,rsi,rdi,r12,r13,r14,r15
+
+    // rsi 基址 = sub rsp 量 + 保存区（vreg 池贴着 rsp 之下、保存区之上）。
+    EXPECT_EQ(leaRsi, subRsp + kSavedRegs) << asmText;
+    // 帧头紧跟保存区之下：env@0x38+8、this@0x38+0x10。
+    EXPECT_EQ(envDisp, kSavedRegs + 8) << asmText;
+    EXPECT_NE(asmText.find("    mov [rbp-" + std::string("48") + "h], rdx"), std::string::npos)
+        << asmText;
+    // vreg 池完整落在 [rbp-0x58, rbp-0x38) 内：不小于 slot 总量。
+    EXPECT_GE(leaRsi - kSavedRegs - 0x20, prog->numSlots * 8u) << asmText;
+    // 旧缺陷形态（帧头砸在保存区上）必须绝迹。
+    EXPECT_EQ(asmText.find("    mov [rbp-8], rcx"), std::string::npos) << asmText;
+    EXPECT_EQ(asmText.find("    mov [rbp-16], rdx"), std::string::npos) << asmText;
+}
+
+// ===========================================================================
+// 5. 发射产物回读：db 行字节与明文流逐位对账（操作数字段不变、tEnc 密文可
 //    用 ks64 解回站点号）、dq 行 handler 名与 addend 与 ks64 单源对账。
 //    （发射器的 K1 派生在此按同源公式重演——测的是发射器落盘契约本身。）
 // ===========================================================================
