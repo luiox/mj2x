@@ -129,23 +129,23 @@ MJ2X_IINLINE uint32_t mj2x_intrinsic_ctz64(uint64_t value)
         n += 32;
         value >>= 32;
     }
-    if ((value & UINT64_C(0x00000000FFFF0000)) == 0) {
+    if ((value & UINT64_C(0x000000000000FFFF)) == 0) {
         n += 16;
         value >>= 16;
     }
-    if ((value & UINT64_C(0x000000000000FF00)) == 0) {
+    if ((value & UINT64_C(0x00000000000000FF)) == 0) {
         n += 8;
         value >>= 8;
     }
-    if ((value & UINT64_C(0x00000000000000F0)) == 0) {
+    if ((value & UINT64_C(0x000000000000000F)) == 0) {
         n += 4;
         value >>= 4;
     }
-    if ((value & UINT64_C(0x000000000000000C)) == 0) {
+    if ((value & UINT64_C(0x0000000000000003)) == 0) {
         n += 2;
         value >>= 2;
     }
-    if ((value & UINT64_C(0x0000000000000002)) == 0) {
+    if ((value & UINT64_C(0x0000000000000001)) == 0) {
         n += 1;
     }
     return n;
