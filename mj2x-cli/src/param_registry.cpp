@@ -458,6 +458,8 @@ DEF_STR(cmakeProjectDir, "--generate-cmake", "generate_cmake")
 DEF_STR(xmakeProjectDir, "--generate-xmake", "generate_xmake")
 DEF_INT(nativeTimeoutSec, "--native-timeout", "native_timeout", 0, 0)
 DEF_STR_LIST(targets, "--targets", "targets")
+DEF_STR(lcaClasspath, "--classpath", "lca_classpath")
+DEF_BOOL(noJdkHierarchy, "--no-jdk-hierarchy", "no_jdk_hierarchy")
 DEF_STR_LIST(targetCc, "--target-cc", "target_cc")
 
 const ParamDef kBaseParamsBefore[] = {
@@ -494,6 +496,9 @@ const ParamDef kBaseParamsBefore[] = {
     PARAM("compile.generate_cmake", "--generate-cmake", "generate_cmake", ParamType::String, nullptr, 0, 0, "", "compile", "", cli_cmakeProjectDir, json_cmakeProjectDir),
     PARAM("compile.generate_xmake", "--generate-xmake", "generate_xmake", ParamType::String, nullptr, 0, 0, "", "compile", "", cli_xmakeProjectDir, json_xmakeProjectDir),
     PARAM("compile.targets", "--targets", "targets", ParamType::StringList, nullptr, 0, 0, "", "compile", "", cli_targets, json_targets),
+    // 帧换装 LCA 供给面：谱系图扩容（帧重算公共父类求解）。
+    PARAM("compile.classpath", "--classpath", "lca_classpath", ParamType::String, nullptr, 0, 0, "", "compile", "", cli_lcaClasspath, json_lcaClasspath),
+    PARAM("compile.no_jdk_hierarchy", "--no-jdk-hierarchy", "no_jdk_hierarchy", ParamType::Bool, nullptr, 0, 0, "", "compile", "", cli_noJdkHierarchy, json_noJdkHierarchy),
     PARAM("compile.target_cc", "--target-cc", "target_cc", ParamType::StringList, nullptr, 0, 0, "", "compile", "", cli_targetCc, json_targetCc),
 };
 

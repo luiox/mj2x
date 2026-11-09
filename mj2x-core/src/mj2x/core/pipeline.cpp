@@ -3,6 +3,8 @@
 
 #include "mj2x/io/output_writer.hpp"
 
+#include "mj2x/core/lca_type_resolver.hpp"
+
 #include "libca/log/log_macros.hpp"
 
 #include <cstdio>
@@ -165,8 +167,18 @@ void Pipeline::runPostprocessors()
 
 void Pipeline::writeOutput()
 {
+    // 帧换装：谱系 LCA 建图在输出前一次完成（输入 jar + classpath + JDK
+    // 供给面），modified 类帧重算的公共父类求解走真 LCA。
+    LcaTypeResolver lca;
+    lca.buildFromIndex(*index_);
+    if (!config_.lcaClasspath.empty() || config_.jdkHierarchy) {
+        std::string note;
+        const auto  added = lca.extendFromEnvironment(config_.lcaClasspath, config_.jdkHierarchy, note);
+        CA_LOGT_INFO("pipeline", "LCA hierarchy: {} classes (extended +{})\n", lca.registeredCount(),
+                     added);
+    }
     OutputWriter writer;
-    writer.write(config_.outputPath, *index_);
+    writer.write(config_.outputPath, *index_, &lca);
 }
 
 }   // namespace mj2x

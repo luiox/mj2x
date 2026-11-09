@@ -33,6 +33,10 @@ struct PipelineConfig
     std::string outputPath;
     bool        dumpIR  = false;
     bool        dumpMIR = false;
+    /// 帧换装 LCA 供给面：classpath 依赖 jar（os 路径分隔符分隔；空 = 不供）
+    /// 与 JDK 谱系扫描开关（默认开，jmods 扫描带磁盘缓存）。
+    std::string lcaClasspath;
+    bool        jdkHierarchy = true;
 };
 
 /// 编排 6 阶段流水线的驱动器。注册顺序 = 执行顺序。
