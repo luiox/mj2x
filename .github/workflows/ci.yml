@@ -173,14 +173,19 @@ jobs:
           xmake build -y mj2x_integration_test
           xmake build -y mj2x_rt_test
 
+      # 不走 xmake run：它会递归注入 target/包 linkdirs 进 PATH（mjbase 家族
+      # 闭包 +5 包），垫到贴线后测试内 spawn 的 xmake 调 vcvarsall 再展开
+      # PATH 越过 cmd 8191 上限直接退出，两例 CliTest 断言落空成误红
+      # （main 全绿/分支红的同日同镜像对照 + 本地 PATH 长度因果复现实证）。
+      # 本仓全静态 MT 无 DLL 解析需求，注入是死重，直调产物 exe。
       - name: Run unit tests
         shell: bash
-        run: xmake run mj2x_unittest --gtest_brief=1
+        run: build/windows/x64/release/mj2x_unittest.exe --gtest_brief=1
 
       - name: Run integration tests
         shell: bash
-        run: xmake run mj2x_integration_test --gtest_brief=1
+        run: build/windows/x64/release/mj2x_integration_test.exe --gtest_brief=1
 
       - name: Run runtime tests
         shell: bash
-        run: xmake run mj2x_rt_test --gtest_brief=1
+        run: build/windows/x64/release/mj2x_rt_test.exe --gtest_brief=1
