@@ -169,13 +169,21 @@ LUIOX_LIBCA_MODULES = "core,crypto,str,fs,env,io,json,net,http,process,opt,threa
 add_requires("libca " .. LUIOX_LIBCA_VERSION, {configs = {modules = LUIOX_LIBCA_MODULES}})
 -- test 模块必须显式点名：test_helper 调用 ca::test::top_project_path()，
 -- 缺模块时链接期 undefined reference；包 on_load 按依赖闭包展开排序链接项。
--- libjbc 0.4.24 起直接用 luiox-repo 定义：上游 on_load 已自带 /utf-8 修正
--- （原项目内联定义的唯一存在理由，其文件头自注"修复合入上游后整体退役"），
--- xmake/packages/libjbc.lua 随本次升级删除；词条 add_deps 已钉家族超集串。
-add_requires("libjbc 0.4.24")
+-- libjbc 走项目内联包定义（xmake/packages/libjbc.lua，libca 钉本仓单源）：
+-- mjbase 闭包的 libjhasm 0.3.3 安装沙箱自带仓内内联 libjbc 词条（上限
+-- 0.4.22），闭包三处 libjbc 边须钉 0.4.22 过沙箱（见下 requireconf）——
+-- luiox-repo 词条无 0.4.22 条目，内联定义是唯一承载形态（同 mjt/mjbase
+-- 先例）。顶层与闭包同用 0.4.22 单实例（0.4.23 纯文档+测试面、0.4.24 纯
+-- libca 依赖接线，均无 API 差）；待 libjhasm 发含 0.4.24 内联词条的新版本
+-- 后，闭包钉定翻 0.4.24，本文件再整体退役。
+includes("xmake/packages/libjbc.lua")
+add_requires("libjbc 0.4.22")
 add_requires("libjstr 0.0.4")
 add_requires("libjbytecode 0.0.2")
-add_requires("libjzip 0.0.4")
+-- libjzip 跟 mjbase 包词条裸名 add_deps 的浮动目标 0.0.5（mjt#78 同病：裸名
+-- 依赖不吃消费图顶层钉版、按包仓最新浮动，顶层落后即双实例分裂）。浮动目标
+-- 上移时两处（本行 + mjbase.libjzip requireconf）同步改，不得单边。
+add_requires("libjzip 0.0.5")
 -- libgarena 单源版本变量：顶层与嵌套 override 钉定（见下）同源取值，复刻
 -- LUIOX_LIBCA_VERSION 纪律。0.0.4->0.0.5 曾在 #44 停跟：当时顶层翻 0.0.5
 -- 但 libjbytecode 缓存实例仍按旧 garena 头构建——0.0.5 给 Arena 加
@@ -206,35 +214,48 @@ add_requireconfs("libjdk_finder.libca",          {version = LUIOX_LIBCA_VERSION,
 -- 单实例，且防未来词条发新版后嵌套解析漂移。
 add_requireconfs("libjbytecode.libjstr",         {version = "0.0.4", override = true})
 add_requireconfs("libjbytecode.libgarena",       {version = LUIOX_LIBGARENA_VERSION, override = true})
--- 帧换装底座：mjbase（hierarchy/LCA 公共父类求解 + 帧查询面）及其依赖闭包
--- libjstd/libjhasm/libjclassfile；zlib/libarchive 随 mjbase 链接闭包（libarchive
--- 覆盖包见上方 mj2x-repo，mjbase 静态库闭包含 libarchive 符号，消费方须同版本
--- 同配置实例满足 final link）。
-add_requires("mjbase 0.0.4")
+-- 帧换装底座：mjbase 0.0.5（hierarchy/LCA 公共父类求解 + 帧查询面，帧换装
+-- 底座）。0.0.4→0.0.5：libjbc 下界对齐 libjhasm 0.3.3 安装沙箱内联词条上限
+-- （0.4.22；0.0.4 的 >=0.4.23 区间在沙箱内无法落地被当裸 git ref clone，CI
+-- 实证 fatal: Remote branch >=0.4.23 not found）+ 包面 libarchive 依赖退场
+-- （本仓 libarchive 走顶层 mj2x-repo 覆盖包，两处同版本同配置实例归并）。
+-- 依赖闭包 libjstd/libjhasm/libjclassfile 顶层显式钉版；zlib 随 mjbase 链接
+-- 闭包。
+add_requires("mjbase 0.0.5")
 add_requires("libjclassfile 0.0.2")
 add_requires("libjstd 0.0.1")
 add_requires("libjhasm 0.3.3")
 add_requires("zlib")
--- mjbase/libjhasm/libjclassfile/libjstd 闭包的嵌套 libca 全路径钉定（同上纪律，
--- 缺一条就多一个实例）：libjhasm 内部依赖链 libjblw→libjbytecode 逐级列出。
-add_requireconfs("libjclassfile.libca",                            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjclassfile.libjstr.libca",                    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjstd.libca",                                  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libca",                                 {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libjblw.libca",                         {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libjblw.libjbytecode.libca",            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libjblw.libjbytecode.libjstr.libca",    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libjblw.libjbytecode.libgarena.libca",  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libjbytecode.libca",                    {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libjbytecode.libjstr.libca",            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("libjhasm.libjbytecode.libgarena.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("mjbase.libca",                                   {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("mjbase.libjbc.libca",                            {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("mjbase.libjstd.libca",                           {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("mjbase.libjhasm.libca",                          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("mjbase.libjhasm.libjblw.libca",                  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("mjbase.libjhasm.libjblw.libjbytecode.libca",     {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
-add_requireconfs("mjbase.libjhasm.libjbytecode.libca",             {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+-- mjbase 闭包嵌套中间包钉定：词条对 libjstr/libjzip/libgarena/libjclassfile
+-- 为裸名、对 libjbc/libjhasm 为下界区间——不钉即浮动取包仓最新版与顶层钉版
+-- 分裂双实例（libjbc#1 0.4.26 / libjzip#1 0.0.5，CI 实证），区间还会进沙箱
+-- 触发裸 ref clone。libjbc 三条边钉 0.4.22（libjhasm 0.3.3 安装沙箱内联词条
+-- 上限，0.4.24 不被内层识别即裸 ref clone 必炸，CI 实证；与顶层同版本单
+-- 实例），其余钉到与顶层同版本，闭包内不含任何区间约束。
+add_requireconfs("mjbase.libjstr",        {version = "0.0.4", override = true})
+add_requireconfs("mjbase.libgarena",      {version = LUIOX_LIBGARENA_VERSION, override = true})
+add_requireconfs("mjbase.libjzip",        {version = "0.0.5", override = true})
+add_requireconfs("mjbase.libjclassfile",  {version = "0.0.2", override = true})
+add_requireconfs("mjbase.libjbc",         {version = "0.4.22", override = true})
+add_requireconfs("mjbase.libjstd",        {version = "0.0.1", override = true})
+add_requireconfs("mjbase.libjhasm",       {version = "0.3.3", override = true})
+add_requireconfs("mjbase.libjhasm.libjbc", {version = "0.4.22", override = true})
+add_requireconfs("libjhasm.libjbc",       {version = "0.4.22", override = true})
+add_requireconfs("libjclassfile.libjstr", {version = "0.0.4", override = true})
+-- mjbase 闭包的嵌套 libca 全路径钉定（词条已自钉同款超集串，此处按路径补钉
+-- 防漂移；libjhasm 0.3.x 后端为 libjbc，libjblw/libjbytecode 链已退役不列）。
+add_requireconfs("libjclassfile.libca",                 {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjclassfile.libjstr.libca",         {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjstd.libca",                       {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libca",                      {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("libjhasm.libjbc.libca",               {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libca",                        {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjbc.libca",                 {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjstd.libca",                {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libca",               {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjhasm.libjbc.libca",        {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjclassfile.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
+add_requireconfs("mjbase.libjclassfile.libjstr.libca",  {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 -- i18n/resources 构建规则内嵌（.lang/.resources add_files 规则，包安装产物
 -- 不带规则；来源 luiox/libca @ 1ab29dea，libca 升级若规则变更需同步）。
 includes("xmake/libca_rules.lua")
