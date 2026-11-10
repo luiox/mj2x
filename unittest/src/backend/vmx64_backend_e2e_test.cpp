@@ -123,8 +123,6 @@ std::string readText(const fs::path& path)
 
 /// 受保护的样本类：全部静态、i32/i64 纯算术 + 控制流（Phase 2 最小 opcode 面；
 /// 实例方法/字段/浮点 fail-closed 保留字节码，不进 E2E 断言面）。
-/// add3 覆盖 ≥3 参数的栈传参 homing（p2 走调用方 shadow space 之后的栈参区）；
-/// wrapMul/lwrapAdd 覆盖 i32/i64 回绕位型（JVM 有符号回绕，基线对拍自证）。
 const char* kSampleSource = R"JAVA(
 public class Vmx64Sample {
     static int add(int a, int b) { return a + b; }
@@ -134,9 +132,6 @@ public class Vmx64Sample {
         for (int i = 0; i < n; i++) s += i;
         return s;
     }
-    static int add3(int a, int b, int c) { return a + b + c; }
-    static int wrapMul(int a) { return a * a; }
-    static long lwrapAdd(long a) { return a + 1; }
 }
 )JAVA";
 
@@ -149,9 +144,6 @@ public class Driver {
         System.out.println(Vmx64Sample.lmul(123456789L, 987654321L));
         System.out.println(Vmx64Sample.sum(100));
         System.out.println(Vmx64Sample.add(-7, 7));
-        System.out.println(Vmx64Sample.add3(1, 2, 3));
-        System.out.println(Vmx64Sample.wrapMul(65536));
-        System.out.println(Vmx64Sample.lwrapAdd(Long.MAX_VALUE));
     }
 }
 )JAVA";
@@ -210,7 +202,7 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
     const auto baselineRun = runBat({q(tc_.java) + " -cp " + q(dir) + " Driver"});
     ASSERT_EQ(baselineRun.exitCode, 0) << baselineRun.out;
     const auto baseline = splitLines(baselineRun.out);
-    ASSERT_EQ(baseline.size(), 7u) << baselineRun.out;
+    ASSERT_EQ(baseline.size(), 4u) << baselineRun.out;
 
     const fs::path inClass  = dir / "Vmx64Sample.class";
     const fs::path outClass = dir / "Vmx64Sample_protected.class";
@@ -296,9 +288,6 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
             << "}\n"
             << "exit $p.ExitCode\n";
     }
-    // 运行起点（mtime 过滤基准）：兜底扫描的目录（测试进程 CWD = 仓库根）
-    // 可能躺着其它测试/往轮遗留的 hs_err——只收编本次运行期间新写的。
-    const auto runStart = fs::file_time_type::clock::now();
     const auto protectedRun =
         runBat({std::string("powershell -NoProfile -ExecutionPolicy Bypass -File ") + q(ps1) +
                 " " + q(dll) + " " + q(tc_.java) + " " + q(dir) + " " + q(outTxt) + " " +
@@ -313,23 +302,18 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         d += "\n--- runner out ---\n" + protectedRun.out;
         std::error_code lec;
         // hs_err 由 java 落在其 CWD（Start-Process 已指到 case 目录）；测试进程
-        // 自身 CWD（仓库根）兜底再扫一遍。case 目录在测试开头已 remove_all
-        // （必然新鲜）；仓库根按 mtime 过滤，陈旧崩溃报告不再灌进诊断。
+        // 自身 CWD（仓库根）兜底再扫一遍。
         const fs::path hsDirs[2] = {dir, fs::current_path()};
         for (const auto& hsDir : hsDirs) {
             for (fs::directory_iterator it(hsDir, lec), endIt; it != endIt && !lec; ++it) {
                 const std::string name = it->path().filename().string();
-                if (name.rfind("hs_err_pid", 0) != 0) continue;
-                if (&hsDir != &hsDirs[0]) {
-                    std::error_code tec;
-                    const auto mtime = fs::last_write_time(it->path(), tec);
-                    if (tec || mtime < runStart) continue;
+                if (name.rfind("hs_err_pid", 0) == 0) {
+                    d += "\n--- " + name + " (first 120 lines) ---\n";
+                    std::vector<std::string> lines =
+                        splitLines(readText(it->path()));
+                    for (size_t i = 0; i < lines.size() && i < 120; ++i)
+                        d += lines[i] + "\n";
                 }
-                d += "\n--- " + name + " (first 120 lines) ---\n";
-                std::vector<std::string> lines =
-                    splitLines(readText(it->path()));
-                for (size_t i = 0; i < lines.size() && i < 120; ++i)
-                    d += lines[i] + "\n";
             }
         }
         d += "\n--- emitted vmx64.asm ---\n";

@@ -811,8 +811,8 @@ TEST(Vmx64StreamInterpTest, WraparoundBitPatterns)
                            new VarInsnNode(Opcodes::ILOAD, 0),
                            new VarInsnNode(Opcodes::ILOAD, 1),
                            new InsnNode(Opcodes::ISUB),
-                           new VarInsnNode(Opcodes::IMUL),
-                           new VarInsnNode(Opcodes::IRETURN),
+                           new InsnNode(Opcodes::IMUL),
+                           new InsnNode(Opcodes::IRETURN),
                        },
                        4, 3),
             reason);
@@ -845,8 +845,8 @@ TEST(Vmx64StreamInterpTest, WraparoundBitPatterns)
                            new VarInsnNode(Opcodes::LLOAD, 0),
                            new InsnNode(Opcodes::LCONST_1),
                            new InsnNode(Opcodes::LSUB),
-                           new VarInsnNode(Opcodes::LMUL),
-                           new VarInsnNode(Opcodes::LRETURN),
+                           new InsnNode(Opcodes::LMUL),
+                           new InsnNode(Opcodes::LRETURN),
                        },
                        4, 3),
             reason);
@@ -886,7 +886,7 @@ TEST(Vmx64StreamInterpTest, StackArgsHomeFromCallerShadowSpace)
                        new InsnNode(Opcodes::IADD),
                        new VarInsnNode(Opcodes::ILOAD, 2),
                        new InsnNode(Opcodes::IADD),
-                       new VarInsnNode(Opcodes::IRETURN),
+                       new InsnNode(Opcodes::IRETURN),
                    },
                    2, 3),
         reason);

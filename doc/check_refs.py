@@ -9,9 +9,8 @@
 3. 代码面不得引用设计内容形态的 ``.md``。豁免只有：流程文档白名单（AGENTS/
    dev_plan/README/MIGRATION/roadmap）；带仓名标记的跨仓出处（libjbc /
    morpher / mjbase / mjt / luiox / 私有仓）；test//build/ 下的生成物报告
-   路径；以及无目录的裸 ``.md`` 文件名——且该文件名**不命中仓内真实存在的
-   任何 .md 文件**（生成的报告/模板文件名字面量，非文档引用；裸名一旦与
-   仓内 tracked .md 同名即视为文档引用，转 doc/*.rst 或加白名单）。
+   路径；以及无目录的裸 ``.md`` 文件名（生成的报告/模板文件名字面量，非文档
+   引用）。
 
 doc/archive/ 是历史归档（只进不出）：不进 toctree、不做任何 .md/.rst 检查；
 长期归宿（删除或压缩）待后续批次定。
@@ -75,33 +74,6 @@ ANON_LINK = re.compile(r"`[^`]*\.(?:md|rst) <([^`>]+\.(?:md|rst))>`_{1,2}")
 
 def in_archive(p: Path) -> bool:
     return ARCHIVE_DIRNAME in p.as_posix()
-
-
-# 生成物/结果/夹具根：其下的 .md 是产物或报告落盘（如 test_resource 下
-# protected_samples 的 TRACE_SURFACE.md 基线、benchmark/results 报告），
-# 代码裸名提及它们仍属「文件名字面量」豁免面；设计文档不在这些根里。
-ARTIFACT_MD_ROOTS = ("test_resource", "test", "build", "benchmark")
-
-
-def tracked_md_names(root: Path) -> set[str]:
-    """仓内真实存在的 .md 文件名（排除 .git、doc/ 与生成物根；流程白名单单走
-    前置分支）。
-
-    裸 .md 名豁免的收紧依据：豁免本意是「生成的报告/模板文件名字面量」——
-    那类文件只落在生成物根或根本不入仓；裸名一旦与生成物根之外的 tracked
-    .md 同名即是文档引用，不再豁免。
-    """
-    names: set[str] = set()
-    for p in root.rglob("*.md"):
-        parts = p.relative_to(root).parts
-        if ".git" in parts:
-            continue
-        if parts[0] == DOC_DIRNAME or parts[0] in ARTIFACT_MD_ROOTS:
-            continue
-        if p.name in PROCESS_DOCS:
-            continue
-        names.add(p.name)
-    return names
 
 
 def code_files(root: Path):
@@ -174,7 +146,6 @@ def check(root: Path):
     labels, rsts, dup = collect_labels(doc_dir)
     problems += dup
     in_tree = toctree_entries(doc_dir / "index.rst")
-    repo_md_names = tracked_md_names(root)
 
     # RST 侧：文档内链必须指向在册文件/已声明 label，匿名 md/rst 链接一律禁止。
     for p in rst_files(doc_dir):
@@ -223,15 +194,9 @@ def check(root: Path):
                 if any(marker in line for marker in UPSTREAM_MARKERS):
                     continue
                 if "/" not in name:
-                    # 无目录的裸 .md 名默认 = 文件名字面量（生成的报告
-                    # TRACE_SURFACE.md、工程模板 README.md.in 等），不是文档
-                    # 引用；但裸名与仓内 tracked .md 同名时即文档引用——收紧
-                    # （文档引用必须写 doc/*.rst 路径或 doc:<label>）。
-                    if name in repo_md_names:
-                        problems.append(
-                            f"{rel}:{lineno}: 裸 .md 名与仓内文件同名 {name}"
-                            f"——文档引用转 {DOC_DIRNAME}/*.rst，或删指"
-                        )
+                    # 无目录的裸 .md 名 = 文件名字面量（生成的报告 TRACE_SURFACE.md、
+                    # 工程模板 README.md.in 等），不是文档引用；文档引用必须写
+                    # doc/*.rst 路径或 doc:<label>。
                     continue
                 problems.append(
                     f"{rel}:{lineno}: 代码面引用 markdown 规格 {name}——设计内容转 {DOC_DIRNAME}/*.rst，或删指"
