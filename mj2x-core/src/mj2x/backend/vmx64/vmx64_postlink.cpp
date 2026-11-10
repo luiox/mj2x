@@ -190,15 +190,17 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
     if (img.size() < 0x40) return ca::core::Err(std::string("file too small to be a PE"));
 
     // --- PE 骨架校验（fail-closed，任何不满足即拒绝） ---
+    // peOff 指向 PE 签名（4 字节），COFF 头在其后：字段全部相对 coffOff 取。
     if (rd16(img, 0) != kMzSignature) return ca::core::Err(std::string("missing MZ signature"));
     const uint32_t peOff = rd32(img, kDoshdrE_lfanewOff);
-    if (peOff + kCoffHeaderBytes > img.size() || rd32(img, peOff) != kPeSignature)
+    if (peOff + 4 + kCoffHeaderBytes > img.size() || rd32(img, peOff) != kPeSignature)
         return ca::core::Err(std::string("missing PE signature"));
-    if (rd16(img, peOff + kCoffMachineOff) != kMachineAmd64)
+    const size_t coffOff = peOff + 4;
+    if (rd16(img, coffOff + kCoffMachineOff) != kMachineAmd64)
         return ca::core::Err(std::string("not an AMD64 PE"));
-    const uint16_t numSections = rd16(img, peOff + kCoffNumSectionsOff);
-    const uint16_t sizeOpt     = rd16(img, peOff + kCoffSizeOptionalOff);
-    const size_t   optOff      = peOff + kCoffHeaderBytes;
+    const uint16_t numSections = rd16(img, coffOff + kCoffNumSectionsOff);
+    const uint16_t sizeOpt     = rd16(img, coffOff + kCoffSizeOptionalOff);
+    const size_t   optOff      = coffOff + kCoffHeaderBytes;
     if (optOff + sizeOpt > img.size()) return ca::core::Err(std::string("truncated optional header"));
     if (rd16(img, optOff + kOptMagicOff) != kOptionalMagicP32)
         return ca::core::Err(std::string("PE32+ optional header required"));

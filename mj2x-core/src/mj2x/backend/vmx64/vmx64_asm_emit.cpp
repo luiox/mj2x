@@ -119,7 +119,7 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
     out += "    test r12, r12\n";
     out += "    jz @F\n";
     out += "    xor rdx, r11\n";
-    out += "    @@\n";
+    out += "    @@:\n";
     out += "    add rdx, r11\n";
     out += "    sub rdx, r12\n";
     out += "    jmp rdx\n";
