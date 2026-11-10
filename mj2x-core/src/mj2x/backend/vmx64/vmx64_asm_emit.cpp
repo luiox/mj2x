@@ -90,27 +90,38 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
     out += ";\n";
     out += "; Register contract (see vmx64_asm_emit.hpp):\n";
     out += ";   rbx=pc(stream offset)  rsi=vreg slots  rdi=site table  r14=stream base\n";
-    out += ";   r13=done label         r15=K1         r12=rolling key\n";
+    out += ";   r13=done label         r15=K1         r12=image delta holdover\n";
+    out += ";     r12 = sites table preferred VA (base qword static value) minus its\n";
+    out += ";     runtime address, computed once in the entry prologue. Unencrypted\n";
+    out += ";     artifacts resolve to 0 (the base qword is live-relocated); post-link\n";
+    out += ";     encrypted artifacts carry the static preferred value.\n";
     out += "; Scratch: rax rcx rdx r8-r11 (not preserved across handlers).\n";
     out += "; Every handler ends with vmx64_NEXT: fetch next handler number from the\n";
-    out += "; stream (encrypted with the XOR rolling key) -> decrypt -> encrypted site\n";
-    out += "; table -> decrypt address -> jmp rdx.\n";
+    out += "; stream (XOR keystream keyed by pc) -> decrypt. The site-table entry is\n";
+    out += "; form-branching on r12: zero = unencrypted artifact (entry is the plain\n";
+    out += "; ks64-addend form, live relocation applied) — add-only; nonzero = post-link\n";
+    out += "; encrypted artifact — undo the entry XOR first, then add/sub the image\n";
+    out += "; delta. Both forms converge on jmp rdx.\n";
     out += "; ============================================================================\n";
     out += "\n";
     out += "vmx64_NEXT macro\n";
     out += "    movzx eax, word ptr [r14+rbx]\n";
-    out += "    imul r12, rbx, 61C88647h\n";
-    out += "    rol r12, 13\n";
-    out += "    xor r12, r15\n";
-    out += "    imul r12, r12, 045D9F3Bh\n";
-    out += "    xor ax, r12w\n";
+    out += "    imul rcx, rbx, 61C88647h\n";
+    out += "    rol rcx, 13\n";
+    out += "    xor rcx, r15\n";
+    out += "    imul rcx, rcx, 045D9F3Bh\n";
+    out += "    xor ax, cx\n";
     out += "    imul r11, rax, 61C88647h\n";
     out += "    rol r11, 13\n";
     out += "    xor r11, r15\n";
     out += "    imul r11, r11, 045D9F3Bh\n";
     out += "    mov rdx, [rdi+rax*8]\n";
+    out += "    test r12, r12\n";
+    out += "    jz @F\n";
+    out += "    xor rdx, r11\n";
+    out += "    @@:\n";
     out += "    add rdx, r11\n";
-    out += "    xor r12, r11\n";
+    out += "    sub rdx, r12\n";
     out += "    jmp rdx\n";
     out += "endm\n";
     out += "\n";
@@ -340,14 +351,30 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     }
     out += "\n";
     out += "align 8\n";
+    // 表头三件套：magic（加密器定位符，加密后清零）+ 站点数（校验用，加密后
+    // 清零）。二者不落 label——消费方只有字节级扫描的 post-link 加密器。
+    out += "    dq " + masmHex(kVmx64TableMagic) + "\n";
+    out += "    dq " + masmHex(static_cast<uint64_t>(program.sites.size())) + "\n";
     out += "mj2x_vmx64_sites_" + methodTag + " label qword\n";
     // 站点表：entry[t] = handler 地址 - ks64(t)（源级可表达的加密形态：
-    // 重定位 + addend；handler 尾 add 回明文）。
+    // 重定位 + addend；handler 尾 xor/add 解回明文）。post-link 加密器把
+    // 落盘字节改写为 (handler 首选 VA - ks64(t)) XOR ks64(t) 纯异或形态，
+    // 并把表区+base qword 的 DIR64 重定位翻成 ABSOLUTE（装载器不再触碰）。
     for (size_t t = 0; t < program.sites.size(); ++t) {
         const uint64_t addend = vmx64Ks64(static_cast<uint64_t>(t), k1);
         out += "    dq mj2x_vmx64_h_" + std::string(vmx64OpHandlerName(program.sites[t].op)) +
                "-" + masmHex(addend) + "\n";
     }
+    // k1 qword：加密器的密钥材料单源（与 prologue 的 mov r15 imm 同一 C++
+    // 局部变量，无漂移面），加密后清零。base qword：自引用重定位指针——
+    // 链接期落盘值 = 站点表首选 VA；未加密产物装载器照常改写它
+    // （运行时 = 表地址，r12 = 0，dispatch 与 Phase 2 逐位一致）；加密后
+    // 重定位翻 ABSOLUTE，静态首选 VA 常驻，r12 = 表首选 VA - 表运行时地址
+    //（-delta），handler 侧 sub rdx, r12 补回镜像基差。
+    out += "mj2x_vmx64_k1_" + methodTag + " label qword\n";
+    out += "    dq " + masmHex(k1) + "\n";
+    out += "mj2x_vmx64_base_" + methodTag + " label qword\n";
+    out += "    dq mj2x_vmx64_sites_" + methodTag + "\n";
     out += "\n";
 
     // --- JNI 入口 ---
@@ -432,6 +459,12 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
         }
     }
     out += "    xor ebx, ebx\n";
+    // r12 = base qword 值 - 站点表运行时地址：未加密产物（base 活重定位）= 0；
+    // 加密产物（base 静态首选 VA）= -镜像装载差。vmx64_NEXT 的 sub rdx, r12
+    // 消费。参数 homing 之后才可动 r8 之外的易变寄存器——这里只用 r12/rdi。
+    out += "    lea r12, [mj2x_vmx64_base_" + methodTag + "]\n";
+    out += "    mov r12, [r12]\n";
+    out += "    sub r12, rdi\n";
     out += "    vmx64_NEXT\n";
     out += "mj2x_vmx64_done_" + methodTag + ":\n";
     out += "    add rsp, " + masmHex(localsSize) + "\n";

@@ -2,6 +2,7 @@
 #include "mj2x/logging.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
+#include "mj2x/backend/vmx64/vmx64_postlink.hpp"
 
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -1487,6 +1488,20 @@ int main(int argc, char** argv)
             buildConfig.outputLibraryPath = nativeLibraryPath;
             buildConfig.processTimeout    = processTimeout;
             compileRc                     = mj2x::cli::buildXmakeProject(buildConfig);
+            if (compileRc == 0 && options.cBackendKind == CEmitterBackend::Vmx64) {
+                // vmx64 post-link 站点表纯 XOR 加密（Phase 3，契约见
+                // vmx64_asm_emit.hpp）：产出 DLL 之后、嵌入/交付之前的单
+                // 消费点。fail-closed——加密失败即整体失败，不交付半加密
+                // 产物。--generate-xmake 工作流不经此处（未加密产物本身
+                // 可运行，加密是纯可选加固）。
+                const auto encrypted =
+                    mj2x::vmx64EncryptSiteTable(buildConfig.outputLibraryPath.string());
+                if (encrypted.is_err()) {
+                    CA_LOGT_ERROR("cli", "mj2x vmx64 post-link: {}\n",
+                                  encrypted.unwrap_err().c_str());
+                    return 1;
+                }
+            }
         }
         else {
             std::filesystem::path crtRoot;

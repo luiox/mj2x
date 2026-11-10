@@ -699,7 +699,7 @@ TEST(Vmx64StreamInterpTest, Ks64AsmMacroReplaysCppSide)
         }
         if (!cur.empty()) lines.push_back(cur);
     }
-    ASSERT_EQ(lines.size(), 15u)
+    ASSERT_EQ(lines.size(), 19u)
         << "vmx64_NEXT macro line count drifted: " << body;
 
     const auto parseHexLit = [](const std::string& text) -> uint64_t {
@@ -723,19 +723,24 @@ TEST(Vmx64StreamInterpTest, Ks64AsmMacroReplaysCppSide)
     uint64_t p1 = kVmx64P1, p2 = kVmx64P2;
     expectLine(0, "vmx64_NEXT macro", nullptr, "macro head");
     expectLine(1, "    movzx eax, word ptr [r14+rbx]", nullptr, "tEnc fetch");
-    expectLine(2, "    imul r12, rbx, ", &p1, "chain key P1");
-    expectLine(3, "    rol r12, 13", nullptr, "chain rol");
-    expectLine(4, "    xor r12, r15", nullptr, "chain xor K1");
-    expectLine(5, "    imul r12, r12, ", &p2, "chain key P2");
-    expectLine(6, "    xor ax, r12w", nullptr, "tEnc decrypt");
+    expectLine(2, "    imul rcx, rbx, ", &p1, "chain key P1");
+    expectLine(3, "    rol rcx, 13", nullptr, "chain rol");
+    expectLine(4, "    xor rcx, r15", nullptr, "chain xor K1");
+    expectLine(5, "    imul rcx, rcx, ", &p2, "chain key P2");
+    expectLine(6, "    xor ax, cx", nullptr, "tEnc decrypt");
     expectLine(7, "    imul r11, rax, ", &p1, "table key P1");
     expectLine(8, "    rol r11, 13", nullptr, "table rol");
     expectLine(9, "    xor r11, r15", nullptr, "table xor K1");
     expectLine(10, "    imul r11, r11, ", &p2, "table key P2");
     expectLine(11, "    mov rdx, [rdi+rax*8]", nullptr, "table load");
-    expectLine(12, "    add rdx, r11", nullptr, "address decrypt");
-    expectLine(13, "    xor r12, r11", nullptr, "rolling key mix");
-    expectLine(14, "    jmp rdx", nullptr, "indirect dispatch");
+    expectLine(12, "    test r12, r12", nullptr, "form branch test");
+    expectLine(13, "    jz @F", nullptr, "plain-form artifact branch");
+    expectLine(14, "    xor rdx, r11", nullptr, "entry un-XOR (post-link form)");
+    expectLine(15, "    @@:", nullptr, "plain-form join (MASM anonymous label)");
+    expectLine(16, "    add rdx, r11", nullptr, "ks64 addend");
+    expectLine(17, "    sub rdx, r12", nullptr, "image delta compensation");
+    expectLine(18, "    jmp rdx", nullptr, "indirect dispatch");
+    ASSERT_EQ(lines.size(), 19u) << "trailing lines in vmx64_NEXT macro: " << body;
 
     // --- b) 数值层：按宏语义独立重放 vs vmx64Ks64 ---
     const auto replayKs64 = [](uint64_t x, uint64_t k1) {
@@ -909,4 +914,54 @@ TEST(Vmx64StreamInterpTest, StackArgsHomeFromCallerShadowSpace)
     const auto r = interpretWithArgs(*prog, {10u, 20u, 30u});
     ASSERT_TRUE(r.ok) << r.diag;
     EXPECT_EQ(r.value, 60u);
+}
+
+// ===========================================================================
+// 10. Phase 3 数据表契约：表头 magic/计数、表尾 k1/base 自引用指针、入口
+//     prologue 的镜像差计算。post-link 加密器（vmx64_postlink）按此布局
+//     字节级扫描改写——布局漂移即加密器失明，文本级锁死。
+// ===========================================================================
+TEST(Vmx64StreamInterpTest, DataTableCarriesEncryptorContract)
+{
+    std::string reason;
+    auto        prog = encodeSumJavacShape(reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    const uint64_t seed = 0x5EED;
+    const uint64_t k1   = ca::random::SplitMix64(seed ^ 0x766D783634ULL).next();
+    const std::string asmText = Vmx64AsmEmitter::emitMethod(*prog, seed, "tag0");
+    ASSERT_EQ(asmText.find(".err"), std::string::npos) << asmText;
+
+    // 表头：magic（ASCII "VMX64TBL" 小端）+ 站点数，不落 label——消费方只有
+    // 加密器的字节级扫描。
+    const auto masmHex = [](uint64_t v) {
+        std::string h;
+        char        buf[32];
+        std::snprintf(buf, sizeof(buf), "%llx", static_cast<unsigned long long>(v));
+        h = buf;
+        if (h[0] >= 'a' && h[0] <= 'f') h.insert(h.begin(), '0');
+        return h + "h";
+    };
+    const size_t magicPos =
+        asmText.find(std::string("    dq ") + masmHex(kVmx64TableMagic) + "\n");
+    ASSERT_NE(magicPos, std::string::npos) << asmText;
+    const size_t countPos =
+        asmText.find("    dq " + masmHex(static_cast<uint64_t>(prog->sites.size())) + "\n");
+    ASSERT_GT(countPos, magicPos) << asmText;
+    // 表尾：k1（加密器密钥材料单源，与 prologue imm 同一 C++ 局部变量）+
+    // base 自引用指针（未加密 = 活重定位，加密 = 静态首选 VA）。
+    // 布局顺序即加密器定位假设：magic → count →（表项区）→ k1 → base，
+    // 相对顺序一并锁死（表项区由站点表发射点另行逐行断言）。
+    const size_t k1Pos =
+        asmText.find("mj2x_vmx64_k1_tag0 label qword\n    dq " + masmHex(k1) + "\n");
+    ASSERT_GT(k1Pos, countPos) << asmText;
+    const size_t basePos =
+        asmText.find("mj2x_vmx64_base_tag0 label qword\n    dq mj2x_vmx64_sites_tag0\n");
+    ASSERT_GT(basePos, k1Pos) << asmText;
+    // prologue 镜像差：r12 = base 值 - 表运行时地址（未加密 = 0，加密 = -delta）。
+    EXPECT_NE(asmText.find("    lea r12, [mj2x_vmx64_base_tag0]\n"
+                           "    mov r12, [r12]\n"
+                           "    sub r12, rdi\n"),
+              std::string::npos)
+        << asmText;
 }
