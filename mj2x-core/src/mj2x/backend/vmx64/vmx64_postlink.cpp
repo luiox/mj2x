@@ -1,11 +1,12 @@
 #include "mj2x/backend/vmx64/vmx64_postlink.hpp"
 
 #include <cstdint>
-#include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <set>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "mj2x/backend/vmx64/vmx64_asm_emit.hpp"
@@ -27,10 +28,8 @@ constexpr size_t kCoffNumSectionsOff = 2;
 constexpr size_t kCoffSizeOptionalOff = 16;
 constexpr size_t kCoffHeaderBytes   = 20;
 constexpr size_t kOptMagicOff       = 0;
-constexpr size_t kOptImageBaseOff   = 24;    // PE32+ 的 ImageBase（u64）
 constexpr size_t kSectionEntryBytes = 40;
 constexpr size_t kSecNameOff        = 0;
-constexpr size_t kSecVirtualSizeOff = 8;
 constexpr size_t kSecVirtualAddressOff = 12;
 constexpr size_t kSecSizeRawOff     = 16;
 constexpr size_t kSecPtrRawOff      = 20;
@@ -78,23 +77,13 @@ struct Section
     uint32_t    rawPtr         = 0;
 };
 
-/// @brief 表实例：一次 magic 命中解析出的方法级表布局（原始文件偏移域）。
-struct TableInstance
-{
-    size_t   magicOff   = 0;   ///< magic qword（加密后清零）
-    size_t   countOff   = 0;   ///< 站点数 qword（加密后清零）
-    size_t   entriesOff = 0;   ///< 表项起点（count × 8 字节）
-    size_t   k1Off      = 0;   ///< k1 qword（加密后清零）
-    size_t   baseOff    = 0;   ///< base qword（自引用指针，内容保留）
-    uint32_t count      = 0;
-    uint64_t k1         = 0;
-};
-
 /// @brief 单表改写（内存镜像上）。@p flipRvas 收集需熄灭的重定位目标 RVA。
-ca::core::Result<TableInstance, std::string> rewriteTable(std::vector<uint8_t>& img,
-                                                          size_t magicOff,
-                                                          const Section& host,
-                                                          std::set<uint32_t>& flipRvas)
+///
+/// @return 表尾 base qword 的文件偏移（扫描续行跳过表体，密文不再当定位符解析）。
+ca::core::Result<size_t, std::string> rewriteTable(std::vector<uint8_t>& img,
+                                                   size_t magicOff,
+                                                   const Section& host,
+                                                   std::set<uint32_t>& flipRvas)
 {
     // 布局校验：整表（count 项 + k1 + base）必须完整落在宿主段原始数据内。
     if (magicOff + 8 > img.size()) return ca::core::Err(std::string("magic qword runs past EOF"));
@@ -107,7 +96,7 @@ ca::core::Result<TableInstance, std::string> rewriteTable(std::vector<uint8_t>& 
                                std::to_string(magicOff)));
     const size_t k1Off   = entriesOff + static_cast<size_t>(count64) * 8;
     const size_t baseOff = k1Off + 8;
-    if (baseOff + 8 > host.rawPtr + host.rawSize)
+    if (baseOff + 8 > static_cast<size_t>(host.rawPtr) + host.rawSize)
         return ca::core::Err(std::string("table layout exceeds host section raw data"));
     const uint64_t k1 = rd64(img, k1Off);
     if (k1 == 0) return ca::core::Err(std::string("k1 qword is zero (already encrypted or corrupt)"));
@@ -128,15 +117,7 @@ ca::core::Result<TableInstance, std::string> rewriteTable(std::vector<uint8_t>& 
     wr64(img, countOff, 0);
     wr64(img, k1Off, 0);
 
-    TableInstance inst;
-    inst.magicOff   = magicOff;
-    inst.countOff   = countOff;
-    inst.entriesOff = entriesOff;
-    inst.k1Off      = k1Off;
-    inst.baseOff    = baseOff;
-    inst.count      = static_cast<uint32_t>(count64);
-    inst.k1         = k1;
-    return ca::core::Ok(std::move(inst));
+    return ca::core::Ok(baseOff);
 }
 
 /// @brief .reloc 熄灭：@p flipRvas 内的 DIR64 项翻 ABSOLUTE。
@@ -195,14 +176,16 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
     // peOff 指向 PE 签名（4 字节），COFF 头在其后：字段全部相对 coffOff 取。
     if (rd16(img, 0) != kMzSignature) return ca::core::Err(std::string("missing MZ signature"));
     const uint32_t peOff = rd32(img, kDoshdrE_lfanewOff);
-    if (peOff + 4 + kCoffHeaderBytes > img.size() || rd32(img, peOff) != kPeSignature)
+    if (static_cast<size_t>(peOff) + 4 + kCoffHeaderBytes > img.size()
+        || rd32(img, peOff) != kPeSignature)
         return ca::core::Err(std::string("missing PE signature"));
-    const size_t coffOff = peOff + 4;
+    const size_t coffOff = static_cast<size_t>(peOff) + 4;
     if (rd16(img, coffOff + kCoffMachineOff) != kMachineAmd64)
         return ca::core::Err(std::string("not an AMD64 PE"));
     const uint16_t numSections = rd16(img, coffOff + kCoffNumSectionsOff);
     const uint16_t sizeOpt     = rd16(img, coffOff + kCoffSizeOptionalOff);
     const size_t   optOff      = coffOff + kCoffHeaderBytes;
+    if (sizeOpt < 2) return ca::core::Err(std::string("optional header size too small"));
     if (optOff + sizeOpt > img.size()) return ca::core::Err(std::string("truncated optional header"));
     if (rd16(img, optOff + kOptMagicOff) != kOptionalMagicP32)
         return ca::core::Err(std::string("PE32+ optional header required"));
@@ -220,7 +203,7 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
         sec.virtualAddress = rd32(img, base + kSecVirtualAddressOff);
         sec.rawSize        = rd32(img, base + kSecSizeRawOff);
         sec.rawPtr         = rd32(img, base + kSecPtrRawOff);
-        if (sec.rawPtr + sec.rawSize > img.size())
+        if (static_cast<size_t>(sec.rawPtr) + sec.rawSize > img.size())
             return ca::core::Err(std::string("section raw data runs past EOF: " + sec.name));
         if (sec.name == ".reloc") relocSec = sec;
         else dataSecs.push_back(sec);
@@ -233,11 +216,13 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
     size_t              tables = 0;
     for (const auto& sec : dataSecs) {
         if (sec.rawSize < 8) continue;
-        for (size_t off = sec.rawPtr; off + 8 <= sec.rawPtr + sec.rawSize; off += 8) {
+        for (size_t off = sec.rawPtr;
+             off + 8 <= static_cast<size_t>(sec.rawPtr) + sec.rawSize; off += 8) {
             if (rd64(img, off) != kVmx64TableMagic) continue;
             auto rewritten = rewriteTable(img, off, sec, flipRvas);
             if (rewritten.is_err()) return ca::core::Err(std::move(rewritten).unwrap_err());
             ++tables;
+            off = std::move(rewritten).unwrap();   // 落到 base：循环 +8 越过表体续扫
         }
     }
     if (tables == 0)
@@ -246,12 +231,21 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
     auto quenched = quenchRelocations(img, relocSec, flipRvas);
     if (quenched.is_err()) return ca::core::Err(std::move(quenched).unwrap_err());
 
-    // --- 单次回写（校验全过才触盘） ---
-    std::ofstream outF(dllPath, std::ios::binary | std::ios::trunc);
-    if (!outF) return ca::core::Err(std::string("cannot open for write: " + dllPath));
-    outF.write(reinterpret_cast<const char*>(img.data()),
-               static_cast<std::streamsize>(img.size()));
-    if (!outF) return ca::core::Err(std::string("write-back failed: " + dllPath));
+    // --- 单次回写（校验全过才触盘；临时文件 + rename 原子替换，中途失败不毁产物） ---
+    const std::filesystem::path finalPath(dllPath);
+    const std::filesystem::path tmpPath = finalPath.string() + ".mj2x-enc-tmp";
+    {
+        std::ofstream outF(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!outF) return ca::core::Err(std::string("cannot open for write: " + tmpPath.string()));
+        outF.write(reinterpret_cast<const char*>(img.data()),
+                   static_cast<std::streamsize>(img.size()));
+        outF.close();
+        if (!outF) return ca::core::Err(std::string("write-back failed: " + tmpPath.string()));
+    }
+    std::error_code renameEc;
+    std::filesystem::rename(tmpPath, finalPath, renameEc);
+    if (renameEc)
+        return ca::core::Err(std::string("atomic rename failed: ") + renameEc.message());
     return ca::core::Ok();
 }
 

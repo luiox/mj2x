@@ -123,10 +123,11 @@ SyntheticPe makeSyntheticPe()
     wr64(sp.img, sp.baseOff, kImageBase + sp.tableRva);
 
     // --- .reloc：一个 page 块 4 个 DIR64 项（3 表项 + base）+ 全零终结块 ---
-    // （MSVC link.exe 的 .reloc 以全零块收尾——熄灭遍历必须认得它，回归锁定）
+    // （MSVC link.exe 的 .reloc 以全零块收尾——熄灭遍历必须认得它，回归锁定；
+    //   4 项 × 2B + 8B 头 = 16 本就 4 对齐，无补零。）
     const size_t block = kRelocRawPtr;
     wr32(sp.img, block, kDataVa);          // pageRVA
-    wr32(sp.img, block + 4, 8 + 8 + 2);    // 4 项 + 2 字节补零（块大小 4 对齐）
+    wr32(sp.img, block + 4, 8 + 4 * 2);    // blockSize = 16
     const uint32_t offs[4] = {sp.tableRva - kDataVa, sp.tableRva - kDataVa + 8,
                               sp.tableRva - kDataVa + 16, sp.baseRva - kDataVa};
     for (int i = 0; i < 4; ++i)
@@ -239,6 +240,9 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         ASSERT_TRUE(writeFile(f, img));
         const auto r = mj2x::vmx64EncryptSiteTable(f.string());
         EXPECT_TRUE(r.is_err()) << "non-AMD64 PE must be rejected";
+        std::vector<uint8_t> after;
+        ASSERT_TRUE(readFile(f, after));
+        EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
     // 表项重定位缺失（第 2 个 DIR64 项抹成 ABSOLUTE：高字节的 type 位清零）。
     {
@@ -262,5 +266,34 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         ASSERT_TRUE(writeFile(f, img));
         const auto r = mj2x::vmx64EncryptSiteTable(f.string());
         EXPECT_TRUE(r.is_err()) << "site count out of u16 domain must be rejected";
+        std::vector<uint8_t> after;
+        ASSERT_TRUE(readFile(f, after));
+        EXPECT_EQ(after, img) << "rejected input must be untouched";
+    }
+    // k1 为 0（已加密或损坏）。
+    {
+        const SyntheticPe sp = makeSyntheticPe();
+        auto               img = sp.img;
+        wr64(img, sp.entriesOff + 24, 0);   // k1 qword
+        const fs::path f = caseFile("zerok1.dll");
+        ASSERT_TRUE(writeFile(f, img));
+        const auto r = mj2x::vmx64EncryptSiteTable(f.string());
+        EXPECT_TRUE(r.is_err()) << "zero k1 must be rejected";
+        std::vector<uint8_t> after;
+        ASSERT_TRUE(readFile(f, after));
+        EXPECT_EQ(after, img) << "rejected input must be untouched";
+    }
+    // .reloc 畸形块（blockSize < 8）。
+    {
+        const SyntheticPe sp = makeSyntheticPe();
+        auto               img = sp.img;
+        wr32(img, kRelocRawPtr + 4, 4);
+        const fs::path f = caseFile("badreloc.dll");
+        ASSERT_TRUE(writeFile(f, img));
+        const auto r = mj2x::vmx64EncryptSiteTable(f.string());
+        EXPECT_TRUE(r.is_err()) << "malformed reloc block must be rejected";
+        std::vector<uint8_t> after;
+        ASSERT_TRUE(readFile(f, after));
+        EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
 }

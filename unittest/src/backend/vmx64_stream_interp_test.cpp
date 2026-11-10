@@ -942,21 +942,22 @@ TEST(Vmx64StreamInterpTest, DataTableCarriesEncryptorContract)
         if (h[0] >= 'a' && h[0] <= 'f') h.insert(h.begin(), '0');
         return h + "h";
     };
-    EXPECT_NE(asmText.find(std::string("    dq ") + masmHex(kVmx64TableMagic) + "\n"),
-              std::string::npos)
-        << asmText;
-    EXPECT_NE(asmText.find("    dq " + masmHex(static_cast<uint64_t>(prog->sites.size())) +
-                           "\n"),
-              std::string::npos)
-        << asmText;
+    const size_t magicPos =
+        asmText.find(std::string("    dq ") + masmHex(kVmx64TableMagic) + "\n");
+    ASSERT_NE(magicPos, std::string::npos) << asmText;
+    const size_t countPos =
+        asmText.find("    dq " + masmHex(static_cast<uint64_t>(prog->sites.size())) + "\n");
+    ASSERT_GT(countPos, magicPos) << asmText;
     // 表尾：k1（加密器密钥材料单源，与 prologue imm 同一 C++ 局部变量）+
     // base 自引用指针（未加密 = 活重定位，加密 = 静态首选 VA）。
-    EXPECT_NE(asmText.find("mj2x_vmx64_k1_tag0 label qword\n    dq " + masmHex(k1) + "\n"),
-              std::string::npos)
-        << asmText;
-    EXPECT_NE(asmText.find("mj2x_vmx64_base_tag0 label qword\n    dq mj2x_vmx64_sites_tag0\n"),
-              std::string::npos)
-        << asmText;
+    // 布局顺序即加密器定位假设：magic → count →（表项区）→ k1 → base，
+    // 相对顺序一并锁死（表项区由站点表发射点另行逐行断言）。
+    const size_t k1Pos =
+        asmText.find("mj2x_vmx64_k1_tag0 label qword\n    dq " + masmHex(k1) + "\n");
+    ASSERT_GT(k1Pos, countPos) << asmText;
+    const size_t basePos =
+        asmText.find("mj2x_vmx64_base_tag0 label qword\n    dq mj2x_vmx64_sites_tag0\n");
+    ASSERT_GT(basePos, k1Pos) << asmText;
     // prologue 镜像差：r12 = base 值 - 表运行时地址（未加密 = 0，加密 = -delta）。
     EXPECT_NE(asmText.find("    lea r12, [mj2x_vmx64_base_tag0]\n"
                            "    mov r12, [r12]\n"
