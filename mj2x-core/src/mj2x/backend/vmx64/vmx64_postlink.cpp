@@ -232,7 +232,7 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
         for (size_t off = sec.rawPtr; off + 8 <= sec.rawPtr + sec.rawSize; off += 8) {
             if (rd64(img, off) != kVmx64TableMagic) continue;
             auto rewritten = rewriteTable(img, off, sec, flipRvas);
-            if (rewritten.is_err()) return ca::core::Err(std::move(rewritten).err().unwrap());
+            if (rewritten.is_err()) return ca::core::Err(std::move(rewritten).unwrap_err());
             ++tables;
         }
     }
@@ -240,7 +240,7 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
         return ca::core::Err(std::string("no vmx64 site table found (already encrypted, or not "
                                "a vmx64 artifact)"));
     auto quenched = quenchRelocations(img, relocSec, flipRvas);
-    if (quenched.is_err()) return ca::core::Err(std::move(quenched).err().unwrap());
+    if (quenched.is_err()) return ca::core::Err(std::move(quenched).unwrap_err());
 
     // --- 单次回写（校验全过才触盘） ---
     std::ofstream outF(dllPath, std::ios::binary | std::ios::trunc);
