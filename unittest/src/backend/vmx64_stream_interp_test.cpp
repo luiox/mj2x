@@ -736,7 +736,7 @@ TEST(Vmx64StreamInterpTest, Ks64AsmMacroReplaysCppSide)
     expectLine(12, "    test r12, r12", nullptr, "form branch test");
     expectLine(13, "    jz @F", nullptr, "plain-form artifact branch");
     expectLine(14, "    xor rdx, r11", nullptr, "entry un-XOR (post-link form)");
-    expectLine(15, "    @@", nullptr, "plain-form join (MASM anonymous label)");
+    expectLine(15, "    @@:", nullptr, "plain-form join (MASM anonymous label)");
     expectLine(16, "    add rdx, r11", nullptr, "ks64 addend");
     expectLine(17, "    sub rdx, r12", nullptr, "image delta compensation");
     expectLine(18, "    jmp rdx", nullptr, "indirect dispatch");

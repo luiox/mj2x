@@ -152,7 +152,10 @@ bool writeFile(const fs::path& path, const std::vector<uint8_t>& bytes)
 
 fs::path caseFile(const std::string& name)
 {
-    return test::getOutPath("mj2x/vmx64_postlink/" + name + "/.keep").parent_path() / name;
+    const fs::path dir = test::getOutPath("mj2x/vmx64_postlink/" + name).parent_path();
+    std::error_code    ec;
+    fs::create_directories(dir, ec);   // libca out_path 只自动建 out_root 本身
+    return dir / name;
 }
 
 }   // namespace
