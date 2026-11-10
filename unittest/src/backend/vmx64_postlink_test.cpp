@@ -168,7 +168,7 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
     ASSERT_TRUE(writeFile(file, sp.img));
 
     const auto r = mj2x::vmx64EncryptSiteTable(file.string());
-    ASSERT_TRUE(r.is_ok()) << r.err().unwrap();
+    ASSERT_TRUE(r.is_ok()) << r.unwrap_err();
 
     std::vector<uint8_t> out;
     ASSERT_TRUE(readFile(file, out));
@@ -198,7 +198,7 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
     const fs::path again = caseFile("again.dll");
     ASSERT_TRUE(writeFile(again, sp.img));
     const auto r2 = mj2x::vmx64EncryptSiteTable(again.string());
-    ASSERT_TRUE(r2.is_ok()) << r2.err().unwrap();
+    ASSERT_TRUE(r2.is_ok()) << r2.unwrap_err();
     std::vector<uint8_t> out2;
     ASSERT_TRUE(readFile(again, out2));
     EXPECT_EQ(out, out2) << "encryption must be deterministic";

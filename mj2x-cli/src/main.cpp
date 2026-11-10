@@ -1498,7 +1498,7 @@ int main(int argc, char** argv)
                     mj2x::vmx64EncryptSiteTable(buildConfig.outputLibraryPath.string());
                 if (encrypted.is_err()) {
                     CA_LOGT_ERROR("cli", "mj2x vmx64 post-link: {}\n",
-                                  encrypted.err().unwrap().c_str());
+                                  encrypted.unwrap_err().c_str());
                     return 1;
                 }
             }
