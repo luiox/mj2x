@@ -12,14 +12,19 @@
 ///
 ///   rbx = pc（当前站点 tEnc 字的流偏移，相对流起点，非绝对地址——ASLR 无关）
 ///   rsi = 虚拟寄存器 slot 池基址（[rbp-frame] 栈上）
-///   rdi = 加密站点表基址（table[t] = handler 地址 - ks64(t)）
+///   rdi = 加密站点表基址（明文 = handler 首选 VA - ks64(t)，加密态见下）
 ///   r13 = 本方法 done 标签（返回出口）
 ///   r14 = 指令流基址
 ///   r15 = key schedule 常量 K1（seed 派生）
-///   r12 = 链 rolling key（每 dispatch 由 pc 重算，再与站点密钥异或滚动；
-///         功能性密钥全部由 pc/站点号确定性派生——路径无关，正确性不依赖
-///         执行历史；r12 的静息值随路径滚动，纯分析噪声）
-///   rax/rcx/rdx/r8-r11 = handler 内 scratch（跨 handler 不保序）
+///   r12 = 形态/基差双重角色（入口 prologue 一次算定：
+///         r12 = base qword 值 - 站点表运行时地址。未加密产物 base qword
+///         活重定位 → r12 = 0 = 明文加数形态标记（NEXT 的 test/jz 走
+///         add-only 路径，与 Phase 2 语义逐位一致）；post-link 加密产物
+///         base qword 静态首选 VA → r12 = -delta，NEXT 先 xor 解表项、再
+///         `sub rdx, r12` 补回基差。Phase 3 起它取代原 rolling-key 噪声
+///         位——噪声从不参与正确性，形态与 delta 参与。）
+///   rax/rcx/rdx/r8-r11 = handler 内 scratch（跨 handler 不保序；NEXT 的
+///         链密钥计算用 rcx——rdx 在表项解密期承载中间值）
 ///
 /// ### Key schedule（Phase 1 最简版）
 ///
@@ -27,35 +32,47 @@
 ///   P1 = 0x61C88647, P2 = 0x045D9F3B（固定公开常数，均 < 2^31，可作
 ///   imul r64, r64, imm32 立即数发射）；K1 从 instanceSeed 派生。
 ///
-/// 两处消费（发射侧 C++ 与 .asm handler 侧逐指令镜像，改公式必须双侧同步）：
+/// 两处消费（发射侧 C++ 与 .asm handler 侧逐指令镜像，改公式必须双侧
+/// 同步——vmx64_stream_interp_test 的 Ks64AsmMacroReplaysCppSide 逐行锁死）：
 ///   - 链加密：流中 tEnc = t XOR (u16)ks64(流偏移)——handler 由 rbx 重算；
-///   - 表加密：table[t] = handler 地址 - ks64(t)——handler 解密用 add。
-///     （XOR 对重定位符号不可表达——`sym XOR imm` 不是合法 MASM 数据表达式，
-///     源级可表达的最近形态是 `sym - imm`（重定位 + addend）；故编号链用
-///     XOR、地址表用 SUB/ADD。二进制层若需纯 XOR，走 post-link 加密器，
-///     见下方「post-link 纯 XOR 加密器」设计注。）
+///   - 表加密：源级 `sym - imm`（重定位 + addend）落盘 `handler 首选 VA -
+///     ks64(t)`；post-link 加密器再改写为纯异或形态（见下节）。
 ///
-/// ### post-link 纯 XOR 加密器（设计注，未实现——接口意向定档）
+/// ### post-link 纯 XOR 加密器（Phase 3 已实现——vmx64_postlink）
 ///
-/// 源级 `sym - imm` 形态把 addend 明文留在重定位里（.obj/.dll 的
-/// RELOC{IE}NT 携带明文 handler 偏移差，逆向者重放 `+addend` 即还原明文表）。
-/// 消除该静态痕迹需在**链接后**对产物字节做二次加密，把表项改写成
-/// `handler - ks64(t) XOR mask` 纯异或形态——但那要求 handler 侧解密序列
-/// 同步改为 `xor`，且解密用的 mask 域与重定位解析互斥（重定位写入的地址
-/// 会覆盖密文）。定档设计约束（实现时在此接口下单点收口，不改散装公式）：
+/// 源级 `sym - imm` 形态把 handler 首选 VA - ks64(t) 的线性差明文留在
+/// .data 落盘字节里，且 .reloc 的 DIR64 项逐条指向表区（"函数指针表"级
+/// 路标）。加密器对链接产物做三步原地改写：
 ///
-///   - **单源锚点**：keystream 只经 vmx64Ks64（本文件唯一公开派生函数），
-///     加密器 = 读产物 → 定位 .data 表/流（按发射器落盘符号名
-///     `mj2x_vmx64_sites_<tag>`/`mj2x_vmx64_code_<tag>` 的 COFF/PE 段偏移）→
-///     重算 keystream → 异或改写 → 原地落盘。发射侧不新增平行公式。
-///   - **时序**：CLI 侧在 buildXmakeProject 产出 DLL 之后、嵌入/交付之前
-///     插桩（单消费点，与 VMC4 的 JNI_OnLoad at-rest 解密互斥——纯 XOR 改写
-///     后运行期无需解密原语，明文只在 dispatch 瞬时存在于 rdx）。
-///   - **确定性**：同 seed + 同产物 → 逐字节相同（keystream 全部由
-///     instanceSeed/站点号/流偏移确定性派生，无随机量）。
-///   - **前置条件**：加密器要求产物含 vmx64 符号名（发射器符号命名是契约，
-///     不得在加密器侧重新推导）；不满足即整体拒绝（fail-closed，不产半加密
-///     产物）。
+///   1. **表项纯异或**：entry_file[t] = (handler 首选 VA - ks64(t))
+///      XOR ks64(t, k1)——密钥材料来自表尾 k1 qword（与 prologue 的
+///      `mov r15, imm` 同一 C++ 局部变量，无第二表达）。
+///   2. **重定位熄灭**：表区全部 DIR64 项 + base qword 的 DIR64 项翻成
+///      ABSOLUTE（type 0，装载器跳过）——.reloc 不再指认表区，装载器
+///      也不会把基差加进密文。
+///   3. **定位痕迹清零**：magic / 站点数 / k1 三个 qword 归零（表项与
+///      base 保留）。重复加密 = 定位符缺失 = fail-closed 拒绝（幂等护栏）。
+///
+/// 配套发射面（本文件 emitMethod 与 NEXT 宏）：
+///   - 表头两 qword：magic（kVmx64TableMagic，加密器定位符）+ 站点数；
+///   - 表尾两 qword：k1（加密器密钥材料）+ base（自引用重定位指针）。
+///     base 的落盘值 = 站点表首选 VA：**未加密产物装载器照常改写它**
+///     （运行时 = 表地址，r12 = 0，--generate-xmake 工作流不破坏）；
+///     加密后重定位熄灭，静态首选 VA 常驻，r12 = -delta 补基差。
+///   - NEXT 的形态分支：`test r12, r12 / jz @F`——r12 = 0（明文加数形态，
+///     表项带活重定位）跳过表项 xor，`add` 直解；r12 ≠ 0（加密形态）先
+///     xor 解密文。静态序列无法同时服务两种落盘形态（明文形态的表项经
+///     重定位已含基差，再 xor 即破坏）——分支以 r12 的形态角色承载，
+///     两态汇合同一条 `add/sub/jmp rdx` 收尾。加密是纯可选加固。
+///     @@ 为 MASM 匿名标签（宏内多次展开不重名）。
+///
+/// 契约约束：
+///   - **单源锚点**：keystream 只经 vmx64Ks64；加密器不新增平行公式。
+///   - **时序**：CLI 侧 --compile 在 buildXmakeProject 产出 DLL 之后、
+///     嵌入/交付之前插桩（单消费点）。
+///   - **确定性**：同产物 → 逐字节相同的加密结果（无随机量）。
+///   - **fail-closed**：定位符缺失/计数越界/k1 为 0/期望的重定位项缺失/
+///     非 AMD64 PE——任何一步不满足即整体拒绝，不写半加密产物。
 ///
 /// ### 确定性
 ///
@@ -98,8 +115,15 @@ inline constexpr uint64_t kVmx64P2 = 0x045D9F3BULL;
 ///
 /// @details
 /// x 为流偏移（u32 域）或站点号（u16 域）；返回值低 16 位用于链字加密，
-/// 全 64 位用于地址表 addend。
+/// 全 64 位用于地址表 addend 与 post-link 表项异或掩码。
 uint64_t vmx64Ks64(uint64_t x, uint64_t k1);
+
+/// @brief 站点表定位 magic（post-link 加密器的字节级定位符，加密后清零）。
+///
+/// @details
+/// ASCII "VMX64TBL" 小端序；发射为 `dq <masmHex>`。定位采用 magic 扫描而非
+/// 符号名——release DLL 无 COFF 符号表（无 /DEBUG），符号定位不可依赖。
+inline constexpr uint64_t kVmx64TableMagic = 0x4C42543634584D56ULL;
 
 /// @brief MASM x64 发射器。
 class Vmx64AsmEmitter
