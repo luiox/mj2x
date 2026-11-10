@@ -122,7 +122,8 @@ SyntheticPe makeSyntheticPe()
     // base qword：自引用指针的链接值 = 表首选 VA。
     wr64(sp.img, sp.baseOff, kImageBase + sp.tableRva);
 
-    // --- .reloc：一个 page 块 4 个 DIR64 项（3 表项 + base），补零对齐 ---
+    // --- .reloc：一个 page 块 4 个 DIR64 项（3 表项 + base）+ 全零终结块 ---
+    // （MSVC link.exe 的 .reloc 以全零块收尾——熄灭遍历必须认得它，回归锁定）
     const size_t block = kRelocRawPtr;
     wr32(sp.img, block, kDataVa);          // pageRVA
     wr32(sp.img, block + 4, 8 + 8 + 2);    // 4 项 + 2 字节补零（块大小 4 对齐）
@@ -130,6 +131,8 @@ SyntheticPe makeSyntheticPe()
                               sp.tableRva - kDataVa + 16, sp.baseRva - kDataVa};
     for (int i = 0; i < 4; ++i)
         wr16(sp.img, block + 8 + i * 2, static_cast<uint16_t>((10 << 12) | offs[i]));
+    wr32(sp.img, block + 16, 0);           // 终结块 pageRVA = 0
+    wr32(sp.img, block + 20, 0);           // 终结块 blockSize = 0
     return sp;
 }
 

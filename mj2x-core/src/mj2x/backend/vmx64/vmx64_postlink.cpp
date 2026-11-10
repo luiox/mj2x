@@ -100,6 +100,7 @@ ca::core::Result<TableInstance, std::string> rewriteTable(std::vector<uint8_t>& 
     if (magicOff + 8 > img.size()) return ca::core::Err(std::string("magic qword runs past EOF"));
     const size_t countOff   = magicOff + 8;
     const size_t entriesOff = countOff + 8;
+    if (countOff + 8 > img.size()) return ca::core::Err(std::string("count qword runs past EOF"));
     const uint64_t count64  = rd64(img, countOff);
     if (count64 == 0 || count64 > 0xFFFF)
         return ca::core::Err(std::string("site count out of range at magic offset " +
@@ -153,6 +154,7 @@ ca::core::Result<void, std::string> quenchRelocations(std::vector<uint8_t>& img,
     while (off + 8 <= end) {
         const uint32_t pageRva   = rd32(img, off);
         const uint32_t blockSize = rd32(img, off + 4);
+        if (blockSize == 0 && pageRva == 0) break;   // MSVC 链接器的全零终结块
         if (blockSize < 8 || off + blockSize > end)
             return ca::core::Err(std::string("malformed .reloc block at raw offset " +
                                    std::to_string(off)));
@@ -168,7 +170,7 @@ ca::core::Result<void, std::string> quenchRelocations(std::vector<uint8_t>& img,
                                        std::to_string(static_cast<int>(type)) +
                                        " for vmx64 table RVA " + std::to_string(target)));
             wr16(img, e, static_cast<uint16_t>(entry & 0x0FFF));   // type → ABSOLUTE
-            remaining.erase(hit);
+            remaining.erase(target);   // 按键删：hit 是 flipRvas 的迭代器，跨容器 erase 是 UB
         }
         off += blockSize;
     }
