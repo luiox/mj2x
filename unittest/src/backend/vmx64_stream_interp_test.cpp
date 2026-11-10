@@ -161,6 +161,11 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
                         trace, pc);
         }
         const auto op = p.sites[t].op;
+        // 操作数区间越界防御（review 遗留）：此前只查 tEnc 字在流内，操作数
+        // 字段（pc+2..pc+13）无界读依赖站点对齐检查间接兜住——对编码器产物
+        // 安全，对手工构造的坏流是 UB。按 opcode 操作数宽度一次性封顶。
+        if (pc + 2u + vmx64OpOperandSize(op) > p.stream.size())
+            return fail("operand span runs past end of stream", trace, pc);
 
         const auto slotAt = [&](uint32_t off) -> uint64_t& {
             const uint16_t idx = rd16(p.stream, off);
@@ -375,6 +380,63 @@ std::unique_ptr<Vmx64Program> encodeSumInvertedShape(std::string& reason)
                        new JumpInsnNode(Opcodes::GOTO, loop->label),
                        done,
                        new VarInsnNode(Opcodes::ILOAD, 1),
+                       new InsnNode(Opcodes::IRETURN),
+                   },
+                   2, 3),
+        reason);
+}
+
+/// do-while 形态：`int i=0; do { i++; } while (i < n); return i;`
+/// javac 产物中循环底部的 if_icmplt true 边直接回到循环头——循环头的 phi
+///（i 的 entry/回边两个前驱）把边拷贝放在了分支的 true 边上（sum 循环覆盖
+/// 的是 false 边链，两条边都需直接覆盖——T3）。
+std::unique_ptr<Vmx64Program> encodeDoWhileTrueEdgeCopy(std::string& reason)
+{
+    auto* body = new LabelNode(labelScratchArena().create<Label>());
+    return encodeMethodNode(
+        makeMethod("dw", "(I)I",
+                   {
+                       new InsnNode(Opcodes::ICONST_0),
+                       new VarInsnNode(Opcodes::ISTORE, 1),
+                       body,
+                       new VarInsnNode(Opcodes::ILOAD, 1),
+                       new InsnNode(Opcodes::ICONST_1),
+                       new InsnNode(Opcodes::IADD),
+                       new VarInsnNode(Opcodes::ISTORE, 1),
+                       new VarInsnNode(Opcodes::ILOAD, 1),
+                       new VarInsnNode(Opcodes::ILOAD, 0),
+                       new JumpInsnNode(Opcodes::IF_ICMPLT, body->label),
+                       new VarInsnNode(Opcodes::ILOAD, 1),
+                       new InsnNode(Opcodes::IRETURN),
+                   },
+                   2, 2),
+        reason);
+}
+
+/// 菱形：`int x; if (a < b) x = a + 1; else x = b - 1; return x;`
+/// 汇合点的 phi 在两条出边（then/else 块各自的 jump 边）各生成一份拷贝。
+std::unique_ptr<Vmx64Program> encodeDiamondPhi(std::string& reason)
+{
+    auto* elseLbl = new LabelNode(labelScratchArena().create<Label>());
+    auto* join    = new LabelNode(labelScratchArena().create<Label>());
+    return encodeMethodNode(
+        makeMethod("dia", "(II)I",
+                   {
+                       new VarInsnNode(Opcodes::ILOAD, 0),
+                       new VarInsnNode(Opcodes::ILOAD, 1),
+                       new JumpInsnNode(Opcodes::IF_ICMPGE, elseLbl->label),
+                       new VarInsnNode(Opcodes::ILOAD, 0),
+                       new InsnNode(Opcodes::ICONST_1),
+                       new InsnNode(Opcodes::IADD),
+                       new VarInsnNode(Opcodes::ISTORE, 2),
+                       new JumpInsnNode(Opcodes::GOTO, join->label),
+                       elseLbl,
+                       new VarInsnNode(Opcodes::ILOAD, 1),
+                       new InsnNode(Opcodes::ICONST_1),
+                       new InsnNode(Opcodes::ISUB),
+                       new VarInsnNode(Opcodes::ISTORE, 2),
+                       join,
+                       new VarInsnNode(Opcodes::ILOAD, 2),
                        new InsnNode(Opcodes::IRETURN),
                    },
                    2, 3),
@@ -601,4 +663,250 @@ TEST(Vmx64StreamInterpTest, EmittedAsmCarriesFaithfulStreamAndTable)
             pos = lineEnd;
         }
     }
+}
+
+// ===========================================================================
+// 6. T2 ks64 双侧重放回归：发射器宏文本与 C++ 侧 vmx64Ks64 的单源契约。
+//
+//    vmx64_NEXT 宏里的常数（61C88647h/045D9F3Bh）是**硬编码文本**，与
+//    kVmx64P1/kVmx64P2 constexpr 是两份表达——头文件注释明言"改公式必须
+//    双侧同步"，此前没有任何测试对账。本测试两层锁死：
+//    a) 文本层：宏体指令序列逐行比对（imul/rol/xor/imul 次序 + 立即数解析
+//       后与 kVmx64P1/P2 相等，大小写不敏感）；
+//    b) 数值层：按宏语义独立重放（imul→rol13→xor→imul）与 vmx64Ks64 在
+//       多组 (x, k1) 采样上逐位相等。
+// ===========================================================================
+TEST(Vmx64StreamInterpTest, Ks64AsmMacroReplaysCppSide)
+{
+    const std::string shared = Vmx64AsmEmitter::emitSharedHandlers();
+    const auto macroBegin = shared.find("vmx64_NEXT macro\n");
+    ASSERT_NE(macroBegin, std::string::npos) << shared;
+    const auto macroEnd = shared.find("endm\n", macroBegin);
+    ASSERT_NE(macroEnd, std::string::npos) << shared;
+    std::string body = shared.substr(macroBegin, macroEnd - macroBegin);
+
+    // --- a) 文本层：行序列 + 常数对账 ---
+    std::vector<std::string> lines;
+    {
+        std::string cur;
+        for (const char c : body) {
+            if (c == '\n') {
+                if (!cur.empty()) lines.push_back(cur);
+                cur.clear();
+            } else if (c != '\r') {
+                cur.push_back(c);
+            }
+        }
+        if (!cur.empty()) lines.push_back(cur);
+    }
+    ASSERT_EQ(lines.size(), 15u)
+        << "vmx64_NEXT macro line count drifted: " << body;
+
+    const auto parseHexLit = [](const std::string& text) -> uint64_t {
+        const auto h = text.rfind('h');
+        EXPECT_NE(h, std::string::npos) << "not an h-suffix literal: " << text;
+        if (h == std::string::npos) return 0;
+        return std::stoull(text.substr(0, h), nullptr, 16);
+    };
+    const auto expectLine = [&](size_t i, const std::string& prefix,
+                                const uint64_t* imm, const char* what) {
+        ASSERT_LT(i, lines.size()) << what << ": line missing";
+        ASSERT_EQ(lines[i].compare(0, prefix.size(), prefix), 0)
+            << what << ": expected prefix [" << prefix << "] got [" << lines[i] << "]";
+        if (imm != nullptr) {
+            const std::string tail = lines[i].substr(prefix.size());
+            EXPECT_EQ(parseHexLit(tail), *imm)
+                << what << ": constant drift in macro text (" << tail << ")";
+        }
+    };
+
+    uint64_t p1 = kVmx64P1, p2 = kVmx64P2;
+    expectLine(0, "vmx64_NEXT macro", nullptr, "macro head");
+    expectLine(1, "    movzx eax, word ptr [r14+rbx]", nullptr, "tEnc fetch");
+    expectLine(2, "    imul r12, rbx, ", &p1, "chain key P1");
+    expectLine(3, "    rol r12, 13", nullptr, "chain rol");
+    expectLine(4, "    xor r12, r15", nullptr, "chain xor K1");
+    expectLine(5, "    imul r12, r12, ", &p2, "chain key P2");
+    expectLine(6, "    xor ax, r12w", nullptr, "tEnc decrypt");
+    expectLine(7, "    imul r11, rax, ", &p1, "table key P1");
+    expectLine(8, "    rol r11, 13", nullptr, "table rol");
+    expectLine(9, "    xor r11, r15", nullptr, "table xor K1");
+    expectLine(10, "    imul r11, r11, ", &p2, "table key P2");
+    expectLine(11, "    mov rdx, [rdi+rax*8]", nullptr, "table load");
+    expectLine(12, "    add rdx, r11", nullptr, "address decrypt");
+    expectLine(13, "    xor r12, r11", nullptr, "rolling key mix");
+    expectLine(14, "    jmp rdx", nullptr, "indirect dispatch");
+
+    // --- b) 数值层：按宏语义独立重放 vs vmx64Ks64 ---
+    const auto replayKs64 = [](uint64_t x, uint64_t k1) {
+        uint64_t v = x * kVmx64P1;
+        v          = (v << 13) | (v >> 51);
+        v ^= k1;
+        return v * kVmx64P2;
+    };
+    const uint64_t xs[]   = {0, 1, 6, 114, 0xFFFF, 0x12345, 0xFFFFFFFFu};
+    const uint64_t k1s[]  = {0x2C3A78E936A5A840ULL, 0, ~0ULL};
+    for (const uint64_t k1 : k1s) {
+        for (const uint64_t x : xs) {
+            EXPECT_EQ(replayKs64(x, k1), vmx64Ks64(x, k1))
+                << "ks64 drift at x=" << x << " k1=" << k1;
+        }
+    }
+}
+
+// ===========================================================================
+// 7. T3 分支边拷贝直接覆盖：true 边（do-while 回边）与双出边（菱形 phi）。
+//    编码器的 dest∈{比较操作数/暂存槽} fail-closed 防御在真实 SSA 下不可达
+//    （SSA 值寄存器唯一），该路径由编码器内联防御承担，不进本测试面。
+// ===========================================================================
+TEST(Vmx64StreamInterpTest, TrueEdgeCarriesPhiCopiesOnDoWhileBackEdge)
+{
+    std::string reason;
+    auto        prog = encodeDoWhileTrueEdgeCopy(reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    // do-while 至少执行一轮：n=0 也返回 1。
+    const struct
+    {
+        uint64_t n;
+        uint64_t expect;
+    } cases[] = {{0, 1}, {1, 1}, {2, 2}, {5, 5}};
+    for (const auto& c : cases) {
+        const auto r = interpretWithArgs(*prog, {c.n});
+        EXPECT_TRUE(r.ok) << "n=" << c.n << " " << r.diag;
+        if (r.ok) EXPECT_EQ(r.value, c.expect) << "n=" << c.n << " " << r.diag;
+    }
+}
+
+TEST(Vmx64StreamInterpTest, DiamondPhiCopiesOnBothOutgoingEdges)
+{
+    std::string reason;
+    auto        prog = encodeDiamondPhi(reason);
+    ASSERT_NE(prog, nullptr) << reason;
+
+    const struct
+    {
+        uint64_t a, b, expect;
+    } cases[] = {{1, 5, 2}, {5, 1, 0}, {3, 3, 2}, {0, 0, -1ull & 0xFFFFFFFFu}};
+    for (const auto& c : cases) {
+        const auto r = interpretWithArgs(*prog, {c.a, c.b});
+        EXPECT_TRUE(r.ok) << "a=" << c.a << " b=" << c.b << " " << r.diag;
+        if (r.ok) EXPECT_EQ(r.value, c.expect) << "a=" << c.a << " b=" << c.b << " " << r.diag;
+    }
+}
+
+// ===========================================================================
+// 8. T5 回绕语义：i32/i64 加减乘的 2^n 回绕位型（JVM 有符号回绕）。
+// ===========================================================================
+TEST(Vmx64StreamInterpTest, WraparoundBitPatterns)
+{
+    std::string reason;
+    {
+        auto prog = encodeMethodNode(
+            makeMethod("w32", "(II)I",
+                       {
+                           new VarInsnNode(Opcodes::ILOAD, 0),
+                           new VarInsnNode(Opcodes::ILOAD, 1),
+                           new InsnNode(Opcodes::IADD),
+                           new VarInsnNode(Opcodes::ILOAD, 0),
+                           new VarInsnNode(Opcodes::ILOAD, 1),
+                           new InsnNode(Opcodes::ISUB),
+                           new InsnNode(Opcodes::IMUL),
+                           new InsnNode(Opcodes::IRETURN),
+                       },
+                       4, 3),
+            reason);
+        // (a+b)*(a-b) = a^2-b^2（i32 回绕位型：a^2-b^2 mod 2^32）。
+        ASSERT_NE(prog, nullptr) << reason;
+        const struct
+        {
+            uint32_t a, b;
+            uint32_t expect;   // (a+b)*(a-b) mod 2^32
+        } cases[] = {
+            {0x7FFFFFFFu, 1u, 0u},                    // INT_MAX ±1：a^2-b^2 回绕到 0
+            {0x80000000u, 1u, 0xFFFFFFFFu},           // INT_MIN ±1：(2^31+1)(2^31-1) 回绕到 -1
+            {0u, 1u, 0xFFFFFFFFu},                    // (0+1)*(0-1) = -1
+            {0x10000u, 0x10000u, 0u},                 // a^2-b^2 = 0
+        };
+        for (const auto& c : cases) {
+            const auto r = interpretWithArgs(*prog, {c.a, c.b});
+            ASSERT_TRUE(r.ok) << r.diag;
+            EXPECT_EQ(static_cast<uint32_t>(r.value), c.expect)
+                << "a=" << c.a << " b=" << c.b;
+        }
+    }
+    {
+        auto prog = encodeMethodNode(
+            makeMethod("w64", "(JJ)J",
+                       {
+                           new VarInsnNode(Opcodes::LLOAD, 0),
+                           new InsnNode(Opcodes::LCONST_1),
+                           new InsnNode(Opcodes::LADD),
+                           new VarInsnNode(Opcodes::LLOAD, 0),
+                           new InsnNode(Opcodes::LCONST_1),
+                           new InsnNode(Opcodes::LSUB),
+                           new InsnNode(Opcodes::LMUL),
+                           new InsnNode(Opcodes::LRETURN),
+                       },
+                       4, 3),
+            reason);
+        // (a+1)*(a-1) = a^2-1（i64 回绕位型：a^2-1 mod 2^64）。
+        ASSERT_NE(prog, nullptr) << reason;
+        const struct
+        {
+            uint64_t a;
+            uint64_t expect;
+        } cases[] = {
+            {0x7FFFFFFFFFFFFFFFULL, 0u},                      // LONG_MAX：a^2-1 回绕到 0
+            {0x8000000000000000ULL, 0xFFFFFFFFFFFFFFFFULL},   // LONG_MIN：a^2 回绕到 0 → -1
+            {0x100000000ULL, 0xFFFFFFFFFFFFFFFFULL},          // a^2 = 2^64 回绕到 0 → -1
+        };
+        for (const auto& c : cases) {
+            const auto r = interpretWithArgs(*prog, {c.a});
+            ASSERT_TRUE(r.ok) << r.diag;
+            EXPECT_EQ(r.value, c.expect) << "a=" << c.a;
+        }
+    }
+}
+
+// ===========================================================================
+// 9. T4 栈传参（≥3 参数）入口 homing 文本契约：p0/p1 走 r8/r9，p2+ 走
+//    [rbp+0x30+8*(i-2)]（call 落返回地址 + 调用方 shadow space 之后的栈参
+//    区）。此前的 E2E 只有 1-2 参数方法，栈参 homing 路径零覆盖。
+// ===========================================================================
+TEST(Vmx64StreamInterpTest, StackArgsHomeFromCallerShadowSpace)
+{
+    std::string reason;
+    // int add3(int a, int b, int c) { return a + b + c; }
+    auto prog = encodeMethodNode(
+        makeMethod("add3", "(III)I",
+                   {
+                       new VarInsnNode(Opcodes::ILOAD, 0),
+                       new VarInsnNode(Opcodes::ILOAD, 1),
+                       new InsnNode(Opcodes::IADD),
+                       new VarInsnNode(Opcodes::ILOAD, 2),
+                       new InsnNode(Opcodes::IADD),
+                       new InsnNode(Opcodes::IRETURN),
+                   },
+                   2, 3),
+        reason);
+    ASSERT_NE(prog, nullptr) << reason;
+    ASSERT_EQ(prog->args.size(), 3u) << reason;
+
+    const std::string asmText = Vmx64AsmEmitter::emitMethod(*prog, 0x5EED, "stk");
+    ASSERT_EQ(asmText.find(".err"), std::string::npos) << asmText;
+    // p0=r8、p1=r9、p2=首个栈参（返回地址 8 + shadow space 0x20 之后）。
+    EXPECT_NE(asmText.find("    mov eax, r8d\n"), std::string::npos) << asmText;
+    EXPECT_NE(asmText.find("    mov eax, r9d\n"), std::string::npos) << asmText;
+    EXPECT_NE(asmText.find("    mov eax, dword ptr [rbp+30h]\n"), std::string::npos)
+        << asmText;
+    // 槽落位顺序与编码器 args 契约一致（slot 0/1/2）。
+    EXPECT_NE(asmText.find("    mov dword ptr [rsi+0h], eax\n"), std::string::npos) << asmText;
+    EXPECT_NE(asmText.find("    mov dword ptr [rsi+8h], eax\n"), std::string::npos) << asmText;
+    EXPECT_NE(asmText.find("    mov dword ptr [rsi+10h], eax\n"), std::string::npos) << asmText;
+
+    // 解释器走 args 契约（slot 直接落参）验证语义：与 homing 路径解耦。
+    const auto r = interpretWithArgs(*prog, {10u, 20u, 30u});
+    ASSERT_TRUE(r.ok) << r.diag;
+    EXPECT_EQ(r.value, 60u);
 }
