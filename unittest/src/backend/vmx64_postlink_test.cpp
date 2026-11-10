@@ -104,7 +104,7 @@ SyntheticPe makeSyntheticPe()
 
     // --- .data：表布局（magic/计数/3 表项/k1/base）---
     const size_t magicOff = kDataRawPtr;
-    wr64(sp.img, magicOff, kVmx64TableMagic);
+    wr64(sp.img, magicOff, mj2x::kVmx64TableMagic);
     wr64(sp.img, magicOff + 8, 3);
     sp.entriesOff = magicOff + 16;
     // 链接期落盘值 = handler 首选 VA - ks64(t)（`dq sym - imm` 的产物形态）。
