@@ -23,8 +23,9 @@ namespace mj2x {
 ///
 /// @details
 /// 临时名 = dst + ".mj2x-atomic-<token>"（steady_clock 计数 + 进程内单调
-/// 序号，进程内/跨进程均不撞名）。写失败（打不开/短写）或替换失败都不
-/// 触碰 dst 原有内容。不创建父目录——调用方自行保证 dst 的父目录存在
+/// 序号；进程内必不撞名，跨进程同 tick 的理论窗口极窄）。写失败（打不开/
+/// 短写）或替换失败都不触碰 dst 原有内容，且不留临时文件尸体。不创建父
+/// 目录——调用方自行保证 dst 的父目录存在
 /// （需要自动建目录的消费方在调用前 create_directories，见
 /// mj2x-cli 的 copyLibraryAtomically 包装）。
 ///

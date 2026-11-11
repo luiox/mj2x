@@ -32,7 +32,8 @@ std::filesystem::path temporaryFor(const std::filesystem::path& dst)
 }
 
 /// 把临时文件 rename 替换到 dst。Windows 走 MoveFileExW
-/// （REPLACE_EXISTING 覆盖既有目标 | WRITE_THROUGH 落盘收尾）；POSIX 上
+/// （REPLACE_EXISTING 覆盖既有目标 | WRITE_THROUGH 保证替换元数据落盘——
+/// tmp 内容本身的落盘由写侧 ofstream 负责，本函数不追加 fsync）；POSIX 上
 /// rename 本身原子替换。任何失败先删临时文件（失败静默——此时错误文本
 /// 以替换失败为准），保证不留 ".mj2x-atomic-*" 尸体。
 ca::core::Result<void, std::string> renameReplaceUnique(const std::filesystem::path& temporary,
@@ -73,7 +74,12 @@ ca::core::Result<void, std::string> writeFileAtomically(const std::filesystem::p
             out.write(reinterpret_cast<const char*>(data),
                       static_cast<std::streamsize>(size));
         out.close();
-        if (!out) return ca::core::Err(std::string("write failed: " + temporary.string()));
+        if (!out)
+        {
+            std::error_code removeEc;
+            std::filesystem::remove(temporary, removeEc);
+            return ca::core::Err(std::string("write failed: " + temporary.string()));
+        }
     }
     return renameReplaceUnique(temporary, dst);
 }
@@ -85,7 +91,11 @@ ca::core::Result<void, std::string> copyFileAtomically(const std::filesystem::pa
     std::error_code        ec;
     std::filesystem::copy_file(src, temporary, std::filesystem::copy_options::overwrite_existing, ec);
     if (ec)
+    {
+        std::error_code removeEc;
+        std::filesystem::remove(temporary, removeEc);
         return ca::core::Err(std::string("copy to temporary failed: ") + ec.message());
+    }
     // 非空校验（承 copyLibraryAtomically 语义）：空复制产物 = 源不可交付。
     if (!std::filesystem::is_regular_file(temporary, ec) || std::filesystem::file_size(temporary, ec) == 0)
     {
