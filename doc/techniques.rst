@@ -135,6 +135,9 @@ E. 运行时与产物保护：
    * - :doc:`/techniques/native-lib-encryption`
      - native 库 at-rest 加密
      - ``--native-lib-key``
+   * - :doc:`/techniques/vm-site-table-encryption`
+     - vmx64 站点表 post-link 加密
+     - ``--backend vmx64`` + ``--compile``\（无独立开关）
 
 未成篇但已存在的保护面
 ------------------------

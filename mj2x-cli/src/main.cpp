@@ -1489,11 +1489,11 @@ int main(int argc, char** argv)
             buildConfig.processTimeout    = processTimeout;
             compileRc                     = mj2x::cli::buildXmakeProject(buildConfig);
             if (compileRc == 0 && options.cBackendKind == CEmitterBackend::Vmx64) {
-                // vmx64 post-link 站点表纯 XOR 加密（Phase 3，契约见
-                // vmx64_asm_emit.hpp）：产出 DLL 之后、嵌入/交付之前的单
-                // 消费点。fail-closed——加密失败即整体失败，不交付半加密
-                // 产物。--generate-xmake 工作流不经此处（未加密产物本身
-                // 可运行，加密是纯可选加固）。
+                // vmx64 站点表 post-link 加密：xmake 产出 DLL 之后、嵌入/交付
+                // 之前的单消费点（设计、算法与数字例子见
+                // doc:vm-site-table-encryption；--generate-xmake 只生成工程，
+                // 不经此处——未加密产物本身可运行，加密是纯可选加固）。
+                // fail-closed：加密失败即整体失败退出，不交付半加密产物。
                 const auto encrypted =
                     mj2x::vmx64EncryptSiteTable(buildConfig.outputLibraryPath.string());
                 if (encrypted.is_err()) {

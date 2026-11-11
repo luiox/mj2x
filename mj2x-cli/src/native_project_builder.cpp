@@ -12,7 +12,6 @@ std::FILE* const kStderrStream = stderr;
 
 #include "native_project_generator.hpp"
 
-#include <chrono>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -34,6 +33,8 @@ std::FILE* const kStderrStream = stderr;
 // 写端，只杀 xmake 会让收尸的 EOF 等待永不到达）。须在 kStdoutStream 固化
 // 之后 include（subprocess.hpp 会 #undef Windows UCRT 的 stdin/stdout/stderr）。
 #include "native_process_timeout.hpp"
+
+#include "mj2x/io/fs_atomic.hpp"
 
 namespace mj2x::cli {
 
@@ -160,29 +161,15 @@ bool copyLibraryAtomically(const fs::path& source, const fs::path& destination)
     std::error_code ec;
     fs::create_directories(destination.parent_path(), ec);
     if (ec) return false;
-    const auto token = std::chrono::steady_clock::now().time_since_epoch().count();
-    fs::path temporary = destination;
-    temporary += ".mj2x-copy-" + std::to_string(token);
-    fs::copy_file(source, temporary, fs::copy_options::overwrite_existing, ec);
-    if (ec) return false;
-    if (!fs::is_regular_file(temporary, ec) || fs::file_size(temporary, ec) == 0) {
-        fs::remove(temporary, ec);
+    // 原子替换写单源（mj2x/io/fs_atomic.hpp）：唯一临时文件 + copy + 非空
+    // 校验 + rename 收尾（Windows 走 MoveFileExW
+    // REPLACE_EXISTING|WRITE_THROUGH），失败路径清理临时文件。
+    auto copied = copyFileAtomically(source, destination);
+    if (copied.is_err())
+    {
+        CA_LOGT_ERROR("compile", "atomic library copy failed: {}\n", copied.unwrap_err().c_str());
         return false;
     }
-#if defined(_WIN32)
-    if (!MoveFileExW(temporary.c_str(),
-                     destination.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        fs::remove(temporary, ec);
-        return false;
-    }
-#else
-    fs::rename(temporary, destination, ec);
-    if (ec) {
-        fs::remove(temporary, ec);
-        return false;
-    }
-#endif
     return true;
 }
 

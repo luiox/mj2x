@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -12,6 +11,7 @@
 #include "libca/str/utf8_string_arena.hpp"
 #include "libca/log/log_macros.hpp"
 
+#include "mj2x/codegen/c_helpers.hpp"
 #include "mj2x/core/dom_edit.hpp"
 #include "mj2x/core/jvm_opcodes.hpp"
 
@@ -19,22 +19,13 @@ namespace mj2x {
 
 namespace {
 
-// FNV-1a 64 位（与 RegCBackend 命名同源，保证名字稳定）。
-std::uint64_t fnv1a64(const std::string& text, std::uint64_t hash = 1469598103934665603ULL)
-{
-    for (unsigned char c : text) {
-        hash ^= c;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
+// 生成方法名的哈希/定宽 hex 单源收编（codegen::fnv1a64 / codegen::hex64）：
+// 与 StackC/RegC/VMC4 的不透明命名同一实现、同一 16 位定宽渲染——本地此前
+// 各持一份，且本地 hex64 走 ostringstream 变宽（无零填充），与其余后端的
+// 生成名宽度不一致。
 
-std::string hex64(std::uint64_t value)
-{
-    std::ostringstream os;
-    os << std::hex << value;
-    return os.str();
-}
+using codegen::fnv1a64;
+using codegen::hex64;
 
 // 参数描述符段 → xLOAD 通用形（opcode + u1 slot）字节。基类型按栈类别：
 // J/D 占双槽，L/[ 引用形态，其余 int 类。方法参数上限 255，u1 编码够用。

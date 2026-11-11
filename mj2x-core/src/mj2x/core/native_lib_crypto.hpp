@@ -12,6 +12,12 @@
 // 强度说明：非密码学（密钥藏于 NativeLoader 字节码常量），用途是把 jar 内
 // 明文 dll 变成静态不可直接提取的 blob，抬高取证/静态分析门槛；强加密 +
 // 密钥下沉 native 层属 sepacker 对接范围（见 doc:native-lib-encryption）。
+//
+// 另一种密钥流勿混淆：mj2x/backend/vmx64 的 vmx64Ks64（位置驱动的
+// imul/rol 混合，镜像边界是发射出的 MASM dispatch，见 vmx64_asm_emit.hpp
+// 的 Key schedule 节）。与本文件只是「XOR 密钥流」同概念——本流纯状态
+// 驱动（state 每字节推进、与位置无关）、镜像 NativeLoader 字节码，机制与
+// 镜像边界都不同，勿合并。
 
 #pragma once
 
