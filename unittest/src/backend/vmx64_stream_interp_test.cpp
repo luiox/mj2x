@@ -666,15 +666,19 @@ TEST(Vmx64StreamInterpTest, EmittedAsmCarriesFaithfulStreamAndTable)
 }
 
 // ===========================================================================
-// 6. T2 ks64 双侧重放回归：发射器宏文本与 C++ 侧 vmx64Ks64 的单源契约。
+// 6. ks64 双侧重放回归：NEXT 宏文本与 C++ 侧 vmx64Ks64 的单源契约。
 //
 //    vmx64_NEXT 宏里的常数（61C88647h/045D9F3Bh）是**硬编码文本**，与
-//    kVmx64P1/kVmx64P2 constexpr 是两份表达——头文件注释明言"改公式必须
-//    双侧同步"，此前没有任何测试对账。本测试两层锁死：
-//    a) 文本层：宏体指令序列逐行比对（imul/rol/xor/imul 次序 + 立即数解析
-//       后与 kVmx64P1/P2 相等，大小写不敏感）；
-//    b) 数值层：按宏语义独立重放（imul→rol13→xor→imul）与 vmx64Ks64 在
-//       多组 (x, k1) 采样上逐位相等。
+//    kVmx64P1/kVmx64P2 constexpr 是同一公式的两份表达——发射侧 C++ 与
+//    .asm handler 侧各算一份，头文件契约要求「改公式必须双侧同步」。这条
+//    契约的运行时意义：tEnc 字与站点表项的解密都靠 handler 现场重算
+//    ks64——两侧公式哪怕一位漂移，dispatch 直接跳飞。本测试两层锁死：
+//    a) 文本层：宏体指令序列逐行比对（imul/rol/xor/imul 次序 + 立即数
+//       解析后与 kVmx64P1/P2 相等，大小写不敏感）；宏体固定 19 行，行数
+//       漂移即宏被改动，先在此炸出；
+//    b) 数值层：按宏语义独立重放（imul → rol13 → xor → imul）与
+//       vmx64Ks64 在多组 (x, k1) 采样上逐位相等——即使文本比对被绕过，
+//       公式漂移也会在数值上炸出来。
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, Ks64AsmMacroReplaysCppSide)
 {
@@ -917,9 +921,16 @@ TEST(Vmx64StreamInterpTest, StackArgsHomeFromCallerShadowSpace)
 }
 
 // ===========================================================================
-// 10. Phase 3 数据表契约：表头 magic/计数、表尾 k1/base 自引用指针、入口
-//     prologue 的镜像差计算。post-link 加密器（vmx64_postlink）按此布局
-//     字节级扫描改写——布局漂移即加密器失明，文本级锁死。
+// 10. 数据表契约（post-link 加密器的定位假设，布局总览见
+//     doc:vm-site-table-encryption）：表头两 qword（magic/站点数）、表尾两
+//     qword（k1/base 自引用指针）与入口 prologue 的 r12 算定序列。
+//
+//     加密器（vmx64_postlink）不改汇编、不读符号——它在链接产物里按
+//     8 字节步扫描 magic，并按「magic → 站点数 → 表项区 → k1 → base」的
+//     固定顺序推算表尾位置。发射器是这份布局的唯一生产者，加密器是唯一
+//     消费者，两侧没有共享类型可以把守：任何字段的顺序或内容漂移都会让
+//     加密器定位失败（fail-closed）或定位到错误字节。发射面与加密面的
+//     对账单就是这里的文本级断言。
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, DataTableCarriesEncryptorContract)
 {
@@ -932,8 +943,9 @@ TEST(Vmx64StreamInterpTest, DataTableCarriesEncryptorContract)
     const std::string asmText = Vmx64AsmEmitter::emitMethod(*prog, seed, "tag0");
     ASSERT_EQ(asmText.find(".err"), std::string::npos) << asmText;
 
-    // 表头：magic（ASCII "VMX64TBL" 小端）+ 站点数，不落 label——消费方只有
-    // 加密器的字节级扫描。
+    // 表头两 qword：magic（ASCII "VMX64TBL" 小端，kVmx64TableMagic）+ 站点
+    // 数。二者不落 MASM label——消费方只有加密器的字节级扫描，符号名帮不
+    // 上忙（release DLL 无 COFF 符号表）。
     const auto masmHex = [](uint64_t v) {
         std::string h;
         char        buf[32];
@@ -948,17 +960,21 @@ TEST(Vmx64StreamInterpTest, DataTableCarriesEncryptorContract)
     const size_t countPos =
         asmText.find("    dq " + masmHex(static_cast<uint64_t>(prog->sites.size())) + "\n");
     ASSERT_GT(countPos, magicPos) << asmText;
-    // 表尾：k1（加密器密钥材料单源，与 prologue imm 同一 C++ 局部变量）+
-    // base 自引用指针（未加密 = 活重定位，加密 = 静态首选 VA）。
-    // 布局顺序即加密器定位假设：magic → count →（表项区）→ k1 → base，
-    // 相对顺序一并锁死（表项区由站点表发射点另行逐行断言）。
+    // 表尾：k1（加密器的密钥材料，与 prologue 的 mov r15 imm 同一 C++ 局
+    // 部变量，无漂移面）+ base 自引用指针（链接值 = 表首选 VA；未加密
+    // 产物装载器把它改写成表运行时地址，加密产物重定位熄灭、保持首选
+    // VA）。布局顺序即加密器的定位假设：magic → count →（表项区）→ k1 →
+    // base，相对顺序一并锁死（表项区各行由站点表发射点另行逐行断言）。
     const size_t k1Pos =
         asmText.find("mj2x_vmx64_k1_tag0 label qword\n    dq " + masmHex(k1) + "\n");
     ASSERT_GT(k1Pos, countPos) << asmText;
     const size_t basePos =
         asmText.find("mj2x_vmx64_base_tag0 label qword\n    dq mj2x_vmx64_sites_tag0\n");
     ASSERT_GT(basePos, k1Pos) << asmText;
-    // prologue 镜像差：r12 = base 值 - 表运行时地址（未加密 = 0，加密 = -delta）。
+    // prologue 的形态/基差算定序列：r12 = base qword 落盘值 - 表运行时地址
+    // （rdi）。未加密产物装载器已改写 base → r12 = 0（明文 dispatch）；
+    // 加密产物 base 保持首选 VA → r12 = -delta（NEXT 的 sub rdx, r12 补基
+    // 差）。这三行是 NEXT 形态分支的前提，逐字符锁定。
     EXPECT_NE(asmText.find("    lea r12, [mj2x_vmx64_base_tag0]\n"
                            "    mov r12, [r12]\n"
                            "    sub r12, rdi\n"),

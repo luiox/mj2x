@@ -1,8 +1,8 @@
-// vmx64 post-link 站点表加密器单元测试：合成最小 AMD64 PE（DOS/PE 头 + 两
-// 段 + .reloc），按发射器数据表布局（vmx64_asm_emit.hpp Phase 3 节）铺一个
-// 三站点表实例，验证加密器的三步改写与全部 fail-closed 面。纯字节运算，
-// linux/windows 双平台 CI 可跑（真实 DLL 的端到端加密由 vmx64 E2E 的
-// --compile 路径覆盖）。
+// vmx64 post-link 站点表加密器单元测试（契约：doc:vm-site-table-encryption）：
+// 合成最小 AMD64 PE（DOS/PE 头 + .data/.reloc 两段），按发射器的数据表布局
+// 铺一个三站点表实例，验证加密器三步改写逐项到位与全部 fail-closed 面。
+// 纯字节运算，linux/windows 双平台 CI 可跑（真实 DLL 的端到端加密由
+// vmx64 E2E 的 --compile 路径覆盖）。
 
 #include <gmock/gmock.h>
 
@@ -59,8 +59,10 @@ uint64_t rd64(const std::vector<uint8_t>& img, size_t off)
            (static_cast<uint64_t>(img[off + 7]) << 56);
 }
 
-/// 合成最小 PE64：.data（magic/计数/3 表项/k1/base 自引用）+ .reloc
-///（4 个 DIR64 项：3 表项 + base）。返回 (镜像, 表项链接值, k1)。
+/// 合成最小 PE64：.data 里按发射器布局铺一张三站点表（magic/站点数/3 表项
+/// /k1/base 自引用指针），.reloc 里放 4 条 DIR64 项（3 表项 + base）。表项
+/// 落盘值 = handler 首选 VA - ks64(t)（`dq sym - imm` 的链接产物形态），
+/// 即加密器输入的未加密形态。
 struct SyntheticPe
 {
     std::vector<uint8_t>   img;
@@ -102,12 +104,13 @@ SyntheticPe makeSyntheticPe()
     writeSection(0x148, ".data", kDataVa, kDataRawSz, kDataRawPtr);
     writeSection(0x170, ".reloc", kRelocVa, kRelocRawSz, kRelocRawPtr);
 
-    // --- .data：表布局（magic/计数/3 表项/k1/base）---
+    // --- .data：表布局（magic/站点数/3 表项/k1/base）---
     const size_t magicOff = kDataRawPtr;
     wr64(sp.img, magicOff, mj2x::kVmx64TableMagic);
     wr64(sp.img, magicOff + 8, 3);
     sp.entriesOff = magicOff + 16;
-    // 链接期落盘值 = handler 首选 VA - ks64(t)（`dq sym - imm` 的产物形态）。
+    // 链接期落盘值 = handler 首选 VA - ks64(t)：源级 `dq sym - imm` 经链接
+    // 器解析后的产物形态（加密器输入）。
     const uint64_t prefHandlers[3] = {0x140001000ULL, 0x140002000ULL, 0x140003000ULL};
     for (uint32_t t = 0; t < 3; ++t) {
         const uint64_t link = prefHandlers[t] - mj2x::vmx64Ks64(t, k1);
@@ -119,12 +122,13 @@ SyntheticPe makeSyntheticPe()
     sp.baseOff = k1Off + 8;
     sp.tableRva = kDataVa + static_cast<uint32_t>(sp.entriesOff - kDataRawPtr);
     sp.baseRva  = kDataVa + static_cast<uint32_t>(sp.baseOff - kDataRawPtr);
-    // base qword：自引用指针的链接值 = 表首选 VA。
+    // base qword：自引用指针（`dq 表label` 的产物），链接值 = 表首选 VA。
     wr64(sp.img, sp.baseOff, kImageBase + sp.tableRva);
 
-    // --- .reloc：一个 page 块 4 个 DIR64 项（3 表项 + base）+ 全零终结块 ---
-    // （MSVC link.exe 的 .reloc 以全零块收尾——熄灭遍历必须认得它，回归锁定；
-    //   4 项 × 2B + 8B 头 = 16 本就 4 对齐，无补零。）
+    // --- .reloc：一个 page 块装 4 条 DIR64 项（3 表项 + base）+ 全零终结块。
+    // 每项 2 字节 = type（高 4 位，10 = DIR64）| 页内偏移（低 12 位）。
+    // 全零终结块是 MSVC link.exe 的固定收尾——熄灭遍历必须认得它并正常
+    // 停下，回归锁定。4 项 × 2B + 8B 块头 = 16，本就 4 对齐，无补零。
     const size_t block = kRelocRawPtr;
     wr32(sp.img, block, kDataVa);          // pageRVA
     wr32(sp.img, block + 4, 8 + 4 * 2);    // blockSize = 16
@@ -165,8 +169,8 @@ fs::path caseFile(const std::string& name)
 }   // namespace
 
 // ===========================================================================
-// 正路：三步改写逐项核对（表项异或 / 重定位熄灭 / 痕迹清零）+ 确定性 +
-// 幂等护栏（二次加密拒绝）。
+// 正路：三步改写逐项核对 + 确定性 + 幂等护栏。
+// 三步 = 第 1 步表项纯异或 / 第 2 步重定位熄灭 / 第 3 步定位痕迹清零。
 // ===========================================================================
 TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
 {
@@ -180,14 +184,17 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
     std::vector<uint8_t> out;
     ASSERT_TRUE(readFile(file, out));
 
-    // 1) 表项 = 链接值 XOR ks64(t, k1)；base 内容不变。
+    // 1) 第 1 步表项纯异或：每项 = 链接期落盘值 XOR ks64(t, k1)——运行时
+    //    handler 重算同一 keystream 即可解回；base qword 是自引用指针不是
+    //    密文，必须原样保留。
     for (uint32_t t = 0; t < 3; ++t) {
         EXPECT_EQ(rd64(out, sp.entriesOff + t * 8),
                   sp.linkValues[t] ^ mj2x::vmx64Ks64(t, sp.k1))
             << "entry " << t;
     }
     EXPECT_EQ(rd64(out, sp.baseOff), kImageBase + sp.tableRva) << "base qword must survive";
-    // 2) 重定位熄灭：4 个 DIR64 项的 type 位清零（offset 保留）。
+    // 2) 第 2 步重定位熄灭：4 条 DIR64 项的 type 字段翻 0（ABSOLUTE，装载
+    //    器跳过），低 12 位页内偏移保留。
     const uint32_t offs[4] = {sp.tableRva - kDataVa, sp.tableRva - kDataVa + 8,
                               sp.tableRva - kDataVa + 16, sp.baseRva - kDataVa};
     for (int i = 0; i < 4; ++i) {
@@ -196,12 +203,12 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
         EXPECT_EQ(e & 0x0FFF, offs[i] & 0x0FFF) << "entry " << i;
         EXPECT_EQ(e >> 12, 0) << "entry " << i << " must be ABSOLUTE";
     }
-    // 3) 痕迹清零：magic/计数/k1。
+    // 3) 第 3 步定位痕迹清零：magic/站点数/k1 三个 qword 归零。
     EXPECT_EQ(rd64(out, kDataRawPtr), 0u);
     EXPECT_EQ(rd64(out, kDataRawPtr + 8), 0u);
     EXPECT_EQ(rd64(out, sp.entriesOff + 24), 0u);
 
-    // 4) 确定性：同输入重放逐字节相同。
+    // 4) 确定性：加密无随机量，同输入重放逐字节相同。
     const fs::path again = caseFile("again.dll");
     ASSERT_TRUE(writeFile(again, sp.img));
     const auto r2 = mj2x::vmx64EncryptSiteTable(again.string());
@@ -210,17 +217,21 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
     ASSERT_TRUE(readFile(again, out2));
     EXPECT_EQ(out, out2) << "encryption must be deterministic";
 
-    // 5) 幂等护栏：对已加密产物二次加密 = 定位符缺失 = fail-closed。
+    // 5) 幂等护栏：加密后 magic/k1 已清零，对已加密产物二次加密 = magic
+    //    扫描零命中 = fail-closed 拒绝，不会把密文再 XOR 一遍。
     const auto r3 = mj2x::vmx64EncryptSiteTable(file.string());
     EXPECT_TRUE(r3.is_err()) << "double encryption must be rejected";
 }
 
 // ===========================================================================
-// fail-closed 面：非 PE / 非 AMD64 / 重定位项缺失——全部拒绝且不落半改写。
+// fail-closed 面：每个坏形态对应一种真实事故——非 PE / 非 AMD64（输错输入
+// 文件）、重定位项缺失（产物不是预期链接形态）、计数越界（magic 碰撞或表
+// 被改）、k1 为 0（已加密或损坏）、.reloc 畸形。全部拒绝且原文件一字不动
+// （不落半改写产物）。
 // ===========================================================================
 TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
 {
-    // 非 MZ。
+    // 不是 PE（无 MZ 签名）：输错输入文件。
     {
         const fs::path f = caseFile("notpe.dll");
         std::vector<uint8_t> junk(0x100, 0x41);
@@ -231,7 +242,7 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         ASSERT_TRUE(readFile(f, after));
         EXPECT_EQ(after, junk) << "rejected input must be untouched";
     }
-    // 非 AMD64 machine。
+    // 非 AMD64：加密器的全部字段偏移按 AMD64 PE32+ 布局取，不猜其他架构。
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
@@ -244,7 +255,9 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         ASSERT_TRUE(readFile(f, after));
         EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
-    // 表项重定位缺失（第 2 个 DIR64 项抹成 ABSOLUTE：高字节的 type 位清零）。
+    // 表项重定位缺失：把第 2 条 DIR64 项抹成 ABSOLUTE（高 4 位 type 清零）
+    // → 表项 1 的熄灭目标找不到。对应真实事故：重定位被剥掉或产物被改——
+    // 熄灭一半留一半会让装载器改写部分密文，dispatch 静默走错。
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
@@ -257,7 +270,8 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         ASSERT_TRUE(readFile(f, after));
         EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
-    // 计数越界。
+    // 计数越界：站点数超出 u16 域（发射器只产 1..0xFFFF 个站点）→ magic
+    // 碰撞或表被改。
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
@@ -270,7 +284,8 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         ASSERT_TRUE(readFile(f, after));
         EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
-    // k1 为 0（已加密或损坏）。
+    // k1 为 0：上一次加密已把 k1 清零（重复加密）或表损坏。若放行，掩码
+    // 退化为固定公开常数 ks64(t, 0)，产出任何人都能解开的「伪加密」。
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
@@ -283,7 +298,7 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         ASSERT_TRUE(readFile(f, after));
         EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
-    // .reloc 畸形块（blockSize < 8）。
+    // .reloc 块头不足 8 字节：遍历会走出块边界，先拒。
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;

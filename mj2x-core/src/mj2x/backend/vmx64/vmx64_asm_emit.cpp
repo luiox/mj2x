@@ -81,6 +81,11 @@ uint64_t vmx64Ks64(uint64_t x, uint64_t k1)
 
 // ===========================================================================
 // 共享 handler 集（含 vmx64_NEXT 宏）：每个 .asm 一份，跨方法共享。
+// handler 语义只依赖站点操作数布局，与具体方法无关；NEXT 宏是 dispatch 的
+// 核心——从指令流解出站点号、查站点表、解回 handler 地址（表项两种落盘
+// 形态的分支算术见头文件「post-link 站点表加密」节，数字例子见
+// doc:vm-site-table-encryption）。发射出的 .asm 注释文本是字符串字面量，
+// 与 C++ 侧注释各自维护，不要在此处重复其内容。
 // ===========================================================================
 std::string Vmx64AsmEmitter::emitSharedHandlers()
 {
@@ -126,8 +131,9 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
     out += "endm\n";
     out += "\n";
     // 宏定义后必须先开 .code 段再落 handler 标签/指令：MASM 要求一切指令在
-    // 段内（段外代码报 "must be in segment block"）。public 与标签都收进
-    // .code；后续方法段自带 .data/.code 切换，与共享段共存于同一 TU。
+    // 段内（段外代码报 "must be in segment block"）。public 声明与 handler
+    // 标签都收进 .code；后续方法段自带 .data/.code 切换，与共享段共存于
+    // 同一 TU。
     out += ".code\n";
     out += "\n";
     out += "public mj2x_vmx64_h_iconst\n";
@@ -302,15 +308,20 @@ std::string Vmx64AsmEmitter::emitSharedHandlers()
 }
 
 // ===========================================================================
-// 方法段：加密指令流 + 加密站点表（.data）+ JNI 入口（.code）。
+// 方法段：加密指令流 + 站点表 + k1/base 尾 qword（.data）+ JNI 入口（.code）。
 // ===========================================================================
 std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t instanceSeed,
                                         const std::string& methodTag)
 {
-    // K1 从实例 seed 独立派生（与站点号/偏移输入解耦）。
+    // K1 从实例 seed 独立派生（与站点号/流偏移输入解耦；常数 0x766D783634
+    // 即 ASCII "vmx64"，域分隔）。这一个 k1 后文三处使用：流链字 ks64、表项
+    // addend/掩码 ks64、prologue `mov r15, imm` 与表尾 dq——四份落点同一
+    // C++ 局部变量，无漂移面。
     const uint64_t k1 = ca::random::SplitMix64(instanceSeed ^ 0x766D783634ULL).next();
 
-    // --- 流加密（副本上改写 tEnc 字：t ^ (u16)ks64(offset)）---
+    // --- 指令流加密（副本上改写 tEnc 字）---
+    // tEnc = 站点号 t XOR (u16)ks64(流偏移)。handler 由 rbx（当前流偏移）
+    // 重算同一 keystream 异或解回站点号——流里没有明文 opcode。
     std::vector<uint8_t> stream = program.stream;
     for (size_t t = 0; t < program.sites.size(); ++t) {
         const uint32_t off = program.sites[t].streamOffset;
@@ -351,26 +362,31 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
     }
     out += "\n";
     out += "align 8\n";
-    // 表头三件套：magic（加密器定位符，加密后清零）+ 站点数（校验用，加密后
-    // 清零）。二者不落 label——消费方只有字节级扫描的 post-link 加密器。
+    // 表头两 qword：magic（post-link 加密器的字节级定位符，加密后清零）+
+    // 站点数（加密器布局校验用，加密后清零）。二者不落 label——消费方只有
+    // 字节级扫描的加密器，符号名帮不上忙（release DLL 无 COFF 符号表）。
     out += "    dq " + masmHex(kVmx64TableMagic) + "\n";
     out += "    dq " + masmHex(static_cast<uint64_t>(program.sites.size())) + "\n";
     out += "mj2x_vmx64_sites_" + methodTag + " label qword\n";
-    // 站点表：entry[t] = handler 地址 - ks64(t)（源级可表达的加密形态：
-    // 重定位 + addend；handler 尾 xor/add 解回明文）。post-link 加密器把
-    // 落盘字节改写为 (handler 首选 VA - ks64(t)) XOR ks64(t) 纯异或形态，
-    // 并把表区+base qword 的 DIR64 重定位翻成 ABSOLUTE（装载器不再触碰）。
+    // 站点表 n 个 qword。源级形态 `dq handler符号 - ks64(t)`：链接器把符号
+    // 解析成首选 VA，落盘字节 = handler 首选 VA - ks64(t)，且每个表项带一
+    // 条 DIR64 重定位（装载器往里加镜像基差）。未加密产物运行时 handler
+    // `add r11`（r11 = ks64(t)）直解回真地址。post-link 加密器再把落盘
+    // 字节改写为 (handler 首选 VA - ks64(t)) XOR ks64(t, k1) 纯异或形态、
+    // 熄灭重定位——两条路径的运行时算术见 doc:vm-site-table-encryption。
     for (size_t t = 0; t < program.sites.size(); ++t) {
         const uint64_t addend = vmx64Ks64(static_cast<uint64_t>(t), k1);
         out += "    dq mj2x_vmx64_h_" + std::string(vmx64OpHandlerName(program.sites[t].op)) +
                "-" + masmHex(addend) + "\n";
     }
-    // k1 qword：加密器的密钥材料单源（与 prologue 的 mov r15 imm 同一 C++
-    // 局部变量，无漂移面），加密后清零。base qword：自引用重定位指针——
-    // 链接期落盘值 = 站点表首选 VA；未加密产物装载器照常改写它
-    // （运行时 = 表地址，r12 = 0，dispatch 与 Phase 2 逐位一致）；加密后
-    // 重定位翻 ABSOLUTE，静态首选 VA 常驻，r12 = 表首选 VA - 表运行时地址
-    //（-delta），handler 侧 sub rdx, r12 补回镜像基差。
+    // 表尾两 qword：
+    //   k1：加密器的密钥材料（与 prologue 的 mov r15 imm 同一 C++ 局部变量，
+    //       无漂移面），加密后清零。
+    //   base：自引用指针，链接期落盘值 = 站点表首选 VA。它是运行时形态
+    //       分支的支点——未加密产物装载器照常改写它（运行时 = 表运行时
+    //       地址，prologue 的 r12 = 0，走明文 add-only dispatch）；加密后
+    //       重定位熄灭，静态首选 VA 常驻（r12 = 首选 VA - 表运行时地址 =
+    //       -delta），handler 侧 sub rdx, r12 补回镜像基差。
     out += "mj2x_vmx64_k1_" + methodTag + " label qword\n";
     out += "    dq " + masmHex(k1) + "\n";
     out += "mj2x_vmx64_base_" + methodTag + " label qword\n";
@@ -459,9 +475,11 @@ std::string Vmx64AsmEmitter::emitMethod(const Vmx64Program& program, uint64_t in
         }
     }
     out += "    xor ebx, ebx\n";
-    // r12 = base qword 值 - 站点表运行时地址：未加密产物（base 活重定位）= 0；
-    // 加密产物（base 静态首选 VA）= -镜像装载差。vmx64_NEXT 的 sub rdx, r12
-    // 消费。参数 homing 之后才可动 r8 之外的易变寄存器——这里只用 r12/rdi。
+    // 形态/基差算定：r12 = base qword 落盘值 - 表运行时地址（rdi）。未加密
+    // 产物装载器已把 base 改写成表运行时地址 → r12 = 0（明文 dispatch）；
+    // 加密产物 base 保持首选 VA → r12 = -delta，NEXT 用 sub rdx, r12 把基
+    // 差补回。NEXT 的 test/jz 以 r12 是否为 0 分流两条算术路径。参数 homing
+    // 之后才可动 r8 之外的易变寄存器——这里只用 r12/rdi。
     out += "    lea r12, [mj2x_vmx64_base_" + methodTag + "]\n";
     out += "    mov r12, [r12]\n";
     out += "    sub r12, rdi\n";

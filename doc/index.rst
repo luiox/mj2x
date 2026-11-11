@@ -49,3 +49,4 @@ mj2x 设计规格
    techniques/runtime-anti-debug
    techniques/string-encryption
    techniques/native-lib-encryption
+   techniques/vm-site-table-encryption
