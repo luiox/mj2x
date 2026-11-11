@@ -31,7 +31,7 @@ namespace mj2x {
 /// @param data 字节缓冲（可空指针当 size == 0，写出空文件合法）。
 /// @return 失败携带可读错误文本（风格与 vmx64 post-link 加密器一致）。
 ca::core::Result<void, std::string> writeFileAtomically(const std::filesystem::path& dst,
-                                                        const ca::u8* data, usize size);
+                                                        const ca::u8* data, ca::usize size);
 
 /// @brief 把 @p src 原子复制为 @p dst：先 copy 到唯一临时文件，校验非空后
 ///        rename 替换目标。

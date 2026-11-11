@@ -63,7 +63,7 @@ ca::core::Result<void, std::string> renameReplaceUnique(const std::filesystem::p
 }   // namespace
 
 ca::core::Result<void, std::string> writeFileAtomically(const std::filesystem::path& dst,
-                                                        const ca::u8* data, usize size)
+                                                        const ca::u8* data, ca::usize size)
 {
     const std::filesystem::path temporary = temporaryFor(dst);
     {
