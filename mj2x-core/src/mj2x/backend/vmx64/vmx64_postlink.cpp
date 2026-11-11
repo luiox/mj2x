@@ -6,10 +6,10 @@
 #include <iterator>
 #include <set>
 #include <string>
-#include <system_error>
 #include <vector>
 
 #include "mj2x/backend/vmx64/vmx64_asm_emit.hpp"
+#include "mj2x/io/fs_atomic.hpp"
 
 namespace mj2x {
 
@@ -308,22 +308,13 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
     if (quenched.is_err()) return ca::core::Err(std::move(quenched).unwrap_err());
 
     // --- 单次回写（校验全过才触盘） ---
-    // 写临时文件 + rename 原子替换：进程在写一半时死掉，磁盘上要么是原
-    // 产物要么是完整加密产物，不会出现半加密文件。
+    // 原子替换写单源（mj2x/io/fs_atomic.hpp）：唯一临时文件 + rename 收尾
+    // （Windows 走 MoveFileExW REPLACE_EXISTING|WRITE_THROUGH）。进程在写
+    // 一半时死掉或替换失败，磁盘上要么是原产物要么是完整加密产物，不会
+    // 出现半加密文件；失败路径同时清理临时文件，不留尸体。
     const std::filesystem::path finalPath(dllPath);
-    const std::filesystem::path tmpPath = finalPath.string() + ".mj2x-enc-tmp";
-    {
-        std::ofstream outF(tmpPath, std::ios::binary | std::ios::trunc);
-        if (!outF) return ca::core::Err(std::string("cannot open for write: " + tmpPath.string()));
-        outF.write(reinterpret_cast<const char*>(img.data()),
-                   static_cast<std::streamsize>(img.size()));
-        outF.close();
-        if (!outF) return ca::core::Err(std::string("write-back failed: " + tmpPath.string()));
-    }
-    std::error_code renameEc;
-    std::filesystem::rename(tmpPath, finalPath, renameEc);
-    if (renameEc)
-        return ca::core::Err(std::string("atomic rename failed: ") + renameEc.message());
+    auto written = writeFileAtomically(finalPath, img.data(), img.size());
+    if (written.is_err()) return ca::core::Err(std::move(written).unwrap_err());
     return ca::core::Ok();
 }
 
