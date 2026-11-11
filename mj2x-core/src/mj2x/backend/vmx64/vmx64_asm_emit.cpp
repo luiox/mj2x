@@ -72,6 +72,9 @@ uint64_t vmx64DeriveInstanceSeed(uint64_t mainSeed, uint64_t identityHash)
 uint64_t vmx64Ks64(uint64_t x, uint64_t k1)
 {
     // 与 .asm 内 vmx64_NEXT 的 imul/rol/xor/imul 序列逐位一致（改式双侧同步）。
+    // 这是位置驱动的密钥流；另一种（mj2x/core/native_lib_crypto.hpp 的
+    // xorshift32 字节流，镜像 NativeLoader 字节码）机制与镜像边界都不同，
+    // 勿混淆、勿合并。
     uint64_t v = x * kVmx64P1;
     v          = rotl64(v, 13);
     v ^= k1;

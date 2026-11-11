@@ -1845,7 +1845,9 @@ void RegCBackend::finalize(const CompilerIndex& index)
 
 void RegCBackend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) const
 {
-    // 照搬 StackC 的惰性逐类 RegisterNatives 发射（stackc_backend.cpp:1332-1716）：
+    // 照搬 StackC 的惰性逐类 RegisterNatives 发射（stackc_registration.cpp:283
+    // StackCBackend::Impl::emitRegistrationCode；历史行号 stackc_backend.cpp
+    // :1332-1716 已随发射器迁出 stackc_backend.cpp 过期）：
     //   - 每类一个 static jint _mj2x_register_<class>(JNIEnv*, jclass)：建 JNINativeMethod[]
     //     并 RegisterNatives。
     //   - static _mj2x_reg_method _mj2x_reg_methods[N] 表（按 classId 索引）。

@@ -38,6 +38,11 @@
 ///   P1 = 0x61C88647, P2 = 0x045D9F3B（固定公开常数，均 < 2^31，可作
 ///   imul r64, r64, imm32 立即数发射）；K1 从 instanceSeed 派生。
 ///
+/// 注意区分另一种密钥流：mj2x/core/native_lib_crypto.hpp 的 xorshift32
+/// 字节流（native 库加密存储，镜像边界是 NativeLoader 字节码）。两者只是
+/// 「XOR 密钥流」同概念，机制与镜像边界不同——ks64 位置驱动、镜像 .asm
+/// dispatch，勿混淆、勿合并。
+///
 /// 两个消费点（发射侧 C++ 与 .asm handler 侧逐指令镜像，改公式必须双侧
 /// 同步——vmx64_stream_interp_test 的 Ks64AsmMacroReplaysCppSide 逐行锁死）：
 ///   - 指令流加密：流中每条指令开头的 tEnc 字 = 站点号 t XOR
