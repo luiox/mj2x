@@ -16,9 +16,16 @@
 #include "test_helper.hpp"
 #include "libca/random/split_mix64.hpp"
 #include "mj2x/backend/vmx64/vmx64_asm_emit.hpp"
+#include "mj2x/backend/vmx64/vmx64_le_bytes.hpp"
 #include "mj2x/backend/vmx64/vmx64_postlink.hpp"
 
 namespace fs = std::filesystem;
+
+// LE 读写原语与生产侧单源（vmx64_le_bytes.hpp），不再测试内复制一份。
+using mj2x::leRead64;
+using mj2x::leWrite16;
+using mj2x::leWrite32;
+using mj2x::leWrite64;
 
 namespace {
 
@@ -29,35 +36,6 @@ constexpr uint32_t kDataRawSz  = 0x200;
 constexpr uint32_t kRelocVa    = 0x2000;
 constexpr uint32_t kRelocRawPtr = 0x600;
 constexpr uint32_t kRelocRawSz  = 0x20;
-
-void wr16(std::vector<uint8_t>& img, size_t off, uint16_t v)
-{
-    img[off]     = static_cast<uint8_t>(v & 0xFF);
-    img[off + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
-}
-
-void wr32(std::vector<uint8_t>& img, size_t off, uint32_t v)
-{
-    wr16(img, off, static_cast<uint16_t>(v & 0xFFFF));
-    wr16(img, off + 2, static_cast<uint16_t>((v >> 16) & 0xFFFF));
-}
-
-void wr64(std::vector<uint8_t>& img, size_t off, uint64_t v)
-{
-    wr32(img, off, static_cast<uint32_t>(v & 0xFFFFFFFFu));
-    wr32(img, off + 4, static_cast<uint32_t>((v >> 32) & 0xFFFFFFFFu));
-}
-
-uint64_t rd64(const std::vector<uint8_t>& img, size_t off)
-{
-    return static_cast<uint64_t>(img[off]) | (static_cast<uint64_t>(img[off + 1]) << 8) |
-           (static_cast<uint64_t>(img[off + 2]) << 16) |
-           (static_cast<uint64_t>(img[off + 3]) << 24) |
-           (static_cast<uint64_t>(img[off + 4]) << 32) |
-           (static_cast<uint64_t>(img[off + 5]) << 40) |
-           (static_cast<uint64_t>(img[off + 6]) << 48) |
-           (static_cast<uint64_t>(img[off + 7]) << 56);
-}
 
 /// 合成最小 PE64：.data 里按发射器布局铺一张三站点表（magic/站点数/3 表项
 /// /k1/base 自引用指针），.reloc 里放 4 条 DIR64 项（3 表项 + base）。表项
@@ -84,30 +62,30 @@ SyntheticPe makeSyntheticPe()
     // --- DOS 头 ---
     sp.img[0] = 'M';
     sp.img[1] = 'Z';
-    wr32(sp.img, 0x3C, 0x40);
+    leWrite32(sp.img, 0x3C, 0x40);
     // --- PE 签名 + COFF（2 段，optional 0xF0）---
-    wr32(sp.img, 0x40, 0x00004550);
-    wr16(sp.img, 0x44, 0x8664);
-    wr16(sp.img, 0x46, 2);
-    wr16(sp.img, 0x54, 0xF0);
+    leWrite32(sp.img, 0x40, 0x00004550);
+    leWrite16(sp.img, 0x44, 0x8664);
+    leWrite16(sp.img, 0x46, 2);
+    leWrite16(sp.img, 0x54, 0xF0);
     // --- Optional header PE32+ ---
-    wr16(sp.img, 0x58, 0x020B);
-    wr64(sp.img, 0x58 + 24, kImageBase);
+    leWrite16(sp.img, 0x58, 0x020B);
+    leWrite64(sp.img, 0x58 + 24, kImageBase);
     // --- 段表 @0x148 ---
     const auto writeSection = [&](size_t off, const char* name, uint32_t va, uint32_t rawSz,
                                   uint32_t rawPtr) {
         std::memcpy(&sp.img[off], name, std::strlen(name));
-        wr32(sp.img, off + 12, va);
-        wr32(sp.img, off + 16, rawSz);
-        wr32(sp.img, off + 20, rawPtr);
+        leWrite32(sp.img, off + 12, va);
+        leWrite32(sp.img, off + 16, rawSz);
+        leWrite32(sp.img, off + 20, rawPtr);
     };
     writeSection(0x148, ".data", kDataVa, kDataRawSz, kDataRawPtr);
     writeSection(0x170, ".reloc", kRelocVa, kRelocRawSz, kRelocRawPtr);
 
     // --- .data：表布局（magic/站点数/3 表项/k1/base）---
     const size_t magicOff = kDataRawPtr;
-    wr64(sp.img, magicOff, mj2x::kVmx64TableMagic);
-    wr64(sp.img, magicOff + 8, 3);
+    leWrite64(sp.img, magicOff, mj2x::kVmx64TableMagic);
+    leWrite64(sp.img, magicOff + 8, 3);
     sp.entriesOff = magicOff + 16;
     // 链接期落盘值 = handler 首选 VA - ks64(t)：源级 `dq sym - imm` 经链接
     // 器解析后的产物形态（加密器输入）。
@@ -115,29 +93,29 @@ SyntheticPe makeSyntheticPe()
     for (uint32_t t = 0; t < 3; ++t) {
         const uint64_t link = prefHandlers[t] - mj2x::vmx64Ks64(t, k1);
         sp.linkValues.push_back(link);
-        wr64(sp.img, sp.entriesOff + t * 8, link);
+        leWrite64(sp.img, sp.entriesOff + t * 8, link);
     }
     const size_t k1Off = sp.entriesOff + 24;
-    wr64(sp.img, k1Off, k1);
+    leWrite64(sp.img, k1Off, k1);
     sp.baseOff = k1Off + 8;
     sp.tableRva = kDataVa + static_cast<uint32_t>(sp.entriesOff - kDataRawPtr);
     sp.baseRva  = kDataVa + static_cast<uint32_t>(sp.baseOff - kDataRawPtr);
     // base qword：自引用指针（`dq 表label` 的产物），链接值 = 表首选 VA。
-    wr64(sp.img, sp.baseOff, kImageBase + sp.tableRva);
+    leWrite64(sp.img, sp.baseOff, kImageBase + sp.tableRva);
 
     // --- .reloc：一个 page 块装 4 条 DIR64 项（3 表项 + base）+ 全零终结块。
     // 每项 2 字节 = type（高 4 位，10 = DIR64）| 页内偏移（低 12 位）。
     // 全零终结块是 MSVC link.exe 的固定收尾——熄灭遍历必须认得它并正常
     // 停下，回归锁定。4 项 × 2B + 8B 块头 = 16，本就 4 对齐，无补零。
     const size_t block = kRelocRawPtr;
-    wr32(sp.img, block, kDataVa);          // pageRVA
-    wr32(sp.img, block + 4, 8 + 4 * 2);    // blockSize = 16
+    leWrite32(sp.img, block, kDataVa);          // pageRVA
+    leWrite32(sp.img, block + 4, 8 + 4 * 2);    // blockSize = 16
     const uint32_t offs[4] = {sp.tableRva - kDataVa, sp.tableRva - kDataVa + 8,
                               sp.tableRva - kDataVa + 16, sp.baseRva - kDataVa};
     for (int i = 0; i < 4; ++i)
-        wr16(sp.img, block + 8 + i * 2, static_cast<uint16_t>((10 << 12) | offs[i]));
-    wr32(sp.img, block + 16, 0);           // 终结块 pageRVA = 0
-    wr32(sp.img, block + 20, 0);           // 终结块 blockSize = 0
+        leWrite16(sp.img, block + 8 + i * 2, static_cast<uint16_t>((10 << 12) | offs[i]));
+    leWrite32(sp.img, block + 16, 0);           // 终结块 pageRVA = 0
+    leWrite32(sp.img, block + 20, 0);           // 终结块 blockSize = 0
     return sp;
 }
 
@@ -188,11 +166,11 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
     //    handler 重算同一 keystream 即可解回；base qword 是自引用指针不是
     //    密文，必须原样保留。
     for (uint32_t t = 0; t < 3; ++t) {
-        EXPECT_EQ(rd64(out, sp.entriesOff + t * 8),
+        EXPECT_EQ(leRead64(out, sp.entriesOff + t * 8),
                   sp.linkValues[t] ^ mj2x::vmx64Ks64(t, sp.k1))
             << "entry " << t;
     }
-    EXPECT_EQ(rd64(out, sp.baseOff), kImageBase + sp.tableRva) << "base qword must survive";
+    EXPECT_EQ(leRead64(out, sp.baseOff), kImageBase + sp.tableRva) << "base qword must survive";
     // 2) 第 2 步重定位熄灭：4 条 DIR64 项的 type 字段翻 0（ABSOLUTE，装载
     //    器跳过），低 12 位页内偏移保留。
     const uint32_t offs[4] = {sp.tableRva - kDataVa, sp.tableRva - kDataVa + 8,
@@ -204,9 +182,9 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
         EXPECT_EQ(e >> 12, 0) << "entry " << i << " must be ABSOLUTE";
     }
     // 3) 第 3 步定位痕迹清零：magic/站点数/k1 三个 qword 归零。
-    EXPECT_EQ(rd64(out, kDataRawPtr), 0u);
-    EXPECT_EQ(rd64(out, kDataRawPtr + 8), 0u);
-    EXPECT_EQ(rd64(out, sp.entriesOff + 24), 0u);
+    EXPECT_EQ(leRead64(out, kDataRawPtr), 0u);
+    EXPECT_EQ(leRead64(out, kDataRawPtr + 8), 0u);
+    EXPECT_EQ(leRead64(out, sp.entriesOff + 24), 0u);
 
     // 4) 确定性：加密无随机量，同输入重放逐字节相同。
     const fs::path again = caseFile("again.dll");
@@ -246,7 +224,7 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
-        wr16(img, 0x44, 0x014C);   // i386
+        leWrite16(img, 0x44, 0x014C);   // i386
         const fs::path f = caseFile("i386.dll");
         ASSERT_TRUE(writeFile(f, img));
         const auto r = mj2x::vmx64EncryptSiteTable(f.string());
@@ -275,7 +253,7 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
-        wr64(img, kDataRawPtr + 8, 0x10000);
+        leWrite64(img, kDataRawPtr + 8, 0x10000);
         const fs::path f = caseFile("badcount.dll");
         ASSERT_TRUE(writeFile(f, img));
         const auto r = mj2x::vmx64EncryptSiteTable(f.string());
@@ -289,7 +267,7 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
-        wr64(img, sp.entriesOff + 24, 0);   // k1 qword
+        leWrite64(img, sp.entriesOff + 24, 0);   // k1 qword
         const fs::path f = caseFile("zerok1.dll");
         ASSERT_TRUE(writeFile(f, img));
         const auto r = mj2x::vmx64EncryptSiteTable(f.string());
@@ -302,7 +280,7 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
-        wr32(img, kRelocRawPtr + 4, 4);
+        leWrite32(img, kRelocRawPtr + 4, 4);
         const fs::path f = caseFile("badreloc.dll");
         ASSERT_TRUE(writeFile(f, img));
         const auto r = mj2x::vmx64EncryptSiteTable(f.string());

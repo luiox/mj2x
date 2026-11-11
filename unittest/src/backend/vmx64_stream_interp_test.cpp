@@ -28,6 +28,7 @@
 #include "libca/str/utf8_string.hpp"
 #include "mj2x/backend/vmx64/vmx64_asm_emit.hpp"
 #include "mj2x/backend/vmx64/vmx64_encoder.hpp"
+#include "mj2x/backend/vmx64/vmx64_le_bytes.hpp"
 #include "mj2x/backend/vmx64/vmx64_opcode.hpp"
 #include "mj2x/frontend/code_converter.hpp"
 #include "mj2x/mir/register_ir/reg_dce.hpp"
@@ -87,22 +88,8 @@ std::unique_ptr<Vmx64Program> encodeMethodNode(std::unique_ptr<MethodNode> mn,
 // ===========================================================================
 // 流级解释器：逐位镜像 .asm handler（vmx64_asm_emit.cpp）的字段偏移、宽度
 // 语义与 pc 推进。i32 写只落低 4 字节（dword store，高位留陈旧值）。
+// LE 读原语用生产侧单源（mj2x::leRead16/32/64，vmx64_le_bytes.hpp）。
 // ===========================================================================
-
-uint16_t rd16(const std::vector<uint8_t>& s, uint32_t off)
-{
-    return static_cast<uint16_t>(s[off] | (s[off + 1] << 8));
-}
-
-uint32_t rd32(const std::vector<uint8_t>& s, uint32_t off)
-{
-    return static_cast<uint32_t>(rd16(s, off)) | (static_cast<uint32_t>(rd16(s, off + 2)) << 16);
-}
-
-uint64_t rd64(const std::vector<uint8_t>& s, uint32_t off)
-{
-    return static_cast<uint64_t>(rd32(s, off)) | (static_cast<uint64_t>(rd32(s, off + 4)) << 32);
-}
 
 struct InterpOutcome
 {
@@ -154,7 +141,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             return fail("step budget exhausted (possible dispatch loop)", trace, pc);
         }
         if (pc + 1 >= p.stream.size()) return fail("pc out of stream", trace, pc);
-        const uint16_t t = rd16(p.stream, pc);
+        const uint16_t t = leRead16(p.stream, pc);
         if (t >= p.sites.size()) return fail("t out of site-table range", trace, pc);
         if (p.sites[t].streamOffset != pc) {
             return fail("site desync: stream tEnc word at pc does not match table offset",
@@ -168,7 +155,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             return fail("operand span runs past end of stream", trace, pc);
 
         const auto slotAt = [&](uint32_t off) -> uint64_t& {
-            const uint16_t idx = rd16(p.stream, off);
+            const uint16_t idx = leRead16(p.stream, off);
             return slots[idx];   // 越界由调用前的检查拦截
         };
         // i32 写镜像 asm 的 dword store：只落低 4 字节、高 4 字节保留陈旧值
@@ -178,20 +165,20 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             slot = (slot & 0xFFFFFFFF00000000ULL) | v;
         };
         const auto checkSlot = [&](uint32_t off) -> bool {
-            const uint16_t idx = rd16(p.stream, off);
+            const uint16_t idx = leRead16(p.stream, off);
             return idx < slots.size();
         };
 
         switch (op) {
         case Vmx64Op::IConst:
             if (!checkSlot(pc + 2)) return fail("iconst dst out of slots", trace, pc);
-            w32(slotAt(pc + 2), rd32(p.stream, pc + 4));
+            w32(slotAt(pc + 2), leRead32(p.stream, pc + 4));
             trace.push_back("iconst");
             pc += 8;
             break;
         case Vmx64Op::LConst:
             if (!checkSlot(pc + 2)) return fail("lconst dst out of slots", trace, pc);
-            slotAt(pc + 2) = rd64(p.stream, pc + 4);
+            slotAt(pc + 2) = leRead64(p.stream, pc + 4);
             trace.push_back("lconst");
             pc += 12;
             break;
@@ -263,7 +250,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             case Vmx64Op::IfIcmpGe: cond = a >= b; break;
             default: break;
             }
-            const uint32_t next = cond ? rd32(p.stream, pc + 6) : rd32(p.stream, pc + 10);
+            const uint32_t next = cond ? leRead32(p.stream, pc + 6) : leRead32(p.stream, pc + 10);
             char line[160];
             std::snprintf(line, sizeof(line), "icmp a=%d b=%d -> %s off=%u", a, b,
                           cond ? "true" : "false", next);
@@ -272,7 +259,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             break;
         }
         case Vmx64Op::Goto: {
-            const uint32_t next = rd32(p.stream, pc + 2);
+            const uint32_t next = leRead32(p.stream, pc + 2);
             char           line[96];
             std::snprintf(line, sizeof(line), "goto off=%u", next);
             trace.push_back(line);
