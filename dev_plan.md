@@ -11,7 +11,7 @@
 ### B. mj2x 自建测试集（#820）
 
 - 步骤 6 待做：mjdbg 对抗闭环（每用例 expected trace surface + weakness report，与 mjdbg 工具端联动）。
-- libjbc 迁移自带回归门长期驻留（原 plan_libjbc_migration §六，已随迁移批 2/批 6 落地）：round-trip 字节保真对拍门、maxs/SMT 与 javac 对拍门——后续测试清理不得顺手删除（plan_libjbc_migration.md 已归档至 doc/archive/）。
+- libjbc 迁移自带回归门长期驻留（原 plan_libjbc_migration §六，已随迁移批 2/批 6 落地）：round-trip 字节保真对拍门、maxs/SMT 与 javac 对拍门——后续测试清理不得顺手删除（原 plan_libjbc_migration 归档已删，来历见 git log）。
 
 ### C. 记录不阻塞（P3）
 

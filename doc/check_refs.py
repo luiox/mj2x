@@ -15,9 +15,6 @@
 4. rst 正文一段一行（AGENTS.md 硬规则 7）：两个连续正文行即手工断行，失败。
    代码块/字面块/指令/表格区的内容豁免——它们的续行是语法的一部分。
 
-doc/archive/ 是历史归档（只进不出）：不进 toctree、不做任何 .md/.rst 检查；
-长期归宿（删除或压缩）待后续批次定。
-
 用法：python doc/check_refs.py [仓库根]
 """
 
@@ -61,7 +58,6 @@ PROCESS_DOCS = {
 UPSTREAM_MARKERS = ("libjbc", "morpher", "mjbase", "mjt", "luiox", "私有仓", "私仓")
 
 DOC_DIRNAME = "doc"
-ARCHIVE_DIRNAME = "doc/archive"
 
 # 生成物输出路径（gitignore 的 test/、build/ 下）：报告文件名，不是文档引用。
 ARTIFACT_MD_PREFIXES = ("test/", "build/")
@@ -73,10 +69,6 @@ MD_MENTION = re.compile(r"[\w./-]*[\w-]\.md\b")
 REF_ROLE = re.compile(r":ref:`([^>`]+)`")
 DOC_ROLE = re.compile(r":doc:`([^>`]+)`")
 ANON_LINK = re.compile(r"`[^`]*\.(?:md|rst) <([^`>]+\.(?:md|rst))>`_{1,2}")
-
-
-def in_archive(p: Path) -> bool:
-    return ARCHIVE_DIRNAME in p.as_posix()
 
 
 # 生成物/结果/夹具根：其下的 .md 是产物或报告落盘（如 test_resource 下
@@ -127,8 +119,6 @@ def iter_lines(path: Path):
 
 def rst_files(doc_dir: Path):
     for p in sorted(doc_dir.rglob("*.rst")):
-        if in_archive(p):
-            continue  # 历史归档：只进不出，不进 toctree 也不做检查
         yield p
 
 
