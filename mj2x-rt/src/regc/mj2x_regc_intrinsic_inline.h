@@ -421,7 +421,7 @@ MJ2X_IINLINE int32_t mj2x_intrinsic_long_compare_unsigned(int64_t lhs, int64_t r
 
 MJ2X_IINLINE int32_t mj2x_intrinsic_char_to_code_point(uint16_t high, uint16_t low)
 {
-    // 0x35FDC00 = 0x10000 - (0xD800 << 10) - 0xDC00，三段展开式合一的常量。
+    // 0x35FDC00 = (0xD800 << 10) + 0xDC00 - 0x10000，三段展开式合一的常量。
     return (((int32_t)high << 10) + (int32_t)low - 0x35FDC00);
 }
 

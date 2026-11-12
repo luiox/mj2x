@@ -2142,6 +2142,7 @@ TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
         "  public static double bitsToDouble(long bits) { return Double.longBitsToDouble(bits); }\n"
         // ---- Integer/Long 无符号族 + max/min ----
         "  public static int compareUnsigned(int a, int b) { return Integer.compareUnsigned(a, b); }\n"
+        "  public static int longCompareUnsigned(long a, long b) { return Long.compareUnsigned(a, b); }\n"
         "  public static int divideUnsignedOrCatch(int a, int b) {\n"
         "    try { return Integer.divideUnsigned(a, b); }\n"
         "    catch (ArithmeticException e) { return -77; }\n"
@@ -2170,6 +2171,7 @@ TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
         "  public static String longToUnsignedStringRadix(long x, int radix) {\n"
         "    return Long.toUnsignedString(x, radix);\n"
         "  }\n"
+        "  public static String longToUnsignedString(long x) { return Long.toUnsignedString(x); }\n"
         "  public static int intMax(int a, int b) { return Integer.max(a, b); }\n"
         "  public static int intMin(int a, int b) { return Integer.min(a, b); }\n"
         "  public static long longMax(long a, long b) { return Long.max(a, b); }\n"
@@ -2205,6 +2207,7 @@ TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
             // 无符号族：无符号序边界、除零 pending、满界解析、非法 radix 静默回落。
             {"compareUnsigned", "RegCScalarIntrinsics.compareUnsigned(-1, 1)"},
             {"compareUnsignedMin", "RegCScalarIntrinsics.compareUnsigned(0, Integer.MIN_VALUE)"},
+            {"longCompareUnsigned", "RegCScalarIntrinsics.longCompareUnsigned(-1L, 1L)"},
             {"divideUnsignedOrCatch", "RegCScalarIntrinsics.divideUnsignedOrCatch(-1, 2)"},
             {"divideUnsignedZero", "RegCScalarIntrinsics.divideUnsignedOrCatch(1, 0)"},
             {"remainderUnsignedOrCatch", "RegCScalarIntrinsics.remainderUnsignedOrCatch(Integer.MIN_VALUE, -1)"},
@@ -2225,6 +2228,7 @@ TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
             {"toUnsignedStringBadRadix", "RegCScalarIntrinsics.toUnsignedStringRadix(5, 1)"},
             {"toUnsignedStringRadix36", "RegCScalarIntrinsics.toUnsignedStringRadix(-1, 36)"},
             {"longToUnsignedStringRadix", "RegCScalarIntrinsics.longToUnsignedStringRadix(-1L, 8)"},
+            {"longToUnsignedString", "RegCScalarIntrinsics.longToUnsignedString(-1L)"},
             {"intMax", "RegCScalarIntrinsics.intMax(-1, 1)"},
             {"intMin", "RegCScalarIntrinsics.intMin(-1, 1)"},
             {"longMax", "RegCScalarIntrinsics.longMax(Long.MIN_VALUE, Long.MAX_VALUE)"},

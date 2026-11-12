@@ -803,7 +803,7 @@ int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref js
  *     （"4294967295" -> -1、"2147483648" -> INT_MIN——返回位型）；
  *   - 符号：接受 '+' 前缀；拒绝 '-'（NFE "Illegal leading minus sign"）；
  *   - radix 越界（<2 或 >36）抛 NFE（parseUnsigned 同 parseInt 口径）；
- *   - null 输入抛 NFE（"Cannot parse null string"，非 NPE——与 parseInt 的
+ *   - null 输入抛 NFE（JDK 消息 "Null string"，非 NPE——与 parseInt 的
  *     NPE 分歧是 parseUnsigned 族自身的口径）；
  *   - 空串/空 sign/非法 digit/溢出 → NFE。
  * 累积在 uint64 域做溢出预判（value > (limit - digit) / radix），limit 为
