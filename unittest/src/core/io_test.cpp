@@ -1,5 +1,6 @@
 #include <gmock/gmock.h>
 
+#include <cstring>
 #include <fstream>
 #include <filesystem>
 #include <limits>
@@ -10,6 +11,7 @@
 #include "libca/zip/checksum.hpp"
 #include "libca/str/utf8_string.hpp"
 #include "test_helper.hpp"
+#include "mj2x/io/jar_manifest.hpp"
 #include "mj2x/backend/stackc/stackc_backend.hpp"
 #include "mj2x/mj2x.hpp"
 #include "mj2x/postprocessor/cloader_postprocessor.hpp"
@@ -687,4 +689,117 @@ TEST(PipelineTest, JarPipelineMarksClassesNativeAndPreservesResources)
     std::remove(inPath.c_str());
     std::remove(outPath.c_str());
     std::remove(cPath.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// jar_manifest：嵌入 native 库的输出 JAR 主清单 Enable-Native-Access 声明
+// （issue #58）。本机 JDK 25.0.3 实测：java -jar 启动时无该属性产生 4 行
+// restricted method 告警，有属性后告警消失；8u162/17.0.20/21.0.11 对带属性
+// 的 jar 加载行为不变（未知主属性被忽略）。
+
+namespace
+{
+std::vector<ca::u8> textBytes(const char* text)
+{
+    return std::vector<ca::u8>(text, text + std::strlen(text));
+}
+
+std::string textOf(const std::vector<ca::u8>& bytes)
+{
+    return std::string(bytes.begin(), bytes.end());
+}
+}   // namespace
+
+TEST(IOTest, ManifestNativeAccessFreshManifest)
+{
+    auto bytes = mj2x::buildNativeAccessManifest(nullptr);
+    EXPECT_EQ(textOf(bytes),
+              std::string("Manifest-Version: 1.0\r\n") + mj2x::kEnableNativeAccess + ": " +
+                  mj2x::kEnableNativeAccessValue + "\r\n\r\n");
+    EXPECT_TRUE(mj2x::manifestHasNativeAccess(bytes));
+
+    std::vector<ca::u8> none;
+    EXPECT_EQ(mj2x::buildNativeAccessManifest(&none), bytes);
+}
+
+TEST(IOTest, ManifestNativeAccessMergesIntoMainSectionOnly)
+{
+    const char* input =
+        "Manifest-Version: 1.0\r\n"
+        "Main-Class: demo.Main\r\n"
+        "\r\n"
+        "Name: pkg/A.class\r\n"
+        "SHA-256-Digest: abc\r\n"
+        "\r\n";
+    auto original = textBytes(input);
+    auto merged   = mj2x::buildNativeAccessManifest(&original);
+
+    // 属性插在主段 Manifest-Version 行之后；per-entry 段逐字节保留。
+    EXPECT_EQ(textOf(merged),
+              std::string("Manifest-Version: 1.0\r\n") + mj2x::kEnableNativeAccess + ": " +
+                  mj2x::kEnableNativeAccessValue +
+                  "\r\n"
+                  "Main-Class: demo.Main\r\n"
+                  "\r\n"
+                  "Name: pkg/A.class\r\n"
+                  "SHA-256-Digest: abc\r\n"
+                  "\r\n");
+    EXPECT_TRUE(mj2x::manifestHasNativeAccess(merged));
+
+    // 无 Manifest-Version 行时属性插在主段开头；无空行时整段视为主段；
+    // 续行（行首空格）保留。
+    const char* noVersion   = "Main-Class: demo.Main\r\n\r\nName: pkg/A.class\r\n";
+    auto        noVersionIn = textBytes(noVersion);
+    EXPECT_EQ(textOf(mj2x::buildNativeAccessManifest(&noVersionIn)),
+              std::string(mj2x::kEnableNativeAccess) + ": " + mj2x::kEnableNativeAccessValue +
+                  "\r\nMain-Class: demo.Main\r\n\r\nName: pkg/A.class\r\n");
+
+    const char* tight   = "Manifest-Version: 1.0\r\nMain-Class: M\r\n";
+    auto        tightIn = textBytes(tight);
+    EXPECT_EQ(textOf(mj2x::buildNativeAccessManifest(&tightIn)),
+              std::string("Manifest-Version: 1.0\r\n") + mj2x::kEnableNativeAccess + ": " +
+                  mj2x::kEnableNativeAccessValue + "\r\nMain-Class: M\r\n");
+
+    const char* folded =
+        "Manifest-Version: 1.0\r\nMain-Class: very.long.Name.That.Continues.On.Next\r\n Line\r\n";
+    auto foldedIn = textBytes(folded);
+    auto foldedOut = mj2x::buildNativeAccessManifest(&foldedIn);
+    EXPECT_NE(textOf(foldedOut).find("\r\n Line\r\n"), std::string::npos);
+}
+
+TEST(IOTest, ManifestNativeAccessKeepsDeclaredBytes)
+{
+    // 已声明（canonical 取值）时字节原样返回，用户显式取值优先不覆盖。
+    const char* declared = "Manifest-Version: 1.0\r\nEnable-Native-Access: ALL-UNNAMED\r\n\r\n";
+    auto        bytes    = textBytes(declared);
+    auto        same     = bytes;
+    EXPECT_EQ(mj2x::buildNativeAccessManifest(&bytes), same);
+    EXPECT_TRUE(mj2x::manifestHasNativeAccess(bytes));
+
+    // 模块名取值同样视为已声明。
+    const char* moduleValue = "Manifest-Version: 1.0\r\nEnable-Native-Access: com.example\r\n\r\n";
+    auto        moduleBytes = textBytes(moduleValue);
+    auto        moduleSame  = moduleBytes;
+    EXPECT_EQ(mj2x::buildNativeAccessManifest(&moduleBytes), moduleSame);
+    EXPECT_TRUE(mj2x::manifestHasNativeAccess(moduleBytes));
+}
+
+TEST(IOTest, ManifestNativeAccessPreservesLfAndNearMissAttribute)
+{
+    // LF 行风格的既有清单：插入行用 CRLF，既有字节不动。
+    const char* lfInput   = "Manifest-Version: 1.0\nMain-Class: M\n";
+    auto        lf        = textBytes(lfInput);
+    auto        lfMerged  = mj2x::buildNativeAccessManifest(&lf);
+    EXPECT_EQ(textOf(lfMerged),
+              std::string("Manifest-Version: 1.0\n") + mj2x::kEnableNativeAccess + ": " +
+                  mj2x::kEnableNativeAccessValue + "\r\nMain-Class: M\n");
+    EXPECT_TRUE(mj2x::manifestHasNativeAccess(lfMerged));
+
+    // 近名属性（前缀同名但多字符）不视为已声明，合并照常进行。
+    const char* nearInput  = "Manifest-Version: 1.0\r\nEnable-Native-AccessX: y\r\n\r\n";
+    auto        near       = textBytes(nearInput);
+    auto        nearMerged = mj2x::buildNativeAccessManifest(&near);
+    EXPECT_NE(near, nearMerged);
+    EXPECT_TRUE(mj2x::manifestHasNativeAccess(nearMerged));
+    EXPECT_NE(textOf(nearMerged).find("Enable-Native-AccessX: y"), std::string::npos);
 }

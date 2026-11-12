@@ -2548,7 +2548,18 @@ TEST(CliTest, CompileRegCJarWithEncryptedNativeLibRunsJvm)
     fs::create_directories(jarDir, ec);
     ASSERT_FALSE(ec) << ec.message();
 
-    const fs::path inputJar  = writeTinyJar();
+    // 输入 jar 带清单：验证嵌入时把 Enable-Native-Access 合并进既有主段
+    // （原属性保留），与无清单输入的全新主段路径互补。
+    std::string inputManifestText = "Manifest-Version: 1.0\r\nMain-Class: demo.Main\r\n\r\n";
+    const fs::path inputJar  = writeJarWithEntries(
+        "mj2x_cli_enc_input.jar",
+        {
+            {"demo/CliJarA.class", tinyClassBytes("demo/CliJarA")},
+            {"demo/CliJarB.class", tinyClassBytes("demo/CliJarB")},
+            {"assets/config.txt", std::vector<ca::u8>{'o', 'k'}},
+            {"META-INF/MANIFEST.MF",
+             std::vector<ca::u8>(inputManifestText.begin(), inputManifestText.end())},
+        });
     const fs::path outputJar = jarDir / "output_enc.jar";
     const fs::path jarDriver = jarDir / "Driver.java";
     {
@@ -2589,6 +2600,14 @@ TEST(CliTest, CompileRegCJarWithEncryptedNativeLibRunsJvm)
     auto decrypted = encBytes;
     mj2x::xorStreamBytes(decrypted.data(), decrypted.size(), 0x1234ABCDu);
     EXPECT_EQ(decrypted, plainBytes) << "XOR 解密往返与打包侧算法不一致";
+
+    // issue #58：既有清单合并路径。属性插入版本行后，Main-Class 保留。
+    auto manifestOut = readJarEntry(outputJar, "META-INF/MANIFEST.MF");
+    ASSERT_FALSE(manifestOut.empty()) << result.out;
+    std::string manifestOutText(manifestOut.begin(), manifestOut.end());
+    EXPECT_EQ(manifestOutText,
+              std::string("Manifest-Version: 1.0\r\n") + "Enable-Native-Access: ALL-UNNAMED\r\n" +
+                  "Main-Class: demo.Main\r\n\r\n");
 
     // 运行加密 jar：NativeLoader 检测 .enc 后缀 → 解密 → System.load。
     result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(outputJar, jarDir)) +
@@ -3802,6 +3821,15 @@ TEST(CliTest, CompileRegCJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable
     auto nativeResource =
         readJarEntry(outJar, "META-INF/mj2x/native/" + nativeLibrary.filename().string());
     EXPECT_FALSE(nativeResource.empty()) << result.out;
+
+    // issue #58：嵌入 native 库的输出 JAR 主清单声明 Enable-Native-Access
+    // （java -jar 启动时 JDK 25+ 免 restricted method 告警）。输入 jar 无
+    // 清单，这里验证全新主段路径。
+    auto manifestEntry = readJarEntry(outJar, "META-INF/MANIFEST.MF");
+    ASSERT_FALSE(manifestEntry.empty()) << result.out;
+    std::string manifestText(manifestEntry.begin(), manifestEntry.end());
+    EXPECT_EQ(manifestText.rfind("Manifest-Version: 1.0\r\n", 0), 0);
+    EXPECT_NE(manifestText.find("Enable-Native-Access: ALL-UNNAMED"), std::string::npos);
 
     auto                     classBytes = readJarEntry(outJar, "demo/CliJarA.class");
     ca::str::Utf8StringArena arena;

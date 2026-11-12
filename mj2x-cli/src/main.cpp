@@ -1,6 +1,7 @@
 #include "mj2x/mj2x.hpp"
 #include "mj2x/logging.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
+#include "mj2x/io/jar_manifest.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
 #include "mj2x/backend/vmx64/vmx64_postlink.hpp"
 
@@ -354,13 +355,40 @@ static int embedNativeLibraryInJar(const std::string& jarPath, const std::string
     auto             original = jzip::ZipIO::readJvm(jzip::MemorySegment(jarBytes));
     jzip::ZipArchive rewritten;
     bool             replaced = false;
+
+    // issue #58：嵌入 native 库的输出 JAR 在主清单声明 Enable-Native-Access，
+    // java -jar 启动时 JDK 25+ 据此免 restricted method 告警；JDK 24 及以下
+    // 忽略未知主属性，本机 8/17/21/25 实测加载行为不变，故无条件写入不做
+    // 版本开关。classpath 启动不受主清单约束，库形态部署仍需在命令行加
+    // java --enable-native-access=ALL-UNNAMED。既有清单时合并进主段（原
+    // 字节逐字节保留），无清单时输出全新主段并按 JAR 惯例写在首条目。
+    std::vector<ca::u8> manifestBytes;
+    bool                hasManifest = false;
+    for (const auto* local : original.getLocalFiles()) {
+        if (local->getFileName() == mj2x::kJarManifestEntry) {
+            auto data     = jzip::ZipIO::decompressLocalFile(*local);
+            manifestBytes = mj2x::buildNativeAccessManifest(&data);
+            hasManifest   = true;
+            break;
+        }
+    }
+    if (!hasManifest) {
+        manifestBytes = mj2x::buildNativeAccessManifest(nullptr);
+        rewritten.addPart(makeStoredEntry(mj2x::kJarManifestEntry, manifestBytes));
+    }
     for (const auto* local : original.getLocalFiles()) {
         const auto& name = local->getFileName();
+        if (name == mj2x::kJarManifestEntry) {
+            rewritten.addPart(makeStoredEntry(name, manifestBytes));
+            continue;
+        }
         auto data = name == entryName ? nativeBytes : jzip::ZipIO::decompressLocalFile(*local);
         if (name == entryName) replaced = true;
         rewritten.addPart(makeStoredEntry(name, data));
     }
     if (!replaced) rewritten.addPart(makeStoredEntry(entryName, nativeBytes));
+    CA_LOGT_INFO("cli", "jar manifest carries {}: {}\n", mj2x::kEnableNativeAccess,
+                 mj2x::kEnableNativeAccessValue);
 
     auto          outBytes = jzip::ZipIO::writeDirect(rewritten);
     std::ofstream ofs(jarPath, std::ios::binary);
