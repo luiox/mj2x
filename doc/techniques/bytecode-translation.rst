@@ -12,17 +12,11 @@
 本仓现状
 ----------
 
-mj2x 的翻译链是两级：``frontend/code_converter.cpp``\ 先把字节码切成 L1 MIR
-基本块（构建期维护 FrameState 模拟操作数栈，栈值不进产物）；随后
-``SSABuilder``\ 消栈构造 SSA（形态见 :ref:`ssa-construction`\ 「本仓现状」）。
+mj2x 的翻译链是两级：``frontend/code_converter.cpp``\ 先把字节码切成 L1 MIR 基本块（构建期维护 FrameState 模拟操作数栈，栈值不进产物）；随后 ``SSABuilder``\ 消栈构造 SSA（形态见 :ref:`ssa-construction`\ 「本仓现状」）。
 
-- **invokedynamic**\ 在 pipeline 级预处理静态展开（StringConcatFactory /
-  LambdaMetafactory）；残留自定义 bootstrap 站点走**\ 运行时 bootstrap 解析**
-  （模块级 cache + bsm 调用，见 :doc:`/user-guide` §5.4）。
-- **异常表**\ 按 protected 区域进 MIR，异常边由异常区域记录承载（handler 入
-  口接收异常值）。
-- **fail-closed 而非回退解释**\ ：无法安全翻译的构造保持原字节码、不生成
-  native 代码并给出明确原因——本仓没有「回退到 JVM 解释执行」的桩路线。
+- **invokedynamic**\ 在 pipeline 级预处理静态展开（StringConcatFactory / LambdaMetafactory）；残留自定义 bootstrap 站点走**\ 运行时 bootstrap 解析** （模块级 cache + bsm 调用，见 :doc:`/user-guide` §5.4）。
+- **异常表**\ 按 protected 区域进 MIR，异常边由异常区域记录承载（handler 入口接收异常值）。
+- **fail-closed 而非回退解释**\ ：无法安全翻译的构造保持原字节码、不生成 native 代码并给出明确原因——本仓没有「回退到 JVM 解释执行」的桩路线。
 
 问题
 ------
@@ -36,14 +30,12 @@ JVM 字节码是基于栈的指令集，IR 通常是基于虚拟寄存器或 SSA
 操作数栈消除
 --------------
 
-字节码中，大多数指令从栈读取操作数并将结果压回栈。翻译为 IR 时需要追踪栈的
-抽象状态。
+字节码中，大多数指令从栈读取操作数并将结果压回栈。翻译为 IR 时需要追踪栈的抽象状态。
 
 抽象栈
 ~~~~~~~~
 
-每条指令执行前，栈上值的类型是可确定的（通过帧分析）。翻译器维护一个抽象操
-作数栈，每个元素是 IR 变量引用：
+每条指令执行前，栈上值的类型是可确定的（通过帧分析）。翻译器维护一个抽象操作数栈，每个元素是 IR 变量引用：
 
 .. code-block:: text
 
@@ -56,8 +48,7 @@ JVM 字节码是基于栈的指令集，IR 通常是基于虚拟寄存器或 SSA
 Push/Pull 模式
 ~~~~~~~~~~~~~~~~
 
-每个 push 指令（``iconst_*``\ 、``ldc``\ 、``iload``\ 、``invokestatic``\ 的
-返回值等）在 IR 中产生一个 def：
+每个 push 指令（``iconst_*``\ 、``ldc``\ 、``iload``\ 、``invokestatic``\ 的返回值等）在 IR 中产生一个 def：
 
 .. code-block:: c
 
@@ -74,14 +65,12 @@ Push/Pull 模式
        }
    }
 
-每个 consume 指令从栈弹出操作数。对于 ``IADD``\ ：弹出两个值 → 创建加法 IR
-节点 → 压回结果。
+每个 consume 指令从栈弹出操作数。对于 ``IADD``\ ：弹出两个值 → 创建加法 IR 节点 → 压回结果。
 
 局部变量追踪
 ~~~~~~~~~~~~~~
 
-``istore``\ 将栈顶值写入局部变量 slot，``iload``\ 读取。在翻译的抽象状态中
-维护一个 slot → IR Value 的映射：
+``istore``\ 将栈顶值写入局部变量 slot，``iload``\ 读取。在翻译的抽象状态中维护一个 slot → IR Value 的映射：
 
 .. code-block:: c
 
@@ -113,8 +102,7 @@ Push/Pull 模式
 Switch
 ~~~~~~~~
 
-``tableswitch``\ 和 ``lookupswitch``\ 翻译为 IR 中的 switch 节点或级联条件
-链：
+``tableswitch``\ 和 ``lookupswitch``\ 翻译为 IR 中的 switch 节点或级联条件链：
 
 .. code-block:: text
 
@@ -131,20 +119,17 @@ Switch
 异常处理
 ----------
 
-JVM 异常处理是翻译中最复杂的部分。异常表条目 {start, end, handler, type}
-定义了 protected 区域。
+JVM 异常处理是翻译中最复杂的部分。异常表条目 {start, end, handler, type} 定义了 protected 区域。
 
 异常边
 ~~~~~~~~
 
-CFG 中，异常表 protected 区域内的每条指令都可能通过异常边到达 handler。翻译
-时 try 块中的每条可能抛异常的调用/指令后都需要隐含的异常分支到 handler。
+CFG 中，异常表 protected 区域内的每条指令都可能通过异常边到达 handler。翻译时 try 块中的每条可能抛异常的调用/指令后都需要隐含的异常分支到 handler。
 
 异常状态修复
 ~~~~~~~~~~~~~~
 
-异常发生时，JVM 的操作数栈被清空，局部变量保持原值，异常引用被压入 handler
-的栈。翻译为 IR 时，handler 入口处需接收异常值作为隐式参数：
+异常发生时，JVM 的操作数栈被清空，局部变量保持原值，异常引用被压入 handler 的栈。翻译为 IR 时，handler 入口处需接收异常值作为隐式参数：
 
 .. code-block:: text
 
@@ -154,14 +139,12 @@ CFG 中，异常表 protected 区域内的每条指令都可能通过异常边�
 Finally
 ~~~~~~~~~
 
-``javac``\ 生成的 finally 块本质上是 try/catch 的复制。翻译时需要识别
-finally 模式（复制两份的 try/catch 结构）并做特殊处理，或保持为两个副本。
+``javac``\ 生成的 finally 块本质上是 try/catch 的复制。翻译时需要识别 finally 模式（复制两份的 try/catch 结构）并做特殊处理，或保持为两个副本。
 
 Invokedynamic 桥接
 --------------------
 
-``invokedynamic``\ 的链接发生在运行时，编译器在翻译时不知道实际目标。处理方
-式：
+``invokedynamic``\ 的链接发生在运行时，编译器在翻译时不知道实际目标。处理方式：
 
 保持 indy 调用
 ~~~~~~~~~~~~~~~~
@@ -176,8 +159,7 @@ Invokedynamic 桥接
 Bootstrap 提前评估
 ~~~~~~~~~~~~~~~~~~~~
 
-对于 bootstrap 参数全是编译期常量的 ``ConstantCallSite``\ ，编译时可以本地评
-估 BSM 并确定目标。如果目标方法是 JDK 方法，可以用 intrinsic 替换。
+对于 bootstrap 参数全是编译期常量的 ``ConstantCallSite``\ ，编译时可以本地评估 BSM 并确定目标。如果目标方法是 JDK 方法，可以用 intrinsic 替换。
 
 数组与对象操作
 ----------------
@@ -185,20 +167,17 @@ Bootstrap 提前评估
 数组
 ~~~~~~
 
-``newarray`` / ``anewarray`` / ``multianewarray``\ → IR 中的数组分配节点。
-``aaload`` / ``aastore``\ → 数组访问节点。
+``newarray`` / ``anewarray`` / ``multianewarray``\ → IR 中的数组分配节点。 ``aaload`` / ``aastore``\ → 数组访问节点。
 
 字段
 ~~~~~~
 
-``getfield`` / ``putfield``\ → 对象字段访问节点。需要解析字段偏移（JVM 布
-局）或生成 JNI 调用。
+``getfield`` / ``putfield``\ → 对象字段访问节点。需要解析字段偏移（JVM 布局）或生成 JNI 调用。
 
 类型检查
 ~~~~~~~~~~
 
-``checkcast`` / ``instanceof``\ → 类型检查节点。翻译为运行时类型查询（比较
-类元数据或调用 JNI 函数）。
+``checkcast`` / ``instanceof``\ → 类型检查节点。翻译为运行时类型查询（比较类元数据或调用 JNI 函数）。
 
 翻译的保守策略
 ----------------

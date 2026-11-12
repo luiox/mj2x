@@ -3,8 +3,7 @@
 编译器内联函数（Intrinsic）
 =============================
 
-状态：定稿（通用品类综述；**\ 本仓实际识别面以「本仓现状」节为准**\ ，下文表格
-是业界常用 intrinsic 的品类罗列，不代表本仓已支持）
+状态：定稿（通用品类综述；**\ 本仓实际识别面以「本仓现状」节为准**\ ，下文表格是业界常用 intrinsic 的品类罗列，不代表本仓已支持）
 
 在编译时将特定的 JDK 方法调用替换为原生代码实现。
 
@@ -13,33 +12,22 @@
 本仓现状
 ----------
 
-mj2x 的 intrinsic 识别面是**\ 保护导向的窄场景**\ ，不是完整 JDK 对象模型（登记
-表在 ``mj2x-core/src/mj2x/backend/regc/regc_intrinsic_registry.cpp``\ ）：
+mj2x 的 intrinsic 识别面是**\ 保护导向的窄场景**\ ，不是完整 JDK 对象模型（登记表在 ``mj2x-core/src/mj2x/backend/regc/regc_intrinsic_registry.cpp``\ ）：
 
-- ``java.lang.Math``\ 纯函数面：``abs`` / ``min`` / ``max`` / ``sin`` /
-  ``cos`` / ``tan`` / ``sqrt`` / ``pow`` / ``floor`` / ``ceil`` / ``round`` /
-  ``random``\ 等直调 mj2x-rt runtime 符号
+- ``java.lang.Math``\ 纯函数面：``abs`` / ``min`` / ``max`` / ``sin`` / ``cos`` / ``tan`` / ``sqrt`` / ``pow`` / ``floor`` / ``ceil`` / ``round`` / ``random``\ 等直调 mj2x-rt runtime 符号
 - ``Integer.parseInt(String)``\ （含字符串字面量参数）
-- 非逃逸包装类窄链路：``Integer/Long/.../Character.valueOf``\ 后接对应
-  ``xxxValue``
+- 非逃逸包装类窄链路：``Integer/Long/.../Character.valueOf``\ 后接对应 ``xxxValue``
 - 非逃逸 ``java.util.Random``\ 状态机切片（``new Random(seed)``\ + nextXxx）
-- ``StringBuilder`` / ``StringBuffer``\ 状态机切片与 ``String``\ 类方法面
-  （RegC/LLVM）
+- ``StringBuilder`` / ``StringBuffer``\ 状态机切片与 ``String``\ 类方法面（RegC/LLVM）
 
-逃逸即 fail-closed：包装类或 ``Random``\ 对象一旦作为返回值、字段/数组元素、
-未知 Java 调用参数或跨复杂 CFG 边界逃逸，不生成语义不可靠的 jobject。完整判
-据见 :doc:`/user-guide` §7.1；任意 Java 静态调用点降级为用户 native symbol
-直调的自定义面见 :doc:`/user-intrinsic`\ （``--intrinsic-config``\ ）。
+逃逸即 fail-closed：包装类或 ``Random``\ 对象一旦作为返回值、字段/数组元素、未知 Java 调用参数或跨复杂 CFG 边界逃逸，不生成语义不可靠的 jobject。完整判据见 :doc:`/user-guide` §7.1；任意 Java 静态调用点降级为用户 native symbol 直调的自定义面见 :doc:`/user-intrinsic`\ （``--intrinsic-config``\ ）。
 
-下文表格中的位运算族（``bitCount``\ 等）、``System.arraycopy``\ 等品类**\ 当前
-不在识别面内**——识别一个新 intrinsic 的门槛是语义等价判据 + 逃逸边界 +
-runtime 符号三件套齐备，不做「表格里列了就该有」的推定。
+下文表格中的位运算族（``bitCount``\ 等）、``System.arraycopy``\ 等品类**\ 当前不在识别面内**——识别一个新 intrinsic 的门槛是语义等价判据 + 逃逸边界 + runtime 符号三件套齐备，不做「表格里列了就该有」的推定。
 
 问题
 ------
 
-JVM 字节码中调用的 JDK 方法（如 ``Math.abs``\ ）在原生编译场景下如果走 JNI
-调用，会有不小的性能损失：
+JVM 字节码中调用的 JDK 方法（如 ``Math.abs``\ ）在原生编译场景下如果走 JNI 调用，会有不小的性能损失：
 
 .. code-block:: c
 
@@ -149,8 +137,7 @@ intrinsic 解决这个问题：在编译时识别特定 JDK 方法调用，用�
    * - ``xxx.parseXxx(String)``
      - 手动解析或库函数
 
-字符串（需要了解 ``String``\ / ``StringBuilder``\ 的内部布局——JDK 8 是
-``char[] value``\ ，JDK 9+ 是 ``byte[] value`` + byte coder）：
+字符串（需要了解 ``String``\ / ``StringBuilder``\ 的内部布局——JDK 8 是 ``char[] value``\ ，JDK 9+ 是 ``byte[] value`` + byte coder）：
 
 .. list-table::
    :header-rows: 1
@@ -198,8 +185,7 @@ intrinsic 解决这个问题：在编译时识别特定 JDK 方法调用，用�
    * - 输入范围
      - 原生实现是否覆盖所有合法输入（如 ``Math.sqrt(-1)``\ 返回 NaN）
    * - 异常行为
-     - 原生实现是否抛相同的异常（如 ``String.charAt(-1)``\ 抛
-       ``IndexOutOfBoundsException``\ ）
+     - 原生实现是否抛相同的异常（如 ``String.charAt(-1)``\ 抛 ``IndexOutOfBoundsException``\ ）
    * - 副作用
      - 原生实现是否保持零副作用（intrinsic 不应有额外副作用）
    * - 溢出语义

@@ -5,10 +5,7 @@ RegC 测试分层与执行命令
 
 状态：定稿
 
-RegC 单测按耗时分成三层。改动后按影响面选组，收尾/CI 跑全量。
-所有命令在仓库根目录执行（xmake 的 ``-P <repo>``\ 参数在本机 xmake 版本上有解析
-问题，直接以仓库为工作目录运行即可；配置被 ``-P <子项目>``\ 破坏后，先
-``xmake f -c -p windows -m release --with_tests=y``\ 重置再 ``xmake build <target>``\ ）。
+RegC 单测按耗时分成三层。改动后按影响面选组，收尾/CI 跑全量。所有命令在仓库根目录执行（xmake 的 ``-P <repo>``\ 参数在本机 xmake 版本上有解析问题，直接以仓库为工作目录运行即可；配置被 ``-P <子项目>``\ 破坏后，先 ``xmake f -c -p windows -m release --with_tests=y``\ 重置再 ``xmake build <target>``\ ）。
 
 .. _regc-test-strategy-layers:
 
@@ -24,19 +21,15 @@ RegC 单测按耗时分成三层。改动后按影响面选组，收尾/CI 跑�
      - 耗时
      - 何时必跑
    * - 快组（毫秒级）
-     - ``RegCTest.*``\ 、``RegCIntrinsicTest.*``\ 、
-       ``RegCIntrinsicRegistryTest.*``\ 、``RegCCompareIntrinsicTest.*``\ 、
-       ``RegCLdcClassTest.*``
+     - ``RegCTest.*``\ 、``RegCIntrinsicTest.*``\ 、 ``RegCIntrinsicRegistryTest.*``\ 、``RegCCompareIntrinsicTest.*``\ 、 ``RegCLdcClassTest.*``
      - 秒级
      - 每次 RegC 改动必跑
    * - 中速组（IR/emitter，不编译生成代码）
-     - ``RegCBackendTest.*``\ 、``Vmc4BackendTest.*``\ 、
-       ``Vmc4ComputedGotoEmitTest.*``
+     - ``RegCBackendTest.*``\ 、``Vmc4BackendTest.*``\ 、 ``Vmc4ComputedGotoEmitTest.*``
      - 十秒级
      - 涉及 IR/emitter/flow 时跑
    * - 慢速组（编译生成代码 + 启动 JVM）
-     - ``RegCBackendE2E.*``\ 、``RegCBackendE2EHarnessTest.*``\ 、
-       ``RegCSafeEnvE2E.*``\ 、``CliTest.*``
+     - ``RegCBackendE2E.*``\ 、``RegCBackendE2EHarnessTest.*``\ 、 ``RegCSafeEnvE2E.*``\ 、``CliTest.*``
      - 约 90 秒
      - 收尾/提交前/CI
 
@@ -83,9 +76,6 @@ RegC 单测按耗时分成三层。改动后按影响面选组，收尾/CI 跑�
 xmake 配置稳定性
 ----------------
 
-- 现象：``xmake f -P <子项目目录>``\ （如 native_project）会破坏 root 配置，之后
-  ``xmake build mj2x-cli``\ 报 ``invalid argument: mj2x-cli``\ （target 列表失效）。
-- 规避：脚本/文档统一用 ``xmake f -c ...``\ 重置后再构建；benchmark 脚本内部已按
-  此处理（``-P``\ 显式指定 + 每次 ``-c``\ 重置）。
-- 本机注意：``xmake -P <repo> build <target>``\ 形态偶发解析失败，直接以仓库为
-  工作目录运行 ``xmake build <target>``\ 更可靠。
+- 现象：``xmake f -P <子项目目录>``\ （如 native_project）会破坏 root 配置，之后 ``xmake build mj2x-cli``\ 报 ``invalid argument: mj2x-cli``\ （target 列表失效）。
+- 规避：脚本/文档统一用 ``xmake f -c ...``\ 重置后再构建；benchmark 脚本内部已按此处理（``-P``\ 显式指定 + 每次 ``-c``\ 重置）。
+- 本机注意：``xmake -P <repo> build <target>``\ 形态偶发解析失败，直接以仓库为工作目录运行 ``xmake build <target>``\ 更可靠。

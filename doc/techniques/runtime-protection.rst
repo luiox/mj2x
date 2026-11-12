@@ -3,8 +3,7 @@
 原生运行时保护（通用技术综述）
 ================================
 
-状态：定稿（通用技术综述；**\ 本仓实际运行时面见「本仓现状」节**\ ，本文的加密
-原语与检测响应表格是业界品类罗列）
+状态：定稿（通用技术综述；**\ 本仓实际运行时面见「本仓现状」节**\ ，本文的加密原语与检测响应表格是业界品类罗列）
 
 在编译后的原生代码中嵌入反调试、反篡改和加密机制，保护运行时安全。
 
@@ -13,27 +12,17 @@
 本仓现状
 ----------
 
-mj2x 的运行时保护是**\ 轻量自包含 C99 面**\ （``mj2x-rt/src/common/
-mj2x_rt_protect.c``\ ），由 ``--runtime-protection``\ 注入方法入口检查点：
+mj2x 的运行时保护是**\ 轻量自包含 C99 面**\ （``mj2x-rt/src/common/ mj2x_rt_protect.c``\ ），由 ``--runtime-protection``\ 注入方法入口检查点：
 
-- 检测面 = Windows ``IsDebuggerPresent``\ / ``CheckRemoteDebuggerPresent``\ /
-  PEB BeingDebugged / NtGlobalFlag / ``NtQueryInformationProcess``\ /
-  硬件断点寄存器 / 命令行扫描；Linux ``TracerPid``\ / 可写可执行段 / agent
-  库映射 / ``/proc/self/cmdline``\ 扫描。全部 fail-open（探测失败不误报）。
-- 触发模型 = 每次检查点全量探测，**\ 概率门控作用于响应**\ （step 确定性下限 +
-  伪随机提前；检测命中必然触发）。没有「周期复查缓存报告」档——探测谓词本身
-  足够廉价，每次都跑。
-- 加密原语面：本仓产物侧只有 XOR 流加密（native 库加密走 xorshift32，见
-  :ref:`native-lib-encryption`\ ；字符串加密密钥由明文 fnv1a64 折叠派生，见
-  :ref:`string-encryption`\ ）。**\ 下文的 AES-CTR / HMAC-SHA256 / 代码段校验
-  和未进仓**——它们是品类知识，不是本仓能力。
+- 检测面 = Windows ``IsDebuggerPresent``\ / ``CheckRemoteDebuggerPresent``\ / PEB BeingDebugged / NtGlobalFlag / ``NtQueryInformationProcess``\ / 硬件断点寄存器 / 命令行扫描；Linux ``TracerPid``\ / 可写可执行段 / agent 库映射 / ``/proc/self/cmdline``\ 扫描。全部 fail-open（探测失败不误报）。
+- 触发模型 = 每次检查点全量探测，**\ 概率门控作用于响应**\ （step 确定性下限 + 伪随机提前；检测命中必然触发）。没有「周期复查缓存报告」档——探测谓词本身足够廉价，每次都跑。
+- 加密原语面：本仓产物侧只有 XOR 流加密（native 库加密走 xorshift32，见 :ref:`native-lib-encryption`\ ；字符串加密密钥由明文 fnv1a64 折叠派生，见 :ref:`string-encryption`\ ）。**\ 下文的 AES-CTR / HMAC-SHA256 / 代码段校验和未进仓**——它们是品类知识，不是本仓能力。
 - 本仓的检查点形态与代价见 :ref:`runtime-anti-debug`\ （技术分篇）。
 
 问题
 ------
 
-JVM 字节码编译为原生代码后，攻击者从字节码层面难以分析，但可以从进程层面入
-手：
+JVM 字节码编译为原生代码后，攻击者从字节码层面难以分析，但可以从进程层面入手：
 
 - 调试器附着（``CreateRemoteThread``\ + ``DebugActiveProcess``\ ）
 - JVMTI agent 注入（通过 ``jvm.dll``\ 的导出函数）
@@ -59,8 +48,7 @@ Windows 调试器检测
      - 调用 ``kernel32!IsDebuggerPresent``
      - 最简单，但容易被绕过
    * - ``NtQueryInformationProcess``
-     - 查询 ``ProcessDebugPort``\ / ``ProcessDebugFlags``\ /
-       ``ProcessDebugObjectHandle``
+     - 查询 ``ProcessDebugPort``\ / ``ProcessDebugFlags``\ / ``ProcessDebugObjectHandle``
      - 比 ``IsDebuggerPresent``\ 更底层
    * - ``PEB.BeingDebugged``
      - 直接读取 PEB 结构体偏移（``PEB + 0x2``\ ）
@@ -116,8 +104,7 @@ RDTSC 在多核 CPU 上的值可能不一致，更好的方案是用 ``QueryPerf
 Linux 调试器检测
 ~~~~~~~~~~~~~~~~~~
 
-Linux 下没有与 Windows ``IsDebuggerPresent``\ 等价的单 API；常见信号来自
-procfs 与 ptrace：
+Linux 下没有与 Windows ``IsDebuggerPresent``\ 等价的单 API；常见信号来自 procfs 与 ptrace：
 
 .. list-table::
    :header-rows: 1
@@ -131,8 +118,7 @@ procfs 与 ptrace：
      - 最直接；调试器 attach 后必非零（gdb/strace 都算）
    * - ``ptrace(PTRACE_TRACEME)``
      - 自检：成功 = 未被跟踪；``EPERM``\ = 已被跟踪或 seccomp 限制
-     - 需要区分「被跟踪」与「沙箱禁用 ptrace」（后者 TracerPid 为零 →
-       探测不可用而非被跟踪）
+     - 需要区分「被跟踪」与「沙箱禁用 ptrace」（后者 TracerPid 为零 → 探测不可用而非被跟踪）
    * - 可写可执行段
      - 解析 ``/proc/self/maps``\ ，perms 含 ``w``\ + ``x``\ （如 ``rwxp``\ ）
      - 注入器/shellcode 特征；正常共享库为 r-xp/rw-p 分离
@@ -159,8 +145,7 @@ procfs 与 ptrace：
 反 JVMTI / 反 Java agent
 --------------------------
 
-JVMTI agent 依赖 ``jvm.dll``\ 的导出函数来注册回调。可以通过检查 ``jvm.dll``
-中关键导出函数的首字节是否为原始值来检测 hook：
+JVMTI agent 依赖 ``jvm.dll``\ 的导出函数来注册回调。可以通过检查 ``jvm.dll`` 中关键导出函数的首字节是否为原始值来检测 hook：
 
 .. code-block:: c
 
@@ -179,8 +164,7 @@ JVMTI agent 依赖 ``jvm.dll``\ 的导出函数来注册回调。可以通过检
        return false;
    }
 
-也可以枚举已加载的模块，检查是否有已知的 JVMTI agent DLL，或检查是否有除
-``jvm.dll``\ 以外的 DLL 也导出了 ``Agent_OnLoad``。
+也可以枚举已加载的模块，检查是否有已知的 JVMTI agent DLL，或检查是否有除 ``jvm.dll``\ 以外的 DLL 也导出了 ``Agent_OnLoad``。
 
 Java 侧 agent 按加载方式分两类，检测信号也分两类：
 
@@ -191,21 +175,15 @@ Java 侧 agent 按加载方式分两类，检测信号也分两类：
    * - 加载方式
      - 信号
      - 检测手段
-   * - 启动型（``-javaagent:``\ / ``-agentpath:``\ / ``-agentlib:``\ /
-       ``-Xrunjdwp:``\ ）
+   * - 启动型（``-javaagent:``\ / ``-agentpath:``\ / ``-agentlib:``\ / ``-Xrunjdwp:``\ ）
      - 命令行参数
-     - 扫描进程命令行：Windows ``GetCommandLineW``\ （引号感知切分），
-       Linux ``/proc/self/cmdline``\ （``\0``\ 分隔）
+     - 扫描进程命令行：Windows ``GetCommandLineW``\ （引号感知切分）， Linux ``/proc/self/cmdline``\ （``\0``\ 分隔）
    * - 动态 attach（jcmd/jattach 注入）
      - 已加载 native 模块 + JVMTI capability
-     - 模块枚举（Windows Toolhelp / Linux ``/proc/self/maps``\ ）匹配已知
-       agent 工具名；``JavaVM::GetEnv(JVMTI)`` + ``GetCapabilities``\ 检查
-       dump 相关位（can_get_bytecodes / can_retransform_classes /
-       can_generate_all_class_hook_events）
+     - 模块枚举（Windows Toolhelp / Linux ``/proc/self/maps``\ ）匹配已知 agent 工具名；``JavaVM::GetEnv(JVMTI)`` + ``GetCapabilities``\ 检查 dump 相关位（can_get_bytecodes / can_retransform_classes / can_generate_all_class_hook_events）
    * - IDE 调试
      - JDWP 参数
-     - ``jdwp``\ / ``transport=dt_socket``\ 子串（含 ``-agentlib:jdwp=``\ 与
-       旧式 ``-Xrunjdwp:``\ ）
+     - ``jdwp``\ / ``transport=dt_socket``\ 子串（含 ``-agentlib:jdwp=``\ 与旧式 ``-Xrunjdwp:``\ ）
 
 .. code-block:: c
 
@@ -220,9 +198,7 @@ Java 侧 agent 按加载方式分两类，检测信号也分两类：
        return false;
    }
 
-JNI 函数表本身也是 hook 锚点：启动期快照 ``env->functions``\ 地址，后续调用前
-比对是否仍指向原始表（agent 原地改写表项或整体换表都会暴露）。注意 capability
-查询只能看到自己的 JVMTI 环境，跨 agent 检测要靠模块枚举互补。
+JNI 函数表本身也是 hook 锚点：启动期快照 ``env->functions``\ 地址，后续调用前比对是否仍指向原始表（agent 原地改写表项或整体换表都会暴露）。注意 capability 查询只能看到自己的 JVMTI 环境，跨 agent 检测要靠模块枚举互补。
 
 检测响应策略：多阶段检查点
 ----------------------------
@@ -249,8 +225,7 @@ JNI 函数表本身也是 hook 锚点：启动期快照 ``env->functions``\ 地�
      - 退出进程
      - 最激进；命中点可预测
 
-检查点本身也应多阶段：每个检查点独立计数，命中概率随调用次数上升（确定性下
-限 + 伪随机提前），攻击者无法靠「精确等到第 N 次调用」定位或规避。
+检查点本身也应多阶段：每个检查点独立计数，命中概率随调用次数上升（确定性下限 + 伪随机提前），攻击者无法靠「精确等到第 N 次调用」定位或规避。
 
 加密原语（品类综述，未进本仓）
 --------------------------------

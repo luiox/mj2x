@@ -5,8 +5,7 @@ native 库 at-rest 加密
 
 状态：已落地
 
-原生库嵌入 JAR 前先 XOR 加密，资源入口加 ``.enc``\ 后缀；运行时 NativeLoader
-解密后加载。直接解压 JAR 拿到的库无法加载。
+原生库嵌入 JAR 前先 XOR 加密，资源入口加 ``.enc``\ 后缀；运行时 NativeLoader 解密后加载。直接解压 JAR 拿到的库无法加载。
 
 .. list-table::
    :header-rows: 1
@@ -28,23 +27,17 @@ native 库 at-rest 加密
 对抗什么
 ----------
 
-默认产物把 native 库以明文资源嵌进 JAR（``META-INF/mj2x/native/``\ ）。解压
-JAR 就能拿到可直接 ``dlopen``\ / 反汇编的 ``.dll``\ / ``.so``\ ——所有前面的
-变换成果都以明文摆在那里。
+默认产物把 native 库以明文资源嵌进 JAR（``META-INF/mj2x/native/``\ ）。解压 JAR 就能拿到可直接 ``dlopen``\ / 反汇编的 ``.dll``\ / ``.so``\ ——所有前面的变换成果都以明文摆在那里。
 
 这一项防的是「直接把库抠出来分析」这条最短路径。
 
 机制
 ------
 
-- **加密**\ ：``--native-lib-key``\ 给密钥，嵌入前按 xorshift32 密钥流做 XOR
-  加密，资源入口加 ``.enc``\ 后缀。
-- **解密**\ ：运行时 ``NativeLoader``\ 检测 ``.enc``\ 后缀 → 解密 →
-  ``System.load``\ 。
+- **加密**\ ：``--native-lib-key``\ 给密钥，嵌入前按 xorshift32 密钥流做 XOR 加密，资源入口加 ``.enc``\ 后缀。
+- **解密**\ ：运行时 ``NativeLoader``\ 检测 ``.enc``\ 后缀 → 解密 → ``System.load``\ 。
 
-同步有一个 pack hook：``--native-lib-pack-hook``\ 是嵌入前的外部处理钩子
-（sepacker DLL 加壳对接），``{in}``\ 占位符替换为编译产物路径，hook 应就地
-改写该文件；非零退出码视为失败。
+同步有一个 pack hook：``--native-lib-pack-hook``\ 是嵌入前的外部处理钩子（sepacker DLL 加壳对接），``{in}``\ 占位符替换为编译产物路径，hook 应就地改写该文件；非零退出码视为失败。
 
 **顺序**\ ：hook → 可选加密 → 嵌入。
 
@@ -68,16 +61,13 @@ JAR 就能拿到可直接 ``dlopen``\ / 反汇编的 ``.dll``\ / ``.so``\ ——
 ------------
 
 - **密钥在产物里**\ ：XOR 密钥必然物化在产物中（否则运行时无从解密）。
-- **解密后就是明文**\ ：解密到临时文件后 ``System.load``\ ，dump 该文件即拿到
-  明文库。
+- **解密后就是明文**\ ：解密到临时文件后 ``System.load``\ ，dump 该文件即拿到明文库。
 - **NativeLoader 字节码是可读的**\ ：解密算法完全可见。
 
-要真正的强度得走外部加壳（``--native-lib-pack-hook``\ 挂 sepacker 之类），
-本项只是内置的轻量档。
+要真正的强度得走外部加壳（``--native-lib-pack-hook``\ 挂 sepacker 之类），本项只是内置的轻量档。
 
 与其他技术的关系
 ------------------
 
-- 与 **VM 程序加密**\ 定位相同（at-rest），但保护对象不同：本项保护整个
-  native 库，后者保护 VM 的指令 blob 且支持块级懒解密。
+- 与 **VM 程序加密**\ 定位相同（at-rest），但保护对象不同：本项保护整个 native 库，后者保护 VM 的指令 blob 且支持块级懒解密。
 - 与 **字符串加密**\ 同属 at-rest 族。

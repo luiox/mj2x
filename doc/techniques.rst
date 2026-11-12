@@ -8,8 +8,7 @@
 ``doc/techniques/``\ 子树收录 mj2x 的技术文档，分两组：
 
 - **编译技术** —— 把 JVM 字节码编译成原生代码的通用技术与本仓实现形态
-- **保护技术** —— 消除可还原锚点、对抗逆向的单项技术（族划分与组合纪律见
-  :ref:`protection-overview`）
+- **保护技术** —— 消除可还原锚点、对抗逆向的单项技术（族划分与组合纪律见 :ref:`protection-overview`）
 
 单项技术分篇回答四个问题：叫什么、对抗什么、机制是什么、代价是什么。
 
@@ -23,8 +22,7 @@
    * - 分篇
      - 主题
    * - :doc:`/techniques/ssa-construction`
-     - SSA 构造：CFG → SSA IR、phi placement、支配树、重命名（本仓实现为
-       block-argument 形态）
+     - SSA 构造：CFG → SSA IR、phi placement、支配树、重命名（本仓实现为 block-argument 形态）
    * - :doc:`/techniques/bytecode-translation`
      - 字节码到 IR：操作数栈消除、异常表、switch、indy 桥接
    * - :doc:`/techniques/codegen-strategies`
@@ -163,5 +161,4 @@ E. 运行时与产物保护：
      - 任意 Java 静态调用点降级为用户 native symbol 直调，见 :doc:`/user-intrinsic`
    * - 混淆作用域（横切）
      - ``--obf-scope-include`` / ``--obf-scope-exclude``
-     - 决定上面这些 RegIR 变换作用于哪些类（类级 glob，两者都为空 = 零行为
-       变化）。本身不是一项技术，见 :ref:`protection-overview`
+     - 决定上面这些 RegIR 变换作用于哪些类（类级 glob，两者都为空 = 零行为变化）。本身不是一项技术，见 :ref:`protection-overview`
