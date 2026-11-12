@@ -10,7 +10,7 @@
 
 #include "test_helper.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -121,7 +121,7 @@ static std::unique_ptr<MethodNode> makeMethod(int access, const std::string& nam
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
     // #921 staticArena 退役：Type::staticArena() 已删除。测试夹具的节点名/描述符
-    // 借用须活过本 helper 返回——用本测试文件私有静态池（测试专属，非产物路径）。
+    // 借用须活过本 helper 返回，用本测试文件私有静态池（测试专属，非产物路径）。
     static ca::str::Utf8StringArena     testArena;
     auto&                               arena = testArena;
     auto                                mn    = std::make_unique<MethodNode>(access,
@@ -511,8 +511,8 @@ TEST(CodeConverterTest, UnconditionalBranch)
     for (auto& n : entryBlock->nodes) {
         if (n->kind == MIRKind::UNCOND_BRANCH) {
             auto* gotoNode = ca::core::tag_cast::cast<MIRUncondBranch>(n.get());
-            // 批 3b DOM 读路径：目标是 LabelPool 合成标签，与树侧 Label*
-            // 身份等价性经「目标块内 MIRLabel 同指针」断言。
+            // DOM 读路径：目标是 LabelPool 合成标签，与树侧 Label*
+            // 身份等价性经"目标块内 MIRLabel 同指针"断言。
             bool targetAnchored = false;
             for (auto* b : blocks) {
                 for (auto& nn : b->nodes) {
@@ -582,7 +582,7 @@ TEST(CodeConverterTest, InvokeDynamicCarriesBootstrapMetadata)
             new InvokeDynamicInsnNode(ca::str::Utf8StringRef::from_cstr("makeConcatWithConstants"),
                                       ca::str::Utf8StringRef::from_cstr("()Ljava/lang/String;"),
                                       bsm,
-                                      // 批 3b：垫片走字节回环，bsm arg 须是旧 writer
+                                      // 垫片走字节回环，bsm arg 须是旧 writer
                                       // 可序列化的载荷（Utf8StringRef→CONSTANT_String）；
                                       // std::string 不在其分派内会写出废索引 0。
                                        {ca::core::Any(
@@ -641,8 +641,8 @@ TEST(CodeConverterTest, IfNullBranchZeroHasObjectType)
                 auto* bz = ca::core::tag_cast::cast<MIRBranchZero>(n.get());
                 EXPECT_EQ(bz->op, CmpOp::EQ);
                 EXPECT_EQ(bz->type, PrimitiveKind::OBJECT);
-                // 批 3b DOM 读路径：目标是 LabelPool 合成标签，与树侧 Label*
-                // 身份等价性经「目标块内 MIRLabel 同指针」断言。
+                // DOM 读路径：目标是 LabelPool 合成标签，与树侧 Label*
+                // 身份等价性经"目标块内 MIRLabel 同指针"断言。
                 bool targetAnchored = false;
                 for (auto* b : blocks) {
                     for (auto& nn : b->nodes) {
@@ -831,7 +831,7 @@ TEST(CodeConverterTest, NewObjectAndInvokeSpecial)
 
 TEST(CodeConverterTest, SwitchInstructions)
 {
-    // 批 3b 起转换走 DOM 读路径（树经 plain 序列化字节往返），夹具必须是
+    // 转换走 DOM 读路径（树经 plain 序列化字节往返），夹具必须是
     // 合法字节码：tableswitch 的 labels 数 == max-min+1（旧树模型不序列化，
     // 非法夹具不再可用）。目标身份断言改为 DOM 合成语义：switch 的目标
     // Label* 与目标块内 MIRLabel 的 labelNode 同指针（LabelPool 同 pc 同身份）。
@@ -900,8 +900,8 @@ TEST(CodeConverterTest, SwitchInstructions)
 // #698：MIR/SSA/RegIR 持久节点字段（JVM 符号 owner/name/desc/typeDesc + MIRConstant LDC
 // String 槽）从自持 std::string 迁移到 arena-backed Utf8StringRef（spec §6.1）。
 // 本测试做两层守卫：
-//   1) 编译期类型断言——防止有人把字段类型悄悄改回 std::string；
-//   2) 运行期内容 + lifetime 断言——确认 intern 后 ref 指向 arena 内副本、内容正确，
+//   1) 编译期类型断言，防止有人把字段类型悄悄改回 std::string；
+//   2) 运行期内容 + lifetime 断言，确认 intern 后 ref 指向 arena 内副本、内容正确，
 //      且 arena 析构前 ref 稳定（这是 #698 调试期发现的测试 harness lifetime 陷阱的回归门）。
 TEST(CodeConverterTest, NodeFieldsHoldArenaBackedUtf8StringRef)
 {
@@ -926,7 +926,7 @@ TEST(CodeConverterTest, NodeFieldsHoldArenaBackedUtf8StringRef)
                   "MIRInvokeDynamic::name must be Utf8StringRef (#698)");
     static_assert(std::is_same_v<decltype(MIRInvokeDynamic::desc), ca::str::Utf8StringRef>,
                   "MIRInvokeDynamic::desc must be Utf8StringRef (#698)");
-    // MIRConstant 的 variant string 槽（Type 槽批 3a 起为 mj2x::Type 门面）
+    // MIRConstant 的 variant string 槽（Type 槽现为 mj2x::Type 门面）
     using ConstVariant = decltype(MIRConstant::value);
     static_assert(std::is_same_v<ConstVariant,
                                  std::variant<int64_t, double, std::nullptr_t,
@@ -964,7 +964,7 @@ TEST(CodeConverterTest, NodeFieldsHoldArenaBackedUtf8StringRef)
     EXPECT_EQ(fg->name, "x");
     EXPECT_EQ(fg->desc, "I");
 
-    // ref 指向 arena 内副本，不是源 cstr 字面量地址——这是 intern 去重生效的证据。
+    // ref 指向 arena 内副本，不是源 cstr 字面量地址，这是 intern 去重生效的证据。
     // arena.intern 把内容拷进 arena chunk，源 cstr（栈上 from_cstr）与 arena 副本地址不同。
     const auto* srcOwnerCstr = "Foo";
     EXPECT_NE(static_cast<const void*>(fg->owner.data()),

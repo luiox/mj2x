@@ -106,7 +106,7 @@ void mj2x_regc_barrier(mj2x_regc_context* context, const char* reason)
     (void)reason;
 }
 
-/* LTO 不可折叠不透明常量：volatile 读迫使编译器每次真实加载——cross-TU
+/* LTO 不可折叠不透明常量：volatile 读迫使编译器每次真实加载，cross-TU
    IPSCCP/常量传播无法把 const_key(site) 折成常量（否则 E ^ K 被折回 C，
    立即数隐藏白做；--native-opt-level 的 LTO 档同样守得住）。
    值与 RegIR pass（reg_transform_passes.cpp kOpaqueConstant）同源，改必须同步。 */
@@ -114,7 +114,7 @@ static volatile uint64_t g_const_key_opaque = 0x517CC1B727220A95ull;
 
 /* 立即数隐藏密钥派生：splitmix64 单步（黄金比例增量后四步混合），输入先掺
    不透明常量。与 reg_transform_passes.cpp 的 splitmix64（ca::random::
-   SplitMix64 正典，#1027 A3 逐位锁定）+ kOpaqueConstant 同源——改常数/
+   SplitMix64 正典，#1027 A3 逐位锁定）+ kOpaqueConstant 同源，改常数/
    移位/顺序即使 E ^ K != C，两端必须同步改。site 为函数内局部计数器；不掺
    seed 的理由见头文件契约。 */
 int64_t mj2x_regc_const_key(int64_t site)
@@ -152,7 +152,7 @@ static void* regc_ptr_cas(void* volatile* slot, void* expected, void* desired)
    缓存两条纪律，见头文件 mj2x_regc_call_site 的契约注释：
    - 存条目的一律 global ref（FindClass/GetObjectClass 给的是 local ref，
      跨 native 调用即悬垂）；
-   - virtual 按 receiver 实际类解析并按 receiver 类分槽——抽象/接口
+   - virtual 按 receiver 实际类解析并按 receiver 类分槽，抽象/接口
      owner 上按声明类解析会拿到抽象条目；special（invokespecial）按 owner
      声明解析 + CallNonvirtual 精确分派（虚分派命中 receiver 覆写会递归）。 */
 static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site* site,
@@ -189,7 +189,7 @@ static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site
         return NULL;
     }
     // special（invokespecial）：owner 声明解析（与 static 同构缓存 ownerClass +
-    // method，一次解析终身复用）。调用侧走 CallNonvirtual 精确分派——虚分派会
+    // method，一次解析终身复用）。调用侧走 CallNonvirtual 精确分派，虚分派会
     // 命中 receiver 实际类的覆写（X.super.m() 调用方自身覆写 → 无限递归）。
     if (site->invokeKind == 2) {
         if (site->method != NULL) return site->method;
@@ -219,7 +219,7 @@ static jmethodID resolveCallSite(mj2x_regc_context* context, mj2x_regc_call_site
     jmethodID method = (*env)->GetMethodID(env, receiverClass, site->name, site->desc);
     (*env)->DeleteLocalRef(env, receiverClass);
     if (method == NULL) return NULL;
-    // 换占式缓存：只增不删——CAS 把旧类换出后不 Delete 旧 global ref，旧方案
+    // 换占式缓存：只增不删，CAS 把旧类换出后不 Delete 旧 global ref，旧方案
     // Delete→NULL→New 窗口下其他线程可能正对旧句柄做 IsSameObject
     // （use-after-free，含双重 Delete）。泄漏上界 = 本调用点出现过的 distinct
     // receiver 类数（仅子类交替场景触发）。

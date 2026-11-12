@@ -1,7 +1,7 @@
 // LcaTypeResolver 单测（帧换装 M1）：谱系内对真 LCA、谱系外对回退硬编码表。
 //
 // 真问题背景：PortedCommonSuperResolver 对输入 jar 自定义谱系一律 Object 兜底
-// （表里只有 JDK 常见链）——合并点下游对合并值直接 invokevirtual 时 VerifyError。
+// （表里只有 JDK 常见链），合并点下游对合并值直接 invokevirtual 时 VerifyError。
 // LcaTypeResolver 用 mjbase ClassHierarchy（super 链最近公共祖先）精确求解；
 // 未登记侧（JDK 类，M1 图只含输入 jar）回退旧表，行为与旧口径逐位一致。
 
@@ -71,7 +71,7 @@ TEST(LcaTypeResolverTest, InGraphPairResolvesToRealAncestor)
     lca.buildFromIndex(index);
     ASSERT_EQ(lca.registeredCount(), ca::usize{4});
 
-    // Derived + Base → Base（旧硬编码表对自定义谱系给 Object——本断言即真问题
+    // Derived + Base → Base（旧硬编码表对自定义谱系给 Object，本断言即真问题
     // 回归锁：合并点下游 invokevirtual Base 方法不再 VerifyError）。
     auto r = lca.merge(jbc::analysis::VType::ref("pkg/Derived"), jbc::analysis::VType::ref("pkg/Base"));
     ASSERT_TRUE(r.is_ok());

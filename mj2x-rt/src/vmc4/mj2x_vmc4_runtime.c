@@ -9,7 +9,7 @@
 #include <limits.h>
 #include <math.h>
 
-// 懒解密互斥锁（#760 切片 2）：多个 Java 线程并发首执行同一方法时，同一块
+// 懒解密互斥锁（#760）：多个 Java 线程并发首执行同一方法时，同一块
 // 只允许解密一次（XOR 对合，并发双重解密会把块还原成密文）。锁为进程级
 // 单例、静态初始化（无生命周期管理）；慢路径（块首次解密）才加锁，稳态
 // 零锁开销。平台面与 regc CRT（mj2x_regc_string_builder.c）同一套宏约定。
@@ -41,7 +41,7 @@ static void mj2x_vm_lazy_gate_unlock(void)
 }
 #endif
 
-// 密钥材料用后擦除（#760 切片 2，对齐 jvmtp 1.6.4 密钥栈擦除）：volatile
+// 密钥材料用后擦除（#760，对齐 jvmtp 1.6.4 密钥栈擦除）：volatile
 // 写阻止编译器把清零优化掉（死存储消除），密钥/keystream 不在栈上留副本。
 static void mj2x_vm_scrub_u32(uint32_t* v)
 {
@@ -129,7 +129,7 @@ int mj2x_vm_bin_step_i(JNIEnv* env, int64_t x, int64_t y, unsigned char op, unsi
 }
 
 // 浮点单步：F32（type == 2）走 float 精度运算并舍回 float（与 BINARY handler
-// 一致——slot 是 double，不做 float 舍入会引入 double 中间精度，比较/再次运算
+// 一致，slot 是 double，不做 float 舍入会引入 double 中间精度，比较/再次运算
 // 时差 1 ULP）；F64 直接 double。浮点运算不抛异常，恒返回 0。
 int mj2x_vm_bin_step_f(JNIEnv* env, double x, double y, unsigned char op, unsigned char type,
                        double* out)
@@ -208,7 +208,7 @@ int32_t mj2x_vm_exception_matches(JNIEnv* env, jobject ex, const char* caught_ty
 }
 
 // ---------------------------------------------------------------------------
-// 程序 blob at-rest 解密(issue #760 首切片)。
+// 程序 blob at-rest 解密(issue #760)。
 //
 // 密钥流形态与 native lib 加密(mj2x-core native_lib_crypto.hpp / NativeLoader
 // 字节码内实现)保持一致:xorshift32 逐步推进,每字节取 state & 0xFF 异或。
@@ -235,14 +235,14 @@ void mj2x_vm_blob_decrypt(unsigned char* data, unsigned int size, uint32_t key)
         state = mj2x_vm_blob_xorshift32(state);
         data[i] = (unsigned char)(data[i] ^ (unsigned char)(state & 0xFFu));
     }
-    // 密钥材料用后擦除(#760 切片 2):keystream 状态与密钥参数清零后再返回,
+    // 密钥材料用后擦除(#760):keystream 状态与密钥参数清零后再返回,
     // 栈上不留可被内存取证捞到的密钥副本。
     mj2x_vm_scrub_u32(&state);
     mj2x_vm_scrub_u32(&key);
 }
 
 // ---------------------------------------------------------------------------
-// 分块懒解密(issue #760 切片 2,--vmc4-lazy-decrypt)。
+// 分块懒解密(issue #760,--vmc4-lazy-decrypt)。
 //
 // 发射侧把 blob 按指令对齐的 64 字节目标块独立加密(块 key =
 // mj2x_vm_chunk_key(blob_key, c),密钥流各自从块 key 起);解释器取码前经
@@ -251,7 +251,7 @@ void mj2x_vm_blob_decrypt(unsigned char* data, unsigned int size, uint32_t key)
 // 1.6.4 vm.lazy-decrypt 形态)。解密后的块保持明文不回擦:本 rt 的指令流
 // 读取方式是 handler 内联直读 code[pc](无中央取译码步骤),回擦需要在
 // 5 种 dispatcher 的每条边上插入重加密点并跟踪"块离开"事件(循环回边
-// 使该事件不可判定),收益/风险不成比例——权衡记录见切片 2 设计说明。
+// 使该事件不可判定),收益/风险不成比例，权衡记录见分块懒解密设计说明。
 // ---------------------------------------------------------------------------
 
 uint32_t mj2x_vm_chunk_key(uint32_t blob_key, uint32_t chunk_index)
@@ -301,7 +301,7 @@ void mj2x_vm_lazy_decrypt(unsigned char* code, const uint32_t* ends,
 }
 
 // ---------------------------------------------------------------------------
-// 块粒度链式懒解密(issue #1116 切片 B,--vmc4-block-lazy-decrypt)。
+// 块粒度链式懒解密(issue #1116,--vmc4-block-lazy-decrypt)。
 //
 // 发射侧把 blob 按 CFG 块粒度独立加密(块区间由 blockTargets 划界,块 key =
 // mj2x_vm_block_chain_key 链式派生:首块 k_0 = F(seed,0,seed),其后

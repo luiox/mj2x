@@ -12,7 +12,7 @@
  *   global ref 并改用赢家值（消除 check-then-write 双建泄漏与撕裂读）。
  * - jmethodID/jfieldID 槽：解析结果幂等（同站点必然解析出同一 id），指针宽
  *   写入在实际平台上原子；保留 check-then-write，不做同步。
- * - lastReceiverClass：只增不删——CAS 换入新类后旧 global ref 不 Delete。
+ * - lastReceiverClass：只增不删，CAS 换入新类后旧 global ref 不 Delete。
  *   旧方案 Delete→New 窗口下其他线程可能对已释放句柄调 IsSameObject
  *   （use-after-free）；泄漏上界 = 每调用点出现过的 distinct receiver 类数，
  *   可接受。实现对齐 StackC 的 _mj2x_cache_cas（JNIC 3.7.0 同构）。 */
@@ -51,7 +51,7 @@ _Thread_local jclass _mj2x_regc_owner_class = NULL;
 #endif
 
 /* 角色单例缓存(#894 B 类下沉):原为每程序 TU 内注入的命名缓存,
- * 现收敛为运行时固定实例——语义角色唯一,跨生成 TU 共享命中。 */
+ * 现收敛为运行时固定实例，语义角色唯一,跨生成 TU 共享命中。 */
 mj2x_regc_class_cache _mj2x_rt_string_class_cache = {"java/lang/String", NULL};
 mj2x_regc_instance_method_cache _mj2x_rt_object_to_string_method_cache = {
     "java/lang/Object", "toString", "()Ljava/lang/String;", NULL, NULL};
@@ -101,7 +101,7 @@ void _mj2x_regc_throw_null(const char* message) {
 jclass _mj2x_regc_find_class(const char* desc) {
     if (desc == NULL) return NULL;
     /* 'L' 前缀仅在完整字段描述符形态（L...;）时剥壳转内部名：裸内部名可能以 'L'
-     * 开头（default 包合成类 Lambda$N，#1182 评审收口 P1），按首字符无条件剥壳
+     * 开头（default 包合成类 Lambda$N，#1182 评审 P1），按首字符无条件剥壳
      * 会把名字截成 "ambda$N" → NoClassDefFoundError。 */
     const size_t desc_len = strlen(desc);
     if (desc[0] == 'L' && desc_len >= 3 && desc[desc_len - 1] == ';') {
@@ -185,12 +185,12 @@ jmethodID _mj2x_regc_cached_instance_method(mj2x_regc_instance_method_cache* cac
     }
     else {
         /* Pin the receiver class and its resolved id for the next same-class call.
-         * 只增不删：CAS 把旧类换出后不 Delete 旧 global ref——旧方案
+         * 只增不删：CAS 把旧类换出后不 Delete 旧 global ref，旧方案
          * Delete→NULL→New 窗口下其他线程可能正对旧句柄做 IsSameObject
          * （use-after-free，含双重 Delete）。泄漏上界 = 本调用点出现过的
          * distinct receiver 类数（仅接口/抽象分派的子类交替场景触发）。
          * method 仅在换占成功后写入；class→method 两写之间读者可能短暂
-         * 见到「新类 + 旧类 method」的错配（与旧代码同窗，受 IsSameObject
+         * 见到"新类 + 旧类 method"的错配（与旧代码同窗，受 IsSameObject
          * 精确类匹配约束，仅同名 desc 解析到不同覆写时才可观察）。 */
         jclass observed = cache->lastReceiverClass;
         jclass pinned   = (jclass)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, receiver_class);
@@ -592,7 +592,7 @@ mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* 
     jstring s = (jstring)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, utf8);
     if (s != NULL) {
         /* JVM 语义：ldc 常量是 interned 实例（#1117，jvmtp 1.7.1 修复④同款
-         * 缺陷面）——首次物化经 String.intern() 归一化进 JVM 字符串池，同内容
+         * 缺陷面），首次物化经 String.intern() 归一化进 JVM 字符串池，同内容
          * 常量跨站点/跨类/跨 String.intern() 恒等；缓存 32 槽溢出后逐次物化
          * 也因 intern 恒等不再破坏语义（只多 2 次 JNI）。miss 路径 2 次 JNI，
          * 命中路径保持 0 JNI。intern_mid 首次并发竞态双方算得同一 methodID，
@@ -1307,7 +1307,7 @@ int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq) {
 // registers. class/methodID are cached globally to avoid repeated lookups.
 /// 小值包装类缓存：JDK Integer/Long/Short/Byte 的 valueOf 对 [-128,127]、
 /// Character 对 [0,127]、Boolean 对 TRUE/FALSE 恒返回同一缓存对象。
-/// 这里的表缓存的是 JDK valueOf 返回对象的全局引用——命中时返回的对象与
+/// 这里的表缓存的是 JDK valueOf 返回对象的全局引用，命中时返回的对象与
 /// JDK valueOf 逐次调用对象恒等（IsSameObject/== 语义完全一致），越界值
 /// 恒透传 JDK 调用（每次新对象，同样一致）。表项与 JDK 自身 cache 同寿命，
 /// 泄漏上界 256+128+2 个 bootstrap 类包装对象。

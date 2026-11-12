@@ -23,7 +23,7 @@
 
 #include "test_helper.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -58,7 +58,7 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
 
 // buildInlineSSA / lowerInlineRegIR 的返回包：把 arena 与 IR 绑在一起。
 // SSA/RegIR 节点字段是 arena-backed Utf8StringRef（spec §6.1），arena 析构会让 IR 内的
-// ref 全部悬垂——故不能用局部 arena + 返回 IR 的旧写法（参见 #698）。
+// ref 全部悬垂，故不能用局部 arena + 返回 IR 的旧写法（参见 #698）。
 // 成员声明顺序：先 ir 后 arena，保证 ir 先析构、arena 后释放。
 struct InlineSsaBundle
 {
@@ -215,7 +215,7 @@ RegFunction makePureAddFunction()
 }
 
 /// 双参数纯 Add 函数：int f(int a, int b) { return a + b; }
-/// （mbaDeep 变体语义求值用——恒等式对具体 (a,b) 代入执行验证）
+/// （mbaDeep 变体语义求值用，恒等式对具体 (a,b) 代入执行验证）
 RegFunction makeParamAddFunction()
 {
     RegFunction    function;
@@ -682,7 +682,7 @@ TEST(RegTransformPassTest, FlattensPureControlFlowAndRetainsEdgeCopies)
     EXPECT_TRUE(validateRegIRNoStackSlots(function, validationReason)) << validationReason;
 }
 
-// 审查 G-1 修复回归：CFF 随机 state 码查重——同码会让 dispatcher switch 首个
+// 审查 G-1 修复回归：CFF 随机 state 码查重，同码会让 dispatcher switch 首个
 // case 命中而静默路由错误（加密模式 case 键 = code ^ xorKey，同 code 同键）。
 // 20 块直线链 + cffStateEncryption，断言 dispatcher 全部 case 键互异。
 TEST(RegTransformPassTest, CffStateCodesAreUnique)
@@ -945,7 +945,7 @@ TEST(RegTransformPassTest, CffStateEncryptionDerivesRandomizedStateCodes)
 }
 
 // H2 守门：深 MBA 注入的 Barrier 不得让 CFF 放弃整函数。
-// 历史缺陷——pass 顺序 MBA → opaque → CFF，而 CFF 把 Barrier 判为非 pure，结果
+// 历史缺陷，pass 顺序 MBA → opaque → CFF，而 CFF 把 Barrier 判为非 pure，结果
 // `--regc-mba-deep` 与 CFF 同一函数并开时， ciphertext 形态退化回原始 CFG 且不报错
 // （实测：同一纯算术函数 dispatcher 12 块 → 5 块）。Barrier 是无数据流/无异常的
 // 不可折叠锚点，不构成 CFF 必须保守的理由。
@@ -1019,10 +1019,10 @@ TEST(RegTransformPassTest, CffStateCodesStayWithinPositiveInt32)
     }
 }
 
-// ---------- 批次 2 第 6 项：立即数隐藏（对标 jvmtp obfuscation.constants） ----------
+// ---------- 立即数隐藏（对标 jvmtp obfuscation.constants） ----------
 
 /// 参数 + 立即数：`int f(int a, int b) { return a + imm + b; }`
-/// （立即数隐藏语义求值用——隐藏后求值结果须与隐藏前逐样本相同。）
+/// （立即数隐藏语义求值用，隐藏后求值结果须与隐藏前逐样本相同。）
 RegFunction makeParamAddImmediateFunction(int64_t immediate, SSAType type)
 {
     RegFunction    function;
@@ -1089,7 +1089,7 @@ bool blockMentionsImmediate(const RegFunction& function, int64_t immediate)
 }
 
 // E ^ K == C 的端到端证据：隐藏后求值结果与隐藏前逐样本相同。
-// 同时守住「原立即数不再以字面量出现」与 site 单调分配两个不变量。
+// 同时守住"原立即数不再以字面量出现"与 site 单调分配两个不变量。
 TEST(RegTransformPassTest, ConstantHidingPreservesImmediateSemantics)
 {
     const int64_t immediates[] = {0, 1, -1, 42, 0x12345678, INT32_MIN, INT32_MAX, -123456789};
@@ -1167,7 +1167,7 @@ TEST(RegTransformPassTest, ConstantHidingSkipsFloatImmediates)
 }
 
 // site 是函数内局部计数器、不掺 seed：不同 seed 产物必须逐字节相同
-// （可复现构建不变量的另一面——seed 只影响 MBA/opaque/CFF 变体与 state 码）。
+// （可复现构建不变量的另一面，seed 只影响 MBA/opaque/CFF 变体与 state 码）。
 TEST(RegTransformPassTest, ConstantHidingIsSeedIndependent)
 {
     auto fingerprint = [](uint64_t seed) {
@@ -1234,7 +1234,7 @@ TEST(RegTransformPassTest, All829OptionsDefaultOff)
     EXPECT_FALSE(options.cffStateEncryption);
     EXPECT_FALSE(options.mbaDeep);
     EXPECT_FALSE(options.opaqueZero);
-    // 批次 2：立即数隐藏默认关闭（每立即数一次运行时调用，最重的一项）。
+    // 立即数隐藏默认关闭（每立即数一次运行时调用，最重的一项）。
     EXPECT_FALSE(options.hideImmediateConstants);
     // 调用目标间接化默认关闭（每次调用多一层 dispatcher 分派）。
     EXPECT_FALSE(options.indirectCallTargets);

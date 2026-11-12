@@ -4,7 +4,7 @@
 //
 // 通用的多项目测试布局机制（.project_root_file 扫描 / 资源定位 / 输出根约定）
 // 已下沉到 libca/test（#912/#913），本头文件保持 morpher 侧历史 API 形态
-// （namespace test::、camelCase），内部委托 ca::test 实现——既有测试 main
+// （namespace test::、camelCase），内部委托 ca::test 实现，既有测试 main
 // 无需任何改动。
 //
 // morpher 私有件（不下沉）：
@@ -51,7 +51,7 @@ std::filesystem::path getAsmTestResourcePath(const std::string& filename);
 std::vector<uint8_t>  getAsmTestResource(const std::string& filename);
 
 /// 跨项目定位：按 .project_root_file 名字（如 "mtest_set" / "mj2x"）取项目根 / 资源。
-/// 统一样本供给的底层原语——任何子项目按名字拿另一子项目的 test_resource 文件，
+/// 统一样本供给的底层原语，任何子项目按名字拿另一子项目的 test_resource 文件，
 /// 无需硬编码相对路径。未注册名字回落 <top>/<name>。
 inline std::filesystem::path getProjectPath(const std::string& projectName)
 {
@@ -88,8 +88,8 @@ inline std::filesystem::path getTempOutPath(const std::string& filename)
 /// 剔除 JDK 24+ 对 System::load 的受限方法告警块（stderr，经 2>&1 混进合并
 /// 输出）：四行固定文案 + 紧随的一个空行。JDK 8/17/21 不产生该告警，输出
 /// 原样返回。被测产物行为是"载入 native 库后跑业务"，这组告警与产物无关，
-/// 不剔除会让精确比对与差分对拍在 JDK 24+ 上全数误红；子进程捕获点（runBat/
-/// 各测试本地 runScript）统一在收口处调用。
+/// 不剔除会让精确比对与差分比对在 JDK 24+ 上全数误红；子进程捕获点（runBat/
+/// 各测试本地 runScript）统一在收尾处调用。
 inline std::string stripJvmNativeAccessWarnings(const std::string& out)
 {
     static const char* const kPrefixes[] = {
@@ -138,7 +138,7 @@ inline std::string stripJvmNativeAccessWarnings(const std::string& out)
 std::string           getBuildModeName();
 
 /// 定位同 buildir 的伴生构建产物（如 mj2x-cli）。优先按测试可执行文件自身位置
-/// 推导活动 buildir——xmake binary 目标同树同目录输出，自定义 `-o <dir>` 配置下
+/// 推导活动 buildir，xmake binary 目标同树同目录输出，自定义 `-o <dir>` 配置下
 /// 依然正确；目标未随测试同树构建（文件不存在）时回退默认 buildir 布局
 /// <top>/build/<plat>/<arch>/<mode>/。@p targetName 可带 .dll 后缀定位 shared
 /// 目标产物（如 "mjt-obf-runtime-native.dll"）。
@@ -164,11 +164,11 @@ inline std::vector<uint8_t> getResource(const std::string& filename)
     return ca::test::resource(filename);
 }
 
-// ---- 批 6d DOM 权威 pass 的测试三明治 ----
+// ---- DOM 权威 pass 的测试三明治 ----
 //
 // 树载体退役后，夹具建模 = mj2x::test::classFromTree（树 → DOM + 快照对齐），
-// 树断言 = mj2x::test::treeFromDom 回投影。三明治退化为「DOM 权威执行 pass +
-// 快照对齐」：缺 dom 的夹具类直接报错（迁移漏网的裸 CompilerClass 夹具）。
+// 树断言 = mj2x::test::treeFromDom 回投影。三明治退化为"DOM 权威执行 pass +
+// 快照对齐"：缺 dom 的夹具类直接报错（迁移漏网的裸 CompilerClass 夹具）。
 
 /// DOM 权威 pre/postprocessor 的测试适配：执行 pass 后把 methods/fields 元数据
 /// 快照与 DOM 对齐（markedForCompile/backendResult 等管线旗标按 name+desc 锚定
@@ -202,9 +202,9 @@ void runWithDomSync(Pass&& pass, mj2x::CompilerIndex& index, Report* report)
     mj2x::refreshSnapshots(index);
 }
 
-// ---- 批 5 backend 注入（injectIntoClass 走 DOM）的测试适配 ----
+// ---- backend 注入（injectIntoClass 走 DOM）的测试适配 ----
 
-/// 注入前守卫：批 6d 后树载体退役，夹具经 classFromTree 落 DOM，本函数退化为
+/// 注入前守卫：树载体退役后，夹具经 classFromTree 落 DOM，本函数退化为
 /// 缺守卫（dom 已在则零操作；裸 CompilerClass 即迁移漏网，报错暴露）。
 inline void ensureDomFor(mj2x::CompilerClass& cls, const std::string& name)
 {
@@ -214,7 +214,7 @@ inline void ensureDomFor(mj2x::CompilerClass& cls, const std::string& name)
                              + name);
 }
 
-/// 注入后刷新：树槽已随批 6d 退役，本函数退化为快照对齐（methods/fields 元数据
+/// 注入后刷新：树槽已随树载体退役，本函数退化为快照对齐（methods/fields 元数据
 /// 与 DOM 对齐）。指令/成员断言一律经 treeFromDom 回投影现查或读快照字段。
 inline void refreshTreeFromDom(mj2x::CompilerClass& cls, const std::string& /*name*/)
 {

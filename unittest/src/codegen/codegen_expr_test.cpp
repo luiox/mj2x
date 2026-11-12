@@ -2,7 +2,7 @@
 // and CodeTemplate registry.
 //
 // Every composed expression/statement must pass the lexical balance scan
-// (balanced_c.hpp) — this is the executable guard against hand-spliced brackets.
+// (balanced_c.hpp): this is the executable guard against hand-spliced brackets.
 
 #include <gmock/gmock.h>
 

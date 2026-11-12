@@ -13,7 +13,7 @@ namespace mj2x::cli {
 
 std::optional<mj2x::RegTransformOptions> buildRegTransformOptions(const CliOptions& options)
 {
-    // 混淆作用域（issue #8）：显式给了 include 即隐含开启混淆——否则用户要开
+    // 混淆作用域（issue #8）：显式给了 include 即隐含开启混淆，否则用户要开
     // 两个开关才能"只混淆这几个类"。exclude 单独给不隐含开启（它只做收窄）。
     // 本单元是 regcObfuscate 的唯一消费方，局部等价改写不落回 options。
     const bool obfuscateBase = options.regcObfuscate || !options.obfScopeIncludes.empty();

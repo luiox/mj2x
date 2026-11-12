@@ -1,23 +1,23 @@
-// VMC4 程序 blob at-rest 加密单测（issue #760 切片 1 --vmc4-encrypt-program +
-// 切片 2 --vmc4-lazy-decrypt 分块懒解密）。
+// VMC4 程序 blob at-rest 加密单测（issue #760 --vmc4-encrypt-program +
+// --vmc4-lazy-decrypt 分块懒解密）。
 //
 // 本测试不调用 JNI/DLL（E2E 语义闭环由 vmc4_backend_e2e_test 的
 // ProgramBlobEncryptRoundTrip / LazyChunkDecryptRoundTrip 覆盖），
 // 只验证发射文本与派生函数：
 //   1. 关闭路径（默认）：数据段保持明文 const 数组形态，无解密调用
-//      （关闭路径产物字节级不变——既有 vmc4 测试与 trace surface 契约）。
+//      （关闭路径产物字节级不变，既有 vmc4 测试与 trace surface 契约）。
 //   2. 开启路径：数据段为 non-const 密文数组，产物文本搜不到关闭态的
 //      已知明文字节序列（产物断言测试）。
 //   3. roundtrip：从产物 C 源解析密文数组，用独立实现的 xorshift32 密钥流
 //      解密，逐字节还原 VmProgram.bytecodes。
-//   4. 错误 seed：设计不做显式 fail-closed 检测（无校验和）——错误密钥解出
+//   4. 错误 seed：设计不做显式 fail-closed 检测（无校验和），错误密钥解出
 //      垃圾流，断言其与明文不同；运行期由解释器 InvalidBytecode（status=2）
 //      防御停机兜底，属隐式 fail-closed。
 //   5. 与 dispatch drift 的叠加：加密作用于 drift 编码后的最终字节流
 //      （两者正交：drift 是明文流的语义解释，加密是 at-rest 形态）。
 //   6. trace surface 契约：describe() 不受加密开关影响。
 //   7. backend 级：finalize 的 JNI_OnLoad 只在开启时发射解密调用，且确定性。
-// 切片 2（lazy 分块）追加：
+// 分块懒解密（lazy 分块）追加：
 //   8. lazy 无加密：开关被归一为关闭（VmInstance.blobLazy 恒以 encrypt 为
 //      前提），产物回退关闭路径形态。
 //   9. lazy 开启：数据段按指令对齐 64 字节目标块独立加密（块边界 ⊆
@@ -303,7 +303,7 @@ TEST(Vmc4EncryptProgramTest, EncryptOffKeepsLegacyPlaintextArray)
 }
 
 // ===========================================================================
-// 2. 开启路径：密文 non-const 数组；产物断言——关闭态已知明文序列搜不到。
+// 2. 开启路径：密文 non-const 数组；产物断言，关闭态已知明文序列搜不到。
 // ===========================================================================
 TEST(Vmc4EncryptProgramTest, EncryptOnHidesKnownPlaintextSequence)
 {
@@ -391,7 +391,7 @@ TEST(Vmc4EncryptProgramTest, RoundtripFromProductRestoresBytecodes)
 }
 
 // ===========================================================================
-// 4. 错误 seed：无显式 fail-closed 检测（首切片无校验和），错误密钥解出
+// 4. 错误 seed：无显式 fail-closed 检测（at-rest 格式首版无校验和），错误密钥解出
 //    垃圾流 ≠ 明文；运行期由解释器 InvalidBytecode 防御停机隐式兜底。
 // ===========================================================================
 TEST(Vmc4EncryptProgramTest, WrongSeedYieldsDifferentStream)
@@ -435,7 +435,7 @@ TEST(Vmc4EncryptProgramTest, BlobKeyDerivationIsDeterministicSeedSensitiveNonZer
             << "seed " << s << ": key derivation must be seed sensitive";
         EXPECT_NE(vmc4DeriveBlobKey(s), 0u) << "derived key must never be 0";
     }
-    // 跨实例身份派生路径：不同 instanceSeed → 不同密钥（取两组固定值对拍）。
+    // 跨实例身份派生路径：不同 instanceSeed → 不同密钥（取两组固定值比对）。
     EXPECT_NE(vmc4DeriveBlobKey(0x11111111ull), vmc4DeriveBlobKey(0x22222222ull));
 }
 
@@ -587,7 +587,7 @@ TEST(Vmc4EncryptProgramTest, OptionFlowsIntoInstance)
 }
 
 // ===========================================================================
-// 切片 2（--vmc4-lazy-decrypt，分块懒解密）
+// --vmc4-lazy-decrypt（分块懒解密）
 // ===========================================================================
 
 // 10. lazy 单独开启（无 encrypt）：VmInstance.blobLazy 归一为关闭，发射产物

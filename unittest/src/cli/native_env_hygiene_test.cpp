@@ -164,7 +164,7 @@ TEST(NativeEnvHygieneMerge, CullsInvalidEntriesAndCapturedOverridesParent)
     const ProcessEnvironment captured = {
         {"MJ2X_HYG_GOOD", "good"},
         {"MJ2X_HYG_BOTH", "captured"},   // case-insensitive 同名以 captured 胜出
-        {"MJ2X_HYG_EMPTY", ""},          // 空值覆盖剔除——该键不注入
+        {"MJ2X_HYG_EMPTY", ""},          // 空值覆盖剔除，该键不注入
         {"MJ2X_HYG=BAD", "x"},           // 含 '=' 键剔除（libca 会整体拒绝注入）
     };
     mergeProcessEnvironment(command, captured);

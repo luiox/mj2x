@@ -534,7 +534,7 @@ const ParamDef kBaseParamsAfter[] = {
     PARAM("log.verbose", "--verbose", "log_verbose", ParamType::Bool, nullptr, 0, 0, "false", "logging", "", cli_verbose, json_verbose),
 };
 
-/// --backend 枚举串：注册表单源（displayOrder 序）。逗号无空格——历史宏拼接
+/// --backend 枚举串：注册表单源（displayOrder 序）。逗号无空格，历史宏拼接
 /// 口径，schema enum 与解析按 ',' 切分。
 std::string backendEnumValues()
 {
@@ -643,7 +643,7 @@ ca::opt::Command buildOptCommand()
     // config：预扫描已消费路径，此处登记仅为通过未知选项校验。
     addSpecialArg(cmd, "config", ca::opt::OptKind::String);
     // lang：i18n 预扫描已消费；String 形态下空格传值会消费后继 token（即使
-    // 以 '-' 开头）、悬空报 MissingValue——较迁移前的容忍式扫描 fail-closed，
+    // 以 '-' 开头）、悬空报 MissingValue，较迁移前的容忍式扫描 fail-closed，
     // 行为变更由 DanglingLangFlagFailsClosed / LangFlagFollowedByFlagFailsClosed
     // 锁定；合法用法为 --lang=<lang> 或 --lang <lang> <args...>。
     addSpecialArg(cmd, "lang", ca::opt::OptKind::String);
@@ -670,7 +670,7 @@ ca::opt::Command buildOptCommand()
             arg.kind = ca::opt::OptKind::Flag;
             break;
         case ParamType::StringList:
-            // ⚠️ 前提：StringList 的合法项本身不得含逗号——opt 侧按逗号
+            // ⚠️ 前提：StringList 的合法项本身不得含逗号，opt 侧按逗号
             // 拆分 + 跨次追加后逐项喂 parseCli（迁移前整串直达 parseCli，
             // 无拆分）。当前 67 参数均满足；新增含逗号项的列表参数时须
             // 改走 String kind 自行收集。
@@ -784,7 +784,7 @@ nlohmann::json buildConfigSchemaJson()
 
 namespace {
 
-/// 「名字|描述」结构化 flag help 行（\n 分行、| 分列，值内零对齐空格）→
+/// "名字|描述"结构化 flag help 行（\n 分行、| 分列，值内零对齐空格）→
 /// HelpTable 渲染期对齐，与 mjt printUsage 的两列 help 同约定。列位来源不同：
 /// mj2x 历史基线的 flag 描述列逐行手工摆放且并不统一（config/help 行在全行
 /// 31 列、dump_schema/lang 行在 33 列，均含 printf 的 2 空格缩进），逐字节

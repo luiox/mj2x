@@ -5,7 +5,7 @@
 /// 算法与常量逐项对齐 netlib fdlibm 5.3(参照 k_sin/k_cos/k_tan/e_rem_pio2/
 /// k_rem_pio2/e_asin/e_acos/s_atan/e_atan2/e_exp/e_log/e_log10/e_pow/
 /// e_hypot/s_rint/s_cbrt/s_scalbn)。HotSpot 的 StrictMath native 实现与
-/// StrictMath.java 的 FdLibm.* 翻译同源,故位精确对拍成立(验证 harness 与
+/// StrictMath.java 的 FdLibm.* 翻译同源,故位精确比对成立(验证 harness 与
 /// 样本量见 PR 说明)。位双关全部经 memcpy(严格别名安全,字节序无关)。
 ///
 /// 许可声明(fdlibm 允许带本声明的再分发,保留原文):

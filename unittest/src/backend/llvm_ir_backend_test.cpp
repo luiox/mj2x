@@ -80,7 +80,7 @@ private:
 
 /// #1065 回归守卫：测试 TU（去 NDEBUG #1063）与 libjbytecode 静态库 TU（NDEBUG）
 /// 的 InsnList 布局必须一致。漂移时本 TU 的内联访问器（size()/getFirst() 等）
-/// 读到错位字段——实证：instructions.size() 返回 ownerArena_ 低半（垃圾堆地址）
+/// 读到错位字段，实证：instructions.size() 返回 ownerArena_ 低半（垃圾堆地址）
 /// + 析构走错位字段 fastfail（exit 127），表象集中在 LlvmIrBackendTest。
 TEST(LlvmIrBackendTest, InsnListLayoutMatchesLibjbytecodeTu)
 {
@@ -101,7 +101,7 @@ TEST(LlvmIrBackendTest, EmitsScalarJniWrapperAndMarksMethodNative)
                              2,
                              2);
 
-    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    // 方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
     ca::str::Utf8StringArena arena;
     MethodNode*   methodPtr = method.get();
     CompilerClass compilerClass;
@@ -320,7 +320,7 @@ CompilerIndex makeCallerIndex(std::unique_ptr<MethodNode>& add,
 
 // 同类内静态调用走直调（--regc-direct-calls=intra-class 起）。LLVM 侧原先无条件
 // 直调、与 RegC 的默认关不一致；纳入同一档位门控后，默认 Off 下应当退化成 JNI
-// 分派——两条用例一起钉住"档位在 LLVM 侧真的生效"这件事。
+// 分派，两条用例一起钉住"档位在 LLVM 侧真的生效"这件事。
 TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
 {
     std::unique_ptr<MethodNode> add;
@@ -343,7 +343,7 @@ TEST(LlvmIrBackendTest, EmitsIntraClassStaticCall)
         << result.text;
 }
 
-// Off 档（默认）：同类内静态调用不应直调——LLVM 侧此前没有这层门控，一直在承担
+// Off 档（默认）：同类内静态调用不应直调，LLVM 侧此前没有这层门控，一直在承担
 // #814 的栈观察语义代价。
 TEST(LlvmIrBackendTest, DirectCallTierOffRoutesIntraClassStaticCallThroughJni)
 {
@@ -420,7 +420,7 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
                               new InsnNode(Opcodes::IRETURN)},
                              2, 1);
 
-    // 批 6d：index 上下文的后端按 DOM 解析被调方法——夹具类经 classFromTree 落 DOM。
+    // index 上下文的后端按 DOM 解析被调方法，夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
     auto&         fArena = index.arena();
     auto cn = std::make_unique<ClassNode>();
@@ -449,7 +449,7 @@ TEST(LlvmIrBackendTest, EmitsRegionCrossingIntraClassCallOverUndefEdgeCopy)
               std::string::npos)
         << trapResult.text;
     // undef 来路边拷贝的可观测形态：区域后合流边对 handler 块参数（try 体
-    // 来路未定义）产出 dest 槽类型 undef 常量。批 3b DOM 读路径的 handler
+    // 来路未定义）产出 dest 槽类型 undef 常量。DOM 读路径的 handler
     // 块参数不再携带树侧双标签怪癖的 slot_r2 局部，REF 槽型 undef 拷贝落在
     // 异常接收局部（slot_r4），槽型保真钉义不变（ptr 而非 i32 塌缩）。
     EXPECT_NE(trapResult.text.find("store ptr undef, ptr %slot_r"), std::string::npos)
@@ -476,7 +476,7 @@ TEST(LlvmIrBackendTest, EmitsForEachShapeOverUndefEdgeCopy)
 {
     // #1121 方向 1 附带钉：javac for-each 展开形态（数组存入中间局部，copySlice
     // 样本同形）在无任何 try 区域时同样产生 undef 来路（Opaque UNKNOWN）边拷贝
-    // ——循环头块参数在回边有定义、进入边未定义。放行后正常发射 native define
+    // 循环头块参数在回边有定义、进入边未定义。放行后正常发射 native define
     // （undef 来路产出 dest 槽类型 undef 常量），零降级诊断。
     auto* loopHead = new jbytecode::core::Label();
     auto* loopEnd  = new jbytecode::core::Label();
@@ -536,7 +536,7 @@ TEST(LlvmIrBackendTest, RetainsFallbackDiagnosticForUndefinedLocalRead)
 {
     // #1121 方向 1 诊断通道保留钉（无区域对照）：undef 来路边拷贝放行后，原两枚
     // 降级钉翻转成功发射，整方法 fail-closed 降级诊断通道（Skipping ...: method
-    // falls back to bytecode）改由真 fail-closed 形态钉住——未初始化局部读取
+    // falls back to bytecode）改由真 fail-closed 形态钉住，未初始化局部读取
     //（undef Opaque 带已知类型）在指令操作数语境仍被拒绝，整方法降级并打警告。
     auto undefRead = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, "undefRead", "()I",
                                 {new VarInsnNode(Opcodes::ILOAD, 0),
@@ -585,7 +585,7 @@ TEST(LlvmIrBackendTest, KeepsBytecodeWhenCallTargetIsNotConvertible)
                                             false),
                          new InsnNode(Opcodes::IRETURN)},
                         1, 0);
-    // 批 6d：index 上下文的后端按 DOM 解析被调方法——夹具类经 classFromTree 落 DOM。
+    // index 上下文的后端按 DOM 解析被调方法，夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
     auto&         fArena = index.arena();
     auto cn = std::make_unique<ClassNode>();
@@ -626,7 +626,7 @@ TEST(LlvmIrBackendTest, KeepsBytecodeForMissingClassAndIndexlessCalls)
          new InsnNode(Opcodes::IRETURN)},
         1, 0);
 
-    // 批 6d：夹具类经 classFromTree 落 DOM。
+    // 夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
     auto&         fArena = index.arena();
     auto cn = std::make_unique<ClassNode>();
@@ -688,7 +688,7 @@ TEST(LlvmIrBackendTest, EmitsRecursiveStaticCall)
          new InsnNode(Opcodes::IRETURN)},
         1, 0);
 
-    // 批 6d：夹具类经 classFromTree 落 DOM。
+    // 夹具类经 classFromTree 落 DOM。
     CompilerIndex index;
     auto&         fArena = index.arena();
     auto cn = std::make_unique<ClassNode>();
@@ -943,7 +943,7 @@ TEST(LlvmIrBackendTest, EmitsNormalFloatLiteralsAsHex)
 {
     // 正常浮点常量同样以 double 加宽 hex 位型发射（LLVM AsmWriter 口径）：
     // 十进制字面量须"恰好等于该浮点值"才合法，round-trip 可逆的短十进制
-    // （如 0.49999997f 的 4.99999970e-01）clang 同样拒读——integration 实跑
+    // （如 0.49999997f 的 4.99999970e-01）clang 同样拒读，integration 实跑
     // g17.math_nan_zero 暴露（#1122）。0.49999997f = 0x3EFFFFFF，加宽
     // double 位型 0x3FDFFFFFE0000000；0.1 double 位型 0x3FB999999999999A。
     auto quarterish = compileScalar("roundhalf", "()F",
@@ -1239,7 +1239,7 @@ TEST(LlvmIrBackendTest, EmitsFptosiSatDeclareMatchingCall)
     // #1120 防回归钉：llvm.fptosi.sat 是重载 intrinsic，模块必须携带对应
     // declare（否则 clang/llc 报 'use of undefined value'）。四个签名变体
     // （f2i/d2i/f2l/d2l）逐个核对 call 与 declare 同时存在；多方法共用一个
-    // backend 验证 finalize 跨函数去重——每个签名 declare 恰好一份。
+    // backend 验证 finalize 跨函数去重，每个签名 declare 恰好一份。
     LlvmIrBackend backend;
     auto          f2i = compileWithBackend(backend, "f2i", "(F)I",
                                   {new VarInsnNode(Opcodes::FLOAD, 0),
@@ -1530,7 +1530,7 @@ TEST(LlvmIrBackendTest, EmitsWrapperBoxUnboxDirectCalls)
 TEST(LlvmIrBackendTest, EmitsRandomStateMachineDirectCalls)
 {
     // Random 状态机切片：非逃逸 new Random(seed).nextInt(bound) 全链直调
-    // mj2x-rt（0 JNI；RegC 同 face 为 inert——Allocate+<init> 融合 NewObjectA
+    // mj2x-rt（0 JNI；RegC 同 face 为 inert，Allocate+<init> 融合 NewObjectA
     // 绕过 registry）。无参 <init> 与逃逸根回退 JNI。
     LlvmIrBackend backend;
     auto initOnly = compileWithBackend(

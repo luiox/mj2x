@@ -2,7 +2,7 @@
 
 /// @file native_process_timeout.hpp
 /// @brief mj2x-cli 内部头：native 编译外部进程墙钟超时（P1-4，对标 jvmtp
-///        `compiler.timeout`，秒，0=∞；见 dev_plan §K 批次 1）。
+///        `compiler.timeout`，秒，0=∞；见 dev_plan §K）。
 /// @details 自 native_compiler.cpp / native_project_builder.cpp 的外呼等待点
 ///        抽出（native_env_hygiene.hpp #1023 同模式）：inline 定义使合成断言
 ///        gtest（mj2x_unittest 的 native_process_timeout_test.cpp）无需链接
@@ -14,7 +14,7 @@
 ///   - `Command::output(OutputOptions)` 站点（编译器/link/vcvars 探针/pack
 ///     hook）：超时即杀直接子进程（libca kill_on_timeout 默认 true）。
 ///   - stdin 供料的 pipe 站点（C/LLVM IR/llc）与 xmake 站点：走
-///     waitChildWithTimeout——先整树收割再收尸。Windows 上 Child::kill() 只
+///     waitChildWithTimeout，先整树收割再清理。Windows 上 Child::kill() 只
 ///     终止直接子进程，孙进程（xmake 拉起的 cl.exe、cmd 拉起的 ping 等）
 ///     继承的管道写端不关，收尸等待将永远拿不到 EOF，故用 taskkill /T /F
 ///     按进程树收割；Linux 上 kill 已针对整个进程组（libca 契约）。
@@ -25,7 +25,7 @@
 /// 在本头之前完成。**传递引入同样致命**：native_compiler.hpp 含本头，故
 /// 任何 include native_compiler.hpp / native_project_generator.hpp 的 TU
 /// （native_compiler.cpp / native_project_builder.cpp）也必须把 `<cstdio>`
-/// 与固化块置于首个 include 之前——固化写在项目头之后会直接 C2065。
+/// 与固化块置于首个 include 之前，固化写在项目头之后会直接 C2065。
 
 #include <chrono>
 #include <cstdint>
@@ -119,7 +119,7 @@ inline void killProcessTree(ca::process::Child& child)
 /// Child；killProcessTree 关闭子进程侧（整树）管道写端，stdin 写入线程的
 /// 阻塞 write 随之失败退出；随后 `wait_with_output()` 续接累积数据并连同
 /// 退出状态一并返回，不丢诊断输出。调用方应无条件 writeProcessOutput(output)
-/// 再判断返回值——超时前编译器吐出的部分告警对定位卡死源码有价值。
+/// 再判断返回值，超时前编译器吐出的部分告警对定位卡死源码有价值。
 inline bool waitChildWithTimeout(ca::process::Child& child, const char* name,
                                  ProcessTimeout timeout, ca::process::Output& output)
 {

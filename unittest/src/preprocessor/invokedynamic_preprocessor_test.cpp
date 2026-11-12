@@ -23,7 +23,7 @@ using namespace jbytecode::tree;
 
 namespace {
 
-// 树夹具暂存（键 = 类名，重建即替换）：批 6d 后 CompilerClass 无树槽，DOM 由
+// 树夹具暂存（键 = 类名，重建即替换）：树载体退役后 CompilerClass 无树槽，DOM 由
 // classFromTree 一次性落定；shelf 让夹具树与回投影存活到测试结束（指针有效面）。
 std::map<std::string, std::vector<std::unique_ptr<ClassNode>>>& treeShelf()
 {
@@ -927,7 +927,7 @@ TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForLibrarySam)
 }
 
 // default 包包私有 SAM → 合成类落 default 包（裸名 Lambda$0，不得产出非法名 /Lambda$0）。
-// （#1182 评审收口 P1：无 '/' 时宿主包必须返回空串。）
+// （#1182 评审 P1：无 '/' 时宿主包必须返回空串。）
 TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePackagePrivateSamSynthInDefaultPackage)
 {
     CompilerIndex index;
@@ -943,7 +943,7 @@ TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePackagePrivateSamSynthIn
     EXPECT_EQ(index.getClass("/Lambda$0"), nullptr);
 }
 
-// 在 index 里造外围类，其 InnerClasses 属性声明嵌套 SAM 的访问位——javac 把
+// 在 index 里造外围类，其 InnerClasses 属性声明嵌套 SAM 的访问位，javac 把
 // 嵌套类型的真实 access 位记在外围类的 InnerClasses 属性而非嵌套类自身 flags。
 void addOuterClassWithNestedSam(CompilerIndex& index, const std::string& outerName,
                                 const std::string& samName, int samAccess)
@@ -996,7 +996,7 @@ TEST(InvokeDynamicPreprocessorTest, KeepsMj2xLambdaPackageForPublicNestedSamMiss
 }
 
 // default 包 private 嵌套 SAM（javac 落盘不写 ACC_PRIVATE，非 public 位触发判定）
-// → 同样落 default 包裸名（#1182 评审收口 P1 第二形态）。
+// → 同样落 default 包裸名（#1182 评审 P1 第二形态）。
 TEST(InvokeDynamicPreprocessorTest, PlacesDefaultPackagePrivateNestedSamSynthInDefaultPackage)
 {
     CompilerIndex index;

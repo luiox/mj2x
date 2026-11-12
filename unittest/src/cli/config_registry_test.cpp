@@ -293,7 +293,7 @@ TEST(ConfigRegistryTest, SchemaAnnotationsMatchRegistrySemantics)
               std::string::npos)
         << out;
 
-    // 数值范围（dump 键按字母序；Int 恒非负，minimum 恒输出——无追加下界即为 0）。
+    // 数值范围（dump 键按字母序；Int 恒非负，minimum 恒输出，无追加下界即为 0）。
     EXPECT_NE(out.find("\"regc_cff_dead\": {"), std::string::npos) << out;
     EXPECT_NE(out.find("\"minimum\": 0,\n      \"type\": \"integer\""), std::string::npos)
         << out;
@@ -460,7 +460,7 @@ TEST(ConfigRegistryTest, ConfigSupportsAllBackendFamilies)
 
 // ---- preset（默认配置档）+ 生效配置回显 ----
 //
-// 四层合并顺序：默认值 < preset < 配置文件 < CLI。preset 不是第四套语法——
+// 四层合并顺序：默认值 < preset < 配置文件 < CLI。preset 不是第四套语法，
 // 它是内置的 JSON 对象，键名与配置文件完全相同，走同一套 parseJson 校验。
 
 /// --dump-effective-config 的输出 → key -> {value 原文, source 层名}。
@@ -489,7 +489,7 @@ std::map<std::string, std::pair<std::string, std::string>> parseEffective(const 
         hasValue = hasSource = false;
     };
     auto flush = [&]() {
-        // 只在实际提交后重置——字段到齐前重置会把已读到的那一半丢掉。
+        // 只在实际提交后重置，字段到齐前重置会把已读到的那一半丢掉。
         if (!key.empty() && hasValue && hasSource) {
             result[key] = {value, source};
             reset();
@@ -592,7 +592,7 @@ TEST(ConfigRegistryTest, PerfPresetTurnsOnDirectCalls)
     EXPECT_EQ(effective.at("regc_indirect_calls").second, "default");
 }
 
-// max 档：两个重型项必须被打开——它们不被 --regc-obfuscate 联动，靠手记开关
+// max 档：两个重型项必须被打开，它们不被 --regc-obfuscate 联动，靠手记开关
 // 最容易漏，正是"要保护才付代价"的那两项。
 TEST(ConfigRegistryTest, MaxPresetTurnsOnHeavyweightOptions)
 {

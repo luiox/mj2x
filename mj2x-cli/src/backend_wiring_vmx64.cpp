@@ -34,7 +34,7 @@ bool wireVmx64(BackendWiringContext& context)
     mj2x::Vmx64Options vmx64Opts;
     vmx64Opts.seed = mj2x::deriveClientSeed(options.vmx64Seed, options.clientId);
     backend->setOptions(vmx64Opts);
-    // Phase 2：RegisterNatives 注册面就位——走 cloader 桥（Loader 桥接类 +
+    // Phase 2：RegisterNatives 注册面就位，走 cloader 桥（Loader 桥接类 +
     // clinit registerNativesForClass 注入，同 regc/vmc4）。native 库的 clinit
     // load 注入只随 jar 嵌入模式（injectsNativeLoaderIntoClinit=false，同 VMC4）。
     context.nativeSourceBackend = backend.get();
@@ -43,10 +43,10 @@ bool wireVmx64(BackendWiringContext& context)
 }
 
 /// vmx64：注册 C TU 落盘（Phase 2 第二产物）。xmake 工程模式下写进
-/// <projectDir>/src/generated/vmx64_reg.c——模板的 src/generated/*.c glob 收编，
+/// <projectDir>/src/generated/vmx64_reg.c，模板的 src/generated/*.c glob 收编，
 /// 与 .asm（backend finalize 直接写 cOutputPath，generateXmakeProject 拷入）
 /// 一并编译链接。目录可能尚不存在（临时工程只建根目录）：幂等补建。
-/// 仅 --emit-c（无工程/编译）时不落盘——emit-only 产物面保持单一 .asm。
+/// 仅 --emit-c（无工程/编译）时不落盘，emit-only 产物面保持单一 .asm。
 void afterPipelineRun(BackendWiringContext& context)
 {
     namespace fs = std::filesystem;
@@ -59,7 +59,7 @@ void afterPipelineRun(BackendWiringContext& context)
     const std::string& reg = vmx64->registrationSource();
     if (reg.empty()) {
         // fail-closed：无虚拟化方法不产空注册面。同一工程目录二次生成时先
-        // 摘除上一轮的 vmx64_reg.c——残留过期注册 TU 会被模板 glob 收编，
+        // 摘除上一轮的 vmx64_reg.c，残留过期注册 TU 会被模板 glob 收编，
         // 引用本轮 .asm 里已不存在的入口符号而链接失败。
         fs::remove(dest, ec);
         return;

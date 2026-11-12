@@ -4,7 +4,7 @@
 //
 // 后端模块注册表：每个后端的 CLI 接线单元（构造、CLI 选项应用、pipeline 登记、
 // 后处理策略位）以静态注册方式进入本表。mj2x-cli 主流程只依赖本表与
-// mj2x::Backend 抽象接口，不再直接引用具体后端头——新增后端或拆分后端到
+// mj2x::Backend 抽象接口，不再直接引用具体后端头，新增后端或拆分后端到
 // 独立接线单元时主流程零改动。
 //
 // #886 单后端编译裁剪：被裁后端的接线单元整体不参与注册（TU 内容被裁剪宏
@@ -45,7 +45,7 @@ struct BackendWiringContext
 
 /// @brief 单个后端的 CLI 接线模块（自注册单元）。
 ///
-/// displayOrder 固定为历史 CLI 清单顺序（stackc, regc, llvm, vmc4）——错误
+/// displayOrder 固定为历史 CLI 清单顺序（stackc, regc, llvm, vmc4），错误
 /// 文案的后端列表、--backend 枚举串顺序都以它为准，新增后端在尾部追加。
 struct BackendModule
 {

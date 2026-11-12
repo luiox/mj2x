@@ -1,7 +1,7 @@
 #include "regc/mj2x_regc_intrinsic.h"
 
 // 纯标量 intrinsic 单源（mj2x_regc_intrinsic_inline.h）：本 TU 以外联模式
-// include——同名函数外部链接定义一次，归档 ABI 保持；生成码侧为 static
+// include，同名函数外部链接定义一次，归档 ABI 保持；生成码侧为 static
 // inline（见头注）。原 .c 内实现体已随迁，勿再手写副本。
 #define MJ2X_INTRINSIC_INLINE_EXTERNAL
 #include "regc/mj2x_regc_intrinsic_inline.h"
@@ -166,11 +166,11 @@ double mj2x_random_next_double(mj2x_random* state)
 // java.lang.Math.max/min float/double 语义（OpenJDK Math.max/min）：
 //   1) 任一操作数为 NaN → 返回该 NaN 操作数（保留位型，不用规范 NAN 常量）；
 //   2) +0.0/-0.0 相互比较必须返回正确符号：max(+0.0,-0.0)=+0.0、
-//      max(-0.0,+0.0)=+0.0、min(+0.0,-0.0)=-0.0、min(-0.0,+0.0)=-0.0——
+//      max(-0.0,+0.0)=+0.0、min(+0.0,-0.0)=-0.0、min(-0.0,+0.0)=-0.0，
 //      IEEE 754 比较把 ±0.0 视为相等，裸三目会返回错误符号的零
 //      （jvmtp 1.7.1 修复③同款缺陷；mtest_set g17.math_nan_zero 按 JVM
-//      语义对拍锁定）。
-//   实现注意：±0.0 与 NaN 都必须在三元比较前显式分流——MSVC 会把
+//      语义比对锁定）。
+//   实现注意：±0.0 与 NaN 都必须在三元比较前显式分流，MSVC 会把
 //   `a >= b ? a : b` 折叠成 maxss/minss 指令，而 SSE 相等（含 ±0.0/NaN
 //   tie）时返回第二操作数，恰好复现缺陷。分流后剩余路径上折叠无影响。
 float mj2x_math_min_f32(float lhs, float rhs)
@@ -243,7 +243,7 @@ double mj2x_math_ceil(double value)
 // ---- java.lang.Math.round(F)I/(D)J：OpenJDK 17 位运算实现（#1144）----
 //
 // JDK 17 java.lang.Math.round 不再是 Javadoc 提及的 (int)floor(a+0.5) 公式
-// （JDK-8010430 起废弃）：该公式在 IEEE754 二进制上有两处可观测发散——
+// （JDK-8010430 起废弃）：该公式在 IEEE754 二进制上有两处可观测发散，
 //   1. 最大的小于 0.5 的浮点数（0.49999997f / 0.49999999999999994d）：
 //      a+0.5 半偶进位到 1.0，公式给 1，正确值 0；
 //   2. [2^23,2^24) / [2^52,2^53) 内的奇整数：a+0.5 不可表示舍入到偶整数，
@@ -251,7 +251,7 @@ double mj2x_math_ceil(double value)
 // 这里按 OpenJDK 17 实源（java.lang.Math.round(float/double)）逐式移植。
 // C 移植的两处改写（语义逐一等价，防 UB / 实现定义行为）：
 //   - Java >> 是算术右移（负数 floor 除法），C 对负数带符号右移是实现定义
-//     行为——改写为幅值域 ceil 除法再取负：r>>shift（r=-m）== -ceil(m/2^shift)
+//     行为，改写为幅值域 ceil 除法再取负：r>>shift（r=-m）== -ceil(m/2^shift)
 //     == -q；随后 ((r>>shift)+1)>>1 在负侧恒等于 -(q>>1)（q 奇偶两例均合）。
 //     全程无符号移位，u32/u64 域无溢出（m ≤ 2^24-1 + 2^31-1 < 2^32；
 //     m ≤ 2^53-1 + 2^63-1 < 2^64）。
@@ -338,7 +338,7 @@ double mj2x_math_signum_f64(double value)
     return value > 0.0 ? 1.0 : -1.0;
 }
 
-// java.lang.Math.exp/log/log10：与 sin/cos/tan/pow 同类——JVM 允许 1 ulp 内
+// java.lang.Math.exp/log/log10：与 sin/cos/tan/pow 同类，JVM 允许 1 ulp 内
 // 的半纯（semi-pure）实现，CRT libm 满足该精度档；特殊值（exp(±0/±Inf)、
 // log(±0/1/负数/NaN)）由 libm 按 IEEE 语义给出，与 JVM 规范一致。
 double mj2x_math_exp(double value)
@@ -460,7 +460,7 @@ mj2x_ref mj2x_intrinsic_long_to_unsigned_string_radix(mj2x_regc_context* context
 
 // ---- Integer/Long.divideUnsigned/remainderUnsigned ----
 //
-// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义；经
+// 除零抛 ArithmeticException("/ by zero")，JVM idiv/irem 同语义；经
 // mj2x_regc_throw_arithmetic 挂 pending 异常（RegCLocalHelper 形态，发射面
 // 保留调用后 ExceptionCheck）。非零除数路径纯 C 无符号运算：无符号除法无
 // INT_MIN/-1 型陷阱，位型与 JDK 一致（Integer.divideUnsigned(MIN_VALUE, -1)
@@ -504,7 +504,7 @@ int64_t mj2x_intrinsic_long_remainder_unsigned(mj2x_regc_context* context, int64
 
 // ---- java.lang.Math.floorDiv/floorMod ----
 //
-// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义，走
+// 除零抛 ArithmeticException("/ by zero")，JVM idiv/irem 同语义，走
 // mj2x_regc_throw_arithmetic 挂 pending 异常（RegCLocalHelper 形态）。
 // 除零外纯 C：商向负无穷取整（符号异或为负且余数非零时商减一）；
 // MIN/-1 是 C 有符号除法的未定义行为（x86 上 SIGFPE），按 JVM 位型回绕
@@ -847,7 +847,7 @@ void mj2x_intrinsic_arraycopy(mj2x_regc_context* context, mj2x_ref src, int32_t 
 
     /* 同类型数组：先识别 primitive 元素类型，非 primitive（对象数组）回退 JNI
      * （System.arraycopy 自身有对象路径优化）。复制走 Get/Set<Type>ArrayRegion
-     * 临时缓冲——重叠安全且不依赖数组内存布局。 */
+     * 临时缓冲，重叠安全且不依赖数组内存布局。 */
     int elemKind = -1; /* 0=[Z 1=[B 2=[C 3=[S 4=[I 5=[J 6=[F 7=[D */
     for (int t = 0; t < 8; ++t) {
         jclass c = mj2x_intrinsic_arraycopy_prim_class(env, t);

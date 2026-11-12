@@ -13,7 +13,7 @@
 ///   拷贝一份函数表，并做**归属校验**：非空表项必须指向 JVM 模块代码段
 ///   （Windows `jvm.dll` / Linux `libjvm.so`），唯一例外是 HotSpot
 ///   `UseFastJNIAccessors`（默认开）的 8 个基本类型字段 getter
-///   （GetBooleanField..GetDoubleField）——它们在 VM 启动时被替换为 JIT stub，
+///   （GetBooleanField..GetDoubleField），它们在 VM 启动时被替换为 JIT stub，
 ///   位于 JVM 代码堆而非 jvm.dll 映像内，校验豁免。若捕获时表已被污染
 ///   （启动期 agent 早于库加载完成 hook），校验失败：
 ///   - 默认（RESTORE 模式）：返回 `MJ2X_REGC_STATUS_INVALID_STATE`，
@@ -30,7 +30,7 @@
 /// - 不能防：对函数目标本身的 inline detour（表恢复后指针仍指向被 patch 的
 ///   jvm.dll 函数）；JVMTI 事件层（NativeMethodBind / MethodEntry 等 onload-
 ///   only 事件，泄露方法映射与调用树）；启动期 agent 在库加载前完成的 hook
-///   ——此时快照必然污染，只能 fail closed 或 debug 观察，无法恢复干净表。
+///   此时快照必然污染，只能 fail closed 或 debug 观察，无法恢复干净表。
 /// - 校验不可用的平台（非 Windows/Linux）：归属校验返回可接受，仅依赖恢复。
 
 #pragma once

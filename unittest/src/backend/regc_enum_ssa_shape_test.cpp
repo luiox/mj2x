@@ -2,12 +2,12 @@
 // #1192 评审 N4 承接：valueOf SSA 谓词死路径删除，方案 B）。
 //
 // 覆盖面（当时仅产物级验证：转换日志行 + 生成 C，本卡补符号级直测）：
-//   1. isJavacEnumValuesSsa 形状判定——正例钉接受形状，反例钉拒绝边界
+//   1. isJavacEnumValuesSsa 形状判定，正例钉接受形状，反例钉拒绝边界
 //      （同形状手工方法 / 缺一指令 / 非 clone owner / 签名门）。
-//   2. javac valueOf 无 SSA 谓词的 lowering 事实钉——body 块恰为
+//   2. javac valueOf 无 SSA 谓词的 lowering 事实钉，body 块恰为
 //      [Call, Convert] 2 条（ldc/aload 不落 SSA 指令），valueOf 合成验证
 //      唯一来源是字节码侧 isJavacEnumValueOfBody 预扫描/按类补扫。
-//   3. SsaInlineOptions.excludeMethod + SsaInlineStats.skippedExcluded——pass 层
+//   3. SsaInlineOptions.excludeMethod + SsaInlineStats.skippedExcluded，pass 层
 //      可观测面（返回结构 SsaInlineStats，仓内 ssa_inline_test 同惯例）。
 //
 // 红相论证（每 TEST 注释单列）：删谓词 / 改判定条件时哪个断言转红。
@@ -244,7 +244,7 @@ TEST(RegCEnumSsaShapeTest, ValuesJavacShapeAccepted)
         << "javac values() shape must be accepted; blocks=" << blockShape(*ssa);
 }
 
-// 红相：删 clone owner 白名单的 java/lang/Object 分支 → 转红（钉「双收」口径）。
+// 红相：删 clone owner 白名单的 java/lang/Object 分支 → 转红（钉"双收"口径）。
 TEST(RegCEnumSsaShapeTest, ValuesCloneOwnerObjectAccepted)
 {
     Utf8StringArena arena;
@@ -257,7 +257,7 @@ TEST(RegCEnumSsaShapeTest, ValuesCloneOwnerObjectAccepted)
         << "Object.clone owner must be accepted; blocks=" << blockShape(*ssa);
 }
 
-// 红相：删「按块搜索」（改为只看首块）→ 空 entry 块场景转红（钉空 entry 容忍）。
+// 红相：删"按块搜索"（改为只看首块）→ 空 entry 块场景转红（钉空 entry 容忍）。
 TEST(RegCEnumSsaShapeTest, ValuesToleratesEmptyEntryBlock)
 {
     HandFn h = makeHandFn("Color", "values", "()[LColor;");
@@ -271,7 +271,7 @@ TEST(RegCEnumSsaShapeTest, ValuesToleratesEmptyEntryBlock)
 // isJavacEnumValuesSsa：反例
 // ---------------------------------------------------------------------------
 
-// 红相：把「clone owner == 数组描述符或 java/lang/Object」放宽为任意 owner → 转红。
+// 红相：把"clone owner == 数组描述符或 java/lang/Object"放宽为任意 owner → 转红。
 TEST(RegCEnumSsaShapeTest, ValuesForeignCloneOwnerRejected)
 {
     HandFn h = makeHandFn("Color", "values", "()[LColor;");
@@ -282,7 +282,7 @@ TEST(RegCEnumSsaShapeTest, ValuesForeignCloneOwnerRejected)
 }
 
 // 红相：删 field.owner == fn.symbol.owner 绑定 → 同形状手工方法（委托他类
-// $VALUES）转红——该绑定是「合成方法」与手工同名方法的分界。
+// $VALUES）转红，该绑定是"合成方法"与手工同名方法的分界。
 TEST(RegCEnumSsaShapeTest, ValuesHandRolledFieldOwnerMismatchRejected)
 {
     HandFn h = makeHandFn("Color", "values", "()[LColor;");
@@ -292,7 +292,7 @@ TEST(RegCEnumSsaShapeTest, ValuesHandRolledFieldOwnerMismatchRejected)
     EXPECT_FALSE(isJavacEnumValuesSsa(*h.fn));
 }
 
-// 红相：2 指令块（缺 checkcast）先被 size 门（同块 ≠ 3 指令）拒绝——单个 kind
+// 红相：2 指令块（缺 checkcast）先被 size 门（同块 ≠ 3 指令）拒绝，单个 kind
 // 检查的删除不改变本例结果（2 指令撞不到 kind 门），故本例钉的是 size 门完整性；
 // 各 kind 检查由其余同形状例分钉（评审 P3-nit① 归属勘正）。缺 checkcast 的
 // 展开体语义已破，保留作形状文档。
@@ -307,7 +307,7 @@ TEST(RegCEnumSsaShapeTest, ValuesMissingCheckCastRejected)
     EXPECT_FALSE(isJavacEnumValuesSsa(*h.fn));
 }
 
-// 红相：放宽「同块 3 指令」size 门为 ≥3 或忽略多余指令 → 转红。
+// 红相：放宽"同块 3 指令"size 门为 ≥3 或忽略多余指令 → 转红。
 TEST(RegCEnumSsaShapeTest, ValuesExtraInstructionRejected)
 {
     HandFn h = makeHandFn("Color", "values", "()[LColor;");
@@ -342,7 +342,7 @@ TEST(RegCEnumSsaShapeTest, ValuesWrongNameRejected)
 }
 
 // 红相：删 desc 门（()[L 前缀 + 尾分号）→ 本测试转红。desc 取 "X)[LColor;" 使
-// substr(2) 恰为 "[LColor;"（与 field desc 一致、只漏前缀门）——若取 "(IL..."
+// substr(2) 恰为 "[LColor;"（与 field desc 一致、只漏前缀门），若取 "(IL..."
 // 类非数组 desc，删门后仍被 field desc 失配拒绝，钉不住前缀门（评审 P3-nit② 勘正）。
 TEST(RegCEnumSsaShapeTest, ValuesWrongDescRejected)
 {
@@ -360,7 +360,7 @@ TEST(RegCEnumSsaShapeTest, ValuesWrongDescRejected)
 // 真实管线（CodeConverter → SSABuilder）后 ldc 类字面量与 aload#0 都不落 SSA
 // 指令（分别降为 opaque 值与局部值，ssa_builder.cpp lowerConstant/
 // lowerLocalLoad），body 块恰为 [Call(Enum.valueOf), Convert(checkcast owner)]
-// 两条——任何 SSA 侧形状门都查不到 ldc desc == owner 这一 owner 绑定证据，
+// 两条，任何 SSA 侧形状门都查不到 ldc desc == owner 这一 owner 绑定证据，
 // 只能造出弱于字节码门的合同（2 指令口径会放行 Enum.valueOf(他类字面量, s) +
 // checkcast 本类的病态形状并注入站点 intrinsic 信任集合，fail-open）。
 // valueOf 合成验证唯一来源 = 字节码侧 isJavacEnumValueOfBody 预扫描/按类补扫

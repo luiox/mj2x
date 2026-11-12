@@ -105,7 +105,7 @@ SyntheticPe makeSyntheticPe()
 
     // --- .reloc：一个 page 块装 4 条 DIR64 项（3 表项 + base）+ 全零终结块。
     // 每项 2 字节 = type（高 4 位，10 = DIR64）| 页内偏移（低 12 位）。
-    // 全零终结块是 MSVC link.exe 的固定收尾——熄灭遍历必须认得它并正常
+    // 全零终结块是 MSVC link.exe 的固定收尾，失效遍历必须认得它并正常
     // 停下，回归锁定。4 项 × 2B + 8B 块头 = 16，本就 4 对齐，无补零。
     const size_t block = kRelocRawPtr;
     leWrite32(sp.img, block, kDataVa);          // pageRVA
@@ -148,7 +148,7 @@ fs::path caseFile(const std::string& name)
 
 // ===========================================================================
 // 正路：三步改写逐项核对 + 确定性 + 幂等护栏。
-// 三步 = 第 1 步表项纯异或 / 第 2 步重定位熄灭 / 第 3 步定位痕迹清零。
+// 三步 = 第 1 步表项纯异或 / 第 2 步重定位失效 / 第 3 步定位痕迹清零。
 // ===========================================================================
 TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
 {
@@ -162,7 +162,7 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
     std::vector<uint8_t> out;
     ASSERT_TRUE(readFile(file, out));
 
-    // 1) 第 1 步表项纯异或：每项 = 链接期落盘值 XOR ks64(t, k1)——运行时
+    // 1) 第 1 步表项纯异或：每项 = 链接期落盘值 XOR ks64(t, k1)，运行时
     //    handler 重算同一 keystream 即可解回；base qword 是自引用指针不是
     //    密文，必须原样保留。
     for (uint32_t t = 0; t < 3; ++t) {
@@ -171,7 +171,7 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
             << "entry " << t;
     }
     EXPECT_EQ(leRead64(out, sp.baseOff), kImageBase + sp.tableRva) << "base qword must survive";
-    // 2) 第 2 步重定位熄灭：4 条 DIR64 项的 type 字段翻 0（ABSOLUTE，装载
+    // 2) 第 2 步重定位失效：4 条 DIR64 项的 type 字段翻 0（ABSOLUTE，装载
     //    器跳过），低 12 位页内偏移保留。
     const uint32_t offs[4] = {sp.tableRva - kDataVa, sp.tableRva - kDataVa + 8,
                               sp.tableRva - kDataVa + 16, sp.baseRva - kDataVa};
@@ -202,7 +202,7 @@ TEST(Vmx64PostlinkTest, EncryptsTableAndQuenchesRelocations)
 }
 
 // ===========================================================================
-// fail-closed 面：每个坏形态对应一种真实事故——非 PE / 非 AMD64（输错输入
+// fail-closed 面：每个坏形态对应一种真实事故，非 PE / 非 AMD64（输错输入
 // 文件）、重定位项缺失（产物不是预期链接形态）、计数越界（magic 碰撞或表
 // 被改）、k1 为 0（已加密或损坏）、.reloc 畸形。全部拒绝且原文件一字不动
 // （不落半改写产物）。
@@ -234,8 +234,8 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
     // 表项重定位缺失：把第 2 条 DIR64 项抹成 ABSOLUTE（高 4 位 type 清零）
-    // → 表项 1 的熄灭目标找不到。对应真实事故：重定位被剥掉或产物被改——
-    // 熄灭一半留一半会让装载器改写部分密文，dispatch 静默走错。
+    // → 表项 1 的失效目标找不到。对应真实事故：重定位被剥掉或产物被改，
+    // 失效一半留一半会让装载器改写部分密文，dispatch 静默走错。
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;
@@ -263,7 +263,7 @@ TEST(Vmx64PostlinkTest, FailClosedOnMalformedInputs)
         EXPECT_EQ(after, img) << "rejected input must be untouched";
     }
     // k1 为 0：上一次加密已把 k1 清零（重复加密）或表损坏。若放行，掩码
-    // 退化为固定公开常数 ks64(t, 0)，产出任何人都能解开的「伪加密」。
+    // 退化为固定公开常数 ks64(t, 0)，产出任何人都能解开的伪加密产物。
     {
         const SyntheticPe sp = makeSyntheticPe();
         auto               img = sp.img;

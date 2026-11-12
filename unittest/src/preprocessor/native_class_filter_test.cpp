@@ -22,7 +22,7 @@ using namespace mj2x;
 namespace {
 
 // 构造一个空方法体类（名 + 一个普通静态方法），供 preprocessor 集成测试。
-// 批 6d：树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
+// 树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
 void buildSimpleClass(CompilerIndex& index, const std::string& className)
 {
     auto& arena = index.arena();

@@ -200,7 +200,7 @@ protected:
         mj2x::Vmc4Options opts;
         opts.dispatcherKind = dispatcherKind;
         // 执行期 dispatch drift：所有 e2e 在 drift 全开（2 变体 + 16 字节周期）下
-        // 验证语义保真——unmap 解码路径与编码器轮转同步。
+        // 验证语义保真，unmap 解码路径与编码器轮转同步。
         opts.driftVariants = 2;
         opts.driftPeriod   = 16;
         backend->setOptions(opts);
@@ -268,7 +268,7 @@ protected:
     }
 
 protected:
-    /// 双后端对拍（Phase 2.D）：同一 Java 方法集分别经 Vmc4Backend / RegCBackend
+    /// 双后端比对（Phase 2.D）：同一 Java 方法集分别经 Vmc4Backend / RegCBackend
     /// 虚拟化，各自编译 DLL 跑 Driver，输出必须与 baseline 完全一致。
     void runDualBackendCase(const std::string& className, const std::string& javaSource,
                             const std::vector<JavaCheck>& checks,
@@ -323,7 +323,7 @@ protected:
 private:
 
     /// 单后端跑一轮：pipeline（后端由 backendName 选择）→ 编译 DLL → Driver 输出。
-    /// 注意：inClass 每次跑前都是原始字节码（对拍用独立输出名，不覆盖输入）。
+    /// 注意：inClass 每次跑前都是原始字节码（比对用独立输出名，不覆盖输入）。
     void runProtected(const std::string& className, const fs::path& inClass, const fs::path& dir,
                       const std::string& backendName, mj2x::VmDispatcherKind dispatcherKind,
                       std::vector<std::string>& out)
@@ -520,7 +520,7 @@ TEST_P(Vmc4BackendE2E, PureArithmeticAndControlFlowRoundTrip)
 }
 
 // 四后端语义回归集成员（X2）：超界/负数移位计数与字符串比较是跨后端
-// 易漂移点——历史缺陷是 RegC/LLVM 缺 JVM &31/&63 掩码（StackC/VMC4 一直
+// 易漂移点，历史缺陷是 RegC/LLVM 缺 JVM &31/&63 掩码（StackC/VMC4 一直
 // 正确）。矩阵三后端由 mtest_set g13.shift_out_of_range / g12.string_compare
 // 覆盖，这里补 VMC4 列；移位计数走参数防常量折叠。
 TEST_P(Vmc4BackendE2E, ShiftMaskAndStringCompareRoundTrip)
@@ -556,7 +556,7 @@ TEST_P(Vmc4BackendE2E, ShiftMaskAndStringCompareRoundTrip)
 
 // 浮点路径：double 全精度一致；float 只用可精确表示的值（MVP 的 F32 handler
 // 内部用 double 计算、仅在 JNI 边界转回 float，多步 float 链会与 Java 的
-// 每步 binary32 舍入不同——已知偏差）。
+// 每步 binary32 舍入不同，已知偏差）。
 // f2i/f2l 饱和语义（NaN→0、超界→min/max）与 JVM 一致。
 TEST_P(Vmc4BackendE2E, FloatDoubleAndConvertRoundTrip)
 {
@@ -963,7 +963,7 @@ TEST_P(Vmc4BackendE2E, ExceptionRoundTrip)
             5, GetParam().kind);
 }
 
-// 后续项：CHECKCAST（castcheck:<desc> intrinsic）语义锁定——
+// 后续项：CHECKCAST（castcheck:<desc> intrinsic）语义锁定，
 // null 通过（JVM 语义）、命中原值传递、失败抛 ClassCastException（经 Driver
 // 捕获 THROW:...）、try 内失败被保护区捕获（异常精确化链路对 castcheck 生效）。
 TEST_P(Vmc4BackendE2E, CheckCastRoundTrip)
@@ -987,7 +987,7 @@ TEST_P(Vmc4BackendE2E, CheckCastRoundTrip)
             4, GetParam().kind);
 }
 
-// 后续项：NullLiteral (object ref) → REF NULL 常量槽——null 比较/返回 null/
+// 后续项：NullLiteral (object ref) → REF NULL 常量槽，null 比较/返回 null/
 // null 实参/checkcast+null 比较（jvm-obf-tester 剩余 fail-closed 主因之一）。
 TEST_P(Vmc4BackendE2E, NullLiteralRoundTrip)
 {
@@ -1105,7 +1105,7 @@ TEST_P(Vmc4BackendE2E, SwitchRoundTrip)
 
 // Phase 2.C 回归：athrow 异常归属 = athrow 所在块，而非布局顺序的下一块。
 // throwCatchTail 的 athrow 块（保护区内）之后紧跟 handler/未保护块（try 内
-// throw、try 外 return）：若检查点按「pc 之后的块」归属，异常会逃逸传播
+// throw、try 外 return）：若检查点按"pc 之后的块"归属，异常会逃逸传播
 // （修复前 4 dispatcher 实测均为 THROW 而非 -1）。
 TEST_P(Vmc4BackendE2E, AthrowAttributionRoundTrip)
 {
@@ -1187,7 +1187,7 @@ TEST_P(Vmc4BackendE2E, IntrinsicAndMonitorRoundTrip)
             5, GetParam().kind);
 }
 
-// Phase 2.D：双后端对拍——同一 Math/wrapper 方法集分别经 VMC4（JNI Call 路径）
+// Phase 2.D：双后端比对，同一 Math/wrapper 方法集分别经 VMC4（JNI Call 路径）
 // 与 RegC（intrinsic helper 路径）虚拟化，输出必须与 baseline 完全一致。
 // abs/sqrt/max/min 走 invokestatic（VMC4 per-callsite JNI helper ↔ RegC intrinsic
 // registry 特化 helper）；parseInt 走 Integer.parseInt 静态调用。
@@ -1216,8 +1216,8 @@ TEST_P(Vmc4BackendE2E, MathIntrinsicDualBackendParity)
 }
 
 // ===========================================================================
-// 程序 blob at-rest 加密（issue #760 首切片，--vmc4-encrypt-program 等价配置）：
-// 全链路 round-trip —— 生成 C 数据段为密文（结构断言），JNI_OnLoad 加载期
+// 程序 blob at-rest 加密（issue #760，--vmc4-encrypt-program 等价配置）：
+// 全链路 round-trip，生成 C 数据段为密文（结构断言），JNI_OnLoad 加载期
 // 原地解密，Java 调用结果与 baseline 完全一致（与 drift 叠加验证正交性）。
 // ===========================================================================
 TEST(Vmc4BackendEncryptE2E, ProgramBlobEncryptRoundTrip)
@@ -1342,11 +1342,11 @@ TEST(Vmc4BackendEncryptE2E, ProgramBlobEncryptRoundTrip)
 }
 
 // ===========================================================================
-// 分块懒解密（issue #760 切片 2，--vmc4-lazy-decrypt 等价配置）：全链路
-// round-trip —— 生成 C 数据段为分块密文 + cend/cstate 表 + touch helper，
+// 分块懒解密（issue #760，--vmc4-lazy-decrypt 等价配置）：全链路
+// round-trip，生成 C 数据段为分块密文 + cend/cstate 表 + touch helper，
 // JNI_OnLoad 无解密调用；解释器首执行到块才经 CRT mj2x_vm_lazy_decrypt 原地
 // 解密（本 e2e 同时是发射侧 vmc4DeriveChunkKey 与 CRT 侧 mj2x_vm_chunk_key
-// 双镜像公式的执行级对拍门）；Java 调用结果与 baseline 完全一致（drift
+// 双镜像公式的执行级比对门）；Java 调用结果与 baseline 完全一致（drift
 // 叠加验证正交性）。
 // ===========================================================================
 TEST(Vmc4BackendEncryptE2E, LazyChunkDecryptRoundTrip)
@@ -1480,11 +1480,11 @@ TEST(Vmc4BackendEncryptE2E, LazyChunkDecryptRoundTrip)
 }
 
 // ===========================================================================
-// 块乱序 e2e（issue #1116 切片 A，--vmc4-shuffle-blocks）：三档 round-trip
+// 块乱序 e2e（issue #1116，--vmc4-shuffle-blocks）：三档 round-trip
 //   shuffle 单开 / shuffle+drift / shuffle+drift+encrypt-program，全部
 //   -Xverify:all 真编译执行。样本含 switch + 多路分支 + 循环 + try/catch
 //   （异常区域重映射的执行级实证）。机制：runShuffleRoundTrip 驱动（无 gtest
-//   宏，错误经 detail 上抛），TEST 只选档 + 结构断言 + 输出对拍。
+//   宏，错误经 detail 上抛），TEST 只选档 + 结构断言 + 输出比对。
 // ===========================================================================
 
 namespace {
@@ -1623,7 +1623,7 @@ ShuffleRoundTripOut runShuffleRoundTrip(const Toolchain& tc, const std::string& 
         return r;
     }
 
-    // -Xverify:all 真编译执行（逐行与 baseline 对拍在 TEST 侧）。
+    // -Xverify:all 真编译执行（逐行与 baseline 比对在 TEST 侧）。
     auto protectedRun = runBat({
         "set \"MORPHER_DLL=" + dll.string() + "\"",
         q(tc.java) + " -Xverify:all -cp " + q(dir) + " Driver",
@@ -1714,14 +1714,14 @@ TEST(Vmc4BackendShuffleE2E, ShuffleDriftEncryptRoundTrip)
 }
 
 // ===========================================================================
-// issue #1116 切片 B：--vmc4-block-lazy-decrypt E2E。
+// issue #1116：--vmc4-block-lazy-decrypt E2E。
 // ===========================================================================
 
 /// 块粒度链式懒解密三档叠加矩阵 round-trip：
 ///   tier 0：block-lazy 单开（+encrypt 前提）
-///   tier 1：+ shuffle-blocks（切片 A 正交叠加，推荐组合）
+///   tier 1：+ shuffle-blocks（块乱序正交叠加，推荐组合）
 ///   tier 2：+ drift 全开（执行解码层正交叠加）
-/// 每档独立目录 javac → Vmc4Backend → .c → DLL → Java 加载对拍 baseline。
+/// 每档独立目录 javac → Vmc4Backend → .c → DLL → Java 加载后与 baseline 比对。
 /// 样本含 switch 多块（pick）+ 循环（loopSum）+ 算术（addMul），保证首达解密
 /// 在多块面上触发；结构断言：块档基础设施齐备、无任何整体解密调用、
 /// JNI_OnLoad 只保留 shuffle 的 targets 解密条目。
@@ -1897,7 +1897,7 @@ struct RegfileRoundTripOut
     std::string detail;
 };
 
-/// 一档 regfile round-trip（javac → Vmc4Backend → .c → DLL → Java 对拍 baseline）。
+/// 一档 regfile round-trip（javac → Vmc4Backend → .c → DLL → Java 运行后与 baseline 比对）。
 RegfileRoundTripOut runRegfileRoundTrip(const Toolchain& tc, const std::string& className,
                                         uint32_t regfileLimit, bool superOps, bool fragment)
 {
@@ -2048,7 +2048,7 @@ RegfileRoundTripOut runRegfileRoundTrip(const Toolchain& tc, const std::string& 
     return r;
 }
 
-/// regfile 单开小档：池容量 5（远小于 pressure 的 6+ 同时活跃值）——溢出槽
+/// regfile 单开小档：池容量 5（远小于 pressure 的 6+ 同时活跃值），溢出槽
 /// 真实读写 + 循环携带 + 异常区域映射，全链路输出与 baseline 一致。
 TEST(Vmc4BlockLazyE2E, RegfileRoundTrip)
 {

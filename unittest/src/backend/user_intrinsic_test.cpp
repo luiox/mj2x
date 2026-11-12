@@ -162,10 +162,10 @@ UserIntrinsic makeShadowAbsEntry()
 
 /// 漂移回归（T1 intrinsic 决策表）：用户条目遮蔽内建 RuntimeFunction 签名时，
 /// 异常检查稀疏化判定必须与发射面同用用户 registry 视图。旧实现稀疏化硬用
-/// builtins()（Math.abs → RuntimeFunction → 纯计算豁免）——受保护区内的用户
+/// builtins()（Math.abs → RuntimeFunction → 纯计算豁免），受保护区内的用户
 /// 调用点被省掉异常分发，my_abs 抛出的异常越过 try 边界；判定表统一后
 /// UserIntrinsic 非纯计算，分发保留。方法形状：try { return Math.abs(a); }
-/// catch (Exception e) { return -1; }——调用点与内建 RuntimeFunction 同键且
+/// catch (Exception e) { return -1; }，调用点与内建 RuntimeFunction 同键且
 /// 处于受保护区。
 TEST(RegCUserIntrinsicTest, ShadowedBuiltinKeepsExceptionDispatch)
 {
@@ -215,7 +215,7 @@ TEST(RegCUserIntrinsicTest, ShadowedBuiltinKeepsExceptionDispatch)
         << result.source;
 }
 
-/// com/x/F.m(II)I 实例调用（int call(F f, int a, int b) { return f.m(a, b); }）——
+/// com/x/F.m(II)I 实例调用（int call(F f, int a, int b) { return f.m(a, b); }），
 /// owner/name/desc 与用户条目同键，用于锁定 instance 调用不进用户 intrinsic 路径。
 std::unique_ptr<MethodNode> makeInstanceCallMethod()
 {
@@ -276,7 +276,7 @@ TEST(RegCUserIntrinsicTest, InstanceCallSiteWithPassReceiverLowersToUserSymbol)
     // 不经通用 JNI 派发。
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32("), std::string::npos) << result.source;
     // JVM 语义保持：receiver 为 NULL 抛 NPE（与通用派发 emitCachedCall 一致），
-    // 且 ThrowNew 后必须 goto cleanup 终止调用路径——仅挂 pending 异常而不
+    // 且 ThrowNew 后必须 goto cleanup 终止调用路径，仅挂 pending 异常而不
     // 转移控制流会把 NULL receiver 继续递给用户 C 实现。
     EXPECT_NE(result.source.find("_mj2x_regc_throw_null(\"instance method call\")"),
               std::string::npos)
@@ -307,7 +307,7 @@ TEST(RegCUserIntrinsicTest, StaticCallSiteWithPassReceiverEntryFailsClosed)
 {
     std::string reason;
     // 配置校验：passReceiver 条目匹配到 INVOKESTATIC 调用点（静态方法无
-    // receiver）——Unsupported 使整方法 fail-closed，不静默回退通用派发。
+    // receiver），Unsupported 使整方法 fail-closed，不静默回退通用派发。
     auto result = emitRegCWithUsers({makeUserEntry(false, false, true)}, reason);
     EXPECT_FALSE(result.ok);
     EXPECT_NE(result.reason.find("passReceiver"), std::string::npos) << result.reason;
@@ -456,7 +456,7 @@ TEST(StackCUserIntrinsicTest, InstanceCallSiteWithoutPassReceiverStillJniDispatc
 
 TEST(StackCUserIntrinsicTest, StaticCallSiteWithPassReceiverEntryFailsClosed)
 {
-    // 配置校验：passReceiver 条目匹配到静态调用点（静态调用无 receiver）——
+    // 配置校验：passReceiver 条目匹配到静态调用点（静态调用无 receiver），
     // 整方法 fail-closed 保留 Java 字节码，不静默回退。
     StackCBackend backend;
     UserIntrinsicConfig cfg;
@@ -566,7 +566,7 @@ std::unique_ptr<VmProgram> encodeInstanceWithUsers(const std::vector<UserIntrins
     auto                     blocks = test::convertMethodNode(converter, *mn, arena);
     SSABuilder               builder;
     // isStatic=false：实例布局 fixture（this@0 + 2 参），与 RegC 实例 helper
-    // 对齐——传 true 会少建 receiver 参数，locals[3] 落 undef 拒绝编码。
+    // 对齐，传 true 会少建 receiver 参数，locals[3] 落 undef 拒绝编码。
     auto ssa = builder.build(blocks, "UserIntrinsicVmc4", mn->name.to_std_string(),
                              mn->desc.to_std_string(), false, mn->maxLocals, arena, reason);
     if (!ssa) return nullptr;
@@ -608,7 +608,7 @@ TEST(Vmc4UserIntrinsicTest, InstanceCallSiteWithoutPassReceiverUnmarked)
 TEST(Vmc4UserIntrinsicTest, StaticCallSiteWithPassReceiverEntryEncodeFails)
 {
     std::string reason;
-    // 配置校验：passReceiver 条目匹配到静态调用点（静态方法无 receiver）——
+    // 配置校验：passReceiver 条目匹配到静态调用点（静态方法无 receiver），
     // 编码失败，reason 指明 passReceiver 配置错误。
     auto prog = encodeWithUsers({makeUserEntry(false, false, true)}, reason);
     EXPECT_EQ(prog, nullptr);

@@ -256,7 +256,7 @@ TEST_F(CliI18nTest, DanglingLangFlagFailsClosed)
 }
 
 // 空格形态的 --lang 会消费后继 token 作值（即使以 '-' 开头），剩余裸 token
-// 报 UnexpectedArgument——与迁移前"静默忽略 lang、其余正常解析"不同，
+// 报 UnexpectedArgument，与迁移前"静默忽略 lang、其余正常解析"不同，
 // fail-closed。合法用法为 --lang=en_US 内联形态或 --lang <lang> <args...>。
 TEST_F(CliI18nTest, LangFlagFollowedByFlagFailsClosed)
 {

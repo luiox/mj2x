@@ -1,4 +1,4 @@
-// jdk_fixture.hpp — 测试侧 JDK 工具链辅助
+// jdk_fixture.hpp，测试侧 JDK 工具链辅助
 //
 // 在 libs/libjdk_finder 的探测能力之上，提供测试专用功能：
 //   - runBat：临时脚本执行（Windows .bat / POSIX sh，失败立即早退）
@@ -221,7 +221,7 @@ inline JdkToolchain probeJdk(const ProbeOptions& opts = {})
         return tc;
     }
     // 版本探测：javac -version 解析 major（供 skipOnJdkBelow 版本门）；解析
-    // 失败按不可用处理——版本不明的 JDK 不能承担"语法档位"判断。
+    // 失败按不可用处理，版本不明的 JDK 不能承担"语法档位"判断。
     const auto versionRun = runBat({q(tc.javac) + " -version"});
     tc.majorVersion       = (versionRun.exitCode == 0) ? parseJavacMajor(versionRun.out) : 0;
     if (tc.majorVersion <= 0) {
@@ -235,12 +235,12 @@ inline JdkToolchain probeJdk(const ProbeOptions& opts = {})
 
 // ---------------------------------------------------------------------------
 // clang 探测（#1122）：llvm exec 列（native matrix LLVM 列 / llvm 样本列）的
-// GTEST_SKIP 依赖 clang，此前只认 PATH 命中——无 clang 机器整列跳过且不可见，
+// GTEST_SKIP 依赖 clang，此前只认 PATH 命中，无 clang 机器整列跳过且不可见，
 // 缺口长期隐形。本探测把"无 clang"的口径从"PATH 无"扩为"PATH 与常见安装位置
 // 均无"，并把探测结果以单行摘要打进测试输出（找到/未找到 + 版本 + 来源），
 // 让 SKIP 从隐形变可见且有因。
 //
-// 语义纪律：探测不改变 llvm 列的跳过条件本身——仍是"无 clang"，只是查找面
+// 语义纪律：探测不改变 llvm 列的跳过条件本身，仍是"无 clang"，只是查找面
 // 变宽；真无 clang 的机器（CI runner）行为与基线逐字一致。
 //
 // 查找顺序：
@@ -302,7 +302,7 @@ inline ClangProbe probeClang()
     }
 
     // 1. PATH：既有跳过条件的原始口径，保持最高优先。未命中不在此处定稿
-    //    reason——全途径收口见函数尾（中途定稿会使收口分支不可达）。
+    //    reason，全途径定稿见函数尾（中途定稿会使收尾分支不可达）。
     {
         const auto r = runBat({q("clang") + " --version"});
         if (r.exitCode == 0) {
@@ -378,8 +378,8 @@ inline ClangProbe probeClang()
     }
 #endif
 
-    // 全途径未命中：reason 按实际探测覆盖面收口。此前 reason 停在 PATH 首步的
-    // "not on PATH"、尾部兜底因 reason 恒非空不可达——SKIP 消息声称已探常见
+    // 全途径未命中：reason 按实际探测覆盖面定稿。此前 reason 停在 PATH 首步的
+    // "not on PATH"、尾部兜底因 reason 恒非空不可达，SKIP 消息声称已探常见
     // 安装位置而原因只写 "not on PATH"，措辞与实际探测面不符（#1191）。
     probe.reason = "not on PATH";
     if (homeProbed) probe.reason += "; MORPHER_CLANG_HOME 未命中 clang --version";
@@ -398,7 +398,7 @@ inline std::string formatClangProbe(const ClangProbe& probe)
     return "clang NOT found: " + probe.reason + " — llvm exec 列将整列跳过 (#1122)";
 }
 
-/// clang 命中非 PATH 位置时，给子进程脚本前置 PATH 注入行——mj2x-cli --compile
+/// clang 命中非 PATH 位置时，给子进程脚本前置 PATH 注入行，mj2x-cli --compile
 /// 与 --c-compiler/--llvm-tool clang 均按 PATH 解析 clang（jdk_finder::command_exists
 /// / ca::process::Command）。PATH 命中或未找到返回空（未找到时调用方本就该 SKIP）。
 inline std::vector<std::string> clangPathPrelude(const ClangProbe& probe)
@@ -494,7 +494,7 @@ struct RunnerSpec
 };
 
 /// 运行终态分类。此前 runWithRunner 把三种失败混同为 nullopt、被调用方
-/// GTEST_SKIP 吞掉——"被测产物运行失败"（如 keychain Phase 3 key2 不自洽的首链
+/// GTEST_SKIP 吞掉，"被测产物运行失败"（如 keychain Phase 3 key2 不自洽的首链
 /// AIOOBE）与"环境无 JDK"不可同日而语：前者是必须显红的缺陷（P0 在 CI 全绿
 /// 下存活两周的直接原因），后者才是合法 skip。
 enum class JvmRunStatus

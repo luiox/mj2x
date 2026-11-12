@@ -1,7 +1,7 @@
 // indy native dispatch 静态判定单测。
 //
 // 锁定 classifyIndySite 的判定矩阵：无参/捕获 lambda、方法引用、string concat、
-// record ObjectMethods、LMF 字段句柄精确子集、非标准 bootstrap——各形态断言
+// record ObjectMethods、LMF 字段句柄精确子集、非标准 bootstrap，各形态断言
 // fast（StaticExpanded / DirectFieldAccess / RecordObjectMethods）或
 // fallback（RuntimeHelper）及稳定理由字面量；report 收集路径对字节码输出零影响
 //（判定=标记，不改写行为；既有 invokedynamic_preprocessor_test.cpp 锁定展开行为）。
@@ -25,7 +25,7 @@ using namespace jbytecode::tree;
 
 namespace {
 
-// 树夹具暂存（键 = 类名，投影追加不销毁）：批 6d 后 CompilerClass 无树槽，DOM 由
+// 树夹具暂存（键 = 类名，投影追加不销毁）：树载体退役后 CompilerClass 无树槽，DOM 由
 // classFromTree 一次性落定；追加式 shelf 让历次回投影存活到测试结束（方法指针不悬垂）。
 std::map<std::string, std::vector<std::unique_ptr<ClassNode>>>& treeShelf()
 {
@@ -73,7 +73,7 @@ void addMethodToIndex(CompilerIndex& index, const std::string& className,
     index.addClass(className, test::classFromTree(className, *treeShelf()[className].back(), arena));
 }
 
-// 在 index 里注册一个空壳类（供 D1 分支「bsm owner 在编译输入内」判定用）。
+// 在 index 里注册一个空壳类（供 D1 分支"bsm owner 在编译输入内"判定用）。
 void addEmptyClass(CompilerIndex& index, const std::string& className)
 {
     auto& arena = index.arena();
@@ -85,8 +85,8 @@ void addEmptyClass(CompilerIndex& index, const std::string& className)
     index.addClass(className, test::classFromTree(className, *cn, arena));
 }
 
-// 判定入口（批 6d 后）：站点自持数据（indy 名/描述符/bsm/bsmArgs）直接走
-// classifyIndySitePayload——树包装 classifyIndySite 已随树载体退役。
+// 判定入口（现入口）：站点自持数据（indy 名/描述符/bsm/bsmArgs）直接走
+// classifyIndySitePayload，树包装 classifyIndySite 已随树载体退役。
 IndyDispatchDecision classifySite(CompilerIndex& index, const std::string& name,
                                   const std::string& desc, const mj2x::Handle& bsm,
                                   std::vector<ca::core::Any> bsmArgs)
@@ -165,7 +165,7 @@ InvokeDynamicInsnNode* makeIndy(CompilerIndex& index, const std::string& name,
 {
     auto& arena = index.arena();
     // 树夹具仍走旧栈节点：bsm 与载荷里的门面 Handle/MethodType 一并投影回旧栈
-    // 形态——树→字节序列化只认旧栈常量（门面载荷是管线读出侧形态，喂树即坏
+    // 形态，树→字节序列化只认旧栈常量（门面载荷是管线读出侧形态，喂树即坏
     // CP：先前只投影 bsm 不投影载荷，BootstrapMethods 写坏报 bad CP utf8 0）。
     jbytecode::core::Handle treeBsm(bsm.getTag(), bsm.getOwner(), bsm.getName(), bsm.getDesc());
     std::vector<ca::core::Any> treeArgs;
@@ -365,7 +365,7 @@ TEST(IndyDispatchClassifyTest, FieldGetterTypeMismatchFallsBack)
                  "lambda-metafactory field handle impl outside strict direct-access subset");
 }
 
-// ---- F1/F2 直派载荷 engagement（波次二 P1，发射端只消费载荷）----
+// ---- F1/F2 直派载荷 engagement（直派桩 P1，发射端只消费载荷）----
 
 // F1 直派形态：indy 描述符本身即字段读（()I 对 GETSTATIC SV:I）→ form 不变、
 // 载荷 engage（isStatic/isWrite/owner/name/fieldDesc 供发射端直接发射字段访问）。
@@ -414,7 +414,7 @@ TEST(IndyDispatchClassifyTest, DirectFieldSetterShapeEngagesPayload)
 }
 
 // F1 lambda 捕获形态（站点=创建函数接口实例，indy 返回 Lp/Sup;）：form 保持
-// DirectFieldAccess（波次一候选标记，reason 逐字不变），载荷不 engage——发射端
+// DirectFieldAccess（候选标记，reason 逐字不变），载荷不 engage，发射端
 // 走既有 helper 路径（零回归边界）。
 TEST(IndyDispatchClassifyTest, LambdaCaptureFieldHandleKeepsCandidateWithoutPayload)
 {
@@ -520,7 +520,7 @@ TEST(IndyDispatchClassifyTest, AltMetafactoryUnknownFlagsFallBack)
 
 // ---- D：非标准（自定义）bootstrap 的 fallback（RuntimeHelper + D1/D2 细分理由）----
 
-// bsm owner 在编译输入内（非 library 类）：D1——波次二静态求值候选。
+// bsm owner 在编译输入内（非 library 类）：D1，静态求值候选。
 TEST(IndyDispatchClassifyTest, CustomBootstrapInCompilationInputFallsBack)
 {
     CompilerIndex index;
@@ -542,7 +542,7 @@ TEST(IndyDispatchClassifyTest, CustomBootstrapInCompilationInputFallsBack)
         "custom bootstrap: bsm body in compilation input (static evaluation candidate, wave-2)");
 }
 
-// bsm owner 不在编译输入（库/JDK 类）：D2——仅运行期 crack 候选。
+// bsm owner 不在编译输入（库/JDK 类）：D2，仅运行期 crack 候选。
 TEST(IndyDispatchClassifyTest, CustomBootstrapExternalBsmFallsBack)
 {
     CompilerIndex index;
