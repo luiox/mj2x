@@ -13,8 +13,9 @@ on:
   workflow_dispatch:
   push:
     branches: ["main"]
+  # pull_request 不限定目标分支：堆叠 PR 的 base 是另一条分支，限 main 会让
+  # 堆叠链上的 PR 拿不到 CI。
   pull_request:
-    branches: ["main"]
 
 concurrency:
   group: ci-${{ github.ref }}
