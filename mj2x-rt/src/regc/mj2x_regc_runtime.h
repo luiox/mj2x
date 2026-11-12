@@ -244,8 +244,9 @@ MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context
 /// 单线程且先于任何 native 方法,解密后的缓冲生命周期覆盖整个执行期。
 MJ2X_REGC_API void _mj2x_regc_decrypt_bytes(uint8_t* data, uint32_t size, uint32_t key);
 MJ2X_REGC_API mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* internal_name);
-MJ2X_REGC_API int32_t _mj2x_intrinsic_digit_value(unsigned char ch);
-MJ2X_REGC_API void _mj2x_intrinsic_throw_number_format(mj2x_regc_context* context);
+/// @brief 镜像 JDK Character.digit(char,int) 的 BMP 口径：ASCII 快路径 +
+/// Unicode Nd 区段表 + 全角字母别名区段；radix 越界或非 digit 返回 -1。
+MJ2X_REGC_API int32_t _mj2x_intrinsic_digit_char(uint16_t ch, int32_t radix);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
 MJ2X_REGC_API int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_short_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);

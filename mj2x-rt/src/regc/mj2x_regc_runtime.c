@@ -697,188 +697,420 @@ void _mj2x_regc_decrypt_bytes(uint8_t* data, uint32_t size, uint32_t key)
     }
 }
 
-int32_t _mj2x_intrinsic_digit_value(unsigned char ch) {
-    if (ch >= '0' && ch <= '9') return (int32_t)(ch - '0');
-    if (ch >= 'a' && ch <= 'z') return (int32_t)(ch - 'a') + 10;
-    if (ch >= 'A' && ch <= 'Z') return (int32_t)(ch - 'A') + 10;
+/* ---- parse 族(JDK 17 语义逐条镜像) ----
+ *
+ * 探测口径(JDK 17.0.20.1 Temurin,实测 + java.base 源码逐字):
+ *   Integer.parseInt/Long.parseLong/Short.parseShort/Byte.parseByte 与
+ *   Integer.parseUnsignedInt/Long.parseUnsignedLong(含 radix 重载)对
+ *   null 一律抛 NumberFormatException("Cannot parse null string");
+ *   Float.parseFloat/Double.parseDouble 对 null 抛 NullPointerException
+ *   (C 侧经 JNI 委派 JDK,行为由 JDK 自身保证,无需处理);
+ *   Boolean.parseBoolean(null) 返回 false。
+ * 消息文本逐字镜像(JDK 17 NumberFormatException.forInputString):
+ *   null        -> "Cannot parse null string"
+ *   radix 越界  -> "radix N less than Character.MIN_RADIX"
+ *                  / "radix N greater than Character.MAX_RADIX"
+ *   其余 NFE    -> "For input string: \"<s>\"" + radix != 10 时
+ *                  " under radix N"
+ *   parseUnsigned '-' -> "Illegal leading minus sign on unsigned string <s>."
+ *   parseUnsigned 超界 -> "String value <s> exceeds range of unsigned int/long."
+ *   parseUnsignedLong 拆分路径末位坏 digit -> "Bad digit at end of <s>"
+ *   Short/Byte 范围 -> "Value out of range. Value:\"<s>\" Radix:<r>"
+ * 已知残差:parseUnsignedLong 拆分路径(串长超阈值)中,前缀内坏 digit 的
+ * JDK 消息含前缀子串而本实现含全串(值语义一致,均抛 NFE);消息缓冲
+ * 1024 字节,超长输入截断(JDK 不截断,超 1K 的异常消息属病态输入)。
+ *
+ * digit 助手镜像 JDK 17 Character.digit(char,int) 的 BMP 行为:ASCII 快
+ * 路径 + 非 ASCII Nd(十进制数字)区段 36 个(值 = ch - 区段起点)+ 全角
+ * 字母别名区段 2 个(值 = ch - 起点 + 10)。区段表由 JDK 17 全 BMP 扫描
+ * 生成(比 Python unicodedata 更权威:直接锁定 JDK 17 的 Unicode 14 表,
+ * 扫描程序与结果见 PR 说明)。全角字母 U+FF21-FF3A/FF41-FF5A 在 radix>10
+ * 时按 JDK 别名口径接受(Character.digit javadoc 明载,实测 parseInt
+ * ("Ａ",16)==10),全角数字 U+FF10-FF19 属 Nd 区段;全角 '+'/'-' 不是
+ * digit 也不在首字符符号判定内,自然走 NFE。surrogate 与其余字符一律 -1。
+ * 解析按 modified UTF-8 解码为 UTF-16 code unit 逐位对齐 charAt 语义。 */
+
+int32_t _mj2x_intrinsic_digit_char(uint16_t ch, int32_t radix) {
+    static const uint16_t nd_lo[36] = {
+        0x0660u, 0x06F0u, 0x07C0u, 0x0966u, 0x09E6u, 0x0A66u, 0x0AE6u, 0x0B66u,
+        0x0BE6u, 0x0C66u, 0x0CE6u, 0x0D66u, 0x0DE6u, 0x0E50u, 0x0ED0u, 0x0F20u,
+        0x1040u, 0x1090u, 0x17E0u, 0x1810u, 0x1946u, 0x19D0u, 0x1A80u, 0x1A90u,
+        0x1B50u, 0x1BB0u, 0x1C40u, 0x1C50u, 0xA620u, 0xA8D0u, 0xA900u, 0xA9D0u,
+        0xA9F0u, 0xAA50u, 0xABF0u, 0xFF10u,
+    };
+    static const uint16_t nd_hi[36] = {
+        0x0669u, 0x06F9u, 0x07C9u, 0x096Fu, 0x09EFu, 0x0A6Fu, 0x0AEFu, 0x0B6Fu,
+        0x0BEFu, 0x0C6Fu, 0x0CEFu, 0x0D6Fu, 0x0DEFu, 0x0E59u, 0x0ED9u, 0x0F29u,
+        0x1049u, 0x1099u, 0x17E9u, 0x1819u, 0x194Fu, 0x19D9u, 0x1A89u, 0x1A99u,
+        0x1B59u, 0x1BB9u, 0x1C49u, 0x1C59u, 0xA629u, 0xA8D9u, 0xA909u, 0xA9D9u,
+        0xA9F9u, 0xAA59u, 0xABF9u, 0xFF19u,
+    };
+    int32_t value = -1;
+    int32_t i;
+    if (radix < 2 || radix > 36) return -1;
+    if (ch < 0x80u) {
+        if (ch >= (uint16_t)'0' && ch <= (uint16_t)'9') value = (int32_t)(ch - (uint16_t)'0');
+        else if (ch >= (uint16_t)'A' && ch <= (uint16_t)'Z') value = (int32_t)(ch - (uint16_t)'A') + 10;
+        else if (ch >= (uint16_t)'a' && ch <= (uint16_t)'z') value = (int32_t)(ch - (uint16_t)'a') + 10;
+    }
+    else {
+        for (i = 0; i < 36; ++i) {
+            if (ch >= nd_lo[i] && ch <= nd_hi[i]) { value = (int32_t)(ch - nd_lo[i]); break; }
+        }
+        if (value < 0) {
+            if (ch >= 0xFF21u && ch <= 0xFF3Au) value = (int32_t)(ch - 0xFF21u) + 10;
+            else if (ch >= 0xFF41u && ch <= 0xFF5Au) value = (int32_t)(ch - 0xFF41u) + 10;
+        }
+    }
+    return value < radix ? value : -1;
+}
+
+/* modified UTF-8 -> UTF-16 code unit。GetStringUTFChars 的合法输出只有
+ * 1/2/3 字节序列(U+0000 编码为 C0 80,补码面由调用方的首字符判定消化);
+ * 其他首字节按无效单元返回 -1(防御路径,合法输入不触发)。 */
+static int32_t _mj2x_regc_next_code_unit(const unsigned char** pp) {
+    const unsigned char* p     = *pp;
+    const unsigned char  lead  = p[0];
+    if (lead < 0x80u) {
+        *pp = p + 1;
+        return (int32_t)lead;
+    }
+    if ((lead & 0xE0u) == 0xC0u) {
+        *pp = p + 2;
+        return ((int32_t)(lead & 0x1Fu) << 6) | (int32_t)(p[1] & 0x3Fu);
+    }
+    if ((lead & 0xF0u) == 0xE0u) {
+        *pp = p + 3;
+        return ((int32_t)(lead & 0x0Fu) << 12) | ((int32_t)(p[1] & 0x3Fu) << 6) |
+               (int32_t)(p[2] & 0x3Fu);
+    }
+    *pp = p + 1;
     return -1;
 }
 
-void _mj2x_intrinsic_throw_number_format(mj2x_regc_context* context) {
+/* modified UTF-8 的 UTF-16 code unit 计数(JDK String.length() 口径) */
+static int32_t _mj2x_regc_utf8_unit_count(const unsigned char* p) {
+    int32_t count = 0;
+    while (*p != '\0') {
+        const unsigned char lead = *p;
+        if (lead < 0x80u) p += 1;
+        else if ((lead & 0xE0u) == 0xC0u) p += 2;
+        else if ((lead & 0xF0u) == 0xE0u) p += 3;
+        else p += 1;
+        count++;
+    }
+    return count;
+}
+
+static void _mj2x_intrinsic_throw_nfe_message(mj2x_regc_context* context, const char* message) {
     if (context != NULL && context->throwException != NULL) {
-        context->throwException(context->env, "java/lang/NumberFormatException", "For input string");
+        context->throwException(context->env, "java/lang/NumberFormatException", message);
     }
 }
 
-int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
-int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
+static void _mj2x_intrinsic_throw_parse_null(mj2x_regc_context* context) {
+    _mj2x_intrinsic_throw_nfe_message(context, "Cannot parse null string");
+}
 
-int32_t _mj2x_intrinsic_parse_short_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
-int32_t _mj2x_intrinsic_parse_byte_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
+/* JDK NumberFormatException.forInputString(s, radix):消息含全串,
+ * radix != 10 时追加 " under radix N"。缓冲 1024 字节,超长截断。 */
+static void _mj2x_intrinsic_throw_for_input(mj2x_regc_context* context, const char* utf,
+                                            int32_t radix) {
+    char buffer[1024];
+    if (radix == 10) {
+        snprintf(buffer, sizeof buffer, "For input string: \"%s\"", utf);
+    } else {
+        snprintf(buffer, sizeof buffer, "For input string: \"%s\" under radix %d", utf, radix);
+    }
+    _mj2x_intrinsic_throw_nfe_message(context, buffer);
+}
+
+static void _mj2x_intrinsic_throw_radix_bounds(mj2x_regc_context* context, int32_t radix) {
+    char buffer[96];
+    if (radix < 2) {
+        snprintf(buffer, sizeof buffer, "radix %d less than Character.MIN_RADIX", radix);
+    } else {
+        snprintf(buffer, sizeof buffer, "radix %d greater than Character.MAX_RADIX", radix);
+    }
+    _mj2x_intrinsic_throw_nfe_message(context, buffer);
+}
+
+/* 有符号核心(Integer.parseInt(String,int)/Long.parseLong(String,int)):
+ * 顺序 null -> radix -> 首字符符号判定 -> 逐 unit digit 累积。
+ * max_abs 为正数上界(INT32_MAX / INT64_MAX);成功返回 0,*out_value 给值,
+ * *out_utf 给待调用方释放的 GetStringUTFChars 结果;失败返回 -1 并挂异常
+ * (utf 已释放)。 */
+static int _mj2x_intrinsic_parse_signed_core(mj2x_regc_context* context, mj2x_ref jstr_ref,
+                                             int32_t radix, uint64_t max_abs,
+                                             int64_t* out_value, const char** out_utf) {
+    const unsigned char* p;
+    const char*          utf;
+    uint64_t             limit;
+    uint64_t             value = 0;
+    int32_t              first;
+    int                  negative = 0;
+    int                  failed   = 0;
+    if (jstr_ref == NULL) {
+        _mj2x_intrinsic_throw_parse_null(context);
+        return -1;
+    }
+    if (radix < 2 || radix > 36) {
+        _mj2x_intrinsic_throw_radix_bounds(context, radix);
+        return -1;
+    }
+    utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, NULL);
+    if (utf == NULL) return -1; /* OOM:pending 已挂 */
+    p = (const unsigned char*)utf;
+    if (*p == '\0') {
+        _mj2x_intrinsic_throw_for_input(context, utf, radix);
+        (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
+        return -1;
+    }
+    first = _mj2x_regc_next_code_unit(&p);
+    if (first < (int32_t)(unsigned char)'0') { /* 可能是 '+'/'-'(JDK firstChar<'0' 分支) */
+        if (first == '-') {
+            negative = 1;
+        } else if (first != '+') {
+            _mj2x_intrinsic_throw_for_input(context, utf, radix);
+            (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
+            return -1;
+        }
+        if (*p == '\0') { /* 孤立 '+'/'-' */
+            _mj2x_intrinsic_throw_for_input(context, utf, radix);
+            (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
+            return -1;
+        }
+    }
+    else {
+        /* 首 unit 是数字:计入累积(JDK digit 循环自 i=0 起) */
+        int32_t first_digit = _mj2x_intrinsic_digit_char((uint16_t)first, radix);
+        if (first_digit < 0) {
+            _mj2x_intrinsic_throw_for_input(context, utf, radix);
+            (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
+            return -1;
+        }
+        value = (uint64_t)first_digit;
+    }
+    limit = negative ? max_abs + UINT64_C(1) : max_abs;
+    while (*p != '\0') {
+        int32_t unit  = _mj2x_regc_next_code_unit(&p);
+        int32_t digit = _mj2x_intrinsic_digit_char((uint16_t)unit, radix);
+        if (digit < 0 || value > (limit - (uint64_t)digit) / (uint64_t)radix) {
+            failed = 1;
+            break;
+        }
+        value = value * (uint64_t)radix + (uint64_t)digit;
+    }
+    if (failed) {
+        _mj2x_intrinsic_throw_for_input(context, utf, radix);
+        (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
+        return -1;
+    }
+    *out_value = negative ? (int64_t)(UINT64_C(0) - value) : (int64_t)value;
+    *out_utf   = utf;
+    return 0;
+}
+
+static void _mj2x_intrinsic_release_utf(mj2x_ref jstr_ref, const char* utf) {
+    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
+}
 
 int32_t _mj2x_intrinsic_parse_int(mj2x_regc_context* context, mj2x_ref jstr_ref) {
     return _mj2x_intrinsic_parse_int_radix(context, jstr_ref, 10);
-}
-
-int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
-    if (radix < 2 || radix > 36) { _mj2x_intrinsic_throw_number_format(context); return 0; }
-    if (jstr_ref == NULL) {
-        if (context != NULL && context->throwException != NULL) {
-            context->throwException(context->env, "java/lang/NullPointerException", "parseInt");
-        }
-        return 0;
-    }
-    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, NULL);
-    if (utf == NULL) return 0;
-    const unsigned char* p = (const unsigned char*)utf;
-    int negative = 0;
-    if (*p == '-' || *p == '+') { negative = (*p == '-'); p++; }
-    uint64_t limit = negative ? 2147483648ULL : 2147483647ULL;
-    uint64_t value = 0;
-    int digit_count = 0;
-    int failed = 0;
-    while (*p != '\0') {
-        int32_t digit = _mj2x_intrinsic_digit_value(*p++);
-        if (digit < 0 || digit >= radix || value > (limit - (uint64_t)digit) / (uint64_t)radix) { failed = 1; break; }
-        value = value * (uint64_t)radix + (uint64_t)digit;
-        digit_count++;
-    }
-    if (digit_count == 0) failed = 1;
-    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
-    if (failed) {
-        _mj2x_intrinsic_throw_number_format(context);
-        return 0;
-    }
-    if (negative) {
-        if (value == 2147483648ULL) return (int32_t)INT32_MIN;
-        return -(int32_t)value;
-    }
-    return (int32_t)value;
 }
 
 int64_t _mj2x_intrinsic_parse_long(mj2x_regc_context* context, mj2x_ref jstr_ref) {
     return _mj2x_intrinsic_parse_long_radix(context, jstr_ref, 10);
 }
 
-int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
-    if (radix < 2 || radix > 36) { _mj2x_intrinsic_throw_number_format(context); return 0; }
-    if (jstr_ref == NULL) {
-        if (context != NULL && context->throwException != NULL) {
-            context->throwException(context->env, "java/lang/NullPointerException", "parseLong");
-        }
+int32_t _mj2x_intrinsic_parse_int_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
+    int64_t     value;
+    const char* utf;
+    if (_mj2x_intrinsic_parse_signed_core(context, jstr_ref, radix, UINT64_C(2147483647),
+                                          &value, &utf) != 0) {
         return 0;
     }
-    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, NULL);
-    if (utf == NULL) return 0;
-    const unsigned char* p = (const unsigned char*)utf;
-    int negative = 0;
-    if (*p == '-' || *p == '+') { negative = (*p == '-'); p++; }
-    uint64_t limit = negative ? 9223372036854775808ULL : 9223372036854775807ULL;
-    uint64_t value = 0;
-    int digit_count = 0;
-    int failed = 0;
-    while (*p != '\0') {
-        int32_t digit = _mj2x_intrinsic_digit_value(*p++);
-        if (digit < 0 || digit >= radix || value > (limit - (uint64_t)digit) / (uint64_t)radix) { failed = 1; break; }
-        value = value * (uint64_t)radix + (uint64_t)digit;
-        digit_count++;
-    }
-    if (digit_count == 0) failed = 1;
-    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
-    if (failed) {
-        _mj2x_intrinsic_throw_number_format(context);
-        return 0;
-    }
-    if (negative) {
-        if (value == 9223372036854775808ULL) return (int64_t)INT64_MIN;
-        return -(int64_t)value;
-    }
-    return (int64_t)value;
+    _mj2x_intrinsic_release_utf(jstr_ref, utf);
+    return (int32_t)value;
 }
 
-/* ---- Integer/Long.parseUnsignedInt/parseUnsignedLong ----
- *
- * 语义口径：
- *   - 无符号域：上界 0xFFFFFFFF / 2^64-1，含超出 Integer.MAX_VALUE 的合法值
- *     （"4294967295" -> -1、"2147483648" -> INT_MIN——返回位型）；
- *   - 符号：接受 '+' 前缀；拒绝 '-'（NFE "Illegal leading minus sign"）；
- *   - radix 越界（<2 或 >36）抛 NFE（parseUnsigned 同 parseInt 口径）；
- *   - null 输入抛 NFE（JDK 消息 "Null string"，非 NPE——与 parseInt 的
- *     NPE 分歧是 parseUnsigned 族自身的口径）；
- *   - 空串/空 sign/非法 digit/溢出 → NFE。
- * 累积在 uint64 域做溢出预判（value > (limit - digit) / radix），limit 为
- * 无符号满界，digit_count 门空串/空 sign。 */
+int64_t _mj2x_intrinsic_parse_long_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
+    int64_t     value;
+    const char* utf;
+    if (_mj2x_intrinsic_parse_signed_core(context, jstr_ref, radix, UINT64_C(9223372036854775807),
+                                          &value, &utf) != 0) {
+        return 0;
+    }
+    _mj2x_intrinsic_release_utf(jstr_ref, utf);
+    return value;
+}
 
-int32_t _mj2x_intrinsic_parse_unsigned_int_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
-    if (radix < 2 || radix > 36) { _mj2x_intrinsic_throw_number_format(context); return 0; }
-    if (jstr_ref == NULL) { _mj2x_intrinsic_throw_number_format(context); return 0; }
-    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, NULL);
-    if (utf == NULL) return 0;
-    const unsigned char* p = (const unsigned char*)utf;
-    if (*p == '+') {
-        p++;
-    } else if (*p == '-') {
-        (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
-        _mj2x_intrinsic_throw_number_format(context);
+/* parseUnsigned 核心:JDK 17 Integer.parseUnsignedInt/Long.parseUnsignedLong。
+ * JDK 结构:parseInt/parseUnsignedInt 短串走有符号核心(顺带校验 radix),
+ * 长串走拆分(前 n-1 位有符号解析,末位 digit 单独判定);有符号解析溢出
+ * (超 Long)报 forInputString,无符号上界溢出报 exceeds range。此处按
+ * unit 数复刻该分流:threshold 内单循环(INT64 限界),超阈值拆分
+ * (仅 parseUnsignedLong;parseUnsignedInt 无拆分,一律全串有符号解析)。 */
+static int _mj2x_intrinsic_parse_unsigned_common(mj2x_regc_context* context, mj2x_ref jstr_ref,
+                                                 int32_t radix, int is_long,
+                                                 int64_t* out_value, const char** out_utf) {
+    const unsigned char* p;
+    const char*          utf;
+    uint64_t             value = 0;
+    int32_t              first;
+    int32_t              unit_count;
+    int                  failed   = 0;
+    int                  overflow = 0;
+    if (jstr_ref == NULL) {
+        _mj2x_intrinsic_throw_parse_null(context);
+        return -1;
+    }
+    utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, NULL);
+    if (utf == NULL) return -1; /* OOM:pending 已挂 */
+    p = (const unsigned char*)utf;
+    if (*p == '\0') { /* JDK:len==0 先于 '-' 判定报 forInputString */
+        _mj2x_intrinsic_throw_for_input(context, utf, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        return -1;
+    }
+    first = _mj2x_regc_next_code_unit(&p);
+    if (first == '-') { /* '-' 先于 radix 校验(JDK parseUnsigned 结构) */
+        char buffer[1024];
+        snprintf(buffer, sizeof buffer,
+                 "Illegal leading minus sign on unsigned string %s.", utf);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        _mj2x_intrinsic_throw_nfe_message(context, buffer);
+        return -1;
+    }
+    if (radix < 2 || radix > 36) { /* JDK 在 parseInt/parseLong 内校验,位于 '-' 之后 */
+        _mj2x_intrinsic_throw_radix_bounds(context, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        return -1;
+    }
+    if (first < (int32_t)(unsigned char)'0' && first != '+') {
+        _mj2x_intrinsic_throw_for_input(context, utf, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        return -1;
+    }
+    if (first == (int32_t)(unsigned char)'+' && *p == '\0') { /* 孤立 '+' */
+        _mj2x_intrinsic_throw_for_input(context, utf, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        return -1;
+    }
+    if (first != (int32_t)(unsigned char)'+') {
+        /* 首 unit 是数字:计入累积(对齐 JDK digit 循环自 i=0 起) */
+        int32_t first_digit = _mj2x_intrinsic_digit_char((uint16_t)first, radix);
+        if (first_digit < 0) {
+            _mj2x_intrinsic_throw_for_input(context, utf, radix);
+            _mj2x_intrinsic_release_utf(jstr_ref, utf);
+            return -1;
+        }
+        value = (uint64_t)first_digit;
+    }
+    unit_count = _mj2x_regc_utf8_unit_count((const unsigned char*)utf);
+    if (is_long && unit_count > (radix == 10 ? 18 : 12)) {
+        /* 拆分路径:前缀(全串去掉末位)按有符号 Long 限界解析(对齐 JDK
+         * parseLong(s,0,len-1,radix)),末位 digit 单独判定。首 unit 已消费,
+         * 余下前缀 unit 数为 unit_count-2 */
+        int32_t  remain  = unit_count - 2;
+        uint64_t limit   = UINT64_C(9223372036854775807);
+        int32_t  last_digit;
+        while (remain-- > 0) {
+            int32_t unit  = _mj2x_regc_next_code_unit(&p);
+            int32_t digit = _mj2x_intrinsic_digit_char((uint16_t)unit, radix);
+            if (digit < 0 || value > (limit - (uint64_t)digit) / (uint64_t)radix) {
+                /* JDK 该分支报 forInputString(前缀);此处含全串 */
+                _mj2x_intrinsic_throw_for_input(context, utf, radix);
+                _mj2x_intrinsic_release_utf(jstr_ref, utf);
+                return -1;
+            }
+            value = value * (uint64_t)radix + (uint64_t)digit;
+        }
+        last_digit = _mj2x_intrinsic_digit_char((uint16_t)_mj2x_regc_next_code_unit(&p), radix);
+        if (last_digit < 0) {
+            char buffer[1024];
+            snprintf(buffer, sizeof buffer, "Bad digit at end of %s", utf);
+            _mj2x_intrinsic_release_utf(jstr_ref, utf);
+            _mj2x_intrinsic_throw_nfe_message(context, buffer);
+            return -1;
+        }
+        if (value > (UINT64_MAX - (uint64_t)last_digit) / (uint64_t)radix) {
+            char buffer[1024];
+            snprintf(buffer, sizeof buffer,
+                     "String value %s exceeds range of unsigned long.", utf);
+            _mj2x_intrinsic_release_utf(jstr_ref, utf);
+            _mj2x_intrinsic_throw_nfe_message(context, buffer);
+            return -1;
+        }
+        value = value * (uint64_t)radix + (uint64_t)last_digit;
+        *out_value = (int64_t)value;
+        *out_utf   = utf;
         return 0;
     }
-    const uint64_t limit = 4294967295ULL; /* 0xFFFFFFFF：无符号满界 */
-    uint64_t value = 0;
-    int digit_count = 0;
-    int failed = 0;
     while (*p != '\0') {
-        int32_t digit = _mj2x_intrinsic_digit_value(*p++);
-        if (digit < 0 || digit >= radix || value > (limit - (uint64_t)digit) / (uint64_t)radix) { failed = 1; break; }
+        int32_t unit  = _mj2x_regc_next_code_unit(&p);
+        int32_t digit = _mj2x_intrinsic_digit_char((uint16_t)unit, radix);
+        if (digit < 0) { /* 阈值内坏 digit 走 parseLong/parseInt 口径 forInputString */
+            failed = 1;
+            break;
+        }
+        if (value > (UINT64_C(9223372036854775807) - (uint64_t)digit) / (uint64_t)radix) {
+            overflow = 1;
+            break;
+        }
         value = value * (uint64_t)radix + (uint64_t)digit;
-        digit_count++;
     }
-    if (digit_count == 0) failed = 1;
-    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
     if (failed) {
-        _mj2x_intrinsic_throw_number_format(context);
-        return 0;
+        _mj2x_intrinsic_throw_for_input(context, utf, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        return -1;
     }
-    return (int32_t)(uint32_t)value;
+    if (overflow) {
+        /* 超有符号 Long:JDK 短串路径 parseLong 报 forInputString */
+        _mj2x_intrinsic_throw_for_input(context, utf, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        return -1;
+    }
+    if (!is_long && value > UINT64_C(0xFFFFFFFF)) {
+        char buffer[1024];
+        snprintf(buffer, sizeof buffer, "String value %s exceeds range of unsigned int.", utf);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        _mj2x_intrinsic_throw_nfe_message(context, buffer);
+        return -1;
+    }
+    *out_value = (int64_t)value;
+    *out_utf   = utf;
+    return 0;
 }
 
 int32_t _mj2x_intrinsic_parse_unsigned_int(mj2x_regc_context* context, mj2x_ref jstr_ref) {
     return _mj2x_intrinsic_parse_unsigned_int_radix(context, jstr_ref, 10);
 }
 
-int64_t _mj2x_intrinsic_parse_unsigned_long_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
-    if (radix < 2 || radix > 36) { _mj2x_intrinsic_throw_number_format(context); return 0; }
-    if (jstr_ref == NULL) { _mj2x_intrinsic_throw_number_format(context); return 0; }
-    const char* utf = (*_mj2x_regc_env)->GetStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, NULL);
-    if (utf == NULL) return 0;
-    const unsigned char* p = (const unsigned char*)utf;
-    if (*p == '+') {
-        p++;
-    } else if (*p == '-') {
-        (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
-        _mj2x_intrinsic_throw_number_format(context);
+int32_t _mj2x_intrinsic_parse_unsigned_int_radix(mj2x_regc_context* context, mj2x_ref jstr_ref,
+                                                 int32_t radix) {
+    int64_t     value;
+    const char* utf;
+    if (_mj2x_intrinsic_parse_unsigned_common(context, jstr_ref, radix, 0, &value, &utf) != 0) {
         return 0;
     }
-    const uint64_t limit = UINT64_MAX; /* 2^64-1：无符号满界 */
-    uint64_t value = 0;
-    int digit_count = 0;
-    int failed = 0;
-    while (*p != '\0') {
-        int32_t digit = _mj2x_intrinsic_digit_value(*p++);
-        if (digit < 0 || digit >= radix || value > (limit - (uint64_t)digit) / (uint64_t)radix) { failed = 1; break; }
-        value = value * (uint64_t)radix + (uint64_t)digit;
-        digit_count++;
-    }
-    if (digit_count == 0) failed = 1;
-    (*_mj2x_regc_env)->ReleaseStringUTFChars(_mj2x_regc_env, (jstring)jstr_ref, utf);
-    if (failed) {
-        _mj2x_intrinsic_throw_number_format(context);
-        return 0;
-    }
-    return (int64_t)value;
+    _mj2x_intrinsic_release_utf(jstr_ref, utf);
+    return (int32_t)(uint32_t)(uint64_t)value;
 }
 
 int64_t _mj2x_intrinsic_parse_unsigned_long(mj2x_regc_context* context, mj2x_ref jstr_ref) {
     return _mj2x_intrinsic_parse_unsigned_long_radix(context, jstr_ref, 10);
+}
+
+int64_t _mj2x_intrinsic_parse_unsigned_long_radix(mj2x_regc_context* context, mj2x_ref jstr_ref,
+                                                  int32_t radix) {
+    int64_t     value;
+    const char* utf;
+    if (_mj2x_intrinsic_parse_unsigned_common(context, jstr_ref, radix, 1, &value, &utf) != 0) {
+        return 0;
+    }
+    _mj2x_intrinsic_release_utf(jstr_ref, utf);
+    return value;
 }
 
 int32_t _mj2x_intrinsic_parse_short(mj2x_regc_context* context, mj2x_ref jstr_ref) {
@@ -886,9 +1118,20 @@ int32_t _mj2x_intrinsic_parse_short(mj2x_regc_context* context, mj2x_ref jstr_re
 }
 
 int32_t _mj2x_intrinsic_parse_short_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
-    int32_t value = _mj2x_intrinsic_parse_int_radix(context, jstr_ref, radix);
-    if (_mj2x_regc_exception_check()) return 0;
-    if (value < INT16_MIN || value > INT16_MAX) { _mj2x_intrinsic_throw_number_format(context); return 0; }
+    int64_t     value;
+    const char* utf;
+    if (_mj2x_intrinsic_parse_signed_core(context, jstr_ref, radix, UINT64_C(2147483647),
+                                          &value, &utf) != 0) {
+        return 0;
+    }
+    if (value < INT16_MIN || value > INT16_MAX) {
+        char buffer[1024];
+        snprintf(buffer, sizeof buffer, "Value out of range. Value:\"%s\" Radix:%d", utf, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        _mj2x_intrinsic_throw_nfe_message(context, buffer);
+        return 0;
+    }
+    _mj2x_intrinsic_release_utf(jstr_ref, utf);
     return (int32_t)(int16_t)value;
 }
 
@@ -897,9 +1140,20 @@ int32_t _mj2x_intrinsic_parse_byte(mj2x_regc_context* context, mj2x_ref jstr_ref
 }
 
 int32_t _mj2x_intrinsic_parse_byte_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix) {
-    int32_t value = _mj2x_intrinsic_parse_int_radix(context, jstr_ref, radix);
-    if (_mj2x_regc_exception_check()) return 0;
-    if (value < INT8_MIN || value > INT8_MAX) { _mj2x_intrinsic_throw_number_format(context); return 0; }
+    int64_t     value;
+    const char* utf;
+    if (_mj2x_intrinsic_parse_signed_core(context, jstr_ref, radix, UINT64_C(2147483647),
+                                          &value, &utf) != 0) {
+        return 0;
+    }
+    if (value < INT8_MIN || value > INT8_MAX) {
+        char buffer[1024];
+        snprintf(buffer, sizeof buffer, "Value out of range. Value:\"%s\" Radix:%d", utf, radix);
+        _mj2x_intrinsic_release_utf(jstr_ref, utf);
+        _mj2x_intrinsic_throw_nfe_message(context, buffer);
+        return 0;
+    }
+    _mj2x_intrinsic_release_utf(jstr_ref, utf);
     return (int32_t)(int8_t)value;
 }
 

@@ -1,5 +1,6 @@
 #include "regc/mj2x_regc_intrinsic.h"
 #include "regc/mj2x_regc_runtime.h"
+#include "regc/mj2x_regc_strictmath.h"
 
 #include <limits.h>
 #include <math.h>
@@ -512,6 +513,322 @@ void test_regc_intrinsic_parse_unsigned(void)
     expect(_mj2x_intrinsic_parse_unsigned_int(&context, NULL) == 0);
     expect(thrown.count == 1);
     expect(strcmp(thrown.class_name, "java/lang/NumberFormatException") == 0);
+
+    _mj2x_regc_env = saved_env;
+}
+
+// ---- StrictMath 位精确 12 条 + Math rint/cbrt：锚点矩阵 ----
+//
+// 期望位型取自 JDK 17.0.20.1 (Temurin) StrictMath 实测探针（仓外 harness，
+// 不入库）；输入按位型构造，杜绝字面量解析歧义。全量位精确对拍（每函数
+// 1e5+ 随机位模式 + 特殊值）由仓外 harness 完成，见 PR 说明；此处锁定
+// 特殊值行为与代表点，防实现漂移。
+void test_regc_intrinsic_strictmath_anchors(void)
+{
+    static double dnan = 0.0;
+    {
+        const uint64_t nan_bits = UINT64_C(0x7FF8000000000000);
+        memcpy(&dnan, &nan_bits, sizeof dnan);
+    }
+    struct Anchor1
+    {
+        const char* label;
+        uint64_t    input;
+        uint64_t    expected;
+        double (*fn)(double);
+    };
+    static const struct Anchor1 anchors1[] = {
+        {"sin(1.0)", UINT64_C(0x3FF0000000000000), UINT64_C(0x3FEAED548F090CEE), mj2x_strictmath_sin},
+        {"sin(1e300)", UINT64_C(0x7E37E43C8800759C), UINT64_C(0xBFEA2C16B010E385), mj2x_strictmath_sin},
+        {"sin(-0.0)", UINT64_C(0x8000000000000000), UINT64_C(0x8000000000000000), mj2x_strictmath_sin},
+        {"cos(1.0)", UINT64_C(0x3FF0000000000000), UINT64_C(0x3FE14A280FB5068C), mj2x_strictmath_cos},
+        {"cos(1e300)", UINT64_C(0x7E37E43C8800759C), UINT64_C(0xBFE2699022ADC4C1), mj2x_strictmath_cos},
+        {"tan(1.0)", UINT64_C(0x3FF0000000000000), UINT64_C(0x3FF8EB245CBEE3A6), mj2x_strictmath_tan},
+        {"tan(1e300)", UINT64_C(0x7E37E43C8800759C), UINT64_C(0x3FF6BE411F37AC77), mj2x_strictmath_tan},
+        {"asin(0.5)", UINT64_C(0x3FE0000000000000), UINT64_C(0x3FE0C152382D7366), mj2x_strictmath_asin},
+        {"asin(1.0)", UINT64_C(0x3FF0000000000000), UINT64_C(0x3FF921FB54442D18), mj2x_strictmath_asin},
+        {"asin(-1.0)", UINT64_C(0xBFF0000000000000), UINT64_C(0xBFF921FB54442D18), mj2x_strictmath_asin},
+        {"acos(0.5)", UINT64_C(0x3FE0000000000000), UINT64_C(0x3FF0C152382D7366), mj2x_strictmath_acos},
+        {"acos(-1.0)", UINT64_C(0xBFF0000000000000), UINT64_C(0x400921FB54442D18), mj2x_strictmath_acos},
+        {"acos(1.0)", UINT64_C(0x3FF0000000000000), UINT64_C(0x0000000000000000), mj2x_strictmath_acos},
+        {"atan(1.0)", UINT64_C(0x3FF0000000000000), UINT64_C(0x3FE921FB54442D18), mj2x_strictmath_atan},
+        {"atan(inf)", UINT64_C(0x7FF0000000000000), UINT64_C(0x3FF921FB54442D18), mj2x_strictmath_atan},
+        {"exp(1.0)", UINT64_C(0x3FF0000000000000), UINT64_C(0x4005BF0A8B14576A), mj2x_strictmath_exp},
+        {"exp(709.782712893384)", UINT64_C(0x40862E42FEFA39EF), UINT64_C(0x7FEFFFFFFFFFFF2A), mj2x_strictmath_exp},
+        {"exp(710.0)", UINT64_C(0x4086300000000000), UINT64_C(0x7FF0000000000000), mj2x_strictmath_exp},
+        {"exp(-745.0)", UINT64_C(0xC087480000000000), UINT64_C(0x0000000000000001), mj2x_strictmath_exp},
+        {"log(2.0)", UINT64_C(0x4000000000000000), UINT64_C(0x3FE62E42FEFA39EF), mj2x_strictmath_log},
+        {"log(10.0)", UINT64_C(0x4024000000000000), UINT64_C(0x40026BB1BBB55516), mj2x_strictmath_log},
+        {"log(0.5)", UINT64_C(0x3FE0000000000000), UINT64_C(0xBFE62E42FEFA39EF), mj2x_strictmath_log},
+        {"log(0.0)", UINT64_C(0x0000000000000000), UINT64_C(0xFFF0000000000000), mj2x_strictmath_log},
+        {"log10(100.0)", UINT64_C(0x4059000000000000), UINT64_C(0x4000000000000000), mj2x_strictmath_log10},
+        {"log10(0.3)", UINT64_C(0x3FD3333333333333), UINT64_C(0xBFE0BB6C34D81502), mj2x_strictmath_log10},
+        {"log10(0.0)", UINT64_C(0x0000000000000000), UINT64_C(0xFFF0000000000000), mj2x_strictmath_log10},
+        {"cbrt(27.0)", UINT64_C(0x403B000000000000), UINT64_C(0x4008000000000000), mj2x_strictmath_cbrt},
+        {"cbrt(-8.0)", UINT64_C(0xC020000000000000), UINT64_C(0xC000000000000000), mj2x_strictmath_cbrt},
+        {"cbrt(1e-7)", UINT64_C(0x3E7AD7F29ABCAF48), UINT64_C(0x3F73030F03DE9991), mj2x_strictmath_cbrt},
+        {"rint(2.5)", UINT64_C(0x4004000000000000), UINT64_C(0x4000000000000000), mj2x_strictmath_rint},
+        {"rint(3.5)", UINT64_C(0x400C000000000000), UINT64_C(0x4010000000000000), mj2x_strictmath_rint},
+        {"rint(-2.5)", UINT64_C(0xC004000000000000), UINT64_C(0xC000000000000000), mj2x_strictmath_rint},
+        {"rint(4.5)", UINT64_C(0x4012000000000000), UINT64_C(0x4010000000000000), mj2x_strictmath_rint},
+        {"rint(0.5)", UINT64_C(0x3FE0000000000000), UINT64_C(0x0000000000000000), mj2x_strictmath_rint},
+        {"rint(-0.5)", UINT64_C(0xBFE0000000000000), UINT64_C(0x8000000000000000), mj2x_strictmath_rint},
+        {"rint(2^52+1)", UINT64_C(0x4330000000000001), UINT64_C(0x4330000000000001), mj2x_strictmath_rint},
+    };
+    struct Anchor2
+    {
+        const char* label;
+        uint64_t    input_a;
+        uint64_t    input_b;
+        uint64_t    expected;
+        double (*fn)(double, double);
+    };
+    static const struct Anchor2 anchors2[] = {
+        {"atan2(1,1)", UINT64_C(0x3FF0000000000000), UINT64_C(0x3FF0000000000000), UINT64_C(0x3FE921FB54442D18), mj2x_strictmath_atan2},
+        {"atan2(0,-0)", UINT64_C(0x0000000000000000), UINT64_C(0x8000000000000000), UINT64_C(0x400921FB54442D18), mj2x_strictmath_atan2},
+        {"atan2(0,-1)", UINT64_C(0x0000000000000000), UINT64_C(0xBFF0000000000000), UINT64_C(0x400921FB54442D18), mj2x_strictmath_atan2},
+        {"atan2(-1,-1)", UINT64_C(0xBFF0000000000000), UINT64_C(0xBFF0000000000000), UINT64_C(0xC002D97C7F3321D2), mj2x_strictmath_atan2},
+        {"atan2(inf,inf)", UINT64_C(0x7FF0000000000000), UINT64_C(0x7FF0000000000000), UINT64_C(0x3FE921FB54442D18), mj2x_strictmath_atan2},
+        {"pow(2,10)", UINT64_C(0x4000000000000000), UINT64_C(0x4024000000000000), UINT64_C(0x4090000000000000), mj2x_strictmath_pow},
+        {"pow(2,0.5)", UINT64_C(0x4000000000000000), UINT64_C(0x3FE0000000000000), UINT64_C(0x3FF6A09E667F3BCD), mj2x_strictmath_pow},
+        {"pow(0.5,-1)", UINT64_C(0x3FE0000000000000), UINT64_C(0xBFF0000000000000), UINT64_C(0x4000000000000000), mj2x_strictmath_pow},
+        {"pow(-2,3)", UINT64_C(0xC000000000000000), UINT64_C(0x4008000000000000), UINT64_C(0xC020000000000000), mj2x_strictmath_pow},
+        {"pow(7,0)", UINT64_C(0x401C000000000000), UINT64_C(0x0000000000000000), UINT64_C(0x3FF0000000000000), mj2x_strictmath_pow},
+        {"pow(inf,2)", UINT64_C(0x7FF0000000000000), UINT64_C(0x4000000000000000), UINT64_C(0x7FF0000000000000), mj2x_strictmath_pow},
+        {"pow(-inf,3)", UINT64_C(0xFFF0000000000000), UINT64_C(0x4008000000000000), UINT64_C(0xFFF0000000000000), mj2x_strictmath_pow},
+        {"pow(-inf,2)", UINT64_C(0xFFF0000000000000), UINT64_C(0x4000000000000000), UINT64_C(0x7FF0000000000000), mj2x_strictmath_pow},
+        {"hypot(3,4)", UINT64_C(0x4008000000000000), UINT64_C(0x4010000000000000), UINT64_C(0x4014000000000000), mj2x_strictmath_hypot},
+        {"hypot(1e300,1e300)", UINT64_C(0x7E37E43C8800759C), UINT64_C(0x7E37E43C8800759C), UINT64_C(0x7E40E4D50F99B211), mj2x_strictmath_hypot},
+        {"hypot(3e-320,4e-320)", UINT64_C(0x00000000000017B8), UINT64_C(0x0000000000001FA0), UINT64_C(0x0000000000002788), mj2x_strictmath_hypot},
+        {"hypot(inf,1)", UINT64_C(0x7FF0000000000000), UINT64_C(0x3FF0000000000000), UINT64_C(0x7FF0000000000000), mj2x_strictmath_hypot},
+    };
+    for (size_t i = 0; i < sizeof anchors1 / sizeof anchors1[0]; ++i) {
+        double   input;
+        double   got;
+        uint64_t got_bits;
+        memcpy(&input, &anchors1[i].input, sizeof input);
+        got      = anchors1[i].fn(input);
+        got_bits = 0;
+        memcpy(&got_bits, &got, sizeof got_bits);
+        if (got_bits != anchors1[i].expected) {
+            fprintf(stderr, "strictmath anchor %s: got 0x%016llX want 0x%016llX\n",
+                    anchors1[i].label, (unsigned long long)got_bits,
+                    (unsigned long long)anchors1[i].expected);
+        }
+        expect(got_bits == anchors1[i].expected);
+    }
+    for (size_t i = 0; i < sizeof anchors2 / sizeof anchors2[0]; ++i) {
+        double   input_a;
+        double   input_b;
+        double   got;
+        uint64_t got_bits;
+        memcpy(&input_a, &anchors2[i].input_a, sizeof input_a);
+        memcpy(&input_b, &anchors2[i].input_b, sizeof input_b);
+        got      = anchors2[i].fn(input_a, input_b);
+        got_bits = 0;
+        memcpy(&got_bits, &got, sizeof got_bits);
+        if (got_bits != anchors2[i].expected) {
+            fprintf(stderr, "strictmath anchor %s: got 0x%016llX want 0x%016llX\n",
+                    anchors2[i].label, (unsigned long long)got_bits,
+                    (unsigned long long)anchors2[i].expected);
+        }
+        expect(got_bits == anchors2[i].expected);
+    }
+    /* NaN/Inf 传播：NaN -> 规范 NaN，Inf -> NaN（trig 三条）与恒等（hypot）。 */
+    {
+        uint64_t bits;
+        double   got;
+        got = mj2x_strictmath_sin(dnan);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF8000000000000));
+        got = mj2x_strictmath_sin(HUGE_VAL);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0xFFF8000000000000) || bits == UINT64_C(0x7FF8000000000000));
+        got = mj2x_strictmath_pow(1.0, dnan);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF8000000000000));
+        got = mj2x_strictmath_pow(-1.0, HUGE_VAL);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0xFFF8000000000000) || bits == UINT64_C(0x7FF8000000000000));
+        got = mj2x_strictmath_hypot(dnan, 1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF8000000000000));
+        got = mj2x_strictmath_acos(1.5);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0xFFF8000000000000) || bits == UINT64_C(0x7FF8000000000000));
+    }
+}
+
+// ---- Math.floorDiv/floorMod：值语义 + 除零 pending + MIN/-1 回绕 ----
+void test_regc_intrinsic_floor_div_mod(void)
+{
+    scalar_thrown_exception thrown = {0, NULL, NULL};
+    mj2x_regc_context       context;
+    mj2x_regc_init_context(&context, &thrown, scalar_record_throw);
+
+    /* 值语义（期望值取自 JDK 17 Math.floorDiv/floorMod 实测）。 */
+    expect(mj2x_intrinsic_math_floor_div_i32(&context, 7, 2) == 3);
+    expect(mj2x_intrinsic_math_floor_mod_i32(&context, 7, 2) == 1);
+    expect(mj2x_intrinsic_math_floor_div_i32(&context, -7, 2) == -4);
+    expect(mj2x_intrinsic_math_floor_mod_i32(&context, -7, 2) == 1);
+    expect(mj2x_intrinsic_math_floor_mod_i32(&context, 7, -2) == -1);
+    expect(mj2x_intrinsic_math_floor_div_i64(&context, 7, 2) == 3);
+    expect(mj2x_intrinsic_math_floor_mod_i64(&context, -7, 2) == 1);
+    /* MIN/-1：JVM 位型回绕（C 有符号除法未定义行为，先分流）。 */
+    expect(mj2x_intrinsic_math_floor_div_i32(&context, INT32_MIN, -1) == INT32_MIN);
+    expect(mj2x_intrinsic_math_floor_mod_i32(&context, INT32_MIN, -1) == 0);
+    expect(mj2x_intrinsic_math_floor_div_i64(&context, INT64_MIN, -1) == INT64_MIN);
+    expect(mj2x_intrinsic_math_floor_mod_i64(&context, INT64_MIN, -1) == 0);
+    expect(thrown.count == 0);
+    /* 除零：挂 pending ArithmeticException("/ by zero") 并返回 0。 */
+    expect(mj2x_intrinsic_math_floor_div_i32(&context, 1, 0) == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.class_name, "java/lang/ArithmeticException") == 0);
+    expect(strcmp(thrown.message, "/ by zero") == 0);
+    expect(mj2x_intrinsic_math_floor_mod_i32(&context, 1, 0) == 0);
+    expect(thrown.count == 2);
+    expect(mj2x_intrinsic_math_floor_div_i64(&context, 1, 0) == 0);
+    expect(thrown.count == 3);
+    expect(mj2x_intrinsic_math_floor_mod_i64(&context, 1, 0) == 0);
+    expect(thrown.count == 4);
+}
+
+// ---- Character.digit 镜像助手：ASCII/Nd 区段/全角别名/radix 边界 ----
+void test_regc_intrinsic_digit_char(void)
+{
+    /* ASCII 快路径。 */
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'0', 10) == 0);
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'9', 10) == 9);
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'a', 16) == 10);
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'z', 36) == 35);
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'Z', 36) == 35);
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'g', 16) == -1);
+    /* 全角数字（Nd 区段 U+FF10-FF19）：Character.digit('１',10)==1。 */
+    expect(_mj2x_intrinsic_digit_char(0xFF11u, 10) == 1);
+    expect(_mj2x_intrinsic_digit_char(0xFF19u, 10) == 9);
+    expect(_mj2x_intrinsic_digit_char(0xFF10u, 10) == 0);
+    /* 阿拉伯印度数字（Nd U+0660-0669）。 */
+    expect(_mj2x_intrinsic_digit_char(0x0663u, 10) == 3);
+    /* 全角字母别名（radix>10）：Character.digit('Ａ',16)==10（JDK javadoc 明载）。 */
+    expect(_mj2x_intrinsic_digit_char(0xFF21u, 16) == 10);
+    expect(_mj2x_intrinsic_digit_char(0xFF3Au, 36) == 35);
+    expect(_mj2x_intrinsic_digit_char(0xFF41u, 16) == 10);
+    expect(_mj2x_intrinsic_digit_char(0xFF21u, 10) == -1);
+    /* surrogate 与未收录字符一律 -1。 */
+    expect(_mj2x_intrinsic_digit_char(0xD800u, 10) == -1);
+    expect(_mj2x_intrinsic_digit_char(0x00BDu, 10) == -1); /* '½' 非 Nd */
+    /* radix 边界。 */
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'1', 1) == -1);
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'1', 37) == -1);
+    expect(_mj2x_intrinsic_digit_char((uint16_t)'1', 36) == 1);
+}
+
+// ---- parse 族 null/radix/消息文本/全角数字（JDK 17 逐字镜像） ----
+void test_regc_intrinsic_parse_semantics(void)
+{
+    static struct JNINativeInterface_ parse_table;
+    static JNIEnv                     parse_env = &parse_table;
+    parse_table.GetStringUTFChars     = parse_fake_get_utf_chars;
+    parse_table.ReleaseStringUTFChars = parse_fake_release_utf_chars;
+    JNIEnv* saved_env                 = _mj2x_regc_env;
+    _mj2x_regc_env                    = &parse_env;
+
+    scalar_thrown_exception thrown = {0, NULL, NULL};
+    mj2x_regc_context       context;
+    mj2x_regc_init_context(&context, &thrown, scalar_record_throw);
+
+    /* null：整型 parse 族按 JDK 17 一律 NFE("Cannot parse null string")，
+     * 不再是各方法名 NPE；Float/Double 经 JNI 委派 JDK 不在此列。 */
+    expect(_mj2x_intrinsic_parse_int(&context, NULL) == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.class_name, "java/lang/NumberFormatException") == 0);
+    expect(strcmp(thrown.message, "Cannot parse null string") == 0);
+    expect(_mj2x_intrinsic_parse_long(&context, NULL) == 0);
+    expect(thrown.count == 2);
+    expect(strcmp(thrown.message, "Cannot parse null string") == 0);
+    expect(_mj2x_intrinsic_parse_short(&context, NULL) == 0);
+    expect(thrown.count == 3);
+    expect(_mj2x_intrinsic_parse_byte(&context, NULL) == 0);
+    expect(thrown.count == 4);
+    expect(_mj2x_intrinsic_parse_int_radix(&context, NULL, 10) == 0);
+    expect(thrown.count == 5);
+
+    /* 基本值回归 + radix 消息文本。 */
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"-2147483648") == INT32_MIN);
+    expect(_mj2x_intrinsic_parse_long(&context, (mj2x_ref)"-9223372036854775808") == INT64_MIN);
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"+2147483647") == INT32_MAX);
+    expect(thrown.count == 0);
+    expect(_mj2x_intrinsic_parse_int_radix(&context, (mj2x_ref)"1", 1) == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.message, "radix 1 less than Character.MIN_RADIX") == 0);
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_long_radix(&context, (mj2x_ref)"1", 37) == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.message, "radix 37 greater than Character.MAX_RADIX") == 0);
+    /* 空串/坏字符消息：forInputString 带 radix 后缀（JDK 17 格式）。 */
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"") == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.message, "For input string: \"\"") == 0);
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"abc") == 0);
+    expect(thrown.count == 2);
+    expect(strcmp(thrown.message, "For input string: \"abc\"") == 0);
+    expect(_mj2x_intrinsic_parse_int_radix(&context, (mj2x_ref)"z", 35) == 0);
+    expect(thrown.count == 3);
+    expect(strcmp(thrown.message, "For input string: \"z\" under radix 35") == 0);
+    /* 孤立符号。 */
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"-") == 0);
+    expect(thrown.count == 4);
+    /* Short/Byte 范围消息。 */
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_short(&context, (mj2x_ref)"99999") == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.message, "Value out of range. Value:\"99999\" Radix:10") == 0);
+    expect(_mj2x_intrinsic_parse_byte_radix(&context, (mj2x_ref)"300", 16) == 0);
+    expect(thrown.count == 2);
+    expect(strcmp(thrown.message, "Value out of range. Value:\"300\" Radix:16") == 0);
+    /* parseUnsigned：minus/超界/末位坏 digit 消息。 */
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"-1") == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.message, "Illegal leading minus sign on unsigned string -1.") == 0);
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"4294967296") == 0);
+    expect(thrown.count == 2);
+    expect(strcmp(thrown.message, "String value 4294967296 exceeds range of unsigned int.") == 0);
+    expect(_mj2x_intrinsic_parse_unsigned_long(&context, (mj2x_ref)"18446744073709551616") == 0);
+    expect(thrown.count == 3);
+    expect(strcmp(thrown.message, "String value 18446744073709551616 exceeds range of unsigned long.") == 0);
+    /* 拆分路径（串长 > 12，radix 36）：末位坏 digit 单独消息。 */
+    expect(_mj2x_intrinsic_parse_unsigned_long_radix(&context, (mj2x_ref)"100000000000z!", 36) == 0);
+    expect(thrown.count == 4);
+    expect(strcmp(thrown.message, "Bad digit at end of 100000000000z!") == 0);
+    /* null -> NFE（非 NPE）。 */
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, NULL) == 0);
+    expect(thrown.count == 5);
+    expect(strcmp(thrown.message, "Cannot parse null string") == 0);
+    expect(_mj2x_intrinsic_parse_unsigned_long(&context, NULL) == 0);
+    expect(thrown.count == 6);
+
+    /* 全角数字解析：modified UTF-8 字节直通 fake JNIEnv。 */
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93") == 123);
+    expect(_mj2x_intrinsic_parse_long(&context, (mj2x_ref)"\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93") == 123);
+    expect(_mj2x_intrinsic_parse_short(&context, (mj2x_ref)"\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93") == 123);
+    expect(thrown.count == 0);
+    /* 全角字母别名（radix 16）："１Ａ" -> 0x1A。 */
+    expect(_mj2x_intrinsic_parse_int_radix(&context, (mj2x_ref)"\xEF\xBC\x91\xEF\xBC\xA1", 16) == 26);
+    expect(thrown.count == 0);
+    /* 阿拉伯印度数字："١٢٣" -> 123。 */
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"\xD9\xA1\xD9\xA2\xD9\xA3") == 123);
+    /* 全角 '+'/'-' 不收：NFE。 */
+    expect(_mj2x_intrinsic_parse_int(&context, (mj2x_ref)"\xEF\xBC\x8B\xEF\xBC\x91") == 0);
+    expect(thrown.count == 1);
+    /* parseUnsigned 全角同路径。 */
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93") == 123);
+    expect(thrown.count == 1);
+    expect(_mj2x_intrinsic_parse_unsigned_long(&context, (mj2x_ref)"\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93") == 123);
+    expect(thrown.count == 1);
 
     _mj2x_regc_env = saved_env;
 }
