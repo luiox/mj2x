@@ -508,6 +508,7 @@ DEF_ENUM_STR(runtimeProtection, "--runtime-protection", "runtime_protection", "n
 DEF_INT(runtimeProtectionStep, "--runtime-protection-step", "runtime_protection_step", 1, 0)
 DEF_INT(runtimeProtectionDelayMs, "--runtime-protection-delay", "runtime_protection_delay_ms", 0, 0)
 DEF_STR(nativeLibPackHook, "--native-lib-pack-hook", "native_lib_pack_hook")
+DEF_BOOL(enableNativeAccess, "--enable-native-access", "enable_native_access")
 DEF_STR(intrinsicConfigPath, "--intrinsic-config", "intrinsic_config")
 DEF_STR_LIST(intrinsicSources, "--intrinsic-src", "intrinsic_src")
 DEF_BOOL(quiet, "--quiet", "log_quiet")
@@ -524,6 +525,7 @@ const ParamDef kBaseParamsAfter[] = {
     // nativeLib
     PARAM("native_lib.key", "--native-lib-key", "native_lib_key", ParamType::Hex, nullptr, 0, 0, "", "native_lib", "", cli_native_lib_key, json_native_lib_key),
     PARAM("native_lib.pack_hook", "--native-lib-pack-hook", "native_lib_pack_hook", ParamType::String, nullptr, 0, 0, "", "native_lib", "", cli_nativeLibPackHook, json_nativeLibPackHook),
+    PARAM("native_lib.enable_native_access", "--enable-native-access", "enable_native_access", ParamType::Bool, nullptr, 0, 0, "false", "native_lib", "", cli_enableNativeAccess, json_enableNativeAccess),
     // client
     PARAM("client.id", "--client-id", "client_id", ParamType::UInt64, nullptr, 0, 0, "0", "client", "", cli_clientId, json_clientId),
     // intrinsic

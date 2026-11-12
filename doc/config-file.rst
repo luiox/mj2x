@@ -172,6 +172,10 @@ mj2x JSON config（配置系统）
      - ``native_lib_pack_hook``
      - string
      - 无
+   * - nativeLib
+     - ``enable_native_access``
+     - boolean
+     - ``false``
    * - client
      - ``client_id``
      - integer ≥ 0

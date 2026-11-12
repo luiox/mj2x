@@ -21,7 +21,8 @@
 //     method 告警；按 JDK 公告，未来版本未声明时会直接失败。
 //   - 可执行 JAR（java -jar 启动）：JDK 25 起主清单声明
 //     Enable-Native-Access: ALL-UNNAMED 即免告警。打包侧在本仓
-//     mj2x-cli embedNativeLibraryInJar 写入/合并该属性。本机实测
+//     mj2x-cli embedNativeLibraryInJar 写入/合并该属性（--enable-native-access
+//     打开时；默认关 = 不声明）。本机实测
 //     （JDK 25.0.3）：无属性 4 行告警，有属性无告警；JDK 8u162/17.0.20/
 //     21.0.11 忽略该属性，加载行为不变。
 //   - 库形态（classpath 启动）：主清单属性不生效，实测 classpath 启动仍

@@ -223,6 +223,7 @@ std::vector<std::string> expectedKeys()
         "runtime_protection_delay_ms",
         "native_lib_key",
         "native_lib_pack_hook",
+        "enable_native_access",
         "client_id",
         "intrinsic_config",
         "obf_scope_exclude",

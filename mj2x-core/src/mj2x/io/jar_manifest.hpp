@@ -14,9 +14,9 @@ inline constexpr const char* kJarManifestEntry = "META-INF/MANIFEST.MF";
 /// JDK 25 起可执行 JAR 主清单声明该属性后，java -jar 启动的产物内
 /// System.load 不再产生 restricted method 告警（本机 JDK 25.0.3 实测：
 /// 有属性无告警，无属性 4 行告警）。JDK 24 及以下把未知主属性当普通
-/// 属性忽略（本机 8u162/17.0.20/21.0.11 实测加载行为不变），故打包侧
-/// 无条件写入、不做版本条件开关：打包时无法知道产物将来跑在哪个 JDK
-/// 上，条件开关只会增加配置面而没有收益。
+/// 属性忽略（本机 8u162/17.0.20/21.0.11 实测加载行为不变），故写入面
+/// 不按 JDK 版本做条件；是否声明由用户开关 --enable-native-access 决定
+/// （默认关 = 不声明），条件开关只加在打包调用侧。
 inline constexpr const char* kEnableNativeAccess      = "Enable-Native-Access";
 inline constexpr const char* kEnableNativeAccessValue = "ALL-UNNAMED";
 

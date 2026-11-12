@@ -138,6 +138,9 @@ struct CliOptions
     std::uint32_t            nativeLibKey         = 0;   ///< native lib 加密密钥（--native-lib-key，hex）
     bool                     nativeLibKeySelected = false;
     std::string              nativeLibPackHook;          ///< 嵌入前外部处理钩子（--native-lib-pack-hook）
+    /// 主清单声明 Enable-Native-Access（--enable-native-access，issue #58；
+    /// 默认关 = 不声明，打开 = 嵌入时写入/合并，仅对 java -jar 形态生效）。
+    bool                     enableNativeAccess   = false;
     /// 日志级别（配置键 log_quiet / log_verbose；CLI --quiet/--verbose 优先）。
     bool                     quiet                = false;
     bool                     verbose              = false;

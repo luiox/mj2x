@@ -2548,8 +2548,8 @@ TEST(CliTest, CompileRegCJarWithEncryptedNativeLibRunsJvm)
     fs::create_directories(jarDir, ec);
     ASSERT_FALSE(ec) << ec.message();
 
-    // 输入 jar 带清单：验证嵌入时把 Enable-Native-Access 合并进既有主段
-    // （原属性保留），与无清单输入的全新主段路径互补。
+    // 输入 jar 带清单：默认关跑一遍（清单原样保留的回归断言），开关打开再
+    // 跑一遍（属性合并进既有主段，原属性保留）。
     std::string inputManifestText = "Manifest-Version: 1.0\r\nMain-Class: demo.Main\r\n\r\n";
     const fs::path inputJar  = writeJarWithEntries(
         "mj2x_cli_enc_input.jar",
@@ -2601,16 +2601,35 @@ TEST(CliTest, CompileRegCJarWithEncryptedNativeLibRunsJvm)
     mj2x::xorStreamBytes(decrypted.data(), decrypted.size(), 0x1234ABCDu);
     EXPECT_EQ(decrypted, plainBytes) << "XOR 解密往返与打包侧算法不一致";
 
-    // issue #58：既有清单合并路径。属性插入版本行后，Main-Class 保留。
-    auto manifestOut = readJarEntry(outputJar, "META-INF/MANIFEST.MF");
-    ASSERT_FALSE(manifestOut.empty()) << result.out;
-    std::string manifestOutText(manifestOut.begin(), manifestOut.end());
-    EXPECT_EQ(manifestOutText,
+    // issue #58：--enable-native-access 默认关，嵌入不声明属性，既有清单
+    // 逐字节原样保留（回归断言）。
+    auto manifestOff = readJarEntry(outputJar, "META-INF/MANIFEST.MF");
+    ASSERT_FALSE(manifestOff.empty()) << result.out;
+    std::string manifestOffText(manifestOff.begin(), manifestOff.end());
+    EXPECT_EQ(manifestOffText, inputManifestText) << "默认关时清单不应被改写";
+
+    // 开关打开：属性合并进既有主段，属性插版本行后，Main-Class 保留。
+    const fs::path outputJarOn = jarDir / "output_enc_on.jar";
+    const fs::path cFileOn     = workDir / "enc_output_on.c";
+    result = runScript({q(cli) + " -i " + q(inputJar) + " -o " + q(outputJarOn) +
+                        " --emit-c " + q(cFileOn) + " --backend regc --compile --native-lib-key 1234abcd" +
+                        " --enable-native-access"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    auto manifestOn = readJarEntry(outputJarOn, "META-INF/MANIFEST.MF");
+    ASSERT_FALSE(manifestOn.empty()) << result.out;
+    std::string manifestOnText(manifestOn.begin(), manifestOn.end());
+    EXPECT_EQ(manifestOnText,
               std::string("Manifest-Version: 1.0\r\n") + "Enable-Native-Access: ALL-UNNAMED\r\n" +
                   "Main-Class: demo.Main\r\n\r\n");
 
     // 运行加密 jar：NativeLoader 检测 .enc 后缀 → 解密 → System.load。
     result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(outputJar, jarDir)) +
+                        " Driver"});
+    ASSERT_EQ(result.exitCode, 0) << result.out;
+    EXPECT_EQ(result.out, "42");
+
+    // 开关打开的 jar 同样可加载（声明属性不影响 classpath 启动）。
+    result = runScript({q(java) + " -Xverify:all -cp " + q(classPath(outputJarOn, jarDir)) +
                         " Driver"});
     ASSERT_EQ(result.exitCode, 0) << result.out;
     EXPECT_EQ(result.out, "42");
@@ -3822,14 +3841,30 @@ TEST(CliTest, CompileRegCJarEmbedsNativeLoaderAndLibraryWhenToolchainIsAvailable
         readJarEntry(outJar, "META-INF/mj2x/native/" + nativeLibrary.filename().string());
     EXPECT_FALSE(nativeResource.empty()) << result.out;
 
-    // issue #58：嵌入 native 库的输出 JAR 主清单声明 Enable-Native-Access
-    // （java -jar 启动时 JDK 25+ 免 restricted method 告警）。输入 jar 无
-    // 清单，这里验证全新主段路径。
+    // issue #58：--enable-native-access 默认关，输入 jar 无清单时嵌入不新增
+    // 清单条目（回归断言）。
     auto manifestEntry = readJarEntry(outJar, "META-INF/MANIFEST.MF");
-    ASSERT_FALSE(manifestEntry.empty()) << result.out;
-    std::string manifestText(manifestEntry.begin(), manifestEntry.end());
+    EXPECT_TRUE(manifestEntry.empty()) << "默认关时不应新增清单";
+
+    // 开关打开：输入 jar 无清单时输出全新主段（按 JAR 惯例置于首条目），
+    // java -jar 启动时 JDK 25+ 据此免 restricted method 告警。
+    const fs::path outJarOn        = test::getTempOutPath("mj2x_cli_compile_regc_output_on.jar");
+    const fs::path cFileOn         = test::getTempOutPath("mj2x_cli_compile_regc_output_on.c");
+    const fs::path nativeLibraryOn = nativeLibraryPathFor(outJarOn);
+    auto           resultOn        = runScript({
+        q(cli) + " -i " + q(inJar) + " -o " + q(outJarOn) + " --emit-c " + q(cFileOn) +
+            " --backend regc --compile --enable-native-access",
+    });
+    ASSERT_EQ(resultOn.exitCode, 0) << resultOn.out;
+    EXPECT_TRUE(fileExists(nativeLibraryOn)) << resultOn.out;
+    auto manifestOn = readJarEntry(outJarOn, "META-INF/MANIFEST.MF");
+    ASSERT_FALSE(manifestOn.empty()) << resultOn.out;
+    std::string manifestText(manifestOn.begin(), manifestOn.end());
     EXPECT_EQ(manifestText.rfind("Manifest-Version: 1.0\r\n", 0), 0);
     EXPECT_NE(manifestText.find("Enable-Native-Access: ALL-UNNAMED"), std::string::npos);
+    auto nativeResourceOn =
+        readJarEntry(outJarOn, "META-INF/mj2x/native/" + nativeLibraryOn.filename().string());
+    EXPECT_FALSE(nativeResourceOn.empty()) << resultOn.out;
 
     auto                     classBytes = readJarEntry(outJar, "demo/CliJarA.class");
     ca::str::Utf8StringArena arena;
