@@ -311,7 +311,7 @@ protected:
     void runCase(const CorpusMatrixParam& param)
     {
         const auto& aCase = param.aCase;
-        skipOnJdkBelow(toolchain_.jdk, corpusMinJdk(aCase.name));
+        if (skipOnJdkBelow(toolchain_.jdk, corpusMinJdk(aCase.name))) return;
         const auto skipped = exclusions_.equal_range(aCase.name);
         for (auto it = skipped.first; it != skipped.second; ++it) {
             if (it->second.first == backendName(param.backend)) {
@@ -381,7 +381,7 @@ protected:
 
     void runCase(const CorpusCase& aCase)
     {
-        skipOnJdkBelow(toolchain_.jdk, corpusMinJdk(aCase.name));
+        if (skipOnJdkBelow(toolchain_.jdk, corpusMinJdk(aCase.name))) return;
         struct Column
         {
             std::string name;
