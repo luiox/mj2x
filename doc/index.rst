@@ -50,3 +50,4 @@ mj2x 设计规格
    techniques/string-encryption
    techniques/native-lib-encryption
    techniques/vm-site-table-encryption
+   techniques/vmx64-intrinsic-channel

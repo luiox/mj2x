@@ -138,6 +138,9 @@ E. 运行时与产物保护：
    * - :doc:`/techniques/vm-site-table-encryption`
      - vmx64 站点表 post-link 加密
      - ``--backend vmx64`` + ``--compile``\（无独立开关）
+   * - :doc:`/techniques/vmx64-intrinsic-channel`
+     - vmx64 intrinsic 双层通道（设计定稿，未落地）
+     - 未定，随 vmx64 intrinsic 批次落地
 
 未成篇但已存在的保护面
 ------------------------
