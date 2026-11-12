@@ -760,18 +760,30 @@ TEST_F(RegCBackendE2E, InvokeDynamicCapturingLambdaRoundTrip)
     // 按方法名前缀 skip）。这里检查生成 C 里出现每个 lambda$ 方法的 regc_ helper 定义——
     // 一个被转 native 的方法会发射 `static ... regc_<Class>_lambda_<n>__<desc>` helper，
     // 被 skip 的方法则不会出现在 C 源里。方法名中 `$` 在 C 标识符里映射为 `_`。
+    // 序号按任意数字匹配：javac 对 lambda$ 合成方法的 $N 计数随版本不同（旧版按
+    // 类全局递增 addDelta$0/affine$1/…，新版按方法名各自从 0 计），钉死序号会在
+    // 新 javac 上误红；断言意图是"该方法转了 native"，序号不是契约。
     fs::path capDir  = caseDir("RegCCapture");
     fs::path capC    = capDir / "RegCCapture.c";
     ASSERT_TRUE(fileExists(capC)) << capC;
     std::string captureC = readText(capC);
-    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_addDelta_0__II_I"), std::string::npos)
-        << captureC;
-    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_affine_1__III_I"), std::string::npos)
-        << captureC;
-    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_mixed_2__JII_I"), std::string::npos)
-        << captureC;
-    EXPECT_NE(captureC.find("regc_RegCCapture_lambda_combine_3__III_I"), std::string::npos)
-        << captureC;
+    const auto hasLambdaHelper = [&](const char* name, const char* desc) {
+        const std::string prefix = std::string("regc_RegCCapture_lambda_") + name + "_";
+        const std::string tail   = std::string("__") + desc;
+        for (size_t pos = captureC.find(prefix); pos != std::string::npos;
+             pos        = captureC.find(prefix, pos + 1)) {
+            const size_t digitsEnd = captureC.find_first_not_of("0123456789", pos + prefix.size());
+            if (digitsEnd != std::string::npos && digitsEnd > pos + prefix.size() &&
+                captureC.compare(digitsEnd, tail.size(), tail) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    EXPECT_TRUE(hasLambdaHelper("addDelta", "II_I")) << captureC;
+    EXPECT_TRUE(hasLambdaHelper("affine", "III_I")) << captureC;
+    EXPECT_TRUE(hasLambdaHelper("mixed", "JII_I")) << captureC;
+    EXPECT_TRUE(hasLambdaHelper("combine", "III_I")) << captureC;
 }
 
 // R6.1 阶段2c：实例 / 构造器方法引用展开验证。javac 为不同 method-handle 形态生成 indy：
