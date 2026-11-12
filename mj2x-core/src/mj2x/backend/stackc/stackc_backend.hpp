@@ -4,7 +4,7 @@
 /// @details
 /// StackC 把 L1 MIR 直译为 `union jvalue stack[]; int sp;` 风格的 C，保留 JVM
 /// 栈语义作为正确性基线和回归参考。它是 mj2x 两个后端中覆盖率最广的，但不是
-/// 保护主线——保护强度由 RegC（无栈锚点）承担。
+/// 保护主线，保护强度由 RegC（无栈锚点）承担。
 ///
 /// StackC 用 RegisterNatives 绑定 native 方法，clinit 重写（含 registerNativesForClass
 /// 和隐藏 clinit 编译）深度耦合注册流程，故 clinit 注入留在 backend 内部（不外移

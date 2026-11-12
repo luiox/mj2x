@@ -1,4 +1,4 @@
-// mj2x SSA IR — type system.
+// mj2x SSA IR type system.
 // 对齐 L1 PrimitiveKind（frontend/mir_node.hpp），不重复发明。
 #pragma once
 

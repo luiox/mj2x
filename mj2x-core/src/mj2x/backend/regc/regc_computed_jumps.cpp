@@ -2,7 +2,7 @@
 //
 // computed jumps / 跳转目标间接化（--regc-computed-jumps，issue #7）。
 //
-// CFF 把控制流打散成 dispatcher，但 dispatcher 的 case key 仍是字面量——逆序
+// CFF 把控制流打散成 dispatcher，但 dispatcher 的 case key 仍是字面量，逆序
 // case key 就能还原控制流。本项把 "key -> 目标块" 的映射从代码挪到数据表：
 //
 //   key 表按站点密钥异或后存放（密钥运行时派生，编译器不可折叠）
@@ -12,7 +12,7 @@
 // 先解出表。
 //
 // 便携性：MSVC 是主目标，不能用 GCC 的 computed goto（`&&label`）。表驱动 + 索引
-// switch 是标准 C 内可表达的最强形态——这是本项的能力上限，不是偷懒。
+// switch 是标准 C 内可表达的最强形态，这是本项的能力上限，不是偷懒。
 
 #include "mj2x/backend/regc/regc_emitter_internal.hpp"
 
@@ -47,7 +47,7 @@ bool emitComputedJumpDispatch(codegen::CSourceStream& out, RegCFunctionEmitState
 
     // 站点密钥只派生一次：static 局部量首次分派时初始化，之后只有一次加载。
     //
-    // 每分派都调 mj2x_regc_const_key 实测让 ControlFlow probe 慢 70%——表驱动本身
+    // 每分派都调 mj2x_regc_const_key 实测让 ControlFlow probe 慢 70%，表驱动本身
     // 很便宜，贵的是那次跨 TU 调用。改成静态缓存后仍是运行时值，不可折叠。
     const std::string keyVar = ca::str::format_std("_mj2x_cj_k_{}", site);
     out.declare_var("static int64_t", keyVar, "0");
@@ -64,7 +64,7 @@ bool emitComputedJumpDispatch(codegen::CSourceStream& out, RegCFunctionEmitState
         o.block([&](codegen::CSourceStream& p) {
             p.declare_var("int32_t", "_mj2x_cj_i", "0");
             // 线性扫表必须是循环：iff 只查 keys[0] 一次，其余 case 全落 default
-            //（java_corpus BigSwitch 首曝——只有首个 case 与 default 命中）。
+            //（java_corpus BigSwitch 首曝，只有首个 case 与 default 命中）。
             p.while_(ca::str::format_std("_mj2x_cj_i < {}", t.cases.size()),
                      [&](codegen::CSourceStream& q) {
                          q.iff(ca::str::format_std("{}[_mj2x_cj_i] == _mj2x_cj_probe", keys),

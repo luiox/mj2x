@@ -10,13 +10,13 @@ namespace mj2x {
 std::vector<IndyBsmSlot> planIndyBsmSlots(const std::string& bsmDesc, size_t bsmArgCount)
 {
     std::vector<IndyBsmSlot> slots;
-    // 空描述符不再特判：mj2x::Type 门面（批 1 libjbc 迁移）经 jbc::type 结构
-    // 校验前置，空/截断描述符确定性抛 invalid_argument——旧栈
+    // 空描述符不再特判：mj2x::Type 门面经 jbc::type 结构
+    // 校验前置，空/截断描述符确定性抛 invalid_argument，旧栈
     // Type::getArgumentTypes 空串越界读的 flake 面已根治（J-6）。
     const auto bsmArgTypes =
         Type::getArgumentTypes(ca::str::Utf8StringRef::from_cstr(bsmDesc.c_str()));
     // bsmArgIndex 语义（对齐切换前三后端原判定，bsmArgs 不含 Lookup/name/type
-    // 三件套——它们是 invokedynamic 隐式实参）：全程 = 静态实参序数（0 起）。
+    // 三件套，它们是 invokedynamic 隐式实参）：全程 = 静态实参序数（0 起）。
     // Varargs 槽：起点 = 当前序数，数量 = 静态实参总数 - 起点（原式
     // `bsmArgIndex < size ? size - bsmArgIndex : 0` 逐字同构）。
     size_t staticOrdinal = 0;

@@ -1,11 +1,11 @@
 // seed_derivation.hpp - per-client 唯一派生层（竞品借鉴低成本项，#759/#760）。
 //
 // 竞品（JavaShroud per-method profile salt / JShield per-client 产物）都落地了
-// 「同一份源码/seed 下，不同客户端拿到不同产物」。本模块提供统一派生入口：
+// 同一份源码/seed 下不同客户端拿到不同产物这一点。本模块提供统一派生入口：
 //   deriveClientSeed(baseSeed, clientId)
-// - clientId == 0：恒等返回 baseSeed —— 默认产物零变化（不变量：不带 --client-id
+// - clientId == 0：恒等返回 baseSeed，默认产物零变化（不变量：不带 --client-id
 //   的构建与历史产物逐字节一致，seed 可复现契约不变）；
-// - clientId != 0：splitmix64(baseSeed ^ clientId) 雪崩混合 —— 每个客户端得到
+// - clientId != 0：splitmix64(baseSeed ^ clientId) 雪崩混合，每个客户端得到
 //   唯一 seed 流，进而得到唯一 ISA/变体/state 码产物；同 clientId + 同 baseSeed
 //   依然确定（可复现构建）。
 //

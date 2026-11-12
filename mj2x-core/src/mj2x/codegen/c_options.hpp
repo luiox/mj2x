@@ -48,7 +48,7 @@ enum class DirectCallTier : uint8_t
 /// @brief 判定某个调用点在给定档位下可否直调。
 ///
 /// @details
-/// RegC 与 LLVM 共用同一判定——两端口径不一致正是本次要消掉的东西。
+/// RegC 与 LLVM 共用同一判定，两端口径不一致正是本次要消掉的东西。
 ///
 /// @param tier                生效档位
 /// @param sameClass           目标 owner 与当前方法 owner 相同
@@ -93,7 +93,7 @@ struct CodeOptions
     /// @brief POD 类降级为 C struct（默认关闭）。
     /// @details 不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI。降级后
     ///          Java 侧对象不存在（REF 寄存器为 NULL），反射/序列化访问它会读到
-    ///          空壳——这是本项的主要兼容性代价。
+    ///          空壳，这是本项的主要兼容性代价。
     bool podStruct = false;
 
     /// @brief computed jumps：跳转目标间接化（默认关闭，--regc-computed-jumps）。

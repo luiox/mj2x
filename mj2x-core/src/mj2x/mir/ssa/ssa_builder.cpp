@@ -350,7 +350,7 @@ SSABlock* resolveJumpTarget(const std::unordered_map<int, SSABlock*>& ssaByLabel
 {
     auto it = ssaByLabel.find(labelKey);
     if (it != ssaByLabel.end()) return it->second;
-    // 块 id 与标签 id 在批 6d 前是不同域：回退标签索引，标签 id →
+    // 块 id 与标签 id 曾是不同域：回退标签索引，标签 id →
     // 所在 L1 块 → 同 id 的 SSABlock。目标块必含同 id MIRLabel。
     if (const Block* l1 = findBlockByLabel(byLabel, labelKey)) {
         for (const auto& sb : fnBlocks) {
@@ -1305,7 +1305,7 @@ void SSABuilder::collectOutEdges(Block* b, const std::unordered_map<int, Block*>
 {
     // 标签 id → 所在块 id（一次性索引 O(1) 查，T1 性能：此前每分支线性扫全块
     // 是 reaching-def 预计算的主导 O(n²)）；找不到不产边（防御）。
-    // 块 id 与标签 id 在批 6d 前是不同域，边键必须落块 id 域。
+    // 块 id 与标签 id 曾是不同域，边键必须落块 id 域。
     auto pushBlockId = [&byLabel, &targets](int labelId) {
         if (const Block* l1 = findBlockByLabel(byLabel, labelId)) {
             targets.push_back(l1->id);
@@ -1335,7 +1335,7 @@ void SSABuilder::collectOutEdges(Block* b, const std::unordered_map<int, Block*>
 }
 
 // 块是否以**无 fallthrough** 的终结指令结尾（goto/return/throw/switch）。
-// 条件分支（BRANCH/BRANCH_ZERO）有 fallthrough 后继，不算"无 fallthrough" ——
+// 条件分支（BRANCH/BRANCH_ZERO）有 fallthrough 后继，不算"无 fallthrough"，
 // 它们同时有跳转目标和 fallthrough 两个后继，仍需加 fallthrough 边。
 static bool blockEndsWithTerminator(Block* b)
 {
@@ -1351,7 +1351,7 @@ static bool blockEndsWithTerminator(Block* b)
 }
 
 
-// 批 6d 标签 id 化：targetLabel 即顺序标签 id（指针截断 id 在 x64 上可为
+// 标签 id 化：targetLabel 即顺序标签 id（指针截断 id 在 x64 上可为
 // 负且 ASLR 依赖，已废除）。
 bool blockContainsLabel(const Block* block, int labelId)
 {
@@ -1408,7 +1408,7 @@ std::vector<ReachingDefBlock> SSABuilder::buildReachingDefView(const std::vector
         Block*           b = blocks[i];
         std::vector<int> outs;
         collectOutEdges(b, byLabel, outs);
-        // 非终结块 fallthrough 到序列下一块（R1a.2：CFG 保真的关键 —— fallthrough 也是边）。
+        // 非终结块 fallthrough 到序列下一块（R1a.2：CFG 保真的关键，fallthrough 也是边）。
         if (!blockEndsWithTerminator(b) && i + 1 < blocks.size()) {
             outs.push_back(blocks[i + 1]->id);
         }
@@ -1569,7 +1569,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
         // Exception-table entries are implicit CFG edges. The handler's local
         // arguments must be the values live when ENTERING the protected block:
         // an exception can fire at any instruction inside the block, before the
-        // block's own re-definitions complete (e.g. `state = state + 10 / 0` —
+        // block's own re-definitions complete (e.g. `state = state + 10 / 0`:
         // the div throws before the add writes state). Capturing after the
         // whole block lowers would reference not-yet-defined SSA values, which
         // read as garbage/stale slots in every register backend (stackc masks
@@ -1577,7 +1577,7 @@ bool SSABuilder::translateBlocks(SSAFunction& fn, const std::vector<Block*>& l1b
         // argument is assigned by the backends from the pending JNI exception
         // and is therefore omitted. Residual imprecision (documented): a local
         // reassigned mid-block and read by the handler after a LATER throwing
-        // instruction still sees the entry value — javac shapes that matter
+        // instruction still sees the entry value; javac shapes that matter
         // (write folded into the throwing expression) are covered.
         for (auto& region : fn.exceptionRegions) {
             if (std::find(region.protectedBlocks.begin(), region.protectedBlocks.end(), sb) ==

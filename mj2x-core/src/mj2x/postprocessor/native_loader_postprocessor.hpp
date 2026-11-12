@@ -14,7 +14,7 @@ namespace mj2x {
 ///  - 当 `injectClinitCalls=true` 时，对每个 modified 且非 library 的类，在其
 ///    `<clinit>` 头部前插 `NativeLoader.load(resourcePath, tempSuffix)` 调用。
 ///
-/// clinit 注入原先在 RegCBackend 内部完成，现已统一收口到此 postprocessor。
+/// clinit 注入原先在 RegCBackend 内部完成，现已统一集中到此 postprocessor。
 /// RegC 和 StackC 均用 RegisterNatives 绑定：
 ///  - RegC：backend 在 clinit 前插 `registerNativesForClass`，本 postprocessor 再前插
 ///    `NativeLoader.load`，最终顺序 [load, register, ...]。故传 `injectClinitCalls=true`。

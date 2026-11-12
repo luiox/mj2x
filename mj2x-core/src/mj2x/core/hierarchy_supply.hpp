@@ -25,7 +25,7 @@ ca::usize registerSkeleton(mjbase::hierarchy::ClassHierarchy& hierarchy, mjbase:
 /// @brief 扫描 .jar / .jmod 容器内全部 .class 的谱系骨架。
 ///
 /// @details jmod 是 4 字节 "JM" 前缀 + zip；自动识别跳过。解析失败条目
-///（module-info、隐藏类等）静默跳过——谱系图容许悬挂键。
+///（module-info、隐藏类等）静默跳过，谱系图容许悬挂键。
 /// @return 扫描到的类数；容器打不开返回 -1（note 附原因）。
 ca::i64 scanContainerSkeletons(const std::string& path, std::vector<ClassSkeleton>& out,
                                std::string& note);

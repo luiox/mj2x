@@ -1,6 +1,6 @@
 #!/bin/bash
 # 假阴性防护（#887 优化一）：断言 RegC 产物 jar 确系转换后产物。
-# 背景：v69 fixture 曾出现「CLI 构建失败 → 回退未转换产物 → 探针全过」的
+# 背景：v69 fixture 曾出现 CLI 构建失败却回退未转换产物、探针全过的
 # 假阴性通过。此后任何 fixture/benchmark 跑分前必须先过本断言：
 #   1. jar 内嵌 DLL（META-INF/mj2x/native/*.dll）存在且 > 16KB；
 #   2. 入口类存根含 __regc_ 注册标记（native 化重命名）；

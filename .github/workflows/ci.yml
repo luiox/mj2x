@@ -4,7 +4,7 @@
 # （需 --with_tests=y）。E2E 依赖 javac/java（setup-java 提供）；MSVC/clang
 # 缺失的用例按 AGENTS.md 约定 skip（不算失败）。依赖：luiox-repo git 直连包
 # 由 CI 显式注册（与根 xmake.lua 的声明幂等同源）；gtest/nlohmann_json 走
-# xrepo。全量回归用默认配置（backend=all），根因见 AGENTS.md「命令」。
+# xrepo。全量回归用默认配置（backend=all），根因见 AGENTS.md 命令一节。
 # 注：set_defaultplat("windows")，linux 作业必须显式 -p linux。
 
 name: CI
@@ -33,13 +33,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install Sphinx
-        # 钉死本地实测通过的版本：-W 下警告集合随 Sphinx 小版本变，范围安装等于定时炸；升级随文档批次显式改这一行。
+        # 钉死本地实测通过的版本：-W 下警告集合随 Sphinx 小版本变，范围安装等于定时炸；升级随文档维护显式改这一行。
         run: python -m pip install --upgrade "sphinx==9.1.1"
 
       - name: Reference gate (check_refs)
         run: python doc/check_refs.py .
 
-      # -E：增量缓存会跳过「回到旧状态」的文件，警告随之消失，等于没门禁。
+      # -E：增量缓存会跳过"回到旧状态"的文件，警告随之消失，等于没门禁。
       - name: "Build design docs (-W: 警告即失败)"
         run: sphinx-build -b html -E -W --keep-going doc doc/_build
 
@@ -52,7 +52,7 @@ jobs:
 
       # 微观层：Doxygen 只吃头文件 /// 注释（Doxyfile 只收 *.hpp），与 RST 站互不干涉。
       # 版本必须钉死（与本地实测同版）：Doxyfile 的 WARN_* 档随版本增减标签，
-      # apt 里的老版本会把「不认识的标签」报成告警，WARN_AS_ERROR 下直接变红。
+      # apt 里的老版本会把"不认识的标签"报成告警，WARN_AS_ERROR 下直接变红。
       - name: Install Doxygen (pinned 1.18.0)
         run: |
           curl -fsSL https://www.doxygen.nl/files/doxygen-1.18.0.linux.bin.tar.gz -o /tmp/dox.tar.gz
@@ -126,7 +126,7 @@ jobs:
       - name: Run runtime tests
         run: xmake run mj2x_rt_test --gtest_brief=1
 
-      # 产物给 e2e-matrix 矩阵腿跨机直跑：mj2x-cli 是 E2E 全链的翻译腿
+      # 产物给 e2e-matrix 矩阵作业跨机直跑：mj2x-cli 是 E2E 全链的翻译环节
       # （javac→mj2x→java，测试内 spawn），fake_zig/fake_xmake 供 cli 负向
       # 用例不退化成 skip。tar 打包保执行位（upload-artifact 不保留 POSIX
       # 权限位），同镜像族 runner 可直跑。
@@ -204,7 +204,7 @@ jobs:
         shell: bash
         run: build/windows/x64/release/mj2x_rt_test.exe --gtest_brief=1
 
-      # 产物给 e2e-matrix 矩阵腿跨机直跑：mj2x-cli 是 E2E 全链的翻译腿
+      # 产物给 e2e-matrix 矩阵作业跨机直跑：mj2x-cli 是 E2E 全链的翻译环节
       # （javac→mj2x→java，测试内 spawn），fake_zig/fake_xmake 供 cli 负向
       # 用例不退化成 skip。全静态 MT 链接，无运行时 DLL 解析需求。
       - name: Upload test binaries
@@ -221,8 +221,8 @@ jobs:
 
   # e2e-matrix：JDK 版本矩阵复跑主作业的全量测试二进制，保证 E2E 全链
   # （javac 编 fixture → mj2x 翻译 → java 跑产物）在 JDK 8/21/25 上工作。
-  # 不重编产品：产物来自 needs 的主构建作业。JDK 17 由主作业两腿覆盖，
-  # 不进矩阵。JDK 8 腿对 JDK 8 之后语法语料经 test_helper 的 skipOnJdkBelow
+  # 不重编产品：产物来自 needs 的主构建作业。JDK 17 由主作业的两个构建覆盖，
+  # 不进矩阵。JDK 8 作业对 JDK 8 之后语法语料经 test_helper 的 skipOnJdkBelow
   # 版本门显式跳过（unittest/src/integration/java_corpus_e2e_test.cpp
   # corpusMinJdk 档位表），官方 SKIP 不算失败。测试内 spawn xmake 编生成
   # 工程（见上方 windows 直调注释），故 xmake/luiox-repo/xrepo 缓存照常置备。
@@ -296,7 +296,7 @@ jobs:
           name: mj2x-testbin-windows-latest
           path: build/windows/x64/release
 
-      # 直调形态与主作业 windows 腿一致（不走 xmake run，见主作业注释），
+      # 直调形态与主作业 windows 构建一致（不走 xmake run，见主作业注释），
       # cwd = 仓根，资源定位与产物伴生定位（getBuildTargetPath）均成立。
       # 不设 gtest filter：宁多勿漏，全量二进制本身带环境/版本 skip 门。
       - name: Run unit tests (linux)

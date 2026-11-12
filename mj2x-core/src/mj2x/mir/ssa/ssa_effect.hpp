@@ -1,4 +1,4 @@
-// mj2x SSA IR — 副作用描述（L4 passes 用，R1 填保守值）。
+// mj2x SSA IR 副作用描述（L4 passes 用，R1 填保守值）。
 #pragma once
 
 namespace mj2x {

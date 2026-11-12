@@ -77,7 +77,7 @@ bool toVmType(SSAType s, VmType& out)
 ///
 /// @details
 /// toVmType 把 I16/I8/CHAR 坍缩到 I32（计算面 slot 承载形态），但 Convert 的
-/// from/to 操作数必须携带原始窄化语义——坍缩会让 i2s/i2b/i2c 在 handler 侧
+/// from/to 操作数必须携带原始窄化语义，坍缩会让 i2s/i2b/i2c 在 handler 侧
 /// 退化成恒等（java_corpus/BigIntMini vmc4 首曝）。I16/I8/CHAR 是 Convert
 /// 专用标签（见 vm_opcode.hpp VmType 注释），其余形态回落 toVmType。
 bool toVmTypeExact(SSAType s, VmType& out)
@@ -249,7 +249,7 @@ struct EncoderState
 
     /// 已分配的最大寄存器索引 + 1（含参数、常量槽、计算寄存器、溢出槽区）。
     /// u32 承载以探测 u16 回绕：最终 numRegs > 0xFFFF 时编码入口 fail-closed
-    /// （#1133 同款——回绕后操作数静默腐蚀，必须报错而非静默截断）。
+    /// （#1133 同款，回绕后操作数静默腐蚀，必须报错而非静默截断）。
     uint32_t maxReg = 0;
     /// 编码期选项（super-ops / 碎片化 / 寄存器文件定长化），默认全关。
     VmEncodeOptions options;
@@ -260,7 +260,7 @@ struct EncoderState
     bool          regfileOn = false;
 
     /// parallel-move scratch 槽（regfile 专用，惰性预留）：边拷贝构成交换环
-    /// （dest A = src B 且 dest B = src A）时顺序执行会互相覆盖——身份映射下
+    /// （dest A = src B 且 dest B = src A）时顺序执行会互相覆盖，身份映射下
     /// SSA id 互异不成环，regfile 槽位复用后才可能出现（java_corpus SwLoop
     /// 首曝：回边 acc/i 互换，第二拷贝读到第一拷贝的写入）。惰性取当前
     /// maxReg 并 +1，与常量槽互不重叠（一切后续分配只能落在其上）。
@@ -281,7 +281,7 @@ struct EncoderState
     /// @brief 并行拷贝序列的环破碎发射（parallel-move / phi 消除经典问题）。
     ///
     /// @details
-    /// 贪心：反复发射「dest 不被任何剩余拷贝用作 src」的拷贝；卡住即成环——
+    /// 贪心：反复发射"dest 不被任何剩余拷贝用作 src"的拷贝；卡住即成环，
     /// 取环上一条 (d0←s0)，先发 Copy(scratch←s0)，把该拷贝改写为 (d0←scratch)
     /// 后继续。拷贝列表 ≤ 4 项，O(n²) 足够。自环 (d←d) 跳过。
     /// regfile 关闭时恒等映射下 SSA id 互异不成环，直接顺序发射（字节流与
@@ -350,7 +350,7 @@ struct EncoderState
     }
 
     /// @brief parallel-move 纯解析（不发射）：返回按依赖序排列、环已破碎的
-    /// (dest, src) 序列（异常区拷贝以数据形态入表、由生成 C 顺序执行——与
+    /// (dest, src) 序列（异常区拷贝以数据形态入表、由生成 C 顺序执行，与
     /// emitParallelCopies 同一算法的数组版）。
     std::vector<std::pair<uint16_t, uint16_t>> resolveParallelOrder(
         std::vector<std::pair<uint16_t, uint16_t>> pairs)
@@ -406,7 +406,7 @@ struct EncoderState
     /// @details
     /// 参数区 [0, numInputs) 恒等（入口现场，不可移动）；其余查分配计划，
     /// 未映射（扫描遗漏/融合吸收的 dest 被引用）属内部不变量破坏，fail-closed
-    /// 中止编码——方法保留字节码不转 VM，绝不产出错误产物。
+    /// 中止编码，方法保留字节码不转 VM，绝不产出错误产物。
     bool mapReg(uint32_t id, uint16_t& out, std::string& reason) const
     {
         if (!regfileOn) {
@@ -446,7 +446,7 @@ struct EncoderState
     /// 寄存器都从 maxReg 高水位向上分配，若提前占住 [M, M+2)，编码期间任何
     /// 落到该区间的分配都会与临时槽重叠（常量被覆盖 / 活值被踩）。首次使用时
     /// maxReg 是当时的真实高水位，预留后立即 += 2，此后一切分配只能落在临时槽
-    /// 之上——这是无条件成立的，不依赖预扫描完备性。
+    /// 之上，这是无条件成立的，不依赖预扫描完备性。
     ///
     /// regfile 开启（issue #10）时改为占用**池顶 3 槽** [poolTop, poolTop+3)：
     /// 临时槽保持在上限之内（溢出槽区从 limit 起，互不重叠）；池容量由
@@ -482,7 +482,7 @@ struct EncoderState
 
     /// 每条指令的起始偏移（emitOpcode/emitHaltOpcode 记录，与 bytecodes 同步
     /// 增长）。编码收尾搬移进 VmProgram.instructionOffsets，供懒解密分块
-    /// （issue #760 切片 2）做指令对齐的块边界。
+    /// （issue #760）做指令对齐的块边界。
     std::vector<uint32_t> instructionOffsets;
 
     /// 带边拷贝（块参数 RegCopy）的边 → 合成块。合成块内容 = [Copy...] + Jump 真实目标，
@@ -501,7 +501,7 @@ struct EncoderState
 
     /// (src 块, dst 块, slot) → 合成块在 syntheticEdges 里的下标，供
     /// encodeJump/encodeBranch 解析目标（resolveEdgeTarget 据此查 SyntheticEdge
-    /// 的最终语义 id——乱序后 id 由 assignBlockIndices 落定，不能缓存旧值）。
+    /// 的最终语义 id，乱序后 id 由 assignBlockIndices 落定，不能缓存旧值）。
     struct EdgeKey
     {
         const RegBlock* src = nullptr;
@@ -511,7 +511,7 @@ struct EncoderState
     std::vector<std::pair<EdgeKey, uint16_t>> edgeToSynthetic;
 
     /// 物理发射槽：真实块指针或 syntheticEdges 下标（互斥，real == nullptr 时
-    /// synthetic >= 0）。emitOrder[id] 即「id 为 i 的块」——物理序 == 升序 id 序，
+    /// synthetic >= 0）。emitOrder[id] 即"id 为 i 的块"，物理序 == 升序 id 序，
     /// 保证 blockTargets 恒升序（解释器异常检查点按 targets 升序区间反查当前块，
     /// 见 vm_interpreter_emit.cpp emitExceptionCheckpoint）。
     struct EmitSlot
@@ -527,7 +527,7 @@ struct EncoderState
     {
         numInputs = static_cast<uint16_t>(f.parameters.size());
         // 预扫描全部计算寄存器（指令 dest + Register 操作数），把常量槽隔离到
-        // 计算寄存器空间之外——否则常量槽与 SSA value id（密集递增）重叠，
+        // 计算寄存器空间之外，否则常量槽与 SSA value id（密集递增）重叠，
         // 常量复用或槽被后续 dest 覆盖后读参即错值。
         maxReg = numInputs;
         scanComputeRegisters();
@@ -537,8 +537,8 @@ struct EncoderState
     ///
     /// @details
     /// SSA 块参数经 RegIR 消除后变成后继边上的 RegCopy（reg_lowering.cpp lowerSuccessor）。
-    /// 这些拷贝必须在该边被取用时执行——MVP 的解释器只有 Copy/Jump/Branch 原语，
-    /// 因此把每条带拷贝的边重写为「合成块：Copy... + Jump 真实目标」，跳转/分支
+    /// 这些拷贝必须在该边被取用时执行，MVP 的解释器只有 Copy/Jump/Branch 原语，
+    /// 因此把每条带拷贝的边重写为"合成块：Copy... + Jump 真实目标"，跳转/分支
     /// 的目标指向合成块。无拷贝的边仍直接指向真实块。
     void planSyntheticEdges()
     {
@@ -571,7 +571,7 @@ struct EncoderState
                     } else if constexpr (std::is_same_v<T, RegSwitchTerminator>) {
                         // Switch 每条 case 边 + default 边都可能带拷贝（块参数
                         // RegCopy）。slot 按后继序编号（case 0..n-1，default=n），
-                        // 与 encodeSwitch 的 resolveEdgeTarget 约定一致——同一
+                        // 与 encodeSwitch 的 resolveEdgeTarget 约定一致，同一
                         // dst 的多条边（如循环内 switch 各 case 汇入循环尾）靠
                         // 不同 slot 区分合成块，各自执行自己的拷贝。
                         uint16_t slot = 0;
@@ -588,7 +588,7 @@ struct EncoderState
     ///
     /// @details
     /// edgeToSynthetic 存 syntheticEdges 下标，语义 id 现查（assignBlockIndices
-    /// 在 shuffle 开启时把合成块 id 覆写为乱序后的值——issue #1116 切片 A 修复：
+    /// 在 shuffle 开启时把合成块 id 覆写为乱序后的值（issue #1116 修复：
     /// 缓存 push 时点的顺序 id 会让乱序产物的跳转指向错误块，e2e 实证为死循环）。
     uint16_t resolveEdgeTarget(const RegBlock* src, const RegBlock* dst, uint16_t slot,
                                uint16_t realIndex)
@@ -608,8 +608,8 @@ struct EncoderState
     // StackC 共用同一份 RegIR，把后端专属概念泄到共享 IR 会迫使三个后端都
     // 认识一个新指令种类。
     //
-    // superOpFusedNext[block][i] = i+1 表示「第 i 条被第 i+1 条吸收，融合产物
-    // 由第 i+1 条承载」；-1 表示不融合。融合永不跨基本块（逐块独立规划），
+    // superOpFusedNext[block][i] = i+1 表示"第 i 条被第 i+1 条吸收，融合产物
+    // 由第 i+1 条承载"；-1 表示不融合。融合永不跨基本块（逐块独立规划），
     // 也绝不链式重叠（命中后跳过下一条，避免三链）。
     std::map<const RegBlock*, std::vector<int>> superOpFusedNext;
 
@@ -619,7 +619,7 @@ struct EncoderState
         if (op.kind == RegOperandKind::Register) ++useCount[op.reg.value];
     }
 
-    /// @brief 统计一条指令读到的所有寄存器（不含 dest——dest 是定义不是使用）。
+    /// @brief 统计一条指令读到的所有寄存器（不含 dest，dest 是定义不是使用）。
     void countInstructionUses(const RegInstruction& ins, std::map<uint32_t, int>& useCount) const
     {
         switch (ins.kind) {
@@ -675,8 +675,8 @@ struct EncoderState
     /// - **唯一消费**：t 无其他使用点（含 terminator 边拷贝与异常区域拷贝），
     ///   折叠后不存在"读不到 t"的代码。
     /// - **异常语义**：op1 抛异常（除零）时，未折叠形态下 handler 看到的是
-    ///   「t 未写」的现场；折叠形态同样是「t 未写」（t 本就不存在），一致。
-    ///   op2 抛异常时未折叠形态下 t 已写、折叠形态下 t 不存在——但 t 无其他
+    ///   "t 未写"的现场；折叠形态同样是"t 未写"（t 本就不存在），一致。
+    ///   op2 抛异常时未折叠形态下 t 已写、折叠形态下 t 不存在，但 t 无其他
     ///   使用点，差异不可观测。
     /// - **类型**：两条 Binary 的 type 必须一致，否则融合指令的单一 type
     ///   操作数无法同时解释两段运算。
@@ -1032,7 +1032,7 @@ struct EncoderState
             return true;
         }
         case RegOperandKind::NullLiteral:
-            // REF NULL 常量槽（prologue 写 .i=0，union 双关 .ref==NULL）——
+            // REF NULL 常量槽（prologue 写 .i=0，union 双关 .ref==NULL），
             // 与 allowOpaqueNull 的 undef 边值物质化同一机制。NullLiteral 的
             // 语义场景（== null 比较 / return null / null 实参 / checkcast null
             // / null 存储）全部等价于 REF NULL。
@@ -1076,7 +1076,7 @@ struct EncoderState
 void emitOpcode(EncoderState& ctx, VmOpcode op, std::vector<uint8_t>& out)
 {
     const uint64_t pc = out.size();
-    // 指令边界记录（issue #760 切片 2）：opcode 字节恒为指令首字节，
+    // 指令边界记录（issue #760）：opcode 字节恒为指令首字节，
     // emitOpcode 是全部指令发射的唯一入口（Halt 走 emitHaltOpcode 同样记录）。
     ctx.instructionOffsets.push_back(static_cast<uint32_t>(pc));
     uint8_t byte;
@@ -1140,13 +1140,13 @@ bool encodeReturn(EncoderState& ctx, const RegReturnTerminator& term, VmProgram&
 /// 基础分配（shuffle 关闭，与历史形态逐字节一致）：fn.blocks 顺序即 id 顺序
 /// （entry 是 blocks[0]，见 reg_function.hpp:38），合成块索引排在真实块之后。
 ///
-/// 块乱序（--vmc4-shuffle-blocks，issue #1116 切片 A）：入口块恒占 id 0
+/// 块乱序（--vmc4-shuffle-blocks，issue #1116）：入口块恒占 id 0
 /// （prologue `pc = targets[0]` 表驱动，不依赖入口物理位置，但保留 id 0 使
-/// 「targets 升序」与「entry 语义」两条不变量最简），其余块（真实 + 合成）
-/// 经 Sattolo 单环排列分配 id 1..N-1——单环保证恒无不动点，每个非入口块的
+/// "targets 升序"与"entry 语义"两条不变量最简），其余块（真实 + 合成）
+/// 经 Sattolo 单环排列分配 id 1..N-1，单环保证恒无不动点，每个非入口块的
 /// id 与物理位置都必然移位，块邻接不再映射 CFG 发射序。控制流语义不变：
 /// 跳转操作数是块 id，layoutBlocks 按新 id 序重建 blockTargets 即完成
-/// 「间接跳转表重映射」，字节流操作数无需改写。排列种子 = 实例 seed ⊕
+/// "间接跳转表重映射"，字节流操作数无需改写。排列种子 = 实例 seed ⊕
 /// 独立常数段 ⊕ 方法身份哈希（同实例不同方法排列去相关）。
 bool assignBlockIndices(EncoderState& ctx, std::string& reason)
 {
@@ -1155,7 +1155,7 @@ bool assignBlockIndices(EncoderState& ctx, std::string& reason)
         return false;
     }
     // u16 块 id 容量：总块数（真实 + 合成）≤ 0xFFFF，见 checkBlockIdCapacity（#1133）。
-    // 旧校验只卡 realCount ≤ 0xFFFE，合成边块不计入——总块数越界时下方
+    // 旧校验只卡 realCount ≤ 0xFFFE，合成边块不计入，总块数越界时下方
     // `static_cast<uint16_t>(k + 1)` 回绕，跳转目标静默腐蚀。
     if (!checkBlockIdCapacity(ctx.fn.blocks.size(), ctx.syntheticEdges.size(), reason)) {
         return false;
@@ -1176,7 +1176,7 @@ bool assignBlockIndices(EncoderState& ctx, std::string& reason)
         rest.push_back({nullptr, static_cast<int>(si)});
 
     if (ctx.instance.shuffleBlocks() && rest.size() > 1) {
-        // Sattolo：i 从尾向头，j ∈ [0, i) 交换——结果恰为单环排列（无不动点）。
+        // Sattolo：i 从尾向头，j ∈ [0, i) 交换，结果恰为单环排列（无不动点）。
         // 独立常数段（与其他实例维度的种子段互不相同）+ 方法身份哈希。
         const uint64_t identityHash = codegen::fnv1a64(
             ctx.fn.symbol.owner + "." + ctx.fn.symbol.name + ctx.fn.symbol.desc);
@@ -1194,7 +1194,7 @@ bool assignBlockIndices(EncoderState& ctx, std::string& reason)
             ctx.blockIndex[rest[k].real] = id;
         } else {
             // 合成块：落定语义 id（resolveEdgeTarget 经 edgeToSynthetic 把
-            // 跳转操作数解析到这里——乱序后必须用新 id 空间的值）。
+            // 跳转操作数解析到这里，乱序后必须用新 id 空间的值）。
             ctx.syntheticEdges[static_cast<size_t>(rest[k].synthetic)].index = id;
         }
         ctx.emitOrder[id] = rest[k];
@@ -1208,7 +1208,7 @@ bool assignBlockIndices(EncoderState& ctx, std::string& reason)
 /// 一遍完成：按 emitOrder 顺序边编码边记录起始 offset（blockTargets[id] = 块
 /// 起点，物理序 == id 序故恒升序）。shuffle 开启时 emitOrder 是 Sattolo 乱序
 /// （assignBlockIndices），跳转操作数（块 id）在编码期已按新 id 空间写出，此
-/// 处按同一空间记录 offset 即完成间接跳转表重映射——语义不变、布局解耦。
+/// 处按同一空间记录 offset 即完成间接跳转表重映射，语义不变、布局解耦。
 /// 末尾追加 Halt 作为停机哨兵。
 bool layoutBlocks(EncoderState& ctx, VmProgram& prog, std::string& reason)
 {
@@ -1242,7 +1242,7 @@ bool emitSyntheticEdge(EncoderState& ctx, const EncoderState::SyntheticEdge& edg
         VmType type;
         if (!toVmType(copy.dest.type, type)) {
             // UNKNOWN dest = 死槽位的跨作用域类型冲突合并（javac 槽位复用 +
-            // R1 每槽建 arg 策略，如 catch 的 e 槽复用为后续 int——SMT 已以 TOP
+            // R1 每槽建 arg 策略，如 catch 的 e 槽复用为后续 int，SMT 已以 TOP
             // 杀槽，arg 值实际不活）。边拷贝只是搬位：寄存器形态退回源操作数
             // 类型；源同样不可映射时按 undef 源同口径落 NULL 引用。
             if (!toVmType(copy.source.type, type)) type = VmType::REF;
@@ -1328,7 +1328,7 @@ bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& 
 ///
 /// @details
 /// fragment 开启时先发射 `Copy(temp, src)` 再返回 temp，调用方随后的指令读 temp
-/// 而非 src——单条指令就此拆成「无意义搬运 + 原指令」两段，VM 指令与字节码不再
+/// 而非 src，单条指令就此拆成"无意义搬运 + 原指令"两段，VM 指令与字节码不再
 /// 1:1。fragment 关闭时原样返回 src（零成本，字节流与历史形态逐字节一致）。
 ///
 /// 临时槽取自寄存器高水位末端（EncoderState::ensureFragmentTemps 惰性预留），
@@ -1336,7 +1336,7 @@ bool encodeInstruction(EncoderState& ctx, const RegInstruction& ins, VmProgram& 
 /// union，故任何 VmType 的中转都不改位模式，语义恒等。
 ///
 /// @param tempIdx 0/1：同一指令的多个操作数各占一个临时槽（指令内即用即弃，
-///                跨指令复用安全——执行完本指令后临时槽已死）。
+///                跨指令复用安全，执行完本指令后临时槽已死）。
 /// @return 中转后的寄存器索引；失败时 reason 非空（调用方须中止）。
 uint16_t stageFragmentOperand(EncoderState& ctx, VmProgram& prog, int tempIdx, uint16_t srcReg,
                               VmType type, std::string& reason)
@@ -1360,7 +1360,7 @@ bool encodeCopy(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
         reason = "Copy dest type not supported in MVP";
         return false;
     }
-    // Copy 指令的源操作数存在 ins.copy.source（不是 ins.value——那是 Unary/Convert
+    // Copy 指令的源操作数存在 ins.copy.source（不是 ins.value，那是 Unary/Convert
     // 用的字段，对 Copy 是默认构造的 Opaque）。
     uint16_t src;
     if (!ctx.resolveOperand(ins.copy.source, src, reason)) return false;
@@ -1453,8 +1453,8 @@ bool encodeBinary(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog,
     ctx.observeReg(dest);
 
     // 指令碎片化（issue #9）：Binary 的两个操作数各经一次临时槽中转，一条指令
-    // 拆成「Copy; Copy; Binary」三段。纯编码期变换（不新增 opcode），代价是
-    // 指令数与解释开销上升——故默认关，且须在文档写明代价。
+    // 拆成"Copy; Copy; Binary"三段。纯编码期变换（不新增 opcode），代价是
+    // 指令数与解释开销上升，故默认关，且须在文档写明代价。
     lhs = stageFragmentOperand(ctx, prog, 0, lhs, type, reason);
     if (!reason.empty()) return false;
     rhs = stageFragmentOperand(ctx, prog, 1, rhs, type, reason);
@@ -1668,7 +1668,7 @@ bool encodeCall(EncoderState& ctx, const RegInstruction& ins, VmProgram& prog, s
     // 用户自定义 intrinsic（issue #818）：匹配调用点降级为直接调用用户 symbol
     // （helper 解包参数，不经 JNI 通用派发）。匹配契约：static 调用点匹配
     // passReceiver=false 条目；instance 调用点仅匹配显式 passReceiver=true
-    // 条目（未声明不匹配，走通用 JNI helper——G-1 行为保持）；static 调用点
+    // 条目（未声明不匹配，走通用 JNI helper，G-1 行为保持）；static 调用点
     // 遇 passReceiver 条目属配置错误（静态方法无 receiver），整方法编码失败。
     if (ctx.userIntrinsics != nullptr) {
         const std::string owner = ins.method.owner.to_std_string();
@@ -1889,7 +1889,7 @@ bool encodeAllocate(EncoderState& ctx, const RegInstruction& ins, VmProgram& pro
 
     // 维度寄存器（MultiArray：每维一个 int；Array：length；Object：无 args）。
     // MultiArray 的 dimCount 编码在 argc，解释器据此递归分配（Phase 2.E）。
-    // 解释器 object-op handler 固定 argBuf[32]、多维路径 _dims[32]——JVM 合法
+    // 解释器 object-op handler 固定 argBuf[32]、多维路径 _dims[32]，JVM 合法
     // 上限 255 维，超 32 必须 fail-closed（对齐 encodeCall/encodeIntrinsic）。
     if (ins.args.size() > 32) {
         reason = "Allocate: too many dimensions (>32)";
@@ -2051,7 +2051,7 @@ bool encodeJump(EncoderState& ctx, const RegBlock* srcBlock, const RegJumpTermin
 /// @brief 编码 THROW（athrow，Phase 2.C）。
 ///
 /// @details
-/// 字节流：[Throw][src:u16]——src 是异常对象寄存器（.ref 承载 jthrowable）。
+/// 字节流：[Throw][src:u16]，src 是异常对象寄存器（.ref 承载 jthrowable）。
 /// 解释器 handler 调 mj2x_vm_throw（null → NPE），随后主循环的异常检查点
 /// 按当前块活跃区域匹配/传播。无异常区域时 throw 直接传播到 Java。
 bool encodeThrow(EncoderState& ctx, const RegThrowTerminator& term, VmProgram& prog,
@@ -2122,7 +2122,7 @@ void encodeExceptionRegions(EncoderState& ctx, VmProgram& prog, std::string& rea
             entry.blockIdx     = blockIt->second;
             ctx.observeReg(excReg);
             // 该块的边拷贝（edges 中 protectedBlock 匹配的项）。异常分派时由
-            // 解释器生成代码**顺序执行**——与合成边同一 parallel-move 危险面：
+            // 解释器生成代码**顺序执行**，与合成边同一 parallel-move 危险面：
             // regfile 槽位复用可构成交换环（先用贪心排序 + scratch 破环解析）。
             for (const auto& edge : region.edges) {
                 if (edge.protectedBlock != protectedBlock) continue;
@@ -2282,7 +2282,7 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     // 编码解耦，故在 layoutBlocks 之前一次性完成。
     ctx.planSuperOps();
     // 寄存器文件定长化（issue #10）：融合计划落地后做线性扫描分配（融合对按
-    // 单条复合指令参与分配），maxReg 抬到溢出槽区终点——常量槽自此从溢出槽区
+    // 单条复合指令参与分配），maxReg 抬到溢出槽区终点，常量槽自此从溢出槽区
     // 之后分配，池内寄存器与溢出槽全部落在计划空间内。
     if (options.regfile > 0) {
         ctx.regfileOn = true;
@@ -2302,7 +2302,7 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     if (!assignBlockIndices(ctx, reason)) return nullptr;
     // 异常区域（Phase 2.C）：先于 layoutBlocks 收集（边拷贝可能 intern 新常量槽，
     // 常量槽分配独立于字节流布局，顺序无影响；但必须保证区域表在 layoutBlocks
-    // 之后仍有效——区域表只存块索引/寄存器索引，不依赖字节流偏移。块乱序时
+    // 之后仍有效，区域表只存块索引/寄存器索引，不依赖字节流偏移。块乱序时
     // handlerBlock/blockIdx 经 ctx.blockIndex 解析，天然落在打乱后的 id 空间，
     // 与 blockTargets/blockExcRegions 同一空间，无需二次重映射）。
     encodeExceptionRegions(ctx, *prog, reason);
@@ -2344,7 +2344,7 @@ std::unique_ptr<VmProgram> VmEncoder::encode(const RegFunction& fn, const VmInst
     prog->hasArrayLength = ctx.hasArrayLength;
     // Intrinsic 表（Phase 2.D 泛化）。
     prog->intrinsics = std::move(ctx.intrinsicRefs);
-    // 指令边界表（issue #760 切片 2）：emitOpcode/emitHaltOpcode 按发射顺序
+    // 指令边界表（issue #760）：emitOpcode/emitHaltOpcode 按发射顺序
     // 记录，与 bytecodes 布局天然同步；懒解密分块据此取指令对齐的块边界。
     prog->instructionOffsets = std::move(ctx.instructionOffsets);
     // String LDC 常量槽（Phase 2.E）。

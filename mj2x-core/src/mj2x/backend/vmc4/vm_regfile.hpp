@@ -2,15 +2,15 @@
 /// @brief VMC4 寄存器文件定长化（issue #10，--vmc4-regfile）：线性扫描分配 + 溢出槽。
 ///
 /// @details
-/// RegIR 的虚拟寄存器（RegId.value == SSA value id）默认恒等映射进 VM 寄存器索引
-/// ——寄存器号直接暴露 SSA 值编号，是红队的结构性锚点。定长化开启后：
+/// RegIR 的虚拟寄存器（RegId.value == SSA value id）默认恒等映射进 VM 寄存器索引，
+/// 寄存器号直接暴露 SSA 值编号，是红队的结构性锚点。定长化开启后：
 ///   - 计算寄存器经**线性扫描分配**（Poletto）压入固定池 `[numInputs, poolTop)`，
 ///     死值槽位被复用，寄存器号不再镜像 SSA id；
 ///   - 池装不下的活值分到**溢出槽** `[spillBase, spillBase+spillCount)`。
 ///
 /// ### 溢出槽直接寻址（实现定界：不引入 Spill/Reload opcode）
 ///
-/// 解释器的寄存器文件是统一 slots 数组，溢出槽就是数组高位索引——指令操作数
+/// 解释器的寄存器文件是统一 slots 数组，溢出槽就是数组高位索引，指令操作数
 /// （u16）直接引用溢出槽即可读写，无需 reg↔slot 搬运指令。相比 Spill/Reload
 /// 双 opcode 方案：零运行时开销、零 opcode/解释器/实例面改动、编码器只需在
 /// 操作数解析单点（resolveOperand）做重映射。若未来运行时把寄存器文件拆成
@@ -61,7 +61,7 @@ struct VmRegfilePlan
 /// @details
 /// 活性分析（块级 backward 不动点）→ 活跃区间（定义点/使用点 + liveIn/liveOut
 /// 块跨度包络，包络是安全过近似：非重叠包络必不干扰）→ Poletto 线性扫描
-/// （池耗尽时溢出「结束点最远」的区间，被溢出者得稳定溢出槽）。
+/// （池耗尽时溢出"结束点最远"的区间，被溢出者得稳定溢出槽）。
 ///
 /// 边拷贝语义：后继边拷贝的 source 在**源块 terminator 位点**被读取、dest 在
 /// **目标块入口**诞生（块参数）；异常区域拷贝的 source 在**保护块末尾**被读取

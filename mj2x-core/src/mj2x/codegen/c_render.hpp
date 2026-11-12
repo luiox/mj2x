@@ -1,7 +1,7 @@
 #pragma once
 
 // 文本模板渲染(#894):与 c_template.hpp 的 CodeTemplate(结构化发射注册表)
-// 互补——本头处理"整文件占位符替换"型模板。模板文本经 resources.embed
+// 互补，本头处理"整文件占位符替换"型模板。模板文本经 resources.embed
 // 嵌入(挂载 codegen),生成期做占位符替换与条件块裁剪后拼入产物。
 //
 // 模板指令:
@@ -23,7 +23,7 @@ namespace mj2x::codegen {
 ///
 /// 字节扫描语义:占位符 `@NAME@` 在任意位置内联替换;指令(`@#IF:/@#ELSE@/@#ENDIF@`)
 /// 必须独占一行(含行尾换行),渲染后整行(连同换行)消失、不产出任何字节;
-/// 其余文本逐字节透传——模板内文本自带的换行不做任何增删。
+/// 其余文本逐字节透传，模板内文本自带的换行不做任何增删。
 inline bool renderCTemplate(std::string_view tpl,
                             const std::unordered_map<std::string, std::string>& values,
                             const std::unordered_map<std::string, bool>& flags,

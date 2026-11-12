@@ -1,5 +1,5 @@
 /// @file llvm_intrinsic_registry.hpp
-/// @brief LLVM IR 后端的 JDK intrinsic 直调注册表（对齐 RegC 纯函数切片）。
+/// @brief LLVM IR 后端的 JDK intrinsic 直调注册表（对齐 RegC 纯函数子集）。
 #pragma once
 
 #include "libca/str/utf8_string.hpp"
@@ -71,7 +71,7 @@ const LlvmWrapperUnboxEntry* matchLlvmWrapperUnbox(ca::str::Utf8StringRef owner,
 /// @brief Random 状态机条目（shadow 结构 %mj2x_random，指针状态直调）。
 ///
 /// @details RegC 同 face 为 inert（`Allocate+<init>` 融合成 NewObjectA 绕过
-/// registry，方法体从不直调）；LLVM 实现真切片（对齐先例：indy 运行时解析）。
+/// registry，方法体从不直调）；LLVM 侧有真实实现体（对齐先例：indy 运行时解析）。
 struct LlvmRandomEntry
 {
     const char* owner;       // "java/util/Random"
@@ -85,7 +85,7 @@ struct LlvmRandomEntry
     RegCIntrinsicPrecheck precheck;
 };
 
-/// @brief 查找 `Random <init>(J)V`（带种子构造；无参构造保持 JNI——JVM 语义
+/// @brief 查找 `Random <init>(J)V`（带种子构造；无参构造保持 JNI，JVM 语义
 /// 依赖时钟/seedUniquifier，不确定）。
 const LlvmRandomEntry* matchLlvmRandomInit(ca::str::Utf8StringRef owner,
                                            ca::str::Utf8StringRef name,
@@ -112,7 +112,7 @@ struct LlvmBuilderEntry
     int         kind;        // 0=init 1=append 2=method
     const char* outLlvm;     // method 的 out 参数类型："" / "ptr" / "i32" / "i16"
     const char* argLlvm[3];  // context/state 之后的参数（i32/i64/float/double/ptr；
-                             // i8/i16 表示需 trunc——crt 形参为 int8_t/uint16_t）
+                             // i8/i16 表示需 trunc，crt 形参为 int8_t/uint16_t）
 };
 
 /// @brief 查找 StringBuilder/StringBuffer 状态机条目（init/append/method）。

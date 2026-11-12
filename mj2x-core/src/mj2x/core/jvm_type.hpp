@@ -1,12 +1,12 @@
 /// @file        jvm_type.hpp
-/// @brief       JVM 类型投影：描述符解析门面（libjbc 迁移批 1）。
+/// @brief       JVM 类型投影：描述符解析门面（libjbc 迁移引入）。
 ///
-/// 旧栈 mj2x::Type 的消费侧对位面（批 1 盘点：getType/
+/// 旧栈 mj2x::Type 的消费侧对位面（覆盖 getType/
 /// getObjectType/getMethodType/getArgumentTypes/getReturnType 静态族 +
 /// getSort/getDescriptor/getInternalName/实例 getArgumentTypes/getReturnType/
 /// toString/operator==）。语义逐位对齐旧栈（视图存储、INTERNAL 掩蔽为
 /// OBJECT、异常消息原文），差异仅在：描述符结构校验单源 jbc::type
-/// （空描述符确定性抛 invalid_argument——J-6 越界读根治点），opcode
+/// （空描述符确定性抛 invalid_argument，J-6 越界读根治点），opcode
 /// 常量镜像见 jvm_opcodes.hpp。
 #pragma once
 

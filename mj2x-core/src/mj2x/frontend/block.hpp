@@ -55,7 +55,7 @@ struct Block
     /// @details
     /// firstInsnIdx 是块首指令（含 LABEL 等伪指令）的序号，lastInsnIdx 是块尾
     /// 指令序号。与 ExceptionHandler::startInsnIdx/endInsnIdx 同尺（同一指令
-    /// 列表的下标），SSABuilder 用「块范围 ∩ 保护区」判定块是否受保护，取代
+    /// 列表的下标），SSABuilder 用"块范围 ∩ 保护区"判定块是否受保护，取代
     /// 依赖块序的 label 区间扫描。空块（无节点）保持 -1。
     int firstInsnIdx = -1;
     int lastInsnIdx  = -1;

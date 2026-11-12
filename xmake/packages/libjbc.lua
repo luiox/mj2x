@@ -3,7 +3,7 @@
 -- 为什么项目内联（#44 曾整体退役本文件，本次随帧换装接线恢复）：
 -- mjbase 依赖闭包的 libjhasm 0.3.3 安装沙箱自带其仓内内联 libjbc 词条，
 -- 条目上限 0.4.22（libjhasm main 已收编 0.4.24 条目但未发版）；libjhasm
--- 0.3.3 自身根 require 又要 libjbc >=0.4.23——沙箱内自相矛盾，外部传什么
+-- 0.3.3 自身根 require 又要 libjbc >=0.4.23，沙箱内自相矛盾，外部传什么
 -- 版本其内层词条不识别即按裸 ref clone（CI 实证 fatal: Remote branch
 -- >=0.4.23/0.4.24 not found，与 luiox-repo 词条是否注册无关）。mjbase
 -- 上游的 shipped 解法：消费方带内联 libjbc 定义承载 0.4.22 条目，
@@ -17,7 +17,7 @@
 -- 其余纪律同 mjt/mjbase 同名文件：上游 on_load 的 /utf-8 修正 luiox-repo
 -- 定义已自带（0.4.16+），本文件保留；libca 依赖直接钉本仓单源 (版本, 模块集)
 -- （项目内联包定义不吃 requireconfs（实测），裸声明会浮动到仓库最新版，
--- 与项目实例形成双版本 libca——D33 同族隐患）。版本/模块常量取 root
+-- 与项目实例形成双版本 libca，D33 同族隐患）。版本/模块常量取 root
 -- xmake.lua 全局（本文件在常量定义之后 include，作用域可见）。
 --
 -- 机制：add_urls 指向 git 仓库 + add_versions 第二参数锁 commit。xmake 用
@@ -31,7 +31,7 @@
 -- libca 依赖（modules = core,str,log,crypto,zip），包沙箱内自解析；下方
 -- add_deps 是给消费方的传递声明（另一回事，不可省）。libca 版本/模块取
 -- root xmake.lua 的 LUIOX_LIBCA_VERSION/LUIOX_LIBCA_MODULES 家族统一超集
--- （同一消费图内各包的 libca (版本, 模块集) 必须完全一致——实例身份 =
+-- （同一消费图内各包的 libca (版本, 模块集) 必须完全一致，实例身份 =
 -- (版本, configs 哈希)，任何偏差都会多出一个 libca 实例：链接闭包多条
 -- -libpath，同名符号双归档，解析次序脆弱）。
 --
@@ -74,7 +74,7 @@ package("libjbc")
 
     -- 嵌套 libca 直接钉到本仓单源版本：项目内联包定义不吃 deps.lua 的
     -- **.libca / libjbc.libca requireconfs（实测），裸声明会解析到仓库最新版
-    -- （0.0.15），与项目实例（LUIOX_LIBCA_VERSION）形成双版本 libca——D33
+    -- （0.0.15），与项目实例（LUIOX_LIBCA_VERSION）形成双版本 libca，D33
     -- 同族隐患。版本/模块常量取 root xmake.lua 全局（本文件在常量定义之后
     -- include，作用域可见）；configs 必须与项目级 add_requires 完全一致，
     -- 否则同一消费图内多出一份 libca 实例（链接闭包多条 -libpath）。

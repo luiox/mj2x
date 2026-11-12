@@ -8,7 +8,7 @@ namespace mj2x {
 
 namespace {
 
-/// @brief jbc::type 结构校验入口：Err 即抛（J-6 根治点——空/截断描述符
+/// @brief jbc::type 结构校验入口：Err 即抛（J-6 根治点：空/截断描述符
 /// 确定性 invalid_argument，不再依赖越界读的漂移行为）。
 void validateMethodDescriptor(const ca::str::Utf8StringRef& desc)
 {

@@ -3,7 +3,7 @@
 ///
 /// @details
 /// vmx64 是 VMC4 虚拟化体系的 x64 汇编发射形态（Phase 1 骨架）：复用 VMC4 的
-/// 前端（L1 → SSA → RegIR），但在 RegIR 之后分叉——RegIR 被编码为自定义最小
+/// 前端（L1 → SSA → RegIR），但在 RegIR 之后分叉，RegIR 被编码为自定义最小
 /// opcode 字节流，由 MASM x64 汇编（ml64）发射的解释器/调度器直接执行，产生
 /// VMP 风格的 `jmp rdx` 数据驱动间接跳转链，消除"经 C 编译器生成的规范代码
 /// 骨架"这个已知反编译突破口。
@@ -13,9 +13,9 @@
 /// 每个指令站点（site）在流中的布局：
 ///   [tEnc:u16][operands...]
 ///
-/// - tEnc 是「下一 handler 编号」（站点在站点表中的索引 t）经 XOR rolling key
+/// - tEnc 是下一 handler 编号（站点在站点表中的索引 t）经 XOR rolling key
 ///   加密后的密文（见 vmx64_asm_emit.hpp 的 key schedule）。流中不出现明文
-///   opcode——指令语义只存在于加密站点表里，纯数据驱动。
+///   opcode，指令语义只存在于加密站点表里，纯数据驱动。
 /// - operands 按 opcode 固定布局（见 Vmx64Op 各项注释）。
 /// - 分支目标（Goto/IfIcmp 族）是 u32 流偏移（相对流起点）。
 ///

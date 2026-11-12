@@ -323,8 +323,8 @@ std::vector<const RegExceptionRegion*> activeExceptionRegions(const RegFunction&
 
 /// 判断已发射的方法体是否含产生 JNI local ref 的操作，用于 gate PushLocalFrame/
 /// PopLocalFrame 帧管理。命中任一产 ref helper 即需要帧；纯标量/纯字段算术方法
-/// 不含这些标记，保留「零 JNI 帧开销」形态。marker 覆盖：方法调用（call_*，含
-/// cached / instance / ref / void——void 调用也可能内部 FindClass 泄漏 class ref）、
+/// 不含这些标记，保留"零 JNI 帧开销"形态。marker 覆盖：方法调用（call_*，含
+/// cached / instance / ref / void，void 调用也可能内部 FindClass 泄漏 class ref）、
 /// 对象/数组分配、class/string 字面量、ref 字段与 ref 数组读取。
 bool bodyProducesLocalRefs(const ca::str::Utf8StringRef& body)
 {
@@ -344,7 +344,7 @@ bool bodyProducesLocalRefs(const ca::str::Utf8StringRef& body)
     return false;
 }
 
-/// 判定「私有实例方法 + this receiver」调用点：JVM 语义下 private 方法无覆写、
+/// 判定"私有实例方法 + this receiver"调用点：JVM 语义下 private 方法无覆写、
 /// 精确分派到声明类实现，因此可跳过 resolved dispatch 的运行时类检查
 /// （GetObjectClass + IsSameObject，2 JNI/调用）。已转换的 private 实现 →
 /// 直接调用 regc 函数（0 JNI）；未转换 → cached instance 调用（GetMethodID
@@ -445,7 +445,7 @@ static bool receiverExactTypes(const RegFunction& fn, const RegBlock* block, con
     return foundAny;
 }
 
-/// 尝试发射「receiver 精确类型静态绑定」调用：receiver 的 SSA def 可证为
+/// 尝试发射"receiver 精确类型静态绑定"调用：receiver 的 SSA def 可证为
 /// 单一分配点类（receiverExactTypes）且该类的目标方法已转换时，跳过 resolved
 /// dispatch 的运行时类检查（双槽 IsInstanceOf，平均 1.5-2 JNI/调用），直接
 /// 调用 regc_* 函数体（0 JNI，保留 null 检查以符合 JVM 动态调用语义）。
@@ -482,7 +482,7 @@ static bool tryEmitStaticBoundCall(CSourceStream& out, const RegInstruction& ins
 
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
     // 前向声明：目标函数定义可能在本调用点之后（同类方法转换顺序不保证）。
-    // 声明登记到 TU 头部注册表——块作用域 static 函数声明违反 C11 6.7.1p6
+    // 声明登记到 TU 头部注册表，块作用域 static 函数声明违反 C11 6.7.1p6
     // （GCC 拒绝，MSVC 放行），见 declareDirectCallTarget。
     declareDirectCallTarget(state, out, ins, direct->second);
     out.block([&](CSourceStream& o) {
@@ -940,7 +940,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                         directName      = direct->second;
                     }
                 }
-                // privateThis 的 receiver 就是 this，目标 owner 即当前类——
+                // privateThis 的 receiver 就是 this，目标 owner 即当前类，
                 // 栈失真限制在类内，IntraClass 档起允许直调。
                 const bool sameOwner = ins.method.owner == state.symbol.owner;
                 bool       safeDirect = allowsDirectCall(state.directCallTier, sameOwner, false);
@@ -957,7 +957,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 if (safeDirect && directAvailable) {
                     // 前向声明：目标函数定义可能在本调用点之后（同类方法转换
                     // 顺序不保证），无声明时 C 隐式 int() 声明与 REF 返回值冲突
-                    // （C2040）。声明登记到 TU 头部注册表——块作用域 static
+                    // （C2040）。声明登记到 TU 头部注册表，块作用域 static
                     // 函数声明违反 C11 6.7.1p6（GCC 拒绝，MSVC 放行），见
                     // declareDirectCallTarget。
                     declareDirectCallTarget(state, u, ins, directName);
@@ -1100,7 +1100,7 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             else if (!state.podStructRoots.empty() &&
                      isPodClassOwner(state.classIndex, ins.typeDesc)) {
                 // POD struct 降级：对象不存在于 JVM 堆，改成一个 C struct 局部
-                // 变量。REF 寄存器置 NULL——后续若有非字段使用，
+                // 变量。REF 寄存器置 NULL，后续若有非字段使用，
                 // rejectNativeObjectEscape 会把它挡回去（保守 fail-closed）。
                 const std::string structTypeName = podStructTypeName(ins.typeDesc);
                 // 变量已在函数作用域声明，这里只做零初始化 + 指针绑定（复合字面量）。
@@ -1282,12 +1282,12 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
                 return false;
             // JVM 语义（JVMS monitorenter）：对象为 NULL 时抛 NPE。JNI
             // MonitorEnter/Exit 对 NULL jobject 行为未定义（HotSpot 按"调用方
-            // 保证非空"处理），先守卫再调用——与 StackC emitMonitor /
+            // 保证非空"处理），先守卫再调用，与 StackC emitMonitor /
             // VMC4 monitor intrinsic helper / LLVM mj2x_llvm_monitor_* 对齐。
             // 抛出后必须立即终止当前指令路径（JVM 在 monitor 指令抛异常时按
             // 当前 pc unwind，绝不继续执行后续指令）：未受保护块 goto cleanup
             // 直接传播；受保护块落入指令后的异常分发（路由 handler）。若
-            // fall-through 继续执行，会踩进 sync-finally 的 monitorexit——javac
+            // fall-through 继续执行，会踩进 sync-finally 的 monitorexit，javac
             // 对 finally handler 还会发 [handler,handlerEnd)→handler 的自覆盖
             // 异常表项，guard 再抛 → 再分发 → 自环死循环。
             {
@@ -1464,7 +1464,7 @@ bool emitTerminator(CSourceStream& out, const RegTerminator& terminator,
                 std::string cjIndex;
                 if (state.computedJumps && t.cases.size() >= 2) {
                     // 拿不到 TU 头部注册表（key 表无处安放）时退回字面量 case，
-                    // 不整方法 fail-closed——本项是混淆增益，不该让方法编译不了。
+                    // 不整方法 fail-closed，本项是混淆增益，不该让方法编译不了。
                     emitComputedJumpDispatch(out, state, t, cjIndex, reason);
                 }
                 const bool         useIndex = !cjIndex.empty();

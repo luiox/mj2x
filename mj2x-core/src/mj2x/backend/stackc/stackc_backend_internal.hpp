@@ -3,8 +3,8 @@
 ///
 /// @details
 /// `stackc_backend.cpp` 原先是一个 3300+ 行的单体：辅助结构、无状态 helper、
-/// MIR 发射器、注册逻辑全部挤在一起。本头把「类型/常量/无状态 helper + Impl
-/// 完整定义」收口，各拆分文件（stackc_mir_*.cpp / stackc_registration.cpp /
+/// MIR 发射器、注册逻辑全部挤在一起。本头把类型/常量/无状态 helper 加 Impl
+/// 完整定义集中在一处，各拆分文件（stackc_mir_*.cpp / stackc_registration.cpp /
 /// stackc_exception.cpp）include 后共享同一套状态与工具，避免重复实现。
 ///
 /// 纯无状态字符串/类型映射 helper 遵循 c_helpers.hpp 的 header-inline 惯例；
@@ -81,7 +81,7 @@ struct CHiddenInterfaceDefaultProxy
 
 struct CExceptionHandlerInfo
 {
-    int         start   = 0;   ///< 保护区间起点标签 id（批 6d 标签 id 化）
+    int         start   = 0;   ///< 保护区间起点标签 id
     int         end     = 0;   ///< 保护区间终点标签 id（半开）
     int         handler = 0;   ///< handler 入口标签 id
     std::string catchType;
@@ -443,7 +443,7 @@ inline const char* binaryOpToC(BinaryOp op)
     case BinaryOp::REM: return "%";
     case BinaryOp::SHL: return "<<";
     case BinaryOp::SHR: return ">>";
-    case BinaryOp::USHR: return ">>";   // unsigned shift — same in C for unsigned
+    case BinaryOp::USHR: return ">>";   // unsigned shift, same in C for unsigned
     case BinaryOp::AND: return "&";
     case BinaryOp::OR: return "|";
     case BinaryOp::XOR: return "^";

@@ -61,7 +61,7 @@ public:
     /// @brief native→native 直调档位（--regc-direct-calls；默认 Off）。
     /// @details 与 RegC 共用 codegen::allowsDirectCall 判定。LLVM 侧原先无条件
     ///          直调同模块 statics，既与 RegC 默认关的口径不一致，又一直在承担
-    ///          #814 的栈观察语义代价——纳入同一门控后两端口径统一。
+    ///          #814 的栈观察语义代价，纳入同一门控后两端口径统一。
     void setDirectCallTier(codegen::DirectCallTier tier) { directCallTier_ = tier; }
 
     const std::string& generatedSource() const override { return sourceCode_; }

@@ -542,7 +542,7 @@ bool isEnumSubtypeOwner(CompilerIndex* classIndex, std::string_view owner)
     return false;
 }
 
-/// @brief 方法体 raw 指令序列（批 6d DOM 形态：Code 槽解码 + decodeInsns；
+/// @brief 方法体 raw 指令序列（DOM 形态：Code 槽解码 + decodeInsns；
 ///        无体/解码失败返回空）。
 static std::vector<jbc::core::RawInsn> bodyInsnsOf(const CompilerClass& cls,
                                                    const CompilerMethod& method)
@@ -594,7 +594,7 @@ const CompilerMethod* findOwnMethod(CompilerIndex* classIndex,
     return nullptr;
 }
 
-/// javac 合成 values() 形态验证（批 6d DOM raw 指令匹配）：
+/// javac 合成 values() 形态验证（DOM raw 指令匹配）：
 /// getstatic owner.$VALUES:[LX; → invokevirtual clone → checkcast [LX; → areturn。
 /// 非该形态（手工字节码自定义 values()）时不允许 intrinsic 化。
 bool isJavacEnumValuesBody(const CompilerClass& cls, const CompilerMethod& method,
@@ -634,7 +634,7 @@ bool isJavacEnumValuesBody(const CompilerClass& cls, const CompilerMethod& metho
     return ret != nullptr && ret->op == jbc::core::Op::ARETURN;
 }
 
-/// javac 合成 valueOf(String) 形态验证（批 6d DOM raw 指令匹配）：
+/// javac 合成 valueOf(String) 形态验证（DOM raw 指令匹配）：
 /// ldc Lowner; → aload 0 → invokestatic
 /// java/lang/Enum.valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;
 /// → checkcast owner → areturn。
@@ -677,7 +677,7 @@ bool isJavacEnumValueOfBody(const CompilerClass& cls, const CompilerMethod& meth
 
 /// javac 合成 values() 调用点 intrinsic：getstatic $VALUES（cached field）+
 /// 站点缓存 clone。替代 JNI 静态调用进 trampoline（其内部为 PushLocalFrame +
-/// getstatic + owner-method clone + checkcast + PopLocalFrame）——每次调用
+/// getstatic + owner-method clone + checkcast + PopLocalFrame），每次调用
 /// 约 5 个 JNI 降为 2 个。
 bool tryEmitEnumValuesCall(CSourceStream& out, const RegInstruction& ins,
                            RegCFunctionEmitState& state)
@@ -727,7 +727,7 @@ bool tryEmitEnumValuesCall(CSourceStream& out, const RegInstruction& ins,
 /// javac 合成 valueOf(String) 调用点 intrinsic：Enum.valueOf(owner, name)
 /// 直调（JDK enumConstantDirectory 映射）。替代 JNI 静态调用进合成 valueOf
 /// trampoline（内部为 PushLocalFrame + 类字面量 + Enum.valueOf + checkcast +
-/// PopLocalFrame）——约 5 个 JNI 降为 1 个。
+/// PopLocalFrame），约 5 个 JNI 降为 1 个。
 bool tryEmitEnumValueOfCall(CSourceStream& out, const RegInstruction& ins,
                             RegCFunctionEmitState& state)
 {
@@ -776,7 +776,7 @@ bool tryEmitEnumValueOfCall(CSourceStream& out, const RegInstruction& ins,
 /// java/lang/Enum 精确等价；registry 按 owner 精确匹配（owner 是枚举子类
 /// 二进制名）匹配不到，这里按类层级补匹配。发射为 NULL 检查 + 字段读取
 /// intrinsic（GetObjectField/GetIntField，缓存 jfieldID），替代 resolved
-/// dispatch 的 IsInstanceOf + CallXxxMethodA——每调用点 2 个 JNI 降为 1 个。
+/// dispatch 的 IsInstanceOf + CallXxxMethodA，每调用点 2 个 JNI 降为 1 个。
 /// 不匹配时返回 false，调用方继续走 registry/通用路径。
 bool tryEmitEnumMemberAccess(CSourceStream& out, const RegInstruction& ins,
                              RegCFunctionEmitState& state)
@@ -943,9 +943,9 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
             return decision;
         }
         // 发射端预检位（#879 Y4 解耦）：预检判定随权威表（kEntries 的 precheck
-        // 位）单源，此处按位发射——Random.nextInt(bound)：JVM 对 bound<=0 抛
+        // 位）单源，此处按位发射。Random.nextInt(bound)：JVM 对 bound<=0 抛
         // IllegalArgumentException；crt 直调无异常通道（bound<=0 返回哨兵值），
-        // 预检把异常挂到 context——pending 由 mayThrow 的调用后异常分发（有 try
+        // 预检把异常挂到 context，pending 由 mayThrow 的调用后异常分发（有 try
         // 区域）或 JNI 边界（无区域）统一处理（fail-closed）。
         if (decision.precheck == RegCIntrinsicPrecheck::PositiveBound) {
             out.emitLine("if (" + operandExpr(ins.args[1]).to_std_string() + " <= 0) {");
@@ -1202,7 +1202,7 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
     if (decision.emitKind == RegCIntrinsicEmitKind::UserIntrinsic) {
         // 用户自定义 intrinsic（issue #818）：直接调用户 symbol。
         // 参数顺序（三后端一致）：passContext 时第一参数 JNIEnv* env；
-        // passReceiver（instance 调用点）时 receiver 紧随 env——RegIR instance
+        // passReceiver（instance 调用点）时 receiver 紧随 env，RegIR instance
         // 调用 args[0] 即 receiver，此处按序透传全部 args 即为契约顺序。
         std::vector<std::string> userArgs;
         if (decision.passContext) userArgs.push_back("_mj2x_regc_current_context()->env");
@@ -1240,7 +1240,7 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out,
     for (const auto& arg : ins.args) {
         // 本地 helper（RegCLocalHelper）同样吃 jobject 形参：native 持有的
         // StringBuilder/StringBuffer 寄存器 operandExpr 产出的是 owner 结构体
-        // 指针（栈地址）而非 jobject——直接透传 = 把栈指针当引用喂 JNI
+        // 指针（栈地址）而非 jobject，直接透传 = 把栈指针当引用喂 JNI
         // （java_corpus V7 首曝：String.valueOf(sb) → object_to_string(ctx,
         // &native_owner_rN) → JVM 崩溃）。与通用调用路径（regc_flow.cpp）同
         // 模式：mutable string 先物化成 jstring/jobject，其余 native 对象
