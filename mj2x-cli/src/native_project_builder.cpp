@@ -29,7 +29,7 @@ std::FILE* const kStderrStream = stderr;
 // （#1023 自本文件与 native_compiler.cpp 抽出）；宏值固化须在其前（见上）。
 #include "native_env_hygiene.hpp"
 // P1-4 外部进程超时：xmake 站点走 spawn + waitChildWithTimeout（超时先
-// taskkill /T /F 收割进程树再收尸——xmake 拉起的 cl.exe/link.exe 继承管道
+// taskkill /T /F 收割进程树再清理，xmake 拉起的 cl.exe/link.exe 继承管道
 // 写端，只杀 xmake 会让收尸的 EOF 等待永不到达）。须在 kStdoutStream 固化
 // 之后 include（subprocess.hpp 会 #undef Windows UCRT 的 stdin/stdout/stderr）。
 #include "native_process_timeout.hpp"
@@ -86,7 +86,7 @@ bool runXmake(ca::process::Command& command, const char* phase, int* failedCode,
 }
 
 /// 构造 configure/build 两阶段的 xmake 命令（不含 env 注入）。重试需要
-/// 全新 Command 对象——旧对象已携带失败的 env 形状与参数序列。
+/// 全新 Command 对象，旧对象已携带失败的 env 形状与参数序列。
 ca::process::Command makeXmakeCommand(const XmakeBuildConfig& config, bool configurePhase)
 {
     ca::process::Command command("xmake");
@@ -95,7 +95,7 @@ ca::process::Command makeXmakeCommand(const XmakeBuildConfig& config, bool confi
         command.arg("f").arg("-P").arg(".").arg("-m").arg(config.mode);
 #if defined(_WIN32)
         // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
-        // program for cc"——显式锁定 windows + msvc 工具链。arch 也必须显式锁
+        // program for cc"，显式锁定 windows + msvc 工具链。arch 也必须显式锁
         // x64：-p windows 的缺省 arch 取 os.arch()="x86_64"（unix 命名），msvc
         // 工具链按 "x64" 探测 VS 环境，于是 "checking for Microsoft Visual
         // Studio (x86_64) version ... no → toolchain not found"（回归 c9edba8fe）。

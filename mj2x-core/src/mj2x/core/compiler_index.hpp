@@ -25,7 +25,7 @@ struct MethodID
 
 struct BackendResult;
 
-/// @brief 方法管线状态条目：元数据快照 + 管线旗标（libjbc 迁移批 6d）。
+/// @brief 方法管线状态条目：元数据快照 + 管线旗标（libjbc 迁移引入）。
 ///
 /// 树载体退役后方法身份源 = 本快照（name+desc 类内唯一键，与 DOM
 /// MemberInfo 对齐）；指令/CP 一律经 cls.dom 读（domMethodFor /
@@ -68,7 +68,7 @@ struct JarEntryRecord
 
 struct CompilerClass
 {
-    /// @brief libjbc DOM：唯一权威载体（批 6d 树载体退役）。
+    /// @brief libjbc DOM：唯一权威载体（树载体已退役）。
     ///
     /// 指令/常量池/属性一律经本对象读改（ClassSession 会话纪律见
     /// dom_edit.hpp）；methods/fields 是元数据快照（refreshMethodSnapshots
@@ -89,7 +89,7 @@ struct CompilerClass
     /// @details
     /// 与 filteredOut 正交：filteredOut 决定"进不进 native 编译集"，本标志决定
     /// "编译出来要不要施加 RegIR 变换"。作用域外的类仍编译成 native，只是跳过
-    /// MBA / opaque / CFF / 常量隐藏 / 调用间接化——产物与未开混淆时一致。
+    /// MBA / opaque / CFF / 常量隐藏 / 调用间接化，产物与未开混淆时一致。
     /// 默认 true（不给任何作用域模式时零行为变化）。
     /// 置位者：ObfuscationScopePreprocessor。
     bool                                        inObfuscationScope = true;

@@ -27,7 +27,7 @@ public:
             if (cls.filteredOut) continue;
             // 接口整体跳过：接口方法禁止 ACC_NATIVE（JLS 9.4/JVMS 4.6），
             // 标记接口的 default/static/私有方法会产出 ClassFormatError。
-            // 批 4：读侧落 DOM（access 位是 ClassFile 头字段）。
+            // 读侧落 DOM（access 位是 ClassFile 头字段）。
             if (cls.dom && (cls.dom->access & Opcodes::ACC_INTERFACE))
                 continue;
             for (auto& method : cls.methods) {

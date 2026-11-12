@@ -225,8 +225,8 @@ const char* regcType(PrimitiveKind kind)
 // 不透明函数名 + RegisterNatives 动态绑定：每个 native 方法编译成一个
 // TU 内部的 `static` C 函数，名字是 `__mj2x_c_<fnv1a64>`，通过每类的
 // RegisterNatives 表显式绑定。函数名/可见性完全与 JNI 符号查找脱钩。
-// fnv1a64 / hex64 / nativeFunctionName / registerFunctionName 已收口到
-// codegen::c_helpers.hpp，StackC 与 RegC 共用同一命名（见该头文件）。
+// fnv1a64 / hex64 / nativeFunctionName / registerFunctionName 统一在
+// codegen::c_helpers.hpp 提供，StackC 与 RegC 共用同一命名（见该头文件）。
 // ---------------------------------------------------------------------------
 
 PrimitiveKind returnKind(const std::string& desc)
@@ -252,7 +252,7 @@ std::vector<PrimitiveKind> argumentKinds(const std::string& desc)
 ///
 /// 这是受 RegisterNatives 绑定的函数：签名必须匹配 Java 描述符的 JNI 调用约定
 /// （JNIEnv* + jclass/jobject + 按 jvmSort 映射的 jxxx 参数），返回值也按 jniType
-/// 映射。但函数本身不导出（无 JNIEXPORT），名字是不透明哈希，JVM 不会按符号查找它——
+/// 映射。但函数本身不导出（无 JNIEXPORT），名字是不透明哈希，JVM 不会按符号查找它，
 /// 绑定完全靠 finalize 阶段发射的 RegisterNatives 表。
 ///
 /// body 与旧 emitJniWrapper 完全一致：设置全局 _mj2x_regc_env、init context、
@@ -339,7 +339,7 @@ std::string emitNativeMethod(const std::string& className, const CompilerMethod&
             // 保留 GetObjectClass 解析。
             out.emitLine("_mj2x_regc_owner_class = (jclass)(*env)->GetObjectClass(env, thisObject);");
         }
-        // 其余实例方法：生成体不读 owner class，跳过 GetObjectClass——
+        // 其余实例方法：生成体不读 owner class，跳过 GetObjectClass，
         // 该全局仅在发射体显式引用时才有意义，逐次 Java→native 入口省 1 JNI。
         out.emitLine("mj2x_regc_init_context(&_mj2x_regc_ctx, env, _mj2x_regc_throw_runtime);");
         if (traceCallLog) {
@@ -428,18 +428,18 @@ struct RegCBackend::Impl
     /// 供 native-to-native 直接调用（deterministic dispatch 目标）使用。
     std::unordered_map<std::string, std::string> convertedFunctions;
     /// 函数体名 -> 由被调方签名生成的规范前向声明文本。直调声明必须与被调方
-    /// 定义逐字一致——按调用点操作数类型推导会因窄类型提升产生多条不同声明
+    /// 定义逐字一致，按调用点操作数类型推导会因窄类型提升产生多条不同声明
     /// （C 编译器报 conflicting types），故权威声明在这里按签名生成。
     std::unordered_map<std::string, std::string> convertedFunctionDecls;
     /// 预扫描验证过的 javac 合成枚举 values()/valueOf() 方法键集合
-    /// （owner\nname\ndesc）。首个 compileMethod 前填充一次——方法注入
+    /// （owner\nname\ndesc）。首个 compileMethod 前填充一次，方法注入
     /// native 后指令被清空，发射期无法再现场验证方法体。
     std::set<std::string> enumSyntheticMethods;
     bool                  enumSyntheticScanned = false;
     /// 含 invokedynamic 站点的方法键集合：直接调用会跳过这些目标
     /// （indy bootstrap 依赖 per-frame _mj2x_regc_owner_class）。
     std::unordered_set<std::string> indyFunctions;
-    /// 已做「类内预登记」的类名集合：compileMethod 对每类首次转换时预登记
+    /// 已做"类内预登记"的类名集合：compileMethod 对每类首次转换时预登记
     /// 该类的全部计划方法函数名，使先转换的方法也能直调后转换的同类方法
     /// （private-this 调用只在同类内，javac 语义保证；转换顺序不保证依赖序，
     /// 如 ExceptionProbe.run 先于 risky）。实际转换失败的方法在早退路径
@@ -447,7 +447,7 @@ struct RegCBackend::Impl
     std::unordered_set<std::string> preRegisteredClasses;
     /// #1193 内联可达性缓存：beforeCompile（任何方法指令被清空前的唯一整输入
     /// 时机）对全部非库类静态方法预转换的 L1 blocks。内联 resolver 优先查
-    /// 缓存——被调类先于调用方被转换清空也能解析，内联判定与 jar 条目序
+    /// 缓存，被调类先于调用方被转换清空也能解析，内联判定与 jar 条目序
     /// 解耦。Block 归 converter 所有，条目持 converter 存活到 backend 析构。
     struct InlineBlockCacheEntry
     {
@@ -526,10 +526,10 @@ void RegCBackend::setUserIntrinsics(const UserIntrinsicConfig& config)
 }
 
 /// #1193 缓存准入的字节码指令数上限（预解析内存粗护栏）。#1193 评审 P3-3
-/// 勘误：字节码数与 SSA 指令数之间没有严格下界关系——控制流字节码
+/// 勘误：字节码数与 SSA 指令数之间没有严格下界关系，控制流字节码
 /// （goto/if*/return/athrow/switch）只落 terminator、nop 被吸收，均不产出
-/// SSA 指令，goto/nop 密集方法的 SSA 计数可远低于字节码数。故「字节码数
-/// 超限 ⇒ 内联大小门必拒」不成立，本护栏只是转换前的粗筛，两个方向都不
+/// SSA 指令，goto/nop 密集方法的 SSA 计数可远低于字节码数。故"字节码数
+/// 超限则内联大小门必拒"不成立，本护栏只是转换前的粗筛，两个方向都不
 /// 精确，均无正确性漂移：
 /// - 字节码超限但 SSA 计数达标：不入缓存，resolver 回落现场路径
 ///   （fail-closed；这类形状保留 jar 条目序依赖窗口）。
@@ -540,10 +540,10 @@ constexpr int kInlineCacheMaxBytecodeInsns = 48 * 4;
 
 /// #1193：全输入预转换（Pipeline::compileMethods 在任何方法指令被清空前调用
 /// 一次）。非库类静态方法整 jar 预转换为 L1 blocks 缓存，内联 resolver 先查
-/// 缓存——被调类先于调用方被转换清空后仍可内联，判定与 jar 条目序解耦。
+/// 缓存，被调类先于调用方被转换清空后仍可内联，判定与 jar 条目序解耦。
 /// 缓存准入与既有 resolver 资格口径一致（有指令体、非 synchronized），另排除
 /// `<clinit>`/`<init>`（无合法 INVOKESTATIC 调用点，且 clinit 会在转换期被
-/// 注入 registerNatives 调用——保持走既有现场路径零漂移）与超长方法（内存
+/// 注入 registerNatives 调用，保持走既有现场路径零漂移）与超长方法（内存
 /// 护栏，见 kInlineCacheMaxBytecodeInsns）。--regc-no-inline 时不建缓存。
 void RegCBackend::beforeCompile(CompilerIndex& index)
 {
@@ -557,7 +557,7 @@ void RegCBackend::beforeCompile(CompilerIndex& index)
             if ((m.access & Opcodes::ACC_SYNCHRONIZED) != 0) continue;
             const std::string& nameStr = m.name;
             if (!nameStr.empty() && nameStr[0] == '<') continue;
-            // 批 6d：体可见性与规模走 DOM Code 槽（树 instructions 同义）。
+            // 体可见性与规模走 DOM Code 槽（树 instructions 同义）。
             auto code = cls.dom->decodeCode(cls.dom->methods[mi]);
             if (code.is_err()) continue;
             auto* c = std::move(code).unwrap();
@@ -625,10 +625,10 @@ bool isJavacEnumValuesSsa(const SSAFunction& fn)
 }
 
 // 说明（#1192 评审 N4 承接，方案 B）：javac 合成 valueOf(String) 无 SSA 形状
-// 验证、也不设 SSA 自登记——真实 javac valueOf 经 lowering 后 body 块仅
+// 验证、也不设 SSA 自登记，真实 javac valueOf 经 lowering 后 body 块仅
 // [Call, Convert] 2 条（ldc 类字面量降为 opaque 值、aload 0 降为局部值，均
 // 不落 SSA 指令，见 ssa_builder.cpp lowerConstant/lowerLocalLoad）。字节码门
-// 的证据（此时方法体指令尚在）严格超集于 SSA 侧可见证据——ldc desc == owner
+// 的证据（此时方法体指令尚在）严格超集于 SSA 侧可见证据，ldc desc == owner
 // 仅存于 opaque tag 字符串约定（调试用，经局部中转/phi 即失配），故 SSA 侧
 // 任何形状门都弱于字节码门：对字节码门已接受者幂等零增量，对其拒绝者净放行
 // （fail-open；旧 3 指令谓词即曾构成此类活体侧门，#1192 评审核出后删除）。
@@ -648,7 +648,7 @@ void RegCBackend::setSafeEnvDebug(bool enabled)
 }
 
 /// @brief 当前类是否在混淆作用域内（issue #8）。
-/// @details 未挂 index 或类不在 index 时按"在作用域内"处理——拿不到信息时保守
+/// @details 未挂 index 或类不在 index 时按"在作用域内"处理，拿不到信息时保守
 ///          沿用现状，不静默改变行为。
 bool RegCBackend::currentClassInObfuscationScope(const std::string& className)
 {
@@ -694,7 +694,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
 
 
     // 类内预登记：本类全部计划转换方法的 regc_* 函数名提前可知（functionName
-    // 只依赖 owner/name/desc）。private-this 直接调用依赖它——同类方法转换
+    // 只依赖 owner/name/desc）。private-this 直接调用依赖它，同类方法转换
     // 顺序不保证（如 ExceptionProbe.run 先于 risky）。失败的转换在早退路径
     // erase 回滚。
     if (index != nullptr && impl_->preRegisteredClasses.insert(className).second) {
@@ -743,7 +743,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     SSABuilder ssaBuilder;
     // RegCBackend is a facade over the existing IR pipeline: L1 blocks are
     // supplied by Pipeline, then this backend owns the SSA and RegIR handoff.
-    // SSA 派生串（如数组 desc）入池用局部 arena——SSA/RegIR 在本方法内同步消费完
+    // SSA 派生串（如数组 desc）入池用局部 arena，SSA/RegIR 在本方法内同步消费完
     // （lower→transform→emit），arena 活到 emitFunction 即可；MIR 透传的 ref 仍指向
     // Pipeline 注入的 job arena（更长寿命），两者共存无冲突（spec §6.3/§6.4）。
     ca::str::Utf8StringArena ssaArena;
@@ -781,15 +781,15 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
     // resolver：从 CompilerIndex 取被调方法 MethodNode → CodeConverter → SSABuilder。
     if (inlineEnabled_) {
         // #1193 评审 P3-2：resolver 各拒绝路径把拒因写入 failReason（原
-        // calleeReason 就地丢弃），随 nullptr 经 pass 侧进样例——逐方法 WARN
-        // 与 finalize 汇总能说清「为什么没内联」。
+        // calleeReason 就地丢弃），随 nullptr 经 pass 侧进样例，逐方法 WARN
+        // 与 finalize 汇总能说清"为什么没内联"。
         const auto resolver = [&](const SSAMethodRef& ref,
                                   std::string&       failReason) -> std::unique_ptr<SSAFunction> {
             if (index == nullptr) {
                 failReason = "no compiler index";
                 return nullptr;
             }
-            // #1193：先查 beforeCompile 预解析缓存（与转换序解耦——被调类先于
+            // #1193：先查 beforeCompile 预解析缓存（与转换序解耦，被调类先于
             // 调用方被转换清空也能解析），未命中再走既有现场路径（library 类、
             // 缓存外形状，行为与以前一致）。
             if (auto it = impl_->inlineBlockCache.find(
@@ -817,7 +817,7 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                 if (m.name != ref.name.to_std_string() || m.desc != ref.desc.to_std_string())
                     continue;
                 matched = true;
-                // 批 6d：体可见性走 DOM Code 槽。
+                // 体可见性走 DOM Code 槽。
                 auto code = cls->dom->decodeCode(cls->dom->methods[mi]);
                 if (code.is_err()) {
                     failReason = "callee has no body (native or abstract)";
@@ -870,9 +870,9 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
                 impl_->inlineUnresolvableSamples.insert(sample);
             }
         }
-        // #1193 可见化：旧口径只在 inlinedCalls>0 时打日志，「内联静默不发生」
+        // #1193 可见化：旧口径只在 inlinedCalls>0 时打日志，"内联静默不发生"
         // 无从发现；unresolvable>0 时同样输出（含调用点样例）。
-        // #1193 评审 P3-1：两路输出解耦——旧 else-if 串联下，方法内同时存在
+        // #1193 评审 P3-1：两路输出解耦，旧 else-if 串联下，方法内同时存在
         // 成功内联与 unresolvable 调用点时，逐方法 WARN 被 INFO 分支吞掉
         //（可见性不对称：完全没内联的方法有 WARN，部分内联的反而没有）。
         if (stats.inlinedCalls > 0) {
@@ -908,8 +908,8 @@ BackendResult RegCBackend::compileMethod(const std::string& className, CompilerM
         return backendResult;
     }
     eliminateDeadRegInstructions(*reg);
-    // 混淆作用域（issue #8）：作用域外的类仍编译成 native，只是跳过 RegIR 变换
-    // ——产物与未开混淆时一致。全局开关照旧作用于作用域内的类。
+    // 混淆作用域（issue #8）：作用域外的类仍编译成 native，只是跳过 RegIR 变换，
+    // 产物与未开混淆时一致。全局开关照旧作用于作用域内的类。
     if (currentClassInObfuscationScope(className)) {
         applyRegTransformPasses(*reg, transformOptions_);
     }
@@ -1005,7 +1005,7 @@ ca::str::Utf8StringBuilder methodSource;
 /// 这保证先加载 native 库再绑定 native 方法，且绑定发生在用户静态初始化之前
 /// （用户 clinit 可能调用 native 方法，必须先完成绑定）。
 ///
-/// 批 5：改写权威在 DOM（dom_inject 门面，与 pre/postprocessor 同会话纪律）；
+/// 改写权威在 DOM（dom_inject 门面，与 pre/postprocessor 同会话纪律）；
 /// 树投影由管线在 compileMethods 后统一 syncDomToTree 刷新。
 void prependRegisterNativesCall(CompilerClass& clazz, const std::string& className, int classId)
 {
@@ -1020,8 +1020,8 @@ void RegCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
     // from being rewritten to native when no working RegC body was emitted.
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
-    // 批 5：标 ACC_NATIVE + 摘 Code 槽（「清指令」的 DOM 对应物），会话字节往返
-    // 提交。批 6d：类名从 DOM 取，身份源 = 快照 name/desc。
+    // 标 ACC_NATIVE + 摘 Code 槽（"清指令"的 DOM 对应物），会话字节往返
+    // 提交。类名从 DOM 取，身份源 = 快照 name/desc。
     if (clazz.dom == nullptr) {
         throw std::runtime_error("regc_backend: DOM not synced for native injection");
     }
@@ -1370,12 +1370,12 @@ void emitIndyBootstrapFunction(ca::str::Utf8StringBuilder& out, size_t index,
 
 /// 发射 indy 直派站点（F1/F2）的 TU 级缓存表 + 惰性解析函数（设计文档 §3.1/§6 P3）。
 ///
-/// 只处理 build-time 判定成功且载荷 engage 的站点——判定失败的站点根本不发直派缓存。
-/// 「发射即 READY」指判定面（无 CRACK/bootstrap 重放态）；jclass/jfieldID/jmethodID 是
+/// 只处理 build-time 判定成功且载荷 engage 的站点，判定失败的站点根本不发直派缓存。
+/// "发射即 READY"指判定面（无 CRACK/bootstrap 重放态）；jclass/jfieldID/jmethodID 是
 /// 运行期句柄无法静态初始化，首调用经 resolve 函数解析一次：成功置 state=READY(1)，
 /// 失败 ExceptionClear 后置 state=HELPER(2)，之后每次调用守卫短路直达既有 helper
 /// 路径（§4 单调降级，无语义分叉）。owner/name/desc 字面量在 --strings-encrypt 开启时
-/// 走密文缓冲（与 emitIndyBsmArg 同一处理）。类经 NewGlobalRef 持有（阻止卸载——与
+/// 走密文缓冲（与 emitIndyBsmArg 同一处理）。类经 NewGlobalRef 持有（阻止卸载，与
 /// 既有 indy target 缓存同一权衡，见设计文档 §3.1 失效语义）。
 void emitIndyDirectCache(ca::str::Utf8StringBuilder& out,
                          const std::vector<RegFunction::InvokeDynamicSite>& sites,
@@ -1545,7 +1545,7 @@ std::string splitRewriteStatic(std::string_view text, std::vector<std::string>& 
                         "#if defined(__cplusplus)\nextern thread_local " + typeName +
                         ";\n#elif defined(_MSC_VER)\nextern __declspec(thread) " + typeName +
                         ";\n#else\nextern _Thread_local " + typeName + ";\n#endif");
-                    // 定义（去 static，不带 extern——extern 声明不能带初始化值）：
+                    // 定义（去 static，不带 extern，因 extern 声明不能带初始化值）：
                     // <kw> <type> <name> [= ...;]
                     out.append(kw);
                     out.append(text.substr(j + len, k - (j + len)));
@@ -1718,7 +1718,7 @@ void RegCBackend::finalize(const CompilerIndex& index)
         }
     }
     // indy 直派缓存表（F1/F2，P3）：TU 级 static + 惰性解析函数，插在方法体之前；
-    // 置于密文缓冲定义之后——解析函数在 --strings-encrypt 下引用 _mj2x_str_<hash>，
+    // 置于密文缓冲定义之后，解析函数在 --strings-encrypt 下引用 _mj2x_str_<hash>，
     // 保证声明先于使用。方法体的直派守卫/快路引用此处定义的 state/cls/fid/mid。
     emitIndyDirectCache(full, impl_->indySites,
                         impl_->cachePool.stringsEncryptEnabled() ? &impl_->cachePool : nullptr);

@@ -35,7 +35,7 @@ enum class CCompilerKind
 /// v1 注册表四项（issue #11 的目标清单；darwin/mach 生态后续按需补）。
 /// 每项决定：产物扩展名、JDK include 平台子目录（jni.h 下的 jni_md.h 按
 /// 平台选）、zig cc -target 三元组（zig 自带交叉 libc，是唯一的仓内默认
-/// 交叉面；gcc/clang 交叉由用户显式提供预配置好的 cross 工具链——issue #11
+/// 交叉面；gcc/clang 交叉由用户显式提供预配置好的 cross 工具链（issue #11
 /// 方案 (a)）。host ABI 由编译期平台宏推导，恒可走自动探测。
 enum class TargetAbi
 {
@@ -74,7 +74,7 @@ bool inferCompilerKindFromPath(const std::filesystem::path& executable, CCompile
 /// @brief 多目标编译规格（issue #11）：显式产物路径与显式编译器路径。
 ///
 /// @details
-/// libraryPath 非空时绕开「outputPath → 宿主扩展名」推导（多目标每 ABI 一个
+/// libraryPath 非空时绕开"outputPath → 宿主扩展名"推导（多目标每 ABI 一个
 /// 路径）；compilerPath 非空时绕开 PATH 探测（--target-cc 显式工具链）。
 struct CompileTargetSpec
 {

@@ -24,7 +24,7 @@
 
 #include "test_helper.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -45,7 +45,7 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
     // #921 staticArena 退役：Type::staticArena() 已删除。测试夹具的节点名/描述符
-    // 借用须活过本 helper 返回——用本测试文件私有静态池（测试专属，非产物路径）。
+    // 借用须活过本 helper 返回，用本测试文件私有静态池（测试专属，非产物路径）。
     static ca::str::Utf8StringArena     testArena;
     auto&                               arena = testArena;
     auto                                mn    = std::make_unique<MethodNode>(access,
@@ -59,7 +59,7 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
     return mn;
 }
 
-// 注意：arena 必须活到 emitFunction 返回——MIR/SSA/RegIR 节点字段是 arena-backed
+// 注意：arena 必须活到 emitFunction 返回，MIR/SSA/RegIR 节点字段是 arena-backed
 // Utf8StringRef（spec §6.1），arena 提前析构会让 emit 读到悬垂指针（参见 #698）。
 // 生产侧 pipeline 把 arena 放在 CompilerIndex（job 级寿命）；测试侧把 arena 与 emit
 // 放同一作用域，对齐该寿命约定。
@@ -180,8 +180,8 @@ TEST(RegCIntrinsicRegistryTest, MatchesIntegerBitIntrinsicsThroughRegistry)
 TEST(RegCIntrinsicRegistryTest, MatchesScalarExpansionIntrinsicsThroughRegistry)
 {
     // Float/Double bits 视图、Integer/Long 无符号族 + max/min、Character
-    // 静态代理族。逐条断言 kind/emitKind/symbol/passContext/nativeObjectKind
-    // ——除零（divideUnsigned/remainderUnsigned）与 NFE（parseUnsignedInt/Long）
+    // 静态代理族。逐条断言 kind/emitKind/symbol/passContext/nativeObjectKind，
+    // 除零（divideUnsigned/remainderUnsigned）与 NFE（parseUnsignedInt/Long）
     // 族必须 RegCLocalHelper（RuntimeFunction 被 isPureRuntimeIntrinsic 纯豁免，
     // 会把异常吞掉）；其余纯计算族必须 RuntimeFunction。
     struct ScalarCase
@@ -788,7 +788,7 @@ TEST(RegCIntrinsicRegistryTest, MatchesRandomInitAndNextInt)
     EXPECT_EQ(nextDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(nextDecision.emitKind, RegCIntrinsicEmitKind::NativeObjectMethod);
     EXPECT_EQ(nextDecision.symbol, "mj2x_random_next_int");
-    // #879 Y4：预检位随权威表单源——无参面 None，bound 面由 decision 透传
+    // #879 Y4：预检位随权威表单源，无参面 None，bound 面由 decision 透传
     // PositiveBound（发射端按位发预检，不再 symbol 硬编码）。
     EXPECT_EQ(nextDecision.precheck, RegCIntrinsicPrecheck::None);
 

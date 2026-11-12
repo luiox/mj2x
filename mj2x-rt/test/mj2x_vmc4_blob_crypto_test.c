@@ -1,12 +1,12 @@
-// VMC4 程序 blob at-rest 解密原语单测（issue #760 切片 1/2）。
+// VMC4 程序 blob at-rest 解密原语单测（issue #760）。
 //
 // 由 mj2x_regc_crt_test.c 的 main 统一调用（单 runner 惯例）。
 // 覆盖：roundtrip（独立密钥流加密 -> mj2x_vm_blob_decrypt 还原）、
 // key==0 固定种子回退、错误密钥产出不同流、size=0 无操作；
-// 切片 2 追加：分块密钥派生镜像对拍（mj2x_vm_chunk_key）、块定位
+// 追加：分块密钥派生镜像比对（mj2x_vm_chunk_key）、块定位
 // （mj2x_vm_chunk_locate）、懒解密 round-trip（乱序 + 重复调用幂等，
 // mj2x_vm_lazy_decrypt）。
-// #1116 切片 B 追加：块密钥链派生镜像对拍（mj2x_vm_block_chain_key，
+// #1116 追加：块密钥链派生镜像比对（mj2x_vm_block_chain_key，
 // (seed, blockIdx, prevKey)、首块 prevKey=seed）、块定位（mj2x_vm_block_locate，
 // targets 划界 + 越界归末块）、链式懒解密 round-trip + 未执行块保持密文
 // （mj2x_vm_block_lazy_decrypt，乱序 + 幂等 + 防御面）。
@@ -82,7 +82,7 @@ void mj2x_vmc4_blob_crypto_test_run(void)
     mj2x_vm_blob_decrypt(blob, (unsigned int)sizeof(blob), 0u);
     assert(memcmp(blob, backup, sizeof(blob)) == 0);
 
-    // 错误密钥：解出的是不同字节流（首切片无校验和，不做显式 fail-closed
+    // 错误密钥：解出的是不同字节流（at-rest 格式首版无校验和，不做显式 fail-closed
     // 检测；运行期由解释器 InvalidBytecode 防御停机隐式兜底）。
     test_side_xor_stream(blob, (unsigned int)sizeof(blob), 0x12345678u);
     mj2x_vm_blob_decrypt(blob, (unsigned int)sizeof(blob), 0x87654321u);
@@ -93,7 +93,7 @@ void mj2x_vmc4_blob_crypto_test_run(void)
     mj2x_vm_blob_decrypt(NULL, 0u, 0x12345678u);
 
     // ------------------------------------------------------------------
-    // 切片 2：分块懒解密原语。
+    // 分块懒解密原语：
     // ------------------------------------------------------------------
 
     // 分块密钥派生：与独立镜像逐位一致；确定性；恒非 0；下标/主密钥敏感。
@@ -156,7 +156,7 @@ void mj2x_vmc4_blob_crypto_test_run(void)
     }
 
     // ------------------------------------------------------------------
-    // #1116 切片 B：块粒度链式懒解密原语。
+    // #1116：块粒度链式懒解密原语。
     // ------------------------------------------------------------------
 
     // 块密钥链派生：与独立镜像逐位一致；确定性；恒非 0；对 seed/下标/prevKey

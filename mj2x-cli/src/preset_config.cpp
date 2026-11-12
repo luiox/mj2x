@@ -92,7 +92,7 @@ json presetObject(PresetName preset)
     case PresetName::Perf:
         // 性能优先：把 JNI 边界压到最少，零混淆。
         //
-        // direct_calls 是本档的主要收益来源——实测（jvm-obf-tester，7 次取中
+        // direct_calls 是本档的主要收益来源，实测（jvm-obf-tester，7 次取中
         // 位数）把 Inheritance probe 从 12.858ms 降到 2.542ms（5.06x），合计
         // 追平未混淆的 JVM 基线。代价是 #814 的栈观察语义失真，故只在明确
         // 性能优先的档位里开。直调已分档（off/intra-class/all），perf 取全开。
@@ -151,7 +151,7 @@ json buildEffectiveConfigJson(PresetName preset, const json& configRoot,
         const ParamDef& param = paramTable[i];
         const std::string key = param.jsonPath;
 
-        // 四层逐层覆盖，最后写的一层即生效层——必须按真实合并顺序，否则
+        // 四层逐层覆盖，最后写的一层即生效层，必须按真实合并顺序，否则
         // "生效配置"会把被覆盖掉的值报成最终结果。
         std::string source = "default";
         json        value  = defaultValueJson(param);

@@ -29,7 +29,7 @@ constexpr char kTagArg   = '\x01';
 constexpr char kTagConst = '\x02';
 
 /// 合成局部访问：索引 > 0xFF 必须带 wide 前缀（JVMS wide 修饰），否则导出
-/// 编码放不下——WideLocals 首曝：拼接参数溢出槽 378 的 LSTORE/LLOAD 走非
+/// 编码放不下，WideLocals 首曝：拼接参数溢出槽 378 的 LSTORE/LLOAD 走非
 /// wide 形态，lower 导出 BadInstructions。
 jbc::ir::Insn synthLocal(jbc::core::Op op, ca::u32 idx)
 {
@@ -119,7 +119,7 @@ const char* appendDesc(const Type& argType)
     }
 }
 
-// 在 seq 尾部追加「append 一个字符串字面量」的指令：LDC <str> + INVOKEVIRTUAL
+// 在 seq 尾部追加"append 一个字符串字面量"的指令：LDC <str> + INVOKEVIRTUAL
 // StringBuilder.append(String)。栈上此前须有 StringBuilder 引用，append 返回自身，
 // 栈保持 StringBuilder 顶（链式）。CP 经调用方 session 语义 intern。
 void emitAppendStringSeq(jbc::ir::ClassSession& session, std::vector<jbc::ir::Insn>& seq,
@@ -145,8 +145,8 @@ void emitAppendStringSeq(jbc::ir::ClassSession& session, std::vector<jbc::ir::In
 // 单块直线代码，不引入分支/label，StackMapTable 帧不受影响；仅 maxLocals 增大。
 // 发射序在预校验通过后逐条 insertBefore(at)（同锚点保序）；预校验保证发射段
 // 无失败路径（DOM 逐条插入无整段回滚）。
-// srcPc：被替换 indy 的原 pc。替换序列首条继承之——lower 的属性重定位 pcmap
-// 以「存活指令的 srcPc」为键，锚在被删指令 pc 上的 LNT/LVT/SMT 行才会继续命中
+// srcPc：被替换 indy 的原 pc。替换序列首条继承之，lower 的属性重定位 pcmap
+// 以"存活指令的 srcPc"为键，锚在被删指令 pc 上的 LNT/LVT/SMT 行才会继续命中
 //（行号语义不变：替换首条就是原 lambda/拼接语句的位置）。
 bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit,
                          jbc::ir::CodeEditor& editor, jbc::ir::InsnId at, const DomIndySite& site,
@@ -157,7 +157,7 @@ bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit
     std::vector<Type> argTypes = Type::getArgumentTypes(arena.intern(indyDesc.c_str()));
 
     // recipe：makeConcatWithConstants 的 bsmArgs[0] 是 recipe；makeConcat 无 recipe，
-    // 等价于「全部动态参数顺序拼接」。
+    // 等价于"全部动态参数顺序拼接"。
     std::string recipe;
     size_t      nextConst = 1;   // withConstants 时常量从 bsmArgs[1] 起
     if (withConstants) {
@@ -268,14 +268,14 @@ bool expandConcatSiteDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit
 
     // 逐条 insertBefore(at)（同锚点保序）。首条回填被删 indy 的 srcPc：CodeDom
     // 插入路径强制 srcPc=kNoPc（appendSlot/insertAt），而 lower 的属性重定位
-    // pcmap 以存活指令 srcPc 为键——锚在被删 pc 上的 LNT/LVT/SMT 行靠首条命中
+    // pcmap 以存活指令 srcPc 为键，锚在被删 pc 上的 LNT/LVT/SMT 行靠首条命中
     //（行号语义不变：替换首条即原语句位置）。CodeDom::get 是正门可变访问。
     jbc::ir::InsnId firstPlaced{};
     for (auto& in : seq) {
         const auto op = in.op;
         auto placed = editor.insertBefore(at, std::move(in));
         if (placed.is_err()) {
-            // 站点改写部分插入即字节码损坏——显式失败，不静默吞。
+            // 站点改写部分插入即字节码损坏，显式失败，不静默吞。
             throw std::runtime_error(std::string("invokedynamic_preprocessor: insertBefore "
                                                  "failed (op=")
                                      + std::to_string(static_cast<int>(op)) + ", "
@@ -465,7 +465,7 @@ bool canAdaptValue(const Type& from, const Type& to)
     return false;
 }
 
-// 在 seq 尾部发射「栈顶值 from → to」的适配指令。调用前须先 canAdaptValue 校验。
+// 在 seq 尾部发射"栈顶值 from → to"的适配指令。调用前须先 canAdaptValue 校验。
 // CP 经调用方 session 语义 intern（CHECKCAST/NEW 的 Class 条目、拆装箱的方法引用）。
 void emitAdaptValueSeq(jbc::ir::ClassSession& session, std::vector<jbc::ir::Insn>& seq,
                        const Type& from, const Type& to)
@@ -555,7 +555,7 @@ struct AltLambdaInfo
 };
 
 // 判断 bsm 是否为 LambdaMetafactory 站点（阶段2 起认 metafactory；阶段2e 起也认
-// altMetafactory——后者带 serializable / marker interface / bridge 等额外标志，尾部由
+// altMetafactory，后者带 serializable / marker interface / bridge 等额外标志，尾部由
 // parseAltMetafactoryTail 解析）。
 bool isLambdaMetafactorySite(const Handle* bsm)
 {
@@ -646,7 +646,7 @@ struct PendingAccessFix
 };
 
 // 校验给定 SAM 描述符能否按 impl handle 形态发射（fullArgs 逐位可适配 + 返回可适配）。
-// 供主 SAM 与各 bridge 描述符复用——bridge 与主 SAM 同名不同签，须各自满足适配才允许展开，
+// 供主 SAM 与各 bridge 描述符复用，bridge 与主 SAM 同名不同签，须各自满足适配才允许展开，
 // 任一不可适配即整站点 fail-closed。
 bool canEmitSam(ca::str::Utf8StringArena& arena, const std::string& samDesc,
                 const std::vector<Type>& capturedTypes, const Handle& impl, bool isStatic,
@@ -694,8 +694,8 @@ bool canEmitSam(ca::str::Utf8StringArena& arena, const std::string& samDesc,
 
 // ---- indy native dispatch 静态判定 ----
 
-/// lambda 站点静态展开前置判定（阶段2a-2f 支持子集）。expandLambdaSite 与
-/// classifyIndySite / classifyIndySiteForm 共用同一谓词，保证「判定结果 = 展开行为」
+/// lambda 站点静态展开前置判定（支持子集）。expandLambdaSite 与
+/// classifyIndySite / classifyIndySiteForm 共用同一谓词，保证"判定结果 = 展开行为"
 /// 零漂移。失败时经 outReason 输出稳定理由字面量（可为 null）。
 bool lambdaExpansionPrecondition(ca::str::Utf8StringArena& arena, const std::string& indyDesc,
                                  const Handle& bsm, const std::vector<ca::core::Any>& bsmArgs,
@@ -843,7 +843,7 @@ std::optional<IndyRecordMethods::Accessor> matchRecordAccessor(
 
 /// record bootstrap bsmArgs 形态校验 + F2 载荷提取：[0]=Class（recordClass）、
 /// [1]=String（方法名集）、[2]=MethodType（方法描述符集）；其后是 0..n 个访问器句柄。
-/// 校验语义与波次一 recordBsmArgsWellFormed 完全一致（reason 锁定不变），载荷中
+/// 校验语义与既有 recordBsmArgsWellFormed 完全一致（reason 锁定不变），载荷中
 /// 附带访问器匹配结果（发射期消费）。
 bool recordMethodsPayload(ca::str::Utf8StringArena& arena, const std::string& indyName,
                           const std::string& indyDesc, const std::vector<ca::core::Any>& bsmArgs,
@@ -868,8 +868,8 @@ bool recordMethodsPayload(ca::str::Utf8StringArena& arena, const std::string& in
 
 /// F1 直派形态检查：indy 调用描述符本身就是字段操作（读 = 参数空[静态]/仅 receiver
 /// [实例] 且返回==字段 desc；写 = 值/captured 布局且返回 void；receiver 描述符精确
-/// 等于声明类——宁窄勿宽，排除子类型 receiver 的分派差异）。满足即「站点调用 = 字段
-/// 访问」，发射端可把站点直接发射为 Get/PutField。
+/// 等于声明类，宁窄勿宽，排除子类型 receiver 的分派差异）。满足即"站点调用 = 字段
+/// 访问"，发射端可把站点直接发射为 Get/PutField。
 bool lmfFieldHandleDirectShape(ca::str::Utf8StringArena& arena, const std::string& indyDesc,
                                const Handle& impl, const std::vector<Type>& indyArgs)
 {
@@ -899,8 +899,8 @@ bool lmfFieldHandleDirectShape(ca::str::Utf8StringArena& arena, const std::strin
 /// 返回 false = 非字段句柄（调用方继续 B1 判定）；返回 true 时 outForm/outReason 为最终结论。
 /// 两个 DirectFieldAccess 子路径：
 ///   - 直派形态（indy 描述符即字段操作）→ 载荷 engage（P1），发射端把站点直接发射
-///     为字段访问（波次二直派桩的唯一 engaged 路径）；
-///   - 波次一精确一致子集（captured++sam lambda 布局，站点=创建 lambda 对象）→
+///     为字段访问（直派桩的唯一 engaged 路径）；
+///   - 精确一致子集（captured++sam lambda 布局，站点=创建 lambda 对象）→
 ///     form 仍为 DirectFieldAccess（报告侧候选标记，reason 逐字不变），载荷不填，
 ///     发射端走既有 helper 路径（零回归）。
 bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const std::string& indyDesc,
@@ -950,7 +950,7 @@ bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const std::string& 
         return true;
     }
 
-    // 波次一精确一致子集（设计文档 §2 表）：无任何加宽/装箱适配——判定即承诺。
+    // 精确一致子集（设计文档 §2 表）：无任何加宽/装箱适配，判定即承诺。
     // #921 staticArena 退役：落点=本函数作业级 arena 参数。
     const bool ok =
         isGetter
@@ -993,7 +993,7 @@ bool classifyLmfFieldHandle(ca::str::Utf8StringArena& arena, const std::string& 
 /// 判定树主体（设计文档 §2）的站点数据级核心：A concat → B LMF → C record → D 自定义
 /// bootstrap。只读站点自持数据（indy 名/描述符/bsm/bsmArgs），不改任何状态；结论由
 /// 展开行为零漂移谓词支撑（B1 共用前置）。classifyIndySite（报告）与
-/// classifyIndySiteForm（SSA 载荷填充）共用本核心——判定单源。
+/// classifyIndySiteForm（SSA 载荷填充）共用本核心，判定单源。
 /// customBootstrapReason：D 分支理由（D1/D2 细分需要 CompilerIndex，由调用方提供）。
 struct CoreDecision
 {
@@ -1073,7 +1073,7 @@ CoreDecision classifyCore(ca::str::Utf8StringArena& arena, const std::string& in
         return d;
     }
 
-    // D：自定义 bootstrap（T2；D1/D2 细分仅体现在 reason——由调用方按 index 提供）。
+    // D：自定义 bootstrap（T2；D1/D2 细分仅体现在 reason，由调用方按 index 提供）。
     d.form   = IndyDispatchForm::RuntimeHelper;
     d.reason = customBootstrapReason;
     return d;
@@ -1374,7 +1374,7 @@ std::unique_ptr<jbc::core::ClassFile> buildLambdaClassDom(ca::str::Utf8StringAre
     }
 
     // writeClass→readClass 字节往返还回（真实编解码器纪律，与 dom_edit 同通道；
-    // ClassFile 不可移动——AttrSlot lazy span 指向 source_，移动即悬垂）。
+    // ClassFile 不可移动，AttrSlot lazy span 指向 source_，移动即悬垂）。
     auto written = jbc::core::writeClass(ses->backing());
     if (written.is_err()) {
         throw std::runtime_error("invokedynamic_preprocessor: lambda synth writeClass failed for "
@@ -1392,16 +1392,16 @@ std::unique_ptr<jbc::core::ClassFile> buildLambdaClassDom(ca::str::Utf8StringAre
 
 // 待注册的合成类（在 getClasses 遍历结束后统一 addClass/upsertJarResource，避免
 // 遍历中改 map 使迭代器失效）。DOM 载体：合成类直接持 libjbc ClassFile
-//（批 6d：树投影退役，合成类经 refreshMethodSnapshots 入 index）。
+//（树投影退役，合成类经 refreshMethodSnapshots 入 index）。
 struct PendingLambdaClass
 {
     std::string                           internalName;   // e.g. mj2x/lambda/Lambda$0
     std::unique_ptr<jbc::core::ClassFile> dom;
 };
 
-/// 合成 lambda 类宿主包判定（#1182，评审收口 P1 修：default 包返回空串）。
+/// 合成 lambda 类宿主包判定（#1182，评审 P1 修：default 包返回空串）。
 ///
-/// JVM 对「类实现接口」的访问检查只看接口类自身的 ACC 标志（嵌套仅命名，nest 只管
+/// JVM 对类实现接口的访问检查只看接口类自身的 ACC 标志（嵌套仅命名，nest 只管
 /// private 成员；javac 嵌套类类文件不写 ACC_PRIVATE，protected 写 ACC_PUBLIC）：
 /// 合成类落在固定 mj2x/lambda 包时，实现包私有 SAM 必然在 defineClass 阶段抛
 /// IllegalAccessError → FindClass 返回 NULL（异常挂起）→ 生成码 NULL 守卫把 op 落
@@ -1442,7 +1442,7 @@ std::string pickLambdaSynthHostPackage(CompilerIndex& index, jbc::ir::ClassSessi
     }
     // SAM 不在 index（单类输入时嵌套接口是独立 class 文件、库/JDK 接口）：
     // 若是**嵌套类型**且其外围类在 index，查外围类 InnerClasses 属性拿 SAM
-    // 的真实访问位——包私有时 mj2x/lambda 落点会 IllegalAccessError（合成类
+    // 的真实访问位，包私有时 mj2x/lambda 落点会 IllegalAccessError（合成类
     // 跨包实现不可访问接口，java_corpus LambdasCapture 首曝：L1$Op 包私有、
     // 单类输入不在 index → synth 落 mj2x/lambda → 链接失败）。非嵌套（库/
     // JDK 顶层 SAM）或访问位未知 → 维持 mj2x/lambda 零漂移（非 public 的
@@ -1525,7 +1525,7 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
         PendingAccessFix{toStd(implPtr->getOwner()), toStd(implPtr->getName()), implDesc});
 
     // 宿主包判定（#1182：编译输入的非 public SAM 落 SAM 同包，其余维持 mj2x/lambda
-    // 零漂移）。宿主包只读类 access/InnerClasses 静态位——树在 DOM 载体 pass 期间
+    // 零漂移）。宿主包只读类 access/InnerClasses 静态位，树在 DOM 载体 pass 期间
     // 是稳定投影（syncDomToTree 在段尾才重建），树读零漂移。
     // 同名类防碰撞（用户类与库类一并算占用，合成类绝不顶替既有条目）：
     // 探测前跳；成功后把计数器推到选中名之后（出参语义），同 run 后续站点不会再
@@ -1603,7 +1603,7 @@ bool expandLambdaSiteDom(CompilerIndex& index, jbc::ir::ClassSession& session,
         const auto op = in.op;
         auto placed = editor.insertBefore(at, std::move(in));
         if (placed.is_err()) {
-            // 站点改写部分插入即字节码损坏——显式失败，不静默吞。
+            // 站点改写部分插入即字节码损坏，显式失败，不静默吞。
             throw std::runtime_error(std::string("invokedynamic_preprocessor: insertBefore "
                                                  "failed (op=")
                                      + std::to_string(static_cast<int>(op)) + ", "
@@ -1681,7 +1681,7 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
                 const auto* in = unit->dom.peek(id);
                 DomIndySite site = decodeDomIndySite(session->backing(), in->cp, *bsmAttr, arena);
 
-                // indy native dispatch 静态判定：只读、只标记（波次一原型，设计文档 §5），
+                // indy native dispatch 静态判定：只读、只标记（原型见设计文档 §5），
                 // 不消费判定结果、不影响下方展开逻辑与字节码输出。
                 if (report != nullptr) {
                     IndyDispatchDecision decision =
@@ -1750,8 +1750,8 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
         // 展开改写了指令流：类必须标记 modified，否则 JAR 输出写回原始字节
         //（OutputWriter 只重写 modified 类，展开静默作废），单类输出走
         // COMPUTE_MAXS 配新指令流有 VerifyError 风险（对齐 ldc_preprocessor
-        // 同约束）。native_loader 的 clinit 注入按「modified 且含 ACC_NATIVE
-        // 方法」判定，不受本处影响。
+        // 同约束）。native_loader 的 clinit 注入按"modified 且含 ACC_NATIVE
+        // 方法"判定，不受本处影响。
         if (changed) cls.modified = true;
         commitDomEdit(cls, name, session);
     }
@@ -1767,7 +1767,7 @@ void processImpl(CompilerIndex& index, IndyDispatchReport* report)
     }
 
     // 遍历结束后统一注册合成 lambda 类（遍历中改 getClasses map 会使迭代器失效）。
-    // 单类输出走 addClass（sidecar，DOM 载体——树投影由 syncDomToTree 物化），JAR 输出
+    // 单类输出走 addClass（sidecar，DOM 载体，树投影由 syncDomToTree 物化），JAR 输出
     // 走 upsertJarResource。isLibrary=true 使 RegC 跳过编译（合成类保留纯字节码，由
     // OutputWriter 写出）。
     for (auto& pc : pendingLambdaClasses) {

@@ -1,8 +1,8 @@
-/// llvm_intrinsic_registry_test.cpp —— #1027 B2 单源切换对拍。
+/// llvm_intrinsic_registry_test.cpp，#1027 单源切换比对。
 ///
 /// llvm_intrinsic_registry 的数据面从"92 条手工对齐副本"切换为按 RegC 权威表
 ///（builtinIntrinsicTable + llvmDirect 位）机械派生。本测试内嵌切换前的手工表
-/// 全文作 golden（仅测试内保留），对派生表逐条逐字段对拍：
+/// 全文作 golden（仅测试内保留），对派生表逐条逐字段比对：
 ///   - 表规模全等（21 Math / 8 装箱 / 8 拆箱 / 7 Random / 48 Builder）；
 ///   - 每条 golden (owner,name,desc) 经 matcher 命中且全部字段逐串一致；
 ///   - 负探针：llvmDirect=false 的条目（Integer/Long 位操作、trimToSize、
@@ -273,7 +273,7 @@ constexpr LlvmBuilderEntry kGoldenBuilder[] = {
 };
 
 // ---------------------------------------------------------------------------
-// 对拍
+// 比对
 // ---------------------------------------------------------------------------
 
 template <size_t N>
@@ -400,7 +400,7 @@ TEST(LlvmIntrinsicRegistryGoldenCross, RandomTableFieldByField)
 TEST(LlvmIntrinsicRegistryGoldenCross, RandomPrecheckBitDerivedFromAuthoritativeTable)
 {
     // #879 Y4 解耦：nextInt(I)I 的 bound<=0 预检位随权威表（builtinIntrinsicTable
-    // → deriveRandomEntries 两趟派生）透传——发射端改按位判定，registry 改符号名
+    // → deriveRandomEntries 两趟派生）透传，发射端改按位判定，registry 改符号名
     // /新增形态时预检不再静默失效。钉三点：bound 面位 = PositiveBound、无参面
     // 位 = None、init 面（RandomInit 趟）位 = None。
     const LlvmRandomEntry* init =

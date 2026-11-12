@@ -15,7 +15,7 @@ namespace {
 /// canonical，#1027 A3 收敛；本文件原内联类删除）。别名保留调用点形态。
 /// next_bounded 对 bound==0 抛 invalid_argument（原实现为 UB 取模）；全部调用
 /// 点边界已核：shuffle 环 bound=i≥2，pickOpcode* 在 size==1 短路且 size==0
-/// 不可达（buildOpcodeBytes 每语义至少分配 canonical 字节）——分歧面不可达。
+/// 不可达（buildOpcodeBytes 每语义至少分配 canonical 字节），分歧面不可达。
 using SplitMix64 = ca::random::SplitMix64;
 
 }   // namespace
@@ -198,7 +198,7 @@ uint8_t VmInstance::variantPickOpcodeByte(VmOpcode op, uint64_t nonce, int varia
     if (!driftEnabled() || variant < 0 || variant >= driftVariants_) {
         return pickOpcodeByte(op, nonce);
     }
-    // 变体 d 下语义 op 使用「集合索引 variantPerm_[d][canonical(op)]」的字节。
+    // 变体 d 下语义 op 使用"集合索引 variantPerm_[d][canonical(op)]"的字节。
     // 集合索引 = canonical 字节值（0..K-1 双射），先反查对应枚举再取集合。
     const uint8_t c = opcodeFor(op);
     const uint8_t targetIdx = variantPerm_[variant][c];

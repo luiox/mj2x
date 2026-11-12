@@ -23,7 +23,7 @@
 
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -347,7 +347,7 @@ TEST(SsaInlineTest, InlinesCalleeWithExternalCallAndFieldStore)
     EXPECT_EQ(stats.inlinedCalls, 1U);
     EXPECT_EQ(countCalls(*callerSsa), 2U) << "JDK String.format + Double.valueOf calls remain";
     EXPECT_GT(callerSsa->blocks.size(), blocksBefore) << "inlined body blocks appended";
-    // 存在 jump 到「无 block arg 的新块」（克隆 entry）的块 → 克隆体可达。
+    // 存在 jump 到"无 block arg 的新块"（克隆 entry）的块 → 克隆体可达。
     // （store 等调用点后续指令已迁移到 merge 块，调用块只剩 call 前指令 + jump。）
     bool callBlockJumpsToClone = false;
     for (const auto& block : callerSsa->blocks) {
@@ -530,7 +530,7 @@ TEST(SsaInlineTest, SkipsNonStaticCall)
     }
     ASSERT_NE(callerSsa, nullptr) << reason;
 
-    // resolver 故意返回一个可解析结果——pass 必须因非静态调用而拒绝。
+    // resolver 故意返回一个可解析结果，pass 必须因非静态调用而拒绝。
     auto callee = makeMethod(kStaticPublic, "helper", "()I",
                              {new InsnNode(Opcodes::ICONST_0),
                               new InsnNode(Opcodes::IRETURN)},
@@ -576,7 +576,7 @@ TEST(SsaInlineTest, SkipsUnresolvableCall)
     EXPECT_EQ(countCalls(*callerSsa), 1U);
 }
 
-// #1193 可见化：unresolvable 调用点样例收集——多调用点去重、计数不丢。
+// #1193 可见化：unresolvable 调用点样例收集，多调用点去重、计数不丢。
 TEST(SsaInlineTest, CollectsDedupedUnresolvableSamples)
 {
     Utf8StringArena arena;
@@ -610,7 +610,7 @@ TEST(SsaInlineTest, CollectsDedupedUnresolvableSamples)
     EXPECT_EQ(stats.unresolvableSamples[0], "Other.missing:(I)I");
 }
 
-// #1193 可见化：样例封顶——超过 kUnresolvableSampleCap 只计数不增样例。
+// #1193 可见化：样例封顶，超过 kUnresolvableSampleCap 只计数不增样例。
 TEST(SsaInlineTest, CapsUnresolvableSamples)
 {
     Utf8StringArena arena;
@@ -650,8 +650,8 @@ TEST(SsaInlineTest, CapsUnresolvableSamples)
     EXPECT_EQ(stats.unresolvableSamples.size(), size_t(kUnresolvableSampleCap));
 }
 
-// #1193 评审 P3-2：resolver 拒因透出——样例带括号拒因后缀，逐方法行/finalize
-// 汇总能说清「为什么没内联」；去重键随拒因细分（同一 callee 不同拒因分别留样）。
+// #1193 评审 P3-2：resolver 拒因透出，样例带括号拒因后缀，逐方法行/finalize
+// 汇总能说清"为什么没内联"；去重键随拒因细分（同一 callee 不同拒因分别留样）。
 TEST(SsaInlineTest, UnresolvableSampleCarriesResolverReason)
 {
     Utf8StringArena arena;
@@ -693,7 +693,7 @@ TEST(SsaInlineTest, UnresolvableSampleCarriesResolverReason)
 
 // #1194：callee 空块集必须在任何迁移发生前拒绝（安全条件 5，fail-closed）。
 // 红相论证（修复前行为）：resolver 返回无块函数时，旧实现的 clones.empty()
-// 迟到判空位于 terminator/tail 迁移之后——此时 mergeBlock 已建、call result
+// 迟到判空位于 terminator/tail 迁移之后，此时 mergeBlock 已建、call result
 // 已重定向到 merge arg、tail（ICONST_1/IADD）已迁出、调用块经 resize 截断
 // （call 指令销毁）；continue 后 mergeBlock 析构，countCalls 由 1 → 0（本测
 // 试的确定性红相），IRETURN/IADD 持有已析构 merge arg 的悬垂引用。修复后判
@@ -752,7 +752,7 @@ TEST(SsaInlineTest, SkipsCalleeWithoutBlocks)
     ASSERT_EQ(countCalls(*callerSsa), 1U) << "call site must be skipped intact";
     ASSERT_EQ(callerSsa->blocks.size(), blocksBefore) << "no blocks appended on skip";
     // call 后 tail 必须原位保留（修复前已随 merge 块析构）。SSA 形状口径：
-    // ILOAD 0 折叠进参数、ICONST_1 折叠成字面量、IRETURN 是 terminator——
+    // ILOAD 0 折叠进参数、ICONST_1 折叠成字面量、IRETURN 是 terminator，
     // 调用块保留的指令恰为 Call + Binary(Add) = 2。
     const SSAFunction& fn = *callerSsa;
     ca::usize             totalInsns = 0;

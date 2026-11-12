@@ -3,8 +3,8 @@
 ///
 /// @details
 /// VMC4 是 mj2x 的 VM 虚拟化后端，把 RegIR（L3 寄存器式 IR）编码成自定义 opcode
-/// 字节流，再生成一个 C 写的解释器执行它。设计目标是 Themida 风格的多虚拟机结构
-/// ——不同 VmInstance 的 opcode 映射、handler 顺序、dispatcher 形态各不相同，让红队
+/// 字节流，再生成一个 C 写的解释器执行它。设计目标是 Themida 风格的多虚拟机结构，
+/// 不同 VmInstance 的 opcode 映射、handler 顺序、dispatcher 形态各不相同，让红队
 /// 对每个 VM 实例的分析相互独立。
 ///
 /// 本文件定义 MVP 阶段（Phase 0）的**固定**指令集：opcode 语义直接对应 RegIR 的
@@ -23,7 +23,7 @@
 ///
 /// **所有寄存器操作数都是 u16 索引**，指向 VM 寄存器文件 `regs[]`。字面量在编码阶段
 /// 被收集到 VmConstantPool，并在方法入口 prologue 里预加载到高地址寄存器槽，
-/// 使每条指令的 operand 格式统一为"寄存器索引"——dispatcher 不需要区分 reg/literal。
+/// 使每条指令的 operand 格式统一为"寄存器索引"，dispatcher 不需要区分 reg/literal。
 ///
 /// ### 寄存器文件布局
 ///
@@ -80,7 +80,7 @@ enum class VmOpcode : uint8_t
     /// @brief 相邻双 Binary 融合（issue #9，--vmc4-super-ops）。
     ///
     /// @details
-    /// `regs[dest] = (regs[a] op1 regs[b]) op2 regs[c]`——把同一基本块内相邻的
+    /// `regs[dest] = (regs[a] op1 regs[b]) op2 regs[c]`，把同一基本块内相邻的
     /// 两条 Binary（前一条的 dest 仅被后一条消费）折成一条复合指令，handler 内联
     /// 展开两步运算。融合后 VM 指令与 JVM 字节码不再 1:1，且中间值不再以独立
     /// 寄存器存在（只活在 handler 的局部变量里）。
@@ -152,7 +152,7 @@ enum class VmType : uint8_t
 
     // --- Convert 专用精确标签（issue：int 窄化语义）---
     // 仅出现在 Convert 指令的 from/to 操作数里（编码器 encodeConvert 用精确
-    // 映射，其余指令仍走 toVmType 的计算坍缩）。槽位布局仍是 I32——这三个
+    // 映射，其余指令仍走 toVmType 的计算坍缩）。槽位布局仍是 I32，这三个
     // 标签只告诉 handler 做符号/零扩展，不改变 slot 的承载形态。
     I16   = 5,   ///< i2s：截断到 16 位并符号扩展
     I8    = 6,   ///< i2b：截断到 8 位并符号扩展
@@ -276,7 +276,7 @@ struct VmFieldRef
 ///
 /// @details
 /// 数组访问无 ID 解析（数组直接传），按 elemKind 精确选 JNI accessor。去重按 elemKind
-/// （同元素类型的访问点共享一个 helper——helper 只依赖元素类型，数组/索引/值经参数传）。
+/// （同元素类型的访问点共享一个 helper，helper 只依赖元素类型，数组/索引/值经参数传）。
 struct VmArrayRef
 {
     VmArrayElemKind elemKind = VmArrayElemKind::Int;   ///< 数组元素类型（决定 accessor）
@@ -320,7 +320,7 @@ struct VmIntrinsicRef
 ///
 /// @details
 /// 编码期把 RegFunction.exceptionRegions 静态展开：每个 region 对每个受保护块
-/// 生成一个条目，解释器在「可能抛异常的操作」后按当前块的活跃条目（异常表顺序）
+/// 生成一个条目，解释器在"可能抛异常的操作"后按当前块的活跃条目（异常表顺序）
 /// 匹配。匹配成功：执行该块的边拷贝（handler 参数寄存器 ← 来源值），把异常对象
 /// 写进 exceptionReg（RegExceptionRegion.exceptionValue 对应的寄存器），pc 跳到
 /// handler 块；全不匹配则保持 pending exception 返回（Java 侧传播）。
@@ -369,7 +369,7 @@ struct VmProgram
 {
     std::vector<uint8_t>         bytecodes;      ///< 指令字节流
     /// 每条指令的起始字节偏移（含合成块指令与末尾 Halt 哨兵，单调不减，
-    /// 首条为 0）。issue #760 切片 2：懒解密分块要求块边界只落在指令起点
+    /// 首条为 0）。issue #760：懒解密分块要求块边界只落在指令起点
     /// （单条指令可远超 64 字节，固定网格分块会切裂 SWITCH 等变长指令），
     /// 发射器据此贪心打包指令对齐块。恒记录（确定性派生，与开关无关）。
     std::vector<uint32_t>        instructionOffsets;

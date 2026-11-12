@@ -42,7 +42,7 @@ struct RuntimeProtectionOptions
 /// @param checkpointVar 状态变量名（调用方保证 TU 内唯一，如
 ///                      `mj2x_rt_cp_<methodTag>`）。
 /// @param fakeReturn    FAKE 命中时的返回语句文本（含分号与换行；空 = 仅
-///                      return 语义由调用方处理——void 方法直接 return）。
+///                      return 语义由调用方处理，void 方法直接 return）。
 void emitRuntimeProtectionCheckpoint(CSourceStream& out, const RuntimeProtectionOptions& opts,
                                      const std::string& checkpointVar,
                                      const std::string& fakeReturn);

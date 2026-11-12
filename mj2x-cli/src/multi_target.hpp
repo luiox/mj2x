@@ -6,7 +6,7 @@
 /// 保护管线与 native 源**生成一次**，逐 ABI 编译（产物落
 /// `<output 目录>/<abi>/<库名><扩展名>`），并写 manifest
 /// `<output 目录>/<stem>.targets.json` 记录每个 ABI 的 built/skipped/failed
-/// 与原因——CI 集成的挂点。编译器解析按 issue #11 方案 (a)：显式
+/// 与原因，CI 集成的挂点。编译器解析按 issue #11 方案 (a)：显式
 /// `--target-cc <abi>=<path>` 优先；宿主 ABI 回落自动探测；其余 ABI 未配置
 /// 即 skipped（汇总与 manifest 明确报告，不静默失败）。
 ///

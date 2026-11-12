@@ -66,7 +66,7 @@ void logMethodFallback(const std::string& className, const CompilerMethod& metho
                  reason.c_str());
 }
 
-/// @brief 解析并预检 LLVM IR 切片内的静态互调目标（类声明见 internal.hpp）。
+/// @brief 解析并预检 LLVM IR 后端产物内的静态互调目标（类声明见 internal.hpp）。
 ///
 /// @details 目标须 INVOKESTATIC + 目标类在编译索引内（非 library）+ markedForCompile
 /// + 纯标量签名 + 方法体可转换。跨类与递归（互递归）均允许：符号由 owner/name/desc
@@ -96,7 +96,7 @@ bool InternalCallResolver::resolve(const SSAMethodRef& method, CallTarget& targe
     if (targetMethod == nullptr) return false;
 
     if (targetMethod->backendResult.kind == BackendResult::Kind::LLVM_IR) {
-        // 已编译成功（backendResult 是注入权威，批 5 起 inject 改 DOM 不清树）：
+        // 已编译成功（backendResult 是注入权威，inject 现直接改 DOM 不清树）：
         // 成功即已通过完整验证，签名直接从描述解析。
         CallTarget parsed;
         if (!fillTargetFromDescriptor(owner, *targetMethod, parsed, reason))
@@ -181,7 +181,7 @@ bool InternalCallResolver::analyze(const std::string& owner, CompilerClass& claz
 {
     SSAType resultType = SSAType::UNKNOWN;
     if (!supportsMethodDescriptor(node, resultType, reason)) return false;
-    // 批 6d：体转换走 DOM（convert(dom, idx)），身份源 = 快照 name/desc。
+    // 体转换走 DOM（convert(dom, idx)），身份源 = 快照 name/desc。
     auto&     dom = *clazz.dom;
     ca::usize idx = dom.methods.size();
     for (ca::usize i = 0; i < dom.methods.size(); ++i) {
@@ -370,7 +370,7 @@ BackendResult LlvmIrBackend::compileMethod(const std::string& className, Compile
     std::unique_ptr<RegFunction> reg;
     RegisterTypes                registerTypes;
     if (!lowerAndValidate(reg, registerTypes, reason)) {
-        // #1121：SSA/RegIR/验证层 fail-closed 在此整方法降级——此前静默（undef
+        // #1121：SSA/RegIR/验证层 fail-closed 在此整方法降级，此前静默（undef
         // 来路边拷贝自方向 1 起放行，不再触发；诊断通道由真 fail-closed 形态
         // 覆盖，见 unittest RetainsFallbackDiagnosticForUndefinedLocalRead）。
         logMethodFallback(className, method, reason);
@@ -449,8 +449,8 @@ void LlvmIrBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
                                     const BackendResult& result)
 {
     if (result.kind != BackendResult::Kind::LLVM_IR) return;
-    // 批 5：改写权威在 DOM（标 ACC_NATIVE + 摘 Code 槽；native 方法无字节码，
-    // 对齐 StackC/VMC4）；批 6d：身份源 = 快照 name/desc。
+    // 改写权威在 DOM（标 ACC_NATIVE + 摘 Code 槽；native 方法无字节码，
+    // 对齐 StackC/VMC4）；身份源 = 快照 name/desc。
     if (clazz.dom == nullptr) {
         throw std::runtime_error("llvmir_backend: DOM not synced for native injection");
     }

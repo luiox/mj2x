@@ -22,7 +22,7 @@ namespace mj2x {
 
 // -- StackMapTable → MIRFrame 重建 --
 //
-// DOM 读取路径（批 3b/6d）丢了树 reader 的帧节点：SSA 的块栈参数类型只能靠
+// DOM 读取路径迭代中丢了树 reader 的帧节点：SSA 的块栈参数类型只能靠
 // 前驱推断，verifier 分裂块 / handler 入口退 UNKNOWN，vmc4 边拷贝编码
 // fail-closed（java_corpus ArithEdges 首曝）。这里从 Code 嵌套 SMT 重建帧序：
 // lower 的 relocation 已把 SMT pc 重锚到新布局（与存活指令 srcPc 同域），
@@ -264,7 +264,7 @@ struct CodeConverter::Impl
     std::vector<PrimitiveKind>                      operandStack;
     std::unordered_map<int, PrimitiveKind>          localTypes;
 
-    // 块起始指令序号集合（批 3b：序号 = DOM decodeInsns 的下标，pc 升序）。
+    // 块起始指令序号集合（序号 = DOM decodeInsns 的下标，pc 升序）。
     // 一条指令是块起始，当且仅当：(a) 它是跳转/switch/异常表目标；或 (b) 它
     // 紧跟终结指令（jump/return/athrow/switch，fallthrough 块入口）。
     std::unordered_set<int> blockStartIndices;
@@ -275,18 +275,18 @@ struct CodeConverter::Impl
     // 与块切分解耦（见 block.hpp ExceptionHandler 注释）。
     std::unordered_map<int, int> labelToInsnIdx;
 
-    // -- 批 3b DOM 读路径状态（每次 convert 重置） --
+    // -- DOM 读路径状态（每次 convert 重置） --
     jbc::core::ClassFile* cf = nullptr;   ///< CP 解析借用（convert 期间稳定）
 
-    /// 批 6d 标签 id 化：MIR/块 id/异常表键统一用顺序 id（同 pc 恒同 id）。
-    /// 不得用指针截断 int 作块 id——x64 堆地址截断可为负（ASLR 依赖），
+    /// 标签 id 化：MIR/块 id/异常表键统一用顺序 id（同 pc 恒同 id）。
+    /// 不得用指针截断 int 作块 id，x64 堆地址截断可为负（ASLR 依赖），
     /// 会把 isTarget/异常表回填随机打挂。
     std::unordered_map<ca::u32, int> labelIdByPc;
-    /// @brief SMT 重建帧（pc → 帧型 + 栈项）；批 6f 恢复树 reader 的帧锚定。
+    /// @brief SMT 重建帧（pc → 帧型 + 栈项）；恢复树 reader 的帧锚定。
     std::map<ca::u32, DomFrame>      framesByPcMap;
     int                              nextLabelId = 1;
 
-    /// @brief 目标 pc → 标签 id（批 6d 标签 id 化：同一 pc 恒同一 id）。
+    /// @brief 目标 pc → 标签 id（同一 pc 恒同一 id）。
     int labelAt(ca::u32 pc)
     {
         auto it = labelIdByPc.find(pc);
@@ -377,7 +377,7 @@ struct CodeConverter::Impl
     ///
     /// 载荷类型对齐旧栈 ClassReader::readConst：Integer→i32、Float→float、
     /// Long→i64、Double→double、String→Utf8StringRef、Class/MethodType→
-    /// 旧栈 Type（批 3a 实证规则：树/Any 载荷一律旧栈类型，限定名构造）、
+    /// 旧栈 Type（实证规则：树/Any 载荷一律旧栈类型，限定名构造）、
     /// MethodHandle→旧栈 Handle。ConstantDynamic 不支持（fail loud）。
     ca::core::Any resolveConstPayload(ca::u32 cpIdx) const
     {
@@ -535,7 +535,7 @@ void CodeConverter::processInsn(const jbc::core::RawInsn& in)
     int    opc      = static_cast<int>(in.op);
     ca::i32 varIndex = in.a;
     // 旧栈 reader 把 ILOAD_0..ASTORE_3 短格式解码成规范形（VarInsn op + var）；
-    // DOM decodeInsns 保留原始 opcode——此处对齐规范形，家族区间判定复用原样。
+    // DOM decodeInsns 保留原始 opcode，此处对齐规范形，家族区间判定复用原样。
     if (opc >= Opcodes::ILOAD_0 && opc <= Opcodes::ALOAD_3) {
         varIndex = (opc - Opcodes::ILOAD_0) % 4;
         opc      = Opcodes::ILOAD + (opc - Opcodes::ILOAD_0) / 4;

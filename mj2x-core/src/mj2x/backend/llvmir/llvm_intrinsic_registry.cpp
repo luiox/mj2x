@@ -11,9 +11,9 @@
 namespace mj2x {
 
 // =============================================================================
-// #1027 B2 单源化：本文件原为 92 条 (owner,name,desc,symbol) 手工对齐副本 +
+// 单源化（#1027）：本文件原为 92 条 (owner,name,desc,symbol) 手工对齐副本 +
 // LLVM 类型文本。现改为从 RegC 权威表（builtinIntrinsicTable，含 llvmDirect
-// 能力位）机械派生——新增 intrinsic 只改 regc_intrinsic_registry.cpp 一处。
+// 能力位）机械派生，新增 intrinsic 只改 regc_intrinsic_registry.cpp 一处。
 //
 // 派生口径（与切换前手工表逐字对齐，mj2x_unittest 的
 // LlvmIntrinsicRegistryGoldenCross 以切换前全表为 golden 逐字段钉死）：

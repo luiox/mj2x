@@ -2,8 +2,8 @@
 // mj2x-cli（--backend vmc4）虚拟化后，native 运行输出必须与 JVM 基线逐字一致。
 //
 // 与 vmc4_backend_e2e_test（Pipeline 直连、内存样本）互补：这里走完整 CLI 链路
-// + 提交的 protected sample（含 JNI helper surface），是「调用/字段/数组/
-// 分配/异常」面与红队 trace-surface 契约（--vmc4-trace-surface，见
+// + 提交的 protected sample（含 JNI helper surface），是"调用/字段/数组/
+// 分配/异常"面与红队 trace-surface 契约（--vmc4-trace-surface，见
 // doc:vm-virtualization）的行为守门。产物落 test/mj2x/protected_samples/vmc4/。
 
 #include <gmock/gmock.h>

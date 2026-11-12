@@ -1,13 +1,13 @@
 /// @file        jvm_opcodes.hpp
-/// @brief       JVM opcode / 访问旗标 / 帧条目常量镜像（libjbc 迁移批 1）。
+/// @brief       JVM opcode / 访问旗标 / 帧条目常量镜像（libjbc 迁移引入）。
 ///
 /// 旧栈 jbytecode::core::Opcodes 是 ASM 风格 static constexpr i32 常量类，
 /// mj2x 以 int 语义消费（switch-case over int opcode、位或旗标）。libjbc 的
-/// jbc::core::Op 是 enum class，不能直接作 int case 标签——本镜像保持 i32
+/// jbc::core::Op 是 enum class，不能直接作 int case 标签，本镜像保持 i32
 /// 常量形态：opcode 值单源自 jbc::core::Op（static_assert 对旧栈冻结 oracle
-/// 逐个交叉锁定），旗标/帧条目族为 JVM 规格固定值。批 6 摘除 libjbytecode
-/// 后本文件为唯一常量源。
-/// 批 3b 再生：批 1 生成器漏了 47 个 opcode（W 后缀/INVOKEDYNAMIC/短格式族），
+/// 逐个交叉锁定），旗标/帧条目族为 JVM 规格固定值。libjbytecode 摘除后
+/// 本文件为唯一常量源。
+/// 生成勘误：初版生成器漏了 47 个 opcode（W 后缀/INVOKEDYNAMIC/短格式族），
 /// 全量 202 项重生成。
 #pragma once
 

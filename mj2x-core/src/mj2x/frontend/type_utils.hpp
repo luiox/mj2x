@@ -17,7 +17,7 @@ int           primitiveStackSize(PrimitiveKind kind);
 /// @brief PrimitiveKind → SSAType（SSA 参数/返回类型的唯一映射）。
 ///
 /// @details
-/// 原先是 `ssa_builder.cpp` 的文件内静态函数，但 RegC 后端也需要它——方法间
+/// 原先是 `ssa_builder.cpp` 的文件内静态函数，但 RegC 后端也需要它，方法间
 /// 直调的前向声明必须按**描述符**算出被调方签名（不能用调用点操作数类型推，
 /// 窄类型提升会让同一函数产出两份不同声明）。两端必须同一张表，故提到这里。
 inline SSAType mirKindToSSA(PrimitiveKind kind)

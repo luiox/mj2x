@@ -1,4 +1,4 @@
-// stackc_mtest_set_test.cpp — 消费 mtest_set 样本做 StackC native 转换 E2E
+// stackc_mtest_set_test.cpp，消费 mtest_set 样本做 StackC native 转换 E2E
 //
 // 遍历 mtest_set::nativeFixtureManifest() 中 backends 含 StackC 的 case：
 //   生成器产 .class bytes（基准）→ mj2x StackC 改写 + 生成 .c → cl 编 DLL

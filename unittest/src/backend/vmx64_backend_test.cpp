@@ -256,7 +256,7 @@ TEST(Vmx64BackendTest, EncodesLoopMethodWithFusedBranch)
 TEST(Vmx64BackendTest, DeterministicEmitForSameSeed)
 {
     // 指令列表必须内联花括号直传：lambda 返回 std::initializer_list 时底层数组
-    // 是 lambda 栈帧上的临时量，函数返回即死亡——调用方拿到悬垂视图，makeMethod
+    // 是 lambda 栈帧上的临时量，函数返回即死亡，调用方拿到悬垂视图，makeMethod
     // 读到的就是垃圾节点指针（CI 首跑 SEGV 的根因）。
     const std::string a = emitViaBackend(
         "det", "(I)I",
@@ -356,7 +356,7 @@ TEST(Vmx64BackendTest, FailClosedOnFloatArithmetic)
     EXPECT_EQ(prog, nullptr);
 }
 
-// 实例方法（this 为 REF 参数）——经 Backend 契约验证 fail-closed 保留字节码。
+// 实例方法（this 为 REF 参数），经 Backend 契约验证 fail-closed 保留字节码。
 TEST(Vmx64BackendTest, FailClosedOnInstanceMethodViaBackend)
 {
     auto method = makeMethod(Opcodes::ACC_PUBLIC, "bump", "(I)I",
@@ -391,7 +391,7 @@ TEST(Vmx64BackendTest, FailClosedLeavesNoPartialArtifact)
     backend.setOptions(opts);
     CompilerClass cls;
     // 每方法独立 arena + converter：CodeConverter 的 Block 池由 converter 拥有，
-    // 且每次 convert() 在 buildBlocks 里先清空池——同一 converter 转第二个方法
+    // 且每次 convert() 在 buildBlocks 里先清空池，同一 converter 转第二个方法
     // 会析构第一个方法的 Block，先拿到的 okBlocks 立刻悬垂（CI 上 ok 编码
     // 无故失败、exec 段缺失的根因）。与 emitViaBackend 每调用新建同一口径。
     ca::str::Utf8StringArena okArena;
@@ -528,7 +528,7 @@ TEST(Vmx64BackendTest, InstanceSeedDerivationIsDeterministic)
 }
 
 // ===========================================================================
-// 11. 链字加密 sanity：流加密确实由 instance seed 派生的密钥驱动。
+// 11. 加密字 sanity：流加密确实由 instance seed 派生的密钥驱动。
 // ===========================================================================
 TEST(Vmx64BackendTest, StreamCarriesEncryptedHandlerNumbers)
 {

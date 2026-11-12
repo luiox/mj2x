@@ -1,4 +1,4 @@
-/// indy_bootstrap_plan_test.cpp —— #1027 B3 单源收敛对拍。
+/// indy_bootstrap_plan_test.cpp，#1027 单源收敛比对。
 ///
 /// invokedynamic bootstrap 解析三份平行实现（StackC stackc_mir_invoke.cpp /
 /// RegC regc_backend.cpp / LLVM llvm_ir_helpers.cpp）收敛到
@@ -212,7 +212,7 @@ TEST(IndyBootstrapPlanTest, ClassifyBsmArgAllKinds)
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any(1.5f)), IndyBsmArgKind::Float);
     EXPECT_EQ(classifyIndyBsmArg(ca::core::Any(2.5)), IndyBsmArgKind::Double);
 
-    // Any 载荷门面（批 6e）：bsm/bsmArgs 的 Class/MethodType 载荷 = mj2x::Type、
+    // Any 载荷门面：bsm/bsmArgs 的 Class/MethodType 载荷 = mj2x::Type、
     // MethodHandle 载荷 = mj2x::Handle（classifyIndyBsmArg 按 as<mj2x::Type/Handle> 判定）。
     mj2x::Type methodType = mj2x::Type::getMethodType(
         ca::str::Utf8StringRef::from_cstr("(II)I"));
@@ -246,7 +246,7 @@ TEST(IndyBootstrapPlanTest, BoxedClassNameAllPrimitives)
 }
 
 // ---------------------------------------------------------------------------
-// 三方对拍：切换前三份平行实现逐字转录为参考（对拍对象 = 切换前代码路径），
+// 三方比对：切换前三份平行实现逐字转录为参考（比对对象 = 切换前代码路径），
 // 与单源 plan 逐字段对齐。参考实现只在本测试内存活（与 A5 oldcore 同纪律）。
 // ---------------------------------------------------------------------------
 
@@ -424,7 +424,7 @@ TEST(IndyBootstrapPlanTest, ThreeWayWalkCrossCheck)
 
 TEST(IndyBootstrapPlanTest, ThreeWayHandleFindCrossCheck)
 {
-    // 切换前 StackC/RegC 两份同式 switch 转录为参考表，与单源逐字段对拍。
+    // 切换前 StackC/RegC 两份同式 switch 转录为参考表，与单源逐字段比对。
     using Shape = IndyHandleArgShape;
     const struct
     {
@@ -504,8 +504,8 @@ IndyBsmArgKind classifyRegCRef(const ca::core::Any& value)
 
 TEST(IndyBootstrapPlanTest, ThreeWayClassifyCrossCheck)
 {
-    // 同位样本对：旧栈载荷（参考实现侧）与 mj2x 门面载荷（产品单源侧）各构一份——
-    // 批 6e 后产品按 as<mj2x::Type/Handle> 判定，参考转录保持旧栈载荷形态。
+    // 同位样本对：旧栈载荷（参考实现侧）与 mj2x 门面载荷（产品单源侧）各构一份，
+    // 产品按 as<mj2x::Type/Handle> 判定，参考转录保持旧栈载荷形态。
     jbytecode::core::Type refMethodType = jbytecode::core::Type::getMethodType(
         ca::str::Utf8StringRef::from_cstr("(II)I"));
     jbytecode::core::Type refObjectType = jbytecode::core::Type::getObjectType(

@@ -379,7 +379,7 @@ void applyOpaquePredicates(RegFunction& function, ca::u32& nextRegister,
         const RegOperand one = RegOperand::fromInt(1, type);
 
         if (!options.opaqueZero) {
-            // 基础形态：(x | 1) & 1 == 1 —— 恒真。
+            // 基础形态：(x | 1) & 1 == 1，恒真。
             const RegValue orValue{RegId{nextRegister++}, type};
             const RegValue andValue{RegId{nextRegister++}, type};
             block->instructions.push_back(makeBinary(orValue, source, one, SSABinaryOp::Or));
@@ -417,7 +417,7 @@ void applyOpaquePredicates(RegFunction& function, ca::u32& nextRegister,
             }
             else if (sel == 2) {
                 // shift-pair：(x >> 1) << 1 == x & ~1（算术右移再左移 = 清最低
-                // 位 = x & ~1；对负数也成立——>>1 后 <<1 只清最低位。零 UB）。
+                // 位 = x & ~1；对负数也成立，>>1 后 <<1 只清最低位。零 UB）。
                 const RegValue notOne{RegId{nextRegister++}, type};
                 const RegValue half{RegId{nextRegister++}, type};
                 const RegValue twice{RegId{nextRegister++}, type};
@@ -464,12 +464,12 @@ void applyOpaquePredicates(RegFunction& function, ca::u32& nextRegister,
 /// 测，因此必须在 effect 检查**之前**特判放行，否则开关形同虚设。
 bool isCffPureInstruction(const RegInstruction& instruction)
 {
-    // Barrier 放行（#X H2）：它虽带 isBarrier effect，但语义上是"不可折叠锚点"——
+    // Barrier 放行（#X H2）：它虽带 isBarrier effect，但语义上是"不可折叠锚点"，
     // 无数据流产出、不抛异常、不读外部状态，唯一作用是阻止 C 编译器把其相邻的
     // MBA/恒假推导常量化。CFF 只改**块间**路由（原 CFG 边 → dispatcher state
     // 迁移），块内指令序列逐字保留，故 barrier 与其它 effect 的相对顺序不变。
     // 反面后果（实测）：若在此判 false，`--regc-mba-deep` 注入的 barrier 会让
-    // 整函数被排除，深 MBA 与 CFF 互为毒药——同一纯算术函数开启两者后 dispatcher
+    // 整函数被排除，深 MBA 与 CFF 互为毒药，同一纯算术函数开启两者后 dispatcher
     // 从 12 块退回原始 CFG（保护强度归零且**不报错**，用户无从察觉）。
     if (instruction.kind == RegInstructionKind::Barrier) return true;
     if (hasObservableEffect(instruction.effect)) return false;
@@ -487,12 +487,12 @@ bool isCffPureInstruction(const RegInstruction& instruction)
     case RegInstructionKind::Call:
     case RegInstructionKind::Allocate:
     case RegInstructionKind::Intrinsic: return false;
-    // Barrier 放行（#X H2）：它虽带 isBarrier effect，但语义上是"不可折叠锚点"——
+    // Barrier 放行（#X H2）：它虽带 isBarrier effect，但语义上是"不可折叠锚点"，
     // 无数据流产出、不抛异常、不读外部状态，唯一作用是阻止 C 编译器把其相邻的
     // MBA/恒假推导常量化。CFF 只改**块间**路由（原 CFG 边 → dispatcher state
     // 迁移），块内指令序列逐字保留，故 barrier 与其它 effect 的相对顺序不变。
     // 反面后果（实测）：若在此判 false，`--regc-mba-deep` 注入的 barrier 会让
-    // 整函数被排除，深 MBA 与 CFF 互为毒药——同一纯算术函数开启两者后 dispatcher
+    // 整函数被排除，深 MBA 与 CFF 互为毒药，同一纯算术函数开启两者后 dispatcher
     // 从 12 块退回原始 CFG（保护强度归零而不报错）。
     case RegInstructionKind::Barrier: return true;
     }
@@ -590,7 +590,7 @@ ca::u32 deriveStateCode(uint64_t seed, ca::u32 index)
 
 /// 状态异或 key：常量（非零），写入值 = code，dispatch 前 state ^= key，
 /// case 常量 = code ^ key（二进制中写入常量与比较常量不同）。
-/// 同 deriveStateCode 的 int32 正值域约束——key 越界会让 case 常量连带溢出。
+/// 同 deriveStateCode 的 int32 正值域约束，key 越界会让 case 常量连带溢出。
 ca::u32 deriveStateXorKey(uint64_t seed)
 {
     ca::u32 key = static_cast<ca::u32>(splitmix64(seed ^ 0x9E3779B97F4A7C15ull)) & 0x7FFFFFFFu;
@@ -623,7 +623,7 @@ bool applyControlFlowFlattening(RegFunction& function, ca::u32& nextRegister,
     if (options.cffStateEncryption) {
         // 派生随机 state 码：splitmix64(seed, index)，非顺序。码空间碰撞
         //（生日效应，数千块的函数概率非平凡）会使 dispatcher switch 首个
-        // case 命中而静默路由错误——查重，冲突时线性探测下一个值
+        // case 命中而静默路由错误，查重，冲突时线性探测下一个值
         //（0 为非法码，绕开）。
         ca::u32           index = 0;
         std::set<ca::u32> usedCodes;
@@ -895,13 +895,13 @@ RegOperand hideImmediateOperand(const RegOperand& operand, ca::u32& site, ca::u3
 /// 调用目标间接化（对标 jvmtp `obfuscation.calls.*`）。
 ///
 /// 被标记的调用点改走 per-signature dispatcher：身份字符串（owner/name/desc）
-/// 从调用点移出，静态分析必须先解析 (表, 索引) → 条目才能还原调用边——调用图
+/// 从调用点移出，静态分析必须先解析 (表, 索引) → 条目才能还原调用边，调用图
 /// 收敛到单一 dispatcher 符号。
 ///
 /// pass 只置 `RegInstruction::indirectCall`，站点表由发射端建：pass 看不到
 /// 跨函数的"哪些方法已被转换"，而发射端本就按解析结果分流（intrinsic /
 /// 同模块直调 / resolved / cached JNI 兜底）。真正落到 dispatcher 的只有兜底
-/// JNI 路径——已转换目标的直调快路径天然不受影响，无需 pass 判断内外。
+/// JNI 路径，已转换目标的直调快路径天然不受影响，无需 pass 判断内外。
 ///
 /// 自递归静态调用跳过：它走 self-call 直调路径（JVM 栈帧语义），间接化只会
 /// 把 0 JNI 的自调用变成一次 FindClass + GetStaticMethodID。
@@ -923,7 +923,7 @@ void applyCallIndirections(RegFunction& function, RegTransformStats& stats)
 /// 立即数隐藏（对标 jvmtp `obfuscation.constants` / `.constants.mba`）。
 ///
 /// 纯字面量恒等式必被编译器折叠（`(C^k)^k` 同值异指令也会被重结合折叠），
-/// 唯一可行路线是「编译期密钥 + 运行时不可折叠读取」（同 OLLVM constant
+/// 唯一可行路线是"编译期密钥 + 运行时不可折叠读取"（同 OLLVM constant
 /// encryption）：每个整型立即数 C 改写为
 ///     k = Intrinsic("const.key:<site>")   // 运行时 splitmix64 派生，独立 TU 不透明调用
 ///     e = Xor(E64, k)                     // E64 = C64 ^ K，编译期算
@@ -933,7 +933,7 @@ void applyCallIndirections(RegFunction& function, RegTransformStats& stats)
 /// mj2x_regc_const_key / mj2x_llvm_const_key 逐位同源（#1027 A3 + 不透明
 /// 常量契约，E2E 真实编译+运行守跨语言一致）。
 ///
-/// 顺序纪律：必须排在 CFF **之后**——`isCffPureInstruction` 的 switch 中
+/// 顺序纪律：必须排在 CFF **之后**，`isCffPureInstruction` 的 switch 中
 /// `Intrinsic → false`，若先插入合成 Intrinsic 会杀死平坦化（零交互保证）。
 /// terminator 的 switch case key 不迭代（dispatcher 表完整性）；CFF 之前
 /// 各 pass 生成的字面量（opaque 谓词的 1、state 码）随本 pass 一并隐藏，

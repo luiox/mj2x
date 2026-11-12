@@ -2,7 +2,7 @@
 /// @brief       压缩包解压工具（ZIP / tar / tar.xz / tar.gz / tar.zst 等）。
 ///
 /// 移植自 mjbase model 的 resource_io::ZipUtil（libarchive 解包后端，与 mbase
-/// 同源），服务于"下载后解压"场景（dev_plan 交叉编译切片的 bundled zig /
+/// 同源），服务于"下载后解压"场景（dev_plan 交叉编译工作项的 bundled zig /
 /// toolchain 获取面）。libca::zip 是 JVM 语义的 ZIP 条目读取器（无 tar 面、
 /// 不落盘），与本工具的整包落盘解压互补，不重复。
 ///

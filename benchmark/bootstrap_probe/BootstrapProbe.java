@@ -1,28 +1,28 @@
 // ============================================================================
-// BootstrapProbe — mj2x runtime bootstrap 四段分解微探针驱动（issue #1183）。
+// BootstrapProbe，mj2x runtime bootstrap 四段分解微探针驱动（issue #1183）。
 //
 // 每种模式独立冷 JVM 运行（外层 bootstrap_probe.ps1 负责多轮取样与统计），
 // 段内 System.nanoTime 计时并打印 `SEG <mode> <nanos>`（reg_k 另打逐类行）。
 //
 // 模式与被测段（对应 performance_evaluation_spec §3.5 分解表）：
-//   full        污染 jar：timed Class.forName(首个转换类) —— 端到端 bootstrap
+//   full        污染 jar：timed Class.forName(首个转换类)，端到端 bootstrap
 //               （提取 + System.load/JNI_OnLoad + 首类注册），作为总和锚点。
 //   extract     污染 jar：驱动侧按 NativeLoader 生成字节码逐调用复刻提取段
 //               （getSystemResourceAsStream → createTempFile/deleteOnExit →
 //               8192 缓冲读循环（.enc 时 xorshift32 逐字节解密）→ 写出 → close），
-//               不触碰 System.load —— 段 1。
+//               不触碰 System.load，对应段 1。
 //   load        stub jar + -Dmj2x.probe.skip=1：不计时预提取后 timed
 //               System.load（LoadLibrary+重定位+CRT+JNI_OnLoad[填表+FindClass
-//               (Loader)→Loader 类定义/初始化+桥接 RegisterNatives]）—— 段 2
+//               (Loader)→Loader 类定义/初始化+桥接 RegisterNatives]），对应段 2
 //               （含 Loader 类定义）。
 //   load_predef 同 load 但先不计时 Class.forName("mj2x.cloader.Loader")，
-//               timed System.load 时 Loader 已定义 —— 段 2 减 Loader 定义；
-//               (load − load_predef) 即 Loader 类定义+初始化成本 —— 段 4（RegC
+//               timed System.load 时 Loader 已定义，即段 2 减 Loader 定义；
+//               (load − load_predef) 即 Loader 类定义+初始化成本，对应段 4（RegC
 //               产物无独立 DefineClass 段，hidden-clinit DefineClass 为 StackC 专有）。
 //   reg_k       stub jar + skip：不计时预提取+System.load 后，timed 依次
-//               Class.forName(前 k 个转换类)（-Dmj2x.probe.k）—— 段 3 逐类
+//               Class.forName(前 k 个转换类)（-Dmj2x.probe.k），对应段 3 逐类
 //               注册（桥接分派 + MonitorEnter + RegisterNatives）。k 递增序列
-//               回答「RegisterNatives 是否随 JNI 方法数线性」。
+//               回答 RegisterNatives 是否随 JNI 方法数线性的问题。
 //
 // 用法：java [-Dmj2x.probe.skip=1] [-Dmj2x.probe.k=N]
 //           -cp <jar>;<本类目录> BootstrapProbe <mode> <resourcePath> [class...]

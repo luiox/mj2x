@@ -15,7 +15,7 @@
 //
 // 另一种密钥流勿混淆：mj2x/backend/vmx64 的 vmx64Ks64（位置驱动的
 // imul/rol 混合，镜像边界是发射出的 MASM dispatch，见 vmx64_asm_emit.hpp
-// 的 Key schedule 节）。与本文件只是「XOR 密钥流」同概念——本流纯状态
+// 的 Key schedule 节）。与本文件只是 XOR 密钥流同概念，本流纯状态
 // 驱动（state 每字节推进、与位置无关）、镜像 NativeLoader 字节码，机制与
 // 镜像边界都不同，勿合并。
 

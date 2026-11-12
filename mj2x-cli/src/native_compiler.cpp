@@ -137,7 +137,7 @@ namespace {
 /// 把 stdin 写入放独立线程并立即返回：wait_with_output 才会并发排空
 /// stdout/stderr。若在排空开始前同步 write_all，子进程消费 stdin 期间写满
 /// 输出管道即双向死锁（大源码 + 多警告输出时必现窗口）。写失败（管道提前
-/// 关闭等）不在此处上报——子进程的真实错误会经输出面暴露。
+/// 关闭等）不在此处上报，子进程的真实错误会经输出面暴露。
 void spawnStdinWriter(ca::process::ChildStdin&& stdinWriter, std::string data)
 {
     std::thread writer(
@@ -322,7 +322,7 @@ bool jniIncludePaths(std::vector<std::filesystem::path>& includes,
     }
     else {
         // 交叉目标（issue #11）：jni_md.h 按目标 ABI 的平台子目录取
-        // （win32 的 jlong 是 long long，linux 是 long——交叉编译必须用目标的）。
+        // （win32 的 jlong 是 long long，linux 是 long，交叉编译必须用目标的）。
         // jdkInclude 本身就是 <jdk>/include 目录，平台子目录是其直接子目录。
         includes.push_back(jdk.jdk_include / platformOverride);
     }
@@ -393,7 +393,7 @@ private:
 };
 
 /// 运行时源后端宏注入(embedded_rt.hpp rtBackendDefine 契约):MSVC 用 /D,
-/// 其余用 -D;define 体为空时为空操作。作用于整个编译命令——生成源、
+/// 其余用 -D;define 体为空时为空操作。作用于整个编译命令，生成源、
 /// mj2x-rt 运行时源与用户 intrinsic 同一定义面。
 void appendRtBackendDefine(ca::process::Command& command, bool msvcStyle,
                            CEmitterBackend backend)
@@ -952,7 +952,7 @@ bool prepareLlvmCrtSources(const std::filesystem::path&        crtRoot,
     std::vector<std::filesystem::path> manifestSources;
     if (!addCrtSources(crtRoot, includes, manifestSources, CEmitterBackend::LlvmIr)) return false;
     // rt_protect 由 --runtime-protection 的专用提取路径提供（.h/.c 同目录成对），
-    // manifest 里也列了它——跳过以免链接期重复符号（LNK2005）。
+    // manifest 里也列了它，跳过以免链接期重复符号（LNK2005）。
     for (const auto& source : manifestSources) {
         if (source.filename() == "mj2x_rt_protect.c") continue;
         sources.push_back(source);
@@ -1134,7 +1134,7 @@ int compileNativeSource(const std::string& sourcePath, const std::string& output
     std::vector<std::filesystem::path> includes;
     if (!jniIncludePaths(includes)) return 1;
 
-    // 多文件模式（--emit-native-dir）：sourcePath 是目录——编译目录内全部 .c
+    // 多文件模式（--emit-native-dir）：sourcePath 是目录，编译目录内全部 .c
     // （mj2x_regc_runtime.c / m_*.c / mj2x_regc_entry.c，api.h 由它们 include；
     // crt include 路径由 addCrtSources 统一提供）。
     std::vector<std::filesystem::path> sources;
@@ -1354,7 +1354,7 @@ int compileCSourceFromPipe(std::string_view cSource, const std::string& outputPa
     spawnStdinWriter(std::move(*input), std::string(cSource));
 
     // 超时路径：helper 内部收割进程树并收尸后返回 false（已记录超时日志）；
-    // 输出无条件先落盘——卡死前编译器吐出的部分告警对定位源码有价值。
+    // 输出无条件先落盘，卡死前编译器吐出的部分告警对定位源码有价值。
     ca::process::Output output;
     if (!waitChildWithTimeout(child, "C compiler", timeout, output)) return 1;
     writeProcessOutput(output);

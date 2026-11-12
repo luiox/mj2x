@@ -23,7 +23,7 @@ using ca::str::format_to;
 
 // ---------------------------------------------------------------------------
 // 数值编码 helpers：把字节/字拆成 C 字面量。
-// 这些是「数据格式化」片段（数组初始化列表），返回 std::string 供 emitRaw 嵌入，
+// 这些是"数据格式化"片段（数组初始化列表），返回 std::string 供 emitRaw 嵌入，
 // 不是源码结构拼接（本仓约定禁止手拼缩进语句，此处是数据片段）。
 // ---------------------------------------------------------------------------
 
@@ -54,9 +54,9 @@ std::string emitU32Array(const std::vector<uint32_t>& vals, const std::string& i
 // ===========================================================================
 // Handler 逻辑片段：每个 opcode 一段 C 代码（读 operand、执行、推进 pc）。
 //
-// 这些片段是「操作码语义模板」（类似 raw-string runtime template），自带固定
+// 这些片段是"操作码语义模板"（类似 raw-string runtime template），自带固定
 // 缩进，经 CSourceStream::emitRaw 原样嵌入 case 体（emitRaw 的设计用途即
-// 「pre-formatted blocks where the caller controls whitespace」，c_source.hpp:99）。
+// "pre-formatted blocks where the caller controls whitespace"，c_source.hpp:99）。
 // 片段假设 dispatcher 已声明局部变量 code/pc/regs/status/targets，并以
 // break/goto mj2x_vm_done 结束。5 种 dispatcher 共享这些片段。
 //
@@ -104,7 +104,7 @@ const char* kHandlerUnaryAlt =
 
 /// BINARY: 算术/位运算（含 JVM 整数环绕、除零、UShr 语义）
 /// 除零/除模抛 ArithmeticException（JVM 语义，Phase 2.C）并进入异常检查点
-/// （mj2x_vm_exc 由每个 dispatcher 无条件提供）——有异常区域则匹配，否则传播。
+/// （mj2x_vm_exc 由每个 dispatcher 无条件提供），有异常区域则匹配，否则传播。
 const char* kHandlerBinary =
     "            unsigned char op = code[pc++];\n"
     "            unsigned char type = code[pc++];\n"
@@ -212,7 +212,7 @@ const char* kHandlerCompareAlt =
 /// CONVERT: 数值宽窄/整浮转换（向零截断，JVM 语义）
 /// 浮点→整数用饱和 helper（NaN→0、超界→min/max），C 原生 cast 对 NaN/超界是 UB。
 /// from/to 是编码器的**精确**类型标签（I16/I8/CHAR 仅 Convert 使用）：int 窄化
-/// （i2s/i2b/i2c）在计算面都是 I32，坍缩会退化成恒等——handler 据精确标签做
+/// （i2s/i2b/i2c）在计算面都是 I32，坍缩会退化成恒等，handler 据精确标签做
 /// 符号/零扩展（java_corpus/BigIntMini vmc4 首曝）。
 const char* kHandlerConvert =
     "            unsigned char from = code[pc++];\n"
@@ -280,8 +280,8 @@ const char* kHandlerSuperDec =
 /// 两步运算各经一个运行时 helper 完成（mj2x_vm_bin_step_i/_f，与 BINARY handler
 /// 同语义：整数环绕、I32 逐步截断、除零抛 ArithmeticException、F32 的 float
 /// 精度逐步舍入）。任一 helper 报抛异常时 goto mj2x_vm_exc 进入异常检查点（与
-/// BINARY handler 同一通道）。helper 落在 VMC4 运行时（mj2x-rt），不按 TU 发射
-/// ——handler 表对每个解释器恒全量发射，按需发射 helper 会留下未定义符号。
+/// BINARY handler 同一通道）。helper 落在 VMC4 运行时（mj2x-rt），不按 TU 发射，
+/// handler 表对每个解释器恒全量发射，按需发射 helper 会留下未定义符号。
 const char* kHandlerFusedBinary =
     "            unsigned char op1 = code[pc++];\n"
     "            unsigned char op2 = code[pc++];\n"
@@ -384,9 +384,9 @@ const char* kHandlerIntrinsic =
     "            intrinsic_table[siteIdx](env, regs, recv, argBuf, argc, dest);\n";
 
 /// THROW（Phase 2.C）：athrow。mj2x_vm_throw 设 pending exception（null → NPE），
-/// 随后 goto 异常检查点 mj2x_vm_exc（每个 dispatcher 无条件提供）——有异常区域则
+/// 随后 goto 异常检查点 mj2x_vm_exc（每个 dispatcher 无条件提供），有异常区域则
 /// 按当前块活跃区域匹配，否则传播（wrapper 检测 status=1 返回，Java 侧抛）。
-/// 注意：进入检查点前 pc 必须回退到 [Throw][src] 起点——检查点的块反查按 pc
+/// 注意：进入检查点前 pc 必须回退到 [Throw][src] 起点，检查点的块反查按 pc
 /// 落在哪个 blockTargets 区间归属异常，而 pc 已被推进到块尾之后（athrow 是
 /// 块 terminator），不回退会把异常归属到布局顺序的下一个块；保护块后紧跟
 /// 未保护块（try 内 throw、try 外 return）时 catch 会漏接、异常逃逸。
@@ -500,7 +500,7 @@ std::string emitOpcodeByteOrChain(const VmInstance& instance, VmOpcode op)
 /// 发射一个 handler 的 case 块：canonical + 全部 ALT 别名共享同一 body。
 /// 多个 case 头（每字节一个）后跟一个 { handler body + break; } 块。
 /// drift 开启时 unmap + case 标签映射已把原始字节解回语义标签（period 语义
-/// 变义），发每变体一个标签（共享同一 body——行为不变）。
+/// 变义），发每变体一个标签（共享同一 body，行为不变）。
 void emitHandlerCase(CSourceStream& out, const VmInstance& instance, const HandlerEntry* entry)
 {
     auto emitHead = [&](uint8_t byte) {
@@ -542,7 +542,7 @@ void emitCommonDecls(CSourceStream& out, const VmInstance& instance, const std::
 ///
 /// @details
 /// 语义：检查 JNI pending exception（可能由 Call/Field/Array/Alloc/Intrinsic helper、
-/// 除零、athrow 产生）——有则取异常对象并清除，按「当前 pc 所在块的活跃异常区域」
+/// 除零、athrow 产生），有则取异常对象并清除，按"当前 pc 所在块的活跃异常区域"
 /// （异常表顺序）匹配：命中执行该块的边拷贝（handler 参数 ← 来源寄存器）、把异常
 /// 对象写进 exceptionReg、pc 跳到 handler 块；全不匹配保持传播（failure 语句）。
 ///
@@ -554,7 +554,7 @@ void emitCommonDecls(CSourceStream& out, const VmInstance& instance, const std::
 ///     FuncPtrTable 循环里 "ctx->status = 1; break;"）
 ///
 /// 块反查：pc 落在哪个 blockTargets 区间（blockTargets 含真实块 + 合成块；合成块
-/// 无活跃区域——异常边只在真实块上，反查到合成块时 switch 无 case 直接传播）。
+/// 无活跃区域，异常边只在真实块上，反查到合成块时 switch 无 case 直接传播）。
 void emitExceptionCheckpoint(CSourceStream& out, const VmProgram& program,
                              const std::string& targetsName, const std::string& pcExpr,
                              const std::string& matchedLabel, const std::string& failure)
@@ -565,7 +565,7 @@ void emitExceptionCheckpoint(CSourceStream& out, const VmProgram& program,
     {
         CSourceStream::IndentGuard g(out);
         // 取异常对象并清除（JNI 规定 pending 未清时只能调 ExceptionCheck/Occurred/
-        // Clear——IsInstanceOf/FindClass 在有 pending 时行为未定义）。匹配成功即
+        // Clear，IsInstanceOf/FindClass 在有 pending 时行为未定义）。匹配成功即
         // 消费；未匹配时重新 Throw 挂起（对齐 RegC _mj2x_regc_throw 语义），
         // wrapper 检测 status=1 返回后 JVM 抛原异常。
         out.emitLine("jthrowable _ex = (*env)->ExceptionOccurred(env);");
@@ -717,7 +717,7 @@ std::string emitLabelSelectExpr(const VmInstance& instance, const std::string& t
 }
 
 // ===========================================================================
-// 分块懒解密发射支持（issue #760 切片 2，--vmc4-lazy-decrypt）。
+// 分块懒解密发射支持（issue #760，--vmc4-lazy-decrypt）。
 // ===========================================================================
 
 /// 懒解密目标块大小（字节）。对齐竞品 jvmtp 1.6.4 vm.lazy-decrypt 的 64 字节
@@ -727,11 +727,11 @@ constexpr uint32_t kLazyChunkTargetBytes = 64;
 /// 计算懒解密分块表（块终点，排他偏移，单调）。
 ///
 /// @details
-/// 块边界只落在指令起点（VmProgram.instructionOffsets）——这是正确性约束而
+/// 块边界只落在指令起点（VmProgram.instructionOffsets），这是正确性约束而
 /// 非优化：handler 内联直读 code[pc..pc+len)（SWITCH 按 count 读 count*6 字节，
 /// 单条指令可远超 64 字节），固定网格分块会把指令切到两个块里，首块解密后
 /// handler 仍会读到下一块的密文。贪心打包：累计指令长度超过 64 字节即开新块；
-/// 单条超长指令自成一块（块长可超 64，不变量只是「指令整块内」）。
+/// 单条超长指令自成一块（块长可超 64，不变量只是"指令整块内"）。
 std::vector<uint32_t> buildLazyChunkEnds(const VmProgram& program)
 {
     // 空流（无 Halt，仅防御）也给一个空块：NC=1、解密 size=0 无操作。
@@ -761,7 +761,7 @@ std::vector<uint32_t> buildLazyChunkEnds(const VmProgram& program)
 /// touch helper 在每次取码前调用：快路径（块游标仍覆盖 pc 且已解密）只做
 /// 2 次读 + 比较；慢路径经 CRT mj2x_vm_chunk_locate 定位块并调
 /// mj2x_vm_lazy_decrypt 原地解密（CRT 内部持锁防多 Java 线程双重解密，
-/// 派生密钥用后擦除）。主密钥只以 32 位立即数出现在调用参数里（与首切片
+/// 派生密钥用后擦除）。主密钥只以 32 位立即数出现在调用参数里（与整体解密
 /// 同一形态），不落任何 key/keystream 数组。
 void emitLazyInfrastructure(CSourceStream& out, const VmInstance& instance,
                             const std::string& tag, const std::string& progName,
@@ -806,7 +806,7 @@ void emitLazyInfrastructure(CSourceStream& out, const VmInstance& instance,
     });
 }
 
-/// 发射取码前的懒解密 touch 调用（两档全关时零发射——关闭路径产物不变）。
+/// 发射取码前的懒解密 touch 调用（两档全关时零发射，关闭路径产物不变）。
 /// pcExpr 是当前指令起点表达式（各 dispatcher 形态各异），ccExpr 是块游标地址。
 /// 64 字节网格档（blobLazy）与 CFG 块粒度档（blockLazy）互斥，按模式分派到
 /// 各自的 touch helper（命名面可辨：mj2x_vm_lazy_touch_ / mj2x_vm_block_touch_）。
@@ -824,14 +824,14 @@ void emitLazyTouchCall(CSourceStream& out, const VmInstance& instance, const std
 /// 之前）：块状态表（volatile，0=密文 1=已解密）+ touch helper。
 ///
 /// @details
-/// issue #1116 切片 B（--vmc4-block-lazy-decrypt）。与 64 字节网格档的两点
-/// 结构差异：①**边界表零新增**——块区间直接复用 blockTargets（targets 形参，
+/// issue #1116（--vmc4-block-lazy-decrypt）。与 64 字节网格档的两点
+/// 结构差异：①**边界表零新增**，块区间直接复用 blockTargets（targets 形参，
 /// end(c) = c+1<N ? targets[c+1] : totalBytes，尾块含 trailing Halt 哨兵），
-/// 不发射独立 cend 表；②**密钥链式派生**——慢路径经 CRT
+/// 不发射独立 cend 表；②**密钥链式派生**，慢路径经 CRT
 /// mj2x_vm_block_lazy_decrypt 从 seed 走链重导出块密钥（(seed, blockIdx,
 /// prevKey)，首块 prevKey=seed；链状态只在 CRT 栈上瞬时存在，用后擦除）。
 /// 快路径同样只做 2 次读 + 比较；慢路径 CRT 内部持锁防多 Java 线程双重解密。
-/// 主密钥只以 32 位立即数出现在调用参数里（与首切片同一形态），不落任何
+/// 主密钥只以 32 位立即数出现在调用参数里（与整体解密同一形态），不落任何
 /// key/keystream 数组。
 void emitBlockLazyInfrastructure(CSourceStream& out, const VmInstance& instance,
                                  const std::string& tag, const std::string& progName,
@@ -908,7 +908,7 @@ void emitHaltCaseHeads(CSourceStream& out, const VmInstance& instance)
     for (uint8_t b : instance.opcodeBytesFor(VmOpcode::Halt)) emitHead(b);
 }
 
-/// 形态 0：SwitchTable —— 经典 switch/case。
+/// 形态 0：SwitchTable，经典 switch/case。
 void emitSwitchDispatcher(CSourceStream& out, const VmProgram& program, const VmInstance& instance,
                           const std::string& progName, const std::string& targetsName,
                           const std::string& tag)
@@ -917,7 +917,7 @@ void emitSwitchDispatcher(CSourceStream& out, const VmProgram& program, const Vm
     out.emitLine("for (;;) {");
     {
         CSourceStream::IndentGuard g(out);
-        // 懒解密（issue #760 切片 2）：取码前确保 pc 所在块已解密。
+        // 懒解密（issue #760）：取码前确保 pc 所在块已解密。
         emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
         emitOpcodeFetch(out, instance, tag);
         out.emitLine("switch (opcode) {");
@@ -944,15 +944,15 @@ void emitSwitchDispatcher(CSourceStream& out, const VmProgram& program, const Vm
     out.emitLine("return status;");
 }
 
-/// 形态 1：FuncPtrTable —— 函数指针表分发。
+/// 形态 1：FuncPtrTable，函数指针表分发。
 ///
 /// @details
 /// 每个 handler 包成独立的 static void 函数（签名统一，操作共享 ctx），
 /// dispatcher 用 handlers[opcode](...) 间接调用。这是结构性差异：逆向者看到的是
 /// 一组函数指针表 + 间接调用，不是 switch 跳表。
 ///
-/// C 兼容性：ctx struct / typedef / dispatch body 必须是**文件级**定义——
-/// MSVC 不支持嵌套函数。MVP 采用「单一 dispatch body + 函数指针表别名」折中：
+/// C 兼容性：ctx struct / typedef / dispatch body 必须是**文件级**定义，
+/// MSVC 不支持嵌套函数。MVP 采用"单一 dispatch body + 函数指针表别名"折中：
 /// 表里每项指向同一文件级函数，但函数指针表本身仍是间接调用结构。
 
 /// 文件级 prelude：ctx struct + typedef + dispatch body 函数（在 exec 函数之前发射）。
@@ -1078,7 +1078,7 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
         };
         for (const auto& op : instance.handlerOrder()) {
             if (instance.driftEnabled()) {
-                // 每变体一个标签槽（共享同一 dispatch body——行为不变）。
+                // 每变体一个标签槽（共享同一 dispatch body，行为不变）。
                 for (int d = 0; d < instance.driftVariants(); ++d) {
                     emitHandlerSlot(static_cast<uint8_t>(instance.caseLabelFor(op, d)));
                 }
@@ -1091,7 +1091,7 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("for (;;) {");
     {
         CSourceStream::IndentGuard g(out);
-        // 懒解密（issue #760 切片 2）：exec 循环读 opcode 选 handler 之前确保
+        // 懒解密（issue #760）：exec 循环读 opcode 选 handler 之前确保
         // 所在块已解密（dispatch_body 内的取码/handler 操作数读同属本条指令，
         // 已被本次 touch 覆盖，body 内无需再 touch）。
         emitLazyTouchCall(out, instance, tag, "ctx->pc", "&_ctx.lazy_chunk");
@@ -1118,7 +1118,7 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
             out.emitLine(format_std("unsigned char _op = {}[{}[ctx->code[op_pos]]];",
                                     emitLabelSelectExpr(instance, tag, "d2"),
                                     emitUnmapSelectExpr(instance, tag, "d2")));
-            // period 语义变义：标签空间跨变体不相交——Return 的全变体标签集
+            // period 语义变义：标签空间跨变体不相交，Return 的全变体标签集
             // 唯一标识 Return（opcode 已是标签，不能直接比 canonical）。
             out.emitLine("int _is_ret = 0;");
             for (int d = 0; d < instance.driftVariants(); ++d) {
@@ -1141,7 +1141,7 @@ void emitFuncPtrDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("return ctx->status;");
 }
 
-/// 形态 2：ComputedGoto —— GCC "Labels as Values" 扩展（MSVC 不支持，调用方需守卫）。
+/// 形态 2：ComputedGoto，GCC "Labels as Values" 扩展（MSVC 不支持，调用方需守卫）。
 void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
                                 const VmInstance& instance, const std::string& progName,
                                 const std::string& targetsName, const std::string& tag)
@@ -1229,7 +1229,7 @@ void emitComputedGotoDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("return status;");
 }
 
-/// 形态 3：IfNest —— 线性 if/else if 链（无跳表）。
+/// 形态 3：IfNest，线性 if/else if 链（无跳表）。
 void emitIfNestDispatcher(CSourceStream& out, const VmProgram& program,
                           const VmInstance& instance, const std::string& progName,
                           const std::string& targetsName, const std::string& tag)
@@ -1238,7 +1238,7 @@ void emitIfNestDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("for (;;) {");
     {
         CSourceStream::IndentGuard g(out);
-        // 懒解密（issue #760 切片 2）：取码前确保 pc 所在块已解密。
+        // 懒解密（issue #760）：取码前确保 pc 所在块已解密。
         emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
         emitOpcodeFetch(out, instance, tag);
         for (const auto& op : instance.handlerOrder()) {
@@ -1261,7 +1261,7 @@ void emitIfNestDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("return status;");
 }
 
-/// 形态 4：StateDispatcher —— state 寄存器 + 控制流平坦化。
+/// 形态 4：StateDispatcher，state 寄存器 + 控制流平坦化。
 ///
 /// @details
 /// 把 dispatch loop 包进一个 while(state==RUNNING) 的平坦结构，opcode 决定
@@ -1276,7 +1276,7 @@ void emitStateDispatcher(CSourceStream& out, const VmProgram& program,
     out.emitLine("while (state) {");
     {
         CSourceStream::IndentGuard g(out);
-        // 懒解密（issue #760 切片 2）：取码前确保 pc 所在块已解密。
+        // 懒解密（issue #760）：取码前确保 pc 所在块已解密。
         emitLazyTouchCall(out, instance, tag, "pc", "&_cc");
         emitOpcodeFetch(out, instance, tag);
         out.emitLine("switch (opcode) {");
@@ -1421,8 +1421,8 @@ const char* resultWriteCast(VmJniKind k)
 /// 四种 dispatch 的 JNI 语义（Phase 2.B）：
 ///   - Virtual/Interface：Call<Type>MethodA（按 receiver 实际类虚分派；interface
 ///     方法用 GetMethodID 取 methodID 后同样经 CallMethodA 分派，JNI 规范允许）
-///   - Special（invokespecial：<init>/private/super 调用）：CallNonvirtual<Type>MethodA
-///     ——必须带定义类参数，禁止虚分派（super 调用语义：调父类实现而非子类覆盖）
+///   - Special（invokespecial：<init>/private/super 调用）：CallNonvirtual<Type>MethodA，
+///     必须带定义类参数，禁止虚分派（super 调用语义：调父类实现而非子类覆盖）
 ///   - Static：CallStatic<Type>MethodA（无 receiver）
 /// instance 调用（Virtual/Special/Interface）的 null receiver 显式抛 NPE（与 JVM
 /// 语义一致；JNI 对 null receiver 的调用行为未定义，不能依赖）。
@@ -1444,7 +1444,7 @@ void emitCallInfrastructure(CSourceStream& out, const VmProgram& program, const 
                                   : format_std("Call{}MethodA", suffix));
         const std::string  helper   = format_std("mj2x_vm_call_{}_{}", tag, i);
 
-        // 用户自定义 intrinsic（issue #818）：直接调用户 symbol——解包 regs 参数
+        // 用户自定义 intrinsic（issue #818）：直接调用户 symbol，解包 regs 参数
         // 按 desc 类型调用（passContext 时第一参数传 env），结果写回 regs[dest]。
         // passReceiver 扩面：instance 调用点把 regs[recv].ref（jobject 形态的
         // receiver）作为 env 后第一参数传入，并在调用前做 null receiver NPE
@@ -2292,8 +2292,8 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
 
     // --- blockTargets 数组（间接跳转表）---
     {
-        // 块乱序（--vmc4-shuffle-blocks，issue #1116 切片 A）：开启时块 id 空间
-        // 已被打乱，本表是「打乱后的块 id → 物理偏移」的唯一映射，以 xorshift32
+        // 块乱序（--vmc4-shuffle-blocks，issue #1116）：开启时块 id 空间
+        // 已被打乱，本表是"打乱后的块 id → 物理偏移"的唯一映射，以 xorshift32
         // keystream 密文落盘（键 vmc4DeriveTargetsKey，与 --vmc4-encrypt-program
         // 同族手法、独立常数种子段），JNI_OnLoad 一次性原地解密（backend 发射，
         // 时机安全性论证同 blob 解密）。数组因此为 non-const。关闭路径保持
@@ -2325,7 +2325,7 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
     // --- bytecode 数组 ---
     std::vector<uint32_t> lazyChunkEnds;   // 懒解密块终点表（blobLazy 时非空）
     {
-        // programBlobEncrypt（issue #760 切片 1/2）：开启时数据段以密文发射
+        // programBlobEncrypt（issue #760）：开启时数据段以密文发射
         // （xorshift32 密钥流，密钥从 instanceSeed 现场派生），产物 C 源与编译
         // 产物二进制中不再出现明文程序流。static 存储期使解密缓冲区存活期
         // 覆盖全部执行期，且不产生第二份 blob 副本。blockTargets/常量池不属
@@ -2333,12 +2333,12 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         //
         // 三种解密档位（互斥，见 vmc4_instance.hpp 互斥矩阵）：
         //   - 仅加密：整流单一密钥，JNI_OnLoad 一次性原地解密（backend 发射）。
-        //   - 加密 + lazy（--vmc4-lazy-decrypt，#760 切片 2）：按指令对齐的
+        //   - 加密 + lazy（--vmc4-lazy-decrypt，#760）：按指令对齐的
         //     64 字节目标块独立加密（块密钥 = vmc4DeriveChunkKey(blobKey, c)，
         //     与 CRT mj2x_vm_chunk_key 双镜像），JNI_OnLoad 不解密；解释器取码
         //     前经 mj2x_vm_lazy_touch_<tag> 确保所在块已解密（首次进入才解密，
         //     未走到的分支保持密文，对齐 jvmtp 1.6.4 vm.lazy-decrypt）。
-        //   - 加密 + block lazy（--vmc4-block-lazy-decrypt，#1116 切片 B）：
+        //   - 加密 + block lazy（--vmc4-block-lazy-decrypt，#1116）：
         //     按 blockTargets 划界的 CFG 块独立加密（块密钥链式派生
         //     vmc4DeriveBlockChainKey(seed, c, prev)，首块 prev=seed，与 CRT
         //     mj2x_vm_block_chain_key 双镜像），JNI_OnLoad 不解密；解释器首达
@@ -2348,7 +2348,7 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
         //     两档解密后均保持明文不回擦：rt 侧 handler 内联直读 code[pc]
         //     （无中央取译码步骤），回擦需在 5 种 dispatcher 的每条控制流边上
         //     插重加密点并判定"块离开"事件（循环回边使其不可判定），而单块
-        //     解密本身是纳秒级操作——权衡后取「解密一次、驻留明文」，密钥侧
+        //     解密本身是纳秒级操作，权衡后取"解密一次、驻留明文"，密钥侧
         //     的暴露面由密钥栈擦除（CRT scrub）与块级密钥独立派生收敛。
         if (instance.blobEncrypt()) {
             std::vector<uint8_t> cipher = program.bytecodes;
@@ -2356,8 +2356,8 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
                 // 块粒度链式加密：块 c 区间 = [targets[c], 下一块起点或流尾
                 // （尾块含 trailing Halt 哨兵）]，密钥按链序推导（k_0 =
                 // F(seed,0,seed)，k_c = F(seed,c,k_{c-1})）。加密施加于 drift
-                // 编码完成后的最终字节流（与 drift 正交叠加，与首切片同一
-                // 施加点）；blockTargets 与发射布局同一 id 空间（切片 A：
+                // 编码完成后的最终字节流（与 drift 正交叠加，与整体解密同一
+                // 施加点）；blockTargets 与发射布局同一 id 空间（块乱序：
                 // 物理序 == id 序），链下标与运行期首达定位天然一致。
                 const uint32_t blobKey = vmc4DeriveBlobKey(instance.instanceSeed());
                 const size_t   nBlocks = program.blockTargets.size();
@@ -2376,7 +2376,7 @@ std::string VmInterpreterEmitter::emit(const VmProgram& program, const VmInstanc
                 lazyChunkEnds = buildLazyChunkEnds(program);
                 // 分块独立加密：块 c 用 vmc4DeriveChunkKey(blobKey, c) 起步的
                 // 独立密钥流。加密施加于 drift 编码完成后的最终字节流（与
-                // drift 正交叠加，与首切片同一施加点）。
+                // drift 正交叠加，与整体解密同一施加点）。
                 const uint32_t blobKey = vmc4DeriveBlobKey(instance.instanceSeed());
                 uint32_t chunkBegin = 0;
                 for (size_t c = 0; c < lazyChunkEnds.size(); ++c) {

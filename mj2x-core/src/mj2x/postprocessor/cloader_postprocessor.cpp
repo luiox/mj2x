@@ -17,9 +17,9 @@ namespace {
 static constexpr const char* kCLoaderClass = "mj2x/cloader/Loader";
 static constexpr const char* kCLoaderEntry = "mj2x/cloader/Loader.class";
 
-/// @brief Loader 生成类 DOM 构建器（批 6d 树退役：与 lambda 合成类同一构建
-///        形态——addMethod/promote/append/lower 发射，writeClass→readClass
-///        字节往返收口）。
+/// @brief Loader 生成类 DOM 构建器（与 lambda 合成类同一构建
+///        形态：addMethod/promote/append/lower 发射，writeClass→readClass
+///        字节往返收束）。
 ///
 /// 方法形态与旧树构建器逐位同源（javac 直译；全部直线体无分支，v52 校验
 /// 无 StackMapTable 依赖）。native 桥接方法（registerNativesForClass）无体。
@@ -49,7 +49,7 @@ std::unique_ptr<jbc::core::ClassFile> buildCLoaderClassDom(const std::string& re
         const ca::usize mi = ses->backing().methods.size() - 1;
         if (!seed.withCode) {
             // native 桥接（registerNativesForClass）无 Code 属性，无体可发
-            //（promoteMethod 对无 Code 方法返回 Err）——落位即收。
+            //（promoteMethod 对无 Code 方法返回 Err），落位即收。
             return;
         }
         auto promoted = jbc::ir::promoteMethod(*ses, mi);
@@ -131,7 +131,7 @@ std::unique_ptr<jbc::core::ClassFile> buildCLoaderClassDom(const std::string& re
                    std::move(seq));
     }
 
-    // 会话收口：字节往返还回独立 ClassFile（真实编解码器纪律，与
+    // 会话收束：字节往返还回独立 ClassFile（真实编解码器纪律，与
     // dom_edit commitDomEdit 同通道；Loader 进 index 后还要过注入与输出面）。
     auto written = jbc::core::writeClass(ses->backing());
     if (written.is_err()) {

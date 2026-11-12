@@ -1,6 +1,6 @@
-// java_corpus_e2e_test.cpp - mj2x 自建 Java 语料集（dev_plan B 项）：
+// java_corpus_e2e_test.cpp，mj2x 自建 Java 语料集（dev_plan B 项）：
 // test_resource/java_corpus 的目录式用例 × 三 C 后端（stackc/regc/vmc4）矩阵，
-// 差分对拍（baseline JVM 输出 vs 保护后 JVM 输出逐字节一致）。
+// 差分比对（baseline JVM 输出 vs 保护后 JVM 输出逐字节一致）。
 //
 // 设计（语料集 README 见 test_resource/java_corpus/README.md）：
 //   - 用例 = 自包含 .java（自带 main、输出确定性），目录名 = 类别
@@ -9,7 +9,7 @@
 //   - exclusions.txt：`<case> <backend> <reason>` 记录已知缺口（每行显式记账，
 //     修复后删行）；# 开头为注释。
 //   - MJ2X_CORPUS_TIER=obf：叠加混淆开关面（regc --regc-obfuscate；
-//     vmc4 super-ops+fragment+regfile+shuffle）——混淆组合吃满语料。
+//     vmc4 super-ops+fragment+regfile+shuffle），混淆组合吃满语料。
 //   - 编译走 CLI 进程（真实产品接口），而非直构 Pipeline。
 
 #include <gtest/gtest.h>
@@ -244,7 +244,7 @@ CorpusRunResult runOnce(const CorpusToolchain& tc, const fs::path& dir, bool wit
 
 /// 语料所需最低 JDK major（JDK 8 之后语法档位；未列条目 = JDK 8 即可编译）。
 /// 与 test_resource/java_corpus 语料同步维护：新增 JDK 8 之后语法的 .java 时
-/// 在此登记档位，消费矩阵腿（JDK 8/21/25）据此 skipOnJdkBelow 跳过。
+/// 在此登记档位，消费矩阵作业（JDK 8/21/25）据此 skipOnJdkBelow 跳过。
 int corpusMinJdk(const std::string& name)
 {
     static const std::map<std::string, int> kMinJdk = {
@@ -307,7 +307,7 @@ protected:
         }
     }
 
-    /// 一格矩阵：javac → baseline → CLI 保护 → native 运行 → 差分对拍。
+    /// 一格矩阵：javac → baseline → CLI 保护 → native 运行 → 差分比对。
     void runCase(const CorpusMatrixParam& param)
     {
         const auto& aCase = param.aCase;
@@ -352,7 +352,7 @@ INSTANTIATE_TEST_SUITE_P(Corpus, JavaCorpusE2E, ::testing::ValuesIn(corpusMatrix
 
 // ===========================================================================
 // 性能档（MJ2X_CORPUS_PERF=1 门控）：perf/ 语料 × 列（baseline + 三后端），
-// 每列 5 轮计时取中位数打表；各列输出与 baseline 逐字节对拍（性能档同样
+// 每列 5 轮计时取中位数打表；各列输出与 baseline 逐字节比对（性能档同样
 // 不得破坏语义）。
 // ===========================================================================
 

@@ -56,7 +56,7 @@ MethodNode* makeMethod(CompilerIndex& index, int access, const std::string& name
 }
 
 /// 造一个类：isInterface 决定 ACC_INTERFACE|ACC_ABSTRACT 复合访问位。
-/// 批 6d：树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
+/// 树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
 CompilerClass& buildClass(CompilerIndex& index, const std::string& className,
                           bool isInterface, std::vector<MethodNode*> methods)
 {

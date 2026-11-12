@@ -221,7 +221,7 @@ static void test_float_to_int_jvm_semantics(void)
 
 int main(int argc, char** argv)
 {
-    // DISABLED_ 语义门（#1186）：纯 C 驱动器仿 gtest 约定——argv 白名单命中
+    // DISABLED_ 语义门（#1186）：纯 C 驱动器仿 gtest 约定，argv 白名单命中
     // --gtest_also_run_disabled_tests（裸旗标或 =值 形式，=0 关、其余值开，
     // 评审 P3-2）才追加执行 DISABLED_ 前缀测试；缺省时函数集合与输出与既有
     // 套件完全一致（DISABLED_ 不计入日常跑套）。

@@ -108,7 +108,7 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
 {
     static constexpr const char* kSelf = native_loader::kClassName;
 
-    // 批 6d 树退役：与 cloader 同一 DOM 构建形态（addMethod/promote/append/
+    // 与 cloader 同一 DOM 构建形态（addMethod/promote/append/
     // lower 发射）。major 49 = v1.5：无 StackMapTable（对齐旧 ClassWriter
     // visit(49) 形态）；maxes 由 recomputeSessionFrames 帧引擎计算（替代旧
     // COMPUTE_MAXS），v<50 只落 maxes 不建表。
@@ -178,7 +178,7 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
             "load", "(Ljava/lang/String;Ljava/lang/String;)V",
             Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC | Opcodes::ACC_SYNCHRONIZED, true});
         auto unit = promote(mi);
-        // 前向分支逐条源序发射，目标指令后到——append 期锚定校验机制性不可
+        // 前向分支逐条源序发射，目标指令后到，append 期锚定校验机制性不可
         // 满足，走受控延后绑定态，退出时全量补验悬垂。
         unit->dom.beginDeferredTargets();
         CodeEditor editor(*unit);
@@ -336,9 +336,9 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
     //   }
     //   throw new UnsatisfiedLinkError("mj2x native temp file create failed");
     // 与 createTempFile 的语义对齐点：同目录（java.io.tmpdir）、同前缀/后缀、
-    // 原子独占（createNewFile 失败即换名重试，永不打开已存在文件——防符号链接
+    // 原子独占（createNewFile 失败即换名重试，永不打开已存在文件，防符号链接
     // 抢占）、失败抛 UnsatisfiedLinkError。已知差异（记录不消除）：POSIX 下
-    // 权限为默认 umask（如 644）而 createTempFile 为 600——Windows 产品线无差，
+    // 权限为默认 umask（如 644）而 createTempFile 为 600，Windows 产品线无差，
     // POSIX 侧提取物生命周期为单 JVM 会话（deleteOnExit），内容即 jar 内资源。
     {
         const ca::usize mi = addMethod(jbc::ir::MethodSeed{
@@ -376,7 +376,7 @@ std::vector<ca::u8> buildNativeLoaderClass(std::uint32_t xorKey = 0)
         appendInsn(editor, CodeEditor::local(Op::ISTORE, 4));
         // loop: f = new File(dir, "mj2x-" + Long.toHexString(rnd.nextLong()) + suffix)
         // 注意：dir 为 String，构造器必须取 (Ljava/lang/String;Ljava/lang/String;)V
-        // 重载——曾误写 (File,String) 描述符致 VerifyError（#1183 排障记录）。
+        // 重载，曾误写 (File,String) 描述符致 VerifyError（#1183 排障记录）。
         bindLabelAt(editor, tempLoop,
                     appendInsn(editor,
                                CodeEditor::cpInsn(Op::NEW,
@@ -498,16 +498,16 @@ void NativeLoaderPostprocessor::process(CompilerIndex& index)
     if (!needResource && !needClinit) return;
 
     if (needResource) {
-        // 批 6d：从零建类发射面走 DOM 构建器（帧引擎出 maxes）。
+        // 从零建类发射面走 DOM 构建器（帧引擎出 maxes）。
         index.upsertJarResource(kLoaderEntry, buildNativeLoaderClass(xorKey_));
     }
 
     if (!needClinit) return;
 
     // 对每个被后端改写过的非库类前插 NativeLoader.load 调用。判定条件是
-    // 「modified 且含 ACC_NATIVE 方法」：modified 现在也被 indy/ldc 展开置位
+    // "modified 且含 ACC_NATIVE 方法"：modified 现在也被 indy/ldc 展开置位
     //（那些类改写了指令流但不含 native 方法），仅凭 modified 会给纯字节码类
-    // 误注入 clinit 加载调用。批 4：改写载体切 DOM（findMethod/addMethod/
+    // 误注入 clinit 加载调用。改写载体已切 DOM（findMethod/addMethod/
     // promote/insertAtStart/lower），native 方法判定读 DOM access。
     for (auto& [name, cls] : index.getClasses()) {
         if (!cls.modified || cls.isLibrary || !cls.dom) continue;

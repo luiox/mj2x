@@ -50,7 +50,7 @@ struct SampleSpec
     const char*              expectedOutput;
     /// 可选：Driver 在 check() 输出后追加执行的 probe 表达式（受保护类的静态
     /// 方法调用，期望值固定打印 "probe=<值>"，异常打印 "probe=iae"）。用于
-    /// no-try 传播这类需要「非翻译的 Java 调用方」观察的用例（#879）。
+    /// no-try 传播这类需要"非翻译的 Java 调用方"观察的用例（#879）。
     const char*              probeExpression = nullptr;
 };
 
@@ -198,7 +198,7 @@ protected:
     static void SetUpTestSuite()
     {
         tc_ = probeToolchain();
-        // #1122：探测结果可见化——找到/未找到 + 版本 + 来源，一行打测试输出。
+        // #1122：探测结果可见化，找到/未找到 + 版本 + 来源，一行打测试输出。
         std::cout << "[clang-probe] LlvmSamples: " << test::jdk::formatClangProbe(tc_.clang) << std::endl;
     }
 
@@ -341,7 +341,7 @@ protected:
         ASSERT_EQ(nativeRun.exitCode, 0) << sample.className << " native run:\n"
                                          << nativeRun.out;
         // 期望值按 \n 判等（#879 起支持 probe 多行期望）：runScript 输出 CRLF，
-        // 全文去 \r 后再裁尾部换行——单行样本行为与原先逐字一致。
+        // 全文去 \r 后再裁尾部换行，单行样本行为与原先逐字一致。
         std::string normalized = nativeRun.out;
         normalized.erase(std::remove(normalized.begin(), normalized.end(), '\r'),
                          normalized.end());

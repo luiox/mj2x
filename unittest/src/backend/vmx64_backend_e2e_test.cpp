@@ -1,6 +1,6 @@
 // vmx64 native E2E harness (Phase 2)：Java source -> javac -> mj2x-cli (vmx64)
 // -> xmake 工程（模板 add_files 收编 .asm 经 ml64 汇编 + 注册 C TU）-> DLL
-// -> Java System.load + RegisterNatives 绑定 -> 调用结果与 JVM 基线对拍。
+// -> Java System.load + RegisterNatives 绑定 -> 调用结果与 JVM 基线比对。
 //
 // 与 vmc4_backend_e2e_test.cpp 的差别：
 //   - 产物是 .asm（MASM x64）而非 C：执行路径必须经生成工程（xmake 模板的
@@ -64,7 +64,7 @@ Toolchain probeToolchain()
     tc.jdkIncludeWin = jdk.jdkIncludeWin;
 
     // ml64/vs 可用性探测（照 vmc4 e2e 惯例）：vcvars 定位失败 = 无 MSVC，
-    // xmake 无法以 msvc 工具链配置——SKIP 而非 FAIL。
+    // xmake 无法以 msvc 工具链配置，SKIP 而非 FAIL。
     if (jdk_finder::find_vcvars_all().empty()) {
         tc.reason = "vcvars64.bat not found; MSVC (ml64 via xmake msvc toolchain) is required";
         return tc;
@@ -124,7 +124,7 @@ std::string readText(const fs::path& path)
 /// 受保护的样本类：全部静态、i32/i64 纯算术 + 控制流（Phase 2 最小 opcode 面；
 /// 实例方法/字段/浮点 fail-closed 保留字节码，不进 E2E 断言面）。
 /// add3 覆盖 ≥3 参数的栈传参 homing（p2 走调用方 shadow space 之后的栈参区）；
-/// wrapMul/lwrapAdd 覆盖 i32/i64 回绕位型（JVM 有符号回绕，基线对拍自证）。
+/// wrapMul/lwrapAdd 覆盖 i32/i64 回绕位型（JVM 有符号回绕，基线比对自证）。
 const char* kSampleSource = R"JAVA(
 public class Vmx64Sample {
     static int add(int a, int b) { return a + b; }
@@ -180,7 +180,7 @@ Toolchain Vmx64BackendE2E::tc_;
 
 // ===========================================================================
 // 主用例：生成工程结构断言（--generate-xmake，不构建）+ 执行链路
-//（--compile 临时工程真构建）+ JVM 基线对拍 + 跨调用确定性。
+//（--compile 临时工程真构建）+ JVM 基线比对 + 跨调用确定性。
 // ===========================================================================
 TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
 {
@@ -230,7 +230,7 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
         << "RegisterNatives binding TU must be written into src/generated";
 
     const std::string xmakeLua = readText(project / "xmake.lua");
-    // vmx64 专属段注入：ml64 汇编分流 + 平台硬校验（on_config 的 raise 文案——
+    // vmx64 专属段注入：ml64 汇编分流 + 平台硬校验（on_config 的 raise 文案，
     // is_plat/add_files 在共享模板正文已有出现，不能作注入证据；描述作用域
     // 沙箱没有 raise/assert，装配器校验只能在 on_config 脚本作用域）。
     EXPECT_NE(xmakeLua.find("add_files(\"src/generated/*.asm\")"), std::string::npos)
@@ -276,7 +276,7 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
     // --- Java 调用保护类（System.load -> JNI_OnLoad -> clinit 注册）---
     // 有界执行护栏（CI 实证：VM 死循环 = java 永不返回 = runBat 永等 = 烧满
     // 6h job timeout 才见分晓）。PowerShell WaitForExit 上限 120s，超时杀进程
-    // 退出码 124——已落盘的部分 stdout/stderr 即"挂死发生在哪次调用"的现场。
+    // 退出码 124，已落盘的部分 stdout/stderr 即"挂死发生在哪次调用"的现场。
     fs::copy_file(outClass, inClass, fs::copy_options::overwrite_existing, ec);
     ASSERT_FALSE(ec) << ec.message();
     const fs::path ps1    = dir / "run_bounded.ps1";
@@ -299,13 +299,13 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
             << "exit $p.ExitCode\n";
     }
     // 运行起点（mtime 过滤基准）：兜底扫描的目录（测试进程 CWD = 仓库根）
-    // 可能躺着其它测试/往轮遗留的 hs_err——只收编本次运行期间新写的。
+    // 可能躺着其它测试/往轮遗留的 hs_err，只收集本次运行期间新写的。
     const auto runStart = fs::file_time_type::clock::now();
     const auto protectedRun =
         runBat({std::string("powershell -NoProfile -ExecutionPolicy Bypass -File ") + q(ps1) +
                 " " + q(dll) + " " + q(tc_.java) + " " + q(dir) + " " + q(outTxt) + " " +
                 q(errTxt)});
-    // 失败现场全量转储：hs_err_pid*.log（崩溃寄存器/故障指令——JVM 崩在
+    // 失败现场全量转储：hs_err_pid*.log（崩溃寄存器/故障指令，JVM 崩在
     // native 内时它是唯一寄存器级现场）+ 发射 .asm + CLI 构建日志。
     const auto crashDiag = [&]() {
         std::string d = "\n--- driver stdout ---\n";

@@ -79,7 +79,7 @@ ZipResult<void> writeEntryToDisk(struct archive* a, struct archive_entry* entry,
                 ofs.write(static_cast<const char*>(buff), static_cast<std::streamsize>(size));
         }
     }
-    // 保持文件权限位（best-effort，失败忽略——CI/解压场景不强求权限还原）。
+    // 保持文件权限位（best-effort，失败忽略，CI/解压场景不强求权限还原）。
     std::error_code ign;
     fs::permissions(out, static_cast<fs::perms>(archive_entry_perm(entry)), ign);
     return ca::core::Ok();
@@ -107,7 +107,7 @@ ZipResult<void> extractArchiveTo(const std::string&           archivePath,
     archive_read_support_format_all(a);   // zip / tar / ...
 
     // archivePath 是字节边界上的 std::string（libarchive C API 需要 NUL 结尾的
-    // char*；UTF-8 字节直通，Windows 侧 libarchive 内部按 ACP 收窄解释——与
+    // char*；UTF-8 字节直通，Windows 侧 libarchive 内部按 ACP 收窄解释，与
     // 源侧 mjbase 同口径，ASCII 路径恒安全）。
     const int r = archive_read_open_filename(a, archivePath.c_str(), 10240);
     if (r != ARCHIVE_OK) {
@@ -120,7 +120,7 @@ ZipResult<void> extractArchiveTo(const std::string&           archivePath,
     }
 
     // 逐条目读取。read_next_header 正常读完返回 ARCHIVE_EOF（循环自然退出），
-    // 只有返回 ARCHIVE_FATAL 等才视为失败——不要用 archive_errno 事后判断，
+    // 只有返回 ARCHIVE_FATAL 等才视为失败，不要用 archive_errno 事后判断，
     // 它是"最近一次错误"，正常读完未必清零，会误报。
     struct archive_entry* entry = nullptr;
     bool                  found = false;

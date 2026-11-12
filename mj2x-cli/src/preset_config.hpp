@@ -4,7 +4,7 @@
 //
 // 默认配置档（preset）：一次设一组开关，不用记十几二十个 CLI 参数。
 //
-// preset 不是第四套配置语法——它是一个内置的 JSON 对象，键名与配置文件完全
+// preset 不是第四套配置语法，它是一个内置的 JSON 对象，键名与配置文件完全
 // 相同（注册表 jsonPath），走同一套 parseJson 校验。差别只有两点：
 //   - 来源：内置而非文件
 //   - 优先级：夹在默认值与配置文件之间（配置文件是用户显式写的，应当能覆盖
@@ -41,7 +41,7 @@ const std::vector<std::string>& presetNames();
 /// @brief 档位展开成的配置对象（键 = 注册表 jsonPath）。
 ///
 /// @details
-/// 只含"与默认值不同"的键——未列出的键保持默认，preset 是建议值不是硬编码
+/// 只含"与默认值不同"的键，未列出的键保持默认，preset 是建议值不是硬编码
 /// 全量。None 返回空对象。
 nlohmann::json presetObject(PresetName preset);
 

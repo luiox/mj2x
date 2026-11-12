@@ -16,7 +16,7 @@
 #include "mj2x/preprocessor/init_clinit_mover_preprocessor.hpp"
 #include "jbytecode/jbytecode.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -80,7 +80,7 @@ bool hasOpcode(MethodNode* m, int opcode)
 }
 
 // 构造一个类：superName=java/lang/Object，给定的方法列表。
-// 批 6d：树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
+// 树夹具经 classFromTree 落 DOM + 快照对齐（CompilerClass 无树槽）。
 void buildClass(CompilerIndex& index, const std::string& className,
                 std::vector<MethodNode*> methods)
 {
@@ -261,7 +261,7 @@ TEST(InitClinitMoverTest, SkipsInitWithFrameInPrefix)
     // 三明治重建树，断言现查新节点（FRAME 经 SMT 往返原样回树）。
     auto* skel = findMethod(clsTree.get(), "<init>");
     ASSERT_NE(skel, nullptr);
-    // 帧经 SMT 往返回树时，帧锚点会先落一个 LabelNode（帧引用 label）——
+    // 帧经 SMT 往返回树时，帧锚点会先落一个 LabelNode（帧引用 label），
     // 重建序：FrameNode + LN(0) + aload0 + super + return。
     EXPECT_EQ(skel->instructions.size(), 5);
     EXPECT_TRUE(hasOpcode(skel, Opcodes::INVOKESPECIAL));

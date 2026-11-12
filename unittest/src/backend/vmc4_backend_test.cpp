@@ -34,7 +34,7 @@
 #include "mj2x/mir/register_ir/reg_lowering.hpp"
 #include "mj2x/mir/ssa/ssa_builder.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -98,7 +98,7 @@ std::unique_ptr<VmProgram> encodeMethodNode(std::unique_ptr<MethodNode> mn,
     eliminateDeadRegInstructions(*reg);
     auto encoded = VmEncoder::encode(*reg, instance, reason, nullptr, encodeOptions);
     // 出参移交所有权：RegFunction 由调用方持有（此前交裸指针、函数返回即悬垂，
-    // ASan heap-use-after-free 实证——DEV-8 测试合同 ①）。
+    // ASan heap-use-after-free 实证，DEV-8 测试合同 ①）。
     if (outReg) *outReg = std::move(reg);
     return encoded;
 }
@@ -241,10 +241,10 @@ int operandLenForTest(VmOpcode op)
 ///
 /// @details 指令长度取自 operandLenForTest（与 vm_interpreter_emit.cpp 的 handler
 /// 片段同源），故本函数与解释器的取指逻辑天然一致。**不能用裸 std::find/
-/// std::count 查 opcode 字节**——operand 字节（寄存器索引/常量位模式）会与某
+/// std::count 查 opcode 字节**，operand 字节（寄存器索引/常量位模式）会与某
 /// 语义的 canonical 字节碰撞，opcode 集大小变化会移动 canonical 赋值，裸查必然
 /// 误报（SuperOpFoldsIncDec 的历史注释已记此坑）。遇到长度未知的 opcode 即停扫
-/// 并返回已统计值——调用方只用它比较「开关开/关」两种形态的相对数量，绝对全集
+/// 并返回已统计值，调用方只用它比较"开关开/关"两种形态的相对数量，绝对全集
 /// 不参与断言。
 size_t countInstructionsForTest(const VmProgram& prog, const VmInstance& instance, VmOpcode op)
 {
@@ -329,7 +329,7 @@ TEST(Vmc4BackendTest, EncodesLoopMethod)
 }
 
 // ===========================================================================
-// issue #9：指令碎片化 —— 一条计算指令拆成「Copy + 原指令」多段。
+// issue #9：指令碎片化，一条计算指令拆成"Copy + 原指令"多段。
 // ===========================================================================
 
 // issue #9：碎片化把一条 Binary 拆成两条 Copy + 原 Binary；关闭时与历史形态
@@ -340,7 +340,7 @@ TEST(Vmc4BackendTest, FragmentExpandsBinaryIntoCopies)
     opts.aliasCount = 0;
     VmInstance instance(opts);
     std::string reason;
-    // int f(int a, int b) { return (a + b) * (a - b); } —— 三条 Binary，无 ±1。
+    // int f(int a, int b) { return (a + b) * (a - b); }，三条 Binary，无 ±1。
     const auto encode = [&](const VmEncodeOptions& eo) {
         return encodeMethod("fm", "(II)I",
                             {
@@ -429,7 +429,7 @@ TEST(Vmc4BackendTest, FragmentOffByDefaultIsByteIdentical)
     EXPECT_EQ(withDefault->numRegs, explicitOff->numRegs);
 }
 
-// issue #9：碎片化与 super-ops 可组合——±1 折叠后的 SuperInc 同样被碎片化
+// issue #9：碎片化与 super-ops 可组合，±1 折叠后的 SuperInc 同样被碎片化
 // （操作数中转一次），不存在"折叠过的指令反而没被打散"的漏网岛。
 TEST(Vmc4BackendTest, FragmentComposesWithSuperOps)
 {
@@ -457,7 +457,7 @@ TEST(Vmc4BackendTest, FragmentComposesWithSuperOps)
         << "no plain Binary may remain";
 }
 
-// issue #9：FusedBinary 与碎片化组合——三个源操作数各中转一次。
+// issue #9：FusedBinary 与碎片化组合，三个源操作数各中转一次。
 TEST(Vmc4BackendTest, FragmentComposesWithFusedBinary)
 {
     Vmc4Options opts;
@@ -485,7 +485,7 @@ TEST(Vmc4BackendTest, FragmentComposesWithFusedBinary)
     EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::Binary), 0u);
 }
 
-// issue #9：中间值被多处消费时不融合（唯一消费是融合的前提——否则折叠后
+// issue #9：中间值被多处消费时不融合（唯一消费是融合的前提，否则折叠后
 // 有代码读不到该值）。
 TEST(Vmc4BackendTest, FusedBinaryRequiresSingleUseIntermediate)
 {
@@ -521,14 +521,14 @@ TEST(Vmc4BackendTest, FusedBinaryRequiresSingleUseIntermediate)
 }
 
 // ===========================================================================
-// 测试 3：LoadField（Phase 2.A）—— getfield 收集为 loadFieldRefs，不再 fail-closed。
+// 测试 3：LoadField（Phase 2.A），getfield 收集为 loadFieldRefs，不再 fail-closed。
 // ===========================================================================
 TEST(Vmc4BackendTest, EncodesLoadFieldInstruction)
 {
     Vmc4Options opts;
     VmInstance  instance(opts);
     std::string reason;
-    // static int getField(MyObj o) { return o.x; }  —— ALOAD0 + getfield
+    // static int getField(MyObj o) { return o.x; }，ALOAD0 + getfield
     auto prog = encodeMethod("getField", "(Ltest/MyObj;)I",
                              {
                                  new VarInsnNode(Opcodes::ALOAD, 0),
@@ -679,7 +679,7 @@ TEST(Vmc4BackendTest, ConstantSlotsIsolatedFromComputeRegisters)
     VmInstance  instance(opts);
     std::string            reason;
     std::unique_ptr<RegFunction> reg;
-    // int addMul3(int a, int b) { return (a + b) * 3 + 3; }  —— 常量 3 出现两次应复用
+    // int addMul3(int a, int b) { return (a + b) * 3 + 3; }，常量 3 出现两次应复用
     auto prog = encodeMethod("addMul3", "(II)I",
                              {
                                  new VarInsnNode(Opcodes::ILOAD, 0),
@@ -708,7 +708,7 @@ TEST(Vmc4BackendTest, ConstantSlotsIsolatedFromComputeRegisters)
     EXPECT_GE(prog->numRegs, maxCompute + 1 + static_cast<uint32_t>(prog->constantPool.size()));
 }
 
-// 审查 G-1 修复回归：scanComputeRegisters 曾漏 Switch 终结者边拷贝——仅经
+// 审查 G-1 修复回归：scanComputeRegisters 曾漏 Switch 终结者边拷贝，仅经
 // switch 边定义的寄存器不抬 maxReg，常量槽从低水位分配会落在边拷贝 dest 之上
 // 被覆写（取值错），且 numRegs 偏小致解释器 regs[] 越界。手构 RegIR：r7 只在
 // switch 各边 copies 中定义（case/default 分别汇入两个 return 块，default 与
@@ -724,7 +724,7 @@ TEST(Vmc4BackendTest, SwitchEdgeCopiesRaiseMaxReg)
     fn.parameters.push_back(selector);
 
     // 碰撞机制（旧代码）：真实块先于合成边块编码，Return(IntLiteral) 在不经过
-    // 任何 dest 观察的情况下 intern 常量——若此时 r1（仅经 switch 边定义）尚未
+    // 任何 dest 观察的情况下 intern 常量，若此时 r1（仅经 switch 边定义）尚未
     // 被观察（其使用块编码在后），首个常量槽从参数数水位 1 起分配即落在 r1 上：
     // blockA 的 77@slot1 与边拷贝 dest 互相覆写。
     const RegValue merged{RegId{1}, SSAType::I32};
@@ -775,7 +775,7 @@ TEST(Vmc4BackendTest, SwitchEdgeCopiesRaiseMaxReg)
 
 // ===========================================================================
 // 回归 2（P0-2）：FuncPtrTable 的 dispatch body 末尾必须有 mj2x_vm_done label
-// 并写回 ctx->pc/status——缺失则 RETURN/BINARY 除零分支引用未定义 label。
+// 并写回 ctx->pc/status，缺失则 RETURN/BINARY 除零分支引用未定义 label。
 // ===========================================================================
 TEST(Vmc4BackendTest, FuncPtrDispatcherEmitsDoneLabel)
 {
@@ -826,7 +826,7 @@ TEST(Vmc4BackendTest, FuncPtrDispatcherEmitsDoneLabel)
 }
 
 // ===========================================================================
-// Phase 2.B：实例方法可转 VM —— SSA 把 this 作为参数 id0（REF），wrapper 把
+// Phase 2.B：实例方法可转 VM，SSA 把 this 作为参数 id0（REF），wrapper 把
 // thisObject 填进 regs[0]、显式参数从 regs[1] 开始（与 encoder numInputs 对齐）。
 // ===========================================================================
 TEST(Vmc4BackendTest, VirtualizesInstanceMethodWithThisInReg0)
@@ -948,7 +948,7 @@ std::vector<uint8_t> mappingOf(const VmInstance& instance)
     return bytes;
 }
 
-// P2-1：可复现构建 —— 相同 seed 相同映射与 handler 顺序；不同 seed 不同。
+// P2-1：可复现构建，相同 seed 相同映射与 handler 顺序；不同 seed 不同。
 TEST(Vmc4BackendTest, OpcodeMappingIsSeedDeterministic)
 {
     Vmc4Options optsA;
@@ -1080,7 +1080,7 @@ TEST(Vmc4BackendTest, InterpreterUsesInstanceMappedCaseLabels)
         << src;
 }
 
-// P2-5：实例 seed 派生 —— 同主 seed + 同身份 → 同实例 seed；不同身份 → 不同。
+// P2-5：实例 seed 派生，同主 seed + 同身份 → 同实例 seed；不同身份 → 不同。
 TEST(Vmc4BackendTest, InstanceSeedDerivationMixesIdentity)
 {
     EXPECT_EQ(vmc4DeriveInstanceSeed(0x11, 0xAA), vmc4DeriveInstanceSeed(0x11, 0xAA));
@@ -1089,7 +1089,7 @@ TEST(Vmc4BackendTest, InstanceSeedDerivationMixesIdentity)
     EXPECT_NE(vmc4DeriveInstanceSeed(0x11, 0xAA), vmc4DeriveInstanceSeed(0x22, 0xBB));
 }
 
-// P2-6：per-class 语义 —— 同主 seed 下两个类实例的映射不同（跨实例 ISA 独立）。
+// P2-6：per-class 语义，同主 seed 下两个类实例的映射不同（跨实例 ISA 独立）。
 TEST(Vmc4BackendTest, PerClassInstancesDivergeAcrossClasses)
 {
     Vmc4Options opts;
@@ -1108,7 +1108,7 @@ TEST(Vmc4BackendTest, PerClassInstancesDivergeAcrossClasses)
 // 语义保真，按 fail-closed 哲学保留字节码。）
 // ===========================================================================
 
-// P2-7：StoreField（PUTFIELD，Phase 2.A）—— putfield 收集为 storeFieldRefs，不再 fail-closed。
+// P2-7：StoreField（PUTFIELD，Phase 2.A），putfield 收集为 storeFieldRefs，不再 fail-closed。
 TEST(Vmc4BackendTest, EncodesStoreFieldInstruction)
 {
     Vmc4Options opts;
@@ -1137,7 +1137,7 @@ TEST(Vmc4BackendTest, EncodesStoreFieldInstruction)
     EXPECT_FALSE(prog->storeFieldRefs[0].isStatic);
 }
 
-// P2-8：ArrayLoad / ArrayStore（Phase 2.A）—— 不再 fail-closed，按元素类型收集。
+// P2-8：ArrayLoad / ArrayStore（Phase 2.A），不再 fail-closed，按元素类型收集。
 TEST(Vmc4BackendTest, EncodesArrayAccessInstructions)
 {
     Vmc4Options opts;
@@ -1254,7 +1254,7 @@ TEST(Vmc4BackendTest, SpecialCallEmitsNonvirtualAndNullReceiverNpe)
         << vsrc;
 }
 
-// P2-10：Allocate（NEW，Phase 2.A）—— Object 分配不再 fail-closed，<init> 由独立 Call。
+// P2-10：Allocate（NEW，Phase 2.A），Object 分配不再 fail-closed，<init> 由独立 Call。
 TEST(Vmc4BackendTest, EncodesAllocateInstruction)
 {
     Vmc4Options opts;
@@ -1283,7 +1283,7 @@ TEST(Vmc4BackendTest, EncodesAllocateInstruction)
     EXPECT_EQ(prog->methodRefs[0].name, "<init>");
 }
 
-// P2-10b：String LDC（Phase 2.E）—— ldc_string Opaque 物质化为字符串常量槽，
+// P2-10b：String LDC（Phase 2.E），ldc_string Opaque 物质化为字符串常量槽，
 // wrapper 用 NewStringUTF 预加载（不再 fail-closed）。
 TEST(Vmc4BackendTest, EncodesStringLdc)
 {
@@ -1309,7 +1309,7 @@ TEST(Vmc4BackendTest, EncodesStringLdc)
     EXPECT_NE(src.find("mj2x_vm_exec_greet1"), std::string::npos) << src;
 }
 
-// P2-10c：MULTIANEWARRAY（Phase 2.E）—— 不再 fail-closed，编码为 MultiArray
+// P2-10c：MULTIANEWARRAY（Phase 2.E），不再 fail-closed，编码为 MultiArray
 // Allocate（argc = 维度数），发射共享递归 helper（NewObjectArray 逐层填充）。
 TEST(Vmc4BackendTest, EncodesMultiArrayAllocate)
 {
@@ -1335,7 +1335,7 @@ TEST(Vmc4BackendTest, EncodesMultiArrayAllocate)
     EXPECT_NE(src.find("NewObjectArray"), std::string::npos) << src;
 }
 
-// P2-11：Intrinsic array.length（Phase 2.A）—— 不再 fail-closed。
+// P2-11：Intrinsic array.length（Phase 2.A），不再 fail-closed。
 TEST(Vmc4BackendTest, EncodesArrayLengthIntrinsic)
 {
     Vmc4Options opts;
@@ -1401,7 +1401,7 @@ TEST(Vmc4BackendTest, EncodesThrowInstruction)
     const std::string src = VmInterpreterEmitter::emit(*prog, instance, "raise1");
     EXPECT_NE(src.find("mj2x_vm_throw(env, regs[src].ref)"), std::string::npos) << src;
     EXPECT_NE(src.find("mj2x_vm_exc:"), std::string::npos) << src;
-    // 回归：THROW handler 进检查点前 pc 回退到抛出指令——否则块反查把异常
+    // 回归：THROW handler 进检查点前 pc 回退到抛出指令，否则块反查把异常
     // 归属到布局顺序的下一块，保护块后跟未保护块时 catch 漏接（见 e2e
     // AthrowAttributionRoundTrip）。
     EXPECT_NE(src.find("pc -= 3;"), std::string::npos) << src;
@@ -1447,7 +1447,7 @@ TEST(Vmc4BackendTest, EncodesSwitchTerminator)
     EXPECT_GE(prog->blockTargets.size(), 4u);
 }
 
-// P2-15：异常区域（try/catch 表，Phase 2.C 起支持）——编码为区域表 + 块活跃条目。
+// P2-15：异常区域（try/catch 表，Phase 2.C 起支持），编码为区域表 + 块活跃条目。
 TEST(Vmc4BackendTest, EncodesExceptionRegion)
 {
     Vmc4Options opts;
@@ -1673,7 +1673,7 @@ TEST(Vmc4BackendTest, InterpreterEmitsAliasCases)
         << ifSrc;
 }
 
-// P3-6：bogus handler 注入——函数存在但 dispatch 结构不引用。
+// P3-6：bogus handler 注入，函数存在但 dispatch 结构不引用。
 TEST(Vmc4BackendTest, BogusHandlersEmittedButNotReferenced)
 {
     Vmc4Options opts;
@@ -1702,7 +1702,7 @@ TEST(Vmc4BackendTest, BogusHandlersEmittedButNotReferenced)
                          << src;
 }
 
-// P3-7：super-operator 折叠——Binary(x,1,Add/Sub) → SuperInc/SuperDec。
+// P3-7：super-operator 折叠，Binary(x,1,Add/Sub) → SuperInc/SuperDec。
 // issue #9 起该折叠由 --vmc4-super-ops 门控（默认关），故显式开启后再断言。
 TEST(Vmc4BackendTest, SuperOpFoldsIncDec)
 {
@@ -1714,7 +1714,7 @@ TEST(Vmc4BackendTest, SuperOpFoldsIncDec)
     VmEncodeOptions encOpts;
     encOpts.superOps = true;
     // int incDec(int x, int y) { return (x + 1) + (y - 1); }
-    // 两处 ±1 各自独立（互不为对方的操作数），不会被 FusedBinary 融合——
+    // 两处 ±1 各自独立（互不为对方的操作数），不会被 FusedBinary 融合，
     // 否则 ±1 折叠本身被融合产物取代，测不到 SuperInc/SuperDec。
     auto prog = encodeMethod("incDec", "(II)I",
                              {
@@ -1737,12 +1737,12 @@ TEST(Vmc4BackendTest, SuperOpFoldsIncDec)
     EXPECT_EQ(countInstructionsForTest(*prog, instance, VmOpcode::SuperDec), 1u)
         << "y-1 must fold to SuperDec";
     // 该方法恰有一处 +1 和一处 -1，两条 Binary 各自全或否地折叠。SuperInc 与 SuperDec
-    // 同时出现即证明两处都已折叠，故无未折叠 Binary 残留——不再用裸 std::find 查
+    // 同时出现即证明两处都已折叠，故无未折叠 Binary 残留，不再用裸 std::find 查
     // Binary 字节（operand 字节会与 Binary 的 canonical 字节碰撞，opcode 集大小变化
     // 会移动 canonical 赋值导致误报）。
 }
 
-// issue #9：super-ops 默认关——不带选项编码时不得出现任何 super-op 折叠
+// issue #9：super-ops 默认关，不带选项编码时不得出现任何 super-op 折叠
 // （与 --vmc4-* 其他开关"默认关、不被联动"的约定一致）。
 TEST(Vmc4BackendTest, SuperOpsOffByDefault)
 {
@@ -1775,7 +1775,7 @@ TEST(Vmc4BackendTest, SuperOpsOffByDefault)
     EXPECT_FALSE(prog->hasFusedBinary);
 }
 
-// issue #9：融合判定边界——只有 rhs 恰为 IntLiteral(1) 且 op 为 Add/Sub 才折叠。
+// issue #9：融合判定边界，只有 rhs 恰为 IntLiteral(1) 且 op 为 Add/Sub 才折叠。
 // +2 / *1 都不得折叠（rhs 不是 1，或 op 不是加减）。
 TEST(Vmc4BackendTest, SuperOpFoldDecisionBoundary)
 {
@@ -1830,7 +1830,7 @@ TEST(Vmc4BackendTest, SuperOpFoldDecisionBoundary)
     EXPECT_EQ(countOpcode(sub1, VmOpcode::SuperInc), 0u);
 }
 
-// issue #9：FusedBinary 融合——同基本块内相邻的 t=a op1 b + dest=t op2 c
+// issue #9：FusedBinary 融合，同基本块内相邻的 t=a op1 b + dest=t op2 c
 // （t 仅此一处消费）折成一条 FusedBinary；字节流操作数回读验证融合判定
 // 与 operand 绑定（a/b/c、op1/op2、type）。
 TEST(Vmc4BackendTest, FusedBinaryFoldsAdjacentPair)
@@ -1890,7 +1890,7 @@ TEST(Vmc4BackendTest, FusedBinaryFoldsAdjacentPair)
         << "both Binaries must be absorbed by the fused instruction";
 }
 
-// issue #9：融合永不跨基本块——两条 Binary 分属不同基本块时不得融合
+// issue #9：融合永不跨基本块，两条 Binary 分属不同基本块时不得融合
 // （逐块独立规划，相邻性以基本块为界）。
 TEST(Vmc4BackendTest, FusedBinaryNeverCrossesBlockBoundary)
 {
@@ -1935,7 +1935,7 @@ TEST(Vmc4BackendTest, FusedBinaryNeverCrossesBlockBoundary)
         << "all three Binaries must stay unfolded across block boundaries";
 }
 
-// P3-8：handler 形态等价变形——确定性选择 + 解释器按实例发射 alt body。
+// P3-8：handler 形态等价变形，确定性选择 + 解释器按实例发射 alt body。
 TEST(Vmc4BackendTest, HandlerFormMorphingIsDeterministicAndEmitted)
 {
     // 两个不同 seed 的实例对 Unary/Compare 的形态选择应确定性且可能不同。
@@ -1983,7 +1983,7 @@ TEST(Vmc4BackendTest, HandlerFormMorphingIsDeterministicAndEmitted)
     }
 }
 
-// P4-1：expected trace surface 描述——确定性 + 覆盖红队契约字段。
+// P4-1：expected trace surface 描述，确定性 + 覆盖红队契约字段。
 TEST(Vmc4BackendTest, TraceSurfaceDescribesInstanceDeterministically)
 {
     Vmc4Options opts;
@@ -2363,7 +2363,7 @@ TEST(Vmc4BackendTest, RuntimeProtectionInjection)
 }
 
 // 后续项：CHECKCAST（ReferenceCast）→ castcheck:<desc> intrinsic
-// （IsInstanceOf + 失败抛 ClassCastException，null 通过）——真实样本转化率
+// （IsInstanceOf + 失败抛 ClassCastException，null 通过），真实样本转化率
 // 第一瓶颈（snake/jvm-obf-tester 主要 fail-closed 原因）。
 TEST(Vmc4BackendTest, EncodesCheckCast)
 {
@@ -2391,7 +2391,7 @@ TEST(Vmc4BackendTest, EncodesCheckCast)
     EXPECT_EQ(prog->intrinsics[0].name, "castcheck:java/lang/String");
     EXPECT_EQ(prog->intrinsics[0].arg0Kind, VmJniKind::Ref);
     EXPECT_EQ(prog->intrinsics[0].retKind, VmJniKind::Ref);
-    // 字节流含 Intrinsic 的实例字节（canonical 或 ALT 别名——emitOpcode 按
+    // 字节流含 Intrinsic 的实例字节（canonical 或 ALT 别名，emitOpcode 按
     // nonce 选字节，两者都可能出现）。
     const auto& opBytes = instance.opcodeBytesFor(VmOpcode::Intrinsic);
     const bool found =
@@ -2435,7 +2435,7 @@ std::string compileSingleMethodWithBackend(Vmc4Backend& backend, const std::stri
 }
 
 /// 提取生成 C 里的实例 opcode 字节集合（switch dispatcher 的 `case 0xNN` 链），
-/// 同一 VmInstance 的所有方法该集合一致——共享实例的直接证据。
+/// 同一 VmInstance 的所有方法该集合一致，共享实例的直接证据。
 std::string firstOpcodeChain(const std::string& c)
 {
     const std::string marker = "case 0x";
@@ -2505,7 +2505,7 @@ TEST(Vmc4BackendTest, PerMethodGranularityDivergeAcrossClasses)
         << "A: " << chainA << "\nB: " << chainB;
 }
 
-/// per-class：同类方法共享（链一致），跨类独立（链不同）—— 既有语义回归锚。
+/// per-class：同类方法共享（链一致），跨类独立（链不同），既有语义回归锚。
 TEST(Vmc4BackendTest, PerClassGranularitySharesWithinClassDivergeAcross)
 {
     Vmc4Options opts;
@@ -2597,7 +2597,7 @@ TEST(Vmc4BackendTest, BlockIdCapacityCheckBoundaries)
 }
 
 /// 负向：total == 65536（65534 真实 + 2 合成）编码 fail-closed 返回 nullptr。
-/// 旧校验（realCount ≤ 0xFFFE）对此形态放行——合成块不计入正是 #1133 的洞。
+/// 旧校验（realCount ≤ 0xFFFE）对此形态放行，合成块不计入正是 #1133 的洞。
 TEST(Vmc4BackendTest, EncodeFailClosedWhenSyntheticEdgesPushTotalPastU16)
 {
     Vmc4Options opts;
@@ -2652,7 +2652,7 @@ TEST(Vmc4BackendTest, EncodesAtU16TotalBlockCapacityBoundary)
 //
 // 分配语义：计算寄存器压入定长池 [numInputs, poolTop)，死值槽位复用（寄存器号
 // 不再镜像 SSA value id）；池装不下的活值分到稳定溢出槽（统一 slots 数组高位
-// 索引，操作数直接寻址——无搬运指令）。溢出槽区起点 = regfile limit，常量槽
+// 索引，操作数直接寻址（无搬运指令）。溢出槽区起点 = regfile limit，常量槽
 // 在溢出槽区之后。默认关闭（regfile=0）保持恒等映射，字节流与历史形态一致。
 // ===========================================================================
 
@@ -2672,8 +2672,8 @@ struct RegfileDecodedInsnForTest
 /// 每条指令的字节跨度取自相邻 instructionOffsets 差值，操作数布局表与
 /// vm_encoder.cpp 的发射函数一一对应（u8 字段跳过、u16 字段小端组装）。
 /// 布局表同时充当**布局一致性断言**：解码长度若与指令跨度不符即停扫，
-/// 上层断言「解码条数 == 指令边界数」就会失败。只覆盖纯计算/控制流 opcode
-/// ——本组测试方法不产生 Call/Throw/Switch/Barrier。
+/// 上层断言"解码条数 == 指令边界数"就会失败。只覆盖纯计算/控制流 opcode，
+/// 本组测试方法不产生 Call/Throw/Switch/Barrier。
 std::vector<RegfileDecodedInsnForTest> decodeProgramForRegfileTest(const VmProgram& prog,
                                                                    const VmInstance& instance)
 {
@@ -2737,16 +2737,16 @@ std::vector<uint16_t> regOperandsForTest(const RegfileDecodedInsnForTest& ins)
 
 }   // namespace
 
-// 说明：本组测试刻意**不走**共享的「双编码助手」——两条实证约束决定了必须
+// 说明：本组测试刻意**不走**共享的"双编码助手"，两条实证约束决定了必须
 // 在每个 encodeMethod 调用点内联全新指令列表：
 //   ① 指令节点经 makeMethod 进入 MethodNode 后被管线接管/改写，同一批节点
 //      复用于第二次编码 = 堆损坏（cdb: free heap block modified after freed）；
 //   ② builder-lambda 返回 initializer_list 的底层临时数组落在 lambda 栈帧上，
-//      返回后即悬垂（MSVC 实证 AV）——initializer_list 只能在调用点内联。
-// 冗余的两份列表是有意为之的测试合同，勿「去重」。
+//      返回后即悬垂（MSVC 实证 AV），initializer_list 只能在调用点内联。
+// 冗余的两份列表是有意为之的测试合同，勿"去重"。
 
 /// 默认关：VmEncodeOptions{} 与显式 regfile=0 编码产物逐字节一致
-/// （--vmc4-* 开关「默认关、不被联动」约定在 regfile 上的体现）。
+/// （--vmc4-* 开关"默认关、不被联动"约定在 regfile 上的体现）。
 TEST(Vmc4BackendTest, RegfileOffByDefaultIsByteIdentical)
 {
     Vmc4Options opts;
@@ -2788,7 +2788,7 @@ TEST(Vmc4BackendTest, RegfileOffByDefaultIsByteIdentical)
 }
 
 /// 池复用：定长池内死值槽位被复用，numRegs 相比恒等映射收缩，且本方法
-/// 活性压力在池内（无溢出槽——全部计算操作数落在 [numInputs, limit)）。
+/// 活性压力在池内（无溢出槽，全部计算操作数落在 [numInputs, limit)）。
 TEST(Vmc4BackendTest, RegfileReuseShrinksRegisterFile)
 {
     Vmc4Options opts;
@@ -2797,7 +2797,7 @@ TEST(Vmc4BackendTest, RegfileReuseShrinksRegisterFile)
     VmInstance instance(opts);
     std::string reason;
     // int mix(int a, int b) { return (a + b) * (a - b) - a; }
-    // SSA 形态：t1=a+b, t2=a-b, t3=t1*t2, t4=t3-a——恒等映射下 4 个计算寄存器
+    // SSA 形态：t1=a+b, t2=a-b, t3=t1*t2, t4=t3-a，恒等映射下 4 个计算寄存器
     // （numRegs=6）；t1/t2 在 t3 处同点死亡，t4 在 t1/t2 死后出生，池 [2,5)
     // 恰好容纳（t4 复用死亡槽位），无溢出。
     VmEncodeOptions identity;
@@ -2862,7 +2862,7 @@ TEST(Vmc4BackendTest, RegfileSpillsUnderPressure)
     opts.aliasCount = 0;
     VmInstance instance(opts);
     std::string reason;
-    // int spread(int a)：v1..v4 同时活跃后求和——池 2 槽装不下，必溢出。
+    // int spread(int a)：v1..v4 同时活跃后求和，池 2 槽装不下，必溢出。
     VmEncodeOptions identity;
     auto plain = encodeMethod("spread", "(I)I",
                               {
@@ -2941,7 +2941,7 @@ TEST(Vmc4BackendTest, RegfileSpillsUnderPressure)
         << plain->numRegs << " packed=" << packed->numRegs << ")";
 }
 
-/// fail-closed：limit 低于参数数时溢出槽区会与参数区重叠——拒绝编码而非静默
+/// fail-closed：limit 低于参数数时溢出槽区会与参数区重叠，拒绝编码而非静默
 /// 腐蚀；limit=0（默认）不受影响。
 TEST(Vmc4BackendTest, RegfileLimitBelowNumInputsFailClosed)
 {
@@ -3011,8 +3011,8 @@ TEST(Vmc4BackendTest, RegfileComposesWithFragment)
     EXPECT_EQ(countInstructionsForTest(*plain, instance, VmOpcode::Copy),
               countInstructionsForTest(*packed, instance, VmOpcode::Copy))
         << "fragment staging count must survive allocation";
-    // 全部操作数在寄存器文件内；碎片目的临时槽（Copy 的 dest）不得越过 limit
-    // ——源操作数允许是常量槽（字面量操作数同样经中转，常量槽在 limit 之上）。
+    // 全部操作数在寄存器文件内；碎片目的临时槽（Copy 的 dest）不得越过 limit，
+    // 源操作数允许是常量槽（字面量操作数同样经中转，常量槽在 limit 之上）。
     for (const auto& ins : decodeProgramForRegfileTest(*packed, instance)) {
         for (const uint16_t reg : regOperandsForTest(ins)) {
             ASSERT_LT(reg, packed->numRegs) << "operand out of register file";
@@ -3024,8 +3024,8 @@ TEST(Vmc4BackendTest, RegfileComposesWithFragment)
     }
 }
 
-/// 与 super-ops 组合：融合计划在分配前落地，融合对按单条复合指令参与分配
-/// ——融合仍发生，且被吸收的 dest 不出现在任何操作数里。
+/// 与 super-ops 组合：融合计划在分配前落地，融合对按单条复合指令参与分配，
+/// 融合仍发生，且被吸收的 dest 不出现在任何操作数里。
 TEST(Vmc4BackendTest, RegfileComposesWithSuperOps)
 {
     Vmc4Options opts;
@@ -3076,7 +3076,7 @@ TEST(Vmc4BackendTest, RegfileComposesWithSuperOps)
     }
 }
 
-/// 控制流与解码一致性：分支/循环方法在定长化下完整解码——布局表驱动的
+/// 控制流与解码一致性：分支/循环方法在定长化下完整解码，布局表驱动的
 /// 遍历覆盖全部指令边界（含 Halt 哨兵），寄存器与块目标操作数全部在界内，
 /// 且跨块存活的 acc/i 在 2 槽池内经复用容纳（numRegs 收缩）。
 TEST(Vmc4BackendTest, RegfileControlFlowDecodeCoversWholeProgram)

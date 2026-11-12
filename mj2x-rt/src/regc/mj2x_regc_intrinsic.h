@@ -106,10 +106,10 @@ double  mj2x_math_sqrt(double value);
 double  mj2x_math_pow(double base, double exponent);
 double  mj2x_math_floor(double value);
 double  mj2x_math_ceil(double value);
-/// java.lang.Math.round(double)：OpenJDK 17 位运算实现（#1144）——最接近的
-/// long、tie→+∞；NaN→0，越界饱和到 long 边界。与 HotSpot 边界值逐项对拍。
+/// java.lang.Math.round(double)：OpenJDK 17 位运算实现（#1144），最接近的
+/// long、tie→+∞；NaN→0，越界饱和到 long 边界。与 HotSpot 边界值逐项比对。
 int64_t mj2x_math_round(double value);
-/// java.lang.Math.round(float)：OpenJDK 17 位运算实现（#1144）——最接近的
+/// java.lang.Math.round(float)：OpenJDK 17 位运算实现（#1144），最接近的
 /// int、tie→+∞；NaN→0，越界饱和到 int 边界。不再用 (int)floor(a+0.5f) 公式
 /// （在 0.49999997f 与 [2^23,2^24) 奇整数上与 HotSpot 可观测发散）。
 int32_t mj2x_math_round_f32(float value);

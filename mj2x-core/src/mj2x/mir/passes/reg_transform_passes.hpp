@@ -36,7 +36,7 @@ struct RegTransformOptions
     /// CFF state 寄存器以 `volatile` 发射（防 C 编译器把 dispatcher 优化回原始
     /// 结构化控制流）。
     ///
-    /// 默认 true：不加就等于白做——state 若可跨基本块常量传播，clang -O2 下
+    /// 默认 true：不加就等于白做，state 若可跨基本块常量传播，clang -O2 下
     /// dispatcher switch 会被 jump-threading 完全消解（实测见
     /// `work/cff_probe/st_cff.ll`）。仅 CFF 生效时才有影响，不改变默认产物形态。
     /// 关闭的唯一理由是需要省下 volatile 读写开销（此时平坦化只剩源码可读性收益）。

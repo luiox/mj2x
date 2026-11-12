@@ -17,7 +17,7 @@ namespace mj2x {
 ///
 /// @details
 /// 旧口径 PortedCommonSuperResolver = 硬编码 JDK 父类链 + Object 兜底，对输入
-/// jar 内的自定义谱系一律 Object——合并点下游对合并值直接 invokevirtual 时
+/// jar 内的自定义谱系一律 Object，合并点下游对合并值直接 invokevirtual 时
 /// （帧类型须是调用目标 owner 的子类型）VerifyError；Strict 不可算则整类
 /// 写不出。本解析器把 mjbase 的类层次图（ClassHierarchy super 链最近公共
 /// 祖先 + CommonSuperClassResolver 查询缓存）挂进 jbc 帧引擎：
@@ -40,15 +40,15 @@ public:
     ///
     /// @details 逐类从 dom 读 this/super/interfaces 手工构 ClassSummary
     ///（层次 LCA 只需要 super 链骨架，不扫成员）。畸形谱系（父链成环，
-    /// 混淆器产物可能故意如此）addClass 报 Cycle 时跳过该类——其对涉及
+    /// 混淆器产物可能故意如此）addClass 报 Cycle 时跳过该类，其对涉及
     /// 类型的查询落回硬编码表，其余类照常精确。
     void buildFromIndex(const CompilerIndex& index);
 
     /// @brief 扩充谱系（M2 供给面）：classpath 依赖 jar + JDK jmods/rt.jar
     ///        扫描（JDK 侧带磁盘缓存）。
     ///
-    /// @details 必须在首次 merge 前调用：CommonSuperClassResolver 对「当时
-    /// 未登记」的对缓存 fallback 结果，图后扩会让缓存吃到陈旧 Object——
+    /// @details 必须在首次 merge 前调用：CommonSuperClassResolver 对当时
+    /// 未登记的类型对缓存 fallback 结果，图后扩会让缓存吃到陈旧 Object，
     /// resolver 因此惰性创建（merge 首调时图已定形）。
     /// @return 登记增量（诊断日志用）。
     ca::usize extendFromEnvironment(std::string_view classpath, bool includeJdk,

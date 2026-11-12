@@ -563,7 +563,7 @@ private:
             if (!floating &&
                 (instruction.binaryOp == SSABinaryOp::Div ||
                  instruction.binaryOp == SSABinaryOp::Rem)) {
-                // 整数 div/rem：sdiv/srem——JVM 是有符号除法，udiv/urem 对负
+                // 整数 div/rem：sdiv/srem，JVM 是有符号除法，udiv/urem 对负
                 // 操作数结果错误（JVM -7/2=-3，udiv 位模式得 2147483644）。
                 // INT_MIN/-1 组合是 sdiv/srem 的溢出 poison，JVM 语义为 div 回绕
                 // INT_MIN、rem 得 0，显式分支防护（对齐 StackC/VMC4）；除零走
@@ -663,7 +663,7 @@ private:
             return emitStore(instruction.dest, result, reason);
         }
         if (instruction.kind == RegInstructionKind::Call) {
-            // 包装类 shadow 切片：valueOf 装箱（结果非逃逸）与 xxxValue 拆箱
+            // 包装类 shadow 子集：valueOf 装箱（结果非逃逸）与 xxxValue 拆箱
             // （receiver 为 shadow）直调 mj2x-rt 值结构（0 JNI；逃逸根已在
             // analyzeWrapperShadows 回退，此处走 JNI 分派）。
             if (instruction.hasDest && instruction.dest.type == SSAType::REF &&
@@ -736,7 +736,7 @@ private:
                         callArgs += ", " + std::string(llvmTypeWide(instruction.args[index].type)) +
                                     " " + argument;
                     }
-                    // 发射端预检位（#879 Y4 解耦）：Random.nextInt(bound)——JVM
+                    // 发射端预检位（#879 Y4 解耦）：Random.nextInt(bound)，JVM
                     // 对 bound<=0 抛 IllegalArgumentException；crt 直调无异常通道
                     // （bound<=0 返回哨兵值），发射端按权威表派生的 precheck 位
                     // 预检（fail-closed），不再 desc/name/argCount 硬编码。
@@ -798,7 +798,7 @@ private:
                     std::string    callArgs = "ptr " + builderContext_;
                     std::string    stateSlot = "ptr " + slotName(instruction.args[0].reg);
                     // 参数（context 之后；init 的参数在 out_state 之前，其余在
-                    // state 之后——crt 签名：init (context, args..., out_state**)，
+                    // state 之后。crt 签名：init (context, args..., out_state**)，
                     // append/method (context, state, args...[, out])）。
                     std::string pendingArgs;
                     if (builder->kind == 0) {
@@ -895,7 +895,7 @@ private:
                     return true;
                 }
             }
-            // JDK 纯函数 intrinsic（Math 切片）：直调 mj2x-rt 符号（0 JNI、
+            // JDK 纯函数 intrinsic（Math 子集）：直调 mj2x-rt 符号（0 JNI、
             // 不抛异常无 ExceptionCheck；对齐 RegC RuntimeFunction 语义）。
             if (instruction.method.invokeOpcode == Opcodes::INVOKESTATIC) {
                 const LlvmIntrinsicEntry* intrinsic =
@@ -974,7 +974,7 @@ private:
             }
             // 调用目标间接化：调用点只带 (站点表, 组内索引)，身份字符串移出调用点
             // （站点表是模块级 internal global）。jvalue 装载与直接 JNI 分派同路径，
-            // 只有"目标从哪来"不同——dispatcher 首调解析并缓存进条目。
+            // 只有"目标从哪来"不同，dispatcher 首调解析并缓存进条目。
             if (instruction.indirectCall && indirectSites_ != nullptr) {
                 const char* suffix = dispatchSuffixFor(retKind);
                 if (suffix == nullptr) {
@@ -1199,12 +1199,12 @@ private:
         if (instruction.kind == RegInstructionKind::Allocate) {
             const std::string typeDesc = instruction.typeDesc.to_std_string();
             if (instruction.allocationKind == SSAAllocationKind::Object) {
-                // Random 原生切片：非逃逸 new Random 的对象槽即 %mj2x_random
+                // Random 原生直映射：非逃逸 new Random 的对象槽即 %mj2x_random
                 // 状态（Allocate 无操作；<init>(J)V 处 mj2x_random_init）。
                 if (nativeSlots_.count(instruction.dest.id.value) != 0) {
                     return true;
                 }
-                // Builder 原生切片：非逃逸 new StringBuilder 的槽即 out_state
+                // Builder 原生直映射：非逃逸 new StringBuilder 的槽即 out_state
                 // 指针（Allocate 无操作；<init> 处 mj2x_string_builder_init）。
                 if (nativeBuilders_.count(instruction.dest.id.value) != 0) {
                     return true;
@@ -1420,7 +1420,7 @@ private:
                      << strings_.intern(function_.symbol.owner) << ")\n";
                 // bsm 失败时 pending 异常已挂且返回 null：必须走异常分发/重抛，
                 // 不得把 null 送进 call_object（其 ThrowNew NPE 会掩盖真实
-                // 异常——StackC 对应路径是异常分发，对齐之）。
+                // 异常，StackC 对应路径是异常分发，对齐之）。
                 {
                     const std::string siteTag = std::to_string(indySiteBase_ + localIndex);
                     const std::string tgtNull = nextTemporary();
@@ -1448,7 +1448,7 @@ private:
                      << strings_.intern("([Ljava/lang/Object;)Ljava/lang/Object;") << ", ptr "
                      << jv << ")\n";
                 // invokeWithArguments 抛异常时 pending 挂着而 result 可为 null
-                //（REF 站点合法返回 null）——调用后统一 ExceptionCheck 分发，
+                //（REF 站点合法返回 null），调用后统一 ExceptionCheck 分发，
                 // 再进拆箱/透传（否则异常会被后续 helper 的 NPE 掩盖）。
                 if (!emitExceptionDispatch(block, regions, dispatchIndex_, true, reason)) {
                     return false;

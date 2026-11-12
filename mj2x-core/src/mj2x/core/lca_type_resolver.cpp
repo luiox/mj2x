@@ -58,8 +58,8 @@ ca::core::Result<jbc::analysis::VType, jbc::analysis::TypeMergeError> LcaTypeRes
     }
     if (a.name == b.name) return ca::core::Ok(a);
 
-    // 谱系内对 → 真 LCA。resolver 的 fallback（Object）只可能对「图内两链
-    // 无交」触发——那与硬编码表兜底的语义一致，直接采信。resolver 惰性
+    // 谱系内对 → 真 LCA。resolver 的 fallback（Object）只可能对图内两链
+    // 无交的情形触发，那与硬编码表兜底的语义一致，直接采信。resolver 惰性
     // 创建：merge 首调时图已定形（buildFromIndex/extendFromEnvironment 均完成）。
     if (resolver_ == nullptr) {
         resolver_ = std::make_unique<mjbase::spi::CommonSuperClassResolver>(hierarchy_);

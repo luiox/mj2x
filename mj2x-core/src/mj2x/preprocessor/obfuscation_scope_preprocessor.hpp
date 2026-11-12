@@ -4,7 +4,7 @@
 //
 // 混淆作用域（issue #8）：按类级 glob 判定"这个类受不受混淆变换影响"。
 //
-// jvmtp 对标：混淆开关在真实工程里不能一开就作用于全部编译输入——性能、产物
+// jvmtp 对标：混淆开关在真实工程里不能一开就作用于全部编译输入，性能、产物
 // 体积、可调试性都要求把作用域收窄到少数核心类。
 //
 // 判定结果落到 `CompilerClass::inObfuscationScope`（方案 (b)，见 issue #8）：
@@ -28,10 +28,10 @@ namespace mj2x {
 ///
 /// @details
 /// 默认全部在作用域内（不给任何模式时零行为变化）。作用域外的类仍照常编译成
-/// native，只是跳过 RegIR 变换——产物与未开混淆时逐字节一致。
+/// native，只是跳过 RegIR 变换，产物与未开混淆时逐字节一致。
 ///
 /// 只打标记、不改方法体：与 NativeClassFilterPreprocessor（决定是否进入 native
-/// 编译集）正交——一个是"编译不编译"，一个是"编译出来的要不要混淆"。
+/// 编译集）正交，一个是"编译不编译"，一个是"编译出来的要不要混淆"。
 class ObfuscationScopePreprocessor : public Preprocessor
 {
 public:
