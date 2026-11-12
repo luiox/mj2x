@@ -116,7 +116,7 @@ SSA/RegIR/L4 are platform capabilities for stronger RegC output and future whole
 StackC
 ^^^^^^
 
-StackC is the broad-coverage backend. It is expected to preserve behavior across many javac output shapes, including object/array/field/call/exception paths. It is not the main anti-c2j protection backend because its emitted code still has stack-machine anchors.
+StackC is the broad-coverage backend. It is expected to preserve behavior across many javac output shapes, including object/array/field/call/exception paths. It is not the main anti-decompilation protection backend because its emitted code still has stack-machine anchors.
 
 Use StackC for:
 
@@ -142,7 +142,7 @@ VMC4
 
 VMC4 is the VM virtualization backend. It encodes RegIR into a per-method VM bytecode stream (compile-time opcode randomization driven by seed, per-class/ method granularity) and generates a table-driven interpreter (4 dispatcher shapes: switch / funcptr / ifnest / state) with per-callsite JNI helpers. Runtime dispatch drift (``--vmc4-drift <0..4>`` + ``--vmc4-drift-period``) rotates semantic labels periodically at runtime without changing instruction semantics.
 
-Coverage (v2.2 available version): fields/arrays/allocation, calls (virtual/ special/static/interface), exception regions, intrinsics subset, String LDC, MULTIANEWARRAY — real-jar conversion rate 100% (jvm-obf-tester). Performance is not a goal; protection-oriented.
+Coverage (v2.2 available version): fields/arrays/allocation, calls (virtual/ special/static/interface), exception regions, intrinsics subset, String LDC, MULTIANEWARRAY, with real-jar conversion rate 100% (jvm-obf-tester). Performance is not a goal; protection-oriented.
 
 Use VMC4 for:
 

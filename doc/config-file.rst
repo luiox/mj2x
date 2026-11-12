@@ -12,7 +12,7 @@ mj2x JSON config（配置系统）
 
 ``mj2x-cli --config <file>``\ 从 JSON 配置读取默认参数，命令行显式参数覆盖配置。 **全量 45+ 参数均可配置**\ （参数注册表单源驱动）。未知键与类型错误被拒绝，报错定位到键名。
 
-参数数量已到 59 个（regc 域独占 14 个），命令行越来越难管理。除配置文件外另提供两组能力：**preset 默认配置档**\ （一次设一组）与**生效配置回显**\ （排查"到底开了啥"）。
+参数数量已到 59 个（regc 域独占 14 个），命令行越来越难管理。除配置文件外另提供两组能力：**preset 默认配置档**\ （一次设一组）与**生效配置回显**\ （排查实际生效的配置）。
 
 .. code-block:: json
 
@@ -47,7 +47,7 @@ mj2x JSON config（配置系统）
    * - global
      - ``input`` / ``output``
      - string
-     - —
+     - 无
    * - global
      - ``backend``
      - ``stackc`` | ``regc`` | ``llvm`` | ``vmc4``\ （``with_mj2x_llvm=n``\ 构建无 ``llvm``\ ）
@@ -55,7 +55,7 @@ mj2x JSON config（配置系统）
    * - global
      - ``emit_c`` / ``emit_cpp`` / ``emit_llvm`` / ``emit_native_dir``
      - string
-     - —
+     - 无
    * - global
      - ``dump_mir``
      - boolean
@@ -63,15 +63,15 @@ mj2x JSON config（配置系统）
    * - selection
      - ``native_annotation``
      - string（JVM desc）
-     - —
+     - 无
    * - selection
      - ``native_method_prefixes``
      - string[]
-     - —
+     - 无
    * - selection
      - ``native_include`` / ``native_exclude``
      - string[]（类名 glob；``*``\ 不跨段、``**``\ 跨段、``/``\ 与 ``.``\ 等价； exclude 优先；空片段拒绝）
-     - —
+     - 无
    * - compile
      - ``compile``
      - boolean
@@ -99,7 +99,7 @@ mj2x JSON config（配置系统）
    * - compile
      - ``generate_cmake`` / ``generate_xmake``
      - string
-     - —
+     - 无
    * - stackc
      - ``stackc_exception_check``
      - ``full`` | ``lite``
@@ -143,7 +143,7 @@ mj2x JSON config（配置系统）
    * - vmc4
      - ``vmc4_trace_surface``
      - string
-     - —
+     - 无
    * - vmc4
      - ``vmc4_encrypt_program`` / ``vmc4_lazy_decrypt`` / ``vmc4_block_lazy_decrypt`` / ``vmc4_shuffle_blocks``
      - boolean（两个懒解密档要求 ``vmc4_encrypt_program``\ 且互斥）
@@ -167,11 +167,11 @@ mj2x JSON config（配置系统）
    * - nativeLib
      - ``native_lib_key``
      - hex string / number
-     - —
+     - 无
    * - nativeLib
      - ``native_lib_pack_hook``
      - string
-     - —
+     - 无
    * - client
      - ``client_id``
      - integer ≥ 0
@@ -179,11 +179,11 @@ mj2x JSON config（配置系统）
    * - intrinsic
      - ``intrinsic_config``
      - string（外部 intrinsic JSON 路径）
-     - —
+     - 无
    * - intrinsic
      - ``intrinsic_src``
      - string[]
-     - —
+     - 无
    * - log
      - ``log_quiet`` / ``log_verbose``
      - boolean
@@ -231,7 +231,7 @@ preset（默认配置档）
      - 最强，代价不设限
      - 基础三项 + ``regc_mba_deep`` / ``regc_opaque_zero`` / ``regc_cff_state_encrypt`` / ``regc_cff_dead=3`` + 两项重型（``regc_hide_constants`` / ``regc_indirect_calls``\ ）+ ``strings_encrypt`` + ``runtime_protection=fake``
 
-preset 不是第四套配置语法——它是**内置的 JSON 对象**\ ，键名与配置文件完全相同，走同一套 ``parseJson``\ 校验。档位只列"与默认值不同"的键，是建议值不是硬编码全量：在 preset 之上仍可用配置文件或 CLI 逐项改。
+preset 不是第四套配置语法，它就是**内置的 JSON 对象**\ ，键名与配置文件完全相同，走同一套 ``parseJson``\ 校验。档位只列"与默认值不同"的键，是建议值不是硬编码全量：在 preset 之上仍可用配置文件或 CLI 逐项改。
 
 ``perf``\ 档的主要收益来自直调：实测（jvm-obf-tester，7 次取中位数）把 Inheritance probe 从 12.858ms 降到 2.542ms（5.06x），合计追平未混淆的 JVM 基线。代价是栈观察语义失真（直调不产生 JVM 栈帧），故只在明确性能优先的档位里开。
 
@@ -244,7 +244,7 @@ preset 不是第四套配置语法——它是**内置的 JSON 对象**\ ，键�
 
    mj2x-cli --dump-effective-config[=<file>]      # 四层合并结果（裸=stdout，内联 =file 写文件）
 
-59 个开关 + 四层合并 + 联动规则（增强项隐含开基础项），出错时没有可核对的输出就只能靠猜。回显形如：
+59 个开关、四层合并、联动规则（增强项隐含开基础项）叠加在一起，排查时需要可核对的输出，否则只能靠猜。回显形如：
 
 .. code-block:: json
 

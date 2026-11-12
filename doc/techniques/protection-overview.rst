@@ -26,7 +26,7 @@ mj2x 的对手拿到的是受保护后的 JAR + native 库。他能做的四类�
      - C 源码 / ``.ll``\ / 反汇编里的控制流与常量
      - MBA、opaque 谓词、CFF、立即数隐藏、computed jumps、VM 虚拟化 + 指令级变换、字符串加密
    * - 静态建调用图
-     - 「这个方法调用了谁」
+     - 这个方法调用了谁
      - 调用目标间接化、computed jumps
    * - 静态读字段语义
      - ``GetIntField(obj, "x")``\ 暴露字段名与类型
@@ -35,7 +35,7 @@ mj2x 的对手拿到的是受保护后的 JAR + native 库。他能做的四类�
      - 调试器、JVMTI agent、JNI 表 hook、内存 dump
      - 运行时保护检查点、safe-env、native 库加密、懒解密
 
-**关键前提**\ ：mj2x 的主线不是「把 Java 全量 AOT」，而是把选定方法/类的语义迁到 native，减少字节码和 JNI 可还原锚点。所以「保护强度」的第一来源是**\ 迁移本身**\，变换是叠加在上面的第二层。没有迁移、只在字节码上做变换，不是 mj2x 的路线。
+**关键前提**\ ：mj2x 的主线不是把 Java 全量 AOT，而是把选定方法/类的语义迁到 native，减少字节码和 JNI 可还原锚点。所以保护强度的第一来源是**\ 迁移本身**\，变换是叠加在上面的第二层。没有迁移、只在字节码上做变换，不是 mj2x 的路线。
 
 技术族与一览
 --------------
@@ -158,7 +158,7 @@ E. 运行时与产物保护：
 
 #. **基础三项**\（MBA / opaque / CFF）由 ``--regc-obfuscate``\ 一次性开启。
 #. **增强项**\各自联动对应基础项：``--regc-mba-deep`` → MBA， ``--regc-opaque-zero`` → opaque，``--regc-cff-dead`` / ``--regc-cff-state-encrypt`` → CFF。
-#. **重型项不联动**\，必须显式给。理由是代价——每一项都换来了可见的运行时代价，是「要保护才付」的档位：
+#. **重型项不联动**\，必须显式给。理由是代价：每一项都换来了可见的运行时代价，属于要保护才付的档位：
 
    .. list-table::
       :header-rows: 1
@@ -190,9 +190,9 @@ RegIR pass 的执行顺序是硬约束，改动前先看这里：
 
 三条已踩过的坑：
 
-- **立即数隐藏必须排 CFF 之后**\ 。``isCffPureInstruction``\ 对 ``Intrinsic`` 返回 false，若先插入合成 Intrinsic 会把 CFF 的纯性判定整体打掉，平坦化直接失效。反过来 CFF 的 case key 保持字面量（分发表完整性），不会被隐藏。
+- **立即数隐藏必须排 CFF 之后**\ 。``isCffPureInstruction``\ 对 ``Intrinsic`` 返回 false，若先插入合成 Intrinsic 会把 CFF 的纯性判定整体破坏，平坦化直接失效。反过来 CFF 的 case key 保持字面量（分发表完整性），不会被隐藏。
 - **调用间接化排 CFF 之后、立即数隐藏之前**\ 。它只置标记、不改指令序列，与前后两者零交互。
-- **computed jumps 必须在 CFF 之后、且紧接 CFF**\ 。它改的是 CFF dispatcher 的 switch terminator——CFF 之前根本没有可改的 terminator。它的 key 是站点密钥异或值，与立即数隐藏同族但独立，两者互不干扰（隐藏作用于整型立即数， computed jumps 作用于 case key 表）。
+- **computed jumps 必须在 CFF 之后、且紧接 CFF**\ 。它改的是 CFF dispatcher 的 switch terminator，CFF 之前根本没有可改的 terminator。它的 key 是站点密钥异或值，与立即数隐藏同族但独立，两者互不干扰（隐藏作用于整型立即数， computed jumps 作用于 case key 表）。
 
 CFF 之前的 pass 生成的字面量（opaque 谓词的 ``1``\ 、state 码）会随立即数隐藏一并被隐藏，语义不变。
 
@@ -246,26 +246,26 @@ CFF 之前的 pass 生成的字面量（opaque 谓词的 ``1``\ 、state 码）�
      - ✅
      - ✅
    * - VM 虚拟化
-     - —
-     - —
-     - —
+     - 不适用
+     - 不适用
+     - 不适用
      - ✅
    * - VM 指令级变换（super-ops / 碎片化）
-     - —
-     - —
-     - —
+     - 不适用
+     - 不适用
+     - 不适用
      - ✅
 
-native→native 直调的两端口径统一：同一档位、同一判定（``codegen::allowsDirectCall``\ ，两后端共用）。
+native→native 直调在两个后端口径统一：同一档位、同一判定（``codegen::allowsDirectCall``\ ，两后端共用）。
 
 VMC4 不走 RegIR transform passes 是显式决定：VM 层已有自己的混淆面（opcode 随机化 / drift / 块乱序 / 指令级变换），再叠 RegIR 变换是重复投入。
 
 作用域：全局 vs 类级
 ----------------------
 
-混淆开关原先是全局布尔——一开就作用于**\ 全部**\ 编译输入。真实工程通常只想保护少数核心类：性能、产物体积、可调试性都要求把作用域收窄。没有作用域，混淆在真实工程里落不了地。
+混淆开关原先是全局布尔，一开就作用于**\ 全部**\ 编译输入。真实工程通常只想保护少数核心类：性能、产物体积、可调试性都要求把作用域收窄。没有作用域，混淆难以在真实工程中启用。
 
-``--obf-scope-include`` / ``--obf-scope-exclude``\（类级 glob）决定上面这些 RegIR 变换作用于哪些类。判定结果落到 ``CompilerClass::inObfuscationScope``\ ： pass 与 backend 只问「这个类在不在作用域内」，与 RegIR 完全解耦，RegC / LLVM 查同一标记，不必每个后端各实现一遍。模式语义复用 ``--native-include/exclude`` 现有的 ``classPassesFilter``\ （``*``\ 不跨段、``**``\ 跨段、exclude 优先），不新造匹配规则。
+``--obf-scope-include`` / ``--obf-scope-exclude``\（类级 glob）决定上面这些 RegIR 变换作用于哪些类。判定结果落到 ``CompilerClass::inObfuscationScope``\ ： pass 与 backend 只问这个类在不在作用域内，与 RegIR 完全解耦，RegC / LLVM 查同一标记，不必每个后端各实现一遍。模式语义复用 ``--native-include/exclude`` 现有的 ``classPassesFilter``\ （``*``\ 不跨段、``**``\ 跨段、exclude 优先），不新造匹配规则。
 
 .. list-table::
    :header-rows: 1
@@ -276,13 +276,13 @@ VMC4 不走 RegIR transform passes 是显式决定：VM 层已有自己的混淆
    * - 两者都为空
      - **零行为变化**\ （硬要求）
    * - 显式给 include
-     - **隐含开启混淆**——否则用户要开两个开关才能「只混淆这几个类」
+     - **隐含开启混淆**，否则用户要开两个开关才能只混淆这几个类
    * - 单独给 exclude
      - 不隐含开启：它只做收窄
    * - 作用域外的类
      - 仍编译成 native，只是跳过 RegIR 变换
 
-与 ``--native-include/exclude`` **正交**\ ：后者决定「进不进 native 编译集」，本项决定「编译出来要不要混淆」。
+与 ``--native-include/exclude`` **正交**\ ：后者决定类进不进 native 编译集，本项决定编译出来要不要混淆。
 
 实测（jvm-obf-tester，scope=``dev/aide/jvmobf/I18n``\ ）：
 
@@ -302,9 +302,9 @@ VMC4 不走 RegIR transform passes 是显式决定：VM 层已有自己的混淆
 代价与取舍的通用原则
 ----------------------
 
-每项技术分篇里都有「代价」一节，通用取舍原则四条：
+每项技术分篇里都有代价一节，通用取舍原则四条：
 
 #. **默认全关**\ 。RegC 定位高性能 native 生成器，默认产物语义直译零混淆。
 #. **语义零变化**\ 是硬底线。任何变换都要有 exec 级 E2E 比对 JVM 基线。
 #. **可复现**\ 。同 seed + 同输入 → 同产物（除不掺 seed 的项，如立即数隐藏的 site，理由见分篇）。
-#. **不宣称强度**\ 。没有 mjdbg 红队报告前，只说「消除了哪个可还原锚点」，不说「提升了保护强度」。
+#. **不宣称强度**\ 。没有 mjdbg 攻击测试报告前，只说消除了哪个可还原锚点，不说提升了保护强度。

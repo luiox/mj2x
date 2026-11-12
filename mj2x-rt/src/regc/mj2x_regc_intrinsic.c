@@ -460,7 +460,7 @@ mj2x_ref mj2x_intrinsic_long_to_unsigned_string_radix(mj2x_regc_context* context
 
 // ---- Integer/Long.divideUnsigned/remainderUnsigned ----
 //
-// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义；经
+// 除零抛 ArithmeticException("/ by zero")，与 JVM idiv/irem 同语义；经
 // mj2x_regc_throw_arithmetic 挂 pending 异常（RegCLocalHelper 形态，发射面
 // 保留调用后 ExceptionCheck）。非零除数路径纯 C 无符号运算：无符号除法无
 // INT_MIN/-1 型陷阱，位型与 JDK 一致（Integer.divideUnsigned(MIN_VALUE, -1)
@@ -504,7 +504,7 @@ int64_t mj2x_intrinsic_long_remainder_unsigned(mj2x_regc_context* context, int64
 
 // ---- java.lang.Math.floorDiv/floorMod ----
 //
-// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义，走
+// 除零抛 ArithmeticException("/ by zero")，与 JVM idiv/irem 同语义，走
 // mj2x_regc_throw_arithmetic 挂 pending 异常（RegCLocalHelper 形态）。
 // 除零外纯 C：商向负无穷取整（符号异或为负且余数非零时商减一）；
 // MIN/-1 是 C 有符号除法的未定义行为（x86 上 SIGFPE），按 JVM 位型回绕
