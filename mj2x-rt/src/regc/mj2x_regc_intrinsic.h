@@ -208,6 +208,17 @@ int32_t mj2x_intrinsic_int_remainder_unsigned(mj2x_regc_context* context, int32_
 int64_t mj2x_intrinsic_long_divide_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 int64_t mj2x_intrinsic_long_remainder_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 
+/// @brief java.lang.Math.floorDiv/floorMod：向负无穷取整的除法/取余。
+///
+/// 除零挂 pending ArithmeticException("/ by zero") 并返回 0（RegCLocalHelper
+/// 形态，同 divideUnsigned 口径）；INT_MIN/-1（INT64_MIN/-1）按 JVM 位型
+/// 回绕（floorDiv 得 INT_MIN、floorMod 得 0），规避 C 有符号除法未定义行为。
+/// 商/余恒等式 floorMod(x,y) == x - floorDiv(x,y)*y 在回绕语义下成立。
+int32_t mj2x_intrinsic_math_floor_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
+int64_t mj2x_intrinsic_math_floor_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
+int32_t mj2x_intrinsic_math_floor_mod_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
+int64_t mj2x_intrinsic_math_floor_mod_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
+
 /// @brief java.lang.Enum.name() / ordinal() 直接字段读取。
 ///
 /// 所有枚举类继承 java/lang/Enum 的 final 字段 name/ordinal，缓存的 jfieldID

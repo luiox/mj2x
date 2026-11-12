@@ -477,6 +477,82 @@ TEST(RegCIntrinsicRegistryTest, MatchesMathIntrinsicThroughRegistry)
     EXPECT_FALSE(decision.passContext);
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesStrictMathAndMathEdgeIntrinsicsThroughRegistry)
+{
+    // StrictMath 位精确 12 条（fdlibm 算法结构，全 RuntimeFunction 纯形态）+
+    // Math 边缘 8 条（rint/hypot/cbrt/atan2 纯函数复用 strictmath 符号；
+    // floorDiv/floorMod 除零抛 ArithmeticException，必须 RegCLocalHelper，
+    // 参照 divideUnsigned 口径）。全条目 llvmDirect=false，LLVM 派生面不扩容。
+    struct StrictCase
+    {
+        const char*           owner;
+        const char*           name;
+        const char*           desc;
+        const char*           symbol;
+        RegCIntrinsicEmitKind emitKind;
+        bool                  passContext;
+    };
+    const StrictCase kCases[] = {
+        {"java/lang/StrictMath", "sin", "(D)D", "mj2x_strictmath_sin", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "cos", "(D)D", "mj2x_strictmath_cos", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "tan", "(D)D", "mj2x_strictmath_tan", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "asin", "(D)D", "mj2x_strictmath_asin", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "acos", "(D)D", "mj2x_strictmath_acos", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "atan", "(D)D", "mj2x_strictmath_atan", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "atan2", "(DD)D", "mj2x_strictmath_atan2", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "exp", "(D)D", "mj2x_strictmath_exp", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "log", "(D)D", "mj2x_strictmath_log", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "log10", "(D)D", "mj2x_strictmath_log10", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "pow", "(DD)D", "mj2x_strictmath_pow", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "hypot", "(DD)D", "mj2x_strictmath_hypot", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "rint", "(D)D", "mj2x_strictmath_rint", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "hypot", "(DD)D", "mj2x_strictmath_hypot", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "cbrt", "(D)D", "mj2x_strictmath_cbrt", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "atan2", "(DD)D", "mj2x_strictmath_atan2", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "floorDiv", "(II)I", "mj2x_intrinsic_math_floor_div_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "floorDiv", "(JJ)J", "mj2x_intrinsic_math_floor_div_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "floorMod", "(II)I", "mj2x_intrinsic_math_floor_mod_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "floorMod", "(JJ)J", "mj2x_intrinsic_math_floor_mod_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+    };
+    for (const auto& c : kCases) {
+        // 全部条目为 1 参 (D)D/(D)D 形或 2 参 (DD)D/(II)I/(JJ)J 形。
+        const size_t   argCount = c.desc[2] == ')' ? 1 : 2;
+        RegInstruction ins      = makeStaticCall(c.owner, c.name, c.desc, {});
+        for (size_t i = 0; i < argCount; ++i) {
+            const char ty = c.desc[1 + i];
+            if (ty == 'J') {
+                ins.args.push_back(RegOperand::fromInt(1, SSAType::I64));
+            }
+            else if (ty == 'D') {
+                ins.args.push_back(RegOperand::fromFloat(1.0, SSAType::F64));
+            }
+            else {
+                ins.args.push_back(RegOperand::fromInt(1, SSAType::I32));
+            }
+        }
+        auto decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+
+        EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.emitKind, c.emitKind) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.symbol, c.symbol) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.passContext, c.passContext) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.nativeObjectKind, RegCIntrinsicNativeObjectKind::None)
+            << c.owner << "." << c.name;
+    }
+    // 全部 llvmDirect=false：LLVM 直调派生面不扩容，仅 RegC 权威表消费。
+    for (const auto& c : kCases) {
+        bool found = false;
+        for (const auto& id : builtinIntrinsicTable()) {
+            if (id.owner == c.owner && id.name == c.name && std::strcmp(id.desc, c.desc) == 0) {
+                EXPECT_FALSE(id.llvmDirect) << c.owner << "." << c.name;
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << c.owner << "." << c.name;
+    }
+}
+
 TEST(RegCIntrinsicRegistryTest, UnsupportedOverloadFallsBackWithReason)
 {
     auto ins = makeStaticCall("java/lang/Math",

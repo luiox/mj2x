@@ -460,7 +460,7 @@ mj2x_ref mj2x_intrinsic_long_to_unsigned_string_radix(mj2x_regc_context* context
 
 // ---- Integer/Long.divideUnsigned/remainderUnsigned ----
 //
-// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义；经
+// 除零抛 ArithmeticException("/ by zero")，与 JVM idiv/irem 同语义；经
 // mj2x_regc_throw_arithmetic 挂 pending 异常（RegCLocalHelper 形态，发射面
 // 保留调用后 ExceptionCheck）。非零除数路径纯 C 无符号运算：无符号除法无
 // INT_MIN/-1 型陷阱，位型与 JDK 一致（Integer.divideUnsigned(MIN_VALUE, -1)
@@ -500,6 +500,67 @@ int64_t mj2x_intrinsic_long_remainder_unsigned(mj2x_regc_context* context, int64
         return 0;
     }
     return (int64_t)((uint64_t)lhs % (uint64_t)rhs);
+}
+
+// ---- java.lang.Math.floorDiv/floorMod ----
+//
+// 除零抛 ArithmeticException("/ by zero")，与 JVM idiv/irem 同语义，走
+// mj2x_regc_throw_arithmetic 挂 pending 异常（RegCLocalHelper 形态）。
+// 除零外纯 C：商向负无穷取整（符号异或为负且余数非零时商减一）；
+// MIN/-1 是 C 有符号除法的未定义行为（x86 上 SIGFPE），按 JVM 位型回绕
+// 先行分流（floorDiv(MIN,-1)=MIN、floorMod(MIN,-1)=0）。余数按
+// x - q*y 的无符号回绕计算，与 Java int/long 溢出语义逐位一致。
+
+int32_t mj2x_intrinsic_math_floor_div_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
+{
+    int32_t quotient;
+    if (rhs == 0) {
+        mj2x_regc_throw_arithmetic(context, NULL);
+        return 0;
+    }
+    if (lhs == INT32_MIN && rhs == -1) return INT32_MIN;
+    quotient = lhs / rhs;
+    if ((lhs ^ rhs) < 0 && quotient * rhs != lhs) quotient--;
+    return quotient;
+}
+
+int64_t mj2x_intrinsic_math_floor_div_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
+{
+    int64_t quotient;
+    if (rhs == 0) {
+        mj2x_regc_throw_arithmetic(context, NULL);
+        return 0;
+    }
+    if (lhs == INT64_MIN && rhs == -1) return INT64_MIN;
+    quotient = lhs / rhs;
+    if ((lhs ^ rhs) < 0 && quotient * rhs != lhs) quotient--;
+    return quotient;
+}
+
+int32_t mj2x_intrinsic_math_floor_mod_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
+{
+    int32_t quotient;
+    if (rhs == 0) {
+        mj2x_regc_throw_arithmetic(context, NULL);
+        return 0;
+    }
+    if (lhs == INT32_MIN && rhs == -1) return 0;
+    quotient = lhs / rhs;
+    if ((lhs ^ rhs) < 0 && quotient * rhs != lhs) quotient--;
+    return (int32_t)((uint32_t)lhs - (uint32_t)quotient * (uint32_t)rhs);
+}
+
+int64_t mj2x_intrinsic_math_floor_mod_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
+{
+    int64_t quotient;
+    if (rhs == 0) {
+        mj2x_regc_throw_arithmetic(context, NULL);
+        return 0;
+    }
+    if (lhs == INT64_MIN && rhs == -1) return 0;
+    quotient = lhs / rhs;
+    if ((lhs ^ rhs) < 0 && quotient * rhs != lhs) quotient--;
+    return (int64_t)((uint64_t)lhs - (uint64_t)quotient * (uint64_t)rhs);
 }
 
 // ---- java.lang.Enum.name() / ordinal() 直接字段读取 ----

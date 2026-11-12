@@ -235,6 +235,7 @@ protected:
         // intrinsic_wrapper/intrinsic_math/intrinsic_random 是历史 in-tree 版，
         // 与 crt 重复定义，不再链接。
         compileCrt("regc/mj2x_regc_intrinsic.c", "mj2x_regc_intrinsic.obj");
+        compileCrt("regc/mj2x_regc_strictmath.c", "mj2x_regc_strictmath.obj");
 
         std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
         for (const auto& obj : runtimeObjs) linkLine += " " + q(obj);
@@ -2132,6 +2133,124 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
     EXPECT_EQ(generatedC.find("_mj2x_regc_call_void(\"java/lang/StringBuilder\""),
               std::string::npos)
         << generatedC;
+}
+
+// exec 对拍：StrictMath 位精确 12 条抽样点 + Math 边缘条目 + 全角数字解析 +
+// null 异常类。样本点取跨 JDK 稳定的纯函数值(fdlibm 算法 8-25 未变,位精确
+// 对拍结论见 PR);floorDiv/floorMod 除零走 try/catch(ArithmeticException
+// pending 分发);null 只对拍异常类不比对消息文本(JDK 8 的 null 消息是
+// "null",17+ 是 "Cannot parse null string",基线本身跨 JDK 不同构)。
+TEST_F(RegCBackendE2E, StrictMathAndMathEdgeRoundTrip)
+{
+    runCase(
+        "RegCStrictMath",
+        "public class RegCStrictMath {\n"
+        "  public static double sinAt(double x) { return StrictMath.sin(x); }\n"
+        "  public static double cosAt(double x) { return StrictMath.cos(x); }\n"
+        "  public static double tanAt(double x) { return StrictMath.tan(x); }\n"
+        "  public static double asinAt(double x) { return StrictMath.asin(x); }\n"
+        "  public static double acosAt(double x) { return StrictMath.acos(x); }\n"
+        "  public static double atanAt(double x) { return StrictMath.atan(x); }\n"
+        "  public static double atan2At(double y, double x) { return StrictMath.atan2(y, x); }\n"
+        "  public static double expAt(double x) { return StrictMath.exp(x); }\n"
+        "  public static double logAt(double x) { return StrictMath.log(x); }\n"
+        "  public static double log10At(double x) { return StrictMath.log10(x); }\n"
+        "  public static double powAt(double a, double b) { return StrictMath.pow(a, b); }\n"
+        "  public static double hypotAt(double a, double b) { return StrictMath.hypot(a, b); }\n"
+        "  public static double rintAt(double x) { return Math.rint(x); }\n"
+        "  public static double cbrtAt(double x) { return Math.cbrt(x); }\n"
+        "  public static String doubleHex(double x) { return Double.toHexString(x); }\n"
+        "  public static int floorDivInt(int a, int b) { return Math.floorDiv(a, b); }\n"
+        "  public static long floorDivLong(long a, long b) { return Math.floorDiv(a, b); }\n"
+        "  public static int floorModInt(int a, int b) { return Math.floorMod(a, b); }\n"
+        "  public static long floorModLong(long a, long b) { return Math.floorMod(a, b); }\n"
+        "  public static int floorDivOrCatch(int a, int b) {\n"
+        "    try { return Math.floorDiv(a, b); }\n"
+        "    catch (ArithmeticException e) { return -77; }\n"
+        "  }\n"
+        "  public static long floorModOrCatch(long a, long b) {\n"
+        "    try { return Math.floorMod(a, b); }\n"
+        "    catch (ArithmeticException e) { return -88L; }\n"
+        "  }\n"
+        "  public static int minMinusOneDivMinusOne(int a, int b) {\n"
+        "    try { return Math.floorDiv(a, b); }\n"
+        "    catch (ArithmeticException e) { return 1; }\n"
+        "  }\n"
+        // 全角数字:Java 源用 unicode 转义,源文件保持纯 ASCII
+        "  public static int parseFullWidth(String s) { return Integer.parseInt(s); }\n"
+        "  public static int parseFullWidthRadix16(String s) { return Integer.parseInt(s, 16); }\n"
+        "  public static long parseLongFullWidth(String s) { return Long.parseLong(s); }\n"
+        "  public static int parseUnsignedFullWidth(String s) { return Integer.parseUnsignedInt(s); }\n"
+        "  public static int parseNullInt() {\n"
+        "    try { Integer.parseInt(null); return 1; }\n"
+        "    catch (NumberFormatException e) { return 2; }\n"
+        "    catch (NullPointerException e) { return 3; }\n"
+        "  }\n"
+        "  public static int parseNullUnsigned() {\n"
+        "    try { Integer.parseUnsignedInt(null); return 1; }\n"
+        "    catch (NumberFormatException e) { return 2; }\n"
+        "    catch (NullPointerException e) { return 3; }\n"
+        "  }\n"
+        "  public static int parseFloatNull() {\n"
+        "    try { Float.parseFloat(null); return 1; }\n"
+        "    catch (NumberFormatException e) { return 2; }\n"
+        "    catch (NullPointerException e) { return 3; }\n"
+        "  }\n"
+        "  public static int parseBooleanNull() {\n"
+        "    return Boolean.parseBoolean(null) ? 1 : 0;\n"
+        "  }\n"
+        "  public static int digitAt(char ch) { return Character.digit(ch, 10); }\n"
+        "}\n",
+        {
+            // StrictMath 抽样点(跨 JDK 稳定:fdlibm 位精确域)
+            {"sin1", "RegCStrictMath.doubleHex(RegCStrictMath.sinAt(1.0))"},
+            {"cos1", "RegCStrictMath.doubleHex(RegCStrictMath.cosAt(1.0))"},
+            {"tan1", "RegCStrictMath.doubleHex(RegCStrictMath.tanAt(1.0))"},
+            {"sinBig", "RegCStrictMath.doubleHex(RegCStrictMath.sinAt(1e300))"},
+            {"cosBig", "RegCStrictMath.doubleHex(RegCStrictMath.cosAt(-1e300))"},
+            {"tanBig", "RegCStrictMath.doubleHex(RegCStrictMath.tanAt(1e300))"},
+            {"asinHalf", "RegCStrictMath.doubleHex(RegCStrictMath.asinAt(0.5))"},
+            {"acosHalf", "RegCStrictMath.doubleHex(RegCStrictMath.acosAt(0.5))"},
+            {"atan1", "RegCStrictMath.doubleHex(RegCStrictMath.atanAt(1.0))"},
+            {"atan2aa", "RegCStrictMath.doubleHex(RegCStrictMath.atan2At(1.0, 1.0))"},
+            {"exp1", "RegCStrictMath.doubleHex(RegCStrictMath.expAt(1.0))"},
+            {"expUnderflow", "RegCStrictMath.doubleHex(RegCStrictMath.expAt(-745.0))"},
+            {"log2", "RegCStrictMath.doubleHex(RegCStrictMath.logAt(2.0))"},
+            {"log100_10", "RegCStrictMath.doubleHex(RegCStrictMath.log10At(100.0))"},
+            {"pow210", "RegCStrictMath.doubleHex(RegCStrictMath.powAt(2.0, 10.0))"},
+            {"powHalfSqrt", "RegCStrictMath.doubleHex(RegCStrictMath.powAt(2.0, 0.5))"},
+            {"powNegOdd", "RegCStrictMath.doubleHex(RegCStrictMath.powAt(-2.0, 3.0))"},
+            {"hypot34", "RegCStrictMath.doubleHex(RegCStrictMath.hypotAt(3.0, 4.0))"},
+            {"hypotBig", "RegCStrictMath.doubleHex(RegCStrictMath.hypotAt(1e300, 1e300))"},
+            {"rintTie1", "RegCStrictMath.doubleHex(RegCStrictMath.rintAt(2.5))"},
+            {"rintTie2", "RegCStrictMath.doubleHex(RegCStrictMath.rintAt(3.5))"},
+            {"rintTieNeg", "RegCStrictMath.doubleHex(RegCStrictMath.rintAt(-2.5))"},
+            {"cbrt27", "RegCStrictMath.doubleHex(RegCStrictMath.cbrtAt(27.0))"},
+            {"cbrtNeg8", "RegCStrictMath.doubleHex(RegCStrictMath.cbrtAt(-8.0))"},
+            {"sinNegZero", "RegCStrictMath.doubleHex(RegCStrictMath.sinAt(-0.0))"},
+            {"expOverflow", "RegCStrictMath.doubleHex(RegCStrictMath.expAt(710.0))"},
+            // Math 边缘条目
+            {"floorDiv7_2", "RegCStrictMath.floorDivInt(7, 2)"},
+            {"floorDivNeg", "RegCStrictMath.floorDivInt(-7, 2)"},
+            {"floorModNeg", "RegCStrictMath.floorModInt(-7, 2)"},
+            {"floorModNegDiv", "RegCStrictMath.floorModInt(7, -2)"},
+            {"floorDivLongMin", "RegCStrictMath.floorDivLong(Long.MIN_VALUE, -1L)"},
+            {"floorModLongMin", "RegCStrictMath.floorModLong(Long.MIN_VALUE, -1L)"},
+            {"floorDivZero", "RegCStrictMath.floorDivOrCatch(7, 0)"},
+            {"floorModZero", "RegCStrictMath.floorModOrCatch(7L, 0L)"},
+            {"floorDivMinMinusOne", "RegCStrictMath.minMinusOneDivMinusOne(Integer.MIN_VALUE, -1)"},
+            // 全角数字 + null 异常类
+            {"parseFullWidth", "RegCStrictMath.parseFullWidth(\"\\uFF11\\uFF12\\uFF13\")"},
+            {"parseFullWidth16", "RegCStrictMath.parseFullWidthRadix16(\"\\uFF11\\uFF41\")"},
+            {"parseLongFullWidth", "RegCStrictMath.parseLongFullWidth(\"\\uFF11\\uFF12\\uFF13\")"},
+            {"parseUnsignedFullWidth",
+             "RegCStrictMath.parseUnsignedFullWidth(\"\\uFF11\\uFF12\\uFF13\")"},
+            {"digitFullWidth", "RegCStrictMath.digitAt('\\uFF11')"},
+            {"parseNullInt", "RegCStrictMath.parseNullInt()"},
+            {"parseNullUnsigned", "RegCStrictMath.parseNullUnsigned()"},
+            {"parseFloatNull", "RegCStrictMath.parseFloatNull()"},
+            {"parseBooleanNull", "RegCStrictMath.parseBooleanNull()"},
+        });
 }
 
 // exec 对拍：三类代表条目 + 边界（除零 pending、NFE、NaN 规范化、unsigned
