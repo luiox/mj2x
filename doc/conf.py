@@ -15,8 +15,7 @@ language = "zh-CN"
 
 root_doc = "index"
 
-# archive/ 是历史归档（只进不出，md 原样保存），不参与构建与引用校验。
-exclude_patterns = ["_build", "archive", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # 引用必须可解析：未定义的 :ref:/:doc: 目标在 -W 下即失败。
 nitpicky = True

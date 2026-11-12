@@ -100,4 +100,3 @@ mj2x-cli --lang en_US --help
 - [AGENTS.md](AGENTS.md) — agent/开发者工作约定(命令、惯例、构建门、文档规范)
 - [MIGRATION.md](MIGRATION.md) — 拆仓来历、vendor 清单与待办
 - [dev_plan.md](dev_plan.md) — 当前挂账与计划
-- [doc/archive/](doc/archive/) — 历史归档（迁移账本、批次笔记、失效快照，只进不出）
