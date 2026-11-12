@@ -31,6 +31,20 @@ inline void skipOnJdkUnavailable(const JvmRunOutcome& r)
     GTEST_SKIP() << "JDK 不可用: " << r.output;
 }
 
+/// JDK 版本门：JDK 不可用或 javac major 低于 @p minMajor 时记官方 GTEST_SKIP
+/// （不算失败）。供消费 JDK 8 之后语法 fixture 的用例挂门——javac 编不过的
+/// 语料在低版本腿上必须显式跳过而不是变红。
+inline void skipOnJdkBelow(const JdkToolchain& tc, int minMajor)
+{
+    if (!tc.available) {
+        GTEST_SKIP() << "JDK 不可用: " << tc.reason;
+    }
+    if (tc.majorVersion < minMajor) {
+        GTEST_SKIP() << "该 fixture 需要 JDK " << minMajor << " 语法，当前 javac major="
+                     << tc.majorVersion;
+    }
+}
+
 /// gtest 语义执行（在 TEST/夹具函数体内用）：
 /// - JDK 不可用 → 记 GTEST_SKIP；
 /// - 编译/运行失败 → ADD_FAILURE + 诊断输出（异常栈等），测试判负。
