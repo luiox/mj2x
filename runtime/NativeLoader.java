@@ -12,6 +12,10 @@
 // 职责：把 JAR 内嵌的 native 库资源解包到临时文件并 System.load 加载一次
 // （ACC_SYNCHRONIZED 幂等，loaded 标记防重复）。
 //
+// 与字节码的注入差异：解密初始密钥由生成器按 xorKey != 0 ? xorKey :
+// 0x9E3779B9 注入（xorKey 为 0 的明文形态同样落到固定种子）；本参考源
+// 硬编码固定种子形态，加密形态的取值以生成器发射为准。
+//
 // JDK 24+ native 访问声明（issue #58）：
 //   - System.load 自 JDK 24 起是受限方法，未声明允许时 JVM 打印 restricted
 //     method 告警；按 JDK 公告，未来版本未声明时会直接失败。

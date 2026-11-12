@@ -569,6 +569,32 @@ TEST(IOTest, CLoaderJavaReferenceStaysInSyncWithGenerator)
     EXPECT_NE(text.find("mj2x.runtime.NativeLoader.load"), std::string::npos) << text;
 }
 
+TEST(IOTest, NativeLoaderJavaReferenceStaysInSyncWithGenerator)
+{
+    namespace fs = std::filesystem;
+    const fs::path source = fs::current_path() / "runtime" / "NativeLoader.java";
+    ASSERT_TRUE(fs::exists(source)) << source;
+    std::ifstream in(source, std::ios::binary);
+    ASSERT_TRUE(in.is_open());
+    const std::string text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+
+    // 生成器固定发射的 load 面(权威字节码在 native_loader_postprocessor.cpp
+    // 的 buildNativeLoaderClass，调用面常量在 native_loader_call.hpp)。
+    EXPECT_NE(text.find("public static synchronized void load(String resourcePath, String tempSuffix)"),
+              std::string::npos)
+        << text;
+    EXPECT_NE(text.find("ClassLoader.getSystemResourceAsStream"), std::string::npos) << text;
+    EXPECT_NE(text.find("System.load(temp.getAbsolutePath())"), std::string::npos) << text;
+    // XOR 解密的固定种子形态与 .enc 后缀判定(加密形态的密钥注入差异见文件头)。
+    EXPECT_NE(text.find("0x9E3779B9"), std::string::npos) << text;
+    EXPECT_NE(text.find(".enc"), std::string::npos) << text;
+    // JDK 24+ native 访问声明的部署说明(issue #58)。
+    EXPECT_NE(text.find("Enable-Native-Access"), std::string::npos) << text;
+    EXPECT_NE(text.find("--enable-native-access"), std::string::npos) << text;
+    // xorKey 注入差异说明(审查补)。
+    EXPECT_NE(text.find("xorKey != 0 ? xorKey :"), std::string::npos) << text;
+}
+
 TEST(PipelineTest, PackagedClassSidecarUsesClasspathRoot)
 {
     namespace fs = std::filesystem;
