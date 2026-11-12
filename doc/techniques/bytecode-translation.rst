@@ -3,7 +3,7 @@
 字节码到 IR 翻译
 ==================
 
-状态：定稿（通用技术综述；本仓实现形态见本文「本仓现状」节）
+状态：定稿（通用技术综述；本仓实现形态见本文本仓现状节）
 
 将 JVM 字节码指令序列翻译为编译器中间表示（IR）。
 
@@ -12,11 +12,11 @@
 本仓现状
 ----------
 
-mj2x 的翻译链是两级：``frontend/code_converter.cpp``\ 先把字节码切成 L1 MIR 基本块（构建期维护 FrameState 模拟操作数栈，栈值不进产物）；随后 ``SSABuilder``\ 消栈构造 SSA（形态见 :ref:`ssa-construction`\ 「本仓现状」）。
+mj2x 的翻译链是两级：``frontend/code_converter.cpp``\ 先把字节码切成 L1 MIR 基本块（构建期维护 FrameState 模拟操作数栈，栈值不进产物）；随后 ``SSABuilder``\ 消栈构造 SSA（形态见 :ref:`ssa-construction`\ 本仓现状节）。
 
-- **invokedynamic**\ 在 pipeline 级预处理静态展开（StringConcatFactory / LambdaMetafactory）；残留自定义 bootstrap 站点走**\ 运行时 bootstrap 解析** （模块级 cache + bsm 调用，见 :doc:`/user-guide` §5.4）。
+- **invokedynamic**\ 在 pipeline 级预处理静态展开（StringConcatFactory / LambdaMetafactory）；残留自定义 bootstrap 站点走**\ 运行时 bootstrap 解析**\ （模块级 cache + bsm 调用，见 :doc:`/user-guide` §5.4）。
 - **异常表**\ 按 protected 区域进 MIR，异常边由异常区域记录承载（handler 入口接收异常值）。
-- **fail-closed 而非回退解释**\ ：无法安全翻译的构造保持原字节码、不生成 native 代码并给出明确原因——本仓没有「回退到 JVM 解释执行」的桩路线。
+- **fail-closed 而非回退解释**\ ：无法安全翻译的构造保持原字节码、不生成 native 代码并给出明确原因，本仓没有回退到 JVM 解释执行的桩路线。
 
 问题
 ------
@@ -70,7 +70,7 @@ Push/Pull 模式
 局部变量追踪
 ~~~~~~~~~~~~~~
 
-``istore``\ 将栈顶值写入局部变量 slot，``iload``\ 读取。在翻译的抽象状态中维护一个 slot → IR Value 的映射：
+``istore``\ 将栈顶值写入局部变量 slot，``iload``\ 读取。在翻译的抽象状态中维护一个 slot 到 IR Value 的映射：
 
 .. code-block:: c
 
