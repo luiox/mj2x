@@ -91,8 +91,14 @@ std::vector<ca::u8> buildNativeAccessManifest(const std::vector<ca::u8>* origina
     if (scan.declared) return src;   // 已声明：用户显式取值优先，字节原样保留
 
     std::vector<ca::u8> out;
-    out.reserve(src.size() + kAttributeLine.size());
+    out.reserve(src.size() + kAttributeLine.size() + 2);
     out.insert(out.end(), src.begin(), src.begin() + static_cast<std::ptrdiff_t>(scan.insertAt));
+    // 插入点落在未终止行末尾（清单无换行结尾）时先补行终止符，否则属性值
+    // 会被并入上一行、声明丢失。
+    if (scan.insertAt > 0 && src[scan.insertAt - 1] != '\n') {
+        out.push_back('\r');
+        out.push_back('\n');
+    }
     out.insert(out.end(), kAttributeLine.begin(), kAttributeLine.end());
     out.insert(out.end(), src.begin() + static_cast<std::ptrdiff_t>(scan.insertAt), src.end());
     return out;

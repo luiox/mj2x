@@ -803,3 +803,21 @@ TEST(IOTest, ManifestNativeAccessPreservesLfAndNearMissAttribute)
     EXPECT_TRUE(mj2x::manifestHasNativeAccess(nearMerged));
     EXPECT_NE(textOf(nearMerged).find("Enable-Native-AccessX: y"), std::string::npos);
 }
+
+TEST(IOTest, ManifestNativeAccessAppendsTerminatorToUnterminatedVersionLine)
+{
+    // 既有清单无换行结尾（审查复现形状）：插入点落在未终止首行末尾时先补
+    // 行终止符，否则属性值被并入版本行、声明丢失。
+    auto bare       = textBytes("Manifest-Version: 1.0");
+    auto bareMerged = mj2x::buildNativeAccessManifest(&bare);
+    EXPECT_EQ(textOf(bareMerged),
+              std::string("Manifest-Version: 1.0\r\n") + mj2x::kEnableNativeAccess + ": " +
+                  mj2x::kEnableNativeAccessValue + "\r\n");
+    EXPECT_TRUE(mj2x::manifestHasNativeAccess(bareMerged));
+
+    // 无版本行且无换行结尾：属性居首，原行原样保留在末尾，互不粘连。
+    auto bareNoVersion = textBytes("Main-Class: M");
+    EXPECT_EQ(textOf(mj2x::buildNativeAccessManifest(&bareNoVersion)),
+              std::string(mj2x::kEnableNativeAccess) + ": " + mj2x::kEnableNativeAccessValue +
+                  "\r\nMain-Class: M");
+}
