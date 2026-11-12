@@ -172,7 +172,7 @@ JAR + ``--compile``\ 的整体模式（改写全部类 + 编译 DLL 并内嵌 + 
    * - ``--config <file>``
      - 从 JSON 配置读取默认参数，命令行显式参数覆盖配置。**全量 45+ 参数可配置** （参数注册表单源，见 :doc:`config-file` 键表）
    * - ``--dump-config-schema[=<file>]``
-     - 输出配置 JSON Schema（draft-07；裸=stdout，内联 ``=``\ 指定文件）——GUI 配置工具 / VS Code / ajv 直接消费
+     - 输出配置 JSON Schema（draft-07；裸=stdout，内联 ``=``\ 指定文件），GUI 配置工具 / VS Code / ajv 直接消费
    * - ``--dump-config-template[=<file>]``
      - 输出全量键 + 默认值 + 注释的配置模板（JSONC，删除注释即得合法配置）；文件目标仅内联 ``=``\ 形态
    * - ``--intrinsic-config <file>``
@@ -212,7 +212,7 @@ JAR + ``--compile``\ 的整体模式（改写全部类 + 编译 DLL 并内嵌 + 
    * - ``--native-opt-level <0|1|2|3|s>``
      - 生成 native 工程的优化级别（默认 ``2``\ ）。MSVC 映射 ``/Od|/O1|/O2|/Ox|/Os``\ ，GCC/Clang 与 LLVM 侧映射 ``-O0..-O3|-Os``\ ， xmake 工程映射 ``set_optimize``\ 。**级别越低越能保住源码级形态**\ ： ``--backend regc --regc-obfuscate``\ 的 CFF dispatcher 在 ``-O2``\ 下会被优化器消解（RegC 已用 volatile state 兜住，见本文 §4.0.1 CFF 边界），降档可进一步确保形态留存；``s``\ 面向体积
    * - ``--native-timeout <秒>``
-     - native 编译外部进程（编译器 / link / MSVC 环境探针 / xmake / pack hook）的墙钟超时，默认 ``900``\ 秒；``0`` = 不限时。**每次外呼独立计时**\ ；超时即整树终止（Windows 先 ``taskkill /T /F``\ 收割进程树再收尸，Linux 杀进程组）并以非零退出，日志记 ``timed out after <n>s``\ 。编译器卡死/挂起的环境把默认 900 调小可快速失败；对标 jvmtp ``compiler.timeout``
+     - native 编译外部进程（编译器 / link / MSVC 环境探针 / xmake / pack hook）的墙钟超时，默认 ``900``\ 秒；``0`` = 不限时。**每次外呼独立计时**\ ；超时即整树终止（Windows 先 ``taskkill /T /F``\ 终止整棵进程树再回收，Linux 杀进程组）并以非零退出，日志记 ``timed out after <n>s``\ 。编译器卡死/挂起的环境把默认 900 调小可快速失败；对标 jvmtp ``compiler.timeout``
    * - ``--strings-encrypt``
      - 字符串常量 at-rest 加密（StackC/RegC）：明文字符串序列加密后落入产物（密钥由明文 fnv1a64 折叠派生），运行时解密使用，静态分析看不到明文。默认关闭
    * - ``--lang <zh_CN|en_US>``
@@ -246,9 +246,7 @@ RegC：
    * - ``--regc-direct-calls <档>``
      - native-to-native 直接 C 调用的**档位**\ （默认 ``off``\ ）。直调不产生 JVM 栈帧，``Throwable.getStackTrace``\ 等语义失真，故按**栈失真范围**\ 分档： ``off``\ 只放行确定性分派的虚调用；``intra-class``\ 加同类内调用（含自递归）；``all``\ 放行全部确定性分派。原布尔开关语义等价于 ``all``\ 。
 
-       实测（jvm-obf-tester，7 次取中位数，合计）：``off`` 114.5ms →
-       ``intra-class`` 108.6ms → ``all`` 99.6ms；``all``\ 档反超未混淆 JVM 基线
-       （104.9ms）
+       实测（jvm-obf-tester，7 次取中位数，合计）：``off`` 114.5ms → ``intra-class`` 108.6ms → ``all`` 99.6ms；``all``\ 档反超未混淆 JVM 基线（104.9ms）
    * - ``--regc-safe-env``
      - 开启 safe-env：JNI 函数表快照 + 方法入口恢复，阻断 agent 的 JNI hook
    * - ``--regc-safe-env-debug``
@@ -256,10 +254,9 @@ RegC：
    * - ``--regc-comment-level <none|summary|detailed>``
      - 生成注释级别（默认 summary）
    * - ``--obf-scope-include <glob>`` / ``--obf-scope-exclude <glob>``
-     - **混淆作用域**\ （可重复、可逗号分隔）：按类级 glob 收窄「哪些类受 RegIR 变换影响」。真实工程通常只想保护少数核心类——性能、产物体积、可调试性都要求收窄作用域。模式语义与 ``--native-include/exclude``\ 一致（``*`` 不跨段、``**``\ 跨段、exclude 优先）。
+     - **混淆作用域**\ （可重复、可逗号分隔）：按类级 glob 决定哪些类受 RegIR 变换影响。真实工程通常只想保护少数核心类，性能、产物体积、可调试性都要求收窄作用域。模式语义与 ``--native-include/exclude``\ 一致（``*`` 不跨段、``**``\ 跨段、exclude 优先）。
 
-       显式给 include 即隐含开启混淆，不必再开 ``--regc-obfuscate``\ ；单独给
-       exclude 不隐含开启（它只做收窄）。两者都为空时零行为变化
+       显式给 include 即隐含开启混淆，不必再开 ``--regc-obfuscate``\ ；单独给 exclude 不隐含开启（它只做收窄）。两者都为空时零行为变化
    * - ``--regc-obfuscate``
      - 开启基础混淆变换（MBA + opaque 谓词 + CFF 平坦化）。**默认全部关闭**\ ： RegC 定位高性能 native 生成器，默认产物语义直译零混淆
    * - ``--regc-cff-dead <n>``
@@ -271,23 +268,21 @@ RegC：
    * - ``--regc-opaque-zero``
      - opaque 恒真谓词变体（demorgan ``~(~x)==x`` / shift-pair / or-dec，零 UB 位运算恒等）。隐含开启 opaque
    * - ``--regc-hide-constants``
-     - 立即数隐藏：整型立即数 C 改写为 ``E ^ const_key(site)``\ （E 编译期物化、密钥运行时经独立 TU 派生，LTO 下不可折叠）。**不被 ``--regc-obfuscate`` 联动**——每立即数多一次运行时调用，是混淆家族里最重的一项（对标 jvmtp ``obfuscation.constants``\ ）
+     - 立即数隐藏：整型立即数 C 改写为 ``E ^ const_key(site)``\ （E 编译期物化、密钥运行时经独立 TU 派生，LTO 下不可折叠）。**不被 ``--regc-obfuscate`` 联动**，原因是每立即数多一次运行时调用，这是混淆家族里最重的一项（对标 jvmtp ``obfuscation.constants``\ ）
    * - ``--regc-indirect-calls``
-     - 调用目标间接化：调用点改走 per-signature dispatcher，只带 ``（站点表, 组内索引）``\ ，目标身份（owner/name/desc 字符串）移出调用点——调用图收敛到单一 dispatcher 符号（对标 jvmtp ``obfuscation.calls.*``\ ）。**不被 ``--regc-obfuscate``联动**\ ——每次调用多一层分派，热路径开销可观。只有通用 JNI 兜底路径会落到 dispatcher：自有 intrinsic（StringBuilder/String 等）、JDK 纯函数 intrinsic（如 ``Math.max``\ ）与同模块直调快路径各自保持原有形态
+     - 调用目标间接化：调用点改走 per-signature dispatcher，只带 ``（站点表, 组内索引）``\ ，目标身份（owner/name/desc 字符串）移出调用点，调用图收敛到单一 dispatcher 符号（对标 jvmtp ``obfuscation.calls.*``\ ）。**不被 ``--regc-obfuscate``\ 联动**，原因是每次调用多一层分派，热路径开销可观。只有通用 JNI 兜底路径会落到 dispatcher：自有 intrinsic（StringBuilder/String 等）、JDK 纯函数 intrinsic（如 ``Math.max``\ ）与同模块直调快路径各自保持原有形态
    * - ``--regc-computed-jumps``
      - computed jumps / 跳转目标间接化（**默认关**\ ）：switch 的 ``case key -> 目标块``\ 映射从代码挪到数据表（key 按站点密钥异或存放），分派改走运行时解析出的块索引，产物里不再有 ``case <字面量>: goto block_bX`` 这种直接可读的映射。
 
-       实测代价（jvm-obf-tester，5 次中位数）：ControlFlow probe 0.374ms →
-       0.477ms（+27%），合计 +8.9%。属混淆增益，按需开
+       实测代价（jvm-obf-tester，5 次中位数）：ControlFlow probe 0.374ms → 0.477ms（+27%），合计 +8.9%。属混淆增益，按需开
    * - ``--regc-pod-struct``
-     - POD 类降级为 C struct（**默认关**\ ）：不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI，字段名从产物里消失。降级后 Java 侧对象不存在，反射/序列化访问它会读到空壳——这是主要代价。
+     - POD 类降级为 C struct（**默认关**\ ）：不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI，字段名从产物里消失。降级后 Java 侧对象不存在，反射/序列化访问它会读到空壳，这是主要代价。
 
-       实测（PodBench 样本，字段访问密集）：关 611ms → 开 **103ms**\ （5.9x），
-       结果与 JVM 基线一致
+       实测（PodBench 样本，字段访问密集）：关 611ms → 开 **103ms**\ （5.9x），结果与 JVM 基线一致
    * - ``--preset <档>``
      - **一次设一组参数**\ ：``none``\ （默认）/ ``perf`` / ``balanced`` / ``max``\ 。参数已到 59 个，命令行动辄十几项，档位是省事的正解；档位只给建议值，仍可用配置文件或 CLI 逐项覆盖。档位内容与四层合并顺序见 :doc:`config-file`
    * - ``--dump-effective-config[=<file>]``
-     - 回显四层合并后的最终配置（含每个键来自哪一层）。排查"到底开了啥" 用——59 个开关 + 联动规则，没有这个只能靠猜。与两个 ``--dump-config-*`` 互斥，都不要求 ``-i/-o``
+     - 回显四层合并后的最终配置（含每个键来自哪一层）。排查实际生效的配置用：59 个开关 + 联动规则，没有这个只能靠猜。与两个 ``--dump-config-*`` 互斥，都不要求 ``-i/-o``
    * - ``--regc-transform-seed <n>``
      - 混淆变换种子（state 码/变体选择，默认 0；同 seed 同产物）。立即数隐藏的 site 为函数内局部计数器，不掺 seed（site 必物化在产物里，掺 seed 不增加分析者成本）
 
@@ -320,13 +315,13 @@ VMC4：
    * - ``--vmc4-shuffle-blocks``
      - 编码期块乱序：方法内 VM 块物理布局按 seed 确定性打乱（Sattolo 单环，恒无不动点），块 id 空间一并打乱，块邻接不再镜像 CFG；语义经间接跳转表重映射保持不变。开启时间接跳转表以 xorshift32 keystream 加密落盘、 JNI_OnLoad 一次性原地解密。与 drift / encrypt-program 正交可叠
    * - ``--vmc4-super-ops``
-     - super-operator 融合：相邻指令折叠成复合指令——``Binary(x, ±1)``\ 折成 SuperInc/SuperDec（去掉 rhs 操作数）；同一基本块内相邻的 ``t = a op1 b`` + ``dest = t op2 c``\ （t 仅此一处消费）折成一条 FusedBinary，中间值不再以独立寄存器存在。融合后 VM 指令与 JVM 字节码不再 1:1。与 ``--vmc4-fragment``\ 可组合
+     - super-operator 融合：相邻指令折叠成复合指令，``Binary(x, ±1)``\ 折成 SuperInc/SuperDec（去掉 rhs 操作数）；同一基本块内相邻的 ``t = a op1 b`` + ``dest = t op2 c``\ （t 仅此一处消费）折成一条 FusedBinary，中间值不再以独立寄存器存在。融合后 VM 指令与 JVM 字节码不再 1:1。与 ``--vmc4-fragment``\ 可组合
    * - ``--vmc4-fragment``
-     - 指令碎片化：每条计算指令（Binary/Unary/Compare/Convert）的寄存器操作数先经专用临时槽中转一次，一条指令拆成「Copy + 原指令」多段，每段单独看是无意义的中间搬运。纯编码期变换（不新增 opcode）。**代价：指令数约 2~3 倍，解释执行开销同步上升**，面向高保护诉求按需开启。与 ``--vmc4-super-ops``\ 可组合
+     - 指令碎片化：每条计算指令（Binary/Unary/Compare/Convert）的寄存器操作数先经专用临时槽中转一次，一条指令拆成先 Copy 后原指令的多段，每段单独看是无意义的中间搬运。纯编码期变换（不新增 opcode）。**代价：指令数约 2~3 倍，解释执行开销同步上升**，面向高保护诉求按需开启。与 ``--vmc4-super-ops``\ 可组合
    * - ``--vmc4-regfile <n>``
-     - 寄存器文件定长化：计算寄存器经线性扫描分配压入 n 槽定长池，死值槽位复用，寄存器号不再镜像 SSA value id；装不下的活值分到稳定溢出槽，以统一 slots 数组高位索引直接寻址——无搬运指令、零运行时开销。与 ``--vmc4-super-ops`` / ``--vmc4-fragment``\ 可组合（fragment 临时槽改占池顶，要求 n ≥ 参数数 + 3；n < 参数数 fail-closed）。默认 0 = 关（恒等映射）
+     - 寄存器文件定长化：计算寄存器经线性扫描分配压入 n 槽定长池，死值槽位复用，寄存器号不再镜像 SSA value id；装不下的活值分到稳定溢出槽，以统一 slots 数组高位索引直接寻址，无搬运指令、零运行时开销。与 ``--vmc4-super-ops`` / ``--vmc4-fragment``\ 可组合（fragment 临时槽改占池顶，要求 n ≥ 参数数 + 3；n < 参数数 fail-closed）。默认 0 = 关（恒等映射）
    * - ``--vmc4-trace-surface <file>``
-     - 导出 VMC4 期望 trace surface（mjdbg 红队契约的实例描述清单）到文件；仅 ``--backend vmc4``\ 有效
+     - 导出 VMC4 期望 trace 输出（mjdbg 攻击测试契约的实例描述清单）到文件；仅 ``--backend vmc4``\ 有效
 
 ``--vmc4-super-ops``\ 与 ``--vmc4-fragment``\ 两项指令级变换的机制、代价与绕过面见技术分篇 :doc:`/techniques/vm-super-ops`。
 
@@ -339,7 +334,7 @@ VMC4：
    * - 参数
      - 说明
    * - ``--client-id <n>``
-     - per-client 唯一派生（默认 0 = 不变，产物与历史逐字节一致；非 0 时所有后端 seed 经 ``splitmix64(baseSeed ^ clientId)``\ 派生——每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物，可复现构建不受影响）。竞品借鉴的低成本项：分发时为每个客户独立构建
+     - per-client 唯一派生（默认 0 = 不变，产物与历史逐字节一致；非 0 时所有后端 seed 经 ``splitmix64(baseSeed ^ clientId)``\ 派生，每个客户端得到唯一 ISA/变体/state 码产物；同 clientId 同 seed 同产物，可复现构建不受影响）。低成本差异化项：分发时为每个客户独立构建
    * - ``--runtime-protection <none|log|delay|fake|terminate>``
      - 反侦测检查点注入（方法入口 ``mj2x_rt_checkpoint_run``\ ）
    * - ``--runtime-protection-step <n>`` / ``--runtime-protection-delay <ms>``
@@ -435,7 +430,7 @@ Zig 使用其 C frontend，不要求单独安装系统 GCC/Clang：
 
    mj2x-cli -i Hello.class -o Hello_native.class --compile --c-compiler xmake
 
-第二种形式在输出目录创建唯一临时工程，构建完成或失败后都会清理。两种形式都顺序执行 xmake configure/build，验证唯一 release 共享库后原子复制到 ``-o`` 指定的输出文件同目录；JAR 输出随后嵌入该库。xmake 是落地工程模式，不能与 ``--compile-mode pipe``\ 同用。显式 direct 编译器（如 ``--c-compiler clang``\ ）也不能和 ``--generate-xmake ... --compile``\ 同时指定。
+第二种形式在输出目录创建唯一临时工程，构建完成或失败后都会清理。两种形式都顺序执行 xmake configure/build，验证唯一 release 共享库后原子复制到 ``-o`` 指定的输出文件同目录；JAR 输出随后嵌入该库。xmake 走保留工程文件的模式，不能与 ``--compile-mode pipe``\ 同用。显式 direct 编译器（如 ``--c-compiler clang``\ ）也不能和 ``--generate-xmake ... --compile``\ 同时指定。
 
 5.3 RegC C++17
 ~~~~~~~~~~~~~~
@@ -525,7 +520,7 @@ Zig 使用其 C frontend，不要求单独安装系统 GCC/Clang：
      - 推荐后端
    * - 需要最大正确性覆盖、不关心抗分析
      - StackC
-   * - 保护导向，需要无栈输出抗 c2j
+   * - 保护导向，需要无栈输出抗反编译
      - RegC
    * - 需要 VM 虚拟化 + 编译期/执行期随机化
      - VMC4（保护导向，性能非关键）
@@ -569,4 +564,4 @@ RegC 会在生成 C 时识别部分 JDK 调用，把这些调用降到 native ru
 
 **Q: StackC 遇到 ``invokedynamic``怎么处理?** StackC 会通过 runtime MethodHandle 桥执行 javac 生成的 string concat / lambda。 RegC 会对未展开的 ``invokedynamic``\ 走运行时 bootstrap 解析（与 LLVM 同口径）。
 
-**Q: RegC 输出里有 ``cstack`` / ``sp``\ ?** 不应该有。如果有，是 bug——RegC 的结构断言禁止 stack-machine anchor。
+**Q: RegC 输出里有 ``cstack`` / ``sp``\ ?** 不应该有。如果有，是 bug，RegC 的结构断言禁止 stack-machine anchor。

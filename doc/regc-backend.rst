@@ -16,7 +16,7 @@ RegC 是 mj2x 的保护导向 native 后端。它不直接输出 JVM operand sta
 
    L1 stack MIR -> SSA -> RegIR -> RegC -> JNI wrapper / mj2x-rt helpers
 
-目标是让生成 C 呈现 virtual-register、block label、edge copy、helper/runtime call 的结构，逐步减少 c2j 对 ``cstack[]``\ 、``sp``\ 、全局 method/class table 等固定形状的依赖。
+目标是让生成 C 呈现 virtual-register、block label、edge copy、helper/runtime call 的结构，逐步减少反编译工具对 ``cstack[]``\ 、``sp``\ 、全局 method/class table 等固定形状的依赖。
 
 RegC 已过 MVP：真实 jar（JavaObfuscatorTest）业务方法 100% 转 native（零 skip）， JDK17/21 双矩阵性能追平并反超 JNIC 竞品 os30（见 ``benchmark/results``\ ）； safe-env（``--regc-safe-env``\ ）、反侦测检查点（``--runtime-protection``\ ）、模板化发射器、混淆变换族（``--regc-obfuscate``\ 及 ``--regc-*``\ 增强档，见 :doc:`user-guide` 参数表）均已在面上。
 
@@ -121,7 +121,7 @@ RegC E2E 覆盖
 - 对象、字段、数组、调用等多数 Java 语义仍通过生成 C 内的 helper 层承载； mj2x-rt 运行时 ABI 目前先接入 div/rem/barrier 等核心 helper。
 - ``invokedynamic``\ 不做直译：StringConcat/Lambda 站点由预处理静态展开，残留自定义 bootstrap 站点走运行时 bootstrap 解析（与 LLVM 后端同口径）。
 - JAR 输出沿用 pipeline MVP 限制：资源保留、class 替换、stored ZIP 输出； signed-JAR metadata fail-closed，multi-release class 作为资源 passthrough。
-- 保护强度不能由实现自证，需要 mjdbg/c2j trace 反馈闭环后再升级结论。
+- 保护强度不能由实现自证，需要 mjdbg 与反编译工具的 trace 反馈形成闭环验证后再升级结论。
 
 .. _regc-backend-refs:
 
