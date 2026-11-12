@@ -1,4 +1,4 @@
-// mj2x SSA IR — 块出口终结符（6 类）+ SSASuccessor + SSABlockArg 容器。
+// mj2x SSA IR 块出口终结符（6 类）+ SSASuccessor + SSABlockArg 容器。
 // 块内不允许控制转移，所有出边归 terminator 拥有。
 #pragma once
 

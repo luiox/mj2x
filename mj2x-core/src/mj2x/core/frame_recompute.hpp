@@ -15,7 +15,7 @@ namespace mj2x {
 
 class LcaTypeResolver;
 
-/// @brief 旧栈 DefaultCommonSuperClassProvider 的硬编码父类链移植（批 6）。
+/// @brief 旧栈 DefaultCommonSuperClassProvider 的硬编码父类链移植。
 ///
 /// 旧 writer 的 COMPUTE_FRAMES 公共父类口径 = 这张表 + Object 兜底（mj2x
 /// 从未注入 typeResolver）。帧引擎 Strict 档经本 resolver 复现同口径：
@@ -32,7 +32,7 @@ public:
     static std::string_view refForName(std::string_view type);
 };
 
-/// @brief 会话类输出面帧重算：对齐旧 writer COMPUTE_FRAMES——全方法重算
+/// @brief 会话类输出面帧重算：对齐旧 writer COMPUTE_FRAMES：全方法重算
 ///        maxStack/maxLocals（lower 落位）+ StackMapTable（v50+，槽换装）。
 ///        帧引擎 Strict 档不可算即抛（旧 writer 同口径：不可验证的类写不出
 ///        来）。生成类构建器（cloader/native_loader）用同一入口拿 maxes。

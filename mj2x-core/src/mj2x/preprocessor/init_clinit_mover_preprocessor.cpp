@@ -20,7 +20,7 @@ namespace mj2x {
 namespace {
 
 // 生成方法名的哈希/定宽 hex 单源收编（codegen::fnv1a64 / codegen::hex64）：
-// 与 StackC/RegC/VMC4 的不透明命名同一实现、同一 16 位定宽渲染——本地此前
+// 与 StackC/RegC/VMC4 的不透明命名同一实现、同一 16 位定宽渲染，本地此前
 // 各持一份，且本地 hex64 走 ostringstream 变宽（无零填充），与其余后端的
 // 生成名宽度不一致。
 
@@ -124,7 +124,7 @@ jbc::core::AttrSlot* findCodeSlot(jbc::core::ClassFile& dom, jbc::core::MemberIn
     return nullptr;
 }
 
-/// 嵌套属性里是否含局部变量表族（LVT/LVTT）——搬运与整段转移冲突（v1 保守）。
+/// 嵌套属性里是否含局部变量表族（LVT/LVTT），搬运与整段转移冲突（v1 保守）。
 /// 嵌套槽 lazy，解码按需（失败 fail-loud）。
 bool hasLocalVariableTable(jbc::core::ClassFile& dom, jbc::core::CodeAttr& code)
 {
@@ -144,7 +144,7 @@ bool hasLocalVariableTable(jbc::core::ClassFile& dom, jbc::core::CodeAttr& code)
 }
 
 /// 拆出嵌套 LNT 槽（若多条取首条；javac 单条常态），无则返回 nullptr。槽 lazy 解码。
-/// 返回槽而非体：改 rows 必须经 mutate() 置脏——Decoded 槽写回仍 copy 源 span，
+/// 返回槽而非体：改 rows 必须经 mutate() 置脏，Decoded 槽写回仍 copy 源 span，
 /// 裸改 body 会被写回静默丢弃（e2e ClassFormatError 实证）。
 jbc::core::AttrSlot* findLnt(jbc::core::ClassFile& dom, jbc::core::CodeAttr& code)
 {
@@ -207,7 +207,7 @@ std::vector<jbc::core::RawInsn> decodeOrThrow(const jbc::core::CodeAttr& code,
     return std::move(insns).unwrap();
 }
 
-/// <clinit> 搬运（批 4 DOM 形态）：整个 Code 体（字节+LNT 等嵌套属性）随槽
+/// <clinit> 搬运（DOM 形态）：整个 Code 体（字节+LNT 等嵌套属性）随槽
 /// 所有权转移进 __regc_clinit_<hash>，原 <clinit> 换 INVOKESTATIC+RETURN 骨架。
 /// 返回生成方法名（空 = 本次未搬运）。
 std::string moveClinit(jbc::ir::ClassSession& session, CompilerClass& cls,
@@ -246,8 +246,8 @@ std::string moveClinit(jbc::ir::ClassSession& session, CompilerClass& cls,
     return genName;
 }
 
-/// 构造器搬运（v1，批 4 DOM 形态）：找到第一个 `<init>` invokespecial 作为切
-/// 点；切点（含）之前保留骨架，之后的字节尾段平移进 __regc_init_<hash>——
+/// 构造器搬运（v1，DOM 形态）：找到第一个 `<init>` invokespecial 作为切
+/// 点；切点（含）之前保留骨架，之后的字节尾段平移进 __regc_init_<hash>，
 /// 尾段控制流封闭（守卫：跨段引用拒绝），段内跳转相对偏移平移不变，字节
 /// 原样搬运；嵌套 LNT 条目按 startPc 归属拆分（尾段条目 startPc -= cutEnd），
 /// SMT 丢弃（output 侧 COMPUTE 重算帧）。
@@ -385,8 +385,8 @@ std::string moveInit(jbc::ir::ClassSession& session, CompilerClass& cls,
     return genName;
 }
 
-/// gen 元数据快照落位：批 6d 树退役后 CompilerMethod 快照即方法身份源，
-/// markAll 等 pass 按 name+desc 锚定 cls.methods——生成方法直接追加快照
+/// gen 元数据快照落位：树退役后 CompilerMethod 快照即方法身份源，
+/// markAll 等 pass 按 name+desc 锚定 cls.methods，生成方法直接追加快照
 /// （指令体已在 DOM 会话内建好，快照只承载元数据与管线旗标）。
 void mirrorGenToSnapshot(CompilerClass& cls, const std::string& genName,
                          const std::string& genDesc, ca::u32 access)
@@ -413,7 +413,7 @@ void InitClinitMoverPreprocessor::process(CompilerIndex& index)
 
         auto session = openDomEdit(cls, name);
         // 注意：遍历的是原始方法列表；生成方法在循环内追加（backing.methods
-        // 尾部），不回遍历——先取原方法数。
+        // 尾部），不回遍历，先取原方法数。
         const ca::usize count = session->backing().methods.size();
         for (ca::usize mi = 0; mi < count; ++mi) {
             auto&       dm    = session->backing().methods[mi];

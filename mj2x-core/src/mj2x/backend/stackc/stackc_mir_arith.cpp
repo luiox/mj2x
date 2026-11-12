@@ -64,7 +64,7 @@ void StackCBackend::Impl::emitConstant(const MIRConstant* node, codegen::CSource
     else if (std::holds_alternative<ca::str::Utf8StringRef>(node->value)) {
         // UTF-16 code units 池（防 strings 扫描），等价 JNIC 3.5.1/3.7.0
         // stringObf=false 形态：NewString(env, units, len)，无明文 UTF-8 字节。
-        // #1117 LDC 恒等：JVM ldc 常量是 interned 实例——首次物化经
+        // #1117 LDC 恒等：JVM ldc 常量是 interned 实例，首次物化经
         // String.intern() 归一化进 JVM 字符串池，缓存在 TU 级
         // _mj2x_literal_cache[]（global ref）；同内容常量跨站点/跨方法/
         // 跨 String.intern() 恒等，命中路径 0 JNI、不耗 local ref。

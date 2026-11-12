@@ -529,10 +529,10 @@ std::unique_ptr<Vmx64Program> Vmx64Encoder::encode(const RegFunction& fn, std::s
             if (!resolveOperand(fusedCompare->rhs, false, scratchB, st, b, reason))
                 return nullptr;
             // true 边拷贝在分支前执行（写 true 后继的 phi 槽，false 路径随后
-            // 覆写自己的 phi 槽，互不干扰——两后继 phi 寄存器不相交）。该论证
+            // 覆写自己的 phi 槽，互不干扰，两后继 phi 寄存器不相交）。该论证
             // 依赖上游 SSA 快照一致性（比较操作数早绑定、边拷贝 dest 晚快照的
             // 交叉在 javac 产物不可达）；本产品对抗面含混淆器/手写字节码，交叉
-            // 时比较会读到覆写后的值——dest 命中比较操作数槽即 fail-closed。
+            // 时比较会读到覆写后的值，dest 命中比较操作数槽即 fail-closed。
             for (const auto& cp : br->trueTarget.copies) {
                 const uint64_t d = cp.dest.id.value;
                 if (d == a || d == b || d == scratchA || d == scratchB) {

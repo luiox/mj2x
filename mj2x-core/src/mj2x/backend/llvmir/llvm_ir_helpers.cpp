@@ -175,7 +175,7 @@ std::string emitObjectHelpers()
 ///          （floating point constant invalid for type，#1117 评审 P1）。
 ///          正常值同样只走 hex：十进制字面量须"恰好等于该浮点值"才合法，
 ///          LLVM 按类型语义做精确转换，round-trip 可逆的短十进制（如
-///          4.99999970e-01）同样拒读——实跑暴露于 #1122，十进制分支整体撤销。
+///          4.99999970e-01）同样拒读，实跑暴露于 #1122，十进制分支整体撤销。
 std::string llvmFloatLiteral(double value, bool isF32)
 {
     const double narrowed = isF32 ? static_cast<double>(static_cast<float>(value)) : value;

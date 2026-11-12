@@ -418,7 +418,7 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                     // 且无任何日志），这里按首次出现去重收集样例，由调用方
                     // （RegCBackend）汇总输出。#1193 评审 P3-2：样例带 resolver
                     // 拒因括号后缀，逐方法 WARN 与 finalize 汇总可以说清
-                    // 「为什么没内联」；拒因缺席保持旧格式（去重键随之细分）。
+                    // "为什么没内联"；拒因缺席保持旧格式（去重键随之细分）。
                     std::string sample = call->method.owner.to_std_string() + "." +
                                          call->method.name.to_std_string() + ":" +
                                          call->method.desc.to_std_string();
@@ -454,7 +454,7 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                 // 既往实现把 clones.empty() 判空放在 terminator/tail 迁移之后
                 // （#1194），该路径一旦触发，调用块已被 resize 截断（call 指令
                 // 销毁）、tail 与 merge 块析构、call result 的既有引用重定向到
-                // 已析构的 merge arg——调用块悬空。resolver 契约下不应出现，
+                // 已析构的 merge arg，调用块悬空。resolver 契约下不应出现，
                 // 但按本 pass 的 fail-closed 契约跳过调用点（call 原样保留），
                 // 不用断言：断言在 NDEBUG 下剥除，悬空路径依旧存在。
                 if (callee->blocks.empty()) {
@@ -472,7 +472,7 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
         if (sites.empty()) break;
 
         // 收集顺序即 function.blocks 顺序（块内指令序）：跨块处理顺序与
-        // 堆地址无关，保证块追加顺序确定（不可按裸指针排序——地址随运行变化，
+        // 堆地址无关，保证块追加顺序确定（不可按裸指针排序，地址随运行变化，
         // 会使克隆体块序/cache 编号非确定，破坏可复现构建）。
         // 同块多个调用点：每块每轮只处理 index 最小的一个；先内联的调用点
         // 克隆体先入 blocks（与执行顺序一致，RegLowering 要求 def-before-use），
@@ -485,7 +485,7 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
 
         SSABlock* lastBlock = nullptr;
         for (auto& site : sites) {
-            // 同一块只处理 index 最小的调用点：每个调用点都要「接管」调用块的
+            // 同一块只处理 index 最小的调用点：每个调用点都要"接管"调用块的
             // terminator 与 tail（迁移到自己的 merge），同块多点批量处理会互相覆盖
             // 产生悬空 CFG；其余调用点随 tail 迁入 merge，下一轮迭代重新收集再内联。
             if (site.block == lastBlock) continue;
@@ -529,7 +529,7 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
                     SSABlockArg{function.ids.newValueId(), callee.symbol.returnType, 0});
             }
 
-            // redirect 必须在 resize 之前、克隆之前完成：oldResult 是「地址」，
+            // redirect 必须在 resize 之前、克隆之前完成：oldResult 是"地址"，
             // call 指令释放后 malloc 可能把同一地址分给克隆体，地址比较会误伤。
             // 此时调用块 terminator / tail 的 oldResult 引用被改到 merge arg。
             const SSAValue* oldResult = nullptr;
@@ -551,7 +551,7 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
             mergeBlock->instructions = std::move(tail);
 
             // 克隆被调方法全部块。clones 非空由安全条件 5 结构性保证
-            // （每源块恰产一块，callee.blocks 非空）——#1194 之前这里的
+            // （每源块恰产一块，callee.blocks 非空），#1194 之前这里的
             // clones.empty() 迟到判空发生在迁移之后，已删除。
             std::vector<std::unique_ptr<SSABlock>> clones;
             cloneCalleeBlocks(callee, remap, arena, function.ids, mergePtr, remap, indyBase,
@@ -559,16 +559,16 @@ SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& o
 
             // #1188：调用块位于异常受保护区时，克隆体与 merge 块同样落在保护
             // 范围内（被内联体的 mayThrow 调用点在 try 语义下必须分发到
-            // handler），必须登记为受保护块并补异常边——否则发射端
+            // handler），必须登记为受保护块并补异常边，否则发射端
             // activeExceptionRegions 对新块为空，逐调用 pending 异常检查被
             // 省略（emitInstructionWithCheck 仅对受保护块发射），挂起异常
             // 越过 try 边界继续执行（try{Enum.valueOf}catch(IAE) 吞异常）。
             // handlerArgs 沿用调用块现有边的实参（调用点之前的帧状态）：被
             // 内联体只定义新值、不改写 handler 可见的局部槽，尾部指令仅在内
-            // 联体成功完成后执行——对克隆体内任意抛出点都是正确传输；merge
-            // 块沿用同一组实参与既有「块入口帧状态」精度约定一致（#1188 评审
+            // 联体成功完成后执行，对克隆体内任意抛出点都是正确传输；merge
+            // 块沿用同一组实参与既有"块入口帧状态"精度约定一致（#1188 评审
             // P3-3 勘注：merge 内尾部指令自身的内部抛出点传输精度=块入口帧
-            // 状态，非精确帧状态——与修复前该指令留在调用块内时相同，无回归）。
+            // 状态，非精确帧状态，与修复前该指令留在调用块内时相同，无回归）。
             if (!function.exceptionRegions.empty()) {
                 std::vector<SSABlock*> newBlocks;
                 newBlocks.reserve(clones.size() + 1);

@@ -78,14 +78,14 @@ inline bool hasObservableEffect(const SSAEffect& effect)
 
 /// @brief undef 来路判定（#1121 方向 1）：SSA join 未定义到达边的 Opaque 操作数。
 /// @details 两类形态：UNKNOWN 类型（undef_stack_arg / undef_succ_arg /
-///          entry_*_unbound——类型信息缺失的 join 兜底）与 `undef_` 前缀 tag
-///          （undef_exception_local / undef_local_N——builder 知道是 undef 但
+///          entry_*_unbound，类型信息缺失的 join 兜底）与 `undef_` 前缀 tag
+///          （undef_exception_local / undef_local_N，builder 知道是 undef 但
 ///          填了槽声明类型）。边拷贝语境下语义合法（undef 赋给任意槽类型仍是
 ///          undef）：验证层放行类型不符检查，发射端产出 dest 槽类型的 `undef`
-///          常量（LLVM LangRef undef，非 poison——来源是未定义到达而非错误
+///          常量（LLVM LangRef undef，非 poison，来源是未定义到达而非错误
 ///          计算）。放行面以语境收窄：仅边拷贝（CFG 后继边 + 异常边）消费此
 ///          判定；指令操作数语境仍按各自检查 fail-closed。
-///          契约注记：UNKNOWN 分支按类型而非 tag 判定——未来新增
+///          契约注记：UNKNOWN 分支按类型而非 tag 判定，未来新增
 ///          Opaque+UNKNOWN 构造点会自动落入本放行面（边拷贝语境隐式放行），
 ///          新增构造点前须核对三处消费面（验证层 recordCopies、发射层
 ///          emitCopies、异常边发射）是否应放行该形态。
@@ -250,7 +250,7 @@ inline const char* callKindFor(PrimitiveKind kind)
 ///
 /// @details
 /// 窄返回类型（boolean/byte/char/short）在 dispatcher 内经 `CallIntMethodA` 取回
-/// （JNI 规范四类同为 32 位），故统一走 i32 形态，不涉及符号扩展——槽类型对窄
+/// （JNI 规范四类同为 32 位），故统一走 i32 形态，不涉及符号扩展，槽类型对窄
 /// 结果本就是 i32。
 inline const char* dispatchSuffixFor(PrimitiveKind kind)
 {
@@ -408,14 +408,14 @@ struct CallTarget
     std::vector<SSAType> argTypes;
 };
 
-/// @brief 解析并预检 LLVM IR 切片内的静态互调目标（实现见 llvm_ir_backend.cpp）。
+/// @brief 解析并预检 LLVM IR 后端产物内的静态互调目标（实现见 llvm_ir_backend.cpp）。
 /// @details 目标必须满足：INVOKESTATIC、目标类在编译索引内（非 library）、
 /// 签名纯标量、方法体可转换（递归预检，含嵌套调用）；结果按 MethodID 缓存。
 class InternalCallResolver
 {
 public:
     /// @param directCallTier native→native 直调档位。Off（默认）时本解析器一律
-    ///        解析失败——LLVM 侧原先是无门控直调，与 RegC 的默认关不一致，
+    ///        解析失败，LLVM 侧原先是无门控直调，与 RegC 的默认关不一致，
     ///        且一直在承担 #814 的栈观察语义代价。
     InternalCallResolver(CompilerIndex& index, const std::string& className,
                          codegen::DirectCallTier directCallTier = codegen::DirectCallTier::Off)
@@ -455,7 +455,7 @@ class GlobalStringTable
 public:
     std::string intern(const std::string& text)
     {
-        // T1 性能：哈希旁路——线性扫在重字符串输入（每 invoke owner/name/desc
+        // T1 性能：哈希旁路，线性扫在重字符串输入（每 invoke owner/name/desc
         // 三连 intern）下 O(n^2)。
         auto it = indexOf_.find(text);
         if (it != indexOf_.end()) return "@_mj2x_llvm_str_" + std::to_string(it->second);
@@ -516,7 +516,7 @@ struct LlvmIndirectCallSite
 /// 一条目，运行时也只解析一次。登记顺序即发射顺序（编译顺序确定），产物可复现。
 ///
 /// 表本体是模块级 `internal global`：不进目标文件符号表，但字符串常量仍可被
-/// `strings`/`grep` 扫到——间接化的收益在于调用点不再自带身份，静态分析须先
+/// `strings`/`grep` 扫到，间接化的收益在于调用点不再自带身份，静态分析须先
 /// 解析 index 才能还原调用边。
 class LlvmIndirectSiteRegistry
 {
@@ -639,7 +639,7 @@ std::string emitThrowArithmeticHelper();
 std::string emitObjectHelpers();
 
 /// @brief LLVM 浮点字面量：全量发射 hex 位型（#1122 实跑暴露：正常值 decimal
-///          scientific 形态 clang 拒读——LLVM 十进制浮点常量须精确等值）。
+///          scientific 形态 clang 拒读，LLVM 十进制浮点常量须精确等值）。
 /// @details 一律按 AsmWriter 口径经 double 加宽为 16 位 hex 位型（float 亦然：
 ///          LLVM 规范要求 float hex 常量为 double 位型宽度，裸 8 位形态
 ///          clang 拒读，#1117 评审 P1）。

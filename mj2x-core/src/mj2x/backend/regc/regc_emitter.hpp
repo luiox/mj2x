@@ -126,11 +126,11 @@ public:
     ///          renderEncryptedLiterals() 统一渲染，解密调用经
     ///          renderEncryptedLiteralDecryptCalls() 插入 JNI_OnLoad 批量
     ///          执行（JVM 保证单线程且先于任何 native 方法，规避 XOR 双解密
-    ///          污染与就绪位图竞态）。首切片边界：仅覆盖 LDC 字面量面与
+    ///          污染与就绪位图竞态）。首期范围：仅覆盖 LDC 字面量面与
     ///          indy bsm 参数字符串；JavaShroud 的 callsite 形状多样化（每
-    ///          解码点不同 push 形状/indy/payload 载体）是后续切片。
+    ///          解码点不同 push 形状/indy/payload 载体）留待后续处理。
     /// @param seedBase 密钥基 seed：非 0 时混入每字面量密钥（RegC 链路取
-    ///                 RegIR 变换 transformSeed——CLI 侧已做 clientId 派生）；
+    ///                 RegIR 变换 transformSeed，CLI 侧已做 clientId 派生）；
     ///                 0 时仅由字面量内容派生（确定性、可复现构建）。
     void setStringsEncrypt(bool enabled, std::uint64_t seedBase = 0);
 
@@ -259,7 +259,7 @@ public:
     ///          nullptr 时发射器回退块内声明（单测直连发射器路径）。
     void setForwardDeclarations(codegen::CForwardDeclarations* fwd) { forwardDecls_ = fwd; }
 
-    /// @brief 设置「函数名 -> 规范直调前向声明」表（backend TU 级，可选）。
+    /// @brief 设置函数名到规范直调前向声明的映射表（backend TU 级，可选）。
     /// @details 直调声明必须与被调方定义逐字一致，按签名预先算好在 backend 侧
     ///          维护（发射端按调用点推导会因窄类型提升产生冲突声明）。nullptr
     ///          时发射端回退按调用点推导。

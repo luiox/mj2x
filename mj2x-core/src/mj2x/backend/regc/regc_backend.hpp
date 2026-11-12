@@ -160,7 +160,7 @@ public:
     ///
     /// @details
     /// 不逃逸的纯原生字段实例改为 C 结构体，字段访问零 JNI。降级后 Java 侧对象
-    /// 不存在（REF 寄存器为 NULL）——反射/序列化访问它会读到空壳，这是本项主要
+    /// 不存在（REF 寄存器为 NULL），反射/序列化访问它会读到空壳，这是本项主要
     /// 的兼容性代价，故默认关。
     void setPodStruct(bool enabled);
 
@@ -187,7 +187,7 @@ public:
     ///
     /// @details 开启后 LDC 字面量与 indy bsm 参数字符串以密文缓冲写入 C 源
     ///          （xorshift32 密钥流逐字节 XOR，密钥基取 RegIR 变换
-    ///          transformSeed——CLI 侧已按 --client-id 派生），生成代码在
+    ///          transformSeed，CLI 侧已按 --client-id 派生），生成代码在
     ///          JNI_OnLoad 内批量解密一次，缓冲生命周期覆盖整个执行期。默认
     ///          关闭（产物字节级不变）。必须在 compileMethod 之前调用。
     void setStringsEncrypt(bool enabled) { stringsEncrypt_ = enabled; }

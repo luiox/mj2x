@@ -50,10 +50,10 @@ int Pipeline::run()
     // 中段（预处理器/编译/后处理器）与 IO 同级防护：CLI main 不兜异常，
     // 任何 preprocess/compile/inject 路径抛出直接 std::terminate。
     try {
-        runPreprocessors();         // 批 4：preprocessor 直接改 DOM（改写权威）
-        refreshSnapshots(*index_);  // 元数据快照对齐 DOM（批 6d 树退役；init_clinit_mover 生成方法落位）
-        compileMethods();           // 读 DOM；批 5 起 inject 也改 DOM（dom_inject 门面）
-        runPostprocessors();  // 批 4：postprocessor 直接改 DOM（inject 后无需再同步）
+        runPreprocessors();         // preprocessor 直接改 DOM（改写权威）
+        refreshSnapshots(*index_);  // 元数据快照对齐 DOM（树已退役；init_clinit_mover 生成方法落位）
+        compileMethods();           // 读 DOM；inject 也改 DOM（dom_inject 门面）
+        runPostprocessors();  // postprocessor 直接改 DOM（inject 后无需再同步）
     }
     catch (const std::exception& e) {
         CA_LOGT_ERROR("pipeline", "compile stage failed - {}\n", e.what());
@@ -80,7 +80,7 @@ void Pipeline::loadInput()
 
 void Pipeline::runPreprocessors()
 {
-    // 批 6d：全部 preprocessor 均为 DOM 权威改写（indy 树载体已退役），
+    // 全部 preprocessor 均为 DOM 权威改写（indy 树载体已退役），
     // 单段顺序执行。
     for (auto& p : preprocs_) p->process(*index_);
 }
@@ -98,7 +98,7 @@ void Pipeline::compileMethods()
     for (auto& [name, cls] : index_->getClasses()) {
         if (cls.isLibrary) continue;
 
-        // 批 3b：读路径主入口走 DOM（批 2 同步产物）。同步保序 tree→DOM，
+        // 读路径主入口走 DOM（同步产物）。同步保序 tree→DOM，
         // 再按 name+desc（类内唯一）锚定下标，双保险防御序漂移。
         if (cls.dom == nullptr) {
             throw std::runtime_error("pipeline: DOM not synced for " + name);
@@ -107,7 +107,7 @@ void Pipeline::compileMethods()
         for (auto& method : cls.methods) {
             if (!method.markedForCompile) continue;
 
-            // 批 5：inject 走 DOM（dom_inject 会话字节往返提交会替换 cls.dom），
+            // inject 走 DOM（dom_inject 会话字节往返提交会替换 cls.dom），
             // dom 指针每方法重取；domIndex 同因重锚。
             if (cls.dom == nullptr) {
                 throw std::runtime_error("pipeline: DOM consumed for " + name);

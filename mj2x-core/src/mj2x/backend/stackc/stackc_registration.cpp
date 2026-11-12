@@ -29,8 +29,8 @@ std::string hiddenClinitClassNameFor(const std::string& ownerClassName)
     return ownerClassName.substr(0, slash + 1) + simpleName;
 }
 
-/// @brief native 代理壳类字节（批 6d DOM 构建）：单 native 静态方法、无体
-///        无分支——native 方法不带 Code 属性（JVMS 4.7.3），RegisterNatives
+/// @brief native 代理壳类字节（DOM 构建）：单 native 静态方法、无体
+///        无分支，native 方法不带 Code 属性（JVMS 4.7.3），RegisterNatives
 ///        运行时绑定与 maxStack/maxLocals 无关。
 static std::vector<ca::u8> buildNativeProxyClassBytes(const std::string& hiddenClassName,
                                                       const std::string& methodName,
@@ -82,7 +82,7 @@ void StackCBackend::Impl::protectClassInitializer(StackCBackend& backend, Compil
 
     // hidden clinit 编译（簿记面）：clinit 体此刻仍是原体（inject 未触碰），
     // convert 直读 DOM；hidden 名走幻影快照（compileMethod 的名字源 =
-    // CompilerMethod.name）——不落任何权威，clinit 体在下方于 DOM 全量重建。
+    // CompilerMethod.name），不落任何权威，clinit 体在下方于 DOM 全量重建。
     std::string hiddenName;
     std::string hiddenFunctionName;
     {
@@ -241,7 +241,7 @@ void StackCBackend::Impl::rewriteInterfaceDefaultMethodToProxy(
     CompilerClass& clazz, const std::string& mnName, const std::string& mnDesc,
     const CHiddenInterfaceDefaultProxy& proxy)
 {
-    // 批 5：体重建走 DOM（replaceMethodBody）；批 6d：身份源 = 快照 name/desc。
+    // 体重建走 DOM（replaceMethodBody）；身份源 = 快照 name/desc。
     const std::string className(clazz.dom != nullptr ? std::string(clazz.dom->thisName()) : "");
 
     // 形参布局（slot/maxStack）按旧口径在会话外算好，回调内逐参 xLOAD。

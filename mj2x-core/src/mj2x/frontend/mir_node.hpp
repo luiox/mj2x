@@ -140,7 +140,7 @@ struct MIRNop : MIRNode
 
 struct MIRLabel : MIRNode
 {
-    // 批 6d 标签 id 化：label 标识 = CodeConverter 的顺序 id（同 pc 恒同 id）。
+    // 标签 id 化：label 标识 = CodeConverter 的顺序 id（同 pc 恒同 id）。
     int labelId = 0;
     explicit MIRLabel(int id)
         : MIRNode(MIRKind::LABEL)
@@ -152,7 +152,7 @@ struct MIRConstant : MIRNode
 {
     // string 槽持 arena-backed Utf8StringRef（LDC String 常量），由 CodeConverter 经
     // index.arena().intern(...) 入池（str-ownership-spec §6.1）。
-    // Type 槽批 3a 起为 mj2x::Type 门面（旧栈 Type 只活在树侧 Any 载荷，
+    // Type 槽现为 mj2x::Type 门面（旧栈 Type 只活在树侧 Any 载荷，
     // 经 CodeConverter 转换后入 MIR）。
     std::variant<int64_t, double, std::nullptr_t, ca::str::Utf8StringRef, Type> value;
     PrimitiveKind type = PrimitiveKind::INT;

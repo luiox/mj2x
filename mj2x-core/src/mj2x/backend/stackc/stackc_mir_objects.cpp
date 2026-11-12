@@ -2,7 +2,7 @@
 /// @brief StackC 对象/数组/字段发射器 + 无锁 CAS 的 field/method ID 缓存。
 ///
 /// @details
-/// ID 缓存从「owner monitor 双检锁」改为 jnic370 形态的「无锁 CAS + 快路径」：
+/// ID 缓存从 owner monitor 双检锁改为 jnic370 形态的无锁 CAS 加快路径：
 /// 快路径 `_mj2x_cache_load` 是无锁读，慢路径 Get*ID 成功后用
 /// `_mj2x_cache_cas` 发布，CAS 输家复用赢家结果。MSVC 走 Interlocked，
 /// GCC/Clang/Zig 走 __atomic（平台宏定义在 mj2x-rt/src/stackc/mj2x_stackc_runtime.h）。
@@ -119,7 +119,7 @@ void StackCBackend::Impl::emitMethodIdCache(const std::string& cacheName,
     emitPendingExceptionCheck(out);
 }
 
-/// @brief 发射「jclass lc = 缓存的类引用」（对标 JNIC cached_c_N）。
+/// @brief 发射 jclass lc = 缓存的类引用（对标 JNIC cached_c_N）。
 /// @details self 类直接取 `_mj2x_owner_class`（clazz 参数即该类，零开销）；其余类
 ///          走 static jclass + 无锁 CAS 缓存，首次执行 `_mj2x_find_class` 后
 ///          以 NewGlobalRef 固化，后续路径只读缓存 slot。失败抛
@@ -131,7 +131,7 @@ void StackCBackend::Impl::emitClassRefCache(const std::string& className,
     if (name.size() >= 2 && name.front() == 'L' && name.back() == ';') {
         name = name.substr(1, name.size() - 2);
     }
-    // 注：不做 owner==self 优化——`_mj2x_owner_class` 是运行期实例类（多态下可能
+    // 注：不做 owner==self 优化，`_mj2x_owner_class` 是运行期实例类（多态下可能
     // 是被继承的 Sub 类），而 owner 是编译期静态解析的类，两者可能不同。
     const std::string cacheName = "_mj2x_cc_" + hex64(fnv1a64(name));
     out.emitLine("static jclass " + cacheName + " = NULL;");
@@ -427,7 +427,7 @@ void StackCBackend::Impl::emitCheckCast(const MIRCheckCast* node, codegen::CSour
 void StackCBackend::Impl::emitInstanceOf(const MIRInstanceOf* node, codegen::CSourceStream& out)
 {
     // null instanceof T → false（JLS 15.20.2）。JNI IsInstanceOf(NULL, ·) 返回
-    // JNI_TRUE，必须前置判空短路（与 emitCheckCast 的 null 直通同一契约）——
+    // JNI_TRUE，必须前置判空短路（与 emitCheckCast 的 null 直通同一契约），
     // 否则 null 值命中任意 instanceof 分支（java_corpus/InstanceLifecycle 首曝）。
     out.appendLineStart("stack[sp].i = stack[sp].l != NULL && (*env)->IsInstanceOf(env, stack[sp].l, ")
         .append(classExprForDescriptor(node->typeDesc.to_std_string())).append(");");

@@ -22,10 +22,10 @@ namespace {
 // ---------------------------------------------------------------------------
 // 位点扫描：把 RegFunction 摊平成线性位点流（定义/使用），供活性分析与区间构造。
 //
-// 位点编号 = fn.blocks 顺序（与块布局/乱序无关——分配只依赖 CFG 真活性，任何
-// 线性化下「非重叠区间 ⇒ 不干扰」的包络论证都成立）。每块：指令位点连续编号，
-// terminator 占一个位点；融合对（superOpPlan[i] == i+1）压缩为单条复合指令
-// ——复合指令占被吸收指令的位点，源 = 两条指令全部源操作数，dest = 承载指令
+// 位点编号 = fn.blocks 顺序（与块布局/乱序无关，分配只依赖 CFG 真活性，任何
+// 线性化下"非重叠区间 ⇒ 不干扰"的包络论证都成立）。每块：指令位点连续编号，
+// terminator 占一个位点；融合对（superOpPlan[i] == i+1）压缩为单条复合指令，
+// 复合指令占被吸收指令的位点，源 = 两条指令全部源操作数，dest = 承载指令
 // 的 dest，被吸收 dest 不再存在。
 // ---------------------------------------------------------------------------
 
@@ -120,7 +120,7 @@ void collectTerminatorReads(const RegTerminator& term, uint32_t numInputs,
         term);
 }
 
-/// 活跃区间：[birth, death] 是真活性位点的连续包络（安全过近似——liveIn/liveOut
+/// 活跃区间：[birth, death] 是真活性位点的连续包络（安全过近似，liveIn/liveOut
 /// 块跨度扩展保证跨块/乱序线性化下的活位点全部落入包络；非重叠包络 ⇒ 不干扰）。
 struct Interval
 {
@@ -142,7 +142,7 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
     out          = VmRegfilePlan{};
     out.numInputs = static_cast<uint16_t>(fn.parameters.size());
     // 溢出槽区从 limit 起：limit < numInputs 时溢出槽会与参数区 [0, numInputs)
-    // 重叠（参数是入口现场，被溢出槽覆写即错值）——fail-closed，不做静默搬移。
+    // 重叠（参数是入口现场，被溢出槽覆写即错值），fail-closed，不做静默搬移。
     if (regfileLimit < out.numInputs) {
         reason = "regfile limit below parameter count: limit=" + std::to_string(regfileLimit)
                  + " numInputs=" + std::to_string(out.numInputs)
@@ -205,10 +205,10 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
     }
 
     // 入口定义：后继边拷贝 dest（块参数）在**源块 terminator 位点**诞生（边拷贝
-    // 在源块结尾、目标块开头之间执行），而非目标块入口——birth 取源块 endPos，
+    // 在源块结尾、目标块开头之间执行），而非目标块入口，birth 取源块 endPos，
     // 否则目标块复用槽位的值会被边拷贝覆盖（java_corpus RfMin 首曝的第二半）。
     // 异常区域拷贝 dest 与 exceptionValue 同为 handler 块入口诞生（分派点在
-    // 保护块内，保守取 handler 起点即可——无跨块覆盖面）。无使用的入口定义
+    // 保护块内，保守取 handler 起点即可，无跨块覆盖面）。无使用的入口定义
     // 同样入表（编码器仍会发射这些写入位点，寄存器映射必须全）。
     struct EntryDef
     {
@@ -276,7 +276,7 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
             for (const uint32_t r : it->reads) live.insert(r);
         }
         useGen[bi] = std::move(live);
-        // defAll：指令定义集（入口定义不算块内定义——块参数 born at entry）。
+        // defAll：指令定义集（入口定义不算块内定义，块参数 born at entry）。
         for (const auto& ev : scan.instrs)
             if (ev.def != 0xFFFFFFFF) defAll[bi].insert(ev.def);
         // 后继（真实块；合成边块只是拷贝的载体，CFG 目标仍是真实块）。
@@ -325,9 +325,9 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
             std::set<uint32_t> outSet;
             for (const size_t s : succs[bi]) {
                 // 后继的块参数（边拷贝 dest）在**边上**诞生（边拷贝写入），
-                // 不应经 liveOut 回流进前驱——否则参数的幻影活性回灌全方法
+                // 不应经 liveOut 回流进前驱，否则参数的幻影活性回灌全方法
                 // （birth=0 / 死参数区间 [0,0] 却在方法末尾的边拷贝处写槽，
-                // 覆盖已分配给其他活值的槽——java_corpus RfMin 首曝）。
+                // 覆盖已分配给其他活值的槽，java_corpus RfMin 首曝）。
                 for (const uint32_t id : liveIn[s])
                     if (!entryDefs[s].count(id)) outSet.insert(id);
             }
@@ -392,11 +392,11 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
     }
     for (const auto& kv : lastUse) noteDeath(kv.first, kv.second);
     // 入口定义（块参数/exceptionValue）：即使无使用也要有退化区间（编码器发射写入）。
-    // birth = 源块 terminator 位点（EntryDef.srcIdx 的 endPos）——边拷贝在源块
+    // birth = 源块 terminator 位点（EntryDef.srcIdx 的 endPos），边拷贝在源块
     // 结尾执行，参数槽位的占用从写入时刻起算；若取目标块起点，目标块复用该槽
     // 位的值会被边拷贝覆盖（java_corpus RfMin 首曝的第二半）。多入口取 min。
     // death = 穿透整个目标块：同一入口点的全部参数在同一程序点被（合成边拷贝
-    // 序列/异常分派）逐个写入——死参数（如 catch 中未使用的 i）与后续才读的
+    // 序列/异常分派）逐个写入，死参数（如 catch 中未使用的 i）与后续才读的
     // 参数若按各自真实使用区间分配会共享槽位，第二个写覆盖第一个的值
     // （java_corpus Mini 首曝：regs[1]=regs[2]; regs[1]=regs[9]）。参数区间
     // live-through 目标块保证同块参数两两重叠 → 槽位互斥。
@@ -464,7 +464,7 @@ bool planVmRegfile(const RegFunction& fn, uint32_t regfileLimit, bool fragmentRe
             active.push_back(a);
             continue;
         }
-        // 池耗尽：溢出「结束点最远」的区间（active ∪ 当前）。被溢出者让出池寄存器，
+        // 池耗尽：溢出"结束点最远"的区间（active ∪ 当前）。被溢出者让出池寄存器，
         // 换取稳定溢出槽；当前区间最远时直接溢出当前。
         Active*  victim      = nullptr;
         uint32_t victimDeath = iv.death;

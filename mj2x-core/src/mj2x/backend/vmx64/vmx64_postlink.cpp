@@ -35,9 +35,9 @@ namespace {
 //     项 + 16              SizeOfRawData（u32，文件内字节数）
 //     项 + 20              PointerToRawData（u32，原始数据文件偏移）
 //
-// .reloc 的块链结构（熄灭遍历的对象）：pageRVA(u32) + blockSize(u32) +
+// .reloc 的块链结构（失效处理遍历的对象）：pageRVA(u32) + blockSize(u32) +
 // (blockSize - 8) 字节的项数组；每项 2 字节 = type（高 4 位）| 页内偏移
-// （低 12 位）。DIR64（type 10）指示装载器把「实际装载基址 - 首选基址」
+// （低 12 位）。DIR64（type 10）指示装载器把"实际装载基址 - 首选基址"
 // 加到目标 qword 上；ABSOLUTE（type 0）是占位项，装载器跳过。
 // MSVC link.exe 以一个全零块（pageRVA = blockSize = 0）收尾。
 
@@ -73,19 +73,19 @@ struct Section
 /// @brief 对内存镜像上的一个站点表执行三步改写中的第 1、3 步（就地）。
 ///
 /// @p magicOff 指向 magic qword（调用方已核对值等于 kVmx64TableMagic）。
-/// 第 2 步（重定位熄灭）统一在 quenchRelocations 做：@p flipRvas 收集需要
-/// 熄灭的目标 RVA（n 个表项 + base qword），由调用方汇总后一次性处理
+/// 第 2 步（重定位失效）统一在 quenchRelocations 做：@p flipRvas 收集需要
+/// 失效的目标 RVA（n 个表项 + base qword），由调用方汇总后一次性处理
 /// .reloc。
 ///
 /// 校验先行，全部发生在改写任何字节之前：
-///   - 整表（count 项 + k1 + base）必须完整落在宿主段原始数据内——挡
+///   - 整表（count 项 + k1 + base）必须完整落在宿主段原始数据内，挡
 ///     magic 碰撞（任意数据里恰好出现 "VMX64TBL"）与被截断的产物，同时
 ///     保证后续 leRead64 不越界；
-///   - 站点数必须在 u16 域（发射器只产 1..0xFFFF 个站点）——0 或越界即
-///     「这不是发射器产出的表」；
-///   - k1 不得为 0——已加密产物（上一次加密已把 k1 清零）或损坏产物。
+///   - 站点数必须在 u16 域（发射器只产 1..0xFFFF 个站点），0 或越界即
+///     不是发射器产出的表；
+///   - k1 不得为 0，已加密产物（上一次加密已把 k1 清零）或损坏产物。
 ///     若放行，掩码退化为固定公开常数 ks64(t, 0)，产出任何人都能解开的
-///     「伪加密」。
+///     伪加密产物。
 ///
 /// @return 表尾 base qword 的文件偏移。调用方把扫描游标落在这里（循环
 ///         +8 后越过表体续扫）：改写后的表体是密文，可能碰巧含 magic
@@ -115,8 +115,8 @@ ca::core::Result<size_t, std::string> rewriteTable(std::vector<uint8_t>& img,
     // 落盘值（链接期形态）= handler 首选 VA - ks64(t)（源级 `dq sym - imm`
     // 的产物）。改写为 entry[t] = 落盘值 XOR ks64(t, k1)。运行时 handler
     // 重算同一 keystream（r11）：先 xor 摘掉掩码回到落盘值，再 add 补回
-    // ks64(t) 得 handler 首选 VA——完整推导见 doc:vm-site-table-encryption。
-    // 每个被改写的表项 RVA 记入 flipRvas，对应 DIR64 项稍后统一熄灭（第
+    // ks64(t) 得 handler 首选 VA，完整推导见 doc:vm-site-table-encryption。
+    // 每个被改写的表项 RVA 记入 flipRvas，对应 DIR64 项稍后统一失效（第
     // 2 步）。
     const auto tableRva = host.virtualAddress + static_cast<uint32_t>(entriesOff - host.rawPtr);
     for (uint32_t t = 0; t < static_cast<uint32_t>(count64); ++t) {
@@ -126,14 +126,14 @@ ca::core::Result<size_t, std::string> rewriteTable(std::vector<uint8_t>& img,
         leWrite64(img, entryOff, plain ^ mask);
         flipRvas.insert(tableRva + t * 8);
     }
-    // base qword（表尾自引用指针，落盘值 = 表首选 VA）同样熄灭其重定位：
+    // base qword（表尾自引用指针，落盘值 = 表首选 VA）同样失效其重定位：
     // 首选 VA 保持常驻，运行时 prologue 的 r12 = 首选 VA - 表运行时地址 =
     // -delta，NEXT 用它补回基差。
     flipRvas.insert(host.virtualAddress + static_cast<uint32_t>(baseOff - host.rawPtr));
     // --- 第 3 步：定位痕迹清零 ---
-    // magic/站点数/k1 归零：文件里不再有「这里有一张 vmx64 表」的特征字节
-    // （表项与 base 保留——它们本身是 dispatch 运行时要用的数据）。magic
-    // 缺失同时是「已加密」的标志：二次加密扫描零命中 → fail-closed。
+    // magic/站点数/k1 归零：文件里不再有这里有一张 vmx64 表的特征字节
+    // （表项与 base 保留，它们本身是 dispatch 运行时要用的数据）。magic
+    // 缺失同时是已加密的标志：二次加密扫描零命中 → fail-closed。
     leWrite64(img, magicOff, 0);
     leWrite64(img, countOff, 0);
     leWrite64(img, k1Off, 0);
@@ -141,21 +141,21 @@ ca::core::Result<size_t, std::string> rewriteTable(std::vector<uint8_t>& img,
     return ca::core::Ok(baseOff);
 }
 
-/// @brief 第 2 步「重定位熄灭」：把 @p flipRvas 里各 RVA 的 DIR64 重定位
+/// @brief 第 2 步重定位失效：把 @p flipRvas 里各 RVA 的 DIR64 重定位
 ///        项的 type 字段翻成 ABSOLUTE（0）。
 ///
 /// @details
-/// DIR64（type 10）指示装载器把「实际装载基址 - 首选基址」加到目标 qword。
-/// 表项熄灭前已是密文——若留着 DIR64，装载器会把基差加进密文，运行时
+/// DIR64（type 10）指示装载器把"实际装载基址 - 首选基址"加到目标 qword。
+/// 表项失效前已是密文，若留着 DIR64，装载器会把基差加进密文，运行时
 /// xor/add 无论怎么算都解不回真地址；翻成 ABSOLUTE 后装载器跳过该项，密文
-/// 原样驻留内存。base qword 同理：熄灭后保持首选 VA，r12 才等于 -delta。
+/// 原样驻留内存。base qword 同理：失效后保持首选 VA，r12 才等于 -delta。
 ///
 /// 校验先行：每个目标 RVA 必须恰好有一条 DIR64 项；见到同目标的非 DIR64
 /// 项或遍历完仍缺失即整体失败（不写半改写产物）。缺失说明产物不是预期的
-/// 链接形态（重定位被剥掉、表被改过）——熄灭一半留一半会让装载器改写部分
+/// 链接形态（重定位被剥掉、表被改过），失效一半留一半会让装载器改写部分
 /// 表项，dispatch 静默走错，必须先拒后改。
 ///
-/// MSVC link.exe 的 .reloc 以全零块（pageRVA = blockSize = 0）收尾——遍历
+/// MSVC link.exe 的 .reloc 以全零块（pageRVA = blockSize = 0）收尾，遍历
 /// 到它即正常结束，不算畸形。
 ca::core::Result<void, std::string> quenchRelocations(std::vector<uint8_t>& img,
                                                        const Section& reloc,
@@ -205,8 +205,8 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
     if (img.size() < 0x40) return ca::core::Err(std::string("file too small to be a PE"));
 
     // --- PE 骨架校验（fail-closed，逐层验完再读下一层） ---
-    // 字段偏移见文件顶「PE/COFF 布局速查」。每一道挡的是一类输错文件/坏
-    // 产物：不是 PE（无 MZ/PE 签名）、不是 AMD64（Machine 不符——所有字段
+    // 字段偏移见文件顶 PE/COFF 布局速查一节。每一道挡的是一类输错文件/坏
+    // 产物：不是 PE（无 MZ/PE 签名）、不是 AMD64（Machine 不符，所有字段
     // 偏移按 PE32+ 布局取，不猜）、Optional header 截断或非 PE32+（段表定
     // 位不可信）、段表截断（段字段不可信）。
     if (leRead16(img, 0) != kMzSignature) return ca::core::Err(std::string("missing MZ signature"));
@@ -228,8 +228,8 @@ ca::core::Result<void, std::string> vmx64EncryptSiteTable(const std::string& dll
     if (secTab + static_cast<size_t>(numSections) * kSectionEntryBytes > img.size())
         return ca::core::Err(std::string("truncated section table"));
 
-    // 收集段表：.reloc 单独记（第 2 步的熄灭对象在里面），其余段全部进
-    // magic 扫描清单。段原始数据越出文件即拒绝——后续一切表内偏移以段界
+    // 收集段表：.reloc 单独记（第 2 步的失效对象在里面），其余段全部进
+    // magic 扫描清单。段原始数据越出文件即拒绝，后续一切表内偏移以段界
     // 为界。
     Section relocSec;
     std::vector<Section> dataSecs;

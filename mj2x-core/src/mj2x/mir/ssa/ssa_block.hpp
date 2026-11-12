@@ -1,4 +1,4 @@
-// mj2x SSA IR — 基本块。
+// mj2x SSA IR 基本块。
 // instructions 不含控制转移；所有出边归 terminator。
 #pragma once
 

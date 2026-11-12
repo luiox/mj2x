@@ -4,7 +4,7 @@
 /// @details
 /// 仅供 backend/regc/ 下 regc_*.cpp 内部包含（不对外）。承载发射状态结构
 /// （RegCNativeObjectState / RegCFunctionEmitState / RegCStringBuilderPlan）
-/// 与按功能区拆出的 helper 声明。声明随拆分批次增量加入：某函数搬入新文件
+/// 与按功能区拆出的 helper 声明。声明随文件拆分增量加入：某函数搬入新文件
 /// 的 commit 才把它的声明加进本头，避免与 regc_emitter.cpp 内仍保留的定义
 /// 在同 TU 冲突。拆分保持纯搬移：生成代码零差异。
 #pragma once
@@ -31,7 +31,7 @@ class RegCIntrinsicDecisionTable;
 /// @brief REF 寄存器并查集：把"同一个对象的多个寄存器"归并到一个根。
 ///
 /// @details
-/// StringBuilder/StringBuffer 的 native lowering 与 POD struct 降级共用——两份
+/// StringBuilder/StringBuffer 的 native lowering 与 POD struct 降级共用，两份
 /// 副本必然漂移，故放在这里。逃逸分析的第一步都是"这个寄存器指的是哪个对象"。
 class RegIdUnionFind
 {
@@ -64,7 +64,7 @@ using codegen::CSourceStream;
 
 /// 方法唯一键（`owner\nname\ndesc`）：convertedFunctions / indyFunctions /
 /// enumSyntheticMethods 的跨 TU 统一构建点（原 regc_backend.cpp TU 内静态
-/// helper 下沉，评审 nit N6）。键格式逐字节冻结——查表写入端
+/// helper 下沉，评审 nit N6）。键格式逐字节冻结，查表写入端
 /// （compileMethod 预登记/自登记）与读取端（直调/resolved 表还原按 '\n'
 /// 切三段）都依赖三段式布局，任何转义/分隔符语义变化都是产物级漂移。
 inline std::string methodKey(const std::string& owner, const std::string& name,
@@ -147,7 +147,7 @@ struct RegCFunctionEmitState
     bool                                      resolvedDispatch    = false;
     /// 本方法是否发射 PushLocalFrame 帧（IR 级判定，见 regc_emitter.cpp
     /// fnProducesLocalRefsIR）。resolved 调用点据此省略每次 GetObjectClass 后
-    /// 的 DeleteLocalRef——帧内 local ref 由 PopLocalFrame 批量释放。
+    /// 的 DeleteLocalRef，帧内 local ref 由 PopLocalFrame 批量释放。
     bool                                      hasLocalFrame       = false;
     std::vector<ca::str::Utf8String>         staticMethodCacheDeclarations;
     std::vector<ca::str::Utf8String>       staticFieldCacheDeclarations;
@@ -172,7 +172,7 @@ struct RegCFunctionEmitState
     /// CFG edge count).
     std::vector<SSAType>                      edgeTempTypes;
     /// 调用目标间接化站点表：按返回形态（dispatcher 后缀）分组，每组一张表、
-    /// 组内独立索引。按指令遍历序登记——与 pass 遍历序一致，产物可复现。
+    /// 组内独立索引。按指令遍历序登记，与 pass 遍历序一致，产物可复现。
     std::map<std::string, std::vector<RegCIndirectCallSite>> indirectSiteTables;
     std::map<std::string, std::string>                       indirectSiteTableNames;
     int                                                     indirectSiteTableIndex = 0;
@@ -182,7 +182,7 @@ struct RegCFunctionEmitState
 ///
 /// @details
 /// `structRoots` 是不逃逸的 POD 实例根（并查集根 id）；`ownerByRoot` 给出每个
-/// 根的类名（用于取 struct 类型名）。`escapedRoots` 保留供诊断——降级覆盖面窄
+/// 根的类名（用于取 struct 类型名）。`escapedRoots` 保留供诊断，降级覆盖面窄
 /// 时需要能说出"为什么这个实例没降级"。
 struct RegCPodStructPlan
 {
@@ -211,7 +211,7 @@ struct RegCStringBuilderPlan
 ///
 /// operandExpr 是无状态自由函数、调用点遍布各拆分文件；ldc_string 分支需要
 /// 登记密文缓冲的池。发射期间由 RegCEmitter::emitFunction 经 RAII 安装当前池
-/// （单线程发射，无并发），函数外为空——字面量保持明文发射（独立发射器/单测
+/// （单线程发射，无并发），函数外为空，字面量保持明文发射（独立发射器/单测
 /// 路径默认不受影响）。
 /// @{
 
@@ -428,7 +428,7 @@ void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegI
                     const ca::str::Utf8StringRef&            cacheName,
                     const std::vector<ca::str::Utf8String>& expressions,
                     bool ownerMethodOnly = false);
-/// 发射「分配 + 构造」融合调用（NewObjectA：1 个 JNI 替代 AllocObject + 解析）。
+/// 发射分配与构造的融合调用（NewObjectA：1 个 JNI 替代 AllocObject + 解析）。
 void emitAllocateWithInit(CSourceStream& out, RegCFunctionEmitState& state,
                           const RegInstruction& alloc, const RegInstruction& initCall,
                           const ca::str::Utf8StringRef& allocCacheName,
@@ -468,7 +468,7 @@ bool rejectNativeObjectEscapes(const RegCFunctionEmitState&   state,
 /// StringBuilder/wrapper 分析（各两遍）、local-ref 帧判定、异常检查稀疏化
 /// 与 emitIntrinsicCall 共享同一份决策。此前各消费点自行重复判定（每 Call
 /// 多次 fromInstruction + 权威表一次线性扫），且 analyze/稀疏化侧硬编码
-/// builtins() 而 emit 侧用用户 registry——用户条目遮蔽内建签名时两侧判定
+/// builtins() 而 emit 侧用用户 registry，用户条目遮蔽内建签名时两侧判定
 /// 漂移（wrapper 分析按 WrapperValueOf 建 native 态、emit 按 UserIntrinsic
 /// 出 jobject 的错配；纯计算豁免 ExceptionCheck 套在可抛用户函数上）。
 /// 表键取指令地址：RegFunction 块/指令为 unique_ptr 所有权，单次发射内
@@ -515,7 +515,7 @@ RegCStringBuilderPlan analyzeStringBuilders(const RegFunction& fn,
                                             const RegCIntrinsicDecisionTable& decisions);
 
 /// @brief 判定某类的实例字段是否全为原生类型（POD 类）。
-/// @details 同时要求无接口、直接继承 Object——继承/接口会让字段布局不等于本类
+/// @details 同时要求无接口、直接继承 Object，继承/接口会让字段布局不等于本类
 ///          字段表，struct 降级不再等价。库类一律否（拿不到字段全貌）。
 bool isPodClassOwner(CompilerIndex* classIndex, const ca::str::Utf8StringRef& owner);
 /// @brief POD 类生成的 C struct 类型名（pod_<sanitized owner>）。
@@ -548,7 +548,7 @@ const std::string* podStructStorageFor(const RegCFunctionEmitState& state,
 /// @details
 /// 成功时 `indexExpression` 为块索引变量名，调用方改按 0..N-1 的索引 switch。
 /// 返回 false（无 TU 头部注册表，key 表无处安放）时 `indexExpression` 保持空，
-/// 调用方**退回按原始 case key 分派**——本项是混淆增益，不该让方法编译不了。
+/// 调用方**退回按原始 case key 分派**，本项是混淆增益，不该让方法编译不了。
 bool emitComputedJumpDispatch(CSourceStream& out, RegCFunctionEmitState& state,
                               const RegSwitchTerminator& t, std::string& indexExpression,
                               std::string& reason);
@@ -570,7 +570,7 @@ RegCIntrinsicDecision emitIntrinsicCall(CSourceStream& out, const RegInstruction
 /// 编译输入内 owner 的超类链抵达 java/lang/Enum（枚举子类判定）。
 bool isEnumSubtypeOwner(CompilerIndex* classIndex, std::string_view owner);
 /// javac 合成 values() 形态验证（getstatic $VALUES + clone + checkcast + areturn；
-/// 批 6d：DOM raw 指令匹配，cls/m = 目标类与方法快照）。
+/// DOM raw 指令匹配，cls/m = 目标类与方法快照）。
 bool isJavacEnumValuesBody(const CompilerClass& cls, const CompilerMethod& method,
                            const std::string& owner, const std::string& arrayDesc);
 /// javac 合成 valueOf(String) 形态验证（ldc class + Enum.valueOf + checkcast + areturn）。
@@ -585,7 +585,7 @@ bool isJavacEnumValueOfBody(const CompilerClass& cls, const CompilerMethod& meth
 /// clone（owner 为数组描述符或 java/lang/Object）→ checkcast 数组描述符，同块
 /// 3 指令（按块搜索，容忍空 entry 块）。与字节码侧 isJavacEnumValuesBody 同一
 /// 口径的 fail-closed SSA 版：方法自身指令清空后字节码侧不可达，只能在其 SSA
-/// 转换当口验证。仅 values——valueOf 无 SSA 形状验证：SSA 侧形状门弱于字节码
+/// 转换当口验证。仅 values，valueOf 无 SSA 形状验证：SSA 侧形状门弱于字节码
 /// 门（可见证据严格子集，opaque tag 不可靠），旧 valueOf 谓词已删（#1192 评审
 /// N4 承接，方案 B），合成验证唯一来源是字节码侧 isJavacEnumValueOfBody
 /// 预扫描/按类补扫。
@@ -604,7 +604,7 @@ bool collectRegisters(const RegFunction& fn, std::map<uint32_t, SSAType>& regs,
 std::vector<const RegExceptionRegion*> activeExceptionRegions(const RegFunction& fn,
                                                               const RegBlock*    block);
 /// 发射函数级 helper 前导声明（cached/instance 调用等）。registry 非空时（用户
-/// 自定义 intrinsic registry）改从该实例发射——其 emitDeclarations 覆盖 builtins
+/// 自定义 intrinsic registry）改从该实例发射，其 emitDeclarations 覆盖 builtins
 /// 固定声明并追加用户 symbol 的 extern 声明。
 void emitHelperPrelude(ca::str::Utf8StringBuilder& out,
                        const RegCIntrinsicRegistry* intrinsicRegistry = nullptr);
@@ -636,7 +636,7 @@ bool emitInvokeDynamic(codegen::CSourceStream& out, const RegInstruction& ins,
                        const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
                        const RegFunction& fn, const RegBlock* block, std::string& reason);
 
-/// 发射 invokedynamic 站点直派桩（设计文档 §6 P2）：按站点派发形态分派——
+/// 发射 invokedynamic 站点直派桩（设计文档 §6 P2）：按站点派发形态分派，
 /// F1（DirectFieldAccess+载荷）发字段访问直派、F2（RecordObjectMethods+访问器载荷）
 /// 发访问器直调，形态为单分支守卫（READY 才走快路，回退分支即既有 helper 路径）；
 /// 其余形态原样落现状 helper 路径（发射文本与现状逐字节一致）。定义在

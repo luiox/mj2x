@@ -24,8 +24,8 @@ namespace mj2x {
 /// @brief finalize 期诊断聚合（T1：三后端失败/降级行为口径统一）。
 ///
 /// @details
-/// finalize 期的事实多是「降级而非失败」：RegC 内联因 callee 不可解析放弃、
-/// VMC4 配置冲突被归一化——此前只落各自 tag 的 WARN 日志，管线/CLI 无编程
+/// finalize 期的事实多是"降级而非失败"：RegC 内联因 callee 不可解析放弃、
+/// VMC4 配置冲突被归一化。此前只落各自 tag 的 WARN 日志，管线/CLI 无编程
 /// 消费面，口径散在三个后端。finalize 把告警同时收进本结构（日志照发），
 /// warnings > 0 即本次产物存在降级；samples 携带逐条一句话描述（封顶由各
 /// 后端自定）。

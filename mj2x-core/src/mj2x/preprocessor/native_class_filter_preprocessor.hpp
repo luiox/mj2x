@@ -15,7 +15,7 @@
 //     include 为空时视为全部放行（再受 exclude 约束）。
 //   - exclude 优先于 include：命中任一 exclude 模式的类一律剔除。
 //
-// 过滤器只打 `CompilerClass::filteredOut` 标志，不删类——JAR 往返仍需保留
+// 过滤器只打 `CompilerClass::filteredOut` 标志，不删类，JAR 往返仍需保留
 // 原始条目，且其他类可能引用被剔除的类。方法级选择（annotation / method
 // prefix / mark-all）与 <init>/<clinit> 搬运在各自入口跳过 filteredOut 类。
 
@@ -31,7 +31,7 @@ namespace mj2x {
 /// @brief 段感知 glob 匹配（`*` 不跨 `.`，`**` 跨段，`?` 单字符不跨 `.`）。
 ///
 /// 模式需已归一化（`/` → `.`）；文本为内部类名（`.` 分隔）。实现为
-/// O(n*m) DP——类名与模式均为短串，确定性且无正则依赖。
+/// O(n*m) DP，类名与模式均为短串，确定性且无正则依赖。
 bool globMatchClassName(const std::string& text, const std::string& pattern);
 
 /// @brief 归一化一串 glob：按 `,` 拆分、去空白、`/` → `.`。
@@ -46,7 +46,7 @@ bool classPassesFilter(const std::string&        className,
 /// @brief 类级过滤器 preprocessor：对不通过门的类置 `filteredOut`。
 ///
 /// 必须在方法级选择 preprocessor（annotation / method prefix / mark-all）
-/// 与 InitClinitMoverPreprocessor **之前**注册——后者按该标志跳过。
+/// 与 InitClinitMoverPreprocessor **之前**注册，后者按该标志跳过。
 class NativeClassFilterPreprocessor : public Preprocessor
 {
 public:

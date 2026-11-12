@@ -21,10 +21,10 @@ struct RegCIntrinsicEntry
     /// LLVM 后端可同语义直调（#1027 B2 单源位）：llvm_intrinsic_registry 由本表
     /// 本位派生，不再维护手工对齐副本。false = LLVM 侧保持 JNI 分派现状
     ///（含 RegC 有而 LLVM 直调未启用的条目，如 Integer/Long 位操作、
-    /// trimToSize——开启属行为扩展，须随 LLVM 侧卡单独验证）。
+    /// trimToSize，开启属行为扩展，须随 LLVM 侧卡单独验证）。
     bool                          llvmDirect;
     /// 发射端直调预检位（#879 Y4 解耦）：发射端按此位发射预检，不再按
-    /// symbol/desc 硬编码判定——registry 改符号名/新增形态时预检不会静默
+    /// symbol/desc 硬编码判定，registry 改符号名/新增形态时预检不会静默
     /// 失效（fail-open 回退）。聚合初始化未写该位的行零初始化 = None。
     RegCIntrinsicPrecheck         precheck;
 };
@@ -305,7 +305,7 @@ constexpr RegCIntrinsicEntry kEntries[] = {
     // 全 RuntimeFunction(纯、不抛)、passContext=false、llvmDirect=false:
     // StrictMath 的契约是与 JDK 实现位精确,实现按 netlib fdlibm 5.3 自写
     // C 翻译(mj2x_regc_strictmath.c,文件头保留 fdlibm 许可声明),与
-    // JDK 17 StrictMath 逐位对拍验证;LLVM 直调面不扩容,仅 RegC 消费。
+    // JDK 17 StrictMath 逐位比对验证;LLVM 直调面不扩容,仅 RegC 消费。
     {"java/lang/StrictMath",
      "sin",
      "(D)D",
@@ -1693,7 +1693,7 @@ constexpr RegCIntrinsicEntry kEntries[] = {
      false,
      true,
      // Y4 预检位：JVM 对 bound<=0 抛 IllegalArgumentException，crt 直调无异常
-     // 通道——发射端按本位发预检（fail-closed），不随符号名漂移。
+     // 通道，发射端按本位发预检（fail-closed），不随符号名漂移。
      RegCIntrinsicPrecheck::PositiveBound},
     {"java/util/Random",
      "nextLong",
@@ -2454,14 +2454,14 @@ RegCIntrinsicDecision RegCIntrinsicRegistry::matchUserCall(const RegCIntrinsicCa
     // 用户 intrinsic 匹配契约：static 调用（INVOKESTATIC）恒可匹配
     // passReceiver=false 的条目；instance 调用（VIRTUAL/SPECIAL/INTERFACE）需
     // 条目显式声明 passReceiver=true 才匹配（fail-closed：instance 调用点未
-    // 声明 passReceiver 回通用 JNI 派发，保持 G-1 行为——此前 instance 调用
+    // 声明 passReceiver 回通用 JNI 派发，保持 G-1 行为，此前 instance 调用
     // 误入 intrinsic 路径会因 argCount 含 receiver 错位整方法 fail-closed）。
     // RegIR 约定：instance 调用 args[0] 是 receiver，argCount 含 receiver。
     for (const auto& entry : userEntries_) {
         if (call.owner != entry.owner || call.name != entry.name || call.desc != entry.desc) {
             continue;
         }
-        // 配置校验：passReceiver 条目匹配到静态调用点——静态方法无 receiver，
+        // 配置校验：passReceiver 条目匹配到静态调用点，静态方法无 receiver，
         // 属配置错误；Unsupported 使整方法 fail-closed 并暴露原因（不静默回退，
         // 避免用户配置错位被通用派发掩盖）。
         if (call.isStatic() && entry.passReceiver) {
@@ -2579,7 +2579,7 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("double mj2x_math_ceil(double value);\n");
     out.append("int64_t mj2x_math_round(double value);\n");
     // #1144 接线补缺：#1117 六行（round(F)I/signum×2/exp/log/log10）此前只进
-    // kEntries 未进本声明表——RegC 发射面调用即缺前置声明（隐式声明靠编译器
+    // kEntries 未进本声明表，RegC 发射面调用即缺前置声明（隐式声明靠编译器
     // 宽容，C23/clang 16 起直接报错）。符号签名与 mj2x-rt
     // mj2x_regc_intrinsic.h 逐一对应。
     out.append("int32_t mj2x_math_round_f32(float value);\n");
@@ -2590,7 +2590,7 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("double mj2x_math_log10(double value);\n");
     out.append("double mj2x_math_random();\n");
     // StrictMath 位精确 12 条 + Math rint/cbrt 复用面:符号在 mj2x-rt
-    // mj2x_regc_strictmath.h(fdlibm 算法结构,与 JDK 17 逐位对拍)。floorDiv/
+    // mj2x_regc_strictmath.h(fdlibm 算法结构,与 JDK 17 逐位比对)。floorDiv/
     // floorMod 是 RegCLocalHelper(吃 context,除零挂 pending 异常),签名与
     // mj2x_regc_intrinsic.h 逐一对应;emitDeclarations 是生成 TU 唯一声明源,
     // 缺行会在 C23/clang 16 下因隐式声明直接报错。
@@ -2619,7 +2619,7 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("mj2x_ref mj2x_intrinsic_long_to_octal_string(mj2x_regc_context* context, int64_t value);\n");
     out.append("mj2x_ref mj2x_intrinsic_long_to_binary_string(mj2x_regc_context* context, int64_t value);\n");
     // toUnsignedString 返回 mj2x_ref（指针，缺前置声明会被隐式 int 截断）、
-    // long 除法返回 i64 同理——emitDeclarations 是生成 TU 唯一声明源
+    // long 除法返回 i64 同理，emitDeclarations 是生成 TU 唯一声明源
     // （mj2x_regc_intrinsic.h 只进归档）。
     out.append("mj2x_ref mj2x_intrinsic_int_to_unsigned_string(mj2x_regc_context* context, int32_t value);\n");
     out.append("mj2x_ref mj2x_intrinsic_int_to_unsigned_string_radix(mj2x_regc_context* context, int32_t value, int32_t radix);\n");
@@ -2633,7 +2633,7 @@ void RegCIntrinsicRegistry::emitDeclarations(ca::str::Utf8StringBuilder& out) co
     out.append("int32_t mj2x_intrinsic_enum_ordinal(mj2x_regc_context* context, mj2x_ref receiver);\n");
     // 用户自定义 intrinsic symbol 声明（issue #818）：返回/参数类型由 desc 派生。
     // 参数顺序与各后端发射一致：passContext 时第一个参数是 JNIEnv*；passReceiver
-    // 时其后是 receiver（mj2x_ref，与 REF 参数同型——jni.h jobject 即 void*），
+    // 时其后是 receiver（mj2x_ref，与 REF 参数同型，jni.h jobject 即 void*），
     // 再往后是 desc 参数。
     {
         auto cType = [](const ca::str::Utf8StringRef& desc) -> const char* {

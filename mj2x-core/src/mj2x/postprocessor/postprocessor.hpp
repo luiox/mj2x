@@ -3,7 +3,7 @@
 ///
 /// @details
 /// Postprocessor 在 Pipeline::runPostprocessors 阶段执行（compileMethods 之后），
-/// 用于 class/资源层面的统一收口，避免各 backend 重复实现。典型职责：
+/// 用于 class/资源层面的统一处理，避免各 backend 重复实现。典型职责：
 ///  - NativeLoaderPostprocessor：注入 NativeLoader.class 资源 + clinit load 调用；
 ///  - CLoaderPostprocessor：注入 cloader/Loader 桥接类（StackC RegisterNatives）。
 ///

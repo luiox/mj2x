@@ -10,7 +10,7 @@
 -- 测试类 target 保 assert（R8 评审 N1 处方：测试 target 去 NDEBUG）。
 --
 -- 背景：release 模式下 xmake 内置 mode.release rule 会向每个 target 注入
--- -DNDEBUG——注意不是 defines 而是 cxflags（xmake rules/mode/xmake.lua 的
+-- -DNDEBUG，注意不是 defines 而是 cxflags（xmake rules/mode/xmake.lua 的
 -- on_config 里 target:add("cxflags", "-DNDEBUG")，v3.0.9 实查），标准 C
 -- assert 因此整体剥除：mj2x_rt_test 在 release 下 "all passed, exit 0"
 -- 实际零向量验证（绿验空转，#1058 评审实锤）。产品 target 的 NDEBUG 必须保留
@@ -19,8 +19,8 @@
 -- 为什么挂 on_config 而不是 remove_defines：NDEBUG 不在 defines 列表里，
 -- remove_defines 无效；且 target:remove("cxflags", ...) 不是注册 API
 -- （v3.0.9 的 target remove API 只覆盖 files 类，实测 raise unknown api）。
--- xmake 派发顺序为「各 rule on_config → target 自身 on_config → 各 rule
--- after_config」，故 target 级 on_config 晚于 mode.release 注入，在此
+-- xmake 派发顺序为各 rule on_config → target 自身 on_config → 各 rule
+-- after_config，故 target 级 on_config 晚于 mode.release 注入，在此
 -- get + set 过滤即可摘掉刚注入的值（target:get 只取 target 自身值，不混入
 -- dep/package 来源，set 不会产生重复/串源）。
 -- 覆盖面：release/releasedbg/minsizerel/profile 四种模式 xmake 均注入 NDEBUG，
@@ -73,7 +73,7 @@ add_rules("mode.debug", "mode.release")
 set_warnings("all")
 
 -- 全线静态 CRT（/MT，debug 档自动映射 /MTd）：CLI 以 subprocess 拉起 javac/
--- clang，测试 exe 以 jdk_fixture 拉起 java——与宿主进程混链旧 CRT 是
+-- clang，测试 exe 以 jdk_fixture 拉起 java，与宿主进程混链旧 CRT 是
 -- LNK2038/AV 根因族，静态链接后不再依赖外部 CRT 解析。xrepo 包按项目
 -- runtime 自动以 MT 口味重装。Linux/macOS 不受此设置影响。
 if is_plat("windows") then
@@ -148,7 +148,7 @@ end
 add_requires("nlohmann_json 3.12.0")
 
 -- libarchive：mj2x-core io zip_util 的解包后端（zip/tar/tar.xz/tar.gz/zst，
--- 下载后解压场景——dev_plan 交叉编译切片的 toolchain 获取面）。
+-- 下载后解压场景（dev_plan 交叉编译工作项的 toolchain 获取面）。
 -- 本地覆盖包（xmake/repo/packages/l/libarchive/xmake.lua）规避官方包在
 -- Linux 漏传 POSIX_REGEX_LIB=NONE 导致的编译失败；配方与 mjt/mjbase/grunt
 -- 四仓同源，升级需同步。
@@ -161,7 +161,7 @@ add_repositories("luiox-repo https://github.com/luiox/luiox-repo.git")
 -- 家族包词条的 add_deps 不吃消费方 requireconfs（实测），词条内已直接声明
 -- 家族统一超集模块串；顶层 (版本, 模块串) 必须与词条逐字一致才能归并单实例
 -- （实例归并靠 version+configs 双匹配，任何偏差都会多出一个 libca 实例：
--- 链接闭包多条 -libpath，同名符号双归档——2026-10-30 词条改超集串后旧
+-- 链接闭包多条 -libpath，同名符号双归档，2026-10-30 词条改超集串后旧
 -- 16 模块钉定即因此翻车，llvm/regc 套件 SEH，见 chore/stack-upgrade PR 正文）。
 -- 模块串从 mjbase xmake.lua @1b80687 一字不差抄入；升级 libca 只改下面两行。
 LUIOX_LIBCA_VERSION = "0.0.16"
@@ -171,7 +171,7 @@ add_requires("libca " .. LUIOX_LIBCA_VERSION, {configs = {modules = LUIOX_LIBCA_
 -- 缺模块时链接期 undefined reference；包 on_load 按依赖闭包展开排序链接项。
 -- libjbc 走项目内联包定义（xmake/packages/libjbc.lua，libca 钉本仓单源）：
 -- mjbase 闭包的 libjhasm 0.3.3 安装沙箱自带仓内内联 libjbc 词条（上限
--- 0.4.22），闭包三处 libjbc 边须钉 0.4.22 过沙箱（见下 requireconf）——
+-- 0.4.22），闭包三处 libjbc 边须钉 0.4.22 过沙箱（见下 requireconf），
 -- luiox-repo 词条无 0.4.22 条目，内联定义是唯一承载形态（同 mjt/mjbase
 -- 先例）。顶层与闭包同用 0.4.22 单实例（0.4.23 纯文档+测试面、0.4.24 纯
 -- libca 依赖接线，均无 API 差）；待 libjhasm 发含 0.4.24 内联词条的新版本
@@ -186,13 +186,13 @@ add_requires("libjbytecode 0.0.2")
 add_requires("libjzip 0.0.5")
 -- libgarena 单源版本变量：顶层与嵌套 override 钉定（见下）同源取值，复刻
 -- LUIOX_LIBCA_VERSION 纪律。0.0.4->0.0.5 曾在 #44 停跟：当时顶层翻 0.0.5
--- 但 libjbytecode 缓存实例仍按旧 garena 头构建——0.0.5 给 Arena 加
+-- 但 libjbytecode 缓存实例仍按旧 garena 头构建，0.0.5 给 Arena 加
 -- bump_chunk_（sizeof 80->88，static_assert 实证），libjbytecode 公开头
 -- 按值内嵌 Arena（FieldNode/MethodNode/ClassNode/ClassReader），两版头
--- 同图布局腐化致全量 279 例 SEH（0xC0 碎片非毒化——家族唯一毒化为 debug
+-- 同图布局腐化致全量 279 例 SEH（0xC0 碎片非毒化，家族唯一毒化为 debug
 -- 0xDD；崩溃点 Label::setOwner 写 owner_@+0x18）。翻案实验（#44 合并后）：
 -- 顶层+override 同步 0.0.5 并强建 libjbytecode 实例，930 ran / 917 passed /
--- 12 例既有环境失败 / 1 skipped / 0 SEH——无回归，归属为混链非 garena 缺陷。
+-- 12 例既有环境失败 / 1 skipped / 0 SEH，无回归，归属为混链非 garena 缺陷。
 -- 注意：升级翻版后须 xmake require -f "libjbytecode 0.0.2" 按新 garena 头
 -- 重建实例（实例缓存不随嵌套依赖版本翻新，实测）。
 LUIOX_LIBGARENA_VERSION = "0.0.5"
@@ -208,7 +208,7 @@ add_requireconfs("libjzip.libca",                {version = LUIOX_LIBCA_VERSION,
 add_requireconfs("libgarena.libca",              {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 add_requireconfs("libjdk_finder.libca",          {version = LUIOX_LIBCA_VERSION, configs = {modules = LUIOX_LIBCA_MODULES}})
 -- 嵌套中间包版本钉定（同 mjbase libjhasm.libjbc 钉定纪律）：libjbytecode 词条
--- 内 libjstr/libgarena 为裸名依赖，放任解析会取词条最新版——若与顶层版本
+-- 内 libjstr/libgarena 为裸名依赖，放任解析会取词条最新版，若与顶层版本
 -- 不一致即形成双 libjstr 实例（链接闭包两条 -libpath，同族 ODR；2026-10-30
 -- 实测 libjstr 0.0.2/0.0.4 双实例 279 例 SEH）。显式钉到与顶层同版本归并
 -- 单实例，且防未来词条发新版后嵌套解析漂移。
@@ -227,7 +227,7 @@ add_requires("libjstd 0.0.1")
 add_requires("libjhasm 0.3.3")
 add_requires("zlib")
 -- mjbase 闭包嵌套中间包钉定：词条对 libjstr/libjzip/libgarena/libjclassfile
--- 为裸名、对 libjbc/libjhasm 为下界区间——不钉即浮动取包仓最新版与顶层钉版
+-- 为裸名、对 libjbc/libjhasm 为下界区间，不钉即浮动取包仓最新版与顶层钉版
 -- 分裂双实例（libjbc#1 0.4.26 / libjzip#1 0.0.5，CI 实证），区间还会进沙箱
 -- 触发裸 ref clone。libjbc 三条边钉 0.4.22（libjhasm 0.3.3 安装沙箱内联词条
 -- 上限，0.4.24 不被内层识别即裸 ref clone 必炸，CI 实证；与顶层同版本单

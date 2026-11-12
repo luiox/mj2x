@@ -36,7 +36,7 @@ using ca::usize;
 ///          - 其余（U+0001..U+FFFF）两编码逐字节相同。
 ///          所有经 C 字符串字面量喂 NewStringUTF 的发射端（RegC / VMC4 / LLVM）
 ///          必须先过本转换；StackC 的 UTF-16 码元池（NewString 按长度）无此面。
-///          字节序列一律用显式转义构造——字符串字面量里直接放 0xC0/0x80 等
+///          字节序列一律用显式转义构造，字符串字面量里直接放 0xC0/0x80 等
 ///          原始字节会被编辑器按文本编码重写（java_corpus TextBlocksAndEscapes
 ///          首曝：C0 80 被存成 U+00C0/U+0080 两字符的 UTF-8 四字节）。
 inline std::string utf8ToModifiedUtf8(std::string_view utf8)
@@ -307,7 +307,7 @@ inline std::string formatFloatLiteral(double value, int precision)
 }
 
 /// @brief 整数值浮点补形为合法 C 浮点字面量：`%.*g` 对 1.0/-0.0 这类值输出
-///        "1"/"-0" 纯整数文本——拼 f 后缀是非法 C（"1f"，#1117 g17 样本
+///        "1"/"-0" 纯整数文本，拼 f 后缀是非法 C（"1f"，#1117 g17 样本
 ///        首次暴露），而 "-0" 作为 int 字面量取负转 double 还会丢符号位。
 ///        统一补 ".0"；NaN/Inf 仍由调用方走宏分支（此处按文本防御）。
 inline std::string cFloatLiteral(double value, int precision)

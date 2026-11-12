@@ -59,7 +59,7 @@ bool recordCopies(RegisterTypes& types, const std::vector<RegCopy>& copies, std:
 {
     for (const auto& copy : copies) {
         // #1121 方向 1：undef 来路（Opaque UNKNOWN 或 undef_ 前缀 tag，SSA join
-        // 的未定义到达边）放行——undef 赋给任意槽类型语义合法（undef 就是
+        // 的未定义到达边）放行，undef 赋给任意槽类型语义合法（undef 就是
         // undef），dest 照常入类型表，后续使用照常精确检查；发射端产出 dest
         // 类型 undef。放行面保持最窄：非 undef 来路的 Opaque 与两边已知类型
         // 不符仍是真错误，照旧拒绝。

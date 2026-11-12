@@ -1,5 +1,5 @@
 # ============================================================================
-# bootstrap_probe.ps1 — mj2x runtime bootstrap 四段分解微探针（issue #1183）。
+# bootstrap_probe.ps1，mj2x runtime bootstrap 四段分解微探针（issue #1183）。
 #
 # 对一个 RegC 转换产物 jar（含嵌入 native DLL）做 bootstrap 分段计量：
 #   段 1 提取（extract 复刻计时；extract_new 为 #1183 改造后加载器同构复刻）/

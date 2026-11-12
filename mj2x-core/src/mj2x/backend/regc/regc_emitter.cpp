@@ -44,7 +44,7 @@ using codegen::CSourceStream;
 /// 兜底分支发射为纯 C 表达式调用，不经过 JNI、不可能抛异常；SSA 阶段无法区分
 /// intrinsic 与普通调用，统一标 mayThrow，导致热循环每轮都做 ExceptionCheck。
 /// 这里在发射异常分发前复判一次：匹配成功且为 RuntimeFunction 时省略检查
-/// （与 emitIntrinsicCall 的发射行为一致——该分支无 native-state 回退）。
+/// （与 emitIntrinsicCall 的发射行为一致，该分支无 native-state 回退）。
 bool isPureRuntimeIntrinsic(const RegInstruction& ins, const RegCIntrinsicDecisionTable& decisions)
 {
     if (ins.kind != RegInstructionKind::Call) return false;
@@ -303,7 +303,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
         } pendingFuse;
         /// getClass().getName().hashCode() 融合窗口：仅 getName/hashCode 两条
         /// 指令被融合结果取代（融合值在 getClass 位置一次产出），窗口内其余
-        /// 指令（isFuseTransparent 放行的字段/数组读写等）必须原位发射——
+        /// 指令（isFuseTransparent 放行的字段/数组读写等）必须原位发射，
         /// 副作用与中间 dest 的后续使用不可丢。
         const RegInstruction* fusedNameHashSkip1 = nullptr;
         const RegInstruction* fusedNameHashEnd   = nullptr;
@@ -373,7 +373,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             case RegInstructionKind::Compare:
             case RegInstructionKind::Convert:
             // 字段/数组读写与 intrinsic 也允许：它们在 NewObjectA 前原位执行
-            // （顺序保持，异常语义等价——分配对象未初始化不可见，异常时丢弃），
+            // （顺序保持，异常语义等价，分配对象未初始化不可见，异常时丢弃），
             // 只要不使用分配结果（instructionUsesReg 已检查）。典型收益：
             // new String(bytes, UTF_8)（alloc → getstatic Charset → <init>）从
             // AllocObject+解析 4 JNI 降为 NewObjectA 2 JNI。
@@ -416,7 +416,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
             if (fusedNameHashEnd != nullptr) {
                 // 融合跳过窗口：仅 getName/hashCode 被融合结果取代；窗口内
                 // 其余指令原位发射（副作用与中间 dest 后续使用保留；getName/
-                // hashCode 提前到 getClass 位置求值——Class 对象身份不可变，
+                // hashCode 提前到 getClass 位置求值，Class 对象身份不可变，
                 // 中间指令不触碰 getClass/getName dest，语义等价）。
                 if (fusedNameHashSkip1 != nullptr && &ins == fusedNameHashSkip1) {
                     fusedNameHashSkip1 = nullptr;
@@ -771,7 +771,7 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
     // local ref 全程累积不释放，反射密集方法会撑爆 JNI 默认保证的 16 槽 local ref 表。
     // 用 PushLocalFrame(入口) / PopLocalFrame(单出口，promote 返回值) 批量释放，语义等价
     // StackC 的 trackLocalRef/clear，但零 C 数组、无 c2j stack anchor。缓存 class/method
-    // 走 NewGlobalRef，不受帧影响。纯标量方法（无产 ref 操作）不发射，保留「零 JNI」形态。
+    // 走 NewGlobalRef，不受帧影响。纯标量方法（无产 ref 操作）不发射，保留零 JNI 形态。
     const ca::str::Utf8String bodySource = body.build();
     const bool producesRefs = bodyProducesLocalRefs(bodySource) || emitState.hasLocalFrame;
     // 帧豁免：无环 CFG 且产 ref 指令 ≤ 6 的函数，单次调用至多 6 个 local ref
@@ -856,8 +856,8 @@ RegCEmitResult RegCEmitter::emitFunction(const RegFunction& fn)
 namespace {
 
 /// 阶段3 helper 路径（现状 emitInvokeDynamic 主体，逐字保留）：站点取 target 后
-/// invokeWithArguments。RuntimeHelper 站点与直派桩的守卫回退分支共用本函数——
-/// 发射文本与波次二之前逐字节一致（零回归锚）。
+/// invokeWithArguments。RuntimeHelper 站点与直派桩的守卫回退分支共用本函数，
+/// 发射文本与直派桩引入前逐字节一致（零回归锚）。
 bool emitIndyHelperCall(CSourceStream& out, const RegInstruction& ins,
                         const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
                         std::string& reason)
@@ -1039,7 +1039,7 @@ bool emitIndyDirectFieldCall(CSourceStream& out, const RegInstruction& ins,
                                                     codegen::exprParen(
                                                         operandExpr(ins.args[0]).to_std_string())));
                 }
-                // 字段访问体：实例形态放进 null 守卫的 else 分支——受保护路径
+                // 字段访问体：实例形态放进 null 守卫的 else 分支，受保护路径
                 // throw_null 落空后直接进指令后异常分发，绝不能以 NULL receiver
                 // 递进 JNI；静态形态无 receiver，直接发射。
                 auto emitAccess = [&](CSourceStream& u) {
@@ -1096,7 +1096,7 @@ bool emitIndyDirectFieldCall(CSourceStream& out, const RegInstruction& ins,
 /// receiver 形态与访问器 tag 由判定载荷给出；参数经 jvalue 数组 marshalling，返回
 /// 按访问器描述符的 JNI 变体取回（等价既有 cached call 面）。无可直派访问器时
 /// （javac equals/hashCode/toString 等 ObjectMethods 内建语义）整体落既有 helper
-/// 路径——与现状逐字节一致，零回归。
+/// 路径，与现状逐字节一致，零回归。
 bool emitIndyDirectRecordCall(CSourceStream& out, const RegInstruction& ins,
                               const RegFunction::InvokeDynamicSite& site, size_t globalSiteIndex,
                               const RegFunction& fn, const RegBlock* block, std::string& reason)
@@ -1141,7 +1141,7 @@ bool emitIndyDirectRecordCall(CSourceStream& out, const RegInstruction& ins,
                     firstArg = 1;
                 }
                 const std::string vaVar = "_mj2x_indy_direct_va_" + idx;
-                // 访问器调用体：实例形态放进 null 守卫的 else 分支——受保护路径
+                // 访问器调用体：实例形态放进 null 守卫的 else 分支，受保护路径
                 // throw_null 落空后直接进指令后异常分发，绝不能以 NULL receiver
                 // 递进 JNI；静态访问器无 receiver，直接发射。
                 auto emitAccessorCall = [&](CSourceStream& u) {
@@ -1223,7 +1223,7 @@ bool emitInvokeDynamic(CSourceStream& out, const RegInstruction& ins,
 bool validateRegCNoStackAnchors(const std::string& source, std::string& reason)
 {
     // 锚点必须是 RegC 不会产出的标识符形态。自然语言片段（如早期的
-    // "Cannot invoke"）会误伤含异常文案字符串常量的合法方法——受保护代码
+    // "Cannot invoke"）会误伤含异常文案字符串常量的合法方法，受保护代码
     // 里 "Cannot invoke method ..." 之类的消息极常见，门禁会静默拒绝整个
     // 方法的 native 化。
     const char* anchors[] = {

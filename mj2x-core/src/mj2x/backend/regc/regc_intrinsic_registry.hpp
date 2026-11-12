@@ -103,7 +103,7 @@ struct RegCIntrinsicDecision
 ///
 /// @details 权威表唯一在 regc_intrinsic_registry.cpp 的 kEntries（RegC 发射属
 /// 性 + LLVM 直调能力位 llvmDirect 一体）。llvm_intrinsic_registry 由此派生
-/// LLVM 类型映射文本，不再维护手工对齐副本——新增 intrinsic 只改本表。
+/// LLVM 类型映射文本，不再维护手工对齐副本，新增 intrinsic 只改本表。
 struct RegCIntrinsicIdentity
 {
     const char*                   owner;
@@ -140,7 +140,7 @@ public:
     /// emitKind 恒为 UserIntrinsic（保留调用后 ExceptionCheck 与 local-ref 帧）；
     /// passContext 时第一参数传 JNIEnv*（三后端一致）；passReceiver 条目匹配
     /// instance 调用点并在 env 后传 receiver（static 调用点匹配到 passReceiver
-    /// 条目判 Unsupported——静态方法无 receiver，配置校验错误）。
+    /// 条目判 Unsupported，静态方法无 receiver，配置校验错误）。
     explicit RegCIntrinsicRegistry(const std::vector<UserIntrinsic>& userEntries);
 
     /// @brief Decide how one RegIR call should be emitted.

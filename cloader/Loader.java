@@ -1,5 +1,5 @@
 // ============================================================================
-// mj2x/cloader/Loader — 桥接类的可读源码版本（规范参考实现）。
+// mj2x/cloader/Loader，桥接类的可读源码版本（规范参考实现）。
 //
 // 权威字节码由生成器程序化构造：
 //   mj2x-core/src/mj2x/postprocessor/cloader_postprocessor.cpp
@@ -13,7 +13,7 @@
 //      RESOURCE_PATH / TEMP_SUFFIX 由发射期字符串常量内联；
 //   3. 未配置资源时整个 <clinit> 不存在。
 //
-// 职责：RegisterNatives 动态绑定的 Java 侧载体——转换类 clinit 调
+// 职责：RegisterNatives 动态绑定的 Java 侧载体，转换类 clinit 调
 // registerNativesForClass；native 库经 NativeLoader.load 解包加载一次。
 // ============================================================================
 package mj2x.cloader;

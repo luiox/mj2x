@@ -4,8 +4,8 @@
 //
 // vmx64 域内小端序随机访问读/写原语（std::vector<uint8_t> 镜像上的 offset
 // 寻址）。历史上三份逐字拷贝：vmx64_postlink.cpp 匿名 namespace（生产侧）、
-// vmx64_postlink_test.cpp 与 vmx64_stream_interp_test.cpp（测试侧）——收编
-// 单源。
+// vmx64_postlink_test.cpp 与 vmx64_stream_interp_test.cpp（测试侧），收编
+// 为单源。
 //
 // 越界安全由调用方先行保证（post-link 加密器的 fail-closed 面在读改写前
 // 逐层验过 PE/COFF 布局；流级解释器的镜像边界自带布局不变量），本头与

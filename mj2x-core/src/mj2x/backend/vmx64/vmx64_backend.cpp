@@ -38,15 +38,15 @@ using codegen::registerFunctionName;
 
 // ===========================================================================
 // Vmx64Backend::Impl：方法段累积 + RegisterNatives 簿记（镜像
-// Vmc4Backend::Impl 的同名结构；差异仅在「fn 指针是 .asm 入口符号的 extern
-// 声明」而非同 TU 的 static C 函数）。
+// Vmc4Backend::Impl 的同名结构；差异仅在 fn 指针是 .asm 入口符号的 extern
+// 声明，而非同 TU 的 static C 函数）。
 // ===========================================================================
 struct Vmx64Backend::Impl
 {
     ca::str::Utf8StringBuilder source;
 
     /// RegisterNatives 表条目：Java name/desc + .asm 入口符号 + extern 原型
-    /// 所需的参数/返回 JNI 类型（jint/jlong/void——Phase 2 最小 opcode 面）。
+    /// 所需的参数/返回 JNI 类型（jint/jlong/void，Phase 2 最小 opcode 面）。
     struct NativeMethodReg
     {
         std::string javaName;
@@ -221,7 +221,7 @@ void Vmx64Backend::finalize(const CompilerIndex& index)
     const std::string methods = impl_->source.build().to_std_string();
     full += methods;
     // MASM 源文件终止指令：ml64 参考用法均以 end 收尾（其后文本忽略），
-    // 缺失在部分 MASM 前端是硬错误——发射器确定性补齐。
+    // 缺失在部分 MASM 前端是硬错误，发射器确定性补齐。
     full += "end\n";
 
     sourceCode_ = std::move(full);
@@ -361,7 +361,7 @@ void Vmx64Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) c
     src.emitLine("");
 
     // JNI_OnLoad：登记逐类 register 函数并绑定 Loader 桥（vmx64 无 at-rest
-    // 解密面——流/表加密是链接期可表达的重定位加法，无需加载期原语）。
+    // 解密面，流/表加密是链接期可表达的重定位加法，无需加载期原语）。
     src.emitLine("JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {");
     src.indent();
     src.emitLine("JNIEnv* env = NULL;");

@@ -61,7 +61,7 @@ inline constexpr ca::usize kUnresolvableSampleCap = 8;
 /// 由调用方（RegCBackend）提供：从 CompilerIndex 取 MethodNode，走
 /// CodeConverter → SSABuilder 构建。返回 nullptr 表示目标不可解析/不可内联，
 /// 此时必须向 `failReason` 写入人类可读拒因（#1193 评审 P3-2：resolver 侧
-/// 拒因经样例透出到逐方法 WARN 与 finalize 汇总，说清「为什么没内联」；
+/// 拒因经样例透出到逐方法 WARN 与 finalize 汇总，说清"为什么没内联"；
 /// 返回非空时 failReason 内容无意义）。返回的 SSA 仅用于克隆（pass 会深拷贝
 /// 并把 Utf8StringRef 重新入调用方 arena），回调返回后可立即析构。
 using SsaInlineResolver =
@@ -84,7 +84,7 @@ using SsaInlineResolver =
 /// 克隆时参数绑定调用点实参；所有返回点改跳新汇合块（block arg 收集
 /// 返回值），原 Call 指令 result 的所有引用重定向到汇合块 arg。
 /// 调用块位于异常受保护区时（#1188），克隆体与汇合块登记为该区域的受保护
-/// 块并补异常边（handlerArgs 沿用调用块现有边——调用点之前的帧状态），
+/// 块并补异常边（handlerArgs 沿用调用块现有边，调用点之前的帧状态），
 /// 发射端对新块的逐调用 pending 异常检查因此保持开启，try 语义不因内联丢失。
 SsaInlineStats applySsaInlining(SSAFunction& function, const SsaInlineOptions& options,
                                 const SsaInlineResolver& resolver,

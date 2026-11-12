@@ -1,4 +1,4 @@
-﻿# jvm_obfuscator_test_benchmark.ps1 — RegC vs os30(JNIC) 13-probe 性能对比基准
+﻿# jvm_obfuscator_test_benchmark.ps1，RegC vs os30(JNIC) 13-probe 性能对比基准
 #
 # 用途：把 jvm-obf-tester（13 个探针 jar）用 mj2x-cli --backend regc 全量 native 化，
 # 与竞品 os30（JNIC 混淆产物）在同一 JDK 下对比各探针耗时，产出 markdown + CSV 报告。
@@ -51,7 +51,7 @@ $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 
 # ---- JDK 解析：-JdkHomes 优先；为空时退回单 -JdkHome（兼容既有调用） ----
 if ($JdkHomes.Count -gt 0) {
-    # -File 调用时 shell 不会把 `a,b` 解析成数组——整串按逗号拆开（pwsh -Command 才有数组字面量）。
+    # -File 调用时 shell 不会把 `a,b` 解析成数组，整串按逗号拆开（pwsh -Command 才有数组字面量）。
     $jdkHomeList = @($JdkHomes | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
 } else {
     if ([string]::IsNullOrWhiteSpace($JdkHome)) {
@@ -82,7 +82,7 @@ if ([string]::IsNullOrWhiteSpace($Cli)) {
 if (-not (Test-Path $Cli)) { throw "mj2x-cli 未找到: $Cli（先构建或传 -Cli）" }
 if (-not (Test-Path $InputJar)) { throw "输入 jar 未找到: $InputJar" }
 # os30 基线缺失时 fail-closed（#887）：对比模式绝不静默跳过竞品侧、更不拿旧
-# 数据凑数——旧版/缺失基线正是此前"打平"误判的来源。Regression 模式跳过
+# 数据凑数，旧版/缺失基线正是此前"打平"误判的来源。Regression 模式跳过
 # os30 是显式契约（单侧回归门），不在此列。
 if (-not $Regression -and -not (Test-Path $Os30Jar)) {
     throw @"
@@ -509,7 +509,7 @@ $lines.Add("- CV% = 标准差/均值；超过 $MaxCvPercent% 的行标记 ⚠，
 $lines.Add("- 原始样本与统计面同步落 CSV：results/ 下 *-runs.csv（逐轮明细）与 *-stats.csv（统计汇总）。")
 $lines.Add("- 历史教训：#887 中单次 72.7 vs 71ms 的假打平，在预热+9 轮中位数口径下实为 ~1.6x 差距（53 vs 83ms，JDK25）。")
 # 评审 N4（#887）：stamp 仅到日期，UpdateBaseline 与 Regression 同日产物互相覆盖，
-# 基线中位数失去 CSV 对应留档——模式入名分离。
+# 基线中位数失去 CSV 对应留档，模式入名分离。
 $outTag = if ($UpdateBaseline) { "updatebaseline" } else { "regression" }
 $reportPath = Join-Path $reportDir "$stamp-jvm-obf-tester-os30-$outTag.md"
 Set-Content -Path $reportPath -Value ($lines -join [Environment]::NewLine) -Encoding UTF8
@@ -604,11 +604,11 @@ if ($Regression -or $UpdateBaseline) {
 
     if ($UpdateBaseline) {
         # meta 字段统一走 Add-Member -Force：旧基线被 PS5.1 ErrorRecord 污染、
-        # 修复后可能缺 warmupRuns/metric 等键——PSCustomObject 直接赋值新属性
+        # 修复后可能缺 warmupRuns/metric 等键，PSCustomObject 直接赋值新属性
         # 会抛 "property cannot be found"。Force=存在则覆写、缺失则新增。
         $baseline.meta | Add-Member -NotePropertyName generated -NotePropertyValue $stamp -Force
         # java -version 走 stderr，PS5.1 下 `& $java -version 2>&1` 会把
-        # ErrorRecord 对象灌进 meta.jdk（旧基线已踩坑）——统一走 cmd /c 取纯文本。
+        # ErrorRecord 对象灌进 meta.jdk（旧基线已踩坑），统一走 cmd /c 取纯文本。
         $baseline.meta | Add-Member -NotePropertyName jdk -NotePropertyValue $firstFace.Ctx.Version -Force
         $baseline.meta | Add-Member -NotePropertyName runs -NotePropertyValue $Runs -Force
         $baseline.meta | Add-Member -NotePropertyName warmupRuns -NotePropertyValue $WarmupRuns -Force
@@ -645,7 +645,7 @@ if ($Regression -or $UpdateBaseline) {
         $errors = New-Object System.Collections.Generic.List[string]
         # 数据完整性门（fail-closed，#1183）：探针表为空或 total=0 说明产物根本没
         # 跑起来/输出未被解析（实例：生成 NativeLoader 字节码 VerifyError 致 main
-        # clinit 崩，13-probe 表为空、total=0，功能门/性能门空转出"假绿"）——先于
+        # clinit 崩，13-probe 表为空、total=0，功能门/性能门空转出"假绿"），先于
         # 功能门判失败并给排查入口。
         if ($firstFace.Regc.Probes.Keys.Count -eq 0) {
             $errors.Add("探针表为空：产物运行输出未解析到任何 probe 行（检查产物可运行性与输出格式）")

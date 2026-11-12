@@ -1,4 +1,4 @@
-// mj2x LdcPreprocessor — 展开 LDC Handle / LDC MethodType 为 MethodHandles.Lookup 反射调用链。
+// mj2x LdcPreprocessor：展开 LDC Handle / LDC MethodType 为 MethodHandles.Lookup 反射调用链。
 //
 // Lookup 取 MethodHandles.lookup()（调用者即本类，
 // 访问权限与原 ldc 常量一致）；MethodType 构造走 fromMethodDescriptorString(desc,
@@ -11,7 +11,7 @@
 //   ldc MethodType → MethodType.fromMethodDescriptorString(desc, callerClassLoader)
 //   其它 ldc（int/float/String/Class）→ 不动（L1 能直译）
 //
-// 批 4：改写载体切 DOM——ClassSession promote/CodeEditor/lower，指令 CP 操作数
+// 改写载体切 DOM：ClassSession promote/CodeEditor/lower，指令 CP 操作数
 // 经 session 语义 intern（去重追加）；展开序列逐条 insertBefore 到原 ldc 之前后
 // erase 原 ldc，与树版逐指令同构。maxStack 保守 +4 的口径与树版一致（展开链
 // 最深形态达原栈深 +5，见树版栈形注释）。
@@ -49,7 +49,7 @@ const char* primitiveBoxClass(char head)
 }
 
 /// CP 成员引用三跳解析（Fieldref/Methodref/InterfaceMethodref → owner/name/desc/itf）。
-/// 与 code_converter 的 resolveRef 同布局；preprocessor 侧独立持有（批 4 不动
+/// 与 code_converter 的 resolveRef 同布局；preprocessor 侧独立持有（不动
 /// code_converter 的私有面，共享收编留后续）。
 void domResolveRef(const jbc::core::ClassFile& dom, ca::u32 cpIdx, std::string& owner,
                    std::string& name, std::string& desc, bool& itf)
@@ -146,7 +146,7 @@ void expandHandleSite(jbc::ir::ClassSession& session, jbc::ir::CodeEditor& edito
     }
     emitClassLdc(session, editor, at, owner);
 
-    // findXxx 选择（按 tag）——#1027 find4 收敛：tag→find* 形态单源 =
+    // findXxx 选择（按 tag），#1027 find4 收敛：tag→find* 形态单源 =
     // indyHandleFindFor；name/MethodType/fieldType/caller 按其描述符顺序入栈。
     const IndyHandleFind find = indyHandleFindFor(handleRefKind);
     switch (find.argShape) {
@@ -164,7 +164,7 @@ void expandHandleSite(jbc::ir::ClassSession& session, jbc::ir::CodeEditor& edito
         }
         else {
             // 字段类型描述符 → Class 常量要求的内部名（findGetter 第 3 参是
-            // Class 对象；直传描述符成非法类名——LdcMhSample ClassFormatError
+            // Class 对象；直传描述符成非法类名，LdcMhSample ClassFormatError
             // 首曝）。数组类型 getInternalName 保留描述符形态（JVMS 数组类
             // LDC 写描述符）。
             ca::str::Utf8StringArena scratch;

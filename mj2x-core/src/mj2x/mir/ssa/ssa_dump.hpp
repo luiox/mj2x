@@ -1,4 +1,4 @@
-// mj2x SSA dump — 文本 dump，验证用。dump 文本不含 cstack/sp 等 c2j 锚点子串。
+// mj2x SSA dump，文本 dump，验证用。dump 文本不含 cstack/sp 等 c2j 锚点子串。
 #pragma once
 
 #include "mj2x/mir/ssa/ssa_function.hpp"

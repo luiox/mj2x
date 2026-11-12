@@ -4,7 +4,7 @@
 /// @details 见 regc_runtime_template.hpp。emitRuntimeHelpers 全部主体已迁移为
 /// resources/codegen/regc_runtime_helpers.c.in 文本模板(#894),此处仅做占位符
 /// 渲染;field/method access helper 文本已并入模板(Phase 1 调整:不再单独
-/// 发射,亦不物理下沉 mj2x-rt——依赖发射体内 thread_local _mj2x_regc_env,
+/// 发射,亦不物理下沉 mj2x-rt，依赖发射体内 thread_local _mj2x_regc_env,
 /// 跨 TU 共享需改 ABI,收益不抵风险)。
 #include "mj2x/backend/regc/regc_runtime_template.hpp"
 #include "mj2x/codegen/c_render.hpp"

@@ -55,7 +55,7 @@ static CompilerClass parseClass(CompilerIndex& index, const std::vector<ca::u8>&
     if (bytes.size() > static_cast<size_t>(std::numeric_limits<ca::i32>::max())) {
         throw std::runtime_error("class file too large");
     }
-    // 批 6d 树退役：readClass 是唯一解析通道（DOM 权威），元数据快照随建。
+    // 树退役后 readClass 是唯一解析通道（DOM 权威），元数据快照随建。
     auto read = jbc::core::readClass(jbc::core::ByteView{bytes.data(), bytes.size()});
     if (read.is_err()) {
         throw std::runtime_error("readClass failed: "

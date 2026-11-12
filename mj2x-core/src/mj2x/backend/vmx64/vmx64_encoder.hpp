@@ -27,7 +27,7 @@
 /// ### fail-closed
 ///
 /// 任何不支持的形态（字段/调用/数组/分配/intrinsic/monitor/异常/switch/
-/// 浮点/对象引用/单独 Compare 等）整体失败并填 reason——不生成半成品。
+/// 浮点/对象引用/单独 Compare 等）整体失败并填 reason，不生成半成品。
 #pragma once
 
 #include "mj2x/backend/vmx64/vmx64_opcode.hpp"
