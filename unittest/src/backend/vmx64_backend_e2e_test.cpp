@@ -284,9 +284,11 @@ TEST_F(Vmx64BackendE2E, XmakeProjectExecMatchesJvmBaseline)
     const fs::path errTxt = dir / "driver_stderr.txt";
     {
         std::ofstream out(ps1);
+        // 不带 -XX 系开关：CreateCoredumpOnCrash 是 JDK 9+ 的选项，JDK 8 的
+        // VM 直接拒启（"Unrecognized VM option"），越界门控交给 WaitForExit。
         out << "$env:MORPHER_DLL = $args[0]\n"
             << "$p = Start-Process -FilePath $args[1] "
-               "-ArgumentList '-XX:-CreateCoredumpOnCrash','-cp',$args[2],'Driver' "
+               "-ArgumentList '-cp',$args[2],'Driver' "
                "-WorkingDirectory $args[2] -NoNewWindow "
                "-RedirectStandardOutput $args[3] -RedirectStandardError $args[4] -PassThru\n"
             << "if (-not $p.WaitForExit(120000)) {\n"

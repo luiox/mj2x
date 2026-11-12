@@ -5,6 +5,7 @@
 //   - compileJava：javac 编译（带 -encoding UTF-8）
 //   - runJavaMain：java 运行 main 类
 //   - probeClang：clang 探测（PATH 优先 + 常见安装位置，#1122 可见化）
+//   - probeJdk 附带 javac major 版本探测（skipOnJdkBelow 版本门的底层）
 //
 // JDK/MSVC 探测本身（JAVA_HOME 解析、vcvarsall 定位等）已在 libjdk_finder，
 // 产品代码（mj2x-cli --compile）与测试代码共用同一份探测，本文件不再重复。
@@ -142,6 +143,7 @@ inline ExecResult runBat(const std::vector<std::string>& lines)
     else if (WIFSIGNALED(status)) r.exitCode = 128 + WTERMSIG(status);
     else r.exitCode = status;
 #endif
+    r.out = test::stripJvmNativeAccessWarnings(r.out);
     std::error_code ec;
     fs::remove(script, ec);
     return r;
@@ -158,7 +160,36 @@ struct JdkToolchain
     fs::path                   java;           // <home>/bin/java(.exe)
     fs::path                   jdkInclude;     // <home>/include（native 测试可校验 jni.h）
     fs::path                   jdkIncludeWin;  // <home>/include/win32
+    int                        majorVersion = 0;  // javac major（8/9/.../25；不可用时 0）
 };
+
+/// 解析 `javac -version` 输出里的 major 版本号：旧版本线是
+/// "javac 1.8.0_x"（取第二段 8），9+ 是 "javac N.0.x"（取第一段 N）。
+/// 找不到 "javac" 前缀或后随数字时返回 0（调用方按不可用处理）。
+inline int parseJavacMajor(const std::string& out)
+{
+    const size_t pos = out.find("javac");
+    if (pos == std::string::npos) return 0;
+    size_t i = pos + 5;
+    while (i < out.size() && (out[i] == ' ' || out[i] == '\t')) ++i;
+    const auto readNumber = [&]() -> int {
+        if (i >= out.size() || out[i] < '0' || out[i] > '9') return -1;
+        int value = 0;
+        while (i < out.size() && out[i] >= '0' && out[i] <= '9') {
+            value = value * 10 + (out[i] - '0');
+            ++i;
+        }
+        return value;
+    };
+    const int first = readNumber();
+    if (first < 0) return 0;
+    if (first == 1 && i < out.size() && out[i] == '.') {
+        ++i;
+        const int second = readNumber();
+        if (second > 0) return second;
+    }
+    return first;
+}
 
 /// probeJdk 的可选配置（透传给 jdk_finder::find_jdk）。
 struct ProbeOptions
@@ -187,6 +218,15 @@ inline JdkToolchain probeJdk(const ProbeOptions& opts = {})
     if (tc.javac.empty() || tc.java.empty()) {
         tc.available = false;
         tc.reason    = "javac 或 java 不存在: " + tc.javaHome.string();
+        return tc;
+    }
+    // 版本探测：javac -version 解析 major（供 skipOnJdkBelow 版本门）；解析
+    // 失败按不可用处理——版本不明的 JDK 不能承担"语法档位"判断。
+    const auto versionRun = runBat({q(tc.javac) + " -version"});
+    tc.majorVersion       = (versionRun.exitCode == 0) ? parseJavacMajor(versionRun.out) : 0;
+    if (tc.majorVersion <= 0) {
+        tc.available = false;
+        tc.reason    = "javac -version 输出无法解析: " + versionRun.out;
         return tc;
     }
     tc.available = true;

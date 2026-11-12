@@ -85,6 +85,56 @@ inline std::filesystem::path getTempOutPath(const std::string& filename)
     return ca::test::temp_out_path(filename);
 }
 
+/// 剔除 JDK 24+ 对 System::load 的受限方法告警块（stderr，经 2>&1 混进合并
+/// 输出）：四行固定文案 + 紧随的一个空行。JDK 8/17/21 不产生该告警，输出
+/// 原样返回。被测产物行为是"载入 native 库后跑业务"，这组告警与产物无关，
+/// 不剔除会让精确比对与差分对拍在 JDK 24+ 上全数误红；子进程捕获点（runBat/
+/// 各测试本地 runScript）统一在收口处调用。
+inline std::string stripJvmNativeAccessWarnings(const std::string& out)
+{
+    static const char* const kPrefixes[] = {
+        "WARNING: A restricted method in ",
+        "WARNING: java.lang.System::load",
+        "WARNING: Use --enable-native-access=",
+        "WARNING: Restricted methods will be blocked ",
+    };
+    const auto isWarningLine = [](const std::string& line) {
+        for (const char* prefix : kPrefixes) {
+            if (line.rfind(prefix, 0) == 0) return true;
+        }
+        return false;
+    };
+    std::string filtered;
+    filtered.reserve(out.size());
+    size_t pos          = 0;
+    bool   dropNextBlank = false;
+    while (pos < out.size()) {
+        const size_t eol   = out.find('\n', pos);
+        const bool   hasNl = eol != std::string::npos;
+        const size_t end   = hasNl ? eol : out.size();
+        std::string  line  = out.substr(pos, end - pos);
+        std::string  bare  = line;
+        while (!bare.empty() && bare.back() == '\r') bare.pop_back();
+        if (isWarningLine(bare)) {
+            dropNextBlank = true;
+        }
+        else {
+            const bool blank = bare.find_first_not_of(" \t") == std::string::npos;
+            if (dropNextBlank && blank) {
+                dropNextBlank = false;
+            }
+            else {
+                filtered += line;
+                if (hasNl) filtered += '\n';
+                dropNextBlank = false;
+            }
+        }
+        if (!hasNl) break;
+        pos = eol + 1;
+    }
+    return filtered;
+}
+
 std::string           getBuildModeName();
 
 /// 定位同 buildir 的伴生构建产物（如 mj2x-cli）。优先按测试可执行文件自身位置

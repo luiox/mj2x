@@ -262,6 +262,8 @@ protected:
         // 1. 写 Java 源并编译。
         fs::path srcDir = dir / "src";
         fs::create_directories(srcDir, ec);
+        // JDK 8 的 javac 不自动创建 -d 目录（JDK 9+ 才会），先建目录再编译。
+        fs::create_directories(dir / "classes", ec);
         const auto program = makeWholeProgram();
         std::string javacCmd = q(tc_.javac) + " -d " + q(dir / "classes") + " ";
         for (const auto& [name, source] : program.classes) {

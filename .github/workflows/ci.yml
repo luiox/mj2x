@@ -126,6 +126,20 @@ jobs:
       - name: Run runtime tests
         run: xmake run mj2x_rt_test --gtest_brief=1
 
+      # 产物给 e2e-matrix 矩阵腿跨机直跑：mj2x-cli 是 E2E 全链的翻译腿
+      # （javac→mj2x→java，测试内 spawn），fake_zig/fake_xmake 供 cli 负向
+      # 用例不退化成 skip。tar 打包保执行位（upload-artifact 不保留 POSIX
+      # 权限位），同镜像族 runner 可直跑。
+      - name: Pack test binaries (e2e-matrix 消费)
+        run: tar czf mj2x-testbin.tar.gz -C build/linux/x64/release mj2x-cli mj2x_unittest mj2x_integration_test mj2x_fake_zig mj2x_fake_xmake
+
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: mj2x-testbin-ubuntu-latest
+          path: mj2x-testbin.tar.gz
+          retention-days: 7
+
   build-and-test-windows:
     name: build & test (windows)
     runs-on: windows-latest
@@ -189,3 +203,116 @@ jobs:
       - name: Run runtime tests
         shell: bash
         run: build/windows/x64/release/mj2x_rt_test.exe --gtest_brief=1
+
+      # 产物给 e2e-matrix 矩阵腿跨机直跑：mj2x-cli 是 E2E 全链的翻译腿
+      # （javac→mj2x→java，测试内 spawn），fake_zig/fake_xmake 供 cli 负向
+      # 用例不退化成 skip。全静态 MT 链接，无运行时 DLL 解析需求。
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: mj2x-testbin-windows-latest
+          path: |
+            build/windows/x64/release/mj2x-cli.exe
+            build/windows/x64/release/mj2x_unittest.exe
+            build/windows/x64/release/mj2x_integration_test.exe
+            build/windows/x64/release/mj2x_fake_zig.exe
+            build/windows/x64/release/mj2x_fake_xmake.exe
+          retention-days: 7
+
+  # e2e-matrix：JDK 版本矩阵复跑主作业的全量测试二进制，保证 E2E 全链
+  # （javac 编 fixture → mj2x 翻译 → java 跑产物）在 JDK 8/21/25 上工作。
+  # 不重编产品：产物来自 needs 的主构建作业。JDK 17 由主作业两腿覆盖，
+  # 不进矩阵。JDK 8 腿对 JDK 8 之后语法语料经 test_helper 的 skipOnJdkBelow
+  # 版本门显式跳过（unittest/src/integration/java_corpus_e2e_test.cpp
+  # corpusMinJdk 档位表），官方 SKIP 不算失败。测试内 spawn xmake 编生成
+  # 工程（见上方 windows 直调注释），故 xmake/luiox-repo/xrepo 缓存照常置备。
+  e2e-matrix:
+    name: e2e matrix (${{ matrix.os }} jdk${{ matrix.jdk }})
+    needs: [build-and-test-linux, build-and-test-windows]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        jdk: ['8', '21', '25']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK (matrix leg)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: v3.0.9
+          actions-cache-folder: '.xmake-cache'
+
+      - name: Cache xrepo packages (linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.xmake/packages
+            ~/.local/share/xmake
+          key: mj2x-xrepo-linux-x64-xmake309v2-${{ hashFiles('xmake.lua', 'xmake/**') }}
+          restore-keys: |
+            mj2x-xrepo-linux-x64-xmake309v2-
+
+      - name: Cache xrepo packages (windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/.xmake/packages
+          key: mj2x-xrepo-windows-x64-xmake309v2-${{ hashFiles('xmake.lua', 'xmake/**') }}
+          restore-keys: |
+            mj2x-xrepo-windows-x64-xmake309v2-
+
+      - name: Register luiox-repo
+        shell: bash
+        run: xmake repo --add luiox-repo https://github.com/luiox/luiox-repo.git
+
+      - name: Download test binaries (linux)
+        if: runner.os == 'Linux'
+        uses: actions/download-artifact@v4
+        with:
+          name: mj2x-testbin-ubuntu-latest
+          path: build/linux/x64/release
+
+      - name: Extract test binaries (linux)
+        if: runner.os == 'Linux'
+        run: |
+          tar xzf build/linux/x64/release/mj2x-testbin.tar.gz -C build/linux/x64/release
+          rm build/linux/x64/release/mj2x-testbin.tar.gz
+
+      - name: Download test binaries (windows)
+        if: runner.os == 'Windows'
+        uses: actions/download-artifact@v4
+        with:
+          name: mj2x-testbin-windows-latest
+          path: build/windows/x64/release
+
+      # 直调形态与主作业 windows 腿一致（不走 xmake run，见主作业注释），
+      # cwd = 仓根，资源定位与产物伴生定位（getBuildTargetPath）均成立。
+      # 不设 gtest filter：宁多勿漏，全量二进制本身带环境/版本 skip 门。
+      - name: Run unit tests (linux)
+        if: runner.os == 'Linux'
+        run: build/linux/x64/release/mj2x_unittest --gtest_brief=1
+
+      - name: Run integration tests (linux)
+        if: runner.os == 'Linux'
+        run: build/linux/x64/release/mj2x_integration_test --gtest_brief=1
+
+      - name: Run unit tests (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: build/windows/x64/release/mj2x_unittest.exe --gtest_brief=1
+
+      - name: Run integration tests (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: build/windows/x64/release/mj2x_integration_test.exe --gtest_brief=1

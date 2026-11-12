@@ -169,14 +169,25 @@ TEST_F(LambdaSynthPackageE2E, PackagePrivateSamLambdaSurvivesRegcNative)
         ASSERT_TRUE(out.good());
     }
     const fs::path classesDir = dir / "classes";
+    // JDK 8 的 javac 不自动创建 -d 目录（JDK 9+ 才会），先建目录再编译。
+    fs::create_directories(classesDir, ec);
     const auto compile = runBat({q(tc_.jdk.javac) + " -encoding UTF-8 -d " + q(classesDir) + " " +
                                  q(srcDir / "Main.java")});
     ASSERT_EQ(compile.exitCode, 0) << compile.out;
 
+    // JDK 8 的 jar 无 --create/--main-class 现代命令面；Main-Class 用 cfm +
+    // manifest 文件表达（java -jar 入口需要），JDK 8/9+ 语法一致。manifest
+    // 行按规范以 CRLF 结尾。
+    const fs::path manifest = dir / "manifest.mf";
+    {
+        std::ofstream out(manifest, std::ios::binary);
+        out << "Main-Class: demo1182.Main\r\n";
+        ASSERT_TRUE(out.good());
+    }
     const fs::path inJar = dir / "lambda-synth-input.jar";
     const auto jarCreate =
-        runBat({q(tc_.jarTool) + " --create --file=" + q(inJar) +
-                " --main-class demo1182.Main -C " + q(classesDir) + " ."});
+        runBat({q(tc_.jarTool) + " cfm " + q(inJar) + " " + q(manifest) + " -C " +
+                q(classesDir) + " ."});
     ASSERT_EQ(jarCreate.exitCode, 0) << jarCreate.out;
 
     // ---- 2) 基线 JVM 行为（样本本身正确）----
@@ -263,14 +274,24 @@ TEST_F(LambdaSynthPackageE2E, DefaultPackageSamSurvivesRegcNative)
         ASSERT_TRUE(out.good());
     }
     const fs::path classesDir = dir / "classes";
+    // JDK 8 的 javac 不自动创建 -d 目录（JDK 9+ 才会），先建目录再编译。
+    fs::create_directories(classesDir, ec);
     const auto compile =
         runBat({q(tc_.jdk.javac) + " -encoding UTF-8 -d " + q(classesDir) + " " + q(srcFile)});
     ASSERT_EQ(compile.exitCode, 0) << compile.out;
 
+    // JDK 8 的 jar 无 --create/--main-class 现代命令面；Main-Class 用 cfm +
+    // manifest 文件表达（java -jar 入口需要），JDK 8/9+ 语法一致。
+    const fs::path manifest = dir / "manifest.mf";
+    {
+        std::ofstream out(manifest, std::ios::binary);
+        out << "Main-Class: Main\r\n";
+        ASSERT_TRUE(out.good());
+    }
     const fs::path inJar = dir / "lambda-deflt-input.jar";
     const auto jarCreate =
-        runBat({q(tc_.jarTool) + " --create --file=" + q(inJar) +
-                " --main-class Main -C " + q(classesDir) + " ."});
+        runBat({q(tc_.jarTool) + " cfm " + q(inJar) + " " + q(manifest) + " -C " +
+                q(classesDir) + " ."});
     ASSERT_EQ(jarCreate.exitCode, 0) << jarCreate.out;
 
     const auto baseline = runBat({q(tc_.jdk.java) + " -cp " + q(classesDir) + " Main"});

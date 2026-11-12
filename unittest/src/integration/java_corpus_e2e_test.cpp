@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "jdk_fixture.hpp"
+#include "jdk_fixture_gtest.hpp"
 #include "jdk_finder/jdk_finder.hpp"
 #include "test_helper.hpp"
 
@@ -241,6 +242,24 @@ CorpusRunResult runOnce(const CorpusToolchain& tc, const fs::path& dir, bool wit
     return {normalizeOutput(result.out), result.exitCode};
 }
 
+/// 语料所需最低 JDK major（JDK 8 之后语法档位；未列条目 = JDK 8 即可编译）。
+/// 与 test_resource/java_corpus 语料同步维护：新增 JDK 8 之后语法的 .java 时
+/// 在此登记档位，消费矩阵腿（JDK 8/21/25）据此 skipOnJdkBelow 跳过。
+int corpusMinJdk(const std::string& name)
+{
+    static const std::map<std::string, int> kMinJdk = {
+        {"InterfaceDefaultMethods", 9},   // 接口私有方法
+        {"TryWithResources", 9},          // effectively-final 资源（try (r)）
+        {"JsonLite", 10},                 // var 局部变量推断
+        {"SwitchExpressions", 14},        // switch 表达式（箭头臂/yield）
+        {"TextBlocksAndEscapes", 15},     // 文本块
+        {"RecordsShapes", 16},            // record
+        {"SealedShapes", 17},             // sealed/permits + instanceof 模式匹配
+    };
+    const auto it = kMinJdk.find(name);
+    return it == kMinJdk.end() ? 8 : it->second;
+}
+
 struct CorpusMatrixParam
 {
     CorpusCase    aCase;
@@ -292,7 +311,8 @@ protected:
     void runCase(const CorpusMatrixParam& param)
     {
         const auto& aCase = param.aCase;
-        const auto  skipped = exclusions_.equal_range(aCase.name);
+        if (skipOnJdkBelow(toolchain_.jdk, corpusMinJdk(aCase.name))) return;
+        const auto skipped = exclusions_.equal_range(aCase.name);
         for (auto it = skipped.first; it != skipped.second; ++it) {
             if (it->second.first == backendName(param.backend)) {
                 GTEST_SKIP() << "excluded: " << it->second.second;
@@ -361,6 +381,7 @@ protected:
 
     void runCase(const CorpusCase& aCase)
     {
+        if (skipOnJdkBelow(toolchain_.jdk, corpusMinJdk(aCase.name))) return;
         struct Column
         {
             std::string name;
