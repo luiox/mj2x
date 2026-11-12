@@ -85,7 +85,7 @@
      - **不匹配**\ （回通用 JNI 派发，G-1 行为保持）
      - 匹配
 
-- 配置校验错误**不会**\ 静默回退通用派发——错位配置直接暴露（RegC emitter Unsupported → 方法 skip；StackC ``compileMethod``\ 预检 fail-closed；VMC4 encode 失败）。
+- 配置校验错误**不会**\ 静默回退通用派发，错位配置直接暴露（RegC emitter Unsupported → 方法 skip；StackC ``compileMethod``\ 预检 fail-closed；VMC4 encode 失败）。
 - instance 调用点匹配时校验 RegIR/SSA 参数个数 = desc 参数数 + 1（receiver）；错位判 malformed，整方法 fail-closed。
 
 .. _user-intrinsic-abi:
@@ -127,7 +127,7 @@ ABI 契约
 receiver 形态（passReceiver=true）
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-receiver 是调用点现成的局部引用，**不复制、不增减引用计数**\ ，以各后端 REF 值表示的原生形态直传——三者在 ABI 位型上同型（jni.h 中 ``jobject``\ 即 ``void*``\ ）：
+receiver 是调用点现成的局部引用，**不复制、不增减引用计数**\ ，以各后端 REF 值表示的原生形态直传，三者在 ABI 位型上同型（jni.h 中 ``jobject``\ 即 ``void*``\ ）：
 
 .. list-table::
    :header-rows: 1

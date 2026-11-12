@@ -1,148 +1,136 @@
 # dev_plan：mj2x 施工计划
 
-> 本文件只保留**待做项**。已完成的工作不写日志——git log 即记录；重要的机制与契约写进设计文档（`doc/techniques/`）。
+> 本文件只保留**待做项**。已完成的工作不写日志,git log 即记录;重要的机制与契约写进设计文档(`doc/techniques/`)。
 
 ## 待做项
 
-### A. VMC4 升级档 S2（P2）
+### A. VMC4 升级档（P2）
 
-- period 语义变义（case 标签周期轮换）已实现（#844）且 mjdbg N-7 对抗闭环就绪（五形态识别 + period 变义 label 表提取/case 常量反查 + computed_goto 产物修复，见 vmc4 红队契约 §6）。剩余：开 `feat/mj2x-vmc4-mutation` 的 S2 对抗验证 + 红队契约扩展（变义强度模型同批）。
+- period 语义变义（case 标签周期轮换）已实现（#844）,mjdbg 侧的检测配套已就绪（五形态识别、period 变义 label 表提取、case 常量反查、computed_goto 产物修复,见 mjdbg 仓 vmc4 攻击测试契约 §6）。剩余:在 `feat/mj2x-vmc4-mutation` 分支做升级档的闭环验证,并扩展攻击测试契约（含变义强度模型）。
 
 ### B. mj2x 自建测试集（#820）
 
-- 步骤 6 待做：mjdbg 对抗闭环（每用例 expected trace surface + weakness report，与 mjdbg 工具端联动）。
-- libjbc 迁移自带回归门长期驻留（原 plan_libjbc_migration §六，已随迁移批 2/批 6 落地）：round-trip 字节保真对拍门、maxs/SMT 与 javac 对拍门——后续测试清理不得顺手删除（原 plan_libjbc_migration 归档已删，来历见 git log）。
+- 步骤 6 待做:mjdbg 闭环验证（每用例期望 trace 输出 + weakness report,与 mjdbg 工具端联动）。
+- libjbc 迁移自带的回归检查长期保留:round-trip 字节保真对照检查、maxs/SMT 与 javac 对照检查,后续测试清理不得顺手删除（原 plan_libjbc_migration 归档已删,来历见 git log）。
 
 ### C. 记录不阻塞（P3）
 
-- VMC4 检查点指令级异常匹配（javac 字节码下块粒度==指令粒度，无实际缺口）、 agent 特征深度检测（javaagent MANIFEST 扫描 / JDWP 探测）、异常表多 region 匹配顺序测试扩展、runtime C++ 版与 crt C 版检测面统一。
-- JVMRTDP 调研（issue #847）：纯 Java 面 JVMTI 工具，对 mj2x 保护产物（native 化/VMC4）**无实质威胁**。观察 a：agent 用 manual mapping 加载可绕过「已加载模块枚举」（Windows 侧；capability 快照 + 启动参数扫描仍覆盖，记录不实施）；观察 b：RegC 无字符串加密变换（对标 jvmtp `obfuscation.strings`），敏感字符串场景需加密模块（P3）。
-- 枚举合成方法（values/valueOf）站点 intrinsic 登记只发生在枚举类自身转换时点：调用方类先于枚举类编译时登记未发生，调用点退通用 JNI 路径（fail-closed，仅损优化不损正确性；根治需编译序无关的登记时机）。
+- VMC4 检查点指令级异常匹配（javac 字节码下块粒度==指令粒度,无实际缺口）、 agent 特征深度检测（javaagent MANIFEST 扫描 / JDWP 探测）、异常表多 region 匹配顺序测试扩展、runtime C++ 版与 crt C 版检测面统一。
+- JVMRTDP 调研（issue #847）:纯 Java 面 JVMTI 工具,对 mj2x 保护产物（native 化/VMC4）**无实质威胁**。观察 a:agent 用 manual mapping 加载可绕过已加载模块枚举的检测（Windows 侧;capability 快照 + 启动参数扫描仍覆盖,记录不实施）;观察 b:RegC 无字符串加密变换（对标 jvmtp `obfuscation.strings`）,敏感字符串场景需加密模块（P3）。
+- 枚举合成方法（values/valueOf）站点 intrinsic 登记只发生在枚举类自身转换时点:调用方类先于枚举类编译时登记未发生,调用点退通用 JNI 路径（fail-closed,仅损优化不损正确性;根治需编译序无关的登记时机）。
 
 ### D. 配置系统 GUI 工具（P2）
 
-- 配置系统 P0+P1 已完成（见归档索引）。设计已完成（GUI 配置工具设计：vite+vue 方案、schema 驱动渲染、联动/校验/导出/可选 sidecar 执行）。剩余：P1 实现（表单渲染 + 校验 + 导出）。
+- 配置系统的前两阶段已完成（见归档索引）。设计已完成（GUI 配置工具设计:vite+vue 方案、schema 驱动渲染、联动/校验/导出/可选 sidecar 执行）。剩余:实现表单渲染、校验与导出。
 
-### F. 整类下沉（P3，记录不阻塞）
+### F. 整类下沉（P3,记录不阻塞）
 
-- roadmap §2 表格行已列（算法密集类整体 native 化，边界保留 JNI）；GUI 设计已预留"方法/类选择"扩展点。条件：无反射、无动态类加载、intrinsic 覆盖充分；先做单类试点再铺开。
+- roadmap §2 表格行已列（算法密集类整体 native 化,边界保留 JNI）;GUI 设计已预留方法/类选择扩展点。条件:无反射、无动态类加载、intrinsic 覆盖充分;先做单类试点再铺开。
 
-### H. indy 原生派发 backend 侧合流（RegC 面已落地）
+### H. indy 原生派发 backend 侧合流（RegC 面已完成）
 
-- 管线层判定原型 + 设计文档已落地（indy 原生派发设计： §2 判定树 / §3 缓存 / §4 回退 / §6 接口提案）。
-- P1（判定载荷单源化）、P2（字段/record 直派）、P3（TU 级直派缓存 + 惰性解析）已落地；P4（运行期破解）保持提案，随合流批评估。
-- 剩余：P5 stackc F1/F2 分支、P7 vmc4 编码前改写式、P10 llvm 模块级缓存分派 ——三后端消费同一 MIR 载荷，发射面各自适配。
-- 注：P6（stackc bootstrap 结果缓存）经核已有等价物（stackc_mir_invoke.cpp indyTargetCache，static jobject per call-site）， **无需实施**（设计文档写作时点误判，2026-09-18 审查订正）。
-- 注：F1 直派 engagement 当前仅覆盖「indy 描述符即字段形态」站点（javac 产物不会出现，现实站点走 helper 零回归）——收益兑现需 D1 静态求值或 bootstrap 白名单扩展（发射面无需再动），与 P4 同批评估。
-- 注：Random 预检 registry 标志位化已单独落地，不再含入合流批。
+- 管线层判定原型 + 设计文档已完成（indy 原生派发设计: §2 判定树 / §3 缓存 / §4 回退 / §6 接口提案,下列 P/F 编号见该提案）。
+- P1（判定载荷单源化）、P2（字段/record 直派）、P3（TU 级直派缓存 + 惰性解析）已完成;P4（运行期破解）保持提案,随合流工作评估。
+- 剩余:P5 stackc 分支、P7 vmc4 编码前改写式、P10 llvm 模块级缓存分派,三后端消费同一 MIR 载荷,发射面各自适配。
+- 注:P6（stackc bootstrap 结果缓存）经核已有等价物（stackc_mir_invoke.cpp indyTargetCache,static jobject per call-site）,**无需实施**。
+- 注:F1 直派 engagement 当前仅覆盖 indy 描述符即字段形态的站点（javac 产物不会出现,现实站点走 helper 零回归）,收益兑现需 D1 静态求值或 bootstrap 白名单扩展（发射面无需再动）,与 P4 一起评估。
+- 注:Random 预检 registry 标志位化已单独完成,不再含入合流范围。
 
-### H-2. 三后端共享层抽取：排期结论
+### H-2. 三后端共享层抽取:排期结论
 
-**结论：不在与发射面改动同窗口实施；indy 解析载荷单源化（P1）已作先导件落地。**
+**结论:不在与发射面改动同窗口实施;indy 解析载荷单源化（P1）已先行完成。**
 
-- 依据：四个子批均需设计决策 + 全量回归，且抽取面与进行中的发射面改动高度重叠，churn 窗口叠结构性抽取语义风险最大；indy 解析载荷单源化（P1）已作为先导件落地，其余待合流批完成后启动。
-- 触发条件（重排期）：本 PR 合入 + indy P5-P7/P10 三后端消费合流完成后，按映射表 → RegisterNatives → indy 解析收尾 → 多维数组 的子批顺序独立排期，每子批独立提交 + 全量回归。
+- 依据:四个子项均需设计决策 + 全量回归,且抽取面与进行中的发射面改动高度重叠,同一窗口内叠加结构性抽取的语义风险最大;其余子项待合流完成后启动。
+- 触发条件（重排期）:indy P5-P7/P10 三后端消费合流完成后,按映射表 → RegisterNatives → indy 解析收尾 → 多维数组 的子项顺序独立排期,每子项独立提交 + 全量回归。
 
 ### G. 全线审查遗留（待评估/待实施）
 
-- rt_protect Linux rwx 检测疑似对宿主 JVM CodeCache（rwxp）误报（force 下自毁）；需 Linux 真机验证后按 safe-env 模式排除 libjvm 自身映射——现有 exec 级测试全在 Windows，掩盖此问题。 **验证（2026-10-29，WSL2 Ubuntu 24.04 + OpenJDK 17.0.20）**：`/proc/PID/maps` 探针——静息态与 2 亿次迭代 JIT 满载态均**零 rwx 段**（perm 直方图仅 r--p/rw-p/r-xp/r--s；CodeHeap 为 r-x，无 rwxp 形态）。疑点不成立于现代 HotSpot 栈（原疑点大概来自 JDK8/11 时代形态），`mj2x_rt_maps_has_rwx` 在目标环境不会误触发。检测面保持现状；若未来遇受影响环境（旧 JDK/其他 JVM/异常内核），再按 safe-env 模式做 libjvm 自身映射排除的细化。
-- RegC 进程级缓存并发残留：jclass 与 methodID 两写间的短暂错配窗（需原子对或 seqlock 才能闭）、字符串字面量 32 槽缓存的瞬时覆盖竞态（越界安全，维持既有注记）；并发契约见 `mj2x_regc_runtime.c` 文件头。
-- ~~CLI 外部进程调用（编译器/xmake/pack hook）无超时~~ **已销项（2026-10-15，P1-4）**： `--native-timeout`（默认 900s，0=∞）+ `native_process_timeout.hpp` 策略单源覆盖全部外呼点；Windows taskkill 整树收割防 EOF 死锁。libca 0.0.15 已有超时基元，原挂账 "需 libca 扩展"不成立。
-- 三后端共享层抽取（结构性最大项）：JVM 类型格点映射表（10+ 张平行）、 RegisterNatives 基建、indy bootstrap 运行时解析（3 份）、多维数组分配（3 份）；按 H-2 触发条件独立排期。
-- ~~backend.hpp 收拾：Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位~~ **已销项（2026-10-24）**：`BackendResult::Kind` 删 BINARY 死枚举 + 无人消费的 `data` 字段，新增 `LLVM_IR`（LLVM 后端产物不再语义错位挂 C_SOURCE，backend.hpp 契约文档同步）。剩余一项仍挂账：finalize 无错误通道（三后端失败行为不一致）。 ~~接口默认方法能力边界~~ **已修（2026-10-26）**：JLS 9.4/JVMS 4.6 禁止接口方法带 ACC_NATIVE——MarkAll / annotation / prefix 三条标记路径统一整体跳过接口类（default/static/私有接口方法保持字节码），InitClinitMover 同步跳过（不再产出永不标记的 `__regc_*` 死静态方法）；契约测试 InterfaceNativeSkipTest 四用例。
-- RegC intrinsic 判定热点：每条 Call 重复 match 6-10 次（含多次 std::string 构造与全表线性扫），应函数级一次算好 decision；registry 视图不统一（analyze 走 builtins、emit 走用户 registry，覆盖判定有漂移风险）。
-- 性能遗留：SSA 构建 O(n²)（fallthroughBlock 线性扫 / findBlockByLabel / reaching_def 无邻接表）；JAR 输出每条目全量拷贝；llvmir GlobalStringTable::intern 线性查。
-- CLI 无下界整数参数负值回绕（2026-10-06 收口：Int/UInt64/Hex 及手写 vmc4-seed、native-lib-key 校验器恒拒负值并给合法范围提示，schema minimum 同源；豁免清单为空，现存整数参数均无负值语义）。
-- 死代码清理批次：cli dispatcher 别名死分支核查（2026-10-06 核查：唯一别名面 `--backend cbackend/c` 有 cli_test 用例 + user_guide.md + 双语翻译三重活引用，属文档化的旧脚本兼容契约，非死代码，跳过；MONITOR_EXIT 死枚举已删）。
-- 挂账（libs 层，跨界）：`jbytecode::core::Type::getArgumentTypes("")` 对空描述符做 `byte_at(1)` 越界读，异常类型随越界字节内容漂移；mj2x 侧 indy_bootstrap_plan 已加空串守卫确定性抛 invalid_argument，libs 层其余调用方的暴露面待共享层统一收口。
-- 约定基调：std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层各自为政，需在 AGENTS 层面定一次豁免边界。
+- rt_protect Linux rwx 检测曾疑似对宿主 JVM CodeCache（rwxp）误报（force 下自毁）。已在 WSL2 Ubuntu 24.04 + OpenJDK 17.0.20 实测排除:静息态与 JIT 满载态 `/proc/PID/maps` 均无 rwx 段,现代 HotSpot 不出现该形态,`mj2x_rt_maps_has_rwx` 在目标环境不会误触发。检测面保持现状;若未来遇受影响环境（旧 JDK/其他 JVM/异常内核）,再按 safe-env 模式细化 libjvm 自身映射排除。
+- RegC 进程级缓存并发残留:jclass 与 methodID 两写间的短暂错配窗（需原子对或 seqlock 才能闭）、字符串字面量 32 槽缓存的瞬时覆盖竞态（越界安全,维持既有注记）;并发契约见 `mj2x_regc_runtime.c` 文件头。
+- ~~CLI 外部进程调用（编译器/xmake/pack hook）无超时~~ **已完成（2026-10-15）**: `--native-timeout`（默认 900s,0=不限时）覆盖全部外呼点;Windows 上 `taskkill /T /F` 先终止整棵进程树再回收,避免孙进程持有管道写端导致的死锁。libca 0.0.15 已有超时基元,策略与文案单源在 `mj2x-cli/src/native_process_timeout.hpp`。
+- 三后端共享层抽取（结构性最大项）:JVM 类型格点映射表（10+ 张平行）、 RegisterNatives 基建、indy bootstrap 运行时解析（3 份）、多维数组分配（3 份）;按 H-2 触发条件独立排期。
+- ~~backend.hpp 的 Kind::BINARY 死枚举、llvmir `.ll` 挂 C_SOURCE 语义错位~~ **已完成（2026-10-24）**:`BackendResult::Kind` 删 BINARY 死枚举与无人消费的 `data` 字段,新增 `LLVM_IR`,backend.hpp 契约文档同步。剩余一项仍待办:finalize 无错误通道（三后端失败行为不一致）。~~接口默认方法能力边界~~ **已修（2026-10-26）**:JLS 9.4/JVMS 4.6 禁止接口方法带 ACC_NATIVE,MarkAll / annotation / prefix 三条标记路径统一整体跳过接口类（default/static/私有接口方法保持字节码）,InitClinitMover 同步跳过;契约测试 InterfaceNativeSkipTest 四用例。
+- RegC intrinsic 判定热点:每条 Call 重复 match 6-10 次（含多次 std::string 构造与全表线性扫）,应函数级一次算好 decision;registry 视图不统一（analyze 走 builtins、emit 走用户 registry,覆盖判定有漂移风险）。
+- 性能遗留:SSA 构建 O(n²)（fallthroughBlock 线性扫 / findBlockByLabel / reaching_def 无邻接表）;JAR 输出每条目全量拷贝;llvmir GlobalStringTable::intern 线性查。
+- CLI 无下界整数参数负值回绕已修复（2026-10-06:Int/UInt64/Hex 及手写 vmc4-seed、native-lib-key 校验器恒拒负值并给合法范围提示,schema minimum 同源;豁免清单为空,现存整数参数均无负值语义）。
+- 死代码清理:cli dispatcher 别名死分支核查（2026-10-06:唯一别名面 `--backend cbackend/c` 有 cli_test 用例 + doc/user-guide.rst + 双语翻译三处仍在使用,属文档化的旧脚本兼容契约,非死代码,跳过;MONITOR_EXIT 死枚举已删）。
+- 待办（libs 层,跨仓）:`jbytecode::core::Type::getArgumentTypes("")` 对空描述符做 `byte_at(1)` 越界读,异常类型随越界字节内容漂移;mj2x 侧 indy_bootstrap_plan 已加空串守卫确定性抛 invalid_argument,libs 层其余调用方的暴露面待共享层统一修复。
+- 约定基调:std::string vs Utf8String、int vs i32 在 CLI/codegen/后端三层各自为政,需在 AGENTS 层面定一次豁免边界。
 
-### J. 待办池（2026-10-02 冻结收官盘点；后续开卡从这里取）
+### J. 待办池（后续开工从这里取）
 
-**工程挂账（小项，均可独立成卡）**
+**工程待办（小项,均可独立开工）**
 
-1. llc / clang++ SKIP 门探测面收口（2026-10-06 调研收窄：原"cl/gcc/zig 列统一注入面"不成立——三者非 clang 家族，不属 clangPathPrelude 注入面）。仅 LLVM 标准安装未上 PATH / Homebrew llvm 未链接环境受益，已建档环境增益为零且需动 #1191 门禁双键基线——待此类环境入档再开卡。
-2. isGeneratedRuntimeClass 用户手写 `Lambda$N` 理论误判：名字识别法对用户自定义同名类的理论冲突，低概率，记录在案。
-3. ~~EnumSemCheck E2E 门禁力~~（2026-10-29 收卡）：前提失效——#1193 内联缓存（beforeCompile 预解析）与类序解耦，三处 Color.valueOf 调用点照常内联进 EnumSem.check（实测 CLI `inline 3 calls`；产物为内联进来的 javac valueOf 体，Enum.valueOf 2 参调用形态），其中两处在 try 内。变异测试（临时禁用 ssa_inline_passes 保护继承登记）实证 E2E 门禁力：regc 红（挂起异常越过 try 边界）、stackc/vmc4 不受影响、回滚复绿。caller-first 排序变体不再需要；测试文件局限注记同步更新。
-4. N4/N6 dev_plan 历史日志数字微误：PR body 已勘正，本文件日志正文回填（低优先级，纯记录）。
-5. #1194 P3-4：模板 glob 收编 `src/generated/` 下任意 .c/.cpp——目录为 CLI 专有无现风险；若未来开放手工放置需加来源约束。
-6. IndyBootstrapPlanTest.WalkEdgeShapes 非确定性翻车（2026-10-06 T3 评审发现）：`Type::getArgumentTypes("")` 对空描述符自 `byte_at(1)` 起越界读零长串，结果随栈残留字节浮动，同一二进制逐次运行可红可绿（实测 5 连跑 2 红），全量门禁对任意二进制布局变化噪声化。消除判据：libs/libjbytecode 的 type.cpp `getArgumentCount`/`getArgumentTypes` 入口加 `length < 2` 边界检查显式抛 invalid_argument，测试改用合法最小描述符；动共享层需跨线回归。
-7. DEF_HEX 零注册死宏退役（deadcode 批次 T3 评审 P3-1）：param_registry 的 DEF_HEX 宏在 main 上即无任何注册点，负值收口对其补丁属给死代码上锁，与清理主题相悖——删宏或注明口径；对应地，负值收口声明口径应为「DEF_INT/DEF_U64 两类宏 + vmc4-seed/native-lib-key 两支手写校验器」。
+1. llc / clang++ 的 SKIP 判定面缩小（2026-10-06 调研:cl/gcc/zig 非 clang 家族,不属 clangPathPrelude 注入面,原统一注入设想不成立）。仅 LLVM 标准安装未上 PATH / Homebrew llvm 未链接的环境受益;当前已建档环境增益为零,且需动 #1191 检查的双键基线,待此类环境入档再开工。
+2. isGeneratedRuntimeClass 对用户手写 `Lambda$N` 的理论误判:名字识别法对用户自定义同名类存在理论冲突,低概率,记录在案。
+3. ~~EnumSemCheck E2E 检查力~~ 已核实（2026-10-29）:#1193 内联缓存与类序解耦后,三处 Color.valueOf 调用点照常内联进 EnumSem.check;变异测试（临时禁用 ssa_inline_passes 保护继承登记）实证 regc 侧 E2E 能拦住该路径（挂起异常越过 try 边界时 regc 红、stackc/vmc4 不受影响、回滚复绿）。caller-first 排序变体不再需要。
+4. #1194:模板 glob 并入 `src/generated/` 下任意 .c/.cpp,该目录为 CLI 专有,无现风险;若未来开放手工放置需加来源约束。
+5. IndyBootstrapPlanTest.WalkEdgeShapes 非确定性失败（2026-10-06 评审发现）:`Type::getArgumentTypes("")` 对空描述符自 `byte_at(1)` 起越界读零长串,结果随栈残留字节浮动,同一二进制逐次运行可红可绿（实测 5 连跑 2 红）,全量检查对二进制布局变化引入噪声。消除判据:libs/libjbytecode 的 type.cpp `getArgumentCount`/`getArgumentTypes` 入口加 `length < 2` 边界检查显式抛 invalid_argument,测试改用合法最小描述符;动共享层需跨仓回归。
+6. DEF_HEX 零注册死宏退役:param_registry 的 DEF_HEX 宏在 main 上无任何注册点,负值校验对其补丁属给死代码上锁,与清理主题相悖,删宏或注明口径;对应地,负值校验的声明口径为 DEF_INT/DEF_U64 两类宏 + vmc4-seed/native-lib-key 两支手写校验器。
 
-**java_corpus 语料集首曝（2026-10-24，test_resource/java_corpus；修后删 exclusions 行）**
+**test_resource/java_corpus 语料集修复记录（2026-10-24 至 2026-10-29,全部完成,过程见 git log）**
 
-8. ~~lambda bootstrap 类查找~~ **已修（2026-10-26）**：受保护类经 lambda bootstrap 反查自身形态下运行期 `NoClassDefFoundError: class lookup failed`（三后端一致；LambdasCapture 首曝——捕获 + 静态方法引用 + 构造器引用 + 循环捕获组合，lambda_synth 既有 E2E 未覆盖）。根因 = 合成类落点规则：SAM 为**包私有嵌套接口**且不在编译 index（单类输入）时， `pickLambdaSynthHostPackage` 默认落 `mj2x/lambda/`——跨包实现包私有接口 IllegalAccessError。修复 = SAM 不在 index 时按 `$` 拆外围类候选查 index，命中则读外围类 classNode->innerClasses 的**真实 access 位**（ACC_PUBLIC 缺失 → 落 SAM 同包；public 或外围未知 → 维持 mj2x/lambda/），排除仅凭名字猜测访问位的误判面。L1 最小复现三后端一致 + LambdasCapture 三格复绿 + exclusions 清零。
-9. ~~regc 引用值丢 null~~ **已修（2026-10-25 收官，a305796）**：根因主修——ssa_builder 异常边 handlerArgs 在整块翻译完后取 fs.locals，引用块内未完成定义的 SSA 值（`state = state + 10/0` 的 div 抛出时 add 未写）：三后端通用缺陷（stackc 靠操作数栈携带侥幸通过；vmc4 identity 靠上一迭代槽位残留巧合通过；regc 读未写变量 = 0/null——J-9 的 null 形态即此）。修复 = 捕获点移至块入口参数绑定后。ExceptionFlow 三格、 ExceptionEntryState（新增语料）三后端全绿。**残留收官**（数组返回 + for-each 崩溃形态）：真根因 = RegCLocalHelper intrinsic 默认发射把 native 持有的 StringBuilder 寄存器 operandExpr（owner 结构体栈指针）当 jobject 喂 JNI；修复 = fallback 发射对 mutable string 参数先 emitMaterializedStringBuilder 物化（V7 最小复现锁定）。ArraysAllTypes / StringsAndBoxing / LoopCarriedTable 三格 regc 复绿，语料 exclusions 就此清零。
-10. ~~regc LDC 字符串物化代理对~~ **已修（2026-10-24）**：常量池是标准 UTF-8 而 NewStringUTF 按 modified UTF-8 解码——BMP 面（1/2/3 字节）两编码逐字节相同故历来正常，增补平面（4 字节）被逐字节拆解。修复：发射期 `utf8ToModifiedUtf8`（NUL→C0 80、增补平面→代理对 3+3 字节）统一转换， strings-encrypt 密文池同面受益；最小复现验证通过（test/tmp/utfsmoke，emoji codePoint 往返一致）。
-11. **已修（2026-10-24）**：stackc `instanceof` 对 null 返回 true（JNI IsInstanceOf(NULL)=TRUE 未前置判空，InstanceLifecycle/IntrinsicSurface 双例首曝）；vmc4 `i2s/i2b/i2c` 窄化退化为恒等（toVmType 坍缩使 Convert 丢失精确类型，BigIntMini vmc4 首曝——VmType 增 I16/I8/CHAR Convert 专用标签 + handler 符号/零扩展）。
-12. ~~**regfile 区间计算缺陷（#10 回归，PR #31 引入）**~~ **已修（2026-10-25）**：根因 = 块参数（边拷贝 dest）对活性不动点不可见——定义在「边上」不在任何块内，幻影回流通达方法入口（全值区间 [0,N]），且死块参数（零使用）的边拷贝写入发生在方法末尾、覆盖已分配给其他活值的池槽。修复双段： (a) liveOut 回流排除后继的 entryDefs（参数在定义边上死亡，不流入前驱）； (b) 参数 birth 取源块 terminator 位点（边拷贝执行点），而非目标块起点 ——目标块复用槽位的值不再被边拷贝覆盖。vmc4 语料全格复绿 + regfile E2E/单测全过 + RfMin 最小复现一致；obf 档 regfile 已重新加入。同形态在 **regc** 下仍有 J-9 家族缺陷（LoopCarriedTable probes 段 sb null，已记账）。 **二段修复（2026-10-25，parallel-move 环破碎）**：块参数活性修复后 switch/循环形态仍错（SwLoop 最小复现：6-case switch + 循环 acc 冻结）。真根因 = 边拷贝的**交换环**：regfile 槽位复用使回边拷贝构成 (slotA←slotB, slotB←slotA)，顺序执行互相覆盖（身份映射下 SSA id 互异永不成环，故 regfile 关闭时无此面）。修复：emitParallelCopies / resolveParallelOrder（贪心排序 + scratch 槽惰性预留破环），合成边与异常区域拷贝两面接线。SwLoop/BigSwitch/LoopCarriedTable(vmc4)/ ArraysAllTypes(vmc4) 全复绿。
-14. ~~**regfile × 异常区域拷贝细节（J-12 残留）**~~ **已修（2026-10-25）**：双因修复——(a) 同一入口点的块参数区间穿透目标块（死参数与后续读参数按真实区间不重叠而共享槽位，异常分派同点并行写入时后者覆盖前者， Mini 首曝 regs[1]=regs[2];regs[1]=regs[9]）；(b) ssa_builder 异常边入口快照（见 J-9，115≠100 的直接根因）。ExceptionFlow regfile 单开与全语料复绿。
-15. ~~**regfile × monitor 密集代码病态慢**~~ **已消（2026-10-25，随 12/14 修复消失）**：InnerClassesMonitor 全组合（super-ops+fragment+regfile 8 +shuffle）单格从 42 分钟恢复至秒级且输出一致（病态慢是 12/14 缺陷的副作用——异常分派拷贝错误致解释器异常路径病态循环）。obf 档 vmc4 列已恢复全组合。 `--vmc4-regfile` 在「256 项表由嵌套循环构建 + 溢出参与」形态下，线性扫描分配出越池/重叠的物理槽（分配 dump 实证：id 10 → 槽 8 = spillBase 越出池 [1,8)；多 id 共享槽 1 的重叠区间），表现为数组 load 的 recv 指向错误对象、元素值变成下标残值（GetIntArrayRegion 失败 + helper `_v` 未初始化读栈残 ——helper 缺 ExceptionCheck 是次生放大面）。最小复现：CRC 表构建形态（test/tmp/rfmin 复现脚本，256 循环 + `table[idx]`）； `--vmc4-super-ops / --vmc4-fragment / --vmc4-shuffle-blocks` 单开均正常，仅 regfile 触发；池大小无关（8/12/16/24/64 全失败）。 **已做的遏制**：语料 obf 档暂撤 `--vmc4-regfile`（corpus runner 注释）； plain 档 regfile E2E（Vmc4RegfileA/B）未覆盖此形态故仍绿。 ~~修复方向：区间 hull 的 liveIn/liveOut 扩展或 victim 换出路径的活性失真。~~ **已消（2026-10-29 校准）：随 J-12 二段（f6d39b8 parallel-move 环破碎）+ J-14（e170a92 异常边入口快照）修复级联消失**。复验证据：① 256 循环 CRC 表形态重建复现（test/tmp/rfmin256：table 256 构建 + 变量下标读 + crc 消费 + 溢出参与），`--vmc4-regfile 8` 单开输出与 plain 档逐行全等； ② obf 档全语料 132 格（44 case × 3 后端，`--vmc4-regfile 8` 满配组合）全绿。后续清单口径：(b) obf 档复接已完成（测试文件 obf 档现含该开关）； (a) helper ExceptionCheck 加固与 (c) 最小复现收编 emit 级单测——主缺陷消失后降级为健壮性备注，遇回归再启用。
-13. ~~**computed jumps 大 switch 缺陷（PR #27 回归，未修）**~~ **已修（f6d39b8， 2026-10-25）**：根因 = key→目标映射表的扫表循环缺陷，与 J-12 二段同提交修复；同提交内 obf 档复接 `--regc-computed-jumps`。 **复验（2026-10-29 校准）**：test/tmp/bsbisect 重现脚本在 main 重新生成（250-case 稠密+稀疏 switch × 循环），`--regc-computed-jumps` 单开编译运行与 JVM 基线全等——BigSwitch.main 1000 次循环 pick 覆盖全部 250 case （4 全扫）+ 稀疏探针（7000/249/1000007）；obf 档全语料 132 格全绿。 BigSwitch 形态已由 obf 档 corpus 例行覆盖（该开关复接后每次 obf 跑都经过 250-case 大 switch 面）。 **修复方向**：key→目标映射表在 case 数量大时的编码/解析面；修后 (a) BigSwitch 收编为该开关的 E2E 用例，(b) obf 档重新加入。
+7. lambda bootstrap 反查自身的 NoClassDefFoundError（合成类落点改为按外围类真实 access 位判定,exclusions 清零）。
+8. regc 引用值丢 null 及 regfile 系列缺陷:ssa_builder 异常边入口快照、块参数活性区间、parallel-move 交换环破碎（emitParallelCopies 贪心排序 + scratch 槽）、异常区域拷贝槽位共享,全语料复绿。
+9. regc/vmc4/llvm 三后端 LDC 字符串的 modified UTF-8 转换（共享 `codegen::utf8ToModifiedUtf8`,NUL 与增补平面代理对）。
+10. stackc `instanceof` 对 null 返回 true;vmc4 `i2s/i2b/i2c` 窄化退化恒等（VmType 增 I16/I8/CHAR Convert 标签）。
+11. stackc 异常分派 handler 顺序反排（按异常表序有序插入;ARRAY_LOAD/STORE 无保护区域也立即 ExceptionCheck 返回）。
+12. computed jumps 大 switch 缺陷（key→目标映射表扫表循环,与 parallel-move 环破碎同提交修复,obf 档复接 `--regc-computed-jumps`,BigSwitch 形态已入 obf 档例行覆盖）。
+13. regc INVOKESPECIAL 虚分派无限递归（owner 声明解析 + CallNonvirtual\*MethodA + JNI 参数序 obj 在前）。
+14. regfile 与 monitor 密集代码的病态慢随上述修复消失;遗留的 helper ExceptionCheck 加固与最小复现单测降级为健壮性备注,遇回归再启用。
 
-**JDK17 现代特性语料批首曝（2026-10-26，10 新用例全部修复）**
+**产品/机器决策项（需决策）**
 
-16. ~~regc INVOKESPECIAL 虚分派~~ **已修（2026-10-26）**：接口默认方法语料（InterfaceDefaultMethods）首曝 `Greeter.super.greet()` 无限递归（StackOverflowError）——regc 全链路（cached/间接 dispatcher）对 INVOKESPECIAL 一律 `Call*MethodA` 虚分派，命中调用方自身覆写。此前语料的 super 调用都在嵌套类（未被保护），受保护代码发出 invokespecial 属首次覆盖。修复：emitCachedCall special 分支 + dispatcher kind==2 改 **owner 声明解析 + CallNonvirtual\*MethodA**（与 stackc 同口径）；二段修复 = JNI 参数序（obj 在前 clazz 在后，对调会把 jclass 当 receiver → IncompatibleClassChangeError，最小复现 test/tmp/idmmin 实证）； useResolved/inlineCached 门控排除 special。
-17. ~~字符串常量 modified UTF-8 面（regc/vmc4/llvm 三面）~~ **已修（2026-10-26）**：TextBlocksAndEscapes 首曝。(a) regc：J-10 修复的 `utf8ToModifiedUtf8` NUL 分支源码里 C0 80 是**字符串字面量原始字节** （历史上被编辑器按文本编码重写成 U+00C0/U+0080 的 UTF-8 四字节）—— NewStringUTF 解出 6 字符串；(b) vmc4：LDC 常量直接 `cStringLiteral` 进 NewStringUTF，嵌入 NUL 被 strlen 截断（`"a\000b\000"` → `"a"`，模式 `"\0"` → 空串，`replace("",..)` 每字符间插入）；(c) llvm：LLVM 常量数组长度显式但运行时 `mj2x_llvm_string_const` 仍 strlen 截断。修复：转换函数提升为共享 `codegen::utf8ToModifiedUtf8`（字节一律显式转义构造，杜绝编辑器重写面），regc/vmc4 LDC/llvm LDC+indy bsm String 三处接线； stackc 的 UTF-16 码元池（NewString 按长度）本就无此面。
-18. ~~stackc 异常分派 handler 顺序反排~~ **已修（2026-10-26）**： TryWithResources 首曝（suppressed 丢失 + NoClassDefFoundError 掩蔽）。根因 = activeExceptionHandlers 按**区域激活序**（外层用户 catch 从方法头先激活）而非 **JVM 异常表序**（首个区域含 pc 且类型匹配的条目获胜） ——t-w-r 合成 catch(Throwable)（表序靠前、区域内层）被排在用户 catch 之后，IAE 直接跳用户 handler，primary 赋值与 close()/addSuppressed 整段被跳过。修复 = 激活时按表索引 lower_bound 有序插入。次生修复： ARRAY_LOAD/STORE 在无保护区域也立即 ExceptionCheck 返回（pending 跨节点滞留会让后续 FindClass 全 NULL，被误报 NoClassDefFoundError 掩蔽真实 AIOOBE）。最小复现 test/tmp/twrmin 实证。
-
-**产品/机器决策项（需拍板）**
-
-8. benchmark 驱动器默认输入路径：`-InputJar` 可覆盖，但默认落 Downloads—— 改仓库样本路径还是提升为配置项。
-9. CI runner 安装 llvm/clang（#1122 方向 1）：unittest skip 地板 4→2 （仅剩 zig 系），integration LLVM 列 28 例在 CI 转实跑。
-10. RegC CRT DLL 跨运行缓存（~12-20ms/次）：需解密 DLL 落盘持久化，与「不落明文 DLL」威胁模型冲突——接受现状或重评威胁模型。
-11. POSIX 600 文件权限：spool/临时文件 `Files.createFile` + posix attrs 收紧（Windows 无影响，POSIX 加固项）。
+15. benchmark 驱动器默认输入路径:`-InputJar` 可覆盖,但默认是 Downloads 目录,改仓库样本路径还是提升为配置项,待定。
+16. CI runner 安装 llvm/clang（#1122 方向 1）:unittest skip 下限 4→2（仅剩 zig 系）,integration LLVM 列 28 例在 CI 转实跑。
+17. RegC CRT DLL 跨运行缓存（~12-20ms/次）:需解密 DLL 落盘持久化,与不落明文 DLL 的威胁模型冲突,接受现状或重评威胁模型,待定。
+18. POSIX 600 文件权限:spool/临时文件 `Files.createFile` + posix attrs 收紧（Windows 无影响,POSIX 加固项）。
 
 **编排层**
 
-12. 锁协议 v2 沉淀：mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates 不持锁、`xmake build <target>` 单 target 单命令——落归档页，供后续 sub agent 会话直接引用。
-13. 测试分层策略文档重写：计划期表格（落地波次列）大多已落地，删表留分层策略与覆盖率审计方法学。
-14. 代码注释与 Doxygen 组名里的 R3/R6 轮次代号退役（`regc_r3_abi` 等），文档侧已先行（本 PR）。
+19. 锁协议 v2 记录:mkdir 抢锁 + owner.txt + 验 own 后释放、tests/gates 不持锁、`xmake build <target>` 单 target 单命令,写入归档页,供后续 sub agent 会话直接引用。
+20. 测试分层策略文档重写:计划期表格（实施顺序列）大多已实现,删表留分层策略与覆盖率审计方法学。
+21. 代码注释与 Doxygen 组名里的评审代号退役（如 `regc_r3_abi`）,文档侧已完成。
 
 ### K. jvmtp 对标差距（2026-10-14 调研）
 
-> 对标对象 jvmtp **1.7.3**。结论：mj2x 在"变换能力"上不落后，在"交付形态"与"抗分析面"上明显落后。
-> 卡片按 ROI 排序，**批次 1 建议在开发任何新功能前先行**。
+> 对标对象 jvmtp **1.7.3**。结论:mj2x 在变换能力上不落后,在交付形态与抗分析面上明显落后。建议先做下列小改动项,再开发新功能。
 
-**批次 1：把"说法"变成"事实"（小改动、无架构风险）**
+**小改动项（无架构风险）**
 
-1. ~~**CFF 抗还原（P1-1）**~~ **已完成（2026-10-15）**：state 由 `RegFunction::cffVolatileState` 发布、RegC 声明为 `volatile int32_t`（`RegTransformOptions::cffStateVolatile` 默认 true）。实测：修复前 clang `-O2` 下 dispatcher 被完全还原，修复后 `switch i32` 存活；顺带 `-Wswitch` 溢出警告归零（B1）。守门：`RegCTest.CffStateRegisterIsEmittedVolatile` / `CffStateVolatileCanBeDisabled`。
-   - **遗留**：① LLVM 后端纯 SSA 无内存槽，volatile 方案不适用——`--backend llvm` + CFF 组合仍会被优化器还原，需 inline-asm 屏障（`asm volatile("" : "+r"(state))`）或模块级 volatile 槽；② 尚未把「clang -O2 后 dispatcher 存活」做成自动化 CI 断言，目前靠人工跑 `work/cff_probe/` 的 standalone 编译对照。
-2. ~~**生成工程优化级别（P1-2）**~~ **已完成（2026-10-15）**：新增 `--native-opt-level <0|1|2|3|s>`（默认 `2`），xmake 工程映射 `set_optimize` （none/faster/fastest/aggressive/smallest），CMake 与 LLVM 侧分别注入 `/O*` 与 `-O*`。LTO 未做（对标 `compiler.lto`），留待需要时开卡。
-3. ~~**类级 glob include/exclude（P1-3）**~~ **已完成（2026-10-15）**：新增 `--native-include` / `--native-exclude`（可重复 + 逗号分隔；`*` 不跨段、`**` 跨段、 `?` 单字符，`/` 与 `.` 等价，exclude 优先），JSON 键 `native_include` / `native_exclude`。实现为 `NativeClassFilterPreprocessor`（置 `CompilerClass::filteredOut`），方法级选择（annotation / prefix / mark-all）与 `<init>`/`<clinit>` 搬运入口按该标志跳过；被剔除类保留在输出 JAR 中不改写。空 glob 片段 fail-closed（`mj2x.cli.err.class_glob_empty`）。守门： `NativeClassFilterGlobTest.*` / `NativeClassFilterPreprocessorTest.*` + `CliTest.NativeClassFilter*` 四条 E2E。
-4. ~~**外部进程超时（P1-4）**~~ **已完成（2026-10-15）**：新增 `--native-timeout <秒>` （默认 `900`，`0`=∞；JSON 键 `native_timeout`；对标 jvmtp `compiler.timeout`）。每次外呼独立计时，覆盖编译器/link/vcvars 探针/xmake 两阶段/pack hook 共 10 余个站点。 libca 0.0.15 subprocess 已具备超时基元（`OutputOptions{timeout, kill_on_timeout}` / `wait_with_output_for` / `StatusCode::DEADLINE_EXCEEDED`），无需扩展——§G 原挂账 "需 libca 扩展或手写并发排空框架"判定过时。策略与文案单源在 `mj2x-cli/src/native_process_timeout.hpp`（内部头 + inline，unittest 跨模块实例化）。关键设计：Windows 单进程 kill 只终止直接子进程，孙进程（xmake→cl.exe、cmd→ping）继承管道写端使收尸的 EOF 等待永不到达——`waitChildWithTimeout` 先 `taskkill /T /F` 整树收割再收尸（Linux 依赖 libca 进程组 kill），把"超时"从死锁变回失败。守门：`NativeProcessTimeoutTest` 7 例（含 async+wait_for 金丝雀把挂起回归转确定性失败）+ `CliTest.NativeTimeout*` 4 条 E2E（假 zig/xmake 挂起 + 非法值 + JSON 透传）。
-5. ~~mba-deep 与 CFF 互斥~~ 与 ~~state 码溢出 int32~~：**已修**（2026-10-14），分别由 `RegTransformPassTest.MbaDeepBarriersDoNotSuppressFlattening` / `CffStateCodesStayWithinPositiveInt32` 守门。
+1. ~~CFF 抗还原~~ **已完成（2026-10-15）**:state 由 `RegFunction::cffVolatileState` 发布、RegC 声明为 `volatile int32_t`（`RegTransformOptions::cffStateVolatile` 默认 true）。clang `-O2` 下 dispatcher 不再被完全还原,`switch i32` 存活,`-Wswitch` 溢出警告归零。测试:`RegCTest.CffStateRegisterIsEmittedVolatile` / `CffStateVolatileCanBeDisabled`。
+   - 遗留:① LLVM 后端纯 SSA 无内存槽,volatile 方案不适用,`--backend llvm` + CFF 组合仍会被优化器还原,需 inline-asm 屏障（`asm volatile("" : "+r"(state))`）或模块级 volatile 槽;② clang -O2 后 dispatcher 存活尚未做成自动化 CI 断言,目前靠人工跑 `work/cff_probe/` 的 standalone 编译对照。
+2. ~~生成工程优化级别~~ **已完成（2026-10-15）**:新增 `--native-opt-level <0|1|2|3|s>`（默认 `2`）,xmake 工程映射 `set_optimize` （none/faster/fastest/aggressive/smallest）,CMake 与 LLVM 侧分别注入 `/O*` 与 `-O*`。LTO 未做（对标 `compiler.lto`）,留待需要时开工。
+3. ~~类级 glob include/exclude~~ **已完成（2026-10-15）**:新增 `--native-include` / `--native-exclude`（可重复 + 逗号分隔;`*` 不跨段、`**` 跨段、 `?` 单字符,`/` 与 `.` 等价,exclude 优先）,JSON 键 `native_include` / `native_exclude`。实现为 `NativeClassFilterPreprocessor`（置 `CompilerClass::filteredOut`）,方法级选择（annotation / prefix / mark-all）与 `<init>`/`<clinit>` 搬运入口按该标志跳过;被剔除类保留在输出 JAR 中不改写。空 glob 片段 fail-closed（`mj2x.cli.err.class_glob_empty`）。测试: `NativeClassFilterGlobTest.*` / `NativeClassFilterPreprocessorTest.*` + `CliTest.NativeClassFilter*` 四条 E2E。
+4. ~~外部进程超时~~ **已完成（2026-10-15）**:新增 `--native-timeout <秒>` （默认 `900`,`0`=不限时;JSON 键 `native_timeout`;对标 jvmtp `compiler.timeout`）。每次外呼独立计时,覆盖编译器/link/vcvars 探针/xmake 两阶段/pack hook 共 10 余个站点。Windows 上 kill 单进程只终止直接子进程,孙进程继承管道写端使回收的 EOF 等待永不到达,`waitChildWithTimeout` 先 `taskkill /T /F` 终止整树再回收（Linux 依赖 libca 进程组 kill）。测试:`NativeProcessTimeoutTest` 7 例 + `CliTest.NativeTimeout*` 4 条 E2E。
+5. ~~mba-deep 与 CFF 互斥~~ 与 ~~state 码溢出 int32~~:已修（2026-10-14）,分别由 `RegTransformPassTest.MbaDeepBarriersDoNotSuppressFlattening` / `CffStateCodesStayWithinPositiveInt32` 测试覆盖。
 
-**批次 2：补缺失的保护面（中改动）**
+**中等改动项（补缺失的保护面）**
 
-6. 原生混淆三件套：
-   - ~~**立即数隐藏（`obfuscation.constants` / `.constants.mba`）**~~ **已完成（2026-10-16）**：新增 `--regc-hide-constants`（JSON 键 `regc_hide_constants`，默认关闭）。RegIR pass `applyConstantHiding` 把每个整型 `IntLiteral` 操作数 C 改写为 `E ^ Intrinsic("const.key:<site>")`：E = C ^ K 编译期物化，K 运行时由可分发运行时（regc CRT / LLVM runtime 的 `const_key`）按同一 site 派生，I32 追加 `Convert` 截断。两端 splitmix64 公式同源（`ca::random::SplitMix64` 正典， #1027 A3 逐位锁定）；不透明常量由 `static volatile` 承载以防 LTO 下 IPSCCP 折回原值。site 为函数内局部计数器、不掺 seed（site 必物化在产物里，掺 seed 只增大位宽不增加分析成本）。**不被 `--regc-obfuscate` 联动**——每立即数一次运行时调用，是家族里最重的一项。守门：`RegTransformPassTest.ConstantHiding*` 5 例（语义等价求值 / I64 不截断 / 浮点跳过 / seed 无关 / 与 CFF 叠加后 dispatcher key 仍字面量）+ `mj2x_rt_test.test_const_key_derivation` + LLVM E2E 变体。
-   - ~~**调用目标间接化 + per-signature dispatcher（`obfuscation.calls.*`）**~~ **已完成（2026-10-18，PR #15；发射端接线同批完成）**：RegC 发射端通用兜底换发 `_mj2x_regc_dispatch_<后缀>`、LLVM 发射端 `call.dispatch:` 分支 + 模块级 declare、validation 白名单放行、CLI `--regc-indirect-calls`（默认关、不被 `--regc-obfuscate` 联动）。分篇见 [doc/techniques/call_indirection.md](doc/techniques/call_indirection.md)。已落地：① 可分发运行时双端（regc CRT / LLVM runtime）各加六返回形态 per-signature dispatcher，按 (站点表, 索引) 解析 owner 类 + jmethodID 并缓存入条目，解析失败返零值并保留 pending exception；② `RegInstruction::indirectCall` 标记 + `RegFunction::callSites`（按 desc 分组、组内独立索引）+ pass `applyCallIndirections`（排 CFF 之后、立即数隐藏之前；自递归静态调用跳过）。 **关键设计**：pass 只打标记、不由 pass 改写指令——pass 在 RegIR 层看不到哪些方法已被转换，而"已转换目标"必须保留发射端的直接 C 调用快路径（0 JNI），间接化它只会退化成 JNI 调用、纯开销零收益。是否"外部"由发射端既有解析结果（tryEmitDirectCall / intrinsic / resolved 均未命中）决定，pass 无需跨函数全局信息 → 保住可复现构建不变量。
-   - ~~**computed jumps（`obfuscation.jumps`）**~~ **已完成（2026-10-23，PR #27）**： `--regc-computed-jumps`（默认关、不联动）。把 CFF dispatcher 的 "key → 目标块"映射从代码挪到模块级数据表（key 按站点密钥异或，splitmix64 派生），分派走解析出的块索引。MSVC 不能用 computed goto，表驱动 + 索引 switch 是标准 C 上限。实测合计 +8.9%、switch 密集处 +27%。分篇见 [doc/techniques/computed_jumps.md](doc/techniques/computed_jumps.md)。
-7. ~~**混淆两级作用域 include/exclude**~~ **已完成（2026-10-23，PR #28）**： `--obf-scope-include/exclude` 类级 glob，判定落到 `CompilerClass::inObfuscationScope`（pass 与 backend 只问"在不在作用域内"）。两者都为空 = 零行为变化；显式给 include 隐含开启混淆。详见 [protection_overview.md §六](doc/techniques/protection_overview.md)。
-8. ~~**VMC4：super-ops + 指令碎片化**~~ **已完成（2026-10-23，PR #29）**： `--vmc4-super-ops` / `--vmc4-fragment`（均默认关、可组合）。分篇见 [doc/techniques/vm_super_ops.md](doc/techniques/vm_super_ops.md)。
-9. ~~**VMC4 寄存器文件定长化**~~ **已完成（2026-10-24，issue #10）**： `--vmc4-regfile <n>`（默认 0 关、不联动）。线性扫描分配（块级活性不动点 → 连续包络区间 → Poletto）把计算寄存器压入定长池 `[numInputs, n)`，死值槽位复用，寄存器号不再镜像 SSA value id；装不下的活值分稳定溢出槽。**实现定界偏差**：原稿「+ Spill/Reload 两个新 opcode」改为**溢出槽直接寻址**（统一 slots 数组高位索引，操作数直接读写）——零运行时搬运、零 opcode/解释器/ trace-surface 面改动；若未来运行时拆定长栈上数组 + 独立溢出区再补双 opcode。 fail-closed：limit < numInputs（溢出槽与参数区重叠）拒编；fragment 组合要求 limit ≥ numInputs + 3（碎片临时槽占池顶）；numRegs > 0xFFFF 编码入口拦截（#1133 同款，恒等映射形态同受益）。分篇见 [doc/techniques/vm_regfile.md](doc/techniques/vm_regfile.md)。
+6. 原生混淆三件套:
+   - ~~立即数隐藏（`obfuscation.constants` / `.constants.mba`）~~ **已完成（2026-10-16）**:新增 `--regc-hide-constants`（JSON 键 `regc_hide_constants`,默认关闭）。RegIR pass `applyConstantHiding` 把每个整型 `IntLiteral` 操作数 C 改写为 `E ^ Intrinsic("const.key:<site>")`:E = C ^ K 编译期物化,K 运行时由可分发运行时（regc CRT / LLVM runtime 的 `const_key`）按同一 site 派生,I32 追加 `Convert` 截断。两端 splitmix64 公式同源（`ca::random::SplitMix64`,#1027 逐位锁定）;不透明常量由 `static volatile` 承载以防 LTO 下 IPSCCP 折回原值。site 为函数内局部计数器、不掺 seed（site 必物化在产物里,掺 seed 只增大位宽不增加分析成本）。**不被 `--regc-obfuscate` 联动**:每立即数一次运行时调用,是家族里最重的一项。测试:`RegTransformPassTest.ConstantHiding*` 5 例（语义等价求值 / I64 不截断 / 浮点跳过 / seed 无关 / 与 CFF 叠加后 dispatcher key 仍字面量）+ `mj2x_rt_test.test_const_key_derivation` + LLVM E2E 变体。
+   - ~~调用目标间接化 + per-signature dispatcher（`obfuscation.calls.*`）~~ **已完成（2026-10-18,PR #15;发射端接线同步完成）**:RegC 发射端通用兜底换发 `_mj2x_regc_dispatch_<后缀>`、LLVM 发射端 `call.dispatch:` 分支 + 模块级 declare、validation 白名单放行、CLI `--regc-indirect-calls`（默认关、不被 `--regc-obfuscate` 联动）。分篇见 [doc/techniques/call-indirection.rst](doc/techniques/call-indirection.rst)。可分发运行时双端（regc CRT / LLVM runtime）各加六返回形态 per-signature dispatcher,按（站点表,索引）解析 owner 类 + jmethodID 并缓存入条目,解析失败返零值并保留 pending exception;`RegInstruction::indirectCall` 标记 + `RegFunction::callSites`（按 desc 分组、组内独立索引）+ pass `applyCallIndirections`（排 CFF 之后、立即数隐藏之前;自递归静态调用跳过）。**关键设计**:pass 只打标记、不由 pass 改写指令,已转换目标必须保留发射端的直接 C 调用快路径（0 JNI）,间接化它只会退化成 JNI 调用、纯开销零收益;是否外部由发射端既有解析结果决定,pass 无需跨函数全局信息,保住可复现构建不变量。
+   - ~~computed jumps（`obfuscation.jumps`）~~ **已完成（2026-10-23,PR #27）**: `--regc-computed-jumps`（默认关、不联动）。把 CFF dispatcher 的 key → 目标块映射从代码挪到模块级数据表（key 按站点密钥异或,splitmix64 派生）,分派走解析出的块索引。MSVC 不能用 computed goto,表驱动 + 索引 switch 是标准 C 上限。实测合计 +8.9%、switch 密集处 +27%。分篇见 [doc/techniques/computed-jumps.rst](doc/techniques/computed-jumps.rst)。
+7. ~~混淆两级作用域 include/exclude~~ **已完成（2026-10-23,PR #28）**: `--obf-scope-include/exclude` 类级 glob,判定落到 `CompilerClass::inObfuscationScope`（pass 与 backend 只问类在不在作用域内）。两者都为空 = 零行为变化;显式给 include 隐含开启混淆。详见 [doc/techniques/protection-overview.rst](doc/techniques/protection-overview.rst)。
+8. ~~VMC4:super-ops + 指令碎片化~~ **已完成（2026-10-23,PR #29）**: `--vmc4-super-ops` / `--vmc4-fragment`（均默认关、可组合）。分篇见 [doc/techniques/vm-super-ops.rst](doc/techniques/vm-super-ops.rst)。
+9. ~~VMC4 寄存器文件定长化~~ **已完成（2026-10-24,issue #10）**: `--vmc4-regfile <n>`（默认 0 关、不联动）。线性扫描分配（块级活性不动点 → 连续包络区间 → Poletto）把计算寄存器压入定长池 `[numInputs, n)`,死值槽位复用,寄存器号不再镜像 SSA value id;装不下的活值分稳定溢出槽。实现相对原稿的偏差:原稿的 Spill/Reload 两个新 opcode 改为溢出槽直接寻址（统一 slots 数组高位索引,操作数直接读写）,零运行时搬运、零 opcode/解释器/trace 面改动;若未来运行时拆定长栈上数组 + 独立溢出区再补双 opcode。 fail-closed:limit < numInputs（溢出槽与参数区重叠）拒编;fragment 组合要求 limit ≥ numInputs + 3（碎片临时槽占池顶）;numRegs > 0xFFFF 编码入口拦截。分篇见 [doc/techniques/vm-regfile.rst](doc/techniques/vm-regfile.rst)。
 
-**批次 3：产品化（大改动，需拍板）**
+**大改动项（需决策）**
 
-10. ~~**交叉编译 + 多目标产物（第一切片）**~~ **已完成（2026-10-24，issue #11）**： `--targets <abi,...>` + `--target-cc <abi>=<path>`（方案 a：显式交叉工具链， zig 为仓内默认交叉面、自动带 `-target` 三元组；宿主 ABI 回落自动探测）。逐 ABI 产物落 `<输出目录>/<abi>/<库名>`，manifest `<stem>.targets.json` 记录 built/skipped/failed 与原因（CI 集成挂点）；退出码两态（全部 built → 0）。v1 定界（定界外 fail-closed）：C99 后端（regc/vmc4）+ 直接驱动（file/pipe）；xmake/LLVM/StackC/jar 嵌入/native-dir 拒绝。 **剩余（后续切片，需拍板）**：fat JAR + 多 ABI jar 嵌入 + NativeLoader 按平台挑选注册、bundled zig / toolchain 反射自动发现、darwin/mach ABI 档 ——**jvmtp 最大的护城河**对位仍未闭合。
+10. ~~交叉编译 + 多目标产物（第一切片）~~ **已完成（2026-10-24,issue #11）**: `--targets <abi,...>` + `--target-cc <abi>=<path>`（显式交叉工具链, zig 为仓内默认交叉面、自动带 `-target` 三元组;宿主 ABI 回落自动探测）。逐 ABI 产物落 `<输出目录>/<abi>/<库名>`,manifest `<stem>.targets.json` 记录 built/skipped/failed 与原因（CI 集成挂点）;退出码两态（全部 built → 0）。v1 定界（定界外 fail-closed）:C99 后端（regc/vmc4）+ 直接驱动（file/pipe）;xmake/LLVM/StackC/jar 嵌入/native-dir 拒绝。 **剩余（后续切片,需决策）**:fat JAR + 多 ABI jar 嵌入 + NativeLoader 按平台挑选注册、bundled zig / toolchain 反射自动发现、darwin/mach ABI 档,对位 jvmtp 最有壁垒的部分仍未闭合。
 11. Gradle 插件 + Java SDK SPI（可替换 packer/compiler 的显式 LifecycleEvent API）。
 12. packer（代码段流加密 + 两阶段 loader + 免落盘）+ 签名流水线。
 
 ## 验证命令
 
 ```bash
-# 全量配置（选项见 xmake/options.lua；--with_mj2x 总开关已随拆仓退场，勿再传；
-# 勿用 -P 子项目，issue #782）。测试 target 需显式开 --with_tests=y。
+# 全量配置（选项见 xmake/options.lua；--with_mj2x 总开关已随拆仓退场,勿再传；
+# 勿用 -P 子项目,issue #782）。测试 target 需显式开 --with_tests=y。
 xmake f --with_tests=y -y
 xmake build mj2x_unittest && xmake run mj2x_unittest --gtest_brief=1
 xmake build mj2x_integration_test && xmake run mj2x_integration_test
 ```
 
 > 性能数据必须先做覆盖率审计。
-> 注意：llvm sample E2E 外呼 `mj2x-cli.exe`，验证前须确认 CLI 已重建
-> （`xmake build mj2x-cli`），否则跑的是旧发射器（#894 收尾时踩过）。
-> unittest/integration 的 skip 数含环境性 skip（本机无 clang/zig 时 LLVM 列
-> exec 编译与性能门控整列跳过）——跨机对数时 skip 差异属环境差异，不构成
-> 回归判据；对数只看 passed/failed。
-
+> 注意:llvm sample E2E 外呼 `mj2x-cli.exe`,验证前须确认 CLI 已重建（`xmake build mj2x-cli`）,否则跑的是旧发射器（#894 教训）。
+> unittest/integration 的 skip 数含环境性 skip（本机无 clang/zig 时 LLVM 列 exec 编译与性能检查整列跳过）,跨机对数时 skip 差异属环境差异,不构成回归判据,对数只看 passed/failed。

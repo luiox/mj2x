@@ -1,6 +1,6 @@
 """Sphinx 配置：mj2x 设计规格层（宏观 + 中观技术分篇）。
 
-规范见 AGENTS.md「文档规范」：本目录收 RST 设计规格（含 techniques/
+规范见 AGENTS.md 的文档规范一节：本目录收 RST 设计规格（含 techniques/
 技术分篇子树）；markdown 属人读/AI 方向层（README/AGENTS/dev_plan/
 roadmap），不进 doctree。CI 以 -W --keep-going 构建，警告即失败。
 """
@@ -27,7 +27,7 @@ nitpick_ignore = [
 html_theme = "alabaster"
 html_title = "mj2x 设计规格"
 html_baseurl = ""
-html_search_language = "zh"  # 需 jieba；未装分词器时仅影响站内搜索，不影响门禁
+html_search_language = "zh"  # 需 jieba；未装分词器时仅影响站内搜索，不影响检查
 html_use_opensearch = ""
 
 # 站点内跳转锚点与 label 同名，便于代码注释里的 doc:<label> 人工回溯。

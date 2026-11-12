@@ -16,7 +16,7 @@ StackCBackend 是 mj2x 当前覆盖面最宽的通用 native 后端。它把 L1 
 - 覆盖 javac 常见字节码形状，作为 RegC 之前的正确性基线。
 - 为 mjdbg 提供 stack-style StackCBackend trace surface，方便和 RegC register-style 产物对比。
 
-StackCBackend 不承担主要抗 c2j 责任。生成 C 中保留 JVM operand stack 形状，是为了广覆盖和可调试性；保护导向路线见 :doc:`regc-backend`。
+StackCBackend 不承担主要抗反编译责任。生成 C 中保留 JVM operand stack 形状，是为了广覆盖和可调试性；保护导向路线见 :doc:`regc-backend`。
 
 Native 绑定使用 ``static`` C 函数加 ``JNI_OnLoad`` / ``RegisterNatives``\ 。生成 DLL/SO 不再为每个 Java 方法导出 ``Java_*``\ 符号；Java 方法名和描述符保留在注册表中供 JVM 绑定。方法体内应用类解析会使用当前 owner class 的 ``ClassLoader``\ ，避免自定义 class loader 场景下直接 ``FindClass``\ 找不到业务类。生成方法体会跟踪临时 JNI local refs，并在正常返回或异常提前返回前批量释放；对象返回值会保留下来作为返回引用。字段和方法 ID 在各生成调用点按需懒初始化到 ``static jfieldID`` / ``static jmethodID``\ ，避免每次执行都重新解析。字符串 LDC 常量会去重到 TU 级 ``_mj2x_string_pool[]``\ ，方法体只保留 pool offset。StackCBackend 对 ``invokedynamic``\ 采用运行时桥：在 native 侧调用 bootstrap，取 ``CallSite.getTarget()``\ 后通过 ``MethodHandle.invokeWithArguments``\ 执行，覆盖 javac 生成的 string concat、方法引用和捕获 lambda。
 
@@ -119,7 +119,7 @@ JAR MVP 会读取每个可处理的 class entry，保留原 entry 顺序和非 c
 已知限制
 --------
 
-- 生成 C 是 ``union jvalue stack[]`` / ``sp``\ 风格，便于正确性覆盖，但容易被 c2j 类工具识别。
+- 生成 C 是 ``union jvalue stack[]`` / ``sp``\ 风格，便于正确性覆盖，但容易被反编译类工具识别。
 - JNI local refs 按方法级固定容量追踪并在返回前释放；极端长循环中持续创建新局部引用时，后续仍可补周期性清理。
 - JNI method/field ID 懒缓存未加锁；多线程首次同时命中同一调用点时可能重复解析一次，但最终缓存值等价。
 - ``<init>`` / ``<clinit>``\ 仍按 MarkAll 边界保守处理，不作为默认 native 化目标。

@@ -1,4 +1,4 @@
-# mj2x — Bytecode to Native Compiler
+# mj2x：Bytecode to Native Compiler
 
 把 Java 字节码(`.class` / `.jar`)翻译为 C 源码,并将原方法标记为 `native`。通过 JNI 实现 Java 运行时互操作。定位为代码混淆 / 硬化工具链,自 morpher 字节码工具平台拆出的独立仓(拆仓来历见 [MIGRATION.md](MIGRATION.md))。
 
@@ -18,17 +18,16 @@
 
 ## 模块组成
 
-- `mj2x-cli/` — 命令行入口、参数解析、native 编译器调用(xmake / CMake / pipe)
-- `mj2x-core/src/mj2x/core/` — Pipeline / CompilerIndex
-- `mj2x-core/src/mj2x/io/` — InputLoader / OutputWriter(`.class` / `.jar`)
-- `mj2x-core/src/mj2x/frontend/` — MIR / Block / CodeConverter
-- `mj2x-core/src/mj2x/backend/` — StackCBackend / RegCBackend / Vmc4Backend / LlvmIrBackend(标量子集,默认开启;`with_mj2x_llvm=n` 可关闭)
-- `mj2x-core/src/mj2x/preprocessor/` — 可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll / NativeAnnotation)
-- `mj2x-annotations/` — 用户可引入的 `@mj2x.Native` 注解源码
-
-- `mj2x-rt/` — C 运行时(regc/vmc4 生成工程内嵌源,含 safe-env、rt_protect 反侦测)
-- `unittest/` — 单元测试 + E2E(backend / cli / codegen / core)
-- `benchmark/` — 性能基准(jvm-obf-tester 13-probe vs os30,JNIC 对比)
+- `mj2x-cli/`：命令行入口、参数解析、native 编译器调用(xmake / CMake / pipe)
+- `mj2x-core/src/mj2x/core/`：Pipeline / CompilerIndex
+- `mj2x-core/src/mj2x/io/`：InputLoader / OutputWriter(`.class` / `.jar`)
+- `mj2x-core/src/mj2x/frontend/`：MIR / Block / CodeConverter
+- `mj2x-core/src/mj2x/backend/`：StackCBackend / RegCBackend / Vmc4Backend / LlvmIrBackend(标量子集,默认开启;`with_mj2x_llvm=n` 可关闭)
+- `mj2x-core/src/mj2x/preprocessor/`：可插拔预处理器(LDC / invokedynamic / multianewarray / MarkAll / NativeAnnotation)
+- `mj2x-annotations/`：用户可引入的 `@mj2x.Native` 注解源码
+- `mj2x-rt/`：C 运行时(regc/vmc4 生成工程内嵌源,含 safe-env、rt_protect 反侦测)
+- `unittest/`：单元测试 + E2E(backend / cli / codegen / core)
+- `benchmark/`：性能基准(jvm-obf-tester 13-probe vs os30,JNIC 对比)
 
 ## 构建
 
@@ -42,7 +41,7 @@ xmake build mj2x_unittest        # 单元测试
 
 需要 JDK(`JAVA_HOME` 含 `jni.h`)与 MSVC;E2E 另需 clang(PATH 探测)。
 
-**单后端构建**(issue #886):默认全后端;`xmake f --with_mj2x_backend=stackc|regc|vmc4|llvm` 只把所选后端编进可执行文件——被排除后端的源码不参与编译、CLI 对 `--backend <被排除>` 及被裁默认值 fail-closed(报可用清单)、mj2x-rt 嵌入按分发面收缩(stackc-only 产物不含 regc CRT 等;llvm 仍收编 regc intrinsic registry 供 JDK intrinsic 直调)。需要全量 mj2x-core 的测试 target(`mj2x_unittest`/`mj2x_integration_test`) 在单后端构建下自动禁用,全量回归用默认配置跑。
+**单后端构建**(issue #886):默认全后端;`xmake f --with_mj2x_backend=stackc|regc|vmc4|llvm` 只把所选后端编进可执行文件。被排除后端的源码不参与编译,CLI 对 `--backend <被排除>` 及被裁默认值 fail-closed(报可用清单),mj2x-rt 的嵌入源码按所选后端收缩(stackc-only 产物不含 regc CRT 等;llvm 仍保留 regc intrinsic registry 供 JDK intrinsic 直调)。需要全量 mj2x-core 的测试 target(`mj2x_unittest`/`mj2x_integration_test`) 在单后端构建下自动禁用,全量回归用默认配置跑。
 
 ## 运行
 
@@ -66,37 +65,37 @@ mj2x-cli --lang en_US --help
 
 ## 文档
 
-设计规格层（rst，Sphinx 构建，引用面由 `doc/check_refs.py` 门禁；分层规则见 [AGENTS.md](AGENTS.md)「文档规范」）：
+设计规格层（rst，Sphinx 构建，引用面由 `doc/check_refs.py` 检查；分层规则见 [AGENTS.md](AGENTS.md) 文档规范一节）：
 
 ### 使用
 
-- **[doc/user-guide.rst](doc/user-guide.rst)** — 怎么用(命令、参数、示例、FAQ)
-- [doc/config-file.rst](doc/config-file.rst) — JSON 配置文件
-- [doc/compile-system.rst](doc/compile-system.rst) — 编译系统(pipe / xmake / cmake)技术说明
+- **[doc/user-guide.rst](doc/user-guide.rst)**：怎么用(命令、参数、示例、FAQ)
+- [doc/config-file.rst](doc/config-file.rst)：JSON 配置文件
+- [doc/compile-system.rst](doc/compile-system.rst)：编译系统(pipe / xmake / cmake)技术说明
 
 ### 混淆与保护
 
-- **[doc/techniques/README.md](doc/techniques/README.md)** — 技术一览（每项技术叫什么、对抗什么、机制、代价、开关、状态）
-  - [保护技术总览](doc/techniques/protection_overview.md) — 威胁模型、开关联动规则、pass 组合纪律、后端覆盖面
+- **[doc/techniques.rst](doc/techniques.rst)**：技术一览（每项技术叫什么、防什么、机制、代价、开关、状态）
+  - [保护技术总览](doc/techniques/protection-overview.rst)：威胁模型、开关联动规则、pass 组合纪律、后端覆盖面
 - 产物 DLL 加壳（sepacker 扩展）需求文档在 morpher 主仓 `doc_ai/dll_packer_requirements.md`（跨仓,未随拆迁移）
 
 ### 架构与设计
 
-- [doc/architecture.rst](doc/architecture.rst) — 当前架构概览
-- [doc/user-intrinsic.rst](doc/user-intrinsic.rst) — 用户自定义 intrinsic
-- [doc/roadmap.md](doc/roadmap.md) — v2.2 能力路线图与优先级
+- [doc/architecture.rst](doc/architecture.rst)：当前架构概览
+- [doc/user-intrinsic.rst](doc/user-intrinsic.rst)：用户自定义 intrinsic
+- [doc/roadmap.md](doc/roadmap.md)：v2.2 能力路线图与优先级
 
 ### 后端
 
-- [doc/stackc-backend.rst](doc/stackc-backend.rst) / [doc/regc-backend.rst](doc/regc-backend.rst) — 各后端支持矩阵
+- [doc/stackc-backend.rst](doc/stackc-backend.rst) / [doc/regc-backend.rst](doc/regc-backend.rst)：各后端支持矩阵
 
 ### 测试与验证
 
 - [doc/regc-test-strategy.rst](doc/regc-test-strategy.rst)
-- [benchmark/README.md](benchmark/README.md) — 基准脚本与结果
+- [benchmark/README.md](benchmark/README.md)：基准脚本与结果
 
 ### 仓库与协作
 
-- [AGENTS.md](AGENTS.md) — agent/开发者工作约定(命令、惯例、构建门、文档规范)
-- [MIGRATION.md](MIGRATION.md) — 拆仓来历、vendor 清单与待办
-- [dev_plan.md](dev_plan.md) — 当前挂账与计划
+- [AGENTS.md](AGENTS.md)：agent/开发者工作约定(命令、惯例、构建验证、文档规范)
+- [MIGRATION.md](MIGRATION.md)：拆仓来历、vendor 清单与待办
+- [dev_plan.md](dev_plan.md)：当前待办与计划

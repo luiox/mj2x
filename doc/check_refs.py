@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""代码引用面门禁：规范见 AGENTS.md「文档规范」（模板出自 mjbase 仓）。
+"""代码引用面检查：规范见 AGENTS.md 的文档规范一节（模板出自 mjbase 仓）。
 
 只认四类可校验事实，其余一律失败：
 
@@ -9,11 +9,11 @@
 3. 代码面不得引用设计内容形态的 ``.md``。豁免只有：流程文档白名单（AGENTS/
    dev_plan/README/MIGRATION/roadmap）；带仓名标记的跨仓出处（libjbc /
    morpher / mjbase / mjt / luiox / 私有仓）；test//build/ 下的生成物报告
-   路径；以及无目录的裸 ``.md`` 文件名——且该文件名**不命中仓内真实存在的
+   路径；以及无目录的裸 ``.md`` 文件名，且该文件名**不命中仓内真实存在的
    任何 .md 文件**（生成的报告/模板文件名字面量，非文档引用；裸名一旦与
    仓内 tracked .md 同名即视为文档引用，转 doc/*.rst 或加白名单）。
 4. rst 正文一段一行（AGENTS.md 硬规则 7）：两个连续正文行即手工断行，失败。
-   代码块/字面块/指令/表格区的内容豁免——它们的续行是语法的一部分。
+   代码块/字面块/指令/表格区的内容豁免，它们的续行是语法的一部分。
 
 用法：python doc/check_refs.py [仓库根]
 """
@@ -73,7 +73,7 @@ ANON_LINK = re.compile(r"`[^`]*\.(?:md|rst) <([^`>]+\.(?:md|rst))>`_{1,2}")
 
 # 生成物/结果/夹具根：其下的 .md 是产物或报告落盘（如 test_resource 下
 # protected_samples 的 TRACE_SURFACE.md 基线、benchmark/results 报告），
-# 代码裸名提及它们仍属「文件名字面量」豁免面；设计文档不在这些根里。
+# 代码裸名提及它们仍属文件名字面量豁免面；设计文档不在这些根里。
 ARTIFACT_MD_ROOTS = ("test_resource", "test", "build", "benchmark")
 
 
@@ -81,9 +81,9 @@ def tracked_md_names(root: Path) -> set[str]:
     """仓内真实存在的 .md 文件名（排除 .git、doc/ 与生成物根；流程白名单单走
     前置分支）。
 
-    裸 .md 名豁免的收紧依据：豁免本意是「生成的报告/模板文件名字面量」——
-    那类文件只落在生成物根或根本不入仓；裸名一旦与生成物根之外的 tracked
-    .md 同名即是文档引用，不再豁免。
+    裸 .md 名豁免的收紧依据：豁免本意是生成的报告/模板文件名字面量，那类
+    文件只落在生成物根或根本不入仓；裸名一旦与生成物根之外的 tracked .md
+    同名即是文档引用，不再豁免。
     """
     names: set[str] = set()
     for p in root.rglob("*.md"):
@@ -185,7 +185,7 @@ def manual_wrap_problems(doc_dir: Path):
     """正文一段一行检查（AGENTS.md 硬规则 7）：两个连续正文行 = 手工断行。
 
     结构行（空行/标题下划线/指令/label/字段选项/列表标记）不参与；指令与
-    ``::`` 字面块的缩进内容整体豁免——它们的续行是语法的一部分。
+    ``::`` 字面块的缩进内容整体豁免，它们的续行是语法的一部分。
     """
     problems = []
     for p in rst_files(doc_dir):
@@ -216,7 +216,7 @@ def manual_wrap_problems(doc_dir: Path):
                 if (WRAP_DIRECTIVE.match(l2) or WRAP_FIELD.match(l2)
                         or WRAP_UNDERLINE.match(l2) or WRAP_MARKER.match(l2)):
                     break
-                problems.append(f"{p.name}:{i + 1}: 正文手工断行——一段一行（AGENTS.md 硬规则 7）")
+                problems.append(f"{p.name}:{i + 1}: 正文手工断行，一段一行（AGENTS.md 硬规则 7）")
                 i += 1
     return problems
 
@@ -225,7 +225,7 @@ def check(root: Path):
     problems = []
     doc_dir = root / DOC_DIRNAME
     if not doc_dir.is_dir():
-        return [f"{DOC_DIRNAME}/ 不存在：目录已改名或迁移未落地"]
+        return [f"{DOC_DIRNAME}/ 不存在：目录已改名或迁移未完成"]
     labels, rsts, dup = collect_labels(doc_dir)
     problems += dup
     in_tree = toctree_entries(doc_dir / "index.rst")
@@ -235,7 +235,7 @@ def check(root: Path):
     for p in rst_files(doc_dir):
         rel_no_ext = p.relative_to(doc_dir).with_suffix("").as_posix()
         if p.name != "index.rst" and p.stem not in in_tree and rel_no_ext not in in_tree:
-            problems.append(f"{p.name}: 未挂进 index.rst 的 toctree（Sphinx -W 会报 orphan）")
+                problems.append(f"{p.name}: 未加入 index.rst 的 toctree（Sphinx -W 会报 orphan）")
     for p in rst_files(doc_dir):
         for lineno, line in iter_lines(p):
             for m in ANON_LINK.finditer(line):
@@ -246,7 +246,7 @@ def check(root: Path):
                 if any(marker in line for marker in UPSTREAM_MARKERS):
                     continue
                 problems.append(
-                    f"{p.name}:{lineno}: 文档点名 markdown 规格 {m.group(0)}——"
+                    f"{p.name}:{lineno}: 文档点名 markdown 规格 {m.group(0)}，"
                     "本仓设计内容用 :ref:，跨仓出处加仓名标记"
                 )
             for m in REF_ROLE.finditer(line):
@@ -282,16 +282,16 @@ def check(root: Path):
                 if "/" not in name:
                     # 无目录的裸 .md 名默认 = 文件名字面量（生成的报告
                     # TRACE_SURFACE.md、工程模板 README.md.in 等），不是文档
-                    # 引用；但裸名与仓内 tracked .md 同名时即文档引用——收紧
+                    # 引用；但裸名与仓内 tracked .md 同名时即文档引用，收紧
                     # （文档引用必须写 doc/*.rst 路径或 doc:<label>）。
                     if name in repo_md_names:
                         problems.append(
                             f"{rel}:{lineno}: 裸 .md 名与仓内文件同名 {name}"
-                            f"——文档引用转 {DOC_DIRNAME}/*.rst，或删指"
+                            f"，文档引用转 {DOC_DIRNAME}/*.rst，或删指"
                         )
                     continue
                 problems.append(
-                    f"{rel}:{lineno}: 代码面引用 markdown 规格 {name}——设计内容转 {DOC_DIRNAME}/*.rst，或删指"
+                    f"{rel}:{lineno}: 代码面引用 markdown 规格 {name}，设计内容转 {DOC_DIRNAME}/*.rst，或删指"
                 )
 
     return problems
@@ -301,11 +301,11 @@ def main(argv):
     root = Path(argv[1]).resolve() if len(argv) > 1 else Path(__file__).resolve().parents[1]
     problems = check(root)
     if problems:
-        print(f"文档引用门禁失败：{len(problems)} 处")
+        print(f"文档引用检查失败：{len(problems)} 处")
         for p in problems:
             print("  " + p)
         return 1
-    print("文档引用门禁通过")
+    print("文档引用检查通过")
     return 0
 
 
