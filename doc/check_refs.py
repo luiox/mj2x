@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """代码引用面门禁：规范见 AGENTS.md「文档规范」（模板出自 mjbase 仓）。
 
-只认三类可校验事实，其余一律失败：
+只认四类可校验事实，其余一律失败：
 
 1. ``doc:<label>`` 必须能在 doc/**.rst 里找到 ``.. _<label>:`` 声明；
    同理 ``:ref:``/``:doc:`` 目标在 RST 侧自检（label 唯一 + doc 文件在册）。
@@ -12,6 +12,8 @@
    路径；以及无目录的裸 ``.md`` 文件名——且该文件名**不命中仓内真实存在的
    任何 .md 文件**（生成的报告/模板文件名字面量，非文档引用；裸名一旦与
    仓内 tracked .md 同名即视为文档引用，转 doc/*.rst 或加白名单）。
+4. rst 正文一段一行（AGENTS.md 硬规则 7）：两个连续正文行即手工断行，失败。
+   代码块/字面块/指令/表格区的内容豁免——它们的续行是语法的一部分。
 
 doc/archive/ 是历史归档（只进不出）：不进 toctree、不做任何 .md/.rst 检查；
 长期归宿（删除或压缩）待后续批次定。
@@ -166,6 +168,69 @@ def toctree_entries(index: Path):
     return entries
 
 
+WRAP_UNDERLINE = re.compile(r"^\s*([=\-^~\"'`*+_#])\1{2,}\s*$")
+WRAP_FIELD = re.compile(r"^\s*:[\w\-]+(\s[\w\-]+)*:\s")
+WRAP_MARKER = re.compile(r"^\s*(?:\* -|- |\+ |\* |#\. |\d+\. |\d+\) )")
+WRAP_DIRECTIVE = re.compile(r"^(\s*)\.\. [\w-]+::")
+
+
+def _skip_indented(lines, i, n, base):
+    """跳过缩进大于 base 的连续区（空行穿透，遇缩进回落或 EOF 停）。"""
+    while i < n:
+        if not lines[i].strip():
+            j = i
+            while j < n and not lines[j].strip():
+                j += 1
+            if j >= n or (len(lines[j]) - len(lines[j].lstrip())) <= base:
+                return i
+            i = j
+            continue
+        if (len(lines[i]) - len(lines[i].lstrip())) <= base:
+            return i
+        i += 1
+    return i
+
+
+def manual_wrap_problems(doc_dir: Path):
+    """正文一段一行检查（AGENTS.md 硬规则 7）：两个连续正文行 = 手工断行。
+
+    结构行（空行/标题下划线/指令/label/字段选项/列表标记）不参与；指令与
+    ``::`` 字面块的缩进内容整体豁免——它们的续行是语法的一部分。
+    """
+    problems = []
+    for p in rst_files(doc_dir):
+        lines = p.read_text(encoding="utf-8").splitlines()
+        i, n = 0, len(lines)
+        while i < n:
+            line = lines[i]
+            if not line.strip():
+                i += 1
+                continue
+            dm = WRAP_DIRECTIVE.match(line)
+            if (dm or WRAP_FIELD.match(line) or WRAP_UNDERLINE.match(line)
+                    or WRAP_MARKER.match(line) or line.lstrip().startswith(".. _")):
+                i = _skip_indented(lines, i + 1, n, len(dm.group(1))) if dm else i + 1
+                continue
+            base = len(line) - len(line.lstrip())
+            ends_literal = line.rstrip().endswith("::")
+            i += 1
+            if ends_literal:
+                j = i
+                while j < n and not lines[j].strip():
+                    j += 1
+                if j < n and (len(lines[j]) - len(lines[j].lstrip())) > base:
+                    i = _skip_indented(lines, i, n, base)
+                    continue
+            while i < n and lines[i].strip():
+                l2 = lines[i]
+                if (WRAP_DIRECTIVE.match(l2) or WRAP_FIELD.match(l2)
+                        or WRAP_UNDERLINE.match(l2) or WRAP_MARKER.match(l2)):
+                    break
+                problems.append(f"{p.name}:{i + 1}: 正文手工断行——一段一行（AGENTS.md 硬规则 7）")
+                i += 1
+    return problems
+
+
 def check(root: Path):
     problems = []
     doc_dir = root / DOC_DIRNAME
@@ -202,6 +267,8 @@ def check(root: Path):
                 target = m.group(1).split("<")[-1].strip().rstrip(">, ")
                 if target and Path(target).name not in rsts and Path(target).stem not in {f[:-4] for f in rsts}:
                     problems.append(f"{p.name}:{lineno}: :doc:`{target}` 指向不在册文件")
+
+    problems += manual_wrap_problems(doc_dir)
 
     # 代码面：只允许指向 RST 规格层的引用。
     for f in code_files(root):

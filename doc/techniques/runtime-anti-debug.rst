@@ -5,8 +5,7 @@
 
 状态：已落地
 
-受保护方法入口注入检查点，检出调试器 / JVMTI agent 等侦测信号时按预设动作
-响应。
+受保护方法入口注入检查点，检出调试器 / JVMTI agent 等侦测信号时按预设动作响应。
 
 .. list-table::
    :header-rows: 1
@@ -19,8 +18,7 @@
    * - 作用层
      - 发射端（入口注入）+ 运行时（mj2x-rt ``rt_protect``\ 模块）
    * - 开关
-     - ``--runtime-protection <动作>`` / ``--runtime-protection-step`` /
-       ``--runtime-protection-delay <ms>``
+     - ``--runtime-protection <动作>`` / ``--runtime-protection-step`` / ``--runtime-protection-delay <ms>``
    * - 后端
      - RegC ✅ / LLVM ✅ / VMC4 ✅ / StackC ❌
    * - 默认
@@ -29,21 +27,14 @@
 对抗什么
 ----------
 
-前面所有技术对抗的都是**\ 静态分析**\ 。运行时保护对抗的是**\ 动态观察**\ ：调试
-器附加、JVMTI agent、动态 instrumentation、单步跟踪。
+前面所有技术对抗的都是**\ 静态分析**\ 。运行时保护对抗的是**\ 动态观察**\ ：调试器附加、JVMTI agent、动态 instrumentation、单步跟踪。
 
 没有它，其余技术全部可以被「跑一遍看结果」绕过。
 
 机制
 ------
 
-受保护方法入口注入一个检查点调用。每次检查点都执行全量信号探测
-（antidebug + antijvmti：Windows 的 ``IsDebuggerPresent``\ / PEB
-BeingDebugged / NtGlobalFlag / NtQueryInformationProcess / 硬件断点寄存器 /
-命令行扫描，Linux 的 ``TracerPid``\ / 可写可执行段 / agent 库映射 /
-``/proc/self/cmdline``\ ）；**\ 概率门控作用于响应而非探测**——触发按
-``step``\ 确定性下限 + 伪随机提前推进（每 step 次调用至少触发一次），检测
-命中则必然触发。
+受保护方法入口注入一个检查点调用。每次检查点都执行全量信号探测（antidebug + antijvmti：Windows 的 ``IsDebuggerPresent``\ / PEB BeingDebugged / NtGlobalFlag / NtQueryInformationProcess / 硬件断点寄存器 / 命令行扫描，Linux 的 ``TracerPid``\ / 可写可执行段 / agent 库映射 / ``/proc/self/cmdline``\ ）；**\ 概率门控作用于响应而非探测**——触发按 ``step``\ 确定性下限 + 伪随机提前推进（每 step 次调用至少触发一次），检测命中则必然触发。
 
 .. list-table::
    :header-rows: 1
@@ -62,14 +53,9 @@ BeingDebugged / NtGlobalFlag / NtQueryInformationProcess / 硬件断点寄存器
    * - ``terminate``
      - 终止
 
-``fake``\ 是最有对抗价值的一档：不崩溃、不报错，只是结果不对。分析者拿到一份
-看起来正常的 trace，结论却是错的——比 ``terminate``\ 更难受，且不暴露检查点
-位置。
+``fake``\ 是最有对抗价值的一档：不崩溃、不报错，只是结果不对。分析者拿到一份看起来正常的 trace，结论却是错的——比 ``terminate``\ 更难受，且不暴露检查点位置。
 
-状态变量是**\ 函数级全局**\ （``mj2x_rt_cp_N``\ ），由编译管线附加的
-``rt_protect``\ 源提供；LLVM 侧编译时附带该源。检测面细节（信号清单、
-fail-open 语义）见 ``mj2x-rt/src/common/mj2x_rt_protect.h``\ 的模块注释与
-:ref:`runtime-protection`\ （通用技术综述）。
+状态变量是**\ 函数级全局**\ （``mj2x_rt_cp_N``\ ），由编译管线附加的 ``rt_protect``\ 源提供；LLVM 侧编译时附带该源。检测面细节（信号清单、 fail-open 语义）见 ``mj2x-rt/src/common/mj2x_rt_protect.h``\ 的模块注释与 :ref:`runtime-protection`\ （通用技术综述）。
 
 代价
 ------
@@ -81,11 +67,9 @@ fail-open 语义）见 ``mj2x-rt/src/common/mj2x_rt_protect.h``\ 的模块注释
    * - 维度
      - 影响
    * - 性能
-     - 每方法入口一次探测调用；``step``\ 越大响应触发越稀疏（探测本身每次
-       都跑）
+     - 每方法入口一次探测调用；``step``\ 越大响应触发越稀疏（探测本身每次都跑）
    * - 误伤
-     - **合法环境可能触发**\ 。调试器、profiler、APM agent 都是侦测信号——
-       ``terminate``\ 档在用户环境里等于自毁
+     - **合法环境可能触发**\ 。调试器、profiler、APM agent 都是侦测信号—— ``terminate``\ 档在用户环境里等于自毁
    * - 体感
      - ``delay``\ 档会真实拖慢生产环境
 

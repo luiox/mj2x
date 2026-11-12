@@ -5,21 +5,14 @@ JNI 桥接层
 
 状态：定稿（通用技术综述；本仓实现形态见本文「本仓现状」节）
 
-通过 JNI（Java Native Interface）在原生代码和 JVM 之间传递数据、调用方法和
-维护引用。
+通过 JNI（Java Native Interface）在原生代码和 JVM 之间传递数据、调用方法和维护引用。
 
 .. _jni-bridge-repo:
 
 本仓现状
 ----------
 
-mj2x 生成的 native 代码不直接散调 JNI 函数表，而是经 mj2x-rt 的 per-callsite
-帮手面：``jfieldID`` / ``jmethodID``\ 缓存查找、``jvalue``\ 参数打包、pending
-异常检查收敛在帮手里（StackC 的检查密度由 ``--stackc-exception-check``
-``full|lite``\ 控制）；字符串常量经运行时字符串池去重复用；引用纪律（global
-ref 缓存、local ref 不跨调用持有）由 crt 与各后端发射器共同遵守。运行时分发
-面见 ``mj2x-rt/src/``\ ；JNI 边界上的保护见 :ref:`jni-table-protection`\ 与
-:ref:`native-direct-call`\ （消除边界）。
+mj2x 生成的 native 代码不直接散调 JNI 函数表，而是经 mj2x-rt 的 per-callsite 帮手面：``jfieldID`` / ``jmethodID``\ 缓存查找、``jvalue``\ 参数打包、pending 异常检查收敛在帮手里（StackC 的检查密度由 ``--stackc-exception-check`` ``full|lite``\ 控制）；字符串常量经运行时字符串池去重复用；引用纪律（global ref 缓存、local ref 不跨调用持有）由 crt 与各后端发射器共同遵守。运行时分发面见 ``mj2x-rt/src/``\ ；JNI 边界上的保护见 :ref:`jni-table-protection`\ 与 :ref:`native-direct-call`\ （消除边界）。
 
 问题
 ------
@@ -51,8 +44,7 @@ JNI 函数返回的引用默认是本地引用。它们在 native 方法返回�
    // 方法返回后，clazz 和 mid 可以被释放
    // 但 mid 是 jmethodID（指针），不是引用，不需要释放
 
-本地引用的容量有限（通常 16~64 个 slot）。在循环或深层调用链中需要及时释
-放：
+本地引用的容量有限（通常 16~64 个 slot）。在循环或深层调用链中需要及时释放：
 
 .. code-block:: c
 
@@ -127,8 +119,7 @@ JNI 函数返回的引用默认是本地引用。它们在 native 方法返回�
 字段与方法 ID 缓存
 --------------------
 
-``GetFieldID`` / ``GetMethodID``\ 需要反查字符串，性能开销大。编译后的原生代
-码应将 ID 缓存为全局静态变量：
+``GetFieldID`` / ``GetMethodID``\ 需要反查字符串，性能开销大。编译后的原生代码应将 ID 缓存为全局静态变量：
 
 .. code-block:: c
 
@@ -146,8 +137,7 @@ JNI 函数返回的引用默认是本地引用。它们在 native 方法返回�
        return MID_run;
    }
 
-缓存 ID 不会失效（类卸载时才会无效，但类卸载在大多数 JVM 实现中罕见）。字段
-和方法 ID 不涉及 GC 安全，不需要作为引用管理。
+缓存 ID 不会失效（类卸载时才会无效，但类卸载在大多数 JVM 实现中罕见）。字段和方法 ID 不涉及 GC 安全，不需要作为引用管理。
 
 字符串编码
 ------------
@@ -180,8 +170,7 @@ C → Java
    // 从 UTF-8 创建
    jstring str = (*env)->NewStringUTF(env, "hello");
 
-编译后的原生代码中，字符串常量会频繁创建。可以通过字符串池去重减少 JNI 调
-用：
+编译后的原生代码中，字符串常量会频繁创建。可以通过字符串池去重减少 JNI 调用：
 
 .. code-block:: c
 
@@ -199,8 +188,7 @@ C → Java
 异常处理
 ----------
 
-JNI 调用抛出异常后，后续大部分 JNI 函数不能正常执行。需要检查并在适当时机处
-理：
+JNI 调用抛出异常后，后续大部分 JNI 函数不能正常执行。需要检查并在适当时机处理：
 
 .. code-block:: c
 
@@ -229,12 +217,10 @@ JNI 调用抛出异常后，后续大部分 JNI 函数不能正常执行。需�
 线程与 JNIEnv
 ---------------
 
-``JNIEnv``\ 是线程局部的——每个 Java 线程有独立的 ``JNIEnv``\ 指针。生成的
-代码需要：
+``JNIEnv``\ 是线程局部的——每个 Java 线程有独立的 ``JNIEnv``\ 指针。生成的代码需要：
 
 #. 从函数参数接收 ``JNIEnv*``
-#. 如果需要在工作线程中调用 JNI，先通过 ``JavaVM->AttachCurrentThread``\ 获
-   取 ``JNIEnv*``
+#. 如果需要在工作线程中调用 JNI，先通过 ``JavaVM->AttachCurrentThread``\ 获取 ``JNIEnv*``
 
 .. code-block:: c
 

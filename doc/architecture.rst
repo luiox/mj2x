@@ -11,10 +11,7 @@ mj2x 当前架构概览：管线结构、模块边界、后端分工与运行时
 
 -------
 
-mj2x moves selected Java method or class semantics into native code. It is not a
-general Java AOT compiler. The protection goal is to reduce bytecode recovery
-surface and JNI/native trace anchors, then validate that claim through mjdbg
-reports.
+mj2x moves selected Java method or class semantics into native code. It is not a general Java AOT compiler. The protection goal is to reduce bytecode recovery surface and JNI/native trace anchors, then validate that claim through mjdbg reports.
 
 The development loop is:
 
@@ -60,8 +57,7 @@ Current backends:
      - VM virtualization backend (protection-oriented)
      - table-driven interpreter with compile-time randomization + runtime dispatch drift
    * - LLVM
-     - LLVM IR textual output backend (scalar subset plus objects/arrays/calls/
-       exceptions; enabled by default, ``with_mj2x_llvm=n`` disables)
+     - LLVM IR textual output backend (scalar subset plus objects/arrays/calls/ exceptions; enabled by default, ``with_mj2x_llvm=n`` disables)
      - textual LLVM IR (``--emit-llvm``), no LLVM SDK linkage at build time
 
 Planned analysis path:
@@ -70,11 +66,7 @@ Planned analysis path:
 
    L1 MIR -> SSA -> RegIR -> L4 transforms -> RegC / VMC4 (VM encoding)
 
-SSA/RegIR/L4 are platform capabilities for stronger RegC output and future
-whole-class sinking. StackC does not depend on SSA. VMC4 encodes RegIR into a
-per-method VM bytecode stream executed by generated dispatcher loops
-(switch/funcptr/ifnest/state), with per-callsite JNI helpers for calls/fields/
-arrays/allocation.
+SSA/RegIR/L4 are platform capabilities for stronger RegC output and future whole-class sinking. StackC does not depend on SSA. VMC4 encodes RegIR into a per-method VM bytecode stream executed by generated dispatcher loops (switch/funcptr/ifnest/state), with per-callsite JNI helpers for calls/fields/ arrays/allocation.
 
 .. _architecture-modules:
 
@@ -124,10 +116,7 @@ arrays/allocation.
 StackC
 ^^^^^^
 
-StackC is the broad-coverage backend. It is expected to preserve behavior across
-many javac output shapes, including object/array/field/call/exception paths. It
-is not the main anti-c2j protection backend because its emitted code still has
-stack-machine anchors.
+StackC is the broad-coverage backend. It is expected to preserve behavior across many javac output shapes, including object/array/field/call/exception paths. It is not the main anti-c2j protection backend because its emitted code still has stack-machine anchors.
 
 Use StackC for:
 
@@ -139,10 +128,7 @@ Use StackC for:
 RegC
 ^^^^
 
-RegC is the protection-oriented backend. Its output must not contain ``cstack``,
-``stack[]``, ``union jvalue``, or ``sp--`` style anchors. Unsupported bytecode must
-fail closed with a clear reason rather than generating incorrect native code.
-The protection-oriented route is detailed in :doc:`regc-backend`.
+RegC is the protection-oriented backend. Its output must not contain ``cstack``, ``stack[]``, ``union jvalue``, or ``sp--`` style anchors. Unsupported bytecode must fail closed with a clear reason rather than generating incorrect native code. The protection-oriented route is detailed in :doc:`regc-backend`.
 
 Use RegC for:
 
@@ -154,18 +140,9 @@ Use RegC for:
 VMC4
 ^^^^
 
-VMC4 is the VM virtualization backend. It encodes RegIR into a per-method VM
-bytecode stream (compile-time opcode randomization driven by seed, per-class/
-method granularity) and generates a table-driven interpreter (4 dispatcher
-shapes: switch / funcptr / ifnest / state) with per-callsite JNI helpers.
-Runtime dispatch drift (``--vmc4-drift <0..4>`` + ``--vmc4-drift-period``)
-rotates semantic labels periodically at runtime without changing instruction
-semantics.
+VMC4 is the VM virtualization backend. It encodes RegIR into a per-method VM bytecode stream (compile-time opcode randomization driven by seed, per-class/ method granularity) and generates a table-driven interpreter (4 dispatcher shapes: switch / funcptr / ifnest / state) with per-callsite JNI helpers. Runtime dispatch drift (``--vmc4-drift <0..4>`` + ``--vmc4-drift-period``) rotates semantic labels periodically at runtime without changing instruction semantics.
 
-Coverage (v2.2 available version): fields/arrays/allocation, calls (virtual/
-special/static/interface), exception regions, intrinsics subset, String LDC,
-MULTIANEWARRAY — real-jar conversion rate 100% (jvm-obf-tester). Performance is
-not a goal; protection-oriented.
+Coverage (v2.2 available version): fields/arrays/allocation, calls (virtual/ special/static/interface), exception regions, intrinsics subset, String LDC, MULTIANEWARRAY — real-jar conversion rate 100% (jvm-obf-tester). Performance is not a goal; protection-oriented.
 
 Use VMC4 for:
 
@@ -176,34 +153,23 @@ Use VMC4 for:
 LLVM
 ^^^^
 
-The LLVM backend emits textual LLVM IR (``--backend llvm --emit-llvm``) for the
-scalar subset plus objects/arrays/calls/exceptions/monitor/ldc, and compiles it
-to a native library through clang or llc. It shares the RegIR-level transform
-and intrinsic surface with RegC. See :ref:`user-guide-llvm` for the supported
-surface and fail-closed boundaries.
+The LLVM backend emits textual LLVM IR (``--backend llvm --emit-llvm``) for the scalar subset plus objects/arrays/calls/exceptions/monitor/ldc, and compiles it to a native library through clang or llc. It shares the RegIR-level transform and intrinsic surface with RegC. See :ref:`user-guide-llvm` for the supported surface and fail-closed boundaries.
 
 .. _architecture-runtime:
 
 5. Runtime
 ----------
 
-The runtime is split by distribution boundary. ``mj2x-rt`` is the sole
-distributable C99/JNI source pack for generated RegC projects; it owns the
-public helper ABI and must not depend on ``libca``. The former in-tree
-``mj2x-runtime`` library was retired: its intrinsic surface lives on as
-``mj2x-rt/src/regc/mj2x_regc_intrinsic.c``, and its protection probes were
-ported into ``mj2x-rt/src/common/mj2x_rt_protect.c``.
+The runtime is split by distribution boundary. ``mj2x-rt`` is the sole distributable C99/JNI source pack for generated RegC projects; it owns the public helper ABI and must not depend on ``libca``. The former in-tree ``mj2x-runtime`` library was retired: its intrinsic surface lives on as ``mj2x-rt/src/regc/mj2x_regc_intrinsic.c``, and its protection probes were ported into ``mj2x-rt/src/common/mj2x_rt_protect.c``.
 
 Current/runtime domains:
 
-- CRT ABI helpers: div/rem/barrier, primitive compare/basic formatting, and
-  exception/error routing.
+- CRT ABI helpers: div/rem/barrier, primitive compare/basic formatting, and exception/error routing.
 - Crypto/kernel/stringpool.
 - Antidebug and antijvmti checks.
 - JDK intrinsic helpers: wrappers, Math, Random, parseInt.
 
-The runtime must remain testable as a standalone component. ABI-affecting
-changes require deterministic unit tests and platform/toolchain notes.
+The runtime must remain testable as a standalone component. ABI-affecting changes require deterministic unit tests and platform/toolchain notes.
 
 .. _architecture-intrinsic:
 
@@ -218,8 +184,7 @@ Intrinsic support is incremental:
 #. arrays, collections, time, regex, custom user intrinsic,
 #. whole-class sinking when enough calls can stay native.
 
-Escaping values, reflection, dynamic class loading, and unknown JDK calls must
-fall back or fail closed.
+Escaping values, reflection, dynamic class loading, and unknown JDK calls must fall back or fail closed.
 
 .. _architecture-non-goals:
 
@@ -249,5 +214,4 @@ Core validation:
    xmake run mj2x_unittest
    xmake run mj2x_rt_test
 
-Protected sample work must also state the expected mjdbg trace surface and record
-whether a weakness report was produced.
+Protected sample work must also state the expected mjdbg trace surface and record whether a weakness report was produced.

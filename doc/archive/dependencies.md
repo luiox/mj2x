@@ -43,10 +43,7 @@ MVP (C 后端) 不需要 LLVM 或其他第三方库。所有依赖均为 morpher
 
 ### 1.5 runtime crypto status
 
-The only in-repo crypto today is the XOR keystream shared by the packer and
-`NativeLoader` (`mj2x-core/src/mj2x/core/native_lib_crypto.hpp`) plus the VMC4
-blob key derivation. Both are explicitly non-cryptographic obfuscation: they
-keep plaintext DLLs from being trivially extracted, nothing more.
+The only in-repo crypto today is the XOR keystream shared by the packer and `NativeLoader` (`mj2x-core/src/mj2x/core/native_lib_crypto.hpp`) plus the VMC4 blob key derivation. Both are explicitly non-cryptographic obfuscation: they keep plaintext DLLs from being trivially extracted, nothing more.
 
 
 | Replacement candidate | Shape | Evaluation point |
@@ -55,10 +52,7 @@ keep plaintext DLLs from being trivially extracted, nothing more.
 | **Mbed TLS subset** | trimmed C library | complete primitive set; more integration work |
 | **BearSSL subset** | constant-time-oriented C library | stronger side-channel posture; lower-level API |
 
-**Decision point**: mj2x must not claim hardened crypto. If a protection feature
-ever needs real primitives, lock a reviewed, audited lightweight library
-(tiny-AES-c / Mbed TLS subset / BearSSL subset) here and in
-`third_party/VERSIONS.lock.md` first.
+**Decision point**: mj2x must not claim hardened crypto. If a protection feature ever needs real primitives, lock a reviewed, audited lightweight library (tiny-AES-c / Mbed TLS subset / BearSSL subset) here and in `third_party/VERSIONS.lock.md` first.
 
 ---
 

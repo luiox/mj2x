@@ -1,8 +1,6 @@
 # mj2x — Bytecode to Native Compiler
 
-把 Java 字节码(`.class` / `.jar`)翻译为 C 源码,并将原方法标记为 `native`。
-通过 JNI 实现 Java 运行时互操作。定位为代码混淆 / 硬化工具链,自 morpher
-字节码工具平台拆出的独立仓(拆仓来历见 [MIGRATION.md](MIGRATION.md))。
+把 Java 字节码(`.class` / `.jar`)翻译为 C 源码,并将原方法标记为 `native`。通过 JNI 实现 Java 运行时互操作。定位为代码混淆 / 硬化工具链,自 morpher 字节码工具平台拆出的独立仓(拆仓来历见 [MIGRATION.md](MIGRATION.md))。
 
 参考项目:[masxinlingvonta](https://github.com/superblaabeere27/masxinlingvonta)(Java → LLVM IR,单后端)。
 
@@ -16,9 +14,7 @@
 
 ## 用户自定义 intrinsic（#818）
 
-三个后端（StackC / RegC / VMC4）都支持把任意 Java 静态调用点降级为对用户
-native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <file>`）。
-配置格式、ABI 契约与示例见 [doc/user-intrinsic.rst](doc/user-intrinsic.rst)。
+三个后端（StackC / RegC / VMC4）都支持把任意 Java 静态调用点降级为对用户 native symbol 的直接调用（`--intrinsic-config <file>` + `--intrinsic-src <file>`）。配置格式、ABI 契约与示例见 [doc/user-intrinsic.rst](doc/user-intrinsic.rst)。
 
 ## 模块组成
 
@@ -42,19 +38,11 @@ xmake build mj2x-cli             # CLI
 xmake build mj2x_unittest        # 单元测试
 ```
 
-外部库(liba / libjstr / libjbytecode / libjzip / libgarena / libjdk_finder)全部走
-[luiox-repo](https://github.com/luiox/luiox-repo) 中心包仓直连包,首次配置自动克隆
-安装;仓内自带 `test_helper/` 与 `mtest_set/src/` 测试基建子集(来历见
-[MIGRATION.md](MIGRATION.md))。
+外部库(liba / libjstr / libjbytecode / libjzip / libgarena / libjdk_finder)全部走 [luiox-repo](https://github.com/luiox/luiox-repo) 中心包仓直连包,首次配置自动克隆安装;仓内自带 `test_helper/` 与 `mtest_set/src/` 测试基建子集(来历见 [MIGRATION.md](MIGRATION.md))。
 
 需要 JDK(`JAVA_HOME` 含 `jni.h`)与 MSVC;E2E 另需 clang(PATH 探测)。
 
-**单后端构建**(issue #886):默认全后端;`xmake f --with_mj2x_backend=stackc|regc|vmc4|llvm`
-只把所选后端编进可执行文件——被排除后端的源码不参与编译、CLI 对 `--backend <被排除>`
-及被裁默认值 fail-closed(报可用清单)、mj2x-rt 嵌入按分发面收缩(stackc-only 产物不含
-regc CRT 等;llvm 仍收编 regc intrinsic registry 供 JDK intrinsic 直调)。需要全量
-mj2x-core 的测试 target(`mj2x_unittest`/`mj2x_integration_test`)
-在单后端构建下自动禁用,全量回归用默认配置跑。
+**单后端构建**(issue #886):默认全后端;`xmake f --with_mj2x_backend=stackc|regc|vmc4|llvm` 只把所选后端编进可执行文件——被排除后端的源码不参与编译、CLI 对 `--backend <被排除>` 及被裁默认值 fail-closed(报可用清单)、mj2x-rt 嵌入按分发面收缩(stackc-only 产物不含 regc CRT 等;llvm 仍收编 regc intrinsic registry 供 JDK intrinsic 直调)。需要全量 mj2x-core 的测试 target(`mj2x_unittest`/`mj2x_integration_test`) 在单后端构建下自动禁用,全量回归用默认配置跑。
 
 ## 运行
 
@@ -78,8 +66,7 @@ mj2x-cli --lang en_US --help
 
 ## 文档
 
-设计规格层（rst，Sphinx 构建，引用面由 `doc/check_refs.py` 门禁；分层规则见
-[AGENTS.md](AGENTS.md)「文档规范」）：
+设计规格层（rst，Sphinx 构建，引用面由 `doc/check_refs.py` 门禁；分层规则见 [AGENTS.md](AGENTS.md)「文档规范」）：
 
 ### 使用
 

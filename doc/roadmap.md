@@ -23,9 +23,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 
 - **StackC**：广覆盖、正确性优先，适合作为"能跑"的通用后端和回归基线。
 - **RegC**：保护导向，目标是消除 stack-style anchor，减少 c2j 可还原面。
-- **VMC4**：VM 虚拟化（保护导向，性能非关键），编译期随机化 + 执行期 dispatch
-  drift；v2.2 已完成"可用版"（对象/字段/数组/调用/异常/intrinsic 全覆盖，
-  真实 jar 转化率 100%）。
+- **VMC4**：VM 虚拟化（保护导向，性能非关键），编译期随机化 + 执行期 dispatch drift；v2.2 已完成"可用版"（对象/字段/数组/调用/异常/intrinsic 全覆盖，真实 jar 转化率 100%）。
 
 ---
 
@@ -64,14 +62,11 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 
 ## 3. v2.2 优先级（issue #787）
 
-已完成：VMC4 可用版（转化率 100%）、反侦测体系、异常语义精确化（指令序号区间
-判定）、RegC 性能第一轮（intrinsic 补全 / 异常检查稀疏化 / resolved dispatch
-双槽缓存 / 发射器模板化 / SSA 内联 / System.arraycopy intrinsic）。
+已完成：VMC4 可用版（转化率 100%）、反侦测体系、异常语义精确化（指令序号区间判定）、RegC 性能第一轮（intrinsic 补全 / 异常检查稀疏化 / resolved dispatch 双槽缓存 / 发射器模板化 / SSA 内联 / System.arraycopy intrinsic）。
 
 进行中/待做：
 
-1. **mjdbg 侧 JNI-hook 分析工具**（#756）：safe-env（#748）需要常设攻击对手
-   才能成为可回归的 E2E 指标。
+1. **mjdbg 侧 JNI-hook 分析工具**（#756）：safe-env（#748）需要常设攻击对手才能成为可回归的 E2E 指标。
 2. **VMC4 升级档**（#762）：period 语义变义——待 mjdbg 对抗验证闭环后实施。
 
 ---
@@ -82,8 +77,7 @@ mj2x 是蓝队保护线，必须和 mjdbg 红队报告形成闭环：
 - 不把 StackC 宣称为强保护；它是正确性和覆盖率基线。
 - 不在 mjdbg 还没有报告前自称保护强度已经提升。
 - VMC4 性能优化（v2.3+，可用版已交付但性能非目标）。
-- ldc Handle/MethodType 常量**已真实支持**（findXxx 描述符展开 + 栈形校验器
-  单测 + exec E2E 守门）；其余不支持场景维持「显式拒绝（fail-closed 保字节码
+- ldc Handle/MethodType 常量**已真实支持**（findXxx 描述符展开 + 栈形校验器单测 + exec E2E 守门）；其余不支持场景维持「显式拒绝（fail-closed 保字节码
   + 可观测日志）」承诺，不走静默降级。
 
 ---
@@ -110,5 +104,4 @@ xmake build mj2x_integration_test
 xmake run mj2x_integration_test --gtest_brief=1
 ```
 
-native 相关 PR 必须记录 OS、JDK、C 编译器、是否运行生成产物、是否产出 mjdbg
-observation/weakness report。
+native 相关 PR 必须记录 OS、JDK、C 编译器、是否运行生成产物、是否产出 mjdbg observation/weakness report。
