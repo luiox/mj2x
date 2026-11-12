@@ -18,6 +18,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <string.h>
 
 #if defined(MJ2X_INTRINSIC_INLINE_EXTERNAL)
 #define MJ2X_IINLINE
@@ -340,6 +341,138 @@ MJ2X_IINLINE int64_t mj2x_intrinsic_long_lowest_one_bit(int64_t value)
 MJ2X_IINLINE int32_t mj2x_intrinsic_long_signum(int64_t value)
 {
     return (value > 0) - (value < 0);
+}
+
+// ---- Float/Double bits 视图（OpenJDK Float/Double 位型口径）----
+//
+// 位型双关一律 memcpy（严格别名安全，与 mj2x_math_round 的位路径同款）；
+// 非 Raw 版把任意 NaN 位型规范化（float → 0x7FC00000、double →
+// 0x7FF8000000000000，Infinity 与 ±0.0 位型原样保留），Raw 版逐位保留。
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_float_to_raw_int_bits(float value)
+{
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    return (int32_t)bits;
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_float_to_int_bits(float value)
+{
+    const uint32_t bits     = (uint32_t)mj2x_intrinsic_float_to_raw_int_bits(value);
+    const uint32_t exponent = bits & 0x7F800000U;
+    const uint32_t mantissa = bits & 0x007FFFFFU;
+    if (exponent == 0x7F800000U && mantissa != 0U) return (int32_t)0x7FC00000U;
+    return (int32_t)bits;
+}
+
+MJ2X_IINLINE float mj2x_intrinsic_int_bits_to_float(int32_t bits)
+{
+    float value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+MJ2X_IINLINE int64_t mj2x_intrinsic_double_to_raw_long_bits(double value)
+{
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    return (int64_t)bits;
+}
+
+MJ2X_IINLINE int64_t mj2x_intrinsic_double_to_long_bits(double value)
+{
+    const uint64_t bits     = (uint64_t)mj2x_intrinsic_double_to_raw_long_bits(value);
+    const uint64_t exponent = (bits >> 52) & UINT64_C(0x7FF);
+    const uint64_t mantissa = bits & UINT64_C(0x000FFFFFFFFFFFFF);
+    if (exponent == UINT64_C(0x7FF) && mantissa != 0) {
+        return (int64_t)UINT64_C(0x7FF8000000000000);
+    }
+    return (int64_t)bits;
+}
+
+MJ2X_IINLINE double mj2x_intrinsic_long_bits_to_double(int64_t bits)
+{
+    double value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+// ---- Integer/Long 无符号比较（compareUnsigned）----
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_int_compare_unsigned(int32_t lhs, int32_t rhs)
+{
+    const uint32_t u = (uint32_t)lhs;
+    const uint32_t v = (uint32_t)rhs;
+    return u < v ? -1 : (u > v ? 1 : 0);
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_long_compare_unsigned(int64_t lhs, int64_t rhs)
+{
+    const uint64_t u = (uint64_t)lhs;
+    const uint64_t v = (uint64_t)rhs;
+    return u < v ? -1 : (u > v ? 1 : 0);
+}
+
+// ---- Character 静态代理族：纯位计算不抛异常 ----
+//
+// toCodePoint/highSurrogate/lowSurrogate 对非法输入（非代理对 / 越界 code
+// point）的结果按 Javadoc 未定义口径取同款公式值（负 int 域用无符号移位复刻
+// Java >>>）。
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_to_code_point(uint16_t high, uint16_t low)
+{
+    // 0x35FDC00 = 0x10000 - (0xD800 << 10) - 0xDC00，三段展开式合一的常量。
+    return (((int32_t)high << 10) + (int32_t)low - 0x35FDC00);
+}
+
+MJ2X_IINLINE uint16_t mj2x_intrinsic_char_high_surrogate(int32_t code_point)
+{
+    return (uint16_t)(((uint32_t)code_point >> 10) + 0xD7C0U);
+}
+
+MJ2X_IINLINE uint16_t mj2x_intrinsic_char_low_surrogate(int32_t code_point)
+{
+    return (uint16_t)(((uint32_t)code_point & 0x3FFU) + 0xDC00U);
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_is_high_surrogate(uint16_t ch)
+{
+    return (ch >= 0xD800U && ch <= 0xDBFFU) ? 1 : 0;
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_is_low_surrogate(uint16_t ch)
+{
+    return (ch >= 0xDC00U && ch <= 0xDFFFU) ? 1 : 0;
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_is_surrogate(uint16_t ch)
+{
+    return (ch >= 0xD800U && ch <= 0xDFFFU) ? 1 : 0;
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_is_surrogate_pair(uint16_t high, uint16_t low)
+{
+    return (mj2x_intrinsic_char_is_high_surrogate(high) &&
+            mj2x_intrinsic_char_is_low_surrogate(low))
+               ? 1
+               : 0;
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_is_bmp_code_point(int32_t code_point)
+{
+    return ((uint32_t)code_point >> 16) == 0U ? 1 : 0;
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_is_valid_code_point(int32_t code_point)
+{
+    // OpenJDK 口径：(codePoint >>> 16) < 0x11，即 [0, 0x10FFFF]；负值无符号
+    // 右移出高段大数 → 0。
+    return ((uint32_t)code_point >> 16) < 0x11U ? 1 : 0;
+}
+
+MJ2X_IINLINE int32_t mj2x_intrinsic_char_char_count(int32_t code_point)
+{
+    return code_point >= 0x10000 ? 2 : 1;
 }
 
 #if defined(__cplusplus)

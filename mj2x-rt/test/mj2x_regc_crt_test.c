@@ -17,6 +17,8 @@ typedef struct thrown_exception
 void test_string_buffer_concurrency(void);
 void test_regc_intrinsic_c99_abi(void);
 void test_regc_intrinsic_bit_ops(void);
+void test_regc_intrinsic_bits_views(void);
+void test_regc_intrinsic_unsigned_and_char(void);
 void test_regc_intrinsic_DISABLED_round_f32_full_sweep(void);
 void test_safe_env(void);
 void test_regc_find_class_desc_shell(void);
@@ -236,6 +238,8 @@ int main(int argc, char** argv)
     test_regc_intrinsic_c99_abi();
     test_regc_intrinsic_bit_ops();
     test_regc_intrinsic_bit_ops();
+    test_regc_intrinsic_bits_views();
+    test_regc_intrinsic_unsigned_and_char();
     test_string_builder_utf16_and_errors();
     test_string_buffer_concurrency();
     test_safe_env();

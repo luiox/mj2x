@@ -12,17 +12,23 @@
 本仓现状
 ----------
 
-mj2x 的 intrinsic 识别面是**\ 保护导向的窄场景**\ ，不是完整 JDK 对象模型（登记表在 ``mj2x-core/src/mj2x/backend/regc/regc_intrinsic_registry.cpp``\ ）：
+mj2x 的 intrinsic 识别面是**\ 保护导向的窄场景**\ ，不是完整 JDK 对象模型（登记表在 ``mj2x-core/src/mj2x/backend/regc/regc_intrinsic_registry.cpp``\ 的 ``kEntries``\ ，条目数以该表为准）：
 
 - ``java.lang.Math``\ 纯函数面：``abs`` / ``min`` / ``max`` / ``sin`` / ``cos`` / ``tan`` / ``sqrt`` / ``pow`` / ``floor`` / ``ceil`` / ``round`` / ``random``\ 等直调 mj2x-rt runtime 符号
 - ``Integer.parseInt(String)``\ （含字符串字面量参数）
+- ``Integer`` / ``Long``\ 位操作族（``bitCount`` / ``rotateLeft`` / ``numberOfLeadingZeros`` / ``reverse``\ 等）与无符号族（``compareUnsigned`` / ``divideUnsigned`` / ``remainderUnsigned`` / ``parseUnsignedInt`` / ``toUnsignedString``\ ）及 ``max`` / ``min``
+- ``Float`` / ``Double``\ bits 视图：``floatToIntBits`` / ``floatToRawIntBits`` / ``intBitsToFloat``\ 及 double 同构——非 Raw 版把任意 NaN 位型规范化，Raw 版逐位保留
+- ``Character``\ 静态代理族：``toCodePoint`` / ``highSurrogate`` / ``lowSurrogate`` / ``isSurrogatePair`` / ``charCount``\ 等
+- ``System.arraycopy``\ 安全子集（primitive 同型数组直拷，其余回退 JNI）
 - 非逃逸包装类窄链路：``Integer/Long/.../Character.valueOf``\ 后接对应 ``xxxValue``
 - 非逃逸 ``java.util.Random``\ 状态机切片（``new Random(seed)``\ + nextXxx）
 - ``StringBuilder`` / ``StringBuffer``\ 状态机切片与 ``String``\ 类方法面（RegC/LLVM）
 
+可抛异常的条目走 ``RegCLocalHelper``\ 形态（经 context 挂 pending 异常，调用后 ``ExceptionCheck``\ 保留）：无符号除法的除零抛 ``ArithmeticException``\ ，``parseUnsignedInt``\ 族抛 ``NumberFormatException``\ ；纯计算条目走 ``RuntimeFunction``\ 形态（发射端豁免调用后异常检查）。
+
 逃逸即 fail-closed：包装类或 ``Random``\ 对象一旦作为返回值、字段/数组元素、未知 Java 调用参数或跨复杂 CFG 边界逃逸，不生成语义不可靠的 jobject。完整判据见 :doc:`/user-guide` §7.1；任意 Java 静态调用点降级为用户 native symbol 直调的自定义面见 :doc:`/user-intrinsic`\ （``--intrinsic-config``\ ）。
 
-下文表格中的位运算族（``bitCount``\ 等）、``System.arraycopy``\ 等品类**\ 当前不在识别面内**——识别一个新 intrinsic 的门槛是语义等价判据 + 逃逸边界 + runtime 符号三件套齐备，不做「表格里列了就该有」的推定。
+下文表格是业界常用品类的综述，不是本仓逐条映射的承诺；识别面随 ``kEntries``\ 迭代、上表未穷举的以登记表为准。识别一个新 intrinsic 的门槛是语义等价判据 + 逃逸边界 + runtime 符号三件套齐备，不做「表格里列了就该有」的推定。
 
 问题
 ------

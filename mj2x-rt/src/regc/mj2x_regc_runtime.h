@@ -258,6 +258,12 @@ MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_short(mj2x_regc_context* context, mj
 MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_short_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_byte(mj2x_regc_context* context, mj2x_ref jstr_ref);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_byte_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
+/// 无符号解析族：'+' 前缀接受、'-' 拒绝（NFE）、radix 越界与 null 输入均
+/// NFE；上界 0xFFFFFFFF / 2^64-1，返回位型（4294967295 → -1）。
+MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_unsigned_int(mj2x_regc_context* context, mj2x_ref jstr_ref);
+MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_unsigned_int_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
+MJ2X_REGC_API int64_t _mj2x_intrinsic_parse_unsigned_long(mj2x_regc_context* context, mj2x_ref jstr_ref);
+MJ2X_REGC_API int64_t _mj2x_intrinsic_parse_unsigned_long_radix(mj2x_regc_context* context, mj2x_ref jstr_ref, int32_t radix);
 MJ2X_REGC_API int32_t _mj2x_intrinsic_parse_boolean(mj2x_regc_context* context, mj2x_ref jstr_ref);
 MJ2X_REGC_API float _mj2x_intrinsic_parse_float(mj2x_regc_context* context, mj2x_ref jstr_ref);
 MJ2X_REGC_API double _mj2x_intrinsic_parse_double(mj2x_regc_context* context, mj2x_ref jstr_ref);

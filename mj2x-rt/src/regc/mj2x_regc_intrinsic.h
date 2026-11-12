@@ -148,12 +148,65 @@ int64_t mj2x_intrinsic_long_highest_one_bit(int64_t value);
 int64_t mj2x_intrinsic_long_lowest_one_bit(int64_t value);
 int32_t mj2x_intrinsic_long_signum(int64_t value);
 
+/// @brief Float/Double bits 视图（实现为 mj2x_regc_intrinsic_inline.h 的
+/// static inline，本头声明归档 ABI 面）。
+///
+/// 非 Raw 版把任意 NaN 位型规范化（float → 0x7FC00000、double →
+/// 0x7FF8000000000000），Raw 版逐位保留；bits→浮点反向直通（NaN 位型不
+/// 规范化）。位型双关经 memcpy（严格别名安全）。
+int32_t mj2x_intrinsic_float_to_int_bits(float value);
+int32_t mj2x_intrinsic_float_to_raw_int_bits(float value);
+float   mj2x_intrinsic_int_bits_to_float(int32_t bits);
+int64_t mj2x_intrinsic_double_to_long_bits(double value);
+int64_t mj2x_intrinsic_double_to_raw_long_bits(double value);
+double  mj2x_intrinsic_long_bits_to_double(int64_t bits);
+
+/// @brief Integer/Long.compareUnsigned：无符号序三值比较（-1/0/1）。
+int32_t mj2x_intrinsic_int_compare_unsigned(int32_t lhs, int32_t rhs);
+int32_t mj2x_intrinsic_long_compare_unsigned(int64_t lhs, int64_t rhs);
+
+/// @brief Character 静态代理族：纯位计算不抛异常。
+///
+/// 非代理对 / 越界 code point 的结果按 Javadoc 未定义口径取同款公式值；
+/// char 形参取 uint16_t 位型。实现为 mj2x_regc_intrinsic_inline.h 的 static inline。
+int32_t  mj2x_intrinsic_char_to_code_point(uint16_t high, uint16_t low);
+int32_t  mj2x_intrinsic_char_is_surrogate_pair(uint16_t high, uint16_t low);
+uint16_t mj2x_intrinsic_char_high_surrogate(int32_t code_point);
+uint16_t mj2x_intrinsic_char_low_surrogate(int32_t code_point);
+int32_t  mj2x_intrinsic_char_is_high_surrogate(uint16_t ch);
+int32_t  mj2x_intrinsic_char_is_low_surrogate(uint16_t ch);
+int32_t  mj2x_intrinsic_char_is_surrogate(uint16_t ch);
+int32_t  mj2x_intrinsic_char_is_bmp_code_point(int32_t code_point);
+int32_t  mj2x_intrinsic_char_is_valid_code_point(int32_t code_point);
+int32_t  mj2x_intrinsic_char_char_count(int32_t code_point);
+
 mj2x_ref mj2x_intrinsic_int_to_hex_string(mj2x_regc_context* context, int32_t value);
 mj2x_ref mj2x_intrinsic_int_to_octal_string(mj2x_regc_context* context, int32_t value);
 mj2x_ref mj2x_intrinsic_int_to_binary_string(mj2x_regc_context* context, int32_t value);
 mj2x_ref mj2x_intrinsic_long_to_hex_string(mj2x_regc_context* context, int64_t value);
 mj2x_ref mj2x_intrinsic_long_to_octal_string(mj2x_regc_context* context, int64_t value);
 mj2x_ref mj2x_intrinsic_long_to_binary_string(mj2x_regc_context* context, int64_t value);
+
+/// @brief Integer/Long.toUnsignedString：无符号位型 radix 字符串（小写、无前缀）。
+///
+/// 非法 radix（<2 或 >36）不抛异常，静默回落 radix 10（Integer/Long.toString
+/// 同款口径）；0 输出 "0"。返回 NewStringUTF 的 local ref。
+mj2x_ref mj2x_intrinsic_int_to_unsigned_string(mj2x_regc_context* context, int32_t value);
+mj2x_ref mj2x_intrinsic_int_to_unsigned_string_radix(mj2x_regc_context* context, int32_t value,
+                                                     int32_t radix);
+mj2x_ref mj2x_intrinsic_long_to_unsigned_string(mj2x_regc_context* context, int64_t value);
+mj2x_ref mj2x_intrinsic_long_to_unsigned_string_radix(mj2x_regc_context* context, int64_t value,
+                                                      int32_t radix);
+
+/// @brief Integer/Long.divideUnsigned/remainderUnsigned：无符号除法/取余。
+///
+/// 除零挂 pending ArithmeticException("/ by zero") 并返回 0（RegCLocalHelper
+/// 形态，调用后 ExceptionCheck 保留）；非零除数为纯无符号运算，无
+/// INT_MIN/-1 型陷阱。
+int32_t mj2x_intrinsic_int_divide_unsigned(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
+int32_t mj2x_intrinsic_int_remainder_unsigned(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
+int64_t mj2x_intrinsic_long_divide_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
+int64_t mj2x_intrinsic_long_remainder_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 
 /// @brief java.lang.Enum.name() / ordinal() 直接字段读取。
 ///
