@@ -147,6 +147,7 @@ ExecResult runScript(const std::vector<std::string>& lines)
 #else
     result.exitCode = pclose(pipe);
 #endif
+    result.out = test::stripJvmNativeAccessWarnings(result.out);
     std::error_code ec;
     fs::remove(script, ec);
     return result;

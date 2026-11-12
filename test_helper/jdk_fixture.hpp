@@ -143,6 +143,7 @@ inline ExecResult runBat(const std::vector<std::string>& lines)
     else if (WIFSIGNALED(status)) r.exitCode = 128 + WTERMSIG(status);
     else r.exitCode = status;
 #endif
+    r.out = test::stripJvmNativeAccessWarnings(r.out);
     std::error_code ec;
     fs::remove(script, ec);
     return r;
