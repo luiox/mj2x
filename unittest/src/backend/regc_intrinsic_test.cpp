@@ -10,6 +10,7 @@
 #include "garena/arena.hpp"
 #include <gmock/gmock.h>
 
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -174,6 +175,289 @@ TEST(RegCIntrinsicRegistryTest, MatchesIntegerBitIntrinsicsThroughRegistry)
             << c.owner << "." << c.name;
         EXPECT_EQ(decision.symbol, c.symbol) << c.owner << "." << c.name;
     }
+}
+
+TEST(RegCIntrinsicRegistryTest, MatchesScalarExpansionIntrinsicsThroughRegistry)
+{
+    // Float/Double bits 视图、Integer/Long 无符号族 + max/min、Character
+    // 静态代理族。逐条断言 kind/emitKind/symbol/passContext/nativeObjectKind
+    // ——除零（divideUnsigned/remainderUnsigned）与 NFE（parseUnsignedInt/Long）
+    // 族必须 RegCLocalHelper（RuntimeFunction 被 isPureRuntimeIntrinsic 纯豁免，
+    // 会把异常吞掉）；其余纯计算族必须 RuntimeFunction。
+    struct ScalarCase
+    {
+        const char*           owner;
+        const char*           name;
+        const char*           desc;
+        const char*           symbol;
+        RegCIntrinsicEmitKind emitKind;
+        bool                  passContext;
+    };
+    const ScalarCase kCases[] = {
+        // Float/Double bits 视图：纯计算，无异常通道。
+        {"java/lang/Float",
+         "floatToIntBits",
+         "(F)I",
+         "mj2x_intrinsic_float_to_int_bits",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Float",
+         "floatToRawIntBits",
+         "(F)I",
+         "mj2x_intrinsic_float_to_raw_int_bits",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Float",
+         "intBitsToFloat",
+         "(I)F",
+         "mj2x_intrinsic_int_bits_to_float",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Double",
+         "doubleToLongBits",
+         "(D)J",
+         "mj2x_intrinsic_double_to_long_bits",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Double",
+         "doubleToRawLongBits",
+         "(D)J",
+         "mj2x_intrinsic_double_to_raw_long_bits",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Double",
+         "longBitsToDouble",
+         "(J)D",
+         "mj2x_intrinsic_long_bits_to_double",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        // Integer 无符号族 + max/min。
+        {"java/lang/Integer",
+         "compareUnsigned",
+         "(II)I",
+         "mj2x_intrinsic_int_compare_unsigned",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Integer",
+         "divideUnsigned",
+         "(II)I",
+         "mj2x_intrinsic_int_divide_unsigned",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Integer",
+         "remainderUnsigned",
+         "(II)I",
+         "mj2x_intrinsic_int_remainder_unsigned",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Integer",
+         "parseUnsignedInt",
+         "(Ljava/lang/String;)I",
+         "_mj2x_intrinsic_parse_unsigned_int",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Integer",
+         "parseUnsignedInt",
+         "(Ljava/lang/String;I)I",
+         "_mj2x_intrinsic_parse_unsigned_int_radix",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Integer",
+         "toUnsignedString",
+         "(I)Ljava/lang/String;",
+         "mj2x_intrinsic_int_to_unsigned_string",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         true},
+        {"java/lang/Integer",
+         "toUnsignedString",
+         "(II)Ljava/lang/String;",
+         "mj2x_intrinsic_int_to_unsigned_string_radix",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         true},
+        {"java/lang/Integer",
+         "max",
+         "(II)I",
+         "mj2x_math_max_i32",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Integer",
+         "min",
+         "(II)I",
+         "mj2x_math_min_i32",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        // Long 无符号族 + max/min（desc 用 J）。
+        {"java/lang/Long",
+         "compareUnsigned",
+         "(JJ)I",
+         "mj2x_intrinsic_long_compare_unsigned",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Long",
+         "divideUnsigned",
+         "(JJ)J",
+         "mj2x_intrinsic_long_divide_unsigned",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Long",
+         "remainderUnsigned",
+         "(JJ)J",
+         "mj2x_intrinsic_long_remainder_unsigned",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Long",
+         "parseUnsignedLong",
+         "(Ljava/lang/String;)J",
+         "_mj2x_intrinsic_parse_unsigned_long",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Long",
+         "parseUnsignedLong",
+         "(Ljava/lang/String;I)J",
+         "_mj2x_intrinsic_parse_unsigned_long_radix",
+         RegCIntrinsicEmitKind::RegCLocalHelper,
+         true},
+        {"java/lang/Long",
+         "toUnsignedString",
+         "(J)Ljava/lang/String;",
+         "mj2x_intrinsic_long_to_unsigned_string",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         true},
+        {"java/lang/Long",
+         "toUnsignedString",
+         "(JI)Ljava/lang/String;",
+         "mj2x_intrinsic_long_to_unsigned_string_radix",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         true},
+        {"java/lang/Long",
+         "max",
+         "(JJ)J",
+         "mj2x_math_max_i64",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Long",
+         "min",
+         "(JJ)J",
+         "mj2x_math_min_i64",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        // Character 静态代理族。
+        {"java/lang/Character",
+         "toCodePoint",
+         "(CC)I",
+         "mj2x_intrinsic_char_to_code_point",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "isSurrogatePair",
+         "(CC)Z",
+         "mj2x_intrinsic_char_is_surrogate_pair",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "highSurrogate",
+         "(I)C",
+         "mj2x_intrinsic_char_high_surrogate",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "lowSurrogate",
+         "(I)C",
+         "mj2x_intrinsic_char_low_surrogate",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "isHighSurrogate",
+         "(C)Z",
+         "mj2x_intrinsic_char_is_high_surrogate",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "isLowSurrogate",
+         "(C)Z",
+         "mj2x_intrinsic_char_is_low_surrogate",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "isSurrogate",
+         "(C)Z",
+         "mj2x_intrinsic_char_is_surrogate",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "isBmpCodePoint",
+         "(I)Z",
+         "mj2x_intrinsic_char_is_bmp_code_point",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "isValidCodePoint",
+         "(I)Z",
+         "mj2x_intrinsic_char_is_valid_code_point",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+        {"java/lang/Character",
+         "charCount",
+         "(I)I",
+         "mj2x_intrinsic_char_char_count",
+         RegCIntrinsicEmitKind::RuntimeFunction,
+         false},
+    };
+    for (const auto& c : kCases) {
+        const std::string desc     = std::string(c.desc);
+        const size_t      argCount = desc.find(')') - 1;
+        RegInstruction    ins      = makeStaticCall(c.owner, c.name, c.desc, {});
+        const std::string argList  = desc.substr(1, argCount);
+        if (argList == "Ljava/lang/String;" || argList == "Ljava/lang/String;I") {
+            ins.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}));
+            if (argList.size() > 18) {
+                ins.args.push_back(RegOperand::fromInt(16, SSAType::I32));
+            }
+        }
+        else {
+            ins.args.reserve(argCount);
+            for (size_t i = 0; i < argCount; ++i) {
+                const char ty = desc[1 + i];
+                if (ty == 'J') {
+                    ins.args.push_back(RegOperand::fromInt(1, SSAType::I64));
+                }
+                else if (ty == 'F') {
+                    ins.args.push_back(RegOperand::fromFloat(1.0, SSAType::F32));
+                }
+                else if (ty == 'D') {
+                    ins.args.push_back(RegOperand::fromFloat(1.0, SSAType::F64));
+                }
+                else {
+                    ins.args.push_back(RegOperand::fromInt(1, SSAType::I32));
+                }
+            }
+        }
+        auto decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+
+        EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.emitKind, c.emitKind) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.symbol, c.symbol) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.passContext, c.passContext) << c.owner << "." << c.name;
+        EXPECT_EQ(decision.nativeObjectKind, RegCIntrinsicNativeObjectKind::None)
+            << c.owner << "." << c.name;
+    }
+
+    // 全部 llvmDirect=false：LLVM 直调派生面不扩容，仅 RegC 权威表消费。
+    size_t scalarEntries = 0;
+    for (const auto& c : kCases) {
+        bool found = false;
+        for (const auto& id : builtinIntrinsicTable()) {
+            if (id.owner == c.owner && id.name == c.name && std::strcmp(id.desc, c.desc) == 0) {
+                EXPECT_FALSE(id.llvmDirect) << c.owner << "." << c.name;
+                EXPECT_EQ(id.emitKind, c.emitKind) << c.owner << "." << c.name;
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << c.owner << "." << c.name;
+        ++scalarEntries;
+    }
+    EXPECT_EQ(scalarEntries, 34u);
 }
 
 TEST(RegCIntrinsicRegistryTest, MatchesMathIntrinsicThroughRegistry)
@@ -862,6 +1146,137 @@ TEST(RegCIntrinsicTest, ParseRadixLoweredToIntrinsicNotJni)
               std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
+}
+
+TEST(RegCIntrinsicTest, ScalarBitsViewAndCharProxiesLoweredToRuntimeSymbols)
+{
+    std::string reason;
+    // static int bits(float f, double d, int cp, int a, int b) {
+    //   return Float.floatToIntBits(f) + (int) Double.doubleToRawLongBits(d)
+    //       + Character.charCount(cp) + Integer.max(a, b);
+    // }
+    // locals：f=0、d=1-2、cp=3、a=4、b=5。
+    auto result = emitRegC(
+        "bits",
+        "(FDIII)I",
+        {
+            new VarInsnNode(Opcodes::FLOAD, 0),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Float"),
+                               U("floatToIntBits"),
+                               U("(F)I"),
+                               false),
+            new VarInsnNode(Opcodes::DLOAD, 1),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Double"),
+                               U("doubleToRawLongBits"),
+                               U("(D)J"),
+                               false),
+            new InsnNode(Opcodes::L2I),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ILOAD, 3),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Character"),
+                               U("charCount"),
+                               U("(I)I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ILOAD, 4),
+            new VarInsnNode(Opcodes::ILOAD, 5),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/Integer"),
+                               U("max"),
+                               U("(II)I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        6,
+        6,
+        reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("mj2x_intrinsic_float_to_int_bits("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("mj2x_intrinsic_double_to_raw_long_bits("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("mj2x_intrinsic_char_char_count("), std::string::npos)
+        << result.source;
+    // Integer.max 复用 Math 同款 rt 符号（符号复用先例）。
+    EXPECT_NE(result.source.find("mj2x_math_max_i32("), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"max\""),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+TEST(RegCIntrinsicTest, UnsignedParseDivideAndStringLoweredToHelpers)
+{
+    std::string reason;
+    // static int unsignedOps(String s, int a, int b) {
+    //   return Integer.parseUnsignedInt(s) + Integer.divideUnsigned(a, b);
+    // }
+    auto result = emitRegC("unsignedOps",
+                           "(Ljava/lang/String;II)I",
+                           {
+                               new VarInsnNode(Opcodes::ALOAD, 0),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Integer"),
+                                                  U("parseUnsignedInt"),
+                                                  U("(Ljava/lang/String;)I"),
+                                                  false),
+                               new VarInsnNode(Opcodes::ILOAD, 1),
+                               new VarInsnNode(Opcodes::ILOAD, 2),
+                               new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                  U("java/lang/Integer"),
+                                                  U("divideUnsigned"),
+                                                  U("(II)I"),
+                                                  false),
+                               new InsnNode(Opcodes::IADD),
+                               new InsnNode(Opcodes::IRETURN),
+                           },
+                           3,
+                           3,
+                           reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_parse_unsigned_int("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("mj2x_intrinsic_int_divide_unsigned("), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"parseUnsignedInt\""),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\", \"divideUnsigned\""),
+              std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+
+    // static String unsignedString(int x) { return Integer.toUnsignedString(x, 16); }
+    auto stringResult = emitRegC("unsignedString",
+                                 "(I)Ljava/lang/String;",
+                                 {
+                                     new VarInsnNode(Opcodes::ILOAD, 0),
+                                     new IntInsnNode(Opcodes::BIPUSH, 16),
+                                     new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                        U("java/lang/Integer"),
+                                                        U("toUnsignedString"),
+                                                        U("(II)Ljava/lang/String;"),
+                                                        false),
+                                     new InsnNode(Opcodes::ARETURN),
+                                 },
+                                 2,
+                                 1,
+                                 reason);
+
+    ASSERT_TRUE(stringResult.ok) << stringResult.reason;
+    EXPECT_NE(stringResult.source.find("mj2x_intrinsic_int_to_unsigned_string_radix("),
+              std::string::npos)
+        << stringResult.source;
+    EXPECT_EQ(stringResult.source.find("_mj2x_regc_call_ref(\"java/lang/Integer\""),
+              std::string::npos)
+        << stringResult.source;
+    expectNoStackAnchors(stringResult.source);
 }
 
 TEST(RegCIntrinsicTest, StringMethodsLoweredToIntrinsicsNotJni)
@@ -2203,16 +2618,16 @@ TEST(RegCIntrinsicTest, StringBufferUseAfterEscapeFallsBackToJavaObject)
 TEST(RegCIntrinsicTest, NonIntrinsicCallStillUsesJniHelper)
 {
     std::string reason;
-    // An unhandled JDK call (Integer.remainderUnsigned) must fall through to the
+    // An unhandled JDK call (Integer.sum) must fall through to the
     // generic JNI call helper so we never silently drop a call site.
     auto result = emitRegC(
-        "remainderUnsigned",
+        "sum",
         "(II)I",
         {
             new VarInsnNode(Opcodes::ILOAD, 0),
             new VarInsnNode(Opcodes::ILOAD, 1),
             new MethodInsnNode(
-                Opcodes::INVOKESTATIC, U("java/lang/Integer"), U("remainderUnsigned"), U("(II)I"), false),
+                Opcodes::INVOKESTATIC, U("java/lang/Integer"), U("sum"), U("(II)I"), false),
             new InsnNode(Opcodes::IRETURN),
         },
         2,
@@ -2221,7 +2636,7 @@ TEST(RegCIntrinsicTest, NonIntrinsicCallStillUsesJniHelper)
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("{\"java/lang/Integer\", \"remainderUnsigned\", \"(II)I\", NULL, NULL}"),
+    EXPECT_NE(result.source.find("{\"java/lang/Integer\", \"sum\", \"(II)I\", NULL, NULL}"),
               std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("_mj2x_regc_cached_static_method(&_mj2x_regc_cache_"),
@@ -2233,7 +2648,7 @@ TEST(RegCIntrinsicTest, NonIntrinsicCallStillUsesJniHelper)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\""), std::string::npos)
         << result.source;
-    // remainderUnsigned must not have been misrecognized as an intrinsic call site.
+    // Integer.sum must not have been misrecognized as an intrinsic call site.
     EXPECT_EQ(result.source.find("= mj2x_math_"), std::string::npos) << result.source;
     EXPECT_EQ(result.source.find("= _mj2x_intrinsic_parse_int"), std::string::npos)
         << result.source;

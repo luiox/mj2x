@@ -480,7 +480,7 @@ TEST(LlvmIntrinsicRegistryGoldenCross, DerivedSurfaceMatchesLlvmDirectBit)
     for (const auto& id : builtinIntrinsicTable()) {
         if (id.llvmDirect) ++direct;
     }
-    EXPECT_EQ(builtinIntrinsicTable().size(), 179u);
+    EXPECT_EQ(builtinIntrinsicTable().size(), 213u);
     EXPECT_EQ(direct, sizeOf(kGoldenMath) + sizeOf(kGoldenBox) + sizeOf(kGoldenUnbox) +
                           sizeOf(kGoldenRandom) + sizeOf(kGoldenBuilder));
 }

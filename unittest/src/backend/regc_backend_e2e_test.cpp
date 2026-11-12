@@ -2122,6 +2122,144 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
         << generatedC;
 }
 
+// exec 对拍：三类代表条目 + 边界（除零 pending、NFE、NaN 规范化、unsigned
+// 满界、代理对边界）。基线 = 纯 JVM 执行，受保护 = RegC native 直调，逐行全等。
+TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
+{
+    runCase(
+        "RegCScalarIntrinsics",
+        "public class RegCScalarIntrinsics {\n"
+        // ---- Float/Double bits 视图 ----
+        "  public static String floatBits(float f) {\n"
+        "    return Integer.toHexString(Float.floatToIntBits(f)) + \"/\"\n"
+        "        + Integer.toHexString(Float.floatToRawIntBits(f));\n"
+        "  }\n"
+        "  public static String doubleBits(double d) {\n"
+        "    return Long.toHexString(Double.doubleToLongBits(d)) + \"/\"\n"
+        "        + Long.toHexString(Double.doubleToRawLongBits(d));\n"
+        "  }\n"
+        "  public static float bitsToFloat(int bits) { return Float.intBitsToFloat(bits); }\n"
+        "  public static double bitsToDouble(long bits) { return Double.longBitsToDouble(bits); }\n"
+        // ---- Integer/Long 无符号族 + max/min ----
+        "  public static int compareUnsigned(int a, int b) { return Integer.compareUnsigned(a, b); }\n"
+        "  public static int divideUnsignedOrCatch(int a, int b) {\n"
+        "    try { return Integer.divideUnsigned(a, b); }\n"
+        "    catch (ArithmeticException e) { return -77; }\n"
+        "  }\n"
+        "  public static int remainderUnsignedOrCatch(int a, int b) {\n"
+        "    try { return Integer.remainderUnsigned(a, b); }\n"
+        "    catch (ArithmeticException e) { return -88; }\n"
+        "  }\n"
+        "  public static long longDivideUnsignedOrCatch(long a, long b) {\n"
+        "    try { return Long.divideUnsigned(a, b); }\n"
+        "    catch (ArithmeticException e) { return -99L; }\n"
+        "  }\n"
+        "  public static long longRemainderUnsignedOrCatch(long a, long b) {\n"
+        "    try { return Long.remainderUnsigned(a, b); }\n"
+        "    catch (ArithmeticException e) { return -66L; }\n"
+        "  }\n"
+        "  public static int parseUnsignedInt(String s) { return Integer.parseUnsignedInt(s); }\n"
+        "  public static int parseUnsignedIntRadix(String s, int radix) {\n"
+        "    return Integer.parseUnsignedInt(s, radix);\n"
+        "  }\n"
+        "  public static long parseUnsignedLong(String s) { return Long.parseUnsignedLong(s); }\n"
+        "  public static String toUnsignedString(int x) { return Integer.toUnsignedString(x); }\n"
+        "  public static String toUnsignedStringRadix(int x, int radix) {\n"
+        "    return Integer.toUnsignedString(x, radix);\n"
+        "  }\n"
+        "  public static String longToUnsignedStringRadix(long x, int radix) {\n"
+        "    return Long.toUnsignedString(x, radix);\n"
+        "  }\n"
+        "  public static int intMax(int a, int b) { return Integer.max(a, b); }\n"
+        "  public static int intMin(int a, int b) { return Integer.min(a, b); }\n"
+        "  public static long longMax(long a, long b) { return Long.max(a, b); }\n"
+        "  public static long longMin(long a, long b) { return Long.min(a, b); }\n"
+        // ---- Character 静态代理族 ----
+        "  public static int toCodePoint(char h, char l) { return Character.toCodePoint(h, l); }\n"
+        "  public static boolean isSurrogatePair(char h, char l) {\n"
+        "    return Character.isSurrogatePair(h, l);\n"
+        "  }\n"
+        "  public static int highSurrogate(int cp) { return Character.highSurrogate(cp); }\n"
+        "  public static int lowSurrogate(int cp) { return Character.lowSurrogate(cp); }\n"
+        "  public static boolean isHighSurrogate(char c) { return Character.isHighSurrogate(c); }\n"
+        "  public static boolean isLowSurrogate(char c) { return Character.isLowSurrogate(c); }\n"
+        "  public static boolean isSurrogate(char c) { return Character.isSurrogate(c); }\n"
+        "  public static boolean isBmpCodePoint(int cp) { return Character.isBmpCodePoint(cp); }\n"
+        "  public static boolean isValidCodePoint(int cp) { return Character.isValidCodePoint(cp); }\n"
+        "  public static int charCount(int cp) { return Character.charCount(cp); }\n"
+        "}\n",
+        {
+            // bits 视图：NaN 规范化（payload 丢弃）vs raw 逐位保留；±0.0/Inf 原样。
+            {"floatBitsPayloadNaN", "RegCScalarIntrinsics.floatBits(Float.intBitsToFloat(0x7FC01234))"},
+            {"floatBitsNaN", "RegCScalarIntrinsics.floatBits(Float.NaN)"},
+            {"floatBitsNegPayloadNaN", "RegCScalarIntrinsics.floatBits(Float.intBitsToFloat(0xFFC01234))"},
+            {"floatBitsNegZero", "RegCScalarIntrinsics.floatBits(-0.0f)"},
+            {"floatBitsInf", "RegCScalarIntrinsics.floatBits(Float.POSITIVE_INFINITY)"},
+            {"floatBitsRoundTrip", "RegCScalarIntrinsics.bitsToFloat(0x3F800000)"},
+            {"bitsToFloatPayloadNaN", "RegCScalarIntrinsics.bitsToFloat(0x7FC01234)"},
+            {"doubleBitsPayloadNaN", "RegCScalarIntrinsics.doubleBits(Double.longBitsToDouble(0x7FF8000000123456L))"},
+            {"doubleBitsNaN", "RegCScalarIntrinsics.doubleBits(Double.NaN)"},
+            {"doubleBitsNegZero", "RegCScalarIntrinsics.doubleBits(-0.0d)"},
+            {"doubleBitsRoundTrip", "RegCScalarIntrinsics.bitsToDouble(0x3FF0000000000000L)"},
+            {"bitsToDoublePayloadNaN", "RegCScalarIntrinsics.bitsToDouble(0x7FF8000000123456L)"},
+            // 无符号族：无符号序边界、除零 pending、满界解析、非法 radix 静默回落。
+            {"compareUnsigned", "RegCScalarIntrinsics.compareUnsigned(-1, 1)"},
+            {"compareUnsignedMin", "RegCScalarIntrinsics.compareUnsigned(0, Integer.MIN_VALUE)"},
+            {"divideUnsignedOrCatch", "RegCScalarIntrinsics.divideUnsignedOrCatch(-1, 2)"},
+            {"divideUnsignedZero", "RegCScalarIntrinsics.divideUnsignedOrCatch(1, 0)"},
+            {"remainderUnsignedOrCatch", "RegCScalarIntrinsics.remainderUnsignedOrCatch(Integer.MIN_VALUE, -1)"},
+            {"remainderUnsignedZero", "RegCScalarIntrinsics.remainderUnsignedOrCatch(1, 0)"},
+            {"longDivideUnsignedOrCatch", "RegCScalarIntrinsics.longDivideUnsignedOrCatch(-1L, 3L)"},
+            {"longDivideUnsignedZero", "RegCScalarIntrinsics.longDivideUnsignedOrCatch(1L, 0L)"},
+            {"longRemainderUnsignedOrCatch", "RegCScalarIntrinsics.longRemainderUnsignedOrCatch(Long.MIN_VALUE, -1L)"},
+            {"parseUnsignedIntMax", "RegCScalarIntrinsics.parseUnsignedInt(\"4294967295\")"},
+            {"parseUnsignedIntOver", "RegCScalarIntrinsics.parseUnsignedInt(\"4294967296\")"},
+            {"parseUnsignedIntMinus", "RegCScalarIntrinsics.parseUnsignedInt(\"-1\")"},
+            {"parseUnsignedIntPlus", "RegCScalarIntrinsics.parseUnsignedInt(\"+5\")"},
+            {"parseUnsignedIntHex", "RegCScalarIntrinsics.parseUnsignedIntRadix(\"ffffffff\", 16)"},
+            {"parseUnsignedLongMax", "RegCScalarIntrinsics.parseUnsignedLong(\"18446744073709551615\")"},
+            {"parseUnsignedLongTwoPow63", "RegCScalarIntrinsics.parseUnsignedLong(\"9223372036854775808\")"},
+            {"toUnsignedString", "RegCScalarIntrinsics.toUnsignedString(-1)"},
+            {"toUnsignedStringMin", "RegCScalarIntrinsics.toUnsignedString(Integer.MIN_VALUE)"},
+            {"toUnsignedStringRadix", "RegCScalarIntrinsics.toUnsignedStringRadix(305419896, 16)"},
+            {"toUnsignedStringBadRadix", "RegCScalarIntrinsics.toUnsignedStringRadix(5, 1)"},
+            {"toUnsignedStringRadix36", "RegCScalarIntrinsics.toUnsignedStringRadix(-1, 36)"},
+            {"longToUnsignedStringRadix", "RegCScalarIntrinsics.longToUnsignedStringRadix(-1L, 8)"},
+            {"intMax", "RegCScalarIntrinsics.intMax(-1, 1)"},
+            {"intMin", "RegCScalarIntrinsics.intMin(-1, 1)"},
+            {"longMax", "RegCScalarIntrinsics.longMax(Long.MIN_VALUE, Long.MAX_VALUE)"},
+            {"longMin", "RegCScalarIntrinsics.longMin(-1L, 1L)"},
+            // Character：代理对边界 0xD7FF/0xD800/0xDBFF/0xDC00/0xDFFF/0xE000。
+            {"toCodePoint", "RegCScalarIntrinsics.toCodePoint((char) 0xD83D, (char) 0xDE00)"},
+            {"toCodePointMin", "RegCScalarIntrinsics.toCodePoint((char) 0xD800, (char) 0xDC00)"},
+            {"isSurrogatePair", "RegCScalarIntrinsics.isSurrogatePair((char) 0xD83D, (char) 0xDE00)"},
+            {"isSurrogatePairBadLow", "RegCScalarIntrinsics.isSurrogatePair((char) 0xD83D, (char) 0x41)"},
+            {"isSurrogatePairBadHigh", "RegCScalarIntrinsics.isSurrogatePair((char) 0x41, (char) 0xD800)"},
+            {"highSurrogate", "RegCScalarIntrinsics.highSurrogate(0x1F600)"},
+            {"highSurrogateZero", "RegCScalarIntrinsics.highSurrogate(0)"},
+            {"lowSurrogate", "RegCScalarIntrinsics.lowSurrogate(0x1F600)"},
+            {"lowSurrogateZero", "RegCScalarIntrinsics.lowSurrogate(0)"},
+            {"isHighD800", "RegCScalarIntrinsics.isHighSurrogate((char) 0xD800)"},
+            {"isHighDBFF", "RegCScalarIntrinsics.isHighSurrogate((char) 0xDBFF)"},
+            {"isHighD7FF", "RegCScalarIntrinsics.isHighSurrogate((char) 0xD7FF)"},
+            {"isLowDFFF", "RegCScalarIntrinsics.isLowSurrogate((char) 0xDFFF)"},
+            {"isLowDC00", "RegCScalarIntrinsics.isLowSurrogate((char) 0xDC00)"},
+            {"isLowE000", "RegCScalarIntrinsics.isLowSurrogate((char) 0xE000)"},
+            {"isSurrogateD800", "RegCScalarIntrinsics.isSurrogate((char) 0xD800)"},
+            {"isSurrogateD7FF", "RegCScalarIntrinsics.isSurrogate((char) 0xD7FF)"},
+            {"isSurrogateE000", "RegCScalarIntrinsics.isSurrogate((char) 0xE000)"},
+            {"isBmpFFFF", "RegCScalarIntrinsics.isBmpCodePoint(0xFFFF)"},
+            {"isBmp10000", "RegCScalarIntrinsics.isBmpCodePoint(0x10000)"},
+            {"isBmpNegative", "RegCScalarIntrinsics.isBmpCodePoint(-1)"},
+            {"isValidMax", "RegCScalarIntrinsics.isValidCodePoint(0x10FFFF)"},
+            {"isValidOver", "RegCScalarIntrinsics.isValidCodePoint(0x110000)"},
+            {"isValidNegative", "RegCScalarIntrinsics.isValidCodePoint(-1)"},
+            {"charCountFFFF", "RegCScalarIntrinsics.charCount(0xFFFF)"},
+            {"charCount10000", "RegCScalarIntrinsics.charCount(0x10000)"},
+            {"charCountNegative", "RegCScalarIntrinsics.charCount(-1)"},
+        });
+}
+
 // ---------------------------------------------------------------------------
 // safe-env E2E：复刻 c2j-native-deobfuscator 的原地改写攻击姿势
 // （*env->functions = hooked_copy，指针不变），验证：

@@ -16,6 +16,23 @@ static void expect_at(int line, int condition)
 }
 #define expect(c) expect_at(__LINE__, (c))
 
+// ---- 除零 pending 断言用的 throw 回调（crt 测试同款形状）----
+typedef struct scalar_thrown_exception
+{
+    int         count;
+    const char* class_name;
+    const char* message;
+} scalar_thrown_exception;
+
+static void scalar_record_throw(void* env, const char* class_name, const char* message)
+{
+    scalar_thrown_exception* thrown = (scalar_thrown_exception*)env;
+    if (thrown == NULL) return;
+    thrown->count += 1;
+    thrown->class_name = class_name;
+    thrown->message    = message;
+}
+
 void test_regc_intrinsic_c99_abi(void)
 {
     mj2x_int integer = mj2x_int_value_of(-42);
@@ -265,6 +282,164 @@ void test_regc_intrinsic_bit_ops(void)
     expect(mj2x_intrinsic_long_signum(INT64_C(-9)) == -1);
     expect(mj2x_intrinsic_long_signum(INT64_C(0)) == 0);
     expect(mj2x_intrinsic_long_signum(INT64_C(9)) == 1);
+}
+
+// ---- Float/Double bits 视图 ----
+// floatToIntBits 把任意 NaN 位型规范化为 0x7FC00000，floatToRawIntBits 逐位
+// 保留（含 NaN payload）；±0.0/Infinity 两版都原样。
+
+void test_regc_intrinsic_bits_views(void)
+{
+    // NaN 规范化：带 payload 的非规范 NaN。
+    {
+        const uint32_t payload_bits = 0x7FC01234U;
+        float          payload_nan;
+        memcpy(&payload_nan, &payload_bits, sizeof payload_nan);
+        expect(mj2x_intrinsic_float_to_int_bits(payload_nan) == (int32_t)0x7FC00000);
+        expect(mj2x_intrinsic_float_to_raw_int_bits(payload_nan) == (int32_t)0x7FC01234);
+        // canonical NaN 幂等。
+        expect(mj2x_intrinsic_float_to_int_bits((float)NAN) == (int32_t)0x7FC00000);
+        // 负侧 payload NaN 同样规范化：规范化到 +NaN 0x7FC00000，符号位丢弃。
+        const uint32_t neg_payload_bits = 0xFFC01234U;
+        float          neg_payload_nan;
+        memcpy(&neg_payload_nan, &neg_payload_bits, sizeof neg_payload_nan);
+        expect(mj2x_intrinsic_float_to_int_bits(neg_payload_nan) == (int32_t)0x7FC00000);
+        expect(mj2x_intrinsic_float_to_raw_int_bits(neg_payload_nan) == (int32_t)0xFFC01234);
+        // Infinity / ±0.0 位型原样（两版一致）。
+        expect(mj2x_intrinsic_float_to_int_bits((float)INFINITY) == (int32_t)0x7F800000);
+        expect(mj2x_intrinsic_float_to_raw_int_bits((float)INFINITY) == (int32_t)0x7F800000);
+        expect(mj2x_intrinsic_float_to_int_bits(-0.0f) == (int32_t)0x80000000);
+        expect(mj2x_intrinsic_float_to_raw_int_bits(-0.0f) == (int32_t)0x80000000);
+        expect(mj2x_intrinsic_float_to_int_bits(0.0f) == 0);
+        expect(mj2x_intrinsic_float_to_int_bits(1.0f) == (int32_t)0x3F800000);
+        // intBitsToFloat 往返（含 NaN 位型直通）。
+        expect(mj2x_intrinsic_int_bits_to_float((int32_t)0x3F800000) == 1.0f);
+        expect(mj2x_intrinsic_int_bits_to_float((int32_t)0x80000000) == -0.0f);
+        {
+            const float round_trip =
+                mj2x_intrinsic_int_bits_to_float((int32_t)0x7FC01234U);
+            expect(mj2x_intrinsic_float_to_raw_int_bits(round_trip) == (int32_t)0x7FC01234);
+        }
+        // double：规范化 0x7FF8000000000000，raw 逐位保留。
+        const uint64_t d_payload_bits = UINT64_C(0x7FF8000000123456);
+        double         d_payload_nan;
+        memcpy(&d_payload_nan, &d_payload_bits, sizeof d_payload_nan);
+        expect(mj2x_intrinsic_double_to_long_bits(d_payload_nan) ==
+               (int64_t)UINT64_C(0x7FF8000000000000));
+        expect(mj2x_intrinsic_double_to_raw_long_bits(d_payload_nan) ==
+               (int64_t)UINT64_C(0x7FF8000000123456));
+        const uint64_t d_neg_payload_bits = UINT64_C(0xFFF8000000123456);
+        double         d_neg_payload_nan;
+        memcpy(&d_neg_payload_nan, &d_neg_payload_bits, sizeof d_neg_payload_nan);
+        expect(mj2x_intrinsic_double_to_long_bits(d_neg_payload_nan) ==
+               (int64_t)UINT64_C(0x7FF8000000000000));
+        expect(mj2x_intrinsic_double_to_raw_long_bits(d_neg_payload_nan) ==
+               (int64_t)UINT64_C(0xFFF8000000123456));
+        expect(mj2x_intrinsic_double_to_long_bits((double)INFINITY) ==
+               (int64_t)UINT64_C(0x7FF0000000000000));
+        expect(mj2x_intrinsic_double_to_long_bits(-0.0) ==
+               (int64_t)UINT64_C(0x8000000000000000));
+        expect(mj2x_intrinsic_double_to_long_bits(1.0) == (int64_t)UINT64_C(0x3FF0000000000000));
+        expect(mj2x_intrinsic_long_bits_to_double(INT64_C(0x3FF0000000000000)) == 1.0);
+        expect(mj2x_intrinsic_long_bits_to_double((int64_t)UINT64_C(0x8000000000000000)) == -0.0);
+        {
+            const double d_round_trip =
+                mj2x_intrinsic_long_bits_to_double((int64_t)UINT64_C(0x7FF8000000123456));
+            expect(mj2x_intrinsic_double_to_raw_long_bits(d_round_trip) ==
+                   (int64_t)UINT64_C(0x7FF8000000123456));
+        }
+    }
+}
+
+// ---- Integer/Long 无符号族 + Character 静态代理 ----
+// divideUnsigned/remainderUnsigned 除零断言 pending
+// ArithmeticException("/ by zero")——RegCLocalHelper 形态的语义锚点。
+
+void test_regc_intrinsic_unsigned_and_char(void)
+{
+    // compareUnsigned：无符号序（-1 = 0xFFFFFFFF 是最大值）。
+    expect(mj2x_intrinsic_int_compare_unsigned(-1, 1) == 1);
+    expect(mj2x_intrinsic_int_compare_unsigned(1, -1) == -1);
+    expect(mj2x_intrinsic_int_compare_unsigned(0, INT32_MIN) == -1);
+    expect(mj2x_intrinsic_int_compare_unsigned(INT32_MIN, INT32_MIN) == 0);
+    /* 0x7FFFFFFF < 0x80000000（无符号序）。 */
+    expect(mj2x_intrinsic_int_compare_unsigned(INT32_MAX, INT32_MIN) == -1);
+    expect(mj2x_intrinsic_int_compare_unsigned(INT32_MIN, INT32_MAX) == 1);
+    expect(mj2x_intrinsic_long_compare_unsigned(-1, 1) == 1);
+    expect(mj2x_intrinsic_long_compare_unsigned(INT64_MIN, INT64_MAX) == 1);
+    expect(mj2x_intrinsic_long_compare_unsigned(INT64_C(5), INT64_C(5)) == 0);
+
+    // divideUnsigned/remainderUnsigned：位型与 JDK 一致。
+    {
+        scalar_thrown_exception thrown = {0, NULL, NULL};
+        mj2x_regc_context       context;
+        mj2x_regc_init_context(&context, &thrown, scalar_record_throw);
+
+        expect(mj2x_intrinsic_int_divide_unsigned(&context, 7, 2) == 3);
+        expect(mj2x_intrinsic_int_remainder_unsigned(&context, 7, 2) == 1);
+        /* 无符号 0x80000000 / 0xFFFFFFFF = 0，余 0x80000000。 */
+        expect(mj2x_intrinsic_int_divide_unsigned(&context, INT32_MIN, -1) == 0);
+        expect(mj2x_intrinsic_int_remainder_unsigned(&context, INT32_MIN, -1) == INT32_MIN);
+        /* 0xFFFFFFFF / 2 = 0x7FFFFFFF，余 1。 */
+        expect(mj2x_intrinsic_int_divide_unsigned(&context, -1, 2) == INT32_MAX);
+        expect(mj2x_intrinsic_int_remainder_unsigned(&context, -1, 2) == 1);
+        expect(mj2x_intrinsic_long_divide_unsigned(&context, -1, 3) ==
+               INT64_C(6148914691236517205));
+        expect(mj2x_intrinsic_long_remainder_unsigned(&context, -1, 3) == 0);
+        expect(mj2x_intrinsic_long_divide_unsigned(&context, INT64_MIN, -1) == 0);
+        expect(mj2x_intrinsic_long_remainder_unsigned(&context, INT64_MIN, -1) == INT64_MIN);
+        expect(thrown.count == 0);
+        /* 除零：挂 pending ArithmeticException("/ by zero") 并返回 0。 */
+        expect(mj2x_intrinsic_int_divide_unsigned(&context, 1, 0) == 0);
+        expect(thrown.count == 1);
+        expect(strcmp(thrown.class_name, "java/lang/ArithmeticException") == 0);
+        expect(strcmp(thrown.message, "/ by zero") == 0);
+        expect(mj2x_intrinsic_int_remainder_unsigned(&context, 1, 0) == 0);
+        expect(thrown.count == 2);
+        expect(mj2x_intrinsic_long_divide_unsigned(&context, 1, 0) == 0);
+        expect(thrown.count == 3);
+        expect(mj2x_intrinsic_long_remainder_unsigned(&context, 1, 0) == 0);
+        expect(thrown.count == 4);
+    }
+
+    // Character 静态代理：0xD7FF/0xD800/0xDBFF/0xDC00/0xDFFF/0xE000 边界。
+    expect(mj2x_intrinsic_char_is_high_surrogate((uint16_t)0xD800) == 1);
+    expect(mj2x_intrinsic_char_is_high_surrogate((uint16_t)0xDBFF) == 1);
+    expect(mj2x_intrinsic_char_is_high_surrogate((uint16_t)0xDC00) == 0);
+    expect(mj2x_intrinsic_char_is_high_surrogate((uint16_t)0xD7FF) == 0);
+    expect(mj2x_intrinsic_char_is_low_surrogate((uint16_t)0xDC00) == 1);
+    expect(mj2x_intrinsic_char_is_low_surrogate((uint16_t)0xDFFF) == 1);
+    expect(mj2x_intrinsic_char_is_low_surrogate((uint16_t)0xD7FF) == 0);
+    expect(mj2x_intrinsic_char_is_low_surrogate((uint16_t)0xE000) == 0);
+    expect(mj2x_intrinsic_char_is_surrogate((uint16_t)0xD800) == 1);
+    expect(mj2x_intrinsic_char_is_surrogate((uint16_t)0xDFFF) == 1);
+    expect(mj2x_intrinsic_char_is_surrogate((uint16_t)0xD7FF) == 0);
+    expect(mj2x_intrinsic_char_is_surrogate((uint16_t)0xE000) == 0);
+    expect(mj2x_intrinsic_char_is_surrogate_pair((uint16_t)0xD83D, (uint16_t)0xDE00) == 1);
+    expect(mj2x_intrinsic_char_is_surrogate_pair((uint16_t)0xD83D, (uint16_t)0x0041) == 0);
+    expect(mj2x_intrinsic_char_is_surrogate_pair((uint16_t)0x0041, (uint16_t)0xD800) == 0);
+    /* high/lowSurrogate：OpenJDK 公式（0x1F600 -> D83D/DE00）。 */
+    expect(mj2x_intrinsic_char_high_surrogate(0x1F600) == (uint16_t)0xD83D);
+    expect(mj2x_intrinsic_char_low_surrogate(0x1F600) == (uint16_t)0xDE00);
+    expect(mj2x_intrinsic_char_high_surrogate(0) == (uint16_t)0xD7C0);
+    expect(mj2x_intrinsic_char_low_surrogate(0) == (uint16_t)0xDC00);
+    /* toCodePoint：代理对往返。 */
+    expect(mj2x_intrinsic_char_to_code_point((uint16_t)0xD83D, (uint16_t)0xDE00) == 0x1F600);
+    expect(mj2x_intrinsic_char_to_code_point((uint16_t)0xD800, (uint16_t)0xDC00) == 0x10000);
+    /* isBmpCodePoint：负值（>0xFFFF 无符号序）非 BMP。 */
+    expect(mj2x_intrinsic_char_is_bmp_code_point(0xFFFF) == 1);
+    expect(mj2x_intrinsic_char_is_bmp_code_point(0x10000) == 0);
+    expect(mj2x_intrinsic_char_is_bmp_code_point(-1) == 0);
+    /* isValidCodePoint：[0, 0x10FFFF]。 */
+    expect(mj2x_intrinsic_char_is_valid_code_point(0) == 1);
+    expect(mj2x_intrinsic_char_is_valid_code_point(0x10FFFF) == 1);
+    expect(mj2x_intrinsic_char_is_valid_code_point(0x110000) == 0);
+    expect(mj2x_intrinsic_char_is_valid_code_point(-1) == 0);
+    /* charCount：cp >= 0x10000 ? 2 : 1（负值/越界不校验）。 */
+    expect(mj2x_intrinsic_char_char_count(0xFFFF) == 1);
+    expect(mj2x_intrinsic_char_char_count(0x10000) == 2);
+    expect(mj2x_intrinsic_char_char_count(-1) == 1);
+    expect(mj2x_intrinsic_char_char_count(0x110000) == 2);
 }
 
 // ---- #1186：DISABLED_ 全量 float 穷举常驻回归 ----

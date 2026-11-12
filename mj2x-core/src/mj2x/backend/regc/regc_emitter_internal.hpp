@@ -467,7 +467,7 @@ bool rejectNativeObjectEscapes(const RegCFunctionEmitState&   state,
 /// emitFunction 入口对全部 Call 指令以唯一 registry 实例算一次 matchCall，
 /// StringBuilder/wrapper 分析（各两遍）、local-ref 帧判定、异常检查稀疏化
 /// 与 emitIntrinsicCall 共享同一份决策。此前各消费点自行重复判定（每 Call
-/// 至多 6 次 fromInstruction + 179 条目线性扫），且 analyze/稀疏化侧硬编码
+/// 多次 fromInstruction + 权威表一次线性扫），且 analyze/稀疏化侧硬编码
 /// builtins() 而 emit 侧用用户 registry——用户条目遮蔽内建签名时两侧判定
 /// 漂移（wrapper 分析按 WrapperValueOf 建 native 态、emit 按 UserIntrinsic
 /// 出 jobject 的错配；纯计算豁免 ExceptionCheck 套在可抛用户函数上）。

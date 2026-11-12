@@ -414,6 +414,100 @@ mj2x_ref mj2x_intrinsic_long_to_binary_string(mj2x_regc_context* context, int64_
     return mj2x_intrinsic_unsigned_to_string(context, (uint64_t)value, 1);
 }
 
+// ---- Integer/Long.toUnsignedString（含 radix 重载）----
+//
+// 非法 radix（<2 或 >36）不抛异常，静默回落 radix 10（Integer/Long.toString
+// 同款口径）；无符号位型 + 小写 digits；0 -> "0"。
+
+static mj2x_ref mj2x_intrinsic_unsigned_radix_to_string(mj2x_regc_context* context,
+                                                        uint64_t value, uint32_t radix)
+{
+    JNIEnv* env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    if (env == NULL) return NULL;
+    if (radix < 2U || radix > 36U) radix = 10U;
+    static const char kRadixDigits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char buffer[66];
+    int  pos = (int)sizeof(buffer) - 1;
+    buffer[pos] = '\0';
+    do {
+        buffer[--pos] = kRadixDigits[value % radix];
+        value /= radix;
+    } while (value != 0U && pos > 0);
+    return (mj2x_ref)(*env)->NewStringUTF(env, buffer + pos);
+}
+
+mj2x_ref mj2x_intrinsic_int_to_unsigned_string(mj2x_regc_context* context, int32_t value)
+{
+    return mj2x_intrinsic_unsigned_radix_to_string(context, (uint32_t)value, 10U);
+}
+
+mj2x_ref mj2x_intrinsic_int_to_unsigned_string_radix(mj2x_regc_context* context, int32_t value,
+                                                     int32_t radix)
+{
+    return mj2x_intrinsic_unsigned_radix_to_string(context, (uint32_t)value, (uint32_t)radix);
+}
+
+mj2x_ref mj2x_intrinsic_long_to_unsigned_string(mj2x_regc_context* context, int64_t value)
+{
+    return mj2x_intrinsic_unsigned_radix_to_string(context, (uint64_t)value, 10U);
+}
+
+mj2x_ref mj2x_intrinsic_long_to_unsigned_string_radix(mj2x_regc_context* context, int64_t value,
+                                                      int32_t radix)
+{
+    return mj2x_intrinsic_unsigned_radix_to_string(context, (uint64_t)value, (uint32_t)radix);
+}
+
+// ---- Integer/Long.divideUnsigned/remainderUnsigned ----
+//
+// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义；经 context
+// 挂 pending 异常（RegCLocalHelper 形态，发射面保留调用后 ExceptionCheck）。
+// 非零除数路径纯 C 无符号运算：无符号除法无 INT_MIN/-1 型陷阱，位型与 JDK
+// 一致（Integer.divideUnsigned(MIN_VALUE, -1) == 0 等）。
+
+static void mj2x_intrinsic_throw_div_zero(mj2x_regc_context* context)
+{
+    if (context != NULL && context->throwException != NULL) {
+        context->throwException(context->env, "java/lang/ArithmeticException", "/ by zero");
+    }
+}
+
+int32_t mj2x_intrinsic_int_divide_unsigned(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
+{
+    if (rhs == 0) {
+        mj2x_intrinsic_throw_div_zero(context);
+        return 0;
+    }
+    return (int32_t)((uint32_t)lhs / (uint32_t)rhs);
+}
+
+int32_t mj2x_intrinsic_int_remainder_unsigned(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
+{
+    if (rhs == 0) {
+        mj2x_intrinsic_throw_div_zero(context);
+        return 0;
+    }
+    return (int32_t)((uint32_t)lhs % (uint32_t)rhs);
+}
+
+int64_t mj2x_intrinsic_long_divide_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
+{
+    if (rhs == 0) {
+        mj2x_intrinsic_throw_div_zero(context);
+        return 0;
+    }
+    return (int64_t)((uint64_t)lhs / (uint64_t)rhs);
+}
+
+int64_t mj2x_intrinsic_long_remainder_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
+{
+    if (rhs == 0) {
+        mj2x_intrinsic_throw_div_zero(context);
+        return 0;
+    }
+    return (int64_t)((uint64_t)lhs % (uint64_t)rhs);
+}
+
 // ---- java.lang.Enum.name() / ordinal() 直接字段读取 ----
 
 static jfieldID mj2x_intrinsic_enum_name_field(JNIEnv* env)
