@@ -1,4 +1,5 @@
 #include "regc/mj2x_regc_intrinsic.h"
+#include "regc/mj2x_regc_runtime.h"
 
 #include <limits.h>
 #include <math.h>
@@ -440,6 +441,79 @@ void test_regc_intrinsic_unsigned_and_char(void)
     expect(mj2x_intrinsic_char_char_count(0x10000) == 2);
     expect(mj2x_intrinsic_char_char_count(-1) == 1);
     expect(mj2x_intrinsic_char_char_count(0x110000) == 2);
+}
+
+// ---- parseUnsigned 族：符号/radix/边界 ----
+//
+// 解析路径经 _mj2x_regc_env 取字符串：fake JNIEnv 把 jstring 当 C 串直通
+// （GetStringUTFChars 原样返回、ReleaseStringUTFChars 空操作），NFE 走
+// context->throwException 记录断言，不依赖真实 JVM。
+
+static const char* JNICALL parse_fake_get_utf_chars(JNIEnv* env, jstring str, jboolean* is_copy)
+{
+    (void)env;
+    (void)is_copy;
+    return (const char*)str;
+}
+
+static void JNICALL parse_fake_release_utf_chars(JNIEnv* env, jstring str, const char* chars)
+{
+    (void)env;
+    (void)str;
+    (void)chars;
+}
+
+void test_regc_intrinsic_parse_unsigned(void)
+{
+    static struct JNINativeInterface_ parse_table;
+    static JNIEnv                     parse_env = &parse_table;
+    parse_table.GetStringUTFChars     = parse_fake_get_utf_chars;
+    parse_table.ReleaseStringUTFChars = parse_fake_release_utf_chars;
+    JNIEnv* saved_env                 = _mj2x_regc_env;
+    _mj2x_regc_env                    = &parse_env;
+
+    scalar_thrown_exception thrown = {0, NULL, NULL};
+    mj2x_regc_context       context;
+    mj2x_regc_init_context(&context, &thrown, scalar_record_throw);
+
+    // '+' 前缀接受。
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"+42") == 42);
+    expect(_mj2x_intrinsic_parse_unsigned_long(&context, (mj2x_ref)"+42") == 42);
+    expect(thrown.count == 0);
+    // '-' 拒绝（NFE）。
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"-1") == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.class_name, "java/lang/NumberFormatException") == 0);
+    // 空串 → NFE。
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"") == 0);
+    expect(thrown.count == 1);
+    // 上界："4294967295" -> -1（位型）、"18446744073709551615" -> -1。
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"4294967295") == -1);
+    expect(_mj2x_intrinsic_parse_unsigned_long(&context, (mj2x_ref)"18446744073709551615") == -1);
+    expect(thrown.count == 0);
+    // 超上界 → NFE。
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, (mj2x_ref)"4294967296") == 0);
+    expect(thrown.count == 1);
+    // radix 边界：1/37 → NFE；2/36 合法。
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_unsigned_int_radix(&context, (mj2x_ref)"101", 1) == 0);
+    expect(thrown.count == 1);
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_unsigned_int_radix(&context, (mj2x_ref)"101", 37) == 0);
+    expect(thrown.count == 1);
+    thrown.count = 0;
+    expect(_mj2x_intrinsic_parse_unsigned_int_radix(&context, (mj2x_ref)"1010", 2) == 10);
+    expect(_mj2x_intrinsic_parse_unsigned_int_radix(&context, (mj2x_ref)"zz", 36) == 1295);
+    expect(_mj2x_intrinsic_parse_unsigned_long_radix(&context, (mj2x_ref)"z", 36) == 35);
+    expect(thrown.count == 0);
+    // null 输入 → NFE（非 NPE）。
+    expect(_mj2x_intrinsic_parse_unsigned_int(&context, NULL) == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.class_name, "java/lang/NumberFormatException") == 0);
+
+    _mj2x_regc_env = saved_env;
 }
 
 // ---- #1186：DISABLED_ 全量 float 穷举常驻回归 ----

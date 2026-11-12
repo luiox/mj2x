@@ -460,22 +460,16 @@ mj2x_ref mj2x_intrinsic_long_to_unsigned_string_radix(mj2x_regc_context* context
 
 // ---- Integer/Long.divideUnsigned/remainderUnsigned ----
 //
-// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义；经 context
-// 挂 pending 异常（RegCLocalHelper 形态，发射面保留调用后 ExceptionCheck）。
-// 非零除数路径纯 C 无符号运算：无符号除法无 INT_MIN/-1 型陷阱，位型与 JDK
-// 一致（Integer.divideUnsigned(MIN_VALUE, -1) == 0 等）。
-
-static void mj2x_intrinsic_throw_div_zero(mj2x_regc_context* context)
-{
-    if (context != NULL && context->throwException != NULL) {
-        context->throwException(context->env, "java/lang/ArithmeticException", "/ by zero");
-    }
-}
+// 除零抛 ArithmeticException("/ by zero")——JVM idiv/irem 同语义；经
+// mj2x_regc_throw_arithmetic 挂 pending 异常（RegCLocalHelper 形态，发射面
+// 保留调用后 ExceptionCheck）。非零除数路径纯 C 无符号运算：无符号除法无
+// INT_MIN/-1 型陷阱，位型与 JDK 一致（Integer.divideUnsigned(MIN_VALUE, -1)
+// == 0 等）。
 
 int32_t mj2x_intrinsic_int_divide_unsigned(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
 {
     if (rhs == 0) {
-        mj2x_intrinsic_throw_div_zero(context);
+        mj2x_regc_throw_arithmetic(context, NULL);
         return 0;
     }
     return (int32_t)((uint32_t)lhs / (uint32_t)rhs);
@@ -484,7 +478,7 @@ int32_t mj2x_intrinsic_int_divide_unsigned(mj2x_regc_context* context, int32_t l
 int32_t mj2x_intrinsic_int_remainder_unsigned(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
 {
     if (rhs == 0) {
-        mj2x_intrinsic_throw_div_zero(context);
+        mj2x_regc_throw_arithmetic(context, NULL);
         return 0;
     }
     return (int32_t)((uint32_t)lhs % (uint32_t)rhs);
@@ -493,7 +487,7 @@ int32_t mj2x_intrinsic_int_remainder_unsigned(mj2x_regc_context* context, int32_
 int64_t mj2x_intrinsic_long_divide_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
 {
     if (rhs == 0) {
-        mj2x_intrinsic_throw_div_zero(context);
+        mj2x_regc_throw_arithmetic(context, NULL);
         return 0;
     }
     return (int64_t)((uint64_t)lhs / (uint64_t)rhs);
@@ -502,7 +496,7 @@ int64_t mj2x_intrinsic_long_divide_unsigned(mj2x_regc_context* context, int64_t 
 int64_t mj2x_intrinsic_long_remainder_unsigned(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
 {
     if (rhs == 0) {
-        mj2x_intrinsic_throw_div_zero(context);
+        mj2x_regc_throw_arithmetic(context, NULL);
         return 0;
     }
     return (int64_t)((uint64_t)lhs % (uint64_t)rhs);
