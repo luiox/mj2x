@@ -687,11 +687,11 @@ std::map<std::string, std::string> snapshotRepoXmakeConfs()
 
 /// CliTest 套件公共 fixture（issue #892 守卫）：套件内每个用例运行前后比对
 /// 仓库根 xmake 配置（<top>/.xmake/<plat>/<arch>/xmake.conf 全量快照），内容
-/// 被改写/删除/新增即在收尾阶段失败并输出差异摘要——把"跑一次全量测试静默
+/// 被改写/删除/新增即在收尾阶段失败并输出差异摘要，把"跑一次全量测试静默
 /// 重置开发者 xmake 配置"从 mtime 人工对时变成显式测试失败。
 ///
 /// 背景：xmake 3.x 传 -P 时只切换工程加载点，配置存储目录跟随 CWD（config.lua
-/// 的 _use_workingdir 语义）——任何在仓库根 CWD 下触发的 `xmake f` 都会把根
+/// 的 _use_workingdir 语义），任何在仓库根 CWD 下触发的 `xmake f` 都会把根
 /// 工程配置重置为默认开关。本套件驱动真实 xmake 的用例（独立编译 / CLI
 /// --generate-xmake --compile / --c-compiler xmake）全部纳入守卫覆盖；测试
 /// 自身在 test/ 下的临时工程配置不位于仓库根 .xmake，不受守卫干扰。
@@ -1733,7 +1733,7 @@ TEST(CliTest, GenerateXmakeProjectEmitsStandaloneCrtProject)
     std::string xmake = readText(projectDir / "xmake.lua");
     EXPECT_NE(xmake.find("target(\"mj2x_native\")"), std::string::npos) << xmake;
     // #1194：生成码按 glob 全量收编（src/generated/*.c / *.cpp），不再钉死
-    // native.c 固定名——自定名 --emit-c/--emit-cpp 落盘源同样进编译面。
+    // native.c 固定名，自定名 --emit-c/--emit-cpp 落盘源同样进编译面。
     EXPECT_NE(xmake.find("src/generated/*.c"), std::string::npos) << xmake;
     EXPECT_NE(xmake.find("src/generated/*.cpp"), std::string::npos) << xmake;
     EXPECT_NE(xmake.find("src/mj2x-rt/**.c"), std::string::npos) << xmake;
@@ -1817,7 +1817,7 @@ TEST(CliTest, GenerateXmakeProjectUsesEmbeddedCrtOutsideRepo)
 
     if (commandAvailable("xmake")) {
         // Git Bash（MSYS）下 xmake 会把平台自动探测为 mingw 导致 "cannot get
-        // program for cc"——Windows 分支显式锁定 windows + msvc 工具链 + x64
+        // program for cc"，Windows 分支显式锁定 windows + msvc 工具链 + x64
         // 架构（-p windows 缺省 arch 是 os.arch()="x86_64"，msvc 工具链按
         // "x64" 探测会 toolchain not found；与产品侧 native_project_builder
         // 的子进程调用一致）。
@@ -1908,8 +1908,8 @@ TEST(CliTest, GenerateXmakeProjectRetainsCppSourceArtifact)
 }
 
 // #1194 定向钉：--generate-xmake × --emit-c 自定名。生成 C 按实名落盘
-// src/generated/<名>.c，模板 glob（src/generated/*.c）必须把它收进编译面——
-// 修复前模板只收编固定名 native.c，自定名源只落盘不编译，链接「成功」但
+// src/generated/<名>.c，模板 glob（src/generated/*.c）必须把它收进编译面，
+// 修复前模板只收编固定名 native.c，自定名源只落盘不编译，链接"成功"但
 // DLL 静默缺失全部生成码（#1188 评审实际踩中）。
 TEST(CliTest, GenerateXmakeProjectCollectsCustomNamedCEmit)
 {
@@ -2216,7 +2216,7 @@ TEST(CliTest, CompileFailsClearlyWhenJavaHomeMissing)
     });
     // libjdk_finder 0.1.x 起带默认安装位置扫描（default_jdk_homes）：JAVA_HOME
     // 未设但机器装有默认位置 JDK 时 find_jdk 直接命中，JNI 头可定位、编译成功
-    // ——"缺 JAVA_HOME ⇒ 清晰失败"路径按设计不可达（CI 无默认位置 JDK，仍走
+    // 故"缺 JAVA_HOME ⇒ 清晰失败"路径按设计不可达（CI 无默认位置 JDK，仍走
     // 完整断言面）。此情形跳过而非判失败。
     if (result.exitCode == 0) {
         GTEST_SKIP() << "libjdk_finder 0.1.x default-home scan located a JDK; "
@@ -2266,7 +2266,7 @@ TEST(CliTest, PipeCompileWithClangDoesNotWriteCSource)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面定稿（test_helper 探测）。
         GTEST_SKIP() << "clang not found: " << clang.reason;
     }
 
@@ -2830,10 +2830,10 @@ TEST(CliTest, LlvmClangAndLlcCompileLoopSwitchAndRunJvm)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面定稿（test_helper 探测）。
         GTEST_SKIP() << "clang not found: " << clang.reason;
     }
-    // probeClang 只覆盖 clang——llc 无对应 probe，维持 PATH 判定（跳过注明口径）。
+    // probeClang 只覆盖 clang，llc 无对应 probe，维持 PATH 判定（跳过注明口径）。
     if (!commandAvailable("llc"))
         GTEST_SKIP() << "llc is not available on PATH"
                         " (probeClang covers clang only; llc stays a PATH-only check #1191)";
@@ -3010,7 +3010,7 @@ TEST(CliTest, LlvmPipeCompileAndProjectGeneration)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面定稿（test_helper 探测）。
         GTEST_SKIP() << "clang not found: " << clang.reason;
     }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
@@ -3148,7 +3148,7 @@ TEST(CliTest, LlvmArraycopyAndExceptionE2E)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面定稿（test_helper 探测）。
         GTEST_SKIP() << "clang not found: " << clang.reason;
     }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
@@ -3501,7 +3501,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面定稿（test_helper 探测）。
         GTEST_SKIP() << "clang not found: " << clang.reason;
     }
     if (std::getenv("JAVA_HOME") == nullptr || std::getenv("JAVA_HOME")[0] == '\0') {
@@ -3535,7 +3535,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
     {
         std::ofstream out(workDir / "Driver.java");
         ASSERT_TRUE(out) << (workDir / "Driver.java").string();
-        // runRef：REF 返回 indy 站点（Y1）。runFail：失败 bootstrap（Y2）——
+        // runRef：REF 返回 indy 站点（Y1）。runFail：失败 bootstrap（Y2），
         // JVM 基线把 bsm 异常包成 BootstrapMethodError(cause)，native 侧重抛
         // 原始异常；解包归一化后两边都应看到 IllegalStateException（而非被
         // call_object(null) 的 NPE 掩盖）。
@@ -3610,7 +3610,7 @@ TEST(CliTest, LlvmIndyCustomBootstrapE2E)
     // --regc-obfuscate：R4 变换（MBA 等）作用于 RegIR 后发射。
     runNativeVariant("obfuscated", "--regc-obfuscate");
     // --regc-hide-constants：整型立即数改写为 E ^ const_key(site)（对标
-    // jvmtp obfuscation.constants，批次 2 第 6 项）。本变体守跨语言一致性——
+    // jvmtp obfuscation.constants）。本变体守跨语言一致性，
     // K 由可分发运行时（mj2x-rt 的 C 实现）派生，pass 编译期算 E 用同源公式；
     // 任一侧漂移（常数/移位/顺序）会让产出值与 JVM 基线不符。
     runNativeVariant("hidden_constants", "--regc-hide-constants");
@@ -3621,7 +3621,7 @@ TEST(CliTest, ClangCompilesRegcCppSource)
 {
     const fs::path cli = findCli();
     if (cli.empty()) GTEST_SKIP() << "mj2x-cli is not built";
-    // probeClang 只覆盖 clang——clang++ 无对应 probe，维持 PATH 判定（跳过注明口径）。
+    // probeClang 只覆盖 clang，clang++ 无对应 probe，维持 PATH 判定（跳过注明口径）。
     if (!commandAvailable("clang++"))
         GTEST_SKIP() << "clang++ is not available on PATH"
                         " (probeClang covers clang only; clang++ stays a PATH-only check #1191)";
@@ -3909,7 +3909,7 @@ TEST(CliTest, PipeCompileRegCJarEmbedsNativeLoaderAndLibraryWithClang)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面定稿（test_helper 探测）。
         GTEST_SKIP() << "clang not found: " << clang.reason;
     }
 
@@ -4293,7 +4293,7 @@ TEST_P(CliLangTest, NegativeArgumentsFail)
 }
 
 /// 整数参数负值 fail-closed：Int/UInt64/Hex 三类一律拒绝负值字面量并给合法
-/// 范围提示（校验环先于输入加载，负值即报即退）。豁免清单为空——注册表现有
+/// 范围提示（校验环先于输入加载，负值即报即退）。豁免清单为空，注册表现有
 /// 整数参数（计数/档位/毫秒/周期/种子/客户端号）均无负值语义。
 TEST(CliTest, NegativeIntegerArgsFailClosed)
 {
@@ -4447,8 +4447,8 @@ TEST(CliTest, DISABLED_InflatedPathSentinelNestedXmakeBuild)
 
     // 膨胀 PATH：重复目录（镜像手工哨兵口径，40 个为上限）+ 填充，尾接原
     // PATH（子 xmake/cl 仍可解析），放大子 xmake env 块构造的形状敏感面。
-    // 预算自感知（#1023 评审勘实）：cmd 单行上限 8191 是「膨胀段 + 宿主段 +
-    // 子进程内 vcvarsall.bat 拼入的 VS 工具链目录(~3.4KB)」总额——固定 3KB+
+    // 预算自感知（#1023 评审勘实）：cmd 单行上限 8191 是"膨胀段 + 宿主段 +
+    // 子进程内 vcvarsall.bat 拼入的 VS 工具链目录(~3.4KB)"总额，固定 3KB+
     // 填充在宿主 PATH 稍长时即假红（vcvars 先爆，哨兵想 exercise 的嵌套
     // xmake 根本没跑，环境假红不是回归）。据此：膨胀段按预算收缩（重复数
     // 与填充同步让位），宿主段本身吃掉预算则跳过。
@@ -4559,7 +4559,7 @@ TEST(CliTest, NtstatusCrashTriggersExactlyOneRetryWithMinimalEnv)
 // 条目，必须按 receiver 实际类解析（见 mj2x-rt 的 mj2x_regc_call_site 契约）。
 //
 // RegC / LLVM 双后端各跑一遍：站点表布局与 dispatcher 调用分别在两个发射端
-// 生成，符号名/字段序错一处就是编译失败或运行期崩——单测层覆盖不到。
+// 生成，符号名/字段序错一处就是编译失败或运行期崩，单测层覆盖不到。
 TEST(CliTest, IndirectCallTargetsPreserveSemanticsUnderBothBackends)
 {
     const fs::path cli = findCli();
@@ -4572,7 +4572,7 @@ TEST(CliTest, IndirectCallTargetsPreserveSemanticsUnderBothBackends)
     // #1191 接线 probeClang：查找面 PATH + 常见安装位置（含 MATLAB 自带），跳过带因。
     const auto clang = test::jdk::probeClang();
     if (!clang.available) {
-        // SKIP 前缀不重复探测面：reason 已按实际覆盖面收口（test_helper 探测）。
+        // SKIP 前缀不重复探测面：reason 已按实际覆盖面定稿（test_helper 探测）。
         GTEST_SKIP() << "clang not found: " << clang.reason;
     }
 #ifdef _WIN32

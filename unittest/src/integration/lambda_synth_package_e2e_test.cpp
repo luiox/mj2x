@@ -41,7 +41,7 @@ public class Main {
     interface Op { int apply(int x); }
 
     // private 嵌套接口：javac 落盘不写 ACC_PRIVATE（非 public 位触发宿主包判定），
-    // 合成类落 demo1182 同包即运行全绿（评审收口 ①：类级访问不查 nest + impl 提权）。
+    // 合成类落 demo1182 同包即运行全绿（评审 ①：类级访问不查 nest + impl 提权）。
     private interface Pri { int f(int x); }
 
     private int privScale(int v) { return v * 2 + 7; }
@@ -92,7 +92,7 @@ public class Main {
         Object opObj = (Object) cap;                 // 反射打 lambda 包装实例本身
         check("refl-op", ((Integer) apply.invoke(opObj, 7)).intValue() == 128);
 
-        // private 嵌套 SAM + 捕获 + 私有实例 impl（评审收口 ①绿钉形态）。
+        // private 嵌套 SAM + 捕获 + 私有实例 impl（评审 ①绿钉形态）。
         Main inst = new Main();
         int  factor = 3;
         Pri priv = x -> inst.privScale(x) + factor;
@@ -233,9 +233,9 @@ TEST_F(LambdaSynthPackageE2E, PackagePrivateSamLambdaSurvivesRegcNative)
     EXPECT_EQ(protectedRun.out.find("Exception"), std::string::npos) << protectedRun.out;
 }
 
-// default 包 SAM（评审收口 P1 复现形态）：合成类落 default 包裸名 Lambda$N（首字符
+// default 包 SAM（评审 P1 复现形态）：合成类落 default 包裸名 Lambda$N（首字符
 // 'L'），同时钉 runtime 的 L 描述符剥壳守卫（裸名按首字符剥壳会截成 "ambda$N" →
-// NoClassDefFoundError）——两修缺一此形态即运行红。
+// NoClassDefFoundError），两修缺一此形态即运行红。
 const char* kDefaultPackageSample = R"(import java.lang.reflect.Method;
 
 public class Main {

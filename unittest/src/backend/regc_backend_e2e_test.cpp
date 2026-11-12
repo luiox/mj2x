@@ -354,7 +354,7 @@ TEST_F(RegCBackendE2E, RandomNextIntBoundTrapRoundTrip)
     // 通道（旧实现 bound<=0 返回 INT32_MIN 哨兵 = fail-open），发射端预检把
     // 异常挂到 context，由调用后异常分发/JNI 边界统一处理。正常 bound 的
     // 结果与 JVM 逐位一致（标准 Java LCG）。
-    // #879 补课：noTryTrap 锁「无 try 区域」的 JNI 边界传播路径——bound<=0
+    // #879 补课：noTryTrap 锁"无 try 区域"的 JNI 边界传播路径，bound<=0
     // 发生在无区域方法内，异常必须原样冒出 native 边界（区别于 trap/trapInTry
     // 的 try 逃逸路径）。
     runCase("RegCRandomBound",
@@ -437,7 +437,7 @@ TEST_F(RegCBackendE2E, MultiArrayHelpersRoundTrip)
 
 /// athrow / monitorenter 的操作数为 NULL 时 JVM 语义是抛 NPE（JVMS）；RegC 侧
 /// monitorenter/exit 由发射面 null → NPE 守卫保护（athrow 的守卫在 CRT
-/// _mj2x_regc_throw 内）。基准 JVM 与 protected 运行输出必须一致——修复前
+/// _mj2x_regc_throw 内）。基准 JVM 与 protected 运行输出必须一致，修复前
 /// monitorenter(null) 会把 NULL jobject 递进 JNI MonitorEnter（未定义行为）。
 TEST_F(RegCBackendE2E, NullOperandSemanticsRoundTrip)
 {
@@ -556,7 +556,7 @@ TEST_F(RegCBackendE2E, CallHelpersRoundTrip)
 // <init>/<clinit> 方法体被搬进 __regc_init_*/__regc_clinit_* 静态方法后经
 // MarkAll 编成 native；原方法保留字节码骨架（super 调用链 / registerNatives 注入点）。
 // javac 默认( -g:lines,source)在 <init> 头部生成 LineNumberTable 锚点 label，
-// 正好覆盖 v1「允许切点前 LABEL/LINE、拒绝跨切点引用」的放宽边界。
+// 正好覆盖 v1"允许切点前 LABEL/LINE、拒绝跨切点引用"的放宽边界。
 TEST_F(RegCBackendE2E, InitAndClinitMoveRoundTrip)
 {
     runCase("RegCNativeInit",
@@ -585,7 +585,7 @@ TEST_F(RegCBackendE2E, InitAndClinitMoveRoundTrip)
 }
 
 // R6 反射子集放开 + JNI local ref 引用管理验证。这些方法调用 Object.getClass /
-// java/lang/Class.* —— 放开黑名单前它们保留字节码路径不转 native；放开后转 native，
+// java/lang/Class.*：放开黑名单前它们保留字节码路径不转 native；放开后转 native，
 // 每次调用产生 Class/String 临时 local ref。loopNames 在循环内反复制造临时 ref，
 // 验证 PushLocalFrame/PopLocalFrame 帧管理不撑爆 JNI 默认保证的 16 槽 local ref 表，
 // 且 name()/simpleName() 的 ref 返回值经 PopLocalFrame promote 后仍有效。
@@ -632,7 +632,7 @@ TEST_F(RegCBackendE2E, ReflectionRoundTrip)
 // continue，吞掉窗口内 isFuseTransparent 放行的 StoreField/ArrayStore 副作用与
 // 中间 dest（后续使用读到声明初值 0）。窗口内其余指令必须原位发射：数组写、
 // 静态字段写位于 getClass 与 getName 之间，且中间值（数组长度）在 hashCode 之后
-// 被使用——三处任一被吞，native 输出即与基线不同。
+// 被使用，三处任一被吞，native 输出即与基线不同。
 TEST_F(RegCBackendE2E, FusedNameHashKeepsIntermediateEffects)
 {
     runCase("RegCFusedNameHash",
@@ -667,7 +667,7 @@ TEST_F(RegCBackendE2E, FusedNameHashKeepsIntermediateEffects)
 }
 
 // R6.1 阶段1：StringConcatFactory invokedynamic 展开验证。javac 把 "a"+x+"b"+... 编译成
-// invokedynamic makeConcatWithConstants —— InvokeDynamicPreprocessor 把它改写成
+// invokedynamic makeConcatWithConstants，InvokeDynamicPreprocessor 把它改写成
 // new StringBuilder + append 链 + toString 字节码，RegC 已有 StringBuilder intrinsic
 // 支持故能转 native（不走 StackC 的 runtime bridge，绕开 RegC 缺 owner-class 障碍）。
 // 覆盖多类型参数（int/long/String/null）、纯字面量、连续动态参数。
@@ -695,7 +695,7 @@ TEST_F(RegCBackendE2E, InvokeDynamicStringConcatRoundTrip)
 }
 
 // R6.1 阶段2：无状态 lambda（方法引用）展开验证。javac 把 `IntUnaryOperator op = X::base`
-// 编译成 invokedynamic LambdaMetafactory.metafactory —— InvokeDynamicPreprocessor 合成一个
+// 编译成 invokedynamic LambdaMetafactory.metafactory，InvokeDynamicPreprocessor 合成一个
 // 实现 IntUnaryOperator 的类（SAM 方法 invokestatic 转调 base），把 indy 改写成
 // new 合成类/dup/<init>，并把私有 base 提权。RegC 转 native 时走通用 new/invoke 路径
 // （不走 StackC runtime bridge，绕开 owner-class 障碍）。stateless 使用方法引用（无捕获）。
@@ -721,7 +721,7 @@ TEST_F(RegCBackendE2E, InvokeDynamicStatelessLambdaRoundTrip)
             });
 }
 
-// R6.1 阶段2b：捕获 lambda 展开验证。`v -> v + delta` 捕获局部变量 delta —— javac 生成
+// 捕获 lambda 展开验证（设计文档 R6.1 阶段2b）。`v -> v + delta` 捕获局部变量 delta，javac 生成
 // invokedynamic desc `(I)L...`（捕获值作 indy 参数）+ 合成方法 lambda$..(I I)I（捕获值在前）。
 // InvokeDynamicPreprocessor 合成带 private final 字段的类，构造器接收捕获值存字段，SAM
 // 方法 GETFIELD 取回后接 SAM 参数一起转调 impl。站点栈上捕获值先 xSTORE 到临时槽、再
@@ -758,7 +758,7 @@ TEST_F(RegCBackendE2E, InvokeDynamicCapturingLambdaRoundTrip)
 
     // 回归断言：javac 为捕获 lambda 生成的合成方法 lambda$xxx 必须被 RegC 编译为
     // native（InvokeDynamicPreprocessor 已把 indy 站点改写为合成类，lambda$ 体不再
-    // 按方法名前缀 skip）。这里检查生成 C 里出现每个 lambda$ 方法的 regc_ helper 定义——
+    // 按方法名前缀 skip）。这里检查生成 C 里出现每个 lambda$ 方法的 regc_ helper 定义，
     // 一个被转 native 的方法会发射 `static ... regc_<Class>_lambda_<n>__<desc>` helper，
     // 被 skip 的方法则不会出现在 C 源里。方法名中 `$` 在 C 标识符里映射为 `_`。
     // 序号按任意数字匹配：javac 对 lambda$ 合成方法的 $N 计数随版本不同（旧版按
@@ -957,7 +957,7 @@ TEST_F(RegCBackendE2E, InvokeDynamicPrimitiveWideningRoundTrip)
 }
 
 // R6-A IO 组放开验证。这些方法在 native 帧内调用 InputStream/ByteArrayInputStream 的
-// read()/available()/read(byte[]) —— 放开黑名单前保留字节码；放开后转 native。
+// read()/available()/read(byte[])：放开黑名单前保留字节码；放开后转 native。
 // read() 返回 int 单字节，read(byte[]) 返回读入数并经 ref-array 写入 byte[]，
 // available() 返回 int。readAll() 反复构造 ByteArrayInputStream 制造临时 ref，验证
 // 引用管理在 IO 路径同样不撑爆 local ref 表。
@@ -1004,7 +1004,7 @@ TEST_F(RegCBackendE2E, IOGroupRoundTrip)
 }
 
 // R6-B 类加载组放开验证。这些方法在 native 帧内调用 ClassLoader.loadClass(String)、
-// getResourceAsStream(String) —— 放开黑名单前保留字节码；放开后转 native。
+// getResourceAsStream(String)：放开黑名单前保留字节码；放开后转 native。
 // loadClass 返回 Class（ref），getResourceAsStream 返回 InputStream（ref），参数 String 也是
 // ref，验证引用管理在类加载路径同样不撑爆 local ref 表，且 ref 返回值经 PopLocalFrame
 // promote 后仍可用。loadAndCheckName 链式 getName() 验证抽象/具体类实例方法分派。
@@ -1020,7 +1020,7 @@ TEST_F(RegCBackendE2E, ClassLoaderGroupRoundTrip)
             "    ClassLoader cl = ClassLoader.getSystemClassLoader();\n"
             "    java.io.InputStream in = cl.getResourceAsStream(name);\n"
             // Driver 运行在 -cp dir，资源不存在时返回 null，available() 不可调；
-            // 用 (in != null) ? 1 : 0 表达「资源是否存在」这一可观测的 int 结果。
+            // 用 (in != null) ? 1 : 0 表达"资源是否存在"这一可观测的 int 结果。
             "    return in != null ? 1 : 0;\n"
             "  }\n"
             "  public static String systemLoaderName() throws Exception {\n"
@@ -1945,7 +1945,7 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
     EXPECT_NE(generatedC.find("_mj2x_intrinsic_string_length("), std::string::npos) << generatedC;
     // charAt/hashCode/equals 回退缓存 methodID 调用（1 JNI），不再发射
     // StringMethod intrinsic 调用点（多 JNI 数据管道实测更慢）。helper 定义
-    // 仍在 prelude 无条件发射，无法用 find 区分定义与调用——用下面三个缓存
+    // 仍在 prelude 无条件发射，无法用 find 区分定义与调用，用下面三个缓存
     // 声明的存在性证明调用点已回退。
     EXPECT_NE(generatedC.find("java/lang/String\", \"charAt\""), std::string::npos) << generatedC;
     EXPECT_NE(generatedC.find("java/lang/String\", \"hashCode\""), std::string::npos)
@@ -2004,7 +2004,7 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
               std::string::npos)
         << generatedC;
     // #894 B 类真下沉:角色单例缓存(valueOf/parseFloat/异常类等 11 个)收敛为
-    // mj2x_regc_runtime.c 的固定实例,生成 TU 不再逐程序声明——反断言钉住。
+    // mj2x_regc_runtime.c 的固定实例,生成 TU 不再逐程序声明，反断言钉住。
     EXPECT_EQ(generatedC.find(
                   "{\"java/lang/String\", \"valueOf\", \"(F)Ljava/lang/String;\", NULL, NULL}"),
               std::string::npos)
@@ -2135,10 +2135,10 @@ TEST_F(RegCBackendE2E, IntrinsicMathAndParseIntRoundTrip)
         << generatedC;
 }
 
-// exec 对拍：StrictMath 位精确 12 条抽样点 + Math 边缘条目 + 全角数字解析 +
+// exec 比对：StrictMath 位精确 12 条抽样点 + Math 边缘条目 + 全角数字解析 +
 // null 异常类。样本点取跨 JDK 稳定的纯函数值(fdlibm 算法 8-25 未变,位精确
-// 对拍结论见 PR);floorDiv/floorMod 除零走 try/catch(ArithmeticException
-// pending 分发);null 只对拍异常类不比对消息文本(JDK 8 的 null 消息是
+// 比对结论见 PR);floorDiv/floorMod 除零走 try/catch(ArithmeticException
+// pending 分发);null 只比对异常类不比对消息文本(JDK 8 的 null 消息是
 // "null",17+ 是 "Cannot parse null string",基线本身跨 JDK 不同构)。
 TEST_F(RegCBackendE2E, StrictMathAndMathEdgeRoundTrip)
 {
@@ -2253,7 +2253,7 @@ TEST_F(RegCBackendE2E, StrictMathAndMathEdgeRoundTrip)
         });
 }
 
-// exec 对拍：三类代表条目 + 边界（除零 pending、NFE、NaN 规范化、unsigned
+// exec 比对：三类代表条目 + 边界（除零 pending、NFE、NaN 规范化、unsigned
 // 满界、代理对边界）。基线 = 纯 JVM 执行，受保护 = RegC native 直调，逐行全等。
 TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
 {
@@ -2557,7 +2557,7 @@ SafeEnvProcessEnv loadVcvarsEnv(const Toolchain& tc, std::string& error)
 }
 
 // 直接启动程序（不经 shell），可追加环境变量覆盖，返回退出码 + stdout/stderr 合并。
-// 注意：程序名必须是全路径 —— CreateProcessW 的裸名搜索只查父进程（测试运行器）
+// 注意：程序名必须是全路径，CreateProcessW 的裸名搜索只查父进程（测试运行器）
 // 的 PATH，不查 lpEnvironment 里传入的 PATH；测试运行器在 Git Bash 下启动，
 // 父 PATH 未必含 MSVC，故工具名一律先经 findToolInPath 解析为全路径。
 SafeEnvExecResult runProcess(const fs::path& program, const std::vector<std::string>& args,

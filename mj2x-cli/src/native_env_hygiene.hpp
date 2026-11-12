@@ -44,11 +44,11 @@ inline bool environmentKeyEquals(const std::string& left, const char* right)
 }
 
 /// 父进程当前环境块快照（UTF-8 键值对）。
-/// @details Windows 侧用 GetEnvironmentStringsW + CP_UTF8 转换——libca 子进程
+/// @details Windows 侧用 GetEnvironmentStringsW + CP_UTF8 转换，libca 子进程
 /// 环境要求 UTF-8（无效序列注入会被整体拒绝，spawn 失败），故不用 ANSI 版；
 /// 转换按替换语义（标志 0）而非 WC_ERR_INVALID_CHARS：极端脏值宁可单条劣化
 /// 也不整条丢弃（丢 PATH 会让子进程彻底失明）。键含 '=' 的 "=C:" 型伪变量
-/// 整条跳过——Command::env 键禁止含 '='，注入会让 spawn 直接失败。
+/// 整条跳过，Command::env 键禁止含 '='，注入会让 spawn 直接失败。
 inline std::vector<std::pair<std::string, std::string>> currentProcessEnvironment()
 {
     std::vector<std::pair<std::string, std::string>> result;
@@ -94,7 +94,7 @@ inline bool isPathFamilyKey(const std::string& key)
 /// @details 重复目录不改变查找语义，只无谓拉长 env 块、放大子进程 env 块
 /// 构造的边界敏感性（A1 报告 §5.2：xmake pinned tbox 的填充 off-by-one 与
 /// 块内容形状相关）。Windows 下分隔符 ';' 且比较大小写不敏感（与文件系统
-/// 口径一致）；非 Windows 分隔符 ':'、精确比较——该路径实际不可达
+/// 口径一致）；非 Windows 分隔符 ':'、精确比较，该路径实际不可达
 /// （captured 恒空，mergeProcessEnvironment 早退），仅为编译完备。
 inline std::string dedupePathValue(const std::string& value)
 {
@@ -130,23 +130,23 @@ inline std::string dedupePathValue(const std::string& value)
 
 /// 合并后 env 块字节预算（按 "KEY=VALUE" + '\0' 逐项累计）。计数为 UTF-8
 /// 字节近似（Windows 实际环境块是 UTF-16），且未计块尾终止 NUL 的 1 字节
-/// ——常数级偏差，不影响判级用途。超限只记 WARN：
+/// 存在常数级偏差，不影响判级用途。超限只记 WARN：
 /// 现阶段收缩手段仅去重/剔除非法条目（不损失语义）；若仍超限需要删条目，
 /// 删除策略须先评审再实现（A1 报告 P0-A：统计性去险，非语义损失删除）。
 constexpr std::size_t kMergedEnvironmentBytesLimit = 16 * 1024;
 
-/// @brief 把捕获的 MSVC 环境（loadMsvcEnvironment 产物）以「父进程环境为底、
-///        捕获变量覆盖其上」的方式注入子进程命令。
+/// @brief 把捕获的 MSVC 环境（loadMsvcEnvironment 产物）以"父进程环境为底、
+///        捕获变量覆盖其上"的方式注入子进程命令。
 /// @details 调用点显式构造完整环境块：父进程当前环境铺底，vcvars 捕获值按
 /// case-insensitive 同名胜出（PATH/INCLUDE/LIB 必须是 vcvars 版本，否则丢
-/// cl.exe）。Command::env 的语义是「覆盖集」，子进程环境块的继承行为属
+/// cl.exe）。Command::env 的语义是"覆盖集"，子进程环境块的继承行为属
 /// libca 内部实现细节（现行为是继承底+覆盖），调用方不依赖该细节。captured
-/// 为空（loadMsvcEnvironment case 1：INCLUDE 已设）时不动 env_——空 env_ 即
+/// 为空（loadMsvcEnvironment case 1：INCLUDE 已设）时不动 env_，空 env_ 即
 /// 整块继承，行为保持不变。注入前做形状卫生（A1 报告 P0-A）：路径族值
 /// （PATH/INCLUDE/LIB）目录去重（保序取首个）、剔除空值条目与含 '=' 的键
-/// ——vcvars `set` 文本解析产物没有 currentProcessEnvironment 的伪变量
+/// 该表无此伪变量，vcvars `set` 文本解析产物没有 currentProcessEnvironment 的伪变量
 /// 防御，含 '=' 的键会让 spawn 整体失败；captured 来源的空值覆盖（VAR=）
-/// 同样被剔除——该键不注入，子进程保留父进程原值。显式全量注入契约不变。
+/// 同样被剔除，该键不注入，子进程保留父进程原值。显式全量注入契约不变。
 inline void mergeProcessEnvironment(ca::process::Command&        command,
                                     const ProcessEnvironment& captured)
 {

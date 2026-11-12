@@ -51,7 +51,7 @@ void test_regc_intrinsic_c99_abi(void)
     expect(fabs(mj2x_math_sqrt(9.0) - 3.0) < 1e-12);
 
     // ---- #1117 补位/修复面（对照 jvmtp 1.7.1 修复③：Math.max/min NaN 与
-    // ±0.0 位型；g17.math_nan_zero 按 JVM 语义 exec 对拍锁定）----
+    // ±0.0 位型；g17.math_nan_zero 按 JVM 语义 exec 比对锁定）----
     {
         const float  fpz = 0.0f, fnz = -0.0f;
         const double dpz = 0.0, dnn = -0.0;
@@ -72,7 +72,7 @@ void test_regc_intrinsic_c99_abi(void)
         expect(memcmp(&rd2, &dpz, sizeof dpz) == 0);
         expect(memcmp(&rd3, &dnn, sizeof dnn) == 0);
         expect(memcmp(&rd4, &dnn, sizeof dnn) == 0);
-        // NaN 操作数：返回操作数本身（位型保留）——用带 payload 的非规范 NaN。
+        // NaN 操作数：返回操作数本身（位型保留），用带 payload 的非规范 NaN。
         {
             const uint32_t nan_bits = 0x7FC01234u;
             float          nan_operand;
@@ -355,7 +355,7 @@ void test_regc_intrinsic_bits_views(void)
 
 // ---- Integer/Long 无符号族 + Character 静态代理 ----
 // divideUnsigned/remainderUnsigned 除零断言 pending
-// ArithmeticException("/ by zero")——RegCLocalHelper 形态的语义锚点。
+// ArithmeticException("/ by zero")，RegCLocalHelper 形态的语义锚点。
 
 void test_regc_intrinsic_unsigned_and_char(void)
 {
@@ -520,7 +520,7 @@ void test_regc_intrinsic_parse_unsigned(void)
 // ---- StrictMath 位精确 12 条 + Math rint/cbrt：锚点矩阵 ----
 //
 // 期望位型取自 JDK 17.0.20.1 (Temurin) StrictMath 实测探针（仓外 harness，
-// 不入库）；输入按位型构造，杜绝字面量解析歧义。全量位精确对拍（每函数
+// 不入库）；输入按位型构造，杜绝字面量解析歧义。全量位精确比对（每函数
 // 1e5+ 随机位模式 + 特殊值）由仓外 harness 完成，见 PR 说明；此处锁定
 // 特殊值行为与代表点，防实现漂移。
 void test_regc_intrinsic_strictmath_anchors(void)
@@ -835,7 +835,7 @@ void test_regc_intrinsic_parse_semantics(void)
 
 // ---- #1186：DISABLED_ 全量 float 穷举常驻回归 ----
 // 命名仿 gtest DISABLED_ 前缀约定：本套驱动器是纯 C main()（非 gtest），以
-// main() 的 argv 白名单复刻同语义——日常跑套不调用（套件函数集合与输出与
+// main() 的 argv 白名单复刻同语义，日常跑套不调用（套件函数集合与输出与
 // 改动前一致），显式传 --gtest_also_run_disabled_tests 时追加执行；
 // --gtest_filter=DISABLED_* 仅门面兼容不单独路由（gtest 同语义：单独过滤
 // DISABLED_ 也是 0 例）。SkipCSV/统计面属 mj2x_unittest gtest 套，本套无
@@ -847,8 +847,8 @@ void test_regc_intrinsic_parse_semantics(void)
 // closest int、tie→+∞、NaN→0、±Inf/出界按 Java cast 语义饱和。float→double
 // 恒等加宽后 floor(x+0.5) 的加法在绝大多数域精确（float 有效位 ≤ 24，加半位
 // 后 ≤ 32 位 ≤ double 53 位）；仅 |x| 足够小时加法跨 53 位产生失真，但该区域
-// floor(x+0.5) 恒为 0、与精确结果一致——全域等价由 DISABLED_ 穷举兜底。
-// 与生产码位路径互为独立推导，对拍结论才非平凡。
+// floor(x+0.5) 恒为 0、与精确结果一致，全域等价由 DISABLED_ 穷举兜底。
+// 与生产码位路径互为独立推导，比对结论才非平凡。
 static int32_t round_f32_reference(float value)
 {
     if (isnan(value)) return 0;
@@ -859,7 +859,7 @@ static int32_t round_f32_reference(float value)
 
 void test_regc_intrinsic_DISABLED_round_f32_full_sweep(void)
 {
-    // 全 2^32 float 位型逐点对拍 mj2x_math_round_f32 vs round_f32_reference；
+    // 全 2^32 float 位型逐点比对 mj2x_math_round_f32 与 round_f32_reference；
     // 64 块 × 2^26 点，逐块 sum/xor 校验和双侧全等断言 + 失配计数（首例位型
     // 打印后 abort）。评审基线：4,294,967,296 点 0 失配、分块校验和全等
     //（#1144 独立评审复现）；合计校验和随行打印，供跨机复跑比对。

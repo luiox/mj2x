@@ -1,4 +1,4 @@
-// VMC4 转化率报告（Phase 2.E 收口）：用真实 fixture（java_obfuscator_style 四
+// VMC4 转化率报告（Phase 2.E 完成）：用真实 fixture（java_obfuscator_style 四
 // 类：Array/Calc/String kernel + Main）经 VMC4 后端处理，统计业务方法转 VM 的
 // 比例与 fail-closed 原因分布，写报告到 test/mj2x/vmc4_conversion_report.md。
 //

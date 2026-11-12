@@ -5,7 +5,7 @@
 /// @details
 /// T1 性能（对标 os30 13-probe）：Arithmetic/Control flow 形态的热循环里，
 /// rotateLeft/reverse 等此前每次调用跨编译单元（mj2x-rt 独立 TU、生成工程无
-/// LTO）——真函数调用每次 ~2ns，而 HotSpot JIT 把 Integer.rotateLeft 内联成
+/// LTO），真函数调用每次 ~2ns，而 HotSpot JIT 把 Integer.rotateLeft 内联成
 /// 单条 rol 指令。实现体收敛到本头单源：
 ///   - 生成 C（include 本头，缺省模式）：static inline，MSVC /O2 原地展开成
 ///     rol/bswap/popcnt 级指令；

@@ -43,7 +43,7 @@ bool wireRegC(BackendWiringContext& context)
     }
     if (!options.nativeDirOutput.empty()) backend->setSplitOutputDir(options.nativeDirOutput);
     // --strings-encrypt：字面量 at-rest 加密（stackc/regc 专属开关，LLVM 后端
-    // 不支持——PARAM 的 backends 面已限 stackc|regc）。
+    // 不支持，PARAM 的 backends 面已限 stackc|regc）。
     if (options.stringsEncrypt) backend->setStringsEncrypt(true);
     if (options.runtimeProtection != "none") {
         backend->setRuntimeProtection(parseRuntimeProtectionAction(options.runtimeProtection),

@@ -4,9 +4,9 @@
 /// inline helper body。R3 运行时 ABI 是将选定 helper 语义移入可分发 `mj2x-rt`
 /// 源码包的边界。
 ///
-/// ## R3 ABI 切片
+/// ## R3 ABI 范围
 ///
-/// 当前 ABI 切片保持小型：
+/// 当前 ABI 范围保持小型：
 /// - 每条目 `mj2x_regc_context`
 /// - JVM 兼容整数除/余 helper
 /// - Java `ArithmeticException` 路由（通过生成的 adapter callback）
@@ -183,7 +183,7 @@ typedef struct mj2x_regc_class_name_hash_site
 /// receiver 为 NULL 抛 NullPointerException 并返回 0。
 ///
 /// 实现在 mj2x_regc_intrinsic.c（随生成工程分发的 CRT 源集里），声明必须在
-/// 本头文件——生成代码只 include 这一个头，漏声明会让 C 编译器按隐式声明处理
+/// 本头文件，生成代码只 include 这一个头，漏声明会让 C 编译器按隐式声明处理
 /// （C99 起即错误）。
 int32_t mj2x_intrinsic_class_name_hash(mj2x_regc_context* context, mj2x_ref receiver,
                                        mj2x_regc_class_name_hash_site* site);
@@ -221,7 +221,7 @@ void    mj2x_regc_barrier(mj2x_regc_context* context, const char* reason);
 /// `applyConstantHiding`（reg_transform_passes.cpp）把每个整型立即数 C 改写为
 /// `E ^ mj2x_regc_const_key(site)`：E = C ^ K 在编译期计算并物化为立即数，K 在
 /// 运行时由本函数从 site 派生。纯字面量恒等式必被编译器折叠，唯一可行路线是
-/// 「编译期密钥 + 运行时不可折叠读取」（同 OLLVM constant encryption）。
+/// "编译期密钥 + 运行时不可折叠读取"（同 OLLVM constant encryption）。
 ///
 /// 两端同常量同产物：本实现的 splitmix64 单步（输入先掺 volatile 不透明常量
 /// `g_const_key_opaque`，LTO 不可折叠）与 reg_transform_passes.cpp 的
@@ -239,7 +239,7 @@ int64_t mj2x_regc_const_key(int64_t site);
 /// @details
 /// `applyCallIndirections`（reg_transform_passes.cpp）把外部（JDK/库）方法调用
 /// 点改写为按签名分派的运行时调用：调用点只带 `(table, index)`，目标身份
-/// （owner/name/desc 字符串）不再出现在调用点上——静态分析必须先解析
+/// （owner/name/desc 字符串）不再出现在调用点上，静态分析必须先解析
 /// index → 表条目，才能看出"这个调用去哪了"。
 ///
 /// 首次分派解析 owner 类 + jmethodID 并缓存在条目内，其后与既有
@@ -256,7 +256,7 @@ int64_t mj2x_regc_const_key(int64_t site);
 ///   AbstractMethodError（HotSpot 17 实测 ACCESS_VIOLATION，见 runtime.c 注释）。
 ///   因此另设 per-receiver-class 槽，同类重复调用经 IsSameObject 命中。
 ///   special（invokespecial，kind=2）例外：按 owner 声明解析 +
-///   `CallNonvirtualXxxMethodA` 精确分派——invokespecial 语义就是绕过
+///   `CallNonvirtualXxxMethodA` 精确分派，invokespecial 语义就是绕过
 ///   receiver 的覆写（super.m() / X.super.m()），虚分派会命中调用方自身的
 ///   覆写造成无限递归。
 typedef struct mj2x_regc_call_site

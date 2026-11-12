@@ -9,7 +9,7 @@
 #include "jbytecode/jbytecode.hpp"
 #include "libca/str/utf8_string_arena.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -48,7 +48,7 @@ static std::unique_ptr<MethodNode> makeMethod(int access, const std::string& nam
     return mn;
 }
 
-// 批 6d：夹具树先建（CompilerClass 无树槽），DOM 由 test::classFromTree 一次性落定。
+// 夹具树先建（CompilerClass 无树槽），DOM 由 test::classFromTree 一次性落定。
 static std::unique_ptr<ClassNode> makeClassNode(const std::string& name)
 {
     auto cn = std::make_unique<ClassNode>();
@@ -169,10 +169,10 @@ TEST(StackCBackendTest, ThrowAndMonitorNullOperandEmitsNpeTrap)
 
 TEST(StackCBackendTest, LabelAtFunctionEndEmitsEmptyStatement)
 {
-    // 批 3b 垫片走字节回环：非跳转目标的标签不进字节流（树专有怪癖退役）。
-    // DOM 语义下「空目标块」不存在：标签只在锚定真实指令时物化为目标块的
+    // 垫片走字节回环：非跳转目标的标签不进字节流（树专有怪癖退役）。
+    // DOM 语义下"空目标块"不存在：标签只在锚定真实指令时物化为目标块的
     // MIRLabel 首节点，而发射器对 MIRLabel 恒产 `label:` + 空语句。钉义收窄
-    // 为「GOTO 目标块以标签发射开场」：GOTO 尾跳 + RETURN 落在标签块内，
+    // 为"GOTO 目标块以标签发射开场"：GOTO 尾跳 + RETURN 落在标签块内，
     // 块全部可达（不可达块会让 stackc 深度分析 fail-closed）。
     auto* tailLabel                  = new LabelNode(labelScratchArena().create<Label>());
     tailLabel->label->bytecodeOffset = 3;
@@ -257,8 +257,8 @@ TEST(StackCBackendTest, InvokeDynamicLowersThroughMethodHandleBridge)
 }
 
 // 单对象参数 + OBJECT 返回的 indy 快路径（invokeMethodHandle1）栈形态：
-// 参数在 pop 之前于原栈槽捕获（stack[sp]），结果原位覆写同一槽——sp 净效应 0，
-// 不建 varargs 数组。锁住该形态，防止回退到「pop 后回读 stale 槽 + ++sp 压回」
+// 参数在 pop 之前于原栈槽捕获（stack[sp]），结果原位覆写同一槽，sp 净效应 0，
+// 不建 varargs 数组。锁住该形态，防止回退到"pop 后回读 stale 槽 + ++sp 压回"
 // 的脆弱写法（X3 复核结论：旧写法净效应恰好正确，但依赖已弹栈槽的陈旧值）。
 TEST(StackCBackendTest, InvokeDynamicOneObjectFastPathStackShape)
 {
@@ -298,7 +298,7 @@ TEST(StackCBackendTest, InvokeDynamicOneObjectFastPathStackShape)
         << result.text;
     EXPECT_NE(result.text.find("s[0].l = "), std::string::npos) << result.text;
     EXPECT_EQ(result.text.find("stack[sp"), std::string::npos) << result.text;
-    // #879 X3 残余收口：args 数组声明下沉慢路径发射分支，快路径生成代码里
+    // #879 X3 残余处理：args 数组声明下沉慢路径发射分支，快路径生成代码里
     // 连 `_mj2x_indy_args = NULL` 声明都不再出现（稳态零多余 JNI 调用之外，
     // 零多余局部声明）。
     EXPECT_EQ(result.text.find("_mj2x_indy_args"), std::string::npos) << result.text;
@@ -365,7 +365,7 @@ TEST(StackCBackendTest, StaticizeSkipsStringLiteralsAndComments)
                                                        bsm,
                                                        // 配方 intern 进 arena：Utf8StringRef 是
                                                        // 视图（jbc plain writer 序列化它），指向
-                                                       // 临时串即悬垂——GCC 下堆复用发射垃圾字节
+                                                       // 临时串即悬垂，GCC 下堆复用发射垃圾字节
                                                        // （CI linux 首曝）；std::string 载荷则
                                                        // jbc writer 不认，CP 写 0。
                                                        {ca::core::Any(testArena.intern(
@@ -819,7 +819,7 @@ TEST(StackCBackendTest, InjectMakesMethodNative)
     CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    // 方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
     auto cn = makeClassNode("Test");
     cn->methods.push_back(mn.get());
     auto cls = test::classFromTree("Test", *cn, testArena);
@@ -850,7 +850,7 @@ TEST(StackCBackendTest, InjectAddsClinitCLoaderRegistrationCall)
     CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    // 方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
     auto cn = makeClassNode("com/example/Foo");
     cn->methods.push_back(mn.get());
     auto cls = test::classFromTree("com/example/Foo", *cn, testArena);
@@ -904,7 +904,7 @@ TEST(StackCBackendTest, ClinitRegistersBridgeWithoutNativeLoad)
     CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    // 方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
     auto cn = makeClassNode("com/example/Foo");
     cn->methods.push_back(mn.get());
     auto cls = test::classFromTree("com/example/Foo", *cn, testArena);
@@ -955,7 +955,7 @@ TEST(StackCBackendTest, ExistingClinitBodyMovesToHiddenClassProxy)
     CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    // 方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
     auto cn = makeClassNode("com/example/Foo");
     cn->methods.push_back(mn.get());
     cn->methods.push_back(clinit.get());
@@ -1024,7 +1024,7 @@ TEST(StackCBackendTest, InterfaceDefaultMethodUsesHiddenProxy)
     CompilerMethod cm = test::snapshotMethod(*mn);
     cm.markedForCompile = true;
 
-    // 批 6d：方法随夹具树一次落 DOM（接口位在序列化前置位；注入走 dom_inject）。
+    // 方法随夹具树一次落 DOM（接口位在序列化前置位；注入走 dom_inject）。
     auto cn = makeClassNode("com/example/Op");
     cn->access |= Opcodes::ACC_INTERFACE | Opcodes::ACC_ABSTRACT;
     cn->methods.push_back(mn.get());

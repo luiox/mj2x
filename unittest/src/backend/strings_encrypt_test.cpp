@@ -59,7 +59,7 @@ size_t countSubstring(const std::string& text, const std::string& needle)
 }
 
 /// 提取 StackC 池定义体（"_mj2x_string_pool[] = {" 到 "}; " 之间）并去掉全部
-/// 空白，得到规范化 token 序列——同明文池必然同序列，可作关闭态基线反证。
+/// 空白，得到规范化 token 序列，同明文池必然同序列，可作关闭态基线反证。
 std::string normalizedStringPoolBody(const std::string& source)
 {
     const auto begin = source.find("_mj2x_string_pool[] = {");

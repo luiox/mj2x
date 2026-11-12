@@ -1,4 +1,4 @@
-// VMC4 编码期块乱序单测（issue #1116 切片 A，--vmc4-shuffle-blocks）。
+// VMC4 编码期块乱序单测（issue #1116，--vmc4-shuffle-blocks）。
 //
 // 本测试不调用 JNI/DLL（执行级 round-trip 在 vmc4_backend_e2e_test.cpp），
 // 只在 VmProgram / 生成 C 源层面验证：
@@ -213,7 +213,7 @@ bool decodeBlockTerminator(const VmProgram& prog, const VmInstance& inst, uint32
         const size_t   len  = vmInstrLength(op);
         if (len == 0) return false;
         if (op == VmOpcode::Jump || op == VmOpcode::Branch || op == VmOpcode::Return) {
-            if (pc + len != end) return false;   // terminator 必须收口块尾
+            if (pc + len != end) return false;   // terminator 必须落在块尾
             if (op == VmOpcode::Jump) {
                 out.targets = {readU16(pc + 1)};
             } else if (op == VmOpcode::Branch) {
@@ -487,7 +487,7 @@ TEST(Vmc4ShuffleTest, ExceptionRegionsRemappedConsistently)
     // handler 块本身是可解码块（乱序后仍是良构块）。
     std::vector<DecodedTerminator> terms;
     ASSERT_TRUE(decodeAllTerminators(*shufProg, on, terms));
-    // 生成 C：异常检查点存在（块反查逻辑对乱序布局透明——targets 恒升序）。
+    // 生成 C：异常检查点存在（块反查逻辑对乱序布局透明，targets 恒升序）。
     const std::string src = VmInterpreterEmitter::emit(*shufProg, on, "shufx");
     EXPECT_NE(src.find("mj2x_vm_exception_matches"), std::string::npos) << src;
     EXPECT_NE(src.find("mj2x_vm_exc:"), std::string::npos) << src;
@@ -495,8 +495,8 @@ TEST(Vmc4ShuffleTest, ExceptionRegionsRemappedConsistently)
 
 // ===========================================================================
 // 语义保真（单测级模拟执行）：乱序程序按解释器语义逐指令模拟，输出与参考
-// 实现一致。shuffle 的跳转目标全部经 blockIndex/blockTargets 解析——本测试
-// 守住「语义不变」不变量（纯结构性断言抓不住跳转指错块，曾由 e2e 死循环
+// 实现一致。shuffle 的跳转目标全部经 blockIndex/blockTargets 解析，本测试
+// 守住"语义不变"不变量（纯结构性断言抓不住跳转指错块，曾由 e2e 死循环
 // 实证，见 resolveEdgeTarget 的 id 缓存缺陷修复）。
 // ===========================================================================
 namespace {
@@ -730,7 +730,7 @@ TEST(Vmc4ShuffleTest, ShuffleComposesWithDriftAndEncrypt)
     auto        prog = encodeForShuffle(makeBranchyLoopMethod(), instance, reason);
     ASSERT_NE(prog, nullptr) << reason;
     // drift 语义已烘焙进字节流（unmap 表消费形态），块乱序与 drift 编码同源于
-    // 最终布局——指令边界表仍与块起点对齐（懒解密分块前提）。
+    // 最终布局，指令边界表仍与块起点对齐（懒解密分块前提）。
     for (uint32_t t : prog->blockTargets) {
         EXPECT_NE(std::find(prog->instructionOffsets.begin(),
                             prog->instructionOffsets.end(), t),

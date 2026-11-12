@@ -108,7 +108,7 @@ protected:
     // 一个 E2E 用例：编译 javaSrc（含若干 static 方法）→ mj2x → cl → 在 JVM 调用并对比。
     //   className: Java 类名（如 "Sample"），文件名同。
     //   javaSrc:   完整 Java 源（public class <className> { ... }）。
-    //   checks:    {"<methodName>(<args>)", 期望输出行} —— driver 调用并打印
+    //   checks:    {"<methodName>(<args>)", 期望输出行}，driver 调用并打印
     //   "<methodName>=<value>"。
     //              args 是 Java 字面量参数串（如 "3, 4"），value 是 driver 打印的返回值字符串。
     struct Check
@@ -179,7 +179,7 @@ protected:
             // cl /LD 生成 DLL；/Fe 指定输出名；/Fo 指定 .obj 输出目录（避免污染 cwd）；
             // /I 加 jni.h 头路径。
             // 运行时源单独编译(#894 下沉后生成 TU 不再自包含),与生成 .c 分开
-            // 编译再链接——避免多源文件时 /Fo 目录形态的 cmd 引号坑。
+            // 编译再链接，避免多源文件时 /Fo 目录形态的 cmd 引号坑。
             auto r = runBat({
                 "call " + q(tc_.vcvars64) + " x64 >nul",
                 "cl /nologo /O2 /EHsc /utf-8 /c /Fo" + q(dir / "_rt.obj") + " " +
@@ -216,7 +216,7 @@ protected:
 
 private:
     // Driver：直接静态调用 <className> 的方法，打印 "<call>=<value>"。
-    // 用反射会很麻烦（基本类型签名匹配），这里生成强类型直接调用——更可靠、更可读。
+    // 用反射会很麻烦（基本类型签名匹配），这里生成强类型直接调用，更可靠、更可读。
     // Driver 自身不被 mj2x 处理（它不在被保护的类列表里）。
     static std::string buildDriver(const std::string& className, const std::vector<Check>& checks)
     {

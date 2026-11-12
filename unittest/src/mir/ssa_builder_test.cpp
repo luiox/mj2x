@@ -30,7 +30,7 @@
 #include "mj2x/mir/ssa/ssa_dump.hpp"
 #include "mj2x/mj2x.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -76,7 +76,7 @@ MethodNode* findMethod(ClassNode* cn, const std::string& name, const std::string
 }
 
 // 跑 CodeConverter + SSABuilder，返回 SSAFunction（或 nullptr + reason）。
-// arena 由调用方持有——SSAFunction 节点字段是 arena-backed Utf8StringRef（spec §6.1），
+// arena 由调用方持有，SSAFunction 节点字段是 arena-backed Utf8StringRef（spec §6.1），
 // arena 必须活到调用方消费完 SSA（dump/lower/emit）为止（参见 #698）。
 std::unique_ptr<SSAFunction> buildSSAFor(ClassNode* cn, MethodNode* m,
                                          ca::str::Utf8StringArena& arena, std::string& reason)
@@ -121,7 +121,7 @@ TEST(SSAFunctionTest, InternFloatPreservesIeee754Identity)
 
 // buildInlineSSA 的返回包：把 arena 与 fn 绑在一起，保证 arena 与 SSAFunction 同生共死。
 // SSAFunction 节点字段是 arena-backed Utf8StringRef（spec §6.1），arena 析构会让 fn 内的
-// ref 全部悬垂——故不能用局部 arena + 返回 fn 的旧写法（参见 #698）。
+// ref 全部悬垂，故不能用局部 arena + 返回 fn 的旧写法（参见 #698）。
 struct InlineSsaBundle
 {
     std::unique_ptr<SSAFunction>      fn;
@@ -264,7 +264,7 @@ std::unique_ptr<ClassNode> loadClassFile(Utf8StringArena& arena, const fs::path&
 }   // namespace
 
 // ============================================================================
-// add(I)I —— 线性方法，基本 IR 生成 + 无栈槽
+// add(I)I，线性方法，基本 IR 生成 + 无栈槽
 // ============================================================================
 TEST(SSABuilderE2E, AddProducesStacklessSSA)
 {
@@ -301,7 +301,7 @@ TEST(SSABuilderE2E, AddProducesStacklessSSA)
 }
 
 // ============================================================================
-// loopSum(I)I —— 循环，验证 block-arg phi
+// loopSum(I)I，循环，验证 block-arg phi
 // ============================================================================
 TEST(SSABuilderE2E, LoopSumHasPhiBlockArg)
 {
@@ -342,7 +342,7 @@ TEST(SSABuilderE2E, LoopSumHasPhiBlockArg)
 }
 
 // ============================================================================
-// loopCount(I)I —— while 循环，验证回边 phi
+// loopCount(I)I，while 循环，验证回边 phi
 // ============================================================================
 TEST(SSABuilderE2E, LoopCountHasPhiBlockArg)
 {
@@ -1115,7 +1115,7 @@ TEST(SSABuilderJavaSamples, NullTrapHandlersFromJavaSource)
 // label 切分解耦，不再依赖"块序 == 字节码序"的 label 区间扫描。断言：
 //   1. handler 的 start/end 指令序号已解析且范围非空；
 //   2. SSA region 的 protectedBlocks 集合 == { L1 块 | 块指令范围与保护区相交 }
-//      —— semiCatch：try 前 x*2 块、try 后 return 块不在保护区；semiAfter：
+//      semiCatch：try 前 x*2 块、try 后 return 块不在保护区；semiAfter：
 //      try 后的 x/0 块不在保护区（JVM 语义：try 外异常必须传播）。
 TEST(SSABuilderJavaSamples, ExceptionPrecisionRanges)
 {

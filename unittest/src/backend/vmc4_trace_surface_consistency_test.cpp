@@ -1,14 +1,14 @@
 // vmc4_trace_surface_consistency_test.cpp
 //
-// #820 步骤 6（对抗闭环）的 mj2x 侧闭环：红队 §4.3「trace-surface 一致性核对」
-// 与 §4.1「跨实例分析复用性」在 mjdbg 对抗工具就绪前的自动化替代。
+// #820 步骤 6（红队对抗验证）的 mj2x 侧闭环：红队 §4.3"trace-surface 一致性核对"
+// 与 §4.1"跨实例分析复用性"在 mjdbg 对抗工具就绪前的自动化替代。
 //
 // 1. DescribeFileRoundTripsToInstanceState：把 describe() 输出当作红队读到的
-//    trace-surface 文件解析，逐项与 VmInstance 产物状态比对——声明的结构
+//    trace-surface 文件解析，逐项与 VmInstance 产物状态比对，声明的结构
 //    必须与产物完全一致（防 describe 与产物漂移；红队观测面不可靠 = 闭环失效）。
-// 2. CrossInstanceSemanticMappingIsUnreusable：§4.1 低配量化——实例 A 的语义
+// 2. CrossInstanceSemanticMappingIsUnreusable：§4.1 低配量化，实例 A 的语义
 //    表对实例 B 的字节归属命中率应接近随机水平（≈1/|支持集|），断言远低于
-//    可复用阈值（0.2），证明「实例独立成立」（跨实例复用性 ≈ 0 的判据）。
+//    可复用阈值（0.2），证明"实例独立成立"（跨实例复用性 ≈ 0 的判据）。
 
 #include <gtest/gtest.h>
 
@@ -221,7 +221,7 @@ TEST(Vmc4TraceSurfaceConsistencyTest, DescribeFileRoundTripsDriftInstance)
 
 TEST(Vmc4TraceSurfaceConsistencyTest, CrossInstanceSemanticMappingIsUnreusable)
 {
-    // §4.1 低配量化：用实例 A 的语义表解析实例 B 的字节——命中率应接近随机
+    // §4.1 低配量化：用实例 A 的语义表解析实例 B 的字节，命中率应接近随机
     // 水平（≈1/|支持集|）。跨实例复用性 ≈ 0（实例独立成立）的 mj2x 自验判据。
     VmInstance a(makeOpts(0x1111, 1, 0));
     VmInstance b(makeOpts(0x2222, 1, 0));
@@ -251,7 +251,7 @@ TEST(Vmc4TraceSurfaceConsistencyTest, CrossInstanceSemanticMappingIsUnreusable)
     }
 
     // 随机水平的期望命中率 ≈ 1/|支持集|（≈5%）；可复用阈值 20% 远高于随机，
-    // 断言必须低于它——若接近 100% 则实例独立失效（强度归零判据 2）。
+    // 断言必须低于它，若接近 100% 则实例独立失效（强度归零判据 2）。
     const double hitRate = static_cast<double>(match) / static_cast<double>(total);
     std::printf("[trace-surface] cross-instance semantic hit rate: %.2f%% "
                 "(random expectation ~%.2f%%, reuse threshold 20%%)\n",

@@ -9,7 +9,7 @@
 //   2. SourceInterpreter 只追踪栈上值的来源，不追踪 local 的 reaching-def（getLocal().insns_ 恒空）
 // 故 R1-B 决定走兜底（自写 reaching-def，从 CodeConverter 的 CFG），详见 dev_plan.md。
 //
-// 这些测试体保留作**负证据留档**，全部 DISABLED_ —— 不跑、不阻塞 CI，但代码与诊断注释保留，
+// 这些测试体保留作**负证据留档**，全部 DISABLED_，不跑、不阻塞 CI，但代码与诊断注释保留，
 // 未来 libjbytecode analysis 修好后去掉 DISABLED_ 前缀即可重新校验。
 //
 // 测试样本：test_resource/analyzer/analyzer/AnalyzerProbe.class（javac -g 编译）
@@ -60,7 +60,7 @@ std::unique_ptr<ClassNode> loadProbeClass()
 }   // namespace
 
 // ============================================================================
-// Part 1: BasicInterpreter — 循环头/合并点的 frame shape 必须正确
+// Part 1: BasicInterpreter，循环头/合并点的 frame shape 必须正确
 // ============================================================================
 
 TEST(AnalyzerProbe, DISABLED_BasicInterpreterSumToLoopHeaderMerges)
@@ -121,7 +121,7 @@ TEST(AnalyzerProbe, DISABLED_BasicInterpreterGcdWhileLoopMerge)
 }
 
 // ============================================================================
-// Part 2: SourceInterpreter — reaching-def 集合必须包含真正的多源 phi
+// Part 2: SourceInterpreter，reaching-def 集合必须包含真正的多源 phi
 // ============================================================================
 //
 // 这是 R1a block-argument SSA 的根基：phi 正是"该 value 的 SourceValue.insns_
@@ -179,7 +179,7 @@ TEST(AnalyzerProbe, DISABLED_SourceInterpreterGcdBackEdgePhi)
 }
 
 // ============================================================================
-// Part 3: 单源（无 phi）的正确性 —— 确保分析器不会"过度合并"
+// Part 3: 单源（无 phi）的正确性，确保分析器不会"过度合并"
 // ============================================================================
 //
 // 如果 SourceInterpreter 把所有东西都并成一个超大集合（常见 bug：merge 退化成
@@ -205,7 +205,7 @@ TEST(AnalyzerProbe, DISABLED_SourceInterpreterSingleDefWhereNoMerge)
 }
 
 // ============================================================================
-// DIAGNOSTIC dump（调试用，非判定性）—— 观察分析器实际产出的 frame 内容
+// DIAGNOSTIC dump（调试用，非判定性），观察分析器实际产出的 frame 内容
 // ============================================================================
 TEST(AnalyzerProbe, DISABLED_DiagnosticDumpSumTo)
 {

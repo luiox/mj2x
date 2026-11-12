@@ -75,7 +75,7 @@ bool llvmSupports(const char* fixtureId)
         "g10.monitor",      "g11.reflection_access", "g12.string_ops",
         "g12.string_compare", "g13.bit_ops",     "g13.shift_out_of_range",
         "g14.deep_recursion", "g15.collection_ops",
-        // ---- G17（#1117）：LLVM 支持面入列；g17.string_intern 暂缓——LLVM ldc
+        // ---- G17（#1117）：LLVM 支持面入列；g17.string_intern 暂缓，LLVM ldc
         // String 物化（NewStringUTF）尚未走 intern（#1117 修复仅覆盖 RegC
         // literal intrinsic 与 StackC 池物化），恒等断言会失败。
         "g17.math_nan_zero", "g17.array_store_check", "g17.sibling_methods",
@@ -142,7 +142,7 @@ protected:
     static void SetUpTestSuite()
     {
         toolchain_ = probeToolchain();
-        // #1122：探测结果可见化——找到/未找到 + 版本 + 来源，一行打测试输出，
+        // #1122：探测结果可见化，找到/未找到 + 版本 + 来源，一行打测试输出，
         // 使 llvm 列的 SKIP 有因可查（此前无 clang 机器整列静默跳过）。
         std::cout << "[clang-probe] MtestSetNativeMatrix: " << formatClangProbe(toolchain_.clang)
                   << std::endl;

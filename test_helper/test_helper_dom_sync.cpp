@@ -10,7 +10,7 @@ namespace test {
 namespace {
 
 /// tree 序列化旗标恒 plain（0）：与退役的 class_dom_sync 同口径（COMPUTE 的
-/// 帧/栈计算是 output 侧语义，见批 2 实证；plain 只求如实序列化当前状态）。
+/// 帧/栈计算是 output 侧语义（既有实证）；plain 只求如实序列化当前状态）。
 constexpr ca::i32 kPlainWriterFlags = 0;
 
 std::vector<ca::u8> serializeTree(jbytecode::tree::ClassNode& node,
@@ -83,7 +83,7 @@ std::vector<mj2x::Block*> convertMethodNode(mj2x::CodeConverter&         convert
                                             jbytecode::tree::MethodNode& mn,
                                             ca::str::Utf8StringArena&    arena)
 {
-    // 批 6d 前产品同款测试垫片的移植（code_converter.cpp 退役的 MethodNode
+    // 产品旧版同款测试垫片的移植（code_converter.cpp 退役的 MethodNode
     // 重载）：方法借用挂最小包装类，plain 序列化 → readClass → convert(cf, 0)。
     jbytecode::tree::ClassNode shim;
     shim.version   = jbytecode::core::Opcodes::V1_8;

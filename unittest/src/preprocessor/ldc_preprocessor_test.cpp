@@ -1,6 +1,6 @@
 // LdcPreprocessor 单元测试。
 //
-// 核心判据：展开序列必须按 findXxx 描述符的参数顺序压栈——这是历史缺陷的
+// 核心判据：展开序列必须按 findXxx 描述符的参数顺序压栈，这是历史缺陷的
 // 直接形态（旧实现压 Class, String(desc), MethodType, String(name)，多一个
 // 参数且 name/MethodType 顺序颠倒，产出必 VerifyError 的字节码）。这里用一个
 // 迷你栈校验器（LDC/INVOKE/GETSTATIC 抽象解释）对展开后的整方法做栈形一致性
@@ -24,7 +24,7 @@ using namespace jbytecode::tree;
 
 namespace {
 
-// 树夹具暂存（键 = 类名，重建即替换）：批 6d 后 CompilerClass 无树槽，DOM 由
+// 树夹具暂存（键 = 类名，重建即替换）：树载体退役后 CompilerClass 无树槽，DOM 由
 // classFromTree 一次性落定；shelf 让树与回投影存活到测试结束（方法指针有效面）。
 std::map<std::string, std::vector<std::unique_ptr<ClassNode>>>& treeShelf()
 {
@@ -103,7 +103,7 @@ bool descCompatible(const std::string& expected, const std::string& actual)
 
 // 抽象解释方法体，返回是否全程栈形一致；失败原因写入 reason。
 // 方法形参按 desc 预压栈（静态方法），返回时栈应只剩返回类型。
-// 同时跟踪操作数栈峰值并断言 ≤ m->maxStack——本文件用例全为无参方法（形参
+// 同时跟踪操作数栈峰值并断言 ≤ m->maxStack，本文件用例全为无参方法（形参
 // 走局部变量不占栈），预压不干扰峰值口径。这是 issue #1 的判据：LDC 展开链
 // 峰值若超出方法 maxStack，stackc 后端 union jvalue s[maxStack] 即写穿。
 bool verifyStackShape(MethodNode* m, std::string& reason)
@@ -229,7 +229,7 @@ struct FindNameDescCase
 class LdcPreprocessorTest : public ::testing::Test
 {
 protected:
-    // 跑一个「ldc <cst>; areturn」方法经过 preprocessor 的完整检查。
+    // 跑一个"ldc <cst>; areturn"方法经过 preprocessor 的完整检查。
     static void runAndVerify(const ca::core::Any& cst, const char* methodDesc,
                              const char* expectFindName)
     {
@@ -247,7 +247,7 @@ protected:
         ASSERT_NE(m, nullptr);
 
         // 展开必须抬 maxStack +4（16 为本 fixture 初值；否则 stackc 后端
-        // union jvalue s[maxStack] 开小，LDC 解析内联写穿 s[]——issue #1）。
+        // union jvalue s[maxStack] 开小，LDC 解析内联写穿 s[]，issue #1）。
         EXPECT_EQ(m->maxStack, 16 + 4);
 
         std::string reason;
@@ -340,9 +340,9 @@ TEST_F(LdcPreprocessorTest, ExpandPutStaticHandle)
 // 名字与方法描述符逐字节钉死（#1027 find4：ldc 侧 find 判定切 indyHandleFindFor
 // 单源后的发射文本不变性判据）。
 
-// 展开一个「ldc 旧栈 Handle(tag); areturn」方法，返回 Lookup.findXxx 调用点的
+// 展开一个"ldc 旧栈 Handle(tag); areturn"方法，返回 Lookup.findXxx 调用点的
 // (name, desc)，并顺带做栈形校验（任何压栈顺序/数量错误都会被抓住）。
-// handleDesc：Handle 的描述符——field tag 须传字段描述符，method tag 传方法
+// handleDesc：Handle 的描述符，field tag 须传字段描述符，method tag 传方法
 // 描述符（findGetter 系第 3 参 = 字段类型 Class，来源 h.getDesc()）。
 LookupCallShape expandAndCaptureLookupCall(int tag, const char* handleDesc)
 {
@@ -409,7 +409,7 @@ TEST_F(LdcPreprocessorTest, FindNameAndDescFullTable)
         {Opcodes::H_INVOKEINTERFACE, "(I)V", "findVirtual",
          "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)"
          "Ljava/lang/invoke/MethodHandle;"},
-        // 注：缺省分支（非法 tag）在 DOM 世界不可达——reference_kind 合法域
+        // 注：缺省分支（非法 tag）在 DOM 世界不可达，reference_kind 合法域
         // 1..9（JVMS 4.4.8），越界值在树→DOM 同步的 readClass 即被拒，用例
         // 无法构建；合法 9 tag 全表已在上列钉死。
     };
@@ -430,7 +430,7 @@ TEST_F(LdcPreprocessorTest, ExpandMethodTypeConstant)
 
 // issue #1 回归：真实类文件形态下（ldc mj2x::Handle + invoke* ⇒ max_stack=2），展开链
 // 峰值 D+5（D=0 起算即 5）须被抬升后的 maxStack 覆盖。预处理器漏抬时
-// verifyStackShape 的峰值断言直接判红——这正是 stackc s[] 写穿的成因。
+// verifyStackShape 的峰值断言直接判红，这正是 stackc s[] 写穿的成因。
 TEST_F(LdcPreprocessorTest, BumpsMaxStackToCoverExpansionPeak)
 {
     CompilerIndex index;
