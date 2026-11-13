@@ -652,6 +652,83 @@ TEST(RegCTest, MonitorNullOperandThrowsNpe)
     expectNoStackAnchors(result.source);
 }
 
+/// null 比较必须发射纯指针比较：JNI 规范保证 null 引用恒为 C NULL 指针，
+/// IsSameObject(x, NULL) 与 x == NULL 恒等价。ifnull/ifnonnull 是生成代码最高频
+/// 守卫形态，走 JNI upcall 每次白付一次跨边界调用（热循环内逐迭代损失）。
+TEST(RegCTest, NullCompareEmitsPointerComparison)
+{
+    auto* nullTaken = new LabelNode(labelScratchArena().create<Label>());
+
+    std::string reason;
+    auto        ifNull =
+        emitRegC("nullEq",
+                 "(Ljava/lang/Object;)I",
+                 {
+                     new VarInsnNode(Opcodes::ALOAD, 0),
+                     new JumpInsnNode(Opcodes::IFNULL, nullTaken->label),
+                     new InsnNode(Opcodes::ICONST_0),
+                     new InsnNode(Opcodes::IRETURN),
+                     nullTaken,
+                     new InsnNode(Opcodes::ICONST_1),
+                     new InsnNode(Opcodes::IRETURN),
+                 },
+                 1,
+                 1,
+                 reason);
+    ASSERT_TRUE(ifNull.ok) << ifNull.reason;
+    EXPECT_NE(ifNull.source.find("== NULL"), std::string::npos) << ifNull.source;
+    EXPECT_EQ(ifNull.source.find("IsSameObject"), std::string::npos) << ifNull.source;
+
+    auto* nonNullTaken = new LabelNode(labelScratchArena().create<Label>());
+    auto ifNonNull =
+        emitRegC("nullNe",
+                 "(Ljava/lang/Object;)I",
+                 {
+                     new VarInsnNode(Opcodes::ALOAD, 0),
+                     new JumpInsnNode(Opcodes::IFNONNULL, nonNullTaken->label),
+                     new InsnNode(Opcodes::ICONST_0),
+                     new InsnNode(Opcodes::IRETURN),
+                     nonNullTaken,
+                     new InsnNode(Opcodes::ICONST_1),
+                     new InsnNode(Opcodes::IRETURN),
+                 },
+                 1,
+                 1,
+                 reason);
+    ASSERT_TRUE(ifNonNull.ok) << ifNonNull.reason;
+    EXPECT_NE(ifNonNull.source.find("!= NULL"), std::string::npos) << ifNonNull.source;
+    EXPECT_EQ(ifNonNull.source.find("IsSameObject"), std::string::npos) << ifNonNull.source;
+    expectNoStackAnchors(ifNonNull.source);
+}
+
+/// acmp（双侧都是值）不能裸指针比较：JNI local ref 是句柄，同一对象的两个不同
+/// local ref 句柄指针不相等，必须保持 IsSameObject 判定对象同一性。
+TEST(RegCTest, AcmpKeepsIsSameObject)
+{
+    auto* notSame = new LabelNode(labelScratchArena().create<Label>());
+
+    std::string reason;
+    auto        result =
+        emitRegC("same",
+                 "(Ljava/lang/Object;Ljava/lang/Object;)I",
+                 {
+                     new VarInsnNode(Opcodes::ALOAD, 0),
+                     new VarInsnNode(Opcodes::ALOAD, 1),
+                     new JumpInsnNode(Opcodes::IF_ACMPNE, notSame->label),
+                     new InsnNode(Opcodes::ICONST_1),
+                     new InsnNode(Opcodes::IRETURN),
+                     notSame,
+                     new InsnNode(Opcodes::ICONST_0),
+                     new InsnNode(Opcodes::IRETURN),
+                 },
+                 2,
+                 2,
+                 reason);
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("IsSameObject"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
 TEST(RegCTest, InternsRepeatedClassCachesWithinFunction)
 {
     std::string reason;

@@ -540,12 +540,27 @@ jmethodID _mj2x_regc_method_id(jobject receiver, int32_t is_static, const char* 
     if (receiver == NULL) { _mj2x_regc_throw_null("instance method call"); return NULL; }
     return (*_mj2x_regc_env)->GetMethodID(_mj2x_regc_env, (*_mj2x_regc_env)->GetObjectClass(_mj2x_regc_env, receiver), name, desc);
 }
-int32_t _mj2x_regc_call_i32(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return 0; return is_static ? (*_mj2x_regc_env)->CallStaticIntMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values) : (*_mj2x_regc_env)->CallIntMethodA(_mj2x_regc_env, receiver, m, values); }
-int64_t _mj2x_regc_call_i64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return 0; return is_static ? (*_mj2x_regc_env)->CallStaticLongMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values) : (*_mj2x_regc_env)->CallLongMethodA(_mj2x_regc_env, receiver, m, values); }
-float _mj2x_regc_call_f32(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return 0.0f; return is_static ? (*_mj2x_regc_env)->CallStaticFloatMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values) : (*_mj2x_regc_env)->CallFloatMethodA(_mj2x_regc_env, receiver, m, values); }
-double _mj2x_regc_call_f64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return 0.0; return is_static ? (*_mj2x_regc_env)->CallStaticDoubleMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values) : (*_mj2x_regc_env)->CallDoubleMethodA(_mj2x_regc_env, receiver, m, values); }
-mj2x_ref _mj2x_regc_call_ref(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return NULL; return is_static ? (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values) : (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethodA(_mj2x_regc_env, receiver, m, values); }
-void _mj2x_regc_call_void(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_method_id(receiver, is_static, owner, name, desc); if (m == NULL) return; if (is_static) (*_mj2x_regc_env)->CallStaticVoidMethodA(_mj2x_regc_env, _mj2x_regc_find_class(owner), m, values); else (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }
+/* 非缓存调用族共用解析：static 分支只 FindClass 一次，jclass 同时供
+ * GetStaticMethodID 与 CallStatic*MethodA 复用（原实现经 _mj2x_regc_method_id
+ * 内 FindClass 一次、调用点再 FindClass 一次，每次静态调用多付一次类查找）。
+ * FindClass 失败时保持 pending 异常返回 NULL，不对 NULL clazz 调
+ * GetStaticMethodID；instance 分支语义与 _mj2x_regc_method_id 完全一致。
+ * static_class 仅 static 分支写出（本帧 local ref，帧弹出自动释放）。 */
+static jmethodID _mj2x_regc_call_method_id(jobject receiver, int32_t is_static, jclass* static_class,
+                                           const char* owner, const char* name, const char* desc)
+{
+    if (!is_static) return _mj2x_regc_method_id(receiver, is_static, owner, name, desc);
+    jclass cls = _mj2x_regc_find_class(owner);
+    *static_class = cls;
+    if (cls == NULL) return NULL;
+    return (*_mj2x_regc_env)->GetStaticMethodID(_mj2x_regc_env, cls, name, desc);
+}
+int32_t _mj2x_regc_call_i32(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jclass cls = NULL; jmethodID m = _mj2x_regc_call_method_id(receiver, is_static, &cls, owner, name, desc); if (m == NULL) return 0; return is_static ? (*_mj2x_regc_env)->CallStaticIntMethodA(_mj2x_regc_env, cls, m, values) : (*_mj2x_regc_env)->CallIntMethodA(_mj2x_regc_env, receiver, m, values); }
+int64_t _mj2x_regc_call_i64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jclass cls = NULL; jmethodID m = _mj2x_regc_call_method_id(receiver, is_static, &cls, owner, name, desc); if (m == NULL) return 0; return is_static ? (*_mj2x_regc_env)->CallStaticLongMethodA(_mj2x_regc_env, cls, m, values) : (*_mj2x_regc_env)->CallLongMethodA(_mj2x_regc_env, receiver, m, values); }
+float _mj2x_regc_call_f32(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jclass cls = NULL; jmethodID m = _mj2x_regc_call_method_id(receiver, is_static, &cls, owner, name, desc); if (m == NULL) return 0.0f; return is_static ? (*_mj2x_regc_env)->CallStaticFloatMethodA(_mj2x_regc_env, cls, m, values) : (*_mj2x_regc_env)->CallFloatMethodA(_mj2x_regc_env, receiver, m, values); }
+double _mj2x_regc_call_f64(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jclass cls = NULL; jmethodID m = _mj2x_regc_call_method_id(receiver, is_static, &cls, owner, name, desc); if (m == NULL) return 0.0; return is_static ? (*_mj2x_regc_env)->CallStaticDoubleMethodA(_mj2x_regc_env, cls, m, values) : (*_mj2x_regc_env)->CallDoubleMethodA(_mj2x_regc_env, receiver, m, values); }
+mj2x_ref _mj2x_regc_call_ref(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jclass cls = NULL; jmethodID m = _mj2x_regc_call_method_id(receiver, is_static, &cls, owner, name, desc); if (m == NULL) return NULL; return is_static ? (mj2x_ref)(*_mj2x_regc_env)->CallStaticObjectMethodA(_mj2x_regc_env, cls, m, values) : (mj2x_ref)(*_mj2x_regc_env)->CallObjectMethodA(_mj2x_regc_env, receiver, m, values); }
+void _mj2x_regc_call_void(const char* owner, const char* name, const char* desc, int32_t is_static, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); jobject receiver = _mj2x_regc_collect_args(desc, arg_count, ap, values); va_end(ap); jclass cls = NULL; jmethodID m = _mj2x_regc_call_method_id(receiver, is_static, &cls, owner, name, desc); if (m == NULL) return; if (is_static) (*_mj2x_regc_env)->CallStaticVoidMethodA(_mj2x_regc_env, cls, m, values); else (*_mj2x_regc_env)->CallVoidMethodA(_mj2x_regc_env, receiver, m, values); }
 
 int32_t _mj2x_regc_call_cached_i32(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return 0; return (*_mj2x_regc_env)->CallStaticIntMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
 int64_t _mj2x_regc_call_cached_i64(mj2x_regc_static_method_cache* cache, int32_t arg_count, ...) { jvalue values[32]; va_list ap; va_start(ap, arg_count); _mj2x_regc_collect_args(cache->desc, arg_count, ap, values); va_end(ap); jmethodID m = _mj2x_regc_cached_static_method(cache); if (m == NULL || cache->ownerClass == NULL) return 0; return (*_mj2x_regc_env)->CallStaticLongMethodA(_mj2x_regc_env, cache->ownerClass, m, values); }
@@ -594,7 +609,8 @@ mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* 
         /* JVM 语义：ldc 常量是 interned 实例（#1117，jvmtp 1.7.1 修复④同款
          * 缺陷面），首次物化经 String.intern() 归一化进 JVM 字符串池，同内容
          * 常量跨站点/跨类/跨 String.intern() 恒等；缓存 32 槽溢出后逐次物化
-         * 也因 intern 恒等不再破坏语义（只多 2 次 JNI）。miss 路径 2 次 JNI，
+         * 也因 intern 恒等不再破坏语义（NewStringUTF+intern 共 2 次 JNI，且
+         * 表满路径不再 NewGlobalRef，见函数尾部说明）。miss 路径 2 次 JNI，
          * 命中路径保持 0 JNI。intern_mid 首次并发竞态双方算得同一 methodID，
          * 覆写无害。 */
         static jmethodID intern_mid = NULL;
@@ -616,15 +632,21 @@ mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context, const char* 
             }
         }
     }
-    if (s != NULL) {
-        s = (jstring)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, s);
-    }
     if (s != NULL && literal_cache_count < 32) {
+        /* 仅在确认入表时才 pin：pin 失败（OOM）与旧行为一致返回 NULL、不入表 */
+        jstring pinned = (jstring)(*_mj2x_regc_env)->NewGlobalRef(_mj2x_regc_env, s);
+        if (pinned == NULL) return NULL;
         /* 索引按位保护：多线程首次并发的瞬时竞态最多覆盖已有槽，不越界 */
         literal_cache[literal_cache_count & 31].key = utf8;
-        literal_cache[literal_cache_count & 31].value = s;
+        literal_cache[literal_cache_count & 31].value = pinned;
         ++literal_cache_count;
+        return (mj2x_ref)pinned;
     }
+    /* 表满路径：直接返回 intern 后的 local ref，不再 NewGlobalRef。旧实现
+     * 表满后每次调用新建 global ref 且从不 Delete（生成代码不管理 global ref
+     * 生命周期），热循环内无上界泄漏；local ref 帧弹出自动释放，与生成代码
+     * 内其他 JNI 调用产物生命周期一致，intern 恒等保证同内容常量逐次物化
+     * 结果与表内缓存对象 == 等价，语义不变。 */
     return (mj2x_ref)s;
 }
 
@@ -1238,8 +1260,10 @@ int32_t _mj2x_intrinsic_string_starts_with(mj2x_ref value, mj2x_ref prefix) {
     if (value_chars == NULL) return 0;
     const jchar* prefix_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)prefix, NULL);
     if (prefix_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars); return 0; }
-    int32_t same = 1;
-    for (jsize i = 0; i < prefix_len; ++i) { if (value_chars[i] != prefix_chars[i]) { same = 0; break; } }
+    /* 首 unit 粗筛 + memcmp：prefix_len >= 1 已由上方空串早退保证，
+     * memcmp 比较 prefix_len*2 字节与逐 unit 相等判定完全等价。 */
+    int32_t same = value_chars[0] == prefix_chars[0] &&
+                   memcmp(value_chars, prefix_chars, (size_t)prefix_len * sizeof(jchar)) == 0;
     (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars);
     (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)prefix, prefix_chars);
     return same;
@@ -1256,9 +1280,10 @@ int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref suffix) {
     if (value_chars == NULL) return 0;
     const jchar* suffix_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)suffix, NULL);
     if (suffix_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars); return 0; }
-    int32_t same = 1;
     jsize start = value_len - suffix_len;
-    for (jsize i = 0; i < suffix_len; ++i) { if (value_chars[start + i] != suffix_chars[i]) { same = 0; break; } }
+    /* 首 unit 粗筛 + memcmp：suffix_len >= 1 已由上方空串早退保证。 */
+    int32_t same = value_chars[start] == suffix_chars[0] &&
+                   memcmp(value_chars + start, suffix_chars, (size_t)suffix_len * sizeof(jchar)) == 0;
     (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars);
     (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)suffix, suffix_chars);
     return same;
@@ -1275,11 +1300,16 @@ int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle) {
     if (value_chars == NULL) return -1;
     const jchar* needle_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)needle, NULL);
     if (needle_chars == NULL) { (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars); return -1; }
+    /* 首 unit 粗筛 + memcmp（对齐 mj2x_string_index_of_units 形态）：
+     * needle_len >= 1 已由上方空串早退保证，memcmp 比较 needle_len*2 字节
+     * 与逐 unit 匹配完全等价，升序扫描与首个命中索引不变。 */
     int32_t found = -1;
     for (jsize i = 0; i <= value_len - needle_len; ++i) {
-        jsize j = 0;
-        while (j < needle_len && value_chars[i + j] == needle_chars[j]) j++;
-        if (j == needle_len) { found = (int32_t)i; break; }
+        if (value_chars[i] == needle_chars[0] &&
+            memcmp(value_chars + i, needle_chars, (size_t)needle_len * sizeof(jchar)) == 0) {
+            found = (int32_t)i;
+            break;
+        }
     }
     (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars);
     (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)needle, needle_chars);
