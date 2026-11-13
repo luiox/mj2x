@@ -24,7 +24,7 @@ namespace mj2x {
 using codegen::CSourceStream;
 
 // 复合键哈希/等值：内容 FNV-1a 三段混合（桶定位）+ 逐段内容比较（等值判定）。
-// 命中路径零分配、零拷贝——查找直接用调用方传入的三段视图，不再拼接
+// 命中路径零分配、零拷贝，查找直接用调用方传入的三段视图，不再拼接
 // 复合 std::string 键（旧 poolCacheKey 的 3×to_std_string + 2 concat 全消）。
 size_t RegCCacheTripleHash::operator()(const RegCCacheTripleKey& key) const noexcept
 {
@@ -48,7 +48,7 @@ namespace {
 /// 未命中路径公用：把调用方三段视图 intern 进池内存储（forward_list 节点地址
 /// 稳定，视图键不过期），返回可入 unordered_map 的三段视图键。调用方实参允许
 /// 是临时串视图（regc_flow 的 componentDescs / intrinsicName.substr 调用点），
-/// intern 后与实参寿命解耦。命中路径不走这里——零分配、零拷贝。
+/// intern 后与实参寿命解耦。命中路径不走这里，零分配、零拷贝。
 RegCCacheTripleKey internTripleKey(std::forward_list<std::string>& storage,
                                    const ca::str::Utf8StringRef&   owner,
                                    const ca::str::Utf8StringRef&   name,
@@ -407,7 +407,7 @@ std::string RegCCachePool::renderEncryptedLiterals() const
 {
     if (encryptedLiterals_.empty()) return {};
     // 密文数组以有符号 char 十进制发射（值域 [-128,127]），避免符号警告；
-    // 单数组多行发射。换行交界必须先补 "," 再起新行——initializer list 里
+    // 单数组多行发射。换行交界必须先补 "," 再起新行，initializer list 里
     // "45\n    -12" 缺逗号会被 C 折叠为常量表达式 45-12，静默改写数组内容。
     CSourceStream out;
     // 生成 TU 内注释保持 ASCII（MSVC codepage 安全，对齐 mj2x_regc_runtime.c 约定）。

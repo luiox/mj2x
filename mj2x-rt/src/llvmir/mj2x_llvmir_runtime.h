@@ -160,13 +160,13 @@ MJ2X_LLVMIR_API void* mj2x_llvm_indy_handle(JNIEnv* env, void* lookup, void* own
 // E ^ mj2x_llvm_const_key(site)（E = C ^ K 编译期物化，K 运行时派生）。splitmix64
 // 单步（输入先掺 volatile 不透明常量 g_const_key_opaque，LTO 不可折叠）与
 // reg_transform_passes.cpp 的 splitmix64（ca::random::SplitMix64 正典，#1027 A3
-// 逐位锁定）+ kOpaqueConstant 同源——改常数/移位/顺序即使 E ^ K != C。site 为
+// 逐位锁定）+ kOpaqueConstant 同源，改常数/移位/顺序即使 E ^ K != C。site 为
 // 函数内局部计数器，不掺 seed（site 必物化在产物里，掺 seed 不增加分析者成本）。
 MJ2X_LLVMIR_API int64_t mj2x_llvm_const_key(int64_t site);
 
 // ---- 阶段六:调用目标间接化 per-signature dispatcher ----
 // 对标 jvmtp obfuscation.calls.*：applyCallIndirections 把外部（JDK/库）方法
-// 调用点改写为按签名分派的运行时调用——调用点只带 (table, index)，目标身份
+// 调用点改写为按签名分派的运行时调用，调用点只带 (table, index)，目标身份
 // （owner/name/desc 字符串）从调用点移出，静态分析须先解析 index → 条目才能
 // 还原调用边。首次分派解析 owner 类 + jmethodID 并缓存入条目。
 // invokeKind：0 = virtual/interface，1 = static，2 = special。

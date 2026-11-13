@@ -1,4 +1,4 @@
-// mj2x SSA IR — id 分配。
+// mj2x SSA IR id 分配。
 // value id = 虚拟寄存器号（L5 直接映射成 C 局部变量 v<id>）。
 #pragma once
 

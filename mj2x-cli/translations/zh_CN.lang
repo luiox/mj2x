@@ -169,6 +169,7 @@ mj2x.param.log.quiet.desc=日志只保留警告与错误（stderr）
 mj2x.param.log.verbose.desc=日志提升到 debug 级别（stderr）
 mj2x.param.native_lib.key.desc=native lib 加密存储：嵌入前 XOR 加密（xorshift32 密钥流），资源入口加 .enc 后缀，运行时 NativeLoader 解密加载；静态提取不可直接加载（默认关闭 = 明文嵌入）
 mj2x.param.native_lib.pack_hook.desc=嵌入前外部处理钩子（sepacker DLL 加壳等）：{in} 占位符替换为编译产物路径，hook 应就地改写该文件；非零退出码视为失败；顺序：hook → 可选加密 → 嵌入（默认关闭）
+mj2x.param.native_lib.enable_native_access.desc=主清单声明 Enable-Native-Access: ALL-UNNAMED（issue #58）：java -jar 启动时 JDK 25+ 免 restricted method 告警；仅对 java -jar 形态生效，库形态（classpath 启动）不受主清单约束，部署方需在命令行加 java --enable-native-access=ALL-UNNAMED（默认关闭 = 不声明）
 mj2x.param.regc.cff_dead.desc=RegC/LLVM: CFF 恒假死块密度（默认 0 关闭；N = 每 N 个跳转插 1 死块；死块条件依赖运行时 state，编译器无法证明恒假不可 DCE；注入 barrier 的方法在 LLVM 侧回退未变换）
 mj2x.param.regc.cff_state_encrypt.desc=RegC/LLVM: CFF 派生随机 state 码 + dispatcher 状态异或（默认关闭；同 seed 同产物）
 mj2x.param.regc.comment_level.desc=RegC: 生成注释级别

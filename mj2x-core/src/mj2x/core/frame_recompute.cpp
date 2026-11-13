@@ -149,7 +149,7 @@ void recomputeSessionFrames(const std::string& name, jbc::ir::ClassSession& sess
         auto result = std::move(smt).unwrap();
 
         // SMT 槽换装：Code 槽已被 promote/lower 解码，mutate() 置脏后改嵌套
-        // 属性表——needed=false 不留空表（对齐旧 writer），已有槽删除。
+        // 属性表，needed=false 不留空表（对齐旧 writer），已有槽删除。
         ca::usize codeIdx = m.attrs.size();
         for (ca::usize k = 0; k < m.attrs.size(); ++k) {
             if (dom.cp.utf8Equals(m.attrs[k].nameCp, kCodeAttrName)) {

@@ -27,7 +27,7 @@ namespace mj2x {
 ///   （INVOKEVIRTUAL/INVOKESPECIAL/INVOKEINTERFACE），并在 env（若
 ///   passContext）之后、Java 参数之前传 receiver。receiver 是调用点现有的
 ///   局部引用，以各后端 REF 值的原生形态直传（StackC 栈槽 jobject、RegC
-///   `mj2x_ref`、VMC4 `mj2x_vm_slot::ref`——jni.h 中 jobject 即 void*，三后端
+///   `mj2x_ref`、VMC4 `mj2x_vm_slot::ref`，jni.h 中 jobject 即 void*，三后端
 ///   同型）。完整参数顺序：`[env,] receiver, <desc 参数...>`。配置校验：
 ///   passReceiver=true 的条目匹配到 INVOKESTATIC 调用点时报配置校验错误并
 ///   fail-closed（静态方法无 receiver）；instance 调用点遇到未声明

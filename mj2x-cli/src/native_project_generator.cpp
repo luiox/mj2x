@@ -205,7 +205,7 @@ const char* xmakeOptimizeFor(const std::string& level)
 /// 仅 backend=vmx64 注入；其余后端替换为空行（token 含换行，非 vmx64 整行
 /// 消失，现有 regc/stackc/vmc4 生成工程逐字节不变）。共享模板按后端差异化的
 /// 唯一注入点：xmake 对 msvc 工具链的 .asm 走 ml64（add_asfiles），非
-/// windows/x64 或非 msvc 工具链在模板层 fail-closed——MASM 语法没有其他受
+/// windows/x64 或非 msvc 工具链在模板层 fail-closed，MASM 语法没有其他受
 /// 支持的汇编器，宁可配置期清晰报错不产半成品。CLI 自身的构建路径恒以
 /// `-p windows --toolchain=msvc -a x64` 配置（native_project_builder.cpp），
 /// 手动配置生成工程的用户由此段获得明确诊断。
@@ -215,7 +215,7 @@ std::string vmx64AsmRuleSection()
     // 不注入（CI 实证 nil 调用），且 xmake f 平台探测阶段会多次求值项目文件、
     // is_plat 时序不可靠（描述段检查会误报）。描述段只做 glob 收编（add_files，
     // msvc 工具链下 xmake 自动路由 ml64）；装配器硬校验放 on_config 脚本作用域
-    // ——target:tool 在 on_load 里尚未解析（CI 实证），xmake 报错原文即要求
+    // （target:tool 在 on_load 里尚未解析，CI 实证，xmake 报错原文即要求
     // 挪 on_config。
     std::string section;
     section += "    -- vmx64 backend section (injected only for backend=vmx64): the generated\n";
@@ -294,7 +294,7 @@ int generateXmakeProject(const XmakeProjectConfig& config)
     const std::string optimizeLine =
         "    set_optimize(\"" + std::string{xmakeOptimizeFor(config.optLevel)} + "\")";
     // vmx64 .asm 段(模板 @VMX64_ASM_RULE@ 行):仅 vmx64 注入,其余后端整行
-    // 消失——共享模板的后端差异化只此一处,非 vmx64 生成工程保持原样。
+    // 消失，共享模板的后端差异化只此一处,非 vmx64 生成工程保持原样。
     // token 含换行:空替换时删除整行,不留空行。
     const std::string asmRule =
         config.backend == CEmitterBackend::Vmx64 ? vmx64AsmRuleSection() : std::string{};

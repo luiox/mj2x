@@ -313,7 +313,7 @@ void podStructEdgeCopy(CSourceStream& out, RegCFunctionEmitState& state, const R
     if (source == nullptr) return;
 
     // 结构体按值拷贝：源与目标是两个独立的 C 变量，语义等价于"同一个对象的
-    // 两个别名"——与 JNI 引用语义不同，但对象不逃逸时对外不可观测。
+    // 两个别名"，与 JNI 引用语义不同，但对象不逃逸时对外不可观测。
     // 别名拷贝 = 指针赋值（值语义拷贝会破坏 Java 的引用语义）。
     out.appendLineStart(podStructPtrName(copy.dest.id))
         .append(" = ")
@@ -354,7 +354,7 @@ bool emitPodStructFieldStore(CSourceStream& out, RegCFunctionEmitState& state,
         emitMaterializedStringBuilder(out, state, ins.value, valueExpression);
     if (!materialized &&
         !rejectNativeObjectEscape(state, ins.value, "pod struct field store value", reason)) {
-        // 存进 struct 的值本身是个 native 对象——不该发生（逃逸分析已把这种
+        // 存进 struct 的值本身是个 native 对象，不该发生（逃逸分析已把这种
         // 实例判为逃逸），落到原路径由它给出诊断。
         return false;
     }

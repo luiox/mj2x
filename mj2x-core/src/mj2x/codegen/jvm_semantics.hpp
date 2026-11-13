@@ -16,7 +16,7 @@
 
 namespace mj2x::codegen {
 
-/// JVM 移位计数按被移位数位宽掩码（JLS 15.19）：int 系 &31、long &63——
+/// JVM 移位计数按被移位数位宽掩码（JLS 15.19）：int 系 &31、long &63，
 /// 超界/负数计数在 JVM 是定义行为；C 裸移位（count >= 位宽）是 UB，
 /// LLVM shift（shift >= 位宽）产生 poison，发射端必须显式掩码。
 inline constexpr int kJvmShiftMaskI32 = 31;

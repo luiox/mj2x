@@ -67,7 +67,7 @@ MJ2X_STACKC_API jclass _mj2x_class_slow(JNIEnv* env, jclass* slot, jclass owner,
 /// 逐单位 XOR(先推进 state 再取低 16 位),与发射侧 StackCBackend::emitStringPool
 /// 的加密逐位一致(与 core/native_lib_crypto.hpp 的 xorshift32 同式)。
 /// key == 0 时使用固定种子(与 xorStreamBytes 同约定)。
-/// 调用时机:生成代码在 JNI_OnLoad 内批量调用一次——JVM 保证 JNI_OnLoad 单线程
+/// 调用时机:生成代码在 JNI_OnLoad 内批量调用一次，JVM 保证 JNI_OnLoad 单线程
 /// 且先于任何 RegisterNatives/native 方法,无需调用点同步(取舍见发射侧注释)。
 MJ2X_STACKC_API void mj2x_stackc_string_pool_decrypt(uint16_t* pool, size_t unit_count,
                                                      uint32_t key);

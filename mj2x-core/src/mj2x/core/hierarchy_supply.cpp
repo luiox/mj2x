@@ -57,7 +57,7 @@ bool classInternalName(const std::string& entryName, std::string& out)
 
 void scanZipBytes(const std::vector<ca::u8>& bytes, std::vector<ClassSkeleton>& out)
 {
-    // readJvm 对畸形容器抛异常：供给面容错——坏 jar 跳过不致命（谱系图
+    // readJvm 对畸形容器抛异常：供给面容错，坏 jar 跳过不致命（谱系图
     // 容许悬挂键回退硬编码表）。
     try {
         auto archive = jzip::ZipIO::readJvm(jzip::MemorySegment(bytes));

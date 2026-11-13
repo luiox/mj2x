@@ -1,14 +1,14 @@
 // vmx64 流级解释器测试：把 Vmx64Encoder 产物（Vmx64Program）按 .asm handler
-// 的字段偏移与 pc 推进语义逐位镜像执行——不经 ml64/JNI/DLL，跨平台跑。
+// 的字段偏移与 pc 推进语义逐位镜像执行，不经 ml64/JNI/DLL，跨平台跑。
 //
 // 动机（CI 实证）：emit 结构与直算方法全通，但带循环方法首次真执行即死循环
-//（windows 作业静默 88 分钟无输出）——asm 层盲审自洽，需要仪器把"编码器数据
+//（windows 作业静默 88 分钟无输出），asm 层盲审自洽，需要仪器把"编码器数据
 // vs handler 语义"的契约错位暴露成可读轨迹。本测试三层：
 //   1. 明文流解释执行（plaintext stream：tEnc 字在 program.stream 中是明文
-//      站点号，加密只发生在发射器副本上）——语义/布局/边朝向验证。
+//      站点号，加密只发生在发射器副本上），语义/布局/边朝向验证。
 //   2. 两种分支朝向都覆盖：javac 形态（if_icmplt body：true 边=循环体前跳、
 //      false 边=出口直落）与手工形态（if_icmpge done：true 边=出口、false
-//      边=循环体直落）——编码器对两条边的规划不对称，只测一边会漏。
+//      边=循环体直落），编码器对两条边的规划不对称，只测一边会漏。
 //   3. 发射产物回读：db 行字节逐位核对（明文字段不变、tEnc 密文可解回站点
 //      号）、dq 行 handler 名与 addend 与 ks64 单源对账。
 //
@@ -149,7 +149,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
         }
         const auto op = p.sites[t].op;
         // 操作数区间越界防御（review 遗留）：此前只查 tEnc 字在流内，操作数
-        // 字段（pc+2..pc+13）无界读依赖站点对齐检查间接兜住——对编码器产物
+        // 字段（pc+2..pc+13）无界读依赖站点对齐检查间接兜住，对编码器产物
         // 安全，对手工构造的坏流是 UB。按 opcode 操作数宽度一次性封顶。
         if (pc + 2u + vmx64OpOperandSize(op) > p.stream.size())
             return fail("operand span runs past end of stream", trace, pc);
@@ -159,7 +159,7 @@ InterpOutcome interpretStream(const Vmx64Program& p, std::vector<uint64_t> slots
             return slots[idx];   // 越界由调用前的检查拦截
         };
         // i32 写镜像 asm 的 dword store：只落低 4 字节、高 4 字节保留陈旧值
-        //（E2E 崩溃根因恰是"高位残留拼接垃圾指针"——解释器必须暴露而非
+        //（E2E 崩溃根因恰是"高位残留拼接垃圾指针"，解释器必须暴露而非
         // 掩盖该位级效应；类型化程序里 i64 槽不会被 i32 写触碰，不可观测）。
         const auto w32 = [](uint64_t& slot, uint32_t v) {
             slot = (slot & 0xFFFFFFFF00000000ULL) | v;
@@ -343,7 +343,7 @@ std::unique_ptr<Vmx64Program> encodeSumJavacShape(std::string& reason)
 }
 
 /// 手工形态：同语义但条件取反（if_icmpge done：true 边=出口，false 边=循环
-/// 体直落）——与 vmx64_backend_test 的 EncodesLoopMethodWithFusedBranch 同形。
+/// 体直落），与 vmx64_backend_test 的 EncodesLoopMethodWithFusedBranch 同形。
 std::unique_ptr<Vmx64Program> encodeSumInvertedShape(std::string& reason)
 {
     auto* loop = new LabelNode(labelScratchArena().create<Label>());
@@ -374,9 +374,9 @@ std::unique_ptr<Vmx64Program> encodeSumInvertedShape(std::string& reason)
 }
 
 /// do-while 形态：`int i=0; do { i++; } while (i < n); return i;`
-/// javac 产物中循环底部的 if_icmplt true 边直接回到循环头——循环头的 phi
+/// javac 产物中循环底部的 if_icmplt true 边直接回到循环头，循环头的 phi
 ///（i 的 entry/回边两个前驱）把边拷贝放在了分支的 true 边上（sum 循环覆盖
-/// 的是 false 边链，两条边都需直接覆盖——T3）。
+/// 的是 false 边链，两条边都需直接覆盖，T3）。
 std::unique_ptr<Vmx64Program> encodeDoWhileTrueEdgeCopy(std::string& reason)
 {
     auto* body = new LabelNode(labelScratchArena().create<Label>());
@@ -433,7 +433,7 @@ std::unique_ptr<Vmx64Program> encodeDiamondPhi(std::string& reason)
 }   // namespace
 
 // ===========================================================================
-// 1. javac 形态循环：流级执行与 JVM 语义对拍（含 0/1/边界 n 与步数上限）。
+// 1. javac 形态循环：流级执行与 JVM 语义比对（含 0/1/边界 n 与步数上限）。
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, JavacShapeLoopTerminatesWithCorrectSum)
 {
@@ -454,7 +454,7 @@ TEST(Vmx64StreamInterpTest, JavacShapeLoopTerminatesWithCorrectSum)
 }
 
 // ===========================================================================
-// 2. 手工反相形态循环：同一编码器另一条边朝向的执行对拍。
+// 2. 手工反相形态循环：同一编码器另一条边朝向的执行比对。
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, InvertedShapeLoopTerminatesWithCorrectSum)
 {
@@ -475,7 +475,7 @@ TEST(Vmx64StreamInterpTest, InvertedShapeLoopTerminatesWithCorrectSum)
 }
 
 // ===========================================================================
-// 3. 直算方法（i32/i64）：与 E2E Driver 相同输入对拍。
+// 3. 直算方法（i32/i64）：与 E2E Driver 相同输入比对。
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, StraightLineArithmeticMatchesJvm)
 {
@@ -520,8 +520,8 @@ TEST(Vmx64StreamInterpTest, StraightLineArithmeticMatchesJvm)
 // ===========================================================================
 // 4. 帧布局不变量：vreg 池与帧头必须整体位于被保存寄存器区（7 个非易失
 //    寄存器，0x38 字节）之下。历史缺陷（E2E 实证）：按 rbp-0x20 起算时
-//    slot 9/10/11 叠在 saved r15/r14/r13 上，epilogue pop 出「高位残留 +
-//    slot 值」拼接的垃圾寄存器，JVM native 存根解引用即崩（sum 循环必踩，
+//    slot 9/10/11 叠在 saved r15/r14/r13 上，epilogue pop 出"高位残留 +
+//    slot 值"拼接的垃圾寄存器，JVM native 存根解引用即崩（sum 循环必踩，
 //    直算方法水位低而侥幸存活）。以文本级断言锁死偏移关系。
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, FrameLayoutKeepsVregsBelowSavedRegisters)
@@ -563,7 +563,7 @@ TEST(Vmx64StreamInterpTest, FrameLayoutKeepsVregsBelowSavedRegisters)
 // ===========================================================================
 // 5. 发射产物回读：db 行字节与明文流逐位对账（操作数字段不变、tEnc 密文可
 //    用 ks64 解回站点号）、dq 行 handler 名与 addend 与 ks64 单源对账。
-//    （发射器的 K1 派生在此按同源公式重演——测的是发射器落盘契约本身。）
+//    （发射器的 K1 派生在此按同源公式重演，测的是发射器落盘契约本身。）
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, EmittedAsmCarriesFaithfulStreamAndTable)
 {
@@ -656,15 +656,15 @@ TEST(Vmx64StreamInterpTest, EmittedAsmCarriesFaithfulStreamAndTable)
 // 6. ks64 双侧重放回归：NEXT 宏文本与 C++ 侧 vmx64Ks64 的单源契约。
 //
 //    vmx64_NEXT 宏里的常数（61C88647h/045D9F3Bh）是**硬编码文本**，与
-//    kVmx64P1/kVmx64P2 constexpr 是同一公式的两份表达——发射侧 C++ 与
-//    .asm handler 侧各算一份，头文件契约要求「改公式必须双侧同步」。这条
+//    kVmx64P1/kVmx64P2 constexpr 是同一公式的两份表达，发射侧 C++ 与
+//    .asm handler 侧各算一份，头文件契约要求"改公式必须双侧同步"。这条
 //    契约的运行时意义：tEnc 字与站点表项的解密都靠 handler 现场重算
-//    ks64——两侧公式哪怕一位漂移，dispatch 直接跳飞。本测试两层锁死：
+//    ks64，两侧公式哪怕一位漂移，dispatch 直接跳飞。本测试两层锁死：
 //    a) 文本层：宏体指令序列逐行比对（imul/rol/xor/imul 次序 + 立即数
 //       解析后与 kVmx64P1/P2 相等，大小写不敏感）；宏体固定 19 行，行数
 //       漂移即宏被改动，先在此炸出；
 //    b) 数值层：按宏语义独立重放（imul → rol13 → xor → imul）与
-//       vmx64Ks64 在多组 (x, k1) 采样上逐位相等——即使文本比对被绕过，
+//       vmx64Ks64 在多组 (x, k1) 采样上逐位相等，即使文本比对被绕过，
 //       公式漂移也会在数值上炸出来。
 // ===========================================================================
 TEST(Vmx64StreamInterpTest, Ks64AsmMacroReplaysCppSide)
@@ -912,8 +912,8 @@ TEST(Vmx64StreamInterpTest, StackArgsHomeFromCallerShadowSpace)
 //     doc:vm-site-table-encryption）：表头两 qword（magic/站点数）、表尾两
 //     qword（k1/base 自引用指针）与入口 prologue 的 r12 算定序列。
 //
-//     加密器（vmx64_postlink）不改汇编、不读符号——它在链接产物里按
-//     8 字节步扫描 magic，并按「magic → 站点数 → 表项区 → k1 → base」的
+//     加密器（vmx64_postlink）不改汇编、不读符号，它在链接产物里按
+//     8 字节步扫描 magic，并按"magic → 站点数 → 表项区 → k1 → base"的
 //     固定顺序推算表尾位置。发射器是这份布局的唯一生产者，加密器是唯一
 //     消费者，两侧没有共享类型可以把守：任何字段的顺序或内容漂移都会让
 //     加密器定位失败（fail-closed）或定位到错误字节。发射面与加密面的
@@ -931,7 +931,7 @@ TEST(Vmx64StreamInterpTest, DataTableCarriesEncryptorContract)
     ASSERT_EQ(asmText.find(".err"), std::string::npos) << asmText;
 
     // 表头两 qword：magic（ASCII "VMX64TBL" 小端，kVmx64TableMagic）+ 站点
-    // 数。二者不落 MASM label——消费方只有加密器的字节级扫描，符号名帮不
+    // 数。二者不落 MASM label，消费方只有加密器的字节级扫描，符号名帮不
     // 上忙（release DLL 无 COFF 符号表）。
     const auto masmHex = [](uint64_t v) {
         std::string h;
@@ -949,7 +949,7 @@ TEST(Vmx64StreamInterpTest, DataTableCarriesEncryptorContract)
     ASSERT_GT(countPos, magicPos) << asmText;
     // 表尾：k1（加密器的密钥材料，与 prologue 的 mov r15 imm 同一 C++ 局
     // 部变量，无漂移面）+ base 自引用指针（链接值 = 表首选 VA；未加密
-    // 产物装载器把它改写成表运行时地址，加密产物重定位熄灭、保持首选
+    // 产物装载器把它改写成表运行时地址，加密产物重定位失效、保持首选
     // VA）。布局顺序即加密器的定位假设：magic → count →（表项区）→ k1 →
     // base，相对顺序一并锁死（表项区各行由站点表发射点另行逐行断言）。
     const size_t k1Pos =

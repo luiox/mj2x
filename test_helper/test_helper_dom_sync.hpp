@@ -1,16 +1,16 @@
 #pragma once
 
 /// @file        test_helper_dom_sync.hpp
-/// @brief       批 6d 后的测试三明治：树夹具 ↔ libjbc DOM 权威。
+/// @brief       树载体退役后的测试三明治：树夹具 ↔ libjbc DOM 权威。
 ///
 /// CompilerClass 树载体退役（只剩 dom + 元数据快照）后，产品侧同步对
 /// syncTreeToDom/syncDomToTree 一并消失。断言面保持树形态的路径改为两步制：
 ///   建模 = classFromTree（树 → plain 字节 → DOM + 快照对齐）；
 ///   断言 = treeFromDom（DOM → writeClass 字节 → ClassReader 重建树）。
-/// 序列化旗标恒 plain（0），与退役的 class_dom_sync 同口径——帧重算归 output
-/// 侧语义，本层只求「如实序列化当前状态」。
+/// 序列化旗标恒 plain（0），与退役的 class_dom_sync 同口径，帧重算归 output
+/// 侧语义，本层只求"如实序列化当前状态"。
 ///
-/// 命名说明：进 namespace test（与 test_helper.hpp 同域）——大量测试 TU 同时
+/// 命名说明：进 namespace test（与 test_helper.hpp 同域），大量测试 TU 同时
 /// `using namespace mj2x;` + `test::foo()` 调用，mj2x::test 会在限定查找里与
 /// ::test 撞名（两个不同 namespace 同名 = 歧义）。
 
@@ -55,7 +55,7 @@ mj2x::CompilerMethod snapshotMethod(jbytecode::tree::MethodNode& mn,
 /// @brief CodeConverter 测试垫片：独立 MethodNode → convert(cf, 0)。
 ///
 /// 方法挂最小包装类（shim/Class，plain 序列化 → readClass → DOM 第 0 方法），
-/// 与批 6d 退役的 CodeConverter::convert(MethodNode&) 同一读路径。converter
+/// 与已退役的 CodeConverter::convert(MethodNode&) 同一读路径。converter
 /// 构造注入的 arena 即 @p arena（Block 内字符串入池）。
 std::vector<mj2x::Block*> convertMethodNode(mj2x::CodeConverter&         converter,
                                             jbytecode::tree::MethodNode& mn,

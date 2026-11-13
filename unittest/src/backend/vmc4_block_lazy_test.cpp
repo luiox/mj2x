@@ -1,4 +1,4 @@
-// VMC4 块粒度链式懒解密单测（issue #1116 切片 B --vmc4-block-lazy-decrypt）。
+// VMC4 块粒度链式懒解密单测（issue #1116 --vmc4-block-lazy-decrypt）。
 //
 // 本测试不调用 JNI/DLL（E2E 语义闭环由 vmc4_backend_e2e_test 的
 // Vmc4BlockLazyE2E.RoundTripTiers 覆盖），只验证发射文本与派生函数：
@@ -472,7 +472,7 @@ TEST(Vmc4BlockLazyTest, ComposesWithShuffle)
     EXPECT_NE(src.find("static unsigned int mj2x_vm_targets_bls1[] = {"), std::string::npos)
         << src;
     EXPECT_NE(src.find("shuffled block ids, encrypted at rest"), std::string::npos) << src;
-    // blockTargets 恒升序不变量（切片 A：物理序 == id 序）。
+    // blockTargets 恒升序不变量（块乱序：物理序 == id 序）。
     ASSERT_TRUE(std::is_sorted(prog->blockTargets.begin(), prog->blockTargets.end()));
 
     std::vector<uint8_t> cipher;

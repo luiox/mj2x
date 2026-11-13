@@ -4,7 +4,7 @@
 /// @details
 /// CodeConverter 是前端入口，把 MethodNode 的 tree 指令序列切成基本块并提升为
 /// L1 MIR（见 mir_node.hpp 的 MIRKind）。L1 MIR 保留 JVM 操作族和控制流，栈操作
-/// （DUP/SWAP/POP）也保留为节点——SSA builder 需要 category-1/2 规则来消除栈。
+/// （DUP/SWAP/POP）也保留为节点，SSA builder 需要 category-1/2 规则来消除栈。
 ///
 /// 输出的 Block 拥有 MIRNode 所有权，由调用方（Pipeline/Backend）消费后释放。
 #pragma once
@@ -26,9 +26,9 @@ namespace mj2x {
 
 /// 把方法字节码转换为 L1 MIR 基本块序列（前端）。
 ///
-/// 批 3b 起主入口走 libjbc DOM（批 2 的 tree→DOM 阶段边界同步产物）：
+/// 主入口走 libjbc DOM（tree→DOM 阶段边界同步的产物）：
 /// decodeInsns 逐指令投影 + CP 解析 + 按 pc 切块。MethodNode 重载是测试垫片
-/// （树经 plain 序列化 + readClass 字节往返到 DOM 后走同一读路径），批 6 摘树
+/// （树经 plain 序列化 + readClass 字节往返到 DOM 后走同一读路径），树摘除
 /// 时随树一并退役。
 class CodeConverter
 {
@@ -40,7 +40,7 @@ public:
     ~CodeConverter();
 
     /// @brief 转换 DOM 中第 methodIndex 个方法的字节码为 L1 MIR blocks。
-    /// @param cf  批 2 同步产出的类 DOM；decodeCode 的 lazy 缓存落在其上。
+    /// @param cf  同步产出的类 DOM；decodeCode 的 lazy 缓存落在其上。
     /// @return Block* 指针由 converter 内部拥有，调用方只读消费。
     std::vector<Block*> convert(jbc::core::ClassFile& cf, ca::usize methodIndex);
 

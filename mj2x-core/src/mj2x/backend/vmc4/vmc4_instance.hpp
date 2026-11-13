@@ -2,7 +2,7 @@
 /// @brief VmInstance：一个 VM 实例的完整描述（seed 驱动生成）。
 ///
 /// @details
-/// VmInstance 是 VMC4 的中心抽象——它描述一个 VM 实例的全部可变维度：
+/// VmInstance 是 VMC4 的中心抽象，它描述一个 VM 实例的全部可变维度：
 ///   - opcode 编号映射表（VmOpcode → 实例 opcode 字节集合，含 ALT 别名）
 ///   - handler 顺序（dispatch 表/handler 的排列）
 ///   - dispatcher 算法（5 种之一）
@@ -47,7 +47,7 @@ struct Vmc4Options
     /// 实例粒度：per-class 同类方法共享一个 VmInstance（推荐默认，体积可控）；
     /// per-method 每方法独立实例（最强可变性，代码膨胀最大）；
     /// per-program 整个程序共享一个 VmInstance（opcode 空间全局统一，方法间
-    /// 字节流互相参照，体积最优——解释器只生成一份）。
+    /// 字节流互相参照，体积最优，解释器只生成一份）。
     enum class Granularity
     {
         PerClass = 0,
@@ -68,8 +68,8 @@ struct Vmc4Options
     /// 执行期 dispatch drift 变体数（0 = 关闭，1..4 = 开启）。
     ///
     /// @details
-    /// 开启后编码器/解释器按「字节偏移周期」轮转语义标签：字节集合固定不变，
-    /// 但「集合 → 语义」的对应关系随周期切换（语义标签轮转）。解释器用
+    /// 开启后编码器/解释器按字节偏移周期轮转语义标签：字节集合固定不变，
+    /// 但"集合 → 语义"的对应关系随周期切换（语义标签轮转）。解释器用
     /// per-variant unmap 表把原始字节解回 canonical 字节再分发，指令语义
     /// 完全不变量（语义保真由 unmap 纯函数保证）。红队对"字节 X = 语义 Y"
     /// 的一次性分析结论在下一周期即失效。
@@ -86,11 +86,11 @@ struct Vmc4Options
     /// （issue #760 记录的前提缺口：jvmtp 1.6.2 起 at-rest 加密为默认形态）。
     bool programBlobEncrypt = false;
 
-    /// 编码期块乱序（--vmc4-shuffle-blocks；默认关闭，issue #1116 切片 A）。
+    /// 编码期块乱序（--vmc4-shuffle-blocks；默认关闭，issue #1116）。
     ///
     /// @details
     /// 开启后编码器把方法内 VM 块的物理布局按 seed 确定性打乱（Sattolo 单环排列，
-    /// 恒无不动点），同时打乱块 id 空间——跳转操作数与块 id 均不再映射 CFG 发射序，
+    /// 恒无不动点），同时打乱块 id 空间，跳转操作数与块 id 均不再映射 CFG 发射序，
     /// 块邻接不再镜像 CFG。控制流语义经间接跳转表（blockTargets 重映射）保持不变。
     /// 与 --vmc4-drift（执行解码层）/ --vmc4-encrypt-program（落盘层）正交可叠。
     /// 开启时间接跳转表以 xorshift32 keystream 加密落盘（键自 seed 派生
@@ -101,7 +101,7 @@ struct Vmc4Options
     /// programBlobEncrypt 开启）。
     ///
     /// @details
-    /// issue #760 切片 2（对齐 jvmtp 1.6.4 vm.lazy-decrypt）：开启后 blob 按
+    /// issue #760（对齐 jvmtp 1.6.4 vm.lazy-decrypt）：开启后 blob 按
     /// 指令对齐的 64 字节目标块独立加密（块密钥从 blob 密钥 + 块下标派生），
     /// JNI_OnLoad 不再整体解密；解释器首次取码到某块时才原地解密该块，
     /// 未执行到的分支保持密文（内存 dump 只能拿到实际执行过的块）。解密后
@@ -114,7 +114,7 @@ struct Vmc4Options
     /// 要求 programBlobEncrypt 开启；与 programLazyDecrypt 互斥）。
     ///
     /// @details
-    /// issue #1116 切片 B（对齐 jvmtp 1.6.8 vm.control-flow-flatten 的
+    /// issue #1116（对齐 jvmtp 1.6.8 vm.control-flow-flatten 的
     /// first-arrival decrypt 口径）：开启后 blob 按 CFG 块粒度独立加密
     /// （块区间由 blockTargets 划界，尾块含 trailing Halt 哨兵），块密钥
     /// 链式派生 vmc4DeriveBlockChainKey(seed, blockIdx, prevKey)（首块
@@ -143,9 +143,9 @@ struct Vmc4Options
     ///
     /// @details
     /// 每条计算指令（Binary/Unary/Compare/Convert）的寄存器操作数先经专用
-    /// 临时槽中转一次：一条指令拆成「Copy... + 原指令」多段，每段单独看是
+    /// 临时槽中转一次：一条指令拆成"Copy... + 原指令"多段，每段单独看是
     /// 无意义的中间搬运。纯编码期变换（不新增 opcode）。
-    /// **代价**：指令数约变为 2~3 倍，解释执行开销同步上升——面向高保护
+    /// **代价**：指令数约变为 2~3 倍，解释执行开销同步上升，面向高保护
     /// 诉求的场景按需开启，文档已写明该代价。与 superOps 可组合。
     bool fragment = false;
 
@@ -153,11 +153,11 @@ struct Vmc4Options
     ///
     /// @details
     /// 开启后计算寄存器经线性扫描分配压入定长池 [numInputs, poolTop)（池顶 =
-    /// 本值），死值槽位复用——寄存器号不再镜像 SSA value id（红队的结构性
+    /// 本值），死值槽位复用，寄存器号不再镜像 SSA value id（红队的结构性
     /// 锚点）；池装不下的活值分到溢出槽（统一 slots 数组高位索引，操作数直接
     /// 寻址，无搬运指令、零运行时开销）。fragment 开启时其临时槽改占池顶 3 槽
     /// （要求 n ≥ numInputs + 3，编码期 fail-closed）。与 superOps/fragment
-    /// 可组合。语义零变化（E2E 对拍验证）。
+    /// 可组合。语义零变化（E2E 与 JVM 输出比对验证）。
     uint32_t regfile = 0;
 };
 
@@ -201,27 +201,27 @@ public:
     /// drift 是否开启（driftVariants > 0）。
     bool driftEnabled() const { return driftVariants_ > 0; }
 
-    /// 程序 blob at-rest 加密是否开启（--vmc4-encrypt-program；issue #760 首切片）。
+    /// 程序 blob at-rest 加密是否开启（--vmc4-encrypt-program；issue #760）。
     ///
     /// @details
     /// 开启时 VmInterpreterEmitter 把 opcode 字节流数据段以密文发射（密钥从
     /// instanceSeed 派生），backend 在 JNI_OnLoad 发射 mj2x_vm_blob_decrypt
     /// 原地解密调用。与 dispatch drift 正交：drift 变换作用于明文字节流的
-    /// 语义解释（unmap 表），加密作用于最终字节流的 at-rest 形态——加密在
+    /// 语义解释（unmap 表），加密作用于最终字节流的 at-rest 形态，加密在
     /// drift 编码完成之后、发射之前施加，解密后字节流即 drift 编码流。
     bool blobEncrypt() const { return blobEncrypt_; }
 
-    /// 编码期块乱序是否开启（--vmc4-shuffle-blocks；issue #1116 切片 A）。
+    /// 编码期块乱序是否开启（--vmc4-shuffle-blocks；issue #1116）。
     ///
     /// @details
     /// 开启时 VmEncoder 把块 id 空间与物理布局按同一 Sattolo 排列打乱（入口块
     /// id 恒 0：prologue `pc = targets[0]` 与异常检查点的 targets 升序区间反查
-    /// 两条既有不变量都依赖「物理序 == id 序」，单一排列同时满足）。语义保真
+    /// 两条既有不变量都依赖"物理序 == id 序"，单一排列同时满足）。语义保真
     /// 由间接跳转表重映射保证；VmInstance::describe() 不含布局维度（trace
     /// surface 契约字段集稳定）。
     bool shuffleBlocks() const { return shuffleBlocks_; }
 
-    /// 程序 blob 分块懒解密是否开启（--vmc4-lazy-decrypt；issue #760 切片 2）。
+    /// 程序 blob 分块懒解密是否开启（--vmc4-lazy-decrypt；issue #760）。
     ///
     /// @details
     /// 开启时（恒以 blobEncrypt() 为前提）VmInterpreterEmitter 把字节流按指令
@@ -231,7 +231,7 @@ public:
     bool blobLazy() const { return blobLazy_; }
 
     /// 程序 blob 块粒度链式懒解密是否开启（--vmc4-block-lazy-decrypt；
-    /// issue #1116 切片 B）。
+    /// issue #1116）。
     ///
     /// @details
     /// 开启时（恒以 blobEncrypt() 为前提）VmInterpreterEmitter 把字节流按
@@ -246,7 +246,7 @@ public:
     ///
     /// @details
     /// 编码器与解释器共用同一公式（字节偏移 / period % D），天然同步，
-    /// 与执行路径（跳转/分支）无关——同一字节位置永远是同一变体。
+    /// 与执行路径（跳转/分支）无关，同一字节位置永远是同一变体。
     int variantForPc(uint64_t pc) const
     {
         if (!driftEnabled()) return 0;
@@ -257,7 +257,7 @@ public:
     /// @brief 在指定 drift 变体下为该语义选一个实例字节。
     ///
     /// @details
-    /// 变体 d 下语义 op 使用「集合 P_d(op)」的字节（语义标签轮转：集合固定，
+    /// 变体 d 下语义 op 使用"集合 P_d(op)"的字节（语义标签轮转：集合固定，
     /// 归属轮换）。nonce 语义与 pickOpcodeByte 相同（确定性选 canonical/别名）。
     uint8_t variantPickOpcodeByte(VmOpcode op, uint64_t nonce, int variant) const;
 
@@ -314,7 +314,7 @@ public:
     ///
     /// @details
     /// period 语义变义（#762 升级档）：drift 的编码轮换之上，case 标签本身
-    /// 按周期轮换——语义 op 在变体 d 下的 case 常量 = d*K + perm_d[canonical]。
+    /// 按周期轮换，语义 op 在变体 d 下的 case 常量 = d*K + perm_d[canonical]。
     /// 各变体标签段互不相交（跨变体无碰撞）；case 体按语义共享（行为不变，
     /// 语义保真由 e2e 验证）。drift 关闭时为空。
     const std::vector<uint8_t>& caseLabelPerm(int variant) const
@@ -353,12 +353,12 @@ private:
     int              driftVariants_;
     int              driftPeriod_;
     /// 程序 blob at-rest 加密开关（options.programBlobEncrypt 透传，不入
-    /// describe()——trace surface 红队契约字段集保持稳定）。
+    /// describe()，trace surface 红队契约字段集保持稳定）。
     bool             blobEncrypt_;
     /// 分块懒解密开关（options.programLazyDecrypt 透传，不入 describe()）。
     bool             blobLazy_;
     /// 块粒度链式懒解密开关（options.programBlockLazyDecrypt 透传，不入
-    /// describe()——trace surface 红队契约字段集保持稳定）。
+    /// describe()，trace surface 红队契约字段集保持稳定）。
     bool             blockLazy_;
     /// 编码期块乱序开关（options.shuffleBlocks 透传，不入 describe()）。
     bool             shuffleBlocks_;
@@ -386,16 +386,16 @@ uint64_t vmc4DeriveInstanceSeed(uint64_t mainSeed, uint64_t identityHash);
 /// 共用同一派生函数，保证同实例 → 同密钥。独立种子段（与 opcode 映射/
 /// handler 顺序等其他实例维度不耦合）。结果折叠到 xorshift32 的 32 位状态
 /// 空间；0 是 xorshift32 死锁态（密钥流退化为全零 = 未加密），折叠结果为 0
-/// 时回退固定种子。密钥不以数组形式落产物——生成的 C 只含 seed 常量，
-/// keystream 由解密循环现场重算。切片 2：CRT 解密原语对密钥参数与 keystream
+/// 时回退固定种子。密钥不以数组形式落产物，生成的 C 只含 seed 常量，
+/// keystream 由解密循环现场重算。CRT 解密原语对密钥参数与 keystream
 /// 状态做用后擦除（密钥栈擦除）；分块密钥派生见 vmc4DeriveChunkKey。
 uint32_t vmc4DeriveBlobKey(uint64_t instanceSeed);
 
 /// @brief 从实例 seed 派生间接跳转表（blockTargets）加密密钥（32 位，确定性，恒非 0）。
 ///
 /// @details
-/// issue #1116 切片 A：--vmc4-shuffle-blocks 开启时块 id 空间被打乱，间接跳转表
-/// 是「打乱后的块 id → 物理偏移」的唯一映射，落盘前以 xorshift32 keystream 加密
+/// issue #1116：--vmc4-shuffle-blocks 开启时块 id 空间被打乱，间接跳转表
+/// 是"打乱后的块 id → 物理偏移"的唯一映射，落盘前以 xorshift32 keystream 加密
 /// （与 vmc4DeriveBlobKey 同族手法、独立常数种子段，不与 blob 密钥耦合）。发射侧
 /// （VmInterpreterEmitter 加密）与运行侧（JNI_OnLoad 解密调用发射）共用同一派生
 /// 函数。0 回退约定与 vmc4DeriveBlobKey 一致。
@@ -404,7 +404,7 @@ uint32_t vmc4DeriveTargetsKey(uint64_t instanceSeed);
 /// @brief 从 blob 密钥 + 块下标派生懒解密分块密钥（32 位，确定性，恒非 0）。
 ///
 /// @details
-/// issue #760 切片 2：blob 按指令对齐块独立加密，块 c 的密钥 =
+/// issue #760：blob 按指令对齐块独立加密，块 c 的密钥 =
 /// vmc4DeriveChunkKey(blobKey, c)（golden-ratio 扰动 + 4 轮 xorshift32 扩散）。
 /// 发射侧（VmInterpreterEmitter 分块加密）与运行侧（CRT mj2x_vm_chunk_key）
 /// 同一公式双镜像，纯 u32 算术逐位一致。互不耦合的独立派生面：知道某个块的
@@ -415,14 +415,14 @@ uint32_t vmc4DeriveChunkKey(uint32_t blobKey, uint32_t chunkIndex);
 /// @brief 块密钥链式派生（seed, blockIdx, prevKey）→ 32 位块密钥（确定性，恒非 0）。
 ///
 /// @details
-/// issue #1116 切片 B（--vmc4-block-lazy-decrypt）：CFG 块粒度懒解密的块密钥
-/// 链——k_c = xorshift32^4(seed ^ prevKey ^ golden(c))，golden(c) 与
+/// issue #1116（--vmc4-block-lazy-decrypt）：CFG 块粒度懒解密的块密钥
+/// 链，k_c = xorshift32^4(seed ^ prevKey ^ golden(c))，golden(c) 与
 /// vmc4DeriveChunkKey 同族（golden-ratio 扰动散布块下标）；首块 prevKey = seed
 /// （k_0 = F(seed, 0, seed)）。发射侧（VmInterpreterEmitter 按块加密）与运行侧
 /// （CRT mj2x_vm_block_chain_key 从 seed 走链重导出）同一公式双镜像，纯 u32
 /// 算术逐位一致；不得引入任何 64 位运算或实现定义行为，改公式必须两侧同步。
-/// blockIdx = blockTargets 下标 = 洗牌后的逻辑块 id（切片 A 已把 id 空间本身
-/// 打乱且保持「物理序 == id 序」，两种口径同一空间）。链上任何密钥材料不落
+/// blockIdx = blockTargets 下标 = 洗牌后的逻辑块 id（块乱序已把 id 空间本身
+/// 打乱且保持"物理序 == id 序"，两种口径同一空间）。链上任何密钥材料不落
 /// 产物/静态存储：运行期首达块 c 时从 seed 逐块重导出（O(c) 次 4 轮
 /// xorshift32），链状态只在栈上瞬时存在、用后擦除（CRT 侧 volatile 清零）。
 /// 结果恒非 0（xorshift32 死锁态回避，与 vmc4DeriveChunkKey 同一约定）。

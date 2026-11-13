@@ -2,7 +2,7 @@
 /// @brief StackC 生成模板片段表（snippet 渲染）。
 ///
 /// @details
-/// 从 stackc_backend.cpp 单体拆出：所有 `StackCSnippet` 模板统一收口在这里，
+/// 从 stackc_backend.cpp 单体拆出：所有 `StackCSnippet` 模板统一集中在这里，
 /// 与 codegen::CodeSnippetSet 渲染器配合。异常检查模板带 `_MJ2X_UNLIKELY`
 /// 分支预测提示（等价 JNIC 3.7.0 的 `__builtin_expect`，MSVC 下退化为普通 if）。
 #include "mj2x/backend/stackc/stackc_backend_internal.hpp"

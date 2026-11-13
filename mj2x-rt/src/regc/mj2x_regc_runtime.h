@@ -4,7 +4,7 @@
 //
 // 实现位于 mj2x_regc_runtime.c(mj2x-rt 编译);生成的 native TU 经本头
 // 获得声明。TLS 状态(env/ctx/owner_class)由运行时定义、生成代码经
-// extern 直接访问——三编译器宏与实现侧严格一致。
+// extern 直接访问，三编译器宏与实现侧严格一致。
 
 #include "regc/mj2x_regc_crt.h"
 
@@ -65,7 +65,7 @@ extern _Thread_local jclass _mj2x_regc_owner_class;
 
 // ---- 角色单例缓存(运行时定义,生成代码可复用;头文件仅 extern 声明) ----
 /// String 类 / 异常类等固定角色的 jclass 全局缓存（NewGlobalRef 稳定句柄，
-/// CAS 发布——并发首解析输家自删并复用赢家值）。
+/// CAS 发布，并发首解析输家自删并复用赢家值）。
 MJ2X_REGC_API extern mj2x_regc_class_cache _mj2x_rt_string_class_cache;
 MJ2X_REGC_API extern mj2x_regc_instance_method_cache _mj2x_rt_object_to_string_method_cache;
 MJ2X_REGC_API extern mj2x_regc_static_method_cache _mj2x_rt_string_value_of_float_cache;
@@ -240,7 +240,7 @@ MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_string_literal(mj2x_regc_context* context
 /// (_mj2x_str_<hash>,内容含结尾 NUL)原地解密。xorshift32 密钥流逐字节 XOR
 /// (先推进 state 再取 state & 0xFF),与发射侧 RegCCachePool 加密及
 /// core/native_lib_crypto.hpp::xorStreamBytes 逐字节一致;key == 0 用固定种子。
-/// 调用时机:生成代码在 JNI_OnLoad 内逐缓冲批量调用——JVM 保证 JNI_OnLoad
+/// 调用时机:生成代码在 JNI_OnLoad 内逐缓冲批量调用，JVM 保证 JNI_OnLoad
 /// 单线程且先于任何 native 方法,解密后的缓冲生命周期覆盖整个执行期。
 MJ2X_REGC_API void _mj2x_regc_decrypt_bytes(uint8_t* data, uint32_t size, uint32_t key);
 MJ2X_REGC_API mj2x_ref _mj2x_regc_class_literal(mj2x_regc_context* context, const char* internal_name);

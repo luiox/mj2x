@@ -1,6 +1,7 @@
 #include "mj2x/mj2x.hpp"
 #include "mj2x/logging.hpp"
 #include "mj2x/core/native_lib_crypto.hpp"
+#include "mj2x/io/jar_manifest.hpp"
 #include "mj2x/core/user_intrinsics.hpp"
 #include "mj2x/backend/vmx64/vmx64_postlink.hpp"
 
@@ -284,7 +285,7 @@ static std::unique_ptr<jzip::LocalFileHeader> makeStoredEntry(const std::string&
 /// `{in}` 占位符替换为编译产物路径；hook 应就地改写该文件（加壳/签名等），
 /// 随后的嵌入（可选 --native-lib-key 加密）使用处理后的产物。经系统 shell
 /// 执行（Windows: ComSpec /d /c；POSIX: sh -c），非零退出码视为失败。
-/// @param timeout 墙钟超时（P1-4；0 = 不限时）。超时只杀 shell 本身——
+/// @param timeout 墙钟超时（P1-4；0 = 不限时）。超时只杀 shell 本身，
 ///        hook 自行拉起的子孙进程不在收割范围（用户自有命令，与 jvmtp 的
 ///        用户钩子的口径一致）。
 static int runNativeLibPackHook(const std::string&    hookTemplate,
@@ -339,7 +340,8 @@ static int runNativeLibPackHook(const std::string&    hookTemplate,
 
 static int embedNativeLibraryInJar(const std::string& jarPath, const std::string& entryName,
                                    const std::filesystem::path& nativeLibraryPath,
-                                   std::uint32_t xorKey, bool encryptEntry)
+                                   std::uint32_t xorKey, bool encryptEntry,
+                                   bool declareNativeAccess)
 {
     auto jarBytes    = readFileBytes(jarPath);
     auto nativeBytes = readFileBytes(nativeLibraryPath);
@@ -354,13 +356,46 @@ static int embedNativeLibraryInJar(const std::string& jarPath, const std::string
     auto             original = jzip::ZipIO::readJvm(jzip::MemorySegment(jarBytes));
     jzip::ZipArchive rewritten;
     bool             replaced = false;
+
+    // issue #58：--enable-native-access 打开时，嵌入 native 库的输出 JAR 在
+    // 主清单声明 Enable-Native-Access，java -jar 启动时 JDK 25+ 据此免
+    // restricted method 告警；不按 JDK 版本做条件（本机 8/17/21/25 实测旧
+    // 版本忽略该主属性），是否写入由用户开关决定，默认关 = 不声明（既有
+    // 清单原样保留，不新增清单）。classpath 启动不受主清单约束，库形态
+    // 部署仍需在命令行加 java --enable-native-access=ALL-UNNAMED。开关打开
+    // 时既有清单合并进主段（原字节逐字节保留），无清单时输出全新主段并按
+    // JAR 惯例写在首条目。
+    std::vector<ca::u8> manifestBytes;
+    bool                hasManifest = false;
+    if (declareNativeAccess) {
+        for (const auto* local : original.getLocalFiles()) {
+            if (local->getFileName() == mj2x::kJarManifestEntry) {
+                auto data     = jzip::ZipIO::decompressLocalFile(*local);
+                manifestBytes = mj2x::buildNativeAccessManifest(&data);
+                hasManifest   = true;
+                break;
+            }
+        }
+        if (!hasManifest) {
+            manifestBytes = mj2x::buildNativeAccessManifest(nullptr);
+            rewritten.addPart(makeStoredEntry(mj2x::kJarManifestEntry, manifestBytes));
+        }
+    }
     for (const auto* local : original.getLocalFiles()) {
         const auto& name = local->getFileName();
+        if (declareNativeAccess && name == mj2x::kJarManifestEntry) {
+            rewritten.addPart(makeStoredEntry(name, manifestBytes));
+            continue;
+        }
         auto data = name == entryName ? nativeBytes : jzip::ZipIO::decompressLocalFile(*local);
         if (name == entryName) replaced = true;
         rewritten.addPart(makeStoredEntry(name, data));
     }
     if (!replaced) rewritten.addPart(makeStoredEntry(entryName, nativeBytes));
+    if (declareNativeAccess) {
+        CA_LOGT_INFO("cli", "jar manifest carries {}: {}\n", mj2x::kEnableNativeAccess,
+                     mj2x::kEnableNativeAccessValue);
+    }
 
     auto          outBytes = jzip::ZipIO::writeDirect(rewritten);
     std::ofstream ofs(jarPath, std::ios::binary);
@@ -456,7 +491,7 @@ static int generateLlvmCMakeProject(const std::string& projectDirValue,
         out << "find_package(JNI REQUIRED COMPONENTS JVM)\n\n";
         out << "set(LLVM_IR_FILE ${CMAKE_CURRENT_SOURCE_DIR}/native.ll)\n";
         // mj2x-rt：JDK intrinsic runtime（regc/*.c）+ rt_protect 检查点（common/）
-        // + mj2x_llvm_* 运行时（llvmir/）——LLVM 分发面三挂载全参与编译。
+        // + mj2x_llvm_* 运行时（llvmir/），LLVM 分发面三挂载全参与编译。
         out << "file(GLOB CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/regc/*.c)\n";
         out << "list(APPEND CRT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/mj2x-rt/common/"
                "mj2x_rt_protect.c)\n";
@@ -564,7 +599,7 @@ static int generateCMakeProject(const std::string& projectDirValue,
             out << "set(CMAKE_CXX_STANDARD 17)\n";
             out << "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
         }
-        // COMPONENTS JVM：同上——headless JDK 无 AWT，默认全组件必炸。
+        // COMPONENTS JVM：同上，headless JDK 无 AWT，默认全组件必炸。
         out << "find_package(JNI REQUIRED COMPONENTS JVM)\n\n";
         out << "if(MSVC)\n";
         out << "  add_compile_options(/utf-8)\n";
@@ -715,7 +750,7 @@ int main(int argc, char** argv)
     else if (cliVerbose) mj2x::setLogLevel(ca::log::Level::Debug);
 
     // preset（第二层）：内置的一组建议值，走与配置文件相同的键与校验。
-    // 放在配置文件之前——配置文件是用户显式写的，应当能覆盖 preset。
+    // 放在配置文件之前，配置文件是用户显式写的，应当能覆盖 preset。
     mj2x::cli::PresetName preset = mj2x::cli::PresetName::None;
     if (!presetArg.empty()) {
         if (!mj2x::cli::parsePresetName(presetArg, preset)) {
@@ -796,7 +831,7 @@ int main(int argc, char** argv)
     }
     const ca::opt::ParseResult& input = parsed.unwrap();
 
-    // 注册表校验环：仅处理命令行显式来源（source_of == CommandLine）——配置
+    // 注册表校验环：仅处理命令行显式来源（source_of == CommandLine），配置
     // 文件值已由 loadConfigFile 直写 options，重复应用会破坏 emit 输出组
     // "首个 CLI 输出清空其他"的替换语义（回归测试
     // JsonConfigSupportsCppOutputAndCommandLineCanReplaceIt 锁定）。Bool Flag
@@ -859,7 +894,7 @@ int main(int argc, char** argv)
     }
 
     // --dump-effective-config：四层合并后的最终配置（含每个键的来源层）。
-    // 放在全部解析之后、业务校验之前——它要回显的是"合并结果"，产不产物无关。
+    // 放在全部解析之后、业务校验之前，它要回显的是"合并结果"，产不产物无关。
     if (dumpEffective) {
         const ca::opt::ParseResult* inputPtr = &input;
         const std::string           text     = mj2x::cli::buildEffectiveConfigJson(
@@ -912,7 +947,7 @@ int main(int argc, char** argv)
     }
     // vmx64 的 --emit-c 产物是 MASM x64 汇编：强制 .asm 扩展名。工程生成按
     // 扩展名 glob 分流（*.asm → add_asfiles/ml64，*.c → C 编译器），错误扩展
-    // 名会把汇编文本喂进 C 编译面——fail-closed 在此拦截。
+    // 名会把汇编文本喂进 C 编译面，fail-closed 在此拦截。
     if (!options.cOutputPath.empty() && options.cBackendKind == CEmitterBackend::Vmx64 &&
         !hasExtension(options.cOutputPath, ".asm")) {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.emit_vmx64_needs_asm_ext"));
@@ -958,7 +993,7 @@ int main(int argc, char** argv)
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.lazy_decrypt_needs_encrypt"));
         return 1;
     }
-    // 块粒度链式懒解密（#1116 切片 B）：requires encrypt_program（同 64B 档
+    // 块粒度链式懒解密（#1116）：requires encrypt_program（同 64B 档
     // 口径）+ 与 64B 档互斥（对齐 jvmtp vm.lazy-decrypt ⊕ vm.control-flow-flatten）。
     if (options.vmc4BlockLazyDecrypt && !options.vmc4EncryptProgram) {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.block_lazy_needs_encrypt"));
@@ -982,7 +1017,7 @@ int main(int argc, char** argv)
     }
     // vmx64 面（Phase 2 起）：--emit-c / --compile / --generate-xmake 走 xmake
     // 工程（模板 add_asfiles 经 ml64 汇编 .asm，注册 C TU 由接线单元落盘）。
-    // CMake 工程模板无 .asm 汇编步骤——仍 fail-closed，不产半成品工程；
+    // CMake 工程模板无 .asm 汇编步骤，仍 fail-closed，不产半成品工程；
     // pipe / direct 驱动 / 多目标由各自的既有校验拦截（pipe_c99_only、
     // xmake 强制、targets 面）。
     if (options.cBackendKind == CEmitterBackend::Vmx64 && !options.cmakeProjectDir.empty()) {
@@ -1006,7 +1041,7 @@ int main(int argc, char** argv)
         return 1;
     }
     // vmx64 native 编译恒走 xmake 工程（.asm 由模板 add_asfiles 经 ml64 汇编），
-    // 编译器选择只对 direct 驱动有意义——fail-closed（对齐 llvm 后端口径）。
+    // 编译器选择只对 direct 驱动有意义，fail-closed（对齐 llvm 后端口径）。
     if (options.cBackendKind == CEmitterBackend::Vmx64 && options.compilerSelected) {
         CA_LOGT_ERROR("cli", "{}\n", ca::i18n::tr("mj2x.cli.err.vmx64_no_c_compiler"));
         return 1;
@@ -1287,7 +1322,7 @@ int main(int argc, char** argv)
     const bool needsNativeSource = !nativeOutputPath.empty() || pipeCompile || nativeDirMode;
     mj2x::Backend* nativeSourceBackend = nullptr;
 
-    // 后端接线单元化：主流程只依赖 backend_registry（#886 裁剪面——被裁后端
+    // 后端接线单元化：主流程只依赖 backend_registry（#886 裁剪面，被裁后端
     // 的模块不注册，此处查不到即无该后端；显式被裁后端名已在参数解析期拒绝、
     // 默认值路径在上方 backendEnabled 拦截，故命中失败不可达，防御性报错）。
     const mj2x::cli::BackendModule* backendModule =
@@ -1306,7 +1341,7 @@ int main(int argc, char** argv)
     pipeline.registerPreprocessor(std::make_unique<mj2x::InvokeDynamicPreprocessor>());
     pipeline.registerPreprocessor(std::make_unique<mj2x::MultiANewArrayPreprocessor>());
     // 类级 glob 过滤器（对标 jvmtp filter.*）：必须在任何方法级选择与
-    // <init>/<clinit> 搬运之前注册——后三者按 CompilerClass::filteredOut 跳过。
+    // <init>/<clinit> 搬运之前注册，后三者按 CompilerClass::filteredOut 跳过。
     // 与 annotation / method-prefix 正交：过滤器收窄类集合，方法级选择在集合内生效。
     if (!options.obfScopeIncludes.empty() || !options.obfScopeExcludes.empty()) {
         pipeline.registerPreprocessor(std::make_unique<mj2x::ObfuscationScopePreprocessor>(
@@ -1361,7 +1396,7 @@ int main(int argc, char** argv)
     int rc = pipeline.run();
     if (rc != 0) return rc;
 
-    // 后端产物后处理（VMC4：写 expected trace surface 文件——mjdbg 红队契约，
+    // 后端产物后处理（VMC4：写 expected trace surface 文件，mjdbg 红队契约，
     // 同 seed+同输入 → 同内容；其余后端无钩子，空转）。
     if (backendModule != nullptr && backendModule->afterPipelineRun != nullptr) {
         backendModule->afterPipelineRun(wiringContext);
@@ -1492,7 +1527,7 @@ int main(int argc, char** argv)
                 // vmx64 站点表 post-link 加密：xmake 产出 DLL 之后、嵌入/交付
                 // 之前的单消费点（设计、算法与数字例子见
                 // doc:vm-site-table-encryption；--generate-xmake 只生成工程，
-                // 不经此处——未加密产物本身可运行，加密是纯可选加固）。
+                // 不经此处，未加密产物本身可运行，加密是纯可选加固）。
                 // fail-closed：加密失败即整体失败退出，不交付半加密产物。
                 const auto encrypted =
                     mj2x::vmx64EncryptSiteTable(buildConfig.outputLibraryPath.string());
@@ -1582,7 +1617,8 @@ int main(int argc, char** argv)
             }
             return embedNativeLibraryInJar(options.outputPath, nativeResourceEntry,
                                            nativeLibraryPath, options.nativeLibKey,
-                                           options.nativeLibKeySelected);
+                                           options.nativeLibKeySelected,
+                                           options.enableNativeAccess);
         }
     }
 

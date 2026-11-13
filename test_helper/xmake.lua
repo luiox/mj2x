@@ -7,7 +7,7 @@ target("test_helper")
     add_packages("libjdk_finder", "libca", "libjbytecode", "libjbc", {public = true})
     add_files("test_helper.cpp", "test_helper_dom_sync.cpp")
     add_includedirs(".", {public = true})
-    -- 批 6d：test_helper 的 runWithDomSync/classFromTree/treeFromDom 依赖
+    -- test_helper 的 runWithDomSync/classFromTree/treeFromDom 依赖
     -- mj2x-core 的快照刷新与 CodeConverter（符号由消费方链接的 mj2x-core 提供）。
     add_includedirs("../mj2x-core/src", {public = true})
     if is_plat("windows") then

@@ -1,4 +1,4 @@
-/// splitmix64_libca_cross_test.cpp —— #1027 A3 单源切换对拍。
+/// splitmix64_libca_cross_test.cpp，#1027 单源切换比对。
 ///
 /// mj2x/mjt-obf 原有 6 份本地 splitmix64 副本（vmc4_instance 内联类 /
 /// reg_transform_passes 单步函数 / vm_interpreter_emit lambda /
@@ -36,7 +36,7 @@ std::uint64_t formulaMix(std::uint64_t x)
 
 TEST(SplitMix64LibcaCross, MatchesFormulaBoundarySeedsFourSteps)
 {
-    // 有状态流对拍（vmc4/name_provider 用法）：连续 next() = 逐步 +G 后混合。
+    // 有状态流比对（vmc4/name_provider 用法）：连续 next() = 逐步 +G 后混合。
     const std::uint64_t kSeeds[] = {
         0x0000000000000000ull,   // 边界：全 0
         0x0000000000000001ull,   // 边界：最小非 0
@@ -61,7 +61,7 @@ TEST(SplitMix64LibcaCross, MatchesFormulaBoundarySeedsFourSteps)
 
 TEST(SplitMix64LibcaCross, OneShotMatchesFormulaBoundarySeeds)
 {
-    // 一步式混合函数对拍（reg_transform_passes/seed_derivation/seed_chain 用法）：
+    // 一步式混合函数比对（reg_transform_passes/seed_derivation/seed_chain 用法）：
     // SplitMix64(x).next() 单发 = mix(x + G)，同原本地 splitmix64(x)。
     const std::uint64_t kInputs[] = {
         0x0000000000000000ull,
@@ -82,7 +82,7 @@ TEST(SplitMix64LibcaCross, OneShotMatchesFormulaBoundarySeeds)
 TEST(SplitMix64LibcaCross, NextBoundedMatchesModulo)
 {
     // next_bounded(bound) == next() % bound（与原本地 nextBounded 同式）。
-    // bound==0：libca 在 assert 构建下断言、NDEBUG 下抛 invalid_argument——
+    // bound==0：libca 在 assert 构建下断言、NDEBUG 下抛 invalid_argument，
     // 原本地实现为 UB 取模；生产调用点无零 bound（shuffle 环 ≥2 / size==1
     // 短路后 ≥2），分歧面不可达，不在此构造。
     ca::random::SplitMix64 rng(42);

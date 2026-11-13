@@ -20,9 +20,9 @@ namespace mj2x {
 using codegen::cStringLiteral;
 using codegen::CSourceStream;
 
-/// 生成「指针相等短路」的 JNI 对象关系检查表达式：
+/// 生成"指针相等短路"的 JNI 对象关系检查表达式：
 ///   (lhs == rhs || (*env)->JniFn(env, lhs, rhs))
-/// 短路仅在指针相等时生效——此时 JNI 语义必为 true（同一对象 self-equal），
+/// 短路仅在指针相等时生效，此时 JNI 语义必为 true（同一对象 self-equal），
 /// 因此语义与纯 JNI 调用完全一致，不引入任何行为差异。实证：HotSpot 的
 /// jobject 是间接句柄（local/global handle 指针不同），该比较恒为 false，
 /// 本优化在 HotSpot 上不省 JNI（代价 ~1 次 C 比较/检查）；保留价值：非句柄
@@ -33,7 +33,7 @@ std::string shortCircuitRefCheck(const char* jniFn, const std::string& lhs,
     // 返回 (lhs == rhs || (*env)->JniFn(env, lhs, rhs))：外层括号保证与
     // `&&` 组合时优先级正确（A != NULL && (ptr_eq || JNI(...))），且 A==NULL
     // 时整体为 false，绝不调用 JNI（IsInstanceOf 的 clazz 参数 NULL 是 JNI
-    // 未定义行为，曾导致 JVM 崩溃——issue #8xx 回归教训）。
+    // 未定义行为，曾导致 JVM 崩溃，issue #8xx 回归教训）。
     return codegen::exprParen(codegen::exprBinop(
         "||",
         codegen::exprBinop("==", lhs, rhs),
@@ -121,8 +121,8 @@ ca::str::Utf8StringRef addInstanceMethodCache(RegCFunctionEmitState& state,
 
 /// 判定调用是否确定性分派：静态/特殊调用总是确定；虚调用在目标方法 final、
 /// owner 类 final（无子类可覆盖）、或 owner 的所有编译输入子类（含递归）中
-/// 无同名同描述方法覆写时确定（owner 自身声明的非 final 方法也走覆写分析
-/// ——新版 javac 不给匿名类/其方法设 ACC_FINAL，靠 final 标志会漏判）。
+/// 无同名同描述方法覆写时确定（owner 自身声明的非 final 方法也走覆写分析，
+/// 新版 javac 不给匿名类/其方法设 ACC_FINAL，靠 final 标志会漏判）。
 /// 接口调用保持动态分派。类层级闭包只含编译输入：owner 是编译类时不可能
 /// 存在库（JDK）子类，分析安全。
 bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classIndex)
@@ -186,7 +186,7 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
 {
     // 直调档位（CodeOptions.directCallTier）：C 直调不产生 JVM 栈帧，
     // getStackTrace/StackWalker/反射等栈观察语义失真（issue #814）。档位按
-    // 栈失真范围划分而非"开不开"——Off 之外每档都以失真换 JNI 边界开销。
+    // 栈失真范围划分而非"开不开"，Off 之外每档都以失真换 JNI 边界开销。
     //
     // 两个免门控例外（任何档位都直调）：
     // - 确定性分派的虚调用：final 方法 / final owner / 编译输入无覆写时，
@@ -208,7 +208,7 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     if (name[0] == '<' && name != "<init>") return false;
     // javac 合成枚举 values()/valueOf() 让路站点 intrinsic（#887 Enums 承接卡）：
     // 直调体会执行 3 次 JNI（getstatic + instance-cache clone + checkcast），
-    // intrinsic 走站点缓存仅 2/1 次（类型检查可省——$VALUES 恒为 [Lowner;、
+    // intrinsic 走站点缓存仅 2/1 次（类型检查可省，$VALUES 恒为 [Lowner;、
     // Enum.valueOf 返回恒为 owner）；且 intrinsic 同样无 JVM 栈帧，issue #814
     // 直调门控的栈观察权衡不变。仅让路给预扫描/按类补扫/SSA 自登记验证过的
     // 合成方法；未登记（非 javac 形状/非枚举 owner）维持直调。
@@ -231,7 +231,7 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     auto              it  = convertedFunctions->find(key);
     if ((it == convertedFunctions->end() || it->second.empty()) && classIndex != nullptr) {
         // 继承方法：调用点 owner 是 receiver 静态类型，convertedFunctions 键
-        // 是声明类——沿超类链（限编译输入）找声明类后重查。
+        // 是声明类，沿超类链（限编译输入）找声明类后重查。
         std::string cur        = ins.method.owner.to_std_string();
         bool        reResolved = false;
         for (int depth = 0; depth < 32 && !reResolved; ++depth) {
@@ -268,7 +268,7 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     const std::string destName = ins.hasDest ? regName(ins.dest.id) : std::string();
     // 前向声明：目标函数定义可能在本调用点之后（同类方法转换顺序不保证，
     // 类内预登记使后转换方法也可直调）。无声明时 C 隐式 int() 声明与 REF
-    // 返回值冲突（C2040）。声明登记到 TU 头部注册表——块作用域 static 函数
+    // 返回值冲突（C2040）。声明登记到 TU 头部注册表，块作用域 static 函数
     // 声明违反 C11 6.7.1p6（GCC 拒绝，MSVC 放行），见 declareDirectCallTarget。
     declareDirectCallTarget(state, out, ins, it->second);
     if (deterministicVirtual && !ins.args.empty()) {
@@ -359,7 +359,7 @@ void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegI
     const ca::str::Utf8String argsArg  = paramTags.empty() ? ca::str::Utf8String("NULL")
                                                           : ca::str::Utf8String("_mj2x_regc_va");
     // INVOKESPECIAL（super.m() / X.super.m() / 私有 / 未融合 <init>）：owner 声明
-    // 解析 + CallNonvirtual 精确分派。虚分派会命中 receiver 实际类的覆写——
+    // 解析 + CallNonvirtual 精确分派。虚分派会命中 receiver 实际类的覆写，
     // X.super.m() 的调用方自身覆写该方法时直接无限递归（java_corpus
     // InterfaceDefaultMethods regc 首曝：Greeter.super.greet() 虚分派回 main
     // 的 greet 覆写 → StackOverflowError）。
@@ -525,7 +525,7 @@ void emitCachedCall(CSourceStream& out, RegCFunctionEmitState& state, const RegI
     });
 }
 
-/// 发射「分配 + 构造」融合调用：JNI NewObjectA 在分配的同时调用 <init>
+/// 发射分配与构造的融合调用：JNI NewObjectA 在分配的同时调用 <init>
 /// 构造器（1 个 JNI），替代 AllocObject + <init> 直调/解析（2 个 JNI）。
 /// 类（FindClass 缓存）与 <init> methodID（owner 解析缓存）都只解析一次，
 /// 之后每迭代 0 JNI 解析。要求：Allocate 与 <init> 同块紧邻、receiver 是
@@ -575,7 +575,7 @@ void emitAllocateWithInit(CSourceStream& out, RegCFunctionEmitState& state,
 }
 
 /// 判定 Allocate 指令与紧邻 <init> 调用是否可融合为 NewObjectA：同块紧邻由
-/// 调用方保证（索引 i 与 i+1）；这里检查指令语义条件——对象分配（非数组）、
+/// 调用方保证（索引 i 与 i+1）；这里检查指令语义条件，对象分配（非数组）、
 /// dest 无 native 状态（Random/StringBuilder 等不走 JNI 分配）、<init> 构造
 /// 调用且 receiver 是分配结果、参数无 native 状态/物化需求。
 bool canFuseAllocateInit(const RegCFunctionEmitState& state, const RegInstruction& alloc,
@@ -700,7 +700,7 @@ void emitResolvedInstanceCall(CSourceStream& out, const RegInstruction& ins,
                                                        paramTags.size()));
                     }
                     // 检查链（快路径优先，GetObjectClass 只在未命中时执行）：
-                    // 1) implClass 的 IsInstanceOf —— receiver 是已转换实现类（或其
+                    // 1) implClass 的 IsInstanceOf，receiver 是已转换实现类（或其
                     //    未覆写子类）时 1 个 JNI 直接命中（省 GetObjectClass +
                     //    IsSameObject；implClass 仅在解析到已转换实现时非 NULL，
                     //    fn 为 NULL 时回退 CallXxxMethodA 虚分派保语义）；

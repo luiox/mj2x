@@ -112,7 +112,7 @@ TEST(RegCBackendTest, EmitsJniWrapperAndMarksStaticMethodNative)
                              2,
                              2);
 
-    // 批 6d：方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
+    // 方法随夹具树一次落 DOM（注入走 dom_inject；断言回树投影现查）。
     ca::str::Utf8StringArena arena;
     CompilerClass cls;
     {
@@ -239,7 +239,7 @@ TEST(RegCBackendTest, EmitsInstanceWrapperWithReceiverRegister)
 TEST(RegCBackendTest, InstanceTrampolineSkipsGetObjectClassWhenOwnerClassUnused)
 {
     // 纯标量实例方法：生成体不引用 _mj2x_regc_owner_class（当前只有 indy 自定义
-    // bootstrap helper 调用点引用），trampoline 跳过 GetObjectClass——每条
+    // bootstrap helper 调用点引用），trampoline 跳过 GetObjectClass，每条
     // Java→native 入口省 1 次 JNI；env 设置与 context 初始化保持不变。
     auto method = makeMethod(jbytecode::core::Opcodes::ACC_PUBLIC,
                              "bump",
@@ -550,7 +550,7 @@ TEST(RegCBackendTest, FailedLoweringDoesNotMarkMethodNative)
     EXPECT_FALSE(cls.modified);
 }
 
-// ---- indy 原生派发（设计文档 §6 P1-P3，波次二）----
+// ---- indy 原生派发（设计文档 §6 P1-P3，直派桩）----
 //
 // F1/F2 发射级断言：直派桩形态（单分支守卫 + 直接字段/访问器 JNI + 缓存表引用）、
 // 回退分支保留既有 helper 调用、RuntimeHelper 站点发射文本与现状逐字节一致。
@@ -756,7 +756,7 @@ TEST(RegCBackendTest, IndyDirectRecordAccessorEmitsGuardedCall)
 // ── issue #958：直派面 null receiver 守卫按块保护分流 ──
 //
 // JVMS getfield/putfield/invokevirtual 系：receiver NULL 时于当前 pc 抛 NPE，按
-// 异常表路由到方法自身 handler。守卫抛出后按块保护状态分流——受保护块落空进
+// 异常表路由到方法自身 handler。守卫抛出后按块保护状态分流，受保护块落空进
 // 指令后异常分发（方法内 catch NPE 必须接得住）；未受保护块保持 goto cleanup
 // 直接传播。实例形态的访问体位于守卫 else 分支（受保护路径不得以 NULL receiver
 // 递进 JNI）。
@@ -959,7 +959,7 @@ TEST(RegCBackendTest, IndyRuntimeHelperSiteKeepsLegacyHelperText)
     auto result = backend.compileMethod("IndyHelper", cls.methods[0], blocks);
 
     ASSERT_EQ(result.kind, BackendResult::Kind::C_SOURCE) << result.text;
-    // 现状逐字节锚点（与波次二之前的 emitInvokeDynamic 主体一致）。
+    // 现状逐字节锚点（与直派桩引入前的 emitInvokeDynamic 主体一致）。
     EXPECT_NE(result.text.find("jobjectArray _mj2x_indy_args = (jobjectArray)(*_mj2x_regc_env)"
                                "->NewObjectArray(_mj2x_regc_env, 0, _mj2x_indy_obj_cls, NULL);"),
               std::string::npos)
@@ -1026,7 +1026,7 @@ TEST(RegCBackendTest, IndyDirectCacheLiteralsEncryptWithStringsEncrypt)
     backend.finalize(emptyIndex);
     const auto& source = backend.generatedSource();
     // 解析函数字面量改走密文缓冲；区域（区间断言）内不得有明文 owner/name/desc
-    // （回退分支的既有 bootstrap 函数会明文重建 impl 句柄——波次一加密切片边界，
+    // （回退分支的既有 bootstrap 函数会明文重建 impl 句柄，属既有 helper 边界，
     // 非直派缓存表面）。
     const auto resolveBegin = source.find("static int _mj2x_indy_direct_resolve_0(void) {");
     ASSERT_NE(resolveBegin, std::string::npos) << source;
@@ -1138,8 +1138,8 @@ TEST(RegCBackendTest, IntToLongConvertKeepsPlainCast)
 }
 
 // ---------------------------------------------------------------------------
-// #1193：内联可达性与 jar 条目序解耦——beforeCompile 预解析缓存。
-// 被调方法先于调用方被「转换清空」（instructions.clear + ACC_NATIVE，即
+// #1193：内联可达性与 jar 条目序解耦，beforeCompile 预解析缓存。
+// 被调方法先于调用方被"转换清空"（instructions.clear + ACC_NATIVE，即
 // injectIntoClass 之后的形态）时：
 //   - 无 beforeCompile（旧驱动序）：resolver 现场解析失败 → 不内联（回退
 //     通用 JNI 调用，即条目序依赖的静默回退面）；
@@ -1192,7 +1192,7 @@ CompilerIndex makeTwoClassIndex(std::unique_ptr<MethodNode>& add,
 }
 
 /// 模拟 callee 已被先转换：injectIntoClass 之后的形态（无 Code 槽 + native）。
-/// 批 6d 后该形态直接落 DOM（dom_inject 的 markMethodNative，同产品注入路径）。
+/// 该形态现直接落 DOM（dom_inject 的 markMethodNative，同产品注入路径）。
 void simulateAlreadyConverted(CompilerIndex& index)
 {
     auto* cls = index.getClass("Callee");
@@ -1249,7 +1249,7 @@ TEST(RegCBackendTest, WithoutBeforeCompileClearedCalleeFallsBackToJniCall)
 // ---------------------------------------------------------------------------
 // #1193 评审 P3-1：逐方法 unresolvable WARN 不得被 INFO 分支压制。
 // 方法内同时存在成功内联（Callee.add 缓存命中）与 unresolvable 调用点
-// （Other.missing 类不在 index）时，旧实现 else-if 串联——WARN 只在
+// （Other.missing 类不在 index）时，旧实现 else-if 串联，WARN 只在
 // inlinedCalls==0 时发射，部分内联的方法反而拿不到可诊性输出（可见性
 // 不对称）。红相：删 WARN 独立发射 → 本测试转红。
 // ---------------------------------------------------------------------------
@@ -1291,7 +1291,7 @@ TEST(RegCBackendTest, UnresolvableWarnNotSuppressedWhenOtherCallsInlined)
         return cn;
     };
 
-    // 批 6d：方法随夹具树一次落 DOM（classFromTree + 快照对齐）。
+    // 方法随夹具树一次落 DOM（classFromTree + 快照对齐）。
     CompilerIndex index;
     auto makeDom = [&](const char* name, MethodNode* m) {
         auto cn  = makeClassNode(name);
@@ -1392,7 +1392,7 @@ TEST(RegCBackendTest, UnresolvableWarnSampleCarriesResolverReason)
         return cn;
     };
 
-    // 批 6d：方法随夹具树一次落 DOM（classFromTree + 快照对齐）。
+    // 方法随夹具树一次落 DOM（classFromTree + 快照对齐）。
     CompilerIndex index;
     auto makeDom = [&](const char* name, MethodNode* m) {
         auto cn  = makeClassNode(name);

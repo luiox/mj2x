@@ -88,7 +88,7 @@ public:
     // ---- 行级发射（带缩进管理） ------------------------------------------
 
     /// @brief Append one logical line at the current indent, terminated by `\n`.
-    /// @details 等价于 `appendLineStart(line); newLine()`。适合「一调用一行」的
+    /// @details 等价于 `appendLineStart(line); newLine()`。适合"一调用一行"的
     ///          简单语句；多片段拼一条语句时改用 `appendLineStart` + `append`。
     void emitLine(std::string_view line)
     {
@@ -103,11 +103,11 @@ public:
     void emitRaw(std::string_view text) { appendStr(text); }
 
     /// @brief 按当前缩进逐行发射多行文本。
-    /// @details 将 text 按 '\n' 拆分：每个非空行写入「当前缩进 + 行内容 + 换行」，
+    /// @details 将 text 按 '\n' 拆分：每个非空行写入"当前缩进 + 行内容 + 换行"，
     ///          空行只写换行（保留空行但不加缩进，避免行尾空格）。用于把 snippet
-    ///          渲染结果接入 CSourceStream 的缩进管理——snippet 模板只需保留块内
+    ///          渲染结果接入 CSourceStream 的缩进管理，snippet 模板只需保留块内
     ///          相对缩进，首层缩进由本方法按当前 indent 自动平移，调用点处于任意
-    ///          缩进层都能正确排版（替代旧式「模板自带 4 空格 + out.append」）。
+    ///          缩进层都能正确排版（替代旧式"模板自带 4 空格 + out.append"）。
     void emitMultiline(std::string_view text)
     {
         size_t pos = 0;

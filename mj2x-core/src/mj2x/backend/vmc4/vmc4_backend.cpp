@@ -109,7 +109,7 @@ const char* slotField(PrimitiveKind k)
 }
 
 /// 往 clinit 头部前插 registerNativesForClass(classId, thisClass) 调用（镜像 regc）。
-/// 批 5：改写权威在 DOM（dom_inject 门面），树投影由管线统一刷。
+/// 改写权威在 DOM（dom_inject 门面），树投影由管线统一刷。
 void prependRegisterNativesCall(CompilerClass& clazz, const std::string& className, int classId)
 {
     dom_inject::prependClinitRegisterCall(clazz, className, classId, cloader::kClassName,
@@ -140,7 +140,7 @@ struct Vmc4Backend::Impl
     /// per-method 粒度按 className.method+desc 键。构造确定性（同 seed 同产物）。
     std::unordered_map<std::string, std::unique_ptr<VmInstance>> instances;
 
-    /// 程序 blob 解密条目（issue #760 首切片）：programBlobEncrypt 开启时每个
+    /// 程序 blob 解密条目（issue #760）：programBlobEncrypt 开启时每个
     /// 转 VM 方法一条，finalize 的 JNI_OnLoad 期发射 mj2x_vm_blob_decrypt 原地
     /// 解密调用。密钥从实例 seed 派生（vmc4DeriveBlobKey，与发射侧同一函数）。
     struct BlobDecryptEntry
@@ -151,7 +151,7 @@ struct Vmc4Backend::Impl
     };
     std::vector<BlobDecryptEntry> blobDecrypts;
 
-    /// 间接跳转表解密条目（issue #1116 切片 A）：shuffleBlocks 开启时每个转 VM
+    /// 间接跳转表解密条目（issue #1116）：shuffleBlocks 开启时每个转 VM
     /// 方法一条（mj2x_vm_targets_<tag> 以密文落盘），finalize 的 JNI_OnLoad 期
     /// 发射 mj2x_vm_blob_decrypt 原地解密（复用 blob 解密原语，按字节 keystream
     /// 对合）。密钥从实例 seed 经 vmc4DeriveTargetsKey 派生（与发射侧同一函数）。
@@ -230,7 +230,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // JNI wrapper 把 thisObject 填进 regs[0]，显式参数从 regs[1] 开始，两者对齐。
     // <init> 仍跳过（JVM 拒收 native 构造器）。
     // 注：OBJECT 自 Phase 2.0 起被 wrapper 的 slot.ref 直通支持，历史上的
-    // 「类型二次防御」检查（isVmCompatibleKind）因此恒真，已删除；真正的不支持
+    // "类型二次防御"检查（isVmCompatibleKind）因此恒真，已删除；真正的不支持
     // 形态由 encoder 按指令族 fail-closed。kinds 仍供 wrapper 签名/槽位编组。
     const auto retKind = returnKind(methodDesc);
     const auto args    = argumentKinds(methodDesc);
@@ -259,7 +259,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // 不支持 switch terminator；且 VMC4 的混淆本体就是它自己的 opcode 编码与解释器
     // 形态，不需要在 VM 内部再套 RegC 变换（分工决定见 doc:vm-virtualization）。
 
-    // --- 阶段 5：VMC4 分叉点 —— RegIR → opcode 流 ---
+    // --- 阶段 5：VMC4 分叉点（RegIR → opcode 流）---
     // 实例按粒度派生：per-class 同类方法共享同一 VmInstance（缓存），
     // per-method 每方法独立实例，per-program 全程序共享同一实例。
     // instanceSeed = mix(主 seed, 身份哈希)，保证可复现（同 seed+同输入 →
@@ -312,9 +312,9 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
     // 程序 blob at-rest 加密（issue #760）：登记 JNI_OnLoad 期的原地解密
     // 条目（emitRegistrationCode 发射）。密钥用与发射侧同一派生函数
     // （vmc4DeriveBlobKey），同实例 seed → 同密钥，确定性一致。
-    // 切片 2：分块懒解密（--vmc4-lazy-decrypt）时跳过登记——块保持密文到
+    // 分块懒解密（--vmc4-lazy-decrypt）时跳过登记，块保持密文到
     // 首次执行，JNI_OnLoad 不做整体解密（懒解密基础设施由发射器直接发射）。
-    // 切片 B（#1116，--vmc4-block-lazy-decrypt）：块粒度链式懒解密同理跳过
+    // 块粒度链式懒解密（#1116，--vmc4-block-lazy-decrypt）同理跳过
     // 登记（块首达解密基础设施由发射器直接发射，bstate 表 + block_touch）。
     if (options_.programBlobEncrypt && !options_.programLazyDecrypt &&
         !options_.programBlockLazyDecrypt) {
@@ -324,7 +324,7 @@ BackendResult Vmc4Backend::compileMethod(const std::string& className, CompilerM
         entry.key  = vmc4DeriveBlobKey(instance.instanceSeed());
         impl_->blobDecrypts.push_back(std::move(entry));
     }
-    // 间接跳转表 at-rest 加密（issue #1116 切片 A）：shuffleBlocks 开启时表以
+    // 间接跳转表 at-rest 加密（issue #1116）：shuffleBlocks 开启时表以
     // 密文落盘（发射器），此处登记 JNI_OnLoad 期的原地解密条目。与 blob 加密
     // 正交：表加密只随 shuffle 开启，blob 加密只随 programBlobEncrypt 开启。
     if (options_.shuffleBlocks) {
@@ -409,7 +409,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
         out.emitLine("ret.i = 0;");
         if (!isStatic) {
             // 实例方法：this 进 regs[0]（SSA 约定 this=参数 id0，SSABuilder 把 this
-            // 作为 parameters[0]），显式参数从 regs[1] 开始——与 encoder 的
+            // 作为 parameters[0]），显式参数从 regs[1] 开始，与 encoder 的
             // numInputs（f.parameters.size()，含 this）对齐。
             out.emitLine("regs[0].ref = (void*)thisObject;");
         }
@@ -475,7 +475,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
         }
         // 预加载 String LDC 常量槽（Phase 2.E）：NewStringUTF 把 UTF-8 内容物化为
         // jstring，写入编码期分配的专用槽（按内容去重）。调用帧内局部引用，
-        // 方法返回后由 JVM 释放——寄存器仅在本帧解释期间使用，安全。
+        // 方法返回后由 JVM 释放，寄存器仅在本帧解释期间使用，安全。
         // 内容先过 modified UTF-8 转换：NewStringUTF 按 modified UTF-8 解码且以
         // strlen 取长，标准 UTF-8 的嵌入 NUL（C0 80）与增补平面（4 字节 → 代理对）
         // 不转换会截断/错解（java_corpus TextBlocksAndEscapes vmc4 首曝）。
@@ -580,7 +580,7 @@ std::string Vmc4Backend::emitNativeWrapper(const std::string& className,
 
 // ===========================================================================
 // injectIntoClass：标 ACC_NATIVE + clinit 注入（镜像 regc_backend.cpp:508）。
-// 批 5：改写权威在 DOM（dom_inject 门面）；树投影由管线统一刷。
+// 改写权威在 DOM（dom_inject 门面）；树投影由管线统一刷。
 // ===========================================================================
 void Vmc4Backend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method,
                                   const BackendResult& result)
@@ -609,10 +609,10 @@ void Vmc4Backend::finalize(const CompilerIndex& index)
     (void)index;
     resetDiagnostics();
 
-    // 配置防御（issue #760 切片 2）：lazy 无加密无意义（块游标/密文块不发射，
+    // 配置防御（issue #760）：lazy 无加密无意义（块游标/密文块不发射，
     // VmInstance 构造已把 blobLazy 归一为 encrypt && lazy）。显式落日志提示
     // CLI 层 requires 约束（vmc4.lazy_decrypt → vmc4.encrypt_program）被绕过。
-    // 切片 B（#1116）：block-lazy 同一 requires 口径；两档同开时 block 档
+    // block-lazy（#1116）同一 requires 口径；两档同开时 block 档
     // 胜出（VmInstance 归一化 blobLazy=关），显式日志说明优先级。
     // T1：三条同入诊断聚合（日志文本不变），管线/CLI 可编程消费。
     if (options_.programBlockLazyDecrypt && !options_.programBlobEncrypt) {
@@ -756,16 +756,16 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
     // JNI_OnLoad。
     src.emitLine("JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {");
     src.indent();
-    // 程序 blob at-rest 解密（issue #760 首切片）：库加载期对全部程序 blob 一次性
+    // 程序 blob at-rest 解密（issue #760）：库加载期对全部程序 blob 一次性
     // 原地解密。时机安全性：JVM 在 System.load 的加载锁内单线程调用 JNI_OnLoad，
-    // 且先于任何 native 方法可达（RegisterNatives 桥在加载完成后才注册）——
+    // 且先于任何 native 方法可达（RegisterNatives 桥在加载完成后才注册），
     // 无首执行竞态；解密缓冲区即 mj2x_vm_code_<tag> 数组本身（static 存储期，
     // 存活期覆盖全部执行期，不产生第二份副本）。解密是纯字节变换不依赖 env，
     // 置于 GetEnv 之前。密钥只以 seed 常量形式出现在调用参数里，keystream 由
     // mj2x_vm_blob_decrypt 现场重算（产物无整块 key/keystream 数组）。
-    // 切片 2 密钥擦除：mj2x_vm_blob_decrypt 返回前对密钥参数与 keystream 状态
+    // 密钥擦除：mj2x_vm_blob_decrypt 返回前对密钥参数与 keystream 状态
     // 做 volatile 清零（密钥栈擦除），传递后不留运行时副本。
-    // 切片 2 懒解密（--vmc4-lazy-decrypt）：不发整体解密调用——块保持密文到
+    // 分块懒解密（--vmc4-lazy-decrypt）：不发整体解密调用，块保持密文到
     // 首次执行，由生成代码的 mj2x_vm_lazy_touch_<tag> 按块懒解密。
     if (!blobDecrypts.empty()) {
         src.emitLine("/* VMC4 program blob at-rest decrypt (issue #760) */");
@@ -776,7 +776,7 @@ void Vmc4Backend::Impl::emitRegistrationCode(ca::str::Utf8StringBuilder& out) co
                          std::to_string(entry.size) + "u, " + keyBuf + ");");
         }
     }
-    // 间接跳转表 at-rest 解密（issue #1116 切片 A）：与 blob 解密同一时机面
+    // 间接跳转表 at-rest 解密（issue #1116）：与 blob 解密同一时机面
     // （JNI_OnLoad、先于 GetEnv、加载锁内单线程，先于任何 VM 方法可达）。
     // mj2x_vm_blob_decrypt 按字节 keystream 对合，直接作用于表的 4×N 字节。
     if (!targetsDecrypts.empty()) {

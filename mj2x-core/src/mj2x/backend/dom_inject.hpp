@@ -1,14 +1,14 @@
 #pragma once
 
 /// @file        dom_inject.hpp
-/// @brief       批 5：backend 注入（injectIntoClass）的 DOM 改写门面。
+/// @brief       backend 注入（injectIntoClass）的 DOM 改写门面。
 ///
 /// 四后端注入的改写权威从树切到 libjbc DOM（与 pre/postprocessor 的
 /// openDomEdit/commitDomEdit 同一会话纪律：字节往返提交，真实编解码器
 /// 单一通道）。树投影由管线在 compileMethods 后统一 syncDomToTree 刷新
 /// （postprocessor 基线 + output 投影），backend 内不再触树。
 ///
-/// 树世界「instructions.clear() + maxStack/maxLocals=0」的 DOM 对应物 =
+/// 树世界 instructions.clear() 加 maxStack/maxLocals=0 的 DOM 对应物 =
 /// 摘除 Code 属性槽（JVMS：native 方法不带 Code 属性）；clinit 前缀注入
 /// 对应 promote + insertBefore(first)（同锚点保序）或 addMethod + append。
 
@@ -41,7 +41,7 @@ inline ca::usize findMethodInDom(const jbc::core::ClassFile& dom, const std::str
     return dom.methods.size();
 }
 
-/// @brief 标记方法为 native 并摘除 Code 槽（「清指令」的 DOM 对应物）。
+/// @brief 标记方法为 native 并摘除 Code 槽（"清指令"的 DOM 对应物）。
 ///
 /// 幂等：已无 Code 槽（如同类第二后端重复注入）时只重标 access。
 /// cls.modified 置位语义与树版一致（output 侧 COMPUTE/重写判定）。
@@ -69,7 +69,7 @@ inline void markMethodNative(CompilerClass& cls, const std::string& className,
 /// @brief clinit 头部插入 registerNativesForClass(classId, thisClass)（regc/vmc4）。
 ///
 /// 无 clinit 则按种子建（ACC_STATIC + RETURN 骨架）。前缀三条对 first 同锚点
-/// insertBefore 正序插入（同锚保序，批 4b 实证 14 的对偶：insertAtStart 才
+/// insertBefore 正序插入（同锚保序，insertAtStart 才
 /// 需要逆序）。
 inline void prependClinitRegisterCall(CompilerClass& cls, const std::string& className,
                                       ca::i32 classId, const char* bridgeClass,
@@ -134,7 +134,7 @@ inline void prependClinitRegisterCall(CompilerClass& cls, const std::string& cla
 
 /// @brief 全量重建方法体（stackc 的 clinit 重写 / interface-default proxy 改写）。
 ///
-/// 无该方法则按种子建；有则 promote 后逐条 erase（含异常表清空——树版
+/// 无该方法则按种子建；有则 promote 后逐条 erase（含异常表清空，树版
 /// clearMethodDebugAndHandlers 的 DOM 对应物）再经 emit 追加新体。emit 在
 /// 会话内执行：CP 操作数（bridge 调用等）经 session intern 后 append，保证
 /// 索引归属本次提交。accessAndMask 非 0 时 access &= mask（clinit/proxy
@@ -168,9 +168,9 @@ inline void replaceMethodBody(
 
     // 全量重建：逐条 erase 首条直至清空（句柄域稳定）；异常表/调试属性引用
     // 旧布局，随体丢弃。erase 不清除标签槽（导入期 ControlFlow 标签留槽失锚），
-    // 残留孤儿标签会让后续 lower 按「目标未锚定」拒绝——IntrinsicSurface 首
+    // 残留孤儿标签会让后续 lower 按"目标未锚定"拒绝，IntrinsicSurface 首
     // 曝（clinit 含 LVT 搬运被弃，原体带分支标签，重建后 lower bad
-    // instructions）——擦除前收集全部引用标签，清空后统一销毁。
+    // instructions），擦除前收集全部引用标签，清空后统一销毁。
     {
         std::vector<jbc::ir::LabelId> doomed;
         for (auto id2 : unit->dom.order()) {
@@ -194,7 +194,7 @@ inline void replaceMethodBody(
         }
         unit->exc.clear();
         for (auto lbl : doomed) (void)unit->dom.destroyLabel(lbl);
-        // 嵌套调试属性（LNT/LVT/SMT）引用旧布局：随体丢弃——lower 的嵌套
+        // 嵌套调试属性（LNT/LVT/SMT）引用旧布局：随体丢弃，lower 的嵌套
         // 属性重定位按旧锚执行，体已全换则无锚可依。
         for (auto& slot : session->backing().methods[mi].attrs) {
             if (!session->backing().cp.utf8Equals(slot.nameCp, "Code")) continue;

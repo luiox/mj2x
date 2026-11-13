@@ -31,12 +31,12 @@ option("with_mj2x_backend")
     set_showmenu(true)
     set_values("all", "stackc", "regc", "vmc4", "llvm", "vmx64")
     -- 非法值的干净报错在 mj2x-core/xmake.lua 的文件级校验（set_values 在
-    -- xmake 3.0.9 上不拦 CLI 传值——monorepo 评审 T3-3 勘实）。
+    -- xmake 3.0.9 上不拦 CLI 传值，monorepo 评审 T3-3 勘实）。
     set_description("mj2x backend set: all | stackc | regc | vmc4 | llvm | vmx64 (single-backend build, #886).")
 
 -- AddressSanitizer。MSVC 下 /fsanitize=address 会改变 STL 的 ABI（annotate_vector
--- 等注解），因此**必须在全局作用域开启**，让所有 target——包括被依赖的静态库
--- ——用同一套插桩，否则链接期报 LNK2038 不匹配。关优化 + 保留调试信息，否则
+-- 等注解），因此**必须在全局作用域开启**，让所有 target（包括被依赖的静态库）
+-- 用同一套插桩，否则链接期报 LNK2038 不匹配。关优化 + 保留调试信息，否则
 -- 报告里的调用栈不可读。
 option("with_asan")
     set_default(false)

@@ -8,7 +8,7 @@ namespace {
 
 TEST(SeedDerivationTest, ClientIdZeroIsIdentity)
 {
-    // 不变量：clientId == 0 时派生恒等 —— 默认构建产物与历史逐字节一致。
+    // 不变量：clientId == 0 时派生恒等，默认构建产物与历史逐字节一致。
     EXPECT_EQ(mj2x::deriveClientSeed(0, 0), 0u);
     EXPECT_EQ(mj2x::deriveClientSeed(42, 0), 42u);
     EXPECT_EQ(mj2x::deriveClientSeed(0x9E3779B97F4A7C15ull, 0), 0x9E3779B97F4A7C15ull);

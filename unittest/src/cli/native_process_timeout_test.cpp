@@ -45,7 +45,7 @@ ca::core::StatusResult<ca::process::Child> spawnPiped(const std::string& program
 }
 
 /// 卡死 30s 的子进程：shell 再拉一个孙进程（Windows: cmd → ping；
-/// POSIX: sh → sleep），孙进程继承 stdout/stderr 管道写端——整树收割的
+/// POSIX: sh → sleep），孙进程继承 stdout/stderr 管道写端，整树收割的
 /// 必要条件（只杀 shell 则 EOF 永不到达）。
 std::pair<std::string, std::vector<std::string>> sleepingChildCommand()
 {
@@ -154,7 +154,7 @@ TEST(NativeProcessTimeout, ZeroTimeoutMeansUnlimited)
 
 // 子进程在截止前自然退出：helper 必须立即返回 true 并交出完整输出，
 // 而不是把"截止未到"当成"等到截止"。用 echo 子进程（本机实测 cmd+echo
-// 冷启 ~3s / 热启 <1s；不用 ping 造"慢子进程"——Windows ping 单发延迟
+// 冷启 ~3s / 热启 <1s；不用 ping 造"慢子进程"，Windows ping 单发延迟
 // 因机器/网络形态波动可达数秒，elapsed 断言会环境性翻车）。10s 截止 +
 // 6s elapsed 界：实现若退化为"等满超时才返回"，elapsed 顶到 10s 被捕获。
 TEST(NativeProcessTimeout, ReturnsWhenChildFinishesBeforeDeadline)

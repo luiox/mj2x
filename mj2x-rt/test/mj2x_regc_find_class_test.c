@@ -7,8 +7,8 @@
 
 // 由 mj2x_regc_crt_test.c 的 main 统一调用（单 runner 惯例）。
 //
-// _mj2x_regc_find_class 描述符守卫的 C 级直钉（#1182 评审收口 P1）：只剥完整
-// `L...;` 形态描述符，裸内部名直通不改写——裸名可能以 'L' 开头（default 包
+// _mj2x_regc_find_class 描述符守卫的 C 级直钉（#1182 评审 P1）：只剥完整
+// `L...;` 形态描述符，裸内部名直通不改写，裸名可能以 'L' 开头（default 包
 // 合成类 Lambda$N），按首字符无条件剥壳会截成 "ambda$N" → NoClassDefFoundError。
 // 此前该守卫只有发射侧 E2E 间接覆盖，抓不住"传给 FindClass 的名字被剥错"的
 // 中间态；此处注入记录型 fake FindClass 观察实际传入名，不依赖真实 JVM。

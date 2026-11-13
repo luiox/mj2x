@@ -62,7 +62,7 @@ void StackCBackend::Impl::emitInvoke(const MIRInvoke* node, codegen::CSourceStre
     // sp 调整与普通调用一致；mayThrow 时保留 pending 异常检查。
     // 匹配契约：static 调用点匹配 passReceiver=false 条目；instance 调用点
     // （receiver 在 sp-argCount 槽）仅匹配显式 passReceiver=true 条目
-    // （fail-closed：未声明不匹配，回通用 JNI 派发——G-1 行为保持）。
+    // （fail-closed：未声明不匹配，回通用 JNI 派发，G-1 行为保持）。
     // static 调用点 + passReceiver 条目的配置校验错误在 compileMethod 入口
     // 预检 fail-closed，此处不会遇到该组合。
     {
@@ -485,7 +485,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
     // #879 X3 评估结论：setup 块不随快/慢分流下沉。稳态成本已是静态读 + NULL
     // 分支（零 JNI）；若移入慢路径，快路径站点的 bootstrap 块（物理上在快路径
     // 调用点之前执行、且由快慢共用发射）里的 bsm varargs 数组须自行物化
-    // jclass——多一套发射形态、多一处作用域耦合，换不来稳态 JNI 调用的减少。
+    // jclass，多一套发射形态、多一处作用域耦合，换不来稳态 JNI 调用的减少。
     const auto indyObjectClsCache =
         cacheIdentifier("indy_object_cls",
                         currentClassName + "." + currentMethodName + currentMethodDesc + ":" +
@@ -507,7 +507,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
     // 不建 varargs 数组（省每次调用一次 NewObjectArray + SetObjectArrayElement）。
     // 一般路径：参数装箱进 Object[] 再弹栈。args 数组声明只随慢路径发射
     //（#879 X3 残余：快路径生成代码不再出现 _mj2x_indy_args，连 NULL 声明
-    // 也不留——发射期快/慢尾二选一，作用域无跨分支引用）。
+    // 也不留，发射期快/慢尾二选一，作用域无跨分支引用）。
     if (useOneObjectInvokeHelper) {
         out.emitLine("jobject _mj2x_indy_capture0 = stack[sp].l;");
     }
@@ -608,8 +608,8 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
                   cStringLiteral(bsmName) + ", " + cStringLiteral(bsmDesc) + ");");
 
     std::vector<std::string> bsmExprs;
-    // #1027 B3：槽位判定单源 = planIndyBsmSlots（三后端原游走逐分支同构）。
-    // 形参 Type 仍取自 bsmArgTypes——StaticArg 物化需要原语宽度（发射面契约）。
+    // #1027：槽位判定单源 = planIndyBsmSlots（三后端原游走逐分支同构）。
+    // 形参 Type 仍取自 bsmArgTypes，StaticArg 物化需要原语宽度（发射面契约）。
     const auto bsmSlots = planIndyBsmSlots(bsmDesc, node->bsmArgs.size());
     for (size_t i = 0; i < bsmSlots.size(); ++i) {
         const auto& slot = bsmSlots[i];
@@ -699,7 +699,7 @@ void StackCBackend::Impl::emitInvokeDynamic(const MIRInvokeDynamic* node, codege
                   "jmethodID _mj2x_indy_helper_mid = (*env)->GetStaticMethodID(env, "
                   "_mj2x_indy_cloader_cls, \"invokeMethodHandle1\", "
                   "\"(Ljava/lang/invoke/MethodHandle;Ljava/lang/Object;)Ljava/lang/Object;\");");
-        // 参数在块首已捕获（pop 之前），结果原位覆写参数槽——sp 净效应 0。
+        // 参数在块首已捕获（pop 之前），结果原位覆写参数槽，sp 净效应 0。
         out.appendLineStart("stack[sp].l = ").append(trackLocalRefExpr(
             "(*env)->CallStaticObjectMethod(env, _mj2x_indy_cloader_cls, "
             "_mj2x_indy_helper_mid, _mj2x_indy_target, _mj2x_indy_capture0)")).append(";");

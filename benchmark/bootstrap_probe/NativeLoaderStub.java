@@ -1,10 +1,10 @@
 // ============================================================================
-// NativeLoaderStub — bootstrap 分解微探针专用 stub（issue #1183，仅探针 jar）。
+// NativeLoaderStub，bootstrap 分解微探针专用 stub（issue #1183，仅探针 jar）。
 //
 // 与 mj2x-core native_loader_postprocessor.cpp 生成的 mj2x/runtime/NativeLoader
 // 同名同签名（public static synchronized void load(String,String)），供测量 jar
 // 替换原类：设置 -Dmj2x.probe.skip=1 时跳过提取与 System.load（仅置 loaded），
-// 使「提取」「加载」两段可被驱动分别隔离计时；未设属性时按原逻辑提取+加载
+// 使提取与加载两段可被驱动分别隔离计时；未设属性时按原逻辑提取+加载
 // （探针流程不使用该路径，仅为类行为完整保真）。
 // ============================================================================
 package mj2x.runtime;

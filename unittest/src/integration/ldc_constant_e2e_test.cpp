@@ -4,7 +4,7 @@
 // tree API 手工构造（这也是保护器产物里 ldc 常量的真实来源）。判据闭环：
 //   1) 手构类在 JVM（-Xverify:all）上的输出 == 硬编码期望（先证明样本本身对）；
 //   2) mj2x-cli（默认注册 LdcPreprocessor，全方法翻译）处理后，加载/运行输出
-//      与基线逐字一致 —— 历史缺陷形态是处理后直接 VerifyError。
+//      与基线逐字一致，历史缺陷形态是处理后直接 VerifyError。
 // 覆盖全部展开家族：findStatic/findVirtual/findConstructor/findGetter/MethodType
 // + #879 补课的 findSpecial/findSetter/findStaticGetter/findStaticSetter
 //（9 tag find* 家族的 exec 级全量：栈序单测见 ldc_preprocessor_test.cpp）。
@@ -351,7 +351,7 @@ std::vector<ca::u8> buildLdcMhSample(ca::str::Utf8StringArena& arena)
     }
 
     // ldc Handle(H_GETSTATIC, flag) → findStaticGetter：空 varargs 读回静态字段
-    //（跨方法可见 setter 写入的 "S1"——native 调用间静态字段一致性）。
+    //（跨方法可见 setter 写入的 "S1"，native 调用间静态字段一致性）。
     {
         auto* m = new MethodNode(Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
                                  ref(arena, "useStaticGetterHandle"),

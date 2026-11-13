@@ -13,14 +13,14 @@
 ///
 /// ## 失败策略
 ///
-/// fail-closed：SSA/RegIR/编码任一阶段失败（含 Phase 1 不支持的 family——
+/// fail-closed：SSA/RegIR/编码任一阶段失败（含 Phase 1 不支持的 family，
 /// 仅 i32/i64 常量/拷贝/add/sub/mul/if_icmp/goto/返回族），保留字节码、不标
 /// native、留可观测日志（继承 VMC4 哲学）。
 ///
 /// ## Phase 2 面（emit-only → 可执行）
 ///
 /// - RegisterNatives 绑定 C TU（registrationSource()）：finalize 组装第二产物
-///   ——C99 注册翻译单元，extern 声明 .asm 入口符号（PROC 已按 JNI ABI 收参），
+///   即 C99 注册翻译单元，extern 声明 .asm 入口符号（PROC 已按 JNI ABI 收参），
 ///   发射 per-class register 函数、mj2x/cloader 桥接（_mj2x_register_for_class）
 ///   与 JNI_OnLoad（结构镜像 Vmc4Backend::Impl::emitRegistrationCode）。CLI 侧
 ///   把它写进生成工程的 src/generated/，与 .asm 一并编译链接。

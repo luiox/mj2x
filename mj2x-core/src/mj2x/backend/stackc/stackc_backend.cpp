@@ -109,13 +109,13 @@ int staticizeStackText(std::string& text, int baseDepth)
         }
         size_t       cursor = 0;
         std::string  replaced;
-        // 行内顺序扫描替换（无「最早匹配」竞争）：栈访问模式与 sp 维护语句
+        // 行内顺序扫描替换（无"最早匹配"竞争）：栈访问模式与 sp 维护语句
         // 都按行内模式处理（sp 语句只更新偏移不产出行，避免行级 continue 吞掉
         // 同行含 stack[..] 的 DUP 类行）。顺序：
         //   1) `stack[++sp]` / `stack[sp--]` / `stack[sp ± N]`（N 可为 0，指栈顶）/
         //      `stack[sp]`
         //   2) `sp -= N` / `sp += N` / `sp--` / `sp++`（只改偏移）
-        // 字符串字面量与 // 行注释内的文本逐字保留——字面量（NewStringUTF 内联
+        // 字符串字面量与 // 行注释内的文本逐字保留，字面量（NewStringUTF 内联
         // 进方法体）一旦含 `stack[sp`/`sp -= N` 等模式会被静默改写（X4 防碰撞）。
         bool inString = false;
         bool escaped  = false;
@@ -399,7 +399,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
 
     // 用户 intrinsic 配置校验（passReceiver 扩面）：passReceiver=true 条目只对
     // instance 调用点有意义；本方法体出现匹配该条目的 INVOKESTATIC 调用点说明
-    // 条目被声明到了静态方法上（静态调用无 receiver）——配置校验错误，整方法
+    // 条目被声明到了静态方法上（静态调用无 receiver），配置校验错误，整方法
     // fail-closed 保留 Java 字节码（与栈深度分析失败同一失败通道），不静默回退
     // 通用派发掩盖错位配置。
     if (!impl_->userIntrinsics.empty()) {
@@ -481,7 +481,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     funcOut.indent();
 
     // Stack and locals declaration
-    // 操作数栈用「静态槽」s[N]（对齐 JNIC 命名槽模型）：发射时按编译期栈深度
+    // 操作数栈用"静态槽"s[N]（对齐 JNIC 命名槽模型）：发射时按编译期栈深度
     // 把 stack[sp±k] 静态化为 s[<常量>]，-O2 下编译器可寄存器化；无运行期 sp。
     int maxLocalsVal = method.maxLocals > 0 ? method.maxLocals : 1;
     funcOut.appendLineStart("union jvalue s[")
@@ -519,7 +519,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     }
     funcOut.emitBlankLine();
 
-    // 批 6d：异常表取自 DOM convert 产物（Block::exceptionTable，标签 id 键），
+    // 异常表取自 DOM convert 产物（Block::exceptionTable，标签 id 键），
     // 与 MIR 同一标签空间；catchType 空串 = finally（catch 一切）。
     std::vector<CExceptionHandlerInfo> exceptionHandlers;
     if (!blocks.empty()) {
@@ -550,7 +550,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
     // Build deterministic per-method label index. Walk blocks in order; assign a
     // sequential index to every label the first time it is referenced, whether as a
     // LABEL definition or as a jump/switch target. The label id is only used as a
-    // map key — it never reaches the output, so two independent CLI processes
+    // map key, it never reaches the output, so two independent CLI processes
     // produce identical C labels (L0, L1, ...).
     impl_->labelIndex.clear();
     auto assignLabelIndex = [&](int lbl) {
@@ -618,7 +618,7 @@ BackendResult StackCBackend::compileMethod(const std::string& className, Compile
                         // 按表索引有序插入：JVM 分派按异常表顺序取**首个**区域含
                         // 当前 pc 且类型匹配的条目，不是按区域激活（嵌套）顺序。
                         // javac 的合成 handler（如 t-w-r 的 catch Throwable primary
-                        // 捕获）表序在外层用户 catch 之前、区域却内层后激活——
+                        // 捕获）表序在外层用户 catch 之前、区域却内层后激活，
                         // 无序插入会把检查顺序排反，跳过 primary/close 语义
                         // （java_corpus TryWithResources stackc 首曝）。
                         activeExceptionHandlers.insert(
@@ -694,7 +694,7 @@ void StackCBackend::injectIntoClass(CompilerClass& clazz, CompilerMethod& method
 {
     if (result.kind != BackendResult::Kind::C_SOURCE) return;
 
-    // 批 5：改写权威在 DOM（dom_inject 门面）；类名从 DOM 取，树投影由管线
+    // 改写权威在 DOM（dom_inject 门面）；类名从 DOM 取，树投影由管线
     // 在 compileMethods 后统一刷。
     if (clazz.dom == nullptr) {
         throw std::runtime_error("stackc_backend: DOM not synced for native injection");
@@ -803,7 +803,7 @@ std::uint32_t StackCBackend::Impl::stringPoolSeed() const
     // （每单位低字节在前）做 fnv1a64，折叠到 u32 再混入固定常量；0 回退
     // 0x9E3779B9（与 native_lib_crypto.hpp::xorStreamBytes 的 key==0 约定一致）。
     // 同池同 seed（可复现构建不变量）；变换 seed/clientId 未接入 StackC 链路，
-    // 后续切片若给 StackC 传 seed 可替换此处折叠输入。
+    // 后续如给 StackC 接入 seed 可替换此处折叠输入。
     std::string bytes;
     bytes.reserve(stringPoolUnits.size() * 2);
     for (const ca::u16 unit : stringPoolUnits) {
@@ -820,18 +820,18 @@ void StackCBackend::Impl::emitStringPool(codegen::CSourceStream& out) const
 {
     if (stringPoolUnits.empty()) return;
     // --strings-encrypt：池以密文形态写入 C 源（xorshift32 密钥流逐单位 XOR，
-    // 先推进 state 再取低 16 位——与 mj2x_stackc_runtime 的解密逐位互逆）。
-    // 首切片目标为 at-rest：产物 C 源/编译后 native 库内无明文 UTF-16 序列；
+    // 先推进 state 再取低 16 位，与 mj2x_stackc_runtime 的解密逐位互逆）。
+    // 首期目标为 at-rest：产物 C 源/编译后 native 库内无明文 UTF-16 序列；
     // 解密在 JNI_OnLoad 批量原地执行一次（JVM 保证单线程且先于任何 native
     // 方法，规避 XOR 双解密污染与就绪位图竞态，调用点保持零开销）。运行期
-    // 池内存为明文——NewString 语义的必然，lazy/分块解密是后续切片。
+    // 池内存为明文，NewString 语义的必然，lazy/分块解密留待后续处理。
     // 数组去 const：原地解密需要可写（.data 段，at-rest 内容为密文）。
     if (stringsEncrypt) {
         std::vector<ca::u16> cipher(stringPoolUnits);
         std::uint32_t        state = stringPoolSeed();
         for (auto& unit : cipher) {
             // xorshift32 一步推进复用 canonical xorshift32Step（先推进再取低
-            // 16 位——与 mj2x_stackc_runtime 的解密逐位互逆）。
+            // 16 位，与 mj2x_stackc_runtime 的解密逐位互逆）。
             state = xorshift32Step(state);
             unit  = static_cast<ca::u16>(unit ^ static_cast<ca::u16>(state & 0xFFFFu));
         }
@@ -1117,7 +1117,7 @@ void StackCBackend::Impl::emitNodeWithExceptionDispatch(const MIRNode*      node
     else if (dispatchTarget.empty() &&
              (node->kind == MIRKind::ARRAY_LOAD || node->kind == MIRKind::ARRAY_STORE)) {
         // JNI 数组访问可抛 AIOOBE/ArrayStoreException；无保护区域的调用点也必须
-        // 立即返回让 pending 传播——跨节点滞留的 pending 会让后续 FindClass/
+        // 立即返回让 pending 传播，跨节点滞留的 pending 会让后续 FindClass/
         // GetMethodID 全部返回 NULL，被误报成 NoClassDefFoundError 掩蔽真实异常
         // （java_corpus TryWithResources stackc 首曝的次生形态）。
         tmp.emitLine("if ((*env)->ExceptionCheck(env)) {");

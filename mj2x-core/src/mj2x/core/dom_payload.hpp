@@ -2,9 +2,9 @@
 
 /// @file        dom_payload.hpp
 /// @brief       DOM CP → 树契约同型载荷的共享解析面（code_converter /
-///              invokedynamic preprocessor 共用，批 4b 收口单源）。
+///              invokedynamic preprocessor 共用，单一解析入口）。
 ///
-/// 批 6e 门面收口：Any 载荷一律 mj2x 自有类型——Class/MethodType 走
+/// 门面统一约定：Any 载荷一律 mj2x 自有类型，Class/MethodType 走
 /// mj2x::Type、MethodHandle 走 mj2x::Handle、字符串视图必须 intern 进
 /// 作业 arena（DOM CP 存储生命周期独立，裸视图会悬垂）。
 /// ConstantDynamic 不支持（fail loud）。
@@ -35,7 +35,7 @@ inline ca::str::Utf8StringRef domUtf8(const jbc::core::ClassFile& dom, ca::u32 i
 }
 
 /// @brief CP 来源内容 intern：必须走 intern_raw（modified UTF-8 含孤代理对/
-/// C0 80 一类序列不是合法标准 UTF-8，intern 校验失败返回空视图——TextUnicode
+/// C0 80 一类序列不是合法标准 UTF-8，intern 校验失败返回空视图，TextUnicode
 /// 代理对常量整条变空首曝）。CP 内容按 JVMS 恒为 modified UTF-8，与 jbc
 /// addUtf8 的 intern_raw 口径一致。
 inline ca::str::Utf8StringRef internCpUtf8(ca::str::Utf8StringArena& arena,

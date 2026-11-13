@@ -5,7 +5,7 @@
 // mj2x/runtime/NativeLoader 是运行时从 JAR 资源加载 native 库的引导类，
 // clinit 里调用其 `load(String resourcePath, String tempSuffix)` 完成加载。
 // 该调用此前在 RegC / StackC / NativeLoaderPostprocessor 三处各写一份常量
-// 和指令序列，本文件收口为单一来源。
+// 和指令序列，本文件集中为单一来源。
 //
 // StackC 因 RegisterNatives 绑定需要在自己的 protectClassInitializer 里
 // 重写整个 clinit，故仅复用本文件的常量与 load 指令发射；RegC 的 clinit
@@ -26,10 +26,10 @@ inline constexpr const char* kClassName = "mj2x/runtime/NativeLoader";
 /// NativeLoader.load 的描述符：(Ljava/lang/String;Ljava/lang/String;)V。
 inline constexpr const char* kLoadDesc = "(Ljava/lang/String;Ljava/lang/String;)V";
 
-/// @brief DOM 版（批 4 载体）：往 clinit 指令序列头部插入 load 调用。
+/// @brief DOM 版：往 clinit 指令序列头部插入 load 调用。
 ///
 /// 逆序逐条 insertAtStart（call → suffix → path）：insertAtStart 恒插位首、
-/// 后插者在前，故须按最终序的逆序插入——最终程序序 = [LDC path, LDC suffix,
+/// 后插者在前，故须按最终序的逆序插入，最终程序序 = [LDC path, LDC suffix,
 /// INVOKESTATIC call] 前置于原 clinit 指令；maxStack 抬到至少 2（对齐树版口径）。
 inline void emitLoadCallDom(jbc::ir::ClassSession& session, jbc::ir::CodeUnit& unit,
                             const std::string& resourcePath, const std::string& tempSuffix)

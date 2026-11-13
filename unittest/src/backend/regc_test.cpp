@@ -18,7 +18,7 @@
 
 #include "test_helper.hpp"
 
-// B8b：测试侧 Label 统一归宿（进程寿命 scratch arena）——LabelNode() 默认构造
+// 测试侧 Label 统一归宿（进程寿命 scratch arena），LabelNode() 默认构造
 // 已随旧池制度退役，Label 一律 arena 分配。
 static garena::Arena& labelScratchArena()
 {
@@ -49,7 +49,7 @@ std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, cons
     return mn;
 }
 
-// 注意：arena 必须活到 emitFunction 返回——MIR/SSA/RegIR 节点字段是 arena-backed
+// 注意：arena 必须活到 emitFunction 返回，MIR/SSA/RegIR 节点字段是 arena-backed
 // Utf8StringRef（spec §6.1），arena 提前析构会让 emit 读到悬垂指针（参见 #698）。
 // 生产侧 pipeline 把 arena 放在 CompilerIndex（job 级寿命）；测试侧把 arena 与 emit
 // 放同一作用域，对齐该寿命约定。
@@ -756,8 +756,8 @@ TEST(RegCTest, EmitsTryCatchExceptionDispatch)
 
 // H3 守门：CFF 的 state 寄存器必须以 volatile 发射。
 // 不加 volatile 时，state 是可跨基本块常量传播的普通局部量，C 编译器的
-// jump-threading 会把 `dispatcher: switch(state)` 整块消解回原始结构化控制流
-// ——产物源码看着复杂，二进制里根本没有平坦化（clang -O2 实测，见
+// jump-threading 会把 `dispatcher: switch(state)` 整块消解回原始结构化控制流。
+// 产物源码看着复杂，二进制里根本没有平坦化（clang -O2 实测，见
 // `work/cff_probe/st_cff.ll` vs `st_vol.ll`）。
 TEST(RegCTest, CffStateRegisterIsEmittedVolatile)
 {
@@ -1084,7 +1084,7 @@ TEST(RegCTest, DirectCallTierOffKeepsCachedJniForSelfCall)
 
     ASSERT_TRUE(result.ok) << result.reason;
     // Off：自递归退回 cached JNI（保 JVM 栈帧语义，issue #814）。
-    // 负向断言要带实参强转——只写函数名会命中函数定义本身那一行。
+    // 负向断言要带实参强转，只写函数名会命中函数定义本身那一行。
     EXPECT_EQ(result.source.find("regc_InlineRegC_self__I_I((int32_t)("), std::string::npos)
         << result.source;
     EXPECT_NE(result.source.find("mj2x_regc_static_method_cache"), std::string::npos)
@@ -1141,7 +1141,7 @@ TEST(RegCTest, AllowsDirectCallFollowsTierAndClassBoundary)
 // ---- POD struct 降级（issue #17）----
 //
 // 纯原生字段 + 不逃逸的实例降级为 C struct：字段访问走 `->成员`，零 JNI。
-// 别名必须是指针——值语义的 struct 拷贝会让同一对象的多个寄存器变成互不影响
+// 别名必须是指针，值语义的 struct 拷贝会让同一对象的多个寄存器变成互不影响
 // 的副本，与 Java 引用语义不等价（实测产物会算错结果）。
 
 TEST(RegCTest, PodStructLowersInstanceFieldAccessToStructMembers)
@@ -1247,7 +1247,7 @@ TEST(RegCTest, ComputedJumpsOffKeepsLiteralCaseKeys)
 }
 
 // 发射器直连路径没有 TU 头部注册表（key 表无处安放），按设计降级为按原始 case
-// key 分派。这条钉住"降级不报错、仍产出正确 switch"——真实表发射由
+// key 分派。这条钉住"降级不报错、仍产出正确 switch"，真实表发射由
 // regc_backend_test.cpp 的 backend 级用例守。
 TEST(RegCTest, ComputedJumpsDegradesGracefullyWithoutTuRegistry)
 {

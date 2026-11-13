@@ -45,7 +45,7 @@ struct CliOptions
     std::string              cmakeProjectDir;
     std::string              xmakeProjectDir;
     /// 生成 native 工程的优化级别（`0`/`1`/`2`/`3`/`s`），默认 "2"。
-    /// 控制 CFF 平坦化会不会被宿主编译器优化掉——见 capabilities §3 CFF 边界。
+    /// 控制 CFF 平坦化会不会被宿主编译器优化掉，见 capabilities §3 CFF 边界。
     std::string              nativeOptLevel = "2";
     std::string              nativeAnnotation;
     std::vector<std::string> nativeMethodPrefixes;
@@ -123,8 +123,8 @@ struct CliOptions
     std::string              vmc4TraceSurface;   ///< 非空时写 expected trace surface 文件
     bool                     vmc4EncryptProgram  = false; ///< VMC4 程序 blob at-rest 加密
     bool                     vmc4LazyDecrypt     = false; ///< VMC4 程序 blob 分块懒解密（要求 encrypt_program）
-    bool                     vmc4BlockLazyDecrypt = false; ///< VMC4 块粒度链式懒解密（要求 encrypt_program；与 lazy_decrypt 互斥，#1116 切片 B）
-    bool                     vmc4ShuffleBlocks   = false; ///< VMC4 编码期块乱序（issue #1116 切片 A）
+    bool                     vmc4BlockLazyDecrypt = false; ///< VMC4 块粒度链式懒解密（要求 encrypt_program；与 lazy_decrypt 互斥，#1116）
+    bool                     vmc4ShuffleBlocks   = false; ///< VMC4 编码期块乱序（issue #1116）
     bool                     vmc4SuperOps        = false; ///< VMC4 super-operator 融合（issue #9）
     bool                     vmc4Fragment        = false; ///< VMC4 指令碎片化（issue #9）
     int                      vmc4Regfile         = 0;     ///< VMC4 寄存器文件定长化池顶（0 = 关，issue #10）
@@ -138,6 +138,9 @@ struct CliOptions
     std::uint32_t            nativeLibKey         = 0;   ///< native lib 加密密钥（--native-lib-key，hex）
     bool                     nativeLibKeySelected = false;
     std::string              nativeLibPackHook;          ///< 嵌入前外部处理钩子（--native-lib-pack-hook）
+    /// 主清单声明 Enable-Native-Access（--enable-native-access，issue #58；
+    /// 默认关 = 不声明，打开 = 嵌入时写入/合并，仅对 java -jar 形态生效）。
+    bool                     enableNativeAccess   = false;
     /// 日志级别（配置键 log_quiet / log_verbose；CLI --quiet/--verbose 优先）。
     bool                     quiet                = false;
     bool                     verbose              = false;
@@ -207,7 +210,7 @@ bool parseBackendName(const std::string& name, CEmitterBackend& backend);
 
 /// @brief 注册表 + CLI 特殊参数 → ca::opt 根命令定义（CLI 解析单源）。
 ///
-/// 参数类型映射：Bool→Flag、StringList→StringList、其余→String——值语义
+/// 参数类型映射：Bool→Flag、StringList→StringList、其余→String，值语义
 /// 校验（Int 的 base0/范围、UInt64/Hex/Enum）统一留在 parseCli 单一校验源，
 /// opt 只做 argv 结构归一。特殊参数：config/lang（String）、
 /// dump-config-schema/template（OptionalString：裸=stdout，=file 写文件，
