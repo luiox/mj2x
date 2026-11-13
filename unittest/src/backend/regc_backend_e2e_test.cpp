@@ -465,6 +465,38 @@ TEST_F(RegCBackendE2E, NullOperandSemanticsRoundTrip)
             });
 }
 
+/// null 比较指针化（发射面 Compare 对 NullLiteral 特判为纯指针比较）的 exec 级
+/// 验证：ifnull/ifnonnull 双极性、null 字面量在左右两侧、acmp 同一对象与不同
+/// 对象。基准 JVM 与 protected 输出必须一致（JNI 规范下 null 引用恒为 C NULL，
+/// IsSameObject(x, NULL) 与 x == NULL 恒等价；acmp 仍走 IsSameObject）。
+TEST_F(RegCBackendE2E, NullCompareSemanticsRoundTrip)
+{
+    runCase("RegCNullCompare",
+            "public class RegCNullCompare {\n"
+            "  static Object held;\n"
+            "  public static int ifNullOnNull() { Object o = null; return o == null ? 11 : 12; }\n"
+            "  public static int ifNonNullNonNull(Object o) { return o != null ? 13 : 14; }\n"
+            "  public static int literalLeftSide(Object o) { return null == o ? 19 : 20; }\n"
+            "  public static int sameObjectIdentity() {\n"
+            "    Object a = new Object(); held = a; Object b = held;\n"
+            "    return a == b ? 15 : 16;\n"
+            "  }\n"
+            "  public static int distinctObjectsNotSame() {\n"
+            "    Object a = new Object(); Object b = new Object();\n"
+            "    return a != b ? 17 : 18;\n"
+            "  }\n"
+            "}\n",
+            {
+                {"ifNullOnNull()", "RegCNullCompare.ifNullOnNull()"},
+                {"ifNonNullNonNull(new Object())", "RegCNullCompare.ifNonNullNonNull(new Object())"},
+                {"ifNonNullNonNull(null)", "RegCNullCompare.ifNonNullNonNull(null)"},
+                {"literalLeftSide(new Object())", "RegCNullCompare.literalLeftSide(new Object())"},
+                {"literalLeftSide(null)", "RegCNullCompare.literalLeftSide(null)"},
+                {"sameObjectIdentity()", "RegCNullCompare.sameObjectIdentity()"},
+                {"distinctObjectsNotSame()", "RegCNullCompare.distinctObjectsNotSame()"},
+            });
+}
+
 TEST_F(RegCBackendE2E, SystemArraycopyRoundTrip)
 {
     runCase("RegCNativeArrayCopy",

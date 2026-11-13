@@ -613,11 +613,24 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
     }
     case RegInstructionKind::Compare:
         // REF 比较（acmp / 与 null 比较）：JNI local ref 是句柄，同一对象的两个不同
-        // local ref 句柄指针不相等，裸 void* 比较会误判。必须用 IsSameObject 判定对象
-        // 同一性（对 NULL 也正确：IsSameObject(x, NULL) 当且仅当 x 为 null 时为真）。
-        // acmp 在字节码只有 eq/ne 两种谓词。
+        // local ref 句柄指针不相等，双侧都是值时裸 void* 比较会误判，必须用
+        // IsSameObject 判定对象同一性。acmp 在字节码只有 eq/ne 两种谓词。
+        // null 特判：JNI 规范保证 null 引用恒为 C NULL 指针，IsSameObject(x, NULL)
+        // 与纯指针比较 x == NULL 恒等价，无需跨 JNI 边界；ifnull/ifnonnull 是生成
+        // 代码最高频的守卫形态（循环条件、判空），特判省掉每次比较 1 次 JNI upcall。
         if (ins.lhs.type == SSAType::REF || ins.rhs.type == SSAType::REF) {
             const std::string destName = regName(ins.dest.id);
+            const bool lhsNull = ins.lhs.kind == RegOperandKind::NullLiteral;
+            const bool rhsNull = ins.rhs.kind == RegOperandKind::NullLiteral;
+            if (lhsNull || rhsNull) {
+                const std::string refOperand = codegen::exprCast(
+                    "jobject",
+                    operandExpr(lhsNull ? ins.rhs : ins.lhs).to_std_string());
+                out.assign(destName,
+                           codegen::exprParen(codegen::exprBinop(compareOp(ins.comparePredicate),
+                                                                 refOperand, "NULL")));
+                return true;
+            }
             const std::string sameObject = codegen::exprCall(
                 "(*_mj2x_regc_env)->IsSameObject",
                 {"_mj2x_regc_env", codegen::exprCast("jobject", operandExpr(ins.lhs).to_std_string()),

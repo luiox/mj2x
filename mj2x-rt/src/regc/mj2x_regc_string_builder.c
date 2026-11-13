@@ -5,6 +5,7 @@
 #endif
 
 #include "regc/mj2x_regc_crt.h"
+#include "regc/mj2x_regc_runtime.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -210,23 +211,36 @@ static mj2x_regc_status mj2x_string_builder_pending_or_oom(mj2x_regc_context* co
     return MJ2X_REGC_STATUS_OUT_OF_MEMORY;
 }
 
-static mj2x_regc_status mj2x_string_builder_append_value_of(mj2x_regc_context*   context,
+/* ---- 进程级解析缓存 ----
+ * jclass 一律经 _mj2x_regc_cached_class(内部 NewGlobalRef + CAS 发布)钉住,
+ * jmethodID 在类存活期间恒等。解析成功才写槽,失败不写、下次重试;多线程
+ * 首写竞态双方解析出同值,覆写无害(与 runtime.c 缓存契约一致)。 */
+static mj2x_regc_static_method_cache mj2x_string_builder_value_of_f32_cache = {
+    "java/lang/String", "valueOf", "(F)Ljava/lang/String;", NULL, NULL};
+static mj2x_regc_static_method_cache mj2x_string_builder_value_of_f64_cache = {
+    "java/lang/String", "valueOf", "(D)Ljava/lang/String;", NULL, NULL};
+/* String 特化判定只缓存 jclass 本身:IsInstanceOf 的结果取决于 value 的
+ * 运行时类型,逐调用判定,不能缓存判定结果。 */
+static mj2x_regc_class_cache mj2x_string_builder_string_class_cache = {"java/lang/String", NULL};
+/* CharSequence.charAt 按声明 owner 解析一次,CallCharMethod 按 receiver 实际
+ * 类虚分派(与 runtime.c _mj2x_regc_cached_owner_method 同契约),跨实现复用安全。 */
+static mj2x_regc_class_cache mj2x_string_builder_char_sequence_class_cache = {
+    "java/lang/CharSequence", NULL};
+static jmethodID mj2x_string_builder_char_at_method = NULL;
+
+static mj2x_regc_status mj2x_string_builder_append_value_of(mj2x_regc_context* context,
                                                             mj2x_string_builder* state,
-                                                            const char* desc, jvalue value,
-                                                            const char* operation)
+                                                            mj2x_regc_static_method_cache* cache,
+                                                            jvalue value, const char* operation)
 {
     JNIEnv* env = mj2x_string_builder_env(context);
     if (env == NULL) return mj2x_string_builder_invalid_state(context, operation);
 
-    jclass string_class = (*env)->FindClass(env, "java/lang/String");
-    if (string_class == NULL) return mj2x_string_builder_pending_or_oom(context, env, operation);
-    jmethodID value_of = (*env)->GetStaticMethodID(env, string_class, "valueOf", desc);
-    if (value_of == NULL) {
-        (*env)->DeleteLocalRef(env, string_class);
+    jmethodID value_of = _mj2x_regc_cached_static_method(cache);
+    if (value_of == NULL || cache->ownerClass == NULL) {
         return mj2x_string_builder_pending_or_oom(context, env, operation);
     }
-    jstring text = (jstring)(*env)->CallStaticObjectMethodA(env, string_class, value_of, &value);
-    (*env)->DeleteLocalRef(env, string_class);
+    jstring text = (jstring)(*env)->CallStaticObjectMethodA(env, cache->ownerClass, value_of, &value);
     if (text == NULL || (*env)->ExceptionCheck(env)) {
         return mj2x_string_builder_pending_or_oom(context, env, operation);
     }
@@ -337,17 +351,10 @@ mj2x_regc_status mj2x_string_builder_append_object(mj2x_regc_context*   context,
 
     JNIEnv* env = mj2x_string_builder_env(context);
     if (env == NULL) return mj2x_string_builder_invalid_state(context, "StringBuilder.append");
-    jclass object_class = (*env)->FindClass(env, "java/lang/Object");
-    if (object_class == NULL)
-        return mj2x_string_builder_pending_or_oom(context, env, "StringBuilder.append");
-    jmethodID to_string =
-        (*env)->GetMethodID(env, object_class, "toString", "()Ljava/lang/String;");
-    if (to_string == NULL) {
-        (*env)->DeleteLocalRef(env, object_class);
-        return mj2x_string_builder_pending_or_oom(context, env, "StringBuilder.append");
-    }
-    jstring text = (jstring)(*env)->CallObjectMethod(env, (jobject)value, to_string);
-    (*env)->DeleteLocalRef(env, object_class);
+    /* toString 经运行时角色缓存(_mj2x_rt_object_to_string_method_cache)解析:
+     * jmethodID/jclass 恒等,命中后 0 次解析 JNI;按 receiver 实际类虚分派,
+     * 与原 FindClass(Object)+GetMethodID+CallObjectMethod 语义一致。 */
+    jstring text = (jstring)_mj2x_intrinsic_object_to_string(context, value);
     if (text == NULL || (*env)->ExceptionCheck(env)) {
         return mj2x_string_builder_pending_or_oom(context, env, "StringBuilder.append");
     }
@@ -372,15 +379,13 @@ static mj2x_regc_status mj2x_string_builder_char_sequence_length(mj2x_regc_conte
     }
     JNIEnv* env = mj2x_string_builder_env(context);
     if (env == NULL) return mj2x_string_builder_invalid_state(context, operation);
-    jclass string_class = (*env)->FindClass(env, "java/lang/String");
+    jclass string_class = _mj2x_regc_cached_class(&mj2x_string_builder_string_class_cache);
     if (string_class == NULL) return mj2x_string_builder_pending_or_oom(context, env, operation);
     if ((*env)->IsInstanceOf(env, (jobject)value, string_class)) {
         *out_length = (int32_t)(*env)->GetStringLength(env, (jstring)value);
-        (*env)->DeleteLocalRef(env, string_class);
         return (*env)->ExceptionCheck(env) ? MJ2X_REGC_STATUS_PENDING_EXCEPTION
                                            : MJ2X_REGC_STATUS_OK;
     }
-    (*env)->DeleteLocalRef(env, string_class);
 
     jclass value_class = (*env)->GetObjectClass(env, (jobject)value);
     if (value_class == NULL) return mj2x_string_builder_pending_or_oom(context, env, operation);
@@ -419,49 +424,46 @@ mj2x_regc_status mj2x_string_builder_append_char_sequence_range(mj2x_regc_contex
 
     JNIEnv* env = mj2x_string_builder_env(context);
     if (env == NULL) return mj2x_string_builder_invalid_state(context, operation);
-    jclass string_class = (*env)->FindClass(env, "java/lang/String");
+    jclass string_class = _mj2x_regc_cached_class(&mj2x_string_builder_string_class_cache);
     if (string_class == NULL) return mj2x_string_builder_pending_or_oom(context, env, operation);
     if ((*env)->IsInstanceOf(env, (jobject)value, string_class)) {
         const jchar* chars = (*env)->GetStringChars(env, (jstring)value, NULL);
-        (*env)->DeleteLocalRef(env, string_class);
         if (chars == NULL) return mj2x_string_builder_pending_or_oom(context, env, operation);
         status =
             mj2x_string_builder_append_utf16(context, state, (const uint16_t*)chars + start, count);
         (*env)->ReleaseStringChars(env, (jstring)value, chars);
         return status;
     }
-    (*env)->DeleteLocalRef(env, string_class);
 
     if (count > (size_t)-1 / sizeof(uint16_t)) {
         mj2x_regc_report_status(context, MJ2X_REGC_STATUS_OUT_OF_MEMORY, operation);
         return MJ2X_REGC_STATUS_OUT_OF_MEMORY;
+    }
+    /* charAt 的 jmethodID 恒等,首次解析后写槽复用;失败不写、下次重试。 */
+    jclass char_sequence_class =
+        _mj2x_regc_cached_class(&mj2x_string_builder_char_sequence_class_cache);
+    if (char_sequence_class == NULL)
+        return mj2x_string_builder_pending_or_oom(context, env, operation);
+    if (mj2x_string_builder_char_at_method == NULL) {
+        mj2x_string_builder_char_at_method =
+            (*env)->GetMethodID(env, char_sequence_class, "charAt", "(I)C");
+        if (mj2x_string_builder_char_at_method == NULL)
+            return mj2x_string_builder_pending_or_oom(context, env, operation);
     }
     uint16_t* units = (uint16_t*)malloc(count * sizeof(uint16_t));
     if (units == NULL) {
         mj2x_regc_report_status(context, MJ2X_REGC_STATUS_OUT_OF_MEMORY, operation);
         return MJ2X_REGC_STATUS_OUT_OF_MEMORY;
     }
-    jclass value_class = (*env)->GetObjectClass(env, (jobject)value);
-    if (value_class == NULL) {
-        free(units);
-        return mj2x_string_builder_pending_or_oom(context, env, operation);
-    }
-    jmethodID char_at = (*env)->GetMethodID(env, value_class, "charAt", "(I)C");
-    if (char_at == NULL) {
-        (*env)->DeleteLocalRef(env, value_class);
-        free(units);
-        return mj2x_string_builder_pending_or_oom(context, env, operation);
-    }
     for (size_t i = 0; i < count; ++i) {
         units[i] = (uint16_t)(*env)->CallCharMethod(
-            env, (jobject)value, char_at, (jint)(start + (int32_t)i));
+            env, (jobject)value, mj2x_string_builder_char_at_method,
+            (jint)(start + (int32_t)i));
         if ((*env)->ExceptionCheck(env)) {
-            (*env)->DeleteLocalRef(env, value_class);
             free(units);
             return MJ2X_REGC_STATUS_PENDING_EXCEPTION;
         }
     }
-    (*env)->DeleteLocalRef(env, value_class);
     status = mj2x_string_builder_append_utf16(context, state, units, count);
     free(units);
     return status;
@@ -622,7 +624,8 @@ mj2x_regc_status mj2x_string_builder_append_f32(mj2x_regc_context*   context,
     jvalue argument;
     argument.f = (jfloat)value;
     return mj2x_string_builder_append_value_of(
-        context, state, "(F)Ljava/lang/String;", argument, "StringBuilder.append float");
+        context, state, &mj2x_string_builder_value_of_f32_cache, argument,
+        "StringBuilder.append float");
 }
 
 mj2x_regc_status mj2x_string_builder_append_f64(mj2x_regc_context*   context,
@@ -631,7 +634,8 @@ mj2x_regc_status mj2x_string_builder_append_f64(mj2x_regc_context*   context,
     jvalue argument;
     argument.d = (jdouble)value;
     return mj2x_string_builder_append_value_of(
-        context, state, "(D)Ljava/lang/String;", argument, "StringBuilder.append double");
+        context, state, &mj2x_string_builder_value_of_f64_cache, argument,
+        "StringBuilder.append double");
 }
 
 mj2x_regc_status mj2x_string_builder_to_jstring(mj2x_regc_context*         context,
@@ -661,9 +665,30 @@ mj2x_regc_status mj2x_string_builder_to_jstring(mj2x_regc_context*         conte
     return MJ2X_REGC_STATUS_OK;
 }
 
+/* 物化目标缓存(StringBuilder/StringBuffer 各一):类与构造、append 两个
+ * jmethodID 都恒等,解析成功才写槽,失败不写、下次重试;首写竞态同值无害。 */
+typedef struct mj2x_string_builder_materialize_cache
+{
+    mj2x_regc_class_cache class_cache;
+    const char*           append_desc;
+    jmethodID             constructor;
+    jmethodID             append;
+} mj2x_string_builder_materialize_cache;
+
+static mj2x_string_builder_materialize_cache mj2x_string_builder_materialize_sb_cache = {
+    {"java/lang/StringBuilder", NULL},
+    "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+    NULL,
+    NULL};
+static mj2x_string_builder_materialize_cache mj2x_string_builder_materialize_sbuf_cache = {
+    {"java/lang/StringBuffer", NULL},
+    "(Ljava/lang/String;)Ljava/lang/StringBuffer;",
+    NULL,
+    NULL};
+
 static mj2x_regc_status mj2x_string_builder_materialize_as(
-    mj2x_regc_context* context, const mj2x_string_builder* state, const char* class_name,
-    const char* append_desc, const char* operation, mj2x_ref* out_value)
+    mj2x_regc_context* context, const mj2x_string_builder* state,
+    mj2x_string_builder_materialize_cache* cache, const char* operation, mj2x_ref* out_value)
 {
     if (out_value == NULL) {
         mj2x_regc_report_status(context, MJ2X_REGC_STATUS_INVALID_ARGUMENT, operation);
@@ -677,32 +702,32 @@ static mj2x_regc_status mj2x_string_builder_materialize_as(
     if (status != MJ2X_REGC_STATUS_OK) return status;
 
     JNIEnv* env         = mj2x_string_builder_env(context);
-    jclass  value_class = (*env)->FindClass(env, class_name);
+    jclass  value_class = _mj2x_regc_cached_class(&cache->class_cache);
     if (value_class == NULL) {
         (*env)->DeleteLocalRef(env, (jobject)string_ref);
         return mj2x_string_builder_pending_or_oom(context, env, operation);
     }
-    jmethodID constructor = (*env)->GetMethodID(env, value_class, "<init>", "(I)V");
-    if (constructor == NULL) {
-        (*env)->DeleteLocalRef(env, value_class);
-        (*env)->DeleteLocalRef(env, (jobject)string_ref);
-        return mj2x_string_builder_pending_or_oom(context, env, operation);
+    if (cache->constructor == NULL) {
+        cache->constructor = (*env)->GetMethodID(env, value_class, "<init>", "(I)V");
+        if (cache->constructor == NULL) {
+            (*env)->DeleteLocalRef(env, (jobject)string_ref);
+            return mj2x_string_builder_pending_or_oom(context, env, operation);
+        }
     }
-    jmethodID append = (*env)->GetMethodID(env, value_class, "append", append_desc);
-    if (append == NULL) {
-        (*env)->DeleteLocalRef(env, value_class);
-        (*env)->DeleteLocalRef(env, (jobject)string_ref);
-        return mj2x_string_builder_pending_or_oom(context, env, operation);
+    if (cache->append == NULL) {
+        cache->append = (*env)->GetMethodID(env, value_class, "append", cache->append_desc);
+        if (cache->append == NULL) {
+            (*env)->DeleteLocalRef(env, (jobject)string_ref);
+            return mj2x_string_builder_pending_or_oom(context, env, operation);
+        }
     }
-    jobject result = (*env)->NewObject(env, value_class, constructor, (jint)state->capacity);
+    jobject result = (*env)->NewObject(env, value_class, cache->constructor, (jint)state->capacity);
     if (result == NULL || (*env)->ExceptionCheck(env)) {
-        (*env)->DeleteLocalRef(env, value_class);
         (*env)->DeleteLocalRef(env, (jobject)string_ref);
         return mj2x_string_builder_pending_or_oom(context, env, operation);
     }
-    jobject append_result = (*env)->CallObjectMethod(env, result, append, (jstring)string_ref);
+    jobject append_result = (*env)->CallObjectMethod(env, result, cache->append, (jstring)string_ref);
     if (append_result != NULL) (*env)->DeleteLocalRef(env, append_result);
-    (*env)->DeleteLocalRef(env, value_class);
     (*env)->DeleteLocalRef(env, (jobject)string_ref);
     if ((*env)->ExceptionCheck(env)) {
         (*env)->DeleteLocalRef(env, result);
@@ -716,12 +741,9 @@ mj2x_regc_status mj2x_string_builder_materialize(mj2x_regc_context*         cont
                                                  const mj2x_string_builder* state,
                                                  mj2x_ref*                  out_builder)
 {
-    return mj2x_string_builder_materialize_as(context,
-                                              state,
-                                              "java/lang/StringBuilder",
-                                              "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
-                                              "StringBuilder.materialize",
-                                              out_builder);
+    return mj2x_string_builder_materialize_as(
+        context, state, &mj2x_string_builder_materialize_sb_cache, "StringBuilder.materialize",
+        out_builder);
 }
 
 mj2x_regc_status mj2x_string_builder_length(mj2x_regc_context*         context,
@@ -1010,13 +1032,9 @@ mj2x_regc_status mj2x_string_buffer_materialize(mj2x_regc_context*        contex
 {
     mj2x_string_builder* builder = (mj2x_string_builder*)state;
     mj2x_string_builder_lock(builder);
-    mj2x_regc_status status =
-        mj2x_string_builder_materialize_as(context,
-                                           builder,
-                                           "java/lang/StringBuffer",
-                                           "(Ljava/lang/String;)Ljava/lang/StringBuffer;",
-                                           "StringBuffer.materialize",
-                                           out_buffer);
+    mj2x_regc_status status = mj2x_string_builder_materialize_as(
+        context, builder, &mj2x_string_builder_materialize_sbuf_cache, "StringBuffer.materialize",
+        out_buffer);
     mj2x_string_builder_unlock(builder);
     return status;
 }

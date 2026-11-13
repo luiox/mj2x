@@ -1,4 +1,5 @@
 #include "regc/mj2x_regc_crt.h"
+#include "regc/mj2x_regc_runtime.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -78,6 +79,15 @@ static int mj2x_string_is_literal_split_pattern(const jchar* pattern, jsize leng
     return 1;
 }
 
+/* ---- 进程级解析缓存 ----
+ * jclass 经 _mj2x_regc_cached_class(内部 NewGlobalRef + CAS 发布)钉住,
+ * jmethodID 在类存活期间恒等。解析成功才写槽,失败不写、下次重试;多线程
+ * 首写竞态双方解析出同值,覆写无害(与 runtime.c 缓存契约一致)。 */
+static mj2x_regc_class_cache mj2x_string_split_string_class_cache = {"java/lang/String", NULL};
+/* split 两个签名(有无 limit 参数)各一槽,jmethodID 恒等。 */
+static jmethodID mj2x_string_split_method       = NULL;
+static jmethodID mj2x_string_split_limit_method = NULL;
+
 static mj2x_regc_status mj2x_string_split_jdk(mj2x_regc_context* context, mj2x_ref value,
                                               mj2x_ref regex, int32_t limit, int has_limit,
                                               mj2x_ref* out_array)
@@ -85,20 +95,20 @@ static mj2x_regc_status mj2x_string_split_jdk(mj2x_regc_context* context, mj2x_r
     const char* operation = "String.split";
     JNIEnv*     env       = mj2x_string_env(context);
     if (env == NULL) return mj2x_string_invalid_state(context, operation);
-    jclass string_class = (*env)->FindClass(env, "java/lang/String");
+    jclass string_class = _mj2x_regc_cached_class(&mj2x_string_split_string_class_cache);
     if (string_class == NULL) return mj2x_string_pending_or_oom(context, env, operation);
-    const char* desc  = has_limit ? "(Ljava/lang/String;I)[Ljava/lang/String;"
-                                  : "(Ljava/lang/String;)[Ljava/lang/String;";
-    jmethodID   split = (*env)->GetMethodID(env, string_class, "split", desc);
-    if (split == NULL) {
-        (*env)->DeleteLocalRef(env, string_class);
-        return mj2x_string_pending_or_oom(context, env, operation);
+    jmethodID* split_slot = has_limit ? &mj2x_string_split_limit_method : &mj2x_string_split_method;
+    if (*split_slot == NULL) {
+        *split_slot = (*env)->GetMethodID(
+            env, string_class, "split",
+            has_limit ? "(Ljava/lang/String;I)[Ljava/lang/String;"
+                      : "(Ljava/lang/String;)[Ljava/lang/String;");
+        if (*split_slot == NULL) return mj2x_string_pending_or_oom(context, env, operation);
     }
-    jobject result =
-        has_limit
-            ? (*env)->CallObjectMethod(env, (jobject)value, split, (jstring)regex, (jint)limit)
-            : (*env)->CallObjectMethod(env, (jobject)value, split, (jstring)regex);
-    (*env)->DeleteLocalRef(env, string_class);
+    jobject result = has_limit
+                         ? (*env)->CallObjectMethod(
+                               env, (jobject)value, *split_slot, (jstring)regex, (jint)limit)
+                         : (*env)->CallObjectMethod(env, (jobject)value, *split_slot, (jstring)regex);
     if (result == NULL || (*env)->ExceptionCheck(env)) {
         return mj2x_string_pending_or_oom(context, env, operation);
     }
@@ -155,7 +165,7 @@ static mj2x_regc_status mj2x_string_split_literal(mj2x_regc_context* context, mj
         while (part_count > 0 && lengths[part_count - 1] == 0) --part_count;
     }
 
-    jclass string_class = (*env)->FindClass(env, "java/lang/String");
+    jclass string_class = _mj2x_regc_cached_class(&mj2x_string_split_string_class_cache);
     if (string_class == NULL) {
         free(lengths);
         free(starts);
@@ -163,7 +173,6 @@ static mj2x_regc_status mj2x_string_split_literal(mj2x_regc_context* context, mj
         return mj2x_string_pending_or_oom(context, env, operation);
     }
     jobjectArray result = (*env)->NewObjectArray(env, (jsize)part_count, string_class, NULL);
-    (*env)->DeleteLocalRef(env, string_class);
     if (result == NULL) {
         free(lengths);
         free(starts);

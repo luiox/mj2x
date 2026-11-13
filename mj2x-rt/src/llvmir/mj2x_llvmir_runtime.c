@@ -89,8 +89,11 @@ void mj2x_llvm_throw(JNIEnv* env, void* obj)
 void* mj2x_llvm_string_const(JNIEnv* env, const char* utf8) { return (*env)->NewStringUTF(env, utf8); }
 
 // JNI local ref 是句柄:同一性必须走 IsSameObject(对齐 RegC regc_flow.cpp)。
+// null 快路径:JNI 规范保证 null 引用恒为 C NULL,IsSameObject(x, NULL) 与
+// x == NULL 恒等价;双侧非 null 仍走 IsSameObject。
 int mj2x_llvm_ref_eq(JNIEnv* env, void* a, void* b)
 {
+    if (a == NULL || b == NULL) return a == b;
     return (*env)->IsSameObject(env, a, b) ? 1 : 0;
 }
 
