@@ -908,8 +908,27 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             // receiver 不可能是已转换类 → cached（owner 解析）语义正确且省 JNI。
             return cls == nullptr || cls->isLibrary;
         }();
+        // 编译索引内的具体类 owner（非抽象/非接口）：按声明 owner 解析 jmethodID
+        // 安全（GetMethodID 落到具体方法条目，Call*MethodA 按 receiver 实际类
+        // 虚分派，native 实现/未转换子类覆写都经 JVM 标准分派），与 libraryOwner
+        // 的 owner 槽口径同一机制。抽象类 owner 保守排除：runtime 侧
+        // _mj2x_regc_cached_instance_method 注释记录过抽象条目 owner 解析的
+        // ACCESS_VIOLATION 观测，不扩大面（其调用点维持 resolved/cached 原路径）。
+        const bool concreteOwner = [&]() {
+            if (state.classIndex == nullptr) return false;
+            CompilerClass* cls = state.classIndex->getClass(ins.method.owner.to_std_string());
+            if (cls == nullptr || cls->isLibrary || cls->dom == nullptr) return false;
+            return (cls->dom->access & (Opcodes::ACC_ABSTRACT | Opcodes::ACC_INTERFACE)) == 0;
+        }();
+        // Off 档（默认）无直调收益：resolved 检查链 fn 恒 NULL（#814 的 JVM 栈帧
+        // 语义由 Call*MethodA 保证），具体类 owner 的 receiver 类验证是纯开销，
+        // 与库类 owner 同口径走 owner 槽缓存（0-JNI 命中 + Call*MethodA 虚分派，
+        // 同样产生 JVM 栈帧）。直调档 fn 非 NULL，resolved 命中换直调收益，
+        // 维持原路径。
+        const bool concreteOwnerShort = concreteOwner &&
+                                        state.directCallTier == codegen::DirectCallTier::Off;
         const bool useResolved = dynamicInstance && state.resolvedDispatch && !state.traceCalls &&
-                                 !privateThis && !libraryOwner &&
+                                 !privateThis && !libraryOwner && !concreteOwnerShort &&
                                  // resolved 分派按 receiver 实际类解析 + 虚调用，
                                  // INVOKESPECIAL 需要 owner 声明 + CallNonvirtual。
                                  ins.method.invokeOpcode != Opcodes::INVOKESPECIAL;
@@ -990,7 +1009,11 @@ bool emitInstruction(CSourceStream& out, const RegInstruction& ins,
             else if (inlineCached) {
                 emitCachedCall(u, state, ins, staticCall,
                                staticCall ? cacheName : instanceCacheName,
-                               argumentExpressions, libraryOwner && !staticCall);
+                               argumentExpressions,
+                               // 库类/具体类 owner 按 owner 槽解析（0-JNI 命中，
+                               // Call*MethodA 虚分派保语义）；抽象类 owner 维持
+                               // cached_instance 的 receiver 类验证。
+                               (libraryOwner || concreteOwner) && !staticCall);
             }
             else if (ins.hasDest) {
                 u.appendLineStart(destName).append(" = ");

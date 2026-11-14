@@ -33,14 +33,17 @@ using namespace jbytecode::tree;
 
 namespace {
 
-std::unique_ptr<MethodNode> makeMethod(int access, const std::string& name, const std::string& desc,
+/// 构造树方法节点。name/desc 取 const char*：Utf8StringRef 是非 owning 视图，
+/// 字面量静态存储保证引用存活；经 classFromTree 序列化往返的 owner 方法节点
+/// 必须传字面量（传 std::string 中转会悬垂，序列化读到 clobbered 栈内存）。
+std::unique_ptr<MethodNode> makeMethod(int access, const char* name, const char* desc,
                                        std::initializer_list<AbstractInsnNode*> insns, int maxStack,
                                        int maxLocals)
 {
     std::vector<ca::str::Utf8StringRef> noExcepts;
     auto                                mn = std::make_unique<MethodNode>(access,
-                                           ca::str::Utf8StringRef::from_cstr(name.c_str()),
-                                           ca::str::Utf8StringRef::from_cstr(desc.c_str()),
+                                           ca::str::Utf8StringRef::from_cstr(name),
+                                           ca::str::Utf8StringRef::from_cstr(desc),
                                            ca::str::Utf8StringRef::from_cstr(""),
                                            noExcepts);
     mn->maxStack                           = maxStack;
@@ -60,7 +63,8 @@ RegCEmitResult emitRegC(const std::string& name, const std::string& desc,
                         bool podStruct = false, bool computedJumps = false)
 {
     auto mn = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name.c_str(), desc.c_str(), insns, maxStack,
+        maxLocals);
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
@@ -936,8 +940,8 @@ TEST(RegCTest, LowersHandlerLocalCopiesForExceptionalEdges)
     const std::string methodDesc = "(Ljava/lang/Object;)I";
     auto mn      = makeMethod(
         Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC,
-        methodName,
-        methodDesc,
+        methodName.c_str(),
+        methodDesc.c_str(),
         {
             new VarInsnNode(Opcodes::ALOAD, 0),
             new InsnNode(Opcodes::DUP),
@@ -1027,15 +1031,19 @@ TEST(RegCTest, EmitsIntegerDivRemHelpers)
 }
 
 /// 带 resolved dispatch + convertedFunctions 的发射辅助（静态绑定测试用）。
-/// converted 表里预置目标方法键 -> regc_* 函数名。
+/// converted 表里预置目标方法键 -> regc_* 函数名。index 可选：owner 元数据
+/// （具体类判定）；resolvedDispatch=false 模拟 jar 模式管线。
 RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc,
                                 std::initializer_list<AbstractInsnNode*> insns, int maxStack,
                                 int maxLocals, std::string& reason,
                                 const std::unordered_map<std::string, std::string>& converted,
-                                codegen::DirectCallTier tier = codegen::DirectCallTier::Off)
+                                codegen::DirectCallTier tier = codegen::DirectCallTier::Off,
+                                CompilerIndex* index                        = nullptr,
+                                bool          resolvedDispatch              = true)
 {
     auto mn = makeMethod(
-        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name, desc, insns, maxStack, maxLocals);
+        Opcodes::ACC_PUBLIC | Opcodes::ACC_STATIC, name.c_str(), desc.c_str(), insns, maxStack,
+        maxLocals);
 
     ca::str::Utf8StringArena arena;
     CodeConverter            converter(arena);
@@ -1058,10 +1066,285 @@ RegCEmitResult emitRegCResolved(const std::string& name, const std::string& desc
 
     RegCCachePool            pool;
     codegen::CodeOptions     options;
-    options.resolvedDispatch = true;
+    options.resolvedDispatch = resolvedDispatch;
     options.directCallTier   = tier;
-    RegCEmitter emitter(&pool, options, nullptr, 0, nullptr, &converted, nullptr);
+    RegCEmitter emitter(&pool, options, nullptr, 0, index, &converted, nullptr);
     return emitter.emitFunction(*reg);
+}
+
+/// Off 档（默认）下具体类 owner 的实例调用改走 owner 槽缓存：resolved 检查链
+/// fn 恒 NULL（#814 的 JVM 栈帧语义由 Call*MethodA 保证），receiver 类验证是
+/// 纯验证开销。断言发射 _mj2x_regc_cached_owner_method 且无 resolved 面。
+TEST(RegCTest, ConcreteOwnerOffTierUsesOwnerSlotCache)
+{
+    CompilerIndex index;
+    {
+        auto cn  = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name = ca::str::Utf8StringRef::from_cstr("Bar");
+        cn->version                     = jbytecode::core::Opcodes::V1_8;
+        cn->access                      = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName                   = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        auto im                         = makeMethod(Opcodes::ACC_PUBLIC, "im", "()I",
+                                     {new InsnNode(Opcodes::ICONST_5), new InsnNode(Opcodes::IRETURN)},
+                                     1, 1);
+        cn->methods.push_back(im.get());
+        auto cls = test::classFromTree("Bar", *cn, index.arena());
+        cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+        index.addClass("Bar", std::move(cls));
+    }
+
+    std::string reason;
+    auto        result = emitRegCResolved("caller",
+                                   "(LBar;)I",
+                                   {
+                                       new VarInsnNode(Opcodes::ALOAD, 0),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("im"),
+                                                          ca::str::Utf8StringRef::from_cstr("()I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   1,
+                                   1,
+                                   reason,
+                                   {},
+                                   codegen::DirectCallTier::Off,
+                                   &index);
+    ASSERT_TRUE(result.ok) << reason;
+    EXPECT_NE(result.source.find("_mj2x_regc_cached_owner_method"), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("implClass"), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("IsSameObject"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+/// 抽象类 owner 保守维持 resolved 路径：runtime 侧记录过抽象条目 owner 解析
+/// 的 ACCESS_VIOLATION 观测，本批不扩大面（Off 档也不短路到 owner 槽）。
+TEST(RegCTest, AbstractOwnerKeepsResolvedDispatch)
+{
+    CompilerIndex index;
+    {
+        auto cn  = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name = ca::str::Utf8StringRef::from_cstr("Shape");
+        cn->version   = jbytecode::core::Opcodes::V1_8;
+        cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC | jbytecode::core::Opcodes::ACC_ABSTRACT;
+        cn->superName = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        auto area     = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_ABSTRACT, "area", "()I", {}, 0, 0);
+        cn->methods.push_back(area.get());
+        auto cls = test::classFromTree("Shape", *cn, index.arena());
+        cn->methods.clear();
+        index.addClass("Shape", std::move(cls));
+    }
+
+    std::string reason;
+    auto        result = emitRegCResolved("caller",
+                                   "(LShape;)I",
+                                   {
+                                       new VarInsnNode(Opcodes::ALOAD, 0),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Shape"),
+                                                          ca::str::Utf8StringRef::from_cstr("area"),
+                                                          ca::str::Utf8StringRef::from_cstr("()I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   1,
+                                   1,
+                                   reason,
+                                   {},
+                                   codegen::DirectCallTier::Off,
+                                   &index);
+    ASSERT_TRUE(result.ok) << reason;
+    EXPECT_NE(result.source.find("implClass"), std::string::npos) << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_cached_owner_method"), std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+/// 直调档下具体类 owner 维持 resolved 路径：resolved 命中换 fn 直调收益，
+/// 不做 Off 档短路。
+TEST(RegCTest, DirectTierKeepsResolvedForConcreteOwner)
+{
+    CompilerIndex index;
+    {
+        auto cn  = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name = ca::str::Utf8StringRef::from_cstr("Bar");
+        cn->version                     = jbytecode::core::Opcodes::V1_8;
+        cn->access                      = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName                   = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        auto im                         = makeMethod(Opcodes::ACC_PUBLIC, "im", "()I",
+                                     {new InsnNode(Opcodes::ICONST_5), new InsnNode(Opcodes::IRETURN)},
+                                     1, 1);
+        cn->methods.push_back(im.get());
+        auto cls = test::classFromTree("Bar", *cn, index.arena());
+        cn->methods.clear();
+        index.addClass("Bar", std::move(cls));
+    }
+
+    std::string reason;
+    auto        result = emitRegCResolved("caller",
+                                   "(LBar;)I",
+                                   {
+                                       new VarInsnNode(Opcodes::ALOAD, 0),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("im"),
+                                                          ca::str::Utf8StringRef::from_cstr("()I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   1,
+                                   1,
+                                   reason,
+                                   {},
+                                   codegen::DirectCallTier::All,
+                                   &index);
+    ASSERT_TRUE(result.ok) << reason;
+    EXPECT_NE(result.source.find("implClass"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+/// jar 模式（resolvedDispatch=false）下具体类/库类 owner 同样走 owner 槽：
+/// 与单文件模式口径对齐（此前 jar 模式库类 owner 是 3-JNI cached_instance）。
+TEST(RegCTest, JarModeConcreteOwnerUsesOwnerSlotCache)
+{
+    CompilerIndex index;
+    {
+        auto cn  = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name = ca::str::Utf8StringRef::from_cstr("Bar");
+        cn->version                     = jbytecode::core::Opcodes::V1_8;
+        cn->access                      = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName                   = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        auto im                         = makeMethod(Opcodes::ACC_PUBLIC, "im", "()I",
+                                     {new InsnNode(Opcodes::ICONST_5), new InsnNode(Opcodes::IRETURN)},
+                                     1, 1);
+        cn->methods.push_back(im.get());
+        auto cls = test::classFromTree("Bar", *cn, index.arena());
+        cn->methods.clear();
+        index.addClass("Bar", std::move(cls));
+    }
+
+    std::string reason;
+    auto        result = emitRegCResolved("caller",
+                                   "(LBar;)I",
+                                   {
+                                       new VarInsnNode(Opcodes::ALOAD, 0),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("im"),
+                                                          ca::str::Utf8StringRef::from_cstr("()I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   1,
+                                   1,
+                                   reason,
+                                   {},
+                                   codegen::DirectCallTier::Off,
+                                   &index,
+                                   /*resolvedDispatch=*/false);
+    ASSERT_TRUE(result.ok) << reason;
+    EXPECT_NE(result.source.find("_mj2x_regc_cached_owner_method"), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("IsSameObject"), std::string::npos) << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+/// issue #69 回归：非 final 虚调用 + 编译输入无覆写（converted 表已含目标
+/// 实现）在 Off 档不再免门控直调 —— 无覆写闭包分析对编译输入外子类不成立，
+/// 直调会旁路闭包外覆写；改走 owner 槽（Call*MethodA 虚分派）。此前该形态
+/// 发射 regc_* 直调。
+TEST(RegCTest, NonFinalNoOverrideOffTierFallsToOwnerSlot)
+{
+    CompilerIndex index;
+    {
+        auto cn  = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name = ca::str::Utf8StringRef::from_cstr("Bar");
+        cn->version                     = jbytecode::core::Opcodes::V1_8;
+        cn->access                      = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName                   = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        auto im                         = makeMethod(Opcodes::ACC_PUBLIC, "im", "()I",
+                                     {new InsnNode(Opcodes::ICONST_5), new InsnNode(Opcodes::IRETURN)},
+                                     1, 1);
+        cn->methods.push_back(im.get());
+        auto cls = test::classFromTree("Bar", *cn, index.arena());
+        cn->methods.clear();   // 节点借用（unique_ptr 所有权在测试侧），防 ClassNode 析构误删
+        index.addClass("Bar", std::move(cls));
+    }
+
+    std::string reason;
+    auto        result = emitRegCResolved("caller",
+                                   "(LBar;)I",
+                                   {
+                                       new VarInsnNode(Opcodes::ALOAD, 0),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("im"),
+                                                          ca::str::Utf8StringRef::from_cstr("()I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   1,
+                                   1,
+                                   reason,
+                                   {{"Bar\nim\n()I", "regc_test_Bar_im___I"}},
+                                   codegen::DirectCallTier::Off,
+                                   &index);
+    ASSERT_TRUE(result.ok) << reason;
+    EXPECT_EQ(result.source.find("regc_test_Bar_im___I("), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_cached_owner_method"), std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+/// final 方法在 Off 档保留免门控直调：final 腿静态可证（JVM 禁止覆写，对
+/// 编译输入外子类同样成立），直调语义与虚分派精确一致，且带 NULL receiver
+/// 守卫复现 JNI 调用点的 NPE 语义。
+TEST(RegCTest, FinalMethodOffTierDirectCallRetained)
+{
+    CompilerIndex index;
+    {
+        auto cn  = std::make_unique<jbytecode::tree::ClassNode>();
+        cn->name = ca::str::Utf8StringRef::from_cstr("Bar");
+        cn->version   = jbytecode::core::Opcodes::V1_8;
+        cn->access    = jbytecode::core::Opcodes::ACC_PUBLIC;
+        cn->superName = ca::str::Utf8StringRef::from_cstr("java/lang/Object");
+        auto im       = makeMethod(Opcodes::ACC_PUBLIC | Opcodes::ACC_FINAL, "im", "()I",
+                             {new InsnNode(Opcodes::ICONST_5), new InsnNode(Opcodes::IRETURN)},
+                             1, 1);
+        cn->methods.push_back(im.get());
+        auto cls = test::classFromTree("Bar", *cn, index.arena());
+        cn->methods.clear();
+        index.addClass("Bar", std::move(cls));
+    }
+
+    std::string reason;
+    auto        result = emitRegCResolved("caller",
+                                   "(LBar;)I",
+                                   {
+                                       new VarInsnNode(Opcodes::ALOAD, 0),
+                                       new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                                                          ca::str::Utf8StringRef::from_cstr("Bar"),
+                                                          ca::str::Utf8StringRef::from_cstr("im"),
+                                                          ca::str::Utf8StringRef::from_cstr("()I"),
+                                                          false),
+                                       new InsnNode(Opcodes::IRETURN),
+                                   },
+                                   1,
+                                   1,
+                                   reason,
+                                   {{"Bar\nim\n()I", "regc_test_Bar_im___I"}},
+                                   codegen::DirectCallTier::Off,
+                                   &index);
+    ASSERT_TRUE(result.ok) << reason;
+    EXPECT_NE(result.source.find("regc_test_Bar_im___I("), std::string::npos) << result.source;
+    EXPECT_NE(result.source.find("_mj2x_regc_throw_null(\"instance method call\")"),
+              std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("_mj2x_regc_cached_owner_method"), std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
 }
 
 TEST(RegCTest, EmitsStaticBoundCallForSingleAllocationReceiver)

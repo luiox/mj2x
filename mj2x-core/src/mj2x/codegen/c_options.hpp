@@ -52,11 +52,14 @@ enum class DirectCallTier : uint8_t
 ///
 /// @param tier                生效档位
 /// @param sameClass           目标 owner 与当前方法 owner 相同
-/// @param deterministicVirtual 确定性分派的虚调用（final 方法/owner、无覆写）
+/// @param deterministicVirtual 确定性分派的虚调用（第三参由 tryEmitDirectCall
+///                             按档位计算：Off 档只认 final 方法/final owner
+///                             静态可证腿；non-Off 档含编译输入闭包分析，
+///                             issue #69）
 inline bool allowsDirectCall(DirectCallTier tier, bool sameClass, bool deterministicVirtual)
 {
-    // 确定性虚调用在任何档位都直调：resolved 路径本来就直调 fn，运行时
-    // IsInstanceOf 是纯冗余，直调不引入新的语义差异。
+    // 确定性虚调用在任何档位都直调。Off 档的确定性口径只含 final 静态可证
+    // 腿：闭包外子类覆写不被任何档位旁路（issue #69）。
     if (deterministicVirtual) return true;
     switch (tier) {
     case DirectCallTier::Off: return false;

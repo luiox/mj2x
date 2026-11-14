@@ -128,6 +128,10 @@ WholeProgram makeWholeProgram()
          "    System.out.println(\"store=\" + s.get());\n"
          "    System.out.println(\"arr=\" + Calc.arrSum(4));\n"
          "    System.out.println(\"str=\" + Str.wrap(\"hi\"));\n"
+         "    Shape c = new Circle(3);\n"
+         "    Square q = new Square(5);\n"
+         "    Square r = new Rect(4);\n"
+         "    System.out.println(\"shape=\" + (c.area() + q.area() + r.area() + q.superArea()));\n"
          "    System.out.println(\"ex=\" + Ex.guard(5));\n"
          "    System.out.println(\"ex2=\" + Ex.guard(-2));\n"
          "    System.out.println(\"refl=\" + Refl.name());\n"
@@ -159,6 +163,38 @@ WholeProgram makeWholeProgram()
         {"Str",
          "package app;\n"
          "public class Str { public static String wrap(String s) { return s + \"!\"; } }\n"},
+        // Owner 槽推广（issue #68）调用面：c.area() owner=Shape（抽象类，
+        // 保守排除 → 维持 resolved/cached 原路径）；q.area()/r.area() owner=
+        // Square（具体类 → owner 槽），其中 r 的实际类是未在调用点声明的
+        // 子类 Rect（覆写 area=s*2），验证 Call*MethodA 按 receiver 实际类
+        // 虚分派选中覆写（9+25+8+1=43）；q.superArea() 是 INVOKESPECIAL
+        // CallNonvirtual 面。
+        {"Shape",
+         "package app;\n"
+         "public abstract class Shape {\n"
+         "  public int area() { return 1; }\n"
+         "}\n"},
+        {"Circle",
+         "package app;\n"
+         "public class Circle extends Shape {\n"
+         "  private int r;\n"
+         "  public Circle(int r) { this.r = r; }\n"
+         "  public int area() { return r * r; }\n"
+         "}\n"},
+        {"Square",
+         "package app;\n"
+         "public class Square extends Shape {\n"
+         "  protected int s;\n"
+         "  public Square(int s) { this.s = s; }\n"
+         "  public int area() { return s * s; }\n"
+         "  public int superArea() { return super.area(); }\n"
+         "}\n"},
+        {"Rect",
+         "package app;\n"
+         "public class Rect extends Square {\n"
+         "  public Rect(int s) { super(s); }\n"
+         "  public int area() { return s * 2; }\n"
+         "}\n"},
         {"Ex",
          "package app;\n"
          "public class Ex {\n"

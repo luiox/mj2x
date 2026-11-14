@@ -122,9 +122,37 @@ ca::str::Utf8StringRef addInstanceMethodCache(RegCFunctionEmitState& state,
 /// 判定调用是否确定性分派：静态/特殊调用总是确定；虚调用在目标方法 final、
 /// owner 类 final（无子类可覆盖）、或 owner 的所有编译输入子类（含递归）中
 /// 无同名同描述方法覆写时确定（owner 自身声明的非 final 方法也走覆写分析，
-/// 新版 javac 不给匿名类/其方法设 ACC_FINAL，靠 final 标志会漏判）。
-/// 接口调用保持动态分派。类层级闭包只含编译输入：owner 是编译类时不可能
-/// 存在库（JDK）子类，分析安全。
+/// 判定虚调用是否静态可证无覆写：目标方法 final 或 owner 类 final。两条腿
+/// 由 JVM 语言规则保证（final 禁止覆写），对编译输入外的子类同样成立，
+/// 免门控直调只认这两条（issue #69：编译输入闭包分析对输入外子类不成立，
+/// 闭包外覆写会被直调旁路）。
+bool isFinalDispatch(const RegInstruction& ins, CompilerIndex* classIndex)
+{
+    if (classIndex == nullptr) return false;
+    const CompilerClass* ownerClass =
+        classIndex->getClass(ins.method.owner.to_std_string());
+    if (ownerClass == nullptr || ownerClass->dom == nullptr) return false;
+    if ((ownerClass->dom->access & Opcodes::ACC_FINAL) != 0) return true;
+    const std::string methodName = ins.method.name.to_std_string();
+    const std::string methodDesc = ins.method.desc.to_std_string();
+    for (const auto& member : ownerClass->methods) {
+        if (member.name != methodName) continue;
+        if (member.desc != methodDesc) continue;
+        // 声明为 final → 可证；声明非 final（新版 javac 不给匿名类/方法设
+        // ACC_FINAL）→ 交回调用方决定是否继续闭包分析。
+        if ((member.access & Opcodes::ACC_FINAL) != 0) return true;
+        break;
+    }
+    return false;
+}
+
+/// 判定调用是否确定性分派：静态/特殊调用总是确定；虚调用在 isFinalDispatch
+/// 或 owner 的所有编译输入子类（含递归）中无同名同描述方法覆写时确定
+/// （owner 自身声明的非 final 方法也走覆写分析，新版 javac 不给匿名类/其
+/// 方法设 ACC_FINAL，靠 final 标志会漏判）。接口调用保持动态分派。
+/// 无覆写分析是编译输入闭包推断：non-Off 档（直调已被档位声明接受）的
+/// 直调判定复用；Off 档（默认，语义保护口径）免门控直调只认
+/// isFinalDispatch（issue #69）。
 bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classIndex)
 {
     switch (ins.method.invokeOpcode) {
@@ -136,21 +164,10 @@ bool isDeterministicDispatch(const RegInstruction& ins, CompilerIndex* classInde
     default:
         return false;
     }
+    if (isFinalDispatch(ins, classIndex)) return true;
     if (classIndex == nullptr) return false;
-    const CompilerClass* ownerClass =
-        classIndex->getClass(ins.method.owner.to_std_string());
-    if (ownerClass == nullptr || ownerClass->dom == nullptr) return false;
-    if ((ownerClass->dom->access & Opcodes::ACC_FINAL) != 0) return true;
     const std::string methodName = ins.method.name.to_std_string();
     const std::string methodDesc = ins.method.desc.to_std_string();
-    for (const auto& member : ownerClass->methods) {
-        if (member.name != methodName) continue;
-        if (member.desc != methodDesc) continue;
-        // 声明为 final → 确定；声明非 final（如新版 javac 不给匿名类/方法设
-        // ACC_FINAL）→ 继续做子类覆写分析，而不是直接判动态。
-        if ((member.access & Opcodes::ACC_FINAL) != 0) return true;
-        break;
-    }
     // 无覆写分析：owner 的每个编译输入子类（含递归）都不声明该方法 → 确定。
     for (const auto& [clsName, cls] : classIndex->getClasses()) {
         if (clsName == ins.method.owner.to_std_string() || cls.isLibrary) continue;
@@ -189,13 +206,18 @@ bool tryEmitDirectCall(CSourceStream& out, const RegInstruction& ins,
     // 栈失真范围划分而非"开不开"，Off 之外每档都以失真换 JNI 边界开销。
     //
     // 两个免门控例外（任何档位都直调）：
-    // - 确定性分派的虚调用：final 方法 / final owner / 编译输入无覆写时，
-    //   resolved 路径命中 implClass 后本来就直调 fn（无 JVM 帧，语义与直调
-    //   完全一致），运行时 IsInstanceOf 检查是纯冗余。
+    // - 确定性分派的虚调用：Off 档（默认，语义保护口径）只认静态可证腿
+    //   （final 方法 / final owner，isFinalDispatch）—— no-override 闭包分析
+    //   只看编译输入，编译输入外子类覆写会被直调旁路（issue #69），Off 档
+    //   不放行：具体类 owner 调用点回落 owner 槽（Call*MethodA 虚分派，
+    //   issue #68），抽象类 owner 回落 resolved 链。非 Off 档直调已被档位
+    //   声明接受，维持闭包放宽。
     // - 同类内调用：栈失真限制在类内，IntraClass 档起允许。
+    const bool virtualCall = ins.method.invokeOpcode == Opcodes::INVOKEVIRTUAL;
     const bool deterministicVirtual =
-        ins.method.invokeOpcode == Opcodes::INVOKEVIRTUAL &&
-        isDeterministicDispatch(ins, classIndex);
+        virtualCall && (state.directCallTier == codegen::DirectCallTier::Off
+                            ? isFinalDispatch(ins, classIndex)
+                            : isDeterministicDispatch(ins, classIndex));
     const bool sameClass = ins.method.owner == state.symbol.owner;
     if (!allowsDirectCall(state.directCallTier, sameClass, deterministicVirtual)) return false;
     if (convertedFunctions == nullptr) return false;
