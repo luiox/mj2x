@@ -3112,12 +3112,8 @@ TEST_F(RegCBackendE2E, MathExactAndAdditionsBatchRoundTrip)
         "  }\n"
         "  public static double toDeg(double x) { return Math.toDegrees(x); }\n"
         "  public static double toRad(double x) { return Math.toRadians(x); }\n"
-        "  public static double fmaAt(double a, double b, double c) {\n"
-        "    return Math.fma(a, b, c);\n"
-        "  }\n"
-        "  public static float fmaF(float a, float b, float c) {\n"
-        "    return Math.fma(a, b, c);\n"
-        "  }\n"
+        // fma 是 JDK 13 API：E2E 样本要与 jdk8 基线共存，不在样本里引用
+        // （语义覆盖在 mj2x-rt 纯 C 测试的 fma 锚点，与 JDK 无关）。
         "  public static double ulpAt(double x) { return Math.ulp(x); }\n"
         "  public static float ulpF(float x) { return Math.ulp(x); }\n"
         "  public static int getExpD(double x) { return Math.getExponent(x); }\n"
@@ -3228,12 +3224,6 @@ TEST_F(RegCBackendE2E, MathExactAndAdditionsBatchRoundTrip)
             {"toDegHalfPi", "RegCMathExactBatch.dhex(RegCMathExactBatch.toDeg(Math.PI / 2))"},
             {"toRad180", "RegCMathExactBatch.dhex(RegCMathExactBatch.toRad(180.0))"},
             {"toRad90", "RegCMathExactBatch.dhex(RegCMathExactBatch.toRad(90.0))"},
-            // ---- fma（两侧均正确舍入，位等价）----
-            {"fmaSimple", "RegCMathExactBatch.dhex(RegCMathExactBatch.fmaAt(2.0, 3.0, 4.0))"},
-            {"fmaSubtle",
-             "RegCMathExactBatch.dhex(RegCMathExactBatch.fmaAt(1e16, 1.0000000000000002, -1e16))"},
-            {"fmaTiny", "RegCMathExactBatch.dhex(RegCMathExactBatch.fmaAt(0.1, 0.2, 0.3))"},
-            {"fmaF", "RegCMathExactBatch.fbits(RegCMathExactBatch.fmaF(1.1f, 2.2f, 3.3f))"},
             // ---- ulp/getExponent（公式位型，确定性）----
             {"ulpAt1", "RegCMathExactBatch.dhex(RegCMathExactBatch.ulpAt(1.0))"},
             {"ulpAtMax", "RegCMathExactBatch.dhex(RegCMathExactBatch.ulpAt(Double.MAX_VALUE))"},
