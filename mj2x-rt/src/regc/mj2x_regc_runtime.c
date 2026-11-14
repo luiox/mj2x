@@ -87,7 +87,9 @@ void _mj2x_regc_throw_runtime(void* env, const char* class_name, const char* mes
     JNIEnv* jni = (JNIEnv*)env;
     if (jni == NULL || class_name == NULL) return;
     jclass ex = (*jni)->FindClass(jni, class_name);
-    if (ex != NULL) (*jni)->ThrowNew(jni, ex, message != NULL ? message : "");
+    /* message 透传（NULL 合法）：Objects.requireNonNull(null, (String)null)
+     * 等调点的 JDK 语义是 getMessage()==null，归一空串会与基准 JVM 漂移。 */
+    if (ex != NULL) (*jni)->ThrowNew(jni, ex, message);
 }
 
 void _mj2x_regc_throw_unsupported(const char* feature) {
