@@ -585,6 +585,48 @@ TEST_F(RegCBackendE2E, CallHelpersRoundTrip)
             });
 }
 
+// Owner 槽推广（issue #68）：单类模式下同类非 this 接收者的实例调用
+// （owner 在编译索引且具体类）Off 档走 _mj2x_regc_cached_owner_method
+// owner 槽（0-JNI 命中 + Call*MethodA 虚分派），不再走 resolved 检查链。
+// 语义门：null 接收者仍 NPE。编译输入外子类覆写场景单类输入下会被
+// isDeterministicDispatch 的免门控直调旁路（先行缺口，issue #69），其语义
+// 门由 jar 全程序矩阵（Shape/Square/Rect 同输入，覆写对 no-override 分析
+// 可见 → 判动态 → owner 槽/resolved）覆盖。
+TEST_F(RegCBackendE2E, OwnerSlotSameClassDispatchRoundTrip)
+{
+    runCase("RegCOwnerSlotDispatch",
+            "public class RegCOwnerSlotDispatch {\n"
+            "  public int value;\n"
+            "  public RegCOwnerSlotDispatch(int v) { value = v; }\n"
+            "  public int twice() { return value * 2; }\n"
+            "  public int pair(RegCOwnerSlotDispatch other) { return other.twice() + twice(); }\n"
+            "  public static int run() {\n"
+            "    RegCOwnerSlotDispatch a = new RegCOwnerSlotDispatch(3);\n"
+            "    return a.pair(new RegCOwnerSlotDispatch(10));\n"
+            "  }\n"
+            "  public static int runNull() {\n"
+            "    RegCOwnerSlotDispatch n = null;\n"
+            "    return n.twice();\n"
+            "  }\n"
+            "}\n",
+            {
+                {"run()", "RegCOwnerSlotDispatch.run()"},
+                {"runNull()", "RegCOwnerSlotDispatch.runNull()"},
+            });
+
+    // 结构断言：同类调用点发射 owner 槽形态（cached_owner_method），无
+    // resolved 站点注册（_mj2x_regc_resolved_site_tu_*；TU 级 resolved 帮手
+    // 是单文件模式无条件发射的死代码，不作断言面）。
+    fs::path dir   = caseDir("RegCOwnerSlotDispatch");
+    fs::path cFile = dir / "RegCOwnerSlotDispatch.c";
+    ASSERT_TRUE(fileExists(cFile)) << cFile;
+    std::string generatedC = readText(cFile);
+    EXPECT_NE(generatedC.find("_mj2x_regc_cached_owner_method"), std::string::npos)
+        << generatedC;
+    EXPECT_EQ(generatedC.find("_mj2x_regc_resolved_site_tu_"), std::string::npos)
+        << generatedC;
+}
+
 // 构造器/静态块搬运验证（搬运法）：
 // <init>/<clinit> 方法体被搬进 __regc_init_*/__regc_clinit_* 静态方法后经
 // MarkAll 编成 native；原方法保留字节码骨架（super 调用链 / registerNatives 注入点）。
