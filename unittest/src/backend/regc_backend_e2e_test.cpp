@@ -3079,14 +3079,8 @@ TEST_F(RegCBackendE2E, MathExactAndAdditionsBatchRoundTrip)
         "    try { return Math.toIntExact(v); }\n"
         "    catch (ArithmeticException e) { return -83; }\n"
         "  }\n"
-        "  public static int absExactOrCatch(int a) {\n"
-        "    try { return Math.absExact(a); }\n"
-        "    catch (ArithmeticException e) { return -84; }\n"
-        "  }\n"
-        "  public static long absExactLongOrCatch(long a) {\n"
-        "    try { return Math.absExact(a); }\n"
-        "    catch (ArithmeticException e) { return -84L; }\n"
-        "  }\n"
+        // absExact 是 JDK 9+ API：样本不引用（与 jdk8 基线共存），语义覆盖在
+        // mj2x-rt 纯 C 测试（MIN_VALUE 溢出与 JDK 17 专属消息逐字断言）。
         // ---- Integer/Long toString radix 版 + hashCode ----
         "  public static String intRadix(int v, int r) { return Integer.toString(v, r); }\n"
         "  public static String longRadix(long v, int r) { return Long.toString(v, r); }\n"
@@ -3164,11 +3158,6 @@ TEST_F(RegCBackendE2E, MathExactAndAdditionsBatchRoundTrip)
             {"toIntExactMin", "RegCMathExactBatch.toIntExactOrCatch(-2147483648L)"},
             {"toIntExactOver", "RegCMathExactBatch.toIntExactOrCatch(2147483648L)"},
             {"toIntExactUnder", "RegCMathExactBatch.toIntExactOrCatch(-2147483649L)"},
-            // ---- absExact（MIN_VALUE 取绝对值溢出）----
-            {"absExactOk", "RegCMathExactBatch.absExactOrCatch(123)"},
-            {"absExactOverflow", "RegCMathExactBatch.absExactOrCatch(-2147483648)"},
-            {"absExactLongOverflow",
-             "RegCMathExactBatch.absExactLongOrCatch(-9223372036854775808L)"},
             // ---- toString radix：正/负/极值/各基数/非法基数回落 ----
             {"intRadix16", "RegCMathExactBatch.intRadix(255, 16)"},
             {"intRadix2", "RegCMathExactBatch.intRadix(-12345, 2)"},
