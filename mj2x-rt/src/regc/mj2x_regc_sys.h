@@ -41,8 +41,9 @@ mj2x_ref _mj2x_intrinsic_require_non_null(mj2x_regc_context* context, mj2x_ref v
 ///
 /// @details
 /// JDK 17 requireNonNull(T, String) 对 null 抛 new NullPointerException(message)；
-/// message 为 null 引用时 NPE 消息亦为 null。消息经 GetStringUTFChars 取
-/// modified UTF-8（ThrowNew 的输入口径），失败时仍抛 NPE（消息退化为空串）。
+/// message 为 null 引用时 NPE 消息亦为 null（ThrowNew 的 msg 参数规范允许
+/// NULL）。消息经 GetStringUTFChars 取 modified UTF-8（ThrowNew 的输入口径），
+/// 提取失败（OOM）时抛无消息 NPE。
 mj2x_ref _mj2x_intrinsic_require_non_null_message(mj2x_regc_context* context, mj2x_ref value,
                                                   mj2x_ref message);
 

@@ -70,8 +70,9 @@ int64_t mj2x_intrinsic_system_nano_time(void)
 #endif
 }
 
-/* NPE 路由：与 runtime.c parse 族同契约（context->throwException 回调，
- * ThrowNew 侧 message 为 NULL 时归一空串）。 */
+/* NPE 路由：与 runtime.c parse 族同契约（context->throwException 回调）。
+ * message 透传 NULL：ThrowNew 的 msg 参数规范允许 NULL，JDK 17 的
+ * requireNonNull(null, (String)null) 语义是 getMessage()==null。 */
 static void mj2x_regc_sys_throw_npe(mj2x_regc_context* context, const char* message)
 {
     if (context == NULL || context->throwException == NULL) return;
@@ -87,8 +88,9 @@ mj2x_ref _mj2x_intrinsic_require_non_null(mj2x_regc_context* context, mj2x_ref v
 }
 
 /* Objects.requireNonNull(T, String)：JDK 17 对 null 抛 NPE(message)；
- * message 经 GetStringUTFChars 取 modified UTF-8（ThrowNew 输入口径），
- * 提取失败（OOM）时仍抛 NPE，消息退化为空串。 */
+ * message 为 null 引用时 NPE 消息亦为 null（与 JDK 同语义）。message
+ * 经 GetStringUTFChars 取 modified UTF-8（ThrowNew 输入口径），提取失败
+ * （OOM）时抛无消息 NPE。 */
 mj2x_ref _mj2x_intrinsic_require_non_null_message(mj2x_regc_context* context, mj2x_ref value,
                                                   mj2x_ref message)
 {
@@ -98,7 +100,7 @@ mj2x_ref _mj2x_intrinsic_require_non_null_message(mj2x_regc_context* context, mj
     if (message != NULL && env != NULL) {
         text = (*env)->GetStringUTFChars(env, (jstring)message, NULL);
     }
-    mj2x_regc_sys_throw_npe(context, text != NULL ? text : "");
+    mj2x_regc_sys_throw_npe(context, text);
     if (text != NULL && env != NULL) (*env)->ReleaseStringUTFChars(env, (jstring)message, text);
     return NULL;
 }

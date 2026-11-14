@@ -935,7 +935,10 @@ void test_math_exact_family(void)
     expect(mj2x_intrinsic_math_add_exact_i64(&context, INT64_MAX, INT64_MIN) == -1);
     expect(mj2x_intrinsic_math_add_exact_i64(&context, INT64_C(1) << 40, INT64_C(1) << 40) ==
            INT64_C(1) << 41);
-    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MIN, INT32_MAX) == 1);
+    /* MIN-MAX 数学上溢出（回绕值恰为 1，JDK subtractExact 必抛），非溢出
+     * 边界取 rhs==0 的两端： */
+    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MAX, 0) == INT32_MAX);
+    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MIN, 0) == INT32_MIN);
     expect(mj2x_intrinsic_math_subtract_exact_i32(&context, 5, 3) == 2);
     expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MIN + 1, 1) == INT32_MIN);
     expect(mj2x_intrinsic_math_subtract_exact_i64(&context, INT64_MIN + 1, 1) == INT64_MIN);
@@ -1109,7 +1112,7 @@ void test_strictmath_hyperbolic_additions(void)
     expect(isinf(mj2x_strictmath_cosh(-INFINITY)));
     expect(isnan(mj2x_strictmath_cosh(NAN)));
     expect(fabs(mj2x_strictmath_tanh(1.0) - 0.7615941559557649) < 1e-12);
-    expect(fabs(mj2x_strictmath_tanh(2.0) - 0.9640275800656498) < 1e-12);
+    expect(fabs(mj2x_strictmath_tanh(2.0) - 0.9640275800758169) < 1e-12);
     expect(fabs(mj2x_strictmath_tanh(0.5) - 0.4621171572600098) < 1e-12);
     expect(mj2x_strictmath_tanh(-1.0) == -mj2x_strictmath_tanh(1.0));
     expect(mj2x_strictmath_tanh(0.0) == 0.0);
@@ -1222,7 +1225,7 @@ void test_math_bitwise_additions(void)
         got = mj2x_strictmath_ulp_f64(2.2250738585072014e-308); /* 2^-1022 */
         memcpy(&bits, &got, sizeof bits);
         expect(bits == UINT64_C(1));
-        got = mj2x_strictmath_ulp_f64(4.4501477170144023e-308); /* 2^-1021 */
+        got = mj2x_strictmath_ulp_f64(4.450147717014403e-308); /* 2^-1021 */
         memcpy(&bits, &got, sizeof bits);
         expect(bits == UINT64_C(2));                  /* 2^-1073 */
         got = mj2x_strictmath_ulp_f64(1.7976931348623157e308); /* MAX_VALUE */
@@ -1251,9 +1254,9 @@ void test_math_bitwise_additions(void)
         got = mj2x_strictmath_ulp_f32(1.4e-45f);
         memcpy(&bits, &got, sizeof bits);
         expect(bits == UINT32_C(1));
-        got = mj2x_strictmath_ulp_f32(2.8e-45f); /* 2×MIN_VALUE */
+        got = mj2x_strictmath_ulp_f32(2.8e-45f); /* 2×MIN_VALUE，仍 subnormal */
         memcpy(&bits, &got, sizeof bits);
-        expect(bits == UINT32_C(2));
+        expect(bits == UINT32_C(1)); /* subnormal ulp 恒为 2^-149（JDK 规范） */
         got = mj2x_strictmath_ulp_f32(3.4028235e38f); /* Float.MAX_VALUE */
         memcpy(&bits, &got, sizeof bits);
         expect(bits == UINT32_C(0x73800000)); /* 2^104 */
@@ -1492,7 +1495,8 @@ void test_intlong_tostring_radix_hash_code(void)
     expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 255, 2), "11111111") == 0);
     expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 255, 8), "377") == 0);
     expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 255, 36), "73") == 0);
-    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 305419896, 16),
+    /* 0x1234ABCD = 305441741。 */
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 305441741, 16),
                   "1234abcd") == 0);
     expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, -255, 16), "-ff") == 0);
     expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, -2147483647, 10),
@@ -1514,6 +1518,8 @@ void test_intlong_tostring_radix_hash_code(void)
 
     /* Long.toString(l, radix)。 */
     expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, 255L, 16), "ff") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, 0x123456789ABCDEFL, 16),
+                  "123456789abcdef") == 0);
     expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, -1L, 8), "-1") == 0);
     expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, -2L, 10), "-2") == 0);
     expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, 0L, 2), "0") == 0);
