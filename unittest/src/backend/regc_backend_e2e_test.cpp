@@ -585,13 +585,12 @@ TEST_F(RegCBackendE2E, CallHelpersRoundTrip)
             });
 }
 
-// Owner 槽推广（issue #68）：单类模式下同类非 this 接收者的实例调用
-// （owner 在编译索引且具体类）Off 档走 _mj2x_regc_cached_owner_method
-// owner 槽（0-JNI 命中 + Call*MethodA 虚分派），不再走 resolved 检查链。
-// 语义门：null 接收者仍 NPE。编译输入外子类覆写场景单类输入下会被
-// isDeterministicDispatch 的免门控直调旁路（先行缺口，issue #69），其语义
-// 门由 jar 全程序矩阵（Shape/Square/Rect 同输入，覆写对 no-override 分析
-// 可见 → 判动态 → owner 槽/resolved）覆盖。
+// Owner 槽推广（issue #68）+ 免门控直调收窄（issue #69）：单类模式下同类
+// 非 this 接收者的实例调用（owner 在编译索引且具体类）Off 档走
+// _mj2x_regc_cached_owner_method owner 槽（0-JNI 命中 + Call*MethodA 虚分派）。
+// 语义门：null 接收者仍 NPE；编译输入外子类覆写经 JVM 标准分派选中
+// （runSub：非 final 虚调用不再被 no-override 闭包分析的免门控直调旁路，
+// 修复前直调基类实现得 28，基线 42）。
 TEST_F(RegCBackendE2E, OwnerSlotSameClassDispatchRoundTrip)
 {
     runCase("RegCOwnerSlotDispatch",
@@ -604,13 +603,22 @@ TEST_F(RegCBackendE2E, OwnerSlotSameClassDispatchRoundTrip)
             "    RegCOwnerSlotDispatch a = new RegCOwnerSlotDispatch(3);\n"
             "    return a.pair(new RegCOwnerSlotDispatch(10));\n"
             "  }\n"
+            "  public static int runSub() {\n"
+            "    RegCOwnerSlotDispatch a = new RegCOwnerSlotDispatchSub(4);\n"
+            "    return a.pair(new RegCOwnerSlotDispatchSub(10));\n"
+            "  }\n"
             "  public static int runNull() {\n"
             "    RegCOwnerSlotDispatch n = null;\n"
             "    return n.twice();\n"
             "  }\n"
+            "}\n"
+            "class RegCOwnerSlotDispatchSub extends RegCOwnerSlotDispatch {\n"
+            "  RegCOwnerSlotDispatchSub(int v) { super(v); }\n"
+            "  public int twice() { return value * 3; }\n"
             "}\n",
             {
                 {"run()", "RegCOwnerSlotDispatch.run()"},
+                {"runSub()", "RegCOwnerSlotDispatch.runSub()"},
                 {"runNull()", "RegCOwnerSlotDispatch.runNull()"},
             });
 
