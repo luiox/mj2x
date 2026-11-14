@@ -458,6 +458,61 @@ mj2x_ref mj2x_intrinsic_long_to_unsigned_string_radix(mj2x_regc_context* context
     return mj2x_intrinsic_unsigned_radix_to_string(context, (uint64_t)value, (uint32_t)radix);
 }
 
+// ---- Integer/Long.toString(int/long, int radix)（有符号 radix 版）----
+//
+// JDK 17 实源口径（Integer.toString(int,int)/Long.toString(long,int) 实源
+// 核对）：radix 越界（<2 或 >36）不抛异常，静默回落 radix 10（与上方
+// toUnsignedString 同款）；负数带 '-' 前缀、幅值无符号转换（Long.MIN_VALUE
+// 幅值经 uint64 位型取负，无 UB）；数字小写（Character.forDigit）；0 -> "0"。
+
+static mj2x_ref mj2x_intrinsic_signed_radix_to_string(mj2x_regc_context* context,
+                                                      int64_t value, uint32_t radix)
+{
+    JNIEnv*  env = (JNIEnv*)(context == NULL ? NULL : context->env);
+    uint64_t magnitude;
+    int      negative = value < 0;
+    static const char kRadixDigits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char     buffer[67]; /* 64 digits + '-' + NUL */
+    int      pos = (int)sizeof(buffer) - 1;
+    if (env == NULL) return NULL;
+    if (radix < 2U || radix > 36U) radix = 10U;
+    magnitude = negative ? ((uint64_t)0 - (uint64_t)value) : (uint64_t)value;
+    buffer[pos] = '\0';
+    do {
+        buffer[--pos] = kRadixDigits[magnitude % radix];
+        magnitude /= radix;
+    } while (magnitude != 0U && pos > 1); /* 预留 '-' 槽位 */
+    if (negative) buffer[--pos] = '-';
+    return (mj2x_ref)(*env)->NewStringUTF(env, buffer + pos);
+}
+
+mj2x_ref mj2x_intrinsic_int_to_string_radix(mj2x_regc_context* context, int32_t value,
+                                            int32_t radix)
+{
+    return mj2x_intrinsic_signed_radix_to_string(context, (int64_t)value, (uint32_t)radix);
+}
+
+mj2x_ref mj2x_intrinsic_long_to_string_radix(mj2x_regc_context* context, int64_t value,
+                                             int32_t radix)
+{
+    return mj2x_intrinsic_signed_radix_to_string(context, value, (uint32_t)radix);
+}
+
+// ---- Integer/Long.hashCode（JDK 17 实源公式，纯计算无异常通道）----
+
+int32_t mj2x_intrinsic_int_hash_code(int32_t value)
+{
+    /* java.lang.Integer.hashCode(int)：JDK 17 实源即 return value。 */
+    return value;
+}
+
+int32_t mj2x_intrinsic_long_hash_code(int64_t value)
+{
+    /* java.lang.Long.hashCode(long)：(int)(value ^ (value >>> 32))，
+     * >>> 为 Java 无符号右移（uint64 位型域计算），强转 int 截断低 32 位。 */
+    return (int32_t)(uint32_t)((uint64_t)value ^ ((uint64_t)value >> 32));
+}
+
 // ---- Integer/Long.divideUnsigned/remainderUnsigned ----
 //
 // 除零抛 ArithmeticException("/ by zero")，与 JVM idiv/irem 同语义；经
@@ -561,6 +616,184 @@ int64_t mj2x_intrinsic_math_floor_mod_i64(mj2x_regc_context* context, int64_t lh
     quotient = lhs / rhs;
     if ((lhs ^ rhs) < 0 && quotient * rhs != lhs) quotient--;
     return (int64_t)((uint64_t)lhs - (uint64_t)quotient * (uint64_t)rhs);
+}
+
+// ---- java.lang.Math exact 溢出族 ----
+//
+// JDK 17 实源语义：溢出挂 pending ArithmeticException 并返回 0（RegCLocalHelper
+// 形态，同 floorDiv 口径）。消息逐字对齐 JDK 17 java.lang.Math 实源：
+// "integer overflow"（int 侧）/ "long overflow"（long 侧）；absExact 的 JDK 17
+// 实源消息为 "Overflow to represent absolute value of Integer.MIN_VALUE" /
+// "Overflow to represent absolute value of Long.MIN_VALUE"（JDK 19+ 才改短）。
+// 实现全部先验条件判定（区间减法/除法哨兵），不计算回绕值（C 有符号溢出 UB）。
+
+int32_t mj2x_intrinsic_math_add_exact_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
+{
+    /* x + y 溢出 iff rhs>=0 时 lhs > MAX-rhs 或 rhs<0 时 lhs < MIN-rhs，
+     * 两处判定减法均不溢出（HD 2-12 同构先验式）。 */
+    if (rhs >= 0 ? lhs > INT32_MAX - rhs : lhs < INT32_MIN - rhs) {
+        mj2x_regc_throw_arithmetic(context, "integer overflow");
+        return 0;
+    }
+    return lhs + rhs;
+}
+
+int64_t mj2x_intrinsic_math_add_exact_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
+{
+    /* i64 用减法判定区间（rhs>0 上界 MAX-rhs、rhs<0 下界 MIN-rhs）。 */
+    if (rhs > 0 && lhs > INT64_MAX - rhs) {
+        mj2x_regc_throw_arithmetic(context, "long overflow");
+        return 0;
+    }
+    if (rhs < 0 && lhs < INT64_MIN - rhs) {
+        mj2x_regc_throw_arithmetic(context, "long overflow");
+        return 0;
+    }
+    return lhs + rhs;
+}
+
+int32_t mj2x_intrinsic_math_subtract_exact_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
+{
+    /* x - y 溢出 iff rhs>0 时 lhs < MIN+rhs 或 rhs<0 时 lhs > MAX+rhs
+     *（两处判定加法均不溢出）。 */
+    if (rhs > 0 ? lhs < INT32_MIN + rhs : (rhs < 0 && lhs > INT32_MAX + rhs)) {
+        mj2x_regc_throw_arithmetic(context, "integer overflow");
+        return 0;
+    }
+    return lhs - rhs;
+}
+
+int64_t mj2x_intrinsic_math_subtract_exact_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
+{
+    if (rhs > 0 && lhs < INT64_MIN + rhs) {
+        mj2x_regc_throw_arithmetic(context, "long overflow");
+        return 0;
+    }
+    if (rhs < 0 && lhs > INT64_MAX + rhs) {
+        mj2x_regc_throw_arithmetic(context, "long overflow");
+        return 0;
+    }
+    return lhs - rhs;
+}
+
+int32_t mj2x_intrinsic_math_multiply_exact_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs)
+{
+    /* JDK 17：long r = (long)x * (long)y; (int)r != r → 溢出。升宽 i64
+     * 乘法对任意 i32 操作数无 UB。 */
+    const int64_t wide = (int64_t)lhs * (int64_t)rhs;
+    if (wide != (int64_t)(int32_t)wide) {
+        mj2x_regc_throw_arithmetic(context, "integer overflow");
+        return 0;
+    }
+    return (int32_t)wide;
+}
+
+int64_t mj2x_intrinsic_math_multiply_exact_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs)
+{
+    /* JDK 17 Math.multiplyExact(long,long) 语义（回绕积 r/y != x 或 MIN/-1），
+     * C 侧禁裸溢出改全先验：除法哨兵判定，所有除法避开 0 与 INT64_MIN/-1
+     * （MIN/-1 两处特判先行）。 */
+    if (lhs != 0 && rhs != 0) {
+        int overflow = 0;
+        if (lhs == INT64_MIN && rhs == -1) overflow = 1;
+        else if (rhs == INT64_MIN && lhs == -1) overflow = 1;
+        else if (lhs > 0) {
+            overflow = (rhs > 0) ? (lhs > INT64_MAX / rhs) : (rhs < INT64_MIN / lhs);
+        }
+        else {
+            overflow = (rhs > 0) ? (lhs < INT64_MIN / rhs) : (lhs < INT64_MAX / rhs);
+        }
+        if (overflow) {
+            mj2x_regc_throw_arithmetic(context, "long overflow");
+            return 0;
+        }
+    }
+    return lhs * rhs;
+}
+
+int32_t mj2x_intrinsic_math_increment_exact_i32(mj2x_regc_context* context, int32_t value)
+{
+    if (value == INT32_MAX) {
+        mj2x_regc_throw_arithmetic(context, "integer overflow");
+        return 0;
+    }
+    return value + 1;
+}
+
+int64_t mj2x_intrinsic_math_increment_exact_i64(mj2x_regc_context* context, int64_t value)
+{
+    if (value == INT64_MAX) {
+        mj2x_regc_throw_arithmetic(context, "long overflow");
+        return 0;
+    }
+    return value + 1;
+}
+
+int32_t mj2x_intrinsic_math_decrement_exact_i32(mj2x_regc_context* context, int32_t value)
+{
+    if (value == INT32_MIN) {
+        mj2x_regc_throw_arithmetic(context, "integer overflow");
+        return 0;
+    }
+    return value - 1;
+}
+
+int64_t mj2x_intrinsic_math_decrement_exact_i64(mj2x_regc_context* context, int64_t value)
+{
+    if (value == INT64_MIN) {
+        mj2x_regc_throw_arithmetic(context, "long overflow");
+        return 0;
+    }
+    return value - 1;
+}
+
+int32_t mj2x_intrinsic_math_negate_exact_i32(mj2x_regc_context* context, int32_t value)
+{
+    if (value == INT32_MIN) {
+        mj2x_regc_throw_arithmetic(context, "integer overflow");
+        return 0;
+    }
+    return -value;
+}
+
+int64_t mj2x_intrinsic_math_negate_exact_i64(mj2x_regc_context* context, int64_t value)
+{
+    if (value == INT64_MIN) {
+        mj2x_regc_throw_arithmetic(context, "long overflow");
+        return 0;
+    }
+    return -value;
+}
+
+int32_t mj2x_intrinsic_math_to_int_exact(mj2x_regc_context* context, int64_t value)
+{
+    /* JDK 17：(int)value != value → "integer overflow"。 */
+    if ((int64_t)(int32_t)value != value) {
+        mj2x_regc_throw_arithmetic(context, "integer overflow");
+        return 0;
+    }
+    return (int32_t)value;
+}
+
+int32_t mj2x_intrinsic_math_abs_exact_i32(mj2x_regc_context* context, int32_t value)
+{
+    /* JDK 17 实源消息（非 "integer overflow"，JDK 19+ 才改短）。 */
+    if (value == INT32_MIN) {
+        mj2x_regc_throw_arithmetic(
+            context, "Overflow to represent absolute value of Integer.MIN_VALUE");
+        return 0;
+    }
+    return value < 0 ? -value : value;
+}
+
+int64_t mj2x_intrinsic_math_abs_exact_i64(mj2x_regc_context* context, int64_t value)
+{
+    if (value == INT64_MIN) {
+        mj2x_regc_throw_arithmetic(
+            context, "Overflow to represent absolute value of Long.MIN_VALUE");
+        return 0;
+    }
+    return value < 0 ? -value : value;
 }
 
 // ---- java.lang.Enum.name() / ordinal() 直接字段读取 ----

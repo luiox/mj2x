@@ -7,6 +7,8 @@
 /// 角色单例缓存收敛为运行时固定实例。
 #include "regc/mj2x_regc_runtime.h"
 
+#include <stdlib.h>
+
 /* 进程级缓存并发契约（2026-08 定案）：
  * - jclass 全局槽（class_cache/ownerClass）：CAS 发布，输家删除自己新建的
  *   global ref 并改用赢家值（消除 check-then-write 双建泄漏与撕裂读）。
@@ -1330,6 +1332,285 @@ int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq) {
         if (_mj2x_intrinsic_string_contains_method == NULL) return 0;
     }
     return (*_mj2x_regc_env)->CallBooleanMethod(_mj2x_regc_env, (jobject)value, _mj2x_intrinsic_string_contains_method, (jobject)seq) == JNI_TRUE;
+}
+
+/* ---- String intrinsic 第二批(JDK 17 语义清单,逐条镜像) ----
+ *
+ * lastIndexOf(I)I / lastIndexOf(II)I:
+ *   - fromIndex 越界不抛异常:扫描起点 clamp 到 min(fromIndex, len-1)
+ *     (补码面 len-2),clamp 后 < 0(含 fromIndex<0、空串)返回 -1
+ *     (JDK StringUTF16.lastIndexOf 同款结构)。
+ *   - ch 在 [0,0xFFFF] 单 unit 倒序;ch >= 0x10000 按代理对(2 unit)倒序,
+ *     命中返回高代理位索引;ch < 0 或 > 0x10FFFF 恒 -1。
+ * lastIndexOf(Ljava/lang/String;)I / lastIndexOf(Ljava/lang/String;I)I:
+ *   - 起点右界 = len - needleLen(空 needle 即 len),fromIndex 超界 clamp,
+ *     clamp 后 < 0 返回 -1;空 needle 返回 clamp 后的 fromIndex(可为 len,
+ *     如 "abc".lastIndexOf("") == 3、"abc".lastIndexOf("", 1) == 1)。
+ * substring(I):begin < 0 或 begin > len 越界;正常返回 [begin, len)。
+ * substring(II):begin > end || end > len || begin < 0 越界,消息
+ *   "begin X, end Y, length Z"(JDK 17 String.checkBoundsBeginEnd 逐字);
+ *   begin == end 返回 ""(空串行为)。
+ * charAt(I):index < 0 || index >= len 越界,消息 "index X, length Y"
+ *   (JDK 17 String.checkIndex 逐字);正常返回该位 UTF-16 unit。
+ * equals(Ljava/lang/Object;)Z:null 参数 / 非 String 参数 / 长度不等
+ *   一律 false 不抛异常;同引用快路径 true;内容逐 unit 全量比较
+ *   (UTF-16 口径与 JDK coder 无关比较等价)。
+ * hashCode()I:h = 31*h + c 的 Java int 溢出回绕语义(uint32 累加后
+ *   cast,无裸 int 溢出 UB);空串 0。
+ * toCharArray()[C:len 长 NewCharArray + SetCharArrayRegion 全量拷贝;
+ *   空串返回 len==0 数组。
+ * repeat(I):count < 0 抛 IllegalArgumentException;count == 0 或空串
+ *   返回 "";count == 1 返回接收者(JDK 返回 this);len*count 超
+ *   INT32_MAX 抛 OutOfMemoryError(JDK 17 同款消息)。
+ * NULL 接收者 / NULL needle:与 contains/indexOf 同口径,
+ *   _mj2x_regc_throw_null 置 pending NPE 并返回缺省值(-1/0/NULL)。
+ * 已知残差(口径见各函数注释):substring 单参越界 JDK 走 SIOOBE(int)
+ *   的 "index N" 消息,此处按 checkBoundsBeginEnd 归一
+ *   "begin X, end Y, length Z"(end=len);repeat 负 count 的 JDK 17
+ *   消息为 "count is negative: N",此处按本批规格取定长
+ *   "count is negative"。 */
+
+static void _mj2x_intrinsic_throw_sioobe_message(mj2x_regc_context* context, const char* message) {
+    if (context != NULL && context->throwException != NULL) {
+        context->throwException(context->env, "java/lang/StringIndexOutOfBoundsException", message);
+    }
+}
+
+static void _mj2x_intrinsic_throw_iae_message(mj2x_regc_context* context, const char* message) {
+    if (context != NULL && context->throwException != NULL) {
+        context->throwException(context->env, "java/lang/IllegalArgumentException", message);
+    }
+}
+
+static void _mj2x_intrinsic_throw_oom_message(mj2x_regc_context* context, const char* message) {
+    if (context != NULL && context->throwException != NULL) {
+        context->throwException(context->env, "java/lang/OutOfMemoryError", message);
+    }
+}
+
+int32_t _mj2x_intrinsic_string_last_index_of_char_from(mj2x_ref value, int32_t ch, int32_t from_index) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.lastIndexOf"); return -1; }
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    /* 起点右界:BMP/负值 len-1,补码面 len-2(代理对占 2 unit);fromIndex
+     * 越界 clamp,clamp 后 < 0(含 fromIndex<0、空串)即 -1 不抛。 */
+    int32_t last  = (ch >= 0x10000) ? (int32_t)value_len - 2 : (int32_t)value_len - 1;
+    int32_t start = from_index < last ? from_index : last;
+    if (start < 0) return -1;
+    if (ch >= 0 && ch <= 0xFFFF) {
+        const jchar unit = (jchar)ch;
+        const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+        if (chars == NULL) return -1;
+        int32_t found = -1;
+        for (int32_t i = start; i >= 0; --i) {
+            if (chars[i] == unit) { found = i; break; }
+        }
+        (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+        return found;
+    }
+    if (ch >= 0x10000 && ch <= 0x10FFFF) {
+        /* 补码面:代理对倒序扫描,命中返回高代理位索引(JDK 同口径) */
+        const uint32_t offset = (uint32_t)ch - 0x10000u;
+        const jchar    hi     = (jchar)(0xD800u + (offset >> 10));
+        const jchar    lo     = (jchar)(0xDC00u + (offset & 0x3FFu));
+        const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+        if (chars == NULL) return -1;
+        int32_t found = -1;
+        for (int32_t i = start; i >= 0; --i) {
+            if (chars[i] == hi && chars[i + 1] == lo) { found = i; break; }
+        }
+        (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+        return found;
+    }
+    return -1; /* 负值 / 超 0x10FFFF:JDK 口径恒不命中 */
+}
+
+int32_t _mj2x_intrinsic_string_last_index_of_char(mj2x_ref value, int32_t ch) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.lastIndexOf"); return -1; }
+    /* JDK:lastIndexOf(ch) == lastIndexOf(ch, length() - 1)(fromIndex 越界
+     * 由 clamp 消化,等价右移到 len-1) */
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    return _mj2x_intrinsic_string_last_index_of_char_from(value, ch, (int32_t)value_len - 1);
+}
+
+int32_t _mj2x_intrinsic_string_last_index_of_from(mj2x_ref value, mj2x_ref needle, int32_t from_index) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.lastIndexOf"); return -1; }
+    if (needle == NULL) { _mj2x_regc_throw_null("String.lastIndexOf needle"); return -1; }
+    jsize value_len  = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    jsize needle_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)needle);
+    /* JDK lastIndexOf(src,tgt,from):起点右界 = len - needleLen(空 needle
+     * 即 len),fromIndex 超界 clamp,clamp 后 < 0 返回 -1;空 needle 命中
+     * 位置即 clamp 后的 fromIndex(可为 len) */
+    int32_t right = (int32_t)value_len - (int32_t)needle_len;
+    int32_t start = from_index < right ? from_index : right;
+    if (start < 0) return -1;
+    if (needle_len == 0) return start;
+    const jchar* value_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+    if (value_chars == NULL) return -1;
+    const jchar* needle_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)needle, NULL);
+    if (needle_chars == NULL) {
+        (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars);
+        return -1;
+    }
+    /* 首 unit 粗筛 + memcmp（倒序,对齐 _mj2x_intrinsic_string_index_of 的
+     * 正序形态）:needle_len >= 1 已由上方空串早退保证,memcmp 比较
+     * needle_len*2 字节与逐 unit 匹配完全等价,降序扫描与最后命中索引不变。 */
+    int32_t found = -1;
+    for (int32_t i = start; i >= 0; --i) {
+        if (value_chars[i] == needle_chars[0] &&
+            memcmp(value_chars + i, needle_chars, (size_t)needle_len * sizeof(jchar)) == 0) {
+            found = i;
+            break;
+        }
+    }
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)needle, needle_chars);
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars);
+    return found;
+}
+
+int32_t _mj2x_intrinsic_string_last_index_of(mj2x_ref value, mj2x_ref needle) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.lastIndexOf"); return -1; }
+    /* JDK:lastIndexOf(str) == lastIndexOf(str, length())(fromIndex 越界由
+     * 右界 clamp 消化,等价于从串尾起搜) */
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    return _mj2x_intrinsic_string_last_index_of_from(value, needle, (int32_t)value_len);
+}
+
+mj2x_ref _mj2x_intrinsic_string_substring_end(mj2x_regc_context* context, mj2x_ref value,
+                                              int32_t begin_index, int32_t end_index) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.substring"); return NULL; }
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    /* JDK 17 String.checkBoundsBeginEnd 逐字消息;单参残差见函数群头注释 */
+    if (begin_index > end_index || end_index > (int32_t)value_len || begin_index < 0) {
+        char buffer[96];
+        snprintf(buffer, sizeof buffer, "begin %d, end %d, length %d",
+                 begin_index, end_index, (int32_t)value_len);
+        _mj2x_intrinsic_throw_sioobe_message(context, buffer);
+        return NULL;
+    }
+    if (begin_index == end_index) {
+        return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, "");
+    }
+    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+    if (chars == NULL) return NULL;
+    jstring sub = (*_mj2x_regc_env)->NewString(_mj2x_regc_env, chars + begin_index,
+                                               (jsize)(end_index - begin_index));
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+    return (mj2x_ref)sub;
+}
+
+mj2x_ref _mj2x_intrinsic_string_substring(mj2x_regc_context* context, mj2x_ref value, int32_t begin_index) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.substring"); return NULL; }
+    /* JDK 单参形态即 [begin, length());边界/消息口径走双参核心
+     * (残差见函数群头注释) */
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    return _mj2x_intrinsic_string_substring_end(context, value, begin_index, (int32_t)value_len);
+}
+
+uint16_t _mj2x_intrinsic_string_char_at(mj2x_regc_context* context, mj2x_ref value, int32_t index) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.charAt"); return 0; }
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    /* JDK 17 String.checkIndex 逐字消息:"index X, length Y" */
+    if (index < 0 || index >= (int32_t)value_len) {
+        char buffer[64];
+        snprintf(buffer, sizeof buffer, "index %d, length %d", index, (int32_t)value_len);
+        _mj2x_intrinsic_throw_sioobe_message(context, buffer);
+        return 0;
+    }
+    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+    if (chars == NULL) return 0;
+    jchar unit = chars[index];
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+    return (uint16_t)unit;
+}
+
+int32_t _mj2x_intrinsic_string_equals(mj2x_ref value, mj2x_ref other) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.equals"); return 0; }
+    if (other == NULL) return 0;                    /* JDK:null 参数恒 false 不抛 */
+    if (value == other) return 1;                   /* JDK:this == anObject 快路径 */
+    if (!_mj2x_intrinsic_is_string(other)) return 0; /* 非 String 参数 false 不抛 */
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    jsize other_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)other);
+    if (value_len != other_len) return 0;
+    if (value_len == 0) return 1;                   /* 两空串相等 */
+    const jchar* value_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+    if (value_chars == NULL) return 0;
+    const jchar* other_chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)other, NULL);
+    if (other_chars == NULL) {
+        (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars);
+        return 0;
+    }
+    /* 首 unit 粗筛 + memcmp 全量:UTF-16 口径与 JDK 内部 coder 编码无关 */
+    int32_t same = value_chars[0] == other_chars[0] &&
+                   memcmp(value_chars, other_chars, (size_t)value_len * sizeof(jchar)) == 0;
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)other, other_chars);
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, value_chars);
+    return same;
+}
+
+int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.hashCode"); return 0; }
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+    if (chars == NULL) return 0;
+    /* h = 31*h + c 的 Java int 回绕:uint32 累加后 cast,禁裸 int 溢出 UB
+     * (JDK StringUTF16.hashCode 同式,空串得 0) */
+    uint32_t hash = 0;
+    for (jsize i = 0; i < value_len; ++i) {
+        hash = hash * 31u + (uint32_t)chars[i];
+    }
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+    return (int32_t)hash;
+}
+
+mj2x_ref _mj2x_intrinsic_string_to_char_array(mj2x_ref value) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.toCharArray"); return NULL; }
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    jcharArray array = (*_mj2x_regc_env)->NewCharArray(_mj2x_regc_env, value_len);
+    if (array == NULL) return NULL; /* OOM pending 已挂 */
+    if (value_len > 0) {
+        const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+        if (chars == NULL) return NULL;
+        (*_mj2x_regc_env)->SetCharArrayRegion(_mj2x_regc_env, array, 0, value_len, chars);
+        (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+    }
+    return (mj2x_ref)array;
+}
+
+mj2x_ref _mj2x_intrinsic_string_repeat(mj2x_regc_context* context, mj2x_ref value, int32_t count) {
+    if (value == NULL) { _mj2x_regc_throw_null("String.repeat"); return NULL; }
+    if (count < 0) {
+        /* JDK 17 追加 ": N" 后缀,本批规格取定长文本(见函数群头注释) */
+        _mj2x_intrinsic_throw_iae_message(context, "count is negative");
+        return NULL;
+    }
+    jsize value_len = (*_mj2x_regc_env)->GetStringLength(_mj2x_regc_env, (jstring)value);
+    if (count == 0 || value_len == 0) {
+        return (mj2x_ref)(*_mj2x_regc_env)->NewStringUTF(_mj2x_regc_env, "");
+    }
+    if (count == 1) return value; /* JDK 返回 this */
+    /* JDK:len > Integer.MAX_VALUE / count 即总量超 INT32_MAX 抛 OOM
+     * "Required length exceeds implementation limit"(逐字) */
+    if ((uint64_t)(uint32_t)value_len * (uint64_t)(uint32_t)count > (uint64_t)INT32_MAX) {
+        _mj2x_intrinsic_throw_oom_message(context, "Required length exceeds implementation limit");
+        return NULL;
+    }
+    const jchar* chars = (*_mj2x_regc_env)->GetStringChars(_mj2x_regc_env, (jstring)value, NULL);
+    if (chars == NULL) return NULL;
+    jsize  total  = (jsize)((uint64_t)(uint32_t)value_len * (uint64_t)(uint32_t)count);
+    jchar* buffer = (jchar*)malloc((size_t)total * sizeof(jchar));
+    if (buffer == NULL) {
+        (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+        _mj2x_intrinsic_throw_oom_message(context, "Required length exceeds implementation limit");
+        return NULL;
+    }
+    /* 循环填充 count 份单位拷贝 */
+    for (int32_t r = 0; r < count; ++r) {
+        memcpy(buffer + (jsize)r * value_len, chars, (size_t)value_len * sizeof(jchar));
+    }
+    jstring repeated = (*_mj2x_regc_env)->NewString(_mj2x_regc_env, buffer, total);
+    free(buffer);
+    (*_mj2x_regc_env)->ReleaseStringChars(_mj2x_regc_env, (jstring)value, chars);
+    return (mj2x_ref)repeated;
 }
 
 // invokedynamic (stage 3) box/unbox helpers: primitive arguments are boxed

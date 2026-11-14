@@ -24,6 +24,10 @@ void test_regc_intrinsic_strictmath_anchors(void);
 void test_regc_intrinsic_floor_div_mod(void);
 void test_regc_intrinsic_digit_char(void);
 void test_regc_intrinsic_parse_semantics(void);
+void test_math_exact_family(void);
+void test_strictmath_hyperbolic_additions(void);
+void test_math_bitwise_additions(void);
+void test_intlong_tostring_radix_hash_code(void);
 void test_regc_intrinsic_DISABLED_round_f32_full_sweep(void);
 void test_safe_env(void);
 void test_regc_find_class_desc_shell(void);
@@ -120,6 +124,82 @@ static void test_string_builder_utf16_and_errors(void)
     assert(strcmp(thrown.class_name, "java/lang/OutOfMemoryError") == 0);
 
     mj2x_string_builder_destroy(builder);
+}
+
+// ---- StringBuilder 补充面（reverse/delete/deleteCharAt 缓冲逻辑，JDK 17
+// AbstractStringBuilder 镜像）。substring/indexOf 需要 JNIEnv 物化 jstring，
+// 纯 C 侧不可测，语义面由 RegC E2E 覆盖。----
+
+static void test_string_builder_reverse_delete(void)
+{
+    thrown_exception  thrown = {0};
+    mj2x_regc_context context;
+    mj2x_regc_init_context(&context, &thrown, record_throw);
+
+    /* reverse："a\uDC00\uD800b" → "b\uD800\uDC00a"（代理对整体保序，
+     * 与 JDK 17 reverse 逐字一致：Javadoc 明载 unpaired low+high 反转后
+     * 结成合法代理对）。 */
+    mj2x_string_builder* builder = NULL;
+    assert(mj2x_string_builder_init(&context, &builder) == MJ2X_REGC_STATUS_OK);
+    const uint16_t units[4] = {(uint16_t)'a', 0xDC00, 0xD800, (uint16_t)'b'};
+    assert(mj2x_string_builder_append_utf16(&context, builder, units, 4) ==
+           MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_reverse(&context, builder) == MJ2X_REGC_STATUS_OK);
+    int32_t  length = 0;
+    uint16_t value  = 0;
+    assert(mj2x_string_builder_length(&context, builder, &length) == MJ2X_REGC_STATUS_OK);
+    assert(length == 4);
+    assert(mj2x_string_builder_char_at(&context, builder, 0, &value) == MJ2X_REGC_STATUS_OK);
+    assert(value == (uint16_t)'b');
+    assert(mj2x_string_builder_char_at(&context, builder, 1, &value) == MJ2X_REGC_STATUS_OK);
+    assert(value == 0xD800);
+    assert(mj2x_string_builder_char_at(&context, builder, 2, &value) == MJ2X_REGC_STATUS_OK);
+    assert(value == 0xDC00);
+    assert(mj2x_string_builder_char_at(&context, builder, 3, &value) == MJ2X_REGC_STATUS_OK);
+    assert(value == (uint16_t)'a');
+
+    /* deleteCharAt 越界：StringIndexOutOfBoundsException（JDK 17
+     * String.checkIndex 口径），状态不变。 */
+    assert(mj2x_string_builder_delete_char_at(&context, builder, 4) ==
+           MJ2X_REGC_STATUS_PENDING_EXCEPTION);
+    assert(thrown.count == 1);
+    assert(strcmp(thrown.class_name, "java/lang/StringIndexOutOfBoundsException") == 0);
+    assert(mj2x_string_builder_length(&context, builder, &length) == MJ2X_REGC_STATUS_OK);
+    assert(length == 4);
+
+    /* deleteCharAt(0) → "\uD800\uDC00a"。 */
+    assert(mj2x_string_builder_delete_char_at(&context, builder, 0) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_length(&context, builder, &length) == MJ2X_REGC_STATUS_OK);
+    assert(length == 3);
+    assert(mj2x_string_builder_char_at(&context, builder, 0, &value) == MJ2X_REGC_STATUS_OK);
+    assert(value == 0xD800);
+
+    /* delete(start,end)：start>end 抛 checkRangeSIOOBE；end 越界先 clamp
+     * （delete(1,99) 等价 delete(1,3) → 剩 "\uD800"）。 */
+    assert(mj2x_string_builder_delete(&context, builder, 2, 1) ==
+           MJ2X_REGC_STATUS_PENDING_EXCEPTION);
+    assert(thrown.count == 2);
+    assert(strcmp(thrown.class_name, "java/lang/StringIndexOutOfBoundsException") == 0);
+    assert(mj2x_string_builder_delete(&context, builder, 1, 99) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_length(&context, builder, &length) == MJ2X_REGC_STATUS_OK);
+    assert(length == 1);
+    assert(mj2x_string_builder_char_at(&context, builder, 0, &value) == MJ2X_REGC_STATUS_OK);
+    assert(value == 0xD800);
+
+    /* delete(0,0) 空段不动；负 start 抛。 */
+    assert(mj2x_string_builder_delete(&context, builder, 0, 0) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_delete(&context, builder, -1, 0) ==
+           MJ2X_REGC_STATUS_PENDING_EXCEPTION);
+    assert(thrown.count == 3);
+
+    mj2x_string_builder_destroy(builder);
+
+    /* 空 builder reverse 恒等安全。 */
+    mj2x_string_builder* empty = NULL;
+    assert(mj2x_string_builder_init(&context, &empty) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_reverse(&context, empty) == MJ2X_REGC_STATUS_OK);
+    assert(mj2x_string_builder_utf16_length(empty) == 0);
+    mj2x_string_builder_destroy(empty);
 }
 
 // ---- mj2x_rt_protect 检查点（纯逻辑部分；平台探测走真实进程）----
@@ -250,7 +330,12 @@ int main(int argc, char** argv)
     test_regc_intrinsic_floor_div_mod();
     test_regc_intrinsic_digit_char();
     test_regc_intrinsic_parse_semantics();
+    test_math_exact_family();
+    test_strictmath_hyperbolic_additions();
+    test_math_bitwise_additions();
+    test_intlong_tostring_radix_hash_code();
     test_string_builder_utf16_and_errors();
+    test_string_builder_reverse_delete();
     test_string_buffer_concurrency();
     test_safe_env();
     test_regc_find_class_desc_shell();

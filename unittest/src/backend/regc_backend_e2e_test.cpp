@@ -2427,6 +2427,202 @@ TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
         });
 }
 
+/// String intrinsic 第二批（perf/regc-jni-hotpath）exec 级验证：lastIndexOf
+/// 命中/未命中/带 fromIndex（含负与超界 clamp、空 needle）、substring 正常/
+/// 越界/反序 catch StringIndexOutOfBoundsException、charAt 正常/越界/负、
+/// equals 同/异/null/非 String、hashCode 已知值（"hello"=99162322）、
+/// toCharArray 内容、repeat 正常/0/1/负数 catch IllegalArgumentException。
+/// 全部输出 int 化结果（THROW: 通道仅类名），基准 JVM 与 protected 逐行比对。
+TEST_F(RegCBackendE2E, StringIntrinsicsBatchRoundTrip)
+{
+    runCase(
+        "RegCStringBatch",
+        "public class RegCStringBatch {\n"
+        "  public static int lastIndexOfChar(String s) {\n"
+        "    return s.lastIndexOf('l') * 10 + s.lastIndexOf('z');\n"
+        "  }\n"
+        "  public static int lastIndexOfCharFrom(String s) {\n"
+        "    return s.lastIndexOf('l', 3) + s.lastIndexOf('l', 0)\n"
+        "        + s.lastIndexOf('l', -1) + s.lastIndexOf('l', 99);\n"
+        "  }\n"
+        "  public static int lastIndexOfStr(String s) {\n"
+        "    return s.lastIndexOf(\"lo\") * 10 + s.lastIndexOf(\"zz\");\n"
+        "  }\n"
+        "  public static int lastIndexOfStrFrom(String s) {\n"
+        "    return s.lastIndexOf(\"l\", 4) + s.lastIndexOf(\"l\", 0)\n"
+        "        + s.lastIndexOf(\"l\", -1) + s.lastIndexOf(\"\", 2);\n"
+        "  }\n"
+        "  public static int substringOk(String s) {\n"
+        "    return s.substring(2).length() * 10 + s.substring(1, 4).length();\n"
+        "  }\n"
+        "  public static int substringEmpty(String s) {\n"
+        "    return s.substring(5).length() + s.substring(1, 1).length();\n"
+        "  }\n"
+        "  public static String substringOob(String s) {\n"
+        "    try { return s.substring(9); }\n"
+        "    catch (StringIndexOutOfBoundsException e) { return \"SIOOBE\"; }\n"
+        "  }\n"
+        "  public static String substringReverse(String s) {\n"
+        "    try { return s.substring(3, 1); }\n"
+        "    catch (StringIndexOutOfBoundsException e) { return \"SIOOBE\"; }\n"
+        "  }\n"
+        "  public static int charAtOk(String s) {\n"
+        "    return s.charAt(0) + s.charAt(4);\n"
+        "  }\n"
+        "  public static String charAtOob(String s) {\n"
+        "    try { return String.valueOf(s.charAt(9)); }\n"
+        "    catch (StringIndexOutOfBoundsException e) { return \"SIOOBE\"; }\n"
+        "  }\n"
+        "  public static int charAtNeg(String s) {\n"
+        "    try { return s.charAt(-1); }\n"
+        "    catch (StringIndexOutOfBoundsException e) { return -3; }\n"
+        "  }\n"
+        "  public static int equalsSame(String s) { return s.equals(s) ? 1 : 0; }\n"
+        "  public static int equalsDiff(String s) { return s.equals(\"world\") ? 1 : 0; }\n"
+        "  public static int equalsNullArg(String s, Object o) { return s.equals(o) ? 1 : 0; }\n"
+        "  public static int equalsNonString(String s, Object o) { return s.equals(o) ? 1 : 0; }\n"
+        "  public static int hashCodeKnown(String s) { return s.hashCode(); }\n"
+        "  public static int toCharArraySum(String s) {\n"
+        "    char[] a = s.toCharArray();\n"
+        "    return a.length + a[0] + a[a.length - 1];\n"
+        "  }\n"
+        "  public static int repeatOk(String s) {\n"
+        "    return s.repeat(3).length() + \"ab\".repeat(2).length()\n"
+        "        + s.repeat(0).length() + s.repeat(1).length();\n"
+        "  }\n"
+        "  public static int repeatNeg(String s) {\n"
+        "    try { return s.repeat(-2).length(); }\n"
+        "    catch (IllegalArgumentException e) { return -7; }\n"
+        "  }\n"
+        "}\n",
+        {
+            // "hello"：'l' 命中 3、'z' 未命中 -1 → 29；'l',3=3 / 'l',0=-1 /
+            // 'l',-1=-1（负 fromIndex）/ 'l',99=3（超界 clamp）→ 4。
+            {"lastIndexOfChar", "RegCStringBatch.lastIndexOfChar(\"hello\")"},
+            {"lastIndexOfCharFrom", "RegCStringBatch.lastIndexOfCharFrom(\"hello\")"},
+            // "lo" 命中 3、`zz` 未命中 -1 → 29；"l",4=3 / "l",0=-1 / "l",-1=-1 /
+            // 空 needle "",2=2（clamp 后 fromIndex 即命中位）→ 3。
+            {"lastIndexOfStr", "RegCStringBatch.lastIndexOfStr(\"hello\")"},
+            {"lastIndexOfStrFrom", "RegCStringBatch.lastIndexOfStrFrom(\"hello\")"},
+            {"substringOk", "RegCStringBatch.substringOk(\"hello\")"},
+            {"substringEmpty", "RegCStringBatch.substringEmpty(\"hello\")"},
+            {"substringOob", "RegCStringBatch.substringOob(\"hello\")"},
+            {"substringReverse", "RegCStringBatch.substringReverse(\"hello\")"},
+            {"charAtOk", "RegCStringBatch.charAtOk(\"hello\")"},
+            {"charAtOob", "RegCStringBatch.charAtOob(\"hello\")"},
+            {"charAtNeg", "RegCStringBatch.charAtNeg(\"hello\")"},
+            {"equalsSame", "RegCStringBatch.equalsSame(\"hello\")"},
+            {"equalsDiff", "RegCStringBatch.equalsDiff(\"hello\")"},
+            {"equalsNullArg", "RegCStringBatch.equalsNullArg(\"hello\", null)"},
+            {"equalsNonString",
+             "RegCStringBatch.equalsNonString(\"hello\", new Object())"},
+            // 已知值："hello".hashCode() == 99162322。
+            {"hashCodeHello", "RegCStringBatch.hashCodeKnown(\"hello\")"},
+            {"hashCodeEmpty", "RegCStringBatch.hashCodeKnown(\"\")"},
+            {"toCharArraySum", "RegCStringBatch.toCharArraySum(\"hello\")"},
+            // 15 + 4 + 0（count==0 空串）+ 5（count==1 返回原串）。
+            {"repeatOk", "RegCStringBatch.repeatOk(\"hello\")"},
+            {"repeatNeg", "RegCStringBatch.repeatNeg(\"hello\")"},
+        });
+}
+
+/// System 时钟 / Objects.requireNonNull / StringBuilder·StringBuffer
+/// mutate-search 补充面的 exec 级验证：时钟单调性、NPE 消息面、reverse 的
+/// 代理对保序、delete/substring 越界异常面、indexOf/lastIndexOf 命中未命中。
+/// 基准 JVM 与 protected 输出必须一致。
+TEST_F(RegCBackendE2E, SysObjectsSbIntrinsicsBatchRoundTrip)
+{
+    runCase(
+        "RegCSysObjectsSb",
+        "public class RegCSysObjectsSb {\n"
+        "  public static int timeMillisMonotonic() {\n"
+        "    long a = System.currentTimeMillis();\n"
+        "    long b = System.currentTimeMillis();\n"
+        "    return b >= a ? 1 : 0;\n"
+        "  }\n"
+        "  public static int nanoTimeMonotonic() {\n"
+        "    long a = System.nanoTime();\n"
+        "    long b = System.nanoTime();\n"
+        "    return b >= a ? 1 : 0;\n"
+        "  }\n"
+        "  public static int rnnPass() {\n"
+        "    return java.util.Objects.requireNonNull(\"x\").equals(\"x\") ? 1 : 0;\n"
+        "  }\n"
+        "  public static int rnnNull() {\n"
+        "    try { java.util.Objects.requireNonNull(null); return 0; }\n"
+        "    catch (NullPointerException e) { return 1; }\n"
+        "  }\n"
+        "  public static int rnnMessage() {\n"
+        "    try { java.util.Objects.requireNonNull(null, \"boom\"); return 0; }\n"
+        "    catch (NullPointerException e) { return \"boom\".equals(e.getMessage()) ? 4 : 5; }\n"
+        "  }\n"
+        "  public static int rnnMessageNull() {\n"
+        "    try { java.util.Objects.requireNonNull(null, null); return 0; }\n"
+        "    catch (NullPointerException e) { return e.getMessage() == null ? 6 : 7; }\n"
+        "  }\n"
+        "  public static int sbReverse() {\n"
+        "    return new StringBuilder(\"abc\").reverse().toString().equals(\"cba\") ? 1 : 0;\n"
+        "  }\n"
+        "  public static int sbReverseSurrogate() {\n"
+        "    String r = new StringBuilder(\"a\\uD800\\uDC00b\").reverse().toString();\n"
+        "    return r.equals(\"b\\uD800\\uDC00a\") ? 1 : 0;\n"
+        "  }\n"
+        "  public static int sbDeleteCharAt() {\n"
+        "    return new StringBuilder(\"hello\").deleteCharAt(1).toString().equals(\"hllo\") ? 1 : 0;\n"
+        "  }\n"
+        "  public static int sbDeleteCharAtOob() {\n"
+        "    try { new StringBuilder(\"hi\").deleteCharAt(5); return 0; }\n"
+        "    catch (StringIndexOutOfBoundsException e) { return 1; }\n"
+        "  }\n"
+        "  public static int sbDelete() {\n"
+        "    return new StringBuilder(\"hello\").delete(1, 3).toString().equals(\"hlo\") ? 1 : 0;\n"
+        "  }\n"
+        "  public static int sbSubstring() {\n"
+        "    StringBuilder sb = new StringBuilder(\"hello\");\n"
+        "    return sb.substring(1).equals(\"ello\") && sb.substring(1, 3).equals(\"el\") ? 1 : 0;\n"
+        "  }\n"
+        "  public static int sbSubstringOob() {\n"
+        "    try { new StringBuilder(\"hi\").substring(5); return 0; }\n"
+        "    catch (StringIndexOutOfBoundsException e) { return 1; }\n"
+        "  }\n"
+        "  public static int sbIndexOf() {\n"
+        "    StringBuilder sb = new StringBuilder(\"hello world\");\n"
+        "    return sb.indexOf(\"world\") * 10 + sb.lastIndexOf(\"l\");\n"
+        "  }\n"
+        "  public static int bufReverse() {\n"
+        "    return new StringBuffer(\"abc\").reverse().toString().equals(\"cba\") ? 1 : 0;\n"
+        "  }\n"
+        "  public static int bufDeleteCharAtOob() {\n"
+        "    try { new StringBuffer(\"hi\").deleteCharAt(5); return 0; }\n"
+        "    catch (StringIndexOutOfBoundsException e) { return 1; }\n"
+        "  }\n"
+        "  public static int bufSubstring() {\n"
+        "    StringBuffer sb = new StringBuffer(\"hello\");\n"
+        "    return sb.substring(2).equals(\"llo\") ? 1 : 0;\n"
+        "  }\n"
+        "}\n",
+        {
+            {"timeMillisMonotonic", "RegCSysObjectsSb.timeMillisMonotonic()"},
+            {"nanoTimeMonotonic", "RegCSysObjectsSb.nanoTimeMonotonic()"},
+            {"rnnPass", "RegCSysObjectsSb.rnnPass()"},
+            {"rnnNull", "RegCSysObjectsSb.rnnNull()"},
+            {"rnnMessage", "RegCSysObjectsSb.rnnMessage()"},
+            {"rnnMessageNull", "RegCSysObjectsSb.rnnMessageNull()"},
+            {"sbReverse", "RegCSysObjectsSb.sbReverse()"},
+            {"sbReverseSurrogate", "RegCSysObjectsSb.sbReverseSurrogate()"},
+            {"sbDeleteCharAt", "RegCSysObjectsSb.sbDeleteCharAt()"},
+            {"sbDeleteCharAtOob", "RegCSysObjectsSb.sbDeleteCharAtOob()"},
+            {"sbDelete", "RegCSysObjectsSb.sbDelete()"},
+            {"sbSubstring", "RegCSysObjectsSb.sbSubstring()"},
+            {"sbSubstringOob", "RegCSysObjectsSb.sbSubstringOob()"},
+            // "hello world"：indexOf("world")=6、lastIndexOf('l')=9 → 69。
+            {"sbIndexOf", "RegCSysObjectsSb.sbIndexOf()"},
+            {"bufReverse", "RegCSysObjectsSb.bufReverse()"},
+            {"bufDeleteCharAtOob", "RegCSysObjectsSb.bufDeleteCharAtOob()"},
+            {"bufSubstring", "RegCSysObjectsSb.bufSubstring()"},
+        });
+}
+
 // ---------------------------------------------------------------------------
 // safe-env E2E：复刻 c2j-native-deobfuscator 的原地改写攻击姿势
 // （*env->functions = hooked_copy，指针不变），验证：
@@ -2907,4 +3103,273 @@ TEST_F(RegCSafeEnvE2E, DebugModeContinuesOnStartupPollution)
               }),
               lines.end())
         << run.out;
+}
+
+// Math exact 溢出族 + Integer/Long toString radix/hashCode + Math/StrictMath
+// 补缺面（expm1/log1p/hyperbolic/copySign/ulp/fma/nextAfter/scalb 等）：
+// 基线 = 纯 JVM 执行，受保护 = RegC native 直调，逐行全等。
+//
+// 多项式敏感锚点（expm1/log1p 小幅输入、双曲函数）走 StrictMath 拼写：
+// JDK 17 的 StrictMath.* 是 fdlibm 5.3 移植且不被 C2 内联，与 crt 的 fdlibm
+// 实现位等价；Math.expm1/log1p 在中心区间走 JDK 自带多项式（与 fdlibm
+// 常数不同），可能末位差 1 ulp，只取平凡点（0.0）。fma 两侧都正确舍入，
+// 位等价。
+TEST_F(RegCBackendE2E, MathExactAndAdditionsBatchRoundTrip)
+{
+    runCase(
+        "RegCMathExactBatch",
+        "public class RegCMathExactBatch {\n"
+        "  public static String dhex(double x) { return Double.toHexString(x); }\n"
+        "  public static String fbits(float x) {\n"
+        "    return Integer.toHexString(Float.floatToIntBits(x));\n"
+        "  }\n"
+        // ---- Math exact 溢出族（溢出走 catch 哨兵，等价比较异常类与结果）----
+        "  public static int addOrCatch(int a, int b) {\n"
+        "    try { return Math.addExact(a, b); }\n"
+        "    catch (ArithmeticException e) { return -77; }\n"
+        "  }\n"
+        "  public static long addLongOrCatch(long a, long b) {\n"
+        "    try { return Math.addExact(a, b); }\n"
+        "    catch (ArithmeticException e) { return -77L; }\n"
+        "  }\n"
+        "  public static int subOrCatch(int a, int b) {\n"
+        "    try { return Math.subtractExact(a, b); }\n"
+        "    catch (ArithmeticException e) { return -78; }\n"
+        "  }\n"
+        "  public static long subLongOrCatch(long a, long b) {\n"
+        "    try { return Math.subtractExact(a, b); }\n"
+        "    catch (ArithmeticException e) { return -78L; }\n"
+        "  }\n"
+        "  public static int mulOrCatch(int a, int b) {\n"
+        "    try { return Math.multiplyExact(a, b); }\n"
+        "    catch (ArithmeticException e) { return -79; }\n"
+        "  }\n"
+        "  public static long mulLongOrCatch(long a, long b) {\n"
+        "    try { return Math.multiplyExact(a, b); }\n"
+        "    catch (ArithmeticException e) { return -79L; }\n"
+        "  }\n"
+        "  public static int incOrCatch(int a) {\n"
+        "    try { return Math.incrementExact(a); }\n"
+        "    catch (ArithmeticException e) { return -80; }\n"
+        "  }\n"
+        "  public static long incLongOrCatch(long a) {\n"
+        "    try { return Math.incrementExact(a); }\n"
+        "    catch (ArithmeticException e) { return -80L; }\n"
+        "  }\n"
+        "  public static int decOrCatch(int a) {\n"
+        "    try { return Math.decrementExact(a); }\n"
+        "    catch (ArithmeticException e) { return -81; }\n"
+        "  }\n"
+        "  public static long decLongOrCatch(long a) {\n"
+        "    try { return Math.decrementExact(a); }\n"
+        "    catch (ArithmeticException e) { return -81L; }\n"
+        "  }\n"
+        "  public static int negOrCatch(int a) {\n"
+        "    try { return Math.negateExact(a); }\n"
+        "    catch (ArithmeticException e) { return -82; }\n"
+        "  }\n"
+        "  public static long negLongOrCatch(long a) {\n"
+        "    try { return Math.negateExact(a); }\n"
+        "    catch (ArithmeticException e) { return -82L; }\n"
+        "  }\n"
+        "  public static int toIntExactOrCatch(long v) {\n"
+        "    try { return Math.toIntExact(v); }\n"
+        "    catch (ArithmeticException e) { return -83; }\n"
+        "  }\n"
+        "  public static int absExactOrCatch(int a) {\n"
+        "    try { return Math.absExact(a); }\n"
+        "    catch (ArithmeticException e) { return -84; }\n"
+        "  }\n"
+        "  public static long absExactLongOrCatch(long a) {\n"
+        "    try { return Math.absExact(a); }\n"
+        "    catch (ArithmeticException e) { return -84L; }\n"
+        "  }\n"
+        // ---- Integer/Long toString radix 版 + hashCode ----
+        "  public static String intRadix(int v, int r) { return Integer.toString(v, r); }\n"
+        "  public static String longRadix(long v, int r) { return Long.toString(v, r); }\n"
+        "  public static int intHash(int v) { return Integer.hashCode(v); }\n"
+        "  public static int longHash(long v) { return Long.hashCode(v); }\n"
+        // ---- Math/StrictMath 补缺面 ----
+        "  public static double sExpm1(double x) { return StrictMath.expm1(x); }\n"
+        "  public static double sLog1p(double x) { return StrictMath.log1p(x); }\n"
+        "  public static double sSinh(double x) { return StrictMath.sinh(x); }\n"
+        "  public static double mExpm1Zero() { return Math.expm1(0.0); }\n"
+        "  public static double mLog1pZero() { return Math.log1p(0.0); }\n"
+        "  public static double sinhAt(double x) { return Math.sinh(x); }\n"
+        "  public static double coshAt(double x) { return Math.cosh(x); }\n"
+        "  public static double tanhAt(double x) { return Math.tanh(x); }\n"
+        "  public static double remainderAt(double a, double b) {\n"
+        "    return Math.IEEEremainder(a, b);\n"
+        "  }\n"
+        "  public static double copySignAt(double a, double b) {\n"
+        "    return Math.copySign(a, b);\n"
+        "  }\n"
+        "  public static float copySignF(float a, float b) {\n"
+        "    return Math.copySign(a, b);\n"
+        "  }\n"
+        "  public static double toDeg(double x) { return Math.toDegrees(x); }\n"
+        "  public static double toRad(double x) { return Math.toRadians(x); }\n"
+        "  public static double fmaAt(double a, double b, double c) {\n"
+        "    return Math.fma(a, b, c);\n"
+        "  }\n"
+        "  public static float fmaF(float a, float b, float c) {\n"
+        "    return Math.fma(a, b, c);\n"
+        "  }\n"
+        "  public static double ulpAt(double x) { return Math.ulp(x); }\n"
+        "  public static float ulpF(float x) { return Math.ulp(x); }\n"
+        "  public static int getExpD(double x) { return Math.getExponent(x); }\n"
+        "  public static int getExpF(float x) { return Math.getExponent(x); }\n"
+        "  public static double nextAfterAt(double x, double d) {\n"
+        "    return Math.nextAfter(x, d);\n"
+        "  }\n"
+        "  public static double nextUpAt(double x) { return Math.nextUp(x); }\n"
+        "  public static float nextUpF(float x) { return Math.nextUp(x); }\n"
+        "  public static double nextDownAt(double x) { return Math.nextDown(x); }\n"
+        "  public static float nextDownF(float x) { return Math.nextDown(x); }\n"
+        "  public static double scalbAt(double x, int s) { return Math.scalb(x, s); }\n"
+        "  public static float scalbF(float x, int s) { return Math.scalb(x, s); }\n"
+        "}\n",
+        {
+            // ---- exact 族：正常值 + 溢出哨兵 ----
+            {"addOk", "RegCMathExactBatch.addOrCatch(12345, 6789)"},
+            {"addOverflowMax", "RegCMathExactBatch.addOrCatch(2147483647, 1)"},
+            {"addOverflowMin", "RegCMathExactBatch.addOrCatch(-2147483648, -1)"},
+            {"addLongOk", "RegCMathExactBatch.addLongOrCatch(4611686018427387903L, 1L)"},
+            {"addLongOverflow",
+             "RegCMathExactBatch.addLongOrCatch(9223372036854775807L, 1L)"},
+            {"addLongMinOverflow",
+             "RegCMathExactBatch.addLongOrCatch(-9223372036854775808L, -1L)"},
+            {"subOk", "RegCMathExactBatch.subOrCatch(5, -3)"},
+            {"subOverflowMin", "RegCMathExactBatch.subOrCatch(-2147483648, 1)"},
+            {"subLongOverflow",
+             "RegCMathExactBatch.subLongOrCatch(-9223372036854775808L, 1L)"},
+            {"mulOk", "RegCMathExactBatch.mulOrCatch(12345, 67)"},
+            {"mulOverflowMax", "RegCMathExactBatch.mulOrCatch(2147483647, 2)"},
+            {"mulOverflowMin", "RegCMathExactBatch.mulOrCatch(-2147483648, -1)"},
+            {"mulLongOverflow", "RegCMathExactBatch.mulLongOrCatch(9223372036854775807L, 2L)"},
+            {"mulLongMinMinusOne",
+             "RegCMathExactBatch.mulLongOrCatch(-9223372036854775808L, -1L)"},
+            {"incOk", "RegCMathExactBatch.incOrCatch(4)"},
+            {"incOverflow", "RegCMathExactBatch.incOrCatch(2147483647)"},
+            {"incLongOverflow",
+             "RegCMathExactBatch.incLongOrCatch(9223372036854775807L)"},
+            {"decOverflow", "RegCMathExactBatch.decOrCatch(-2147483648)"},
+            {"decLongOverflow",
+             "RegCMathExactBatch.decLongOrCatch(-9223372036854775808L)"},
+            {"negOk", "RegCMathExactBatch.negOrCatch(123)"},
+            {"negOverflow", "RegCMathExactBatch.negOrCatch(-2147483648)"},
+            {"negLongOverflow",
+             "RegCMathExactBatch.negLongOrCatch(-9223372036854775808L)"},
+            // ---- toIntExact 边界（含上/下越界溢出哨兵）----
+            {"toIntExactMax", "RegCMathExactBatch.toIntExactOrCatch(2147483647L)"},
+            {"toIntExactMin", "RegCMathExactBatch.toIntExactOrCatch(-2147483648L)"},
+            {"toIntExactOver", "RegCMathExactBatch.toIntExactOrCatch(2147483648L)"},
+            {"toIntExactUnder", "RegCMathExactBatch.toIntExactOrCatch(-2147483649L)"},
+            // ---- absExact（MIN_VALUE 取绝对值溢出）----
+            {"absExactOk", "RegCMathExactBatch.absExactOrCatch(123)"},
+            {"absExactOverflow", "RegCMathExactBatch.absExactOrCatch(-2147483648)"},
+            {"absExactLongOverflow",
+             "RegCMathExactBatch.absExactLongOrCatch(-9223372036854775808L)"},
+            // ---- toString radix：正/负/极值/各基数/非法基数回落 ----
+            {"intRadix16", "RegCMathExactBatch.intRadix(255, 16)"},
+            {"intRadix2", "RegCMathExactBatch.intRadix(-12345, 2)"},
+            {"intRadix8Min", "RegCMathExactBatch.intRadix(-2147483648, 8)"},
+            {"intRadix36", "RegCMathExactBatch.intRadix(35, 36)"},
+            {"intRadixNeg36", "RegCMathExactBatch.intRadix(-35, 36)"},
+            {"intRadixZero", "RegCMathExactBatch.intRadix(0, 5)"},
+            {"intRadixBad1", "RegCMathExactBatch.intRadix(7, 1)"},
+            {"intRadixBad0", "RegCMathExactBatch.intRadix(7, 0)"},
+            {"intRadixBad37", "RegCMathExactBatch.intRadix(7, 37)"},
+            {"intRadixBadNeg", "RegCMathExactBatch.intRadix(7, -3)"},
+            {"longRadix16Max",
+             "RegCMathExactBatch.longRadix(9223372036854775807L, 16)"},
+            {"longRadix8Min",
+             "RegCMathExactBatch.longRadix(-9223372036854775808L, 8)"},
+            {"longRadix36", "RegCMathExactBatch.longRadix(-2, 36)"},
+            {"longRadixZero", "RegCMathExactBatch.longRadix(0L, 12)"},
+            {"longRadixBad", "RegCMathExactBatch.longRadix(7L, 40)"},
+            // ---- hashCode（Integer 值本身；Long 高低位异或）----
+            {"intHash", "RegCMathExactBatch.intHash(12345)"},
+            {"intHashMin", "RegCMathExactBatch.intHash(-2147483648)"},
+            {"longHash", "RegCMathExactBatch.longHash(1311768467463790320L)"},
+            {"longHashMin", "RegCMathExactBatch.longHash(-9223372036854775808L)"},
+            {"longHashMax", "RegCMathExactBatch.longHash(9223372036854775807L)"},
+            // ---- expm1/log1p（StrictMath fdlibm 锚点 + Math 平凡点）----
+            {"sExpm1At1", "RegCMathExactBatch.dhex(RegCMathExactBatch.sExpm1(1.0))"},
+            {"sExpm1Neg1", "RegCMathExactBatch.dhex(RegCMathExactBatch.sExpm1(-1.0))"},
+            {"sExpm1Tiny", "RegCMathExactBatch.dhex(RegCMathExactBatch.sExpm1(1e-14))"},
+            {"sExpm1Big", "RegCMathExactBatch.dhex(RegCMathExactBatch.sExpm1(700.0))"},
+            {"mExpm1Zero", "RegCMathExactBatch.dhex(RegCMathExactBatch.mExpm1Zero())"},
+            {"sLog1pAt1", "RegCMathExactBatch.dhex(RegCMathExactBatch.sLog1p(1.0))"},
+            {"sLog1pTiny", "RegCMathExactBatch.dhex(RegCMathExactBatch.sLog1p(1e-14))"},
+            {"sLog1pNeg", "RegCMathExactBatch.dhex(RegCMathExactBatch.sLog1p(-0.9))"},
+            {"mLog1pZero", "RegCMathExactBatch.dhex(RegCMathExactBatch.mLog1pZero())"},
+            // ---- 双曲函数 + IEEEremainder（Math 委派 StrictMath，fdlibm 同源）----
+            {"sinhAt1", "RegCMathExactBatch.dhex(RegCMathExactBatch.sinhAt(1.0))"},
+            {"sinhBig", "RegCMathExactBatch.dhex(RegCMathExactBatch.sinhAt(720.0))"},
+            {"coshAt1", "RegCMathExactBatch.dhex(RegCMathExactBatch.coshAt(1.0))"},
+            {"coshBig", "RegCMathExactBatch.dhex(RegCMathExactBatch.coshAt(30.0))"},
+            {"tanhAt1", "RegCMathExactBatch.dhex(RegCMathExactBatch.tanhAt(1.0))"},
+            {"tanhBig", "RegCMathExactBatch.dhex(RegCMathExactBatch.tanhAt(20.0))"},
+            {"sSinhNeg", "RegCMathExactBatch.dhex(RegCMathExactBatch.sSinh(-2.0))"},
+            {"ieeeRem10_6", "RegCMathExactBatch.dhex(RegCMathExactBatch.remainderAt(10.0, 6.0))"},
+            {"ieeeRemNeg", "RegCMathExactBatch.dhex(RegCMathExactBatch.remainderAt(-10.0, 6.0))"},
+            {"ieeeRemHalf", "RegCMathExactBatch.dhex(RegCMathExactBatch.remainderAt(4.5, 2.0))"},
+            // ---- copySign/toDegrees/toRadians（非 NaN，无符号残留歧义）----
+            {"copySignPos", "RegCMathExactBatch.dhex(RegCMathExactBatch.copySignAt(3.5, 2.0))"},
+            {"copySignNeg", "RegCMathExactBatch.dhex(RegCMathExactBatch.copySignAt(3.5, -2.0))"},
+            {"copySignNegZeroArg",
+             "RegCMathExactBatch.dhex(RegCMathExactBatch.copySignAt(-7.25, -0.0))"},
+            {"copySignF", "RegCMathExactBatch.fbits(RegCMathExactBatch.copySignF(2.5f, -1.0f))"},
+            {"toDegPi", "RegCMathExactBatch.dhex(RegCMathExactBatch.toDeg(Math.PI))"},
+            {"toDegHalfPi", "RegCMathExactBatch.dhex(RegCMathExactBatch.toDeg(Math.PI / 2))"},
+            {"toRad180", "RegCMathExactBatch.dhex(RegCMathExactBatch.toRad(180.0))"},
+            {"toRad90", "RegCMathExactBatch.dhex(RegCMathExactBatch.toRad(90.0))"},
+            // ---- fma（两侧均正确舍入，位等价）----
+            {"fmaSimple", "RegCMathExactBatch.dhex(RegCMathExactBatch.fmaAt(2.0, 3.0, 4.0))"},
+            {"fmaSubtle",
+             "RegCMathExactBatch.dhex(RegCMathExactBatch.fmaAt(1e16, 1.0000000000000002, -1e16))"},
+            {"fmaTiny", "RegCMathExactBatch.dhex(RegCMathExactBatch.fmaAt(0.1, 0.2, 0.3))"},
+            {"fmaF", "RegCMathExactBatch.fbits(RegCMathExactBatch.fmaF(1.1f, 2.2f, 3.3f))"},
+            // ---- ulp/getExponent（公式位型，确定性）----
+            {"ulpAt1", "RegCMathExactBatch.dhex(RegCMathExactBatch.ulpAt(1.0))"},
+            {"ulpAtMax", "RegCMathExactBatch.dhex(RegCMathExactBatch.ulpAt(Double.MAX_VALUE))"},
+            {"ulpAtMin", "RegCMathExactBatch.dhex(RegCMathExactBatch.ulpAt(Double.MIN_VALUE))"},
+            {"ulpAtPi", "RegCMathExactBatch.dhex(RegCMathExactBatch.ulpAt(Math.PI))"},
+            {"ulpF1", "RegCMathExactBatch.fbits(RegCMathExactBatch.ulpF(1.0f))"},
+            {"ulpFMin", "RegCMathExactBatch.fbits(RegCMathExactBatch.ulpF(Float.MIN_VALUE))"},
+            {"ulpFMax", "RegCMathExactBatch.fbits(RegCMathExactBatch.ulpF(Float.MAX_VALUE))"},
+            {"getExpD1", "RegCMathExactBatch.getExpD(1.0)"},
+            {"getExpDBig", "RegCMathExactBatch.getExpD(1e300)"},
+            {"getExpDSub", "RegCMathExactBatch.getExpD(Double.MIN_VALUE)"},
+            {"getExpDInf", "RegCMathExactBatch.getExpD(Double.POSITIVE_INFINITY)"},
+            {"getExpF", "RegCMathExactBatch.getExpF(1.0f)"},
+            {"getExpFSub", "RegCMathExactBatch.getExpF(Float.MIN_VALUE)"},
+            // ---- nextAfter/nextUp/nextDown（含 -0.0 与极值边界）----
+            {"nextAfterUp", "RegCMathExactBatch.dhex(RegCMathExactBatch.nextAfterAt(1.0, 2.0))"},
+            {"nextAfterDown",
+             "RegCMathExactBatch.dhex(RegCMathExactBatch.nextAfterAt(1.0, 0.5))"},
+            {"nextAfterMinToZero",
+             "RegCMathExactBatch.dhex(RegCMathExactBatch.nextAfterAt(Double.MIN_VALUE, 0.0))"},
+            {"nextAfterZeroUp",
+             "RegCMathExactBatch.dhex(RegCMathExactBatch.nextAfterAt(0.0, 1.0))"},
+            {"nextAfterNegZero",
+             "RegCMathExactBatch.dhex(RegCMathExactBatch.nextAfterAt(-0.0, -1.0))"},
+            {"nextUpD", "RegCMathExactBatch.dhex(RegCMathExactBatch.nextUpAt(1.0))"},
+            {"nextUpDNegZero", "RegCMathExactBatch.dhex(RegCMathExactBatch.nextUpAt(-0.0))"},
+            {"nextUpDMax", "RegCMathExactBatch.dhex(RegCMathExactBatch.nextUpAt(Double.MAX_VALUE))"},
+            {"nextUpF", "RegCMathExactBatch.fbits(RegCMathExactBatch.nextUpF(1.0f))"},
+            {"nextDownD", "RegCMathExactBatch.dhex(RegCMathExactBatch.nextDownAt(1.0))"},
+            {"nextDownDMax",
+             "RegCMathExactBatch.dhex(RegCMathExactBatch.nextDownAt(Double.MAX_VALUE))"},
+            {"nextDownF", "RegCMathExactBatch.fbits(RegCMathExactBatch.nextDownF(1.0f))"},
+            // ---- scalb（正常/次正规/上溢/浮点版）----
+            {"scalbD", "RegCMathExactBatch.dhex(RegCMathExactBatch.scalbAt(1.5, 10))"},
+            {"scalbDNeg", "RegCMathExactBatch.dhex(RegCMathExactBatch.scalbAt(1.5, -1074))"},
+            {"scalbDOver", "RegCMathExactBatch.dhex(RegCMathExactBatch.scalbAt(1.0, 1024))"},
+            {"scalbDLarge", "RegCMathExactBatch.dhex(RegCMathExactBatch.scalbAt(1.0, 2099))"},
+            {"scalbF", "RegCMathExactBatch.fbits(RegCMathExactBatch.scalbF(1.5f, 5))"},
+            {"scalbFOver", "RegCMathExactBatch.fbits(RegCMathExactBatch.scalbF(1.0f, 128))"},
+            {"scalbFSub", "RegCMathExactBatch.fbits(RegCMathExactBatch.scalbF(1.0f, -149))"},
+        });
 }

@@ -460,6 +460,35 @@ mj2x_regc_status mj2x_string_builder_set_char_at(mj2x_regc_context*   context,
                                                  mj2x_string_builder* state, int32_t index,
                                                  uint16_t value);
 
+/// @brief JDK 17 AbstractStringBuilder 补充面：原地反转（代理对整体保序）、
+/// 删段/删单元（越界抛 StringIndexOutOfBoundsException，消息对齐 JDK 17
+/// checkRangeSIOOBE/String.checkIndex）、substring 物化与 UTF-16 子串搜索。
+/// 返回 builder 的方法（reverse/delete/deleteCharAt）由发射端以 receiver
+/// 回填 dest（与 append 链式同形态），本 ABI 只返回 status。
+mj2x_regc_status mj2x_string_builder_reverse(mj2x_regc_context*   context,
+                                             mj2x_string_builder* state);
+mj2x_regc_status mj2x_string_builder_delete_char_at(mj2x_regc_context*   context,
+                                                    mj2x_string_builder* state, int32_t index);
+mj2x_regc_status mj2x_string_builder_delete(mj2x_regc_context*   context,
+                                            mj2x_string_builder* state, int32_t start,
+                                            int32_t              end);
+mj2x_regc_status mj2x_string_builder_substring_from(mj2x_regc_context*         context,
+                                                    const mj2x_string_builder* state,
+                                                    int32_t                    start,
+                                                    mj2x_ref*                  out_string);
+mj2x_regc_status mj2x_string_builder_substring_range(mj2x_regc_context*         context,
+                                                     const mj2x_string_builder* state,
+                                                     int32_t start, int32_t end,
+                                                     mj2x_ref*                  out_string);
+mj2x_regc_status mj2x_string_builder_index_of(mj2x_regc_context*         context,
+                                              const mj2x_string_builder* state,
+                                              mj2x_ref                   needle,
+                                              int32_t*                   out_index);
+mj2x_regc_status mj2x_string_builder_last_index_of(mj2x_regc_context*         context,
+                                                   const mj2x_string_builder* state,
+                                                   mj2x_ref                   needle,
+                                                   int32_t*                   out_index);
+
 /// @brief Return the number of retained UTF-16 code units, or zero for null.
 size_t mj2x_string_builder_utf16_length(const mj2x_string_builder* state);
 
@@ -532,6 +561,32 @@ mj2x_regc_status mj2x_string_buffer_char_at(mj2x_regc_context*        context,
 mj2x_regc_status mj2x_string_buffer_set_char_at(mj2x_regc_context*  context,
                                                 mj2x_string_buffer* state, int32_t index,
                                                 uint16_t value);
+/// @brief StringBuffer 侧的 JDK 17 补充面（reverse/delete/deleteCharAt/
+/// substring/indexOf/lastIndexOf）：逐操作持锁，语义与 StringBuilder 同名
+/// ABI 逐点一致。
+mj2x_regc_status mj2x_string_buffer_reverse(mj2x_regc_context*  context,
+                                            mj2x_string_buffer* state);
+mj2x_regc_status mj2x_string_buffer_delete_char_at(mj2x_regc_context*  context,
+                                                   mj2x_string_buffer* state, int32_t index);
+mj2x_regc_status mj2x_string_buffer_delete(mj2x_regc_context*  context,
+                                           mj2x_string_buffer* state, int32_t start,
+                                           int32_t             end);
+mj2x_regc_status mj2x_string_buffer_substring_from(mj2x_regc_context*        context,
+                                                   const mj2x_string_buffer* state,
+                                                   int32_t                   start,
+                                                   mj2x_ref*                 out_string);
+mj2x_regc_status mj2x_string_buffer_substring_range(mj2x_regc_context*        context,
+                                                    const mj2x_string_buffer* state,
+                                                    int32_t start, int32_t end,
+                                                    mj2x_ref*                 out_string);
+mj2x_regc_status mj2x_string_buffer_index_of(mj2x_regc_context*        context,
+                                             const mj2x_string_buffer* state,
+                                             mj2x_ref                  needle,
+                                             int32_t*                  out_index);
+mj2x_regc_status mj2x_string_buffer_last_index_of(mj2x_regc_context*        context,
+                                                  const mj2x_string_buffer* state,
+                                                  mj2x_ref                  needle,
+                                                  int32_t*                  out_index);
 size_t           mj2x_string_buffer_utf16_length(const mj2x_string_buffer* state);
 
 #ifdef __cplusplus

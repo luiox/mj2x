@@ -589,6 +589,47 @@ TEST(RegCIntrinsicRegistryTest, MatchesSystemArraycopy)
     EXPECT_EQ(decision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesSystemTimeAndObjectsIntrinsics)
+{
+    // System 时钟：纯读取不抛（RuntimeFunction，无 context），与 Math.abs 同形。
+    auto millis = RegCIntrinsicRegistry::builtins().matchCall(makeStaticCall(
+        "java/lang/System", "currentTimeMillis", "()J", {}));
+    EXPECT_EQ(millis.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(millis.emitKind, RegCIntrinsicEmitKind::RuntimeFunction);
+    EXPECT_EQ(millis.symbol, "mj2x_intrinsic_system_current_time_millis");
+    EXPECT_FALSE(millis.passContext);
+
+    auto nanos = RegCIntrinsicRegistry::builtins().matchCall(
+        makeStaticCall("java/lang/System", "nanoTime", "()J", {}));
+    EXPECT_EQ(nanos.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(nanos.emitKind, RegCIntrinsicEmitKind::RuntimeFunction);
+    EXPECT_EQ(nanos.symbol, "mj2x_intrinsic_system_nano_time");
+    EXPECT_FALSE(nanos.passContext);
+
+    // Objects.requireNonNull：null 抛 NPE，必须 RegCLocalHelper（保留调用后
+    // ExceptionCheck，pending 经 context 路由，模板同 parseInt 族）。
+    auto requireNonNull = RegCIntrinsicRegistry::builtins().matchCall(makeStaticCall(
+        "java/util/Objects",
+        "requireNonNull",
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+        {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF})}));
+    EXPECT_EQ(requireNonNull.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(requireNonNull.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(requireNonNull.symbol, "_mj2x_intrinsic_require_non_null");
+    EXPECT_TRUE(requireNonNull.passContext);
+
+    auto requireNonNullMessage = RegCIntrinsicRegistry::builtins().matchCall(makeStaticCall(
+        "java/util/Objects",
+        "requireNonNull",
+        "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;",
+        {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+         RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF})}));
+    EXPECT_EQ(requireNonNullMessage.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(requireNonNullMessage.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(requireNonNullMessage.symbol, "_mj2x_intrinsic_require_non_null_message");
+    EXPECT_TRUE(requireNonNullMessage.passContext);
+}
+
 TEST(RegCIntrinsicRegistryTest, MalformedIntrinsicArgumentCountIsUnsupported)
 {
     auto ins = makeStaticCall("java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", {});
@@ -900,6 +941,122 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderIntrinsics)
     EXPECT_EQ(toStringDecision.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuilder);
 }
 
+TEST(RegCIntrinsicRegistryTest, MatchesStringBuilderMutateSearchIntrinsics)
+{
+    // 返回 this 的 reverse/delete/deleteCharAt 走 StringBuilderAppend 形态
+    // （发射端以 receiver 回填 dest，链式与 append 同款）；substring 返回
+    // String、indexOf/lastIndexOf 返回 I 走 StringBuilderMethod 的 out 参形态。
+    RegInstruction call;
+    call.kind                = RegInstructionKind::Call;
+    call.method.owner        = U("java/lang/StringBuilder");
+    call.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+
+    call.method.name = U("reverse");
+    call.method.desc = U("()Ljava/lang/StringBuilder;");
+    call.args        = {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF})};
+    auto reverse     = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(reverse.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(reverse.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
+    EXPECT_EQ(reverse.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuilder);
+    EXPECT_EQ(reverse.symbol, "mj2x_string_builder_reverse");
+
+    call.method.name = U("deleteCharAt");
+    call.method.desc = U("(I)Ljava/lang/StringBuilder;");
+    call.args        = {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+                        RegOperand::fromInt(0, SSAType::I32)};
+    auto deleteCharAt = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(deleteCharAt.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(deleteCharAt.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
+    EXPECT_EQ(deleteCharAt.symbol, "mj2x_string_builder_delete_char_at");
+
+    call.method.name = U("delete");
+    call.method.desc = U("(II)Ljava/lang/StringBuilder;");
+    call.args        = {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+                        RegOperand::fromInt(0, SSAType::I32),
+                        RegOperand::fromInt(2, SSAType::I32)};
+    auto deleteRange = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(deleteRange.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(deleteRange.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
+    EXPECT_EQ(deleteRange.symbol, "mj2x_string_builder_delete");
+
+    call.method.name = U("substring");
+    call.method.desc = U("(I)Ljava/lang/String;");
+    call.args        = {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+                        RegOperand::fromInt(1, SSAType::I32)};
+    auto substringFrom = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(substringFrom.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(substringFrom.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
+    EXPECT_EQ(substringFrom.symbol, "mj2x_string_builder_substring_from");
+
+    call.method.desc = U("(II)Ljava/lang/String;");
+    call.args.push_back(RegOperand::fromInt(3, SSAType::I32));
+    auto substringRange = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(substringRange.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(substringRange.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
+    EXPECT_EQ(substringRange.symbol, "mj2x_string_builder_substring_range");
+
+    call.method.name = U("indexOf");
+    call.method.desc = U("(Ljava/lang/String;)I");
+    call.args        = {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF}),
+                        RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF})};
+    auto indexOf = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(indexOf.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(indexOf.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
+    EXPECT_EQ(indexOf.symbol, "mj2x_string_builder_index_of");
+
+    call.method.name = U("lastIndexOf");
+    auto lastIndexOf = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(lastIndexOf.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(lastIndexOf.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
+    EXPECT_EQ(lastIndexOf.symbol, "mj2x_string_builder_last_index_of");
+
+    // StringBuffer 逐条对称（持锁转发同语义实现）。
+    call.method.owner = U("java/lang/StringBuffer");
+    call.method.name  = U("reverse");
+    call.method.desc  = U("()Ljava/lang/StringBuffer;");
+    call.args         = {RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF})};
+    auto bufferReverse = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(bufferReverse.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(bufferReverse.emitKind, RegCIntrinsicEmitKind::StringBuilderAppend);
+    EXPECT_EQ(bufferReverse.nativeObjectKind, RegCIntrinsicNativeObjectKind::StringBuffer);
+    EXPECT_EQ(bufferReverse.symbol, "mj2x_string_buffer_reverse");
+
+    call.method.name = U("deleteCharAt");
+    call.method.desc = U("(I)Ljava/lang/StringBuffer;");
+    call.args.push_back(RegOperand::fromInt(0, SSAType::I32));
+    auto bufferDeleteCharAt = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(bufferDeleteCharAt.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(bufferDeleteCharAt.symbol, "mj2x_string_buffer_delete_char_at");
+
+    call.method.name = U("delete");
+    call.method.desc = U("(II)Ljava/lang/StringBuffer;");
+    call.args.push_back(RegOperand::fromInt(2, SSAType::I32));
+    auto bufferDelete = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(bufferDelete.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(bufferDelete.symbol, "mj2x_string_buffer_delete");
+
+    call.method.name = U("substring");
+    call.method.desc = U("(II)Ljava/lang/String;");
+    call.args.resize(3);
+    auto bufferSubstring = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(bufferSubstring.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(bufferSubstring.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
+    EXPECT_EQ(bufferSubstring.symbol, "mj2x_string_buffer_substring_range");
+
+    call.method.name = U("indexOf");
+    call.method.desc = U("(Ljava/lang/String;)I");
+    call.args.resize(2);
+    auto bufferIndexOf = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(bufferIndexOf.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(bufferIndexOf.emitKind, RegCIntrinsicEmitKind::StringBuilderMethod);
+    EXPECT_EQ(bufferIndexOf.symbol, "mj2x_string_buffer_index_of");
+
+    call.method.name = U("lastIndexOf");
+    auto bufferLastIndexOf = RegCIntrinsicRegistry::builtins().matchCall(call);
+    EXPECT_EQ(bufferLastIndexOf.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(bufferLastIndexOf.symbol, "mj2x_string_buffer_last_index_of");
+}
+
 TEST(RegCIntrinsicRegistryTest, MatchesMutableStringRangeCapacityAndBufferIntrinsics)
 {
     RegInstruction call;
@@ -976,10 +1133,13 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
     charAt.args.push_back(RegOperand::fromInt(1, SSAType::I32));
 
     auto charAtDecision = RegCIntrinsicRegistry::builtins().matchCall(charAt);
-    // charAt/hashCode/equals 不再走 StringMethod intrinsic：多 JNI 数据管道
-    // 比回退缓存 methodID 的 1-JNI CallXxxMethodA 更慢（HotSpot 对这三个方法
-    // 有 VM intrinsic + memoization），保留 length/isEmpty 等 1-JNI 平价项。
-    EXPECT_EQ(charAtDecision.kind, RegCIntrinsicDecisionKind::Fallback);
+    // charAt/equals/hashCode 曾被摘出 intrinsic 面（多 JNI 数据管道更慢），
+    // perf/regc-jni-hotpath 第二批回归：charAt 吃 context（SIOOBE 通道），
+    // equals/hashCode 走 StringMethod 直调（见 MatchesStringBatchIntrinsics）。
+    EXPECT_EQ(charAtDecision.kind, RegCIntrinsicDecisionKind::Emit);
+    EXPECT_EQ(charAtDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
+    EXPECT_EQ(charAtDecision.symbol, "_mj2x_intrinsic_string_char_at");
+    EXPECT_TRUE(charAtDecision.passContext);
 
     RegInstruction isEmpty;
     isEmpty.kind                = RegInstructionKind::Call;
@@ -1020,6 +1180,76 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
     EXPECT_EQ(valueOfDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(valueOfDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(valueOfDecision.symbol, "_mj2x_intrinsic_double_to_string");
+}
+
+// String 第二批（perf/regc-jni-hotpath）：lastIndexOf×4 / substring×2 / charAt /
+// equals / hashCode / toCharArray / repeat。emitKind 分流：需要异常通道的
+// substring/charAt/repeat 走 RegCLocalHelper+passContext（对齐 parseInt 族），
+// 其余走 StringMethod 直调；全部 instance 条目（argCount 含 receiver），
+// llvmDirect 不设（LLVM 侧维持 JNI 分派）。
+TEST(RegCIntrinsicRegistryTest, MatchesStringBatchIntrinsics)
+{
+    auto makeCall = [](const char* name, const char* desc, std::vector<RegOperand> args) {
+        RegInstruction call;
+        call.kind                = RegInstructionKind::Call;
+        call.method.owner        = U("java/lang/String");
+        call.method.name         = U(name);
+        call.method.desc         = U(desc);
+        call.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
+        call.args                = std::move(args);
+        return call;
+    };
+    const RegOperand receiver = RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF});
+    const RegOperand stringArg = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
+    const RegOperand intArg    = RegOperand::fromInt(1, SSAType::I32);
+
+    struct BatchCase
+    {
+        RegInstruction           call;
+        RegCIntrinsicEmitKind    emitKind;
+        std::string              symbol;
+        bool                     passContext;
+    };
+    const std::vector<BatchCase> cases = {
+        {makeCall("lastIndexOf", "(I)I", {receiver, intArg}),
+         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of_char",
+         false},
+        {makeCall("lastIndexOf", "(II)I", {receiver, intArg, intArg}),
+         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of_char_from",
+         false},
+        {makeCall("lastIndexOf", "(Ljava/lang/String;)I", {receiver, stringArg}),
+         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of",
+         false},
+        {makeCall("lastIndexOf", "(Ljava/lang/String;I)I", {receiver, stringArg, intArg}),
+         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of_from",
+         false},
+        {makeCall("substring", "(I)Ljava/lang/String;", {receiver, intArg}),
+         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_substring", true},
+        {makeCall("substring", "(II)Ljava/lang/String;", {receiver, intArg, intArg}),
+         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_substring_end",
+         true},
+        {makeCall("charAt", "(I)C", {receiver, intArg}),
+         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_char_at", true},
+        {makeCall("equals", "(Ljava/lang/Object;)Z", {receiver, stringArg}),
+         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_equals", false},
+        {makeCall("hashCode", "()I", {receiver}),
+         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_hash_code", false},
+        {makeCall("toCharArray", "()[C", {receiver}),
+         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_to_char_array",
+         false},
+        {makeCall("repeat", "(I)Ljava/lang/String;", {receiver, intArg}),
+         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_repeat", true},
+    };
+
+    for (const auto& batch : cases) {
+        auto decision = RegCIntrinsicRegistry::builtins().matchCall(batch.call);
+        EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit)
+            << batch.symbol;
+        EXPECT_EQ(decision.emitKind, batch.emitKind) << batch.symbol;
+        EXPECT_EQ(decision.symbol, batch.symbol);
+        EXPECT_EQ(decision.passContext, batch.passContext) << batch.symbol;
+        EXPECT_EQ(decision.precheck, RegCIntrinsicPrecheck::None) << batch.symbol;
+    }
 }
 
 TEST(RegCIntrinsicRegistryTest, MatchesUtf16StringRuntimeIntrinsics)
@@ -1394,21 +1624,22 @@ TEST(RegCIntrinsicTest, StringMethodsLoweredToIntrinsicsNotJni)
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_length("), std::string::npos)
         << result.source;
-    // charAt/hashCode/equals 回退缓存 methodID 调用（1 JNI），不再发射
-    // StringMethod intrinsic（多 JNI 数据管道实测更慢）。
-    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
+    // charAt/hashCode/equals 第二批回归 intrinsic 面（emitKind 分流：
+    // charAt 为 RegCLocalHelper+context，equals/hashCode 为 StringMethod），
+    // 缓存 methodID 的 JNI 回退面不得再出现。
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_equals("), std::string::npos)
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_equals("), std::string::npos)
         << result.source;
     EXPECT_EQ(result.source.find("java/lang/String\", \"length\""), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
+    EXPECT_EQ(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
+    EXPECT_EQ(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("java/lang/String\", \"equals\""), std::string::npos)
+    EXPECT_EQ(result.source.find("java/lang/String\", \"equals\""), std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
 }
@@ -1515,6 +1746,154 @@ TEST(RegCIntrinsicTest, MoreStringMethodsLoweredToIntrinsicsNotJni)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/String\", \"contains\""),
               std::string::npos)
+        << result.source;
+    expectNoStackAnchors(result.source);
+}
+
+// String 第二批发射形态：lastIndexOf×4 / substring×2 / charAt / hashCode /
+// toCharArray / repeat 全部降为 intrinsic 直调（substring/charAt/repeat 吃
+// context），缓存 methodID 的 JNI 回退面不得出现；串接结果上的 length() 与
+// toCharArray 的 ARRAYLENGTH 保持各自的 1-JNI/0-JNI 平价路径。
+TEST(RegCIntrinsicTest, StringBatchMethodsLoweredToIntrinsicsNotJni)
+{
+    std::string reason;
+    // static int batch(String s) {
+    //   return s.lastIndexOf('l') + s.lastIndexOf('l', 3) + s.lastIndexOf("lo")
+    //       + s.lastIndexOf("l", 4) + s.substring(2).length()
+    //       + s.substring(1, 3).length() + s.charAt(0) + s.hashCode()
+    //       + s.toCharArray().length + "ab".repeat(2).length();
+    // }
+    auto result = emitRegC(
+        "batchStrings",
+        "(Ljava/lang/String;)I",
+        {
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new IntInsnNode(Opcodes::BIPUSH, 108),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("lastIndexOf"), U("(I)I"), false),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new IntInsnNode(Opcodes::BIPUSH, 108),
+            new InsnNode(Opcodes::ICONST_3),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("lastIndexOf"), U("(II)I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new LdcInsnNode(std::string("lo")),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("lastIndexOf"),
+                               U("(Ljava/lang/String;)I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new LdcInsnNode(std::string("l")),
+            new InsnNode(Opcodes::ICONST_4),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("lastIndexOf"),
+                               U("(Ljava/lang/String;I)I"),
+                               false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new InsnNode(Opcodes::ICONST_2),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("substring"),
+                               U("(I)Ljava/lang/String;"),
+                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new InsnNode(Opcodes::ICONST_1),
+            new InsnNode(Opcodes::ICONST_3),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("substring"),
+                               U("(II)Ljava/lang/String;"),
+                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new InsnNode(Opcodes::ICONST_0),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("charAt"), U("(I)C"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("hashCode"), U("()I"), false),
+            new InsnNode(Opcodes::IADD),
+            new VarInsnNode(Opcodes::ALOAD, 0),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("toCharArray"),
+                               U("()[C"),
+                               false),
+            new InsnNode(Opcodes::ARRAYLENGTH),
+            new InsnNode(Opcodes::IADD),
+            new LdcInsnNode(std::string("ab")),
+            new InsnNode(Opcodes::ICONST_2),
+            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
+                               U("java/lang/String"),
+                               U("repeat"),
+                               U("(I)Ljava/lang/String;"),
+                               false),
+            new MethodInsnNode(
+                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        4,
+        1,
+        reason);
+
+    ASSERT_TRUE(result.ok) << result.reason;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of_char("),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of_char_from("),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of_from("),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_substring("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_substring_end("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_to_char_array("), std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_repeat("), std::string::npos)
+        << result.source;
+    // 语义自测（发射文本级）：吃 context 的三条必须以 current_context 领参。
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_substring_end(_mj2x_regc_current_context()"),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at(_mj2x_regc_current_context()"),
+              std::string::npos)
+        << result.source;
+    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_repeat(_mj2x_regc_current_context()"),
+              std::string::npos)
+        << result.source;
+    // JNI 回退面：六组方法名的缓存 methodID 调用串不得出现。
+    EXPECT_EQ(result.source.find("java/lang/String\", \"lastIndexOf\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"substring\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"toCharArray\""), std::string::npos)
+        << result.source;
+    EXPECT_EQ(result.source.find("java/lang/String\", \"repeat\""), std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
 }
@@ -2918,4 +3297,288 @@ TEST(RegCLdcClassTest, LdcClassConstantEmitsFindClass)
     // internal name 正确透传。
     EXPECT_NE(result.source.find("\"java/lang/String\""), std::string::npos) << result.source;
     expectNoStackAnchors(result.source);
+}
+
+TEST(RegCIntrinsicRegistryTest, MatchesMathStrictMathAndIntLongAdditionsThroughRegistry)
+{
+    // Math/StrictMath 补缺面 + Math exact 溢出族 + Integer/Long toString
+    // radix/hashCode（perf/regc-jni-hotpath）。Math 补缺 23 条与 StrictMath
+    // 补缺 23 条共用同一 strictmath symbol（Math 委派 StrictMath 或反之，
+    // JDK 17 实源口径）；exact 族为 Math 专属 RegCLocalHelper（溢出抛
+    // ArithmeticException，RuntimeFunction 会被豁免调用后异常检查）；
+    // toString radix 版 RuntimeFunction+passContext（NewStringUTF 需 env），
+    // hashCode 纯计算。全条目 llvmDirect 不设（零值 false）。
+    struct AdditionCase
+    {
+        const char*           owner;
+        const char*           name;
+        const char*           desc;
+        const char*           symbol;
+        RegCIntrinsicEmitKind emitKind;
+        bool                  passContext;
+    };
+    const AdditionCase kCases[] = {
+        // ---- Math 补缺面（fdlibm/位型）----
+        {"java/lang/Math", "expm1", "(D)D", "mj2x_strictmath_expm1", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "log1p", "(D)D", "mj2x_strictmath_log1p", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "sinh", "(D)D", "mj2x_strictmath_sinh", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "cosh", "(D)D", "mj2x_strictmath_cosh", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "tanh", "(D)D", "mj2x_strictmath_tanh", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "IEEEremainder", "(DD)D", "mj2x_strictmath_ieee_remainder", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "copySign", "(DD)D", "mj2x_strictmath_copy_sign_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "copySign", "(FF)F", "mj2x_strictmath_copy_sign_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "toDegrees", "(D)D", "mj2x_strictmath_to_degrees", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "toRadians", "(D)D", "mj2x_strictmath_to_radians", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "fma", "(DDD)D", "mj2x_strictmath_fma_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "fma", "(FFF)F", "mj2x_strictmath_fma_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "ulp", "(D)D", "mj2x_strictmath_ulp_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "ulp", "(F)F", "mj2x_strictmath_ulp_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "getExponent", "(D)I", "mj2x_strictmath_get_exponent_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "getExponent", "(F)I", "mj2x_strictmath_get_exponent_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "nextAfter", "(DD)D", "mj2x_strictmath_next_after_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "nextUp", "(D)D", "mj2x_strictmath_next_up_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "nextUp", "(F)F", "mj2x_strictmath_next_up_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "nextDown", "(D)D", "mj2x_strictmath_next_down_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "nextDown", "(F)F", "mj2x_strictmath_next_down_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "scalb", "(DI)D", "mj2x_strictmath_scalb_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Math", "scalb", "(FI)F", "mj2x_strictmath_scalb_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        // ---- StrictMath 补缺面（同 symbol 共用）----
+        {"java/lang/StrictMath", "expm1", "(D)D", "mj2x_strictmath_expm1", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "log1p", "(D)D", "mj2x_strictmath_log1p", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "sinh", "(D)D", "mj2x_strictmath_sinh", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "cosh", "(D)D", "mj2x_strictmath_cosh", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "tanh", "(D)D", "mj2x_strictmath_tanh", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "IEEEremainder", "(DD)D", "mj2x_strictmath_ieee_remainder", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "copySign", "(DD)D", "mj2x_strictmath_copy_sign_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "copySign", "(FF)F", "mj2x_strictmath_copy_sign_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "toDegrees", "(D)D", "mj2x_strictmath_to_degrees", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "toRadians", "(D)D", "mj2x_strictmath_to_radians", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "fma", "(DDD)D", "mj2x_strictmath_fma_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "fma", "(FFF)F", "mj2x_strictmath_fma_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "ulp", "(D)D", "mj2x_strictmath_ulp_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "ulp", "(F)F", "mj2x_strictmath_ulp_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "getExponent", "(D)I", "mj2x_strictmath_get_exponent_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "getExponent", "(F)I", "mj2x_strictmath_get_exponent_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "nextAfter", "(DD)D", "mj2x_strictmath_next_after_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "nextUp", "(D)D", "mj2x_strictmath_next_up_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "nextUp", "(F)F", "mj2x_strictmath_next_up_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "nextDown", "(D)D", "mj2x_strictmath_next_down_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "nextDown", "(F)F", "mj2x_strictmath_next_down_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "scalb", "(DI)D", "mj2x_strictmath_scalb_f64", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/StrictMath", "scalb", "(FI)F", "mj2x_strictmath_scalb_f32", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        // ---- Math exact 溢出族（Math 专属，RegCLocalHelper + passContext）----
+        {"java/lang/Math", "addExact", "(II)I", "mj2x_intrinsic_math_add_exact_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "addExact", "(JJ)J", "mj2x_intrinsic_math_add_exact_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "subtractExact", "(II)I", "mj2x_intrinsic_math_subtract_exact_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "subtractExact", "(JJ)J", "mj2x_intrinsic_math_subtract_exact_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "multiplyExact", "(II)I", "mj2x_intrinsic_math_multiply_exact_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "multiplyExact", "(JJ)J", "mj2x_intrinsic_math_multiply_exact_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "incrementExact", "(I)I", "mj2x_intrinsic_math_increment_exact_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "incrementExact", "(J)J", "mj2x_intrinsic_math_increment_exact_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "decrementExact", "(I)I", "mj2x_intrinsic_math_decrement_exact_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "decrementExact", "(J)J", "mj2x_intrinsic_math_decrement_exact_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "negateExact", "(I)I", "mj2x_intrinsic_math_negate_exact_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "negateExact", "(J)J", "mj2x_intrinsic_math_negate_exact_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "toIntExact", "(J)I", "mj2x_intrinsic_math_to_int_exact", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "absExact", "(I)I", "mj2x_intrinsic_math_abs_exact_i32", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        {"java/lang/Math", "absExact", "(J)J", "mj2x_intrinsic_math_abs_exact_i64", RegCIntrinsicEmitKind::RegCLocalHelper, true},
+        // ---- Integer/Long toString radix 版 + hashCode ----
+        {"java/lang/Integer", "toString", "(II)Ljava/lang/String;", "mj2x_intrinsic_int_to_string_radix", RegCIntrinsicEmitKind::RuntimeFunction, true},
+        {"java/lang/Long", "toString", "(JI)Ljava/lang/String;", "mj2x_intrinsic_long_to_string_radix", RegCIntrinsicEmitKind::RuntimeFunction, true},
+        {"java/lang/Integer", "hashCode", "(I)I", "mj2x_intrinsic_int_hash_code", RegCIntrinsicEmitKind::RuntimeFunction, false},
+        {"java/lang/Long", "hashCode", "(J)I", "mj2x_intrinsic_long_hash_code", RegCIntrinsicEmitKind::RuntimeFunction, false},
+    };
+    for (const auto& c : kCases) {
+        // argCount 由 desc 派生：'(' 与 ')' 之间的每个描述符字符计一参
+        // （J/D 单参单槽语义在 RegIR argCount 面与 I 同）。
+        size_t   argCount = 0;
+        for (const char* p = c.desc + 1; *p != ')'; ++p) ++argCount;
+        RegInstruction ins = makeStaticCall(c.owner, c.name, c.desc, {});
+        for (size_t i = 0; i < argCount; ++i) {
+            const char ty = c.desc[1 + i];
+            switch (ty) {
+            case 'J': ins.args.push_back(RegOperand::fromInt(1, SSAType::I64)); break;
+            case 'D': ins.args.push_back(RegOperand::fromFloat(1.0, SSAType::F64)); break;
+            case 'F': ins.args.push_back(RegOperand::fromFloat(1.0, SSAType::F32)); break;
+            case 'L': ins.args.push_back(RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF})); break;
+            default: ins.args.push_back(RegOperand::fromInt(1, SSAType::I32)); break;
+            }
+        }
+        auto decision = RegCIntrinsicRegistry::builtins().matchCall(ins);
+
+        EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit)
+            << c.owner << "." << c.name << c.desc;
+        EXPECT_EQ(decision.emitKind, c.emitKind) << c.owner << "." << c.name << c.desc;
+        EXPECT_EQ(decision.symbol, c.symbol) << c.owner << "." << c.name << c.desc;
+        EXPECT_EQ(decision.passContext, c.passContext) << c.owner << "." << c.name << c.desc;
+        EXPECT_EQ(decision.nativeObjectKind, RegCIntrinsicNativeObjectKind::None)
+            << c.owner << "." << c.name << c.desc;
+        EXPECT_EQ(decision.precheck, RegCIntrinsicPrecheck::None)
+            << c.owner << "." << c.name << c.desc;
+    }
+    // 全部 llvmDirect=false：LLVM 直调派生面不扩容，仅 RegC 权威表消费。
+    for (const auto& c : kCases) {
+        bool found = false;
+        for (const auto& id : builtinIntrinsicTable()) {
+            if (id.owner == c.owner && id.name == c.name && std::strcmp(id.desc, c.desc) == 0) {
+                EXPECT_FALSE(id.llvmDirect) << c.owner << "." << c.name << c.desc;
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << c.owner << "." << c.name << c.desc;
+    }
+}
+
+TEST(RegCIntrinsicTest, MathExactFamilyAndAdditionsLoweredToRuntimeSymbols)
+{
+    std::string reason;
+    // static int addExactCall(int a, int b) { return Math.addExact(a, b); }
+    auto addExact = emitRegC("addExactCall",
+                             "(II)I",
+                             {
+                                 new VarInsnNode(Opcodes::ILOAD, 0),
+                                 new VarInsnNode(Opcodes::ILOAD, 1),
+                                 new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                    U("java/lang/Math"),
+                                                    U("addExact"),
+                                                    U("(II)I"),
+                                                    false),
+                                 new InsnNode(Opcodes::IRETURN),
+                             },
+                             2,
+                             2,
+                             reason);
+    ASSERT_TRUE(addExact.ok) << addExact.reason;
+    // throwing 族必须发射 RegCLocalHelper runtime symbol（带 context 形态），
+    // 且不走通用 JNI 派发。
+    EXPECT_NE(addExact.source.find("mj2x_intrinsic_math_add_exact_i32("), std::string::npos)
+        << addExact.source;
+    EXPECT_EQ(addExact.source.find("_mj2x_regc_call_i32(\"java/lang/Math\""), std::string::npos)
+        << addExact.source;
+
+    // static long longExactCall(long a, long b) { return Math.addExact(a, b); }
+    auto addExactLong = emitRegC("longExactCall",
+                                 "(JJ)J",
+                                 {
+                                     new VarInsnNode(Opcodes::LLOAD, 0),
+                                     new VarInsnNode(Opcodes::LLOAD, 2),
+                                     new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                        U("java/lang/Math"),
+                                                        U("addExact"),
+                                                        U("(JJ)J"),
+                                                        false),
+                                     new InsnNode(Opcodes::LRETURN),
+                                 },
+                                 4,
+                                 4,
+                                 reason);
+    ASSERT_TRUE(addExactLong.ok) << addExactLong.reason;
+    EXPECT_NE(addExactLong.source.find("mj2x_intrinsic_math_add_exact_i64("), std::string::npos)
+        << addExactLong.source;
+    EXPECT_EQ(addExactLong.source.find("_mj2x_regc_call_i64(\"java/lang/Math\""), std::string::npos)
+        << addExactLong.source;
+
+    // static int toIntExactCall(long v) { return Math.toIntExact(v); }
+    auto toIntExact = emitRegC("toIntExactCall",
+                               "(J)I",
+                               {
+                                   new VarInsnNode(Opcodes::LLOAD, 0),
+                                   new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                      U("java/lang/Math"),
+                                                      U("toIntExact"),
+                                                      U("(J)I"),
+                                                      false),
+                                   new InsnNode(Opcodes::IRETURN),
+                               },
+                               2,
+                               2,
+                               reason);
+    ASSERT_TRUE(toIntExact.ok) << toIntExact.reason;
+    EXPECT_NE(toIntExact.source.find("mj2x_intrinsic_math_to_int_exact("), std::string::npos)
+        << toIntExact.source;
+
+    // static int hashCalls(int i, long l) { return Integer.hashCode(i) + Long.hashCode(l); }
+    auto hashCalls = emitRegC(
+        "hashCalls",
+        "(IJ)I",
+        {
+            new VarInsnNode(Opcodes::ILOAD, 0),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Integer"), U("hashCode"), U("(I)I"), false),
+            new VarInsnNode(Opcodes::LLOAD, 1),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Long"), U("hashCode"), U("(J)I"), false),
+            new InsnNode(Opcodes::IADD),
+            new InsnNode(Opcodes::IRETURN),
+        },
+        4,
+        3,
+        reason);
+    ASSERT_TRUE(hashCalls.ok) << hashCalls.reason;
+    EXPECT_NE(hashCalls.source.find("mj2x_intrinsic_int_hash_code("), std::string::npos)
+        << hashCalls.source;
+    EXPECT_NE(hashCalls.source.find("mj2x_intrinsic_long_hash_code("), std::string::npos)
+        << hashCalls.source;
+    EXPECT_EQ(hashCalls.source.find("_mj2x_regc_call_i32(\"java/lang/Integer\""), std::string::npos)
+        << hashCalls.source;
+    EXPECT_EQ(hashCalls.source.find("_mj2x_regc_call_i32(\"java/lang/Long\""), std::string::npos)
+        << hashCalls.source;
+
+    // static String toStringRadix(int x) { return Integer.toString(x, 16); }
+    auto toStringRadix = emitRegC("toStringRadix",
+                                  "(I)Ljava/lang/String;",
+                                  {
+                                      new VarInsnNode(Opcodes::ILOAD, 0),
+                                      new IntInsnNode(Opcodes::BIPUSH, 16),
+                                      new MethodInsnNode(Opcodes::INVOKESTATIC,
+                                                         U("java/lang/Integer"),
+                                                         U("toString"),
+                                                         U("(II)Ljava/lang/String;"),
+                                                         false),
+                                      new InsnNode(Opcodes::ARETURN),
+                                  },
+                                  2,
+                                  1,
+                                  reason);
+    ASSERT_TRUE(toStringRadix.ok) << toStringRadix.reason;
+    EXPECT_NE(toStringRadix.source.find("mj2x_intrinsic_int_to_string_radix("), std::string::npos)
+        << toStringRadix.source;
+    EXPECT_EQ(toStringRadix.source.find("_mj2x_regc_call_ref(\"java/lang/Integer\""),
+              std::string::npos)
+        << toStringRadix.source;
+
+    // static double strictAdditions(double x) { return StrictMath.expm1(x) + Math.scalb(x, 2); }
+    auto strictAdditions = emitRegC(
+        "strictAdditions",
+        "(D)D",
+        {
+            new VarInsnNode(Opcodes::DLOAD, 0),
+            new MethodInsnNode(Opcodes::INVOKESTATIC,
+                               U("java/lang/StrictMath"),
+                               U("expm1"),
+                               U("(D)D"),
+                               false),
+            new VarInsnNode(Opcodes::DLOAD, 0),
+            new IntInsnNode(Opcodes::BIPUSH, 2),
+            new MethodInsnNode(
+                Opcodes::INVOKESTATIC, U("java/lang/Math"), U("scalb"), U("(DI)D"), false),
+            new InsnNode(Opcodes::DADD),
+            new InsnNode(Opcodes::DRETURN),
+        },
+        4,
+        2,
+        reason);
+    ASSERT_TRUE(strictAdditions.ok) << strictAdditions.reason;
+    EXPECT_NE(strictAdditions.source.find("mj2x_strictmath_expm1("), std::string::npos)
+        << strictAdditions.source;
+    EXPECT_NE(strictAdditions.source.find("mj2x_strictmath_scalb_f64("), std::string::npos)
+        << strictAdditions.source;
+    EXPECT_EQ(strictAdditions.source.find("_mj2x_regc_call_f64(\"java/lang/StrictMath\""),
+              std::string::npos)
+        << strictAdditions.source;
+    EXPECT_EQ(strictAdditions.source.find("_mj2x_regc_call_f64(\"java/lang/Math\""),
+              std::string::npos)
+        << strictAdditions.source;
+    expectNoStackAnchors(strictAdditions.source);
 }
