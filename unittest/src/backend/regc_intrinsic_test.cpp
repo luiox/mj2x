@@ -1133,13 +1133,10 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
     charAt.args.push_back(RegOperand::fromInt(1, SSAType::I32));
 
     auto charAtDecision = RegCIntrinsicRegistry::builtins().matchCall(charAt);
-    // charAt/equals/hashCode 曾被摘出 intrinsic 面（多 JNI 数据管道更慢），
-    // perf/regc-jni-hotpath 第二批回归：charAt 吃 context（SIOOBE 通道），
-    // equals/hashCode 走 StringMethod 直调（见 MatchesStringBatchIntrinsics）。
-    EXPECT_EQ(charAtDecision.kind, RegCIntrinsicDecisionKind::Emit);
-    EXPECT_EQ(charAtDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
-    EXPECT_EQ(charAtDecision.symbol, "_mj2x_intrinsic_string_char_at");
-    EXPECT_TRUE(charAtDecision.passContext);
+    // charAt/hashCode/equals 不再走 StringMethod intrinsic：多 JNI 数据管道
+    // 比回退缓存 methodID 的 1-JNI CallXxxMethodA 更慢（HotSpot 对这三个方法
+    // 有 VM intrinsic + memoization），保留 length/isEmpty 等 1-JNI 平价项。
+    EXPECT_EQ(charAtDecision.kind, RegCIntrinsicDecisionKind::Fallback);
 
     RegInstruction isEmpty;
     isEmpty.kind                = RegInstructionKind::Call;
@@ -1180,76 +1177,6 @@ TEST(RegCIntrinsicRegistryTest, MatchesStringIntrinsics)
     EXPECT_EQ(valueOfDecision.kind, RegCIntrinsicDecisionKind::Emit);
     EXPECT_EQ(valueOfDecision.emitKind, RegCIntrinsicEmitKind::RegCLocalHelper);
     EXPECT_EQ(valueOfDecision.symbol, "_mj2x_intrinsic_double_to_string");
-}
-
-// String 第二批（perf/regc-jni-hotpath）：lastIndexOf×4 / substring×2 / charAt /
-// equals / hashCode / toCharArray / repeat。emitKind 分流：需要异常通道的
-// substring/charAt/repeat 走 RegCLocalHelper+passContext（对齐 parseInt 族），
-// 其余走 StringMethod 直调；全部 instance 条目（argCount 含 receiver），
-// llvmDirect 不设（LLVM 侧维持 JNI 分派）。
-TEST(RegCIntrinsicRegistryTest, MatchesStringBatchIntrinsics)
-{
-    auto makeCall = [](const char* name, const char* desc, std::vector<RegOperand> args) {
-        RegInstruction call;
-        call.kind                = RegInstructionKind::Call;
-        call.method.owner        = U("java/lang/String");
-        call.method.name         = U(name);
-        call.method.desc         = U(desc);
-        call.method.invokeOpcode = Opcodes::INVOKEVIRTUAL;
-        call.args                = std::move(args);
-        return call;
-    };
-    const RegOperand receiver = RegOperand::fromRegister(RegValue{RegId{1}, SSAType::REF});
-    const RegOperand stringArg = RegOperand::fromRegister(RegValue{RegId{2}, SSAType::REF});
-    const RegOperand intArg    = RegOperand::fromInt(1, SSAType::I32);
-
-    struct BatchCase
-    {
-        RegInstruction           call;
-        RegCIntrinsicEmitKind    emitKind;
-        std::string              symbol;
-        bool                     passContext;
-    };
-    const std::vector<BatchCase> cases = {
-        {makeCall("lastIndexOf", "(I)I", {receiver, intArg}),
-         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of_char",
-         false},
-        {makeCall("lastIndexOf", "(II)I", {receiver, intArg, intArg}),
-         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of_char_from",
-         false},
-        {makeCall("lastIndexOf", "(Ljava/lang/String;)I", {receiver, stringArg}),
-         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of",
-         false},
-        {makeCall("lastIndexOf", "(Ljava/lang/String;I)I", {receiver, stringArg, intArg}),
-         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_last_index_of_from",
-         false},
-        {makeCall("substring", "(I)Ljava/lang/String;", {receiver, intArg}),
-         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_substring", true},
-        {makeCall("substring", "(II)Ljava/lang/String;", {receiver, intArg, intArg}),
-         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_substring_end",
-         true},
-        {makeCall("charAt", "(I)C", {receiver, intArg}),
-         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_char_at", true},
-        {makeCall("equals", "(Ljava/lang/Object;)Z", {receiver, stringArg}),
-         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_equals", false},
-        {makeCall("hashCode", "()I", {receiver}),
-         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_hash_code", false},
-        {makeCall("toCharArray", "()[C", {receiver}),
-         RegCIntrinsicEmitKind::StringMethod, "_mj2x_intrinsic_string_to_char_array",
-         false},
-        {makeCall("repeat", "(I)Ljava/lang/String;", {receiver, intArg}),
-         RegCIntrinsicEmitKind::RegCLocalHelper, "_mj2x_intrinsic_string_repeat", true},
-    };
-
-    for (const auto& batch : cases) {
-        auto decision = RegCIntrinsicRegistry::builtins().matchCall(batch.call);
-        EXPECT_EQ(decision.kind, RegCIntrinsicDecisionKind::Emit)
-            << batch.symbol;
-        EXPECT_EQ(decision.emitKind, batch.emitKind) << batch.symbol;
-        EXPECT_EQ(decision.symbol, batch.symbol);
-        EXPECT_EQ(decision.passContext, batch.passContext) << batch.symbol;
-        EXPECT_EQ(decision.precheck, RegCIntrinsicPrecheck::None) << batch.symbol;
-    }
 }
 
 TEST(RegCIntrinsicRegistryTest, MatchesUtf16StringRuntimeIntrinsics)
@@ -1624,22 +1551,19 @@ TEST(RegCIntrinsicTest, StringMethodsLoweredToIntrinsicsNotJni)
     ASSERT_TRUE(result.ok) << result.reason;
     EXPECT_NE(result.source.find("_mj2x_intrinsic_string_length("), std::string::npos)
         << result.source;
-    // charAt/hashCode/equals 第二批回归 intrinsic 面（emitKind 分流：
-    // charAt 为 RegCLocalHelper+context，equals/hashCode 为 StringMethod），
-    // 缓存 methodID 的 JNI 回退面不得再出现。
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
+    // charAt/hashCode/equals 回退缓存 methodID 调用（1 JNI），不再发射
+    // StringMethod intrinsic（多 JNI 数据管道实测更慢）。
+    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
+    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
         << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_equals("), std::string::npos)
+    EXPECT_EQ(result.source.find("_mj2x_intrinsic_string_equals("), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"length\""), std::string::npos)
+    EXPECT_NE(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
+    EXPECT_NE(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
         << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
-        << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"equals\""), std::string::npos)
+    EXPECT_NE(result.source.find("java/lang/String\", \"equals\""), std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
 }
@@ -1746,154 +1670,6 @@ TEST(RegCIntrinsicTest, MoreStringMethodsLoweredToIntrinsicsNotJni)
         << result.source;
     EXPECT_EQ(result.source.find("_mj2x_regc_call_i32(\"java/lang/String\", \"contains\""),
               std::string::npos)
-        << result.source;
-    expectNoStackAnchors(result.source);
-}
-
-// String 第二批发射形态：lastIndexOf×4 / substring×2 / charAt / hashCode /
-// toCharArray / repeat 全部降为 intrinsic 直调（substring/charAt/repeat 吃
-// context），缓存 methodID 的 JNI 回退面不得出现；串接结果上的 length() 与
-// toCharArray 的 ARRAYLENGTH 保持各自的 1-JNI/0-JNI 平价路径。
-TEST(RegCIntrinsicTest, StringBatchMethodsLoweredToIntrinsicsNotJni)
-{
-    std::string reason;
-    // static int batch(String s) {
-    //   return s.lastIndexOf('l') + s.lastIndexOf('l', 3) + s.lastIndexOf("lo")
-    //       + s.lastIndexOf("l", 4) + s.substring(2).length()
-    //       + s.substring(1, 3).length() + s.charAt(0) + s.hashCode()
-    //       + s.toCharArray().length + "ab".repeat(2).length();
-    // }
-    auto result = emitRegC(
-        "batchStrings",
-        "(Ljava/lang/String;)I",
-        {
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new IntInsnNode(Opcodes::BIPUSH, 108),
-            new MethodInsnNode(
-                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("lastIndexOf"), U("(I)I"), false),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new IntInsnNode(Opcodes::BIPUSH, 108),
-            new InsnNode(Opcodes::ICONST_3),
-            new MethodInsnNode(
-                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("lastIndexOf"), U("(II)I"), false),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new LdcInsnNode(std::string("lo")),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("lastIndexOf"),
-                               U("(Ljava/lang/String;)I"),
-                               false),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new LdcInsnNode(std::string("l")),
-            new InsnNode(Opcodes::ICONST_4),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("lastIndexOf"),
-                               U("(Ljava/lang/String;I)I"),
-                               false),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new InsnNode(Opcodes::ICONST_2),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("substring"),
-                               U("(I)Ljava/lang/String;"),
-                               false),
-            new MethodInsnNode(
-                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new InsnNode(Opcodes::ICONST_1),
-            new InsnNode(Opcodes::ICONST_3),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("substring"),
-                               U("(II)Ljava/lang/String;"),
-                               false),
-            new MethodInsnNode(
-                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new InsnNode(Opcodes::ICONST_0),
-            new MethodInsnNode(
-                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("charAt"), U("(I)C"), false),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new MethodInsnNode(
-                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("hashCode"), U("()I"), false),
-            new InsnNode(Opcodes::IADD),
-            new VarInsnNode(Opcodes::ALOAD, 0),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("toCharArray"),
-                               U("()[C"),
-                               false),
-            new InsnNode(Opcodes::ARRAYLENGTH),
-            new InsnNode(Opcodes::IADD),
-            new LdcInsnNode(std::string("ab")),
-            new InsnNode(Opcodes::ICONST_2),
-            new MethodInsnNode(Opcodes::INVOKEVIRTUAL,
-                               U("java/lang/String"),
-                               U("repeat"),
-                               U("(I)Ljava/lang/String;"),
-                               false),
-            new MethodInsnNode(
-                Opcodes::INVOKEVIRTUAL, U("java/lang/String"), U("length"), U("()I"), false),
-            new InsnNode(Opcodes::IADD),
-            new InsnNode(Opcodes::IRETURN),
-        },
-        4,
-        1,
-        reason);
-
-    ASSERT_TRUE(result.ok) << result.reason;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of_char("),
-              std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of_char_from("),
-              std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of("), std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_last_index_of_from("),
-              std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_substring("), std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_substring_end("), std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at("), std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_hash_code("), std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_to_char_array("), std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_repeat("), std::string::npos)
-        << result.source;
-    // 语义自测（发射文本级）：吃 context 的三条必须以 current_context 领参。
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_substring_end(_mj2x_regc_current_context()"),
-              std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_char_at(_mj2x_regc_current_context()"),
-              std::string::npos)
-        << result.source;
-    EXPECT_NE(result.source.find("_mj2x_intrinsic_string_repeat(_mj2x_regc_current_context()"),
-              std::string::npos)
-        << result.source;
-    // JNI 回退面：六组方法名的缓存 methodID 调用串不得出现。
-    EXPECT_EQ(result.source.find("java/lang/String\", \"lastIndexOf\""), std::string::npos)
-        << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"substring\""), std::string::npos)
-        << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"charAt\""), std::string::npos)
-        << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"hashCode\""), std::string::npos)
-        << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"toCharArray\""), std::string::npos)
-        << result.source;
-    EXPECT_EQ(result.source.find("java/lang/String\", \"repeat\""), std::string::npos)
         << result.source;
     expectNoStackAnchors(result.source);
 }
